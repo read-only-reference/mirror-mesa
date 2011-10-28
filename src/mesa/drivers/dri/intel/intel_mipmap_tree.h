@@ -56,6 +56,7 @@
  * temporary system buffers.
  */
 
+struct intel_texture_image;
 
 /**
  * Describes the location of each texture image within a texture region.
@@ -98,7 +99,7 @@ struct intel_mipmap_tree
 
    GLuint width0, height0, depth0; /**< Level zero image dimensions */
    GLuint cpp;
-   GLboolean compressed;
+   bool compressed;
 
    /* Derived from the above:
     */
@@ -142,7 +143,7 @@ struct intel_mipmap_tree *intel_miptree_create(struct intel_context *intel,
                                                GLuint width0,
                                                GLuint height0,
                                                GLuint depth0,
-					       GLboolean expect_accelerated_upload);
+					       bool expect_accelerated_upload);
 
 struct intel_mipmap_tree *
 intel_miptree_create_for_region(struct intel_context *intel,
@@ -162,25 +163,17 @@ void intel_miptree_release(struct intel_mipmap_tree **mt);
 
 /* Check if an image fits an existing mipmap tree layout
  */
-GLboolean intel_miptree_match_image(struct intel_mipmap_tree *mt,
+bool intel_miptree_match_image(struct intel_mipmap_tree *mt,
                                     struct gl_texture_image *image);
-
-/* Return a pointer to an image within a tree.  Return image stride as
- * well.
- */
-GLubyte *intel_miptree_image_map(struct intel_context *intel,
-                                 struct intel_mipmap_tree *mt,
-                                 GLuint face,
-                                 GLuint level,
-                                 GLuint * row_stride, GLuint * image_stride);
-
-void intel_miptree_image_unmap(struct intel_context *intel,
-                               struct intel_mipmap_tree *mt);
 
 void
 intel_miptree_get_image_offset(struct intel_mipmap_tree *mt,
 			       GLuint level, GLuint face, GLuint depth,
 			       GLuint *x, GLuint *y);
+
+void
+intel_miptree_get_dimensions_for_image(struct gl_texture_image *image,
+                                       int *width, int *height, int *depth);
 
 void intel_miptree_set_level_info(struct intel_mipmap_tree *mt,
                                   GLuint level,
@@ -192,21 +185,10 @@ void intel_miptree_set_image_offset(struct intel_mipmap_tree *mt,
                                     GLuint level,
                                     GLuint img, GLuint x, GLuint y);
 
-/* Upload an image into a tree
- */
-void intel_miptree_image_data(struct intel_context *intel,
-                              struct intel_mipmap_tree *dst,
-                              GLuint face,
-                              GLuint level,
-                              void *src,
-                              GLuint src_row_pitch, GLuint src_image_pitch);
-
-/* Copy an image between two trees
- */
-void intel_miptree_image_copy(struct intel_context *intel,
-                              struct intel_mipmap_tree *dst,
-                              GLuint face, GLuint level,
-                              struct intel_mipmap_tree *src);
+void
+intel_miptree_copy_teximage(struct intel_context *intel,
+                            struct intel_texture_image *intelImage,
+                            struct intel_mipmap_tree *dst_mt);
 
 /* i915_mipmap_tree.c:
  */

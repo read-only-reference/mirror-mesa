@@ -34,7 +34,7 @@
 #include "intel_batchbuffer.h"
 
 static void
-gen6_prepare_vs_push_constants(struct brw_context *brw)
+gen6_upload_vs_push_constants(struct brw_context *brw)
 {
    struct intel_context *intel = &brw->intel;
    struct gl_context *ctx = &intel->ctx;
@@ -76,14 +76,14 @@ gen6_prepare_vs_push_constants(struct brw_context *brw)
          /* This should be loaded like any other param, but it's ad-hoc
           * until we redo the VS backend.
           */
-         if (!uses_clip_distance) {
-            for (i = 0; i < MAX_CLIP_PLANES; i++) {
-               if (ctx->Transform.ClipPlanesEnabled & (1 << i)) {
-                  memcpy(param, ctx->Transform._ClipUserPlane[i], 4 * sizeof(float));
-                  param += 4;
-                  params_uploaded++;
-               }
-            }
+         if (ctx->Transform.ClipPlanesEnabled != 0 && !uses_clip_distance) {
+            gl_clip_plane *clip_planes = brw_select_clip_planes(ctx);
+            int num_userclip_plane_consts
+               = _mesa_logbase2(ctx->Transform.ClipPlanesEnabled) + 1;
+            int num_floats = 4 * num_userclip_plane_consts;
+            memcpy(param, clip_planes, num_floats * sizeof(float));
+            param += num_floats;
+            params_uploaded += num_userclip_plane_consts;
          }
 
          /* Align to a reg for convenience for brw_vs_emit.c */
@@ -124,13 +124,14 @@ const struct brw_tracked_state gen6_vs_constants = {
 		BRW_NEW_VERTEX_PROGRAM),
       .cache = CACHE_NEW_VS_PROG,
    },
-   .prepare = gen6_prepare_vs_push_constants,
+   .emit = gen6_upload_vs_push_constants,
 };
 
 static void
 upload_vs_state(struct brw_context *brw)
 {
    struct intel_context *intel = &brw->intel;
+   uint32_t floating_point_mode = 0;
 
    if (brw->vs.push_const_size == 0) {
       /* Disable the push constant buffers. */
@@ -147,7 +148,7 @@ upload_vs_state(struct brw_context *brw)
 		GEN6_CONSTANT_BUFFER_0_ENABLE |
 		(5 - 2));
       /* Pointer to the VS constant buffer.  Covered by the set of
-       * state flags from gen6_prepare_wm_constants
+       * state flags from gen6_upload_vs_constants
        */
       OUT_BATCH(brw->vs.push_const_offset +
 		brw->vs.push_const_size - 1);
@@ -157,11 +158,17 @@ upload_vs_state(struct brw_context *brw)
       ADVANCE_BATCH();
    }
 
+   /* Use ALT floating point mode for ARB vertex programs, because they
+    * require 0^0 == 1.
+    */
+   if (intel->ctx.Shader.CurrentVertexProgram == NULL)
+      floating_point_mode = GEN6_VS_FLOATING_POINT_MODE_ALT;
+
    BEGIN_BATCH(6);
    OUT_BATCH(_3DSTATE_VS << 16 | (6 - 2));
    OUT_BATCH(brw->vs.prog_offset);
    OUT_BATCH((0 << GEN6_VS_SAMPLER_COUNT_SHIFT) |
-	     GEN6_VS_FLOATING_POINT_MODE_ALT |
+             floating_point_mode |
 	     (brw->vs.nr_surfaces << GEN6_VS_BINDING_TABLE_ENTRY_COUNT_SHIFT));
 
    if (brw->vs.prog_data->total_scratch) {
@@ -176,7 +183,7 @@ upload_vs_state(struct brw_context *brw)
 	     (brw->vs.prog_data->urb_read_length << GEN6_VS_URB_READ_LENGTH_SHIFT) |
 	     (0 << GEN6_VS_URB_ENTRY_READ_OFFSET_SHIFT));
 
-   OUT_BATCH(((brw->vs_max_threads - 1) << GEN6_VS_MAX_THREADS_SHIFT) |
+   OUT_BATCH(((brw->max_vs_threads - 1) << GEN6_VS_MAX_THREADS_SHIFT) |
 	     GEN6_VS_STATISTICS_ENABLE |
 	     GEN6_VS_ENABLE);
    ADVANCE_BATCH();
@@ -198,6 +205,8 @@ upload_vs_state(struct brw_context *brw)
     * bug reports that led to this workaround, and may be more than
     * what is strictly required to avoid the issue.
     */
+   intel_emit_post_sync_nonzero_flush(intel);
+
    BEGIN_BATCH(4);
    OUT_BATCH(_3DSTATE_PIPE_CONTROL);
    OUT_BATCH(PIPE_CONTROL_DEPTH_STALL |

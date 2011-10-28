@@ -196,6 +196,13 @@
 #define BRW_MIPFILTER_NEAREST     1   
 #define BRW_MIPFILTER_LINEAR      3
 
+#define BRW_ADDRESS_ROUNDING_ENABLE_U_MAG	0x20
+#define BRW_ADDRESS_ROUNDING_ENABLE_U_MIN	0x10
+#define BRW_ADDRESS_ROUNDING_ENABLE_V_MAG	0x08
+#define BRW_ADDRESS_ROUNDING_ENABLE_V_MIN	0x04
+#define BRW_ADDRESS_ROUNDING_ENABLE_R_MAG	0x02
+#define BRW_ADDRESS_ROUNDING_ENABLE_R_MIN	0x01
+
 #define BRW_POLYGON_FRONT_FACING     0
 #define BRW_POLYGON_BACK_FACING      1
 
@@ -486,9 +493,11 @@
 #define BRW_CHANNEL_Z     2
 #define BRW_CHANNEL_W     3
 
-#define BRW_COMPRESSION_NONE          0
-#define BRW_COMPRESSION_2NDHALF       1
-#define BRW_COMPRESSION_COMPRESSED    2
+enum brw_compression {
+   BRW_COMPRESSION_NONE       = 0,
+   BRW_COMPRESSION_2NDHALF    = 1,
+   BRW_COMPRESSION_COMPRESSED = 2,
+};
 
 #define GEN6_COMPRESSION_1Q		0
 #define GEN6_COMPRESSION_2Q		1
@@ -622,6 +631,8 @@ enum opcode {
    SHADER_OPCODE_EXP2,
    SHADER_OPCODE_LOG2,
    SHADER_OPCODE_POW,
+   SHADER_OPCODE_INT_QUOTIENT,
+   SHADER_OPCODE_INT_REMAINDER,
    SHADER_OPCODE_SIN,
    SHADER_OPCODE_COS,
    FS_OPCODE_DDX,
@@ -741,18 +752,34 @@ enum opcode {
 #define BRW_POLYGON_FACING_FRONT      0
 #define BRW_POLYGON_FACING_BACK       1
 
-#define BRW_MESSAGE_TARGET_NULL               0
-#define BRW_MESSAGE_TARGET_MATH               1 /* reserved on GEN6 */
-#define BRW_MESSAGE_TARGET_SAMPLER            2
-#define BRW_MESSAGE_TARGET_GATEWAY            3
-#define BRW_MESSAGE_TARGET_DATAPORT_READ      4
-#define BRW_MESSAGE_TARGET_DATAPORT_WRITE     5
-#define BRW_MESSAGE_TARGET_URB                6
-#define BRW_MESSAGE_TARGET_THREAD_SPAWNER     7
+/**
+ * Message target: Shared Function ID for where to SEND a message.
+ *
+ * These are enumerated in the ISA reference under "send - Send Message".
+ * In particular, see the following tables:
+ * - G45 PRM, Volume 4, Table 14-15 "Message Descriptor Definition"
+ * - Sandybridge PRM, Volume 4 Part 2, Table 8-16 "Extended Message Descriptor"
+ * - BSpec, Volume 1a (GPU Overview) / Graphics Processing Engine (GPE) /
+ *   Overview / GPE Function IDs
+ */
+enum brw_message_target {
+   BRW_SFID_NULL                     = 0,
+   BRW_SFID_MATH                     = 1, /* Only valid on Gen4-5 */
+   BRW_SFID_SAMPLER                  = 2,
+   BRW_SFID_MESSAGE_GATEWAY          = 3,
+   BRW_SFID_DATAPORT_READ            = 4,
+   BRW_SFID_DATAPORT_WRITE           = 5,
+   BRW_SFID_URB                      = 6,
+   BRW_SFID_THREAD_SPAWNER           = 7,
 
-#define GEN6_MESSAGE_TARGET_DP_SAMPLER_CACHE  4
-#define GEN6_MESSAGE_TARGET_DP_RENDER_CACHE   5
-#define GEN6_MESSAGE_TARGET_DP_CONST_CACHE    9
+   GEN6_SFID_DATAPORT_SAMPLER_CACHE  = 4,
+   GEN6_SFID_DATAPORT_RENDER_CACHE   = 5,
+   GEN6_SFID_DATAPORT_CONSTANT_CACHE = 9,
+
+   GEN7_SFID_DATAPORT_DATA_CACHE     = 10,
+};
+
+#define GEN7_MESSAGE_TARGET_DP_DATA_CACHE     10
 
 #define BRW_SAMPLER_RETURN_FORMAT_FLOAT32     0
 #define BRW_SAMPLER_RETURN_FORMAT_UINT32      2
@@ -850,6 +877,9 @@ enum opcode {
 #define GEN6_DATAPORT_WRITE_MESSAGE_RENDER_TARGET_WRITE             12
 #define GEN6_DATAPORT_WRITE_MESSAGE_STREAMED_VB_WRITE               13
 #define GEN6_DATAPORT_WRITE_MESSAGE_RENDER_TARGET_UNORM_WRITE       14
+
+/* GEN7 */
+#define GEN7_DATAPORT_WRITE_MESSAGE_OWORD_DUAL_BLOCK_WRITE          10
 
 #define BRW_MATH_FUNCTION_INV                              1
 #define BRW_MATH_FUNCTION_LOG                              2
@@ -1022,6 +1052,8 @@ enum opcode {
 # define GEN6_GS_VECTOR_MASK_ENABLE			(1 << 30)
 # define GEN6_GS_SAMPLER_COUNT_SHIFT			27
 # define GEN6_GS_BINDING_TABLE_ENTRY_COUNT_SHIFT	18
+# define GEN6_GS_FLOATING_POINT_MODE_IEEE_754		(0 << 16)
+# define GEN6_GS_FLOATING_POINT_MODE_ALT		(1 << 16)
 /* DW4 */
 # define GEN6_GS_URB_READ_LENGTH_SHIFT			11
 # define GEN7_GS_INCLUDE_VERTEX_HANDLES		        (1 << 10)
@@ -1034,6 +1066,12 @@ enum opcode {
 # define GEN6_GS_RENDERING_ENABLE			(1 << 8)
 # define GEN7_GS_ENABLE					(1 << 0)
 /* DW6 */
+# define GEN6_GS_REORDER				(1 << 30)
+# define GEN6_GS_DISCARD_ADJACENCY			(1 << 29)
+# define GEN6_GS_SVBI_PAYLOAD_ENABLE			(1 << 28)
+# define GEN6_GS_SVBI_POSTINCREMENT_ENABLE		(1 << 27)
+# define GEN6_GS_SVBI_POSTINCREMENT_VALUE_SHIFT		16
+# define GEN6_GS_SVBI_POSTINCREMENT_VALUE_MASK		INTEL_MASK(25, 16)
 # define GEN6_GS_ENABLE					(1 << 15)
 
 #define _3DSTATE_HS                             0x781B /* GEN7+ */
@@ -1070,7 +1108,7 @@ enum opcode {
 # define GEN6_CLIP_MODE_REJECT_ALL			(3 << 13)
 # define GEN6_CLIP_MODE_ACCEPT_ALL			(4 << 13)
 # define GEN6_CLIP_PERSPECTIVE_DIVIDE_DISABLE		(1 << 9)
-# define GEN6_CLIP_BARYCENTRIC_ENABLE			(1 << 8)
+# define GEN6_CLIP_NON_PERSPECTIVE_BARYCENTRIC_ENABLE	(1 << 8)
 # define GEN6_CLIP_TRI_PROVOKE_SHIFT			4
 # define GEN6_CLIP_LINE_PROVOKE_SHIFT			2
 # define GEN6_CLIP_TRIFAN_PROVOKE_SHIFT			0
@@ -1177,6 +1215,16 @@ enum opcode {
 /* DW12: attr 0-7 wrap shortest enables */
 /* DW13: attr 8-16 wrap shortest enables */
 
+enum brw_wm_barycentric_interp_mode {
+   BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC		= 0,
+   BRW_WM_PERSPECTIVE_CENTROID_BARYCENTRIC	= 1,
+   BRW_WM_PERSPECTIVE_SAMPLE_BARYCENTRIC	= 2,
+   BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC	= 3,
+   BRW_WM_NONPERSPECTIVE_CENTROID_BARYCENTRIC	= 4,
+   BRW_WM_NONPERSPECTIVE_SAMPLE_BARYCENTRIC	= 5,
+   BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT  = 6
+};
+
 #define _3DSTATE_WM				0x7814 /* GEN6+ */
 /* DW1: kernel pointer */
 /* DW2 */
@@ -1231,6 +1279,7 @@ enum opcode {
 # define GEN6_WM_PERSPECTIVE_SAMPLE_BARYCENTRIC		(1 << 12)
 # define GEN6_WM_PERSPECTIVE_CENTROID_BARYCENTRIC	(1 << 11)
 # define GEN6_WM_PERSPECTIVE_PIXEL_BARYCENTRIC		(1 << 10)
+# define GEN6_WM_BARYCENTRIC_INTERPOLATION_MODE_SHIFT   10
 # define GEN6_WM_POINT_RASTRULE_UPPER_RIGHT		(1 << 9)
 # define GEN6_WM_MSRAST_OFF_PIXEL			(0 << 1)
 # define GEN6_WM_MSRAST_OFF_PATTERN			(1 << 1)
@@ -1268,12 +1317,7 @@ enum opcode {
 # define GEN7_WM_POSITION_ZW_PIXEL			(0 << 17)
 # define GEN7_WM_POSITION_ZW_CENTROID			(2 << 17)
 # define GEN7_WM_POSITION_ZW_SAMPLE			(3 << 17)
-# define GEN7_WM_NONPERSPECTIVE_SAMPLE_BARYCENTRIC	(1 << 16)
-# define GEN7_WM_NONPERSPECTIVE_CENTROID_BARYCENTRIC	(1 << 15)
-# define GEN7_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC	(1 << 14)
-# define GEN7_WM_PERSPECTIVE_SAMPLE_BARYCENTRIC		(1 << 13)
-# define GEN7_WM_PERSPECTIVE_CENTROID_BARYCENTRIC	(1 << 12)
-# define GEN7_WM_PERSPECTIVE_PIXEL_BARYCENTRIC		(1 << 11)
+# define GEN7_WM_BARYCENTRIC_INTERPOLATION_MODE_SHIFT   11
 # define GEN7_WM_USES_INPUT_COVERAGE_MASK	        (1 << 10)
 # define GEN7_WM_LINE_END_CAP_AA_WIDTH_0_5		(0 << 8)
 # define GEN7_WM_LINE_END_CAP_AA_WIDTH_1_0		(1 << 8)

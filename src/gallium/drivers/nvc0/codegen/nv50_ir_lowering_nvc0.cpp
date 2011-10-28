@@ -261,6 +261,7 @@ private:
    bool handlePOW(Instruction *);
    bool handleTEX(TexInstruction *);
    bool handleTXD(TexInstruction *);
+   bool handleTXQ(TexInstruction *);
    bool handleManualTXD(TexInstruction *);
 
    void checkPredicate(Instruction *);
@@ -288,6 +289,10 @@ NVC0LoweringPass::visit(Function *fn)
       // TODO: when we generate actual functions pass this value along somehow
       bld.setPosition(BasicBlock::get(fn->cfg.getRoot()), false);
       gpEmitAddress = bld.loadImm(NULL, 0)->asLValue();
+      if (fn->cfgExit) {
+         bld.setPosition(BasicBlock::get(fn->cfgExit)->getExit(), false);
+         bld.mkMovToReg(0, gpEmitAddress);
+      }
    }
    return true;
 }
@@ -302,14 +307,14 @@ NVC0LoweringPass::visit(BasicBlock *bb)
 bool
 NVC0LoweringPass::handleTEX(TexInstruction *i)
 {
-   const int dim = i->tex.target.getDim();
-   const int arg = i->tex.target.getDim() + i->tex.target.isArray();
+   const int dim = i->tex.target.getDim() + i->tex.target.isCube();
+   const int arg = i->tex.target.getArgCount();
 
    // generate and move the tsc/tic/array source to the front
    if (dim != arg || i->tex.rIndirectSrc >= 0 || i->tex.sIndirectSrc >= 0) {
       LValue *src = new_LValue(func, FILE_GPR); // 0xttxsaaaa
 
-      Value *arrayIndex = i->tex.target.isArray() ? i->getSrc(dim) : NULL;
+      Value *arrayIndex = i->tex.target.isArray() ? i->getSrc(arg - 1) : NULL;
       for (int s = dim; s >= 1; --s)
          i->setSrc(s, i->getSrc(s - 1));
       i->setSrc(0, arrayIndex);
@@ -413,14 +418,14 @@ NVC0LoweringPass::handleTXD(TexInstruction *txd)
    int arg = txd->tex.target.getDim() + txd->tex.target.isArray();
 
    handleTEX(txd);
-   if (txd->src[arg].exists())
+   while (txd->src[arg].exists())
       ++arg;
 
+   txd->tex.derivAll = true;
    if (dim > 2 || txd->tex.target.isShadow())
       return handleManualTXD(txd);
 
-   // at most s/t/array, x, y, offset
-   assert(arg <= 4 && !txd->src[arg].exists());
+   assert(arg <= 4); // at most s/t/array, x, y, offset
 
    for (int c = 0; c < dim; ++c) {
       txd->src[arg + c * 2 + 0].set(txd->dPdx[c]);
@@ -428,6 +433,13 @@ NVC0LoweringPass::handleTXD(TexInstruction *txd)
       txd->dPdx[c] = NULL;
       txd->dPdy[c] = NULL;
    }
+   return true;
+}
+
+bool
+NVC0LoweringPass::handleTXQ(TexInstruction *txq)
+{
+   // TODO: indirect resource/sampler index
    return true;
 }
 
@@ -475,7 +487,7 @@ NVC0LoweringPass::readTessCoord(LValue *dst, int c)
    if (x)
       bld.mkFetch(x, TYPE_F32, FILE_SHADER_OUTPUT, 0x2f0, NULL, laneid);
    if (y)
-      bld.mkFetch(x, TYPE_F32, FILE_SHADER_OUTPUT, 0x2f4, NULL, laneid);
+      bld.mkFetch(y, TYPE_F32, FILE_SHADER_OUTPUT, 0x2f4, NULL, laneid);
 
    if (c == 2) {
       bld.mkOp2(OP_ADD, TYPE_F32, dst, x, y);
@@ -497,11 +509,17 @@ NVC0LoweringPass::handleRDSV(Instruction *i)
    switch (i->getSrc(0)->reg.data.sv.sv) {
    case SV_POSITION:
       assert(prog->getType() == Program::TYPE_FRAGMENT);
-      ld = new_Instruction(func, OP_LINTERP, TYPE_F32);
-      ld->setDef(0, i->getDef(0));
-      ld->setSrc(0, bld.mkSymbol(FILE_SHADER_INPUT, 0, TYPE_F32, addr));
-      ld->setInterpolate(NV50_IR_INTERP_LINEAR);
-      bld.getBB()->insertAfter(i, ld);
+      bld.mkInterp(NV50_IR_INTERP_LINEAR, i->getDef(0), addr, NULL);
+      break;
+   case SV_FACE:
+   {
+      Value *face = i->getDef(0);
+      bld.mkInterp(NV50_IR_INTERP_FLAT, face, addr, NULL);
+      if (i->dType == TYPE_F32) {
+         bld.mkOp2(OP_AND, TYPE_U32, face, face, bld.mkImm(0x80000000));
+         bld.mkOp2(OP_XOR, TYPE_U32, face, face, bld.mkImm(0xbf800000));
+      }
+   }
       break;
    case SV_TESS_COORD:
       assert(prog->getType() == Program::TYPE_TESSELLATION_EVAL);
@@ -524,6 +542,7 @@ NVC0LoweringPass::handleDIV(Instruction *i)
 {
    if (!isFloatType(i->dType))
       return true;
+   bld.setPosition(i, false);
    Instruction *rcp = bld.mkOp1(OP_RCP, i->dType, bld.getSSA(), i->getSrc(1));
    i->op = OP_MUL;
    i->setSrc(1, rcp->getDef(0));
@@ -654,11 +673,12 @@ NVC0LoweringPass::visit(Instruction *i)
    case OP_TXB:
    case OP_TXL:
    case OP_TXF:
-   case OP_TXQ:
    case OP_TXG:
       return handleTEX(i->asTex());
    case OP_TXD:
       return handleTXD(i->asTex());
+   case OP_TXQ:
+     return handleTXQ(i->asTex());
    case OP_EX2:
       bld.mkOp1(OP_PREEX2, TYPE_F32, i->getDef(0), i->getSrc(0));
       i->setSrc(0, i->getDef(0));
@@ -690,14 +710,6 @@ NVC0LoweringPass::visit(Instruction *i)
       if (i->getSrc(0)->reg.data.offset >= 0x280 &&
           i->getSrc(0)->reg.data.offset <  0x2c0)
          i->setInterpolate(i->getSampleMode() | NV50_IR_INTERP_SC);
-      break;
-   case OP_LINTERP:
-      if (i->getSrc(0)->reg.data.offset == 0x3fc) {
-         Value *face = i->getDef(0);
-         bld.setPosition(i, true);
-         bld.mkOp2(OP_SHL, TYPE_U32, face, face, bld.mkImm(31));
-         bld.mkOp2(OP_XOR, TYPE_U32, face, face, bld.mkImm(0xbf800000));
-      }
       break;
    default:
       break;

@@ -45,11 +45,37 @@ struct brw_vs_prog_key {
     * Number of channels of the vertex attribute that need GL_FIXED rescaling
     */
    uint8_t gl_fixed_input_size[VERT_ATTRIB_MAX];
-   GLuint nr_userclip:4;
+
+   /**
+    * True if at least one clip flag is enabled, regardless of whether the
+    * shader uses clip planes or gl_ClipDistance.
+    */
+   GLuint userclip_active:1;
+
+   /**
+    * How many user clipping planes are being uploaded to the vertex shader as
+    * push constants.
+    */
+   GLuint nr_userclip_plane_consts:4;
+
+   /**
+    * True if the shader uses gl_ClipDistance, regardless of whether any clip
+    * flags are enabled.
+    */
+   GLuint uses_clip_distance:1;
+
+   /**
+    * For pre-Gen6 hardware, a bitfield indicating which clipping planes are
+    * enabled.  This is used to compact clip planes.
+    *
+    * For Gen6 and later hardware, clip planes are not compacted, so this
+    * value is zero to avoid provoking unnecessary shader recompiles.
+    */
+   GLuint userclip_planes_enabled_gen_4_5:MAX_CLIP_PLANES;
+
    GLuint copy_edgeflag:1;
    GLuint point_coord_replace:8;
    GLuint clamp_vertex_color:1;
-   GLuint uses_clip_distance:1;
 };
 
 
@@ -77,7 +103,7 @@ struct brw_vs_compile {
    struct brw_reg stack;
 
    struct {	
-       GLboolean used_in_src;
+       bool used_in_src;
        struct brw_reg reg;
    } output_regs[128];
 
@@ -89,7 +115,7 @@ struct brw_vs_compile {
       struct brw_reg reg;
    } current_const[3];
 
-   GLboolean needs_stack;
+   bool needs_stack;
 };
 
 bool brw_vs_emit(struct gl_shader_program *prog, struct brw_vs_compile *c);

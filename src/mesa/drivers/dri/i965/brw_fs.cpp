@@ -152,6 +152,8 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
    case SHADER_OPCODE_COS:
       return 1 * c->dispatch_width / 8;
    case SHADER_OPCODE_POW:
+   case SHADER_OPCODE_INT_QUOTIENT:
+   case SHADER_OPCODE_INT_REMAINDER:
       return 2 * c->dispatch_width / 8;
    case FS_OPCODE_TEX:
    case FS_OPCODE_TXB:
@@ -405,8 +407,10 @@ fs_visitor::emit_fragcoord_interpolation(ir_variable *ir)
       emit(BRW_OPCODE_MOV, wpos,
 	   fs_reg(brw_vec8_grf(c->source_depth_reg, 0)));
    } else {
-      emit(FS_OPCODE_LINTERP, wpos, this->delta_x, this->delta_y,
-	   interp_reg(FRAG_ATTRIB_WPOS, 2));
+      emit(FS_OPCODE_LINTERP, wpos,
+           this->delta_x[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC],
+           this->delta_y[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC],
+           interp_reg(FRAG_ATTRIB_WPOS, 2));
    }
    wpos.reg_offset++;
 
@@ -420,8 +424,7 @@ fs_reg *
 fs_visitor::emit_general_interpolation(ir_variable *ir)
 {
    fs_reg *reg = new(this->mem_ctx) fs_reg(this, ir->type);
-   /* Interpolation is always in floating point regs. */
-   reg->type = BRW_REGISTER_TYPE_F;
+   reg->type = brw_type_for_base_type(ir->type->get_scalar_type());
    fs_reg attr = *reg;
 
    unsigned int array_elements;
@@ -438,6 +441,9 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
       type = ir->type;
    }
 
+   glsl_interp_qualifier interpolation_mode =
+      ir->determine_interpolation_mode(c->key.flat_shade);
+
    int location = ir->location;
    for (unsigned int i = 0; i < array_elements; i++) {
       for (unsigned int j = 0; j < type->matrix_columns; j++) {
@@ -450,10 +456,7 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
 	    continue;
 	 }
 
-	 bool is_gl_Color =
-	    location == FRAG_ATTRIB_COL0 || location == FRAG_ATTRIB_COL1;
-
-	 if (c->key.flat_shade && is_gl_Color) {
+	 if (interpolation_mode == INTERP_QUALIFIER_FLAT) {
 	    /* Constant interpolation (flat shading) case. The SF has
 	     * handed us defined values in only the constant offset
 	     * field of the setup reg.
@@ -461,11 +464,12 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
 	    for (unsigned int k = 0; k < type->vector_elements; k++) {
 	       struct brw_reg interp = interp_reg(location, k);
 	       interp = suboffset(interp, 3);
+               interp.type = reg->type;
 	       emit(FS_OPCODE_CINTERP, attr, fs_reg(interp));
 	       attr.reg_offset++;
 	    }
 	 } else {
-	    /* Perspective interpolation case. */
+	    /* Smooth/noperspective interpolation case. */
 	    for (unsigned int k = 0; k < type->vector_elements; k++) {
 	       /* FINISHME: At some point we probably want to push
 		* this farther by giving similar treatment to the
@@ -479,8 +483,14 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
 		  emit(BRW_OPCODE_MOV, attr, fs_reg(1.0f));
 	       } else {
 		  struct brw_reg interp = interp_reg(location, k);
-		  emit(FS_OPCODE_LINTERP, attr,
-		       this->delta_x, this->delta_y, fs_reg(interp));
+                  brw_wm_barycentric_interp_mode barycoord_mode;
+                  if (interpolation_mode == INTERP_QUALIFIER_SMOOTH)
+                     barycoord_mode = BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
+                  else
+                     barycoord_mode = BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC;
+                  emit(FS_OPCODE_LINTERP, attr,
+                       this->delta_x[barycoord_mode],
+                       this->delta_y[barycoord_mode], fs_reg(interp));
 	       }
 	       attr.reg_offset++;
 	    }
@@ -576,7 +586,15 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1)
    int base_mrf = 2;
    fs_inst *inst;
 
-   assert(opcode == SHADER_OPCODE_POW);
+   switch (opcode) {
+   case SHADER_OPCODE_POW:
+   case SHADER_OPCODE_INT_QUOTIENT:
+   case SHADER_OPCODE_INT_REMAINDER:
+      break;
+   default:
+      assert(!"not reached: unsupported binary math opcode.");
+      return NULL;
+   }
 
    if (intel->gen >= 6) {
       /* Can't do hstride == 0 args to gen6 math, so expand it out.
@@ -586,20 +604,35 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1)
        */
       if (src0.file == UNIFORM || src0.abs || src0.negate) {
 	 fs_reg expanded = fs_reg(this, glsl_type::float_type);
+	 expanded.type = src0.type;
 	 emit(BRW_OPCODE_MOV, expanded, src0);
 	 src0 = expanded;
       }
 
       if (src1.file == UNIFORM || src1.abs || src1.negate) {
 	 fs_reg expanded = fs_reg(this, glsl_type::float_type);
+	 expanded.type = src1.type;
 	 emit(BRW_OPCODE_MOV, expanded, src1);
 	 src1 = expanded;
       }
 
       inst = emit(opcode, dst, src0, src1);
    } else {
-      emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + 1), src1);
-      inst = emit(opcode, dst, src0, reg_null_f);
+      /* From the Ironlake PRM, Volume 4, Part 1, Section 6.1.13
+       * "Message Payload":
+       *
+       * "Operand0[7].  For the INT DIV functions, this operand is the
+       *  denominator."
+       *  ...
+       * "Operand1[7].  For the INT DIV functions, this operand is the
+       *  numerator."
+       */
+      bool is_int_div = opcode != SHADER_OPCODE_POW;
+      fs_reg &op0 = is_int_div ? src1 : src0;
+      fs_reg &op1 = is_int_div ? src0 : src1;
+
+      emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + 1, op1.type), op1);
+      inst = emit(opcode, dst, op0, reg_null_f);
 
       inst->base_mrf = base_mrf;
       inst->mlen = 2 * c->dispatch_width / 8;
@@ -743,9 +776,15 @@ fs_visitor::split_virtual_grfs()
 	 split_grf[i] = false;
    }
 
-   if (brw->has_pln) {
-      /* PLN opcodes rely on the delta_xy being contiguous. */
-      split_grf[this->delta_x.reg] = false;
+   if (brw->has_pln &&
+       this->delta_x[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC].file == GRF) {
+      /* PLN opcodes rely on the delta_xy being contiguous.  We only have to
+       * check this for BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC, because prior to
+       * Gen6, that was the only supported interpolation mode, and since Gen6,
+       * delta_x and delta_y are in fixed hardware registers.
+       */
+      split_grf[this->delta_x[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC].reg] =
+         false;
    }
 
    foreach_list(node, &this->instructions) {
@@ -1322,6 +1361,19 @@ fs_visitor::register_coalesce()
 	    interfered = true;
 	    break;
 	 }
+
+	 /* The accumulator result appears to get used for the
+	  * conditional modifier generation.  When negating a UD
+	  * value, there is a 33rd bit generated for the sign in the
+	  * accumulator value, so now you can't check, for example,
+	  * equality with a 32-bit value.  See piglit fs-op-neg-uint.
+	  */
+	 if (scan_inst->conditional_mod &&
+	     inst->src[0].negate &&
+	     inst->src[0].type == BRW_REGISTER_TYPE_UD) {
+	    interfered = true;
+	    break;
+	 }
       }
       if (interfered) {
 	 continue;
@@ -1338,8 +1390,11 @@ fs_visitor::register_coalesce()
 		scan_inst->src[i].reg == inst->dst.reg &&
 		scan_inst->src[i].reg_offset == inst->dst.reg_offset) {
 	       fs_reg new_src = inst->src[0];
+               if (scan_inst->src[i].abs) {
+                  new_src.negate = 0;
+                  new_src.abs = 1;
+               }
 	       new_src.negate ^= scan_inst->src[i].negate;
-	       new_src.abs |= scan_inst->src[i].abs;
 	       scan_inst->src[i] = new_src;
 	    }
 	 }
@@ -1748,6 +1803,7 @@ fs_visitor::run()
 
       /* Make sure we didn't try to sneak in an extra uniform */
       assert(orig_nr_params == c->prog_data.nr_params);
+      (void) orig_nr_params;
    }
 
    return !failed;
@@ -1779,7 +1835,7 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
 
    fs_visitor v(c, prog, shader);
    if (!v.run()) {
-      prog->LinkStatus = GL_FALSE;
+      prog->LinkStatus = false;
       ralloc_strcat(&prog->InfoLog, v.fail_msg);
 
       return false;
@@ -1802,11 +1858,13 @@ brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
 {
    struct brw_context *brw = brw_context(ctx);
    struct brw_wm_prog_key key;
-   struct gl_fragment_program *fp = prog->FragmentProgram;
-   struct brw_fragment_program *bfp = brw_fragment_program(fp);
 
-   if (!fp)
+   if (!prog->_LinkedShaders[MESA_SHADER_FRAGMENT])
       return true;
+
+   struct gl_fragment_program *fp = (struct gl_fragment_program *)
+      prog->_LinkedShaders[MESA_SHADER_FRAGMENT]->Program;
+   struct brw_fragment_program *bfp = brw_fragment_program(fp);
 
    memset(&key, 0, sizeof(key));
 

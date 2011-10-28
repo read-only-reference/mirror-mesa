@@ -24,7 +24,7 @@ USER_CXXFLAGS="$CXXFLAGS"
 dnl Versions for external dependencies
 LIBDRM_REQUIRED=2.4.24
 LIBDRM_RADEON_REQUIRED=2.4.24
-LIBDRM_INTEL_REQUIRED=2.4.24
+LIBDRM_INTEL_REQUIRED=2.4.27
 LIBDRM_NOUVEAU_REQUIRED=0.6
 DRI2PROTO_REQUIRED=2.6
 GLPROTO_REQUIRED=1.4.14
@@ -172,6 +172,10 @@ if test "x$GCC" = xyes; then
 
     # Work around aliasing bugs - developers should comment this out
     CFLAGS="$CFLAGS -fno-strict-aliasing"
+
+    # gcc's builtin memcmp is slower than glibc's
+    # http://gcc.gnu.org/bugzilla/show_bug.cgi?id=43052
+    CFLAGS="$CFLAGS -fno-builtin-memcmp"
 fi
 if test "x$GXX" = xyes; then
     CXXFLAGS="$CXXFLAGS -Wall"
@@ -191,6 +195,10 @@ if test "x$GXX" = xyes; then
 
     # Work around aliasing bugs - developers should comment this out
     CXXFLAGS="$CXXFLAGS -fno-strict-aliasing"
+
+    # gcc's builtin memcmp is slower than glibc's
+    # http://gcc.gnu.org/bugzilla/show_bug.cgi?id=43052
+    CXXFLAGS="$CXXFLAGS -fno-builtin-memcmp"
 fi
 
 dnl even if the compiler appears to support it, using visibility attributes isn't
@@ -340,6 +348,28 @@ else
         LIB_EXTENSION='so' ;;
     esac
 fi
+
+dnl
+dnl Mangled Mesa support
+dnl
+AC_ARG_ENABLE([mangling],
+  [AS_HELP_STRING([--enable-mangling],
+    [enable mangled symbols and library name @<:@default=disabled@:>@])],
+  [enable_mangling="${enableval}"],
+  [enable_mangling=no]
+)
+GL_LIB="GL"
+GLU_LIB="GLU"
+OSMESA_LIB="OSMesa"
+if test "x${enable_mangling}" = "xyes" ; then
+  DEFINES="${DEFINES} -DUSE_MGL_NAMESPACE"
+  GL_LIB="MangledGL"
+  GLU_LIB="MangledGLU"
+  OSMESA_LIB="MangledOSMesa"
+fi
+AC_SUBST([GL_LIB])
+AC_SUBST([GLU_LIB])
+AC_SUBST([OSMESA_LIB])
 
 dnl
 dnl potentially-infringing-but-nobody-knows-for-sure stuff
@@ -1155,19 +1185,19 @@ if test "x$enable_dri" = xyes; then
         case "$host_cpu" in
         x86_64)
             if test "x$DRI_DIRS" = "xyes"; then
-                DRI_DIRS="i915 i965 nouveau r200 r300 r600 radeon swrast"
+                DRI_DIRS="i915 i965 nouveau r200 radeon swrast"
             fi
             ;;
         powerpc*)
             # Build only the drivers for cards that exist on PowerPC.
             if test "x$DRI_DIRS" = "xyes"; then
-                DRI_DIRS="r200 r300 r600 radeon swrast"
+                DRI_DIRS="r200 radeon swrast"
             fi
             ;;
         sparc*)
             # Build only the drivers for cards that exist on sparc
             if test "x$DRI_DIRS" = "xyes"; then
-                DRI_DIRS="r200 r300 r600 radeon swrast"
+                DRI_DIRS="r200 radeon swrast"
             fi
             ;;
         esac
@@ -1177,7 +1207,7 @@ if test "x$enable_dri" = xyes; then
         DEFINES="$DEFINES -DIN_DRI_DRIVER -DHAVE_ALIAS"
 
         if test "x$DRI_DIRS" = "xyes"; then
-            DRI_DIRS="i915 i965 nouveau r200 r300 r600 radeon swrast"
+            DRI_DIRS="i915 i965 nouveau r200 radeon swrast"
         fi
         ;;
     gnu*)
@@ -1197,7 +1227,7 @@ if test "x$enable_dri" = xyes; then
 
     # default drivers
     if test "x$DRI_DIRS" = "xyes"; then
-        DRI_DIRS="i915 i965 nouveau r200 r300 r600 radeon swrast"
+        DRI_DIRS="i915 i965 nouveau r200 radeon swrast"
     fi
 
     DRI_DIRS=`echo "$DRI_DIRS" | $SED 's/  */ /g'`
@@ -1246,20 +1276,10 @@ case $DRI_DIRS in
 esac
 
 case $DRI_DIRS in
-*radeon*|*r200*|*r300*|*r600*)
-    PKG_CHECK_MODULES([LIBDRM_RADEON],
-		      [libdrm_radeon >= $LIBDRM_RADEON_REQUIRED],
-		      HAVE_LIBDRM_RADEON=yes,
-		      HAVE_LIBDRM_RADEON=no)
-
-    if test "x$HAVE_LIBDRM_RADEON" = xyes; then
-	RADEON_CFLAGS="-DHAVE_LIBDRM_RADEON=1 $LIBDRM_RADEON_CFLAGS"
-	RADEON_LDFLAGS=$LIBDRM_RADEON_LIBS
-    fi
+*radeon*|*r200*)
+    PKG_CHECK_MODULES([RADEON], [libdrm_radeon >= $LIBDRM_RADEON_REQUIRED])
     ;;
 esac
-AC_SUBST([RADEON_CFLAGS])
-AC_SUBST([RADEON_LDFLAGS])
 
 
 dnl
@@ -1280,17 +1300,16 @@ if test "x$osmesa_bits" != x8; then
 fi
 case "x$osmesa_bits" in
 x8)
-    OSMESA_LIB=OSMesa
+    OSMESA_LIB="${OSMESA_LIB}"
     ;;
 x16|x32)
-    OSMESA_LIB="OSMesa$osmesa_bits"
+    OSMESA_LIB="${OSMESA_LIB}$osmesa_bits"
     DEFINES="$DEFINES -DCHAN_BITS=$osmesa_bits -DDEFAULT_SOFTWARE_DEPTH_BITS=31"
     ;;
 *)
     AC_MSG_ERROR([OSMesa bits '$osmesa_bits' is not a valid option])
     ;;
 esac
-AC_SUBST([OSMESA_LIB])
 
 if test "x$enable_osmesa" = xyes; then
     # only link libraries with osmesa if shared
@@ -1719,7 +1738,7 @@ if test "x$enable_gallium_llvm" = xyes; then
     if test "x$LLVM_CONFIG" != xno; then
 	LLVM_VERSION=`$LLVM_CONFIG --version`
 	LLVM_CFLAGS=`$LLVM_CONFIG --cppflags|sed 's/-DNDEBUG\>//g'`
-	LLVM_LIBS="`$LLVM_CONFIG --libs` -lstdc++"
+	LLVM_LIBS="`$LLVM_CONFIG --libs`"
 
 	LLVM_LDFLAGS=`$LLVM_CONFIG --ldflags`
 	DEFINES="$DEFINES -D__STDC_CONSTANT_MACROS"
@@ -1829,7 +1848,7 @@ if test "x$with_gallium_drivers" != x; then
         xnouveau)
             PKG_CHECK_MODULES([NOUVEAU], [libdrm_nouveau >= $LIBDRM_NOUVEAU_REQUIRED])
             GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS nouveau nvfx nv50 nvc0"
-            gallium_check_st "nouveau/drm" "dri-nouveau" "xorg-nouveau" "" "xvmc-nouveau"
+            gallium_check_st "nouveau/drm" "dri-nouveau" "xorg-nouveau" "" "xvmc-nouveau" "vdpau-nouveau"
             ;;
         xswrast)
             GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS softpipe"
@@ -1849,9 +1868,9 @@ if test "x$with_gallium_drivers" != x; then
             if test "x$HAVE_ST_VA" = xyes; then
                 GALLIUM_TARGET_DIRS="$GALLIUM_TARGET_DIRS va-softpipe"
             fi
-            if test "x$HAVE_ST_VDPAU" == xyes ||
-               test "x$HAVE_ST_XVMC" == xyes ||
-               test "x$HAVE_ST_VA" == xyes; then
+            if test "x$HAVE_ST_VDPAU" = xyes ||
+               test "x$HAVE_ST_XVMC" = xyes ||
+               test "x$HAVE_ST_VA" = xyes; then
                if test "x$HAVE_WINSYS_XLIB" != xyes; then
                   GALLIUM_WINSYS_DIRS="$GALLIUM_WINSYS_DIRS sw/xlib"
                fi

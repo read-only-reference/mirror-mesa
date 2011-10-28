@@ -5512,6 +5512,13 @@ _glapi_create_table_from_handle(void *handle, const char *symbol_prefix) {
     }
 
 
+    if(!disp->DrawBuffersARB) {
+        void ** procp = (void **) &disp->DrawBuffersARB;
+        snprintf(symboln, sizeof(symboln), "%sDrawBuffersNV", symbol_prefix);
+        *procp = dlsym(handle, symboln);
+    }
+
+
     if(!disp->ClampColorARB) {
         void ** procp = (void **) &disp->ClampColorARB;
         snprintf(symboln, sizeof(symboln), "%sClampColorARB", symbol_prefix);
@@ -6362,6 +6369,48 @@ _glapi_create_table_from_handle(void *handle, const char *symbol_prefix) {
     if(!disp->ReadnPixelsARB) {
         void ** procp = (void **) &disp->ReadnPixelsARB;
         snprintf(symboln, sizeof(symboln), "%sReadnPixelsARB", symbol_prefix);
+        *procp = dlsym(handle, symboln);
+    }
+
+
+    if(!disp->TexStorage1D) {
+        void ** procp = (void **) &disp->TexStorage1D;
+        snprintf(symboln, sizeof(symboln), "%sTexStorage1D", symbol_prefix);
+        *procp = dlsym(handle, symboln);
+    }
+
+
+    if(!disp->TexStorage2D) {
+        void ** procp = (void **) &disp->TexStorage2D;
+        snprintf(symboln, sizeof(symboln), "%sTexStorage2D", symbol_prefix);
+        *procp = dlsym(handle, symboln);
+    }
+
+
+    if(!disp->TexStorage3D) {
+        void ** procp = (void **) &disp->TexStorage3D;
+        snprintf(symboln, sizeof(symboln), "%sTexStorage3D", symbol_prefix);
+        *procp = dlsym(handle, symboln);
+    }
+
+
+    if(!disp->TextureStorage1DEXT) {
+        void ** procp = (void **) &disp->TextureStorage1DEXT;
+        snprintf(symboln, sizeof(symboln), "%sTextureStorage1DEXT", symbol_prefix);
+        *procp = dlsym(handle, symboln);
+    }
+
+
+    if(!disp->TextureStorage2DEXT) {
+        void ** procp = (void **) &disp->TextureStorage2DEXT;
+        snprintf(symboln, sizeof(symboln), "%sTextureStorage2DEXT", symbol_prefix);
+        *procp = dlsym(handle, symboln);
+    }
+
+
+    if(!disp->TextureStorage3DEXT) {
+        void ** procp = (void **) &disp->TextureStorage3DEXT;
+        snprintf(symboln, sizeof(symboln), "%sTextureStorage3DEXT", symbol_prefix);
         *procp = dlsym(handle, symboln);
     }
 

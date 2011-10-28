@@ -725,43 +725,6 @@ static GLboolean r200UpdateTextureEnv( struct gl_context *ctx, int unit, int slo
    return GL_TRUE;
 }
 
-void r200SetTexOffset(__DRIcontext * pDRICtx, GLint texname,
-		      unsigned long long offset, GLint depth, GLuint pitch)
-{
-	r200ContextPtr rmesa = pDRICtx->driverPrivate;
-	struct gl_texture_object *tObj =
-	    _mesa_lookup_texture(rmesa->radeon.glCtx, texname);
-	radeonTexObjPtr t = radeon_tex_obj(tObj);
-
-	if (!tObj)
-		return;
-
-	t->image_override = GL_TRUE;
-
-	if (!offset)
-		return;
-
-	t->bo = NULL;
-	t->override_offset = offset;
-	t->pp_txpitch = pitch - 32;
-
-	switch (depth) {
-	case 32:
-		t->pp_txformat = tx_table_le[MESA_FORMAT_ARGB8888].format;
-		t->pp_txfilter |= tx_table_le[MESA_FORMAT_ARGB8888].filter;
-		break;
-	case 24:
-	default:
-		t->pp_txformat = tx_table_le[MESA_FORMAT_RGB888].format;
-		t->pp_txfilter |= tx_table_le[MESA_FORMAT_RGB888].filter;
-		break;
-	case 16:
-		t->pp_txformat = tx_table_le[MESA_FORMAT_RGB565].format;
-		t->pp_txfilter |= tx_table_le[MESA_FORMAT_RGB565].filter;
-		break;
-	}
-}
-
 void r200SetTexBuffer2(__DRIcontext *pDRICtx, GLint target, GLint texture_format,
 		       __DRIdrawable *dPriv)
 {
@@ -846,7 +809,7 @@ void r200SetTexBuffer2(__DRIcontext *pDRICtx, GLint target, GLint texture_format
 	_mesa_init_teximage_fields(radeon->glCtx, target, texImage,
 				   rb->base.Width, rb->base.Height, 1, 0,
 				   rb->cpp, texFormat);
-	texImage->RowStride = rb->pitch / rb->cpp;
+	rImage->base.RowStride = rb->pitch / rb->cpp;
 
 
         t->pp_txsize = ((rb->base.Width - 1) << RADEON_TEX_USIZE_SHIFT)
@@ -1127,11 +1090,9 @@ static void import_tex_obj_state( r200ContextPtr rmesa,
 
       R200_STATECHANGE( rmesa, cube[unit] );
       cube_cmd[CUBE_PP_CUBIC_FACES] = texobj->pp_cubic_faces;
-      if (rmesa->radeon.radeonScreen->drmSupportsFragShader) {
-	 /* that value is submitted twice. could change cube atom
-	    to not include that command when new drm is used */
-	 cmd[TEX_PP_CUBIC_FACES] = texobj->pp_cubic_faces;
-      }
+      /* that value is submitted twice. could change cube atom
+         to not include that command when new drm is used */
+      cmd[TEX_PP_CUBIC_FACES] = texobj->pp_cubic_faces;
    }
 
 }

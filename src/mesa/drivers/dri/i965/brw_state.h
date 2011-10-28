@@ -35,17 +35,6 @@
 
 #include "brw_context.h"
 
-static INLINE void
-brw_add_validated_bo(struct brw_context *brw, drm_intel_bo *bo)
-{
-   assert(brw->state.validated_bo_count < ARRAY_SIZE(brw->state.validated_bos));
-
-   if (bo != NULL) {
-      drm_intel_bo_reference(bo);
-      brw->state.validated_bos[brw->state.validated_bo_count++] = bo;
-   }
-};
-
 extern const struct brw_tracked_state brw_blend_constant_color;
 extern const struct brw_tracked_state brw_cc_vp;
 extern const struct brw_tracked_state brw_cc_unit;
@@ -135,11 +124,9 @@ extern const struct brw_tracked_state gen7_wm_surfaces;
 /***********************************************************************
  * brw_state.c
  */
-void brw_validate_state(struct brw_context *brw);
 void brw_upload_state(struct brw_context *brw);
 void brw_init_state(struct brw_context *brw);
 void brw_destroy_state(struct brw_context *brw);
-void brw_clear_validated_bos(struct brw_context *brw);
 
 /***********************************************************************
  * brw_state_cache.c
@@ -212,10 +199,5 @@ get_attr_override(struct brw_vue_map *vue_map, int urb_entry_read_offset,
 /* gen7_misc_state.c */
 unsigned int
 gen7_depth_format(struct brw_context *brw);
-
-/* gen6_clip_state.c */
-uint32_t
-brw_compute_userclip_flags(bool uses_clip_distance,
-                           GLbitfield clip_planes_enabled);
 
 #endif

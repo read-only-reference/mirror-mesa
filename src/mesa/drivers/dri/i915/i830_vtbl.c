@@ -41,8 +41,8 @@
 
 #define FILE_DEBUG_FLAG DEBUG_STATE
 
-static GLboolean i830_check_vertex_size(struct intel_context *intel,
-                                        GLuint expected);
+static bool i830_check_vertex_size(struct intel_context *intel,
+				   GLuint expected);
 
 #define SZ_TO_HW(sz)  ((sz-2)&0x3)
 #define EMIT_SZ(sz)   (EMIT_1F + (sz) - 1)
@@ -236,7 +236,7 @@ i830_reduced_primitive_state(struct intel_context *intel, GLenum rprim)
 /* Pull apart the vertex format registers and figure out how large a
  * vertex is supposed to be. 
  */
-static GLboolean
+static bool
 i830_check_vertex_size(struct intel_context *intel, GLuint expected)
 {
    struct i830_context *i830 = i830_context(&intel->ctx);
@@ -715,7 +715,6 @@ i830_update_draw_buffer(struct intel_context *intel)
    struct gl_framebuffer *fb = ctx->DrawBuffer;
    struct intel_region *colorRegions[MAX_DRAW_BUFFERS], *depthRegion = NULL;
    struct intel_renderbuffer *irbDepth = NULL, *irbStencil = NULL;
-   bool fb_has_hiz = intel_framebuffer_has_hiz(fb);
 
    if (!fb) {
       /* this can happen during the initial context initialization */
@@ -784,35 +783,34 @@ i830_update_draw_buffer(struct intel_context *intel)
    }
 
    if (!colorRegions[0]) {
-      FALLBACK(intel, INTEL_FALLBACK_DRAW_BUFFER, GL_TRUE);
+      FALLBACK(intel, INTEL_FALLBACK_DRAW_BUFFER, true);
    }
    else {
-      FALLBACK(intel, INTEL_FALLBACK_DRAW_BUFFER, GL_FALSE);
+      FALLBACK(intel, INTEL_FALLBACK_DRAW_BUFFER, false);
    }
 
    /* Check for depth fallback. */
    if (irbDepth && irbDepth->region) {
-      assert(!fb_has_hiz || irbDepth->Base.Format != MESA_FORMAT_S8_Z24);
-      FALLBACK(intel, INTEL_FALLBACK_DEPTH_BUFFER, GL_FALSE);
+      FALLBACK(intel, INTEL_FALLBACK_DEPTH_BUFFER, false);
       depthRegion = irbDepth->region;
    } else if (irbDepth && !irbDepth->region) {
-      FALLBACK(intel, INTEL_FALLBACK_DEPTH_BUFFER, GL_TRUE);
+      FALLBACK(intel, INTEL_FALLBACK_DEPTH_BUFFER, true);
       depthRegion = NULL;
    } else { /* !irbDepth */
       /* No fallback is needed because there is no depth buffer. */
-      FALLBACK(intel, INTEL_FALLBACK_DEPTH_BUFFER, GL_FALSE);
+      FALLBACK(intel, INTEL_FALLBACK_DEPTH_BUFFER, false);
       depthRegion = NULL;
    }
 
    /* Check for stencil fallback. */
    if (irbStencil && irbStencil->region) {
       assert(irbStencil->Base.Format == MESA_FORMAT_S8_Z24);
-      FALLBACK(intel, INTEL_FALLBACK_STENCIL_BUFFER, GL_FALSE);
+      FALLBACK(intel, INTEL_FALLBACK_STENCIL_BUFFER, false);
    } else if (irbStencil && !irbStencil->region) {
-      FALLBACK(intel, INTEL_FALLBACK_STENCIL_BUFFER, GL_TRUE);
+      FALLBACK(intel, INTEL_FALLBACK_STENCIL_BUFFER, true);
    } else { /* !irbStencil */
       /* No fallback is needed because there is no stencil buffer. */
-      FALLBACK(intel, INTEL_FALLBACK_STENCIL_BUFFER, GL_FALSE);
+      FALLBACK(intel, INTEL_FALLBACK_STENCIL_BUFFER, false);
    }
 
    /* If we have a (packed) stencil buffer attached but no depth buffer,
@@ -887,6 +885,13 @@ i830_is_hiz_depth_format(struct intel_context *intel, gl_format format)
    return false;
 }
 
+static void
+i830_hiz_resolve_noop(struct intel_context *intel,
+		      struct intel_region *region)
+{
+   /* empty */
+}
+
 void
 i830InitVtbl(struct i830_context *i830)
 {
@@ -905,4 +910,6 @@ i830InitVtbl(struct i830_context *i830)
    i830->intel.vtbl.invalidate_state = i830_invalidate_state;
    i830->intel.vtbl.render_target_supported = i830_render_target_supported;
    i830->intel.vtbl.is_hiz_depth_format = i830_is_hiz_depth_format;
+   i830->intel.vtbl.hiz_resolve_depthbuffer = i830_hiz_resolve_noop;
+   i830->intel.vtbl.hiz_resolve_hizbuffer = i830_hiz_resolve_noop;
 }

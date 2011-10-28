@@ -494,7 +494,6 @@ make_texture(struct st_context *st,
 
    {
       struct pipe_transfer *transfer;
-      static const GLuint dstImageOffsets = 0;
       GLboolean success;
       GLubyte *dest;
       const GLbitfield imageTransferStateSave = ctx->_ImageTransferState;
@@ -517,10 +516,9 @@ make_texture(struct st_context *st,
       success = _mesa_texstore(ctx, 2,           /* dims */
                                baseInternalFormat, /* baseInternalFormat */
                                mformat,          /* gl_format */
-                               dest,             /* dest */
                                0, 0, 0,          /* dstX/Y/Zoffset */
                                transfer->stride, /* dstRowStride, bytes */
-                               &dstImageOffsets, /* dstImageOffsets */
+                               &dest,            /* destSlices */
                                width, height, 1, /* size */
                                format, type,     /* src format/type */
                                pixels,           /* data source */
@@ -873,7 +871,7 @@ draw_stencil_pixels(struct gl_context *ctx, GLint x, GLint y,
 
          if (format == GL_DEPTH_STENCIL) {
             GLenum ztype =
-               pt->resource->format == PIPE_FORMAT_Z32_FLOAT_S8X24_USCALED ?
+               pt->resource->format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT ?
                GL_FLOAT : GL_UNSIGNED_INT;
 
             _mesa_unpack_depth_span(ctx, spanWidth, ztype, zValues,
@@ -898,14 +896,14 @@ draw_stencil_pixels(struct gl_context *ctx, GLint x, GLint y,
 
             /* now pack the stencil (and Z) values in the dest format */
             switch (pt->resource->format) {
-            case PIPE_FORMAT_S8_USCALED:
+            case PIPE_FORMAT_S8_UINT:
                {
                   ubyte *dest = stmap + spanY * pt->stride + spanX;
                   assert(usage == PIPE_TRANSFER_WRITE);
                   memcpy(dest, sValues, spanWidth);
                }
                break;
-            case PIPE_FORMAT_Z24_UNORM_S8_USCALED:
+            case PIPE_FORMAT_Z24_UNORM_S8_UINT:
                if (format == GL_DEPTH_STENCIL) {
                   uint *dest = (uint *) (stmap + spanY * pt->stride + spanX*4);
                   GLint k;
@@ -923,7 +921,7 @@ draw_stencil_pixels(struct gl_context *ctx, GLint x, GLint y,
                   }
                }
                break;
-            case PIPE_FORMAT_S8_USCALED_Z24_UNORM:
+            case PIPE_FORMAT_S8_UINT_Z24_UNORM:
                if (format == GL_DEPTH_STENCIL) {
                   uint *dest = (uint *) (stmap + spanY * pt->stride + spanX*4);
                   GLint k;
@@ -941,7 +939,7 @@ draw_stencil_pixels(struct gl_context *ctx, GLint x, GLint y,
                   }
                }
                break;
-            case PIPE_FORMAT_Z32_FLOAT_S8X24_USCALED:
+            case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
                if (format == GL_DEPTH_STENCIL) {
                   uint *dest = (uint *) (stmap + spanY * pt->stride + spanX*4);
                   GLfloat *destf = (GLfloat*)dest;
@@ -1114,20 +1112,20 @@ st_DrawPixels(struct gl_context *ctx, GLint x, GLint y,
                enum pipe_format stencil_format = PIPE_FORMAT_NONE;
 
                switch (pt->format) {
-               case PIPE_FORMAT_Z24_UNORM_S8_USCALED:
-               case PIPE_FORMAT_X24S8_USCALED:
-                  stencil_format = PIPE_FORMAT_X24S8_USCALED;
+               case PIPE_FORMAT_Z24_UNORM_S8_UINT:
+               case PIPE_FORMAT_X24S8_UINT:
+                  stencil_format = PIPE_FORMAT_X24S8_UINT;
                   break;
-               case PIPE_FORMAT_S8_USCALED_Z24_UNORM:
-               case PIPE_FORMAT_S8X24_USCALED:
-                  stencil_format = PIPE_FORMAT_S8X24_USCALED;
+               case PIPE_FORMAT_S8_UINT_Z24_UNORM:
+               case PIPE_FORMAT_S8X24_UINT:
+                  stencil_format = PIPE_FORMAT_S8X24_UINT;
                   break;
-               case PIPE_FORMAT_Z32_FLOAT_S8X24_USCALED:
-               case PIPE_FORMAT_X32_S8X24_USCALED:
-                  stencil_format = PIPE_FORMAT_X32_S8X24_USCALED;
+               case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
+               case PIPE_FORMAT_X32_S8X24_UINT:
+                  stencil_format = PIPE_FORMAT_X32_S8X24_UINT;
                   break;
-               case PIPE_FORMAT_S8_USCALED:
-                  stencil_format = PIPE_FORMAT_S8_USCALED;
+               case PIPE_FORMAT_S8_UINT:
+                  stencil_format = PIPE_FORMAT_S8_UINT;
                   break;
                default:
                   assert(0);
@@ -1243,7 +1241,7 @@ copy_stencil_pixels(struct gl_context *ctx, GLint srcx, GLint srcy,
       src = buffer + i * width;
 
       switch (ptDraw->resource->format) {
-      case PIPE_FORMAT_Z24_UNORM_S8_USCALED:
+      case PIPE_FORMAT_Z24_UNORM_S8_UINT:
          {
             uint *dst4 = (uint *) dst;
             int j;
@@ -1254,7 +1252,7 @@ copy_stencil_pixels(struct gl_context *ctx, GLint srcx, GLint srcy,
             }
          }
          break;
-      case PIPE_FORMAT_S8_USCALED_Z24_UNORM:
+      case PIPE_FORMAT_S8_UINT_Z24_UNORM:
          {
             uint *dst4 = (uint *) dst;
             int j;
@@ -1265,11 +1263,11 @@ copy_stencil_pixels(struct gl_context *ctx, GLint srcx, GLint srcy,
             }
          }
          break;
-      case PIPE_FORMAT_S8_USCALED:
+      case PIPE_FORMAT_S8_UINT:
          assert(usage == PIPE_TRANSFER_WRITE);
          memcpy(dst, src, width);
          break;
-      case PIPE_FORMAT_Z32_FLOAT_S8X24_USCALED:
+      case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
          {
             uint *dst4 = (uint *) dst;
             int j;

@@ -51,7 +51,7 @@
  * linear RGB value in [0, 1].
  * Implemented with a 256-entry lookup table.
  */
-static INLINE GLfloat
+static inline GLfloat
 nonlinear_to_linear(GLubyte cs8)
 {
    static GLfloat table[256];
@@ -121,9 +121,9 @@ static void store_null_texel(struct swrast_texture_image *texImage,
  */
 static struct {
    gl_format Name;
-   FetchTexelFuncF Fetch1D;
-   FetchTexelFuncF Fetch2D;
-   FetchTexelFuncF Fetch3D;
+   FetchTexelFunc Fetch1D;
+   FetchTexelFunc Fetch2D;
+   FetchTexelFunc Fetch3D;
    StoreTexelFunc StoreTexel;
 }
 texfetch_funcs[MESA_FORMAT_COUNT] =
@@ -656,6 +656,226 @@ texfetch_funcs[MESA_FORMAT_COUNT] =
       store_texel_rg_f16
    },
 
+   {
+      MESA_FORMAT_ALPHA_UINT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_ALPHA_UINT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_ALPHA_UINT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_ALPHA_INT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_ALPHA_INT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_ALPHA_INT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+
+   {
+      MESA_FORMAT_INTENSITY_UINT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_INTENSITY_UINT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_INTENSITY_UINT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_INTENSITY_INT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_INTENSITY_INT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_INTENSITY_INT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+
+   {
+      MESA_FORMAT_LUMINANCE_UINT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_LUMINANCE_UINT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_LUMINANCE_UINT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_LUMINANCE_INT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_LUMINANCE_INT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_LUMINANCE_INT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+
+   {
+      MESA_FORMAT_LUMINANCE_ALPHA_UINT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_LUMINANCE_ALPHA_UINT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_LUMINANCE_ALPHA_UINT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_LUMINANCE_ALPHA_INT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_LUMINANCE_ALPHA_INT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_LUMINANCE_ALPHA_INT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+
+   {
+      MESA_FORMAT_R_INT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_RG_INT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
+   {
+      MESA_FORMAT_RGB_INT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+
    /* non-normalized, signed int */
    {
       MESA_FORMAT_RGBA_INT8,
@@ -665,11 +885,53 @@ texfetch_funcs[MESA_FORMAT_COUNT] =
       store_texel_rgba_int8
    },
    {
+      MESA_FORMAT_R_INT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
+      MESA_FORMAT_RG_INT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
+      MESA_FORMAT_RGB_INT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
       MESA_FORMAT_RGBA_INT16,
       fetch_texel_1d_rgba_int16,
       fetch_texel_2d_rgba_int16,
       fetch_texel_3d_rgba_int16,
       store_texel_rgba_int16
+   },
+   {
+      MESA_FORMAT_R_INT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
+      MESA_FORMAT_RG_INT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
+      MESA_FORMAT_RGB_INT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
    },
    {
       MESA_FORMAT_RGBA_INT32,
@@ -681,6 +943,27 @@ texfetch_funcs[MESA_FORMAT_COUNT] =
 
    /* non-normalized, unsigned int */
    {
+      MESA_FORMAT_R_UINT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
+      MESA_FORMAT_RG_UINT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
+      MESA_FORMAT_RGB_UINT8,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
       MESA_FORMAT_RGBA_UINT8,
       fetch_texel_1d_rgba_uint8,
       fetch_texel_2d_rgba_uint8,
@@ -688,11 +971,53 @@ texfetch_funcs[MESA_FORMAT_COUNT] =
       store_texel_rgba_uint8
    },
    {
+      MESA_FORMAT_R_UINT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
+      MESA_FORMAT_RG_UINT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
+      MESA_FORMAT_RGB_UINT16,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
       MESA_FORMAT_RGBA_UINT16,
       fetch_texel_1d_rgba_uint16,
       fetch_texel_2d_rgba_uint16,
       fetch_texel_3d_rgba_uint16,
       store_texel_rgba_uint16
+   },
+   {
+      MESA_FORMAT_R_UINT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
+      MESA_FORMAT_RG_UINT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
+   },
+   {
+      MESA_FORMAT_RGB_UINT32,
+      NULL,
+      NULL,
+      NULL,
+      NULL
    },
    {
       MESA_FORMAT_RGBA_UINT32,
@@ -925,7 +1250,7 @@ texfetch_funcs[MESA_FORMAT_COUNT] =
 };
 
 
-FetchTexelFuncF
+FetchTexelFunc
 _mesa_get_texel_fetch_func(gl_format format, GLuint dims)
 {
 #ifdef DEBUG
@@ -962,63 +1287,7 @@ _mesa_get_texel_store_func(gl_format format)
 
 
 /**
- * Adaptor for fetching a GLchan texel from a float-valued texture.
- */
-static void
-fetch_texel_float_to_chan(const struct swrast_texture_image *texImage,
-                          GLint i, GLint j, GLint k, GLchan *texelOut)
-{
-   GLfloat temp[4];
-   GLenum baseFormat = _mesa_get_format_base_format(texImage->Base.TexFormat);
-
-   ASSERT(texImage->FetchTexelf);
-   texImage->FetchTexelf(texImage, i, j, k, temp);
-   if (baseFormat == GL_DEPTH_COMPONENT ||
-       baseFormat == GL_DEPTH_STENCIL_EXT) {
-      /* just one channel */
-      UNCLAMPED_FLOAT_TO_CHAN(texelOut[0], temp[0]);
-   }
-   else {
-      /* four channels */
-      UNCLAMPED_FLOAT_TO_CHAN(texelOut[0], temp[0]);
-      UNCLAMPED_FLOAT_TO_CHAN(texelOut[1], temp[1]);
-      UNCLAMPED_FLOAT_TO_CHAN(texelOut[2], temp[2]);
-      UNCLAMPED_FLOAT_TO_CHAN(texelOut[3], temp[3]);
-   }
-}
-
-
-#if 0
-/**
- * Adaptor for fetching a float texel from a GLchan-valued texture.
- */
-static void
-fetch_texel_chan_to_float(const struct swrast_texture_image *texImage,
-                          GLint i, GLint j, GLint k, GLfloat *texelOut)
-{
-   GLchan temp[4];
-   GLenum baseFormat = _mesa_get_format_base_format(texImage->TexFormat);
-
-   ASSERT(texImage->FetchTexelc);
-   texImage->FetchTexelc(texImage, i, j, k, temp);
-   if (baseFormat == GL_DEPTH_COMPONENT ||
-       baseFormat == GL_DEPTH_STENCIL_EXT) {
-      /* just one channel */
-      texelOut[0] = CHAN_TO_FLOAT(temp[0]);
-   }
-   else {
-      /* four channels */
-      texelOut[0] = CHAN_TO_FLOAT(temp[0]);
-      texelOut[1] = CHAN_TO_FLOAT(temp[1]);
-      texelOut[2] = CHAN_TO_FLOAT(temp[2]);
-      texelOut[3] = CHAN_TO_FLOAT(temp[3]);
-   }
-}
-#endif
-
-
-/**
- * Initialize the texture image's FetchTexelc and FetchTexelf methods.
+ * Initialize the texture image's FetchTexel methods.
  */
 static void
 set_fetch_functions(struct swrast_texture_image *texImage, GLuint dims)
@@ -1032,12 +1301,8 @@ set_fetch_functions(struct swrast_texture_image *texImage, GLuint dims)
       format = _mesa_get_srgb_format_linear(format);
    }
 
-   texImage->FetchTexelf = _mesa_get_texel_fetch_func(format, dims);
-
-   texImage->FetchTexelc = fetch_texel_float_to_chan;
-
-   ASSERT(texImage->FetchTexelc);
-   ASSERT(texImage->FetchTexelf);
+   texImage->FetchTexel = _mesa_get_texel_fetch_func(format, dims);
+   ASSERT(texImage->FetchTexel);
 }
 
 void

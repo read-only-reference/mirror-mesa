@@ -422,8 +422,6 @@ bind_array_obj(struct gl_context *ctx)
       assert(i < Elements(exec->array.generic_array));
       exec->array.generic_array[i] = &arrayObj->VertexAttrib[i];
    }
-   
-   exec->array.array_obj = arrayObj->Name;
 }
 
 
@@ -444,10 +442,7 @@ recalculate_input_bindings(struct gl_context *ctx)
    GLbitfield const_inputs = 0x0;
    GLuint i;
 
-   exec->array.program_mode = get_program_mode(ctx);
-   exec->array.enabled_flags = ctx->Array.ArrayObj->_Enabled;
-
-   switch (exec->array.program_mode) {
+   switch (get_program_mode(ctx)) {
    case VP_NONE:
       /* When no vertex program is active (or the vertex program is generated
        * from fixed-function state).  We put the material values into the
@@ -538,7 +533,7 @@ recalculate_input_bindings(struct gl_context *ctx)
          }
       }
 
-      for (i = 0; i < MAX_VERTEX_GENERIC_ATTRIBS; i++) {
+      for (i = 1; i < MAX_VERTEX_GENERIC_ATTRIBS; i++) {
 	 if (exec->array.generic_array[i]->Enabled)
 	    inputs[VERT_ATTRIB_GENERIC0 + i] = exec->array.generic_array[i];
 	 else {
@@ -547,6 +542,7 @@ recalculate_input_bindings(struct gl_context *ctx)
          }
       }
 
+      inputs[VERT_ATTRIB_GENERIC0] = inputs[0];
       ctx->NewState |= _NEW_ARRAY;
       break;
    }
@@ -562,8 +558,8 @@ recalculate_input_bindings(struct gl_context *ctx)
  * Note that this might set the _NEW_ARRAY dirty flag so state validation
  * must be done after this call.
  */
-static void
-bind_arrays(struct gl_context *ctx)
+void
+vbo_bind_arrays(struct gl_context *ctx)
 {
    if (!ctx->Array.RebindArrays) {
       return;
@@ -589,7 +585,7 @@ vbo_draw_arrays(struct gl_context *ctx, GLenum mode, GLint start,
    struct vbo_exec_context *exec = &vbo->exec;
    struct _mesa_prim prim[2];
 
-   bind_arrays(ctx);
+   vbo_bind_arrays(ctx);
 
    /* Again... because we may have changed the bitmask of per-vertex varying
     * attributes.  If we regenerate the fixed-function vertex program now
@@ -803,7 +799,7 @@ vbo_validated_drawrangeelements(struct gl_context *ctx, GLenum mode,
       return;
    }
 
-   bind_arrays( ctx );
+   vbo_bind_arrays( ctx );
 
    /* check for dirty state again */
    if (ctx->NewState)
@@ -1128,7 +1124,7 @@ vbo_validated_multidrawelements(struct gl_context *ctx, GLenum mode,
     * same index buffer, or if we have to reset the index pointer per
     * primitive.
     */
-   bind_arrays( ctx );
+   vbo_bind_arrays( ctx );
 
    /* check for dirty state again */
    if (ctx->NewState)

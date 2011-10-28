@@ -146,7 +146,6 @@ struct vbo_save_context {
    GLuint vert_count;
    GLuint max_vert;
    GLboolean dangling_attr_ref;
-   GLboolean have_materials;
 
    GLuint opcode_vertex_list;
 
@@ -187,12 +186,12 @@ void vbo_save_api_init( struct vbo_save_context *save );
 
 #else /* FEATURE_dlist */
 
-static INLINE void
+static inline void
 vbo_save_init( struct gl_context *ctx )
 {
 }
 
-static INLINE void
+static inline void
 vbo_save_destroy( struct gl_context *ctx )
 {
 }

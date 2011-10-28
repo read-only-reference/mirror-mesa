@@ -63,7 +63,7 @@ static void compile_sf_prog( struct brw_context *brw,
    brw_init_compile(brw, &c.func, mem_ctx);
 
    c.key = *key;
-   brw_compute_vue_map(&c.vue_map, intel, c.key.nr_userclip, c.key.attrs);
+   brw_compute_vue_map(&c.vue_map, intel, c.key.userclip_active, c.key.attrs);
    c.urb_entry_read_offset = brw_sf_compute_urb_entry_read_offset(intel);
    c.nr_attr_regs = (c.vue_map.num_slots + 1)/2 - c.urb_entry_read_offset;
    c.nr_setup_regs = c.nr_attr_regs;
@@ -76,18 +76,18 @@ static void compile_sf_prog( struct brw_context *brw,
    switch (key->primitive) {
    case SF_TRIANGLES:
       c.nr_verts = 3;
-      brw_emit_tri_setup( &c, GL_TRUE );
+      brw_emit_tri_setup( &c, true );
       break;
    case SF_LINES:
       c.nr_verts = 2;
-      brw_emit_line_setup( &c, GL_TRUE );
+      brw_emit_line_setup( &c, true );
       break;
    case SF_POINTS:
       c.nr_verts = 1;
       if (key->do_point_sprite)
-	  brw_emit_point_sprite_setup( &c, GL_TRUE );
+	  brw_emit_point_sprite_setup( &c, true );
       else
-	  brw_emit_point_setup( &c, GL_TRUE );
+	  brw_emit_point_setup( &c, true );
       break;
    case SF_UNFILLED_TRIS:
       c.nr_verts = 3;
@@ -120,7 +120,8 @@ static void compile_sf_prog( struct brw_context *brw,
 
 /* Calculate interpolants for triangle and line rasterization.
  */
-static void upload_sf_prog(struct brw_context *brw)
+static void
+brw_upload_sf_prog(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->intel.ctx;
    struct brw_sf_prog_key key;
@@ -154,7 +155,7 @@ static void upload_sf_prog(struct brw_context *brw)
    }
 
    /* _NEW_TRANSFORM */
-   key.nr_userclip = brw_count_bits(ctx->Transform.ClipPlanesEnabled);
+   key.userclip_active = (ctx->Transform.ClipPlanesEnabled != 0);
 
    /* _NEW_POINT */
    key.do_point_sprite = ctx->Point.PointSprite;
@@ -195,6 +196,6 @@ const struct brw_tracked_state brw_sf_prog = {
       .brw   = (BRW_NEW_REDUCED_PRIMITIVE),
       .cache = CACHE_NEW_VS_PROG
    },
-   .prepare = upload_sf_prog
+   .emit = brw_upload_sf_prog
 };
 

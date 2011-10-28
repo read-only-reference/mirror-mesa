@@ -88,6 +88,27 @@ intel_batchbuffer_reset(struct intel_context *intel)
 }
 
 void
+intel_batchbuffer_save_state(struct intel_context *intel)
+{
+   intel->batch.saved.used = intel->batch.used;
+   intel->batch.saved.reloc_count =
+      drm_intel_gem_bo_get_reloc_count(intel->batch.bo);
+}
+
+void
+intel_batchbuffer_reset_to_saved(struct intel_context *intel)
+{
+   drm_intel_gem_bo_clear_relocs(intel->batch.bo, intel->batch.saved.reloc_count);
+
+   intel->batch.used = intel->batch.saved.used;
+
+   /* Cached batch state is dead, since we just cleared some unknown part of the
+    * batchbuffer.  Assume that the caller resets any other state necessary.
+    */
+   clear_cache(intel);
+}
+
+void
 intel_batchbuffer_free(struct intel_context *intel)
 {
    drm_intel_bo_unreference(intel->batch.last_bo);
@@ -99,7 +120,7 @@ intel_batchbuffer_free(struct intel_context *intel)
 
 /* TODO: Push this whole function into bufmgr.
  */
-static void
+static int
 do_flush_locked(struct intel_context *intel)
 {
    struct intel_batchbuffer *batch = &intel->batch;
@@ -130,7 +151,7 @@ do_flush_locked(struct intel_context *intel)
       drm_intel_bo_map(batch->bo, false);
       intel_decode(batch->bo->virtual, batch->used,
 		   batch->bo->offset,
-		   intel->intelScreen->deviceID, GL_TRUE);
+		   intel->intelScreen->deviceID, true);
       drm_intel_bo_unmap(batch->bo);
 
       if (intel->vtbl.debug_batch != NULL)
@@ -142,14 +163,25 @@ do_flush_locked(struct intel_context *intel)
       exit(1);
    }
    intel->vtbl.new_batch(intel);
+
+   return ret;
 }
 
-void
+int
 _intel_batchbuffer_flush(struct intel_context *intel,
 			 const char *file, int line)
 {
+   int ret;
+
+   /* No batch should be emitted that uses a mapped region, because that would
+    * cause the map to be incoherent with GPU rendering done by the
+    * batchbuffer. To ensure that condition, we assert a condition that is
+    * stronger but easier to implement: that *no* region is mapped.
+    */
+   assert(intel->num_mapped_regions == 0);
+
    if (intel->batch.used == 0)
-      return;
+      return 0;
 
    if (intel->first_post_swapbuffers_batch == NULL) {
       intel->first_post_swapbuffers_batch = intel->batch.bo;
@@ -161,10 +193,6 @@ _intel_batchbuffer_flush(struct intel_context *intel,
 	      4*intel->batch.used);
 
    intel->batch.reserved_space = 0;
-
-   if (intel->always_flush_cache) {
-      intel_batchbuffer_emit_mi_flush(intel);
-   }
 
    /* Mark the end of the buffer. */
    intel_batchbuffer_emit_dword(intel, MI_BATCH_BUFFER_END);
@@ -181,7 +209,7 @@ _intel_batchbuffer_flush(struct intel_context *intel,
    /* Check that we didn't just wrap our batchbuffer at a bad time. */
    assert(!intel->no_batch_wrap);
 
-   do_flush_locked(intel);
+   ret = do_flush_locked(intel);
 
    if (unlikely(INTEL_DEBUG & DEBUG_SYNC)) {
       fprintf(stderr, "waiting for idle\n");
@@ -191,12 +219,14 @@ _intel_batchbuffer_flush(struct intel_context *intel,
    /* Reset the buffer:
     */
    intel_batchbuffer_reset(intel);
+
+   return ret;
 }
 
 
 /*  This is the only way buffers get added to the validate list.
  */
-GLboolean
+bool
 intel_batchbuffer_emit_reloc(struct intel_context *intel,
                              drm_intel_bo *buffer,
                              uint32_t read_domains, uint32_t write_domain,
@@ -217,10 +247,10 @@ intel_batchbuffer_emit_reloc(struct intel_context *intel,
     */
    intel_batchbuffer_emit_dword(intel, buffer->offset + delta);
 
-   return GL_TRUE;
+   return true;
 }
 
-GLboolean
+bool
 intel_batchbuffer_emit_reloc_fenced(struct intel_context *intel,
 				    drm_intel_bo *buffer,
 				    uint32_t read_domains,
@@ -242,7 +272,7 @@ intel_batchbuffer_emit_reloc_fenced(struct intel_context *intel,
     */
    intel_batchbuffer_emit_dword(intel, buffer->offset + delta);
 
-   return GL_TRUE;
+   return true;
 }
 
 void

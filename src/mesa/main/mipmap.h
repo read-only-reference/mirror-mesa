@@ -34,25 +34,16 @@ _mesa_generate_mipmap_level(GLenum target,
                             GLenum datatype, GLuint comps,
                             GLint border,
                             GLint srcWidth, GLint srcHeight, GLint srcDepth,
-                            const GLubyte *srcData,
+                            const GLubyte **srcData,
                             GLint srcRowStride,
                             GLint dstWidth, GLint dstHeight, GLint dstDepth,
-                            GLubyte *dstData,
+                            GLubyte **dstData,
                             GLint dstRowStride);
 
 
 extern void
 _mesa_generate_mipmap(struct gl_context *ctx, GLenum target,
                       struct gl_texture_object *texObj);
-
-
-extern void
-_mesa_rescale_teximage2d(GLuint bytesPerPixel,
-                         GLuint srcStrideInPixels,
-                         GLuint dstRowStride,
-                         GLint srcWidth, GLint srcHeight,
-                         GLint dstWidth, GLint dstHeight,
-                         const GLvoid *srcImage, GLvoid *dstImage);
 
 
 #endif /* MIPMAP_H */

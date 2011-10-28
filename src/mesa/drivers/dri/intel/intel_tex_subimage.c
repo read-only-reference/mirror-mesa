@@ -57,6 +57,7 @@ intel_blit_texsubimage(struct gl_context * ctx,
    unsigned int blit_x = 0, blit_y = 0;
    unsigned long pitch;
    uint32_t tiling_mode = I915_TILING_NONE;
+   GLubyte *dstMap;
 
    /* Try to do a blit upload of the subimage if the texture is
     * currently busy.
@@ -108,8 +109,7 @@ intel_blit_texsubimage(struct gl_context * ctx,
       return false;
    }
 
-   texImage->Data = temp_bo->virtual;
-   texImage->ImageOffsets[0] = 0;
+   dstMap = temp_bo->virtual;
    dstRowStride = pitch;
 
    intel_miptree_get_image_offset(intelImage->mt, level,
@@ -122,26 +122,24 @@ intel_blit_texsubimage(struct gl_context * ctx,
 
    if (!_mesa_texstore(ctx, 2, texImage->_BaseFormat,
 		       texImage->TexFormat,
-		       texImage->Data,
 		       xoffset, yoffset, 0,
 		       dstRowStride,
-		       texImage->ImageOffsets,
+		       &dstMap,
 		       width, height, 1,
 		       format, type, pixels, packing)) {
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "intelTexSubImage");
    }
 
-   GLboolean ret;
+   bool ret;
    unsigned int dst_pitch = intelImage->mt->region->pitch *
       intelImage->mt->cpp;
 
    drm_intel_gem_bo_unmap_gtt(temp_bo);
-   texImage->Data = NULL;
 
    ret = intelEmitCopyBlit(intel,
 			   intelImage->mt->cpp,
 			   dstRowStride / intelImage->mt->cpp,
-			   temp_bo, 0, GL_FALSE,
+			   temp_bo, 0, false,
 			   dst_pitch / intelImage->mt->cpp,
 			   intelImage->mt->region->bo, 0,
 			   intelImage->mt->region->tiling,

@@ -93,6 +93,7 @@ MAIN_SOURCES = \
 	main/texpal.c \
 	main/texparam.c \
 	main/texstate.c \
+	main/texstorage.c \
 	main/texstore.c \
 	main/texturebarrier.c \
 	main/transformfeedback.c \
@@ -104,7 +105,9 @@ MAIN_SOURCES = \
 	$(MAIN_ES_SOURCES)
 
 MAIN_CXX_SOURCES = \
-	main/ff_fragment_shader.cpp
+	main/ff_fragment_shader.cpp \
+	main/shader_query.cpp \
+	main/uniform_query.cpp
 
 MATH_SOURCES = \
 	math/m_debug_clip.c \
@@ -266,7 +269,8 @@ PROGRAM_SOURCES = \
 
 SHADER_CXX_SOURCES = \
 	program/ir_to_mesa.cpp \
-	program/sampler.cpp
+	program/sampler.cpp \
+	program/string_to_uint_map.cpp
 
 ASM_C_SOURCES =	\
 	x86/common_x86.c \

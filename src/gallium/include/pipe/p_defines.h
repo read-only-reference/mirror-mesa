@@ -295,10 +295,11 @@ enum pipe_transfer_usage {
  */
 #define PIPE_BIND_DEPTH_STENCIL        (1 << 0) /* create_surface */
 #define PIPE_BIND_RENDER_TARGET        (1 << 1) /* create_surface */
-#define PIPE_BIND_SAMPLER_VIEW         (1 << 2) /* create_sampler_view */
-#define PIPE_BIND_VERTEX_BUFFER        (1 << 3) /* set_vertex_buffers */
-#define PIPE_BIND_INDEX_BUFFER         (1 << 4) /* draw_elements */
-#define PIPE_BIND_CONSTANT_BUFFER      (1 << 5) /* set_constant_buffer */
+#define PIPE_BIND_BLENDABLE            (1 << 2) /* create_surface */
+#define PIPE_BIND_SAMPLER_VIEW         (1 << 3) /* create_sampler_view */
+#define PIPE_BIND_VERTEX_BUFFER        (1 << 4) /* set_vertex_buffers */
+#define PIPE_BIND_INDEX_BUFFER         (1 << 5) /* draw_elements */
+#define PIPE_BIND_CONSTANT_BUFFER      (1 << 6) /* set_constant_buffer */
 #define PIPE_BIND_DISPLAY_TARGET       (1 << 8) /* flush_front_buffer */
 #define PIPE_BIND_TRANSFER_WRITE       (1 << 9) /* get_transfer */
 #define PIPE_BIND_TRANSFER_READ        (1 << 10) /* get_transfer */
@@ -374,14 +375,17 @@ enum pipe_transfer_usage {
  * Query object types
  */
 #define PIPE_QUERY_OCCLUSION_COUNTER     0
-#define PIPE_QUERY_PRIMITIVES_GENERATED  1
-#define PIPE_QUERY_PRIMITIVES_EMITTED    2
-#define PIPE_QUERY_TIME_ELAPSED          3
-#define PIPE_QUERY_SO_STATISTICS         5
-#define PIPE_QUERY_GPU_FINISHED          6
-#define PIPE_QUERY_TIMESTAMP_DISJOINT    7
-#define PIPE_QUERY_OCCLUSION_PREDICATE   8
-#define PIPE_QUERY_TYPES                 9
+#define PIPE_QUERY_OCCLUSION_PREDICATE   1
+#define PIPE_QUERY_TIMESTAMP             2
+#define PIPE_QUERY_TIMESTAMP_DISJOINT    3
+#define PIPE_QUERY_TIME_ELAPSED          4
+#define PIPE_QUERY_PRIMITIVES_GENERATED  5
+#define PIPE_QUERY_PRIMITIVES_EMITTED    6
+#define PIPE_QUERY_SO_STATISTICS         7
+#define PIPE_QUERY_SO_OVERFLOW_PREDICATE 8
+#define PIPE_QUERY_GPU_FINISHED          9
+#define PIPE_QUERY_PIPELINE_STATISTICS  10
+#define PIPE_QUERY_TYPES                11
 
 
 /**

@@ -85,7 +85,7 @@ static const struct extension extension_table[] = {
    { "GL_ARB_depth_buffer_float",                  o(ARB_depth_buffer_float),                  GL,             2008 },
    { "GL_ARB_depth_clamp",                         o(ARB_depth_clamp),                         GL,             2003 },
    { "GL_ARB_depth_texture",                       o(ARB_depth_texture),                       GL,             2001 },
-   { "GL_ARB_draw_buffers",                        o(ARB_draw_buffers),                        GL,             2002 },
+   { "GL_ARB_draw_buffers",                        o(dummy_true),                              GL,             2002 },
    { "GL_ARB_draw_buffers_blend",                  o(ARB_draw_buffers_blend),                  GL,             2009 },
    { "GL_ARB_draw_elements_base_vertex",           o(ARB_draw_elements_base_vertex),           GL,             2009 },
    { "GL_ARB_draw_instanced",                      o(ARB_draw_instanced),                      GL,             2008 },
@@ -134,6 +134,7 @@ static const struct extension extension_table[] = {
    { "GL_ARB_texture_rectangle",                   o(NV_texture_rectangle),                    GL,             2004 },
    { "GL_ARB_texture_rgb10_a2ui",                  o(ARB_texture_rgb10_a2ui),                  GL,             2009 },
    { "GL_ARB_texture_rg",                          o(ARB_texture_rg),                          GL,             2008 },
+   { "GL_ARB_texture_storage",                     o(ARB_texture_storage),                     GL,             2011 },
    { "GL_ARB_texture_swizzle",                     o(EXT_texture_swizzle),                     GL,             2008 },
    { "GL_ARB_transform_feedback2",                 o(ARB_transform_feedback2),                 GL,             2010 },
    { "GL_ARB_transpose_matrix",                    o(ARB_transpose_matrix),                    GL,             1999 },
@@ -263,7 +264,7 @@ static const struct extension extension_table[] = {
    { "GL_APPLE_packed_pixels",                     o(APPLE_packed_pixels),                     GL,             2002 },
    { "GL_APPLE_vertex_array_object",               o(APPLE_vertex_array_object),               GL,             2002 },
    { "GL_ATI_blend_equation_separate",             o(EXT_blend_equation_separate),             GL,             2003 },
-   { "GL_ATI_draw_buffers",                        o(ARB_draw_buffers),                        GL,             2002 },
+   { "GL_ATI_draw_buffers",                        o(dummy_true),                              GL,             2002 },
    { "GL_ATI_envmap_bumpmap",                      o(ATI_envmap_bumpmap),                      GL,             2001 },
    { "GL_ATI_fragment_shader",                     o(ATI_fragment_shader),                     GL,             2001 },
    { "GL_ATI_separate_stencil",                    o(ATI_separate_stencil),                    GL,             2006 },
@@ -284,6 +285,8 @@ static const struct extension extension_table[] = {
    { "GL_NV_blend_square",                         o(NV_blend_square),                         GL,             1999 },
    { "GL_NV_conditional_render",                   o(NV_conditional_render),                   GL,             2008 },
    { "GL_NV_depth_clamp",                          o(ARB_depth_clamp),                         GL,             2001 },
+   { "GL_NV_draw_buffers",                         o(dummy_true),                                         ES2, 2011 },
+   { "GL_NV_fbo_color_attachments",                o(EXT_framebuffer_object),                             ES2, 2010 },
    { "GL_NV_fragment_program",                     o(NV_fragment_program),                     GL,             2001 },
    { "GL_NV_fragment_program_option",              o(NV_fragment_program_option),              GL,             2005 },
    { "GL_NV_light_max_exponent",                   o(NV_light_max_exponent),                   GL,             1999 },
@@ -341,7 +344,6 @@ name_to_offset(const char* name)
  */
 static const size_t default_extensions[] = {
    o(ARB_copy_buffer),
-   o(ARB_draw_buffers),
    o(ARB_transpose_matrix),
    o(ARB_window_pos),
 
@@ -376,7 +378,6 @@ _mesa_enable_sw_extensions(struct gl_context *ctx)
    /*ctx->Extensions.ARB_copy_buffer = GL_TRUE;*/
    ctx->Extensions.ARB_depth_clamp = GL_TRUE;
    ctx->Extensions.ARB_depth_texture = GL_TRUE;
-   /*ctx->Extensions.ARB_draw_buffers = GL_TRUE;*/
    ctx->Extensions.ARB_draw_elements_base_vertex = GL_TRUE;
    ctx->Extensions.ARB_draw_instanced = GL_TRUE;
    ctx->Extensions.ARB_explicit_attrib_location = GL_TRUE;
@@ -421,6 +422,7 @@ _mesa_enable_sw_extensions(struct gl_context *ctx)
    ctx->Extensions.ARB_texture_non_power_of_two = GL_TRUE;
    ctx->Extensions.ARB_texture_rg = GL_TRUE;
    ctx->Extensions.ARB_texture_compression_rgtc = GL_TRUE;
+   ctx->Extensions.ARB_texture_storage = GL_TRUE;
    ctx->Extensions.ARB_vertex_array_object = GL_TRUE;
 #if FEATURE_ARB_vertex_program
    ctx->Extensions.ARB_vertex_program = GL_TRUE;
@@ -575,7 +577,6 @@ _mesa_enable_1_5_extensions(struct gl_context *ctx)
 void
 _mesa_enable_2_0_extensions(struct gl_context *ctx)
 {
-   /*ctx->Extensions.ARB_draw_buffers = GL_TRUE;*/
 #if FEATURE_ARB_fragment_shader
    ctx->Extensions.ARB_fragment_shader = GL_TRUE;
 #endif

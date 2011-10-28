@@ -299,26 +299,27 @@ char *end_of_thread[2] = {
 };
 
 char *target_function[16] = {
-    [BRW_MESSAGE_TARGET_NULL] = "null",
-    [BRW_MESSAGE_TARGET_MATH] = "math",
-    [BRW_MESSAGE_TARGET_SAMPLER] = "sampler",
-    [BRW_MESSAGE_TARGET_GATEWAY] = "gateway",
-    [BRW_MESSAGE_TARGET_DATAPORT_READ] = "read",
-    [BRW_MESSAGE_TARGET_DATAPORT_WRITE] = "write",
-    [BRW_MESSAGE_TARGET_URB] = "urb",
-    [BRW_MESSAGE_TARGET_THREAD_SPAWNER] = "thread_spawner"
+    [BRW_SFID_NULL] = "null",
+    [BRW_SFID_MATH] = "math",
+    [BRW_SFID_SAMPLER] = "sampler",
+    [BRW_SFID_MESSAGE_GATEWAY] = "gateway",
+    [BRW_SFID_DATAPORT_READ] = "read",
+    [BRW_SFID_DATAPORT_WRITE] = "write",
+    [BRW_SFID_URB] = "urb",
+    [BRW_SFID_THREAD_SPAWNER] = "thread_spawner"
 };
 
 char *target_function_gen6[16] = {
-    [BRW_MESSAGE_TARGET_NULL] = "null",
-    [BRW_MESSAGE_TARGET_MATH] = "math",
-    [BRW_MESSAGE_TARGET_SAMPLER] = "sampler",
-    [BRW_MESSAGE_TARGET_GATEWAY] = "gateway",
-    [GEN6_MESSAGE_TARGET_DP_SAMPLER_CACHE] = "sampler",
-    [GEN6_MESSAGE_TARGET_DP_RENDER_CACHE] = "render",
-    [GEN6_MESSAGE_TARGET_DP_CONST_CACHE] = "const",
-    [BRW_MESSAGE_TARGET_URB] = "urb",
-    [BRW_MESSAGE_TARGET_THREAD_SPAWNER] = "thread_spawner"
+    [BRW_SFID_NULL] = "null",
+    [BRW_SFID_MATH] = "math",
+    [BRW_SFID_SAMPLER] = "sampler",
+    [BRW_SFID_MESSAGE_GATEWAY] = "gateway",
+    [BRW_SFID_URB] = "urb",
+    [BRW_SFID_THREAD_SPAWNER] = "thread_spawner",
+    [GEN6_SFID_DATAPORT_SAMPLER_CACHE] = "sampler",
+    [GEN6_SFID_DATAPORT_RENDER_CACHE] = "render",
+    [GEN6_SFID_DATAPORT_CONSTANT_CACHE] = "const",
+    [GEN7_SFID_DATAPORT_DATA_CACHE] = "data"
 };
 
 char *dp_rc_msg_type_gen6[16] = {
@@ -944,7 +945,7 @@ int brw_disasm (FILE *file, struct brw_instruction *inst, int gen)
 
     if (inst->header.opcode == BRW_OPCODE_SEND ||
 	inst->header.opcode == BRW_OPCODE_SENDC) {
-	int target;
+	enum brw_message_target target;
 
 	if (gen >= 6)
 	    target = inst->header.destreg__conditionalmod;
@@ -966,7 +967,7 @@ int brw_disasm (FILE *file, struct brw_instruction *inst, int gen)
 	}
 
 	switch (target) {
-	case BRW_MESSAGE_TARGET_MATH:
+	case BRW_SFID_MATH:
 	    err |= control (file, "math function", math_function,
 			    inst->bits3.math.function, &space);
 	    err |= control (file, "math saturate", math_saturate,
@@ -978,7 +979,7 @@ int brw_disasm (FILE *file, struct brw_instruction *inst, int gen)
 	    err |= control (file, "math precision", math_precision,
 			    inst->bits3.math.precision, &space);
 	    break;
-	case BRW_MESSAGE_TARGET_SAMPLER:
+	case BRW_SFID_SAMPLER:
 	    if (gen >= 5) {
 		format (file, " (%d, %d, %d, %d)",
 			inst->bits3.sampler_gen5.binding_table_index,
@@ -999,15 +1000,13 @@ int brw_disasm (FILE *file, struct brw_instruction *inst, int gen)
 		string (file, ")");
 	    }
 	    break;
-	case BRW_MESSAGE_TARGET_DATAPORT_READ:
+	case BRW_SFID_DATAPORT_READ:
 	    if (gen >= 6) {
-		format (file, " (%d, %d, %d, %d, %d, %d)",
+		format (file, " (%d, %d, %d, %d)",
 			inst->bits3.gen6_dp.binding_table_index,
 			inst->bits3.gen6_dp.msg_control,
 			inst->bits3.gen6_dp.msg_type,
-			inst->bits3.gen6_dp.send_commit_msg,
-			inst->bits3.gen6_dp.msg_length,
-			inst->bits3.gen6_dp.response_length);
+			inst->bits3.gen6_dp.send_commit_msg);
 	    } else if (gen >= 5 /* FINISHME: || is_g4x */) {
 		format (file, " (%d, %d, %d)",
 			inst->bits3.dp_read_gen5.binding_table_index,
@@ -1021,7 +1020,7 @@ int brw_disasm (FILE *file, struct brw_instruction *inst, int gen)
 	    }
 	    break;
 
-	case BRW_MESSAGE_TARGET_DATAPORT_WRITE:
+	case BRW_SFID_DATAPORT_WRITE:
 	    if (gen >= 6) {
 		format (file, " (");
 
@@ -1029,24 +1028,22 @@ int brw_disasm (FILE *file, struct brw_instruction *inst, int gen)
 				dp_rc_msg_type_gen6,
 				inst->bits3.gen6_dp.msg_type, &space);
 
-		format (file, ", %d, %d, %d, %d, %d, %d)",
+		format (file, ", %d, %d, %d, %d)",
 			inst->bits3.gen6_dp.binding_table_index,
 			inst->bits3.gen6_dp.msg_control,
 			inst->bits3.gen6_dp.msg_type,
-			inst->bits3.gen6_dp.send_commit_msg,
-			inst->bits3.gen6_dp.msg_length,
-			inst->bits3.gen6_dp.response_length);
+			inst->bits3.gen6_dp.send_commit_msg);
 	    } else {
 		format (file, " (%d, %d, %d, %d)",
 			inst->bits3.dp_write.binding_table_index,
-			(inst->bits3.dp_write.pixel_scoreboard_clear << 3) |
+			(inst->bits3.dp_write.last_render_target << 3) |
 			inst->bits3.dp_write.msg_control,
 			inst->bits3.dp_write.msg_type,
 			inst->bits3.dp_write.send_commit_msg);
 	    }
 	    break;
 
-	case BRW_MESSAGE_TARGET_URB:
+	case BRW_SFID_URB:
 	    if (gen >= 5) {
 		format (file, " %d", inst->bits3.urb_gen5.offset);
 	    } else {
@@ -1066,14 +1063,17 @@ int brw_disasm (FILE *file, struct brw_instruction *inst, int gen)
 			    inst->bits3.urb.used, &space);
 	    err |= control (file, "urb complete", urb_complete,
 			    inst->bits3.urb.complete, &space);
-	    if (gen >= 5) {
-		format (file, " mlen %d, rlen %d\n",
-			inst->bits3.urb_gen5.msg_length,
-			inst->bits3.urb_gen5.response_length);
-	    }
 	    break;
-	case BRW_MESSAGE_TARGET_THREAD_SPAWNER:
+	case BRW_SFID_THREAD_SPAWNER:
 	    break;
+	case GEN7_SFID_DATAPORT_DATA_CACHE:
+	    format (file, " (%d, %d, %d)",
+		    inst->bits3.gen7_dp.binding_table_index,
+		    inst->bits3.gen7_dp.msg_control,
+		    inst->bits3.gen7_dp.msg_type);
+	    break;
+
+
 	default:
 	    format (file, "unsupported target %d", target);
 	    break;

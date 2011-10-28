@@ -41,11 +41,10 @@
 
 struct brw_gs_prog_key {
    GLbitfield64 attrs;
-   GLuint primitive:4;
+   GLuint primitive:8; /**< Hardware primitive, such as _3DPRIM_TRILIST. */
    GLuint pv_first:1;
    GLuint need_gs_prog:1;
-   GLuint nr_userclip:4;
-   GLuint pad:22;
+   GLuint userclip_active:1;
 };
 
 struct brw_gs_compile {

@@ -58,12 +58,32 @@ static unsigned caps_dx_9_3[] = {
 	UTIL_CHECK_CAP(TEXTURE_MIRROR_CLAMP),
 	UTIL_CHECK_CAP(BLEND_EQUATION_SEPARATE),
 	UTIL_CHECK_CAP(SM3),
-	//UTIL_CHECK_CAP(INSTANCING),
+	UTIL_CHECK_CAP(VERTEX_ELEMENT_INSTANCE_DIVISOR),
 	UTIL_CHECK_CAP(OCCLUSION_QUERY),
 	UTIL_CHECK_INT(MAX_RENDER_TARGETS, 4),
 	UTIL_CHECK_INT(MAX_TEXTURE_2D_LEVELS, 13),	/* 4096 */
 	UTIL_CHECK_INT(MAX_TEXTURE_3D_LEVELS, 9),	 /* 256 */
 	UTIL_CHECK_INT(MAX_TEXTURE_CUBE_LEVELS, 10), /* 512 */
+	UTIL_CHECK_TERMINATE
+};
+
+static unsigned caps_dx_10_0[] = {
+	UTIL_CHECK_CAP(INDEP_BLEND_ENABLE),
+	UTIL_CHECK_CAP(ANISOTROPIC_FILTER),
+	UTIL_CHECK_CAP(MIXED_COLORBUFFER_FORMATS),
+	UTIL_CHECK_CAP(FRAGMENT_COLOR_CLAMP_CONTROL),
+	UTIL_CHECK_CAP(STREAM_OUTPUT),
+	UTIL_CHECK_CAP(CONDITIONAL_RENDER),
+	UTIL_CHECK_CAP(PRIMITIVE_RESTART),
+	UTIL_CHECK_CAP(TGSI_INSTANCEID),
+	UTIL_CHECK_INT(MAX_RENDER_TARGETS, 8),
+	UTIL_CHECK_INT(MAX_TEXTURE_2D_LEVELS, 13),
+	UTIL_CHECK_INT(MAX_TEXTURE_ARRAY_LAYERS, 512),
+	UTIL_CHECK_SHADER(VERTEX, MAX_INPUTS, 16),
+	UTIL_CHECK_SHADER(GEOMETRY, MAX_CONST_BUFFERS, 14),
+	UTIL_CHECK_SHADER(GEOMETRY, MAX_TEXTURE_SAMPLERS, 16),
+	UTIL_CHECK_SHADER(GEOMETRY, SUBROUTINES, 1),
+	UTIL_CHECK_SHADER(FRAGMENT, INTEGERS, 1),
 	UTIL_CHECK_TERMINATE
 };
 
@@ -90,7 +110,7 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		screen_caps.gs = screen->get_shader_param(screen, PIPE_SHADER_GEOMETRY, PIPE_SHADER_CAP_MAX_INSTRUCTIONS) > 0;
 		screen_caps.so = !!screen->get_param(screen, PIPE_CAP_STREAM_OUTPUT);
 		screen_caps.queries = screen->get_param(screen, PIPE_CAP_OCCLUSION_QUERY);
-		screen_caps.render_condition = screen_caps.queries;
+		screen_caps.render_condition = screen->get_param(screen, PIPE_CAP_CONDITIONAL_RENDER);
 		for(unsigned i = 0; i < PIPE_SHADER_TYPES; ++i)
 			screen_caps.constant_buffers[i] = screen->get_shader_param(screen, i, PIPE_SHADER_CAP_MAX_CONST_BUFFERS);
 		screen_caps.stages = 0;
@@ -107,19 +127,17 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 
 		memset(format_support, 0xff, sizeof(format_support));
 
-		float default_level;
-		/* don't even attempt to autodetect D3D10 level support, since it's just not fully implemented yet */
-		if(util_check_caps(screen, caps_dx_9_3))
-			default_level = 9.3;
-		else if(util_check_caps(screen, caps_dx_9_2))
-			default_level = 9.2;
-		else if(util_check_caps(screen, caps_dx_9_1))
-			default_level = 9.1;
-		else
-		{
+		float default_level = 9.1f;
+		if(!util_check_caps(screen, caps_dx_9_1))
 			_debug_printf("Warning: driver does not even meet D3D_FEATURE_LEVEL_9_1 features, advertising it anyway!\n");
-			default_level = 9.1;
-		}
+		else if(!util_check_caps(screen, caps_dx_9_2))
+			default_level = 9.1f;
+		else if(!util_check_caps(screen, caps_dx_9_3))
+			default_level = 9.2f;
+		else if(!util_check_caps(screen, caps_dx_10_0))
+			default_level = 9.3f;
+		else
+			default_level = 10.0f;
 
 		char default_level_name[64];
 		sprintf(default_level_name, "%.1f", default_level);
@@ -285,6 +303,7 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		SYNCHRONIZED;
 
 		/* TODO: MSAA, advanced features */
+
 		pipe_format format = dxgi_to_pipe_format[dxgi_format];
 		if(!format)
 			return E_INVALIDARG;
@@ -293,32 +312,61 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		if(support < 0)
 		{
 			support = 0;
-			unsigned buffer = D3D11_FORMAT_SUPPORT_BUFFER | D3D11_FORMAT_SUPPORT_IA_VERTEX_BUFFER | D3D11_FORMAT_SUPPORT_IA_INDEX_BUFFER;
-			unsigned sampler_view = D3D11_FORMAT_SUPPORT_SHADER_SAMPLE | D3D11_FORMAT_SUPPORT_MIP | D3D11_FORMAT_SUPPORT_MIP_AUTOGEN;
-			if(util_format_is_depth_or_stencil(format))
-				sampler_view |= D3D11_FORMAT_SUPPORT_SHADER_SAMPLE_COMPARISON;
 
-			/* TODO: do this properly when Gallium drivers actually support index/vertex format queries */
-                        if(screen->is_format_supported(screen, format, PIPE_BUFFER, 0, PIPE_BIND_VERTEX_BUFFER)
-                                || (screen->is_format_supported(screen, format, PIPE_BUFFER, 0, PIPE_BIND_INDEX_BUFFER)
-				|| format == PIPE_FORMAT_R8_UNORM))
-				support |= buffer;
+			if(dxgi_format == DXGI_FORMAT_R8_UINT ||
+			   dxgi_format == DXGI_FORMAT_R16_UINT ||
+			   dxgi_format == DXGI_FORMAT_R32_UINT)
+				support |= D3D11_FORMAT_SUPPORT_IA_INDEX_BUFFER;
+
+			if(screen->is_format_supported(screen, format, PIPE_BUFFER, 0, PIPE_BIND_VERTEX_BUFFER))
+				support |= D3D11_FORMAT_SUPPORT_IA_VERTEX_BUFFER;
+
                         if(screen->is_format_supported(screen, format, PIPE_BUFFER, 0, PIPE_BIND_STREAM_OUTPUT))
-				support |= buffer | D3D11_FORMAT_SUPPORT_SO_BUFFER;
+				support |= D3D11_FORMAT_SUPPORT_SO_BUFFER;
+
                         if(screen->is_format_supported(screen, format, PIPE_TEXTURE_1D, 0, PIPE_BIND_SAMPLER_VIEW))
-				support |= D3D11_FORMAT_SUPPORT_TEXTURE1D | sampler_view;
+				support |= D3D11_FORMAT_SUPPORT_TEXTURE1D;
                         if(screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 0, PIPE_BIND_SAMPLER_VIEW))
-				support |= D3D11_FORMAT_SUPPORT_TEXTURE2D | sampler_view;
+				support |= D3D11_FORMAT_SUPPORT_TEXTURE2D;
                         if(screen->is_format_supported(screen, format, PIPE_TEXTURE_CUBE, 0, PIPE_BIND_SAMPLER_VIEW))
-				support |= D3D11_FORMAT_SUPPORT_TEXTURE2D | sampler_view;
+				support |= D3D11_FORMAT_SUPPORT_TEXTURECUBE;
                         if(screen->is_format_supported(screen, format, PIPE_TEXTURE_3D, 0, PIPE_BIND_SAMPLER_VIEW))
-				support |= D3D11_FORMAT_SUPPORT_TEXTURE3D | sampler_view;
-                        if(screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 0, PIPE_BIND_RENDER_TARGET))
+				support |= D3D11_FORMAT_SUPPORT_TEXTURE3D;
+
+			if(support & (D3D11_FORMAT_SUPPORT_TEXTURE1D | D3D11_FORMAT_SUPPORT_TEXTURE2D |
+				      D3D11_FORMAT_SUPPORT_TEXTURE3D | D3D11_FORMAT_SUPPORT_TEXTURECUBE))
+			{
+				support |=
+					D3D11_FORMAT_SUPPORT_SHADER_LOAD |
+					D3D11_FORMAT_SUPPORT_SHADER_SAMPLE |
+					D3D11_FORMAT_SUPPORT_MIP |
+					D3D11_FORMAT_SUPPORT_MIP_AUTOGEN;
+				if(util_format_is_depth_or_stencil(format))
+					support |= D3D11_FORMAT_SUPPORT_SHADER_SAMPLE_COMPARISON;
+			}
+
+			if(screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 0, PIPE_BIND_RENDER_TARGET | PIPE_BIND_BLENDABLE))
 				support |= D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_RENDER_TARGET | D3D11_FORMAT_SUPPORT_BLENDABLE;
-                        if(screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 0, PIPE_BIND_DEPTH_STENCIL))
+			else
+			if(screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 0, PIPE_BIND_RENDER_TARGET))
+				support |= D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_RENDER_TARGET;
+			if(screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 0, PIPE_BIND_DEPTH_STENCIL))
 				support |= D3D11_FORMAT_SUPPORT_TEXTURE2D | D3D11_FORMAT_SUPPORT_DEPTH_STENCIL;
-                        if(screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 0, PIPE_BIND_DISPLAY_TARGET))
+			if(screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, 0, PIPE_BIND_DISPLAY_TARGET))
 				support |= D3D11_FORMAT_SUPPORT_DISPLAY;
+
+			unsigned ms;
+			for(ms = 2; ms <= 8; ++ms)
+			{
+				if(screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, ms, PIPE_BIND_RENDER_TARGET))
+				{
+					support |= D3D11_FORMAT_SUPPORT_MULTISAMPLE_RENDERTARGET | D3D11_FORMAT_SUPPORT_MULTISAMPLE_RESOLVE;
+					break;
+				}
+			}
+			if(ms <= 8 && screen->is_format_supported(screen, format, PIPE_TEXTURE_2D, ms, PIPE_BIND_SAMPLER_VIEW))
+				support |= D3D11_FORMAT_SUPPORT_MULTISAMPLE_LOAD;
+
 			format_support[format] = support;
 		}
 		*out_format_support = support;
@@ -343,27 +391,29 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 	template<typename T, typename U>
 	bool convert_blend_state(T& to, const U& from, unsigned BlendEnable, unsigned RenderTargetWriteMask)
 	{
-		if(invalid(0
-			|| from.SrcBlend >= D3D11_BLEND_COUNT
-			|| from.SrcBlendAlpha >= D3D11_BLEND_COUNT
-			|| from.DestBlend >= D3D11_BLEND_COUNT
-			|| from.DestBlendAlpha >= D3D11_BLEND_COUNT
-			|| from.BlendOp >= 6
-			|| from.BlendOpAlpha >= 6
-			|| !from.BlendOp
-			|| !from.BlendOpAlpha
-		))
+		if(unlikely(BlendEnable &&
+			    (from.SrcBlend >= D3D11_BLEND_COUNT ||
+			     from.SrcBlendAlpha >= D3D11_BLEND_COUNT ||
+			     from.DestBlend >= D3D11_BLEND_COUNT ||
+			     from.DestBlendAlpha >= D3D11_BLEND_COUNT ||
+			     from.BlendOp >= 6 ||
+			     from.BlendOp == 0 ||
+			     from.BlendOpAlpha >= 6 ||
+			     from.BlendOpAlpha == 0)))
 			return false;
 
 		to.blend_enable = BlendEnable;
 
-		to.rgb_func = from.BlendOp - 1;
-		to.alpha_func = from.BlendOpAlpha - 1;
+		if(BlendEnable)
+		{
+			to.rgb_func = from.BlendOp - 1;
+			to.alpha_func = from.BlendOpAlpha - 1;
 
-		to.rgb_src_factor = d3d11_to_pipe_blend[from.SrcBlend];
-		to.alpha_src_factor = d3d11_to_pipe_blend[from.SrcBlendAlpha];
-		to.rgb_dst_factor = d3d11_to_pipe_blend[from.DestBlend];
-		to.alpha_dst_factor = d3d11_to_pipe_blend[from.DestBlendAlpha];
+			to.rgb_src_factor = d3d11_to_pipe_blend[from.SrcBlend];
+			to.alpha_src_factor = d3d11_to_pipe_blend[from.SrcBlendAlpha];
+			to.rgb_dst_factor = d3d11_to_pipe_blend[from.DestBlend];
+			to.alpha_dst_factor = d3d11_to_pipe_blend[from.DestBlendAlpha];
+		}
 
 		to.colormask = RenderTargetWriteMask & 0xf;
 		return true;
@@ -387,8 +437,10 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		memset(&state, 0, sizeof(state));
 		state.alpha_to_coverage = !!blend_state_desc->AlphaToCoverageEnable;
 		state.independent_blend_enable = !!blend_state_desc->IndependentBlendEnable;
+
 		assert(PIPE_MAX_COLOR_BUFS >= 8);
-		for(unsigned i = 0; i < 8; ++i)
+		const unsigned n = blend_state_desc->IndependentBlendEnable ? 8 : 1;
+		for(unsigned i = 0; i < n; ++i)
 		{
 			 if(!convert_blend_state(
 					 state.rt[i],
@@ -458,23 +510,41 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 
 		pipe_depth_stencil_alpha_state state;
 		memset(&state, 0, sizeof(state));
+
 		state.depth.enabled = !!depth_stencil_state_desc->DepthEnable;
-		state.depth.writemask = depth_stencil_state_desc->DepthWriteMask;
-		state.depth.func = depth_stencil_state_desc->DepthFunc - 1;
+		if(depth_stencil_state_desc->DepthEnable)
+		{
+			if(depth_stencil_state_desc->DepthFunc == 0 ||
+			   depth_stencil_state_desc->DepthFunc >= 9)
+				return E_INVALIDARG;
+			state.depth.writemask = depth_stencil_state_desc->DepthWriteMask;
+			state.depth.func = depth_stencil_state_desc->DepthFunc - 1;
+		}
+
 		state.stencil[0].enabled = !!depth_stencil_state_desc->StencilEnable;
-		state.stencil[0].writemask = depth_stencil_state_desc->StencilWriteMask;
-		state.stencil[0].valuemask = depth_stencil_state_desc->StencilReadMask;
-		state.stencil[0].zpass_op = d3d11_to_pipe_stencil_op[depth_stencil_state_desc->FrontFace.StencilPassOp];
-		state.stencil[0].fail_op = d3d11_to_pipe_stencil_op[depth_stencil_state_desc->FrontFace.StencilFailOp];
-		state.stencil[0].zfail_op = d3d11_to_pipe_stencil_op[depth_stencil_state_desc->FrontFace.StencilDepthFailOp];
-		state.stencil[0].func = depth_stencil_state_desc->FrontFace.StencilFunc - 1;
-		state.stencil[1].enabled = !!depth_stencil_state_desc->StencilEnable;
-		state.stencil[1].writemask = depth_stencil_state_desc->StencilWriteMask;
-		state.stencil[1].valuemask = depth_stencil_state_desc->StencilReadMask;
-		state.stencil[1].zpass_op = d3d11_to_pipe_stencil_op[depth_stencil_state_desc->BackFace.StencilPassOp];
-		state.stencil[1].fail_op = d3d11_to_pipe_stencil_op[depth_stencil_state_desc->BackFace.StencilFailOp];
-		state.stencil[1].zfail_op = d3d11_to_pipe_stencil_op[depth_stencil_state_desc->BackFace.StencilDepthFailOp];
-		state.stencil[1].func = depth_stencil_state_desc->BackFace.StencilFunc - 1;
+		if(depth_stencil_state_desc->StencilEnable)
+		{
+			if(depth_stencil_state_desc->FrontFace.StencilPassOp >= D3D11_STENCIL_OP_COUNT ||
+			   depth_stencil_state_desc->FrontFace.StencilFailOp >= D3D11_STENCIL_OP_COUNT ||
+			   depth_stencil_state_desc->FrontFace.StencilDepthFailOp >= D3D11_STENCIL_OP_COUNT ||
+			   depth_stencil_state_desc->BackFace.StencilPassOp >= D3D11_STENCIL_OP_COUNT ||
+			   depth_stencil_state_desc->BackFace.StencilFailOp >= D3D11_STENCIL_OP_COUNT ||
+			   depth_stencil_state_desc->BackFace.StencilDepthFailOp >= D3D11_STENCIL_OP_COUNT)
+				return E_INVALIDARG;
+			state.stencil[0].writemask = depth_stencil_state_desc->StencilWriteMask;
+			state.stencil[0].valuemask = depth_stencil_state_desc->StencilReadMask;
+			state.stencil[0].zpass_op = d3d11_to_pipe_stencil_op[depth_stencil_state_desc->FrontFace.StencilPassOp];
+			state.stencil[0].fail_op = d3d11_to_pipe_stencil_op[depth_stencil_state_desc->FrontFace.StencilFailOp];
+			state.stencil[0].zfail_op = d3d11_to_pipe_stencil_op[depth_stencil_state_desc->FrontFace.StencilDepthFailOp];
+			state.stencil[0].func = depth_stencil_state_desc->FrontFace.StencilFunc - 1;
+			state.stencil[1].enabled = !!depth_stencil_state_desc->StencilEnable;
+			state.stencil[1].writemask = depth_stencil_state_desc->StencilWriteMask;
+			state.stencil[1].valuemask = depth_stencil_state_desc->StencilReadMask;
+			state.stencil[1].zpass_op = d3d11_to_pipe_stencil_op[depth_stencil_state_desc->BackFace.StencilPassOp];
+			state.stencil[1].fail_op = d3d11_to_pipe_stencil_op[depth_stencil_state_desc->BackFace.StencilFailOp];
+			state.stencil[1].zfail_op = d3d11_to_pipe_stencil_op[depth_stencil_state_desc->BackFace.StencilDepthFailOp];
+			state.stencil[1].func = depth_stencil_state_desc->BackFace.StencilFunc - 1;
+		}
 
 		if(!depth_stencil_state)
 			return S_FALSE;
@@ -546,7 +616,7 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		if(sampler_desc->Filter & 0x80)
 		{
 			state.compare_mode = PIPE_TEX_COMPARE_R_TO_TEXTURE;
-			state.compare_func = sampler_desc->ComparisonFunc;
+			state.compare_func = sampler_desc->ComparisonFunc - 1;
 		}
 		state.wrap_s = d3d11_to_pipe_wrap[sampler_desc->AddressU];
 		state.wrap_t = d3d11_to_pipe_wrap[sampler_desc->AddressV];
@@ -582,7 +652,7 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 
 		// putting semantics matching in the core API seems to be a (minor) design mistake
 
-		struct dxbc_chunk_signature* sig = dxbc_find_signature(shader_bytecode_with_input_signature, bytecode_length, false);
+		struct dxbc_chunk_signature* sig = dxbc_find_signature(shader_bytecode_with_input_signature, bytecode_length, DXBC_FIND_INPUT_SIGNATURE);
 		D3D11_SIGNATURE_PARAMETER_DESC* params;
 		unsigned num_params = dxbc_parse_signature(sig, &params);
 
@@ -593,23 +663,60 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 
 		struct pipe_vertex_element elements[D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT];
 
-		unsigned num_params_to_use = std::min(num_params, (unsigned)D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT);
-		for(unsigned i = 0; i < num_params_to_use; ++i)
-		{
-			int idx = -1;
-			semantic_to_idx_map_t::iterator iter = semantic_to_idx_map.find(std::make_pair(c_string(params[i].SemanticName), params[i].SemanticIndex));
-			if(iter != semantic_to_idx_map.end())
-				idx = iter->second;
+		enum pipe_format formats[D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT];
+		unsigned offsets[D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT];
 
-			// TODO: I kind of doubt Gallium drivers will like null elements; should we do something about it, either here, in the interface, or in the drivers?
-			// TODO: also, in which cases should we return errors? (i.e. duplicate semantics in vs, duplicate semantics in layout, unmatched semantic in vs, unmatched semantic in layout)
-			memset(&elements[i], 0, sizeof(elements[i]));
-			if(idx >= 0)
+		offsets[0] = 0;
+		for(unsigned i = 0; i < count; ++i)
+		{
+			formats[i] = dxgi_to_pipe_format[input_element_descs[i].Format];
+
+			if(likely(input_element_descs[i].AlignedByteOffset != D3D11_APPEND_ALIGNED_ELEMENT))
 			{
-				elements[i].src_format = dxgi_to_pipe_format[input_element_descs[idx].Format];
-				elements[i].src_offset = input_element_descs[idx].AlignedByteOffset;
-				elements[i].vertex_buffer_index = input_element_descs[idx].InputSlot;
-				elements[i].instance_divisor = input_element_descs[idx].InstanceDataStepRate;
+				offsets[i] = input_element_descs[i].AlignedByteOffset;
+			}
+			else if(i > 0)
+			{
+				unsigned align_mask = util_format_description(formats[i])->channel[0].size;
+				if(align_mask & 7) // e.g. R10G10B10A2
+					align_mask = 32;
+				align_mask = (align_mask / 8) - 1;
+
+				offsets[i] = (offsets[i - 1] + util_format_get_blocksize(formats[i - 1]) + align_mask) & ~align_mask;
+			}
+		}
+
+		// TODO: check for & report errors (e.g. ambiguous layouts, unmatched semantics)
+
+		unsigned num_params_to_use = 0;
+		for(unsigned i = 0; i < num_params && num_params_to_use < D3D11_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT; ++i)
+		{
+			if(!strcasecmp(params[i].SemanticName, "SV_INSTANCEID") ||
+			   !strcasecmp(params[i].SemanticName, "SV_VERTEXID"))
+				continue;
+			const unsigned n = num_params_to_use++;
+
+			semantic_to_idx_map_t::iterator iter = semantic_to_idx_map.find(std::make_pair(c_string(params[i].SemanticName), params[i].SemanticIndex));
+
+			if(iter != semantic_to_idx_map.end())
+			{
+				unsigned idx = iter->second;
+
+				elements[n].src_format = formats[idx];
+				elements[n].src_offset = offsets[idx];
+				elements[n].vertex_buffer_index = input_element_descs[idx].InputSlot;
+				elements[n].instance_divisor = input_element_descs[idx].InstanceDataStepRate;
+				if (input_element_descs[idx].InputSlotClass == D3D11_INPUT_PER_INSTANCE_DATA)
+					if (elements[n].instance_divisor == 0)
+						elements[n].instance_divisor = ~0; // XXX: can't specify 'never' to gallium
+			}
+			else
+			{
+				// XXX: undefined input, is this valid or should we return an error ?
+				elements[n].src_format = PIPE_FORMAT_NONE;
+				elements[n].src_offset = 0;
+				elements[n].vertex_buffer_index = 0;
+				elements[n].instance_divisor = 0;
 			}
 		}
 
@@ -671,15 +778,17 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 			if(target != PIPE_TEXTURE_2D)
 				return E_INVALIDARG;
 			target = PIPE_TEXTURE_CUBE;
-
-			if(array_size != 6)
-				return E_NOTIMPL;
+			if(array_size % 6)
+				return E_INVALIDARG;
 		}
-		else
+		else if(array_size > 1)
 		{
-			if(array_size > 1)
-				return E_NOTIMPL;
-			array_size = 1;
+			switch (target) {
+			case PIPE_TEXTURE_1D: target = PIPE_TEXTURE_1D_ARRAY; break;
+			case PIPE_TEXTURE_2D: target = PIPE_TEXTURE_2D_ARRAY; break;
+			default:
+				return E_INVALIDARG;
+			}
 		}
 		/* TODO: msaa */
 		struct pipe_resource templat;
@@ -688,11 +797,22 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		templat.width0 = width;
 		templat.height0 = height;
 		templat.depth0 = depth;
+		templat.array_size = array_size;
 		if(mip_levels)
 			templat.last_level = mip_levels - 1;
 		else
 			templat.last_level = MAX2(MAX2(util_logbase2(templat.width0), util_logbase2(templat.height0)), util_logbase2(templat.depth0));
 		templat.format = dxgi_to_pipe_format[format];
+		if(bind_flags & D3D11_BIND_DEPTH_STENCIL) {
+			// colour formats are not depth-renderable, but depth/stencil-formats may be colour-renderable
+			switch(format)
+			{
+			case DXGI_FORMAT_R32_TYPELESS: templat.format = PIPE_FORMAT_Z32_FLOAT; break;
+			case DXGI_FORMAT_R16_TYPELESS: templat.format = PIPE_FORMAT_Z16_UNORM; break;
+			default:
+				break;
+			}
+		}
 		templat.bind = d3d11_to_pipe_bind_flags(bind_flags);
 		if(c_p_u_access_flags & D3D11_CPU_ACCESS_READ)
 			templat.bind |= PIPE_BIND_TRANSFER_READ;
@@ -725,7 +845,7 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 					box.z = slice;
 					box.width = u_minify(width, level);
 					box.height = u_minify(height, level);
-					box.depth = 1;
+					box.depth = u_minify(depth, level);
 					immediate_pipe->transfer_inline_write(immediate_pipe, resource, level, PIPE_TRANSFER_WRITE | PIPE_TRANSFER_DISCARD | PIPE_TRANSFER_UNSYNCHRONIZED, &box, initial_data->pSysMem, initial_data->SysMemPitch, initial_data->SysMemSlicePitch);
 					++initial_data;
 				}
@@ -922,9 +1042,10 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 #endif
 		SYNCHRONIZED;
 
+		const struct pipe_resource* resource = ((GalliumD3D11Resource<>*)iresource)->resource;
+
 		if(!desc)
 		{
-			struct pipe_resource* resource = ((GalliumD3D11Resource<>*)iresource)->resource;
 			init_pipe_to_dxgi_format();
 			memset(&def_desc, 0, sizeof(def_desc));
 			def_desc.Format = pipe_to_dxgi_format[resource->format];
@@ -938,17 +1059,35 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 				def_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE1D;
 				def_desc.Texture1D.MipLevels = resource->last_level + 1;
 				break;
+			case PIPE_TEXTURE_1D_ARRAY:
+				def_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE1DARRAY;
+				def_desc.Texture1DArray.MipLevels = resource->last_level + 1;
+				def_desc.Texture1DArray.ArraySize = resource->array_size;
+				break;
 			case PIPE_TEXTURE_2D:
 			case PIPE_TEXTURE_RECT:
 				def_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 				def_desc.Texture2D.MipLevels = resource->last_level + 1;
+				break;
+			case PIPE_TEXTURE_2D_ARRAY:
+				def_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+				def_desc.Texture2DArray.MipLevels = resource->last_level + 1;
+				def_desc.Texture2DArray.ArraySize = resource->array_size;
 				break;
 			case PIPE_TEXTURE_3D:
 				def_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D;
 				def_desc.Texture3D.MipLevels = resource->last_level + 1;
 				break;
 			case PIPE_TEXTURE_CUBE:
-				def_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
+				if(resource->array_size > 6)
+				{
+					def_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBEARRAY;
+					def_desc.TextureCubeArray.NumCubes = resource->array_size / 6;
+				}
+				else
+				{
+					def_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
+				}
 				def_desc.TextureCube.MipLevels = resource->last_level + 1;
 				break;
 			default:
@@ -961,7 +1100,7 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		memset(&templat, 0, sizeof(templat));
 		if(invalid(format >= DXGI_FORMAT_COUNT))
 			return E_INVALIDARG;
-		templat.format = dxgi_to_pipe_format[desc->Format];
+		templat.format = (desc->Format == DXGI_FORMAT_UNKNOWN) ? resource->format : dxgi_to_pipe_format[desc->Format];
 		if(!templat.format)
 			return E_NOTIMPL;
 		templat.swizzle_r = PIPE_SWIZZLE_RED;
@@ -972,16 +1111,32 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		templat.texture = ((GalliumD3D11Resource<>*)iresource)->resource;
 		switch(desc->ViewDimension)
 		{
+		case D3D11_SRV_DIMENSION_TEXTURE1DARRAY:
+		case D3D11_SRV_DIMENSION_TEXTURE2DARRAY:
+		case D3D11_SRV_DIMENSION_TEXTURECUBEARRAY:
+			templat.u.tex.first_layer = desc->Texture1DArray.FirstArraySlice;
+			templat.u.tex.last_layer = desc->Texture1DArray.FirstArraySlice + desc->Texture1DArray.ArraySize - 1;
+			if (desc->ViewDimension == D3D11_SRV_DIMENSION_TEXTURECUBEARRAY) {
+				templat.u.tex.first_layer *= 6;
+				templat.u.tex.last_layer *= 6;
+			}
+			// fall through
 		case D3D11_SRV_DIMENSION_TEXTURE1D:
 		case D3D11_SRV_DIMENSION_TEXTURE2D:
 		case D3D11_SRV_DIMENSION_TEXTURE3D:
-		case D3D11_SRV_DIMENSION_TEXTURE1DARRAY:
-		case D3D11_SRV_DIMENSION_TEXTURE2DARRAY:
-			/* yes, this works for all of these types (but TODO: texture arrays) */
+		case D3D11_SRV_DIMENSION_TEXTURECUBE:
+			// yes, this works for all of these types
 			templat.u.tex.first_level = desc->Texture1D.MostDetailedMip;
-			templat.u.tex.last_level = templat.u.tex.first_level + desc->Texture1D.MipLevels - 1;
+			if(desc->Texture1D.MipLevels == (unsigned)-1)
+				templat.u.tex.last_level = templat.texture->last_level;
+			else
+				templat.u.tex.last_level = templat.u.tex.first_level + desc->Texture1D.MipLevels - 1;
+			assert(templat.u.tex.last_level >= templat.u.tex.first_level);
 			break;
 		case D3D11_SRV_DIMENSION_BUFFER:
+			templat.u.buf.first_element = desc->Buffer.ElementOffset;
+			templat.u.buf.last_element = desc->Buffer.ElementOffset + desc->Buffer.ElementWidth - 1;
+			break;
 		case D3D11_SRV_DIMENSION_TEXTURE2DMS:
 		case D3D11_SRV_DIMENSION_TEXTURE2DMSARRAY:
 			return E_NOTIMPL;
@@ -1020,10 +1175,11 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 	{
 		SYNCHRONIZED;
 
+		const struct pipe_resource* resource = ((GalliumD3D11Resource<>*)iresource)->resource;
+
 		D3D11_RENDER_TARGET_VIEW_DESC def_desc;
 		if(!desc)
 		{
-			struct pipe_resource* resource = ((GalliumD3D11Resource<>*)iresource)->resource;
 			init_pipe_to_dxgi_format();
 			memset(&def_desc, 0, sizeof(def_desc));
 			def_desc.Format = pipe_to_dxgi_format[resource->format];
@@ -1036,9 +1192,17 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 			case PIPE_TEXTURE_1D:
 				def_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE1D;
 				break;
+			case PIPE_TEXTURE_1D_ARRAY:
+				def_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE1DARRAY;
+				def_desc.Texture1DArray.ArraySize = resource->array_size;
+				break;
 			case PIPE_TEXTURE_2D:
 			case PIPE_TEXTURE_RECT:
 				def_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+				break;
+			case PIPE_TEXTURE_2D_ARRAY:
+				def_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
+				def_desc.Texture2DArray.ArraySize = resource->array_size;
 				break;
 			case PIPE_TEXTURE_3D:
 				def_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE3D;
@@ -1058,7 +1222,7 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		memset(&templat, 0, sizeof(templat));
 		if(invalid(desc->format >= DXGI_FORMAT_COUNT))
 			return E_INVALIDARG;
-		templat.format = dxgi_to_pipe_format[desc->Format];
+		templat.format = (desc->Format == DXGI_FORMAT_UNKNOWN) ? resource->format : dxgi_to_pipe_format[desc->Format];
 		if(!templat.format)
 			return E_NOTIMPL;
 		templat.usage = PIPE_BIND_RENDER_TARGET;
@@ -1073,17 +1237,18 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		case D3D11_RTV_DIMENSION_TEXTURE3D:
 			templat.u.tex.level = desc->Texture3D.MipSlice;
 			templat.u.tex.first_layer = desc->Texture3D.FirstWSlice;
-			/* XXX FIXME */
-			templat.u.tex.last_layer = desc->Texture3D.FirstWSlice;
+			templat.u.tex.last_layer = desc->Texture3D.FirstWSlice + desc->Texture3D.WSize - 1;
 			break;
 		case D3D11_RTV_DIMENSION_TEXTURE1DARRAY:
 		case D3D11_RTV_DIMENSION_TEXTURE2DARRAY:
 			templat.u.tex.level = desc->Texture1DArray.MipSlice;
 			templat.u.tex.first_layer = desc->Texture1DArray.FirstArraySlice;
-			/* XXX FIXME */
-			templat.u.tex.last_layer = desc->Texture1DArray.FirstArraySlice;
+			templat.u.tex.last_layer = desc->Texture1DArray.FirstArraySlice + desc->Texture1DArray.ArraySize - 1;
 			break;
 		case D3D11_RTV_DIMENSION_BUFFER:
+			templat.u.buf.first_element = desc->Buffer.ElementOffset;
+			templat.u.buf.last_element = desc->Buffer.ElementOffset + desc->Buffer.ElementWidth - 1;
+			break;
 		case D3D11_RTV_DIMENSION_TEXTURE2DMS:
 		case D3D11_RTV_DIMENSION_TEXTURE2DMSARRAY:
 			return E_NOTIMPL;
@@ -1108,10 +1273,11 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 	{
 		SYNCHRONIZED;
 
+		const struct pipe_resource* resource = ((GalliumD3D11Resource<>*)iresource)->resource;
+
 		D3D11_DEPTH_STENCIL_VIEW_DESC def_desc;
 		if(!desc)
 		{
-			struct pipe_resource* resource = ((GalliumD3D11Resource<>*)iresource)->resource;
 			init_pipe_to_dxgi_format();
 			memset(&def_desc, 0, sizeof(def_desc));
 			def_desc.Format = pipe_to_dxgi_format[resource->format];
@@ -1120,9 +1286,17 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 			case PIPE_TEXTURE_1D:
 				def_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE1D;
 				break;
+			case PIPE_TEXTURE_1D_ARRAY:
+				def_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE1DARRAY;
+				def_desc.Texture1DArray.ArraySize = resource->array_size;
+				break;
 			case PIPE_TEXTURE_2D:
 			case PIPE_TEXTURE_RECT:
 				def_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+				break;
+			case PIPE_TEXTURE_2D_ARRAY:
+				def_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
+				def_desc.Texture2DArray.ArraySize = resource->array_size;
 				break;
 			case PIPE_TEXTURE_CUBE:
 				def_desc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
@@ -1138,7 +1312,7 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		memset(&templat, 0, sizeof(templat));
 		if(invalid(desc->format >= DXGI_FORMAT_COUNT))
 			return E_INVALIDARG;
-		templat.format = dxgi_to_pipe_format[desc->Format];
+		templat.format = (desc->Format == DXGI_FORMAT_UNKNOWN) ? resource->format : dxgi_to_pipe_format[desc->Format];
 		if(!templat.format)
 			return E_NOTIMPL;
 		templat.usage = PIPE_BIND_DEPTH_STENCIL;
@@ -1154,8 +1328,7 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		case D3D11_DSV_DIMENSION_TEXTURE2DARRAY:
 			templat.u.tex.level = desc->Texture1DArray.MipSlice;
 			templat.u.tex.first_layer = desc->Texture1DArray.FirstArraySlice;
-			/* XXX FIXME */
-			templat.u.tex.last_layer = desc->Texture1DArray.FirstArraySlice;
+			templat.u.tex.last_layer = desc->Texture1DArray.FirstArraySlice + desc->Texture1DArray.ArraySize - 1;
 			break;
 		case D3D11_DSV_DIMENSION_TEXTURE2DMS:
 		case D3D11_DSV_DIMENSION_TEXTURE2DMSARRAY:
@@ -1193,6 +1366,20 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		if(dump)
 			sm4->dump();
 
+		struct dxbc_chunk_signature* sig;
+
+		sig = dxbc_find_signature(shader_bytecode, bytecode_length, DXBC_FIND_INPUT_SIGNATURE);
+		if(sig)
+			sm4->num_params_in = dxbc_parse_signature(sig, &sm4->params_in);
+
+		sig = dxbc_find_signature(shader_bytecode, bytecode_length, DXBC_FIND_OUTPUT_SIGNATURE);
+		if(sig)
+			sm4->num_params_out = dxbc_parse_signature(sig, &sm4->params_out);
+
+		sig = dxbc_find_signature(shader_bytecode, bytecode_length, DXBC_FIND_PATCH_SIGNATURE);
+		if(sig)
+			sm4->num_params_patch = dxbc_parse_signature(sig, &sm4->params_patch);
+
 		struct pipe_shader_state tgsi_shader;
 		memset(&tgsi_shader, 0, sizeof(tgsi_shader));
 		tgsi_shader.tokens = (const tgsi_token*)sm4_to_tgsi(*sm4);
@@ -1223,12 +1410,6 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 			shader_cso = 0;
 			shader = 0;
 			break;
-		}
-
-		if(shader)
-		{
-			shader->slot_to_resource = sm4->slot_to_resource;
-			shader->slot_to_sampler = sm4->slot_to_sampler;
 		}
 
 		free((void*)tgsi_shader.tokens);
@@ -1327,10 +1508,10 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		if(invalid(query_desc->Query >= D3D11_QUERY_COUNT))
 			return E_INVALIDARG;
 		unsigned query_type = d3d11_to_pipe_query[query_desc->Query];
-		if(!query_type)
+		if(query_type >= PIPE_QUERY_TYPES)
 			return E_NOTIMPL;
 
-		if(out_query)
+		if(!out_query)
 			return S_FALSE;
 
 		struct pipe_query* query = immediate_pipe->create_query(immediate_pipe, query_type);
@@ -1351,9 +1532,10 @@ struct GalliumD3D11ScreenImpl : public GalliumD3D11Screen
 		switch(predicate_desc->Query)
 		{
 		case D3D11_QUERY_SO_OVERFLOW_PREDICATE:
-			return E_NOTIMPL;
+			query_type = PIPE_QUERY_SO_OVERFLOW_PREDICATE;
+			break;
 		case D3D11_QUERY_OCCLUSION_PREDICATE:
-			query_type = PIPE_QUERY_OCCLUSION_COUNTER;
+			query_type = PIPE_QUERY_OCCLUSION_PREDICATE;
 			break;
 		default:
 			return E_INVALIDARG;

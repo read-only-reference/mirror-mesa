@@ -47,21 +47,32 @@ void intelSetTexBuffer(__DRIcontext *pDRICtx,
 void intelSetTexBuffer2(__DRIcontext *pDRICtx,
 			GLint target, GLint format, __DRIdrawable *pDraw);
 
+struct intel_mipmap_tree *
+intel_miptree_create_for_teximage(struct intel_context *intel,
+				  struct intel_texture_object *intelObj,
+				  struct intel_texture_image *intelImage,
+				  bool expect_accelerated_upload);
+
 GLuint intel_finalize_mipmap_tree(struct intel_context *intel, GLuint unit);
 
 void intel_tex_map_level_images(struct intel_context *intel,
 				struct intel_texture_object *intelObj,
-				int level);
+				int level,
+				GLbitfield mode);
 
 void intel_tex_unmap_level_images(struct intel_context *intel,
 				  struct intel_texture_object *intelObj,
 				  int level);
 
 void intel_tex_map_images(struct intel_context *intel,
-                          struct intel_texture_object *intelObj);
+                          struct intel_texture_object *intelObj,
+                          GLbitfield mode);
 
 void intel_tex_unmap_images(struct intel_context *intel,
                             struct intel_texture_object *intelObj);
+bool
+intel_tex_image_s8z24_create_renderbuffers(struct intel_context *intel,
+					   struct intel_texture_image *image);
 
 void intel_tex_image_s8z24_scatter(struct intel_context *intel,
 				   struct intel_texture_image *intel_image);
@@ -71,7 +82,7 @@ void intel_tex_image_s8z24_gather(struct intel_context *intel,
 
 int intel_compressed_num_bytes(GLuint mesaFormat);
 
-GLboolean intel_copy_texsubimage(struct intel_context *intel,
+bool intel_copy_texsubimage(struct intel_context *intel,
                                  struct intel_texture_image *intelImage,
                                  GLint dstx, GLint dsty,
                                  GLint x, GLint y,

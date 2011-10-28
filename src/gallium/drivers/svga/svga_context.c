@@ -239,9 +239,9 @@ void svga_context_flush( struct svga_context *svga,
    }
 
    if(pfence)
-      *pfence = fence;
-   else
-      svgascreen->sws->fence_reference(svgascreen->sws, &fence, NULL);
+      svgascreen->sws->fence_reference(svgascreen->sws, pfence, fence);
+
+   svgascreen->sws->fence_reference(svgascreen->sws, &fence, NULL);
 }
 
 
@@ -256,6 +256,20 @@ void svga_hwtnl_flush_retry( struct svga_context *svga )
    }
 
    assert(ret == 0);
+}
+
+
+/**
+ * Flush the primitive queue if this buffer is referred.
+ *
+ * Otherwise DMA commands on the referred buffer will be emitted too late.
+ */
+void svga_hwtnl_flush_buffer( struct svga_context *svga,
+                              struct pipe_resource *buffer )
+{
+   if (svga_hwtnl_is_buffer_referred(svga->hwtnl, buffer)) {
+      svga_hwtnl_flush_retry(svga);
+   }
 }
 
 

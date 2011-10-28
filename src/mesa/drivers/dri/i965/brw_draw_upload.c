@@ -31,6 +31,7 @@
 #include "main/bufferobj.h"
 #include "main/context.h"
 #include "main/enums.h"
+#include "main/macros.h"
 
 #include "brw_draw.h"
 #include "brw_defines.h"
@@ -167,7 +168,7 @@ static GLuint byte_types_scale[5] = {
  * Format will be GL_RGBA or possibly GL_BGRA for GLubyte[4] color arrays.
  */
 static GLuint get_surface_type( GLenum type, GLuint size,
-                                GLenum format, GLboolean normalized )
+                                GLenum format, bool normalized )
 {
    if (unlikely(INTEL_DEBUG & DEBUG_VERTS))
       printf("type %s size %d normalized %d\n", 
@@ -251,6 +252,22 @@ copy_array_to_vbo_array(struct brw_context *brw,
 			struct brw_vertex_buffer *buffer,
 			GLuint dst_stride)
 {
+   if (min == -1) {
+      /* If we don't have computed min/max bounds, then this must be a use of
+       * the current attribute, which has a 0 stride.  Otherwise, we wouldn't
+       * know what data to upload.
+       */
+      assert(element->glarray->StrideB == 0);
+
+      intel_upload_data(&brw->intel, element->glarray->Ptr,
+                        element->element_size,
+                        element->element_size,
+			&buffer->bo, &buffer->offset);
+
+      buffer->stride = 0;
+      return;
+   }
+
    int src_stride = element->glarray->StrideB;
    const unsigned char *src = element->glarray->Ptr + min * src_stride;
    int count = max - min + 1;
@@ -309,7 +326,7 @@ static void brw_prepare_vertices(struct brw_context *brw)
       return;
 
    if (brw->vb.nr_buffers)
-      goto validate;
+      goto prepare;
 
    /* XXX: In the rare cases where this happens we fallback all
     * the way to software rasterization, although a tnl fallback
@@ -318,7 +335,7 @@ static void brw_prepare_vertices(struct brw_context *brw)
     * isn't an issue at this point.
     */
    if (brw->vb.nr_enabled >= BRW_VEP_MAX) {
-      intel->Fallback = GL_TRUE; /* boolean, not bitfield */
+      intel->Fallback = true; /* boolean, not bitfield */
       return;
    }
 
@@ -381,7 +398,7 @@ static void brw_prepare_vertices(struct brw_context *brw)
 	    /* Position array not properly enabled:
 	     */
 	    if (input->attrib == VERT_ATTRIB_POS && glarray->StrideB == 0) {
-               intel->Fallback = GL_TRUE; /* boolean, not bitfield */
+               intel->Fallback = true; /* boolean, not bitfield */
                return;
             }
 
@@ -442,7 +459,7 @@ static void brw_prepare_vertices(struct brw_context *brw)
       else if (total_size < 2048) {
 	 /* Upload non-interleaved arrays into a single interleaved array */
 	 struct brw_vertex_buffer *buffer;
-	 int count = max_index - min_index + 1;
+	 int count = MAX2(max_index - min_index + 1, 1);
 	 int offset;
 	 char *map;
 
@@ -518,11 +535,8 @@ static void brw_prepare_vertices(struct brw_context *brw)
 
    brw->vb.nr_buffers = j;
 
-validate:
+prepare:
    brw_prepare_query_begin(brw);
-   for (i = 0; i < brw->vb.nr_buffers; i++) {
-      brw_add_validated_bo(brw, brw->vb.buffers[i].bo);
-   }
 }
 
 static void brw_emit_vertices(struct brw_context *brw)
@@ -530,6 +544,8 @@ static void brw_emit_vertices(struct brw_context *brw)
    struct gl_context *ctx = &brw->intel.ctx;
    struct intel_context *intel = intel_context(ctx);
    GLuint i;
+
+   brw_prepare_vertices(brw);
 
    brw_emit_query_begin(brw);
 
@@ -651,11 +667,10 @@ const struct brw_tracked_state brw_vertices = {
       .brw = BRW_NEW_BATCH | BRW_NEW_VERTICES,
       .cache = CACHE_NEW_VS_PROG,
    },
-   .prepare = brw_prepare_vertices,
    .emit = brw_emit_vertices,
 };
 
-static void brw_prepare_indices(struct brw_context *brw)
+static void brw_upload_indices(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->intel.ctx;
    struct intel_context *intel = &brw->intel;
@@ -721,7 +736,6 @@ static void brw_prepare_indices(struct brw_context *brw)
       drm_intel_bo_unreference(brw->ib.bo);
       brw->ib.bo = bo;
 
-      brw_add_validated_bo(brw, brw->ib.bo);
       brw->state.dirty.brw |= BRW_NEW_INDEX_BUFFER;
    } else {
       drm_intel_bo_unreference(bo);
@@ -739,7 +753,7 @@ const struct brw_tracked_state brw_indices = {
       .brw = BRW_NEW_INDICES,
       .cache = 0,
    },
-   .prepare = brw_prepare_indices,
+   .emit = brw_upload_indices,
 };
 
 static void brw_emit_index_buffer(struct brw_context *brw)

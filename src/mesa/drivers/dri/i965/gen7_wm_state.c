@@ -32,61 +32,6 @@
 #include "intel_batchbuffer.h"
 
 static void
-gen7_prepare_wm_constants(struct brw_context *brw)
-{
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
-   /* BRW_NEW_FRAGMENT_PROGRAM */
-   const struct brw_fragment_program *fp =
-      brw_fragment_program_const(brw->fragment_program);
-
-   /* Updates the ParameterValues[i] pointers for all parameters of the
-    * basic type of PROGRAM_STATE_VAR.
-    */
-   /* XXX: Should this happen somewhere before to get our state flag set? */
-   _mesa_load_state_parameters(ctx, fp->program.Base.Parameters);
-
-   /* CACHE_NEW_WM_PROG */
-   if (brw->wm.prog_data->nr_params != 0) {
-      float *constants;
-      unsigned int i;
-
-      constants = brw_state_batch(brw, AUB_TRACE_NO_TYPE,
-				  brw->wm.prog_data->nr_params *
-				  sizeof(float),
-				  32, &brw->wm.push_const_offset);
-
-      for (i = 0; i < brw->wm.prog_data->nr_params; i++) {
-	 constants[i] = convert_param(brw->wm.prog_data->param_convert[i],
-				      brw->wm.prog_data->param[i]);
-      }
-
-      if (0) {
-	 printf("WM constants:\n");
-	 for (i = 0; i < brw->wm.prog_data->nr_params; i++) {
-	    if ((i & 7) == 0)
-	       printf("g%d: ", brw->wm.prog_data->first_curbe_grf + i / 8);
-	    printf("%8f ", constants[i]);
-	    if ((i & 7) == 7)
-	       printf("\n");
-	 }
-	 if ((i & 7) != 0)
-	    printf("\n");
-	 printf("\n");
-      }
-   }
-}
-
-const struct brw_tracked_state gen7_wm_constants = {
-   .dirty = {
-      .mesa  = _NEW_PROGRAM_CONSTANTS,
-      .brw   = (BRW_NEW_BATCH | BRW_NEW_FRAGMENT_PROGRAM),
-      .cache = CACHE_NEW_WM_PROG,
-   },
-   .prepare = gen7_prepare_wm_constants,
-};
-
-static void
 upload_wm_state(struct brw_context *brw)
 {
    struct intel_context *intel = &brw->intel;
@@ -95,6 +40,9 @@ upload_wm_state(struct brw_context *brw)
       brw_fragment_program_const(brw->fragment_program);
    bool writes_depth = false;
    uint32_t dw1;
+
+   /* _NEW_LIGHT */
+   bool flat_shade = (ctx->Light.ShadeModel == GL_FLAT);
 
    dw1 = 0;
    dw1 |= GEN7_WM_STATISTICS_ENABLE;
@@ -116,6 +64,8 @@ upload_wm_state(struct brw_context *brw)
       writes_depth = true;
       dw1 |= GEN7_WM_PSCDEPTH_ON;
    }
+   dw1 |= brw_compute_barycentric_interp_modes(flat_shade, &fp->program) <<
+      GEN7_WM_BARYCENTRIC_INTERPOLATION_MODE_SHIFT;
 
    /* _NEW_COLOR */
    if (fp->program.UsesKill || ctx->Color.AlphaEnabled)
@@ -127,8 +77,6 @@ upload_wm_state(struct brw_context *brw)
       dw1 |= GEN7_WM_DISPATCH_ENABLE;
    }
 
-   dw1 |= GEN7_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
-
    BEGIN_BATCH(3);
    OUT_BATCH(_3DSTATE_WM << 16 | (3 - 2));
    OUT_BATCH(dw1);
@@ -138,7 +86,7 @@ upload_wm_state(struct brw_context *brw)
 
 const struct brw_tracked_state gen7_wm_state = {
    .dirty = {
-      .mesa  = (_NEW_LINE | _NEW_POLYGON |
+      .mesa  = (_NEW_LINE | _NEW_LIGHT | _NEW_POLYGON |
 	        _NEW_COLOR | _NEW_BUFFERS),
       .brw   = (BRW_NEW_FRAGMENT_PROGRAM |
 		BRW_NEW_URB_FENCE |
@@ -201,11 +149,14 @@ upload_ps_state(struct brw_context *brw)
    /* BRW_NEW_NR_WM_SURFACES */
    dw2 |= brw->wm.nr_surfaces << GEN7_PS_BINDING_TABLE_ENTRY_COUNT_SHIFT;
 
-   /* OpenGL non-ieee floating point mode */
-   dw2 |= GEN7_PS_FLOATING_POINT_MODE_ALT;
+   /* Use ALT floating point mode for ARB fragment programs, because they
+    * require 0^0 == 1.
+    */
+   if (intel->ctx.Shader.CurrentFragmentProgram == NULL)
+      dw2 |= GEN7_PS_FLOATING_POINT_MODE_ALT;
 
    /* CACHE_NEW_SAMPLER */
-   dw4 |= (brw->wm_max_threads - 1) << GEN7_PS_MAX_THREADS_SHIFT;
+   dw4 |= (brw->max_wm_threads - 1) << GEN7_PS_MAX_THREADS_SHIFT;
 
    /* CACHE_NEW_WM_PROG */
    if (brw->wm.prog_data->nr_params > 0)

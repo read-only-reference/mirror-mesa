@@ -32,7 +32,10 @@
 #include "radeon_compiler.h"
 #include "radeon_compiler_util.h"
 #include "radeon_dataflow.h"
+#include "radeon_list.h"
+#include "radeon_variable.h"
 
+#include "util/u_debug.h"
 
 #define VERBOSE 0
 
@@ -60,6 +63,22 @@ struct schedule_instruction {
 	 * "all readers"), even those outside the basic block this instruction
 	 * lives in. */
 	struct rc_reader_data GlobalReaders;
+
+	/** If the scheduler has paired an RGB and an Alpha instruction together,
+	 * PairedInst references the alpha insturction's dependency information.
+	 */
+	struct schedule_instruction * PairedInst;
+
+	/** This scheduler uses the value of Score to determine which
+	 * instruction to schedule.  Instructions with a higher value of Score
+	 * will be scheduled first. */
+	int Score;
+
+	/** The number of components that read from a TEX instruction. */
+	unsigned TexReadCount;
+
+	/** For TEX instructions a list of readers */
+	struct rc_list * TexReaders;
 };
 
 
@@ -113,6 +132,9 @@ struct remap_reg {
 struct schedule_state {
 	struct radeon_compiler * C;
 	struct schedule_instruction * Current;
+	/** Array of the previous writers of Current's destination register
+	 * indexed by channel. */
+	struct schedule_instruction * PrevWriter[4];
 
 	struct register_state Temporary[RC_REGISTER_MAX_INDEX];
 
@@ -126,6 +148,13 @@ struct schedule_state {
 	struct schedule_instruction *ReadyAlpha;
 	struct schedule_instruction *ReadyTEX;
 	/*@}*/
+	struct rc_list *PendingTEX;
+
+	void (*CalcScore)(struct schedule_instruction *);
+	long max_tex_group;
+	unsigned PrevBlockHasTex:1;
+	unsigned TEXCount;
+	unsigned Opt:1;
 };
 
 static struct reg_value ** get_reg_valuep(struct schedule_state * s,
@@ -142,23 +171,76 @@ static struct reg_value ** get_reg_valuep(struct schedule_state * s,
 	return &s->Temporary[index].Values[chan];
 }
 
+static unsigned get_tex_read_count(struct schedule_instruction * sinst)
+{
+	unsigned tex_read_count = sinst->TexReadCount;
+	if (sinst->PairedInst) {
+		tex_read_count += sinst->PairedInst->TexReadCount;
+	}
+	return tex_read_count;
+}
+
+#if VERBOSE
+static void print_list(struct schedule_instruction * sinst)
+{
+	struct schedule_instruction * ptr;
+	for (ptr = sinst; ptr; ptr=ptr->NextReady) {
+		unsigned tex_read_count = get_tex_read_count(ptr);
+		unsigned score = sinst->Score;
+		fprintf(stderr,"%u (%d) [%u],", ptr->Instruction->IP, score,
+						tex_read_count);
+	}
+	fprintf(stderr, "\n");
+}
+#endif
+
+static void remove_inst_from_list(struct schedule_instruction ** list,
+					struct schedule_instruction * inst)
+{
+	struct schedule_instruction * prev = NULL;
+	struct schedule_instruction * list_ptr;
+	for (list_ptr = *list; list_ptr; prev = list_ptr,
+					list_ptr = list_ptr->NextReady) {
+		if (list_ptr == inst) {
+			if (prev) {
+				prev->NextReady = inst->NextReady;
+			} else {
+				*list = inst->NextReady;
+			}
+			inst->NextReady = NULL;
+			break;
+		}
+	}
+}
+
 static void add_inst_to_list(struct schedule_instruction ** list, struct schedule_instruction * inst)
 {
 	inst->NextReady = *list;
 	*list = inst;
 }
 
-static void add_inst_to_list_end(struct schedule_instruction ** list,
+static void add_inst_to_list_score(struct schedule_instruction ** list,
 					struct schedule_instruction * inst)
 {
-	if(!*list){
+	struct schedule_instruction * temp;
+	struct schedule_instruction * prev;
+	if (!*list) {
 		*list = inst;
-	}else{
-		struct schedule_instruction * temp = *list;
-		while(temp->NextReady){
-			temp = temp->NextReady;
-		}
-		temp->NextReady = inst;
+		return;
+	}
+	temp = *list;
+	prev = NULL;
+	while(temp && inst->Score <= temp->Score) {
+		prev = temp;
+		temp = temp->NextReady;
+	}
+
+	if (!prev) {
+		inst->NextReady = temp;
+		*list = inst;
+	} else {
+		prev->NextReady = inst;
+		inst->NextReady = temp;
 	}
 }
 
@@ -169,13 +251,13 @@ static void instruction_ready(struct schedule_state * s, struct schedule_instruc
 	/* Adding Ready TEX instructions to the end of the "Ready List" helps
 	 * us emit TEX instructions in blocks without losing our place. */
 	if (sinst->Instruction->Type == RC_INSTRUCTION_NORMAL)
-		add_inst_to_list_end(&s->ReadyTEX, sinst);
+		add_inst_to_list_score(&s->ReadyTEX, sinst);
 	else if (sinst->Instruction->U.P.Alpha.Opcode == RC_OPCODE_NOP)
-		add_inst_to_list(&s->ReadyRGB, sinst);
+		add_inst_to_list_score(&s->ReadyRGB, sinst);
 	else if (sinst->Instruction->U.P.RGB.Opcode == RC_OPCODE_NOP)
-		add_inst_to_list(&s->ReadyAlpha, sinst);
+		add_inst_to_list_score(&s->ReadyAlpha, sinst);
 	else
-		add_inst_to_list(&s->ReadyFullALU, sinst);
+		add_inst_to_list_score(&s->ReadyFullALU, sinst);
 }
 
 static void decrease_dependencies(struct schedule_state * s, struct schedule_instruction * sinst)
@@ -184,6 +266,68 @@ static void decrease_dependencies(struct schedule_state * s, struct schedule_ins
 	sinst->NumDependencies--;
 	if (!sinst->NumDependencies)
 		instruction_ready(s, sinst);
+}
+
+/* These functions provide different heuristics for scheduling instructions.
+ * The default is calc_score_readers. */
+
+#if 0
+
+static void calc_score_zero(struct schedule_instruction * sinst)
+{
+	sinst->Score = 0;
+}
+
+static void calc_score_deps(struct schedule_instruction * sinst)
+{
+	int i;
+	sinst->Score = 0;
+	for (i = 0; i < sinst->NumWriteValues; i++) {
+		struct reg_value * v = sinst->WriteValues[i];
+		if (v->NumReaders) {
+			struct reg_value_reader * r;
+			for (r = v->Readers; r; r = r->Next) {
+				if (r->Reader->NumDependencies == 1) {
+					sinst->Score += 100;
+				}
+				sinst->Score += r->Reader->NumDependencies;
+			}
+		}
+	}
+}
+
+#endif
+
+#define NO_READ_TEX_SCORE (1 << 16)
+#define NO_OUTPUT_SCORE (1 << 24)
+
+static void calc_score_readers(struct schedule_instruction * sinst)
+{
+	if (sinst->Instruction->Type == RC_INSTRUCTION_NORMAL) {
+		sinst->Score = 0;
+	} else {
+		sinst->Score = sinst->NumReadValues;
+		if (sinst->PairedInst) {
+			sinst->Score += sinst->PairedInst->NumReadValues;
+		}
+		if (get_tex_read_count(sinst) == 0) {
+			sinst->Score |= NO_READ_TEX_SCORE;
+		}
+		if (!sinst->Instruction->U.P.RGB.OutputWriteMask &&
+			!sinst->Instruction->U.P.Alpha.OutputWriteMask) {
+			if (sinst->PairedInst) {
+				if (!sinst->PairedInst->Instruction->U.P.
+						RGB.OutputWriteMask
+				&& !sinst->PairedInst->Instruction->U.P.
+						Alpha.OutputWriteMask) {
+					sinst->Score |= NO_OUTPUT_SCORE;
+				}
+
+			} else {
+				sinst->Score |= NO_OUTPUT_SCORE;
+			}
+		}
+	}
 }
 
 /**
@@ -198,9 +342,13 @@ static void commit_update_reads(struct schedule_state * s,
 		assert(v->NumReaders > 0);
 		v->NumReaders--;
 		if (!v->NumReaders) {
-			if (v->Next)
+			if (v->Next) {
 				decrease_dependencies(s, v->Next->Writer);
+			}
 		}
+	}
+	if (sinst->PairedInst) {
+		commit_update_reads(s, sinst->PairedInst);
 	}
 }
 
@@ -224,15 +372,38 @@ static void commit_update_writes(struct schedule_state * s,
 				decrease_dependencies(s, v->Next->Writer);
 		}
 	}
+	if (sinst->PairedInst) {
+		commit_update_writes(s, sinst->PairedInst);
+	}
+}
+
+static void notify_sem_wait(struct schedule_state *s)
+{
+	struct rc_list * pend_ptr;
+	for (pend_ptr = s->PendingTEX; pend_ptr; pend_ptr = pend_ptr->Next) {
+		struct rc_list * read_ptr;
+		struct schedule_instruction * pending = pend_ptr->Item;
+		for (read_ptr = pending->TexReaders; read_ptr;
+						read_ptr = read_ptr->Next) {
+			struct schedule_instruction * reader = read_ptr->Item;
+			reader->TexReadCount--;
+		}
+	}
+	s->PendingTEX = NULL;
 }
 
 static void commit_alu_instruction(struct schedule_state * s, struct schedule_instruction * sinst)
 {
-	DBG("%i: commit\n", sinst->Instruction->IP);
+	DBG("%i: commit score = %d\n", sinst->Instruction->IP, sinst->Score);
 
 	commit_update_reads(s, sinst);
 
 	commit_update_writes(s, sinst);
+
+	if (get_tex_read_count(sinst) > 0) {
+		sinst->Instruction->U.P.SemWait = 1;
+		notify_sem_wait(s);
+	}
 }
 
 /**
@@ -247,6 +418,7 @@ static void emit_all_tex(struct schedule_state * s, struct rc_instruction * befo
 	struct rc_instruction * inst_begin;
 
 	assert(s->ReadyTEX);
+	notify_sem_wait(s);
 
 	/* Node marker for R300 */
 	inst_begin = rc_insert_new_instruction(s->C, before->Prev);
@@ -278,6 +450,12 @@ static void emit_all_tex(struct schedule_state * s, struct rc_instruction * befo
 	while(readytex){
 		DBG("%i: commit TEX writes\n", readytex->Instruction->IP);
 		commit_update_writes(s, readytex);
+		/* Set semaphore bits for last TEX instruction in the block */
+		if (!readytex->NextReady) {
+			readytex->Instruction->U.I.TexSemAcquire = 1;
+			readytex->Instruction->U.I.TexSemWait = 1;
+		}
+		rc_list_add(&s->PendingTEX, rc_list(&s->C->Pool, readytex));
 		readytex = readytex->NextReady;
 	}
 }
@@ -461,6 +639,9 @@ static int destructive_merge_instructions(
 		rgb->ALUResultCompare = alpha->ALUResultCompare;
 	}
 
+	/* Copy SemWait */
+	rgb->SemWait |= alpha->SemWait;
+
 	return 1;
 }
 
@@ -480,6 +661,14 @@ static int merge_instructions(struct rc_pair_instruction * rgb, struct rc_pair_i
 		|| (rgb->RGB.OutputWriteMask && alpha->WriteALUResult)) {
 		return 0;
 	}
+
+	/* Writing output registers in the middle of shaders is slow, so
+	 * we don't want to pair output writes with temp writes. */
+	if ((rgb->RGB.OutputWriteMask && !alpha->Alpha.OutputWriteMask)
+		|| (!rgb->RGB.OutputWriteMask && alpha->Alpha.OutputWriteMask)) {
+		return 0;
+	}
+
 	memcpy(&backup, rgb, sizeof(struct rc_pair_instruction));
 
 	if (destructive_merge_instructions(rgb, alpha))
@@ -595,7 +784,7 @@ static void is_rgb_to_alpha_possible(
 	struct rc_pair_instruction_arg * arg,
 	struct rc_pair_instruction_source * src)
 {
-	unsigned int chan_count = 0;
+	unsigned int read_chan = RC_SWIZZLE_UNUSED;
 	unsigned int alpha_sources = 0;
 	unsigned int i;
 	struct rc_reader_data * reader_data = userdata;
@@ -617,8 +806,9 @@ static void is_rgb_to_alpha_possible(
 		return;
 	}
 
-	/* Make sure the source only reads from one component.
-	 * XXX We should allow the source to read from the same component twice.
+	/* Make sure the source only reads the register component that we
+	 * are going to be convering from.  It is OK if the instruction uses
+	 * this component more than once.
 	 * XXX If the index we will be converting to is the same as the
 	 * current index, then it is OK to read from more than one component.
 	 */
@@ -629,15 +819,16 @@ static void is_rgb_to_alpha_possible(
 		case RC_SWIZZLE_Y:
 		case RC_SWIZZLE_Z:
 		case RC_SWIZZLE_W:
-			chan_count++;
+			if (read_chan == RC_SWIZZLE_UNUSED) {
+				read_chan = swz;
+			} else if (read_chan != swz) {
+				reader_data->Abort = 1;
+				return;
+			}
 			break;
 		default:
 			break;
 		}
-	}
-	if (chan_count > 1) {
-		reader_data->Abort = 1;
-		return;
 	}
 
 	/* Make sure there are enough alpha sources.
@@ -708,7 +899,16 @@ static int convert_rgb_to_alpha(
 		return 0;
 	}
 
-	pair_inst->Alpha.Opcode = pair_inst->RGB.Opcode;
+	/* If we are converting a full instruction with RC_OPCODE_REPL_ALPHA
+	 * as the RGB opcode, then the Alpha instruction will already contain
+	 * the correct opcode and instruction args, so we do not want to
+	 * overwrite them.
+	 */
+	if (pair_inst->RGB.Opcode != RC_OPCODE_REPL_ALPHA) {
+		pair_inst->Alpha.Opcode = pair_inst->RGB.Opcode;
+		memcpy(pair_inst->Alpha.Arg, pair_inst->RGB.Arg,
+						sizeof(pair_inst->Alpha.Arg));
+	}
 	pair_inst->Alpha.DestIndex = new_index;
 	pair_inst->Alpha.WriteMask = RC_MASK_W;
 	pair_inst->Alpha.Target = pair_inst->RGB.Target;
@@ -716,8 +916,6 @@ static int convert_rgb_to_alpha(
 	pair_inst->Alpha.DepthWriteMask = pair_inst->RGB.DepthWriteMask;
 	pair_inst->Alpha.Saturate = pair_inst->RGB.Saturate;
 	pair_inst->Alpha.Omod = pair_inst->RGB.Omod;
-	memcpy(pair_inst->Alpha.Arg, pair_inst->RGB.Arg,
-						sizeof(pair_inst->Alpha.Arg));
 	/* Move the swizzles into the first chan */
 	for (i = 0; i < info->NumSrcRegs; i++) {
 		unsigned int j;
@@ -747,6 +945,154 @@ static int convert_rgb_to_alpha(
 	return 1;
 }
 
+static void try_convert_and_pair(
+	struct schedule_state *s,
+	struct schedule_instruction ** inst_list)
+{
+	struct schedule_instruction * list_ptr = *inst_list;
+	while (list_ptr && *inst_list && (*inst_list)->NextReady) {
+		int paired = 0;
+		if (list_ptr->Instruction->U.P.Alpha.Opcode != RC_OPCODE_NOP
+			&& list_ptr->Instruction->U.P.RGB.Opcode
+						!= RC_OPCODE_REPL_ALPHA) {
+				goto next;
+		}
+		if (list_ptr->NumWriteValues == 1
+					&& convert_rgb_to_alpha(s, list_ptr)) {
+
+			struct schedule_instruction * pair_ptr;
+			remove_inst_from_list(inst_list, list_ptr);
+			add_inst_to_list_score(&s->ReadyAlpha, list_ptr);
+
+			for (pair_ptr = s->ReadyRGB; pair_ptr;
+					pair_ptr = pair_ptr->NextReady) {
+				if (merge_instructions(&pair_ptr->Instruction->U.P,
+						&list_ptr->Instruction->U.P)) {
+					remove_inst_from_list(&s->ReadyAlpha, list_ptr);
+					remove_inst_from_list(&s->ReadyRGB, pair_ptr);
+					pair_ptr->PairedInst = list_ptr;
+
+					add_inst_to_list(&s->ReadyFullALU, pair_ptr);
+					list_ptr = *inst_list;
+					paired = 1;
+					break;
+				}
+
+			}
+		}
+		if (!paired) {
+next:
+			list_ptr = list_ptr->NextReady;
+		}
+	}
+}
+
+/**
+ * This function attempts to merge RGB and Alpha instructions together.
+ */
+static void pair_instructions(struct schedule_state * s)
+{
+	struct schedule_instruction *rgb_ptr;
+	struct schedule_instruction *alpha_ptr;
+
+	/* Some pairings might fail because they require too
+	 * many source slots; try all possible pairings if necessary */
+	rgb_ptr = s->ReadyRGB;
+	while(rgb_ptr) {
+		struct schedule_instruction * rgb_next = rgb_ptr->NextReady;
+		alpha_ptr = s->ReadyAlpha;
+		while(alpha_ptr) {
+			struct schedule_instruction * alpha_next = alpha_ptr->NextReady;
+			if (merge_instructions(&rgb_ptr->Instruction->U.P, &alpha_ptr->Instruction->U.P)) {
+				/* Remove RGB and Alpha from their ready lists.
+				 */
+				remove_inst_from_list(&s->ReadyRGB, rgb_ptr);
+				remove_inst_from_list(&s->ReadyAlpha, alpha_ptr);
+				rgb_ptr->PairedInst = alpha_ptr;
+				add_inst_to_list(&s->ReadyFullALU, rgb_ptr);
+				break;
+			}
+			alpha_ptr = alpha_next;
+		}
+		rgb_ptr = rgb_next;
+	}
+
+	if (!s->Opt) {
+		return;
+	}
+
+	/* Full instructions that have RC_OPCODE_REPL_ALPHA in the RGB
+	 * slot can be converted into Alpha instructions. */
+	try_convert_and_pair(s, &s->ReadyFullALU);
+
+	/* Try to convert some of the RGB instructions to Alpha and
+	 * try to pair it with another RGB. */
+	try_convert_and_pair(s, &s->ReadyRGB);
+}
+
+static void update_max_score(
+	struct schedule_state * s,
+	struct schedule_instruction ** list,
+	int * max_score,
+	struct schedule_instruction ** max_inst_out,
+	struct schedule_instruction *** list_out)
+{
+	struct schedule_instruction * list_ptr;
+	for (list_ptr = *list; list_ptr; list_ptr = list_ptr->NextReady) {
+		int score;
+		s->CalcScore(list_ptr);
+		score = list_ptr->Score;
+		if (!*max_inst_out || score > *max_score) {
+			*max_score = score;
+			*max_inst_out = list_ptr;
+			*list_out = list;
+		}
+	}
+}
+
+static void emit_instruction(
+	struct schedule_state * s,
+	struct rc_instruction * before)
+{
+	int max_score = -1;
+	struct schedule_instruction * max_inst = NULL;
+	struct schedule_instruction ** max_list = NULL;
+	unsigned tex_count = 0;
+	struct schedule_instruction * tex_ptr;
+
+	pair_instructions(s);
+#if VERBOSE
+	fprintf(stderr, "Full:\n");
+	print_list(s->ReadyFullALU);
+	fprintf(stderr, "RGB:\n");
+	print_list(s->ReadyRGB);
+	fprintf(stderr, "Alpha:\n");
+	print_list(s->ReadyAlpha);
+	fprintf(stderr, "TEX:\n");
+	print_list(s->ReadyTEX);
+#endif
+
+	for (tex_ptr = s->ReadyTEX; tex_ptr; tex_ptr = tex_ptr->NextReady) {
+		tex_count++;
+	}
+	update_max_score(s, &s->ReadyFullALU, &max_score, &max_inst, &max_list);
+	update_max_score(s, &s->ReadyRGB, &max_score, &max_inst, &max_list);
+	update_max_score(s, &s->ReadyAlpha, &max_score, &max_inst, &max_list);
+
+	if (tex_count >= s->max_tex_group || max_score == -1
+		|| (s->TEXCount > 0 && tex_count == s->TEXCount)) {
+		emit_all_tex(s, before);
+	} else {
+
+
+		remove_inst_from_list(max_list, max_inst);
+		rc_insert_instruction(before->Prev, max_inst->Instruction);
+		commit_alu_instruction(s, max_inst);
+
+		presub_nop(before->Prev);
+	}
+}
+
 /**
  * Find a good ALU instruction or pair of ALU instruction and emit it.
  *
@@ -757,6 +1103,10 @@ static int convert_rgb_to_alpha(
 static void emit_one_alu(struct schedule_state *s, struct rc_instruction * before)
 {
 	struct schedule_instruction * sinst;
+	int rgb_score = -1, alpha_score = -1;
+
+	/* Try to merge RGB and Alpha instructions together. */
+	pair_instructions(s);
 
 	if (s->ReadyFullALU) {
 		sinst = s->ReadyFullALU;
@@ -764,56 +1114,13 @@ static void emit_one_alu(struct schedule_state *s, struct rc_instruction * befor
 		rc_insert_instruction(before->Prev, sinst->Instruction);
 		commit_alu_instruction(s, sinst);
 	} else {
-		struct schedule_instruction **prgb;
-		struct schedule_instruction **palpha;
-		struct schedule_instruction *prev;
-pair:
-		/* Some pairings might fail because they require too
-		 * many source slots; try all possible pairings if necessary */
-		for(prgb = &s->ReadyRGB; *prgb; prgb = &(*prgb)->NextReady) {
-			for(palpha = &s->ReadyAlpha; *palpha; palpha = &(*palpha)->NextReady) {
-				struct schedule_instruction * psirgb = *prgb;
-				struct schedule_instruction * psialpha = *palpha;
-
-				if (!merge_instructions(&psirgb->Instruction->U.P, &psialpha->Instruction->U.P))
-					continue;
-
-				*prgb = (*prgb)->NextReady;
-				*palpha = (*palpha)->NextReady;
-				rc_insert_instruction(before->Prev, psirgb->Instruction);
-				commit_alu_instruction(s, psirgb);
-				commit_alu_instruction(s, psialpha);
-				goto success;
-			}
-		}
-		prev = NULL;
-		/* No success in pairing, now try to convert one of the RGB
-		 * instructions to an Alpha so we can pair it with another RGB.
-		 */
-		if (s->ReadyRGB && s->ReadyRGB->NextReady) {
-		for(prgb = &s->ReadyRGB; *prgb; prgb = &(*prgb)->NextReady) {
-			if ((*prgb)->NumWriteValues == 1) {
-				struct schedule_instruction * prgb_next;
-				if (!convert_rgb_to_alpha(s, *prgb))
-					goto cont_loop;
-				prgb_next = (*prgb)->NextReady;
-				/* Add instruction to the Alpha ready list. */
-				(*prgb)->NextReady = s->ReadyAlpha;
-				s->ReadyAlpha = *prgb;
-				/* Remove instruction from the RGB ready list.*/
-				if (prev)
-					prev->NextReady = prgb_next;
-				else
-					s->ReadyRGB = prgb_next;
-				goto pair;
-			}
-cont_loop:
-			prev = *prgb;
-		}
-		}
-		/* Still no success in pairing, just take the first RGB
-		 * or alpha instruction. */
 		if (s->ReadyRGB) {
+			rgb_score = s->ReadyRGB->Score;
+		}
+		if (s->ReadyAlpha) {
+			alpha_score = s->ReadyAlpha->Score;
+		}
+		if (rgb_score > alpha_score) {
 			sinst = s->ReadyRGB;
 			s->ReadyRGB = s->ReadyRGB->NextReady;
 		} else if (s->ReadyAlpha) {
@@ -826,12 +1133,24 @@ cont_loop:
 
 		rc_insert_instruction(before->Prev, sinst->Instruction);
 		commit_alu_instruction(s, sinst);
-	success: ;
 	}
 	/* If the instruction we just emitted uses a presubtract value, and
 	 * the presubtract sources were written by the previous intstruction,
 	 * the previous instruction needs a nop. */
 	presub_nop(before->Prev);
+}
+
+static void add_tex_reader(
+	struct schedule_state * s,
+	struct schedule_instruction * writer,
+	struct schedule_instruction * reader)
+{
+	if (!writer || writer->Instruction->Type != RC_INSTRUCTION_NORMAL) {
+		/*Not a TEX instructions */
+		return;
+	}
+	reader->TexReadCount++;
+	rc_list_add(&writer->TexReaders, rc_list(&s->C->Pool, reader));
 }
 
 static void scan_read(void * data, struct rc_instruction * inst,
@@ -847,7 +1166,22 @@ static void scan_read(void * data, struct rc_instruction * inst,
 	if (*v && (*v)->Writer == s->Current) {
 		/* The instruction reads and writes to a register component.
 		 * In this case, we only want to increment dependencies by one.
+		 * Why?
+		 * Because each instruction depends on the writers of its source
+		 * registers _and_ the most recent writer of its destination
+		 * register.  In this case, the current instruction (s->Current)
+		 * has a dependency that both writes to one of its source
+		 * registers and was the most recent writer to its destination
+		 * register.  We have already marked this dependency in
+		 * scan_write(), so we don't need to do it again.
 		 */
+
+		/* We need to make sure we are adding s->Current to the
+		 * previous writer's list of TexReaders, if the previous writer
+		 * was a TEX instruction.
+		 */
+		add_tex_reader(s, s->PrevWriter[chan], s->Current);
+
 		return;
 	}
 
@@ -868,6 +1202,7 @@ static void scan_read(void * data, struct rc_instruction * inst,
 		/* Only update the current instruction's dependencies if the
 		 * register it reads from has been written to in this block. */
 		if ((*v)->Writer) {
+			add_tex_reader(s, (*v)->Writer, s->Current);
 			s->Current->NumDependencies++;
 		}
 	}
@@ -900,6 +1235,9 @@ static void scan_write(void * data, struct rc_instruction * inst,
 	if (*pv) {
 		(*pv)->Next = newv;
 		s->Current->NumDependencies++;
+		/* Keep track of the previous writer to s->Current's destination
+		 * register */
+		s->PrevWriter[chan] = (*pv)->Writer;
 	}
 
 	*pv = newv;
@@ -921,22 +1259,33 @@ static void is_rgb_to_alpha_possible_normal(
 
 }
 
-static void schedule_block(struct r300_fragment_program_compiler * c,
+static void schedule_block(struct schedule_state * s,
 		struct rc_instruction * begin, struct rc_instruction * end)
 {
-	struct schedule_state s;
 	unsigned int ip;
-
-	memset(&s, 0, sizeof(s));
-	s.C = &c->Base;
 
 	/* Scan instructions for data dependencies */
 	ip = 0;
 	for(struct rc_instruction * inst = begin; inst != end; inst = inst->Next) {
-		s.Current = memory_pool_malloc(&c->Base.Pool, sizeof(*s.Current));
-		memset(s.Current, 0, sizeof(struct schedule_instruction));
+		s->Current = memory_pool_malloc(&s->C->Pool, sizeof(*s->Current));
+		memset(s->Current, 0, sizeof(struct schedule_instruction));
 
-		s.Current->Instruction = inst;
+		if (inst->Type == RC_INSTRUCTION_NORMAL) {
+			const struct rc_opcode_info * info =
+					rc_get_opcode_info(inst->U.I.Opcode);
+			if (info->HasTexture) {
+				s->TEXCount++;
+			}
+		}
+
+		/* XXX: This causes SemWait to be set for all instructions in
+		 * a block if the previous block contained a TEX instruction.
+		 * We can do better here, but it will take a lot of work. */
+		if (s->PrevBlockHasTex) {
+			s->Current->TexReadCount = 1;
+		}
+
+		s->Current->Instruction = inst;
 		inst->IP = ip++;
 
 		DBG("%i: Scanning\n", inst->IP);
@@ -945,17 +1294,18 @@ static void schedule_block(struct r300_fragment_program_compiler * c,
 		 * counter-intuitive, to account for the case where an
 		 * instruction writes to the same register as it reads
 		 * from. */
-		rc_for_all_writes_chan(inst, &scan_write, &s);
-		rc_for_all_reads_chan(inst, &scan_read, &s);
+		rc_for_all_writes_chan(inst, &scan_write, s);
+		rc_for_all_reads_chan(inst, &scan_read, s);
 
-		DBG("%i: Has %i dependencies\n", inst->IP, s.Current->NumDependencies);
+		DBG("%i: Has %i dependencies\n", inst->IP, s->Current->NumDependencies);
 
-		if (!s.Current->NumDependencies)
-			instruction_ready(&s, s.Current);
+		if (!s->Current->NumDependencies) {
+			instruction_ready(s, s->Current);
+		}
 
 		/* Get global readers for possible RGB->Alpha conversion. */
-		s.Current->GlobalReaders.ExitOnAbort = 1;
-		rc_get_readers(s.C, inst, &s.Current->GlobalReaders,
+		s->Current->GlobalReaders.ExitOnAbort = 1;
+		rc_get_readers(s->C, inst, &s->Current->GlobalReaders,
 				is_rgb_to_alpha_possible_normal,
 				is_rgb_to_alpha_possible, NULL);
 	}
@@ -965,13 +1315,17 @@ static void schedule_block(struct r300_fragment_program_compiler * c,
 	end->Prev = begin->Prev;
 
 	/* Schedule instructions back */
-	while(!s.C->Error &&
-	      (s.ReadyTEX || s.ReadyRGB || s.ReadyAlpha || s.ReadyFullALU)) {
-		if (s.ReadyTEX)
-			emit_all_tex(&s, end);
+	while(!s->C->Error &&
+	      (s->ReadyTEX || s->ReadyRGB || s->ReadyAlpha || s->ReadyFullALU)) {
+		if (s->C->is_r500) {
+			emit_instruction(s, end);
+		} else {
+			if (s->ReadyTEX)
+				emit_all_tex(s, end);
 
-		while(!s.C->Error && (s.ReadyFullALU || s.ReadyRGB || s.ReadyAlpha))
-			emit_one_alu(&s, end);
+			while(!s->C->Error && (s->ReadyFullALU || s->ReadyRGB || s->ReadyAlpha))
+				emit_one_alu(s, end);
+		}
 	}
 }
 
@@ -986,13 +1340,16 @@ static int is_controlflow(struct rc_instruction * inst)
 
 void rc_pair_schedule(struct radeon_compiler *cc, void *user)
 {
-	struct schedule_state s;
-
 	struct r300_fragment_program_compiler *c = (struct r300_fragment_program_compiler*)cc;
+	struct schedule_state s;
 	struct rc_instruction * inst = c->Base.Program.Instructions.Next;
+	unsigned int * opt = user;
 
 	memset(&s, 0, sizeof(s));
+	s.Opt = *opt;
 	s.C = &c->Base;
+	s.CalcScore = calc_score_readers;
+	s.max_tex_group = debug_get_num_option("RADEON_TEX_GROUP", 8);
 	while(inst != &c->Base.Program.Instructions) {
 		struct rc_instruction * first;
 
@@ -1007,6 +1364,11 @@ void rc_pair_schedule(struct radeon_compiler *cc, void *user)
 			inst = inst->Next;
 
 		DBG("Schedule one block\n");
-		schedule_block(c, first, inst);
+		memset(s.Temporary, 0, sizeof(s.Temporary));
+		s.TEXCount = 0;
+		schedule_block(&s, first, inst);
+		if (s.PendingTEX) {
+			s.PrevBlockHasTex = 1;
+		}
 	}
 }

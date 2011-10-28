@@ -45,7 +45,6 @@ static void r600_blitter_begin(struct pipe_context *ctx, enum r600_blitter_op op
 {
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
 
-	rctx->blit = true;
 	r600_context_queries_suspend(&rctx->ctx);
 
 	util_blitter_save_blend(rctx->blitter, rctx->states[R600_PIPE_STATE_BLEND]);
@@ -97,8 +96,7 @@ static void r600_blitter_end(struct pipe_context *ctx)
 					       rctx->saved_render_cond_mode);
 		rctx->saved_render_cond = NULL;
 	}
-	r600_context_queries_resume(&rctx->ctx, FALSE);
-	rctx->blit = false;
+	r600_context_queries_resume(&rctx->ctx);
 }
 
 static unsigned u_num_layers(struct pipe_resource *r, unsigned level)
@@ -205,11 +203,11 @@ static void r600_clear(struct pipe_context *ctx, unsigned buffers,
 {
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
 	struct pipe_framebuffer_state *fb = &rctx->framebuffer;
-
+	
 	r600_blitter_begin(ctx, R600_CLEAR);
 	util_blitter_clear(rctx->blitter, fb->width, fb->height,
-			   fb->nr_cbufs, buffers, color, depth,
-			   stencil);
+			   fb->nr_cbufs, buffers, fb->nr_cbufs ? fb->cbufs[0]->format : PIPE_FORMAT_NONE,
+			   color, depth, stencil);
 	r600_blitter_end(ctx);
 }
 
@@ -282,26 +280,21 @@ static void r600_compressed_to_blittable(struct pipe_resource *tex,
 	orig->height0 = tex->height0;
 
 	if (pixsize == 8)
-		new_format = PIPE_FORMAT_R16G16B16A16_UNORM; /* 64-bit block */
+		new_format = PIPE_FORMAT_R16G16B16A16_UINT; /* 64-bit block */
 	else
-		new_format = PIPE_FORMAT_R32G32B32A32_UNORM; /* 128-bit block */
+		new_format = PIPE_FORMAT_R32G32B32A32_UINT; /* 128-bit block */
 
 	new_width = util_format_get_nblocksx(tex->format, orig->width0);
 	new_height = util_format_get_nblocksy(tex->format, orig->height0);
 
-	rtex->force_int_type = true;
 	tex->width0 = new_width;
 	tex->height0 = new_height;
 	tex->format = new_format;
 }
 
 static void r600_reset_blittable_to_compressed(struct pipe_resource *tex,
-					 unsigned level,
-					 struct texture_orig_info *orig)
+					       struct texture_orig_info *orig)
 {
-	struct r600_resource_texture *rtex = (struct r600_resource_texture*)tex;
-	rtex->force_int_type = false;
-
 	tex->format = orig->format;
 	tex->width0 = orig->width0;
 	tex->height0 = orig->height0;
@@ -358,10 +351,10 @@ static void r600_resource_copy_region(struct pipe_context *ctx,
 			    src, src_level, psbox);
 
 	if (restore_orig[0])
-		r600_reset_blittable_to_compressed(src, src_level, &orig_info[0]);
+		r600_reset_blittable_to_compressed(src, &orig_info[0]);
 
 	if (restore_orig[1])
-		r600_reset_blittable_to_compressed(dst, dst_level, &orig_info[1]);
+		r600_reset_blittable_to_compressed(dst, &orig_info[1]);
 }
 
 void r600_init_blit_functions(struct r600_pipe_context *rctx)

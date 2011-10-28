@@ -293,12 +293,6 @@ struct r300_query {
     /* The buffer where query results are stored. */
     struct pb_buffer *buf;
     struct radeon_winsys_cs_handle *cs_buf;
-    /* The size of the buffer. */
-    unsigned buffer_size;
-
-    /* Linked list members. */
-    struct r300_query* prev;
-    struct r300_query* next;
 };
 
 struct r300_surface {
@@ -401,9 +395,6 @@ struct r300_resource
     /* Registers carrying texture format data. */
     /* Only format-independent bits should be filled in. */
     struct r300_texture_format_state tx_format;
-
-    /* Where the texture starts in the buffer. */
-    unsigned tex_offset;
 
     /* This is the level tiling flags were last time set for.
      * It's used to prevent redundant tiling-flags changes from happening.*/

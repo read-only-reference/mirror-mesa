@@ -51,7 +51,7 @@ static uint32_t
 nvc0_shader_input_address(unsigned sn, unsigned si, unsigned ubase)
 {
    switch (sn) {
-/* case TGSI_SEMANTIC_TESSFACTOR:   return 0x000 + si * 0x4; */
+   case NV50_SEMANTIC_TESSFACTOR:   return 0x000 + si * 0x4;
    case TGSI_SEMANTIC_PRIMID:       return 0x060;
    case TGSI_SEMANTIC_PSIZE:        return 0x06c;
    case TGSI_SEMANTIC_POSITION:     return 0x070;
@@ -59,14 +59,14 @@ nvc0_shader_input_address(unsigned sn, unsigned si, unsigned ubase)
    case TGSI_SEMANTIC_FOG:          return 0x270;
    case TGSI_SEMANTIC_COLOR:        return 0x280 + si * 0x10;
    case TGSI_SEMANTIC_BCOLOR:       return 0x2a0 + si * 0x10;
-/* case TGSI_SEMANTIC_CLIP:         return 0x2c0 + si * 0x10; */
-/* case TGSI_SEMANTIC_POINTCOORD:   return 0x2e0; */
-/* case TGSI_SEMANTIC_TESSCOORD:    return ~0; */ /* 0x2f0, but special load */
+   case NV50_SEMANTIC_CLIPDISTANCE: return 0x2c0 + si * 0x10;
+   case NV50_SEMANTIC_POINTCOORD:   return 0x2e0;
+   case NV50_SEMANTIC_TESSCOORD:    return 0x2f0;
    case TGSI_SEMANTIC_INSTANCEID:   return 0x2f8;
-/* case TGSI_SEMANTIC_VERTEXID:     return 0x2fc; */
-/* case TGSI_SEMANTIC_TEXCOORD:     return 0x300 + si * 0x10; */
+   case NV50_SEMANTIC_VERTEXID:     return 0x2fc;
+   case NV50_SEMANTIC_TEXCOORD:     return 0x300 + si * 0x10;
    case TGSI_SEMANTIC_FACE:         return 0x3fc;
-/* case TGSI_SEMANTIC_INVOCATIONID: return ~0; */
+   case NV50_SEMANTIC_INVOCATIONID: return ~0;
    default:
       assert(!"invalid TGSI input semantic");
       return ~0;
@@ -77,18 +77,18 @@ static uint32_t
 nvc0_shader_output_address(unsigned sn, unsigned si, unsigned ubase)
 {
    switch (sn) {
-/* case TGSI_SEMANTIC_TESSFACTOR:    return 0x000 + si * 0x4; */
-   case TGSI_SEMANTIC_PRIMID:        return 0x040;
-/* case TGSI_SEMANTIC_LAYER:         return 0x064; */
-/* case TGSI_SEMANTIC_VIEWPORTINDEX: return 0x068; */
+   case NV50_SEMANTIC_TESSFACTOR:    return 0x000 + si * 0x4;
+   case TGSI_SEMANTIC_PRIMID:        return 0x060;
+   case NV50_SEMANTIC_LAYER:         return 0x064;
+   case NV50_SEMANTIC_VIEWPORTINDEX: return 0x068;
    case TGSI_SEMANTIC_PSIZE:         return 0x06c;
    case TGSI_SEMANTIC_POSITION:      return 0x070;
    case TGSI_SEMANTIC_GENERIC:       return ubase + si * 0x10;
    case TGSI_SEMANTIC_FOG:           return 0x270;
    case TGSI_SEMANTIC_COLOR:         return 0x280 + si * 0x10;
    case TGSI_SEMANTIC_BCOLOR:        return 0x2a0 + si * 0x10;
-/* case TGSI_SEMANTIC_CLIP:          return 0x2c0 + si * 0x10; */
-/* case TGSI_SEMANTIC_TEXCOORD:      return 0x300 + si * 0x10; */
+   case NV50_SEMANTIC_CLIPDISTANCE:  return 0x2c0 + si * 0x10;
+   case NV50_SEMANTIC_TEXCOORD:      return 0x300 + si * 0x10;
    case TGSI_SEMANTIC_EDGEFLAG:      return ~0;
    default:
       assert(!"invalid TGSI output semantic");
@@ -99,11 +99,23 @@ nvc0_shader_output_address(unsigned sn, unsigned si, unsigned ubase)
 static int
 nvc0_vp_assign_input_slots(struct nv50_ir_prog_info *info)
 {
-   unsigned i, c;
+   unsigned i, c, n;
 
-   for (i = 0; i < info->numInputs; ++i)
+   for (n = 0, i = 0; i < info->numInputs; ++i) {
+      switch (info->in[i].sn) {
+      case TGSI_SEMANTIC_INSTANCEID:
+      case NV50_SEMANTIC_VERTEXID:
+         info->in[i].mask = 0x1;
+         info->in[i].slot[0] =
+            nvc0_shader_input_address(info->in[i].sn, 0, 0) / 4;
+         continue;
+      default:
+         break;
+      }
       for (c = 0; c < 4; ++c)
-         info->in[i].slot[c] = (0x80 + i * 0x10 + c * 0x4) / 4;
+         info->in[i].slot[c] = (0x80 + n * 0x10 + c * 0x4) / 4;
+      ++n;
+   }
 
    return 0;
 }
@@ -120,6 +132,9 @@ nvc0_sp_assign_input_slots(struct nv50_ir_prog_info *info)
                                          info->in[i].si, ubase);
       if (info->in[i].patch && offset >= 0x20)
          offset = 0x20 + info->in[i].si * 0x10;
+
+      if (info->in[i].sn == NV50_SEMANTIC_TESSCOORD)
+         info->in[i].mask &= 3;
 
       for (c = 0; c < 4; ++c)
          info->in[i].slot[c] = (offset + c * 0x4) / 4;
@@ -214,8 +229,12 @@ nvc0_vtgp_gen_header(struct nvc0_program *vp, struct nv50_ir_prog_info *info)
          continue;
       for (c = 0; c < 4; ++c) {
          a = info->in[i].slot[c];
-         if (info->in[i].mask & (1 << c))
-            vp->hdr[5 + a / 32] |= 1 << (a % 32);
+         if (info->in[i].mask & (1 << c)) {
+            if (info->in[i].sn != NV50_SEMANTIC_TESSCOORD)
+               vp->hdr[5 + a / 32] |= 1 << (a % 32);
+            else
+               nvc0_vtgp_hdr_update_oread(vp, info->in[i].slot[c]);
+         }
       }
    }
 
@@ -241,15 +260,18 @@ nvc0_vtgp_gen_header(struct nvc0_program *vp, struct nv50_ir_prog_info *info)
       case TGSI_SEMANTIC_INSTANCEID:
          vp->hdr[10] |= 1 << 30;
          break;
-         /*
-      case TGSI_SEMANTIC_VERTEXID:
+      case NV50_SEMANTIC_VERTEXID:
          vp->hdr[10] |= 1 << 31;
          break;
-         */
       default:
          break;
       }
    }
+
+   vp->vp.clip_enable = (1 << info->io.clipDistanceCount) - 1;
+   for (i = 0; i < 8; ++i)
+      if (info->io.cullDistanceMask & (1 << i))
+         vp->vp.clip_mode |= 1 << (i * 4);
 
    return 0;
 }
@@ -269,6 +291,10 @@ nvc0_vp_gen_header(struct nvc0_program *vp, struct nv50_ir_prog_info *info)
 static void
 nvc0_tp_get_tess_mode(struct nvc0_program *tp, struct nv50_ir_prog_info *info)
 {
+   if (info->prop.tp.outputPrim == PIPE_PRIM_MAX) {
+      tp->tp.tess_mode = ~0;
+      return;
+   }
    switch (info->prop.tp.domain) {
    case PIPE_PRIM_LINES:
       tp->tp.tess_mode = NVC0_3D_TESS_MODE_PRIM_ISOLINES;
@@ -336,6 +362,8 @@ nvc0_tcp_gen_header(struct nvc0_program *tcp, struct nv50_ir_prog_info *info)
 static int
 nvc0_tep_gen_header(struct nvc0_program *tep, struct nv50_ir_prog_info *info)
 {
+   tep->tp.input_patch_size = ~0;
+
    tep->hdr[0] = 0x20061 | (3 << 10);
    tep->hdr[4] = 0xff000;
 
@@ -418,8 +446,10 @@ nvc0_fp_gen_header(struct nvc0_program *fp, struct nv50_ir_prog_info *info)
       for (c = 0; c < 4; ++c) {
          if (!(info->in[i].mask & (1 << c)))
             continue;
-         if (info->in[i].slot[0] == (0x070 / 4)) {
-            fp->hdr[5] |= 1 << (28 + c);
+	 a = info->in[i].slot[c];
+         if (info->in[i].slot[0] >= (0x060 / 4) &&
+             info->in[i].slot[0] <= (0x07c / 4)) {
+            fp->hdr[5] |= 1 << (24 + (a - 0x060 / 4));
          } else
          if (info->in[i].slot[0] == (0x2e0 / 4)) {
             if (c <= 1)
@@ -428,7 +458,7 @@ nvc0_fp_gen_header(struct nvc0_program *fp, struct nv50_ir_prog_info *info)
             if (info->in[i].slot[c] < (0x040 / 4) ||
                 info->in[i].slot[c] > (0x380 / 4))
                continue;
-            a = info->in[i].slot[c] * 2;
+            a *= 2;
             if (info->in[i].slot[0] >= (0x2c0 / 4))
                a -= 32;
             fp->hdr[4 + a / 32] |= m << (a % 32);
@@ -577,7 +607,7 @@ nvc0_program_upload_code(struct nvc0_context *nvc0, struct nvc0_program *prog)
    }
    prog->code_base = prog->res->start;
    prog->immd_base = align(prog->res->start + prog->immd_base, 0x100);
-   assert((prog->immd_size == 0) || (prog->immd_base + prog->immd_size <
+   assert((prog->immd_size == 0) || (prog->immd_base + prog->immd_size <=
                                      prog->res->start + prog->res->size));
 
    code_pos = prog->code_base + NVC0_SHADER_HEADER_SIZE;

@@ -127,10 +127,12 @@ _swrast_culltriangle( struct gl_context *ctx,
       ctx->Texture.Unit[0].CurrentTex[TEXTURE_2D_INDEX];		\
    const struct gl_texture_image *texImg =				\
       obj->Image[0][obj->BaseLevel];					\
+   const struct swrast_texture_image *swImg =				\
+      swrast_texture_image_const(texImg);				\
    const GLfloat twidth = (GLfloat) texImg->Width;			\
    const GLfloat theight = (GLfloat) texImg->Height;			\
    const GLint twidth_log2 = texImg->WidthLog2;				\
-   const GLubyte *texture = (const GLubyte *) texImg->Data;		\
+   const GLubyte *texture = (const GLubyte *) swImg->Data;		\
    const GLint smask = texImg->Width - 1;				\
    const GLint tmask = texImg->Height - 1;				\
    ASSERT(texImg->TexFormat == MESA_FORMAT_RGB888);			\
@@ -181,10 +183,12 @@ _swrast_culltriangle( struct gl_context *ctx,
       ctx->Texture.Unit[0].CurrentTex[TEXTURE_2D_INDEX];		\
    const struct gl_texture_image *texImg = 				\
        obj->Image[0][obj->BaseLevel]; 					\
+   const struct swrast_texture_image *swImg =				\
+      swrast_texture_image_const(texImg);				\
    const GLfloat twidth = (GLfloat) texImg->Width;			\
    const GLfloat theight = (GLfloat) texImg->Height;			\
    const GLint twidth_log2 = texImg->WidthLog2;				\
-   const GLubyte *texture = (const GLubyte *) texImg->Data;		\
+   const GLubyte *texture = (const GLubyte *) swImg->Data;		\
    const GLint smask = texImg->Width - 1;				\
    const GLint tmask = texImg->Height - 1;				\
    ASSERT(texImg->TexFormat == MESA_FORMAT_RGB888);			\
@@ -237,13 +241,13 @@ struct affine_info
 };
 
 
-static INLINE GLint
+static inline GLint
 ilerp(GLint t, GLint a, GLint b)
 {
    return a + ((t * (b - a)) >> FIXED_SHIFT);
 }
 
-static INLINE GLint
+static inline GLint
 ilerp_2d(GLint ia, GLint ib, GLint v00, GLint v10, GLint v01, GLint v11)
 {
    const GLint temp0 = ilerp(ia, v00, v10);
@@ -256,7 +260,7 @@ ilerp_2d(GLint ia, GLint ib, GLint v00, GLint v10, GLint v01, GLint v11)
  * textures with GL_REPLACE, GL_MODULATE, GL_BLEND, GL_DECAL or GL_ADD
  * texture env modes.
  */
-static INLINE void
+static inline void
 affine_span(struct gl_context *ctx, SWspan *span,
             struct affine_info *info)
 {
@@ -533,9 +537,11 @@ affine_span(struct gl_context *ctx, SWspan *span,
       ctx->Texture.Unit[0].CurrentTex[TEXTURE_2D_INDEX];		\
    const struct gl_texture_image *texImg = 				\
       obj->Image[0][obj->BaseLevel]; 					\
+   const struct swrast_texture_image *swImg =				\
+      swrast_texture_image_const(texImg);				\
    const GLfloat twidth = (GLfloat) texImg->Width;			\
    const GLfloat theight = (GLfloat) texImg->Height;			\
-   info.texture = (const GLchan *) texImg->Data;			\
+   info.texture = (const GLchan *) swImg->Data;				\
    info.twidth_log2 = texImg->WidthLog2;				\
    info.smask = texImg->Width - 1;					\
    info.tmask = texImg->Height - 1;					\
@@ -591,7 +597,7 @@ struct persp_info
 };
 
 
-static INLINE void
+static inline void
 fast_persp_span(struct gl_context *ctx, SWspan *span,
 		struct persp_info *info)
 {
@@ -800,7 +806,9 @@ fast_persp_span(struct gl_context *ctx, SWspan *span,
       ctx->Texture.Unit[0].CurrentTex[TEXTURE_2D_INDEX];		\
    const struct gl_texture_image *texImg = 				\
       obj->Image[0][obj->BaseLevel];			 		\
-   info.texture = (const GLchan *) texImg->Data;			\
+   const struct swrast_texture_image *swImg =				\
+      swrast_texture_image_const(texImg);				\
+   info.texture = (const GLchan *) swImg->Data;				\
    info.twidth_log2 = texImg->WidthLog2;				\
    info.smask = texImg->Width - 1;					\
    info.tmask = texImg->Height - 1;					\
@@ -1062,7 +1070,7 @@ _swrast_choose_triangle( struct gl_context *ctx )
              && texObj2D->_Swizzle == SWIZZLE_NOOP
              && swImg->_IsPowerOfTwo
              && texImg->Border == 0
-             && texImg->Width == texImg->RowStride
+             && texImg->Width == swImg->RowStride
              && (format == MESA_FORMAT_RGB888 || format == MESA_FORMAT_RGBA8888)
              && minFilter == magFilter
              && ctx->Light.Model.ColorControl == GL_SINGLE_COLOR

@@ -72,11 +72,11 @@ _mesa_texstore_rgb_fxt1(TEXSTORE_PARAMS)
    ASSERT(dstYoffset % 4 == 0);
    ASSERT(dstZoffset     == 0);
    (void) dstZoffset;
-   (void) dstImageOffsets;
 
    if (srcFormat != GL_RGB ||
        srcType != GL_UNSIGNED_BYTE ||
        ctx->_ImageTransferState ||
+       srcPacking->RowLength != srcWidth ||
        srcPacking->SwapBytes) {
       /* convert image to RGB/GLubyte */
       tempImage = _mesa_make_temp_ubyte_image(ctx, dims,
@@ -92,14 +92,16 @@ _mesa_texstore_rgb_fxt1(TEXSTORE_PARAMS)
       srcFormat = GL_RGB;
    }
    else {
-      pixels = (const GLubyte *) srcAddr;
+      pixels = _mesa_image_address2d(srcPacking, srcAddr, srcWidth, srcHeight,
+                                     srcFormat, srcType, 0, 0);
+
       srcRowStride = _mesa_image_row_stride(srcPacking, srcWidth, srcFormat,
                                             srcType) / sizeof(GLubyte);
    }
 
    dst = _mesa_compressed_image_address(dstXoffset, dstYoffset, 0,
                                         dstFormat,
-                                        texWidth, (GLubyte *) dstAddr);
+                                        texWidth, dstSlices[0]);
 
    fxt1_encode(srcWidth, srcHeight, 3, pixels, srcRowStride,
                dst, dstRowStride);
@@ -128,7 +130,6 @@ _mesa_texstore_rgba_fxt1(TEXSTORE_PARAMS)
    ASSERT(dstYoffset % 4 == 0);
    ASSERT(dstZoffset     == 0);
    (void) dstZoffset;
-   (void) dstImageOffsets;
 
    if (srcFormat != GL_RGBA ||
        srcType != GL_UNSIGNED_BYTE ||
@@ -148,14 +149,16 @@ _mesa_texstore_rgba_fxt1(TEXSTORE_PARAMS)
       srcFormat = GL_RGBA;
    }
    else {
-      pixels = (const GLubyte *) srcAddr;
+      pixels = _mesa_image_address2d(srcPacking, srcAddr, srcWidth, srcHeight,
+                                     srcFormat, srcType, 0, 0);
+
       srcRowStride = _mesa_image_row_stride(srcPacking, srcWidth, srcFormat,
                                             srcType) / sizeof(GLubyte);
    }
 
    dst = _mesa_compressed_image_address(dstXoffset, dstYoffset, 0,
                                         dstFormat,
-                                        texWidth, (GLubyte *) dstAddr);
+                                        texWidth, dstSlices[0]);
 
    fxt1_encode(srcWidth, srcHeight, 4, pixels, srcRowStride,
                dst, dstRowStride);
@@ -174,7 +177,7 @@ _mesa_fetch_texel_2d_f_rgba_fxt1( const struct swrast_texture_image *texImage,
    /* just sample as GLubyte and convert to float here */
    GLubyte rgba[4];
    (void) k;
-   fxt1_decode_1(texImage->Base.Data, texImage->Base.RowStride, i, j, rgba);
+   fxt1_decode_1(texImage->Data, texImage->RowStride, i, j, rgba);
    texel[RCOMP] = UBYTE_TO_FLOAT(rgba[RCOMP]);
    texel[GCOMP] = UBYTE_TO_FLOAT(rgba[GCOMP]);
    texel[BCOMP] = UBYTE_TO_FLOAT(rgba[BCOMP]);
@@ -189,7 +192,7 @@ _mesa_fetch_texel_2d_f_rgb_fxt1( const struct swrast_texture_image *texImage,
    /* just sample as GLubyte and convert to float here */
    GLubyte rgba[4];
    (void) k;
-   fxt1_decode_1(texImage->Base.Data, texImage->Base.RowStride, i, j, rgba);
+   fxt1_decode_1(texImage->Data, texImage->RowStride, i, j, rgba);
    texel[RCOMP] = UBYTE_TO_FLOAT(rgba[RCOMP]);
    texel[GCOMP] = UBYTE_TO_FLOAT(rgba[GCOMP]);
    texel[BCOMP] = UBYTE_TO_FLOAT(rgba[BCOMP]);

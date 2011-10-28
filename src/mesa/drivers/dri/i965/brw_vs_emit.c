@@ -40,7 +40,7 @@
 /* Return the SrcReg index of the channels that can be immediate float operands
  * instead of usage of PROGRAM_CONSTANT values through push/pull.
  */
-static GLboolean
+static bool
 brw_vs_arg_can_be_immediate(enum prog_opcode opcode, int arg)
 {
    int opcode_array[] = {
@@ -68,11 +68,11 @@ brw_vs_arg_can_be_immediate(enum prog_opcode opcode, int arg)
     */
    if (opcode == OPCODE_MAD || opcode == OPCODE_LRP) {
       if (arg == 1 || arg == 2)
-	 return GL_TRUE;
+	 return true;
    }
 
    if (opcode > ARRAY_SIZE(opcode_array))
-      return GL_FALSE;
+      return false;
 
    return arg == opcode_array[opcode] - 1;
 }
@@ -189,9 +189,9 @@ static void brw_vs_alloc_regs( struct brw_vs_compile *c )
     */
    if (c->vp->program.Base.Parameters->NumParameters +
        c->vp->program.Base.NumTemporaries + 20 > BRW_MAX_GRF)
-      c->vp->use_const_buffer = GL_TRUE;
+      c->vp->use_const_buffer = true;
    else
-      c->vp->use_const_buffer = GL_FALSE;
+      c->vp->use_const_buffer = false;
 
    /*printf("use_const_buffer = %d\n", c->vp->use_const_buffer);*/
 
@@ -202,19 +202,19 @@ static void brw_vs_alloc_regs( struct brw_vs_compile *c )
 
    /* User clip planes from curbe: 
     */
-   if (c->key.nr_userclip) {
+   if (c->key.userclip_active) {
       if (intel->gen >= 6) {
-	 for (i = 0; i < c->key.nr_userclip; i++) {
+	 for (i = 0; i <= c->key.nr_userclip_plane_consts; i++) {
 	    c->userplane[i] = stride(brw_vec4_grf(reg + i / 2,
 						  (i % 2) * 4), 0, 4, 1);
 	 }
-	 reg += ALIGN(c->key.nr_userclip, 2) / 2;
+	 reg += ALIGN(c->key.nr_userclip_plane_consts, 2) / 2;
       } else {
-	 for (i = 0; i < c->key.nr_userclip; i++) {
+	 for (i = 0; i < c->key.nr_userclip_plane_consts; i++) {
 	    c->userplane[i] = stride(brw_vec4_grf(reg + (6 + i) / 2,
 						  (i % 2) * 4), 0, 4, 1);
 	 }
-	 reg += (ALIGN(6 + c->key.nr_userclip, 4) / 4) * 2;
+	 reg += (ALIGN(6 + c->key.nr_userclip_plane_consts, 4) / 4) * 2;
       }
 
    }
@@ -239,7 +239,7 @@ static void brw_vs_alloc_regs( struct brw_vs_compile *c )
     */
    if (intel->gen >= 6) {
       /* We can only load 32 regs of push constants. */
-      max_constant = 32 * 2 - c->key.nr_userclip;
+      max_constant = 32 * 2 - c->key.nr_userclip_plane_consts;
    } else {
       max_constant = BRW_MAX_GRF - 20 - c->vp->program.Base.NumTemporaries;
    }
@@ -265,7 +265,7 @@ static void brw_vs_alloc_regs( struct brw_vs_compile *c )
 	 }
 
 	 if (inst->SrcReg[arg].RelAddr) {
-	    c->vp->use_const_buffer = GL_TRUE;
+	    c->vp->use_const_buffer = true;
 	    continue;
 	 }
 
@@ -281,7 +281,7 @@ static void brw_vs_alloc_regs( struct brw_vs_compile *c )
     * case) we need them all in place anyway.
     */
    if (constant == max_constant)
-      c->vp->use_const_buffer = GL_TRUE;
+      c->vp->use_const_buffer = true;
 
    /* Set up the references to the pull parameters if present.  This backend
     * uses a 1:1 mapping from Mesa IR's index to location in the pull constant
@@ -325,7 +325,7 @@ static void brw_vs_alloc_regs( struct brw_vs_compile *c )
 
    /* Allocate outputs.  The non-position outputs go straight into message regs.
     */
-   brw_compute_vue_map(&c->vue_map, intel, c->key.nr_userclip,
+   brw_compute_vue_map(&c->vue_map, intel, c->key.userclip_active,
                        c->prog_data.outputs_written);
    c->first_output = reg;
 
@@ -665,11 +665,11 @@ static void emit_math1_gen4(struct brw_vs_compile *c,
     */
    struct brw_compile *p = &c->func;
    struct brw_reg tmp = dst;
-   GLboolean need_tmp = GL_FALSE;
+   bool need_tmp = false;
 
    if (dst.file != BRW_GENERAL_REGISTER_FILE ||
        dst.dw1.bits.writemask != 0xf)
-      need_tmp = GL_TRUE;
+      need_tmp = true;
 
    if (need_tmp)
       tmp = get_tmp(c);
@@ -750,11 +750,11 @@ static void emit_math2_gen4( struct brw_vs_compile *c,
 {
    struct brw_compile *p = &c->func;
    struct brw_reg tmp = dst;
-   GLboolean need_tmp = GL_FALSE;
+   bool need_tmp = false;
 
    if (dst.file != BRW_GENERAL_REGISTER_FILE ||
        dst.dw1.bits.writemask != 0xf)
-      need_tmp = GL_TRUE;
+      need_tmp = true;
 
    if (need_tmp) 
       tmp = get_tmp(c);
@@ -889,7 +889,7 @@ static void emit_log_noalias( struct brw_vs_compile *c,
    struct brw_reg tmp = dst;
    struct brw_reg tmp_ud = retype(tmp, BRW_REGISTER_TYPE_UD);
    struct brw_reg arg0_ud = retype(arg0, BRW_REGISTER_TYPE_UD);
-   GLboolean need_tmp = (dst.dw1.bits.writemask != 0xf ||
+   bool need_tmp = (dst.dw1.bits.writemask != 0xf ||
 			 dst.file != BRW_GENERAL_REGISTER_FILE);
 
    if (need_tmp) {
@@ -1010,7 +1010,7 @@ static void emit_lit_noalias( struct brw_vs_compile *c,
 {
    struct brw_compile *p = &c->func;
    struct brw_reg tmp = dst;
-   GLboolean need_tmp = (dst.file != BRW_GENERAL_REGISTER_FILE);
+   bool need_tmp = (dst.file != BRW_GENERAL_REGISTER_FILE);
 
    if (need_tmp) 
       tmp = get_tmp(c);
@@ -1255,7 +1255,7 @@ get_src_reg( struct brw_vs_compile *c,
 {
    const GLuint file = inst->SrcReg[argIndex].File;
    const GLint index = inst->SrcReg[argIndex].Index;
-   const GLboolean relAddr = inst->SrcReg[argIndex].RelAddr;
+   const bool relAddr = inst->SrcReg[argIndex].RelAddr;
 
    if (brw_vs_arg_can_be_immediate(inst->Opcode, argIndex)) {
       const struct prog_src_register *src = &inst->SrcReg[argIndex];
@@ -1438,7 +1438,7 @@ static void emit_swz( struct brw_vs_compile *c,
    GLuint ones_mask = 0;
    GLuint src_mask = 0;
    GLubyte src_swz[4];
-   GLboolean need_tmp = (src.Negate &&
+   bool need_tmp = (src.Negate &&
 			 dst.file != BRW_GENERAL_REGISTER_FILE);
    struct brw_reg tmp = dst;
    GLuint i;
@@ -1564,8 +1564,8 @@ static void emit_vertex_write( struct brw_vs_compile *c)
       }
 
       /* Set the user clip distances in dword 8-15. (m3-4)*/
-      if (c->key.nr_userclip) {
-	 for (i = 0; i < c->key.nr_userclip; i++) {
+      if (c->key.userclip_active) {
+	 for (i = 0; i < c->key.nr_userclip_plane_consts; i++) {
 	    struct brw_reg m;
 	    if (i < 4)
 	       m = brw_message_reg(3);
@@ -1577,7 +1577,7 @@ static void emit_vertex_write( struct brw_vs_compile *c)
       }
    } else if ((c->prog_data.outputs_written &
 	       BITFIELD64_BIT(VERT_RESULT_PSIZ)) ||
-	      c->key.nr_userclip || brw->has_negative_rhw_bug) {
+	      c->key.userclip_active || brw->has_negative_rhw_bug) {
       struct brw_reg header1 = retype(get_tmp(c), BRW_REGISTER_TYPE_UD);
       GLuint i;
 
@@ -1593,7 +1593,7 @@ static void emit_vertex_write( struct brw_vs_compile *c)
 		 header1, brw_imm_ud(0x7ff<<8));
       }
 
-      for (i = 0; i < c->key.nr_userclip; i++) {
+      for (i = 0; i < c->key.nr_userclip_plane_consts; i++) {
 	 brw_set_conditionalmod(p, BRW_CONDITIONAL_L);
 	 brw_DP4(p, brw_null_reg(), pos, c->userplane[i]);
 	 brw_OR(p, brw_writemask(header1, WRITEMASK_W), header1, brw_imm_ud(1<<i));
@@ -1649,7 +1649,7 @@ static void emit_vertex_write( struct brw_vs_compile *c)
        */
       brw_MOV(p, brw_message_reg(2), pos);
       len_vertex_header = 1;
-      if (c->key.nr_userclip > 0)
+      if (c->key.userclip_active)
 	 len_vertex_header += 2;
    } else if (intel->gen == 5) {
       /* There are 20 DWs (D0-D19) in VUE header on Ironlake:
@@ -1741,20 +1741,20 @@ static void emit_vertex_write( struct brw_vs_compile *c)
    }
 }
 
-static GLboolean
+static bool
 accumulator_contains(struct brw_vs_compile *c, struct brw_reg val)
 {
    struct brw_compile *p = &c->func;
    struct brw_instruction *prev_insn = &p->store[p->nr_insn - 1];
 
    if (p->nr_insn == 0)
-      return GL_FALSE;
+      return false;
 
    if (val.address_mode != BRW_ADDRESS_DIRECT)
-      return GL_FALSE;
+      return false;
 
    if (val.negate || val.abs)
-      return GL_FALSE;
+      return false;
 
    switch (prev_insn->header.opcode) {
    case BRW_OPCODE_MOV:
@@ -1768,11 +1768,11 @@ accumulator_contains(struct brw_vs_compile *c, struct brw_reg val)
 	  prev_insn->bits1.da1.dest_reg_nr == val.nr &&
 	  prev_insn->bits1.da16.dest_subreg_nr == val.subnr / 16 &&
 	  prev_insn->bits1.da16.dest_writemask == 0xf)
-	 return GL_TRUE;
+	 return true;
       else
-	 return GL_FALSE;
+	 return false;
    default:
-      return GL_FALSE;
+      return false;
    }
 }
 
@@ -1853,7 +1853,7 @@ void brw_old_vs_emit(struct brw_vs_compile *c )
    if (unlikely(INTEL_DEBUG & DEBUG_VS)) {
       printf("vs-mesa:\n");
       _mesa_fprint_program_opt(stdout, &c->vp->program.Base, PROG_PRINT_DEBUG,
-			       GL_TRUE);
+			       true);
       printf("\n");
    }
 
@@ -1875,13 +1875,13 @@ void brw_old_vs_emit(struct brw_vs_compile *c )
 	   GLuint index = src->Index;
 	   GLuint file = src->File;	
 	   if (file == PROGRAM_OUTPUT && index != VERT_RESULT_HPOS)
-	       c->output_regs[index].used_in_src = GL_TRUE;
+	       c->output_regs[index].used_in_src = true;
        }
 
        switch (inst->Opcode) {
        case OPCODE_CAL:
        case OPCODE_RET:
-	  c->needs_stack = GL_TRUE;
+	  c->needs_stack = true;
 	  break;
        default:
 	  break;

@@ -49,6 +49,76 @@ intelDeleteTextureObject(struct gl_context *ctx,
    _mesa_delete_texture_object(ctx, texObj);
 }
 
+static GLboolean
+intel_alloc_texture_image_buffer(struct gl_context *ctx,
+				 struct gl_texture_image *image,
+				 gl_format format, GLsizei width,
+				 GLsizei height, GLsizei depth)
+{
+   struct intel_context *intel = intel_context(ctx);
+   struct intel_texture_image *intel_image = intel_texture_image(image);
+   struct gl_texture_object *texobj = image->TexObject;
+   struct intel_texture_object *intel_texobj = intel_texture_object(texobj);
+   GLuint slices;
+
+   assert(image->Border == 0);
+
+   /* Because the driver uses AllocTextureImageBuffer() internally, it may end
+    * up mismatched with FreeTextureImageBuffer(), but that is safe to call
+    * multiple times.
+    */
+   ctx->Driver.FreeTextureImageBuffer(ctx, image);
+
+   if (intel->must_use_separate_stencil
+       && image->TexFormat == MESA_FORMAT_S8_Z24) {
+      intel_tex_image_s8z24_create_renderbuffers(intel, intel_image);
+   }
+
+   /* Allocate the swrast_texture_image::ImageOffsets array now */
+   switch (texobj->Target) {
+   case GL_TEXTURE_3D:
+   case GL_TEXTURE_2D_ARRAY:
+      slices = image->Depth;
+      break;
+   case GL_TEXTURE_1D_ARRAY:
+      slices = image->Height;
+      break;
+   default:
+      slices = 1;
+   }
+   assert(!intel_image->base.ImageOffsets);
+   intel_image->base.ImageOffsets = malloc(slices * sizeof(GLuint));
+
+   if (intel_texobj->mt &&
+       intel_miptree_match_image(intel_texobj->mt, image)) {
+      intel_miptree_reference(&intel_image->mt, intel_texobj->mt);
+      DBG("%s: alloc obj %p level %d %dx%dx%d using object's miptree %p\n",
+          __FUNCTION__, texobj, image->Level,
+          width, height, depth, intel_texobj->mt);
+   } else {
+      intel_image->mt = intel_miptree_create_for_teximage(intel, intel_texobj,
+                                                          intel_image,
+                                                          false);
+
+      /* Even if the object currently has a mipmap tree associated
+       * with it, this one is a more likely candidate to represent the
+       * whole object since our level didn't fit what was there
+       * before, and any lower levels would fit into our miptree.
+       */
+      intel_miptree_reference(&intel_texobj->mt, intel_image->mt);
+
+      if (intel->must_use_separate_stencil
+          && image->TexFormat == MESA_FORMAT_S8_Z24) {
+         intel_tex_image_s8z24_create_renderbuffers(intel, intel_image);
+      }
+
+      DBG("%s: alloc obj %p level %d %dx%dx%d using new miptree %p\n",
+          __FUNCTION__, texobj, image->Level,
+          width, height, depth, intel_image->mt);
+   }
+
+   return true;
+}
 
 static void
 intel_free_texture_image_buffer(struct gl_context * ctx,
@@ -60,9 +130,14 @@ intel_free_texture_image_buffer(struct gl_context * ctx,
 
    intel_miptree_release(&intelImage->mt);
 
-   if (texImage->Data) {
-      _mesa_free_texmemory(texImage->Data);
-      texImage->Data = NULL;
+   if (intelImage->base.Buffer) {
+      _mesa_align_free(intelImage->base.Buffer);
+      intelImage->base.Buffer = NULL;
+   }
+
+   if (intelImage->base.ImageOffsets) {
+      free(intelImage->base.ImageOffsets);
+      intelImage->base.ImageOffsets = NULL;
    }
 
    _mesa_reference_renderbuffer(&intelImage->depth_rb, NULL);
@@ -72,6 +147,7 @@ intel_free_texture_image_buffer(struct gl_context * ctx,
 /**
  * Map texture memory/buffer into user space.
  * Note: the region of interest parameters are ignored here.
+ * \param mode  bitmask of GL_MAP_READ_BIT, GL_MAP_WRITE_BIT
  * \param mapOut  returns start of mapping of region of interest
  * \param rowStrideOut  returns row stride in bytes
  */
@@ -88,6 +164,15 @@ intel_map_texture_image(struct gl_context *ctx,
    struct intel_texture_image *intel_image = intel_texture_image(tex_image);
    struct intel_mipmap_tree *mt = intel_image->mt;
    unsigned int bw, bh;
+   void *base;
+   unsigned int image_x, image_y;
+
+   /* Our texture data is always stored in a miptree. */
+   assert(mt);
+
+   /* Check that our caller wasn't confused about how to map a 1D texture. */
+   assert(tex_image->TexObject->Target != GL_TEXTURE_1D_ARRAY ||
+	  h == 1);
 
    if (intel_image->stencil_rb) {
       /*
@@ -106,30 +191,18 @@ intel_map_texture_image(struct gl_context *ctx,
    assert(y % bh == 0);
    y /= bh;
 
-   if (likely(mt)) {
-      void *base = intel_region_map(intel, mt->region);
-      unsigned int image_x, image_y;
+   base = intel_region_map(intel, mt->region, mode);
+   intel_miptree_get_image_offset(mt, tex_image->Level, tex_image->Face,
+				  slice, &image_x, &image_y);
+   x += image_x;
+   y += image_y;
 
-      intel_miptree_get_image_offset(mt, tex_image->Level, tex_image->Face,
-				     slice, &image_x, &image_y);
-      x += image_x;
-      y += image_y;
+   *stride = mt->region->pitch * mt->cpp;
+   *map = base + y * *stride + x * mt->cpp;
 
-      *stride = mt->region->pitch * mt->cpp;
-      *map = base + y * *stride + x * mt->cpp;
-   } else {
-      /* texture data is in malloc'd memory */
-      GLuint width = tex_image->Width;
-      GLuint height = ALIGN(tex_image->Height, bh) / bh;
-      GLuint texelSize = _mesa_get_format_bytes(tex_image->TexFormat);
-
-      assert(map);
-
-      *stride = _mesa_format_row_stride(tex_image->TexFormat, width);
-      *map = tex_image->Data + (slice * height + y) * *stride + x * texelSize;
-
-      return;
-   }
+   DBG("%s: %d,%d %dx%d from mt %p %d,%d = %p/%d\n", __FUNCTION__,
+       x - image_x, y - image_y, w, h,
+       mt, x, y, *map, *stride);
 }
 
 static void
@@ -139,8 +212,7 @@ intel_unmap_texture_image(struct gl_context *ctx,
    struct intel_context *intel = intel_context(ctx);
    struct intel_texture_image *intel_image = intel_texture_image(tex_image);
 
-   if (intel_image->mt)
-      intel_region_unmap(intel, intel_image->mt->region);
+   intel_region_unmap(intel, intel_image->mt->region);
 
    if (intel_image->stencil_rb) {
       /*
@@ -152,64 +224,14 @@ intel_unmap_texture_image(struct gl_context *ctx,
    }
 }
 
-/**
- * Called via ctx->Driver.GenerateMipmap()
- * This is basically a wrapper for _mesa_meta_GenerateMipmap() which checks
- * if we'll be using software mipmap generation.  In that case, we need to
- * map/unmap the base level texture image.
- */
-static void
-intelGenerateMipmap(struct gl_context *ctx, GLenum target,
-                    struct gl_texture_object *texObj)
-{
-   if (_mesa_meta_check_generate_mipmap_fallback(ctx, target, texObj)) {
-      /* sw path: need to map texture images */
-      struct intel_context *intel = intel_context(ctx);
-      struct intel_texture_object *intelObj = intel_texture_object(texObj);
-      struct gl_texture_image *first_image = texObj->Image[0][texObj->BaseLevel];
-
-      fallback_debug("%s - fallback to swrast\n", __FUNCTION__);
-
-      if (_mesa_is_format_compressed(first_image->TexFormat)) {
-         _mesa_generate_mipmap(ctx, target, texObj);
-      } else {
-         intel_tex_map_level_images(intel, intelObj, texObj->BaseLevel);
-         _mesa_generate_mipmap(ctx, target, texObj);
-         intel_tex_unmap_level_images(intel, intelObj, texObj->BaseLevel);
-      }
-
-      if (!_mesa_is_format_compressed(first_image->TexFormat)) {
-         GLuint nr_faces = (texObj->Target == GL_TEXTURE_CUBE_MAP) ? 6 : 1;
-         GLuint face, i;
-         for (face = 0; face < nr_faces; face++) {
-            for (i = texObj->BaseLevel + 1; i < texObj->MaxLevel; i++) {
-               struct intel_texture_image *intelImage =
-                  intel_texture_image(texObj->Image[face][i]);
-               if (!intelImage)
-                  break;
-               /* Unreference the miptree to signal that the new Data is a
-                * bare pointer from mesa.
-                */
-               intel_miptree_release(&intelImage->mt);
-            }
-         }
-      }
-   }
-   else {
-      _mesa_meta_GenerateMipmap(ctx, target, texObj);
-   }
-}
-
-
 void
 intelInitTextureFuncs(struct dd_function_table *functions)
 {
-   functions->GenerateMipmap = intelGenerateMipmap;
-
    functions->NewTextureObject = intelNewTextureObject;
    functions->NewTextureImage = intelNewTextureImage;
    functions->DeleteTextureImage = intelDeleteTextureImage;
    functions->DeleteTexture = intelDeleteTextureObject;
+   functions->AllocTextureImageBuffer = intel_alloc_texture_image_buffer;
    functions->FreeTextureImageBuffer = intel_free_texture_image_buffer;
    functions->MapTextureImage = intel_map_texture_image;
    functions->UnmapTextureImage = intel_unmap_texture_image;

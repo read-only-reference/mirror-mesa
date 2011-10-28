@@ -1,8 +1,5 @@
 Random list of problems with i915g:
 
-- Check if PIPE_CAP_BLEND_EQUATION_SEPARATE work, the code is there.
-  If not fix it! A simple task, good for beginners.
-
 - Add support for PIPE_CAP_POINT_SPRITE either via the draw module or directly
   via the hardware, look at the classic driver, more advanced.
 
@@ -31,15 +28,17 @@ Random list of problems with i915g:
   4D. Is it a big problem though? We're more limited by the # of texture
   indirections and the # of instructions.
 
-- Leverage draw to enable more caps:
-  * PIPE_CAP_TGSI_INSTANCEID
-  * PIPE_CAP_MAX_VERTEX_TEXTURE_UNITS
-
 - Finish front/back face. We need to add face support to lp_build_system_values_array and use it in draw_llvm.c.
+
+- More optimizations, like replacing ADD + MUL with MAD or use DP2ADD.
 
 - Replace constants and immediates which are 0,1,-1 or a combination of those with a swizzle.
 
 - i915_delete_fs_state doesn't call draw_delete_fragment_shader. Why?
+
+- Schedule instructions to minimize the number of phases. One way is to replace
+  R registers responsible for a boundary with U registers to avoid phase
+  boundaries.
 
 Other bugs can be found here:
 https://bugs.freedesktop.org/buglist.cgi?bug_status=NEW&bug_status=ASSIGNED&bug_status=REOPENED&component=Drivers/Gallium/i915g

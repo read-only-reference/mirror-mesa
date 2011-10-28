@@ -514,6 +514,15 @@ struct dd_function_table {
    /** Unmap texture images from user space */
    void (*UnmapTexture)( struct gl_context *ctx, struct gl_texture_object *tObj );
 
+   /** For GL_ARB_texture_storage.  Allocate memory for whole mipmap stack.
+    * All the gl_texture_images in the texture object will have their
+    * dimensions, format, etc. initialized already.
+    */
+   GLboolean (*AllocTextureStorage)(struct gl_context *ctx,
+                                    struct gl_texture_object *texObj,
+                                    GLsizei levels, GLsizei width,
+                                    GLsizei height, GLsizei depth);
+
    /**
     * Note: no context argument.  This function doesn't initially look
     * like it belongs here, except that the driver is the only entity
@@ -861,6 +870,14 @@ struct dd_function_table {
    void (*SaveFlushVertices)( struct gl_context *ctx );
 
    /**
+    * \brief Hook for drivers to prepare for a glBegin/glEnd block
+    *
+    * This hook is called in vbo_exec_Begin() before any action, including
+    * state updates, occurs.
+    */
+   void (*PrepareExecBegin)( struct gl_context *ctx );
+
+   /**
     * Give the driver the opportunity to hook in its own vtxfmt for
     * compiling optimized display lists.  This is called on each valid
     * glBegin() during list compilation.
@@ -901,6 +918,7 @@ struct dd_function_table {
     */
    void (*EndCallList)( struct gl_context *ctx );
 
+   /**@}*/
 
    /**
     * \name GL_ARB_sync interfaces

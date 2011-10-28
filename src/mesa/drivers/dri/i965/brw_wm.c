@@ -123,6 +123,50 @@ brw_wm_non_glsl_emit(struct brw_context *brw, struct brw_wm_compile *c)
    brw_wm_emit(c);
 }
 
+
+/**
+ * Return a bitfield where bit n is set if barycentric interpolation mode n
+ * (see enum brw_wm_barycentric_interp_mode) is needed by the fragment shader.
+ */
+unsigned
+brw_compute_barycentric_interp_modes(bool shade_model_flat,
+                                     const struct gl_fragment_program *fprog)
+{
+   unsigned barycentric_interp_modes = 0;
+   int attr;
+
+   /* Loop through all fragment shader inputs to figure out what interpolation
+    * modes are in use, and set the appropriate bits in
+    * barycentric_interp_modes.
+    */
+   for (attr = 0; attr < FRAG_ATTRIB_MAX; ++attr) {
+      enum glsl_interp_qualifier interp_qualifier =
+         fprog->InterpQualifier[attr];
+      bool is_gl_Color = attr == FRAG_ATTRIB_COL0 || attr == FRAG_ATTRIB_COL1;
+
+      /* Ignore unused inputs. */
+      if (!(fprog->Base.InputsRead & BITFIELD64_BIT(attr)))
+         continue;
+
+      /* Ignore WPOS and FACE, because they don't require interpolation. */
+      if (attr == FRAG_ATTRIB_WPOS || attr == FRAG_ATTRIB_FACE)
+         continue;
+
+      if (interp_qualifier == INTERP_QUALIFIER_NOPERSPECTIVE) {
+         barycentric_interp_modes |=
+            1 << BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC;
+      } else if (interp_qualifier == INTERP_QUALIFIER_SMOOTH ||
+                 (!(shade_model_flat && is_gl_Color) &&
+                  interp_qualifier == INTERP_QUALIFIER_NONE)) {
+         barycentric_interp_modes |=
+            1 << BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
+      }
+   }
+
+   return barycentric_interp_modes;
+}
+
+
 void
 brw_wm_payload_setup(struct brw_context *brw,
 		     struct brw_wm_compile *c)
@@ -130,22 +174,32 @@ brw_wm_payload_setup(struct brw_context *brw,
    struct intel_context *intel = &brw->intel;
    bool uses_depth = (c->fp->program.Base.InputsRead &
 		      (1 << FRAG_ATTRIB_WPOS)) != 0;
+   unsigned barycentric_interp_modes =
+      brw_compute_barycentric_interp_modes(c->key.flat_shade,
+                                           &c->fp->program);
+   int i;
 
    if (intel->gen >= 6) {
       /* R0-1: masks, pixel X/Y coordinates. */
       c->nr_payload_regs = 2;
       /* R2: only for 32-pixel dispatch.*/
-      /* R3-4: perspective pixel location barycentric */
-      c->nr_payload_regs += 2;
-      /* R5-6: perspective pixel location bary for dispatch width != 8 */
-      if (c->dispatch_width == 16) {
-	 c->nr_payload_regs += 2;
+
+      /* R3-26: barycentric interpolation coordinates.  These appear in the
+       * same order that they appear in the brw_wm_barycentric_interp_mode
+       * enum.  Each set of coordinates occupies 2 registers if dispatch width
+       * == 8 and 4 registers if dispatch width == 16.  Coordinates only
+       * appear if they were enabled using the "Barycentric Interpolation
+       * Mode" bits in WM_STATE.
+       */
+      for (i = 0; i < BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT; ++i) {
+         if (barycentric_interp_modes & (1 << i)) {
+            c->barycentric_coord_reg[i] = c->nr_payload_regs;
+            c->nr_payload_regs += 2;
+            if (c->dispatch_width == 16) {
+               c->nr_payload_regs += 2;
+            }
+         }
       }
-      /* R7-10: perspective centroid barycentric */
-      /* R11-14: perspective sample barycentric */
-      /* R15-18: linear pixel location barycentric */
-      /* R19-22: linear centroid barycentric */
-      /* R23-26: linear sample barycentric */
 
       /* R27: interpolated depth if uses source depth */
       if (uses_depth) {
@@ -172,8 +226,8 @@ brw_wm_payload_setup(struct brw_context *brw,
 
       if (c->fp->program.Base.OutputsWritten &
 	  BITFIELD64_BIT(FRAG_RESULT_DEPTH)) {
-	 c->source_depth_to_render_target = GL_TRUE;
-	 c->computes_depth = GL_TRUE;
+	 c->source_depth_to_render_target = true;
+	 c->computes_depth = true;
       }
    } else {
       brw_wm_lookup_iz(intel, c);
@@ -224,7 +278,7 @@ bool do_wm_prog(struct brw_context *brw,
 
    brw_init_compile(brw, &c->func, c);
 
-   if (prog && prog->FragmentProgram) {
+   if (prog && prog->_LinkedShaders[MESA_SHADER_FRAGMENT]) {
       if (!brw_wm_fs_emit(brw, c, prog))
 	 return false;
    } else {
@@ -247,7 +301,7 @@ bool do_wm_prog(struct brw_context *brw,
       c->prog_data.total_scratch = brw_get_scratch_size(c->last_scratch);
 
       brw_get_scratch_bo(intel, &brw->wm.scratch_bo,
-			 c->prog_data.total_scratch * brw->wm_max_threads);
+			 c->prog_data.total_scratch * brw->max_wm_threads);
    }
 
    if (unlikely(INTEL_DEBUG & DEBUG_WM))
@@ -452,7 +506,8 @@ static void brw_wm_populate_key( struct brw_context *brw,
 }
 
 
-static void brw_prepare_wm_prog(struct brw_context *brw)
+static void
+brw_upload_wm_prog(struct brw_context *brw)
 {
    struct intel_context *intel = &brw->intel;
    struct gl_context *ctx = &intel->ctx;
@@ -467,6 +522,7 @@ static void brw_prepare_wm_prog(struct brw_context *brw)
 			 &brw->wm.prog_offset, &brw->wm.prog_data)) {
       bool success = do_wm_prog(brw, ctx->Shader.CurrentFragmentProgram, fp,
 				&key);
+      (void) success;
       assert(success);
    }
 }
@@ -488,6 +544,6 @@ const struct brw_tracked_state brw_wm_prog = {
 		BRW_NEW_REDUCED_PRIMITIVE),
       .cache = CACHE_NEW_VS_PROG,
    },
-   .prepare = brw_prepare_wm_prog
+   .emit = brw_upload_wm_prog
 };
 

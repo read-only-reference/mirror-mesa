@@ -47,10 +47,10 @@ class dst_reg;
  * channels, as that will tell optimization passes that those other
  * channels are used.
  */
-static int
+static unsigned
 swizzle_for_size(int size)
 {
-   int size_swizzles[4] = {
+   static const unsigned size_swizzles[4] = {
       BRW_SWIZZLE4(SWIZZLE_X, SWIZZLE_X, SWIZZLE_X, SWIZZLE_X),
       BRW_SWIZZLE4(SWIZZLE_X, SWIZZLE_Y, SWIZZLE_Y, SWIZZLE_Y),
       BRW_SWIZZLE4(SWIZZLE_X, SWIZZLE_Y, SWIZZLE_Z, SWIZZLE_Z),
@@ -509,7 +509,8 @@ public:
 				src_reg orig_src,
 				int base_offset);
 
-   GLboolean try_emit_sat(ir_expression *ir);
+   bool try_emit_sat(ir_expression *ir);
+   void resolve_ud_negate(src_reg *reg);
 
    bool process_move_condition(ir_rvalue *ir);
 

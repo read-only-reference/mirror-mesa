@@ -83,20 +83,15 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 	void* default_depth_stencil;
 	void* default_blend;
 	void* default_sampler;
-	void* ld_sampler;
-	void * default_shaders[D3D11_STAGES];
+	void* default_shaders[D3D11_STAGES];
 
 	// derived state
 	int primitive_mode;
 	struct pipe_vertex_buffer vertex_buffers[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
 	struct pipe_resource* so_buffers[D3D11_SO_BUFFER_SLOT_COUNT];
 	struct pipe_sampler_view* sampler_views[D3D11_STAGES][D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
-	struct
-	{
-		void* ld; // accessed with a -1 index from v
-		void* v[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
-	} sampler_csos[D3D11_STAGES];
-	struct pipe_resource * buffers[D3D11_SO_BUFFER_SLOT_COUNT];
+	void* sampler_csos[D3D11_STAGES][D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
+	struct pipe_resource* buffers[D3D11_SO_BUFFER_SLOT_COUNT];
 	unsigned num_shader_resource_views[D3D11_STAGES];
 	unsigned num_samplers[D3D11_STAGES];
 	unsigned num_vertex_buffers;
@@ -150,8 +145,6 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 	{
 		if(!pipe->begin_query)
 			caps.queries = false;
-		if(!pipe->render_condition || !screen->get_param(screen, PIPE_CAP_CONDITIONAL_RENDER))
-			caps.render_condition = false;
 		if(!pipe->bind_gs_state)
 		{
 			caps.gs = false;
@@ -248,14 +241,10 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 		samplerd.min_lod = -FLT_MAX;
 		samplerd.max_lod = FLT_MAX;
 		samplerd.max_anisotropy = 1;
-		ld_sampler = pipe->create_sampler_state(pipe, &samplerd);
 
 		for(unsigned s = 0; s < D3D11_STAGES; ++s)
-		{
-			sampler_csos[s].ld = ld_sampler;
 			for(unsigned i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; ++i)
-				sampler_csos[s].v[i] = default_sampler;
-		}
+				sampler_csos[s][i] = default_sampler;
 
 		// TODO: should this really be empty shaders, or should they be all-passthrough?
 		memset(default_shaders, 0, sizeof(default_shaders));
@@ -296,7 +285,6 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 		if(pipe->bind_geometry_sampler_states)
 			pipe->bind_geometry_sampler_states(pipe, 0, 0);
 		pipe->delete_sampler_state(pipe, default_sampler);
-		pipe->delete_sampler_state(pipe, ld_sampler);
 
 		pipe->bind_fs_state(pipe, 0);
 		pipe->delete_fs_state(pipe, default_shaders[PIPE_SHADER_FRAGMENT]);
@@ -395,14 +383,14 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 			if(samplers[s][start + i].p != samps[i])
 			{
 				samplers[s][start + i] = samps[i];
-				sampler_csos[s].v[start + i] = samps[i] ? samps[i]->object : default_sampler;
+				sampler_csos[s][start + i] = samps[i] ? samps[i]->object : default_sampler;
 				last_different = i;
 			}
-			if(last_different >= 0)
-			{
-				num_samplers[s] = std::max(num_samplers[s], start + last_different + 1);
-				update_flags |= 1 << (UPDATE_SAMPLERS_SHIFT + s);
-			}
+		}
+		if(last_different >= 0)
+		{
+			num_samplers[s] = std::max(num_samplers[s], start + last_different + 1);
+			update_flags |= 1 << (UPDATE_SAMPLERS_SHIFT + s);
 		}
 	}
 
@@ -519,22 +507,17 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 				--num_shader_resource_views[s];
 			if((1 << s) & caps.stages_with_sampling)
 			{
-				struct pipe_sampler_view* views_to_bind[PIPE_MAX_SAMPLERS];
-				unsigned num_views_to_bind = shaders[s] ? shaders[s]->slot_to_resource.size() : 0;
-				for(unsigned i = 0; i < num_views_to_bind; ++i)
-				{
-					views_to_bind[i] = sampler_views[s][shaders[s]->slot_to_resource[i]];
-				}
+				const unsigned num_views_to_bind = num_shader_resource_views[s];
 				switch(s)
 				{
 				case PIPE_SHADER_VERTEX:
-					pipe->set_vertex_sampler_views(pipe, num_views_to_bind, views_to_bind);
+					pipe->set_vertex_sampler_views(pipe, num_views_to_bind, sampler_views[s]);
 					break;
 				case PIPE_SHADER_FRAGMENT:
-					pipe->set_fragment_sampler_views(pipe, num_views_to_bind, views_to_bind);
+					pipe->set_fragment_sampler_views(pipe, num_views_to_bind, sampler_views[s]);
 					break;
 				case PIPE_SHADER_GEOMETRY:
-					pipe->set_geometry_sampler_views(pipe, num_views_to_bind, views_to_bind);
+					pipe->set_geometry_sampler_views(pipe, num_views_to_bind, sampler_views[s]);
 					break;
 				}
 			}
@@ -542,27 +525,21 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 
 		if(update_flags & (1 << (UPDATE_SAMPLERS_SHIFT + s)))
 		{
-			while(num_samplers[s] && !sampler_csos[s].v[num_samplers[s] - 1])
+			while(num_samplers[s] && !sampler_csos[s][num_samplers[s] - 1])
 				--num_samplers[s];
 			if((1 << s) & caps.stages_with_sampling)
 			{
-				void* samplers_to_bind[PIPE_MAX_SAMPLERS];
-				unsigned num_samplers_to_bind = shaders[s] ? shaders[s]->slot_to_sampler.size() : 0;
-				for(unsigned i = 0; i < num_samplers_to_bind; ++i)
-				{
-					// index can be -1 to access sampler_csos[s].ld
-					samplers_to_bind[i] = *(sampler_csos[s].v + shaders[s]->slot_to_sampler[i]);
-				}
+				const unsigned num_samplers_to_bind = num_samplers[s];
 				switch(s)
 				{
 				case PIPE_SHADER_VERTEX:
-					pipe->bind_vertex_sampler_states(pipe, num_samplers_to_bind, samplers_to_bind);
+					pipe->bind_vertex_sampler_states(pipe, num_samplers_to_bind, sampler_csos[s]);
 					break;
 				case PIPE_SHADER_FRAGMENT:
-					pipe->bind_fragment_sampler_states(pipe, num_samplers_to_bind, samplers_to_bind);
+					pipe->bind_fragment_sampler_states(pipe, num_samplers_to_bind, sampler_csos[s]);
 					break;
 				case PIPE_SHADER_GEOMETRY:
-					pipe->bind_geometry_sampler_states(pipe, num_samplers_to_bind, samplers_to_bind);
+					pipe->bind_geometry_sampler_states(pipe, num_samplers_to_bind, sampler_csos[s]);
 					break;
 				}
 			}
@@ -622,7 +599,7 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 			ID3D11Buffer* buffer = new_vertex_buffers[i];
 			if(buffer != input_buffers[start + i].p
 				|| vertex_buffers[start + i].buffer_offset != new_offsets[i]
-				|| vertex_buffers[start + i].stride != new_offsets[i]
+				|| vertex_buffers[start + i].stride != new_strides[i]
 			)
 			{
 				input_buffers[start + i] = buffer;
@@ -765,7 +742,8 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 		info.max_index = ~0;
 		info.start_instance = 0;
 		info.instance_count = 1;
-		info.primitive_restart = FALSE;
+		info.primitive_restart = TRUE;
+		info.restart_index = strip_cut_index;
 
 		pipe->draw_vbo(pipe, &info);
 	}
@@ -788,8 +766,7 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 		info.max_index = ~0;
 		info.start_instance = 0;
 		info.instance_count = 1;
-		info.primitive_restart = TRUE;
-		info.restart_index = strip_cut_index;
+		info.primitive_restart = FALSE;
 
 		pipe->draw_vbo(pipe, &info);
 	}
@@ -815,7 +792,8 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 		info.max_index = ~0;
 		info.start_instance = start_instance_location;
 		info.instance_count = instance_count;
-		info.primitive_restart = FALSE;
+		info.primitive_restart = TRUE;
+		info.restart_index = strip_cut_index;
 
 		pipe->draw_vbo(pipe, &info);
 	}
@@ -840,8 +818,7 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 		info.max_index = ~0;
 		info.start_instance = start_instance_location;
 		info.instance_count = instance_count;
-		info.primitive_restart = TRUE;
-		info.restart_index = strip_cut_index;
+		info.primitive_restart = FALSE;
 
 		pipe->draw_vbo(pipe, &info);
 	}
@@ -885,7 +862,8 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 		info.max_index = ~0;
 		info.start_instance = 0;
 		info.instance_count = data.instance_count;
-		info.primitive_restart = FALSE;
+		info.primitive_restart = TRUE;
+		info.restart_index = strip_cut_index;
 
 		pipe->draw_vbo(pipe, &info);
 	}
@@ -916,8 +894,7 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 		info.max_index = ~0;
 		info.start_instance = 0;
 		info.instance_count = data.instance_count;
-		info.primitive_restart = TRUE;
-		info.restart_index = strip_cut_index;
+		info.primitive_restart = FALSE;
 
 		pipe->draw_vbo(pipe, &info);
 	}
@@ -1211,31 +1188,38 @@ struct GalliumD3D10Device : public GalliumD3D10ScreenImpl<threadsafe>
 		ID3D11DepthStencilView  *new_depth_stencil_view)
 	{
 		SYNCHRONIZED;
+
+		bool update = false;
+		unsigned i, num;
+
+		if(depth_stencil_view.p != new_depth_stencil_view) {
+			update = true;
+			depth_stencil_view = new_depth_stencil_view;
+		}
+
 		if(!new_render_target_views)
 			count = 0;
-		if(count == num_render_target_views)
-		{
-			for(unsigned i = 0; i < count; ++i)
-			{
-				if(new_render_target_views[i] != render_target_views[i].p)
-					goto changed;
-			}
-			return;
-		}
-changed:
-		depth_stencil_view = new_depth_stencil_view;
-		unsigned i;
-		for(i = 0; i < count; ++i)
-		{
-			render_target_views[i] = new_render_target_views[i];
+
+		for(num = 0, i = 0; i < count; ++i) {
 #if API >= 11
+			// XXX: is unbinding the UAVs here correct ?
 			om_unordered_access_views[i] = (ID3D11UnorderedAccessView*)NULL;
 #endif
+			if(new_render_target_views[i] != render_target_views[i].p) {
+				update = true;
+				render_target_views[i] = new_render_target_views[i];
+			}
+			if(new_render_target_views[i])
+				num = i + 1;
 		}
-		for(; i < num_render_target_views; ++i)
-			render_target_views[i] = (ID3D11RenderTargetView*)NULL;
-		num_render_target_views = count;
-		set_framebuffer();
+		if(num != num_render_target_views) {
+			update = true;
+			for(; i < num_render_target_views; ++i)
+				render_target_views[i] = (ID3D11RenderTargetView*)NULL;
+		}
+		num_render_target_views = num;
+		if(update)
+			set_framebuffer();
 	}
 
 	virtual void STDMETHODCALLTYPE OMGetRenderTargets(
@@ -1451,7 +1435,7 @@ changed:
 		}
 	}
 
-	static unsigned d3d11_subresource_to_face(struct pipe_resource* resource, unsigned subresource)
+	static unsigned d3d11_subresource_to_layer(struct pipe_resource* resource, unsigned subresource)
 	{
 		if(subresource <= resource->last_level)
 		{
@@ -1481,9 +1465,9 @@ changed:
 		if(resource->transfers.count(subresource))
 			return E_FAIL;
 		unsigned level = d3d11_subresource_to_level(resource->resource, subresource);
-		unsigned face = d3d11_subresource_to_face(resource->resource, subresource);
+		unsigned layer = d3d11_subresource_to_layer(resource->resource, subresource);
 		pipe_box box = d3d11_to_pipe_box(resource->resource, level, 0);
-		/* XXX the translation from subresource to level/face(zslice/array layer) isn't quite right */
+		box.z += layer;
 		unsigned usage = 0;
 		if(map_type == D3D11_MAP_READ)
 			usage = PIPE_TRANSFER_READ;
@@ -1542,11 +1526,12 @@ changed:
 		GalliumD3D11Resource<>* dst = (GalliumD3D11Resource<>*)dst_resource;
 		GalliumD3D11Resource<>* src = (GalliumD3D11Resource<>*)src_resource;
 		unsigned dst_level = d3d11_subresource_to_level(dst->resource, dst_subresource);
-		unsigned dst_face = d3d11_subresource_to_face(dst->resource, dst_subresource);
+		unsigned dst_layer = d3d11_subresource_to_layer(dst->resource, dst_subresource);
 		unsigned src_level = d3d11_subresource_to_level(src->resource, src_subresource);
-		unsigned src_face = d3d11_subresource_to_face(src->resource, src_subresource);
-		/* XXX the translation from subresource to level/face(zslice/array layer) isn't quite right */
+		unsigned src_layer = d3d11_subresource_to_layer(src->resource, src_subresource);
 		pipe_box box = d3d11_to_pipe_box(src->resource, src_level, src_box);
+		dst_z += dst_layer;
+		box.z += src_layer;
 		{
 			pipe->resource_copy_region(pipe,
 				dst->resource, dst_level, dst_x, dst_y, dst_z,
@@ -1564,17 +1549,14 @@ changed:
 		unsigned level;
 		for(level = 0; level <= dst->resource->last_level; ++level)
 		{
-		        unsigned layers = 1;
 			pipe_box box;
-			if (dst->resource->target == PIPE_TEXTURE_CUBE)
-				layers = 6;
-			else if (dst->resource->target == PIPE_TEXTURE_3D)
-				layers = u_minify(dst->resource->depth0, level);
-			/* else layers = dst->resource->array_size; */
 			box.x = box.y = box.z = 0;
 			box.width = u_minify(dst->resource->width0, level);
 			box.height = u_minify(dst->resource->height0, level);
-			box.depth = layers;
+			if(dst->resource->target == PIPE_TEXTURE_3D)
+				box.depth = u_minify(dst->resource->depth0, level);
+			else
+				box.depth = dst->resource->array_size;
 			pipe->resource_copy_region(pipe,
 						   dst->resource, level, 0, 0, 0,
 						   src->resource, level, &box);
@@ -1592,8 +1574,9 @@ changed:
 		SYNCHRONIZED;
 		GalliumD3D11Resource<>* dst = (GalliumD3D11Resource<>*)dst_resource;
 		unsigned dst_level = d3d11_subresource_to_level(dst->resource, dst_subresource);
-		/* XXX the translation from subresource to level/face(zslice/array layer) isn't quite right */
+		unsigned dst_layer = d3d11_subresource_to_layer(dst->resource, dst_subresource);
 		pipe_box box = d3d11_to_pipe_box(dst->resource, dst_level, pDstBox);
+		box.z += dst_layer;
 		pipe->transfer_inline_write(pipe, dst->resource, dst_level, PIPE_TRANSFER_WRITE, &box, pSrcData, src_row_pitch, src_depth_pitch);
 	}
 
@@ -1690,7 +1673,8 @@ changed:
 			pipe->bind_stream_output_state(pipe, 0);
 		if(pipe->render_condition)
 			pipe->render_condition(pipe, 0, 0);
-		util_gen_mipmap(gen_mipmap, view->object, 0, 0, view->object->texture->last_level, PIPE_TEX_FILTER_LINEAR);
+		for(unsigned layer = view->object->u.tex.first_layer; layer <= view->object->u.tex.last_layer; ++layer)
+			util_gen_mipmap(gen_mipmap, view->object, layer, view->object->u.tex.first_level, view->object->u.tex.last_level, PIPE_TEX_FILTER_LINEAR);
 		restore_gallium_state_blit_only();
 	}
 
@@ -1759,8 +1743,8 @@ changed:
 		info.dst.res = dst->resource;
 		info.src.res = src->resource;
 		info.dst.level = 0;
-		info.dst.layer = d3d11_subresource_to_face(dst->resource, dst_subresource);
-		info.src.layer = d3d11_subresource_to_face(src->resource, src_subresource);
+		info.dst.layer = d3d11_subresource_to_layer(dst->resource, dst_subresource);
+		info.src.layer = d3d11_subresource_to_layer(src->resource, src_subresource);
 
 		info.src.x0 = 0;
 		info.src.x1 = info.src.res->width0;
@@ -1920,7 +1904,7 @@ changed:
 				if(samplers[s][i] == state)
 				{
 					samplers[s][i].p = NULL;
-					sampler_csos[s].v[i] = NULL;
+					sampler_csos[s][i] = NULL;
 					update_flags |= (1 << (UPDATE_SAMPLERS_SHIFT + s));
 				}
 			}

@@ -180,7 +180,7 @@ set_swizzle_component(GLuint *swizzle, GLuint comp, GLuint swz)
  * This is called just prior to changing any texture object state which
  * will not effect texture completeness.
  */
-static INLINE void
+static inline void
 flush(struct gl_context *ctx)
 {
    FLUSH_VERTICES(ctx, _NEW_TEXTURE);
@@ -195,7 +195,7 @@ flush(struct gl_context *ctx)
  * state flag and then mark the texture object as 'incomplete' so that any
  * per-texture derived state gets recomputed.
  */
-static INLINE void
+static inline void
 incomplete(struct gl_context *ctx, struct gl_texture_object *texObj)
 {
    FLUSH_VERTICES(ctx, _NEW_TEXTURE);
@@ -1204,6 +1204,12 @@ _mesa_GetTexParameterfv( GLenum target, GLenum pname, GLfloat *params )
          *params = (GLfloat) obj->Sampler.CubeMapSeamless;
          break;
 
+      case GL_TEXTURE_IMMUTABLE_FORMAT:
+         if (!ctx->Extensions.ARB_texture_storage)
+            goto invalid_pname;
+         *params = (GLfloat) obj->Immutable;
+         break;
+
       default:
          goto invalid_pname;
    }
@@ -1336,6 +1342,12 @@ _mesa_GetTexParameteriv( GLenum target, GLenum pname, GLint *params )
          if (!ctx->Extensions.AMD_seamless_cubemap_per_texture)
             goto invalid_pname;
          *params = (GLint) obj->Sampler.CubeMapSeamless;
+         break;
+
+      case GL_TEXTURE_IMMUTABLE_FORMAT:
+         if (!ctx->Extensions.ARB_texture_storage)
+            goto invalid_pname;
+         *params = (GLint) obj->Immutable;
          break;
 
       default:

@@ -271,47 +271,69 @@ nvc0_clear_render_target(struct pipe_context *pipe,
                          unsigned dstx, unsigned dsty,
                          unsigned width, unsigned height)
 {
-	struct nvc0_context *nv50 = nvc0_context(pipe);
-	struct nvc0_screen *screen = nv50->screen;
-	struct nouveau_channel *chan = screen->base.channel;
-	struct nv50_miptree *mt = nv50_miptree(dst->texture);
-	struct nv50_surface *sf = nv50_surface(dst);
-	struct nouveau_bo *bo = mt->base.bo;
+   struct nvc0_context *nv50 = nvc0_context(pipe);
+   struct nvc0_screen *screen = nv50->screen;
+   struct nouveau_channel *chan = screen->base.channel;
+   struct nv50_surface *sf = nv50_surface(dst);
+   struct nv04_resource *res = nv04_resource(sf->base.texture);
+   unsigned z;
 
-	BEGIN_RING(chan, RING_3D(CLEAR_COLOR(0)), 4);
-	OUT_RINGf (chan, color->f[0]);
-	OUT_RINGf (chan, color->f[1]);
-	OUT_RINGf (chan, color->f[2]);
-	OUT_RINGf (chan, color->f[3]);
+   BEGIN_RING(chan, RING_3D(CLEAR_COLOR(0)), 4);
+   OUT_RINGf (chan, color->f[0]);
+   OUT_RINGf (chan, color->f[1]);
+   OUT_RINGf (chan, color->f[2]);
+   OUT_RINGf (chan, color->f[3]);
 
-	if (MARK_RING(chan, 18, 2))
-		return;
+   if (MARK_RING(chan, 18, 2))
+      return;
 
-	BEGIN_RING(chan, RING_3D(RT_CONTROL), 1);
-	OUT_RING  (chan, 1);
-	BEGIN_RING(chan, RING_3D(RT_ADDRESS_HIGH(0)), 9);
-	OUT_RELOCh(chan, bo, sf->offset, NOUVEAU_BO_VRAM | NOUVEAU_BO_WR);
-	OUT_RELOCl(chan, bo, sf->offset, NOUVEAU_BO_VRAM | NOUVEAU_BO_WR);
-	OUT_RING  (chan, sf->width);
-	OUT_RING  (chan, sf->height);
-	OUT_RING  (chan, nvc0_format_table[dst->format].rt);
-	OUT_RING  (chan, (mt->layout_3d << 16) |
-              mt->level[sf->base.u.tex.level].tile_mode);
-	OUT_RING  (chan, dst->u.tex.first_layer + sf->depth);
-	OUT_RING  (chan, mt->layer_stride >> 2);
-	OUT_RING  (chan, dst->u.tex.first_layer);
+   BEGIN_RING(chan, RING_3D(SCREEN_SCISSOR_HORIZ), 2);
+   OUT_RING  (chan, ( width << 16) | dstx);
+   OUT_RING  (chan, (height << 16) | dsty);
 
-	BEGIN_RING(chan, RING_3D(CLIP_RECT_HORIZ(0)), 2);
-	OUT_RING  (chan, ((dstx + width) << 16) | dstx);
-	OUT_RING  (chan, ((dsty + height) << 16) | dsty);
-	IMMED_RING(chan, RING_3D(CLIP_RECTS_EN), 1);
+   BEGIN_RING(chan, RING_3D(RT_CONTROL), 1);
+   OUT_RING  (chan, 1);
+   BEGIN_RING(chan, RING_3D(RT_ADDRESS_HIGH(0)), 9);
+   OUT_RESRCh(chan, res, sf->offset, NOUVEAU_BO_WR);
+   OUT_RESRCl(chan, res, sf->offset, NOUVEAU_BO_WR);
+   if (likely(nouveau_bo_tile_layout(res->bo))) {
+      struct nv50_miptree *mt = nv50_miptree(dst->texture);
 
-	BEGIN_RING(chan, RING_3D(CLEAR_BUFFERS), 1);
-	OUT_RING  (chan, 0x3c);
+      OUT_RING(chan, sf->width);
+      OUT_RING(chan, sf->height);
+      OUT_RING(chan, nvc0_format_table[dst->format].rt);
+      OUT_RING(chan, (mt->layout_3d << 16) |
+               mt->level[sf->base.u.tex.level].tile_mode);
+      OUT_RING(chan, dst->u.tex.first_layer + sf->depth);
+      OUT_RING(chan, mt->layer_stride >> 2);
+      OUT_RING(chan, dst->u.tex.first_layer);
+   } else {
+      if (res->base.target == PIPE_BUFFER) {
+         OUT_RING(chan, 262144);
+         OUT_RING(chan, 1);
+      } else {
+         OUT_RING(chan, nv50_miptree(&res->base)->level[0].pitch);
+         OUT_RING(chan, sf->height);
+      }
+      OUT_RING(chan, nvc0_format_table[sf->base.format].rt);
+      OUT_RING(chan, 1 << 12);
+      OUT_RING(chan, 1);
+      OUT_RING(chan, 0);
+      OUT_RING(chan, 0);
 
-	IMMED_RING(chan, RING_3D(CLIP_RECTS_EN), 0);
+      IMMED_RING(chan, RING_3D(ZETA_ENABLE), 0);
 
-	nv50->dirty |= NVC0_NEW_FRAMEBUFFER;
+      /* tiled textures don't have to be fenced, they're not mapped directly */
+      nvc0_resource_fence(res, NOUVEAU_BO_WR);
+   }
+
+   for (z = 0; z < sf->depth; ++z) {
+      BEGIN_RING(chan, RING_3D(CLEAR_BUFFERS), 1);
+      OUT_RING  (chan, 0x3c |
+                 (z << NVC0_3D_CLEAR_BUFFERS_LAYER__SHIFT));
+   }
+
+   nv50->dirty |= NVC0_NEW_FRAMEBUFFER;
 }
 
 static void
@@ -331,6 +353,7 @@ nvc0_clear_depth_stencil(struct pipe_context *pipe,
 	struct nouveau_bo *bo = mt->base.bo;
 	uint32_t mode = 0;
 	int unk = mt->base.base.target == PIPE_TEXTURE_2D;
+	unsigned z;
 
 	if (clear_flags & PIPE_CLEAR_DEPTH) {
 		BEGIN_RING(chan, RING_3D(CLEAR_DEPTH), 1);
@@ -344,8 +367,12 @@ nvc0_clear_depth_stencil(struct pipe_context *pipe,
 		mode |= NVC0_3D_CLEAR_BUFFERS_S;
 	}
 
-	if (MARK_RING(chan, 17, 2))
+	if (MARK_RING(chan, 20, 2))
 		return;
+
+	BEGIN_RING(chan, RING_3D(SCREEN_SCISSOR_HORIZ), 2);
+	OUT_RING  (chan, ( width << 16) | dstx);
+	OUT_RING  (chan, (height << 16) | dsty);
 
 	BEGIN_RING(chan, RING_3D(ZETA_ADDRESS_HIGH), 5);
 	OUT_RELOCh(chan, bo, sf->offset, NOUVEAU_BO_VRAM | NOUVEAU_BO_WR);
@@ -362,15 +389,11 @@ nvc0_clear_depth_stencil(struct pipe_context *pipe,
 	BEGIN_RING(chan, RING_3D(ZETA_BASE_LAYER), 1);
 	OUT_RING  (chan, dst->u.tex.first_layer);
 
-	BEGIN_RING(chan, RING_3D(CLIP_RECT_HORIZ(0)), 2);
-	OUT_RING  (chan, ((dstx + width) << 16) | dstx);
-	OUT_RING  (chan, ((dsty + height) << 16) | dsty);
-	IMMED_RING(chan, RING_3D(CLIP_RECTS_EN), 1);
-
-	BEGIN_RING(chan, RING_3D(CLEAR_BUFFERS), 1);
-	OUT_RING  (chan, mode);
-
-	IMMED_RING(chan, RING_3D(CLIP_RECTS_EN), 0);
+	for (z = 0; z < sf->depth; ++z) {
+		BEGIN_RING(chan, RING_3D(CLEAR_BUFFERS), 1);
+		OUT_RING  (chan, mode |
+			   (z << NVC0_3D_CLEAR_BUFFERS_LAYER__SHIFT));
+	}
 
 	nv50->dirty |= NVC0_NEW_FRAMEBUFFER;
 }
@@ -478,7 +501,7 @@ nvc0_blitctx_make_fp(struct nvc0_blitctx *blit)
 {
    static const uint32_t code[] = /* use nvc0dis */
    {
-      /* 2 coords RGBA in, RGBA out, also for Z32_FLOAT(_S8X24_USCALED)
+      /* 2 coords RGBA in, RGBA out, also for Z32_FLOAT(_S8X24_UINT)
        * NOTE:
        * NVC0 doesn't like tex 3d on non-3d textures, but there should
        * only be 2d and 2d-array MS resources anyway.
@@ -581,11 +604,11 @@ nvc0_blit_zeta_to_colour_format(enum pipe_format format)
 {
    switch (format) {
    case PIPE_FORMAT_Z16_UNORM:               return PIPE_FORMAT_R16_UNORM;
-   case PIPE_FORMAT_Z24_UNORM_S8_USCALED:
-   case PIPE_FORMAT_S8_USCALED_Z24_UNORM:
+   case PIPE_FORMAT_Z24_UNORM_S8_UINT:
+   case PIPE_FORMAT_S8_UINT_Z24_UNORM:
    case PIPE_FORMAT_Z24X8_UNORM:             return PIPE_FORMAT_R8G8B8A8_UNORM;
    case PIPE_FORMAT_Z32_FLOAT:               return PIPE_FORMAT_R32_FLOAT;
-   case PIPE_FORMAT_Z32_FLOAT_S8X24_USCALED: return PIPE_FORMAT_R32G32_FLOAT;
+   case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:    return PIPE_FORMAT_R32G32_FLOAT;
    default:
       assert(0);
       return PIPE_FORMAT_NONE;
@@ -600,14 +623,14 @@ nvc0_blitctx_get_color_mask_and_fp(struct nvc0_blitctx *blit,
 
    switch (format) {
    case PIPE_FORMAT_Z24X8_UNORM:
-   case PIPE_FORMAT_Z24_UNORM_S8_USCALED:
+   case PIPE_FORMAT_Z24_UNORM_S8_UINT:
       blit->fp_offset = 0x180;
       if (mask & PIPE_MASK_Z)
          blit->color_mask |= 0x0111;
       if (mask & PIPE_MASK_S)
          blit->color_mask |= 0x1000;
       break;
-   case PIPE_FORMAT_S8_USCALED_Z24_UNORM:
+   case PIPE_FORMAT_S8_UINT_Z24_UNORM:
       blit->fp_offset = 0x80;
       if (mask & PIPE_MASK_Z)
          blit->color_mask |= 0x1110;

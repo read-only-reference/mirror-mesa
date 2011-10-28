@@ -87,7 +87,7 @@ typedef void (*intel_point_func) (struct intel_context *, intelVertex *);
 /*@}*/
 
 extern void intelFallback(struct intel_context *intel, GLbitfield bit,
-                          GLboolean mode);
+                          bool mode);
 #define FALLBACK( intel, bit, mode ) intelFallback( intel, bit, mode )
 
 
@@ -141,7 +141,7 @@ struct intel_context
       void (*reduced_primitive_state) (struct intel_context * intel,
                                        GLenum rprim);
 
-      GLboolean (*check_vertex_size) (struct intel_context * intel,
+      bool (*check_vertex_size) (struct intel_context * intel,
 				      GLuint expected);
       void (*invalidate_state) (struct intel_context *intel,
 				GLuint new_state);
@@ -154,6 +154,22 @@ struct intel_context
       /** Can HiZ be enabled on a depthbuffer of the given format? */
       bool (*is_hiz_depth_format)(struct intel_context *intel,
 	                          gl_format format);
+
+      /**
+       * \name HiZ operations
+       *
+       * See the following sections of the Sandy Bridge PRM, Volume 1, Part2:
+       *   - 7.5.3.1 Depth Buffer Clear
+       *   - 7.5.3.2 Depth Buffer Resolve
+       *   - 7.5.3.3 Hierarchical Depth Buffer Resolve
+       * \{
+       */
+      void (*hiz_resolve_depthbuffer)(struct intel_context *intel,
+				      struct intel_region *depth_region);
+      void (*hiz_resolve_hizbuffer)(struct intel_context *intel,
+				    struct intel_region *depth_region);
+      /** \} */
+
    } vtbl;
 
    GLbitfield Fallback;  /**< mask of INTEL_FALLBACK_x bits */
@@ -167,12 +183,12 @@ struct intel_context
     */
    int gen;
    int gt;
-   GLboolean needs_ff_sync;
-   GLboolean is_g4x;
-   GLboolean is_945;
-   GLboolean has_separate_stencil;
-   GLboolean must_use_separate_stencil;
-   GLboolean has_hiz;
+   bool needs_ff_sync;
+   bool is_g4x;
+   bool is_945;
+   bool has_separate_stencil;
+   bool must_use_separate_stencil;
+   bool has_hiz;
 
    int urb_size;
 
@@ -194,11 +210,16 @@ struct intel_context
 
       uint32_t state_batch_offset;
       bool is_blit;
+
+      struct {
+	 uint16_t used;
+	 int reloc_count;
+      } saved;
    } batch;
 
    drm_intel_bo *first_post_swapbuffers_batch;
-   GLboolean need_throttle;
-   GLboolean no_batch_wrap;
+   bool need_throttle;
+   bool no_batch_wrap;
    bool tnl_pipeline_running; /**< Set while i915's _tnl_run_pipeline. */
 
    struct
@@ -235,12 +256,12 @@ struct intel_context
 
    GLfloat polygon_offset_scale;        /* dependent on depth_scale, bpp */
 
-   GLboolean hw_stencil;
-   GLboolean hw_stipple;
-   GLboolean depth_buffer_is_float;
-   GLboolean no_rast;
-   GLboolean always_flush_batch;
-   GLboolean always_flush_cache;
+   bool hw_stencil;
+   bool hw_stipple;
+   bool depth_buffer_is_float;
+   bool no_rast;
+   bool always_flush_batch;
+   bool always_flush_cache;
 
    /* 0 - nonconformant, best performance;
     * 1 - fallback to sw for known conformance bugs
@@ -253,7 +274,7 @@ struct intel_context
    GLuint RenderIndex;
    GLmatrix ViewportMatrix;
    GLenum render_primitive;
-   GLenum reduced_primitive;
+   GLenum reduced_primitive; /*< Only gen < 6 */
    GLuint vertex_size;
    GLubyte *verts;              /* points to tnl->clipspace.vertex_buf */
 
@@ -269,7 +290,7 @@ struct intel_context
     * This is used in the DRI2 case to detect that glFlush should also copy
     * the contents of the fake front buffer to the real front buffer.
     */
-   GLboolean front_buffer_dirty;
+   bool front_buffer_dirty;
 
    /**
     * Track whether front-buffer rendering is currently enabled
@@ -277,7 +298,7 @@ struct intel_context
     * A separate flag is used to track this in order to support MRT more
     * easily.
     */
-   GLboolean is_front_buffer_rendering;
+   bool is_front_buffer_rendering;
    /**
     * Track whether front-buffer is the current read target.
     *
@@ -285,10 +306,18 @@ struct intel_context
     * be set separately.  The DRI2 fake front buffer must be referenced
     * either way.
     */
-   GLboolean is_front_buffer_reading;
+   bool is_front_buffer_reading;
 
-   GLboolean use_texture_tiling;
-   GLboolean use_early_z;
+   /**
+    * Count of intel_regions that are mapped.
+    *
+    * This allows us to assert that no batch buffer is emitted if a
+    * region is mapped.
+    */
+   int num_mapped_regions;
+
+   bool use_texture_tiling;
+   bool use_early_z;
 
    int driFd;
 
@@ -413,11 +442,10 @@ extern int INTEL_DEBUG;
 #define DEBUG_SLEEP     0x80000
 #define DEBUG_STATS     0x100000
 #define DEBUG_TILE      0x200000
-#define DEBUG_SINGLE_THREAD   0x400000
-#define DEBUG_WM        0x800000
-#define DEBUG_URB       0x1000000
-#define DEBUG_VS        0x2000000
-#define DEBUG_CLIP      0x8000000
+#define DEBUG_WM        0x400000
+#define DEBUG_URB       0x800000
+#define DEBUG_VS        0x1000000
+#define DEBUG_CLIP      0x2000000
 
 #define DBG(...) do {						\
 	if (unlikely(INTEL_DEBUG & FILE_DEBUG_FLAG))		\
@@ -447,7 +475,7 @@ extern int INTEL_DEBUG;
  * intel_context.c:
  */
 
-extern GLboolean intelInitContext(struct intel_context *intel,
+extern bool intelInitContext(struct intel_context *intel,
 				  int api,
                                   const struct gl_config * mesaVis,
                                   __DRIcontext * driContextPriv,
@@ -547,7 +575,7 @@ intel_context(struct gl_context * ctx)
    return (struct intel_context *) ctx;
 }
 
-static INLINE GLboolean
+static INLINE bool
 is_power_of_two(uint32_t value)
 {
    return (value & (value - 1)) == 0;

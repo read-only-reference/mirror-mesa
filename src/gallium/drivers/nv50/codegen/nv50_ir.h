@@ -136,6 +136,7 @@ enum operation
 #define NV50_IR_SUBOP_LDC_IL       1
 #define NV50_IR_SUBOP_LDC_IS       2
 #define NV50_IR_SUBOP_LDC_ISL      3
+#define NV50_IR_SUBOP_SHIFT_WRAP   1
 
 enum DataType
 {
@@ -802,6 +803,7 @@ public:
 
       bool liveOnly; // only execute on live pixels of a quad (optimization)
       bool levelZero;
+      bool derivAll;
 
       int8_t useOffsets; // 0, 1, or 4 for textureGatherOffsets
       int8_t offset[4][3];

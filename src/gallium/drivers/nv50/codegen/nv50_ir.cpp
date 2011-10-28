@@ -508,7 +508,7 @@ ImmediateValue::equals(const Value *that, bool strict) const
 bool
 Symbol::equals(const Value *that, bool strict) const
 {
-   if (this->reg.file != that->reg.file)
+   if (reg.file != that->reg.file || reg.fileIndex != that->reg.fileIndex)
       return false;
    assert(that->asSym());
 
@@ -819,7 +819,7 @@ const struct TexInstruction::Target::Desc TexInstruction::Target::descTable[] =
    { "1D_ARRAY",          1, 2, true,  false, false },
    { "2D_ARRAY",          2, 3, true,  false, false },
    { "2D_MS_ARRAY",       2, 3, true,  false, false },
-   { "CUBE_ARRAY",        2, 3, true,  true,  false },
+   { "CUBE_ARRAY",        2, 4, true,  true,  false },
    { "1D_ARRAY_SHADOW",   1, 2, true,  false, true  },
    { "2D_ARRAY_SHADOW",   2, 3, true,  false, true  },
    { "RECT",              2, 2, false, false, false },
@@ -926,6 +926,16 @@ extern "C" {
 static void
 nv50_ir_init_prog_info(struct nv50_ir_prog_info *info)
 {
+#if defined(PIPE_SHADER_HULL) && defined(PIPE_SHADER_DOMAIN)
+   if (info->type == PIPE_SHADER_HULL || info->type == PIPE_SHADER_DOMAIN) {
+      info->prop.tp.domain = PIPE_PRIM_MAX;
+      info->prop.tp.outputPrim = PIPE_PRIM_MAX;
+   }
+#endif
+   if (info->type == PIPE_SHADER_GEOMETRY) {
+      info->prop.gp.instanceCount = 1;
+      info->prop.gp.maxVertices = 1;
+   }
    info->io.clipDistance = 0xff;
    info->io.pointSize = 0xff;
    info->io.edgeFlagIn = 0xff;

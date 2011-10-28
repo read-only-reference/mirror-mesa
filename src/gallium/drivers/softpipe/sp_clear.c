@@ -50,7 +50,6 @@ softpipe_clear(struct pipe_context *pipe, unsigned buffers,
                double depth, unsigned stencil)
 {
    struct softpipe_context *softpipe = softpipe_context(pipe);
-   union util_color uc;
    unsigned cv;
    uint i;
 
@@ -66,19 +65,16 @@ softpipe_clear(struct pipe_context *pipe, unsigned buffers,
 
    if (buffers & PIPE_CLEAR_COLOR) {
       for (i = 0; i < softpipe->framebuffer.nr_cbufs; i++) {
-         struct pipe_surface *ps = softpipe->framebuffer.cbufs[i];
-
-         util_pack_color(color->f, ps->format, &uc);
-         sp_tile_cache_clear(softpipe->cbuf_cache[i], color->f, uc.ui);
+         sp_tile_cache_clear(softpipe->cbuf_cache[i], color, 0);
       }
    }
 
    if (buffers & PIPE_CLEAR_DEPTHSTENCIL) {
-      static const float zero[4] = { 0.0F, 0.0F, 0.0F, 0.0F };
+      static const union pipe_color_union zero;
       struct pipe_surface *ps = softpipe->framebuffer.zsbuf;
 
       cv = util_pack_z_stencil(ps->format, depth, stencil);
-      sp_tile_cache_clear(softpipe->zsbuf_cache, zero, cv);
+      sp_tile_cache_clear(softpipe->zsbuf_cache, &zero, cv);
    }
 
    softpipe->dirty_render_cache = TRUE;

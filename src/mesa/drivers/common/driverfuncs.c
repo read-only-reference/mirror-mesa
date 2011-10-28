@@ -120,6 +120,7 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->UnmapTexture = NULL;
    driver->TextureMemCpy = memcpy;
    driver->IsTextureResident = NULL;
+   driver->DrawTex = _mesa_meta_DrawTex;
 
    /* Vertex/fragment programs */
    driver->BindProgram = NULL;
@@ -208,6 +209,7 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->ProgramStringNotify = _tnl_program_string;
    driver->FlushVertices = NULL;
    driver->SaveFlushVertices = NULL;
+   driver->PrepareExecBegin = NULL;
    driver->NotifySaveBegin = NULL;
    driver->LightingSpaceChange = NULL;
 
@@ -216,6 +218,9 @@ _mesa_init_driver_functions(struct dd_function_table *driver)
    driver->EndList = NULL;
    driver->BeginCallList = NULL;
    driver->EndCallList = NULL;
+
+   /* GL_ARB_texture_storage */
+   driver->AllocTextureStorage = _swrast_AllocTextureStorage;
 }
 
 

@@ -182,6 +182,9 @@ vec4_visitor::IF(src_reg src0, src_reg src1, uint32_t condition)
 
    vec4_instruction *inst;
 
+   resolve_ud_negate(&src0);
+   resolve_ud_negate(&src1);
+
    inst = new(mem_ctx) vec4_instruction(this, BRW_OPCODE_IF, dst_null_d(),
 					src0, src1);
    inst->conditional_mod = condition;
@@ -208,6 +211,9 @@ vec4_visitor::CMP(dst_reg dst, src_reg src0, src_reg src1, uint32_t condition)
       if (dst.file == HW_REG)
 	 dst.fixed_hw_reg.type = dst.type;
    }
+
+   resolve_ud_negate(&src0);
+   resolve_ud_negate(&src1);
 
    inst = new(mem_ctx) vec4_instruction(this, BRW_OPCODE_CMP, dst, src0, src1);
    inst->conditional_mod = condition;
@@ -326,10 +332,12 @@ vec4_visitor::emit_math2_gen6(enum opcode opcode,
     */
 
    expanded = src_reg(this, glsl_type::vec4_type);
+   expanded.type = src0.type;
    emit(MOV(dst_reg(expanded), src0));
    src0 = expanded;
 
    expanded = src_reg(this, glsl_type::vec4_type);
+   expanded.type = src1.type;
    emit(MOV(dst_reg(expanded), src1));
    src1 = expanded;
 
@@ -338,6 +346,7 @@ vec4_visitor::emit_math2_gen6(enum opcode opcode,
        * writemasks.
        */
       dst_reg temp_dst = dst_reg(this, glsl_type::vec4_type);
+      temp_dst.type = dst.type;
 
       emit(opcode, temp_dst, src0, src1);
 
@@ -360,7 +369,15 @@ void
 vec4_visitor::emit_math(enum opcode opcode,
 			dst_reg dst, src_reg src0, src_reg src1)
 {
-   assert(opcode == SHADER_OPCODE_POW);
+   switch (opcode) {
+   case SHADER_OPCODE_POW:
+   case SHADER_OPCODE_INT_QUOTIENT:
+   case SHADER_OPCODE_INT_REMAINDER:
+      break;
+   default:
+      assert(!"not reached: unsupported binary math opcode");
+      return;
+   }
 
    if (intel->gen >= 6) {
       return emit_math2_gen6(opcode, dst, src0, src1);
@@ -485,9 +502,7 @@ vec4_visitor::setup_uniform_values(int loc, const glsl_type *type)
    float *values = &this->vp->Base.Parameters->ParameterValues[loc][0].f;
 
    if (type->is_matrix()) {
-      const glsl_type *column = glsl_type::get_instance(GLSL_TYPE_FLOAT,
-							type->vector_elements,
-							1);
+      const glsl_type *column = type->column_type();
 
       for (unsigned int i = 0; i < type->matrix_columns; i++) {
 	 offset += setup_uniform_values(loc + offset, column);
@@ -546,18 +561,31 @@ vec4_visitor::setup_uniform_values(int loc, const glsl_type *type)
 void
 vec4_visitor::setup_uniform_clipplane_values()
 {
+   gl_clip_plane *clip_planes = brw_select_clip_planes(ctx);
+
+   /* Pre-Gen6, we compact clip planes.  For example, if the user
+    * enables just clip planes 0, 1, and 3, we will enable clip planes
+    * 0, 1, and 2 in the hardware, and we'll move clip plane 3 to clip
+    * plane 2.  This simplifies the implementation of the Gen6 clip
+    * thread.
+    *
+    * In Gen6 and later, we don't compact clip planes, because this
+    * simplifies the implementation of gl_ClipDistance.
+    */
    int compacted_clipplane_index = 0;
-   for (int i = 0; i < MAX_CLIP_PLANES; ++i) {
-      if (ctx->Transform.ClipPlanesEnabled & (1 << i)) {
-         this->uniform_vector_size[this->uniforms] = 4;
-         this->userplane[compacted_clipplane_index] = dst_reg(UNIFORM, this->uniforms);
-         this->userplane[compacted_clipplane_index].type = BRW_REGISTER_TYPE_F;
-         for (int j = 0; j < 4; ++j) {
-            c->prog_data.param[this->uniforms * 4 + j] = &ctx->Transform._ClipUserPlane[i][j];
-         }
-         ++compacted_clipplane_index;
-         ++this->uniforms;
+   for (int i = 0; i < c->key.nr_userclip_plane_consts; ++i) {
+      if (intel->gen < 6 &&
+          !(c->key.userclip_planes_enabled_gen_4_5 & (1 << i))) {
+         continue;
       }
+      this->uniform_vector_size[this->uniforms] = 4;
+      this->userplane[compacted_clipplane_index] = dst_reg(UNIFORM, this->uniforms);
+      this->userplane[compacted_clipplane_index].type = BRW_REGISTER_TYPE_F;
+      for (int j = 0; j < 4; ++j) {
+         c->prog_data.param[this->uniforms * 4 + j] = &clip_planes[i][j];
+      }
+      ++compacted_clipplane_index;
+      ++this->uniforms;
    }
 }
 
@@ -619,6 +647,8 @@ vec4_visitor::emit_bool_to_cond_code(ir_rvalue *ir, uint32_t *predicate)
       for (unsigned int i = 0; i < expr->get_num_operands(); i++) {
 	 expr->operands[i]->accept(this);
 	 op[i] = this->result;
+
+	 resolve_ud_negate(&op[i]);
       }
 
       switch (expr->operation) {
@@ -693,6 +723,8 @@ vec4_visitor::emit_bool_to_cond_code(ir_rvalue *ir, uint32_t *predicate)
    }
 
    ir->accept(this);
+
+   resolve_ud_negate(&this->result);
 
    if (intel->gen >= 6) {
       vec4_instruction *inst = emit(AND(dst_null_d(),
@@ -821,7 +853,8 @@ vec4_visitor::visit(ir_variable *ir)
       for (int i = 0; i < type_size(ir->type); i++) {
 	 output_reg[ir->location + i] = *reg;
 	 output_reg[ir->location + i].reg_offset = i;
-	 output_reg[ir->location + i].type = BRW_REGISTER_TYPE_F;
+	 output_reg[ir->location + i].type =
+            brw_type_for_base_type(ir->type->get_scalar_type());
 	 output_reg_annotation[ir->location + i] = ir->name;
       }
       break;
@@ -941,7 +974,7 @@ vec4_visitor::visit(ir_function *ir)
    }
 }
 
-GLboolean
+bool
 vec4_visitor::try_emit_sat(ir_expression *ir)
 {
    ir_rvalue *sat_src = ir->as_rvalue_to_saturate();
@@ -1112,9 +1145,14 @@ vec4_visitor::visit(ir_expression *ir)
       }
       break;
    case ir_binop_div:
-      assert(!"not reached: should be handled by ir_div_to_mul_rcp");
+      /* Floating point should be lowered by DIV_TO_MUL_RCP in the compiler. */
+      assert(ir->type->is_integer());
+      emit_math(SHADER_OPCODE_INT_QUOTIENT, result_dst, op[0], op[1]);
+      break;
    case ir_binop_mod:
-      assert(!"ir_binop_mod should have been converted to b * fract(a/b)");
+      /* Floating point should be lowered by MOD_TO_FRACT in the compiler. */
+      assert(ir->type->is_integer());
+      emit_math(SHADER_OPCODE_INT_REMAINDER, result_dst, op[0], op[1]);
       break;
 
    case ir_binop_less:
@@ -1472,7 +1510,8 @@ vec4_visitor::emit_block_move(dst_reg *dst, src_reg *src,
    dst->writemask = (1 << type->vector_elements) - 1;
 
    /* Do we need to worry about swizzling a swizzle? */
-   assert(src->swizzle == BRW_SWIZZLE_NOOP);
+   assert(src->swizzle == BRW_SWIZZLE_NOOP
+	  || src->swizzle == swizzle_for_size(type->vector_elements));
    src->swizzle = swizzle_for_size(type->vector_elements);
 
    vec4_instruction *inst = emit(MOV(*dst, *src));
@@ -1519,7 +1558,8 @@ vec4_visitor::try_rewrite_rhs_to_dst(ir_assignment *ir,
     * potentially reswizzle the operands of many instructions so that
     * we could handle out of order channels, but don't yet.
     */
-   for (int i = 0; i < 4; i++) {
+
+   for (unsigned i = 0; i < 4; i++) {
       if (dst.writemask & (1 << i)) {
 	 if (!(last_rhs_inst->dst.writemask & (1 << i)))
 	    return false;
@@ -1771,7 +1811,7 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
 {
    if (intel->gen < 6 &&
        ((c->prog_data.outputs_written & BITFIELD64_BIT(VERT_RESULT_PSIZ)) ||
-        c->key.nr_userclip || brw->has_negative_rhw_bug)) {
+        c->key.userclip_active || brw->has_negative_rhw_bug)) {
       dst_reg header1 = dst_reg(this, glsl_type::uvec4_type);
       dst_reg header1_w = header1;
       header1_w.writemask = WRITEMASK_W;
@@ -1788,7 +1828,7 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
       }
 
       current_annotation = "Clipping flags";
-      for (i = 0; i < c->key.nr_userclip; i++) {
+      for (i = 0; i < c->key.nr_userclip_plane_consts; i++) {
 	 vec4_instruction *inst;
 
 	 inst = emit(DP4(dst_null_f(), src_reg(output_reg[VERT_RESULT_HPOS]),
@@ -1846,9 +1886,28 @@ vec4_visitor::emit_clip_distances(struct brw_reg reg, int offset)
       return;
    }
 
-   for (int i = 0; i + offset < c->key.nr_userclip && i < 4; ++i) {
+   /* From the GLSL 1.30 spec, section 7.1 (Vertex Shader Special Variables):
+    *
+    *     "If a linked set of shaders forming the vertex stage contains no
+    *     static write to gl_ClipVertex or gl_ClipDistance, but the
+    *     application has requested clipping against user clip planes through
+    *     the API, then the coordinate written to gl_Position is used for
+    *     comparison against the user clip planes."
+    *
+    * This function is only called if the shader didn't write to
+    * gl_ClipDistance.  Accordingly, we use gl_ClipVertex to perform clipping
+    * if the user wrote to it; otherwise we use gl_Position.
+    */
+   gl_vert_result clip_vertex = VERT_RESULT_CLIP_VERTEX;
+   if (!(c->prog_data.outputs_written
+         & BITFIELD64_BIT(VERT_RESULT_CLIP_VERTEX))) {
+      clip_vertex = VERT_RESULT_HPOS;
+   }
+
+   for (int i = 0; i + offset < c->key.nr_userclip_plane_consts && i < 4;
+        ++i) {
       emit(DP4(dst_reg(brw_writemask(reg, 1 << i)),
-               src_reg(output_reg[VERT_RESULT_HPOS]),
+               src_reg(output_reg[clip_vertex]),
                src_reg(this->userplane[i + offset])));
    }
 }
@@ -1857,6 +1916,7 @@ void
 vec4_visitor::emit_generic_urb_slot(dst_reg reg, int vert_result)
 {
    assert (vert_result < VERT_RESULT_MAX);
+   reg.type = output_reg[vert_result].type;
    current_annotation = output_reg_annotation[vert_result];
    /* Copy the register, saturating if necessary */
    vec4_instruction *inst = emit(MOV(reg,
@@ -1959,7 +2019,7 @@ vec4_visitor::emit_urb_writes()
 
    /* FINISHME: edgeflag */
 
-   brw_compute_vue_map(&c->vue_map, intel, c->key.nr_userclip,
+   brw_compute_vue_map(&c->vue_map, intel, c->key.userclip_active,
                        c->prog_data.outputs_written);
 
    /* First mrf is the g0-based message header containing URB handles and such,
@@ -2279,6 +2339,18 @@ vec4_visitor::move_uniform_array_access_to_pull_constants()
    split_uniform_registers();
 }
 
+void
+vec4_visitor::resolve_ud_negate(src_reg *reg)
+{
+   if (reg->type != BRW_REGISTER_TYPE_UD ||
+       !reg->negate)
+      return;
+
+   src_reg temp = src_reg(this, glsl_type::uvec4_type);
+   emit(BRW_OPCODE_MOV, dst_reg(temp), *reg);
+   *reg = temp;
+}
+
 vec4_visitor::vec4_visitor(struct brw_vs_compile *c,
 			   struct gl_shader_program *prog,
 			   struct brw_shader *shader)
@@ -2298,7 +2370,8 @@ vec4_visitor::vec4_visitor(struct brw_vs_compile *c,
    this->current_annotation = NULL;
 
    this->c = c;
-   this->vp = prog->VertexProgram;
+   this->vp = (struct gl_vertex_program *)
+     prog->_LinkedShaders[MESA_SHADER_VERTEX]->Program;
    this->prog_data = &c->prog_data;
 
    this->variable_ht = hash_table_ctor(0,

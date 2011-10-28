@@ -145,10 +145,10 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_SCALED_RESOLVE:
         case PIPE_CAP_MIN_TEXEL_OFFSET:
         case PIPE_CAP_MAX_TEXEL_OFFSET:
+        case PIPE_CAP_STREAM_OUTPUT:
             return 0;
 
         /* SWTCL-only features. */
-        case PIPE_CAP_STREAM_OUTPUT:
         case PIPE_CAP_PRIMITIVE_RESTART:
             return !r300screen->caps.has_tcl;
 
@@ -225,6 +225,13 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
         }
         break;
     case PIPE_SHADER_VERTEX:
+        switch (param)
+        {
+        case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+            return 0;
+        default:;
+        }
+
         if (!r300screen->caps.has_tcl) {
             return draw_get_shader_param(shader, param);
         }
@@ -259,11 +266,9 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
         case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
         case PIPE_SHADER_CAP_SUBROUTINES:
         case PIPE_SHADER_CAP_INTEGERS:
-        case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
             return 0;
+        default:;
         }
-        break;
-    default:
         break;
     }
     return 0;
@@ -356,6 +361,10 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
                             format == PIPE_FORMAT_R16G16_FLOAT ||
                             format == PIPE_FORMAT_R16G16B16_FLOAT ||
                             format == PIPE_FORMAT_R16G16B16A16_FLOAT;
+    boolean is_fixed = format == PIPE_FORMAT_R32_FIXED ||
+                       format == PIPE_FORMAT_R32G32_FIXED ||
+                       format == PIPE_FORMAT_R32G32B32_FIXED ||
+                       format == PIPE_FORMAT_R32G32B32A32_FIXED;
 
     if (!util_format_is_supported(format, usage))
        return FALSE;
@@ -417,9 +426,10 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
 
     /* Check vertex buffer format support. */
     if (usage & PIPE_BIND_VERTEX_BUFFER &&
-        /* Half float is supported on >= RV350. */
+        /* Half float is supported on >= R400. */
         (is_r400 || is_r500 || !is_half_float) &&
-        r300_translate_vertex_data_type(format) != R300_INVALID_FORMAT) {
+        /* We have a fallback for FIXED. */
+        (is_fixed || r300_translate_vertex_data_type(format) != R300_INVALID_FORMAT)) {
         retval |= PIPE_BIND_VERTEX_BUFFER;
     }
 

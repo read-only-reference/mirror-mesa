@@ -55,7 +55,8 @@ static inline void assign_vue_slot(struct brw_vue_map *vue_map,
  */
 void
 brw_compute_vue_map(struct brw_vue_map *vue_map,
-                    const struct intel_context *intel, int nr_userclip,
+                    const struct intel_context *intel,
+                    bool userclip_active,
                     GLbitfield64 outputs_written)
 {
    int i;
@@ -112,7 +113,7 @@ brw_compute_vue_map(struct brw_vue_map *vue_map,
        */
       assign_vue_slot(vue_map, VERT_RESULT_PSIZ);
       assign_vue_slot(vue_map, VERT_RESULT_HPOS);
-      if (nr_userclip) {
+      if (userclip_active) {
          assign_vue_slot(vue_map, VERT_RESULT_CLIP_DIST0);
          assign_vue_slot(vue_map, VERT_RESULT_CLIP_DIST1);
       }
@@ -137,14 +138,46 @@ brw_compute_vue_map(struct brw_vue_map *vue_map,
    /* The hardware doesn't care about the rest of the vertex outputs, so just
     * assign them contiguously.  Don't reassign outputs that already have a
     * slot.
+    *
+    * Also, don't assign a slot for VERT_RESULT_CLIP_VERTEX, since it is
+    * unsupported in pre-GEN6, and in GEN6+ the vertex shader converts it into
+    * clip distances.
     */
    for (int i = 0; i < VERT_RESULT_MAX; ++i) {
       if ((outputs_written & BITFIELD64_BIT(i)) &&
-          vue_map->vert_result_to_slot[i] == -1) {
+          vue_map->vert_result_to_slot[i] == -1 &&
+          i != VERT_RESULT_CLIP_VERTEX) {
          assign_vue_slot(vue_map, i);
       }
    }
 }
+
+
+/**
+ * Decide which set of clip planes should be used when clipping via
+ * gl_Position or gl_ClipVertex.
+ */
+gl_clip_plane *brw_select_clip_planes(struct gl_context *ctx)
+{
+   if (ctx->Shader.CurrentVertexProgram) {
+      /* There is currently a GLSL vertex shader, so clip according to GLSL
+       * rules, which means compare gl_ClipVertex (or gl_Position, if
+       * gl_ClipVertex wasn't assigned) against the eye-coordinate clip planes
+       * that were stored in EyeUserPlane at the time the clip planes were
+       * specified.
+       */
+      return ctx->Transform.EyeUserPlane;
+   } else {
+      /* Either we are using fixed function or an ARB vertex program.  In
+       * either case the clip planes are going to be compared against
+       * gl_Position (which is in clip coordinates) so we have to clip using
+       * _ClipUserPlane, which was transformed into clip coordinates by Mesa
+       * core.
+       */
+      return ctx->Transform._ClipUserPlane;
+   }
+}
+
 
 static bool
 do_vs_prog(struct brw_context *brw,
@@ -190,7 +223,7 @@ do_vs_prog(struct brw_context *brw,
 
    if (0) {
       _mesa_fprint_program_opt(stdout, &c.vp->program.Base, PROG_PRINT_DEBUG,
-			       GL_TRUE);
+			       true);
    }
 
    /* Emit GEN4 code.
@@ -209,7 +242,7 @@ do_vs_prog(struct brw_context *brw,
       c.prog_data.total_scratch = brw_get_scratch_size(c.last_scratch);
 
       brw_get_scratch_bo(intel, &brw->vs.scratch_bo,
-			 c.prog_data.total_scratch * brw->vs_max_threads);
+			 c.prog_data.total_scratch * brw->max_vs_threads);
    }
 
    /* get the program
@@ -243,7 +276,8 @@ do_vs_prog(struct brw_context *brw,
 
 static void brw_upload_vs_prog(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->intel.ctx;
+   struct intel_context *intel = &brw->intel;
+   struct gl_context *ctx = &intel->ctx;
    struct brw_vs_prog_key key;
    struct brw_vertex_program *vp = 
       (struct brw_vertex_program *)brw->vertex_program;
@@ -255,8 +289,19 @@ static void brw_upload_vs_prog(struct brw_context *brw)
     * the inputs it asks for, whether they are varying or not.
     */
    key.program_string_id = vp->id;
-   key.nr_userclip = brw_count_bits(ctx->Transform.ClipPlanesEnabled);
+   key.userclip_active = (ctx->Transform.ClipPlanesEnabled != 0);
    key.uses_clip_distance = vp->program.UsesClipDistance;
+   if (key.userclip_active && !key.uses_clip_distance) {
+      if (intel->gen < 6) {
+         key.nr_userclip_plane_consts
+            = _mesa_bitcount_64(ctx->Transform.ClipPlanesEnabled);
+         key.userclip_planes_enabled_gen_4_5
+            = ctx->Transform.ClipPlanesEnabled;
+      } else {
+         key.nr_userclip_plane_consts
+            = _mesa_logbase2(ctx->Transform.ClipPlanesEnabled) + 1;
+      }
+   }
    key.copy_edgeflag = (ctx->Polygon.FrontMode != GL_FILL ||
 			ctx->Polygon.BackMode != GL_FILL);
 
@@ -301,7 +346,7 @@ const struct brw_tracked_state brw_vs_prog = {
 		BRW_NEW_VERTICES),
       .cache = 0
    },
-   .prepare = brw_upload_vs_prog
+   .emit = brw_upload_vs_prog
 };
 
 bool
@@ -309,14 +354,16 @@ brw_vs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
 {
    struct brw_context *brw = brw_context(ctx);
    struct brw_vs_prog_key key;
-   struct gl_vertex_program *vp = prog->VertexProgram;
-   struct brw_vertex_program *bvp = brw_vertex_program(vp);
    uint32_t old_prog_offset = brw->vs.prog_offset;
    struct brw_vs_prog_data *old_prog_data = brw->vs.prog_data;
    bool success;
 
-   if (!vp)
+   if (!prog->_LinkedShaders[MESA_SHADER_VERTEX])
       return true;
+
+   struct gl_vertex_program *vp = (struct gl_vertex_program *)
+      prog->_LinkedShaders[MESA_SHADER_VERTEX]->Program;
+   struct brw_vertex_program *bvp = brw_vertex_program(vp);
 
    memset(&key, 0, sizeof(key));
 

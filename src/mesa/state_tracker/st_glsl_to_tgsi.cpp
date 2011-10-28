@@ -42,12 +42,13 @@
 #include "ir_optimization.h"
 #include "ast.h"
 
-extern "C" {
 #include "main/mtypes.h"
-#include "main/shaderapi.h"
 #include "main/shaderobj.h"
-#include "main/uniforms.h"
 #include "program/hash_table.h"
+
+extern "C" {
+#include "main/shaderapi.h"
+#include "main/uniforms.h"
 #include "program/prog_instruction.h"
 #include "program/prog_optimize.h"
 #include "program/prog_print.h"
@@ -1933,14 +1934,6 @@ glsl_to_tgsi_visitor::visit(ir_dereference_variable *ir)
          entry = new(mem_ctx) variable_storage(var,
                                                PROGRAM_INPUT,
                                                var->location);
-         if (this->prog->Target == GL_VERTEX_PROGRAM_ARB &&
-             var->location >= VERT_ATTRIB_GENERIC0) {
-            _mesa_add_attribute(this->prog->Attributes,
-                                var->name,
-                                _mesa_sizeof_glsl_type(var->type->gl_type),
-                                var->type->gl_type,
-                                var->location - VERT_ATTRIB_GENERIC0);
-         }
          break;
       case ir_var_out:
          assert(var->location != -1);
@@ -2921,122 +2914,6 @@ check_resources(const struct gl_context *ctx,
 }
 
 
-
-struct uniform_sort {
-   struct gl_uniform *u;
-   int pos;
-};
-
-/* The shader_program->Uniforms list is almost sorted in increasing
- * uniform->{Frag,Vert}Pos locations, but not quite when there are
- * uniforms shared between targets.  We need to add parameters in
- * increasing order for the targets.
- */
-static int
-sort_uniforms(const void *a, const void *b)
-{
-   struct uniform_sort *u1 = (struct uniform_sort *)a;
-   struct uniform_sort *u2 = (struct uniform_sort *)b;
-
-   return u1->pos - u2->pos;
-}
-
-/* Add the uniforms to the parameters.  The linker chose locations
- * in our parameters lists (which weren't created yet), which the
- * uniforms code will use to poke values into our parameters list
- * when uniforms are updated.
- */
-static void
-add_uniforms_to_parameters_list(struct gl_shader_program *shader_program,
-        			struct gl_shader *shader,
-        			struct gl_program *prog)
-{
-   unsigned int i;
-   unsigned int next_sampler = 0, num_uniforms = 0;
-   struct uniform_sort *sorted_uniforms;
-
-   sorted_uniforms = ralloc_array(NULL, struct uniform_sort,
-        			  shader_program->Uniforms->NumUniforms);
-
-   for (i = 0; i < shader_program->Uniforms->NumUniforms; i++) {
-      struct gl_uniform *uniform = shader_program->Uniforms->Uniforms + i;
-      int parameter_index = -1;
-
-      switch (shader->Type) {
-      case GL_VERTEX_SHADER:
-         parameter_index = uniform->VertPos;
-         break;
-      case GL_FRAGMENT_SHADER:
-         parameter_index = uniform->FragPos;
-         break;
-      case GL_GEOMETRY_SHADER:
-         parameter_index = uniform->GeomPos;
-         break;
-      }
-
-      /* Only add uniforms used in our target. */
-      if (parameter_index != -1) {
-         sorted_uniforms[num_uniforms].pos = parameter_index;
-         sorted_uniforms[num_uniforms].u = uniform;
-         num_uniforms++;
-      }
-   }
-
-   qsort(sorted_uniforms, num_uniforms, sizeof(struct uniform_sort),
-         sort_uniforms);
-
-   for (i = 0; i < num_uniforms; i++) {
-      struct gl_uniform *uniform = sorted_uniforms[i].u;
-      int parameter_index = sorted_uniforms[i].pos;
-      const glsl_type *type = uniform->Type;
-      unsigned int size;
-
-      if (type->is_vector() ||
-          type->is_scalar()) {
-         size = type->vector_elements;
-      } else {
-         size = type_size(type) * 4;
-      }
-
-      gl_register_file file;
-      if (type->is_sampler() ||
-          (type->is_array() && type->fields.array->is_sampler())) {
-         file = PROGRAM_SAMPLER;
-      } else {
-         file = PROGRAM_UNIFORM;
-      }
-
-      GLint index = _mesa_lookup_parameter_index(prog->Parameters, -1,
-        					 uniform->Name);
-
-      if (index < 0) {
-         index = _mesa_add_parameter(prog->Parameters, file,
-        			     uniform->Name, size, type->gl_type,
-        			     NULL, NULL, 0x0);
-
-         /* Sampler uniform values are stored in prog->SamplerUnits,
-          * and the entry in that array is selected by this index we
-          * store in ParameterValues[].
-          */
-         if (file == PROGRAM_SAMPLER) {
-            for (unsigned int j = 0; j < size / 4; j++)
-               prog->Parameters->ParameterValues[index + j][0].f = next_sampler++;
-         }
-
-         /* The location chosen in the Parameters list here (returned
-          * from _mesa_add_uniform) has to match what the linker chose.
-          */
-         if (index != parameter_index) {
-            fail_link(shader_program, "Allocation of uniform `%s' to target "
-        	      "failed (%d vs %d)\n",
-        	      uniform->Name, index, parameter_index);
-         }
-      }
-   }
-
-   ralloc_free(sorted_uniforms);
-}
-
 static void
 set_uniform_initializer(struct gl_context *ctx, void *mem_ctx,
         		struct gl_shader_program *shader_program,
@@ -3780,7 +3657,7 @@ glsl_to_tgsi_visitor::eliminate_dead_code_advanced(void)
       
       if (!inst->dead_mask || !inst->dst.writemask)
          continue;
-      else if (inst->dead_mask == inst->dst.writemask) {
+      else if ((inst->dst.writemask & ~inst->dead_mask) == 0) {
          iter.remove();
          delete inst;
          removed++;
@@ -3986,7 +3863,6 @@ get_pixel_transfer_visitor(struct st_fragment_program *fp,
    /* Make modifications to fragment program info. */
    prog->Parameters = _mesa_combine_parameter_lists(params,
                                                     original->prog->Parameters);
-   prog->Attributes = _mesa_clone_parameter_list(original->prog->Attributes);
    _mesa_free_parameter_list(params);
    count_resources(v, prog);
    fp->glsl_to_tgsi = v;
@@ -4061,7 +3937,6 @@ get_bitmap_visitor(struct st_fragment_program *fp,
 
    /* Make modifications to fragment program info. */
    prog->Parameters = _mesa_clone_parameter_list(original->prog->Parameters);
-   prog->Attributes = _mesa_clone_parameter_list(original->prog->Attributes);
    count_resources(v, prog);
    fp->glsl_to_tgsi = v;
 }
@@ -4447,37 +4322,15 @@ compile_tgsi_instruction(struct st_translate *t,
 }
 
 /**
- * Emit the TGSI instructions to adjust the WPOS pixel center convention
- * Basically, add (adjX, adjY) to the fragment position.
- */
-static void
-emit_adjusted_wpos(struct st_translate *t,
-                   const struct gl_program *program,
-                   float adjX, float adjY)
-{
-   struct ureg_program *ureg = t->ureg;
-   struct ureg_dst wpos_temp = ureg_DECL_temporary(ureg);
-   struct ureg_src wpos_input = t->inputs[t->inputMapping[FRAG_ATTRIB_WPOS]];
-
-   /* Note that we bias X and Y and pass Z and W through unchanged.
-    * The shader might also use gl_FragCoord.w and .z.
-    */
-   ureg_ADD(ureg, wpos_temp, wpos_input,
-            ureg_imm4f(ureg, adjX, adjY, 0.0f, 0.0f));
-
-   t->inputs[t->inputMapping[FRAG_ATTRIB_WPOS]] = ureg_src(wpos_temp);
-}
-
-
-/**
- * Emit the TGSI instructions for inverting the WPOS y coordinate.
+ * Emit the TGSI instructions for inverting and adjusting WPOS.
  * This code is unavoidable because it also depends on whether
  * a FBO is bound (STATE_FB_WPOS_Y_TRANSFORM).
  */
 static void
-emit_wpos_inversion(struct st_translate *t,
-                    const struct gl_program *program,
-                    bool invert)
+emit_wpos_adjustment( struct st_translate *t,
+                      const struct gl_program *program,
+                      boolean invert,
+                      GLfloat adjX, GLfloat adjY[2])
 {
    struct ureg_program *ureg = t->ureg;
 
@@ -4496,35 +4349,55 @@ emit_wpos_inversion(struct st_translate *t,
    unsigned wposTransConst = _mesa_add_state_reference(program->Parameters,
                                                        wposTransformState);
 
-   struct ureg_src wpostrans = ureg_DECL_constant(ureg, wposTransConst);
-   struct ureg_dst wpos_temp;
+   struct ureg_src wpostrans = ureg_DECL_constant( ureg, wposTransConst );
+   struct ureg_dst wpos_temp = ureg_DECL_temporary( ureg );
    struct ureg_src wpos_input = t->inputs[t->inputMapping[FRAG_ATTRIB_WPOS]];
 
-   /* MOV wpos_temp, input[wpos]
-    */
-   if (wpos_input.File == TGSI_FILE_TEMPORARY)
-      wpos_temp = ureg_dst(wpos_input);
-   else {
-      wpos_temp = ureg_DECL_temporary(ureg);
-      ureg_MOV(ureg, wpos_temp, wpos_input);
+   /* First, apply the coordinate shift: */
+   if (adjX || adjY[0] || adjY[1]) {
+      if (adjY[0] != adjY[1]) {
+         /* Adjust the y coordinate by adjY[1] or adjY[0] respectively
+          * depending on whether inversion is actually going to be applied
+          * or not, which is determined by testing against the inversion
+          * state variable used below, which will be either +1 or -1.
+          */
+         struct ureg_dst adj_temp = ureg_DECL_temporary(ureg);
+
+         ureg_CMP(ureg, adj_temp,
+                  ureg_scalar(wpostrans, invert ? 2 : 0),
+                  ureg_imm4f(ureg, adjX, adjY[0], 0.0f, 0.0f),
+                  ureg_imm4f(ureg, adjX, adjY[1], 0.0f, 0.0f));
+         ureg_ADD(ureg, wpos_temp, wpos_input, ureg_src(adj_temp));
+      } else {
+         ureg_ADD(ureg, wpos_temp, wpos_input,
+                  ureg_imm4f(ureg, adjX, adjY[0], 0.0f, 0.0f));
+      }
+      wpos_input = ureg_src(wpos_temp);
+   } else {
+      /* MOV wpos_temp, input[wpos]
+       */
+      ureg_MOV( ureg, wpos_temp, wpos_input );
    }
 
+   /* Now the conditional y flip: STATE_FB_WPOS_Y_TRANSFORM.xy/zw will be
+    * inversion/identity, or the other way around if we're drawing to an FBO.
+    */
    if (invert) {
       /* MAD wpos_temp.y, wpos_input, wpostrans.xxxx, wpostrans.yyyy
        */
-      ureg_MAD(ureg,
-               ureg_writemask(wpos_temp, TGSI_WRITEMASK_Y),
-               wpos_input,
-               ureg_scalar(wpostrans, 0),
-               ureg_scalar(wpostrans, 1));
+      ureg_MAD( ureg,
+                ureg_writemask(wpos_temp, TGSI_WRITEMASK_Y ),
+                wpos_input,
+                ureg_scalar(wpostrans, 0),
+                ureg_scalar(wpostrans, 1));
    } else {
       /* MAD wpos_temp.y, wpos_input, wpostrans.zzzz, wpostrans.wwww
        */
-      ureg_MAD(ureg,
-               ureg_writemask(wpos_temp, TGSI_WRITEMASK_Y),
-               wpos_input,
-               ureg_scalar(wpostrans, 2),
-               ureg_scalar(wpostrans, 3));
+      ureg_MAD( ureg,
+                ureg_writemask(wpos_temp, TGSI_WRITEMASK_Y ),
+                wpos_input,
+                ureg_scalar(wpostrans, 2),
+                ureg_scalar(wpostrans, 3));
    }
 
    /* Use wpos_temp as position input from here on:
@@ -4545,8 +4418,37 @@ emit_wpos(struct st_context *st,
    const struct gl_fragment_program *fp =
       (const struct gl_fragment_program *) program;
    struct pipe_screen *pscreen = st->pipe->screen;
+   GLfloat adjX = 0.0f;
+   GLfloat adjY[2] = { 0.0f, 0.0f };
    boolean invert = FALSE;
 
+   /* Query the pixel center conventions supported by the pipe driver and set
+    * adjX, adjY to help out if it cannot handle the requested one internally.
+    *
+    * The bias of the y-coordinate depends on whether y-inversion takes place
+    * (adjY[1]) or not (adjY[0]), which is in turn dependent on whether we are
+    * drawing to an FBO (causes additional inversion), and whether the the pipe
+    * driver origin and the requested origin differ (the latter condition is
+    * stored in the 'invert' variable).
+    *
+    * For height = 100 (i = integer, h = half-integer, l = lower, u = upper):
+    *
+    * center shift only:
+    * i -> h: +0.5
+    * h -> i: -0.5
+    *
+    * inversion only:
+    * l,i -> u,i: ( 0.0 + 1.0) * -1 + 100 = 99
+    * l,h -> u,h: ( 0.5 + 0.0) * -1 + 100 = 99.5
+    * u,i -> l,i: (99.0 + 1.0) * -1 + 100 = 0
+    * u,h -> l,h: (99.5 + 0.0) * -1 + 100 = 0.5
+    *
+    * inversion and center shift:
+    * l,i -> u,h: ( 0.0 + 0.5) * -1 + 100 = 99.5
+    * l,h -> u,i: ( 0.5 + 0.5) * -1 + 100 = 99
+    * u,i -> l,h: (99.0 + 0.5) * -1 + 100 = 0.5
+    * u,h -> l,i: (99.5 + 0.5) * -1 + 100 = 0
+    */
    if (fp->OriginUpperLeft) {
       /* Fragment shader wants origin in upper-left */
       if (pscreen->get_param(pscreen, PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT)) {
@@ -4574,12 +4476,17 @@ emit_wpos(struct st_context *st,
    
    if (fp->PixelCenterInteger) {
       /* Fragment shader wants pixel center integer */
-      if (pscreen->get_param(pscreen, PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER))
+      if (pscreen->get_param(pscreen, PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER)) {
          /* the driver supports pixel center integer */
+         adjY[1] = 1.0f;
          ureg_property_fs_coord_pixel_center(ureg, TGSI_FS_COORD_PIXEL_CENTER_INTEGER);
-      else if (pscreen->get_param(pscreen, PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER))
+      }
+      else if (pscreen->get_param(pscreen, PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER)) {
          /* the driver supports pixel center half integer, need to bias X,Y */
-         emit_adjusted_wpos(t, program, 0.5f, invert ? 0.5f : -0.5f);
+         adjX = -0.5f;
+         adjY[0] = -0.5f;
+         adjY[1] = 0.5f;
+      }
       else
          assert(0);
    }
@@ -4590,8 +4497,8 @@ emit_wpos(struct st_context *st,
       }
       else if (pscreen->get_param(pscreen, PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER)) {
          /* the driver supports pixel center integer, need to bias X,Y */
+         adjX = adjY[0] = adjY[1] = 0.5f;
          ureg_property_fs_coord_pixel_center(ureg, TGSI_FS_COORD_PIXEL_CENTER_INTEGER);
-         emit_adjusted_wpos(t, program, 0.5f, invert ? -0.5f : 0.5f);
       }
       else
          assert(0);
@@ -4599,7 +4506,7 @@ emit_wpos(struct st_context *st,
 
    /* we invert after adjustment so that we avoid the MOV to temporary,
     * and reuse the adjustment ADD instead */
-   emit_wpos_inversion(t, program, invert);
+   emit_wpos_adjustment(t, program, invert, adjX, adjY);
 }
 
 /**
@@ -4967,7 +4874,6 @@ get_mesa_program(struct gl_context *ctx,
    if (!prog)
       return NULL;
    prog->Parameters = _mesa_new_parameter_list();
-   prog->Attributes = _mesa_new_parameter_list();
    v->ctx = ctx;
    v->prog = prog;
    v->shader_program = shader_program;
@@ -4975,7 +4881,8 @@ get_mesa_program(struct gl_context *ctx,
    v->glsl_version = ctx->Const.GLSLVersion;
    v->native_integers = ctx->Const.NativeIntegers;
 
-   add_uniforms_to_parameters_list(shader_program, shader, prog);
+   _mesa_generate_parameters_list_for_uniforms(shader_program, shader,
+					       prog->Parameters);
 
    /* Emit intermediate IR for main(). */
    visit_exec_list(shader->ir, v);
@@ -5059,7 +4966,7 @@ get_mesa_program(struct gl_context *ctx,
    prog->Instructions = NULL;
    prog->NumInstructions = 0;
 
-   do_set_program_inouts(shader->ir, prog);
+   do_set_program_inouts(shader->ir, prog, shader->Type == GL_FRAGMENT_SHADER);
    count_resources(v, prog);
 
    check_resources(ctx, shader_program, v, prog);
@@ -5151,7 +5058,9 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 
          progress = do_lower_jumps(ir, true, true, options->EmitNoMainReturn, options->EmitNoCont, options->EmitNoLoops) || progress;
 
-         progress = do_common_optimization(ir, true, options->MaxUnrollIterations) || progress;
+         progress = do_common_optimization(ir, true, true,
+					   options->MaxUnrollIterations)
+	   || progress;
 
          progress = lower_quadop_vector(ir, false) || progress;
 
@@ -5191,39 +5100,17 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       linked_prog = get_mesa_program(ctx, prog, prog->_LinkedShaders[i]);
 
       if (linked_prog) {
-         bool ok = true;
+	 static const GLenum targets[] = {
+	    GL_VERTEX_PROGRAM_ARB,
+	    GL_FRAGMENT_PROGRAM_ARB,
+	    GL_GEOMETRY_PROGRAM_NV
+	 };
 
-         switch (prog->_LinkedShaders[i]->Type) {
-         case GL_VERTEX_SHADER:
-            _mesa_reference_vertprog(ctx, &prog->VertexProgram,
-                                     (struct gl_vertex_program *)linked_prog);
-            ok = ctx->Driver.ProgramStringNotify(ctx, GL_VERTEX_PROGRAM_ARB,
-                                                 linked_prog);
-            if (!ok) {
-               _mesa_reference_vertprog(ctx, &prog->VertexProgram, NULL);
-            }
-            break;
-         case GL_FRAGMENT_SHADER:
-            _mesa_reference_fragprog(ctx, &prog->FragmentProgram,
-                                     (struct gl_fragment_program *)linked_prog);
-            ok = ctx->Driver.ProgramStringNotify(ctx, GL_FRAGMENT_PROGRAM_ARB,
-                                                 linked_prog);
-            if (!ok) {
-               _mesa_reference_fragprog(ctx, &prog->FragmentProgram, NULL);
-            }
-            break;
-         case GL_GEOMETRY_SHADER:
-            _mesa_reference_geomprog(ctx, &prog->GeometryProgram,
-                                     (struct gl_geometry_program *)linked_prog);
-            ok = ctx->Driver.ProgramStringNotify(ctx, GL_GEOMETRY_PROGRAM_NV,
-                                                 linked_prog);
-            if (!ok) {
-               _mesa_reference_geomprog(ctx, &prog->GeometryProgram, NULL);
-            }
-            break;
-         }
-         if (!ok) {
-            _mesa_reference_program(ctx, &prog->_LinkedShaders[i]->Program, NULL);
+	 _mesa_reference_program(ctx, &prog->_LinkedShaders[i]->Program,
+				 linked_prog);
+         if (!ctx->Driver.ProgramStringNotify(ctx, targets[i], linked_prog)) {
+	    _mesa_reference_program(ctx, &prog->_LinkedShaders[i]->Program,
+				    NULL);
             _mesa_reference_program(ctx, &linked_prog, NULL);
             return GL_FALSE;
          }

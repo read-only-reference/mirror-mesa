@@ -681,6 +681,20 @@ static void omod_filter_reader_cb(
 	}
 }
 
+static void omod_filter_writer_cb(
+	void * userdata,
+	struct rc_instruction * inst,
+	rc_register_file file,
+	unsigned int index,
+	unsigned int mask)
+{
+	struct peephole_mul_cb_data * d = userdata;
+	if (file == d->Writer->File && index == d->Writer->Index &&
+					(mask & d->Writer->WriteMask)) {
+		d->Clobbered = 1;
+	}
+}
+
 static int peephole_mul_omod(
 	struct radeon_compiler * c,
 	struct rc_instruction * inst_mul,
@@ -788,6 +802,8 @@ static int peephole_mul_omod(
 							inst = inst->Prev) {
 			rc_for_all_reads_mask(inst, omod_filter_reader_cb,
 								&cb_data);
+			rc_for_all_writes_mask(inst, omod_filter_writer_cb,
+								&cb_data);
 			if (cb_data.Clobbered) {
 				break;
 			}
@@ -801,8 +817,13 @@ static int peephole_mul_omod(
 	/* Rewrite the instructions */
 	for (var = writer_list->Item; var; var = var->Friend) {
 		struct rc_variable * writer = writer_list->Item;
+		unsigned conversion_swizzle = rc_make_conversion_swizzle(
+					writer->Inst->U.I.DstReg.WriteMask,
+					inst_mul->U.I.DstReg.WriteMask);
 		writer->Inst->U.I.Omod = omod_op;
-		writer->Inst->U.I.DstReg = inst_mul->U.I.DstReg;
+		writer->Inst->U.I.DstReg.File = inst_mul->U.I.DstReg.File;
+		writer->Inst->U.I.DstReg.Index = inst_mul->U.I.DstReg.Index;
+		rc_normal_rewrite_writemask(writer->Inst, conversion_swizzle);
 		writer->Inst->U.I.SaturateMode = inst_mul->U.I.SaturateMode;
 	}
 

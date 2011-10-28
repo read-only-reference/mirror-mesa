@@ -155,7 +155,7 @@ static uint32_t r300_depth_clear_value(enum pipe_format format,
         case PIPE_FORMAT_X8Z24_UNORM:
             return util_pack_z(format, depth);
 
-        case PIPE_FORMAT_S8_USCALED_Z24_UNORM:
+        case PIPE_FORMAT_S8_UINT_Z24_UNORM:
             return util_pack_z_stencil(format, depth, stencil);
 
         default:
@@ -292,13 +292,14 @@ static void r300_clear(struct pipe_context* pipe,
 
     /* Clear. */
     if (buffers) {
+        enum pipe_format cformat = fb->nr_cbufs ? fb->cbufs[0]->format : PIPE_FORMAT_NONE;
         /* Clear using the blitter. */
         r300_blitter_begin(r300, R300_CLEAR);
         util_blitter_clear(r300->blitter,
                            width,
                            height,
                            fb->nr_cbufs,
-                           buffers, color, depth, stencil);
+                           buffers, cformat, color, depth, stencil);
         r300_blitter_end(r300);
     } else if (r300->zmask_clear.dirty || r300->hiz_clear.dirty) {
         /* Just clear zmask and hiz now, this does not use the standard draw
@@ -545,17 +546,17 @@ static void r300_resource_copy_region(struct pipe_context *pipe,
     }
 
     if (old_src.format != new_src.format)
-        r300_resource_set_properties(pipe->screen, src, 0, &new_src);
+        r300_resource_set_properties(pipe->screen, src, &new_src);
     if (old_dst.format != new_dst.format)
-        r300_resource_set_properties(pipe->screen, dst, 0, &new_dst);
+        r300_resource_set_properties(pipe->screen, dst, &new_dst);
 
     r300_hw_copy_region(pipe, dst, dst_level, dstx, dsty, dstz,
                         src, src_level, src_box);
 
     if (old_src.format != new_src.format)
-        r300_resource_set_properties(pipe->screen, src, 0, &old_src);
+        r300_resource_set_properties(pipe->screen, src, &old_src);
     if (old_dst.format != new_dst.format)
-        r300_resource_set_properties(pipe->screen, dst, 0, &old_dst);
+        r300_resource_set_properties(pipe->screen, dst, &old_dst);
 }
 
 void r300_init_blit_functions(struct r300_context *r300)

@@ -116,7 +116,7 @@ struct brw_compile {
    struct brw_instruction *current;
 
    GLuint flag_value;
-   GLboolean single_program_flow;
+   bool single_program_flow;
    bool compressed;
    struct brw_context *brw;
 
@@ -698,6 +698,7 @@ static INLINE struct brw_reg negate( struct brw_reg reg )
 static INLINE struct brw_reg brw_abs( struct brw_reg reg )
 {
    reg.abs = 1;
+   reg.negate = 0;
    return reg;
 }
 
@@ -774,7 +775,7 @@ static INLINE struct brw_indirect brw_indirect( GLuint addr_subnr, GLint offset 
 }
 
 /** Do two brw_regs refer to the same register? */
-static INLINE GLboolean
+static INLINE bool
 brw_same_reg(struct brw_reg r1, struct brw_reg r2)
 {
    return r1.file == r2.file && r1.nr == r2.nr;
@@ -790,7 +791,7 @@ void brw_push_insn_state( struct brw_compile *p );
 void brw_set_mask_control( struct brw_compile *p, GLuint value );
 void brw_set_saturate( struct brw_compile *p, GLuint value );
 void brw_set_access_mode( struct brw_compile *p, GLuint access_mode );
-void brw_set_compression_control( struct brw_compile *p, GLboolean control );
+void brw_set_compression_control(struct brw_compile *p, enum brw_compression c);
 void brw_set_predicate_control_flag_value( struct brw_compile *p, GLuint value );
 void brw_set_predicate_control( struct brw_compile *p, GLuint pc );
 void brw_set_predicate_inverse(struct brw_compile *p, bool predicate_inverse);
@@ -879,8 +880,8 @@ void brw_set_dp_write_message(struct brw_compile *p,
 			      GLuint msg_control,
 			      GLuint msg_type,
 			      GLuint msg_length,
-			      GLboolean header_present,
-			      GLuint pixel_scoreboard_clear,
+			      bool header_present,
+			      GLuint last_render_target,
 			      GLuint response_length,
 			      GLuint end_of_thread,
 			      GLuint send_commit_msg);
@@ -889,12 +890,12 @@ void brw_urb_WRITE(struct brw_compile *p,
 		   struct brw_reg dest,
 		   GLuint msg_reg_nr,
 		   struct brw_reg src0,
-		   GLboolean allocate,
-		   GLboolean used,
+		   bool allocate,
+		   bool used,
 		   GLuint msg_length,
 		   GLuint response_length,
-		   GLboolean eot,
-		   GLboolean writes_complete,
+		   bool eot,
+		   bool writes_complete,
 		   GLuint offset,
 		   GLuint swizzle);
 
@@ -902,9 +903,9 @@ void brw_ff_sync(struct brw_compile *p,
 		   struct brw_reg dest,
 		   GLuint msg_reg_nr,
 		   struct brw_reg src0,
-		   GLboolean allocate,
+		   bool allocate,
 		   GLuint response_length,
-		   GLboolean eot);
+		   bool eot);
 
 void brw_fb_WRITE(struct brw_compile *p,
 		  int dispatch_width,
@@ -913,8 +914,8 @@ void brw_fb_WRITE(struct brw_compile *p,
 		   GLuint binding_table_index,
 		   GLuint msg_length,
 		   GLuint response_length,
-		   GLboolean eot,
-		   GLboolean header_present);
+		   bool eot,
+		   bool header_present);
 
 void brw_SAMPLE(struct brw_compile *p,
 		struct brw_reg dest,
@@ -926,7 +927,6 @@ void brw_SAMPLE(struct brw_compile *p,
 		GLuint msg_type,
 		GLuint response_length,
 		GLuint msg_length,
-		GLboolean eot,
 		GLuint header_present,
 		GLuint simd_mode);
 

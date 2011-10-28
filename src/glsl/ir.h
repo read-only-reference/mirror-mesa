@@ -34,6 +34,7 @@
 #include "list.h"
 #include "ir_visitor.h"
 #include "ir_hierarchical_visitor.h"
+#include "main/mtypes.h"
 
 /**
  * \defgroup IR Intermediate representation nodes
@@ -227,12 +228,6 @@ enum ir_variable_mode {
    ir_var_temporary	/**< Temporary variable generated during compilation. */
 };
 
-enum ir_variable_interpolation {
-   ir_var_smooth = 0,
-   ir_var_flat,
-   ir_var_noperspective
-};
-
 /**
  * \brief Layout qualifiers for gl_FragDepth.
  *
@@ -288,17 +283,24 @@ public:
     * \return The string that would be used in a shader to specify \c
     * mode will be returned.
     *
+    * This function is used to generate error messages of the form "shader
+    * uses %s interpolation qualifier", so in the case where there is no
+    * interpolation qualifier, it returns "no".
+    *
     * This function should only be used on a shader input or output variable.
     */
    const char *interpolation_string() const;
 
    /**
-    * Calculate the number of slots required to hold this variable
+    * Determine how this variable should be interpolated based on its
+    * interpolation qualifier (if present), whether it is gl_Color or
+    * gl_SecondaryColor, and whether flatshading is enabled in the current GL
+    * state.
     *
-    * This is used to determine how many uniform or varying locations a variable
-    * occupies.  The count is in units of floating point components.
+    * The return value will always be either INTERP_QUALIFIER_SMOOTH,
+    * INTERP_QUALIFIER_NOPERSPECTIVE, or INTERP_QUALIFIER_FLAT.
     */
-   unsigned component_slots() const;
+   glsl_interp_qualifier determine_interpolation_mode(bool flat_shade);
 
    /**
     * Delcared name of the variable
@@ -1687,7 +1689,8 @@ extern bool
 ir_has_call(ir_instruction *ir);
 
 extern void
-do_set_program_inouts(exec_list *instructions, struct gl_program *prog);
+do_set_program_inouts(exec_list *instructions, struct gl_program *prog,
+                      bool is_fragment_shader);
 
 extern char *
 prototype_string(const glsl_type *return_type, const char *name,

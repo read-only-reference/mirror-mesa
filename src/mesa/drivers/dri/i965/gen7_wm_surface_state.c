@@ -22,7 +22,6 @@
  */
 #include "main/mtypes.h"
 #include "main/samplerobj.h"
-#include "main/texstore.h"
 #include "program/prog_parameter.h"
 
 #include "intel_mipmap_tree.h"
@@ -64,6 +63,9 @@ gen7_update_texture_surface(struct gl_context *ctx, GLuint unit)
    struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit);
    const GLuint surf_index = SURF_INDEX_TEXTURE(unit);
    struct gen7_surface_state *surf;
+   int width, height, depth;
+
+   intel_miptree_get_dimensions_for_image(firstImage, &width, &height, &depth);
 
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
 			  sizeof(*surf), 32, &brw->wm.surf_offset[surf_index]);
@@ -97,11 +99,11 @@ gen7_update_texture_surface(struct gl_context *ctx, GLuint unit)
 
    surf->ss1.base_addr = intelObj->mt->region->bo->offset; /* reloc */
 
-   surf->ss2.width = firstImage->Width - 1;
-   surf->ss2.height = firstImage->Height - 1;
+   surf->ss2.width = width - 1;
+   surf->ss2.height = height - 1;
 
    surf->ss3.pitch = (intelObj->mt->region->pitch * intelObj->mt->cpp) - 1;
-   surf->ss3.depth = firstImage->Depth - 1;
+   surf->ss3.depth = depth - 1;
 
    /* ss4: ignored? */
 
@@ -300,59 +302,16 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
 			   I915_GEM_DOMAIN_RENDER);
 }
 
-static void
-prepare_wm_surfaces(struct brw_context *brw)
-{
-   struct gl_context *ctx = &brw->intel.ctx;
-   int i;
-   int nr_surfaces = 0;
-
-   if (ctx->DrawBuffer->_NumColorDrawBuffers >= 1) {
-      for (i = 0; i < ctx->DrawBuffer->_NumColorDrawBuffers; i++) {
-	 struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[i];
-	 struct intel_renderbuffer *irb = intel_renderbuffer(rb);
-	 struct intel_region *region = irb ? irb->region : NULL;
-
-	 if (region)
-	    brw_add_validated_bo(brw, region->bo);
-	 nr_surfaces = SURF_INDEX_DRAW(i) + 1;
-      }
-   }
-
-   if (brw->wm.const_bo) {
-      brw_add_validated_bo(brw, brw->wm.const_bo);
-      nr_surfaces = SURF_INDEX_FRAG_CONST_BUFFER + 1;
-   }
-
-   for (i = 0; i < BRW_MAX_TEX_UNIT; i++) {
-      const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[i];
-      struct gl_texture_object *tObj = texUnit->_Current;
-      struct intel_texture_object *intelObj = intel_texture_object(tObj);
-
-      if (texUnit->_ReallyEnabled) {
-	 brw_add_validated_bo(brw, intelObj->mt->region->bo);
-	 nr_surfaces = SURF_INDEX_TEXTURE(i) + 1;
-      }
-   }
-
-   /* Have to update this in our prepare, since the unit's prepare
-    * relies on it.
-    */
-   if (brw->wm.nr_surfaces != nr_surfaces) {
-      brw->wm.nr_surfaces = nr_surfaces;
-      brw->state.dirty.brw |= BRW_NEW_NR_WM_SURFACES;
-   }
-}
-
 /**
  * Constructs the set of surface state objects pointed to by the
  * binding table.
  */
 static void
-upload_wm_surfaces(struct brw_context *brw)
+gen7_upload_wm_surfaces(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->intel.ctx;
    GLuint i;
+   int nr_surfaces = 0;
 
    /* _NEW_BUFFERS | _NEW_COLOR */
    /* Update surfaces for drawing buffers */
@@ -365,8 +324,15 @@ upload_wm_surfaces(struct brw_context *brw)
 	    gen7_update_null_renderbuffer_surface(brw, i);
 	 }
       }
+      nr_surfaces = SURF_INDEX_DRAW(ctx->DrawBuffer->_NumColorDrawBuffers);
    } else {
       gen7_update_null_renderbuffer_surface(brw, 0);
+      nr_surfaces = SURF_INDEX_DRAW(0) + 1;
+   }
+
+   /* BRW_NEW_WM_CONSTBUF */
+   if (brw->wm.const_bo) {
+      nr_surfaces = SURF_INDEX_FRAG_CONST_BUFFER + 1;
    }
 
    /* Update surfaces for textures */
@@ -377,9 +343,15 @@ upload_wm_surfaces(struct brw_context *brw)
       /* _NEW_TEXTURE */
       if (texUnit->_ReallyEnabled) {
 	 gen7_update_texture_surface(ctx, i);
+	 nr_surfaces = SURF_INDEX_TEXTURE(i) + 1;
       } else {
          brw->wm.surf_offset[surf] = 0;
       }
+   }
+
+   if (brw->wm.nr_surfaces != nr_surfaces) {
+      brw->wm.nr_surfaces = nr_surfaces;
+      brw->state.dirty.brw |= BRW_NEW_NR_WM_SURFACES;
    }
 
    brw->state.dirty.brw |= BRW_NEW_WM_SURFACES;
@@ -390,9 +362,9 @@ const struct brw_tracked_state gen7_wm_surfaces = {
       .mesa = (_NEW_COLOR |
                _NEW_TEXTURE |
                _NEW_BUFFERS),
-      .brw = BRW_NEW_BATCH,
+      .brw = (BRW_NEW_BATCH |
+	      BRW_NEW_WM_CONSTBUF),
       .cache = 0
    },
-   .prepare = prepare_wm_surfaces,
-   .emit = upload_wm_surfaces,
+   .emit = gen7_upload_wm_surfaces,
 };

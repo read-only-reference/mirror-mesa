@@ -39,7 +39,7 @@ extern "C" {
 void
 fs_visitor::generate_fb_write(fs_inst *inst)
 {
-   GLboolean eot = inst->eot;
+   bool eot = inst->eot;
    struct brw_reg implied_header;
 
    /* Header is 2 regs, g0 and g1 are the contents. g0 will be implied
@@ -343,7 +343,6 @@ fs_visitor::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
 	      msg_type,
 	      rlen,
 	      inst->mlen,
-	      0,
 	      inst->header_present,
 	      simd_mode);
 }
@@ -636,6 +635,16 @@ fs_visitor::generate_code()
 
       for (unsigned int i = 0; i < 3; i++) {
 	 src[i] = brw_reg_from_fs_reg(&inst->src[i]);
+
+	 /* The accumulator result appears to get used for the
+	  * conditional modifier generation.  When negating a UD
+	  * value, there is a 33rd bit generated for the sign in the
+	  * accumulator value, so now you can't check, for example,
+	  * equality with a 32-bit value.  See piglit fs-op-neg-uvec4.
+	  */
+	 assert(!inst->conditional_mod ||
+		inst->src[i].type != BRW_REGISTER_TYPE_UD ||
+		!inst->src[i].negate);
       }
       dst = brw_reg_from_fs_reg(&inst->dst);
 
@@ -794,6 +803,8 @@ fs_visitor::generate_code()
 	    generate_math_gen4(inst, dst, src[0]);
 	 }
 	 break;
+      case SHADER_OPCODE_INT_QUOTIENT:
+      case SHADER_OPCODE_INT_REMAINDER:
       case SHADER_OPCODE_POW:
 	 if (intel->gen >= 6) {
 	    generate_math2_gen6(inst, dst, src[0], src[1]);

@@ -70,7 +70,7 @@ static struct gl_buffer_object DummyBufferObject;
  * \return   pointer to pointer to the buffer object bound to \c target in the
  *           specified context or \c NULL if \c target is invalid.
  */
-static INLINE struct gl_buffer_object **
+static inline struct gl_buffer_object **
 get_buffer_target(struct gl_context *ctx, GLenum target)
 {
    switch (target) {
@@ -112,7 +112,7 @@ get_buffer_target(struct gl_context *ctx, GLenum target)
  * \return   pointer to the buffer object bound to \c target in the
  *           specified context or \c NULL if \c target is invalid.
  */
-static INLINE struct gl_buffer_object *
+static inline struct gl_buffer_object *
 get_buffer(struct gl_context *ctx, GLenum target)
 {
    struct gl_buffer_object **bufObj = get_buffer_target(ctx, target);
@@ -571,7 +571,7 @@ bind_buffer_object(struct gl_context *ctx, GLenum target, GLuint buffer)
 
    /* Get pointer to old buffer object (to be unbound) */
    oldBufObj = *bindTarget;
-   if (oldBufObj && oldBufObj->Name == buffer)
+   if (oldBufObj && oldBufObj->Name == buffer && !oldBufObj->DeletePending)
       return;   /* rebinding the same buffer object- no change */
 
    /*
@@ -773,6 +773,17 @@ _mesa_DeleteBuffersARB(GLsizei n, const GLuint *ids)
 
          /* The ID is immediately freed for re-use */
          _mesa_HashRemove(ctx->Shared->BufferObjects, ids[i]);
+         /* Make sure we do not run into the classic ABA problem on bind.
+          * We don't want to allow re-binding a buffer object that's been
+          * "deleted" by glDeleteBuffers().
+          *
+          * The explicit rebinding to the default object in the current context
+          * prevents the above in the current context, but another context
+          * sharing the same objects might suffer from this problem.
+          * The alternative would be to do the hash lookup in any case on bind
+          * which would introduce more runtime overhead than this.
+          */
+         bufObj->DeletePending = GL_TRUE;
          _mesa_reference_buffer_object(ctx, &bufObj, NULL);
       }
    }

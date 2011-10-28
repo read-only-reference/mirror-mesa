@@ -167,6 +167,8 @@ struct i915_state
    unsigned dst_buf_vars;
    uint32_t draw_offset;
    uint32_t draw_size;
+   unsigned need_target_fixup;
+   uint32_t fixup_swizzle;
 
    unsigned id;			/* track lost context events */
 };
@@ -223,6 +225,7 @@ struct i915_context {
     */
    const struct i915_blend_state           *blend;
    const struct i915_sampler_state         *sampler[PIPE_MAX_SAMPLERS];
+   struct pipe_sampler_state *vertex_samplers[PIPE_MAX_VERTEX_SAMPLERS];
    const struct i915_depth_stencil_state   *depth_stencil;
    const struct i915_rasterizer_state      *rasterizer;
 
@@ -236,13 +239,19 @@ struct i915_context {
    struct pipe_poly_stipple poly_stipple;
    struct pipe_scissor_state scissor;
    struct pipe_sampler_view *fragment_sampler_views[PIPE_MAX_SAMPLERS];
+   struct pipe_sampler_view *vertex_sampler_views[PIPE_MAX_SAMPLERS];
    struct pipe_viewport_state viewport;
    struct pipe_index_buffer index_buffer;
 
    unsigned dirty;
 
+   struct pipe_resource *mapped_vs_tex[PIPE_MAX_VERTEX_SAMPLERS];
+   struct i915_winsys_buffer* mapped_vs_tex_buffer[PIPE_MAX_VERTEX_SAMPLERS];
+
    unsigned num_samplers;
    unsigned num_fragment_sampler_views;
+   unsigned num_vertex_samplers;
+   unsigned num_vertex_sampler_views;
 
    struct i915_winsys_batchbuffer *batch;
 
@@ -356,6 +365,14 @@ struct draw_stage *i915_draw_render_stage( struct i915_context *i915 );
  * i915_prim_vbuf.c: 
  */
 struct draw_stage *i915_draw_vbuf_stage( struct i915_context *i915 );
+
+
+/***********************************************************************
+ * i915_state.c:
+ */
+void i915_prepare_vertex_sampling(struct i915_context *i915);
+void i915_cleanup_vertex_sampling(struct i915_context *i915);
+
 
 
 /***********************************************************************

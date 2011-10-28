@@ -258,7 +258,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		return NULL;
 	}
 
-	rctx->screen->ws->cs_set_flush_callback(rctx->ctx.cs, r600_flush_from_winsys, rctx);
+	rctx->ws->cs_set_flush_callback(rctx->ctx.cs, r600_flush_from_winsys, rctx);
 
 	util_slab_create(&rctx->pool_transfers,
 			 sizeof(struct pipe_transfer), 64,
@@ -280,6 +280,8 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		r600_destroy_context(&rctx->context);
 		return NULL;
 	}
+
+	r600_get_backend_mask(&rctx->ctx); /* this emits commands and must be last */
 
 	return &rctx->context;
 }
@@ -441,6 +443,7 @@ static float r600_get_paramf(struct pipe_screen* pscreen, enum pipe_cap param)
 
 static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enum pipe_shader_cap param)
 {
+	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
 	switch(shader)
 	{
 	case PIPE_SHADER_FRAGMENT:
@@ -489,6 +492,8 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_SUBROUTINES:
 		return 0;
 	case PIPE_SHADER_CAP_INTEGERS:
+		if (rscreen->chip_class == EVERGREEN)
+			return 1;
 		return 0;
 	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
 		return 16;

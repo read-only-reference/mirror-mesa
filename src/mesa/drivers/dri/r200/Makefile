@@ -7,20 +7,13 @@ LIBNAME = r200_dri.so
 
 include ../Makefile.defines
 
-ifeq ($(RADEON_LDFLAGS),)
-CS_SOURCES = radeon_cs_space_drm.c radeon_bo.c radeon_cs.c
-endif
-
 RADEON_COMMON_SOURCES = \
-	radeon_bo_legacy.c \
 	radeon_buffer_objects.c \
 	radeon_common_context.c \
 	radeon_common.c \
-	radeon_cs_legacy.c \
 	radeon_dma.c \
 	radeon_debug.c \
 	radeon_fbo.c \
-	radeon_lock.c \
 	radeon_mipmap_tree.c \
 	radeon_pixel_read.c \
 	radeon_queryobj.c \
@@ -45,8 +38,7 @@ DRIVER_SOURCES = r200_context.c \
 		 r200_blit.c \
 		 radeon_screen.c \
 		 $(EGL_SOURCES) \
-		 $(RADEON_COMMON_SOURCES) \
-		 $(CS_SOURCES)
+		 $(RADEON_COMMON_SOURCES)
 
 C_SOURCES = $(COMMON_SOURCES) $(DRIVER_SOURCES)
 
@@ -55,7 +47,7 @@ X86_SOURCES =
 DRIVER_DEFINES = -DRADEON_R200
 
 INCLUDES += $(RADEON_CFLAGS)
-DRI_LIB_DEPS += $(RADEON_LDFLAGS)
+DRI_LIB_DEPS += $(RADEON_LIBS)
 
 ##### TARGETS #####
 

@@ -53,8 +53,7 @@ struct brw_sf_prog_key {
    GLuint frontface_ccw:1;
    GLuint do_point_sprite:1;
    GLuint sprite_origin_lower_left:1;
-   GLuint nr_userclip:4;
-   GLuint pad:20;
+   GLuint userclip_active:1;
 };
 
 struct brw_sf_compile {
@@ -98,10 +97,10 @@ struct brw_sf_compile {
 };
 
  
-void brw_emit_tri_setup( struct brw_sf_compile *c, GLboolean allocate );
-void brw_emit_line_setup( struct brw_sf_compile *c, GLboolean allocate );
-void brw_emit_point_setup( struct brw_sf_compile *c, GLboolean allocate );
-void brw_emit_point_sprite_setup( struct brw_sf_compile *c, GLboolean allocate );
+void brw_emit_tri_setup( struct brw_sf_compile *c, bool allocate );
+void brw_emit_line_setup( struct brw_sf_compile *c, bool allocate );
+void brw_emit_point_setup( struct brw_sf_compile *c, bool allocate );
+void brw_emit_point_sprite_setup( struct brw_sf_compile *c, bool allocate );
 void brw_emit_anyprim_setup( struct brw_sf_compile *c );
 int brw_sf_compute_urb_entry_read_offset(struct intel_context *intel);
 

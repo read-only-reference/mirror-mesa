@@ -307,14 +307,27 @@ vec4_visitor::generate_math2_gen4(vec4_instruction *inst,
 				  struct brw_reg src0,
 				  struct brw_reg src1)
 {
-   brw_MOV(p, brw_message_reg(inst->base_mrf + 1), src1);
+   /* From the Ironlake PRM, Volume 4, Part 1, Section 6.1.13
+    * "Message Payload":
+    *
+    * "Operand0[7].  For the INT DIV functions, this operand is the
+    *  denominator."
+    *  ...
+    * "Operand1[7].  For the INT DIV functions, this operand is the
+    *  numerator."
+    */
+   bool is_int_div = inst->opcode != SHADER_OPCODE_POW;
+   struct brw_reg &op0 = is_int_div ? src1 : src0;
+   struct brw_reg &op1 = is_int_div ? src0 : src1;
+
+   brw_MOV(p, retype(brw_message_reg(inst->base_mrf + 1), op1.type), op1);
 
    brw_math(p,
 	    dst,
 	    brw_math_function(inst->opcode),
 	    BRW_MATH_SATURATE_NONE,
 	    inst->base_mrf,
-	    src0,
+	    op0,
 	    BRW_MATH_DATA_VECTOR,
 	    BRW_MATH_PRECISION_FULL);
 }
@@ -437,7 +450,9 @@ vec4_visitor::generate_scratch_write(vec4_instruction *inst,
 
    uint32_t msg_type;
 
-   if (intel->gen >= 6)
+   if (intel->gen >= 7)
+      msg_type = GEN7_DATAPORT_WRITE_MESSAGE_OWORD_DUAL_BLOCK_WRITE;
+   else if (intel->gen == 6)
       msg_type = GEN6_DATAPORT_WRITE_MESSAGE_OWORD_DUAL_BLOCK_WRITE;
    else
       msg_type = BRW_DATAPORT_WRITE_MESSAGE_OWORD_DUAL_BLOCK_WRITE;
@@ -477,7 +492,7 @@ vec4_visitor::generate_scratch_write(vec4_instruction *inst,
 			    msg_type,
 			    3, /* mlen */
 			    true, /* header present */
-			    false, /* pixel scoreboard */
+			    false, /* not a render target write */
 			    write_commit, /* rlen */
 			    false, /* eot */
 			    write_commit);
@@ -544,6 +559,8 @@ vec4_visitor::generate_vs_instruction(vec4_instruction *instruction,
       break;
 
    case SHADER_OPCODE_POW:
+   case SHADER_OPCODE_INT_QUOTIENT:
+   case SHADER_OPCODE_INT_REMAINDER:
       if (intel->gen >= 6) {
 	 generate_math2_gen6(inst, dst, src[0], src[1]);
       } else {
@@ -580,7 +597,7 @@ vec4_visitor::generate_vs_instruction(vec4_instruction *instruction,
 bool
 vec4_visitor::run()
 {
-   if (c->key.nr_userclip && !c->key.uses_clip_distance)
+   if (c->key.userclip_active && !c->key.uses_clip_distance)
       setup_uniform_clipplane_values();
 
    /* Generate VS IR for main().  (the visitor only descends into
@@ -888,7 +905,7 @@ brw_vs_emit(struct gl_shader_program *prog, struct brw_vs_compile *c)
 
    vec4_visitor v(c, prog, shader);
    if (!v.run()) {
-      prog->LinkStatus = GL_FALSE;
+      prog->LinkStatus = false;
       ralloc_strcat(&prog->InfoLog, v.fail_msg);
       return false;
    }

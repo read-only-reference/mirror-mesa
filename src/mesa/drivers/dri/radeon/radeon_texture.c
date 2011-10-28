@@ -104,17 +104,22 @@ void radeonFreeTextureImageBuffer(struct gl_context *ctx, struct gl_texture_imag
 
 	if (image->mt) {
 		radeon_miptree_unreference(&image->mt);
-		assert(!image->base.Base.Data);
+		assert(!image->base.Buffer);
 	} else {
-		_mesa_free_texture_image_data(ctx, timage);
+		_swrast_free_texture_image_buffer(ctx, timage);
 	}
 	if (image->bo) {
 		radeon_bo_unref(image->bo);
 		image->bo = NULL;
 	}
-	if (timage->Data) {
-		_mesa_free_texmemory(timage->Data);
-		timage->Data = NULL;
+	if (image->base.Buffer) {
+		_mesa_align_free(image->base.Buffer);
+		image->base.Buffer = NULL;
+	}
+
+	if (image->base.ImageOffsets) {
+		free(image->base.ImageOffsets);
+		image->base.ImageOffsets = NULL;
 	}
 }
 
@@ -132,8 +137,8 @@ static void teximage_set_map_data(radeon_texture_image *image)
 
 	lvl = &image->mt->levels[image->mtlevel];
 
-	image->base.Base.Data = image->mt->bo->ptr + lvl->faces[image->mtface].offset;
-	image->base.Base.RowStride = lvl->rowstride / _mesa_get_format_bytes(image->base.Base.TexFormat);
+	image->base.Data = image->mt->bo->ptr + lvl->faces[image->mtface].offset;
+	image->base.RowStride = lvl->rowstride / _mesa_get_format_bytes(image->base.Base.TexFormat);
 }
 
 
@@ -147,7 +152,7 @@ void radeon_teximage_map(radeon_texture_image *image, GLboolean write_enable)
 			__func__, image,
 			write_enable ? "true": "false");
 	if (image->mt) {
-		assert(!image->base.Base.Data);
+		assert(!image->base.Data);
 
 		radeon_bo_map(image->mt->bo, write_enable);
 		teximage_set_map_data(image);
@@ -161,9 +166,9 @@ void radeon_teximage_unmap(radeon_texture_image *image)
 			"%s(img %p)\n",
 			__func__, image);
 	if (image->mt) {
-		assert(image->base.Base.Data);
+		assert(image->base.Data);
 
-		image->base.Base.Data = 0;
+		image->base.Data = 0;
 		radeon_bo_unmap(image->mt->bo);
 	}
 }
@@ -174,7 +179,7 @@ static void map_override(struct gl_context *ctx, radeonTexObj *t)
 
 	radeon_bo_map(t->bo, GL_FALSE);
 
-	img->base.Base.Data = t->bo->ptr;
+	img->base.Data = t->bo->ptr;
 }
 
 static void unmap_override(struct gl_context *ctx, radeonTexObj *t)
@@ -183,7 +188,7 @@ static void unmap_override(struct gl_context *ctx, radeonTexObj *t)
 
 	radeon_bo_unmap(t->bo);
 
-	img->base.Base.Data = NULL;
+	img->base.Data = NULL;
 }
 
 /**
@@ -243,8 +248,11 @@ void radeonUnmapTexture(struct gl_context *ctx, struct gl_texture_object *texObj
 	  return;
 
 	for(face = 0; face < t->mt->faces; ++face) {
-		for(level = t->minLod; level <= t->maxLod; ++level)
-			texObj->Image[face][level]->Data = 0;
+		for(level = t->minLod; level <= t->maxLod; ++level) {
+			radeon_texture_image *image =
+				get_radeon_texture_image(texObj->Image[face][level]);
+			image->base.Data = NULL;
+		}
 	}
 	radeon_bo_unmap(t->mt->bo);
 }
@@ -306,7 +314,7 @@ radeon_map_texture_image(struct gl_context *ctx,
 		assert(map);
 
 		*stride = _mesa_format_row_stride(texImage->TexFormat, width);
-		*map = texImage->Data + (slice * height) * *stride;
+		*map = image->base.Buffer + (slice * height) * *stride;
 	}
 
 	*map += y * *stride + x * texel_size;
@@ -323,83 +331,6 @@ radeon_unmap_texture_image(struct gl_context *ctx,
 	else if (image->mt)
 		radeon_bo_unmap(image->mt->bo);
 }
-
-/**
- * Wraps Mesa's implementation to ensure that the base level image is mapped.
- *
- * This relies on internal details of _mesa_generate_mipmap, in particular
- * the fact that the memory for recreated texture images is always freed.
- */
-static void radeon_generate_mipmap(struct gl_context *ctx, GLenum target,
-				   struct gl_texture_object *texObj)
-{
-	radeonTexObj* t = radeon_tex_obj(texObj);
-	GLuint nr_faces = (t->base.Target == GL_TEXTURE_CUBE_MAP) ? 6 : 1;
-	int i, face;
-	struct gl_texture_image *first_image;
-
-	radeon_print(RADEON_TEXTURE, RADEON_VERBOSE,
-			"%s(%p, tex %p) Target type %s.\n",
-			__func__, ctx, texObj,
-			_mesa_lookup_enum_by_nr(target));
-
-	_mesa_generate_mipmap(ctx, target, texObj);
-
-	/* For the compressed case, we don't need to do the
-	 * non-TexImage recovery path below.
-	 */
-	first_image = texObj->Image[0][texObj->BaseLevel];
-	if (_mesa_is_format_compressed(first_image->TexFormat))
-		return;
-
-	for (face = 0; face < nr_faces; face++) {
-		for (i = texObj->BaseLevel + 1; i < texObj->MaxLevel; i++) {
-			radeon_texture_image *image;
-
-			image = get_radeon_texture_image(texObj->Image[face][i]);
-
-			if (image == NULL)
-				break;
-
-			image->mtlevel = i;
-			image->mtface = face;
-
-			radeon_miptree_unreference(&image->mt);
-		}
-	}
-	
-}
-
-void radeonGenerateMipmap(struct gl_context* ctx, GLenum target, struct gl_texture_object *texObj)
-{
-	radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
-	struct radeon_bo *bo;
-	GLuint face = _mesa_tex_target_to_face(target);
-	radeon_texture_image *baseimage = get_radeon_texture_image(texObj->Image[face][texObj->BaseLevel]);
-	bo = !baseimage->mt ? baseimage->bo : baseimage->mt->bo;
-
-	radeon_print(RADEON_TEXTURE, RADEON_TRACE,
-		"%s(%p, target %s, tex %p)\n",
-		__func__, ctx, _mesa_lookup_enum_by_nr(target),
-		texObj);
-
-	if (bo && radeon_bo_is_referenced_by_cs(bo, rmesa->cmdbuf.cs)) {
-		radeon_print(RADEON_TEXTURE, RADEON_NORMAL,
-			"%s(%p, tex %p) Trying to generate mipmap for texture "
-			"in processing by GPU.\n",
-			__func__, ctx, texObj);
-		radeon_firevertices(rmesa);
-	}
-
-	if (_mesa_meta_check_generate_mipmap_fallback(ctx, target, texObj)) {
-		radeon_teximage_map(baseimage, GL_FALSE);
-		radeon_generate_mipmap(ctx, target, texObj);
-		radeon_teximage_unmap(baseimage);
-	} else {
-		_mesa_meta_GenerateMipmap(ctx, target, texObj);
-	}
-}
-
 
 /* try to find a format which will only need a memcopy */
 static gl_format radeonChoose8888TexFormat(radeonContextPtr rmesa,
@@ -541,7 +472,7 @@ gl_format radeonChooseTextureFormat(struct gl_context * ctx,
 		if (IS_R200_CLASS(rmesa->radeonScreen))
 			return _dri_texformat_al88;
 		else
-			return _dri_texformat_a8;
+			return MESA_FORMAT_A8;
 	case 1:
 	case GL_LUMINANCE:
 	case GL_LUMINANCE4:
@@ -549,7 +480,7 @@ gl_format radeonChooseTextureFormat(struct gl_context * ctx,
 	case GL_LUMINANCE12:
 	case GL_LUMINANCE16:
 	case GL_COMPRESSED_LUMINANCE:
-		return _dri_texformat_l8;
+		return MESA_FORMAT_L8;
 
 	case 2:
 	case GL_LUMINANCE_ALPHA:
@@ -568,7 +499,7 @@ gl_format radeonChooseTextureFormat(struct gl_context * ctx,
 	case GL_INTENSITY12:
 	case GL_INTENSITY16:
 	case GL_COMPRESSED_INTENSITY:
-		return _dri_texformat_i8;
+		return MESA_FORMAT_I8;
 
 	case GL_YCBCR_MESA:
 		if (type == GL_UNSIGNED_SHORT_8_8_APPLE ||
@@ -618,19 +549,6 @@ gl_format radeonChooseTextureFormat(struct gl_context * ctx,
 	case GL_RGBA32F_ARB:
 		return MESA_FORMAT_RGBA_FLOAT32;
 
-#ifdef RADEON_R300
-	case GL_DEPTH_COMPONENT:
-	case GL_DEPTH_COMPONENT16:
-		return MESA_FORMAT_Z16;
-	case GL_DEPTH_COMPONENT24:
-	case GL_DEPTH_COMPONENT32:
-	case GL_DEPTH_STENCIL_EXT:
-	case GL_DEPTH24_STENCIL8_EXT:
-		if (rmesa->radeonScreen->chip_family >= CHIP_FAMILY_RV515)
-			return MESA_FORMAT_S8_Z24;
-		else
-			return MESA_FORMAT_Z16;
-#else
 	case GL_DEPTH_COMPONENT:
 	case GL_DEPTH_COMPONENT16:
 	case GL_DEPTH_COMPONENT24:
@@ -638,7 +556,6 @@ gl_format radeonChooseTextureFormat(struct gl_context * ctx,
 	case GL_DEPTH_STENCIL_EXT:
 	case GL_DEPTH24_STENCIL8_EXT:
 		return MESA_FORMAT_S8_Z24;
-#endif
 
 	/* EXT_texture_sRGB */
 	case GL_SRGB:
@@ -738,26 +655,6 @@ static void teximage_assign_miptree(radeonContextPtr rmesa,
 				"%s Failed to allocate miptree.\n", __func__);
 }
 
-static GLuint * allocate_image_offsets(struct gl_context *ctx,
-	unsigned alignedWidth,
-	unsigned height,
-	unsigned depth)
-{
-	int i;
-	GLuint *offsets;
-
-	offsets = malloc(depth * sizeof(GLuint)) ;
-	if (!offsets) {
-		_mesa_error(ctx, GL_OUT_OF_MEMORY, "glTex[Sub]Image");
-		return NULL;
-	}
-
-	for (i = 0; i < depth; ++i) {
-		offsets[i] = alignedWidth * height * i;
-	}
-
-	return offsets;
-}
 
 /**
  * Update a subregion of the given texture image.
@@ -776,9 +673,11 @@ static void radeon_store_teximage(struct gl_context* ctx, int dims,
 	radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
 	radeonTexObj *t = radeon_tex_obj(texObj);
 	radeon_texture_image* image = get_radeon_texture_image(texImage);
+	GLuint texel_size = _mesa_get_format_bytes(texImage->TexFormat);
 
 	GLuint dstRowStride;
-	GLuint *dstImageOffsets;
+	GLuint alignedWidth;
+	GLint i;
 
 	radeon_print(RADEON_TEXTURE, RADEON_TRACE,
 			"%s(%p, tex %p, image %p) compressed %d\n",
@@ -795,16 +694,13 @@ static void radeon_store_teximage(struct gl_context* ctx, int dims,
 
 	assert(dstRowStride);
 
-	if (dims == 3) {
-		unsigned alignedWidth = dstRowStride/_mesa_get_format_bytes(texImage->TexFormat);
-		dstImageOffsets = allocate_image_offsets(ctx, alignedWidth, texImage->Height, texImage->Depth);
-		if (!dstImageOffsets) {
-			radeon_warning("%s Failed to allocate dstImaeOffset.\n", __func__);
-			return;
-		}
-	} else {
-		dstImageOffsets = texImage->ImageOffsets;
+	/* fill in the ImageOffsets array */
+	alignedWidth = dstRowStride / texel_size;
+	for (i = 0; i < texImage->Depth; ++i) {
+		image->base.ImageOffsets[i] = alignedWidth * texImage->Height * i;
 	}
+	/* and fill in RowStride (in texels) */
+	image->base.RowStride = alignedWidth;
 
 	radeon_teximage_map(image, GL_TRUE);
 
@@ -818,13 +714,13 @@ static void radeon_store_teximage(struct gl_context* ctx, int dims,
 			dstRowStride = _mesa_format_row_stride(texImage->TexFormat, texImage->Width);
 			img_start = _mesa_compressed_image_address(xoffset, yoffset, 0,
 									texImage->TexFormat,
-									texImage->Width, texImage->Data);
+									texImage->Width, image->base.Data);
 		}
 		else {
 			uint32_t offset;
-			offset = dstRowStride / _mesa_get_format_bytes(texImage->TexFormat) * yoffset / block_height + xoffset / block_width;
-			offset *= _mesa_get_format_bytes(texImage->TexFormat);
-			img_start = texImage->Data + offset;
+			offset = dstRowStride / texel_size * yoffset / block_height + xoffset / block_width;
+			offset *= texel_size;
+			img_start = image->base.Data + offset;
 		}
 		srcRowStride = _mesa_format_row_stride(texImage->TexFormat, width);
 		bytesPerRow = srcRowStride;
@@ -833,19 +729,22 @@ static void radeon_store_teximage(struct gl_context* ctx, int dims,
 		copy_rows(img_start, dstRowStride, pixels, srcRowStride, rows, bytesPerRow);
 	}
 	else {
+		GLubyte *slices[512];
+		GLuint i;
+		assert(depth <= 512);
+		for (i = 0; i < depth; i++) {
+			slices[i] = (GLubyte *) image->base.Data
+				+ image->base.ImageOffsets[i] * texel_size;
+		}
 		if (!_mesa_texstore(ctx, dims, texImage->_BaseFormat,
-					texImage->TexFormat, texImage->Data,
+					texImage->TexFormat,
 					xoffset, yoffset, zoffset,
 					dstRowStride,
-					dstImageOffsets,
+					slices,
 					width, height, depth,
 					format, type, pixels, packing)) {
 			_mesa_error(ctx, GL_OUT_OF_MEMORY, "glTexSubImage");
 		}
-	}
-
-	if (dims == 3) {
-		free(dstImageOffsets);
 	}
 
 	radeon_teximage_unmap(image);
@@ -877,7 +776,6 @@ static void radeon_teximage(
 
 	t->validated = GL_FALSE;
 
-	/* Mesa core only clears texImage->Data but not image->mt */
 	radeonFreeTextureImageBuffer(ctx, texImage);
 
 	if (!t->bo) {
@@ -887,11 +785,12 @@ static void radeon_teximage(
 								texImage->Width,
 								texImage->Height,
 								texImage->Depth);
-			texImage->Data = _mesa_alloc_texmemory(size);
+			image->base.Buffer = _mesa_align_malloc(size, 512);
+
 			radeon_print(RADEON_TEXTURE, RADEON_VERBOSE,
 					"%s %dd: texObj %p, texImage %p, "
 					" no miptree assigned, using local memory %p\n",
-					__func__, dims, texObj, texImage, texImage->Data);
+					__func__, dims, texObj, texImage, image->base.Buffer);
 		}
 	}
 
@@ -906,6 +805,10 @@ static void radeon_teximage(
 			radeon_firevertices(rmesa);
 		}
 	}
+
+	image->base.ImageOffsets =
+		(GLuint *) malloc(texImage->Depth * sizeof(GLuint));
+
 
 	/* Upload texture image; note that the spec allows pixels to be NULL */
 	if (compressed) {
@@ -1130,7 +1033,7 @@ void radeon_image_target_texture_2d(struct gl_context *ctx, GLenum target,
 	texImage->Depth = 1;
 	texImage->_BaseFormat = GL_RGBA;
 	texImage->TexFormat = image->format;
-	texImage->RowStride = image->pitch;
+	radeonImage->base.RowStride = image->pitch;
 	texImage->InternalFormat = image->internal_format;
 
 	if(t->mt)
@@ -1192,11 +1095,7 @@ radeon_init_common_texture_funcs(radeonContextPtr radeon,
 	functions->CompressedTexImage2D = radeonCompressedTexImage2D;
 	functions->CompressedTexSubImage2D = radeonCompressedTexSubImage2D;
 
-	functions->GenerateMipmap = radeonGenerateMipmap;
-
-	if (radeon->radeonScreen->kernel_mm) {
-		functions->CopyTexSubImage2D = radeonCopyTexSubImage2D;
-	}
+	functions->CopyTexSubImage2D = radeonCopyTexSubImage2D;
 
 #if FEATURE_OES_EGL_image
 	functions->EGLImageTargetTexture2D = radeon_image_target_texture_2d;

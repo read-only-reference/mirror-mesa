@@ -40,13 +40,15 @@
 #include "../glsl/program.h"
 #include "ir_optimization.h"
 #include "ast.h"
+#include "linker.h"
+
+#include "main/mtypes.h"
+#include "main/shaderobj.h"
+#include "program/hash_table.h"
 
 extern "C" {
-#include "main/mtypes.h"
 #include "main/shaderapi.h"
-#include "main/shaderobj.h"
 #include "main/uniforms.h"
-#include "program/hash_table.h"
 #include "program/prog_instruction.h"
 #include "program/prog_optimize.h"
 #include "program/prog_print.h"
@@ -1261,8 +1263,11 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
       break;
    case ir_binop_div:
       assert(!"not reached: should be handled by ir_div_to_mul_rcp");
+      break;
    case ir_binop_mod:
-      assert(!"ir_binop_mod should have been converted to b * fract(a/b)");
+      /* Floating point should be lowered by MOD_TO_FRACT in the compiler. */
+      assert(ir->type->is_integer());
+      emit(ir, OPCODE_MUL, result_dst, op[0], op[1]);
       break;
 
    case ir_binop_less:
@@ -1556,14 +1561,6 @@ ir_to_mesa_visitor::visit(ir_dereference_variable *ir)
          entry = new(mem_ctx) variable_storage(var,
                                                PROGRAM_INPUT,
                                                var->location);
-         if (this->prog->Target == GL_VERTEX_PROGRAM_ARB &&
-             var->location >= VERT_ATTRIB_GENERIC0) {
-            _mesa_add_attribute(this->prog->Attributes,
-                                var->name,
-                                _mesa_sizeof_glsl_type(var->type->gl_type),
-                                var->type->gl_type,
-                                var->location - VERT_ATTRIB_GENERIC0);
-         }
          break;
       case ir_var_out:
 	 assert(var->location != -1);
@@ -2549,7 +2546,7 @@ count_resources(struct gl_program *prog)
  *
  * XXX more checks are needed...
  */
-static void
+static bool
 check_resources(const struct gl_context *ctx,
                 struct gl_shader_program *shader_program,
                 struct gl_program *prog)
@@ -2589,124 +2586,113 @@ check_resources(const struct gl_context *ctx,
    default:
       _mesa_problem(ctx, "unexpected program type in check_resources()");
    }
+
+   return shader_program->LinkStatus;
 }
 
+class add_uniform_to_shader : public uniform_field_visitor {
+public:
+   add_uniform_to_shader(struct gl_shader_program *shader_program,
+			 struct gl_program_parameter_list *params)
+      : shader_program(shader_program), params(params), next_sampler(0)
+   {
+      /* empty */
+   }
 
+   int process(ir_variable *var)
+   {
+      this->idx = -1;
+      this->uniform_field_visitor::process(var);
 
-struct uniform_sort {
-   struct gl_uniform *u;
-   int pos;
+      return this->idx;
+   }
+
+private:
+   virtual void visit_field(const glsl_type *type, const char *name);
+
+   struct gl_shader_program *shader_program;
+   struct gl_program_parameter_list *params;
+   int next_sampler;
+   int idx;
 };
 
-/* The shader_program->Uniforms list is almost sorted in increasing
- * uniform->{Frag,Vert}Pos locations, but not quite when there are
- * uniforms shared between targets.  We need to add parameters in
- * increasing order for the targets.
- */
-static int
-sort_uniforms(const void *a, const void *b)
+void
+add_uniform_to_shader::visit_field(const glsl_type *type, const char *name)
 {
-   struct uniform_sort *u1 = (struct uniform_sort *)a;
-   struct uniform_sort *u2 = (struct uniform_sort *)b;
+   unsigned int size;
 
-   return u1->pos - u2->pos;
+   if (type->is_vector() || type->is_scalar()) {
+      size = type->vector_elements;
+   } else {
+      size = type_size(type) * 4;
+   }
+
+   gl_register_file file;
+   if (type->is_sampler() ||
+       (type->is_array() && type->fields.array->is_sampler())) {
+      file = PROGRAM_SAMPLER;
+   } else {
+      file = PROGRAM_UNIFORM;
+   }
+
+   int index = _mesa_lookup_parameter_index(params, -1, name);
+   if (index < 0) {
+      index = _mesa_add_parameter(params, file, name, size, type->gl_type,
+				  NULL, NULL, 0x0);
+
+      /* Sampler uniform values are stored in prog->SamplerUnits,
+       * and the entry in that array is selected by this index we
+       * store in ParameterValues[].
+       */
+      if (file == PROGRAM_SAMPLER) {
+	 for (unsigned int j = 0; j < size / 4; j++)
+	    params->ParameterValues[index + j][0].f = this->next_sampler++;
+      }
+   }
+
+   /* The first part of the uniform that's processed determines the base
+    * location of the whole uniform (for structures).
+    */
+   if (this->idx < 0)
+      this->idx = index;
 }
 
-/* Add the uniforms to the parameters.  The linker chose locations
- * in our parameters lists (which weren't created yet), which the
- * uniforms code will use to poke values into our parameters list
- * when uniforms are updated.
+/**
+ * Generate the program parameters list for the user uniforms in a shader
+ *
+ * \param shader_program Linked shader program.  This is only used to
+ *                       emit possible link errors to the info log.
+ * \param sh             Shader whose uniforms are to be processed.
+ * \param params         Parameter list to be filled in.
  */
-static void
-add_uniforms_to_parameters_list(struct gl_shader_program *shader_program,
-				struct gl_shader *shader,
-				struct gl_program *prog)
+void
+_mesa_generate_parameters_list_for_uniforms(struct gl_shader_program
+					    *shader_program,
+					    struct gl_shader *sh,
+					    struct gl_program_parameter_list
+					    *params)
 {
-   unsigned int i;
-   unsigned int next_sampler = 0, num_uniforms = 0;
-   struct uniform_sort *sorted_uniforms;
+   add_uniform_to_shader add(shader_program, params);
 
-   sorted_uniforms = ralloc_array(NULL, struct uniform_sort,
-				  shader_program->Uniforms->NumUniforms);
+   foreach_list(node, sh->ir) {
+      ir_variable *var = ((ir_instruction *) node)->as_variable();
 
-   for (i = 0; i < shader_program->Uniforms->NumUniforms; i++) {
-      struct gl_uniform *uniform = shader_program->Uniforms->Uniforms + i;
-      int parameter_index = -1;
+      if ((var == NULL) || (var->mode != ir_var_uniform)
+	  || (strncmp(var->name, "gl_", 3) == 0))
+	 continue;
 
-      switch (shader->Type) {
-      case GL_VERTEX_SHADER:
-	 parameter_index = uniform->VertPos;
-	 break;
-      case GL_FRAGMENT_SHADER:
-	 parameter_index = uniform->FragPos;
-	 break;
-      case GL_GEOMETRY_SHADER:
-	 parameter_index = uniform->GeomPos;
-	 break;
-      }
+      int loc = add.process(var);
 
-      /* Only add uniforms used in our target. */
-      if (parameter_index != -1) {
-	 sorted_uniforms[num_uniforms].pos = parameter_index;
-	 sorted_uniforms[num_uniforms].u = uniform;
-	 num_uniforms++;
+      /* The location chosen in the Parameters list here (returned from
+       * _mesa_add_parameter) has to match what the linker chose.
+       */
+      if (var->location != loc) {
+	 linker_error(shader_program,
+		      "Allocation of uniform `%s' to target failed "
+		      "(%d vs %d)\n",
+		      var->name, loc, var->location);
       }
    }
-
-   qsort(sorted_uniforms, num_uniforms, sizeof(struct uniform_sort),
-	 sort_uniforms);
-
-   for (i = 0; i < num_uniforms; i++) {
-      struct gl_uniform *uniform = sorted_uniforms[i].u;
-      int parameter_index = sorted_uniforms[i].pos;
-      const glsl_type *type = uniform->Type;
-      unsigned int size;
-
-      if (type->is_vector() ||
-	  type->is_scalar()) {
-	 size = type->vector_elements;
-      } else {
-	 size = type_size(type) * 4;
-      }
-
-      gl_register_file file;
-      if (type->is_sampler() ||
-	  (type->is_array() && type->fields.array->is_sampler())) {
-	 file = PROGRAM_SAMPLER;
-      } else {
-	 file = PROGRAM_UNIFORM;
-      }
-
-      GLint index = _mesa_lookup_parameter_index(prog->Parameters, -1,
-						 uniform->Name);
-
-      if (index < 0) {
-	 index = _mesa_add_parameter(prog->Parameters, file,
-				     uniform->Name, size, type->gl_type,
-				     NULL, NULL, 0x0);
-
-	 /* Sampler uniform values are stored in prog->SamplerUnits,
-	  * and the entry in that array is selected by this index we
-	  * store in ParameterValues[].
-	  */
-	 if (file == PROGRAM_SAMPLER) {
-	    for (unsigned int j = 0; j < size / 4; j++)
-	       prog->Parameters->ParameterValues[index + j][0].f = next_sampler++;
-	 }
-
-	 /* The location chosen in the Parameters list here (returned
-	  * from _mesa_add_uniform) has to match what the linker chose.
-	  */
-	 if (index != parameter_index) {
-	    linker_error(shader_program,
-			 "Allocation of uniform `%s' to target failed "
-			 "(%d vs %d)\n",
-			 uniform->Name, index, parameter_index);
-	 }
-      }
-   }
-
-   ralloc_free(sorted_uniforms);
 }
 
 static void
@@ -3045,13 +3031,13 @@ get_mesa_program(struct gl_context *ctx,
    if (!prog)
       return NULL;
    prog->Parameters = _mesa_new_parameter_list();
-   prog->Attributes = _mesa_new_parameter_list();
    v.ctx = ctx;
    v.prog = prog;
    v.shader_program = shader_program;
    v.options = options;
 
-   add_uniforms_to_parameters_list(shader_program, shader, prog);
+   _mesa_generate_parameters_list_for_uniforms(shader_program, shader,
+					       prog->Parameters);
 
    /* Emit Mesa IR for main(). */
    visit_exec_list(shader->ir, &v);
@@ -3184,9 +3170,7 @@ get_mesa_program(struct gl_context *ctx,
    }
 
    if (!shader_program->LinkStatus) {
-      free(mesa_instructions);
-      _mesa_reference_program(ctx, &shader->Program, NULL);
-      return NULL;
+      goto fail_exit;
    }
 
    set_branchtargets(&v, mesa_instructions, num_instructions);
@@ -3207,10 +3191,16 @@ get_mesa_program(struct gl_context *ctx,
    prog->Instructions = mesa_instructions;
    prog->NumInstructions = num_instructions;
 
-   do_set_program_inouts(shader->ir, prog);
+   /* Setting this to NULL prevents a possible double free in the fail_exit
+    * path (far below).
+    */
+   mesa_instructions = NULL;
+
+   do_set_program_inouts(shader->ir, prog, shader->Type == GL_FRAGMENT_SHADER);
    count_resources(prog);
 
-   check_resources(ctx, shader_program, prog);
+   if (!check_resources(ctx, shader_program, prog))
+      goto fail_exit;
 
    _mesa_reference_program(ctx, &shader->Program, prog);
 
@@ -3219,6 +3209,11 @@ get_mesa_program(struct gl_context *ctx,
    }
 
    return prog;
+
+fail_exit:
+   free(mesa_instructions);
+   _mesa_reference_program(ctx, &shader->Program, NULL);
+   return NULL;
 }
 
 extern "C" {
@@ -3254,7 +3249,9 @@ _mesa_ir_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 
 	 progress = do_lower_jumps(ir, true, true, options->EmitNoMainReturn, options->EmitNoCont, options->EmitNoLoops) || progress;
 
-	 progress = do_common_optimization(ir, true, options->MaxUnrollIterations) || progress;
+	 progress = do_common_optimization(ir, true, true,
+					   options->MaxUnrollIterations)
+	   || progress;
 
 	 progress = lower_quadop_vector(ir, true) || progress;
 
@@ -3294,31 +3291,20 @@ _mesa_ir_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       linked_prog = get_mesa_program(ctx, prog, prog->_LinkedShaders[i]);
 
       if (linked_prog) {
-         bool ok = true;
+	 static const GLenum targets[] = {
+	    GL_VERTEX_PROGRAM_ARB,
+	    GL_FRAGMENT_PROGRAM_ARB,
+	    GL_GEOMETRY_PROGRAM_NV
+	 };
 
-         switch (prog->_LinkedShaders[i]->Type) {
-         case GL_VERTEX_SHADER:
+	 if (i == MESA_SHADER_VERTEX) {
             ((struct gl_vertex_program *)linked_prog)->UsesClipDistance
                = prog->Vert.UsesClipDistance;
-            _mesa_reference_vertprog(ctx, &prog->VertexProgram,
-                                     (struct gl_vertex_program *)linked_prog);
-            ok = ctx->Driver.ProgramStringNotify(ctx, GL_VERTEX_PROGRAM_ARB,
-                                                 linked_prog);
-            break;
-         case GL_FRAGMENT_SHADER:
-            _mesa_reference_fragprog(ctx, &prog->FragmentProgram,
-                                     (struct gl_fragment_program *)linked_prog);
-            ok = ctx->Driver.ProgramStringNotify(ctx, GL_FRAGMENT_PROGRAM_ARB,
-                                                 linked_prog);
-            break;
-         case GL_GEOMETRY_SHADER:
-            _mesa_reference_geomprog(ctx, &prog->GeometryProgram,
-                                     (struct gl_geometry_program *)linked_prog);
-            ok = ctx->Driver.ProgramStringNotify(ctx, GL_GEOMETRY_PROGRAM_NV,
-                                                 linked_prog);
-            break;
-         }
-         if (!ok) {
+	 }
+
+	 _mesa_reference_program(ctx, &prog->_LinkedShaders[i]->Program,
+				 linked_prog);
+         if (!ctx->Driver.ProgramStringNotify(ctx, targets[i], linked_prog)) {
             return GL_FALSE;
          }
       }
@@ -3326,7 +3312,7 @@ _mesa_ir_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       _mesa_reference_program(ctx, &linked_prog, NULL);
    }
 
-   return GL_TRUE;
+   return prog->LinkStatus;
 }
 
 
@@ -3374,7 +3360,7 @@ _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader)
       /* Do some optimization at compile time to reduce shader IR size
        * and reduce later work if the same shader is linked multiple times
        */
-      while (do_common_optimization(shader->ir, false, 32))
+      while (do_common_optimization(shader->ir, false, false, 32))
 	 ;
 
       validate_ir_tree(shader->ir);
@@ -3432,10 +3418,6 @@ _mesa_glsl_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 	 prog->LinkStatus = GL_FALSE;
       }
    }
-
-   _mesa_reference_vertprog(ctx, &prog->VertexProgram, NULL);
-   _mesa_reference_fragprog(ctx, &prog->FragmentProgram, NULL);
-   _mesa_reference_geomprog(ctx, &prog->GeometryProgram, NULL);
 
    if (prog->LinkStatus) {
       link_shaders(ctx, prog);

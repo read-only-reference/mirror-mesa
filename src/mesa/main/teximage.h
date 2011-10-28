@@ -36,13 +36,6 @@
 #include "formats.h"
 
 
-extern void *
-_mesa_alloc_texmemory(GLsizei bytes);
-
-extern void
-_mesa_free_texmemory(void *m);
-
-
 /** \name Internal functions */
 /*@{*/
 
@@ -61,10 +54,6 @@ _mesa_new_texture_image( struct gl_context *ctx );
 extern void
 _mesa_delete_texture_image( struct gl_context *ctx,
                             struct gl_texture_image *teximage );
-
-extern void
-_mesa_free_texture_image_data( struct gl_context *ctx, 
-			       struct gl_texture_image *texImage );
 
 
 extern void
@@ -136,7 +125,7 @@ _mesa_get_texture_dimensions(GLenum target);
 /**
  * Lock a texture for updating.  See also _mesa_lock_context_textures().
  */
-static INLINE void
+static inline void
 _mesa_lock_texture(struct gl_context *ctx, struct gl_texture_object *texObj)
 {
    _glthread_LOCK_MUTEX(ctx->Shared->TexMutex);
@@ -144,7 +133,7 @@ _mesa_lock_texture(struct gl_context *ctx, struct gl_texture_object *texObj)
    (void) texObj;
 }
 
-static INLINE void
+static inline void
 _mesa_unlock_texture(struct gl_context *ctx, struct gl_texture_object *texObj)
 {
    (void) texObj;

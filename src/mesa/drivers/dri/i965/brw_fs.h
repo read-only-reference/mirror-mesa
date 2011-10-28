@@ -305,6 +305,8 @@ public:
 	      opcode == SHADER_OPCODE_LOG2 ||
 	      opcode == SHADER_OPCODE_SIN ||
 	      opcode == SHADER_OPCODE_COS ||
+	      opcode == SHADER_OPCODE_INT_QUOTIENT ||
+	      opcode == SHADER_OPCODE_INT_REMAINDER ||
 	      opcode == SHADER_OPCODE_POW);
    }
 
@@ -345,7 +347,8 @@ public:
       this->c = c;
       this->p = &c->func;
       this->brw = p->brw;
-      this->fp = prog->FragmentProgram;
+      this->fp = (struct gl_fragment_program *)
+	 prog->_LinkedShaders[MESA_SHADER_FRAGMENT]->Program;
       this->prog = prog;
       this->intel = &brw->intel;
       this->ctx = &intel->ctx;
@@ -532,6 +535,7 @@ public:
 			       fs_inst *last_rhs_inst);
    void emit_assignment_writes(fs_reg &l, fs_reg &r,
 			       const glsl_type *type, bool predicated);
+   void resolve_ud_negate(fs_reg *reg);
 
    struct brw_reg interp_reg(int location, int channel);
    int setup_uniform_values(int loc, const glsl_type *type);
@@ -590,8 +594,8 @@ public:
    fs_reg pixel_y;
    fs_reg wpos_w;
    fs_reg pixel_w;
-   fs_reg delta_x;
-   fs_reg delta_y;
+   fs_reg delta_x[BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT];
+   fs_reg delta_y[BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT];
    fs_reg reg_null_cmp;
 
    int grf_used;
@@ -600,6 +604,6 @@ public:
    int force_sechalf_stack;
 };
 
-GLboolean brw_do_channel_expressions(struct exec_list *instructions);
-GLboolean brw_do_vector_splitting(struct exec_list *instructions);
+bool brw_do_channel_expressions(struct exec_list *instructions);
+bool brw_do_vector_splitting(struct exec_list *instructions);
 bool brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog);

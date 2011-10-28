@@ -78,7 +78,7 @@ static struct gl_renderbuffer DummyRenderbuffer;
 static struct gl_framebuffer IncompleteFramebuffer;
 
 
-static INLINE GLboolean
+static inline GLboolean
 is_cube_face(GLenum target)
 {
    return (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
@@ -89,7 +89,7 @@ is_cube_face(GLenum target)
 /**
  * Is the given FBO a user-created FBO?
  */
-static INLINE GLboolean
+static inline GLboolean
 is_user_fbo(const struct gl_framebuffer *fb)
 {
    return fb->Name != 0;
@@ -99,7 +99,7 @@ is_user_fbo(const struct gl_framebuffer *fb)
 /**
  * Is the given FBO a window system FBO (like an X window)?
  */
-static INLINE GLboolean
+static inline GLboolean
 is_winsys_fbo(const struct gl_framebuffer *fb)
 {
    return fb->Name == 0;
@@ -194,9 +194,11 @@ get_framebuffer_target(struct gl_context *ctx, GLenum target)
 {
    switch (target) {
    case GL_DRAW_FRAMEBUFFER:
-      return ctx->Extensions.EXT_framebuffer_blit ? ctx->DrawBuffer : NULL;
+      return ctx->Extensions.EXT_framebuffer_blit && ctx->API == API_OPENGL
+	 ? ctx->DrawBuffer : NULL;
    case GL_READ_FRAMEBUFFER:
-      return ctx->Extensions.EXT_framebuffer_blit ? ctx->ReadBuffer : NULL;
+      return ctx->Extensions.EXT_framebuffer_blit && ctx->API == API_OPENGL
+	 ? ctx->ReadBuffer : NULL;
    case GL_FRAMEBUFFER_EXT:
       return ctx->DrawBuffer;
    default:
@@ -238,19 +240,22 @@ _mesa_get_attachment(struct gl_context *ctx, struct gl_framebuffer *fb,
    case GL_COLOR_ATTACHMENT13_EXT:
    case GL_COLOR_ATTACHMENT14_EXT:
    case GL_COLOR_ATTACHMENT15_EXT:
+      /* Only OpenGL ES 1.x forbids color attachments other than
+       * GL_COLOR_ATTACHMENT0.  For all other APIs the limit set by the
+       * hardware is used.
+       */
       i = attachment - GL_COLOR_ATTACHMENT0_EXT;
-      if (i >= ctx->Const.MaxColorAttachments) {
+      if (i >= ctx->Const.MaxColorAttachments
+	  || (i > 0 && ctx->API == API_OPENGLES)) {
 	 return NULL;
       }
       return &fb->Attachment[BUFFER_COLOR0 + i];
    case GL_DEPTH_STENCIL_ATTACHMENT:
+      if (ctx->API != API_OPENGL)
+	 return NULL;
       /* fall-through */
-   case GL_DEPTH_BUFFER:
-      /* fall-through / new in GL 3.0 */
    case GL_DEPTH_ATTACHMENT_EXT:
       return &fb->Attachment[BUFFER_DEPTH];
-   case GL_STENCIL_BUFFER:
-      /* fall-through / new in GL 3.0 */
    case GL_STENCIL_ATTACHMENT_EXT:
       return &fb->Attachment[BUFFER_STENCIL];
    default:
@@ -283,13 +288,34 @@ _mesa_get_fb0_attachment(struct gl_context *ctx, struct gl_framebuffer *fb,
          return &fb->Attachment[BUFFER_AUX0];
       }
       return NULL;
-   case GL_DEPTH_BUFFER:
-      /* fall-through / new in GL 3.0 */
-   case GL_DEPTH_ATTACHMENT_EXT:
+
+   /* Page 336 (page 352 of the PDF) of the OpenGL 3.0 spec says:
+    *
+    *     "If the default framebuffer is bound to target, then attachment must
+    *     be one of FRONT LEFT, FRONT RIGHT, BACK LEFT, BACK RIGHT, or AUXi,
+    *     identifying a color buffer; DEPTH, identifying the depth buffer; or
+    *     STENCIL, identifying the stencil buffer."
+    *
+    * Revision #34 of the ARB_framebuffer_object spec has essentially the same
+    * language.  However, revision #33 of the ARB_framebuffer_object spec
+    * says:
+    *
+    *     "If the default framebuffer is bound to <target>, then <attachment>
+    *     must be one of FRONT_LEFT, FRONT_RIGHT, BACK_LEFT, BACK_RIGHT, AUXi,
+    *     DEPTH_BUFFER, or STENCIL_BUFFER, identifying a color buffer, the
+    *     depth buffer, or the stencil buffer, and <pname> may be
+    *     FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE or
+    *     FRAMEBUFFER_ATTACHMENT_OBJECT_NAME."
+    *
+    * The enum values for DEPTH_BUFFER and STENCIL_BUFFER have been removed
+    * from glext.h, so shipping apps should not use those values.
+    *
+    * Note that neither EXT_framebuffer_object nor OES_framebuffer_object
+    * support queries of the window system FBO.
+    */
+   case GL_DEPTH:
       return &fb->Attachment[BUFFER_DEPTH];
-   case GL_STENCIL_BUFFER:
-      /* fall-through / new in GL 3.0 */
-   case GL_STENCIL_ATTACHMENT_EXT:
+   case GL_STENCIL:
       return &fb->Attachment[BUFFER_STENCIL];
    default:
       return NULL;
@@ -1220,7 +1246,67 @@ _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
       return ctx->Extensions.EXT_texture_shared_exponent ? GL_RGB : 0;
    case GL_R11F_G11F_B10F:
       return ctx->Extensions.EXT_packed_float ? GL_RGB : 0;
-   /* XXX add integer formats eventually */
+
+   case GL_RGBA8UI_EXT:
+   case GL_RGBA16UI_EXT:
+   case GL_RGBA32UI_EXT:
+   case GL_RGBA8I_EXT:
+   case GL_RGBA16I_EXT:
+   case GL_RGBA32I_EXT:
+      return ctx->Extensions.EXT_texture_integer ? GL_RGBA : 0;
+
+   case GL_RGB8UI_EXT:
+   case GL_RGB16UI_EXT:
+   case GL_RGB32UI_EXT:
+   case GL_RGB8I_EXT:
+   case GL_RGB16I_EXT:
+   case GL_RGB32I_EXT:
+      return ctx->Extensions.EXT_texture_integer ? GL_RGB : 0;
+
+   case GL_R8UI:
+   case GL_R8I:
+   case GL_R16UI:
+   case GL_R16I:
+   case GL_R32UI:
+   case GL_R32I:
+      return ctx->Extensions.ARB_texture_rg &&
+             ctx->Extensions.EXT_texture_integer ? GL_RED : 0;
+
+   case GL_RG8UI:
+   case GL_RG8I:
+   case GL_RG16UI:
+   case GL_RG16I:
+   case GL_RG32UI:
+   case GL_RG32I:
+      return ctx->Extensions.ARB_texture_rg &&
+             ctx->Extensions.EXT_texture_integer ? GL_RG : 0;
+      
+   case GL_INTENSITY8I_EXT:
+   case GL_INTENSITY8UI_EXT:
+   case GL_INTENSITY16I_EXT:
+   case GL_INTENSITY16UI_EXT:
+   case GL_INTENSITY32I_EXT:
+   case GL_INTENSITY32UI_EXT:
+      return ctx->Extensions.EXT_texture_integer &&
+             ctx->Extensions.ARB_framebuffer_object ? GL_INTENSITY : 0;
+
+   case GL_LUMINANCE8I_EXT:
+   case GL_LUMINANCE8UI_EXT:
+   case GL_LUMINANCE16I_EXT:
+   case GL_LUMINANCE16UI_EXT:
+   case GL_LUMINANCE32I_EXT:
+   case GL_LUMINANCE32UI_EXT:
+      return ctx->Extensions.EXT_texture_integer &&
+             ctx->Extensions.ARB_framebuffer_object ? GL_LUMINANCE : 0;
+
+   case GL_LUMINANCE_ALPHA8I_EXT:
+   case GL_LUMINANCE_ALPHA8UI_EXT:
+   case GL_LUMINANCE_ALPHA16I_EXT:
+   case GL_LUMINANCE_ALPHA16UI_EXT:
+   case GL_LUMINANCE_ALPHA32I_EXT:
+   case GL_LUMINANCE_ALPHA32UI_EXT:
+      return ctx->Extensions.EXT_texture_integer &&
+             ctx->Extensions.ARB_framebuffer_object ? GL_LUMINANCE_ALPHA : 0;
    default:
       return 0;
    }
@@ -2190,6 +2276,21 @@ _mesa_GetFramebufferAttachmentParameterivEXT(GLenum target, GLenum attachment,
    }
 
    if (is_winsys_fbo(buffer)) {
+      /* Page 126 (page 136 of the PDF) of the OpenGL ES 2.0.25 spec
+       * says:
+       *
+       *     "If the framebuffer currently bound to target is zero, then
+       *     INVALID_OPERATION is generated."
+       *
+       * The EXT_framebuffer_object spec has the same wording, and the
+       * OES_framebuffer_object spec refers to the EXT_framebuffer_object
+       * spec.
+       */
+      if (ctx->API != API_OPENGL || !ctx->Extensions.ARB_framebuffer_object) {
+	 _mesa_error(ctx, GL_INVALID_OPERATION,
+		     "glGetFramebufferAttachmentParameteriv(bound FBO = 0)");
+	 return;
+      }
       /* the default / window-system FBO */
       att = _mesa_get_fb0_attachment(ctx, buffer, attachment);
    }
@@ -2385,6 +2486,7 @@ _mesa_GetFramebufferAttachmentParameterivEXT(GLenum target, GLenum attachment,
 void GLAPIENTRY
 _mesa_GenerateMipmapEXT(GLenum target)
 {
+   struct gl_texture_image *srcImage;
    struct gl_texture_object *texObj;
    GLboolean error;
 
@@ -2431,6 +2533,13 @@ _mesa_GenerateMipmapEXT(GLenum target)
    }
 
    _mesa_lock_texture(ctx, texObj);
+
+   srcImage = _mesa_select_tex_image(ctx, texObj, target, texObj->BaseLevel);
+   if (!srcImage) {
+      _mesa_unlock_texture(ctx, texObj);
+      return;
+   }
+
    if (target == GL_TEXTURE_CUBE_MAP) {
       GLuint face;
       for (face = 0; face < 6; face++)

@@ -615,7 +615,7 @@ static uint32_t r300_get_border_color(enum pipe_format format,
         case PIPE_FORMAT_Z16_UNORM:
             return util_pack_z(PIPE_FORMAT_Z16_UNORM, border[0]);
         case PIPE_FORMAT_X8Z24_UNORM:
-        case PIPE_FORMAT_S8_USCALED_Z24_UNORM:
+        case PIPE_FORMAT_S8_UINT_Z24_UNORM:
             if (is_r500) {
                 return util_pack_z(PIPE_FORMAT_X8Z24_UNORM, border[0]);
             } else {
@@ -782,17 +782,13 @@ static void r300_merge_textures_and_samplers(struct r300_context* r300)
                      * an i-th mipmap level as the zero level. */
                     base_level += min_level;
                 }
-                offset = tex->tex_offset +
-                         tex->tex.offset_in_bytes[base_level];
+                offset = tex->tex.offset_in_bytes[base_level];
 
                 r300_texture_setup_format_state(r300->screen, tex,
                                                 base_level,
                                                 &texstate->format);
                 texstate->format.tile_config |= offset & 0xffffffe0;
                 assert((offset & 0x1f) == 0);
-            } else {
-                texstate->format.tile_config |= tex->tex_offset & 0xffffffe0;
-                assert((tex->tex_offset & 0x1f) == 0);
             }
 
             /* Assign a texture cache region. */

@@ -124,6 +124,7 @@ nvc0_create(struct pipe_screen *pscreen, void *priv)
    nvc0->base.screen    = &screen->base;
    nvc0->base.copy_data = nvc0_m2mf_copy_linear;
    nvc0->base.push_data = nvc0_m2mf_push_linear;
+   nvc0->base.push_cb = nvc0_cb_push;
 
    pipe->winsys = pipe_winsys;
    pipe->screen = pscreen;
@@ -209,7 +210,7 @@ nvc0_bufctx_emit_relocs(struct nvc0_context *nvc0)
    n  = nvc0->residents_size / sizeof(struct resident);
    n += NVC0_SCREEN_RESIDENT_BO_COUNT;
 
-   MARK_RING(nvc0->screen->base.channel, n, n);
+   MARK_RING(nvc0->screen->base.channel, 0, n);
 
    for (ctx = 0; ctx < NVC0_BUFCTX_COUNT; ++ctx) {
       array = &nvc0->residents[ctx];

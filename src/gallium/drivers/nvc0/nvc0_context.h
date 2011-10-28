@@ -74,13 +74,15 @@ struct nvc0_context {
       int32_t index_bias;
       boolean prim_restart;
       boolean early_z;
+      uint16_t scissor;
       uint8_t num_vtxbufs;
       uint8_t num_vtxelts;
       uint8_t num_textures[5];
       uint8_t num_samplers[5];
       uint8_t tls_required; /* bitmask of shader types using l[] */
       uint8_t c14_bound; /* whether immediate array constbuf is bound */
-      uint16_t scissor;
+      uint8_t clip_enable;
+      uint32_t clip_mode;
       uint32_t uniform_buffer_bound[5];
    } state;
 
@@ -168,6 +170,10 @@ void nvc0_program_library_upload(struct nvc0_context *);
 
 /* nvc0_query.c */
 void nvc0_init_query_functions(struct nvc0_context *);
+void nvc0_query_pushbuf_submit(struct nvc0_context *nvc0,
+                               struct pipe_query *pq, unsigned result_offset);
+
+#define NVC0_QUERY_TFB_BUFFER_OFFSETS (PIPE_QUERY_TYPES + 0)
 
 /* nvc0_shader_state.c */
 void nvc0_vertprog_validate(struct nvc0_context *);
@@ -215,6 +221,11 @@ nvc0_m2mf_copy_linear(struct nouveau_context *nv,
 		      struct nouveau_bo *dst, unsigned dstoff, unsigned dstdom,
 		      struct nouveau_bo *src, unsigned srcoff, unsigned srcdom,
 		      unsigned size);
+void
+nvc0_cb_push(struct nouveau_context *,
+             struct nouveau_bo *bo, unsigned domain,
+             unsigned base, unsigned size,
+             unsigned offset, unsigned words, const uint32_t *data);
 
 /* nvc0_vbo.c */
 void nvc0_draw_vbo(struct pipe_context *, const struct pipe_draw_info *);

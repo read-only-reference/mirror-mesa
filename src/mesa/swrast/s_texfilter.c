@@ -57,7 +57,7 @@
  * optimization!  If we find that's not true on some systems, convert
  * to a macro.
  */
-static INLINE GLfloat
+static inline GLfloat
 lerp_2d(GLfloat a, GLfloat b,
         GLfloat v00, GLfloat v10, GLfloat v01, GLfloat v11)
 {
@@ -71,7 +71,7 @@ lerp_2d(GLfloat a, GLfloat b,
  * Do 3D/trilinear interpolation of float values.
  * \sa lerp_2d
  */
-static INLINE GLfloat
+static inline GLfloat
 lerp_3d(GLfloat a, GLfloat b, GLfloat c,
         GLfloat v000, GLfloat v100, GLfloat v010, GLfloat v110,
         GLfloat v001, GLfloat v101, GLfloat v011, GLfloat v111)
@@ -89,7 +89,7 @@ lerp_3d(GLfloat a, GLfloat b, GLfloat c,
 /**
  * Do linear interpolation of colors.
  */
-static INLINE void
+static inline void
 lerp_rgba(GLfloat result[4], GLfloat t, const GLfloat a[4], const GLfloat b[4])
 {
    result[0] = LERP(t, a[0], b[0]);
@@ -102,7 +102,7 @@ lerp_rgba(GLfloat result[4], GLfloat t, const GLfloat a[4], const GLfloat b[4])
 /**
  * Do bilinear interpolation of colors.
  */
-static INLINE void
+static inline void
 lerp_rgba_2d(GLfloat result[4], GLfloat a, GLfloat b,
              const GLfloat t00[4], const GLfloat t10[4],
              const GLfloat t01[4], const GLfloat t11[4])
@@ -117,7 +117,7 @@ lerp_rgba_2d(GLfloat result[4], GLfloat a, GLfloat b,
 /**
  * Do trilinear interpolation of colors.
  */
-static INLINE void
+static inline void
 lerp_rgba_3d(GLfloat result[4], GLfloat a, GLfloat b, GLfloat c,
              const GLfloat t000[4], const GLfloat t100[4],
              const GLfloat t010[4], const GLfloat t110[4],
@@ -153,7 +153,7 @@ lerp_rgba_3d(GLfloat result[4], GLfloat a, GLfloat b, GLfloat c,
  *    i0, i1 = returns two nearest texel indexes
  *    weight = returns blend factor between texels
  */
-static INLINE void
+static inline void
 linear_texel_locations(GLenum wrapMode,
                        const struct gl_texture_image *img,
                        GLint size, GLfloat s,
@@ -281,7 +281,7 @@ linear_texel_locations(GLenum wrapMode,
 /**
  * Used to compute texel location for nearest sampling.
  */
-static INLINE GLint
+static inline GLint
 nearest_texel_location(GLenum wrapMode,
                        const struct gl_texture_image *img,
                        GLint size, GLfloat s)
@@ -406,7 +406,7 @@ nearest_texel_location(GLenum wrapMode,
 
 
 /* Power of two image sizes only */
-static INLINE void
+static inline void
 linear_repeat_texel_location(GLuint size, GLfloat s,
                              GLint *i0, GLint *i1, GLfloat *weight)
 {
@@ -420,7 +420,7 @@ linear_repeat_texel_location(GLuint size, GLfloat s,
 /**
  * Do clamp/wrap for a texture rectangle coord, GL_NEAREST filter mode.
  */
-static INLINE GLint
+static inline GLint
 clamp_rect_coord_nearest(GLenum wrapMode, GLfloat coord, GLint max)
 {
    switch (wrapMode) {
@@ -440,7 +440,7 @@ clamp_rect_coord_nearest(GLenum wrapMode, GLfloat coord, GLint max)
 /**
  * As above, but GL_LINEAR filtering.
  */
-static INLINE void
+static inline void
 clamp_rect_coord_linear(GLenum wrapMode, GLfloat coord, GLint max,
                         GLint *i0out, GLint *i1out, GLfloat *weight)
 {
@@ -481,7 +481,7 @@ clamp_rect_coord_linear(GLenum wrapMode, GLfloat coord, GLint max,
 /**
  * Compute slice/image to use for 1D or 2D array texture.
  */
-static INLINE GLint
+static inline GLint
 tex_array_slice(GLfloat coord, GLsizei size)
 {
    GLint slice = IFLOOR(coord + 0.5f);
@@ -494,7 +494,7 @@ tex_array_slice(GLfloat coord, GLsizei size)
  * Compute nearest integer texcoords for given texobj and coordinate.
  * NOTE: only used for depth texture sampling.
  */
-static INLINE void
+static inline void
 nearest_texcoord(const struct gl_texture_object *texObj,
                  GLuint level,
                  const GLfloat texcoord[4],
@@ -541,7 +541,7 @@ nearest_texcoord(const struct gl_texture_object *texObj,
  * Compute linear integer texcoords for given texobj and coordinate.
  * NOTE: only used for depth texture sampling.
  */
-static INLINE void
+static inline void
 linear_texcoord(const struct gl_texture_object *texObj,
                 GLuint level,
                 const GLfloat texcoord[4],
@@ -598,7 +598,7 @@ linear_texcoord(const struct gl_texture_object *texObj,
  * For linear interpolation between mipmap levels N and N+1, this function
  * computes N.
  */
-static INLINE GLint
+static inline GLint
 linear_mipmap_level(const struct gl_texture_object *tObj, GLfloat lambda)
 {
    if (lambda < 0.0F)
@@ -613,7 +613,7 @@ linear_mipmap_level(const struct gl_texture_object *tObj, GLfloat lambda)
 /**
  * Compute the nearest mipmap level to take texels from.
  */
-static INLINE GLint
+static inline GLint
 nearest_mipmap_level(const struct gl_texture_object *tObj, GLfloat lambda)
 {
    GLfloat l;
@@ -649,7 +649,7 @@ nearest_mipmap_level(const struct gl_texture_object *tObj, GLfloat lambda)
  * will be minified, magnified, or split between the two.  This function
  * determines the subranges in [0, n-1] that are to be minified or magnified.
  */
-static INLINE void
+static inline void
 compute_min_mag_ranges(const struct gl_texture_object *tObj,
                        GLuint n, const GLfloat lambda[],
                        GLuint *minStart, GLuint *minEnd,
@@ -758,7 +758,7 @@ compute_min_mag_ranges(const struct gl_texture_object *tObj,
  * the base texture format.  Ex: if the texture base format it GL_ALPHA,
  * we return (0,0,0,BorderAlpha).
  */
-static INLINE void
+static inline void
 get_border_color(const struct gl_texture_object *tObj,
                  const struct gl_texture_image *img,
                  GLfloat rgba[4])
@@ -798,7 +798,7 @@ get_border_color(const struct gl_texture_object *tObj,
 /**
  * Return the texture sample for coordinate (s) using GL_NEAREST filter.
  */
-static INLINE void
+static inline void
 sample_1d_nearest(struct gl_context *ctx,
                   const struct gl_texture_object *tObj,
                   const struct gl_texture_image *img,
@@ -815,7 +815,7 @@ sample_1d_nearest(struct gl_context *ctx,
       get_border_color(tObj, img, rgba);
    }
    else {
-      swImg->FetchTexelf(swImg, i, 0, 0, rgba);
+      swImg->FetchTexel(swImg, i, 0, 0, rgba);
    }
 }
 
@@ -823,7 +823,7 @@ sample_1d_nearest(struct gl_context *ctx,
 /**
  * Return the texture sample for coordinate (s) using GL_LINEAR filter.
  */
-static INLINE void
+static inline void
 sample_1d_linear(struct gl_context *ctx,
                  const struct gl_texture_object *tObj,
                  const struct gl_texture_image *img,
@@ -852,13 +852,13 @@ sample_1d_linear(struct gl_context *ctx,
       get_border_color(tObj, img, t0);
    }
    else {
-      swImg->FetchTexelf(swImg, i0, 0, 0, t0);
+      swImg->FetchTexel(swImg, i0, 0, 0, t0);
    }
    if (useBorderColor & I1BIT) {
       get_border_color(tObj, img, t1);
    }
    else {
-      swImg->FetchTexelf(swImg, i1, 0, 0, t1);
+      swImg->FetchTexel(swImg, i1, 0, 0, t1);
    }
 
    lerp_rgba(rgba, a, t0, t1);
@@ -1057,7 +1057,7 @@ sample_lambda_1d( struct gl_context *ctx,
 /**
  * Return the texture sample for coordinate (s,t) using GL_NEAREST filter.
  */
-static INLINE void
+static inline void
 sample_2d_nearest(struct gl_context *ctx,
                   const struct gl_texture_object *tObj,
                   const struct gl_texture_image *img,
@@ -1082,7 +1082,7 @@ sample_2d_nearest(struct gl_context *ctx,
       get_border_color(tObj, img, rgba);
    }
    else {
-      swImg->FetchTexelf(swImg, i, j, 0, rgba);
+      swImg->FetchTexel(swImg, i, j, 0, rgba);
    }
 }
 
@@ -1091,7 +1091,7 @@ sample_2d_nearest(struct gl_context *ctx,
  * Return the texture sample for coordinate (s,t) using GL_LINEAR filter.
  * New sampling code contributed by Lynn Quam <quam@ai.sri.com>.
  */
-static INLINE void
+static inline void
 sample_2d_linear(struct gl_context *ctx,
                  const struct gl_texture_object *tObj,
                  const struct gl_texture_image *img,
@@ -1127,25 +1127,25 @@ sample_2d_linear(struct gl_context *ctx,
       get_border_color(tObj, img, t00);
    }
    else {
-      swImg->FetchTexelf(swImg, i0, j0, 0, t00);
+      swImg->FetchTexel(swImg, i0, j0, 0, t00);
    }
    if (useBorderColor & (I1BIT | J0BIT)) {
       get_border_color(tObj, img, t10);
    }
    else {
-      swImg->FetchTexelf(swImg, i1, j0, 0, t10);
+      swImg->FetchTexel(swImg, i1, j0, 0, t10);
    }
    if (useBorderColor & (I0BIT | J1BIT)) {
       get_border_color(tObj, img, t01);
    }
    else {
-      swImg->FetchTexelf(swImg, i0, j1, 0, t01);
+      swImg->FetchTexel(swImg, i0, j1, 0, t01);
    }
    if (useBorderColor & (I1BIT | J1BIT)) {
       get_border_color(tObj, img, t11);
    }
    else {
-      swImg->FetchTexelf(swImg, i1, j1, 0, t11);
+      swImg->FetchTexel(swImg, i1, j1, 0, t11);
    }
 
    lerp_rgba_2d(rgba, a, b, t00, t10, t01, t11);
@@ -1156,7 +1156,7 @@ sample_2d_linear(struct gl_context *ctx,
  * As above, but we know WRAP_S == REPEAT and WRAP_T == REPEAT.
  * We don't have to worry about the texture border.
  */
-static INLINE void
+static inline void
 sample_2d_linear_repeat(struct gl_context *ctx,
                         const struct gl_texture_object *tObj,
                         const struct gl_texture_image *img,
@@ -1180,10 +1180,10 @@ sample_2d_linear_repeat(struct gl_context *ctx,
    linear_repeat_texel_location(width,  texcoord[0], &i0, &i1, &wi);
    linear_repeat_texel_location(height, texcoord[1], &j0, &j1, &wj);
 
-   swImg->FetchTexelf(swImg, i0, j0, 0, t00);
-   swImg->FetchTexelf(swImg, i1, j0, 0, t10);
-   swImg->FetchTexelf(swImg, i0, j1, 0, t01);
-   swImg->FetchTexelf(swImg, i1, j1, 0, t11);
+   swImg->FetchTexel(swImg, i0, j0, 0, t00);
+   swImg->FetchTexel(swImg, i1, j0, 0, t10);
+   swImg->FetchTexel(swImg, i0, j1, 0, t01);
+   swImg->FetchTexel(swImg, i1, j1, 0, t11);
 
    lerp_rgba_2d(rgba, wi, wj, t00, t10, t01, t11);
 }
@@ -1369,12 +1369,13 @@ opt_sample_rgb_2d(struct gl_context *ctx,
    ASSERT(img->Border==0);
    ASSERT(img->TexFormat == MESA_FORMAT_RGB888);
    ASSERT(swImg->_IsPowerOfTwo);
+   (void) swImg;
 
    for (k=0; k<n; k++) {
       GLint i = IFLOOR(texcoords[k][0] * width) & colMask;
       GLint j = IFLOOR(texcoords[k][1] * height) & rowMask;
       GLint pos = (j << shift) | i;
-      GLubyte *texel = ((GLubyte *) img->Data) + 3*pos;
+      GLubyte *texel = swImg->Data + 3 * pos;
       rgba[k][RCOMP] = UBYTE_TO_FLOAT(texel[2]);
       rgba[k][GCOMP] = UBYTE_TO_FLOAT(texel[1]);
       rgba[k][BCOMP] = UBYTE_TO_FLOAT(texel[0]);
@@ -1412,12 +1413,13 @@ opt_sample_rgba_2d(struct gl_context *ctx,
    ASSERT(img->Border==0);
    ASSERT(img->TexFormat == MESA_FORMAT_RGBA8888);
    ASSERT(swImg->_IsPowerOfTwo);
+   (void) swImg;
 
    for (i = 0; i < n; i++) {
       const GLint col = IFLOOR(texcoords[i][0] * width) & colMask;
       const GLint row = IFLOOR(texcoords[i][1] * height) & rowMask;
       const GLint pos = (row << shift) | col;
-      const GLuint texel = *((GLuint *) img->Data + pos);
+      const GLuint texel = *((GLuint *) swImg->Data + pos);
       rgba[i][RCOMP] = UBYTE_TO_FLOAT( (texel >> 24)        );
       rgba[i][GCOMP] = UBYTE_TO_FLOAT( (texel >> 16) & 0xff );
       rgba[i][BCOMP] = UBYTE_TO_FLOAT( (texel >>  8) & 0xff );
@@ -1440,7 +1442,7 @@ sample_lambda_2d(struct gl_context *ctx,
 
    const GLboolean repeatNoBorderPOT = (tObj->Sampler.WrapS == GL_REPEAT)
       && (tObj->Sampler.WrapT == GL_REPEAT)
-      && (tImg->Border == 0 && (tImg->Width == tImg->RowStride))
+      && (tImg->Border == 0 && (tImg->Width == swImg->RowStride))
       && swImg->_IsPowerOfTwo;
 
    ASSERT(lambda != NULL);
@@ -1760,7 +1762,7 @@ sample_2d_footprint(struct gl_context *ctx,
  * Returns the index of the specified texture object in the
  * gl_context texture unit array.
  */
-static INLINE GLuint
+static inline GLuint
 texture_unit_index(const struct gl_context *ctx,
                    const struct gl_texture_object *tObj)
 {
@@ -1941,7 +1943,7 @@ sample_lambda_2d_aniso(struct gl_context *ctx,
 /**
  * Return the texture sample for coordinate (s,t,r) using GL_NEAREST filter.
  */
-static INLINE void
+static inline void
 sample_3d_nearest(struct gl_context *ctx,
                   const struct gl_texture_object *tObj,
                   const struct gl_texture_image *img,
@@ -1966,7 +1968,7 @@ sample_3d_nearest(struct gl_context *ctx,
       get_border_color(tObj, img, rgba);
    }
    else {
-      swImg->FetchTexelf(swImg, i, j, k, rgba);
+      swImg->FetchTexel(swImg, i, j, k, rgba);
    }
 }
 
@@ -2018,50 +2020,50 @@ sample_3d_linear(struct gl_context *ctx,
       get_border_color(tObj, img, t000);
    }
    else {
-      swImg->FetchTexelf(swImg, i0, j0, k0, t000);
+      swImg->FetchTexel(swImg, i0, j0, k0, t000);
    }
    if (useBorderColor & (I1BIT | J0BIT | K0BIT)) {
       get_border_color(tObj, img, t100);
    }
    else {
-      swImg->FetchTexelf(swImg, i1, j0, k0, t100);
+      swImg->FetchTexel(swImg, i1, j0, k0, t100);
    }
    if (useBorderColor & (I0BIT | J1BIT | K0BIT)) {
       get_border_color(tObj, img, t010);
    }
    else {
-      swImg->FetchTexelf(swImg, i0, j1, k0, t010);
+      swImg->FetchTexel(swImg, i0, j1, k0, t010);
    }
    if (useBorderColor & (I1BIT | J1BIT | K0BIT)) {
       get_border_color(tObj, img, t110);
    }
    else {
-      swImg->FetchTexelf(swImg, i1, j1, k0, t110);
+      swImg->FetchTexel(swImg, i1, j1, k0, t110);
    }
 
    if (useBorderColor & (I0BIT | J0BIT | K1BIT)) {
       get_border_color(tObj, img, t001);
    }
    else {
-      swImg->FetchTexelf(swImg, i0, j0, k1, t001);
+      swImg->FetchTexel(swImg, i0, j0, k1, t001);
    }
    if (useBorderColor & (I1BIT | J0BIT | K1BIT)) {
       get_border_color(tObj, img, t101);
    }
    else {
-      swImg->FetchTexelf(swImg, i1, j0, k1, t101);
+      swImg->FetchTexel(swImg, i1, j0, k1, t101);
    }
    if (useBorderColor & (I0BIT | J1BIT | K1BIT)) {
       get_border_color(tObj, img, t011);
    }
    else {
-      swImg->FetchTexelf(swImg, i0, j1, k1, t011);
+      swImg->FetchTexel(swImg, i0, j1, k1, t011);
    }
    if (useBorderColor & (I1BIT | J1BIT | K1BIT)) {
       get_border_color(tObj, img, t111);
    }
    else {
-      swImg->FetchTexelf(swImg, i1, j1, k1, t111);
+      swImg->FetchTexel(swImg, i1, j1, k1, t111);
    }
 
    /* trilinear interpolation of samples */
@@ -2582,7 +2584,7 @@ sample_nearest_rect(struct gl_context *ctx,
       if (col < 0 || col >= width || row < 0 || row >= height)
          get_border_color(tObj, img, rgba[i]);
       else
-         swImg->FetchTexelf(swImg, col, row, 0, rgba[i]);
+         swImg->FetchTexel(swImg, col, row, 0, rgba[i]);
    }
 }
 
@@ -2630,22 +2632,22 @@ sample_linear_rect(struct gl_context *ctx,
       if (useBorderColor & (I0BIT | J0BIT))
          get_border_color(tObj, img, t00);
       else
-         swImg->FetchTexelf(swImg, i0, j0, 0, t00);
+         swImg->FetchTexel(swImg, i0, j0, 0, t00);
 
       if (useBorderColor & (I1BIT | J0BIT))
          get_border_color(tObj, img, t10);
       else
-         swImg->FetchTexelf(swImg, i1, j0, 0, t10);
+         swImg->FetchTexel(swImg, i1, j0, 0, t10);
 
       if (useBorderColor & (I0BIT | J1BIT))
          get_border_color(tObj, img, t01);
       else
-         swImg->FetchTexelf(swImg, i0, j1, 0, t01);
+         swImg->FetchTexel(swImg, i0, j1, 0, t01);
 
       if (useBorderColor & (I1BIT | J1BIT))
          get_border_color(tObj, img, t11);
       else
-         swImg->FetchTexelf(swImg, i1, j1, 0, t11);
+         swImg->FetchTexel(swImg, i1, j1, 0, t11);
 
       lerp_rgba_2d(rgba[i], a, b, t00, t10, t01, t11);
    }
@@ -2723,7 +2725,7 @@ sample_2d_array_nearest(struct gl_context *ctx,
       get_border_color(tObj, img, rgba);
    }
    else {
-      swImg->FetchTexelf(swImg, i, j, array, rgba);
+      swImg->FetchTexel(swImg, i, j, array, rgba);
    }
 }
 
@@ -2775,25 +2777,25 @@ sample_2d_array_linear(struct gl_context *ctx,
          get_border_color(tObj, img, t00);
       }
       else {
-	 swImg->FetchTexelf(swImg, i0, j0, array, t00);
+	 swImg->FetchTexel(swImg, i0, j0, array, t00);
       }
       if (useBorderColor & (I1BIT | J0BIT)) {
          get_border_color(tObj, img, t10);
       }
       else {
-	 swImg->FetchTexelf(swImg, i1, j0, array, t10);
+	 swImg->FetchTexel(swImg, i1, j0, array, t10);
       }
       if (useBorderColor & (I0BIT | J1BIT)) {
          get_border_color(tObj, img, t01);
       }
       else {
-	 swImg->FetchTexelf(swImg, i0, j1, array, t01);
+	 swImg->FetchTexel(swImg, i0, j1, array, t01);
       }
       if (useBorderColor & (I1BIT | J1BIT)) {
          get_border_color(tObj, img, t11);
       }
       else {
-	 swImg->FetchTexelf(swImg, i1, j1, array, t11);
+	 swImg->FetchTexel(swImg, i1, j1, array, t11);
       }
       
       /* trilinear interpolation of samples */
@@ -3032,7 +3034,7 @@ sample_1d_array_nearest(struct gl_context *ctx,
       get_border_color(tObj, img, rgba);
    }
    else {
-      swImg->FetchTexelf(swImg, i, array, 0, rgba);
+      swImg->FetchTexel(swImg, i, array, 0, rgba);
    }
 }
 
@@ -3076,13 +3078,13 @@ sample_1d_array_linear(struct gl_context *ctx,
       get_border_color(tObj, img, t0);
    }
    else {
-      swImg->FetchTexelf(swImg, i0, array, 0, t0);
+      swImg->FetchTexel(swImg, i0, array, 0, t0);
    }
    if (useBorderColor & (I1BIT | K0BIT)) {
       get_border_color(tObj, img, t1);
    }
    else {
-      swImg->FetchTexelf(swImg, i1, array, 0, t1);
+      swImg->FetchTexel(swImg, i1, array, 0, t1);
    }
 
    /* bilinear interpolation of samples */
@@ -3282,7 +3284,7 @@ sample_lambda_1d_array(struct gl_context *ctx,
 /**
  * Compare texcoord against depth sample.  Return 1.0 or the ambient value.
  */
-static INLINE GLfloat
+static inline GLfloat
 shadow_compare(GLenum function, GLfloat coord, GLfloat depthSample,
                GLfloat ambient)
 {
@@ -3315,7 +3317,7 @@ shadow_compare(GLenum function, GLfloat coord, GLfloat depthSample,
 /**
  * Compare texcoord against four depth samples.
  */
-static INLINE GLfloat
+static inline GLfloat
 shadow_compare4(GLenum function, GLfloat coord,
                 GLfloat depth00, GLfloat depth01,
                 GLfloat depth10, GLfloat depth11,
@@ -3446,7 +3448,7 @@ sample_depth_texture( struct gl_context *ctx,
 
          if (col >= 0 && row >= 0 && col < width && row < height && 
              slice >= 0 && slice < depth) {
-            swImg->FetchTexelf(swImg, col, row, slice, &depthSample);
+            swImg->FetchTexel(swImg, col, row, slice, &depthSample);
          }
          else {
             depthSample = tObj->Sampler.BorderColor.f[0];
@@ -3515,13 +3517,13 @@ sample_depth_texture( struct gl_context *ctx,
                depth00 = tObj->Sampler.BorderColor.f[0];
             }
             else {
-               swImg->FetchTexelf(swImg, i0, j0, slice, &depth00);
+               swImg->FetchTexel(swImg, i0, j0, slice, &depth00);
             }
             if (useBorderTexel & (I1BIT | J0BIT)) {
                depth10 = tObj->Sampler.BorderColor.f[0];
             }
             else {
-               swImg->FetchTexelf(swImg, i1, j0, slice, &depth10);
+               swImg->FetchTexel(swImg, i1, j0, slice, &depth10);
             }
 
             if (tObj->Target != GL_TEXTURE_1D_ARRAY_EXT) {
@@ -3529,13 +3531,13 @@ sample_depth_texture( struct gl_context *ctx,
                   depth01 = tObj->Sampler.BorderColor.f[0];
                }
                else {
-                  swImg->FetchTexelf(swImg, i0, j1, slice, &depth01);
+                  swImg->FetchTexel(swImg, i0, j1, slice, &depth01);
                }
                if (useBorderTexel & (I1BIT | J1BIT)) {
                   depth11 = tObj->Sampler.BorderColor.f[0];
                }
                else {
-                  swImg->FetchTexelf(swImg, i1, j1, slice, &depth11);
+                  swImg->FetchTexel(swImg, i1, j1, slice, &depth11);
                }
             }
             else {

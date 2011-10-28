@@ -62,7 +62,6 @@ static void r300_release_referenced_objects(struct r300_context *r300)
             (struct pipe_framebuffer_state*)r300->fb_state.state;
     struct r300_textures_state *textures =
             (struct r300_textures_state*)r300->textures_state.state;
-    struct r300_query *query, *temp;
     unsigned i;
 
     /* Framebuffer state. */
@@ -83,12 +82,6 @@ static void r300_release_referenced_objects(struct r300_context *r300)
     /* Manually-created vertex buffers. */
     pipe_resource_reference(&r300->dummy_vb, NULL);
     pipe_resource_reference(&r300->vbo, NULL);
-
-    /* If there are any queries pending or not destroyed, remove them now. */
-    foreach_s(query, temp, &r300->query_list) {
-        remove_from_list(query);
-        FREE(query);
-    }
 
     r300->context.delete_depth_stencil_alpha_state(&r300->context,
                                                    r300->dsa_decompress_zmask);
@@ -408,8 +401,6 @@ struct pipe_context* r300_create_context(struct pipe_screen* screen,
 
     r300->context.destroy = r300_destroy_context;
 
-    make_empty_list(&r300->query_list);
-
     util_slab_create(&r300->pool_transfers,
                      sizeof(struct pipe_transfer), 64,
                      UTIL_SLAB_SINGLETHREADED);
@@ -448,6 +439,7 @@ struct pipe_context* r300_create_context(struct pipe_screen* screen,
                                        U_VERTEX_FETCH_DWORD_ALIGNED);
     if (!r300->vbuf_mgr)
         goto fail;
+    r300->vbuf_mgr->caps.format_fixed32 = 0;
 
     r300->blitter = util_blitter_create(&r300->context);
     if (r300->blitter == NULL)

@@ -17,7 +17,8 @@
 
 struct radeon_context;
 
-#include "radeon_bocs_wrapper.h"
+#include "radeon_bo_gem.h"
+#include "radeon_cs_gem.h"
 
 /* This union is used to avoid warnings/miscompilation
    with float to uint32_t casts due to strict-aliasing */
@@ -91,15 +92,7 @@ struct radeon_renderbuffer
 	int has_surface;
 
 	GLuint pf_pending;  /**< sequence number of pending flip */
-	GLuint vbl_pending;   /**< vblank sequence number of pending flip */
 	__DRIdrawable *dPriv;
-
-	/* r6xx+ tiling */
-	GLuint tile_config;
-	GLint group_bytes;
-	GLint num_channels;
-	GLint num_banks;
-	GLint r7xx_bank_op;
 };
 
 struct radeon_framebuffer
@@ -107,21 +100,6 @@ struct radeon_framebuffer
 	struct gl_framebuffer base;
 
 	struct radeon_renderbuffer *color_rb[2];
-
-	GLuint vbl_waited;
-
-	/* buffer swap */
-	int64_t swap_ust;
-	int64_t swap_missed_ust;
-
-	GLuint swap_count;
-	GLuint swap_missed_count;
-
-	/* Drawable page flipping state */
-	GLboolean pf_active;
-	GLint pf_current_page;
-	GLint pf_num_pages;
-
 };
 
 
@@ -240,29 +218,7 @@ struct radeon_tex_obj {
 
         GLuint pp_txfilter_1;	/*  r300 */
 
-	/* r700 texture states */
-	GLuint SQ_TEX_RESOURCE0;
-	GLuint SQ_TEX_RESOURCE1;
-	GLuint SQ_TEX_RESOURCE2;
-	GLuint SQ_TEX_RESOURCE3;
-	GLuint SQ_TEX_RESOURCE4;
-	GLuint SQ_TEX_RESOURCE5;
-	GLuint SQ_TEX_RESOURCE6;
-
-    GLuint SQ_TEX_RESOURCE7;
-
-	GLuint SQ_TEX_SAMPLER0;
-	GLuint SQ_TEX_SAMPLER1;
-	GLuint SQ_TEX_SAMPLER2;
-
-	GLuint TD_PS_SAMPLER0_BORDER_RED;
-	GLuint TD_PS_SAMPLER0_BORDER_GREEN;
-	GLuint TD_PS_SAMPLER0_BORDER_BLUE;
-	GLuint TD_PS_SAMPLER0_BORDER_ALPHA;
-
 	GLboolean border_fallback;
-
-
 };
 
 static INLINE radeonTexObj* radeon_tex_obj(struct gl_texture_object *texObj)
@@ -457,9 +413,7 @@ struct radeon_context {
    GLuint NewGLState;
    DECLARE_RENDERINPUTS(tnl_index_bitset);	/* index of bits for last tnl_install_attrs */
 
-   /* Drawable, cliprect and scissor information */
-   GLuint numClipRects;	/* Cliprects for the draw buffer */
-   drm_clip_rect_t *pClipRects;
+   /* Drawable information */
    unsigned int lastStamp;
    drm_radeon_sarea_t *sarea;	/* Private SAREA data */
 
@@ -565,51 +519,6 @@ static inline __DRIdrawable* radeon_get_drawable(radeonContextPtr radeon)
 static inline __DRIdrawable* radeon_get_readable(radeonContextPtr radeon)
 {
 	return radeon->dri.context->driReadablePriv;
-}
-
-/**
- * This function takes a float and packs it into a uint32_t
- */
-static INLINE uint32_t radeonPackFloat32(float fl)
-{
-	union {
-		float fl;
-		uint32_t u;
-	} u;
-
-	u.fl = fl;
-	return u.u;
-}
-
-/* This is probably wrong for some values, I need to test this
- * some more.  Range checking would be a good idea also..
- *
- * But it works for most things.  I'll fix it later if someone
- * else with a better clue doesn't
- */
-static INLINE uint32_t radeonPackFloat24(float f)
-{
-	float mantissa;
-	int exponent;
-	uint32_t float24 = 0;
-
-	if (f == 0.0)
-		return 0;
-
-	mantissa = frexpf(f, &exponent);
-
-	/* Handle -ve */
-	if (mantissa < 0) {
-		float24 |= (1 << 23);
-		mantissa = mantissa * -1.0;
-	}
-	/* Handle exponent, bias of 63 */
-	exponent += 62;
-	float24 |= (exponent << 16);
-	/* Kill 7 LSB of mantissa */
-	float24 |= (radeonPackFloat32(mantissa) & 0x7FFFFF) >> 7;
-
-	return float24;
 }
 
 GLboolean radeonInitContext(radeonContextPtr radeon,

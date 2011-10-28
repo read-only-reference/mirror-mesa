@@ -351,11 +351,20 @@ private:
 	{}
 };
 
+struct _D3D11_SIGNATURE_PARAMETER_DESC;
+
 struct sm4_program
 {
 	sm4_token_version version;
 	std::vector<sm4_dcl*> dcls;
 	std::vector<sm4_insn*> insns;
+
+	_D3D11_SIGNATURE_PARAMETER_DESC* params_in;
+	_D3D11_SIGNATURE_PARAMETER_DESC* params_out;
+	_D3D11_SIGNATURE_PARAMETER_DESC* params_patch;
+	unsigned num_params_in;
+	unsigned num_params_out;
+	unsigned num_params_patch;
 
 	/* for ifs, the insn number of the else or endif if there is no else
 	 * for elses, the insn number of the endif
@@ -366,15 +375,6 @@ struct sm4_program
 	 */
 	std::vector<int> cf_insn_linked;
 
-	/* NOTE: sampler 0 is the unnormalized nearest sampler for LD/LD_MS, while
-	 * sampler 1 is user-specified sampler 0
-	 */
-	bool resource_sampler_slots_assigned;
-	std::vector<int> slot_to_resource;
-	std::vector<int> slot_to_sampler;
-	std::map<std::pair<int, int>, int> resource_sampler_to_slot;
-	std::map<int, int> resource_to_slot;
-
 	bool labels_found;
 	std::vector<int> label_to_insn_num;
 
@@ -382,7 +382,7 @@ struct sm4_program
 	{
 		memset(&version, 0, sizeof(version));
 		labels_found = false;
-		resource_sampler_slots_assigned = false;
+		num_params_in = num_params_out = num_params_patch = 0;
 	}
 
 	~sm4_program()
@@ -391,6 +391,13 @@ struct sm4_program
 			delete *i;
 		for(std::vector<sm4_insn*>::iterator i = insns.begin(), e = insns.end(); i != e; ++i)
 			delete *i;
+
+		if(num_params_in)
+			free(params_in);
+		if(num_params_out)
+			free(params_out);
+		if(num_params_patch)
+			free(params_patch);
 	}
 
 	void dump();
@@ -404,7 +411,6 @@ sm4_program* sm4_parse(void* tokens, int size);
 
 bool sm4_link_cf_insns(sm4_program& program);
 bool sm4_find_labels(sm4_program& program);
-bool sm4_allocate_resource_sampler_pairs(sm4_program& program);
 
 #endif /* SM4_H_ */
 

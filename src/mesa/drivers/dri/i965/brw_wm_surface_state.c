@@ -32,7 +32,6 @@
 
 #include "main/mtypes.h"
 #include "main/samplerobj.h"
-#include "main/texstore.h"
 #include "program/prog_parameter.h"
 
 #include "intel_mipmap_tree.h"
@@ -50,12 +49,14 @@ translate_tex_target(GLenum target)
 {
    switch (target) {
    case GL_TEXTURE_1D: 
+   case GL_TEXTURE_1D_ARRAY_EXT:
       return BRW_SURFACE_1D;
 
    case GL_TEXTURE_RECTANGLE_NV: 
       return BRW_SURFACE_2D;
 
    case GL_TEXTURE_2D: 
+   case GL_TEXTURE_2D_ARRAY_EXT:
       return BRW_SURFACE_2D;
 
    case GL_TEXTURE_3D: 
@@ -231,6 +232,9 @@ brw_update_texture_surface( struct gl_context *ctx, GLuint unit )
    struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit);
    const GLuint surf_index = SURF_INDEX_TEXTURE(unit);
    uint32_t *surf;
+   int width, height, depth;
+
+   intel_miptree_get_dimensions_for_image(firstImage, &width, &height, &depth);
 
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
 			  6 * 4, 32, &brw->wm.surf_offset[surf_index]);
@@ -247,11 +251,11 @@ brw_update_texture_surface( struct gl_context *ctx, GLuint unit )
    surf[1] = intelObj->mt->region->bo->offset; /* reloc */
 
    surf[2] = ((intelObj->_MaxLevel - tObj->BaseLevel) << BRW_SURFACE_LOD_SHIFT |
-	      (firstImage->Width - 1) << BRW_SURFACE_WIDTH_SHIFT |
-	      (firstImage->Height - 1) << BRW_SURFACE_HEIGHT_SHIFT);
+	      (width - 1) << BRW_SURFACE_WIDTH_SHIFT |
+	      (height - 1) << BRW_SURFACE_HEIGHT_SHIFT);
 
    surf[3] = (brw_get_surface_tiling_bits(intelObj->mt->region->tiling) |
-	      (firstImage->Depth - 1) << BRW_SURFACE_DEPTH_SHIFT |
+	      (depth - 1) << BRW_SURFACE_DEPTH_SHIFT |
 	      ((intelObj->mt->region->pitch * intelObj->mt->cpp) - 1) <<
 	      BRW_SURFACE_PITCH_SHIFT);
 
@@ -317,7 +321,7 @@ brw_create_constant_surface(struct brw_context *brw,
  * state atom.
  */
 static void
-prepare_wm_pull_constants(struct brw_context *brw)
+brw_upload_wm_pull_constants(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->intel.ctx;
    struct intel_context *intel = &brw->intel;
@@ -361,7 +365,7 @@ const struct brw_tracked_state brw_wm_constants = {
       .brw = (BRW_NEW_FRAGMENT_PROGRAM),
       .cache = 0
    },
-   .prepare = prepare_wm_pull_constants,
+   .emit = brw_upload_wm_pull_constants,
 };
 
 /**
@@ -537,58 +541,16 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
 			   I915_GEM_DOMAIN_RENDER);
 }
 
-static void
-prepare_wm_surfaces(struct brw_context *brw)
-{
-   struct gl_context *ctx = &brw->intel.ctx;
-   int i;
-   int nr_surfaces = 0;
-
-   for (i = 0; i < ctx->DrawBuffer->_NumColorDrawBuffers; i++) {
-      struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[i];
-      struct intel_renderbuffer *irb = intel_renderbuffer(rb);
-      struct intel_region *region = irb ? irb->region : NULL;
-
-      if (region)
-	 brw_add_validated_bo(brw, region->bo);
-      nr_surfaces = SURF_INDEX_DRAW(i) + 1;
-   }
-
-   if (brw->wm.const_bo) {
-      brw_add_validated_bo(brw, brw->wm.const_bo);
-      nr_surfaces = SURF_INDEX_FRAG_CONST_BUFFER + 1;
-   }
-
-   for (i = 0; i < BRW_MAX_TEX_UNIT; i++) {
-      const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[i];
-
-      if (texUnit->_ReallyEnabled) {
-	 struct gl_texture_object *tObj = texUnit->_Current;
-	 struct intel_texture_object *intelObj = intel_texture_object(tObj);
-
-	 brw_add_validated_bo(brw, intelObj->mt->region->bo);
-	 nr_surfaces = SURF_INDEX_TEXTURE(i) + 1;
-      }
-   }
-
-   /* Have to update this in our prepare, since the unit's prepare
-    * relies on it.
-    */
-   if (brw->wm.nr_surfaces != nr_surfaces) {
-      brw->wm.nr_surfaces = nr_surfaces;
-      brw->state.dirty.brw |= BRW_NEW_NR_WM_SURFACES;
-   }
-}
-
 /**
  * Constructs the set of surface state objects pointed to by the
  * binding table.
  */
 static void
-upload_wm_surfaces(struct brw_context *brw)
+brw_upload_wm_surfaces(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->intel.ctx;
    GLuint i;
+   int nr_surfaces = 0;
 
    /* _NEW_BUFFERS | _NEW_COLOR */
    /* Update surfaces for drawing buffers */
@@ -602,8 +564,15 @@ upload_wm_surfaces(struct brw_context *brw)
 	    brw_update_null_renderbuffer_surface(brw, i);
 	 }
       }
+      nr_surfaces = SURF_INDEX_DRAW(ctx->DrawBuffer->_NumColorDrawBuffers);
    } else {
       brw_update_null_renderbuffer_surface(brw, 0);
+      nr_surfaces = SURF_INDEX_DRAW(0) + 1;
+   }
+
+   /* BRW_NEW_WM_CONSTBUF */
+   if (brw->wm.const_bo) {
+      nr_surfaces = SURF_INDEX_FRAG_CONST_BUFFER + 1;
    }
 
    /* Update surfaces for textures */
@@ -614,9 +583,15 @@ upload_wm_surfaces(struct brw_context *brw)
       /* _NEW_TEXTURE */
       if (texUnit->_ReallyEnabled) {
 	 brw_update_texture_surface(ctx, i);
+	 nr_surfaces = SURF_INDEX_TEXTURE(i) + 1;
       } else {
          brw->wm.surf_offset[surf] = 0;
       }
+   }
+
+   if (brw->wm.nr_surfaces != nr_surfaces) {
+      brw->wm.nr_surfaces = nr_surfaces;
+      brw->state.dirty.brw |= BRW_NEW_NR_WM_SURFACES;
    }
 
    brw->state.dirty.brw |= BRW_NEW_WM_SURFACES;
@@ -627,11 +602,11 @@ const struct brw_tracked_state brw_wm_surfaces = {
       .mesa = (_NEW_COLOR |
                _NEW_TEXTURE |
                _NEW_BUFFERS),
-      .brw = (BRW_NEW_BATCH),
+      .brw = (BRW_NEW_BATCH |
+	      BRW_NEW_WM_CONSTBUF),
       .cache = 0
    },
-   .prepare = prepare_wm_surfaces,
-   .emit = upload_wm_surfaces,
+   .emit = brw_upload_wm_surfaces,
 };
 
 /**

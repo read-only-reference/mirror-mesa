@@ -55,7 +55,10 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLGE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLNE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MUL:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_INT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULLO_INT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_UINT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULLO_UINT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MAX:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MIN:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETE:
@@ -66,6 +69,7 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETGT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETGE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETNE:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETNE_INT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_DOT4:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_DOT4_IEEE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_CUBE:
@@ -135,6 +139,7 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETGT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETGE:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETNE:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETNE_INT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_DOT4:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_DOT4_IEEE:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_CUBE:
@@ -1841,7 +1846,7 @@ void r600_bytecode_dump(struct r600_bytecode *bc)
 			fprintf(stderr, "KCACHE_BANK1:%X\n", cf->kcache[1].bank);
 			id++;
 			fprintf(stderr, "%04d %08X ALU ", id, bc->bytecode[id]);
-			fprintf(stderr, "INST:%d ", cf->inst);
+			fprintf(stderr, "INST:0x%x ", cf->inst);
 			fprintf(stderr, "KCACHE_MODE1:%X ", cf->kcache[1].mode);
 			fprintf(stderr, "KCACHE_ADDR0:%X ", cf->kcache[0].addr);
 			fprintf(stderr, "KCACHE_ADDR1:%X ", cf->kcache[1].addr);
@@ -1854,7 +1859,7 @@ void r600_bytecode_dump(struct r600_bytecode *bc)
 			fprintf(stderr, "ADDR:%d\n", cf->addr);
 			id++;
 			fprintf(stderr, "%04d %08X TEX/VTX ", id, bc->bytecode[id]);
-			fprintf(stderr, "INST:%d ", cf->inst);
+			fprintf(stderr, "INST:0x%x ", cf->inst);
 			fprintf(stderr, "COUNT:%d\n", cf->ndw / 4);
 			break;
 		case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
@@ -1873,7 +1878,7 @@ void r600_bytecode_dump(struct r600_bytecode *bc)
 			fprintf(stderr, "SWIZ_Z:%X ", cf->output.swizzle_z);
 			fprintf(stderr, "SWIZ_W:%X ", cf->output.swizzle_w);
 			fprintf(stderr, "BARRIER:%X ", cf->output.barrier);
-			fprintf(stderr, "INST:%d ", cf->output.inst);
+			fprintf(stderr, "INST:0x%x ", cf->output.inst);
 			fprintf(stderr, "BURST_COUNT:%d ", cf->output.burst_count);
 			fprintf(stderr, "EOP:%X\n", cf->output.end_of_program);
 			break;
@@ -1891,7 +1896,7 @@ void r600_bytecode_dump(struct r600_bytecode *bc)
 			fprintf(stderr, "ADDR:%d\n", cf->cf_addr);
 			id++;
 			fprintf(stderr, "%04d %08X CF ", id, bc->bytecode[id]);
-			fprintf(stderr, "INST:%d ", cf->inst);
+			fprintf(stderr, "INST:0x%x ", cf->inst);
 			fprintf(stderr, "COND:%X ", cf->cond);
 			fprintf(stderr, "POP_COUNT:%X\n", cf->pop_count);
 			break;
@@ -1914,7 +1919,7 @@ void r600_bytecode_dump(struct r600_bytecode *bc)
 			fprintf(stderr, "LAST:%d)\n", alu->last);
 			id++;
 			fprintf(stderr, "%04d %08X %c ", id, bc->bytecode[id], alu->last ? '*' : ' ');
-			fprintf(stderr, "INST:%d ", alu->inst);
+			fprintf(stderr, "INST:0x%x ", alu->inst);
 			fprintf(stderr, "DST(SEL:%d ", alu->dst.sel);
 			fprintf(stderr, "CHAN:%d ", alu->dst.chan);
 			fprintf(stderr, "REL:%d ", alu->dst.rel);
@@ -1947,7 +1952,7 @@ void r600_bytecode_dump(struct r600_bytecode *bc)
 
 		LIST_FOR_EACH_ENTRY(tex, &cf->tex, list) {
 			fprintf(stderr, "%04d %08X   ", id, bc->bytecode[id]);
-			fprintf(stderr, "INST:%d ", tex->inst);
+			fprintf(stderr, "INST:0x%x ", tex->inst);
 			fprintf(stderr, "RESOURCE_ID:%d ", tex->resource_id);
 			fprintf(stderr, "SRC(GPR:%d ", tex->src_gpr);
 			fprintf(stderr, "REL:%d)\n", tex->src_rel);
@@ -2017,8 +2022,9 @@ void r600_bytecode_dump(struct r600_bytecode *bc)
 	fprintf(stderr, "--------------------------------------\n");
 }
 
-static void r600_vertex_data_type(enum pipe_format pformat, unsigned *format,
-				unsigned *num_format, unsigned *format_comp, unsigned *endian)
+static void r600_vertex_data_type(enum pipe_format pformat,
+				  unsigned *format,
+				  unsigned *num_format, unsigned *format_comp, unsigned *endian)
 {
 	const struct util_format_description *desc;
 	unsigned i;
@@ -2146,10 +2152,16 @@ static void r600_vertex_data_type(enum pipe_format pformat, unsigned *format,
 	if (desc->channel[i].type == UTIL_FORMAT_TYPE_SIGNED) {
 		*format_comp = 1;
 	}
-	if (desc->channel[i].normalized) {
-		*num_format = 0;
-	} else {
-		*num_format = 2;
+
+	*num_format = 0;
+	if (desc->channel[i].type == UTIL_FORMAT_TYPE_UNSIGNED ||
+	    desc->channel[i].type == UTIL_FORMAT_TYPE_SIGNED) {
+		if (!desc->channel[i].normalized) {
+			if (desc->channel[i].pure_integer)
+				*num_format = 1;
+			else
+				*num_format = 2;
+		}
 	}
 	return;
 out_unknown:
@@ -2210,7 +2222,8 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 
 	for (i = 0; i < ve->count; i++) {
 		unsigned vbuffer_index;
-		r600_vertex_data_type(ve->elements[i].src_format, &format, &num_format, &format_comp, &endian);
+		r600_vertex_data_type(ve->elements[i].src_format,
+				      &format, &num_format, &format_comp, &endian);
 		desc = util_format_description(ve->elements[i].src_format);
 		if (desc == NULL) {
 			r600_bytecode_clear(&bc);

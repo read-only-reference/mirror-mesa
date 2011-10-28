@@ -222,6 +222,8 @@ void st_init_limits(struct st_context *st)
       _mesa_override_glsl_version(st->ctx);
       c->UniformBooleanTrue = ~0;
    }
+
+   c->StripTextureBorder = GL_TRUE;
 }
 
 
@@ -262,6 +264,7 @@ void st_init_extensions(struct st_context *st)
    ctx->Extensions.ARB_texture_env_combine = GL_TRUE;
    ctx->Extensions.ARB_texture_env_crossbar = GL_TRUE;
    ctx->Extensions.ARB_texture_env_dot3 = GL_TRUE;
+   ctx->Extensions.ARB_texture_storage = GL_TRUE;
    ctx->Extensions.ARB_vertex_array_object = GL_TRUE;
    ctx->Extensions.ARB_vertex_program = GL_TRUE;
    ctx->Extensions.ARB_window_pos = GL_TRUE;
@@ -307,10 +310,6 @@ void st_init_extensions(struct st_context *st)
    /*
     * Extensions that depend on the driver/hardware:
     */
-   if (screen->get_param(screen, PIPE_CAP_MAX_RENDER_TARGETS) > 0) {
-      ctx->Extensions.ARB_draw_buffers = GL_TRUE;
-   }
-
    if (screen->get_param(screen, PIPE_CAP_TEXTURE_SWIZZLE) > 0) {
       ctx->Extensions.EXT_texture_swizzle = GL_TRUE;
    }
@@ -372,18 +371,18 @@ void st_init_extensions(struct st_context *st)
    /* GL_EXT_packed_depth_stencil requires both the ability to render to
     * a depth/stencil buffer and texture from depth/stencil source.
     */
-   if (screen->is_format_supported(screen, PIPE_FORMAT_S8_USCALED_Z24_UNORM,
+   if (screen->is_format_supported(screen, PIPE_FORMAT_S8_UINT_Z24_UNORM,
                                    PIPE_TEXTURE_2D, 0,
                                    PIPE_BIND_DEPTH_STENCIL) &&
-       screen->is_format_supported(screen, PIPE_FORMAT_S8_USCALED_Z24_UNORM,
+       screen->is_format_supported(screen, PIPE_FORMAT_S8_UINT_Z24_UNORM,
                                    PIPE_TEXTURE_2D, 0,
                                    PIPE_BIND_SAMPLER_VIEW)) {
       ctx->Extensions.EXT_packed_depth_stencil = GL_TRUE;
    }
-   else if (screen->is_format_supported(screen, PIPE_FORMAT_Z24_UNORM_S8_USCALED,
+   else if (screen->is_format_supported(screen, PIPE_FORMAT_Z24_UNORM_S8_UINT,
                                         PIPE_TEXTURE_2D, 0,
                                         PIPE_BIND_DEPTH_STENCIL) &&
-            screen->is_format_supported(screen, PIPE_FORMAT_Z24_UNORM_S8_USCALED,
+            screen->is_format_supported(screen, PIPE_FORMAT_Z24_UNORM_S8_UINT,
                                         PIPE_TEXTURE_2D, 0,
                                         PIPE_BIND_SAMPLER_VIEW)) {
       ctx->Extensions.EXT_packed_depth_stencil = GL_TRUE;
@@ -559,8 +558,9 @@ void st_init_extensions(struct st_context *st)
 #endif
    }
 
-   if (screen->get_param(screen, PIPE_CAP_PRIMITIVE_RESTART)) {
-      ctx->Extensions.NV_primitive_restart = GL_TRUE;
+   ctx->Extensions.NV_primitive_restart = GL_TRUE;
+   if (!screen->get_param(screen, PIPE_CAP_PRIMITIVE_RESTART)) {
+      st->sw_primitive_restart = GL_TRUE;
    }
 
    if (screen->get_param(screen, PIPE_CAP_DEPTH_CLAMP)) {
@@ -654,7 +654,7 @@ void st_init_extensions(struct st_context *st)
                                    PIPE_TEXTURE_2D, 0,
                                    PIPE_BIND_DEPTH_STENCIL |
                                    PIPE_BIND_SAMPLER_VIEW) &&
-       screen->is_format_supported(screen, PIPE_FORMAT_Z32_FLOAT_S8X24_USCALED,
+       screen->is_format_supported(screen, PIPE_FORMAT_Z32_FLOAT_S8X24_UINT,
                                    PIPE_TEXTURE_2D, 0,
                                    PIPE_BIND_DEPTH_STENCIL |
                                    PIPE_BIND_SAMPLER_VIEW)) {

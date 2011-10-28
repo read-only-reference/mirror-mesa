@@ -34,6 +34,7 @@
 
 
 #include "context.h"
+#include "enums.h"
 #include "mfeatures.h"
 #include "mtypes.h"
 #include "texcompress.h"
@@ -591,54 +592,144 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
 
    if (ctx->Extensions.EXT_texture_integer) {
       switch (internalFormat) {
-      case GL_RGBA32UI_EXT:
-      case GL_RGB32UI_EXT:
-      case GL_ALPHA32UI_EXT:
-      case GL_INTENSITY32UI_EXT:
-      case GL_LUMINANCE32UI_EXT:
-      case GL_LUMINANCE_ALPHA32UI_EXT:
-	 RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT32);
-	 break;
-      case GL_RGBA16UI_EXT:
-      case GL_RGB16UI_EXT:
-      case GL_ALPHA16UI_EXT:
-      case GL_INTENSITY16UI_EXT:
-      case GL_LUMINANCE16UI_EXT:
-      case GL_LUMINANCE_ALPHA16UI_EXT:
-	 RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT16);
-	 break;
-      case GL_RGBA8UI_EXT:
-      case GL_RGB8UI_EXT:
       case GL_ALPHA8UI_EXT:
-      case GL_INTENSITY8UI_EXT:
-      case GL_LUMINANCE8UI_EXT:
-      case GL_LUMINANCE_ALPHA8UI_EXT:
-	 RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT8);
-	 break;
-      case GL_RGBA32I_EXT:
-      case GL_RGB32I_EXT:
-      case GL_ALPHA32I_EXT:
-      case GL_INTENSITY32I_EXT:
-      case GL_LUMINANCE32I_EXT:
-      case GL_LUMINANCE_ALPHA32I_EXT:
-	 RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT32);
-	 break;
-      case GL_RGBA16I_EXT:
-      case GL_RGB16I_EXT:
-      case GL_ALPHA16I_EXT:
-      case GL_INTENSITY16I_EXT:
-      case GL_LUMINANCE16I_EXT:
-      case GL_LUMINANCE_ALPHA16I_EXT:
-	 RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT16);
-	 break;
-      case GL_RGBA8I_EXT:
-      case GL_RGB8I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_ALPHA_UINT8);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT8);
+         break;
+      case GL_ALPHA16UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_ALPHA_UINT16);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT16);
+         break;
+      case GL_ALPHA32UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_ALPHA_UINT32);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT32);
+         break;
       case GL_ALPHA8I_EXT:
-      case GL_INTENSITY8I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_ALPHA_INT8);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT8);
+         break;
+      case GL_ALPHA16I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_ALPHA_INT16);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT16);
+         break;
+      case GL_ALPHA32I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_ALPHA_INT32);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT32);
+         break;
+      case GL_LUMINANCE8UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_UINT8);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT8);
+         break;
+      case GL_LUMINANCE16UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_UINT16);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT16);
+         break;
+      case GL_LUMINANCE32UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_UINT32);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT32);
+         break;
       case GL_LUMINANCE8I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_INT8);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT8);
+         break;
+      case GL_LUMINANCE16I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_INT16);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT16);
+         break;
+      case GL_LUMINANCE32I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_INT32);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT32);
+         break;
+      case GL_LUMINANCE_ALPHA8UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_ALPHA_UINT8);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT8);
+         break;
+      case GL_LUMINANCE_ALPHA16UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_ALPHA_UINT16);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT16);
+         break;
+      case GL_LUMINANCE_ALPHA32UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_ALPHA_UINT32);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT32);
+         break;
       case GL_LUMINANCE_ALPHA8I_EXT:
-	 RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT8);
-	 break;
+         RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_ALPHA_INT8);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT8);
+         break;
+      case GL_LUMINANCE_ALPHA16I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_ALPHA_INT16);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT16);
+         break;
+      case GL_LUMINANCE_ALPHA32I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_ALPHA_INT32);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT32);
+         break;
+      case GL_INTENSITY8UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_INTENSITY_UINT8);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT8);
+         break;
+      case GL_INTENSITY16UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_INTENSITY_UINT16);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT16);
+         break;
+      case GL_INTENSITY32UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_INTENSITY_UINT32);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT32);
+         break;
+      case GL_INTENSITY8I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_INTENSITY_INT8);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT8);
+         break;
+      case GL_INTENSITY16I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_INTENSITY_INT16);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT16);
+         break;
+      case GL_INTENSITY32I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_INTENSITY_INT32);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT32);
+         break;
+      case GL_RGB8UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGB_UINT8);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT8);
+         break;
+      case GL_RGB16UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGB_UINT16);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT16);
+         break;
+      case GL_RGB32UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGB_UINT32);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT32);
+         break;
+      case GL_RGB8I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGB_INT8);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT8);
+         break;
+      case GL_RGB16I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGB_INT16);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT16);
+         break;
+      case GL_RGB32I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGB_INT32);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT32);
+         break;
+      case GL_RGBA8UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT8);
+         break;
+      case GL_RGBA16UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT16);
+         break;
+      case GL_RGBA32UI_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_UINT32);
+         break;
+      case GL_RGBA8I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT8);
+         break;
+      case GL_RGBA16I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT16);
+         break;
+      case GL_RGBA32I_EXT:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_INT32);
+         break;
       }
    }
 
@@ -703,6 +794,49 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
       }
    }
 
+   if (ctx->Extensions.ARB_texture_rg && ctx->Extensions.EXT_texture_integer) {
+      switch (internalFormat) {
+      case GL_R8UI:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_R_UINT8);
+         break;
+      case GL_RG8UI:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RG_UINT8);
+         break;
+      case GL_R16UI:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_R_UINT16);
+	 break;
+      case GL_RG16UI:
+	 RETURN_IF_SUPPORTED(MESA_FORMAT_RG_UINT16);
+         break;
+      case GL_R32UI:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_R_UINT32);
+         break;
+      case GL_RG32UI:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RG_UINT32);
+         break;
+      case GL_R8I:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_R_INT8);
+         break;
+      case GL_RG8I:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RG_INT8);
+         break;
+      case GL_R16I:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_R_INT16);
+         break;
+      case GL_RG16I:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RG_INT16);
+         break;
+      case GL_R32I:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_R_INT32);
+         break;
+      case GL_RG32I:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_RG_INT32);
+         break;
+      default:
+         break;
+      }
+   }
+
    /* GL_BGRA can be an internal format *only* in OpenGL ES (1.x or 2.0).
     */
    if (ctx->API != API_OPENGL) {
@@ -764,7 +898,8 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
       }
    }
 
-   _mesa_problem(ctx, "unexpected format in _mesa_choose_tex_format()");
+   _mesa_problem(ctx, "unexpected format %s in _mesa_choose_tex_format()",
+                 _mesa_lookup_enum_by_nr(internalFormat));
    return MESA_FORMAT_NONE;
 }
 

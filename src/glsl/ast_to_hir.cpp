@@ -1812,7 +1812,17 @@ process_array_type(YYLTYPE *loc, const glsl_type *base, ast_node *array_size,
 {
    unsigned length = 0;
 
-   /* FINISHME: Reject delcarations of multidimensional arrays. */
+   /* From page 19 (page 25) of the GLSL 1.20 spec:
+    *
+    *     "Only one-dimensional arrays may be declared."
+    */
+   if (base->is_array()) {
+      _mesa_glsl_error(loc, state,
+		       "invalid array of `%s' (only one-dimensional arrays "
+		       "may be declared)",
+		       base->name);
+      return glsl_type::error_type;
+   }
 
    if (array_size != NULL) {
       exec_list dummy_instructions;
@@ -1962,11 +1972,13 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
    }
 
    if (qual->flags.q.flat)
-      var->interpolation = ir_var_flat;
+      var->interpolation = INTERP_QUALIFIER_FLAT;
    else if (qual->flags.q.noperspective)
-      var->interpolation = ir_var_noperspective;
+      var->interpolation = INTERP_QUALIFIER_NOPERSPECTIVE;
+   else if (qual->flags.q.smooth)
+      var->interpolation = INTERP_QUALIFIER_SMOOTH;
    else
-      var->interpolation = ir_var_smooth;
+      var->interpolation = INTERP_QUALIFIER_NONE;
 
    var->pixel_center_integer = qual->flags.q.pixel_center_integer;
    var->origin_upper_left = qual->flags.q.origin_upper_left;
@@ -2443,14 +2455,32 @@ ast_declarator_list::hir(exec_list *instructions,
 
    decl_type = this->type->specifier->glsl_type(& type_name, state);
    if (this->declarations.is_empty()) {
-      if (decl_type != NULL) {
-	 /* Warn if this empty declaration is not for declaring a structure.
-	  */
-	 if (this->type->specifier->structure == NULL) {
+      /* If there is no structure involved in the program text, there are two
+       * possible scenarios:
+       *
+       * - The program text contained something like 'vec4;'.  This is an
+       *   empty declaration.  It is valid but weird.  Emit a warning.
+       *
+       * - The program text contained something like 'S;' and 'S' is not the
+       *   name of a known structure type.  This is both invalid and weird.
+       *   Emit an error.
+       *
+       * Note that if decl_type is NULL and there is a structure involved,
+       * there must have been some sort of error with the structure.  In this
+       * case we assume that an error was already generated on this line of
+       * code for the structure.  There is no need to generate an additional,
+       * confusing error.
+       */
+      assert(this->type->specifier->structure == NULL || decl_type != NULL
+	     || state->error);
+      if (this->type->specifier->structure == NULL) {
+	 if (decl_type != NULL) {
 	    _mesa_glsl_warning(&loc, state, "empty declaration");
+	 } else {
+	    _mesa_glsl_error(&loc, state,
+			     "invalid type `%s' in empty declaration",
+			     type_name);
 	 }
-      } else {
-	    _mesa_glsl_error(& loc, state, "incomplete declaration");
       }
    }
 
@@ -2478,6 +2508,8 @@ ast_declarator_list::hir(exec_list *instructions,
       if (decl->is_array) {
 	 var_type = process_array_type(&loc, decl_type, decl->array_size,
 				       state);
+	 if (var_type->is_error())
+	    continue;
       } else {
 	 var_type = decl_type;
       }
@@ -2630,7 +2662,7 @@ ast_declarator_list::hir(exec_list *instructions,
           && state->current_function == NULL
           && var->type->is_integer()
           && var->mode == ir_var_out
-          && var->interpolation != ir_var_flat) {
+          && var->interpolation != INTERP_QUALIFIER_FLAT) {
 
          _mesa_glsl_error(&loc, state, "If a vertex output is an integer, "
                           "then it must be qualified with 'flat'");
@@ -2803,6 +2835,18 @@ ast_declarator_list::hir(exec_list *instructions,
 	    _mesa_glsl_error(& loc, state,
 			     "identifier `%s' uses reserved `gl_' prefix",
 			     decl->identifier);
+	 else if (strstr(decl->identifier, "__")) {
+	    /* From page 14 (page 20 of the PDF) of the GLSL 1.10
+	     * spec:
+	     *
+	     *     "In addition, all identifiers containing two
+	     *      consecutive underscores (__) are reserved as
+	     *      possible future keywords."
+	     */
+	    _mesa_glsl_error(& loc, state,
+			     "identifier `%s' uses reserved `__' string",
+			     decl->identifier);
+	 }
 
 	 /* Add the variable to the symbol table.  Note that the initializer's
 	  * IR was already processed earlier (though it hasn't been emitted
@@ -2907,7 +2951,7 @@ ast_parameter_declarator::hir(exec_list *instructions,
       type = process_array_type(&loc, type, this->array_size, state);
    }
 
-   if (type->array_size() == 0) {
+   if (!type->is_error() && type->array_size() == 0) {
       _mesa_glsl_error(&loc, state, "arrays passed as parameters must have "
 		       "a declared size.");
       type = glsl_type::error_type;

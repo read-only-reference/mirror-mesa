@@ -219,7 +219,7 @@ enum state_struct_type {
 struct brw_vertex_program {
    struct gl_vertex_program program;
    GLuint id;
-   GLboolean use_const_buffer;
+   bool use_const_buffer;
 };
 
 
@@ -227,9 +227,6 @@ struct brw_vertex_program {
 struct brw_fragment_program {
    struct gl_fragment_program program;
    GLuint id;  /**< serial no. to identify frag progs, never re-used */
-
-   /** for debugging, which texture units are referenced */
-   GLbitfield tex_units_used;
 };
 
 struct brw_shader {
@@ -268,7 +265,7 @@ struct brw_wm_prog_data {
 
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params;
-   GLboolean error;
+   bool error;
    int dispatch_width;
    uint32_t prog_offset_16;
 
@@ -501,7 +498,6 @@ struct brw_cache {
  */
 struct brw_tracked_state {
    struct brw_state_flags dirty;
-   void (*prepare)( struct brw_context *brw );
    void (*emit)( struct brw_context *brw );
 };
 
@@ -583,31 +579,18 @@ struct brw_query_object {
 struct brw_context 
 {
    struct intel_context intel;  /**< base class, must be first field */
-   GLuint primitive;
+   GLuint primitive; /**< Hardware primitive, such as _3DPRIM_TRILIST. */
 
-   GLboolean emit_state_always;
-   GLboolean has_surface_tile_offset;
-   GLboolean has_compr4;
-   GLboolean has_negative_rhw_bug;
-   GLboolean has_aa_line_parameters;
-   GLboolean has_pln;
-   GLboolean new_vs_backend;
+   bool emit_state_always;
+   bool has_surface_tile_offset;
+   bool has_compr4;
+   bool has_negative_rhw_bug;
+   bool has_aa_line_parameters;
+   bool has_pln;
+   bool new_vs_backend;
 
    struct {
       struct brw_state_flags dirty;
-      /**
-       * List of buffers accumulated in brw_validate_state to receive
-       * drm_intel_bo_check_aperture treatment before exec, so we can
-       * know if we should flush the batch and try again before
-       * emitting primitives.
-       *
-       * This can be a fixed number as we only have a limited number of
-       * objects referenced from the batchbuffer in a primitive emit,
-       * consisting of the vertex buffers, pipelined state pointers,
-       * the CURBE, the depth buffer, and a query BO.
-       */
-      drm_intel_bo *validated_bos[VERT_ATTRIB_MAX + BRW_WM_MAX_SURF + 16];
-      unsigned int validated_bo_count;
    } state;
 
    struct brw_cache cache;
@@ -666,8 +649,14 @@ struct brw_context
    uint32_t CMD_VF_STATISTICS;
    /* hw-dependent 3DSTATE_PIPELINE_SELECT opcode */
    uint32_t CMD_PIPELINE_SELECT;
-   int vs_max_threads;
-   int wm_max_threads;
+
+   /**
+    * Platform specific constants containing the maximum number of threads
+    * for each pipeline stage.
+    */
+   int max_vs_threads;
+   int max_gs_threads;
+   int max_wm_threads;
 
    /* BRW_NEW_URB_ALLOCATIONS:
     */
@@ -676,7 +665,7 @@ struct brw_context
       GLuint csize;		/* constant buffer size in urb registers */
       GLuint sfsize;		/* setup data size in urb registers */
 
-      GLboolean constrained;
+      bool constrained;
 
       GLuint max_vs_entries;	/* Maximum number of VS entries */
       GLuint max_gs_entries;	/* Maximum number of GS entries */
@@ -776,7 +765,7 @@ struct brw_context
    struct {
       struct brw_gs_prog_data *prog_data;
 
-      GLboolean prog_active;
+      bool prog_active;
       /** Offset in the program cache to the CLIP program pre-gen6 */
       uint32_t prog_offset;
       uint32_t state_offset;
@@ -880,14 +869,14 @@ struct brw_context
       struct brw_query_object *obj;
       drm_intel_bo *bo;
       int index;
-      GLboolean active;
+      bool active;
    } query;
    /* Used to give every program string a unique id
     */
    GLuint program_id;
 
-   int num_prepare_atoms, num_emit_atoms;
-   struct brw_tracked_state prepare_atoms[64], emit_atoms[64];
+   int num_atoms;
+   const struct brw_tracked_state **atoms;
 
    /* If (INTEL_DEBUG & DEBUG_BATCH) */
    struct {
@@ -899,13 +888,14 @@ struct brw_context
 };
 
 
+
 #define BRW_PACKCOLOR8888(r,g,b,a)  ((r<<24) | (g<<16) | (b<<8) | a)
 
 struct brw_instruction_info {
     char    *name;
     int	    nsrc;
     int	    ndst;
-    GLboolean is_arith;
+    bool is_arith;
 };
 extern const struct brw_instruction_info brw_opcodes[128];
 
@@ -917,10 +907,10 @@ void brwInitVtbl( struct brw_context *brw );
 /*======================================================================
  * brw_context.c
  */
-GLboolean brwCreateContext( int api,
-			    const struct gl_config *mesaVis,
-			    __DRIcontext *driContextPriv,
-			    void *sharedContextPrivate);
+bool brwCreateContext(int api,
+		      const struct gl_config *mesaVis,
+		      __DRIcontext *driContextPriv,
+		      void *sharedContextPrivate);
 
 /*======================================================================
  * brw_queryobj.c
@@ -964,8 +954,21 @@ int brw_disasm (FILE *file, struct brw_instruction *inst, int gen);
 
 /* brw_vs.c */
 void brw_compute_vue_map(struct brw_vue_map *vue_map,
-                         const struct intel_context *intel, int nr_userclip,
+                         const struct intel_context *intel,
+                         bool userclip_active,
                          GLbitfield64 outputs_written);
+gl_clip_plane *brw_select_clip_planes(struct gl_context *ctx);
+
+/* brw_wm.c */
+unsigned
+brw_compute_barycentric_interp_modes(bool shade_model_flat,
+                                     const struct gl_fragment_program *fprog);
+
+/* gen6_clip_state.c */
+bool
+brw_fprog_uses_noperspective(const struct gl_fragment_program *fprog);
+
+
 
 /*======================================================================
  * Inline conversion functions.  These are better-typed than the
@@ -1063,6 +1066,6 @@ brw_program_reloc(struct brw_context *brw, uint32_t state_offset,
    return brw->cache.bo->offset + prog_offset;
 }
 
-GLboolean brw_do_cubemap_normalize(struct exec_list *instructions);
+bool brw_do_cubemap_normalize(struct exec_list *instructions);
 
 #endif

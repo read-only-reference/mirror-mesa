@@ -54,6 +54,7 @@
 #define MESA_META_CLAMP_VERTEX_COLOR    0x10000
 #define MESA_META_CONDITIONAL_RENDER    0x20000
 #define MESA_META_CLIP                  0x40000
+#define MESA_META_SELECT_FEEDBACK       0x80000
 /**\}*/
 
 extern void
@@ -128,5 +129,8 @@ _mesa_meta_GetTexImage(struct gl_context *ctx,
                        GLenum format, GLenum type, GLvoid *pixels,
                        struct gl_texture_image *texImage);
 
+extern void
+_mesa_meta_DrawTex(struct gl_context *ctx, GLfloat x, GLfloat y, GLfloat z,
+                   GLfloat width, GLfloat height);
 
 #endif /* META_H */

@@ -80,11 +80,11 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_COMBINED_SAMPLERS:
       return 64;
    case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
-      return 13;
+      return 14;
    case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
-      return 10;
+      return 12;
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
-      return 13;
+      return 14;
    case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS: /* shader support missing */
       return 0;
    case PIPE_CAP_MIN_TEXEL_OFFSET:
@@ -261,16 +261,20 @@ nv50_screen_destroy(struct pipe_screen *pscreen)
 }
 
 static void
-nv50_screen_fence_emit(struct pipe_screen *pscreen, u32 sequence)
+nv50_screen_fence_emit(struct pipe_screen *pscreen, u32 *sequence)
 {
    struct nv50_screen *screen = nv50_screen(pscreen);
    struct nouveau_channel *chan = screen->base.channel;
 
    MARK_RING (chan, 5, 2);
+
+   /* we need to do it after possible flush in MARK_RING */
+   *sequence = ++screen->base.fence.sequence;
+
    BEGIN_RING(chan, RING_3D(QUERY_ADDRESS_HIGH), 4);
    OUT_RELOCh(chan, screen->fence.bo, 0, NOUVEAU_BO_WR);
    OUT_RELOCl(chan, screen->fence.bo, 0, NOUVEAU_BO_WR);
-   OUT_RING  (chan, sequence);
+   OUT_RING  (chan, *sequence);
    OUT_RING  (chan, NV50_3D_QUERY_GET_MODE_WRITE_UNK0 |
                     NV50_3D_QUERY_GET_UNK4 |
                     NV50_3D_QUERY_GET_UNIT_CROP |
@@ -498,8 +502,9 @@ nv50_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 
    screen->tls_size = tls_space * max_warps * 32;
 
-   debug_printf("max_warps = %i, tls_size = %"PRIu64" KiB\n",
-                max_warps, screen->tls_size >> 10);
+   if (nouveau_mesa_debug)
+      debug_printf("max_warps = %i, tls_size = %"PRIu64" KiB\n",
+                     max_warps, screen->tls_size >> 10);
 
    ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 1 << 16, screen->tls_size,
                         &screen->tls_bo);
@@ -637,7 +642,7 @@ nv50_screen_make_buffers_resident(struct nv50_screen *screen)
 
    const unsigned flags = NOUVEAU_BO_VRAM | NOUVEAU_BO_RD;
 
-   MARK_RING(chan, 5, 5);
+   MARK_RING(chan, 0, 5);
    nouveau_bo_validate(chan, screen->code, flags);
    nouveau_bo_validate(chan, screen->uniforms, flags);
    nouveau_bo_validate(chan, screen->txc, flags);

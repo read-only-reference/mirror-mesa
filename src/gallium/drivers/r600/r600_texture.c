@@ -66,7 +66,7 @@ static void r600_copy_from_staging_texture(struct pipe_context *ctx, struct r600
 				  rtransfer->staging_texture,
 				  0, &sbox);
 
-	r600_flush(ctx, NULL, RADEON_FLUSH_ASYNC);
+	ctx->texture_barrier(ctx);
 }
 
 unsigned r600_texture_get_offset(struct r600_resource_texture *rtex,
@@ -401,13 +401,13 @@ r600_texture_create_object(struct pipe_screen *screen,
 		unsigned stencil_pitch_override = 0;
 
 		switch (base->format) {
-		case PIPE_FORMAT_Z24_UNORM_S8_USCALED:
+		case PIPE_FORMAT_Z24_UNORM_S8_UINT:
 			rtex->real_format = PIPE_FORMAT_Z24X8_UNORM;
 			break;
-		case PIPE_FORMAT_S8_USCALED_Z24_UNORM:
+		case PIPE_FORMAT_S8_UINT_Z24_UNORM:
 			rtex->real_format = PIPE_FORMAT_X8Z24_UNORM;
 			break;
-		case PIPE_FORMAT_Z32_FLOAT_S8X24_USCALED:
+		case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
 			rtex->real_format = PIPE_FORMAT_Z32_FLOAT;
 			break;
 		default:
@@ -418,14 +418,14 @@ r600_texture_create_object(struct pipe_screen *screen,
 
 		/* Divide the pitch in bytes by 4 for stencil, because it has a smaller pixel size. */
 		if (pitch_in_bytes_override) {
-			assert(base->format == PIPE_FORMAT_Z24_UNORM_S8_USCALED ||
-			       base->format == PIPE_FORMAT_S8_USCALED_Z24_UNORM);
+			assert(base->format == PIPE_FORMAT_Z24_UNORM_S8_UINT ||
+			       base->format == PIPE_FORMAT_S8_UINT_Z24_UNORM);
 			stencil_pitch_override = pitch_in_bytes_override / 4;
 		}
 
 		/* Allocate the stencil buffer. */
 		stencil = *base;
-		stencil.format = PIPE_FORMAT_S8_USCALED;
+		stencil.format = PIPE_FORMAT_S8_UINT;
 		rtex->stencil = r600_texture_create_object(screen, &stencil, array_mode,
 							   stencil_pitch_override,
 							   max_buffer_size, NULL, FALSE);
@@ -882,26 +882,26 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen,
 		case PIPE_FORMAT_Z16_UNORM:
 			result = FMT_16;
 			goto out_word4;
-		case PIPE_FORMAT_X24S8_USCALED:
+		case PIPE_FORMAT_X24S8_UINT:
 			word4 |= S_038010_NUM_FORMAT_ALL(V_038010_SQ_NUM_FORMAT_INT);
 		case PIPE_FORMAT_Z24X8_UNORM:
-		case PIPE_FORMAT_Z24_UNORM_S8_USCALED:
+		case PIPE_FORMAT_Z24_UNORM_S8_UINT:
 			result = FMT_8_24;
 			goto out_word4;
-		case PIPE_FORMAT_S8X24_USCALED:
+		case PIPE_FORMAT_S8X24_UINT:
 			word4 |= S_038010_NUM_FORMAT_ALL(V_038010_SQ_NUM_FORMAT_INT);
 		case PIPE_FORMAT_X8Z24_UNORM:
-		case PIPE_FORMAT_S8_USCALED_Z24_UNORM:
+		case PIPE_FORMAT_S8_UINT_Z24_UNORM:
 			result = FMT_24_8;
 			goto out_word4;
-		case PIPE_FORMAT_S8_USCALED:
+		case PIPE_FORMAT_S8_UINT:
 			result = FMT_8;
 			word4 |= S_038010_NUM_FORMAT_ALL(V_038010_SQ_NUM_FORMAT_INT);
 			goto out_word4;
 		case PIPE_FORMAT_Z32_FLOAT:
 			result = FMT_32_FLOAT;
 			goto out_word4;
-		case PIPE_FORMAT_Z32_FLOAT_S8X24_USCALED:
+		case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
 			result = FMT_X24_8_32_FLOAT;
 			goto out_word4;
 		default:
@@ -1061,7 +1061,7 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen,
 		}
 #endif
 		if (desc->colorspace != UTIL_FORMAT_COLORSPACE_SRGB &&
-		    !desc->channel[i].normalized)
+		    desc->channel[i].pure_integer)
 			word4 |= S_038010_NUM_FORMAT_ALL(V_038010_SQ_NUM_FORMAT_INT);
 
 		switch (desc->channel[i].size) {

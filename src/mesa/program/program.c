@@ -140,7 +140,7 @@ _mesa_free_program_data(struct gl_context *ctx)
 #endif
 #if FEATURE_NV_fragment_program || FEATURE_ARB_fragment_program
    _mesa_reference_fragprog(ctx, &ctx->FragmentProgram.Current, NULL);
-   _mesa_delete_program_cache(ctx, ctx->FragmentProgram.Cache);
+   _mesa_delete_shader_cache(ctx, ctx->FragmentProgram.Cache);
 #endif
 #if FEATURE_ARB_geometry_shader4
    _mesa_reference_geomprog(ctx, &ctx->GeometryProgram.Current, NULL);
@@ -394,9 +394,6 @@ _mesa_delete_program(struct gl_context *ctx, struct gl_program *prog)
    if (prog->Parameters) {
       _mesa_free_parameter_list(prog->Parameters);
    }
-   if (prog->Attributes) {
-      _mesa_free_parameter_list(prog->Attributes);
-   }
 
    free(prog);
 }
@@ -519,8 +516,6 @@ _mesa_clone_program(struct gl_context *ctx, const struct gl_program *prog)
    if (prog->Parameters)
       clone->Parameters = _mesa_clone_parameter_list(prog->Parameters);
    memcpy(clone->LocalParams, prog->LocalParams, sizeof(clone->LocalParams));
-   if (prog->Attributes)
-      clone->Attributes = _mesa_clone_parameter_list(prog->Attributes);
    memcpy(clone->LocalParams, prog->LocalParams, sizeof(clone->LocalParams));
    clone->IndirectRegisterFiles = prog->IndirectRegisterFiles;
    clone->NumInstructions = prog->NumInstructions;

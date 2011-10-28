@@ -665,8 +665,8 @@ CodeEmitterNVC0::emitShift(const Instruction *i)
       emitForm_A(i, HEX64(60000000, 00000003));
    }
 
-   if (0)
-      code[0] |= 1 << 9; // clamp shift amount
+   if (i->subOp == NV50_IR_SUBOP_SHIFT_WRAP)
+      code[0] |= 1 << 9;
 }
 
 void
@@ -785,8 +785,9 @@ CodeEmitterNVC0::emitCVT(Instruction *i)
 
       roundMode_C(i);
 
-      code[0] |= util_logbase2(i->def[0].getSize()) << 20;
-      code[0] |= util_logbase2(i->src[0].getSize()) << 23;
+      // cvt u16 f32 sets high bits to 0, so we don't have to use Value::Size()
+      code[0] |= util_logbase2(typeSizeof(i->dType)) << 20;
+      code[0] |= util_logbase2(typeSizeof(i->sType)) << 23;
 
       if (sat)
          code[0] |= 0x20;
@@ -952,13 +953,24 @@ CodeEmitterNVC0::emitTEX(const TexInstruction *i)
    case OP_TEX: code[1] = 0x80000000; break;
    case OP_TXB: code[1] = 0x84000000; break;
    case OP_TXL: code[1] = 0x86000000; break;
-   case OP_TXF: code[1] = 0x92000000; break;
+   case OP_TXF: code[1] = 0x90000000; break;
    case OP_TXG: code[1] = 0xa0000000; break;
    case OP_TXD: code[1] = 0xe0000000; break;
    default:
       assert(!"invalid texture op");
       break;
    }
+   if (i->op == OP_TXF) {
+      if (!i->tex.levelZero)
+         code[1] |= 0x02000000;
+   } else
+   if (i->tex.levelZero) {
+      code[1] |= 0x02000000;
+   }
+
+   if (i->tex.derivAll)
+      code[1] |= 1 << 13;
+
    defId(i->def[0], 14);
    srcId(i->src[0], 20);
 
@@ -983,6 +995,8 @@ CodeEmitterNVC0::emitTEX(const TexInstruction *i)
       code[1] |= 1 << 24;
 
    int src1 = i->tex.target.getArgCount();
+   if (i->op == OP_TXD && i->tex.useOffsets)
+      ++src1;
 
    if (i->src[src1].getFile() == FILE_IMMEDIATE) { // lzero
       if (i->op == OP_TXL)
@@ -1042,6 +1056,9 @@ CodeEmitterNVC0::emitQUADOP(const Instruction *i, uint8_t qOp, uint8_t laneMask)
    defId(i->def[0], 14);
    srcId(i->src[0], 20);
    srcId(i->srcExists(1) ? i->src[1] : i->src[0], 26);
+
+   if (i->op == OP_QUADOP && progType != Program::TYPE_FRAGMENT)
+      code[0] |= 1 << 9; // dall
 
    emitPredicate(i);
 }

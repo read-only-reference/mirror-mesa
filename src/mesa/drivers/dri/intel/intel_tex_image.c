@@ -10,10 +10,10 @@
 #include "main/pbo.h"
 #include "main/renderbuffer.h"
 #include "main/texcompress.h"
-#include "main/texstore.h"
 #include "main/texgetimage.h"
 #include "main/texobj.h"
 #include "main/teximage.h"
+#include "main/texstore.h"
 
 #include "intel_context.h"
 #include "intel_mipmap_tree.h"
@@ -26,49 +26,29 @@
 
 #define FILE_DEBUG_FLAG DEBUG_TEXTURE
 
-/* Functions to store texture images.  Where possible, mipmap_tree's
- * will be created or further instantiated with image data, otherwise
- * images will be stored in malloc'd memory.  A validation step is
- * required to pull those images into a mipmap tree, or otherwise
- * decide a fallback is required.
+/* Work back from the specified level of the image to the baselevel and create a
+ * miptree of that size.
  */
-
-
-
-/* Otherwise, store it in memory if (Border != 0) or (any dimension ==
- * 1).
- *    
- * Otherwise, if max_level >= level >= min_level, create tree with
- * space for textures from min_level down to max_level.
- *
- * Otherwise, create tree with space for textures from (level
- * 0)..(1x1).  Consider pruning this tree at a validation if the
- * saving is worth it.
- */
-static struct intel_mipmap_tree *
+struct intel_mipmap_tree *
 intel_miptree_create_for_teximage(struct intel_context *intel,
 				  struct intel_texture_object *intelObj,
 				  struct intel_texture_image *intelImage,
-				  GLboolean expect_accelerated_upload)
+				  bool expect_accelerated_upload)
 {
    GLuint firstLevel;
    GLuint lastLevel;
-   GLuint width = intelImage->base.Base.Width;
-   GLuint height = intelImage->base.Base.Height;
-   GLuint depth = intelImage->base.Base.Depth;
+   int width, height, depth;
    GLuint i;
+
+   intel_miptree_get_dimensions_for_image(&intelImage->base.Base,
+                                          &width, &height, &depth);
 
    DBG("%s\n", __FUNCTION__);
 
-   if (intelImage->base.Base.Border)
-      return NULL;
-
    if (intelImage->base.Base.Level > intelObj->base.BaseLevel &&
-       (intelImage->base.Base.Width == 1 ||
-        (intelObj->base.Target != GL_TEXTURE_1D &&
-         intelImage->base.Base.Height == 1) ||
-        (intelObj->base.Target == GL_TEXTURE_3D &&
-         intelImage->base.Base.Depth == 1))) {
+       (width == 1 ||
+        (intelObj->base.Target != GL_TEXTURE_1D && height == 1) ||
+        (intelObj->base.Target == GL_TEXTURE_3D && depth == 1))) {
       /* For this combination, we're at some lower mipmap level and
        * some important dimension is 1.  We can't extrapolate up to a
        * likely base level width/height/depth for a full mipmap stack
@@ -146,12 +126,14 @@ check_pbo_format(GLenum format, GLenum type,
 /* XXX: Do this for TexSubImage also:
  */
 static bool
-try_pbo_upload(struct intel_context *intel,
-               struct intel_texture_image *intelImage,
+try_pbo_upload(struct gl_context *ctx,
+               struct gl_texture_image *image,
                const struct gl_pixelstore_attrib *unpack,
 	       GLenum format, GLenum type,
                GLint width, GLint height, const void *pixels)
 {
+   struct intel_texture_image *intelImage = intel_texture_image(image);
+   struct intel_context *intel = intel_context(ctx);
    struct intel_buffer_object *pbo = intel_buffer_object(unpack->BufferObj);
    GLuint src_offset, src_stride;
    GLuint dst_x, dst_y, dst_stride;
@@ -161,11 +143,6 @@ try_pbo_upload(struct intel_context *intel,
       return false;
 
    DBG("trying pbo upload\n");
-
-   if (!intelImage->mt) {
-      DBG("%s: no miptree\n", __FUNCTION__);
-      return false;
-   }
 
    if (intel->ctx._ImageTransferState ||
        unpack->SkipPixels || unpack->SkipRows) {
@@ -177,6 +154,14 @@ try_pbo_upload(struct intel_context *intel,
       DBG("%s: format mismatch (upload to %s with format 0x%x, type 0x%x)\n",
 	  __FUNCTION__, _mesa_get_format_name(intelImage->base.Base.TexFormat),
 	  format, type);
+      return false;
+   }
+
+   ctx->Driver.AllocTextureImageBuffer(ctx, image, image->TexFormat,
+                                       width, height, 1);
+
+   if (!intelImage->mt) {
+      DBG("%s: no miptree\n", __FUNCTION__);
       return false;
    }
 
@@ -199,7 +184,7 @@ try_pbo_upload(struct intel_context *intel,
    if (!intelEmitCopyBlit(intel,
 			  intelImage->mt->cpp,
 			  src_stride, src_buffer,
-			  src_offset, GL_FALSE,
+			  src_offset, false,
 			  dst_stride, dst_buffer, 0,
 			  intelImage->mt->region->tiling,
 			  0, 0, dst_x, dst_y, width, height,
@@ -226,9 +211,10 @@ intel_tex_image_s8z24_scattergather(struct intel_context *intel,
    struct gl_context *ctx = &intel->ctx;
    struct gl_renderbuffer *depth_rb = intel_image->depth_rb;
    struct gl_renderbuffer *stencil_rb = intel_image->stencil_rb;
+   int w, h, d;
 
-   int w = intel_image->base.Base.Width;
-   int h = intel_image->base.Base.Height;
+   intel_miptree_get_dimensions_for_image(&intel_image->base.Base, &w, &h, &d);
+   assert(d == 1); /* FINISHME */
 
    uint32_t depth_row[w];
    uint8_t stencil_row[w];
@@ -282,19 +268,21 @@ intel_tex_image_s8z24_gather(struct intel_context *intel,
    intel_tex_image_s8z24_scattergather(intel, intel_image, false);
 }
 
-static bool
+bool
 intel_tex_image_s8z24_create_renderbuffers(struct intel_context *intel,
 					   struct intel_texture_image *image)
 {
    struct gl_context *ctx = &intel->ctx;
-
    bool ok = true;
-   int width = image->base.Base.Width;
-   int height = image->base.Base.Height;
+   int width, height, depth;
    struct gl_renderbuffer *drb;
    struct gl_renderbuffer *srb;
    struct intel_renderbuffer *idrb;
    struct intel_renderbuffer *isrb;
+
+   intel_miptree_get_dimensions_for_image(&image->base.Base,
+                                          &width, &height, &depth);
+   assert(depth == 1); /* FINISHME */
 
    assert(intel->has_separate_stencil);
    assert(image->base.Base.TexFormat == MESA_FORMAT_S8_Z24);
@@ -343,122 +331,29 @@ intelTexImage(struct gl_context * ctx,
               GLenum target, GLint level,
               GLint internalFormat,
               GLint width, GLint height, GLint depth,
-              GLint border,
               GLenum format, GLenum type, const void *pixels,
               const struct gl_pixelstore_attrib *unpack,
               struct gl_texture_object *texObj,
               struct gl_texture_image *texImage, GLsizei imageSize)
 {
-   struct intel_context *intel = intel_context(ctx);
-   struct intel_texture_object *intelObj = intel_texture_object(texObj);
-   struct intel_texture_image *intelImage = intel_texture_image(texImage);
-   GLint texelBytes;
-   GLuint dstRowStride = 0;
-
-   DBG("%s target %s level %d %dx%dx%d border %d\n", __FUNCTION__,
-       _mesa_lookup_enum_by_nr(target), level, width, height, depth, border);
-
-   if (_mesa_is_format_compressed(texImage->TexFormat)) {
-      texelBytes = 0;
-   }
-   else {
-      texelBytes = _mesa_get_format_bytes(texImage->TexFormat);
-
-      if (!intelImage->mt) {      
-	  assert(texImage->RowStride == width);
-      }
-   }
-
-   if (intelObj->mt &&
-       intel_miptree_match_image(intelObj->mt, &intelImage->base.Base)) {
-      /* Use an existing miptree when possible */
-      intel_miptree_reference(&intelImage->mt, intelObj->mt);
-      assert(intelImage->mt);
-   } else if (intelImage->base.Base.Border == 0) {
-      /* Didn't fit in the object miptree, but it's suitable for inclusion in
-       * a miptree, so create one just for our level and store it in the image.
-       * It'll get moved into the object miptree at validate time.
-       */
-      intelImage->mt = intel_miptree_create_for_teximage(intel, intelObj,
-							 intelImage,
-							 pixels == NULL);
-
-      /* Even if the object currently has a mipmap tree associated
-       * with it, this one is a more likely candidate to represent the
-       * whole object since our level didn't fit what was there
-       * before, and any lower levels would fit into our miptree.
-       */
-      intel_miptree_reference(&intelObj->mt, intelImage->mt);
-   } else {
-      /* Allocate fallback texImage->Data storage through swrast. */
-      ctx->Driver.AllocTextureImageBuffer(ctx, texImage, texImage->TexFormat,
-					  width, height, depth);
-   }
+   DBG("%s target %s level %d %dx%dx%d\n", __FUNCTION__,
+       _mesa_lookup_enum_by_nr(target), level, width, height, depth);
 
    /* Attempt to use the blitter for PBO image uploads.
     */
    if (dims <= 2 &&
-       try_pbo_upload(intel, intelImage, unpack, format, type,
+       try_pbo_upload(ctx, texImage, unpack, format, type,
 		      width, height, pixels)) {
       return;
    }
 
-   pixels = _mesa_validate_pbo_teximage(ctx, dims, width, height, 1,
-					format, type,
-					pixels, unpack, "glTexImage");
+   DBG("%s: upload image %dx%dx%d pixels %p\n",
+       __FUNCTION__, width, height, depth, pixels);
 
-   if (intelImage->mt) {
-      if (pixels != NULL) {
-	 /* Flush any queued rendering with the texture before mapping. */
-	 if (drm_intel_bo_references(intel->batch.bo,
-				     intelImage->mt->region->bo)) {
-	    intel_flush(ctx);
-	 }
-         texImage->Data = intel_miptree_image_map(intel,
-                                                  intelImage->mt,
-                                                  intelImage->base.Base.Face,
-                                                  intelImage->base.Base.Level,
-                                                  &dstRowStride,
-                                                  intelImage->base.Base.ImageOffsets);
-      }
-
-      texImage->RowStride = dstRowStride / intelImage->mt->cpp;
-   }
-
-   DBG("Upload image %dx%dx%d row_len %d pitch %d pixels %d\n",
-       width, height, depth, width * texelBytes, dstRowStride,
-       pixels ? 1 : 0);
-
-   /* Copy data.  Would like to know when it's ok for us to eg. use
-    * the blitter to copy.  Or, use the hardware to do the format
-    * conversion and copy:
-    */
-   if (pixels) {
-      if (!_mesa_texstore(ctx, dims,
-			  texImage->_BaseFormat,
-			  texImage->TexFormat,
-			  texImage->Data, 0, 0, 0, /* dstX/Y/Zoffset */
-			  dstRowStride,
-			  texImage->ImageOffsets,
-			  width, height, depth,
-			  format, type, pixels, unpack)) {
-	 _mesa_error(ctx, GL_OUT_OF_MEMORY, "glTexImage");
-      }
-   }
-
-   _mesa_unmap_teximage_pbo(ctx, unpack);
-
-   if (intel->must_use_separate_stencil
-       && texImage->TexFormat == MESA_FORMAT_S8_Z24) {
-      intel_tex_image_s8z24_create_renderbuffers(intel, intelImage);
-      intel_tex_image_s8z24_scatter(intel, intelImage);
-   }
-
-   if (intelImage->mt) {
-      if (pixels != NULL)
-         intel_miptree_image_unmap(intel, intelImage->mt);
-      texImage->Data = NULL;
-   }
+   _mesa_store_teximage3d(ctx, target, level, internalFormat,
+			  width, height, depth, 0,
+			  format, type, pixels,
+			  unpack, texObj, texImage);
 }
 
 
@@ -474,7 +369,7 @@ intelTexImage3D(struct gl_context * ctx,
                 struct gl_texture_image *texImage)
 {
    intelTexImage(ctx, 3, target, level,
-                 internalFormat, width, height, depth, border,
+                 internalFormat, width, height, depth,
                  format, type, pixels, unpack, texObj, texImage, 0);
 }
 
@@ -490,7 +385,7 @@ intelTexImage2D(struct gl_context * ctx,
                 struct gl_texture_image *texImage)
 {
    intelTexImage(ctx, 2, target, level,
-                 internalFormat, width, height, 1, border,
+                 internalFormat, width, height, 1,
                  format, type, pixels, unpack, texObj, texImage, 0);
 }
 
@@ -506,7 +401,7 @@ intelTexImage1D(struct gl_context * ctx,
                 struct gl_texture_image *texImage)
 {
    intelTexImage(ctx, 1, target, level,
-                 internalFormat, width, 1, 1, border,
+                 internalFormat, width, 1, 1,
                  format, type, pixels, unpack, texObj, texImage, 0);
 }
 
@@ -539,7 +434,7 @@ intel_set_texture_image_region(struct gl_context *ctx,
    if (intel_image->mt == NULL)
        return;
 
-   image->RowStride = region->pitch;
+   intel_image->base.RowStride = region->pitch;
 }
 
 void

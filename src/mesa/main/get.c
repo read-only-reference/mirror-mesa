@@ -138,6 +138,7 @@ enum value_extra {
    EXTRA_VALID_TEXTURE_UNIT,
    EXTRA_VALID_CLIP_DISTANCE,
    EXTRA_FLUSH_CURRENT,
+   EXTRA_GLSL_130,
 };
 
 #define NO_EXTRA NULL
@@ -277,8 +278,8 @@ static const int extra_EXT_texture_integer[] = {
    EXTRA_END
 };
 
-static const int extra_EXT_gpu_shader4[] = {
-   EXT(EXT_gpu_shader4),
+static const int extra_GLSL_130[] = {
+   EXTRA_GLSL_130,
    EXTRA_END
 };
 
@@ -326,6 +327,7 @@ EXTRA_EXT2(ARB_fragment_program, NV_fragment_program);
 EXTRA_EXT2(ARB_vertex_program, NV_vertex_program);
 EXTRA_EXT2(ARB_vertex_program, ARB_fragment_program);
 EXTRA_EXT(ARB_geometry_shader4);
+EXTRA_EXT(ARB_color_buffer_float);
 EXTRA_EXT(ARB_copy_buffer);
 EXTRA_EXT(EXT_framebuffer_sRGB);
 EXTRA_EXT(ARB_texture_buffer_object);
@@ -481,6 +483,11 @@ static const struct value_desc values[] = {
    /* GL_WEIGHT_ARRAY_BUFFER_BINDING_ARB - not supported */
    { GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB, LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA },
 
+   /* GL_ARB_color_buffer_float */
+   { GL_CLAMP_VERTEX_COLOR, CONTEXT_ENUM(Light.ClampVertexColor), extra_ARB_color_buffer_float },
+   { GL_CLAMP_FRAGMENT_COLOR, CONTEXT_ENUM(Color.ClampFragmentColor), extra_ARB_color_buffer_float },
+   { GL_CLAMP_READ_COLOR, CONTEXT_ENUM(Color.ClampReadColor), extra_ARB_color_buffer_float },
+
    /* GL_ARB_copy_buffer */
    { GL_COPY_READ_BUFFER, LOC_CUSTOM, TYPE_INT, 0, extra_ARB_copy_buffer },
    { GL_COPY_WRITE_BUFFER, LOC_CUSTOM, TYPE_INT, 0, extra_ARB_copy_buffer },
@@ -506,6 +513,7 @@ static const struct value_desc values[] = {
 #if FEATURE_GL || FEATURE_ES1
    /* Enums in OpenGL and GLES1 */
    { 0, 0, TYPE_API_MASK, API_OPENGL_BIT | API_OPENGLES_BIT, NO_EXTRA },
+   { GL_MAX_LIGHTS, CONTEXT_INT(Const.MaxLights), NO_EXTRA },
    { GL_LIGHT0, CONTEXT_BOOL(Light.Light[0].Enabled), NO_EXTRA },
    { GL_LIGHT1, CONTEXT_BOOL(Light.Light[1].Enabled), NO_EXTRA },
    { GL_LIGHT2, CONTEXT_BOOL(Light.Light[2].Enabled), NO_EXTRA },
@@ -674,14 +682,33 @@ static const struct value_desc values[] = {
 
 #if FEATURE_GL || FEATURE_ES2
    { 0, 0, TYPE_API_MASK, API_OPENGL_BIT | API_OPENGLES2_BIT, NO_EXTRA },
-   /* This entry isn't spec'ed for GLES 2, but is needed for Mesa's GLSL: */
-   { GL_MAX_LIGHTS, CONTEXT_INT(Const.MaxLights), NO_EXTRA },
    { GL_MAX_TEXTURE_COORDS_ARB, /* == GL_MAX_TEXTURE_COORDS_NV */
      CONTEXT_INT(Const.MaxTextureCoordUnits),
      extra_ARB_fragment_program_NV_fragment_program },
 
    /* GL_ARB_draw_buffers */
    { GL_MAX_DRAW_BUFFERS_ARB, CONTEXT_INT(Const.MaxDrawBuffers), NO_EXTRA },
+
+   /* GL_EXT_framebuffer_object / GL_NV_fbo_color_attachments */
+   { GL_MAX_COLOR_ATTACHMENTS, CONTEXT_INT(Const.MaxColorAttachments),
+     extra_EXT_framebuffer_object },
+
+   /* GL_ARB_draw_buffers / GL_NV_draw_buffers (for ES 2.0) */
+   { GL_DRAW_BUFFER0_ARB, BUFFER_ENUM(ColorDrawBuffer[0]), NO_EXTRA },
+   { GL_DRAW_BUFFER1_ARB, BUFFER_ENUM(ColorDrawBuffer[1]),
+     extra_valid_draw_buffer },
+   { GL_DRAW_BUFFER2_ARB, BUFFER_ENUM(ColorDrawBuffer[2]),
+     extra_valid_draw_buffer },
+   { GL_DRAW_BUFFER3_ARB, BUFFER_ENUM(ColorDrawBuffer[3]),
+     extra_valid_draw_buffer },
+   { GL_DRAW_BUFFER4_ARB, BUFFER_ENUM(ColorDrawBuffer[4]),
+     extra_valid_draw_buffer },
+   { GL_DRAW_BUFFER5_ARB, BUFFER_ENUM(ColorDrawBuffer[5]),
+     extra_valid_draw_buffer },
+   { GL_DRAW_BUFFER6_ARB, BUFFER_ENUM(ColorDrawBuffer[6]),
+     extra_valid_draw_buffer },
+   { GL_DRAW_BUFFER7_ARB, BUFFER_ENUM(ColorDrawBuffer[7]),
+     extra_valid_draw_buffer },
 
    { GL_BLEND_COLOR_EXT, LOC_CUSTOM, TYPE_FLOATN_4, 0, extra_new_frag_clamp },
    /* GL_ARB_fragment_program */
@@ -1119,23 +1146,6 @@ static const struct value_desc values[] = {
    { GL_DEPTH_CLAMP, CONTEXT_BOOL(Transform.DepthClamp),
      extra_ARB_depth_clamp },
 
-   /* GL_ARB_draw_buffers */
-   { GL_DRAW_BUFFER0_ARB, BUFFER_ENUM(ColorDrawBuffer[0]), NO_EXTRA },
-   { GL_DRAW_BUFFER1_ARB, BUFFER_ENUM(ColorDrawBuffer[1]),
-     extra_valid_draw_buffer },
-   { GL_DRAW_BUFFER2_ARB, BUFFER_ENUM(ColorDrawBuffer[2]),
-     extra_valid_draw_buffer },
-   { GL_DRAW_BUFFER3_ARB, BUFFER_ENUM(ColorDrawBuffer[3]),
-     extra_valid_draw_buffer },
-   { GL_DRAW_BUFFER4_ARB, BUFFER_ENUM(ColorDrawBuffer[4]),
-     extra_valid_draw_buffer },
-   { GL_DRAW_BUFFER5_ARB, BUFFER_ENUM(ColorDrawBuffer[5]),
-     extra_valid_draw_buffer },
-   { GL_DRAW_BUFFER6_ARB, BUFFER_ENUM(ColorDrawBuffer[6]),
-     extra_valid_draw_buffer },
-   { GL_DRAW_BUFFER7_ARB, BUFFER_ENUM(ColorDrawBuffer[7]),
-     extra_valid_draw_buffer },
-
    /* GL_ATI_fragment_shader */
    { GL_NUM_FRAGMENT_REGISTERS_ATI, CONST(6), extra_ATI_fragment_shader },
    { GL_NUM_FRAGMENT_CONSTANTS_ATI, CONST(8), extra_ATI_fragment_shader },
@@ -1147,10 +1157,6 @@ static const struct value_desc values[] = {
    { GL_NUM_INPUT_INTERPOLATOR_COMPONENTS_ATI,
      CONST(3), extra_ATI_fragment_shader },
 
-   /* GL_EXT_framebuffer_object */
-   { GL_MAX_COLOR_ATTACHMENTS_EXT, CONTEXT_INT(Const.MaxColorAttachments),
-     extra_EXT_framebuffer_object },
-   
    /* GL_EXT_framebuffer_blit
     * NOTE: GL_DRAW_FRAMEBUFFER_BINDING_EXT == GL_FRAMEBUFFER_BINDING_EXT */
    { GL_READ_FRAMEBUFFER_BINDING_EXT, LOC_CUSTOM, TYPE_INT, 0,
@@ -1229,13 +1235,13 @@ static const struct value_desc values[] = {
    /* GL_ARB_color_buffer_float */
    { GL_RGBA_FLOAT_MODE_ARB, BUFFER_FIELD(Visual.floatMode, TYPE_BOOLEAN), 0 },
 
-   /* GL_EXT_gpu_shader4 / GL 3.0 */
+   /* GL_EXT_gpu_shader4 / GLSL 1.30 */
    { GL_MIN_PROGRAM_TEXEL_OFFSET,
      CONTEXT_INT(Const.MinProgramTexelOffset),
-     extra_EXT_gpu_shader4 },
+     extra_GLSL_130 },
    { GL_MAX_PROGRAM_TEXEL_OFFSET,
      CONTEXT_INT(Const.MaxProgramTexelOffset),
-     extra_EXT_gpu_shader4 },
+     extra_GLSL_130 },
 
    /* GL_ARB_texture_buffer_object */
    { GL_MAX_TEXTURE_BUFFER_SIZE_ARB, CONTEXT_INT(Const.MaxTextureBufferSize),
@@ -1810,6 +1816,12 @@ check_extra(struct gl_context *ctx, const char *func, const struct value_desc *d
 	    _mesa_error(ctx, GL_INVALID_ENUM, "%s(clip distance %u)",
 			func, d->pname - GL_CLIP_DISTANCE0);
 	    return GL_FALSE;
+	 }
+	 break;
+      case EXTRA_GLSL_130:
+	 if (ctx->Const.GLSLVersion >= 130) {
+	    total++;
+	    enabled++;
 	 }
 	 break;
       case EXTRA_END:

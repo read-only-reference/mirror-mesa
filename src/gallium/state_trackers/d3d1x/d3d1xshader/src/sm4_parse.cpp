@@ -197,9 +197,29 @@ relative:
 
 			if(opcode == SM4_OPCODE_CUSTOMDATA)
 			{
+				// immediate constant buffer data
 				unsigned customlen = read32() - 2;
+
+				sm4_dcl& dcl = *new sm4_dcl;
+				program.dcls.push_back(&dcl);
+
+				dcl.opcode = SM4_OPCODE_CUSTOMDATA;
+				dcl.num = customlen;
+				dcl.data = malloc(customlen * sizeof(tokens[0]));
+
+				memcpy(dcl.data, &tokens[0], customlen * sizeof(tokens[0]));
+
 				skip(customlen);
 				continue;
+			}
+
+			if(opcode == SM4_OPCODE_HS_FORK_PHASE || opcode == SM4_OPCODE_HS_JOIN_PHASE)
+			{
+				// need to interleave these with the declarations or we cannot
+				// assign fork/join phase instance counts to phases
+				sm4_dcl& dcl = *new sm4_dcl;
+				program.dcls.push_back(&dcl);
+				dcl.opcode = opcode;
 			}
 
 			if((opcode >= SM4_OPCODE_DCL_RESOURCE && opcode <= SM4_OPCODE_DCL_GLOBAL_FLAGS)

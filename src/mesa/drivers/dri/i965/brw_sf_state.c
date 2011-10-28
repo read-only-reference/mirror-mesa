@@ -44,7 +44,7 @@ static void upload_sf_vp(struct brw_context *brw)
    const GLfloat depth_scale = 1.0F / ctx->DrawBuffer->_DepthMaxF;
    struct brw_sf_viewport *sfv;
    GLfloat y_scale, y_bias;
-   const GLboolean render_to_fbo = (ctx->DrawBuffer->Name != 0);
+   const bool render_to_fbo = (ctx->DrawBuffer->Name != 0);
    const GLfloat *v = ctx->Viewport._WindowMap.m;
 
    sfv = brw_state_batch(brw, AUB_TRACE_SF_VP_STATE,
@@ -119,7 +119,7 @@ const struct brw_tracked_state brw_sf_vp = {
       .brw   = BRW_NEW_BATCH,
       .cache = 0
    },
-   .prepare = upload_sf_vp
+   .emit = upload_sf_vp
 };
 
 /**
@@ -183,9 +183,6 @@ static void upload_sf_unit( struct brw_context *brw )
    /* BRW_NEW_URB_FENCE */
    sf->thread4.max_threads = MIN2(chipset_max_threads,
 				  brw->urb.nr_sf_entries) - 1;
-
-   if (unlikely(INTEL_DEBUG & DEBUG_SINGLE_THREAD))
-      sf->thread4.max_threads = 0;
 
    if (unlikely(INTEL_DEBUG & DEBUG_STATS))
       sf->thread4.stats_enable = 1;
@@ -327,5 +324,5 @@ const struct brw_tracked_state brw_sf_unit = {
       .cache = (CACHE_NEW_SF_VP |
 		CACHE_NEW_SF_PROG)
    },
-   .prepare = upload_sf_unit,
+   .emit = upload_sf_unit,
 };

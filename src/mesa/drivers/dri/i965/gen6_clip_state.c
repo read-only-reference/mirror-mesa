@@ -31,24 +31,25 @@
 #include "brw_util.h"
 #include "intel_batchbuffer.h"
 
-uint32_t
-brw_compute_userclip_flags(bool uses_clip_distance,
-                           GLbitfield clip_planes_enabled)
+/**
+ * Return true if at least one of the inputs used by the given fragment
+ * program has the GLSL "noperspective" interpolation qualifier.
+ */
+bool
+brw_fprog_uses_noperspective(const struct gl_fragment_program *fprog)
 {
-   if (uses_clip_distance) {
-      /* When using gl_ClipDistance, it is up to the shader to decide which
-       * clip distance values to use.
-       */
-      return clip_planes_enabled;
-   } else {
-      /* When using clipping planes, we compact the ones that are in use so
-       * that they are always numbered consecutively from zero, so we need to
-       * enable clipping planes 0 through n-1 in the hardware regardless of
-       * which planes the user has selected.
-       */
-      return (1 << brw_count_bits(clip_planes_enabled)) - 1;
+   int attr;
+   for (attr = 0; attr < FRAG_ATTRIB_MAX; ++attr) {
+      /* Ignore unused inputs. */
+      if (!(fprog->Base.InputsRead & BITFIELD64_BIT(attr)))
+         continue;
+
+      if (fprog->InterpQualifier[attr] == INTERP_QUALIFIER_NOPERSPECTIVE)
+         return true;
    }
+   return false;
 }
+
 
 static void
 upload_clip_state(struct brw_context *brw)
@@ -57,10 +58,14 @@ upload_clip_state(struct brw_context *brw)
    struct gl_context *ctx = &intel->ctx;
    uint32_t depth_clamp = 0;
    uint32_t provoking, userclip;
+   uint32_t nonperspective_barycentric_enable_flag = 0;
+   /* BRW_NEW_FRAGMENT_PROGRAM */
+   const struct gl_fragment_program *fprog = brw->fragment_program;
 
-   /* BRW_NEW_VERTEX_PROGRAM */
-   struct brw_vertex_program *vp =
-      (struct brw_vertex_program *)brw->vertex_program;
+   if (brw_fprog_uses_noperspective(fprog)) {
+      nonperspective_barycentric_enable_flag =
+         GEN6_CLIP_NON_PERSPECTIVE_BARYCENTRIC_ENABLE;
+   }
 
    if (!ctx->Transform.DepthClamp)
       depth_clamp = GEN6_CLIP_Z_TEST;
@@ -79,8 +84,7 @@ upload_clip_state(struct brw_context *brw)
    }
 
    /* _NEW_TRANSFORM */
-   userclip = brw_compute_userclip_flags(vp->program.UsesClipDistance,
-                                         ctx->Transform.ClipPlanesEnabled);
+   userclip = ctx->Transform.ClipPlanesEnabled;
 
    BEGIN_BATCH(4);
    OUT_BATCH(_3DSTATE_CLIP << 16 | (4 - 2));
@@ -88,6 +92,7 @@ upload_clip_state(struct brw_context *brw)
    OUT_BATCH(GEN6_CLIP_ENABLE |
 	     GEN6_CLIP_API_OGL |
 	     GEN6_CLIP_MODE_NORMAL |
+             nonperspective_barycentric_enable_flag |
 	     GEN6_CLIP_XY_TEST |
 	     userclip << GEN6_USER_CLIP_CLIP_DISTANCES_SHIFT |
 	     depth_clamp |
@@ -101,7 +106,8 @@ upload_clip_state(struct brw_context *brw)
 const struct brw_tracked_state gen6_clip_state = {
    .dirty = {
       .mesa  = _NEW_TRANSFORM | _NEW_LIGHT,
-      .brw   = BRW_NEW_CONTEXT | BRW_NEW_VERTEX_PROGRAM,
+      .brw   = (BRW_NEW_CONTEXT |
+                BRW_NEW_FRAGMENT_PROGRAM),
       .cache = 0
    },
    .emit = upload_clip_state,

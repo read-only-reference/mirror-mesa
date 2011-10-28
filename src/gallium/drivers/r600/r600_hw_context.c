@@ -74,10 +74,10 @@ void r600_get_backend_mask(struct r600_context *ctx)
 		goto err;
 
 	/* initialize buffer with zeroes */
-	results = ctx->screen->ws->buffer_map(buffer->buf, ctx->cs, PIPE_TRANSFER_WRITE);
+	results = ctx->ws->buffer_map(buffer->buf, ctx->cs, PIPE_TRANSFER_WRITE);
 	if (results) {
 		memset(results, 0, ctx->max_db * 4 * 4);
-		ctx->screen->ws->buffer_unmap(buffer->buf);
+		ctx->ws->buffer_unmap(buffer->buf);
 
 		/* emit EVENT_WRITE for ZPASS_DONE */
 		ctx->pm4[ctx->pm4_cdwords++] = PKT3(PKT3_EVENT_WRITE, 2, 0);
@@ -88,18 +88,15 @@ void r600_get_backend_mask(struct r600_context *ctx)
 		ctx->pm4[ctx->pm4_cdwords++] = PKT3(PKT3_NOP, 0, 0);
 		ctx->pm4[ctx->pm4_cdwords++] = r600_context_bo_reloc(ctx, buffer, RADEON_USAGE_WRITE);
 
-		/* execute */
-		r600_context_flush(ctx, 0);
-
 		/* analyze results */
-		results = ctx->screen->ws->buffer_map(buffer->buf, ctx->cs, PIPE_TRANSFER_READ);
+		results = ctx->ws->buffer_map(buffer->buf, ctx->cs, PIPE_TRANSFER_READ);
 		if (results) {
 			for(i = 0; i < ctx->max_db; i++) {
 				/* at least highest bit will be set if backend is used */
 				if (results[i*4 + 1])
 					mask |= (1<<i);
 			}
-			ctx->screen->ws->buffer_unmap(buffer->buf);
+			ctx->ws->buffer_unmap(buffer->buf);
 		}
 	}
 
@@ -776,7 +773,7 @@ void r600_context_fini(struct r600_context *ctx)
 	free(ctx->range);
 	free(ctx->blocks);
 	free(ctx->bo);
-	ctx->screen->ws->cs_destroy(ctx->cs);
+	ctx->ws->cs_destroy(ctx->cs);
 
 	memset(ctx, 0, sizeof(struct r600_context));
 }
@@ -834,8 +831,9 @@ int r600_context_init(struct r600_context *ctx, struct r600_screen *screen)
 
 	memset(ctx, 0, sizeof(struct r600_context));
 	ctx->screen = screen;
+	ctx->ws = screen->ws;
 
-	LIST_INITHEAD(&ctx->query_list);
+	LIST_INITHEAD(&ctx->active_query_list);
 
 	/* init dirty list */
 	LIST_INITHEAD(&ctx->dirty);
@@ -925,8 +923,6 @@ int r600_context_init(struct r600_context *ctx, struct r600_screen *screen)
 	/* save 16dwords space for fence mecanism */
 	ctx->pm4_ndwords -= 16;
 	ctx->max_db = 4;
-
-	r600_get_backend_mask(ctx);
 	return 0;
 out_err:
 	r600_context_fini(ctx);
@@ -1505,7 +1501,7 @@ void r600_context_flush(struct r600_context *ctx, unsigned flags)
 
 	/* Flush the CS. */
 	ctx->cs->cdw = ctx->pm4_cdwords;
-	ctx->screen->ws->cs_flush(ctx->cs, flags);
+	ctx->ws->cs_flush(ctx->cs, flags);
 
 	/* We need to get the pointer to the other CS,
 	 * the command streams are double-buffered. */
@@ -1524,7 +1520,7 @@ void r600_context_flush(struct r600_context *ctx, unsigned flags)
 	r600_init_cs(ctx);
 
 	/* resume queries */
-	r600_context_queries_resume(ctx, TRUE);
+	r600_context_queries_resume(ctx);
 
 	/* set all valid group as dirty so they get reemited on
 	 * next draw command
@@ -1571,20 +1567,17 @@ void r600_context_emit_fence(struct r600_context *ctx, struct r600_resource *fen
 static boolean r600_query_result(struct r600_context *ctx, struct r600_query *query, boolean wait)
 {
 	unsigned results_base = query->results_start;
-	u64 start, end;
-	u32 *results, *current_result;
+	u32 *map;
 
-	if (wait)
-		results = ctx->screen->ws->buffer_map(query->buffer->buf, ctx->cs, PIPE_TRANSFER_READ);
-	else
-		results = ctx->screen->ws->buffer_map(query->buffer->buf, ctx->cs, PIPE_TRANSFER_DONTBLOCK | PIPE_TRANSFER_READ);
-	if (!results)
+	map = ctx->ws->buffer_map(query->buffer->buf, ctx->cs,
+					  PIPE_TRANSFER_READ | (wait ? 0 : PIPE_TRANSFER_DONTBLOCK));
+	if (!map)
 		return FALSE;
-
 
 	/* count all results across all data blocks */
 	while (results_base != query->results_end) {
-		current_result = (u32*)((char*)results + results_base);
+		u64 start, end;
+		u32 *current_result = (u32*)((char*)map + results_base);
 
 		start = (u64)current_result[0] | (u64)current_result[1] << 32;
 		end = (u64)current_result[2] | (u64)current_result[3] << 32;
@@ -1594,12 +1587,12 @@ static boolean r600_query_result(struct r600_context *ctx, struct r600_query *qu
 		}
 
 		results_base += 4 * 4;
-		if (results_base >= query->buffer_size)
+		if (results_base >= query->buffer->b.b.b.width0)
 			results_base = 0;
 	}
 
 	query->results_start = query->results_end;
-	ctx->screen->ws->buffer_unmap(query->buffer->buf);
+	ctx->ws->buffer_unmap(query->buffer->buf);
 	return TRUE;
 }
 
@@ -1625,26 +1618,12 @@ void r600_query_begin(struct r600_context *ctx, struct r600_query *query)
 		r600_context_flush(ctx, RADEON_FLUSH_ASYNC);
 	}
 
-	if (query->type == PIPE_QUERY_OCCLUSION_COUNTER) {
-		/* Count queries emitted without flushes, and flush if more than
-		 * half of buffer used, to avoid overwriting results which may be
-		 * still in use. */
-		if (query->state & R600_QUERY_STATE_FLUSHED) {
-			query->queries_emitted = 1;
-		} else {
-			if (++query->queries_emitted > query->buffer_size / query->result_size / 2)
-				r600_context_flush(ctx, RADEON_FLUSH_ASYNC);
-		}
-	}
-
 	new_results_end = query->results_end + query->result_size;
-	if (new_results_end >= query->buffer_size)
+	if (new_results_end >= query->buffer->b.b.b.width0)
 		new_results_end = 0;
 
 	/* collect current results if query buffer is full */
 	if (new_results_end == query->results_start) {
-		if (!(query->state & R600_QUERY_STATE_FLUSHED))
-			r600_context_flush(ctx, 0);
 		r600_query_result(ctx, query, TRUE);
 	}
 
@@ -1652,7 +1631,7 @@ void r600_query_begin(struct r600_context *ctx, struct r600_query *query)
 		u32 *results;
 		int i;
 
-		results = ctx->screen->ws->buffer_map(query->buffer->buf, ctx->cs, PIPE_TRANSFER_WRITE);
+		results = ctx->ws->buffer_map(query->buffer->buf, ctx->cs, PIPE_TRANSFER_WRITE);
 		if (results) {
 			results = (u32*)((char*)results + query->results_end);
 			memset(results, 0, query->result_size);
@@ -1664,7 +1643,7 @@ void r600_query_begin(struct r600_context *ctx, struct r600_query *query)
 					results[(i * 4)+3] = 0x80000000;
 				}
 			}
-			ctx->screen->ws->buffer_unmap(query->buffer->buf);
+			ctx->ws->buffer_unmap(query->buffer->buf);
 		}
 	}
 
@@ -1690,8 +1669,6 @@ void r600_query_begin(struct r600_context *ctx, struct r600_query *query)
 	ctx->pm4[ctx->pm4_cdwords++] = PKT3(PKT3_NOP, 0, 0);
 	ctx->pm4[ctx->pm4_cdwords++] = r600_context_bo_reloc(ctx, query->buffer, RADEON_USAGE_WRITE);
 
-	query->state |= R600_QUERY_STATE_STARTED;
-	query->state ^= R600_QUERY_STATE_ENDED;
 	ctx->num_query_running++;
 }
 
@@ -1720,12 +1697,8 @@ void r600_query_end(struct r600_context *ctx, struct r600_query *query)
 	ctx->pm4[ctx->pm4_cdwords++] = r600_context_bo_reloc(ctx, query->buffer, RADEON_USAGE_WRITE);
 
 	query->results_end += query->result_size;
-	if (query->results_end >= query->buffer_size)
+	if (query->results_end >= query->buffer->b.b.b.width0)
 		query->results_end = 0;
-
-	query->state ^= R600_QUERY_STATE_STARTED;
-	query->state |= R600_QUERY_STATE_ENDED;
-	query->state &= ~R600_QUERY_STATE_FLUSHED;
 
 	ctx->num_query_running--;
 }
@@ -1746,8 +1719,10 @@ void r600_query_predication(struct r600_context *ctx, struct r600_query *query, 
 		u32 op;
 
 		/* find count of the query data blocks */
-		count = query->buffer_size + query->results_end - query->results_start;
-		if (count >= query->buffer_size) count-=query->buffer_size;
+		count = query->buffer->b.b.b.width0 + query->results_end - query->results_start;
+		if (count >= query->buffer->b.b.b.width0) {
+			count -= query->buffer->b.b.b.width0;
+		}
 		count /= query->result_size;
 
 		if (ctx->pm4_cdwords + 5 * count > ctx->pm4_ndwords)
@@ -1765,7 +1740,7 @@ void r600_query_predication(struct r600_context *ctx, struct r600_query *query, 
 			ctx->pm4[ctx->pm4_cdwords++] = r600_context_bo_reloc(ctx, query->buffer,
 									     RADEON_USAGE_READ);
 			results_base += query->result_size;
-			if (results_base >= query->buffer_size)
+			if (results_base >= query->buffer->b.b.b.width0)
 				results_base = 0;
 			/* set CONTINUE bit for all packets except the first */
 			op |= PREDICATION_CONTINUE;
@@ -1775,12 +1750,14 @@ void r600_query_predication(struct r600_context *ctx, struct r600_query *query, 
 
 struct r600_query *r600_context_query_create(struct r600_context *ctx, unsigned query_type)
 {
-	struct r600_query *query = calloc(1, sizeof(struct r600_query));
+	struct r600_query *query;
+	unsigned buffer_size = 4096;
+
+	query = CALLOC_STRUCT(r600_query);
 	if (query == NULL)
 		return NULL;
 
 	query->type = query_type;
-	query->buffer_size = 4096;
 
 	switch (query_type) {
 	case PIPE_QUERY_OCCLUSION_COUNTER:
@@ -1796,28 +1773,24 @@ struct r600_query *r600_context_query_create(struct r600_context *ctx, unsigned 
 	}
 
 	/* adjust buffer size to simplify offsets wrapping math */
-	query->buffer_size -= query->buffer_size % query->result_size;
+	buffer_size -= buffer_size % query->result_size;
 
-	/* As of GL4, query buffers are normally read by the CPU after
+	/* Queries are normally read by the CPU after
 	 * being written by the gpu, hence staging is probably a good
 	 * usage pattern.
 	 */
 	query->buffer = (struct r600_resource*)
-		pipe_buffer_create(&ctx->screen->screen, PIPE_BIND_CUSTOM, PIPE_USAGE_STAGING, query->buffer_size);
+		pipe_buffer_create(&ctx->screen->screen, PIPE_BIND_CUSTOM, PIPE_USAGE_STAGING, buffer_size);
 	if (!query->buffer) {
-		free(query);
+		FREE(query);
 		return NULL;
 	}
-
-	LIST_ADDTAIL(&query->list, &ctx->query_list);
-
 	return query;
 }
 
 void r600_context_query_destroy(struct r600_context *ctx, struct r600_query *query)
 {
 	pipe_resource_reference((struct pipe_resource**)&query->buffer, NULL);
-	LIST_DELINIT(&query->list);
 	free(query);
 }
 
@@ -1827,9 +1800,6 @@ boolean r600_context_query_result(struct r600_context *ctx,
 {
 	uint64_t *result = (uint64_t*)vresult;
 
-	if (!(query->state & R600_QUERY_STATE_FLUSHED)) {
-		r600_context_flush(ctx, 0);
-	}
 	if (!r600_query_result(ctx, query, wait))
 		return FALSE;
 
@@ -1852,25 +1822,16 @@ void r600_context_queries_suspend(struct r600_context *ctx)
 {
 	struct r600_query *query;
 
-	LIST_FOR_EACH_ENTRY(query, &ctx->query_list, list) {
-		if (query->state & R600_QUERY_STATE_STARTED) {
-			r600_query_end(ctx, query);
-			query->state |= R600_QUERY_STATE_SUSPENDED;
-		}
+	LIST_FOR_EACH_ENTRY(query, &ctx->active_query_list, list) {
+		r600_query_end(ctx, query);
 	}
 }
 
-void r600_context_queries_resume(struct r600_context *ctx, boolean flushed)
+void r600_context_queries_resume(struct r600_context *ctx)
 {
 	struct r600_query *query;
 
-	LIST_FOR_EACH_ENTRY(query, &ctx->query_list, list) {
-		if (flushed)
-			query->state |= R600_QUERY_STATE_FLUSHED;
-
-		if (query->state & R600_QUERY_STATE_SUSPENDED) {
-			r600_query_begin(ctx, query);
-			query->state ^= R600_QUERY_STATE_SUSPENDED;
-		}
+	LIST_FOR_EACH_ENTRY(query, &ctx->active_query_list, list) {
+		r600_query_begin(ctx, query);
 	}
 }

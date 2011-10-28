@@ -294,10 +294,14 @@ fs_visitor::visit(ir_expression *ir)
       }
       break;
    case ir_binop_div:
-      assert(!"not reached: should be handled by ir_div_to_mul_rcp");
+      /* Floating point should be lowered by DIV_TO_MUL_RCP in the compiler. */
+      assert(ir->type->is_integer());
+      emit_math(SHADER_OPCODE_INT_QUOTIENT, this->result, op[0], op[1]);
       break;
    case ir_binop_mod:
-      assert(!"ir_binop_mod should have been converted to b * fract(a/b)");
+      /* Floating point should be lowered by MOD_TO_FRACT in the compiler. */
+      assert(ir->type->is_integer());
+      emit_math(SHADER_OPCODE_INT_REMAINDER, this->result, op[0], op[1]);
       break;
 
    case ir_binop_less:
@@ -312,6 +316,9 @@ fs_visitor::visit(ir_expression *ir)
       /* original gen4 does implicit conversion before comparison. */
       if (intel->gen < 5)
 	 temp.type = op[0].type;
+
+      resolve_ud_negate(&op[0]);
+      resolve_ud_negate(&op[1]);
 
       inst = emit(BRW_OPCODE_CMP, temp, op[0], op[1]);
       inst->conditional_mod = brw_conditional_for_comparison(ir->operation);
@@ -373,6 +380,8 @@ fs_visitor::visit(ir_expression *ir)
       if (intel->gen < 5)
 	 temp.type = op[0].type;
 
+      resolve_ud_negate(&op[0]);
+
       inst = emit(BRW_OPCODE_CMP, temp, op[0], fs_reg(0.0f));
       inst->conditional_mod = BRW_CONDITIONAL_NZ;
       inst = emit(BRW_OPCODE_AND, this->result, this->result, fs_reg(1));
@@ -397,6 +406,9 @@ fs_visitor::visit(ir_expression *ir)
       break;
 
    case ir_binop_min:
+      resolve_ud_negate(&op[0]);
+      resolve_ud_negate(&op[1]);
+
       if (intel->gen >= 6) {
 	 inst = emit(BRW_OPCODE_SEL, this->result, op[0], op[1]);
 	 inst->conditional_mod = BRW_CONDITIONAL_L;
@@ -412,6 +424,9 @@ fs_visitor::visit(ir_expression *ir)
       }
       break;
    case ir_binop_max:
+      resolve_ud_negate(&op[0]);
+      resolve_ud_negate(&op[1]);
+
       if (intel->gen >= 6) {
 	 inst = emit(BRW_OPCODE_SEL, this->result, op[0], op[1]);
 	 inst->conditional_mod = BRW_CONDITIONAL_GE;
@@ -1071,7 +1086,7 @@ fs_visitor::visit(ir_texture *ir)
 
       /* Explicitly set up the message header by copying g0 to msg reg m1. */
       emit(BRW_OPCODE_MOV, fs_reg(MRF, 1, BRW_REGISTER_TYPE_UD),
-	   fs_reg(GRF, 0, BRW_REGISTER_TYPE_UD));
+	   fs_reg(retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD)));
 
       /* Then set the offset bits in DWord 2 of the message header. */
       emit(BRW_OPCODE_MOV,
@@ -1365,6 +1380,8 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
 
 	 expr->operands[i]->accept(this);
 	 op[i] = this->result;
+
+	 resolve_ud_negate(&op[i]);
       }
 
       switch (expr->operation) {
@@ -1737,16 +1754,20 @@ fs_visitor::emit_interpolation_setup_gen4()
 
    this->current_annotation = "compute pixel deltas from v0";
    if (brw->has_pln) {
-      this->delta_x = fs_reg(this, glsl_type::vec2_type);
-      this->delta_y = this->delta_x;
-      this->delta_y.reg_offset++;
+      this->delta_x[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC] =
+         fs_reg(this, glsl_type::vec2_type);
+      this->delta_y[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC] =
+         this->delta_x[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC];
+      this->delta_y[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC].reg_offset++;
    } else {
-      this->delta_x = fs_reg(this, glsl_type::float_type);
-      this->delta_y = fs_reg(this, glsl_type::float_type);
+      this->delta_x[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC] =
+         fs_reg(this, glsl_type::float_type);
+      this->delta_y[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC] =
+         fs_reg(this, glsl_type::float_type);
    }
-   emit(BRW_OPCODE_ADD, this->delta_x,
+   emit(BRW_OPCODE_ADD, this->delta_x[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC],
 	this->pixel_x, fs_reg(negate(brw_vec1_grf(1, 0))));
-   emit(BRW_OPCODE_ADD, this->delta_y,
+   emit(BRW_OPCODE_ADD, this->delta_y[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC],
 	this->pixel_y, fs_reg(negate(brw_vec1_grf(1, 1))));
 
    this->current_annotation = "compute pos.w and 1/pos.w";
@@ -1754,7 +1775,9 @@ fs_visitor::emit_interpolation_setup_gen4()
     * interpolate the other attributes.
     */
    this->wpos_w = fs_reg(this, glsl_type::float_type);
-   emit(FS_OPCODE_LINTERP, wpos_w, this->delta_x, this->delta_y,
+   emit(FS_OPCODE_LINTERP, wpos_w,
+        this->delta_x[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC],
+        this->delta_y[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC],
 	interp_reg(FRAG_ATTRIB_WPOS, 3));
    /* Compute the pixel 1/W value from wpos.w. */
    this->pixel_w = fs_reg(this, glsl_type::float_type);
@@ -1797,8 +1820,11 @@ fs_visitor::emit_interpolation_setup_gen6()
    this->wpos_w = fs_reg(this, glsl_type::float_type);
    emit_math(SHADER_OPCODE_RCP, this->wpos_w, this->pixel_w);
 
-   this->delta_x = fs_reg(brw_vec8_grf(2, 0));
-   this->delta_y = fs_reg(brw_vec8_grf(3, 0));
+   for (int i = 0; i < BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT; ++i) {
+      uint8_t reg = c->barycentric_coord_reg[i];
+      this->delta_x[i] = fs_reg(brw_vec8_grf(reg, 0));
+      this->delta_y[i] = fs_reg(brw_vec8_grf(reg + 1, 0));
+   }
 
    this->current_annotation = NULL;
 }
@@ -1873,7 +1899,7 @@ void
 fs_visitor::emit_fb_writes()
 {
    this->current_annotation = "FB write header";
-   GLboolean header_present = GL_TRUE;
+   bool header_present = true;
    int base_mrf = 2;
    int nr = base_mrf;
    int reg_width = c->dispatch_width / 8;
@@ -1979,4 +2005,16 @@ fs_visitor::emit_fb_writes()
    }
 
    this->current_annotation = NULL;
+}
+
+void
+fs_visitor::resolve_ud_negate(fs_reg *reg)
+{
+   if (reg->type != BRW_REGISTER_TYPE_UD ||
+       !reg->negate)
+      return;
+
+   fs_reg temp = fs_reg(this, glsl_type::uint_type);
+   emit(BRW_OPCODE_MOV, temp, *reg);
+   *reg = temp;
 }

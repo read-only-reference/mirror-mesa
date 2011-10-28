@@ -12,9 +12,11 @@
 void intel_batchbuffer_init(struct intel_context *intel);
 void intel_batchbuffer_reset(struct intel_context *intel);
 void intel_batchbuffer_free(struct intel_context *intel);
+void intel_batchbuffer_save_state(struct intel_context *intel);
+void intel_batchbuffer_reset_to_saved(struct intel_context *intel);
 
-void _intel_batchbuffer_flush(struct intel_context *intel,
-			      const char *file, int line);
+int _intel_batchbuffer_flush(struct intel_context *intel,
+			     const char *file, int line);
 
 #define intel_batchbuffer_flush(intel) \
 	_intel_batchbuffer_flush(intel, __FILE__, __LINE__)
@@ -28,12 +30,12 @@ void _intel_batchbuffer_flush(struct intel_context *intel,
 void intel_batchbuffer_data(struct intel_context *intel,
                             const void *data, GLuint bytes, bool is_blit);
 
-GLboolean intel_batchbuffer_emit_reloc(struct intel_context *intel,
+bool intel_batchbuffer_emit_reloc(struct intel_context *intel,
                                        drm_intel_bo *buffer,
 				       uint32_t read_domains,
 				       uint32_t write_domain,
 				       uint32_t offset);
-GLboolean intel_batchbuffer_emit_reloc_fenced(struct intel_context *intel,
+bool intel_batchbuffer_emit_reloc_fenced(struct intel_context *intel,
 					      drm_intel_bo *buffer,
 					      uint32_t read_domains,
 					      uint32_t write_domain,

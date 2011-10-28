@@ -35,7 +35,7 @@
  * Apply texture object's swizzle (X/Y/Z/W/0/1) to incoming 'texel'
  * and return results in 'colorOut'.
  */
-static INLINE void
+static inline void
 swizzle_texel(const GLfloat texel[4], GLfloat colorOut[4], GLuint swizzle)
 {
    if (swizzle == SWIZZLE_NOOP) {
@@ -237,7 +237,8 @@ run_program(struct gl_context *ctx, SWspan *span, GLuint start, GLuint end)
                else if (depth >= 1.0)
                   span->array->z[i] = ctx->DrawBuffer->_DepthMax;
                else
-                  span->array->z[i] = IROUND(depth * ctx->DrawBuffer->_DepthMaxF);
+                  span->array->z[i] =
+                     (GLuint) (depth * ctx->DrawBuffer->_DepthMaxF + 0.5F);
             }
          }
          else {

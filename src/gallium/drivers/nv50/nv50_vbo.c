@@ -351,6 +351,10 @@ nv50_vertex_arrays_validate(struct nv50_context *nv50)
    for (; i < nv50->state.num_vtxelts; ++i) {
       BEGIN_RING(chan, RING_3D(VERTEX_ARRAY_ATTRIB(i)), 1);
       OUT_RING  (chan, NV50_3D_VERTEX_ATTRIB_INACTIVE);
+      if (unlikely(nv50->state.instance_elts & (1 << i))) {
+         BEGIN_RING(chan, RING_3D(VERTEX_ARRAY_PER_INSTANCE(i)), 1);
+         OUT_RING  (chan, 0);
+      }
       BEGIN_RING(chan, RING_3D(VERTEX_ARRAY_FETCH(i)), 1);
       OUT_RING  (chan, 0);
    }
@@ -403,6 +407,12 @@ nv50_draw_arrays(struct nv50_context *nv50,
 {
    struct nouveau_channel *chan = nv50->screen->base.channel;
    unsigned prim;
+
+   if (nv50->state.index_bias) {
+      BEGIN_RING(chan, RING_3D(VB_ELEMENT_BASE), 1);
+      OUT_RING  (chan, 0);
+      nv50->state.index_bias = 0;
+   }
 
    prim = nv50_prim_gl(mode);
 

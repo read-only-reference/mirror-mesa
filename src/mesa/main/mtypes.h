@@ -73,10 +73,7 @@ struct _mesa_HashTable;
 struct gl_attrib_node;
 struct gl_list_extensions;
 struct gl_meta_state;
-struct gl_pixelstore_attrib;
 struct gl_program_cache;
-struct gl_texture_format;
-struct gl_texture_image;
 struct gl_texture_object;
 struct gl_context;
 struct st_context;
@@ -214,9 +211,10 @@ typedef enum
    VERT_RESULT_BFC0 = 13,
    VERT_RESULT_BFC1 = 14,
    VERT_RESULT_EDGE = 15,
-   VERT_RESULT_CLIP_DIST0 = 16,
-   VERT_RESULT_CLIP_DIST1 = 17,
-   VERT_RESULT_VAR0 = 18,  /**< shader varying */
+   VERT_RESULT_CLIP_VERTEX = 16,
+   VERT_RESULT_CLIP_DIST0 = 17,
+   VERT_RESULT_CLIP_DIST1 = 18,
+   VERT_RESULT_VAR0 = 19,  /**< shader varying */
    VERT_RESULT_MAX = (VERT_RESULT_VAR0 + MAX_VARYING)
 } gl_vert_result;
 
@@ -330,7 +328,7 @@ typedef enum
  * (VERT_RESULT_PSIZ, VERT_RESULT_BFC0, VERT_RESULT_BFC1, and
  * VERT_RESULT_EDGE) are converted to a value of -1.
  */
-static INLINE int
+static inline int
 _mesa_vert_result_to_frag_attrib(gl_vert_result vert_result)
 {
    if (vert_result >= VERT_RESULT_CLIP_DIST0)
@@ -350,7 +348,7 @@ _mesa_vert_result_to_frag_attrib(gl_vert_result vert_result)
  * gl_frag_attrib values which have no corresponding gl_vert_result
  * (FRAG_ATTRIB_FACE and FRAG_ATTRIB_PNTC) are converted to a value of -1.
  */
-static INLINE int
+static inline int
 _mesa_frag_attrib_to_vert_result(gl_frag_attrib frag_attrib)
 {
    if (frag_attrib <= FRAG_ATTRIB_TEX7)
@@ -1233,8 +1231,8 @@ typedef enum
 
 
 /**
- * Texture image state.  Describes the dimensions of a texture image,
- * the texel format and pointers to Texel Fetch functions.
+ * Texture image state.  Drivers will typically create a subclass of this
+ * with extra fields for memory buffers, etc.
  */
 struct gl_texture_image
 {
@@ -1263,18 +1261,6 @@ struct gl_texture_image
    GLuint Level;                /**< Which mipmap level am I? */
    /** Cube map face: index into gl_texture_object::Image[] array */
    GLuint Face;
-
-   GLuint RowStride;		/**< Padded width in units of texels */
-   GLuint *ImageOffsets;        /**< if 3D texture: array [Depth] of offsets to
-                                     each 2D slice in 'Data', in texels */
-   GLvoid *Data;		/**< Image data, accessed via FetchTexel() */
-
-   /**
-    * \name For device driver:
-    */
-   /*@{*/
-   void *DriverData;		/**< Arbitrary device driver data */
-   /*@}*/
 };
 
 
@@ -1320,9 +1306,6 @@ struct gl_sampler_object
 
    /* deprecated sampler state */
    GLenum DepthMode;		/**< GL_ARB_depth_texture */
-
-   /** Is the texture object complete with respect to this sampler? */
-   GLboolean _CompleteTexture;
 };
 
 
@@ -1351,6 +1334,7 @@ struct gl_texture_object
    GLboolean _Complete;		/**< Is texture object complete? */
    GLboolean _RenderToTexture;  /**< Any rendering to this texture? */
    GLboolean Purgeable;         /**< Is the buffer purgeable under memory pressure? */
+   GLboolean Immutable;         /**< GL_ARB_texture_storage */
 
    /** Actual texture images, indexed by [cube face] and [mipmap level] */
    struct gl_texture_image *Image[MAX_FACES][MAX_TEXTURE_LEVELS];
@@ -1492,13 +1476,20 @@ struct gl_texture_attrib
 
 
 /**
+ * Data structure representing a single clip plane (e.g. one of the elements
+ * of the ctx->Transform.EyeUserPlane or ctx->Transform._ClipUserPlane array).
+ */
+typedef GLfloat gl_clip_plane[4];
+
+
+/**
  * Transformation attribute group (GL_TRANSFORM_BIT).
  */
 struct gl_transform_attrib
 {
    GLenum MatrixMode;				/**< Matrix mode */
-   GLfloat EyeUserPlane[MAX_CLIP_PLANES][4];	/**< User clip planes */
-   GLfloat _ClipUserPlane[MAX_CLIP_PLANES][4];	/**< derived */
+   gl_clip_plane EyeUserPlane[MAX_CLIP_PLANES];	/**< User clip planes */
+   gl_clip_plane _ClipUserPlane[MAX_CLIP_PLANES]; /**< derived */
    GLbitfield ClipPlanesEnabled;                /**< on/off bitmask */
    GLboolean Normalize;				/**< Normalize all normals? */
    GLboolean RescaleNormals;			/**< GL_EXT_rescale_normal */
@@ -1540,6 +1531,7 @@ struct gl_buffer_object
    GLintptr Offset;     /**< Mapped offset */
    GLsizeiptr Length;   /**< Mapped length */
    /*@}*/
+   GLboolean DeletePending;   /**< true if buffer object is removed from the hash */
    GLboolean Written;   /**< Ever written to? (for debugging) */
    GLboolean Purgeable; /**< Is the buffer purgeable under memory pressure? */
 };
@@ -1799,6 +1791,22 @@ typedef enum
 } gl_system_value;
 
 
+/**
+ * The possible interpolation qualifiers that can be applied to a fragment
+ * shader input in GLSL.
+ *
+ * Note: INTERP_QUALIFIER_NONE must be 0 so that memsetting the
+ * gl_fragment_program data structure to 0 causes the default behavior.
+ */
+enum glsl_interp_qualifier
+{
+   INTERP_QUALIFIER_NONE = 0,
+   INTERP_QUALIFIER_SMOOTH,
+   INTERP_QUALIFIER_FLAT,
+   INTERP_QUALIFIER_NOPERSPECTIVE
+};
+
+
 /** Vertex and fragment instructions */
 struct prog_instruction;
 struct gl_program_parameter_list;
@@ -1833,9 +1841,6 @@ struct gl_program
    struct gl_program_parameter_list *Parameters;
    /** Numbered local parameters */
    GLfloat LocalParams[MAX_PROGRAM_LOCAL_PARAMS][4];
-
-   /** Vertex program user-defined attributes */
-   struct gl_program_parameter_list *Attributes;
 
    /** Map from sampler unit to texture unit (set by glUniform1i()) */
    GLubyte SamplerUnits[MAX_SAMPLERS];
@@ -1902,6 +1907,13 @@ struct gl_fragment_program
    GLboolean OriginUpperLeft;
    GLboolean PixelCenterInteger;
    enum gl_frag_depth_layout FragDepthLayout;
+
+   /**
+    * GLSL interpolation qualifier associated with each fragment shader input.
+    * For inputs that do not have an interpolation qualifier specified in
+    * GLSL, the value is INTERP_QUALIFIER_NONE.
+    */
+   enum glsl_interp_qualifier InterpQualifier[FRAG_ATTRIB_MAX];
 };
 
 
@@ -2143,11 +2155,28 @@ struct gl_shader_program
    GLint RefCount;  /**< Reference count */
    GLboolean DeletePending;
 
+   /**
+    * Flags that the linker should not reject the program if it lacks
+    * a vertex or fragment shader.  GLES2 doesn't allow separate
+    * shader objects, and would reject them.  However, we internally
+    * build separate shader objects for fixed function programs, which
+    * we use for drivers/common/meta.c and for handling
+    * _mesa_update_state with no program bound (for example in
+    * glClear()).
+    */
+   GLboolean InternalSeparateShader;
+
    GLuint NumShaders;          /**< number of attached shaders */
    struct gl_shader **Shaders; /**< List of attached the shaders */
 
-   /** User-defined attribute bindings (glBindAttribLocation) */
-   struct gl_program_parameter_list *Attributes;
+   /**
+    * User-defined attribute bindings
+    *
+    * These are set via \c glBindAttribLocation and are used to direct the
+    * GLSL linker.  These are \b not the values used in the compiled shader,
+    * and they are \b not the values returned by \c glGetAttribLocation.
+    */
+   struct string_to_uint_map *AttributeBindings;
 
    /** Transform feedback varyings */
    struct {
@@ -2170,9 +2199,6 @@ struct gl_shader_program
    } Vert;
 
    /* post-link info: */
-   struct gl_vertex_program *VertexProgram;     /**< Linked vertex program */
-   struct gl_fragment_program *FragmentProgram; /**< Linked fragment prog */
-   struct gl_geometry_program *GeometryProgram; /**< Linked geometry prog */
    struct gl_uniform_list *Uniforms;
    struct gl_program_parameter_list *Varying;
    GLboolean LinkStatus;   /**< GL_LINK_STATUS */
@@ -2730,6 +2756,20 @@ struct gl_constants
 
    /* GL_ARB_robustness */
    GLenum ResetStrategy;
+
+   /**
+    * Whether the implementation strips out and ignores texture borders.
+    *
+    * Many GPU hardware implementations don't support rendering with texture
+    * borders and mipmapped textures.  (Note: not static border color, but the
+    * old 1-pixel border around each edge).  Implementations then have to do
+    * slow fallbacks to be correct, or just ignore the border and be fast but
+    * wrong.  Setting the flag stripts the border off of TexImage calls,
+    * providing "fast but wrong" at significantly reduced driver complexity.
+    *
+    * Texture borders are deprecated in GL 3.0.
+    **/
+   GLboolean StripTextureBorder;
 };
 
 
@@ -2749,7 +2789,6 @@ struct gl_extensions
    GLboolean ARB_depth_buffer_float;
    GLboolean ARB_depth_clamp;
    GLboolean ARB_depth_texture;
-   GLboolean ARB_draw_buffers;
    GLboolean ARB_draw_buffers_blend;
    GLboolean ARB_draw_elements_base_vertex;
    GLboolean ARB_draw_instanced;
@@ -2788,6 +2827,7 @@ struct gl_extensions
    GLboolean ARB_texture_non_power_of_two;
    GLboolean ARB_texture_rg;
    GLboolean ARB_texture_rgb10_a2ui;
+   GLboolean ARB_texture_storage;
    GLboolean ARB_timer_query;
    GLboolean ARB_transform_feedback2;
    GLboolean ARB_transpose_matrix;

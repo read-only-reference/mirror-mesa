@@ -73,33 +73,56 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
     MARK_RING(chan, 9 * fb->nr_cbufs, 2 * fb->nr_cbufs);
 
     for (i = 0; i < fb->nr_cbufs; ++i) {
-        struct nv50_miptree *mt = nv50_miptree(fb->cbufs[i]->texture);
         struct nv50_surface *sf = nv50_surface(fb->cbufs[i]);
-        struct nouveau_bo *bo = mt->base.bo;
-        uint32_t offset = sf->offset;
+        struct nv04_resource *res = nv04_resource(sf->base.texture);
+        struct nouveau_bo *bo = res->bo;
+        uint32_t offset = sf->offset + res->offset;
 
         BEGIN_RING(chan, RING_3D(RT_ADDRESS_HIGH(i)), 9);
-        OUT_RELOCh(chan, bo, offset, NOUVEAU_BO_VRAM | NOUVEAU_BO_RDWR);
-        OUT_RELOCl(chan, bo, offset, NOUVEAU_BO_VRAM | NOUVEAU_BO_RDWR);
-        OUT_RING  (chan, sf->width);
-        OUT_RING  (chan, sf->height);
-        OUT_RING  (chan, nvc0_format_table[sf->base.format].rt);
-        OUT_RING  (chan, (mt->layout_3d << 16) |
-                   mt->level[sf->base.u.tex.level].tile_mode);
-        OUT_RING  (chan, sf->base.u.tex.first_layer + sf->depth);
-        OUT_RING  (chan, mt->layer_stride >> 2);
-        OUT_RING  (chan, sf->base.u.tex.first_layer);
+        OUT_RELOCh(chan, res->bo, offset, res->domain | NOUVEAU_BO_RDWR);
+        OUT_RELOCl(chan, res->bo, offset, res->domain | NOUVEAU_BO_RDWR);
+        if (likely(nouveau_bo_tile_layout(bo))) {
+           struct nv50_miptree *mt = nv50_miptree(sf->base.texture);
 
-        ms_mode = mt->ms_mode;
+           assert(sf->base.texture->target != PIPE_BUFFER);
 
-        if (mt->base.status & NOUVEAU_BUFFER_STATUS_GPU_READING)
+           OUT_RING(chan, sf->width);
+           OUT_RING(chan, sf->height);
+           OUT_RING(chan, nvc0_format_table[sf->base.format].rt);
+           OUT_RING(chan, (mt->layout_3d << 16) |
+                    mt->level[sf->base.u.tex.level].tile_mode);
+           OUT_RING(chan, sf->base.u.tex.first_layer + sf->depth);
+           OUT_RING(chan, mt->layer_stride >> 2);
+           OUT_RING(chan, sf->base.u.tex.first_layer);
+
+           ms_mode = mt->ms_mode;
+        } else {
+           if (res->base.target == PIPE_BUFFER) {
+              OUT_RING(chan, 262144);
+              OUT_RING(chan, 1);
+           } else {
+              OUT_RING(chan, nv50_miptree(sf->base.texture)->level[0].pitch);
+              OUT_RING(chan, sf->height);
+           }
+           OUT_RING(chan, nvc0_format_table[sf->base.format].rt);
+           OUT_RING(chan, 1 << 12);
+           OUT_RING(chan, 1);
+           OUT_RING(chan, 0);
+           OUT_RING(chan, 0);
+
+           nvc0_resource_fence(res, NOUVEAU_BO_WR);
+
+           assert(!fb->zsbuf);
+        }
+
+        if (res->status & NOUVEAU_BUFFER_STATUS_GPU_READING)
            serialize = TRUE;
-        mt->base.status |=  NOUVEAU_BUFFER_STATUS_GPU_WRITING;
-        mt->base.status &= ~NOUVEAU_BUFFER_STATUS_GPU_READING;
+        res->status |=  NOUVEAU_BUFFER_STATUS_GPU_WRITING;
+        res->status &= ~NOUVEAU_BUFFER_STATUS_GPU_READING;
 
         /* only register for writing, otherwise we'd always serialize here */
-        nvc0_bufctx_add_resident(nvc0, NVC0_BUFCTX_FRAME, &mt->base,
-                                 NOUVEAU_BO_VRAM | NOUVEAU_BO_WR);
+        nvc0_bufctx_add_resident(nvc0, NVC0_BUFCTX_FRAME, res,
+                                 res->domain | NOUVEAU_BO_WR);
     }
 
     if (fb->zsbuf) {
@@ -267,11 +290,13 @@ nvc0_validate_clip(struct nvc0_context *nvc0)
       BEGIN_RING_1I(chan, RING_3D(CB_POS), nvc0->clip.nr * 4 + 1);
       OUT_RING  (chan, 0);
       OUT_RINGp (chan, &nvc0->clip.ucp[0][0], nvc0->clip.nr * 4);
+   }
 
-      BEGIN_RING(chan, RING_3D(VP_CLIP_DISTANCE_ENABLE), 1);
-      OUT_RING  (chan, (1 << nvc0->clip.nr) - 1);
-   } else {
-      IMMED_RING(chan, RING_3D(VP_CLIP_DISTANCE_ENABLE), 0);
+   if (nvc0->vertprog->vp.num_ucps) {
+      nvc0->state.clip_mode = 0;
+      nvc0->state.clip_enable = (1 << nvc0->clip.nr) - 1;
+      IMMED_RING(chan, RING_3D(CLIP_DISTANCE_ENABLE), nvc0->state.clip_enable);
+      IMMED_RING(chan, RING_3D(CLIP_DISTANCE_MODE), 0);
    }
 }
 
@@ -315,7 +340,7 @@ nvc0_constbufs_validate(struct nvc0_context *nvc0)
 
       while (nvc0->constbuf_dirty[s]) {
          unsigned base = 0;
-         unsigned offset = 0, words = 0;
+         unsigned words = 0;
          boolean rebind = TRUE;
 
          i = ffs(nvc0->constbuf_dirty[s]) - 1;
@@ -331,7 +356,7 @@ nvc0_constbufs_validate(struct nvc0_context *nvc0)
          }
 
          if (!nouveau_resource_mapped_by_gpu(&res->base)) {
-            if (i == 0) {
+            if (i == 0 && (res->status & NOUVEAU_BUFFER_STATUS_USER_MEMORY)) {
                base = s << 16;
                bo = nvc0->screen->uniforms;
 
@@ -340,19 +365,16 @@ nvc0_constbufs_validate(struct nvc0_context *nvc0)
                else
                   nvc0->state.uniform_buffer_bound[s] =
                      align(res->base.width0, 0x100);
+
+               words = res->base.width0 / 4;
             } else {
+               nouveau_buffer_migrate(&nvc0->base, res, NOUVEAU_BO_VRAM);
                bo = res->bo;
+               base = res->offset;
             }
-#if 0
-            nvc0_m2mf_push_linear(nvc0, bo, NOUVEAU_BO_VRAM,
-                                  base, res->base.width0, res->data);
-            BEGIN_RING(chan, RING_3D_(0x021c), 1);
-            OUT_RING  (chan, 0x1111);
-#else
-            words = res->base.width0 / 4;
-#endif
          } else {
             bo = res->bo;
+            base = res->offset;
             if (i == 0)
                nvc0->state.uniform_buffer_bound[s] = 0;
          }
@@ -371,27 +393,10 @@ nvc0_constbufs_validate(struct nvc0_context *nvc0)
             OUT_RING  (chan, (i << 4) | 1);
          }
 
-         while (words) {
-            unsigned nr = AVAIL_RING(chan);
-
-            if (nr < 16) {
-               FIRE_RING(chan);
-               continue;
-            }
-            nr = MIN2(MIN2(nr - 6, words), NV04_PFIFO_MAX_PACKET_LEN - 1);
-
-            MARK_RING (chan, nr + 5, 2);
-            BEGIN_RING(chan, RING_3D(CB_SIZE), 3);
-            OUT_RING  (chan, align(res->base.width0, 0x100));
-            OUT_RELOCh(chan, bo, base, NOUVEAU_BO_VRAM | NOUVEAU_BO_RD);
-            OUT_RELOCl(chan, bo, base, NOUVEAU_BO_VRAM | NOUVEAU_BO_RD);
-            BEGIN_RING_1I(chan, RING_3D(CB_POS), nr + 1);
-            OUT_RING  (chan, offset);
-            OUT_RINGp (chan, &res->data[offset], nr);
-
-            offset += nr * 4;
-            words -= nr;
-         }
+         if (words)
+            nvc0_cb_push(&nvc0->base,
+                         bo, NOUVEAU_BO_VRAM, base, res->base.width0,
+                         0, words, (const uint32_t *)res->data);
       }
    }
 }
@@ -474,13 +479,13 @@ static struct state_validate {
     { nvc0_validate_stipple,       NVC0_NEW_STIPPLE },
     { nvc0_validate_scissor,       NVC0_NEW_SCISSOR | NVC0_NEW_RASTERIZER },
     { nvc0_validate_viewport,      NVC0_NEW_VIEWPORT },
-    { nvc0_validate_clip,          NVC0_NEW_CLIP },
     { nvc0_vertprog_validate,      NVC0_NEW_VERTPROG },
     { nvc0_tctlprog_validate,      NVC0_NEW_TCTLPROG },
     { nvc0_tevlprog_validate,      NVC0_NEW_TEVLPROG },
     { nvc0_gmtyprog_validate,      NVC0_NEW_GMTYPROG },
     { nvc0_fragprog_validate,      NVC0_NEW_FRAGPROG },
     { nvc0_validate_derived_1,     NVC0_NEW_FRAGPROG | NVC0_NEW_ZSA },
+    { nvc0_validate_clip,          NVC0_NEW_CLIP },
     { nvc0_constbufs_validate,     NVC0_NEW_CONSTBUF },
     { nvc0_validate_textures,      NVC0_NEW_TEXTURES },
     { nvc0_validate_samplers,      NVC0_NEW_SAMPLERS },

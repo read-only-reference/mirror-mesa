@@ -100,7 +100,6 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       lower_instructions(shader->ir,
 			 MOD_TO_FRACT |
 			 DIV_TO_MUL_RCP |
-			 INT_DIV_TO_MUL_RCP |
 			 SUB_TO_ADD_NEG |
 			 EXP_TO_EXP2 |
 			 LOG_TO_LOG2);
@@ -139,7 +138,8 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 				   false /* loops */
 				   ) || progress;
 
-	 progress = do_common_optimization(shader->ir, true, 32) || progress;
+	 progress = do_common_optimization(shader->ir, true, true, 32)
+	   || progress;
       } while (progress);
 
       validate_ir_tree(shader->ir);
@@ -149,12 +149,12 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
    }
 
    if (!_mesa_ir_link_shader(ctx, prog))
-      return GL_FALSE;
+      return false;
 
    if (!brw_shader_precompile(ctx, prog))
-      return GL_FALSE;
+      return false;
 
-   return GL_TRUE;
+   return true;
 }
 
 
@@ -227,6 +227,10 @@ brw_math_function(enum opcode op)
       return BRW_MATH_FUNCTION_SIN;
    case SHADER_OPCODE_COS:
       return BRW_MATH_FUNCTION_COS;
+   case SHADER_OPCODE_INT_QUOTIENT:
+      return BRW_MATH_FUNCTION_INT_DIV_QUOTIENT;
+   case SHADER_OPCODE_INT_REMAINDER:
+      return BRW_MATH_FUNCTION_INT_DIV_REMAINDER;
    default:
       assert(!"not reached: unknown math function");
       return 0;

@@ -92,7 +92,7 @@ radeon_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffe
 {
   struct radeon_context *radeon = RADEON_CONTEXT(ctx);
   struct radeon_renderbuffer *rrb = radeon_renderbuffer(rb);
-  GLboolean software_buffer = GL_FALSE;
+  uint32_t size, pitch;
   int cpp;
 
   radeon_print(RADEON_TEXTURE, RADEON_TRACE,
@@ -170,34 +170,25 @@ radeon_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffe
 
   if (rrb->bo)
     radeon_bo_unref(rrb->bo);
-  
-    
-   if (software_buffer) {
-      return _mesa_soft_renderbuffer_storage(ctx, rb, internalFormat,
-                                             width, height);
-   }
-   else {
-     uint32_t size;
-     uint32_t pitch = ((cpp * width + 63) & ~63) / cpp;
 
-     if (RADEON_DEBUG & RADEON_MEMORY)
-	     fprintf(stderr,"Allocating %d x %d radeon RBO (pitch %d)\n", width,
-		     height, pitch);
+   pitch = ((cpp * width + 63) & ~63) / cpp;
 
-     size = pitch * height * cpp;
-     rrb->pitch = pitch * cpp;
-     rrb->cpp = cpp;
-     rrb->bo = radeon_bo_open(radeon->radeonScreen->bom,
-			      0,
-			      size,
-			      0,
-			      RADEON_GEM_DOMAIN_VRAM,
-			      0);
-     rb->Width = width;
-     rb->Height = height;
-       return GL_TRUE;
-   }    
-   
+   if (RADEON_DEBUG & RADEON_MEMORY)
+      fprintf(stderr,"Allocating %d x %d radeon RBO (pitch %d)\n", width,
+	      height, pitch);
+
+   size = pitch * height * cpp;
+   rrb->pitch = pitch * cpp;
+   rrb->cpp = cpp;
+   rrb->bo = radeon_bo_open(radeon->radeonScreen->bom,
+			    0,
+			    size,
+			    0,
+			    RADEON_GEM_DOMAIN_VRAM,
+			    0);
+   rb->Width = width;
+   rb->Height = height;
+   return GL_TRUE;
 }
 
 #if FEATURE_OES_EGL_image
@@ -333,48 +324,38 @@ radeon_create_renderbuffer(gl_format format, __DRIdrawable *driDrawPriv)
         case MESA_FORMAT_RGB565:
 	    assert(_mesa_little_endian());
 	    rrb->base.DataType = GL_UNSIGNED_BYTE;
-            rrb->base._BaseFormat = GL_RGB;
 	    break;
         case MESA_FORMAT_RGB565_REV:
 	    assert(!_mesa_little_endian());
 	    rrb->base.DataType = GL_UNSIGNED_BYTE;
-            rrb->base._BaseFormat = GL_RGB;
 	    break;
         case MESA_FORMAT_XRGB8888:
 	    assert(_mesa_little_endian());
 	    rrb->base.DataType = GL_UNSIGNED_BYTE;
-            rrb->base._BaseFormat = GL_RGB;
 	    break;
         case MESA_FORMAT_XRGB8888_REV:
 	    assert(!_mesa_little_endian());
 	    rrb->base.DataType = GL_UNSIGNED_BYTE;
-            rrb->base._BaseFormat = GL_RGB;
 	    break;
 	case MESA_FORMAT_ARGB8888:
 	    assert(_mesa_little_endian());
 	    rrb->base.DataType = GL_UNSIGNED_BYTE;
-            rrb->base._BaseFormat = GL_RGBA;
 	    break;
 	case MESA_FORMAT_ARGB8888_REV:
 	    assert(!_mesa_little_endian());
 	    rrb->base.DataType = GL_UNSIGNED_BYTE;
-            rrb->base._BaseFormat = GL_RGBA;
 	    break;
 	case MESA_FORMAT_S8:
 	    rrb->base.DataType = GL_UNSIGNED_BYTE;
-            rrb->base._BaseFormat = GL_STENCIL_INDEX;
 	    break;
 	case MESA_FORMAT_Z16:
 	    rrb->base.DataType = GL_UNSIGNED_SHORT;
-            rrb->base._BaseFormat = GL_DEPTH_COMPONENT;
 	    break;
 	case MESA_FORMAT_X8_Z24:
 	    rrb->base.DataType = GL_UNSIGNED_INT;
-            rrb->base._BaseFormat = GL_DEPTH_COMPONENT;
 	    break;
 	case MESA_FORMAT_S8_Z24:
 	    rrb->base.DataType = GL_UNSIGNED_INT_24_8_EXT;
-            rrb->base._BaseFormat = GL_DEPTH_STENCIL;
 	    break;
 	default:
 	    fprintf(stderr, "%s: Unknown format %s\n",
@@ -382,6 +363,7 @@ radeon_create_renderbuffer(gl_format format, __DRIdrawable *driDrawPriv)
 	    _mesa_delete_renderbuffer(&rrb->base);
 	    return NULL;
     }
+    rrb->base._BaseFormat = _mesa_get_format_base_format(format);
 
     rrb->dPriv = driDrawPriv;
     rrb->base.InternalFormat = _mesa_get_format_base_format(format);

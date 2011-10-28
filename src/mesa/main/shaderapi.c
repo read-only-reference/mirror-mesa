@@ -324,82 +324,6 @@ attach_shader(struct gl_context *ctx, GLuint program, GLuint shader)
 }
 
 
-static GLint
-get_attrib_location(struct gl_context *ctx, GLuint program, const GLchar *name)
-{
-   struct gl_shader_program *shProg
-      = _mesa_lookup_shader_program_err(ctx, program, "glGetAttribLocation");
-
-   if (!shProg) {
-      return -1;
-   }
-
-   if (!shProg->LinkStatus) {
-      _mesa_error(ctx, GL_INVALID_OPERATION,
-                  "glGetAttribLocation(program not linked)");
-      return -1;
-   }
-
-   if (!name)
-      return -1;
-
-   if (shProg->VertexProgram) {
-      const struct gl_program_parameter_list *attribs =
-         shProg->VertexProgram->Base.Attributes;
-      if (attribs) {
-         GLint i = _mesa_lookup_parameter_index(attribs, -1, name);
-         if (i >= 0) {
-            return attribs->Parameters[i].StateIndexes[0];
-         }
-      }
-   }
-   return -1;
-}
-
-
-static void
-bind_attrib_location(struct gl_context *ctx, GLuint program, GLuint index,
-                     const GLchar *name)
-{
-   struct gl_shader_program *shProg;
-   const GLint size = -1; /* unknown size */
-   GLint i;
-   GLenum datatype = GL_FLOAT_VEC4;
-
-   shProg = _mesa_lookup_shader_program_err(ctx, program,
-                                            "glBindAttribLocation");
-   if (!shProg) {
-      return;
-   }
-
-   if (!name)
-      return;
-
-   if (strncmp(name, "gl_", 3) == 0) {
-      _mesa_error(ctx, GL_INVALID_OPERATION,
-                  "glBindAttribLocation(illegal name)");
-      return;
-   }
-
-   if (index >= ctx->Const.VertexProgram.MaxAttribs) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glBindAttribLocation(index)");
-      return;
-   }
-
-   /* this will replace the current value if it's already in the list */
-   i = _mesa_add_attribute(shProg->Attributes, name, size, datatype, index);
-   if (i < 0) {
-      _mesa_error(ctx, GL_OUT_OF_MEMORY, "glBindAttribLocation");
-      return;
-   }
-
-   /*
-    * Note that this attribute binding won't go into effect until
-    * glLinkProgram is called again.
-    */
-}
-
-
 static void
 bind_frag_data_location(struct gl_context *ctx, GLuint program,
                         GLuint colorNumber, const GLchar *name)
@@ -466,10 +390,12 @@ delete_shader_program(struct gl_context *ctx, GLuint name)
    if (!shProg)
       return;
 
-   shProg->DeletePending = GL_TRUE;
+   if (!shProg->DeletePending) {
+      shProg->DeletePending = GL_TRUE;
 
-   /* effectively, decr shProg's refcount */
-   _mesa_reference_shader_program(ctx, &shProg, NULL);
+      /* effectively, decr shProg's refcount */
+      _mesa_reference_shader_program(ctx, &shProg, NULL);
+   }
 }
 
 
@@ -557,38 +483,6 @@ detach_shader(struct gl_context *ctx, GLuint program, GLuint shader)
 }
 
 
-static void
-get_active_attrib(struct gl_context *ctx, GLuint program, GLuint index,
-                  GLsizei maxLength, GLsizei *length, GLint *size,
-                  GLenum *type, GLchar *nameOut)
-{
-   const struct gl_program_parameter_list *attribs = NULL;
-   struct gl_shader_program *shProg;
-
-   shProg = _mesa_lookup_shader_program_err(ctx, program, "glGetActiveAttrib");
-   if (!shProg)
-      return;
-
-   if (shProg->VertexProgram)
-      attribs = shProg->VertexProgram->Base.Attributes;
-
-   if (!attribs || index >= attribs->NumParameters) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glGetActiveAttrib(index)");
-      return;
-   }
-
-   _mesa_copy_string(nameOut, maxLength, length,
-                     attribs->Parameters[index].Name);
-
-   if (size)
-      *size = attribs->Parameters[index].Size
-         / _mesa_sizeof_glsl_type(attribs->Parameters[index].DataType);
-
-   if (type)
-      *type = attribs->Parameters[index].DataType;
-}
-
-
 /**
  * Return list of shaders attached to shader program.
  */
@@ -646,7 +540,6 @@ get_handle(struct gl_context *ctx, GLenum pname)
 static void
 get_programiv(struct gl_context *ctx, GLuint program, GLenum pname, GLint *params)
 {
-   const struct gl_program_parameter_list *attribs;
    struct gl_shader_program *shProg
       = _mesa_lookup_shader_program(ctx, program);
 
@@ -654,11 +547,6 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname, GLint *param
       _mesa_error(ctx, GL_INVALID_VALUE, "glGetProgramiv(program)");
       return;
    }
-
-   if (shProg->VertexProgram)
-      attribs = shProg->VertexProgram->Base.Attributes;
-   else
-      attribs = NULL;
 
    switch (pname) {
    case GL_DELETE_STATUS:
@@ -677,10 +565,10 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname, GLint *param
       *params = shProg->NumShaders;
       break;
    case GL_ACTIVE_ATTRIBUTES:
-      *params = attribs ? attribs->NumParameters : 0;
+      *params = _mesa_count_active_attribs(shProg);
       break;
    case GL_ACTIVE_ATTRIBUTE_MAX_LENGTH:
-      *params = _mesa_longest_parameter_name(attribs, PROGRAM_INPUT) + 1;
+      *params = _mesa_longest_attribute_name_length(shProg);
       break;
    case GL_ACTIVE_UNIFORMS:
       *params = shProg->Uniforms ? shProg->Uniforms->NumUniforms : 0;
@@ -922,12 +810,15 @@ print_shader_info(const struct gl_shader_program *shProg)
 	     shProg->Shaders[i]->Name,
 	     shProg->Shaders[i]->SourceChecksum);
    }
-   if (shProg->VertexProgram)
-      printf("  vert prog %u\n", shProg->VertexProgram->Base.Id);
-   if (shProg->FragmentProgram)
-      printf("  frag prog %u\n", shProg->FragmentProgram->Base.Id);
-   if (shProg->GeometryProgram)
-      printf("  geom prog %u\n", shProg->GeometryProgram->Base.Id);
+   if (shProg->_LinkedShaders[MESA_SHADER_VERTEX])
+      printf("  vert prog %u\n",
+	     shProg->_LinkedShaders[MESA_SHADER_VERTEX]->Program->Id);
+   if (shProg->_LinkedShaders[MESA_SHADER_FRAGMENT])
+      printf("  frag prog %u\n",
+	     shProg->_LinkedShaders[MESA_SHADER_FRAGMENT]->Program->Id);
+   if (shProg->_LinkedShaders[MESA_SHADER_GEOMETRY])
+      printf("  geom prog %u\n",
+	     shProg->_LinkedShaders[MESA_SHADER_GEOMETRY]->Program->Id);
 }
 
 
@@ -1077,9 +968,7 @@ static GLboolean
 validate_shader_program(const struct gl_shader_program *shProg,
                         char *errMsg)
 {
-   const struct gl_vertex_program *vp = shProg->VertexProgram;
-   const struct gl_geometry_program *gp = shProg->GeometryProgram;
-   const struct gl_fragment_program *fp = shProg->FragmentProgram;
+   unsigned i;
 
    if (!shProg->LinkStatus) {
       return GL_FALSE;
@@ -1105,14 +994,11 @@ validate_shader_program(const struct gl_shader_program *shProg,
     * Check: any two active samplers in the current program object are of
     * different types, but refer to the same texture image unit,
     */
-   if (vp && !validate_samplers(&vp->Base, errMsg)) {
-      return GL_FALSE;
-   }
-   if (gp && !validate_samplers(&gp->Base, errMsg)) {
-      return GL_FALSE;
-   }
-   if (fp && !validate_samplers(&fp->Base, errMsg)) {
-      return GL_FALSE;
+   for (i = 0; i < Elements(shProg->_LinkedShaders); i++) {
+      if (shProg->_LinkedShaders[i]
+	  && !validate_samplers(shProg->_LinkedShaders[i]->Program, errMsg)) {
+	 return GL_FALSE;
+      }
    }
 
    return GL_TRUE;
@@ -1158,15 +1044,6 @@ _mesa_AttachShader(GLuint program, GLuint shader)
 {
    GET_CURRENT_CONTEXT(ctx);
    attach_shader(ctx, program, shader);
-}
-
-
-void GLAPIENTRY
-_mesa_BindAttribLocationARB(GLhandleARB program, GLuint index,
-                            const GLcharARB *name)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   bind_attrib_location(ctx, program, index, name);
 }
 
 
@@ -1289,16 +1166,6 @@ _mesa_DetachShader(GLuint program, GLuint shader)
 
 
 void GLAPIENTRY
-_mesa_GetActiveAttribARB(GLhandleARB program, GLuint index,
-                         GLsizei maxLength, GLsizei * length, GLint * size,
-                         GLenum * type, GLcharARB * name)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   get_active_attrib(ctx, program, index, maxLength, length, size, type, name);
-}
-
-
-void GLAPIENTRY
 _mesa_GetAttachedObjectsARB(GLhandleARB container, GLsizei maxCount,
                             GLsizei * count, GLhandleARB * obj)
 {
@@ -1313,14 +1180,6 @@ _mesa_GetAttachedShaders(GLuint program, GLsizei maxCount,
 {
    GET_CURRENT_CONTEXT(ctx);
    get_attached_shaders(ctx, program, maxCount, count, obj);
-}
-
-
-GLint GLAPIENTRY
-_mesa_GetAttribLocationARB(GLhandleARB program, const GLcharARB * name)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   return get_attrib_location(ctx, program, name);
 }
 
 

@@ -30,8 +30,10 @@
 #include "intel_regions.h"
 #include "intel_tex_layout.h"
 #include "intel_tex.h"
+#include "intel_blit.h"
 #include "main/enums.h"
 #include "main/formats.h"
+#include "main/teximage.h"
 
 #define FILE_DEBUG_FLAG DEBUG_MIPTREE
 
@@ -108,7 +110,7 @@ intel_miptree_create(struct intel_context *intel,
 		     GLuint width0,
 		     GLuint height0,
 		     GLuint depth0,
-		     GLboolean expect_accelerated_upload)
+		     bool expect_accelerated_upload)
 {
    struct intel_mipmap_tree *mt;
    uint32_t tiling = I915_TILING_NONE;
@@ -212,6 +214,23 @@ intel_miptree_release(struct intel_mipmap_tree **mt)
    *mt = NULL;
 }
 
+void
+intel_miptree_get_dimensions_for_image(struct gl_texture_image *image,
+                                       int *width, int *height, int *depth)
+{
+   switch (image->TexObject->Target) {
+   case GL_TEXTURE_1D_ARRAY:
+      *width = image->Width;
+      *height = 1;
+      *depth = image->Height;
+      break;
+   default:
+      *width = image->Width;
+      *height = image->Height;
+      *depth = image->Depth;
+      break;
+   }
+}
 
 /**
  * Can the image be pulled into a unified mipmap tree?  This mirrors
@@ -219,30 +238,29 @@ intel_miptree_release(struct intel_mipmap_tree **mt)
  *
  * Not sure whether I want to pass gl_texture_image here.
  */
-GLboolean
+bool
 intel_miptree_match_image(struct intel_mipmap_tree *mt,
                           struct gl_texture_image *image)
 {
    struct intel_texture_image *intelImage = intel_texture_image(image);
    GLuint level = intelImage->base.Base.Level;
-
-   /* Images with borders are never pulled into mipmap trees. */
-   if (image->Border)
-      return GL_FALSE;
+   int width, height, depth;
 
    if (image->TexFormat != mt->format)
-      return GL_FALSE;
+      return false;
+
+   intel_miptree_get_dimensions_for_image(image, &width, &height, &depth);
 
    /* Test image dimensions against the base level image adjusted for
     * minification.  This will also catch images not present in the
     * tree, changed targets, etc.
     */
-   if (image->Width != mt->level[level].width ||
-       image->Height != mt->level[level].height ||
-       image->Depth != mt->level[level].depth)
-      return GL_FALSE;
+   if (width != mt->level[level].width ||
+       height != mt->level[level].height ||
+       depth != mt->level[level].depth)
+      return false;
 
-   return GL_TRUE;
+   return true;
 }
 
 
@@ -297,172 +315,96 @@ intel_miptree_get_image_offset(struct intel_mipmap_tree *mt,
 			       GLuint level, GLuint face, GLuint depth,
 			       GLuint *x, GLuint *y)
 {
-   if (mt->target == GL_TEXTURE_CUBE_MAP_ARB) {
+   switch (mt->target) {
+   case GL_TEXTURE_CUBE_MAP_ARB:
       *x = mt->level[level].x_offset[face];
       *y = mt->level[level].y_offset[face];
-   } else if (mt->target == GL_TEXTURE_3D) {
+      break;
+   case GL_TEXTURE_3D:
+   case GL_TEXTURE_2D_ARRAY_EXT:
+   case GL_TEXTURE_1D_ARRAY_EXT:
+      assert(depth < mt->level[level].nr_images);
       *x = mt->level[level].x_offset[depth];
       *y = mt->level[level].y_offset[depth];
-   } else {
+      break;
+   default:
       *x = mt->level[level].x_offset[0];
       *y = mt->level[level].y_offset[0];
+      break;
    }
 }
 
 /**
- * Map a teximage in a mipmap tree.
- * \param row_stride  returns row stride in bytes
- * \param image_stride  returns image stride in bytes (for 3D textures).
- * \param image_offsets pointer to array of pixel offsets from the returned
- *	  pointer to each depth image
- * \return address of mapping
+ * Copies the image's current data to the given miptree, and associates that
+ * miptree with the image.
  */
-GLubyte *
-intel_miptree_image_map(struct intel_context * intel,
-                        struct intel_mipmap_tree * mt,
-                        GLuint face,
-                        GLuint level,
-                        GLuint * row_stride, GLuint * image_offsets)
+void
+intel_miptree_copy_teximage(struct intel_context *intel,
+			    struct intel_texture_image *intelImage,
+			    struct intel_mipmap_tree *dst_mt)
 {
-   GLuint x, y;
+   struct intel_mipmap_tree *src_mt = intelImage->mt;
+   int level = intelImage->base.Base.Level;
+   int face = intelImage->base.Base.Face;
+   GLuint width = src_mt->level[level].width;
+   GLuint height = src_mt->level[level].height;
+   GLuint depth = src_mt->level[level].depth;
+   int slice;
+   void *src, *dst;
 
-   if (row_stride)
-      *row_stride = mt->region->pitch * mt->cpp;
+   if (dst_mt->compressed) {
+      unsigned int align_w, align_h;
 
-   if (mt->target == GL_TEXTURE_3D) {
-      int i;
-
-      for (i = 0; i < mt->level[level].depth; i++) {
-
-	 intel_miptree_get_image_offset(mt, level, face, i,
-					&x, &y);
-	 image_offsets[i] = x + y * mt->region->pitch;
-      }
-
-      DBG("%s \n", __FUNCTION__);
-
-      return intel_region_map(intel, mt->region);
-   } else {
-      assert(mt->level[level].depth == 1);
-      intel_miptree_get_image_offset(mt, level, face, 0,
-				     &x, &y);
-      image_offsets[0] = 0;
-
-      DBG("%s: (%d,%d) -> (%d, %d)/%d\n",
-	  __FUNCTION__, face, level, x, y, mt->region->pitch * mt->cpp);
-
-      return intel_region_map(intel, mt->region) +
-	 (x + y * mt->region->pitch) * mt->cpp;
+      intel_get_texture_alignment_unit(intelImage->base.Base.TexFormat,
+				       &align_w, &align_h);
+      height = ALIGN(height, align_h) / align_h;
+      width = ALIGN(width, align_w);
    }
-}
 
+   for (slice = 0; slice < depth; slice++) {
+      unsigned int dst_x, dst_y, src_x, src_y;
 
-void
-intel_miptree_image_unmap(struct intel_context *intel,
-                          struct intel_mipmap_tree *mt)
-{
-   DBG("%s\n", __FUNCTION__);
-   intel_region_unmap(intel, mt->region);
-}
+      intel_miptree_get_image_offset(dst_mt, level, face, slice,
+				     &dst_x, &dst_y);
 
+      /* Copy potentially with the blitter:
+       */
+      intel_miptree_get_image_offset(src_mt, level, face, slice,
+				     &src_x, &src_y);
 
-/**
- * Upload data for a particular image.
- */
-void
-intel_miptree_image_data(struct intel_context *intel,
-			 struct intel_mipmap_tree *dst,
-			 GLuint face,
-			 GLuint level,
-			 void *src,
-			 GLuint src_row_pitch,
-			 GLuint src_image_pitch)
-{
-   const GLuint depth = dst->level[level].depth;
-   GLuint i;
-
-   for (i = 0; i < depth; i++) {
-      GLuint dst_x, dst_y, height, width;
-
-      intel_miptree_get_image_offset(dst, level, face, i, &dst_x, &dst_y);
-
-      height = dst->level[level].height;
-      width = dst->level[level].width;
-      if (dst->compressed) {
-	 unsigned int align_w, align_h;
-
-	 intel_get_texture_alignment_unit(dst->format, &align_w, &align_h);
-	 height = (height + align_h - 1) / align_h;
-	 width = ALIGN(width, align_w);
-      }
-
-      DBG("%s: %d/%d %p/%d -> (%d, %d)/%d (%d, %d)\n",
-	  __FUNCTION__, face, level,
-	  src, src_row_pitch * dst->cpp,
-	  dst_x, dst_y, dst->region->pitch * dst->cpp,
+      DBG("validate blit mt %p %d,%d/%d -> mt %p %d,%d/%d (%dx%d)\n",
+	  src_mt, src_x, src_y, src_mt->region->pitch * src_mt->region->cpp,
+	  dst_mt, dst_x, dst_y, dst_mt->region->pitch * dst_mt->region->cpp,
 	  width, height);
 
-      intel_region_data(intel,
-			dst->region, 0, dst_x, dst_y,
-			src,
-			src_row_pitch,
-			0, 0,                             /* source x, y */
-			width, height);
+      if (!intelEmitCopyBlit(intel,
+			     dst_mt->region->cpp,
+			     src_mt->region->pitch, src_mt->region->bo,
+			     0, src_mt->region->tiling,
+			     dst_mt->region->pitch, dst_mt->region->bo,
+			     0, dst_mt->region->tiling,
+			     src_x, src_y,
+			     dst_x, dst_y,
+			     width, height,
+			     GL_COPY)) {
 
-      src = (char *)src + src_image_pitch * dst->cpp;
-   }
-}
+	 fallback_debug("miptree validate blit for %s failed\n",
+			_mesa_get_format_name(intelImage->base.Base.TexFormat));
+	 dst = intel_region_map(intel, dst_mt->region, GL_MAP_WRITE_BIT);
+	 src = intel_region_map(intel, src_mt->region, GL_MAP_READ_BIT);
 
-
-/**
- * Copy mipmap image between trees
- */
-void
-intel_miptree_image_copy(struct intel_context *intel,
-                         struct intel_mipmap_tree *dst,
-                         GLuint face, GLuint level,
-                         struct intel_mipmap_tree *src)
-{
-   GLuint width = src->level[level].width;
-   GLuint height = src->level[level].height;
-   GLuint depth = src->level[level].depth;
-   GLuint src_x, src_y, dst_x, dst_y;
-   GLuint i;
-   GLboolean success;
-
-   if (dst->compressed) {
-       GLuint align_w, align_h;
-
-       intel_get_texture_alignment_unit(dst->format, &align_w, &align_h);
-       height = (height + 3) / 4;
-       width = ALIGN(width, align_w);
-   }
-
-   intel_prepare_render(intel);
-
-   for (i = 0; i < depth; i++) {
-      intel_miptree_get_image_offset(src, level, face, i, &src_x, &src_y);
-      intel_miptree_get_image_offset(dst, level, face, i, &dst_x, &dst_y);
-      success = intel_region_copy(intel,
-				  dst->region, 0, dst_x, dst_y,
-				  src->region, 0, src_x, src_y,
-				  width, height, GL_FALSE,
-				  GL_COPY);
-      if (!success) {
-	 GLubyte *src_ptr, *dst_ptr;
-
-	 src_ptr = intel_region_map(intel, src->region);
-	 dst_ptr = intel_region_map(intel, dst->region);
-
-	 _mesa_copy_rect(dst_ptr,
-			 dst->cpp,
-			 dst->region->pitch,
-			 dst_x, dst_y, width, height,
-			 src_ptr,
-			 src->region->pitch,
+	 _mesa_copy_rect(dst,
+			 dst_mt->cpp,
+			 dst_mt->region->pitch,
+			 dst_x, dst_y,
+			 width, height,
+			 src, src_mt->region->pitch,
 			 src_x, src_y);
-	 intel_region_unmap(intel, src->region);
-	 intel_region_unmap(intel, dst->region);
+
+	 intel_region_unmap(intel, dst_mt->region);
+	 intel_region_unmap(intel, src_mt->region);
       }
    }
+
+   intel_miptree_reference(&intelImage->mt, dst_mt);
 }

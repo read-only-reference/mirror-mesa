@@ -25,6 +25,7 @@
  * 
  **************************************************************************/
 
+#include <sys/errno.h>
 
 #include "main/glheader.h"
 #include "main/context.h"
@@ -79,40 +80,51 @@ static const GLenum reduced_prim[GL_POLYGON+1] = {
  * programs be immune to the active primitive (ie. cope with all
  * possibilities).  That may not be realistic however.
  */
-static GLuint brw_set_prim(struct brw_context *brw,
-			   const struct _mesa_prim *prim)
+static void brw_set_prim(struct brw_context *brw,
+                         const struct _mesa_prim *prim)
 {
    struct gl_context *ctx = &brw->intel.ctx;
-   GLenum mode = prim->mode;
+   uint32_t hw_prim = prim_to_hw_prim[prim->mode];
 
    DBG("PRIM: %s\n", _mesa_lookup_enum_by_nr(prim->mode));
 
    /* Slight optimization to avoid the GS program when not needed:
     */
-   if (mode == GL_QUAD_STRIP &&
+   if (prim->mode == GL_QUAD_STRIP &&
        ctx->Light.ShadeModel != GL_FLAT &&
        ctx->Polygon.FrontMode == GL_FILL &&
        ctx->Polygon.BackMode == GL_FILL)
-      mode = GL_TRIANGLE_STRIP;
+      hw_prim = _3DPRIM_TRISTRIP;
 
    if (prim->mode == GL_QUADS && prim->count == 4 &&
        ctx->Light.ShadeModel != GL_FLAT &&
        ctx->Polygon.FrontMode == GL_FILL &&
        ctx->Polygon.BackMode == GL_FILL) {
-      mode = GL_TRIANGLE_FAN;
+      hw_prim = _3DPRIM_TRIFAN;
    }
 
-   if (mode != brw->primitive) {
-      brw->primitive = mode;
+   if (hw_prim != brw->primitive) {
+      brw->primitive = hw_prim;
       brw->state.dirty.brw |= BRW_NEW_PRIMITIVE;
 
-      if (reduced_prim[mode] != brw->intel.reduced_primitive) {
-	 brw->intel.reduced_primitive = reduced_prim[mode];
+      if (reduced_prim[prim->mode] != brw->intel.reduced_primitive) {
+	 brw->intel.reduced_primitive = reduced_prim[prim->mode];
 	 brw->state.dirty.brw |= BRW_NEW_REDUCED_PRIMITIVE;
       }
    }
+}
 
-   return prim_to_hw_prim[mode];
+static void gen6_set_prim(struct brw_context *brw,
+                          const struct _mesa_prim *prim)
+{
+   uint32_t hw_prim = prim_to_hw_prim[prim->mode];
+
+   DBG("PRIM: %s\n", _mesa_lookup_enum_by_nr(prim->mode));
+
+   if (hw_prim != brw->primitive) {
+      brw->primitive = hw_prim;
+      brw->state.dirty.brw |= BRW_NEW_PRIMITIVE;
+   }
 }
 
 
@@ -271,7 +283,7 @@ static void brw_merge_inputs( struct brw_context *brw,
 /* May fail if out of video memory for texture or vbo upload, or on
  * fallback conditions.
  */
-static GLboolean brw_try_draw_prims( struct gl_context *ctx,
+static bool brw_try_draw_prims( struct gl_context *ctx,
 				     const struct gl_client_array *arrays[],
 				     const struct _mesa_prim *prim,
 				     GLuint nr_prims,
@@ -281,9 +293,9 @@ static GLboolean brw_try_draw_prims( struct gl_context *ctx,
 {
    struct intel_context *intel = intel_context(ctx);
    struct brw_context *brw = brw_context(ctx);
-   GLboolean retval = GL_FALSE;
-   GLboolean warn = GL_FALSE;
+   bool retval = true;
    GLuint i;
+   bool fail_next = false;
 
    if (ctx->NewState)
       _mesa_update_state( ctx );
@@ -318,7 +330,6 @@ static GLboolean brw_try_draw_prims( struct gl_context *ctx,
    intel_prepare_render(intel);
 
    for (i = 0; i < nr_prims; i++) {
-      uint32_t hw_prim;
       int estimated_max_prim_size;
 
       estimated_max_prim_size = 512; /* batchbuffer commands */
@@ -334,50 +345,57 @@ static GLboolean brw_try_draw_prims( struct gl_context *ctx,
        * primitives.
        */
       intel_batchbuffer_require_space(intel, estimated_max_prim_size, false);
+      intel_batchbuffer_save_state(intel);
 
-      hw_prim = brw_set_prim(brw, &prim[i]);
+      if (intel->gen < 6)
+	 brw_set_prim(brw, &prim[i]);
+      else
+	 gen6_set_prim(brw, &prim[i]);
+
+retry:
+      /* Note that before the loop, brw->state.dirty.brw was set to != 0, and
+       * that the state updated in the loop outside of this block is that in
+       * *_set_prim or intel_batchbuffer_flush(), which only impacts
+       * brw->state.dirty.brw.
+       */
       if (brw->state.dirty.brw) {
-	 brw_validate_state(brw);
-
-	 /* Various fallback checks:  */
-	 if (brw->intel.Fallback)
-	    goto out;
-
-	 /* Check that we can fit our state in with our existing batchbuffer, or
-	  * flush otherwise.
-	  */
-	 if (dri_bufmgr_check_aperture_space(brw->state.validated_bos,
-					     brw->state.validated_bo_count)) {
-	    static GLboolean warned;
-	    intel_batchbuffer_flush(intel);
-
-	    /* Validate the state after we flushed the batch (which would have
-	     * changed the set of dirty state).  If we still fail to
-	     * check_aperture, warn of what's happening, but attempt to continue
-	     * on since it may succeed anyway, and the user would probably rather
-	     * see a failure and a warning than a fallback.
-	     */
-	    brw_validate_state(brw);
-	    if (!warned &&
-		dri_bufmgr_check_aperture_space(brw->state.validated_bos,
-						brw->state.validated_bo_count)) {
-	       warn = GL_TRUE;
-	       warned = GL_TRUE;
-	    }
-	 }
-
-	 intel->no_batch_wrap = GL_TRUE;
+	 intel->no_batch_wrap = true;
 	 brw_upload_state(brw);
+
+	 if (unlikely(brw->intel.Fallback)) {
+	    intel->no_batch_wrap = false;
+	    retval = false;
+	    goto out;
+	 }
       }
 
       if (intel->gen >= 7)
-	 gen7_emit_prim(brw, &prim[i], hw_prim);
+	 gen7_emit_prim(brw, &prim[i], brw->primitive);
       else
-	 brw_emit_prim(brw, &prim[i], hw_prim);
+	 brw_emit_prim(brw, &prim[i], brw->primitive);
 
-      intel->no_batch_wrap = GL_FALSE;
+      intel->no_batch_wrap = false;
 
-      retval = GL_TRUE;
+      if (dri_bufmgr_check_aperture_space(&intel->batch.bo, 1)) {
+	 if (!fail_next) {
+	    intel_batchbuffer_reset_to_saved(intel);
+	    intel_batchbuffer_flush(intel);
+	    fail_next = true;
+	    goto retry;
+	 } else {
+	    if (intel_batchbuffer_flush(intel) == -ENOSPC) {
+	       static bool warned = false;
+
+	       if (!warned) {
+		  fprintf(stderr, "i965: Single primitive emit exceeded"
+			  "available aperture space\n");
+		  warned = true;
+	       }
+
+	       retval = false;
+	    }
+	 }
+      }
    }
 
    if (intel->always_flush_batch)
@@ -385,13 +403,6 @@ static GLboolean brw_try_draw_prims( struct gl_context *ctx,
  out:
 
    brw_state_cache_check_size(brw);
-
-   if (warn)
-      fprintf(stderr, "i965: Single primitive emit potentially exceeded "
-	      "available aperture space\n");
-
-   if (!retval)
-      DBG("%s failed\n", __FUNCTION__);
 
    return retval;
 }
@@ -405,7 +416,7 @@ void brw_draw_prims( struct gl_context *ctx,
 		     GLuint min_index,
 		     GLuint max_index )
 {
-   GLboolean retval;
+   bool retval;
 
    if (!_mesa_check_conditional_render(ctx))
       return;

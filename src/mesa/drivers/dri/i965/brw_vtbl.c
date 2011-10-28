@@ -49,6 +49,8 @@
 #include "brw_vs.h"
 #include "brw_wm.h"
 
+#include "gen6_hiz.h"
+
 #include "glsl/ralloc.h"
 
 static void
@@ -68,7 +70,6 @@ static void brw_destroy_context( struct intel_context *intel )
 
    brw_destroy_state(brw);
    brw_draw_destroy( brw );
-   brw_clear_validated_bos(brw);
    ralloc_free(brw->wm.compile_data);
 
    dri_bo_release(&brw->curbe.curbe_bo);
@@ -237,6 +238,11 @@ static bool brw_is_hiz_depth_format(struct intel_context *intel,
    return intel->has_hiz && (format == MESA_FORMAT_X8_Z24);
 }
 
+static void brw_hiz_resolve_noop(struct intel_context *intel,
+				 struct intel_region *depth_region)
+{
+   /* empty */
+}
 
 void brwInitVtbl( struct brw_context *brw )
 {
@@ -254,4 +260,12 @@ void brwInitVtbl( struct brw_context *brw )
    brw->intel.vtbl.debug_batch = brw_debug_batch;
    brw->intel.vtbl.render_target_supported = brw_render_target_supported;
    brw->intel.vtbl.is_hiz_depth_format = brw_is_hiz_depth_format;
+
+   if (brw->intel.has_hiz) {
+      brw->intel.vtbl.hiz_resolve_hizbuffer = gen6_hiz_resolve_hizbuffer;
+      brw->intel.vtbl.hiz_resolve_depthbuffer = gen6_hiz_resolve_depthbuffer;
+   } else {
+      brw->intel.vtbl.hiz_resolve_hizbuffer = brw_hiz_resolve_noop;
+      brw->intel.vtbl.hiz_resolve_depthbuffer = brw_hiz_resolve_noop;
+   }
 }

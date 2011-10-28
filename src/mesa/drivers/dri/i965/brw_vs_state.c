@@ -37,7 +37,7 @@
 #include "main/macros.h"
 
 static void
-brw_prepare_vs_unit(struct brw_context *brw)
+brw_upload_vs_unit(struct brw_context *brw)
 {
    struct intel_context *intel = &brw->intel;
    struct gl_context *ctx = &intel->ctx;
@@ -142,7 +142,7 @@ brw_prepare_vs_unit(struct brw_context *brw)
    vs->thread4.urb_entry_allocation_size = brw->urb.vsize - 1;
 
    vs->thread4.max_threads = CLAMP(brw->urb.nr_vs_entries / 2,
-				   1, brw->vs_max_threads) - 1;
+				   1, brw->max_vs_threads) - 1;
 
    /* No samplers for ARB_vp programs:
     */
@@ -181,5 +181,5 @@ const struct brw_tracked_state brw_vs_unit = {
                 BRW_NEW_VERTEX_PROGRAM),
       .cache = CACHE_NEW_VS_PROG
    },
-   .prepare = brw_prepare_vs_unit,
+   .emit = brw_upload_vs_unit,
 };

@@ -32,7 +32,6 @@
 
 static const char *common_extensions[] = {
    /* Used by mesa internally (cf all_mesa_extensions in ../common/utils.c) */
-   "GL_ARB_draw_buffers",
    "GL_ARB_transpose_matrix",
    "GL_ARB_window_pos",
    "GL_EXT_blend_func_separate",
@@ -65,6 +64,7 @@ static const char *es1_extensions[] = {
    "GL_EXT_blend_equation_separate",
    "GL_EXT_blend_func_separate",
    "GL_EXT_blend_subtract",
+   "GL_OES_draw_texture",
    "GL_ARB_framebuffer_object",
    "GL_EXT_framebuffer_object",
    "GL_ARB_point_sprite",

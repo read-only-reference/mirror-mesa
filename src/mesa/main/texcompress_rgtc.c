@@ -106,7 +106,6 @@ _mesa_texstore_red_rgtc1(TEXSTORE_PARAMS)
    ASSERT(dstYoffset % 4 == 0);
    ASSERT(dstZoffset % 4 == 0);
    (void) dstZoffset;
-   (void) dstImageOffsets;
 
 
    tempImage = _mesa_make_temp_ubyte_image(ctx, dims,
@@ -120,7 +119,7 @@ _mesa_texstore_red_rgtc1(TEXSTORE_PARAMS)
 
    dst = _mesa_compressed_image_address(dstXoffset, dstYoffset, 0,
                                         dstFormat,
-                                        texWidth, (GLubyte *) dstAddr);
+                                        texWidth, dstSlices[0]);
 
    blkaddr = dst;
    dstRowDiff = dstRowStride >= (srcWidth * 2) ? dstRowStride - (((srcWidth + 3) & ~3) * 2) : 0;
@@ -162,7 +161,6 @@ _mesa_texstore_signed_red_rgtc1(TEXSTORE_PARAMS)
    ASSERT(dstYoffset % 4 == 0);
    ASSERT(dstZoffset % 4 == 0);
    (void) dstZoffset;
-   (void) dstImageOffsets;
 
    tempImage = _mesa_make_temp_float_image(ctx, dims,
 					   baseInternalFormat,
@@ -175,7 +173,7 @@ _mesa_texstore_signed_red_rgtc1(TEXSTORE_PARAMS)
 
    dst = (GLbyte *)_mesa_compressed_image_address(dstXoffset, dstYoffset, 0,
 						  dstFormat,
-						  texWidth, (GLubyte *) dstAddr);
+						  texWidth, dstSlices[0]);
 
    blkaddr = dst;
    dstRowDiff = dstRowStride >= (srcWidth * 2) ? dstRowStride - (((srcWidth + 3) & ~3) * 2) : 0;
@@ -218,7 +216,6 @@ _mesa_texstore_rg_rgtc2(TEXSTORE_PARAMS)
    ASSERT(dstYoffset % 4 == 0);
    ASSERT(dstZoffset % 4 == 0);
    (void) dstZoffset;
-   (void) dstImageOffsets;
 
    tempImage = _mesa_make_temp_ubyte_image(ctx, dims,
 					  baseInternalFormat,
@@ -231,7 +228,7 @@ _mesa_texstore_rg_rgtc2(TEXSTORE_PARAMS)
 
    dst = _mesa_compressed_image_address(dstXoffset, dstYoffset, 0,
                                         dstFormat,
-                                        texWidth, (GLubyte *) dstAddr);
+                                        texWidth, dstSlices[0]);
 
    blkaddr = dst;
    dstRowDiff = dstRowStride >= (srcWidth * 4) ? dstRowStride - (((srcWidth + 3) & ~3) * 4) : 0;
@@ -280,7 +277,6 @@ _mesa_texstore_signed_rg_rgtc2(TEXSTORE_PARAMS)
    ASSERT(dstYoffset % 4 == 0);
    ASSERT(dstZoffset % 4 == 0);
    (void) dstZoffset;
-   (void) dstImageOffsets;
 
    tempImage = _mesa_make_temp_float_image(ctx, dims,
 					   baseInternalFormat,
@@ -293,7 +289,7 @@ _mesa_texstore_signed_rg_rgtc2(TEXSTORE_PARAMS)
 
    dst = (GLbyte *)_mesa_compressed_image_address(dstXoffset, dstYoffset, 0,
 						  dstFormat,
-						  texWidth, (GLubyte *) dstAddr);
+						  texWidth, dstSlices[0]);
 
    blkaddr = dst;
    dstRowDiff = dstRowStride >= (srcWidth * 4) ? dstRowStride - (((srcWidth + 3) & ~3) * 4) : 0;
@@ -329,7 +325,7 @@ _mesa_fetch_texel_2d_f_red_rgtc1(const struct swrast_texture_image *texImage,
 				 GLint i, GLint j, GLint k, GLfloat *texel)
 {
    GLubyte red;
-   unsigned_fetch_texel_rgtc(texImage->Base.RowStride, (GLubyte *)(texImage->Base.Data),
+   unsigned_fetch_texel_rgtc(texImage->RowStride, texImage->Data,
 		       i, j, &red, 1);
    texel[RCOMP] = UBYTE_TO_FLOAT(red);
    texel[GCOMP] = 0.0;
@@ -342,7 +338,7 @@ _mesa_fetch_texel_2d_f_signed_red_rgtc1(const struct swrast_texture_image *texIm
 					GLint i, GLint j, GLint k, GLfloat *texel)
 {
    GLbyte red;
-   signed_fetch_texel_rgtc(texImage->Base.RowStride, (GLbyte *)(texImage->Base.Data),
+   signed_fetch_texel_rgtc(texImage->RowStride, (GLbyte *)(texImage->Data),
 		       i, j, &red, 1);
    texel[RCOMP] = BYTE_TO_FLOAT_TEX(red);
    texel[GCOMP] = 0.0;
@@ -355,9 +351,9 @@ _mesa_fetch_texel_2d_f_rg_rgtc2(const struct swrast_texture_image *texImage,
 				 GLint i, GLint j, GLint k, GLfloat *texel)
 {
    GLubyte red, green;
-   unsigned_fetch_texel_rgtc(texImage->Base.RowStride, (GLubyte *)(texImage->Base.Data),
+   unsigned_fetch_texel_rgtc(texImage->RowStride, texImage->Data,
 		     i, j, &red, 2);
-   unsigned_fetch_texel_rgtc(texImage->Base.RowStride, (GLubyte *)(texImage->Base.Data) + 8,
+   unsigned_fetch_texel_rgtc(texImage->RowStride, texImage->Data + 8,
 		     i, j, &green, 2);
    texel[RCOMP] = UBYTE_TO_FLOAT(red);
    texel[GCOMP] = UBYTE_TO_FLOAT(green);
@@ -370,9 +366,9 @@ _mesa_fetch_texel_2d_f_signed_rg_rgtc2(const struct swrast_texture_image *texIma
 				       GLint i, GLint j, GLint k, GLfloat *texel)
 {
    GLbyte red, green;
-   signed_fetch_texel_rgtc(texImage->Base.RowStride, (GLbyte *)(texImage->Base.Data),
+   signed_fetch_texel_rgtc(texImage->RowStride, (GLbyte *)(texImage->Data),
 		     i, j, &red, 2);
-   signed_fetch_texel_rgtc(texImage->Base.RowStride, (GLbyte *)(texImage->Base.Data) + 8,
+   signed_fetch_texel_rgtc(texImage->RowStride, (GLbyte *)(texImage->Data) + 8,
 		     i, j, &green, 2);
    texel[RCOMP] = BYTE_TO_FLOAT_TEX(red);
    texel[GCOMP] = BYTE_TO_FLOAT_TEX(green);
@@ -385,7 +381,7 @@ _mesa_fetch_texel_2d_f_l_latc1(const struct swrast_texture_image *texImage,
                                  GLint i, GLint j, GLint k, GLfloat *texel)
 {
    GLubyte red;
-   unsigned_fetch_texel_rgtc(texImage->Base.RowStride, (GLubyte *)(texImage->Base.Data),
+   unsigned_fetch_texel_rgtc(texImage->RowStride, texImage->Data,
                        i, j, &red, 1);
    texel[RCOMP] =
    texel[GCOMP] =
@@ -398,7 +394,7 @@ _mesa_fetch_texel_2d_f_signed_l_latc1(const struct swrast_texture_image *texImag
                                         GLint i, GLint j, GLint k, GLfloat *texel)
 {
    GLbyte red;
-   signed_fetch_texel_rgtc(texImage->Base.RowStride, (GLbyte *)(texImage->Base.Data),
+   signed_fetch_texel_rgtc(texImage->RowStride, (GLbyte *)(texImage->Data),
                        i, j, &red, 1);
    texel[RCOMP] =
    texel[GCOMP] =
@@ -411,9 +407,9 @@ _mesa_fetch_texel_2d_f_la_latc2(const struct swrast_texture_image *texImage,
                                  GLint i, GLint j, GLint k, GLfloat *texel)
 {
    GLubyte red, green;
-   unsigned_fetch_texel_rgtc(texImage->Base.RowStride, (GLubyte *)(texImage->Base.Data),
+   unsigned_fetch_texel_rgtc(texImage->RowStride, texImage->Data,
                      i, j, &red, 2);
-   unsigned_fetch_texel_rgtc(texImage->Base.RowStride, (GLubyte *)(texImage->Base.Data) + 8,
+   unsigned_fetch_texel_rgtc(texImage->RowStride, texImage->Data + 8,
                      i, j, &green, 2);
    texel[RCOMP] =
    texel[GCOMP] =
@@ -426,9 +422,9 @@ _mesa_fetch_texel_2d_f_signed_la_latc2(const struct swrast_texture_image *texIma
                                        GLint i, GLint j, GLint k, GLfloat *texel)
 {
    GLbyte red, green;
-   signed_fetch_texel_rgtc(texImage->Base.RowStride, (GLbyte *)(texImage->Base.Data),
+   signed_fetch_texel_rgtc(texImage->RowStride, (GLbyte *)(texImage->Data),
                      i, j, &red, 2);
-   signed_fetch_texel_rgtc(texImage->Base.RowStride, (GLbyte *)(texImage->Base.Data) + 8,
+   signed_fetch_texel_rgtc(texImage->RowStride, (GLbyte *)(texImage->Data) + 8,
                      i, j, &green, 2);
    texel[RCOMP] =
    texel[GCOMP] =

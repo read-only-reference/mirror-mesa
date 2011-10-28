@@ -112,18 +112,12 @@ typedef void (*validate_texture_image_func)(struct gl_context *ctx,
 struct swrast_texture_image;
 
 
-typedef void (*FetchTexelFuncC)(const struct swrast_texture_image *texImage,
-                                GLint col, GLint row, GLint img,
-                                GLchan *texelOut);
-
 /**
- * As above, but returns floats.
- * Used for depth component images and for upcoming signed/float
- * texture images.
+ * Fetch a texel from texture image at given position.
  */
-typedef void (*FetchTexelFuncF)(const struct swrast_texture_image *texImage,
-                                GLint col, GLint row, GLint img,
-                                GLfloat *texelOut);
+typedef void (*FetchTexelFunc)(const struct swrast_texture_image *texImage,
+                               GLint col, GLint row, GLint img,
+                               GLfloat *texelOut);
 
 
 typedef void (*StoreTexelFunc)(struct swrast_texture_image *texImage,
@@ -144,33 +138,29 @@ struct swrast_texture_image
    /** used for mipmap LOD computation */
    GLfloat WidthScale, HeightScale, DepthScale;
 
-#if 0
-   GLubyte *Data;    /**< The actual texture data in malloc'd memory */
-
-   GLint TexelSize;  /**< bytes per texel block */
-#endif
-
-   FetchTexelFuncC FetchTexelc;
-   FetchTexelFuncF FetchTexelf;
-   StoreTexelFunc Store;
-
-#if 0
    /** These fields only valid when texture memory is mapped */
-   GLubyte **SliceMaps;  /**< points to OneMap or a malloc'd array */
-   GLint RowStride;  /**< bytes per row of blocks */
-#endif
+   GLint RowStride;		/**< Padded width in units of texels */
+   GLuint *ImageOffsets;        /**< if 3D texture: array [Depth] of offsets to
+                                     each 2D slice in 'Data', in texels */
+   GLubyte *Data;		/**< Image data, accessed via FetchTexel() */
+
+   /** Malloc'd texture memory */
+   GLubyte *Buffer;
+
+   FetchTexelFunc FetchTexel;
+   StoreTexelFunc Store;
 };
 
 
 /** cast wrapper */
-static INLINE struct swrast_texture_image *
+static inline struct swrast_texture_image *
 swrast_texture_image(struct gl_texture_image *img)
 {
    return (struct swrast_texture_image *) img;
 }
 
 /** cast wrapper */
-static INLINE const struct swrast_texture_image *
+static inline const struct swrast_texture_image *
 swrast_texture_image_const(const struct gl_texture_image *img)
 {
    return (const struct swrast_texture_image *) img;
@@ -308,14 +298,14 @@ _swrast_update_texture_samplers(struct gl_context *ctx);
 
 
 /** Return SWcontext for the given struct gl_context */
-static INLINE SWcontext *
+static inline SWcontext *
 SWRAST_CONTEXT(struct gl_context *ctx)
 {
    return (SWcontext *) ctx->swrast_context;
 }
 
 /** const version of above */
-static INLINE const SWcontext *
+static inline const SWcontext *
 CONST_SWRAST_CONTEXT(const struct gl_context *ctx)
 {
    return (const SWcontext *) ctx->swrast_context;
@@ -327,7 +317,7 @@ CONST_SWRAST_CONTEXT(const struct gl_context *ctx)
  * For drivers that rely on swrast for fallback rendering, this is the
  * driver's opportunity to map renderbuffers and textures.
  */
-static INLINE void
+static inline void
 swrast_render_start(struct gl_context *ctx)
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
@@ -337,7 +327,7 @@ swrast_render_start(struct gl_context *ctx)
 
 
 /** Called after framebuffer reading/writing */
-static INLINE void
+static inline void
 swrast_render_finish(struct gl_context *ctx)
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
@@ -345,6 +335,31 @@ swrast_render_finish(struct gl_context *ctx)
       swrast->Driver.SpanRenderFinish(ctx);
 }
 
+
+extern void
+_swrast_span_render_start(struct gl_context *ctx);
+
+extern void
+_swrast_span_render_finish(struct gl_context *ctx);
+
+extern void
+_swrast_map_textures(struct gl_context *ctx);
+
+extern void
+_swrast_unmap_textures(struct gl_context *ctx);
+
+extern void
+_swrast_map_texture(struct gl_context *ctx, struct gl_texture_object *texObj);
+
+extern void
+_swrast_unmap_texture(struct gl_context *ctx, struct gl_texture_object *texObj);
+
+
+extern void
+_swrast_map_renderbuffers(struct gl_context *ctx);
+
+extern void
+_swrast_unmap_renderbuffers(struct gl_context *ctx);
 
 
 /**

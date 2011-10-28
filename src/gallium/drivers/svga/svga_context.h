@@ -36,6 +36,8 @@
 #include "tgsi/tgsi_scan.h"
 
 #include "svga_state.h"
+#include "svga_hw_reg.h"
+#include "svga3d_shaderdefs.h"
 
 
 #define SVGA_TEX_UNITS 8
@@ -236,10 +238,6 @@ struct svga_state
    float zero_stride_constants[PIPE_MAX_ATTRIBS*4];
 };
 
-#define RS_MAX 97
-#define TS_MAX 30
-#define CB_MAX 256
-
 struct svga_prescale {
    float translate[4];
    float scale[4];
@@ -276,9 +274,9 @@ struct svga_hw_view_state
  */
 struct svga_hw_draw_state
 {
-   unsigned rs[RS_MAX];
-   unsigned ts[16][TS_MAX];
-   float cb[PIPE_SHADER_TYPES][CB_MAX][4];
+   unsigned rs[SVGA3D_RS_MAX];
+   unsigned ts[SVGA3D_PIXEL_SAMPLERREG_MAX][SVGA3D_TS_MAX];
+   float cb[PIPE_SHADER_TYPES][SVGA3D_CONSTREG_MAX][4];
 
    struct svga_shader_result *fs;
    struct svga_shader_result *vs;
@@ -454,6 +452,8 @@ void svga_context_flush( struct svga_context *svga,
                          struct pipe_fence_handle **pfence );
 
 void svga_hwtnl_flush_retry( struct svga_context *svga );
+void svga_hwtnl_flush_buffer( struct svga_context *svga,
+                              struct pipe_resource *buffer );
 
 void svga_surfaces_flush(struct svga_context *svga);
 

@@ -109,13 +109,13 @@ st_read_stencil_pixels(struct gl_context *ctx, GLint x, GLint y,
 
       /* get stencil (and Z) values */
       switch (pt->resource->format) {
-      case PIPE_FORMAT_S8_USCALED:
+      case PIPE_FORMAT_S8_UINT:
          {
             const ubyte *src = stmap + srcY * pt->stride;
             memcpy(sValues, src, width);
          }
          break;
-      case PIPE_FORMAT_Z24_UNORM_S8_USCALED:
+      case PIPE_FORMAT_Z24_UNORM_S8_UINT:
          if (format == GL_DEPTH_STENCIL) {
             const uint *src = (uint *) (stmap + srcY * pt->stride);
             const GLfloat scale = 1.0f / (0xffffff);
@@ -133,7 +133,7 @@ st_read_stencil_pixels(struct gl_context *ctx, GLint x, GLint y,
             }
          }
          break;
-      case PIPE_FORMAT_S8_USCALED_Z24_UNORM:
+      case PIPE_FORMAT_S8_UINT_Z24_UNORM:
          if (format == GL_DEPTH_STENCIL) {
             const uint *src = (uint *) (stmap + srcY * pt->stride);
             const GLfloat scale = 1.0f / (0xffffff);
@@ -151,7 +151,7 @@ st_read_stencil_pixels(struct gl_context *ctx, GLint x, GLint y,
             }
          }
          break;
-      case PIPE_FORMAT_Z32_FLOAT_S8X24_USCALED:
+      case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
          if (format == GL_DEPTH_STENCIL) {
             const uint *src = (uint *) (stmap + srcY * pt->stride);
             const GLfloat *srcf = (const GLfloat*)src;
@@ -387,6 +387,8 @@ st_readpixels(struct gl_context *ctx, GLint x, GLint y, GLsizei width, GLsizei h
    GLsizei i, j;
    GLint yStep, dfStride;
    GLfloat *df;
+   GLuint *dui;
+   GLint *di;
    struct st_renderbuffer *strb;
    struct gl_pixelstore_attrib clippedPacking = *pack;
    struct pipe_transfer *trans;
@@ -454,9 +456,12 @@ st_readpixels(struct gl_context *ctx, GLint x, GLint y, GLsizei width, GLsizei h
    }
    else {
       /* write tile(row) into temp row buffer */
-      df = (GLfloat *) temp;
+      df = (GLfloat *)temp;
       dfStride = 0;
    }
+
+   dui = (GLuint *)df;
+   di = (GLint *)df;
 
    if (st_fb_orientation(ctx->ReadBuffer) == Y_0_TOP) {
       /* convert GL Y to Gallium Y */
@@ -497,7 +502,7 @@ st_readpixels(struct gl_context *ctx, GLint x, GLint y, GLsizei width, GLsizei h
       const GLint dstStride = _mesa_image_row_stride(&clippedPacking, width,
                                                      format, type);
 
-      if (pformat == PIPE_FORMAT_Z24_UNORM_S8_USCALED ||
+      if (pformat == PIPE_FORMAT_Z24_UNORM_S8_UINT ||
           pformat == PIPE_FORMAT_Z24X8_UNORM) {
          if (format == GL_DEPTH_COMPONENT) {
             for (i = 0; i < height; i++) {
@@ -529,7 +534,7 @@ st_readpixels(struct gl_context *ctx, GLint x, GLint y, GLsizei width, GLsizei h
             }
          }
       }
-      else if (pformat == PIPE_FORMAT_S8_USCALED_Z24_UNORM ||
+      else if (pformat == PIPE_FORMAT_S8_UINT_Z24_UNORM ||
                pformat == PIPE_FORMAT_X8Z24_UNORM) {
          if (format == GL_DEPTH_COMPONENT) {
             for (i = 0; i < height; i++) {
@@ -596,7 +601,7 @@ st_readpixels(struct gl_context *ctx, GLint x, GLint y, GLsizei width, GLsizei h
             dst += dstStride;
          }
       }
-      else if (pformat == PIPE_FORMAT_Z32_FLOAT_S8X24_USCALED) {
+      else if (pformat == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT) {
          assert(format == GL_DEPTH_COMPONENT);
          for (i = 0; i < height; i++) {
             GLfloat zfloat[MAX_WIDTH];    /* Z32 */
@@ -611,7 +616,38 @@ st_readpixels(struct gl_context *ctx, GLint x, GLint y, GLsizei width, GLsizei h
             dst += dstStride;
          }
       }
-      else {
+      else if (util_format_is_pure_sint(pformat)) {
+         for (i = 0; i < height; i++) {
+            if (type == GL_UNSIGNED_INT)
+               pipe_get_tile_ui_format(pipe, trans, 0, y, width, 1,
+                                       pformat, dui);
+            else
+               pipe_get_tile_i_format(pipe, trans, 0, y, width, 1,
+                                      pformat, di);
+            y += yStep;
+            if (!dfStride) {
+               _mesa_pack_rgba_span_int(ctx, width, (GLuint (*)[4])temp,
+                                        format, type, dst);
+               dst += dstStride;
+            }
+        }
+      } else if (util_format_is_pure_uint(pformat)) {
+         for (i = 0; i < height; i++) {
+            if (type == GL_UNSIGNED_INT)
+               pipe_get_tile_ui_format(pipe, trans, 0, y, width, 1,
+                                       pformat, dui);
+            else
+               pipe_get_tile_i_format(pipe, trans, 0, y, width, 1,
+                                      pformat, di);
+            y += yStep;
+            df += dfStride;
+            if (!dfStride) {
+               _mesa_pack_rgba_span_int(ctx, width, (GLuint (*)[4])temp,
+                                        format, type, dst);
+               dst += dstStride;
+            }
+         }
+      } else {
          /* RGBA format */
          /* Do a row at a time to flip image data vertically */
          for (i = 0; i < height; i++) {

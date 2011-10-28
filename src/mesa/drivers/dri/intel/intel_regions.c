@@ -109,17 +109,31 @@ debug_backtrace(void)
 /* XXX: Thread safety?
  */
 GLubyte *
-intel_region_map(struct intel_context *intel, struct intel_region *region)
+intel_region_map(struct intel_context *intel, struct intel_region *region,
+                 GLbitfield mode)
 {
-   intel_flush(&intel->ctx);
+   /* We have the region->map_refcount controlling mapping of the BO because
+    * in software fallbacks we may end up mapping the same buffer multiple
+    * times on Mesa's behalf, so we refcount our mappings to make sure that
+    * the pointer stays valid until the end of the unmap chain.  However, we
+    * must not emit any batchbuffers between the start of mapping and the end
+    * of unmapping, or further use of the map will be incoherent with the GPU
+    * rendering done by that batchbuffer. Hence we assert in
+    * intel_batchbuffer_flush() that that doesn't happen, which means that the
+    * flush is only needed on first map of the buffer.
+    */
 
    _DBG("%s %p\n", __FUNCTION__, region);
    if (!region->map_refcount++) {
+      intel_flush(&intel->ctx);
+
       if (region->tiling != I915_TILING_NONE)
 	 drm_intel_gem_bo_map_gtt(region->bo);
       else
-	 drm_intel_bo_map(region->bo, GL_TRUE);
+	 drm_intel_bo_map(region->bo, true);
+
       region->map = region->bo->virtual;
+      ++intel->num_mapped_regions;
    }
 
    return region->map;
@@ -134,7 +148,10 @@ intel_region_unmap(struct intel_context *intel, struct intel_region *region)
 	 drm_intel_gem_bo_unmap_gtt(region->bo);
       else
 	 drm_intel_bo_unmap(region->bo);
+
       region->map = NULL;
+      --intel->num_mapped_regions;
+      assert(intel->num_mapped_regions >= 0);
    }
 }
 
@@ -167,7 +184,7 @@ struct intel_region *
 intel_region_alloc(struct intel_screen *screen,
 		   uint32_t tiling,
                    GLuint cpp, GLuint width, GLuint height,
-		   GLboolean expect_accelerated_upload)
+		   bool expect_accelerated_upload)
 {
    drm_intel_bo *buffer;
    unsigned long flags = 0;
@@ -193,12 +210,12 @@ intel_region_alloc(struct intel_screen *screen,
    return region;
 }
 
-GLboolean
+bool
 intel_region_flink(struct intel_region *region, uint32_t *name)
 {
    if (region->name == 0) {
       if (drm_intel_bo_flink(region->bo, &region->name))
-	 return GL_FALSE;
+	 return false;
       
       _mesa_HashInsert(region->screen->named_regions,
 		       region->name, region);
@@ -206,7 +223,7 @@ intel_region_flink(struct intel_region *region, uint32_t *name)
 
    *name = region->name;
 
-   return GL_TRUE;
+   return true;
 }
 
 struct intel_region *
@@ -337,41 +354,10 @@ _mesa_copy_rect(GLubyte * dst,
    }
 }
 
-
-/* Upload data to a rectangular sub-region.  Lots of choices how to do this:
- *
- * - memcpy by span to current destination
- * - upload data as new buffer and blit
- *
- * Currently always memcpy.
- */
-void
-intel_region_data(struct intel_context *intel,
-                  struct intel_region *dst,
-                  GLuint dst_offset,
-                  GLuint dstx, GLuint dsty,
-                  const void *src, GLuint src_pitch,
-                  GLuint srcx, GLuint srcy, GLuint width, GLuint height)
-{
-   _DBG("%s\n", __FUNCTION__);
-
-   if (intel == NULL)
-      return;
-
-   intel_prepare_render(intel);
-
-   _mesa_copy_rect(intel_region_map(intel, dst) + dst_offset,
-                   dst->cpp,
-                   dst->pitch,
-                   dstx, dsty, width, height, src, src_pitch, srcx, srcy);
-
-   intel_region_unmap(intel, dst);
-}
-
 /* Copy rectangular sub-regions. Need better logic about when to
  * push buffers into AGP - will currently do so whenever possible.
  */
-GLboolean
+bool
 intel_region_copy(struct intel_context *intel,
                   struct intel_region *dst,
                   GLuint dst_offset,
@@ -379,7 +365,7 @@ intel_region_copy(struct intel_context *intel,
                   struct intel_region *src,
                   GLuint src_offset,
                   GLuint srcx, GLuint srcy, GLuint width, GLuint height,
-		  GLboolean flip,
+		  bool flip,
 		  GLenum logicop)
 {
    uint32_t src_pitch = src->pitch;
@@ -387,7 +373,7 @@ intel_region_copy(struct intel_context *intel,
    _DBG("%s\n", __FUNCTION__);
 
    if (intel == NULL)
-      return GL_FALSE;
+      return false;
 
    assert(src->cpp == dst->cpp);
 

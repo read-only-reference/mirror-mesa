@@ -38,6 +38,7 @@
 #include "program/program.h"
 #include "program/prog_parameter.h"
 #include "program/prog_uniform.h"
+#include "program/hash_table.h"
 #include "ralloc.h"
 
 /**********************************************************************/
@@ -238,7 +239,9 @@ _mesa_init_shader_program(struct gl_context *ctx, struct gl_shader_program *prog
 {
    prog->Type = GL_SHADER_PROGRAM_MESA;
    prog->RefCount = 1;
-   prog->Attributes = _mesa_new_parameter_list();
+
+   prog->AttributeBindings = string_to_uint_map_ctor();
+
 #if FEATURE_ARB_geometry_shader4
    prog->Geom.VerticesOut = 0;
    prog->Geom.InputType = GL_TRIANGLES;
@@ -272,10 +275,6 @@ void
 _mesa_clear_shader_program_data(struct gl_context *ctx,
                                 struct gl_shader_program *shProg)
 {
-   _mesa_reference_vertprog(ctx, &shProg->VertexProgram, NULL);
-   _mesa_reference_fragprog(ctx, &shProg->FragmentProgram, NULL);
-   _mesa_reference_geomprog(ctx, &shProg->GeometryProgram, NULL);
-
    if (shProg->Uniforms) {
       _mesa_free_uniform_list(shProg->Uniforms);
       shProg->Uniforms = NULL;
@@ -307,9 +306,9 @@ _mesa_free_shader_program_data(struct gl_context *ctx,
 
    _mesa_clear_shader_program_data(ctx, shProg);
 
-   if (shProg->Attributes) {
-      _mesa_free_parameter_list(shProg->Attributes);
-      shProg->Attributes = NULL;
+   if (shProg->AttributeBindings) {
+      string_to_uint_map_dtor(shProg->AttributeBindings);
+      shProg->AttributeBindings = NULL;
    }
 
    /* detach shaders */
