@@ -296,6 +296,13 @@ usamplerCube		KEYWORD(130, 130, USAMPLERCUBE);
 usampler1DArray		KEYWORD(130, 130, USAMPLER1DARRAY);
 usampler2DArray		KEYWORD(130, 130, USAMPLER2DARRAY);
 
+samplerExternalOES	{
+			  if (yyextra->OES_EGL_image_external_enable)
+			     return SAMPLEREXTERNALOES;
+			  else
+			     return IDENTIFIER;
+			}
+
 
 struct		return STRUCT;
 void		return VOID_TOK;
@@ -303,6 +310,7 @@ void		return VOID_TOK;
 layout		{
 		  if ((yyextra->language_version >= 140)
 		      || yyextra->AMD_conservative_depth_enable
+		      || yyextra->ARB_conservative_depth_enable
 		      || yyextra->ARB_explicit_attrib_location_enable
 		      || yyextra->ARB_fragment_coord_conventions_enable) {
 		      return LAYOUT_TOK;

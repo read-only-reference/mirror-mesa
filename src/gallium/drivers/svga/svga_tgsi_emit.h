@@ -54,7 +54,7 @@ struct svga_shader_emitter
    char *buf;
    char *ptr;
 
-   union svga_compile_key key;
+   struct svga_compile_key key;
    struct tgsi_shader_info info;
    int unit;
 
@@ -262,6 +262,10 @@ dst_register( unsigned file,
 {
    SVGA3dShaderDestToken dest;
 
+   /* check values against bitfield sizes */
+   assert(number < (1 << 11));
+   assert(file <= SVGA3DREG_PREDICATE);
+
    dest.value = 0;
    dest.num = number;
    dest.type_upper = file >> 3;
@@ -290,6 +294,10 @@ static INLINE SVGA3dShaderSrcToken
 src_token( unsigned file, int number )
 {
    SVGA3dShaderSrcToken src;
+
+   /* check values against bitfield sizes */
+   assert(number < (1 << 11));
+   assert(file <= SVGA3DREG_PREDICATE);
 
    src.value = 0;
    src.num = number;

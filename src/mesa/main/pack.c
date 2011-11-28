@@ -34,32 +34,13 @@
 #include "enums.h"
 #include "image.h"
 #include "imports.h"
+#include "macros.h"
 #include "mtypes.h"
 #include "pack.h"
 #include "pixeltransfer.h"
 #include "imports.h"
 #include "../../gallium/auxiliary/util/u_format_rgb9e5.h"
 #include "../../gallium/auxiliary/util/u_format_r11g11b10f.h"
-
-
-/**
- * NOTE:
- * Normally, BYTE_TO_FLOAT(0) returns 0.00392  That causes problems when
- * we later convert the float to a packed integer value (such as for
- * GL_RGB5_A1) because we'll wind up with a non-zero value.
- *
- * We redefine the macros here so zero is handled correctly.
- */
-#undef BYTE_TO_FLOAT
-#define BYTE_TO_FLOAT(B)    ((B) == 0 ? 0.0F : ((2.0F * (B) + 1.0F) * (1.0F/255.0F)))
-
-#undef SHORT_TO_FLOAT
-#define SHORT_TO_FLOAT(S)   ((S) == 0 ? 0.0F : ((2.0F * (S) + 1.0F) * (1.0F/65535.0F)))
-
-
-
-/** Compute ceiling of integer quotient of A divided by B. */
-#define CEILING( A, B )  ( (A) % (B) == 0 ? (A)/(B) : (A)/(B)+1 )
 
 
 /**
@@ -1983,6 +1964,7 @@ _mesa_pack_rgba_span_float(struct gl_context *ctx, GLuint n, GLfloat rgba[][4],
          break;
       default:
          _mesa_problem(ctx, "bad type in _mesa_pack_rgba_span_float");
+         free(luminance);
          return;
    }
 
@@ -2263,7 +2245,7 @@ get_component_mapping(GLenum format,
       *gSrc = 0;
       *rSrc = *bSrc = *aSrc = -1;
       break;
-      case GL_BLUE:
+   case GL_BLUE:
    case GL_BLUE_INTEGER_EXT:
       *bSrc = 0;
       *rSrc = *gSrc = *aSrc = -1;
@@ -2309,6 +2291,7 @@ get_component_mapping(GLenum format,
       *aDst = 3;
       break;
    case GL_BGR:
+   case GL_BGR_INTEGER:
       *rSrc = 2;
       *gSrc = 1;
       *bSrc = 0;
@@ -2330,6 +2313,7 @@ get_component_mapping(GLenum format,
       *aDst = 3;
       break;
    case GL_BGRA:
+   case GL_BGRA_INTEGER:
       *rSrc = 2;
       *gSrc = 1;
       *bSrc = 0;
@@ -2506,10 +2490,10 @@ extract_float_rgba(GLuint n, GLfloat rgba[][4],
          PROCESS(aSrc, ACOMP, 1.0F, 255, GLubyte, UBYTE_TO_FLOAT);
          break;
       case GL_BYTE:
-         PROCESS(rSrc, RCOMP, 0.0F,   0, GLbyte, BYTE_TO_FLOAT);
-         PROCESS(gSrc, GCOMP, 0.0F,   0, GLbyte, BYTE_TO_FLOAT);
-         PROCESS(bSrc, BCOMP, 0.0F,   0, GLbyte, BYTE_TO_FLOAT);
-         PROCESS(aSrc, ACOMP, 1.0F, 127, GLbyte, BYTE_TO_FLOAT);
+         PROCESS(rSrc, RCOMP, 0.0F,   0, GLbyte, BYTE_TO_FLOATZ);
+         PROCESS(gSrc, GCOMP, 0.0F,   0, GLbyte, BYTE_TO_FLOATZ);
+         PROCESS(bSrc, BCOMP, 0.0F,   0, GLbyte, BYTE_TO_FLOATZ);
+         PROCESS(aSrc, ACOMP, 1.0F, 127, GLbyte, BYTE_TO_FLOATZ);
          break;
       case GL_UNSIGNED_SHORT:
          PROCESS(rSrc, RCOMP, 0.0F,      0, GLushort, USHORT_TO_FLOAT);
@@ -2518,10 +2502,10 @@ extract_float_rgba(GLuint n, GLfloat rgba[][4],
          PROCESS(aSrc, ACOMP, 1.0F, 0xffff, GLushort, USHORT_TO_FLOAT);
          break;
       case GL_SHORT:
-         PROCESS(rSrc, RCOMP, 0.0F,     0, GLshort, SHORT_TO_FLOAT);
-         PROCESS(gSrc, GCOMP, 0.0F,     0, GLshort, SHORT_TO_FLOAT);
-         PROCESS(bSrc, BCOMP, 0.0F,     0, GLshort, SHORT_TO_FLOAT);
-         PROCESS(aSrc, ACOMP, 1.0F, 32767, GLshort, SHORT_TO_FLOAT);
+         PROCESS(rSrc, RCOMP, 0.0F,     0, GLshort, SHORT_TO_FLOATZ);
+         PROCESS(gSrc, GCOMP, 0.0F,     0, GLshort, SHORT_TO_FLOATZ);
+         PROCESS(bSrc, BCOMP, 0.0F,     0, GLshort, SHORT_TO_FLOATZ);
+         PROCESS(aSrc, ACOMP, 1.0F, 32767, GLshort, SHORT_TO_FLOATZ);
          break;
       case GL_UNSIGNED_INT:
          PROCESS(rSrc, RCOMP, 0.0F,          0, GLuint, UINT_TO_FLOAT);
@@ -4585,10 +4569,10 @@ _mesa_unpack_stencil_span( struct gl_context *ctx, GLuint n,
 
 void
 _mesa_pack_stencil_span( struct gl_context *ctx, GLuint n,
-                         GLenum dstType, GLvoid *dest, const GLstencil *source,
+                         GLenum dstType, GLvoid *dest, const GLubyte *source,
                          const struct gl_pixelstore_attrib *dstPacking )
 {
-   GLstencil *stencil = (GLstencil *) malloc(n * sizeof(GLstencil));
+   GLubyte *stencil = (GLubyte *) malloc(n * sizeof(GLubyte));
 
    if (!stencil) {
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "stencil packing");
@@ -4598,23 +4582,14 @@ _mesa_pack_stencil_span( struct gl_context *ctx, GLuint n,
    if (ctx->Pixel.IndexShift || ctx->Pixel.IndexOffset ||
        ctx->Pixel.MapStencilFlag) {
       /* make a copy of input */
-      memcpy(stencil, source, n * sizeof(GLstencil));
+      memcpy(stencil, source, n * sizeof(GLubyte));
       _mesa_apply_stencil_transfer_ops(ctx, n, stencil);
       source = stencil;
    }
 
    switch (dstType) {
    case GL_UNSIGNED_BYTE:
-      if (sizeof(GLstencil) == 1) {
-         memcpy( dest, source, n );
-      }
-      else {
-         GLubyte *dst = (GLubyte *) dest;
-         GLuint i;
-         for (i=0;i<n;i++) {
-            dst[i] = (GLubyte) source[i];
-         }
-      }
+      memcpy(dest, source, n);
       break;
    case GL_BYTE:
       {
@@ -4833,14 +4808,14 @@ _mesa_unpack_depth_span( struct gl_context *ctx, GLuint n,
     */
    switch (srcType) {
       case GL_BYTE:
-         DEPTH_VALUES(GLbyte, BYTE_TO_FLOAT);
+         DEPTH_VALUES(GLbyte, BYTE_TO_FLOATZ);
          needClamp = GL_TRUE;
          break;
       case GL_UNSIGNED_BYTE:
          DEPTH_VALUES(GLubyte, UBYTE_TO_FLOAT);
          break;
       case GL_SHORT:
-         DEPTH_VALUES(GLshort, SHORT_TO_FLOAT);
+         DEPTH_VALUES(GLshort, SHORT_TO_FLOATZ);
          needClamp = GL_TRUE;
          break;
       case GL_UNSIGNED_SHORT:
@@ -5119,11 +5094,11 @@ void
 _mesa_pack_depth_stencil_span(struct gl_context *ctx,GLuint n,
                               GLenum dstType, GLuint *dest,
                               const GLfloat *depthVals,
-                              const GLstencil *stencilVals,
+                              const GLubyte *stencilVals,
                               const struct gl_pixelstore_attrib *dstPacking)
 {
    GLfloat *depthCopy = (GLfloat *) malloc(n * sizeof(GLfloat));
-   GLstencil *stencilCopy = (GLstencil *) malloc(n * sizeof(GLstencil));
+   GLubyte *stencilCopy = (GLubyte *) malloc(n * sizeof(GLubyte));
    GLuint i;
 
    if (!depthCopy || !stencilCopy) {
@@ -5142,7 +5117,7 @@ _mesa_pack_depth_stencil_span(struct gl_context *ctx,GLuint n,
    if (ctx->Pixel.IndexShift ||
        ctx->Pixel.IndexOffset ||
        ctx->Pixel.MapStencilFlag) {
-      memcpy(stencilCopy, stencilVals, n * sizeof(GLstencil));
+      memcpy(stencilCopy, stencilVals, n * sizeof(GLubyte));
       _mesa_apply_stencil_transfer_ops(ctx, n, stencilCopy);
       stencilVals = stencilCopy;
    }

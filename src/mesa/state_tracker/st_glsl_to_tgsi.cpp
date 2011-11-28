@@ -53,7 +53,6 @@ extern "C" {
 #include "program/prog_optimize.h"
 #include "program/prog_print.h"
 #include "program/program.h"
-#include "program/prog_uniform.h"
 #include "program/prog_parameter.h"
 #include "program/sampler.h"
 
@@ -79,6 +78,12 @@ extern "C" {
                            (1 << PROGRAM_CONSTANT) |     \
                            (1 << PROGRAM_UNIFORM))
 
+/**
+ * Maximum number of temporary registers.
+ *
+ * It is too big for stack allocated arrays -- it will cause stack overflow on
+ * Windows and likely Mac OS X.
+ */
 #define MAX_TEMPS         4096
 
 /* will be 4 for GLSL 4.00 */
@@ -1012,29 +1017,6 @@ glsl_to_tgsi_visitor::visit(ir_variable *ir)
 
       fp->OriginUpperLeft = ir->origin_upper_left;
       fp->PixelCenterInteger = ir->pixel_center_integer;
-
-   } else if (strcmp(ir->name, "gl_FragDepth") == 0) {
-      struct gl_fragment_program *fp = (struct gl_fragment_program *)this->prog;
-      switch (ir->depth_layout) {
-      case ir_depth_layout_none:
-         fp->FragDepthLayout = FRAG_DEPTH_LAYOUT_NONE;
-         break;
-      case ir_depth_layout_any:
-         fp->FragDepthLayout = FRAG_DEPTH_LAYOUT_ANY;
-         break;
-      case ir_depth_layout_greater:
-         fp->FragDepthLayout = FRAG_DEPTH_LAYOUT_GREATER;
-         break;
-      case ir_depth_layout_less:
-         fp->FragDepthLayout = FRAG_DEPTH_LAYOUT_LESS;
-         break;
-      case ir_depth_layout_unchanged:
-         fp->FragDepthLayout = FRAG_DEPTH_LAYOUT_UNCHANGED;
-         break;
-      default:
-         assert(0);
-         break;
-      }
    }
 
    if (ir->mode == ir_var_uniform && strncmp(ir->name, "gl_", 3) == 0) {
@@ -2725,6 +2707,9 @@ glsl_to_tgsi_visitor::visit(ir_texture *ir)
    case GLSL_SAMPLER_DIM_BUF:
       assert(!"FINISHME: Implement ARB_texture_buffer_object");
       break;
+   case GLSL_SAMPLER_DIM_EXTERNAL:
+      inst->tex_target = TEXTURE_EXTERNAL_INDEX;
+      break;
    default:
       assert(!"Should not get here.");
    }
@@ -2865,55 +2850,6 @@ count_resources(glsl_to_tgsi_visitor *v, gl_program *prog)
    _mesa_update_shader_textures_used(prog);
 }
 
-
-/**
- * Check if the given vertex/fragment/shader program is within the
- * resource limits of the context (number of texture units, etc).
- * If any of those checks fail, record a linker error.
- *
- * XXX more checks are needed...
- */
-static void
-check_resources(const struct gl_context *ctx,
-                struct gl_shader_program *shader_program,
-                glsl_to_tgsi_visitor *prog,
-                struct gl_program *proginfo)
-{
-   switch (proginfo->Target) {
-   case GL_VERTEX_PROGRAM_ARB:
-      if (_mesa_bitcount(prog->samplers_used) >
-          ctx->Const.MaxVertexTextureImageUnits) {
-         fail_link(shader_program, "Too many vertex shader texture samplers");
-      }
-      if (proginfo->Parameters->NumParameters > MAX_UNIFORMS) {
-         fail_link(shader_program, "Too many vertex shader constants");
-      }
-      break;
-   case MESA_GEOMETRY_PROGRAM:
-      if (_mesa_bitcount(prog->samplers_used) >
-          ctx->Const.MaxGeometryTextureImageUnits) {
-         fail_link(shader_program, "Too many geometry shader texture samplers");
-      }
-      if (proginfo->Parameters->NumParameters >
-          MAX_GEOMETRY_UNIFORM_COMPONENTS / 4) {
-         fail_link(shader_program, "Too many geometry shader constants");
-      }
-      break;
-   case GL_FRAGMENT_PROGRAM_ARB:
-      if (_mesa_bitcount(prog->samplers_used) >
-          ctx->Const.MaxTextureImageUnits) {
-         fail_link(shader_program, "Too many fragment shader texture samplers");
-      }
-      if (proginfo->Parameters->NumParameters > MAX_UNIFORMS) {
-         fail_link(shader_program, "Too many fragment shader constants");
-      }
-      break;
-   default:
-      _mesa_problem(ctx, "unexpected program type in check_resources()");
-   }
-}
-
-
 static void
 set_uniform_initializer(struct gl_context *ctx, void *mem_ctx,
         		struct gl_shader_program *shader_program,
@@ -2975,12 +2911,12 @@ set_uniform_initializer(struct gl_context *ctx, void *mem_ctx,
         		      element_type->matrix_columns,
         		      element_type->vector_elements,
         		      loc, 1, GL_FALSE, (GLfloat *)values);
-         loc += element_type->matrix_columns;
       } else {
          _mesa_uniform(ctx, shader_program, loc, element_type->matrix_columns,
         	       values, element_type->gl_type);
-         loc += type_size(element_type);
       }
+
+      loc++;
    }
 }
 
@@ -3001,9 +2937,13 @@ glsl_to_tgsi_visitor::remove_output_reads(gl_register_file type)
    GLint outputMap[VERT_RESULT_MAX];
    GLint outputTypes[VERT_RESULT_MAX];
    GLuint numVaryingReads = 0;
-   GLboolean usedTemps[MAX_TEMPS];
+   GLboolean *usedTemps;
    GLuint firstTemp = 0;
 
+   usedTemps = new GLboolean[MAX_TEMPS];
+   if (!usedTemps) {
+      return;
+   }
    _mesa_find_used_registers(prog, PROGRAM_TEMPORARY,
                              usedTemps, MAX_TEMPS);
 
@@ -3035,6 +2975,8 @@ glsl_to_tgsi_visitor::remove_output_reads(gl_register_file type)
          }
       }
    }
+
+   delete [] usedTemps;
 
    if (numVaryingReads == 0)
       return; /* nothing to be done */
@@ -3107,9 +3049,13 @@ get_src_arg_mask(st_dst_reg dst, st_src_reg src)
 void
 glsl_to_tgsi_visitor::simplify_cmp(void)
 {
-   unsigned tempWrites[MAX_TEMPS];
+   unsigned *tempWrites;
    unsigned outputWrites[MAX_PROGRAM_OUTPUTS];
 
+   tempWrites = new unsigned[MAX_TEMPS];
+   if (!tempWrites) {
+      return;
+   }
    memset(tempWrites, 0, sizeof(tempWrites));
    memset(outputWrites, 0, sizeof(outputWrites));
 
@@ -3125,7 +3071,7 @@ glsl_to_tgsi_visitor::simplify_cmp(void)
           inst->op == TGSI_OPCODE_END ||
           inst->op == TGSI_OPCODE_ENDSUB ||
           inst->op == TGSI_OPCODE_RET) {
-         return;
+         break;
       }
 
       if (inst->dst.file == PROGRAM_OUTPUT) {
@@ -3150,6 +3096,8 @@ glsl_to_tgsi_visitor::simplify_cmp(void)
          inst->src[0] = inst->src[1];
       }
    }
+
+   delete [] tempWrites;
 }
 
 /* Replaces all references to a temporary register index with another index. */
@@ -3783,7 +3731,7 @@ get_pixel_transfer_visitor(struct st_fragment_program *fp,
    inst->sampler = 0;
    inst->tex_target = TEXTURE_2D_INDEX;
 
-   prog->InputsRead |= (1 << FRAG_ATTRIB_TEX0);
+   prog->InputsRead |= FRAG_BIT_TEX0;
    prog->SamplersUsed |= (1 << 0); /* mark sampler 0 as used */
    v->samplers_used |= (1 << 0);
 
@@ -3854,7 +3802,7 @@ get_pixel_transfer_visitor(struct st_fragment_program *fp,
             src_regs[i].index = src0.index;
          }
          else if (src_regs[i].file == PROGRAM_INPUT)
-            prog->InputsRead |= (1 << src_regs[i].index);
+            prog->InputsRead |= BITFIELD64_BIT(src_regs[i].index);
       }
 
       v->emit(NULL, inst->op, inst->dst, src_regs[0], src_regs[1], src_regs[2]);
@@ -3907,7 +3855,7 @@ get_bitmap_visitor(struct st_fragment_program *fp,
    inst->sampler = samplerIndex;
    inst->tex_target = TEXTURE_2D_INDEX;
 
-   prog->InputsRead |= (1 << FRAG_ATTRIB_TEX0);
+   prog->InputsRead |= FRAG_BIT_TEX0;
    prog->SamplersUsed |= (1 << samplerIndex); /* mark sampler as used */
    v->samplers_used |= (1 << samplerIndex);
 
@@ -3929,7 +3877,7 @@ get_bitmap_visitor(struct st_fragment_program *fp,
       for (int i=0; i<3; i++) {
          src_regs[i] = inst->src[i];
          if (src_regs[i].file == PROGRAM_INPUT)
-            prog->InputsRead |= (1 << src_regs[i].index);
+            prog->InputsRead |= BITFIELD64_BIT(src_regs[i].index);
       }
 
       v->emit(NULL, inst->op, inst->dst, src_regs[0], src_regs[1], src_regs[2]);
@@ -3995,6 +3943,7 @@ struct st_translate {
 /** Map Mesa's SYSTEM_VALUE_x to TGSI_SEMANTIC_x */
 static unsigned mesa_sysval_to_semantic[SYSTEM_VALUE_MAX] = {
    TGSI_SEMANTIC_FACE,
+   TGSI_SEMANTIC_VERTEXID,
    TGSI_SEMANTIC_INSTANCEID
 };
 
@@ -4577,14 +4526,19 @@ st_translate_program(
    const ubyte outputSemanticIndex[],
    boolean passthrough_edgeflags)
 {
-   struct st_translate translate, *t;
+   struct st_translate *t;
    unsigned i;
    enum pipe_error ret = PIPE_OK;
 
    assert(numInputs <= Elements(t->inputs));
    assert(numOutputs <= Elements(t->outputs));
 
-   t = &translate;
+   t = CALLOC_STRUCT(st_translate);
+   if (!t) {
+      ret = PIPE_ERROR_OUT_OF_MEMORY;
+      goto out;
+   }
+
    memset(t, 0, sizeof *t);
 
    t->procType = procType;
@@ -4639,7 +4593,8 @@ st_translate_program(
             break;
          default:
             assert(!"fragment shader outputs must be POSITION/STENCIL/COLOR");
-            return PIPE_ERROR_BAD_INPUT;
+            ret = PIPE_ERROR_BAD_INPUT;
+            goto out;
          }
       }
    }
@@ -4820,13 +4775,17 @@ st_translate_program(
    }
 
 out:
-   FREE(t->insn);
-   FREE(t->labels);
-   FREE(t->constants);
-   FREE(t->immediates);
+   if (t) {
+      FREE(t->insn);
+      FREE(t->labels);
+      FREE(t->constants);
+      FREE(t->immediates);
 
-   if (t->error) {
-      debug_printf("%s: translate error flag set\n", __FUNCTION__);
+      if (t->error) {
+         debug_printf("%s: translate error flag set\n", __FUNCTION__);
+      }
+
+      FREE(t);
    }
 
    return ret;
@@ -4844,6 +4803,8 @@ get_mesa_program(struct gl_context *ctx,
 {
    glsl_to_tgsi_visitor* v = new glsl_to_tgsi_visitor();
    struct gl_program *prog;
+   struct pipe_screen * screen = st_context(ctx)->pipe->screen;
+   unsigned pipe_shader_type;
    GLenum target;
    const char *target_string;
    bool progress;
@@ -4854,14 +4815,17 @@ get_mesa_program(struct gl_context *ctx,
    case GL_VERTEX_SHADER:
       target = GL_VERTEX_PROGRAM_ARB;
       target_string = "vertex";
+      pipe_shader_type = PIPE_SHADER_VERTEX;
       break;
    case GL_FRAGMENT_SHADER:
       target = GL_FRAGMENT_PROGRAM_ARB;
       target_string = "fragment";
+      pipe_shader_type = PIPE_SHADER_FRAGMENT;
       break;
    case GL_GEOMETRY_SHADER:
       target = GL_GEOMETRY_PROGRAM_NV;
       target_string = "geometry";
+      pipe_shader_type = PIPE_SHADER_GEOMETRY;
       break;
    default:
       assert(!"should not be reached");
@@ -4930,10 +4894,13 @@ get_mesa_program(struct gl_context *ctx,
    }
 #endif
 
-   /* Remove reads to output registers, and to varyings in vertex shaders. */
-   v->remove_output_reads(PROGRAM_OUTPUT);
-   if (target == GL_VERTEX_PROGRAM_ARB)
-      v->remove_output_reads(PROGRAM_VARYING);
+   if (!screen->get_shader_param(screen, pipe_shader_type,
+                                 PIPE_SHADER_CAP_OUTPUT_READ)) {
+      /* Remove reads to output registers, and to varyings in vertex shaders. */
+      v->remove_output_reads(PROGRAM_OUTPUT);
+      if (target == GL_VERTEX_PROGRAM_ARB)
+         v->remove_output_reads(PROGRAM_VARYING);
+   }
    
    /* Perform optimizations on the instructions in the glsl_to_tgsi_visitor. */
    v->simplify_cmp();
@@ -4961,6 +4928,7 @@ get_mesa_program(struct gl_context *ctx,
       _mesa_print_ir(shader->ir, NULL);
       printf("\n");
       printf("\n");
+      fflush(stdout);
    }
 
    prog->Instructions = NULL;
@@ -4969,10 +4937,17 @@ get_mesa_program(struct gl_context *ctx,
    do_set_program_inouts(shader->ir, prog, shader->Type == GL_FRAGMENT_SHADER);
    count_resources(v, prog);
 
-   check_resources(ctx, shader_program, v, prog);
-
    _mesa_reference_program(ctx, &shader->Program, prog);
    
+   /* This has to be done last.  Any operation the can cause
+    * prog->ParameterValues to get reallocated (e.g., anything that adds a
+    * program constant) has to happen before creating this linkage.
+    */
+   _mesa_associate_uniform_storage(ctx, shader_program, prog->Parameters);
+   if (!shader_program->LinkStatus) {
+      return NULL;
+   }
+
    struct st_vertex_program *stvp;
    struct st_fragment_program *stfp;
    struct st_geometry_program *stgp;

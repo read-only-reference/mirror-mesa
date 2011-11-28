@@ -33,6 +33,7 @@
 
 #include "intel_batchbuffer.h"
 #include "intel_fbo.h"
+#include "intel_mipmap_tree.h"
 #include "intel_regions.h"
 
 #include "brw_context.h"
@@ -76,11 +77,11 @@ static void upload_binding_table_pointers(struct brw_context *brw)
 
    BEGIN_BATCH(6);
    OUT_BATCH(_3DSTATE_BINDING_TABLE_POINTERS << 16 | (6 - 2));
-   OUT_BATCH(brw->vs.bind_bo_offset);
+   OUT_BATCH(brw->bind.bo_offset);
    OUT_BATCH(0); /* gs */
    OUT_BATCH(0); /* clip */
    OUT_BATCH(0); /* sf */
-   OUT_BATCH(brw->wm.bind_bo_offset);
+   OUT_BATCH(brw->bind.bo_offset);
    ADVANCE_BATCH();
 }
 
@@ -114,9 +115,9 @@ static void upload_gen6_binding_table_pointers(struct brw_context *brw)
 	     GEN6_BINDING_TABLE_MODIFY_GS |
 	     GEN6_BINDING_TABLE_MODIFY_PS |
 	     (4 - 2));
-   OUT_BATCH(brw->vs.bind_bo_offset); /* vs */
+   OUT_BATCH(brw->bind.bo_offset); /* vs */
    OUT_BATCH(0); /* gs */
-   OUT_BATCH(brw->wm.bind_bo_offset); /* wm/ps */
+   OUT_BATCH(brw->bind.bo_offset); /* wm/ps */
    ADVANCE_BATCH();
 }
 
@@ -196,6 +197,37 @@ const struct brw_tracked_state brw_psp_urb_cbs = {
    .emit = upload_psp_urb_cbs,
 };
 
+uint32_t
+brw_depthbuffer_format(struct brw_context *brw)
+{
+   struct intel_context *intel = &brw->intel;
+   struct gl_context *ctx = &intel->ctx;
+   struct gl_framebuffer *fb = ctx->DrawBuffer;
+   struct intel_renderbuffer *drb = intel_get_renderbuffer(fb, BUFFER_DEPTH);
+   struct intel_renderbuffer *srb;
+
+   if (!drb &&
+       (srb = intel_get_renderbuffer(fb, BUFFER_STENCIL)) &&
+       srb->Base.Format == MESA_FORMAT_S8_Z24) {
+      drb = srb;
+   }
+
+   switch (drb->Base.Format) {
+   case MESA_FORMAT_Z16:
+      return BRW_DEPTHFORMAT_D16_UNORM;
+   case MESA_FORMAT_Z32_FLOAT:
+      return BRW_DEPTHFORMAT_D32_FLOAT;
+   case MESA_FORMAT_X8_Z24:
+      return BRW_DEPTHFORMAT_D24_UNORM_X8_UINT;
+   case MESA_FORMAT_S8_Z24:
+      return BRW_DEPTHFORMAT_D24_UNORM_S8_UINT;
+   default:
+      _mesa_problem(ctx, "Unexpected depth format %s\n",
+		    _mesa_get_format_name(drb->Base.Format));
+      return BRW_DEPTHFORMAT_D16_UNORM;
+   }
+}
+
 static void emit_depthbuffer(struct brw_context *brw)
 {
    struct intel_context *intel = &brw->intel;
@@ -204,8 +236,14 @@ static void emit_depthbuffer(struct brw_context *brw)
    /* _NEW_BUFFERS */
    struct intel_renderbuffer *depth_irb = intel_get_renderbuffer(fb, BUFFER_DEPTH);
    struct intel_renderbuffer *stencil_irb = intel_get_renderbuffer(fb, BUFFER_STENCIL);
-   struct intel_region *hiz_region = depth_irb ? depth_irb->hiz_region : NULL;
+   struct intel_region *hiz_region = NULL;
    unsigned int len;
+
+   if (depth_irb &&
+       depth_irb->mt &&
+       depth_irb->mt->hiz_mt) {
+      hiz_region = depth_irb->mt->hiz_mt->region;
+   }
 
    /* 3DSTATE_DEPTH_BUFFER, 3DSTATE_STENCIL_BUFFER are both
     * non-pipelined state that will need the PIPE_CONTROL workaround.
@@ -271,7 +309,13 @@ static void emit_depthbuffer(struct brw_context *brw)
        *
        *     [DevGT]: This field must be set to the same value (enabled or
        *     disabled) as Hierarchical Depth Buffer Enable
+       *
+       * The tiled bit must be set. From the Sandybridge PRM, Volume 2, Part 1,
+       * Section 7.5.5.1.1 3DSTATE_DEPTH_BUFFER, Bit 1.27 Tiled Surface:
+       *     [DevGT+]: This field must be set to TRUE.
        */
+      struct intel_region *region = stencil_irb->mt->region;
+
       assert(intel->has_separate_stencil);
       assert(stencil_irb->Base.Format == MESA_FORMAT_S8);
 
@@ -281,10 +325,11 @@ static void emit_depthbuffer(struct brw_context *brw)
 	        (1 << 21) | /* separate stencil enable */
 	        (1 << 22) | /* hiz enable */
 	        (BRW_TILEWALK_YMAJOR << 26) |
+	        (1 << 27) | /* tiled surface */
 	        (BRW_SURFACE_2D << 29));
       OUT_BATCH(0);
-      OUT_BATCH(((stencil_irb->region->width - 1) << 6) |
-	         (2 * stencil_irb->region->height - 1) << 19);
+      OUT_BATCH(((region->width - 1) << 6) |
+	         (2 * region->height - 1) << 19);
       OUT_BATCH(0);
       OUT_BATCH(0);
 
@@ -294,29 +339,11 @@ static void emit_depthbuffer(struct brw_context *brw)
       ADVANCE_BATCH();
 
    } else {
-      struct intel_region *region = depth_irb->region;
-      unsigned int format;
+      struct intel_region *region = depth_irb->mt->region;
       uint32_t tile_x, tile_y, offset;
 
       /* If using separate stencil, hiz must be enabled. */
       assert(!stencil_irb || hiz_region);
-
-      switch (region->cpp) {
-      case 2:
-	 format = BRW_DEPTHFORMAT_D16_UNORM;
-	 break;
-      case 4:
-	 if (intel->depth_buffer_is_float)
-	    format = BRW_DEPTHFORMAT_D32_FLOAT;
-	 else if (hiz_region)
-	    format = BRW_DEPTHFORMAT_D24_UNORM_X8_UINT;
-	 else
-	    format = BRW_DEPTHFORMAT_D24_UNORM_S8_UINT;
-	 break;
-      default:
-	 assert(0);
-	 return;
-      }
 
       offset = intel_renderbuffer_tile_offsets(depth_irb, &tile_x, &tile_y);
 
@@ -326,7 +353,7 @@ static void emit_depthbuffer(struct brw_context *brw)
       BEGIN_BATCH(len);
       OUT_BATCH(_3DSTATE_DEPTH_BUFFER << 16 | (len - 2));
       OUT_BATCH(((region->pitch * region->cpp) - 1) |
-		(format << 18) |
+		(brw_depthbuffer_format(brw) << 18) |
 		((hiz_region ? 1 : 0) << 21) | /* separate stencil enable */
 		((hiz_region ? 1 : 0) << 22) | /* hiz enable */
 		(BRW_TILEWALK_YMAJOR << 26) |
@@ -379,10 +406,11 @@ static void emit_depthbuffer(struct brw_context *brw)
 
       /* Emit stencil buffer. */
       if (stencil_irb) {
+	 struct intel_region *region = stencil_irb->mt->region;
 	 BEGIN_BATCH(3);
 	 OUT_BATCH((_3DSTATE_STENCIL_BUFFER << 16) | (3 - 2));
-	 OUT_BATCH(stencil_irb->region->pitch * stencil_irb->region->cpp - 1);
-	 OUT_RELOC(stencil_irb->region->bo,
+	 OUT_BATCH(region->pitch * region->cpp - 1);
+	 OUT_RELOC(region->bo,
 		   I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
 		   0);
 	 ADVANCE_BATCH();

@@ -32,46 +32,16 @@
 #include <GL/internal/dri_interface.h>
 #include "main/context.h"
 
-typedef struct __DRIutilversionRec2    __DRIutilversion2;
-
 struct dri_debug_control {
     const char * string;
     unsigned     flag;
 };
-
-/**
- * Used to store a version which includes a major range instead of a single
- * major version number.
- */
-struct __DRIutilversionRec2 {
-    int    major_min;    /** min allowed Major version number. */
-    int    major_max;    /** max allowed Major version number. */
-    int    minor;        /**< Minor version number. */
-    int    patch;        /**< Patch-level. */
-};
-
-extern void
-__driUtilMessage(const char *f, ...);
 
 extern unsigned driParseDebugString( const char * debug,
     const struct dri_debug_control * control );
 
 extern unsigned driGetRendererString( char * buffer,
     const char * hardware_name, GLuint agp_mode );
-
-extern GLboolean driCheckDriDdxDrmVersions2(const char * driver_name,
-    const __DRIversion * driActual, const __DRIversion * driExpected,
-    const __DRIversion * ddxActual, const __DRIversion * ddxExpected,
-    const __DRIversion * drmActual, const __DRIversion * drmExpected);
-
-extern GLboolean driCheckDriDdxDrmVersions3(const char * driver_name,
-    const __DRIversion * driActual, const __DRIversion * driExpected,
-    const __DRIversion * ddxActual, const __DRIutilversion2 * ddxExpected,
-    const __DRIversion * drmActual, const __DRIversion * drmExpected);
-
-extern GLboolean driClipRectToFramebuffer( const struct gl_framebuffer *buffer,
-					   GLint *x, GLint *y,
-					   GLsizei *width, GLsizei *height );
 
 struct __DRIconfigRec {
     struct gl_config modes;

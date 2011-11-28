@@ -135,9 +135,9 @@ static void teximage_set_map_data(radeon_texture_image *image)
 		return;
 	}
 
-	lvl = &image->mt->levels[image->mtlevel];
+	lvl = &image->mt->levels[image->base.Base.Level];
 
-	image->base.Data = image->mt->bo->ptr + lvl->faces[image->mtface].offset;
+	image->base.Data = image->mt->bo->ptr + lvl->faces[image->base.Base.Face].offset;
 	image->base.RowStride = lvl->rowstride / _mesa_get_format_bytes(image->base.Base.TexFormat);
 }
 
@@ -299,12 +299,12 @@ radeon_map_texture_image(struct gl_context *ctx,
 	if (image->bo) {
 		/* TFP case */
 		radeon_bo_map(image->bo, write);
-		*stride = get_texture_image_row_stride(rmesa, texImage->TexFormat, width, 0);
+		*stride = get_texture_image_row_stride(rmesa, texImage->TexFormat, width, 0, texImage->TexObject->Target);
 		*map = bo->ptr;
 	} else if (likely(mt)) {
 		radeon_bo_map(mt->bo, write);
 		radeon_mipmap_level *lvl = &image->mt->levels[texImage->Level];
-		void *base = mt->bo->ptr + lvl->faces[image->mtface].offset;
+		void *base = mt->bo->ptr + lvl->faces[image->base.Base.Face].offset;
 
 		*stride = lvl->rowstride;
 		*map = base + (slice * height) * *stride;
@@ -337,12 +337,15 @@ static gl_format radeonChoose8888TexFormat(radeonContextPtr rmesa,
 					   GLenum srcFormat,
 					   GLenum srcType, GLboolean fbo)
 {
+#if defined(RADEON_R100)
+	/* r100 can only do this */
+	return _radeon_texformat_argb8888;
+#elif defined(RADEON_R200)
 	const GLuint ui = 1;
 	const GLubyte littleEndian = *((const GLubyte *)&ui);
 
-	/* r100 can only do this */
-	if (IS_R100_CLASS(rmesa->radeonScreen) || fbo)
-	  return _dri_texformat_argb8888;
+	if (fbo)
+		return _radeon_texformat_argb8888;
 
 	if ((srcFormat == GL_RGBA && srcType == GL_UNSIGNED_INT_8_8_8_8) ||
 	    (srcFormat == GL_RGBA && srcType == GL_UNSIGNED_BYTE && !littleEndian) ||
@@ -354,16 +357,9 @@ static gl_format radeonChoose8888TexFormat(radeonContextPtr rmesa,
 		   (srcFormat == GL_ABGR_EXT && srcType == GL_UNSIGNED_INT_8_8_8_8) ||
 		   (srcFormat == GL_ABGR_EXT && srcType == GL_UNSIGNED_BYTE && !littleEndian)) {
 		return MESA_FORMAT_RGBA8888_REV;
-	} else if (IS_R200_CLASS(rmesa->radeonScreen)) {
-		return _dri_texformat_argb8888;
-	} else if (srcFormat == GL_BGRA && ((srcType == GL_UNSIGNED_BYTE && !littleEndian) ||
-					    srcType == GL_UNSIGNED_INT_8_8_8_8)) {
-		return MESA_FORMAT_ARGB8888_REV;
-	} else if (srcFormat == GL_BGRA && ((srcType == GL_UNSIGNED_BYTE && littleEndian) ||
-					    srcType == GL_UNSIGNED_INT_8_8_8_8_REV)) {
-		return MESA_FORMAT_ARGB8888;
 	} else
-		return _dri_texformat_argb8888;
+		return _radeon_texformat_argb8888;
+#endif
 }
 
 gl_format radeonChooseTextureFormat_mesa(struct gl_context * ctx,
@@ -403,17 +399,17 @@ gl_format radeonChooseTextureFormat(struct gl_context * ctx,
 		switch (type) {
 		case GL_UNSIGNED_INT_10_10_10_2:
 		case GL_UNSIGNED_INT_2_10_10_10_REV:
-			return do32bpt ? _dri_texformat_argb8888 :
-			    _dri_texformat_argb1555;
+			return do32bpt ? _radeon_texformat_argb8888 :
+			    _radeon_texformat_argb1555;
 		case GL_UNSIGNED_SHORT_4_4_4_4:
 		case GL_UNSIGNED_SHORT_4_4_4_4_REV:
-			return _dri_texformat_argb4444;
+			return _radeon_texformat_argb4444;
 		case GL_UNSIGNED_SHORT_5_5_5_1:
 		case GL_UNSIGNED_SHORT_1_5_5_5_REV:
-			return _dri_texformat_argb1555;
+			return _radeon_texformat_argb1555;
 		default:
 			return do32bpt ? radeonChoose8888TexFormat(rmesa, format, type, fbo) :
-			    _dri_texformat_argb4444;
+			    _radeon_texformat_argb4444;
 		}
 
 	case 3:
@@ -422,16 +418,16 @@ gl_format radeonChooseTextureFormat(struct gl_context * ctx,
 		switch (type) {
 		case GL_UNSIGNED_SHORT_4_4_4_4:
 		case GL_UNSIGNED_SHORT_4_4_4_4_REV:
-			return _dri_texformat_argb4444;
+			return _radeon_texformat_argb4444;
 		case GL_UNSIGNED_SHORT_5_5_5_1:
 		case GL_UNSIGNED_SHORT_1_5_5_5_REV:
-			return _dri_texformat_argb1555;
+			return _radeon_texformat_argb1555;
 		case GL_UNSIGNED_SHORT_5_6_5:
 		case GL_UNSIGNED_SHORT_5_6_5_REV:
-			return _dri_texformat_rgb565;
+			return _radeon_texformat_rgb565;
 		default:
-			return do32bpt ? _dri_texformat_argb8888 :
-			    _dri_texformat_rgb565;
+			return do32bpt ? _radeon_texformat_argb8888 :
+			    _radeon_texformat_rgb565;
 		}
 
 	case GL_RGBA8:
@@ -440,26 +436,26 @@ gl_format radeonChooseTextureFormat(struct gl_context * ctx,
 	case GL_RGBA16:
 		return !force16bpt ?
 			radeonChoose8888TexFormat(rmesa, format, type, fbo) :
-			_dri_texformat_argb4444;
+			_radeon_texformat_argb4444;
 
 	case GL_RGBA4:
 	case GL_RGBA2:
-		return _dri_texformat_argb4444;
+		return _radeon_texformat_argb4444;
 
 	case GL_RGB5_A1:
-		return _dri_texformat_argb1555;
+		return _radeon_texformat_argb1555;
 
 	case GL_RGB8:
 	case GL_RGB10:
 	case GL_RGB12:
 	case GL_RGB16:
-		return !force16bpt ? _dri_texformat_argb8888 :
-		    _dri_texformat_rgb565;
+		return !force16bpt ? _radeon_texformat_argb8888 :
+		    _radeon_texformat_rgb565;
 
 	case GL_RGB5:
 	case GL_RGB4:
 	case GL_R3_G3_B2:
-		return _dri_texformat_rgb565;
+		return _radeon_texformat_rgb565;
 
 	case GL_ALPHA:
 	case GL_ALPHA4:
@@ -467,12 +463,13 @@ gl_format radeonChooseTextureFormat(struct gl_context * ctx,
 	case GL_ALPHA12:
 	case GL_ALPHA16:
 	case GL_COMPRESSED_ALPHA:
+#if defined(RADEON_R200)
 		/* r200: can't use a8 format since interpreting hw I8 as a8 would result
 		   in wrong rgb values (same as alpha value instead of 0). */
-		if (IS_R200_CLASS(rmesa->radeonScreen))
-			return _dri_texformat_al88;
-		else
-			return MESA_FORMAT_A8;
+		return _radeon_texformat_al88;
+#else
+		return MESA_FORMAT_A8;
+#endif
 	case 1:
 	case GL_LUMINANCE:
 	case GL_LUMINANCE4:
@@ -491,7 +488,7 @@ gl_format radeonChooseTextureFormat(struct gl_context * ctx,
 	case GL_LUMINANCE12_ALPHA12:
 	case GL_LUMINANCE16_ALPHA16:
 	case GL_COMPRESSED_LUMINANCE_ALPHA:
-		return _dri_texformat_al88;
+		return _radeon_texformat_al88;
 
 	case GL_INTENSITY:
 	case GL_INTENSITY4:
@@ -647,8 +644,6 @@ static void teximage_assign_miptree(radeonContextPtr rmesa,
 	/* Miptree alocation may have failed,
 	 * when there was no image for baselevel specified */
 	if (t->mt) {
-		image->mtface = face;
-		image->mtlevel = level;
 		radeon_miptree_reference(t->mt, &image->mt);
 	} else
 		radeon_print(RADEON_TEXTURE, RADEON_VERBOSE,
@@ -684,10 +679,10 @@ static void radeon_store_teximage(struct gl_context* ctx, int dims,
 			__func__, ctx, texObj, texImage, compressed);
 
 	if (image->mt) {
-		dstRowStride = image->mt->levels[image->mtlevel].rowstride;
+		dstRowStride = image->mt->levels[image->base.Base.Level].rowstride;
 	} else if (t->bo) {
 		/* TFP case */
-		dstRowStride = get_texture_image_row_stride(rmesa, texImage->TexFormat, width, 0);
+		dstRowStride = get_texture_image_row_stride(rmesa, texImage->TexFormat, width, 0, texObj->Target);
 	} else {
 		dstRowStride = _mesa_format_row_stride(texImage->TexFormat, texImage->Width);
 	}
@@ -994,8 +989,8 @@ void radeonTexSubImage3D(struct gl_context * ctx, GLenum target, GLint level,
 
 unsigned radeonIsFormatRenderable(gl_format mesa_format)
 {
-	if (mesa_format == _dri_texformat_argb8888 || mesa_format == _dri_texformat_rgb565 ||
-		mesa_format == _dri_texformat_argb1555 || mesa_format == _dri_texformat_argb4444)
+	if (mesa_format == _radeon_texformat_argb8888 || mesa_format == _radeon_texformat_rgb565 ||
+		mesa_format == _radeon_texformat_argb1555 || mesa_format == _radeon_texformat_argb4444)
 		return 1;
 
 	switch (mesa_format)
@@ -1049,8 +1044,6 @@ void radeon_image_target_texture_2d(struct gl_context *ctx, GLenum target,
 
 	radeon_try_alloc_miptree(radeon, t);
 
-	radeonImage->mtface = _mesa_tex_target_to_face(target);
-	radeonImage->mtlevel = 0;
 	radeon_miptree_reference(t->mt, &radeonImage->mt);
 
 	if (t->mt == NULL)
@@ -1067,10 +1060,40 @@ void radeon_image_target_texture_2d(struct gl_context *ctx, GLenum target,
 	t->mt->bo = image->bo;
 
 	if (!radeon_miptree_matches_image(t->mt, &radeonImage->base.Base,
-					  radeonImage->mtface, 0))
+					  radeonImage->base.Base.Face, 0))
 		fprintf(stderr, "miptree doesn't match image\n");
 }
 #endif
+
+gl_format _radeon_texformat_rgba8888 = MESA_FORMAT_NONE;
+gl_format _radeon_texformat_argb8888 = MESA_FORMAT_NONE;
+gl_format _radeon_texformat_rgb565 = MESA_FORMAT_NONE;
+gl_format _radeon_texformat_argb4444 = MESA_FORMAT_NONE;
+gl_format _radeon_texformat_argb1555 = MESA_FORMAT_NONE;
+gl_format _radeon_texformat_al88 = MESA_FORMAT_NONE;
+/*@}*/
+
+
+static void
+radeonInitTextureFormats(void)
+{
+   if (_mesa_little_endian()) {
+      _radeon_texformat_rgba8888	= MESA_FORMAT_RGBA8888;
+      _radeon_texformat_argb8888	= MESA_FORMAT_ARGB8888;
+      _radeon_texformat_rgb565		= MESA_FORMAT_RGB565;
+      _radeon_texformat_argb4444	= MESA_FORMAT_ARGB4444;
+      _radeon_texformat_argb1555	= MESA_FORMAT_ARGB1555;
+      _radeon_texformat_al88		= MESA_FORMAT_AL88;
+   }
+   else {
+      _radeon_texformat_rgba8888	= MESA_FORMAT_RGBA8888_REV;
+      _radeon_texformat_argb8888	= MESA_FORMAT_ARGB8888_REV;
+      _radeon_texformat_rgb565		= MESA_FORMAT_RGB565_REV;
+      _radeon_texformat_argb4444	= MESA_FORMAT_ARGB4444_REV;
+      _radeon_texformat_argb1555	= MESA_FORMAT_ARGB1555_REV;
+      _radeon_texformat_al88		= MESA_FORMAT_AL88_REV;
+   }
+}
 
 void
 radeon_init_common_texture_funcs(radeonContextPtr radeon,
@@ -1097,9 +1120,10 @@ radeon_init_common_texture_funcs(radeonContextPtr radeon,
 
 	functions->CopyTexSubImage2D = radeonCopyTexSubImage2D;
 
+	functions->Bitmap = _mesa_meta_Bitmap;
 #if FEATURE_OES_EGL_image
 	functions->EGLImageTargetTexture2D = radeon_image_target_texture_2d;
 #endif
 
-	driInitTextureFormats();
+	radeonInitTextureFormats();
 }

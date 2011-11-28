@@ -156,7 +156,7 @@ struct brw_wm_instruction {
    GLuint saturate:1;
    GLuint writemask:4;
    GLuint tex_unit:4;   /* texture unit for TEX, TXD, TXP instructions */
-   GLuint tex_idx:3;    /* TEXTURE_1D,2D,3D,CUBE,RECT_INDEX source target */
+   GLuint tex_idx:4;    /* TEXTURE_1D,2D,3D,CUBE,RECT_INDEX source target */
    GLuint tex_shadow:1; /* do shadow comparison? */
    GLuint eot:1;    	/* End of thread indicator for FB_WRITE*/
    GLuint target:10;    /* target binding table index for FB_WRITE*/
@@ -485,7 +485,7 @@ struct gl_shader *brw_new_shader(struct gl_context *ctx, GLuint name, GLuint typ
 struct gl_shader_program *brw_new_shader_program(struct gl_context *ctx, GLuint name);
 
 bool brw_color_buffer_write_enabled(struct brw_context *brw);
-bool brw_render_target_supported(gl_format format);
+bool brw_render_target_supported(struct intel_context *intel, gl_format format);
 void brw_wm_payload_setup(struct brw_context *brw,
 			  struct brw_wm_compile *c);
 bool do_wm_prog(struct brw_context *brw,

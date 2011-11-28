@@ -4,7 +4,6 @@
 
 #include "main/mm.h"
 #include "math/m_vector.h"
-#include "texmem.h"
 #include "tnl/t_context.h"
 #include "main/colormac.h"
 
@@ -86,6 +85,10 @@ struct radeon_renderbuffer
 	unsigned int cpp;
 	/* unsigned int offset; */
 	unsigned int pitch;
+
+	struct radeon_bo *map_bo;
+	GLbitfield map_mode;
+	int map_x, map_y, map_w, map_h;
 
 	uint32_t draw_offset; /* FBO */
 	/* boo Xorg 6.8.2 compat */
@@ -171,9 +174,6 @@ struct _radeon_texture_image {
 	 */
 	struct _radeon_mipmap_tree *mt;
 	struct radeon_bo *bo;
-
-	int mtlevel; /** if mt != 0, this is the image's level in the mipmap tree */
-	int mtface; /** if mt != 0, this is the image's face in the mipmap tree */
 };
 
 
@@ -215,8 +215,6 @@ struct radeon_tex_obj {
 	GLuint pp_txpitch;	/* npot only */
 	GLuint pp_border_color;
 	GLuint pp_cubic_faces;	/* cube face 1,2,3,4 log2 sizes */
-
-        GLuint pp_txfilter_1;	/*  r300 */
 
 	GLboolean border_fallback;
 };
@@ -440,7 +438,6 @@ struct radeon_context {
    struct radeon_debug debug;
 
   drm_clip_rect_t fboRect;
-  GLboolean constant_cliprect; /* use for FBO or DRI2 rendering */
   GLboolean front_cliprects;
 
    /**

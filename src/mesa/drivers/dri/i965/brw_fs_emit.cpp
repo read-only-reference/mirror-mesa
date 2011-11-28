@@ -143,6 +143,31 @@ fs_visitor::generate_linterp(fs_inst *inst,
 }
 
 void
+fs_visitor::generate_math1_gen7(fs_inst *inst,
+			        struct brw_reg dst,
+			        struct brw_reg src0)
+{
+   assert(inst->mlen == 0);
+   brw_math(p, dst,
+	    brw_math_function(inst->opcode),
+	    inst->saturate ? BRW_MATH_SATURATE_SATURATE
+			   : BRW_MATH_SATURATE_NONE,
+	    0, src0,
+	    BRW_MATH_DATA_VECTOR,
+	    BRW_MATH_PRECISION_FULL);
+}
+
+void
+fs_visitor::generate_math2_gen7(fs_inst *inst,
+			        struct brw_reg dst,
+			        struct brw_reg src0,
+			        struct brw_reg src1)
+{
+   assert(inst->mlen == 0);
+   brw_math2(p, dst, brw_math_function(inst->opcode), src0, src1);
+}
+
+void
 fs_visitor::generate_math1_gen6(fs_inst *inst,
 			        struct brw_reg dst,
 			        struct brw_reg src0)
@@ -231,6 +256,19 @@ fs_visitor::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
    int msg_type = -1;
    int rlen = 4;
    uint32_t simd_mode = BRW_SAMPLER_SIMD_MODE_SIMD8;
+   uint32_t return_format;
+
+   switch (dst.type) {
+   case BRW_REGISTER_TYPE_D:
+      return_format = BRW_SAMPLER_RETURN_FORMAT_SINT32;
+      break;
+   case BRW_REGISTER_TYPE_UD:
+      return_format = BRW_SAMPLER_RETURN_FORMAT_UINT32;
+      break;
+   default:
+      return_format = BRW_SAMPLER_RETURN_FORMAT_FLOAT32;
+      break;
+   }
 
    if (c->dispatch_width == 16)
       simd_mode = BRW_SAMPLER_SIMD_MODE_SIMD16;
@@ -344,7 +382,8 @@ fs_visitor::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
 	      rlen,
 	      inst->mlen,
 	      inst->header_present,
-	      simd_mode);
+	      simd_mode,
+	      return_format);
 }
 
 
@@ -534,6 +573,23 @@ fs_visitor::generate_pull_constant_load(fs_inst *inst, struct brw_reg dst)
    }
 }
 
+static uint32_t brw_file_from_reg(fs_reg *reg)
+{
+   switch (reg->file) {
+   case ARF:
+      return BRW_ARCHITECTURE_REGISTER_FILE;
+   case GRF:
+      return BRW_GENERAL_REGISTER_FILE;
+   case MRF:
+      return BRW_MESSAGE_REGISTER_FILE;
+   case IMM:
+      return BRW_IMMEDIATE_VALUE;
+   default:
+      assert(!"not reached");
+      return BRW_GENERAL_REGISTER_FILE;
+   }
+}
+
 static struct brw_reg
 brw_reg_from_fs_reg(fs_reg *reg)
 {
@@ -544,9 +600,9 @@ brw_reg_from_fs_reg(fs_reg *reg)
    case ARF:
    case MRF:
       if (reg->smear == -1) {
-	 brw_reg = brw_vec8_reg(reg->file, reg->reg, 0);
+	 brw_reg = brw_vec8_reg(brw_file_from_reg(reg), reg->reg, 0);
       } else {
-	 brw_reg = brw_vec1_reg(reg->file, reg->reg, reg->smear);
+	 brw_reg = brw_vec1_reg(brw_file_from_reg(reg), reg->reg, reg->smear);
       }
       brw_reg = retype(brw_reg, reg->type);
       if (reg->sechalf)
@@ -797,7 +853,9 @@ fs_visitor::generate_code()
       case SHADER_OPCODE_LOG2:
       case SHADER_OPCODE_SIN:
       case SHADER_OPCODE_COS:
-	 if (intel->gen >= 6) {
+	 if (intel->gen >= 7) {
+	    generate_math1_gen7(inst, dst, src[0]);
+	 } else if (intel->gen == 6) {
 	    generate_math1_gen6(inst, dst, src[0]);
 	 } else {
 	    generate_math_gen4(inst, dst, src[0]);
@@ -806,7 +864,9 @@ fs_visitor::generate_code()
       case SHADER_OPCODE_INT_QUOTIENT:
       case SHADER_OPCODE_INT_REMAINDER:
       case SHADER_OPCODE_POW:
-	 if (intel->gen >= 6) {
+	 if (intel->gen >= 7) {
+	    generate_math2_gen7(inst, dst, src[0], src[1]);
+	 } else if (intel->gen == 6) {
 	    generate_math2_gen6(inst, dst, src[0], src[1]);
 	 } else {
 	    generate_math_gen4(inst, dst, src[0]);

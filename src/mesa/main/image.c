@@ -39,25 +39,6 @@
 #include "mtypes.h"
 
 
-/**
- * NOTE:
- * Normally, BYTE_TO_FLOAT(0) returns 0.00392  That causes problems when
- * we later convert the float to a packed integer value (such as for
- * GL_RGB5_A1) because we'll wind up with a non-zero value.
- *
- * We redefine the macros here so zero is handled correctly.
- */
-#undef BYTE_TO_FLOAT
-#define BYTE_TO_FLOAT(B)    ((B) == 0 ? 0.0F : ((2.0F * (B) + 1.0F) * (1.0F/255.0F)))
-
-#undef SHORT_TO_FLOAT
-#define SHORT_TO_FLOAT(S)   ((S) == 0 ? 0.0F : ((2.0F * (S) + 1.0F) * (1.0F/65535.0F)))
-
-
-
-/** Compute ceiling of integer quotient of A divided by B. */
-#define CEILING( A, B )  ( (A) % (B) == 0 ? (A)/(B) : (A)/(B)+1 )
-
 
 /**
  * \return GL_TRUE if type is packed pixel type, GL_FALSE otherwise.
@@ -195,38 +176,24 @@ _mesa_sizeof_packed_type( GLenum type )
       case GL_FLOAT:
 	 return sizeof(GLfloat);
       case GL_UNSIGNED_BYTE_3_3_2:
-         return sizeof(GLubyte);
       case GL_UNSIGNED_BYTE_2_3_3_REV:
-         return sizeof(GLubyte);
       case MESA_UNSIGNED_BYTE_4_4:
          return sizeof(GLubyte);
       case GL_UNSIGNED_SHORT_5_6_5:
-         return sizeof(GLushort);
       case GL_UNSIGNED_SHORT_5_6_5_REV:
-         return sizeof(GLushort);
       case GL_UNSIGNED_SHORT_4_4_4_4:
-         return sizeof(GLushort);
       case GL_UNSIGNED_SHORT_4_4_4_4_REV:
-         return sizeof(GLushort);
       case GL_UNSIGNED_SHORT_5_5_5_1:
-         return sizeof(GLushort);
       case GL_UNSIGNED_SHORT_1_5_5_5_REV:
-         return sizeof(GLushort);
-      case GL_UNSIGNED_INT_8_8_8_8:
-         return sizeof(GLuint);
-      case GL_UNSIGNED_INT_8_8_8_8_REV:
-         return sizeof(GLuint);
-      case GL_UNSIGNED_INT_10_10_10_2:
-         return sizeof(GLuint);
-      case GL_UNSIGNED_INT_2_10_10_10_REV:
-         return sizeof(GLuint);
       case GL_UNSIGNED_SHORT_8_8_MESA:
       case GL_UNSIGNED_SHORT_8_8_REV_MESA:
-         return sizeof(GLushort);      
+         return sizeof(GLushort);
+      case GL_UNSIGNED_INT_8_8_8_8:
+      case GL_UNSIGNED_INT_8_8_8_8_REV:
+      case GL_UNSIGNED_INT_10_10_10_2:
+      case GL_UNSIGNED_INT_2_10_10_10_REV:
       case GL_UNSIGNED_INT_24_8_EXT:
-         return sizeof(GLuint);
       case GL_UNSIGNED_INT_5_9_9_9_REV:
-         return sizeof(GLuint);
       case GL_UNSIGNED_INT_10F_11F_11F_REV:
          return sizeof(GLuint);
       case GL_FLOAT_32_UNSIGNED_INT_24_8_REV:
@@ -263,29 +230,29 @@ _mesa_components_in_format( GLenum format )
       case GL_LUMINANCE_INTEGER_EXT:
       case GL_INTENSITY:
          return 1;
+
       case GL_LUMINANCE_ALPHA:
       case GL_LUMINANCE_ALPHA_INTEGER_EXT:
       case GL_RG:
-	 return 2;
-      case GL_RGB:
-      case GL_RGB_INTEGER_EXT:
-	 return 3;
-      case GL_RGBA:
-      case GL_RGBA_INTEGER_EXT:
-	 return 4;
-      case GL_BGR:
-	 return 3;
-      case GL_BGRA:
-	 return 4;
-      case GL_ABGR_EXT:
-         return 4;
       case GL_YCBCR_MESA:
-         return 2;
       case GL_DEPTH_STENCIL_EXT:
-         return 2;
       case GL_DUDV_ATI:
       case GL_DU8DV8_ATI:
-         return 2;
+	 return 2;
+
+      case GL_RGB:
+      case GL_BGR:
+      case GL_RGB_INTEGER_EXT:
+      case GL_BGR_INTEGER_EXT:
+	 return 3;
+
+      case GL_RGBA:
+      case GL_BGRA:
+      case GL_ABGR_EXT:
+      case GL_RGBA_INTEGER_EXT:
+      case GL_BGRA_INTEGER_EXT:
+         return 4;
+
       default:
          return -1;
    }
@@ -580,11 +547,12 @@ _mesa_is_legal_format_and_type(const struct gl_context *ctx,
             case GL_UNSIGNED_SHORT:
             case GL_INT:
             case GL_UNSIGNED_INT:
+               return ctx->Extensions.EXT_texture_integer;
             case GL_UNSIGNED_BYTE_3_3_2:
             case GL_UNSIGNED_BYTE_2_3_3_REV:
             case GL_UNSIGNED_SHORT_5_6_5:
             case GL_UNSIGNED_SHORT_5_6_5_REV:
-               return ctx->Extensions.EXT_texture_integer;
+               return ctx->Extensions.ARB_texture_rgb10_a2ui;
             default:
                return GL_FALSE;
          }
@@ -612,6 +580,7 @@ _mesa_is_legal_format_and_type(const struct gl_context *ctx,
             case GL_UNSIGNED_SHORT:
             case GL_INT:
             case GL_UNSIGNED_INT:
+               return ctx->Extensions.EXT_texture_integer;
             case GL_UNSIGNED_SHORT_4_4_4_4:
             case GL_UNSIGNED_SHORT_4_4_4_4_REV:
             case GL_UNSIGNED_SHORT_5_5_5_1:
@@ -620,7 +589,7 @@ _mesa_is_legal_format_and_type(const struct gl_context *ctx,
             case GL_UNSIGNED_INT_8_8_8_8_REV:
             case GL_UNSIGNED_INT_10_10_10_2:
             case GL_UNSIGNED_INT_2_10_10_10_REV:
-               return ctx->Extensions.EXT_texture_integer;
+               return ctx->Extensions.ARB_texture_rgb10_a2ui;
             default:
                return GL_FALSE;
          }
@@ -847,6 +816,7 @@ _mesa_is_color_format(GLenum format)
       case GL_INTENSITY16_SNORM:
       case GL_RGB9_E5:
       case GL_R11F_G11F_B10F:
+      case GL_RGB10_A2UI:
          return GL_TRUE;
       case GL_YCBCR_MESA:  /* not considered to be RGB */
          /* fall-through */
@@ -883,7 +853,6 @@ _mesa_is_stencil_format(GLenum format)
 {
    switch (format) {
       case GL_STENCIL_INDEX:
-      case GL_DEPTH_STENCIL:
          return GL_TRUE;
       default:
          return GL_FALSE;
@@ -987,40 +956,53 @@ _mesa_is_integer_format(GLenum format)
    /* specific integer formats */
    case GL_RGBA32UI_EXT:
    case GL_RGB32UI_EXT:
+   case GL_RG32UI:
+   case GL_R32UI:
    case GL_ALPHA32UI_EXT:
    case GL_INTENSITY32UI_EXT:
    case GL_LUMINANCE32UI_EXT:
    case GL_LUMINANCE_ALPHA32UI_EXT:
    case GL_RGBA16UI_EXT:
    case GL_RGB16UI_EXT:
+   case GL_RG16UI:
+   case GL_R16UI:
    case GL_ALPHA16UI_EXT:
    case GL_INTENSITY16UI_EXT:
    case GL_LUMINANCE16UI_EXT:
    case GL_LUMINANCE_ALPHA16UI_EXT:
    case GL_RGBA8UI_EXT:
    case GL_RGB8UI_EXT:
+   case GL_RG8UI:
+   case GL_R8UI:
    case GL_ALPHA8UI_EXT:
    case GL_INTENSITY8UI_EXT:
    case GL_LUMINANCE8UI_EXT:
    case GL_LUMINANCE_ALPHA8UI_EXT:
    case GL_RGBA32I_EXT:
    case GL_RGB32I_EXT:
+   case GL_RG32I:
+   case GL_R32I:
    case GL_ALPHA32I_EXT:
    case GL_INTENSITY32I_EXT:
    case GL_LUMINANCE32I_EXT:
    case GL_LUMINANCE_ALPHA32I_EXT:
    case GL_RGBA16I_EXT:
    case GL_RGB16I_EXT:
+   case GL_RG16I:
+   case GL_R16I:
    case GL_ALPHA16I_EXT:
    case GL_INTENSITY16I_EXT:
    case GL_LUMINANCE16I_EXT:
    case GL_LUMINANCE_ALPHA16I_EXT:
    case GL_RGBA8I_EXT:
    case GL_RGB8I_EXT:
+   case GL_RG8I:
+   case GL_R8I:
    case GL_ALPHA8I_EXT:
    case GL_INTENSITY8I_EXT:
    case GL_LUMINANCE8I_EXT:
    case GL_LUMINANCE_ALPHA8I_EXT:
+   case GL_RGB10_A2UI:
       return GL_TRUE;
    default:
       return GL_FALSE;
@@ -1084,6 +1066,93 @@ _mesa_is_compressed_format(struct gl_context *ctx, GLenum format)
    default:
       return GL_FALSE;
    }
+}
+
+
+/**
+ * Does the given base texture/renderbuffer format have the channel
+ * named by 'pname'?
+ */
+GLboolean
+_mesa_base_format_has_channel(GLenum base_format, GLenum pname)
+{
+   switch (pname) {
+   case GL_TEXTURE_RED_SIZE:
+   case GL_TEXTURE_RED_TYPE:
+   case GL_RENDERBUFFER_RED_SIZE_EXT:
+   case GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE:
+      if (base_format == GL_RED ||
+	  base_format == GL_RG ||
+	  base_format == GL_RGB ||
+	  base_format == GL_RGBA) {
+	 return GL_TRUE;
+      }
+      return GL_FALSE;
+   case GL_TEXTURE_GREEN_SIZE:
+   case GL_TEXTURE_GREEN_TYPE:
+   case GL_RENDERBUFFER_GREEN_SIZE_EXT:
+   case GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE:
+      if (base_format == GL_RG ||
+	  base_format == GL_RGB ||
+	  base_format == GL_RGBA) {
+	 return GL_TRUE;
+      }
+      return GL_FALSE;
+   case GL_TEXTURE_BLUE_SIZE:
+   case GL_TEXTURE_BLUE_TYPE:
+   case GL_RENDERBUFFER_BLUE_SIZE_EXT:
+   case GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE:
+      if (base_format == GL_RGB ||
+	  base_format == GL_RGBA) {
+	 return GL_TRUE;
+      }
+      return GL_FALSE;
+   case GL_TEXTURE_ALPHA_SIZE:
+   case GL_TEXTURE_ALPHA_TYPE:
+   case GL_RENDERBUFFER_ALPHA_SIZE_EXT:
+   case GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE:
+      if (base_format == GL_RGBA ||
+	  base_format == GL_ALPHA ||
+	  base_format == GL_LUMINANCE_ALPHA) {
+	 return GL_TRUE;
+      }
+      return GL_FALSE;
+   case GL_TEXTURE_LUMINANCE_SIZE:
+   case GL_TEXTURE_LUMINANCE_TYPE:
+      if (base_format == GL_LUMINANCE ||
+	  base_format == GL_LUMINANCE_ALPHA) {
+	 return GL_TRUE;
+      }
+      return GL_FALSE;
+   case GL_TEXTURE_INTENSITY_SIZE:
+   case GL_TEXTURE_INTENSITY_TYPE:
+      if (base_format == GL_INTENSITY) {
+	 return GL_TRUE;
+      }
+      return GL_FALSE;
+   case GL_TEXTURE_DEPTH_SIZE:
+   case GL_TEXTURE_DEPTH_TYPE:
+   case GL_RENDERBUFFER_DEPTH_SIZE_EXT:
+   case GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE:
+      if (base_format == GL_DEPTH_STENCIL ||
+	  base_format == GL_DEPTH_COMPONENT) {
+	 return GL_TRUE;
+      }
+      return GL_FALSE;
+   case GL_RENDERBUFFER_STENCIL_SIZE_EXT:
+   case GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE:
+      if (base_format == GL_DEPTH_STENCIL ||
+	  base_format == GL_STENCIL_INDEX) {
+	 return GL_TRUE;
+      }
+      return GL_FALSE;
+   default:
+      _mesa_warning(NULL, "%s: Unexpected channel token 0x%x\n",
+		    __FUNCTION__, pname);
+      return GL_FALSE;
+   }
+
+   return GL_FALSE;
 }
 
 

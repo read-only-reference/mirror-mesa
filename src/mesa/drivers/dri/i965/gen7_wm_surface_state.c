@@ -68,7 +68,7 @@ gen7_update_texture_surface(struct gl_context *ctx, GLuint unit)
    intel_miptree_get_dimensions_for_image(firstImage, &width, &height, &depth);
 
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-			  sizeof(*surf), 32, &brw->wm.surf_offset[surf_index]);
+			  sizeof(*surf), 32, &brw->bind.surf_offset[surf_index]);
    memset(surf, 0, sizeof(*surf));
 
    surf->ss0.surface_type = translate_tex_target(tObj->Target);
@@ -118,7 +118,7 @@ gen7_update_texture_surface(struct gl_context *ctx, GLuint unit)
 
    /* Emit relocation to surface contents */
    drm_intel_bo_emit_reloc(brw->intel.batch.bo,
-			   brw->wm.surf_offset[surf_index] +
+			   brw->bind.surf_offset[surf_index] +
 			   offsetof(struct gen7_surface_state, ss1),
 			   intelObj->mt->region->bo, 0,
 			   I915_GEM_DOMAIN_SAMPLER, 0);
@@ -166,55 +166,13 @@ gen7_create_constant_surface(struct brw_context *brw,
 			   I915_GEM_DOMAIN_SAMPLER, 0);
 }
 
-/**
- * Updates surface / buffer for fragment shader constant buffer, if
- * one is required.
- *
- * This consumes the state updates for the constant buffer, and produces
- * BRW_NEW_WM_SURFACES to get picked up by brw_prepare_wm_surfaces for
- * inclusion in the binding table.
- */
-static void upload_wm_constant_surface(struct brw_context *brw)
-{
-   GLuint surf = SURF_INDEX_FRAG_CONST_BUFFER;
-   struct brw_fragment_program *fp =
-      (struct brw_fragment_program *) brw->fragment_program;
-   const struct gl_program_parameter_list *params =
-      fp->program.Base.Parameters;
-
-   /* If there's no constant buffer, then no surface BO is needed to point at
-    * it.
-    */
-   if (brw->wm.const_bo == 0) {
-      if (brw->wm.surf_offset[surf]) {
-	 brw->state.dirty.brw |= BRW_NEW_WM_SURFACES;
-	 brw->wm.surf_offset[surf] = 0;
-      }
-      return;
-   }
-
-   gen7_create_constant_surface(brw, brw->wm.const_bo, params->NumParameters,
-			        &brw->wm.surf_offset[surf]);
-   brw->state.dirty.brw |= BRW_NEW_WM_SURFACES;
-}
-
-const struct brw_tracked_state gen7_wm_constant_surface = {
-   .dirty = {
-      .mesa = 0,
-      .brw = (BRW_NEW_WM_CONSTBUF |
-	      BRW_NEW_BATCH),
-      .cache = 0
-   },
-   .emit = upload_wm_constant_surface,
-};
-
 static void
 gen7_update_null_renderbuffer_surface(struct brw_context *brw, unsigned unit)
 {
    struct gen7_surface_state *surf;
 
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-			  sizeof(*surf), 32, &brw->wm.surf_offset[unit]);
+			  sizeof(*surf), 32, &brw->bind.surf_offset[unit]);
    memset(surf, 0, sizeof(*surf));
 
    surf->ss0.surface_type = BRW_SURFACE_NULL;
@@ -234,33 +192,15 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
    struct intel_context *intel = &brw->intel;
    struct gl_context *ctx = &intel->ctx;
    struct intel_renderbuffer *irb = intel_renderbuffer(rb);
-   struct intel_region *region = irb->region;
+   struct intel_region *region = irb->mt->region;
    struct gen7_surface_state *surf;
    uint32_t tile_x, tile_y;
 
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-			  sizeof(*surf), 32, &brw->wm.surf_offset[unit]);
+			  sizeof(*surf), 32, &brw->bind.surf_offset[unit]);
    memset(surf, 0, sizeof(*surf));
 
    switch (irb->Base.Format) {
-   case MESA_FORMAT_XRGB8888:
-      /* XRGB is handled as ARGB because the chips in this family
-       * cannot render to XRGB targets.  This means that we have to
-       * mask writes to alpha (ala glColorMask) and reconfigure the
-       * alpha blending hardware to use GL_ONE (or GL_ZERO) for
-       * cases where GL_DST_ALPHA (or GL_ONE_MINUS_DST_ALPHA) is
-       * used.
-       */
-      surf->ss0.surface_format = BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
-      break;
-   case MESA_FORMAT_INTENSITY_FLOAT32:
-   case MESA_FORMAT_LUMINANCE_FLOAT32:
-      /* For these formats, we just need to read/write the first
-       * channel into R, which is to say that we just treat them as
-       * GL_RED.
-       */
-      surf->ss0.surface_format = BRW_SURFACEFORMAT_R32_FLOAT;
-      break;
    case MESA_FORMAT_SARGB8:
       /* without GL_EXT_framebuffer_sRGB we shouldn't bind sRGB
 	 surfaces to the blend/update as sRGB */
@@ -270,8 +210,13 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
 	 surf->ss0.surface_format = BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
       break;
    default:
-      assert(brw_render_target_supported(irb->Base.Format));
-      surf->ss0.surface_format = brw_format_for_mesa_format(irb->Base.Format);
+      assert(brw_render_target_supported(intel, irb->Base.Format));
+      surf->ss0.surface_format = brw->render_target_format[irb->Base.Format];
+      if (unlikely(!brw->format_supported_as_render_target[irb->Base.Format])) {
+	 _mesa_problem(ctx, "%s: renderbuffer format %s unsupported\n",
+		       __FUNCTION__, _mesa_get_format_name(irb->Base.Format));
+      }
+       break;
    }
 
    surf->ss0.surface_type = BRW_SURFACE_2D;
@@ -294,7 +239,7 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
    surf->ss3.pitch = (region->pitch * region->cpp) - 1;
 
    drm_intel_bo_emit_reloc(brw->intel.batch.bo,
-			   brw->wm.surf_offset[unit] +
+			   brw->bind.surf_offset[unit] +
 			   offsetof(struct gen7_surface_state, ss1),
 			   region->bo,
 			   surf->ss1.base_addr - region->bo->offset,
@@ -302,69 +247,14 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
 			   I915_GEM_DOMAIN_RENDER);
 }
 
-/**
- * Constructs the set of surface state objects pointed to by the
- * binding table.
- */
-static void
-gen7_upload_wm_surfaces(struct brw_context *brw)
+void
+gen7_init_vtable_surface_functions(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->intel.ctx;
-   GLuint i;
-   int nr_surfaces = 0;
+   struct intel_context *intel = &brw->intel;
 
-   /* _NEW_BUFFERS | _NEW_COLOR */
-   /* Update surfaces for drawing buffers */
-   if (ctx->DrawBuffer->_NumColorDrawBuffers >= 1) {
-      for (i = 0; i < ctx->DrawBuffer->_NumColorDrawBuffers; i++) {
-	 if (intel_renderbuffer(ctx->DrawBuffer->_ColorDrawBuffers[i])) {
-	    gen7_update_renderbuffer_surface(brw,
-	       ctx->DrawBuffer->_ColorDrawBuffers[i], i);
-	 } else {
-	    gen7_update_null_renderbuffer_surface(brw, i);
-	 }
-      }
-      nr_surfaces = SURF_INDEX_DRAW(ctx->DrawBuffer->_NumColorDrawBuffers);
-   } else {
-      gen7_update_null_renderbuffer_surface(brw, 0);
-      nr_surfaces = SURF_INDEX_DRAW(0) + 1;
-   }
-
-   /* BRW_NEW_WM_CONSTBUF */
-   if (brw->wm.const_bo) {
-      nr_surfaces = SURF_INDEX_FRAG_CONST_BUFFER + 1;
-   }
-
-   /* Update surfaces for textures */
-   for (i = 0; i < BRW_MAX_TEX_UNIT; i++) {
-      const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[i];
-      const GLuint surf = SURF_INDEX_TEXTURE(i);
-
-      /* _NEW_TEXTURE */
-      if (texUnit->_ReallyEnabled) {
-	 gen7_update_texture_surface(ctx, i);
-	 nr_surfaces = SURF_INDEX_TEXTURE(i) + 1;
-      } else {
-         brw->wm.surf_offset[surf] = 0;
-      }
-   }
-
-   if (brw->wm.nr_surfaces != nr_surfaces) {
-      brw->wm.nr_surfaces = nr_surfaces;
-      brw->state.dirty.brw |= BRW_NEW_NR_WM_SURFACES;
-   }
-
-   brw->state.dirty.brw |= BRW_NEW_WM_SURFACES;
+   intel->vtbl.update_texture_surface = gen7_update_texture_surface;
+   intel->vtbl.update_renderbuffer_surface = gen7_update_renderbuffer_surface;
+   intel->vtbl.update_null_renderbuffer_surface =
+      gen7_update_null_renderbuffer_surface;
+   intel->vtbl.create_constant_surface = gen7_create_constant_surface;
 }
-
-const struct brw_tracked_state gen7_wm_surfaces = {
-   .dirty = {
-      .mesa = (_NEW_COLOR |
-               _NEW_TEXTURE |
-               _NEW_BUFFERS),
-      .brw = (BRW_NEW_BATCH |
-	      BRW_NEW_WM_CONSTBUF),
-      .cache = 0
-   },
-   .emit = gen7_upload_wm_surfaces,
-};

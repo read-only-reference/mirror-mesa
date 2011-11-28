@@ -35,7 +35,7 @@ int
 vec4_visitor::setup_attributes(int payload_reg)
 {
    int nr_attributes;
-   int attribute_map[VERT_ATTRIB_MAX];
+   int attribute_map[VERT_ATTRIB_MAX + 1];
 
    nr_attributes = 0;
    for (int i = 0; i < VERT_ATTRIB_MAX; i++) {
@@ -43,6 +43,15 @@ vec4_visitor::setup_attributes(int payload_reg)
 	 attribute_map[i] = payload_reg + nr_attributes;
 	 nr_attributes++;
       }
+   }
+
+   /* VertexID is stored by the VF as the last vertex element, but we
+    * don't represent it with a flag in inputs_read, so we call it
+    * VERT_ATTRIB_MAX.
+    */
+   if (prog_data->uses_vertexid) {
+      attribute_map[VERT_ATTRIB_MAX] = payload_reg + nr_attributes;
+      nr_attributes++;
    }
 
    foreach_list(node, &this->instructions) {
@@ -67,6 +76,7 @@ vec4_visitor::setup_attributes(int payload_reg)
 
 	 struct brw_reg reg = brw_vec8_grf(grf, 0);
 	 reg.dw1.bits.swizzle = inst->src[i].swizzle;
+         reg.type = inst->src[i].type;
 	 if (inst->src[i].abs)
 	    reg = brw_abs(reg);
 	 if (inst->src[i].negate)
@@ -279,6 +289,18 @@ vec4_visitor::generate_math1_gen6(vec4_instruction *inst,
 	    BRW_MATH_DATA_SCALAR,
 	    BRW_MATH_PRECISION_FULL);
    brw_set_access_mode(p, BRW_ALIGN_16);
+}
+
+void
+vec4_visitor::generate_math2_gen7(vec4_instruction *inst,
+				  struct brw_reg dst,
+				  struct brw_reg src0,
+				  struct brw_reg src1)
+{
+   brw_math2(p,
+	     dst,
+	     brw_math_function(inst->opcode),
+	     src0, src1);
 }
 
 void
@@ -551,9 +573,10 @@ vec4_visitor::generate_vs_instruction(vec4_instruction *instruction,
    case SHADER_OPCODE_LOG2:
    case SHADER_OPCODE_SIN:
    case SHADER_OPCODE_COS:
-      if (intel->gen >= 6) {
+      if (intel->gen == 6) {
 	 generate_math1_gen6(inst, dst, src[0]);
       } else {
+	 /* Also works for Gen7. */
 	 generate_math1_gen4(inst, dst, src[0]);
       }
       break;
@@ -561,7 +584,9 @@ vec4_visitor::generate_vs_instruction(vec4_instruction *instruction,
    case SHADER_OPCODE_POW:
    case SHADER_OPCODE_INT_QUOTIENT:
    case SHADER_OPCODE_INT_REMAINDER:
-      if (intel->gen >= 6) {
+      if (intel->gen >= 7) {
+	 generate_math2_gen7(inst, dst, src[0], src[1]);
+      } else if (intel->gen == 6) {
 	 generate_math2_gen6(inst, dst, src[0], src[1]);
       } else {
 	 generate_math2_gen4(inst, dst, src[0], src[1]);

@@ -122,11 +122,25 @@ void r600_flush(struct pipe_context *ctx, struct pipe_fence_handle **fence,
 {
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
 	struct r600_fence **rfence = (struct r600_fence**)fence;
+	struct pipe_query *render_cond = NULL;
+	unsigned render_cond_mode = 0;
 
 	if (rfence)
 		*rfence = r600_create_fence(rctx);
 
+	/* Disable render condition. */
+	if (rctx->current_render_cond) {
+		render_cond = rctx->current_render_cond;
+		render_cond_mode = rctx->current_render_cond_mode;
+		ctx->render_condition(ctx, NULL, 0);
+	}
+
 	r600_context_flush(&rctx->ctx, flags);
+
+	/* Re-enable render condition. */
+	if (render_cond) {
+		ctx->render_condition(ctx, render_cond, render_cond_mode);
+	}
 }
 
 static void r600_flush_from_st(struct pipe_context *ctx,
@@ -258,6 +272,8 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		return NULL;
 	}
 
+	rctx->ctx.pipe = &rctx->context;
+	rctx->ctx.flush = r600_flush_from_winsys;
 	rctx->ws->cs_set_flush_callback(rctx->ctx.cs, r600_flush_from_winsys, rctx);
 
 	util_slab_create(&rctx->pool_transfers,
@@ -341,7 +357,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	/* Supported features (boolean caps). */
 	case PIPE_CAP_NPOT_TEXTURES:
 	case PIPE_CAP_TWO_SIDED_STENCIL:
-	case PIPE_CAP_GLSL:
 	case PIPE_CAP_DUAL_SOURCE_BLEND:
 	case PIPE_CAP_ANISOTROPIC_FILTER:
 	case PIPE_CAP_POINT_SPRITE:
@@ -380,6 +395,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_INSTANCEID:
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
+	case PIPE_CAP_SCALED_RESOLVE:
 		return 0;
 
 	/* Texturing. */
@@ -410,35 +426,36 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_MAX_TEXEL_OFFSET:
 		return 7;
-
-	default:
-		R600_ERR("r600: unknown param %d\n", param);
-		return 0;
 	}
+	return 0;
 }
 
-static float r600_get_paramf(struct pipe_screen* pscreen, enum pipe_cap param)
+static float r600_get_paramf(struct pipe_screen* pscreen,
+			     enum pipe_capf param)
 {
 	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
 	enum radeon_family family = rscreen->family;
 
 	switch (param) {
-	case PIPE_CAP_MAX_LINE_WIDTH:
-	case PIPE_CAP_MAX_LINE_WIDTH_AA:
-	case PIPE_CAP_MAX_POINT_WIDTH:
-	case PIPE_CAP_MAX_POINT_WIDTH_AA:
+	case PIPE_CAPF_MAX_LINE_WIDTH:
+	case PIPE_CAPF_MAX_LINE_WIDTH_AA:
+	case PIPE_CAPF_MAX_POINT_WIDTH:
+	case PIPE_CAPF_MAX_POINT_WIDTH_AA:
 		if (family >= CHIP_CEDAR)
 			return 16384.0f;
 		else
 			return 8192.0f;
-	case PIPE_CAP_MAX_TEXTURE_ANISOTROPY:
+	case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
 		return 16.0f;
-	case PIPE_CAP_MAX_TEXTURE_LOD_BIAS:
+	case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
 		return 16.0f;
-	default:
-		R600_ERR("r600: unsupported paramf %d\n", param);
+	case PIPE_CAPF_GUARD_BAND_LEFT:
+	case PIPE_CAPF_GUARD_BAND_TOP:
+	case PIPE_CAPF_GUARD_BAND_RIGHT:
+	case PIPE_CAPF_GUARD_BAND_BOTTOM:
 		return 0.0f;
 	}
+	return 0.0f;
 }
 
 static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enum pipe_shader_cap param)
@@ -497,9 +514,10 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		return 0;
 	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
 		return 16;
-	default:
-		return 0;
+	case PIPE_SHADER_CAP_OUTPUT_READ:
+		return 1;
 	}
+	return 0;
 }
 
 static int r600_get_video_param(struct pipe_screen *screen,

@@ -34,8 +34,6 @@
 #include "r600_pipe.h"
 #include "r600d.h"
 
-static void r600_spi_update(struct r600_pipe_context *rctx);
-
 static bool r600_conv_pipe_prim(unsigned pprim, unsigned *prim)
 {
 	static const int prim_conv[] = {
@@ -103,8 +101,9 @@ void r600_bind_rs_state(struct pipe_context *ctx, void *state)
 
 	rctx->clamp_vertex_color = rs->clamp_vertex_color;
 	rctx->clamp_fragment_color = rs->clamp_fragment_color;
-	rctx->flatshade = rs->flatshade;
+
 	rctx->sprite_coord_enable = rs->sprite_coord_enable;
+
 	rctx->rasterizer = rs;
 
 	rctx->states[rs->rstate.id] = &rs->rstate;
@@ -115,8 +114,6 @@ void r600_bind_rs_state(struct pipe_context *ctx, void *state)
 	} else {
 		r600_polygon_offset_update(rctx);
 	}
-	if (rctx->ps_shader && rctx->vs_shader)
-		rctx->spi_dirty = true;
 }
 
 void r600_delete_rs_state(struct pipe_context *ctx, void *state)
@@ -193,15 +190,7 @@ void r600_set_index_buffer(struct pipe_context *ctx,
 {
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
 
-	if (ib) {
-		pipe_resource_reference(&rctx->index_buffer.buffer, ib->buffer);
-		memcpy(&rctx->index_buffer, ib, sizeof(rctx->index_buffer));
-	} else {
-		pipe_resource_reference(&rctx->index_buffer.buffer, NULL);
-		memset(&rctx->index_buffer, 0, sizeof(rctx->index_buffer));
-	}
-
-	/* TODO make this more like a state */
+	u_vbuf_set_index_buffer(rctx->vbuf_mgr, ib);
 }
 
 void r600_set_vertex_buffers(struct pipe_context *ctx, unsigned count,
@@ -280,7 +269,6 @@ void r600_bind_ps_shader(struct pipe_context *ctx, void *state)
 		r600_context_pipe_state_set(&rctx->ctx, &rctx->ps_shader->rstate);
 	}
 	if (rctx->ps_shader && rctx->vs_shader) {
-		rctx->spi_dirty = true;
 		r600_adjust_gprs(rctx);
 	}
 }
@@ -295,7 +283,6 @@ void r600_bind_vs_shader(struct pipe_context *ctx, void *state)
 		r600_context_pipe_state_set(&rctx->ctx, &rctx->vs_shader->rstate);
 	}
 	if (rctx->ps_shader && rctx->vs_shader) {
-		rctx->spi_dirty = true;
 		r600_adjust_gprs(rctx);
 	}
 }
@@ -341,66 +328,6 @@ static void r600_update_alpha_ref(struct r600_pipe_context *rctx)
 
 	r600_context_pipe_state_set(&rctx->ctx, &rstate);
 	rctx->alpha_ref_dirty = false;
-}
-
-/* FIXME optimize away spi update when it's not needed */
-static void r600_spi_block_init(struct r600_pipe_context *rctx, struct r600_pipe_state *rstate)
-{
-	int i;
-	rstate->nregs = 0;
-	rstate->id = R600_PIPE_STATE_SPI;
-	for (i = 0; i < 32; i++) {
-		r600_pipe_state_add_reg(rstate, R_028644_SPI_PS_INPUT_CNTL_0 + i * 4, 0, 0xFFFFFFFF, NULL, 0);
-	}
-}
-
-static void r600_spi_update(struct r600_pipe_context *rctx)
-{
-	struct r600_pipe_shader *shader = rctx->ps_shader;
-	struct r600_pipe_state *rstate = &rctx->spi;
-	struct r600_shader *rshader = &shader->shader;
-	unsigned i, tmp, sid;
-
-	if (rctx->spi.id == 0)
-		r600_spi_block_init(rctx, &rctx->spi);
-
-	rstate->nregs = 0;
-	for (i = 0; i < rshader->ninput; i++) {
-		if (rshader->input[i].name == TGSI_SEMANTIC_POSITION ||
-		    rshader->input[i].name == TGSI_SEMANTIC_FACE)
-			if (rctx->chip_class >= EVERGREEN)
-				continue;
-			else
-				sid=0;
-		else
-			sid=r600_find_vs_semantic_index(&rctx->vs_shader->shader, rshader, i);
-
-		tmp = S_028644_SEMANTIC(sid);
-
-		if (rshader->input[i].name == TGSI_SEMANTIC_COLOR ||
-		    rshader->input[i].name == TGSI_SEMANTIC_BCOLOR ||
-		    rshader->input[i].name == TGSI_SEMANTIC_POSITION) {
-			tmp |= S_028644_FLAT_SHADE(rctx->flatshade);
-		}
-
-		if (rshader->input[i].name == TGSI_SEMANTIC_GENERIC &&
-		    rctx->sprite_coord_enable & (1 << rshader->input[i].sid)) {
-			tmp |= S_028644_PT_SPRITE_TEX(1);
-		}
-
-		if (rctx->chip_class < EVERGREEN) {
-			if (rshader->input[i].centroid)
-				tmp |= S_028644_SEL_CENTROID(1);
-
-			if (rshader->input[i].interpolate == TGSI_INTERPOLATE_LINEAR)
-				tmp |= S_028644_SEL_LINEAR(1);
-		}
-
-		r600_pipe_state_mod_reg(rstate, tmp);
-	}
-
-	rctx->spi_dirty = false;
-	r600_context_pipe_state_set(&rctx->ctx, rstate);
 }
 
 void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint index,
@@ -555,6 +482,8 @@ static int r600_shader_rebuild(struct pipe_context * ctx, struct r600_pipe_shade
 
 static void r600_update_derived_state(struct r600_pipe_context *rctx)
 {
+	struct pipe_context * ctx = (struct pipe_context*)rctx;
+
 	if (!rctx->blitter->running) {
 		if (rctx->have_depth_fb || rctx->have_depth_texture)
 			r600_flush_depth_textures(rctx);
@@ -574,13 +503,21 @@ static void r600_update_derived_state(struct r600_pipe_context *rctx)
 		r600_shader_rebuild(&rctx->context, rctx->ps_shader);
 	}
 
-	if (rctx->spi_dirty) {
-		r600_spi_update(rctx);
-	}
-
 	if (rctx->alpha_ref_dirty) {
 		r600_update_alpha_ref(rctx);
 	}
+
+	if (rctx->ps_shader && rctx->sprite_coord_enable &&
+		(rctx->ps_shader->sprite_coord_enable != rctx->sprite_coord_enable)) {
+
+		if (rctx->chip_class >= EVERGREEN)
+			evergreen_pipe_shader_ps(ctx, rctx->ps_shader);
+		else
+			r600_pipe_shader_ps(ctx, rctx->ps_shader);
+
+		r600_context_pipe_state_set(&rctx->ctx, &rctx->ps_shader->rstate);
+	}
+
 }
 
 void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
@@ -589,10 +526,10 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
 	struct pipe_draw_info info = *dinfo;
 	struct r600_draw rdraw = {};
 	struct pipe_index_buffer ib = {};
-	unsigned prim, mask;
+	unsigned prim, mask, ls_mask = 0;
 
 	if (!info.count ||
-	    (info.indexed && !rctx->index_buffer.buffer) ||
+	    (info.indexed && !rctx->vbuf_mgr->index_buffer.buffer) ||
 	    !r600_conv_pipe_prim(info.mode, &prim)) {
 		return;
 	}
@@ -606,16 +543,10 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
 	rdraw.vgt_num_instances = info.instance_count;
 
 	if (info.indexed) {
-		/* Adjust min/max_index by the index bias. */
-		if (info.max_index != ~0) {
-			info.min_index += info.index_bias;
-			info.max_index += info.index_bias;
-		}
-
 		/* Initialize the index buffer struct. */
-		pipe_resource_reference(&ib.buffer, rctx->index_buffer.buffer);
-		ib.index_size = rctx->index_buffer.index_size;
-		ib.offset = rctx->index_buffer.offset + info.start * ib.index_size;
+		pipe_resource_reference(&ib.buffer, rctx->vbuf_mgr->index_buffer.buffer);
+		ib.index_size = rctx->vbuf_mgr->index_buffer.index_size;
+		ib.offset = rctx->vbuf_mgr->index_buffer.offset + info.start * ib.index_size;
 
 		/* Translate or upload, if needed. */
 		r600_translate_index_buffer(rctx, &ib, info.count);
@@ -647,13 +578,16 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
 		rctx->vgt.nregs = 0;
 		r600_pipe_state_add_reg(&rctx->vgt, R_008958_VGT_PRIMITIVE_TYPE, prim, 0xFFFFFFFF, NULL, 0);
 		r600_pipe_state_add_reg(&rctx->vgt, R_028238_CB_TARGET_MASK, rctx->cb_target_mask & mask, 0xFFFFFFFF, NULL, 0);
-		r600_pipe_state_add_reg(&rctx->vgt, R_028400_VGT_MAX_VTX_INDX, info.max_index, 0xFFFFFFFF, NULL, 0);
-		r600_pipe_state_add_reg(&rctx->vgt, R_028404_VGT_MIN_VTX_INDX, info.min_index, 0xFFFFFFFF, NULL, 0);
+		r600_pipe_state_add_reg(&rctx->vgt, R_028400_VGT_MAX_VTX_INDX, ~0, 0xFFFFFFFF, NULL, 0);
+		r600_pipe_state_add_reg(&rctx->vgt, R_028404_VGT_MIN_VTX_INDX, 0, 0xFFFFFFFF, NULL, 0);
 		r600_pipe_state_add_reg(&rctx->vgt, R_028408_VGT_INDX_OFFSET, info.index_bias, 0xFFFFFFFF, NULL, 0);
 		r600_pipe_state_add_reg(&rctx->vgt, R_02840C_VGT_MULTI_PRIM_IB_RESET_INDX, info.restart_index, 0xFFFFFFFF, NULL, 0);
 		r600_pipe_state_add_reg(&rctx->vgt, R_028A94_VGT_MULTI_PRIM_IB_RESET_EN, info.primitive_restart, 0xFFFFFFFF, NULL, 0);
 		r600_pipe_state_add_reg(&rctx->vgt, R_03CFF0_SQ_VTX_BASE_VTX_LOC, 0, 0xFFFFFFFF, NULL, 0);
 		r600_pipe_state_add_reg(&rctx->vgt, R_03CFF4_SQ_VTX_START_INST_LOC, info.start_instance, 0xFFFFFFFF, NULL, 0);
+		r600_pipe_state_add_reg(&rctx->vgt, R_028A0C_PA_SC_LINE_STIPPLE,
+					0,
+					S_028A0C_AUTO_RESET_CNTL(3), NULL, 0);
 		r600_pipe_state_add_reg(&rctx->vgt, R_028814_PA_SU_SC_MODE_CNTL,
 					0,
 					S_028814_PROVOKING_VTX_LAST(1), NULL, 0);
@@ -662,13 +596,20 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
 	rctx->vgt.nregs = 0;
 	r600_pipe_state_mod_reg(&rctx->vgt, prim);
 	r600_pipe_state_mod_reg(&rctx->vgt, rctx->cb_target_mask & mask);
-	r600_pipe_state_mod_reg(&rctx->vgt, info.max_index);
-	r600_pipe_state_mod_reg(&rctx->vgt, info.min_index);
+	r600_pipe_state_mod_reg(&rctx->vgt, ~0);
+	r600_pipe_state_mod_reg(&rctx->vgt, 0);
 	r600_pipe_state_mod_reg(&rctx->vgt, info.index_bias);
 	r600_pipe_state_mod_reg(&rctx->vgt, info.restart_index);
 	r600_pipe_state_mod_reg(&rctx->vgt, info.primitive_restart);
 	r600_pipe_state_mod_reg(&rctx->vgt, 0);
 	r600_pipe_state_mod_reg(&rctx->vgt, info.start_instance);
+
+	if (prim == V_008958_DI_PT_LINELIST)
+		ls_mask = 1;
+	else if (prim == V_008958_DI_PT_LINESTRIP) 
+		ls_mask = 2;
+	r600_pipe_state_mod_reg(&rctx->vgt, S_028A0C_AUTO_RESET_CNTL(ls_mask));
+
 	if (info.mode == PIPE_PRIM_QUADS || info.mode == PIPE_PRIM_QUAD_STRIP || info.mode == PIPE_PRIM_POLYGON) {
 		r600_pipe_state_mod_reg(&rctx->vgt, S_028814_PROVOKING_VTX_LAST(1));
 	}

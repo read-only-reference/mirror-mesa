@@ -23,6 +23,8 @@ def get_sampler_dim(sampler_type):
         sampler_dim = int(sampler_type[0])
     elif sampler_type.startswith("Cube"):
         sampler_dim = 3
+    elif sampler_type == "ExternalOES":
+        sampler_dim = 2
     else:
         assert False ("coord_dim: invalid sampler_type: " + sampler_type)
     return sampler_dim
@@ -148,6 +150,7 @@ def generate_texture_functions(fs):
     generate_fiu_sigs("txs", "2DArray")
     generate_sigs("", "txs", "1DShadow")
     generate_sigs("", "txs", "2DShadow")
+    generate_sigs("", "txs", "CubeShadow")
     generate_sigs("", "txs", "1DArrayShadow")
     generate_sigs("", "txs", "2DArrayShadow")
     end_function(fs, "textureSize")
@@ -311,7 +314,6 @@ def generate_texture_functions(fs):
     generate_fiu_sigs("txd", "1D", Offset)
     generate_fiu_sigs("txd", "2D", Offset)
     generate_fiu_sigs("txd", "3D", Offset)
-    generate_fiu_sigs("txd", "Cube", Offset)
     generate_fiu_sigs("txd", "1DArray", Offset)
     generate_fiu_sigs("txd", "2DArray", Offset)
     generate_sigs("", "txd", "1DShadow", Offset | Single, 1);
@@ -480,6 +482,8 @@ def generate_texture_functions(fs):
     start_function("texture2D")
     generate_sigs("", "tex", "2D")
     generate_sigs("", "txb", "2D")
+    # OES_EGL_image_external
+    generate_sigs("", "tex", "ExternalOES")
     end_function(fs, "texture2D")
 
     start_function("texture2DLod")
@@ -491,6 +495,9 @@ def generate_texture_functions(fs):
     generate_sigs("", "tex", "2D", Proj, 1)
     generate_sigs("", "txb", "2D", Proj)
     generate_sigs("", "txb", "2D", Proj, 1)
+    # OES_EGL_image_external
+    generate_sigs("", "tex", "ExternalOES", Proj)
+    generate_sigs("", "tex", "ExternalOES", Proj, 1)
     end_function(fs, "texture2DProj")
 
     start_function("texture2DProjLod")

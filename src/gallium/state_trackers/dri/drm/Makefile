@@ -20,11 +20,8 @@ C_SOURCES = \
 	dri2.c
 
 #	$(TOP)/src/mesa/drivers/dri/common/utils.c \
-	$(TOP)/src/mesa/drivers/dri/common/vblank.c \
 	$(TOP)/src/mesa/drivers/dri/common/dri_util.c \
 	$(TOP)/src/mesa/drivers/dri/common/xmlconfig.c \
-	$(TOP)/src/mesa/drivers/common/driverfuncs.c \
-	$(TOP)/src/mesa/drivers/dri/common/texmem.c \
-	$(TOP)/src/mesa/drivers/dri/common/drirenderbuffer.c
+	$(TOP)/src/mesa/drivers/common/driverfuncs.c
 
 include ../../../Makefile.template

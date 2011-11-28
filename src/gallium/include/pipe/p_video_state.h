@@ -134,6 +134,7 @@ struct pipe_mpeg12_picture_desc
    unsigned concealment_motion_vectors;
    unsigned intra_dc_precision;
    unsigned f_code[2][2];
+   unsigned num_slices;
 };
 
 struct pipe_mpeg12_quant_matrix
@@ -182,6 +183,67 @@ struct pipe_mpeg12_macroblock
 
    /* Number of skipped macroblocks after this macroblock */
    unsigned short num_skipped_macroblocks;
+};
+
+struct pipe_mpeg4_picture_desc
+{
+   struct pipe_picture_desc base;
+   int32_t trd[2];
+   int32_t trb[2];
+   uint16_t vop_time_increment_resolution;
+   uint8_t vop_coding_type;
+   uint8_t vop_fcode_forward;
+   uint8_t vop_fcode_backward;
+   uint8_t resync_marker_disable;
+   uint8_t interlaced;
+   uint8_t quant_type;
+   uint8_t quarter_sample;
+   uint8_t short_video_header;
+   uint8_t rounding_control;
+   uint8_t alternate_vertical_scan_flag;
+   uint8_t top_field_first;
+};
+
+struct pipe_mpeg4_quant_matrix
+{
+   struct pipe_quant_matrix base;
+
+   const uint8_t *intra_matrix;
+   const uint8_t *non_intra_matrix;
+};
+
+struct pipe_vc1_picture_desc
+{
+   struct pipe_picture_desc base;
+   uint32_t slice_count;
+   uint8_t picture_type;
+   uint8_t frame_coding_mode;
+   uint8_t postprocflag;
+   uint8_t pulldown;
+   uint8_t interlace;
+   uint8_t tfcntrflag;
+   uint8_t finterpflag;
+   uint8_t psf;
+   uint8_t dquant;
+   uint8_t panscan_flag;
+   uint8_t refdist_flag;
+   uint8_t quantizer;
+   uint8_t extended_mv;
+   uint8_t extended_dmv;
+   uint8_t overlap;
+   uint8_t vstransform;
+   uint8_t loopfilter;
+   uint8_t fastuvmc;
+   uint8_t range_mapy_flag;
+   uint8_t range_mapy;
+   uint8_t range_mapuv_flag;
+   uint8_t range_mapuv;
+   uint8_t multires;
+   uint8_t syncmarker;
+   uint8_t rangered;
+   uint8_t maxbframes;
+   uint8_t deblockEnable;
+   uint8_t pquant;
 };
 
 #ifdef __cplusplus

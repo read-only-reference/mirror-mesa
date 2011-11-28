@@ -295,6 +295,7 @@ EXTRA_EXT(MESA_texture_array);
 EXTRA_EXT2(EXT_secondary_color, ARB_vertex_program);
 EXTRA_EXT(EXT_secondary_color);
 EXTRA_EXT(EXT_fog_coord);
+EXTRA_EXT(NV_fog_distance);
 EXTRA_EXT(EXT_texture_filter_anisotropic);
 EXTRA_EXT(IBM_rasterpos_clip);
 EXTRA_EXT(NV_point_sprite);
@@ -331,6 +332,7 @@ EXTRA_EXT(ARB_color_buffer_float);
 EXTRA_EXT(ARB_copy_buffer);
 EXTRA_EXT(EXT_framebuffer_sRGB);
 EXTRA_EXT(ARB_texture_buffer_object);
+EXTRA_EXT(OES_EGL_image_external);
 
 static const int
 extra_ARB_vertex_program_ARB_fragment_program_NV_vertex_program[] = {
@@ -587,17 +589,17 @@ static const struct value_desc values[] = {
    { GL_TEXTURE_STACK_DEPTH, LOC_CUSTOM, TYPE_INT, 0,
      extra_valid_texture_unit  },
 
-   { GL_VERTEX_ARRAY, ARRAY_BOOL(Vertex.Enabled), NO_EXTRA },
-   { GL_VERTEX_ARRAY_SIZE, ARRAY_INT(Vertex.Size), NO_EXTRA },
-   { GL_VERTEX_ARRAY_TYPE, ARRAY_ENUM(Vertex.Type), NO_EXTRA },
-   { GL_VERTEX_ARRAY_STRIDE, ARRAY_INT(Vertex.Stride), NO_EXTRA },
-   { GL_NORMAL_ARRAY, ARRAY_BOOL(Normal.Enabled), NO_EXTRA },
-   { GL_NORMAL_ARRAY_TYPE, ARRAY_ENUM(Normal.Type), NO_EXTRA },
-   { GL_NORMAL_ARRAY_STRIDE, ARRAY_INT(Normal.Stride), NO_EXTRA },
-   { GL_COLOR_ARRAY, ARRAY_BOOL(Color.Enabled), NO_EXTRA },
-   { GL_COLOR_ARRAY_SIZE, ARRAY_INT(Color.Size), NO_EXTRA },
-   { GL_COLOR_ARRAY_TYPE, ARRAY_ENUM(Color.Type), NO_EXTRA },
-   { GL_COLOR_ARRAY_STRIDE, ARRAY_INT(Color.Stride), NO_EXTRA },
+   { GL_VERTEX_ARRAY, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_POS].Enabled), NO_EXTRA },
+   { GL_VERTEX_ARRAY_SIZE, ARRAY_INT(VertexAttrib[VERT_ATTRIB_POS].Size), NO_EXTRA },
+   { GL_VERTEX_ARRAY_TYPE, ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_POS].Type), NO_EXTRA },
+   { GL_VERTEX_ARRAY_STRIDE, ARRAY_INT(VertexAttrib[VERT_ATTRIB_POS].Stride), NO_EXTRA },
+   { GL_NORMAL_ARRAY, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_NORMAL].Enabled), NO_EXTRA },
+   { GL_NORMAL_ARRAY_TYPE, ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_NORMAL].Type), NO_EXTRA },
+   { GL_NORMAL_ARRAY_STRIDE, ARRAY_INT(VertexAttrib[VERT_ATTRIB_NORMAL].Stride), NO_EXTRA },
+   { GL_COLOR_ARRAY, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_COLOR0].Enabled), NO_EXTRA },
+   { GL_COLOR_ARRAY_SIZE, ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR0].Size), NO_EXTRA },
+   { GL_COLOR_ARRAY_TYPE, ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_COLOR0].Type), NO_EXTRA },
+   { GL_COLOR_ARRAY_STRIDE, ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR0].Stride), NO_EXTRA },
    { GL_TEXTURE_COORD_ARRAY,
      LOC_CUSTOM, TYPE_BOOLEAN, offsetof(struct gl_client_array, Enabled), NO_EXTRA },
    { GL_TEXTURE_COORD_ARRAY_SIZE,
@@ -632,11 +634,11 @@ static const struct value_desc values[] = {
 
    /* GL_ARB_vertex_buffer_object */
    { GL_VERTEX_ARRAY_BUFFER_BINDING_ARB, LOC_CUSTOM, TYPE_INT,
-     offsetof(struct gl_array_object, Vertex.BufferObj), NO_EXTRA },
+     offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_POS].BufferObj), NO_EXTRA },
    { GL_NORMAL_ARRAY_BUFFER_BINDING_ARB, LOC_CUSTOM, TYPE_INT,
-     offsetof(struct gl_array_object, Normal.BufferObj), NO_EXTRA },
+     offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_NORMAL].BufferObj), NO_EXTRA },
    { GL_COLOR_ARRAY_BUFFER_BINDING_ARB, LOC_CUSTOM, TYPE_INT,
-     offsetof(struct gl_array_object, Color.BufferObj), NO_EXTRA },
+     offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_COLOR0].BufferObj), NO_EXTRA },
    { GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING_ARB, LOC_CUSTOM, TYPE_INT, NO_OFFSET, NO_EXTRA },
 
    /* GL_OES_point_sprite */
@@ -674,9 +676,9 @@ static const struct value_desc values[] = {
    { GL_TEXTURE_MATRIX_FLOAT_AS_INT_BITS_OES },
 
    /* OES_point_size_array */
-   { GL_POINT_SIZE_ARRAY_OES, ARRAY_FIELD(PointSize.Enabled, TYPE_BOOLEAN) },
-   { GL_POINT_SIZE_ARRAY_TYPE_OES, ARRAY_FIELD(PointSize.Type, TYPE_ENUM) },
-   { GL_POINT_SIZE_ARRAY_STRIDE_OES, ARRAY_FIELD(PointSize.Stride, TYPE_INT) },
+   { GL_POINT_SIZE_ARRAY_OES, ARRAY_FIELD(VertexAttrib[VERT_ATTRIB_POINT_SIZE].Enabled, TYPE_BOOLEAN) },
+   { GL_POINT_SIZE_ARRAY_TYPE_OES, ARRAY_FIELD(VertexAttrib[VERT_ATTRIB_POINT_SIZE].Type, TYPE_ENUM) },
+   { GL_POINT_SIZE_ARRAY_STRIDE_OES, ARRAY_FIELD(VertexAttrib[VERT_ATTRIB_POINT_SIZE].Stride, TYPE_INT) },
    { GL_POINT_SIZE_ARRAY_BUFFER_BINDING_OES, LOC_CUSTOM, TYPE_INT, 0 },
 #endif /* FEATURE_ES1 */
 
@@ -760,6 +762,12 @@ static const struct value_desc values[] = {
    { GL_NUM_SHADER_BINARY_FORMATS, CONST(0), NO_EXTRA },
    { GL_SHADER_BINARY_FORMATS, CONST(0), NO_EXTRA },
 #endif /* FEATURE_ES2 */
+
+   /* GL_OES_EGL_image_external */
+   { GL_TEXTURE_BINDING_EXTERNAL_OES, LOC_CUSTOM,
+     TYPE_INT, TEXTURE_EXTERNAL_INDEX, extra_OES_EGL_image_external },
+   { GL_TEXTURE_EXTERNAL_OES, LOC_CUSTOM,
+     TYPE_BOOLEAN, 0, extra_OES_EGL_image_external },
 
 #if FEATURE_GL
    /* Remaining enums are only in OpenGL */
@@ -919,13 +927,13 @@ static const struct value_desc values[] = {
    { GL_VERTEX_ARRAY_COUNT_EXT, CONST(0), NO_EXTRA },
    { GL_NORMAL_ARRAY_COUNT_EXT, CONST(0), NO_EXTRA },
    { GL_COLOR_ARRAY_COUNT_EXT, CONST(0), NO_EXTRA },
-   { GL_INDEX_ARRAY, ARRAY_BOOL(Index.Enabled), NO_EXTRA },
-   { GL_INDEX_ARRAY_TYPE, ARRAY_ENUM(Index.Type), NO_EXTRA },
-   { GL_INDEX_ARRAY_STRIDE, ARRAY_INT(Index.Stride), NO_EXTRA },
+   { GL_INDEX_ARRAY, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_COLOR_INDEX].Enabled), NO_EXTRA },
+   { GL_INDEX_ARRAY_TYPE, ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_COLOR_INDEX].Type), NO_EXTRA },
+   { GL_INDEX_ARRAY_STRIDE, ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR_INDEX].Stride), NO_EXTRA },
    { GL_INDEX_ARRAY_COUNT_EXT, CONST(0), NO_EXTRA },
    { GL_TEXTURE_COORD_ARRAY_COUNT_EXT, CONST(0), NO_EXTRA },
-   { GL_EDGE_FLAG_ARRAY, ARRAY_BOOL(EdgeFlag.Enabled), NO_EXTRA },
-   { GL_EDGE_FLAG_ARRAY_STRIDE, ARRAY_INT(EdgeFlag.Stride), NO_EXTRA },
+   { GL_EDGE_FLAG_ARRAY, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_EDGEFLAG].Enabled), NO_EXTRA },
+   { GL_EDGE_FLAG_ARRAY_STRIDE, ARRAY_INT(VertexAttrib[VERT_ATTRIB_EDGEFLAG].Stride), NO_EXTRA },
    { GL_EDGE_FLAG_ARRAY_COUNT_EXT, CONST(0), NO_EXTRA },
 
    /* GL_ARB_texture_compression */
@@ -950,27 +958,31 @@ static const struct value_desc values[] = {
    { GL_CURRENT_SECONDARY_COLOR_EXT,
      CONTEXT_FIELD(Current.Attrib[VERT_ATTRIB_COLOR1][0], TYPE_FLOATN_4),
      extra_EXT_secondary_color_flush_current },
-   { GL_SECONDARY_COLOR_ARRAY_EXT, ARRAY_BOOL(SecondaryColor.Enabled),
+   { GL_SECONDARY_COLOR_ARRAY_EXT, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_COLOR1].Enabled),
      extra_EXT_secondary_color },
-   { GL_SECONDARY_COLOR_ARRAY_TYPE_EXT, ARRAY_ENUM(SecondaryColor.Type),
+   { GL_SECONDARY_COLOR_ARRAY_TYPE_EXT, ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_COLOR1].Type),
      extra_EXT_secondary_color },
-   { GL_SECONDARY_COLOR_ARRAY_STRIDE_EXT, ARRAY_INT(SecondaryColor.Stride),
+   { GL_SECONDARY_COLOR_ARRAY_STRIDE_EXT, ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR1].Stride),
      extra_EXT_secondary_color },
-   { GL_SECONDARY_COLOR_ARRAY_SIZE_EXT, ARRAY_INT(SecondaryColor.Size),
+   { GL_SECONDARY_COLOR_ARRAY_SIZE_EXT, ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR1].Size),
      extra_EXT_secondary_color },
 
    /* GL_EXT_fog_coord */
    { GL_CURRENT_FOG_COORDINATE_EXT,
      CONTEXT_FLOAT(Current.Attrib[VERT_ATTRIB_FOG][0]),
      extra_EXT_fog_coord_flush_current },
-   { GL_FOG_COORDINATE_ARRAY_EXT, ARRAY_BOOL(FogCoord.Enabled),
+   { GL_FOG_COORDINATE_ARRAY_EXT, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_FOG].Enabled),
      extra_EXT_fog_coord },
-   { GL_FOG_COORDINATE_ARRAY_TYPE_EXT, ARRAY_ENUM(FogCoord.Type),
+   { GL_FOG_COORDINATE_ARRAY_TYPE_EXT, ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_FOG].Type),
      extra_EXT_fog_coord },
-   { GL_FOG_COORDINATE_ARRAY_STRIDE_EXT, ARRAY_INT(FogCoord.Stride),
+   { GL_FOG_COORDINATE_ARRAY_STRIDE_EXT, ARRAY_INT(VertexAttrib[VERT_ATTRIB_FOG].Stride),
      extra_EXT_fog_coord },
    { GL_FOG_COORDINATE_SOURCE_EXT, CONTEXT_ENUM(Fog.FogCoordinateSource),
      extra_EXT_fog_coord },
+
+   /* GL_NV_fog_distance */
+   { GL_FOG_DISTANCE_MODE_NV, CONTEXT_ENUM(Fog.FogDistanceMode),
+     extra_NV_fog_distance },
 
    /* GL_IBM_rasterpos_clip */
    { GL_RASTER_POSITION_UNCLIPPED_IBM,
@@ -986,37 +998,37 @@ static const struct value_desc values[] = {
    /* GL_NV_vertex_program */
    { GL_VERTEX_PROGRAM_BINDING_NV, LOC_CUSTOM, TYPE_INT, 0,
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY0_NV, ARRAY_BOOL(VertexAttrib[0].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY0_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(0)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY1_NV, ARRAY_BOOL(VertexAttrib[1].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY1_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(1)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY2_NV, ARRAY_BOOL(VertexAttrib[2].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY2_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(2)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY3_NV, ARRAY_BOOL(VertexAttrib[3].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY3_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(3)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY4_NV, ARRAY_BOOL(VertexAttrib[4].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY4_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(4)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY5_NV, ARRAY_BOOL(VertexAttrib[5].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY5_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(5)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY6_NV, ARRAY_BOOL(VertexAttrib[6].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY6_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(6)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY7_NV, ARRAY_BOOL(VertexAttrib[7].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY7_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(7)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY8_NV, ARRAY_BOOL(VertexAttrib[8].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY8_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(8)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY9_NV, ARRAY_BOOL(VertexAttrib[9].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY9_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(9)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY10_NV, ARRAY_BOOL(VertexAttrib[10].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY10_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(10)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY11_NV, ARRAY_BOOL(VertexAttrib[11].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY11_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(11)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY12_NV, ARRAY_BOOL(VertexAttrib[12].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY12_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(12)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY13_NV, ARRAY_BOOL(VertexAttrib[13].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY13_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(13)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY14_NV, ARRAY_BOOL(VertexAttrib[14].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY14_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(14)].Enabled),
      extra_NV_vertex_program },
-   { GL_VERTEX_ATTRIB_ARRAY15_NV, ARRAY_BOOL(VertexAttrib[15].Enabled),
+   { GL_VERTEX_ATTRIB_ARRAY15_NV, ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_GENERIC(15)].Enabled),
      extra_NV_vertex_program },
    { GL_MAP1_VERTEX_ATTRIB0_4_NV, CONTEXT_BOOL(Eval.Map1Attrib[0]),
      extra_NV_vertex_program },
@@ -1087,13 +1099,13 @@ static const struct value_desc values[] = {
  
    /* GL_ARB_vertex_buffer_object */
    { GL_INDEX_ARRAY_BUFFER_BINDING_ARB, LOC_CUSTOM, TYPE_INT,
-     offsetof(struct gl_array_object, Index.BufferObj), NO_EXTRA },
+     offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_COLOR_INDEX].BufferObj), NO_EXTRA },
    { GL_EDGE_FLAG_ARRAY_BUFFER_BINDING_ARB, LOC_CUSTOM, TYPE_INT,
-     offsetof(struct gl_array_object, EdgeFlag.BufferObj), NO_EXTRA },
+     offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_EDGEFLAG].BufferObj), NO_EXTRA },
    { GL_SECONDARY_COLOR_ARRAY_BUFFER_BINDING_ARB, LOC_CUSTOM, TYPE_INT,
-     offsetof(struct gl_array_object, SecondaryColor.BufferObj), NO_EXTRA },
+     offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_COLOR1].BufferObj), NO_EXTRA },
    { GL_FOG_COORDINATE_ARRAY_BUFFER_BINDING_ARB, LOC_CUSTOM, TYPE_INT,
-     offsetof(struct gl_array_object, FogCoord.BufferObj), NO_EXTRA },
+     offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_FOG].BufferObj), NO_EXTRA },
 
    /* GL_EXT_pixel_buffer_object */
    { GL_PIXEL_PACK_BUFFER_BINDING_EXT, LOC_CUSTOM, TYPE_INT, 0,
@@ -1414,6 +1426,7 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
    case GL_TEXTURE_2D_ARRAY_EXT:
    case GL_TEXTURE_CUBE_MAP_ARB:
    case GL_TEXTURE_RECTANGLE_NV:
+   case GL_TEXTURE_EXTERNAL_OES:
       v->value_bool = _mesa_IsEnabled(d->pname);
       break;
 
@@ -1474,7 +1487,7 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
    case GL_TEXTURE_COORD_ARRAY_SIZE:
    case GL_TEXTURE_COORD_ARRAY_TYPE:
    case GL_TEXTURE_COORD_ARRAY_STRIDE:
-      array = &ctx->Array.ArrayObj->TexCoord[ctx->Array.ActiveTexture];
+      array = &ctx->Array.ArrayObj->VertexAttrib[VERT_ATTRIB_TEX(ctx->Array.ActiveTexture)];
       v->value_int = *(GLuint *) ((char *) array + d->offset);
       break;
 
@@ -1591,6 +1604,7 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
    case GL_TEXTURE_BINDING_2D_ARRAY_EXT:
    case GL_TEXTURE_BINDING_CUBE_MAP_ARB:
    case GL_TEXTURE_BINDING_RECTANGLE_NV:
+   case GL_TEXTURE_BINDING_EXTERNAL_OES:
       unit = ctx->Texture.CurrentUnit;
       v->value_int =
 	 ctx->Texture.Unit[unit].CurrentTex[d->offset]->Name;
@@ -1613,10 +1627,10 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
       break;
    case GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING_ARB:
       v->value_int =
-	 ctx->Array.ArrayObj->TexCoord[ctx->Array.ActiveTexture].BufferObj->Name;
+	 ctx->Array.ArrayObj->VertexAttrib[VERT_ATTRIB_TEX(ctx->Array.ActiveTexture)].BufferObj->Name;
       break;
    case GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB:
-      v->value_int = ctx->Array.ElementArrayBufferObj->Name;
+      v->value_int = ctx->Array.ArrayObj->ElementArrayBufferObj->Name;
       break;
 
    /* ARB_copy_buffer */
@@ -1665,7 +1679,7 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
 	 ctx->CurrentRenderbuffer ? ctx->CurrentRenderbuffer->Name : 0;
       break;
    case GL_POINT_SIZE_ARRAY_BUFFER_BINDING_OES:
-      v->value_int = ctx->Array.ArrayObj->PointSize.BufferObj->Name;
+      v->value_int = ctx->Array.ArrayObj->VertexAttrib[VERT_ATTRIB_POINT_SIZE].BufferObj->Name;
       break;
 
    case GL_FOG_COLOR:

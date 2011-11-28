@@ -50,6 +50,8 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ADD:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ADD_INT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SUB_INT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_AND_INT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_OR_INT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLGT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_KILLGE:
@@ -61,10 +63,20 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULLO_UINT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MAX:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MIN:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MAX_UINT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MIN_UINT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MAX_INT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MIN_INT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETE:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETE_INT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETNE:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETNE_INT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETGT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETGT_INT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETGT_UINT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETGE:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETGE_INT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SETGE_UINT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETGT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETGE:
@@ -95,6 +107,7 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SIN:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_COS:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RNDNE:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_NOT_INT:
 			return 1;
 		default: R600_ERR(
 			"Need instruction operand number for 0x%x.\n", alu->inst);
@@ -242,6 +255,7 @@ static int r600_bytecode_add_cf(struct r600_bytecode *bc)
 	bc->ncf++;
 	bc->ndw += 2;
 	bc->force_add_cf = 0;
+	bc->ar_loaded = 0;
 	return 0;
 }
 
@@ -426,11 +440,21 @@ static int is_alu_mova_inst(struct r600_bytecode *bc, struct r600_bytecode_alu *
 /* alu instructions that can only execute on the vector unit */
 static int is_alu_vec_unit_inst(struct r600_bytecode *bc, struct r600_bytecode_alu *alu)
 {
-	return is_alu_reduction_inst(bc, alu) ||
-		is_alu_mova_inst(bc, alu) ||
-		(bc->chip_class == EVERGREEN &&
-		(alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT ||
-		alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT_FLOOR));
+	switch (bc->chip_class) {
+	case R600:
+	case R700:
+		return is_alu_reduction_inst(bc, alu) ||
+			is_alu_mova_inst(bc, alu);
+	case EVERGREEN:
+	case CAYMAN:
+	default:
+		return is_alu_reduction_inst(bc, alu) ||
+			is_alu_mova_inst(bc, alu) ||
+			(alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT ||
+			 alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT_FLOOR ||
+			 alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INTERP_XY ||
+			 alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INTERP_ZW);
+	}
 }
 
 /* alu instructions that can only execute on the trans unit */
@@ -441,8 +465,9 @@ static int is_alu_trans_unit_inst(struct r600_bytecode *bc, struct r600_bytecode
 	case R700:
 		if (!alu->is_op3)
 			return alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ASHR_INT ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT ||
 				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INT_TO_FLT ||
+			        alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_UINT ||
+				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT ||
 				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHL_INT ||
 				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHR_INT ||
 				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_INT ||
@@ -985,6 +1010,11 @@ static int merge_inst_groups(struct r600_bytecode *bc, struct r600_bytecode_alu 
 					result[i] = prev[i];
 					result[4] = slots[i];
 				} else if (is_alu_any_unit_inst(bc, prev[i])) {
+					if (slots[i]->dst.sel == prev[i]->dst.sel &&
+						(slots[i]->dst.write == 1 || slots[i]->is_op3) &&
+						(prev[i]->dst.write == 1 || prev[i]->is_op3))
+						return 0;
+
 					result[i] = slots[i];
 					result[4] = prev[i];
 				} else
@@ -993,8 +1023,16 @@ static int merge_inst_groups(struct r600_bytecode *bc, struct r600_bytecode_alu 
 				return 0;
 		} else if(!slots[i]) {
 			continue;
-		} else
+		} else {
+			if (max_slots == 5 && slots[i] && prev[4] &&
+					slots[i]->dst.sel == prev[4]->dst.sel &&
+					slots[i]->dst.chan == prev[4]->dst.chan &&
+					(slots[i]->dst.write == 1 || slots[i]->is_op3) &&
+					(prev[4]->dst.write == 1 || prev[4]->is_op3))
+				return 0;
+
 			result[i] = slots[i];
+		}
 
 		alu = slots[i];
 		num_once_inst += is_alu_once_inst(bc, alu);
@@ -1020,7 +1058,7 @@ static int merge_inst_groups(struct r600_bytecode *bc, struct r600_bytecode_alu 
 				continue;
 
 			for (j = 0; j < max_slots; ++j) {
-				if (!prev[j] || !prev[j]->dst.write)
+				if (!prev[j] || !(prev[j]->dst.write || prev[j]->is_op3))
 					continue;
 
 				/* If it's relative then we can't determin which gpr is really used. */
@@ -1135,7 +1173,7 @@ static int r600_bytecode_alloc_kcache_lines(struct r600_bytecode *bc, struct r60
 		if ((r = r600_bytecode_add_cf(bc))) {
 			return r;
 		}
-		bc->cf_last->inst = (type << 3);
+		bc->cf_last->inst = type;
 		kcache = bc->cf_last->kcache;
 	}
 
@@ -1187,6 +1225,32 @@ static int r600_bytecode_alloc_kcache_lines(struct r600_bytecode *bc, struct r60
 	return 0;
 }
 
+/* load AR register from gpr (bc->ar_reg) with MOVA_INT */
+static int load_ar(struct r600_bytecode *bc)
+{
+	struct r600_bytecode_alu alu;
+	int r;
+
+	if (bc->ar_loaded)
+		return 0;
+
+	/* hack to avoid making MOVA the last instruction in the clause */
+	if ((bc->cf_last->ndw>>1) >= 110)
+		bc->force_add_cf = 1;
+
+	memset(&alu, 0, sizeof(alu));
+	alu.inst = BC_INST(bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA_INT);
+	alu.src[0].sel = bc->ar_reg;
+	alu.last = 1;
+	r = r600_bytecode_add_alu(bc, &alu);
+	if (r)
+		return r;
+
+	bc->cf_last->r6xx_uses_waterfall = 1;
+	bc->ar_loaded = 1;
+	return 0;
+}
+
 int r600_bytecode_add_alu_type(struct r600_bytecode *bc, const struct r600_bytecode_alu *alu, int type)
 {
 	struct r600_bytecode_alu *nalu = r600_bytecode_alu();
@@ -1197,10 +1261,10 @@ int r600_bytecode_add_alu_type(struct r600_bytecode *bc, const struct r600_bytec
 		return -ENOMEM;
 	memcpy(nalu, alu, sizeof(struct r600_bytecode_alu));
 
-	if (bc->cf_last != NULL && bc->cf_last->inst != (type << 3)) {
+	if (bc->cf_last != NULL && bc->cf_last->inst != type) {
 		/* check if we could add it anyway */
-		if (bc->cf_last->inst == (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU << 3) &&
-			type == V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE) {
+		if (bc->cf_last->inst == BC_INST(bc, V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU) &&
+			type == BC_INST(bc, V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE)) {
 			LIST_FOR_EACH_ENTRY(lalu, &bc->cf_last->alu, list) {
 				if (lalu->predicate) {
 					bc->force_add_cf = 1;
@@ -1219,7 +1283,15 @@ int r600_bytecode_add_alu_type(struct r600_bytecode *bc, const struct r600_bytec
 			return r;
 		}
 	}
-	bc->cf_last->inst = (type << 3);
+	bc->cf_last->inst = type;
+
+	/* Check AR usage and load it if required */
+	for (i = 0; i < 3; i++)
+		if (nalu->src[i].rel && !bc->ar_loaded)
+			load_ar(bc);
+
+	if (nalu->dst.rel && !bc->ar_loaded)
+		load_ar(bc);
 
 	/* Setup the kcache for this ALU instruction. This will start a new
 	 * ALU clause if needed. */
@@ -1308,11 +1380,9 @@ static unsigned r600_bytecode_num_tex_and_vtx_instructions(const struct r600_byt
 		return 8;
 
 	case R700:
-		return 16;
-
 	case EVERGREEN:
 	case CAYMAN:
-		return 64;
+		return 16;
 
 	default:
 		R600_ERR("Unknown chip class %d.\n", bc->chip_class);
@@ -1320,17 +1390,21 @@ static unsigned r600_bytecode_num_tex_and_vtx_instructions(const struct r600_byt
 	}
 }
 
-static inline boolean last_inst_was_vtx_fetch(struct r600_bytecode *bc)
+static inline boolean last_inst_was_not_vtx_fetch(struct r600_bytecode *bc)
 {
-	if (bc->chip_class == CAYMAN) {
-		if (bc->cf_last->inst != CM_V_SQ_CF_WORD1_SQ_CF_INST_TC)
-			return TRUE;
-	} else {
-		if (bc->cf_last->inst != V_SQ_CF_WORD1_SQ_CF_INST_VTX &&
-		    bc->cf_last->inst != V_SQ_CF_WORD1_SQ_CF_INST_VTX_TC)
-			return TRUE;
+	switch (bc->chip_class) {
+	case R700:
+	case R600:
+		return bc->cf_last->inst != V_SQ_CF_WORD1_SQ_CF_INST_VTX &&
+		       bc->cf_last->inst != V_SQ_CF_WORD1_SQ_CF_INST_VTX_TC;
+	case EVERGREEN:
+		return bc->cf_last->inst != EG_V_SQ_CF_WORD1_SQ_CF_INST_VTX;
+	case CAYMAN:
+		return bc->cf_last->inst != CM_V_SQ_CF_WORD1_SQ_CF_INST_TC;
+	default:
+		R600_ERR("Unknown chip class %d.\n", bc->chip_class);
+		return FALSE;
 	}
-	return FALSE;
 }
 
 int r600_bytecode_add_vtx(struct r600_bytecode *bc, const struct r600_bytecode_vtx *vtx)
@@ -1344,17 +1418,28 @@ int r600_bytecode_add_vtx(struct r600_bytecode *bc, const struct r600_bytecode_v
 
 	/* cf can contains only alu or only vtx or only tex */
 	if (bc->cf_last == NULL ||
-	    last_inst_was_vtx_fetch(bc) ||
+	    last_inst_was_not_vtx_fetch(bc) ||
 	    bc->force_add_cf) {
 		r = r600_bytecode_add_cf(bc);
 		if (r) {
 			free(nvtx);
 			return r;
 		}
-		if (bc->chip_class == CAYMAN)
-			bc->cf_last->inst = CM_V_SQ_CF_WORD1_SQ_CF_INST_TC;
-		else
+		switch (bc->chip_class) {
+		case R600:
+		case R700:
 			bc->cf_last->inst = V_SQ_CF_WORD1_SQ_CF_INST_VTX;
+			break;
+		case EVERGREEN:
+			bc->cf_last->inst = EG_V_SQ_CF_WORD1_SQ_CF_INST_VTX;
+			break;
+		case CAYMAN:
+			bc->cf_last->inst = CM_V_SQ_CF_WORD1_SQ_CF_INST_TC;
+			break;
+		default:
+			R600_ERR("Unknown chip class %d.\n", bc->chip_class);
+			return -EINVAL;
+		}
 	}
 	LIST_ADDTAIL(&nvtx->list, &bc->cf_last->vtx);
 	/* each fetch use 4 dwords */
@@ -1376,7 +1461,7 @@ int r600_bytecode_add_tex(struct r600_bytecode *bc, const struct r600_bytecode_t
 
 	/* we can't fetch data und use it as texture lookup address in the same TEX clause */
 	if (bc->cf_last != NULL &&
-		bc->cf_last->inst == V_SQ_CF_WORD1_SQ_CF_INST_TEX) {
+		bc->cf_last->inst == BC_INST(bc, V_SQ_CF_WORD1_SQ_CF_INST_TEX)) {
 		struct r600_bytecode_tex *ttex;
 		LIST_FOR_EACH_ENTRY(ttex, &bc->cf_last->tex, list) {
 			if (ttex->dst_gpr == ntex->src_gpr) {
@@ -1391,14 +1476,14 @@ int r600_bytecode_add_tex(struct r600_bytecode *bc, const struct r600_bytecode_t
 
 	/* cf can contains only alu or only vtx or only tex */
 	if (bc->cf_last == NULL ||
-		bc->cf_last->inst != V_SQ_CF_WORD1_SQ_CF_INST_TEX ||
+		bc->cf_last->inst != BC_INST(bc, V_SQ_CF_WORD1_SQ_CF_INST_TEX) ||
 	        bc->force_add_cf) {
 		r = r600_bytecode_add_cf(bc);
 		if (r) {
 			free(ntex);
 			return r;
 		}
-		bc->cf_last->inst = V_SQ_CF_WORD1_SQ_CF_INST_TEX;
+		bc->cf_last->inst = BC_INST(bc, V_SQ_CF_WORD1_SQ_CF_INST_TEX);
 	}
 	if (ntex->src_gpr >= bc->ngpr) {
 		bc->ngpr = ntex->src_gpr + 1;
@@ -1536,7 +1621,7 @@ static int r600_bytecode_alu_build(struct r600_bytecode *bc, struct r600_bytecod
 static void r600_bytecode_cf_vtx_build(uint32_t *bytecode, const struct r600_bytecode_cf *cf)
 {
 	*bytecode++ = S_SQ_CF_WORD0_ADDR(cf->addr >> 1);
-	*bytecode++ = S_SQ_CF_WORD1_CF_INST(cf->inst) |
+	*bytecode++ = cf->inst |
 			S_SQ_CF_WORD1_BARRIER(1) |
 			S_SQ_CF_WORD1_COUNT((cf->ndw / 4) - 1);
 }
@@ -1547,16 +1632,16 @@ static int r600_bytecode_cf_build(struct r600_bytecode *bc, struct r600_bytecode
 	unsigned id = cf->id;
 
 	switch (cf->inst) {
-	case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU << 3):
-	case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE << 3):
-	case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP_AFTER << 3):
-	case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP2_AFTER << 3):
+	case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU:
+	case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE:
+	case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP_AFTER:
+	case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP2_AFTER:
 		bc->bytecode[id++] = S_SQ_CF_ALU_WORD0_ADDR(cf->addr >> 1) |
 			S_SQ_CF_ALU_WORD0_KCACHE_MODE0(cf->kcache[0].mode) |
 			S_SQ_CF_ALU_WORD0_KCACHE_BANK0(cf->kcache[0].bank) |
 			S_SQ_CF_ALU_WORD0_KCACHE_BANK1(cf->kcache[1].bank);
 
-		bc->bytecode[id++] = S_SQ_CF_ALU_WORD1_CF_INST(cf->inst >> 3) |
+		bc->bytecode[id++] = cf->inst |
 			S_SQ_CF_ALU_WORD1_KCACHE_MODE1(cf->kcache[1].mode) |
 			S_SQ_CF_ALU_WORD1_KCACHE_ADDR0(cf->kcache[0].addr) |
 			S_SQ_CF_ALU_WORD1_KCACHE_ADDR1(cf->kcache[1].addr) |
@@ -1584,7 +1669,7 @@ static int r600_bytecode_cf_build(struct r600_bytecode *bc, struct r600_bytecode
 			S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_Z(cf->output.swizzle_z) |
 			S_SQ_CF_ALLOC_EXPORT_WORD1_SWIZ_SEL_W(cf->output.swizzle_w) |
 			S_SQ_CF_ALLOC_EXPORT_WORD1_BARRIER(cf->output.barrier) |
-			S_SQ_CF_ALLOC_EXPORT_WORD1_CF_INST(cf->output.inst) |
+			cf->output.inst |
 			S_SQ_CF_ALLOC_EXPORT_WORD1_END_OF_PROGRAM(cf->output.end_of_program);
 		break;
 	case V_SQ_CF_WORD1_SQ_CF_INST_JUMP:
@@ -1597,7 +1682,7 @@ static int r600_bytecode_cf_build(struct r600_bytecode *bc, struct r600_bytecode
 	case V_SQ_CF_WORD1_SQ_CF_INST_CALL_FS:
 	case V_SQ_CF_WORD1_SQ_CF_INST_RETURN:
 		bc->bytecode[id++] = S_SQ_CF_WORD0_ADDR(cf->cf_addr >> 1);
-		bc->bytecode[id++] = S_SQ_CF_WORD1_CF_INST(cf->inst) |
+		bc->bytecode[id++] = cf->inst |
 					S_SQ_CF_WORD1_BARRIER(1) |
 			                S_SQ_CF_WORD1_COND(cf->cond) |
 			                S_SQ_CF_WORD1_POP_COUNT(cf->pop_count);
@@ -1631,38 +1716,64 @@ int r600_bytecode_build(struct r600_bytecode *bc)
 	/* addr start after all the CF instructions */
 	addr = bc->cf_last->id + 2;
 	LIST_FOR_EACH_ENTRY(cf, &bc->cf, list) {
-		switch (cf->inst) {
-		case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU << 3):
-		case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP_AFTER << 3):
-		case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP2_AFTER << 3):
-		case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE << 3):
-			break;
-		case V_SQ_CF_WORD1_SQ_CF_INST_TEX:
-		case V_SQ_CF_WORD1_SQ_CF_INST_VTX:
-		case V_SQ_CF_WORD1_SQ_CF_INST_VTX_TC:
-			/* fetch node need to be 16 bytes aligned*/
-			addr += 3;
-			addr &= 0xFFFFFFFCUL;
-			break;
-		case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
-		case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
-		case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
-		case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
-			break;
-		case V_SQ_CF_WORD1_SQ_CF_INST_JUMP:
-		case V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
-		case V_SQ_CF_WORD1_SQ_CF_INST_POP:
-		case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
-		case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
-		case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
-		case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
-		case V_SQ_CF_WORD1_SQ_CF_INST_CALL_FS:
-		case V_SQ_CF_WORD1_SQ_CF_INST_RETURN:
-		case CM_V_SQ_CF_WORD1_SQ_CF_INST_END:
-			break;
-		default:
-			R600_ERR("unsupported CF instruction (0x%X)\n", cf->inst);
-			return -EINVAL;
+		if (bc->chip_class >= EVERGREEN) {
+			switch (cf->inst) {
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_TEX:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_VTX:
+				/* fetch node need to be 16 bytes aligned*/
+				addr += 3;
+				addr &= 0xFFFFFFFCUL;
+				break;
+			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU:
+			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP_AFTER:
+			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP2_AFTER:
+			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE:
+			case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
+			case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_JUMP:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_POP:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_CALL_FS:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_RETURN:
+			case CM_V_SQ_CF_WORD1_SQ_CF_INST_END:
+				break;
+			default:
+				R600_ERR("unsupported CF instruction (0x%X)\n", cf->inst);
+				return -EINVAL;
+			}
+		} else {
+			switch (cf->inst) {
+			case V_SQ_CF_WORD1_SQ_CF_INST_TEX:
+			case V_SQ_CF_WORD1_SQ_CF_INST_VTX:
+			case V_SQ_CF_WORD1_SQ_CF_INST_VTX_TC:
+				/* fetch node need to be 16 bytes aligned*/
+				addr += 3;
+				addr &= 0xFFFFFFFCUL;
+				break;
+			case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU:
+			case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP_AFTER:
+			case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP2_AFTER:
+			case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE:
+			case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
+			case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
+			case V_SQ_CF_WORD1_SQ_CF_INST_JUMP:
+			case V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
+			case V_SQ_CF_WORD1_SQ_CF_INST_POP:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
+			case V_SQ_CF_WORD1_SQ_CF_INST_CALL_FS:
+			case V_SQ_CF_WORD1_SQ_CF_INST_RETURN:
+				break;
+			default:
+				R600_ERR("unsupported CF instruction (0x%X)\n", cf->inst);
+				return -EINVAL;
+			}
 		}
 		cf->addr = addr;
 		addr += cf->ndw;
@@ -1674,92 +1785,158 @@ int r600_bytecode_build(struct r600_bytecode *bc)
 		return -ENOMEM;
 	LIST_FOR_EACH_ENTRY(cf, &bc->cf, list) {
 		addr = cf->addr;
-		if (bc->chip_class >= EVERGREEN)
+		if (bc->chip_class >= EVERGREEN) {
 			r = eg_bytecode_cf_build(bc, cf);
-		else
-			r = r600_bytecode_cf_build(bc, cf);
-		if (r)
-			return r;
-		switch (cf->inst) {
-		case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU << 3):
-		case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP_AFTER << 3):
-		case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP2_AFTER << 3):
-		case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE << 3):
-			nliteral = 0;
-			memset(literal, 0, sizeof(literal));
-			LIST_FOR_EACH_ENTRY(alu, &cf->alu, list) {
-				r = r600_bytecode_alu_nliterals(bc, alu, literal, &nliteral);
-				if (r)
-					return r;
-				r600_bytecode_alu_adjust_literals(bc, alu, literal, nliteral);
-				switch(bc->chip_class) {
-				case R600:
-					r = r600_bytecode_alu_build(bc, alu, addr);
-					break;
-				case R700:
-				case EVERGREEN: /* eg alu is same encoding as r700 */
-				case CAYMAN: /* eg alu is same encoding as r700 */
-					r = r700_bytecode_alu_build(bc, alu, addr);
-					break;
-				default:
-					R600_ERR("unknown chip class %d.\n", bc->chip_class);
-					return -EINVAL;
-				}
-				if (r)
-					return r;
-				addr += 2;
-				if (alu->last) {
-					for (i = 0; i < align(nliteral, 2); ++i) {
-						bc->bytecode[addr++] = literal[i];
+			if (r)
+				return r;
+
+			switch (cf->inst) {
+			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU:
+			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP_AFTER:
+			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP2_AFTER:
+			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE:
+				nliteral = 0;
+				memset(literal, 0, sizeof(literal));
+				LIST_FOR_EACH_ENTRY(alu, &cf->alu, list) {
+					r = r600_bytecode_alu_nliterals(bc, alu, literal, &nliteral);
+					if (r)
+						return r;
+					r600_bytecode_alu_adjust_literals(bc, alu, literal, nliteral);
+					switch(bc->chip_class) {
+					case EVERGREEN: /* eg alu is same encoding as r700 */
+					case CAYMAN:
+						r = r700_bytecode_alu_build(bc, alu, addr);
+						break;
+					default:
+						R600_ERR("unknown chip class %d.\n", bc->chip_class);
+						return -EINVAL;
 					}
-					nliteral = 0;
-					memset(literal, 0, sizeof(literal));
+					if (r)
+						return r;
+					addr += 2;
+					if (alu->last) {
+						for (i = 0; i < align(nliteral, 2); ++i) {
+							bc->bytecode[addr++] = literal[i];
+						}
+						nliteral = 0;
+						memset(literal, 0, sizeof(literal));
+					}
 				}
-			}
-			break;
-		case V_SQ_CF_WORD1_SQ_CF_INST_VTX:
-		case V_SQ_CF_WORD1_SQ_CF_INST_VTX_TC:
-			LIST_FOR_EACH_ENTRY(vtx, &cf->vtx, list) {
-				r = r600_bytecode_vtx_build(bc, vtx, addr);
-				if (r)
-					return r;
-				addr += 4;
-			}
-			break;
-		case V_SQ_CF_WORD1_SQ_CF_INST_TEX:
-			if (bc->chip_class == CAYMAN) {
+				break;
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_VTX:
 				LIST_FOR_EACH_ENTRY(vtx, &cf->vtx, list) {
 					r = r600_bytecode_vtx_build(bc, vtx, addr);
 					if (r)
 						return r;
 					addr += 4;
 				}
+				break;
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_TEX:
+				if (bc->chip_class == CAYMAN) {
+					LIST_FOR_EACH_ENTRY(vtx, &cf->vtx, list) {
+						r = r600_bytecode_vtx_build(bc, vtx, addr);
+						if (r)
+							return r;
+						addr += 4;
+					}
+				}
+				LIST_FOR_EACH_ENTRY(tex, &cf->tex, list) {
+					r = r600_bytecode_tex_build(bc, tex, addr);
+					if (r)
+						return r;
+					addr += 4;
+				}
+				break;
+			case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
+			case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_JUMP:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_POP:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_CALL_FS:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_RETURN:
+			case CM_V_SQ_CF_WORD1_SQ_CF_INST_END:
+				break;
+			default:
+				R600_ERR("unsupported CF instruction (0x%X)\n", cf->inst);
+				return -EINVAL;
 			}
-			LIST_FOR_EACH_ENTRY(tex, &cf->tex, list) {
-				r = r600_bytecode_tex_build(bc, tex, addr);
-				if (r)
-					return r;
-				addr += 4;
+		} else {
+			r = r600_bytecode_cf_build(bc, cf);
+			if (r)
+				return r;
+
+			switch (cf->inst) {
+			case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU:
+			case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP_AFTER:
+			case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP2_AFTER:
+			case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE:
+				nliteral = 0;
+				memset(literal, 0, sizeof(literal));
+				LIST_FOR_EACH_ENTRY(alu, &cf->alu, list) {
+					r = r600_bytecode_alu_nliterals(bc, alu, literal, &nliteral);
+					if (r)
+						return r;
+					r600_bytecode_alu_adjust_literals(bc, alu, literal, nliteral);
+					switch(bc->chip_class) {
+					case R600:
+						r = r600_bytecode_alu_build(bc, alu, addr);
+						break;
+					case R700:
+						r = r700_bytecode_alu_build(bc, alu, addr);
+						break;
+					default:
+						R600_ERR("unknown chip class %d.\n", bc->chip_class);
+						return -EINVAL;
+					}
+					if (r)
+						return r;
+					addr += 2;
+					if (alu->last) {
+						for (i = 0; i < align(nliteral, 2); ++i) {
+							bc->bytecode[addr++] = literal[i];
+						}
+						nliteral = 0;
+						memset(literal, 0, sizeof(literal));
+					}
+				}
+				break;
+			case V_SQ_CF_WORD1_SQ_CF_INST_VTX:
+			case V_SQ_CF_WORD1_SQ_CF_INST_VTX_TC:
+				LIST_FOR_EACH_ENTRY(vtx, &cf->vtx, list) {
+					r = r600_bytecode_vtx_build(bc, vtx, addr);
+					if (r)
+						return r;
+					addr += 4;
+				}
+				break;
+			case V_SQ_CF_WORD1_SQ_CF_INST_TEX:
+				LIST_FOR_EACH_ENTRY(tex, &cf->tex, list) {
+					r = r600_bytecode_tex_build(bc, tex, addr);
+					if (r)
+						return r;
+					addr += 4;
+				}
+				break;
+			case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
+			case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
+			case V_SQ_CF_WORD1_SQ_CF_INST_JUMP:
+			case V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
+			case V_SQ_CF_WORD1_SQ_CF_INST_POP:
+			case V_SQ_CF_WORD1_SQ_CF_INST_CALL_FS:
+			case V_SQ_CF_WORD1_SQ_CF_INST_RETURN:
+				break;
+			default:
+				R600_ERR("unsupported CF instruction (0x%X)\n", cf->inst);
+				return -EINVAL;
 			}
-			break;
-		case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
-		case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
-		case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
-		case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
-		case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
-		case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
-		case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
-		case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
-		case V_SQ_CF_WORD1_SQ_CF_INST_JUMP:
-		case V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
-		case V_SQ_CF_WORD1_SQ_CF_INST_POP:
-		case V_SQ_CF_WORD1_SQ_CF_INST_CALL_FS:
-		case V_SQ_CF_WORD1_SQ_CF_INST_RETURN:
-		case CM_V_SQ_CF_WORD1_SQ_CF_INST_END:
-			break;
-		default:
-			R600_ERR("unsupported CF instruction (0x%X)\n", cf->inst);
-			return -EINVAL;
 		}
 	}
 	return 0;
@@ -1834,72 +2011,140 @@ void r600_bytecode_dump(struct r600_bytecode *bc)
 	LIST_FOR_EACH_ENTRY(cf, &bc->cf, list) {
 		id = cf->id;
 
-		switch (cf->inst) {
-		case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU << 3):
-		case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP_AFTER << 3):
-		case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP2_AFTER << 3):
-		case (V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE << 3):
-			fprintf(stderr, "%04d %08X ALU ", id, bc->bytecode[id]);
-			fprintf(stderr, "ADDR:%d ", cf->addr);
-			fprintf(stderr, "KCACHE_MODE0:%X ", cf->kcache[0].mode);
-			fprintf(stderr, "KCACHE_BANK0:%X ", cf->kcache[0].bank);
-			fprintf(stderr, "KCACHE_BANK1:%X\n", cf->kcache[1].bank);
-			id++;
-			fprintf(stderr, "%04d %08X ALU ", id, bc->bytecode[id]);
-			fprintf(stderr, "INST:0x%x ", cf->inst);
-			fprintf(stderr, "KCACHE_MODE1:%X ", cf->kcache[1].mode);
-			fprintf(stderr, "KCACHE_ADDR0:%X ", cf->kcache[0].addr);
-			fprintf(stderr, "KCACHE_ADDR1:%X ", cf->kcache[1].addr);
-			fprintf(stderr, "COUNT:%d\n", cf->ndw / 2);
-			break;
-		case V_SQ_CF_WORD1_SQ_CF_INST_TEX:
-		case V_SQ_CF_WORD1_SQ_CF_INST_VTX:
-		case V_SQ_CF_WORD1_SQ_CF_INST_VTX_TC:
-			fprintf(stderr, "%04d %08X TEX/VTX ", id, bc->bytecode[id]);
-			fprintf(stderr, "ADDR:%d\n", cf->addr);
-			id++;
-			fprintf(stderr, "%04d %08X TEX/VTX ", id, bc->bytecode[id]);
-			fprintf(stderr, "INST:0x%x ", cf->inst);
-			fprintf(stderr, "COUNT:%d\n", cf->ndw / 4);
-			break;
-		case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
-		case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
-		case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
-		case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
-			fprintf(stderr, "%04d %08X EXPORT ", id, bc->bytecode[id]);
-			fprintf(stderr, "GPR:%X ", cf->output.gpr);
-			fprintf(stderr, "ELEM_SIZE:%X ", cf->output.elem_size);
-			fprintf(stderr, "ARRAY_BASE:%X ", cf->output.array_base);
-			fprintf(stderr, "TYPE:%X\n", cf->output.type);
-			id++;
-			fprintf(stderr, "%04d %08X EXPORT ", id, bc->bytecode[id]);
-			fprintf(stderr, "SWIZ_X:%X ", cf->output.swizzle_x);
-			fprintf(stderr, "SWIZ_Y:%X ", cf->output.swizzle_y);
-			fprintf(stderr, "SWIZ_Z:%X ", cf->output.swizzle_z);
-			fprintf(stderr, "SWIZ_W:%X ", cf->output.swizzle_w);
-			fprintf(stderr, "BARRIER:%X ", cf->output.barrier);
-			fprintf(stderr, "INST:0x%x ", cf->output.inst);
-			fprintf(stderr, "BURST_COUNT:%d ", cf->output.burst_count);
-			fprintf(stderr, "EOP:%X\n", cf->output.end_of_program);
-			break;
-		case V_SQ_CF_WORD1_SQ_CF_INST_JUMP:
-		case V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
-		case V_SQ_CF_WORD1_SQ_CF_INST_POP:
-		case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
-		case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
-		case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
-		case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
-		case V_SQ_CF_WORD1_SQ_CF_INST_CALL_FS:
-		case V_SQ_CF_WORD1_SQ_CF_INST_RETURN:
-		case CM_V_SQ_CF_WORD1_SQ_CF_INST_END:
-			fprintf(stderr, "%04d %08X CF ", id, bc->bytecode[id]);
-			fprintf(stderr, "ADDR:%d\n", cf->cf_addr);
-			id++;
-			fprintf(stderr, "%04d %08X CF ", id, bc->bytecode[id]);
-			fprintf(stderr, "INST:0x%x ", cf->inst);
-			fprintf(stderr, "COND:%X ", cf->cond);
-			fprintf(stderr, "POP_COUNT:%X\n", cf->pop_count);
-			break;
+		if (bc->chip_class >= EVERGREEN) {
+			switch (cf->inst) {
+			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU:
+			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP_AFTER:
+			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP2_AFTER:
+			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE:
+				fprintf(stderr, "%04d %08X ALU ", id, bc->bytecode[id]);
+				fprintf(stderr, "ADDR:%d ", cf->addr);
+				fprintf(stderr, "KCACHE_MODE0:%X ", cf->kcache[0].mode);
+				fprintf(stderr, "KCACHE_BANK0:%X ", cf->kcache[0].bank);
+				fprintf(stderr, "KCACHE_BANK1:%X\n", cf->kcache[1].bank);
+				id++;
+				fprintf(stderr, "%04d %08X ALU ", id, bc->bytecode[id]);
+				fprintf(stderr, "INST:0x%x ", EG_G_SQ_CF_ALU_WORD1_CF_INST(cf->inst));
+				fprintf(stderr, "KCACHE_MODE1:%X ", cf->kcache[1].mode);
+				fprintf(stderr, "KCACHE_ADDR0:%X ", cf->kcache[0].addr);
+				fprintf(stderr, "KCACHE_ADDR1:%X ", cf->kcache[1].addr);
+				fprintf(stderr, "COUNT:%d\n", cf->ndw / 2);
+				break;
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_TEX:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_VTX:
+				fprintf(stderr, "%04d %08X TEX/VTX ", id, bc->bytecode[id]);
+				fprintf(stderr, "ADDR:%d\n", cf->addr);
+				id++;
+				fprintf(stderr, "%04d %08X TEX/VTX ", id, bc->bytecode[id]);
+				fprintf(stderr, "INST:0x%x ", EG_G_SQ_CF_WORD1_CF_INST(cf->inst));
+				fprintf(stderr, "COUNT:%d\n", cf->ndw / 4);
+				break;
+			case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
+			case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
+				fprintf(stderr, "%04d %08X EXPORT ", id, bc->bytecode[id]);
+				fprintf(stderr, "GPR:%X ", cf->output.gpr);
+				fprintf(stderr, "ELEM_SIZE:%X ", cf->output.elem_size);
+				fprintf(stderr, "ARRAY_BASE:%X ", cf->output.array_base);
+				fprintf(stderr, "TYPE:%X\n", cf->output.type);
+				id++;
+				fprintf(stderr, "%04d %08X EXPORT ", id, bc->bytecode[id]);
+				fprintf(stderr, "SWIZ_X:%X ", cf->output.swizzle_x);
+				fprintf(stderr, "SWIZ_Y:%X ", cf->output.swizzle_y);
+				fprintf(stderr, "SWIZ_Z:%X ", cf->output.swizzle_z);
+				fprintf(stderr, "SWIZ_W:%X ", cf->output.swizzle_w);
+				fprintf(stderr, "BARRIER:%X ", cf->output.barrier);
+				fprintf(stderr, "INST:0x%x ", EG_G_SQ_CF_ALLOC_EXPORT_WORD1_CF_INST(cf->output.inst));
+				fprintf(stderr, "BURST_COUNT:%d ", cf->output.burst_count);
+				fprintf(stderr, "EOP:%X\n", cf->output.end_of_program);
+				break;
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_JUMP:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_POP:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_CALL_FS:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_RETURN:
+			case CM_V_SQ_CF_WORD1_SQ_CF_INST_END:
+				fprintf(stderr, "%04d %08X CF ", id, bc->bytecode[id]);
+				fprintf(stderr, "ADDR:%d\n", cf->cf_addr);
+				id++;
+				fprintf(stderr, "%04d %08X CF ", id, bc->bytecode[id]);
+				fprintf(stderr, "INST:0x%x ", EG_G_SQ_CF_WORD1_CF_INST(cf->inst));
+				fprintf(stderr, "COND:%X ", cf->cond);
+				fprintf(stderr, "POP_COUNT:%X\n", cf->pop_count);
+				break;
+			default:
+				R600_ERR("Unknown instruction %0x\n", cf->inst);
+			}
+		} else {
+			switch (cf->inst) {
+			case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU:
+			case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP_AFTER:
+			case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP2_AFTER:
+			case V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE:
+				fprintf(stderr, "%04d %08X ALU ", id, bc->bytecode[id]);
+				fprintf(stderr, "ADDR:%d ", cf->addr);
+				fprintf(stderr, "KCACHE_MODE0:%X ", cf->kcache[0].mode);
+				fprintf(stderr, "KCACHE_BANK0:%X ", cf->kcache[0].bank);
+				fprintf(stderr, "KCACHE_BANK1:%X\n", cf->kcache[1].bank);
+				id++;
+				fprintf(stderr, "%04d %08X ALU ", id, bc->bytecode[id]);
+				fprintf(stderr, "INST:0x%x ", R600_G_SQ_CF_ALU_WORD1_CF_INST(cf->inst));
+				fprintf(stderr, "KCACHE_MODE1:%X ", cf->kcache[1].mode);
+				fprintf(stderr, "KCACHE_ADDR0:%X ", cf->kcache[0].addr);
+				fprintf(stderr, "KCACHE_ADDR1:%X ", cf->kcache[1].addr);
+				fprintf(stderr, "COUNT:%d\n", cf->ndw / 2);
+				break;
+			case V_SQ_CF_WORD1_SQ_CF_INST_TEX:
+			case V_SQ_CF_WORD1_SQ_CF_INST_VTX:
+			case V_SQ_CF_WORD1_SQ_CF_INST_VTX_TC:
+				fprintf(stderr, "%04d %08X TEX/VTX ", id, bc->bytecode[id]);
+				fprintf(stderr, "ADDR:%d\n", cf->addr);
+				id++;
+				fprintf(stderr, "%04d %08X TEX/VTX ", id, bc->bytecode[id]);
+				fprintf(stderr, "INST:0x%x ", R600_G_SQ_CF_WORD1_CF_INST(cf->inst));
+				fprintf(stderr, "COUNT:%d\n", cf->ndw / 4);
+				break;
+			case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT:
+			case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT_DONE:
+				fprintf(stderr, "%04d %08X EXPORT ", id, bc->bytecode[id]);
+				fprintf(stderr, "GPR:%X ", cf->output.gpr);
+				fprintf(stderr, "ELEM_SIZE:%X ", cf->output.elem_size);
+				fprintf(stderr, "ARRAY_BASE:%X ", cf->output.array_base);
+				fprintf(stderr, "TYPE:%X\n", cf->output.type);
+				id++;
+				fprintf(stderr, "%04d %08X EXPORT ", id, bc->bytecode[id]);
+				fprintf(stderr, "SWIZ_X:%X ", cf->output.swizzle_x);
+				fprintf(stderr, "SWIZ_Y:%X ", cf->output.swizzle_y);
+				fprintf(stderr, "SWIZ_Z:%X ", cf->output.swizzle_z);
+				fprintf(stderr, "SWIZ_W:%X ", cf->output.swizzle_w);
+				fprintf(stderr, "BARRIER:%X ", cf->output.barrier);
+				fprintf(stderr, "INST:0x%x ", R600_G_SQ_CF_ALLOC_EXPORT_WORD1_CF_INST(cf->output.inst));
+				fprintf(stderr, "BURST_COUNT:%d ", cf->output.burst_count);
+				fprintf(stderr, "EOP:%X\n", cf->output.end_of_program);
+				break;
+			case V_SQ_CF_WORD1_SQ_CF_INST_JUMP:
+			case V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
+			case V_SQ_CF_WORD1_SQ_CF_INST_POP:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
+			case V_SQ_CF_WORD1_SQ_CF_INST_CALL_FS:
+			case V_SQ_CF_WORD1_SQ_CF_INST_RETURN:
+				fprintf(stderr, "%04d %08X CF ", id, bc->bytecode[id]);
+				fprintf(stderr, "ADDR:%d\n", cf->cf_addr);
+				id++;
+				fprintf(stderr, "%04d %08X CF ", id, bc->bytecode[id]);
+				fprintf(stderr, "INST:0x%x ", R600_G_SQ_CF_WORD1_CF_INST(cf->inst));
+				fprintf(stderr, "COND:%X ", cf->cond);
+				fprintf(stderr, "POP_COUNT:%X\n", cf->pop_count);
+				break;
+			default:
+				R600_ERR("Unknown instruction %0x\n", cf->inst);
+			}
 		}
 
 		id = cf->addr;

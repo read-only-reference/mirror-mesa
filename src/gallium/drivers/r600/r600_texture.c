@@ -65,8 +65,6 @@ static void r600_copy_from_staging_texture(struct pipe_context *ctx, struct r600
 				  transfer->box.x, transfer->box.y, transfer->box.z,
 				  rtransfer->staging_texture,
 				  0, &sbox);
-
-	ctx->texture_barrier(ctx);
 }
 
 unsigned r600_texture_get_offset(struct r600_resource_texture *rtex,
@@ -352,6 +350,9 @@ static void r600_texture_destroy(struct pipe_screen *screen,
 	if (rtex->flushed_depth_texture)
 		pipe_resource_reference((struct pipe_resource **)&rtex->flushed_depth_texture, NULL);
 
+	if (rtex->stencil)
+		pipe_resource_reference((struct pipe_resource **)&rtex->stencil, NULL);
+
 	pb_reference(&resource->buf, NULL);
 	FREE(rtex);
 }
@@ -471,7 +472,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 	}
 
 	if (rtex->stencil) {
-		rtex->stencil->resource.buf = rtex->resource.buf;
+		pb_reference(&rtex->stencil->resource.buf, rtex->resource.buf);
 		rtex->stencil->resource.cs_buf = rtex->resource.cs_buf;
 	}
 	return rtex;
@@ -1011,6 +1012,9 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen,
 
 	/* Non-uniform formats. */
 	if (!uniform) {
+		if (desc->colorspace != UTIL_FORMAT_COLORSPACE_SRGB &&
+		    desc->channel[0].pure_integer)
+			word4 |= S_038010_NUM_FORMAT_ALL(V_038010_SQ_NUM_FORMAT_INT);
 		switch(desc->nr_channels) {
 		case 3:
 			if (desc->channel[0].size == 5 &&

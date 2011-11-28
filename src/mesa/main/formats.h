@@ -35,6 +35,12 @@
 
 #include <GL/gl.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
 /* OpenGL doesn't have GL_UNSIGNED_BYTE_4_4, so we must define our own type
  * for GL_LUMINANCE4_ALPHA4. */
 #define MESA_UNSIGNED_BYTE_4_4 (GL_UNSIGNED_BYTE<<1)
@@ -57,6 +63,8 @@ typedef enum
    MESA_FORMAT_RGBA8888_REV,	/* AAAA AAAA BBBB BBBB GGGG GGGG RRRR RRRR */
    MESA_FORMAT_ARGB8888,	/* AAAA AAAA RRRR RRRR GGGG GGGG BBBB BBBB */
    MESA_FORMAT_ARGB8888_REV,	/* BBBB BBBB GGGG GGGG RRRR RRRR AAAA AAAA */
+   MESA_FORMAT_RGBX8888,	/* RRRR RRRR GGGG GGGG BBBB BBBB XXXX XXXX */
+   MESA_FORMAT_RGBX8888_REV,	/* xxxx xxxx BBBB BBBB GGGG GGGG RRRR RRRR */
    MESA_FORMAT_XRGB8888,	/* xxxx xxxx RRRR RRRR GGGG GGGG BBBB BBBB */
    MESA_FORMAT_XRGB8888_REV,	/* BBBB BBBB GGGG GGGG RRRR RRRR xxxx xxxx */
    MESA_FORMAT_RGB888,		/*           RRRR RRRR GGGG GGGG BBBB BBBB */
@@ -83,11 +91,11 @@ typedef enum
    MESA_FORMAT_YCBCR,		/*                     YYYY YYYY UorV UorV */
    MESA_FORMAT_YCBCR_REV,	/*                     UorV UorV YYYY YYYY */
    MESA_FORMAT_R8,		/*                               RRRR RRRR */
-   MESA_FORMAT_RG88,		/*                     RRRR RRRR GGGG GGGG */
-   MESA_FORMAT_RG88_REV,	/*                     GGGG GGGG RRRR RRRR */
+   MESA_FORMAT_RG88,		/*                     GGGG GGGG RRRR RRRR */
+   MESA_FORMAT_RG88_REV,	/*                     RRRR RRRR GGGG GGGG */
    MESA_FORMAT_R16,		/*                     RRRR RRRR RRRR RRRR */
-   MESA_FORMAT_RG1616,		/* RRRR RRRR RRRR RRRR GGGG GGGG GGGG GGGG */
-   MESA_FORMAT_RG1616_REV,	/* GGGG GGGG GGGG GGGG RRRR RRRR RRRR RRRR */
+   MESA_FORMAT_RG1616,		/* GGGG GGGG GGGG GGGG RRRR RRRR RRRR RRRR */
+   MESA_FORMAT_RG1616_REV,	/* RRRR RRRR RRRR RRRR GGGG GGGG GGGG GGGG */
    MESA_FORMAT_ARGB2101010,     /* AARR RRRR RRRR GGGG GGGG GGBB BBBB BBBB */
    MESA_FORMAT_Z24_S8,          /* ZZZZ ZZZZ ZZZZ ZZZZ ZZZZ ZZZZ SSSS SSSS */
    MESA_FORMAT_S8_Z24,          /* SSSS SSSS ZZZZ ZZZZ ZZZZ ZZZZ ZZZZ ZZZZ */
@@ -102,11 +110,11 @@ typedef enum
     * \name 8-bit/channel sRGB formats
     */
    /*@{*/
-   MESA_FORMAT_SRGB8,
-   MESA_FORMAT_SRGBA8,
-   MESA_FORMAT_SARGB8,
-   MESA_FORMAT_SL8,
-   MESA_FORMAT_SLA8,
+   MESA_FORMAT_SRGB8,           /*           RRRR RRRR GGGG GGGG BBBB BBBB */
+   MESA_FORMAT_SRGBA8,          /* RRRR RRRR GGGG GGGG BBBB BBBB AAAA AAAA */
+   MESA_FORMAT_SARGB8,          /* AAAA AAAA RRRR RRRR GGGG GGGG BBBB BBBB */
+   MESA_FORMAT_SL8,             /*                               LLLL LLLL */
+   MESA_FORMAT_SLA8,            /*                     AAAA AAAA LLLL LLLL */
    MESA_FORMAT_SRGB_DXT1,
    MESA_FORMAT_SRGBA_DXT1,
    MESA_FORMAT_SRGBA_DXT3,
@@ -257,6 +265,8 @@ typedef enum
    MESA_FORMAT_Z32_FLOAT,
    MESA_FORMAT_Z32_FLOAT_X24S8,
 
+   MESA_FORMAT_ARGB2101010_UINT,
+
    MESA_FORMAT_COUNT
 } gl_format;
 
@@ -318,5 +328,13 @@ _mesa_get_uncompressed_format(gl_format format);
 extern GLuint
 _mesa_format_num_components(gl_format format);
 
+GLboolean
+_mesa_format_matches_format_and_type(gl_format gl_format,
+				     GLenum format, GLenum type);
+
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* FORMATS_H */

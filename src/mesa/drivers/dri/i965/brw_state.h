@@ -41,8 +41,8 @@ extern const struct brw_tracked_state brw_cc_unit;
 extern const struct brw_tracked_state brw_check_fallback;
 extern const struct brw_tracked_state brw_clip_prog;
 extern const struct brw_tracked_state brw_clip_unit;
-extern const struct brw_tracked_state brw_vs_constants;
-extern const struct brw_tracked_state brw_wm_constants;
+extern const struct brw_tracked_state brw_vs_pull_constants;
+extern const struct brw_tracked_state brw_wm_pull_constants;
 extern const struct brw_tracked_state brw_constant_buffer;
 extern const struct brw_tracked_state brw_curbe_offsets;
 extern const struct brw_tracked_state brw_invarient_state;
@@ -57,21 +57,20 @@ extern const struct brw_tracked_state brw_polygon_stipple_offset;
 extern const struct brw_tracked_state brw_polygon_stipple;
 extern const struct brw_tracked_state brw_program_parameters;
 extern const struct brw_tracked_state brw_recalculate_urb_fence;
+extern const struct brw_tracked_state brw_samplers;
 extern const struct brw_tracked_state brw_sf_prog;
 extern const struct brw_tracked_state brw_sf_unit;
 extern const struct brw_tracked_state brw_sf_vp;
 extern const struct brw_tracked_state brw_state_base_address;
 extern const struct brw_tracked_state brw_urb_fence;
 extern const struct brw_tracked_state brw_vertex_state;
-extern const struct brw_tracked_state brw_vs_surfaces;
 extern const struct brw_tracked_state brw_vs_prog;
 extern const struct brw_tracked_state brw_vs_unit;
 extern const struct brw_tracked_state brw_wm_input_sizes;
 extern const struct brw_tracked_state brw_wm_prog;
-extern const struct brw_tracked_state brw_wm_samplers;
-extern const struct brw_tracked_state brw_wm_constant_surface;
-extern const struct brw_tracked_state brw_wm_surfaces;
-extern const struct brw_tracked_state brw_wm_binding_table;
+extern const struct brw_tracked_state brw_renderbuffer_surfaces;
+extern const struct brw_tracked_state brw_texture_surfaces;
+extern const struct brw_tracked_state brw_binding_table;
 extern const struct brw_tracked_state brw_wm_unit;
 
 extern const struct brw_tracked_state brw_psp_urb_cbs;
@@ -90,15 +89,16 @@ extern const struct brw_tracked_state gen6_clip_vp;
 extern const struct brw_tracked_state gen6_color_calc_state;
 extern const struct brw_tracked_state gen6_depth_stencil_state;
 extern const struct brw_tracked_state gen6_gs_state;
+extern const struct brw_tracked_state gen6_renderbuffer_surfaces;
 extern const struct brw_tracked_state gen6_sampler_state;
 extern const struct brw_tracked_state gen6_scissor_state;
 extern const struct brw_tracked_state gen6_sf_state;
 extern const struct brw_tracked_state gen6_sf_vp;
 extern const struct brw_tracked_state gen6_urb;
 extern const struct brw_tracked_state gen6_viewport_state;
-extern const struct brw_tracked_state gen6_vs_constants;
+extern const struct brw_tracked_state gen6_vs_push_constants;
 extern const struct brw_tracked_state gen6_vs_state;
-extern const struct brw_tracked_state gen6_wm_constants;
+extern const struct brw_tracked_state gen6_wm_push_constants;
 extern const struct brw_tracked_state gen6_wm_state;
 extern const struct brw_tracked_state gen7_depthbuffer;
 extern const struct brw_tracked_state gen7_blend_state_pointer;
@@ -120,6 +120,11 @@ extern const struct brw_tracked_state gen7_wm_constants;
 extern const struct brw_tracked_state gen7_wm_constant_surface;
 extern const struct brw_tracked_state gen7_wm_state;
 extern const struct brw_tracked_state gen7_wm_surfaces;
+
+/* brw_misc_state.c */
+uint32_t
+brw_depthbuffer_format(struct brw_context *brw);
+
 
 /***********************************************************************
  * brw_state.c
@@ -165,6 +170,7 @@ void *brw_state_batch(struct brw_context *brw,
 		      uint32_t *out_offset);
 
 /* brw_wm_surface_state.c */
+void gen4_init_vtable_surface_functions(struct brw_context *brw);
 void brw_create_constant_surface(struct brw_context *brw,
 				 drm_intel_bo *bo,
 				 int width,
@@ -180,6 +186,7 @@ GLuint translate_tex_format(gl_format mesa_format,
 			    GLenum srgb_decode);
 
 /* gen7_wm_surface_state.c */
+void gen7_init_vtable_surface_functions(struct brw_context *brw);
 void gen7_create_constant_surface(struct brw_context *brw,
 				  drm_intel_bo *bo,
 				  int width,
@@ -195,9 +202,5 @@ void upload_default_color(struct brw_context *brw,
 uint32_t
 get_attr_override(struct brw_vue_map *vue_map, int urb_entry_read_offset,
                   int fs_attr, bool two_side_color);
-
-/* gen7_misc_state.c */
-unsigned int
-gen7_depth_format(struct brw_context *brw);
 
 #endif

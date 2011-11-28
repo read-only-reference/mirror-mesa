@@ -80,7 +80,7 @@ gen6_upload_wm_push_constants(struct brw_context *brw)
    }
 }
 
-const struct brw_tracked_state gen6_wm_constants = {
+const struct brw_tracked_state gen6_wm_push_constants = {
    .dirty = {
       .mesa  = _NEW_PROGRAM_CONSTANTS,
       .brw   = (BRW_NEW_BATCH |
@@ -140,15 +140,29 @@ upload_wm_state(struct brw_context *brw)
    if (ctx->Shader.CurrentFragmentProgram == NULL)
       dw2 |= GEN6_WM_FLOATING_POINT_MODE_ALT;
 
-   /* BRW_NEW_NR_WM_SURFACES */
-   dw2 |= brw->wm.nr_surfaces << GEN6_WM_BINDING_TABLE_ENTRY_COUNT_SHIFT;
-
    /* CACHE_NEW_SAMPLER */
-   dw2 |= (ALIGN(brw->wm.sampler_count, 4) / 4) << GEN6_WM_SAMPLER_COUNT_SHIFT;
+   dw2 |= (ALIGN(brw->sampler.count, 4) / 4) << GEN6_WM_SAMPLER_COUNT_SHIFT;
    dw4 |= (brw->wm.prog_data->first_curbe_grf <<
 	   GEN6_WM_DISPATCH_START_GRF_SHIFT_0);
    dw4 |= (brw->wm.prog_data->first_curbe_grf_16 <<
 	   GEN6_WM_DISPATCH_START_GRF_SHIFT_2);
+
+   switch (brw->hiz.op) {
+   case BRW_HIZ_OP_NONE:
+      break;
+   case BRW_HIZ_OP_DEPTH_CLEAR:
+      dw4 |= GEN6_WM_DEPTH_CLEAR;
+      break;
+   case BRW_HIZ_OP_DEPTH_RESOLVE:
+      dw4 |= GEN6_WM_DEPTH_RESOLVE;
+      break;
+   case BRW_HIZ_OP_HIZ_RESOLVE:
+      dw4 |= GEN6_WM_HIERARCHICAL_DEPTH_RESOLVE;
+      break;
+   default:
+      assert(0);
+      break;
+   }
 
    dw5 |= (brw->max_wm_threads - 1) << GEN6_WM_MAX_THREADS_SHIFT;
 
@@ -170,7 +184,7 @@ upload_wm_state(struct brw_context *brw)
       dw5 |= GEN6_WM_POLYGON_STIPPLE_ENABLE;
 
    /* BRW_NEW_FRAGMENT_PROGRAM */
-   if (fp->program.Base.InputsRead & (1 << FRAG_ATTRIB_WPOS))
+   if (fp->program.Base.InputsRead & FRAG_BIT_WPOS)
       dw5 |= GEN6_WM_USES_SOURCE_DEPTH | GEN6_WM_USES_SOURCE_W;
    if (fp->program.Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_DEPTH))
       dw5 |= GEN6_WM_COMPUTED_DEPTH;
@@ -217,9 +231,9 @@ const struct brw_tracked_state gen6_wm_state = {
 		_NEW_PROGRAM_CONSTANTS |
 		_NEW_POLYGON),
       .brw   = (BRW_NEW_FRAGMENT_PROGRAM |
-                BRW_NEW_NR_WM_SURFACES |
 		BRW_NEW_URB_FENCE |
-		BRW_NEW_BATCH),
+		BRW_NEW_BATCH |
+		BRW_NEW_HIZ),
       .cache = (CACHE_NEW_SAMPLER |
 		CACHE_NEW_WM_PROG)
    },

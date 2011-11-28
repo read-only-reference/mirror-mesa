@@ -78,6 +78,8 @@ struct cso_context {
    struct pipe_context *pipe;
    struct cso_cache *cache;
 
+   boolean has_geometry_shader;
+
    struct sampler_info fragment_samplers;
    struct sampler_info vertex_samplers;
 
@@ -269,6 +271,11 @@ struct cso_context *cso_create_context( struct pipe_context *pipe )
 
    /* Enable for testing: */
    if (0) cso_set_maximum_cache_size( ctx->cache, 4 );
+
+   if (pipe->screen->get_shader_param(pipe->screen, PIPE_SHADER_GEOMETRY,
+                                PIPE_SHADER_CAP_MAX_INSTRUCTIONS) > 0) {
+      ctx->has_geometry_shader = TRUE;
+   }
 
    return ctx;
 
@@ -785,7 +792,9 @@ void cso_restore_stencil_ref(struct cso_context *ctx)
 enum pipe_error cso_set_geometry_shader_handle(struct cso_context *ctx,
                                                void *handle)
 {
-   if (ctx->geometry_shader != handle) {
+   assert(ctx->has_geometry_shader || !handle);
+
+   if (ctx->has_geometry_shader && ctx->geometry_shader != handle) {
       ctx->geometry_shader = handle;
       ctx->pipe->bind_gs_state(ctx->pipe, handle);
    }
@@ -804,12 +813,20 @@ void cso_delete_geometry_shader(struct cso_context *ctx, void *handle)
 
 void cso_save_geometry_shader(struct cso_context *ctx)
 {
+   if (!ctx->has_geometry_shader) {
+      return;
+   }
+
    assert(!ctx->geometry_shader_saved);
    ctx->geometry_shader_saved = ctx->geometry_shader;
 }
 
 void cso_restore_geometry_shader(struct cso_context *ctx)
 {
+   if (!ctx->has_geometry_shader) {
+      return;
+   }
+
    if (ctx->geometry_shader_saved != ctx->geometry_shader) {
       ctx->pipe->bind_gs_state(ctx->pipe, ctx->geometry_shader_saved);
       ctx->geometry_shader = ctx->geometry_shader_saved;
@@ -1265,8 +1282,10 @@ restore_sampler_views(struct cso_context *ctx,
    uint i;
 
    for (i = 0; i < info->nr_views_saved; i++) {
-      pipe_sampler_view_reference(&info->views[i], info->views_saved[i]);
-      pipe_sampler_view_reference(&info->views_saved[i], NULL);
+      pipe_sampler_view_reference(&info->views[i], NULL);
+      /* move the reference from one pointer to another */
+      info->views[i] = info->views_saved[i];
+      info->views_saved[i] = NULL;
    }
    for (; i < info->nr_views; i++) {
       pipe_sampler_view_reference(&info->views[i], NULL);

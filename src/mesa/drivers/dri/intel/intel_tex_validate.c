@@ -125,14 +125,16 @@ intel_tex_map_image_for_swrast(struct intel_context *intel,
 			       struct intel_texture_image *intel_image,
 			       GLbitfield mode)
 {
-   int level = intel_image->base.Base.Level;
-   int face = intel_image->base.Base.Face;
+   int level;
+   int face;
    struct intel_mipmap_tree *mt;
    unsigned int x, y;
 
    if (!intel_image || !intel_image->mt)
       return;
 
+   level = intel_image->base.Base.Level;
+   face = intel_image->base.Base.Face;
    mt = intel_image->mt;
 
    if (mt->target == GL_TEXTURE_3D ||
@@ -152,7 +154,7 @@ intel_tex_map_image_for_swrast(struct intel_context *intel,
 
       intel_image->base.Data = intel_region_map(intel, mt->region, mode);
    } else {
-      assert(mt->level[level].depth == 1);
+      assert(intel_image->base.Base.Depth == 1);
       intel_miptree_get_image_offset(mt, level, face, 0, &x, &y);
 
       DBG("%s: (%d,%d) -> (%d, %d)/%d\n",

@@ -650,7 +650,8 @@ static void brw_set_sampler_message(struct brw_compile *p,
                                     GLuint response_length,
                                     GLuint msg_length,
                                     GLuint header_present,
-                                    GLuint simd_mode)
+                                    GLuint simd_mode,
+				    GLuint return_format)
 {
    struct brw_context *brw = p->brw;
    struct intel_context *intel = &brw->intel;
@@ -676,7 +677,7 @@ static void brw_set_sampler_message(struct brw_compile *p,
       insn->bits3.sampler.binding_table_index = binding_table_index;
       insn->bits3.sampler.sampler = sampler;
       insn->bits3.sampler.msg_type = msg_type;
-      insn->bits3.sampler.return_format = BRW_SAMPLER_RETURN_FORMAT_FLOAT32;
+      insn->bits3.sampler.return_format = return_format;
    }
 }
 
@@ -1443,11 +1444,14 @@ void brw_math( struct brw_compile *p,
       assert(src.file == BRW_GENERAL_REGISTER_FILE);
 
       assert(dest.hstride == BRW_HORIZONTAL_STRIDE_1);
-      assert(src.hstride == BRW_HORIZONTAL_STRIDE_1);
+      if (intel->gen == 6)
+	 assert(src.hstride == BRW_HORIZONTAL_STRIDE_1);
 
-      /* Source modifiers are ignored for extended math instructions. */
-      assert(!src.negate);
-      assert(!src.abs);
+      /* Source modifiers are ignored for extended math instructions on Gen6. */
+      if (intel->gen == 6) {
+	 assert(!src.negate);
+	 assert(!src.abs);
+      }
 
       if (function == BRW_MATH_FUNCTION_INT_DIV_QUOTIENT ||
 	  function == BRW_MATH_FUNCTION_INT_DIV_REMAINDER ||
@@ -1507,8 +1511,10 @@ void brw_math2(struct brw_compile *p,
    assert(src1.file == BRW_GENERAL_REGISTER_FILE);
 
    assert(dest.hstride == BRW_HORIZONTAL_STRIDE_1);
-   assert(src0.hstride == BRW_HORIZONTAL_STRIDE_1);
-   assert(src1.hstride == BRW_HORIZONTAL_STRIDE_1);
+   if (intel->gen == 6) {
+      assert(src0.hstride == BRW_HORIZONTAL_STRIDE_1);
+      assert(src1.hstride == BRW_HORIZONTAL_STRIDE_1);
+   }
 
    if (function == BRW_MATH_FUNCTION_INT_DIV_QUOTIENT ||
        function == BRW_MATH_FUNCTION_INT_DIV_REMAINDER ||
@@ -1520,11 +1526,13 @@ void brw_math2(struct brw_compile *p,
       assert(src1.type == BRW_REGISTER_TYPE_F);
    }
 
-   /* Source modifiers are ignored for extended math instructions. */
-   assert(!src0.negate);
-   assert(!src0.abs);
-   assert(!src1.negate);
-   assert(!src1.abs);
+   /* Source modifiers are ignored for extended math instructions on Gen6. */
+   if (intel->gen == 6) {
+      assert(!src0.negate);
+      assert(!src0.abs);
+      assert(!src1.negate);
+      assert(!src1.abs);
+   }
 
    /* Math is the same ISA format as other opcodes, except that CondModifier
     * becomes FC[3:0] and ThreadCtrl becomes FC[5:4].
@@ -2079,7 +2087,8 @@ void brw_SAMPLE(struct brw_compile *p,
 		GLuint response_length,
 		GLuint msg_length,
 		GLuint header_present,
-		GLuint simd_mode)
+		GLuint simd_mode,
+		GLuint return_format)
 {
    struct intel_context *intel = &p->brw->intel;
    bool need_stall = 0;
@@ -2173,7 +2182,8 @@ void brw_SAMPLE(struct brw_compile *p,
 			      response_length, 
 			      msg_length,
 			      header_present,
-			      simd_mode);
+			      simd_mode,
+			      return_format);
    }
 
    if (need_stall) {

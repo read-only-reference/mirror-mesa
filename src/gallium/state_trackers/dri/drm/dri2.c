@@ -65,7 +65,7 @@ dri2_invalidate_drawable(__DRIdrawable *dPriv)
    struct dri_drawable *drawable = dri_drawable(dPriv);
 
    dri2InvalidateDrawable(dPriv);
-   drawable->dPriv->lastStamp = *drawable->dPriv->pStamp;
+   drawable->dPriv->lastStamp = drawable->dPriv->dri2.stamp;
 
    p_atomic_inc(&drawable->base.stamp);
 }
@@ -158,25 +158,8 @@ dri2_drawable_get_buffers(struct dri_drawable *drawable,
             &num_buffers, dri_drawable->loaderPrivate);
    }
 
-   if (buffers) {
-      /* set one cliprect to cover the whole dri_drawable */
-      dri_drawable->x = 0;
-      dri_drawable->y = 0;
-      dri_drawable->backX = 0;
-      dri_drawable->backY = 0;
-      dri_drawable->numClipRects = 1;
-      dri_drawable->pClipRects[0].x1 = 0;
-      dri_drawable->pClipRects[0].y1 = 0;
-      dri_drawable->pClipRects[0].x2 = dri_drawable->w;
-      dri_drawable->pClipRects[0].y2 = dri_drawable->h;
-      dri_drawable->numBackClipRects = 1;
-      dri_drawable->pBackClipRects[0].x1 = 0;
-      dri_drawable->pBackClipRects[0].y1 = 0;
-      dri_drawable->pBackClipRects[0].x2 = dri_drawable->w;
-      dri_drawable->pBackClipRects[0].y2 = dri_drawable->h;
-
+   if (buffers)
       *count = num_buffers;
-   }
 
    return buffers;
 }
@@ -323,8 +306,10 @@ dri2_allocate_buffer(__DRIscreen *sPriv,
 
    buffer->resource =
       screen->base.screen->resource_create(screen->base.screen, &templ);
-   if (!buffer->resource)
+   if (!buffer->resource) {
+      FREE(buffer);
       return NULL;
+   }
 
    memset(&whandle, 0, sizeof(whandle));
    whandle.type = DRM_API_HANDLE_TYPE_SHARED;
@@ -378,6 +363,14 @@ dri2_flush_frontbuffer(struct dri_drawable *drawable,
    if (statt == ST_ATTACHMENT_FRONT_LEFT) {
       loader->flushFrontBuffer(dri_drawable, dri_drawable->loaderPrivate);
    }
+}
+
+static void
+dri2_update_tex_buffer(struct dri_drawable *drawable,
+                       struct dri_context *ctx,
+                       struct pipe_resource *res)
+{
+   /* no-op */
 }
 
 static __DRIimage *
@@ -612,10 +605,6 @@ static struct __DRIimageExtensionRec dri2ImageExtension = {
  */
 
 static const __DRIextension *dri_screen_extensions[] = {
-   &driReadDrawableExtension,
-   &driCopySubBufferExtension.base,
-   &driSwapControlExtension.base,
-   &driMediaStreamCounterExtension.base,
    &driTexBufferExtension.base,
    &dri2FlushExtension.base,
    &dri2ImageExtension.base,
@@ -624,10 +613,6 @@ static const __DRIextension *dri_screen_extensions[] = {
 };
 
 static const __DRIextension *dri_screen_extensions_throttle[] = {
-   &driReadDrawableExtension,
-   &driCopySubBufferExtension.base,
-   &driSwapControlExtension.base,
-   &driMediaStreamCounterExtension.base,
    &driTexBufferExtension.base,
    &dri2FlushExtension.base,
    &dri2ImageExtension.base,
@@ -656,7 +641,7 @@ dri2_init_screen(__DRIscreen * sPriv)
    screen->sPriv = sPriv;
    screen->fd = sPriv->fd;
 
-   sPriv->private = (void *)screen;
+   sPriv->driverPrivate = (void *)screen;
 
    pscreen = driver_descriptor.create_screen(screen->fd);
    if (driver_descriptor.configuration)
@@ -707,6 +692,7 @@ dri2_create_buffer(__DRIscreen * sPriv,
 
    drawable->allocate_textures = dri2_allocate_textures;
    drawable->flush_frontbuffer = dri2_flush_frontbuffer;
+   drawable->update_tex_buffer = dri2_update_tex_buffer;
 
    return TRUE;
 }
@@ -717,8 +703,7 @@ dri2_create_buffer(__DRIscreen * sPriv,
  * DRI versions differ in their implementation of init_screen and swap_buffers.
  */
 const struct __DriverAPIRec driDriverAPI = {
-   .InitScreen = NULL,
-   .InitScreen2 = dri2_init_screen,
+   .InitScreen = dri2_init_screen,
    .DestroyScreen = dri_destroy_screen,
    .CreateContext = dri_create_context,
    .DestroyContext = dri_destroy_context,
@@ -727,13 +712,6 @@ const struct __DriverAPIRec driDriverAPI = {
    .MakeCurrent = dri_make_current,
    .UnbindContext = dri_unbind_context,
 
-   .GetSwapInfo = NULL,
-   .GetDrawableMSC = NULL,
-   .WaitForMSC = NULL,
-
-   .SwapBuffers = NULL,
-   .CopySubBuffer = NULL,
-
    .AllocateBuffer = dri2_allocate_buffer,
    .ReleaseBuffer  = dri2_release_buffer,
 };
@@ -741,7 +719,6 @@ const struct __DriverAPIRec driDriverAPI = {
 /* This is the table of extensions that the loader will dlsym() for. */
 PUBLIC const __DRIextension *__driDriverExtensions[] = {
     &driCoreExtension.base,
-    &driLegacyExtension.base,
     &driDRI2Extension.base,
     NULL
 };

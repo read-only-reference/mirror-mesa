@@ -65,7 +65,9 @@ brw_new_shader_program(struct gl_context *ctx, GLuint name)
 bool
 brw_shader_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
 {
-   if (!brw_fs_precompile(ctx, prog))
+   struct brw_context *brw = brw_context(ctx);
+
+   if (brw->precompile && !brw_fs_precompile(ctx, prog))
       return false;
 
    if (!brw_vs_precompile(ctx, prog))
@@ -80,6 +82,9 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
    struct brw_context *brw = brw_context(ctx);
    struct intel_context *intel = &brw->intel;
    unsigned int stage;
+
+   if (!_mesa_ir_link_shader(ctx, prog))
+      return false;
 
    for (stage = 0; stage < ARRAY_SIZE(prog->_LinkedShaders); stage++) {
       struct brw_shader *shader =
@@ -148,9 +153,6 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       ralloc_free(mem_ctx);
    }
 
-   if (!_mesa_ir_link_shader(ctx, prog))
-      return false;
-
    if (!brw_shader_precompile(ctx, prog))
       return false;
 
@@ -170,6 +172,7 @@ brw_type_for_base_type(const struct glsl_type *type)
    case GLSL_TYPE_UINT:
       return BRW_REGISTER_TYPE_UD;
    case GLSL_TYPE_ARRAY:
+      return brw_type_for_base_type(type->fields.array);
    case GLSL_TYPE_STRUCT:
    case GLSL_TYPE_SAMPLER:
       /* These should be overridden with the type of the member when

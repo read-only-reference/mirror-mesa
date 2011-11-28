@@ -107,7 +107,6 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE:
    case PIPE_CAP_POINT_SPRITE:
       return 1;
-   case PIPE_CAP_GLSL:
    case PIPE_CAP_SM3:
       return 1;
    case PIPE_CAP_MAX_RENDER_TARGETS:
@@ -201,18 +200,18 @@ nv50_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 }
 
 static float
-nv50_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_cap param)
+nv50_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
 {
    switch (param) {
-   case PIPE_CAP_MAX_LINE_WIDTH:
-   case PIPE_CAP_MAX_LINE_WIDTH_AA:
+   case PIPE_CAPF_MAX_LINE_WIDTH:
+   case PIPE_CAPF_MAX_LINE_WIDTH_AA:
       return 10.0f;
-   case PIPE_CAP_MAX_POINT_WIDTH:
-   case PIPE_CAP_MAX_POINT_WIDTH_AA:
+   case PIPE_CAPF_MAX_POINT_WIDTH:
+   case PIPE_CAPF_MAX_POINT_WIDTH_AA:
       return 64.0f;
-   case PIPE_CAP_MAX_TEXTURE_ANISOTROPY:
+   case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
       return 16.0f;
-   case PIPE_CAP_MAX_TEXTURE_LOD_BIAS:
+   case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
       return 4.0f;
    default:
       NOUVEAU_ERR("unknown PIPE_CAP %d\n", param);

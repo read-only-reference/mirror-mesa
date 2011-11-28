@@ -9,7 +9,6 @@ MAIN_SOURCES = \
 	main/api_arrayelt.c \
 	main/api_exec.c \
 	main/api_loopback.c \
-	main/api_noop.c \
 	main/api_validate.c \
 	main/accum.c \
 	main/arbprogram.c \
@@ -142,7 +141,6 @@ SWRAST_SOURCES = \
 	swrast/s_logic.c \
 	swrast/s_masking.c \
 	swrast/s_points.c \
-	swrast/s_readpix.c \
 	swrast/s_span.c \
 	swrast/s_stencil.c \
 	swrast/s_texcombine.c \
@@ -183,6 +181,7 @@ VBO_SOURCES = \
 	vbo/vbo_exec_array.c \
 	vbo/vbo_exec_draw.c \
 	vbo/vbo_exec_eval.c \
+	vbo/vbo_noop.c \
 	vbo/vbo_rebase.c \
 	vbo/vbo_split.c \
 	vbo/vbo_split_copy.c \
@@ -261,7 +260,6 @@ PROGRAM_SOURCES = \
 	program/prog_parameter_layout.c \
 	program/prog_print.c \
 	program/prog_statevars.c \
-	program/prog_uniform.c \
 	program/programopt.c \
 	program/register_allocate.c \
 	program/symbol_table.c

@@ -82,6 +82,7 @@ struct vbo_exec_context
 {
    struct gl_context *ctx;   
    GLvertexformat vtxfmt;
+   GLvertexformat vtxfmt_noop;
 
    struct {
       struct gl_buffer_object *bufferobj;
@@ -124,8 +125,8 @@ struct vbo_exec_context
       /* These just mirror the current arrayobj (todo: make arrayobj
        * look like this and remove the mirror):
        */
-      const struct gl_client_array *legacy_array[16];
-      const struct gl_client_array *generic_array[16];
+      const struct gl_client_array *legacy_array[VERT_ATTRIB_FF_MAX];
+      const struct gl_client_array *generic_array[VERT_ATTRIB_GENERIC_MAX];
 
       /* Arrays and current values manipulated according to program
        * mode, etc.  These are the attributes as seen by vertex

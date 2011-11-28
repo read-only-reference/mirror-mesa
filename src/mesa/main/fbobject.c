@@ -39,6 +39,7 @@
 #include "formats.h"
 #include "framebuffer.h"
 #include "hash.h"
+#include "image.h"
 #include "macros.h"
 #include "mfeatures.h"
 #include "mtypes.h"
@@ -76,14 +77,6 @@ static struct gl_renderbuffer DummyRenderbuffer;
 /* We bind this framebuffer when applications pass a NULL
  * drawable/surface in make current. */
 static struct gl_framebuffer IncompleteFramebuffer;
-
-
-static inline GLboolean
-is_cube_face(GLenum target)
-{
-   return (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X &&
-           target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z);
-}
 
 
 /**
@@ -1307,6 +1300,9 @@ _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
    case GL_LUMINANCE_ALPHA32UI_EXT:
       return ctx->Extensions.EXT_texture_integer &&
              ctx->Extensions.ARB_framebuffer_object ? GL_LUMINANCE_ALPHA : 0;
+
+   case GL_RGB10_A2UI:
+      return ctx->Extensions.ARB_texture_rgb10_a2ui ? GL_RGBA : 0;
    default:
       return 0;
    }
@@ -1370,12 +1366,12 @@ renderbuffer_storage(GLenum target, GLenum internalFormat,
       return;
    }
 
-   if (width < 1 || width > (GLsizei) ctx->Const.MaxRenderbufferSize) {
+   if (width < 0 || width > (GLsizei) ctx->Const.MaxRenderbufferSize) {
       _mesa_error(ctx, GL_INVALID_VALUE, "%s(width)", func);
       return;
    }
 
-   if (height < 1 || height > (GLsizei) ctx->Const.MaxRenderbufferSize) {
+   if (height < 0 || height > (GLsizei) ctx->Const.MaxRenderbufferSize) {
       _mesa_error(ctx, GL_INVALID_VALUE, "%s(height)", func);
       return;
    }
@@ -1482,48 +1478,10 @@ _mesa_EGLImageTargetRenderbufferStorageOES(GLenum target, GLeglImageOES image)
 static GLint
 get_component_bits(GLenum pname, GLenum baseFormat, gl_format format)
 {
-   switch (pname) {
-   case GL_RENDERBUFFER_RED_SIZE_EXT:
-   case GL_FRAMEBUFFER_ATTACHMENT_RED_SIZE:
-      if (baseFormat == GL_RGB || baseFormat == GL_RGBA ||
-	  baseFormat == GL_RG || baseFormat == GL_RED)
-         return _mesa_get_format_bits(format, pname);
-      else
-         return 0;
-   case GL_RENDERBUFFER_GREEN_SIZE_EXT:
-   case GL_FRAMEBUFFER_ATTACHMENT_GREEN_SIZE:
-      if (baseFormat == GL_RGB || baseFormat == GL_RGBA || baseFormat == GL_RG)
-         return _mesa_get_format_bits(format, pname);
-      else
-         return 0;
-   case GL_RENDERBUFFER_BLUE_SIZE_EXT:
-   case GL_FRAMEBUFFER_ATTACHMENT_BLUE_SIZE:
-      if (baseFormat == GL_RGB || baseFormat == GL_RGBA)
-         return _mesa_get_format_bits(format, pname);
-      else
-         return 0;
-   case GL_RENDERBUFFER_ALPHA_SIZE_EXT:
-   case GL_FRAMEBUFFER_ATTACHMENT_ALPHA_SIZE:
-      if (baseFormat == GL_RGBA || baseFormat == GL_ALPHA ||
-	  baseFormat == GL_LUMINANCE_ALPHA)
-         return _mesa_get_format_bits(format, pname);
-      else
-         return 0;
-   case GL_RENDERBUFFER_DEPTH_SIZE_EXT:
-   case GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE:
-      if (baseFormat == GL_DEPTH_COMPONENT || baseFormat == GL_DEPTH_STENCIL)
-         return _mesa_get_format_bits(format, pname);
-      else
-         return 0;
-   case GL_RENDERBUFFER_STENCIL_SIZE_EXT:
-   case GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE:
-      if (baseFormat == GL_STENCIL_INDEX || baseFormat == GL_DEPTH_STENCIL)
-         return _mesa_get_format_bits(format, pname);
-      else
-         return 0;
-   default:
+   if (_mesa_base_format_has_channel(baseFormat, pname))
+      return _mesa_get_format_bits(format, pname);
+   else
       return 0;
-   }
 }
 
 
@@ -1939,7 +1897,29 @@ _mesa_CheckFramebufferStatusEXT(GLenum target)
    return buffer->_Status;
 }
 
+/**
+ * Replicate the src attachment point. Used by framebuffer_texture() when
+ * the same texture is attached at GL_DEPTH_ATTACHMENT and
+ * GL_STENCIL_ATTACHMENT.
+ */
+static void
+reuse_framebuffer_texture_attachment(struct gl_framebuffer *fb,
+                                     gl_buffer_index dst,
+                                     gl_buffer_index src)
+{
+   struct gl_renderbuffer_attachment *dst_att = &fb->Attachment[dst];
+   struct gl_renderbuffer_attachment *src_att = &fb->Attachment[src];
 
+   assert(src_att->Texture != NULL);
+   assert (src_att->Renderbuffer != NULL);
+
+   _mesa_reference_texobj(&dst_att->Texture, src_att->Texture);
+   _mesa_reference_renderbuffer(&dst_att->Renderbuffer, src_att->Renderbuffer);
+   dst_att->Type = src_att->Type;
+   dst_att->Complete = src_att->Complete;
+   dst_att->TextureLevel = src_att->TextureLevel;
+   dst_att->Zoffset = src_att->Zoffset;
+}
 
 /**
  * Common code called by glFramebufferTexture1D/2D/3DEXT().
@@ -1986,7 +1966,7 @@ framebuffer_texture(struct gl_context *ctx, const char *caller, GLenum target,
          }
          else {
             err = (texObj->Target == GL_TEXTURE_CUBE_MAP)
-                ? !is_cube_face(textarget)
+                ? !_mesa_is_cube_face(textarget)
                 : (texObj->Target != textarget);
          }
       }
@@ -2041,8 +2021,34 @@ framebuffer_texture(struct gl_context *ctx, const char *caller, GLenum target,
 
    _glthread_LOCK_MUTEX(fb->Mutex);
    if (texObj) {
-      _mesa_set_texture_attachment(ctx, fb, att, texObj, textarget,
-                                   level, zoffset);
+      if (attachment == GL_DEPTH_ATTACHMENT &&
+	   texObj == fb->Attachment[BUFFER_STENCIL].Texture) {
+	 /* The texture object is already attached to the stencil attachment
+	  * point. Don't create a new renderbuffer; just reuse the stencil
+	  * attachment's. This is required to prevent a GL error in
+	  * glGetFramebufferAttachmentParameteriv(GL_DEPTH_STENCIL).
+	  */
+	 reuse_framebuffer_texture_attachment(fb, BUFFER_DEPTH,
+	                                      BUFFER_STENCIL);
+      } else if (attachment == GL_STENCIL_ATTACHMENT &&
+	         texObj== fb->Attachment[BUFFER_DEPTH].Texture) {
+	 /* As above, but with depth and stencil juxtasposed. */
+	 reuse_framebuffer_texture_attachment(fb, BUFFER_STENCIL,
+	                                      BUFFER_DEPTH);
+      } else {
+	 _mesa_set_texture_attachment(ctx, fb, att, texObj, textarget,
+				      level, zoffset);
+	 if (attachment == GL_DEPTH_STENCIL_ATTACHMENT) {
+	    /* Above we created a new renderbuffer and attached it to the
+	     * depth attachment point. Now attach it to the stencil attachment
+	     * point too.
+	     */
+	    assert(att == &fb->Attachment[BUFFER_DEPTH]);
+	    reuse_framebuffer_texture_attachment(fb,BUFFER_STENCIL,
+	                                         BUFFER_DEPTH);
+	 }
+      }
+
       /* Set the render-to-texture flag.  We'll check this flag in
        * glTexImage() and friends to determine if we need to revalidate
        * any FBOs that might be rendering into this texture.
@@ -2055,6 +2061,10 @@ framebuffer_texture(struct gl_context *ctx, const char *caller, GLenum target,
    }
    else {
       _mesa_remove_attachment(ctx, att);
+      if (attachment == GL_DEPTH_STENCIL_ATTACHMENT) {
+	 assert(att == &fb->Attachment[BUFFER_DEPTH]);
+	 _mesa_remove_attachment(ctx, &fb->Attachment[BUFFER_STENCIL]);
+      }
    }
 
    invalidate_framebuffer(fb);
@@ -2125,7 +2135,7 @@ _mesa_FramebufferTexture2DEXT(GLenum target, GLenum attachment,
          error = !ctx->Extensions.EXT_texture_array;
          break;
       default:
-         error = GL_FALSE;
+         error = GL_TRUE;
       }
 
       if (error) {

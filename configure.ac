@@ -658,7 +658,7 @@ GALLIUM_DRIVERS_DEFAULT="r300,r600,swrast"
 AC_ARG_WITH([gallium-drivers],
     [AS_HELP_STRING([--with-gallium-drivers@<:@=DIRS...@:>@],
         [comma delimited Gallium drivers list, e.g.
-        "i915,i965,nouveau,r300,r600,svga,swrast"
+        "i915,nouveau,r300,r600,svga,swrast"
         @<:@default=r300,r600,swrast@:>@])],
     [with_gallium_drivers="$withval"],
     [with_gallium_drivers="$GALLIUM_DRIVERS_DEFAULT"])
@@ -799,7 +799,7 @@ GLU_DIRS="sgi"
 GALLIUM_DIRS="auxiliary drivers state_trackers"
 GALLIUM_TARGET_DIRS=""
 GALLIUM_WINSYS_DIRS="sw"
-GALLIUM_DRIVERS_DIRS="failover galahad trace rbug noop identity"
+GALLIUM_DRIVERS_DIRS="galahad trace rbug noop identity"
 GALLIUM_STATE_TRACKERS_DIRS=""
 
 # build shared-glapi if enabled for OpenGL or if OpenGL ES is enabled
@@ -1052,7 +1052,7 @@ AC_SUBST([GLESv1_CM_PC_LIB_PRIV])
 AC_SUBST([GLESv2_LIB_DEPS])
 AC_SUBST([GLESv2_PC_LIB_PRIV])
 
-GLAPI_LIB_DEPS="-lpthread"
+GLAPI_LIB_DEPS="-lpthread $SELINUX_LIBS"
 AC_SUBST([GLAPI_LIB_DEPS])
 
 
@@ -1427,8 +1427,8 @@ dnl
 dnl gbm Gallium configuration
 dnl
 if test "x$enable_gallium_gbm" = xauto; then
-    case "$enable_gbm$HAVE_ST_EGL$with_egl_platforms" in
-        yesyes*drm*)
+    case "$enable_gbm$HAVE_ST_EGL$enable_dri$with_egl_platforms" in
+        yesyesyes*drm*)
             enable_gallium_gbm=yes ;;
          *)
             enable_gallium_gbm=no ;;
@@ -1440,6 +1440,10 @@ if test "x$enable_gallium_gbm" = xyes; then
     fi
     if test "x$enable_gbm" = xno; then
         AC_MSG_ERROR([cannot enable gbm_gallium without gbm])
+    fi
+    # gbm_gallium abuses DRI_LIB_DEPS to link.  Make sure it is set.
+    if test "x$enable_dri" = xno; then
+        AC_MSG_ERROR([gbm_gallium requires --enable-dri to build])
     fi
 
     GALLIUM_STATE_TRACKERS_DIRS="gbm $GALLIUM_STATE_TRACKERS_DIRS"
@@ -1465,8 +1469,20 @@ dnl
 dnl XA configuration
 dnl
 if test "x$enable_xa" = xyes; then
+AC_PROG_AWK
+AC_PROG_GREP
+AC_CHECK_PROG(NM, nm, "nm")
+if test "x$AWK" = x || test "x$GREP" = x || test "x$NM" = x; then
+AC_MSG_WARN([Missing one of nm, grep or awk. Disabling xa.])
+enable_xa=no
+fi
+fi
+if test "x$enable_xa" = xyes; then
     GALLIUM_STATE_TRACKERS_DIRS="xa $GALLIUM_STATE_TRACKERS_DIRS"
     HAVE_ST_XA=yes
+    AC_SUBST(AWK)
+    AC_SUBST(GREP)
+    AC_SUBST(NM)
 fi
 
 dnl
@@ -1828,14 +1844,6 @@ if test "x$with_gallium_drivers" != x; then
             GALLIUM_WINSYS_DIRS="$GALLIUM_WINSYS_DIRS i915/sw"
             gallium_check_st "i915/drm" "dri-i915" "xorg-i915"
             ;;
-        xi965)
-            PKG_CHECK_MODULES([INTEL], [libdrm_intel >= $LIBDRM_INTEL_REQUIRED])
-            GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS i965 softpipe"
-            if test "x$MESA_LLVM" = x1; then
-                GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS llvmpipe"
-            fi
-            gallium_check_st "i965/drm" "dri-i965" "xorg-i965"
-            ;;
         xr300)
             gallium_require_llvm "Gallium R300"
             GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS r300"
@@ -2006,6 +2014,7 @@ if echo "$SRC_DIRS" | grep 'gallium' >/dev/null 2>&1; then
 else
     echo "        Gallium:         no"
 fi
+
 
 dnl Libraries
 echo ""

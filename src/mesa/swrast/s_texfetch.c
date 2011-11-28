@@ -165,6 +165,20 @@ texfetch_funcs[MESA_FORMAT_COUNT] =
       store_texel_argb8888_rev
    },
    {
+      MESA_FORMAT_RGBX8888,
+      fetch_texel_1d_f_rgbx8888,
+      fetch_texel_2d_f_rgbx8888,
+      fetch_texel_3d_f_rgbx8888,
+      store_texel_rgbx8888
+   },
+   {
+      MESA_FORMAT_RGBX8888_REV,
+      fetch_texel_1d_f_rgbx8888_rev,
+      fetch_texel_2d_f_rgbx8888_rev,
+      fetch_texel_3d_f_rgbx8888_rev,
+      store_texel_rgbx8888_rev,
+   },
+   {
       MESA_FORMAT_XRGB8888,
       fetch_texel_1d_f_xrgb8888,
       fetch_texel_2d_f_xrgb8888,
@@ -1246,6 +1260,13 @@ texfetch_funcs[MESA_FORMAT_COUNT] =
       fetch_texel_2d_z32f_x24s8,
       fetch_texel_3d_z32f_x24s8,
       store_texel_z32f_x24s8
+   },
+   {
+      MESA_FORMAT_ARGB2101010_UINT,
+      NULL,
+      NULL,
+      NULL,
+      NULL
    }
 };
 
@@ -1261,7 +1282,8 @@ _mesa_get_texel_fetch_func(gl_format format, GLuint dims)
    }
 #endif
 
-   assert(Elements(texfetch_funcs) == MESA_FORMAT_COUNT);
+   STATIC_ASSERT(Elements(texfetch_funcs) == MESA_FORMAT_COUNT);
+
    assert(format < MESA_FORMAT_COUNT);
 
    switch (dims) {

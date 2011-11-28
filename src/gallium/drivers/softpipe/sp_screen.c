@@ -70,8 +70,6 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_TWO_SIDED_STENCIL:
       return 1;
-   case PIPE_CAP_GLSL:
-      return 1;
    case PIPE_CAP_SM3:
       return 1;
    case PIPE_CAP_ANISOTROPIC_FILTER:
@@ -157,20 +155,20 @@ softpipe_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe
 }
 
 static float
-softpipe_get_paramf(struct pipe_screen *screen, enum pipe_cap param)
+softpipe_get_paramf(struct pipe_screen *screen, enum pipe_capf param)
 {
    switch (param) {
-   case PIPE_CAP_MAX_LINE_WIDTH:
+   case PIPE_CAPF_MAX_LINE_WIDTH:
       /* fall-through */
-   case PIPE_CAP_MAX_LINE_WIDTH_AA:
+   case PIPE_CAPF_MAX_LINE_WIDTH_AA:
       return 255.0; /* arbitrary */
-   case PIPE_CAP_MAX_POINT_WIDTH:
+   case PIPE_CAPF_MAX_POINT_WIDTH:
       /* fall-through */
-   case PIPE_CAP_MAX_POINT_WIDTH_AA:
+   case PIPE_CAPF_MAX_POINT_WIDTH_AA:
       return 255.0; /* arbitrary */
-   case PIPE_CAP_MAX_TEXTURE_ANISOTROPY:
+   case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
       return 16.0;
-   case PIPE_CAP_MAX_TEXTURE_LOD_BIAS:
+   case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
       return 16.0; /* arbitrary */
    default:
       return 0;

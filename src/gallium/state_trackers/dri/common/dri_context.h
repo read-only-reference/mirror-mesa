@@ -32,8 +32,8 @@
 #ifndef DRI_CONTEXT_H
 #define DRI_CONTEXT_H
 
+#include "dri_util.h"
 #include "pipe/p_compiler.h"
-#include "dri_wrapper.h"
 #include "postprocess/filters.h"
 
 struct pipe_context;
@@ -51,11 +51,6 @@ struct dri_context
    __DRIdrawable *rPriv;
 
    driOptionCache optionCache;
-
-   drmLock *lock;
-   boolean isLocked;
-   boolean stLostLock;
-   boolean wsLostLock;
 
    unsigned int bind_count;
 

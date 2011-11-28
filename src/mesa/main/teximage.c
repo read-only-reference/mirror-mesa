@@ -331,6 +331,7 @@ _mesa_base_tex_format( struct gl_context *ctx, GLint internalFormat )
       case GL_RGBA8I_EXT:
       case GL_RGBA16I_EXT:
       case GL_RGBA32I_EXT:
+      case GL_RGB10_A2UI:
          return GL_RGBA;
       case GL_RGB8UI_EXT:
       case GL_RGB16UI_EXT:
@@ -522,8 +523,7 @@ _mesa_base_tex_format( struct gl_context *ctx, GLint internalFormat )
 GLuint
 _mesa_tex_target_to_face(GLenum target)
 {
-   if (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
-       target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB)
+   if (_mesa_is_cube_face(target))
       return (GLuint) target - (GLuint) GL_TEXTURE_CUBE_MAP_POSITIVE_X;
    else
       return 0;
@@ -549,7 +549,8 @@ _mesa_set_tex_image(struct gl_texture_object *tObj,
 
    ASSERT(tObj);
    ASSERT(texImage);
-   ASSERT(target != GL_TEXTURE_RECTANGLE_NV || level == 0);
+   if (target == GL_TEXTURE_RECTANGLE_NV || target == GL_TEXTURE_EXTERNAL_OES)
+      assert(level == 0);
 
    tObj->Image[face][level] = texImage;
 
@@ -607,10 +608,11 @@ _mesa_delete_texture_image(struct gl_context *ctx,
 GLboolean
 _mesa_is_proxy_texture(GLenum target)
 {
-   /* NUM_TEXTURE_TARGETS should match number of terms below,
-    * except there's no proxy for GL_TEXTURE_BUFFER.
+   /*
+    * NUM_TEXTURE_TARGETS should match number of terms below, except there's no
+    * proxy for GL_TEXTURE_BUFFER and GL_TEXTURE_EXTERNAL_OES.
     */
-   assert(NUM_TEXTURE_TARGETS == 8);
+   assert(NUM_TEXTURE_TARGETS == 7 + 2);
 
    return (target == GL_PROXY_TEXTURE_1D ||
            target == GL_PROXY_TEXTURE_2D ||
@@ -723,6 +725,9 @@ _mesa_select_tex_object(struct gl_context *ctx,
       case GL_TEXTURE_BUFFER:
          return ctx->Extensions.ARB_texture_buffer_object
             ? texUnit->CurrentTex[TEXTURE_BUFFER_INDEX] : NULL;
+      case GL_TEXTURE_EXTERNAL_OES:
+         return ctx->Extensions.OES_EGL_image_external
+            ? texUnit->CurrentTex[TEXTURE_EXTERNAL_INDEX] : NULL;
       default:
          _mesa_problem(NULL, "bad target in _mesa_select_tex_object()");
          return NULL;
@@ -911,6 +916,7 @@ _mesa_max_texture_levels(struct gl_context *ctx, GLenum target)
               ctx->Extensions.EXT_texture_array)
          ? ctx->Const.MaxTextureLevels : 0;
    case GL_TEXTURE_BUFFER:
+   case GL_TEXTURE_EXTERNAL_OES:
       /* fall-through */
    default:
       return 0; /* bad target */
@@ -942,6 +948,7 @@ _mesa_get_texture_dimensions(GLenum target)
    case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
    case GL_TEXTURE_1D_ARRAY:
    case GL_PROXY_TEXTURE_1D_ARRAY:
+   case GL_TEXTURE_EXTERNAL_OES:
       return 2;
    case GL_TEXTURE_3D:
    case GL_PROXY_TEXTURE_3D:
@@ -1015,15 +1022,8 @@ make_null_texture(GLint width, GLint height, GLint depth, GLenum format)
 
 
 /**
- * Reset the fields of a gl_texture_image struct to zero.
- * 
- * \param img texture image structure.
- *
- * This is called when a proxy texture test fails, we set all the
- * image members (except DriverData) to zero.
- * It's also used in glTexImage[123]D as a safeguard to be sure all
- * required fields get initialized properly by the Driver.TexImage[123]D
- * functions.
+ * Set the size and format-related fields of a gl_texture_image struct
+ * to zero.  This is used when a proxy texture test fails.
  */
 static void
 clear_teximage_fields(struct gl_texture_image *img)
@@ -2533,13 +2533,10 @@ _mesa_EGLImageTargetTexture2DOES (GLenum target, GLeglImageOES image)
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH(ctx);
 
-   if (!ctx->Extensions.OES_EGL_image) {
-      _mesa_error(ctx, GL_INVALID_OPERATION,
-                  "glEGLImageTargetTexture2DOES(unsupported)");
-      return;
-   }
-
-   if (target != GL_TEXTURE_2D) {
+   if ((target == GL_TEXTURE_2D &&
+        !ctx->Extensions.OES_EGL_image) ||
+       (target == GL_TEXTURE_EXTERNAL_OES &&
+        !ctx->Extensions.OES_EGL_image_external)) {
       _mesa_error(ctx, GL_INVALID_ENUM,
 		  "glEGLImageTargetTexture2D(target=%d)", target);
       return;
@@ -3090,8 +3087,7 @@ compressed_texture_error_check(struct gl_context *ctx, GLint dimensions,
    }
 
    /* For cube map, width must equal height */
-   if (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
-       target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB && width != height) {
+   if (_mesa_is_cube_face(target) && width != height) {
       *reason = "width != height";
       return GL_INVALID_VALUE;
    }
@@ -3179,8 +3175,7 @@ compressed_subtexture_error_check(struct gl_context *ctx, GLint dimensions,
             return GL_INVALID_ENUM; /*target*/
          maxLevels = ctx->Const.MaxCubeTextureLevels;
       }
-      else if (target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB &&
-               target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB) {
+      else if (_mesa_is_cube_face(target)) {
          if (!ctx->Extensions.ARB_texture_cube_map)
             return GL_INVALID_ENUM; /*target*/
          maxLevels = ctx->Const.MaxCubeTextureLevels;

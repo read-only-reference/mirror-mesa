@@ -58,7 +58,7 @@ upload_wm_state(struct brw_context *brw)
       dw1 |= GEN7_WM_POLYGON_STIPPLE_ENABLE;
 
    /* BRW_NEW_FRAGMENT_PROGRAM */
-   if (fp->program.Base.InputsRead & (1 << FRAG_ATTRIB_WPOS))
+   if (fp->program.Base.InputsRead & FRAG_BIT_WPOS)
       dw1 |= GEN7_WM_USES_SOURCE_DEPTH | GEN7_WM_USES_SOURCE_W;
    if (fp->program.Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_DEPTH)) {
       writes_depth = true;
@@ -104,13 +104,13 @@ upload_ps_state(struct brw_context *brw)
 
    BEGIN_BATCH(2);
    OUT_BATCH(_3DSTATE_BINDING_TABLE_POINTERS_PS << 16 | (2 - 2));
-   OUT_BATCH(brw->wm.bind_bo_offset);
+   OUT_BATCH(brw->bind.bo_offset);
    ADVANCE_BATCH();
 
    /* CACHE_NEW_SAMPLER */
    BEGIN_BATCH(2);
    OUT_BATCH(_3DSTATE_SAMPLER_STATE_POINTERS_PS << 16 | (2 - 2));
-   OUT_BATCH(brw->wm.sampler_offset);
+   OUT_BATCH(brw->sampler.offset);
    ADVANCE_BATCH();
 
    /* CACHE_NEW_WM_PROG */
@@ -144,10 +144,7 @@ upload_ps_state(struct brw_context *brw)
 
    dw2 = dw4 = dw5 = 0;
 
-   dw2 |= (ALIGN(brw->wm.sampler_count, 4) / 4) << GEN7_PS_SAMPLER_COUNT_SHIFT;
-
-   /* BRW_NEW_NR_WM_SURFACES */
-   dw2 |= brw->wm.nr_surfaces << GEN7_PS_BINDING_TABLE_ENTRY_COUNT_SHIFT;
+   dw2 |= (ALIGN(brw->sampler.count, 4) / 4) << GEN7_PS_SAMPLER_COUNT_SHIFT;
 
    /* Use ALT floating point mode for ARB fragment programs, because they
     * require 0^0 == 1.
@@ -198,7 +195,6 @@ const struct brw_tracked_state gen7_ps_state = {
       .mesa  = _NEW_PROGRAM_CONSTANTS,
       .brw   = (BRW_NEW_CURBE_OFFSETS |
 		BRW_NEW_FRAGMENT_PROGRAM |
-                BRW_NEW_NR_WM_SURFACES |
 		BRW_NEW_PS_BINDING_TABLE |
 		BRW_NEW_URB_FENCE |
 		BRW_NEW_BATCH),

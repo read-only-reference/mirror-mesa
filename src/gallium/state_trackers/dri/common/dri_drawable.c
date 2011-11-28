@@ -62,9 +62,9 @@ dri_st_framebuffer_validate(struct st_framebuffer_iface *stfbi,
    new_mask = (statt_mask & ~drawable->texture_mask);
 
    /*
-    * dPriv->pStamp is the server stamp.  It should be accessed with a lock, at
-    * least for DRI1.  dPriv->lastStamp is the client stamp.  It has the value
-    * of the server stamp when last checked.
+    * dPriv->dri2.stamp is the server stamp.  dPriv->lastStamp is the
+    * client stamp.  It has the value of the server stamp when last
+    * checked.
     */
    new_stamp = (drawable->texture_stamp != drawable->dPriv->lastStamp);
 
@@ -116,7 +116,7 @@ dri_create_buffer(__DRIscreen * sPriv,
 		  __DRIdrawable * dPriv,
 		  const struct gl_config * visual, boolean isPixmap)
 {
-   struct dri_screen *screen = sPriv->private;
+   struct dri_screen *screen = sPriv->driverPrivate;
    struct dri_drawable *drawable = NULL;
 
    if (isPixmap)
@@ -207,6 +207,7 @@ dri_set_tex_buffer2(__DRIcontext *pDRICtx, GLint target,
 
    dri_drawable_validate_att(drawable, ST_ATTACHMENT_FRONT_LEFT);
 
+   /* Use the pipe resource associated with the X drawable */
    pt = drawable->textures[ST_ATTACHMENT_FRONT_LEFT];
 
    if (pt) {
@@ -225,6 +226,8 @@ dri_set_tex_buffer2(__DRIcontext *pDRICtx, GLint target,
             break;
          }
       }
+
+      drawable->update_tex_buffer(drawable, ctx, pt);
 
       ctx->st->teximage(ctx->st,
             (target == GL_TEXTURE_2D) ? ST_TEXTURE_2D : ST_TEXTURE_RECT,

@@ -199,7 +199,7 @@ GLboolean r200CreateContext( gl_api api,
 			     void *sharedContextPrivate)
 {
    __DRIscreen *sPriv = driContextPriv->driScreenPriv;
-   radeonScreenPtr screen = (radeonScreenPtr)(sPriv->private);
+   radeonScreenPtr screen = (radeonScreenPtr)(sPriv->driverPrivate);
    struct dd_function_table functions;
    r200ContextPtr rmesa;
    struct gl_context *ctx;
@@ -275,6 +275,8 @@ GLboolean r200CreateContext( gl_api api,
    ctx->Const.MaxTextureCoordUnits = ctx->Const.MaxTextureUnits;
 
    ctx->Const.MaxCombinedTextureImageUnits = ctx->Const.MaxTextureUnits;
+
+   ctx->Const.StripTextureBorder = GL_TRUE;
 
    i = driQueryOptioni( &rmesa->radeon.optionCache, "allow_large_textures");
 

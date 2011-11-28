@@ -13,7 +13,7 @@ Feature                                               Status
 GL 3.0:
 
 GLSL 1.30 (GL_EXT_gpu_shader4, etc.)                  started
-glBindFragDataLocation, glGetFragDataLocation         not started
+glBindFragDataLocation, glGetFragDataLocation         DONE
 Conditional rendering (GL_NV_conditional_render)      DONE (swrast, softpipe, i965)
 Map buffer subranges (GL_ARB_map_buffer_range)        DONE
 Clamping controls (GL_ARB_color_buffer_float)         DONE
@@ -78,7 +78,7 @@ GL_ARB_blend_func_extended                            not started
 GL_ARB_explicit_attrib_location                       DONE (swrast, i915, i965)
 GL_ARB_occlusion_query2                               DONE (swrast, gallium)
 GL_ARB_sampler_objects                                DONE (gallium)
-GL_ARB_texture_rgb10_a2ui                             not started
+GL_ARB_texture_rgb10_a2ui                             DONE (gallium)
 GL_ARB_texture_swizzle                                DONE (same as EXT version)
 GL_ARB_timer_query                                    ~60% done (the EXT variant)
 GL_ARB_instanced_arrays                               DONE (gallium)
@@ -118,7 +118,7 @@ GLSL 4.2                                             not started
 GL_ARB_texture_compression_bptc                      not started
 GL_ARB_compressed_texture_pixel_storage              not started
 GL_ARB_shader_atomic_counters                        not started
-GL_ARB_texture_storage                               not started
+GL_ARB_texture_storage                               DONE (gallium, swrast)
 GL_ARB_transform_feedback_instanced                  not started
 GL_ARB_base_instance                                 not started
 GL_ARB_shader_image_load_store                       not started

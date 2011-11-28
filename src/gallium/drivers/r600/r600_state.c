@@ -369,6 +369,7 @@ static uint32_t r600_translate_colorswap(enum pipe_format format)
 		return V_0280A0_SWAP_STD;
 
 	case PIPE_FORMAT_B10G10R10A2_UNORM:
+	case PIPE_FORMAT_B10G10R10A2_UINT:
 		return V_0280A0_SWAP_ALT;
 
 	case PIPE_FORMAT_R11G11B10_FLOAT:
@@ -491,6 +492,7 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 	case PIPE_FORMAT_R10G10B10A2_UNORM:
 	case PIPE_FORMAT_R10G10B10X2_SNORM:
 	case PIPE_FORMAT_B10G10R10A2_UNORM:
+	case PIPE_FORMAT_B10G10R10A2_UINT:
 	case PIPE_FORMAT_R10SG10SB10SA2U_NORM:
 		return V_0280A0_COLOR_2_10_10_10;
 
@@ -939,6 +941,7 @@ static void *r600_create_rs_state(struct pipe_context *ctx,
 	unsigned tmp;
 	unsigned prov_vtx = 1, polygon_dual_mode;
 	unsigned clip_rule;
+	unsigned sc_mode_cntl;
 
 	if (rs == NULL) {
 		return NULL;
@@ -958,7 +961,7 @@ static void *r600_create_rs_state(struct pipe_context *ctx,
 	rstate->id = R600_PIPE_STATE_RASTERIZER;
 	if (state->flatshade_first)
 		prov_vtx = 0;
-	tmp = S_0286D4_FLAT_SHADE_ENA(1);
+	tmp = S_0286D4_FLAT_SHADE_ENA(state->flatshade);
 	if (state->sprite_coord_enable) {
 		tmp |= S_0286D4_PNT_SPRITE_ENA(1) |
 			S_0286D4_PNT_SPRITE_OVRD_X(2) |
@@ -996,7 +999,21 @@ static void *r600_create_rs_state(struct pipe_context *ctx,
 	tmp = (unsigned)state->line_width * 8;
 	r600_pipe_state_add_reg(rstate, R_028A08_PA_SU_LINE_CNTL, S_028A08_WIDTH(tmp), 0xFFFFFFFF, NULL, 0);
 
-	r600_pipe_state_add_reg(rstate, R_028A0C_PA_SC_LINE_STIPPLE, 0x00000005, 0xFFFFFFFF, NULL, 0);
+	if (state->line_stipple_enable) {
+		r600_pipe_state_add_reg(rstate, R_028A0C_PA_SC_LINE_STIPPLE,
+					S_028A0C_LINE_PATTERN(state->line_stipple_pattern) |
+					S_028A0C_REPEAT_COUNT(state->line_stipple_factor),
+					0x9FFFFFFF, NULL, 0);
+	}
+
+	if (rctx->chip_class >= R700)
+		sc_mode_cntl = 0x514002;
+	else
+		sc_mode_cntl = 0x4102;
+	sc_mode_cntl |= S_028A4C_LINE_STIPPLE_ENABLE(state->line_stipple_enable);
+	
+	r600_pipe_state_add_reg(rstate, R_028A4C_PA_SC_MODE_CNTL, sc_mode_cntl,
+				0xFFFFFFFF, NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_028A48_PA_SC_MPASS_PS_CNTL, 0x00000000, 0xFFFFFFFF, NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_028C00_PA_SC_LINE_CNTL, 0x00000400, 0xFFFFFFFF, NULL, 0);
 
@@ -1994,7 +2011,6 @@ void r600_init_config(struct r600_pipe_context *rctx)
 		r600_pipe_state_add_reg(rstate, R_009830_DB_DEBUG, 0x00000000, 0xFFFFFFFF, NULL, 0);
 		r600_pipe_state_add_reg(rstate, R_009838_DB_WATERMARKS, 0x00420204, 0xFFFFFFFF, NULL, 0);
 		r600_pipe_state_add_reg(rstate, R_0286C8_SPI_THREAD_GROUPING, 0x00000000, 0xFFFFFFFF, NULL, 0);
-		r600_pipe_state_add_reg(rstate, R_028A4C_PA_SC_MODE_CNTL, 0x00514002, 0xFFFFFFFF, NULL, 0);
 	} else {
 		r600_pipe_state_add_reg(rstate, R_008D8C_SQ_DYN_GPR_CNTL_PS_FLUSH_REQ, 0x00000000, 0xFFFFFFFF, NULL, 0);
 		r600_pipe_state_add_reg(rstate, R_009508_TA_CNTL_AUX,
@@ -2005,7 +2021,6 @@ void r600_init_config(struct r600_pipe_context *rctx)
 		r600_pipe_state_add_reg(rstate, R_009830_DB_DEBUG, 0x82000000, 0xFFFFFFFF, NULL, 0);
 		r600_pipe_state_add_reg(rstate, R_009838_DB_WATERMARKS, 0x01020204, 0xFFFFFFFF, NULL, 0);
 		r600_pipe_state_add_reg(rstate, R_0286C8_SPI_THREAD_GROUPING, 0x00000001, 0xFFFFFFFF, NULL, 0);
-		r600_pipe_state_add_reg(rstate, R_028A4C_PA_SC_MODE_CNTL, 0x00004012, 0xFFFFFFFF, NULL, 0);
 	}
 	r600_pipe_state_add_reg(rstate, R_0288A8_SQ_ESGS_RING_ITEMSIZE, 0x00000000, 0xFFFFFFFF, NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_0288AC_SQ_GSVS_RING_ITEMSIZE, 0x00000000, 0xFFFFFFFF, NULL, 0);
@@ -2049,6 +2064,7 @@ void r600_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shad
 	struct r600_shader *rshader = &shader->shader;
 	unsigned i, exports_ps, num_cout, spi_ps_in_control_0, spi_input_z, spi_ps_in_control_1, db_shader_control;
 	int pos_index = -1, face_index = -1;
+	unsigned tmp, sid;
 
 	rstate->nregs = 0;
 
@@ -2057,6 +2073,30 @@ void r600_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shad
 			pos_index = i;
 		if (rshader->input[i].name == TGSI_SEMANTIC_FACE)
 			face_index = i;
+
+		sid = rshader->input[i].spi_sid;
+
+		tmp = S_028644_SEMANTIC(sid);
+
+		if (rshader->input[i].name == TGSI_SEMANTIC_COLOR ||
+				rshader->input[i].name == TGSI_SEMANTIC_BCOLOR ||
+				rshader->input[i].name == TGSI_SEMANTIC_POSITION) {
+			tmp |= S_028644_FLAT_SHADE(1);
+		}
+
+		if (rshader->input[i].name == TGSI_SEMANTIC_GENERIC &&
+				rctx->sprite_coord_enable & (1 << rshader->input[i].sid)) {
+			tmp |= S_028644_PT_SPRITE_TEX(1);
+		}
+
+		if (rshader->input[i].centroid)
+			tmp |= S_028644_SEL_CENTROID(1);
+
+		if (rshader->input[i].interpolate == TGSI_INTERPOLATE_LINEAR)
+			tmp |= S_028644_SEL_LINEAR(1);
+
+		r600_pipe_state_add_reg(rstate, R_028644_SPI_PS_INPUT_CNTL_0 + i * 4,
+				tmp, 0xFFFFFFFF, NULL, 0);
 	}
 
 	db_shader_control = 0;
@@ -2134,6 +2174,8 @@ void r600_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shad
 	r600_pipe_state_add_reg(rstate,
 				R_03E200_SQ_LOOP_CONST_0, 0x01000FFF,
 				0xFFFFFFFF, NULL, 0);
+
+	shader->sprite_coord_enable = rctx->sprite_coord_enable;
 }
 
 void r600_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader *shader)
@@ -2141,23 +2183,20 @@ void r600_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader *shad
 	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
 	struct r600_pipe_state *rstate = &shader->rstate;
 	struct r600_shader *rshader = &shader->shader;
-	unsigned spi_vs_out_id[10];
-	unsigned i, tmp, nparams;
+	unsigned spi_vs_out_id[10] = {};
+	unsigned i, tmp, nparams = 0;
 
 	/* clear previous register */
 	rstate->nregs = 0;
 
-	/* so far never got proper semantic id from tgsi */
-	/* FIXME better to move this in config things so they get emited
-	 * only one time per cs
-	 */
-	for (i = 0; i < 10; i++) {
-		spi_vs_out_id[i] = 0;
+	for (i = 0; i < rshader->noutput; i++) {
+		if (rshader->output[i].spi_sid) {
+			tmp = rshader->output[i].spi_sid << ((nparams & 3) * 8);
+			spi_vs_out_id[nparams / 4] |= tmp;
+			nparams++;
+		}
 	}
-	for (i = 0; i < 32; i++) {
-		tmp = i << ((i & 3) * 8);
-		spi_vs_out_id[i / 4] |= tmp;
-	}
+
 	for (i = 0; i < 10; i++) {
 		r600_pipe_state_add_reg(rstate,
 					R_028614_SPI_VS_OUT_ID_0 + i * 4,
@@ -2168,7 +2207,6 @@ void r600_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader *shad
 	 * VS is required to export at least one param and r600_shader_from_tgsi()
 	 * takes care of adding a dummy export.
 	 */
-	nparams = rshader->noutput - rshader->npos;
 	if (nparams < 1)
 		nparams = 1;
 

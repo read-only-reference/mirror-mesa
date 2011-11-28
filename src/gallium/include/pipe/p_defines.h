@@ -419,12 +419,11 @@ enum pipe_transfer_usage {
 
 /**
  * Implementation capabilities/limits which are queried through
- * pipe_screen::get_param() and pipe_screen::get_paramf().
+ * pipe_screen::get_param()
  */
 enum pipe_cap {
    PIPE_CAP_NPOT_TEXTURES = 1,
    PIPE_CAP_TWO_SIDED_STENCIL = 2,
-   PIPE_CAP_GLSL = 3,  /* XXX need something better */
    PIPE_CAP_DUAL_SOURCE_BLEND = 4,
    PIPE_CAP_ANISOTROPIC_FILTER = 5,
    PIPE_CAP_POINT_SPRITE = 6,
@@ -436,16 +435,6 @@ enum pipe_cap {
    PIPE_CAP_MAX_TEXTURE_2D_LEVELS = 12,
    PIPE_CAP_MAX_TEXTURE_3D_LEVELS = 13,
    PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS = 14,
-   PIPE_CAP_MAX_LINE_WIDTH = 15,
-   PIPE_CAP_MAX_LINE_WIDTH_AA = 16,
-   PIPE_CAP_MAX_POINT_WIDTH = 17,
-   PIPE_CAP_MAX_POINT_WIDTH_AA = 18,
-   PIPE_CAP_MAX_TEXTURE_ANISOTROPY = 19,
-   PIPE_CAP_MAX_TEXTURE_LOD_BIAS = 20,
-   PIPE_CAP_GUARD_BAND_LEFT = 21,  /*< float */
-   PIPE_CAP_GUARD_BAND_TOP = 22,  /*< float */
-   PIPE_CAP_GUARD_BAND_RIGHT = 23,  /*< float */
-   PIPE_CAP_GUARD_BAND_BOTTOM = 24,  /*< float */
    PIPE_CAP_TEXTURE_MIRROR_CLAMP = 25,
    PIPE_CAP_BLEND_EQUATION_SEPARATE = 28,
    PIPE_CAP_SM3 = 29,  /*< Shader Model, supported */
@@ -479,6 +468,24 @@ enum pipe_cap {
    PIPE_CAP_TEXTURE_BARRIER = 53
 };
 
+/**
+ * Implementation limits which are queried through
+ * pipe_screen::get_paramf()
+ */
+enum pipe_capf
+{
+   PIPE_CAPF_MAX_LINE_WIDTH = 15,
+   PIPE_CAPF_MAX_LINE_WIDTH_AA = 16,
+   PIPE_CAPF_MAX_POINT_WIDTH = 17,
+   PIPE_CAPF_MAX_POINT_WIDTH_AA = 18,
+   PIPE_CAPF_MAX_TEXTURE_ANISOTROPY = 19,
+   PIPE_CAPF_MAX_TEXTURE_LOD_BIAS = 20,
+   PIPE_CAPF_GUARD_BAND_LEFT = 21,
+   PIPE_CAPF_GUARD_BAND_TOP = 22,
+   PIPE_CAPF_GUARD_BAND_RIGHT = 23,
+   PIPE_CAPF_GUARD_BAND_BOTTOM = 24
+};
+
 /* Shader caps not specific to any single stage */
 enum pipe_shader_cap
 {
@@ -501,7 +508,8 @@ enum pipe_shader_cap
    PIPE_SHADER_CAP_INDIRECT_CONST_ADDR = 15,
    PIPE_SHADER_CAP_SUBROUTINES = 16, /* BGNSUB, ENDSUB, CAL, RET */
    PIPE_SHADER_CAP_INTEGERS = 17,
-   PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS = 18
+   PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS = 18,
+   PIPE_SHADER_CAP_OUTPUT_READ = 19
 };
 
 

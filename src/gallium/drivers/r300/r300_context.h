@@ -30,7 +30,7 @@
 #include "pipe/p_context.h"
 #include "util/u_inlines.h"
 #include "util/u_transfer.h"
-#include "util/u_vbuf_mgr.h"
+#include "util/u_vbuf.h"
 
 #include "r300_defines.h"
 #include "r300_screen.h"
@@ -546,8 +546,6 @@ struct r300_context {
     /* Vertex elements for Gallium. */
     struct r300_vertex_element_state *velems;
 
-    struct pipe_index_buffer index_buffer;
-
     /* Vertex info for Draw. */
     struct vertex_info vertex_info;
 
@@ -582,7 +580,7 @@ struct r300_context {
 
     void *dsa_decompress_zmask;
 
-    struct u_vbuf_mgr *vbuf_mgr;
+    struct u_vbuf *vbuf_mgr;
 
     struct util_slab_mempool pool_transfers;
 

@@ -41,6 +41,7 @@
 #include "swrast_setup/swrast_setup.h"
 
 #include "intel_batchbuffer.h"
+#include "intel_mipmap_tree.h"
 #include "intel_regions.h"
 #include "intel_tris.h"
 #include "intel_fbo.h"
@@ -556,7 +557,7 @@ static uint32_t i915_render_target_format_for_mesa_format[MESA_FORMAT_COUNT] =
 };
 
 static bool
-i915_render_target_supported(gl_format format)
+i915_render_target_supported(struct intel_context *intel, gl_format format)
 {
    if (format == MESA_FORMAT_S8_Z24 ||
        format == MESA_FORMAT_X8_Z24 ||
@@ -755,15 +756,15 @@ i915_update_draw_buffer(struct intel_context *intel)
    } else {
       struct intel_renderbuffer *irb;
       irb = intel_renderbuffer(fb->_ColorDrawBuffers[0]);
-      colorRegion = irb ? irb->region : NULL;
+      colorRegion = (irb && irb->mt) ? irb->mt->region : NULL;
       FALLBACK(intel, INTEL_FALLBACK_DRAW_BUFFER, false);
    }
 
    /* Check for depth fallback. */
-   if (irbDepth && irbDepth->region) {
+   if (irbDepth && irbDepth->mt) {
       FALLBACK(intel, INTEL_FALLBACK_DEPTH_BUFFER, false);
-      depthRegion = irbDepth->region;
-   } else if (irbDepth && !irbDepth->region) {
+      depthRegion = irbDepth->mt->region;
+   } else if (irbDepth && !irbDepth->mt) {
       FALLBACK(intel, INTEL_FALLBACK_DEPTH_BUFFER, true);
       depthRegion = NULL;
    } else { /* !irbDepth */
@@ -773,10 +774,10 @@ i915_update_draw_buffer(struct intel_context *intel)
    }
 
    /* Check for stencil fallback. */
-   if (irbStencil && irbStencil->region) {
+   if (irbStencil && irbStencil->mt) {
       assert(irbStencil->Base.Format == MESA_FORMAT_S8_Z24);
       FALLBACK(intel, INTEL_FALLBACK_STENCIL_BUFFER, false);
-   } else if (irbStencil && !irbStencil->region) {
+   } else if (irbStencil && !irbStencil->mt) {
       FALLBACK(intel, INTEL_FALLBACK_STENCIL_BUFFER, true);
    } else { /* !irbStencil */
       /* No fallback is needed because there is no stencil buffer. */
@@ -786,9 +787,9 @@ i915_update_draw_buffer(struct intel_context *intel)
    /* If we have a (packed) stencil buffer attached but no depth buffer,
     * we still need to set up the shared depth/stencil state so we can use it.
     */
-   if (depthRegion == NULL && irbStencil && irbStencil->region
+   if (depthRegion == NULL && irbStencil && irbStencil->mt
        && irbStencil->Base.Format == MESA_FORMAT_S8_Z24) {
-      depthRegion = irbStencil->region;
+      depthRegion = irbStencil->mt->region;
    }
 
    /*
@@ -853,13 +854,6 @@ i915_is_hiz_depth_format(struct intel_context *intel,
 }
 
 static void
-i915_hiz_resolve_noop(struct intel_context *intel,
-		      struct intel_region *region)
-{
-   /* empty */
-}
-
-static void
 i915_invalidate_state(struct intel_context *intel, GLuint new_state)
 {
    struct gl_context *ctx = &intel->ctx;
@@ -887,6 +881,4 @@ i915InitVtbl(struct i915_context *i915)
    i915->intel.vtbl.invalidate_state = i915_invalidate_state;
    i915->intel.vtbl.render_target_supported = i915_render_target_supported;
    i915->intel.vtbl.is_hiz_depth_format = i915_is_hiz_depth_format;
-   i915->intel.vtbl.hiz_resolve_depthbuffer = i915_hiz_resolve_noop;
-   i915->intel.vtbl.hiz_resolve_hizbuffer = i915_hiz_resolve_noop;
 }

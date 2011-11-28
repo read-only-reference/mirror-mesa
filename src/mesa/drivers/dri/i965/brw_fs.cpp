@@ -559,10 +559,10 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src)
     * expanding that result out, but we would need to be careful with
     * masking.
     *
-    * The hardware ignores source modifiers (negate and abs) on math
+    * Gen 6 hardware ignores source modifiers (negate and abs) on math
     * instructions, so we also move to a temp to set those up.
     */
-   if (intel->gen >= 6 && (src.file == UNIFORM ||
+   if (intel->gen == 6 && (src.file == UNIFORM ||
 			   src.abs ||
 			   src.negate)) {
       fs_reg expanded = fs_reg(this, glsl_type::float_type);
@@ -596,7 +596,9 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1)
       return NULL;
    }
 
-   if (intel->gen >= 6) {
+   if (intel->gen >= 7) {
+      inst = emit(opcode, dst, src0, src1);
+   } else if (intel->gen == 6) {
       /* Can't do hstride == 0 args to gen6 math, so expand it out.
        *
        * The hardware ignores source modifiers (negate and abs) on math
@@ -1127,7 +1129,14 @@ fs_visitor::propagate_constants()
 		  scan_inst->src[i] = inst->src[0];
 		  progress = true;
 	       } else if (i == 0 && scan_inst->src[1].file != IMM) {
-		  /* Fit this constant in by commuting the operands */
+		  /* Fit this constant in by commuting the operands.
+		   * Exception: we can't do this for 32-bit integer MUL
+		   * because it's asymmetric.
+		   */
+		  if (scan_inst->opcode == BRW_OPCODE_MUL &&
+		      (scan_inst->src[1].type == BRW_REGISTER_TYPE_D ||
+		       scan_inst->src[1].type == BRW_REGISTER_TYPE_UD))
+		     break;
 		  scan_inst->src[0] = scan_inst->src[1];
 		  scan_inst->src[1] = inst->src[0];
 		  progress = true;

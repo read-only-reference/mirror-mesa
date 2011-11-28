@@ -46,6 +46,18 @@ _mesa_delete_renderbuffer(struct gl_renderbuffer *rb);
 extern struct gl_renderbuffer *
 _mesa_new_soft_renderbuffer(struct gl_context *ctx, GLuint name);
 
+void
+_mesa_map_soft_renderbuffer(struct gl_context *ctx,
+			    struct gl_renderbuffer *rb,
+			    GLuint x, GLuint y, GLuint w, GLuint h,
+			    GLbitfield mode,
+			    GLubyte **out_map,
+			    GLint *out_stride);
+
+void
+_mesa_unmap_soft_renderbuffer(struct gl_context *ctx,
+			      struct gl_renderbuffer *rb);
+
 extern void
 _mesa_set_renderbuffer_accessors(struct gl_renderbuffer *rb);
 
@@ -59,15 +71,6 @@ _mesa_add_color_renderbuffers(struct gl_context *ctx, struct gl_framebuffer *fb,
                               GLuint rgbBits, GLuint alphaBits,
                               GLboolean frontLeft, GLboolean backLeft,
                               GLboolean frontRight, GLboolean backRight);
-
-extern GLboolean
-_mesa_add_alpha_renderbuffers(struct gl_context *ctx, struct gl_framebuffer *fb,
-                              GLuint alphaBits,
-                              GLboolean frontLeft, GLboolean backLeft,
-                              GLboolean frontRight, GLboolean backRight);
-
-extern void
-_mesa_copy_soft_alpha_renderbuffers(struct gl_context *ctx, struct gl_framebuffer *fb);
 
 extern GLboolean
 _mesa_add_depth_renderbuffer(struct gl_context *ctx, struct gl_framebuffer *fb,

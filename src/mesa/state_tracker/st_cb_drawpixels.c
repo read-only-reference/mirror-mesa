@@ -38,6 +38,7 @@
 #include "main/mtypes.h"
 #include "main/pack.h"
 #include "main/pbo.h"
+#include "main/readpix.h"
 #include "main/texformat.h"
 #include "main/teximage.h"
 #include "main/texstore.h"
@@ -671,6 +672,7 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
    cso_save_fragment_sampler_views(cso);
    cso_save_fragment_shader(cso);
    cso_save_vertex_shader(cso);
+   cso_save_geometry_shader(cso);
    cso_save_vertex_elements(cso);
    cso_save_vertex_buffers(cso);
    if (write_stencil) {
@@ -720,6 +722,8 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
    /* vertex shader state: position + texcoord pass-through */
    cso_set_vertex_shader_handle(cso, driver_vp);
 
+   /* geometry shader state: disabled */
+   cso_set_geometry_shader_handle(cso, NULL);
 
    /* texture sampling state: */
    {
@@ -789,6 +793,7 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
    cso_restore_fragment_sampler_views(cso);
    cso_restore_fragment_shader(cso);
    cso_restore_vertex_shader(cso);
+   cso_restore_geometry_shader(cso);
    cso_restore_vertex_elements(cso);
    cso_restore_vertex_buffers(cso);
    if (write_stencil) {
@@ -1131,10 +1136,10 @@ st_DrawPixels(struct gl_context *ctx, GLint x, GLint y,
                   assert(0);
                }
 
-	       sv[1] = st_create_texture_sampler_view_format(st->pipe, pt,
+               sv[1] = st_create_texture_sampler_view_format(st->pipe, pt,
                                                              stencil_format);
-	       num_sampler_view++;
-	    }
+               num_sampler_view++;
+            }
 
             draw_textured_quad(ctx, x, y, ctx->Current.RasterPos[2],
                                width, height,
@@ -1185,9 +1190,9 @@ copy_stencil_pixels(struct gl_context *ctx, GLint srcx, GLint srcy,
       rbDraw = st_renderbuffer(rbDraw->Base.Wrapped);
 
    /* this will do stencil pixel transfer ops */
-   st_read_stencil_pixels(ctx, srcx, srcy, width, height,
-                          GL_STENCIL_INDEX, GL_UNSIGNED_BYTE,
-                          &ctx->DefaultPacking, buffer);
+   _mesa_readpixels(ctx, srcx, srcy, width, height,
+                    GL_STENCIL_INDEX, GL_UNSIGNED_BYTE,
+                    &ctx->DefaultPacking, buffer);
 
    if (0) {
       /* debug code: dump stencil values */
@@ -1289,6 +1294,20 @@ copy_stencil_pixels(struct gl_context *ctx, GLint srcx, GLint srcy,
    /* unmap the stencil buffer */
    pipe_transfer_unmap(pipe, ptDraw);
    pipe->transfer_destroy(pipe, ptDraw);
+}
+
+
+/**
+ * Return renderbuffer to use for reading color pixels for glCopyPixels
+ */
+static struct st_renderbuffer *
+st_get_color_read_renderbuffer(struct gl_context *ctx)
+{
+   struct gl_framebuffer *fb = ctx->ReadBuffer;
+   struct st_renderbuffer *strb =
+      st_renderbuffer(fb->_ColorReadBuffer);
+
+   return strb;
 }
 
 
@@ -1421,6 +1440,13 @@ st_CopyPixels(struct gl_context *ctx, GLint srcx, GLint srcy,
    struct st_fp_variant *fpv;
 
    st_validate_state(st);
+
+   if (type == GL_DEPTH_STENCIL) {
+      /* XXX make this more efficient */
+      st_CopyPixels(ctx, srcx, srcy, width, height, dstx, dsty, GL_STENCIL);
+      st_CopyPixels(ctx, srcx, srcy, width, height, dstx, dsty, GL_DEPTH);
+      return;
+   }
 
    if (type == GL_STENCIL) {
       /* can't use texturing to do stencil */
@@ -1634,9 +1660,9 @@ st_destroy_drawpix(struct st_context *st)
 
    st_reference_fragprog(st, &st->pixel_xfer.combined_prog, NULL);
    if (st->drawpix.vert_shaders[0])
-      ureg_free_tokens(st->drawpix.vert_shaders[0]);
+      cso_delete_vertex_shader(st->cso_context, st->drawpix.vert_shaders[0]);
    if (st->drawpix.vert_shaders[1])
-      ureg_free_tokens(st->drawpix.vert_shaders[1]);
+      cso_delete_vertex_shader(st->cso_context, st->drawpix.vert_shaders[1]);
 }
 
 #endif /* FEATURE_drawpix */

@@ -165,6 +165,11 @@ draw_quad(struct st_context *st,
                                           max_slots * sizeof(st->clear.vertices));
    }
 
+   if (!st->clear.vbuf) {
+      /* ran out of memory */
+      return;
+   }
+
    /* positions */
    st->clear.vertices[0][0][0] = x0;
    st->clear.vertices[0][0][1] = y0;
@@ -246,6 +251,7 @@ clear_with_quad(struct gl_context *ctx,
    cso_save_clip(st->cso_context);
    cso_save_fragment_shader(st->cso_context);
    cso_save_vertex_shader(st->cso_context);
+   cso_save_geometry_shader(st->cso_context);
    cso_save_vertex_elements(st->cso_context);
    cso_save_vertex_buffers(st->cso_context);
 
@@ -321,6 +327,7 @@ clear_with_quad(struct gl_context *ctx,
    cso_set_clip(st->cso_context, &st->clear.clip);
    set_fragment_shader(st);
    set_vertex_shader(st);
+   cso_set_geometry_shader_handle(st->cso_context, NULL);
 
    if (ctx->DrawBuffer->_ColorDrawBuffers[0]) {
       st_translate_color(ctx->Color.ClearColor.f,
@@ -340,6 +347,7 @@ clear_with_quad(struct gl_context *ctx,
    cso_restore_clip(st->cso_context);
    cso_restore_fragment_shader(st->cso_context);
    cso_restore_vertex_shader(st->cso_context);
+   cso_restore_geometry_shader(st->cso_context);
    cso_restore_vertex_elements(st->cso_context);
    cso_restore_vertex_buffers(st->cso_context);
 }

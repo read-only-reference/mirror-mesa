@@ -629,7 +629,7 @@ depth_stencil_test_quad(struct quad_stage *qs,
 
 
 #define ALPHATEST( FUNC, COMP )                                         \
-   static int                                                           \
+   static unsigned                                                      \
    alpha_test_quads_##FUNC( struct quad_stage *qs,                      \
                            struct quad_header *quads[],                 \
                            unsigned nr )                                \
@@ -668,7 +668,7 @@ ALPHATEST( GEQUAL,   >= )
 
 /* XXX: Incorporate into shader using KILP.
  */
-static int
+static unsigned
 alpha_test_quads(struct quad_stage *qs, 
                  struct quad_header *quads[], 
                  unsigned nr)
@@ -678,7 +678,6 @@ alpha_test_quads(struct quad_stage *qs,
       return alpha_test_quads_LESS( qs, quads, nr );
    case PIPE_FUNC_EQUAL:
       return alpha_test_quads_EQUAL( qs, quads, nr );
-      break;
    case PIPE_FUNC_LEQUAL:
       return alpha_test_quads_LEQUAL( qs, quads, nr );
    case PIPE_FUNC_GREATER:

@@ -286,8 +286,10 @@ setup_vertex_data_tex(struct blit_state *ctx,
 
    offset = get_next_slot( ctx );
 
-   pipe_buffer_write_nooverlap(ctx->pipe, ctx->vbuf,
-                               offset, sizeof(ctx->vertices), ctx->vertices);
+   if (ctx->vbuf) {
+      pipe_buffer_write_nooverlap(ctx->pipe, ctx->vbuf,
+                                  offset, sizeof(ctx->vertices), ctx->vertices);
+   }
 
    return offset;
 }
@@ -531,6 +533,7 @@ util_blit_pixels_writemask(struct blit_state *ctx,
    cso_save_framebuffer(ctx->cso);
    cso_save_fragment_shader(ctx->cso);
    cso_save_vertex_shader(ctx->cso);
+   cso_save_geometry_shader(ctx->cso);
    cso_save_clip(ctx->cso);
    cso_save_vertex_elements(ctx->cso);
    cso_save_vertex_buffers(ctx->cso);
@@ -574,6 +577,7 @@ util_blit_pixels_writemask(struct blit_state *ctx,
       set_fragment_shader(ctx, writemask);
    }
    set_vertex_shader(ctx);
+   cso_set_geometry_shader_handle(ctx->cso, NULL);
 
    /* drawing dest */
    memset(&fb, 0, sizeof(fb));
@@ -597,10 +601,12 @@ util_blit_pixels_writemask(struct blit_state *ctx,
                                   s1, t1,
                                   z);
 
-   util_draw_vertex_buffer(ctx->pipe, ctx->cso, ctx->vbuf, offset,
-                           PIPE_PRIM_TRIANGLE_FAN,
-                           4,  /* verts */
-                           2); /* attribs/vert */
+   if (ctx->vbuf) {
+      util_draw_vertex_buffer(ctx->pipe, ctx->cso, ctx->vbuf, offset,
+                              PIPE_PRIM_TRIANGLE_FAN,
+                              4,  /* verts */
+                              2); /* attribs/vert */
+   }
 
    /* restore state we changed */
    cso_restore_blend(ctx->cso);
@@ -612,6 +618,7 @@ util_blit_pixels_writemask(struct blit_state *ctx,
    cso_restore_framebuffer(ctx->cso);
    cso_restore_fragment_shader(ctx->cso);
    cso_restore_vertex_shader(ctx->cso);
+   cso_restore_geometry_shader(ctx->cso);
    cso_restore_clip(ctx->cso);
    cso_restore_vertex_elements(ctx->cso);
    cso_restore_vertex_buffers(ctx->cso);
@@ -719,6 +726,7 @@ util_blit_pixels_tex(struct blit_state *ctx,
    cso_save_framebuffer(ctx->cso);
    cso_save_fragment_shader(ctx->cso);
    cso_save_vertex_shader(ctx->cso);
+   cso_save_geometry_shader(ctx->cso);
    cso_save_clip(ctx->cso);
    cso_save_vertex_elements(ctx->cso);
    cso_save_vertex_buffers(ctx->cso);
@@ -754,6 +762,7 @@ util_blit_pixels_tex(struct blit_state *ctx,
    /* shaders */
    set_fragment_shader(ctx, TGSI_WRITEMASK_XYZW);
    set_vertex_shader(ctx);
+   cso_set_geometry_shader_handle(ctx->cso, NULL);
 
    /* drawing dest */
    memset(&fb, 0, sizeof(fb));
@@ -788,6 +797,7 @@ util_blit_pixels_tex(struct blit_state *ctx,
    cso_restore_framebuffer(ctx->cso);
    cso_restore_fragment_shader(ctx->cso);
    cso_restore_vertex_shader(ctx->cso);
+   cso_restore_geometry_shader(ctx->cso);
    cso_restore_clip(ctx->cso);
    cso_restore_vertex_elements(ctx->cso);
    cso_restore_vertex_buffers(ctx->cso);

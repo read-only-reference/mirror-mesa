@@ -142,9 +142,9 @@ enum brw_state_id {
    BRW_STATE_NR_VS_SURFACES,
    BRW_STATE_INDEX_BUFFER,
    BRW_STATE_VS_CONSTBUF,
-   BRW_STATE_WM_CONSTBUF,
    BRW_STATE_PROGRAM_CACHE,
    BRW_STATE_STATE_BASE_ADDRESS,
+   BRW_STATE_HIZ,
 };
 
 #define BRW_NEW_URB_FENCE               (1 << BRW_STATE_URB_FENCE)
@@ -169,13 +169,11 @@ enum brw_state_id {
  */
 #define BRW_NEW_BATCH                  (1 << BRW_STATE_BATCH)
 /** \see brw.state.depth_region */
-#define BRW_NEW_NR_WM_SURFACES         (1 << BRW_STATE_NR_WM_SURFACES)
-#define BRW_NEW_NR_VS_SURFACES         (1 << BRW_STATE_NR_VS_SURFACES)
 #define BRW_NEW_INDEX_BUFFER           (1 << BRW_STATE_INDEX_BUFFER)
 #define BRW_NEW_VS_CONSTBUF            (1 << BRW_STATE_VS_CONSTBUF)
-#define BRW_NEW_WM_CONSTBUF            (1 << BRW_STATE_WM_CONSTBUF)
 #define BRW_NEW_PROGRAM_CACHE		(1 << BRW_STATE_PROGRAM_CACHE)
 #define BRW_NEW_STATE_BASE_ADDRESS	(1 << BRW_STATE_STATE_BASE_ADDRESS)
+#define BRW_NEW_HIZ			(1 << BRW_STATE_HIZ)
 
 struct brw_state_flags {
    /** State update flags signalled by mesa internals */
@@ -381,7 +379,7 @@ struct brw_vs_prog_data {
    GLuint nr_pull_params; /**< number of dwords referenced by pull_param[] */
    GLuint total_scratch;
 
-   GLuint inputs_read;
+   GLbitfield64 inputs_read;
 
    /* Used for calculating urb partitions:
     */
@@ -391,6 +389,7 @@ struct brw_vs_prog_data {
    const float *pull_param[MAX_UNIFORMS * 4];
 
    bool uses_new_param_layout;
+   bool uses_vertexid;
 };
 
 
@@ -408,31 +407,48 @@ struct brw_vs_ouput_sizes {
 #define BRW_MAX_DRAW_BUFFERS 8
 
 /**
- * Size of our surface binding table for the WM.
- * This contains pointers to the drawing surfaces and current texture
- * objects and shader constant buffers (+2).
- */
-#define BRW_WM_MAX_SURF (BRW_MAX_DRAW_BUFFERS + BRW_MAX_TEX_UNIT + 1)
-
-/**
- * Helpers to convert drawing buffers, textures and constant buffers
- * to surface binding table indexes, for WM.
+ * Helpers to create Surface Binding Table indexes for draw buffers,
+ * textures, and constant buffers.
+ *
+ * Shader threads access surfaces via numeric handles, rather than directly
+ * using pointers.  The binding table maps these numeric handles to the
+ * address of the actual buffer.
+ *
+ * For example, a shader might ask to sample from "surface 7."  In this case,
+ * bind[7] would contain a pointer to a texture.
+ *
+ * Although the hardware supports separate binding tables per pipeline stage
+ * (VS, HS, DS, GS, PS), we currently share a single binding table for all of
+ * them.  This is purely for convenience.
+ *
+ * Currently our binding tables are (arbitrarily) programmed as follows:
+ *
+ *    +-------------------------------+
+ *    |   0 | Draw buffer 0           | .
+ *    |   . |     .                   |  \
+ *    |   : |     :                   |   > Only relevant to the WM.
+ *    |   7 | Draw buffer 7           |  /
+ *    |-----|-------------------------| `
+ *    |   8 | VS Pull Constant Buffer |
+ *    |   9 | WM Pull Constant Buffer |
+ *    |-----|-------------------------|
+ *    |  10 | Texture 0               |
+ *    |   . |     .                   |
+ *    |   : |     :                   |
+ *    |  25 | Texture 15              |
+ *    +-------------------------------+
+ *
+ * Note that nothing actually uses the SURF_INDEX_DRAW macro, so it has to be
+ * the identity function or things will break.  We do want to keep draw buffers
+ * first so we can use headerless render target writes for RT 0.
  */
 #define SURF_INDEX_DRAW(d)           (d)
-#define SURF_INDEX_FRAG_CONST_BUFFER (BRW_MAX_DRAW_BUFFERS) 
-#define SURF_INDEX_TEXTURE(t)        (BRW_MAX_DRAW_BUFFERS + 1 + (t))
+#define SURF_INDEX_VERT_CONST_BUFFER (BRW_MAX_DRAW_BUFFERS + 0)
+#define SURF_INDEX_FRAG_CONST_BUFFER (BRW_MAX_DRAW_BUFFERS + 1)
+#define SURF_INDEX_TEXTURE(t)        (BRW_MAX_DRAW_BUFFERS + 2 + (t))
 
-/**
- * Size of surface binding table for the VS.
- * Only one constant buffer for now.
- */
-#define BRW_VS_MAX_SURF 1
-
-/**
- * Only a VS constant buffer
- */
-#define SURF_INDEX_VERT_CONST_BUFFER 0
-
+/** Maximum size of the binding table. */
+#define BRW_MAX_SURFACES (BRW_MAX_DRAW_BUFFERS + BRW_MAX_TEX_UNIT + 2)
 
 enum brw_cache_id {
    BRW_BLEND_STATE,
@@ -588,6 +604,7 @@ struct brw_context
    bool has_aa_line_parameters;
    bool has_pln;
    bool new_vs_backend;
+   bool precompile;
 
    struct {
       struct brw_state_flags dirty;
@@ -727,6 +744,18 @@ struct brw_context
    } curbe;
 
    struct {
+      /** Binding table of pointers to surf_bo entries */
+      uint32_t bo_offset;
+      uint32_t surf_offset[BRW_MAX_SURFACES];
+   } bind;
+
+   /** SAMPLER_STATE count and offset */
+   struct {
+      GLuint count;
+      uint32_t offset;
+   } sampler;
+
+   struct {
       struct brw_vs_prog_data *prog_data;
       int8_t *constant_map; /* variable array following prog_data */
 
@@ -735,11 +764,6 @@ struct brw_context
       /** Offset in the program cache to the VS program */
       uint32_t prog_offset;
       uint32_t state_offset;
-
-      /** Binding table of pointers to surf_bo entries */
-      uint32_t bind_bo_offset;
-      uint32_t surf_offset[BRW_VS_MAX_SURF];
-      GLuint nr_surfaces;      
 
       uint32_t push_const_offset; /* Offset in the batchbuffer */
       int push_const_size; /* in 256-bit register increments */
@@ -810,19 +834,12 @@ struct brw_context
       uint32_t sdc_offset[BRW_MAX_TEX_UNIT];
 
       GLuint render_surf;
-      GLuint nr_surfaces;      
 
       drm_intel_bo *scratch_bo;
-
-      GLuint sampler_count;
-      uint32_t sampler_offset;
 
       /** Offset in the program cache to the WM program */
       uint32_t prog_offset;
 
-      /** Binding table of pointers to surf_bo entries */
-      uint32_t bind_bo_offset;
-      uint32_t surf_offset[BRW_WM_MAX_SURF];
       uint32_t state_offset; /* offset in batchbuffer to pre-gen6 WM state */
 
       drm_intel_bo *const_bo; /* pull constant buffer. */
@@ -885,6 +902,44 @@ struct brw_context
       enum state_struct_type type;
    } *state_batch_list;
    int state_batch_count;
+
+   /**
+    * \brief State needed to execute HiZ meta-ops
+    *
+    * All fields except \c op are initialized by gen6_hiz_init().
+    */
+   struct brw_hiz_state {
+      /**
+       * \brief Indicates which HiZ operation is in progress.
+       *
+       * See the following sections of the Sandy Bridge PRM, Volume 1, Part2:
+       *   - 7.5.3.1 Depth Buffer Clear
+       *   - 7.5.3.2 Depth Buffer Resolve
+       *   - 7.5.3.3 Hierarchical Depth Buffer Resolve
+       */
+      enum brw_hiz_op {
+	 BRW_HIZ_OP_NONE = 0,
+	 BRW_HIZ_OP_DEPTH_CLEAR,
+	 BRW_HIZ_OP_DEPTH_RESOLVE,
+	 BRW_HIZ_OP_HIZ_RESOLVE,
+      } op;
+
+      /** \brief Shader state */
+      struct {
+	 GLuint program;
+	 GLuint position_vbo;
+	 GLint position_location;
+      } shader;
+
+      /** \brief VAO for the rectangle primitive's vertices. */
+      GLuint vao;
+
+      GLuint fbo;
+      struct gl_renderbuffer *depth_rb;
+   } hiz;
+
+   uint32_t render_target_format[MESA_FORMAT_COUNT];
+   bool format_supported_as_render_target[MESA_FORMAT_COUNT];
 };
 
 
@@ -963,6 +1018,9 @@ gl_clip_plane *brw_select_clip_planes(struct gl_context *ctx);
 unsigned
 brw_compute_barycentric_interp_modes(bool shade_model_flat,
                                      const struct gl_fragment_program *fprog);
+
+/* brw_wm_surface_state.c */
+void brw_init_surface_formats(struct brw_context *brw);
 
 /* gen6_clip_state.c */
 bool

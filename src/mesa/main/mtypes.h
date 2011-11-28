@@ -43,15 +43,8 @@
 #include "main/formats.h"       /* MESA_FORMAT_COUNT */
 
 
-/**
- * Stencil buffer data type.
- */
-#if STENCIL_BITS==8
-   typedef GLubyte GLstencil;
-#elif STENCIL_BITS==16
-   typedef GLushort GLstencil;
-#else
-#  error "illegal number of stencil bits"
+#ifdef __cplusplus
+extern "C" {
 #endif
 
 
@@ -77,6 +70,7 @@ struct gl_program_cache;
 struct gl_texture_object;
 struct gl_context;
 struct st_context;
+struct gl_uniform_storage;
 /*@}*/
 
 
@@ -116,7 +110,6 @@ typedef enum
    VERT_ATTRIB_COLOR1 = 4,
    VERT_ATTRIB_FOG = 5,
    VERT_ATTRIB_COLOR_INDEX = 6,
-   VERT_ATTRIB_POINT_SIZE = 6,  /*alias*/
    VERT_ATTRIB_EDGEFLAG = 7,
    VERT_ATTRIB_TEX0 = 8,
    VERT_ATTRIB_TEX1 = 9,
@@ -126,65 +119,93 @@ typedef enum
    VERT_ATTRIB_TEX5 = 13,
    VERT_ATTRIB_TEX6 = 14,
    VERT_ATTRIB_TEX7 = 15,
-   VERT_ATTRIB_GENERIC0 = 16,
-   VERT_ATTRIB_GENERIC1 = 17,
-   VERT_ATTRIB_GENERIC2 = 18,
-   VERT_ATTRIB_GENERIC3 = 19,
-   VERT_ATTRIB_GENERIC4 = 20,
-   VERT_ATTRIB_GENERIC5 = 21,
-   VERT_ATTRIB_GENERIC6 = 22,
-   VERT_ATTRIB_GENERIC7 = 23,
-   VERT_ATTRIB_GENERIC8 = 24,
-   VERT_ATTRIB_GENERIC9 = 25,
-   VERT_ATTRIB_GENERIC10 = 26,
-   VERT_ATTRIB_GENERIC11 = 27,
-   VERT_ATTRIB_GENERIC12 = 28,
-   VERT_ATTRIB_GENERIC13 = 29,
-   VERT_ATTRIB_GENERIC14 = 30,
-   VERT_ATTRIB_GENERIC15 = 31,
-   VERT_ATTRIB_MAX = 32
+   VERT_ATTRIB_POINT_SIZE = 16,
+   VERT_ATTRIB_GENERIC0 = 17,
+   VERT_ATTRIB_GENERIC1 = 18,
+   VERT_ATTRIB_GENERIC2 = 19,
+   VERT_ATTRIB_GENERIC3 = 20,
+   VERT_ATTRIB_GENERIC4 = 21,
+   VERT_ATTRIB_GENERIC5 = 22,
+   VERT_ATTRIB_GENERIC6 = 23,
+   VERT_ATTRIB_GENERIC7 = 24,
+   VERT_ATTRIB_GENERIC8 = 25,
+   VERT_ATTRIB_GENERIC9 = 26,
+   VERT_ATTRIB_GENERIC10 = 27,
+   VERT_ATTRIB_GENERIC11 = 28,
+   VERT_ATTRIB_GENERIC12 = 29,
+   VERT_ATTRIB_GENERIC13 = 30,
+   VERT_ATTRIB_GENERIC14 = 31,
+   VERT_ATTRIB_GENERIC15 = 32,
+   VERT_ATTRIB_MAX = 33
 } gl_vert_attrib;
+
+/**
+ * Symbolic constats to help iterating over
+ * specific blocks of vertex attributes.
+ *
+ * VERT_ATTRIB_FF
+ *   includes all fixed function attributes as well as
+ *   the aliased GL_NV_vertex_program shader attributes.
+ * VERT_ATTRIB_TEX
+ *   include the classic texture coordinate attributes.
+ *   Is a subset of VERT_ATTRIB_FF.
+ * VERT_ATTRIB_GENERIC_NV
+ *   include the NV shader attributes.
+ *   Is a subset of VERT_ATTRIB_FF.
+ * VERT_ATTRIB_GENERIC
+ *   include the OpenGL 2.0+ GLSL generic shader attributes.
+ *   These alias the generic GL_ARB_vertex_shader attributes.
+ */
+#define VERT_ATTRIB_FF(i)           (VERT_ATTRIB_POS + (i))
+#define VERT_ATTRIB_FF_MAX          VERT_ATTRIB_GENERIC0
+
+#define VERT_ATTRIB_TEX(i)          (VERT_ATTRIB_TEX0 + (i))
+#define VERT_ATTRIB_TEX_MAX         MAX_TEXTURE_COORD_UNITS
+
+#define VERT_ATTRIB_GENERIC_NV(i)   (VERT_ATTRIB_POS + (i))
+#define VERT_ATTRIB_GENERIC_NV_MAX  MAX_VERTEX_GENERIC_ATTRIBS
+
+#define VERT_ATTRIB_GENERIC(i)      (VERT_ATTRIB_GENERIC0 + (i))
+#define VERT_ATTRIB_GENERIC_MAX     MAX_VERTEX_GENERIC_ATTRIBS
 
 /**
  * Bitflags for vertex attributes.
  * These are used in bitfields in many places.
  */
 /*@{*/
-#define VERT_BIT_POS         (1 << VERT_ATTRIB_POS)
-#define VERT_BIT_WEIGHT      (1 << VERT_ATTRIB_WEIGHT)
-#define VERT_BIT_NORMAL      (1 << VERT_ATTRIB_NORMAL)
-#define VERT_BIT_COLOR0      (1 << VERT_ATTRIB_COLOR0)
-#define VERT_BIT_COLOR1      (1 << VERT_ATTRIB_COLOR1)
-#define VERT_BIT_FOG         (1 << VERT_ATTRIB_FOG)
-#define VERT_BIT_COLOR_INDEX (1 << VERT_ATTRIB_COLOR_INDEX)
-#define VERT_BIT_EDGEFLAG    (1 << VERT_ATTRIB_EDGEFLAG)
-#define VERT_BIT_TEX0        (1 << VERT_ATTRIB_TEX0)
-#define VERT_BIT_TEX1        (1 << VERT_ATTRIB_TEX1)
-#define VERT_BIT_TEX2        (1 << VERT_ATTRIB_TEX2)
-#define VERT_BIT_TEX3        (1 << VERT_ATTRIB_TEX3)
-#define VERT_BIT_TEX4        (1 << VERT_ATTRIB_TEX4)
-#define VERT_BIT_TEX5        (1 << VERT_ATTRIB_TEX5)
-#define VERT_BIT_TEX6        (1 << VERT_ATTRIB_TEX6)
-#define VERT_BIT_TEX7        (1 << VERT_ATTRIB_TEX7)
-#define VERT_BIT_GENERIC0    (1 << VERT_ATTRIB_GENERIC0)
-#define VERT_BIT_GENERIC1    (1 << VERT_ATTRIB_GENERIC1)
-#define VERT_BIT_GENERIC2    (1 << VERT_ATTRIB_GENERIC2)
-#define VERT_BIT_GENERIC3    (1 << VERT_ATTRIB_GENERIC3)
-#define VERT_BIT_GENERIC4    (1 << VERT_ATTRIB_GENERIC4)
-#define VERT_BIT_GENERIC5    (1 << VERT_ATTRIB_GENERIC5)
-#define VERT_BIT_GENERIC6    (1 << VERT_ATTRIB_GENERIC6)
-#define VERT_BIT_GENERIC7    (1 << VERT_ATTRIB_GENERIC7)
-#define VERT_BIT_GENERIC8    (1 << VERT_ATTRIB_GENERIC8)
-#define VERT_BIT_GENERIC9    (1 << VERT_ATTRIB_GENERIC9)
-#define VERT_BIT_GENERIC10   (1 << VERT_ATTRIB_GENERIC10)
-#define VERT_BIT_GENERIC11   (1 << VERT_ATTRIB_GENERIC11)
-#define VERT_BIT_GENERIC12   (1 << VERT_ATTRIB_GENERIC12)
-#define VERT_BIT_GENERIC13   (1 << VERT_ATTRIB_GENERIC13)
-#define VERT_BIT_GENERIC14   (1 << VERT_ATTRIB_GENERIC14)
-#define VERT_BIT_GENERIC15   (1 << VERT_ATTRIB_GENERIC15)
+#define VERT_BIT_POS             BITFIELD64_BIT(VERT_ATTRIB_POS)
+#define VERT_BIT_WEIGHT          BITFIELD64_BIT(VERT_ATTRIB_WEIGHT)
+#define VERT_BIT_NORMAL          BITFIELD64_BIT(VERT_ATTRIB_NORMAL)
+#define VERT_BIT_COLOR0          BITFIELD64_BIT(VERT_ATTRIB_COLOR0)
+#define VERT_BIT_COLOR1          BITFIELD64_BIT(VERT_ATTRIB_COLOR1)
+#define VERT_BIT_FOG             BITFIELD64_BIT(VERT_ATTRIB_FOG)
+#define VERT_BIT_COLOR_INDEX     BITFIELD64_BIT(VERT_ATTRIB_COLOR_INDEX)
+#define VERT_BIT_EDGEFLAG        BITFIELD64_BIT(VERT_ATTRIB_EDGEFLAG)
+#define VERT_BIT_TEX0            BITFIELD64_BIT(VERT_ATTRIB_TEX0)
+#define VERT_BIT_TEX1            BITFIELD64_BIT(VERT_ATTRIB_TEX1)
+#define VERT_BIT_TEX2            BITFIELD64_BIT(VERT_ATTRIB_TEX2)
+#define VERT_BIT_TEX3            BITFIELD64_BIT(VERT_ATTRIB_TEX3)
+#define VERT_BIT_TEX4            BITFIELD64_BIT(VERT_ATTRIB_TEX4)
+#define VERT_BIT_TEX5            BITFIELD64_BIT(VERT_ATTRIB_TEX5)
+#define VERT_BIT_TEX6            BITFIELD64_BIT(VERT_ATTRIB_TEX6)
+#define VERT_BIT_TEX7            BITFIELD64_BIT(VERT_ATTRIB_TEX7)
+#define VERT_BIT_POINT_SIZE      BITFIELD64_BIT(VERT_ATTRIB_POINT_SIZE)
+#define VERT_BIT_GENERIC0        BITFIELD64_BIT(VERT_ATTRIB_GENERIC0)
 
-#define VERT_BIT_TEX(u)  (1 << (VERT_ATTRIB_TEX0 + (u)))
-#define VERT_BIT_GENERIC(g)  (1 << (VERT_ATTRIB_GENERIC0 + (g)))
+#define VERT_BIT(i)              BITFIELD64_BIT(i)
+#define VERT_BIT_ALL             (BITFIELD64_BIT(VERT_ATTRIB_MAX) - 1)
+
+#define VERT_BIT_FF(i)           VERT_BIT(i)
+#define VERT_BIT_FF_ALL          (BITFIELD64_BIT(VERT_ATTRIB_FF_MAX) - 1)
+#define VERT_BIT_TEX(i)          VERT_BIT(VERT_ATTRIB_TEX(i))
+#define VERT_BIT_TEX_ALL         \
+  ((BITFIELD64_BIT(VERT_ATTRIB_TEX_MAX) - 1) << VERT_ATTRIB_TEX(0))
+#define VERT_BIT_GENERIC_NV(i)   VERT_BIT(VERT_ATTRIB_GENERIC_NV(i))
+#define VERT_BIT_GENERIC_NV_ALL  \
+  ((BITFIELD64_BIT(VERT_ATTRIB_GENERIC_NV_MAX) - 1) << (VERT_ATTRIB_GENERIC_NV(0)))
+#define VERT_BIT_GENERIC(i)      VERT_BIT(VERT_ATTRIB_GENERIC(i))
+#define VERT_BIT_GENERIC_ALL     \
+  ((BITFIELD64_BIT(VERT_ATTRIB_GENERIC_MAX) - 1) << (VERT_ATTRIB_GENERIC(0)))
 /*@}*/
 
 
@@ -884,6 +905,7 @@ struct gl_fog_attrib
    GLboolean ColorSumEnabled;
    GLenum FogCoordinateSource;  /**< GL_EXT_fog_coord */
    GLfloat _Scale;		/**< (End == Start) ? 1.0 : 1.0 / (End - Start) */
+   GLenum FogDistanceMode;     /**< GL_NV_fog_distance */
 };
 
 
@@ -1165,6 +1187,7 @@ typedef enum
    TEXTURE_BUFFER_INDEX,
    TEXTURE_2D_ARRAY_INDEX,
    TEXTURE_1D_ARRAY_INDEX,
+   TEXTURE_EXTERNAL_INDEX,
    TEXTURE_CUBE_INDEX,
    TEXTURE_3D_INDEX,
    TEXTURE_RECT_INDEX,
@@ -1182,6 +1205,7 @@ typedef enum
 #define TEXTURE_BUFFER_BIT   (1 << TEXTURE_BUFFER_INDEX)
 #define TEXTURE_2D_ARRAY_BIT (1 << TEXTURE_2D_ARRAY_INDEX)
 #define TEXTURE_1D_ARRAY_BIT (1 << TEXTURE_1D_ARRAY_INDEX)
+#define TEXTURE_EXTERNAL_BIT (1 << TEXTURE_EXTERNAL_INDEX)
 #define TEXTURE_CUBE_BIT     (1 << TEXTURE_CUBE_INDEX)
 #define TEXTURE_3D_BIT       (1 << TEXTURE_3D_INDEX)
 #define TEXTURE_RECT_BIT     (1 << TEXTURE_RECT_INDEX)
@@ -1343,14 +1367,8 @@ struct gl_texture_object
    struct gl_buffer_object *BufferObject;
    GLenum BufferObjectFormat;
 
-   /**
-    * \name For device driver.
-    * Note: instead of attaching driver data to this pointer, it's preferable
-    * to instead use this struct as a base class for your own texture object
-    * class.  Driver->NewTextureObject() can be used to implement the
-    * allocation.
-    */
-   void *DriverData;	/**< Arbitrary device driver data */
+   /** GL_OES_EGL_image_external */
+   GLint RequiredTextureImageUnits;
 };
 
 
@@ -1590,36 +1608,19 @@ struct gl_array_object
    _glthread_Mutex Mutex;
    GLboolean VBOonly;  /**< require all arrays to live in VBOs? */
 
-   /** Conventional vertex arrays */
-   /*@{*/
-   struct gl_client_array Vertex;
-   struct gl_client_array Weight;
-   struct gl_client_array Normal;
-   struct gl_client_array Color;
-   struct gl_client_array SecondaryColor;
-   struct gl_client_array FogCoord;
-   struct gl_client_array Index;
-   struct gl_client_array EdgeFlag;
-   struct gl_client_array TexCoord[MAX_TEXTURE_COORD_UNITS];
-   struct gl_client_array PointSize;
-   /*@}*/
+   /** Vertex attribute arrays */
+   struct gl_client_array VertexAttrib[VERT_ATTRIB_MAX];
 
-   /**
-    * Generic arrays for vertex programs/shaders.
-    * For NV vertex programs, these attributes alias and take priority
-    * over the conventional attribs above.  For ARB vertex programs and
-    * GLSL vertex shaders, these attributes are separate.
-    */
-   struct gl_client_array VertexAttrib[MAX_VERTEX_GENERIC_ATTRIBS];
-
-   /** Mask of _NEW_ARRAY_* values indicating which arrays are enabled */
-   GLbitfield _Enabled;
+   /** Mask of VERT_BIT_* values indicating which arrays are enabled */
+   GLbitfield64 _Enabled;
 
    /**
     * Min of all enabled arrays' _MaxElement.  When arrays reside inside VBOs
     * we can determine the max legal (in bounds) glDrawElements array index.
     */
    GLuint _MaxElement;
+
+   struct gl_buffer_object *ElementArrayBufferObj;
 };
 
 
@@ -1645,12 +1646,11 @@ struct gl_array_attrib
    GLboolean PrimitiveRestart;
    GLuint RestartIndex;
 
-   GLbitfield NewState;		/**< mask of _NEW_ARRAY_* values */
+   GLbitfield64 NewState;		/**< mask of VERT_BIT_* values */
    GLboolean RebindArrays; /**< whether the VBO module should rebind arrays */
 
    /* GL_ARB_vertex_buffer_object */
    struct gl_buffer_object *ArrayBufferObj;
-   struct gl_buffer_object *ElementArrayBufferObj;
 };
 
 
@@ -1786,6 +1786,7 @@ typedef enum
 typedef enum
 {
    SYSTEM_VALUE_FRONT_FACE,  /**< Fragment shader only (not done yet) */
+   SYSTEM_VALUE_VERTEX_ID,   /**< Vertex shader only */
    SYSTEM_VALUE_INSTANCE_ID, /**< Vertex shader only */
    SYSTEM_VALUE_MAX          /**< Number of values */
 } gl_system_value;
@@ -1812,6 +1813,16 @@ struct prog_instruction;
 struct gl_program_parameter_list;
 struct gl_uniform_list;
 
+/** Post-link transform feedback info. */
+struct gl_transform_feedback_info {
+   unsigned NumOutputs;
+
+   struct {
+      unsigned OutputRegister;
+      unsigned OutputBuffer;
+      unsigned NumComponents;
+   } Outputs[MAX_PROGRAM_OUTPUTS];
+};
 
 /**
  * Base class for any kind of program object
@@ -1827,7 +1838,7 @@ struct gl_program
 
    struct prog_instruction *Instructions;
 
-   GLbitfield InputsRead;     /**< Bitmask of which input regs are read */
+   GLbitfield64 InputsRead;     /**< Bitmask of which input regs are read */
    GLbitfield64 OutputsWritten; /**< Bitmask of which output regs are written */
    GLbitfield SystemValuesRead;   /**< Bitmask of SYSTEM_VALUE_x inputs used */
    GLbitfield InputFlags[MAX_PROGRAM_INPUTS];   /**< PROG_PARAM_BIT_x flags */
@@ -2135,6 +2146,16 @@ struct gl_shader
 
    unsigned Version;       /**< GLSL version used for linking */
 
+   unsigned num_samplers;	/**< Number of samplers used by this shader.
+				 * This field is only set post-linking.
+				 */
+   /**
+    * Number of uniform components used by this shader.
+    *
+    * This field is only set post-linking.
+    */
+   unsigned num_uniform_components;
+
    struct exec_list *ir;
    struct glsl_symbol_table *symbols;
 
@@ -2178,12 +2199,27 @@ struct gl_shader_program
     */
    struct string_to_uint_map *AttributeBindings;
 
+   /**
+    * User-defined fragment data bindings
+    *
+    * These are set via \c glBindFragDataLocation and are used to direct the
+    * GLSL linker.  These are \b not the values used in the compiled shader,
+    * and they are \b not the values returned by \c glGetFragDataLocation.
+    */
+   struct string_to_uint_map *FragDataBindings;
+
    /** Transform feedback varyings */
    struct {
       GLenum BufferMode;
       GLuint NumVarying;
       GLchar **VaryingNames;  /**< Array [NumVarying] of char * */
    } TransformFeedback;
+
+   /** Post-link transform feedback info. */
+   struct gl_transform_feedback_info LinkedTransformFeedback;
+
+   /** Post-link gl_FragDepth layout for ARB_conservative_depth. */
+   enum gl_frag_depth_layout FragDepthLayout;
 
    /** Geometry shader state - copied into gl_geometry_program at link time */
    struct {
@@ -2199,7 +2235,30 @@ struct gl_shader_program
    } Vert;
 
    /* post-link info: */
-   struct gl_uniform_list *Uniforms;
+   unsigned NumUserUniformStorage;
+   struct gl_uniform_storage *UniformStorage;
+
+   /**
+    * Map of active uniform names to locations
+    *
+    * Maps any active uniform that is not an array element to a location.
+    * Each active uniform, including individual structure members will appear
+    * in this map.  This roughly corresponds to the set of names that would be
+    * enumerated by \c glGetActiveUniform.
+    */
+   struct string_to_uint_map *UniformHash;
+
+   /**
+    * Map from sampler unit to texture unit (set by glUniform1i())
+    *
+    * A sampler unit is associated with each sampler uniform by the linker.
+    * The sampler unit associated with each uniform is stored in the
+    * \c gl_uniform_storage::sampler field.
+    */
+   GLubyte SamplerUnits[MAX_SAMPLERS];
+   /** Which texture target is being sampled (TEXTURE_1D/2D/3D/etc_INDEX) */
+   gl_texture_index SamplerTargets[MAX_SAMPLERS];
+
    struct gl_program_parameter_list *Varying;
    GLboolean LinkStatus;   /**< GL_LINK_STATUS */
    GLboolean Validated;
@@ -2785,6 +2844,7 @@ struct gl_extensions
    GLboolean ARB_ES2_compatibility;
    GLboolean ARB_blend_func_extended;
    GLboolean ARB_color_buffer_float;
+   GLboolean ARB_conservative_depth;
    GLboolean ARB_copy_buffer;
    GLboolean ARB_depth_buffer_float;
    GLboolean ARB_depth_clamp;
@@ -2883,7 +2943,6 @@ struct gl_extensions
    GLboolean EXT_vertex_array_bgra;
    GLboolean OES_standard_derivatives;
    /* vendor extensions */
-   GLboolean AMD_conservative_depth;
    GLboolean AMD_seamless_cubemap_per_texture;
    GLboolean APPLE_packed_pixels;
    GLboolean APPLE_vertex_array_object;
@@ -2902,6 +2961,7 @@ struct gl_extensions
    GLboolean MESA_texture_array;
    GLboolean NV_blend_square;
    GLboolean NV_conditional_render;
+   GLboolean NV_fog_distance;
    GLboolean NV_fragment_program;
    GLboolean NV_fragment_program_option;
    GLboolean NV_light_max_exponent;
@@ -2918,6 +2978,7 @@ struct gl_extensions
    GLboolean S3_s3tc;
    GLboolean OES_EGL_image;
    GLboolean OES_draw_texture;
+   GLboolean OES_EGL_image_external;
    GLboolean extension_sentinel;
    /** The extension string */
    const GLubyte *String;
@@ -2991,39 +3052,6 @@ struct gl_matrix_stack
 #define _NEW_FRAG_CLAMP        (1 << 29)
 #define _NEW_ALL ~0
 /*@}*/
-
-
-/**
- * \name Bits to track array state changes 
- *
- * Also used to summarize array enabled.
- */
-/*@{*/
-#define _NEW_ARRAY_VERTEX           VERT_BIT_POS
-#define _NEW_ARRAY_WEIGHT           VERT_BIT_WEIGHT
-#define _NEW_ARRAY_NORMAL           VERT_BIT_NORMAL
-#define _NEW_ARRAY_COLOR0           VERT_BIT_COLOR0
-#define _NEW_ARRAY_COLOR1           VERT_BIT_COLOR1
-#define _NEW_ARRAY_FOGCOORD         VERT_BIT_FOG
-#define _NEW_ARRAY_INDEX            VERT_BIT_COLOR_INDEX
-#define _NEW_ARRAY_EDGEFLAG         VERT_BIT_EDGEFLAG
-#define _NEW_ARRAY_POINT_SIZE       VERT_BIT_COLOR_INDEX  /* aliased */
-#define _NEW_ARRAY_TEXCOORD_0       VERT_BIT_TEX0
-#define _NEW_ARRAY_TEXCOORD_1       VERT_BIT_TEX1
-#define _NEW_ARRAY_TEXCOORD_2       VERT_BIT_TEX2
-#define _NEW_ARRAY_TEXCOORD_3       VERT_BIT_TEX3
-#define _NEW_ARRAY_TEXCOORD_4       VERT_BIT_TEX4
-#define _NEW_ARRAY_TEXCOORD_5       VERT_BIT_TEX5
-#define _NEW_ARRAY_TEXCOORD_6       VERT_BIT_TEX6
-#define _NEW_ARRAY_TEXCOORD_7       VERT_BIT_TEX7
-#define _NEW_ARRAY_ATTRIB_0         VERT_BIT_GENERIC0  /* start at bit 16 */
-#define _NEW_ARRAY_ALL              0xffffffff
-
-
-#define _NEW_ARRAY_TEXCOORD(i) (_NEW_ARRAY_TEXCOORD_0 << (i))
-#define _NEW_ARRAY_ATTRIB(i) (_NEW_ARRAY_ATTRIB_0 << (i))
-/*@}*/
-
 
 
 /**
@@ -3317,7 +3345,7 @@ struct gl_context
 
    GLboolean ViewportInitialized;  /**< has viewport size been initialized? */
 
-   GLbitfield varying_vp_inputs;  /**< mask of VERT_BIT_* flags */
+   GLbitfield64 varying_vp_inputs;  /**< mask of VERT_BIT_* flags */
 
    /** \name Derived state */
    /*@{*/
@@ -3412,5 +3440,9 @@ enum _debug
 };
 
 
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* MTYPES_H */

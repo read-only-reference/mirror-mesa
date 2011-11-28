@@ -108,7 +108,7 @@ struct state_key {
    /* NOTE: This array of structs must be last! (see "keySize" below) */
    struct {
       GLuint enabled:1;
-      GLuint source_index:3;   /**< TEXTURE_x_INDEX */
+      GLuint source_index:4;   /**< TEXTURE_x_INDEX */
       GLuint shadow:1;
       GLuint ScaleShiftRGB:2;
       GLuint ScaleShiftA:2;
@@ -334,7 +334,7 @@ static GLbitfield get_fp_input_mask( struct gl_context *ctx )
    else if (!(vertexProgram || vertexShader)) {
       /* Fixed function vertex logic */
       /* _NEW_ARRAY */
-      GLbitfield varying_inputs = ctx->varying_vp_inputs;
+      GLbitfield64 varying_inputs = ctx->varying_vp_inputs;
 
       /* These get generated in the setup routine regardless of the
        * vertex program:
@@ -488,6 +488,12 @@ static GLuint make_state_key( struct gl_context *ctx,  struct state_key *key )
 
    /* _NEW_BUFFERS */
    key->num_draw_buffers = ctx->DrawBuffer->_NumColorDrawBuffers;
+
+   /* _NEW_COLOR */
+   if (ctx->Color.AlphaEnabled && key->num_draw_buffers == 0) {
+      /* if alpha test is enabled we need to emit at least one color */
+      key->num_draw_buffers = 1;
+   }
 
    key->inputs_available = (inputs_available & inputs_referenced);
 
@@ -1041,6 +1047,11 @@ static void load_texture( struct texenv_fragment_program *p, GLuint unit )
 	 sampler_type = p->shader->symbols->get_type("samplerCube");
       coords = 3;
       break;
+   case TEXTURE_EXTERNAL_INDEX:
+      assert(!p->state->unit[unit].shadow);
+      sampler_type = p->shader->symbols->get_type("samplerExternalOES");
+      coords = 2;
+      break;
    }
 
    p->src_texture[unit] = new(p->mem_ctx) ir_variable(glsl_type::vec4_type,
@@ -1437,6 +1448,8 @@ create_new_program(struct gl_context *ctx, struct state_key *key)
    p.shader_program->InternalSeparateShader = GL_TRUE;
 
    state->language_version = 130;
+   if (ctx->Extensions.OES_EGL_image_external)
+      state->OES_EGL_image_external_enable = true;
    _mesa_glsl_initialize_types(state);
    _mesa_glsl_initialize_variables(p.instructions, state);
 

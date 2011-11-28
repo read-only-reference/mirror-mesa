@@ -28,7 +28,7 @@
 
 #include "../../winsys/radeon/drm/radeon_winsys.h"
 #include "util/u_double_list.h"
-#include "util/u_vbuf_mgr.h"
+#include "util/u_vbuf.h"
 
 #define R600_ERR(fmt, args...) \
 	fprintf(stderr, "EE %s:%d %s - "fmt, __FILE__, __LINE__, __func__, ##args)
@@ -163,23 +163,26 @@ struct r600_range {
 	struct r600_block	**blocks;
 };
 
-/*
- * query
- */
 struct r600_query {
-	u64					result;
+	union {
+		uint64_t			u64;
+		boolean				b;
+	} result;
 	/* The kind of query */
 	unsigned				type;
 	/* Offset of the first result for current query */
 	unsigned				results_start;
 	/* Offset of the next free result after current query data */
 	unsigned				results_end;
-	/* Size of the result */
+	/* Size of the result in memory for both begin_query and end_query,
+	 * this can be one or two numbers, or it could even be a size of a structure. */
 	unsigned				result_size;
 	/* The buffer where query results are stored. It's used as a ring,
 	 * data blocks for current query are stored sequentially from
 	 * results_start to results_end, with wrapping on the buffer end */
 	struct r600_resource			*buffer;
+	/* The number of dwords for begin_query or end_query. */
+	unsigned				num_cs_dw;
 	/* linked list of queries */
 	struct list_head			list;
 };
@@ -192,6 +195,9 @@ struct r600_context {
 	struct r600_screen	*screen;
 	struct radeon_winsys	*ws;
 	struct radeon_winsys_cs	*cs;
+	struct pipe_context	*pipe;
+
+	void (*flush)(void *pipe, unsigned flags);
 
 	struct r600_range	*range;
 	unsigned		nblocks;
@@ -199,7 +205,6 @@ struct r600_context {
 	struct list_head	dirty;
 	struct list_head	resource_dirty;
 	struct list_head	enable_list;
-	unsigned		pm4_ndwords;
 	unsigned		pm4_dirty_cdwords;
 	unsigned		ctx_pm4_ndwords;
 	unsigned		init_dwords;
@@ -212,8 +217,8 @@ struct r600_context {
 
 	/* The list of active queries. Only one query of each type can be active. */
 	struct list_head	active_query_list;
+	unsigned		num_cs_dw_queries_suspend;
 
-	unsigned		num_query_running;
 	unsigned		backend_mask;
 	unsigned                max_db; /* for OQ */
 	unsigned                num_dest_buffers;

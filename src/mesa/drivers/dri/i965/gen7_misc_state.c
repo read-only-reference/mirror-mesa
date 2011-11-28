@@ -22,39 +22,12 @@
  */
 
 #include "intel_batchbuffer.h"
+#include "intel_mipmap_tree.h"
 #include "intel_regions.h"
 #include "intel_fbo.h"
 #include "brw_context.h"
 #include "brw_state.h"
 #include "brw_defines.h"
-
-unsigned int
-gen7_depth_format(struct brw_context *brw)
-{
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
-   struct gl_framebuffer *fb = ctx->DrawBuffer;
-   struct intel_renderbuffer *drb = intel_get_renderbuffer(fb, BUFFER_DEPTH);
-   struct intel_region *region = NULL;
-
-   if (drb)
-      region = drb->region;
-   else
-      return BRW_DEPTHFORMAT_D32_FLOAT;
-
-   switch (region->cpp) {
-   case 2:
-      return BRW_DEPTHFORMAT_D16_UNORM;
-   case 4:
-      if (intel->depth_buffer_is_float)
-	 return BRW_DEPTHFORMAT_D32_FLOAT;
-      else
-	 return BRW_DEPTHFORMAT_D24_UNORM_X8_UINT;
-   default:
-      assert(!"Should not get here.");
-   }
-   return 0;
-}
 
 static void emit_depthbuffer(struct brw_context *brw)
 {
@@ -78,7 +51,7 @@ static void emit_depthbuffer(struct brw_context *brw)
       if (srb == NULL) {
 	 dw1 |= (BRW_SURFACE_NULL << 29);
       } else {
-	 struct intel_region *region = srb->region;
+	 struct intel_region *region = srb->mt->region;
 
 	 /* _NEW_STENCIL: enable stencil buffer writes */
 	 dw1 |= ((ctx->Stencil.WriteMask != 0) << 27);
@@ -98,7 +71,7 @@ static void emit_depthbuffer(struct brw_context *brw)
       OUT_BATCH(0);
       ADVANCE_BATCH();
    } else {
-      struct intel_region *region = drb->region;
+      struct intel_region *region = drb->mt->region;
       uint32_t tile_x, tile_y, offset;
 
       offset = intel_renderbuffer_tile_offsets(drb, &tile_x, &tile_y);
@@ -109,7 +82,7 @@ static void emit_depthbuffer(struct brw_context *brw)
       BEGIN_BATCH(7);
       OUT_BATCH(GEN7_3DSTATE_DEPTH_BUFFER << 16 | (7 - 2));
       OUT_BATCH(((region->pitch * region->cpp) - 1) |
-		(gen7_depth_format(brw) << 18) |
+		(brw_depthbuffer_format(brw) << 18) |
 		(0 << 22) /* no HiZ buffer */ |
 		((srb != NULL && ctx->Stencil.WriteMask != 0) << 27) |
 		((ctx->Depth.Mask != 0) << 28) |
@@ -140,8 +113,8 @@ static void emit_depthbuffer(struct brw_context *brw)
    } else {
       BEGIN_BATCH(3);
       OUT_BATCH(GEN7_3DSTATE_STENCIL_BUFFER << 16 | (3 - 2));
-      OUT_BATCH(srb->region->pitch * srb->region->cpp - 1);
-      OUT_RELOC(srb->region->bo,
+      OUT_BATCH(srb->mt->region->pitch * srb->mt->region->cpp - 1);
+      OUT_RELOC(srb->mt->region->bo,
 	        I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
 		0);
       ADVANCE_BATCH();

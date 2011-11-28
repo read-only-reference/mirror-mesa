@@ -326,6 +326,8 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
          case GL_ALPHA32F_ARB:
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_ALPHA_FLOAT32);
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT32);
+	    RETURN_IF_SUPPORTED(MESA_FORMAT_ALPHA_FLOAT16);
+	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT16);
 	    break;
          case GL_LUMINANCE16F_ARB:
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_FLOAT16);
@@ -335,6 +337,8 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
          case GL_LUMINANCE32F_ARB:
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_FLOAT32);
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT32);
+	    RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_FLOAT16);
+	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT16);
 	    break;
          case GL_LUMINANCE_ALPHA16F_ARB:
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_ALPHA_FLOAT16);
@@ -344,6 +348,8 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
          case GL_LUMINANCE_ALPHA32F_ARB:
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_ALPHA_FLOAT32);
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT32);
+	    RETURN_IF_SUPPORTED(MESA_FORMAT_LUMINANCE_ALPHA_FLOAT16);
+	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT16);
 	    break;
          case GL_INTENSITY16F_ARB:
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_INTENSITY_FLOAT16);
@@ -353,15 +359,20 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
          case GL_INTENSITY32F_ARB:
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_INTENSITY_FLOAT32);
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT32);
+	    RETURN_IF_SUPPORTED(MESA_FORMAT_INTENSITY_FLOAT16);
+	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT16);
 	    break;
          case GL_RGB16F_ARB:
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGB_FLOAT16);
+	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT16);
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGB_FLOAT32);
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT32);
 	    break;
          case GL_RGB32F_ARB:
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGB_FLOAT32);
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT32);
+	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGB_FLOAT16);
+	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT16);
 	    break;
          case GL_RGBA16F_ARB:
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT16);
@@ -369,6 +380,7 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
 	    break;
          case GL_RGBA32F_ARB:
 	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT32);
+	    RETURN_IF_SUPPORTED(MESA_FORMAT_RGBA_FLOAT16);
 	    break;
          default:
             ; /* fallthrough */
@@ -837,6 +849,15 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
       }
    }
 
+   if (ctx->Extensions.ARB_texture_rgb10_a2ui) {
+      switch (internalFormat) {
+      case GL_RGB10_A2UI:
+         RETURN_IF_SUPPORTED(MESA_FORMAT_ARGB2101010_UINT);
+         break;
+      default:
+         break;
+      }
+   }
    /* GL_BGRA can be an internal format *only* in OpenGL ES (1.x or 2.0).
     */
    if (ctx->API != API_OPENGL) {

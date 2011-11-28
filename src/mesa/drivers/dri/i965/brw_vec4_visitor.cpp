@@ -842,6 +842,7 @@ vec4_visitor::visit(ir_variable *ir)
 	    continue;
 
 	 dst_reg dst = *reg;
+         dst.type = brw_type_for_base_type(ir->type);
 	 dst.writemask = (1 << c->key.gl_fixed_input_size[i]) - 1;
 	 emit(MUL(dst, src_reg(dst), src_reg(1.0f / 65536.0f)));
       }
@@ -876,6 +877,27 @@ vec4_visitor::visit(ir_variable *ir)
 	 setup_builtin_uniform_values(ir);
       } else {
 	 setup_uniform_values(ir->location, ir->type);
+      }
+      break;
+
+   case ir_var_system_value:
+      /* VertexID is stored by the VF as the last vertex element, but
+       * we don't represent it with a flag in inputs_read, so we call
+       * it VERT_ATTRIB_MAX, which setup_attributes() picks up on.
+       */
+      reg = new(mem_ctx) dst_reg(ATTR, VERT_ATTRIB_MAX);
+      prog_data->uses_vertexid = true;
+
+      switch (ir->location) {
+      case SYSTEM_VALUE_VERTEX_ID:
+	 reg->writemask = WRITEMASK_X;
+	 break;
+      case SYSTEM_VALUE_INSTANCE_ID:
+	 reg->writemask = WRITEMASK_Y;
+	 break;
+      default:
+	 assert(!"not reached");
+	 break;
       }
       break;
 

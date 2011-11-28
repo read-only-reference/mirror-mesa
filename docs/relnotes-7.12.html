@@ -41,9 +41,12 @@ tbd
 <li>GL_ARB_vertex_type_2_10_10_10_rev (r600g)
 <li>GL_ARB_texture_storage (gallium drivers and swrast)
 <li>GL_EXT_packed_float (i965)
-<li>GL_EXT_texture_array (r600g)
+<li>GL_EXT_texture_array (r600g, i965)
 <li>GL_EXT_texture_shared_exponent (i965)
+<li>GL_NV_fog_distance (all gallium drivers, nouveau classic)
 <li>GL_NV_primitive_restart (r600g)
+<li>GL_OES_EGL_image_external (gallium drivers)
+<li>ARB_texture_rgb10_a2ui (softpipe, r600g)
 <li>Many updates to the VMware svga Gallium driver
 </ul>
 
@@ -66,9 +69,12 @@ tbd
   desktop OpenGL, <tt>GL_COLOR_INDEX</tt> data can still be uploaded
   to a color (e.g., RGBA) texture.  However, the data cannot be stored
   internally as color-index.</li>
-<li>Removed support for GL_APPLE_client_storage extension.
+<li>Removed support for GL_APPLE_client_storage extension.</li>
 <li>Removed the classic Mesa r300 and r600 drivers, which are superseded
-  by the gallium drivers for this hardware.
+  by the gallium drivers for this hardware.</li>
+<li>Removed the dead Gallium i965, cell and failover drivers, which were
+  either broken and with nobody in sight to fix the situation or
+  deprecated.</li>
 </ul>
 
 

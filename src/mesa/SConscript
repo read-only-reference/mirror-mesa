@@ -40,7 +40,6 @@ main_sources = [
     'main/api_arrayelt.c',
     'main/api_exec.c',
     'main/api_loopback.c',
-    'main/api_noop.c',
     'main/api_validate.c',
     'main/accum.c',
     'main/arbprogram.c',
@@ -149,10 +148,6 @@ math_sources = [
     'math/m_xform.c',
 ]
 
-math_xform_sources = [
-    'math/m_xform.c'
-]
-
 swrast_sources = [
     'swrast/s_aaline.c',
     'swrast/s_aatriangle.c',
@@ -174,7 +169,6 @@ swrast_sources = [
     'swrast/s_logic.c',
     'swrast/s_masking.c',
     'swrast/s_points.c',
-    'swrast/s_readpix.c',
     'swrast/s_span.c',
     'swrast/s_stencil.c',
     'swrast/s_texcombine.c',
@@ -218,6 +212,7 @@ vbo_sources = [
     'vbo/vbo_exec_array.c',
     'vbo/vbo_exec_draw.c',
     'vbo/vbo_exec_eval.c',
+    'vbo/vbo_noop.c',
     'vbo/vbo_rebase.c',
     'vbo/vbo_split.c',
     'vbo/vbo_split_copy.c',
@@ -306,7 +301,6 @@ program_sources = [
     'program/prog_parameter_layout.c',
     'program/prog_print.c',
     'program/prog_statevars.c',
-    'program/prog_uniform.c',
     'program/programopt.c',
     'program/sampler.cpp',
     'program/symbol_table.c',
@@ -323,7 +317,6 @@ common_driver_sources =	[
 mesa_sources = (
     main_sources +
     math_sources +
-    math_xform_sources +
     program_sources +
     vbo_sources +
     tnl_sources +

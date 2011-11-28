@@ -29,20 +29,22 @@
 #include <string.h>
 #include <assert.h>
 
+#ifdef __cplusplus
 extern "C" {
-#include "GL/gl.h"
-}
-
-#include "ralloc.h"
+#endif
 
 struct _mesa_glsl_parse_state;
 struct glsl_symbol_table;
 
-extern "C" void
+extern void
 _mesa_glsl_initialize_types(struct _mesa_glsl_parse_state *state);
 
-extern "C" void
+extern void
 _mesa_glsl_release_types(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 enum glsl_base_type {
    GLSL_TYPE_UINT = 0,
@@ -62,9 +64,13 @@ enum glsl_sampler_dim {
    GLSL_SAMPLER_DIM_3D,
    GLSL_SAMPLER_DIM_CUBE,
    GLSL_SAMPLER_DIM_RECT,
-   GLSL_SAMPLER_DIM_BUF
+   GLSL_SAMPLER_DIM_BUF,
+   GLSL_SAMPLER_DIM_EXTERNAL
 };
 
+#ifdef __cplusplus
+#include "GL/gl.h"
+#include "ralloc.h"
 
 struct glsl_type {
    GLenum gl_type;
@@ -489,6 +495,7 @@ private:
    static const glsl_type builtin_ARB_texture_rectangle_types[];
    static const glsl_type builtin_EXT_texture_array_types[];
    static const glsl_type builtin_EXT_texture_buffer_object_types[];
+   static const glsl_type builtin_OES_EGL_image_external_types[];
    /*@}*/
 
    /**
@@ -507,6 +514,7 @@ private:
    static void generate_ARB_texture_rectangle_types(glsl_symbol_table *, bool);
    static void generate_EXT_texture_array_types(glsl_symbol_table *, bool);
    static void generate_OES_texture_3D_types(glsl_symbol_table *, bool);
+   static void generate_OES_EGL_image_external_types(glsl_symbol_table *, bool);
    /*@}*/
 
    /**
@@ -526,5 +534,7 @@ struct glsl_struct_field {
    const struct glsl_type *type;
    const char *name;
 };
+
+#endif /* __cplusplus */
 
 #endif /* GLSL_TYPES_H */

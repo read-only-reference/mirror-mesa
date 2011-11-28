@@ -50,8 +50,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "main/renderbuffer.h"
 #include "drivers/common/meta.h"
 
-#include "vblank.h"
-
 #include "radeon_common.h"
 #include "radeon_drm.h"
 #include "radeon_queryobj.h"
@@ -95,7 +93,7 @@ void radeonRecalcScissorRects(radeonContextPtr radeon)
 	bounds.x1 = 0;
 	bounds.y1 = 0;
 	bounds.x2 = ctx->DrawBuffer->Width;
-	bounds.x2 = ctx->DrawBuffer->Height;
+	bounds.y2 = ctx->DrawBuffer->Height;
 
 	if (!radeon->state.scissor.numAllocedClipRects) {
 		radeon->state.scissor.numAllocedClipRects = 1;
@@ -307,7 +305,6 @@ void radeon_draw_buffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 			offset = rrb->draw_offset;
 			rrbColor = rrb;
 		}
-		radeon->constant_cliprect = GL_TRUE;
 	}
 
 	if (rrbColor == NULL)
@@ -467,9 +464,6 @@ void radeon_viewport(struct gl_context *ctx, GLint x, GLint y, GLsizei width, GL
 	__DRIcontext *driContext = radeon->dri.context;
 	void (*old_viewport)(struct gl_context *ctx, GLint x, GLint y,
 			     GLsizei w, GLsizei h);
-
-	if (!driContext->driScreenPriv->dri2.enabled)
-		return;
 
 	if (ctx->DrawBuffer->Name == 0) {
 		if (radeon->is_front_buffer_rendering) {

@@ -81,7 +81,7 @@ static const struct extension extension_table[] = {
    { "GL_ARB_blend_func_extended",                 o(ARB_blend_func_extended),                 GL,             2009 },
    { "GL_ARB_color_buffer_float",                  o(ARB_color_buffer_float),                  GL,             2004 },
    { "GL_ARB_copy_buffer",                         o(ARB_copy_buffer),                         GL,             2008 },
-   { "GL_ARB_conservative_depth",                  o(AMD_conservative_depth),                  GL,             2011 },
+   { "GL_ARB_conservative_depth",                  o(ARB_conservative_depth),                  GL,             2011 },
    { "GL_ARB_depth_buffer_float",                  o(ARB_depth_buffer_float),                  GL,             2008 },
    { "GL_ARB_depth_clamp",                         o(ARB_depth_clamp),                         GL,             2003 },
    { "GL_ARB_depth_texture",                       o(ARB_depth_texture),                       GL,             2001 },
@@ -229,6 +229,7 @@ static const struct extension extension_table[] = {
 #if FEATURE_OES_EGL_image
    /*  FIXME: Mesa expects GL_OES_EGL_image to be available in OpenGL contexts. */
    { "GL_OES_EGL_image",                           o(OES_EGL_image),                           GL | ES1 | ES2, 2006 },
+   { "GL_OES_EGL_image_external",                  o(OES_EGL_image_external),                       ES1 | ES2, 2010 },
 #endif
    { "GL_OES_element_index_uint",                  o(dummy_true),                                   ES1 | ES2, 2005 },
    { "GL_OES_fbo_render_mipmap",                   o(EXT_framebuffer_object),                       ES1 | ES2, 2005 },
@@ -256,7 +257,7 @@ static const struct extension extension_table[] = {
 
    /* Vendor extensions */
    { "GL_3DFX_texture_compression_FXT1",           o(TDFX_texture_compression_FXT1),           GL,             1999 },
-   { "GL_AMD_conservative_depth",                  o(AMD_conservative_depth),                  GL,             2009 },
+   { "GL_AMD_conservative_depth",                  o(ARB_conservative_depth),                  GL,             2009 },
    { "GL_AMD_draw_buffers_blend",                  o(ARB_draw_buffers_blend),                  GL,             2009 },
    { "GL_AMD_seamless_cubemap_per_texture",        o(AMD_seamless_cubemap_per_texture),        GL,             2009 },
    { "GL_AMD_shader_stencil_export",               o(ARB_shader_stencil_export),               GL,             2009 },
@@ -287,6 +288,7 @@ static const struct extension extension_table[] = {
    { "GL_NV_depth_clamp",                          o(ARB_depth_clamp),                         GL,             2001 },
    { "GL_NV_draw_buffers",                         o(dummy_true),                                         ES2, 2011 },
    { "GL_NV_fbo_color_attachments",                o(EXT_framebuffer_object),                             ES2, 2010 },
+   { "GL_NV_fog_distance",                         o(NV_fog_distance),                         GL,             2001 },
    { "GL_NV_fragment_program",                     o(NV_fragment_program),                     GL,             2001 },
    { "GL_NV_fragment_program_option",              o(NV_fragment_program_option),              GL,             2005 },
    { "GL_NV_light_max_exponent",                   o(NV_light_max_exponent),                   GL,             1999 },

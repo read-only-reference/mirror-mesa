@@ -47,10 +47,10 @@
 #include "main/shaderobj.h"
 #include "program/program.h"
 #include "program/prog_parameter.h"
-#include "program/prog_uniform.h"
 #include "ralloc.h"
 #include <stdbool.h>
 #include "../glsl/glsl_parser_extras.h"
+#include "../glsl/ir_uniform.h"
 
 /** Define this to enable shader substitution (see below) */
 #define SHADER_SUBST 0
@@ -152,6 +152,7 @@ _mesa_sizeof_glsl_type(GLenum type)
    case GL_SAMPLER_1D_ARRAY_SHADOW_EXT:
    case GL_SAMPLER_2D_ARRAY_SHADOW_EXT:
    case GL_SAMPLER_CUBE_SHADOW_EXT:
+   case GL_SAMPLER_EXTERNAL_OES:
       return 1;
    case GL_FLOAT_VEC2:
    case GL_INT_VEC2:
@@ -321,14 +322,6 @@ attach_shader(struct gl_context *ctx, GLuint program, GLuint shader)
    shProg->Shaders[n] = NULL; /* since realloc() didn't zero the new space */
    _mesa_reference_shader(ctx, &shProg->Shaders[n], sh);
    shProg->NumShaders++;
-}
-
-
-static void
-bind_frag_data_location(struct gl_context *ctx, GLuint program,
-                        GLuint colorNumber, const GLchar *name)
-{
-   _mesa_problem(ctx, "bind_frag_data_location() not implemented yet");
 }
 
 
@@ -503,16 +496,6 @@ get_attached_shaders(struct gl_context *ctx, GLuint program, GLsizei maxCount,
 }
 
 
-static GLint
-get_frag_data_location(struct gl_context *ctx, GLuint program,
-                       const GLchar *name)
-{
-   _mesa_problem(ctx, "get_frag_data_location() not implemented yet");
-   return -1;
-}
-
-
-
 /**
  * glGetHandleARB() - return ID/name of currently bound shader program.
  */
@@ -571,13 +554,24 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname, GLint *param
       *params = _mesa_longest_attribute_name_length(shProg);
       break;
    case GL_ACTIVE_UNIFORMS:
-      *params = shProg->Uniforms ? shProg->Uniforms->NumUniforms : 0;
+      *params = shProg->NumUserUniformStorage;
       break;
-   case GL_ACTIVE_UNIFORM_MAX_LENGTH:
-      *params = _mesa_longest_uniform_name(shProg->Uniforms);
-      if (*params > 0)
-         (*params)++;  /* add one for terminating zero */
+   case GL_ACTIVE_UNIFORM_MAX_LENGTH: {
+      unsigned i;
+      GLint max_len = 0;
+
+      for (i = 0; i < shProg->NumUserUniformStorage; i++) {
+	 /* Add one for the terminating NUL character.
+	  */
+	 const GLint len = strlen(shProg->UniformStorage[i].name) + 1;
+
+	 if (len > max_len)
+	    max_len = len;
+      }
+
+      *params = max_len;
       break;
+   }
    case GL_PROGRAM_BINARY_LENGTH_OES:
       *params = 0;
       break;
@@ -918,6 +912,7 @@ validate_samplers(const struct gl_program *prog, char *errMsg)
       "TEXTURE_BUFFER",
       "TEXTURE_2D_ARRAY",
       "TEXTURE_1D_ARRAY",
+      "TEXTURE_EXTERNAL",
       "TEXTURE_CUBE",
       "TEXTURE_3D",
       "TEXTURE_RECT",
@@ -1047,16 +1042,6 @@ _mesa_AttachShader(GLuint program, GLuint shader)
 }
 
 
-/* GL_EXT_gpu_shader4, GL3 */
-void GLAPIENTRY
-_mesa_BindFragDataLocation(GLuint program, GLuint colorNumber,
-                           const GLchar *name)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   bind_frag_data_location(ctx, program, colorNumber, name);
-}
-
-
 void GLAPIENTRY
 _mesa_CompileShaderARB(GLhandleARB shaderObj)
 {
@@ -1181,16 +1166,6 @@ _mesa_GetAttachedShaders(GLuint program, GLsizei maxCount,
    GET_CURRENT_CONTEXT(ctx);
    get_attached_shaders(ctx, program, maxCount, count, obj);
 }
-
-
-/* GL_EXT_gpu_shader4, GL3 */
-GLint GLAPIENTRY
-_mesa_GetFragDataLocation(GLuint program, const GLchar *name)
-{
-   GET_CURRENT_CONTEXT(ctx);
-   return get_frag_data_location(ctx, program, name);
-}
-
 
 
 void GLAPIENTRY
