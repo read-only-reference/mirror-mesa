@@ -89,9 +89,6 @@ intel_miptree_create_internal(struct intel_context *intel,
    mt->compressed = compress_byte ? 1 : 0;
    mt->refcount = 1; 
 
-   intel_get_texture_alignment_unit(intel, format,
-				    &mt->align_w, &mt->align_h);
-
    if (target == GL_TEXTURE_CUBE_MAP) {
       assert(depth0 == 1);
       mt->depth0 = 6;
@@ -109,18 +106,10 @@ intel_miptree_create_internal(struct intel_context *intel,
       mt->cpp = 2;
    }
 
-#ifdef I915
-   (void) intel;
-   if (intel->is_945)
-      i945_miptree_layout(mt);
-   else
-      i915_miptree_layout(mt);
-#else
-   brw_miptree_layout(intel, mt);
-#endif
-
-   if (intel->has_separate_stencil &&
-       _mesa_is_depthstencil_format(_mesa_get_format_base_format(format))) {
+   if (_mesa_is_depthstencil_format(_mesa_get_format_base_format(format)) &&
+       (intel->must_use_separate_stencil ||
+	(intel->has_separate_stencil &&
+	 intel->vtbl.is_hiz_depth_format(intel, format)))) {
       mt->stencil_mt = intel_miptree_create(intel,
                                             mt->target,
                                             MESA_FORMAT_S8,
@@ -134,7 +123,33 @@ intel_miptree_create_internal(struct intel_context *intel,
 	 intel_miptree_release(&mt);
 	 return NULL;
       }
+
+      /* Fix up the Z miptree format for how we're splitting out separate
+       * stencil.  Gen7 expects there to be no stencil bits in its depth buffer.
+       */
+      if (mt->format == MESA_FORMAT_S8_Z24) {
+	 mt->format = MESA_FORMAT_X8_Z24;
+      } else if (mt->format == MESA_FORMAT_Z32_FLOAT_X24S8) {
+	 mt->format = MESA_FORMAT_Z32_FLOAT;
+	 mt->cpp = 4;
+      } else {
+	 _mesa_problem(NULL, "Unknown format %s in separate stencil mt\n",
+		       _mesa_get_format_name(mt->format));
+      }
    }
+
+   intel_get_texture_alignment_unit(intel, mt->format,
+				    &mt->align_w, &mt->align_h);
+
+#ifdef I915
+   (void) intel;
+   if (intel->is_945)
+      i945_miptree_layout(mt);
+   else
+      i915_miptree_layout(mt);
+#else
+   brw_miptree_layout(intel, mt);
+#endif
 
    return mt;
 }
@@ -160,10 +175,26 @@ intel_miptree_create(struct intel_context *intel,
 	  (base_format == GL_DEPTH_COMPONENT ||
 	   base_format == GL_DEPTH_STENCIL_EXT))
 	 tiling = I915_TILING_Y;
-      else if (format == MESA_FORMAT_S8)
-	 tiling = I915_TILING_NONE;
       else if (width0 >= 64)
 	 tiling = I915_TILING_X;
+   }
+
+   if (format == MESA_FORMAT_S8) {
+      /* The stencil buffer is W tiled. However, we request from the kernel a
+       * non-tiled buffer because the GTT is incapable of W fencing.
+       *
+       * The stencil buffer has quirky pitch requirements.  From Vol 2a,
+       * 11.5.6.2.1 3DSTATE_STENCIL_BUFFER, field "Surface Pitch":
+       *    The pitch must be set to 2x the value computed based on width, as
+       *    the stencil buffer is stored with two rows interleaved.
+       * To accomplish this, we resort to the nasty hack of doubling the drm
+       * region's cpp and halving its height.
+       *
+       * If we neglect to double the pitch, then render corruption occurs.
+       */
+      tiling = I915_TILING_NONE;
+      width0 = ALIGN(width0, 64);
+      height0 = ALIGN((height0 + 1) / 2, 64);
    }
 
    mt = intel_miptree_create_internal(intel, target, format,
@@ -173,7 +204,7 @@ intel_miptree_create(struct intel_context *intel,
     * pitch == 0 || height == 0  indicates the null texture
     */
    if (!mt || !mt->total_width || !mt->total_height) {
-      free(mt);
+      intel_miptree_release(&mt);
       return NULL;
    }
 
@@ -185,7 +216,7 @@ intel_miptree_create(struct intel_context *intel,
 				   expect_accelerated_upload);
 
    if (!mt->region) {
-       free(mt);
+       intel_miptree_release(&mt);
        return NULL;
    }
 
@@ -215,21 +246,14 @@ intel_miptree_create_for_region(struct intel_context *intel,
 struct intel_mipmap_tree*
 intel_miptree_create_for_renderbuffer(struct intel_context *intel,
                                       gl_format format,
-                                      uint32_t tiling,
-                                      uint32_t cpp,
                                       uint32_t width,
                                       uint32_t height)
 {
-   struct intel_region *region;
    struct intel_mipmap_tree *mt;
 
-   region = intel_region_alloc(intel->intelScreen,
-                               tiling, cpp, width, height, true);
-   if (!region)
-      return NULL;
+   mt = intel_miptree_create(intel, GL_TEXTURE_2D, format, 0, 0,
+			     width, height, 1, true);
 
-   mt = intel_miptree_create_for_region(intel, GL_TEXTURE_2D, format, region);
-   intel_region_release(&region);
    return mt;
 }
 
@@ -309,10 +333,20 @@ intel_miptree_match_image(struct intel_mipmap_tree *mt,
    GLuint level = intelImage->base.Base.Level;
    int width, height, depth;
 
-   if (image->TexFormat != mt->format)
+   if (target_to_target(image->TexObject->Target) != mt->target)
       return false;
 
+   if (image->TexFormat != mt->format &&
+       !(image->TexFormat == MESA_FORMAT_S8_Z24 &&
+	 mt->format == MESA_FORMAT_X8_Z24 &&
+	 mt->stencil_mt)) {
+      return false;
+   }
+
    intel_miptree_get_dimensions_for_image(image, &width, &height, &depth);
+
+   if (mt->target == GL_TEXTURE_CUBE_MAP)
+      depth = 6;
 
    /* Test image dimensions against the base level image adjusted for
     * minification.  This will also catch images not present in the
@@ -344,7 +378,7 @@ intel_miptree_set_level_info(struct intel_mipmap_tree *mt,
 
    assert(mt->level[level].slice == NULL);
 
-   mt->level[level].slice = malloc(d * sizeof(*mt->level[0].slice));
+   mt->level[level].slice = calloc(d, sizeof(*mt->level[0].slice));
    mt->level[level].slice[0].x_offset = mt->level[level].level_x;
    mt->level[level].slice[0].y_offset = mt->level[level].level_y;
 }
@@ -484,100 +518,6 @@ intel_miptree_copy_teximage(struct intel_context *intel,
    }
 
    intel_miptree_reference(&intelImage->mt, dst_mt);
-}
-
-/**
- * \param scatter Scatter if true. Gather if false.
- *
- * \see intel_miptree_s8z24_scatter()
- * \see intel_miptree_s8z24_gather()
- */
-static void
-intel_miptree_s8z24_scattergather(struct intel_context *intel,
-                                  struct intel_mipmap_tree *mt,
-                                  uint32_t level,
-                                  uint32_t layer,
-                                  bool scatter)
-{
-   /* Check function inputs. */
-   assert(level >= mt->first_level);
-   assert(level <= mt->last_level);
-   assert(layer < mt->level[level].depth);
-
-   /* Label everything and its bit layout, just to make the code easier to
-    * read.
-    */
-   struct intel_mipmap_tree  *s8_mt    = mt->stencil_mt;
-   struct intel_mipmap_level *s8_level = &s8_mt->level[level];
-   struct intel_mipmap_slice *s8_slice = &s8_mt->level[level].slice[layer];
-
-   struct intel_mipmap_tree  *s8z24_mt    = mt;
-   struct intel_mipmap_level *s8z24_level = &s8z24_mt->level[level];
-   struct intel_mipmap_slice *s8z24_slice = &s8z24_mt->level[level].slice[layer];
-
-   /* Check that both miptree levels have the same dimensions. */
-   assert(s8_level->width  == s8z24_level->width);
-   assert(s8_level->height == s8z24_level->height);
-   assert(s8_level->depth  == s8z24_level->depth);
-
-   /* Map the buffers. */
-   if (drm_intel_bo_references(intel->batch.bo, s8_mt->region->bo) ||
-       drm_intel_bo_references(intel->batch.bo, s8z24_mt->region->bo)) {
-      intel_batchbuffer_flush(intel);
-   }
-   drm_intel_gem_bo_map_gtt(s8_mt->region->bo);
-   drm_intel_gem_bo_map_gtt(s8z24_mt->region->bo);
-
-   /* Define the invariant values outside the for loop, because I don't trust
-    * GCC to do it for us.
-    */
-   uint8_t *s8_map = s8_mt->region->bo->virtual
-		   + s8_slice->x_offset
-		   + s8_slice->y_offset;
-
-   uint8_t *s8z24_map = s8z24_mt->region->bo->virtual
-		      + s8z24_slice->x_offset
-		      + s8z24_slice->y_offset;
-
-   ptrdiff_t s8z24_stride = s8z24_mt->region->pitch * s8z24_mt->region->cpp;
-
-   uint32_t w = s8_level->width;
-   uint32_t h = s8_level->height;
-
-   for (uint32_t y = 0; y < h; ++y) {
-      for (uint32_t x = 0; x < w; ++x) {
-	 ptrdiff_t s8_offset = intel_offset_S8(s8_mt->region->pitch, x, y);
-	 ptrdiff_t s8z24_offset = y * s8z24_stride
-				+ x * 4
-				+ 3;
-	 if (scatter) {
-	    s8_map[s8_offset] = s8z24_map[s8z24_offset];
-	 } else {
-	    s8z24_map[s8z24_offset] = s8_map[s8_offset];
-	 }
-      }
-   }
-
-   drm_intel_gem_bo_unmap_gtt(s8_mt->region->bo);
-   drm_intel_gem_bo_unmap_gtt(s8z24_mt->region->bo);
-}
-
-void
-intel_miptree_s8z24_scatter(struct intel_context *intel,
-                            struct intel_mipmap_tree *mt,
-                            uint32_t level,
-                            uint32_t layer)
-{
-   intel_miptree_s8z24_scattergather(intel, mt, level, layer, true);
-}
-
-void
-intel_miptree_s8z24_gather(struct intel_context *intel,
-                           struct intel_mipmap_tree *mt,
-                           uint32_t level,
-                           uint32_t layer)
-{
-   intel_miptree_s8z24_scattergather(intel, mt, level, layer, false);
 }
 
 bool
@@ -729,4 +669,416 @@ intel_miptree_all_slices_resolve_depth(struct intel_context *intel,
    return intel_miptree_all_slices_resolve(intel, mt,
 					   INTEL_NEED_DEPTH_RESOLVE,
 					   intel->vtbl.resolve_depth_slice);
+}
+
+static void
+intel_miptree_map_gtt(struct intel_context *intel,
+		      struct intel_mipmap_tree *mt,
+		      struct intel_miptree_map *map,
+		      unsigned int level, unsigned int slice)
+{
+   unsigned int bw, bh;
+   void *base;
+   unsigned int image_x, image_y;
+   int x = map->x;
+   int y = map->y;
+
+   /* For compressed formats, the stride is the number of bytes per
+    * row of blocks.  intel_miptree_get_image_offset() already does
+    * the divide.
+    */
+   _mesa_get_format_block_size(mt->format, &bw, &bh);
+   assert(y % bh == 0);
+   y /= bh;
+
+   base = intel_region_map(intel, mt->region, map->mode);
+   /* Note that in the case of cube maps, the caller must have passed the slice
+    * number referencing the face.
+    */
+   intel_miptree_get_image_offset(mt, level, 0, slice, &image_x, &image_y);
+   x += image_x;
+   y += image_y;
+
+   map->stride = mt->region->pitch * mt->cpp;
+   map->ptr = base + y * map->stride + x * mt->cpp;
+
+   DBG("%s: %d,%d %dx%d from mt %p (%s) %d,%d = %p/%d\n", __FUNCTION__,
+       map->x, map->y, map->w, map->h,
+       mt, _mesa_get_format_name(mt->format),
+       x, y, map->ptr, map->stride);
+}
+
+static void
+intel_miptree_unmap_gtt(struct intel_context *intel,
+			struct intel_mipmap_tree *mt,
+			struct intel_miptree_map *map,
+			unsigned int level,
+			unsigned int slice)
+{
+   intel_region_unmap(intel, mt->region);
+}
+
+static void
+intel_miptree_map_blit(struct intel_context *intel,
+		       struct intel_mipmap_tree *mt,
+		       struct intel_miptree_map *map,
+		       unsigned int level, unsigned int slice)
+{
+   unsigned int image_x, image_y;
+   int x = map->x;
+   int y = map->y;
+   int ret;
+
+   /* The blitter requires the pitch to be aligned to 4. */
+   map->stride = ALIGN(map->w * mt->region->cpp, 4);
+
+   map->bo = drm_intel_bo_alloc(intel->bufmgr, "intel_miptree_map_blit() temp",
+				map->stride * map->h, 4096);
+   if (!map->bo) {
+      fprintf(stderr, "Failed to allocate blit temporary\n");
+      goto fail;
+   }
+
+   intel_miptree_get_image_offset(mt, level, 0, slice, &image_x, &image_y);
+   x += image_x;
+   y += image_y;
+
+   if (!intelEmitCopyBlit(intel,
+			  mt->region->cpp,
+			  mt->region->pitch, mt->region->bo,
+			  0, mt->region->tiling,
+			  map->stride / mt->region->cpp, map->bo,
+			  0, I915_TILING_NONE,
+			  x, y,
+			  0, 0,
+			  map->w, map->h,
+			  GL_COPY)) {
+      fprintf(stderr, "Failed to blit\n");
+      goto fail;
+   }
+
+   intel_batchbuffer_flush(intel);
+   ret = drm_intel_bo_map(map->bo, (map->mode & GL_MAP_WRITE_BIT) != 0);
+   if (ret) {
+      fprintf(stderr, "Failed to map blit temporary\n");
+      goto fail;
+   }
+
+   map->ptr = map->bo->virtual;
+
+   DBG("%s: %d,%d %dx%d from mt %p (%s) %d,%d = %p/%d\n", __FUNCTION__,
+       map->x, map->y, map->w, map->h,
+       mt, _mesa_get_format_name(mt->format),
+       x, y, map->ptr, map->stride);
+
+   return;
+
+fail:
+   drm_intel_bo_unreference(map->bo);
+   map->ptr = NULL;
+   map->stride = 0;
+}
+
+static void
+intel_miptree_unmap_blit(struct intel_context *intel,
+			 struct intel_mipmap_tree *mt,
+			 struct intel_miptree_map *map,
+			 unsigned int level,
+			 unsigned int slice)
+{
+   assert(!(map->mode & GL_MAP_WRITE_BIT));
+
+   drm_intel_bo_unmap(map->bo);
+   drm_intel_bo_unreference(map->bo);
+}
+
+static void
+intel_miptree_map_s8(struct intel_context *intel,
+		     struct intel_mipmap_tree *mt,
+		     struct intel_miptree_map *map,
+		     unsigned int level, unsigned int slice)
+{
+   map->stride = map->w;
+   map->buffer = map->ptr = malloc(map->stride * map->h);
+   if (!map->buffer)
+      return;
+
+   /* One of either READ_BIT or WRITE_BIT or both is set.  READ_BIT implies no
+    * INVALIDATE_RANGE_BIT.  WRITE_BIT needs the original values read in unless
+    * invalidate is set, since we'll be writing the whole rectangle from our
+    * temporary buffer back out.
+    */
+   if (!(map->mode & GL_MAP_INVALIDATE_RANGE_BIT)) {
+      uint8_t *untiled_s8_map = map->ptr;
+      uint8_t *tiled_s8_map = intel_region_map(intel, mt->region,
+					       GL_MAP_READ_BIT);
+      unsigned int image_x, image_y;
+
+      intel_miptree_get_image_offset(mt, level, 0, slice, &image_x, &image_y);
+
+      for (uint32_t y = 0; y < map->h; y++) {
+	 for (uint32_t x = 0; x < map->w; x++) {
+	    ptrdiff_t offset = intel_offset_S8(mt->region->pitch,
+	                                       x + image_x + map->x,
+	                                       y + image_y + map->y);
+	    untiled_s8_map[y * map->w + x] = tiled_s8_map[offset];
+	 }
+      }
+
+      intel_region_unmap(intel, mt->region);
+
+      DBG("%s: %d,%d %dx%d from mt %p %d,%d = %p/%d\n", __FUNCTION__,
+	  map->x, map->y, map->w, map->h,
+	  mt, map->x + image_x, map->y + image_y, map->ptr, map->stride);
+   } else {
+      DBG("%s: %d,%d %dx%d from mt %p = %p/%d\n", __FUNCTION__,
+	  map->x, map->y, map->w, map->h,
+	  mt, map->ptr, map->stride);
+   }
+}
+
+static void
+intel_miptree_unmap_s8(struct intel_context *intel,
+		       struct intel_mipmap_tree *mt,
+		       struct intel_miptree_map *map,
+		       unsigned int level,
+		       unsigned int slice)
+{
+   if (map->mode & GL_MAP_WRITE_BIT) {
+      unsigned int image_x, image_y;
+      uint8_t *untiled_s8_map = map->ptr;
+      uint8_t *tiled_s8_map = intel_region_map(intel, mt->region, map->mode);
+
+      intel_miptree_get_image_offset(mt, level, 0, slice, &image_x, &image_y);
+
+      for (uint32_t y = 0; y < map->h; y++) {
+	 for (uint32_t x = 0; x < map->w; x++) {
+	    ptrdiff_t offset = intel_offset_S8(mt->region->pitch,
+	                                       x + map->x,
+	                                       y + map->y);
+	    tiled_s8_map[offset] = untiled_s8_map[y * map->w + x];
+	 }
+      }
+
+      intel_region_unmap(intel, mt->region);
+   }
+
+   free(map->buffer);
+}
+
+/**
+ * Mapping function for packed depth/stencil miptrees backed by real separate
+ * miptrees for depth and stencil.
+ *
+ * On gen7, and to support HiZ pre-gen7, we have to have the stencil buffer
+ * separate from the depth buffer.  Yet at the GL API level, we have to expose
+ * packed depth/stencil textures and FBO attachments, and Mesa core expects to
+ * be able to map that memory for texture storage and glReadPixels-type
+ * operations.  We give Mesa core that access by mallocing a temporary and
+ * copying the data between the actual backing store and the temporary.
+ */
+static void
+intel_miptree_map_depthstencil(struct intel_context *intel,
+			       struct intel_mipmap_tree *mt,
+			       struct intel_miptree_map *map,
+			       unsigned int level, unsigned int slice)
+{
+   struct intel_mipmap_tree *z_mt = mt;
+   struct intel_mipmap_tree *s_mt = mt->stencil_mt;
+   bool map_z32f_x24s8 = mt->format == MESA_FORMAT_Z32_FLOAT;
+   int packed_bpp = map_z32f_x24s8 ? 8 : 4;
+
+   map->stride = map->w * packed_bpp;
+   map->buffer = map->ptr = malloc(map->stride * map->h);
+   if (!map->buffer)
+      return;
+
+   /* One of either READ_BIT or WRITE_BIT or both is set.  READ_BIT implies no
+    * INVALIDATE_RANGE_BIT.  WRITE_BIT needs the original values read in unless
+    * invalidate is set, since we'll be writing the whole rectangle from our
+    * temporary buffer back out.
+    */
+   if (!(map->mode & GL_MAP_INVALIDATE_RANGE_BIT)) {
+      uint32_t *packed_map = map->ptr;
+      uint8_t *s_map = intel_region_map(intel, s_mt->region, GL_MAP_READ_BIT);
+      uint32_t *z_map = intel_region_map(intel, z_mt->region, GL_MAP_READ_BIT);
+      unsigned int s_image_x, s_image_y;
+      unsigned int z_image_x, z_image_y;
+
+      intel_miptree_get_image_offset(s_mt, level, 0, slice,
+				     &s_image_x, &s_image_y);
+      intel_miptree_get_image_offset(z_mt, level, 0, slice,
+				     &z_image_x, &z_image_y);
+
+      for (uint32_t y = 0; y < map->h; y++) {
+	 for (uint32_t x = 0; x < map->w; x++) {
+	    int map_x = map->x + x, map_y = map->y + y;
+	    ptrdiff_t s_offset = intel_offset_S8(s_mt->region->pitch,
+						 map_x + s_image_x,
+						 map_y + s_image_y);
+	    ptrdiff_t z_offset = ((map_y + z_image_y) * z_mt->region->pitch +
+				  (map_x + z_image_x));
+	    uint8_t s = s_map[s_offset];
+	    uint32_t z = z_map[z_offset];
+
+	    if (map_z32f_x24s8) {
+	       packed_map[(y * map->w + x) * 2 + 0] = z;
+	       packed_map[(y * map->w + x) * 2 + 1] = s;
+	    } else {
+	       packed_map[y * map->w + x] = (s << 24) | (z & 0x00ffffff);
+	    }
+	 }
+      }
+
+      intel_region_unmap(intel, s_mt->region);
+      intel_region_unmap(intel, z_mt->region);
+
+      DBG("%s: %d,%d %dx%d from z mt %p %d,%d, s mt %p %d,%d = %p/%d\n",
+	  __FUNCTION__,
+	  map->x, map->y, map->w, map->h,
+	  z_mt, map->x + z_image_x, map->y + z_image_y,
+	  s_mt, map->x + s_image_x, map->y + s_image_y,
+	  map->ptr, map->stride);
+   } else {
+      DBG("%s: %d,%d %dx%d from mt %p = %p/%d\n", __FUNCTION__,
+	  map->x, map->y, map->w, map->h,
+	  mt, map->ptr, map->stride);
+   }
+}
+
+static void
+intel_miptree_unmap_depthstencil(struct intel_context *intel,
+				 struct intel_mipmap_tree *mt,
+				 struct intel_miptree_map *map,
+				 unsigned int level,
+				 unsigned int slice)
+{
+   struct intel_mipmap_tree *z_mt = mt;
+   struct intel_mipmap_tree *s_mt = mt->stencil_mt;
+   bool map_z32f_x24s8 = mt->format == MESA_FORMAT_Z32_FLOAT;
+
+   if (map->mode & GL_MAP_WRITE_BIT) {
+      uint32_t *packed_map = map->ptr;
+      uint8_t *s_map = intel_region_map(intel, s_mt->region, map->mode);
+      uint32_t *z_map = intel_region_map(intel, z_mt->region, map->mode);
+      unsigned int s_image_x, s_image_y;
+      unsigned int z_image_x, z_image_y;
+
+      intel_miptree_get_image_offset(s_mt, level, 0, slice,
+				     &s_image_x, &s_image_y);
+      intel_miptree_get_image_offset(z_mt, level, 0, slice,
+				     &z_image_x, &z_image_y);
+
+      for (uint32_t y = 0; y < map->h; y++) {
+	 for (uint32_t x = 0; x < map->w; x++) {
+	    ptrdiff_t s_offset = intel_offset_S8(s_mt->region->pitch,
+						 x + s_image_x + map->x,
+						 y + s_image_y + map->y);
+	    ptrdiff_t z_offset = ((y + z_image_y) * z_mt->region->pitch +
+				  (x + z_image_x));
+
+	    if (map_z32f_x24s8) {
+	       z_map[z_offset] = packed_map[(y * map->w + x) * 2 + 0];
+	       s_map[s_offset] = packed_map[(y * map->w + x) * 2 + 1];
+	    } else {
+	       uint32_t packed = packed_map[y * map->w + x];
+	       s_map[s_offset] = packed >> 24;
+	       z_map[z_offset] = packed;
+	    }
+	 }
+      }
+
+      intel_region_unmap(intel, s_mt->region);
+      intel_region_unmap(intel, z_mt->region);
+
+      DBG("%s: %d,%d %dx%d from z mt %p (%s) %d,%d, s mt %p %d,%d = %p/%d\n",
+	  __FUNCTION__,
+	  map->x, map->y, map->w, map->h,
+	  z_mt, _mesa_get_format_name(z_mt->format),
+	  map->x + z_image_x, map->y + z_image_y,
+	  s_mt, map->x + s_image_x, map->y + s_image_y,
+	  map->ptr, map->stride);
+   }
+
+   free(map->buffer);
+}
+
+void
+intel_miptree_map(struct intel_context *intel,
+		  struct intel_mipmap_tree *mt,
+		  unsigned int level,
+		  unsigned int slice,
+		  unsigned int x,
+		  unsigned int y,
+		  unsigned int w,
+		  unsigned int h,
+		  GLbitfield mode,
+		  void **out_ptr,
+		  int *out_stride)
+{
+   struct intel_miptree_map *map;
+
+   map = calloc(1, sizeof(struct intel_miptree_map));
+   if (!map){
+      *out_ptr = NULL;
+      *out_stride = 0;
+      return;
+   }
+
+   assert(!mt->level[level].slice[slice].map);
+   mt->level[level].slice[slice].map = map;
+   map->mode = mode;
+   map->x = x;
+   map->y = y;
+   map->w = w;
+   map->h = h;
+
+   intel_miptree_slice_resolve_depth(intel, mt, level, slice);
+   if (map->mode & GL_MAP_WRITE_BIT) {
+      intel_miptree_slice_set_needs_hiz_resolve(mt, level, slice);
+   }
+
+   if (mt->format == MESA_FORMAT_S8) {
+      intel_miptree_map_s8(intel, mt, map, level, slice);
+   } else if (mt->stencil_mt) {
+      intel_miptree_map_depthstencil(intel, mt, map, level, slice);
+   } else if (intel->gen >= 6 &&
+	      !(mode & GL_MAP_WRITE_BIT) &&
+	      !mt->compressed &&
+	      mt->region->tiling == I915_TILING_X) {
+      intel_miptree_map_blit(intel, mt, map, level, slice);
+   } else {
+      intel_miptree_map_gtt(intel, mt, map, level, slice);
+   }
+
+   *out_ptr = map->ptr;
+   *out_stride = map->stride;
+}
+
+void
+intel_miptree_unmap(struct intel_context *intel,
+		    struct intel_mipmap_tree *mt,
+		    unsigned int level,
+		    unsigned int slice)
+{
+   struct intel_miptree_map *map = mt->level[level].slice[slice].map;
+
+   if (!map)
+      return;
+
+   DBG("%s: mt %p (%s) level %d slice %d\n", __FUNCTION__,
+       mt, _mesa_get_format_name(mt->format), level, slice);
+
+   if (mt->format == MESA_FORMAT_S8) {
+      intel_miptree_unmap_s8(intel, mt, map, level, slice);
+   } else if (mt->stencil_mt) {
+      intel_miptree_unmap_depthstencil(intel, mt, map, level, slice);
+   } else if (map->bo) {
+      intel_miptree_unmap_blit(intel, mt, map, level, slice);
+   } else {
+      intel_miptree_unmap_gtt(intel, mt, map, level, slice);
+   }
+
+   mt->level[level].slice[slice].map = NULL;
+   free(map);
 }

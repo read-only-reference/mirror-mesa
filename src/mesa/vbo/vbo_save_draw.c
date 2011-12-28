@@ -248,6 +248,7 @@ vbo_save_playback_vertex_list(struct gl_context *ctx, void *data)
    const struct vbo_save_vertex_list *node =
       (const struct vbo_save_vertex_list *) data;
    struct vbo_save_context *save = &vbo_context(ctx)->save;
+   struct vbo_exec_context *exec = &vbo_context(ctx)->exec;
 
    FLUSH_CURRENT(ctx, 0);
 
@@ -286,6 +287,8 @@ vbo_save_playback_vertex_list(struct gl_context *ctx, void *data)
 
       vbo_bind_vertex_list( ctx, node );
 
+      vbo_draw_method(exec, DRAW_DISPLAY_LIST);
+
       /* Again...
        */
       if (ctx->NewState)
@@ -299,7 +302,8 @@ vbo_save_playback_vertex_list(struct gl_context *ctx, void *data)
                                       NULL,
                                       GL_TRUE,
                                       0,    /* Node is a VBO, so this is ok */
-                                      node->count - 1);
+                                      node->count - 1,
+                                      NULL);
       }
    }
 

@@ -47,6 +47,14 @@ extern "C" {
 
 
 /**
+ * Max number of bytes for any non-compressed pixel format below, or for
+ * intermediate pixel storage in Mesa.  This should never be less than
+ * 16.  Maybe 32 someday?
+ */
+#define MAX_PIXEL_BYTES 16
+
+
+/**
  * Mesa texture/renderbuffer image formats.
  */
 typedef enum
@@ -91,8 +99,8 @@ typedef enum
    MESA_FORMAT_YCBCR,		/*                     YYYY YYYY UorV UorV */
    MESA_FORMAT_YCBCR_REV,	/*                     UorV UorV YYYY YYYY */
    MESA_FORMAT_R8,		/*                               RRRR RRRR */
-   MESA_FORMAT_RG88,		/*                     GGGG GGGG RRRR RRRR */
-   MESA_FORMAT_RG88_REV,	/*                     RRRR RRRR GGGG GGGG */
+   MESA_FORMAT_GR88,		/*                     GGGG GGGG RRRR RRRR */
+   MESA_FORMAT_RG88,    	/*                     RRRR RRRR GGGG GGGG */
    MESA_FORMAT_R16,		/*                     RRRR RRRR RRRR RRRR */
    MESA_FORMAT_RG1616,		/* GGGG GGGG GGGG GGGG RRRR RRRR RRRR RRRR */
    MESA_FORMAT_RG1616_REV,	/* RRRR RRRR RRRR RRRR GGGG GGGG GGGG GGGG */
@@ -250,6 +258,8 @@ typedef enum
    MESA_FORMAT_SIGNED_LA_LATC2,
    /*@}*/
 
+   MESA_FORMAT_ETC1_RGB8,
+
    MESA_FORMAT_SIGNED_A8,         /*                               AAAA AAAA */
    MESA_FORMAT_SIGNED_L8,         /*                               LLLL LLLL */
    MESA_FORMAT_SIGNED_AL88,       /*                     AAAA AAAA LLLL LLLL */
@@ -279,6 +289,9 @@ _mesa_get_format_bytes(gl_format format);
 
 extern GLint
 _mesa_get_format_bits(gl_format format, GLenum pname);
+
+extern GLuint
+_mesa_get_format_max_bits(gl_format format);
 
 extern GLenum
 _mesa_get_format_datatype(gl_format format);

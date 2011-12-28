@@ -245,6 +245,9 @@ vlVdpDecoderRenderMpeg12(struct pipe_video_decoder *decoder,
    picture.f_code[1][0] = picture_info->f_code[1][0] - 1;
    picture.f_code[1][1] = picture_info->f_code[1][1] - 1;
    picture.num_slices = picture_info->slice_count;
+   picture.top_field_first = picture_info->top_field_first;
+   picture.full_pel_forward_vector = picture_info->full_pel_forward_vector;
+   picture.full_pel_backward_vector = picture_info->full_pel_backward_vector;
 
    decoder->set_picture_parameters(decoder, &picture.base);
 
@@ -319,7 +322,6 @@ vlVdpDecoderRenderVC1(struct pipe_video_decoder *decoder,
 {
    struct pipe_vc1_picture_desc picture;
    struct pipe_video_buffer *ref_frames[2] = {};
-   unsigned i;
 
    VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Decoding VC-1\n");
 
@@ -382,6 +384,8 @@ vlVdpDecoderRender(VdpDecoder decoder,
                    uint32_t bitstream_buffer_count,
                    VdpBitstreamBuffer const *bitstream_buffers)
 {
+   const void * buffers[bitstream_buffer_count];
+   unsigned sizes[bitstream_buffer_count];
    vlVdpDecoder *vldecoder;
    vlVdpSurface *vlsurf;
    VdpStatus ret;
@@ -432,9 +436,11 @@ vlVdpDecoderRender(VdpDecoder decoder,
       return ret;
 
    dec->begin_frame(dec);
-   for (i = 0; i < bitstream_buffer_count; ++i)
-      dec->decode_bitstream(dec, bitstream_buffers[i].bitstream_bytes,
-                                           bitstream_buffers[i].bitstream);
+   for (i = 0; i < bitstream_buffer_count; ++i) {
+      buffers[i] = bitstream_buffers[i].bitstream;
+      sizes[i] = bitstream_buffers[i].bitstream_bytes;
+   }
+   dec->decode_bitstream(dec, bitstream_buffer_count, buffers, sizes);
    dec->end_frame(dec);
    return ret;
 }

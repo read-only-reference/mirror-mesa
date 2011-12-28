@@ -1760,7 +1760,6 @@ exec_tex(struct tgsi_exec_machine *mach,
 
    switch (inst->Texture.Texture) {
    case TGSI_TEXTURE_1D:
-   case TGSI_TEXTURE_SHADOW1D:
       FETCH(&r[0], 0, CHAN_X);
 
       if (modifier == TEX_MODIFIER_PROJECTED) {
@@ -1769,6 +1768,19 @@ exec_tex(struct tgsi_exec_machine *mach,
 
       fetch_texel(mach->Samplers[unit],
                   &r[0], &ZeroVec, &ZeroVec, lod,  /* S, T, P, LOD */
+                  control,
+                  &r[0], &r[1], &r[2], &r[3]);     /* R, G, B, A */
+      break;
+   case TGSI_TEXTURE_SHADOW1D:
+      FETCH(&r[0], 0, CHAN_X);
+      FETCH(&r[2], 0, CHAN_Z);
+
+      if (modifier == TEX_MODIFIER_PROJECTED) {
+         micro_div(&r[0], &r[0], &r[3]);
+      }
+
+      fetch_texel(mach->Samplers[unit],
+                  &r[0], &ZeroVec, &r[2], lod,  /* S, T, P, LOD */
                   control,
                   &r[0], &r[1], &r[2], &r[3]);     /* R, G, B, A */
       break;
@@ -1794,9 +1806,22 @@ exec_tex(struct tgsi_exec_machine *mach,
       break;
 
    case TGSI_TEXTURE_1D_ARRAY:
+      FETCH(&r[0], 0, CHAN_X);
+      FETCH(&r[1], 0, CHAN_Y);
+
+      if (modifier == TEX_MODIFIER_PROJECTED) {
+         micro_div(&r[0], &r[0], &r[3]);
+      }
+
+      fetch_texel(mach->Samplers[unit],
+                  &r[0], &r[1], &ZeroVec, lod,     /* S, T, P, LOD */
+                  control,
+                  &r[0], &r[1], &r[2], &r[3]);  /* outputs */
+      break;
    case TGSI_TEXTURE_SHADOW1D_ARRAY:
       FETCH(&r[0], 0, CHAN_X);
       FETCH(&r[1], 0, CHAN_Y);
+      FETCH(&r[2], 0, CHAN_Z);
 
       if (modifier == TEX_MODIFIER_PROJECTED) {
          micro_div(&r[0], &r[0], &r[3]);
@@ -1809,7 +1834,6 @@ exec_tex(struct tgsi_exec_machine *mach,
       break;
 
    case TGSI_TEXTURE_2D_ARRAY:
-   case TGSI_TEXTURE_SHADOW2D_ARRAY:
       FETCH(&r[0], 0, CHAN_X);
       FETCH(&r[1], 0, CHAN_Y);
       FETCH(&r[2], 0, CHAN_Z);
@@ -1824,7 +1848,17 @@ exec_tex(struct tgsi_exec_machine *mach,
                   control,
                   &r[0], &r[1], &r[2], &r[3]);  /* outputs */
       break;
+   case TGSI_TEXTURE_SHADOW2D_ARRAY:
+      FETCH(&r[0], 0, CHAN_X);
+      FETCH(&r[1], 0, CHAN_Y);
+      FETCH(&r[2], 0, CHAN_Z);
+      FETCH(&r[3], 0, CHAN_W);
 
+      fetch_texel(mach->Samplers[unit],
+                  &r[0], &r[1], &r[2], &r[3],     /* S, T, P, LOD */
+                  control,
+                  &r[0], &r[1], &r[2], &r[3]);  /* outputs */
+      break;
    case TGSI_TEXTURE_3D:
    case TGSI_TEXTURE_CUBE:
       FETCH(&r[0], 0, CHAN_X);
@@ -2954,16 +2988,8 @@ exec_lit(struct tgsi_exec_machine *mach,
    union tgsi_exec_channel r[3];
    union tgsi_exec_channel d[3];
 
-   if (inst->Dst[0].Register.WriteMask & TGSI_WRITEMASK_X) {
-      store_dest(mach, &OneVec, &inst->Dst[0], inst, CHAN_X, TGSI_EXEC_DATA_FLOAT);
-   }
    if (inst->Dst[0].Register.WriteMask & TGSI_WRITEMASK_YZ) {
       fetch_source(mach, &r[0], &inst->Src[0], CHAN_X, TGSI_EXEC_DATA_FLOAT);
-      if (inst->Dst[0].Register.WriteMask & TGSI_WRITEMASK_Y) {
-         micro_max(&d[CHAN_Y], &r[0], &ZeroVec);
-         store_dest(mach, &d[CHAN_Y], &inst->Dst[0], inst, CHAN_Y, TGSI_EXEC_DATA_FLOAT);
-      }
-
       if (inst->Dst[0].Register.WriteMask & TGSI_WRITEMASK_Z) {
          fetch_source(mach, &r[1], &inst->Src[0], CHAN_Y, TGSI_EXEC_DATA_FLOAT);
          micro_max(&r[1], &r[1], &ZeroVec);
@@ -2975,7 +3001,15 @@ exec_lit(struct tgsi_exec_machine *mach,
          micro_lt(&d[CHAN_Z], &ZeroVec, &r[0], &r[1], &ZeroVec);
          store_dest(mach, &d[CHAN_Z], &inst->Dst[0], inst, CHAN_Z, TGSI_EXEC_DATA_FLOAT);
       }
+      if (inst->Dst[0].Register.WriteMask & TGSI_WRITEMASK_Y) {
+         micro_max(&d[CHAN_Y], &r[0], &ZeroVec);
+         store_dest(mach, &d[CHAN_Y], &inst->Dst[0], inst, CHAN_Y, TGSI_EXEC_DATA_FLOAT);
+      }
    }
+   if (inst->Dst[0].Register.WriteMask & TGSI_WRITEMASK_X) {
+      store_dest(mach, &OneVec, &inst->Dst[0], inst, CHAN_X, TGSI_EXEC_DATA_FLOAT);
+   }
+
    if (inst->Dst[0].Register.WriteMask & TGSI_WRITEMASK_W) {
       store_dest(mach, &OneVec, &inst->Dst[0], inst, CHAN_W, TGSI_EXEC_DATA_FLOAT);
    }

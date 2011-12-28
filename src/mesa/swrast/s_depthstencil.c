@@ -22,13 +22,13 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include "glheader.h"
-#include "imports.h"
-#include "context.h"
-#include "formats.h"
-#include "mtypes.h"
-#include "depthstencil.h"
-#include "renderbuffer.h"
+#include "main/glheader.h"
+#include "main/imports.h"
+#include "main/context.h"
+#include "main/formats.h"
+#include "main/mtypes.h"
+#include "main/renderbuffer.h"
+#include "swrast/s_depthstencil.h"
 
 
 /**
@@ -207,59 +207,6 @@ put_row_z24(struct gl_context *ctx, struct gl_renderbuffer *z24rb, GLuint count,
    }
 }
 
-static void
-put_mono_row_z24(struct gl_context *ctx, struct gl_renderbuffer *z24rb, GLuint count,
-                 GLint x, GLint y, const void *value, const GLubyte *mask)
-{
-   struct gl_renderbuffer *dsrb = z24rb->Wrapped;
-   GLuint *dst = (GLuint *) dsrb->GetPointer(ctx, dsrb, x, y);
-   ASSERT(z24rb->DataType == GL_UNSIGNED_INT);
-   ASSERT(dsrb->DataType == GL_UNSIGNED_INT_24_8_EXT);
-   if (dst) {
-      /* direct access */
-      GLuint i;
-      if (dsrb->Format == MESA_FORMAT_Z24_S8) {
-         const GLuint shiftedVal = *((GLuint *) value) << 8;
-         for (i = 0; i < count; i++) {
-            if (!mask || mask[i]) {
-               dst[i] = shiftedVal | (dst[i] & 0xff);
-            }
-         }
-      }
-      else {
-         const GLuint shiftedVal = *((GLuint *) value);
-         assert(dsrb->Format == MESA_FORMAT_S8_Z24);
-         for (i = 0; i < count; i++) {
-            if (!mask || mask[i]) {
-               dst[i] = shiftedVal | (dst[i] & 0xff000000);
-            }
-         }
-      }
-   }
-   else {
-      /* get, modify, put */
-      GLuint temp[MAX_WIDTH], i;
-      dsrb->GetRow(ctx, dsrb, count, x, y, temp);
-      if (dsrb->Format == MESA_FORMAT_Z24_S8) {
-         const GLuint shiftedVal = *((GLuint *) value) << 8;
-         for (i = 0; i < count; i++) {
-            if (!mask || mask[i]) {
-               temp[i] = shiftedVal | (temp[i] & 0xff);
-            }
-         }
-      }
-      else {
-         const GLuint shiftedVal = *((GLuint *) value);
-         assert(dsrb->Format == MESA_FORMAT_S8_Z24);
-         for (i = 0; i < count; i++) {
-            if (!mask || mask[i]) {
-               temp[i] = shiftedVal | (temp[i] & 0xff000000);
-            }
-         }
-      }
-      dsrb->PutRow(ctx, dsrb, count, x, y, temp, mask);
-   }
-}
 
 static void
 put_values_z24(struct gl_context *ctx, struct gl_renderbuffer *z24rb, GLuint count,
@@ -314,44 +261,15 @@ put_values_z24(struct gl_context *ctx, struct gl_renderbuffer *z24rb, GLuint cou
    }
 }
 
-static void
-put_mono_values_z24(struct gl_context *ctx, struct gl_renderbuffer *z24rb,
-                    GLuint count, const GLint x[], const GLint y[],
-                    const void *value, const GLubyte *mask)
-{
-   struct gl_renderbuffer *dsrb = z24rb->Wrapped;
-   GLuint temp[MAX_WIDTH], i;
-   /* get, modify, put */
-   dsrb->GetValues(ctx, dsrb, count, x, y, temp);
-   if (dsrb->Format == MESA_FORMAT_Z24_S8) {
-      const GLuint shiftedVal = *((GLuint *) value) << 8;
-      for (i = 0; i < count; i++) {
-         if (!mask || mask[i]) {
-            temp[i] = shiftedVal | (temp[i] & 0xff);
-         }
-      }
-   }
-   else {
-      const GLuint shiftedVal = *((GLuint *) value);
-      assert(dsrb->Format == MESA_FORMAT_S8_Z24);
-      for (i = 0; i < count; i++) {
-         if (!mask || mask[i]) {
-            temp[i] = shiftedVal | (temp[i] & 0xff000000);
-         }
-      }
-   }
-   dsrb->PutValues(ctx, dsrb, count, x, y, temp, mask);
-}
-
 
 /**
  * Wrap the given GL_DEPTH_STENCIL renderbuffer so that it acts like
  * a depth renderbuffer.
  * \return new depth renderbuffer
  */
-struct gl_renderbuffer *
-_mesa_new_z24_renderbuffer_wrapper(struct gl_context *ctx,
-                                   struct gl_renderbuffer *dsrb)
+static struct gl_renderbuffer *
+new_z24_renderbuffer_wrapper(struct gl_context *ctx,
+                             struct gl_renderbuffer *dsrb)
 {
    struct gl_renderbuffer *z24rb;
 
@@ -385,10 +303,7 @@ _mesa_new_z24_renderbuffer_wrapper(struct gl_context *ctx,
    z24rb->GetRow = get_row_z24;
    z24rb->GetValues = get_values_z24;
    z24rb->PutRow = put_row_z24;
-   z24rb->PutRowRGB = NULL;
-   z24rb->PutMonoRow = put_mono_row_z24;
    z24rb->PutValues = put_values_z24;
-   z24rb->PutMonoValues = put_mono_values_z24;
 
    return z24rb;
 }
@@ -467,39 +382,6 @@ put_row_z32f(struct gl_context *ctx, struct gl_renderbuffer *z32frb, GLuint coun
    }
 }
 
-static void
-put_mono_row_z32f(struct gl_context *ctx, struct gl_renderbuffer *z32frb, GLuint count,
-                  GLint x, GLint y, const void *value, const GLubyte *mask)
-{
-   struct gl_renderbuffer *dsrb = z32frb->Wrapped;
-   GLfloat *dst = (GLfloat *) dsrb->GetPointer(ctx, dsrb, x, y);
-   ASSERT(z32frb->DataType == GL_FLOAT);
-   ASSERT(dsrb->DataType == GL_FLOAT_32_UNSIGNED_INT_24_8_REV);
-   ASSERT(dsrb->Format == MESA_FORMAT_Z32_FLOAT_X24S8);
-   if (dst) {
-      /* direct access */
-      GLuint i;
-      const GLfloat val = *(GLfloat*)value;
-      for (i = 0; i < count; i++) {
-         if (!mask || mask[i]) {
-            dst[i*2] = val;
-         }
-      }
-   }
-   else {
-      /* get, modify, put */
-      GLfloat temp[MAX_WIDTH*2];
-      GLuint i;
-      const GLfloat val = *(GLfloat *)value;
-      dsrb->GetRow(ctx, dsrb, count, x, y, temp);
-      for (i = 0; i < count; i++) {
-         if (!mask || mask[i]) {
-            temp[i*2] = val;
-         }
-      }
-      dsrb->PutRow(ctx, dsrb, count, x, y, temp, mask);
-   }
-}
 
 static void
 put_values_z32f(struct gl_context *ctx, struct gl_renderbuffer *z32frb, GLuint count,
@@ -535,37 +417,15 @@ put_values_z32f(struct gl_context *ctx, struct gl_renderbuffer *z32frb, GLuint c
    }
 }
 
-static void
-put_mono_values_z32f(struct gl_context *ctx, struct gl_renderbuffer *z32frb,
-                     GLuint count, const GLint x[], const GLint y[],
-                     const void *value, const GLubyte *mask)
-{
-   struct gl_renderbuffer *dsrb = z32frb->Wrapped;
-   GLfloat temp[MAX_WIDTH*2];
-   GLuint i;
-   const GLfloat val = *(GLfloat *)value;
-   ASSERT(z32frb->DataType == GL_FLOAT);
-   ASSERT(dsrb->DataType == GL_FLOAT_32_UNSIGNED_INT_24_8_REV);
-   ASSERT(dsrb->Format == MESA_FORMAT_Z32_FLOAT_X24S8);
-   /* get, modify, put */
-   dsrb->GetValues(ctx, dsrb, count, x, y, temp);
-   for (i = 0; i < count; i++) {
-      if (!mask || mask[i]) {
-         temp[i*2] = val;
-      }
-   }
-   dsrb->PutValues(ctx, dsrb, count, x, y, temp, mask);
-}
-
 
 /**
  * Wrap the given GL_DEPTH_STENCIL renderbuffer so that it acts like
  * a depth renderbuffer.
  * \return new depth renderbuffer
  */
-struct gl_renderbuffer *
-_mesa_new_z32f_renderbuffer_wrapper(struct gl_context *ctx,
-                                    struct gl_renderbuffer *dsrb)
+static struct gl_renderbuffer *
+new_z32f_renderbuffer_wrapper(struct gl_context *ctx,
+                              struct gl_renderbuffer *dsrb)
 {
    struct gl_renderbuffer *z32frb;
 
@@ -596,10 +456,7 @@ _mesa_new_z32f_renderbuffer_wrapper(struct gl_context *ctx,
    z32frb->GetRow = get_row_z32f;
    z32frb->GetValues = get_values_z32f;
    z32frb->PutRow = put_row_z32f;
-   z32frb->PutRowRGB = NULL;
-   z32frb->PutMonoRow = put_mono_row_z32f;
    z32frb->PutValues = put_values_z32f;
-   z32frb->PutMonoValues = put_mono_values_z32f;
 
    return z32frb;
 }
@@ -739,71 +596,6 @@ put_row_s8(struct gl_context *ctx, struct gl_renderbuffer *s8rb, GLuint count,
    }
 }
 
-static void
-put_mono_row_s8(struct gl_context *ctx, struct gl_renderbuffer *s8rb, GLuint count,
-                GLint x, GLint y, const void *value, const GLubyte *mask)
-{
-   struct gl_renderbuffer *dsrb = s8rb->Wrapped;
-   const GLubyte val = *((GLubyte *) value);
-   GLuint *dst = (GLuint *) dsrb->GetPointer(ctx, dsrb, x, y);
-   ASSERT(s8rb->DataType == GL_UNSIGNED_BYTE);
-   ASSERT(dsrb->DataType == GL_UNSIGNED_INT_24_8_EXT ||
-          dsrb->DataType == GL_FLOAT_32_UNSIGNED_INT_24_8_REV);
-   if (dst) {
-      /* direct access */
-      GLuint i;
-      if (dsrb->Format == MESA_FORMAT_Z32_FLOAT_X24S8) {
-         for (i = 0; i < count; i++) {
-            if (!mask || mask[i]) {
-               dst[i*2+1] = val;
-            }
-         }
-      }
-      else if (dsrb->Format == MESA_FORMAT_Z24_S8) {
-         for (i = 0; i < count; i++) {
-            if (!mask || mask[i]) {
-               dst[i] = (dst[i] & 0xffffff00) | val;
-            }
-         }
-      }
-      else {
-         assert(dsrb->Format == MESA_FORMAT_S8_Z24);
-         for (i = 0; i < count; i++) {
-            if (!mask || mask[i]) {
-               dst[i] = (dst[i] & 0xffffff) | (val << 24);
-            }
-         }
-      }
-   }
-   else {
-      /* get, modify, put */
-      GLuint temp[MAX_WIDTH*2], i;
-      dsrb->GetRow(ctx, dsrb, count, x, y, temp);
-      if (dsrb->Format == MESA_FORMAT_Z32_FLOAT_X24S8) {
-         for (i = 0; i < count; i++) {
-            if (!mask || mask[i]) {
-               temp[i*2+1] = val;
-            }
-         }
-      }
-      else if (dsrb->Format == MESA_FORMAT_Z24_S8) {
-         for (i = 0; i < count; i++) {
-            if (!mask || mask[i]) {
-               temp[i] = (temp[i] & 0xffffff00) | val;
-            }
-         }
-      }
-      else {
-         assert(dsrb->Format == MESA_FORMAT_S8_Z24);
-         for (i = 0; i < count; i++) {
-            if (!mask || mask[i]) {
-               temp[i] = (temp[i] & 0xffffff) | (val << 24);
-            }
-         }
-      }
-      dsrb->PutRow(ctx, dsrb, count, x, y, temp, mask);
-   }
-}
 
 static void
 put_values_s8(struct gl_context *ctx, struct gl_renderbuffer *s8rb, GLuint count,
@@ -874,49 +666,14 @@ put_values_s8(struct gl_context *ctx, struct gl_renderbuffer *s8rb, GLuint count
    }
 }
 
-static void
-put_mono_values_s8(struct gl_context *ctx, struct gl_renderbuffer *s8rb, GLuint count,
-                   const GLint x[], const GLint y[],
-                   const void *value, const GLubyte *mask)
-{
-   struct gl_renderbuffer *dsrb = s8rb->Wrapped;
-   GLuint temp[MAX_WIDTH*2], i;
-   const GLubyte val = *((GLubyte *) value);
-   /* get, modify, put */
-   dsrb->GetValues(ctx, dsrb, count, x, y, temp);
-   if (dsrb->Format == MESA_FORMAT_Z32_FLOAT_X24S8) {
-      for (i = 0; i < count; i++) {
-         if (!mask || mask[i]) {
-            temp[i*2+1] = val;
-         }
-      }
-   }
-   else if (dsrb->Format == MESA_FORMAT_Z24_S8) {
-      for (i = 0; i < count; i++) {
-         if (!mask || mask[i]) {
-            temp[i] = (temp[i] & 0xffffff00) | val;
-         }
-      }
-   }
-   else {
-      assert(dsrb->Format == MESA_FORMAT_S8_Z24);
-      for (i = 0; i < count; i++) {
-         if (!mask || mask[i]) {
-            temp[i] = (temp[i] & 0xffffff) | (val << 24);
-         }
-      }
-   }
-   dsrb->PutValues(ctx, dsrb, count, x, y, temp, mask);
-}
-
 
 /**
  * Wrap the given GL_DEPTH_STENCIL renderbuffer so that it acts like
  * a stencil renderbuffer.
  * \return new stencil renderbuffer
  */
-struct gl_renderbuffer *
-_mesa_new_s8_renderbuffer_wrapper(struct gl_context *ctx, struct gl_renderbuffer *dsrb)
+static struct gl_renderbuffer *
+new_s8_renderbuffer_wrapper(struct gl_context *ctx, struct gl_renderbuffer *dsrb)
 {
    struct gl_renderbuffer *s8rb;
 
@@ -950,165 +707,85 @@ _mesa_new_s8_renderbuffer_wrapper(struct gl_context *ctx, struct gl_renderbuffer
    s8rb->GetRow = get_row_s8;
    s8rb->GetValues = get_values_s8;
    s8rb->PutRow = put_row_s8;
-   s8rb->PutRowRGB = NULL;
-   s8rb->PutMonoRow = put_mono_row_s8;
    s8rb->PutValues = put_values_s8;
-   s8rb->PutMonoValues = put_mono_values_s8;
 
    return s8rb;
 }
 
 
-
 /**
- ** The following functions are useful for hardware drivers that only
- ** implement combined depth/stencil buffers.
- ** The GL_EXT_framebuffer_object extension allows indepedent depth and
- ** stencil buffers to be used in any combination.
- ** Therefore, we sometimes have to merge separate depth and stencil
- ** renderbuffers into a single depth+stencil renderbuffer.  And sometimes
- ** we have to split combined depth+stencil renderbuffers into separate
- ** renderbuffers.
- **/
-
-
-/**
- * Extract stencil values from the combined depth/stencil renderbuffer, storing
- * the values into a separate stencil renderbuffer.
- * \param dsRb  the source depth/stencil renderbuffer
- * \param stencilRb  the destination stencil renderbuffer
- *                   (either 8-bit or 32-bit)
+ * Update the framebuffer's _DepthBuffer field using the renderbuffer
+ * found at the given attachment index.
+ *
+ * If that attachment points to a combined GL_DEPTH_STENCIL renderbuffer,
+ * create and install a depth wrapper/adaptor.
+ *
+ * \param fb  the framebuffer whose _DepthBuffer field to update
  */
 void
-_mesa_extract_stencil(struct gl_context *ctx,
-                      struct gl_renderbuffer *dsRb,
-                      struct gl_renderbuffer *stencilRb)
+_swrast_update_depth_buffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 {
-   GLuint row, width, height;
+   struct gl_renderbuffer *depthRb =
+      fb->Attachment[BUFFER_DEPTH].Renderbuffer;
 
-   ASSERT(dsRb);
-   ASSERT(stencilRb);
+   if (depthRb && _mesa_is_format_packed_depth_stencil(depthRb->Format)) {
+      /* The attached depth buffer is a GL_DEPTH_STENCIL renderbuffer */
+      if (!fb->_DepthBuffer
+          || fb->_DepthBuffer->Wrapped != depthRb
+          || _mesa_get_format_base_format(fb->_DepthBuffer->Format) != GL_DEPTH_COMPONENT) {
+         /* need to update wrapper */
+         struct gl_renderbuffer *wrapper;
 
-   ASSERT(dsRb->Format == MESA_FORMAT_Z24_S8);
-   ASSERT(dsRb->DataType == GL_UNSIGNED_INT_24_8_EXT);
-   ASSERT(stencilRb->Format == MESA_FORMAT_Z24_S8 ||
-          stencilRb->Format == MESA_FORMAT_S8);
-   ASSERT(dsRb->Width == stencilRb->Width);
-   ASSERT(dsRb->Height == stencilRb->Height);
-
-   width = dsRb->Width;
-   height = dsRb->Height;
-
-   for (row = 0; row < height; row++) {
-      GLuint depthStencil[MAX_WIDTH];
-      dsRb->GetRow(ctx, dsRb, width, 0, row, depthStencil);
-      if (stencilRb->Format == MESA_FORMAT_S8) {
-         /* 8bpp stencil */
-         GLubyte stencil[MAX_WIDTH];
-         GLuint i;
-         for (i = 0; i < width; i++) {
-            stencil[i] = depthStencil[i] & 0xff;
+         if (depthRb->Format == MESA_FORMAT_Z32_FLOAT_X24S8) {
+            wrapper = new_z32f_renderbuffer_wrapper(ctx, depthRb);
          }
-         stencilRb->PutRow(ctx, stencilRb, width, 0, row, stencil, NULL);
+         else {
+            wrapper = new_z24_renderbuffer_wrapper(ctx, depthRb);
+         }
+         _mesa_reference_renderbuffer(&fb->_DepthBuffer, wrapper);
       }
-      else {
-         /* 32bpp stencil */
-         /* the 24 depth bits will be ignored */
-         ASSERT(stencilRb->Format == MESA_FORMAT_Z24_S8);
-         ASSERT(stencilRb->DataType == GL_UNSIGNED_INT_24_8_EXT);
-         stencilRb->PutRow(ctx, stencilRb, width, 0, row, depthStencil, NULL);
-      }
+      ASSERT(fb->_DepthBuffer->Wrapped == depthRb);
+      fb->_DepthBuffer->Width = depthRb->Width;
+      fb->_DepthBuffer->Height = depthRb->Height;
+   }
+   else {
+      /* depthRb may be null */
+      _mesa_reference_renderbuffer(&fb->_DepthBuffer, depthRb);
    }
 }
 
 
 /**
- * Copy stencil values from a stencil renderbuffer into a combined
- * depth/stencil renderbuffer.
- * \param dsRb  the destination depth/stencil renderbuffer
- * \param stencilRb  the source stencil buffer (either 8-bit or 32-bit)
+ * Update the framebuffer's _StencilBuffer field using the renderbuffer
+ * found at the given attachment index.
+ *
+ * If that attachment points to a combined GL_DEPTH_STENCIL renderbuffer,
+ * create and install a stencil wrapper/adaptor.
+ *
+ * \param fb  the framebuffer whose _StencilBuffer field to update
  */
 void
-_mesa_insert_stencil(struct gl_context *ctx,
-                     struct gl_renderbuffer *dsRb,
-                     struct gl_renderbuffer *stencilRb)
+_swrast_update_stencil_buffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 {
-   GLuint row, width, height;
+   struct gl_renderbuffer *stencilRb =
+      fb->Attachment[BUFFER_STENCIL].Renderbuffer;
 
-   ASSERT(dsRb);
-   ASSERT(stencilRb);
-
-   ASSERT(dsRb->Format == MESA_FORMAT_Z24_S8);
-   ASSERT(dsRb->DataType == GL_UNSIGNED_INT_24_8_EXT);
-   ASSERT(stencilRb->Format == MESA_FORMAT_Z24_S8 ||
-          stencilRb->Format == MESA_FORMAT_S8);
-
-   ASSERT(dsRb->Width == stencilRb->Width);
-   ASSERT(dsRb->Height == stencilRb->Height);
-
-   width = dsRb->Width;
-   height = dsRb->Height;
-
-   for (row = 0; row < height; row++) {
-      GLuint depthStencil[MAX_WIDTH];
-
-      dsRb->GetRow(ctx, dsRb, width, 0, row, depthStencil);
-
-      if (stencilRb->Format == MESA_FORMAT_S8) {
-         /* 8bpp stencil */
-         GLubyte stencil[MAX_WIDTH];
-         GLuint i;
-         stencilRb->GetRow(ctx, stencilRb, width, 0, row, stencil);
-         for (i = 0; i < width; i++) {
-            depthStencil[i] = (depthStencil[i] & 0xffffff00) | stencil[i];
-         }
+   if (stencilRb && _mesa_is_format_packed_depth_stencil(stencilRb->Format)) {
+      /* The attached stencil buffer is a GL_DEPTH_STENCIL renderbuffer */
+      if (!fb->_StencilBuffer
+          || fb->_StencilBuffer->Wrapped != stencilRb
+          || _mesa_get_format_base_format(fb->_StencilBuffer->Format) != GL_STENCIL_INDEX) {
+         /* need to update wrapper */
+         struct gl_renderbuffer *wrapper
+            = new_s8_renderbuffer_wrapper(ctx, stencilRb);
+         _mesa_reference_renderbuffer(&fb->_StencilBuffer, wrapper);
       }
-      else {
-         /* 32bpp stencil buffer */
-         GLuint stencil[MAX_WIDTH], i;
-         ASSERT(stencilRb->Format == MESA_FORMAT_Z24_S8);
-         ASSERT(stencilRb->DataType == GL_UNSIGNED_INT_24_8_EXT);
-         stencilRb->GetRow(ctx, stencilRb, width, 0, row, stencil);
-         for (i = 0; i < width; i++) {
-            depthStencil[i]
-               = (depthStencil[i] & 0xffffff00) | (stencil[i] & 0xff);
-         }
-      }
-
-      dsRb->PutRow(ctx, dsRb, width, 0, row, depthStencil, NULL);
+      ASSERT(fb->_StencilBuffer->Wrapped == stencilRb);
+      fb->_StencilBuffer->Width = stencilRb->Width;
+      fb->_StencilBuffer->Height = stencilRb->Height;
    }
-}
-
-
-/**
- * Convert the stencil buffer from 8bpp to 32bpp depth/stencil.
- * \param stencilRb  the stencil renderbuffer to promote
- */
-void
-_mesa_promote_stencil(struct gl_context *ctx, struct gl_renderbuffer *stencilRb)
-{
-   const GLsizei width = stencilRb->Width;
-   const GLsizei height = stencilRb->Height;
-   GLubyte *data;
-   GLint i, j, k;
-
-   ASSERT(stencilRb->Format == MESA_FORMAT_S8);
-   ASSERT(stencilRb->Data);
-
-   data = (GLubyte *) stencilRb->Data;
-   stencilRb->Data = NULL;
-   stencilRb->AllocStorage(ctx, stencilRb, GL_DEPTH24_STENCIL8_EXT,
-                           width, height);
-
-   ASSERT(stencilRb->DataType == GL_UNSIGNED_INT_24_8_EXT);
-
-   k = 0;
-   for (i = 0; i < height; i++) {
-      GLuint depthStencil[MAX_WIDTH];
-      for (j = 0; j < width; j++) {
-         depthStencil[j] = data[k++];
-      }
-      stencilRb->PutRow(ctx, stencilRb, width, 0, i, depthStencil, NULL);
+   else {
+      /* stencilRb may be null */
+      _mesa_reference_renderbuffer(&fb->_StencilBuffer, stencilRb);
    }
-   free(data);
 }

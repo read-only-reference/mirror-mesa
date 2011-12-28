@@ -2,7 +2,7 @@
  * Mesa 3-D graphics library
  * Version:  6.5
  *
- * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -23,40 +23,44 @@
  */
 
 
-#ifndef DEPTHSTENCIL_H
-#define DEPTHSTENCIL_H
+#ifndef S_RENDERBUFFER_H
+#define S_RENDERBUFFER_H
+
+#include "main/glheader.h"
+
 
 struct gl_context;
-
-extern struct gl_renderbuffer *
-_mesa_new_z24_renderbuffer_wrapper(struct gl_context *ctx,
-                                   struct gl_renderbuffer *dsrb);
+struct gl_framebuffer;
+struct gl_renderbuffer;
 
 
 extern struct gl_renderbuffer *
-_mesa_new_z32f_renderbuffer_wrapper(struct gl_context *ctx,
-                                    struct gl_renderbuffer *dsrb);
+_swrast_new_soft_renderbuffer(struct gl_context *ctx, GLuint name);
 
+extern void
+_swrast_map_soft_renderbuffer(struct gl_context *ctx,
+                              struct gl_renderbuffer *rb,
+                              GLuint x, GLuint y, GLuint w, GLuint h,
+                              GLbitfield mode,
+                              GLubyte **out_map,
+                              GLint *out_stride);
 
-extern struct gl_renderbuffer *
-_mesa_new_s8_renderbuffer_wrapper(struct gl_context *ctx,
-                                  struct gl_renderbuffer *dsrb);
+extern void
+_swrast_unmap_soft_renderbuffer(struct gl_context *ctx,
+                                struct gl_renderbuffer *rb);
+
+extern void
+_swrast_set_renderbuffer_accessors(struct gl_renderbuffer *rb);
 
 
 extern void
-_mesa_extract_stencil(struct gl_context *ctx,
-                      struct gl_renderbuffer *dsRb,
-                      struct gl_renderbuffer *stencilRb);
+_swrast_add_soft_renderbuffers(struct gl_framebuffer *fb,
+                               GLboolean color,
+                               GLboolean depth,
+                               GLboolean stencil,
+                               GLboolean accum,
+                               GLboolean alpha,
+                               GLboolean aux);
 
 
-extern void
-_mesa_insert_stencil(struct gl_context *ctx,
-                     struct gl_renderbuffer *dsRb,
-                     struct gl_renderbuffer *stencilRb);
-
-
-extern void
-_mesa_promote_stencil(struct gl_context *ctx, struct gl_renderbuffer *stencilRb);
-
-
-#endif /* DEPTHSTENCIL_H */
+#endif /* S_RENDERBUFFER_H */

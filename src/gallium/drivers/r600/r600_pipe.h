@@ -71,6 +71,17 @@ enum r600_pipe_state_id {
 	R600_PIPE_NSTATES
 };
 
+struct r600_pipe_fences {
+	struct r600_resource		*bo;
+	unsigned			*data;
+	unsigned			next_index;
+	/* linked list of preallocated blocks */
+	struct list_head		blocks;
+	/* linked list of freed fences */
+	struct list_head		pool;
+	pipe_mutex			mutex;
+};
+
 struct r600_screen {
 	struct pipe_screen		screen;
 	struct radeon_winsys		*ws;
@@ -79,6 +90,8 @@ struct r600_screen {
 	struct radeon_info		info;
 	struct r600_tiling_info		tiling_info;
 	struct util_slab_mempool	pool_buffers;
+	struct r600_pipe_fences		fences;
+
 	unsigned			num_contexts;
 
 	/* for thread-safe write accessing to num_contexts */
@@ -133,6 +146,8 @@ struct r600_pipe_shader {
 	struct r600_vertex_element	vertex_elements;
 	struct tgsi_token		*tokens;
 	unsigned	sprite_coord_enable;
+	struct pipe_stream_output_info	so;
+	unsigned			so_strides[4];
 };
 
 struct r600_pipe_sampler_state {
@@ -154,7 +169,6 @@ struct r600_textures_info {
 
 struct r600_fence {
 	struct pipe_reference		reference;
-	struct r600_pipe_context	*ctx;
 	unsigned			index; /* in the shared bo */
 	struct list_head		head;
 };
@@ -164,16 +178,6 @@ struct r600_fence {
 struct r600_fence_block {
 	struct r600_fence		fences[FENCE_BLOCK_SIZE];
 	struct list_head		head;
-};
-
-struct r600_pipe_fences {
-	struct r600_resource		*bo;
-	unsigned			*data;
-	unsigned			next_index;
-	/* linked list of preallocated blocks */
-	struct list_head		blocks;
-	/* linked list of freed fences */
-	struct list_head		pool;
 };
 
 #define R600_CONSTANT_ARRAY_SIZE 256
@@ -221,8 +225,6 @@ struct r600_pipe_context {
 	unsigned			nr_cbufs;
 	struct r600_textures_info	vs_samplers;
 	struct r600_textures_info	ps_samplers;
-
-	struct r600_pipe_fences		fences;
 
 	struct u_vbuf			*vbuf_mgr;
 	struct util_slab_mempool	pool_transfers;
@@ -348,6 +350,19 @@ void r600_delete_ps_shader(struct pipe_context *ctx, void *state);
 void r600_delete_vs_shader(struct pipe_context *ctx, void *state);
 void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint index,
 			      struct pipe_resource *buffer);
+struct pipe_stream_output_target *
+r600_create_so_target(struct pipe_context *ctx,
+		      struct pipe_resource *buffer,
+		      unsigned buffer_offset,
+		      unsigned buffer_size);
+void r600_so_target_destroy(struct pipe_context *ctx,
+			    struct pipe_stream_output_target *target);
+void r600_set_so_targets(struct pipe_context *ctx,
+			 unsigned num_targets,
+			 struct pipe_stream_output_target **targets,
+			 unsigned append_bitmask);
+
+
 void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info);
 
 /*

@@ -202,10 +202,10 @@ static int check_##NM( struct gl_context *ctx, struct radeon_state_atom *atom )	
 CHECK( always, GL_TRUE, 0 )
 CHECK( always_add2, GL_TRUE, 2 )
 CHECK( always_add4, GL_TRUE, 4 )
-CHECK( tex0_mm, ctx->Texture.Unit[0]._ReallyEnabled, 3 )
-CHECK( tex1_mm, ctx->Texture.Unit[1]._ReallyEnabled, 3 )
+CHECK( tex0_mm, GL_TRUE, 3 )
+CHECK( tex1_mm, GL_TRUE, 3 )
 /* need this for the cubic_map on disabled unit 2 bug, maybe r100 only? */
-CHECK( tex2_mm, ctx->Texture._EnabledUnits, 3 )
+CHECK( tex2_mm, GL_TRUE, 3 )
 CHECK( cube0_mm, (ctx->Texture.Unit[0]._ReallyEnabled & TEXTURE_CUBE_BIT), 2 + 4*5 - CUBE_STATE_SIZE )
 CHECK( cube1_mm, (ctx->Texture.Unit[1]._ReallyEnabled & TEXTURE_CUBE_BIT), 2 + 4*5 - CUBE_STATE_SIZE )
 CHECK( cube2_mm, (ctx->Texture.Unit[2]._ReallyEnabled & TEXTURE_CUBE_BIT), 2 + 4*5 - CUBE_STATE_SIZE )
@@ -351,6 +351,8 @@ static void ctx_emit_cs(struct gl_context *ctx, struct radeon_state_atom *atom)
    cbpitch = (rrb->pitch / rrb->cpp);
    if (rrb->bo->flags & RADEON_BO_FLAGS_MACRO_TILE)
        cbpitch |= R200_COLOR_TILE_ENABLE;
+   if (rrb->bo->flags & RADEON_BO_FLAGS_MICRO_TILE)
+       cbpitch |= RADEON_COLOR_MICROTILE_ENABLE;
 
    drb = radeon_get_depthbuffer(&r100->radeon);
    if (drb) {

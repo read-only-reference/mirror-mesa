@@ -84,7 +84,11 @@ nvfx_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_SEAMLESS_CUBE_MAP:
 	case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
 	case PIPE_CAP_SHADER_STENCIL_EXPORT:
-		return 0;
+	case PIPE_CAP_MIN_TEXEL_OFFSET:
+	case PIPE_CAP_MAX_TEXEL_OFFSET:
+	case PIPE_CAP_CONDITIONAL_RENDER:
+	case PIPE_CAP_TEXTURE_BARRIER:
+                return 0;
 	case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
                 return 0;
 	default:
@@ -460,7 +464,7 @@ static void nvfx_channel_flush_notify(struct nouveau_channel* chan)
 }
 
 struct pipe_screen *
-nvfx_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
+nvfx_screen_create(struct nouveau_device *dev)
 {
 	static const unsigned query_sizes[] = {(4096 - 4 * 32) / 32, 3 * 1024 / 32, 2 * 1024 / 32, 1024 / 32};
 	struct nvfx_screen *screen = CALLOC_STRUCT(nvfx_screen);
@@ -484,7 +488,6 @@ nvfx_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
 	chan->user_private = screen;
 	chan->flush_notify = nvfx_channel_flush_notify;
 
-	pscreen->winsys = ws;
 	pscreen->destroy = nvfx_screen_destroy;
 	pscreen->get_param = nvfx_screen_get_param;
 	pscreen->get_shader_param = nvfx_screen_get_shader_param;

@@ -1,8 +1,8 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.3
+ * Version:  6.5
  *
- * Copyright (C) 1999-2005  Brian Paul   All Rights Reserved.
+ * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -23,16 +23,17 @@
  */
 
 
-#ifndef S_ACCUM_H
-#define S_ACCUM_H
-
+#ifndef S_DEPTHSTENCIL_H
+#define S_DEPTHSTENCIL_H
 
 struct gl_context;
-struct gl_renderbuffer;
+struct gl_framebuffer;
+
+void
+_swrast_update_depth_buffer(struct gl_context *ctx, struct gl_framebuffer *fb);
+
+void
+_swrast_update_stencil_buffer(struct gl_context *ctx, struct gl_framebuffer *fb);
 
 
-extern void
-_swrast_clear_accum_buffer(struct gl_context *ctx, struct gl_renderbuffer *rb);
-
-
-#endif
+#endif /* S_DEPTHSTENCIL_H */

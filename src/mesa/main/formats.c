@@ -27,6 +27,7 @@
 #include "imports.h"
 #include "formats.h"
 #include "mfeatures.h"
+#include "macros.h"
 
 
 /**
@@ -375,8 +376,8 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
       1, 1, 1
    },
    {
-      MESA_FORMAT_RG88,
-      "MESA_FORMAT_RG88",
+      MESA_FORMAT_GR88,
+      "MESA_FORMAT_GR88",
       GL_RG,
       GL_UNSIGNED_NORMALIZED,
       8, 8, 0, 0,
@@ -384,8 +385,8 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
       1, 1, 2
    },
    {
-      MESA_FORMAT_RG88_REV,
-      "MESA_FORMAT_RG88_REV",
+      MESA_FORMAT_RG88,
+      "MESA_FORMAT_RG88",
       GL_RG,
       GL_UNSIGNED_NORMALIZED,
       8, 8, 0, 0,
@@ -1386,6 +1387,16 @@ static struct gl_format_info format_info[MESA_FORMAT_COUNT] =
      4, 4, 16                     /* 16 bytes per 4x4 block */
    },
 
+   {
+      MESA_FORMAT_ETC1_RGB8,
+      "MESA_FORMAT_ETC1_RGB8",
+      GL_RGB,
+      GL_UNSIGNED_NORMALIZED,
+      8, 8, 8, 0,
+      0, 0, 0, 0, 0,
+      4, 4, 8                     /* 8 bytes per 4x4 block */
+   },
+
    /* Signed formats from EXT_texture_snorm that are not in GL3.1 */
    {
       MESA_FORMAT_SIGNED_A8,
@@ -1543,6 +1554,8 @@ _mesa_get_format_bytes(gl_format format)
 {
    const struct gl_format_info *info = _mesa_get_format_info(format);
    ASSERT(info->BytesPerBlock);
+   ASSERT(info->BytesPerBlock <= MAX_PIXEL_BYTES ||
+          _mesa_is_format_compressed(format));
    return info->BytesPerBlock;
 }
 
@@ -1598,6 +1611,21 @@ _mesa_get_format_bits(gl_format format, GLenum pname)
       _mesa_problem(NULL, "bad pname in _mesa_get_format_bits()");
       return 0;
    }
+}
+
+
+GLuint
+_mesa_get_format_max_bits(gl_format format)
+{
+   const struct gl_format_info *info = _mesa_get_format_info(format);
+   GLuint max = MAX2(info->RedBits, info->GreenBits);
+   max = MAX2(max, info->BlueBits);
+   max = MAX2(max, info->AlphaBits);
+   max = MAX2(max, info->LuminanceBits);
+   max = MAX2(max, info->IntensityBits);
+   max = MAX2(max, info->DepthBits);
+   max = MAX2(max, info->StencilBits);
+   return max;
 }
 
 
@@ -1779,7 +1807,7 @@ _mesa_get_uncompressed_format(gl_format format)
    case MESA_FORMAT_SIGNED_RED_RGTC1:
       return MESA_FORMAT_SIGNED_R8;
    case MESA_FORMAT_RG_RGTC2:
-      return MESA_FORMAT_RG88;
+      return MESA_FORMAT_GR88;
    case MESA_FORMAT_SIGNED_RG_RGTC2:
       return MESA_FORMAT_SIGNED_RG88_REV;
    case MESA_FORMAT_L_LATC1:
@@ -1790,6 +1818,8 @@ _mesa_get_uncompressed_format(gl_format format)
       return MESA_FORMAT_AL88;
    case MESA_FORMAT_SIGNED_LA_LATC2:
       return MESA_FORMAT_SIGNED_AL88;
+   case MESA_FORMAT_ETC1_RGB8:
+      return MESA_FORMAT_RGB888;
    default:
 #ifdef DEBUG
       assert(!_mesa_is_format_compressed(format));
@@ -2064,8 +2094,8 @@ _mesa_format_to_type_and_comps(gl_format format,
 
    case MESA_FORMAT_AL88:
    case MESA_FORMAT_AL88_REV:
+   case MESA_FORMAT_GR88:
    case MESA_FORMAT_RG88:
-   case MESA_FORMAT_RG88_REV:
       *datatype = GL_UNSIGNED_BYTE;
       *comps = 2;
       return;
@@ -2240,6 +2270,7 @@ _mesa_format_to_type_and_comps(gl_format format,
    case MESA_FORMAT_SIGNED_L_LATC1:
    case MESA_FORMAT_LA_LATC2:
    case MESA_FORMAT_SIGNED_LA_LATC2:
+   case MESA_FORMAT_ETC1_RGB8:
       /* XXX generate error instead? */
       *datatype = GL_UNSIGNED_BYTE;
       *comps = 0;
@@ -2598,9 +2629,9 @@ _mesa_format_matches_format_and_type(gl_format gl_format,
 
    case MESA_FORMAT_R8:
       return format == GL_RED && type == GL_UNSIGNED_BYTE;
-   case MESA_FORMAT_RG88:
+   case MESA_FORMAT_GR88:
       return format == GL_RG && type == GL_UNSIGNED_BYTE && littleEndian;
-   case MESA_FORMAT_RG88_REV:
+   case MESA_FORMAT_RG88:
       return GL_FALSE;
 
    case MESA_FORMAT_R16:
@@ -2775,6 +2806,9 @@ _mesa_format_matches_format_and_type(gl_format gl_format,
    case MESA_FORMAT_SIGNED_L_LATC1:
    case MESA_FORMAT_LA_LATC2:
    case MESA_FORMAT_SIGNED_LA_LATC2:
+      return GL_FALSE;
+
+   case MESA_FORMAT_ETC1_RGB8:
       return GL_FALSE;
 
    case MESA_FORMAT_SIGNED_A8:

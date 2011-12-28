@@ -114,7 +114,7 @@ i915_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe_sha
          return draw_get_shader_param(shader, cap);
       }
    case PIPE_SHADER_FRAGMENT:
-      /* XXX: these are just shader model 2.0 values, fix this! */
+      /* XXX: some of these are just shader model 2.0 values, fix this! */
       switch(cap) {
       case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
          return I915_MAX_ALU_INSN + I915_MAX_TEX_INSN;
@@ -151,6 +151,8 @@ i915_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe_sha
          return 0;
       case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
          return I915_TEX_UNITS;
+      case PIPE_SHADER_CAP_OUTPUT_READ:
+         return 0;
       default:
          debug_printf("%s: Unknown cap %u.\n", __FUNCTION__, cap);
          return 0;
@@ -193,10 +195,13 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
    case PIPE_CAP_SM3:
    case PIPE_CAP_SEAMLESS_CUBE_MAP:
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
+   case PIPE_CAP_SCALED_RESOLVE:
    case PIPE_CAP_FRAGMENT_COLOR_CLAMP_CONTROL:
    case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
    case PIPE_CAP_CONDITIONAL_RENDER:
    case PIPE_CAP_TEXTURE_BARRIER:
+   case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
+   case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
       return 0;
 
    /* Features we can lie about (boolean caps). */
@@ -219,6 +224,9 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
       return I915_MAX_TEXTURE_2D_LEVELS;
    case PIPE_CAP_MIN_TEXEL_OFFSET:
    case PIPE_CAP_MAX_TEXEL_OFFSET:
+   case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
+   case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
+   case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
       return 0;
 
    /* Render targets. */

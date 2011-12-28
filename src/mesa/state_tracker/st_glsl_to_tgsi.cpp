@@ -1807,27 +1807,27 @@ glsl_to_tgsi_visitor::visit(ir_expression *ir)
       }
    case ir_binop_lshift:
       if (native_integers) {
-         emit(ir, TGSI_OPCODE_SHL, result_dst, op[0]);
+         emit(ir, TGSI_OPCODE_SHL, result_dst, op[0], op[1]);
          break;
       }
    case ir_binop_rshift:
       if (native_integers) {
-         emit(ir, TGSI_OPCODE_ISHR, result_dst, op[0]);
+         emit(ir, TGSI_OPCODE_ISHR, result_dst, op[0], op[1]);
          break;
       }
    case ir_binop_bit_and:
       if (native_integers) {
-         emit(ir, TGSI_OPCODE_AND, result_dst, op[0]);
+         emit(ir, TGSI_OPCODE_AND, result_dst, op[0], op[1]);
          break;
       }
    case ir_binop_bit_xor:
       if (native_integers) {
-         emit(ir, TGSI_OPCODE_XOR, result_dst, op[0]);
+         emit(ir, TGSI_OPCODE_XOR, result_dst, op[0], op[1]);
          break;
       }
    case ir_binop_bit_or:
       if (native_integers) {
-         emit(ir, TGSI_OPCODE_OR, result_dst, op[0]);
+         emit(ir, TGSI_OPCODE_OR, result_dst, op[0], op[1]);
          break;
       }
    case ir_unop_round_even:
@@ -3514,25 +3514,23 @@ glsl_to_tgsi_visitor::eliminate_dead_code_advanced(void)
          break;
 
       case TGSI_OPCODE_ENDIF:
-         --level;
-         break;
-
       case TGSI_OPCODE_ELSE:
-         /* Clear all channels written inside the preceding if block from the
-          * write array, but leave those that were not touched.
-          *
-          * FIXME: This destroys opportunities to remove dead code inside of
-          * IF blocks that are followed by an ELSE block.
+         /* Promote the recorded level of all channels written inside the
+          * preceding if or else block to the level above the if/else block.
           */
          for (int r = 0; r < this->next_temp; r++) {
             for (int c = 0; c < 4; c++) {
                if (!writes[4 * r + c])
         	         continue;
 
-               if (write_level[4 * r + c] >= level)
-        	         writes[4 * r + c] = NULL;
+               if (write_level[4 * r + c] == level)
+        	         write_level[4 * r + c] = level-1;
             }
          }
+
+         if(inst->op == TGSI_OPCODE_ENDIF)
+            --level;
+         
          break;
 
       case TGSI_OPCODE_IF:
@@ -3788,6 +3786,7 @@ get_pixel_transfer_visitor(struct st_fragment_program *fp,
     * new visitor. */
    foreach_iter(exec_list_iterator, iter, original->instructions) {
       glsl_to_tgsi_instruction *inst = (glsl_to_tgsi_instruction *)iter.get();
+      glsl_to_tgsi_instruction *newinst;
       st_src_reg src_regs[3];
 
       if (inst->dst.file == PROGRAM_OUTPUT)
@@ -3805,7 +3804,8 @@ get_pixel_transfer_visitor(struct st_fragment_program *fp,
             prog->InputsRead |= BITFIELD64_BIT(src_regs[i].index);
       }
 
-      v->emit(NULL, inst->op, inst->dst, src_regs[0], src_regs[1], src_regs[2]);
+      newinst = v->emit(NULL, inst->op, inst->dst, src_regs[0], src_regs[1], src_regs[2]);
+      newinst->tex_target = inst->tex_target;
    }
 
    /* Make modifications to fragment program info. */
@@ -3869,6 +3869,7 @@ get_bitmap_visitor(struct st_fragment_program *fp,
     * new visitor. */
    foreach_iter(exec_list_iterator, iter, original->instructions) {
       glsl_to_tgsi_instruction *inst = (glsl_to_tgsi_instruction *)iter.get();
+      glsl_to_tgsi_instruction *newinst;
       st_src_reg src_regs[3];
 
       if (inst->dst.file == PROGRAM_OUTPUT)
@@ -3880,7 +3881,8 @@ get_bitmap_visitor(struct st_fragment_program *fp,
             prog->InputsRead |= BITFIELD64_BIT(src_regs[i].index);
       }
 
-      v->emit(NULL, inst->op, inst->dst, src_regs[0], src_regs[1], src_regs[2]);
+      newinst = v->emit(NULL, inst->op, inst->dst, src_regs[0], src_regs[1], src_regs[2]);
+      newinst->tex_target = inst->tex_target;
    }
 
    /* Make modifications to fragment program info. */
@@ -5095,6 +5097,33 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
    }
 
    return GL_TRUE;
+}
+
+void
+st_translate_stream_output_info(struct glsl_to_tgsi_visitor *glsl_to_tgsi,
+                                const GLuint outputMapping[],
+                                struct pipe_stream_output_info *so)
+{
+   static unsigned comps_to_mask[] = {
+      0,
+      TGSI_WRITEMASK_X,
+      TGSI_WRITEMASK_XY,
+      TGSI_WRITEMASK_XYZ,
+      TGSI_WRITEMASK_XYZW
+   };
+   unsigned i;
+   struct gl_transform_feedback_info *info =
+      &glsl_to_tgsi->shader_program->LinkedTransformFeedback;
+
+   for (i = 0; i < info->NumOutputs; i++) {
+      assert(info->Outputs[i].NumComponents < Elements(comps_to_mask));
+      so->output[i].register_index =
+         outputMapping[info->Outputs[i].OutputRegister];
+      so->output[i].register_mask =
+         comps_to_mask[info->Outputs[i].NumComponents];
+      so->output[i].output_buffer = info->Outputs[i].OutputBuffer;
+   }
+   so->num_outputs = info->NumOutputs;
 }
 
 } /* extern "C" */

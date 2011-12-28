@@ -155,12 +155,12 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
    case SHADER_OPCODE_INT_QUOTIENT:
    case SHADER_OPCODE_INT_REMAINDER:
       return 2 * c->dispatch_width / 8;
-   case FS_OPCODE_TEX:
+   case SHADER_OPCODE_TEX:
    case FS_OPCODE_TXB:
-   case FS_OPCODE_TXD:
-   case FS_OPCODE_TXF:
-   case FS_OPCODE_TXL:
-   case FS_OPCODE_TXS:
+   case SHADER_OPCODE_TXD:
+   case SHADER_OPCODE_TXF:
+   case SHADER_OPCODE_TXL:
+   case SHADER_OPCODE_TXS:
       return 1;
    case FS_OPCODE_FB_WRITE:
       return 2;
@@ -1144,6 +1144,7 @@ fs_visitor::propagate_constants()
 	       break;
 
 	    case BRW_OPCODE_CMP:
+	    case BRW_OPCODE_IF:
 	       if (i == 1) {
 		  scan_inst->src[i] = inst->src[0];
 		  progress = true;
@@ -1904,10 +1905,10 @@ brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
 
    for (int i = 0; i < BRW_MAX_TEX_UNIT; i++) {
       if (fp->Base.ShadowSamplers & (1 << i))
-	 key.compare_funcs[i] = GL_LESS;
+	 key.tex.compare_funcs[i] = GL_LESS;
 
       /* FINISHME: depth compares might use (0,0,0,W) for example */
-      key.tex_swizzles[i] = SWIZZLE_XYZW;
+      key.tex.swizzles[i] = SWIZZLE_XYZW;
    }
 
    if (fp->Base.InputsRead & FRAG_BIT_WPOS) {

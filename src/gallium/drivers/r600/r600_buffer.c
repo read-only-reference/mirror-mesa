@@ -151,12 +151,40 @@ bool r600_init_resource(struct r600_screen *rscreen,
 			unsigned size, unsigned alignment,
 			unsigned bind, unsigned usage)
 {
-	res->buf = rscreen->ws->buffer_create(rscreen->ws, size, alignment, bind, usage);
+	uint32_t initial_domain, domains;
+
+	/* Staging resources particpate in transfers and blits only
+	 * and are used for uploads and downloads from regular
+	 * resources.  We generate them internally for some transfers.
+	 */
+	if (usage == PIPE_USAGE_STAGING) {
+		domains = RADEON_DOMAIN_GTT;
+		initial_domain = RADEON_DOMAIN_GTT;
+	} else {
+		domains = RADEON_DOMAIN_GTT | RADEON_DOMAIN_VRAM;
+
+		switch(usage) {
+		case PIPE_USAGE_DYNAMIC:
+		case PIPE_USAGE_STREAM:
+		case PIPE_USAGE_STAGING:
+			initial_domain = RADEON_DOMAIN_GTT;
+			break;
+		case PIPE_USAGE_DEFAULT:
+		case PIPE_USAGE_STATIC:
+		case PIPE_USAGE_IMMUTABLE:
+		default:
+			initial_domain = RADEON_DOMAIN_VRAM;
+			break;
+		}
+	}
+
+	res->buf = rscreen->ws->buffer_create(rscreen->ws, size, alignment, bind, initial_domain);
 	if (!res->buf) {
 		return false;
 	}
 
 	res->cs_buf = rscreen->ws->buffer_get_cs_handle(res->buf);
+	res->domains = domains;
 	return true;
 }
 
@@ -177,7 +205,7 @@ struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 	rbuffer->b.user_ptr = NULL;
 
 	if (!r600_init_resource(rscreen, rbuffer, templ->width0, alignment, templ->bind, templ->usage)) {
-		FREE(rbuffer);
+		util_slab_free(&rscreen->pool_buffers, rbuffer);
 		return NULL;
 	}
 	return &rbuffer->b.b.b;

@@ -117,6 +117,8 @@ static void brwInitDriverFunctions( struct dd_function_table *functions )
    brw_init_queryobj_functions(functions);
 
    functions->PrepareExecBegin = brwPrepareExecBegin;
+   functions->BeginTransformFeedback = brw_begin_transform_feedback;
+   functions->EndTransformFeedback = brw_end_transform_feedback;
 }
 
 bool
@@ -159,7 +161,7 @@ brwCreateContext(int api,
    ctx->Const.MaxTextureCoordUnits = 8; /* Mesa limit */
    ctx->Const.MaxTextureUnits = MIN2(ctx->Const.MaxTextureCoordUnits,
                                      ctx->Const.MaxTextureImageUnits);
-   ctx->Const.MaxVertexTextureImageUnits = 0; /* no vertex shader textures */
+   ctx->Const.MaxVertexTextureImageUnits = BRW_MAX_TEX_UNIT;
    ctx->Const.MaxCombinedTextureImageUnits =
       ctx->Const.MaxVertexTextureImageUnits +
       ctx->Const.MaxTextureImageUnits;
@@ -177,6 +179,26 @@ brwCreateContext(int api,
    ctx->Const.MaxTextureRectSize = (1<<12);
    
    ctx->Const.MaxTextureMaxAnisotropy = 16.0;
+
+   /* Hardware only supports a limited number of transform feedback buffers.
+    * So we need to override the Mesa default (which is based only on software
+    * limits).
+    */
+   ctx->Const.MaxTransformFeedbackSeparateAttribs = BRW_MAX_SOL_BUFFERS;
+
+   /* On Gen6, in the worst case, we use up one binding table entry per
+    * transform feedback component (see comments above the definition of
+    * BRW_MAX_SOL_BINDINGS, in brw_context.h), so we need to advertise a value
+    * for MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS equal to
+    * BRW_MAX_SOL_BINDINGS.
+    *
+    * In "separate components" mode, we need to divide this value by
+    * BRW_MAX_SOL_BUFFERS, so that the total number of binding table entries
+    * used up by all buffers will not exceed BRW_MAX_SOL_BINDINGS.
+    */
+   ctx->Const.MaxTransformFeedbackInterleavedComponents = BRW_MAX_SOL_BINDINGS;
+   ctx->Const.MaxTransformFeedbackSeparateComponents =
+      BRW_MAX_SOL_BINDINGS / BRW_MAX_SOL_BUFFERS;
 
    /* if conformance mode is set, swrast can handle any size AA point */
    ctx->Const.MaxPointSizeAA = 255.0;
@@ -284,13 +306,16 @@ brwCreateContext(int api,
 	 brw->max_gs_threads = 60;
 	 brw->urb.size = 64;            /* volume 5c.5 section 5.1 */
 	 brw->urb.max_vs_entries = 256; /* volume 2a (see 3DSTATE_URB) */
+	 brw->urb.max_gs_entries = 256;
       } else {
 	 brw->max_wm_threads = 40;
 	 brw->max_vs_threads = 24;
 	 brw->max_gs_threads = 21; /* conservative; 24 if rendering disabled */
 	 brw->urb.size = 32;            /* volume 5c.5 section 5.1 */
 	 brw->urb.max_vs_entries = 128; /* volume 2a (see 3DSTATE_URB) */
+	 brw->urb.max_gs_entries = 256;
       }
+      brw->urb.gen6_gs_previously_active = false;
    } else if (intel->gen == 5) {
       brw->urb.size = 1024;
       brw->max_vs_threads = 72;

@@ -59,6 +59,7 @@ gen7_update_texture_surface(struct gl_context *ctx, GLuint unit)
    struct brw_context *brw = brw_context(ctx);
    struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
    struct intel_texture_object *intelObj = intel_texture_object(tObj);
+   struct intel_mipmap_tree *mt = intelObj->mt;
    struct gl_texture_image *firstImage = tObj->Image[0][tObj->BaseLevel];
    struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit);
    const GLuint surf_index = SURF_INDEX_TEXTURE(unit);
@@ -71,8 +72,11 @@ gen7_update_texture_surface(struct gl_context *ctx, GLuint unit)
 			  sizeof(*surf), 32, &brw->bind.surf_offset[surf_index]);
    memset(surf, 0, sizeof(*surf));
 
+   if (mt->align_h == 4)
+      surf->ss0.vertical_alignment = 1;
+
    surf->ss0.surface_type = translate_tex_target(tObj->Target);
-   surf->ss0.surface_format = translate_tex_format(firstImage->TexFormat,
+   surf->ss0.surface_format = translate_tex_format(mt->format,
                                                    firstImage->InternalFormat,
                                                    sampler->DepthMode,
                                                    sampler->sRGBDecode);
@@ -85,10 +89,11 @@ gen7_update_texture_surface(struct gl_context *ctx, GLuint unit)
       surf->ss0.cube_neg_z = 1;
    }
 
+   surf->ss0.is_array = depth > 1 && tObj->Target != GL_TEXTURE_3D;
+
    gen7_set_surface_tiling(surf, intelObj->mt->region->tiling);
 
    /* ss0 remaining fields:
-    * - is_array
     * - vertical_alignment
     * - horizontal_alignment
     * - vert_line_stride (exists on gen6 but we ignore it)
@@ -199,6 +204,9 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
 			  sizeof(*surf), 32, &brw->bind.surf_offset[unit]);
    memset(surf, 0, sizeof(*surf));
+
+   if (irb->mt->align_h == 4)
+      surf->ss0.vertical_alignment = 1;
 
    switch (irb->Base.Format) {
    case MESA_FORMAT_SARGB8:

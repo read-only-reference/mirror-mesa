@@ -56,6 +56,12 @@ typedef GLuint64 GLbitfield64;
 
 /** Set a single bit */
 #define BITFIELD64_BIT(b)      ((GLbitfield64)1 << (b))
+/** Set all bits up to excluding bit b */
+#define BITFIELD64_MASK(b)      \
+   ((b) == 64 ? (~(GLbitfield64)0) : BITFIELD64_BIT(b) - 1)
+/** Set count bits starting from bit b  */
+#define BITFIELD64_RANGE(b, count) \
+   (BITFIELD64_MASK((b) + (count)) & ~BITFIELD64_MASK(b))
 
 
 /**
@@ -683,8 +689,6 @@ struct gl_light
    GLfloat _MatAmbient[2][3];	/**< material ambient * light ambient */
    GLfloat _MatDiffuse[2][3];	/**< material diffuse * light diffuse */
    GLfloat _MatSpecular[2][3];	/**< material spec * light specular */
-   GLfloat _dli;		/**< CI diffuse light intensity */
-   GLfloat _sli;		/**< CI specular light intensity */
    /*@}*/
 };
 
@@ -1821,7 +1825,17 @@ struct gl_transform_feedback_info {
       unsigned OutputRegister;
       unsigned OutputBuffer;
       unsigned NumComponents;
+
+      /** offset (in DWORDs) of this output within the interleaved structure */
+      unsigned DstOffset;
    } Outputs[MAX_PROGRAM_OUTPUTS];
+
+   /**
+    * Total number of components stored in each buffer.  This may be used by
+    * hardware back-ends to determine the correct stride when interleaving
+    * multiple transform feedback outputs in the same buffer.
+    */
+   unsigned BufferStride[MAX_FEEDBACK_ATTRIBS];
 };
 
 /**
@@ -2355,6 +2369,8 @@ struct gl_transform_feedback_object
    GLint RefCount;
    GLboolean Active;  /**< Is transform feedback enabled? */
    GLboolean Paused;  /**< Is transform feedback paused? */
+   GLboolean EndedAnytime; /**< Has EndTransformFeedback been called
+                                at least once? */
 
    /** The feedback buffers */
    GLuint BufferNames[MAX_FEEDBACK_ATTRIBS];
@@ -2373,8 +2389,6 @@ struct gl_transform_feedback_object
 struct gl_transform_feedback
 {
    GLenum Mode;       /**< GL_POINTS, GL_LINES or GL_TRIANGLES */
-
-   GLboolean RasterDiscard;  /**< GL_RASTERIZER_DISCARD */
 
    /** The general binding point (GL_TRANSFORM_FEEDBACK_BUFFER) */
    struct gl_buffer_object *CurrentBuffer;
@@ -2528,33 +2542,12 @@ struct gl_renderbuffer
    void (*PutRow)(struct gl_context *ctx, struct gl_renderbuffer *rb, GLuint count,
                   GLint x, GLint y, const void *values, const GLubyte *mask);
 
-   /* Put/Write a row of RGB values.  This is a special-case routine that's
-    * only used for RGBA renderbuffers when the source data is GL_RGB. That's
-    * a common case for glDrawPixels and some triangle routines.
-    * The values will be of format GL_RGB and type DataType.
-    */
-   void (*PutRowRGB)(struct gl_context *ctx, struct gl_renderbuffer *rb, GLuint count,
-                    GLint x, GLint y, const void *values, const GLubyte *mask);
-
-
-   /* Put/Write a row of identical values.
-    * The values will be of format _BaseFormat and type DataType.
-    */
-   void (*PutMonoRow)(struct gl_context *ctx, struct gl_renderbuffer *rb, GLuint count,
-                     GLint x, GLint y, const void *value, const GLubyte *mask);
-
    /* Put/Write values at arbitrary locations.
     * The values will be of format _BaseFormat and type DataType.
     */
    void (*PutValues)(struct gl_context *ctx, struct gl_renderbuffer *rb, GLuint count,
                      const GLint x[], const GLint y[], const void *values,
                      const GLubyte *mask);
-   /* Put/Write identical values at arbitrary locations.
-    * The values will be of format _BaseFormat and type DataType.
-    */
-   void (*PutMonoValues)(struct gl_context *ctx, struct gl_renderbuffer *rb,
-                         GLuint count, const GLint x[], const GLint y[],
-                         const void *value, const GLubyte *mask);
 };
 
 
@@ -2650,8 +2643,9 @@ struct gl_framebuffer
    struct gl_renderbuffer *_ColorDrawBuffers[MAX_DRAW_BUFFERS];
    struct gl_renderbuffer *_ColorReadBuffer;
 
-   /** The Actual depth/stencil buffers to use.  May be wrappers around the
-    * depth/stencil buffers attached above. */
+   /** Wrappers to make combined depth/stencil buffers look like separate
+    * buffers.  Only used by swrast.  Will be removed in the future.
+    */
    struct gl_renderbuffer *_DepthBuffer;
    struct gl_renderbuffer *_StencilBuffer;
 
@@ -2829,6 +2823,15 @@ struct gl_constants
     * Texture borders are deprecated in GL 3.0.
     **/
    GLboolean StripTextureBorder;
+
+   /**
+    * For drivers which can do a better job at eliminating unused varyings
+    * and uniforms than the GLSL compiler.
+    *
+    * XXX Remove these as soon as a better solution is available.
+    */
+   GLboolean GLSLSkipStrictMaxVaryingLimitCheck;
+   GLboolean GLSLSkipStrictMaxUniformLimitCheck;
 };
 
 
@@ -2979,6 +2982,7 @@ struct gl_extensions
    GLboolean OES_EGL_image;
    GLboolean OES_draw_texture;
    GLboolean OES_EGL_image_external;
+   GLboolean OES_compressed_ETC1_RGB8_texture;
    GLboolean extension_sentinel;
    /** The extension string */
    const GLubyte *String;
@@ -3050,7 +3054,14 @@ struct gl_matrix_stack
 #define _NEW_PROGRAM_CONSTANTS (1 << 27)
 #define _NEW_BUFFER_OBJECT     (1 << 28)
 #define _NEW_FRAG_CLAMP        (1 << 29)
+#define _NEW_TRANSFORM_FEEDBACK (1 << 30) /**< gl_context::TransformFeedback */
 #define _NEW_ALL ~0
+
+/**
+ * We use _NEW_TRANSFORM for GL_RASTERIZER_DISCARD.  This #define is for
+ * clarity.
+ */
+#define _NEW_RASTERIZER_DISCARD _NEW_TRANSFORM
 /*@}*/
 
 
@@ -3382,6 +3393,8 @@ struct gl_context
     * transformation?
     */
    GLboolean mvp_with_dp4;
+
+   GLboolean RasterDiscard;  /**< GL_RASTERIZER_DISCARD */
 
    /**
     * \name Hooks for module contexts.  

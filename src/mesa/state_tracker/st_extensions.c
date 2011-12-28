@@ -210,12 +210,10 @@ void st_init_limits(struct st_context *st)
          options->MaxUnrollIterations = MIN2(screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_MAX_INSTRUCTIONS), 65536);
    }
 
-   /* PIPE_CAP_MAX_FS_INPUTS specifies the number of COLORn + GENERICn inputs
-    * and is set in MaxNativeAttribs. It's always 2 colors + N generic
-    * attributes. The GLSL compiler never uses COLORn for varyings, so we
-    * subtract the 2 colors to get the maximum number of varyings (generic
-    * attributes) supported by a driver. */
-   c->MaxVarying = screen->get_shader_param(screen, PIPE_SHADER_FRAGMENT, PIPE_SHADER_CAP_MAX_INPUTS) - 2;
+   /* PIPE_SHADER_CAP_MAX_INPUTS for the FS specifies the maximum number
+    * of inputs. It's always 2 colors + N generic inputs. */
+   c->MaxVarying = screen->get_shader_param(screen, PIPE_SHADER_FRAGMENT,
+                                            PIPE_SHADER_CAP_MAX_INPUTS);
    c->MaxVarying = MIN2(c->MaxVarying, MAX_VARYING);
 
    c->MinProgramTexelOffset = screen->get_param(screen, PIPE_CAP_MIN_TEXEL_OFFSET);
@@ -223,7 +221,20 @@ void st_init_limits(struct st_context *st)
 
    c->UniformBooleanTrue = ~0;
 
+   c->MaxTransformFeedbackSeparateAttribs =
+      screen->get_param(screen, PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS);
+   c->MaxTransformFeedbackSeparateComponents =
+      screen->get_param(screen, PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS);
+   c->MaxTransformFeedbackInterleavedComponents =
+      screen->get_param(screen, PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS);
+
    c->StripTextureBorder = GL_TRUE;
+
+   c->GLSLSkipStrictMaxUniformLimitCheck =
+      screen->get_param(screen, PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS);
+
+   c->GLSLSkipStrictMaxVaryingLimitCheck =
+      screen->get_param(screen, PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS);
 }
 
 
@@ -251,6 +262,12 @@ void st_init_extensions(struct st_context *st)
 
    ctx->Const.GLSLVersion = 120;
    _mesa_override_glsl_version(st->ctx);
+
+   /* Extensions that only depend on the GLSL version:
+    */
+   if (ctx->Const.GLSLVersion >= 130) {
+      ctx->Extensions.ARB_conservative_depth = GL_TRUE;
+   }
 
    /*
     * Extensions that are supported by all Gallium drivers:
@@ -475,6 +492,14 @@ void st_init_extensions(struct st_context *st)
       ctx->Extensions.ATI_texture_compression_3dc = GL_TRUE;
    }
 
+   if (ctx->API != API_OPENGL) {
+      if (screen->is_format_supported(screen, PIPE_FORMAT_ETC1_RGB8,
+                                      PIPE_TEXTURE_2D, 0,
+                                      PIPE_BIND_SAMPLER_VIEW)) {
+         ctx->Extensions.OES_compressed_ETC1_RGB8_texture = GL_TRUE;
+      }
+   }
+
    if (screen->is_format_supported(screen, PIPE_FORMAT_R8G8B8A8_SNORM,
                                    PIPE_TEXTURE_2D, 0,
                                    PIPE_BIND_SAMPLER_VIEW)) {
@@ -670,4 +695,12 @@ void st_init_extensions(struct st_context *st)
                                    PIPE_BIND_SAMPLER_VIEW))
        ctx->Extensions.ARB_texture_rgb10_a2ui = GL_TRUE;
 
+   if (screen->get_param(screen, PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS) != 0) {
+      ctx->Extensions.EXT_transform_feedback = GL_TRUE;
+
+      if (screen->get_param(screen,
+                            PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME) != 0) {
+         ctx->Extensions.ARB_transform_feedback2 = GL_TRUE;
+      }
+   }
 }

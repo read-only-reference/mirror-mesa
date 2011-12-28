@@ -37,6 +37,7 @@
 #include "pipe/p_video_decoder.h"
 
 #include "util/u_debug.h"
+#include "util/u_rect.h"
 #include "vl/vl_compositor.h"
 
 #include "vl_winsys.h"
@@ -298,12 +299,18 @@ typedef struct
    vlVdpDevice *device;
    Drawable drawable;
    struct vl_compositor compositor;
+   struct u_rect dirty_area;
 } vlVdpPresentationQueue;
 
 typedef struct
 {
    vlVdpDevice *device;
    struct vl_compositor compositor;
+   unsigned video_width, video_height;
+   enum pipe_video_chroma_format chroma_format;
+   unsigned max_layers, skip_chroma_deint, custom_csc;
+   float luma_key_min, luma_key_max, sharpness, noise_reduction_level;
+   float csc[16];
 } vlVdpVideoMixer;
 
 typedef struct
@@ -321,6 +328,7 @@ typedef struct
    struct pipe_surface *surface;
    struct pipe_sampler_view *sampler_view;
    struct pipe_fence_handle *fence;
+   struct u_rect dirty_area;
 } vlVdpOutputSurface;
 
 typedef struct

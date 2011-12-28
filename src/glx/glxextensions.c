@@ -73,73 +73,28 @@ struct extension_info
 static const struct extension_info known_glx_extensions[] = {
    { GLX(ARB_get_proc_address),        VER(1,4), Y, N, Y, N },
    { GLX(ARB_multisample),             VER(1,4), Y, Y, N, N },
-   { GLX(ARB_render_texture),          VER(0,0), N, N, N, N },
    { GLX(ATI_pixel_format_float),      VER(0,0), N, N, N, N },
-#ifdef GLX_USE_APPLEGL
-   { GLX(EXT_import_context),          VER(0,0), N, N, N, N },
-   { GLX(EXT_visual_info),             VER(0,0), N, N, N, N },
-#else
    { GLX(EXT_import_context),          VER(0,0), Y, Y, N, N },
    { GLX(EXT_visual_info),             VER(0,0), Y, Y, N, N },
-#endif
    { GLX(EXT_visual_rating),           VER(0,0), Y, Y, N, N },
    { GLX(EXT_framebuffer_sRGB),        VER(0,0), Y, Y, N, N },
-#ifdef GLX_USE_APPLEGL
-   { GLX(MESA_agp_offset),             VER(0,0), N, N, N, N }, /* Deprecated */
-   { GLX(MESA_copy_sub_buffer),        VER(0,0), N, N, N, N },
-#else
-   { GLX(MESA_agp_offset),             VER(0,0), N, N, N, Y }, /* Deprecated */
    { GLX(MESA_copy_sub_buffer),        VER(0,0), Y, N, N, N },
-#endif
    { GLX(MESA_multithread_makecurrent),VER(0,0), Y, N, Y, N },
-   { GLX(MESA_pixmap_colormap),        VER(0,0), N, N, N, N }, /* Deprecated */
-   { GLX(MESA_release_buffers),        VER(0,0), N, N, N, N }, /* Deprecated */
-#ifdef GLX_USE_APPLEGL
-   { GLX(MESA_swap_control),           VER(0,0), N, N, N, N },
-#else
    { GLX(MESA_swap_control),           VER(0,0), Y, N, N, Y },
-#endif
    { GLX(NV_float_buffer),             VER(0,0), N, N, N, N },
-   { GLX(NV_render_depth_texture),     VER(0,0), N, N, N, N },
-   { GLX(NV_render_texture_rectangle), VER(0,0), N, N, N, N },
-#ifdef GLX_USE_APPLEGL
-   { GLX(NV_vertex_array_range),       VER(0,0), N, N, N, N }, /* Deprecated */
-   { GLX(OML_swap_method),             VER(0,0), N, N, N, N },
-   { GLX(OML_sync_control),            VER(0,0), N, N, N, N },
-   { GLX(SGI_make_current_read),       VER(1,3), N, N, N, N },
-   { GLX(SGI_swap_control),            VER(0,0), N, N, N, N },
-   { GLX(SGI_video_sync),              VER(0,0), N, N, N, N },
-#else
-   { GLX(NV_vertex_array_range),       VER(0,0), N, N, N, Y }, /* Deprecated */
    { GLX(OML_swap_method),             VER(0,0), Y, Y, N, N },
    { GLX(OML_sync_control),            VER(0,0), Y, N, N, Y },
    { GLX(SGI_make_current_read),       VER(1,3), Y, N, N, N },
    { GLX(SGI_swap_control),            VER(0,0), Y, N, N, N },
    { GLX(SGI_video_sync),              VER(0,0), Y, N, N, Y },
-#endif
-   { GLX(SGIS_blended_overlay),        VER(0,0), N, N, N, N },
-   { GLX(SGIS_color_range),            VER(0,0), N, N, N, N },
-#ifdef GLX_USE_APPLEGL
-   { GLX(SGIS_multisample),            VER(0,0), N, N, N, N },
-#else
    { GLX(SGIS_multisample),            VER(0,0), Y, Y, N, N },
-#endif
    { GLX(SGIX_fbconfig),               VER(1,3), Y, Y, N, N },
-#ifdef GLX_USE_APPLEGL
-   { GLX(SGIX_pbuffer),                VER(1,3), N, N, N, N },
-#else
    { GLX(SGIX_pbuffer),                VER(1,3), Y, Y, N, N },
-#endif
    { GLX(SGIX_swap_barrier),           VER(0,0), N, N, N, N },
    { GLX(SGIX_swap_group),             VER(0,0), N, N, N, N },
-#ifdef GLX_USE_APPLEGL
-   { GLX(SGIX_visual_select_group),    VER(0,0), N, N, N, N },
-   { GLX(EXT_texture_from_pixmap),     VER(0,0), N, N, N, N },
-#else
    { GLX(SGIX_visual_select_group),    VER(0,0), Y, Y, N, N },
    { GLX(EXT_texture_from_pixmap),     VER(0,0), Y, N, N, N },
-#endif
-   { GLX(INTEL_swap_event),            VER(1,4), Y, N, N, N },
+   { GLX(INTEL_swap_event),            VER(0,0), Y, N, N, N },
    { NULL }
 };
 
@@ -619,7 +574,7 @@ __glXCalculateUsableExtensions(struct glx_screen * psc,
     * support for GLX 1.3, enable support for the extensions that can be
     * "emulated" as well.
     */
-
+#ifndef GLX_USE_APPLEGL
    if (minor_version >= 3) {
       SET_BIT(server_support, EXT_visual_info_bit);
       SET_BIT(server_support, EXT_visual_rating_bit);
@@ -635,7 +590,7 @@ __glXCalculateUsableExtensions(struct glx_screen * psc,
 
       SET_BIT(server_support, EXT_import_context_bit);
    }
-
+#endif
 
    /* An extension is supported if the client-side (i.e., libGL) supports
     * it and the "server" supports it.  In this case that means that either

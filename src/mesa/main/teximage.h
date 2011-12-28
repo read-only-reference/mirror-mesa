@@ -80,16 +80,14 @@ _mesa_choose_texture_format(struct gl_context *ctx,
                             GLenum target, GLint level,
                             GLenum internalFormat, GLenum format, GLenum type);
 
+extern void
+_mesa_update_fbo_texture(struct gl_context *ctx,
+                         struct gl_texture_object *texObj,
+                         GLuint face, GLuint level);
 
 extern void
 _mesa_clear_texture_image(struct gl_context *ctx,
                           struct gl_texture_image *texImage);
-
-
-extern void
-_mesa_set_tex_image(struct gl_texture_object *tObj,
-                    GLenum target, GLint level,
-                    struct gl_texture_image *texImage);
 
 
 extern struct gl_texture_object *

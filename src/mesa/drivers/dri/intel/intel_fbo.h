@@ -47,10 +47,6 @@ struct intel_renderbuffer
    struct intel_mipmap_tree *mt; /**< The renderbuffer storage. */
    drm_intel_bo *map_bo;
 
-   void *map_buffer;
-   GLuint map_x, map_y, map_w, map_h;
-   GLbitfield map_mode;
-
    /**
     * \name Miptree view
     * \{
@@ -66,17 +62,6 @@ struct intel_renderbuffer
     */
    unsigned int mt_level;
    unsigned int mt_layer;
-   /** \} */
-
-   /**
-    * \name Packed depth/stencil unwrappers
-    *
-    * If the intel_context is using separate stencil and this renderbuffer has
-    * a packed depth/stencil format, then wrapped_depth and wrapped_stencil
-    * are the real renderbuffers.
-    */
-   struct gl_renderbuffer *wrapped_depth;
-   struct gl_renderbuffer *wrapped_stencil;
    /** \} */
 
    GLuint draw_x, draw_y; /**< Offset of drawing within the region */
@@ -120,7 +105,6 @@ static INLINE struct intel_renderbuffer *
 intel_get_renderbuffer(struct gl_framebuffer *fb, gl_buffer_index attIndex)
 {
    struct gl_renderbuffer *rb;
-   struct intel_renderbuffer *irb;
 
    assert((unsigned)attIndex < ARRAY_SIZE(fb->Attachment));
 
@@ -128,26 +112,7 @@ intel_get_renderbuffer(struct gl_framebuffer *fb, gl_buffer_index attIndex)
    if (!rb)
       return NULL;
 
-   irb = intel_renderbuffer(rb);
-   if (!irb)
-      return NULL;
-
-   switch (attIndex) {
-   case BUFFER_DEPTH:
-      if (irb->wrapped_depth) {
-	 irb = intel_renderbuffer(irb->wrapped_depth);
-      }
-      break;
-   case BUFFER_STENCIL:
-      if (irb->wrapped_stencil) {
-	 irb = intel_renderbuffer(irb->wrapped_stencil);
-      }
-      break;
-   default:
-      break;
-   }
-
-   return irb;
+   return intel_renderbuffer(rb);
 }
 
 bool

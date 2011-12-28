@@ -101,9 +101,11 @@ struct dri2_egl_display
    __DRIimageExtension      *image;
    int                       fd;
 
+   int                       own_device;
+   int                       swap_available;
+   int                       invalidate_available;
 #ifdef HAVE_DRM_PLATFORM
    struct gbm_dri_device    *gbm_dri;
-   int                       own_gbm_device;
 #endif
 
    char                     *device_name;

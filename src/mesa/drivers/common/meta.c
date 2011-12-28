@@ -65,6 +65,7 @@
 #include "main/teximage.h"
 #include "main/texparam.h"
 #include "main/texstate.h"
+#include "main/transformfeedback.h"
 #include "main/uniforms.h"
 #include "main/varray.h"
 #include "main/viewport.h"
@@ -180,6 +181,8 @@ struct save_state
 
    /** Miscellaneous (always disabled) */
    GLboolean Lighting;
+   GLboolean RasterDiscard;
+   GLboolean TransformFeedbackNeedsResume;
 };
 
 /**
@@ -422,6 +425,15 @@ _mesa_meta_begin(struct gl_context *ctx, GLbitfield state)
    memset(save, 0, sizeof(*save));
    save->SavedState = state;
 
+   /* Pausing transform feedback needs to be done early, or else we won't be
+    * able to change other state.
+    */
+   save->TransformFeedbackNeedsResume =
+      ctx->TransformFeedback.CurrentObject->Active &&
+      !ctx->TransformFeedback.CurrentObject->Paused;
+   if (save->TransformFeedbackNeedsResume)
+      _mesa_PauseTransformFeedback();
+
    if (state & MESA_META_ALPHA_TEST) {
       save->AlphaEnabled = ctx->Color.AlphaEnabled;
       save->AlphaFunc = ctx->Color.AlphaFunc;
@@ -576,6 +588,8 @@ _mesa_meta_begin(struct gl_context *ctx, GLbitfield state)
                _mesa_set_enable(ctx, GL_TEXTURE_CUBE_MAP, GL_FALSE);
             if (ctx->Extensions.NV_texture_rectangle)
                _mesa_set_enable(ctx, GL_TEXTURE_RECTANGLE, GL_FALSE);
+            if (ctx->Extensions.OES_EGL_image_external)
+               _mesa_set_enable(ctx, GL_TEXTURE_EXTERNAL_OES, GL_FALSE);
             _mesa_set_enable(ctx, GL_TEXTURE_GEN_S, GL_FALSE);
             _mesa_set_enable(ctx, GL_TEXTURE_GEN_T, GL_FALSE);
             _mesa_set_enable(ctx, GL_TEXTURE_GEN_R, GL_FALSE);
@@ -702,6 +716,9 @@ _mesa_meta_begin(struct gl_context *ctx, GLbitfield state)
       save->Lighting = ctx->Light.Enabled;
       if (ctx->Light.Enabled)
          _mesa_set_enable(ctx, GL_LIGHTING, GL_FALSE);
+      save->RasterDiscard = ctx->RasterDiscard;
+      if (ctx->RasterDiscard)
+         _mesa_set_enable(ctx, GL_RASTERIZER_DISCARD, GL_FALSE);
    }
 }
 
@@ -981,6 +998,21 @@ _mesa_meta_end(struct gl_context *ctx)
    if (save->Lighting) {
       _mesa_set_enable(ctx, GL_LIGHTING, GL_TRUE);
    }
+   if (save->RasterDiscard) {
+      _mesa_set_enable(ctx, GL_RASTERIZER_DISCARD, GL_TRUE);
+   }
+   if (save->TransformFeedbackNeedsResume)
+      _mesa_ResumeTransformFeedback();
+}
+
+
+/**
+ * Determine whether Mesa is currently in a meta state.
+ */
+GLboolean
+_mesa_meta_in_progress(struct gl_context *ctx)
+{
+   return ctx->Meta->SaveStackDepth != 0;
 }
 
 
@@ -2943,43 +2975,20 @@ _mesa_meta_GenerateMipmap(struct gl_context *ctx, GLenum target,
          break;
       }
 
-      /* Set MaxLevel large enough to hold the new level when we allocate it  */
+      /* Allocate storage for the destination mipmap image(s) */
+
+      /* Set MaxLevel large enough to hold the new level when we allocate it */
       _mesa_TexParameteri(target, GL_TEXTURE_MAX_LEVEL, dstLevel);
 
-      /* Create empty dest image */
-      if (target == GL_TEXTURE_1D) {
-         _mesa_TexImage1D(target, dstLevel, srcImage->InternalFormat,
-                          dstWidth, border,
-                          GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-      }
-      else if (target == GL_TEXTURE_3D) {
-         _mesa_TexImage3D(target, dstLevel, srcImage->InternalFormat,
-                          dstWidth, dstHeight, dstDepth, border,
-                          GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-      }
-      else {
-         /* 2D or cube */
-         _mesa_TexImage2D(faceTarget, dstLevel, srcImage->InternalFormat,
-                          dstWidth, dstHeight, border,
-                          GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-
-         if (target == GL_TEXTURE_CUBE_MAP) {
-            /* If texturing from a cube, we need to make sure all src faces
-             * have been defined (even if we're not sampling from them.)
-             * Otherwise the texture object will be 'incomplete' and
-             * texturing from it will not be allowed.
-             */
-            GLuint face;
-            for (face = 0; face < 6; face++) {
-               if (!texObj->Image[face][srcLevel] ||
-                   texObj->Image[face][srcLevel]->Width != srcWidth) {
-                  _mesa_TexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
-                                   srcLevel, srcImage->InternalFormat,
-                                   srcWidth, srcHeight, border,
-                                   GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-               }
-            }
-         }
+      if (!_mesa_prepare_mipmap_level(ctx, texObj, dstLevel,
+                                      dstWidth, dstHeight, dstDepth,
+                                      srcImage->Border,
+                                      srcImage->InternalFormat,
+                                      srcImage->TexFormat)) {
+         /* All done.  We either ran out of memory or we would go beyond the
+          * last valid level of an immutable texture if we continued.
+          */
+         break;
       }
 
       /* limit minification to src level */
@@ -3148,19 +3157,19 @@ copy_tex_sub_image(struct gl_context *ctx,
     */
    _mesa_meta_begin(ctx, MESA_META_PIXEL_STORE);
    if (target == GL_TEXTURE_1D) {
-      ctx->Driver.TexSubImage1D(ctx, target, level, xoffset,
-                                width, format, type, buf,
-                                &ctx->Unpack, texObj, texImage);
+      ctx->Driver.TexSubImage1D(ctx, texImage,
+                                xoffset, width,
+                                format, type, buf, &ctx->Unpack);
    }
    else if (target == GL_TEXTURE_3D) {
-      ctx->Driver.TexSubImage3D(ctx, target, level, xoffset, yoffset, zoffset,
-                                width, height, 1, format, type, buf,
-                                &ctx->Unpack, texObj, texImage);
+      ctx->Driver.TexSubImage3D(ctx, texImage,
+                                xoffset, yoffset, zoffset, width, height, 1,
+                                format, type, buf, &ctx->Unpack);
    }
    else {
-      ctx->Driver.TexSubImage2D(ctx, target, level, xoffset, yoffset,
-                                width, height, format, type, buf,
-                                &ctx->Unpack, texObj, texImage);
+      ctx->Driver.TexSubImage2D(ctx, texImage,
+                                xoffset, yoffset, width, height,
+                                format, type, buf, &ctx->Unpack);
    }
    _mesa_meta_end(ctx);
 

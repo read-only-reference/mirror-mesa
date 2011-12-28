@@ -104,11 +104,16 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Const.GLSLVersion = 120;
    _mesa_override_glsl_version(ctx);
 
+   if (intel->gen == 6 || (intel->gen == 7 && override_version >= 30))
+      ctx->Extensions.EXT_transform_feedback = true;
+
    if (intel->gen >= 5)
       ctx->Extensions.EXT_timer_query = true;
 
    if (intel->gen >= 4) {
       ctx->Extensions.ARB_color_buffer_float = true;
+      if (override_version >= 30)
+	 ctx->Extensions.ARB_depth_buffer_float = true;
       ctx->Extensions.ARB_depth_clamp = true;
       ctx->Extensions.ARB_fragment_coord_conventions = true;
       ctx->Extensions.ARB_fragment_program_shadow = true;

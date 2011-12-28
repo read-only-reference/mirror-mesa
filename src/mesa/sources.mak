@@ -27,7 +27,6 @@ MAIN_SOURCES = \
 	main/cpuinfo.c \
 	main/debug.c \
 	main/depth.c \
-	main/depthstencil.c \
 	main/dlist.c \
 	main/dlopen.c \
 	main/drawpix.c \
@@ -42,6 +41,7 @@ MAIN_SOURCES = \
 	main/ffvertex_prog.c \
 	main/fog.c \
 	main/formats.c \
+	main/format_pack.c \
 	main/format_unpack.c \
 	main/framebuffer.c \
 	main/get.c \
@@ -83,6 +83,7 @@ MAIN_SOURCES = \
 	main/texcompress_rgtc.c \
 	main/texcompress_s3tc.c \
 	main/texcompress_fxt1.c \
+	main/texcompress_etc.c \
 	main/texenv.c \
 	main/texformat.c \
 	main/texgen.c \
@@ -123,7 +124,6 @@ MATH_XFORM_SOURCES = \
 SWRAST_SOURCES = \
 	swrast/s_aaline.c \
 	swrast/s_aatriangle.c \
-	swrast/s_accum.c \
 	swrast/s_alpha.c \
 	swrast/s_atifragshader.c \
 	swrast/s_bitmap.c \
@@ -133,6 +133,7 @@ SWRAST_SOURCES = \
 	swrast/s_copypix.c \
 	swrast/s_context.c \
 	swrast/s_depth.c \
+	swrast/s_depthstencil.c \
 	swrast/s_drawpix.c \
 	swrast/s_feedback.c \
 	swrast/s_fog.c \
@@ -141,6 +142,7 @@ SWRAST_SOURCES = \
 	swrast/s_logic.c \
 	swrast/s_masking.c \
 	swrast/s_points.c \
+	swrast/s_renderbuffer.c \
 	swrast/s_span.c \
 	swrast/s_stencil.c \
 	swrast/s_texcombine.c \
@@ -207,7 +209,6 @@ STATETRACKER_SOURCES = \
 	state_tracker/st_atom_stipple.c \
 	state_tracker/st_atom_texture.c \
 	state_tracker/st_atom_viewport.c \
-	state_tracker/st_cb_accum.c \
 	state_tracker/st_cb_bitmap.c \
 	state_tracker/st_cb_blit.c \
 	state_tracker/st_cb_bufferobjects.c \

@@ -72,15 +72,19 @@ void r300_flush(struct pipe_context *pipe,
     if (r300->draw && !r300->draw_vbo_locked)
 	r300_draw_flush_vbuf(r300);
 
+    if (r300->screen->info.drm_minor >= 12) {
+        flags |= RADEON_FLUSH_KEEP_TILING_FLAGS;
+    }
+
     if (rfence) {
         /* Create a fence, which is a dummy BO. */
         *rfence = r300->rws->buffer_create(r300->rws, 1, 1,
                                            PIPE_BIND_CUSTOM,
-                                           PIPE_USAGE_IMMUTABLE);
+                                           RADEON_DOMAIN_GTT);
         /* Add the fence as a dummy relocation. */
         r300->rws->cs_add_reloc(r300->cs,
                                 r300->rws->buffer_get_cs_handle(*rfence),
-                                RADEON_USAGE_READWRITE);
+                                RADEON_USAGE_READWRITE, RADEON_DOMAIN_GTT);
     }
 
     if (r300->dirty_hw) {

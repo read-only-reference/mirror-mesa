@@ -42,6 +42,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "main/framebuffer.h"
 #include "main/renderbuffer.h"
 #include "main/fbobject.h"
+#include "swrast/s_renderbuffer.h"
 
 #define STANDALONE_MMIO
 #include "radeon_chipset.h"
@@ -417,7 +418,7 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
    case PCI_CHIP_RADEON_QG:
       /* all original radeons (7200) presumably have a stencil op bug */
       screen->chip_family = CHIP_FAMILY_R100;
-      screen->chip_flags = RADEON_CHIPSET_TCL | RADEON_CHIPSET_BROKEN_STENCIL;
+      screen->chip_flags = RADEON_CHIPSET_TCL | RADEON_CHIPSET_BROKEN_STENCIL | RADEON_CHIPSET_DEPTH_ALWAYS_TILED;
       break;
 
    case PCI_CHIP_RV200_QW:
@@ -425,7 +426,7 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
    case PCI_CHIP_RADEON_LW:
    case PCI_CHIP_RADEON_LX:
       screen->chip_family = CHIP_FAMILY_RV200;
-      screen->chip_flags = RADEON_CHIPSET_TCL;
+      screen->chip_flags = RADEON_CHIPSET_TCL | RADEON_CHIPSET_DEPTH_ALWAYS_TILED;
       break;
 
 #elif defined(RADEON_R200)
@@ -434,7 +435,7 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
    case PCI_CHIP_R200_QL:
    case PCI_CHIP_R200_QM:
       screen->chip_family = CHIP_FAMILY_R200;
-      screen->chip_flags = RADEON_CHIPSET_TCL;
+      screen->chip_flags = RADEON_CHIPSET_TCL | RADEON_CHIPSET_DEPTH_ALWAYS_TILED;
       break;
 
    case PCI_CHIP_RV250_If:
@@ -443,7 +444,7 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
    case PCI_CHIP_RV250_Lf:
    case PCI_CHIP_RV250_Lg:
       screen->chip_family = CHIP_FAMILY_RV250;
-      screen->chip_flags = R200_CHIPSET_YCBCR_BROKEN | RADEON_CHIPSET_TCL;
+      screen->chip_flags = R200_CHIPSET_YCBCR_BROKEN | RADEON_CHIPSET_TCL | RADEON_CHIPSET_DEPTH_ALWAYS_TILED;
       break;
 
    case PCI_CHIP_RV280_4C6E:
@@ -455,7 +456,7 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
    case PCI_CHIP_RV280_5C61:
    case PCI_CHIP_RV280_5C63:
       screen->chip_family = CHIP_FAMILY_RV280;
-      screen->chip_flags = RADEON_CHIPSET_TCL;
+      screen->chip_flags = RADEON_CHIPSET_TCL | RADEON_CHIPSET_DEPTH_ALWAYS_TILED;
       break;
 
    case PCI_CHIP_RS300_5834:
@@ -463,6 +464,7 @@ static int radeon_set_screen_flags(radeonScreenPtr screen, int device_id)
    case PCI_CHIP_RS350_7834:
    case PCI_CHIP_RS350_7835:
       screen->chip_family = CHIP_FAMILY_RS300;
+      screen->chip_flags = RADEON_CHIPSET_DEPTH_ALWAYS_TILED;
       break;
 #endif
 
@@ -650,7 +652,7 @@ radeonCreateBuffer( __DRIscreen *driScrnPriv,
 	depth->has_surface = screen->depthHasSurface;
     }
 
-    _mesa_add_soft_renderbuffers(&rfb->base,
+    _swrast_add_soft_renderbuffers(&rfb->base,
 	    GL_FALSE, /* color */
 	    swDepth,
 	    swStencil,

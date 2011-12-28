@@ -367,6 +367,12 @@ st_translate_vertex_program(struct st_context *st,
 
    ureg_destroy( ureg );
 
+   if (stvp->glsl_to_tgsi) {
+      st_translate_stream_output_info(stvp->glsl_to_tgsi,
+                                      stvp->result_to_output,
+                                      &vpv->tgsi.stream_output);
+   }
+
    vpv->driver_shader = pipe->create_vs_state(pipe, &vpv->tgsi);
 
    if (ST_DEBUG & DEBUG_TGSI) {
@@ -524,12 +530,12 @@ st_translate_fragment_program(struct st_context *st,
             case FRAG_ATTRIB_COL0:
                input_semantic_name[slot] = TGSI_SEMANTIC_COLOR;
                input_semantic_index[slot] = 0;
-               interpMode[slot] = TGSI_INTERPOLATE_LINEAR;
+               interpMode[slot] = st_translate_interp(stfp->Base.InterpQualifier[attr]);
                break;
             case FRAG_ATTRIB_COL1:
                input_semantic_name[slot] = TGSI_SEMANTIC_COLOR;
                input_semantic_index[slot] = 1;
-               interpMode[slot] = TGSI_INTERPOLATE_LINEAR;
+               interpMode[slot] = st_translate_interp(stfp->Base.InterpQualifier[attr]);
                break;
             case FRAG_ATTRIB_FOGC:
                input_semantic_name[slot] = TGSI_SEMANTIC_FOG;
@@ -648,6 +654,25 @@ st_translate_fragment_program(struct st_context *st,
       }
       if (write_all == GL_TRUE)
          ureg_property_fs_color0_writes_all_cbufs(ureg, 1);
+
+      if (stfp->Base.FragDepthLayout != FRAG_DEPTH_LAYOUT_NONE) {
+         switch (stfp->Base.FragDepthLayout) {
+         case FRAG_DEPTH_LAYOUT_ANY:
+            ureg_property_fs_depth_layout(ureg, TGSI_FS_DEPTH_LAYOUT_ANY);
+            break;
+         case FRAG_DEPTH_LAYOUT_GREATER:
+            ureg_property_fs_depth_layout(ureg, TGSI_FS_DEPTH_LAYOUT_GREATER);
+            break;
+         case FRAG_DEPTH_LAYOUT_LESS:
+            ureg_property_fs_depth_layout(ureg, TGSI_FS_DEPTH_LAYOUT_LESS);
+            break;
+         case FRAG_DEPTH_LAYOUT_UNCHANGED:
+            ureg_property_fs_depth_layout(ureg, TGSI_FS_DEPTH_LAYOUT_UNCHANGED);
+            break;
+         default:
+            assert(0);
+         }
+      }
 
       if (stfp->glsl_to_tgsi)
          st_translate_program(st->ctx,
@@ -974,6 +999,12 @@ st_translate_geometry_program(struct st_context *st,
    stgp->num_inputs = gs_num_inputs;
    stgp->tgsi.tokens = ureg_get_tokens( ureg, NULL );
    ureg_destroy( ureg );
+
+   if (stgp->glsl_to_tgsi) {
+      st_translate_stream_output_info(stgp->glsl_to_tgsi,
+                                      outputMapping,
+                                      &stgp->tgsi.stream_output);
+   }
 
    /* fill in new variant */
    gpv->driver_shader = pipe->create_gs_state(pipe, &stgp->tgsi);

@@ -113,8 +113,7 @@ blend_for_op(struct xa_composite_blend *blend,
     /*
      * Temporarily disable component alpha since it appears buggy.
      */
-    if (src_pic->component_alpha ||
-	(mask_pic && mask_pic->component_alpha))
+    if (mask_pic && mask_pic->component_alpha)
 	return FALSE;
 
     /*
@@ -228,6 +227,14 @@ xa_composite_check_accelerated(const struct xa_composite *comp)
     if (src_pic->src_pict) {
 	if (src_pic->src_pict->type != xa_src_pict_solid_fill)
 	    return -XA_ERR_INVAL;
+
+	/*
+	 * Currently we don't support solid fill with a mask.
+	 * We can easily do that, but that would require shader,
+	 * sampler view setup and vertex setup modification.
+	 */
+	if (comp->mask)
+	    return -XA_ERR_INVAL;
     }
 
     if (blend_for_op(&blend, comp->op, comp->src, comp->mask, comp->dst)) {
@@ -330,7 +337,7 @@ bind_shaders(struct xa_context *ctx, const struct xa_composite *comp)
 
 	if (src_pic->src_pict) {
 	    if (src_pic->src_pict->type == xa_src_pict_solid_fill) {
-		fs_traits |= FS_SOLID_FILL;
+		fs_traits |= FS_SOLID_FILL | FS_FILL;
 		vs_traits |= VS_SOLID_FILL;
 		xa_pixel_to_float4(src_pic->src_pict->solid_fill.color,
 				   ctx->solid_color);
@@ -440,6 +447,16 @@ bind_samplers(struct xa_context *ctx,
 					     &view_templ);
 	pipe_sampler_view_reference(&ctx->bound_sampler_views[1], NULL);
 	ctx->bound_sampler_views[1] = src_view;
+
+
+	/*
+	 * If src is a solid color, we have no src view, so set up a
+	 * dummy one that will not be used anyway.
+	 */
+	if (ctx->bound_sampler_views[0] == NULL)
+	    pipe_sampler_view_reference(&ctx->bound_sampler_views[0],
+					src_view);
+
     }
 
     cso_set_samplers(ctx->cso, ctx->num_bound_samplers,

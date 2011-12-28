@@ -259,8 +259,14 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
       return NULL;
    }
 
-   if (double_buffer)
+   if (double_buffer) {
       surface_type &= ~EGL_PIXMAP_BIT;
+
+      if (dri2_dpy->swap_available) {
+         conf->base.MinSwapInterval = 0;
+         conf->base.MaxSwapInterval = 1000; /* XXX arbitrary value */
+      }
+   }
 
    conf->base.SurfaceType |= surface_type;
 
@@ -608,6 +614,8 @@ dri2_terminate(_EGLDriver *drv, _EGLDisplay *disp)
       close(dri2_dpy->fd);
    if (dri2_dpy->driver)
       dlclose(dri2_dpy->driver);
+   if (dri2_dpy->device_name)
+      free(dri2_dpy->device_name);
 
    if (disp->PlatformDisplay == NULL) {
       switch (disp->Platform) {
@@ -616,14 +624,9 @@ dri2_terminate(_EGLDriver *drv, _EGLDisplay *disp)
          xcb_disconnect(dri2_dpy->conn);
          break;
 #endif
-#ifdef HAVE_WAYLAND_PLATFORM
-      case _EGL_PLATFORM_WAYLAND:
-         wl_display_destroy(dri2_dpy->wl_dpy);
-         break;
-#endif
 #ifdef HAVE_DRM_PLATFORM
       case _EGL_PLATFORM_DRM:
-         if (dri2_dpy->own_gbm_device) {
+         if (dri2_dpy->own_device) {
             gbm_device_destroy(&dri2_dpy->gbm_dri->base.base);
          }
          break;

@@ -104,9 +104,13 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_TIMER_QUERY:
    case PIPE_CAP_OCCLUSION_QUERY:
+   case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
       return 1;
-   case PIPE_CAP_STREAM_OUTPUT:
-      return 0;
+   case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
+      return 4;
+   case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
+   case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
+      return 128;
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
    case PIPE_CAP_INDEP_BLEND_ENABLE:
    case PIPE_CAP_INDEP_BLEND_FUNC:
@@ -220,7 +224,8 @@ nvc0_screen_destroy(struct pipe_screen *pscreen)
       nouveau_fence_wait(screen->base.fence.current);
       nouveau_fence_ref(NULL, &screen->base.fence.current);
    }
-   screen->base.channel->user_private = NULL;
+   if (screen->base.channel)
+      screen->base.channel->user_private = NULL;
 
    if (screen->blitctx)
       FREE(screen->blitctx);
@@ -366,7 +371,7 @@ nvc0_screen_fence_update(struct pipe_screen *pscreen)
    } while(0)
 
 struct pipe_screen *
-nvc0_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
+nvc0_screen_create(struct nouveau_device *dev)
 {
    struct nvc0_screen *screen;
    struct nouveau_channel *chan;
@@ -389,7 +394,6 @@ nvc0_screen_create(struct pipe_winsys *ws, struct nouveau_device *dev)
    chan = screen->base.channel;
    chan->user_private = screen;
 
-   pscreen->winsys = ws;
    pscreen->destroy = nvc0_screen_destroy;
    pscreen->context_create = nvc0_create;
    pscreen->is_format_supported = nvc0_screen_is_format_supported;

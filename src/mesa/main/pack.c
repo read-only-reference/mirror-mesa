@@ -467,6 +467,7 @@ _mesa_pack_rgba_span_int(struct gl_context *ctx, GLuint n, GLuint rgba[][4],
       case GL_GREEN_INTEGER_EXT:
       case GL_BLUE_INTEGER_EXT:
       case GL_ALPHA_INTEGER_EXT:
+      case GL_RG_INTEGER:
       case GL_RGB_INTEGER_EXT:
       case GL_RGBA_INTEGER_EXT:
       case GL_BGR_INTEGER_EXT:
@@ -490,6 +491,7 @@ _mesa_pack_rgba_span_int(struct gl_context *ctx, GLuint n, GLuint rgba[][4],
       case GL_GREEN_INTEGER_EXT:
       case GL_BLUE_INTEGER_EXT:
       case GL_ALPHA_INTEGER_EXT:
+      case GL_RG_INTEGER:
       case GL_RGB_INTEGER_EXT:
       case GL_RGBA_INTEGER_EXT:
       case GL_BGR_INTEGER_EXT:
@@ -3021,6 +3023,7 @@ extract_uint_rgba(GLuint n, GLuint rgba[][4],
           srcFormat == GL_DU8DV8_ATI ||
           srcFormat == GL_DUDV_ATI ||
           srcFormat == GL_RED_INTEGER_EXT ||
+          srcFormat == GL_RG_INTEGER ||
           srcFormat == GL_GREEN_INTEGER_EXT ||
           srcFormat == GL_BLUE_INTEGER_EXT ||
           srcFormat == GL_ALPHA_INTEGER_EXT ||
@@ -3611,70 +3614,6 @@ _mesa_unpack_color_span_ubyte(struct gl_context *ctx,
             return;
          }
       }
-      /*
-       * Common situation, loading 8bit RGBA/RGB source images
-       * into 16/32 bit destination. (OSMesa16/32)
-       */
-      else if (srcType == GL_UNSIGNED_BYTE) {
-         if (dstFormat == GL_RGBA) {
-            if (srcFormat == GL_RGB) {
-               GLuint i;
-               const GLubyte *src = (const GLubyte *) source;
-               GLubyte *dst = dest;
-               for (i = 0; i < n; i++) {
-                  dst[0] = src[0];
-                  dst[1] = src[1];
-                  dst[2] = src[2];
-                  dst[3] = 255;
-                  src += 3;
-                  dst += 4;
-               }
-               return;
-            }
-            else if (srcFormat == GL_RGBA) {
-               GLuint i;
-               const GLubyte *src = (const GLubyte *) source;
-               GLubyte *dst = dest;
-               for (i = 0; i < n; i++) {
-                  dst[0] = src[0];
-                  dst[1] = src[1];
-                  dst[2] = src[2];
-                  dst[3] = src[3];
-                  src += 4;
-                  dst += 4;
-               }
-               return;
-             }
-         }
-         else if (dstFormat == GL_RGB) {
-            if (srcFormat == GL_RGB) {
-               GLuint i;
-               const GLubyte *src = (const GLubyte *) source;
-               GLubyte *dst = dest;
-               for (i = 0; i < n; i++) {
-                  dst[0] = src[0];
-                  dst[1] = src[1];
-                  dst[2] = src[2];
-                  src += 3;
-                  dst += 3;
-               }
-               return;
-            }
-            else if (srcFormat == GL_RGBA) {
-               GLuint i;
-               const GLubyte *src = (const GLubyte *) source;
-               GLubyte *dst = dest;
-               for (i = 0; i < n; i++) {
-                  dst[0] = src[0];
-                  dst[1] = src[1];
-                  dst[2] = src[2];
-                  src += 4;
-                  dst += 3;
-               }
-               return;
-            }
-         }
-      }
    }
 
 
@@ -4044,6 +3983,7 @@ _mesa_unpack_color_span_uint(struct gl_context *ctx,
           srcFormat == GL_GREEN_INTEGER_EXT ||
           srcFormat == GL_BLUE_INTEGER_EXT ||
           srcFormat == GL_ALPHA_INTEGER_EXT ||
+          srcFormat == GL_RG_INTEGER ||
           srcFormat == GL_RGB_INTEGER_EXT ||
           srcFormat == GL_RGBA_INTEGER_EXT ||
           srcFormat == GL_BGR_INTEGER_EXT ||

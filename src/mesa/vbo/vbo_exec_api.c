@@ -655,9 +655,6 @@ vbo_exec_EvalMesh2(GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2)
 	 CALL_End(GET_DISPATCH(), ());
       }
       break;
-   default:
-      _mesa_error( ctx, GL_INVALID_ENUM, "glEvalMesh2(mode)" );
-      return;
    }
 }
 
@@ -703,6 +700,8 @@ static void GLAPIENTRY vbo_exec_Begin( GLenum mode )
          _mesa_error(ctx, GL_INVALID_ENUM, "glBegin");
          return;
       }
+
+      vbo_draw_method(exec, DRAW_BEGIN_END);
 
       if (ctx->Driver.PrepareExecBegin)
 	 ctx->Driver.PrepareExecBegin(ctx);

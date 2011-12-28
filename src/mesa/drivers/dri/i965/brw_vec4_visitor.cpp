@@ -25,6 +25,7 @@
 extern "C" {
 #include "main/macros.h"
 #include "program/prog_parameter.h"
+#include "program/sampler.h"
 }
 
 namespace brw {
@@ -1755,13 +1756,178 @@ vec4_visitor::visit(ir_call *ir)
 void
 vec4_visitor::visit(ir_texture *ir)
 {
-   /* FINISHME: Implement vertex texturing.
-    *
-    * With 0 vertex samplers available, the linker will reject
-    * programs that do vertex texturing, but after our visitor has
-    * run.
-    */
-   this->result = src_reg(this, glsl_type::vec4_type);
+   int sampler = _mesa_get_sampler_uniform_value(ir->sampler, prog, &vp->Base);
+   sampler = vp->Base.SamplerUnits[sampler];
+
+   /* Should be lowered by do_lower_texture_projection */
+   assert(!ir->projector);
+
+   vec4_instruction *inst;
+   switch (ir->op) {
+   case ir_tex:
+   case ir_txl:
+      inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TXL);
+      break;
+   case ir_txd:
+      inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TXD);
+      break;
+   case ir_txf:
+      inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TXF);
+      break;
+   case ir_txs:
+      inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TXS);
+      break;
+   case ir_txb:
+      assert(!"TXB is not valid for vertex shaders.");
+   }
+
+   /* Texel offsets go in the message header; Gen4 also requires headers. */
+   inst->header_present = ir->offset || intel->gen < 5;
+   inst->base_mrf = 2;
+   inst->mlen = inst->header_present + 1; /* always at least one */
+   inst->sampler = sampler;
+   inst->dst = dst_reg(this, glsl_type::get_instance(ir->type->base_type,4,1));
+   inst->shadow_compare = ir->shadow_comparitor != NULL;
+
+   if (ir->offset != NULL)
+      inst->texture_offset = brw_texture_offset(ir->offset->as_constant());
+
+   /* MRF for the first parameter */
+   int param_base = inst->base_mrf + inst->header_present;
+
+   if (ir->op == ir_txs) {
+      ir->lod_info.lod->accept(this);
+      int writemask = intel->gen == 4 ? WRITEMASK_W : WRITEMASK_X;
+      emit(MOV(dst_reg(MRF, param_base, ir->lod_info.lod->type, writemask),
+	   this->result));
+   } else {
+      int i, coord_mask = 0, zero_mask = 0;
+      /* Load the coordinate */
+      /* FINISHME: gl_clamp_mask and saturate */
+      for (i = 0; i < ir->coordinate->type->vector_elements; i++)
+	 coord_mask |= (1 << i);
+      for (; i < 4; i++)
+	 zero_mask |= (1 << i);
+
+      ir->coordinate->accept(this);
+      emit(MOV(dst_reg(MRF, param_base, ir->coordinate->type, coord_mask),
+	       this->result));
+      emit(MOV(dst_reg(MRF, param_base, ir->coordinate->type, zero_mask),
+	       src_reg(0)));
+      /* Load the shadow comparitor */
+      if (ir->shadow_comparitor) {
+	 ir->shadow_comparitor->accept(this);
+	 emit(MOV(dst_reg(MRF, param_base + 1, ir->shadow_comparitor->type,
+			  WRITEMASK_X),
+		  this->result));
+	 inst->mlen++;
+      }
+
+      /* Load the LOD info */
+      if (ir->op == ir_txl) {
+	 int mrf, writemask;
+	 if (intel->gen >= 5) {
+	    mrf = param_base + 1;
+	    if (ir->shadow_comparitor) {
+	       writemask = WRITEMASK_Y;
+	       /* mlen already incremented */
+	    } else {
+	       writemask = WRITEMASK_X;
+	       inst->mlen++;
+	    }
+	 } else /* intel->gen == 4 */ {
+	    mrf = param_base;
+	    writemask = WRITEMASK_Z;
+	 }
+	 ir->lod_info.lod->accept(this);
+	 emit(MOV(dst_reg(MRF, mrf, ir->lod_info.lod->type, writemask),
+		  this->result));
+      } else if (ir->op == ir_txf) {
+	 ir->lod_info.lod->accept(this);
+	 emit(MOV(dst_reg(MRF, param_base, ir->lod_info.lod->type, WRITEMASK_W),
+		  this->result));
+      } else if (ir->op == ir_txd) {
+	 const glsl_type *type = ir->lod_info.grad.dPdx->type;
+
+	 ir->lod_info.grad.dPdx->accept(this);
+	 src_reg dPdx = this->result;
+	 ir->lod_info.grad.dPdy->accept(this);
+	 src_reg dPdy = this->result;
+
+	 if (intel->gen >= 5) {
+	    dPdx.swizzle = BRW_SWIZZLE4(SWIZZLE_X,SWIZZLE_X,SWIZZLE_Y,SWIZZLE_Y);
+	    dPdy.swizzle = BRW_SWIZZLE4(SWIZZLE_X,SWIZZLE_X,SWIZZLE_Y,SWIZZLE_Y);
+	    emit(MOV(dst_reg(MRF, param_base + 1, type, WRITEMASK_XZ), dPdx));
+	    emit(MOV(dst_reg(MRF, param_base + 1, type, WRITEMASK_YW), dPdy));
+	    inst->mlen++;
+
+	    if (ir->type->vector_elements == 3) {
+	       dPdx.swizzle = BRW_SWIZZLE_ZZZZ;
+	       dPdy.swizzle = BRW_SWIZZLE_ZZZZ;
+	       emit(MOV(dst_reg(MRF, param_base + 2, type, WRITEMASK_X), dPdx));
+	       emit(MOV(dst_reg(MRF, param_base + 2, type, WRITEMASK_Y), dPdy));
+	       inst->mlen++;
+	    }
+	 } else /* intel->gen == 4 */ {
+	    emit(MOV(dst_reg(MRF, param_base + 1, type, WRITEMASK_XYZ), dPdx));
+	    emit(MOV(dst_reg(MRF, param_base + 2, type, WRITEMASK_XYZ), dPdy));
+	    inst->mlen += 2;
+	 }
+      }
+   }
+
+   emit(inst);
+
+   swizzle_result(ir, src_reg(inst->dst), sampler);
+}
+
+void
+vec4_visitor::swizzle_result(ir_texture *ir, src_reg orig_val, int sampler)
+{
+   this->result = orig_val;
+
+   int s = c->key.tex.swizzles[sampler];
+
+   if (ir->op == ir_txs || ir->type == glsl_type::float_type
+			|| s == SWIZZLE_NOOP)
+      return;
+
+   int zero_mask = 0, one_mask = 0, copy_mask = 0;
+   int swizzle[4];
+
+   for (int i = 0; i < 4; i++) {
+      switch (GET_SWZ(s, i)) {
+      case SWIZZLE_ZERO:
+	 zero_mask |= (1 << i);
+	 break;
+      case SWIZZLE_ONE:
+	 one_mask |= (1 << i);
+	 break;
+      default:
+	 copy_mask |= (1 << i);
+	 swizzle[i] = GET_SWZ(s, i);
+	 break;
+      }
+   }
+
+   this->result = src_reg(this, ir->type);
+   dst_reg swizzled_result(this->result);
+
+   if (copy_mask) {
+      orig_val.swizzle = BRW_SWIZZLE4(swizzle[0], swizzle[1], swizzle[2], swizzle[3]);
+      swizzled_result.writemask = copy_mask;
+      emit(MOV(swizzled_result, orig_val));
+   }
+
+   if (zero_mask) {
+      swizzled_result.writemask = zero_mask;
+      emit(MOV(swizzled_result, src_reg(0.0f)));
+   }
+
+   if (one_mask) {
+      swizzled_result.writemask = one_mask;
+      emit(MOV(swizzled_result, src_reg(1.0f)));
+   }
 }
 
 void

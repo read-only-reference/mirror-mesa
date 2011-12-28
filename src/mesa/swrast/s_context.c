@@ -36,6 +36,7 @@
 #include "swrast.h"
 #include "s_blend.h"
 #include "s_context.h"
+#include "s_depthstencil.h"
 #include "s_lines.h"
 #include "s_points.h"
 #include "s_span.h"
@@ -545,6 +546,25 @@ _swrast_update_active_attribs(struct gl_context *ctx)
 }
 
 
+/**
+ * Update the depth/stencil renderbuffers, if needed.
+ */
+static void
+_swrast_update_depth_stencil(struct gl_context *ctx)
+{
+   struct gl_framebuffer *drawFb = ctx->DrawBuffer;
+   struct gl_framebuffer *readFb = ctx->ReadBuffer;
+
+   _swrast_update_depth_buffer(ctx, drawFb);
+   _swrast_update_stencil_buffer(ctx, drawFb);
+
+   if (readFb != drawFb) {
+      _swrast_update_depth_buffer(ctx, readFb);
+      _swrast_update_stencil_buffer(ctx, readFb);
+   }
+}
+
+
 void
 _swrast_validate_derived( struct gl_context *ctx )
 {
@@ -589,6 +609,9 @@ _swrast_validate_derived( struct gl_context *ctx )
                               _NEW_TEXTURE))
          _swrast_update_specular_vertex_add(ctx);
 
+      if (swrast->NewState & _NEW_BUFFERS)
+         _swrast_update_depth_stencil(ctx);
+
       swrast->NewState = 0;
       swrast->StateChanges = 0;
       swrast->InvalidateState = _swrast_invalidate_state;
@@ -597,7 +620,7 @@ _swrast_validate_derived( struct gl_context *ctx )
 
 #define SWRAST_DEBUG 0
 
-/* Public entrypoints:  See also s_accum.c, s_bitmap.c, etc.
+/* Public entrypoints:  See also s_bitmap.c, etc.
  */
 void
 _swrast_Quad( struct gl_context *ctx,
@@ -754,10 +777,6 @@ _swrast_CreateContext( struct gl_context *ctx )
 
    ctx->Driver.MapTexture = _swrast_map_texture;
    ctx->Driver.UnmapTexture = _swrast_unmap_texture;
-
-   /* Optimized Accum buffer */
-   swrast->_IntegerAccumMode = GL_FALSE;
-   swrast->_IntegerAccumScaler = 0.0;
 
    for (i = 0; i < MAX_TEXTURE_IMAGE_UNITS; i++)
       swrast->TextureSample[i] = NULL;

@@ -275,10 +275,11 @@ unpack_ARGB1555_REV(const void *src, GLfloat dst[][4], GLuint n)
    const GLushort *s = ((const GLushort *) src);
    GLuint i;
    for (i = 0; i < n; i++) {
-      dst[i][RCOMP] = UBYTE_TO_FLOAT( ((s[i] >>  7) & 0xf8) | ((s[i] >> 12) & 0x7) );
-      dst[i][GCOMP] = UBYTE_TO_FLOAT( ((s[i] >>  2) & 0xf8) | ((s[i] >>  7) & 0x7) );
-      dst[i][BCOMP] = UBYTE_TO_FLOAT( ((s[i] <<  3) & 0xf8) | ((s[i] >>  2) & 0x7) );
-      dst[i][ACOMP] = UBYTE_TO_FLOAT( ((s[i] >> 15) & 0x01) * 255 );
+      GLushort tmp = (s[i] << 8) | (s[i] >> 8); /* byteswap */
+      dst[i][RCOMP] = ((tmp >> 10) & 0x1f) * (1.0F / 31.0F);
+      dst[i][GCOMP] = ((tmp >>  5) & 0x1f) * (1.0F / 31.0F);
+      dst[i][BCOMP] = ((tmp >>  0) & 0x1f) * (1.0F / 31.0F);
+      dst[i][ACOMP] = ((tmp >> 15) & 0x01) * 1.0F;
    }
 }
 
@@ -503,7 +504,7 @@ unpack_R8(const void *src, GLfloat dst[][4], GLuint n)
 }
 
 static void
-unpack_RG88(const void *src, GLfloat dst[][4], GLuint n)
+unpack_GR88(const void *src, GLfloat dst[][4], GLuint n)
 {
    const GLushort *s = ((const GLushort *) src);
    GLuint i;
@@ -516,13 +517,13 @@ unpack_RG88(const void *src, GLfloat dst[][4], GLuint n)
 }
 
 static void
-unpack_RG88_REV(const void *src, GLfloat dst[][4], GLuint n)
+unpack_RG88(const void *src, GLfloat dst[][4], GLuint n)
 {
    const GLushort *s = ((const GLushort *) src);
    GLuint i;
    for (i = 0; i < n; i++) {
-      dst[i][RCOMP] = UBYTE_TO_FLOAT( s[i] & 0xff );
-      dst[i][GCOMP] = UBYTE_TO_FLOAT( s[i] >> 8 );
+      dst[i][RCOMP] = UBYTE_TO_FLOAT( s[i] >> 8 );
+      dst[i][GCOMP] = UBYTE_TO_FLOAT( s[i] & 0xff );
       dst[i][BCOMP] = 0.0;
       dst[i][ACOMP] = 1.0;
    }
@@ -586,7 +587,7 @@ unpack_Z24_S8(const void *src, GLfloat dst[][4], GLuint n)
 {
    /* only return Z, not stencil data */
    const GLuint *s = ((const GLuint *) src);
-   const GLfloat scale = 1.0F / (GLfloat) 0xffffff;
+   const GLdouble scale = 1.0 / (GLdouble) 0xffffff;
    GLuint i;
    for (i = 0; i < n; i++) {
       dst[i][0] =
@@ -603,7 +604,7 @@ unpack_S8_Z24(const void *src, GLfloat dst[][4], GLuint n)
 {
    /* only return Z, not stencil data */
    const GLuint *s = ((const GLuint *) src);
-   const GLfloat scale = 1.0F / (GLfloat) 0xffffff;
+   const GLdouble scale = 1.0 / (GLdouble) 0xffffff;
    GLuint i;
    for (i = 0; i < n; i++) {
       dst[i][0] =
@@ -1194,8 +1195,8 @@ unpack_SIGNED_GR1616(const void *src, GLfloat dst[][4], GLuint n)
    const GLuint *s = ((const GLuint *) src);
    GLuint i;
    for (i = 0; i < n; i++) {
-      dst[i][RCOMP] = SHORT_TO_FLOAT_TEX( s[i] & 0xffff );
-      dst[i][GCOMP] = SHORT_TO_FLOAT_TEX( s[i] >> 16 );
+      dst[i][RCOMP] = SHORT_TO_FLOAT_TEX( (GLshort) (s[i] & 0xffff) );
+      dst[i][GCOMP] = SHORT_TO_FLOAT_TEX( (GLshort) (s[i] >> 16) );
       dst[i][BCOMP] = 0.0F;
       dst[i][ACOMP] = 1.0F;
    }
@@ -1284,6 +1285,12 @@ unpack_LA_LATC2(const void *src, GLfloat dst[][4], GLuint n)
 
 static void
 unpack_SIGNED_LA_LATC2(const void *src, GLfloat dst[][4], GLuint n)
+{
+   /* XXX to do */
+}
+
+static void
+unpack_ETC1_RGB8(const void *src, GLfloat dst[][4], GLuint n)
 {
    /* XXX to do */
 }
@@ -1459,8 +1466,8 @@ get_unpack_rgba_function(gl_format format)
       table[MESA_FORMAT_YCBCR] = unpack_YCBCR;
       table[MESA_FORMAT_YCBCR_REV] = unpack_YCBCR_REV;
       table[MESA_FORMAT_R8] = unpack_R8;
+      table[MESA_FORMAT_GR88] = unpack_GR88;
       table[MESA_FORMAT_RG88] = unpack_RG88;
-      table[MESA_FORMAT_RG88_REV] = unpack_RG88_REV;
       table[MESA_FORMAT_R16] = unpack_R16;
       table[MESA_FORMAT_RG1616] = unpack_RG1616;
       table[MESA_FORMAT_RG1616_REV] = unpack_RG1616_REV;
@@ -1535,6 +1542,8 @@ get_unpack_rgba_function(gl_format format)
       table[MESA_FORMAT_LA_LATC2] = unpack_LA_LATC2;
       table[MESA_FORMAT_SIGNED_LA_LATC2] = unpack_SIGNED_LA_LATC2;
 
+      table[MESA_FORMAT_ETC1_RGB8] = unpack_ETC1_RGB8;
+
       table[MESA_FORMAT_SIGNED_A8] = unpack_SIGNED_A8;
       table[MESA_FORMAT_SIGNED_L8] = unpack_SIGNED_L8;
       table[MESA_FORMAT_SIGNED_AL88] = unpack_SIGNED_AL88;
@@ -1572,7 +1581,111 @@ unpack_int_rgba_RGBA_UINT32(const GLuint *src, GLuint dst[][4], GLuint n)
 }
 
 static void
+unpack_int_rgba_RGBA_UINT16(const GLushort *src, GLuint dst[][4], GLuint n)
+{
+   unsigned int i;
+
+   for (i = 0; i < n; i++) {
+      dst[i][0] = src[i * 4 + 0];
+      dst[i][1] = src[i * 4 + 1];
+      dst[i][2] = src[i * 4 + 2];
+      dst[i][3] = src[i * 4 + 3];
+   }
+}
+
+static void
+unpack_int_rgba_RGBA_INT16(const GLshort *src, GLuint dst[][4], GLuint n)
+{
+   unsigned int i;
+
+   for (i = 0; i < n; i++) {
+      dst[i][0] = src[i * 4 + 0];
+      dst[i][1] = src[i * 4 + 1];
+      dst[i][2] = src[i * 4 + 2];
+      dst[i][3] = src[i * 4 + 3];
+   }
+}
+
+static void
+unpack_int_rgba_RGBA_UINT8(const GLubyte *src, GLuint dst[][4], GLuint n)
+{
+   unsigned int i;
+
+   for (i = 0; i < n; i++) {
+      dst[i][0] = src[i * 4 + 0];
+      dst[i][1] = src[i * 4 + 1];
+      dst[i][2] = src[i * 4 + 2];
+      dst[i][3] = src[i * 4 + 3];
+   }
+}
+
+static void
+unpack_int_rgba_RGBA_INT8(const GLbyte *src, GLuint dst[][4], GLuint n)
+{
+   unsigned int i;
+
+   for (i = 0; i < n; i++) {
+      dst[i][0] = src[i * 4 + 0];
+      dst[i][1] = src[i * 4 + 1];
+      dst[i][2] = src[i * 4 + 2];
+      dst[i][3] = src[i * 4 + 3];
+   }
+}
+
+static void
 unpack_int_rgba_RGB_UINT32(const GLuint *src, GLuint dst[][4], GLuint n)
+{
+   unsigned int i;
+
+   for (i = 0; i < n; i++) {
+      dst[i][0] = src[i * 3 + 0];
+      dst[i][1] = src[i * 3 + 1];
+      dst[i][2] = src[i * 3 + 2];
+      dst[i][3] = 1;
+   }
+}
+
+static void
+unpack_int_rgba_RGB_UINT16(const GLushort *src, GLuint dst[][4], GLuint n)
+{
+   unsigned int i;
+
+   for (i = 0; i < n; i++) {
+      dst[i][0] = src[i * 3 + 0];
+      dst[i][1] = src[i * 3 + 1];
+      dst[i][2] = src[i * 3 + 2];
+      dst[i][3] = 1;
+   }
+}
+
+static void
+unpack_int_rgba_RGB_INT16(const GLshort *src, GLuint dst[][4], GLuint n)
+{
+   unsigned int i;
+
+   for (i = 0; i < n; i++) {
+      dst[i][0] = src[i * 3 + 0];
+      dst[i][1] = src[i * 3 + 1];
+      dst[i][2] = src[i * 3 + 2];
+      dst[i][3] = 1;
+   }
+}
+
+static void
+unpack_int_rgba_RGB_UINT8(const GLubyte *src, GLuint dst[][4], GLuint n)
+{
+   unsigned int i;
+
+   for (i = 0; i < n; i++) {
+      dst[i][0] = src[i * 3 + 0];
+      dst[i][1] = src[i * 3 + 1];
+      dst[i][2] = src[i * 3 + 2];
+      dst[i][3] = 1;
+   }
+}
+
+static void
+unpack_int_rgba_RGB_INT8(const GLbyte *src, GLuint dst[][4], GLuint n)
 {
    unsigned int i;
 
@@ -1668,10 +1781,40 @@ _mesa_unpack_int_rgba_row(gl_format format, GLuint n,
    case MESA_FORMAT_RGBA_INT32:
       unpack_int_rgba_RGBA_UINT32(src, dst, n);
       break;
+
+   case MESA_FORMAT_RGBA_UINT16:
+      unpack_int_rgba_RGBA_UINT16(src, dst, n);
+      break;
+   case MESA_FORMAT_RGBA_INT16:
+      unpack_int_rgba_RGBA_INT16(src, dst, n);
+      break;
+
+   case MESA_FORMAT_RGBA_UINT8:
+      unpack_int_rgba_RGBA_UINT8(src, dst, n);
+      break;
+   case MESA_FORMAT_RGBA_INT8:
+      unpack_int_rgba_RGBA_INT8(src, dst, n);
+      break;
+
    case MESA_FORMAT_RGB_UINT32:
    case MESA_FORMAT_RGB_INT32:
       unpack_int_rgba_RGB_UINT32(src, dst, n);
       break;
+
+   case MESA_FORMAT_RGB_UINT16:
+      unpack_int_rgba_RGB_UINT16(src, dst, n);
+      break;
+   case MESA_FORMAT_RGB_INT16:
+      unpack_int_rgba_RGB_INT16(src, dst, n);
+      break;
+
+   case MESA_FORMAT_RGB_UINT8:
+      unpack_int_rgba_RGB_UINT8(src, dst, n);
+      break;
+   case MESA_FORMAT_RGB_INT8:
+      unpack_int_rgba_RGB_INT8(src, dst, n);
+      break;
+
    case MESA_FORMAT_RG_UINT32:
    case MESA_FORMAT_RG_INT32:
       unpack_int_rgba_RG_UINT32(src, dst, n);
@@ -1752,7 +1895,7 @@ unpack_float_z_Z24_X8(GLuint n, const void *src, GLfloat *dst)
 {
    /* only return Z, not stencil data */
    const GLuint *s = ((const GLuint *) src);
-   const GLfloat scale = 1.0F / (GLfloat) 0xffffff;
+   const GLdouble scale = 1.0 / (GLdouble) 0xffffff;
    GLuint i;
    for (i = 0; i < n; i++) {
       dst[i] = (s[i] >> 8) * scale;
@@ -1766,7 +1909,7 @@ unpack_float_z_X8_Z24(GLuint n, const void *src, GLfloat *dst)
 {
    /* only return Z, not stencil data */
    const GLuint *s = ((const GLuint *) src);
-   const GLfloat scale = 1.0F / (GLfloat) 0xffffff;
+   const GLdouble scale = 1.0 / (GLdouble) 0xffffff;
    GLuint i;
    for (i = 0; i < n; i++) {
       dst[i] = (s[i] & 0x00ffffff) * scale;
@@ -1813,6 +1956,10 @@ unpack_float_z_Z32X24S8(GLuint n, const void *src, GLfloat *dst)
 
 
 
+/**
+ * Unpack Z values.
+ * The returned values will always be in the range [0.0, 1.0].
+ */
 void
 _mesa_unpack_float_z_row(gl_format format, GLuint n,
                          const void *src, GLfloat *dst)
@@ -1892,6 +2039,10 @@ unpack_uint_z_Z32(const void *src, GLuint *dst, GLuint n)
 }
 
 
+/**
+ * Unpack Z values.
+ * The returned values will always be in the range [0, 0xffffffff].
+ */
 void
 _mesa_unpack_uint_z_row(gl_format format, GLuint n,
                         const void *src, GLuint *dst)

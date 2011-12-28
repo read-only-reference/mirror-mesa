@@ -161,6 +161,7 @@ struct ureg_program
    unsigned char property_fs_coord_origin; /* = TGSI_FS_COORD_ORIGIN_* */
    unsigned char property_fs_coord_pixel_center; /* = TGSI_FS_COORD_PIXEL_CENTER_* */
    unsigned char property_fs_color0_writes_all_cbufs; /* = TGSI_FS_COLOR0_WRITES_ALL_CBUFS * */
+   unsigned char property_fs_depth_layout; /* TGSI_FS_DEPTH_LAYOUT */
 
    unsigned nr_addrs;
    unsigned nr_preds;
@@ -302,6 +303,13 @@ ureg_property_fs_color0_writes_all_cbufs(struct ureg_program *ureg,
                             unsigned fs_color0_writes_all_cbufs)
 {
    ureg->property_fs_color0_writes_all_cbufs = fs_color0_writes_all_cbufs;
+}
+
+void
+ureg_property_fs_depth_layout(struct ureg_program *ureg,
+                              unsigned fs_depth_layout)
+{
+   ureg->property_fs_depth_layout = fs_depth_layout;
 }
 
 struct ureg_src
@@ -1388,6 +1396,14 @@ static void emit_decls( struct ureg_program *ureg )
                     ureg->property_fs_color0_writes_all_cbufs);
    }
 
+   if (ureg->property_fs_depth_layout) {
+      assert(ureg->processor == TGSI_PROCESSOR_FRAGMENT);
+
+      emit_property(ureg,
+                    TGSI_PROPERTY_FS_DEPTH_LAYOUT,
+                    ureg->property_fs_depth_layout);
+   }
+
    if (ureg->processor == TGSI_PROCESSOR_VERTEX) {
       for (i = 0; i < UREG_MAX_INPUT; i++) {
          if (ureg->vs_inputs[i/32] & (1 << (i%32))) {
@@ -1574,13 +1590,19 @@ const struct tgsi_token *ureg_finalize( struct ureg_program *ureg )
 
 
 void *ureg_create_shader( struct ureg_program *ureg,
-                          struct pipe_context *pipe )
+                          struct pipe_context *pipe,
+                          const struct pipe_stream_output_info *so )
 {
    struct pipe_shader_state state;
 
    state.tokens = ureg_finalize(ureg);
    if(!state.tokens)
       return NULL;
+
+   if (so)
+      state.stream_output = *so;
+   else
+      memset(&state.stream_output, 0, sizeof(state.stream_output));
 
    if (ureg->processor == TGSI_PROCESSOR_VERTEX)
       return pipe->create_vs_state( pipe, &state );

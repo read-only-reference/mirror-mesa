@@ -33,10 +33,12 @@
 #include "main/samplerobj.h"
 #include "main/state.h"
 #include "main/enums.h"
+#include "main/macros.h"
 #include "tnl/tnl.h"
 #include "vbo/vbo_context.h"
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
+#include "drivers/common/meta.h"
 
 #include "brw_draw.h"
 #include "brw_defines.h"
@@ -377,6 +379,60 @@ static void brw_postdraw_set_buffers_need_resolve(struct brw_context *brw)
    }
 }
 
+static int
+verts_per_prim(GLenum mode)
+{
+   switch (mode) {
+   case GL_POINTS:
+      return 1;
+   case GL_LINE_STRIP:
+   case GL_LINE_LOOP:
+   case GL_LINES:
+      return 2;
+   case GL_TRIANGLE_STRIP:
+   case GL_TRIANGLE_FAN:
+   case GL_POLYGON:
+   case GL_TRIANGLES:
+   case GL_QUADS:
+   case GL_QUAD_STRIP:
+      return 3;
+   default:
+      _mesa_problem(NULL,
+		    "unknown prim type in transform feedback primitive count");
+      return 0;
+   }
+}
+
+/**
+ * Update internal counters based on the the drawing operation described in
+ * prim.
+ */
+static void
+brw_update_primitive_count(struct brw_context *brw,
+                           const struct _mesa_prim *prim)
+{
+   uint32_t count = count_tessellated_primitives(prim);
+   brw->sol.primitives_generated += count;
+   if (brw->intel.ctx.TransformFeedback.CurrentObject->Active &&
+       !brw->intel.ctx.TransformFeedback.CurrentObject->Paused) {
+      /* Update brw->sol.svbi_0_max_index to reflect the amount by which the
+       * hardware is going to increment SVBI 0 when this drawing operation
+       * occurs.  This is necessary because the kernel does not (yet) save and
+       * restore GPU registers when context switching, so we'll need to be
+       * able to reload SVBI 0 with the correct value in case we have to start
+       * a new batch buffer.
+       */
+      unsigned verts = verts_per_prim(prim->mode);
+      uint32_t space_avail =
+         (brw->sol.svbi_0_max_index - brw->sol.svbi_0_starting_index) / verts;
+      uint32_t primitives_written = MIN2 (space_avail, count);
+      brw->sol.svbi_0_starting_index += verts * primitives_written;
+
+      /* And update the TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN query. */
+      brw->sol.primitives_written += primitives_written;
+   }
+}
+
 /* May fail if out of video memory for texture or vbo upload, or on
  * fallback conditions.
  */
@@ -498,6 +554,9 @@ retry:
 	    }
 	 }
       }
+
+      if (!_mesa_meta_in_progress(ctx))
+         brw_update_primitive_count(brw, &prim[i]);
    }
 
    if (intel->always_flush_batch)
@@ -517,7 +576,8 @@ void brw_draw_prims( struct gl_context *ctx,
 		     const struct _mesa_index_buffer *ib,
 		     GLboolean index_bounds_valid,
 		     GLuint min_index,
-		     GLuint max_index )
+		     GLuint max_index,
+		     struct gl_transform_feedback_object *tfb_vertcount )
 {
    bool retval;
 

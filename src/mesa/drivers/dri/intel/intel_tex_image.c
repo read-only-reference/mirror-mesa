@@ -84,6 +84,8 @@ intel_miptree_create_for_teximage(struct intel_context *intel,
 	  intelImage->base.Base.Level == firstLevel &&
 	  (intel->gen < 4 || firstLevel == 0)) {
 	 lastLevel = firstLevel;
+      } else if (intelObj->base.Target == GL_TEXTURE_EXTERNAL_OES) {
+	 lastLevel = firstLevel;
       } else {
 	 lastLevel = firstLevel + _mesa_logbase2(MAX2(MAX2(width, height), depth));
       }
@@ -200,16 +202,16 @@ try_pbo_upload(struct gl_context *ctx,
 static void
 intelTexImage(struct gl_context * ctx,
               GLint dims,
-              GLenum target, GLint level,
+              struct gl_texture_image *texImage,
               GLint internalFormat,
               GLint width, GLint height, GLint depth,
               GLenum format, GLenum type, const void *pixels,
               const struct gl_pixelstore_attrib *unpack,
-              struct gl_texture_object *texObj,
-              struct gl_texture_image *texImage, GLsizei imageSize)
+              GLsizei imageSize)
 {
    DBG("%s target %s level %d %dx%dx%d\n", __FUNCTION__,
-       _mesa_lookup_enum_by_nr(target), level, width, height, depth);
+       _mesa_lookup_enum_by_nr(texImage->TexObject->Target),
+       texImage->Level, width, height, depth);
 
    /* Attempt to use the blitter for PBO image uploads.
     */
@@ -222,59 +224,52 @@ intelTexImage(struct gl_context * ctx,
    DBG("%s: upload image %dx%dx%d pixels %p\n",
        __FUNCTION__, width, height, depth, pixels);
 
-   _mesa_store_teximage3d(ctx, target, level, internalFormat,
+   _mesa_store_teximage3d(ctx, texImage, internalFormat,
 			  width, height, depth, 0,
-			  format, type, pixels,
-			  unpack, texObj, texImage);
+			  format, type, pixels, unpack);
 }
 
 
 static void
 intelTexImage3D(struct gl_context * ctx,
-                GLenum target, GLint level,
+                struct gl_texture_image *texImage,
                 GLint internalFormat,
                 GLint width, GLint height, GLint depth,
                 GLint border,
                 GLenum format, GLenum type, const void *pixels,
-                const struct gl_pixelstore_attrib *unpack,
-                struct gl_texture_object *texObj,
-                struct gl_texture_image *texImage)
+                const struct gl_pixelstore_attrib *unpack)
 {
-   intelTexImage(ctx, 3, target, level,
+   intelTexImage(ctx, 3, texImage,
                  internalFormat, width, height, depth,
-                 format, type, pixels, unpack, texObj, texImage, 0);
+                 format, type, pixels, unpack, 0);
 }
 
 
 static void
 intelTexImage2D(struct gl_context * ctx,
-                GLenum target, GLint level,
+                struct gl_texture_image *texImage,
                 GLint internalFormat,
                 GLint width, GLint height, GLint border,
                 GLenum format, GLenum type, const void *pixels,
-                const struct gl_pixelstore_attrib *unpack,
-                struct gl_texture_object *texObj,
-                struct gl_texture_image *texImage)
+                const struct gl_pixelstore_attrib *unpack)
 {
-   intelTexImage(ctx, 2, target, level,
+   intelTexImage(ctx, 2, texImage,
                  internalFormat, width, height, 1,
-                 format, type, pixels, unpack, texObj, texImage, 0);
+                 format, type, pixels, unpack, 0);
 }
 
 
 static void
 intelTexImage1D(struct gl_context * ctx,
-                GLenum target, GLint level,
+                struct gl_texture_image *texImage,
                 GLint internalFormat,
                 GLint width, GLint border,
                 GLenum format, GLenum type, const void *pixels,
-                const struct gl_pixelstore_attrib *unpack,
-                struct gl_texture_object *texObj,
-                struct gl_texture_image *texImage)
+                const struct gl_pixelstore_attrib *unpack)
 {
-   intelTexImage(ctx, 1, target, level,
+   intelTexImage(ctx, 1, texImage,
                  internalFormat, width, 1, 1,
-                 format, type, pixels, unpack, texObj, texImage, 0);
+                 format, type, pixels, unpack, 0);
 }
 
 

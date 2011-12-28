@@ -145,6 +145,7 @@ static const struct brw_tracked_state *gen6_atoms[] =
    &brw_wm_pull_constants,
    &gen6_renderbuffer_surfaces,
    &brw_texture_surfaces,
+   &gen6_sol_surface,
    &brw_binding_table,
 
    &brw_samplers,
@@ -170,6 +171,7 @@ static const struct brw_tracked_state *gen6_atoms[] =
 
    &brw_drawing_rect,
 
+   &gen6_sol_indices,
    &brw_indices,
    &brw_index_buffer,
    &brw_vertices,
@@ -218,6 +220,7 @@ const struct brw_tracked_state *gen7_atoms[] =
 
    &gen7_disable_stages,
    &gen7_vs_state,
+   &gen7_sol_state,
    &gen7_clip_state,
    &gen7_sbe_state,
    &gen7_sf_state,
@@ -358,7 +361,7 @@ static struct dirty_bit_map brw_bits[] = {
    DEFINE_BIT(BRW_NEW_WM_INPUT_DIMENSIONS),
    DEFINE_BIT(BRW_NEW_PROGRAM_CACHE),
    DEFINE_BIT(BRW_NEW_PSP),
-   DEFINE_BIT(BRW_NEW_WM_SURFACES),
+   DEFINE_BIT(BRW_NEW_SURFACES),
    DEFINE_BIT(BRW_NEW_INDICES),
    DEFINE_BIT(BRW_NEW_INDEX_BUFFER),
    DEFINE_BIT(BRW_NEW_VERTICES),
