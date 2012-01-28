@@ -42,6 +42,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "main/imports.h"
 #include "main/extensions.h"
 #include "main/mfeatures.h"
+#include "main/version.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -62,6 +63,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "radeon_tcl.h"
 #include "radeon_queryobj.h"
 #include "radeon_blit.h"
+#include "radeon_fog.h"
 
 #include "utils.h"
 #include "xmlpool.h" /* for symbolic values of enum-type options */
@@ -162,6 +164,10 @@ GLboolean
 r100CreateContext( gl_api api,
 		   const struct gl_config *glVisual,
 		   __DRIcontext *driContextPriv,
+		   unsigned major_version,
+		   unsigned minor_version,
+		   uint32_t flags,
+		   unsigned *error,
 		   void *sharedContextPrivate)
 {
    __DRIscreen *sPriv = driContextPriv->driScreenPriv;
@@ -172,14 +178,21 @@ r100CreateContext( gl_api api,
    int i;
    int tcl_mode, fthrottle_mode;
 
+   /* API and flag filtering is handled in dri2CreateContextAttribs.
+    */
+   (void) api;
+   (void) flags;
+
    assert(glVisual);
    assert(driContextPriv);
    assert(screen);
 
    /* Allocate the Radeon context */
    rmesa = (r100ContextPtr) CALLOC( sizeof(*rmesa) );
-   if ( !rmesa )
+   if ( !rmesa ) {
+      *error = __DRI_CTX_ERROR_NO_MEMORY;
       return GL_FALSE;
+   }
 
    rmesa->radeon.radeonScreen = screen;
    r100_init_vtbl(&rmesa->radeon);
@@ -218,6 +231,7 @@ r100CreateContext( gl_api api,
 			  glVisual, driContextPriv,
 			  sharedContextPrivate)) {
      FREE(rmesa);
+     *error = __DRI_CTX_ERROR_NO_MEMORY;
      return GL_FALSE;
    }
 
@@ -386,5 +400,16 @@ r100CreateContext( gl_api api,
    if (rmesa->radeon.radeonScreen->chip_flags & RADEON_CHIPSET_TCL) {
 /*       _tnl_need_dlist_norm_lengths( ctx, GL_FALSE ); */
    }
+
+   _mesa_compute_version(ctx);
+   if (ctx->VersionMajor < major_version
+       || (ctx->VersionMajor == major_version
+	   && ctx->VersionMinor < minor_version)) {
+      radeonDestroyContext(driContextPriv);
+      *error = __DRI_CTX_ERROR_BAD_VERSION;
+      return GL_FALSE;
+   }
+
+   *error = __DRI_CTX_ERROR_SUCCESS;
    return GL_TRUE;
 }

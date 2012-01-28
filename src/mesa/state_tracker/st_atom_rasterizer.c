@@ -90,29 +90,12 @@ static void update_raster_state( struct st_context *st )
    if (ctx->Light.ProvokingVertex == GL_FIRST_VERTEX_CONVENTION_EXT)
       raster->flatshade_first = 1;
 
-   /* _NEW_LIGHT | _NEW_PROGRAM
-    *
-    * Back-face colors can come from traditional lighting (when
-    * GL_LIGHT_MODEL_TWO_SIDE is set) or from vertex programs/shaders (when
-    * GL_VERTEX_PROGRAM_TWO_SIDE is set).  Note the logic here.
-    */
-   if (ctx->VertexProgram._Current) {
-      if (ctx->VertexProgram._Enabled ||
-          (ctx->Shader.CurrentVertexProgram &&
-           ctx->Shader.CurrentVertexProgram->LinkStatus)) {
-         /* user-defined vertex program or shader */
-         raster->light_twoside = ctx->VertexProgram.TwoSideEnabled;
-      }
-      else {
-         /* TNL-generated program */
-         raster->light_twoside = ctx->Light.Enabled && ctx->Light.Model.TwoSide;
-      }
-   }
-   else if (ctx->Light.Enabled && ctx->Light.Model.TwoSide) {
-      raster->light_twoside = 1;
-   }
+   /* _NEW_LIGHT | _NEW_PROGRAM */
+   raster->light_twoside = ctx->VertexProgram._TwoSideEnabled;
 
-   raster->clamp_vertex_color = ctx->Light._ClampVertexColor;
+   /*_NEW_LIGHT | _NEW_BUFFERS */
+   raster->clamp_vertex_color = !st->clamp_vert_color_in_shader &&
+                                ctx->Light._ClampVertexColor;
 
    /* _NEW_POLYGON
     */
@@ -255,11 +238,16 @@ static void update_raster_state( struct st_context *st )
       raster->scissor = 1;
 
    /* _NEW_FRAG_CLAMP */
-   raster->clamp_fragment_color = ctx->Color._ClampFragmentColor;
+   raster->clamp_fragment_color = !st->clamp_frag_color_in_shader &&
+                                  ctx->Color._ClampFragmentColor;
    raster->gl_rasterization_rules = 1;
 
    /* _NEW_RASTERIZER_DISCARD */
    raster->rasterizer_discard = ctx->RasterDiscard;
+
+   /* _NEW_TRANSFORM */
+   raster->depth_clip = ctx->Transform.DepthClamp == GL_FALSE;
+   raster->clip_plane_enable = ctx->Transform.ClipPlanesEnabled;
 
    cso_set_rasterizer(st->cso_context, raster);
 }
@@ -276,7 +264,8 @@ const struct st_tracked_state st_update_rasterizer = {
        _NEW_PROGRAM |
        _NEW_SCISSOR |
        _NEW_FRAG_CLAMP |
-       _NEW_RASTERIZER_DISCARD),      /* mesa state dependencies*/
+       _NEW_RASTERIZER_DISCARD |
+       _NEW_TRANSFORM),      /* mesa state dependencies*/
       ST_NEW_VERTEX_PROGRAM,  /* state tracker dependencies */
    },
    update_raster_state     /* update function */

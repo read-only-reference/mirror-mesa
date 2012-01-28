@@ -118,7 +118,7 @@ upload_wm_state(struct brw_context *brw)
 		GEN6_CONSTANT_BUFFER_0_ENABLE |
 		(5 - 2));
       /* Pointer to the WM constant buffer.  Covered by the set of
-       * state flags from gen6_upload_wm_constants
+       * state flags from gen6_upload_wm_push_constants.
        */
       OUT_BATCH(brw->wm.push_const_offset +
 		ALIGN(brw->wm.prog_data->nr_params,
@@ -135,7 +135,9 @@ upload_wm_state(struct brw_context *brw)
    dw5 |= GEN6_WM_LINE_END_CAP_AA_WIDTH_0_5;
 
    /* Use ALT floating point mode for ARB fragment programs, because they
-    * require 0^0 == 1.
+    * require 0^0 == 1.  Even though _CurrentFragmentProgram is used for
+    * rendering, CurrentFragmentProgram is used for this check to
+    * differentiate between the GLSL and non-GLSL cases.
     */
    if (ctx->Shader.CurrentFragmentProgram == NULL)
       dw2 |= GEN6_WM_FLOATING_POINT_MODE_ALT;
@@ -231,7 +233,6 @@ const struct brw_tracked_state gen6_wm_state = {
 		_NEW_PROGRAM_CONSTANTS |
 		_NEW_POLYGON),
       .brw   = (BRW_NEW_FRAGMENT_PROGRAM |
-		BRW_NEW_URB_FENCE |
 		BRW_NEW_BATCH |
 		BRW_NEW_HIZ),
       .cache = (CACHE_NEW_SAMPLER |

@@ -181,11 +181,12 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
    case PIPE_CAP_TGSI_INSTANCEID:
+   case PIPE_CAP_VERTEX_COLOR_CLAMPED:
       return 1;
 
    /* Unsupported features (boolean caps). */
    case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
-   case PIPE_CAP_DEPTH_CLAMP:
+   case PIPE_CAP_DEPTH_CLIP_DISABLE:
    case PIPE_CAP_INDEP_BLEND_ENABLE:
    case PIPE_CAP_INDEP_BLEND_FUNC:
    case PIPE_CAP_SHADER_STENCIL_EXPORT:
@@ -196,12 +197,13 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
    case PIPE_CAP_SEAMLESS_CUBE_MAP:
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
    case PIPE_CAP_SCALED_RESOLVE:
-   case PIPE_CAP_FRAGMENT_COLOR_CLAMP_CONTROL:
+   case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
    case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
    case PIPE_CAP_CONDITIONAL_RENDER:
    case PIPE_CAP_TEXTURE_BARRIER:
    case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
+   case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
       return 0;
 
    /* Features we can lie about (boolean caps). */
@@ -368,7 +370,7 @@ i915_fence_signalled(struct pipe_screen *screen,
 {
    struct i915_screen *is = i915_screen(screen);
 
-   return is->iws->fence_signalled(is->iws, fence) == 0;
+   return is->iws->fence_signalled(is->iws, fence) == 1;
 }
 
 static boolean
@@ -378,7 +380,7 @@ i915_fence_finish(struct pipe_screen *screen,
 {
    struct i915_screen *is = i915_screen(screen);
 
-   return is->iws->fence_finish(is->iws, fence) == 0;
+   return is->iws->fence_finish(is->iws, fence) == 1;
 }
 
 

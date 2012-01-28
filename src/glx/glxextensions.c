@@ -71,6 +71,13 @@ struct extension_info
 
 /* *INDENT-OFF* */
 static const struct extension_info known_glx_extensions[] = {
+#ifdef HAVE_XCB_GLX_CREATE_CONTEXT
+   { GLX(ARB_create_context),          VER(0,0), Y, N, N, N },
+   { GLX(ARB_create_context_profile),  VER(0,0), Y, N, N, N },
+#else
+   { GLX(ARB_create_context),          VER(0,0), N, N, N, N },
+   { GLX(ARB_create_context_profile),  VER(0,0), N, N, N, N },
+#endif
    { GLX(ARB_get_proc_address),        VER(1,4), Y, N, Y, N },
    { GLX(ARB_multisample),             VER(1,4), Y, Y, N, N },
    { GLX(ATI_pixel_format_float),      VER(0,0), N, N, N, N },
@@ -78,6 +85,11 @@ static const struct extension_info known_glx_extensions[] = {
    { GLX(EXT_visual_info),             VER(0,0), Y, Y, N, N },
    { GLX(EXT_visual_rating),           VER(0,0), Y, Y, N, N },
    { GLX(EXT_framebuffer_sRGB),        VER(0,0), Y, Y, N, N },
+#ifdef HAVE_XCB_GLX_CREATE_CONTEXT
+   { GLX(EXT_create_context_es2_profile), VER(0,0), Y, N, N, Y },
+#else
+   { GLX(EXT_create_context_es2_profile), VER(0,0), N, N, N, N },
+#endif
    { GLX(MESA_copy_sub_buffer),        VER(0,0), Y, N, N, N },
    { GLX(MESA_multithread_makecurrent),VER(0,0), Y, N, Y, N },
    { GLX(MESA_swap_control),           VER(0,0), Y, N, N, Y },
@@ -616,6 +628,16 @@ __glXCalculateUsableExtensions(struct glx_screen * psc,
          usable[i] = (client_glx_support[i] & client_glx_only[i])
             | (client_glx_support[i] & server_support[i]);
       }
+   }
+
+   /* This hack is necessary because GLX_ARB_create_context_profile depends on
+    * server support, but GLX_EXT_create_context_es2_profile is direct-only.
+    * Without this hack, it would be possible to advertise
+    * GLX_EXT_create_context_es2_profile without
+    * GLX_ARB_create_context_profile.  That would be a problem.
+    */
+   if (!IS_SET(server_support, ARB_create_context_profile_bit)) {
+      CLR_BIT(usable, EXT_create_context_es2_profile_bit);
    }
 
    psc->effectiveGLXexts = __glXGetStringFromTable(known_glx_extensions,

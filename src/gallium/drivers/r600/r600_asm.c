@@ -86,11 +86,15 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_DOT4_IEEE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_CUBE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_XOR_INT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHL_INT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHR_INT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ASHR_INT:
 			return 2;
 
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOV:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA_FLOOR:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA_GPR_INT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA_INT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FRACT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLOOR:
@@ -100,10 +104,13 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LOG_IEEE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_CLAMPED:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_IEEE:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_UINT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIPSQRT_CLAMPED:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIPSQRT_IEEE:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INT_TO_FLT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_UINT_TO_FLT:
+		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_UINT:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SIN:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_COS:
 		case V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RNDNE:
@@ -156,9 +163,12 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_DOT4:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_DOT4_IEEE:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_CUBE:
-		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INTERP_XY:
-		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INTERP_ZW:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INTERP_XY:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INTERP_ZW:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_XOR_INT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHL_INT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHR_INT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ASHR_INT:
 			return 2;
 
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOV:
@@ -176,11 +186,15 @@ static inline unsigned int r600_bytecode_get_num_operands(struct r600_bytecode *
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT_FLOOR:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INT_TO_FLT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_UINT_TO_FLT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_UINT:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SIN:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_COS:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RNDNE:
 		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_NOT_INT:
-		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INTERP_LOAD_P0:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INTERP_LOAD_P0:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_INT:
+		case EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_UINT:
 			return 1;
 		default: R600_ERR(
 			"Need instruction operand number for 0x%x.\n", alu->inst);
@@ -236,8 +250,18 @@ static struct r600_bytecode_tex *r600_bytecode_tex(void)
 	return tex;
 }
 
-void r600_bytecode_init(struct r600_bytecode *bc, enum chip_class chip_class)
+void r600_bytecode_init(struct r600_bytecode *bc, enum chip_class chip_class, enum radeon_family family)
 {
+	if ((chip_class == R600) && (family != CHIP_RV670))
+		bc->ar_handling = AR_HANDLE_RV6XX;
+	else
+		bc->ar_handling = AR_HANDLE_NORMAL;
+
+	if ((chip_class == R600) && (family != CHIP_RV670 && family != CHIP_RS780 &&
+					   family != CHIP_RS880))
+		bc->r6xx_nop_after_rel_dst = 1;
+	else
+		bc->r6xx_nop_after_rel_dst = 0;
 	LIST_INITHEAD(&bc->cf);
 	bc->chip_class = chip_class;
 }
@@ -249,8 +273,14 @@ static int r600_bytecode_add_cf(struct r600_bytecode *bc)
 	if (cf == NULL)
 		return -ENOMEM;
 	LIST_ADDTAIL(&cf->list, &bc->cf);
-	if (bc->cf_last)
+	if (bc->cf_last) {
 		cf->id = bc->cf_last->id + 2;
+		if (bc->cf_last->eg_alu_extended) {
+			/* take into account extended alu size */
+			cf->id += 2;
+			bc->ndw += 2;
+		}
+	}
 	bc->cf_last = cf;
 	bc->ncf++;
 	bc->ndw += 2;
@@ -428,7 +458,8 @@ static int is_alu_mova_inst(struct r600_bytecode *bc, struct r600_bytecode_alu *
 		return !alu->is_op3 && (
 			alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA ||
 			alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA_FLOOR ||
-			alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA_INT);
+			alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA_INT ||
+			alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA_GPR_INT);
 	case EVERGREEN:
 	case CAYMAN:
 	default:
@@ -437,95 +468,109 @@ static int is_alu_mova_inst(struct r600_bytecode *bc, struct r600_bytecode_alu *
 	}
 }
 
-/* alu instructions that can only execute on the vector unit */
+static int is_opcode_in_range(unsigned opcode, unsigned min, unsigned max)
+{
+	return min <= opcode && opcode <= max;
+}
+
+/* ALU instructions that can only execute on the vector unit:
+ *
+ * opcode ranges:
+ * R6xx/R7xx:
+ *   op3 : [0x08 - 0x0B]
+ *   op2 : 0x07, [0x15 - 0x18], [0x1B - 0x1D], [0x50 - 0x53], [0x7A - 0x7E]
+ *
+ * EVERGREEN:
+ *   op3: [0x04 - 0x11]
+ *   op2: [0xA0 - 0xE2]
+ */
 static int is_alu_vec_unit_inst(struct r600_bytecode *bc, struct r600_bytecode_alu *alu)
 {
 	switch (bc->chip_class) {
 	case R600:
 	case R700:
-		return is_alu_reduction_inst(bc, alu) ||
-			is_alu_mova_inst(bc, alu);
+		if (alu->is_op3)
+			return is_opcode_in_range(alu->inst,
+					V_SQ_ALU_WORD1_OP3_SQ_OP3_INST_MULADD_64,
+					V_SQ_ALU_WORD1_OP3_SQ_OP3_INST_MULADD_64_D2);
+		else
+			return (alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FREXP_64) ||
+					is_opcode_in_range(alu->inst,
+						V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA,
+						V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA_INT) ||
+					is_opcode_in_range(alu->inst,
+						V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MUL_64,
+						V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT32_TO_FLT64) ||
+					is_opcode_in_range(alu->inst,
+						V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_DOT4,
+						V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MAX4) ||
+					is_opcode_in_range(alu->inst,
+						V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LDEXP_64,
+						V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETGE_64);
+
 	case EVERGREEN:
+		if (alu->is_op3)
+			return is_opcode_in_range(alu->inst,
+					EG_V_SQ_ALU_WORD1_OP3_SQ_OP3_INST_BFE_UINT,
+					EG_V_SQ_ALU_WORD1_OP3_SQ_OP3_INST_LDS_IDX_OP);
+		else
+			return is_opcode_in_range(alu->inst,
+					EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_BFM_INT,
+					EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INTERP_LOAD_P20);
 	case CAYMAN:
 	default:
-		return is_alu_reduction_inst(bc, alu) ||
-			is_alu_mova_inst(bc, alu) ||
-			(alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT ||
-			 alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT_FLOOR ||
-			 alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INTERP_XY ||
-			 alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INTERP_ZW);
+		assert(0);
+		return 0;
 	}
 }
 
-/* alu instructions that can only execute on the trans unit */
+/* ALU instructions that can only execute on the trans unit:
+ *
+ * opcode ranges:
+ * R600:
+ *   op3: 0x0C
+ *   op2: [0x60 - 0x79]
+ *
+ * R700:
+ *   op3: 0x0C
+ *   op2: [0x60 - 0x6F], [0x73 - 0x79]
+ *
+ * EVERGREEN:
+ *   op3: 0x1F
+ *   op2: [0x81 - 0x9C]
+ */
 static int is_alu_trans_unit_inst(struct r600_bytecode *bc, struct r600_bytecode_alu *alu)
 {
+
 	switch (bc->chip_class) {
 	case R600:
-	case R700:
-		if (!alu->is_op3)
-			return alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ASHR_INT ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INT_TO_FLT ||
-			        alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_UINT ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_INT ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHL_INT ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHR_INT ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_INT ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_UINT ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULLO_INT ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULLO_UINT ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_INT ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_UINT ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_UINT_TO_FLT ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_COS ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_EXP_IEEE ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LOG_CLAMPED ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LOG_IEEE ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_CLAMPED ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_FF ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_IEEE ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIPSQRT_CLAMPED ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIPSQRT_FF ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIPSQRT_IEEE ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SIN ||
-				alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SQRT_IEEE;
+		if (alu->is_op3)
+			return alu->inst == V_SQ_ALU_WORD1_OP3_SQ_OP3_INST_MUL_LIT;
 		else
-			return alu->inst == V_SQ_ALU_WORD1_OP3_SQ_OP3_INST_MUL_LIT ||
-				alu->inst == V_SQ_ALU_WORD1_OP3_SQ_OP3_INST_MUL_LIT_D2 ||
-				alu->inst == V_SQ_ALU_WORD1_OP3_SQ_OP3_INST_MUL_LIT_M2 ||
-				alu->inst == V_SQ_ALU_WORD1_OP3_SQ_OP3_INST_MUL_LIT_M4;
+			return is_opcode_in_range(alu->inst,
+					V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA_GPR_INT,
+					V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_UINT);
+	case R700:
+		if (alu->is_op3)
+			return alu->inst == V_SQ_ALU_WORD1_OP3_SQ_OP3_INST_MUL_LIT;
+		else
+			return is_opcode_in_range(alu->inst,
+						V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA_GPR_INT,
+						V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_COS) ||
+					is_opcode_in_range(alu->inst,
+							V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULLO_INT,
+							V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_FLT_TO_UINT);
 	case EVERGREEN:
+		if (alu->is_op3)
+			return alu->inst == EG_V_SQ_ALU_WORD1_OP3_SQ_OP3_INST_MUL_LIT;
+		else
+			return is_opcode_in_range(alu->inst,
+					EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_EXP_IEEE,
+					EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_UINT_TO_FLT);
 	case CAYMAN:
 	default:
-		if (!alu->is_op3)
-			/* Note that FLT_TO_INT_* instructions are vector-only instructions
-			 * on Evergreen, despite what the documentation says. FLT_TO_INT
-			 * can do both vector and scalar. */
-			return alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_ASHR_INT ||
-			        alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INT_TO_FLT ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHL_INT ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHR_INT ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_INT ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_UINT ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULLO_INT ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULLO_UINT ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_INT ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_UINT ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_UINT_TO_FLT ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_COS ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_EXP_IEEE ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LOG_CLAMPED ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LOG_IEEE ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_CLAMPED ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_FF ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIP_IEEE ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIPSQRT_CLAMPED ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIPSQRT_FF ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_RECIPSQRT_IEEE ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SIN ||
-				alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_SQRT_IEEE;
-		else
-			return alu->inst == EG_V_SQ_ALU_WORD1_OP3_SQ_OP3_INST_MUL_LIT;
+		assert(0);
+		return 0;
 	}
 }
 
@@ -535,6 +580,19 @@ static int is_alu_any_unit_inst(struct r600_bytecode *bc, struct r600_bytecode_a
 	return !is_alu_vec_unit_inst(bc, alu) &&
 		!is_alu_trans_unit_inst(bc, alu);
 }
+
+static int is_nop_inst(struct r600_bytecode *bc, struct r600_bytecode_alu *alu)
+{
+	switch (bc->chip_class) {
+	case R600:
+	case R700:
+		return (!alu->is_op3 && alu->inst == V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_NOP);
+	case EVERGREEN:
+	case CAYMAN:
+	default:
+		return (!alu->is_op3 && alu->inst == EG_V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_NOP);
+	}
+}		
 
 static int assign_alu_units(struct r600_bytecode *bc, struct r600_bytecode_alu *alu_first,
 			    struct r600_bytecode_alu *assignment[5])
@@ -688,7 +746,7 @@ static int check_vector(struct r600_bytecode *bc, struct r600_bytecode_alu *alu,
 					return r;
 			}
 		} else if (is_cfile(sel)) {
-			r = reserve_cfile(bc, bs, sel, elem);
+			r = reserve_cfile(bc, bs, (alu->src[src].kc_bank<<16) + sel, elem);
 			if (r)
 				return r;
 		}
@@ -715,7 +773,7 @@ static int check_scalar(struct r600_bytecode *bc, struct r600_bytecode_alu *alu,
 				const_count++;
 		}
 		if (is_cfile(sel)) {
-			r = reserve_cfile(bc, bs, sel, elem);
+			r = reserve_cfile(bc, bs, (alu->src[src].kc_bank<<16) + sel, elem);
 			if (r)
 				return r;
 		}
@@ -883,7 +941,7 @@ static int replace_gpr_with_pv_ps(struct r600_bytecode *bc,
 	return 0;
 }
 
-void r600_bytecode_special_constants(u32 value, unsigned *sel, unsigned *neg)
+void r600_bytecode_special_constants(uint32_t value, unsigned *sel, unsigned *neg)
 {
 	switch(value) {
 	case 0:
@@ -1037,6 +1095,10 @@ static int merge_inst_groups(struct r600_bytecode *bc, struct r600_bytecode_alu 
 		alu = slots[i];
 		num_once_inst += is_alu_once_inst(bc, alu);
 
+		/* don't reschedule NOPs */
+		if (is_nop_inst(bc, alu))
+			return 0;
+
 		/* Let's check dst gpr. */
 		if (alu->dst.rel) {
 			if (have_mova)
@@ -1111,117 +1173,203 @@ static int merge_inst_groups(struct r600_bytecode *bc, struct r600_bytecode_alu 
 	return 0;
 }
 
-/* This code handles kcache lines as single blocks of 32 constants. We could
- * probably do slightly better by recognizing that we actually have two
- * consecutive lines of 16 constants, but the resulting code would also be
- * somewhat more complicated. */
-static int r600_bytecode_alloc_kcache_lines(struct r600_bytecode *bc, struct r600_bytecode_alu *alu, int type)
+/* we'll keep kcache sets sorted by bank & addr */
+static int r600_bytecode_alloc_kcache_line(struct r600_bytecode *bc,
+		struct r600_bytecode_kcache *kcache,
+		unsigned bank, unsigned line)
 {
-	struct r600_bytecode_kcache *kcache = bc->cf_last->kcache;
-	unsigned int required_lines;
-	unsigned int free_lines = 0;
-	unsigned int cache_line[3];
-	unsigned int count = 0;
-	unsigned int i, j;
-	int r;
+	int i, kcache_banks = bc->chip_class >= EVERGREEN ? 4 : 2;
 
-	/* Collect required cache lines. */
-	for (i = 0; i < 3; ++i) {
-		boolean found = false;
-		unsigned int line;
+	for (i = 0; i < kcache_banks; i++) {
+		if (kcache[i].mode) {
+			int d;
 
-		if (alu->src[i].sel < 512)
+			if (kcache[i].bank < bank)
+				continue;
+
+			if ((kcache[i].bank == bank && kcache[i].addr > line+1) ||
+					kcache[i].bank > bank) {
+				/* try to insert new line */
+				if (kcache[kcache_banks-1].mode) {
+					/* all sets are in use */
+					return -ENOMEM;
+				}
+
+				memmove(&kcache[i+1],&kcache[i], (kcache_banks-i-1)*sizeof(struct r600_bytecode_kcache));
+				kcache[i].mode = V_SQ_CF_KCACHE_LOCK_1;
+				kcache[i].bank = bank;
+				kcache[i].addr = line;
+				return 0;
+			}
+
+			d = line - kcache[i].addr;
+
+			if (d == -1) {
+				kcache[i].addr--;
+				if (kcache[i].mode == V_SQ_CF_KCACHE_LOCK_2) {
+					/* we are prepending the line to the current set,
+					 * discarding the existing second line,
+					 * so we'll have to insert line+2 after it */
+					line += 2;
+					continue;
+				} else if (kcache[i].mode == V_SQ_CF_KCACHE_LOCK_1) {
+					kcache[i].mode = V_SQ_CF_KCACHE_LOCK_2;
+					return 0;
+				} else {
+					/* V_SQ_CF_KCACHE_LOCK_LOOP_INDEX is not supported */
+					return -ENOMEM;
+				}
+			} else if (d == 1) {
+				kcache[i].mode = V_SQ_CF_KCACHE_LOCK_2;
+				return 0;
+			} else if (d == 0)
+				return 0;
+		} else { /* free kcache set - use it */
+			kcache[i].mode = V_SQ_CF_KCACHE_LOCK_1;
+			kcache[i].bank = bank;
+			kcache[i].addr = line;
+			return 0;
+		}
+	}
+	return -ENOMEM;
+}
+
+static int r600_bytecode_alloc_inst_kcache_lines(struct r600_bytecode *bc,
+		struct r600_bytecode_kcache *kcache,
+		struct r600_bytecode_alu *alu)
+{
+	int i, r;
+
+	for (i = 0; i < 3; i++) {
+		unsigned bank, line, sel = alu->src[i].sel;
+
+		if (sel < 512)
 			continue;
 
-		line = ((alu->src[i].sel - 512) / 32) * 2;
+		bank = alu->src[i].kc_bank;
+		line = (sel-512)>>4;
 
-		for (j = 0; j < count; ++j) {
-			if (cache_line[j] == line) {
-				found = true;
-				break;
-			}
-		}
-
-		if (!found)
-			cache_line[count++] = line;
-	}
-
-	/* This should never actually happen. */
-	if (count >= 3) return -ENOMEM;
-
-	for (i = 0; i < 2; ++i) {
-		if (kcache[i].mode == V_SQ_CF_KCACHE_NOP) {
-			++free_lines;
-		}
-	}
-
-	/* Filter lines pulled in by previous intructions. Note that this is
-	 * only for the required_lines count, we can't remove these from the
-	 * cache_line array since we may have to start a new ALU clause. */
-	for (i = 0, required_lines = count; i < count; ++i) {
-		for (j = 0; j < 2; ++j) {
-			if (kcache[j].mode == V_SQ_CF_KCACHE_LOCK_2 &&
-			    kcache[j].addr == cache_line[i]) {
-				--required_lines;
-				break;
-			}
-		}
-	}
-
-	/* Start a new ALU clause if needed. */
-	if (required_lines > free_lines) {
-		if ((r = r600_bytecode_add_cf(bc))) {
+		if ((r = r600_bytecode_alloc_kcache_line(bc, kcache, bank, line)))
 			return r;
-		}
-		bc->cf_last->inst = type;
-		kcache = bc->cf_last->kcache;
 	}
+	return 0;
+}
 
-	/* Setup the kcache lines. */
-	for (i = 0; i < count; ++i) {
-		boolean found = false;
-
-		for (j = 0; j < 2; ++j) {
-			if (kcache[j].mode == V_SQ_CF_KCACHE_LOCK_2 &&
-			    kcache[j].addr == cache_line[i]) {
-				found = true;
-				break;
-			}
-		}
-
-		if (found) continue;
-
-		for (j = 0; j < 2; ++j) {
-			if (kcache[j].mode == V_SQ_CF_KCACHE_NOP) {
-				kcache[j].bank = 0;
-				kcache[j].addr = cache_line[i];
-				kcache[j].mode = V_SQ_CF_KCACHE_LOCK_2;
-				break;
-			}
-		}
-	}
+static int r600_bytecode_assign_kcache_banks(struct r600_bytecode *bc,
+		struct r600_bytecode_alu *alu,
+		struct r600_bytecode_kcache * kcache)
+{
+	int i, j;
 
 	/* Alter the src operands to refer to the kcache. */
 	for (i = 0; i < 3; ++i) {
 		static const unsigned int base[] = {128, 160, 256, 288};
-		unsigned int line;
+		unsigned int line, sel = alu->src[i].sel, found = 0;
 
-		if (alu->src[i].sel < 512)
+		if (sel < 512)
 			continue;
 
-		alu->src[i].sel -= 512;
-		line = (alu->src[i].sel / 32) * 2;
+		sel -= 512;
+		line = sel>>4;
 
-		for (j = 0; j < 2; ++j) {
-			if (kcache[j].mode == V_SQ_CF_KCACHE_LOCK_2 &&
-			    kcache[j].addr == line) {
-				alu->src[i].sel &= 0x1f;
-				alu->src[i].sel += base[j];
-				break;
+		for (j = 0; j < 4 && !found; ++j) {
+			switch (kcache[j].mode) {
+			case V_SQ_CF_KCACHE_NOP:
+			case V_SQ_CF_KCACHE_LOCK_LOOP_INDEX:
+				R600_ERR("unexpected kcache line mode\n");
+				return -ENOMEM;
+			default:
+				if (kcache[j].bank == alu->src[i].kc_bank &&
+						kcache[j].addr <= line &&
+						line < kcache[j].addr + kcache[j].mode) {
+					alu->src[i].sel = sel - (kcache[j].addr<<4);
+					alu->src[i].sel += base[j];
+					found=1;
+			    }
 			}
 		}
 	}
+	return 0;
+}
 
+static int r600_bytecode_alloc_kcache_lines(struct r600_bytecode *bc, struct r600_bytecode_alu *alu, int type)
+{
+	struct r600_bytecode_kcache kcache_sets[4];
+	struct r600_bytecode_kcache *kcache = kcache_sets;
+	int r;
+
+	memcpy(kcache, bc->cf_last->kcache, 4 * sizeof(struct r600_bytecode_kcache));
+
+	if ((r = r600_bytecode_alloc_inst_kcache_lines(bc, kcache, alu))) {
+		/* can't alloc, need to start new clause */
+		if ((r = r600_bytecode_add_cf(bc))) {
+			return r;
+		}
+		bc->cf_last->inst = type;
+
+		/* retry with the new clause */
+		kcache = bc->cf_last->kcache;
+		if ((r = r600_bytecode_alloc_inst_kcache_lines(bc, kcache, alu))) {
+			/* can't alloc again- should never happen */
+			return r;
+		}
+	} else {
+		/* update kcache sets */
+		memcpy(bc->cf_last->kcache, kcache, 4 * sizeof(struct r600_bytecode_kcache));
+	}
+
+	/* if we actually used more than 2 kcache sets - use ALU_EXTENDED on eg+ */
+	if (kcache[2].mode != V_SQ_CF_KCACHE_NOP) {
+		if (bc->chip_class < EVERGREEN)
+			return -ENOMEM;
+		bc->cf_last->eg_alu_extended = 1;
+	}
+
+	return 0;
+}
+
+static int insert_nop_r6xx(struct r600_bytecode *bc)
+{
+	struct r600_bytecode_alu alu;
+	int r, i;
+
+	for (i = 0; i < 4; i++) {
+		memset(&alu, 0, sizeof(alu));
+		alu.inst = V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_NOP;
+		alu.src[0].chan = i;
+		alu.dst.chan = i;
+		alu.last = (i == 3);
+		r = r600_bytecode_add_alu(bc, &alu);
+		if (r)
+			return r;
+	}
+	return 0;
+}
+
+/* load AR register from gpr (bc->ar_reg) with MOVA_INT */
+static int load_ar_r6xx(struct r600_bytecode *bc)
+{
+	struct r600_bytecode_alu alu;
+	int r;
+
+	if (bc->ar_loaded)
+		return 0;
+
+	/* hack to avoid making MOVA the last instruction in the clause */
+	if ((bc->cf_last->ndw>>1) >= 110)
+		bc->force_add_cf = 1;
+
+	memset(&alu, 0, sizeof(alu));
+	alu.inst = V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA_GPR_INT;
+	alu.src[0].sel = bc->ar_reg;
+	alu.last = 1;
+	alu.index_mode = INDEX_MODE_LOOP;
+	r = r600_bytecode_add_alu(bc, &alu);
+	if (r)
+		return r;
+
+	/* no requirement to set uses waterfall on MOVA_GPR_INT */
+	bc->ar_loaded = 1;
 	return 0;
 }
 
@@ -1230,6 +1378,9 @@ static int load_ar(struct r600_bytecode *bc)
 {
 	struct r600_bytecode_alu alu;
 	int r;
+
+	if (bc->ar_handling)
+		return load_ar_r6xx(bc);
 
 	if (bc->ar_loaded)
 		return 0;
@@ -1365,6 +1516,10 @@ int r600_bytecode_add_alu_type(struct r600_bytecode *bc, const struct r600_bytec
 		bc->cf_last->prev_bs_head = bc->cf_last->curr_bs_head;
 		bc->cf_last->curr_bs_head = NULL;
 	}
+
+	if (nalu->dst.rel && bc->r6xx_nop_after_rel_dst)
+		insert_nop_r6xx(bc);
+
 	return 0;
 }
 
@@ -1588,6 +1743,7 @@ static int r600_bytecode_alu_build(struct r600_bytecode *bc, struct r600_bytecod
 				S_SQ_ALU_WORD0_SRC1_REL(alu->src[1].rel) |
 				S_SQ_ALU_WORD0_SRC1_CHAN(alu->src[1].chan) |
 				S_SQ_ALU_WORD0_SRC1_NEG(alu->src[1].neg) |
+				S_SQ_ALU_WORD0_INDEX_MODE(alu->index_mode) |
 				S_SQ_ALU_WORD0_LAST(alu->last);
 
 	if (alu->is_op3) {
@@ -1837,6 +1993,8 @@ int r600_bytecode_build(struct r600_bytecode *bc)
 					if (r)
 						return r;
 					r600_bytecode_alu_adjust_literals(bc, alu, literal, nliteral);
+					r600_bytecode_assign_kcache_banks(bc, alu, cf->kcache);
+
 					switch(bc->chip_class) {
 					case EVERGREEN: /* eg alu is same encoding as r700 */
 					case CAYMAN:
@@ -1932,6 +2090,8 @@ int r600_bytecode_build(struct r600_bytecode *bc)
 					if (r)
 						return r;
 					r600_bytecode_alu_adjust_literals(bc, alu, literal, nliteral);
+					r600_bytecode_assign_kcache_banks(bc, alu, cf->kcache);
+
 					switch(bc->chip_class) {
 					case R600:
 						r = r600_bytecode_alu_build(bc, alu, addr);
@@ -2072,6 +2232,19 @@ void r600_bytecode_dump(struct r600_bytecode *bc)
 			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP_AFTER:
 			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_POP2_AFTER:
 			case EG_V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE:
+				if (cf->eg_alu_extended) {
+					fprintf(stderr, "%04d %08X ALU_EXT0 ", id, bc->bytecode[id]);
+					fprintf(stderr, "KCACHE_BANK2:%X ", cf->kcache[2].bank);
+					fprintf(stderr, "KCACHE_BANK3:%X ", cf->kcache[3].bank);
+					fprintf(stderr, "KCACHE_MODE2:%X\n", cf->kcache[2].mode);
+					id++;
+					fprintf(stderr, "%04d %08X ALU_EXT1 ", id, bc->bytecode[id]);
+					fprintf(stderr, "KCACHE_MODE3:%X ", cf->kcache[3].mode);
+					fprintf(stderr, "KCACHE_ADDR2:%X ", cf->kcache[2].addr);
+					fprintf(stderr, "KCACHE_ADDR3:%X\n", cf->kcache[3].addr);
+					id++;
+				}
+
 				fprintf(stderr, "%04d %08X ALU ", id, bc->bytecode[id]);
 				fprintf(stderr, "ADDR:%d ", cf->addr);
 				fprintf(stderr, "KCACHE_MODE0:%X ", cf->kcache[0].mode);
@@ -2275,7 +2448,8 @@ void r600_bytecode_dump(struct r600_bytecode *bc)
 			fprintf(stderr, "SRC1(SEL:%d ", alu->src[1].sel);
 			fprintf(stderr, "REL:%d ", alu->src[1].rel);
 			fprintf(stderr, "CHAN:%d ", alu->src[1].chan);
-			fprintf(stderr, "NEG:%d) ", alu->src[1].neg);
+			fprintf(stderr, "NEG:%d ", alu->src[1].neg);
+			fprintf(stderr, "IM:%d) ", alu->index_mode);
 			fprintf(stderr, "LAST:%d)\n", alu->last);
 			id++;
 			fprintf(stderr, "%04d %08X %c ", id, bc->bytecode[id], alu->last ? '*' : ' ');
@@ -2528,7 +2702,7 @@ out_unknown:
 	R600_ERR("unsupported vertex format %s\n", util_format_name(pformat));
 }
 
-int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, struct r600_vertex_element *ve)
+int r600_vertex_elements_build_fetch_shader(struct r600_context *rctx, struct r600_vertex_element *ve)
 {
 	static int dump_shaders = -1;
 
@@ -2538,7 +2712,7 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 	const struct util_format_description *desc;
 	unsigned fetch_resource_start = rctx->chip_class >= EVERGREEN ? 0 : 160;
 	unsigned format, num_format, format_comp, endian;
-	u32 *bytecode;
+	uint32_t *bytecode;
 	int i, r;
 
 	/* Vertex element offsets need special handling. If the offset is
@@ -2554,7 +2728,7 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 	}
 
 	memset(&bc, 0, sizeof(bc));
-	r600_bytecode_init(&bc, rctx->chip_class);
+	r600_bytecode_init(&bc, rctx->chip_class, rctx->family);
 
 	for (i = 0; i < ve->count; i++) {
 		if (elements[i].instance_divisor > 1) {
@@ -2644,7 +2818,7 @@ int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, stru
 		return -ENOMEM;
 	}
 
-	bytecode = rctx->ws->buffer_map(ve->fetch_shader->buf, rctx->ctx.cs, PIPE_TRANSFER_WRITE);
+	bytecode = rctx->ws->buffer_map(ve->fetch_shader->buf, rctx->cs, PIPE_TRANSFER_WRITE);
 	if (bytecode == NULL) {
 		r600_bytecode_clear(&bc);
 		pipe_resource_reference((struct pipe_resource**)&ve->fetch_shader, NULL);

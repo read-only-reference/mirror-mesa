@@ -51,9 +51,9 @@
 /*
  * pipe_context
  */
-static struct r600_fence *r600_create_fence(struct r600_pipe_context *ctx)
+static struct r600_fence *r600_create_fence(struct r600_context *rctx)
 {
-	struct r600_screen *rscreen = ctx->screen;
+	struct r600_screen *rscreen = rctx->screen;
 	struct r600_fence *fence = NULL;
 
 	pipe_mutex_lock(rscreen->fences.mutex);
@@ -67,8 +67,8 @@ static struct r600_fence *r600_create_fence(struct r600_pipe_context *ctx)
 			R600_ERR("r600: failed to create bo for fence objects\n");
 			goto out;
 		}
-		rscreen->fences.data = ctx->ws->buffer_map(rscreen->fences.bo->buf,
-							   ctx->ctx.cs,
+		rscreen->fences.data = rctx->ws->buffer_map(rscreen->fences.bo->buf,
+							   rctx->cs,
 							   PIPE_TRANSFER_READ_WRITE);
 	}
 
@@ -115,7 +115,7 @@ static struct r600_fence *r600_create_fence(struct r600_pipe_context *ctx)
 	pipe_reference_init(&fence->reference, 1);
 
 	rscreen->fences.data[fence->index] = 0;
-	r600_context_emit_fence(&ctx->ctx, rscreen->fences.bo, fence->index, 1);
+	r600_context_emit_fence(rctx, rscreen->fences.bo, fence->index, 1);
 out:
 	pipe_mutex_unlock(rscreen->fences.mutex);
 	return fence;
@@ -125,7 +125,7 @@ out:
 void r600_flush(struct pipe_context *ctx, struct pipe_fence_handle **fence,
 		unsigned flags)
 {
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)ctx;
+	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct r600_fence **rfence = (struct r600_fence**)fence;
 	struct pipe_query *render_cond = NULL;
 	unsigned render_cond_mode = 0;
@@ -140,7 +140,7 @@ void r600_flush(struct pipe_context *ctx, struct pipe_fence_handle **fence,
 		ctx->render_condition(ctx, NULL, 0);
 	}
 
-	r600_context_flush(&rctx->ctx, flags);
+	r600_context_flush(rctx, flags);
 
 	/* Re-enable render condition. */
 	if (render_cond) {
@@ -180,12 +180,12 @@ static void r600_update_num_contexts(struct r600_screen *rscreen, int diff)
 
 static void r600_destroy_context(struct pipe_context *context)
 {
-	struct r600_pipe_context *rctx = (struct r600_pipe_context *)context;
+	struct r600_context *rctx = (struct r600_context *)context;
 
 	rctx->context.delete_depth_stencil_alpha_state(&rctx->context, rctx->custom_dsa_flush);
 	util_unreference_framebuffer_state(&rctx->framebuffer);
 
-	r600_context_fini(&rctx->ctx);
+	r600_context_fini(rctx);
 
 	util_blitter_destroy(rctx->blitter);
 
@@ -203,7 +203,7 @@ static void r600_destroy_context(struct pipe_context *context)
 
 static struct pipe_context *r600_create_context(struct pipe_screen *screen, void *priv)
 {
-	struct r600_pipe_context *rctx = CALLOC_STRUCT(r600_pipe_context);
+	struct r600_context *rctx = CALLOC_STRUCT(r600_context);
 	struct r600_screen* rscreen = (struct r600_screen *)screen;
 
 	if (rctx == NULL)
@@ -232,11 +232,13 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	rctx->context.create_video_decoder = vl_create_decoder;
 	rctx->context.create_video_buffer = vl_video_buffer_create;
 
+	r600_init_common_atoms(rctx);
+
 	switch (rctx->chip_class) {
 	case R600:
 	case R700:
 		r600_init_state_functions(rctx);
-		if (r600_context_init(&rctx->ctx, rctx->screen)) {
+		if (r600_context_init(rctx)) {
 			r600_destroy_context(&rctx->context);
 			return NULL;
 		}
@@ -246,7 +248,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	case EVERGREEN:
 	case CAYMAN:
 		evergreen_init_state_functions(rctx);
-		if (evergreen_context_init(&rctx->ctx, rctx->screen)) {
+		if (evergreen_context_init(rctx)) {
 			r600_destroy_context(&rctx->context);
 			return NULL;
 		}
@@ -259,9 +261,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		return NULL;
 	}
 
-	rctx->ctx.pipe = &rctx->context;
-	rctx->ctx.flush = r600_flush_from_winsys;
-	rctx->ws->cs_set_flush_callback(rctx->ctx.cs, r600_flush_from_winsys, rctx);
+	rctx->ws->cs_set_flush_callback(rctx->cs, r600_flush_from_winsys, rctx);
 
 	util_slab_create(&rctx->pool_transfers,
 			 sizeof(struct pipe_transfer), 64,
@@ -284,7 +284,9 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		return NULL;
 	}
 
-	r600_get_backend_mask(&rctx->ctx); /* this emits commands and must be last */
+	LIST_INITHEAD(&rctx->dirty_states);
+
+	r600_get_backend_mask(rctx); /* this emits commands and must be last */
 
 	return &rctx->context;
 }
@@ -353,7 +355,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
 	case PIPE_CAP_TEXTURE_SWIZZLE:
 	case PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE:
-	case PIPE_CAP_DEPTH_CLAMP:
+	case PIPE_CAP_DEPTH_CLIP_DISABLE:
 	case PIPE_CAP_SHADER_STENCIL_EXPORT:
 	case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
 	case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
@@ -361,12 +363,14 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
 	case PIPE_CAP_SM3:
 	case PIPE_CAP_SEAMLESS_CUBE_MAP:
-	case PIPE_CAP_FRAGMENT_COLOR_CLAMP_CONTROL:
 	case PIPE_CAP_PRIMITIVE_RESTART:
 	case PIPE_CAP_CONDITIONAL_RENDER:
 	case PIPE_CAP_TEXTURE_BARRIER:
-	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+	case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
 		return 1;
+
+	case PIPE_CAP_GLSL_FEATURE_LEVEL:
+		return debug_get_bool_option("R600_GLSL130", FALSE) ? 130 : 120;
 
 	/* Supported except the original R600. */
 	case PIPE_CAP_INDEP_BLEND_ENABLE:
@@ -385,11 +389,15 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_SCALED_RESOLVE:
 	case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
 	case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
+	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
+	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 		return 0;
 
 	/* Stream output. */
 	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
 		return debug_get_bool_option("R600_STREAMOUT", FALSE) ? 4 : 0;
+	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+		return debug_get_bool_option("R600_STREAMOUT", FALSE) ? 1 : 0;
 	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
 	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
 		return 16*4;
@@ -456,7 +464,6 @@ static float r600_get_paramf(struct pipe_screen* pscreen,
 
 static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enum pipe_shader_cap param)
 {
-	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
 	switch(shader)
 	{
 	case PIPE_SHADER_FRAGMENT:
@@ -492,7 +499,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_MAX_CONSTS:
 		return R600_MAX_CONST_BUFFER_SIZE;
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
-		return R600_MAX_CONST_BUFFERS;
+		return R600_MAX_CONST_BUFFERS-1;
 	case PIPE_SHADER_CAP_MAX_PREDS:
 		return 0; /* FIXME */
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
@@ -505,8 +512,6 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_SUBROUTINES:
 		return 0;
 	case PIPE_SHADER_CAP_INTEGERS:
-		if (rscreen->chip_class == EVERGREEN)
-			return 1;
 		return 0;
 	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
 		return 16;
@@ -528,8 +533,8 @@ static int r600_get_video_param(struct pipe_screen *screen,
 	case PIPE_VIDEO_CAP_MAX_WIDTH:
 	case PIPE_VIDEO_CAP_MAX_HEIGHT:
 		return vl_video_buffer_max_size(screen);
-	case PIPE_VIDEO_CAP_NUM_BUFFERS_DESIRED:
-		return vl_num_buffers_desired(screen, profile);
+	case PIPE_VIDEO_CAP_PREFERED_FORMAT:
+		return PIPE_FORMAT_NV12;
 	default:
 		return 0;
 	}

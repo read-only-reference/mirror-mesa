@@ -34,6 +34,8 @@ nvfx_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_SM3:
 		/* TODO: >= nv4x support Shader Model 3.0 */
 		return 0;
+	case PIPE_CAP_GLSL_FEATURE_LEVEL:
+		return 120;
 	case PIPE_CAP_ANISOTROPIC_FILTER:
 		return 1;
 	case PIPE_CAP_POINT_SPRITE:
@@ -72,15 +74,17 @@ nvfx_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
+	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 		return 1;
-	case PIPE_CAP_DEPTH_CLAMP:
+	case PIPE_CAP_DEPTH_CLIP_DISABLE:
 		return 0; // TODO: implement depth clamp
 	case PIPE_CAP_PRIMITIVE_RESTART:
 		return 0; // TODO: implement primitive restart
 	case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
 	case PIPE_CAP_TGSI_INSTANCEID:
 	case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
-	case PIPE_CAP_FRAGMENT_COLOR_CLAMP_CONTROL:
+	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
+	case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
 	case PIPE_CAP_SEAMLESS_CUBE_MAP:
 	case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
 	case PIPE_CAP_SHADER_STENCIL_EXPORT:
@@ -88,8 +92,12 @@ nvfx_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_TEXEL_OFFSET:
 	case PIPE_CAP_CONDITIONAL_RENDER:
 	case PIPE_CAP_TEXTURE_BARRIER:
-                return 0;
 	case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
+	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
+	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
+	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
+	case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
+	case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
                 return 0;
 	default:
 		NOUVEAU_ERR("Warning: unknown PIPE_CAP %d\n", param);
@@ -226,8 +234,8 @@ nvfx_screen_get_video_param(struct pipe_screen *screen,
 	case PIPE_VIDEO_CAP_MAX_WIDTH:
 	case PIPE_VIDEO_CAP_MAX_HEIGHT:
 		return vl_video_buffer_max_size(screen);
-	case PIPE_VIDEO_CAP_NUM_BUFFERS_DESIRED:
-		return vl_num_buffers_desired(screen, profile);
+	case PIPE_VIDEO_CAP_PREFERED_FORMAT:
+		return PIPE_FORMAT_NV12;
 	default:
 		return 0;
 	}

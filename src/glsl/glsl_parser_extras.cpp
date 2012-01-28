@@ -114,6 +114,9 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *ctx,
    }
 
    this->supported_version_string = supported;
+
+   if (ctx->Const.ForceGLSLExtensionsWarn)
+      _mesa_glsl_process_extension("all", NULL, "warn", NULL, this);
 }
 
 const char *
@@ -626,6 +629,7 @@ ast_expression::ast_expression(int oper,
    this->subexpressions[0] = ex0;
    this->subexpressions[1] = ex1;
    this->subexpressions[2] = ex2;
+   this->non_lvalue_description = NULL;
 }
 
 

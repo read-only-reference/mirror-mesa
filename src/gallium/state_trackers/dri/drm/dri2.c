@@ -316,6 +316,9 @@ dri2_allocate_buffer(__DRIscreen *sPriv,
 
    switch (format) {
       case 32:
+         pf = PIPE_FORMAT_B8G8R8A8_UNORM;
+         break;
+      case 24:
          pf = PIPE_FORMAT_B8G8R8X8_UNORM;
          break;
       case 16:
@@ -626,7 +629,7 @@ dri2_destroy_image(__DRIimage *img)
 }
 
 static struct __DRIimageExtensionRec dri2ImageExtension = {
-    { __DRI_IMAGE, __DRI_IMAGE_VERSION },
+    { __DRI_IMAGE, 1 },
     dri2_create_image_from_name,
     dri2_create_image_from_renderbuffer,
     dri2_destroy_image,

@@ -313,7 +313,9 @@ vec4_visitor::emit_math(opcode opcode, dst_reg dst, src_reg src)
       return;
    }
 
-   if (intel->gen >= 6) {
+   if (intel->gen >= 7) {
+      emit(opcode, dst, src);
+   } else if (intel->gen == 6) {
       return emit_math1_gen6(opcode, dst, src);
    } else {
       return emit_math1_gen4(opcode, dst, src);
@@ -380,7 +382,9 @@ vec4_visitor::emit_math(enum opcode opcode,
       return;
    }
 
-   if (intel->gen >= 6) {
+   if (intel->gen >= 7) {
+      emit(opcode, dst, src0, src1);
+   } else if (intel->gen == 6) {
       return emit_math2_gen6(opcode, dst, src0, src1);
    } else {
       return emit_math2_gen4(opcode, dst, src0, src1);
@@ -1285,16 +1289,26 @@ vec4_visitor::visit(ir_expression *ir)
       break;
 
    case ir_binop_min:
-      emit(CMP(result_dst, op[0], op[1], BRW_CONDITIONAL_L));
+      if (intel->gen >= 6) {
+	 inst = emit(BRW_OPCODE_SEL, result_dst, op[0], op[1]);
+	 inst->conditional_mod = BRW_CONDITIONAL_L;
+      } else {
+	 emit(CMP(result_dst, op[0], op[1], BRW_CONDITIONAL_L));
 
-      inst = emit(BRW_OPCODE_SEL, result_dst, op[0], op[1]);
-      inst->predicate = BRW_PREDICATE_NORMAL;
+	 inst = emit(BRW_OPCODE_SEL, result_dst, op[0], op[1]);
+	 inst->predicate = BRW_PREDICATE_NORMAL;
+      }
       break;
    case ir_binop_max:
-      emit(CMP(result_dst, op[0], op[1], BRW_CONDITIONAL_G));
+      if (intel->gen >= 6) {
+	 inst = emit(BRW_OPCODE_SEL, result_dst, op[0], op[1]);
+	 inst->conditional_mod = BRW_CONDITIONAL_G;
+      } else {
+	 emit(CMP(result_dst, op[0], op[1], BRW_CONDITIONAL_G));
 
-      inst = emit(BRW_OPCODE_SEL, result_dst, op[0], op[1]);
-      inst->predicate = BRW_PREDICATE_NORMAL;
+	 inst = emit(BRW_OPCODE_SEL, result_dst, op[0], op[1]);
+	 inst->predicate = BRW_PREDICATE_NORMAL;
+      }
       break;
 
    case ir_binop_pow:
@@ -1532,9 +1546,6 @@ vec4_visitor::emit_block_move(dst_reg *dst, src_reg *src,
 
    dst->writemask = (1 << type->vector_elements) - 1;
 
-   /* Do we need to worry about swizzling a swizzle? */
-   assert(src->swizzle == BRW_SWIZZLE_NOOP
-	  || src->swizzle == swizzle_for_size(type->vector_elements));
    src->swizzle = swizzle_for_size(type->vector_elements);
 
    vec4_instruction *inst = emit(MOV(*dst, *src));
@@ -1616,6 +1627,15 @@ vec4_visitor::visit(ir_assignment *ir)
       if (ir->condition) {
 	 emit_bool_to_cond_code(ir->condition, &predicate);
       }
+
+      /* emit_block_move doesn't account for swizzles in the source register.
+       * This should be ok, since the source register is a structure or an
+       * array, and those can't be swizzled.  But double-check to be sure.
+       */
+      assert(src.swizzle ==
+             (ir->rhs->type->is_matrix()
+              ? swizzle_for_size(ir->rhs->type->vector_elements)
+              : BRW_SWIZZLE_NOOP));
 
       emit_block_move(&dst, &src, ir->rhs->type, predicate);
       return;
@@ -1701,21 +1721,44 @@ vec4_visitor::emit_constant_values(dst_reg *dst, ir_constant *ir)
 
    if (ir->type->is_matrix()) {
       for (int i = 0; i < ir->type->matrix_columns; i++) {
+	 float *vec = &ir->value.f[i * ir->type->vector_elements];
+
 	 for (int j = 0; j < ir->type->vector_elements; j++) {
 	    dst->writemask = 1 << j;
 	    dst->type = BRW_REGISTER_TYPE_F;
 
-	    emit(MOV(*dst,
-		     src_reg(ir->value.f[i * ir->type->vector_elements + j])));
+	    emit(MOV(*dst, src_reg(vec[j])));
 	 }
 	 dst->reg_offset++;
       }
       return;
    }
 
+   int remaining_writemask = (1 << ir->type->vector_elements) - 1;
+
    for (int i = 0; i < ir->type->vector_elements; i++) {
+      if (!(remaining_writemask & (1 << i)))
+	 continue;
+
       dst->writemask = 1 << i;
       dst->type = brw_type_for_base_type(ir->type);
+
+      /* Find other components that match the one we're about to
+       * write.  Emits fewer instructions for things like vec4(0.5,
+       * 1.5, 1.5, 1.5).
+       */
+      for (int j = i + 1; j < ir->type->vector_elements; j++) {
+	 if (ir->type->base_type == GLSL_TYPE_BOOL) {
+	    if (ir->value.b[i] == ir->value.b[j])
+	       dst->writemask |= (1 << j);
+	 } else {
+	    /* u, i, and f storage all line up, so no need for a
+	     * switch case for comparing each type.
+	     */
+	    if (ir->value.u[i] == ir->value.u[j])
+	       dst->writemask |= (1 << j);
+	 }
+      }
 
       switch (ir->type->base_type) {
       case GLSL_TYPE_FLOAT:
@@ -1734,6 +1777,8 @@ vec4_visitor::emit_constant_values(dst_reg *dst, ir_constant *ir)
 	 assert(!"Non-float/uint/int/bool constant");
 	 break;
       }
+
+      remaining_writemask &= ~dst->writemask;
    }
    dst->reg_offset++;
 }
@@ -1762,7 +1807,7 @@ vec4_visitor::visit(ir_texture *ir)
    /* Should be lowered by do_lower_texture_projection */
    assert(!ir->projector);
 
-   vec4_instruction *inst;
+   vec4_instruction *inst = NULL;
    switch (ir->op) {
    case ir_tex:
    case ir_txl:
@@ -1786,7 +1831,7 @@ vec4_visitor::visit(ir_texture *ir)
    inst->base_mrf = 2;
    inst->mlen = inst->header_present + 1; /* always at least one */
    inst->sampler = sampler;
-   inst->dst = dst_reg(this, glsl_type::get_instance(ir->type->base_type,4,1));
+   inst->dst = dst_reg(this, ir->type);
    inst->shadow_compare = ir->shadow_comparitor != NULL;
 
    if (ir->offset != NULL)
@@ -2261,11 +2306,6 @@ vec4_visitor::emit_urb_writes()
        */
       inst->offset = (max_usable_mrf - base_mrf) / 2;
    }
-
-   if (intel->gen == 6)
-      c->prog_data.urb_entry_size = ALIGN(c->vue_map.num_slots, 8) / 8;
-   else
-      c->prog_data.urb_entry_size = ALIGN(c->vue_map.num_slots, 4) / 4;
 }
 
 src_reg
@@ -2575,11 +2615,9 @@ vec4_visitor::vec4_visitor(struct brw_vs_compile *c,
    this->virtual_grf_array_size = 0;
    this->live_intervals_valid = false;
 
-   this->uniforms = 0;
+   this->max_grf = intel->gen >= 7 ? GEN7_MRF_HACK_START : BRW_MAX_GRF;
 
-   this->variable_ht = hash_table_ctor(0,
-				       hash_table_pointer_hash,
-				       hash_table_pointer_compare);
+   this->uniforms = 0;
 }
 
 vec4_visitor::~vec4_visitor()

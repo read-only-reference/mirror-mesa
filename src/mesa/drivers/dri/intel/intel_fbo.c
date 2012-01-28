@@ -59,15 +59,6 @@
 static struct gl_renderbuffer *
 intel_new_renderbuffer(struct gl_context * ctx, GLuint name);
 
-static bool
-intel_renderbuffer_update_wrapper(struct intel_context *intel,
-                                  struct intel_renderbuffer *irb,
-                                  struct intel_mipmap_tree *mt,
-                                  uint32_t level,
-                                  uint32_t layer,
-                                  gl_format format,
-                                  GLenum internal_format);
-
 bool
 intel_framebuffer_has_hiz(struct gl_framebuffer *fb)
 {
@@ -128,9 +119,19 @@ intel_map_renderbuffer(struct gl_context *ctx,
 		       GLint *out_stride)
 {
    struct intel_context *intel = intel_context(ctx);
+   struct swrast_renderbuffer *srb = (struct swrast_renderbuffer *)rb;
    struct intel_renderbuffer *irb = intel_renderbuffer(rb);
    void *map;
    int stride;
+
+   if (srb->Buffer) {
+      /* this is a malloc'd renderbuffer (accum buffer), not an irb */
+      GLint bpp = _mesa_get_format_bytes(rb->Format);
+      GLint rowStride = srb->RowStride;
+      *out_map = (GLubyte *) srb->Buffer + y * rowStride + x * bpp;
+      *out_stride = rowStride;
+      return;
+   }
 
    /* We sometimes get called with this by our intel_span.c usage. */
    if (!irb->mt) {
@@ -171,25 +172,19 @@ intel_unmap_renderbuffer(struct gl_context *ctx,
 			 struct gl_renderbuffer *rb)
 {
    struct intel_context *intel = intel_context(ctx);
+   struct swrast_renderbuffer *srb = (struct swrast_renderbuffer *)rb;
    struct intel_renderbuffer *irb = intel_renderbuffer(rb);
 
    DBG("%s: rb %d (%s)\n", __FUNCTION__,
        rb->Name, _mesa_get_format_name(rb->Format));
 
-   intel_miptree_unmap(intel, irb->mt, irb->mt_level, irb->mt_layer);
-}
+   if (srb->Buffer) {
+      /* this is a malloc'd renderbuffer (accum buffer) */
+      /* nothing to do */
+      return;
+   }
 
-/**
- * Return a pointer to a specific pixel in a renderbuffer.
- */
-static void *
-intel_get_pointer(struct gl_context * ctx, struct gl_renderbuffer *rb,
-                  GLint x, GLint y)
-{
-   /* By returning NULL we force all software rendering to go through
-    * the span routines.
-    */
-   return NULL;
+   intel_miptree_unmap(intel, irb->mt, irb->mt_level, irb->mt_layer);
 }
 
 
@@ -235,7 +230,6 @@ intel_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffer
    rb->Width = width;
    rb->Height = height;
    rb->_BaseFormat = _mesa_base_fbo_format(ctx, internalFormat);
-   rb->DataType = intel_mesa_format_to_rb_datatype(rb->Format);
 
    intel_miptree_release(&irb->mt);
 
@@ -301,7 +295,6 @@ intel_image_target_renderbuffer_storage(struct gl_context *ctx,
    rb->Width = image->region->width;
    rb->Height = image->region->height;
    rb->Format = image->format;
-   rb->DataType = image->data_type;
    rb->_BaseFormat = _mesa_base_fbo_format(&intel->ctx,
 					   image->internal_format);
 }
@@ -368,9 +361,10 @@ intel_nop_alloc_storage(struct gl_context * ctx, struct gl_renderbuffer *rb,
 struct intel_renderbuffer *
 intel_create_renderbuffer(gl_format format)
 {
-   GET_CURRENT_CONTEXT(ctx);
-
    struct intel_renderbuffer *irb;
+   struct gl_renderbuffer *rb;
+
+   GET_CURRENT_CONTEXT(ctx);
 
    irb = CALLOC_STRUCT(intel_renderbuffer);
    if (!irb) {
@@ -378,17 +372,17 @@ intel_create_renderbuffer(gl_format format)
       return NULL;
    }
 
-   _mesa_init_renderbuffer(&irb->Base, 0);
-   irb->Base.ClassID = INTEL_RB_CLASS;
-   irb->Base._BaseFormat = _mesa_get_format_base_format(format);
-   irb->Base.Format = format;
-   irb->Base.InternalFormat = irb->Base._BaseFormat;
-   irb->Base.DataType = intel_mesa_format_to_rb_datatype(format);
+   rb = &irb->Base.Base;
+
+   _mesa_init_renderbuffer(rb, 0);
+   rb->ClassID = INTEL_RB_CLASS;
+   rb->_BaseFormat = _mesa_get_format_base_format(format);
+   rb->Format = format;
+   rb->InternalFormat = rb->_BaseFormat;
 
    /* intel-specific methods */
-   irb->Base.Delete = intel_delete_renderbuffer;
-   irb->Base.AllocStorage = intel_alloc_window_storage;
-   irb->Base.GetPointer = intel_get_pointer;
+   rb->Delete = intel_delete_renderbuffer;
+   rb->AllocStorage = intel_alloc_window_storage;
 
    return irb;
 }
@@ -402,6 +396,7 @@ intel_new_renderbuffer(struct gl_context * ctx, GLuint name)
 {
    /*struct intel_context *intel = intel_context(ctx); */
    struct intel_renderbuffer *irb;
+   struct gl_renderbuffer *rb;
 
    irb = CALLOC_STRUCT(intel_renderbuffer);
    if (!irb) {
@@ -409,16 +404,17 @@ intel_new_renderbuffer(struct gl_context * ctx, GLuint name)
       return NULL;
    }
 
-   _mesa_init_renderbuffer(&irb->Base, name);
-   irb->Base.ClassID = INTEL_RB_CLASS;
+   rb = &irb->Base.Base;
+
+   _mesa_init_renderbuffer(rb, name);
+   rb->ClassID = INTEL_RB_CLASS;
 
    /* intel-specific methods */
-   irb->Base.Delete = intel_delete_renderbuffer;
-   irb->Base.AllocStorage = intel_alloc_renderbuffer_storage;
-   irb->Base.GetPointer = intel_get_pointer;
+   rb->Delete = intel_delete_renderbuffer;
+   rb->AllocStorage = intel_alloc_renderbuffer_storage;
    /* span routines set in alloc_storage function */
 
-   return &irb->Base;
+   return rb;
 }
 
 
@@ -452,14 +448,6 @@ intel_framebuffer_renderbuffer(struct gl_context * ctx,
    intel_draw_buffer(ctx);
 }
 
-static struct intel_renderbuffer*
-intel_renderbuffer_wrap_miptree(struct intel_context *intel,
-                                struct intel_mipmap_tree *mt,
-                                uint32_t level,
-                                uint32_t layer,
-                                gl_format format,
-                                GLenum internal_format);
-
 /**
  * \par Special case for separate stencil
  *
@@ -473,26 +461,26 @@ intel_renderbuffer_wrap_miptree(struct intel_context *intel,
  *
  * @return true on success
  */
+
 static bool
 intel_renderbuffer_update_wrapper(struct intel_context *intel,
                                   struct intel_renderbuffer *irb,
-                                  struct intel_mipmap_tree *mt,
-                                  uint32_t level,
-                                  uint32_t layer,
-                                  gl_format format,
-                                  GLenum internal_format)
+				  struct gl_texture_image *image,
+                                  uint32_t layer)
 {
-   struct gl_renderbuffer *rb = &irb->Base;
+   struct gl_renderbuffer *rb = &irb->Base.Base;
+   struct intel_texture_image *intel_image = intel_texture_image(image);
+   struct intel_mipmap_tree *mt = intel_image->mt;
+   int level = image->Level;
 
-   rb->Format = format;
-   rb->InternalFormat = internal_format;
-   rb->DataType = intel_mesa_format_to_rb_datatype(rb->Format);
-   rb->_BaseFormat = _mesa_get_format_base_format(rb->Format);
+   rb->Format = image->TexFormat;
+   rb->InternalFormat = image->InternalFormat;
+   rb->_BaseFormat = image->_BaseFormat;
    rb->Width = mt->level[level].width;
    rb->Height = mt->level[level].height;
 
-   irb->Base.Delete = intel_delete_renderbuffer;
-   irb->Base.AllocStorage = intel_nop_alloc_storage;
+   rb->Delete = intel_delete_renderbuffer;
+   rb->AllocStorage = intel_nop_alloc_storage;
 
    intel_miptree_check_level_layer(mt, level, layer);
    irb->mt_level = level;
@@ -510,45 +498,6 @@ intel_renderbuffer_update_wrapper(struct intel_context *intel,
    }
 
    return true;
-}
-
-/**
- * \brief Wrap a renderbuffer around a single slice of a miptree.
- *
- * Called by glFramebufferTexture*(). This just allocates a
- * ``struct intel_renderbuffer`` then calls
- * intel_renderbuffer_update_wrapper() to do the real work.
- *
- * \see intel_renderbuffer_update_wrapper()
- */
-static struct intel_renderbuffer*
-intel_renderbuffer_wrap_miptree(struct intel_context *intel,
-                                struct intel_mipmap_tree *mt,
-                                uint32_t level,
-                                uint32_t layer,
-                                gl_format format,
-                                GLenum internal_format)
-
-{
-   struct gl_context *ctx = &intel->ctx;
-   struct gl_renderbuffer *rb;
-   struct intel_renderbuffer *irb;
-
-   intel_miptree_check_level_layer(mt, level, layer);
-
-   rb = intel_new_renderbuffer(ctx, ~0);
-   irb = intel_renderbuffer(rb);
-   if (!irb)
-      return NULL;
-
-   if (!intel_renderbuffer_update_wrapper(intel, irb,
-                                          mt, level, layer,
-                                          format, internal_format)) {
-      free(irb);
-      return NULL;
-   }
-
-   return irb;
 }
 
 void
@@ -636,10 +585,10 @@ intel_render_texture(struct gl_context * ctx,
    struct intel_renderbuffer *irb = intel_renderbuffer(att->Renderbuffer);
    struct intel_texture_image *intel_image = intel_texture_image(image);
    struct intel_mipmap_tree *mt = intel_image->mt;
+   int layer;
 
    (void) fb;
 
-   int layer;
    if (att->CubeMapFace > 0) {
       assert(att->Zoffset == 0);
       layer = att->CubeMapFace;
@@ -656,16 +605,13 @@ intel_render_texture(struct gl_context * ctx,
       return;
    }
    else if (!irb) {
-      irb = intel_renderbuffer_wrap_miptree(intel,
-                                            mt,
-                                            att->TextureLevel,
-                                            layer,
-                                            image->TexFormat,
-                                            image->InternalFormat);
+      intel_miptree_check_level_layer(mt, att->TextureLevel, layer);
+
+      irb = (struct intel_renderbuffer *)intel_new_renderbuffer(ctx, ~0);
 
       if (irb) {
          /* bind the wrapper to the attachment point */
-         _mesa_reference_renderbuffer(&att->Renderbuffer, &irb->Base);
+         _mesa_reference_renderbuffer(&att->Renderbuffer, &irb->Base.Base);
       }
       else {
          /* fallback to software rendering */
@@ -674,10 +620,7 @@ intel_render_texture(struct gl_context * ctx,
       }
    }
 
-   if (!intel_renderbuffer_update_wrapper(intel, irb,
-                                          mt, att->TextureLevel, layer,
-                                          image->TexFormat,
-                                          image->InternalFormat)) {
+   if (!intel_renderbuffer_update_wrapper(intel, irb, image, layer)) {
        _mesa_reference_renderbuffer(&att->Renderbuffer, NULL);
        _swrast_render_texture(ctx, fb, att);
        return;
@@ -686,7 +629,7 @@ intel_render_texture(struct gl_context * ctx,
    DBG("Begin render %s texture tex=%u w=%d h=%d refcount=%d\n",
        _mesa_get_format_name(image->TexFormat),
        att->Texture->Name, image->Width, image->Height,
-       irb->Base.RefCount);
+       irb->Base.Base.RefCount);
 
    intel_image->used_as_render_target = true;
 
@@ -789,6 +732,15 @@ intel_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 	    fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
 	 if (stencil_mt->format != MESA_FORMAT_S8)
 	    fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
+	 if (intel->gen < 7 && depth_mt->hiz_mt == NULL) {
+	    /* Before Gen7, separate depth and stencil buffers can be used
+	     * only if HiZ is enabled. From the Sandybridge PRM, Volume 2,
+	     * Part 1, Bit 3DSTATE_DEPTH_BUFFER.SeparateStencilBufferEnable:
+	     *     [DevSNB]: This field must be set to the same value (enabled
+	     *     or disabled) as Hierarchical Depth Buffer Enable.
+	     */
+	    fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED;
+	 }
       }
    }
 
@@ -817,19 +769,11 @@ intel_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 	 continue;
       }
 
-      if (!intel->vtbl.render_target_supported(intel, irb->Base.Format)) {
+      if (!intel->vtbl.render_target_supported(intel, rb)) {
 	 DBG("Unsupported HW texture/renderbuffer format attached: %s\n",
-	     _mesa_get_format_name(irb->Base.Format));
+	     _mesa_get_format_name(intel_rb_format(irb)));
 	 fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
       }
-
-#ifdef I915
-      if (!intel_span_supports_format(irb->Base.Format)) {
-	 DBG("Unsupported swrast texture/renderbuffer format attached: %s\n",
-	     _mesa_get_format_name(irb->Base.Format));
-	 fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
-      }
-#endif
    }
 }
 
@@ -854,13 +798,15 @@ intel_blit_framebuffer_copy_tex_sub_image(struct gl_context *ctx,
       const struct gl_framebuffer *readFb = ctx->ReadBuffer;
       const struct gl_renderbuffer_attachment *drawAtt =
          &drawFb->Attachment[drawFb->_ColorDrawBufferIndexes[0]];
+      struct intel_renderbuffer *srcRb = 
+         intel_renderbuffer(readFb->_ColorReadBuffer);
 
       /* If the source and destination are the same size with no
          mirroring, the rectangles are within the size of the
          texture and there is no scissor then we can use
          glCopyTexSubimage2D to implement the blit. This will end
          up as a fast hardware blit on some drivers */
-      if (drawAtt && drawAtt->Texture &&
+      if (srcRb && drawAtt && drawAtt->Texture &&
           srcX0 - srcX1 == dstX0 - dstX1 &&
           srcY0 - srcY1 == dstY0 - dstY1 &&
           srcX1 >= srcX0 &&
@@ -880,6 +826,7 @@ intel_blit_framebuffer_copy_tex_sub_image(struct gl_context *ctx,
          if (intel_copy_texsubimage(intel_context(ctx),
                                     intel_texture_image(texImage),
                                     dstX0, dstY0,
+                                    srcRb,
                                     srcX0, srcY0,
                                     srcX1 - srcX0, /* width */
                                     srcY1 - srcY0))

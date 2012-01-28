@@ -289,6 +289,8 @@ def generate(env):
             cppdefines += ['_DEBUG']
     if platform == 'windows':
         cppdefines += ['PIPE_SUBSYSTEM_WINDOWS_USER']
+    if platform == 'haiku':
+        cppdefines += ['BEOS_THREADS']
     if env['embedded']:
         cppdefines += ['PIPE_SUBSYSTEM_EMBEDDED']
     env.Append(CPPDEFINES = cppdefines)
@@ -348,7 +350,7 @@ def generate(env):
             ccflags += ['-m64']
             if platform == 'darwin':
                 ccflags += ['-fno-common']
-        if env['platform'] != 'windows':
+        if env['platform'] not in ('windows', 'haiku'):
             ccflags += ['-fvisibility=hidden']
         # See also:
         # - http://gcc.gnu.org/onlinedocs/gcc/Warning-Options.html
@@ -362,10 +364,6 @@ def generate(env):
             '-Wmissing-prototypes',
             '-std=gnu99',
         ]
-        if distutils.version.LooseVersion(ccversion) >= distutils.version.LooseVersion('4.0'):
-            ccflags += [
-                '-Wmissing-field-initializers',
-            ]
         if distutils.version.LooseVersion(ccversion) >= distutils.version.LooseVersion('4.2'):
             ccflags += [
                 '-Wpointer-arith',
@@ -507,6 +505,7 @@ def generate(env):
     createInstallMethods(env)
 
     env.PkgCheckModules('X11', ['x11', 'xext', 'xdamage', 'xfixes'])
+    env.PkgCheckModules('XCB', ['x11-xcb', 'xcb-glx'])
     env.PkgCheckModules('XF86VIDMODE', ['xxf86vm'])
     env.PkgCheckModules('DRM', ['libdrm'])
     env.PkgCheckModules('DRM_INTEL', ['libdrm_intel'])

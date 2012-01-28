@@ -114,16 +114,23 @@ nvfx_ucp_validate(struct nvfx_context* nvfx)
 {
 	struct nouveau_channel* chan = nvfx->screen->base.channel;
 	struct nouveau_grobj *eng3d = nvfx->screen->eng3d;
-	unsigned enables[7] =
+	unsigned enables[] =
 	{
-			0,
 			NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE0,
-			NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE0 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE1,
-			NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE0 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE1 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE2,
-			NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE0 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE1 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE2 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE3,
-			NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE0 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE1 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE2 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE3 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE4,
-			NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE0 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE1 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE2 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE3 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE4 | NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE5,
+			NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE1,
+			NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE2,
+			NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE3,
+			NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE4,
+			NV30_3D_VP_CLIP_PLANES_ENABLE_PLANE5
 	};
+	unsigned i, enable = 0, nr = 0;
+
+	for (i = 0; i < 6; i++) {
+		if (nvfx->rasterizer->pipe.clip_plane_enable & (1 << i)) {
+			enable |= enables[i];
+			nr = i+1;
+		}
+	}
 
 	if(!nvfx->use_vp_clipping)
 	{
@@ -131,12 +138,12 @@ nvfx_ucp_validate(struct nvfx_context* nvfx)
 		OUT_RING(chan, 0);
 
 		BEGIN_RING(chan, eng3d, NV30_3D_VP_CLIP_PLANE(0, 0),
-			   nvfx->clip.nr * 4);
-		OUT_RINGp(chan, &nvfx->clip.ucp[0][0], nvfx->clip.nr * 4);
+			   nr * 4);
+		OUT_RINGp(chan, &nvfx->clip.ucp[0][0], nr * 4);
 	}
 
 	BEGIN_RING(chan, eng3d, NV30_3D_VP_CLIP_PLANES_ENABLE, 1);
-	OUT_RING(chan, enables[nvfx->clip.nr]);
+	OUT_RING(chan, enable);
 }
 
 static void
@@ -146,7 +153,10 @@ nvfx_vertprog_ucp_validate(struct nvfx_context* nvfx)
 	struct nouveau_grobj *eng3d = nvfx->screen->eng3d;
 	unsigned i;
 	struct nvfx_vertex_program* vp = nvfx->hw_vertprog;
-	if(nvfx->clip.nr != vp->clip_nr)
+	unsigned enable = nvfx->rasterizer->pipe.clip_plane_enable;
+	unsigned nr = util_bitcount(enable);
+
+	if(nr != vp->clip_nr)
 	{
 		unsigned idx;
 
@@ -161,21 +171,24 @@ nvfx_vertprog_ucp_validate(struct nvfx_context* nvfx)
 		}
 
 		 /* set last instruction bit */
-		idx = vp->nr_insns - 7 + nvfx->clip.nr;
+		idx = vp->nr_insns - 7 + nr;
 		BEGIN_RING(chan, eng3d, NV30_3D_VP_UPLOAD_FROM_ID, 1);
 		OUT_RING(chan,  vp->exec->start + idx);
 		BEGIN_RING(chan, eng3d, NV30_3D_VP_UPLOAD_INST(0), 4);
 		OUT_RINGp(chan, vp->insns[idx].data, 3);
 		OUT_RING(chan, vp->insns[idx].data[3] | 1);
-		vp->clip_nr = nvfx->clip.nr;
+		vp->clip_nr = nr;
 	}
 
 	// TODO: only do this for the ones changed
-	for(i = 0; i < nvfx->clip.nr; ++i)
+	for(i = 0; enable; ++i)
 	{
+		unsigned index = ffs(enable) - 1;
+		enable &= ~(1 << index);
+
 		BEGIN_RING(chan, eng3d, NV30_3D_VP_UPLOAD_CONST_ID, 5);
 		OUT_RING(chan, vp->data->start + i);
-		OUT_RINGp (chan, nvfx->clip.ucp[i], 4);
+		OUT_RINGp (chan, nvfx->clip.ucp[index], 4);
 	}
 }
 
@@ -186,9 +199,7 @@ nvfx_state_validate_common(struct nvfx_context *nvfx)
 	struct nouveau_grobj *eng3d = nvfx->screen->eng3d;
 	unsigned dirty;
 	unsigned still_dirty = 0;
-	int new_fb_mode = -1; /* 1 = all swizzled, 0 = make all linear */
 	boolean flush_tex_cache = FALSE;
-	unsigned render_temps;
 
 	if(nvfx != nvfx->screen->cur_ctx)
 	{
@@ -198,31 +209,6 @@ nvfx_state_validate_common(struct nvfx_context *nvfx)
 		nvfx->hw_vp_output = -1;
 		nvfx->screen->cur_ctx = nvfx;
 		nvfx->relocs_needed = NVFX_RELOCATE_ALL;
-	}
-
-	/* These can trigger use the of 3D engine to copy temporaries.
-	 * That will recurse here and thus dirty all 3D state, so we need to this before anything else, and in a loop..
-	 * This converges to having clean temps, then binding both fragtexes and framebuffers.
-	 */
-	while(nvfx->dirty & (NVFX_NEW_FB | NVFX_NEW_SAMPLER))
-	{
-		if(nvfx->dirty & NVFX_NEW_SAMPLER)
-		{
-			nvfx->dirty &=~ NVFX_NEW_SAMPLER;
-			nvfx_fragtex_validate(nvfx);
-
-			// TODO: only set this if really necessary
-			flush_tex_cache = TRUE;
-		}
-
-		if(nvfx->dirty & NVFX_NEW_FB)
-		{
-			nvfx->dirty &=~ NVFX_NEW_FB;
-			new_fb_mode = nvfx_framebuffer_prepare(nvfx);
-
-			// TODO: make sure this doesn't happen, i.e. fbs have matching formats
-			assert(new_fb_mode >= 0);
-		}
 	}
 
 	dirty = nvfx->dirty;
@@ -257,6 +243,16 @@ nvfx_state_validate_common(struct nvfx_context *nvfx)
 		}
 	}
 
+	if(dirty & NVFX_NEW_SAMPLER) {
+		/* XXX: we take the big hammer here, I have no idea why this is needed
+		   to make this work properly */
+		nvfx->dirty &= ~NVFX_NEW_SAMPLER;
+		nvfx_fragtex_validate(nvfx);
+
+		// TODO: only set this if really necessary
+		flush_tex_cache = TRUE;
+	}
+
 	if(dirty & NVFX_NEW_RAST)
 		sb_emit(chan, nvfx->rasterizer->sb, nvfx->rasterizer->sb_len);
 
@@ -266,13 +262,16 @@ nvfx_state_validate_common(struct nvfx_context *nvfx)
 	if(dirty & NVFX_NEW_STIPPLE)
 		nvfx_state_stipple_validate(nvfx);
 
-       if(nvfx->dirty & NVFX_NEW_UCP)
+       if(nvfx->dirty & (NVFX_NEW_UCP | NVFX_NEW_RAST))
 	       nvfx_ucp_validate(nvfx);
 
-	if(nvfx->use_vp_clipping && (nvfx->dirty & (NVFX_NEW_UCP | NVFX_NEW_VERTPROG)))
+	if(nvfx->use_vp_clipping && (nvfx->dirty &
+			                     (NVFX_NEW_UCP | NVFX_NEW_VERTPROG |
+			                      NVFX_NEW_RAST)))
 		nvfx_vertprog_ucp_validate(nvfx);
 
-	if(dirty & (NVFX_NEW_FRAGPROG | NVFX_NEW_FRAGCONST | NVFX_NEW_VERTPROG | NVFX_NEW_SPRITE))
+	if(dirty & (NVFX_NEW_FRAGPROG | NVFX_NEW_FRAGCONST |
+			    NVFX_NEW_VERTPROG | NVFX_NEW_SPRITE))
 	{
 		nvfx_fragprog_validate(nvfx);
 		if(dirty & NVFX_NEW_FRAGPROG)
@@ -282,7 +281,7 @@ nvfx_state_validate_common(struct nvfx_context *nvfx)
 	if(nvfx->is_nv4x)
 	{
 		unsigned vp_output = nvfx->hw_vertprog->or | nvfx->hw_fragprog->or;
-		vp_output |= (1 << (nvfx->clip.nr + 6)) - (1 << 6);
+		vp_output |= ((1 << (nvfx->rasterizer->pipe.clip_plane_enable & 63)) - 1) << 6;
 
 		if(vp_output != nvfx->hw_vp_output)
 		{
@@ -292,8 +291,8 @@ nvfx_state_validate_common(struct nvfx_context *nvfx)
 		}
 	}
 
-	if(new_fb_mode >= 0)
-		nvfx_framebuffer_validate(nvfx, new_fb_mode);
+	if(dirty & NVFX_NEW_FB)
+		nvfx_framebuffer_validate(nvfx);
 
 	if(dirty & NVFX_NEW_BLEND)
 		sb_emit(chan, nvfx->blend->sb, nvfx->blend->sb_len);
@@ -307,57 +306,33 @@ nvfx_state_validate_common(struct nvfx_context *nvfx)
 	if(dirty & NVFX_NEW_SR)
 		nvfx_state_sr_validate(nvfx);
 
-/* All these dependencies are wrong, but otherwise
-   etracer, neverball, foobillard, glest totally misrender
-   TODO: find the right fix
-*/
-	if(dirty & (NVFX_NEW_VIEWPORT | NVFX_NEW_RAST | NVFX_NEW_ZSA) || (new_fb_mode >= 0))
+	/* XXX: nv3x needs viewport revalidation after RAST or ZSA change */
+	if(dirty & (NVFX_NEW_VIEWPORT | NVFX_NEW_RAST | NVFX_NEW_ZSA))
 	{
 		nvfx_state_viewport_validate(nvfx);
 	}
 
-	if(dirty & NVFX_NEW_ZSA || (new_fb_mode >= 0))
+	if(dirty & (NVFX_NEW_ZSA | NVFX_NEW_FB))
 	{
 		BEGIN_RING(chan, eng3d, NV30_3D_DEPTH_WRITE_ENABLE, 2);
-		OUT_RING(chan, nvfx->framebuffer.zsbuf && nvfx->zsa->pipe.depth.writemask);
-	        OUT_RING(chan, nvfx->framebuffer.zsbuf && nvfx->zsa->pipe.depth.enabled);
+		OUT_RING(chan, nvfx->framebuffer.zsbuf &&
+                       nvfx->zsa->pipe.depth.writemask);
+	    OUT_RING(chan, nvfx->framebuffer.zsbuf &&
+                       nvfx->zsa->pipe.depth.enabled);
 	}
 
-	if((new_fb_mode >= 0) || (dirty & NVFX_NEW_FRAGPROG))
+	if(dirty & (NVFX_NEW_FRAGPROG | NVFX_NEW_FB))
 		nvfx_coord_conventions_validate(nvfx);
 
-	if(flush_tex_cache)
+	if(flush_tex_cache && nvfx->is_nv4x)
 	{
-		// TODO: what about nv30?
-		if(nvfx->is_nv4x)
-		{
-			BEGIN_RING(chan, eng3d, NV40_3D_TEX_CACHE_CTL, 1);
-			OUT_RING(chan, 2);
-			BEGIN_RING(chan, eng3d, NV40_3D_TEX_CACHE_CTL, 1);
-			OUT_RING(chan, 1);
-		}
+		BEGIN_RING(chan, eng3d, NV40_3D_TEX_CACHE_CTL, 1);
+		OUT_RING(chan, 2);
+		BEGIN_RING(chan, eng3d, NV40_3D_TEX_CACHE_CTL, 1);
+		OUT_RING(chan, 1);
 	}
 
 	nvfx->dirty = dirty & still_dirty;
-
-	render_temps = nvfx->state.render_temps;
-	if(render_temps)
-	{
-		for(int i = 0; i < nvfx->framebuffer.nr_cbufs; ++i)
-		{
-			if(render_temps & (1 << i)) {
-				assert(((struct nvfx_surface*)nvfx->framebuffer.cbufs[i])->temp);
-				util_dirty_surface_set_dirty(nvfx_surface_get_dirty_surfaces(nvfx->framebuffer.cbufs[i]),
-						(struct util_dirty_surface*)nvfx->framebuffer.cbufs[i]);
-			}
-		}
-
-		if(render_temps & 0x80) {
-			assert(((struct nvfx_surface*)nvfx->framebuffer.zsbuf)->temp);
-			util_dirty_surface_set_dirty(nvfx_surface_get_dirty_surfaces(nvfx->framebuffer.zsbuf),
-					(struct util_dirty_surface*)nvfx->framebuffer.zsbuf);
-		}
-	}
 
 	return TRUE;
 }

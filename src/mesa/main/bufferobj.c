@@ -49,13 +49,6 @@
 /*#define BOUNDS_CHECK*/
 
 
-#if FEATURE_OES_mapbuffer
-#define DEFAULT_ACCESS GL_MAP_WRITE_BIT
-#else
-#define DEFAULT_ACCESS (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT)
-#endif
-
-
 /**
  * Used as a placeholder for buffer objects between glGenBuffers() and
  * glBindBuffer() so that glIsBuffer() can work correctly.
@@ -122,6 +115,30 @@ get_buffer(struct gl_context *ctx, GLenum target)
 }
 
 
+static inline GLenum
+default_access_mode(const struct gl_context *ctx)
+{
+   /* Table 2.6 on page 31 (page 44 of the PDF) of the OpenGL 1.5 spec says:
+    *
+    * Name           Type  Initial Value  Legal Values
+    * ...            ...   ...            ...
+    * BUFFER_ACCESS  enum  READ_WRITE     READ_ONLY, WRITE_ONLY
+    *                                     READ_WRITE
+    *
+    * However, table 6.8 in the GL_OES_mapbuffer extension says:
+    *
+    * Get Value         Type Get Command          Value          Description
+    * ---------         ---- -----------          -----          -----------
+    * BUFFER_ACCESS_OES Z1   GetBufferParameteriv WRITE_ONLY_OES buffer map flag
+    *
+    * The difference is because GL_OES_mapbuffer only supports mapping buffers
+    * write-only.
+    */
+   return (ctx->API == API_OPENGLES)
+      ? GL_MAP_WRITE_BIT : (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
+}
+
+
 /**
  * Convert a GLbitfield describing the mapped buffer access flags
  * into one of GL_READ_WRITE, GL_READ_ONLY, or GL_WRITE_ONLY.
@@ -184,7 +201,10 @@ buffer_object_subdata_range_good( struct gl_context * ctx, GLenum target,
    }
    if (offset + size > bufObj->Size) {
       _mesa_error(ctx, GL_INVALID_VALUE,
-		  "%s(size + offset > buffer size)", caller);
+		  "%s(offset %lu + size %lu > buffer size %lu)", caller,
+                  (unsigned long) offset,
+                  (unsigned long) size,
+                  (unsigned long) bufObj->Size);
       return NULL;
    }
    if (_mesa_bufferobj_mapped(bufObj)) {
@@ -210,7 +230,7 @@ _mesa_new_buffer_object( struct gl_context *ctx, GLuint name, GLenum target )
    (void) ctx;
 
    obj = MALLOC_STRUCT(gl_buffer_object);
-   _mesa_initialize_buffer_object(obj, name, target);
+   _mesa_initialize_buffer_object(ctx, obj, name, target);
    return obj;
 }
 
@@ -308,7 +328,8 @@ _mesa_reference_buffer_object_(struct gl_context *ctx,
  * Initialize a buffer object to default values.
  */
 void
-_mesa_initialize_buffer_object( struct gl_buffer_object *obj,
+_mesa_initialize_buffer_object( struct gl_context *ctx,
+				struct gl_buffer_object *obj,
 				GLuint name, GLenum target )
 {
    (void) target;
@@ -318,7 +339,7 @@ _mesa_initialize_buffer_object( struct gl_buffer_object *obj,
    obj->RefCount = 1;
    obj->Name = name;
    obj->Usage = GL_STATIC_DRAW_ARB;
-   obj->AccessFlags = DEFAULT_ACCESS;
+   obj->AccessFlags = default_access_mode(ctx);
 }
 
 
@@ -501,20 +522,37 @@ _mesa_copy_buffer_subdata(struct gl_context *ctx,
 {
    GLubyte *srcPtr, *dstPtr;
 
-   /* buffer should not already be mapped */
+   /* the buffers should not be mapped */
    assert(!_mesa_bufferobj_mapped(src));
    assert(!_mesa_bufferobj_mapped(dst));
 
-   srcPtr = (GLubyte *) ctx->Driver.MapBufferRange(ctx, 0, src->Size,
-						   GL_MAP_READ_BIT, src);
-   dstPtr = (GLubyte *) ctx->Driver.MapBufferRange(ctx, 0, dst->Size,
-						   GL_MAP_WRITE_BIT, dst);
+   if (src == dst) {
+      srcPtr = dstPtr = ctx->Driver.MapBufferRange(ctx, 0, src->Size,
+						   GL_MAP_READ_BIT |
+						   GL_MAP_WRITE_BIT, src);
 
+      if (!srcPtr)
+	 return;
+
+      srcPtr += readOffset;
+      dstPtr += writeOffset;
+   } else {
+      srcPtr = ctx->Driver.MapBufferRange(ctx, readOffset, size,
+					  GL_MAP_READ_BIT, src);
+      dstPtr = ctx->Driver.MapBufferRange(ctx, writeOffset, size,
+					  (GL_MAP_WRITE_BIT |
+					   GL_MAP_INVALIDATE_RANGE_BIT), dst);
+   }
+
+   /* Note: the src and dst regions will never overlap.  Trying to do so
+    * would generate GL_INVALID_VALUE earlier.
+    */
    if (srcPtr && dstPtr)
-      memcpy(dstPtr + writeOffset, srcPtr + readOffset, size);
+      memcpy(dstPtr, srcPtr, size);
 
    ctx->Driver.UnmapBuffer(ctx, src);
-   ctx->Driver.UnmapBuffer(ctx, dst);
+   if (dst != src)
+      ctx->Driver.UnmapBuffer(ctx, dst);
 }
 
 
@@ -733,7 +771,7 @@ _mesa_DeleteBuffersARB(GLsizei n, const GLuint *ids)
          if (_mesa_bufferobj_mapped(bufObj)) {
             /* if mapped, unmap it now */
             ctx->Driver.UnmapBuffer(ctx, bufObj);
-            bufObj->AccessFlags = DEFAULT_ACCESS;
+            bufObj->AccessFlags = default_access_mode(ctx);
             bufObj->Pointer = NULL;
          }
 
@@ -893,7 +931,7 @@ _mesa_BufferDataARB(GLenum target, GLsizeiptrARB size,
    if (_mesa_bufferobj_mapped(bufObj)) {
       /* Unmap the existing buffer.  We'll replace it now.  Not an error. */
       ctx->Driver.UnmapBuffer(ctx, bufObj);
-      bufObj->AccessFlags = DEFAULT_ACCESS;
+      bufObj->AccessFlags = default_access_mode(ctx);
       ASSERT(bufObj->Pointer == NULL);
    }  
 
@@ -1112,7 +1150,7 @@ _mesa_UnmapBufferARB(GLenum target)
 #endif
 
    status = ctx->Driver.UnmapBuffer( ctx, bufObj );
-   bufObj->AccessFlags = DEFAULT_ACCESS;
+   bufObj->AccessFlags = default_access_mode(ctx);
    ASSERT(bufObj->Pointer == NULL);
    ASSERT(bufObj->Offset == 0);
    ASSERT(bufObj->Length == 0);

@@ -40,6 +40,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "main/imports.h"
 #include "main/extensions.h"
 #include "main/mfeatures.h"
+#include "main/version.h"
 
 #include "swrast/swrast.h"
 #include "swrast_setup/swrast_setup.h"
@@ -59,6 +60,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "r200_vertprog.h"
 #include "radeon_queryobj.h"
 #include "r200_blit.h"
+#include "radeon_fog.h"
 
 #include "radeon_span.h"
 
@@ -196,6 +198,10 @@ static void r200_init_vtbl(radeonContextPtr radeon)
 GLboolean r200CreateContext( gl_api api,
 			     const struct gl_config *glVisual,
 			     __DRIcontext *driContextPriv,
+			     unsigned major_version,
+			     unsigned minor_version,
+			     uint32_t flags,
+			     unsigned *error,
 			     void *sharedContextPrivate)
 {
    __DRIscreen *sPriv = driContextPriv->driScreenPriv;
@@ -206,19 +212,26 @@ GLboolean r200CreateContext( gl_api api,
    int i;
    int tcl_mode;
 
+   /* API and flag filtering is handled in dri2CreateContextAttribs.
+    */
+   (void) api;
+   (void) flags;
+
    assert(glVisual);
    assert(driContextPriv);
    assert(screen);
 
    /* Allocate the R200 context */
    rmesa = (r200ContextPtr) CALLOC( sizeof(*rmesa) );
-   if ( !rmesa )
+   if ( !rmesa ) {
+      *error = __DRI_CTX_ERROR_NO_MEMORY;
       return GL_FALSE;
+   }
 
    rmesa->radeon.radeonScreen = screen;
    r200_init_vtbl(&rmesa->radeon);
    /* init exp fog table data */
-   r200InitStaticFogData();
+   radeonInitStaticFogData();
 
    /* Parse configuration files.
     * Do this here so that initialMaxAnisotropy is set before we create
@@ -256,6 +269,7 @@ GLboolean r200CreateContext( gl_api api,
 			  glVisual, driContextPriv,
 			  sharedContextPrivate)) {
      FREE(rmesa);
+     *error = __DRI_CTX_ERROR_NO_MEMORY;
      return GL_FALSE;
    }
 
@@ -439,6 +453,16 @@ GLboolean r200CreateContext( gl_api api,
       TCL_FALLBACK(rmesa->radeon.glCtx, R200_TCL_FALLBACK_TCL_DISABLE, 1);
    }
 
+   _mesa_compute_version(ctx);
+   if (ctx->VersionMajor < major_version
+       || (ctx->VersionMajor == major_version
+	   && ctx->VersionMinor < minor_version)) {
+      r200DestroyContext(driContextPriv);
+      *error = __DRI_CTX_ERROR_BAD_VERSION;
+      return GL_FALSE;
+   }
+
+   *error = __DRI_CTX_ERROR_SUCCESS;
    return GL_TRUE;
 }
 

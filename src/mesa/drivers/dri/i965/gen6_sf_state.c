@@ -129,6 +129,7 @@ upload_sf_state(struct brw_context *brw)
    float point_size;
    uint16_t attr_overrides[FRAG_ATTRIB_MAX];
    bool userclip_active;
+   uint32_t point_sprite_origin;
 
    /* _NEW_TRANSFORM */
    userclip_active = (ctx->Transform.ClipPlanesEnabled != 0);
@@ -247,7 +248,7 @@ upload_sf_state(struct brw_context *brw)
       dw3 |= GEN6_SF_LINE_END_CAP_WIDTH_1_0;
    }
 
-   /* _NEW_POINT */
+   /* _NEW_PROGRAM | _NEW_POINT */
    if (!(ctx->VertexProgram.PointSizeEnabled ||
 	 ctx->Point._Attenuated))
       dw4 |= GEN6_SF_USE_STATE_POINT_WIDTH;
@@ -258,8 +259,16 @@ upload_sf_state(struct brw_context *brw)
    /* Clamp to the hardware limits and convert to fixed point */
    dw4 |= U_FIXED(CLAMP(point_size, 0.125, 255.875), 3);
 
-   if (ctx->Point.SpriteOrigin == GL_LOWER_LEFT)
-      dw1 |= GEN6_SF_POINT_SPRITE_LOWERLEFT;
+   /*
+    * Window coordinates in an FBO are inverted, which means point
+    * sprite origin must be inverted, too.
+    */
+   if ((ctx->Point.SpriteOrigin == GL_LOWER_LEFT) != render_to_fbo) {
+      point_sprite_origin = GEN6_SF_POINT_SPRITE_LOWERLEFT;
+   } else {
+      point_sprite_origin = GEN6_SF_POINT_SPRITE_UPPERLEFT;
+   }
+   dw1 |= point_sprite_origin;
 
    /* _NEW_LIGHT */
    if (ctx->Light.ProvokingVertex != GL_FIRST_VERTEX_CONVENTION) {

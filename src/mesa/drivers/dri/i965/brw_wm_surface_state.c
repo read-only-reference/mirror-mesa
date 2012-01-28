@@ -553,15 +553,27 @@ brw_init_surface_formats(struct brw_context *brw)
    ctx->TextureFormatSupported[MESA_FORMAT_X8_Z24] = true;
    ctx->TextureFormatSupported[MESA_FORMAT_Z32_FLOAT] = true;
    ctx->TextureFormatSupported[MESA_FORMAT_Z32_FLOAT_X24S8] = true;
+   ctx->TextureFormatSupported[MESA_FORMAT_Z16] = true;
 }
 
 bool
-brw_render_target_supported(struct intel_context *intel, gl_format format)
+brw_render_target_supported(struct intel_context *intel,
+			    struct gl_renderbuffer *rb)
 {
    struct brw_context *brw = brw_context(&intel->ctx);
-   /* Not exactly true, as some of those formats are not renderable.
-    * But at least we know how to translate them.
+   gl_format format = rb->Format;
+
+   /* Many integer formats are promoted to RGBA (like XRGB8888 is), which means
+    * we would consider them renderable even though we don't have surface
+    * support for their alpha behavior and don't have the blending unit
+    * available to fake it like we do for XRGB8888.  Force them to being
+    * unsupported.
     */
+   if ((rb->_BaseFormat != GL_RGBA &&
+	rb->_BaseFormat != GL_RG &&
+	rb->_BaseFormat != GL_RED) && _mesa_is_format_integer_color(format))
+      return false;
+
    return brw->format_supported_as_render_target[format];
 }
 
@@ -698,11 +710,11 @@ brw_create_constant_surface(struct brw_context *brw,
 
    surf[1] = bo->offset; /* reloc */
 
-   surf[2] = (((w & 0x7f) - 1) << BRW_SURFACE_WIDTH_SHIFT |
-	      (((w >> 7) & 0x1fff) - 1) << BRW_SURFACE_HEIGHT_SHIFT);
+   surf[2] = ((w & 0x7f) << BRW_SURFACE_WIDTH_SHIFT |
+	      ((w >> 7) & 0x1fff) << BRW_SURFACE_HEIGHT_SHIFT);
 
-   surf[3] = ((((w >> 20) & 0x7f) - 1) << BRW_SURFACE_DEPTH_SHIFT |
-	      (width * 16 - 1) << BRW_SURFACE_PITCH_SHIFT);
+   surf[3] = (((w >> 20) & 0x7f) << BRW_SURFACE_DEPTH_SHIFT |
+	      (16 - 1) << BRW_SURFACE_PITCH_SHIFT); /* ignored */
 
    surf[4] = 0;
    surf[5] = 0;
@@ -729,7 +741,10 @@ brw_update_sol_surface(struct brw_context *brw,
                        uint32_t *out_offset, unsigned num_vector_components,
                        unsigned stride_dwords, unsigned offset_dwords)
 {
-   drm_intel_bo *bo = intel_buffer_object(buffer_obj)->buffer;
+   struct intel_context *intel = &brw->intel;
+   struct intel_buffer_object *intel_bo = intel_buffer_object(buffer_obj);
+   drm_intel_bo *bo =
+      intel_bufferobj_buffer(intel, intel_bo, INTEL_WRITE_PART);
    uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE, 6 * 4, 32,
                                     out_offset);
    uint32_t pitch_minus_1 = 4*stride_dwords - 1;
@@ -905,24 +920,25 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
    uint32_t *surf;
    uint32_t tile_x, tile_y;
    uint32_t format = 0;
+   gl_format rb_format = intel_rb_format(irb);
 
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
 			  6 * 4, 32, &brw->bind.surf_offset[unit]);
 
-   switch (irb->Base.Format) {
+   switch (rb_format) {
    case MESA_FORMAT_SARGB8:
       /* without GL_EXT_framebuffer_sRGB we shouldn't bind sRGB
 	 surfaces to the blend/update as sRGB */
       if (ctx->Color.sRGBEnabled)
-	 format = brw_format_for_mesa_format(irb->Base.Format);
+	 format = brw_format_for_mesa_format(rb_format);
       else
 	 format = BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
       break;
    default:
-      format = brw->render_target_format[irb->Base.Format];
-      if (unlikely(!brw->format_supported_as_render_target[irb->Base.Format])) {
+      format = brw->render_target_format[rb_format];
+      if (unlikely(!brw->format_supported_as_render_target[rb_format])) {
 	 _mesa_problem(ctx, "%s: renderbuffer format %s unsupported\n",
-		       __FUNCTION__, _mesa_get_format_name(irb->Base.Format));
+		       __FUNCTION__, _mesa_get_format_name(rb_format));
       }
       break;
    }

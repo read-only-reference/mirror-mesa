@@ -199,19 +199,23 @@ typedef enum
 #define VERT_BIT_GENERIC0        BITFIELD64_BIT(VERT_ATTRIB_GENERIC0)
 
 #define VERT_BIT(i)              BITFIELD64_BIT(i)
-#define VERT_BIT_ALL             (BITFIELD64_BIT(VERT_ATTRIB_MAX) - 1)
+#define VERT_BIT_ALL             BITFIELD64_RANGE(0, VERT_ATTRIB_MAX)
 
 #define VERT_BIT_FF(i)           VERT_BIT(i)
-#define VERT_BIT_FF_ALL          (BITFIELD64_BIT(VERT_ATTRIB_FF_MAX) - 1)
+#define VERT_BIT_FF_ALL          BITFIELD64_RANGE(0, VERT_ATTRIB_FF_MAX)
 #define VERT_BIT_TEX(i)          VERT_BIT(VERT_ATTRIB_TEX(i))
 #define VERT_BIT_TEX_ALL         \
-  ((BITFIELD64_BIT(VERT_ATTRIB_TEX_MAX) - 1) << VERT_ATTRIB_TEX(0))
+   BITFIELD64_RANGE(VERT_ATTRIB_TEX(0), VERT_ATTRIB_TEX_MAX)
+#define VERT_BIT_FF_NVALIAS      \
+   BITFIELD64_RANGE(VERT_ATTRIB_POS, VERT_ATTRIB_TEX(VERT_ATTRIB_TEX_MAX))
+
 #define VERT_BIT_GENERIC_NV(i)   VERT_BIT(VERT_ATTRIB_GENERIC_NV(i))
 #define VERT_BIT_GENERIC_NV_ALL  \
-  ((BITFIELD64_BIT(VERT_ATTRIB_GENERIC_NV_MAX) - 1) << (VERT_ATTRIB_GENERIC_NV(0)))
+   BITFIELD64_RANGE(VERT_ATTRIB_GENERIC_NV(0), VERT_ATTRIB_GENERIC_NV_MAX)
+
 #define VERT_BIT_GENERIC(i)      VERT_BIT(VERT_ATTRIB_GENERIC(i))
 #define VERT_BIT_GENERIC_ALL     \
-  ((BITFIELD64_BIT(VERT_ATTRIB_GENERIC_MAX) - 1) << (VERT_ATTRIB_GENERIC(0)))
+   BITFIELD64_RANGE(VERT_ATTRIB_GENERIC(0), VERT_ATTRIB_GENERIC_MAX)
 /*@}*/
 
 
@@ -1610,7 +1614,22 @@ struct gl_array_object
 
    GLint RefCount;
    _glthread_Mutex Mutex;
-   GLboolean VBOonly;  /**< require all arrays to live in VBOs? */
+
+   /**
+    * Does the VAO use ARB semantics or Apple semantics?
+    *
+    * There are several ways in which ARB_vertex_array_object and
+    * APPLE_vertex_array_object VAOs have differing semantics.  At the very
+    * least,
+    *
+    *     - ARB VAOs require that all array data be sourced from vertex buffer
+    *       objects, but Apple VAOs do not.
+    *
+    *     - ARB VAOs require that names come from GenVertexArrays.
+    *
+    * This flag notes which behavior governs this VAO.
+    */
+   GLboolean ARBsemantics;
 
    /** Vertex attribute arrays */
    struct gl_client_array VertexAttrib[VERT_ATTRIB_MAX];
@@ -1817,18 +1836,45 @@ struct prog_instruction;
 struct gl_program_parameter_list;
 struct gl_uniform_list;
 
+struct gl_transform_feedback_varying_info {
+   char *Name;
+   GLenum Type;
+   GLint Size;
+};
+
+struct gl_transform_feedback_output {
+   unsigned OutputRegister;
+   unsigned OutputBuffer;
+   unsigned NumComponents;
+
+   /** offset (in DWORDs) of this output within the interleaved structure */
+   unsigned DstOffset;
+
+   /**
+    * Offset into the output register of the data to output.  For example,
+    * if NumComponents is 2 and ComponentOffset is 1, then the data to
+    * offset is in the y and z components of the output register.
+    */
+   unsigned ComponentOffset;
+};
+
 /** Post-link transform feedback info. */
 struct gl_transform_feedback_info {
    unsigned NumOutputs;
 
-   struct {
-      unsigned OutputRegister;
-      unsigned OutputBuffer;
-      unsigned NumComponents;
+   /**
+    * Number of transform feedback buffers in use by this program.
+    */
+   unsigned NumBuffers;
 
-      /** offset (in DWORDs) of this output within the interleaved structure */
-      unsigned DstOffset;
-   } Outputs[MAX_PROGRAM_OUTPUTS];
+   struct gl_transform_feedback_output *Outputs;
+
+   /** Transform feedback varyings used for the linking of this shader program.
+    *
+    * Use for glGetTransformFeedbackVarying().
+    */
+   struct gl_transform_feedback_varying_info *Varyings;
+   GLint NumVarying;
 
    /**
     * Total number of components stored in each buffer.  This may be used by
@@ -1869,8 +1915,6 @@ struct gl_program
 
    /** Map from sampler unit to texture unit (set by glUniform1i()) */
    GLubyte SamplerUnits[MAX_SAMPLERS];
-   /** Which texture target is being sampled (TEXTURE_1D/2D/3D/etc_INDEX) */
-   gl_texture_index SamplerTargets[MAX_SAMPLERS];
 
    /** Bitmask of which register files are read/written with indirect
     * addressing.  Mask of (1 << PROGRAM_x) bits.
@@ -2160,9 +2204,17 @@ struct gl_shader
 
    unsigned Version;       /**< GLSL version used for linking */
 
-   unsigned num_samplers;	/**< Number of samplers used by this shader.
-				 * This field is only set post-linking.
-				 */
+   /**
+    * \name Sampler tracking
+    *
+    * \note Each of these fields is only set post-linking.
+    */
+   /*@{*/
+   unsigned num_samplers;	/**< Number of samplers used by this shader. */
+   GLbitfield active_samplers;	/**< Bitfield of which samplers are used */
+   GLbitfield shadow_samplers;	/**< Samplers used for shadow sampling. */
+   /*@}*/
+
    /**
     * Number of uniform components used by this shader.
     *
@@ -2222,7 +2274,13 @@ struct gl_shader_program
     */
    struct string_to_uint_map *FragDataBindings;
 
-   /** Transform feedback varyings */
+   /**
+    * Transform feedback varyings last specified by
+    * glTransformFeedbackVaryings().
+    *
+    * For the current set of transform feeedback varyings used for transform
+    * feedback output, see LinkedTransformFeedback.
+    */
    struct {
       GLenum BufferMode;
       GLuint NumVarying;
@@ -2246,6 +2304,8 @@ struct gl_shader_program
    /** Vertex shader state - copied into gl_vertex_program at link time */
    struct {
       GLboolean UsesClipDistance; /**< True if gl_ClipDistance is written to. */
+      GLuint ClipDistanceArraySize; /**< Size of the gl_ClipDistance array, or
+                                         0 if not present. */
    } Vert;
 
    /* post-link info: */
@@ -2273,7 +2333,6 @@ struct gl_shader_program
    /** Which texture target is being sampled (TEXTURE_1D/2D/3D/etc_INDEX) */
    gl_texture_index SamplerTargets[MAX_SAMPLERS];
 
-   struct gl_program_parameter_list *Varying;
    GLboolean LinkStatus;   /**< GL_LINK_STATUS */
    GLboolean Validated;
    GLboolean _Used;        /**< Ever used for drawing? */
@@ -2317,6 +2376,8 @@ struct gl_shader_state
    struct gl_shader_program *CurrentVertexProgram;
    struct gl_shader_program *CurrentGeometryProgram;
    struct gl_shader_program *CurrentFragmentProgram;
+
+   struct gl_shader_program *_CurrentFragmentProgram;
 
    /**
     * Program used by glUniform calls.
@@ -2469,85 +2530,34 @@ struct gl_shared_state
 
 
 
-
 /**
- * A renderbuffer stores colors or depth values or stencil values.
- * A framebuffer object will have a collection of these.
- * Data are read/written to the buffer with a handful of Get/Put functions.
- *
- * Instances of this object are allocated with the Driver's NewRenderbuffer
- * hook.  Drivers will likely wrap this class inside a driver-specific
- * class to simulate inheritance.
+ * Renderbuffers represent drawing surfaces such as color, depth and/or
+ * stencil.  A framebuffer object has a set of renderbuffers.
+ * Drivers will typically derive subclasses of this type.
  */
 struct gl_renderbuffer
 {
-   _glthread_Mutex Mutex;		   /**< for thread safety */
+   _glthread_Mutex Mutex; /**< for thread safety */
    GLuint ClassID;        /**< Useful for drivers */
    GLuint Name;
    GLint RefCount;
    GLuint Width, Height;
-   GLint RowStride;       /**< Padded width in units of pixels */
-   GLboolean Purgeable;   /**< Is the buffer purgeable under memory pressure? */
-
+   GLboolean Purgeable;  /**< Is the buffer purgeable under memory pressure? */
    GLboolean AttachedAnytime; /**< TRUE if it was attached to a framebuffer */
-
    GLubyte NumSamples;
-
    GLenum InternalFormat; /**< The user-specified format */
    GLenum _BaseFormat;    /**< Either GL_RGB, GL_RGBA, GL_DEPTH_COMPONENT or
                                GL_STENCIL_INDEX. */
    gl_format Format;      /**< The actual renderbuffer memory format */
 
-   GLenum DataType;      /**< Type of values passed to the Get/Put functions */
-   GLvoid *Data;        /**< This may not be used by some kinds of RBs */
-
-   /* Used to wrap one renderbuffer around another: */
-   struct gl_renderbuffer *Wrapped;
-
-   /* Delete this renderbuffer */
+   /** Delete this renderbuffer */
    void (*Delete)(struct gl_renderbuffer *rb);
 
-   /* Allocate new storage for this renderbuffer */
-   GLboolean (*AllocStorage)(struct gl_context *ctx, struct gl_renderbuffer *rb,
+   /** Allocate new storage for this renderbuffer */
+   GLboolean (*AllocStorage)(struct gl_context *ctx,
+                             struct gl_renderbuffer *rb,
                              GLenum internalFormat,
                              GLuint width, GLuint height);
-
-   /* Lock/Unlock are called before/after calling the Get/Put functions.
-    * Not sure this is the right place for these yet.
-   void (*Lock)(struct gl_context *ctx, struct gl_renderbuffer *rb);
-   void (*Unlock)(struct gl_context *ctx, struct gl_renderbuffer *rb);
-    */
-
-   /* Return a pointer to the element/pixel at (x,y).
-    * Should return NULL if the buffer memory can't be directly addressed.
-    */
-   void *(*GetPointer)(struct gl_context *ctx, struct gl_renderbuffer *rb,
-                       GLint x, GLint y);
-
-   /* Get/Read a row of values.
-    * The values will be of format _BaseFormat and type DataType.
-    */
-   void (*GetRow)(struct gl_context *ctx, struct gl_renderbuffer *rb, GLuint count,
-                  GLint x, GLint y, void *values);
-
-   /* Get/Read values at arbitrary locations.
-    * The values will be of format _BaseFormat and type DataType.
-    */
-   void (*GetValues)(struct gl_context *ctx, struct gl_renderbuffer *rb, GLuint count,
-                     const GLint x[], const GLint y[], void *values);
-
-   /* Put/Write a row of values.
-    * The values will be of format _BaseFormat and type DataType.
-    */
-   void (*PutRow)(struct gl_context *ctx, struct gl_renderbuffer *rb, GLuint count,
-                  GLint x, GLint y, const void *values, const GLubyte *mask);
-
-   /* Put/Write values at arbitrary locations.
-    * The values will be of format _BaseFormat and type DataType.
-    */
-   void (*PutValues)(struct gl_context *ctx, struct gl_renderbuffer *rb, GLuint count,
-                     const GLint x[], const GLint y[], const void *values,
-                     const GLubyte *mask);
 };
 
 
@@ -2642,12 +2652,6 @@ struct gl_framebuffer
    GLint _ColorReadBufferIndex; /* -1 = None */
    struct gl_renderbuffer *_ColorDrawBuffers[MAX_DRAW_BUFFERS];
    struct gl_renderbuffer *_ColorReadBuffer;
-
-   /** Wrappers to make combined depth/stencil buffers look like separate
-    * buffers.  Only used by swrast.  Will be removed in the future.
-    */
-   struct gl_renderbuffer *_DepthBuffer;
-   struct gl_renderbuffer *_StencilBuffer;
 
    /** Delete this framebuffer */
    void (*Delete)(struct gl_framebuffer *fb);
@@ -2768,6 +2772,12 @@ struct gl_constants
    GLuint GLSLVersion;  /**< GLSL version supported (ex: 120 = 1.20) */
 
    /**
+    * Changes default GLSL extension behavior from "error" to "warn".  It's out
+    * of spec, but it can make some apps work that otherwise wouldn't.
+    */
+   GLboolean ForceGLSLExtensionsWarn;
+
+   /**
     * Does the driver support real 32-bit integers?  (Otherwise, integers are
     * simulated via floats.)
     */
@@ -2803,9 +2813,6 @@ struct gl_constants
 
    /** GL_EXT_gpu_shader4 */
    GLint MinProgramTexelOffset, MaxProgramTexelOffset;
-
-   /* GL_EXT_framebuffer_sRGB */
-   GLboolean sRGBCapable; /* can enable sRGB blend/update on FBOs */
 
    /* GL_ARB_robustness */
    GLenum ResetStrategy;

@@ -44,7 +44,14 @@ _mesa_is_cube_face(GLenum target)
            target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB);
 }
 
-
+/** Is any of the dimensions of given texture equal to zero? */
+static inline GLboolean
+_mesa_is_zero_size_texture(const struct gl_texture_image *texImage)
+{
+   return (texImage->Width == 0 ||
+           texImage->Height == 0 ||
+           texImage->Depth == 0);
+}
 
 /** \name Internal functions */
 /*@{*/
@@ -67,7 +74,7 @@ _mesa_delete_texture_image( struct gl_context *ctx,
 
 
 extern void
-_mesa_init_teximage_fields(struct gl_context *ctx, GLenum target,
+_mesa_init_teximage_fields(struct gl_context *ctx,
                            struct gl_texture_image *img,
                            GLsizei width, GLsizei height, GLsizei depth,
                            GLint border, GLenum internalFormat,

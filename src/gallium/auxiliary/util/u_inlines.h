@@ -252,10 +252,7 @@ pipe_buffer_map_range(struct pipe_context *pipe,
       return NULL;
    }
 
-   /* Match old screen->buffer_map_range() behaviour, return pointer
-    * to where the beginning of the buffer would be:
-    */
-   return (void *)((char *)map - offset);
+   return map;
 }
 
 
@@ -374,7 +371,7 @@ pipe_buffer_read(struct pipe_context *pipe,
 					 &src_transfer);
 
    if (map)
-      memcpy(data, map + offset, size);
+      memcpy(data, map, size);
 
    pipe_buffer_unmap(pipe, src_transfer);
 }
@@ -462,6 +459,17 @@ static INLINE void util_copy_vertex_buffers(struct pipe_vertex_buffer *dst,
     * of pipe_vertex_buffer. */
    *dst_count = src_count;
    memcpy(dst, src, src_count * sizeof(struct pipe_vertex_buffer));
+}
+
+static INLINE float
+util_get_min_point_size(const struct pipe_rasterizer_state *state)
+{
+   /* The point size should be clamped to this value at the rasterizer stage.
+    */
+   return state->gl_rasterization_rules &&
+          !state->point_quad_rasterization &&
+          !state->point_smooth &&
+          !state->multisample ? 1.0f : 0.0f;
 }
 
 #ifdef __cplusplus

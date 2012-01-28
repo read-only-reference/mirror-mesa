@@ -22,8 +22,9 @@ doxygen:
 	cd doxygen && $(MAKE)
 
 check:
+	cd src/glsl && $(MAKE) check
 	cd src/glsl/tests/ && ./optimization-test
-	@echo "All tests passed."
+	make -C tests check
 
 clean:
 	-@touch $(TOP)/configs/current
@@ -184,13 +185,15 @@ ultrix-gcc:
 
 # Rules for making release tarballs
 
-PACKAGE_VERSION=7.12-devel
+PACKAGE_VERSION=8.0-devel
 PACKAGE_DIR = Mesa-$(PACKAGE_VERSION)
 PACKAGE_NAME = MesaLib-$(PACKAGE_VERSION)
 
 EXTRA_FILES = \
 	aclocal.m4					\
 	configure					\
+	tests/Makefile.in				\
+	tests/glx/Makefile.in				\
 	src/glsl/glsl_parser.cpp			\
 	src/glsl/glsl_parser.h				\
 	src/glsl/glsl_lexer.cpp				\

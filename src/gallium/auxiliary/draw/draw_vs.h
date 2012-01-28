@@ -111,7 +111,8 @@ struct draw_vertex_shader {
    struct tgsi_shader_info info;
    unsigned position_output;
    unsigned edgeflag_output;
-
+   unsigned clipvertex_output;
+   unsigned clipdistance_output[2];
    /* Extracted from shader:
     */
    const float (*immediates)[4];

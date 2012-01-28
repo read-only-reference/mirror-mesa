@@ -127,6 +127,22 @@ struct pipe_rasterizer_state
     */
    unsigned rasterizer_discard:1;
 
+   /**
+    * When false, depth clipping is disabled and the depth value will be
+    * clamped later at the per-pixel level before depth testing.
+    * This depends on PIPE_CAP_DEPTH_CLIP_DISABLE.
+    */
+   unsigned depth_clip:1;
+
+   /**
+    * Enable bits for clipping half-spaces.
+    * This applies to both user clip planes and shader clip distances.
+    * Note that if the bound shader exports any clip distances, these
+    * replace all user clip planes, and clip half-spaces enabled here
+    * but not written by the shader count as disabled.
+    */
+   unsigned clip_plane_enable:PIPE_MAX_CLIP_PLANES;
+
    unsigned line_stipple_factor:8;  /**< [1..256] actually */
    unsigned line_stipple_pattern:16;
 
@@ -165,8 +181,6 @@ struct pipe_scissor_state
 struct pipe_clip_state
 {
    float ucp[PIPE_MAX_CLIP_PLANES][4];
-   unsigned nr;
-   unsigned depth_clamp:1;
 };
 
 
@@ -176,16 +190,19 @@ struct pipe_clip_state
 struct pipe_stream_output_info
 {
    unsigned num_outputs;
-   /** stride for an entire vertex, only used if all output_buffers are 0 */
-   unsigned stride;
+   /** stride for an entire vertex for each buffer in dwords */
+   unsigned stride[PIPE_MAX_SO_BUFFERS];
+
    /**
     * Array of stream outputs, in the order they are to be written in.
     * Selected components are tightly packed into the output buffer.
     */
    struct {
-      unsigned register_index:8; /**< 0 to PIPE_MAX_SHADER_OUTPUTS */
-      unsigned register_mask:4;  /**< TGSI_WRITEMASK_x */
-      unsigned output_buffer:4;  /**< 0 to PIPE_MAX_SO_BUFFERS */
+      unsigned register_index:8;  /**< 0 to PIPE_MAX_SHADER_OUTPUTS */
+      unsigned start_component:2; /** 0 to 3 */
+      unsigned num_components:3;  /** 1 to 4 */
+      unsigned output_buffer:3;   /**< 0 to PIPE_MAX_SO_BUFFERS */
+      unsigned dst_offset:16;     /**< offset into the buffer in dwords */
    } output[PIPE_MAX_SHADER_OUTPUTS];
 };
 

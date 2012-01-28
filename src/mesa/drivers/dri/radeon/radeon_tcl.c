@@ -276,89 +276,6 @@ void radeonTclPrimitive( struct gl_context *ctx,
    }
 }
 
-/**********************************************************************/
-/*             Fog blend factor computation for hw tcl                */
-/*             same calculation used as in t_vb_fog.c                 */
-/**********************************************************************/
-
-#define FOG_EXP_TABLE_SIZE 256
-#define FOG_MAX (10.0)
-#define EXP_FOG_MAX .0006595
-#define FOG_INCR (FOG_MAX/FOG_EXP_TABLE_SIZE)
-static GLfloat exp_table[FOG_EXP_TABLE_SIZE];
-
-#if 1
-#define NEG_EXP( result, narg )						\
-do {									\
-   GLfloat f = (GLfloat) (narg * (1.0/FOG_INCR));			\
-   GLint k = (GLint) f;							\
-   if (k > FOG_EXP_TABLE_SIZE-2) 					\
-      result = (GLfloat) EXP_FOG_MAX;					\
-   else									\
-      result = exp_table[k] + (f-k)*(exp_table[k+1]-exp_table[k]);	\
-} while (0)
-#else
-#define NEG_EXP( result, narg )					\
-do {								\
-   result = exp(-narg);						\
-} while (0)
-#endif
-
-
-/**
- * Initialize the exp_table[] lookup table for approximating exp().
- */
-void
-radeonInitStaticFogData( void )
-{
-   GLfloat f = 0.0F;
-   GLint i = 0;
-   for ( ; i < FOG_EXP_TABLE_SIZE ; i++, f += FOG_INCR) {
-      exp_table[i] = (GLfloat) exp(-f);
-   }
-}
-
-
-/**
- * Compute per-vertex fog blend factors from fog coordinates by
- * evaluating the GL_LINEAR, GL_EXP or GL_EXP2 fog function.
- * Fog coordinates are distances from the eye (typically between the
- * near and far clip plane distances).
- * Note the fog (eye Z) coords may be negative so we use ABS(z) below.
- * Fog blend factors are in the range [0,1].
- */
-float
-radeonComputeFogBlendFactor( struct gl_context *ctx, GLfloat fogcoord )
-{
-   GLfloat end  = ctx->Fog.End;
-   GLfloat d, temp;
-   const GLfloat z = FABSF(fogcoord);
-
-   switch (ctx->Fog.Mode) {
-   case GL_LINEAR:
-      if (ctx->Fog.Start == ctx->Fog.End)
-         d = 1.0F;
-      else
-         d = 1.0F / (ctx->Fog.End - ctx->Fog.Start);
-      temp = (end - z) * d;
-      return CLAMP(temp, 0.0F, 1.0F);
-      break;
-   case GL_EXP:
-      d = ctx->Fog.Density;
-      NEG_EXP( temp, d * z );
-      return temp;
-      break;
-   case GL_EXP2:
-      d = ctx->Fog.Density*ctx->Fog.Density;
-      NEG_EXP( temp, d * z * z );
-      return temp;
-      break;
-   default:
-      _mesa_problem(ctx, "Bad fog mode in make_fog_coord");
-      return 0;
-   }
-}
-
 /**
  * Predict total emit size for next rendering operation so there is no flush in middle of rendering
  * Prediction has to aim towards the best possible value that is worse than worst case scenario
@@ -401,8 +318,6 @@ static GLuint radeonEnsureEmitSize( struct gl_context * ctx , GLuint inputs )
     /* predict size for elements */
     for (i = 0; i < VB->PrimitiveCount; ++i)
     {
-      if (!VB->Primitive[i].count)
-	continue;
       /* If primitive.count is less than MAX_CONVERSION_SIZE
 	 rendering code may decide convert to elts.
 	 In that case we have to make pessimistic prediction.
@@ -410,6 +325,8 @@ static GLuint radeonEnsureEmitSize( struct gl_context * ctx , GLuint inputs )
       const GLuint elts = ELTS_BUFSZ(nr_aos);
       const GLuint index = INDEX_BUFSZ;
       const GLuint vbuf = VBUF_BUFSZ;
+      if (!VB->Primitive[i].count)
+	continue;
       if ( (!VB->Elts && VB->Primitive[i].count >= MAX_CONVERSION_SIZE)
 	  || vbuf > index + elts)
 	space_required += vbuf;
@@ -442,6 +359,7 @@ static GLboolean radeon_run_tcl_render( struct gl_context *ctx,
    struct vertex_buffer *VB = &tnl->vb;
    GLuint inputs = VERT_BIT_POS | VERT_BIT_COLOR0;
    GLuint i;
+   GLuint emit_end;
 
    /* TODO: separate this from the swtnl pipeline 
     */
@@ -477,7 +395,7 @@ static GLboolean radeon_run_tcl_render( struct gl_context *ctx,
    }
 
    radeonReleaseArrays( ctx, ~0 );
-   GLuint emit_end = radeonEnsureEmitSize( ctx, inputs )
+   emit_end = radeonEnsureEmitSize( ctx, inputs )
      + rmesa->radeon.cmdbuf.cs->cdw;
    radeonEmitArrays( ctx, inputs );
 

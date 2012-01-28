@@ -109,7 +109,8 @@ static void brwPrepareExecBegin(struct gl_context *ctx)
    }
 }
 
-static void brwInitDriverFunctions( struct dd_function_table *functions )
+static void brwInitDriverFunctions(struct intel_screen *screen,
+				   struct dd_function_table *functions)
 {
    intelInitDriverFunctions( functions );
 
@@ -118,7 +119,11 @@ static void brwInitDriverFunctions( struct dd_function_table *functions )
 
    functions->PrepareExecBegin = brwPrepareExecBegin;
    functions->BeginTransformFeedback = brw_begin_transform_feedback;
-   functions->EndTransformFeedback = brw_end_transform_feedback;
+
+   if (screen->gen >= 7)
+      functions->EndTransformFeedback = gen7_end_transform_feedback;
+   else
+      functions->EndTransformFeedback = brw_end_transform_feedback;
 }
 
 bool
@@ -127,6 +132,8 @@ brwCreateContext(int api,
 		 __DRIcontext *driContextPriv,
 	         void *sharedContextPrivate)
 {
+   __DRIscreen *sPriv = driContextPriv->driScreenPriv;
+   struct intel_screen *screen = sPriv->driverPrivate;
    struct dd_function_table functions;
    struct brw_context *brw = rzalloc(NULL, struct brw_context);
    struct intel_context *intel = &brw->intel;
@@ -138,7 +145,7 @@ brwCreateContext(int api,
       return false;
    }
 
-   brwInitDriverFunctions( &functions );
+   brwInitDriverFunctions(screen, &functions);
 
    if (!intelInitContext( intel, api, mesaVis, driContextPriv,
 			  sharedContextPrivate, &functions )) {
@@ -171,11 +178,12 @@ brwCreateContext(int api,
 	   ctx->Const.MaxTextureLevels = MAX_TEXTURE_LEVELS;
    ctx->Const.Max3DTextureLevels = 9;
    ctx->Const.MaxCubeTextureLevels = 12;
-   /* minimum maximum.  Users are likely to run into memory problems
-    * even at this size, since 64 * 2048 * 2048 * 4 = 1GB and we can't
-    * address that much.
-    */
-   ctx->Const.MaxArrayTextureLayers = 64;
+
+   if (intel->gen >= 7)
+      ctx->Const.MaxArrayTextureLayers = 2048;
+   else
+      ctx->Const.MaxArrayTextureLayers = 512;
+
    ctx->Const.MaxTextureRectSize = (1<<12);
    
    ctx->Const.MaxTextureMaxAnisotropy = 16.0;
@@ -199,6 +207,14 @@ brwCreateContext(int api,
    ctx->Const.MaxTransformFeedbackInterleavedComponents = BRW_MAX_SOL_BINDINGS;
    ctx->Const.MaxTransformFeedbackSeparateComponents =
       BRW_MAX_SOL_BINDINGS / BRW_MAX_SOL_BUFFERS;
+
+   /* Claim to support 4 multisamples, even though we don't.  This is a
+    * requirement for GL 3.0 that we missed until the last minute.  Go ahead and
+    * claim the limit, so that usage of the 4 multisample-based API that is
+    * guaranteed in 3.0 succeeds, even though we only rasterize a single sample.
+    */
+   if (intel->gen >= 6)
+      ctx->Const.MaxSamples = 4;
 
    /* if conformance mode is set, swrast can handle any size AA point */
    ctx->Const.MaxPointSizeAA = 255.0;
@@ -312,7 +328,7 @@ brwCreateContext(int api,
 	 brw->max_vs_threads = 24;
 	 brw->max_gs_threads = 21; /* conservative; 24 if rendering disabled */
 	 brw->urb.size = 32;            /* volume 5c.5 section 5.1 */
-	 brw->urb.max_vs_entries = 128; /* volume 2a (see 3DSTATE_URB) */
+	 brw->urb.max_vs_entries = 256; /* volume 2a (see 3DSTATE_URB) */
 	 brw->urb.max_gs_entries = 256;
       }
       brw->urb.gen6_gs_previously_active = false;
@@ -351,16 +367,12 @@ brwCreateContext(int api,
 
    brw_draw_init( brw );
 
-   brw->new_vs_backend = (getenv("INTEL_OLD_VS") == NULL);
    brw->precompile = driQueryOptionb(&intel->optionCache, "shader_precompile");
 
-   /* If we're using the new shader backend, we require integer uniforms
-    * stored as actual integers.
-    */
-   if (brw->new_vs_backend) {
-      ctx->Const.NativeIntegers = true;
-      ctx->Const.UniformBooleanTrue = 1;
-   }
+   ctx->Const.NativeIntegers = true;
+   ctx->Const.UniformBooleanTrue = 1;
+
+   ctx->Const.ForceGLSLExtensionsWarn = driQueryOptionb(&intel->optionCache, "force_glsl_extensions_warn");
 
    return true;
 }

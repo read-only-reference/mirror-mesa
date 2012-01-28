@@ -119,7 +119,7 @@ st_feedback_draw_vbo(struct gl_context *ctx,
    st_validate_state(st);
 
    if (!index_bounds_valid)
-      vbo_get_minmax_index(ctx, prims, ib, &min_index, &max_index);
+      vbo_get_minmax_indices(ctx, prims, ib, &min_index, &max_index, nr_prims);
 
    /* must get these after state validation! */
    vp = st->vp;
@@ -196,7 +196,8 @@ st_feedback_draw_vbo(struct gl_context *ctx,
          st_pipe_vertex_format(arrays[mesaAttr]->Type,
                                arrays[mesaAttr]->Size,
                                arrays[mesaAttr]->Format,
-                               arrays[mesaAttr]->Normalized);
+                               arrays[mesaAttr]->Normalized,
+                               arrays[mesaAttr]->Integer);
       assert(velements[attr].src_format);
 
       /* tell draw about this attribute */

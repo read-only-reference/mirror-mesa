@@ -625,11 +625,11 @@ setup_tri_coefficients(struct setup_context *setup)
 
       switch (vinfo->attrib[fragSlot].interp_mode) {
       case INTERP_CONSTANT:
-         for (j = 0; j < NUM_CHANNELS; j++)
+         for (j = 0; j < TGSI_NUM_CHANNELS; j++)
             const_coeff(setup, &setup->coef[fragSlot], vertSlot, j);
          break;
       case INTERP_LINEAR:
-         for (j = 0; j < NUM_CHANNELS; j++) {
+         for (j = 0; j < TGSI_NUM_CHANNELS; j++) {
             tri_apply_cylindrical_wrap(setup->vmin[vertSlot][j],
                                        setup->vmid[vertSlot][j],
                                        setup->vmax[vertSlot][j],
@@ -639,7 +639,7 @@ setup_tri_coefficients(struct setup_context *setup)
          }
          break;
       case INTERP_PERSPECTIVE:
-         for (j = 0; j < NUM_CHANNELS; j++) {
+         for (j = 0; j < TGSI_NUM_CHANNELS; j++) {
             tri_apply_cylindrical_wrap(setup->vmin[vertSlot][j],
                                        setup->vmid[vertSlot][j],
                                        setup->vmax[vertSlot][j],
@@ -807,7 +807,7 @@ sp_setup_tri(struct setup_context *setup,
    print_vertex(setup, v2);
 #endif
 
-   if (setup->softpipe->no_rast)
+   if (setup->softpipe->no_rast || setup->softpipe->rasterizer->rasterizer_discard)
       return;
    
    det = calc_det(v0, v1, v2);
@@ -981,11 +981,11 @@ setup_line_coefficients(struct setup_context *setup,
 
       switch (vinfo->attrib[fragSlot].interp_mode) {
       case INTERP_CONSTANT:
-         for (j = 0; j < NUM_CHANNELS; j++)
+         for (j = 0; j < TGSI_NUM_CHANNELS; j++)
             const_coeff(setup, &setup->coef[fragSlot], vertSlot, j);
          break;
       case INTERP_LINEAR:
-         for (j = 0; j < NUM_CHANNELS; j++) {
+         for (j = 0; j < TGSI_NUM_CHANNELS; j++) {
             line_apply_cylindrical_wrap(setup->vmin[vertSlot][j],
                                         setup->vmax[vertSlot][j],
                                         fsInfo->input_cylindrical_wrap[fragSlot] & (1 << j),
@@ -994,7 +994,7 @@ setup_line_coefficients(struct setup_context *setup,
          }
          break;
       case INTERP_PERSPECTIVE:
-         for (j = 0; j < NUM_CHANNELS; j++) {
+         for (j = 0; j < TGSI_NUM_CHANNELS; j++) {
             line_apply_cylindrical_wrap(setup->vmin[vertSlot][j],
                                         setup->vmax[vertSlot][j],
                                         fsInfo->input_cylindrical_wrap[fragSlot] & (1 << j),
@@ -1073,7 +1073,7 @@ sp_setup_line(struct setup_context *setup,
    print_vertex(setup, v1);
 #endif
 
-   if (setup->softpipe->no_rast)
+   if (setup->softpipe->no_rast || setup->softpipe->rasterizer->rasterizer_discard)
       return;
 
    if (dx == 0 && dy == 0)
@@ -1206,7 +1206,7 @@ sp_setup_point(struct setup_context *setup,
    print_vertex(setup, v0);
 #endif
 
-   if (softpipe->no_rast)
+   if (setup->softpipe->no_rast || setup->softpipe->rasterizer->rasterizer_discard)
       return;
 
    assert(setup->softpipe->reduced_prim == PIPE_PRIM_POINTS);
@@ -1241,11 +1241,11 @@ sp_setup_point(struct setup_context *setup,
       case INTERP_CONSTANT:
          /* fall-through */
       case INTERP_LINEAR:
-         for (j = 0; j < NUM_CHANNELS; j++)
+         for (j = 0; j < TGSI_NUM_CHANNELS; j++)
             const_coeff(setup, &setup->coef[fragSlot], vertSlot, j);
          break;
       case INTERP_PERSPECTIVE:
-         for (j = 0; j < NUM_CHANNELS; j++)
+         for (j = 0; j < TGSI_NUM_CHANNELS; j++)
             point_persp_coeff(setup, setup->vprovoke,
                               &setup->coef[fragSlot], vertSlot, j);
          break;

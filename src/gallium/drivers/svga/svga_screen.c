@@ -120,7 +120,7 @@ svga_get_paramf(struct pipe_screen *screen, enum pipe_capf param)
       return result.u;
 
    case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
-      return 16.0;
+      return 15.0;
 
    default:
       return 0;
@@ -185,8 +185,8 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
        * No mechanism to query the host, and at least limited to 2048x2048 on
        * certain hardware.
        */
-      return MIN2(screen->get_paramf(screen, PIPE_CAP_MAX_TEXTURE_2D_LEVELS),
-                  12.0 /* 2048x2048 */);
+      return MIN2(screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_2D_LEVELS),
+                  12 /* 2048x2048 */);
 
    case PIPE_CAP_BLEND_EQUATION_SEPARATE: /* req. for GL 1.5 */
       return 1;
@@ -259,6 +259,8 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
          return 0;
       case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
          return 16;
+      case PIPE_SHADER_CAP_OUTPUT_READ:
+         return 0;
       }
       break;
    case PIPE_SHADER_VERTEX:
@@ -301,6 +303,8 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_SUBROUTINES:
          return 0;
       case PIPE_SHADER_CAP_INTEGERS:
+         return 0;
+      case PIPE_SHADER_CAP_OUTPUT_READ:
          return 0;
       default:
          break;

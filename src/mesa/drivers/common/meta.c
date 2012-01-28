@@ -1026,7 +1026,7 @@ _mesa_meta_in_progress(struct gl_context *ctx)
 static INLINE GLfloat
 invert_z(GLfloat normZ)
 {
-   GLfloat objZ = 1.0 - 2.0 * normZ;
+   GLfloat objZ = 1.0f - 2.0f * normZ;
    return objZ;
 }
 
@@ -1451,7 +1451,12 @@ _mesa_meta_BlitFramebuffer(struct gl_context *ctx,
    struct vertex verts[4];
    GLboolean newTex;
 
-   if (srcW > maxTexSize || srcH > maxTexSize) {
+   /* In addition to falling back if the blit size is larger than the maximum
+    * texture size, fallback if the source is multisampled.  This fallback can
+    * be removed once Mesa gets support ARB_texture_multisample.
+    */
+   if (srcW > maxTexSize || srcH > maxTexSize
+       || ctx->ReadBuffer->Visual.samples > 0) {
       /* XXX avoid this fallback */
       _swrast_BlitFramebuffer(ctx, srcX0, srcY0, srcX1, srcY1,
                               dstX0, dstY0, dstX1, dstY1, mask, filter);
@@ -2920,8 +2925,8 @@ _mesa_meta_GenerateMipmap(struct gl_context *ctx, GLenum target,
 
    /* setup texcoords (XXX what about border?) */
    setup_texture_coords(faceTarget,
-                        0.0, 0.0, /* width, height never used here */
                         slice,
+                        0, 0, /* width, height never used here */
                         verts[0].tex,
                         verts[1].tex,
                         verts[2].tex,
@@ -3071,6 +3076,8 @@ get_temp_image_type(struct gl_context *ctx, GLenum baseFormat)
    switch (baseFormat) {
    case GL_RGBA:
    case GL_RGB:
+   case GL_RG:
+   case GL_RED:
    case GL_ALPHA:
    case GL_LUMINANCE:
    case GL_LUMINANCE_ALPHA:
@@ -3086,7 +3093,8 @@ get_temp_image_type(struct gl_context *ctx, GLenum baseFormat)
    case GL_DEPTH_STENCIL:
       return GL_UNSIGNED_INT_24_8;
    default:
-      _mesa_problem(ctx, "Unexpected format in get_temp_image_type()");
+      _mesa_problem(ctx, "Unexpected format %d in get_temp_image_type()",
+		    baseFormat);
       return 0;
    }
 }
@@ -3098,19 +3106,18 @@ get_temp_image_type(struct gl_context *ctx, GLenum baseFormat)
  */
 static void
 copy_tex_sub_image(struct gl_context *ctx,
-                   GLuint dims, GLenum target, GLint level,
+                   GLuint dims,
+                   struct gl_texture_image *texImage,
                    GLint xoffset, GLint yoffset, GLint zoffset,
+                   struct gl_renderbuffer *rb,
                    GLint x, GLint y,
                    GLsizei width, GLsizei height)
 {
-   struct gl_texture_object *texObj;
-   struct gl_texture_image *texImage;
+   struct gl_texture_object *texObj = texImage->TexObject;
+   const GLenum target = texObj->Target;
    GLenum format, type;
    GLint bpp;
    void *buf;
-
-   texObj = _mesa_get_current_tex_object(ctx, target);
-   texImage = _mesa_select_tex_image(ctx, texObj, target, level);
 
    /* Choose format/type for temporary image buffer */
    format = _mesa_get_format_base_format(texImage->TexFormat);
@@ -3122,6 +3129,11 @@ copy_tex_sub_image(struct gl_context *ctx,
        * not what we want (should be L=R).
        */
       format = GL_RGBA;
+   }
+
+   if (_mesa_is_format_integer_color(texImage->TexFormat)) {
+      _mesa_problem(ctx, "unsupported integer color copyteximage");
+      return;
    }
 
    type = get_temp_image_type(ctx, format);
@@ -3180,34 +3192,40 @@ copy_tex_sub_image(struct gl_context *ctx,
 
 
 void
-_mesa_meta_CopyTexSubImage1D(struct gl_context *ctx, GLenum target, GLint level,
+_mesa_meta_CopyTexSubImage1D(struct gl_context *ctx,
+                             struct gl_texture_image *texImage,
                              GLint xoffset,
+                             struct gl_renderbuffer *rb,
                              GLint x, GLint y, GLsizei width)
 {
-   copy_tex_sub_image(ctx, 1, target, level, xoffset, 0, 0,
-                      x, y, width, 1);
+   copy_tex_sub_image(ctx, 1, texImage, xoffset, 0, 0,
+                      rb, x, y, width, 1);
 }
 
 
 void
-_mesa_meta_CopyTexSubImage2D(struct gl_context *ctx, GLenum target, GLint level,
+_mesa_meta_CopyTexSubImage2D(struct gl_context *ctx,
+                             struct gl_texture_image *texImage,
                              GLint xoffset, GLint yoffset,
+                             struct gl_renderbuffer *rb,
                              GLint x, GLint y,
                              GLsizei width, GLsizei height)
 {
-   copy_tex_sub_image(ctx, 2, target, level, xoffset, yoffset, 0,
-                      x, y, width, height);
+   copy_tex_sub_image(ctx, 2, texImage, xoffset, yoffset, 0,
+                      rb, x, y, width, height);
 }
 
 
 void
-_mesa_meta_CopyTexSubImage3D(struct gl_context *ctx, GLenum target, GLint level,
+_mesa_meta_CopyTexSubImage3D(struct gl_context *ctx,
+                             struct gl_texture_image *texImage,
                              GLint xoffset, GLint yoffset, GLint zoffset,
+                             struct gl_renderbuffer *rb,
                              GLint x, GLint y,
                              GLsizei width, GLsizei height)
 {
-   copy_tex_sub_image(ctx, 3, target, level, xoffset, yoffset, zoffset,
-                      x, y, width, height);
+   copy_tex_sub_image(ctx, 3, texImage, xoffset, yoffset, zoffset,
+                      rb, x, y, width, height);
 }
 
 

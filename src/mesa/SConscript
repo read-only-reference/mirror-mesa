@@ -161,7 +161,6 @@ swrast_sources = [
     'swrast/s_copypix.c',
     'swrast/s_context.c',
     'swrast/s_depth.c',
-    'swrast/s_depthstencil.c',
     'swrast/s_drawpix.c',
     'swrast/s_feedback.c',
     'swrast/s_fog.c',
@@ -423,14 +422,6 @@ if env['gcc'] and env['platform'] != 'windows':
         mesa_sources += [
             'x86-64/x86-64.c',
             'x86-64/xform4.S',
-        ]
-    elif env['machine'] == 'ppc':
-        env.Append(CPPDEFINES = [
-            'USE_PPC_ASM',
-            'USE_VMX_ASM',
-        ])
-        mesa_sources += [
-            'ppc/common_ppc.c',
         ]
     elif env['machine'] == 'sparc':
         mesa_sources += [

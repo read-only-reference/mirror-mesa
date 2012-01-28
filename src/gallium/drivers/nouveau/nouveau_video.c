@@ -424,44 +424,33 @@ nouveau_decoder_surface_index(struct nouveau_decoder *dec,
 }
 
 static void
-nouveau_decoder_set_picture_parameters(struct pipe_video_decoder *decoder,
-                                       struct pipe_picture_desc *picture_desc)
+nouveau_decoder_begin_frame(struct pipe_video_decoder *decoder,
+                            struct pipe_video_buffer *target,
+                            struct pipe_picture_desc *picture)
 {
-   struct nouveau_decoder *dec = (struct nouveau_decoder *)decoder;
-   struct pipe_mpeg12_picture_desc *desc;
-   desc = (struct pipe_mpeg12_picture_desc *)picture_desc;
-   dec->picture_structure = desc->picture_structure;
-}
-
-static void
-nouveau_decoder_set_reference_frames(struct pipe_video_decoder *decoder,
-                                     struct pipe_video_buffer **buffers,
-                                     unsigned count)
-{
-   struct nouveau_decoder *dec = (struct nouveau_decoder *)decoder;
-   if (count >= 1 && buffers[0])
-      dec->past = nouveau_decoder_surface_index(dec, buffers[0]);
-   if (count >= 2 && buffers[1])
-      dec->future = nouveau_decoder_surface_index(dec, buffers[1]);
-}
-
-static void
-nouveau_decoder_set_decode_target(struct pipe_video_decoder *decoder,
-                                  struct pipe_video_buffer *buffer)
-{
-   struct nouveau_decoder *dec = (struct nouveau_decoder *)decoder;
-   dec->current = nouveau_decoder_surface_index(dec, buffer);
 }
 
 static void
 nouveau_decoder_decode_macroblock(struct pipe_video_decoder *decoder,
+                                  struct pipe_video_buffer *target,
+                                  struct pipe_picture_desc *picture,
                                   const struct pipe_macroblock *pipe_mb,
                                   unsigned num_macroblocks)
 {
    struct nouveau_decoder *dec = (struct nouveau_decoder *)decoder;
+   struct pipe_mpeg12_picture_desc *desc = (struct pipe_mpeg12_picture_desc*)picture;
    const struct pipe_mpeg12_macroblock *mb;
    unsigned i;
+   assert(target->width == decoder->width);
+   assert(target->height == decoder->height);
+
+   dec->current = nouveau_decoder_surface_index(dec, target);
    assert(dec->current < 8);
+   dec->picture_structure = desc->picture_structure;
+   if (desc->ref[1])
+      dec->future = nouveau_decoder_surface_index(dec, desc->ref[1]);
+   if (desc->ref[0])
+      dec->past = nouveau_decoder_surface_index(dec, desc->ref[0]);
 
    if (nouveau_vpe_init(dec)) return;
    mb = (const struct pipe_mpeg12_macroblock *)pipe_mb;
@@ -481,6 +470,13 @@ nouveau_decoder_decode_macroblock(struct pipe_video_decoder *decoder,
       else
          nouveau_vpe_mb_data_blocks(dec, mb);
    }
+}
+
+static void
+nouveau_decoder_end_frame(struct pipe_video_decoder *decoder,
+                          struct pipe_video_buffer *target,
+                          struct pipe_picture_desc *picture)
+{
 }
 
 static void
@@ -511,23 +507,14 @@ nouveau_decoder_destroy(struct pipe_video_decoder *decoder)
    FREE(dec);
 }
 
-static void
-nouveau_decoder_begin_frame(struct pipe_video_decoder *decoder)
-{
-}
-
-static void
-nouveau_decoder_end_frame(struct pipe_video_decoder *decoder)
-{
-}
-
 static struct pipe_video_decoder *
 nouveau_create_decoder(struct pipe_context *context,
                        struct nouveau_screen *screen,
                        enum pipe_video_profile profile,
                        enum pipe_video_entrypoint entrypoint,
                        enum pipe_video_chroma_format chroma_format,
-                       unsigned width, unsigned height, unsigned max_references)
+                       unsigned width, unsigned height,
+                       unsigned max_references, bool expect_chunked_decode)
 {
    struct nouveau_channel *chan = screen->channel;
    struct nouveau_grobj *mpeg = NULL;
@@ -572,11 +559,8 @@ nouveau_create_decoder(struct pipe_context *context,
    dec->base.max_references = max_references;
    dec->base.destroy = nouveau_decoder_destroy;
    dec->base.begin_frame = nouveau_decoder_begin_frame;
-   dec->base.end_frame = nouveau_decoder_end_frame;
-   dec->base.set_decode_target = nouveau_decoder_set_decode_target;
-   dec->base.set_picture_parameters = nouveau_decoder_set_picture_parameters;
-   dec->base.set_reference_frames = nouveau_decoder_set_reference_frames;
    dec->base.decode_macroblock = nouveau_decoder_decode_macroblock;
+   dec->base.begin_frame = nouveau_decoder_end_frame;
    dec->base.flush = nouveau_decoder_flush;
    dec->screen = screen;
 
@@ -646,7 +630,8 @@ fail:
 vl:
    debug_printf("Using g3dvl renderer\n");
    return vl_create_decoder(context, profile, entrypoint,
-                            chroma_format, width, height, max_references);
+                            chroma_format, width, height,
+                            max_references, expect_chunked_decode);
 }
 
 static struct pipe_sampler_view **
@@ -778,24 +763,23 @@ nouveau_video_buffer_destroy(struct pipe_video_buffer *buffer)
 static struct pipe_video_buffer *
 nouveau_video_buffer_create(struct pipe_context *pipe,
                             struct nouveau_screen *screen,
-                            enum pipe_format buffer_format,
-                            enum pipe_video_chroma_format chroma_format,
-                            unsigned width, unsigned height)
+                            const struct pipe_video_buffer *templat)
 {
    struct nouveau_video_buffer *buffer;
    struct pipe_resource templ;
+   unsigned width, height;
 
    /* Only do a linear surface when a hardware decoder is used
     * hardware decoder is only supported on some chipsets
     * and it only supports the NV12 format
     */
-   if (buffer_format != PIPE_FORMAT_NV12 || getenv("XVMC_VL") ||
+   if (templat->buffer_format != PIPE_FORMAT_NV12 || getenv("XVMC_VL") ||
        (screen->device->chipset >= 0x98 && screen->device->chipset != 0xa0))
-      return vl_video_buffer_create(pipe, buffer_format, chroma_format, width, height);
+      return vl_video_buffer_create(pipe, templat);
 
-   assert(chroma_format == PIPE_VIDEO_CHROMA_FORMAT_420);
-   width = align(width, 64);
-   height = align(height, 64);
+   assert(templat->chroma_format == PIPE_VIDEO_CHROMA_FORMAT_420);
+   width = align(templat->width, 64);
+   height = align(templat->height, 64);
 
    buffer = CALLOC_STRUCT(nouveau_video_buffer);
    if (!buffer)
@@ -806,7 +790,7 @@ nouveau_video_buffer_create(struct pipe_context *pipe,
    buffer->base.get_sampler_view_planes = nouveau_video_buffer_sampler_view_planes;
    buffer->base.get_sampler_view_components = nouveau_video_buffer_sampler_view_components;
    buffer->base.get_surfaces = nouveau_video_buffer_surfaces;
-   buffer->base.chroma_format = chroma_format;
+   buffer->base.chroma_format = templat->chroma_format;
    buffer->base.width = width;
    buffer->base.height = height;
    buffer->num_planes = 2;
@@ -851,8 +835,8 @@ nouveau_screen_get_video_param(struct pipe_screen *pscreen,
    case PIPE_VIDEO_CAP_MAX_WIDTH:
    case PIPE_VIDEO_CAP_MAX_HEIGHT:
       return vl_video_buffer_max_size(pscreen);
-   case PIPE_VIDEO_CAP_NUM_BUFFERS_DESIRED:
-      return vl_num_buffers_desired(pscreen, profile);
+   case PIPE_VIDEO_CAP_PREFERED_FORMAT:
+      return PIPE_FORMAT_NV12;
    default:
       debug_printf("unknown video param: %d\n", param);
       return 0;
@@ -871,21 +855,21 @@ nvfx_context_create_decoder(struct pipe_context *context,
                             enum pipe_video_profile profile,
                             enum pipe_video_entrypoint entrypoint,
                             enum pipe_video_chroma_format chroma_format,
-                            unsigned width, unsigned height, unsigned max_references)
+                            unsigned width, unsigned height,
+                            unsigned max_references, bool expect_chunked_decode)
 {
    struct nouveau_screen *screen = &nvfx_context(context)->screen->base;
    return nouveau_create_decoder(context, screen, profile, entrypoint,
-                                 chroma_format, width, height, max_references);
+                                 chroma_format, width, height,
+                                 max_references, expect_chunked_decode);
 }
 
 static struct pipe_video_buffer *
 nvfx_context_video_buffer_create(struct pipe_context *pipe,
-                                 enum pipe_format buffer_format,
-                                 enum pipe_video_chroma_format chroma_format,
-                                 unsigned width, unsigned height)
+                                 const struct pipe_video_buffer *templat)
 {
    struct nouveau_screen *screen = &nvfx_context(pipe)->screen->base;
-   return nouveau_video_buffer_create(pipe, screen, buffer_format, chroma_format, width, height);
+   return nouveau_video_buffer_create(pipe, screen, templat);
 }
 
 void
@@ -900,21 +884,21 @@ nouveau_context_create_decoder(struct pipe_context *context,
                                enum pipe_video_profile profile,
                                enum pipe_video_entrypoint entrypoint,
                                enum pipe_video_chroma_format chroma_format,
-                               unsigned width, unsigned height, unsigned max_references)
+                               unsigned width, unsigned height,
+                               unsigned max_references, bool expect_chunked_decode)
 {
    struct nouveau_screen *screen = nouveau_context(context)->screen;
    return nouveau_create_decoder(context, screen, profile, entrypoint,
-                                 chroma_format, width, height, max_references);
+                                 chroma_format, width, height,
+                                 max_references, expect_chunked_decode);
 }
 
 static struct pipe_video_buffer *
 nouveau_context_video_buffer_create(struct pipe_context *pipe,
-                                    enum pipe_format buffer_format,
-                                    enum pipe_video_chroma_format chroma_format,
-                                    unsigned width, unsigned height)
+                                    const struct pipe_video_buffer *templat)
 {
    struct nouveau_screen *screen = nouveau_context(pipe)->screen;
-   return nouveau_video_buffer_create(pipe, screen, buffer_format, chroma_format, width, height);
+   return nouveau_video_buffer_create(pipe, screen, templat);
 }
 
 void

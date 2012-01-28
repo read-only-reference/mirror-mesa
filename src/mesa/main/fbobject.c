@@ -79,26 +79,6 @@ static struct gl_renderbuffer DummyRenderbuffer;
 static struct gl_framebuffer IncompleteFramebuffer;
 
 
-/**
- * Is the given FBO a user-created FBO?
- */
-static inline GLboolean
-is_user_fbo(const struct gl_framebuffer *fb)
-{
-   return fb->Name != 0;
-}
-
-
-/**
- * Is the given FBO a window system FBO (like an X window)?
- */
-static inline GLboolean
-is_winsys_fbo(const struct gl_framebuffer *fb)
-{
-   return fb->Name == 0;
-}
-
-
 static void
 delete_dummy_renderbuffer(struct gl_renderbuffer *rb)
 {
@@ -214,7 +194,7 @@ _mesa_get_attachment(struct gl_context *ctx, struct gl_framebuffer *fb,
 {
    GLuint i;
 
-   assert(is_user_fbo(fb));
+   assert(_mesa_is_user_fbo(fb));
 
    switch (attachment) {
    case GL_COLOR_ATTACHMENT0_EXT:
@@ -265,7 +245,7 @@ static struct gl_renderbuffer_attachment *
 _mesa_get_fb0_attachment(struct gl_context *ctx, struct gl_framebuffer *fb,
                          GLenum attachment)
 {
-   assert(is_winsys_fbo(fb));
+   assert(_mesa_is_winsys_fbo(fb));
 
    switch (attachment) {
    case GL_FRONT_LEFT:
@@ -711,7 +691,7 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
    GLint i;
    GLuint j;
 
-   assert(is_user_fbo(fb));
+   assert(_mesa_is_user_fbo(fb));
 
    numImages = 0;
    fb->Width = 0;
@@ -1009,10 +989,10 @@ _mesa_DeleteRenderbuffersEXT(GLsizei n, const GLuint *renderbuffers)
                _mesa_BindRenderbufferEXT(GL_RENDERBUFFER_EXT, 0);
             }
 
-            if (is_user_fbo(ctx->DrawBuffer)) {
+            if (_mesa_is_user_fbo(ctx->DrawBuffer)) {
                detach_renderbuffer(ctx, ctx->DrawBuffer, rb);
             }
-            if (is_user_fbo(ctx->ReadBuffer)
+            if (_mesa_is_user_fbo(ctx->ReadBuffer)
                 && ctx->ReadBuffer != ctx->DrawBuffer) {
                detach_renderbuffer(ctx, ctx->ReadBuffer, rb);
             }
@@ -1245,7 +1225,8 @@ _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
    case GL_RGBA8I_EXT:
    case GL_RGBA16I_EXT:
    case GL_RGBA32I_EXT:
-      return ctx->Extensions.EXT_texture_integer ? GL_RGBA : 0;
+      return ctx->VersionMajor >= 3 ||
+             ctx->Extensions.EXT_texture_integer ? GL_RGBA : 0;
 
    case GL_RGB8UI_EXT:
    case GL_RGB16UI_EXT:
@@ -1253,7 +1234,8 @@ _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
    case GL_RGB8I_EXT:
    case GL_RGB16I_EXT:
    case GL_RGB32I_EXT:
-      return ctx->Extensions.EXT_texture_integer ? GL_RGB : 0;
+      return ctx->VersionMajor >= 3 ||
+             ctx->Extensions.EXT_texture_integer ? GL_RGB : 0;
 
    case GL_R8UI:
    case GL_R8I:
@@ -1261,8 +1243,9 @@ _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
    case GL_R16I:
    case GL_R32UI:
    case GL_R32I:
-      return ctx->Extensions.ARB_texture_rg &&
-             ctx->Extensions.EXT_texture_integer ? GL_RED : 0;
+      return ctx->VersionMajor >= 3 ||
+             (ctx->Extensions.ARB_texture_rg &&
+              ctx->Extensions.EXT_texture_integer) ? GL_RED : 0;
 
    case GL_RG8UI:
    case GL_RG8I:
@@ -1270,8 +1253,9 @@ _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
    case GL_RG16I:
    case GL_RG32UI:
    case GL_RG32I:
-      return ctx->Extensions.ARB_texture_rg &&
-             ctx->Extensions.EXT_texture_integer ? GL_RG : 0;
+      return ctx->VersionMajor >= 3 ||
+             (ctx->Extensions.ARB_texture_rg &&
+              ctx->Extensions.EXT_texture_integer) ? GL_RG : 0;
 
    case GL_INTENSITY8I_EXT:
    case GL_INTENSITY8UI_EXT:
@@ -1300,6 +1284,15 @@ _mesa_base_fbo_format(struct gl_context *ctx, GLenum internalFormat)
       return ctx->Extensions.EXT_texture_integer &&
              ctx->Extensions.ARB_framebuffer_object ? GL_LUMINANCE_ALPHA : 0;
 
+   case GL_ALPHA8I_EXT:
+   case GL_ALPHA8UI_EXT:
+   case GL_ALPHA16I_EXT:
+   case GL_ALPHA16UI_EXT:
+   case GL_ALPHA32I_EXT:
+   case GL_ALPHA32UI_EXT:
+      return ctx->Extensions.EXT_texture_integer &&
+             ctx->Extensions.ARB_framebuffer_object ? GL_ALPHA : 0;
+
    case GL_RGB10_A2UI:
       return ctx->Extensions.ARB_texture_rgb10_a2ui ? GL_RGBA : 0;
    default:
@@ -1318,7 +1311,7 @@ invalidate_rb(GLuint key, void *data, void *userData)
    struct gl_renderbuffer *rb = (struct gl_renderbuffer *) userData;
 
    /* If this is a user-created FBO */
-   if (is_user_fbo(fb)) {
+   if (_mesa_is_user_fbo(fb)) {
       GLuint i;
       for (i = 0; i < BUFFER_COUNT; i++) {
          struct gl_renderbuffer_attachment *att = fb->Attachment + i;
@@ -1395,7 +1388,8 @@ renderbuffer_storage(GLenum target, GLenum internalFormat,
 
    if (rb->InternalFormat == internalFormat &&
        rb->Width == (GLuint) width &&
-       rb->Height == (GLuint) height) {
+       rb->Height == (GLuint) height &&
+       rb->NumSamples == samples) {
       /* no change in allocation needed */
       return;
    }
@@ -1609,7 +1603,7 @@ check_begin_texture_render(struct gl_context *ctx, struct gl_framebuffer *fb)
    GLuint i;
    ASSERT(ctx->Driver.RenderTexture);
 
-   if (is_winsys_fbo(fb))
+   if (_mesa_is_winsys_fbo(fb))
       return; /* can't render to texture with winsys framebuffers */
 
    for (i = 0; i < BUFFER_COUNT; i++) {
@@ -1629,7 +1623,7 @@ check_begin_texture_render(struct gl_context *ctx, struct gl_framebuffer *fb)
 static void
 check_end_texture_render(struct gl_context *ctx, struct gl_framebuffer *fb)
 {
-   if (is_winsys_fbo(fb))
+   if (_mesa_is_winsys_fbo(fb))
       return; /* can't render to texture with winsys framebuffers */
 
    if (ctx->Driver.FinishRenderTexture) {
@@ -1882,7 +1876,7 @@ _mesa_CheckFramebufferStatusEXT(GLenum target)
       return 0;
    }
 
-   if (is_winsys_fbo(buffer)) {
+   if (_mesa_is_winsys_fbo(buffer)) {
       /* The window system / default framebuffer is always complete */
       return GL_FRAMEBUFFER_COMPLETE_EXT;
    }
@@ -1944,7 +1938,7 @@ framebuffer_texture(struct gl_context *ctx, const char *caller, GLenum target,
    }
 
    /* check framebuffer binding */
-   if (is_winsys_fbo(fb)) {
+   if (_mesa_is_winsys_fbo(fb)) {
       _mesa_error(ctx, GL_INVALID_OPERATION,
                   "glFramebufferTexture%sEXT", caller);
       return;
@@ -2204,7 +2198,7 @@ _mesa_FramebufferRenderbufferEXT(GLenum target, GLenum attachment,
       return;
    }
 
-   if (is_winsys_fbo(fb)) {
+   if (_mesa_is_winsys_fbo(fb)) {
       /* Can't attach new renderbuffers to a window system framebuffer */
       _mesa_error(ctx, GL_INVALID_OPERATION, "glFramebufferRenderbufferEXT");
       return;
@@ -2285,7 +2279,7 @@ _mesa_GetFramebufferAttachmentParameterivEXT(GLenum target, GLenum attachment,
       return;
    }
 
-   if (is_winsys_fbo(buffer)) {
+   if (_mesa_is_winsys_fbo(buffer)) {
       /* Page 126 (page 136 of the PDF) of the OpenGL ES 2.0.25 spec
        * says:
        *
@@ -2332,7 +2326,8 @@ _mesa_GetFramebufferAttachmentParameterivEXT(GLenum target, GLenum attachment,
 
    switch (pname) {
    case GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE_EXT:
-      *params = is_winsys_fbo(buffer) ? GL_FRAMEBUFFER_DEFAULT : att->Type;
+      *params = _mesa_is_winsys_fbo(buffer)
+         ? GL_FRAMEBUFFER_DEFAULT : att->Type;
       return;
    case GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME_EXT:
       if (att->Type == GL_RENDERBUFFER_EXT) {
@@ -2410,7 +2405,7 @@ _mesa_GetFramebufferAttachmentParameterivEXT(GLenum target, GLenum attachment,
                      "glGetFramebufferAttachmentParameterivEXT(pname)");
       }
       else {
-         if (ctx->Extensions.EXT_framebuffer_sRGB && ctx->Const.sRGBCapable) {
+         if (ctx->Extensions.EXT_framebuffer_sRGB) {
             *params = _mesa_get_format_color_encoding(att->Renderbuffer->Format);
          }
          else {
@@ -2579,6 +2574,44 @@ find_attachment(const struct gl_framebuffer *fb,
 }
 
 
+/**
+ * Helper function for checking if the datatypes of color buffers are
+ * compatible for glBlitFramebuffer.  From the 3.1 spec, page 198:
+ *
+ * "GL_INVALID_OPERATION is generated if mask contains GL_COLOR_BUFFER_BIT
+ *  and any of the following conditions hold:
+ *   - The read buffer contains fixed-point or floating-point values and any
+ *     draw buffer contains neither fixed-point nor floating-point values.
+ *   - The read buffer contains unsigned integer values and any draw buffer
+ *     does not contain unsigned integer values.
+ *   - The read buffer contains signed integer values and any draw buffer
+ *     does not contain signed integer values."
+ */
+static GLboolean
+compatible_color_datatypes(gl_format srcFormat, gl_format dstFormat)
+{
+   GLenum srcType = _mesa_get_format_datatype(srcFormat);
+   GLenum dstType = _mesa_get_format_datatype(dstFormat);
+
+   if (srcType != GL_INT && srcType != GL_UNSIGNED_INT) {
+      assert(srcType == GL_UNSIGNED_NORMALIZED ||
+             srcType == GL_SIGNED_NORMALIZED ||
+             srcType == GL_FLOAT);
+      /* Boil any of those types down to GL_FLOAT */
+      srcType = GL_FLOAT;
+   }
+
+   if (dstType != GL_INT && dstType != GL_UNSIGNED_INT) {
+      assert(dstType == GL_UNSIGNED_NORMALIZED ||
+             dstType == GL_SIGNED_NORMALIZED ||
+             dstType == GL_FLOAT);
+      /* Boil any of those types down to GL_FLOAT */
+      dstType = GL_FLOAT;
+   }
+
+   return srcType == dstType;
+}
+
 
 /**
  * Blit rectangular region, optionally from one framebuffer to another.
@@ -2663,6 +2696,12 @@ _mesa_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
 	 colorReadRb = colorDrawRb = NULL;
 	 mask &= ~GL_COLOR_BUFFER_BIT;
       }
+      else if (!compatible_color_datatypes(colorReadRb->Format,
+                                           colorDrawRb->Format)) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glBlitFramebufferEXT(color buffer datatypes mismatch)");
+         return;
+      }
    }
    else {
       colorReadRb = colorDrawRb = NULL;
@@ -2685,6 +2724,9 @@ _mesa_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
       }
       else if (_mesa_get_format_bits(readRb->Format, GL_STENCIL_BITS) !=
 	       _mesa_get_format_bits(drawRb->Format, GL_STENCIL_BITS)) {
+	 /* There is no need to check the stencil datatype here, because
+	  * there is only one: GL_UNSIGNED_INT.
+	  */
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "glBlitFramebufferEXT(stencil buffer size mismatch)");
          return;
@@ -2706,10 +2748,12 @@ _mesa_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
       if ((readRb == NULL) || (drawRb == NULL)) {
 	 mask &= ~GL_DEPTH_BUFFER_BIT;
       }
-      else if (_mesa_get_format_bits(readRb->Format, GL_DEPTH_BITS) !=
-	       _mesa_get_format_bits(drawRb->Format, GL_DEPTH_BITS)) {
+      else if ((_mesa_get_format_bits(readRb->Format, GL_DEPTH_BITS) !=
+	        _mesa_get_format_bits(drawRb->Format, GL_DEPTH_BITS)) ||
+	       (_mesa_get_format_datatype(readRb->Format) !=
+		_mesa_get_format_datatype(drawRb->Format))) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
-                     "glBlitFramebufferEXT(depth buffer size mismatch)");
+                     "glBlitFramebufferEXT(depth buffer format mismatch)");
          return;
       }
    }
@@ -2718,7 +2762,7 @@ _mesa_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
        drawFb->Visual.samples > 0 &&
        readFb->Visual.samples != drawFb->Visual.samples) {
       _mesa_error(ctx, GL_INVALID_OPERATION,
-                  "glBlitFramebufferEXT(mismatched samples");
+                  "glBlitFramebufferEXT(mismatched samples)");
       return;
    }
 
@@ -2738,6 +2782,19 @@ _mesa_BlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
           colorReadRb->Format != colorDrawRb->Format) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                 "glBlitFramebufferEXT(bad src/dst multisample pixel formats)");
+         return;
+      }
+   }
+
+   if (filter == GL_LINEAR && (mask & GL_COLOR_BUFFER_BIT)) {
+      /* 3.1 spec, page 199:
+       * "Calling BlitFramebuffer will result in an INVALID_OPERATION error
+       * if filter is LINEAR and read buffer contains integer data."
+       */
+      GLenum type = _mesa_get_format_datatype(colorReadRb->Format);
+      if (type == GL_INT || type == GL_UNSIGNED_INT) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glBlitFramebufferEXT(integer color type)");
          return;
       }
    }

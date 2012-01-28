@@ -95,7 +95,6 @@
 #define		WAIT_REG_MEM_EQUAL		3
 #define PKT3_MEM_WRITE                         0x3D
 #define PKT3_INDIRECT_BUFFER                   0x32
-#define PKT3_CP_INTERRUPT                      0x40
 #define PKT3_SURFACE_SYNC                      0x43
 #define PKT3_ME_INITIALIZE                     0x44
 #define PKT3_COND_WRITE                        0x45
@@ -3271,6 +3270,7 @@
 #define   S_0085F0_SO3_DEST_BASE_ENA(x)                (((x) & 0x1) << 5)
 #define   G_0085F0_SO3_DEST_BASE_ENA(x)                (((x) >> 5) & 0x1)
 #define   C_0085F0_SO3_DEST_BASE_ENA                   0xFFFFFFDF
+#define   S_0085F0_CB0_DEST_BASE_ENA_SHIFT             6
 #define   S_0085F0_CB0_DEST_BASE_ENA(x)                (((x) & 0x1) << 6)
 #define   G_0085F0_CB0_DEST_BASE_ENA(x)                (((x) >> 6) & 0x1)
 #define   C_0085F0_CB0_DEST_BASE_ENA                   0xFFFFFFBF
@@ -3538,9 +3538,13 @@
 #define R_038018_RESOURCE0_WORD6                     0x038018
 
 #define R_028140_ALU_CONST_BUFFER_SIZE_PS_0          0x00028140
+#define R_028144_ALU_CONST_BUFFER_SIZE_PS_1          0x00028144
 #define R_028180_ALU_CONST_BUFFER_SIZE_VS_0          0x00028180
+#define R_028184_ALU_CONST_BUFFER_SIZE_VS_1          0x00028184
 #define R_028940_ALU_CONST_CACHE_PS_0                0x00028940
+#define R_028944_ALU_CONST_CACHE_PS_1                0x00028944
 #define R_028980_ALU_CONST_CACHE_VS_0                0x00028980
+#define R_028984_ALU_CONST_CACHE_VS_1                0x00028984
 
 #define R_03CFF0_SQ_VTX_BASE_VTX_LOC                 0x03CFF0
 #define R_03CFF4_SQ_VTX_START_INST_LOC               0x03CFF4

@@ -53,9 +53,11 @@ upload_3dstate_so_buffers(struct brw_context *brw)
     * gl_transform_feedback_object.
     */
    for (i = 0; i < 4; i++) {
-      struct gl_buffer_object *bufferobj = xfb_obj->Buffers[i];
+      struct intel_buffer_object *bufferobj =
+	 intel_buffer_object(xfb_obj->Buffers[i]);
       drm_intel_bo *bo;
       uint32_t start, end;
+      uint32_t stride;
 
       if (!xfb_obj->Buffers[i]) {
 	 /* The pitch of 0 in this command indicates that the buffer is
@@ -71,18 +73,24 @@ upload_3dstate_so_buffers(struct brw_context *brw)
 	 continue;
       }
 
-      bo = intel_buffer_object(bufferobj)->buffer;
+      bo = intel_bufferobj_buffer(intel, bufferobj, INTEL_WRITE_PART);
+      stride = linked_xfb_info->BufferStride[i] * 4;
 
       start = xfb_obj->Offset[i];
       assert(start % 4 == 0);
       end = ALIGN(start + xfb_obj->Size[i], 4);
       assert(end <= bo->size);
 
+      /* Offset the starting offset by the current vertex index into the
+       * feedback buffer, offset register is always set to 0 at the start of the
+       * batchbuffer.
+       */
+      start += brw->sol.offset_0_batch_start * stride;
+      assert(start <= end);
+
       BEGIN_BATCH(4);
       OUT_BATCH(_3DSTATE_SO_BUFFER << 16 | (4 - 2));
-      OUT_BATCH((i << SO_BUFFER_INDEX_SHIFT) |
-		((linked_xfb_info->BufferStride[i] * 4) <<
-		 SO_BUFFER_PITCH_SHIFT));
+      OUT_BATCH((i << SO_BUFFER_INDEX_SHIFT) | stride);
       OUT_RELOC(bo, I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, start);
       OUT_RELOC(bo, I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, end);
       ADVANCE_BATCH();
@@ -122,14 +130,23 @@ upload_3dstate_so_decl_list(struct brw_context *brw,
       int buffer = linked_xfb_info->Outputs[i].OutputBuffer;
       uint16_t decl = 0;
       int vert_result = linked_xfb_info->Outputs[i].OutputRegister;
+      unsigned component_mask =
+         (1 << linked_xfb_info->Outputs[i].NumComponents) - 1;
+
+      /* gl_PointSize is stored in VERT_RESULT_PSIZ.w. */
+      if (vert_result == VERT_RESULT_PSIZ) {
+         assert(linked_xfb_info->Outputs[i].NumComponents == 1);
+         component_mask <<= 3;
+      } else {
+         component_mask <<= linked_xfb_info->Outputs[i].ComponentOffset;
+      }
 
       buffer_mask |= 1 << buffer;
 
       decl |= buffer << SO_DECL_OUTPUT_BUFFER_SLOT_SHIFT;
       decl |= vue_map->vert_result_to_slot[vert_result] <<
 	 SO_DECL_REGISTER_INDEX_SHIFT;
-      decl |= ((1 << linked_xfb_info->Outputs[i].NumComponents) - 1) <<
-	 SO_DECL_COMPONENT_MASK_SHIFT;
+      decl |= component_mask << SO_DECL_COMPONENT_MASK_SHIFT;
 
       /* This assert should be true until GL_ARB_transform_feedback_instanced
        * is added and we start using the hole flag.
@@ -231,6 +248,8 @@ upload_sol_state(struct brw_context *brw)
    if (active) {
       upload_3dstate_so_buffers(brw);
       upload_3dstate_so_decl_list(brw, &vue_map);
+
+      intel->batch.needs_sol_reset = true;
    }
 
    /* Finally, set up the SOL stage.  This command must always follow updates to
@@ -253,3 +272,19 @@ const struct brw_tracked_state gen7_sol_state = {
    },
    .emit = upload_sol_state,
 };
+
+void
+gen7_end_transform_feedback(struct gl_context *ctx,
+			    struct gl_transform_feedback_object *obj)
+{
+   /* Because we have to rely on the kernel to reset our SO write offsets, and
+    * we only get to do it once per batchbuffer, flush the batch after feedback
+    * so another transform feedback can get the write offset reset it needs.
+    *
+    * This also covers any cache flushing required.
+    */
+   struct brw_context *brw = brw_context(ctx);
+   struct intel_context *intel = &brw->intel;
+
+   intel_batchbuffer_flush(intel);
+}

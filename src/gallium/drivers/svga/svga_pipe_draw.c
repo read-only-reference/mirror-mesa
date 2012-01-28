@@ -138,7 +138,6 @@ svga_upload_user_buffers(struct svga_context *svga,
 
       if (vb->buffer && svga_buffer_is_user_buffer(vb->buffer)) {
          struct svga_buffer *buffer = svga_buffer(vb->buffer);
-         boolean flushed;
 
          /*
           * Check if already uploaded. Otherwise go ahead and upload.
@@ -153,8 +152,7 @@ svga_upload_user_buffers(struct svga_context *svga,
                                 buffer->uploaded.end - buffer->uploaded.start,
                                 &buffer->b.b,
                                 &buffer->uploaded.offset,
-                                &buffer->uploaded.buffer,
-                                &flushed);
+                                &buffer->uploaded.buffer);
 
          if (ret)
             return ret;
@@ -202,6 +200,17 @@ svga_release_user_upl_buffers(struct svga_context *svga)
 
       if (vb->buffer && svga_buffer_is_user_buffer(vb->buffer)) {
          struct svga_buffer *buffer = svga_buffer(vb->buffer);
+
+         /* The buffer_offset is relative to the uploaded buffer.
+          * Since we're discarding that buffer we need to reset this offset
+          * so it's not inadvertantly applied to a subsequent draw.
+          *
+          * XXX a root problem here is that the svga->curr.vb[] information
+          * is getting set both by gallium API calls and by code in
+          * svga_upload_user_buffers().  We should instead have two copies
+          * of the vertex buffer information and choose between as needed.
+          */
+         vb->buffer_offset = 0;
 
          buffer->uploaded.start = ~0;
          buffer->uploaded.end = 0;
@@ -400,6 +409,9 @@ svga_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
                                   TRUE );
       }
    }
+
+   /* XXX: Silence warnings, do something sensible here? */
+   (void)ret;
 
    svga_release_user_upl_buffers( svga );
 

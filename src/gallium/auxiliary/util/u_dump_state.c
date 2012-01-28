@@ -303,6 +303,8 @@ util_dump_rasterizer_state(FILE *stream, const struct pipe_rasterizer_state *sta
 
    util_dump_member(stream, bool, state, flatshade);
    util_dump_member(stream, bool, state, light_twoside);
+   util_dump_member(stream, bool, state, clamp_vertex_color);
+   util_dump_member(stream, bool, state, clamp_fragment_color);
    util_dump_member(stream, uint, state, front_ccw);
    util_dump_member(stream, uint, state, cull_face);
    util_dump_member(stream, uint, state, fill_front);
@@ -326,6 +328,9 @@ util_dump_rasterizer_state(FILE *stream, const struct pipe_rasterizer_state *sta
    util_dump_member(stream, bool, state, line_last_pixel);
    util_dump_member(stream, bool, state, flatshade_first);
    util_dump_member(stream, bool, state, gl_rasterization_rules);
+   util_dump_member(stream, bool, state, rasterizer_discard);
+   util_dump_member(stream, bool, state, depth_clip);
+   util_dump_member(stream, uint, state, clip_plane_enable);
 
    util_dump_member(stream, float, state, line_width);
    util_dump_member(stream, float, state, point_size);
@@ -413,8 +418,6 @@ util_dump_clip_state(FILE *stream, const struct pipe_clip_state *state)
    util_dump_array_end(stream);
    util_dump_member_end(stream);
 
-   util_dump_member(stream, uint, state, nr);
-
    util_dump_struct_end(stream);
 }
 
@@ -441,13 +444,15 @@ util_dump_shader_state(FILE *stream, const struct pipe_shader_state *state)
    util_dump_member_begin(stream, "stream_output");
    util_dump_struct_begin(stream, "pipe_stream_output_info");
    util_dump_member(stream, uint, &state->stream_output, num_outputs);
-   util_dump_member(stream, uint, &state->stream_output, stride);
+   util_dump_array(stream, uint, state->stream_output.stride,
+                   Elements(state->stream_output.stride));
    util_dump_array_begin(stream);
    for(i = 0; i < state->stream_output.num_outputs; ++i) {
       util_dump_elem_begin(stream);
       util_dump_struct_begin(stream, ""); /* anonymous */
       util_dump_member(stream, uint, &state->stream_output.output[i], register_index);
-      util_dump_member(stream, uint, &state->stream_output.output[i], register_mask);
+      util_dump_member(stream, uint, &state->stream_output.output[i], start_component);
+      util_dump_member(stream, uint, &state->stream_output.output[i], num_components);
       util_dump_member(stream, uint, &state->stream_output.output[i], output_buffer);
       util_dump_struct_end(stream);
       util_dump_elem_end(stream);
@@ -722,6 +727,38 @@ util_dump_vertex_element(FILE *stream, const struct pipe_vertex_element *state)
    util_dump_member(stream, uint, state, vertex_buffer_index);
 
    util_dump_member(stream, format, state, src_format);
+
+   util_dump_struct_end(stream);
+}
+
+
+void
+util_dump_draw_info(FILE *stream, const struct pipe_draw_info *state)
+{
+   if(!state) {
+      util_dump_null(stream);
+      return;
+   }
+
+   util_dump_struct_begin(stream, "pipe_draw_info");
+
+   util_dump_member(stream, bool, state, indexed);
+
+   util_dump_member(stream, uint, state, mode);
+   util_dump_member(stream, uint, state, start);
+   util_dump_member(stream, uint, state, count);
+
+   util_dump_member(stream, uint, state, start_instance);
+   util_dump_member(stream, uint, state, instance_count);
+
+   util_dump_member(stream, int,  state, index_bias);
+   util_dump_member(stream, uint, state, min_index);
+   util_dump_member(stream, uint, state, max_index);
+
+   util_dump_member(stream, bool, state, primitive_restart);
+   util_dump_member(stream, uint, state, restart_index);
+
+   util_dump_member(stream, ptr, state, count_from_stream_output);
 
    util_dump_struct_end(stream);
 }

@@ -24,7 +24,7 @@
 #define R600_ASM_H
 
 struct r600_vertex_element;
-struct r600_pipe_context;
+struct r600_context;
 
 struct r600_bytecode_alu_src {
 	unsigned			sel;
@@ -32,6 +32,7 @@ struct r600_bytecode_alu_src {
 	unsigned			neg;
 	unsigned			abs;
 	unsigned			rel;
+	unsigned			kc_bank;
 	uint32_t			value;
 };
 
@@ -54,6 +55,7 @@ struct r600_bytecode_alu {
 	unsigned			bank_swizzle;
 	unsigned			bank_swizzle_force;
 	unsigned			omod;
+	unsigned                        index_mode;
 };
 
 struct r600_bytecode_tex {
@@ -143,8 +145,9 @@ struct r600_bytecode_cf {
 	unsigned			cond;
 	unsigned			pop_count;
 	unsigned			cf_addr; /* control flow addr */
-	struct r600_bytecode_kcache		kcache[2];
+	struct r600_bytecode_kcache		kcache[4];
 	unsigned			r6xx_uses_waterfall;
+	unsigned			eg_alu_extended;
 	struct list_head		alu;
 	struct list_head		tex;
 	struct list_head		vtx;
@@ -176,6 +179,10 @@ struct r600_cf_callstack {
 	int				max;
 };
 
+#define AR_HANDLE_NORMAL 0
+#define AR_HANDLE_RV6XX 1 /* except RV670 */
+
+
 struct r600_bytecode {
 	enum chip_class			chip_class;
 	int				type;
@@ -187,20 +194,22 @@ struct r600_bytecode {
 	unsigned			nstack;
 	unsigned			nresource;
 	unsigned			force_add_cf;
-	u32				*bytecode;
-	u32				fc_sp;
+	uint32_t			*bytecode;
+	uint32_t			fc_sp;
 	struct r600_cf_stack_entry	fc_stack[32];
 	unsigned			call_sp;
 	struct r600_cf_callstack	callstack[SQ_MAX_CALL_DEPTH];
 	unsigned	ar_loaded;
 	unsigned	ar_reg;
+	unsigned        ar_handling;
+	unsigned        r6xx_nop_after_rel_dst;
 };
 
 /* eg_asm.c */
 int eg_bytecode_cf_build(struct r600_bytecode *bc, struct r600_bytecode_cf *cf);
 
 /* r600_asm.c */
-void r600_bytecode_init(struct r600_bytecode *bc, enum chip_class chip_class);
+void r600_bytecode_init(struct r600_bytecode *bc, enum chip_class chip_class, enum radeon_family family);
 void r600_bytecode_clear(struct r600_bytecode *bc);
 int r600_bytecode_add_alu(struct r600_bytecode *bc, const struct r600_bytecode_alu *alu);
 int r600_bytecode_add_vtx(struct r600_bytecode *bc, const struct r600_bytecode_vtx *vtx);
@@ -209,12 +218,12 @@ int r600_bytecode_add_output(struct r600_bytecode *bc, const struct r600_bytecod
 int r600_bytecode_build(struct r600_bytecode *bc);
 int r600_bytecode_add_cfinst(struct r600_bytecode *bc, int inst);
 int r600_bytecode_add_alu_type(struct r600_bytecode *bc, const struct r600_bytecode_alu *alu, int type);
-void r600_bytecode_special_constants(u32 value, unsigned *sel, unsigned *neg);
+void r600_bytecode_special_constants(uint32_t value, unsigned *sel, unsigned *neg);
 void r600_bytecode_dump(struct r600_bytecode *bc);
 
 int cm_bytecode_add_cf_end(struct r600_bytecode *bc);
 
-int r600_vertex_elements_build_fetch_shader(struct r600_pipe_context *rctx, struct r600_vertex_element *ve);
+int r600_vertex_elements_build_fetch_shader(struct r600_context *rctx, struct r600_vertex_element *ve);
 
 /* r700_asm.c */
 void r700_bytecode_cf_vtx_build(uint32_t *bytecode, const struct r600_bytecode_cf *cf);

@@ -50,7 +50,12 @@ dri_pp_query(struct dri_context *ctx)
 
 GLboolean
 dri_create_context(gl_api api, const struct gl_config * visual,
-		   __DRIcontext * cPriv, void *sharedContextPrivate)
+		   __DRIcontext * cPriv,
+		   unsigned major_version,
+		   unsigned minor_version,
+		   uint32_t flags,
+		   unsigned *error,
+		   void *sharedContextPrivate)
 {
    __DRIscreen *sPriv = cPriv->driScreenPriv;
    struct dri_screen *screen = dri_screen(sPriv);
@@ -68,9 +73,20 @@ dri_create_context(gl_api api, const struct gl_config * visual,
    case API_OPENGLES2:
       attribs.profile = ST_PROFILE_OPENGL_ES2;
       break;
-   default:
+   case API_OPENGL:
       attribs.profile = ST_PROFILE_DEFAULT;
+      attribs.major = major_version;
+      attribs.minor = minor_version;
+
+      if ((flags & __DRI_CTX_FLAG_DEBUG) != 0)
+	 attribs.flags |= ST_CONTEXT_FLAG_DEBUG;
+
+      if ((flags & __DRI_CTX_FLAG_FORWARD_COMPATIBLE) != 0)
+	 attribs.flags |= ST_CONTEXT_FLAG_FORWARD_COMPATIBLE;
       break;
+   default:
+      *error = __DRI_CTX_ERROR_BAD_API;
+      goto fail;
    }
 
    if (sharedContextPrivate) {
@@ -78,8 +94,10 @@ dri_create_context(gl_api api, const struct gl_config * visual,
    }
 
    ctx = CALLOC_STRUCT(dri_context);
-   if (ctx == NULL)
+   if (ctx == NULL) {
+      *error = __DRI_CTX_ERROR_NO_MEMORY;
       goto fail;
+   }
 
    cPriv->driverPrivate = ctx;
    ctx->cPriv = cPriv;
@@ -91,8 +109,32 @@ dri_create_context(gl_api api, const struct gl_config * visual,
    dri_fill_st_visual(&attribs.visual, screen, visual);
    ctx->st = stapi->create_context(stapi, &screen->base, &attribs, &ctx_err,
 				   st_share);
-   if (ctx->st == NULL)
+   if (ctx->st == NULL) {
+      switch (ctx_err) {
+      case ST_CONTEXT_SUCCESS:
+	 *error = __DRI_CTX_ERROR_SUCCESS;
+	 break;
+      case ST_CONTEXT_ERROR_NO_MEMORY:
+	 *error = __DRI_CTX_ERROR_NO_MEMORY;
+	 break;
+      case ST_CONTEXT_ERROR_BAD_API:
+	 *error = __DRI_CTX_ERROR_BAD_API;
+	 break;
+      case ST_CONTEXT_ERROR_BAD_VERSION:
+	 *error = __DRI_CTX_ERROR_BAD_VERSION;
+	 break;
+      case ST_CONTEXT_ERROR_BAD_FLAG:
+	 *error = __DRI_CTX_ERROR_BAD_FLAG;
+	 break;
+      case ST_CONTEXT_ERROR_UNKNOWN_ATTRIBUTE:
+	 *error = __DRI_CTX_ERROR_UNKNOWN_ATTRIBUTE;
+	 break;
+      case ST_CONTEXT_ERROR_UNKNOWN_FLAG:
+	 *error = __DRI_CTX_ERROR_UNKNOWN_FLAG;
+	 break;
+      }
       goto fail;
+   }
    ctx->st->st_manager_private = (void *) ctx;
    ctx->stapi = stapi;
 
@@ -101,6 +143,7 @@ dri_create_context(gl_api api, const struct gl_config * visual,
 
    ctx->pp = pp_init(screen->base.screen, ctx->pp_enabled);
 
+   *error = __DRI_CTX_ERROR_SUCCESS;
    return GL_TRUE;
 
  fail:
@@ -123,7 +166,7 @@ dri_destroy_context(__DRIcontext * cPriv)
    FREE(ctx->optionCache.values);
 
    /* No particular reason to wait for command completion before
-    * destroying a context, but it is probably worthwhile flushing it
+    * destroying a context, but we flush the context here
     * to avoid having to add code elsewhere to cope with flushing a
     * partially destroyed context.
     */
@@ -145,7 +188,11 @@ dri_unbind_context(__DRIcontext * cPriv)
 
    if (--ctx->bind_count == 0) {
       if (ctx->st == ctx->stapi->get_current(ctx->stapi)) {
-         ctx->st->flush(ctx->st, ST_FLUSH_FRONT, NULL);
+         /* For conformance, unbind is supposed to flush the context.
+          * However, if we do it here we might end up flushing a partially
+          * destroyed context. Instead, we flush in dri_make_current and
+          * in dri_destroy_context which should cover all the cases.
+          */
          stapi->make_current(stapi, NULL, NULL, NULL);
       }
    }
@@ -164,6 +211,7 @@ dri_make_current(__DRIcontext * cPriv,
    struct dri_drawable *read = dri_drawable(driReadPriv);
    struct st_context_iface *old_st = ctx->stapi->get_current(ctx->stapi);
 
+   /* Flush the old context here so we don't have to flush on unbind() */
    if (old_st && old_st != ctx->st)
       old_st->flush(old_st, ST_FLUSH_FRONT, NULL);
 

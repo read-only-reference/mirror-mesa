@@ -63,6 +63,7 @@ struct draw_stage;
 struct vbuf_render;
 struct tgsi_exec_machine;
 struct tgsi_sampler;
+struct draw_pt_front_end;
 
 
 /**
@@ -72,10 +73,11 @@ struct tgsi_sampler;
 struct vertex_header {
    unsigned clipmask:DRAW_TOTAL_CLIP_PLANES;
    unsigned edgeflag:1;
-   unsigned pad:1;
+   unsigned have_clipdist:1;
    unsigned vertex_id:16;
 
    float clip[4];
+   float pre_clip_pos[4];
 
    /* This will probably become float (*data)[4] soon:
     */
@@ -136,6 +138,12 @@ struct draw_context
    /* Support prototype passthrough path:
     */
    struct {
+      /* Current active frontend */
+      struct draw_pt_front_end *frontend;
+      unsigned prim;
+      unsigned opt;
+      unsigned eltSize; /* saved eltSize for flushing */
+
       struct {
          struct draw_pt_middle_end *fetch_emit;
          struct draw_pt_middle_end *fetch_shade_emit;
@@ -230,7 +238,8 @@ struct draw_context
       uint num_vs_outputs;  /**< convenience, from vertex_shader */
       uint position_output;
       uint edgeflag_output;
-
+      uint clipvertex_output;
+      uint clipdistance_output[2];
       /** TGSI program interpreter runtime state */
       struct tgsi_exec_machine *machine;
 
@@ -271,15 +280,13 @@ struct draw_context
    /** Stream output (vertex feedback) state */
    struct {
       struct pipe_stream_output_info state;
-      void *buffers[PIPE_MAX_SO_BUFFERS];
-      uint num_buffers;
+      struct draw_so_target *targets[PIPE_MAX_SO_BUFFERS];
+      uint num_targets;
    } so;
 
    /* Clip derived state:
     */
    float plane[DRAW_TOTAL_CLIP_PLANES][4];
-   unsigned nr_planes;
-   boolean depth_clamp;
 
    /* If a prim stage introduces new vertex attributes, they'll be stored here
     */
@@ -289,8 +296,6 @@ struct draw_context
       uint semantic_index[10];
       uint slot[10];
    } extra_shader_outputs;
-
-   unsigned reduced_prim;
 
    unsigned instance_id;
 
@@ -380,7 +385,8 @@ void draw_gs_destroy( struct draw_context *draw );
  */
 uint draw_current_shader_outputs(const struct draw_context *draw);
 uint draw_current_shader_position_output(const struct draw_context *draw);
-
+uint draw_current_shader_clipvertex_output(const struct draw_context *draw);
+uint draw_current_shader_clipdistance_output(const struct draw_context *draw, int index);
 int draw_alloc_extra_vertex_attrib(struct draw_context *draw,
                                    uint semantic_name, uint semantic_index);
 void draw_remove_extra_vertex_attribs(struct draw_context *draw);
@@ -392,6 +398,7 @@ void draw_remove_extra_vertex_attribs(struct draw_context *draw);
 boolean draw_pt_init( struct draw_context *draw );
 void draw_pt_destroy( struct draw_context *draw );
 void draw_pt_reset_vertex_ids( struct draw_context *draw );
+void draw_pt_flush( struct draw_context *draw, unsigned flags );
 
 
 /*******************************************************************************

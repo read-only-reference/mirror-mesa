@@ -47,106 +47,6 @@
 #include "st_format.h"
 
 
-static GLuint
-format_max_bits(enum pipe_format format)
-{
-   GLuint size = util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_RGB, 0);
-
-   size = MAX2(size, util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_RGB, 1));
-   size = MAX2(size, util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_RGB, 2));
-   size = MAX2(size, util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_RGB, 3));
-   size = MAX2(size, util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_ZS, 0));
-   size = MAX2(size, util_format_get_component_bits(format, UTIL_FORMAT_COLORSPACE_ZS, 1));
-   return size;
-}
-
-
-/**
- * Return basic GL datatype for the given gallium format.
- */
-GLenum
-st_format_datatype(enum pipe_format format)
-{
-   const struct util_format_description *desc;
-   int i;
-
-   desc = util_format_description(format);
-   assert(desc);
-
-   /* Find the first non-VOID channel. */
-   for (i = 0; i < 4; i++) {
-       if (desc->channel[i].type != UTIL_FORMAT_TYPE_VOID) {
-           break;
-       }
-   }
-
-   if (desc->layout == UTIL_FORMAT_LAYOUT_PLAIN) {
-      if (format == PIPE_FORMAT_B5G5R5A1_UNORM ||
-          format == PIPE_FORMAT_B5G6R5_UNORM) {
-         return GL_UNSIGNED_SHORT;
-      }
-      else if (format == PIPE_FORMAT_R11G11B10_FLOAT ||
-               format == PIPE_FORMAT_R9G9B9E5_FLOAT) {
-         return GL_FLOAT;
-      }
-      else if (format == PIPE_FORMAT_Z24_UNORM_S8_UINT ||
-               format == PIPE_FORMAT_S8_UINT_Z24_UNORM ||
-               format == PIPE_FORMAT_Z24X8_UNORM ||
-               format == PIPE_FORMAT_X8Z24_UNORM) {
-         return GL_UNSIGNED_INT_24_8;
-      }
-      else if (format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT) {
-         return GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
-      }
-      else {
-         const GLuint size = format_max_bits(format);
-
-         assert(i < 4);
-         if (i == 4)
-            return GL_NONE;
-
-         if (size == 8) {
-            if (desc->channel[i].type == UTIL_FORMAT_TYPE_UNSIGNED)
-               return GL_UNSIGNED_BYTE;
-            else
-               return GL_BYTE;
-         }
-         else if (size == 16) {
-            if (desc->channel[i].type == UTIL_FORMAT_TYPE_FLOAT)
-               return GL_HALF_FLOAT;
-            if (desc->channel[i].type == UTIL_FORMAT_TYPE_UNSIGNED)
-               return GL_UNSIGNED_SHORT;
-            else
-               return GL_SHORT;
-         }
-         else if (size <= 32) {
-            if (desc->channel[i].type == UTIL_FORMAT_TYPE_FLOAT)
-               return GL_FLOAT;
-            if (desc->channel[i].type == UTIL_FORMAT_TYPE_UNSIGNED)
-               return GL_UNSIGNED_INT;
-            else
-               return GL_INT;
-         }
-         else {
-            assert(size == 64);
-            assert(desc->channel[i].type == UTIL_FORMAT_TYPE_FLOAT);
-            return GL_DOUBLE;
-         }
-      }
-   }
-   else if (format == PIPE_FORMAT_UYVY) {
-      return GL_UNSIGNED_SHORT;
-   }
-   else if (format == PIPE_FORMAT_YUYV) {
-      return GL_UNSIGNED_SHORT;
-   }
-   else {
-      /* probably a compressed format, unsupported anyway */
-      return GL_NONE;
-   }
-}
-
-
 /**
  * Translate Mesa format to Gallium format.
  */
@@ -839,6 +739,15 @@ struct format_mapping
       PIPE_FORMAT_S8_UINT_Z24_UNORM, \
       0
 
+#define DEFAULT_SNORM8_RGBA_FORMATS \
+      PIPE_FORMAT_R8G8B8A8_SNORM, \
+      0
+
+#define DEFAULT_UNORM16_RGBA_FORMATS \
+      PIPE_FORMAT_R16G16B16A16_UNORM, \
+      DEFAULT_RGBA_FORMATS
+
+
 /**
  * This table maps OpenGL texture format enums to Gallium pipe_format enums.
  * Multiple GL enums might map to multiple pipe_formats.
@@ -1145,54 +1054,55 @@ static const struct format_mapping format_map[] = {
    /* R, RG formats */
    {
       { GL_RED, GL_R8, 0 },
-      { PIPE_FORMAT_R8_UNORM, 0 }
+      { PIPE_FORMAT_R8_UNORM, PIPE_FORMAT_R8G8_UNORM, DEFAULT_RGBA_FORMATS }
    },
    {
       { GL_RG, GL_RG8, 0 },
-      { PIPE_FORMAT_R8G8_UNORM, 0 }
+      { PIPE_FORMAT_R8G8_UNORM, DEFAULT_RGBA_FORMATS }
    },
    {
       { GL_R16, 0 },
-      { PIPE_FORMAT_R16_UNORM, 0 }
+      { PIPE_FORMAT_R16_UNORM, PIPE_FORMAT_R16G16_UNORM,
+        DEFAULT_UNORM16_RGBA_FORMATS }
    },
    {
       { GL_RG16, 0 },
-      { PIPE_FORMAT_R16G16_UNORM, 0 }
+      { PIPE_FORMAT_R16G16_UNORM, DEFAULT_UNORM16_RGBA_FORMATS }
    },
 
    /* compressed R, RG formats */
    {
       { GL_COMPRESSED_RED, GL_COMPRESSED_RED_RGTC1, 0 },
-      { PIPE_FORMAT_RGTC1_UNORM, PIPE_FORMAT_R8_UNORM, 0 }
+      { PIPE_FORMAT_RGTC1_UNORM, PIPE_FORMAT_R8_UNORM, DEFAULT_RGBA_FORMATS }
    },
    {
       { GL_COMPRESSED_SIGNED_RED_RGTC1, 0 },
-      { PIPE_FORMAT_RGTC1_SNORM, 0 }
+      { PIPE_FORMAT_RGTC1_SNORM, DEFAULT_SNORM8_RGBA_FORMATS }
    },
    {
       { GL_COMPRESSED_RG, GL_COMPRESSED_RG_RGTC2, 0 },
-      { PIPE_FORMAT_RGTC2_UNORM, PIPE_FORMAT_R8G8_UNORM, 0 }
+      { PIPE_FORMAT_RGTC2_UNORM, PIPE_FORMAT_R8G8_UNORM, DEFAULT_RGBA_FORMATS }
    },
    {
       { GL_COMPRESSED_SIGNED_RG_RGTC2, 0 },
-      { PIPE_FORMAT_RGTC2_SNORM, 0 }
+      { PIPE_FORMAT_RGTC2_SNORM, DEFAULT_SNORM8_RGBA_FORMATS }
    },
    {
       { GL_COMPRESSED_LUMINANCE, GL_COMPRESSED_LUMINANCE_LATC1_EXT, 0 },
-      { PIPE_FORMAT_LATC1_UNORM, PIPE_FORMAT_L8_UNORM, 0 }
+      { PIPE_FORMAT_LATC1_UNORM, PIPE_FORMAT_L8_UNORM, DEFAULT_RGBA_FORMATS }
    },
    {
       { GL_COMPRESSED_SIGNED_LUMINANCE_LATC1_EXT, 0 },
-      { PIPE_FORMAT_LATC1_SNORM, 0 }
+      { PIPE_FORMAT_LATC1_SNORM, DEFAULT_SNORM8_RGBA_FORMATS }
    },
    {
       { GL_COMPRESSED_LUMINANCE_ALPHA, GL_COMPRESSED_LUMINANCE_ALPHA_LATC2_EXT,
         GL_COMPRESSED_LUMINANCE_ALPHA_3DC_ATI, 0 },
-      { PIPE_FORMAT_LATC2_UNORM, PIPE_FORMAT_L8A8_UNORM, 0 }
+      { PIPE_FORMAT_LATC2_UNORM, PIPE_FORMAT_L8A8_UNORM, DEFAULT_RGBA_FORMATS }
    },
    {
       { GL_COMPRESSED_SIGNED_LUMINANCE_ALPHA_LATC2_EXT, 0 },
-      { PIPE_FORMAT_LATC2_SNORM, 0 }
+      { PIPE_FORMAT_LATC2_SNORM, DEFAULT_SNORM8_RGBA_FORMATS }
    },
 
    /* ETC1 */

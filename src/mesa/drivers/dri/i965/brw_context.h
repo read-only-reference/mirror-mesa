@@ -645,7 +645,6 @@ struct brw_context
    bool has_negative_rhw_bug;
    bool has_aa_line_parameters;
    bool has_pln;
-   bool new_vs_backend;
    bool precompile;
 
    struct {
@@ -988,6 +987,7 @@ struct brw_context
    struct brw_sol_state {
       uint32_t svbi_0_starting_index;
       uint32_t svbi_0_max_index;
+      uint32_t offset_0_batch_start;
       uint32_t primitives_generated;
       uint32_t primitives_written;
    } sol;
@@ -1092,6 +1092,11 @@ brw_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
 void
 brw_end_transform_feedback(struct gl_context *ctx,
                            struct gl_transform_feedback_object *obj);
+
+/* gen7_sol_state.c */
+void
+gen7_end_transform_feedback(struct gl_context *ctx,
+			    struct gl_transform_feedback_object *obj);
 
 
 

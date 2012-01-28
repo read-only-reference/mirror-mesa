@@ -493,21 +493,13 @@ static void r300_set_clip_state(struct pipe_context* pipe,
             (struct r300_clip_state*)r300->clip_state.state;
     CB_LOCALS;
 
-    clip->clip = *state;
-
     if (r300->screen->caps.has_tcl) {
-        r300->clip_state.size = 2 + !!state->nr * 3 + state->nr * 4;
-
         BEGIN_CB(clip->cb, r300->clip_state.size);
-        if (state->nr) {
-           OUT_CB_REG(R300_VAP_PVS_VECTOR_INDX_REG,
+        OUT_CB_REG(R300_VAP_PVS_VECTOR_INDX_REG,
                    (r300->screen->caps.is_r500 ?
                     R500_PVS_UCP_START : R300_PVS_UCP_START));
-           OUT_CB_ONE_REG(R300_VAP_PVS_UPLOAD_DATA, state->nr * 4);
-           OUT_CB_TABLE(state->ucp, state->nr * 4);
-        }
-        OUT_CB_REG(R300_VAP_CLIP_CNTL, ((1 << state->nr) - 1) |
-                   R300_PS_UCP_MODE_CLIP_AS_TRIFAN);
+        OUT_CB_ONE_REG(R300_VAP_PVS_UPLOAD_DATA, 6 * 4);
+        OUT_CB_TABLE(state->ucp, 6 * 4);
         END_CB;
 
         r300_mark_atom_dirty(r300, &r300->clip_state);
@@ -756,7 +748,7 @@ static void r300_print_fb_surf_info(struct pipe_surface *surf, unsigned index,
             "r300:   %s[%i] Dim: %ix%i, Firstlayer: %i, "
             "Lastlayer: %i, Level: %i, Format: %s\n"
 
-            "r300:     TEX: Macro: %s, Micro: %s, Pitch: %i, "
+            "r300:     TEX: Macro: %s, Micro: %s, "
             "Dim: %ix%ix%i, LastLevel: %i, Format: %s\n",
 
             binding, index, surf->width, surf->height,
@@ -765,9 +757,8 @@ static void r300_print_fb_surf_info(struct pipe_surface *surf, unsigned index,
 
             rtex->tex.macrotile[0] ? "YES" : " NO",
             rtex->tex.microtile ? "YES" : " NO",
-            rtex->tex.stride_in_pixels[0],
             tex->width0, tex->height0, tex->depth0,
-            tex->last_level, util_format_short_name(tex->format));
+            tex->last_level, util_format_short_name(surf->format));
 }
 
 void r300_mark_fb_state_dirty(struct r300_context *r300,
@@ -888,7 +879,7 @@ r300_set_framebuffer_state(struct pipe_context* pipe,
     r300_mark_fb_state_dirty(r300, R300_CHANGED_FB_STATE);
 
     if (state->zsbuf) {
-        switch (util_format_get_blocksize(state->zsbuf->texture->format)) {
+        switch (util_format_get_blocksize(state->zsbuf->format)) {
         case 2:
             zbuffer_bpp = 16;
             break;
@@ -1026,8 +1017,8 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
                                   const struct pipe_rasterizer_state* state)
 {
     struct r300_rs_state* rs = CALLOC_STRUCT(r300_rs_state);
-    float psiz;
     uint32_t vap_control_status;    /* R300_VAP_CNTL_STATUS: 0x2140 */
+    uint32_t vap_clip_cntl;         /* R300_VAP_CLIP_CNTL: 0x221C */
     uint32_t point_size;            /* R300_GA_POINT_SIZE: 0x421c */
     uint32_t point_minmax;          /* R300_GA_POINT_MINMAX: 0x4230 */
     uint32_t line_control;          /* R300_GA_LINE_CNTL: 0x4234 */
@@ -1044,7 +1035,8 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
     float point_texcoord_bottom = 0;/* R300_GA_POINT_T0: 0x4204 */
     float point_texcoord_right = 1; /* R300_GA_POINT_S1: 0x4208 */
     float point_texcoord_top = 0;   /* R300_GA_POINT_T1: 0x420c */
-    boolean vclamp = state->clamp_vertex_color;
+    boolean vclamp = state->clamp_vertex_color ||
+                     !r300_context(pipe)->screen->caps.is_r500;
     CB_LOCALS;
 
     /* Copy rasterizer state. */
@@ -1077,14 +1069,16 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
     if (state->point_size_per_vertex) {
         /* Per-vertex point size.
          * Clamp to [0, max FB size] */
-        psiz = pipe->screen->get_paramf(pipe->screen,
+        float min_psiz = util_get_min_point_size(state);
+        float max_psiz = pipe->screen->get_paramf(pipe->screen,
                                         PIPE_CAPF_MAX_POINT_WIDTH);
         point_minmax =
-            pack_float_16_6x(psiz) << R300_GA_POINT_MINMAX_MAX_SHIFT;
+            (pack_float_16_6x(min_psiz) << R300_GA_POINT_MINMAX_MIN_SHIFT) |
+            (pack_float_16_6x(max_psiz) << R300_GA_POINT_MINMAX_MAX_SHIFT);
     } else {
         /* We cannot disable the point-size vertex output,
          * so clamp it. */
-        psiz = state->point_size;
+        float psiz = state->point_size;
         point_minmax =
             (pack_float_16_6x(psiz) << R300_GA_POINT_MINMAX_MIN_SHIFT) |
             (pack_float_16_6x(psiz) << R300_GA_POINT_MINMAX_MAX_SHIFT);
@@ -1167,6 +1161,13 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
         }
     }
 
+    if (r300_screen(pipe->screen)->caps.has_tcl) {
+       vap_clip_cntl = (state->clip_plane_enable & 63) |
+                       R300_PS_UCP_MODE_CLIP_AS_TRIFAN;
+    } else {
+       vap_clip_cntl = R300_CLIP_DISABLE;
+    }
+
     /* Vertex color clamping. FP20 means no clamping. */
     round_mode =
       R300_GA_ROUND_MODE_GEOMETRY_ROUND_NEAREST |
@@ -1176,13 +1177,14 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
     /* Build the main command buffer. */
     BEGIN_CB(rs->cb_main, RS_STATE_MAIN_SIZE);
     OUT_CB_REG(R300_VAP_CNTL_STATUS, vap_control_status);
+    OUT_CB_REG(R300_VAP_CLIP_CNTL, vap_clip_cntl);
     OUT_CB_REG(R300_GA_POINT_SIZE, point_size);
     OUT_CB_REG_SEQ(R300_GA_POINT_MINMAX, 2);
     OUT_CB(point_minmax);
     OUT_CB(line_control);
     OUT_CB_REG_SEQ(R300_SU_POLY_OFFSET_ENABLE, 2);
     OUT_CB(polygon_offset_enable);
-    rs->cull_mode_index = 9;
+    rs->cull_mode_index = 11;
     OUT_CB(cull_mode);
     OUT_CB_REG(R300_GA_LINE_STIPPLE_CONFIG, line_stipple_config);
     OUT_CB_REG(R300_GA_LINE_STIPPLE_VALUE, line_stipple_value);
@@ -1230,7 +1232,6 @@ static void r300_bind_rs_state(struct pipe_context* pipe, void* state)
     struct r300_rs_state* rs = (struct r300_rs_state*)state;
     int last_sprite_coord_enable = r300->sprite_coord_enable;
     boolean last_two_sided_color = r300->two_sided_color;
-    boolean last_frag_clamp = r300->frag_clamp;
 
     if (r300->draw && rs) {
         draw_set_rasterizer_state(r300->draw, &rs->rs_draw, state);
@@ -1240,12 +1241,10 @@ static void r300_bind_rs_state(struct pipe_context* pipe, void* state)
         r300->polygon_offset_enabled = rs->polygon_offset_enable;
         r300->sprite_coord_enable = rs->rs.sprite_coord_enable;
         r300->two_sided_color = rs->rs.light_twoside;
-        r300->frag_clamp = rs->rs.clamp_fragment_color;
     } else {
         r300->polygon_offset_enabled = FALSE;
         r300->sprite_coord_enable = 0;
         r300->two_sided_color = FALSE;
-        r300->frag_clamp = FALSE;
     }
 
     UPDATE_STATE(state, r300->rs_state);
@@ -1254,11 +1253,6 @@ static void r300_bind_rs_state(struct pipe_context* pipe, void* state)
     if (last_sprite_coord_enable != r300->sprite_coord_enable ||
         last_two_sided_color != r300->two_sided_color) {
         r300_mark_atom_dirty(r300, &r300->rs_block_state);
-    }
-
-    if (last_frag_clamp != r300->frag_clamp &&
-        r300->fs_status == FRAGMENT_SHADER_VALID) {
-        r300->fs_status = FRAGMENT_SHADER_MAYBE_DIRTY;
     }
 }
 
@@ -1458,10 +1452,12 @@ static void r300_set_fragment_sampler_views(struct pipe_context* pipe,
     }
 }
 
-static struct pipe_sampler_view *
-r300_create_sampler_view(struct pipe_context *pipe,
+struct pipe_sampler_view *
+r300_create_sampler_view_custom(struct pipe_context *pipe,
                          struct pipe_resource *texture,
-                         const struct pipe_sampler_view *templ)
+                         const struct pipe_sampler_view *templ,
+                         unsigned width0_override,
+                         unsigned height0_override)
 {
     struct r300_sampler_view *view = CALLOC_STRUCT(r300_sampler_view);
     struct r300_resource *tex = r300_resource(texture);
@@ -1477,6 +1473,8 @@ r300_create_sampler_view(struct pipe_context *pipe,
         view->base.texture = NULL;
         pipe_resource_reference(&view->base.texture, texture);
 
+	view->width0_override = width0_override;
+	view->height0_override = height0_override;
         view->swizzle[0] = templ->swizzle_r;
         view->swizzle[1] = templ->swizzle_g;
         view->swizzle[2] = templ->swizzle_b;
@@ -1493,7 +1491,10 @@ r300_create_sampler_view(struct pipe_context *pipe,
         }
         assert(hwformat != ~0);
 
-        view->format = tex->tx_format;
+	r300_texture_setup_format_state(r300_screen(pipe->screen), tex,
+					templ->format, 0,
+	                                width0_override, height0_override,
+					&view->format);
         view->format.format1 |= hwformat;
         if (is_r500) {
             view->format.format2 |= r500_tx_format_msb_bit(templ->format);
@@ -1502,6 +1503,17 @@ r300_create_sampler_view(struct pipe_context *pipe,
 
     return (struct pipe_sampler_view*)view;
 }
+
+static struct pipe_sampler_view *
+r300_create_sampler_view(struct pipe_context *pipe,
+                         struct pipe_resource *texture,
+                         const struct pipe_sampler_view *templ)
+{
+    return r300_create_sampler_view_custom(pipe, texture, templ,
+                                           r300_resource(texture)->tex.width0,
+                                           r300_resource(texture)->tex.height0);
+}
+
 
 static void
 r300_sampler_view_destroy(struct pipe_context *pipe,

@@ -150,7 +150,7 @@ DestroyGLXDrawable(Display *dpy, GLXDrawable drawable)
  *       number range for \c dpy?
  */
 
-static struct glx_screen *
+_X_HIDDEN struct glx_screen *
 GetGLXScreenConfigs(Display * dpy, int scrn)
 {
    struct glx_display *const priv = __glXInitialize(dpy);
@@ -2602,6 +2602,9 @@ static const struct name_address_pair GLX_functions[] = {
    GLX_FUNCTION(glXGetScreenDriver),
    GLX_FUNCTION(glXGetDriverConfig),
 #endif
+
+   /*** GLX_ARB_create_context and GLX_ARB_create_context_profile ***/
+   GLX_FUNCTION(glXCreateContextAttribsARB),
 
    {NULL, NULL}                 /* end of list */
 };

@@ -209,14 +209,9 @@ fast_read_rgba_pixels_memcpy( struct gl_context *ctx,
    GLubyte *dst, *map;
    int dstStride, stride, j, texelBytes;
 
-   if (!_mesa_format_matches_format_and_type(rb->Format, format, type))
+   if (!_mesa_format_matches_format_and_type(rb->Format, format, type,
+                                             ctx->Pack.SwapBytes))
       return GL_FALSE;
-
-   /* check for things we can't handle here */
-   if (packing->SwapBytes ||
-       packing->LsbFirst) {
-      return GL_FALSE;
-   }
 
    dstStride = _mesa_image_row_stride(packing, width, format, type);
    dst = (GLubyte *) _mesa_image_address2d(packing, pixels, width, height,
@@ -273,7 +268,7 @@ slow_read_rgba_pixels( struct gl_context *ctx,
 
    for (j = 0; j < height; j++) {
       if (_mesa_is_integer_format(format)) {
-	 _mesa_unpack_int_rgba_row(rbFormat, width, map, (GLuint (*)[4]) rgba);
+	 _mesa_unpack_uint_rgba_row(rbFormat, width, map, (GLuint (*)[4]) rgba);
 	 _mesa_pack_rgba_span_int(ctx, width, (GLuint (*)[4]) rgba, format,
                                   type, dst);
       } else {
@@ -779,6 +774,11 @@ _mesa_ReadnPixelsARB( GLint x, GLint y, GLsizei width, GLsizei height,
    if (ctx->ReadBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
       _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
                   "glReadPixels(incomplete framebuffer)" );
+      return;
+   }
+
+   if (ctx->ReadBuffer->Name != 0 && ctx->ReadBuffer->Visual.samples > 0) {
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glReadPixels(multisample FBO)");
       return;
    }
 

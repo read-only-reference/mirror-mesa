@@ -636,7 +636,7 @@ pack_float_ARGB1555_REV(const GLfloat src[4], void *dst)
 static void
 pack_ubyte_AL44(const GLubyte src[4], void *dst)
 {
-   GLushort *d = ((GLushort *) dst);
+   GLubyte *d = ((GLubyte *) dst);
    *d = PACK_COLOR_44(src[ACOMP], src[RCOMP]);
 }
 
@@ -2050,6 +2050,48 @@ _mesa_pack_ubyte_rgba_row(gl_format format, GLuint n,
 
 
 /**
+ * Pack a 2D image of ubyte RGBA pixels in the given format.
+ * \param srcRowStride  source image row stride in bytes
+ * \param dstRowStride  destination image row stride in bytes
+ */
+void
+_mesa_pack_ubyte_rgba_rect(gl_format format, GLuint width, GLuint height,
+                           const GLubyte *src, GLint srcRowStride,
+                           void *dst, GLint dstRowStride)
+{
+   pack_ubyte_rgba_row_func packrow = get_pack_ubyte_rgba_row_function(format);
+   GLubyte *dstUB = (GLubyte *) dst;
+   GLuint i;
+
+   if (packrow) {
+      if (srcRowStride == width * 4 * sizeof(GLubyte) &&
+          dstRowStride == _mesa_format_row_stride(format, width)) {
+         /* do whole image at once */
+         packrow(width * height, (const GLubyte (*)[4]) src, dst);
+      }
+      else {
+         /* row by row */
+         for (i = 0; i < height; i++) {
+            packrow(width, (const GLubyte (*)[4]) src, dstUB);
+            src += srcRowStride;
+            dstUB += dstRowStride;
+         }
+      }
+   }
+   else {
+      /* slower fallback */
+      for (i = 0; i < height; i++) {
+         _mesa_pack_ubyte_rgba_row(format, width,
+                                   (const GLubyte (*)[4]) src, dstUB);
+         src += srcRowStride;
+         dstUB += dstRowStride;
+      }
+   }
+}
+
+
+
+/**
  ** Pack float Z pixels
  **/
 
@@ -2453,7 +2495,7 @@ _mesa_pack_ubyte_stencil_row(gl_format format, GLuint n,
       break;
    case MESA_FORMAT_Z32_FLOAT_X24S8:
       {
-         GLfloat *d = ((GLfloat *) dst);
+         GLuint *d = dst;
          GLuint i;
          for (i = 0; i < n; i++) {
             d[i * 2 + 1] = src[i];
@@ -2532,10 +2574,10 @@ _mesa_pack_colormask(gl_format format, const GLubyte colorMask[4], void *dst)
          GLuint i;
 
          /* this should put non-zero values into the channels of dst */
-         maskColor[0] = colorMask[0] ? -1.0 : 0.0;
-         maskColor[1] = colorMask[1] ? -1.0 : 0.0;
-         maskColor[2] = colorMask[2] ? -1.0 : 0.0;
-         maskColor[3] = colorMask[3] ? -1.0 : 0.0;
+         maskColor[0] = colorMask[0] ? -1.0f : 0.0f;
+         maskColor[1] = colorMask[1] ? -1.0f : 0.0f;
+         maskColor[2] = colorMask[2] ? -1.0f : 0.0f;
+         maskColor[3] = colorMask[3] ? -1.0f : 0.0f;
          _mesa_pack_float_rgba_row(format, 1,
                                    (const GLfloat (*)[4]) maskColor, dst);
 

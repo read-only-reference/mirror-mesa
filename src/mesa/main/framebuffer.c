@@ -222,10 +222,6 @@ _mesa_free_framebuffer_data(struct gl_framebuffer *fb)
       ASSERT(!att->Texture);
       att->Type = GL_NONE;
    }
-
-   /* unbind _Depth/_StencilBuffer to decr ref counts */
-   _mesa_reference_renderbuffer(&fb->_DepthBuffer, NULL);
-   _mesa_reference_renderbuffer(&fb->_StencilBuffer, NULL);
 }
 
 
@@ -285,8 +281,8 @@ _mesa_resize_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb,
     * and return early.
     */
 
-   /* For window system framebuffers, Name is zero */
-   assert(fb->Name == 0);
+   /* Can only resize win-sys framebuffer objects */
+   assert(_mesa_is_winsys_fbo(fb));
 
    for (i = 0; i < BUFFER_COUNT; i++) {
       struct gl_renderbuffer_attachment *att = &fb->Attachment[i];
@@ -412,7 +408,7 @@ update_framebuffer_size(struct gl_context *ctx, struct gl_framebuffer *fb)
    GLuint i;
 
    /* user-created framebuffers only */
-   assert(fb->Name);
+   assert(_mesa_is_user_fbo(fb));
 
    for (i = 0; i < BUFFER_COUNT; i++) {
       struct gl_renderbuffer_attachment *att = &fb->Attachment[i];
@@ -531,7 +527,7 @@ _mesa_update_framebuffer_visual(struct gl_context *ctx,
             fb->Visual.samples = rb->NumSamples;
             fb->Visual.sampleBuffers = rb->NumSamples > 0 ? 1 : 0;
             if (_mesa_get_format_color_encoding(fmt) == GL_SRGB)
-                fb->Visual.sRGBCapable = ctx->Const.sRGBCapable;
+                fb->Visual.sRGBCapable = ctx->Extensions.EXT_framebuffer_sRGB;
             break;
          }
       }
@@ -681,8 +677,6 @@ update_color_read_buffer(struct gl_context *ctx, struct gl_framebuffer *fb)
  *    _ColorDrawBuffers
  *    _NumColorDrawBuffers
  *    _ColorReadBuffer
- *    _DepthBuffer
- *    _StencilBuffer
  *
  * If the framebuffer is user-created, make sure it's complete.
  *
@@ -693,7 +687,7 @@ update_color_read_buffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 static void
 update_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 {
-   if (fb->Name == 0) {
+   if (_mesa_is_winsys_fbo(fb)) {
       /* This is a window-system framebuffer */
       /* Need to update the FB's GL_DRAW_BUFFER state to match the
        * context state (GL_READ_BUFFER too).
@@ -857,7 +851,6 @@ _mesa_source_buffer_exists(struct gl_context *ctx, GLenum format)
 
 /**
  * As above, but for drawing operations.
- * XXX could do some code merging w/ above function.
  */
 GLboolean
 _mesa_dest_buffer_exists(struct gl_context *ctx, GLenum format)

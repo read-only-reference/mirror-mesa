@@ -100,7 +100,8 @@ enum tgsi_file_type {
 #define TGSI_INTERPOLATE_CONSTANT      0
 #define TGSI_INTERPOLATE_LINEAR        1
 #define TGSI_INTERPOLATE_PERSPECTIVE   2
-#define TGSI_INTERPOLATE_COUNT         3
+#define TGSI_INTERPOLATE_COLOR         3 /* special color case for smooth/flat */
+#define TGSI_INTERPOLATE_COUNT         4
 
 #define TGSI_CYLINDRICAL_WRAP_X (1 << 0)
 #define TGSI_CYLINDRICAL_WRAP_Y (1 << 1)
@@ -146,7 +147,9 @@ struct tgsi_declaration_dimension
 #define TGSI_SEMANTIC_INSTANCEID 10
 #define TGSI_SEMANTIC_VERTEXID   11
 #define TGSI_SEMANTIC_STENCIL    12
-#define TGSI_SEMANTIC_COUNT      13 /**< number of semantic values */
+#define TGSI_SEMANTIC_CLIPDIST   13
+#define TGSI_SEMANTIC_CLIPVERTEX 14
+#define TGSI_SEMANTIC_COUNT      15 /**< number of semantic values */
 
 struct tgsi_declaration_semantic
 {
@@ -189,7 +192,8 @@ union tgsi_immediate_data
 #define TGSI_PROPERTY_FS_COORD_PIXEL_CENTER  4
 #define TGSI_PROPERTY_FS_COLOR0_WRITES_ALL_CBUFS 5
 #define TGSI_PROPERTY_FS_DEPTH_LAYOUT        6
-#define TGSI_PROPERTY_COUNT                  7
+#define TGSI_PROPERTY_VS_PROHIBIT_UCPS       7
+#define TGSI_PROPERTY_COUNT                  8
 
 struct tgsi_property {
    unsigned Type         : 4;  /**< TGSI_TOKEN_TYPE_PROPERTY */
@@ -374,8 +378,10 @@ struct tgsi_property_data {
 
 #define TGSI_OPCODE_UARL                157
 #define TGSI_OPCODE_UCMP                158
+#define TGSI_OPCODE_IABS                159
+#define TGSI_OPCODE_ISSG                160
 
-#define TGSI_OPCODE_LAST                159
+#define TGSI_OPCODE_LAST                161
 
 #define TGSI_SAT_NONE            0  /* do not saturate */
 #define TGSI_SAT_ZERO_ONE        1  /* clamp to [0,1] */
@@ -448,7 +454,8 @@ struct tgsi_instruction_label
 #define TGSI_TEXTURE_2D_ARRAY       10
 #define TGSI_TEXTURE_SHADOW1D_ARRAY 11
 #define TGSI_TEXTURE_SHADOW2D_ARRAY 12
-#define TGSI_TEXTURE_COUNT          13
+#define TGSI_TEXTURE_SHADOWCUBE     13
+#define TGSI_TEXTURE_COUNT          14
 
 struct tgsi_instruction_texture
 {

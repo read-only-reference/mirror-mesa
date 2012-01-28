@@ -148,7 +148,7 @@ copy_rgba_pixels(struct gl_context *ctx, GLint srcx, GLint srcy,
       p = tmpImage;
       for (row = 0; row < height; row++) {
          _swrast_read_rgba_span( ctx, ctx->ReadBuffer->_ColorReadBuffer,
-                                 width, srcx, sy + row, GL_FLOAT, p );
+                                 width, srcx, sy + row, p );
          p += width * 4;
       }
       p = tmpImage;
@@ -172,7 +172,7 @@ copy_rgba_pixels(struct gl_context *ctx, GLint srcx, GLint srcy,
       else {
          /* get from framebuffer */
          _swrast_read_rgba_span( ctx, ctx->ReadBuffer->_ColorReadBuffer,
-                                 width, srcx, sy, GL_FLOAT, rgba );
+                                 width, srcx, sy, rgba );
       }
 
       if (transferOps) {
@@ -422,13 +422,13 @@ copy_stencil_pixels( struct gl_context *ctx, GLint srcx, GLint srcy,
 
 
 /**
- * Try to do a fast copy pixels with memcpy.
+ * Try to do a fast 1:1 blit with memcpy.
  * \return GL_TRUE if successful, GL_FALSE otherwise.
  */
-static GLboolean
-fast_copy_pixels(struct gl_context *ctx,
-                 GLint srcX, GLint srcY, GLsizei width, GLsizei height,
-                 GLint dstX, GLint dstY, GLenum type)
+GLboolean
+swrast_fast_copy_pixels(struct gl_context *ctx,
+			GLint srcX, GLint srcY, GLsizei width, GLsizei height,
+			GLint dstX, GLint dstY, GLenum type)
 {
    struct gl_framebuffer *srcFb = ctx->ReadBuffer;
    struct gl_framebuffer *dstFb = ctx->DrawBuffer;
@@ -437,14 +437,6 @@ fast_copy_pixels(struct gl_context *ctx,
    GLuint pixelBytes, widthInBytes;
    GLubyte *srcMap, *dstMap;
    GLint srcRowStride, dstRowStride;
-
-   if (SWRAST_CONTEXT(ctx)->_RasterMask != 0x0 ||
-       ctx->Pixel.ZoomX != 1.0F ||
-       ctx->Pixel.ZoomY != 1.0F ||
-       ctx->_ImageTransferState) {
-      /* can't handle these */
-      return GL_FALSE;
-   }
 
    if (type == GL_COLOR) {
       if (dstFb->_NumColorDrawBuffers != 1)
@@ -508,7 +500,7 @@ fast_copy_pixels(struct gl_context *ctx,
                                   srcRb->Width, srcRb->Height,
                                   GL_MAP_READ_BIT | GL_MAP_WRITE_BIT,
                                   &map, &rowStride);
-      if (!srcMap) {
+      if (!map) {
          _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCopyPixels");
          return GL_TRUE; /* don't retry with slow path */
       }
@@ -566,6 +558,49 @@ fast_copy_pixels(struct gl_context *ctx,
 
 
 /**
+ * Find/map the renderbuffer that we'll be reading from.
+ * The swrast_render_start() function only maps the drawing buffers,
+ * not the read buffer.
+ */
+static struct gl_renderbuffer *
+map_readbuffer(struct gl_context *ctx, GLenum type)
+{
+   struct gl_framebuffer *fb = ctx->ReadBuffer;
+   struct gl_renderbuffer *rb;
+   struct swrast_renderbuffer *srb;
+
+   switch (type) {
+   case GL_COLOR:
+      rb = fb->Attachment[fb->_ColorReadBufferIndex].Renderbuffer;
+      break;
+   case GL_DEPTH:
+   case GL_DEPTH_STENCIL:
+      rb = fb->Attachment[BUFFER_DEPTH].Renderbuffer;
+      break;
+   case GL_STENCIL:
+      rb = fb->Attachment[BUFFER_STENCIL].Renderbuffer;
+      break;
+   default:
+      return NULL;
+   }
+
+   srb = swrast_renderbuffer(rb);
+
+   if (!srb || srb->Map) {
+      /* no buffer, or buffer is mapped already, we're done */
+      return NULL;
+   }
+
+   ctx->Driver.MapRenderbuffer(ctx, rb,
+                               0, 0, rb->Width, rb->Height,
+                               GL_MAP_READ_BIT,
+                               &srb->Map, &srb->RowStride);
+
+   return rb;
+}
+
+
+/**
  * Do software-based glCopyPixels.
  * By time we get here, all parameters will have been error-checked.
  */
@@ -575,6 +610,7 @@ _swrast_CopyPixels( struct gl_context *ctx,
 		    GLint destx, GLint desty, GLenum type )
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
+   struct gl_renderbuffer *rb;
       
    if (!_mesa_check_conditional_render(ctx))
       return; /* don't copy */
@@ -582,12 +618,18 @@ _swrast_CopyPixels( struct gl_context *ctx,
    if (swrast->NewState)
       _swrast_validate_derived( ctx );
 
-   if (fast_copy_pixels(ctx, srcx, srcy, width, height, destx, desty, type)) {
+   if (!(SWRAST_CONTEXT(ctx)->_RasterMask != 0x0 ||
+	 ctx->Pixel.ZoomX != 1.0F ||
+	 ctx->Pixel.ZoomY != 1.0F ||
+	 ctx->_ImageTransferState) &&
+       swrast_fast_copy_pixels(ctx, srcx, srcy, width, height, destx, desty,
+			       type)) {
       /* all done */
       return;
    }
 
    swrast_render_start(ctx);
+   rb = map_readbuffer(ctx, type);
 
    switch (type) {
    case GL_COLOR:
@@ -609,4 +651,10 @@ _swrast_CopyPixels( struct gl_context *ctx,
    }
 
    swrast_render_finish(ctx);
+
+   if (rb) {
+      struct swrast_renderbuffer *srb = swrast_renderbuffer(rb);
+      ctx->Driver.UnmapRenderbuffer(ctx, rb);
+      srb->Map = NULL;
+   }
 }

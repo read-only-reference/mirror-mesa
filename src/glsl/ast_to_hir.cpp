@@ -664,6 +664,7 @@ mark_whole_array_access(ir_rvalue *access)
 
 ir_rvalue *
 do_assignment(exec_list *instructions, struct _mesa_glsl_parse_state *state,
+	      const char *non_lvalue_description,
 	      ir_rvalue *lhs, ir_rvalue *rhs, bool is_initializer,
 	      YYLTYPE lhs_loc)
 {
@@ -671,8 +672,13 @@ do_assignment(exec_list *instructions, struct _mesa_glsl_parse_state *state,
    bool error_emitted = (lhs->type->is_error() || rhs->type->is_error());
 
    if (!error_emitted) {
-      if (lhs->variable_referenced() != NULL
-          && lhs->variable_referenced()->read_only) {
+      if (non_lvalue_description != NULL) {
+         _mesa_glsl_error(&lhs_loc, state,
+                          "assignment to %s",
+			  non_lvalue_description);
+	 error_emitted = true;
+      } else if (lhs->variable_referenced() != NULL
+		 && lhs->variable_referenced()->read_only) {
          _mesa_glsl_error(&lhs_loc, state,
                           "assignment to read-only variable '%s'",
                           lhs->variable_referenced()->name);
@@ -768,11 +774,6 @@ get_lvalue_copy(exec_list *instructions, ir_rvalue *lvalue)
 
    instructions->push_tail(new(ctx) ir_assignment(new(ctx) ir_dereference_variable(var),
 						  lvalue, NULL));
-
-   /* Once we've created this temporary, mark it read only so it's no
-    * longer considered an lvalue.
-    */
-   var->read_only = true;
 
    return new(ctx) ir_dereference_variable(var);
 }
@@ -1030,7 +1031,9 @@ ast_expression::hir(exec_list *instructions,
       op[0] = this->subexpressions[0]->hir(instructions, state);
       op[1] = this->subexpressions[1]->hir(instructions, state);
 
-      result = do_assignment(instructions, state, op[0], op[1], false,
+      result = do_assignment(instructions, state,
+			     this->subexpressions[0]->non_lvalue_description,
+			     op[0], op[1], false,
 			     this->subexpressions[0]->get_location());
       error_emitted = result->type->is_error();
       break;
@@ -1184,7 +1187,7 @@ ast_expression::hir(exec_list *instructions,
 	 error_emitted = true;
       }
 
-      type = op[0]->type;
+      type = error_emitted ? glsl_type::error_type : op[0]->type;
       result = new(ctx) ir_expression(ir_unop_bit_not, type, op[0], NULL);
       break;
 
@@ -1310,6 +1313,7 @@ ast_expression::hir(exec_list *instructions,
 						   op[0], op[1]);
 
       result = do_assignment(instructions, state,
+			     this->subexpressions[0]->non_lvalue_description,
 			     op[0]->clone(ctx, NULL), temp_rhs, false,
 			     this->subexpressions[0]->get_location());
       error_emitted = (op[0]->type->is_error());
@@ -1335,6 +1339,7 @@ ast_expression::hir(exec_list *instructions,
 					op[0], op[1]);
 
       result = do_assignment(instructions, state,
+			     this->subexpressions[0]->non_lvalue_description,
 			     op[0]->clone(ctx, NULL), temp_rhs, false,
 			     this->subexpressions[0]->get_location());
       error_emitted = type->is_error();
@@ -1349,8 +1354,9 @@ ast_expression::hir(exec_list *instructions,
                                &loc);
       ir_rvalue *temp_rhs = new(ctx) ir_expression(operations[this->oper],
                                                    type, op[0], op[1]);
-      result = do_assignment(instructions, state, op[0]->clone(ctx, NULL),
-                             temp_rhs, false,
+      result = do_assignment(instructions, state,
+			     this->subexpressions[0]->non_lvalue_description,
+			     op[0]->clone(ctx, NULL), temp_rhs, false,
                              this->subexpressions[0]->get_location());
       error_emitted = op[0]->type->is_error() || op[1]->type->is_error();
       break;
@@ -1365,8 +1371,9 @@ ast_expression::hir(exec_list *instructions,
                                    state, &loc);
       ir_rvalue *temp_rhs = new(ctx) ir_expression(operations[this->oper],
                                                    type, op[0], op[1]);
-      result = do_assignment(instructions, state, op[0]->clone(ctx, NULL),
-                             temp_rhs, false,
+      result = do_assignment(instructions, state,
+			     this->subexpressions[0]->non_lvalue_description,
+			     op[0]->clone(ctx, NULL), temp_rhs, false,
                              this->subexpressions[0]->get_location());
       error_emitted = op[0]->type->is_error() || op[1]->type->is_error();
       break;
@@ -1463,6 +1470,9 @@ ast_expression::hir(exec_list *instructions,
 
    case ast_pre_inc:
    case ast_pre_dec: {
+      this->non_lvalue_description = (this->oper == ast_pre_inc)
+	 ? "pre-increment operation" : "pre-decrement operation";
+
       op[0] = this->subexpressions[0]->hir(instructions, state);
       op[1] = constant_one_for_inc_dec(ctx, op[0]->type);
 
@@ -1473,6 +1483,7 @@ ast_expression::hir(exec_list *instructions,
 					op[0], op[1]);
 
       result = do_assignment(instructions, state,
+			     this->subexpressions[0]->non_lvalue_description,
 			     op[0]->clone(ctx, NULL), temp_rhs, false,
 			     this->subexpressions[0]->get_location());
       error_emitted = op[0]->type->is_error();
@@ -1481,6 +1492,8 @@ ast_expression::hir(exec_list *instructions,
 
    case ast_post_inc:
    case ast_post_dec: {
+      this->non_lvalue_description = (this->oper == ast_post_inc)
+	 ? "post-increment operation" : "post-decrement operation";
       op[0] = this->subexpressions[0]->hir(instructions, state);
       op[1] = constant_one_for_inc_dec(ctx, op[0]->type);
 
@@ -1498,6 +1511,7 @@ ast_expression::hir(exec_list *instructions,
       result = get_lvalue_copy(instructions, op[0]->clone(ctx, NULL));
 
       (void)do_assignment(instructions, state,
+			  this->subexpressions[0]->non_lvalue_description,
 			  op[0]->clone(ctx, NULL), temp_rhs, false,
 			  this->subexpressions[0]->get_location());
 
@@ -1996,6 +2010,29 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
    else
       var->interpolation = INTERP_QUALIFIER_NONE;
 
+   if (var->interpolation != INTERP_QUALIFIER_NONE &&
+       !(state->target == vertex_shader && var->mode == ir_var_out) &&
+       !(state->target == fragment_shader && var->mode == ir_var_in)) {
+      const char *qual_string = NULL;
+      switch (var->interpolation) {
+      case INTERP_QUALIFIER_FLAT:
+	 qual_string = "flat";
+	 break;
+      case INTERP_QUALIFIER_NOPERSPECTIVE:
+	 qual_string = "noperspective";
+	 break;
+      case INTERP_QUALIFIER_SMOOTH:
+	 qual_string = "smooth";
+	 break;
+      }
+
+      _mesa_glsl_error(loc, state,
+		       "interpolation qualifier `%s' can only be applied to "
+		       "vertex shader outputs and fragment shader inputs.",
+		       qual_string);
+
+   }
+
    var->pixel_center_integer = qual->flags.q.pixel_center_integer;
    var->origin_upper_left = qual->flags.q.origin_upper_left;
    if ((qual->flags.q.origin_upper_left || qual->flags.q.pixel_center_integer)
@@ -2365,6 +2402,7 @@ process_initializer(ir_variable *var, ast_declaration *decl,
       const glsl_type *initializer_type;
       if (!type->qualifier.flags.q.uniform) {
 	 result = do_assignment(initializer_instructions, state,
+				NULL,
 				lhs, rhs, true,
 				type->get_location());
 	 initializer_type = result->type;

@@ -139,14 +139,17 @@ brw_compute_vue_map(struct brw_vue_map *vue_map,
     * assign them contiguously.  Don't reassign outputs that already have a
     * slot.
     *
-    * Also, don't assign a slot for VERT_RESULT_CLIP_VERTEX, since it is
-    * unsupported in pre-GEN6, and in GEN6+ the vertex shader converts it into
-    * clip distances.
+    * Also, prior to Gen6, don't assign a slot for VERT_RESULT_CLIP_VERTEX,
+    * since it is unsupported.  In Gen6 and above, VERT_RESULT_CLIP_VERTEX may
+    * be needed for transform feedback; since we don't want to have to
+    * recompute the VUE map (and everything that depends on it) when transform
+    * feedback is enabled or disabled, just go ahead and assign a slot for it.
     */
    for (int i = 0; i < VERT_RESULT_MAX; ++i) {
+      if (intel->gen < 6 && i == VERT_RESULT_CLIP_VERTEX)
+         continue;
       if ((outputs_written & BITFIELD64_BIT(i)) &&
-          vue_map->vert_result_to_slot[i] == -1 &&
-          i != VERT_RESULT_CLIP_VERTEX) {
+          vue_map->vert_result_to_slot[i] == -1) {
          assign_vue_slot(vue_map, i);
       }
    }
@@ -228,7 +231,7 @@ do_vs_prog(struct brw_context *brw,
 
    /* Emit GEN4 code.
     */
-   if (brw->new_vs_backend && prog) {
+   if (prog) {
       if (!brw_vs_emit(prog, &c)) {
 	 ralloc_free(mem_ctx);
 	 return false;
@@ -349,6 +352,7 @@ static void brw_upload_vs_prog(struct brw_context *brw)
 const struct brw_tracked_state brw_vs_prog = {
    .dirty = {
       .mesa  = (_NEW_TRANSFORM | _NEW_POLYGON | _NEW_POINT | _NEW_LIGHT |
+		_NEW_TEXTURE |
 		_NEW_BUFFERS),
       .brw   = (BRW_NEW_VERTEX_PROGRAM |
 		BRW_NEW_VERTICES),

@@ -26,16 +26,6 @@
  *    Chia-I Wu <olv@lunarg.com>
  */
 
-#include "state_tracker/st_gl_api.h"
-
-#include "pipe/p_context.h"
-#include "pipe/p_screen.h"
-#include "util/u_format.h"
-#include "util/u_pointer.h"
-#include "util/u_inlines.h"
-#include "util/u_atomic.h"
-#include "util/u_surface.h"
-
 #include "main/mtypes.h"
 #include "main/context.h"
 #include "main/mfeatures.h"
@@ -53,6 +43,16 @@
 #include "st_cb_fbo.h"
 #include "st_cb_flush.h"
 #include "st_manager.h"
+
+#include "state_tracker/st_gl_api.h"
+
+#include "pipe/p_context.h"
+#include "pipe/p_screen.h"
+#include "util/u_format.h"
+#include "util/u_pointer.h"
+#include "util/u_inlines.h"
+#include "util/u_atomic.h"
+#include "util/u_surface.h"
 
 /**
  * Cast wrapper to convert a struct gl_framebuffer to an st_framebuffer.
@@ -222,7 +222,6 @@ st_framebuffer_validate(struct st_framebuffer *stfb,
          continue;
       }
 
-      memset(&surf_tmpl, 0, sizeof(surf_tmpl));
       u_surface_default_template(&surf_tmpl, textures[i],
                                  PIPE_BIND_RENDER_TARGET);
       ps = st->pipe->create_surface(st->pipe, textures[i], &surf_tmpl);
@@ -535,7 +534,7 @@ st_context_teximage(struct st_context_iface *stctxi,
       texFormat = st_ChooseTextureFormat(ctx, internalFormat,
                                          GL_BGRA, GL_UNSIGNED_BYTE);
 
-      _mesa_init_teximage_fields(ctx, target, texImage,
+      _mesa_init_teximage_fields(ctx, texImage,
                                  tex->width0, tex->height0, 1, 0,
                                  internalFormat, texFormat);
 
@@ -647,9 +646,13 @@ st_api_create_context(struct st_api *stapi, struct st_manager *smapi,
    if (attribs->major > 1 || attribs->minor > 0) {
       _mesa_compute_version(st->ctx);
 
-      /* is the actual version less than the requested version? */
+      /* Is the actual version less than the requested version?  Mesa can't
+       * yet enforce the added restrictions of a forward-looking context, so
+       * fail that too.
+       */
       if (st->ctx->VersionMajor * 10 + st->ctx->VersionMinor <
-          attribs->major * 10 + attribs->minor) {
+          attribs->major * 10 + attribs->minor
+	  || (attribs->flags & ~ST_CONTEXT_FLAG_DEBUG) != 0) {
 	 *error = ST_CONTEXT_ERROR_BAD_VERSION;
          st_destroy_context(st);
          return NULL;
@@ -685,7 +688,9 @@ st_framebuffer_reuse_or_create(struct gl_framebuffer *fb,
 {
    struct st_framebuffer *cur = st_ws_framebuffer(fb), *stfb = NULL;
 
-   if (cur && cur->iface == stfbi) {
+   /* dummy framebuffers cant be used as st_framebuffer */
+   if (cur && &cur->Base != _mesa_get_incomplete_framebuffer() &&
+       cur->iface == stfbi) {
       /* reuse the current stfb */
       st_framebuffer_reference(&stfb, cur);
    }
@@ -776,7 +781,7 @@ st_manager_flush_frontbuffer(struct st_context *st)
       return;
 
    /* never a dummy fb */
-   assert(stfb->iface);
+   assert(&stfb->Base != _mesa_get_incomplete_framebuffer());
    stfb->iface->flush_front(stfb->iface, ST_ATTACHMENT_FRONT_LEFT);
 }
 

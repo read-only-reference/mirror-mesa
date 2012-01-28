@@ -450,6 +450,8 @@ draw_bitmap_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
    memset(&key, 0, sizeof(key));
    key.st = st;
    key.bitmap = GL_TRUE;
+   key.clamp_color = st->clamp_frag_color_in_shader &&
+                     st->ctx->Color._ClampFragmentColor;
 
    fpv = st_get_fp_variant(st, st->fp, &key);
 
@@ -870,6 +872,7 @@ st_init_bitmap(struct st_context *st)
    /* init baseline rasterizer state once */
    memset(&st->bitmap.rasterizer, 0, sizeof(st->bitmap.rasterizer));
    st->bitmap.rasterizer.gl_rasterization_rules = 1;
+   st->bitmap.rasterizer.depth_clip = 1;
 
    /* find a usable texture format */
    if (screen->is_format_supported(screen, PIPE_FORMAT_I8_UNORM,

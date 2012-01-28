@@ -102,14 +102,18 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_TEXTURE_BARRIER:
         case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
         case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
+        case PIPE_CAP_VERTEX_COLOR_CLAMPED:
             return 1;
+
+        case PIPE_CAP_GLSL_FEATURE_LEVEL:
+            return 120;
 
         /* r300 cannot do swizzling of compressed textures. Supported otherwise. */
         case PIPE_CAP_TEXTURE_SWIZZLE:
             return util_format_s3tc_enabled ? r300screen->caps.dxtc_swizzle : 1;
 
         /* Supported on r500 only. */
-        case PIPE_CAP_FRAGMENT_COLOR_CLAMP_CONTROL:
+        case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
         case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
         case PIPE_CAP_SM3:
             return is_r500 ? 1 : 0;
@@ -119,7 +123,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_DUAL_SOURCE_BLEND:
         case PIPE_CAP_INDEP_BLEND_ENABLE:
         case PIPE_CAP_INDEP_BLEND_FUNC:
-        case PIPE_CAP_DEPTH_CLAMP:
+        case PIPE_CAP_DEPTH_CLIP_DISABLE:
         case PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE:
         case PIPE_CAP_SHADER_STENCIL_EXPORT:
         case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
@@ -135,6 +139,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
         case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
         case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+        case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
             return 0;
 
         /* SWTCL-only features. */
@@ -307,8 +312,8 @@ static int r300_get_video_param(struct pipe_screen *screen,
       case PIPE_VIDEO_CAP_MAX_WIDTH:
       case PIPE_VIDEO_CAP_MAX_HEIGHT:
          return vl_video_buffer_max_size(screen);
-      case PIPE_VIDEO_CAP_NUM_BUFFERS_DESIRED:
-         return vl_num_buffers_desired(screen, profile);
+      case PIPE_VIDEO_CAP_PREFERED_FORMAT:
+         return PIPE_FORMAT_NV12;
       default:
          return 0;
    }

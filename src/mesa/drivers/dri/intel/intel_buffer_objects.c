@@ -72,7 +72,7 @@ intel_bufferobj_alloc(struct gl_context * ctx, GLuint name, GLenum target)
 {
    struct intel_buffer_object *obj = CALLOC_STRUCT(intel_buffer_object);
 
-   _mesa_initialize_buffer_object(&obj->Base, name, target);
+   _mesa_initialize_buffer_object(ctx, &obj->Base, name, target);
 
    obj->buffer = NULL;
 
@@ -657,13 +657,15 @@ intel_bufferobj_copy_subdata(struct gl_context *ctx,
       return;
 
    /* If we're in system memory, just map and memcpy. */
-   if (intel_src->sys_buffer || intel_dst->sys_buffer || intel->gen >= 6) {
+   if (intel_src->sys_buffer || intel_dst->sys_buffer) {
       /* The same buffer may be used, but note that regions copied may
        * not overlap.
        */
       if (src == dst) {
 	 char *ptr = intel_bufferobj_map_range(ctx, 0, dst->Size,
-					       GL_MAP_READ_BIT, dst);
+					       GL_MAP_READ_BIT |
+					       GL_MAP_WRITE_BIT,
+					       dst);
 	 memmove(ptr + write_offset, ptr + read_offset, size);
 	 intel_bufferobj_unmap(ctx, dst);
       } else {

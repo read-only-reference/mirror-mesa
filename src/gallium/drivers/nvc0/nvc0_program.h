@@ -10,7 +10,7 @@
 struct nvc0_transform_feedback_state {
    uint32_t stride[4];
    uint8_t varying_count[4];
-   uint8_t varying_index[0];
+   uint8_t varying_index[4][128];
 };
 
 
@@ -36,9 +36,10 @@ struct nvc0_program {
 
    struct {
       uint32_t clip_mode; /* clip/cull selection */
-      uint8_t clip_enable; /* only applies if num_ucps == 0 */
-      uint8_t edgeflag;
-      uint8_t num_ucps;
+      uint8_t clip_enable; /* mask of defined clip planes */
+      uint8_t num_ucps; /* also set to max if ClipDistance is used */
+      uint8_t edgeflag; /* attribute index of edgeflag input */
+      boolean need_vertex_id;
    } vp;
    struct {
       uint8_t early_z;

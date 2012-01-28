@@ -38,7 +38,6 @@ void r300_upload_index_buffer(struct r300_context *r300,
 			      unsigned count, uint8_t *ptr)
 {
     unsigned index_offset;
-    boolean flushed;
 
     *index_buffer = NULL;
 
@@ -46,7 +45,7 @@ void r300_upload_index_buffer(struct r300_context *r300,
                   0, count * index_size,
                   ptr + (*start * index_size),
                   &index_offset,
-                  index_buffer, &flushed);
+                  index_buffer);
 
     *start = index_offset / index_size;
 }
@@ -162,7 +161,7 @@ static void r300_buffer_transfer_inline_write(struct pipe_context *pipe,
     assert(rbuf->b.user_ptr == NULL);
 
     map = rws->buffer_map(rbuf->buf, r300->cs,
-                          PIPE_TRANSFER_WRITE | PIPE_TRANSFER_DISCARD | usage);
+                          PIPE_TRANSFER_WRITE | PIPE_TRANSFER_DISCARD_RANGE | usage);
 
     memcpy(map + box->x, data, box->width);
 

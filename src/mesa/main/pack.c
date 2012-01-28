@@ -448,65 +448,75 @@ get_type_min_max(GLenum type, GLfloat *min, GLfloat *max)
    }
 }
 
-/*
- * integer packing , no transfer operations only packs
- * to dst of GL_UNSIGNED_INT or GL_INT
+/* Customization of integer packing.  We always treat src as uint, and can pack dst
+ * as any integer type/format combo.
  */
+#define SRC_TYPE GLuint
+
+#define DST_TYPE GLuint
+#define SRC_CONVERT(x) (x)
+#define FN_NAME pack_uint_from_uint_rgba
+#include "pack_tmp.h"
+#undef DST_TYPE
+#undef SRC_CONVERT
+#undef FN_NAME
+
+#define DST_TYPE GLushort
+#define SRC_CONVERT(x) MIN2(x, 0xffff)
+#define FN_NAME pack_ushort_from_uint_rgba
+#include "pack_tmp.h"
+#undef DST_TYPE
+#undef SRC_CONVERT
+#undef FN_NAME
+
+#define DST_TYPE GLshort
+#define SRC_CONVERT(x) CLAMP((int)x, -32768, 32767)
+#define FN_NAME pack_short_from_uint_rgba
+#include "pack_tmp.h"
+#undef DST_TYPE
+#undef SRC_CONVERT
+#undef FN_NAME
+
+#define DST_TYPE GLubyte
+#define SRC_CONVERT(x) MIN2(x, 0xff)
+#define FN_NAME pack_ubyte_from_uint_rgba
+#include "pack_tmp.h"
+#undef DST_TYPE
+#undef SRC_CONVERT
+#undef FN_NAME
+
+#define DST_TYPE GLbyte
+#define SRC_CONVERT(x) CLAMP((int)x, -128, 127)
+#define FN_NAME pack_byte_from_uint_rgba
+#include "pack_tmp.h"
+#undef DST_TYPE
+#undef SRC_CONVERT
+#undef FN_NAME
+
 void
 _mesa_pack_rgba_span_int(struct gl_context *ctx, GLuint n, GLuint rgba[][4],
                          GLenum dstFormat, GLenum dstType,
                          GLvoid *dstAddr)
 {
-   int i;
-
    switch(dstType) {
-   case GL_UNSIGNED_INT: {
-      GLuint *dst = (GLuint *) dstAddr;
-      switch (dstFormat) {
-      case GL_RED_INTEGER_EXT:
-      case GL_GREEN_INTEGER_EXT:
-      case GL_BLUE_INTEGER_EXT:
-      case GL_ALPHA_INTEGER_EXT:
-      case GL_RG_INTEGER:
-      case GL_RGB_INTEGER_EXT:
-      case GL_RGBA_INTEGER_EXT:
-      case GL_BGR_INTEGER_EXT:
-      case GL_BGRA_INTEGER_EXT:
-      case GL_LUMINANCE_INTEGER_EXT:
-      case GL_LUMINANCE_ALPHA_INTEGER_EXT:
-         for (i=0;i<n;i++) {
-            dst[i*4+0] = (GLuint) rgba[i][RCOMP];
-            dst[i*4+1] = (GLuint) rgba[i][GCOMP];
-            dst[i*4+2] = (GLuint) rgba[i][BCOMP];
-            dst[i*4+3] = (GLuint) rgba[i][ACOMP];
-         }
-         break;
-      }
-   }
+   case GL_UNSIGNED_INT:
+      pack_uint_from_uint_rgba(dstAddr, dstFormat, rgba, n);
       break;
-   case GL_INT: {
-      GLint *dst = (GLint *) dstAddr;
-      switch (dstFormat) {
-      case GL_RED_INTEGER_EXT:
-      case GL_GREEN_INTEGER_EXT:
-      case GL_BLUE_INTEGER_EXT:
-      case GL_ALPHA_INTEGER_EXT:
-      case GL_RG_INTEGER:
-      case GL_RGB_INTEGER_EXT:
-      case GL_RGBA_INTEGER_EXT:
-      case GL_BGR_INTEGER_EXT:
-      case GL_BGRA_INTEGER_EXT:
-      case GL_LUMINANCE_INTEGER_EXT:
-      case GL_LUMINANCE_ALPHA_INTEGER_EXT:
-         for (i=0;i<n;i++) {
-            dst[i*4+0] = (GLint) rgba[i][RCOMP];
-            dst[i*4+1] = (GLint) rgba[i][GCOMP];
-            dst[i*4+2] = (GLint) rgba[i][BCOMP];
-            dst[i*4+3] = (GLint) rgba[i][ACOMP];
-         }
-         break;
-      }
-   }
+   case GL_INT:
+      /* No conversion necessary. */
+      pack_uint_from_uint_rgba(dstAddr, dstFormat, rgba, n);
+      break;
+   case GL_UNSIGNED_SHORT:
+      pack_ushort_from_uint_rgba(dstAddr, dstFormat, rgba, n);
+      break;
+   case GL_SHORT:
+      pack_short_from_uint_rgba(dstAddr, dstFormat, rgba, n);
+      break;
+   case GL_UNSIGNED_BYTE:
+      pack_ubyte_from_uint_rgba(dstAddr, dstFormat, rgba, n);
+      break;
+   case GL_BYTE:
+      pack_byte_from_uint_rgba(dstAddr, dstFormat, rgba, n);
       break;
    default:
       assert(0);
@@ -692,6 +702,12 @@ _mesa_pack_rgba_span_float(struct gl_context *ctx, GLuint n, GLfloat rgba[][4],
                      dst[i] = (GLubyte) rgba[i][ACOMP];
                   }
                   break;
+               case GL_RG_INTEGER:
+                  for (i=0;i<n;i++) {
+                     dst[i*2+0] = (GLubyte) rgba[i][RCOMP];
+                     dst[i*2+1] = (GLubyte) rgba[i][GCOMP];
+                  }
+                  break;
                case GL_RGB_INTEGER_EXT:
                   for (i=0;i<n;i++) {
                      dst[i*3+0] = (GLubyte) rgba[i][RCOMP];
@@ -841,6 +857,12 @@ _mesa_pack_rgba_span_float(struct gl_context *ctx, GLuint n, GLfloat rgba[][4],
                case GL_ALPHA_INTEGER_EXT:
                   for (i=0;i<n;i++) {
                      dst[i] = (GLbyte) rgba[i][ACOMP];
+                  }
+                  break;
+               case GL_RG_INTEGER:
+                  for (i=0;i<n;i++) {
+                     dst[i*2+0] = (GLbyte) rgba[i][RCOMP];
+                     dst[i*2+1] = (GLbyte) rgba[i][GCOMP];
                   }
                   break;
                case GL_RGB_INTEGER_EXT:
@@ -994,6 +1016,12 @@ _mesa_pack_rgba_span_float(struct gl_context *ctx, GLuint n, GLfloat rgba[][4],
                      dst[i] = (GLushort) rgba[i][ACOMP];
                   }
                   break;
+               case GL_RG_INTEGER:
+                  for (i=0;i<n;i++) {
+                     dst[i*2+0] = (GLushort) rgba[i][RCOMP];
+                     dst[i*2+1] = (GLushort) rgba[i][GCOMP];
+                  }
+                  break;
                case GL_RGB_INTEGER_EXT:
                   for (i=0;i<n;i++) {
                      dst[i*3+0] = (GLushort) rgba[i][RCOMP];
@@ -1145,6 +1173,13 @@ _mesa_pack_rgba_span_float(struct gl_context *ctx, GLuint n, GLfloat rgba[][4],
                      dst[i] = (GLshort) rgba[i][ACOMP];
                   }
                   break;
+               case GL_RG_INTEGER:
+                  for (i=0;i<n;i++) {
+                     dst[i*3+0] = (GLshort) rgba[i][RCOMP];
+                     dst[i*3+1] = (GLshort) rgba[i][GCOMP];
+                     dst[i*3+2] = (GLshort) rgba[i][BCOMP];
+                  }
+                  break;
                case GL_RGB_INTEGER_EXT:
                   for (i=0;i<n;i++) {
                      dst[i*3+0] = (GLshort) rgba[i][RCOMP];
@@ -1294,6 +1329,12 @@ _mesa_pack_rgba_span_float(struct gl_context *ctx, GLuint n, GLfloat rgba[][4],
                case GL_ALPHA_INTEGER_EXT:
                   for (i=0;i<n;i++) {
                      dst[i] = (GLuint) rgba[i][ACOMP];
+                  }
+                  break;
+               case GL_RG_INTEGER:
+                  for (i=0;i<n;i++) {
+                     dst[i*2+0] = (GLuint) rgba[i][RCOMP];
+                     dst[i*2+1] = (GLuint) rgba[i][GCOMP];
                   }
                   break;
                case GL_RGB_INTEGER_EXT:
@@ -1452,6 +1493,12 @@ _mesa_pack_rgba_span_float(struct gl_context *ctx, GLuint n, GLfloat rgba[][4],
                case GL_ALPHA_INTEGER_EXT:
                   for (i=0;i<n;i++) {
                      dst[i] = (GLint) rgba[i][ACOMP];
+                  }
+                  break;
+               case GL_RG_INTEGER:
+                  for (i=0;i<n;i++) {
+                     dst[i*2+0] = (GLint) rgba[i][RCOMP];
+                     dst[i*2+1] = (GLint) rgba[i][GCOMP];
                   }
                   break;
                case GL_RGB_INTEGER_EXT:
@@ -1973,14 +2020,10 @@ _mesa_pack_rgba_span_float(struct gl_context *ctx, GLuint n, GLfloat rgba[][4],
    if (dstPacking->SwapBytes) {
       GLint swapSize = _mesa_sizeof_packed_type(dstType);
       if (swapSize == 2) {
-         if (dstPacking->SwapBytes) {
-            _mesa_swap2((GLushort *) dstAddr, n * comps);
-         }
+         _mesa_swap2((GLushort *) dstAddr, n * comps);
       }
       else if (swapSize == 4) {
-         if (dstPacking->SwapBytes) {
-            _mesa_swap4((GLuint *) dstAddr, n * comps);
-         }
+         _mesa_swap4((GLuint *) dstAddr, n * comps);
       }
    }
 
@@ -2397,6 +2440,7 @@ extract_float_rgba(GLuint n, GLfloat rgba[][4],
           srcFormat == GL_GREEN_INTEGER_EXT ||
           srcFormat == GL_BLUE_INTEGER_EXT ||
           srcFormat == GL_ALPHA_INTEGER_EXT ||
+          srcFormat == GL_RG_INTEGER ||
           srcFormat == GL_RGB_INTEGER_EXT ||
           srcFormat == GL_RGBA_INTEGER_EXT ||
           srcFormat == GL_BGR_INTEGER_EXT ||
@@ -2960,27 +3004,6 @@ extract_float_rgba(GLuint n, GLfloat rgba[][4],
 
 
 static inline GLuint
-clamp_byte_to_uint(GLbyte b)
-{
-   return b < 0 ? 0 : b;
-}
-
-
-static inline GLuint
-clamp_short_to_uint(GLshort s)
-{
-   return s < 0 ? 0 : s;
-}
-
-
-static inline GLuint
-clamp_int_to_uint(GLint i)
-{
-   return i < 0 ? 0 : i;
-}
-
-
-static inline GLuint
 clamp_float_to_uint(GLfloat f)
 {
    return f < 0.0F ? 0 : IROUND(f);
@@ -3102,10 +3125,10 @@ extract_uint_rgba(GLuint n, GLuint rgba[][4],
          PROCESS(aSrc, ACOMP, 1, GLubyte, (GLuint));
          break;
       case GL_BYTE:
-         PROCESS(rSrc, RCOMP, 0, GLbyte, clamp_byte_to_uint);
-         PROCESS(gSrc, GCOMP, 0, GLbyte, clamp_byte_to_uint);
-         PROCESS(bSrc, BCOMP, 0, GLbyte, clamp_byte_to_uint);
-         PROCESS(aSrc, ACOMP, 1, GLbyte, clamp_byte_to_uint);
+         PROCESS(rSrc, RCOMP, 0, GLbyte, (GLuint));
+         PROCESS(gSrc, GCOMP, 0, GLbyte, (GLuint));
+         PROCESS(bSrc, BCOMP, 0, GLbyte, (GLuint));
+         PROCESS(aSrc, ACOMP, 1, GLbyte, (GLuint));
          break;
       case GL_UNSIGNED_SHORT:
          PROCESS(rSrc, RCOMP, 0, GLushort, (GLuint));
@@ -3114,10 +3137,10 @@ extract_uint_rgba(GLuint n, GLuint rgba[][4],
          PROCESS(aSrc, ACOMP, 1, GLushort, (GLuint));
          break;
       case GL_SHORT:
-         PROCESS(rSrc, RCOMP, 0, GLshort, clamp_short_to_uint);
-         PROCESS(gSrc, GCOMP, 0, GLshort, clamp_short_to_uint);
-         PROCESS(bSrc, BCOMP, 0, GLshort, clamp_short_to_uint);
-         PROCESS(aSrc, ACOMP, 1, GLshort, clamp_short_to_uint);
+         PROCESS(rSrc, RCOMP, 0, GLshort, (GLuint));
+         PROCESS(gSrc, GCOMP, 0, GLshort, (GLuint));
+         PROCESS(bSrc, BCOMP, 0, GLshort, (GLuint));
+         PROCESS(aSrc, ACOMP, 1, GLshort, (GLuint));
          break;
       case GL_UNSIGNED_INT:
          PROCESS(rSrc, RCOMP, 0, GLuint, (GLuint));
@@ -3126,10 +3149,10 @@ extract_uint_rgba(GLuint n, GLuint rgba[][4],
          PROCESS(aSrc, ACOMP, 1, GLuint, (GLuint));
          break;
       case GL_INT:
-         PROCESS(rSrc, RCOMP, 0, GLint, clamp_int_to_uint);
-         PROCESS(gSrc, GCOMP, 0, GLint, clamp_int_to_uint);
-         PROCESS(bSrc, BCOMP, 0, GLint, clamp_int_to_uint);
-         PROCESS(aSrc, ACOMP, 1, GLint, clamp_int_to_uint);
+         PROCESS(rSrc, RCOMP, 0, GLint, (GLuint));
+         PROCESS(gSrc, GCOMP, 0, GLint, (GLuint));
+         PROCESS(bSrc, BCOMP, 0, GLint, (GLuint));
+         PROCESS(aSrc, ACOMP, 1, GLint, (GLuint));
          break;
       case GL_FLOAT:
          PROCESS(rSrc, RCOMP, 0, GLfloat, clamp_float_to_uint);
@@ -3778,6 +3801,7 @@ _mesa_unpack_color_span_float( struct gl_context *ctx,
           srcFormat == GL_GREEN_INTEGER_EXT ||
           srcFormat == GL_BLUE_INTEGER_EXT ||
           srcFormat == GL_ALPHA_INTEGER_EXT ||
+          srcFormat == GL_RG_INTEGER ||
           srcFormat == GL_RGB_INTEGER_EXT ||
           srcFormat == GL_RGBA_INTEGER_EXT ||
           srcFormat == GL_BGR_INTEGER_EXT ||

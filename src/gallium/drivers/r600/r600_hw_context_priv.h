@@ -30,7 +30,7 @@
 #include "util/u_hash_table.h"
 #include "os/os_thread.h"
 
-#define R600_MAX_DRAW_CS_DWORDS 11
+#define R600_MAX_DRAW_CS_DWORDS 17
 
 #define PKT_COUNT_C                     0xC000FFFF
 #define PKT_COUNT_S(x)                  (((x) & 0x3FFF) << 16)
@@ -47,32 +47,19 @@
 struct r600_reg {
 	unsigned			offset;
 	unsigned			flags;
-	unsigned			flush_flags;
-	unsigned			flush_mask;
+	unsigned			sbu_flags;
 };
-
-#define BO_BOUND_TEXTURE 1
 
 /*
  * r600_hw_context.c
  */
-void r600_need_cs_space(struct r600_context *ctx, unsigned num_dw,
-			boolean count_draw_in);
-
-void r600_context_bo_flush(struct r600_context *ctx, unsigned flush_flags,
-				unsigned flush_mask, struct r600_resource *rbo);
 struct r600_resource *r600_context_reg_bo(struct r600_context *ctx, unsigned offset);
 int r600_context_add_block(struct r600_context *ctx, const struct r600_reg *reg, unsigned nreg,
 			   unsigned opcode, unsigned offset_base);
 void r600_context_pipe_state_set_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, struct r600_block *block);
-void r600_context_block_emit_dirty(struct r600_context *ctx, struct r600_block *block);
-void r600_context_block_resource_emit_dirty(struct r600_context *ctx, struct r600_block *block);
 void r600_context_dirty_block(struct r600_context *ctx, struct r600_block *block,
 			      int dirty, int index);
 int r600_setup_block_table(struct r600_context *ctx);
-void r600_context_reg(struct r600_context *ctx,
-		      unsigned offset, unsigned value,
-		      unsigned mask);
 void r600_init_cs(struct r600_context *ctx);
 int r600_resource_init(struct r600_context *ctx, struct r600_range *range, unsigned offset, unsigned nblocks, unsigned stride, struct r600_reg *reg, int nreg, unsigned offset_base);
 
@@ -86,16 +73,8 @@ void evergreen_set_streamout_enable(struct r600_context *ctx, unsigned buffer_en
 static INLINE unsigned r600_context_bo_reloc(struct r600_context *ctx, struct r600_resource *rbo,
 					     enum radeon_bo_usage usage)
 {
-	unsigned reloc_index;
-
 	assert(usage);
-
-	reloc_index = ctx->ws->cs_add_reloc(ctx->cs, rbo->cs_buf, usage, rbo->domains);
-	if (reloc_index >= ctx->creloc)
-		ctx->creloc = reloc_index+1;
-
-	pipe_resource_reference((struct pipe_resource**)&ctx->bo[reloc_index], &rbo->b.b.b);
-	return reloc_index * 4;
+	return ctx->ws->cs_add_reloc(ctx->cs, rbo->cs_buf, usage, rbo->domains) * 4;
 }
 
 #endif

@@ -10,6 +10,7 @@ SConscript('auxiliary/SConscript')
 # Drivers
 #
 
+# These are common and work across all platforms
 SConscript([
     'drivers/galahad/SConscript',
     'drivers/identity/SConscript',
@@ -53,7 +54,7 @@ SConscript('winsys/sw/null/SConscript')
 
 if not env['embedded']:
     SConscript('state_trackers/vega/SConscript')
-    if env['platform'] not in ['darwin']:
+    if env['platform'] not in ['darwin', 'haiku']:
         SConscript('state_trackers/egl/SConscript')
 
     if env['x11']:
@@ -83,7 +84,7 @@ SConscript([
 ])
 
 if not env['embedded']:
-    if env['platform'] not in ['darwin']:
+    if env['platform'] not in ['darwin', 'haiku']:
         SConscript([
             'targets/egl-static/SConscript'
         ])

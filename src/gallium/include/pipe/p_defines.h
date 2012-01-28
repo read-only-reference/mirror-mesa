@@ -226,6 +226,22 @@ enum pipe_transfer_usage {
    PIPE_TRANSFER_MAP_DIRECTLY = (1 << 2),
 
    /**
+    * The transfer should map the resource storage directly and the GPU should
+    * be able to see what the CPU has written. Such a storage may stay mapped
+    * while issuing draw commands which use it. The only allowed usage is
+    * non-overlapping writes which are suballocated out of a big buffer.
+    * The minimum allowed alignment of suballocations is 256 bytes (this is
+    * a subject to change).
+    * The flag is intended to be used to avoid mapping and unmapping
+    * resources repeatedly when doing uploads and draws intermixed.
+    *
+    * The driver may return NULL if that isn't possible, and the state
+    * tracker needs to cope with that and use an alternative path
+    * without this flag.
+    */
+   PIPE_TRANSFER_MAP_PERMANENTLY = (1 << 3),
+
+   /**
     * Discards the memory within the mapped region.
     *
     * It should not be used with PIPE_TRANSFER_READ.
@@ -233,7 +249,6 @@ enum pipe_transfer_usage {
     * See also:
     * - OpenGL's ARB_map_buffer_range extension, MAP_INVALIDATE_RANGE_BIT flag.
     */
-   PIPE_TRANSFER_DISCARD = (1 << 8), /* DEPRECATED */
    PIPE_TRANSFER_DISCARD_RANGE = (1 << 8),
 
    /**
@@ -453,11 +468,11 @@ enum pipe_cap {
    PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT = 38,
    PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER = 39,
    PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER = 40,
-   PIPE_CAP_DEPTH_CLAMP = 41,
+   PIPE_CAP_DEPTH_CLIP_DISABLE = 41,
    PIPE_CAP_SHADER_STENCIL_EXPORT = 42,
    PIPE_CAP_TGSI_INSTANCEID = 43,
    PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR = 44,
-   PIPE_CAP_FRAGMENT_COLOR_CLAMP_CONTROL = 45,
+   PIPE_CAP_FRAGMENT_COLOR_CLAMPED = 45,
    PIPE_CAP_MIXED_COLORBUFFER_FORMATS = 46,
    PIPE_CAP_SEAMLESS_CUBE_MAP = 47,
    PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE = 48,
@@ -470,7 +485,10 @@ enum pipe_cap {
    PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS = 56,
    PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME = 57,
    PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS = 58, /* temporary */
-   PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS = 59 /* temporary */
+   PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS = 59, /* temporary */
+   PIPE_CAP_VERTEX_COLOR_UNCLAMPED = 60,
+   PIPE_CAP_VERTEX_COLOR_CLAMPED = 61,
+   PIPE_CAP_GLSL_FEATURE_LEVEL = 62
 };
 
 /**

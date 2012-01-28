@@ -282,7 +282,7 @@ radeon_create_image_from_renderbuffer(__DRIcontext *context,
    image->internal_format = rb->InternalFormat;
    image->format = rb->Format;
    image->cpp = rrb->cpp;
-   image->data_type = rb->DataType;
+   image->data_type = GL_UNSIGNED_BYTE;
    image->data = loaderPrivate;
    radeon_bo_ref(rrb->bo);
    image->bo = rrb->bo;
@@ -375,7 +375,7 @@ radeon_query_image(__DRIimage *image, int attrib, int *value)
 }
 
 static struct __DRIimageExtensionRec radeonImageExtension = {
-    { __DRI_IMAGE, __DRI_IMAGE_VERSION },
+    { __DRI_IMAGE, 1 },
    radeon_create_image_from_name,
    radeon_create_image_from_renderbuffer,
    radeon_destroy_image,
@@ -514,7 +514,7 @@ radeonCreateScreen2(__DRIscreen *sPriv)
    if (ret == -1)
      return NULL;
 
-   if (getenv("R300_NO_TCL"))
+   if (getenv("RADEON_NO_TCL"))
 	   screen->chip_flags &= ~RADEON_CHIPSET_TCL;
 
    i = 0;
@@ -620,13 +620,13 @@ radeonCreateBuffer( __DRIscreen *driScrnPriv,
 
     /* front color renderbuffer */
     rfb->color_rb[0] = radeon_create_renderbuffer(rgbFormat, driDrawPriv);
-    _mesa_add_renderbuffer(&rfb->base, BUFFER_FRONT_LEFT, &rfb->color_rb[0]->base);
+    _mesa_add_renderbuffer(&rfb->base, BUFFER_FRONT_LEFT, &rfb->color_rb[0]->base.Base);
     rfb->color_rb[0]->has_surface = 1;
 
     /* back color renderbuffer */
     if (mesaVis->doubleBufferMode) {
       rfb->color_rb[1] = radeon_create_renderbuffer(rgbFormat, driDrawPriv);
-	_mesa_add_renderbuffer(&rfb->base, BUFFER_BACK_LEFT, &rfb->color_rb[1]->base);
+	_mesa_add_renderbuffer(&rfb->base, BUFFER_BACK_LEFT, &rfb->color_rb[1]->base.Base);
 	rfb->color_rb[1]->has_surface = 1;
     }
 
@@ -634,21 +634,21 @@ radeonCreateBuffer( __DRIscreen *driScrnPriv,
       if (mesaVis->stencilBits == 8) {
 	struct radeon_renderbuffer *depthStencilRb =
            radeon_create_renderbuffer(MESA_FORMAT_S8_Z24, driDrawPriv);
-	_mesa_add_renderbuffer(&rfb->base, BUFFER_DEPTH, &depthStencilRb->base);
-	_mesa_add_renderbuffer(&rfb->base, BUFFER_STENCIL, &depthStencilRb->base);
+	_mesa_add_renderbuffer(&rfb->base, BUFFER_DEPTH, &depthStencilRb->base.Base);
+	_mesa_add_renderbuffer(&rfb->base, BUFFER_STENCIL, &depthStencilRb->base.Base);
 	depthStencilRb->has_surface = screen->depthHasSurface;
       } else {
 	/* depth renderbuffer */
 	struct radeon_renderbuffer *depth =
            radeon_create_renderbuffer(MESA_FORMAT_X8_Z24, driDrawPriv);
-	_mesa_add_renderbuffer(&rfb->base, BUFFER_DEPTH, &depth->base);
+	_mesa_add_renderbuffer(&rfb->base, BUFFER_DEPTH, &depth->base.Base);
 	depth->has_surface = screen->depthHasSurface;
       }
     } else if (mesaVis->depthBits == 16) {
         /* just 16-bit depth buffer, no hw stencil */
 	struct radeon_renderbuffer *depth =
            radeon_create_renderbuffer(MESA_FORMAT_Z16, driDrawPriv);
-	_mesa_add_renderbuffer(&rfb->base, BUFFER_DEPTH, &depth->base);
+	_mesa_add_renderbuffer(&rfb->base, BUFFER_DEPTH, &depth->base.Base);
 	depth->has_surface = screen->depthHasSurface;
     }
 

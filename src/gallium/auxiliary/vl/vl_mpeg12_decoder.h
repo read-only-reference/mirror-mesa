@@ -50,6 +50,7 @@ struct vl_mpeg12_decoder
    unsigned blocks_per_line;
    unsigned num_blocks;
    unsigned width_in_macroblocks;
+   bool expect_chunked_decode;
 
    enum pipe_format zscan_source_format;
 
@@ -74,12 +75,8 @@ struct vl_mpeg12_decoder
 
    void *dsa;
 
-   struct vl_mpeg12_buffer *current_buffer;
-   struct pipe_mpeg12_picture_desc picture_desc;
-   uint8_t intra_matrix[64];
-   uint8_t non_intra_matrix[64];
-   struct pipe_sampler_view *ref_frames[VL_MAX_REF_FRAMES][VL_MAX_PLANES];
-   struct pipe_surface *target_surfaces[VL_MAX_PLANES];
+   unsigned current_buffer;
+   struct vl_mpeg12_buffer *dec_buffers[4];
 };
 
 struct vl_mpeg12_buffer
@@ -111,6 +108,7 @@ vl_create_mpeg12_decoder(struct pipe_context *pipe,
                          enum pipe_video_profile profile,
                          enum pipe_video_entrypoint entrypoint,
                          enum pipe_video_chroma_format chroma_format,
-                         unsigned width, unsigned height, unsigned max_references);
+                         unsigned width, unsigned height, unsigned max_references,
+                         bool expect_chunked_decode);
 
 #endif /* vl_mpeg12_decoder_h */

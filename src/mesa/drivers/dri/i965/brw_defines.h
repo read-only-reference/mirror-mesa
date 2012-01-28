@@ -1128,6 +1128,7 @@ enum brw_message_target {
 /* DW1 (for gen6) */
 # define GEN6_SF_NUM_OUTPUTS_SHIFT			22
 # define GEN6_SF_SWIZZLE_ENABLE				(1 << 21)
+# define GEN6_SF_POINT_SPRITE_UPPERLEFT			(0 << 20)
 # define GEN6_SF_POINT_SPRITE_LOWERLEFT			(1 << 20)
 # define GEN6_SF_URB_ENTRY_READ_LENGTH_SHIFT		11
 # define GEN6_SF_URB_ENTRY_READ_OFFSET_SHIFT		4
@@ -1345,7 +1346,7 @@ enum brw_wm_barycentric_interp_mode {
 # define GEN7_WM_STATISTICS_ENABLE			(1 << 31)
 # define GEN7_WM_DEPTH_CLEAR				(1 << 30)
 # define GEN7_WM_DISPATCH_ENABLE			(1 << 29)
-# define GEN6_WM_DEPTH_RESOLVE				(1 << 28)
+# define GEN7_WM_DEPTH_RESOLVE				(1 << 28)
 # define GEN7_WM_HIERARCHICAL_DEPTH_RESOLVE		(1 << 27)
 # define GEN7_WM_KILL_ENABLE				(1 << 25)
 # define GEN7_WM_PSCDEPTH_OFF			        (0 << 23)

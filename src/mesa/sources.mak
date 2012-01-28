@@ -133,7 +133,6 @@ SWRAST_SOURCES = \
 	swrast/s_copypix.c \
 	swrast/s_context.c \
 	swrast/s_depth.c \
-	swrast/s_depthstencil.c \
 	swrast/s_drawpix.c \
 	swrast/s_feedback.c \
 	swrast/s_fog.c \
@@ -278,7 +277,6 @@ ASM_C_SOURCES =	\
 	x86/sse.c \
 	x86/rtasm/x86sse.c \
 	sparc/sparc.c \
-	ppc/common_ppc.c \
 	x86-64/x86-64.c
 
 X86_SOURCES =			\
@@ -337,7 +335,6 @@ MESA_GALLIUM_SOURCES = \
 	$(VBO_SOURCES)		\
 	$(STATETRACKER_SOURCES)	\
 	$(PROGRAM_SOURCES)	\
-	ppc/common_ppc.c	\
 	x86/common_x86.c
 
 MESA_GALLIUM_CXX_SOURCES = \
@@ -371,7 +368,7 @@ COMMON_DRIVER_OBJECTS = $(COMMON_DRIVER_SOURCES:.c=.o)
 ### Other archives/libraries
 
 GLSL_LIBS = \
-	$(TOP)/src/glsl/libglsl.a
+	$(TOP)/src/glsl/.libs/$(GLSL_LIB_NAME)
 
 
 ### Include directories

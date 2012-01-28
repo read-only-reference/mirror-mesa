@@ -50,6 +50,18 @@ const enum pipe_format const_resource_formats_NV12[3] = {
    PIPE_FORMAT_NONE
 };
 
+const unsigned const_resource_plane_order_YUV[3] = {
+   0,
+   1,
+   2
+};
+
+const unsigned const_resource_plane_order_YVU[3] = {
+   0,
+   2,
+   1
+};
+
 const enum pipe_format *
 vl_video_buffer_formats(struct pipe_screen *screen, enum pipe_format format)
 {
@@ -59,6 +71,21 @@ vl_video_buffer_formats(struct pipe_screen *screen, enum pipe_format format)
 
    case PIPE_FORMAT_NV12:
       return const_resource_formats_NV12;
+
+   default:
+      return NULL;
+   }
+}
+
+const unsigned *
+vl_video_buffer_plane_order(enum pipe_format format)
+{
+    switch(format) {
+   case PIPE_FORMAT_YV12:
+      return const_resource_plane_order_YVU;
+
+   case PIPE_FORMAT_NV12:
+      return const_resource_plane_order_YUV;
 
    default:
       return NULL;
@@ -98,6 +125,60 @@ vl_video_buffer_max_size(struct pipe_screen *screen)
    return 1 << (max_2d_texture_level-1);
 }
 
+void
+vl_video_buffer_set_associated_data(struct pipe_video_buffer *vbuf,
+                                    struct pipe_video_decoder *vdec,
+                                    void *associated_data,
+                                    void (*destroy_associated_data)(void *))
+{
+   vbuf->decoder = vdec;
+
+   if (vbuf->associated_data == associated_data)
+      return;
+
+   if (vbuf->associated_data)
+      vbuf->destroy_associated_data(vbuf->associated_data);
+
+   vbuf->associated_data = associated_data;
+   vbuf->destroy_associated_data = destroy_associated_data;
+}
+
+void *
+vl_video_buffer_get_associated_data(struct pipe_video_buffer *vbuf,
+                                    struct pipe_video_decoder *vdec)
+{
+   if (vbuf->decoder == vdec)
+      return vbuf->associated_data;
+   else
+      return NULL;
+}
+
+void
+vl_vide_buffer_template(struct pipe_resource *templ,
+                        const struct pipe_video_buffer *tmpl,
+                        enum pipe_format resource_format,
+                        unsigned depth, unsigned usage, unsigned plane)
+{
+   memset(templ, 0, sizeof(*templ));
+   templ->target = depth > 1 ? PIPE_TEXTURE_3D : PIPE_TEXTURE_2D;
+   templ->format = resource_format;
+   templ->width0 = tmpl->width;
+   templ->height0 = tmpl->height;
+   templ->depth0 = depth;
+   templ->array_size = 1;
+   templ->bind = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET;
+   templ->usage = usage;
+
+   if (plane > 0) {
+      if (tmpl->chroma_format == PIPE_VIDEO_CHROMA_FORMAT_420) {
+         templ->width0 /= 2;
+         templ->height0 /= 2;
+      } else if (tmpl->chroma_format == PIPE_VIDEO_CHROMA_FORMAT_422) {
+         templ->height0 /= 2;
+      }
+   }
+}
+
 static void
 vl_video_buffer_destroy(struct pipe_video_buffer *buffer)
 {
@@ -107,11 +188,15 @@ vl_video_buffer_destroy(struct pipe_video_buffer *buffer)
    assert(buf);
 
    for (i = 0; i < VL_MAX_PLANES; ++i) {
-      pipe_surface_reference(&buf->surfaces[i], NULL);
       pipe_sampler_view_reference(&buf->sampler_view_planes[i], NULL);
       pipe_sampler_view_reference(&buf->sampler_view_components[i], NULL);
       pipe_resource_reference(&buf->resources[i], NULL);
    }
+
+   for (i = 0; i < VL_MAX_PLANES * 2; ++i)
+      pipe_surface_reference(&buf->surfaces[i], NULL);
+
+   vl_video_buffer_set_associated_data(buffer, NULL, NULL, NULL);
 
    FREE(buffer);
 }
@@ -157,24 +242,28 @@ vl_video_buffer_sampler_view_components(struct pipe_video_buffer *buffer)
    struct vl_video_buffer *buf = (struct vl_video_buffer *)buffer;
    struct pipe_sampler_view sv_templ;
    struct pipe_context *pipe;
+   const unsigned *plane_order;
    unsigned i, j, component;
 
    assert(buf);
 
    pipe = buf->base.context;
 
+   plane_order = vl_video_buffer_plane_order(buf->base.buffer_format);
+
    for (component = 0, i = 0; i < buf->num_planes; ++i ) {
-      unsigned nr_components = util_format_get_nr_components(buf->resources[i]->format);
+      struct pipe_resource *res = buf->resources[plane_order[i]];
+      unsigned nr_components = util_format_get_nr_components(res->format);
 
       for (j = 0; j < nr_components; ++j, ++component) {
          assert(component < VL_MAX_PLANES);
 
          if (!buf->sampler_view_components[component]) {
             memset(&sv_templ, 0, sizeof(sv_templ));
-            u_sampler_view_default_template(&sv_templ, buf->resources[i], buf->resources[i]->format);
+            u_sampler_view_default_template(&sv_templ, res, res->format);
             sv_templ.swizzle_r = sv_templ.swizzle_g = sv_templ.swizzle_b = PIPE_SWIZZLE_RED + j;
             sv_templ.swizzle_a = PIPE_SWIZZLE_ONE;
-            buf->sampler_view_components[component] = pipe->create_sampler_view(pipe, buf->resources[i], &sv_templ);
+            buf->sampler_view_components[component] = pipe->create_sampler_view(pipe, res, &sv_templ);
             if (!buf->sampler_view_components[component])
                goto error;
          }
@@ -196,27 +285,32 @@ vl_video_buffer_surfaces(struct pipe_video_buffer *buffer)
    struct vl_video_buffer *buf = (struct vl_video_buffer *)buffer;
    struct pipe_surface surf_templ;
    struct pipe_context *pipe;
-   unsigned i;
+   unsigned i, j, surf;
 
    assert(buf);
 
    pipe = buf->base.context;
 
-   for (i = 0; i < buf->num_planes; ++i ) {
-      if (!buf->surfaces[i]) {
-         memset(&surf_templ, 0, sizeof(surf_templ));
-         surf_templ.format = buf->resources[i]->format;
-         surf_templ.usage = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET;
-         buf->surfaces[i] = pipe->create_surface(pipe, buf->resources[i], &surf_templ);
-         if (!buf->surfaces[i])
-            goto error;
+   for (i = 0, surf = 0; i < buf->num_planes; ++i ) {
+      for (j = 0; j < buf->resources[i]->depth0; ++j, ++surf) {
+         assert(surf < (VL_MAX_PLANES * 2));
+
+         if (!buf->surfaces[surf]) {
+            memset(&surf_templ, 0, sizeof(surf_templ));
+            surf_templ.format = buf->resources[i]->format;
+            surf_templ.usage = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET;
+            surf_templ.u.tex.first_layer = surf_templ.u.tex.last_layer = j;
+            buf->surfaces[i] = pipe->create_surface(pipe, buf->resources[i], &surf_templ);
+            if (!buf->surfaces[i])
+               goto error;
+         }
       }
    }
 
    return buf->surfaces;
 
 error:
-   for (i = 0; i < buf->num_planes; ++i )
+   for (i = 0; i < (VL_MAX_PLANES * 2); ++i )
       pipe_surface_reference(&buf->surfaces[i], NULL);
 
    return NULL;
@@ -224,17 +318,14 @@ error:
 
 struct pipe_video_buffer *
 vl_video_buffer_create(struct pipe_context *pipe,
-                       enum pipe_format buffer_format,
-                       enum pipe_video_chroma_format chroma_format,
-                       unsigned width, unsigned height)
+                       const struct pipe_video_buffer *tmpl)
 {
    const enum pipe_format *resource_formats;
-   struct pipe_video_buffer *result;
-   unsigned buffer_width, buffer_height;
+   struct pipe_video_buffer templat;
    bool pot_buffers;
 
    assert(pipe);
-   assert(width > 0 && height > 0);
+   assert(tmpl->width > 0 && tmpl->height > 0);
 
    pot_buffers = !pipe->screen->get_video_param
    (
@@ -243,98 +334,96 @@ vl_video_buffer_create(struct pipe_context *pipe,
       PIPE_VIDEO_CAP_NPOT_TEXTURES
    );
 
-   resource_formats = vl_video_buffer_formats(pipe->screen, buffer_format);
+   resource_formats = vl_video_buffer_formats(pipe->screen, tmpl->buffer_format);
    if (!resource_formats)
       return NULL;
 
-   buffer_width = pot_buffers ? util_next_power_of_two(width) : align(width, MACROBLOCK_WIDTH);
-   buffer_height = pot_buffers ? util_next_power_of_two(height) : align(height, MACROBLOCK_HEIGHT);
+   templat = *tmpl;
+   templat.width = pot_buffers ? util_next_power_of_two(tmpl->width)
+                 : align(tmpl->width, MACROBLOCK_WIDTH);
+   templat.height = pot_buffers ? util_next_power_of_two(tmpl->height)
+                  : align(tmpl->height, MACROBLOCK_HEIGHT);
 
-   result = vl_video_buffer_create_ex
+   if (tmpl->interlaced)
+      templat.height /= 2;
+
+   return vl_video_buffer_create_ex
    (
-      pipe, buffer_width, buffer_height, 1,
-      chroma_format, resource_formats, PIPE_USAGE_STATIC
+      pipe, &templat, resource_formats,
+      tmpl->interlaced ? 2 : 1, PIPE_USAGE_STATIC
    );
-   if (result)
-      result->buffer_format = buffer_format;
-
-   return result;
 }
 
 struct pipe_video_buffer *
 vl_video_buffer_create_ex(struct pipe_context *pipe,
-                          unsigned width, unsigned height, unsigned depth,
-                          enum pipe_video_chroma_format chroma_format,
+                          const struct pipe_video_buffer *tmpl,
                           const enum pipe_format resource_formats[VL_MAX_PLANES],
-                          unsigned usage)
+                          unsigned depth, unsigned usage)
 {
-   struct vl_video_buffer *buffer;
-   struct pipe_resource templ;
+   struct pipe_resource res_tmpl;
+   struct pipe_resource *resources[VL_MAX_PLANES];
    unsigned i;
 
    assert(pipe);
 
+   memset(resources, 0, sizeof resources);
+
+   vl_vide_buffer_template(&res_tmpl, tmpl, resource_formats[0], depth, usage, 0);
+   resources[0] = pipe->screen->resource_create(pipe->screen, &res_tmpl);
+   if (!resources[0])
+      goto error;
+
+   if (resource_formats[1] == PIPE_FORMAT_NONE) {
+      assert(tmpl->chroma_format == PIPE_VIDEO_CHROMA_FORMAT_444);
+      assert(resource_formats[2] == PIPE_FORMAT_NONE);
+      return vl_video_buffer_create_ex2(pipe, tmpl, resources);
+   }
+
+   vl_vide_buffer_template(&res_tmpl, tmpl, resource_formats[1], depth, usage, 1);
+   resources[1] = pipe->screen->resource_create(pipe->screen, &res_tmpl);
+   if (!resources[1])
+      goto error;
+
+   if (resource_formats[2] == PIPE_FORMAT_NONE)
+      return vl_video_buffer_create_ex2(pipe, tmpl, resources);
+
+   vl_vide_buffer_template(&res_tmpl, tmpl, resource_formats[2], depth, usage, 2);
+   resources[2] = pipe->screen->resource_create(pipe->screen, &res_tmpl);
+   if (!resources[2])
+      goto error;
+
+   return vl_video_buffer_create_ex2(pipe, tmpl, resources);
+
+error:
+   for (i = 0; i < VL_MAX_PLANES; ++i)
+      pipe_resource_reference(&resources[i], NULL);
+
+   return NULL;
+}
+
+struct pipe_video_buffer *
+vl_video_buffer_create_ex2(struct pipe_context *pipe,
+                           const struct pipe_video_buffer *tmpl,
+                           struct pipe_resource *resources[VL_MAX_PLANES])
+{
+   struct vl_video_buffer *buffer;
+   unsigned i;
+
    buffer = CALLOC_STRUCT(vl_video_buffer);
 
+   buffer->base = *tmpl;
    buffer->base.context = pipe;
    buffer->base.destroy = vl_video_buffer_destroy;
    buffer->base.get_sampler_view_planes = vl_video_buffer_sampler_view_planes;
    buffer->base.get_sampler_view_components = vl_video_buffer_sampler_view_components;
    buffer->base.get_surfaces = vl_video_buffer_surfaces;
-   buffer->base.chroma_format = chroma_format;
-   buffer->base.width = width;
-   buffer->base.height = height;
-   buffer->num_planes = 1;
+   buffer->num_planes = 0;
 
-   memset(&templ, 0, sizeof(templ));
-   templ.target = depth > 1 ? PIPE_TEXTURE_3D : PIPE_TEXTURE_2D;
-   templ.format = resource_formats[0];
-   templ.width0 = width;
-   templ.height0 = height;
-   templ.depth0 = depth;
-   templ.array_size = 1;
-   templ.bind = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET;
-   templ.usage = usage;
-
-   buffer->resources[0] = pipe->screen->resource_create(pipe->screen, &templ);
-   if (!buffer->resources[0])
-      goto error;
-
-   if (resource_formats[1] == PIPE_FORMAT_NONE) {
-      assert(chroma_format == PIPE_VIDEO_CHROMA_FORMAT_444);
-      assert(resource_formats[2] == PIPE_FORMAT_NONE);
-      return &buffer->base;
-   } else
-      buffer->num_planes = 2;
-
-   templ.format = resource_formats[1];
-   if (chroma_format == PIPE_VIDEO_CHROMA_FORMAT_420) {
-      templ.width0 /= 2;
-      templ.height0 /= 2;
-   } else if (chroma_format == PIPE_VIDEO_CHROMA_FORMAT_422) {
-      templ.height0 /= 2;
+   for (i = 0; i < VL_MAX_PLANES; ++i) {
+      buffer->resources[i] = resources[i];
+      if (resources[i])
+         buffer->num_planes++;
    }
 
-   buffer->resources[1] = pipe->screen->resource_create(pipe->screen, &templ);
-   if (!buffer->resources[1])
-      goto error;
-
-   if (resource_formats[2] == PIPE_FORMAT_NONE)
-      return &buffer->base;
-   else
-      buffer->num_planes = 3;
-
-   templ.format = resource_formats[2];
-   buffer->resources[2] = pipe->screen->resource_create(pipe->screen, &templ);
-   if (!buffer->resources[2])
-      goto error;
-
    return &buffer->base;
-
-error:
-   for (i = 0; i < VL_MAX_PLANES; ++i)
-      pipe_resource_reference(&buffer->resources[i], NULL);
-   FREE(buffer);
-
-   return NULL;
 }

@@ -316,7 +316,7 @@ typedef struct
 typedef struct
 {
    vlVdpDevice *device;
-   struct pipe_video_buffer *video_buffer;
+   struct pipe_video_buffer templat, *video_buffer;
 } vlVdpSurface;
 
 typedef uint64_t vlVdpTime;
@@ -335,9 +335,6 @@ typedef struct
 {
    vlVdpDevice *device;
    struct pipe_video_decoder *decoder;
-   unsigned num_buffers;
-   void **buffers;
-   unsigned cur_buffer;
 } vlVdpDecoder;
 
 typedef uint32_t vlHandle;

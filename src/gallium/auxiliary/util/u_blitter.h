@@ -94,7 +94,6 @@ struct blitter_context
    struct pipe_framebuffer_state saved_fb_state;  /**< framebuffer state */
    struct pipe_stencil_ref saved_stencil_ref;     /**< stencil ref */
    struct pipe_viewport_state saved_viewport;
-   struct pipe_clip_state saved_clip;
 
    int saved_num_sampler_states;
    void *saved_sampler_states[PIPE_MAX_SAMPLERS];
@@ -216,6 +215,24 @@ void util_blitter_copy_texture_view(struct blitter_context *blitter,
                                     struct pipe_sampler_view *src,
                                     const struct pipe_box *srcbox,
                                     unsigned src_width0, unsigned src_height0);
+
+/**
+ * Helper function to initialize a view for copy_texture_view.
+ * The parameters must match copy_texture_view.
+ */
+void util_blitter_default_dst_texture(struct pipe_surface *dst_templ,
+                                      struct pipe_resource *dst,
+                                      unsigned dstlevel,
+                                      unsigned dstz,
+                                      const struct pipe_box *srcbox);
+
+/**
+ * Helper function to initialize a view for copy_texture_view.
+ * The parameters must match copy_texture_view.
+ */
+void util_blitter_default_src_texture(struct pipe_sampler_view *src_templ,
+                                      struct pipe_resource *src,
+                                      unsigned srclevel);
 
 /**
  * Copy data from one buffer to another using the Stream Output functionality.
@@ -344,13 +361,6 @@ void util_blitter_save_viewport(struct blitter_context *blitter,
                                 struct pipe_viewport_state *state)
 {
    blitter->saved_viewport = *state;
-}
-
-static INLINE
-void util_blitter_save_clip(struct blitter_context *blitter,
-                            struct pipe_clip_state *state)
-{
-   blitter->saved_clip = *state;
 }
 
 static INLINE

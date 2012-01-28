@@ -49,6 +49,23 @@ upload_wm_state(struct brw_context *brw)
    dw1 |= GEN7_WM_LINE_AA_WIDTH_1_0;
    dw1 |= GEN7_WM_LINE_END_CAP_AA_WIDTH_0_5;
 
+   switch (brw->hiz.op) {
+   case BRW_HIZ_OP_NONE:
+      break;
+   case BRW_HIZ_OP_DEPTH_CLEAR:
+      dw1 |= GEN7_WM_DEPTH_CLEAR;
+      break;
+   case BRW_HIZ_OP_DEPTH_RESOLVE:
+      dw1 |= GEN7_WM_DEPTH_RESOLVE;
+      break;
+   case BRW_HIZ_OP_HIZ_RESOLVE:
+      dw1 |= GEN7_WM_HIERARCHICAL_DEPTH_RESOLVE;
+      break;
+   default:
+      assert(0);
+      break;
+   }
+
    /* _NEW_LINE */
    if (ctx->Line.StippleFlag)
       dw1 |= GEN7_WM_LINE_STIPPLE_ENABLE;
@@ -89,7 +106,7 @@ const struct brw_tracked_state gen7_wm_state = {
       .mesa  = (_NEW_LINE | _NEW_LIGHT | _NEW_POLYGON |
 	        _NEW_COLOR | _NEW_BUFFERS),
       .brw   = (BRW_NEW_FRAGMENT_PROGRAM |
-		BRW_NEW_URB_FENCE |
+                BRW_NEW_HIZ |
 		BRW_NEW_BATCH),
       .cache = 0,
    },
@@ -102,6 +119,7 @@ upload_ps_state(struct brw_context *brw)
    struct intel_context *intel = &brw->intel;
    uint32_t dw2, dw4, dw5;
 
+   /* BRW_NEW_PS_BINDING_TABLE */
    BEGIN_BATCH(2);
    OUT_BATCH(_3DSTATE_BINDING_TABLE_POINTERS_PS << 16 | (2 - 2));
    OUT_BATCH(brw->bind.bo_offset);
@@ -133,7 +151,7 @@ upload_ps_state(struct brw_context *brw)
 		      brw->wm.prog_data->dispatch_width) / 8);
       OUT_BATCH(0);
       /* Pointer to the WM constant buffer.  Covered by the set of
-       * state flags from gen7_prepare_wm_constants
+       * state flags from gen6_upload_wm_push_constants.
        */
       OUT_BATCH(brw->wm.push_const_offset);
       OUT_BATCH(0);
@@ -144,15 +162,17 @@ upload_ps_state(struct brw_context *brw)
 
    dw2 = dw4 = dw5 = 0;
 
+   /* CACHE_NEW_SAMPLER */
    dw2 |= (ALIGN(brw->sampler.count, 4) / 4) << GEN7_PS_SAMPLER_COUNT_SHIFT;
 
    /* Use ALT floating point mode for ARB fragment programs, because they
-    * require 0^0 == 1.
+    * require 0^0 == 1.  Even though _CurrentFragmentProgram is used for
+    * rendering, CurrentFragmentProgram is used for this check to
+    * differentiate between the GLSL and non-GLSL cases.
     */
    if (intel->ctx.Shader.CurrentFragmentProgram == NULL)
       dw2 |= GEN7_PS_FLOATING_POINT_MODE_ALT;
 
-   /* CACHE_NEW_SAMPLER */
    dw4 |= (brw->max_wm_threads - 1) << GEN7_PS_MAX_THREADS_SHIFT;
 
    /* CACHE_NEW_WM_PROG */
@@ -163,14 +183,18 @@ upload_ps_state(struct brw_context *brw)
    if (brw->fragment_program->Base.InputsRead != 0)
       dw4 |= GEN7_PS_ATTRIBUTE_ENABLE;
 
-   if (brw->wm.prog_data->dispatch_width == 8)
+   if (brw->wm.prog_data->dispatch_width == 8) {
       dw4 |= GEN7_PS_8_DISPATCH_ENABLE;
-   else
+      if (brw->wm.prog_data->prog_offset_16)
+	 dw4 |= GEN7_PS_16_DISPATCH_ENABLE;
+   } else {
       dw4 |= GEN7_PS_16_DISPATCH_ENABLE;
+   }
 
-   /* BRW_NEW_CURBE_OFFSETS */
    dw5 |= (brw->wm.prog_data->first_curbe_grf <<
 	   GEN7_PS_DISPATCH_START_GRF_SHIFT_0);
+   dw5 |= (brw->wm.prog_data->first_curbe_grf_16 <<
+	   GEN7_PS_DISPATCH_START_GRF_SHIFT_2);
 
    BEGIN_BATCH(8);
    OUT_BATCH(_3DSTATE_PS << 16 | (8 - 2));
@@ -193,10 +217,8 @@ upload_ps_state(struct brw_context *brw)
 const struct brw_tracked_state gen7_ps_state = {
    .dirty = {
       .mesa  = _NEW_PROGRAM_CONSTANTS,
-      .brw   = (BRW_NEW_CURBE_OFFSETS |
-		BRW_NEW_FRAGMENT_PROGRAM |
+      .brw   = (BRW_NEW_FRAGMENT_PROGRAM |
 		BRW_NEW_PS_BINDING_TABLE |
-		BRW_NEW_URB_FENCE |
 		BRW_NEW_BATCH),
       .cache = (CACHE_NEW_SAMPLER |
 		CACHE_NEW_WM_PROG)

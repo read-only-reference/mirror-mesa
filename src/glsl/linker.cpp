@@ -246,7 +246,8 @@ count_attribute_slots(const glsl_type *t)
 /**
  * Verify that a vertex shader executable meets all semantic requirements.
  *
- * Also sets prog->Vert.UsesClipDistance as a side effect.
+ * Also sets prog->Vert.UsesClipDistance and prog->Vert.ClipDistanceArraySize
+ * as a side effect.
  *
  * \param shader  Vertex shader executable to be verified
  */
@@ -263,6 +264,8 @@ validate_vertex_shader_executable(struct gl_shader_program *prog,
       linker_error(prog, "vertex shader does not write to `gl_Position'\n");
       return false;
    }
+
+   prog->Vert.ClipDistanceArraySize = 0;
 
    if (prog->Version >= 130) {
       /* From section 7.1 (Vertex Shader Special Variables) of the
@@ -282,6 +285,10 @@ validate_vertex_shader_executable(struct gl_shader_program *prog,
          return false;
       }
       prog->Vert.UsesClipDistance = clip_distance.variable_found();
+      ir_variable *clip_distance_var =
+         shader->symbols->get_variable("gl_ClipDistance");
+      if (clip_distance_var)
+         prog->Vert.ClipDistanceArraySize = clip_distance_var->type->length;
    }
 
    return true;
@@ -1376,13 +1383,15 @@ demote_shader_inputs_and_outputs(gl_shader *sh, enum ir_variable_mode mode)
 class tfeedback_decl
 {
 public:
-   bool init(struct gl_shader_program *prog, const void *mem_ctx,
-             const char *input);
+   bool init(struct gl_context *ctx, struct gl_shader_program *prog,
+             const void *mem_ctx, const char *input);
    static bool is_same(const tfeedback_decl &x, const tfeedback_decl &y);
    bool assign_location(struct gl_context *ctx, struct gl_shader_program *prog,
                         ir_variable *output_var);
-   bool store(struct gl_shader_program *prog,
-              struct gl_transform_feedback_info *info, unsigned buffer) const;
+   bool accumulate_num_outputs(struct gl_shader_program *prog, unsigned *count);
+   bool store(struct gl_context *ctx, struct gl_shader_program *prog,
+              struct gl_transform_feedback_info *info, unsigned buffer,
+              unsigned varying, const unsigned max_outputs) const;
 
 
    /**
@@ -1398,7 +1407,10 @@ public:
     */
    bool matches_var(ir_variable *var) const
    {
-      return strcmp(var->name, this->var_name) == 0;
+      if (this->is_clip_distance_mesa)
+         return strcmp(var->name, "gl_ClipDistanceMESA") == 0;
+      else
+         return strcmp(var->name, this->var_name) == 0;
    }
 
    /**
@@ -1407,30 +1419,39 @@ public:
     */
    unsigned num_components() const
    {
-      return this->vector_elements * this->matrix_columns;
+      if (this->is_clip_distance_mesa)
+         return this->size;
+      else
+         return this->vector_elements * this->matrix_columns * this->size;
    }
 
 private:
    /**
     * The name that was supplied to glTransformFeedbackVaryings.  Used for
-    * error reporting.
+    * error reporting and glGetTransformFeedbackVarying().
     */
    const char *orig_name;
 
    /**
     * The name of the variable, parsed from orig_name.
     */
-   char *var_name;
+   const char *var_name;
 
    /**
     * True if the declaration in orig_name represents an array.
     */
-   bool is_array;
+   bool is_subscripted;
 
    /**
-    * If is_array is true, the array index that was specified in orig_name.
+    * If is_subscripted is true, the subscript that was specified in orig_name.
     */
-   unsigned array_index;
+   unsigned array_subscript;
+
+   /**
+    * True if the variable is gl_ClipDistance and the driver lowers
+    * gl_ClipDistance to gl_ClipDistanceMESA.
+    */
+   bool is_clip_distance_mesa;
 
    /**
     * The vertex shader output location that the linker assigned for this
@@ -1449,6 +1470,15 @@ private:
     * if this variable is not a matrix.
     */
    unsigned matrix_columns;
+
+   /** Type of the varying returned by glGetTransformFeedbackVarying() */
+   GLenum type;
+
+   /**
+    * If location != -1, the size that should be returned by
+    * glGetTransformFeedbackVarying().
+    */
+   unsigned size;
 };
 
 
@@ -1458,8 +1488,8 @@ private:
  * reported using linker_error(), and false is returned.
  */
 bool
-tfeedback_decl::init(struct gl_shader_program *prog, const void *mem_ctx,
-                     const char *input)
+tfeedback_decl::init(struct gl_context *ctx, struct gl_shader_program *prog,
+                     const void *mem_ctx, const char *input)
 {
    /* We don't have to be pedantic about what is a valid GLSL variable name,
     * because any variable with an invalid name can't exist in the IR anyway.
@@ -1467,23 +1497,32 @@ tfeedback_decl::init(struct gl_shader_program *prog, const void *mem_ctx,
 
    this->location = -1;
    this->orig_name = input;
+   this->is_clip_distance_mesa = false;
 
    const char *bracket = strrchr(input, '[');
 
    if (bracket) {
       this->var_name = ralloc_strndup(mem_ctx, input, bracket - input);
-      if (sscanf(bracket, "[%u]", &this->array_index) == 1) {
-         this->is_array = true;
-         return true;
+      if (sscanf(bracket, "[%u]", &this->array_subscript) != 1) {
+         linker_error(prog, "Cannot parse transform feedback varying %s", input);
+         return false;
       }
+      this->is_subscripted = true;
    } else {
       this->var_name = ralloc_strdup(mem_ctx, input);
-      this->is_array = false;
-      return true;
+      this->is_subscripted = false;
    }
 
-   linker_error(prog, "Cannot parse transform feedback varying %s", input);
-   return false;
+   /* For drivers that lower gl_ClipDistance to gl_ClipDistanceMESA, this
+    * class must behave specially to account for the fact that gl_ClipDistance
+    * is converted from a float[8] to a vec4[2].
+    */
+   if (ctx->ShaderCompilerOptions[MESA_SHADER_VERTEX].LowerClipDistance &&
+       strcmp(this->var_name, "gl_ClipDistance") == 0) {
+      this->is_clip_distance_mesa = true;
+   }
+
+   return true;
 }
 
 
@@ -1496,9 +1535,9 @@ tfeedback_decl::is_same(const tfeedback_decl &x, const tfeedback_decl &y)
 {
    if (strcmp(x.var_name, y.var_name) != 0)
       return false;
-   if (x.is_array != y.is_array)
+   if (x.is_subscripted != y.is_subscripted)
       return false;
-   if (x.is_array && x.array_index != y.array_index)
+   if (x.is_subscripted && x.array_subscript != y.array_subscript)
       return false;
    return true;
 }
@@ -1518,38 +1557,53 @@ tfeedback_decl::assign_location(struct gl_context *ctx,
 {
    if (output_var->type->is_array()) {
       /* Array variable */
-      if (!this->is_array) {
-         linker_error(prog, "Transform feedback varying %s found, "
-                      "but it's not an array ([] not expected).",
-                      this->orig_name);
-         return false;
-      }
-      /* Check array bounds. */
-      if (this->array_index >=
-          (unsigned) output_var->type->array_size()) {
-         linker_error(prog, "Transform feedback varying %s has index "
-                      "%i, but the array size is %i.",
-                      this->orig_name, this->array_index,
-                      output_var->type->array_size());
-         return false;
-      }
       const unsigned matrix_cols =
          output_var->type->fields.array->matrix_columns;
-      this->location = output_var->location + this->array_index * matrix_cols;
+      unsigned actual_array_size = this->is_clip_distance_mesa ?
+         prog->Vert.ClipDistanceArraySize : output_var->type->array_size();
+
+      if (this->is_subscripted) {
+         /* Check array bounds. */
+         if (this->array_subscript >= actual_array_size) {
+            linker_error(prog, "Transform feedback varying %s has index "
+                         "%i, but the array size is %u.",
+                         this->orig_name, this->array_subscript,
+                         actual_array_size);
+            return false;
+         }
+         if (this->is_clip_distance_mesa) {
+            this->location =
+               output_var->location + this->array_subscript / 4;
+         } else {
+            this->location =
+               output_var->location + this->array_subscript * matrix_cols;
+         }
+         this->size = 1;
+      } else {
+         this->location = output_var->location;
+         this->size = actual_array_size;
+      }
       this->vector_elements = output_var->type->fields.array->vector_elements;
       this->matrix_columns = matrix_cols;
+      if (this->is_clip_distance_mesa)
+         this->type = GL_FLOAT;
+      else
+         this->type = output_var->type->fields.array->gl_type;
    } else {
       /* Regular variable (scalar, vector, or matrix) */
-      if (this->is_array) {
-         linker_error(prog, "Transform feedback varying %s found, "
-                      "but it's an array ([] expected).",
-                      this->orig_name);
+      if (this->is_subscripted) {
+         linker_error(prog, "Transform feedback varying %s requested, "
+                      "but %s is not an array.",
+                      this->orig_name, this->var_name);
          return false;
       }
       this->location = output_var->location;
+      this->size = 1;
       this->vector_elements = output_var->type->vector_elements;
       this->matrix_columns = output_var->type->matrix_columns;
+      this->type = output_var->type->gl_type;
    }
+
    /* From GL_EXT_transform_feedback:
     *   A program will fail to link if:
     *
@@ -1571,16 +1625,9 @@ tfeedback_decl::assign_location(struct gl_context *ctx,
 }
 
 
-/**
- * Update gl_transform_feedback_info to reflect this tfeedback_decl.
- *
- * If an error occurs, the error is reported through linker_error() and false
- * is returned.
- */
 bool
-tfeedback_decl::store(struct gl_shader_program *prog,
-                      struct gl_transform_feedback_info *info,
-                      unsigned buffer) const
+tfeedback_decl::accumulate_num_outputs(struct gl_shader_program *prog,
+                                       unsigned *count)
 {
    if (!this->is_assigned()) {
       /* From GL_EXT_transform_feedback:
@@ -1594,14 +1641,79 @@ tfeedback_decl::store(struct gl_shader_program *prog,
                    this->orig_name);
       return false;
    }
-   for (unsigned v = 0; v < this->matrix_columns; ++v) {
-      info->Outputs[info->NumOutputs].OutputRegister = this->location + v;
-      info->Outputs[info->NumOutputs].NumComponents = this->vector_elements;
-      info->Outputs[info->NumOutputs].OutputBuffer = buffer;
-      info->Outputs[info->NumOutputs].DstOffset = info->BufferStride[buffer];
-      ++info->NumOutputs;
-      info->BufferStride[buffer] += this->vector_elements;
+
+   unsigned translated_size = this->size;
+   if (this->is_clip_distance_mesa)
+      translated_size = (translated_size + 3) / 4;
+
+   *count += translated_size * this->matrix_columns;
+
+   return true;
+}
+
+
+/**
+ * Update gl_transform_feedback_info to reflect this tfeedback_decl.
+ *
+ * If an error occurs, the error is reported through linker_error() and false
+ * is returned.
+ */
+bool
+tfeedback_decl::store(struct gl_context *ctx, struct gl_shader_program *prog,
+                      struct gl_transform_feedback_info *info,
+                      unsigned buffer,
+                      unsigned varying, const unsigned max_outputs) const
+{
+   /* From GL_EXT_transform_feedback:
+    *   A program will fail to link if:
+    *
+    *     * the total number of components to capture is greater than
+    *       the constant MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS_EXT
+    *       and the buffer mode is INTERLEAVED_ATTRIBS_EXT.
+    */
+   if (prog->TransformFeedback.BufferMode == GL_INTERLEAVED_ATTRIBS &&
+       info->BufferStride[buffer] + this->num_components() >
+       ctx->Const.MaxTransformFeedbackInterleavedComponents) {
+      linker_error(prog, "The MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS "
+                   "limit has been exceeded.");
+      return false;
    }
+
+   unsigned translated_size = this->size;
+   if (this->is_clip_distance_mesa)
+      translated_size = (translated_size + 3) / 4;
+   unsigned components_so_far = 0;
+   for (unsigned index = 0; index < translated_size; ++index) {
+      for (unsigned v = 0; v < this->matrix_columns; ++v) {
+         unsigned num_components = this->vector_elements;
+         assert(info->NumOutputs < max_outputs);
+         info->Outputs[info->NumOutputs].ComponentOffset = 0;
+         if (this->is_clip_distance_mesa) {
+            if (this->is_subscripted) {
+               num_components = 1;
+               info->Outputs[info->NumOutputs].ComponentOffset =
+                  this->array_subscript % 4;
+            } else {
+               num_components = MIN2(4, this->size - components_so_far);
+            }
+         }
+         info->Outputs[info->NumOutputs].OutputRegister =
+            this->location + v + index * this->matrix_columns;
+         info->Outputs[info->NumOutputs].NumComponents = num_components;
+         info->Outputs[info->NumOutputs].OutputBuffer = buffer;
+         info->Outputs[info->NumOutputs].DstOffset = info->BufferStride[buffer];
+         ++info->NumOutputs;
+         info->BufferStride[buffer] += num_components;
+         components_so_far += num_components;
+      }
+   }
+   assert(components_so_far == this->num_components());
+
+   info->Varyings[varying].Name = ralloc_strdup(prog, this->orig_name);
+   info->Varyings[varying].Type = this->type;
+   info->Varyings[varying].Size = this->size;
+   info->NumVarying++;
+
    return true;
 }
 
@@ -1614,12 +1726,12 @@ tfeedback_decl::store(struct gl_shader_program *prog,
  * is returned.
  */
 static bool
-parse_tfeedback_decls(struct gl_shader_program *prog, const void *mem_ctx,
-                      unsigned num_names, char **varying_names,
-                      tfeedback_decl *decls)
+parse_tfeedback_decls(struct gl_context *ctx, struct gl_shader_program *prog,
+                      const void *mem_ctx, unsigned num_names,
+                      char **varying_names, tfeedback_decl *decls)
 {
    for (unsigned i = 0; i < num_names; ++i) {
-      if (!decls[i].init(prog, mem_ctx, varying_names[i]))
+      if (!decls[i].init(ctx, prog, mem_ctx, varying_names[i]))
          return false;
       /* From GL_EXT_transform_feedback:
        *   A program will fail to link if:
@@ -1864,32 +1976,40 @@ store_tfeedback_info(struct gl_context *ctx, struct gl_shader_program *prog,
                      unsigned num_tfeedback_decls,
                      tfeedback_decl *tfeedback_decls)
 {
-   unsigned total_tfeedback_components = 0;
+   bool separate_attribs_mode =
+      prog->TransformFeedback.BufferMode == GL_SEPARATE_ATTRIBS;
+
+   ralloc_free(prog->LinkedTransformFeedback.Varyings);
+   ralloc_free(prog->LinkedTransformFeedback.Outputs);
+
    memset(&prog->LinkedTransformFeedback, 0,
           sizeof(prog->LinkedTransformFeedback));
-   for (unsigned i = 0; i < num_tfeedback_decls; ++i) {
-      unsigned buffer =
-         prog->TransformFeedback.BufferMode == GL_SEPARATE_ATTRIBS ? i : 0;
-      if (!tfeedback_decls[i].store(prog, &prog->LinkedTransformFeedback,
-                                    buffer))
-         return false;
-      total_tfeedback_components += tfeedback_decls[i].num_components();
-   }
 
-   /* From GL_EXT_transform_feedback:
-    *   A program will fail to link if:
-    *
-    *     * the total number of components to capture is greater than
-    *       the constant MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS_EXT
-    *       and the buffer mode is INTERLEAVED_ATTRIBS_EXT.
-    */
-   if (prog->TransformFeedback.BufferMode == GL_INTERLEAVED_ATTRIBS &&
-       total_tfeedback_components >
-       ctx->Const.MaxTransformFeedbackInterleavedComponents) {
-      linker_error(prog, "The MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS "
-                   "limit has been exceeded.");
-      return false;
+   prog->LinkedTransformFeedback.NumBuffers =
+      separate_attribs_mode ? num_tfeedback_decls : 1;
+
+   prog->LinkedTransformFeedback.Varyings =
+      rzalloc_array(prog,
+		    struct gl_transform_feedback_varying_info,
+		    num_tfeedback_decls);
+
+   unsigned num_outputs = 0;
+   for (unsigned i = 0; i < num_tfeedback_decls; ++i)
+      if (!tfeedback_decls[i].accumulate_num_outputs(prog, &num_outputs))
+         return false;
+
+   prog->LinkedTransformFeedback.Outputs =
+      rzalloc_array(prog,
+                    struct gl_transform_feedback_output,
+                    num_outputs);
+
+   for (unsigned i = 0; i < num_tfeedback_decls; ++i) {
+      unsigned buffer = separate_attribs_mode ? i : 0;
+      if (!tfeedback_decls[i].store(ctx, prog, &prog->LinkedTransformFeedback,
+                                    buffer, i, num_outputs))
+         return false;
    }
+   assert(prog->LinkedTransformFeedback.NumOutputs == num_outputs);
 
    return true;
 }
@@ -2182,7 +2302,7 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
 
       tfeedback_decls = ralloc_array(mem_ctx, tfeedback_decl,
                                      prog->TransformFeedback.NumVarying);
-      if (!parse_tfeedback_decls(prog, mem_ctx, num_tfeedback_decls,
+      if (!parse_tfeedback_decls(ctx, prog, mem_ctx, num_tfeedback_decls,
                                  prog->TransformFeedback.VaryingNames,
                                  tfeedback_decls))
          goto done;

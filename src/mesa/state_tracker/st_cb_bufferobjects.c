@@ -58,7 +58,7 @@ st_bufferobj_alloc(struct gl_context *ctx, GLuint name, GLenum target)
    if (!st_obj)
       return NULL;
 
-   _mesa_initialize_buffer_object(&st_obj->Base, name, target);
+   _mesa_initialize_buffer_object(ctx, &st_obj->Base, name, target);
 
    return &st_obj->Base;
 }
@@ -290,10 +290,6 @@ st_bufferobj_map_range(struct gl_context *ctx,
                                         offset, length,
                                         flags,
                                         &st_obj->transfer);
-   if (obj->Pointer) {
-      obj->Pointer = (ubyte *) obj->Pointer + offset;
-   }
-
    if (obj->Pointer) {
       obj->Offset = offset;
       obj->Length = length;
