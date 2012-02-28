@@ -119,6 +119,10 @@
 #define BRW_MAX_CURBE                    (32*16)
 
 struct brw_context;
+struct brw_instruction;
+struct brw_vs_prog_key;
+struct brw_wm_prog_key;
+struct brw_wm_prog_data;
 
 enum brw_state_id {
    BRW_STATE_URB_FENCE,
@@ -144,7 +148,6 @@ enum brw_state_id {
    BRW_STATE_VS_CONSTBUF,
    BRW_STATE_PROGRAM_CACHE,
    BRW_STATE_STATE_BASE_ADDRESS,
-   BRW_STATE_HIZ,
    BRW_STATE_SOL_INDICES,
 };
 
@@ -174,7 +177,6 @@ enum brw_state_id {
 #define BRW_NEW_VS_CONSTBUF            (1 << BRW_STATE_VS_CONSTBUF)
 #define BRW_NEW_PROGRAM_CACHE		(1 << BRW_STATE_PROGRAM_CACHE)
 #define BRW_NEW_STATE_BASE_ADDRESS	(1 << BRW_STATE_STATE_BASE_ADDRESS)
-#define BRW_NEW_HIZ			(1 << BRW_STATE_HIZ)
 #define BRW_NEW_SOL_INDICES		(1 << BRW_STATE_SOL_INDICES)
 
 struct brw_state_flags {
@@ -268,6 +270,12 @@ struct brw_wm_prog_data {
    bool error;
    int dispatch_width;
    uint32_t prog_offset_16;
+
+   /**
+    * Mask of which interpolation modes are required by the fragment shader.
+    * Used in hardware setup on gen6+.
+    */
+   uint32_t barycentric_interp_modes;
 
    /* Pointer to tracked values (only valid once
     * _mesa_load_state_parameters has been called at runtime).
@@ -379,6 +387,8 @@ struct brw_gs_prog_data {
 };
 
 struct brw_vs_prog_data {
+   struct brw_vue_map vue_map;
+
    GLuint curb_read_length;
    GLuint urb_read_length;
    GLuint total_grf;
@@ -398,6 +408,9 @@ struct brw_vs_prog_data {
 
    bool uses_new_param_layout;
    bool uses_vertexid;
+   bool userclip;
+
+   int num_surfaces;
 };
 
 
@@ -457,7 +470,7 @@ struct brw_vs_ouput_sizes {
  * (VS, HS, DS, GS, PS), we currently share a single binding table for all of
  * them.  This is purely for convenience.
  *
- * Currently our binding tables are (arbitrarily) programmed as follows:
+ * Currently our SOL/WM binding tables are (arbitrarily) programmed as follows:
  *
  *    +-------------------------------+
  *    |   0 | Draw buffer 0           | .
@@ -465,32 +478,51 @@ struct brw_vs_ouput_sizes {
  *    |   : |     :                   |   > Only relevant to the WM.
  *    |   7 | Draw buffer 7           |  /
  *    |-----|-------------------------| `
- *    |   8 | VS Pull Constant Buffer |
- *    |   9 | WM Pull Constant Buffer |
+ *    |   8 | WM Pull Constant Buffer |
  *    |-----|-------------------------|
- *    |  10 | Texture 0               |
+ *    |   9 | Texture 0               |
  *    |   . |     .                   |
  *    |   : |     :                   |
- *    |  25 | Texture 15              |
- *    +-----|-------------------------+
- *    |  26 | SOL Binding 0           |
- *    |   . |     .                   |
- *    |   : |     :                   |
- *    |  89 | SOL Binding 63          |
+ *    |  24 | Texture 15              |
  *    +-------------------------------+
+ *
+ * Our VS binding tables are programmed as follows:
+ *
+ *    +-----+-------------------------+ `
+ *    |   0 | VS Pull Constant Buffer |
+ *    +-----+-------------------------+
+ *    |   1 | Texture 0               |
+ *    |   . |     .                   |
+ *    |   : |     :                   |
+ *    |  16 | Texture 15              |
+ *    +-------------------------------+
+ *
+ * Our (gen6) GS binding tables are programmed as follows:
+ *
+ *    +-----+-------------------------+
+ *    |  0  | SOL Binding 0           |
+ *    |   . |     .                   |
+ *    |   : |     :                   |
+ *    |  63 | SOL Binding 63          |
+ *    +-----+-------------------------+
  *
  * Note that nothing actually uses the SURF_INDEX_DRAW macro, so it has to be
  * the identity function or things will break.  We do want to keep draw buffers
  * first so we can use headerless render target writes for RT 0.
  */
 #define SURF_INDEX_DRAW(d)           (d)
-#define SURF_INDEX_VERT_CONST_BUFFER (BRW_MAX_DRAW_BUFFERS + 0)
 #define SURF_INDEX_FRAG_CONST_BUFFER (BRW_MAX_DRAW_BUFFERS + 1)
 #define SURF_INDEX_TEXTURE(t)        (BRW_MAX_DRAW_BUFFERS + 2 + (t))
-#define SURF_INDEX_SOL_BINDING(t)    (SURF_INDEX_TEXTURE(BRW_MAX_TEX_UNIT) + (t))
 
 /** Maximum size of the binding table. */
-#define BRW_MAX_SURFACES SURF_INDEX_SOL_BINDING(BRW_MAX_SOL_BINDINGS)
+#define BRW_MAX_SURFACES             SURF_INDEX_TEXTURE(BRW_MAX_TEX_UNIT)
+
+#define SURF_INDEX_VERT_CONST_BUFFER (0)
+#define SURF_INDEX_VS_TEXTURE(t)     (SURF_INDEX_VERT_CONST_BUFFER + 1 + (t))
+#define BRW_MAX_VS_SURFACES          SURF_INDEX_VS_TEXTURE(BRW_MAX_TEX_UNIT)
+
+#define SURF_INDEX_SOL_BINDING(t)    ((t))
+#define BRW_MAX_GS_SURFACES          SURF_INDEX_SOL_BINDING(BRW_MAX_SOL_BINDINGS)
 
 enum brw_cache_id {
    BRW_BLEND_STATE,
@@ -789,12 +821,6 @@ struct brw_context
       GLuint last_bufsz;
    } curbe;
 
-   struct {
-      /** Binding table of pointers to surf_bo entries */
-      uint32_t bo_offset;
-      uint32_t surf_offset[BRW_MAX_SURFACES];
-   } bind;
-
    /** SAMPLER_STATE count and offset */
    struct {
       GLuint count;
@@ -830,6 +856,9 @@ struct brw_context
       */
       uint8_t *ra_reg_to_grf;
       /** @} */
+
+      uint32_t bind_bo_offset;
+      uint32_t surf_offset[BRW_MAX_VS_SURFACES];
    } vs;
 
    struct {
@@ -839,6 +868,9 @@ struct brw_context
       /** Offset in the program cache to the CLIP program pre-gen6 */
       uint32_t prog_offset;
       uint32_t state_offset;
+
+      uint32_t bind_bo_offset;
+      uint32_t surf_offset[BRW_MAX_GS_SURFACES];
    } gs;
 
    struct {
@@ -896,6 +928,10 @@ struct brw_context
        */
       uint32_t push_const_offset;
 
+      /** Binding table of pointers to surf_bo entries */
+      uint32_t bind_bo_offset;
+      uint32_t surf_offset[BRW_MAX_SURFACES];
+
       /** @{ register allocator */
 
       struct ra_regs *regs;
@@ -948,41 +984,6 @@ struct brw_context
       enum state_struct_type type;
    } *state_batch_list;
    int state_batch_count;
-
-   /**
-    * \brief State needed to execute HiZ meta-ops
-    *
-    * All fields except \c op are initialized by gen6_hiz_init().
-    */
-   struct brw_hiz_state {
-      /**
-       * \brief Indicates which HiZ operation is in progress.
-       *
-       * See the following sections of the Sandy Bridge PRM, Volume 1, Part2:
-       *   - 7.5.3.1 Depth Buffer Clear
-       *   - 7.5.3.2 Depth Buffer Resolve
-       *   - 7.5.3.3 Hierarchical Depth Buffer Resolve
-       */
-      enum brw_hiz_op {
-	 BRW_HIZ_OP_NONE = 0,
-	 BRW_HIZ_OP_DEPTH_CLEAR,
-	 BRW_HIZ_OP_DEPTH_RESOLVE,
-	 BRW_HIZ_OP_HIZ_RESOLVE,
-      } op;
-
-      /** \brief Shader state */
-      struct {
-	 GLuint program;
-	 GLuint position_vbo;
-	 GLint position_location;
-      } shader;
-
-      /** \brief VAO for the rectangle primitive's vertices. */
-      GLuint vao;
-
-      GLuint fbo;
-      struct gl_renderbuffer *depth_rb;
-   } hiz;
 
    struct brw_sol_state {
       uint32_t svbi_0_starting_index;
@@ -1062,16 +1063,7 @@ void brw_upload_cs_urb_state(struct brw_context *brw);
 int brw_disasm (FILE *file, struct brw_instruction *inst, int gen);
 
 /* brw_vs.c */
-void brw_compute_vue_map(struct brw_vue_map *vue_map,
-                         const struct intel_context *intel,
-                         bool userclip_active,
-                         GLbitfield64 outputs_written);
 gl_clip_plane *brw_select_clip_planes(struct gl_context *ctx);
-
-/* brw_wm.c */
-unsigned
-brw_compute_barycentric_interp_modes(bool shade_model_flat,
-                                     const struct gl_fragment_program *fprog);
 
 /* brw_wm_surface_state.c */
 void brw_init_surface_formats(struct brw_context *brw);
@@ -1080,10 +1072,6 @@ brw_update_sol_surface(struct brw_context *brw,
                        struct gl_buffer_object *buffer_obj,
                        uint32_t *out_offset, unsigned num_vector_components,
                        unsigned stride_dwords, unsigned offset_dwords);
-
-/* gen6_clip_state.c */
-bool
-brw_fprog_uses_noperspective(const struct gl_fragment_program *fprog);
 
 /* gen6_sol.c */
 void

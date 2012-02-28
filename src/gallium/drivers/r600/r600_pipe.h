@@ -67,9 +67,23 @@ struct r600_atom {
 	struct list_head	head;
 };
 
+/* This is an atom containing GPU commands that never change.
+ * This is supposed to be copied directly into the CS. */
+struct r600_command_buffer {
+	struct r600_atom atom;
+	uint32_t *buf;
+	unsigned max_num_dw;
+};
+
 struct r600_atom_surface_sync {
 	struct r600_atom atom;
 	unsigned flush_flags; /* CP_COHER_CNTL */
+};
+
+struct r600_atom_db_misc_state {
+	struct r600_atom atom;
+	bool occlusion_query_enabled;
+	bool flush_depthstencil_enabled;
 };
 
 enum r600_pipe_state_id {
@@ -117,6 +131,7 @@ struct r600_screen {
 	struct r600_pipe_fences		fences;
 
 	unsigned			num_contexts;
+	bool				use_surface_alloc;
 
 	/* for thread-safe write accessing to num_contexts */
 	pipe_mutex			mutex_num_contexts;
@@ -134,7 +149,6 @@ struct r600_pipe_rasterizer {
 	unsigned			sprite_coord_enable;
 	unsigned                        clip_plane_enable;
 	unsigned			pa_sc_line_stipple;
-	unsigned			pa_su_sc_mode_cntl;
 	unsigned			pa_cl_clip_cntl;
 	float				offset_units;
 	float				offset_scale;
@@ -149,10 +163,9 @@ struct r600_pipe_blend {
 struct r600_pipe_dsa {
 	struct r600_pipe_state		rstate;
 	unsigned			alpha_ref;
-	unsigned			db_render_override;
-	unsigned			db_render_control;
 	ubyte				valuemask[2];
 	ubyte				writemask[2];
+	bool				is_flush;
 };
 
 struct r600_vertex_element
@@ -203,6 +216,7 @@ struct r600_textures_info {
 struct r600_fence {
 	struct pipe_reference		reference;
 	unsigned			index; /* in the shared bo */
+	struct r600_resource            *sleep_bo;
 	struct list_head		head;
 };
 
@@ -239,13 +253,11 @@ struct r600_context {
 	unsigned			cb_target_mask;
 	unsigned			cb_color_control;
 	unsigned			pa_sc_line_stipple;
-	unsigned			pa_su_sc_mode_cntl;
 	unsigned			pa_cl_clip_cntl;
 	/* for saving when using blitter */
 	struct pipe_stencil_ref		stencil_ref;
 	struct pipe_viewport_state	viewport;
 	struct pipe_clip_state		clip;
-	struct r600_pipe_state		config;
 	struct r600_pipe_shader 	*ps_shader;
 	struct r600_pipe_shader 	*vs_shader;
 	struct r600_pipe_state		vs_const_buffer;
@@ -277,8 +289,10 @@ struct r600_context {
 
 	/* States based on r600_state. */
 	struct list_head		dirty_states;
+	struct r600_command_buffer	atom_start_cs; /* invariant state mostly */
 	struct r600_atom_surface_sync	atom_surface_sync;
 	struct r600_atom		atom_r6xx_flush_and_inv;
+	struct r600_atom_db_misc_state	atom_db_misc_state;
 
 	/* Below are variables from the old r600_context.
 	 */
@@ -292,9 +306,9 @@ struct r600_context {
 	struct list_head	enable_list;
 	unsigned		pm4_dirty_cdwords;
 	unsigned		ctx_pm4_ndwords;
-	unsigned		init_dwords;
 
 	/* The list of active queries. Only one query of each type can be active. */
+	int			num_occlusion_queries;
 	struct list_head	active_query_list;
 	unsigned		num_cs_dw_queries_suspend;
 	unsigned		num_cs_dw_streamout_end;
@@ -312,7 +326,6 @@ struct r600_context {
 	struct r600_so_target	*so_targets[PIPE_MAX_SO_BUFFERS];
 	boolean			streamout_start;
 	unsigned		streamout_append_bitmask;
-	unsigned		*vs_so_stride_in_dw;
 };
 
 static INLINE void r600_emit_atom(struct r600_context *rctx, struct r600_atom *atom)
@@ -337,7 +350,7 @@ static INLINE void r600_atom_dirty(struct r600_context *rctx, struct r600_atom *
 
 /* evergreen_state.c */
 void evergreen_init_state_functions(struct r600_context *rctx);
-void evergreen_init_config(struct r600_context *rctx);
+void evergreen_init_atom_start_cs(struct r600_context *rctx);
 void evergreen_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shader);
 void evergreen_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader *shader);
 void evergreen_fetch_shader(struct pipe_context *ctx, struct r600_vertex_element *ve);
@@ -395,7 +408,7 @@ int r600_find_vs_semantic_index(struct r600_shader *vs,
 /* r600_state.c */
 void r600_update_sampler_states(struct r600_context *rctx);
 void r600_init_state_functions(struct r600_context *rctx);
-void r600_init_config(struct r600_context *rctx);
+void r600_init_atom_start_cs(struct r600_context *rctx);
 void r600_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shader);
 void r600_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader *shader);
 void r600_fetch_shader(struct pipe_context *ctx, struct r600_vertex_element *ve);
@@ -429,6 +442,9 @@ void r600_translate_index_buffer(struct r600_context *r600,
 				 unsigned count);
 
 /* r600_state_common.c */
+void r600_init_atom(struct r600_atom *atom,
+		    void (*emit)(struct r600_context *ctx, struct r600_atom *state),
+		    unsigned num_dw, enum r600_atom_flags flags);
 void r600_init_common_atoms(struct r600_context *rctx);
 unsigned r600_get_cb_flush_flags(struct r600_context *rctx);
 void r600_texture_barrier(struct pipe_context *ctx);
@@ -441,6 +457,8 @@ void *r600_create_vertex_elements(struct pipe_context *ctx,
 				  const struct pipe_vertex_element *elements);
 void r600_delete_vertex_element(struct pipe_context *ctx, void *state);
 void r600_bind_blend_state(struct pipe_context *ctx, void *state);
+void r600_set_blend_color(struct pipe_context *ctx,
+			  const struct pipe_blend_color *state);
 void r600_bind_dsa_state(struct pipe_context *ctx, void *state);
 void r600_bind_rs_state(struct pipe_context *ctx, void *state);
 void r600_delete_rs_state(struct pipe_context *ctx, void *state);
@@ -470,6 +488,162 @@ void r600_set_so_targets(struct pipe_context *ctx,
 void r600_set_pipe_stencil_ref(struct pipe_context *ctx,
 			       const struct pipe_stencil_ref *state);
 void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info);
+uint32_t r600_translate_stencil_op(int s_op);
+uint32_t r600_translate_fill(uint32_t func);
+unsigned r600_tex_wrap(unsigned wrap);
+unsigned r600_tex_filter(unsigned filter);
+unsigned r600_tex_mipfilter(unsigned filter);
+unsigned r600_tex_compare(unsigned compare);
+
+/*
+ * Helpers for building command buffers
+ */
+
+#define PKT3_SET_CONFIG_REG	0x68
+#define PKT3_SET_CONTEXT_REG	0x69
+#define PKT3_SET_CTL_CONST      0x6F
+#define PKT3_SET_LOOP_CONST                    0x6C
+
+#define R600_CONFIG_REG_OFFSET	0x08000
+#define R600_CONTEXT_REG_OFFSET 0x28000
+#define R600_CTL_CONST_OFFSET   0x3CFF0
+#define R600_LOOP_CONST_OFFSET                 0X0003E200
+#define EG_LOOP_CONST_OFFSET               0x0003A200
+
+#define PKT_TYPE_S(x)                   (((x) & 0x3) << 30)
+#define PKT_COUNT_S(x)                  (((x) & 0x3FFF) << 16)
+#define PKT3_IT_OPCODE_S(x)             (((x) & 0xFF) << 8)
+#define PKT3_PREDICATE(x)               (((x) >> 0) & 0x1)
+#define PKT3(op, count, predicate) (PKT_TYPE_S(3) | PKT_COUNT_S(count) | PKT3_IT_OPCODE_S(op) | PKT3_PREDICATE(predicate))
+
+static INLINE void r600_store_value(struct r600_command_buffer *cb, unsigned value)
+{
+	cb->buf[cb->atom.num_dw++] = value;
+}
+
+static INLINE void r600_store_config_reg_seq(struct r600_command_buffer *cb, unsigned reg, unsigned num)
+{
+	assert(reg < R600_CONTEXT_REG_OFFSET);
+	assert(cb->atom.num_dw+2+num <= cb->max_num_dw);
+	cb->buf[cb->atom.num_dw++] = PKT3(PKT3_SET_CONFIG_REG, num, 0);
+	cb->buf[cb->atom.num_dw++] = (reg - R600_CONFIG_REG_OFFSET) >> 2;
+}
+
+static INLINE void r600_store_context_reg_seq(struct r600_command_buffer *cb, unsigned reg, unsigned num)
+{
+	assert(reg >= R600_CONTEXT_REG_OFFSET && reg < R600_CTL_CONST_OFFSET);
+	assert(cb->atom.num_dw+2+num <= cb->max_num_dw);
+	cb->buf[cb->atom.num_dw++] = PKT3(PKT3_SET_CONTEXT_REG, num, 0);
+	cb->buf[cb->atom.num_dw++] = (reg - R600_CONTEXT_REG_OFFSET) >> 2;
+}
+
+static INLINE void r600_store_ctl_const_seq(struct r600_command_buffer *cb, unsigned reg, unsigned num)
+{
+	assert(reg >= R600_CTL_CONST_OFFSET);
+	assert(cb->atom.num_dw+2+num <= cb->max_num_dw);
+	cb->buf[cb->atom.num_dw++] = PKT3(PKT3_SET_CTL_CONST, num, 0);
+	cb->buf[cb->atom.num_dw++] = (reg - R600_CTL_CONST_OFFSET) >> 2;
+}
+
+static INLINE void r600_store_loop_const_seq(struct r600_command_buffer *cb, unsigned reg, unsigned num)
+{
+	assert(reg >= R600_LOOP_CONST_OFFSET);
+	assert(cb->atom.num_dw+2+num <= cb->max_num_dw);
+	cb->buf[cb->atom.num_dw++] = PKT3(PKT3_SET_LOOP_CONST, num, 0);
+	cb->buf[cb->atom.num_dw++] = (reg - R600_LOOP_CONST_OFFSET) >> 2;
+}
+
+static INLINE void eg_store_loop_const_seq(struct r600_command_buffer *cb, unsigned reg, unsigned num)
+{
+	assert(reg >= EG_LOOP_CONST_OFFSET);
+	assert(cb->atom.num_dw+2+num <= cb->max_num_dw);
+	cb->buf[cb->atom.num_dw++] = PKT3(PKT3_SET_LOOP_CONST, num, 0);
+	cb->buf[cb->atom.num_dw++] = (reg - EG_LOOP_CONST_OFFSET) >> 2;
+}
+
+static INLINE void r600_store_config_reg(struct r600_command_buffer *cb, unsigned reg, unsigned value)
+{
+	r600_store_config_reg_seq(cb, reg, 1);
+	r600_store_value(cb, value);
+}
+
+static INLINE void r600_store_context_reg(struct r600_command_buffer *cb, unsigned reg, unsigned value)
+{
+	r600_store_context_reg_seq(cb, reg, 1);
+	r600_store_value(cb, value);
+}
+
+static INLINE void r600_store_ctl_const(struct r600_command_buffer *cb, unsigned reg, unsigned value)
+{
+	r600_store_ctl_const_seq(cb, reg, 1);
+	r600_store_value(cb, value);
+}
+
+static INLINE void r600_store_loop_const(struct r600_command_buffer *cb, unsigned reg, unsigned value)
+{
+	r600_store_loop_const_seq(cb, reg, 1);
+	r600_store_value(cb, value);
+}
+
+static INLINE void eg_store_loop_const(struct r600_command_buffer *cb, unsigned reg, unsigned value)
+{
+	eg_store_loop_const_seq(cb, reg, 1);
+	r600_store_value(cb, value);
+}
+
+void r600_init_command_buffer(struct r600_command_buffer *cb, unsigned num_dw, enum r600_atom_flags flags);
+void r600_release_command_buffer(struct r600_command_buffer *cb);
+
+/*
+ * Helpers for emitting state into a command stream directly.
+ */
+
+static INLINE void r600_write_value(struct radeon_winsys_cs *cs, unsigned value)
+{
+	cs->buf[cs->cdw++] = value;
+}
+
+static INLINE void r600_write_config_reg_seq(struct radeon_winsys_cs *cs, unsigned reg, unsigned num)
+{
+	assert(reg < R600_CONTEXT_REG_OFFSET);
+	assert(cs->cdw+2+num <= RADEON_MAX_CMDBUF_DWORDS);
+	cs->buf[cs->cdw++] = PKT3(PKT3_SET_CONFIG_REG, num, 0);
+	cs->buf[cs->cdw++] = (reg - R600_CONFIG_REG_OFFSET) >> 2;
+}
+
+static INLINE void r600_write_context_reg_seq(struct radeon_winsys_cs *cs, unsigned reg, unsigned num)
+{
+	assert(reg >= R600_CONTEXT_REG_OFFSET && reg < R600_CTL_CONST_OFFSET);
+	assert(cs->cdw+2+num <= RADEON_MAX_CMDBUF_DWORDS);
+	cs->buf[cs->cdw++] = PKT3(PKT3_SET_CONTEXT_REG, num, 0);
+	cs->buf[cs->cdw++] = (reg - R600_CONTEXT_REG_OFFSET) >> 2;
+}
+
+static INLINE void r600_write_ctl_const_seq(struct radeon_winsys_cs *cs, unsigned reg, unsigned num)
+{
+	assert(reg >= R600_CTL_CONST_OFFSET);
+	assert(cs->cdw+2+num <= RADEON_MAX_CMDBUF_DWORDS);
+	cs->buf[cs->cdw++] = PKT3(PKT3_SET_CTL_CONST, num, 0);
+	cs->buf[cs->cdw++] = (reg - R600_CTL_CONST_OFFSET) >> 2;
+}
+
+static INLINE void r600_write_config_reg(struct radeon_winsys_cs *cs, unsigned reg, unsigned value)
+{
+	r600_write_config_reg_seq(cs, reg, 1);
+	r600_write_value(cs, value);
+}
+
+static INLINE void r600_write_context_reg(struct radeon_winsys_cs *cs, unsigned reg, unsigned value)
+{
+	r600_write_context_reg_seq(cs, reg, 1);
+	r600_write_value(cs, value);
+}
+
+static INLINE void r600_write_ctl_const(struct radeon_winsys_cs *cs, unsigned reg, unsigned value)
+{
+	r600_write_ctl_const_seq(cs, reg, 1);
+	r600_write_value(cs, value);
+}
 
 /*
  * common helpers

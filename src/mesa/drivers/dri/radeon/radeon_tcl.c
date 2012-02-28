@@ -34,8 +34,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "main/glheader.h"
 #include "main/imports.h"
-#include "main/light.h"
 #include "main/mtypes.h"
+#include "main/light.h"
 #include "main/enums.h"
 
 #include "vbo/vbo.h"
@@ -461,10 +461,10 @@ static void transition_to_swtnl( struct gl_context *ctx )
    radeonChooseVertexState( ctx );
    radeonChooseRenderState( ctx );
 
-   _mesa_validate_all_lighting_tables( ctx ); 
+   _tnl_validate_shine_tables( ctx ); 
 
    tnl->Driver.NotifyMaterialChange = 
-      _mesa_validate_all_lighting_tables;
+      _tnl_validate_shine_tables;
 
    radeonReleaseArrays( ctx, ~0 );
 

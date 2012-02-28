@@ -48,6 +48,10 @@
 #define RTLD_GLOBAL 0
 #endif
 
+/**
+ * Print informational message to stderr if LIBGL_DEBUG is set to
+ * "verbose".
+ */
 _X_HIDDEN void
 InfoMessageF(const char *f, ...)
 {
@@ -63,7 +67,8 @@ InfoMessageF(const char *f, ...)
 }
 
 /**
- * Print error to stderr, unless LIBGL_DEBUG=="quiet".
+ * Print error message to stderr if LIBGL_DEBUG is set to anything but
+ * "quiet", (do nothing if LIBGL_DEBUG is unset).
  */
 _X_HIDDEN void
 ErrorMessageF(const char *f, ...)
@@ -76,6 +81,30 @@ ErrorMessageF(const char *f, ...)
       va_start(args, f);
       vfprintf(stderr, f, args);
       va_end(args);
+   }
+}
+
+/**
+ * Print error message unless LIBGL_DEBUG is set to "quiet".
+ *
+ * The distinction between CriticalErrorMessageF and ErrorMessageF is
+ * that critcial errors will be printed by default, (even when
+ * LIBGL_DEBUG is unset).
+ */
+_X_HIDDEN void
+CriticalErrorMessageF(const char *f, ...)
+{
+   va_list args;
+   const char *env;
+
+   if (!(env = getenv("LIBGL_DEBUG")) || !strstr(env, "quiet")) {
+      fprintf(stderr, "libGL error: ");
+      va_start(args, f);
+      vfprintf(stderr, f, args);
+      va_end(args);
+
+      if (!env || !strstr(env, "verbose"))
+         fprintf(stderr, "libGL error: Try again with LIBGL_DEBUG=verbose for more details.\n");
    }
 }
 

@@ -104,7 +104,7 @@ vl_video_buffer_is_format_supported(struct pipe_screen *screen,
    if (!resource_formats)
       return false;
 
-   for (i = 0; i < VL_MAX_PLANES; ++i) {
+   for (i = 0; i < VL_NUM_COMPONENTS; ++i) {
       if (!resource_formats[i])
          continue;
 
@@ -187,13 +187,13 @@ vl_video_buffer_destroy(struct pipe_video_buffer *buffer)
 
    assert(buf);
 
-   for (i = 0; i < VL_MAX_PLANES; ++i) {
+   for (i = 0; i < VL_NUM_COMPONENTS; ++i) {
       pipe_sampler_view_reference(&buf->sampler_view_planes[i], NULL);
       pipe_sampler_view_reference(&buf->sampler_view_components[i], NULL);
       pipe_resource_reference(&buf->resources[i], NULL);
    }
 
-   for (i = 0; i < VL_MAX_PLANES * 2; ++i)
+   for (i = 0; i < VL_NUM_COMPONENTS * 2; ++i)
       pipe_surface_reference(&buf->surfaces[i], NULL);
 
    vl_video_buffer_set_associated_data(buffer, NULL, NULL, NULL);
@@ -256,7 +256,7 @@ vl_video_buffer_sampler_view_components(struct pipe_video_buffer *buffer)
       unsigned nr_components = util_format_get_nr_components(res->format);
 
       for (j = 0; j < nr_components; ++j, ++component) {
-         assert(component < VL_MAX_PLANES);
+         assert(component < VL_NUM_COMPONENTS);
 
          if (!buf->sampler_view_components[component]) {
             memset(&sv_templ, 0, sizeof(sv_templ));
@@ -273,7 +273,7 @@ vl_video_buffer_sampler_view_components(struct pipe_video_buffer *buffer)
    return buf->sampler_view_components;
 
 error:
-   for (i = 0; i < VL_MAX_PLANES; ++i )
+   for (i = 0; i < VL_NUM_COMPONENTS; ++i )
       pipe_sampler_view_reference(&buf->sampler_view_components[i], NULL);
 
    return NULL;
@@ -285,23 +285,29 @@ vl_video_buffer_surfaces(struct pipe_video_buffer *buffer)
    struct vl_video_buffer *buf = (struct vl_video_buffer *)buffer;
    struct pipe_surface surf_templ;
    struct pipe_context *pipe;
-   unsigned i, j, surf;
+   unsigned i, j, depth, surf;
 
    assert(buf);
 
    pipe = buf->base.context;
 
-   for (i = 0, surf = 0; i < buf->num_planes; ++i ) {
-      for (j = 0; j < buf->resources[i]->depth0; ++j, ++surf) {
-         assert(surf < (VL_MAX_PLANES * 2));
+   depth = buffer->interlaced ? 2 : 1;
+   for (i = 0, surf = 0; i < depth; ++i ) {
+      for (j = 0; j < VL_NUM_COMPONENTS; ++j, ++surf) {
+         assert(surf < (VL_NUM_COMPONENTS * 2));
+
+         if (!buf->resources[j]) {
+            pipe_surface_reference(&buf->surfaces[surf], NULL);
+            continue;
+         }
 
          if (!buf->surfaces[surf]) {
             memset(&surf_templ, 0, sizeof(surf_templ));
-            surf_templ.format = buf->resources[i]->format;
+            surf_templ.format = buf->resources[j]->format;
             surf_templ.usage = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET;
-            surf_templ.u.tex.first_layer = surf_templ.u.tex.last_layer = j;
-            buf->surfaces[i] = pipe->create_surface(pipe, buf->resources[i], &surf_templ);
-            if (!buf->surfaces[i])
+            surf_templ.u.tex.first_layer = surf_templ.u.tex.last_layer = i;
+            buf->surfaces[surf] = pipe->create_surface(pipe, buf->resources[j], &surf_templ);
+            if (!buf->surfaces[surf])
                goto error;
          }
       }
@@ -310,7 +316,7 @@ vl_video_buffer_surfaces(struct pipe_video_buffer *buffer)
    return buf->surfaces;
 
 error:
-   for (i = 0; i < (VL_MAX_PLANES * 2); ++i )
+   for (i = 0; i < (VL_NUM_COMPONENTS * 2); ++i )
       pipe_surface_reference(&buf->surfaces[i], NULL);
 
    return NULL;
@@ -321,7 +327,7 @@ vl_video_buffer_create(struct pipe_context *pipe,
                        const struct pipe_video_buffer *tmpl)
 {
    const enum pipe_format *resource_formats;
-   struct pipe_video_buffer templat;
+   struct pipe_video_buffer templat, *result;
    bool pot_buffers;
 
    assert(pipe);
@@ -340,28 +346,34 @@ vl_video_buffer_create(struct pipe_context *pipe,
 
    templat = *tmpl;
    templat.width = pot_buffers ? util_next_power_of_two(tmpl->width)
-                 : align(tmpl->width, MACROBLOCK_WIDTH);
+                 : align(tmpl->width, VL_MACROBLOCK_WIDTH);
    templat.height = pot_buffers ? util_next_power_of_two(tmpl->height)
-                  : align(tmpl->height, MACROBLOCK_HEIGHT);
+                  : align(tmpl->height, VL_MACROBLOCK_HEIGHT);
 
    if (tmpl->interlaced)
       templat.height /= 2;
 
-   return vl_video_buffer_create_ex
+   result = vl_video_buffer_create_ex
    (
       pipe, &templat, resource_formats,
       tmpl->interlaced ? 2 : 1, PIPE_USAGE_STATIC
    );
+
+
+   if (result && tmpl->interlaced)
+      result->height *= 2;
+
+   return result;
 }
 
 struct pipe_video_buffer *
 vl_video_buffer_create_ex(struct pipe_context *pipe,
                           const struct pipe_video_buffer *tmpl,
-                          const enum pipe_format resource_formats[VL_MAX_PLANES],
+                          const enum pipe_format resource_formats[VL_NUM_COMPONENTS],
                           unsigned depth, unsigned usage)
 {
    struct pipe_resource res_tmpl;
-   struct pipe_resource *resources[VL_MAX_PLANES];
+   struct pipe_resource *resources[VL_NUM_COMPONENTS];
    unsigned i;
 
    assert(pipe);
@@ -395,7 +407,7 @@ vl_video_buffer_create_ex(struct pipe_context *pipe,
    return vl_video_buffer_create_ex2(pipe, tmpl, resources);
 
 error:
-   for (i = 0; i < VL_MAX_PLANES; ++i)
+   for (i = 0; i < VL_NUM_COMPONENTS; ++i)
       pipe_resource_reference(&resources[i], NULL);
 
    return NULL;
@@ -404,7 +416,7 @@ error:
 struct pipe_video_buffer *
 vl_video_buffer_create_ex2(struct pipe_context *pipe,
                            const struct pipe_video_buffer *tmpl,
-                           struct pipe_resource *resources[VL_MAX_PLANES])
+                           struct pipe_resource *resources[VL_NUM_COMPONENTS])
 {
    struct vl_video_buffer *buffer;
    unsigned i;
@@ -419,7 +431,7 @@ vl_video_buffer_create_ex2(struct pipe_context *pipe,
    buffer->base.get_surfaces = vl_video_buffer_surfaces;
    buffer->num_planes = 0;
 
-   for (i = 0; i < VL_MAX_PLANES; ++i) {
+   for (i = 0; i < VL_NUM_COMPONENTS; ++i) {
       buffer->resources[i] = resources[i];
       if (resources[i])
          buffer->num_planes++;

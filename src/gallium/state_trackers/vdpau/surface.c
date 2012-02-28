@@ -48,8 +48,6 @@ vlVdpVideoSurfaceCreate(VdpDevice device, VdpChromaType chroma_type,
    vlVdpSurface *p_surf;
    VdpStatus ret;
 
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Creating a surface\n");
-
    if (!(width && height)) {
       ret = VDP_STATUS_INVALID_SIZE;
       goto inv_size;
@@ -73,7 +71,7 @@ vlVdpVideoSurfaceCreate(VdpDevice device, VdpChromaType chroma_type,
    }
 
    p_surf->device = dev;
-   pipe = dev->context->pipe;
+   pipe = dev->context;
 
    memset(&p_surf->templat, 0, sizeof(p_surf->templat));
    p_surf->templat.buffer_format = pipe->screen->get_video_param
@@ -85,6 +83,12 @@ vlVdpVideoSurfaceCreate(VdpDevice device, VdpChromaType chroma_type,
    p_surf->templat.chroma_format = ChromaToPipe(chroma_type);
    p_surf->templat.width = width;
    p_surf->templat.height = height;
+   p_surf->templat.interlaced = pipe->screen->get_video_param
+   (
+      pipe->screen,
+      PIPE_VIDEO_PROFILE_UNKNOWN,
+      PIPE_VIDEO_CAP_PREFERS_INTERLACED
+   );
    p_surf->video_buffer = pipe->create_video_buffer(pipe, &p_surf->templat);
 
    *surface = vlAddDataHTAB(p_surf);
@@ -191,7 +195,7 @@ vlVdpVideoSurfacePutBitsYCbCr(VdpVideoSurface surface,
    enum pipe_format pformat = FormatYCBCRToPipe(source_ycbcr_format);
    struct pipe_context *pipe;
    struct pipe_sampler_view **sampler_views;
-   unsigned i;
+   unsigned i, j;
 
    if (!vlCreateHTAB())
       return VDP_STATUS_RESOURCES;
@@ -200,12 +204,11 @@ vlVdpVideoSurfacePutBitsYCbCr(VdpVideoSurface surface,
    if (!p_surf)
       return VDP_STATUS_INVALID_HANDLE;
 
-   pipe = p_surf->device->context->pipe;
+   pipe = p_surf->device->context;
    if (!pipe)
       return VDP_STATUS_INVALID_HANDLE;
 
-   if (p_surf->video_buffer == NULL || p_surf->video_buffer->interlaced ||
-       pformat != p_surf->video_buffer->buffer_format) {
+   if (p_surf->video_buffer == NULL || pformat != p_surf->video_buffer->buffer_format) {
 
       /* destroy the old one */
       if (p_surf->video_buffer)
@@ -213,7 +216,6 @@ vlVdpVideoSurfacePutBitsYCbCr(VdpVideoSurface surface,
 
       /* adjust the template parameters */
       p_surf->templat.buffer_format = pformat;
-      p_surf->templat.interlaced = false;
 
       /* and try to create the video buffer with the new format */
       p_surf->video_buffer = pipe->create_video_buffer(pipe, &p_surf->templat);
@@ -227,27 +229,22 @@ vlVdpVideoSurfacePutBitsYCbCr(VdpVideoSurface surface,
    if (!sampler_views)
       return VDP_STATUS_RESOURCES;
 
-   for (i = 0; i < 3; ++i) { //TODO put nr of planes into util format
+   for (i = 0; i < 3; ++i) {
       struct pipe_sampler_view *sv = sampler_views[i];
-      struct pipe_box dst_box = { 0, 0, 0, sv->texture->width0, sv->texture->height0, 1 };
+      if (!sv) continue;
 
-      struct pipe_transfer *transfer;
-      void *map;
+      for (j = 0; j < sv->texture->depth0; ++j) {
+         struct pipe_box dst_box = {
+            0, 0, j,
+            sv->texture->width0, sv->texture->height0, 1
+         };
 
-      transfer = pipe->get_transfer(pipe, sv->texture, 0, PIPE_TRANSFER_WRITE, &dst_box);
-      if (!transfer)
-         return VDP_STATUS_RESOURCES;
-
-      map = pipe->transfer_map(pipe, transfer);
-      if (map) {
-         util_copy_rect(map, sv->texture->format, transfer->stride, 0, 0,
-                        dst_box.width, dst_box.height,
-                        source_data[i], source_pitches[i], 0, 0);
-
-         pipe->transfer_unmap(pipe, transfer);
+         pipe->transfer_inline_write(pipe, sv->texture, 0,
+                                     PIPE_TRANSFER_WRITE, &dst_box,
+                                     source_data[i] + source_pitches[i] * j,
+                                     source_pitches[i] * sv->texture->depth0,
+                                     0);
       }
-
-      pipe->transfer_destroy(pipe, transfer);
    }
 
    return VDP_STATUS_OK;

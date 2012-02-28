@@ -31,26 +31,6 @@
 #include "brw_util.h"
 #include "intel_batchbuffer.h"
 
-/**
- * Return true if at least one of the inputs used by the given fragment
- * program has the GLSL "noperspective" interpolation qualifier.
- */
-bool
-brw_fprog_uses_noperspective(const struct gl_fragment_program *fprog)
-{
-   int attr;
-   for (attr = 0; attr < FRAG_ATTRIB_MAX; ++attr) {
-      /* Ignore unused inputs. */
-      if (!(fprog->Base.InputsRead & BITFIELD64_BIT(attr)))
-         continue;
-
-      if (fprog->InterpQualifier[attr] == INTERP_QUALIFIER_NOPERSPECTIVE)
-         return true;
-   }
-   return false;
-}
-
-
 static void
 upload_clip_state(struct brw_context *brw)
 {
@@ -59,29 +39,12 @@ upload_clip_state(struct brw_context *brw)
    uint32_t depth_clamp = 0;
    uint32_t provoking, userclip;
    uint32_t nonperspective_barycentric_enable_flag = 0;
-   /* BRW_NEW_FRAGMENT_PROGRAM */
-   const struct gl_fragment_program *fprog = brw->fragment_program;
 
-   if (brw_fprog_uses_noperspective(fprog)) {
+   /* CACHE_NEW_WM_PROG */
+   if (brw->wm.prog_data->barycentric_interp_modes &
+       (1 << BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC)) {
       nonperspective_barycentric_enable_flag =
          GEN6_CLIP_NON_PERSPECTIVE_BARYCENTRIC_ENABLE;
-   }
-
-   if (brw->hiz.op) {
-      /* HiZ operations emit a rectangle primitive, which requires clipping to
-       * be disabled. From page 10 of the Sandy Bridge PRM Volume 2 Part 1
-       * Section 1.3 3D Primitives Overview:
-       *    RECTLIST:
-       *    Either the CLIP unit should be DISABLED, or the CLIP unit's Clip
-       *    Mode should be set to a value other than CLIPMODE_NORMAL.
-       */
-      BEGIN_BATCH(4);
-      OUT_BATCH(_3DSTATE_CLIP << 16 | (4 - 2));
-      OUT_BATCH(0);
-      OUT_BATCH(0);
-      OUT_BATCH(0);
-      ADVANCE_BATCH();
-      return;
    }
 
    if (!ctx->Transform.DepthClamp)
@@ -123,10 +86,8 @@ upload_clip_state(struct brw_context *brw)
 const struct brw_tracked_state gen6_clip_state = {
    .dirty = {
       .mesa  = _NEW_TRANSFORM | _NEW_LIGHT,
-      .brw   = (BRW_NEW_CONTEXT |
-                BRW_NEW_FRAGMENT_PROGRAM |
-                BRW_NEW_HIZ),
-      .cache = 0
+      .brw   = (BRW_NEW_CONTEXT),
+      .cache = CACHE_NEW_WM_PROG
    },
    .emit = upload_clip_state,
 };

@@ -35,6 +35,7 @@
 #include "main/macros.h"
 #include "main/mtypes.h"
 #include "main/samplerobj.h"
+#include "main/texobj.h"
 #include "program/prog_instruction.h"
 
 #include "st_context.h"
@@ -137,7 +138,7 @@ check_sampler_swizzle(struct pipe_sampler_view *sv,
 }
 
 
-static INLINE struct pipe_sampler_view *
+static struct pipe_sampler_view *
 st_create_texture_sampler_view_from_stobj(struct pipe_context *pipe,
 					  struct st_texture_object *stObj,
                                           const struct gl_sampler_object *samp,
@@ -164,7 +165,7 @@ st_create_texture_sampler_view_from_stobj(struct pipe_context *pipe,
 }
 
 
-static INLINE struct pipe_sampler_view *
+static struct pipe_sampler_view *
 st_get_texture_sampler_view_from_stobj(struct st_texture_object *stObj,
 				       struct pipe_context *pipe,
                                        const struct gl_sampler_object *samp,
@@ -201,7 +202,7 @@ update_single_texture(struct st_context *st,
    texObj = ctx->Texture.Unit[texUnit]._Current;
 
    if (!texObj) {
-      texObj = st_get_default_texture(st);
+      texObj = _mesa_get_fallback_texture(ctx, TEXTURE_2D_INDEX);
       samp = &texObj->Sampler;
    }
    stObj = st_texture_object(texObj);
@@ -260,6 +261,9 @@ update_vertex_textures(struct st_context *st)
    struct gl_vertex_program *vprog = ctx->VertexProgram._Current;
    GLuint su;
 
+   if (!vprog->Base.SamplersUsed && st->state.num_vertex_textures == 0)
+      return;
+
    st->state.num_vertex_textures = 0;
 
    /* loop over sampler units (aka tex image units) */
@@ -297,24 +301,31 @@ update_fragment_textures(struct st_context *st)
    const struct gl_context *ctx = st->ctx;
    struct gl_fragment_program *fprog = ctx->FragmentProgram._Current;
    GLuint su;
+   int old_max = st->state.num_textures;
+   GLbitfield samplers_used = fprog->Base.SamplersUsed;
 
    st->state.num_textures = 0;
 
    /* loop over sampler units (aka tex image units) */
-   for (su = 0; su < ctx->Const.MaxTextureImageUnits; su++) {
+   for (su = 0; su < ctx->Const.MaxTextureImageUnits; su++, samplers_used >>= 1) {
       struct pipe_sampler_view *sampler_view = NULL;
-      if (fprog->Base.SamplersUsed & (1 << su)) {
+
+      if (samplers_used & 1) {
          GLboolean retval;
          GLuint texUnit;
 
-	 texUnit = fprog->Base.SamplerUnits[su];
+         texUnit = fprog->Base.SamplerUnits[su];
 
-	 retval = update_single_texture(st, &sampler_view, texUnit);
-	 if (retval == GL_FALSE)
-	    continue;
+         retval = update_single_texture(st, &sampler_view, texUnit);
+         if (retval == GL_FALSE)
+            continue;
 
          st->state.num_textures = su + 1;
+      } else if (samplers_used == 0 && su >= old_max) {
+         /* if we've reset all the old views and we have no more new ones */
+         break;
       }
+
       pipe_sampler_view_reference(&st->state.sampler_views[su], sampler_view);
    }
 

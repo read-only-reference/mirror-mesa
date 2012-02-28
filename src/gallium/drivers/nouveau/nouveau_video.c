@@ -685,7 +685,7 @@ nouveau_video_buffer_sampler_view_components(struct pipe_video_buffer *buffer)
       unsigned nr_components = util_format_get_nr_components(buf->resources[i]->format);
 
       for (j = 0; j < nr_components; ++j, ++component) {
-         assert(component < VL_MAX_PLANES);
+         assert(component < VL_NUM_COMPONENTS);
 
          if (!buf->sampler_view_components[component]) {
             memset(&sv_templ, 0, sizeof(sv_templ));
@@ -837,6 +837,12 @@ nouveau_screen_get_video_param(struct pipe_screen *pscreen,
       return vl_video_buffer_max_size(pscreen);
    case PIPE_VIDEO_CAP_PREFERED_FORMAT:
       return PIPE_FORMAT_NV12;
+   case PIPE_VIDEO_CAP_PREFERS_INTERLACED:
+      return false;
+   case PIPE_VIDEO_CAP_SUPPORTS_INTERLACED:
+      return false;
+   case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+      return true;
    default:
       debug_printf("unknown video param: %d\n", param);
       return 0;

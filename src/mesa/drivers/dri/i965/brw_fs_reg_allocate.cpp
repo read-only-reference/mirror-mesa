@@ -61,6 +61,7 @@ fs_visitor::assign_regs_trivial()
       assign_reg(hw_reg_mapping, &inst->dst, reg_width);
       assign_reg(hw_reg_mapping, &inst->src[0], reg_width);
       assign_reg(hw_reg_mapping, &inst->src[1], reg_width);
+      assign_reg(hw_reg_mapping, &inst->src[2], reg_width);
    }
 
    if (this->grf_used >= max_grf) {
@@ -236,8 +237,6 @@ fs_visitor::assign_regs()
 
       if (reg == -1) {
 	 fail("no register to spill\n");
-      } else if (intel->gen >= 7) {
-	 fail("no spilling support on gen7 yet\n");
       } else if (c->dispatch_width == 16) {
 	 fail("no spilling support on 16-wide yet\n");
       } else {
@@ -271,6 +270,7 @@ fs_visitor::assign_regs()
       assign_reg(hw_reg_mapping, &inst->dst, reg_width);
       assign_reg(hw_reg_mapping, &inst->src[0], reg_width);
       assign_reg(hw_reg_mapping, &inst->src[1], reg_width);
+      assign_reg(hw_reg_mapping, &inst->src[2], reg_width);
    }
 
    ralloc_free(g);

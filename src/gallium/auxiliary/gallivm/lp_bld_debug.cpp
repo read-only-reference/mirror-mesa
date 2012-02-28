@@ -146,12 +146,20 @@ public:
       return 0;
    }
 
+#if HAVE_LLVM >= 0x0301
+   uint64_t getExtent()
+#else
    uint64_t getExtent() const
+#endif
    {
       return Length;
    }
 
+#if HAVE_LLVM >= 0x0301
+   int readByte(uint64_t addr, uint8_t *byte)
+#else
    int readByte(uint64_t addr, uint8_t *byte) const
+#endif
    {
       if (addr > getExtent())
          return -1;
@@ -199,13 +207,17 @@ lp_disassemble(const void* func)
 
 #if HAVE_LLVM >= 0x0208
    InitializeNativeTargetAsmPrinter();
-#else
-   InitializeAllAsmPrinters();
+#elif defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+   LLVMInitializeX86AsmPrinter();
+#elif defined(PIPE_ARCH_ARM)
+   LLVMInitializeARMAsmPrinter();
+#elif defined(PIPE_ARCH_PPC)
+   LLVMInitializePowerPCAsmPrinter();
 #endif
 
-#if LLVM_NATIVE_ARCH == X86
+#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
    LLVMInitializeX86Disassembler();
-#elif LLVM_NATIVE_ARCH == ARM
+#elif defined(PIPE_ARCH_ARM)
    LLVMInitializeARMDisassembler();
 #endif
 

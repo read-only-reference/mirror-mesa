@@ -651,7 +651,7 @@ brw_update_texture_surface( struct gl_context *ctx, GLuint unit )
    intel_miptree_get_dimensions_for_image(firstImage, &width, &height, &depth);
 
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-			  6 * 4, 32, &brw->bind.surf_offset[surf_index]);
+			  6 * 4, 32, &brw->wm.surf_offset[surf_index]);
 
    surf[0] = (translate_tex_target(tObj->Target) << BRW_SURFACE_TYPE_SHIFT |
 	      BRW_SURFACE_MIPMAPLAYOUT_BELOW << BRW_SURFACE_MIPLAYOUT_SHIFT |
@@ -679,7 +679,7 @@ brw_update_texture_surface( struct gl_context *ctx, GLuint unit )
 
    /* Emit relocation to surface contents */
    drm_intel_bo_emit_reloc(brw->intel.batch.bo,
-			   brw->bind.surf_offset[surf_index] + 4,
+			   brw->wm.surf_offset[surf_index] + 4,
 			   intelObj->mt->region->bo, 0,
 			   I915_GEM_DOMAIN_SAMPLER, 0);
 }
@@ -843,7 +843,7 @@ brw_upload_wm_pull_constants(struct brw_context *brw)
       if (brw->wm.const_bo) {
 	 drm_intel_bo_unreference(brw->wm.const_bo);
 	 brw->wm.const_bo = NULL;
-	 brw->bind.surf_offset[surf_index] = 0;
+	 brw->wm.surf_offset[surf_index] = 0;
 	 brw->state.dirty.brw |= BRW_NEW_SURFACES;
       }
       return;
@@ -864,7 +864,7 @@ brw_upload_wm_pull_constants(struct brw_context *brw)
 
    intel->vtbl.create_constant_surface(brw, brw->wm.const_bo,
 				       params->NumParameters,
-				       &brw->bind.surf_offset[surf_index]);
+				       &brw->wm.surf_offset[surf_index]);
 
    brw->state.dirty.brw |= BRW_NEW_SURFACES;
 }
@@ -885,7 +885,7 @@ brw_update_null_renderbuffer_surface(struct brw_context *brw, unsigned int unit)
    uint32_t *surf;
 
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-			  6 * 4, 32, &brw->bind.surf_offset[unit]);
+			  6 * 4, 32, &brw->wm.surf_offset[unit]);
 
    surf[0] = (BRW_SURFACE_NULL << BRW_SURFACE_TYPE_SHIFT |
 	      BRW_SURFACEFORMAT_B8G8R8A8_UNORM << BRW_SURFACE_FORMAT_SHIFT);
@@ -916,14 +916,50 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
    struct gl_context *ctx = &intel->ctx;
    struct intel_renderbuffer *irb = intel_renderbuffer(rb);
    struct intel_mipmap_tree *mt = irb->mt;
-   struct intel_region *region = irb->mt->region;
+   struct intel_region *region;
    uint32_t *surf;
    uint32_t tile_x, tile_y;
    uint32_t format = 0;
    gl_format rb_format = intel_rb_format(irb);
 
+   if (irb->tex_image && !brw->has_surface_tile_offset) {
+      intel_renderbuffer_tile_offsets(irb, &tile_x, &tile_y);
+
+      if (tile_x != 0 || tile_y != 0) {
+	 /* Original gen4 hardware couldn't draw to a non-tile-aligned
+	  * destination in a miptree unless you actually setup your renderbuffer
+	  * as a miptree and used the fragile lod/array_index/etc. controls to
+	  * select the image.  So, instead, we just make a new single-level
+	  * miptree and render into that.
+	  */
+	 struct intel_context *intel = intel_context(ctx);
+	 struct intel_texture_image *intel_image =
+	    intel_texture_image(irb->tex_image);
+	 struct intel_mipmap_tree *new_mt;
+	 int width, height, depth;
+
+	 intel_miptree_get_dimensions_for_image(irb->tex_image, &width, &height, &depth);
+
+	 new_mt = intel_miptree_create(intel, irb->tex_image->TexObject->Target,
+				       intel_image->base.Base.TexFormat,
+				       intel_image->base.Base.Level,
+				       intel_image->base.Base.Level,
+				       width, height, depth,
+				       true);
+
+	 intel_miptree_copy_teximage(intel, intel_image, new_mt);
+	 intel_miptree_reference(&irb->mt, intel_image->mt);
+	 intel_renderbuffer_set_draw_offset(irb);
+	 intel_miptree_release(&new_mt);
+
+	 mt = irb->mt;
+      }
+   }
+
+   region = irb->mt->region;
+
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-			  6 * 4, 32, &brw->bind.surf_offset[unit]);
+			  6 * 4, 32, &brw->wm.surf_offset[unit]);
 
    switch (rb_format) {
    case MESA_FORMAT_SARGB8:
@@ -991,7 +1027,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
    }
 
    drm_intel_bo_emit_reloc(brw->intel.batch.bo,
-			   brw->bind.surf_offset[unit] + 4,
+			   brw->wm.surf_offset[unit] + 4,
 			   region->bo,
 			   surf[1] - region->bo->offset,
 			   I915_GEM_DOMAIN_RENDER,
@@ -1059,8 +1095,12 @@ brw_update_texture_surfaces(struct brw_context *brw)
       if (texUnit->_ReallyEnabled) {
 	 brw->intel.vtbl.update_texture_surface(ctx, i);
       } else {
-         brw->bind.surf_offset[surf] = 0;
+         brw->wm.surf_offset[surf] = 0;
       }
+
+      /* For now, just mirror the texture setup to the VS slots. */
+      brw->vs.surf_offset[SURF_INDEX_VS_TEXTURE(i)] =
+	 brw->wm.surf_offset[surf];
    }
 
    brw->state.dirty.brw |= BRW_NEW_SURFACES;
@@ -1080,7 +1120,7 @@ const struct brw_tracked_state brw_texture_surfaces = {
  * numbers to surface state objects.
  */
 static void
-brw_upload_binding_table(struct brw_context *brw)
+brw_upload_wm_binding_table(struct brw_context *brw)
 {
    uint32_t *bind;
    int i;
@@ -1090,26 +1130,24 @@ brw_upload_binding_table(struct brw_context *brw)
     */
    bind = brw_state_batch(brw, AUB_TRACE_BINDING_TABLE,
 			  sizeof(uint32_t) * BRW_MAX_SURFACES,
-			  32, &brw->bind.bo_offset);
+			  32, &brw->wm.bind_bo_offset);
 
-   /* BRW_NEW_SURFACES and BRW_NEW_VS_CONSTBUF */
+   /* BRW_NEW_SURFACES */
    for (i = 0; i < BRW_MAX_SURFACES; i++) {
-      bind[i] = brw->bind.surf_offset[i];
+      bind[i] = brw->wm.surf_offset[i];
    }
 
-   brw->state.dirty.brw |= BRW_NEW_VS_BINDING_TABLE;
    brw->state.dirty.brw |= BRW_NEW_PS_BINDING_TABLE;
 }
 
-const struct brw_tracked_state brw_binding_table = {
+const struct brw_tracked_state brw_wm_binding_table = {
    .dirty = {
       .mesa = 0,
       .brw = (BRW_NEW_BATCH |
-	      BRW_NEW_VS_CONSTBUF |
 	      BRW_NEW_SURFACES),
       .cache = 0
    },
-   .emit = brw_upload_binding_table,
+   .emit = brw_upload_wm_binding_table,
 };
 
 void

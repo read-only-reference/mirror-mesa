@@ -182,6 +182,43 @@ fs_visitor::try_emit_saturate(ir_expression *ir)
    return true;
 }
 
+bool
+fs_visitor::try_emit_mad(ir_expression *ir, int mul_arg)
+{
+   /* 3-src instructions were introduced in gen6. */
+   if (intel->gen < 6)
+      return false;
+
+   /* MAD can only handle floating-point data. */
+   if (ir->type != glsl_type::float_type)
+      return false;
+
+   ir_rvalue *nonmul = ir->operands[1 - mul_arg];
+   ir_expression *mul = ir->operands[mul_arg]->as_expression();
+
+   if (!mul || mul->operation != ir_binop_mul)
+      return false;
+
+   if (nonmul->as_constant() ||
+       mul->operands[0]->as_constant() ||
+       mul->operands[1]->as_constant())
+      return false;
+
+   nonmul->accept(this);
+   fs_reg src0 = this->result;
+
+   mul->operands[0]->accept(this);
+   fs_reg src1 = this->result;
+
+   mul->operands[1]->accept(this);
+   fs_reg src2 = this->result;
+
+   this->result = fs_reg(this, ir->type);
+   emit(BRW_OPCODE_MAD, this->result, src0, src1, src2);
+
+   return true;
+}
+
 void
 fs_visitor::visit(ir_expression *ir)
 {
@@ -193,6 +230,10 @@ fs_visitor::visit(ir_expression *ir)
 
    if (try_emit_saturate(ir))
       return;
+   if (ir->operation == ir_binop_add) {
+      if (try_emit_mad(ir, 0) || try_emit_mad(ir, 1))
+	 return;
+   }
 
    for (operand = 0; operand < ir->get_num_operands(); operand++) {
       ir->operands[operand]->accept(this);
@@ -564,6 +605,12 @@ fs_visitor::try_rewrite_rhs_to_dst(ir_assignment *ir,
        !src.equals(&last_rhs_inst->dst))
       return false;
 
+   /* If last_rhs_inst wrote a different number of components than our LHS,
+    * we can't safely rewrite it.
+    */
+   if (ir->lhs->type->vector_elements != last_rhs_inst->regs_written())
+      return false;
+
    /* Success!  Rewrite the instruction. */
    last_rhs_inst->dst = dst;
 
@@ -627,11 +674,7 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
 
    if (ir->shadow_comparitor && ir->op != ir_txd) {
       for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
-	 fs_inst *inst = emit(BRW_OPCODE_MOV,
-			      fs_reg(MRF, base_mrf + mlen + i), coordinate);
-	 if (i < 3 && c->key.tex.gl_clamp_mask[i] & (1 << sampler))
-	    inst->saturate = true;
-
+	 emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen + i), coordinate);
 	 coordinate.reg_offset++;
       }
       /* gen4's SIMD8 sampler always has the slots for u,v,r present. */
@@ -659,10 +702,7 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       mlen++;
    } else if (ir->op == ir_tex) {
       for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
-	 fs_inst *inst = emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen + i),
-			      coordinate);
-	 if (i < 3 && c->key.tex.gl_clamp_mask[i] & (1 << sampler))
-	    inst->saturate = true;
+	 emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen + i), coordinate);
 	 coordinate.reg_offset++;
       }
       /* gen4's SIMD8 sampler always has the slots for u,v,r present. */
@@ -720,12 +760,8 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       assert(ir->op == ir_txb || ir->op == ir_txl || ir->op == ir_txf);
 
       for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
-	 fs_inst *inst = emit(BRW_OPCODE_MOV, fs_reg(MRF,
-						     base_mrf + mlen + i * 2,
-						     coordinate.type),
-			      coordinate);
-	 if (i < 3 && c->key.tex.gl_clamp_mask[i] & (1 << sampler))
-	    inst->saturate = true;
+	 emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen + i * 2, coordinate.type),
+	      coordinate);
 	 coordinate.reg_offset++;
       }
 
@@ -832,12 +868,9 @@ fs_visitor::emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    }
 
    for (int i = 0; i < vector_elements; i++) {
-      fs_inst *inst = emit(BRW_OPCODE_MOV,
-			   fs_reg(MRF, base_mrf + mlen + i * reg_width,
-				  coordinate.type),
-			   coordinate);
-      if (i < 3 && c->key.tex.gl_clamp_mask[i] & (1 << sampler))
-	 inst->saturate = true;
+      emit(BRW_OPCODE_MOV,
+	   fs_reg(MRF, base_mrf + mlen + i * reg_width, coordinate.type),
+	   coordinate);
       coordinate.reg_offset++;
    }
    mlen += vector_elements * reg_width;
@@ -982,10 +1015,7 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
        * [hdr], [ref], x, dPdx.x, dPdy.x, y, dPdx.y, dPdy.y, z, dPdx.z, dPdy.z
        */
       for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
-	 fs_inst *inst = emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen),
-			      coordinate);
-	 if (i < 3 && c->key.tex.gl_clamp_mask[i] & (1 << sampler))
-	    inst->saturate = true;
+	 emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen), coordinate);
 	 coordinate.reg_offset++;
 	 mlen += reg_width;
 
@@ -1027,10 +1057,7 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    /* Set up the coordinate (except for cases where it was done above) */
    if (ir->op != ir_txd && ir->op != ir_txs && ir->op != ir_txf) {
       for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
-	 fs_inst *inst = emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen),
-			      coordinate);
-	 if (i < 3 && c->key.tex.gl_clamp_mask[i] & (1 << sampler))
-	    inst->saturate = true;
+	 emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen), coordinate);
 	 coordinate.reg_offset++;
 	 mlen += reg_width;
       }
@@ -1099,12 +1126,18 @@ fs_visitor::visit(ir_texture *ir)
    /* Should be lowered by do_lower_texture_projection */
    assert(!ir->projector);
 
+   bool needs_gl_clamp = true;
+
+   fs_reg scale_x, scale_y;
+
    /* The 965 requires the EU to do the normalization of GL rectangle
     * texture coordinates.  We use the program parameter state
     * tracking to get the scaling factor.
     */
-   if (intel->gen < 6 &&
-       ir->sampler->type->sampler_dimensionality == GLSL_SAMPLER_DIM_RECT) {
+   if (ir->sampler->type->sampler_dimensionality == GLSL_SAMPLER_DIM_RECT &&
+       (intel->gen < 6 ||
+	(intel->gen >= 6 && (c->key.tex.gl_clamp_mask[0] & (1 << sampler) ||
+			     c->key.tex.gl_clamp_mask[1] & (1 << sampler))))) {
       struct gl_program_parameter_list *params = c->fp->program.Base.Parameters;
       int tokens[STATE_LENGTH] = {
 	 STATE_INTERNAL,
@@ -1125,8 +1158,9 @@ fs_visitor::visit(ir_texture *ir)
       c->prog_data.param_convert[c->prog_data.nr_params + 1] =
 	 PARAM_NO_CONVERT;
 
-      fs_reg scale_x = fs_reg(UNIFORM, c->prog_data.nr_params);
-      fs_reg scale_y = fs_reg(UNIFORM, c->prog_data.nr_params + 1);
+      scale_x = fs_reg(UNIFORM, c->prog_data.nr_params);
+      scale_y = fs_reg(UNIFORM, c->prog_data.nr_params + 1);
+
       GLuint index = _mesa_add_state_reference(params,
 					       (gl_state_index *)tokens);
 
@@ -1136,7 +1170,14 @@ fs_visitor::visit(ir_texture *ir)
       this->param_index[c->prog_data.nr_params] = index;
       this->param_offset[c->prog_data.nr_params] = 1;
       c->prog_data.nr_params++;
+   }
 
+   /* The 965 requires the EU to do the normalization of GL rectangle
+    * texture coordinates.  We use the program parameter state
+    * tracking to get the scaling factor.
+    */
+   if (intel->gen < 6 &&
+       ir->sampler->type->sampler_dimensionality == GLSL_SAMPLER_DIM_RECT) {
       fs_reg dst = fs_reg(this, ir->coordinate->type);
       fs_reg src = coordinate;
       coordinate = dst;
@@ -1145,6 +1186,48 @@ fs_visitor::visit(ir_texture *ir)
       dst.reg_offset++;
       src.reg_offset++;
       emit(BRW_OPCODE_MUL, dst, src, scale_y);
+   } else if (ir->sampler->type->sampler_dimensionality == GLSL_SAMPLER_DIM_RECT) {
+      /* On gen6+, the sampler handles the rectangle coordinates
+       * natively, without needing rescaling.  But that means we have
+       * to do GL_CLAMP clamping at the [0, width], [0, height] scale,
+       * not [0, 1] like the default case below.
+       */
+      needs_gl_clamp = false;
+
+      for (int i = 0; i < 2; i++) {
+	 if (c->key.tex.gl_clamp_mask[i] & (1 << sampler)) {
+	    fs_reg chan = coordinate;
+	    chan.reg_offset += i;
+
+	    inst = emit(BRW_OPCODE_SEL, chan, chan, brw_imm_f(0.0));
+	    inst->conditional_mod = BRW_CONDITIONAL_G;
+
+	    /* Our parameter comes in as 1.0/width or 1.0/height,
+	     * because that's what people normally want for doing
+	     * texture rectangle handling.  We need width or height
+	     * for clamping, but we don't care enough to make a new
+	     * parameter type, so just invert back.
+	     */
+	    fs_reg limit = fs_reg(this, glsl_type::float_type);
+	    emit(BRW_OPCODE_MOV, limit, i == 0 ? scale_x : scale_y);
+	    emit(SHADER_OPCODE_RCP, limit, limit);
+
+	    inst = emit(BRW_OPCODE_SEL, chan, chan, limit);
+	    inst->conditional_mod = BRW_CONDITIONAL_L;
+	 }
+      }
+   }
+
+   if (ir->coordinate && needs_gl_clamp) {
+      for (int i = 0; i < MIN2(ir->coordinate->type->vector_elements, 3); i++) {
+	 if (c->key.tex.gl_clamp_mask[i] & (1 << sampler)) {
+	    fs_reg chan = coordinate;
+	    chan.reg_offset += i;
+
+	    fs_inst *inst = emit(BRW_OPCODE_MOV, chan, chan);
+	    inst->saturate = true;
+	 }
+      }
    }
 
    /* Writemasking doesn't eliminate channels on SIMD8 texture
@@ -1717,15 +1800,19 @@ fs_visitor::emit(fs_inst inst)
 void
 fs_visitor::emit_dummy_fs()
 {
+   int reg_width = c->dispatch_width / 8;
+
    /* Everyone's favorite color. */
-   emit(BRW_OPCODE_MOV, fs_reg(MRF, 2), fs_reg(1.0f));
-   emit(BRW_OPCODE_MOV, fs_reg(MRF, 3), fs_reg(0.0f));
-   emit(BRW_OPCODE_MOV, fs_reg(MRF, 4), fs_reg(1.0f));
-   emit(BRW_OPCODE_MOV, fs_reg(MRF, 5), fs_reg(0.0f));
+   emit(BRW_OPCODE_MOV, fs_reg(MRF, 2 + 0 * reg_width), fs_reg(1.0f));
+   emit(BRW_OPCODE_MOV, fs_reg(MRF, 2 + 1 * reg_width), fs_reg(0.0f));
+   emit(BRW_OPCODE_MOV, fs_reg(MRF, 2 + 2 * reg_width), fs_reg(1.0f));
+   emit(BRW_OPCODE_MOV, fs_reg(MRF, 2 + 3 * reg_width), fs_reg(0.0f));
 
    fs_inst *write;
    write = emit(FS_OPCODE_FB_WRITE, fs_reg(0), fs_reg(0));
    write->base_mrf = 2;
+   write->mlen = 4 * reg_width;
+   write->eot = true;
 }
 
 /* The register location here is relative to the start of the URB

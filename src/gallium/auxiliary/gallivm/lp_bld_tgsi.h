@@ -45,7 +45,7 @@
 #include "pipe/p_state.h"
 #include "tgsi/tgsi_exec.h"
 #include "tgsi/tgsi_scan.h"
-
+#include "tgsi/tgsi_info.h"
 
 #define LP_CHAN_ALL ~0
 
@@ -273,11 +273,15 @@ struct lp_build_tgsi_context;
 
 typedef LLVMValueRef (*lp_build_emit_fetch_fn)(struct lp_build_tgsi_context *,
                                         const struct tgsi_full_src_register *,
+                                        enum tgsi_opcode_type,
                                         unsigned);
 
 struct lp_build_tgsi_context
 {
    struct lp_build_context base;
+
+   struct lp_build_context uint_bld;
+   struct lp_build_context int_bld;
 
    /** This array stores functions that are used to transform TGSI opcodes to
      * LLVM instructions.
@@ -337,9 +341,6 @@ struct lp_build_tgsi_context
 struct lp_build_tgsi_soa_context
 {
    struct lp_build_tgsi_context bld_base;
-
-   /* Builder for vector integer masks and indices */
-   struct lp_build_context uint_bld;
 
    /* Builder for scalar elements of shader's data type (float) */
    struct lp_build_context elem_bld;

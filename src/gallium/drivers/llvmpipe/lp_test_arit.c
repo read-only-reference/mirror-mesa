@@ -35,6 +35,7 @@
 #include "util/u_math.h"
 
 #include "gallivm/lp_bld.h"
+#include "gallivm/lp_bld_debug.h"
 #include "gallivm/lp_bld_init.h"
 #include "gallivm/lp_bld_arit.h"
 
@@ -80,7 +81,18 @@ struct unary_test_t
     */
    const float *values;
    unsigned num_values;
+
+   /*
+    * Required precision in bits.
+    */
+   double precision;
 };
+
+
+static float negf(float x)
+{
+   return -x;
+}
 
 
 const float exp2_values[] = {
@@ -161,14 +173,16 @@ const float sincos_values[] = {
  * Unary test cases.
  */
 
-static const struct unary_test_t unary_tests[] = {
-   {"exp2", &lp_build_exp2, &exp2f, exp2_values, Elements(exp2_values)},
-   {"log2", &lp_build_log2, &log2f, log2_values, Elements(log2_values)},
-   {"exp", &lp_build_exp, &expf, exp2_values, Elements(exp2_values)},
-   {"log", &lp_build_log, &logf, log2_values, Elements(log2_values)},
-   {"rsqrt", &lp_build_rsqrt, &rsqrtf, rsqrt_values, Elements(rsqrt_values)},
-   {"sin", &lp_build_sin, &sinf, sincos_values, Elements(sincos_values)},
-   {"cos", &lp_build_cos, &cosf, sincos_values, Elements(sincos_values)},
+static const struct unary_test_t
+unary_tests[] = {
+   {"neg", &lp_build_negate, &negf, exp2_values, Elements(exp2_values), 20.0 },
+   {"exp2", &lp_build_exp2, &exp2f, exp2_values, Elements(exp2_values), 20.0 },
+   {"log2", &lp_build_log2, &log2f, log2_values, Elements(log2_values), 10.0 }, // FIXME
+   {"exp", &lp_build_exp, &expf, exp2_values, Elements(exp2_values), 18.0 },
+   {"log", &lp_build_log, &logf, log2_values, Elements(log2_values), 10.0 }, // FIXME
+   {"rsqrt", &lp_build_rsqrt, &rsqrtf, rsqrt_values, Elements(rsqrt_values), 20.0 },
+   {"sin", &lp_build_sin, &sinf, sincos_values, Elements(sincos_values), 20.0 },
+   {"cos", &lp_build_cos, &cosf, sincos_values, Elements(sincos_values), 20.0 },
 };
 
 
@@ -181,9 +195,10 @@ build_unary_test_func(struct gallivm_state *gallivm,
                       LLVMContextRef context,
                       const struct unary_test_t *test)
 {
+   struct lp_type type = lp_type_float_vec(32);
    LLVMTypeRef i32t = LLVMInt32TypeInContext(context);
    LLVMTypeRef f32t = LLVMFloatTypeInContext(context);
-   LLVMTypeRef v4f32t = LLVMVectorType(f32t, 4);
+   LLVMTypeRef vf32t = lp_build_vec_type(gallivm, type);
    LLVMTypeRef args[1] = { f32t };
    LLVMValueRef func = LLVMAddFunction(module, test->name, LLVMFunctionType(f32t, args, Elements(args), 0));
    LLVMValueRef arg1 = LLVMGetParam(func, 0);
@@ -194,14 +209,14 @@ build_unary_test_func(struct gallivm_state *gallivm,
 
    struct lp_build_context bld;
 
-   lp_build_context_init(&bld, gallivm, lp_float32_vec4_type());
+   lp_build_context_init(&bld, gallivm, lp_type_float_vec(32));
 
    LLVMSetFunctionCallConv(func, LLVMCCallConv);
 
    LLVMPositionBuilderAtEnd(builder, block);
    
    /* scalar to vector */
-   arg1 = LLVMBuildInsertElement(builder, LLVMGetUndef(v4f32t), arg1, index0, "");
+   arg1 = LLVMBuildInsertElement(builder, LLVMGetUndef(vf32t), arg1, index0, "");
 
    ret = test->builder(&bld, arg1);
    
@@ -247,7 +262,7 @@ test_unary(struct gallivm_state *gallivm, unsigned verbose, FILE *fp, const stru
       double error = fabs(src - ref);
       double precision = error ? -log2(error/fabs(ref)) : FLT_MANT_DIG;
 
-      bool pass = precision >= 20.0;
+      bool pass = precision >= test->precision;
 
       if (isnan(ref)) {
          continue;

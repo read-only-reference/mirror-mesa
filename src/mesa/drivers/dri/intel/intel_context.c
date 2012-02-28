@@ -628,6 +628,7 @@ intelInitContext(struct intel_context *intel,
    intel->has_separate_stencil = intel->intelScreen->hw_has_separate_stencil;
    intel->must_use_separate_stencil = intel->intelScreen->hw_must_use_separate_stencil;
    intel->has_hiz = intel->intelScreen->hw_has_hiz;
+   intel->has_llc = intel->intelScreen->hw_has_llc;
 
    memset(&ctx->TextureFormatSupported,
 	  0, sizeof(ctx->TextureFormatSupported));
@@ -697,11 +698,9 @@ intelInitContext(struct intel_context *intel,
    _mesa_init_point(ctx);
 
    if (intel->gen >= 4) {
-      if (MAX_WIDTH > 8192)
-	 ctx->Const.MaxRenderbufferSize = 8192;
+      ctx->Const.MaxRenderbufferSize = 8192;
    } else {
-      if (MAX_WIDTH > 2048)
-	 ctx->Const.MaxRenderbufferSize = 2048;
+      ctx->Const.MaxRenderbufferSize = 2048;
    }
 
    /* Initialize the software rasterizer and helper modules. */

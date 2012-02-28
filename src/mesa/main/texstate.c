@@ -586,9 +586,15 @@ update_texture_state( struct gl_context *ctx )
              * object, but there isn't one (or it's incomplete).  Use the
              * fallback texture.
              */
-            struct gl_texture_object *texObj = _mesa_get_fallback_texture(ctx);
-            texUnit->_ReallyEnabled = 1 << TEXTURE_2D_INDEX;
+            struct gl_texture_object *texObj;
+            gl_texture_index texTarget;
+
+            assert(_mesa_bitcount(enabledTargets) == 1);
+
+            texTarget = (gl_texture_index) (ffs(enabledTargets) - 1);
+            texObj = _mesa_get_fallback_texture(ctx, texTarget);
             _mesa_reference_texobj(&texUnit->_Current, texObj);
+            texUnit->_ReallyEnabled = 1 << texTarget;
          }
          else {
             /* fixed-function: texture unit is really disabled */
@@ -682,20 +688,25 @@ _mesa_update_texture( struct gl_context *ctx, GLuint new_state )
 static GLboolean
 alloc_proxy_textures( struct gl_context *ctx )
 {
+   /* NOTE: these values must be in the same order as the TEXTURE_x_INDEX
+    * values!
+    */
    static const GLenum targets[] = {
-      GL_TEXTURE_1D,
-      GL_TEXTURE_2D,
-      GL_TEXTURE_3D,
-      GL_TEXTURE_CUBE_MAP_ARB,
-      GL_TEXTURE_RECTANGLE_NV,
-      GL_TEXTURE_1D_ARRAY_EXT,
-      GL_TEXTURE_2D_ARRAY_EXT,
       GL_TEXTURE_BUFFER,
-      GL_TEXTURE_EXTERNAL_OES
+      GL_TEXTURE_2D_ARRAY_EXT,
+      GL_TEXTURE_1D_ARRAY_EXT,
+      GL_TEXTURE_EXTERNAL_OES,
+      GL_TEXTURE_CUBE_MAP_ARB,
+      GL_TEXTURE_3D,
+      GL_TEXTURE_RECTANGLE_NV,
+      GL_TEXTURE_2D,
+      GL_TEXTURE_1D,
    };
    GLint tgt;
 
    STATIC_ASSERT(Elements(targets) == NUM_TEXTURE_TARGETS);
+   assert(targets[TEXTURE_2D_INDEX] == GL_TEXTURE_2D);
+   assert(targets[TEXTURE_CUBE_INDEX] == GL_TEXTURE_CUBE_MAP);
 
    for (tgt = 0; tgt < NUM_TEXTURE_TARGETS; tgt++) {
       if (!(ctx->Texture.ProxyTex[tgt]

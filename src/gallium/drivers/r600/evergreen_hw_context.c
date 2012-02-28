@@ -30,57 +30,28 @@
 #include "util/u_memory.h"
 #include <errno.h>
 
-#define GROUP_FORCE_NEW_BLOCK	0
-
 static const struct r600_reg evergreen_config_reg_list[] = {
 	{R_008958_VGT_PRIMITIVE_TYPE, 0},
-	{R_008A14_PA_CL_ENHANCE, REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C00_SQ_CONFIG, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C04_SQ_GPR_RESOURCE_MGMT_1, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C08_SQ_GPR_RESOURCE_MGMT_2, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C0C_SQ_GPR_RESOURCE_MGMT_3, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C10_SQ_GLOBAL_GPR_RESOURCE_MGMT_1, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C14_SQ_GLOBAL_GPR_RESOURCE_MGMT_2, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C18_SQ_THREAD_RESOURCE_MGMT_1, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C1C_SQ_THREAD_RESOURCE_MGMT_2, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C20_SQ_STACK_RESOURCE_MGMT_1, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C24_SQ_STACK_RESOURCE_MGMT_2, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C28_SQ_STACK_RESOURCE_MGMT_3, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008D8C_SQ_DYN_GPR_CNTL_PS_FLUSH_REQ, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008E2C_SQ_LDS_RESOURCE_MGMT, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_009100_SPI_CONFIG_CNTL, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_00913C_SPI_CONFIG_CNTL_1, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
 };
 
 
 static const struct r600_reg cayman_config_reg_list[] = {
 	{R_008958_VGT_PRIMITIVE_TYPE, 0, 0},
-	{R_008A14_PA_CL_ENHANCE, REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C00_SQ_CONFIG, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C04_SQ_GPR_RESOURCE_MGMT_1, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C10_SQ_GLOBAL_GPR_RESOURCE_MGMT_1, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008C14_SQ_GLOBAL_GPR_RESOURCE_MGMT_2, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_008D8C_SQ_DYN_GPR_CNTL_PS_FLUSH_REQ, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
 	{R_009100_SPI_CONFIG_CNTL, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
 	{R_00913C_SPI_CONFIG_CNTL_1, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
 };
 
 static const struct r600_reg evergreen_ctl_const_list[] = {
-	{R_03CFF0_SQ_VTX_BASE_VTX_LOC, 0, 0},
 	{R_03CFF4_SQ_VTX_START_INST_LOC, 0, 0},
 };
 
 static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028000_DB_RENDER_CONTROL, 0, 0},
-	{R_028004_DB_COUNT_CONTROL, 0, 0},
 	{R_028008_DB_DEPTH_VIEW, 0, 0},
-	{R_02800C_DB_RENDER_OVERRIDE, 0, 0},
 	{R_028010_DB_RENDER_OVERRIDE2, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028014_DB_HTILE_DATA_BASE, REG_FLAG_NEED_BO, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
-	{R_028028_DB_STENCIL_CLEAR, 0, 0},
-	{R_02802C_DB_DEPTH_CLEAR, 0, 0},
 	{R_028030_PA_SC_SCREEN_SCISSOR_TL, 0, 0},
 	{R_028034_PA_SC_SCREEN_SCISSOR_BR, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
@@ -102,7 +73,6 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028144_ALU_CONST_BUFFER_SIZE_PS_1, REG_FLAG_DIRTY_ALWAYS, 0},
 	{R_028180_ALU_CONST_BUFFER_SIZE_VS_0, REG_FLAG_DIRTY_ALWAYS, 0},
 	{R_028184_ALU_CONST_BUFFER_SIZE_VS_1, REG_FLAG_DIRTY_ALWAYS, 0},
-	{R_028200_PA_SC_WINDOW_OFFSET, 0, 0},
 	{R_028204_PA_SC_WINDOW_SCISSOR_TL, 0, 0},
 	{R_028208_PA_SC_WINDOW_SCISSOR_BR, 0, 0},
 	{R_02820C_PA_SC_CLIPRECT_RULE, 0, 0},
@@ -114,7 +84,6 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028224_PA_SC_CLIPRECT_2_BR, 0, 0},
 	{R_028228_PA_SC_CLIPRECT_3_TL, 0, 0},
 	{R_02822C_PA_SC_CLIPRECT_3_BR, 0, 0},
-	{R_028230_PA_SC_EDGERULE, 0, 0},
 	{R_028234_PA_SU_HARDWARE_SCREEN_OFFSET, 0, 0},
 	{R_028238_CB_TARGET_MASK, 0, 0},
 	{R_02823C_CB_SHADER_MASK, 0, 0},
@@ -122,44 +91,8 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028244_PA_SC_GENERIC_SCISSOR_BR, 0, 0},
 	{R_028250_PA_SC_VPORT_SCISSOR_0_TL, 0, 0},
 	{R_028254_PA_SC_VPORT_SCISSOR_0_BR, 0, 0},
-	{R_0282D0_PA_SC_VPORT_ZMIN_0, 0, 0},
-	{R_0282D4_PA_SC_VPORT_ZMAX_0, 0, 0},
 	{R_028350_SX_MISC, 0, 0},
-	{R_028380_SQ_VTX_SEMANTIC_0, 0, 0},
-	{R_028384_SQ_VTX_SEMANTIC_1, 0, 0},
-	{R_028388_SQ_VTX_SEMANTIC_2, 0, 0},
-	{R_02838C_SQ_VTX_SEMANTIC_3, 0, 0},
-	{R_028390_SQ_VTX_SEMANTIC_4, 0, 0},
-	{R_028394_SQ_VTX_SEMANTIC_5, 0, 0},
-	{R_028398_SQ_VTX_SEMANTIC_6, 0, 0},
-	{R_02839C_SQ_VTX_SEMANTIC_7, 0, 0},
-	{R_0283A0_SQ_VTX_SEMANTIC_8, 0, 0},
-	{R_0283A4_SQ_VTX_SEMANTIC_9, 0, 0},
-	{R_0283A8_SQ_VTX_SEMANTIC_10, 0, 0},
-	{R_0283AC_SQ_VTX_SEMANTIC_11, 0, 0},
-	{R_0283B0_SQ_VTX_SEMANTIC_12, 0, 0},
-	{R_0283B4_SQ_VTX_SEMANTIC_13, 0, 0},
-	{R_0283B8_SQ_VTX_SEMANTIC_14, 0, 0},
-	{R_0283BC_SQ_VTX_SEMANTIC_15, 0, 0},
-	{R_0283C0_SQ_VTX_SEMANTIC_16, 0, 0},
-	{R_0283C4_SQ_VTX_SEMANTIC_17, 0, 0},
-	{R_0283C8_SQ_VTX_SEMANTIC_18, 0, 0},
-	{R_0283CC_SQ_VTX_SEMANTIC_19, 0, 0},
-	{R_0283D0_SQ_VTX_SEMANTIC_20, 0, 0},
-	{R_0283D4_SQ_VTX_SEMANTIC_21, 0, 0},
-	{R_0283D8_SQ_VTX_SEMANTIC_22, 0, 0},
-	{R_0283DC_SQ_VTX_SEMANTIC_23, 0, 0},
-	{R_0283E0_SQ_VTX_SEMANTIC_24, 0, 0},
-	{R_0283E4_SQ_VTX_SEMANTIC_25, 0, 0},
-	{R_0283E8_SQ_VTX_SEMANTIC_26, 0, 0},
-	{R_0283EC_SQ_VTX_SEMANTIC_27, 0, 0},
-	{R_0283F0_SQ_VTX_SEMANTIC_28, 0, 0},
-	{R_0283F4_SQ_VTX_SEMANTIC_29, 0, 0},
-	{R_0283F8_SQ_VTX_SEMANTIC_30, 0, 0},
-	{R_0283FC_SQ_VTX_SEMANTIC_31, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
-	{R_028400_VGT_MAX_VTX_INDX, 0, 0},
-	{R_028404_VGT_MIN_VTX_INDX, 0, 0},
 	{R_028408_VGT_INDX_OFFSET, 0, 0},
 	{R_02840C_VGT_MULTI_PRIM_IB_RESET_INDX, 0, 0},
 	{R_028A94_VGT_MULTI_PRIM_IB_RESET_EN, 0, 0},
@@ -253,7 +186,6 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_0286D0_SPI_PS_IN_CONTROL_1, 0, 0},
 	{R_0286D4_SPI_INTERP_CONTROL_0, 0, 0},
 	{R_0286D8_SPI_INPUT_Z, 0, 0},
-	{R_0286DC_SPI_FOG_CNTL, 0, 0},
 	{R_0286E0_SPI_BARYC_CNTL, 0, 0},
 	{R_0286E4_SPI_PS_IN_CONTROL_2, 0, 0},
 	{R_0286E8_SPI_COMPUTE_INPUT_CNTL, 0, 0},
@@ -270,30 +202,14 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028808_CB_COLOR_CONTROL, 0, 0},
 	{R_028810_PA_CL_CLIP_CNTL, 0, 0},
 	{R_028814_PA_SU_SC_MODE_CNTL, 0, 0},
-	{R_028818_PA_CL_VTE_CNTL, 0, 0},
 	{R_02881C_PA_CL_VS_OUT_CNTL, 0, 0},
-	{R_028820_PA_CL_NANINF_CNTL, 0, 0},
-	{R_028838_SQ_DYN_GPR_RESOURCE_LIMIT_1, 0, 0},
 	{R_028840_SQ_PGM_START_PS, REG_FLAG_NEED_BO, 0},
 	{R_028844_SQ_PGM_RESOURCES_PS, 0, 0},
-	{R_028848_SQ_PGM_RESOURCES_2_PS, 0, 0},
 	{R_02884C_SQ_PGM_EXPORTS_PS, 0, 0},
 	{R_02885C_SQ_PGM_START_VS, REG_FLAG_NEED_BO, 0},
 	{R_028860_SQ_PGM_RESOURCES_VS, 0, 0},
-	{R_028864_SQ_PGM_RESOURCES_2_VS, 0, 0},
 	{R_0288A4_SQ_PGM_START_FS, REG_FLAG_NEED_BO, 0},
-	{R_0288A8_SQ_PGM_RESOURCES_FS, 0, 0},
 	{R_0288EC_SQ_LDS_ALLOC_PS, 0, 0},
-	{R_028900_SQ_ESGS_RING_ITEMSIZE, 0, 0},
-	{R_028904_SQ_GSVS_RING_ITEMSIZE, 0, 0},
-	{R_028908_SQ_ESTMP_RING_ITEMSIZE, 0, 0},
-	{R_02890C_SQ_GSTMP_RING_ITEMSIZE, 0, 0},
-	{R_028910_SQ_VSTMP_RING_ITEMSIZE, 0, 0},
-	{R_028914_SQ_PSTMP_RING_ITEMSIZE, 0, 0},
-	{R_02891C_SQ_GS_VERT_ITEMSIZE, 0, 0},
-	{R_028920_SQ_GS_VERT_ITEMSIZE_1, 0, 0},
-	{R_028924_SQ_GS_VERT_ITEMSIZE_2, 0, 0},
-	{R_028928_SQ_GS_VERT_ITEMSIZE_3, 0, 0},
 	{R_028940_ALU_CONST_CACHE_PS_0, REG_FLAG_NEED_BO, 0},
 	{R_028944_ALU_CONST_CACHE_PS_1, REG_FLAG_NEED_BO, 0},
 	{R_028980_ALU_CONST_CACHE_VS_0, REG_FLAG_NEED_BO, 0},
@@ -302,46 +218,16 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028A04_PA_SU_POINT_MINMAX, 0, 0},
 	{R_028A08_PA_SU_LINE_CNTL, 0, 0},
 	{R_028A0C_PA_SC_LINE_STIPPLE, 0, 0},
-	{R_028A10_VGT_OUTPUT_PATH_CNTL, 0, 0},
-	{R_028A14_VGT_HOS_CNTL, 0, 0},
-	{R_028A18_VGT_HOS_MAX_TESS_LEVEL, 0, 0},
-	{R_028A1C_VGT_HOS_MIN_TESS_LEVEL, 0, 0},
-	{R_028A20_VGT_HOS_REUSE_DEPTH, 0, 0},
-	{R_028A24_VGT_GROUP_PRIM_TYPE, 0, 0},
-	{R_028A28_VGT_GROUP_FIRST_DECR, 0, 0},
-	{R_028A2C_VGT_GROUP_DECR, 0, 0},
-	{R_028A30_VGT_GROUP_VECT_0_CNTL, 0, 0},
-	{R_028A34_VGT_GROUP_VECT_1_CNTL, 0, 0},
-	{R_028A38_VGT_GROUP_VECT_0_FMT_CNTL, 0, 0},
-	{R_028A3C_VGT_GROUP_VECT_1_FMT_CNTL, 0, 0},
-	{R_028A40_VGT_GS_MODE, 0, 0},
 	{R_028A48_PA_SC_MODE_CNTL_0, 0, 0},
-	{R_028A4C_PA_SC_MODE_CNTL_1, 0, 0},
-	{R_028AB4_VGT_REUSE_OFF, 0, 0},
-	{R_028AB8_VGT_VTX_CNT_EN, 0, 0},
 	{R_028ABC_DB_HTILE_SURFACE, 0, 0},
-	{R_028AC0_DB_SRESULTS_COMPARE_STATE0, 0, 0},
-	{R_028AC4_DB_SRESULTS_COMPARE_STATE1, 0, 0},
-	{R_028AC8_DB_PRELOAD_CONTROL, 0, 0},
 	{R_028B54_VGT_SHADER_STAGES_EN, 0, 0},
-	{R_028B70_DB_ALPHA_TO_MASK, 0, 0},
 	{R_028B78_PA_SU_POLY_OFFSET_DB_FMT_CNTL, 0, 0},
 	{R_028B7C_PA_SU_POLY_OFFSET_CLAMP, 0, 0},
 	{R_028B80_PA_SU_POLY_OFFSET_FRONT_SCALE, 0, 0},
 	{R_028B84_PA_SU_POLY_OFFSET_FRONT_OFFSET, 0, 0},
 	{R_028B88_PA_SU_POLY_OFFSET_BACK_SCALE, 0, 0},
 	{R_028B8C_PA_SU_POLY_OFFSET_BACK_OFFSET, 0, 0},
-	{R_028B94_VGT_STRMOUT_CONFIG, 0, 0},
-	{R_028B98_VGT_STRMOUT_BUFFER_CONFIG, 0, 0},
-	{R_028C00_PA_SC_LINE_CNTL, 0, 0},
-	{R_028C04_PA_SC_AA_CONFIG, 0, 0},
 	{R_028C08_PA_SU_VTX_CNTL, 0, 0},
-	{R_028C0C_PA_CL_GB_VERT_CLIP_ADJ, 0, 0},
-	{R_028C10_PA_CL_GB_VERT_DISC_ADJ, 0, 0},
-	{R_028C14_PA_CL_GB_HORZ_CLIP_ADJ, 0, 0},
-	{R_028C18_PA_CL_GB_HORZ_DISC_ADJ, 0, 0},
-	{R_028C1C_PA_SC_AA_SAMPLE_LOCS_0, 0, 0},
-	{R_028C3C_PA_SC_AA_MASK, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028C60_CB_COLOR0_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028C64_CB_COLOR0_PITCH, 0, 0},
@@ -442,15 +328,11 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 
 static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028000_DB_RENDER_CONTROL, 0, 0},
-	{R_028004_DB_COUNT_CONTROL, 0, 0},
 	{R_028008_DB_DEPTH_VIEW, 0, 0},
-	{R_02800C_DB_RENDER_OVERRIDE, 0, 0},
 	{R_028010_DB_RENDER_OVERRIDE2, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028014_DB_HTILE_DATA_BASE, REG_FLAG_NEED_BO, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
-	{R_028028_DB_STENCIL_CLEAR, 0, 0},
-	{R_02802C_DB_DEPTH_CLEAR, 0, 0},
 	{R_028030_PA_SC_SCREEN_SCISSOR_TL, 0, 0},
 	{R_028034_PA_SC_SCREEN_SCISSOR_BR, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
@@ -472,7 +354,6 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028144_ALU_CONST_BUFFER_SIZE_PS_1, REG_FLAG_DIRTY_ALWAYS, 0},
 	{R_028180_ALU_CONST_BUFFER_SIZE_VS_0, REG_FLAG_DIRTY_ALWAYS, 0},
 	{R_028184_ALU_CONST_BUFFER_SIZE_VS_1, REG_FLAG_DIRTY_ALWAYS, 0},
-	{R_028200_PA_SC_WINDOW_OFFSET, 0, 0},
 	{R_028204_PA_SC_WINDOW_SCISSOR_TL, 0, 0},
 	{R_028208_PA_SC_WINDOW_SCISSOR_BR, 0, 0},
 	{R_02820C_PA_SC_CLIPRECT_RULE, 0, 0},
@@ -484,7 +365,6 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028224_PA_SC_CLIPRECT_2_BR, 0, 0},
 	{R_028228_PA_SC_CLIPRECT_3_TL, 0, 0},
 	{R_02822C_PA_SC_CLIPRECT_3_BR, 0, 0},
-	{R_028230_PA_SC_EDGERULE, 0, 0},
 	{R_028234_PA_SU_HARDWARE_SCREEN_OFFSET, 0, 0},
 	{R_028238_CB_TARGET_MASK, 0, 0},
 	{R_02823C_CB_SHADER_MASK, 0, 0},
@@ -492,44 +372,8 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028244_PA_SC_GENERIC_SCISSOR_BR, 0, 0},
 	{R_028250_PA_SC_VPORT_SCISSOR_0_TL, 0, 0},
 	{R_028254_PA_SC_VPORT_SCISSOR_0_BR, 0, 0},
-	{R_0282D0_PA_SC_VPORT_ZMIN_0, 0, 0},
-	{R_0282D4_PA_SC_VPORT_ZMAX_0, 0, 0},
 	{R_028350_SX_MISC, 0, 0},
-	{R_028380_SQ_VTX_SEMANTIC_0, 0, 0},
-	{R_028384_SQ_VTX_SEMANTIC_1, 0, 0},
-	{R_028388_SQ_VTX_SEMANTIC_2, 0, 0},
-	{R_02838C_SQ_VTX_SEMANTIC_3, 0, 0},
-	{R_028390_SQ_VTX_SEMANTIC_4, 0, 0},
-	{R_028394_SQ_VTX_SEMANTIC_5, 0, 0},
-	{R_028398_SQ_VTX_SEMANTIC_6, 0, 0},
-	{R_02839C_SQ_VTX_SEMANTIC_7, 0, 0},
-	{R_0283A0_SQ_VTX_SEMANTIC_8, 0, 0},
-	{R_0283A4_SQ_VTX_SEMANTIC_9, 0, 0},
-	{R_0283A8_SQ_VTX_SEMANTIC_10, 0, 0},
-	{R_0283AC_SQ_VTX_SEMANTIC_11, 0, 0},
-	{R_0283B0_SQ_VTX_SEMANTIC_12, 0, 0},
-	{R_0283B4_SQ_VTX_SEMANTIC_13, 0, 0},
-	{R_0283B8_SQ_VTX_SEMANTIC_14, 0, 0},
-	{R_0283BC_SQ_VTX_SEMANTIC_15, 0, 0},
-	{R_0283C0_SQ_VTX_SEMANTIC_16, 0, 0},
-	{R_0283C4_SQ_VTX_SEMANTIC_17, 0, 0},
-	{R_0283C8_SQ_VTX_SEMANTIC_18, 0, 0},
-	{R_0283CC_SQ_VTX_SEMANTIC_19, 0, 0},
-	{R_0283D0_SQ_VTX_SEMANTIC_20, 0, 0},
-	{R_0283D4_SQ_VTX_SEMANTIC_21, 0, 0},
-	{R_0283D8_SQ_VTX_SEMANTIC_22, 0, 0},
-	{R_0283DC_SQ_VTX_SEMANTIC_23, 0, 0},
-	{R_0283E0_SQ_VTX_SEMANTIC_24, 0, 0},
-	{R_0283E4_SQ_VTX_SEMANTIC_25, 0, 0},
-	{R_0283E8_SQ_VTX_SEMANTIC_26, 0, 0},
-	{R_0283EC_SQ_VTX_SEMANTIC_27, 0, 0},
-	{R_0283F0_SQ_VTX_SEMANTIC_28, 0, 0},
-	{R_0283F4_SQ_VTX_SEMANTIC_29, 0, 0},
-	{R_0283F8_SQ_VTX_SEMANTIC_30, 0, 0},
-	{R_0283FC_SQ_VTX_SEMANTIC_31, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
-	{R_028400_VGT_MAX_VTX_INDX, 0, 0},
-	{R_028404_VGT_MIN_VTX_INDX, 0, 0},
 	{R_028408_VGT_INDX_OFFSET, 0, 0},
 	{R_02840C_VGT_MULTI_PRIM_IB_RESET_INDX, 0, 0},
 	{R_028A94_VGT_MULTI_PRIM_IB_RESET_EN, 0, 0},
@@ -620,7 +464,6 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_0286D0_SPI_PS_IN_CONTROL_1, 0, 0},
 	{R_0286D4_SPI_INTERP_CONTROL_0, 0, 0},
 	{R_0286D8_SPI_INPUT_Z, 0, 0},
-	{R_0286DC_SPI_FOG_CNTL, 0, 0},
 	{R_0286E0_SPI_BARYC_CNTL, 0, 0},
 	{R_0286E4_SPI_PS_IN_CONTROL_2, 0, 0},
 	{R_0286E8_SPI_COMPUTE_INPUT_CNTL, 0, 0},
@@ -633,26 +476,18 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028798_CB_BLEND6_CONTROL, 0, 0},
 	{R_02879C_CB_BLEND7_CONTROL, 0, 0},
 	{R_028800_DB_DEPTH_CONTROL, 0, 0},
-	{CM_R_028804_DB_EQAA, 0, 0},
 	{R_028808_CB_COLOR_CONTROL, 0, 0},
 	{R_02880C_DB_SHADER_CONTROL, 0, 0},
 	{R_028810_PA_CL_CLIP_CNTL, 0, 0},
 	{R_028814_PA_SU_SC_MODE_CNTL, 0, 0},
-	{R_028818_PA_CL_VTE_CNTL, 0, 0},
 	{R_02881C_PA_CL_VS_OUT_CNTL, 0, 0},
-	{R_028820_PA_CL_NANINF_CNTL, 0, 0},
 	{R_028838_SQ_DYN_GPR_RESOURCE_LIMIT_1, 0, 0},
 	{R_028840_SQ_PGM_START_PS, REG_FLAG_NEED_BO, 0},
 	{R_028844_SQ_PGM_RESOURCES_PS, 0, 0},
-	{R_028848_SQ_PGM_RESOURCES_2_PS, 0, 0},
 	{R_02884C_SQ_PGM_EXPORTS_PS, 0, 0},
 	{R_02885C_SQ_PGM_START_VS, REG_FLAG_NEED_BO, 0},
 	{R_028860_SQ_PGM_RESOURCES_VS, 0, 0},
-	{R_028864_SQ_PGM_RESOURCES_2_VS, 0, 0},
 	{R_0288A4_SQ_PGM_START_FS, REG_FLAG_NEED_BO, 0},
-	{R_0288A8_SQ_PGM_RESOURCES_FS, 0, 0},
-	{CM_R_0288E8_SQ_LDS_ALLOC, 0, 0},
-	{R_0288EC_SQ_LDS_ALLOC_PS, 0, 0},
 	{R_028900_SQ_ESGS_RING_ITEMSIZE, 0, 0},
 	{R_028904_SQ_GSVS_RING_ITEMSIZE, 0, 0},
 	{R_028908_SQ_ESTMP_RING_ITEMSIZE, 0, 0},
@@ -671,47 +506,16 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028A04_PA_SU_POINT_MINMAX, 0, 0},
 	{R_028A08_PA_SU_LINE_CNTL, 0, 0},
 	{R_028A0C_PA_SC_LINE_STIPPLE, 0, 0},
-	{R_028A10_VGT_OUTPUT_PATH_CNTL, 0, 0},
-	{R_028A14_VGT_HOS_CNTL, 0, 0},
-	{R_028A18_VGT_HOS_MAX_TESS_LEVEL, 0, 0},
-	{R_028A1C_VGT_HOS_MIN_TESS_LEVEL, 0, 0},
-	{R_028A20_VGT_HOS_REUSE_DEPTH, 0, 0},
-	{R_028A24_VGT_GROUP_PRIM_TYPE, 0, 0},
-	{R_028A28_VGT_GROUP_FIRST_DECR, 0, 0},
-	{R_028A2C_VGT_GROUP_DECR, 0, 0},
-	{R_028A30_VGT_GROUP_VECT_0_CNTL, 0, 0},
-	{R_028A34_VGT_GROUP_VECT_1_CNTL, 0, 0},
-	{R_028A38_VGT_GROUP_VECT_0_FMT_CNTL, 0, 0},
-	{R_028A3C_VGT_GROUP_VECT_1_FMT_CNTL, 0, 0},
-	{R_028A40_VGT_GS_MODE, 0, 0},
 	{R_028A48_PA_SC_MODE_CNTL_0, 0, 0},
-	{R_028A4C_PA_SC_MODE_CNTL_1, 0, 0},
-	{CM_R_028AA8_IA_MULTI_VGT_PARAM, 0, 0},
-	{R_028AB4_VGT_REUSE_OFF, 0, 0},
-	{R_028AB8_VGT_VTX_CNT_EN, 0, 0},
 	{R_028ABC_DB_HTILE_SURFACE, 0, 0},
-	{R_028AC0_DB_SRESULTS_COMPARE_STATE0, 0, 0},
-	{R_028AC4_DB_SRESULTS_COMPARE_STATE1, 0, 0},
-	{R_028AC8_DB_PRELOAD_CONTROL, 0, 0},
 	{R_028B54_VGT_SHADER_STAGES_EN, 0, 0},
-	{R_028B70_DB_ALPHA_TO_MASK, 0, 0},
 	{R_028B78_PA_SU_POLY_OFFSET_DB_FMT_CNTL, 0, 0},
 	{R_028B7C_PA_SU_POLY_OFFSET_CLAMP, 0, 0},
 	{R_028B80_PA_SU_POLY_OFFSET_FRONT_SCALE, 0, 0},
 	{R_028B84_PA_SU_POLY_OFFSET_FRONT_OFFSET, 0, 0},
 	{R_028B88_PA_SU_POLY_OFFSET_BACK_SCALE, 0, 0},
 	{R_028B8C_PA_SU_POLY_OFFSET_BACK_OFFSET, 0, 0},
-	{R_028B94_VGT_STRMOUT_CONFIG, 0, 0},
-	{R_028B98_VGT_STRMOUT_BUFFER_CONFIG, 0, 0},
-	{CM_R_028BD4_PA_SC_CENTROID_PRIORITY_0, 0, 0},
-	{CM_R_028BD8_PA_SC_CENTROID_PRIORITY_1, 0, 0},
-	{CM_R_028BDC_PA_SC_LINE_CNTL, 0, 0},
-	{CM_R_028BE0_PA_SC_AA_CONFIG, 0, 0},
 	{CM_R_028BE4_PA_SU_VTX_CNTL, 0, 0},
-	{CM_R_028BE8_PA_CL_GB_VERT_CLIP_ADJ, 0, 0},
-	{CM_R_028BEC_PA_CL_GB_VERT_DISC_ADJ, 0, 0},
-	{CM_R_028BF0_PA_CL_GB_HORZ_CLIP_ADJ, 0, 0},
-	{CM_R_028BF4_PA_CL_GB_HORZ_DISC_ADJ, 0, 0},
 	{CM_R_028BF8_PA_SC_AA_SAMPLE_LOCS_PIXEL_X0Y0_0, 0, 0},
 	{CM_R_028BFC_PA_SC_AA_SAMPLE_LOCS_PIXEL_X0Y0_1, 0, 0},
 	{CM_R_028C00_PA_SC_AA_SAMPLE_LOCS_PIXEL_X0Y0_2, 0, 0},
@@ -728,8 +532,6 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{CM_R_028C2C_PA_SC_AA_SAMPLE_LOCS_PIXEL_X1Y1_1, 0, 0},
 	{CM_R_028C30_PA_SC_AA_SAMPLE_LOCS_PIXEL_X1Y1_2, 0, 0},
 	{CM_R_028C34_PA_SC_AA_SAMPLE_LOCS_PIXEL_X1Y1_3, 0, 0},
-	{CM_R_028C38_PA_SC_AA_MASK_X0Y0_X1Y0, 0, 0},
-	{CM_R_028C3C_PA_SC_AA_MASK_X0Y1_X1Y1, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028C60_CB_COLOR0_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028C64_CB_COLOR0_PITCH, 0, 0},
@@ -828,8 +630,8 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028EAC_CB_COLOR11_DIM, 0, 0},
 };
 
-/* SHADER RESOURCE R600/R700 */
-static int r600_resource_range_init(struct r600_context *ctx, struct r600_range *range, unsigned offset, unsigned nblocks, unsigned stride)
+/* SHADER RESOURCE EG/CM */
+static int evergreen_resource_range_init(struct r600_context *ctx, struct r600_range *range, unsigned offset, unsigned nblocks, unsigned stride)
 {
 	struct r600_reg r600_shader_resource[] = {
 		{R_030000_RESOURCE0_WORD0, REG_FLAG_NEED_BO, 0},
@@ -844,22 +646,6 @@ static int r600_resource_range_init(struct r600_context *ctx, struct r600_range 
 	unsigned nreg = Elements(r600_shader_resource);
 
 	return r600_resource_init(ctx, range, offset, nblocks, stride, r600_shader_resource, nreg, EVERGREEN_RESOURCE_OFFSET);
-}
-
-/* SHADER SAMPLER R600/R700 */
-static int r600_state_sampler_init(struct r600_context *ctx, uint32_t offset)
-{
-	struct r600_reg r600_shader_sampler[] = {
-		{R_03C000_SQ_TEX_SAMPLER_WORD0_0, 0, 0},
-		{R_03C004_SQ_TEX_SAMPLER_WORD1_0, 0, 0},
-		{R_03C008_SQ_TEX_SAMPLER_WORD2_0, 0, 0},
-	};
-	unsigned nreg = Elements(r600_shader_sampler);
-
-	for (int i = 0; i < nreg; i++) {
-		r600_shader_sampler[i].offset += offset;
-	}
-	return r600_context_add_block(ctx, r600_shader_sampler, nreg, PKT3_SET_SAMPLER, EVERGREEN_SAMPLER_OFFSET);
 }
 
 /* SHADER SAMPLER BORDER EG/CM */
@@ -910,19 +696,6 @@ static int evergreen_loop_const_init(struct r600_context *ctx, uint32_t offset)
 int evergreen_context_init(struct r600_context *ctx)
 {
 	int r;
-
-	LIST_INITHEAD(&ctx->active_query_list);
-
-	/* init dirty list */
-	LIST_INITHEAD(&ctx->dirty);
-	LIST_INITHEAD(&ctx->resource_dirty);
-	LIST_INITHEAD(&ctx->enable_list);
-
-	ctx->range = calloc(NUM_RANGES, sizeof(struct r600_range));
-	if (!ctx->range) {
-		r = -ENOMEM;
-		goto out_err;
-	}
 
 	/* add blocks */
 	if (ctx->family == CHIP_CAYMAN)
@@ -975,13 +748,13 @@ int evergreen_context_init(struct r600_context *ctx)
 	ctx->num_ps_resources = 176;
 	ctx->num_vs_resources = 160;
 	ctx->num_fs_resources = 16;
-	r = r600_resource_range_init(ctx, &ctx->ps_resources, 0, 176, 0x20);
+	r = evergreen_resource_range_init(ctx, &ctx->ps_resources, 0, 176, 0x20);
 	if (r)
 		goto out_err;
-	r = r600_resource_range_init(ctx, &ctx->vs_resources, 0x1600, 160, 0x20);
+	r = evergreen_resource_range_init(ctx, &ctx->vs_resources, 0x1600, 160, 0x20);
 	if (r)
 		goto out_err;
-	r = r600_resource_range_init(ctx, &ctx->fs_resources, 0x7C00, 16, 0x20);
+	r = evergreen_resource_range_init(ctx, &ctx->fs_resources, 0x7C00, 16, 0x20);
 	if (r)
 		goto out_err;
 
@@ -994,75 +767,11 @@ int evergreen_context_init(struct r600_context *ctx)
 	if (r)
 		goto out_err;
 
-	ctx->cs = ctx->ws->cs_create(ctx->ws);
-
-	r600_init_cs(ctx);
 	ctx->max_db = 8;
 	return 0;
 out_err:
 	r600_context_fini(ctx);
 	return r;
-}
-
-void evergreen_context_pipe_state_set_ps_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, unsigned rid)
-{
-	struct r600_block *block = ctx->ps_resources.blocks[rid];
-
-	r600_context_pipe_state_set_resource(ctx, state, block);
-}
-
-void evergreen_context_pipe_state_set_vs_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, unsigned rid)
-{
-	struct r600_block *block = ctx->vs_resources.blocks[rid];
-
-	r600_context_pipe_state_set_resource(ctx, state, block);
-}
-
-void evergreen_context_pipe_state_set_fs_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, unsigned rid)
-{
-	struct r600_block *block = ctx->fs_resources.blocks[rid];
-
-	r600_context_pipe_state_set_resource(ctx, state, block);
-}
-
-static inline void evergreen_context_pipe_state_set_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned offset)
-{
-	struct r600_range *range;
-	struct r600_block *block;
-	int i;
-	int dirty;
-
-	range = &ctx->range[CTX_RANGE_ID(offset)];
-	block = range->blocks[CTX_BLOCK_ID(offset)];
-	if (state == NULL) {
-		block->status &= ~(R600_BLOCK_STATUS_ENABLED | R600_BLOCK_STATUS_DIRTY);
-		LIST_DELINIT(&block->list);
-		LIST_DELINIT(&block->enable_list);
-		return;
-	}
-	dirty = block->status & R600_BLOCK_STATUS_DIRTY;
-
-	for (i = 0; i < 3; i++) {
-		if (block->reg[i] != state->regs[i].value) {
-			dirty |= R600_BLOCK_STATUS_DIRTY;
-			block->reg[i] = state->regs[i].value;
-		}
-	}
-	if (dirty)
-		r600_context_dirty_block(ctx, block, dirty, 2);
-}
-
-static inline void evergreen_context_ps_partial_flush(struct r600_context *ctx)
-{
-	struct radeon_winsys_cs *cs = ctx->cs;
-
-	if (!(ctx->flags & R600_CONTEXT_DRAW_PENDING))
-		return;
-
-	cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 0, 0);
-	cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_PS_PARTIAL_FLUSH) | EVENT_INDEX(4);
-
-	ctx->flags &= ~R600_CONTEXT_DRAW_PENDING;
 }
 
 static inline void evergreen_context_pipe_state_set_sampler_border(struct r600_context *ctx, struct r600_pipe_state *state, unsigned offset, unsigned id)
@@ -1102,7 +811,7 @@ static inline void evergreen_context_pipe_state_set_sampler_border(struct r600_c
 	 * registers, or previous draw commands that haven't completed yet
 	 * will end up using the new border color. */
 	if (dirty & R600_BLOCK_STATUS_DIRTY)
-		evergreen_context_ps_partial_flush(ctx);
+		r600_context_ps_partial_flush(ctx);
 	if (dirty)
 		r600_context_dirty_block(ctx, block, dirty, 4);
 }
@@ -1111,8 +820,8 @@ void evergreen_context_pipe_state_set_ps_sampler(struct r600_context *ctx, struc
 {
 	unsigned offset;
 
-	offset = 0x0003C000 + id * 0xc;
-	evergreen_context_pipe_state_set_sampler(ctx, state, offset);
+	offset = R_03C000_SQ_TEX_SAMPLER_WORD0_0 + 12*id;
+	r600_context_pipe_state_set_sampler(ctx, state, offset);
 	evergreen_context_pipe_state_set_sampler_border(ctx, state, R_00A400_TD_PS_SAMPLER0_BORDER_INDEX, id);
 }
 
@@ -1120,64 +829,9 @@ void evergreen_context_pipe_state_set_vs_sampler(struct r600_context *ctx, struc
 {
 	unsigned offset;
 
-	offset = 0x0003C0D8 + id * 0xc;
-	evergreen_context_pipe_state_set_sampler(ctx, state, offset);
+	offset = R_03C000_SQ_TEX_SAMPLER_WORD0_0 + 12*(id + 18);
+	r600_context_pipe_state_set_sampler(ctx, state, offset);
 	evergreen_context_pipe_state_set_sampler_border(ctx, state, R_00A414_TD_VS_SAMPLER0_BORDER_INDEX, id);
-}
-
-
-void evergreen_context_draw(struct r600_context *ctx, const struct r600_draw *draw)
-{
-	struct radeon_winsys_cs *cs = ctx->cs;
-	unsigned ndwords = 7;
-	uint32_t *pm4;
-	uint64_t va;
-
-	if (draw->indices) {
-		ndwords = 11;
-	}
-	if (ctx->num_cs_dw_queries_suspend)
-		ndwords += 6;
-
-	/* when increasing ndwords, bump the max limit too */
-	assert(ndwords <= R600_MAX_DRAW_CS_DWORDS);
-
-	/* queries need some special values
-	 * (this is non-zero if any query is active) */
-	if (ctx->num_cs_dw_queries_suspend) {
-		pm4 = &cs->buf[cs->cdw];
-		pm4[0] = PKT3(PKT3_SET_CONTEXT_REG, 1, 0);
-		pm4[1] = (R_028004_DB_COUNT_CONTROL - EVERGREEN_CONTEXT_REG_OFFSET) >> 2;
-		pm4[2] = S_028004_PERFECT_ZPASS_COUNTS(1);
-		pm4[3] = PKT3(PKT3_SET_CONTEXT_REG, 1, 0);
-		pm4[4] = (R_02800C_DB_RENDER_OVERRIDE - EVERGREEN_CONTEXT_REG_OFFSET) >> 2;
-		pm4[5] = draw->db_render_override | S_02800C_NOOP_CULL_DISABLE(1);
-		cs->cdw += 6;
-		ndwords -= 6;
-	}
-
-	/* draw packet */
-	pm4 = &cs->buf[cs->cdw];
-	pm4[0] = PKT3(PKT3_INDEX_TYPE, 0, ctx->predicate_drawing);
-	pm4[1] = draw->vgt_index_type;
-	pm4[2] = PKT3(PKT3_NUM_INSTANCES, 0, ctx->predicate_drawing);
-	pm4[3] = draw->vgt_num_instances;
-	if (draw->indices) {
-		va = r600_resource_va(&ctx->screen->screen, (void*)draw->indices);
-		va += draw->indices_bo_offset;
-		pm4[4] = PKT3(PKT3_DRAW_INDEX, 3, ctx->predicate_drawing);
-		pm4[5] = va;
-		pm4[6] = (va >> 32UL) & 0xFF;
-		pm4[7] = draw->vgt_num_indices;
-		pm4[8] = draw->vgt_draw_initiator;
-		pm4[9] = PKT3(PKT3_NOP, 0, ctx->predicate_drawing);
-		pm4[10] = r600_context_bo_reloc(ctx, draw->indices, RADEON_USAGE_READ);
-	} else {
-		pm4[4] = PKT3(PKT3_DRAW_INDEX_AUTO, 1, ctx->predicate_drawing);
-		pm4[5] = draw->vgt_num_indices;
-		pm4[6] = draw->vgt_draw_initiator;
-	}
-	cs->cdw += ndwords;
 }
 
 void evergreen_flush_vgt_streamout(struct r600_context *ctx)

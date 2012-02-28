@@ -286,6 +286,18 @@ public:
 	      offset == inst->offset);
    }
 
+   int regs_written()
+   {
+      if (is_tex())
+	 return 4;
+
+      /* The SINCOS and INT_DIV_QUOTIENT_AND_REMAINDER math functions return 2,
+       * but we don't currently use them...nor do we have an opcode for them.
+       */
+
+      return 1;
+   }
+
    bool is_tex()
    {
       return (opcode == SHADER_OPCODE_TEX ||
@@ -529,6 +541,7 @@ public:
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0, fs_reg src1);
    bool try_emit_saturate(ir_expression *ir);
+   bool try_emit_mad(ir_expression *ir, int mul_arg);
    void emit_bool_to_cond_code(ir_rvalue *condition);
    void emit_if_gen6(ir_if *ir);
    void emit_unspill(fs_inst *inst, fs_reg reg, uint32_t spill_offset);

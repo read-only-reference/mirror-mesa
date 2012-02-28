@@ -36,9 +36,7 @@
 #define EG_BOOL_CONST_OFFSET               0x0003A500
 #define EG_BOOL_CONST_END                  0x0003A506
 
-#define R600_CONFIG_REG_OFFSET                 0X00008000
 #define R600_CONFIG_REG_END                    0X0000AC00
-#define R600_CONTEXT_REG_OFFSET                0X00028000
 #define R600_CONTEXT_REG_END                   0X00029000
 #define R600_ALU_CONST_OFFSET                  0X00030000
 #define R600_ALU_CONST_END                     0X00032000
@@ -46,7 +44,6 @@
 #define R600_RESOURCE_END                      0X0003C000
 #define R600_SAMPLER_OFFSET                    0X0003C000
 #define R600_SAMPLER_END                       0X0003CFF0
-#define R600_CTL_CONST_OFFSET                  0X0003CFF0
 #define R600_CTL_CONST_END                     0X0003E200
 #define R600_LOOP_CONST_OFFSET                 0X0003E200
 #define R600_LOOP_CONST_END                    0X0003E380
@@ -158,7 +155,6 @@
 #define PKT3_IT_OPCODE_C                0xFFFF00FF
 #define PKT3_PRED_S(x)               (((x) >> 0) & 0x1)
 #define PKT0(index, count) (PKT_TYPE_S(0) | PKT0_BASE_INDEX_S(index) | PKT_COUNT_S(count))
-#define PKT3(op, count, predicate) (PKT_TYPE_S(3) | PKT3_IT_OPCODE_S(op) | PKT_COUNT_S(count) | PKT3_PRED_S(predicate))
 
 /* Registers */
 #define R_008490_CP_STRMOUT_CNTL		     0x008490

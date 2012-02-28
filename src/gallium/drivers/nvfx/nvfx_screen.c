@@ -2,7 +2,6 @@
 #include "pipe/p_state.h"
 #include "util/u_format.h"
 #include "util/u_format_s3tc.h"
-#include "util/u_simple_screen.h"
 #include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
 
@@ -98,6 +97,7 @@ nvfx_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
 	case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
 	case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
+	case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
                 return 0;
 	default:
 		NOUVEAU_ERR("Warning: unknown PIPE_CAP %d\n", param);
@@ -236,6 +236,12 @@ nvfx_screen_get_video_param(struct pipe_screen *screen,
 		return vl_video_buffer_max_size(screen);
 	case PIPE_VIDEO_CAP_PREFERED_FORMAT:
 		return PIPE_FORMAT_NV12;
+	case PIPE_VIDEO_CAP_PREFERS_INTERLACED:
+		return false;
+	case PIPE_VIDEO_CAP_SUPPORTS_INTERLACED:
+		return false;
+	case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+		return true;
 	default:
 		return 0;
 	}

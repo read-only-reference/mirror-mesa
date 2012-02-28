@@ -109,10 +109,7 @@ svga_get_paramf(struct pipe_screen *screen, enum pipe_capf param)
    case PIPE_CAPF_MAX_POINT_WIDTH:
       /* fall-through */
    case PIPE_CAPF_MAX_POINT_WIDTH_AA:
-      /* Keep this to a reasonable size to avoid failures in
-       * conform/pntaa.c:
-       */
-      return SVGA_MAX_POINTSIZE;
+      return svgascreen->maxPointSize;
 
    case PIPE_CAPF_MAX_TEXTURE_ANISOTROPY:
       if(!sws->get_cap(sws, SVGA3D_DEVCAP_MAX_TEXTURE_ANISOTROPY, &result))
@@ -203,6 +200,9 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
       return 0;
 
+   case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
+      return 0;
+
    default:
       return 0;
    }
@@ -235,7 +235,7 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_MAX_TEMPS:
          if (!sws->get_cap(sws, SVGA3D_DEVCAP_MAX_FRAGMENT_SHADER_TEMPS, &result))
             return 32;
-         return result.u;
+         return MIN2(result.u, SVGA3D_TEMPREG_MAX);
       case PIPE_SHADER_CAP_MAX_ADDRS:
       case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
 	 /* 
@@ -259,8 +259,6 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
          return 0;
       case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
          return 16;
-      case PIPE_SHADER_CAP_OUTPUT_READ:
-         return 0;
       }
       break;
    case PIPE_SHADER_VERTEX:
@@ -286,7 +284,7 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_MAX_TEMPS:
          if (!sws->get_cap(sws, SVGA3D_DEVCAP_MAX_VERTEX_SHADER_TEMPS, &result))
             return 32;
-         return result.u;
+         return MIN2(result.u, SVGA3D_TEMPREG_MAX);
       case PIPE_SHADER_CAP_MAX_ADDRS:
          return 1;
       case PIPE_SHADER_CAP_MAX_PREDS:
@@ -303,8 +301,6 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_SUBROUTINES:
          return 0;
       case PIPE_SHADER_CAP_INTEGERS:
-         return 0;
-      case PIPE_SHADER_CAP_OUTPUT_READ:
          return 0;
       default:
          break;
@@ -355,8 +351,8 @@ svga_is_format_supported( struct pipe_screen *screen,
       /* Often unsupported/problematic. This means we end up with the same
        * visuals for all virtual hardware implementations.
        */
-      case PIPE_FORMAT_B4G4R4A4_UNORM:
-      case PIPE_FORMAT_B5G5R5A1_UNORM:
+      case SVGA3D_A4R4G4B4:
+      case SVGA3D_A1R5G5B5:
          return FALSE;
          
       default:
@@ -542,6 +538,15 @@ svga_screen_create(struct svga_winsys_screen *sws)
       if (has_d24s8_int) {
          svgascreen->depth.s8z24 = SVGA3D_Z_D24S8_INT;
       }
+   }
+
+   if (!sws->get_cap(sws, SVGA3D_DEVCAP_MAX_POINT_SIZE, &result)) {
+      svgascreen->maxPointSize = 1.0F;
+   } else {
+      /* Keep this to a reasonable size to avoid failures in
+       * conform/pntaa.c:
+       */
+      svgascreen->maxPointSize = MIN2(result.f, 80.0f);
    }
 
    pipe_mutex_init(svgascreen->tex_mutex);

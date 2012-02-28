@@ -47,6 +47,7 @@
 #include "multisample.h"
 #include "points.h"
 #include "polygon.h"
+#include "shared.h"
 #include "scissor.h"
 #include "stencil.h"
 #include "texenv.h"
@@ -121,7 +122,6 @@ struct gl_enable_attrib
    GLboolean SampleAlphaToCoverage;   /* GL_ARB_multisample */
    GLboolean SampleAlphaToOne;        /* GL_ARB_multisample */
    GLboolean SampleCoverage;          /* GL_ARB_multisample */
-   GLboolean SampleCoverageInvert;    /* GL_ARB_multisample */
    GLboolean RasterPositionUnclipped; /* GL_IBM_rasterpos_clip */
 
    GLbitfield Texture[MAX_TEXTURE_UNITS];
@@ -165,6 +165,13 @@ struct texture_state
     * deleted while saved in the attribute stack).
     */
    struct gl_texture_object *SavedTexRef[MAX_TEXTURE_UNITS][NUM_TEXTURE_TARGETS];
+
+   /* We need to keep a reference to the shared state.  That's where the
+    * default texture objects are kept.  We don't want that state to be
+    * freed while the attribute stack contains pointers to any default
+    * texture objects.
+    */
+   struct gl_shared_state *SharedRef;
 };
 
 
@@ -306,7 +313,6 @@ _mesa_PushAttrib(GLbitfield mask)
       attr->SampleAlphaToCoverage = ctx->Multisample.SampleAlphaToCoverage;
       attr->SampleAlphaToOne = ctx->Multisample.SampleAlphaToOne;
       attr->SampleCoverage = ctx->Multisample.SampleCoverage;
-      attr->SampleCoverageInvert = ctx->Multisample.SampleCoverageInvert;
       for (i = 0; i < ctx->Const.MaxTextureUnits; i++) {
          attr->Texture[i] = ctx->Texture.Unit[i].Enabled;
          attr->TexGen[i] = ctx->Texture.Unit[i].TexGenEnabled;
@@ -436,6 +442,8 @@ _mesa_PushAttrib(GLbitfield mask)
                                       ctx->Texture.Unit[u].CurrentTex[tex]);
          }
       }
+
+      _mesa_reference_shared_state(ctx, &texstate->SharedRef, ctx->Shared);
 
       _mesa_unlock_context_textures(ctx);
 
@@ -598,9 +606,6 @@ pop_enable_group(struct gl_context *ctx, const struct gl_enable_attrib *enable)
    TEST_AND_UPDATE(ctx->Multisample.SampleCoverage,
                    enable->SampleCoverage,
                    GL_SAMPLE_COVERAGE_ARB);
-   TEST_AND_UPDATE(ctx->Multisample.SampleCoverageInvert,
-                   enable->SampleCoverageInvert,
-                   GL_SAMPLE_COVERAGE_INVERT_ARB);
    /* GL_ARB_vertex_program, GL_NV_vertex_program */
    TEST_AND_UPDATE(ctx->VertexProgram.Enabled,
                    enable->VertexProgram,
@@ -611,8 +616,6 @@ pop_enable_group(struct gl_context *ctx, const struct gl_enable_attrib *enable)
    TEST_AND_UPDATE(ctx->VertexProgram.TwoSideEnabled,
                    enable->VertexProgramTwoSide,
                    GL_VERTEX_PROGRAM_TWO_SIDE_ARB);
-
-#undef TEST_AND_UPDATE
 
    /* texture unit enables */
    for (i = 0; i < ctx->Const.MaxTextureUnits; i++) {
@@ -805,6 +808,8 @@ pop_texture_group(struct gl_context *ctx, struct texture_state *texstate)
    }
 
    _mesa_ActiveTextureARB(GL_TEXTURE0_ARB + texstate->Texture.CurrentUnit);
+
+   _mesa_reference_shared_state(ctx, &texstate->SharedRef, NULL);
 
    _mesa_unlock_context_textures(ctx);
 }
@@ -1244,7 +1249,6 @@ _mesa_PopAttrib(void)
             }
             break;
          case GL_TEXTURE_BIT:
-            /* Take care of texture object reference counters */
             {
                struct texture_state *texstate
                   = (struct texture_state *) attr->data;
@@ -1264,6 +1268,23 @@ _mesa_PopAttrib(void)
             {
                const struct gl_multisample_attrib *ms;
                ms = (const struct gl_multisample_attrib *) attr->data;
+
+	       TEST_AND_UPDATE(ctx->Multisample.Enabled,
+			       ms->Enabled,
+			       GL_MULTISAMPLE);
+
+	       TEST_AND_UPDATE(ctx->Multisample.SampleCoverage,
+			       ms->SampleCoverage,
+			       GL_SAMPLE_COVERAGE);
+
+	       TEST_AND_UPDATE(ctx->Multisample.SampleAlphaToCoverage,
+			       ms->SampleAlphaToCoverage,
+			       GL_SAMPLE_ALPHA_TO_COVERAGE);
+
+	       TEST_AND_UPDATE(ctx->Multisample.SampleAlphaToOne,
+			       ms->SampleAlphaToOne,
+			       GL_SAMPLE_ALPHA_TO_ONE);
+
                _mesa_SampleCoverageARB(ms->SampleCoverageValue,
                                        ms->SampleCoverageInvert);
             }
@@ -1605,6 +1626,7 @@ _mesa_free_attrib_data(struct gl_context *ctx)
                   _mesa_reference_texobj(&texstate->SavedTexRef[u][tgt], NULL);
                }
             }
+            _mesa_reference_shared_state(ctx, &texstate->SharedRef, NULL);
          }
          else {
             /* any other chunks of state that requires special handling? */

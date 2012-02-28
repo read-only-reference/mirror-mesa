@@ -553,22 +553,6 @@ intel_renderbuffer_tile_offsets(struct intel_renderbuffer *irb,
    }
 }
 
-#ifndef I915
-static bool
-need_tile_offset_workaround(struct brw_context *brw,
-			    struct intel_renderbuffer *irb)
-{
-   uint32_t tile_x, tile_y;
-
-   if (brw->has_surface_tile_offset)
-      return false;
-
-   intel_renderbuffer_tile_offsets(irb, &tile_x, &tile_y);
-
-   return tile_x != 0 || tile_y != 0;
-}
-#endif
-
 /**
  * Called by glFramebufferTexture[123]DEXT() (and other places) to
  * prepare for rendering into texture memory.  This might be called
@@ -626,42 +610,13 @@ intel_render_texture(struct gl_context * ctx,
        return;
    }
 
+   irb->tex_image = image;
+
    DBG("Begin render %s texture tex=%u w=%d h=%d refcount=%d\n",
        _mesa_get_format_name(image->TexFormat),
        att->Texture->Name, image->Width, image->Height,
        irb->Base.Base.RefCount);
 
-   intel_image->used_as_render_target = true;
-
-#ifndef I915
-   if (need_tile_offset_workaround(brw_context(ctx), irb)) {
-      /* Original gen4 hardware couldn't draw to a non-tile-aligned
-       * destination in a miptree unless you actually setup your
-       * renderbuffer as a miptree and used the fragile
-       * lod/array_index/etc. controls to select the image.  So,
-       * instead, we just make a new single-level miptree and render
-       * into that.
-       */
-      struct intel_context *intel = intel_context(ctx);
-      struct intel_mipmap_tree *new_mt;
-      int width, height, depth;
-
-      intel_miptree_get_dimensions_for_image(image, &width, &height, &depth);
-
-      new_mt = intel_miptree_create(intel, image->TexObject->Target,
-				    intel_image->base.Base.TexFormat,
-				    intel_image->base.Base.Level,
-				    intel_image->base.Base.Level,
-                                    width, height, depth,
-				    true);
-
-      intel_miptree_copy_teximage(intel, intel_image, new_mt);
-      intel_renderbuffer_set_draw_offset(irb);
-
-      intel_miptree_reference(&irb->mt, intel_image->mt);
-      intel_miptree_release(&new_mt);
-   }
-#endif
    /* update drawing region, etc */
    intel_draw_buffer(ctx);
 }
@@ -678,14 +633,13 @@ intel_finish_render_texture(struct gl_context * ctx,
    struct gl_texture_object *tex_obj = att->Texture;
    struct gl_texture_image *image =
       tex_obj->Image[att->CubeMapFace][att->TextureLevel];
-   struct intel_texture_image *intel_image = intel_texture_image(image);
+   struct intel_renderbuffer *irb = intel_renderbuffer(att->Renderbuffer);
 
    DBG("Finish render %s texture tex=%u\n",
        _mesa_get_format_name(image->TexFormat), att->Texture->Name);
 
-   /* Flag that this image may now be validated into the object's miptree. */
-   if (intel_image)
-      intel_image->used_as_render_target = false;
+   if (irb)
+      irb->tex_image = NULL;
 
    /* Since we've (probably) rendered to the texture and will (likely) use
     * it in the texture domain later on in this batchbuffer, flush the
@@ -709,6 +663,10 @@ intel_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
    struct intel_mipmap_tree *depth_mt = NULL, *stencil_mt = NULL;
    int i;
 
+   DBG("%s() on fb %p (%s)\n", __FUNCTION__,
+       fb, (fb == ctx->DrawBuffer ? "drawbuffer" :
+	    (fb == ctx->ReadBuffer ? "readbuffer" : "other buffer")));
+
    if (depthRb)
       depth_mt = depthRb->mt;
    if (stencilRb) {
@@ -725,13 +683,23 @@ intel_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 	  */
 	 if (depthRb->mt_level != stencilRb->mt_level ||
 	     depthRb->mt_layer != stencilRb->mt_layer) {
+	    DBG("depth image level/layer %d/%d != stencil image %d/%d\n",
+		depthRb->mt_level,
+		depthRb->mt_layer,
+		stencilRb->mt_level,
+		stencilRb->mt_layer);
 	    fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
 	 }
       } else {
-	 if (!intel->has_separate_stencil)
+	 if (!intel->has_separate_stencil) {
+	    DBG("separate stencil unsupported\n");
 	    fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
-	 if (stencil_mt->format != MESA_FORMAT_S8)
+	 }
+	 if (stencil_mt->format != MESA_FORMAT_S8) {
+	    DBG("separate stencil is %s instead of S8\n",
+		_mesa_get_format_name(stencil_mt->format));
 	    fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
+	 }
 	 if (intel->gen < 7 && depth_mt->hiz_mt == NULL) {
 	    /* Before Gen7, separate depth and stencil buffers can be used
 	     * only if HiZ is enabled. From the Sandybridge PRM, Volume 2,
@@ -739,6 +707,7 @@ intel_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 	     *     [DevSNB]: This field must be set to the same value (enabled
 	     *     or disabled) as Hierarchical Depth Buffer Enable.
 	     */
+	    DBG("separate stencil without HiZ\n");
 	    fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED;
 	 }
       }
@@ -760,6 +729,17 @@ intel_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 	 DBG("attachment without renderbuffer\n");
 	 fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
 	 continue;
+      }
+
+      if (fb->Attachment[i].Type == GL_TEXTURE) {
+	 const struct gl_texture_image *img =
+	    _mesa_get_attachment_teximage_const(&fb->Attachment[i]);
+
+	 if (img->Border) {
+	    DBG("texture with border\n");
+	    fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
+	    continue;
+	 }
       }
 
       irb = intel_renderbuffer(rb);

@@ -70,7 +70,8 @@ static const struct brw_tracked_state *gen4_atoms[] =
    &brw_wm_pull_constants,
    &brw_renderbuffer_surfaces,
    &brw_texture_surfaces,
-   &brw_binding_table,
+   &brw_vs_binding_table,
+   &brw_wm_binding_table,
 
    &brw_samplers,
 
@@ -146,7 +147,9 @@ static const struct brw_tracked_state *gen6_atoms[] =
    &gen6_renderbuffer_surfaces,
    &brw_texture_surfaces,
    &gen6_sol_surface,
-   &brw_binding_table,
+   &brw_vs_binding_table,
+   &gen6_gs_binding_table,
+   &brw_wm_binding_table,
 
    &brw_samplers,
    &gen6_sampler_state,
@@ -183,7 +186,6 @@ const struct brw_tracked_state *gen7_atoms[] =
 
    &brw_wm_input_sizes,
    &brw_vs_prog,
-   &brw_gs_prog,
    &brw_wm_prog,
 
    /* Command packets: */
@@ -215,7 +217,8 @@ const struct brw_tracked_state *gen7_atoms[] =
    &brw_wm_pull_constants,
    &gen6_renderbuffer_surfaces,
    &brw_texture_surfaces,
-   &brw_binding_table,
+   &brw_vs_binding_table,
+   &brw_wm_binding_table,
 
    &gen7_samplers,
 
@@ -372,7 +375,6 @@ static struct dirty_bit_map brw_bits[] = {
    DEFINE_BIT(BRW_NEW_GS_BINDING_TABLE),
    DEFINE_BIT(BRW_NEW_PS_BINDING_TABLE),
    DEFINE_BIT(BRW_NEW_STATE_BASE_ADDRESS),
-   DEFINE_BIT(BRW_NEW_HIZ),
    {0, 0, 0}
 };
 

@@ -41,8 +41,9 @@ PUBLIC VdpStatus
 vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *device,
                           VdpGetProcAddress **get_proc_address)
 {
-   VdpStatus ret;
+   struct pipe_screen *pscreen;
    vlVdpDevice *dev = NULL;
+   VdpStatus ret;
 
    if (!(display && device && get_proc_address))
       return VDP_STATUS_INVALID_POINTER;
@@ -64,7 +65,8 @@ vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *device,
       goto no_vscreen;
    }
 
-   dev->context = vl_video_create(dev->vscreen);
+   pscreen = dev->vscreen->pscreen;
+   dev->context = pscreen->context_create(pscreen, dev->vscreen);
    if (!dev->context) {
       ret = VDP_STATUS_RESOURCES;
       goto no_context;
@@ -76,10 +78,9 @@ vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *device,
       goto no_handle;
    }
 
-   vl_compositor_init(&dev->compositor, dev->context->pipe);
+   vl_compositor_init(&dev->compositor, dev->context);
 
    *get_proc_address = &vlVdpGetProcAddress;
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Device created succesfully\n");
 
    return VDP_STATUS_OK;
 
@@ -104,8 +105,6 @@ vlVdpPresentationQueueTargetCreateX11(VdpDevice device, Drawable drawable,
 {
    vlVdpPresentationQueueTarget *pqt;
    VdpStatus ret;
-
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Creating PresentationQueueTarget\n");
 
    if (!drawable)
       return VDP_STATUS_INVALID_HANDLE;
@@ -142,8 +141,6 @@ vlVdpPresentationQueueTargetDestroy(VdpPresentationQueueTarget presentation_queu
 {
    vlVdpPresentationQueueTarget *pqt;
 
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Destroying PresentationQueueTarget\n");
-
    pqt = vlGetDataHTAB(presentation_queue_target);
    if (!pqt)
       return VDP_STATUS_INVALID_HANDLE;
@@ -160,20 +157,16 @@ vlVdpPresentationQueueTargetDestroy(VdpPresentationQueueTarget presentation_queu
 VdpStatus
 vlVdpDeviceDestroy(VdpDevice device)
 {
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Destroying device\n");
-
    vlVdpDevice *dev = vlGetDataHTAB(device);
    if (!dev)
       return VDP_STATUS_INVALID_HANDLE;
       
    vl_compositor_cleanup(&dev->compositor);
-   vl_video_destroy(dev->context);
+   dev->context->destroy(dev->context);
    vl_screen_destroy(dev->vscreen);
 
    FREE(dev);
    vlDestroyHTAB();
-
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Device destroyed successfully\n");
 
    return VDP_STATUS_OK;
 }

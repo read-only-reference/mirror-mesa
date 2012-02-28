@@ -151,8 +151,6 @@ i915_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe_sha
          return 0;
       case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
          return I915_TEX_UNITS;
-      case PIPE_SHADER_CAP_OUTPUT_READ:
-         return 0;
       default:
          debug_printf("%s: Unknown cap %u.\n", __FUNCTION__, cap);
          return 0;
@@ -204,6 +202,7 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
    case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
    case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
+   case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
       return 0;
 
    /* Features we can lie about (boolean caps). */
@@ -450,8 +449,6 @@ i915_screen_create(struct i915_winsys *iws)
    }
 
    is->iws = iws;
-
-   is->base.winsys = NULL;
 
    is->base.destroy = i915_destroy_screen;
    is->base.flush_frontbuffer = i915_flush_frontbuffer;

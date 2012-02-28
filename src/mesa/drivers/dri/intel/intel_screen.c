@@ -245,6 +245,8 @@ intel_create_image(__DRIscreen *screen,
    if (image == NULL)
       return NULL;
 
+   image->dri_format = format;
+
    switch (format) {
    case __DRI_IMAGE_FORMAT_RGB565:
       image->format = MESA_FORMAT_RGB565;
@@ -297,6 +299,8 @@ intel_query_image(__DRIimage *image, int attrib, int *value)
       return true;
    case __DRI_IMAGE_ATTRIB_NAME:
       return intel_region_flink(image->region, (uint32_t *) value);
+   case __DRI_IMAGE_ATTRIB_FORMAT:
+      return image->dri_format;
    default:
       return false;
    }
@@ -337,7 +341,7 @@ intel_validate_usage(__DRIimage *image, unsigned int use)
 }
 
 static struct __DRIimageExtensionRec intelImageExtension = {
-    { __DRI_IMAGE, 2 },
+    { __DRI_IMAGE, 3 },
     intel_create_image_from_name,
     intel_create_image_from_renderbuffer,
     intel_destroy_image,
@@ -361,6 +365,7 @@ intel_get_param(__DRIscreen *psp, int param, int *value)
    int ret;
    struct drm_i915_getparam gp;
 
+   memset(&gp, 0, sizeof(gp));
    gp.param = param;
    gp.value = value;
 
@@ -734,6 +739,14 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
    intelScreen->hw_must_use_separate_stencil = intelScreen->gen >= 7;
    intelScreen->hw_has_hiz = intelScreen->gen >= 6;
    intelScreen->dri2_has_hiz = INTEL_DRI2_HAS_HIZ_UNKNOWN;
+
+#if defined(I915_PARAM_HAS_LLC)
+   intelScreen->hw_has_llc =
+      intel_get_boolean(intelScreen->driScrnPriv,
+              I915_PARAM_HAS_LLC);
+#else
+   intelScreen->hw_has_llc = intelScreen->gen >= 6;
+#endif
 
    intel_override_hiz(intelScreen);
    intel_override_separate_stencil(intelScreen);

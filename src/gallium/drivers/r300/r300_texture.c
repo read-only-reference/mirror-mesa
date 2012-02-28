@@ -843,7 +843,7 @@ boolean r300_resource_get_handle(struct pipe_screen* screen,
                                  struct pipe_resource *texture,
                                  struct winsys_handle *whandle)
 {
-    struct radeon_winsys *rws = (struct radeon_winsys *)screen->winsys;
+    struct radeon_winsys *rws = r300_screen(screen)->rws;
     struct r300_resource* tex = (struct r300_resource*)texture;
 
     if (!tex) {
@@ -882,6 +882,9 @@ r300_texture_create_object(struct r300_screen *rscreen,
             pb_reference(&buffer, NULL);
         return NULL;
     }
+
+    if (base->nr_samples > 1)
+        return NULL;
 
     pipe_reference_init(&tex->b.b.b.reference, 1);
     tex->b.b.b.screen = &rscreen->screen;
@@ -945,8 +948,8 @@ struct pipe_resource *r300_texture_from_handle(struct pipe_screen *screen,
                                                const struct pipe_resource *base,
                                                struct winsys_handle *whandle)
 {
-    struct radeon_winsys *rws = (struct radeon_winsys*)screen->winsys;
     struct r300_screen *rscreen = r300_screen(screen);
+    struct radeon_winsys *rws = rscreen->rws;
     struct pb_buffer *buffer;
     enum radeon_bo_layout microtile, macrotile;
     unsigned stride;
@@ -963,7 +966,7 @@ struct pipe_resource *r300_texture_from_handle(struct pipe_screen *screen,
     if (!buffer)
         return NULL;
 
-    rws->buffer_get_tiling(buffer, &microtile, &macrotile);
+    rws->buffer_get_tiling(buffer, &microtile, &macrotile, NULL, NULL, NULL, NULL, NULL);
 
     /* Enforce a microtiled zbuffer. */
     if (util_format_is_depth_or_stencil(base->format) &&

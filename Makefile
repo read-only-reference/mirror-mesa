@@ -22,7 +22,6 @@ doxygen:
 	cd doxygen && $(MAKE)
 
 check:
-	cd src/glsl && $(MAKE) check
 	cd src/glsl/tests/ && ./optimization-test
 	make -C tests check
 
@@ -185,7 +184,7 @@ ultrix-gcc:
 
 # Rules for making release tarballs
 
-PACKAGE_VERSION=8.0-devel
+PACKAGE_VERSION=8.1-devel
 PACKAGE_DIR = Mesa-$(PACKAGE_VERSION)
 PACKAGE_NAME = MesaLib-$(PACKAGE_VERSION)
 

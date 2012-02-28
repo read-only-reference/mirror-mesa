@@ -12,7 +12,7 @@ INCLUDES = -I$(TOP)/src/gallium/include \
 	   $(DRIVER_INCLUDES)
 DEFINES = -DGALLIUM_TRACE $(DRIVER_DEFINES)
 LIBS = $(EXTRA_LIB_PATH) $(DRIVER_LIBS) -lXv -lX11 -lm
-STATE_TRACKER_LIB = $(TOP)/src/gallium/state_trackers/xorg/xvmc/libxvmctracker.a
+STATE_TRACKER_LIB = $(TOP)/src/gallium/state_trackers/xvmc/libxvmctracker.a
 
 ifeq ($(MESA_LLVM),1)
 LDFLAGS += $(LLVM_LDFLAGS)
@@ -27,9 +27,9 @@ else
 endif
 
 # XXX: Hack, XvMC public funcs aren't exported if we link to libxvmctracker.a :(
+C_SOURCES += $(wildcard $(TOP)/src/gallium/state_trackers/xvmc/*.c)
 OBJECTS = $(C_SOURCES:.c=.o) \
-	  $(ASM_SOURCES:.S=.o) \
-	  $(TOP)/src/gallium/state_trackers/xorg/xvmc/*.o
+	  $(ASM_SOURCES:.S=.o)
 
 ##### RULES #####
 

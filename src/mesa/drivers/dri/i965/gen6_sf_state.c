@@ -112,10 +112,7 @@ upload_sf_state(struct brw_context *brw)
 {
    struct intel_context *intel = &brw->intel;
    struct gl_context *ctx = &intel->ctx;
-   struct brw_vue_map vue_map;
    uint32_t urb_entry_read_length;
-   /* CACHE_NEW_VS_PROG */
-   GLbitfield64 vs_outputs_written = brw->vs.prog_data->outputs_written;
    /* BRW_NEW_FRAGMENT_PROGRAM */
    uint32_t num_outputs = _mesa_bitcount_64(brw->fragment_program->Base.InputsRead);
    /* _NEW_LIGHT */
@@ -128,14 +125,11 @@ upload_sf_state(struct brw_context *brw)
    int urb_entry_read_offset = 1;
    float point_size;
    uint16_t attr_overrides[FRAG_ATTRIB_MAX];
-   bool userclip_active;
    uint32_t point_sprite_origin;
 
-   /* _NEW_TRANSFORM */
-   userclip_active = (ctx->Transform.ClipPlanesEnabled != 0);
-
-   brw_compute_vue_map(&vue_map, intel, userclip_active, vs_outputs_written);
-   urb_entry_read_length = (vue_map.num_slots + 1)/2 - urb_entry_read_offset;
+   /* CACHE_NEW_VS_PROG */
+   urb_entry_read_length = ((brw->vs.prog_data->vue_map.num_slots + 1) / 2 -
+			    urb_entry_read_offset);
    if (urb_entry_read_length == 0) {
       /* Setting the URB entry read length to 0 causes undefined behavior, so
        * if we have no URB data to read, set it to 1.
@@ -149,17 +143,8 @@ upload_sf_state(struct brw_context *brw)
       urb_entry_read_length << GEN6_SF_URB_ENTRY_READ_LENGTH_SHIFT |
       urb_entry_read_offset << GEN6_SF_URB_ENTRY_READ_OFFSET_SHIFT;
 
-   dw2 = GEN6_SF_STATISTICS_ENABLE;
-
-   /* Enable viewport transform only if no HiZ operation is progress
-    *
-    * From page 11 of the SandyBridge PRM, Volume 2, Part 1, Section 1.3, "3D
-    * Primitives Overview":
-    *     RECTLIST: Viewport Mapping must be DISABLED (as is typical with the
-    *     use of screen- space coordinates).
-    */
-   if (!brw->hiz.op)
-      dw2 |= GEN6_SF_VIEWPORT_TRANSFORM_ENABLE;
+   dw2 = GEN6_SF_STATISTICS_ENABLE |
+         GEN6_SF_VIEWPORT_TRANSFORM_ENABLE;
 
    dw3 = 0;
    dw4 = 0;
@@ -315,9 +300,10 @@ upload_sf_state(struct brw_context *brw)
        */
       assert(input_index < 16 || attr == input_index);
 
-      /* _NEW_LIGHT | _NEW_PROGRAM */
+      /* CACHE_NEW_VS_PROG | _NEW_LIGHT | _NEW_PROGRAM */
       attr_overrides[input_index++] =
-         get_attr_override(&vue_map, urb_entry_read_offset, attr,
+         get_attr_override(&brw->vs.prog_data->vue_map,
+			   urb_entry_read_offset, attr,
                            ctx->VertexProgram._TwoSideEnabled);
    }
 
@@ -351,11 +337,9 @@ const struct brw_tracked_state gen6_sf_state = {
 		_NEW_LINE |
 		_NEW_SCISSOR |
 		_NEW_BUFFERS |
-		_NEW_POINT |
-		_NEW_TRANSFORM),
+		_NEW_POINT),
       .brw   = (BRW_NEW_CONTEXT |
-		BRW_NEW_FRAGMENT_PROGRAM |
-		BRW_NEW_HIZ),
+		BRW_NEW_FRAGMENT_PROGRAM),
       .cache = CACHE_NEW_VS_PROG
    },
    .emit = upload_sf_state,

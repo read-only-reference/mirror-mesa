@@ -30,7 +30,7 @@
 #include "util/u_hash_table.h"
 #include "os/os_thread.h"
 
-#define R600_MAX_DRAW_CS_DWORDS 17
+#define R600_MAX_DRAW_CS_DWORDS 11
 
 #define PKT_COUNT_C                     0xC000FFFF
 #define PKT_COUNT_S(x)                  (((x) & 0x3FFF) << 16)
@@ -43,6 +43,8 @@
 #define REG_FLAG_ENABLE_ALWAYS 16
 #define BLOCK_FLAG_RESOURCE 32
 #define REG_FLAG_FLUSH_CHANGE 64
+
+#define GROUP_FORCE_NEW_BLOCK	0
 
 struct r600_reg {
 	unsigned			offset;
@@ -60,8 +62,10 @@ void r600_context_pipe_state_set_resource(struct r600_context *ctx, struct r600_
 void r600_context_dirty_block(struct r600_context *ctx, struct r600_block *block,
 			      int dirty, int index);
 int r600_setup_block_table(struct r600_context *ctx);
-void r600_init_cs(struct r600_context *ctx);
 int r600_resource_init(struct r600_context *ctx, struct r600_range *range, unsigned offset, unsigned nblocks, unsigned stride, struct r600_reg *reg, int nreg, unsigned offset_base);
+int r600_state_sampler_init(struct r600_context *ctx, uint32_t offset);
+void r600_context_pipe_state_set_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned offset);
+void r600_context_ps_partial_flush(struct r600_context *ctx);
 
 /*
  * evergreen_hw_context.c

@@ -196,32 +196,53 @@ static boolean radeon_bo_is_busy(struct pb_buffer *_buf,
     }
 }
 
-static uint64_t radeon_bomgr_find_va(struct radeon_bomgr *mgr, uint64_t size)
+static uint64_t radeon_bomgr_find_va(struct radeon_bomgr *mgr, uint64_t size, uint64_t alignment)
 {
     struct radeon_bo_va_hole *hole, *n;
-    uint64_t offset = 0;
+    uint64_t offset = 0, waste = 0;
 
     pipe_mutex_lock(mgr->bo_va_mutex);
     /* first look for a hole */
     LIST_FOR_EACH_ENTRY_SAFE(hole, n, &mgr->va_holes, list) {
-        if (hole->size == size) {
+        offset = hole->offset;
+        waste = 0;
+        if (alignment) {
+            waste = offset % alignment;
+            waste = waste ? alignment - waste : 0;
+        }
+        offset += waste;
+        if (offset >= (hole->offset + hole->size)) {
+            continue;
+        }
+        if (!waste && hole->size == size) {
             offset = hole->offset;
             list_del(&hole->list);
             FREE(hole);
             pipe_mutex_unlock(mgr->bo_va_mutex);
             return offset;
         }
-        if (hole->size > size) {
-            offset = hole->offset;
-            hole->size -= size;
-            hole->offset += size;
+        if ((hole->size - waste) >= size) {
+            if (waste) {
+                n = CALLOC_STRUCT(radeon_bo_va_hole);
+                n->size = waste;
+                n->offset = hole->offset;
+                list_add(&n->list, &mgr->va_holes);
+            }
+            hole->size -= (size + waste);
+            hole->offset += size + waste;
             pipe_mutex_unlock(mgr->bo_va_mutex);
             return offset;
         }
     }
 
     offset = mgr->va_offset;
-    mgr->va_offset += size;
+    waste = 0;
+    if (alignment) {
+        waste = offset % alignment;
+        waste = waste ? alignment - waste : 0;
+    }
+    offset += waste;
+    mgr->va_offset += size + waste;
     pipe_mutex_unlock(mgr->bo_va_mutex);
     return offset;
 }
@@ -517,7 +538,7 @@ static struct pb_buffer *radeon_bomgr_create_bo(struct pb_manager *_mgr,
         struct drm_radeon_gem_va va;
 
         bo->va_size = align(size,  4096);
-        bo->va = radeon_bomgr_find_va(mgr, bo->va_size);
+        bo->va = radeon_bomgr_find_va(mgr, bo->va_size, desc->alignment);
 
         va.handle = bo->handle;
         va.vm_id = 0;
@@ -620,9 +641,28 @@ static void *radeon_bo_map(struct pb_buffer *buf,
     return pb_map(buf, get_pb_usage_from_transfer_flags(usage), cs);
 }
 
+static unsigned eg_tile_split(unsigned tile_split)
+{
+    switch (tile_split) {
+    case 0:     tile_split = 64;    break;
+    case 1:     tile_split = 128;   break;
+    case 2:     tile_split = 256;   break;
+    case 3:     tile_split = 512;   break;
+    default:
+    case 4:     tile_split = 1024;  break;
+    case 5:     tile_split = 2048;  break;
+    case 6:     tile_split = 4096;  break;
+    }
+    return tile_split;
+}
+
 static void radeon_bo_get_tiling(struct pb_buffer *_buf,
                                  enum radeon_bo_layout *microtiled,
-                                 enum radeon_bo_layout *macrotiled)
+                                 enum radeon_bo_layout *macrotiled,
+                                 unsigned *bankw, unsigned *bankh,
+                                 unsigned *tile_split,
+                                 unsigned *stencil_tile_split,
+                                 unsigned *mtilea)
 {
     struct radeon_bo *bo = get_radeon_bo(_buf);
     struct drm_radeon_gem_set_tiling args;
@@ -643,6 +683,14 @@ static void radeon_bo_get_tiling(struct pb_buffer *_buf,
 
     if (args.tiling_flags & RADEON_BO_FLAGS_MACRO_TILE)
         *macrotiled = RADEON_LAYOUT_TILED;
+    if (bankw && tile_split && stencil_tile_split && mtilea && tile_split) {
+        *bankw = (args.tiling_flags >> RADEON_TILING_EG_BANKW_SHIFT) & RADEON_TILING_EG_BANKW_MASK;
+        *bankh = (args.tiling_flags >> RADEON_TILING_EG_BANKH_SHIFT) & RADEON_TILING_EG_BANKH_MASK;
+        *tile_split = (args.tiling_flags >> RADEON_TILING_EG_TILE_SPLIT_SHIFT) & RADEON_TILING_EG_TILE_SPLIT_MASK;
+        *stencil_tile_split = (args.tiling_flags >> RADEON_TILING_EG_STENCIL_TILE_SPLIT_SHIFT) & RADEON_TILING_EG_STENCIL_TILE_SPLIT_MASK;
+        *mtilea = (args.tiling_flags >> RADEON_TILING_EG_MACRO_TILE_ASPECT_SHIFT) & RADEON_TILING_EG_MACRO_TILE_ASPECT_MASK;
+        *tile_split = eg_tile_split(*tile_split);
+    }
 }
 
 static void radeon_bo_set_tiling(struct pb_buffer *_buf,
@@ -791,7 +839,7 @@ done:
         struct drm_radeon_gem_va va;
 
         bo->va_size = ((bo->base.size + 4095) & ~4095);
-        bo->va = radeon_bomgr_find_va(mgr, bo->va_size);
+        bo->va = radeon_bomgr_find_va(mgr, bo->va_size, 1 << 20);
 
         va.handle = bo->handle;
         va.operation = RADEON_VA_MAP;

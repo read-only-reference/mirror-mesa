@@ -241,7 +241,7 @@ struct blitter_context *util_blitter_create(struct pipe_context *pipe)
    }
 
    if (ctx->has_stream_out) {
-      velem[0].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
+      velem[0].src_format = PIPE_FORMAT_R32_UINT;
       ctx->velem_state_readbuf = pipe->create_vertex_elements_state(pipe, 1, &velem[0]);
    }
 
@@ -263,8 +263,8 @@ struct blitter_context *util_blitter_create(struct pipe_context *pipe)
 
       memset(&so, 0, sizeof(so));
       so.num_outputs = 1;
-      so.output[0].num_components = 4;
-      so.stride[0] = 4;
+      so.output[0].num_components = 1;
+      so.stride[0] = 1;
 
       ctx->vs_pos_only =
          util_make_vertex_passthrough_shader_with_so(pipe, 1, semantic_names,
@@ -351,12 +351,12 @@ static void blitter_unset_running_flag(struct blitter_context_priv *ctx)
 
 static void blitter_check_saved_vertex_states(struct blitter_context_priv *ctx)
 {
-   assert(ctx->base.saved_num_vertex_buffers != ~0 &&
-          ctx->base.saved_velem_state != INVALID_PTR &&
-          ctx->base.saved_vs != INVALID_PTR &&
-          (!ctx->has_geometry_shader || ctx->base.saved_gs != INVALID_PTR) &&
-          (!ctx->has_stream_out || ctx->base.saved_num_so_targets != ~0) &&
-          ctx->base.saved_rs_state != INVALID_PTR);
+   assert(ctx->base.saved_num_vertex_buffers != ~0);
+   assert(ctx->base.saved_velem_state != INVALID_PTR);
+   assert(ctx->base.saved_vs != INVALID_PTR);
+   assert(!ctx->has_geometry_shader || ctx->base.saved_gs != INVALID_PTR);
+   assert(!ctx->has_stream_out || ctx->base.saved_num_so_targets != ~0);
+   assert(ctx->base.saved_rs_state != INVALID_PTR);
 }
 
 static void blitter_restore_vertex_states(struct blitter_context_priv *ctx)
@@ -410,9 +410,9 @@ static void blitter_restore_vertex_states(struct blitter_context_priv *ctx)
 
 static void blitter_check_saved_fragment_states(struct blitter_context_priv *ctx)
 {
-   assert(ctx->base.saved_fs != INVALID_PTR &&
-          ctx->base.saved_dsa_state != INVALID_PTR &&
-          ctx->base.saved_blend_state != INVALID_PTR);
+   assert(ctx->base.saved_fs != INVALID_PTR);
+   assert(ctx->base.saved_dsa_state != INVALID_PTR);
+   assert(ctx->base.saved_blend_state != INVALID_PTR);
 }
 
 static void blitter_restore_fragment_states(struct blitter_context_priv *ctx)
@@ -453,8 +453,8 @@ static void blitter_restore_fb_state(struct blitter_context_priv *ctx)
 
 static void blitter_check_saved_textures(struct blitter_context_priv *ctx)
 {
-   assert(ctx->base.saved_num_sampler_states != ~0 &&
-          ctx->base.saved_num_sampler_views != ~0);
+   assert(ctx->base.saved_num_sampler_states != ~0);
+   assert(ctx->base.saved_num_sampler_views != ~0);
 }
 
 static void blitter_restore_textures(struct blitter_context_priv *ctx)
@@ -1247,12 +1247,23 @@ void util_blitter_copy_buffer(struct blitter_context *blitter,
    struct pipe_vertex_buffer vb;
    struct pipe_stream_output_target *so_target;
 
+   if (srcx >= src->width0 ||
+       dstx >= dst->width0) {
+      return;
+   }
+   if (srcx + size > src->width0) {
+      size = src->width0 - srcx;
+   }
+   if (dstx + size > dst->width0) {
+      size = dst->width0 - dstx;
+   }
+
    /* Drivers not capable of Stream Out should not call this function
     * in the first place. */
    assert(ctx->has_stream_out);
 
    /* Some alignment is required. */
-   if (srcx % 4 != 0 || dstx % 4 != 0 || size % 16 != 0 ||
+   if (srcx % 4 != 0 || dstx % 4 != 0 || size % 4 != 0 ||
        !ctx->has_stream_out) {
       struct pipe_box box;
       u_box_1d(srcx, size, &box);
@@ -1277,7 +1288,7 @@ void util_blitter_copy_buffer(struct blitter_context *blitter,
    so_target = pipe->create_stream_output_target(pipe, dst, dstx, size);
    pipe->set_stream_output_targets(pipe, 1, &so_target, 0);
 
-   util_draw_arrays(pipe, PIPE_PRIM_POINTS, 0, size / 16);
+   util_draw_arrays(pipe, PIPE_PRIM_POINTS, 0, size / 4);
 
    blitter_restore_vertex_states(ctx);
    blitter_unset_running_flag(ctx);

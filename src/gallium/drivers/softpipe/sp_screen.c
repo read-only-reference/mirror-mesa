@@ -134,6 +134,8 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
       return 130;
+   case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
+      return 0;
    default:
       return 0;
    }
@@ -209,6 +211,12 @@ softpipe_get_video_param(struct pipe_screen *screen,
       return vl_video_buffer_max_size(screen);
    case PIPE_VIDEO_CAP_PREFERED_FORMAT:
       return PIPE_FORMAT_NV12;
+   case PIPE_VIDEO_CAP_PREFERS_INTERLACED:
+      return false;
+   case PIPE_VIDEO_CAP_SUPPORTS_INTERLACED:
+      return false;
+   case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+      return true;
    default:
       return 0;
    }
@@ -330,7 +338,6 @@ softpipe_create_screen(struct sw_winsys *winsys)
 
    screen->winsys = winsys;
 
-   screen->base.winsys = NULL;
    screen->base.destroy = softpipe_destroy_screen;
 
    screen->base.get_name = softpipe_get_name;

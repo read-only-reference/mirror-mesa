@@ -214,14 +214,6 @@ lp_build_tgsi_inst_llvm(
    case TGSI_OPCODE_DIV:
    case TGSI_OPCODE_PUSHA:
    case TGSI_OPCODE_POPA:
-   case TGSI_OPCODE_I2F:
-   case TGSI_OPCODE_NOT:
-   case TGSI_OPCODE_SHL:
-   case TGSI_OPCODE_ISHR:
-   case TGSI_OPCODE_AND:
-   case TGSI_OPCODE_OR:
-   case TGSI_OPCODE_MOD:
-   case TGSI_OPCODE_XOR:
    case TGSI_OPCODE_SAD:
    case TGSI_OPCODE_TXF:
    case TGSI_OPCODE_TXQ:
@@ -298,6 +290,7 @@ lp_build_emit_fetch(
    const struct tgsi_full_src_register *reg = &inst->Src[src_op];
    unsigned swizzle;
    LLVMValueRef res;
+   enum tgsi_opcode_type stype = tgsi_opcode_infer_src_type(inst->Instruction.Opcode);
 
    if (chan_index == LP_CHAN_ALL) {
       swizzle = ~0;
@@ -312,7 +305,7 @@ lp_build_emit_fetch(
    assert(reg->Register.Index <= bld_base->info->file_max[reg->Register.File]);
 
    if (bld_base->emit_fetch_funcs[reg->Register.File]) {
-      res = bld_base->emit_fetch_funcs[reg->Register.File](bld_base, reg,
+      res = bld_base->emit_fetch_funcs[reg->Register.File](bld_base, reg, stype,
                                                            swizzle);
    } else {
       assert(0 && "invalid src register in emit_fetch()");

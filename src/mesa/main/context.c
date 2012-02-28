@@ -268,7 +268,7 @@ _mesa_initialize_visual( struct gl_config *vis,
    if (depthBits < 0 || depthBits > 32) {
       return GL_FALSE;
    }
-   if (stencilBits < 0 || stencilBits > STENCIL_BITS) {
+   if (stencilBits < 0 || stencilBits > 8) {
       return GL_FALSE;
    }
    assert(accumRedBits >= 0);
@@ -586,8 +586,8 @@ _mesa_init_constants(struct gl_context *ctx)
    ctx->Const.MaxLights = MAX_LIGHTS;
    ctx->Const.MaxShininess = 128.0;
    ctx->Const.MaxSpotExponent = 128.0;
-   ctx->Const.MaxViewportWidth = MAX_WIDTH;
-   ctx->Const.MaxViewportHeight = MAX_HEIGHT;
+   ctx->Const.MaxViewportWidth = MAX_VIEWPORT_WIDTH;
+   ctx->Const.MaxViewportHeight = MAX_VIEWPORT_HEIGHT;
 #if FEATURE_ARB_vertex_program
    init_program_limits(GL_VERTEX_PROGRAM_ARB, &ctx->Const.VertexProgram);
 #endif
@@ -608,7 +608,7 @@ _mesa_init_constants(struct gl_context *ctx)
 
 #if FEATURE_EXT_framebuffer_object
    ctx->Const.MaxColorAttachments = MAX_COLOR_ATTACHMENTS;
-   ctx->Const.MaxRenderbufferSize = MAX_WIDTH;
+   ctx->Const.MaxRenderbufferSize = MAX_RENDERBUFFER_SIZE;
 #endif
 
 #if FEATURE_ARB_vertex_shader
@@ -712,20 +712,15 @@ check_context_limits(struct gl_context *ctx)
    assert(ctx->Const.MaxCubeTextureLevels <= MAX_CUBE_TEXTURE_LEVELS);
    assert(ctx->Const.MaxTextureRectSize <= MAX_TEXTURE_RECT_SIZE);
 
-   /* make sure largest texture image is <= MAX_WIDTH in size */
-   assert((1 << (ctx->Const.MaxTextureLevels - 1)) <= MAX_WIDTH);
-   assert((1 << (ctx->Const.MaxCubeTextureLevels - 1)) <= MAX_WIDTH);
-   assert((1 << (ctx->Const.Max3DTextureLevels - 1)) <= MAX_WIDTH);
-
    /* Texture level checks */
    assert(MAX_TEXTURE_LEVELS >= MAX_3D_TEXTURE_LEVELS);
    assert(MAX_TEXTURE_LEVELS >= MAX_CUBE_TEXTURE_LEVELS);
 
    /* Max texture size should be <= max viewport size (render to texture) */
-   assert((1 << (MAX_TEXTURE_LEVELS - 1)) <= MAX_WIDTH);
-
-   assert(ctx->Const.MaxViewportWidth <= MAX_WIDTH);
-   assert(ctx->Const.MaxViewportHeight <= MAX_WIDTH);
+   assert((1 << (ctx->Const.MaxTextureLevels - 1))
+          <= ctx->Const.MaxViewportWidth);
+   assert((1 << (ctx->Const.MaxTextureLevels - 1))
+          <= ctx->Const.MaxViewportHeight);
 
    assert(ctx->Const.MaxDrawBuffers <= MAX_DRAW_BUFFERS);
 
@@ -939,13 +934,10 @@ _mesa_initialize_context(struct gl_context *ctx,
          return GL_FALSE;
    }
 
-   _glthread_LOCK_MUTEX(shared->Mutex);
-   ctx->Shared = shared;
-   shared->RefCount++;
-   _glthread_UNLOCK_MUTEX(shared->Mutex);
+   _mesa_reference_shared_state(ctx, &ctx->Shared, shared);
 
    if (!init_attrib_groups( ctx )) {
-      _mesa_release_shared_state(ctx, ctx->Shared);
+      _mesa_reference_shared_state(ctx, &ctx->Shared, NULL);
       return GL_FALSE;
    }
 
@@ -973,7 +965,7 @@ _mesa_initialize_context(struct gl_context *ctx,
    }
 
    if (!ctx->Exec) {
-      _mesa_release_shared_state(ctx, ctx->Shared);
+      _mesa_reference_shared_state(ctx, &ctx->Shared, NULL);
       return GL_FALSE;
    }
 #endif
@@ -1002,7 +994,7 @@ _mesa_initialize_context(struct gl_context *ctx,
 #if FEATURE_dlist
       ctx->Save = _mesa_create_save_table();
       if (!ctx->Save) {
-	 _mesa_release_shared_state(ctx, ctx->Shared);
+         _mesa_reference_shared_state(ctx, &ctx->Shared, NULL);
 	 free(ctx->Exec);
 	 return GL_FALSE;
       }
@@ -1140,7 +1132,7 @@ _mesa_free_context_data( struct gl_context *ctx )
    free(ctx->Save);
 
    /* Shared context state (display lists, textures, etc) */
-   _mesa_release_shared_state( ctx, ctx->Shared );
+   _mesa_reference_shared_state(ctx, &ctx->Shared, NULL);
 
    /* needs to be after freeing shared state */
    _mesa_free_display_list_data(ctx);
@@ -1540,17 +1532,18 @@ GLboolean
 _mesa_share_state(struct gl_context *ctx, struct gl_context *ctxToShare)
 {
    if (ctx && ctxToShare && ctx->Shared && ctxToShare->Shared) {
-      struct gl_shared_state *oldSharedState = ctx->Shared;
+      struct gl_shared_state *oldShared = NULL;
 
-      ctx->Shared = ctxToShare->Shared;
-      
-      _glthread_LOCK_MUTEX(ctx->Shared->Mutex);
-      ctx->Shared->RefCount++;
-      _glthread_UNLOCK_MUTEX(ctx->Shared->Mutex);
+      /* save ref to old state to prevent it from being deleted immediately */
+      _mesa_reference_shared_state(ctx, &oldShared, ctx->Shared);
+
+      /* update ctx's Shared pointer */
+      _mesa_reference_shared_state(ctx, &ctx->Shared, ctxToShare->Shared);
 
       update_default_objects(ctx);
 
-      _mesa_release_shared_state(ctx, oldSharedState);
+      /* release the old shared state */
+      _mesa_reference_shared_state(ctx, &oldShared, NULL);
 
       return GL_TRUE;
    }

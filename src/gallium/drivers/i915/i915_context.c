@@ -94,9 +94,8 @@ i915_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
       i915_cleanup_vertex_sampling(i915);
 
    /*
-    * TODO: Flush only when a user vertex/index buffer is present
-    * (or even better, modify draw module to do this
-    * internally when this condition is seen?)
+    * Instead of flushing on every state change, we flush once here
+    * when we fire the vbo.
     */
    draw_flush(i915->draw);
 }
@@ -144,7 +143,6 @@ i915_create_context(struct pipe_screen *screen, void *priv)
       return NULL;
 
    i915->iws = i915_screen(screen)->iws;
-   i915->base.winsys = NULL;
    i915->base.screen = screen;
    i915->base.priv = priv;
 
@@ -186,6 +184,7 @@ i915_create_context(struct pipe_screen *screen, void *priv)
 
    draw_install_aaline_stage(i915->draw, &i915->base);
    draw_install_aapoint_stage(i915->draw, &i915->base);
+   draw_install_pstipple_stage(i915->draw, &i915->base);
    draw_enable_point_sprites(i915->draw, TRUE);
 
    /* augmented draw pipeline clobbers state functions */

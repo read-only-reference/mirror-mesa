@@ -1463,7 +1463,7 @@ MemoryOpt::replaceStFromSt(Instruction *restrict st, Record *rec)
    st->takeExtraSources(0, extra);
 
    if (offR < offS) {
-      Value *vals[4];
+      Value *vals[10];
       int s, n;
       int k = 0;
       // get non-replaced sources of ri
@@ -1478,6 +1478,7 @@ MemoryOpt::replaceStFromSt(Instruction *restrict st, Record *rec)
       // get non-replaced sources after values covered by st
       for (; offR < endR; offR += ri->getSrc(s)->reg.size, ++s)
          vals[k++] = ri->getSrc(s);
+      assert(k <= Elements(vals));
       for (s = 0; s < k; ++s)
          st->setSrc(s + 1, vals[s]);
       st->setSrc(0, ri->getSrc(0));

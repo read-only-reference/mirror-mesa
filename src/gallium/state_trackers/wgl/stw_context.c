@@ -138,6 +138,7 @@ stw_create_context_attribs(
    int contextFlags, int profileMask)
 {
    int iPixelFormat;
+   struct stw_framebuffer *fb;
    const struct stw_pixelformat_info *pfi;
    struct st_context_attribs attribs;
    struct stw_context *ctx = NULL;
@@ -154,7 +155,20 @@ stw_create_context_attribs(
    if(!iPixelFormat)
       return 0;
 
-   pfi = stw_pixelformat_get_info( iPixelFormat - 1 );
+   /*
+    * GDI only knows about displayable pixel formats, so determine the pixel format
+    * from the framebuffer.
+    *
+    * TODO: Remove the GetPixelFormat() above, and stop relying on GDI.
+    */
+   fb = stw_framebuffer_from_hdc( hdc );
+   if (fb) {
+      assert(iPixelFormat == fb->iDisplayablePixelFormat);
+      iPixelFormat = fb->iPixelFormat;
+      stw_framebuffer_release(fb);
+   }
+
+   pfi = stw_pixelformat_get_info( iPixelFormat );
 
    if (hShareContext != 0) {
       pipe_mutex_lock( stw_dev->ctx_mutex );

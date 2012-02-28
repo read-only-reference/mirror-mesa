@@ -98,40 +98,11 @@ static void r600_buffer_transfer_unmap(struct pipe_context *pipe,
 	rctx->ws->buffer_unmap(rbuffer->buf);
 }
 
-static void r600_buffer_transfer_flush_region(struct pipe_context *pipe,
-						struct pipe_transfer *transfer,
-						const struct pipe_box *box)
-{
-}
-
 static void r600_transfer_destroy(struct pipe_context *ctx,
 				  struct pipe_transfer *transfer)
 {
 	struct r600_context *rctx = (struct r600_context*)ctx;
 	util_slab_free(&rctx->pool_transfers, transfer);
-}
-
-static void r600_buffer_transfer_inline_write(struct pipe_context *pipe,
-						struct pipe_resource *resource,
-						unsigned level,
-						unsigned usage,
-						const struct pipe_box *box,
-						const void *data,
-						unsigned stride,
-						unsigned layer_stride)
-{
-	struct r600_context *rctx = (struct r600_context*)pipe;
-	struct r600_resource *rbuffer = r600_resource(resource);
-	uint8_t *map = NULL;
-
-	assert(rbuffer->b.user_ptr == NULL);
-
-	map = rctx->ws->buffer_map(rbuffer->buf, rctx->cs,
-				   PIPE_TRANSFER_WRITE | PIPE_TRANSFER_DISCARD_RANGE | usage);
-
-	memcpy(map + box->x, data, box->width);
-
-	rctx->ws->buffer_unmap(rbuffer->buf);
 }
 
 static const struct u_resource_vtbl r600_buffer_vtbl =
@@ -141,9 +112,9 @@ static const struct u_resource_vtbl r600_buffer_vtbl =
 	r600_get_transfer,			/* get_transfer */
 	r600_transfer_destroy,			/* transfer_destroy */
 	r600_buffer_transfer_map,		/* transfer_map */
-	r600_buffer_transfer_flush_region,	/* transfer_flush_region */
+	NULL,					/* transfer_flush_region */
 	r600_buffer_transfer_unmap,		/* transfer_unmap */
-	r600_buffer_transfer_inline_write	/* transfer_inline_write */
+	NULL					/* transfer_inline_write */
 };
 
 bool r600_init_resource(struct r600_screen *rscreen,

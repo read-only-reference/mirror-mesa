@@ -108,6 +108,14 @@ void st_init_limits(struct st_context *st)
 
    c->MaxTextureUnits = _min(c->MaxTextureImageUnits, c->MaxTextureCoordUnits);
 
+   /* Define max viewport size and max renderbuffer size in terms of
+    * max texture size (note: max tex RECT size = max tex 2D size).
+    * If this isn't true for some hardware we'll need new PIPE_CAP_ queries.
+    */
+   c->MaxViewportWidth =
+   c->MaxViewportHeight =
+   c->MaxRenderbufferSize = c->MaxTextureRectSize;
+
    c->MaxDrawBuffers
       = _clamp(screen->get_param(screen, PIPE_CAP_MAX_RENDER_TARGETS),
               1, MAX_DRAW_BUFFERS);
@@ -146,8 +154,8 @@ void st_init_limits(struct st_context *st)
       = CLAMP(screen->get_param(screen, PIPE_CAP_MAX_RENDER_TARGETS),
               1, MAX_DRAW_BUFFERS);
 
-   /* Quads always follow GL provoking rules. */
-   c->QuadsFollowProvokingVertexConvention = GL_FALSE;
+   c->QuadsFollowProvokingVertexConvention = screen->get_param(
+      screen, PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION);
 
    for (sh = 0; sh < MESA_SHADER_TYPES; ++sh) {
       struct gl_shader_compiler_options *options =

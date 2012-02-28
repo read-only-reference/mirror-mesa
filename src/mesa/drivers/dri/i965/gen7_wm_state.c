@@ -41,30 +41,10 @@ upload_wm_state(struct brw_context *brw)
    bool writes_depth = false;
    uint32_t dw1;
 
-   /* _NEW_LIGHT */
-   bool flat_shade = (ctx->Light.ShadeModel == GL_FLAT);
-
    dw1 = 0;
    dw1 |= GEN7_WM_STATISTICS_ENABLE;
    dw1 |= GEN7_WM_LINE_AA_WIDTH_1_0;
    dw1 |= GEN7_WM_LINE_END_CAP_AA_WIDTH_0_5;
-
-   switch (brw->hiz.op) {
-   case BRW_HIZ_OP_NONE:
-      break;
-   case BRW_HIZ_OP_DEPTH_CLEAR:
-      dw1 |= GEN7_WM_DEPTH_CLEAR;
-      break;
-   case BRW_HIZ_OP_DEPTH_RESOLVE:
-      dw1 |= GEN7_WM_DEPTH_RESOLVE;
-      break;
-   case BRW_HIZ_OP_HIZ_RESOLVE:
-      dw1 |= GEN7_WM_HIERARCHICAL_DEPTH_RESOLVE;
-      break;
-   default:
-      assert(0);
-      break;
-   }
 
    /* _NEW_LINE */
    if (ctx->Line.StippleFlag)
@@ -81,7 +61,8 @@ upload_wm_state(struct brw_context *brw)
       writes_depth = true;
       dw1 |= GEN7_WM_PSCDEPTH_ON;
    }
-   dw1 |= brw_compute_barycentric_interp_modes(flat_shade, &fp->program) <<
+   /* CACHE_NEW_WM_PROG */
+   dw1 |= brw->wm.prog_data->barycentric_interp_modes <<
       GEN7_WM_BARYCENTRIC_INTERPOLATION_MODE_SHIFT;
 
    /* _NEW_COLOR */
@@ -103,12 +84,11 @@ upload_wm_state(struct brw_context *brw)
 
 const struct brw_tracked_state gen7_wm_state = {
    .dirty = {
-      .mesa  = (_NEW_LINE | _NEW_LIGHT | _NEW_POLYGON |
+      .mesa  = (_NEW_LINE | _NEW_POLYGON |
 	        _NEW_COLOR | _NEW_BUFFERS),
       .brw   = (BRW_NEW_FRAGMENT_PROGRAM |
-                BRW_NEW_HIZ |
 		BRW_NEW_BATCH),
-      .cache = 0,
+      .cache = CACHE_NEW_WM_PROG,
    },
    .emit = upload_wm_state,
 };
@@ -122,7 +102,7 @@ upload_ps_state(struct brw_context *brw)
    /* BRW_NEW_PS_BINDING_TABLE */
    BEGIN_BATCH(2);
    OUT_BATCH(_3DSTATE_BINDING_TABLE_POINTERS_PS << 16 | (2 - 2));
-   OUT_BATCH(brw->bind.bo_offset);
+   OUT_BATCH(brw->wm.bind_bo_offset);
    ADVANCE_BATCH();
 
    /* CACHE_NEW_SAMPLER */

@@ -1402,6 +1402,10 @@ vec4_visitor::visit(ir_dereference_variable *ir)
 
    this->result = src_reg(*reg);
 
+   /* System values get their swizzle from the dst_reg writemask */
+   if (ir->var->mode == ir_var_system_value)
+      return;
+
    if (type->is_scalar() || type->is_vector() || type->is_matrix())
       this->result.swizzle = swizzle_for_size(type->vector_elements);
 }
@@ -2252,9 +2256,6 @@ vec4_visitor::emit_urb_writes()
 
    /* FINISHME: edgeflag */
 
-   brw_compute_vue_map(&c->vue_map, intel, c->key.userclip_active,
-                       c->prog_data.outputs_written);
-
    /* First mrf is the g0-based message header containing URB handles and such,
     * which is implied in VS_OPCODE_URB_WRITE.
     */
@@ -2266,8 +2267,8 @@ vec4_visitor::emit_urb_writes()
 
    /* Set up the VUE data for the first URB write */
    int slot;
-   for (slot = 0; slot < c->vue_map.num_slots; ++slot) {
-      emit_urb_slot(mrf++, c->vue_map.slot_to_vert_result[slot]);
+   for (slot = 0; slot < c->prog_data.vue_map.num_slots; ++slot) {
+      emit_urb_slot(mrf++, c->prog_data.vue_map.slot_to_vert_result[slot]);
 
       /* If this was max_usable_mrf, we can't fit anything more into this URB
        * WRITE.
@@ -2282,16 +2283,16 @@ vec4_visitor::emit_urb_writes()
    vec4_instruction *inst = emit(VS_OPCODE_URB_WRITE);
    inst->base_mrf = base_mrf;
    inst->mlen = align_interleaved_urb_mlen(brw, mrf - base_mrf);
-   inst->eot = (slot >= c->vue_map.num_slots);
+   inst->eot = (slot >= c->prog_data.vue_map.num_slots);
 
    /* Optional second URB write */
    if (!inst->eot) {
       mrf = base_mrf + 1;
 
-      for (; slot < c->vue_map.num_slots; ++slot) {
+      for (; slot < c->prog_data.vue_map.num_slots; ++slot) {
 	 assert(mrf < max_usable_mrf);
 
-         emit_urb_slot(mrf++, c->vue_map.slot_to_vert_result[slot]);
+         emit_urb_slot(mrf++, c->prog_data.vue_map.slot_to_vert_result[slot]);
       }
 
       current_annotation = "URB write";

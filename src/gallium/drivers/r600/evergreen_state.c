@@ -48,6 +48,61 @@
 #include "r600_pipe.h"
 #include "r600_formats.h"
 
+static uint32_t eg_num_banks(uint32_t nbanks)
+{
+	switch (nbanks) {
+	case 2:
+		return 0;
+	case 4:
+		return 1;
+	case 8:
+	default:
+		return 2;
+	case 16:
+		return 3;
+	}
+}
+
+
+static unsigned eg_tile_split(unsigned tile_split)
+{
+	switch (tile_split) {
+	case 64:	tile_split = 0;	break;
+	case 128:	tile_split = 1;	break;
+	case 256:	tile_split = 2;	break;
+	case 512:	tile_split = 3;	break;
+	default:
+	case 1024:	tile_split = 4;	break;
+	case 2048:	tile_split = 5;	break;
+	case 4096:	tile_split = 6;	break;
+	}
+	return tile_split;
+}
+
+static unsigned eg_macro_tile_aspect(unsigned macro_tile_aspect)
+{
+	switch (macro_tile_aspect) {
+	default:
+	case 1:	macro_tile_aspect = 0;	break;
+	case 2:	macro_tile_aspect = 1;	break;
+	case 4:	macro_tile_aspect = 2;	break;
+	case 8:	macro_tile_aspect = 3;	break;
+	}
+	return macro_tile_aspect;
+}
+
+static unsigned eg_bank_wh(unsigned bankwh)
+{
+	switch (bankwh) {
+	default:
+	case 1:	bankwh = 0;	break;
+	case 2:	bankwh = 1;	break;
+	case 4:	bankwh = 2;	break;
+	case 8:	bankwh = 3;	break;
+	}
+	return bankwh;
+}
+
 static uint32_t r600_translate_blend_function(int blend_func)
 {
 	switch (blend_func) {
@@ -116,124 +171,6 @@ static uint32_t r600_translate_blend_factor(int blend_fact)
 		break;
 	}
 	return 0;
-}
-
-static uint32_t r600_translate_stencil_op(int s_op)
-{
-	switch (s_op) {
-	case PIPE_STENCIL_OP_KEEP:
-		return V_028800_STENCIL_KEEP;
-	case PIPE_STENCIL_OP_ZERO:
-		return V_028800_STENCIL_ZERO;
-	case PIPE_STENCIL_OP_REPLACE:
-		return V_028800_STENCIL_REPLACE;
-	case PIPE_STENCIL_OP_INCR:
-		return V_028800_STENCIL_INCR;
-	case PIPE_STENCIL_OP_DECR:
-		return V_028800_STENCIL_DECR;
-	case PIPE_STENCIL_OP_INCR_WRAP:
-		return V_028800_STENCIL_INCR_WRAP;
-	case PIPE_STENCIL_OP_DECR_WRAP:
-		return V_028800_STENCIL_DECR_WRAP;
-	case PIPE_STENCIL_OP_INVERT:
-		return V_028800_STENCIL_INVERT;
-	default:
-		R600_ERR("Unknown stencil op %d", s_op);
-		assert(0);
-		break;
-	}
-	return 0;
-}
-
-static uint32_t r600_translate_fill(uint32_t func)
-{
-	switch(func) {
-	case PIPE_POLYGON_MODE_FILL:
-		return 2;
-	case PIPE_POLYGON_MODE_LINE:
-		return 1;
-	case PIPE_POLYGON_MODE_POINT:
-		return 0;
-	default:
-		assert(0);
-		return 0;
-	}
-}
-
-/* translates straight */
-static uint32_t r600_translate_ds_func(int func)
-{
-	return func;
-}
-
-static unsigned r600_tex_wrap(unsigned wrap)
-{
-	switch (wrap) {
-	default:
-	case PIPE_TEX_WRAP_REPEAT:
-		return V_03C000_SQ_TEX_WRAP;
-	case PIPE_TEX_WRAP_CLAMP:
-		return V_03C000_SQ_TEX_CLAMP_HALF_BORDER;
-	case PIPE_TEX_WRAP_CLAMP_TO_EDGE:
-		return V_03C000_SQ_TEX_CLAMP_LAST_TEXEL;
-	case PIPE_TEX_WRAP_CLAMP_TO_BORDER:
-		return V_03C000_SQ_TEX_CLAMP_BORDER;
-	case PIPE_TEX_WRAP_MIRROR_REPEAT:
-		return V_03C000_SQ_TEX_MIRROR;
-	case PIPE_TEX_WRAP_MIRROR_CLAMP:
-		return V_03C000_SQ_TEX_MIRROR_ONCE_HALF_BORDER;
-	case PIPE_TEX_WRAP_MIRROR_CLAMP_TO_EDGE:
-		return V_03C000_SQ_TEX_MIRROR_ONCE_LAST_TEXEL;
-	case PIPE_TEX_WRAP_MIRROR_CLAMP_TO_BORDER:
-		return V_03C000_SQ_TEX_MIRROR_ONCE_BORDER;
-	}
-}
-
-static unsigned r600_tex_filter(unsigned filter)
-{
-	switch (filter) {
-	default:
-	case PIPE_TEX_FILTER_NEAREST:
-		return V_03C000_SQ_TEX_XY_FILTER_POINT;
-	case PIPE_TEX_FILTER_LINEAR:
-		return V_03C000_SQ_TEX_XY_FILTER_BILINEAR;
-	}
-}
-
-static unsigned r600_tex_mipfilter(unsigned filter)
-{
-	switch (filter) {
-	case PIPE_TEX_MIPFILTER_NEAREST:
-		return V_03C000_SQ_TEX_Z_FILTER_POINT;
-	case PIPE_TEX_MIPFILTER_LINEAR:
-		return V_03C000_SQ_TEX_Z_FILTER_LINEAR;
-	default:
-	case PIPE_TEX_MIPFILTER_NONE:
-		return V_03C000_SQ_TEX_Z_FILTER_NONE;
-	}
-}
-
-static unsigned r600_tex_compare(unsigned compare)
-{
-	switch (compare) {
-	default:
-	case PIPE_FUNC_NEVER:
-		return V_03C000_SQ_TEX_DEPTH_COMPARE_NEVER;
-	case PIPE_FUNC_LESS:
-		return V_03C000_SQ_TEX_DEPTH_COMPARE_LESS;
-	case PIPE_FUNC_EQUAL:
-		return V_03C000_SQ_TEX_DEPTH_COMPARE_EQUAL;
-	case PIPE_FUNC_LEQUAL:
-		return V_03C000_SQ_TEX_DEPTH_COMPARE_LESSEQUAL;
-	case PIPE_FUNC_GREATER:
-		return V_03C000_SQ_TEX_DEPTH_COMPARE_GREATER;
-	case PIPE_FUNC_NOTEQUAL:
-		return V_03C000_SQ_TEX_DEPTH_COMPARE_NOTEQUAL;
-	case PIPE_FUNC_GEQUAL:
-		return V_03C000_SQ_TEX_DEPTH_COMPARE_GREATEREQUAL;
-	case PIPE_FUNC_ALWAYS:
-		return V_03C000_SQ_TEX_DEPTH_COMPARE_ALWAYS;
-	}
 }
 
 static unsigned r600_tex_dim(unsigned dim)
@@ -692,26 +629,6 @@ boolean evergreen_is_format_supported(struct pipe_screen *screen,
 	return retval == usage;
 }
 
-static void evergreen_set_blend_color(struct pipe_context *ctx,
-					const struct pipe_blend_color *state)
-{
-	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct r600_pipe_state *rstate = CALLOC_STRUCT(r600_pipe_state);
-
-	if (rstate == NULL)
-		return;
-
-	rstate->id = R600_PIPE_STATE_BLEND_COLOR;
-	r600_pipe_state_add_reg(rstate, R_028414_CB_BLEND_RED, fui(state->color[0]), NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028418_CB_BLEND_GREEN, fui(state->color[1]), NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_02841C_CB_BLEND_BLUE, fui(state->color[2]), NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028420_CB_BLEND_ALPHA, fui(state->color[3]), NULL, 0);
-
-	free(rctx->states[R600_PIPE_STATE_BLEND_COLOR]);
-	rctx->states[R600_PIPE_STATE_BLEND_COLOR] = rstate;
-	r600_context_pipe_state_set(rctx, rstate);
-}
-
 static void *evergreen_create_blend_state(struct pipe_context *ctx,
 					const struct pipe_blend_state *state)
 {
@@ -751,13 +668,6 @@ static void *evergreen_create_blend_state(struct pipe_context *ctx,
 	
 	r600_pipe_state_add_reg(rstate, R_028808_CB_COLOR_CONTROL,
 				color_control, NULL, 0);
-
-	if (rctx->chip_class != CAYMAN)
-		r600_pipe_state_add_reg(rstate, R_028C3C_PA_SC_AA_MASK, ~0, NULL, 0);
-	else {
-		r600_pipe_state_add_reg(rstate, CM_R_028C38_PA_SC_AA_MASK_X0Y0_X1Y0, ~0, NULL, 0);
-		r600_pipe_state_add_reg(rstate, CM_R_028C3C_PA_SC_AA_MASK_X0Y1_X1Y1, ~0, NULL, 0);
-	}
 
 	for (int i = 0; i < 8; i++) {
 		/* state->rt entries > 0 only written if independent blending */
@@ -799,7 +709,7 @@ static void *evergreen_create_dsa_state(struct pipe_context *ctx,
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct r600_pipe_dsa *dsa = CALLOC_STRUCT(r600_pipe_dsa);
 	unsigned db_depth_control, alpha_test_control, alpha_ref;
-	unsigned db_render_override, db_render_control;
+	unsigned db_render_control;
 	struct r600_pipe_state *rstate;
 
 	if (dsa == NULL) {
@@ -821,14 +731,14 @@ static void *evergreen_create_dsa_state(struct pipe_context *ctx,
 	/* stencil */
 	if (state->stencil[0].enabled) {
 		db_depth_control |= S_028800_STENCIL_ENABLE(1);
-		db_depth_control |= S_028800_STENCILFUNC(r600_translate_ds_func(state->stencil[0].func));
+		db_depth_control |= S_028800_STENCILFUNC(state->stencil[0].func); /* translates straight */
 		db_depth_control |= S_028800_STENCILFAIL(r600_translate_stencil_op(state->stencil[0].fail_op));
 		db_depth_control |= S_028800_STENCILZPASS(r600_translate_stencil_op(state->stencil[0].zpass_op));
 		db_depth_control |= S_028800_STENCILZFAIL(r600_translate_stencil_op(state->stencil[0].zfail_op));
 
 		if (state->stencil[1].enabled) {
 			db_depth_control |= S_028800_BACKFACE_ENABLE(1);
-			db_depth_control |= S_028800_STENCILFUNC_BF(r600_translate_ds_func(state->stencil[1].func));
+			db_depth_control |= S_028800_STENCILFUNC_BF(state->stencil[1].func); /* translates straight */
 			db_depth_control |= S_028800_STENCILFAIL_BF(r600_translate_stencil_op(state->stencil[1].fail_op));
 			db_depth_control |= S_028800_STENCILZPASS_BF(r600_translate_stencil_op(state->stencil[1].zpass_op));
 			db_depth_control |= S_028800_STENCILZFAIL_BF(r600_translate_stencil_op(state->stencil[1].zfail_op));
@@ -847,26 +757,9 @@ static void *evergreen_create_dsa_state(struct pipe_context *ctx,
 
 	/* misc */
 	db_render_control = 0;
-	db_render_override = S_02800C_FORCE_HIZ_ENABLE(V_02800C_FORCE_DISABLE) |
-		S_02800C_FORCE_HIS_ENABLE0(V_02800C_FORCE_DISABLE) |
-		S_02800C_FORCE_HIS_ENABLE1(V_02800C_FORCE_DISABLE);
-	/* TODO db_render_override depends on query */
-	r600_pipe_state_add_reg(rstate, R_028028_DB_STENCIL_CLEAR, 0x00000000, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_02802C_DB_DEPTH_CLEAR, 0x3F800000, NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_028410_SX_ALPHA_TEST_CONTROL, alpha_test_control, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0286DC_SPI_FOG_CNTL, 0x00000000, NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_028800_DB_DEPTH_CONTROL, db_depth_control, NULL, 0);
-	/* The DB_SHADER_CONTROL mask is 0xFFFFFFBC since Z_EXPORT_ENABLE,
-	 * STENCIL_EXPORT_ENABLE and KILL_ENABLE are controlled by
-	 * evergreen_pipe_shader_ps().*/
 	r600_pipe_state_add_reg(rstate, R_028000_DB_RENDER_CONTROL, db_render_control, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_02800C_DB_RENDER_OVERRIDE, db_render_override, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028AC0_DB_SRESULTS_COMPARE_STATE0, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028AC4_DB_SRESULTS_COMPARE_STATE1, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028AC8_DB_PRELOAD_CONTROL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028B70_DB_ALPHA_TO_MASK, 0x0000AA00, NULL, 0);
-	dsa->db_render_override = db_render_override;
-
 	return rstate;
 }
 
@@ -899,17 +792,6 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 	rs->pa_sc_line_stipple = state->line_stipple_enable ?
 				S_028A0C_LINE_PATTERN(state->line_stipple_pattern) |
 				S_028A0C_REPEAT_COUNT(state->line_stipple_factor) : 0;
-	rs->pa_su_sc_mode_cntl =
-		S_028814_PROVOKING_VTX_LAST(prov_vtx) |
-		S_028814_CULL_FRONT(state->rasterizer_discard || (state->cull_face & PIPE_FACE_FRONT) ? 1 : 0) |
-		S_028814_CULL_BACK(state->rasterizer_discard || (state->cull_face & PIPE_FACE_BACK) ? 1 : 0) |
-		S_028814_FACE(!state->front_ccw) |
-		S_028814_POLY_OFFSET_FRONT_ENABLE(state->offset_tri) |
-		S_028814_POLY_OFFSET_BACK_ENABLE(state->offset_tri) |
-		S_028814_POLY_OFFSET_PARA_ENABLE(state->offset_tri) |
-		S_028814_POLY_MODE(polygon_dual_mode) |
-		S_028814_POLYMODE_FRONT_PTYPE(r600_translate_fill(state->fill_front)) |
-		S_028814_POLYMODE_BACK_PTYPE(r600_translate_fill(state->fill_back));
 	rs->pa_cl_clip_cntl =
 		S_028810_PS_UCP_MODE(3) |
 		S_028810_ZCLIP_NEAR_DISABLE(!state->depth_clip) |
@@ -936,7 +818,6 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 	}
 	r600_pipe_state_add_reg(rstate, R_0286D4_SPI_INTERP_CONTROL_0, tmp, NULL, 0);
 
-	r600_pipe_state_add_reg(rstate, R_028820_PA_CL_NANINF_CNTL, 0x00000000, NULL, 0);
 	/* point size 12.4 fixed point */
 	tmp = (unsigned)(state->point_size * 8.0);
 	r600_pipe_state_add_reg(rstate, R_028A00_PA_SU_POINT_SIZE, S_028A00_HEIGHT(tmp) | S_028A00_WIDTH(tmp), NULL, 0);
@@ -962,30 +843,28 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 				NULL, 0);
 
 	if (rctx->chip_class == CAYMAN) {
-		r600_pipe_state_add_reg(rstate, CM_R_028BDC_PA_SC_LINE_CNTL, 0x00000400, NULL, 0);
 		r600_pipe_state_add_reg(rstate, CM_R_028BE4_PA_SU_VTX_CNTL,
 					S_028C08_PIX_CENTER_HALF(state->gl_rasterization_rules),
 					NULL, 0);
-		r600_pipe_state_add_reg(rstate, CM_R_028BE8_PA_CL_GB_VERT_CLIP_ADJ, 0x3F800000, NULL, 0);
-		r600_pipe_state_add_reg(rstate, CM_R_028BEC_PA_CL_GB_VERT_DISC_ADJ, 0x3F800000, NULL, 0);
-		r600_pipe_state_add_reg(rstate, CM_R_028BF0_PA_CL_GB_HORZ_CLIP_ADJ, 0x3F800000, NULL, 0);
-		r600_pipe_state_add_reg(rstate, CM_R_028BF4_PA_CL_GB_HORZ_DISC_ADJ, 0x3F800000, NULL, 0);
-
-
 	} else {
-		r600_pipe_state_add_reg(rstate, R_028C00_PA_SC_LINE_CNTL, 0x00000400, NULL, 0);
-
-		r600_pipe_state_add_reg(rstate, R_028C0C_PA_CL_GB_VERT_CLIP_ADJ, 0x3F800000, NULL, 0);
-		r600_pipe_state_add_reg(rstate, R_028C10_PA_CL_GB_VERT_DISC_ADJ, 0x3F800000, NULL, 0);
-		r600_pipe_state_add_reg(rstate, R_028C14_PA_CL_GB_HORZ_CLIP_ADJ, 0x3F800000, NULL, 0);
-		r600_pipe_state_add_reg(rstate, R_028C18_PA_CL_GB_HORZ_DISC_ADJ, 0x3F800000, NULL, 0);
-
 		r600_pipe_state_add_reg(rstate, R_028C08_PA_SU_VTX_CNTL,
 					S_028C08_PIX_CENTER_HALF(state->gl_rasterization_rules),
 					NULL, 0);
 	}
 	r600_pipe_state_add_reg(rstate, R_028B7C_PA_SU_POLY_OFFSET_CLAMP, fui(state->offset_clamp), NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_02820C_PA_SC_CLIPRECT_RULE, clip_rule, NULL, 0);
+	r600_pipe_state_add_reg(rstate, R_028814_PA_SU_SC_MODE_CNTL,
+				S_028814_PROVOKING_VTX_LAST(prov_vtx) |
+				S_028814_CULL_FRONT(state->rasterizer_discard || (state->cull_face & PIPE_FACE_FRONT) ? 1 : 0) |
+				S_028814_CULL_BACK(state->rasterizer_discard || (state->cull_face & PIPE_FACE_BACK) ? 1 : 0) |
+				S_028814_FACE(!state->front_ccw) |
+				S_028814_POLY_OFFSET_FRONT_ENABLE(state->offset_tri) |
+				S_028814_POLY_OFFSET_BACK_ENABLE(state->offset_tri) |
+				S_028814_POLY_OFFSET_PARA_ENABLE(state->offset_tri) |
+				S_028814_POLY_MODE(polygon_dual_mode) |
+				S_028814_POLYMODE_FRONT_PTYPE(r600_translate_fill(state->fill_front)) |
+				S_028814_POLYMODE_BACK_PTYPE(r600_translate_fill(state->fill_back)),
+				NULL, 0);
 	return rstate;
 }
 
@@ -1035,13 +914,15 @@ static struct pipe_sampler_view *evergreen_create_sampler_view(struct pipe_conte
 							struct pipe_resource *texture,
 							const struct pipe_sampler_view *state)
 {
+	struct r600_screen *rscreen = (struct r600_screen*)ctx->screen;
 	struct r600_pipe_sampler_view *view = CALLOC_STRUCT(r600_pipe_sampler_view);
 	struct r600_pipe_resource_state *rstate;
 	struct r600_resource_texture *tmp = (struct r600_resource_texture*)texture;
 	unsigned format, endian;
 	uint32_t word4 = 0, yuv_format = 0, pitch = 0;
 	unsigned char swizzle[4], array_mode = 0, tile_type = 0;
-	unsigned height, depth;
+	unsigned height, depth, width;
+	unsigned macro_aspect, tile_split, bankh, bankw, nbanks;
 
 	if (view == NULL)
 		return NULL;
@@ -1067,20 +948,62 @@ static struct pipe_sampler_view *evergreen_create_sampler_view(struct pipe_conte
 		format = 0;
 	}
 
-	if (tmp->depth && !tmp->is_flushing_texture) {
+	if (tmp->is_depth && !tmp->is_flushing_texture) {
 		r600_texture_depth_flush(ctx, texture, TRUE);
 		tmp = tmp->flushed_depth_texture;
 	}
 
 	endian = r600_colorformat_endian_swap(format);
 
-	height = texture->height0;
-	depth = texture->depth0;
+	if (!rscreen->use_surface_alloc) {
+		height = texture->height0;
+		depth = texture->depth0;
+		width = texture->width0;
+		pitch = align(tmp->pitch_in_blocks[0] *
+				util_format_get_blockwidth(state->format), 8);
+		array_mode = tmp->array_mode[0];
+		tile_type = tmp->tile_type;
+		tile_split = 0;
+		macro_aspect = 0;
+		bankw = 0;
+		bankh = 0;
+	} else {
+		width = tmp->surface.level[0].npix_x;
+		height = tmp->surface.level[0].npix_y;
+		depth = tmp->surface.level[0].npix_z;
+		pitch = tmp->surface.level[0].nblk_x * util_format_get_blockwidth(state->format);
+		tile_type = tmp->tile_type;
 
-	pitch = align(tmp->pitch_in_blocks[0] *
-		      util_format_get_blockwidth(state->format), 8);
-	array_mode = tmp->array_mode[0];
-	tile_type = tmp->tile_type;
+		switch (tmp->surface.level[0].mode) {
+		case RADEON_SURF_MODE_LINEAR_ALIGNED:
+			array_mode = V_028C70_ARRAY_LINEAR_ALIGNED;
+			break;
+		case RADEON_SURF_MODE_2D:
+			array_mode = V_028C70_ARRAY_2D_TILED_THIN1;
+			break;
+		case RADEON_SURF_MODE_1D:
+			array_mode = V_028C70_ARRAY_1D_TILED_THIN1;
+			break;
+		case RADEON_SURF_MODE_LINEAR:
+		default:
+			array_mode = V_028C70_ARRAY_LINEAR_GENERAL;
+			break;
+		}
+		tile_split = tmp->surface.tile_split;
+		macro_aspect = tmp->surface.mtilea;
+		bankw = tmp->surface.bankw;
+		bankh = tmp->surface.bankh;
+		tile_split = eg_tile_split(tile_split);
+		macro_aspect = eg_macro_tile_aspect(macro_aspect);
+		bankw = eg_bank_wh(bankw);
+		bankh = eg_bank_wh(bankh);
+	}
+	/* 128 bit formats require tile type = 1 */
+	if (rscreen->chip_class == CAYMAN) {
+		if (util_format_get_blocksize(state->format) >= 16)
+			tile_type = 1;
+	}
+	nbanks = eg_num_banks(rscreen->tiling_info.num_banks);
 
 	if (texture->target == PIPE_TEXTURE_1D_ARRAY) {
 	        height = 1;
@@ -1096,13 +1019,20 @@ static struct pipe_sampler_view *evergreen_create_sampler_view(struct pipe_conte
 
 	rstate->val[0] = (S_030000_DIM(r600_tex_dim(texture->target)) |
 			  S_030000_PITCH((pitch / 8) - 1) |
-			  S_030000_NON_DISP_TILING_ORDER(tile_type) |
-			  S_030000_TEX_WIDTH(texture->width0 - 1));
+			  S_030000_TEX_WIDTH(width - 1));
+	if (rscreen->chip_class == CAYMAN)
+		rstate->val[0] |= CM_S_030000_NON_DISP_TILING_ORDER(tile_type);
+	else
+		rstate->val[0] |= S_030000_NON_DISP_TILING_ORDER(tile_type);
 	rstate->val[1] = (S_030004_TEX_HEIGHT(height - 1) |
 			  S_030004_TEX_DEPTH(depth - 1) |
 			  S_030004_ARRAY_MODE(array_mode));
 	rstate->val[2] = (tmp->offset[0] + r600_resource_va(ctx->screen, texture)) >> 8;
-	rstate->val[3] = (tmp->offset[1] + r600_resource_va(ctx->screen, texture)) >> 8;
+	if (state->u.tex.last_level) {
+		rstate->val[3] = (tmp->offset[1] + r600_resource_va(ctx->screen, texture)) >> 8;
+	} else {
+		rstate->val[3] = (tmp->offset[0] + r600_resource_va(ctx->screen, texture)) >> 8;
+	}
 	rstate->val[4] = (word4 |
 			  S_030010_SRF_MODE_ALL(V_030010_SRF_MODE_ZERO_CLAMP_MINUS_ONE) |
 			  S_030010_ENDIAN_SWAP(endian) |
@@ -1110,9 +1040,15 @@ static struct pipe_sampler_view *evergreen_create_sampler_view(struct pipe_conte
 	rstate->val[5] = (S_030014_LAST_LEVEL(state->u.tex.last_level) |
 			  S_030014_BASE_ARRAY(state->u.tex.first_layer) |
 			  S_030014_LAST_ARRAY(state->u.tex.last_layer));
-	rstate->val[6] = (S_030018_MAX_ANISO(4 /* max 16 samples */));
-	rstate->val[7] = (S_03001C_DATA_FORMAT(format) |
-			  S_03001C_TYPE(V_03001C_SQ_TEX_VTX_VALID_TEXTURE));
+	/* aniso max 16 samples */
+	rstate->val[6] = (S_030018_MAX_ANISO(4)) |
+			 (S_030018_TILE_SPLIT(tile_split));
+	rstate->val[7] = S_03001C_DATA_FORMAT(format) |
+			 S_03001C_TYPE(V_03001C_SQ_TEX_VTX_VALID_TEXTURE) |
+			 S_03001C_BANK_WIDTH(bankw) |
+			 S_03001C_BANK_HEIGHT(bankh) |
+			 S_03001C_MACRO_TILE_ASPECT(macro_aspect) |
+			 S_03001C_NUM_BANKS(nbanks);
 
 	return &view->base;
 }
@@ -1125,8 +1061,8 @@ static void evergreen_set_vs_sampler_view(struct pipe_context *ctx, unsigned cou
 
 	for (int i = 0; i < count; i++) {
 		if (resource[i]) {
-			evergreen_context_pipe_state_set_vs_resource(rctx, &resource[i]->state,
-								     i + R600_MAX_CONST_BUFFERS);
+			r600_context_pipe_state_set_vs_resource(rctx, &resource[i]->state,
+								i + R600_MAX_CONST_BUFFERS);
 		}
 	}
 }
@@ -1142,28 +1078,28 @@ static void evergreen_set_ps_sampler_view(struct pipe_context *ctx, unsigned cou
 	for (i = 0; i < count; i++) {
 		if (&rctx->ps_samplers.views[i]->base != views[i]) {
 			if (resource[i]) {
-				if (((struct r600_resource_texture *)resource[i]->base.texture)->depth)
+				if (((struct r600_resource_texture *)resource[i]->base.texture)->is_depth)
 					has_depth = 1;
-				evergreen_context_pipe_state_set_ps_resource(rctx, &resource[i]->state,
-									     i + R600_MAX_CONST_BUFFERS);
+				r600_context_pipe_state_set_ps_resource(rctx, &resource[i]->state,
+									i + R600_MAX_CONST_BUFFERS);
 			} else
-				evergreen_context_pipe_state_set_ps_resource(rctx, NULL,
-									     i + R600_MAX_CONST_BUFFERS);
+				r600_context_pipe_state_set_ps_resource(rctx, NULL,
+									i + R600_MAX_CONST_BUFFERS);
 
 			pipe_sampler_view_reference(
 				(struct pipe_sampler_view **)&rctx->ps_samplers.views[i],
 				views[i]);
 		} else {
 			if (resource[i]) {
-				if (((struct r600_resource_texture *)resource[i]->base.texture)->depth)
+				if (((struct r600_resource_texture *)resource[i]->base.texture)->is_depth)
 					has_depth = 1;
 			}
 		}
 	}
 	for (i = count; i < NUM_TEX_UNITS; i++) {
 		if (rctx->ps_samplers.views[i]) {
-			evergreen_context_pipe_state_set_ps_resource(rctx, NULL,
-								     i + R600_MAX_CONST_BUFFERS);
+			r600_context_pipe_state_set_ps_resource(rctx, NULL,
+								i + R600_MAX_CONST_BUFFERS);
 			pipe_sampler_view_reference((struct pipe_sampler_view **)&rctx->ps_samplers.views[i], NULL);
 		}
 	}
@@ -1302,15 +1238,12 @@ static void evergreen_set_viewport_state(struct pipe_context *ctx,
 
 	rctx->viewport = *state;
 	rstate->id = R600_PIPE_STATE_VIEWPORT;
-	r600_pipe_state_add_reg(rstate, R_0282D0_PA_SC_VPORT_ZMIN_0, 0x00000000, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0282D4_PA_SC_VPORT_ZMAX_0, 0x3F800000, NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_02843C_PA_CL_VPORT_XSCALE_0, fui(state->scale[0]), NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_028444_PA_CL_VPORT_YSCALE_0, fui(state->scale[1]), NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_02844C_PA_CL_VPORT_ZSCALE_0, fui(state->scale[2]), NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_028440_PA_CL_VPORT_XOFFSET_0, fui(state->translate[0]), NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_028448_PA_CL_VPORT_YOFFSET_0, fui(state->translate[1]), NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_028450_PA_CL_VPORT_ZOFFSET_0, fui(state->translate[2]), NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028818_PA_CL_VTE_CNTL, 0x0000043F, NULL, 0);
 
 	free(rctx->states[R600_PIPE_STATE_VIEWPORT]);
 	rctx->states[R600_PIPE_STATE_VIEWPORT] = rstate;
@@ -1318,16 +1251,17 @@ static void evergreen_set_viewport_state(struct pipe_context *ctx,
 }
 
 static void evergreen_cb(struct r600_context *rctx, struct r600_pipe_state *rstate,
-			const struct pipe_framebuffer_state *state, int cb)
+			 const struct pipe_framebuffer_state *state, int cb)
 {
+	struct r600_screen *rscreen = rctx->screen;
 	struct r600_resource_texture *rtex;
 	struct r600_surface *surf;
 	unsigned level = state->cbufs[cb]->u.tex.level;
 	unsigned pitch, slice;
-	unsigned color_info;
+	unsigned color_info, color_attrib;
 	unsigned format, swap, ntype, endian;
 	uint64_t offset;
-	unsigned tile_type;
+	unsigned tile_type, macro_aspect, tile_split, bankh, bankw, nbanks;
 	const struct util_format_description *desc;
 	int i;
 	unsigned blend_clamp = 0, blend_bypass = 0;
@@ -1335,25 +1269,93 @@ static void evergreen_cb(struct r600_context *rctx, struct r600_pipe_state *rsta
 	surf = (struct r600_surface *)state->cbufs[cb];
 	rtex = (struct r600_resource_texture*)state->cbufs[cb]->texture;
 
-	if (rtex->depth)
+	if (rtex->is_depth)
 		rctx->have_depth_fb = TRUE;
 
-	if (rtex->depth && !rtex->is_flushing_texture) {
+	if (rtex->is_depth && !rtex->is_flushing_texture) {
 	        r600_texture_depth_flush(&rctx->context, state->cbufs[cb]->texture, TRUE);
 		rtex = rtex->flushed_depth_texture;
 	}
 
 	/* XXX quite sure for dx10+ hw don't need any offset hacks */
-	offset = r600_texture_get_offset(rtex,
-					 level, state->cbufs[cb]->u.tex.first_layer);
-	pitch = rtex->pitch_in_blocks[level] / 8 - 1;
-	slice = rtex->pitch_in_blocks[level] * surf->aligned_height / 64 - 1;
+	if (!rscreen->use_surface_alloc) {
+		offset = r600_texture_get_offset(rtex,
+				level, state->cbufs[cb]->u.tex.first_layer);
+		pitch = rtex->pitch_in_blocks[level] / 8 - 1;
+		slice = rtex->pitch_in_blocks[level] * surf->aligned_height / 64;
+		if (slice) {
+			slice = slice - 1;
+		}
+		color_info = S_028C70_ARRAY_MODE(rtex->array_mode[level]);
+		tile_split = 0;
+		macro_aspect = 0;
+		bankw = 0;
+		bankh = 0;
+		if (rtex->array_mode[level] > V_028C70_ARRAY_LINEAR_ALIGNED) {
+			tile_type = rtex->tile_type;
+		} else {
+			/* workaround for linear buffers */
+			tile_type = 1;
+		}
+	} else {
+		offset = rtex->surface.level[level].offset;
+		if (rtex->surface.level[level].mode < RADEON_SURF_MODE_1D) {
+			offset += rtex->surface.level[level].slice_size *
+				  state->cbufs[cb]->u.tex.first_layer;
+		}
+		pitch = (rtex->surface.level[level].nblk_x) / 8 - 1;
+		slice = (rtex->surface.level[level].nblk_x * rtex->surface.level[level].nblk_y) / 64;
+		if (slice) {
+			slice = slice - 1;
+		}
+		color_info = 0;
+		switch (rtex->surface.level[level].mode) {
+		case RADEON_SURF_MODE_LINEAR_ALIGNED:
+			color_info = S_028C70_ARRAY_MODE(V_028C70_ARRAY_LINEAR_ALIGNED);
+			tile_type = 1;
+			break;
+		case RADEON_SURF_MODE_1D:
+			color_info = S_028C70_ARRAY_MODE(V_028C70_ARRAY_1D_TILED_THIN1);
+			tile_type = rtex->tile_type;
+			break;
+		case RADEON_SURF_MODE_2D:
+			color_info = S_028C70_ARRAY_MODE(V_028C70_ARRAY_2D_TILED_THIN1);
+			tile_type = rtex->tile_type;
+			break;
+		case RADEON_SURF_MODE_LINEAR:
+		default:
+			color_info = S_028C70_ARRAY_MODE(V_028C70_ARRAY_LINEAR_GENERAL);
+			tile_type = 1;
+			break;
+		}
+		tile_split = rtex->surface.tile_split;
+		macro_aspect = rtex->surface.mtilea;
+		bankw = rtex->surface.bankw;
+		bankh = rtex->surface.bankh;
+		tile_split = eg_tile_split(tile_split);
+		macro_aspect = eg_macro_tile_aspect(macro_aspect);
+		bankw = eg_bank_wh(bankw);
+		bankh = eg_bank_wh(bankh);
+	}
+	/* 128 bit formats require tile type = 1 */
+	if (rscreen->chip_class == CAYMAN) {
+		if (util_format_get_blocksize(surf->base.format) >= 16)
+			tile_type = 1;
+	}
+	nbanks = eg_num_banks(rscreen->tiling_info.num_banks);
 	desc = util_format_description(surf->base.format);
 	for (i = 0; i < 4; i++) {
 		if (desc->channel[i].type != UTIL_FORMAT_TYPE_VOID) {
 			break;
 		}
 	}
+
+	color_attrib = S_028C74_TILE_SPLIT(tile_split)|
+			S_028C74_NUM_BANKS(nbanks) |
+			S_028C74_BANK_WIDTH(bankw) |
+			S_028C74_BANK_HEIGHT(bankh) |
+			S_028C74_MACRO_TILE_ASPECT(macro_aspect) |
+			S_028C74_NON_DISP_TILING_ORDER(tile_type);
 
 	ntype = V_028C70_NUMBER_UNORM;
 	if (desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB)
@@ -1392,9 +1394,8 @@ static void evergreen_cb(struct r600_context *rctx, struct r600_pipe_state *rsta
 		blend_bypass = 1;
 	}
 
-	color_info = S_028C70_FORMAT(format) |
+	color_info |= S_028C70_FORMAT(format) |
 		S_028C70_COMP_SWAP(swap) |
-		S_028C70_ARRAY_MODE(rtex->array_mode[level]) |
 		S_028C70_BLEND_CLAMP(blend_clamp) |
 		S_028C70_BLEND_BYPASS(blend_bypass) |
 		S_028C70_NUMBER_TYPE(ntype) |
@@ -1421,10 +1422,6 @@ static void evergreen_cb(struct r600_context *rctx, struct r600_pipe_state *rsta
 	}
 	rctx->alpha_ref_dirty = true;
 
-	if (rtex->array_mode[level] > V_028C70_ARRAY_LINEAR_ALIGNED) {
-		tile_type = rtex->tile_type;
-	} else /* workaround for linear buffers */
-		tile_type = 1;
 
 	offset += r600_resource_va(rctx->context.screen, state->cbufs[cb]->texture);
 	offset >>= 8;
@@ -1447,22 +1444,38 @@ static void evergreen_cb(struct r600_context *rctx, struct r600_pipe_state *rsta
 				R_028C68_CB_COLOR0_SLICE + cb * 0x3C,
 				S_028C68_SLICE_TILE_MAX(slice),
 				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_028C6C_CB_COLOR0_VIEW + cb * 0x3C,
-				0x00000000, NULL, 0);
+	if (!rscreen->use_surface_alloc) {
+		r600_pipe_state_add_reg(rstate,
+					R_028C6C_CB_COLOR0_VIEW + cb * 0x3C,
+					0x00000000, NULL, 0);
+	} else {
+		if (rtex->surface.level[level].mode < RADEON_SURF_MODE_1D) {
+			r600_pipe_state_add_reg(rstate,
+						R_028C6C_CB_COLOR0_VIEW + cb * 0x3C,
+						0x00000000, NULL, 0);
+		} else {
+			r600_pipe_state_add_reg(rstate,
+						R_028C6C_CB_COLOR0_VIEW + cb * 0x3C,
+						S_028C6C_SLICE_START(state->cbufs[cb]->u.tex.first_layer) |
+						S_028C6C_SLICE_MAX(state->cbufs[cb]->u.tex.last_layer),
+						NULL, 0);
+		}
+	}
 	r600_pipe_state_add_reg(rstate,
 				R_028C74_CB_COLOR0_ATTRIB + cb * 0x3C,
-				S_028C74_NON_DISP_TILING_ORDER(tile_type),
+				color_attrib,
 				&rtex->resource, RADEON_USAGE_READWRITE);
 }
 
 static void evergreen_db(struct r600_context *rctx, struct r600_pipe_state *rstate,
 			 const struct pipe_framebuffer_state *state)
 {
+	struct r600_screen *rscreen = rctx->screen;
 	struct r600_resource_texture *rtex;
 	struct r600_surface *surf;
-	unsigned level, first_layer, pitch, slice, format, array_mode;
 	uint64_t offset;
+	unsigned level, first_layer, pitch, slice, format, array_mode;
+	unsigned macro_aspect, tile_split, bankh, bankw, z_info, nbanks;
 
 	if (state->zsbuf == NULL)
 		return;
@@ -1470,30 +1483,84 @@ static void evergreen_db(struct r600_context *rctx, struct r600_pipe_state *rsta
 	surf = (struct r600_surface *)state->zsbuf;
 	level = surf->base.u.tex.level;
 	rtex = (struct r600_resource_texture*)surf->base.texture;
-
-	/* XXX remove this once tiling is properly supported */
-	array_mode = rtex->array_mode[level] ? rtex->array_mode[level] :
-					       V_028C70_ARRAY_1D_TILED_THIN1;
-
 	first_layer = surf->base.u.tex.first_layer;
-	offset = r600_texture_get_offset(rtex, level, first_layer);
-	pitch = rtex->pitch_in_blocks[level] / 8 - 1;
-	slice = rtex->pitch_in_blocks[level] * surf->aligned_height / 64 - 1;
 	format = r600_translate_dbformat(rtex->real_format);
 
-	offset += r600_resource_va(rctx->context.screen, surf->base.texture);
+	offset = r600_resource_va(rctx->context.screen, surf->base.texture);
+	/* XXX remove this once tiling is properly supported */
+	if (!rscreen->use_surface_alloc) {
+		/* XXX remove this once tiling is properly supported */
+		array_mode = rtex->array_mode[level] ? rtex->array_mode[level] :
+				V_028C70_ARRAY_1D_TILED_THIN1;
+
+		offset += r600_texture_get_offset(rtex, level, first_layer);
+		pitch = (rtex->pitch_in_blocks[level] / 8) - 1;
+		slice = ((rtex->pitch_in_blocks[level] * surf->aligned_height) / 64);
+		if (slice) {
+			slice = slice - 1;
+		}
+		tile_split = 0;
+		macro_aspect = 0;
+		bankw = 0;
+		bankh = 0;
+	} else {
+		offset += rtex->surface.level[level].offset;
+		pitch = (rtex->surface.level[level].nblk_x / 8) - 1;
+		slice = (rtex->surface.level[level].nblk_x * rtex->surface.level[level].nblk_y) / 64;
+		if (slice) {
+			slice = slice - 1;
+		}
+		switch (rtex->surface.level[level].mode) {
+		case RADEON_SURF_MODE_2D:
+			array_mode = V_028C70_ARRAY_2D_TILED_THIN1;
+			break;
+		case RADEON_SURF_MODE_1D:
+		case RADEON_SURF_MODE_LINEAR_ALIGNED:
+		case RADEON_SURF_MODE_LINEAR:
+		default:
+			array_mode = V_028C70_ARRAY_1D_TILED_THIN1;
+			break;
+		}
+		tile_split = rtex->surface.tile_split;
+		macro_aspect = rtex->surface.mtilea;
+		bankw = rtex->surface.bankw;
+		bankh = rtex->surface.bankh;
+		tile_split = eg_tile_split(tile_split);
+		macro_aspect = eg_macro_tile_aspect(macro_aspect);
+		bankw = eg_bank_wh(bankw);
+		bankh = eg_bank_wh(bankh);
+	}
+	nbanks = eg_num_banks(rscreen->tiling_info.num_banks);
 	offset >>= 8;
+
+	z_info = S_028040_ARRAY_MODE(array_mode) |
+		 S_028040_FORMAT(format) |
+		 S_028040_TILE_SPLIT(tile_split)|
+		 S_028040_NUM_BANKS(nbanks) |
+		 S_028040_BANK_WIDTH(bankw) |
+		 S_028040_BANK_HEIGHT(bankh) |
+		 S_028040_MACRO_TILE_ASPECT(macro_aspect);
 
 	r600_pipe_state_add_reg(rstate, R_028048_DB_Z_READ_BASE,
 				offset, &rtex->resource, RADEON_USAGE_READWRITE);
 	r600_pipe_state_add_reg(rstate, R_028050_DB_Z_WRITE_BASE,
 				offset, &rtex->resource, RADEON_USAGE_READWRITE);
-	r600_pipe_state_add_reg(rstate, R_028008_DB_DEPTH_VIEW, 0x00000000, NULL, 0);
+	if (!rscreen->use_surface_alloc) {
+		r600_pipe_state_add_reg(rstate, R_028008_DB_DEPTH_VIEW,
+					0x00000000, NULL, 0);
+	} else {
+		r600_pipe_state_add_reg(rstate, R_028008_DB_DEPTH_VIEW,
+					S_028008_SLICE_START(state->zsbuf->u.tex.first_layer) |
+					S_028008_SLICE_MAX(state->zsbuf->u.tex.last_layer),
+					NULL, 0);
+	}
 
 	if (rtex->stencil) {
 		uint64_t stencil_offset =
 			r600_texture_get_offset(rtex->stencil, level, first_layer);
+		unsigned stile_split;
 
+		stile_split = eg_tile_split(rtex->stencil->surface.tile_split);
 		stencil_offset += r600_resource_va(rctx->context.screen, (void*)rtex->stencil);
 		stencil_offset >>= 8;
 
@@ -1502,14 +1569,41 @@ static void evergreen_db(struct r600_context *rctx, struct r600_pipe_state *rsta
 		r600_pipe_state_add_reg(rstate, R_028054_DB_STENCIL_WRITE_BASE,
 					stencil_offset, &rtex->stencil->resource, RADEON_USAGE_READWRITE);
 		r600_pipe_state_add_reg(rstate, R_028044_DB_STENCIL_INFO,
-					1, &rtex->stencil->resource, RADEON_USAGE_READWRITE);
+					1 | S_028044_TILE_SPLIT(stile_split),
+					&rtex->stencil->resource, RADEON_USAGE_READWRITE);
 	} else {
-		r600_pipe_state_add_reg(rstate, R_028044_DB_STENCIL_INFO,
-					0, NULL, RADEON_USAGE_READWRITE);
+		if (rscreen->use_surface_alloc && rtex->surface.flags & RADEON_SURF_SBUFFER) {
+			uint64_t stencil_offset = rtex->surface.stencil_offset;
+			unsigned stile_split = rtex->surface.stencil_tile_split;
+
+			stile_split = eg_tile_split(stile_split);
+			stencil_offset += r600_resource_va(rctx->context.screen, surf->base.texture);
+			stencil_offset += rtex->surface.level[level].offset / 4;
+			stencil_offset >>= 8;
+
+			r600_pipe_state_add_reg(rstate, R_02804C_DB_STENCIL_READ_BASE,
+						stencil_offset, &rtex->resource,
+						RADEON_USAGE_READWRITE);
+			r600_pipe_state_add_reg(rstate, R_028054_DB_STENCIL_WRITE_BASE,
+						stencil_offset, &rtex->resource,
+						RADEON_USAGE_READWRITE);
+			r600_pipe_state_add_reg(rstate, R_028044_DB_STENCIL_INFO,
+						1 | S_028044_TILE_SPLIT(stile_split),
+						&rtex->resource,
+						RADEON_USAGE_READWRITE);
+		} else {
+			r600_pipe_state_add_reg(rstate, R_02804C_DB_STENCIL_READ_BASE,
+						offset, &rtex->resource,
+						RADEON_USAGE_READWRITE);
+			r600_pipe_state_add_reg(rstate, R_028054_DB_STENCIL_WRITE_BASE,
+						offset, &rtex->resource,
+						RADEON_USAGE_READWRITE);
+			r600_pipe_state_add_reg(rstate, R_028044_DB_STENCIL_INFO,
+						0, NULL, RADEON_USAGE_READWRITE);
+		}
 	}
 
-	r600_pipe_state_add_reg(rstate, R_028040_DB_Z_INFO,
-				S_028040_ARRAY_MODE(array_mode) | S_028040_FORMAT(format),
+	r600_pipe_state_add_reg(rstate, R_028040_DB_Z_INFO, z_info,
 				&rtex->resource, RADEON_USAGE_READWRITE);
 	r600_pipe_state_add_reg(rstate, R_028058_DB_DEPTH_SIZE,
 				S_028058_PITCH_TILE_MAX(pitch),
@@ -1592,25 +1686,8 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 	r600_pipe_state_add_reg(rstate,
 				R_028208_PA_SC_WINDOW_SCISSOR_BR, br,
 				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_028200_PA_SC_WINDOW_OFFSET, 0x00000000,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_028230_PA_SC_EDGERULE, 0xAAAAAAAA,
-				NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_02823C_CB_SHADER_MASK,
 				shader_mask, NULL, 0);
-
-
-	if (rctx->chip_class == CAYMAN) {
-		r600_pipe_state_add_reg(rstate, CM_R_028BE0_PA_SC_AA_CONFIG,
-					0x00000000, NULL, 0);
-	} else {
-		r600_pipe_state_add_reg(rstate, R_028C04_PA_SC_AA_CONFIG,
-					0x00000000, NULL, 0);
-		r600_pipe_state_add_reg(rstate, R_028C1C_PA_SC_AA_SAMPLE_LOCS_0,
-					0x00000000, NULL, 0);
-	}
 
 	free(rctx->states[R600_PIPE_STATE_FRAMEBUFFER]);
 	rctx->states[R600_PIPE_STATE_FRAMEBUFFER] = rstate;
@@ -1621,8 +1698,29 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 	}
 }
 
+static void evergreen_emit_db_misc_state(struct r600_context *rctx, struct r600_atom *atom)
+{
+	struct radeon_winsys_cs *cs = rctx->cs;
+	struct r600_atom_db_misc_state *a = (struct r600_atom_db_misc_state*)atom;
+	unsigned db_count_control = 0;
+	unsigned db_render_override =
+		S_02800C_FORCE_HIZ_ENABLE(V_02800C_FORCE_DISABLE) |
+		S_02800C_FORCE_HIS_ENABLE0(V_02800C_FORCE_DISABLE) |
+		S_02800C_FORCE_HIS_ENABLE1(V_02800C_FORCE_DISABLE);
+
+	if (a->occlusion_query_enabled) {
+		db_count_control |= S_028004_PERFECT_ZPASS_COUNTS(1);
+		db_render_override |= S_02800C_NOOP_CULL_DISABLE(1);
+	}
+
+	r600_write_context_reg(cs, R_028004_DB_COUNT_CONTROL, db_count_control);
+	r600_write_context_reg(cs, R_02800C_DB_RENDER_OVERRIDE, db_render_override);
+}
+
 void evergreen_init_state_functions(struct r600_context *rctx)
 {
+	r600_init_atom(&rctx->atom_db_misc_state.atom, evergreen_emit_db_misc_state, 6, 0);
+
 	rctx->context.create_blend_state = evergreen_create_blend_state;
 	rctx->context.create_depth_stencil_alpha_state = evergreen_create_dsa_state;
 	rctx->context.create_fs_state = r600_create_shader_state;
@@ -1646,7 +1744,7 @@ void evergreen_init_state_functions(struct r600_context *rctx)
 	rctx->context.delete_sampler_state = r600_delete_state;
 	rctx->context.delete_vertex_elements_state = r600_delete_vertex_element;
 	rctx->context.delete_vs_state = r600_delete_vs_shader;
-	rctx->context.set_blend_color = evergreen_set_blend_color;
+	rctx->context.set_blend_color = r600_set_blend_color;
 	rctx->context.set_clip_state = evergreen_set_clip_state;
 	rctx->context.set_constant_buffer = r600_set_constant_buffer;
 	rctx->context.set_fragment_sampler_views = evergreen_set_ps_sampler_view;
@@ -1667,91 +1765,152 @@ void evergreen_init_state_functions(struct r600_context *rctx)
 	rctx->context.set_stream_output_targets = r600_set_so_targets;
 }
 
-static void cayman_init_config(struct r600_context *rctx)
+static void cayman_init_atom_start_cs(struct r600_context *rctx)
 {
-  	struct r600_pipe_state *rstate = &rctx->config;
-	unsigned tmp;
+	struct r600_command_buffer *cb = &rctx->atom_start_cs;
 
-	tmp = 0x00000000;
-	tmp |= S_008C00_EXPORT_SRC_C(1);
-	r600_pipe_state_add_reg(rstate, R_008C00_SQ_CONFIG, tmp, NULL, 0);
+	r600_init_command_buffer(cb, 256, EMIT_EARLY);
 
+	/* This must be first. */
+	r600_store_value(cb, PKT3(PKT3_CONTEXT_CONTROL, 1, 0));
+	r600_store_value(cb, 0x80000000);
+	r600_store_value(cb, 0x80000000);
+
+	r600_store_config_reg_seq(cb, R_008C00_SQ_CONFIG, 2);
+	r600_store_value(cb, S_008C00_EXPORT_SRC_C(1)); /* R_008C00_SQ_CONFIG */
 	/* always set the temp clauses */
-	r600_pipe_state_add_reg(rstate, R_008C04_SQ_GPR_RESOURCE_MGMT_1, S_008C04_NUM_CLAUSE_TEMP_GPRS(4), NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_008C10_SQ_GLOBAL_GPR_RESOURCE_MGMT_1, 0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_008C14_SQ_GLOBAL_GPR_RESOURCE_MGMT_2, 0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_008D8C_SQ_DYN_GPR_CNTL_PS_FLUSH_REQ, (1 << 8), NULL, 0);
+	r600_store_value(cb, S_008C04_NUM_CLAUSE_TEMP_GPRS(4)); /* R_008C04_SQ_GPR_RESOURCE_MGMT_1 */
 
-	r600_pipe_state_add_reg(rstate, R_028A4C_PA_SC_MODE_CNTL_1, 0x0, NULL, 0);
+	r600_store_config_reg_seq(cb, R_008C10_SQ_GLOBAL_GPR_RESOURCE_MGMT_1, 2);
+	r600_store_value(cb, 0); /* R_008C10_SQ_GLOBAL_GPR_RESOURCE_MGMT_1 */
+	r600_store_value(cb, 0); /* R_008C14_SQ_GLOBAL_GPR_RESOURCE_MGMT_2 */
 
-	r600_pipe_state_add_reg(rstate, R_028A10_VGT_OUTPUT_PATH_CNTL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A14_VGT_HOS_CNTL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A18_VGT_HOS_MAX_TESS_LEVEL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A1C_VGT_HOS_MIN_TESS_LEVEL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A20_VGT_HOS_REUSE_DEPTH, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A24_VGT_GROUP_PRIM_TYPE, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A28_VGT_GROUP_FIRST_DECR, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A2C_VGT_GROUP_DECR, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A30_VGT_GROUP_VECT_0_CNTL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A34_VGT_GROUP_VECT_1_CNTL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A38_VGT_GROUP_VECT_0_FMT_CNTL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A3C_VGT_GROUP_VECT_1_FMT_CNTL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A40_VGT_GS_MODE, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028B94_VGT_STRMOUT_CONFIG, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028B98_VGT_STRMOUT_BUFFER_CONFIG, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, CM_R_028AA8_IA_MULTI_VGT_PARAM, S_028AA8_SWITCH_ON_EOP(1) | S_028AA8_PARTIAL_VS_WAVE_ON(1) | S_028AA8_PRIMGROUP_SIZE(63), NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028AB4_VGT_REUSE_OFF, 0x00000000, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028AB8_VGT_VTX_CNT_EN, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_008A14_PA_CL_ENHANCE, (3 << 1) | 1, NULL, 0);
+	r600_store_config_reg(cb, R_008D8C_SQ_DYN_GPR_CNTL_PS_FLUSH_REQ, (1 << 8));
 
-	r600_pipe_state_add_reg(rstate, R_028380_SQ_VTX_SEMANTIC_0, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028384_SQ_VTX_SEMANTIC_1, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028388_SQ_VTX_SEMANTIC_2, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_02838C_SQ_VTX_SEMANTIC_3, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028390_SQ_VTX_SEMANTIC_4, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028394_SQ_VTX_SEMANTIC_5, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028398_SQ_VTX_SEMANTIC_6, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_02839C_SQ_VTX_SEMANTIC_7, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283A0_SQ_VTX_SEMANTIC_8, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283A4_SQ_VTX_SEMANTIC_9, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283A8_SQ_VTX_SEMANTIC_10, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283AC_SQ_VTX_SEMANTIC_11, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283B0_SQ_VTX_SEMANTIC_12, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283B4_SQ_VTX_SEMANTIC_13, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283B8_SQ_VTX_SEMANTIC_14, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283BC_SQ_VTX_SEMANTIC_15, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283C0_SQ_VTX_SEMANTIC_16, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283C4_SQ_VTX_SEMANTIC_17, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283C8_SQ_VTX_SEMANTIC_18, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283CC_SQ_VTX_SEMANTIC_19, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283D0_SQ_VTX_SEMANTIC_20, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283D4_SQ_VTX_SEMANTIC_21, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283D8_SQ_VTX_SEMANTIC_22, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283DC_SQ_VTX_SEMANTIC_23, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283E0_SQ_VTX_SEMANTIC_24, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283E4_SQ_VTX_SEMANTIC_25, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283E8_SQ_VTX_SEMANTIC_26, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283EC_SQ_VTX_SEMANTIC_27, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283F0_SQ_VTX_SEMANTIC_28, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283F4_SQ_VTX_SEMANTIC_29, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283F8_SQ_VTX_SEMANTIC_30, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283FC_SQ_VTX_SEMANTIC_31, 0x0, NULL, 0);
+	r600_store_context_reg(cb, R_028A4C_PA_SC_MODE_CNTL_1, 0);
 
-	r600_pipe_state_add_reg(rstate, R_028810_PA_CL_CLIP_CNTL, 0x0, NULL, 0);
+	r600_store_context_reg_seq(cb, R_028A10_VGT_OUTPUT_PATH_CNTL, 13);
+	r600_store_value(cb, 0); /* R_028A10_VGT_OUTPUT_PATH_CNTL */
+	r600_store_value(cb, 0); /* R_028A14_VGT_HOS_CNTL */
+	r600_store_value(cb, 0); /* R_028A18_VGT_HOS_MAX_TESS_LEVEL */
+	r600_store_value(cb, 0); /* R_028A1C_VGT_HOS_MIN_TESS_LEVEL */
+	r600_store_value(cb, 0); /* R_028A20_VGT_HOS_REUSE_DEPTH */
+	r600_store_value(cb, 0); /* R_028A24_VGT_GROUP_PRIM_TYPE */
+	r600_store_value(cb, 0); /* R_028A28_VGT_GROUP_FIRST_DECR */
+	r600_store_value(cb, 0); /* R_028A2C_VGT_GROUP_DECR */
+	r600_store_value(cb, 0); /* R_028A30_VGT_GROUP_VECT_0_CNTL */
+	r600_store_value(cb, 0); /* R_028A34_VGT_GROUP_VECT_1_CNTL */
+	r600_store_value(cb, 0); /* R_028A38_VGT_GROUP_VECT_0_FMT_CNTL */
+	r600_store_value(cb, 0); /* R_028A3C_VGT_GROUP_VECT_1_FMT_CNTL */
+	r600_store_value(cb, 0); /* R_028A40_VGT_GS_MODE */
 
-	r600_pipe_state_add_reg(rstate, CM_R_028BD4_PA_SC_CENTROID_PRIORITY_0, 0x76543210, NULL, 0);
-	r600_pipe_state_add_reg(rstate, CM_R_028BD8_PA_SC_CENTROID_PRIORITY_1, 0xfedcba98, NULL, 0);
+	r600_store_context_reg_seq(cb, R_028B94_VGT_STRMOUT_CONFIG, 2);
+	r600_store_value(cb, 0); /* R_028B94_VGT_STRMOUT_CONFIG */
+	r600_store_value(cb, 0); /* R_028B98_VGT_STRMOUT_BUFFER_CONFIG */
 
-	r600_pipe_state_add_reg(rstate, CM_R_0288E8_SQ_LDS_ALLOC, 0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0288EC_SQ_LDS_ALLOC_PS, 0, NULL, 0);
+	r600_store_context_reg_seq(cb, R_028AB4_VGT_REUSE_OFF, 2);
+	r600_store_value(cb, 0); /* R_028AB4_VGT_REUSE_OFF */
+	r600_store_value(cb, 0); /* R_028AB8_VGT_VTX_CNT_EN */
 
-	r600_pipe_state_add_reg(rstate, CM_R_028804_DB_EQAA, 0x110000, NULL, 0);
-	r600_context_pipe_state_set(rctx, rstate);
+	r600_store_config_reg(cb, R_008A14_PA_CL_ENHANCE, (3 << 1) | 1);
+
+	r600_store_context_reg(cb, CM_R_028AA8_IA_MULTI_VGT_PARAM, S_028AA8_SWITCH_ON_EOP(1) | S_028AA8_PARTIAL_VS_WAVE_ON(1) | S_028AA8_PRIMGROUP_SIZE(63));
+
+	r600_store_context_reg_seq(cb, CM_R_028BD4_PA_SC_CENTROID_PRIORITY_0, 2);
+	r600_store_value(cb, 0x76543210); /* CM_R_028BD4_PA_SC_CENTROID_PRIORITY_0 */
+	r600_store_value(cb, 0xfedcba98); /* CM_R_028BD8_PA_SC_CENTROID_PRIORITY_1 */
+
+	r600_store_context_reg_seq(cb, CM_R_0288E8_SQ_LDS_ALLOC, 2);
+	r600_store_value(cb, 0); /* CM_R_0288E8_SQ_LDS_ALLOC */
+	r600_store_value(cb, 0); /* R_0288EC_SQ_LDS_ALLOC_PS */
+
+	r600_store_context_reg(cb, CM_R_028804_DB_EQAA, 0x110000);
+
+	r600_store_context_reg_seq(cb, R_028380_SQ_VTX_SEMANTIC_0, 34);
+	r600_store_value(cb, 0); /* R_028380_SQ_VTX_SEMANTIC_0 */
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0); /* R_0283FC_SQ_VTX_SEMANTIC_31 */
+	r600_store_value(cb, ~0); /* R_028400_VGT_MAX_VTX_INDX */
+	r600_store_value(cb, 0); /* R_028404_VGT_MIN_VTX_INDX */
+
+	r600_store_ctl_const(cb, R_03CFF0_SQ_VTX_BASE_VTX_LOC, 0);
+
+	r600_store_context_reg_seq(cb, CM_R_028C38_PA_SC_AA_MASK_X0Y0_X1Y0, 2);
+	r600_store_value(cb, ~0); /* CM_R_028C38_PA_SC_AA_MASK_X0Y0_X1Y0 */
+	r600_store_value(cb, ~0); /* CM_R_028C3C_PA_SC_AA_MASK_X0Y1_X1Y1 */
+
+	r600_store_context_reg_seq(cb, R_028028_DB_STENCIL_CLEAR, 2);
+	r600_store_value(cb, 0); /* R_028028_DB_STENCIL_CLEAR */
+	r600_store_value(cb, 0x3F800000); /* R_02802C_DB_DEPTH_CLEAR */
+
+	r600_store_context_reg(cb, R_0286DC_SPI_FOG_CNTL, 0);
+
+	r600_store_context_reg_seq(cb, R_028AC0_DB_SRESULTS_COMPARE_STATE0, 3);
+	r600_store_value(cb, 0); /* R_028AC0_DB_SRESULTS_COMPARE_STATE0 */
+	r600_store_value(cb, 0); /* R_028AC4_DB_SRESULTS_COMPARE_STATE1 */
+	r600_store_value(cb, 0); /* R_028AC8_DB_PRELOAD_CONTROL */
+
+	r600_store_context_reg(cb, R_028200_PA_SC_WINDOW_OFFSET, 0);
+
+	r600_store_context_reg_seq(cb, R_0282D0_PA_SC_VPORT_ZMIN_0, 2);
+	r600_store_value(cb, 0); /* R_0282D0_PA_SC_VPORT_ZMIN_0 */
+	r600_store_value(cb, 0x3F800000); /* R_0282D4_PA_SC_VPORT_ZMAX_0 */
+
+	r600_store_context_reg(cb, R_028230_PA_SC_EDGERULE, 0xAAAAAAAA);
+	r600_store_context_reg(cb, R_028818_PA_CL_VTE_CNTL, 0x0000043F);
+	r600_store_context_reg(cb, R_028820_PA_CL_NANINF_CNTL, 0);
+	r600_store_context_reg(cb, R_028B70_DB_ALPHA_TO_MASK, 0x0000AA00);
+
+	r600_store_context_reg_seq(cb, CM_R_028BDC_PA_SC_LINE_CNTL, 2);
+	r600_store_value(cb, 0x00000400); /* CM_R_028BDC_PA_SC_LINE_CNTL */
+	r600_store_value(cb, 0); /* CM_R_028BE0_PA_SC_AA_CONFIG */
+
+	r600_store_context_reg_seq(cb, CM_R_028BE8_PA_CL_GB_VERT_CLIP_ADJ, 4);
+	r600_store_value(cb, 0x3F800000); /* CM_R_028BE8_PA_CL_GB_VERT_CLIP_ADJ */
+	r600_store_value(cb, 0x3F800000); /* CM_R_028BEC_PA_CL_GB_VERT_DISC_ADJ */
+	r600_store_value(cb, 0x3F800000); /* CM_R_028BF0_PA_CL_GB_HORZ_CLIP_ADJ */
+	r600_store_value(cb, 0x3F800000); /* CM_R_028BF4_PA_CL_GB_HORZ_DISC_ADJ */
+
+	r600_store_context_reg(cb, R_028848_SQ_PGM_RESOURCES_2_PS, S_028848_SINGLE_ROUND(V_SQ_ROUND_TO_ZERO));
+	r600_store_context_reg(cb, R_028864_SQ_PGM_RESOURCES_2_VS, S_028864_SINGLE_ROUND(V_SQ_ROUND_TO_ZERO));
+	r600_store_context_reg(cb, R_0288A8_SQ_PGM_RESOURCES_FS, 0);
+
+	eg_store_loop_const(cb, R_03A200_SQ_LOOP_CONST_0, 0x01000FFF);
+	eg_store_loop_const(cb, R_03A200_SQ_LOOP_CONST_0 + (32 * 4), 0x01000FFF);
 }
 
-void evergreen_init_config(struct r600_context *rctx)
+void evergreen_init_atom_start_cs(struct r600_context *rctx)
 {
-	struct r600_pipe_state *rstate = &rctx->config;
+	struct r600_command_buffer *cb = &rctx->atom_start_cs;
 	int ps_prio;
 	int vs_prio;
 	int gs_prio;
@@ -1779,13 +1938,19 @@ void evergreen_init_config(struct r600_context *rctx)
 	enum radeon_family family;
 	unsigned tmp;
 
-	family = rctx->family;
-
 	if (rctx->chip_class == CAYMAN) {
-		cayman_init_config(rctx);
+		cayman_init_atom_start_cs(rctx);
 		return;
 	}
-		
+
+	r600_init_command_buffer(cb, 256, EMIT_EARLY);
+
+	/* This must be first. */
+	r600_store_value(cb, PKT3(PKT3_CONTEXT_CONTROL, 1, 0));
+	r600_store_value(cb, 0x80000000);
+	r600_store_value(cb, 0x80000000);
+
+	family = rctx->family;
 	ps_prio = 0;
 	vs_prio = 1;
 	gs_prio = 2;
@@ -2009,7 +2174,7 @@ void evergreen_init_config(struct r600_context *rctx)
 		break;
 	}
 
-	tmp = 0x00000000;
+	tmp = 0;
 	switch (family) {
 	case CHIP_CEDAR:
 	case CHIP_PALM:
@@ -2029,150 +2194,191 @@ void evergreen_init_config(struct r600_context *rctx)
 	tmp |= S_008C00_VS_PRIO(vs_prio);
 	tmp |= S_008C00_GS_PRIO(gs_prio);
 	tmp |= S_008C00_ES_PRIO(es_prio);
-	r600_pipe_state_add_reg(rstate, R_008C00_SQ_CONFIG, tmp, NULL, 0);
 
 	/* enable dynamic GPR resource management */
 	if (rctx->screen->info.drm_minor >= 7) {
+		r600_store_config_reg_seq(cb, R_008C00_SQ_CONFIG, 2);
+		r600_store_value(cb, tmp); /* R_008C00_SQ_CONFIG */
 		/* always set temp clauses */
-		r600_pipe_state_add_reg(rstate, R_008C04_SQ_GPR_RESOURCE_MGMT_1,
-					S_008C04_NUM_CLAUSE_TEMP_GPRS(num_temp_gprs), NULL, 0);
-		r600_pipe_state_add_reg(rstate, R_008C10_SQ_GLOBAL_GPR_RESOURCE_MGMT_1, 0, NULL, 0);
-		r600_pipe_state_add_reg(rstate, R_008C14_SQ_GLOBAL_GPR_RESOURCE_MGMT_2, 0, NULL, 0);
-		r600_pipe_state_add_reg(rstate, R_008D8C_SQ_DYN_GPR_CNTL_PS_FLUSH_REQ, (1 << 8), NULL, 0);
-		r600_pipe_state_add_reg(rstate, R_028838_SQ_DYN_GPR_RESOURCE_LIMIT_1,
+		r600_store_value(cb, S_008C04_NUM_CLAUSE_TEMP_GPRS(num_temp_gprs)); /* R_008C04_SQ_GPR_RESOURCE_MGMT_1 */
+		r600_store_config_reg_seq(cb, R_008C10_SQ_GLOBAL_GPR_RESOURCE_MGMT_1, 2);
+		r600_store_value(cb, 0); /* R_008C10_SQ_GLOBAL_GPR_RESOURCE_MGMT_1 */
+		r600_store_value(cb, 0); /* R_008C14_SQ_GLOBAL_GPR_RESOURCE_MGMT_2 */
+		r600_store_config_reg(cb, R_008D8C_SQ_DYN_GPR_CNTL_PS_FLUSH_REQ, (1 << 8));
+		r600_store_context_reg(cb, R_028838_SQ_DYN_GPR_RESOURCE_LIMIT_1,
 					S_028838_PS_GPRS(0x1e) |
 					S_028838_VS_GPRS(0x1e) |
 					S_028838_GS_GPRS(0x1e) |
 					S_028838_ES_GPRS(0x1e) |
 					S_028838_HS_GPRS(0x1e) |
-					S_028838_LS_GPRS(0x1e), NULL, 0); /* workaround for hw issues with dyn gpr - must set all limits to 240 instead of 0, 0x1e == 240 / 8*/
+					S_028838_LS_GPRS(0x1e)); /* workaround for hw issues with dyn gpr - must set all limits to 240 instead of 0, 0x1e == 240 / 8*/
 	} else {
-		tmp = 0;
-		tmp |= S_008C04_NUM_PS_GPRS(num_ps_gprs);
+		r600_store_config_reg_seq(cb, R_008C00_SQ_CONFIG, 4);
+		r600_store_value(cb, tmp); /* R_008C00_SQ_CONFIG */
+
+		tmp = S_008C04_NUM_PS_GPRS(num_ps_gprs);
 		tmp |= S_008C04_NUM_VS_GPRS(num_vs_gprs);
 		tmp |= S_008C04_NUM_CLAUSE_TEMP_GPRS(num_temp_gprs);
-		r600_pipe_state_add_reg(rstate, R_008C04_SQ_GPR_RESOURCE_MGMT_1, tmp, NULL, 0);
+		r600_store_value(cb, tmp); /* R_008C04_SQ_GPR_RESOURCE_MGMT_1 */
 
-		tmp = 0;
-		tmp |= S_008C08_NUM_GS_GPRS(num_gs_gprs);
+		tmp = S_008C08_NUM_GS_GPRS(num_gs_gprs);
 		tmp |= S_008C08_NUM_ES_GPRS(num_es_gprs);
-		r600_pipe_state_add_reg(rstate, R_008C08_SQ_GPR_RESOURCE_MGMT_2, tmp, NULL, 0);
+		r600_store_value(cb, tmp); /* R_008C08_SQ_GPR_RESOURCE_MGMT_2 */
 
-		tmp = 0;
-		tmp |= S_008C0C_NUM_HS_GPRS(num_hs_gprs);
+		tmp = S_008C0C_NUM_HS_GPRS(num_hs_gprs);
 		tmp |= S_008C0C_NUM_HS_GPRS(num_ls_gprs);
-		r600_pipe_state_add_reg(rstate, R_008C0C_SQ_GPR_RESOURCE_MGMT_3, tmp, NULL, 0);
+		r600_store_value(cb, tmp); /* R_008C0C_SQ_GPR_RESOURCE_MGMT_3 */
 	}
 
-	tmp = 0;
-	tmp |= S_008C18_NUM_PS_THREADS(num_ps_threads);
+	tmp = S_008C18_NUM_PS_THREADS(num_ps_threads);
 	tmp |= S_008C18_NUM_VS_THREADS(num_vs_threads);
 	tmp |= S_008C18_NUM_GS_THREADS(num_gs_threads);
 	tmp |= S_008C18_NUM_ES_THREADS(num_es_threads);
-	r600_pipe_state_add_reg(rstate, R_008C18_SQ_THREAD_RESOURCE_MGMT_1, tmp, NULL, 0);
+	r600_store_config_reg_seq(cb, R_008C18_SQ_THREAD_RESOURCE_MGMT_1, 5);
+	r600_store_value(cb, tmp); /* R_008C18_SQ_THREAD_RESOURCE_MGMT_1 */
 
-	tmp = 0;
-	tmp |= S_008C1C_NUM_HS_THREADS(num_hs_threads);
+	tmp = S_008C1C_NUM_HS_THREADS(num_hs_threads);
 	tmp |= S_008C1C_NUM_LS_THREADS(num_ls_threads);
-	r600_pipe_state_add_reg(rstate, R_008C1C_SQ_THREAD_RESOURCE_MGMT_2, tmp, NULL, 0);
+	r600_store_value(cb, tmp); /* R_008C1C_SQ_THREAD_RESOURCE_MGMT_2 */
 
-	tmp = 0;
-	tmp |= S_008C20_NUM_PS_STACK_ENTRIES(num_ps_stack_entries);
+	tmp = S_008C20_NUM_PS_STACK_ENTRIES(num_ps_stack_entries);
 	tmp |= S_008C20_NUM_VS_STACK_ENTRIES(num_vs_stack_entries);
-	r600_pipe_state_add_reg(rstate, R_008C20_SQ_STACK_RESOURCE_MGMT_1, tmp, NULL, 0);
+	r600_store_value(cb, tmp); /* R_008C20_SQ_STACK_RESOURCE_MGMT_1 */
 
-	tmp = 0;
-	tmp |= S_008C24_NUM_GS_STACK_ENTRIES(num_gs_stack_entries);
+	tmp = S_008C24_NUM_GS_STACK_ENTRIES(num_gs_stack_entries);
 	tmp |= S_008C24_NUM_ES_STACK_ENTRIES(num_es_stack_entries);
-	r600_pipe_state_add_reg(rstate, R_008C24_SQ_STACK_RESOURCE_MGMT_2, tmp, NULL, 0);
+	r600_store_value(cb, tmp); /* R_008C24_SQ_STACK_RESOURCE_MGMT_2 */
 
-	tmp = 0;
-	tmp |= S_008C28_NUM_HS_STACK_ENTRIES(num_hs_stack_entries);
+	tmp = S_008C28_NUM_HS_STACK_ENTRIES(num_hs_stack_entries);
 	tmp |= S_008C28_NUM_LS_STACK_ENTRIES(num_ls_stack_entries);
-	r600_pipe_state_add_reg(rstate, R_008C28_SQ_STACK_RESOURCE_MGMT_3, tmp, NULL, 0);
+	r600_store_value(cb, tmp); /* R_008C28_SQ_STACK_RESOURCE_MGMT_3 */
 
-	tmp = 0;
-	tmp |= S_008E2C_NUM_PS_LDS(0x1000);
-	tmp |= S_008E2C_NUM_LS_LDS(0x1000);
-	r600_pipe_state_add_reg(rstate, R_008E2C_SQ_LDS_RESOURCE_MGMT, tmp, NULL, 0);
+	r600_store_config_reg(cb, R_008E2C_SQ_LDS_RESOURCE_MGMT,
+			      S_008E2C_NUM_PS_LDS(0x1000) | S_008E2C_NUM_LS_LDS(0x1000));
 
-	r600_pipe_state_add_reg(rstate, R_009100_SPI_CONFIG_CNTL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_00913C_SPI_CONFIG_CNTL_1, S_00913C_VTX_DONE_DELAY(4), NULL, 0);
+	r600_store_config_reg(cb, R_009100_SPI_CONFIG_CNTL, 0);
+	r600_store_config_reg(cb, R_00913C_SPI_CONFIG_CNTL_1, S_00913C_VTX_DONE_DELAY(4));
 
-#if 0
-	r600_pipe_state_add_reg(rstate, R_028350_SX_MISC, 0x0, NULL, 0);
+	r600_store_context_reg(cb, R_028A4C_PA_SC_MODE_CNTL_1, 0);
 
-	r600_pipe_state_add_reg(rstate, R_008D8C_SQ_DYN_GPR_CNTL_PS_FLUSH_REQ, 0x0, NULL, 0);
-#endif
-	r600_pipe_state_add_reg(rstate, R_028A4C_PA_SC_MODE_CNTL_1, 0x0, NULL, 0);
+	r600_store_context_reg_seq(cb, R_028900_SQ_ESGS_RING_ITEMSIZE, 6);
+	r600_store_value(cb, 0); /* R_028900_SQ_ESGS_RING_ITEMSIZE */
+	r600_store_value(cb, 0); /* R_028904_SQ_GSVS_RING_ITEMSIZE */
+	r600_store_value(cb, 0); /* R_028908_SQ_ESTMP_RING_ITEMSIZE */
+	r600_store_value(cb, 0); /* R_02890C_SQ_GSTMP_RING_ITEMSIZE */
+	r600_store_value(cb, 0); /* R_028910_SQ_VSTMP_RING_ITEMSIZE */
+	r600_store_value(cb, 0); /* R_028914_SQ_PSTMP_RING_ITEMSIZE */
 
-	r600_pipe_state_add_reg(rstate, R_028900_SQ_ESGS_RING_ITEMSIZE, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028904_SQ_GSVS_RING_ITEMSIZE, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028908_SQ_ESTMP_RING_ITEMSIZE, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_02890C_SQ_GSTMP_RING_ITEMSIZE, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028910_SQ_VSTMP_RING_ITEMSIZE, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028914_SQ_PSTMP_RING_ITEMSIZE, 0x0, NULL, 0);
+	r600_store_context_reg_seq(cb, R_02891C_SQ_GS_VERT_ITEMSIZE, 4);
+	r600_store_value(cb, 0); /* R_02891C_SQ_GS_VERT_ITEMSIZE */
+	r600_store_value(cb, 0); /* R_028920_SQ_GS_VERT_ITEMSIZE_1 */
+	r600_store_value(cb, 0); /* R_028924_SQ_GS_VERT_ITEMSIZE_2 */
+	r600_store_value(cb, 0); /* R_028928_SQ_GS_VERT_ITEMSIZE_3 */
 
-	r600_pipe_state_add_reg(rstate, R_02891C_SQ_GS_VERT_ITEMSIZE, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028920_SQ_GS_VERT_ITEMSIZE_1, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028924_SQ_GS_VERT_ITEMSIZE_2, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028928_SQ_GS_VERT_ITEMSIZE_3, 0x0, NULL, 0);
+	r600_store_context_reg_seq(cb, R_028A10_VGT_OUTPUT_PATH_CNTL, 13);
+	r600_store_value(cb, 0); /* R_028A10_VGT_OUTPUT_PATH_CNTL */
+	r600_store_value(cb, 0); /* R_028A14_VGT_HOS_CNTL */
+	r600_store_value(cb, 0); /* R_028A18_VGT_HOS_MAX_TESS_LEVEL */
+	r600_store_value(cb, 0); /* R_028A1C_VGT_HOS_MIN_TESS_LEVEL */
+	r600_store_value(cb, 0); /* R_028A20_VGT_HOS_REUSE_DEPTH */
+	r600_store_value(cb, 0); /* R_028A24_VGT_GROUP_PRIM_TYPE */
+	r600_store_value(cb, 0); /* R_028A28_VGT_GROUP_FIRST_DECR */
+	r600_store_value(cb, 0); /* R_028A2C_VGT_GROUP_DECR */
+	r600_store_value(cb, 0); /* R_028A30_VGT_GROUP_VECT_0_CNTL */
+	r600_store_value(cb, 0); /* R_028A34_VGT_GROUP_VECT_1_CNTL */
+	r600_store_value(cb, 0); /* R_028A38_VGT_GROUP_VECT_0_FMT_CNTL */
+	r600_store_value(cb, 0); /* R_028A3C_VGT_GROUP_VECT_1_FMT_CNTL */
+	r600_store_value(cb, 0); /* R_028A40_VGT_GS_MODE */
 
-	r600_pipe_state_add_reg(rstate, R_028A10_VGT_OUTPUT_PATH_CNTL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A14_VGT_HOS_CNTL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A18_VGT_HOS_MAX_TESS_LEVEL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A1C_VGT_HOS_MIN_TESS_LEVEL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A20_VGT_HOS_REUSE_DEPTH, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A24_VGT_GROUP_PRIM_TYPE, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A28_VGT_GROUP_FIRST_DECR, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A2C_VGT_GROUP_DECR, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A30_VGT_GROUP_VECT_0_CNTL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A34_VGT_GROUP_VECT_1_CNTL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A38_VGT_GROUP_VECT_0_FMT_CNTL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A3C_VGT_GROUP_VECT_1_FMT_CNTL, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028A40_VGT_GS_MODE, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028B94_VGT_STRMOUT_CONFIG, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028B98_VGT_STRMOUT_BUFFER_CONFIG, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028AB4_VGT_REUSE_OFF, 0x00000000, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028AB8_VGT_VTX_CNT_EN, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_008A14_PA_CL_ENHANCE, (3 << 1) | 1, NULL, 0);
+	r600_store_context_reg_seq(cb, R_028B94_VGT_STRMOUT_CONFIG, 2);
+	r600_store_value(cb, 0); /* R_028B94_VGT_STRMOUT_CONFIG */
+	r600_store_value(cb, 0); /* R_028B98_VGT_STRMOUT_BUFFER_CONFIG */
 
-	r600_pipe_state_add_reg(rstate, R_028380_SQ_VTX_SEMANTIC_0, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028384_SQ_VTX_SEMANTIC_1, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028388_SQ_VTX_SEMANTIC_2, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_02838C_SQ_VTX_SEMANTIC_3, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028390_SQ_VTX_SEMANTIC_4, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028394_SQ_VTX_SEMANTIC_5, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_028398_SQ_VTX_SEMANTIC_6, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_02839C_SQ_VTX_SEMANTIC_7, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283A0_SQ_VTX_SEMANTIC_8, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283A4_SQ_VTX_SEMANTIC_9, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283A8_SQ_VTX_SEMANTIC_10, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283AC_SQ_VTX_SEMANTIC_11, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283B0_SQ_VTX_SEMANTIC_12, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283B4_SQ_VTX_SEMANTIC_13, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283B8_SQ_VTX_SEMANTIC_14, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283BC_SQ_VTX_SEMANTIC_15, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283C0_SQ_VTX_SEMANTIC_16, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283C4_SQ_VTX_SEMANTIC_17, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283C8_SQ_VTX_SEMANTIC_18, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283CC_SQ_VTX_SEMANTIC_19, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283D0_SQ_VTX_SEMANTIC_20, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283D4_SQ_VTX_SEMANTIC_21, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283D8_SQ_VTX_SEMANTIC_22, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283DC_SQ_VTX_SEMANTIC_23, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283E0_SQ_VTX_SEMANTIC_24, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283E4_SQ_VTX_SEMANTIC_25, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283E8_SQ_VTX_SEMANTIC_26, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283EC_SQ_VTX_SEMANTIC_27, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283F0_SQ_VTX_SEMANTIC_28, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283F4_SQ_VTX_SEMANTIC_29, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283F8_SQ_VTX_SEMANTIC_30, 0x0, NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_0283FC_SQ_VTX_SEMANTIC_31, 0x0, NULL, 0);
+	r600_store_context_reg_seq(cb, R_028AB4_VGT_REUSE_OFF, 2);
+	r600_store_value(cb, 0); /* R_028AB4_VGT_REUSE_OFF */
+	r600_store_value(cb, 0); /* R_028AB8_VGT_VTX_CNT_EN */
 
-	r600_pipe_state_add_reg(rstate, R_028810_PA_CL_CLIP_CNTL, 0x0, NULL, 0);
+	r600_store_config_reg(cb, R_008A14_PA_CL_ENHANCE, (3 << 1) | 1);
 
-	r600_context_pipe_state_set(rctx, rstate);
+	r600_store_context_reg_seq(cb, R_028380_SQ_VTX_SEMANTIC_0, 34);
+	r600_store_value(cb, 0); /* R_028380_SQ_VTX_SEMANTIC_0 */
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0);
+	r600_store_value(cb, 0); /* R_0283FC_SQ_VTX_SEMANTIC_31 */
+	r600_store_value(cb, ~0); /* R_028400_VGT_MAX_VTX_INDX */
+	r600_store_value(cb, 0); /* R_028404_VGT_MIN_VTX_INDX */
+
+	r600_store_ctl_const(cb, R_03CFF0_SQ_VTX_BASE_VTX_LOC, 0);
+
+	r600_store_context_reg_seq(cb, R_028028_DB_STENCIL_CLEAR, 2);
+	r600_store_value(cb, 0); /* R_028028_DB_STENCIL_CLEAR */
+	r600_store_value(cb, 0x3F800000); /* R_02802C_DB_DEPTH_CLEAR */
+
+	r600_store_context_reg(cb, R_028200_PA_SC_WINDOW_OFFSET, 0);
+	r600_store_context_reg(cb, R_028230_PA_SC_EDGERULE, 0xAAAAAAAA);
+
+	r600_store_context_reg_seq(cb, R_0282D0_PA_SC_VPORT_ZMIN_0, 2);
+	r600_store_value(cb, 0); /* R_0282D0_PA_SC_VPORT_ZMIN_0 */
+	r600_store_value(cb, 0x3F800000); /* R_0282D4_PA_SC_VPORT_ZMAX_0 */
+
+	r600_store_context_reg(cb, R_0286DC_SPI_FOG_CNTL, 0);
+	r600_store_context_reg(cb, R_028818_PA_CL_VTE_CNTL, 0x0000043F);
+	r600_store_context_reg(cb, R_028820_PA_CL_NANINF_CNTL, 0);
+
+	r600_store_context_reg_seq(cb, R_028AC0_DB_SRESULTS_COMPARE_STATE0, 3);
+	r600_store_value(cb, 0); /* R_028AC0_DB_SRESULTS_COMPARE_STATE0 */
+	r600_store_value(cb, 0); /* R_028AC4_DB_SRESULTS_COMPARE_STATE1 */
+	r600_store_value(cb, 0); /* R_028AC8_DB_PRELOAD_CONTROL */
+
+	r600_store_context_reg(cb, R_028B70_DB_ALPHA_TO_MASK, 0x0000AA00);
+
+	r600_store_context_reg_seq(cb, R_028C00_PA_SC_LINE_CNTL, 2);
+	r600_store_value(cb, 0x00000400); /* R_028C00_PA_SC_LINE_CNTL */
+	r600_store_value(cb, 0); /* R_028C04_PA_SC_AA_CONFIG */
+
+	r600_store_context_reg_seq(cb, R_028C0C_PA_CL_GB_VERT_CLIP_ADJ, 5);
+	r600_store_value(cb, 0x3F800000); /* R_028C0C_PA_CL_GB_VERT_CLIP_ADJ */
+	r600_store_value(cb, 0x3F800000); /* R_028C10_PA_CL_GB_VERT_DISC_ADJ */
+	r600_store_value(cb, 0x3F800000); /* R_028C14_PA_CL_GB_HORZ_CLIP_ADJ */
+	r600_store_value(cb, 0x3F800000); /* R_028C18_PA_CL_GB_HORZ_DISC_ADJ */
+	r600_store_value(cb, 0); /* R_028C1C_PA_SC_AA_SAMPLE_LOCS_0 */
+
+	r600_store_context_reg(cb, R_028C3C_PA_SC_AA_MASK, ~0);
+
+	r600_store_context_reg(cb, R_028848_SQ_PGM_RESOURCES_2_PS, S_028848_SINGLE_ROUND(V_SQ_ROUND_TO_ZERO));
+	r600_store_context_reg(cb, R_028864_SQ_PGM_RESOURCES_2_VS, S_028864_SINGLE_ROUND(V_SQ_ROUND_TO_ZERO));
+	r600_store_context_reg(cb, R_0288A8_SQ_PGM_RESOURCES_FS, 0);
+
+	eg_store_loop_const(cb, R_03A200_SQ_LOOP_CONST_0, 0x01000FFF);
+	eg_store_loop_const(cb, R_03A200_SQ_LOOP_CONST_0 + (32 * 4), 0x01000FFF);
 }
 
 void evergreen_polygon_offset_update(struct r600_context *rctx)
@@ -2365,17 +2571,10 @@ void evergreen_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader 
 				S_028844_STACK_SIZE(rshader->bc.nstack),
 				NULL, 0);
 	r600_pipe_state_add_reg(rstate,
-				R_028848_SQ_PGM_RESOURCES_2_PS,
-				S_028848_SINGLE_ROUND(V_SQ_ROUND_TO_ZERO),
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
 				R_02884C_SQ_PGM_EXPORTS_PS,
 				exports_ps, NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_02880C_DB_SHADER_CONTROL,
 				db_shader_control,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_03A200_SQ_LOOP_CONST_0, 0x01000FFF,
 				NULL, 0);
 
 	shader->sprite_coord_enable = rctx->sprite_coord_enable;
@@ -2425,17 +2624,9 @@ void evergreen_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader 
 			S_028860_STACK_SIZE(rshader->bc.nstack),
 			NULL, 0);
 	r600_pipe_state_add_reg(rstate,
-				R_028864_SQ_PGM_RESOURCES_2_VS,
-				S_028864_SINGLE_ROUND(V_SQ_ROUND_TO_ZERO),
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
 			R_02885C_SQ_PGM_START_VS,
 			r600_resource_va(ctx->screen, (void *)shader->bo) >> 8,
 			shader->bo, RADEON_USAGE_READ);
-
-	r600_pipe_state_add_reg(rstate,
-				R_03A200_SQ_LOOP_CONST_0 + (32 * 4), 0x01000FFF,
-				NULL, 0);
 
 	shader->pa_cl_vs_out_cntl =
 		S_02881C_VS_OUT_CCDIST0_VEC_ENA((rshader->clip_dist_write & 0x0F) != 0) |
@@ -2451,8 +2642,6 @@ void evergreen_fetch_shader(struct pipe_context *ctx,
 	struct r600_pipe_state *rstate = &ve->rstate;
 	rstate->id = R600_PIPE_STATE_FETCH_SHADER;
 	rstate->nregs = 0;
-	r600_pipe_state_add_reg(rstate, R_0288A8_SQ_PGM_RESOURCES_FS,
-				0x00000000, NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_0288A4_SQ_PGM_START_FS,
 				r600_resource_va(ctx->screen, (void *)ve->fetch_shader) >> 8,
 				ve->fetch_shader, RADEON_USAGE_READ);
@@ -2472,6 +2661,7 @@ void *evergreen_create_db_flush_dsa(struct r600_context *rctx)
 				S_028000_STENCIL_COPY_ENABLE(1) |
 				S_028000_COPY_CENTROID(1),
 				NULL, 0);
+	/* Don't set the 'is_flush' flag in r600_pipe_dsa, evergreen doesn't need it. */
 	return rstate;
 }
 

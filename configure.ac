@@ -18,6 +18,10 @@ AC_CONFIG_AUX_DIR([bin])
 AC_CANONICAL_HOST
 AM_INIT_AUTOMAKE([foreign])
 
+dnl http://people.gnome.org/~walters/docs/build-api.txt
+dnl We don't support srcdir != builddir.
+echo \#buildapi-variable-no-builddir >/dev/null
+
 # Support silent build rules, requires at least automake-1.11. Disable
 # by either passing --disable-silent-rules to configure or passing V=1
 # to make
@@ -32,7 +36,7 @@ USER_CXXFLAGS="$CXXFLAGS"
 
 dnl Versions for external dependencies
 LIBDRM_REQUIRED=2.4.24
-LIBDRM_RADEON_REQUIRED=2.4.24
+LIBDRM_RADEON_REQUIRED=2.4.31
 LIBDRM_INTEL_REQUIRED=2.4.30
 LIBDRM_NOUVEAU_REQUIRED=0.6
 DRI2PROTO_REQUIRED=2.6
@@ -302,8 +306,6 @@ xnono )
     enable_static=yes
     ;;
 esac
-AM_CONDITIONAL(BUILD_STATIC, test "x$enable_static" = xyes)
-AM_CONDITIONAL(BUILD_SHARED, test "x$enable_shared" = xyes)
 
 dnl
 dnl mklib options
@@ -377,6 +379,7 @@ fi
 AC_SUBST([GL_LIB])
 AC_SUBST([GLU_LIB])
 AC_SUBST([OSMESA_LIB])
+AM_CONDITIONAL(HAVE_MANGLED_GL, test $GL_LIB = MangledGL)
 
 dnl
 dnl potentially-infringing-but-nobody-knows-for-sure stuff
@@ -401,7 +404,6 @@ GLESv1_CM_LIB_NAME='lib$(GLESv1_CM_LIB).'${LIB_EXTENSION}
 GLESv2_LIB_NAME='lib$(GLESv2_LIB).'${LIB_EXTENSION}
 VG_LIB_NAME='lib$(VG_LIB).'${LIB_EXTENSION}
 GLAPI_LIB_NAME='lib$(GLAPI_LIB).'${LIB_EXTENSION}
-GLSL_LIB_NAME='libglsl.'${LIB_EXTENSION}
 
 GL_LIB_GLOB=${LIB_PREFIX_GLOB}'$(GL_LIB)'${LIB_VERSION_SEPARATOR}'*'${LIB_EXTENSION}'*'
 GLU_LIB_GLOB=${LIB_PREFIX_GLOB}'$(GLU_LIB)'${LIB_VERSION_SEPARATOR}'*'${LIB_EXTENSION}'*'
@@ -421,7 +423,6 @@ AC_SUBST([GLESv1_CM_LIB_NAME])
 AC_SUBST([GLESv2_LIB_NAME])
 AC_SUBST([VG_LIB_NAME])
 AC_SUBST([GLAPI_LIB_NAME])
-AC_SUBST([GLSL_LIB_NAME])
 
 AC_SUBST([GL_LIB_GLOB])
 AC_SUBST([GLU_LIB_GLOB])
@@ -698,8 +699,12 @@ AC_ARG_ENABLE([shared-glapi],
 SHARED_GLAPI="0"
 if test "x$enable_shared_glapi" = xyes; then
     SHARED_GLAPI="1"
+    # libGL will use libglapi for function lookups (IN_DRI_DRIVER means to use
+    # the remap table)
+    DEFINES="$DEFINES -DIN_DRI_DRIVER"
 fi
 AC_SUBST([SHARED_GLAPI])
+AM_CONDITIONAL(HAVE_SHARED_GLAPI, test $SHARED_GLAPI = 1)
 
 dnl
 dnl Driver configuration. Options are xlib, dri and osmesa right now.
@@ -1037,6 +1042,7 @@ esac
 # builds.
 AM_CONDITIONAL(HAVE_XCB_GLX_CREATE_CONTEXT,
     test x$HAVE_XCB_GLX_CREATE_CONTEXT = xyes)
+AM_CONDITIONAL(HAVE_XF86VIDMODE, test "x$HAVE_XF86VIDMODE" = xyes)
 
 GLESv1_CM_LIB_DEPS="$LIBDRM_LIBS -lm -lpthread $DLOPEN_LIBS"
 GLESv1_CM_PC_LIB_PRIV="-lm -lpthread $DLOPEN_LIBS"
@@ -1240,11 +1246,14 @@ if test "x$enable_dri" = xyes; then
 	LIBS="$save_LIBS"
     fi
 
-    # libdrm is required for all except swrast
+    # if we are building any dri driver other than swrast ...
     if test -n "$DRI_DIRS" -a x"$DRI_DIRS" != xswrast; then
+        # ... libdrm is required
         if test "x$have_libdrm" != xyes; then
             AC_MSG_ERROR([DRI drivers requires libdrm >= $LIBDRM_REQUIRED])
         fi
+        # ... and build dricommon
+        HAVE_COMMON_DRI=yes
     fi
 
     # put all the necessary libs together
@@ -1309,6 +1318,7 @@ AM_CONDITIONAL(HAVE_NOUVEAU_DRI, test x$HAVE_NOUVEAU_DRI = xyes)
 AM_CONDITIONAL(HAVE_R200_DRI, test x$HAVE_R200_DRI = xyes)
 AM_CONDITIONAL(HAVE_RADEON_DRI, test x$HAVE_RADEON_DRI = xyes)
 AM_CONDITIONAL(HAVE_SWRAST_DRI, test x$HAVE_SWRAST_DRI = xyes)
+AM_CONDITIONAL(HAVE_COMMON_DRI, test x$HAVE_COMMON_DRI = xyes)
 
 dnl
 dnl OSMesa configuration
@@ -1338,9 +1348,6 @@ x16|x32)
     AC_MSG_ERROR([OSMesa bits '$osmesa_bits' is not a valid option])
     ;;
 esac
-AM_CONDITIONAL(HAVE_OSMESA8, test "x$osmesa_bits" = x8)
-AM_CONDITIONAL(HAVE_OSMESA16, test "x$osmesa_bits" = x16)
-AM_CONDITIONAL(HAVE_OSMESA32, test "x$osmesa_bits" = x32)
 
 if test "x$enable_osmesa" = xyes; then
     # only link libraries with osmesa if shared
@@ -1349,9 +1356,12 @@ if test "x$enable_osmesa" = xyes; then
     else
         OSMESA_LIB_DEPS=""
     fi
+    OSMESA_MESA_DEPS=""
     OSMESA_PC_LIB_PRIV="-lm -lpthread $SELINUX_LIBS $DLOPEN_LIBS"
 fi
 AC_SUBST([OSMESA_LIB_DEPS])
+AC_SUBST([OSMESA_MESA_DEPS])
+AC_SUBST([OSMESA_PC_REQ])
 AC_SUBST([OSMESA_PC_LIB_PRIV])
 
 dnl
@@ -1391,14 +1401,13 @@ EGL_CLIENT_APIS=""
 if test "x$enable_egl" = xyes; then
     SRC_DIRS="$SRC_DIRS egl"
     EGL_LIB_DEPS="$DLOPEN_LIBS $SELINUX_LIBS -lpthread"
-    EGL_DRIVERS_DIRS=""
 
     AC_CHECK_FUNC(mincore, [DEFINES="$DEFINES -DHAVE_MINCORE"])
 
     if test "$enable_static" != yes; then
         # build egl_glx when libGL is built
         if test "x$enable_glx" = xyes; then
-            EGL_DRIVERS_DIRS="glx"
+	    HAVE_EGL_DRIVER_GLX=1
         fi
 
         PKG_CHECK_MODULES([LIBUDEV], [libudev > 150],
@@ -1410,21 +1419,19 @@ if test "x$enable_egl" = xyes; then
             # build egl_dri2 when xcb-dri2 is available
             PKG_CHECK_MODULES([XCB_DRI2], [x11-xcb xcb-dri2 xcb-xfixes],
             		  [have_xcb_dri2=yes],[have_xcb_dri2=no])
-            
             if test "$have_xcb_dri2" = yes; then
-                EGL_DRIVER_DRI2=dri2
-                DEFINES="$DEFINES -DHAVE_XCB_DRI2"
+	        HAVE_EGL_DRIVER_DRI2=1
                 # workaround a bug in xcb-dri2 generated by xcb-proto 1.6
+		save_LIBS="$LIBS"
                 AC_CHECK_LIB(xcb-dri2, xcb_dri2_connect_alignment_pad, [],
                           [DEFINES="$DEFINES -DXCB_DRI2_CONNECT_DEVICE_NAME_BROKEN"])
+		LIBS="$save_LIBS"
             fi
 	fi
 
-        EGL_DRIVERS_DIRS="$EGL_DRIVERS_DIRS $EGL_DRIVER_DRI2"
     fi
 fi
 AC_SUBST([EGL_LIB_DEPS])
-AC_SUBST([EGL_DRIVERS_DIRS])
 
 dnl
 dnl EGL Gallium configuration
@@ -1573,7 +1580,7 @@ fi
 
 if test "x$enable_xvmc" = xyes; then
     PKG_CHECK_MODULES([XVMC], [xvmc >= 1.0.6])
-    GALLIUM_STATE_TRACKERS_DIRS="$GALLIUM_STATE_TRACKERS_DIRS xorg/xvmc"
+    GALLIUM_STATE_TRACKERS_DIRS="$GALLIUM_STATE_TRACKERS_DIRS xvmc"
     HAVE_ST_XVMC="yes"
 fi
 
@@ -1670,23 +1677,21 @@ AC_ARG_WITH([egl-platforms],
         [comma delimited native platforms libEGL supports, e.g.
         "x11,drm" @<:@default=auto@:>@])],
     [with_egl_platforms="$withval"],
-    [with_egl_platforms=yes])
+    [if test "x$enable_egl" = xyes; then
+	with_egl_platforms="x11"
+    else
+	with_egl_platforms=""
+    fi])
 
 EGL_PLATFORMS=""
 
-case "$with_egl_platforms" in
-yes)
-    if test "x$enable_egl" = xyes; then
-        EGL_PLATFORMS="x11"
-    fi
-    ;;
-*)
-    if test "x$enable_egl" != xyes; then
-        AC_MSG_ERROR([cannot build egl state tracker without EGL library])
-    fi
-    # verify the requested driver directories exist
-    egl_platforms=`IFS=', '; echo $with_egl_platforms`
-    for plat in $egl_platforms; do
+if test "x$with_egl_platforms" != "x" -a "x$enable_egl" != xyes; then
+    AC_MSG_ERROR([cannot build egl state tracker without EGL library])
+fi
+
+# verify the requested driver directories exist
+egl_platforms=`IFS=', '; echo $with_egl_platforms`
+for plat in $egl_platforms; do
         test -d "$srcdir/src/gallium/state_trackers/egl/$plat" || \
             AC_MSG_ERROR([EGL platform '$plat' does not exist])
         if test "$plat" = "fbdev"; then
@@ -1710,11 +1715,31 @@ yes)
                 waylandno|drmno)
                     AC_MSG_ERROR([cannot build $plat platfrom without udev]) ;;
         esac
-    done
-    EGL_PLATFORMS="$egl_platforms"
-    ;;
-esac
+done
+
+# libEGL wants to default to the first platform specified in
+# ./configure.  parse that here.
+if test "x$egl_platforms" != "x"; then
+    FIRST_PLATFORM_CAPS=`echo $egl_platforms | sed 's| .*||' | tr 'a-z' 'A-Z'`
+    EGL_NATIVE_PLATFORM="_EGL_PLATFORM_$FIRST_PLATFORM_CAPS"
+else
+    EGL_NATIVE_PLATFORM="_EGL_INVALID_PLATFORM"
+fi
+
+EGL_PLATFORMS="$egl_platforms"
+
+AM_CONDITIONAL(HAVE_EGL_PLATFORM_X11, echo "$egl_platforms" | grep 'x11' >/dev/null 2>&1)
+AM_CONDITIONAL(HAVE_EGL_PLATFORM_WAYLAND, echo "$egl_platforms" | grep 'wayland' >/dev/null 2>&1)
+AM_CONDITIONAL(HAVE_EGL_PLATFORM_DRM, echo "$egl_platforms" | grep 'drm' >/dev/null 2>&1)
+AM_CONDITIONAL(HAVE_EGL_PLATFORM_FBDEV, echo "$egl_platforms" | grep 'fbdev' >/dev/null 2>&1)
+AM_CONDITIONAL(HAVE_EGL_PLATFORM_NULL, echo "$egl_platforms" | grep 'null' >/dev/null 2>&1)
+
+AM_CONDITIONAL(HAVE_EGL_DRIVER_DRI2, test "x$HAVE_EGL_DRIVER_DRI2" != "x")
+AM_CONDITIONAL(HAVE_EGL_DRIVER_GLX, test "x$HAVE_EGL_DRIVER_GLX" != "x")
+
+AC_SUBST([EGL_NATIVE_PLATFORM])
 AC_SUBST([EGL_PLATFORMS])
+AC_SUBST([EGL_CFLAGS])
 
 AC_ARG_WITH([egl-driver-dir],
     [AS_HELP_STRING([--with-egl-driver-dir=DIR],
@@ -1858,11 +1883,13 @@ if test "x$with_gallium_drivers" != x; then
             gallium_check_st "i915/drm" "dri-i915" "xorg-i915"
             ;;
         xr300)
+            PKG_CHECK_MODULES([RADEON], [libdrm_radeon >= $LIBDRM_RADEON_REQUIRED])
             gallium_require_llvm "Gallium R300"
             GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS r300"
             gallium_check_st "radeon/drm" "dri-r300" "xorg-r300" "" "xvmc-r300" "vdpau-r300" "va-r300"
             ;;
         xr600)
+            PKG_CHECK_MODULES([RADEON], [libdrm_radeon >= $LIBDRM_RADEON_REQUIRED])
             GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS r600"
             gallium_check_st "radeon/drm" "dri-r600" "xorg-r600" "" "xvmc-r600" "vdpau-r600" "va-r600"
             ;;
@@ -1921,14 +1948,19 @@ CXXFLAGS="$CXXFLAGS $USER_CXXFLAGS"
 
 dnl Substitute the config
 AC_CONFIG_FILES([configs/autoconf
+		src/gallium/drivers/r300/Makefile
 		src/gbm/Makefile
 		src/gbm/main/gbm.pc
-		src/glsl/Makefile
-		src/glsl/glcpp/Makefile
+		src/egl/drivers/Makefile
+		src/egl/drivers/dri2/Makefile
+		src/egl/drivers/glx/Makefile
+		src/egl/main/Makefile
+		src/egl/main/egl.pc
 		src/egl/wayland/Makefile
 		src/egl/wayland/wayland-egl/Makefile
 		src/egl/wayland/wayland-egl/wayland-egl.pc
 		src/egl/wayland/wayland-drm/Makefile
+		src/glx/Makefile
 		src/mesa/drivers/dri/dri.pc
 		src/mesa/drivers/dri/Makefile
 		src/mesa/drivers/dri/common/Makefile
@@ -1938,8 +1970,6 @@ AC_CONFIG_FILES([configs/autoconf
 		src/mesa/drivers/dri/r200/Makefile
 		src/mesa/drivers/dri/radeon/Makefile
 		src/mesa/drivers/dri/swrast/Makefile
-		src/mesa/drivers/osmesa/osmesa.pc
-		src/mesa/drivers/osmesa/Makefile
 		tests/Makefile
 		tests/glx/Makefile])
 
@@ -2014,9 +2044,12 @@ if test "$enable_egl" = yes; then
     echo "        EGL platforms:   $EGL_PLATFORMS"
 
     egl_drivers=""
-    for d in $EGL_DRIVERS_DIRS; do
-        egl_drivers="$egl_drivers builtin:egl_$d"
-    done
+    if test "x$HAVE_EGL_DRIVER_GLX" != "x"; then
+        egl_drivers="$egl_drivers builtin:egl_glx"
+    fi
+    if test "x$HAVE_EGL_DRIVER_DRI2" != "x"; then
+        egl_drivers="$egl_drivers builtin:egl_dri2"
+    fi
 
     if test "x$HAVE_ST_EGL" = xyes; then
         echo "        EGL drivers:    ${egl_drivers} egl_gallium"

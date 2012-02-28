@@ -157,25 +157,31 @@ struct r600_range {
 	struct r600_block	**blocks;
 };
 
-struct r600_query {
-	union {
-		uint64_t			u64;
-		boolean				b;
-		struct pipe_query_data_so_statistics so;
-	} result;
-	/* The kind of query */
-	unsigned				type;
-	/* Offset of the first result for current query */
-	unsigned				results_start;
+struct r600_query_buffer {
+	/* The buffer where query results are stored. */
+	struct r600_resource			*buf;
 	/* Offset of the next free result after current query data */
 	unsigned				results_end;
+	/* If a query buffer is full, a new buffer is created and the old one
+	 * is put in here. When we calculate the result, we sum up the samples
+	 * from all buffers. */
+	struct r600_query_buffer		*previous;
+};
+
+union r600_query_result {
+	uint64_t			u64;
+	boolean				b;
+	struct pipe_query_data_so_statistics so;
+};
+
+struct r600_query {
+	/* The query buffer and how many results are in it. */
+	struct r600_query_buffer		buffer;
+	/* The type of query */
+	unsigned				type;
 	/* Size of the result in memory for both begin_query and end_query,
 	 * this can be one or two numbers, or it could even be a size of a structure. */
 	unsigned				result_size;
-	/* The buffer where query results are stored. It's used as a ring,
-	 * data blocks for current query are stored sequentially from
-	 * results_start to results_end, with wrapping on the buffer end */
-	struct r600_resource			*buffer;
 	/* The number of dwords for begin_query or end_query. */
 	unsigned				num_cs_dw;
 	/* linked list of queries */
@@ -195,17 +201,6 @@ struct r600_so_target {
 #define R600_CONTEXT_DST_CACHES_DIRTY	(1 << 1)
 #define R600_CONTEXT_CHECK_EVENT_FLUSH	(1 << 2)
 
-struct r600_draw {
-	uint32_t		vgt_num_indices;
-	uint32_t		vgt_num_instances;
-	uint32_t		vgt_index_type;
-	uint32_t		vgt_draw_initiator;
-	uint32_t		indices_bo_offset;
-	unsigned		db_render_override;
-	unsigned		db_render_control;
-	struct r600_resource	*indices;
-};
-
 struct r600_context;
 struct r600_screen;
 
@@ -219,13 +214,13 @@ void r600_context_pipe_state_set_fs_resource(struct r600_context *ctx, struct r6
 void r600_context_pipe_state_set_ps_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id);
 void r600_context_pipe_state_set_vs_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id);
 void r600_context_flush(struct r600_context *ctx, unsigned flags);
-void r600_context_draw(struct r600_context *ctx, const struct r600_draw *draw);
 
 struct r600_query *r600_context_query_create(struct r600_context *ctx, unsigned query_type);
 void r600_context_query_destroy(struct r600_context *ctx, struct r600_query *query);
 boolean r600_context_query_result(struct r600_context *ctx,
 				struct r600_query *query,
 				boolean wait, void *vresult);
+struct r600_resource *r600_new_query_buffer(struct r600_context *ctx, unsigned type);
 void r600_query_begin(struct r600_context *ctx, struct r600_query *query);
 void r600_query_end(struct r600_context *ctx, struct r600_query *query);
 void r600_context_queries_suspend(struct r600_context *ctx);
@@ -247,10 +242,6 @@ void r600_context_block_emit_dirty(struct r600_context *ctx, struct r600_block *
 void r600_context_block_resource_emit_dirty(struct r600_context *ctx, struct r600_block *block);
 
 int evergreen_context_init(struct r600_context *ctx);
-void evergreen_context_draw(struct r600_context *ctx, const struct r600_draw *draw);
-void evergreen_context_pipe_state_set_ps_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, unsigned rid);
-void evergreen_context_pipe_state_set_vs_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, unsigned rid);
-void evergreen_context_pipe_state_set_fs_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, unsigned rid);
 void evergreen_context_pipe_state_set_ps_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id);
 void evergreen_context_pipe_state_set_vs_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id);
 

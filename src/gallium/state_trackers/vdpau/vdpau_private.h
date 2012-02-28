@@ -39,6 +39,8 @@
 #include "util/u_debug.h"
 #include "util/u_rect.h"
 #include "vl/vl_compositor.h"
+#include "vl/vl_matrix_filter.h"
+#include "vl/vl_median_filter.h"
 
 #include "vl_winsys.h"
 
@@ -284,7 +286,7 @@ RectToPipe(const VdpRect *src, struct pipe_video_rect *dst)
 typedef struct
 {
    struct vl_screen *vscreen;
-   struct vl_context *context;
+   struct pipe_context *context;
    struct vl_compositor compositor;
 } vlVdpDevice;
 
@@ -306,10 +308,23 @@ typedef struct
 {
    vlVdpDevice *device;
    struct vl_compositor compositor;
+
+   struct {
+      bool supported, enabled;
+      unsigned level;
+      struct vl_median_filter *filter;
+   } noise_reduction;
+
+   struct {
+      bool supported, enabled;
+      float value;
+      struct vl_matrix_filter *filter;
+   } sharpness;
+
    unsigned video_width, video_height;
    enum pipe_video_chroma_format chroma_format;
    unsigned max_layers, skip_chroma_deint, custom_csc;
-   float luma_key_min, luma_key_max, sharpness, noise_reduction_level;
+   float luma_key_min, luma_key_max;
    float csc[16];
 } vlVdpVideoMixer;
 

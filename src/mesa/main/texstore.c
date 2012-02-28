@@ -1350,6 +1350,32 @@ _mesa_texstore_argb8888(TEXSTORE_PARAMS)
    }
    else if (!ctx->_ImageTransferState &&
             !srcPacking->SwapBytes &&
+            dstFormat == MESA_FORMAT_ARGB8888 &&
+            srcFormat == GL_LUMINANCE_ALPHA &&
+            baseInternalFormat == GL_RGBA &&
+            srcType == GL_UNSIGNED_BYTE) {
+      /* special case of storing LA -> ARGB8888 */
+      int img, row, col;
+      const GLint srcRowStride =
+         _mesa_image_row_stride(srcPacking, srcWidth, srcFormat, srcType);
+      for (img = 0; img < srcDepth; img++) {
+         const GLubyte *srcRow = (const GLubyte *)
+            _mesa_image_address(dims, srcPacking, srcAddr, srcWidth,
+                                srcHeight, srcFormat, srcType, img, 0, 0);
+         GLubyte *dstRow = dstSlices[img];
+         for (row = 0; row < srcHeight; row++) {
+            GLuint *d4 = (GLuint *) dstRow;
+            for (col = 0; col < srcWidth; col++) {
+               GLubyte l = srcRow[col * 2 + 0], a = srcRow[col * 2 + 1];
+               d4[col] = PACK_COLOR_8888(a, l, l, l);
+            }
+            dstRow += dstRowStride;
+            srcRow += srcRowStride;
+         }
+      }
+   }
+   else if (!ctx->_ImageTransferState &&
+            !srcPacking->SwapBytes &&
 	    dstFormat == MESA_FORMAT_ARGB8888 &&
             srcFormat == GL_RGBA &&
 	    baseInternalFormat == GL_RGBA &&
@@ -2771,6 +2797,15 @@ _mesa_texstore_z24_s8(TEXSTORE_PARAMS)
    }
    else if (srcFormat == GL_DEPTH_COMPONENT ||
             srcFormat == GL_STENCIL_INDEX) {
+      GLuint *depth = (GLuint *) malloc(srcWidth * sizeof(GLuint));
+      GLubyte *stencil = (GLubyte *) malloc(srcWidth * sizeof(GLubyte));
+
+      if (!depth || !stencil) {
+         free(depth);
+         free(stencil);
+         return GL_FALSE;
+      }
+
       /* In case we only upload depth we need to preserve the stencil */
       for (img = 0; img < srcDepth; img++) {
 	 GLuint *dstRow = (GLuint *) dstSlices[img];
@@ -2780,8 +2815,6 @@ _mesa_texstore_z24_s8(TEXSTORE_PARAMS)
                   srcFormat, srcType,
                   img, 0, 0);
          for (row = 0; row < srcHeight; row++) {
-            GLuint depth[MAX_WIDTH];
-	    GLubyte stencil[MAX_WIDTH];
             GLint i;
 	    GLboolean keepdepth = GL_FALSE, keepstencil = GL_FALSE;
 
@@ -2819,6 +2852,9 @@ _mesa_texstore_z24_s8(TEXSTORE_PARAMS)
             dstRow += dstRowStride / sizeof(GLuint);
          }
       }
+
+      free(depth);
+      free(stencil);
    }
    return GL_TRUE;
 }
@@ -2834,6 +2870,8 @@ _mesa_texstore_s8_z24(TEXSTORE_PARAMS)
    const GLint srcRowStride
       = _mesa_image_row_stride(srcPacking, srcWidth, srcFormat, srcType);
    GLint img, row;
+   GLuint *depth;
+   GLubyte *stencil;
 
    ASSERT(dstFormat == MESA_FORMAT_S8_Z24);
    ASSERT(srcFormat == GL_DEPTH_STENCIL_EXT ||
@@ -2841,6 +2879,15 @@ _mesa_texstore_s8_z24(TEXSTORE_PARAMS)
           srcFormat == GL_STENCIL_INDEX);
    ASSERT(srcFormat != GL_DEPTH_STENCIL_EXT ||
           srcType == GL_UNSIGNED_INT_24_8_EXT);
+
+   depth = (GLuint *) malloc(srcWidth * sizeof(GLuint));
+   stencil = (GLubyte *) malloc(srcWidth * sizeof(GLubyte));
+
+   if (!depth || !stencil) {
+      free(depth);
+      free(stencil);
+      return GL_FALSE;
+   }
 
    for (img = 0; img < srcDepth; img++) {
       GLuint *dstRow = (GLuint *) dstSlices[img];
@@ -2850,8 +2897,6 @@ _mesa_texstore_s8_z24(TEXSTORE_PARAMS)
 						srcFormat, srcType,
 						img, 0, 0);
       for (row = 0; row < srcHeight; row++) {
-	 GLuint depth[MAX_WIDTH];
-	 GLubyte stencil[MAX_WIDTH];
 	 GLint i;
 	 GLboolean keepdepth = GL_FALSE, keepstencil = GL_FALSE;
 	 
@@ -2890,6 +2935,10 @@ _mesa_texstore_s8_z24(TEXSTORE_PARAMS)
 	 dstRow += dstRowStride / sizeof(GLuint);
       }
    }
+
+   free(depth);
+   free(stencil);
+
    return GL_TRUE;
 }
 
@@ -2918,7 +2967,11 @@ _mesa_texstore_s8(TEXSTORE_PARAMS)
       const GLint srcRowStride
 	 = _mesa_image_row_stride(srcPacking, srcWidth, srcFormat, srcType);
       GLint img, row;
-      
+      GLubyte *stencil = (GLubyte *) malloc(srcWidth * sizeof(GLubyte));
+
+      if (!stencil)
+         return GL_FALSE;
+
       for (img = 0; img < srcDepth; img++) {
          GLubyte *dstRow = dstSlices[img];
          const GLubyte *src
@@ -2927,7 +2980,6 @@ _mesa_texstore_s8(TEXSTORE_PARAMS)
                                                    srcFormat, srcType,
                                                    img, 0, 0);
          for (row = 0; row < srcHeight; row++) {
-            GLubyte stencil[MAX_WIDTH];
             GLint i;
 
             /* get the 8-bit stencil values */
@@ -2945,6 +2997,7 @@ _mesa_texstore_s8(TEXSTORE_PARAMS)
          }
       }
 
+      free(stencil);
    }
 
    return GL_TRUE;

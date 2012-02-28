@@ -140,6 +140,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
         case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
         case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
+        case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
             return 0;
 
         /* SWTCL-only features. */
@@ -209,7 +210,6 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
         case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
         case PIPE_SHADER_CAP_SUBROUTINES:
         case PIPE_SHADER_CAP_INTEGERS:
-        case PIPE_SHADER_CAP_OUTPUT_READ:
             return 0;
         }
         break;
@@ -255,7 +255,6 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
         case PIPE_SHADER_CAP_SUBROUTINES:
         case PIPE_SHADER_CAP_INTEGERS:
         case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
-        case PIPE_SHADER_CAP_OUTPUT_READ:
             return 0;
         }
         break;
@@ -314,6 +313,12 @@ static int r300_get_video_param(struct pipe_screen *screen,
          return vl_video_buffer_max_size(screen);
       case PIPE_VIDEO_CAP_PREFERED_FORMAT:
          return PIPE_FORMAT_NV12;
+      case PIPE_VIDEO_CAP_PREFERS_INTERLACED:
+         return false;
+      case PIPE_VIDEO_CAP_SUPPORTS_INTERLACED:
+         return false;
+      case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
+         return true;
       default:
          return 0;
    }
@@ -519,7 +524,6 @@ struct pipe_screen* r300_screen_create(struct radeon_winsys *rws)
                      UTIL_SLAB_SINGLETHREADED);
 
     r300screen->rws = rws;
-    r300screen->screen.winsys = (struct pipe_winsys*)rws;
     r300screen->screen.destroy = r300_destroy_screen;
     r300screen->screen.get_name = r300_get_name;
     r300screen->screen.get_vendor = r300_get_vendor;

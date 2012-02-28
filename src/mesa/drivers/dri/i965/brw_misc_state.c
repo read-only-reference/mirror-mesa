@@ -77,11 +77,11 @@ static void upload_binding_table_pointers(struct brw_context *brw)
 
    BEGIN_BATCH(6);
    OUT_BATCH(_3DSTATE_BINDING_TABLE_POINTERS << 16 | (6 - 2));
-   OUT_BATCH(brw->bind.bo_offset);
+   OUT_BATCH(brw->vs.bind_bo_offset);
    OUT_BATCH(0); /* gs */
    OUT_BATCH(0); /* clip */
    OUT_BATCH(0); /* sf */
-   OUT_BATCH(brw->bind.bo_offset);
+   OUT_BATCH(brw->wm.bind_bo_offset);
    ADVANCE_BATCH();
 }
 
@@ -115,9 +115,9 @@ static void upload_gen6_binding_table_pointers(struct brw_context *brw)
 	     GEN6_BINDING_TABLE_MODIFY_GS |
 	     GEN6_BINDING_TABLE_MODIFY_PS |
 	     (4 - 2));
-   OUT_BATCH(brw->bind.bo_offset); /* vs */
-   OUT_BATCH(brw->bind.bo_offset); /* gs */
-   OUT_BATCH(brw->bind.bo_offset); /* wm/ps */
+   OUT_BATCH(brw->vs.bind_bo_offset); /* vs */
+   OUT_BATCH(brw->gs.bind_bo_offset); /* gs */
+   OUT_BATCH(brw->wm.bind_bo_offset); /* wm/ps */
    ADVANCE_BATCH();
 }
 
@@ -774,8 +774,7 @@ static void upload_state_base_address( struct brw_context *brw )
 	* If this isn't programmed to a real bound, the sampler border color
 	* pointer is rejected, causing border color to mysteriously fail.
 	*/
-       OUT_RELOC(intel->batch.bo, I915_GEM_DOMAIN_INSTRUCTION, 0,
-		 intel->batch.bo->size | 1);
+       OUT_BATCH(0xfffff001);
        OUT_BATCH(1); /* Indirect object upper bound */
        OUT_BATCH(1); /* Instruction access upper bound */
        ADVANCE_BATCH();
@@ -788,7 +787,7 @@ static void upload_state_base_address( struct brw_context *brw )
        OUT_BATCH(1); /* Indirect object base address */
        OUT_RELOC(brw->cache.bo, I915_GEM_DOMAIN_INSTRUCTION, 0,
 		 1); /* Instruction base address */
-       OUT_BATCH(1); /* General state upper bound */
+       OUT_BATCH(0xfffff001); /* General state upper bound */
        OUT_BATCH(1); /* Indirect object upper bound */
        OUT_BATCH(1); /* Instruction access upper bound */
        ADVANCE_BATCH();

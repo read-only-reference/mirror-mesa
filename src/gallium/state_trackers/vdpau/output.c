@@ -51,7 +51,6 @@ vlVdpOutputSurfaceCreate(VdpDevice device,
 
    vlVdpOutputSurface *vlsurface = NULL;
 
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Creating output surface\n");
    if (!(width && height))
       return VDP_STATUS_INVALID_SIZE;
 
@@ -59,7 +58,7 @@ vlVdpOutputSurfaceCreate(VdpDevice device,
    if (!dev)
       return VDP_STATUS_INVALID_HANDLE;
 
-   pipe = dev->context->pipe;
+   pipe = dev->context;
    if (!pipe)
       return VDP_STATUS_INVALID_HANDLE;
 
@@ -127,8 +126,6 @@ vlVdpOutputSurfaceDestroy(VdpOutputSurface surface)
 {
    vlVdpOutputSurface *vlsurface;
 
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Destroying output surface\n");
-
    vlsurface = vlGetDataHTAB(surface);
    if (!vlsurface)
       return VDP_STATUS_INVALID_HANDLE;
@@ -152,8 +149,6 @@ vlVdpOutputSurfaceGetParameters(VdpOutputSurface surface,
 {
    vlVdpOutputSurface *vlsurface;
 
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Getting output surface parameters\n");
-        
    vlsurface = vlGetDataHTAB(surface);
    if (!vlsurface)
       return VDP_STATUS_INVALID_HANDLE;
@@ -218,13 +213,11 @@ vlVdpOutputSurfacePutBitsIndexed(VdpOutputSurface surface,
    struct pipe_box box;
    struct pipe_video_rect dst_rect;
 
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Uploading indexed output surface\n");
-
    vlsurface = vlGetDataHTAB(surface);
    if (!vlsurface)
       return VDP_STATUS_INVALID_HANDLE;
 
-   context = vlsurface->device->context->pipe;
+   context = vlsurface->device->context;
    compositor = &vlsurface->device->compositor;
 
    index_format = FormatIndexedToPipe(source_indexed_format);
@@ -455,8 +448,6 @@ vlVdpOutputSurfaceRenderOutputSurface(VdpOutputSurface destination_surface,
 
    void *blend;
 
-   VDPAU_MSG(VDPAU_TRACE, "[VDPAU] Composing output surfaces\n");
-
    dst_vlsurface = vlGetDataHTAB(destination_surface);
    if (!dst_vlsurface)
       return VDP_STATUS_INVALID_HANDLE;
@@ -468,7 +459,7 @@ vlVdpOutputSurfaceRenderOutputSurface(VdpOutputSurface destination_surface,
    if (dst_vlsurface->device != src_vlsurface->device)
       return VDP_STATUS_HANDLE_DEVICE_MISMATCH;
 
-   context = dst_vlsurface->device->context->pipe;
+   context = dst_vlsurface->device->context;
    compositor = &dst_vlsurface->device->compositor;
 
    blend = BlenderToPipe(context, blend_state);
