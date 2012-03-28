@@ -37,8 +37,7 @@
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
 #include "util/u_math.h"
-
-#include "vl_winsys.h"
+#include "vl/vl_winsys.h"
 
 #include "xvmc_private.h"
 
@@ -349,13 +348,18 @@ Status XvMCPutSurface(Display *dpy, XvMCSurface *surface, Drawable drawable,
 
    struct pipe_context *pipe;
    struct vl_compositor *compositor;
+   struct vl_compositor_state *cstate;
 
    XvMCSurfacePrivate *surface_priv;
    XvMCContextPrivate *context_priv;
    XvMCSubpicturePrivate *subpicture_priv;
    XvMCContext *context;
-   struct pipe_video_rect src_rect = {srcx, srcy, srcw, srch};
-   struct pipe_video_rect dst_rect = {destx, desty, destw, desth};
+   struct u_rect src_rect = {srcx, srcx + srcw, srcy, srcy + srch};
+   struct u_rect dst_rect = {destx, destx + destw, desty, desty + desth};
+
+   struct pipe_resource *tex;
+   struct pipe_surface surf_templ, *surf;
+   struct u_rect *dirty_area;
 
    XVMC_MSG(XVMC_TRACE, "[XvMC] Displaying surface %p.\n", surface);
 
@@ -375,26 +379,17 @@ Status XvMCPutSurface(Display *dpy, XvMCSurface *surface, Drawable drawable,
    subpicture_priv = surface_priv->subpicture ? surface_priv->subpicture->privData : NULL;
    pipe = context_priv->pipe;
    compositor = &context_priv->compositor;
+   cstate = &context_priv->cstate;
 
-   if (!context_priv->drawable_surface ||
-       context_priv->dst_rect.x != dst_rect.x || context_priv->dst_rect.y != dst_rect.y ||
-       context_priv->dst_rect.w != dst_rect.w || context_priv->dst_rect.h != dst_rect.h) {
+   tex = vl_screen_texture_from_drawable(context_priv->vscreen, drawable);
+   dirty_area = vl_screen_get_dirty_area(context_priv->vscreen);
 
-      struct pipe_surface surf_templ;
-      struct pipe_resource *tex = vl_screen_texture_from_drawable(
-         context_priv->vscreen, drawable);
+   memset(&surf_templ, 0, sizeof(surf_templ));
+   surf_templ.format = tex->format;
+   surf_templ.usage = PIPE_BIND_RENDER_TARGET;
+   surf = pipe->create_surface(pipe, tex, &surf_templ);
 
-      pipe_surface_reference(&context_priv->drawable_surface, NULL);
-
-      memset(&surf_templ, 0, sizeof(surf_templ));
-      surf_templ.format = tex->format;
-      surf_templ.usage = PIPE_BIND_RENDER_TARGET;
-      context_priv->drawable_surface = pipe->create_surface(pipe, tex, &surf_templ);
-      vl_compositor_reset_dirty_area(&context_priv->dirty_area);
-      context_priv->dst_rect = dst_rect;
-   }
-
-   if (!context_priv->drawable_surface)
+   if (!surf)
       return BadDrawable;
 
    /*
@@ -413,8 +408,8 @@ Status XvMCPutSurface(Display *dpy, XvMCSurface *surface, Drawable drawable,
 
    context_priv->decoder->flush(context_priv->decoder);
 
-   vl_compositor_clear_layers(compositor);
-   vl_compositor_set_buffer_layer(compositor, 0, surface_priv->video_buffer,
+   vl_compositor_clear_layers(cstate);
+   vl_compositor_set_buffer_layer(cstate, compositor, 0, surface_priv->video_buffer,
                                   &src_rect, NULL, VL_COMPOSITOR_WEAVE);
 
    if (subpicture_priv) {
@@ -423,11 +418,11 @@ Status XvMCPutSurface(Display *dpy, XvMCSurface *surface, Drawable drawable,
       assert(subpicture_priv->surface == surface);
 
       if (subpicture_priv->palette)
-         vl_compositor_set_palette_layer(compositor, 1, subpicture_priv->sampler, subpicture_priv->palette,
+         vl_compositor_set_palette_layer(cstate, compositor, 1, subpicture_priv->sampler, subpicture_priv->palette,
                                          &subpicture_priv->src_rect, &subpicture_priv->dst_rect, true);
       else
-         vl_compositor_set_rgba_layer(compositor, 1, subpicture_priv->sampler,
-                                      &subpicture_priv->src_rect, &subpicture_priv->dst_rect);
+         vl_compositor_set_rgba_layer(cstate, compositor, 1, subpicture_priv->sampler,
+                                      &subpicture_priv->src_rect, &subpicture_priv->dst_rect, NULL);
 
       surface_priv->subpicture = NULL;
       subpicture_priv->surface = NULL;
@@ -436,7 +431,9 @@ Status XvMCPutSurface(Display *dpy, XvMCSurface *surface, Drawable drawable,
    // Workaround for r600g, there seems to be a bug in the fence refcounting code
    pipe->screen->fence_reference(pipe->screen, &surface_priv->fence, NULL);
 
-   vl_compositor_render(compositor, context_priv->drawable_surface, &dst_rect, NULL, &context_priv->dirty_area);
+   vl_compositor_set_layer_dst_area(cstate, 0, &dst_rect);
+   vl_compositor_set_layer_dst_area(cstate, 1, &dst_rect);
+   vl_compositor_render(cstate, compositor, surf, dirty_area);
 
    pipe->flush(pipe, &surface_priv->fence);
 
@@ -444,7 +441,7 @@ Status XvMCPutSurface(Display *dpy, XvMCSurface *surface, Drawable drawable,
 
    pipe->screen->flush_frontbuffer
    (
-      pipe->screen, context_priv->drawable_surface->texture, 0, 0,
+      pipe->screen, tex, 0, 0,
       vl_screen_get_private(context_priv->vscreen)
    );
 

@@ -26,16 +26,8 @@
 #ifndef R600_PIPE_H
 #define R600_PIPE_H
 
-#include "../../winsys/radeon/drm/radeon_winsys.h"
-
-#include "pipe/p_state.h"
-#include "pipe/p_screen.h"
-#include "pipe/p_context.h"
-#include "util/u_math.h"
 #include "util/u_slab.h"
-#include "util/u_vbuf.h"
 #include "r600.h"
-#include "r600_public.h"
 #include "r600_shader.h"
 #include "r600_resource.h"
 
@@ -75,12 +67,12 @@ struct r600_command_buffer {
 	unsigned max_num_dw;
 };
 
-struct r600_atom_surface_sync {
+struct r600_surface_sync_cmd {
 	struct r600_atom atom;
 	unsigned flush_flags; /* CP_COHER_CNTL */
 };
 
-struct r600_atom_db_misc_state {
+struct r600_db_misc_state {
 	struct r600_atom atom;
 	bool occlusion_query_enabled;
 	bool flush_depthstencil_enabled;
@@ -152,6 +144,7 @@ struct r600_pipe_rasterizer {
 	unsigned			pa_cl_clip_cntl;
 	float				offset_units;
 	float				offset_scale;
+	bool				scissor_enable;
 };
 
 struct r600_pipe_blend {
@@ -287,12 +280,12 @@ struct r600_context {
 
 	unsigned default_ps_gprs, default_vs_gprs;
 
-	/* States based on r600_state. */
+	/* States based on r600_atom. */
 	struct list_head		dirty_states;
-	struct r600_command_buffer	atom_start_cs; /* invariant state mostly */
-	struct r600_atom_surface_sync	atom_surface_sync;
-	struct r600_atom		atom_r6xx_flush_and_inv;
-	struct r600_atom_db_misc_state	atom_db_misc_state;
+	struct r600_command_buffer	start_cs_cmd; /* invariant state mostly */
+	struct r600_surface_sync_cmd	surface_sync_cmd;
+	struct r600_atom		r6xx_flush_and_inv_cmd;
+	struct r600_db_misc_state	db_misc_state;
 
 	/* Below are variables from the old r600_context.
 	 */
@@ -309,8 +302,18 @@ struct r600_context {
 
 	/* The list of active queries. Only one query of each type can be active. */
 	int			num_occlusion_queries;
-	struct list_head	active_query_list;
-	unsigned		num_cs_dw_queries_suspend;
+
+	/* Manage queries in two separate groups:
+	 * The timer ones and the others (streamout, occlusion).
+	 *
+	 * We do this because we should only suspend non-timer queries for u_blitter,
+	 * and later if the non-timer queries are suspended, the context flush should
+	 * only suspend and resume the timer queries. */
+	struct list_head	active_timer_queries;
+	unsigned		num_cs_dw_timer_queries_suspend;
+	struct list_head	active_nontimer_queries;
+	unsigned		num_cs_dw_nontimer_queries_suspend;
+
 	unsigned		num_cs_dw_streamout_end;
 
 	unsigned		backend_mask;
@@ -326,6 +329,15 @@ struct r600_context {
 	struct r600_so_target	*so_targets[PIPE_MAX_SO_BUFFERS];
 	boolean			streamout_start;
 	unsigned		streamout_append_bitmask;
+
+	/* There is no scissor enable bit on r6xx, so we must use a workaround.
+	 * These track the current scissor state. */
+	bool			scissor_enable;
+	struct pipe_scissor_state scissor_state;
+
+	/* With rasterizer discard, there doesn't have to be a pixel shader.
+	 * In that case, we bind this one: */
+	void			*dummy_pixel_shader;
 };
 
 static INLINE void r600_emit_atom(struct r600_context *rctx, struct r600_atom *atom)
@@ -395,6 +407,10 @@ void r600_flush(struct pipe_context *ctx, struct pipe_fence_handle **fence,
 
 /* r600_query.c */
 void r600_init_query_functions(struct r600_context *rctx);
+void r600_suspend_nontimer_queries(struct r600_context *ctx);
+void r600_resume_nontimer_queries(struct r600_context *ctx);
+void r600_suspend_timer_queries(struct r600_context *ctx);
+void r600_resume_timer_queries(struct r600_context *ctx);
 
 /* r600_resource.c */
 void r600_init_context_resource_functions(struct r600_context *r600);
@@ -406,6 +422,8 @@ int r600_find_vs_semantic_index(struct r600_shader *vs,
 				struct r600_shader *ps, int id);
 
 /* r600_state.c */
+void r600_set_scissor_state(struct r600_context *rctx,
+			    const struct pipe_scissor_state *state);
 void r600_update_sampler_states(struct r600_context *rctx);
 void r600_init_state_functions(struct r600_context *rctx);
 void r600_init_atom_start_cs(struct r600_context *rctx);
@@ -460,6 +478,7 @@ void r600_bind_blend_state(struct pipe_context *ctx, void *state);
 void r600_set_blend_color(struct pipe_context *ctx,
 			  const struct pipe_blend_color *state);
 void r600_bind_dsa_state(struct pipe_context *ctx, void *state);
+void r600_set_max_scissor(struct r600_context *rctx);
 void r600_bind_rs_state(struct pipe_context *ctx, void *state);
 void r600_delete_rs_state(struct pipe_context *ctx, void *state);
 void r600_sampler_view_destroy(struct pipe_context *ctx,
@@ -597,6 +616,13 @@ void r600_release_command_buffer(struct r600_command_buffer *cb);
 /*
  * Helpers for emitting state into a command stream directly.
  */
+
+static INLINE unsigned r600_context_bo_reloc(struct r600_context *ctx, struct r600_resource *rbo,
+					     enum radeon_bo_usage usage)
+{
+	assert(usage);
+	return ctx->ws->cs_add_reloc(ctx->cs, rbo->cs_buf, usage, rbo->domains) * 4;
+}
 
 static INLINE void r600_write_value(struct radeon_winsys_cs *cs, unsigned value)
 {

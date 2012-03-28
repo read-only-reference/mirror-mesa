@@ -83,12 +83,12 @@ class raw_debug_ostream :
    uint64_t pos;
 
    void write_impl(const char *Ptr, size_t Size);
-   uint64_t current_pos() { return pos; }
-   uint64_t current_pos() const { return pos; }
 
 #if HAVE_LLVM >= 0x207
-   uint64_t preferred_buffer_size() { return 512; }
+   uint64_t current_pos() const { return pos; }
+   size_t preferred_buffer_size() const { return 512; }
 #else
+   uint64_t current_pos() { return pos; }
    size_t preferred_buffer_size() { return 512; }
 #endif
 };
@@ -146,20 +146,12 @@ public:
       return 0;
    }
 
-#if HAVE_LLVM >= 0x0301
-   uint64_t getExtent()
-#else
    uint64_t getExtent() const
-#endif
    {
       return Length;
    }
 
-#if HAVE_LLVM >= 0x0301
-   int readByte(uint64_t addr, uint8_t *byte)
-#else
    int readByte(uint64_t addr, uint8_t *byte) const
-#endif
    {
       if (addr > getExtent())
          return -1;
@@ -215,7 +207,9 @@ lp_disassemble(const void* func)
    LLVMInitializePowerPCAsmPrinter();
 #endif
 
-#if defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
+#if HAVE_LLVM >= 0x0301
+   InitializeNativeTargetDisassembler();
+#elif defined(PIPE_ARCH_X86) || defined(PIPE_ARCH_X86_64)
    LLVMInitializeX86Disassembler();
 #elif defined(PIPE_ARCH_ARM)
    LLVMInitializeARMDisassembler();
@@ -251,7 +245,18 @@ lp_disassemble(const void* func)
    int AsmPrinterVariant = AsmInfo->getAssemblerDialect();
 #endif
 
-#if HAVE_LLVM >= 0x0300
+#if HAVE_LLVM >= 0x0301
+   OwningPtr<const MCRegisterInfo> MRI(T->createMCRegInfo(Triple));
+   if (!MRI) {
+      debug_printf("error: no register info for target %s\n", Triple.c_str());
+      return;
+   }
+#endif
+
+#if HAVE_LLVM >= 0x0301
+   OwningPtr<MCInstPrinter> Printer(
+         T->createMCInstPrinter(AsmPrinterVariant, *AsmInfo, *MRI, *STI));
+#elif HAVE_LLVM == 0x0300
    OwningPtr<MCInstPrinter> Printer(
          T->createMCInstPrinter(AsmPrinterVariant, *AsmInfo, *STI));
 #elif HAVE_LLVM >= 0x0208

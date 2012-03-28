@@ -258,11 +258,36 @@ validate_vertex_shader_executable(struct gl_shader_program *prog,
    if (shader == NULL)
       return true;
 
-   find_assignment_visitor find("gl_Position");
-   find.run(shader->ir);
-   if (!find.variable_found()) {
-      linker_error(prog, "vertex shader does not write to `gl_Position'\n");
-      return false;
+   /* From the GLSL 1.10 spec, page 48:
+    *
+    *     "The variable gl_Position is available only in the vertex
+    *      language and is intended for writing the homogeneous vertex
+    *      position. All executions of a well-formed vertex shader
+    *      executable must write a value into this variable. [...] The
+    *      variable gl_Position is available only in the vertex
+    *      language and is intended for writing the homogeneous vertex
+    *      position. All executions of a well-formed vertex shader
+    *      executable must write a value into this variable."
+    *
+    * while in GLSL 1.40 this text is changed to:
+    *
+    *     "The variable gl_Position is available only in the vertex
+    *      language and is intended for writing the homogeneous vertex
+    *      position. It can be written at any time during shader
+    *      execution. It may also be read back by a vertex shader
+    *      after being written. This value will be used by primitive
+    *      assembly, clipping, culling, and other fixed functionality
+    *      operations, if present, that operate on primitives after
+    *      vertex processing has occurred. Its value is undefined if
+    *      the vertex shader executable does not write gl_Position."
+    */
+   if (prog->Version < 140) {
+      find_assignment_visitor find("gl_Position");
+      find.run(shader->ir);
+      if (!find.variable_found()) {
+	 linker_error(prog, "vertex shader does not write to `gl_Position'\n");
+	 return false;
+      }
    }
 
    prog->Vert.ClipDistanceArraySize = 0;
@@ -1294,9 +1319,11 @@ assign_attribute_or_color_locations(gl_shader_program *prog,
 	     * attribute overlaps any previously allocated bits.
 	     */
 	    if ((~(use_mask << attr) & used_locations) != used_locations) {
+	       const char *const string = (target_index == MESA_SHADER_VERTEX)
+		  ? "vertex shader input" : "fragment shader output";
 	       linker_error(prog,
-			    "insufficient contiguous attribute locations "
-			    "available for vertex shader input `%s'",
+			    "insufficient contiguous locations "
+			    "available for %s `%s'", string,
 			    var->name);
 	       return false;
 	    }
@@ -1345,7 +1372,7 @@ assign_attribute_or_color_locations(gl_shader_program *prog,
 	    ? "vertex shader input" : "fragment shader output";
 
 	 linker_error(prog,
-		      "insufficient contiguous attribute locations "
+		      "insufficient contiguous locations "
 		      "available for %s `%s'",
 		      string, to_assign[i].var->name);
 	 return false;
@@ -2175,7 +2202,7 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
     * of all shaders must match.
     */
    assert(min_version >= 100);
-   assert(max_version <= 130);
+   assert(max_version <= 140);
    if ((max_version >= 130 || min_version == 100)
        && min_version != max_version) {
       linker_error(prog, "all shaders must use same shading "
@@ -2269,7 +2296,9 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
       if (ctx->ShaderCompilerOptions[i].LowerClipDistance)
          lower_clip_distance(prog->_LinkedShaders[i]->ir);
 
-      while (do_common_optimization(prog->_LinkedShaders[i]->ir, true, false, 32))
+      unsigned max_unroll = ctx->ShaderCompilerOptions[i].MaxUnrollIterations;
+
+      while (do_common_optimization(prog->_LinkedShaders[i]->ir, true, false, max_unroll))
 	 ;
    }
 

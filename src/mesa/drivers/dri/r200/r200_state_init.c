@@ -620,20 +620,6 @@ void r200InitState( r200ContextPtr rmesa )
    struct gl_context *ctx = rmesa->radeon.glCtx;
    GLuint i;
 
-   rmesa->radeon.state.color.clear = 0x00000000;
-
-   switch ( ctx->Visual.depthBits ) {
-   case 16:
-      rmesa->radeon.state.depth.clear = 0x0000ffff;
-      rmesa->radeon.state.stencil.clear = 0x00000000;
-      break;
-   case 24:
-   default:
-      rmesa->radeon.state.depth.clear = 0x00ffffff;
-      rmesa->radeon.state.stencil.clear = 0xffff0000;
-      break;
-   }
-
    rmesa->radeon.Fallback = 0;
 
    rmesa->radeon.hw.max_state_size = 0;

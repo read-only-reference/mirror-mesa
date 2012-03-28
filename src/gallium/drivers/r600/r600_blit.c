@@ -20,10 +20,10 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include "r600_pipe.h"
 #include "util/u_surface.h"
 #include "util/u_blitter.h"
 #include "util/u_format.h"
-#include "r600_pipe.h"
 
 enum r600_blitter_op /* bitmask */
 {
@@ -45,7 +45,7 @@ static void r600_blitter_begin(struct pipe_context *ctx, enum r600_blitter_op op
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 
-	r600_context_queries_suspend(rctx);
+	r600_suspend_nontimer_queries(rctx);
 
 	util_blitter_save_blend(rctx->blitter, rctx->states[R600_PIPE_STATE_BLEND]);
 	util_blitter_save_depth_stencil_alpha(rctx->blitter, rctx->states[R600_PIPE_STATE_DSA]);
@@ -95,7 +95,7 @@ static void r600_blitter_end(struct pipe_context *ctx)
 					       rctx->saved_render_cond_mode);
 		rctx->saved_render_cond = NULL;
 	}
-	r600_context_queries_resume(rctx);
+	r600_resume_nontimer_queries(rctx);
 }
 
 static unsigned u_num_layers(struct pipe_resource *r, unsigned level)
@@ -162,7 +162,7 @@ void r600_flush_depth_textures(struct r600_context *rctx)
 {
 	unsigned int i;
 
-	/* FIXME: This handles fragment shader textures only. */
+	/* XXX: This handles fragment shader textures only. */
 
 	for (i = 0; i < rctx->ps_samplers.n_views; ++i) {
 		struct r600_pipe_sampler_view *view;

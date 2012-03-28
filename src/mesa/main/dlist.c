@@ -5767,10 +5767,16 @@ save_Begin(GLenum mode)
    Node *n;
    GLboolean error = GL_FALSE;
 
-   if (!_mesa_valid_prim_mode(ctx, mode)) {
-      _mesa_compile_error(ctx, GL_INVALID_ENUM, "glBegin(mode)");
+   if (mode > GL_POLYGON) {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glBegin(mode=%x)", mode);
       error = GL_TRUE;
    }
+   if (ctx->ExecuteFlag) {
+      if (!_mesa_valid_prim_mode(ctx, mode, "glBegin")) {
+	 error = GL_TRUE;
+      }
+   }
+
    else if (ctx->Driver.CurrentSavePrimitive == PRIM_UNKNOWN) {
       /* Typically the first begin.  This may raise an error on
        * playback, depending on whether CallList is issued from inside
@@ -10424,6 +10430,9 @@ _mesa_create_save_table(void)
    SET_TextureStorage1DEXT(table, _mesa_TextureStorage1DEXT);
    SET_TextureStorage2DEXT(table, _mesa_TextureStorage2DEXT);
    SET_TextureStorage3DEXT(table, _mesa_TextureStorage3DEXT);
+
+   /* GL_ARB_debug_output (no dlist support) */
+   _mesa_init_errors_dispatch(table);
 
    return table;
 }

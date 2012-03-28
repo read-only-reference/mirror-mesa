@@ -74,7 +74,7 @@ libEGL_la_SOURCES = \
 
 libEGL_la_LIBADD = \
 	$(EGL_LIB_DEPS)
-libEGL_la_LDFLAGS = -version-number 1:0
+libEGL_la_LDFLAGS = -version-number 1:0 -no-undefined
 
 if HAVE_EGL_PLATFORM_X11
 AM_CFLAGS += -DHAVE_X11_PLATFORM
@@ -92,7 +92,6 @@ endif
 
 if HAVE_EGL_PLATFORM_DRM
 AM_CFLAGS += -DHAVE_DRM_PLATFORM
-libEGL_la_LIBADD += ../../gbm/libgbm.la
 libEGL_la_LIBADD += ../../gbm/libgbm.la
 endif
 
@@ -122,6 +121,7 @@ endif
 all-local: libEGL.la
 	$(MKDIR_P) $(top_builddir)/$(LIB_DIR);
 	ln -f .libs/libEGL.so.1.0.0 $(top_builddir)/$(LIB_DIR)/libEGL.so.1
+	ln -sf libEGL.so.1 $(top_builddir)/$(LIB_DIR)/libEGL.so
 
 pkgconfigdir = $(libdir)/pkgconfig
 

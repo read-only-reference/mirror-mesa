@@ -86,6 +86,12 @@
 #define PCI_CHIP_IVYBRIDGE_M_GT2        0x0166
 #define PCI_CHIP_IVYBRIDGE_S_GT1        0x015a  /* Server */
 
+#define PCI_CHIP_HASWELL_GT1            0x0402 /* Desktop */
+#define PCI_CHIP_HASWELL_GT2            0x0412
+#define PCI_CHIP_HASWELL_M_GT1          0x0406 /* Mobile */
+#define PCI_CHIP_HASWELL_M_GT2          0x0416
+#define PCI_CHIP_HASWELL_M_ULT_GT2      0x0A16 /* Mobile ULT */
+
 #define IS_MOBILE(devid)	(devid == PCI_CHIP_I855_GM || \
 				 devid == PCI_CHIP_I915_GM || \
 				 devid == PCI_CHIP_I945_GM || \
@@ -151,7 +157,17 @@
 
 #define IS_IVYBRIDGE(devid)     (IS_IVB_GT1(devid) || IS_IVB_GT2(devid))
 
-#define IS_GEN7(devid)	        IS_IVYBRIDGE(devid)
+#define IS_GEN7(devid)	        (IS_IVYBRIDGE(devid) || \
+				 IS_HASWELL(devid))
+
+#define IS_HSW_GT1(devid)	(devid == PCI_CHIP_HASWELL_GT1 || \
+				 devid == PCI_CHIP_HASWELL_M_GT1)
+#define IS_HSW_GT2(devid)	(devid == PCI_CHIP_HASWELL_GT2 || \
+				 devid == PCI_CHIP_HASWELL_M_GT2 || \
+				 devid == PCI_CHIP_HASWELL_M_ULT_GT2)
+
+#define IS_HASWELL(devid)       (IS_HSW_GT1(devid) || \
+				 IS_HSW_GT2(devid))
 
 #define IS_965(devid)		(IS_GEN4(devid) || \
 				 IS_G4X(devid) || \

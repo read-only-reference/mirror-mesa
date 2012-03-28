@@ -61,6 +61,7 @@ enum radeon_family {
 	CHIP_TURKS,
 	CHIP_CAICOS,
 	CHIP_CAYMAN,
+	CHIP_ARUBA,
 	CHIP_LAST,
 };
 
@@ -88,8 +89,6 @@ struct r600_resource {
 	unsigned			domains;
 };
 
-/* R600/R700 STATES */
-#define R600_GROUP_MAX			16
 #define R600_BLOCK_MAX_BO		32
 #define R600_BLOCK_MAX_REG		128
 
@@ -168,12 +167,6 @@ struct r600_query_buffer {
 	struct r600_query_buffer		*previous;
 };
 
-union r600_query_result {
-	uint64_t			u64;
-	boolean				b;
-	struct pipe_query_data_so_statistics so;
-};
-
 struct r600_query {
 	/* The query buffer and how many results are in it. */
 	struct r600_query_buffer		buffer;
@@ -199,7 +192,6 @@ struct r600_so_target {
 
 #define R600_CONTEXT_DRAW_PENDING	(1 << 0)
 #define R600_CONTEXT_DST_CACHES_DIRTY	(1 << 1)
-#define R600_CONTEXT_CHECK_EVENT_FLUSH	(1 << 2)
 
 struct r600_context;
 struct r600_screen;
@@ -215,18 +207,6 @@ void r600_context_pipe_state_set_ps_sampler(struct r600_context *ctx, struct r60
 void r600_context_pipe_state_set_vs_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id);
 void r600_context_flush(struct r600_context *ctx, unsigned flags);
 
-struct r600_query *r600_context_query_create(struct r600_context *ctx, unsigned query_type);
-void r600_context_query_destroy(struct r600_context *ctx, struct r600_query *query);
-boolean r600_context_query_result(struct r600_context *ctx,
-				struct r600_query *query,
-				boolean wait, void *vresult);
-struct r600_resource *r600_new_query_buffer(struct r600_context *ctx, unsigned type);
-void r600_query_begin(struct r600_context *ctx, struct r600_query *query);
-void r600_query_end(struct r600_context *ctx, struct r600_query *query);
-void r600_context_queries_suspend(struct r600_context *ctx);
-void r600_context_queries_resume(struct r600_context *ctx);
-void r600_query_predication(struct r600_context *ctx, struct r600_query *query, int operation,
-			    int flag_wait);
 void r600_context_emit_fence(struct r600_context *ctx, struct r600_resource *fence,
                              unsigned offset, unsigned value);
 void r600_inval_shader_cache(struct r600_context *ctx);

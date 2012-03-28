@@ -20,34 +20,17 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include <stdio.h>
+#include "r600_pipe.h"
+#include "r600_public.h"
+
 #include <errno.h>
-#include "pipe/p_defines.h"
-#include "pipe/p_state.h"
-#include "pipe/p_context.h"
-#include "tgsi/tgsi_scan.h"
-#include "tgsi/tgsi_parse.h"
-#include "tgsi/tgsi_util.h"
+#include "pipe/p_shader_tokens.h"
 #include "util/u_blitter.h"
-#include "util/u_double_list.h"
-#include "util/u_format.h"
 #include "util/u_format_s3tc.h"
-#include "util/u_transfer.h"
-#include "util/u_surface.h"
-#include "util/u_pack_color.h"
-#include "util/u_memory.h"
-#include "util/u_inlines.h"
-#include "util/u_upload_mgr.h"
+#include "util/u_simple_shaders.h"
 #include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
 #include "os/os_time.h"
-#include "pipebuffer/pb_buffer.h"
-#include "r600.h"
-#include "r600d.h"
-#include "r600_resource.h"
-#include "r600_shader.h"
-#include "r600_pipe.h"
-#include "r600_hw_context_priv.h"
 
 /*
  * pipe_context
@@ -191,6 +174,9 @@ static void r600_destroy_context(struct pipe_context *context)
 {
 	struct r600_context *rctx = (struct r600_context *)context;
 
+	if (rctx->dummy_pixel_shader) {
+		rctx->context.delete_fs_state(&rctx->context, rctx->dummy_pixel_shader);
+	}
 	if (rctx->custom_dsa_flush) {
 		rctx->context.delete_depth_stencil_alpha_state(&rctx->context, rctx->custom_dsa_flush);
 	}
@@ -212,7 +198,7 @@ static void r600_destroy_context(struct pipe_context *context)
 
 	r600_update_num_contexts(rctx->screen, -1);
 
-	r600_release_command_buffer(&rctx->atom_start_cs);
+	r600_release_command_buffer(&rctx->start_cs_cmd);
 
 	if (rctx->cs) {
 		rctx->ws->cs_destroy(rctx->cs);
@@ -248,7 +234,8 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	rctx->chip_class = rscreen->chip_class;
 
 	LIST_INITHEAD(&rctx->dirty_states);
-	LIST_INITHEAD(&rctx->active_query_list);
+	LIST_INITHEAD(&rctx->active_timer_queries);
+	LIST_INITHEAD(&rctx->active_nontimer_queries);
 	LIST_INITHEAD(&rctx->dirty);
 	LIST_INITHEAD(&rctx->resource_dirty);
 	LIST_INITHEAD(&rctx->enable_list);
@@ -292,7 +279,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 
 	rctx->cs = rctx->ws->cs_create(rctx->ws);
 	rctx->ws->cs_set_flush_callback(rctx->cs, r600_flush_from_winsys, rctx);
-	r600_emit_atom(rctx, &rctx->atom_start_cs.atom);
+	r600_emit_atom(rctx, &rctx->start_cs_cmd.atom);
 
 	rctx->vbuf_mgr = u_vbuf_create(&rctx->context, 1024 * 1024, 256,
 					   PIPE_BIND_VERTEX_BUFFER |
@@ -308,6 +295,15 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		goto fail;
 
 	r600_get_backend_mask(rctx); /* this emits commands and must be last */
+
+	if (rctx->chip_class == R600)
+		r600_set_max_scissor(rctx);
+
+	rctx->dummy_pixel_shader =
+		util_make_fragment_cloneinput_shader(&rctx->context, 0,
+						     TGSI_SEMANTIC_GENERIC,
+						     TGSI_INTERPOLATE_CONSTANT);
+	rctx->context.bind_fs_state(&rctx->context, rctx->dummy_pixel_shader);
 
 	return &rctx->context;
 
@@ -351,6 +347,7 @@ static const char *r600_get_family_name(enum radeon_family family)
 	case CHIP_TURKS: return "AMD TURKS";
 	case CHIP_CAICOS: return "AMD CAICOS";
 	case CHIP_CAYMAN: return "AMD CAYMAN";
+	case CHIP_ARUBA: return "AMD ARUBA";
 	default: return "AMD unknown";
 	}
 }
@@ -393,6 +390,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TEXTURE_BARRIER:
 	case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
 	case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
+	case PIPE_CAP_TGSI_INSTANCEID:
 		return 1;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
@@ -409,7 +407,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return family >= CHIP_CEDAR ? 1 : 0;
 
 	/* Unsupported features. */
-	case PIPE_CAP_TGSI_INSTANCEID:
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
 	case PIPE_CAP_SCALED_RESOLVE:
@@ -444,7 +441,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	/* Render targets. */
 	case PIPE_CAP_MAX_RENDER_TARGETS:
-		/* FIXME some r6xx are buggy and can only do 4 */
+		/* XXX some r6xx are buggy and can only do 4 */
 		return 8;
 
 	/* Timer queries, present when the clock frequency is non zero. */
@@ -496,14 +493,14 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_VERTEX:
 		break;
 	case PIPE_SHADER_GEOMETRY:
-		/* TODO: support and enable geometry programs */
+		/* XXX: support and enable geometry programs */
 		return 0;
 	default:
-		/* TODO: support tessellation on Evergreen */
+		/* XXX: support tessellation on Evergreen */
 		return 0;
 	}
 
-	/* TODO: all these should be fixed, since r600 surely supports much more! */
+	/* XXX: all these should be fixed, since r600 surely supports much more! */
 	switch (param) {
 	case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
 	case PIPE_SHADER_CAP_MAX_ALU_INSTRUCTIONS:
@@ -511,7 +508,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_MAX_TEX_INDIRECTIONS:
 		return 16384;
 	case PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH:
-		return 8; /* FIXME */
+		return 8; /* XXX */
 	case PIPE_SHADER_CAP_MAX_INPUTS:
 		if(shader == PIPE_SHADER_FRAGMENT)
 			return 34;
@@ -520,14 +517,14 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_MAX_TEMPS:
 		return 256; /* Max native temporaries. */
 	case PIPE_SHADER_CAP_MAX_ADDRS:
-		/* FIXME Isn't this equal to TEMPS? */
+		/* XXX Isn't this equal to TEMPS? */
 		return 1; /* Max native address registers */
 	case PIPE_SHADER_CAP_MAX_CONSTS:
 		return R600_MAX_CONST_BUFFER_SIZE;
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
 		return R600_MAX_CONST_BUFFERS-1;
 	case PIPE_SHADER_CAP_MAX_PREDS:
-		return 0; /* FIXME */
+		return 0; /* nothing uses this */
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
 		return 1;
 	case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
@@ -807,7 +804,7 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 	}
 
 	/* setup class */
-	if (rscreen->family == CHIP_CAYMAN) {
+	if (rscreen->family >= CHIP_CAYMAN) {
 		rscreen->chip_class = CAYMAN;
 	} else if (rscreen->family >= CHIP_CEDAR) {
 		rscreen->chip_class = EVERGREEN;
@@ -815,6 +812,13 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 		rscreen->chip_class = R700;
 	} else {
 		rscreen->chip_class = R600;
+	}
+
+	/* XXX streamout is said to be broken on r700 and cayman */
+	if ((rscreen->chip_class == R700 ||
+	     rscreen->chip_class == CAYMAN) &&
+	    !debug_get_bool_option("R600_STREAMOUT", FALSE)) {
+		rscreen->info.r600_has_streamout = false;
 	}
 
 	if (r600_init_tiling(rscreen)) {

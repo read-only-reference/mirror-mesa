@@ -24,18 +24,12 @@
  *      Jerome Glisse
  *      Corbin Simpson
  */
-#include <errno.h>
-#include "pipe/p_screen.h"
-#include "util/u_format.h"
-#include "util/u_format_s3tc.h"
-#include "util/u_math.h"
-#include "util/u_inlines.h"
-#include "util/u_memory.h"
-#include "pipebuffer/pb_buffer.h"
-#include "r600_pipe.h"
-#include "r600_resource.h"
-#include "r600d.h"
 #include "r600_formats.h"
+#include "r600d.h"
+
+#include <errno.h>
+#include "util/u_format_s3tc.h"
+#include "util/u_memory.h"
 
 /* Copy from a full GPU texture to a transfer's staging one. */
 static void r600_copy_to_staging_texture(struct pipe_context *ctx, struct r600_transfer *rtransfer)
@@ -444,14 +438,7 @@ static boolean permit_hardware_blit(struct pipe_screen *screen,
                                 PIPE_BIND_SAMPLER_VIEW))
 		return FALSE;
 
-	switch (res->usage) {
-	case PIPE_USAGE_STREAM:
-	case PIPE_USAGE_STAGING:
-		return FALSE;
-
-	default:
-		return TRUE;
-	}
+	return TRUE;
 }
 
 static boolean r600_texture_get_handle(struct pipe_screen* screen,
@@ -630,12 +617,13 @@ struct pipe_resource *r600_texture_create(struct pipe_screen *screen,
 	unsigned array_mode = 0;
 	int r;
 
-	if (!(templ->flags & R600_RESOURCE_FLAG_TRANSFER) &&
-	    !(templ->bind & PIPE_BIND_SCANOUT)) {
-		if (rscreen->use_surface_alloc) {
-			if (permit_hardware_blit(screen, templ)) {
-				array_mode = V_038000_ARRAY_2D_TILED_THIN1;
-			}
+	if (!(templ->flags & R600_RESOURCE_FLAG_TRANSFER)) {
+		if (rscreen->use_surface_alloc &&
+		    !(templ->bind & PIPE_BIND_SCANOUT) &&
+		    templ->usage != PIPE_USAGE_STAGING &&
+		    templ->usage != PIPE_USAGE_STREAM &&
+		    permit_hardware_blit(screen, templ)) {
+			array_mode = V_038000_ARRAY_2D_TILED_THIN1;
 		} else if (util_format_is_compressed(templ->format)) {
 			array_mode = V_038000_ARRAY_1D_TILED_THIN1;
 		}
@@ -664,8 +652,6 @@ static struct pipe_surface *r600_create_surface(struct pipe_context *pipe,
 	assert(surf_tmpl->u.tex.first_layer == surf_tmpl->u.tex.last_layer);
 	if (surface == NULL)
 		return NULL;
-	/* XXX no offset */
-/*	offset = r600_texture_get_offset(rtex, level, surf_tmpl->u.tex.first_layer);*/
 	pipe_reference_init(&surface->base.reference, 1);
 	pipe_resource_reference(&surface->base.texture, texture);
 	surface->base.context = pipe;
@@ -790,10 +776,6 @@ struct pipe_transfer* r600_texture_get_transfer(struct pipe_context *ctx,
 	int r;
 	boolean use_staging_texture = FALSE;
 
-	if (usage & PIPE_TRANSFER_MAP_PERMANENTLY) {
-	   return NULL;
-	}
-
 	/* We cannot map a tiled texture directly because the data is
 	 * in a different order, therefore we do detiling using a blit.
 	 *
@@ -809,7 +791,7 @@ struct pipe_transfer* r600_texture_get_transfer(struct pipe_context *ctx,
 
 	/* Use a staging texture for uploads if the underlying BO is busy. */
 	if (!(usage & PIPE_TRANSFER_READ) &&
-	    (rctx->ws->cs_is_buffer_referenced(rctx->cs, rtex->resource.cs_buf) ||
+	    (rctx->ws->cs_is_buffer_referenced(rctx->cs, rtex->resource.cs_buf, RADEON_USAGE_READWRITE) ||
 	     rctx->ws->buffer_is_busy(rtex->resource.buf, RADEON_USAGE_READWRITE)))
 		use_staging_texture = TRUE;
 
@@ -1079,7 +1061,7 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen,
 		default:
 			break;
 		}
-		goto out_unknown; /* TODO */
+		goto out_unknown; /* XXX */
 
 	case UTIL_FORMAT_COLORSPACE_SRGB:
 		word4 |= S_038010_FORCE_DEGAMMA(1);
@@ -1153,6 +1135,21 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen,
 		}
 	}
 
+	if (desc->layout == UTIL_FORMAT_LAYOUT_SUBSAMPLED) {
+		switch (format) {
+		case PIPE_FORMAT_R8G8_B8G8_UNORM:
+		case PIPE_FORMAT_G8R8_B8R8_UNORM:
+			result = FMT_GB_GR;
+			goto out_word4;
+		case PIPE_FORMAT_G8R8_G8B8_UNORM:
+		case PIPE_FORMAT_R8G8_R8B8_UNORM:
+			result = FMT_BG_RG;
+			goto out_word4;
+		default:
+			goto out_unknown;
+		}
+	}
+
 	if (format == PIPE_FORMAT_R9G9B9E5_FLOAT) {
 		result = FMT_5_9_9_9_SHAREDEXP;
 		goto out_word4;
@@ -1168,7 +1165,7 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen,
 		}
 	}
 
-	/* R8G8Bx_SNORM - TODO CxV8U8 */
+	/* R8G8Bx_SNORM - XXX CxV8U8 */
 
 	/* See whether the components are of the same size. */
 	for (i = 1; i < desc->nr_channels; i++) {

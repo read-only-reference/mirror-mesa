@@ -25,6 +25,12 @@
  *
  **************************************************************************/
 
+/*
+ * vl targets use either a dri or sw based winsys backend, so their
+ * Makefiles directly refer to either vl_winsys_dri.c or vl_winsys_xsp.c.
+ * Both files implement the interface described in this header.
+ */
+
 #ifndef vl_winsys_h
 #define vl_winsys_h
 
@@ -47,6 +53,15 @@ void vl_screen_destroy(struct vl_screen *vscreen);
 
 struct pipe_resource*
 vl_screen_texture_from_drawable(struct vl_screen *vscreen, Drawable drawable);
+
+struct u_rect *
+vl_screen_get_dirty_area(struct vl_screen *vscreen);
+
+uint64_t
+vl_screen_get_timestamp(struct vl_screen *vscreen, Drawable drawable);
+
+void
+vl_screen_set_next_timestamp(struct vl_screen *vscreen, uint64_t stamp);
 
 void*
 vl_screen_get_private(struct vl_screen *vscreen);

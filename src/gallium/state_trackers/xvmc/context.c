@@ -38,7 +38,7 @@
 #include "util/u_memory.h"
 
 #include "vl/vl_csc.h"
-#include "vl_winsys.h"
+#include "vl/vl_winsys.h"
 
 #include "xvmc_private.h"
 
@@ -192,7 +192,7 @@ Status XvMCCreateContext(Display *dpy, XvPortID port, int surface_type_id,
    struct vl_screen *vscreen;
    struct pipe_context *pipe;
    XvMCContextPrivate *context_priv;
-   float csc[16];
+   vl_csc_matrix csc;
 
    XVMC_MSG(XVMC_TRACE, "[XvMC] Creating context %p.\n", context);
 
@@ -270,6 +270,17 @@ Status XvMCCreateContext(Display *dpy, XvPortID port, int surface_type_id,
       return BadAlloc;
    }
 
+   if (!vl_compositor_init_state(&context_priv->cstate, pipe)) {
+      XVMC_MSG(XVMC_ERR, "[XvMC] Could not create VL compositor state.\n");
+      vl_compositor_cleanup(&context_priv->compositor);
+      context_priv->decoder->destroy(context_priv->decoder);
+      pipe->destroy(pipe);
+      vl_screen_destroy(vscreen);
+      FREE(context_priv);
+      return BadAlloc;
+   }
+
+
    context_priv->color_standard =
       debug_get_bool_option("G3DVL_NO_CSC", FALSE) ?
       VL_CSC_COLOR_STANDARD_IDENTITY : VL_CSC_COLOR_STANDARD_BT_601;
@@ -278,9 +289,9 @@ Status XvMCCreateContext(Display *dpy, XvPortID port, int surface_type_id,
    vl_csc_get_matrix
    (
       context_priv->color_standard,
-      &context_priv->procamp, true, csc
+      &context_priv->procamp, true, &csc
    );
-   vl_compositor_set_csc_matrix(&context_priv->compositor, csc);
+   vl_compositor_set_csc_matrix(&context_priv->cstate, (const vl_csc_matrix *)&csc);
 
    context_priv->vscreen = vscreen;
    context_priv->pipe = pipe;
@@ -315,8 +326,8 @@ Status XvMCDestroyContext(Display *dpy, XvMCContext *context)
       return XvMCBadContext;
 
    context_priv = context->privData;
-   pipe_surface_reference(&context_priv->drawable_surface, NULL);
    context_priv->decoder->destroy(context_priv->decoder);
+   vl_compositor_cleanup_state(&context_priv->cstate);
    vl_compositor_cleanup(&context_priv->compositor);
    context_priv->pipe->destroy(context_priv->pipe);
    vl_screen_destroy(context_priv->vscreen);

@@ -337,6 +337,9 @@ fs_visitor::visit(ir_expression *ir)
 	  * FINISHME: Emit just the MUL if we know an operand is small
 	  * enough.
 	  */
+	 if (intel->gen >= 7 && c->dispatch_width == 16)
+	    fail("16-wide explicit accumulator operands unsupported\n");
+
 	 struct brw_reg acc = retype(brw_acc_reg(), BRW_REGISTER_TYPE_D);
 
 	 emit(BRW_OPCODE_MUL, acc, op[0], op[1]);
@@ -1676,7 +1679,7 @@ fs_visitor::visit(ir_loop *ir)
 {
    fs_reg counter = reg_undef;
 
-   if (c->dispatch_width == 16) {
+   if (intel->gen < 6 && c->dispatch_width == 16) {
       fail("Can't support (non-uniform) control flow on 16-wide\n");
    }
 

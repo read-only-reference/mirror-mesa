@@ -226,22 +226,6 @@ enum pipe_transfer_usage {
    PIPE_TRANSFER_MAP_DIRECTLY = (1 << 2),
 
    /**
-    * The transfer should map the resource storage directly and the GPU should
-    * be able to see what the CPU has written. Such a storage may stay mapped
-    * while issuing draw commands which use it. The only allowed usage is
-    * non-overlapping writes which are suballocated out of a big buffer.
-    * The minimum allowed alignment of suballocations is 256 bytes (this is
-    * a subject to change).
-    * The flag is intended to be used to avoid mapping and unmapping
-    * resources repeatedly when doing uploads and draws intermixed.
-    *
-    * The driver may return NULL if that isn't possible, and the state
-    * tracker needs to cope with that and use an alternative path
-    * without this flag.
-    */
-   PIPE_TRANSFER_MAP_PERMANENTLY = (1 << 3),
-
-   /**
     * Discards the memory within the mapped region.
     *
     * It should not be used with PIPE_TRANSFER_READ.
@@ -539,15 +523,68 @@ enum pipe_shader_cap
 /**
  * Composite query types
  */
+
+/**
+ * Query result for PIPE_QUERY_SO_STATISTICS.
+ */
 struct pipe_query_data_so_statistics
 {
    uint64_t num_primitives_written;
    uint64_t primitives_storage_needed;
 };
+
+/**
+ * Query result for PIPE_QUERY_TIMESTAMP_DISJOINT.
+ */
 struct pipe_query_data_timestamp_disjoint
 {
    uint64_t frequency;
    boolean  disjoint;
+};
+
+/**
+ * Query result for PIPE_QUERY_PIPELINE_STATISTICS.
+ */
+struct pipe_query_data_pipeline_statistics
+{
+   uint64_t ia_vertices;    /**< Num vertices read by the vertex fetcher. */
+   uint64_t ia_primitives;  /**< Num primitives read by the vertex fetcher. */
+   uint64_t vs_invocations; /**< Num vertex shader invocations. */
+   uint64_t gs_invocations; /**< Num geometry shader invocations. */
+   uint64_t gs_primitives;  /**< Num primitives output by a geometry shader. */
+   uint64_t c_invocations;  /**< Num primitives sent to the rasterizer. */
+   uint64_t c_primitives;   /**< Num primitives that were rendered. */
+   uint64_t ps_invocations; /**< Num pixel shader invocations. */
+   uint64_t hs_invocations; /**< Num hull shader invocations. */
+   uint64_t ds_invocations; /**< Num domain shader invocations. */
+   uint64_t cs_invocations; /**< Num compute shader invocations. */
+};
+
+/**
+ * Query result (returned by pipe_context::get_query_result).
+ */
+union pipe_query_result
+{
+   /* PIPE_QUERY_OCCLUSION_PREDICATE */
+   /* PIPE_QUERY_SO_OVERFLOW_PREDICATE */
+   /* PIPE_QUERY_GPU_FINISHED */
+   boolean b;
+
+   /* PIPE_QUERY_OCCLUSION_COUNTER */
+   /* PIPE_QUERY_TIMESTAMP */
+   /* PIPE_QUERY_TIME_ELAPSED */
+   /* PIPE_QUERY_PRIMITIVES_GENERATED */
+   /* PIPE_QUERY_PRIMITIVES_EMITTED */
+   uint64_t u64;
+
+   /* PIPE_QUERY_SO_STATISTICS */
+   struct pipe_query_data_so_statistics so_statistics;
+
+   /* PIPE_QUERY_TIMESTAMP_DISJOINT */
+   struct pipe_query_data_timestamp_disjoint timestamp_disjoint;
+
+   /* PIPE_QUERY_PIPELINE_STATISTICS */
+   struct pipe_query_data_pipeline_statistics pipeline_statistics;
 };
 
 union pipe_color_union

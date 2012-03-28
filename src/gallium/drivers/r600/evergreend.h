@@ -751,6 +751,11 @@
 #define   S_028A40_CUT_MODE(x)                         (((x) & 0x3) << 3)
 #define   G_028A40_CUT_MODE(x)                         (((x) >> 3) & 0x3)
 #define   C_028A40_CUT_MODE                            0xFFFFFFE7
+#define R_028A6C_VGT_GS_OUT_PRIM_TYPE                0x028A6C
+#define   S_028A6C_OUTPRIM_TYPE(x)                     (((x) & 0x3F) << 0)
+#define     V_028A6C_OUTPRIM_TYPE_POINTLIST            0
+#define     V_028A6C_OUTPRIM_TYPE_LINESTRIP            1
+#define     V_028A6C_OUTPRIM_TYPE_TRISTRIP             2
 #define R_008040_WAIT_UNTIL                          0x008040
 #define   S_008040_WAIT_CP_DMA_IDLE(x)                 (((x) & 0x1) << 8)
 #define   G_008040_WAIT_CP_DMA_IDLE(x)                 (((x) >> 8) & 0x1)
@@ -1585,6 +1590,11 @@
 #define R_028238_CB_TARGET_MASK                      0x00028238
 #define R_02823C_CB_SHADER_MASK                      0x0002823C
 #define R_028350_SX_MISC                             0x00028350
+#define   S_028350_MULTIPASS(x)                        (((x) & 0x1) << 0)
+#define   G_028350_MULTIPASS(x)                        (((x) >> 0) & 0x1)
+#define   C_028350_MULTIPASS                           0xFFFFFFFE
+#define R_028354_SX_SURFACE_SYNC                     0x00028354
+#define   S_028354_SURFACE_SYNC_MASK(x)                (((x) & 0x1FF) << 0)
 #define R_028380_SQ_VTX_SEMANTIC_0                   0x00028380
 #define R_028384_SQ_VTX_SEMANTIC_1                   0x00028384
 #define R_028388_SQ_VTX_SEMANTIC_2                   0x00028388
@@ -1770,6 +1780,8 @@
 #define R_028A38_VGT_GROUP_VECT_0_FMT_CNTL           0x00028A38
 #define R_028A3C_VGT_GROUP_VECT_1_FMT_CNTL           0x00028A3C
 #define R_028A48_PA_SC_MODE_CNTL_0                   0x00028A48
+#define   S_028A48_MSAA_ENABLE(x)                      (((x) & 0x1) << 0)
+#define   S_028A48_VPORT_SCISSOR_ENABLE(x)             (((x) & 0x1) << 1)
 #define   S_028A48_LINE_STIPPLE_ENABLE(x)              (((x) & 0x1) << 2)
 #define R_028A4C_PA_SC_MODE_CNTL_1                   0x00028A4C
 #define R_028A94_VGT_MULTI_PRIM_IB_RESET_EN          0x00028A94

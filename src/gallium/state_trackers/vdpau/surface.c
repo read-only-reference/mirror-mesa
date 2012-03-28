@@ -33,6 +33,7 @@
 #include "util/u_memory.h"
 #include "util/u_debug.h"
 #include "util/u_rect.h"
+#include "vl/vl_defines.h"
 
 #include "vdpau_private.h"
 
@@ -73,6 +74,7 @@ vlVdpVideoSurfaceCreate(VdpDevice device, VdpChromaType chroma_type,
    p_surf->device = dev;
    pipe = dev->context;
 
+   pipe_mutex_lock(dev->mutex);
    memset(&p_surf->templat, 0, sizeof(p_surf->templat));
    p_surf->templat.buffer_format = pipe->screen->get_video_param
    (
@@ -90,6 +92,8 @@ vlVdpVideoSurfaceCreate(VdpDevice device, VdpChromaType chroma_type,
       PIPE_VIDEO_CAP_PREFERS_INTERLACED
    );
    p_surf->video_buffer = pipe->create_video_buffer(pipe, &p_surf->templat);
+   vlVdpVideoSurfaceClear(p_surf);
+   pipe_mutex_unlock(dev->mutex);
 
    *surface = vlAddDataHTAB(p_surf);
    if (*surface == 0) {
@@ -123,8 +127,10 @@ vlVdpVideoSurfaceDestroy(VdpVideoSurface surface)
    if (!p_surf)
       return VDP_STATUS_INVALID_HANDLE;
 
+   pipe_mutex_lock(p_surf->device->mutex);
    if (p_surf->video_buffer)
       p_surf->video_buffer->destroy(p_surf->video_buffer);
+   pipe_mutex_unlock(p_surf->device->mutex);
 
    FREE(p_surf);
    return VDP_STATUS_OK;
@@ -168,18 +174,70 @@ vlVdpVideoSurfaceGetBitsYCbCr(VdpVideoSurface surface,
                               void *const *destination_data,
                               uint32_t const *destination_pitches)
 {
-   if (!vlCreateHTAB())
-      return VDP_STATUS_RESOURCES;
+   vlVdpSurface *vlsurface;
+   struct pipe_context *pipe;
+   enum pipe_format format;
+   struct pipe_sampler_view **sampler_views;
+   unsigned i, j;
 
-   vlVdpSurface *p_surf = vlGetDataHTAB(surface);
-   if (!p_surf)
+   vlsurface = vlGetDataHTAB(surface);
+   if (!vlsurface)
       return VDP_STATUS_INVALID_HANDLE;
 
-   //if (!p_surf->psurface)
-   //   return VDP_STATUS_RESOURCES;
+   pipe = vlsurface->device->context;
+   if (!pipe)
+      return VDP_STATUS_INVALID_HANDLE;
 
-   //return VDP_STATUS_OK;
-   return VDP_STATUS_NO_IMPLEMENTATION;
+   format = FormatYCBCRToPipe(destination_ycbcr_format);
+   if (format == PIPE_FORMAT_NONE)
+       return VDP_STATUS_INVALID_Y_CB_CR_FORMAT;
+
+   if (vlsurface->video_buffer == NULL || format != vlsurface->video_buffer->buffer_format)
+      return VDP_STATUS_NO_IMPLEMENTATION; /* TODO We don't support conversion (yet) */
+
+   pipe_mutex_lock(vlsurface->device->mutex);
+   sampler_views = vlsurface->video_buffer->get_sampler_view_planes(vlsurface->video_buffer);
+   if (!sampler_views) {
+      pipe_mutex_unlock(vlsurface->device->mutex);
+      return VDP_STATUS_RESOURCES;
+   }
+
+   for (i = 0; i < 3; ++i) {
+      struct pipe_sampler_view *sv = sampler_views[i];
+      if (!sv) continue;
+
+      for (j = 0; j < sv->texture->depth0; ++j) {
+         struct pipe_box box = {
+            0, 0, j,
+            sv->texture->width0, sv->texture->height0, 1
+         };
+         struct pipe_transfer *transfer;
+         uint8_t *map;
+
+         transfer = pipe->get_transfer(pipe, sv->texture, 0, PIPE_TRANSFER_READ, &box);
+         if (transfer == NULL) {
+            pipe_mutex_unlock(vlsurface->device->mutex);
+            return VDP_STATUS_RESOURCES;
+         }
+
+         map = pipe_transfer_map(pipe, transfer);
+         if (map == NULL) {
+            pipe_transfer_destroy(pipe, transfer);
+            pipe_mutex_unlock(vlsurface->device->mutex);
+            return VDP_STATUS_RESOURCES;
+         }
+
+         util_copy_rect(destination_data[i] + destination_pitches[i] * j, sv->texture->format,
+                        destination_pitches[i] * sv->texture->depth0, 0, 0,
+                        box.width, box.height, map, transfer->stride, 0, 0);
+
+         pipe_transfer_unmap(pipe, transfer);
+         pipe_transfer_destroy(pipe, transfer);
+      }
+   }
+   pipe_mutex_unlock(vlsurface->device->mutex);
+
+   return VDP_STATUS_OK;
 }
 
 /**
@@ -208,6 +266,7 @@ vlVdpVideoSurfacePutBitsYCbCr(VdpVideoSurface surface,
    if (!pipe)
       return VDP_STATUS_INVALID_HANDLE;
 
+   pipe_mutex_lock(p_surf->device->mutex);
    if (p_surf->video_buffer == NULL || pformat != p_surf->video_buffer->buffer_format) {
 
       /* destroy the old one */
@@ -221,17 +280,22 @@ vlVdpVideoSurfacePutBitsYCbCr(VdpVideoSurface surface,
       p_surf->video_buffer = pipe->create_video_buffer(pipe, &p_surf->templat);
 
       /* stil no luck? ok forget it we don't support it */
-      if (!p_surf->video_buffer)
+      if (!p_surf->video_buffer) {
+         pipe_mutex_unlock(p_surf->device->mutex);
          return VDP_STATUS_NO_IMPLEMENTATION;
+      }
+      vlVdpVideoSurfaceClear(p_surf);
    }
 
    sampler_views = p_surf->video_buffer->get_sampler_view_planes(p_surf->video_buffer);
-   if (!sampler_views)
+   if (!sampler_views) {
+      pipe_mutex_unlock(p_surf->device->mutex);
       return VDP_STATUS_RESOURCES;
+   }
 
    for (i = 0; i < 3; ++i) {
       struct pipe_sampler_view *sv = sampler_views[i];
-      if (!sv) continue;
+      if (!sv || !source_pitches[i]) continue;
 
       for (j = 0; j < sv->texture->depth0; ++j) {
          struct pipe_box dst_box = {
@@ -246,6 +310,33 @@ vlVdpVideoSurfacePutBitsYCbCr(VdpVideoSurface surface,
                                      0);
       }
    }
+   pipe_mutex_unlock(p_surf->device->mutex);
 
    return VDP_STATUS_OK;
+}
+
+/**
+ * Helper function to initially clear the VideoSurface after (re-)creation
+ */
+void
+vlVdpVideoSurfaceClear(vlVdpSurface *vlsurf)
+{
+   struct pipe_context *pipe = vlsurf->device->context;
+   struct pipe_surface **surfaces;
+   unsigned i;
+
+   if (!vlsurf->video_buffer)
+      return;
+
+   surfaces = vlsurf->video_buffer->get_surfaces(vlsurf->video_buffer);
+   for (i = 0; i < VL_MAX_SURFACES; ++i) {
+      union pipe_color_union black = {};
+
+      if (!surfaces[i])
+         continue;
+
+      pipe->clear_render_target(pipe, surfaces[i], &black, 0, 0,
+                                surfaces[i]->width, surfaces[i]->height);
+   }
+   pipe->flush(pipe, NULL);
 }

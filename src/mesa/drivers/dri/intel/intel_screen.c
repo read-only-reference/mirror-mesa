@@ -57,6 +57,10 @@ PUBLIC const char __driConfigOptions[] =
 	 DRI_CONF_DESC(en, "Enable texture tiling")
       DRI_CONF_OPT_END
 
+      DRI_CONF_OPT_BEGIN(hiz, bool, true)
+	 DRI_CONF_DESC(en, "Enable Hierarchical Z on gen6+")
+      DRI_CONF_OPT_END
+
       DRI_CONF_OPT_BEGIN(early_z, bool, false)
 	 DRI_CONF_DESC(en, "Enable early Z in classic mode (unstable, 945-only).")
       DRI_CONF_OPT_END
@@ -86,7 +90,7 @@ PUBLIC const char __driConfigOptions[] =
    DRI_CONF_SECTION_END
 DRI_CONF_END;
 
-const GLuint __driNConfigOptions = 13;
+const GLuint __driNConfigOptions = 14;
 
 #include "intel_batchbuffer.h"
 #include "intel_buffers.h"
@@ -125,6 +129,38 @@ intelDRI2Flush(__DRIdrawable *drawable)
 
    if (intel->batch.used)
       intel_batchbuffer_flush(intel);
+
+   if (INTEL_DEBUG & DEBUG_AUB) {
+      struct gl_framebuffer *fb = ctx->DrawBuffer;
+
+      for (int i = 0; i < fb->_NumColorDrawBuffers; i++) {
+	 struct intel_renderbuffer *irb =
+	    intel_renderbuffer(fb->_ColorDrawBuffers[i]);
+
+	 if (irb && irb->mt) {
+	    enum aub_dump_bmp_format format;
+
+	    switch (irb->Base.Base.Format) {
+	    case MESA_FORMAT_ARGB8888:
+	    case MESA_FORMAT_XRGB8888:
+	       format = AUB_DUMP_BMP_FORMAT_ARGB_8888;
+	       break;
+	    default:
+	       continue;
+	    }
+
+	    drm_intel_gem_bo_aub_dump_bmp(irb->mt->region->bo,
+					  irb->draw_x,
+					  irb->draw_y,
+					  irb->Base.Base.Width,
+					  irb->Base.Base.Height,
+					  format,
+					  irb->mt->region->pitch *
+					  irb->mt->region->cpp,
+					  0);
+	 }
+      }
+   }
 }
 
 static const struct __DRI2flushExtensionRec intelFlushExtension = {
@@ -592,8 +628,7 @@ intel_init_bufmgr(struct intel_screen *intelScreen)
    __DRIscreen *spriv = intelScreen->driScrnPriv;
    int num_fences = 0;
 
-   intelScreen->no_hw = (getenv("INTEL_NO_HW") != NULL ||
-			 getenv("INTEL_DEVID_OVERRIDE") != NULL);
+   intelScreen->no_hw = getenv("INTEL_NO_HW") != NULL;
 
    intelScreen->bufmgr = intel_bufmgr_gem_init(spriv->fd, BATCH_SZ);
    if (intelScreen->bufmgr == NULL) {
@@ -617,29 +652,6 @@ intel_init_bufmgr(struct intel_screen *intelScreen)
       intel_get_boolean(spriv, I915_PARAM_HAS_RELAXED_DELTA) << 0;
 
    return true;
-}
-
-/**
- * Override intel_screen.hw_has_hiz with environment variable INTEL_HIZ.
- *
- * Valid values for INTEL_HIZ are "0" and "1". If an invalid valid value is
- * encountered, a warning is emitted and INTEL_HIZ is ignored.
- */
-static void
-intel_override_hiz(struct intel_screen *intel)
-{
-   const char *s = getenv("INTEL_HIZ");
-   if (!s) {
-      return;
-   } else if (!strncmp("0", s, 2)) {
-      intel->hw_has_hiz = false;
-   } else if (!strncmp("1", s, 2)) {
-      intel->hw_has_hiz = true;
-   } else {
-      fprintf(stderr,
-	      "warning: env variable INTEL_HIZ=\"%s\" has invalid value "
-	      "and is ignored", s);
-   }
 }
 
 /**
@@ -667,6 +679,30 @@ intel_override_separate_stencil(struct intel_screen *screen)
    }
 }
 
+static bool
+intel_detect_swizzling(struct intel_screen *screen)
+{
+   drm_intel_bo *buffer;
+   unsigned long flags = 0;
+   unsigned long aligned_pitch;
+   uint32_t tiling = I915_TILING_X;
+   uint32_t swizzle_mode = 0;
+
+   buffer = drm_intel_bo_alloc_tiled(screen->bufmgr, "swizzle test",
+				     64, 64, 4,
+				     &tiling, &aligned_pitch, flags);
+   if (buffer == NULL)
+      return false;
+
+   drm_intel_bo_get_tiling(buffer, &tiling, &swizzle_mode);
+   drm_intel_bo_unreference(buffer);
+
+   if (swizzle_mode == I915_BIT_6_SWIZZLE_NONE)
+      return false;
+   else
+      return true;
+}
+
 /**
  * This is the driver specific part of the createNewScreen entry point.
  * Called when using DRI2.
@@ -680,7 +716,6 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
    GLenum fb_format[3];
    GLenum fb_type[3];
    unsigned int api_mask;
-   char *devid_override;
 
    static const GLenum back_buffer_modes[] = {
        GLX_NONE, GLX_SWAP_UNDEFINED_OML, GLX_SWAP_COPY_OML
@@ -702,20 +737,10 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
    intelScreen->driScrnPriv = psp;
    psp->driverPrivate = (void *) intelScreen;
 
-   /* Determine chipset ID */
-   if (!intel_get_param(psp, I915_PARAM_CHIPSET_ID,
-			&intelScreen->deviceID))
-      return false;
+   if (!intel_init_bufmgr(intelScreen))
+       return false;
 
-   /* Allow an override of the device ID for the purpose of making the
-    * driver produce dumps for debugging of new chipset enablement.
-    * This implies INTEL_NO_HW, to avoid programming your actual GPU
-    * incorrectly.
-    */
-   devid_override = getenv("INTEL_DEVID_OVERRIDE");
-   if (devid_override) {
-      intelScreen->deviceID = strtod(devid_override, NULL);
-   }
+   intelScreen->deviceID = drm_intel_bufmgr_gem_get_devid(intelScreen->bufmgr);
 
    intelScreen->kernel_has_gen7_sol_reset =
       intel_get_boolean(intelScreen->driScrnPriv,
@@ -737,7 +762,6 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
 
    intelScreen->hw_has_separate_stencil = intelScreen->gen >= 6;
    intelScreen->hw_must_use_separate_stencil = intelScreen->gen >= 7;
-   intelScreen->hw_has_hiz = intelScreen->gen >= 6;
    intelScreen->dri2_has_hiz = INTEL_DRI2_HAS_HIZ_UNKNOWN;
 
 #if defined(I915_PARAM_HAS_LLC)
@@ -748,7 +772,6 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
    intelScreen->hw_has_llc = intelScreen->gen >= 6;
 #endif
 
-   intel_override_hiz(intelScreen);
    intel_override_separate_stencil(intelScreen);
 
    api_mask = (1 << __DRI_API_OPENGL);
@@ -762,8 +785,7 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
    if (IS_9XX(intelScreen->deviceID) || IS_965(intelScreen->deviceID))
       psp->api_mask = api_mask;
 
-   if (!intel_init_bufmgr(intelScreen))
-       return false;
+   intelScreen->hw_has_swizzling = intel_detect_swizzling(intelScreen);
 
    psp->extensions = intelScreenExtensions;
 

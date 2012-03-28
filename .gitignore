@@ -2,6 +2,7 @@
 *.dll
 *.exe
 *.ilk
+*.la
 *.lo
 *.o
 *.obj
@@ -35,4 +36,7 @@ config.py
 build
 libtool
 manifest.txt
+Makefile.in
 .dir-locals.el
+.deps/
+.libs/

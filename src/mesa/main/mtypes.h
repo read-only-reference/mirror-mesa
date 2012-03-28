@@ -1316,7 +1316,9 @@ struct gl_texture_object
    GLenum Swizzle[4];           /**< GL_EXT_texture_swizzle */
    GLuint _Swizzle;             /**< same as Swizzle, but SWIZZLE_* format */
    GLboolean GenerateMipmap;    /**< GL_SGIS_generate_mipmap */
-   GLboolean _Complete;		/**< Is texture object complete? */
+   GLboolean _BaseComplete;     /**< Is the base texture level valid? */
+   GLboolean _MipmapComplete;   /**< Is the whole mipmap valid? */
+   GLboolean _IsIntegerFormat;  /**< Does the texture store integer values? */
    GLboolean _RenderToTexture;  /**< Any rendering to this texture? */
    GLboolean Purgeable;         /**< Is the buffer purgeable under memory pressure? */
    GLboolean Immutable;         /**< GL_ARB_texture_storage */
@@ -3071,40 +3073,16 @@ struct gl_matrix_stack
  * Set in the __struct gl_contextRec::_TriangleCaps bitfield.
  */
 /*@{*/
-#define DD_FLATSHADE                0x1
-#define DD_SEPARATE_SPECULAR        0x2
-#define DD_TRI_CULL_FRONT_BACK      0x4 /* special case on some hw */
-#define DD_TRI_LIGHT_TWOSIDE        0x8
-#define DD_TRI_UNFILLED             0x10
-#define DD_TRI_SMOOTH               0x20
-#define DD_TRI_STIPPLE              0x40
-#define DD_TRI_OFFSET               0x80
-#define DD_LINE_SMOOTH              0x100
-#define DD_LINE_STIPPLE             0x200
-#define DD_POINT_SMOOTH             0x400
-#define DD_POINT_ATTEN              0x800
-#define DD_TRI_TWOSTENCIL           0x1000
-/*@}*/
-
-
-/**
- * \name Define the state changes under which each of these bits might change
- */
-/*@{*/
-#define _DD_NEW_FLATSHADE                _NEW_LIGHT
-#define _DD_NEW_SEPARATE_SPECULAR        (_NEW_LIGHT | _NEW_FOG | _NEW_PROGRAM)
-#define _DD_NEW_TRI_CULL_FRONT_BACK      _NEW_POLYGON
-#define _DD_NEW_TRI_LIGHT_TWOSIDE        _NEW_LIGHT
-#define _DD_NEW_TRI_UNFILLED             _NEW_POLYGON
-#define _DD_NEW_TRI_SMOOTH               _NEW_POLYGON
-#define _DD_NEW_TRI_STIPPLE              _NEW_POLYGON
-#define _DD_NEW_TRI_OFFSET               _NEW_POLYGON
-#define _DD_NEW_LINE_SMOOTH              _NEW_LINE
-#define _DD_NEW_LINE_STIPPLE             _NEW_LINE
-#define _DD_NEW_LINE_WIDTH               _NEW_LINE
-#define _DD_NEW_POINT_SMOOTH             _NEW_POINT
-#define _DD_NEW_POINT_SIZE               _NEW_POINT
-#define _DD_NEW_POINT_ATTEN              _NEW_POINT
+#define DD_SEPARATE_SPECULAR        (1 << 0)
+#define DD_TRI_LIGHT_TWOSIDE        (1 << 1)
+#define DD_TRI_UNFILLED             (1 << 2)
+#define DD_TRI_SMOOTH               (1 << 3)
+#define DD_TRI_STIPPLE              (1 << 4)
+#define DD_TRI_OFFSET               (1 << 5)
+#define DD_LINE_SMOOTH              (1 << 6)
+#define DD_LINE_STIPPLE             (1 << 7)
+#define DD_POINT_SMOOTH             (1 << 8)
+#define DD_POINT_ATTEN              (1 << 9)
 /*@}*/
 
 
@@ -3117,6 +3095,12 @@ struct gl_matrix_stack
                                            _NEW_POINT |		\
                                            _NEW_PROGRAM |	\
                                            _NEW_MODELVIEW)
+
+#define _MESA_NEW_SEPARATE_SPECULAR        (_NEW_LIGHT | \
+                                            _NEW_FOG | \
+                                            _NEW_PROGRAM)
+
+
 /*@}*/
 
 
@@ -3186,6 +3170,70 @@ struct gl_dlist_state
    } Current;
 };
 
+/**
+ * An error, warning, or other piece of debug information for an application
+ * to consume via GL_ARB_debug_output.
+ */
+struct gl_debug_msg
+{
+   GLenum source;
+   GLenum type;
+   GLuint id;
+   GLenum severity;
+   GLsizei length;
+   GLcharARB *message;
+};
+
+typedef enum {
+   API_ERROR_UNKNOWN,
+   API_ERROR_COUNT
+} gl_api_error;
+
+typedef enum {
+   WINSYS_ERROR_UNKNOWN,
+   WINSYS_ERROR_COUNT
+} gl_winsys_error;
+
+typedef enum {
+   SHADER_ERROR_UNKNOWN,
+   SHADER_ERROR_COUNT
+} gl_shader_error;
+
+typedef enum {
+   OTHER_ERROR_UNKNOWN,
+   OTHER_ERROR_OUT_OF_MEMORY,
+   OTHER_ERROR_COUNT
+} gl_other_error;
+
+struct gl_client_namespace
+{
+   struct _mesa_HashTable *IDs;
+   unsigned ZeroID; /* a HashTable won't take zero, so store its state here */
+   struct simple_node Severity[3]; /* lists of IDs in the hash table */
+};
+
+struct gl_client_debug
+{
+   GLboolean Defaults[3][2][6]; /* severity, source, type */
+   struct gl_client_namespace Namespaces[2][6]; /* source, type */
+};
+
+struct gl_debug_state
+{
+   GLDEBUGPROCARB Callback;
+   GLvoid *CallbackData;
+   GLboolean SyncOutput;
+   GLboolean ApiErrors[API_ERROR_COUNT];
+   GLboolean WinsysErrors[WINSYS_ERROR_COUNT];
+   GLboolean ShaderErrors[SHADER_ERROR_COUNT];
+   GLboolean OtherErrors[OTHER_ERROR_COUNT];
+   struct gl_client_debug ClientIDs;
+   struct gl_debug_msg Log[MAX_DEBUG_LOGGED_MESSAGES];
+   GLint NumMessages;
+   GLint NextMsg;
+   GLint NextMsgLength; /* redundant, but copied here from Log[NextMsg].length
+                           for the sake of the offsetof() code in get.c */
+};
 
 /**
  * Enum for the OpenGL APIs we know about and may support.
@@ -3350,6 +3398,9 @@ struct gl_context
     */
    const char *ErrorDebugFmtString;
    GLuint ErrorDebugCount;
+
+   /* GL_ARB_debug_output */
+   struct gl_debug_state Debug;
 
    GLenum RenderMode;        /**< either GL_RENDER, GL_SELECT, GL_FEEDBACK */
    GLbitfield NewState;      /**< bitwise-or of _NEW_* flags */

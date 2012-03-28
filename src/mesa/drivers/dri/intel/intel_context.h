@@ -208,12 +208,14 @@ struct intel_context
    int gen;
    int gt;
    bool needs_ff_sync;
+   bool is_haswell;
    bool is_g4x;
    bool is_945;
    bool has_separate_stencil;
    bool must_use_separate_stencil;
    bool has_hiz;
    bool has_llc;
+   bool has_swizzling;
 
    int urb_size;
 
@@ -287,12 +289,6 @@ struct intel_context
    bool no_rast;
    bool always_flush_batch;
    bool always_flush_cache;
-
-   /* 0 - nonconformant, best performance;
-    * 1 - fallback to sw for known conformance bugs
-    * 2 - always fallback to sw
-    */
-   GLuint conformance_mode;
 
    /* State for intelvb.c and inteltris.c.
     */
@@ -471,6 +467,7 @@ extern int INTEL_DEBUG;
 #define DEBUG_URB       0x800000
 #define DEBUG_VS        0x1000000
 #define DEBUG_CLIP      0x2000000
+#define DEBUG_AUB       0x4000000
 
 #define DBG(...) do {						\
 	if (unlikely(INTEL_DEBUG & FILE_DEBUG_FLAG))		\

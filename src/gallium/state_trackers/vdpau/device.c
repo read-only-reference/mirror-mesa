@@ -29,8 +29,7 @@
 
 #include "util/u_memory.h"
 #include "util/u_debug.h"
-
-#include "vl_winsys.h"
+#include "util/u_sampler.h"
 
 #include "vdpau_private.h"
 
@@ -79,6 +78,7 @@ vdp_imp_device_create_x11(Display *display, int screen, VdpDevice *device,
    }
 
    vl_compositor_init(&dev->compositor, dev->context);
+   pipe_mutex_init(dev->mutex);
 
    *get_proc_address = &vlVdpGetProcAddress;
 
@@ -160,7 +160,8 @@ vlVdpDeviceDestroy(VdpDevice device)
    vlVdpDevice *dev = vlGetDataHTAB(device);
    if (!dev)
       return VDP_STATUS_INVALID_HANDLE;
-      
+
+   pipe_mutex_destroy(dev->mutex);
    vl_compositor_cleanup(&dev->compositor);
    dev->context->destroy(dev->context);
    vl_screen_destroy(dev->vscreen);
@@ -236,4 +237,73 @@ vlVdpGetErrorString (VdpStatus status)
    _ERROR_TYPE(VDP_STATUS_ERROR,"A catch-all error, used when no other error code applies.");
    default: return "Unknown Error";
    }
+}
+
+void
+vlVdpDefaultSamplerViewTemplate(struct pipe_sampler_view *templ, struct pipe_resource *res)
+{
+   const struct util_format_description *desc;
+
+   memset(templ, 0, sizeof(*templ));
+   u_sampler_view_default_template(templ, res, res->format);
+
+   desc = util_format_description(res->format);
+   if (desc->swizzle[0] == UTIL_FORMAT_SWIZZLE_0)
+      templ->swizzle_r = PIPE_SWIZZLE_ONE;
+   if (desc->swizzle[1] == UTIL_FORMAT_SWIZZLE_0)
+      templ->swizzle_g = PIPE_SWIZZLE_ONE;
+   if (desc->swizzle[2] == UTIL_FORMAT_SWIZZLE_0)
+      templ->swizzle_b = PIPE_SWIZZLE_ONE;
+   if (desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_0)
+      templ->swizzle_a = PIPE_SWIZZLE_ONE;
+}
+
+void
+vlVdpResolveDelayedRendering(vlVdpDevice *dev, struct pipe_surface *surface, struct u_rect *dirty_area)
+{
+   struct vl_compositor_state *cstate;
+   vlVdpOutputSurface *vlsurface;
+
+   assert(dev);
+
+   cstate = dev->delayed_rendering.cstate;
+   if (!cstate)
+      return;
+
+   vlsurface = vlGetDataHTAB(dev->delayed_rendering.surface);
+   if (!vlsurface)
+      return;
+
+   if (!surface) {
+      surface = vlsurface->surface;
+      dirty_area = &vlsurface->dirty_area;
+   }
+
+   vl_compositor_render(cstate, &dev->compositor, surface, dirty_area);
+
+   dev->delayed_rendering.surface = VDP_INVALID_HANDLE;
+   dev->delayed_rendering.cstate = NULL;
+
+   /* test if we need to create a new sampler for the just filled texture */
+   if (surface->texture != vlsurface->sampler_view->texture) {
+      struct pipe_resource *res = surface->texture;
+      struct pipe_sampler_view sv_templ;
+
+      vlVdpDefaultSamplerViewTemplate(&sv_templ, res);
+      pipe_sampler_view_reference(&vlsurface->sampler_view, NULL);
+      vlsurface->sampler_view = dev->context->create_sampler_view(dev->context, res, &sv_templ);
+   }
+
+   return;
+}
+
+void
+vlVdpSave4DelayedRendering(vlVdpDevice *dev, VdpOutputSurface surface, struct vl_compositor_state *cstate)
+{
+   assert(dev);
+
+   vlVdpResolveDelayedRendering(dev, NULL, NULL);
+
+   dev->delayed_rendering.surface = surface;
+   dev->delayed_rendering.cstate = cstate;
 }

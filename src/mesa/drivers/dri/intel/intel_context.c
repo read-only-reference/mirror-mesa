@@ -185,6 +185,15 @@ intelGetString(struct gl_context * ctx, GLenum name)
       case PCI_CHIP_IVYBRIDGE_S_GT1:
 	 chipset = "Intel(R) Ivybridge Server";
 	 break;
+      case PCI_CHIP_HASWELL_GT1:
+      case PCI_CHIP_HASWELL_GT2:
+	 chipset = "Intel(R) Haswell Desktop";
+	 break;
+      case PCI_CHIP_HASWELL_M_GT1:
+      case PCI_CHIP_HASWELL_M_GT2:
+      case PCI_CHIP_HASWELL_M_ULT_GT2:
+	 chipset = "Intel(R) Haswell Mobile";
+	 break;
       default:
          chipset = "Unknown Intel Chipset";
          break;
@@ -477,6 +486,7 @@ static const struct dri_debug_control debug_control[] = {
    { "urb",   DEBUG_URB },
    { "vs",    DEBUG_VS },
    { "clip",  DEBUG_CLIP },
+   { "aub",   DEBUG_AUB },
    { NULL,    0 }
 };
 
@@ -607,15 +617,16 @@ intelInitContext(struct intel_context *intel,
    intel->gen = intelScreen->gen;
 
    const int devID = intelScreen->deviceID;
-
-   if (IS_SNB_GT1(devID) || IS_IVB_GT1(devID))
+   if (IS_SNB_GT1(devID) || IS_IVB_GT1(devID) || IS_HSW_GT1(devID))
       intel->gt = 1;
-   else if (IS_SNB_GT2(devID) || IS_IVB_GT2(devID))
+   else if (IS_SNB_GT2(devID) || IS_IVB_GT2(devID) || IS_HSW_GT2(devID))
       intel->gt = 2;
    else
       intel->gt = 0;
 
-   if (IS_G4X(devID)) {
+   if (IS_HASWELL(devID)) {
+      intel->is_haswell = true;
+   } else if (IS_G4X(devID)) {
       intel->is_g4x = true;
    } else if (IS_945(devID)) {
       intel->is_945 = true;
@@ -627,8 +638,9 @@ intelInitContext(struct intel_context *intel,
 
    intel->has_separate_stencil = intel->intelScreen->hw_has_separate_stencil;
    intel->must_use_separate_stencil = intel->intelScreen->hw_must_use_separate_stencil;
-   intel->has_hiz = intel->intelScreen->hw_has_hiz;
+   intel->has_hiz = intel->gen >= 6 && !intel->is_haswell;
    intel->has_llc = intel->intelScreen->hw_has_llc;
+   intel->has_swizzling = intel->intelScreen->hw_has_swizzling;
 
    memset(&ctx->TextureFormatSupported,
 	  0, sizeof(ctx->TextureFormatSupported));
@@ -651,33 +663,11 @@ intelInitContext(struct intel_context *intel,
       break;
    }
 
-   /* This doesn't yet catch all non-conformant rendering, but it's a
-    * start.
-    */
-   if (getenv("INTEL_STRICT_CONFORMANCE")) {
-      unsigned int value = atoi(getenv("INTEL_STRICT_CONFORMANCE"));
-      if (value > 0) {
-         intel->conformance_mode = value;
-      }
-      else {
-         intel->conformance_mode = 1;
-      }
-   }
-
-   if (intel->conformance_mode > 0) {
-      ctx->Const.MinLineWidth = 1.0;
-      ctx->Const.MinLineWidthAA = 1.0;
-      ctx->Const.MaxLineWidth = 1.0;
-      ctx->Const.MaxLineWidthAA = 1.0;
-      ctx->Const.LineWidthGranularity = 1.0;
-   }
-   else {
-      ctx->Const.MinLineWidth = 1.0;
-      ctx->Const.MinLineWidthAA = 1.0;
-      ctx->Const.MaxLineWidth = 5.0;
-      ctx->Const.MaxLineWidthAA = 5.0;
-      ctx->Const.LineWidthGranularity = 0.5;
-   }
+   ctx->Const.MinLineWidth = 1.0;
+   ctx->Const.MinLineWidthAA = 1.0;
+   ctx->Const.MaxLineWidth = 5.0;
+   ctx->Const.MaxLineWidthAA = 5.0;
+   ctx->Const.LineWidthGranularity = 0.5;
 
    ctx->Const.MinPointSize = 1.0;
    ctx->Const.MinPointSizeAA = 1.0;
@@ -753,6 +743,9 @@ intelInitContext(struct intel_context *intel,
    if (INTEL_DEBUG & DEBUG_BUFMGR)
       dri_bufmgr_set_debug(intel->bufmgr, true);
 
+   if (INTEL_DEBUG & DEBUG_AUB)
+      drm_intel_bufmgr_gem_set_aub_dump(intel->bufmgr, true);
+
    intel_batchbuffer_init(intel);
 
    intel_fbo_init(intel);
@@ -760,6 +753,13 @@ intelInitContext(struct intel_context *intel,
    intel->use_texture_tiling = driQueryOptionb(&intel->optionCache,
 					       "texture_tiling");
    intel->use_early_z = driQueryOptionb(&intel->optionCache, "early_z");
+
+   if (!driQueryOptionb(&intel->optionCache, "hiz")) {
+       intel->has_hiz = false;
+       /* On gen6, you can only do separate stencil with HIZ. */
+       if (intel->gen == 6)
+	  intel->has_separate_stencil = false;
+   }
 
    intel->prim.primitive = ~0;
 
@@ -1221,6 +1221,10 @@ intel_process_dri2_buffer_with_separate_stencil(struct intel_context *intel,
    if (!rb)
       return;
 
+   /* Check if we failed to allocate the depth miptree earlier. */
+   if (buffer->attachment == __DRI_BUFFER_HIZ && rb->mt == NULL)
+     return;
+
    /* If the renderbuffer's and DRIbuffer's regions match, then continue. */
    if ((buffer->attachment != __DRI_BUFFER_HIZ &&
 	rb->mt &&
@@ -1262,6 +1266,7 @@ intel_process_dri2_buffer_with_separate_stencil(struct intel_context *intel,
     * due to failure to allocate new storage.
     */
    if (buffer->attachment == __DRI_BUFFER_HIZ) {
+      assert(rb->mt);
       intel_miptree_release(&rb->mt->hiz_mt);
    } else {
       intel_miptree_release(&rb->mt);
@@ -1287,6 +1292,7 @@ intel_process_dri2_buffer_with_separate_stencil(struct intel_context *intel,
 
    /* Associate buffer with new storage. */
    if (buffer->attachment == __DRI_BUFFER_HIZ) {
+      assert(rb->mt);
       rb->mt->hiz_mt = mt;
    } else {
       rb->mt = mt;

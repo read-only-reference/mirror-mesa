@@ -54,13 +54,63 @@ dri_lookup_egl_image(__DRIscreen *screen, void *image, void *data)
    return dri->lookup_image(screen, image, dri->lookup_user_data);
 }
 
-const __DRIuseInvalidateExtension use_invalidate = {
+static __DRIbuffer *
+dri_get_buffers(__DRIdrawable * driDrawable,
+		 int *width, int *height,
+		 unsigned int *attachments, int count,
+		 int *out_count, void *data)
+{
+   struct gbm_dri_surface *surf = data;
+   struct gbm_dri_device *dri = gbm_dri_device(surf->base.gbm);
+
+   if (dri->get_buffers == NULL)
+      return NULL;
+
+   return dri->get_buffers(driDrawable, width, height, attachments,
+                           count, out_count, surf->dri_private);
+}
+
+static void
+dri_flush_front_buffer(__DRIdrawable * driDrawable, void *data)
+{
+   struct gbm_dri_surface *surf = data;
+   struct gbm_dri_device *dri = gbm_dri_device(surf->base.gbm);
+
+   if (dri->flush_front_buffer != NULL)
+      dri->flush_front_buffer(driDrawable, surf->dri_private);
+}
+
+static __DRIbuffer *
+dri_get_buffers_with_format(__DRIdrawable * driDrawable,
+                            int *width, int *height,
+                            unsigned int *attachments, int count,
+                            int *out_count, void *data)
+{
+   struct gbm_dri_surface *surf = data;
+   struct gbm_dri_device *dri = gbm_dri_device(surf->base.gbm);
+
+   if (dri->get_buffers_with_format == NULL)
+      return NULL;
+
+   return
+      dri->get_buffers_with_format(driDrawable, width, height, attachments,
+                                   count, out_count, surf->dri_private);
+}
+
+static const __DRIuseInvalidateExtension use_invalidate = {
    { __DRI_USE_INVALIDATE, 1 }
 };
 
-const __DRIimageLookupExtension image_lookup_extension = {
+static const __DRIimageLookupExtension image_lookup_extension = {
    { __DRI_IMAGE_LOOKUP, 1 },
    dri_lookup_egl_image
+};
+
+const __DRIdri2LoaderExtension dri2_loader_extension = {
+   { __DRI_DRI2_LOADER, 3 },
+   dri_get_buffers,
+   dri_flush_front_buffer,
+   dri_get_buffers_with_format,
 };
 
 struct dri_extension_match {
@@ -70,6 +120,7 @@ struct dri_extension_match {
 };
 
 static struct dri_extension_match dri_core_extensions[] = {
+   { __DRI2_FLUSH, 1, offsetof(struct gbm_dri_device, flush) },
    { __DRI_IMAGE, 1, offsetof(struct gbm_dri_device, image) },
    { NULL, 0, 0 }
 };
@@ -186,7 +237,8 @@ dri_screen_create(struct gbm_dri_device *dri)
 
    dri->extensions[0] = &image_lookup_extension.base;
    dri->extensions[1] = &use_invalidate.base;
-   dri->extensions[2] = NULL;
+   dri->extensions[2] = &dri2_loader_extension.base;
+   dri->extensions[3] = NULL;
 
    if (dri->dri2 == NULL)
       return -1;
@@ -386,6 +438,34 @@ gbm_dri_bo_create(struct gbm_device *gbm,
    return &bo->base.base;
 }
 
+static struct gbm_surface *
+gbm_dri_surface_create(struct gbm_device *gbm,
+                       uint32_t width, uint32_t height,
+		       uint32_t format, uint32_t flags)
+{
+   struct gbm_dri_surface *surf;
+
+   surf = calloc(1, sizeof *surf);
+   if (surf == NULL)
+      return NULL;
+
+   surf->base.gbm = gbm;
+   surf->base.width = width;
+   surf->base.height = height;
+   surf->base.format = format;
+   surf->base.flags = flags;
+
+   return &surf->base;
+}
+
+static void
+gbm_dri_surface_destroy(struct gbm_surface *_surf)
+{
+   struct gbm_dri_surface *surf = gbm_dri_surface(_surf);
+
+   free(surf);
+}
+
 static void
 dri_destroy(struct gbm_device *gbm)
 {
@@ -413,6 +493,8 @@ dri_device_create(int fd)
    dri->base.base.is_format_supported = gbm_dri_is_format_supported;
    dri->base.base.bo_destroy = gbm_dri_bo_destroy;
    dri->base.base.destroy = dri_destroy;
+   dri->base.base.surface_create = gbm_dri_surface_create;
+   dri->base.base.surface_destroy = gbm_dri_surface_destroy;
 
    dri->base.type = GBM_DRM_DRIVER_TYPE_DRI;
    dri->base.base.name = "drm";

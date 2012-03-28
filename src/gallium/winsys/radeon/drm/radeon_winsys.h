@@ -40,9 +40,7 @@
  * - R16F/RG16F
  */
 
-#include "pipebuffer/pb_bufmgr.h"
-#include "pipe/p_defines.h"
-#include "pipe/p_state.h"
+#include "pipebuffer/pb_buffer.h"
 #include "libdrm/radeon_surface.h"
 
 #define RADEON_MAX_CMDBUF_DWORDS (16 * 1024)
@@ -341,7 +339,8 @@ struct radeon_winsys {
      * \param buf       A winsys buffer.
      */
     boolean (*cs_is_buffer_referenced)(struct radeon_winsys_cs *cs,
-                                       struct radeon_winsys_cs_handle *buf);
+                                       struct radeon_winsys_cs_handle *buf,
+                                       enum radeon_bo_usage usage);
 
     /**
      * Request access to a feature for a command stream.

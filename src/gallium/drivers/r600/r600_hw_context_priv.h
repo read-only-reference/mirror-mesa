@@ -27,13 +27,8 @@
 #define R600_PRIV_H
 
 #include "r600_pipe.h"
-#include "util/u_hash_table.h"
-#include "os/os_thread.h"
 
 #define R600_MAX_DRAW_CS_DWORDS 11
-
-#define PKT_COUNT_C                     0xC000FFFF
-#define PKT_COUNT_S(x)                  (((x) & 0x3FFF) << 16)
 
 /* these flags are used in register flags and added into block flags */
 #define REG_FLAG_NEED_BO 1
@@ -55,7 +50,6 @@ struct r600_reg {
 /*
  * r600_hw_context.c
  */
-struct r600_resource *r600_context_reg_bo(struct r600_context *ctx, unsigned offset);
 int r600_context_add_block(struct r600_context *ctx, const struct r600_reg *reg, unsigned nreg,
 			   unsigned opcode, unsigned offset_base);
 void r600_context_pipe_state_set_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, struct r600_block *block);
@@ -72,13 +66,5 @@ void r600_context_ps_partial_flush(struct r600_context *ctx);
  */
 void evergreen_flush_vgt_streamout(struct r600_context *ctx);
 void evergreen_set_streamout_enable(struct r600_context *ctx, unsigned buffer_enable_bit);
-
-
-static INLINE unsigned r600_context_bo_reloc(struct r600_context *ctx, struct r600_resource *rbo,
-					     enum radeon_bo_usage usage)
-{
-	assert(usage);
-	return ctx->ws->cs_add_reloc(ctx->cs, rbo->cs_buf, usage, rbo->domains) * 4;
-}
 
 #endif

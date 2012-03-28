@@ -63,6 +63,14 @@ def run_compiler(args):
     p = Popen(command, 1, stdout=PIPE, shell=False)
     output = p.communicate()[0]
 
+    if (p.returncode):
+        sys.stderr.write("Failed to compile builtins with command:\n")
+        for arg in command:
+            sys.stderr.write(arg + " ")
+        sys.stderr.write("\n")
+        sys.stderr.write("Result:\n")
+        sys.stderr.write(output)
+
     # Clean up output a bit by killing whitespace before a closing paren.
     kill_paren_whitespace = re.compile(r'[ \n]*\)', re.MULTILINE)
     output = kill_paren_whitespace.sub(')', output)
@@ -154,14 +162,15 @@ read_builtins(GLenum target, const char *protos, const char **functions, unsigne
 {
    struct gl_context fakeCtx;
    fakeCtx.API = API_OPENGL;
-   fakeCtx.Const.GLSLVersion = 130;
+   fakeCtx.Const.GLSLVersion = 140;
    fakeCtx.Extensions.ARB_ES2_compatibility = true;
+   fakeCtx.Const.ForceGLSLExtensionsWarn = false;
    gl_shader *sh = _mesa_new_shader(NULL, 0, target);
    struct _mesa_glsl_parse_state *st =
       new(sh) _mesa_glsl_parse_state(&fakeCtx, target, sh);
 
-   st->language_version = 130;
-   st->symbols->language_version = 130;
+   st->language_version = 140;
+   st->symbols->language_version = 140;
    st->ARB_texture_rectangle_enable = true;
    st->EXT_texture_array_enable = true;
    st->OES_EGL_image_external_enable = true;

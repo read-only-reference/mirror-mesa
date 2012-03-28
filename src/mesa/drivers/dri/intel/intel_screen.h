@@ -111,12 +111,12 @@ struct intel_screen
     */
    bool hw_has_separate_stencil;
    bool hw_must_use_separate_stencil;
-   bool hw_has_hiz;
    enum intel_dri2_has_hiz dri2_has_hiz;
 
    bool kernel_has_gen7_sol_reset;
 
    bool hw_has_llc;
+   bool hw_has_swizzling;
 
    bool no_vbo;
    dri_bufmgr *bufmgr;

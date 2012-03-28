@@ -37,7 +37,7 @@ USER_CXXFLAGS="$CXXFLAGS"
 dnl Versions for external dependencies
 LIBDRM_REQUIRED=2.4.24
 LIBDRM_RADEON_REQUIRED=2.4.31
-LIBDRM_INTEL_REQUIRED=2.4.30
+LIBDRM_INTEL_REQUIRED=2.4.32
 LIBDRM_NOUVEAU_REQUIRED=0.6
 DRI2PROTO_REQUIRED=2.6
 GLPROTO_REQUIRED=1.4.14
@@ -702,6 +702,7 @@ if test "x$enable_shared_glapi" = xyes; then
     # libGL will use libglapi for function lookups (IN_DRI_DRIVER means to use
     # the remap table)
     DEFINES="$DEFINES -DIN_DRI_DRIVER"
+    SRC_DIRS="$SRC_DIRS mapi/shared-glapi"
 fi
 AC_SUBST([SHARED_GLAPI])
 AM_CONDITIONAL(HAVE_SHARED_GLAPI, test $SHARED_GLAPI = 1)
@@ -1579,19 +1580,19 @@ if test "x$enable_gallium_g3dvl" = xyes; then
 fi
 
 if test "x$enable_xvmc" = xyes; then
-    PKG_CHECK_MODULES([XVMC], [xvmc >= 1.0.6])
+    PKG_CHECK_MODULES([XVMC], [xvmc >= 1.0.6 x11-xcb xcb-dri2 >= 1.8])
     GALLIUM_STATE_TRACKERS_DIRS="$GALLIUM_STATE_TRACKERS_DIRS xvmc"
     HAVE_ST_XVMC="yes"
 fi
 
 if test "x$enable_vdpau" = xyes; then
-    PKG_CHECK_MODULES([VDPAU], [vdpau >= 0.4.1])
+    PKG_CHECK_MODULES([VDPAU], [vdpau >= 0.4.1 x11-xcb xcb-dri2 >= 1.8])
     GALLIUM_STATE_TRACKERS_DIRS="$GALLIUM_STATE_TRACKERS_DIRS vdpau"
     HAVE_ST_VDPAU="yes"
 fi
 
 if test "x$enable_va" = xyes; then
-    PKG_CHECK_MODULES([LIBVA], [libva = 0.31.1])
+    PKG_CHECK_MODULES([LIBVA], [libva = 0.31.1 x11-xcb xcb-dri2 >= 1.8])
     AC_MSG_WARN([vaapi state tracker currently unmaintained])
     GALLIUM_STATE_TRACKERS_DIRS="$GALLIUM_STATE_TRACKERS_DIRS va"
     HAVE_ST_VA="yes"
@@ -1778,6 +1779,13 @@ AC_ARG_ENABLE([gallium-llvm],
         [build gallium LLVM support @<:@default=enabled on x86/x86_64@:>@])],
     [enable_gallium_llvm="$enableval"],
     [enable_gallium_llvm=auto])
+
+AC_ARG_WITH([llvm-shared-libs],
+    [AS_HELP_STRING([--with-llvm-shared-libs],
+        [link with LLVM shared libraries @<:@default=disabled@:>@])],
+    [with_llvm_shared_libs=yes],
+    [with_llvm_shared_libs=no])
+
 if test "x$with_gallium_drivers" = x; then
     enable_gallium_llvm=no
 fi
@@ -1792,8 +1800,12 @@ if test "x$enable_gallium_llvm" = xyes; then
     if test "x$LLVM_CONFIG" != xno; then
 	LLVM_VERSION=`$LLVM_CONFIG --version | sed 's/svn.*//g'`
 	LLVM_CFLAGS=`$LLVM_CONFIG --cppflags|sed -e 's/-DNDEBUG\>//g' -e 's/-pedantic//g'`
-	LLVM_LIBS="`$LLVM_CONFIG --libs engine bitwriter`"
-
+	if test "x$with_llvm_shared_libs" = xyes; then
+	    dnl We can't use $LLVM_VERSION because it has 'svn' stripped out,
+	    LLVM_LIBS="-lLLVM-`$LLVM_CONFIG --version`"
+	else
+	    LLVM_LIBS="`$LLVM_CONFIG --libs engine bitwriter`"
+	fi
 	LLVM_LDFLAGS=`$LLVM_CONFIG --ldflags`
 	DEFINES="$DEFINES -D__STDC_CONSTANT_MACROS"
 	MESA_LLVM=1
@@ -1843,15 +1855,12 @@ gallium_check_st() {
     fi
     if test "x$HAVE_ST_XVMC" = xyes && test "x$5" != x; then
          GALLIUM_TARGET_DIRS="$GALLIUM_TARGET_DIRS $5"
-         NEED_G3DVL_DRI="yes"
     fi
     if test "x$HAVE_ST_VDPAU" = xyes && test "x$6" != x; then
          GALLIUM_TARGET_DIRS="$GALLIUM_TARGET_DIRS $6"
-         NEED_G3DVL_DRI="yes"
     fi
     if test "x$HAVE_ST_VA" = xyes && test "x$7" != x; then
          GALLIUM_TARGET_DIRS="$GALLIUM_TARGET_DIRS $7"
-         NEED_G3DVL_DRI="yes"
     fi
 }
 
@@ -1931,9 +1940,28 @@ if test "x$with_gallium_drivers" != x; then
     done
 fi
 
-if test "x$NEED_G3DVL_DRI" = xyes; then
-    GALLIUM_WINSYS_DIRS="$GALLIUM_WINSYS_DIRS g3dvl/dri"
-fi
+dnl Tell Automake which drivers to build
+for driver in $GALLIUM_DRIVERS_DIRS; do
+    case "x$driver" in
+        xgalahad)
+            HAVE_GALAHAD_GALLIUM=yes;
+	    ;;
+	xidentity)
+	    HAVE_IDENTITY_GALLIUM=yes;
+	    ;;
+	xnoop)
+	    HAVE_NOOP_GALLIUM=yes;
+	    ;;
+        *)
+            GALLIUM_MAKE_DIRS="$GALLIUM_MAKE_DIRS $driver"
+	    ;;
+    esac
+done
+
+AM_CONDITIONAL(HAVE_GALAHAD_GALLIUM, test x$HAVE_GALAHAD_GALLIUM = xyes)
+AM_CONDITIONAL(HAVE_IDENTITY_GALLIUM, test x$HAVE_IDENTITY_GALLIUM = xyes)
+AM_CONDITIONAL(HAVE_NOOP_GALLIUM, test x$HAVE_NOOP_GALLIUM = xyes)
+AC_SUBST([GALLIUM_MAKE_DIRS])
 
 dnl prepend CORE_DIRS to SRC_DIRS
 SRC_DIRS="$CORE_DIRS $SRC_DIRS"
@@ -1948,6 +1976,7 @@ CXXFLAGS="$CXXFLAGS $USER_CXXFLAGS"
 
 dnl Substitute the config
 AC_CONFIG_FILES([configs/autoconf
+		src/gallium/drivers/Makefile
 		src/gallium/drivers/r300/Makefile
 		src/gbm/Makefile
 		src/gbm/main/gbm.pc
@@ -1961,6 +1990,7 @@ AC_CONFIG_FILES([configs/autoconf
 		src/egl/wayland/wayland-egl/wayland-egl.pc
 		src/egl/wayland/wayland-drm/Makefile
 		src/glx/Makefile
+		src/mapi/shared-glapi/Makefile
 		src/mesa/drivers/dri/dri.pc
 		src/mesa/drivers/dri/Makefile
 		src/mesa/drivers/dri/common/Makefile
@@ -1985,6 +2015,7 @@ dnl Sort the dirs alphabetically
 GALLIUM_TARGET_DIRS=`echo $GALLIUM_TARGET_DIRS|tr " " "\n"|sort -u|tr "\n" " "`
 GALLIUM_WINSYS_DIRS=`echo $GALLIUM_WINSYS_DIRS|tr " " "\n"|sort -u|tr "\n" " "`
 GALLIUM_DRIVERS_DIRS=`echo $GALLIUM_DRIVERS_DIRS|tr " " "\n"|sort -u|tr "\n" " "`
+GALLIUM_MAKE_DIRS=`echo $GALLIUM_MAKE_DIRS|tr " " "\n"|sort -u|tr "\n" " "`
 GALLIUM_STATE_TRACKERS_DIRS=`echo $GALLIUM_STATE_TRACKERS_DIRS|tr " " "\n"|sort -u|tr "\n" " "`
 
 AC_OUTPUT

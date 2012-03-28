@@ -702,15 +702,20 @@ intel_miptree_map_gtt(struct intel_context *intel,
    y /= bh;
 
    base = intel_region_map(intel, mt->region, map->mode);
-   /* Note that in the case of cube maps, the caller must have passed the slice
-    * number referencing the face.
-    */
-   intel_miptree_get_image_offset(mt, level, 0, slice, &image_x, &image_y);
-   x += image_x;
-   y += image_y;
 
-   map->stride = mt->region->pitch * mt->cpp;
-   map->ptr = base + y * map->stride + x * mt->cpp;
+   if (base == NULL)
+      map->ptr = NULL;
+   else {
+      /* Note that in the case of cube maps, the caller must have passed the
+       * slice number referencing the face.
+      */
+      intel_miptree_get_image_offset(mt, level, 0, slice, &image_x, &image_y);
+      x += image_x;
+      y += image_y;
+
+      map->stride = mt->region->pitch * mt->cpp;
+      map->ptr = base + y * map->stride + x * mt->cpp;
+   }
 
    DBG("%s: %d,%d %dx%d from mt %p (%s) %d,%d = %p/%d\n", __FUNCTION__,
        map->x, map->y, map->w, map->h,
@@ -830,7 +835,8 @@ intel_miptree_map_s8(struct intel_context *intel,
 	 for (uint32_t x = 0; x < map->w; x++) {
 	    ptrdiff_t offset = intel_offset_S8(mt->region->pitch,
 	                                       x + image_x + map->x,
-	                                       y + image_y + map->y);
+	                                       y + image_y + map->y,
+					       intel->has_swizzling);
 	    untiled_s8_map[y * map->w + x] = tiled_s8_map[offset];
 	 }
       }
@@ -865,7 +871,8 @@ intel_miptree_unmap_s8(struct intel_context *intel,
 	 for (uint32_t x = 0; x < map->w; x++) {
 	    ptrdiff_t offset = intel_offset_S8(mt->region->pitch,
 	                                       x + map->x,
-	                                       y + map->y);
+	                                       y + map->y,
+					       intel->has_swizzling);
 	    tiled_s8_map[offset] = untiled_s8_map[y * map->w + x];
 	 }
       }
@@ -925,7 +932,8 @@ intel_miptree_map_depthstencil(struct intel_context *intel,
 	    int map_x = map->x + x, map_y = map->y + y;
 	    ptrdiff_t s_offset = intel_offset_S8(s_mt->region->pitch,
 						 map_x + s_image_x,
-						 map_y + s_image_y);
+						 map_y + s_image_y,
+						 intel->has_swizzling);
 	    ptrdiff_t z_offset = ((map_y + z_image_y) * z_mt->region->pitch +
 				  (map_x + z_image_x));
 	    uint8_t s = s_map[s_offset];
@@ -983,7 +991,8 @@ intel_miptree_unmap_depthstencil(struct intel_context *intel,
 	 for (uint32_t x = 0; x < map->w; x++) {
 	    ptrdiff_t s_offset = intel_offset_S8(s_mt->region->pitch,
 						 x + s_image_x + map->x,
-						 y + s_image_y + map->y);
+						 y + s_image_y + map->y,
+						 intel->has_swizzling);
 	    ptrdiff_t z_offset = ((y + z_image_y) * z_mt->region->pitch +
 				  (x + z_image_x));
 
@@ -1063,6 +1072,11 @@ intel_miptree_map(struct intel_context *intel,
 
    *out_ptr = map->ptr;
    *out_stride = map->stride;
+
+   if (map->ptr == NULL) {
+      mt->level[level].slice[slice].map = NULL;
+      free(map);
+   }
 }
 
 void

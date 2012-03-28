@@ -810,6 +810,11 @@
 #define   S_028A40_CUT_MODE(x)                         (((x) & 0x3) << 3)
 #define   G_028A40_CUT_MODE(x)                         (((x) >> 3) & 0x3)
 #define   C_028A40_CUT_MODE                            0xFFFFFFE7
+#define R_028A6C_VGT_GS_OUT_PRIM_TYPE                0x028A6C
+#define   S_028A6C_OUTPRIM_TYPE(x)                     (((x) & 0x3F) << 0)
+#define     V_028A6C_OUTPRIM_TYPE_POINTLIST            0
+#define     V_028A6C_OUTPRIM_TYPE_LINESTRIP            1
+#define     V_028A6C_OUTPRIM_TYPE_TRISTRIP             2
 #define R_008040_WAIT_UNTIL                          0x008040
 #define   S_008040_WAIT_CP_DMA_IDLE(x)                 (((x) & 0x1) << 8)
 #define   G_008040_WAIT_CP_DMA_IDLE(x)                 (((x) >> 8) & 0x1)
@@ -2740,6 +2745,8 @@
 #define   S_028350_MULTIPASS(x)                        (((x) & 0x1) << 0)
 #define   G_028350_MULTIPASS(x)                        (((x) >> 0) & 0x1)
 #define   C_028350_MULTIPASS                           0xFFFFFFFE
+#define R_028354_SX_SURFACE_SYNC                     0x028354
+#define   S_028354_SURFACE_SYNC_MASK(x)                (((x) & 0x1FF) << 0)
 #define R_028380_SQ_VTX_SEMANTIC_0                   0x028380
 #define   S_028380_SEMANTIC_ID(x)                      (((x) & 0xFF) << 0)
 #define   G_028380_SEMANTIC_ID(x)                      (((x) >> 0) & 0xFF)
@@ -3132,6 +3139,8 @@
 #define   S_028A4C_PS_ITER_SAMPLE(x)                   (((x) & 0x1) << 17)
 #define   G_028A4C_PS_ITER_SAMPLE(x)                   (((x) >> 17) & 0x1)
 #define   C_028A4C_PS_ITER_SAMPLE                      0xFFFDFFFF
+#define   S_028A4C_R700_ZMM_LINE_OFFSET(x)             (((x) & 0x1) << 20)
+#define   S_028A4C_R700_VPORT_SCISSOR_ENABLE(x)        (((x) & 0x1) << 22)
 #define R_028A84_VGT_PRIMITIVEID_EN                  0x028A84
 #define   S_028A84_PRIMITIVEID_EN(x)                   (((x) & 0x1) << 0)
 #define   G_028A84_PRIMITIVEID_EN(x)                   (((x) >> 0) & 0x1)

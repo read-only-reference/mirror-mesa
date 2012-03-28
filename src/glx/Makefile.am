@@ -21,7 +21,7 @@
 
 if HAVE_SHARED_GLAPI
 SHARED_GLAPI_CFLAGS = -DGLX_SHARED_GLAPI
-SHARED_GLAPI_LIBS = -L$(top_builddir)/$(LIB_DIR) -lglapi
+SHARED_GLAPI_LIBS = $(top_builddir)/src/mapi/shared-glapi/libglapi.la
 endif
 
 GLAPI_LIB = ../mapi/glapi/libglapi.a
@@ -101,7 +101,8 @@ GL_LIBS = \
 	$(GL_LIB_DEPS)
 
 GL_LDFLAGS = \
-	-version-number 1:2
+	-Wl,-Bsymbolic \
+	-version-number 1:2 -no-undefined
 
 libGL_la_SOURCES = $(GL_FILES)
 libMangledGL_la_SOURCES = $(GL_FILES)
@@ -116,6 +117,7 @@ if !HAVE_MANGLED_GL
 all-local: $(NORMAL_GL_LIB) $(MANGLED_GL_LIB)
 	$(MKDIR_P) $(top_builddir)/$(LIB_DIR);
 	ln -f .libs/libGL.so.1.2.0 $(top_builddir)/$(LIB_DIR)/libGL.so.1
+	ln -sf libGL.so.1 $(top_builddir)/$(LIB_DIR)/libGL.so
 endif
 
 $(GLAPI_LIB):

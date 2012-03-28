@@ -20,18 +20,15 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
-#include <stdio.h>
-#include <errno.h>
-#include <byteswap.h>
-#include "util/u_format.h"
-#include "util/u_memory.h"
-#include "pipe/p_shader_tokens.h"
-#include "r600_pipe.h"
 #include "r600_sq.h"
 #include "r600_opcodes.h"
-#include "r600_asm.h"
 #include "r600_formats.h"
 #include "r600d.h"
+
+#include <errno.h>
+#include <byteswap.h>
+#include "util/u_memory.h"
+#include "pipe/p_shader_tokens.h"
 
 #define NUM_OF_CYCLES 3
 #define NUM_OF_COMPONENTS 4
@@ -2546,7 +2543,7 @@ void r600_bytecode_dump(struct r600_bytecode *bc)
 			fprintf(stderr, "%04d %08X   ", id, bc->bytecode[id]);
 			fprintf(stderr, "ENDIAN:%d ", vtx->endian);
 			fprintf(stderr, "OFFSET:%d\n", vtx->offset);
-			/* TODO */
+			/* XXX */
 			id++;
 			fprintf(stderr, "%04d %08X   \n", id, bc->bytecode[id]);
 			id++;

@@ -23,12 +23,9 @@
  * Authors:
  *      Jerome Glisse
  */
-#include "r600.h"
 #include "r600_hw_context_priv.h"
-#include "r600_pipe.h"
 #include "evergreend.h"
 #include "util/u_memory.h"
-#include <errno.h>
 
 static const struct r600_reg evergreen_config_reg_list[] = {
 	{R_008958_VGT_PRIMITIVE_TYPE, 0},
@@ -52,9 +49,6 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028014_DB_HTILE_DATA_BASE, REG_FLAG_NEED_BO, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
-	{R_028030_PA_SC_SCREEN_SCISSOR_TL, 0, 0},
-	{R_028034_PA_SC_SCREEN_SCISSOR_BR, 0, 0},
-	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028040_DB_Z_INFO, REG_FLAG_NEED_BO, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028044_DB_STENCIL_INFO, 0, 0},
@@ -75,20 +69,9 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028184_ALU_CONST_BUFFER_SIZE_VS_1, REG_FLAG_DIRTY_ALWAYS, 0},
 	{R_028204_PA_SC_WINDOW_SCISSOR_TL, 0, 0},
 	{R_028208_PA_SC_WINDOW_SCISSOR_BR, 0, 0},
-	{R_02820C_PA_SC_CLIPRECT_RULE, 0, 0},
-	{R_028210_PA_SC_CLIPRECT_0_TL, 0, 0},
-	{R_028214_PA_SC_CLIPRECT_0_BR, 0, 0},
-	{R_028218_PA_SC_CLIPRECT_1_TL, 0, 0},
-	{R_02821C_PA_SC_CLIPRECT_1_BR, 0, 0},
-	{R_028220_PA_SC_CLIPRECT_2_TL, 0, 0},
-	{R_028224_PA_SC_CLIPRECT_2_BR, 0, 0},
-	{R_028228_PA_SC_CLIPRECT_3_TL, 0, 0},
-	{R_02822C_PA_SC_CLIPRECT_3_BR, 0, 0},
 	{R_028234_PA_SU_HARDWARE_SCREEN_OFFSET, 0, 0},
 	{R_028238_CB_TARGET_MASK, 0, 0},
 	{R_02823C_CB_SHADER_MASK, 0, 0},
-	{R_028240_PA_SC_GENERIC_SCISSOR_TL, 0, 0},
-	{R_028244_PA_SC_GENERIC_SCISSOR_BR, 0, 0},
 	{R_028250_PA_SC_VPORT_SCISSOR_0_TL, 0, 0},
 	{R_028254_PA_SC_VPORT_SCISSOR_0_BR, 0, 0},
 	{R_028350_SX_MISC, 0, 0},
@@ -219,6 +202,7 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028A08_PA_SU_LINE_CNTL, 0, 0},
 	{R_028A0C_PA_SC_LINE_STIPPLE, 0, 0},
 	{R_028A48_PA_SC_MODE_CNTL_0, 0, 0},
+	{R_028A6C_VGT_GS_OUT_PRIM_TYPE, 0, 0},
 	{R_028ABC_DB_HTILE_SURFACE, 0, 0},
 	{R_028B54_VGT_SHADER_STAGES_EN, 0, 0},
 	{R_028B78_PA_SU_POLY_OFFSET_DB_FMT_CNTL, 0, 0},
@@ -333,9 +317,6 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028014_DB_HTILE_DATA_BASE, REG_FLAG_NEED_BO, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
-	{R_028030_PA_SC_SCREEN_SCISSOR_TL, 0, 0},
-	{R_028034_PA_SC_SCREEN_SCISSOR_BR, 0, 0},
-	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028040_DB_Z_INFO, REG_FLAG_NEED_BO, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028044_DB_STENCIL_INFO, 0, 0},
@@ -356,20 +337,9 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028184_ALU_CONST_BUFFER_SIZE_VS_1, REG_FLAG_DIRTY_ALWAYS, 0},
 	{R_028204_PA_SC_WINDOW_SCISSOR_TL, 0, 0},
 	{R_028208_PA_SC_WINDOW_SCISSOR_BR, 0, 0},
-	{R_02820C_PA_SC_CLIPRECT_RULE, 0, 0},
-	{R_028210_PA_SC_CLIPRECT_0_TL, 0, 0},
-	{R_028214_PA_SC_CLIPRECT_0_BR, 0, 0},
-	{R_028218_PA_SC_CLIPRECT_1_TL, 0, 0},
-	{R_02821C_PA_SC_CLIPRECT_1_BR, 0, 0},
-	{R_028220_PA_SC_CLIPRECT_2_TL, 0, 0},
-	{R_028224_PA_SC_CLIPRECT_2_BR, 0, 0},
-	{R_028228_PA_SC_CLIPRECT_3_TL, 0, 0},
-	{R_02822C_PA_SC_CLIPRECT_3_BR, 0, 0},
 	{R_028234_PA_SU_HARDWARE_SCREEN_OFFSET, 0, 0},
 	{R_028238_CB_TARGET_MASK, 0, 0},
 	{R_02823C_CB_SHADER_MASK, 0, 0},
-	{R_028240_PA_SC_GENERIC_SCISSOR_TL, 0, 0},
-	{R_028244_PA_SC_GENERIC_SCISSOR_BR, 0, 0},
 	{R_028250_PA_SC_VPORT_SCISSOR_0_TL, 0, 0},
 	{R_028254_PA_SC_VPORT_SCISSOR_0_BR, 0, 0},
 	{R_028350_SX_MISC, 0, 0},
@@ -507,6 +477,7 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028A08_PA_SU_LINE_CNTL, 0, 0},
 	{R_028A0C_PA_SC_LINE_STIPPLE, 0, 0},
 	{R_028A48_PA_SC_MODE_CNTL_0, 0, 0},
+	{R_028A6C_VGT_GS_OUT_PRIM_TYPE, 0, 0},
 	{R_028ABC_DB_HTILE_SURFACE, 0, 0},
 	{R_028B54_VGT_SHADER_STAGES_EN, 0, 0},
 	{R_028B78_PA_SU_POLY_OFFSET_DB_FMT_CNTL, 0, 0},
@@ -698,7 +669,7 @@ int evergreen_context_init(struct r600_context *ctx)
 	int r;
 
 	/* add blocks */
-	if (ctx->family == CHIP_CAYMAN)
+	if (ctx->family >= CHIP_CAYMAN)
 		r = r600_context_add_block(ctx, cayman_config_reg_list,
 					   Elements(cayman_config_reg_list), PKT3_SET_CONFIG_REG, EVERGREEN_CONFIG_REG_OFFSET);
 	else
@@ -706,7 +677,7 @@ int evergreen_context_init(struct r600_context *ctx)
 					   Elements(evergreen_config_reg_list), PKT3_SET_CONFIG_REG, EVERGREEN_CONFIG_REG_OFFSET);
 	if (r)
 		goto out_err;
-	if (ctx->family == CHIP_CAYMAN)
+	if (ctx->family >= CHIP_CAYMAN)
 		r = r600_context_add_block(ctx, cayman_context_reg_list,
 					   Elements(cayman_context_reg_list), PKT3_SET_CONTEXT_REG, EVERGREEN_CONTEXT_REG_OFFSET);
 	else

@@ -24,16 +24,11 @@
  * Authors: Dave Airlie <airlied@redhat.com>
  *          Jerome Glisse <jglisse@redhat.com>
  */
-#include "util/u_blitter.h"
-#include "util/u_memory.h"
-#include "util/u_format.h"
-#include "pipebuffer/pb_buffer.h"
-#include "pipe/p_shader_tokens.h"
-#include "tgsi/tgsi_parse.h"
 #include "r600_formats.h"
-#include "r600_pipe.h"
 #include "r600d.h"
-#include "r600_hw_context_priv.h"
+
+#include "util/u_blitter.h"
+#include "tgsi/tgsi_parse.h"
 
 static void r600_emit_command_buffer(struct r600_context *rctx, struct r600_atom *atom)
 {
@@ -62,7 +57,7 @@ void r600_release_command_buffer(struct r600_command_buffer *cb)
 static void r600_emit_surface_sync(struct r600_context *rctx, struct r600_atom *atom)
 {
 	struct radeon_winsys_cs *cs = rctx->cs;
-	struct r600_atom_surface_sync *a = (struct r600_atom_surface_sync*)atom;
+	struct r600_surface_sync_cmd *a = (struct r600_surface_sync_cmd*)atom;
 
 	cs->buf[cs->cdw++] = PKT3(PKT3_SURFACE_SYNC, 3, 0);
 	cs->buf[cs->cdw++] = a->flush_flags;  /* CP_COHER_CNTL */
@@ -91,8 +86,8 @@ void r600_init_atom(struct r600_atom *atom,
 
 void r600_init_common_atoms(struct r600_context *rctx)
 {
-	r600_init_atom(&rctx->atom_surface_sync.atom,	r600_emit_surface_sync,		5, EMIT_EARLY);
-	r600_init_atom(&rctx->atom_r6xx_flush_and_inv,	r600_emit_r6xx_flush_and_inv,	2, EMIT_EARLY);
+	r600_init_atom(&rctx->surface_sync_cmd.atom,	r600_emit_surface_sync,		5, EMIT_EARLY);
+	r600_init_atom(&rctx->r6xx_flush_and_inv_cmd,	r600_emit_r6xx_flush_and_inv,	2, EMIT_EARLY);
 }
 
 unsigned r600_get_cb_flush_flags(struct r600_context *rctx)
@@ -118,8 +113,8 @@ void r600_texture_barrier(struct pipe_context *ctx)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 
-	rctx->atom_surface_sync.flush_flags |= S_0085F0_TC_ACTION_ENA(1) | r600_get_cb_flush_flags(rctx);
-	r600_atom_dirty(rctx, &rctx->atom_surface_sync.atom);
+	rctx->surface_sync_cmd.flush_flags |= S_0085F0_TC_ACTION_ENA(1) | r600_get_cb_flush_flags(rctx);
+	r600_atom_dirty(rctx, &rctx->surface_sync_cmd.atom);
 }
 
 static bool r600_conv_pipe_prim(unsigned pprim, unsigned *prim)
@@ -263,10 +258,22 @@ void r600_bind_dsa_state(struct pipe_context *ctx, void *state)
 
 	r600_set_stencil_ref(ctx, &ref);
 
-	if (rctx->atom_db_misc_state.flush_depthstencil_enabled != dsa->is_flush) {
-		rctx->atom_db_misc_state.flush_depthstencil_enabled = dsa->is_flush;
-		r600_atom_dirty(rctx, &rctx->atom_db_misc_state.atom);
+	if (rctx->db_misc_state.flush_depthstencil_enabled != dsa->is_flush) {
+		rctx->db_misc_state.flush_depthstencil_enabled = dsa->is_flush;
+		r600_atom_dirty(rctx, &rctx->db_misc_state.atom);
 	}
+}
+
+void r600_set_max_scissor(struct r600_context *rctx)
+{
+	/* Set a scissor state such that it doesn't do anything. */
+	struct pipe_scissor_state scissor;
+	scissor.minx = 0;
+	scissor.miny = 0;
+	scissor.maxx = 8192;
+	scissor.maxy = 8192;
+
+	r600_set_scissor_state(rctx, &scissor);
 }
 
 void r600_bind_rs_state(struct pipe_context *ctx, void *state)
@@ -291,6 +298,19 @@ void r600_bind_rs_state(struct pipe_context *ctx, void *state)
 		evergreen_polygon_offset_update(rctx);
 	} else {
 		r600_polygon_offset_update(rctx);
+	}
+
+	/* Workaround for a missing scissor enable on r600. */
+	if (rctx->chip_class == R600) {
+		if (rs->scissor_enable != rctx->scissor_enable) {
+			rctx->scissor_enable = rs->scissor_enable;
+
+			if (rs->scissor_enable) {
+				r600_set_scissor_state(rctx, &rctx->scissor_state);
+			} else {
+				r600_set_max_scissor(rctx);
+			}
+		}
 	}
 }
 
@@ -435,15 +455,18 @@ void r600_bind_ps_shader(struct pipe_context *ctx, void *state)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 
-	/* TODO delete old shader */
-	rctx->ps_shader = (struct r600_pipe_shader *)state;
-	if (state) {
-		r600_inval_shader_cache(rctx);
-		r600_context_pipe_state_set(rctx, &rctx->ps_shader->rstate);
-
-		rctx->cb_color_control &= C_028808_MULTIWRITE_ENABLE;
-		rctx->cb_color_control |= S_028808_MULTIWRITE_ENABLE(!!rctx->ps_shader->shader.fs_write_all);
+	if (!state) {
+		state = rctx->dummy_pixel_shader;
 	}
+
+	rctx->ps_shader = (struct r600_pipe_shader *)state;
+
+	r600_inval_shader_cache(rctx);
+	r600_context_pipe_state_set(rctx, &rctx->ps_shader->rstate);
+
+	rctx->cb_color_control &= C_028808_MULTIWRITE_ENABLE;
+	rctx->cb_color_control |= S_028808_MULTIWRITE_ENABLE(!!rctx->ps_shader->shader.fs_write_all);
+
 	if (rctx->ps_shader && rctx->vs_shader) {
 		r600_adjust_gprs(rctx);
 	}
@@ -453,7 +476,6 @@ void r600_bind_vs_shader(struct pipe_context *ctx, void *state)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 
-	/* TODO delete old shader */
 	rctx->vs_shader = (struct r600_pipe_shader *)state;
 	if (state) {
 		r600_inval_shader_cache(rctx);
@@ -770,6 +792,29 @@ static void r600_update_derived_state(struct r600_context *rctx)
 
 }
 
+static unsigned r600_conv_prim_to_gs_out(unsigned mode)
+{
+	static const int prim_conv[] = {
+		V_028A6C_OUTPRIM_TYPE_POINTLIST,
+		V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		V_028A6C_OUTPRIM_TYPE_TRISTRIP
+	};
+	assert(mode < Elements(prim_conv));
+
+	return prim_conv[mode];
+}
+
 void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
@@ -784,11 +829,14 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
 	if ((!info.count && (info.indexed || !info.count_from_stream_output)) ||
 	    (info.indexed && !rctx->vbuf_mgr->index_buffer.buffer) ||
 	    !r600_conv_pipe_prim(info.mode, &prim)) {
+		assert(0);
 		return;
 	}
 
-	if (!rctx->ps_shader || !rctx->vs_shader)
+	if (!rctx->vs_shader) {
+		assert(0);
 		return;
+	}
 
 	r600_update_derived_state(rctx);
 
@@ -820,6 +868,7 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
 		rctx->vgt.id = R600_PIPE_STATE_VGT;
 		rctx->vgt.nregs = 0;
 		r600_pipe_state_add_reg(&rctx->vgt, R_008958_VGT_PRIMITIVE_TYPE, prim, NULL, 0);
+		r600_pipe_state_add_reg(&rctx->vgt, R_028A6C_VGT_GS_OUT_PRIM_TYPE, 0, NULL, 0);
 		r600_pipe_state_add_reg(&rctx->vgt, R_028238_CB_TARGET_MASK, rctx->cb_target_mask & mask, NULL, 0);
 		r600_pipe_state_add_reg(&rctx->vgt, R_028408_VGT_INDX_OFFSET, info.index_bias, NULL, 0);
 		r600_pipe_state_add_reg(&rctx->vgt, R_02840C_VGT_MULTI_PRIM_IB_RESET_INDX, info.restart_index, NULL, 0);
@@ -834,6 +883,7 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
 
 	rctx->vgt.nregs = 0;
 	r600_pipe_state_mod_reg(&rctx->vgt, prim);
+	r600_pipe_state_mod_reg(&rctx->vgt, r600_conv_prim_to_gs_out(info.mode));
 	r600_pipe_state_mod_reg(&rctx->vgt, rctx->cb_target_mask & mask);
 	r600_pipe_state_mod_reg(&rctx->vgt, info.index_bias);
 	r600_pipe_state_mod_reg(&rctx->vgt, info.restart_index);

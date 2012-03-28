@@ -1,6 +1,2 @@
-.deps
-.libs
 Makefile
-Makefile.in
-i965_dri.la
 i965_symbols_test

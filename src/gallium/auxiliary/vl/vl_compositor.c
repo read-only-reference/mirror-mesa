@@ -45,21 +45,20 @@
 
 enum VS_OUTPUT
 {
-   VS_O_VPOS,
-   VS_O_VTEX,
+   VS_O_VPOS = 0,
+   VS_O_COLOR = 0,
+   VS_O_VTEX = 0,
    VS_O_VTOP,
    VS_O_VBOTTOM,
 };
-
-typedef float csc_matrix[16];
 
 static void *
 create_vert_shader(struct vl_compositor *c)
 {
    struct ureg_program *shader;
-   struct ureg_src vpos, vtex;
+   struct ureg_src vpos, vtex, color;
    struct ureg_dst tmp;
-   struct ureg_dst o_vpos, o_vtex;
+   struct ureg_dst o_vpos, o_vtex, o_color;
    struct ureg_dst o_vtop, o_vbottom;
 
    shader = ureg_create(TGSI_PROCESSOR_VERTEX);
@@ -68,8 +67,10 @@ create_vert_shader(struct vl_compositor *c)
 
    vpos = ureg_DECL_vs_input(shader, 0);
    vtex = ureg_DECL_vs_input(shader, 1);
+   color = ureg_DECL_vs_input(shader, 2);
    tmp = ureg_DECL_temporary(shader);
    o_vpos = ureg_DECL_output(shader, TGSI_SEMANTIC_POSITION, VS_O_VPOS);
+   o_color = ureg_DECL_output(shader, TGSI_SEMANTIC_COLOR, VS_O_COLOR);
    o_vtex = ureg_DECL_output(shader, TGSI_SEMANTIC_GENERIC, VS_O_VTEX);
    o_vtop = ureg_DECL_output(shader, TGSI_SEMANTIC_GENERIC, VS_O_VTOP);
    o_vbottom = ureg_DECL_output(shader, TGSI_SEMANTIC_GENERIC, VS_O_VBOTTOM);
@@ -77,10 +78,26 @@ create_vert_shader(struct vl_compositor *c)
    /*
     * o_vpos = vpos
     * o_vtex = vtex
+    * o_color = color
     */
    ureg_MOV(shader, o_vpos, vpos);
    ureg_MOV(shader, o_vtex, vtex);
+   ureg_MOV(shader, o_color, color);
 
+   /*
+    * tmp.x = vtex.w / 2
+    * tmp.y = vtex.w / 4
+    *
+    * o_vtop.x = vtex.x
+    * o_vtop.y = vtex.y * tmp.x + 0.25f
+    * o_vtop.z = vtex.y * tmp.y + 0.25f
+    * o_vtop.w = 1 / tmp.x
+    *
+    * o_vbottom.x = vtex.x
+    * o_vbottom.y = vtex.y * tmp.x - 0.25f
+    * o_vbottom.z = vtex.y * tmp.y - 0.25f
+    * o_vbottom.w = 1 / tmp.y
+    */
    ureg_MUL(shader, ureg_writemask(tmp, TGSI_WRITEMASK_X),
             ureg_scalar(vtex, TGSI_SWIZZLE_W), ureg_imm1f(shader, 0.5f));
    ureg_MUL(shader, ureg_writemask(tmp, TGSI_WRITEMASK_Y),
@@ -122,7 +139,7 @@ create_frag_shader_video_buffer(struct vl_compositor *c)
    if (!shader)
       return false;
 
-   tc = ureg_DECL_fs_input(shader, TGSI_SEMANTIC_GENERIC, 1, TGSI_INTERPOLATE_LINEAR);
+   tc = ureg_DECL_fs_input(shader, TGSI_SEMANTIC_GENERIC, VS_O_VTEX, TGSI_INTERPOLATE_LINEAR);
    for (i = 0; i < 3; ++i) {
       csc[i] = ureg_DECL_constant(shader, i);
       sampler[i] = ureg_DECL_sampler(shader, i);
@@ -295,22 +312,24 @@ static void *
 create_frag_shader_rgba(struct vl_compositor *c)
 {
    struct ureg_program *shader;
-   struct ureg_src tc;
-   struct ureg_src sampler;
-   struct ureg_dst fragment;
+   struct ureg_src tc, color, sampler;
+   struct ureg_dst texel, fragment;
 
    shader = ureg_create(TGSI_PROCESSOR_FRAGMENT);
    if (!shader)
       return false;
 
    tc = ureg_DECL_fs_input(shader, TGSI_SEMANTIC_GENERIC, VS_O_VTEX, TGSI_INTERPOLATE_LINEAR);
+   color = ureg_DECL_fs_input(shader, TGSI_SEMANTIC_COLOR, VS_O_COLOR, TGSI_INTERPOLATE_LINEAR);
    sampler = ureg_DECL_sampler(shader, 0);
+   texel = ureg_DECL_temporary(shader);
    fragment = ureg_DECL_output(shader, TGSI_SEMANTIC_COLOR, 0);
 
    /*
     * fragment = tex(tc, sampler)
     */
-   ureg_TEX(shader, fragment, TGSI_TEXTURE_2D, tc, sampler);
+   ureg_TEX(shader, texel, TGSI_TEXTURE_2D, tc, sampler);
+   ureg_MUL(shader, fragment, ureg_src(texel), color);
    ureg_END(shader);
 
    return ureg_create_shader_and_destroy(shader, c->pipe);
@@ -386,11 +405,6 @@ init_pipe_state(struct vl_compositor *c)
    c->fb_state.nr_cbufs = 1;
    c->fb_state.zsbuf = NULL;
 
-   c->viewport.scale[2] = 1;
-   c->viewport.scale[3] = 1;
-   c->viewport.translate[2] = 0;
-   c->viewport.translate[3] = 0;
-
    memset(&sampler, 0, sizeof(sampler));
    sampler.wrap_s = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
    sampler.wrap_t = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
@@ -427,7 +441,7 @@ init_pipe_state(struct vl_compositor *c)
    c->blend_add = c->pipe->create_blend_state(c->pipe, &blend);
 
    memset(&rast, 0, sizeof rast);
-   rast.flatshade = 1;
+   rast.flatshade = 0;
    rast.front_ccw = 1;
    rast.cull_face = PIPE_FACE_NONE;
    rast.fill_back = PIPE_POLYGON_MODE_FILL;
@@ -500,14 +514,14 @@ create_vertex_buffer(struct vl_compositor *c)
 static bool
 init_buffers(struct vl_compositor *c)
 {
-   struct pipe_vertex_element vertex_elems[2];
+   struct pipe_vertex_element vertex_elems[3];
 
    assert(c);
 
    /*
     * Create our vertex buffer and vertex buffer elements
     */
-   c->vertex_buf.stride = sizeof(struct vertex2f) + sizeof(struct vertex4f);
+   c->vertex_buf.stride = sizeof(struct vertex2f) + sizeof(struct vertex4f) * 2;
    c->vertex_buf.buffer_offset = 0;
    create_vertex_buffer(c);
 
@@ -519,20 +533,11 @@ init_buffers(struct vl_compositor *c)
    vertex_elems[1].instance_divisor = 0;
    vertex_elems[1].vertex_buffer_index = 0;
    vertex_elems[1].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
-   c->vertex_elems_state = c->pipe->create_vertex_elements_state(c->pipe, 2, vertex_elems);
-
-   /*
-    * Create our fragment shader's constant buffer
-    * Const buffer contains the color conversion matrix and bias vectors
-    */
-   /* XXX: Create with IMMUTABLE/STATIC... although it does change every once in a long while... */
-   c->csc_matrix = pipe_buffer_create
-   (
-      c->pipe->screen,
-      PIPE_BIND_CONSTANT_BUFFER,
-      PIPE_USAGE_STATIC,
-      sizeof(csc_matrix)
-   );
+   vertex_elems[2].src_offset = sizeof(struct vertex2f) + sizeof(struct vertex4f);
+   vertex_elems[2].instance_divisor = 0;
+   vertex_elems[2].vertex_buffer_index = 0;
+   vertex_elems[2].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
+   c->vertex_elems_state = c->pipe->create_vertex_elements_state(c->pipe, 3, vertex_elems);
 
    return true;
 }
@@ -544,34 +549,33 @@ cleanup_buffers(struct vl_compositor *c)
 
    c->pipe->delete_vertex_elements_state(c->pipe, c->vertex_elems_state);
    pipe_resource_reference(&c->vertex_buf.buffer, NULL);
-   pipe_resource_reference(&c->csc_matrix, NULL);
 }
 
-static INLINE struct pipe_video_rect
+static INLINE struct u_rect
 default_rect(struct vl_compositor_layer *layer)
 {
    struct pipe_resource *res = layer->sampler_views[0]->texture;
-   struct pipe_video_rect rect = { 0, 0, res->width0, res->height0 * res->depth0 };
+   struct u_rect rect = { 0, res->width0, 0, res->height0 * res->depth0 };
    return rect;
 }
 
 static INLINE struct vertex2f
-calc_topleft(struct vertex2f size, struct pipe_video_rect rect)
+calc_topleft(struct vertex2f size, struct u_rect rect)
 {
-   struct vertex2f res = { rect.x / size.x, rect.y / size.y };
+   struct vertex2f res = { rect.x0 / size.x, rect.y0 / size.y };
    return res;
 }
 
 static INLINE struct vertex2f
-calc_bottomright(struct vertex2f size, struct pipe_video_rect rect)
+calc_bottomright(struct vertex2f size, struct u_rect rect)
 {
-   struct vertex2f res = { (rect.x + rect.w) / size.x, (rect.y + rect.h) / size.y };
+   struct vertex2f res = { rect.x1 / size.x, rect.y1 / size.y };
    return res;
 }
 
 static INLINE void
 calc_src_and_dst(struct vl_compositor_layer *layer, unsigned width, unsigned height,
-                 struct pipe_video_rect src, struct pipe_video_rect dst)
+                 struct u_rect src, struct u_rect dst)
 {
    struct vertex2f size =  { width, height };
 
@@ -593,47 +597,63 @@ gen_rect_verts(struct vertex2f *vb, struct vl_compositor_layer *layer)
    vb[ 1].x = layer->src.tl.x;
    vb[ 1].y = layer->src.tl.y;
    vb[ 2] = layer->zw;
+   vb[ 3].x = layer->colors[0].x;
+   vb[ 3].y = layer->colors[0].y;
+   vb[ 4].x = layer->colors[0].z;
+   vb[ 4].y = layer->colors[0].w;
 
-   vb[ 3].x = layer->dst.br.x;
-   vb[ 3].y = layer->dst.tl.y;
-   vb[ 4].x = layer->src.br.x;
-   vb[ 4].y = layer->src.tl.y;
-   vb[ 5] = layer->zw;
+   vb[ 5].x = layer->dst.br.x;
+   vb[ 5].y = layer->dst.tl.y;
+   vb[ 6].x = layer->src.br.x;
+   vb[ 6].y = layer->src.tl.y;
+   vb[ 7] = layer->zw;
+   vb[ 8].x = layer->colors[1].x;
+   vb[ 8].y = layer->colors[1].y;
+   vb[ 9].x = layer->colors[1].z;
+   vb[ 9].y = layer->colors[1].w;
 
-   vb[ 6].x = layer->dst.br.x;
-   vb[ 6].y = layer->dst.br.y;
-   vb[ 7].x = layer->src.br.x;
-   vb[ 7].y = layer->src.br.y;
-   vb[ 8] = layer->zw;
+   vb[10].x = layer->dst.br.x;
+   vb[10].y = layer->dst.br.y;
+   vb[11].x = layer->src.br.x;
+   vb[11].y = layer->src.br.y;
+   vb[12] = layer->zw;
+   vb[13].x = layer->colors[2].x;
+   vb[13].y = layer->colors[2].y;
+   vb[14].x = layer->colors[2].z;
+   vb[14].y = layer->colors[2].w;
 
-   vb[ 9].x = layer->dst.tl.x;
-   vb[ 9].y = layer->dst.br.y;
-   vb[10].x = layer->src.tl.x;
-   vb[10].y = layer->src.br.y;
-   vb[11] = layer->zw;
+   vb[15].x = layer->dst.tl.x;
+   vb[15].y = layer->dst.br.y;
+   vb[16].x = layer->src.tl.x;
+   vb[16].y = layer->src.br.y;
+   vb[17] = layer->zw;
+   vb[18].x = layer->colors[3].x;
+   vb[18].y = layer->colors[3].y;
+   vb[19].x = layer->colors[3].z;
+   vb[19].y = layer->colors[3].w;
 }
 
 static INLINE struct u_rect
-calc_drawn_area(struct vl_compositor *c, struct vl_compositor_layer *layer)
+calc_drawn_area(struct vl_compositor_state *s, struct vl_compositor_layer *layer)
 {
    struct u_rect result;
 
    // scale
-   result.x0 = layer->dst.tl.x * c->viewport.scale[0] + c->viewport.translate[0];
-   result.y0 = layer->dst.tl.y * c->viewport.scale[1] + c->viewport.translate[1];
-   result.x1 = layer->dst.br.x * c->viewport.scale[0] + c->viewport.translate[0];
-   result.y1 = layer->dst.br.y * c->viewport.scale[1] + c->viewport.translate[1];
+   result.x0 = layer->dst.tl.x * layer->viewport.scale[0] + layer->viewport.translate[0];
+   result.y0 = layer->dst.tl.y * layer->viewport.scale[1] + layer->viewport.translate[1];
+   result.x1 = layer->dst.br.x * layer->viewport.scale[0] + layer->viewport.translate[0];
+   result.y1 = layer->dst.br.y * layer->viewport.scale[1] + layer->viewport.translate[1];
 
    // and clip
-   result.x0 = MAX2(result.x0, c->scissor.minx);
-   result.y0 = MAX2(result.y0, c->scissor.miny);
-   result.x1 = MIN2(result.x1, c->scissor.maxx);
-   result.y1 = MIN2(result.y1, c->scissor.maxy);
+   result.x0 = MAX2(result.x0, s->scissor.minx);
+   result.y0 = MAX2(result.y0, s->scissor.miny);
+   result.x1 = MIN2(result.x1, s->scissor.maxx);
+   result.y1 = MIN2(result.y1, s->scissor.maxy);
    return result;
 }
 
 static void
-gen_vertex_data(struct vl_compositor *c, struct u_rect *dirty)
+gen_vertex_data(struct vl_compositor *c, struct vl_compositor_state *s, struct u_rect *dirty)
 {
    struct vertex2f *vb;
    struct pipe_transfer *buf_transfer;
@@ -654,13 +674,20 @@ gen_vertex_data(struct vl_compositor *c, struct u_rect *dirty)
    }
 
    for (i = 0; i < VL_COMPOSITOR_MAX_LAYERS; i++) {
-      if (c->used_layers & (1 << i)) {
-         struct vl_compositor_layer *layer = &c->layers[i];
+      if (s->used_layers & (1 << i)) {
+         struct vl_compositor_layer *layer = &s->layers[i];
          gen_rect_verts(vb, layer);
-         vb += 12;
+         vb += 20;
+
+         if (!layer->viewport_valid) {
+            layer->viewport.scale[0] = c->fb_state.width;
+            layer->viewport.scale[1] = c->fb_state.height;
+            layer->viewport.translate[0] = 0;
+            layer->viewport.translate[1] = 0;
+         }
 
          if (dirty && layer->clearing) {
-            struct u_rect drawn = calc_drawn_area(c, layer);
+            struct u_rect drawn = calc_drawn_area(s, layer);
             if (
              dirty->x0 >= drawn.x0 &&
              dirty->y0 >= drawn.y0 &&
@@ -679,19 +706,21 @@ gen_vertex_data(struct vl_compositor *c, struct u_rect *dirty)
 }
 
 static void
-draw_layers(struct vl_compositor *c, struct u_rect *dirty)
+draw_layers(struct vl_compositor *c, struct vl_compositor_state *s, struct u_rect *dirty)
 {
    unsigned vb_index, i;
 
    assert(c);
 
    for (i = 0, vb_index = 0; i < VL_COMPOSITOR_MAX_LAYERS; ++i) {
-      if (c->used_layers & (1 << i)) {
-         struct vl_compositor_layer *layer = &c->layers[i];
+      if (s->used_layers & (1 << i)) {
+         struct vl_compositor_layer *layer = &s->layers[i];
          struct pipe_sampler_view **samplers = &layer->sampler_views[0];
          unsigned num_sampler_views = !samplers[1] ? 1 : !samplers[2] ? 2 : 3;
+         void *blend = layer->blend ? layer->blend : i ? c->blend_add : c->blend_clear;
 
-         c->pipe->bind_blend_state(c->pipe, layer->blend);
+         c->pipe->bind_blend_state(c->pipe, blend);
+         c->pipe->set_viewport_state(c->pipe, &layer->viewport);
          c->pipe->bind_fs_state(c->pipe, layer->fs);
          c->pipe->bind_fragment_sampler_states(c->pipe, num_sampler_views, layer->samplers);
          c->pipe->set_fragment_sampler_views(c->pipe, num_sampler_views, samplers);
@@ -700,7 +729,7 @@ draw_layers(struct vl_compositor *c, struct u_rect *dirty)
 
          if (dirty) {
             // Remember the currently drawn area as dirty for the next draw command
-            struct u_rect drawn = calc_drawn_area(c, layer);
+            struct u_rect drawn = calc_drawn_area(s, layer);
             dirty->x0 = MIN2(drawn.x0, dirty->x0);
             dirty->y0 = MIN2(drawn.y0, dirty->y0);
             dirty->x1 = MAX2(drawn.x1, dirty->x1);
@@ -720,36 +749,45 @@ vl_compositor_reset_dirty_area(struct u_rect *dirty)
 }
 
 void
-vl_compositor_set_clear_color(struct vl_compositor *c, union pipe_color_union *color)
+vl_compositor_set_clear_color(struct vl_compositor_state *s, union pipe_color_union *color)
 {
-   assert(c);
-
-   c->clear_color = *color;
-}
-
-void
-vl_compositor_get_clear_color(struct vl_compositor *c, union pipe_color_union *color)
-{
-   assert(c);
+   assert(s);
    assert(color);
 
-   *color = c->clear_color;
+   s->clear_color = *color;
 }
 
 void
-vl_compositor_clear_layers(struct vl_compositor *c)
+vl_compositor_get_clear_color(struct vl_compositor_state *s, union pipe_color_union *color)
+{
+   assert(s);
+   assert(color);
+
+   *color = s->clear_color;
+}
+
+void
+vl_compositor_clear_layers(struct vl_compositor_state *s)
 {
    unsigned i, j;
 
-   assert(c);
+   assert(s);
 
-   c->used_layers = 0;
+   s->used_layers = 0;
    for ( i = 0; i < VL_COMPOSITOR_MAX_LAYERS; ++i) {
-      c->layers[i].clearing = i ? false : true;
-      c->layers[i].blend = i ? c->blend_add : c->blend_clear;
-      c->layers[i].fs = NULL;
+      struct vertex4f v_one = { 1.0f, 1.0f, 1.0f, 1.0f };
+      s->layers[i].clearing = i ? false : true;
+      s->layers[i].blend = NULL;
+      s->layers[i].fs = NULL;
+      s->layers[i].viewport.scale[2] = 1;
+      s->layers[i].viewport.scale[3] = 1;
+      s->layers[i].viewport.translate[2] = 0;
+      s->layers[i].viewport.translate[3] = 0;
+
       for ( j = 0; j < 3; j++)
-         pipe_sampler_view_reference(&c->layers[i].sampler_views[j], NULL);
+         pipe_sampler_view_reference(&s->layers[i].sampler_views[j], NULL);
+      for ( j = 0; j < 4; ++j)
+         s->layers[i].colors[j] = v_one;
    }
 }
 
@@ -758,156 +796,194 @@ vl_compositor_cleanup(struct vl_compositor *c)
 {
    assert(c);
 
-   vl_compositor_clear_layers(c);
-
    cleanup_buffers(c);
    cleanup_shaders(c);
    cleanup_pipe_state(c);
 }
 
 void
-vl_compositor_set_csc_matrix(struct vl_compositor *c, const float matrix[16])
+vl_compositor_set_csc_matrix(struct vl_compositor_state *s, vl_csc_matrix const *matrix)
 {
    struct pipe_transfer *buf_transfer;
 
-   assert(c);
+   assert(s);
 
    memcpy
    (
-      pipe_buffer_map(c->pipe, c->csc_matrix,
+      pipe_buffer_map(s->pipe, s->csc_matrix,
                       PIPE_TRANSFER_WRITE | PIPE_TRANSFER_DISCARD_RANGE,
                       &buf_transfer),
       matrix,
-      sizeof(csc_matrix)
+      sizeof(vl_csc_matrix)
    );
 
-   pipe_buffer_unmap(c->pipe, buf_transfer);
+   pipe_buffer_unmap(s->pipe, buf_transfer);
 }
 
 void
-vl_compositor_set_layer_blend(struct vl_compositor *c,
+vl_compositor_set_dst_clip(struct vl_compositor_state *s, struct u_rect *dst_clip)
+{
+   assert(s);
+
+   s->scissor_valid = dst_clip != NULL;
+   if (dst_clip) {
+      s->scissor.minx = dst_clip->x0;
+      s->scissor.miny = dst_clip->y0;
+      s->scissor.maxx = dst_clip->x1;
+      s->scissor.maxy = dst_clip->y1;
+   }
+}
+
+void
+vl_compositor_set_layer_blend(struct vl_compositor_state *s,
                               unsigned layer, void *blend,
                               bool is_clearing)
 {
-   assert(c && blend);
+   assert(s && blend);
 
    assert(layer < VL_COMPOSITOR_MAX_LAYERS);
 
-   c->layers[layer].clearing = is_clearing;
-   c->layers[layer].blend = blend;
+   s->layers[layer].clearing = is_clearing;
+   s->layers[layer].blend = blend;
 }
 
 void
-vl_compositor_set_buffer_layer(struct vl_compositor *c,
+vl_compositor_set_layer_dst_area(struct vl_compositor_state *s,
+                                 unsigned layer, struct u_rect *dst_area)
+{
+   assert(s);
+
+   assert(layer < VL_COMPOSITOR_MAX_LAYERS);
+
+   s->layers[layer].viewport_valid = dst_area != NULL;
+   if (dst_area) {
+      s->layers[layer].viewport.scale[0] = dst_area->x1 - dst_area->x0;
+      s->layers[layer].viewport.scale[1] = dst_area->y1 - dst_area->y0;
+      s->layers[layer].viewport.translate[0] = dst_area->x0;
+      s->layers[layer].viewport.translate[1] = dst_area->y0;
+   }
+}
+
+void
+vl_compositor_set_buffer_layer(struct vl_compositor_state *s,
+                               struct vl_compositor *c,
                                unsigned layer,
                                struct pipe_video_buffer *buffer,
-                               struct pipe_video_rect *src_rect,
-                               struct pipe_video_rect *dst_rect,
+                               struct u_rect *src_rect,
+                               struct u_rect *dst_rect,
                                enum vl_compositor_deinterlace deinterlace)
 {
    struct pipe_sampler_view **sampler_views;
    unsigned i;
 
-   assert(c && buffer);
+   assert(s && c && buffer);
 
    assert(layer < VL_COMPOSITOR_MAX_LAYERS);
 
-   c->used_layers |= 1 << layer;
+   s->used_layers |= 1 << layer;
    sampler_views = buffer->get_sampler_view_components(buffer);
    for (i = 0; i < 3; ++i) {
-      c->layers[layer].samplers[i] = c->sampler_linear;
-      pipe_sampler_view_reference(&c->layers[layer].sampler_views[i], sampler_views[i]);
+      s->layers[layer].samplers[i] = c->sampler_linear;
+      pipe_sampler_view_reference(&s->layers[layer].sampler_views[i], sampler_views[i]);
    }
 
-   calc_src_and_dst(&c->layers[layer], buffer->width, buffer->height,
-                    src_rect ? *src_rect : default_rect(&c->layers[layer]),
-                    dst_rect ? *dst_rect : default_rect(&c->layers[layer]));
+   calc_src_and_dst(&s->layers[layer], buffer->width, buffer->height,
+                    src_rect ? *src_rect : default_rect(&s->layers[layer]),
+                    dst_rect ? *dst_rect : default_rect(&s->layers[layer]));
 
    if (buffer->interlaced) {
-      float half_a_line = 0.5f / c->layers[layer].zw.y;
+      float half_a_line = 0.5f / s->layers[layer].zw.y;
       switch(deinterlace) {
       case VL_COMPOSITOR_WEAVE:
-         c->layers[layer].fs = c->fs_weave;
+         s->layers[layer].fs = c->fs_weave;
          break;
 
       case VL_COMPOSITOR_BOB_TOP:
-         c->layers[layer].zw.x = 0.25f;
-         c->layers[layer].src.tl.y += half_a_line;
-         c->layers[layer].src.br.y += half_a_line;
-         c->layers[layer].fs = c->fs_video_buffer;
+         s->layers[layer].zw.x = 0.25f;
+         s->layers[layer].src.tl.y += half_a_line;
+         s->layers[layer].src.br.y += half_a_line;
+         s->layers[layer].fs = c->fs_video_buffer;
          break;
 
       case VL_COMPOSITOR_BOB_BOTTOM:
-         c->layers[layer].zw.x = 0.75f;
-         c->layers[layer].src.tl.y -= half_a_line;
-         c->layers[layer].src.br.y -= half_a_line;
-         c->layers[layer].fs = c->fs_video_buffer;
+         s->layers[layer].zw.x = 0.75f;
+         s->layers[layer].src.tl.y -= half_a_line;
+         s->layers[layer].src.br.y -= half_a_line;
+         s->layers[layer].fs = c->fs_video_buffer;
          break;
       }
 
    } else
-      c->layers[layer].fs = c->fs_video_buffer;
+      s->layers[layer].fs = c->fs_video_buffer;
 }
 
 void
-vl_compositor_set_palette_layer(struct vl_compositor *c,
+vl_compositor_set_palette_layer(struct vl_compositor_state *s,
+                                struct vl_compositor *c,
                                 unsigned layer,
                                 struct pipe_sampler_view *indexes,
                                 struct pipe_sampler_view *palette,
-                                struct pipe_video_rect *src_rect,
-                                struct pipe_video_rect *dst_rect,
+                                struct u_rect *src_rect,
+                                struct u_rect *dst_rect,
                                 bool include_color_conversion)
 {
-   assert(c && indexes && palette);
+   assert(s && c && indexes && palette);
 
    assert(layer < VL_COMPOSITOR_MAX_LAYERS);
 
-   c->used_layers |= 1 << layer;
+   s->used_layers |= 1 << layer;
 
-   c->layers[layer].fs = include_color_conversion ?
+   s->layers[layer].fs = include_color_conversion ?
       c->fs_palette.yuv : c->fs_palette.rgb;
 
-   c->layers[layer].samplers[0] = c->sampler_linear;
-   c->layers[layer].samplers[1] = c->sampler_nearest;
-   c->layers[layer].samplers[2] = NULL;
-   pipe_sampler_view_reference(&c->layers[layer].sampler_views[0], indexes);
-   pipe_sampler_view_reference(&c->layers[layer].sampler_views[1], palette);
-   pipe_sampler_view_reference(&c->layers[layer].sampler_views[2], NULL);
-   calc_src_and_dst(&c->layers[layer], indexes->texture->width0, indexes->texture->height0,
-                    src_rect ? *src_rect : default_rect(&c->layers[layer]),
-                    dst_rect ? *dst_rect : default_rect(&c->layers[layer]));
+   s->layers[layer].samplers[0] = c->sampler_linear;
+   s->layers[layer].samplers[1] = c->sampler_nearest;
+   s->layers[layer].samplers[2] = NULL;
+   pipe_sampler_view_reference(&s->layers[layer].sampler_views[0], indexes);
+   pipe_sampler_view_reference(&s->layers[layer].sampler_views[1], palette);
+   pipe_sampler_view_reference(&s->layers[layer].sampler_views[2], NULL);
+   calc_src_and_dst(&s->layers[layer], indexes->texture->width0, indexes->texture->height0,
+                    src_rect ? *src_rect : default_rect(&s->layers[layer]),
+                    dst_rect ? *dst_rect : default_rect(&s->layers[layer]));
 }
 
 void
-vl_compositor_set_rgba_layer(struct vl_compositor *c,
+vl_compositor_set_rgba_layer(struct vl_compositor_state *s,
+                             struct vl_compositor *c,
                              unsigned layer,
                              struct pipe_sampler_view *rgba,
-                             struct pipe_video_rect *src_rect,
-                             struct pipe_video_rect *dst_rect)
+                             struct u_rect *src_rect,
+                             struct u_rect *dst_rect,
+                             struct vertex4f *colors)
 {
-   assert(c && rgba);
+   unsigned i;
+
+   assert(s && c && rgba);
 
    assert(layer < VL_COMPOSITOR_MAX_LAYERS);
 
-   c->used_layers |= 1 << layer;
-   c->layers[layer].fs = c->fs_rgba;
-   c->layers[layer].samplers[0] = c->sampler_linear;
-   c->layers[layer].samplers[1] = NULL;
-   c->layers[layer].samplers[2] = NULL;
-   pipe_sampler_view_reference(&c->layers[layer].sampler_views[0], rgba);
-   pipe_sampler_view_reference(&c->layers[layer].sampler_views[1], NULL);
-   pipe_sampler_view_reference(&c->layers[layer].sampler_views[2], NULL);
-   calc_src_and_dst(&c->layers[layer], rgba->texture->width0, rgba->texture->height0,
-                    src_rect ? *src_rect : default_rect(&c->layers[layer]),
-                    dst_rect ? *dst_rect : default_rect(&c->layers[layer]));
+   s->used_layers |= 1 << layer;
+   s->layers[layer].fs = c->fs_rgba;
+   s->layers[layer].samplers[0] = c->sampler_linear;
+   s->layers[layer].samplers[1] = NULL;
+   s->layers[layer].samplers[2] = NULL;
+   pipe_sampler_view_reference(&s->layers[layer].sampler_views[0], rgba);
+   pipe_sampler_view_reference(&s->layers[layer].sampler_views[1], NULL);
+   pipe_sampler_view_reference(&s->layers[layer].sampler_views[2], NULL);
+   calc_src_and_dst(&s->layers[layer], rgba->texture->width0, rgba->texture->height0,
+                    src_rect ? *src_rect : default_rect(&s->layers[layer]),
+                    dst_rect ? *dst_rect : default_rect(&s->layers[layer]));
+
+   if (colors)
+      for (i = 0; i < 4; ++i)
+         s->layers[layer].colors[i] = colors[i];
 }
 
 void
-vl_compositor_render(struct vl_compositor   *c,
-                     struct pipe_surface    *dst_surface,
-                     struct pipe_video_rect *dst_area,
-                     struct pipe_video_rect *dst_clip,
-                     struct u_rect          *dirty_area)
+vl_compositor_render(struct vl_compositor_state *s,
+                     struct vl_compositor       *c,
+                     struct pipe_surface        *dst_surface,
+                     struct u_rect              *dirty_area)
 {
    assert(c);
    assert(dst_surface);
@@ -916,57 +992,41 @@ vl_compositor_render(struct vl_compositor   *c,
    c->fb_state.height = dst_surface->height;
    c->fb_state.cbufs[0] = dst_surface;
    
-   if (dst_area) {
-      c->viewport.scale[0] = dst_area->w;
-      c->viewport.scale[1] = dst_area->h;
-      c->viewport.translate[0] = dst_area->x;
-      c->viewport.translate[1] = dst_area->y;
-   } else {
-      c->viewport.scale[0] = dst_surface->width;
-      c->viewport.scale[1] = dst_surface->height;
-      c->viewport.translate[0] = 0;
-      c->viewport.translate[1] = 0;
+   if (!s->scissor_valid) {
+      s->scissor.minx = 0;
+      s->scissor.miny = 0;
+      s->scissor.maxx = dst_surface->width;
+      s->scissor.maxy = dst_surface->height;
    }
 
-   if (dst_clip) {
-      c->scissor.minx = dst_clip->x;
-      c->scissor.miny = dst_clip->y;
-      c->scissor.maxx = dst_clip->x + dst_clip->w;
-      c->scissor.maxy = dst_clip->y + dst_clip->h;
-   } else {
-      c->scissor.minx = 0;
-      c->scissor.miny = 0;
-      c->scissor.maxx = dst_surface->width;
-      c->scissor.maxy = dst_surface->height;
-   }
-
-   gen_vertex_data(c, dirty_area);
+   gen_vertex_data(c, s, dirty_area);
 
    if (dirty_area && (dirty_area->x0 < dirty_area->x1 ||
                       dirty_area->y0 < dirty_area->y1)) {
 
-      c->pipe->clear_render_target(c->pipe, dst_surface, &c->clear_color,
+      c->pipe->clear_render_target(c->pipe, dst_surface, &s->clear_color,
                                    0, 0, dst_surface->width, dst_surface->height);
       dirty_area->x0 = dirty_area->y0 = MAX_DIRTY;
       dirty_area->x1 = dirty_area->y1 = MIN_DIRTY;
    }
 
-   c->pipe->set_scissor_state(c->pipe, &c->scissor);
+   c->pipe->set_scissor_state(c->pipe, &s->scissor);
    c->pipe->set_framebuffer_state(c->pipe, &c->fb_state);
-   c->pipe->set_viewport_state(c->pipe, &c->viewport);
    c->pipe->bind_vs_state(c->pipe, c->vs);
    c->pipe->set_vertex_buffers(c->pipe, 1, &c->vertex_buf);
    c->pipe->bind_vertex_elements_state(c->pipe, c->vertex_elems_state);
-   c->pipe->set_constant_buffer(c->pipe, PIPE_SHADER_FRAGMENT, 0, c->csc_matrix);
+   c->pipe->set_constant_buffer(c->pipe, PIPE_SHADER_FRAGMENT, 0, s->csc_matrix);
    c->pipe->bind_rasterizer_state(c->pipe, c->rast);
 
-   draw_layers(c, dirty_area);
+   draw_layers(c, s, dirty_area);
 }
 
 bool
 vl_compositor_init(struct vl_compositor *c, struct pipe_context *pipe)
 {
-   csc_matrix csc_matrix;
+   assert(c);
+
+   memset(c, 0, sizeof(*c));
 
    c->pipe = pipe;
 
@@ -984,13 +1044,49 @@ vl_compositor_init(struct vl_compositor *c, struct pipe_context *pipe)
       return false;
    }
 
-   vl_compositor_clear_layers(c);
+   return true;
+}
 
-   vl_csc_get_matrix(VL_CSC_COLOR_STANDARD_IDENTITY, NULL, true, csc_matrix);
-   vl_compositor_set_csc_matrix(c, csc_matrix);
+bool
+vl_compositor_init_state(struct vl_compositor_state *s, struct pipe_context *pipe)
+{
+   vl_csc_matrix csc_matrix;
 
-   c->clear_color.f[0] = c->clear_color.f[1] = 0.0f;
-   c->clear_color.f[2] = c->clear_color.f[3] = 0.0f;
+   assert(s);
+
+   memset(s, 0, sizeof(*s));
+
+   s->pipe = pipe;
+
+   s->clear_color.f[0] = s->clear_color.f[1] = 0.0f;
+   s->clear_color.f[2] = s->clear_color.f[3] = 0.0f;
+
+   /*
+    * Create our fragment shader's constant buffer
+    * Const buffer contains the color conversion matrix and bias vectors
+    */
+   /* XXX: Create with IMMUTABLE/STATIC... although it does change every once in a long while... */
+   s->csc_matrix = pipe_buffer_create
+   (
+      pipe->screen,
+      PIPE_BIND_CONSTANT_BUFFER,
+      PIPE_USAGE_STATIC,
+      sizeof(csc_matrix)
+   );
+
+   vl_compositor_clear_layers(s);
+
+   vl_csc_get_matrix(VL_CSC_COLOR_STANDARD_IDENTITY, NULL, true, &csc_matrix);
+   vl_compositor_set_csc_matrix(s, (const vl_csc_matrix *)&csc_matrix);
 
    return true;
+}
+
+void
+vl_compositor_cleanup_state(struct vl_compositor_state *s)
+{
+   assert(s);
+
+   vl_compositor_clear_layers(s);
+   pipe_resource_reference(&s->csc_matrix, NULL);
 }

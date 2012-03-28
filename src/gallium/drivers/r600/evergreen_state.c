@@ -20,33 +20,13 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
+#include "r600_formats.h"
+#include "evergreend.h"
 
-/* TODO:
- *	- fix mask for depth control & cull for query
- */
-#include <stdio.h>
-#include <errno.h>
-#include "pipe/p_defines.h"
-#include "pipe/p_state.h"
-#include "pipe/p_context.h"
-#include "tgsi/tgsi_scan.h"
-#include "tgsi/tgsi_parse.h"
-#include "tgsi/tgsi_util.h"
-#include "util/u_blitter.h"
-#include "util/u_double_list.h"
-#include "util/u_transfer.h"
-#include "util/u_surface.h"
+#include "pipe/p_shader_tokens.h"
 #include "util/u_pack_color.h"
 #include "util/u_memory.h"
-#include "util/u_inlines.h"
 #include "util/u_framebuffer.h"
-#include "pipebuffer/pb_buffer.h"
-#include "r600.h"
-#include "evergreend.h"
-#include "r600_resource.h"
-#include "r600_shader.h"
-#include "r600_pipe.h"
-#include "r600_formats.h"
 
 static uint32_t eg_num_banks(uint32_t nbanks)
 {
@@ -218,17 +198,44 @@ static uint32_t r600_translate_colorswap(enum pipe_format format)
 		return V_028C70_SWAP_ALT;
 
 	case PIPE_FORMAT_A8_UNORM:
+	case PIPE_FORMAT_A8_SNORM:
 	case PIPE_FORMAT_A8_UINT:
 	case PIPE_FORMAT_A8_SINT:
+	case PIPE_FORMAT_A16_UNORM:
+	case PIPE_FORMAT_A16_SNORM:
+	case PIPE_FORMAT_A16_UINT:
+	case PIPE_FORMAT_A16_SINT:
+	case PIPE_FORMAT_A16_FLOAT:
+	case PIPE_FORMAT_A32_UINT:
+	case PIPE_FORMAT_A32_SINT:
+	case PIPE_FORMAT_A32_FLOAT:
 	case PIPE_FORMAT_R4A4_UNORM:
 		return V_028C70_SWAP_ALT_REV;
 	case PIPE_FORMAT_I8_UNORM:
-	case PIPE_FORMAT_L8_UNORM:
+	case PIPE_FORMAT_I8_SNORM:
 	case PIPE_FORMAT_I8_UINT:
 	case PIPE_FORMAT_I8_SINT:
+	case PIPE_FORMAT_I16_UNORM:
+	case PIPE_FORMAT_I16_SNORM:
+	case PIPE_FORMAT_I16_UINT:
+	case PIPE_FORMAT_I16_SINT:
+	case PIPE_FORMAT_I16_FLOAT:
+	case PIPE_FORMAT_I32_UINT:
+	case PIPE_FORMAT_I32_SINT:
+	case PIPE_FORMAT_I32_FLOAT:
+	case PIPE_FORMAT_L8_UNORM:
+	case PIPE_FORMAT_L8_SNORM:
 	case PIPE_FORMAT_L8_UINT:
 	case PIPE_FORMAT_L8_SINT:
 	case PIPE_FORMAT_L8_SRGB:
+	case PIPE_FORMAT_L16_UNORM:
+	case PIPE_FORMAT_L16_SNORM:
+	case PIPE_FORMAT_L16_UINT:
+	case PIPE_FORMAT_L16_SINT:
+	case PIPE_FORMAT_L16_FLOAT:
+	case PIPE_FORMAT_L32_UINT:
+	case PIPE_FORMAT_L32_SINT:
+	case PIPE_FORMAT_L32_FLOAT:
 	case PIPE_FORMAT_R8_UNORM:
 	case PIPE_FORMAT_R8_SNORM:
 	case PIPE_FORMAT_R8_UINT:
@@ -251,16 +258,27 @@ static uint32_t r600_translate_colorswap(enum pipe_format format)
 		return V_028C70_SWAP_STD;
 
 	case PIPE_FORMAT_L8A8_UNORM:
+	case PIPE_FORMAT_L8A8_SNORM:
 	case PIPE_FORMAT_L8A8_UINT:
 	case PIPE_FORMAT_L8A8_SINT:
 	case PIPE_FORMAT_L8A8_SRGB:
+	case PIPE_FORMAT_L16A16_UNORM:
+	case PIPE_FORMAT_L16A16_SNORM:
+	case PIPE_FORMAT_L16A16_UINT:
+	case PIPE_FORMAT_L16A16_SINT:
+	case PIPE_FORMAT_L16A16_FLOAT:
+	case PIPE_FORMAT_L32A32_UINT:
+	case PIPE_FORMAT_L32A32_SINT:
+	case PIPE_FORMAT_L32A32_FLOAT:
 		return V_028C70_SWAP_ALT;
 	case PIPE_FORMAT_R8G8_UNORM:
+	case PIPE_FORMAT_R8G8_SNORM:
 	case PIPE_FORMAT_R8G8_UINT:
 	case PIPE_FORMAT_R8G8_SINT:
 		return V_028C70_SWAP_STD;
 
 	case PIPE_FORMAT_R16_UNORM:
+	case PIPE_FORMAT_R16_SNORM:
 	case PIPE_FORMAT_R16_UINT:
 	case PIPE_FORMAT_R16_SINT:
 	case PIPE_FORMAT_R16_FLOAT:
@@ -281,8 +299,6 @@ static uint32_t r600_translate_colorswap(enum pipe_format format)
 		return V_028C70_SWAP_ALT_REV;
 	case PIPE_FORMAT_R8G8B8A8_SNORM:
 	case PIPE_FORMAT_R8G8B8A8_UNORM:
-	case PIPE_FORMAT_R8G8B8A8_SSCALED:
-	case PIPE_FORMAT_R8G8B8A8_USCALED:
 	case PIPE_FORMAT_R8G8B8A8_SINT:
 	case PIPE_FORMAT_R8G8B8A8_UINT:
 	case PIPE_FORMAT_R8G8B8X8_UNORM:
@@ -317,6 +333,7 @@ static uint32_t r600_translate_colorswap(enum pipe_format format)
 	case PIPE_FORMAT_Z32_FLOAT:
 	case PIPE_FORMAT_R16G16_FLOAT:
 	case PIPE_FORMAT_R16G16_UNORM:
+	case PIPE_FORMAT_R16G16_SNORM:
 	case PIPE_FORMAT_R16G16_UINT:
 	case PIPE_FORMAT_R16G16_SINT:
 		return V_028C70_SWAP_STD;
@@ -327,8 +344,6 @@ static uint32_t r600_translate_colorswap(enum pipe_format format)
 	case PIPE_FORMAT_R32G32_SINT:
 	case PIPE_FORMAT_R16G16B16A16_UNORM:
 	case PIPE_FORMAT_R16G16B16A16_SNORM:
-	case PIPE_FORMAT_R16G16B16A16_USCALED:
-	case PIPE_FORMAT_R16G16B16A16_SSCALED:
 	case PIPE_FORMAT_R16G16B16A16_UINT:
 	case PIPE_FORMAT_R16G16B16A16_SINT:
 	case PIPE_FORMAT_R16G16B16A16_FLOAT:
@@ -338,8 +353,6 @@ static uint32_t r600_translate_colorswap(enum pipe_format format)
 	case PIPE_FORMAT_R32G32B32A32_FLOAT:
 	case PIPE_FORMAT_R32G32B32A32_SNORM:
 	case PIPE_FORMAT_R32G32B32A32_UNORM:
-	case PIPE_FORMAT_R32G32B32A32_SSCALED:
-	case PIPE_FORMAT_R32G32B32A32_USCALED:
 	case PIPE_FORMAT_R32G32B32A32_SINT:
 	case PIPE_FORMAT_R32G32B32A32_UINT:
 		return V_028C70_SWAP_STD;
@@ -355,12 +368,15 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 	switch (format) {
 	/* 8-bit buffers. */
 	case PIPE_FORMAT_A8_UNORM:
+	case PIPE_FORMAT_A8_SNORM:
 	case PIPE_FORMAT_A8_UINT:
 	case PIPE_FORMAT_A8_SINT:
 	case PIPE_FORMAT_I8_UNORM:
+	case PIPE_FORMAT_I8_SNORM:
 	case PIPE_FORMAT_I8_UINT:
 	case PIPE_FORMAT_I8_SINT:
 	case PIPE_FORMAT_L8_UNORM:
+	case PIPE_FORMAT_L8_SNORM:
 	case PIPE_FORMAT_L8_UINT:
 	case PIPE_FORMAT_L8_SINT:
 	case PIPE_FORMAT_L8_SRGB:
@@ -386,20 +402,38 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 		return V_028C70_COLOR_16;
 
 	case PIPE_FORMAT_L8A8_UNORM:
+	case PIPE_FORMAT_L8A8_SNORM:
 	case PIPE_FORMAT_L8A8_UINT:
 	case PIPE_FORMAT_L8A8_SINT:
 	case PIPE_FORMAT_L8A8_SRGB:
 	case PIPE_FORMAT_R8G8_UNORM:
+	case PIPE_FORMAT_R8G8_SNORM:
 	case PIPE_FORMAT_R8G8_UINT:
 	case PIPE_FORMAT_R8G8_SINT:
 		return V_028C70_COLOR_8_8;
 
 	case PIPE_FORMAT_R16_UNORM:
+	case PIPE_FORMAT_R16_SNORM:
 	case PIPE_FORMAT_R16_UINT:
 	case PIPE_FORMAT_R16_SINT:
+	case PIPE_FORMAT_A16_UNORM:
+	case PIPE_FORMAT_A16_SNORM:
+	case PIPE_FORMAT_A16_UINT:
+	case PIPE_FORMAT_A16_SINT:
+	case PIPE_FORMAT_L16_UNORM:
+	case PIPE_FORMAT_L16_SNORM:
+	case PIPE_FORMAT_L16_UINT:
+	case PIPE_FORMAT_L16_SINT:
+	case PIPE_FORMAT_I16_UNORM:
+	case PIPE_FORMAT_I16_SNORM:
+	case PIPE_FORMAT_I16_UINT:
+	case PIPE_FORMAT_I16_SINT:
 		return V_028C70_COLOR_16;
 
 	case PIPE_FORMAT_R16_FLOAT:
+	case PIPE_FORMAT_A16_FLOAT:
+	case PIPE_FORMAT_L16_FLOAT:
+	case PIPE_FORMAT_I16_FLOAT:
 		return V_028C70_COLOR_16_FLOAT;
 
 	/* 32-bit buffers. */
@@ -416,8 +450,6 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 	case PIPE_FORMAT_X8B8G8R8_UNORM:
 	case PIPE_FORMAT_X8R8G8B8_UNORM:
 	case PIPE_FORMAT_R8G8B8_UNORM:
-	case PIPE_FORMAT_R8G8B8A8_SSCALED:
-	case PIPE_FORMAT_R8G8B8A8_USCALED:
 	case PIPE_FORMAT_R8G8B8A8_SINT:
 	case PIPE_FORMAT_R8G8B8A8_UINT:
 		return V_028C70_COLOR_8_8_8_8;
@@ -442,31 +474,41 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 
 	case PIPE_FORMAT_R32_UINT:
 	case PIPE_FORMAT_R32_SINT:
+	case PIPE_FORMAT_A32_UINT:
+	case PIPE_FORMAT_A32_SINT:
+	case PIPE_FORMAT_L32_UINT:
+	case PIPE_FORMAT_L32_SINT:
+	case PIPE_FORMAT_I32_UINT:
+	case PIPE_FORMAT_I32_SINT:
 		return V_028C70_COLOR_32;
 
 	case PIPE_FORMAT_R32_FLOAT:
+	case PIPE_FORMAT_A32_FLOAT:
+	case PIPE_FORMAT_L32_FLOAT:
+	case PIPE_FORMAT_I32_FLOAT:
 	case PIPE_FORMAT_Z32_FLOAT:
 		return V_028C70_COLOR_32_FLOAT;
 
 	case PIPE_FORMAT_R16G16_FLOAT:
+	case PIPE_FORMAT_L16A16_FLOAT:
 		return V_028C70_COLOR_16_16_FLOAT;
 
-	case PIPE_FORMAT_R16G16_SSCALED:
 	case PIPE_FORMAT_R16G16_UNORM:
+	case PIPE_FORMAT_R16G16_SNORM:
 	case PIPE_FORMAT_R16G16_UINT:
 	case PIPE_FORMAT_R16G16_SINT:
+	case PIPE_FORMAT_L16A16_UNORM:
+	case PIPE_FORMAT_L16A16_SNORM:
+	case PIPE_FORMAT_L16A16_UINT:
+	case PIPE_FORMAT_L16A16_SINT:
 		return V_028C70_COLOR_16_16;
 
 	case PIPE_FORMAT_R11G11B10_FLOAT:
 		return V_028C70_COLOR_10_11_11_FLOAT;
 
 	/* 64-bit buffers. */
-	case PIPE_FORMAT_R16G16B16_USCALED:
-	case PIPE_FORMAT_R16G16B16_SSCALED:
 	case PIPE_FORMAT_R16G16B16A16_UINT:
 	case PIPE_FORMAT_R16G16B16A16_SINT:
-	case PIPE_FORMAT_R16G16B16A16_USCALED:
-	case PIPE_FORMAT_R16G16B16A16_SSCALED:
 	case PIPE_FORMAT_R16G16B16A16_UNORM:
 	case PIPE_FORMAT_R16G16B16A16_SNORM:
 		return V_028C70_COLOR_16_16_16_16;
@@ -476,12 +518,13 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 		return V_028C70_COLOR_16_16_16_16_FLOAT;
 
 	case PIPE_FORMAT_R32G32_FLOAT:
+	case PIPE_FORMAT_L32A32_FLOAT:
 		return V_028C70_COLOR_32_32_FLOAT;
 
-	case PIPE_FORMAT_R32G32_USCALED:
-	case PIPE_FORMAT_R32G32_SSCALED:
 	case PIPE_FORMAT_R32G32_SINT:
 	case PIPE_FORMAT_R32G32_UINT:
+	case PIPE_FORMAT_L32A32_UINT:
+	case PIPE_FORMAT_L32A32_SINT:
 		return V_028C70_COLOR_32_32;
 
 	/* 96-bit buffers. */
@@ -491,8 +534,6 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 	/* 128-bit buffers. */
 	case PIPE_FORMAT_R32G32B32A32_SNORM:
 	case PIPE_FORMAT_R32G32B32A32_UNORM:
-	case PIPE_FORMAT_R32G32B32A32_SSCALED:
-	case PIPE_FORMAT_R32G32B32A32_USCALED:
 	case PIPE_FORMAT_R32G32B32A32_SINT:
 	case PIPE_FORMAT_R32G32B32A32_UINT:
 		return V_028C70_COLOR_32_32_32_32;
@@ -636,7 +677,7 @@ static void *evergreen_create_blend_state(struct pipe_context *ctx,
 	struct r600_pipe_blend *blend = CALLOC_STRUCT(r600_pipe_blend);
 	struct r600_pipe_state *rstate;
 	uint32_t color_control, target_mask;
-	/* FIXME there is more then 8 framebuffer */
+	/* XXX there is more then 8 framebuffer */
 	unsigned blend_cntl[8];
 
 	if (blend == NULL) {
@@ -771,7 +812,6 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 	struct r600_pipe_state *rstate;
 	unsigned tmp;
 	unsigned prov_vtx = 1, polygon_dual_mode;
-	unsigned clip_rule;
 	float psize_min, psize_max;
 
 	if (rs == NULL) {
@@ -797,8 +837,6 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 		S_028810_ZCLIP_NEAR_DISABLE(!state->depth_clip) |
 		S_028810_ZCLIP_FAR_DISABLE(!state->depth_clip) |
 		S_028810_DX_LINEAR_ATTR_CLIP_ENA(1);
-
-	clip_rule = state->scissor ? 0xAAAA : 0xFFFF;
 
 	/* offset */
 	rs->offset_units = state->offset_units;
@@ -839,6 +877,7 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 	tmp = (unsigned)state->line_width * 8;
 	r600_pipe_state_add_reg(rstate, R_028A08_PA_SU_LINE_CNTL, S_028A08_WIDTH(tmp), NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_028A48_PA_SC_MODE_CNTL_0,
+				S_028A48_VPORT_SCISSOR_ENABLE(state->scissor) |
 				S_028A48_LINE_STIPPLE_ENABLE(state->line_stipple_enable),
 				NULL, 0);
 
@@ -852,7 +891,6 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 					NULL, 0);
 	}
 	r600_pipe_state_add_reg(rstate, R_028B7C_PA_SU_POLY_OFFSET_CLAMP, fui(state->offset_clamp), NULL, 0);
-	r600_pipe_state_add_reg(rstate, R_02820C_PA_SC_CLIPRECT_RULE, clip_rule, NULL, 0);
 	r600_pipe_state_add_reg(rstate, R_028814_PA_SU_SC_MODE_CNTL,
 				S_028814_PROVOKING_VTX_LAST(prov_vtx) |
 				S_028814_CULL_FRONT(state->rasterizer_discard || (state->cull_face & PIPE_FACE_FRONT) ? 1 : 0) |
@@ -865,6 +903,7 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 				S_028814_POLYMODE_FRONT_PTYPE(r600_translate_fill(state->fill_front)) |
 				S_028814_POLYMODE_BACK_PTYPE(r600_translate_fill(state->fill_back)),
 				NULL, 0);
+	r600_pipe_state_add_reg(rstate, R_028350_SX_MISC, S_028350_MULTIPASS(state->rasterizer_discard), NULL, 0);
 	return rstate;
 }
 
@@ -1184,6 +1223,26 @@ static void evergreen_set_sample_mask(struct pipe_context *pipe, unsigned sample
 {
 }
 
+static void evergreen_get_scissor_rect(struct r600_context *rctx,
+				       unsigned tl_x, unsigned tl_y, unsigned br_x, unsigned br_y,
+				       uint32_t *tl, uint32_t *br)
+{
+	/* EG hw workaround */
+	if (br_x == 0)
+		tl_x = 1;
+	if (br_y == 0)
+		tl_y = 1;
+
+	/* cayman hw workaround */
+	if (rctx->chip_class == CAYMAN) {
+		if (br_x == 1 && br_y == 1)
+			br_x = 2;
+	}
+
+	*tl = S_028240_TL_X(tl_x) | S_028240_TL_Y(tl_y);
+	*br = S_028244_BR_X(br_x) | S_028244_BR_Y(br_y);
+}
+
 static void evergreen_set_scissor_state(struct pipe_context *ctx,
 					const struct pipe_scissor_state *state)
 {
@@ -1194,33 +1253,11 @@ static void evergreen_set_scissor_state(struct pipe_context *ctx,
 	if (rstate == NULL)
 		return;
 
+	evergreen_get_scissor_rect(rctx, state->minx, state->miny, state->maxx, state->maxy, &tl, &br);
+
 	rstate->id = R600_PIPE_STATE_SCISSOR;
-	tl = S_028240_TL_X(state->minx) | S_028240_TL_Y(state->miny);
-	br = S_028244_BR_X(state->maxx) | S_028244_BR_Y(state->maxy);
-	r600_pipe_state_add_reg(rstate,
-				R_028210_PA_SC_CLIPRECT_0_TL, tl,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_028214_PA_SC_CLIPRECT_0_BR, br,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_028218_PA_SC_CLIPRECT_1_TL, tl,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_02821C_PA_SC_CLIPRECT_1_BR, br,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_028220_PA_SC_CLIPRECT_2_TL, tl,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_028224_PA_SC_CLIPRECT_2_BR, br,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_028228_PA_SC_CLIPRECT_3_TL, tl,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_02822C_PA_SC_CLIPRECT_3_BR, br,
-				NULL, 0);
+	r600_pipe_state_add_reg(rstate, R_028250_PA_SC_VPORT_SCISSOR_0_TL, tl, NULL, 0);
+	r600_pipe_state_add_reg(rstate, R_028254_PA_SC_VPORT_SCISSOR_0_BR, br, NULL, 0);
 
 	free(rctx->states[R600_PIPE_STATE_SCISSOR]);
 	rctx->states[R600_PIPE_STATE_SCISSOR] = rstate;
@@ -1407,7 +1444,7 @@ static void evergreen_cb(struct r600_context *rctx, struct r600_pipe_state *rsta
 	 * - 11-bit or smaller UNORM/SNORM/SRGB
 	 * - 16-bit or smaller FLOAT
 	 */
-	/* FIXME: This should probably be the same for all CBs if we want
+	/* XXX: This should probably be the same for all CBs if we want
 	 * useful alpha tests. */
 	if (desc->colorspace != UTIL_FORMAT_COLORSPACE_ZS &&
 	    ((desc->channel[i].size < 12 &&
@@ -1426,7 +1463,7 @@ static void evergreen_cb(struct r600_context *rctx, struct r600_pipe_state *rsta
 	offset += r600_resource_va(rctx->context.screen, state->cbufs[cb]->texture);
 	offset >>= 8;
 
-	/* FIXME handle enabling of CB beyond BASE8 which has different offset */
+	/* XXX handle enabling of CB beyond BASE8 which has different offset */
 	r600_pipe_state_add_reg(rstate,
 				R_028C60_CB_COLOR0_BASE + cb * 0x3C,
 				offset, &rtex->resource, RADEON_USAGE_READWRITE);
@@ -1619,7 +1656,6 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct r600_pipe_state *rstate = CALLOC_STRUCT(r600_pipe_state);
 	uint32_t shader_mask, tl, br;
-	int tl_x, tl_y, br_x, br_y;
 
 	if (rstate == NULL)
 		return;
@@ -1645,41 +1681,9 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 	for (int i = 0; i < state->nr_cbufs; i++) {
 		shader_mask |= 0xf << (i * 4);
 	}
-	tl_x = 0;
-	tl_y = 0;
-	br_x = state->width;
-	br_y = state->height;
-	/* EG hw workaround */
-	if (br_x == 0)
-		tl_x = 1;
-	if (br_y == 0)
-		tl_y = 1;
-	/* cayman hw workaround */
-	if (rctx->chip_class == CAYMAN) {
-		if (br_x == 1 && br_y == 1)
-			br_x = 2;
-	}
-	tl = S_028240_TL_X(tl_x) | S_028240_TL_Y(tl_y);
-	br = S_028244_BR_X(br_x) | S_028244_BR_Y(br_y);
 
-	r600_pipe_state_add_reg(rstate,
-				R_028240_PA_SC_GENERIC_SCISSOR_TL, tl,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_028244_PA_SC_GENERIC_SCISSOR_BR, br,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_028250_PA_SC_VPORT_SCISSOR_0_TL, tl,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_028254_PA_SC_VPORT_SCISSOR_0_BR, br,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_028030_PA_SC_SCREEN_SCISSOR_TL, tl,
-				NULL, 0);
-	r600_pipe_state_add_reg(rstate,
-				R_028034_PA_SC_SCREEN_SCISSOR_BR, br,
-				NULL, 0);
+	evergreen_get_scissor_rect(rctx, 0, 0, state->width, state->height, &tl, &br);
+
 	r600_pipe_state_add_reg(rstate,
 				R_028204_PA_SC_WINDOW_SCISSOR_TL, tl,
 				NULL, 0);
@@ -1701,7 +1705,7 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 static void evergreen_emit_db_misc_state(struct r600_context *rctx, struct r600_atom *atom)
 {
 	struct radeon_winsys_cs *cs = rctx->cs;
-	struct r600_atom_db_misc_state *a = (struct r600_atom_db_misc_state*)atom;
+	struct r600_db_misc_state *a = (struct r600_db_misc_state*)atom;
 	unsigned db_count_control = 0;
 	unsigned db_render_override =
 		S_02800C_FORCE_HIZ_ENABLE(V_02800C_FORCE_DISABLE) |
@@ -1719,7 +1723,8 @@ static void evergreen_emit_db_misc_state(struct r600_context *rctx, struct r600_
 
 void evergreen_init_state_functions(struct r600_context *rctx)
 {
-	r600_init_atom(&rctx->atom_db_misc_state.atom, evergreen_emit_db_misc_state, 6, 0);
+	r600_init_atom(&rctx->db_misc_state.atom, evergreen_emit_db_misc_state, 6, 0);
+	r600_atom_dirty(rctx, &rctx->db_misc_state.atom);
 
 	rctx->context.create_blend_state = evergreen_create_blend_state;
 	rctx->context.create_depth_stencil_alpha_state = evergreen_create_dsa_state;
@@ -1767,7 +1772,7 @@ void evergreen_init_state_functions(struct r600_context *rctx)
 
 static void cayman_init_atom_start_cs(struct r600_context *rctx)
 {
-	struct r600_command_buffer *cb = &rctx->atom_start_cs;
+	struct r600_command_buffer *cb = &rctx->start_cs_cmd;
 
 	r600_init_command_buffer(cb, 256, EMIT_EARLY);
 
@@ -1880,6 +1885,7 @@ static void cayman_init_atom_start_cs(struct r600_context *rctx)
 	r600_store_value(cb, 0); /* R_028AC8_DB_PRELOAD_CONTROL */
 
 	r600_store_context_reg(cb, R_028200_PA_SC_WINDOW_OFFSET, 0);
+	r600_store_context_reg(cb, R_02820C_PA_SC_CLIPRECT_RULE, 0xFFFF);
 
 	r600_store_context_reg_seq(cb, R_0282D0_PA_SC_VPORT_ZMIN_0, 2);
 	r600_store_value(cb, 0); /* R_0282D0_PA_SC_VPORT_ZMIN_0 */
@@ -1900,9 +1906,20 @@ static void cayman_init_atom_start_cs(struct r600_context *rctx)
 	r600_store_value(cb, 0x3F800000); /* CM_R_028BF0_PA_CL_GB_HORZ_CLIP_ADJ */
 	r600_store_value(cb, 0x3F800000); /* CM_R_028BF4_PA_CL_GB_HORZ_DISC_ADJ */
 
+	r600_store_context_reg_seq(cb, R_028240_PA_SC_GENERIC_SCISSOR_TL, 2);
+	r600_store_value(cb, 0); /* R_028240_PA_SC_GENERIC_SCISSOR_TL */
+	r600_store_value(cb, S_028244_BR_X(16384) | S_028244_BR_Y(16384)); /* R_028244_PA_SC_GENERIC_SCISSOR_BR */
+
+	r600_store_context_reg_seq(cb, R_028030_PA_SC_SCREEN_SCISSOR_TL, 2);
+	r600_store_value(cb, 0); /* R_028030_PA_SC_SCREEN_SCISSOR_TL */
+	r600_store_value(cb, S_028034_BR_X(16384) | S_028034_BR_Y(16384)); /* R_028034_PA_SC_SCREEN_SCISSOR_BR */
+
 	r600_store_context_reg(cb, R_028848_SQ_PGM_RESOURCES_2_PS, S_028848_SINGLE_ROUND(V_SQ_ROUND_TO_ZERO));
 	r600_store_context_reg(cb, R_028864_SQ_PGM_RESOURCES_2_VS, S_028864_SINGLE_ROUND(V_SQ_ROUND_TO_ZERO));
 	r600_store_context_reg(cb, R_0288A8_SQ_PGM_RESOURCES_FS, 0);
+
+	r600_store_context_reg(cb, R_028354_SX_SURFACE_SYNC, S_028354_SURFACE_SYNC_MASK(0xf));
+	r600_store_context_reg(cb, R_028800_DB_DEPTH_CONTROL, 0);
 
 	eg_store_loop_const(cb, R_03A200_SQ_LOOP_CONST_0, 0x01000FFF);
 	eg_store_loop_const(cb, R_03A200_SQ_LOOP_CONST_0 + (32 * 4), 0x01000FFF);
@@ -1910,7 +1927,7 @@ static void cayman_init_atom_start_cs(struct r600_context *rctx)
 
 void evergreen_init_atom_start_cs(struct r600_context *rctx)
 {
-	struct r600_command_buffer *cb = &rctx->atom_start_cs;
+	struct r600_command_buffer *cb = &rctx->start_cs_cmd;
 	int ps_prio;
 	int vs_prio;
 	int gs_prio;
@@ -2343,6 +2360,7 @@ void evergreen_init_atom_start_cs(struct r600_context *rctx)
 	r600_store_value(cb, 0x3F800000); /* R_02802C_DB_DEPTH_CLEAR */
 
 	r600_store_context_reg(cb, R_028200_PA_SC_WINDOW_OFFSET, 0);
+	r600_store_context_reg(cb, R_02820C_PA_SC_CLIPRECT_RULE, 0xFFFF);
 	r600_store_context_reg(cb, R_028230_PA_SC_EDGERULE, 0xAAAAAAAA);
 
 	r600_store_context_reg_seq(cb, R_0282D0_PA_SC_VPORT_ZMIN_0, 2);
@@ -2373,9 +2391,20 @@ void evergreen_init_atom_start_cs(struct r600_context *rctx)
 
 	r600_store_context_reg(cb, R_028C3C_PA_SC_AA_MASK, ~0);
 
+	r600_store_context_reg_seq(cb, R_028240_PA_SC_GENERIC_SCISSOR_TL, 2);
+	r600_store_value(cb, 0); /* R_028240_PA_SC_GENERIC_SCISSOR_TL */
+	r600_store_value(cb, S_028244_BR_X(16384) | S_028244_BR_Y(16384)); /* R_028244_PA_SC_GENERIC_SCISSOR_BR */
+
+	r600_store_context_reg_seq(cb, R_028030_PA_SC_SCREEN_SCISSOR_TL, 2);
+	r600_store_value(cb, 0); /* R_028030_PA_SC_SCREEN_SCISSOR_TL */
+	r600_store_value(cb, S_028034_BR_X(16384) | S_028034_BR_Y(16384)); /* R_028034_PA_SC_SCREEN_SCISSOR_BR */
+
 	r600_store_context_reg(cb, R_028848_SQ_PGM_RESOURCES_2_PS, S_028848_SINGLE_ROUND(V_SQ_ROUND_TO_ZERO));
 	r600_store_context_reg(cb, R_028864_SQ_PGM_RESOURCES_2_VS, S_028864_SINGLE_ROUND(V_SQ_ROUND_TO_ZERO));
 	r600_store_context_reg(cb, R_0288A8_SQ_PGM_RESOURCES_FS, 0);
+
+	r600_store_context_reg(cb, R_028354_SX_SURFACE_SYNC, S_028354_SURFACE_SYNC_MASK(0xf));
+	r600_store_context_reg(cb, R_028800_DB_DEPTH_CONTROL, 0);
 
 	eg_store_loop_const(cb, R_03A200_SQ_LOOP_CONST_0, 0x01000FFF);
 	eg_store_loop_const(cb, R_03A200_SQ_LOOP_CONST_0 + (32 * 4), 0x01000FFF);
@@ -2410,7 +2439,7 @@ void evergreen_polygon_offset_update(struct r600_context *rctx)
 		default:
 			return;
 		}
-		/* FIXME some of those reg can be computed with cso */
+		/* XXX some of those reg can be computed with cso */
 		offset_db_fmt_cntl |= S_028B78_POLY_OFFSET_NEG_NUM_DB_BITS(depth);
 		r600_pipe_state_add_reg(&state,
 				R_028B80_PA_SU_POLY_OFFSET_FRONT_SCALE,

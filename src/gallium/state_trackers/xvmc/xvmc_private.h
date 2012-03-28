@@ -35,7 +35,6 @@
 
 #include "util/u_debug.h"
 #include "util/u_math.h"
-#include "util/u_rect.h"
 
 #include "vl/vl_csc.h"
 #include "vl/vl_compositor.h"
@@ -58,13 +57,10 @@ typedef struct
    enum VL_CSC_COLOR_STANDARD color_standard;
    struct vl_procamp procamp;
    struct vl_compositor compositor;
+   struct vl_compositor_state cstate;
 
    unsigned short subpicture_max_width;
    unsigned short subpicture_max_height;
-
-   struct pipe_video_rect dst_rect;
-   struct pipe_surface *drawable_surface;
-   struct u_rect dirty_area;
 
 } XvMCContextPrivate;
 
@@ -94,8 +90,8 @@ typedef struct
    /* optional palette for this subpicture */
    struct pipe_sampler_view *palette;
 
-   struct pipe_video_rect src_rect;
-   struct pipe_video_rect dst_rect;
+   struct u_rect src_rect;
+   struct u_rect dst_rect;
 
    /* The surface this subpicture is currently associated with, if any. */
    XvMCSurface *surface;
