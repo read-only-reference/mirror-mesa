@@ -124,6 +124,7 @@ struct r600_screen {
 
 	unsigned			num_contexts;
 	bool				use_surface_alloc;
+	int 				glsl_feature_level;
 
 	/* for thread-safe write accessing to num_contexts */
 	pipe_mutex			mutex_num_contexts;
@@ -151,6 +152,7 @@ struct r600_pipe_blend {
 	struct r600_pipe_state		rstate;
 	unsigned			cb_target_mask;
 	unsigned			cb_color_control;
+	bool				dual_src_blend;
 };
 
 struct r600_pipe_dsa {
@@ -165,15 +167,9 @@ struct r600_vertex_element
 {
 	unsigned			count;
 	struct pipe_vertex_element	elements[PIPE_MAX_ATTRIBS];
-	struct u_vbuf_elements		*vmgr_elements;
 	struct r600_resource		*fetch_shader;
 	unsigned			fs_size;
 	struct r600_pipe_state		rstate;
-	/* if offset is to big for fetch instructio we need to alterate
-	 * offset of vertex buffer, record here the offset need to add
-	 */
-	unsigned			vbuffer_need_offset;
-	unsigned			vbuffer_offset[PIPE_MAX_ATTRIBS];
 };
 
 struct r600_pipe_shader {
@@ -186,6 +182,7 @@ struct r600_pipe_shader {
 	unsigned	sprite_coord_enable;
 	unsigned	flatshade;
 	unsigned	pa_cl_vs_out_cntl;
+	unsigned        ps_cb_shader_mask;
 	struct pipe_stream_output_info	so;
 };
 
@@ -230,20 +227,30 @@ struct r600_stencil_ref
 	ubyte writemask[2];
 };
 
+struct r600_constbuf_state
+{
+	struct r600_atom		atom;
+	struct pipe_constant_buffer	cb[PIPE_MAX_CONSTANT_BUFFERS];
+	uint32_t			enabled_mask;
+	uint32_t			dirty_mask;
+};
+
 struct r600_context {
 	struct pipe_context		context;
 	struct blitter_context		*blitter;
 	enum radeon_family		family;
 	enum chip_class			chip_class;
+	boolean				has_vertex_cache;
 	unsigned			r6xx_num_clause_temp_gprs;
 	void				*custom_dsa_flush;
 	struct r600_screen		*screen;
 	struct radeon_winsys		*ws;
 	struct r600_pipe_state		*states[R600_PIPE_NSTATES];
 	struct r600_vertex_element	*vertex_elements;
-	struct r600_pipe_resource_state	fs_resource[PIPE_MAX_ATTRIBS];
 	struct pipe_framebuffer_state	framebuffer;
 	unsigned			cb_target_mask;
+	unsigned			fb_cb_shader_mask;
+	unsigned			cb_shader_mask;
 	unsigned			cb_color_control;
 	unsigned			pa_sc_line_stipple;
 	unsigned			pa_cl_clip_cntl;
@@ -253,10 +260,6 @@ struct r600_context {
 	struct pipe_clip_state		clip;
 	struct r600_pipe_shader 	*ps_shader;
 	struct r600_pipe_shader 	*vs_shader;
-	struct r600_pipe_state		vs_const_buffer;
-	struct r600_pipe_resource_state		vs_const_buffer_resource[R600_MAX_CONST_BUFFERS];
-	struct r600_pipe_state		ps_const_buffer;
-	struct r600_pipe_resource_state		ps_const_buffer_resource[R600_MAX_CONST_BUFFERS];
 	struct r600_pipe_rasterizer	*rasterizer;
 	struct r600_pipe_state          vgt;
 	struct r600_pipe_state          spi;
@@ -274,7 +277,7 @@ struct r600_context {
 	struct r600_textures_info	vs_samplers;
 	struct r600_textures_info	ps_samplers;
 
-	struct u_vbuf			*vbuf_mgr;
+	struct u_upload_mgr	        *uploader;
 	struct util_slab_mempool	pool_transfers;
 	boolean				have_depth_texture, have_depth_fb;
 
@@ -286,9 +289,10 @@ struct r600_context {
 	struct r600_surface_sync_cmd	surface_sync_cmd;
 	struct r600_atom		r6xx_flush_and_inv_cmd;
 	struct r600_db_misc_state	db_misc_state;
+	struct r600_atom		vertex_buffer_state;
+	struct r600_constbuf_state	vs_constbuf_state;
+	struct r600_constbuf_state	ps_constbuf_state;
 
-	/* Below are variables from the old r600_context.
-	 */
 	struct radeon_winsys_cs	*cs;
 
 	struct r600_range	*range;
@@ -322,8 +326,7 @@ struct r600_context {
 	boolean                 predicate_drawing;
 	struct r600_range	ps_resources;
 	struct r600_range	vs_resources;
-	struct r600_range	fs_resources;
-	int			num_ps_resources, num_vs_resources, num_fs_resources;
+	int			num_ps_resources, num_vs_resources;
 
 	unsigned		num_so_targets;
 	struct r600_so_target	*so_targets[PIPE_MAX_SO_BUFFERS];
@@ -338,6 +341,15 @@ struct r600_context {
 	/* With rasterizer discard, there doesn't have to be a pixel shader.
 	 * In that case, we bind this one: */
 	void			*dummy_pixel_shader;
+
+	boolean			dual_src_blend;
+	unsigned color0_format;
+
+	/* Vertex and index buffers. */
+	bool			vertex_buffers_dirty;
+	struct pipe_index_buffer index_buffer;
+	struct pipe_vertex_buffer vertex_buffer[PIPE_MAX_ATTRIBS];
+	unsigned		nr_vertex_buffers;
 };
 
 static INLINE void r600_emit_atom(struct r600_context *rctx, struct r600_atom *atom)
@@ -368,13 +380,6 @@ void evergreen_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader 
 void evergreen_fetch_shader(struct pipe_context *ctx, struct r600_vertex_element *ve);
 void *evergreen_create_db_flush_dsa(struct r600_context *rctx);
 void evergreen_polygon_offset_update(struct r600_context *rctx);
-void evergreen_pipe_init_buffer_resource(struct r600_context *rctx,
-					 struct r600_pipe_resource_state *rstate);
-void evergreen_pipe_mod_buffer_resource(struct pipe_context *ctx,
-					struct r600_pipe_resource_state *rstate,
-					struct r600_resource *rbuffer,
-					unsigned offset, unsigned stride,
-					enum radeon_bo_usage usage);
 boolean evergreen_is_format_supported(struct pipe_screen *screen,
 				      enum pipe_format format,
 				      enum pipe_texture_target target,
@@ -397,9 +402,6 @@ struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 struct pipe_resource *r600_user_buffer_create(struct pipe_screen *screen,
 					      void *ptr, unsigned bytes,
 					      unsigned bind);
-void r600_upload_index_buffer(struct r600_context *rctx,
-			      struct pipe_index_buffer *ib, unsigned count);
-
 
 /* r600_pipe.c */
 void r600_flush(struct pipe_context *ctx, struct pipe_fence_handle **fence,
@@ -432,12 +434,6 @@ void r600_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader *shad
 void r600_fetch_shader(struct pipe_context *ctx, struct r600_vertex_element *ve);
 void *r600_create_db_flush_dsa(struct r600_context *rctx);
 void r600_polygon_offset_update(struct r600_context *rctx);
-void r600_pipe_init_buffer_resource(struct r600_context *rctx,
-				    struct r600_pipe_resource_state *rstate);
-void r600_pipe_mod_buffer_resource(struct r600_pipe_resource_state *rstate,
-				   struct r600_resource *rbuffer,
-				   unsigned offset, unsigned stride,
-				   enum radeon_bo_usage usage);
 void r600_adjust_gprs(struct r600_context *rctx);
 boolean r600_is_format_supported(struct pipe_screen *screen,
 				 enum pipe_format format,
@@ -491,8 +487,9 @@ void r600_bind_ps_shader(struct pipe_context *ctx, void *state);
 void r600_bind_vs_shader(struct pipe_context *ctx, void *state);
 void r600_delete_ps_shader(struct pipe_context *ctx, void *state);
 void r600_delete_vs_shader(struct pipe_context *ctx, void *state);
+void r600_constant_buffers_dirty(struct r600_context *rctx, struct r600_constbuf_state *state);
 void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint index,
-			      struct pipe_resource *buffer);
+			      struct pipe_constant_buffer *cb);
 struct pipe_stream_output_target *
 r600_create_so_target(struct pipe_context *ctx,
 		      struct pipe_resource *buffer,
@@ -694,6 +691,14 @@ static INLINE unsigned r600_pack_float_12p4(float x)
 {
 	return x <= 0    ? 0 :
 	       x >= 4096 ? 0xffff : x * 16;
+}
+
+static INLINE uint64_t r600_resource_va(struct pipe_screen *screen, struct pipe_resource *resource)
+{
+	struct r600_screen *rscreen = (struct r600_screen*)screen;
+	struct r600_resource *rresource = (struct r600_resource*)resource;
+
+	return rscreen->ws->buffer_get_virtual_address(rresource->cs_buf);
 }
 
 #endif

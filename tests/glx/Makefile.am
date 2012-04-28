@@ -1,9 +1,9 @@
-AM_CFLAGS = -I$(top_builddir)/src/glx -I$(top_builddir)/src/mapi \
-	$(X11_CFLAGS) $(GTEST_CFLAGS)
-AM_CXXFLAGS = -I$(top_builddir)/src/glx -I$(top_builddir)/src/mapi \
-	$(X11_CFLAGS) $(GTEST_CFLAGS)
+AM_CPPFLAGS = \
+	-I$(top_builddir)/src/gtest/include \
+	-I$(top_builddir)/src/mapi \
+	-I$(top_builddir)/src/glx \
+	$(X11_CFLAGS)
 
-if HAVE_GTEST
 if HAVE_XCB_GLX_CREATE_CONTEXT
 TESTS = glx_unittest
 check_PROGRAMS = glx_unittest
@@ -13,6 +13,9 @@ glx_unittest_SOURCES =			\
         create_context_unittest.cpp	\
         fake_glx_screen.cpp
 
-glx_unittest_LDADD = $(top_builddir)/src/glx/libglx.a $(GTEST_LIBS) -lgtest_main
-endif
+glx_unittest_LDADD = \
+	$(top_builddir)/src/glx/libglx.la \
+	$(top_builddir)/src/gtest/libgtest.la \
+	-lpthread
+
 endif

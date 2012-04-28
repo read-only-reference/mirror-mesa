@@ -16,7 +16,7 @@ AC_INIT([Mesa],[mesa_version],
     [https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa])
 AC_CONFIG_AUX_DIR([bin])
 AC_CANONICAL_HOST
-AM_INIT_AUTOMAKE([foreign])
+AM_INIT_AUTOMAKE([foreign -Wall])
 
 dnl http://people.gnome.org/~walters/docs/build-api.txt
 dnl We don't support srcdir != builddir.
@@ -38,7 +38,8 @@ dnl Versions for external dependencies
 LIBDRM_REQUIRED=2.4.24
 LIBDRM_RADEON_REQUIRED=2.4.31
 LIBDRM_INTEL_REQUIRED=2.4.32
-LIBDRM_NOUVEAU_REQUIRED=0.6
+LIBDRM_NVVIEUX_REQUIRED=2.4.33
+LIBDRM_NOUVEAU_REQUIRED=2.4.33
 DRI2PROTO_REQUIRED=2.6
 GLPROTO_REQUIRED=1.4.14
 LIBDRM_XORG_REQUIRED=2.4.24
@@ -48,6 +49,7 @@ dnl Check for progs
 AC_PROG_CPP
 AC_PROG_CC
 AC_PROG_CXX
+AM_PROG_CC_C_O
 AC_CHECK_PROGS([MAKE], [gmake make])
 AC_CHECK_PROGS([PYTHON2], [python2 python])
 AC_PROG_SED
@@ -67,6 +69,8 @@ if test ! -f "$srcdir/src/glsl/glcpp/glcpp-parse.y"; then
 fi
 AC_PROG_LEX
 
+AC_PATH_PROG([PERL], [perl])
+
 dnl Our fallback install-sh is a symlink to minstall. Use the existing
 dnl configuration in that case.
 AC_PROG_INSTALL
@@ -81,18 +85,6 @@ solaris*)
     SHELL="$POSIX_SHELL"
     ;;
 esac
-
-AC_PATH_PROG([GTESTCONFIG], [gtest-config])
-if test "x$GTESTCONFIG" != "x"; then
-    GTEST_CFLAGS=`gtest-config --cppflags --cxxflags`
-    GTEST_LIBS=`gtest-config --ldflags --libs`
-    AC_SUBST([GTEST_CFLAGS])
-    AC_SUBST([GTEST_LIBS])
-    HAVE_GTEST=yes
-else
-    HAVE_GTEST=no
-fi
-AM_CONDITIONAL(HAVE_GTEST, test x$HAVE_GTEST = xyes)
 
 dnl clang is mostly GCC-compatible, but its version is much lower,
 dnl so we have to check for it.
@@ -645,6 +637,12 @@ AC_ARG_ENABLE([gallium_gbm],
     [enable_gallium_gbm="$enableval"],
     [enable_gallium_gbm=auto])
 
+AC_ARG_ENABLE([r600-llvm-compiler],
+    [AS_HELP_STRING([--enable-r600-llvm-compilerl],
+        [Enable experimental LLVM backend for graphics shaders @<:default=disable@:>@])],
+    [enable_r600_llvm="$enableval"],
+    [enable_r600_llvm=no])
+
 # Option for Gallium drivers
 GALLIUM_DRIVERS_DEFAULT="r300,r600,svga,swrast"
 
@@ -716,7 +714,7 @@ default_driver="xlib"
 case "$host_os" in
 linux*)
     case "$host_cpu" in
-    i*86|x86_64|powerpc*|sparc*) default_driver="dri";;
+    i*86|x86_64|powerpc*|sparc*|ia64*) default_driver="dri";;
     esac
     ;;
 *freebsd* | dragonfly* | *netbsd*)
@@ -794,7 +792,7 @@ dnl
 dnl this variable will be prepended to SRC_DIRS and is not exported
 CORE_DIRS=""
 
-SRC_DIRS=""
+SRC_DIRS="gtest"
 GLU_DIRS="sgi"
 GALLIUM_DIRS="auxiliary drivers state_trackers"
 GALLIUM_TARGET_DIRS=""
@@ -1284,7 +1282,7 @@ esac
 
 case $DRI_DIRS in
 *nouveau*)
-    PKG_CHECK_MODULES([NOUVEAU], [libdrm_nouveau >= $LIBDRM_NOUVEAU_REQUIRED])
+    PKG_CHECK_MODULES([NOUVEAU], [libdrm_nouveau >= $LIBDRM_NVVIEUX_REQUIRED])
     HAVE_NOUVEAU_DRI=yes;
     ;;
 esac
@@ -1659,9 +1657,12 @@ if test "x$with_gallium_drivers" != x; then
     SRC_DIRS="$SRC_DIRS gallium gallium/winsys gallium/targets"
 fi
 
+AC_SUBST([LLVM_BINDIR])
 AC_SUBST([LLVM_CFLAGS])
+AC_SUBST([LLVM_CXXFLAGS])
 AC_SUBST([LLVM_LIBS])
 AC_SUBST([LLVM_LDFLAGS])
+AC_SUBST([LLVM_INCLUDEDIR])
 AC_SUBST([LLVM_VERSION])
 
 case "x$enable_opengl$enable_gles1$enable_gles2" in
@@ -1807,7 +1808,10 @@ if test "x$enable_gallium_llvm" = xyes; then
 	    LLVM_LIBS="`$LLVM_CONFIG --libs engine bitwriter`"
 	fi
 	LLVM_LDFLAGS=`$LLVM_CONFIG --ldflags`
-	DEFINES="$DEFINES -D__STDC_CONSTANT_MACROS"
+	LLVM_BINDIR=`$LLVM_CONFIG --bindir`
+	LLVM_CXXFLAGS=`$LLVM_CONFIG --cxxflags`
+	LLVM_INCLUDEDIR=`$LLVM_CONFIG --includedir`
+	DEFINES="${DEFINES} -DHAVE_LLVM=`echo $LLVM_VERSION | sed -e 's/\([[0-9]]\)\.\([[0-9]]\)/0x0\10\2/g'`"
 	MESA_LLVM=1
     else
 	MESA_LLVM=0
@@ -1815,6 +1819,14 @@ if test "x$enable_gallium_llvm" = xyes; then
 else
     MESA_LLVM=0
 fi
+
+dnl Directory for XVMC libs
+AC_ARG_WITH([xvmc-libdir],
+    [AS_HELP_STRING([--with-xvmc-libdir=DIR],
+        [directory for the XVMC libraries @<:@default=${libdir}@:>@])],
+    [XVMC_LIB_INSTALL_DIR="$withval"],
+    [XVMC_LIB_INSTALL_DIR='${libdir}'])
+AC_SUBST([XVMC_LIB_INSTALL_DIR])
 
 dnl Directory for VDPAU libs
 AC_ARG_WITH([vdpau-libdir],
@@ -1900,11 +1912,26 @@ if test "x$with_gallium_drivers" != x; then
         xr600)
             PKG_CHECK_MODULES([RADEON], [libdrm_radeon >= $LIBDRM_RADEON_REQUIRED])
             GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS r600"
+            if test "x$enable_r600_llvm" = xyes; then
+                if test "x$LLVM_VERSION" != "x3.1"; then
+                    AC_MSG_ERROR([LLVM 3.1 is required for the r600 llvm compiler.])
+                fi
+                NEED_RADEON_GALLIUM=yes;
+                USE_R600_LLVM_COMPILER=yes;
+            fi
             gallium_check_st "radeon/drm" "dri-r600" "xorg-r600" "" "xvmc-r600" "vdpau-r600" "va-r600"
+            ;;
+        xradeonsi)
+            GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS radeonsi"
+            if test "x$LLVM_VERSION" != "x3.1"; then
+                AC_MSG_ERROR([LLVM 3.1 is required to build the radeonsi driver.])
+            fi
+	    NEED_RADEON_GALLIUM=yes;
+            gallium_check_st "radeon/drm" "dri-radeonsi" "xorg-radeonsi"
             ;;
         xnouveau)
             PKG_CHECK_MODULES([NOUVEAU], [libdrm_nouveau >= $LIBDRM_NOUVEAU_REQUIRED])
-            GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS nouveau nvfx nv50 nvc0"
+            GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS nouveau nv30 nv50 nvc0"
             gallium_check_st "nouveau/drm" "dri-nouveau" "xorg-nouveau" "" "xvmc-nouveau" "vdpau-nouveau"
             ;;
         xswrast)
@@ -1961,6 +1988,8 @@ done
 AM_CONDITIONAL(HAVE_GALAHAD_GALLIUM, test x$HAVE_GALAHAD_GALLIUM = xyes)
 AM_CONDITIONAL(HAVE_IDENTITY_GALLIUM, test x$HAVE_IDENTITY_GALLIUM = xyes)
 AM_CONDITIONAL(HAVE_NOOP_GALLIUM, test x$HAVE_NOOP_GALLIUM = xyes)
+AM_CONDITIONAL(NEED_RADEON_GALLIUM, test x$NEED_RADEON_GALLIUM = xyes)
+AM_CONDITIONAL(USE_R600_LLVM_COMPILER, test x$USE_R600_LLVM_COMPILER = xyes)
 AC_SUBST([GALLIUM_MAKE_DIRS])
 
 dnl prepend CORE_DIRS to SRC_DIRS
@@ -1978,6 +2007,7 @@ dnl Substitute the config
 AC_CONFIG_FILES([configs/autoconf
 		src/gallium/drivers/Makefile
 		src/gallium/drivers/r300/Makefile
+		src/gallium/drivers/r600/Makefile
 		src/gbm/Makefile
 		src/gbm/main/gbm.pc
 		src/egl/drivers/Makefile
@@ -1989,8 +2019,10 @@ AC_CONFIG_FILES([configs/autoconf
 		src/egl/wayland/wayland-egl/Makefile
 		src/egl/wayland/wayland-egl/wayland-egl.pc
 		src/egl/wayland/wayland-drm/Makefile
+		src/glsl/tests/Makefile
 		src/glx/Makefile
 		src/mapi/shared-glapi/Makefile
+		src/gtest/Makefile
 		src/mesa/drivers/dri/dri.pc
 		src/mesa/drivers/dri/Makefile
 		src/mesa/drivers/dri/common/Makefile

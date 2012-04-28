@@ -30,7 +30,6 @@
 #include "pipe/p_context.h"
 #include "util/u_inlines.h"
 #include "util/u_transfer.h"
-#include "util/u_vbuf.h"
 
 #include "r300_defines.h"
 #include "r300_screen.h"
@@ -383,7 +382,7 @@ struct r300_texture_desc {
 
 struct r300_resource
 {
-    struct u_vbuf_resource b;
+    struct u_resource b;
 
     /* Winsys buffer backing this resource. */
     struct pb_buffer *buf;
@@ -405,8 +404,6 @@ struct r300_vertex_element_state {
     unsigned count;
     struct pipe_vertex_element velem[PIPE_MAX_ATTRIBS];
     unsigned format_size[PIPE_MAX_ATTRIBS];
-
-    struct u_vbuf_elements *vmgr_elements;
 
     /* The size of the vertex, in dwords. */
     unsigned vertex_size_dwords;
@@ -470,7 +467,7 @@ struct r300_context {
 
     /* When no vertex buffer is set, this one is used instead to prevent
      * hardlocks. */
-    struct pipe_resource *dummy_vb;
+    struct pipe_vertex_buffer dummy_vb;
 
     /* The currently active query. */
     struct r300_query *query_current;
@@ -578,7 +575,10 @@ struct r300_context {
 
     void *dsa_decompress_zmask;
 
-    struct u_vbuf *vbuf_mgr;
+    struct pipe_index_buffer index_buffer;
+    struct pipe_vertex_buffer vertex_buffer[PIPE_MAX_ATTRIBS];
+    unsigned nr_vertex_buffers;
+    struct u_upload_mgr *uploader;
 
     struct util_slab_mempool pool_transfers;
 
@@ -692,7 +692,8 @@ void r300_stop_query(struct r300_context *r300);
 
 /* r300_render_translate.c */
 void r300_translate_index_buffer(struct r300_context *r300,
-                                 struct pipe_resource **index_buffer,
+                                 struct pipe_index_buffer *ib,
+                                 struct pipe_resource **out_index_buffer,
                                  unsigned *index_size, unsigned index_offset,
                                  unsigned *start, unsigned count);
 
@@ -702,6 +703,12 @@ void r300_plug_in_stencil_ref_fallback(struct r300_context *r300);
 /* r300_render.c */
 void r300_draw_flush_vbuf(struct r300_context *r300);
 void r500_emit_index_bias(struct r300_context *r300, int index_bias);
+void r300_blitter_draw_rectangle(struct blitter_context *blitter,
+                                 unsigned x1, unsigned y1,
+                                 unsigned x2, unsigned y2,
+                                 float depth,
+                                 enum blitter_attrib_type type,
+                                 const union pipe_color_union *attrib);
 
 /* r300_state.c */
 enum r300_fb_state_change {

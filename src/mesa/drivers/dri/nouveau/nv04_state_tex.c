@@ -59,16 +59,10 @@ get_tex_format(struct gl_texture_image *ti)
 void
 nv04_emit_tex_obj(struct gl_context *ctx, int emit)
 {
+	struct nv04_context *nv04 = to_nv04_context(ctx);
 	const int i = emit - NOUVEAU_STATE_TEX_OBJ0;
-	struct nouveau_channel *chan = context_chan(ctx);
-	struct nouveau_grobj *fahrenheit = nv04_context_engine(ctx);
-	struct nouveau_bo_context *bctx = context_bctx_i(ctx, TEXTURE, i);
-	const int bo_flags = NOUVEAU_BO_RD | NOUVEAU_BO_GART | NOUVEAU_BO_VRAM;
 	struct nouveau_surface *s;
 	uint32_t format = 0xa0, filter = 0x1010;
-
-	if (i && !nv04_mtex_engine(fahrenheit))
-		return;
 
 	if (ctx->Texture.Unit[i]._ReallyEnabled) {
 		struct gl_texture_object *t = ctx->Texture.Unit[i]._Current;
@@ -114,37 +108,7 @@ nv04_emit_tex_obj(struct gl_context *ctx, int emit)
 			NV04_TEXTURED_TRIANGLE_FILTER_MAGNIFY_NEAREST;
 	}
 
-	if (nv04_mtex_engine(fahrenheit)) {
-		nouveau_bo_markl(bctx, fahrenheit,
-				 NV04_MULTITEX_TRIANGLE_OFFSET(i),
-				 s->bo, s->offset, bo_flags);
-
-		nouveau_bo_mark(bctx, fahrenheit,
-				NV04_MULTITEX_TRIANGLE_FORMAT(i),
-				s->bo, format, 0,
-				NV04_MULTITEX_TRIANGLE_FORMAT_DMA_A,
-				NV04_MULTITEX_TRIANGLE_FORMAT_DMA_B,
-				bo_flags | NOUVEAU_BO_OR);
-
-		BEGIN_RING(chan, fahrenheit, NV04_MULTITEX_TRIANGLE_FILTER(i), 1);
-		OUT_RING(chan, filter);
-
-	} else {
-		nouveau_bo_markl(bctx, fahrenheit,
-				 NV04_TEXTURED_TRIANGLE_OFFSET,
-				 s->bo, s->offset, bo_flags);
-
-		nouveau_bo_mark(bctx, fahrenheit,
-				NV04_TEXTURED_TRIANGLE_FORMAT,
-				s->bo, format, 0,
-				NV04_TEXTURED_TRIANGLE_FORMAT_DMA_A,
-				NV04_TEXTURED_TRIANGLE_FORMAT_DMA_B,
-				bo_flags | NOUVEAU_BO_OR);
-
-		BEGIN_RING(chan, fahrenheit, NV04_TEXTURED_TRIANGLE_COLORKEY, 1);
-		OUT_RING(chan, 0);
-
-		BEGIN_RING(chan, fahrenheit, NV04_TEXTURED_TRIANGLE_FILTER, 1);
-		OUT_RING(chan, filter);
-	}
+	nv04->texture[i] = s;
+	nv04->format[i] = format;
+	nv04->filter[i] = filter;
 }

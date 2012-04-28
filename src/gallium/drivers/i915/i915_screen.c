@@ -180,6 +180,9 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
    case PIPE_CAP_TGSI_INSTANCEID:
    case PIPE_CAP_VERTEX_COLOR_CLAMPED:
+   case PIPE_CAP_USER_VERTEX_BUFFERS:
+   case PIPE_CAP_USER_INDEX_BUFFERS:
+   case PIPE_CAP_USER_CONSTANT_BUFFERS:
       return 1;
 
    /* Unsupported features (boolean caps). */
@@ -204,6 +207,9 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
    case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
       return 0;
+
+   case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
+      return 16;
 
    /* Features we can lie about (boolean caps). */
    case PIPE_CAP_OCCLUSION_QUERY:
@@ -336,8 +342,10 @@ i915_is_format_supported(struct pipe_screen *screen,
       list = depth_supported;
    else if (tex_usage & PIPE_BIND_RENDER_TARGET)
       list = render_supported;
-   else
+   else if (tex_usage & PIPE_BIND_SAMPLER_VIEW)
       list = tex_supported;
+   else
+      return TRUE; /* PIPE_BIND_{VERTEX,INDEX}_BUFFER */
 
    for (i = 0; list[i] != PIPE_FORMAT_NONE; i++) {
       if (list[i] == format)

@@ -26,7 +26,7 @@ The integer capabilities:
   normalized coordinates, and mipmaps.
 * ``PIPE_CAP_TWO_SIDED_STENCIL``: Whether the stencil test can also affect back-facing
   polygons.
-* ``PIPE_CAP_DUAL_SOURCE_BLEND``: Whether dual-source blend factors are supported. See
+* ``PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS``: How many dual-source blend RTs are support.
   :ref:`Blend` for more information.
 * ``PIPE_CAP_ANISOTROPIC_FILTER``: Whether textures can be filtered anisotropically.
 * ``PIPE_CAP_POINT_SPRITE``: Whether point sprites are available.
@@ -98,6 +98,26 @@ The integer capabilities:
   equivalent to a specific GLSL version. E.g. for GLSL 1.3, report 130.
 * ``PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION``: Whether quads adhere to
   the flatshade_first setting in ``pipe_rasterizer_state``.
+* ``PIPE_CAP_USER_VERTEX_BUFFERS``: Whether the driver supports user vertex
+  buffers.  If not, the state tracker must upload all data which is not in hw
+  resources.
+* ``PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY``: This CAP describes a hw
+  limitation.  If true, pipe_vertex_buffer::buffer_offset must always be aligned
+  to 4.  If false, there are no restrictions on the offset.
+* ``PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY``: This CAP describes a hw
+  limitation.  If true, pipe_vertex_buffer::stride must always be aligned to 4.
+  If false, there are no restrictions on the stride.
+* ``PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY``: This CAP describes
+  a hw limitation.  If true, pipe_vertex_element::src_offset must always be
+  aligned to 4.  If false, there are no restrictions on src_offset.
+* ``PIPE_CAP_USER_INDEX_BUFFERS``: Whether user index buffers are supported.
+  If not, the state tracker must upload all indices which are not in hw
+  resources.
+* ``PIPE_CAP_USER_CONSTANT_BUFFERS``: Whether user constant buffers are
+  supported. If not, the state tracker must upload constants which are not in hw
+  resources.
+* ``PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT``: Describes the required
+  alignment of pipe_constant_buffer::buffer_offset.
 
 
 

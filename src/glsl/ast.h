@@ -206,7 +206,7 @@ public:
       subexpressions[0] = NULL;
       subexpressions[1] = NULL;
       subexpressions[2] = NULL;
-      primary_expression.identifier = (char *) identifier;
+      primary_expression.identifier = identifier;
       this->non_lvalue_description = NULL;
    }
 
@@ -222,7 +222,7 @@ public:
    ast_expression *subexpressions[3];
 
    union {
-      char *identifier;
+      const char *identifier;
       int int_constant;
       float float_constant;
       unsigned uint_constant;
@@ -317,11 +317,11 @@ public:
 
 class ast_declaration : public ast_node {
 public:
-   ast_declaration(char *identifier, int is_array, ast_expression *array_size,
+   ast_declaration(const char *identifier, int is_array, ast_expression *array_size,
 		   ast_expression *initializer);
    virtual void print(void) const;
 
-   char *identifier;
+   const char *identifier;
    
    int is_array;
    ast_expression *array_size;
@@ -363,6 +363,11 @@ struct ast_type_qualifier {
 	  * qualifier is used.
 	  */
 	 unsigned explicit_location:1;
+	 /**
+	  * Flag set if GL_ARB_explicit_attrib_location "index" layout
+	  * qualifier is used.
+	  */
+	 unsigned explicit_index:1;
 
          /** \name Layout qualifiers for GL_AMD_conservative_depth */
          /** \{ */
@@ -386,6 +391,13 @@ struct ast_type_qualifier {
     * This field is only valid if \c explicit_location is set.
     */
    int location;
+   /**
+    * Index specified via GL_ARB_explicit_attrib_location layout
+    *
+    * \note
+    * This field is only valid if \c explicit_index is set.
+    */
+   int index;
 
    /**
     * Return true if and only if an interpolation qualifier is present.
@@ -407,83 +419,23 @@ struct ast_type_qualifier {
 
 class ast_struct_specifier : public ast_node {
 public:
-   ast_struct_specifier(char *identifier, ast_node *declarator_list);
+   ast_struct_specifier(const char *identifier, ast_node *declarator_list);
    virtual void print(void) const;
 
    virtual ir_rvalue *hir(exec_list *instructions,
 			  struct _mesa_glsl_parse_state *state);
 
-   char *name;
+   const char *name;
    exec_list declarations;
 };
 
 
-enum ast_types {
-   ast_void,
-   ast_float,
-   ast_int,
-   ast_uint,
-   ast_bool,
-   ast_vec2,
-   ast_vec3,
-   ast_vec4,
-   ast_bvec2,
-   ast_bvec3,
-   ast_bvec4,
-   ast_ivec2,
-   ast_ivec3,
-   ast_ivec4,
-   ast_uvec2,
-   ast_uvec3,
-   ast_uvec4,
-   ast_mat2,
-   ast_mat2x3,
-   ast_mat2x4,
-   ast_mat3x2,
-   ast_mat3,
-   ast_mat3x4,
-   ast_mat4x2,
-   ast_mat4x3,
-   ast_mat4,
-   ast_sampler1d,
-   ast_sampler2d,
-   ast_sampler2drect,
-   ast_sampler3d,
-   ast_samplercube,
-   ast_samplerexternaloes,
-   ast_sampler1dshadow,
-   ast_sampler2dshadow,
-   ast_sampler2drectshadow,
-   ast_samplercubeshadow,
-   ast_sampler1darray,
-   ast_sampler2darray,
-   ast_sampler1darrayshadow,
-   ast_sampler2darrayshadow,
-   ast_isampler1d,
-   ast_isampler2d,
-   ast_isampler3d,
-   ast_isamplercube,
-   ast_isampler1darray,
-   ast_isampler2darray,
-   ast_usampler1d,
-   ast_usampler2d,
-   ast_usampler3d,
-   ast_usamplercube,
-   ast_usampler1darray,
-   ast_usampler2darray,
-
-   ast_struct,
-   ast_type_name
-};
-
 
 class ast_type_specifier : public ast_node {
 public:
-   ast_type_specifier(int specifier);
-
    /** Construct a type specifier from a type name */
    ast_type_specifier(const char *name) 
-      : type_specifier(ast_type_name), type_name(name), structure(NULL),
+      : type_name(name), structure(NULL),
 	is_array(false), array_size(NULL), precision(ast_precision_none),
 	is_precision_statement(false)
    {
@@ -492,7 +444,7 @@ public:
 
    /** Construct a type specifier from a structure definition */
    ast_type_specifier(ast_struct_specifier *s)
-      : type_specifier(ast_struct), type_name(s->name), structure(s),
+      : type_name(s->name), structure(s),
 	is_array(false), array_size(NULL), precision(ast_precision_none),
 	is_precision_statement(false)
    {
@@ -506,8 +458,6 @@ public:
    virtual void print(void) const;
 
    ir_rvalue *hir(exec_list *, struct _mesa_glsl_parse_state *);
-
-   enum ast_types type_specifier;
 
    const char *type_name;
    ast_struct_specifier *structure;
@@ -568,7 +518,7 @@ public:
 			  struct _mesa_glsl_parse_state *state);
 
    ast_fully_specified_type *type;
-   char *identifier;
+   const char *identifier;
    int is_array;
    ast_expression *array_size;
 
@@ -599,7 +549,7 @@ public:
 			  struct _mesa_glsl_parse_state *state);
 
    ast_fully_specified_type *return_type;
-   char *identifier;
+   const char *identifier;
 
    exec_list parameters;
 

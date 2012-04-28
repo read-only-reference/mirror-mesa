@@ -63,6 +63,7 @@
 #include "st_program.h"
 #include "pipe/p_context.h"
 #include "util/u_inlines.h"
+#include "util/u_upload_mgr.h"
 #include "cso_cache/cso_context.h"
 
 
@@ -110,9 +111,12 @@ st_get_msaa(void)
 }
 
 
+
+
 static struct st_context *
 st_create_context_priv( struct gl_context *ctx, struct pipe_context *pipe )
 {
+   struct pipe_screen *screen = pipe->screen;
    uint i;
    struct st_context *st = ST_CALLOC_STRUCT( st_context );
    
@@ -129,6 +133,21 @@ st_create_context_priv( struct gl_context *ctx, struct pipe_context *pipe )
 
    st->dirty.mesa = ~0;
    st->dirty.st = ~0;
+
+   st->uploader = u_upload_create(st->pipe, 65536, 4, PIPE_BIND_VERTEX_BUFFER);
+
+   if (!screen->get_param(screen, PIPE_CAP_USER_INDEX_BUFFERS)) {
+      st->indexbuf_uploader = u_upload_create(st->pipe, 128 * 1024, 4,
+                                              PIPE_BIND_INDEX_BUFFER);
+   }
+
+   if (!screen->get_param(screen, PIPE_CAP_USER_CONSTANT_BUFFERS)) {
+      unsigned alignment =
+         screen->get_param(screen, PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT);
+
+      st->constbuf_uploader = u_upload_create(pipe, 128 * 1024, alignment,
+                                              PIPE_BIND_CONSTANT_BUFFER);
+   }
 
    st->cso_context = cso_create_context(pipe);
 
@@ -221,11 +240,6 @@ static void st_destroy_context_priv( struct st_context *st )
    st_destroy_drawpix(st);
    st_destroy_drawtex(st);
 
-   /* Unreference any user vertex buffers. */
-   for (i = 0; i < st->num_user_attribs; i++) {
-      pipe_resource_reference(&st->user_attrib[i].buffer, NULL);
-   }
-
    for (i = 0; i < Elements(st->state.sampler_views); i++) {
       pipe_sampler_view_reference(&st->state.sampler_views[i], NULL);
    }
@@ -235,6 +249,13 @@ static void st_destroy_context_priv( struct st_context *st )
       st->default_texture = NULL;
    }
 
+   u_upload_destroy(st->uploader);
+   if (st->indexbuf_uploader) {
+      u_upload_destroy(st->indexbuf_uploader);
+   }
+   if (st->constbuf_uploader) {
+      u_upload_destroy(st->constbuf_uploader);
+   }
    free( st );
 }
 
@@ -272,7 +293,10 @@ void st_destroy_context( struct st_context *st )
 
    _mesa_free_context_data(ctx);
 
+   /* This will free the st_context too, so 'st' must not be accessed
+    * afterwards. */
    st_destroy_context_priv(st);
+   st = NULL;
 
    cso_destroy_context(cso);
 

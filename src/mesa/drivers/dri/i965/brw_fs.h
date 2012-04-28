@@ -25,6 +25,8 @@
  *
  */
 
+#pragma once
+
 #include "brw_shader.h"
 
 extern "C" {
@@ -487,6 +489,9 @@ public:
    }
 
    int type_size(const struct glsl_type *type);
+   fs_inst *get_instruction_generating_reg(fs_inst *start,
+					   fs_inst *end,
+					   fs_reg reg);
 
    bool run();
    void setup_paramvalues_refs();
@@ -646,6 +651,8 @@ public:
 
    int force_uncompressed_stack;
    int force_sechalf_stack;
+
+   class fs_bblock *bblock;
 };
 
 bool brw_do_channel_expressions(struct exec_list *instructions);

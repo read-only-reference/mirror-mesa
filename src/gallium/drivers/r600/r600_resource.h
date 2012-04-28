@@ -94,10 +94,4 @@ void* r600_texture_transfer_map(struct pipe_context *ctx,
 void r600_texture_transfer_unmap(struct pipe_context *ctx,
 				 struct pipe_transfer* transfer);
 
-struct r600_context;
-
-void r600_upload_const_buffer(struct r600_context *rctx, struct r600_resource **rbuffer, uint32_t *offset);
-
-uint64_t r600_resource_va(struct pipe_screen *screen, struct pipe_resource *resource);
-
 #endif

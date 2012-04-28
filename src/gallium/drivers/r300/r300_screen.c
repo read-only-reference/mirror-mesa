@@ -103,7 +103,15 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
         case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
         case PIPE_CAP_VERTEX_COLOR_CLAMPED:
+        case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
+        case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
+        case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
+        case PIPE_CAP_USER_INDEX_BUFFERS:
+        case PIPE_CAP_USER_CONSTANT_BUFFERS:
             return 1;
+
+        case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
+            return 16;
 
         case PIPE_CAP_GLSL_FEATURE_LEVEL:
             return 120;
@@ -120,7 +128,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
         /* Unsupported features. */
         case PIPE_CAP_TIMER_QUERY:
-        case PIPE_CAP_DUAL_SOURCE_BLEND:
+        case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
         case PIPE_CAP_INDEP_BLEND_ENABLE:
         case PIPE_CAP_INDEP_BLEND_FUNC:
         case PIPE_CAP_DEPTH_CLIP_DISABLE:
@@ -141,6 +149,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
         case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
         case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
+        case PIPE_CAP_USER_VERTEX_BUFFERS:
             return 0;
 
         /* SWTCL-only features. */
@@ -217,6 +226,7 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
         switch (param)
         {
         case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+        case PIPE_SHADER_CAP_SUBROUTINES:
             return 0;
         default:;
         }
@@ -356,10 +366,6 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
                             format == PIPE_FORMAT_R16G16_FLOAT ||
                             format == PIPE_FORMAT_R16G16B16_FLOAT ||
                             format == PIPE_FORMAT_R16G16B16A16_FLOAT;
-    boolean is_fixed = format == PIPE_FORMAT_R32_FIXED ||
-                       format == PIPE_FORMAT_R32G32_FIXED ||
-                       format == PIPE_FORMAT_R32G32B32_FIXED ||
-                       format == PIPE_FORMAT_R32G32B32A32_FIXED;
 
     if (!util_format_is_supported(format, usage))
        return FALSE;
@@ -423,8 +429,7 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
     if (usage & PIPE_BIND_VERTEX_BUFFER &&
         /* Half float is supported on >= R400. */
         (is_r400 || is_r500 || !is_half_float) &&
-        /* We have a fallback for FIXED. */
-        (is_fixed || r300_translate_vertex_data_type(format) != R300_INVALID_FORMAT)) {
+        r300_translate_vertex_data_type(format) != R300_INVALID_FORMAT) {
         retval |= PIPE_BIND_VERTEX_BUFFER;
     }
 

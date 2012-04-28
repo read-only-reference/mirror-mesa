@@ -26,6 +26,7 @@ LIBGLSL_CXX_FILES := \
 	glsl_symbol_table.cpp \
 	hir_field_selection.cpp \
 	ir_basic_block.cpp \
+	ir_builder.cpp \
 	ir_clone.cpp \
 	ir_constant_expression.cpp \
 	ir.cpp \
@@ -62,6 +63,7 @@ LIBGLSL_CXX_FILES := \
 	lower_vector.cpp \
 	lower_output_reads.cpp \
 	opt_algebraic.cpp \
+	opt_array_splitting.cpp \
 	opt_constant_folding.cpp \
 	opt_constant_propagation.cpp \
 	opt_constant_variable.cpp \

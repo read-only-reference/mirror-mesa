@@ -53,7 +53,7 @@ i915_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
 {
    struct i915_context *i915 = i915_context(pipe);
    struct draw_context *draw = i915->draw;
-   void *mapped_indices = NULL;
+   const void *mapped_indices = NULL;
 
 
    /*
@@ -67,8 +67,11 @@ i915_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
    /*
     * Map index buffer, if present
     */
-   if (info->indexed && i915->index_buffer.buffer)
-      mapped_indices = i915_buffer(i915->index_buffer.buffer)->data;
+   if (info->indexed) {
+      mapped_indices = i915->index_buffer.user_buffer;
+      if (!mapped_indices)
+         mapped_indices = i915_buffer(i915->index_buffer.buffer)->data;
+   }
    draw_set_mapped_index_buffer(draw, mapped_indices);
 
    if (i915->constants[PIPE_SHADER_VERTEX])
@@ -184,7 +187,6 @@ i915_create_context(struct pipe_screen *screen, void *priv)
 
    draw_install_aaline_stage(i915->draw, &i915->base);
    draw_install_aapoint_stage(i915->draw, &i915->base);
-   draw_install_pstipple_stage(i915->draw, &i915->base);
    draw_enable_point_sprites(i915->draw, TRUE);
 
    /* augmented draw pipeline clobbers state functions */

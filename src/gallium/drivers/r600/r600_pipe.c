@@ -28,6 +28,7 @@
 #include "util/u_blitter.h"
 #include "util/u_format_s3tc.h"
 #include "util/u_simple_shaders.h"
+#include "util/u_upload_mgr.h"
 #include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
 #include "os/os_time.h"
@@ -51,7 +52,7 @@ static struct r600_fence *r600_create_fence(struct r600_context *rctx)
 			R600_ERR("r600: failed to create bo for fence objects\n");
 			goto out;
 		}
-		rscreen->fences.data = rctx->ws->buffer_map(rscreen->fences.bo->buf,
+		rscreen->fences.data = rctx->ws->buffer_map(rscreen->fences.bo->cs_buf,
 							   rctx->cs,
 							   PIPE_TRANSFER_READ_WRITE);
 	}
@@ -191,8 +192,8 @@ static void r600_destroy_context(struct pipe_context *context)
 		free(rctx->states[i]);
 	}
 
-	if (rctx->vbuf_mgr) {
-		u_vbuf_destroy(rctx->vbuf_mgr);
+	if (rctx->uploader) {
+		u_upload_destroy(rctx->uploader);
 	}
 	util_slab_destroy(&rctx->pool_transfers);
 
@@ -263,6 +264,11 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		if (r600_context_init(rctx))
 			goto fail;
 		rctx->custom_dsa_flush = r600_create_db_flush_dsa(rctx);
+		rctx->has_vertex_cache = !(rctx->family == CHIP_RV610 ||
+					   rctx->family == CHIP_RV620 ||
+					   rctx->family == CHIP_RS780 ||
+					   rctx->family == CHIP_RS880 ||
+					   rctx->family == CHIP_RV710);
 		break;
 	case EVERGREEN:
 	case CAYMAN:
@@ -271,6 +277,13 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		if (evergreen_context_init(rctx))
 			goto fail;
 		rctx->custom_dsa_flush = evergreen_create_db_flush_dsa(rctx);
+		rctx->has_vertex_cache = !(rctx->family == CHIP_CEDAR ||
+					   rctx->family == CHIP_PALM ||
+					   rctx->family == CHIP_SUMO ||
+					   rctx->family == CHIP_SUMO2 ||
+					   rctx->family == CHIP_CAICOS ||
+					   rctx->family == CHIP_CAYMAN ||
+					   rctx->family == CHIP_ARUBA);
 		break;
 	default:
 		R600_ERR("Unsupported chip class %d.\n", rctx->chip_class);
@@ -281,14 +294,11 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	rctx->ws->cs_set_flush_callback(rctx->cs, r600_flush_from_winsys, rctx);
 	r600_emit_atom(rctx, &rctx->start_cs_cmd.atom);
 
-	rctx->vbuf_mgr = u_vbuf_create(&rctx->context, 1024 * 1024, 256,
-					   PIPE_BIND_VERTEX_BUFFER |
-					   PIPE_BIND_INDEX_BUFFER |
-					   PIPE_BIND_CONSTANT_BUFFER,
-					   U_VERTEX_FETCH_DWORD_ALIGNED);
-	if (!rctx->vbuf_mgr)
-		goto fail;
-	rctx->vbuf_mgr->caps.format_fixed32 = 0;
+        rctx->uploader = u_upload_create(&rctx->context, 1024 * 1024, 256,
+                                         PIPE_BIND_INDEX_BUFFER |
+                                         PIPE_BIND_CONSTANT_BUFFER);
+        if (!rctx->uploader)
+                goto fail;
 
 	rctx->blitter = util_blitter_create(&rctx->context);
 	if (rctx->blitter == NULL)
@@ -368,7 +378,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	/* Supported features (boolean caps). */
 	case PIPE_CAP_NPOT_TEXTURES:
 	case PIPE_CAP_TWO_SIDED_STENCIL:
-	case PIPE_CAP_DUAL_SOURCE_BLEND:
 	case PIPE_CAP_ANISOTROPIC_FILTER:
 	case PIPE_CAP_POINT_SPRITE:
 	case PIPE_CAP_OCCLUSION_QUERY:
@@ -391,10 +400,18 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
 	case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
 	case PIPE_CAP_TGSI_INSTANCEID:
+	case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
+	case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
+	case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
+	case PIPE_CAP_USER_INDEX_BUFFERS:
+	case PIPE_CAP_USER_CONSTANT_BUFFERS:
 		return 1;
 
+	case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
+		return 256;
+
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
-		return debug_get_bool_option("R600_GLSL130", FALSE) ? 130 : 120;
+		return rscreen->glsl_feature_level;
 
 	/* Supported except the original R600. */
 	case PIPE_CAP_INDEP_BLEND_ENABLE:
@@ -414,6 +431,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
+	case PIPE_CAP_USER_VERTEX_BUFFERS:
 		return 0;
 
 	/* Stream output. */
@@ -453,6 +471,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_MAX_TEXEL_OFFSET:
 		return 7;
+
+	case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
+		return (family < CHIP_RV770) ?  1 : 0;
 	}
 	return 0;
 }
@@ -487,6 +508,7 @@ static float r600_get_paramf(struct pipe_screen* pscreen,
 
 static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enum pipe_shader_cap param)
 {
+	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
 	switch(shader)
 	{
 	case PIPE_SHADER_FRAGMENT:
@@ -535,7 +557,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_SUBROUTINES:
 		return 0;
 	case PIPE_SHADER_CAP_INTEGERS:
-		return 0;
+		return rscreen->glsl_feature_level >= 130;
 	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
 		return 16;
 	}
@@ -582,7 +604,7 @@ static void r600_destroy_screen(struct pipe_screen* pscreen)
 			FREE(entry);
 		}
 
-		rscreen->ws->buffer_unmap(rscreen->fences.bo->buf);
+		rscreen->ws->buffer_unmap(rscreen->fences.bo->cs_buf);
 		pipe_resource_reference((struct pipe_resource**)&rscreen->fences.bo, NULL);
 	}
 	pipe_mutex_destroy(rscreen->fences.mutex);
@@ -789,6 +811,7 @@ static unsigned radeon_family_from_device(unsigned device)
 struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 {
 	struct r600_screen *rscreen = CALLOC_STRUCT(r600_screen);
+
 	if (rscreen == NULL) {
 		return NULL;
 	}
@@ -861,6 +884,7 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 	pipe_mutex_init(rscreen->fences.mutex);
 
 	rscreen->use_surface_alloc = debug_get_bool_option("R600_SURF", TRUE);
+	rscreen->glsl_feature_level = debug_get_bool_option("R600_GLSL130", TRUE) ? 130 : 120;
 
 	return &rscreen->screen;
 }

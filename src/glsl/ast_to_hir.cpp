@@ -57,6 +57,10 @@
 #include "program/hash_table.h"
 #include "ir.h"
 
+static void
+detect_conflicting_assignments(struct _mesa_glsl_parse_state *state,
+			       exec_list *instructions);
+
 void
 _mesa_ast_to_hir(exec_list *instructions, struct _mesa_glsl_parse_state *state)
 {
@@ -87,6 +91,7 @@ _mesa_ast_to_hir(exec_list *instructions, struct _mesa_glsl_parse_state *state)
       ast->hir(instructions, state);
 
    detect_recursion_unlinked(state, instructions);
+   detect_conflicting_assignments(state, instructions);
 
    state->toplevel_ir = NULL;
 }
@@ -671,6 +676,10 @@ do_assignment(exec_list *instructions, struct _mesa_glsl_parse_state *state,
 {
    void *ctx = state;
    bool error_emitted = (lhs->type->is_error() || rhs->type->is_error());
+
+   ir_variable *lhs_var = lhs->variable_referenced();
+   if (lhs_var)
+      lhs_var->assigned = true;
 
    if (!error_emitted) {
       if (non_lvalue_description != NULL) {
@@ -1699,7 +1708,7 @@ ast_expression::hir(exec_list *instructions,
 	 _mesa_glsl_error(& loc, state, "`%s' undeclared",
 			  this->primary_expression.identifier);
 
-	 result = ir_call::get_error_instruction(ctx);
+	 result = ir_rvalue::error_value(ctx);
 	 error_emitted = true;
       }
       break;
@@ -2092,14 +2101,21 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
 	 } else {
 	    var->location = qual->location;
 	 }
+	 if (qual->flags.q.explicit_index) {
+	    var->explicit_index = true;
+	    var->index = qual->index;
+	 }
       }
+   } else if (qual->flags.q.explicit_index) {
+	 _mesa_glsl_error(loc, state,
+			  "explicit index requires explicit location\n");
    }
 
    /* Does the declaration use the 'layout' keyword?
     */
    const bool uses_layout = qual->flags.q.pixel_center_integer
       || qual->flags.q.origin_upper_left
-      || qual->flags.q.explicit_location;
+      || qual->flags.q.explicit_location; /* no need for index since it relies on location */
 
    /* Does the declaration use the deprecated 'attribute' or 'varying'
     * keywords?
@@ -3904,8 +3920,8 @@ ast_type_specifier::hir(exec_list *instructions,
                           "arrays");
          return NULL;
       }
-      if (this->type_specifier != ast_float
-          && this->type_specifier != ast_int) {
+      if (strcmp(this->type_name, "float") != 0 &&
+	  strcmp(this->type_name, "int") != 0) {
          _mesa_glsl_error(&loc, state,
                           "default precision statements apply only to types "
                           "float and int");
@@ -4005,4 +4021,65 @@ ast_struct_specifier::hir(exec_list *instructions,
    /* Structure type definitions do not have r-values.
     */
    return NULL;
+}
+
+static void
+detect_conflicting_assignments(struct _mesa_glsl_parse_state *state,
+			       exec_list *instructions)
+{
+   bool gl_FragColor_assigned = false;
+   bool gl_FragData_assigned = false;
+   bool user_defined_fs_output_assigned = false;
+   ir_variable *user_defined_fs_output = NULL;
+
+   /* It would be nice to have proper location information. */
+   YYLTYPE loc;
+   memset(&loc, 0, sizeof(loc));
+
+   foreach_list(node, instructions) {
+      ir_variable *var = ((ir_instruction *)node)->as_variable();
+
+      if (!var)
+	 continue;
+
+      if (strcmp(var->name, "gl_FragColor") == 0)
+	 gl_FragColor_assigned = var->assigned;
+      else if (strcmp(var->name, "gl_FragData") == 0)
+	 gl_FragData_assigned = var->assigned;
+      else if (strncmp(var->name, "gl_", 3) != 0) {
+	 if (state->target == fragment_shader &&
+	     (var->mode == ir_var_out || var->mode == ir_var_inout)) {
+	    user_defined_fs_output_assigned = true;
+	    user_defined_fs_output = var;
+	 }
+      }
+   }
+
+   /* From the GLSL 1.30 spec:
+    *
+    *     "If a shader statically assigns a value to gl_FragColor, it
+    *      may not assign a value to any element of gl_FragData. If a
+    *      shader statically writes a value to any element of
+    *      gl_FragData, it may not assign a value to
+    *      gl_FragColor. That is, a shader may assign values to either
+    *      gl_FragColor or gl_FragData, but not both. Multiple shaders
+    *      linked together must also consistently write just one of
+    *      these variables.  Similarly, if user declared output
+    *      variables are in use (statically assigned to), then the
+    *      built-in variables gl_FragColor and gl_FragData may not be
+    *      assigned to. These incorrect usages all generate compile
+    *      time errors."
+    */
+   if (gl_FragColor_assigned && gl_FragData_assigned) {
+      _mesa_glsl_error(&loc, state, "fragment shader writes to both "
+		       "`gl_FragColor' and `gl_FragData'\n");
+   } else if (gl_FragColor_assigned && user_defined_fs_output_assigned) {
+      _mesa_glsl_error(&loc, state, "fragment shader writes to both "
+		       "`gl_FragColor' and `%s'\n",
+		       user_defined_fs_output->name);
+   } else if (gl_FragData_assigned && user_defined_fs_output_assigned) {
+      _mesa_glsl_error(&loc, state, "fragment shader writes to both "
+		       "`gl_FragData' and `%s'\n",
+		       user_defined_fs_output->name);
+   }
 }

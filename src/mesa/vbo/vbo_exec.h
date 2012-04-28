@@ -141,6 +141,7 @@ struct vbo_exec_context
        * programs:
        */
       const struct gl_client_array *inputs[VERT_ATTRIB_MAX];
+      GLboolean recalculate_inputs;
    } array;
 
    /* Which flags to set in vbo_exec_BeginVertices() */
@@ -188,7 +189,8 @@ static inline void
 vbo_draw_method(struct vbo_exec_context *exec, enum draw_method method)
 {
    if (exec->last_draw_method != method) {
-      exec->ctx->NewState |= _NEW_ARRAY;
+      struct gl_context *ctx = exec->ctx;
+      ctx->Driver.UpdateState(ctx, _NEW_ARRAY);
       exec->last_draw_method = method;
    }
 }

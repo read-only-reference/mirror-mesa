@@ -62,8 +62,6 @@ public:
 
    signature_entry *get_signature_entry(ir_function_signature *var);
 
-   bool (*predicate)(ir_instruction *ir);
-
    /* List of signature_entry */
    exec_list signature_list;
    void *mem_ctx;
@@ -103,7 +101,7 @@ ir_dead_functions_visitor::visit_enter(ir_function_signature *ir)
 ir_visitor_status
 ir_dead_functions_visitor::visit_enter(ir_call *ir)
 {
-   signature_entry *entry = this->get_signature_entry(ir->get_callee());
+   signature_entry *entry = this->get_signature_entry(ir->callee);
 
    entry->used = true;
 

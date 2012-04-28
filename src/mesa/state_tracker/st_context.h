@@ -40,14 +40,15 @@ struct draw_stage;
 struct gen_mipmap_state;
 struct st_context;
 struct st_fragment_program;
+struct u_upload_mgr;
 
 
-#define ST_NEW_MESA                    0x1 /* Mesa state has changed */
-#define ST_NEW_FRAGMENT_PROGRAM        0x2
-#define ST_NEW_VERTEX_PROGRAM          0x4
-#define ST_NEW_FRAMEBUFFER             0x8
-#define ST_NEW_EDGEFLAGS_DATA          0x10
-#define ST_NEW_GEOMETRY_PROGRAM        0x20
+#define ST_NEW_MESA                    (1 << 0) /* Mesa state has changed */
+#define ST_NEW_FRAGMENT_PROGRAM        (1 << 1)
+#define ST_NEW_VERTEX_PROGRAM          (1 << 2)
+#define ST_NEW_FRAMEBUFFER             (1 << 3)
+#define ST_NEW_EDGEFLAGS_DATA          (1 << 4)
+#define ST_NEW_GEOMETRY_PROGRAM        (1 << 5)
 
 
 struct st_state_flags {
@@ -70,6 +71,8 @@ struct st_context
    struct gl_context *ctx;
 
    struct pipe_context *pipe;
+
+   struct u_upload_mgr *uploader, *indexbuf_uploader, *constbuf_uploader;
 
    struct draw_context *draw;  /**< For selection/feedback/rastpos only */
    struct draw_stage *feedback_stage;  /**< For GL_FEEDBACK rendermode */
@@ -153,9 +156,6 @@ struct st_context
       struct pipe_sampler_state samplers[2];
       enum pipe_format tex_format;
       void *vs;
-      float vertices[4][3][4];  /**< vertex pos + color + texcoord */
-      struct pipe_resource *vbuf;
-      unsigned vbuf_slot;       /* next free slot in vbuf */
       struct bitmap_cache *cache;
    } bitmap;
 
@@ -171,9 +171,6 @@ struct st_context
       struct pipe_viewport_state viewport;
       void *vs;
       void *fs;
-      float vertices[4][2][4];  /**< vertex pos + color */
-      struct pipe_resource *vbuf;
-      unsigned vbuf_slot;
       boolean enable_ds_separate;
    } clear;
 
@@ -190,18 +187,6 @@ struct st_context
 
    int force_msaa;
    void *winsys_drawable_handle;
-
-   /* User vertex buffers. */
-   struct {
-      struct pipe_resource *buffer;
-
-      /** Element size */
-      GLuint element_size;
-
-      /** Attribute stride */
-      GLsizei stride;
-   } user_attrib[PIPE_MAX_ATTRIBS];
-   unsigned num_user_attribs;
 
    /* Active render condition. */
    struct pipe_query *render_condition;

@@ -361,6 +361,7 @@ nv50_ir::DataType Instruction::inferSrcType() const
    case TGSI_OPCODE_AND:
    case TGSI_OPCODE_OR:
    case TGSI_OPCODE_XOR:
+   case TGSI_OPCODE_NOT:
    case TGSI_OPCODE_U2F:
    case TGSI_OPCODE_UADD:
    case TGSI_OPCODE_UDIV:
@@ -577,11 +578,6 @@ public:
    Source(struct nv50_ir_prog_info *);
    ~Source();
 
-   struct Subroutine
-   {
-      unsigned pc;
-   };
-
 public:
    bool scanSource();
    unsigned fileSize(unsigned file) const { return scan.file_max[file] + 1; }
@@ -604,9 +600,6 @@ public:
    uint8_t *resourceTargets; // TGSI_TEXTURE_*
    unsigned resourceCount;
 
-   Subroutine *subroutines;
-   unsigned subroutineCount;
-
 private:
    int inferSysValDirection(unsigned sn) const;
    bool scanDeclaration(const struct tgsi_full_declaration *);
@@ -625,7 +618,6 @@ Source::Source(struct nv50_ir_prog_info *prog) : info(prog)
       tgsi_dump(tokens, 0);
 
    resourceTargets = NULL;
-   subroutines = NULL;
 
    mainTempsInLMem = FALSE;
 }
@@ -642,14 +634,11 @@ Source::~Source()
 
    if (resourceTargets)
       delete[] resourceTargets;
-   if (subroutines)
-      delete[] subroutines;
 }
 
 bool Source::scanSource()
 {
    unsigned insnCount = 0;
-   unsigned subrCount = 0;
    struct tgsi_parse_context parse;
 
    tgsi_scan_shader(tokens, &scan);
@@ -663,9 +652,6 @@ bool Source::scanSource()
 
    resourceCount = scan.file_max[TGSI_FILE_RESOURCE] + 1;
    resourceTargets = new uint8_t[resourceCount];
-
-   subroutineCount = scan.opcode_count[TGSI_OPCODE_BGNSUB] + 1;
-   subroutines = new Subroutine[subroutineCount];
 
    info->immd.bufSize = 0;
    tempArrayCount = 0;
@@ -699,10 +685,7 @@ bool Source::scanSource()
          break;
       case TGSI_TOKEN_TYPE_INSTRUCTION:
          insns[insnCount++] = parse.FullToken.FullInstruction;
-         if (insns[insnCount - 1].Instruction.Opcode == TGSI_OPCODE_BGNSUB)
-            subroutines[++subrCount].pc = insnCount - 1;
-         else
-            scanInstruction(&parse.FullToken.FullInstruction);
+         scanInstruction(&parse.FullToken.FullInstruction);
          break;
       case TGSI_TOKEN_TYPE_PROPERTY:
          scanProperty(&parse.FullToken.FullProperty);
@@ -717,8 +700,17 @@ bool Source::scanSource()
    if (mainTempsInLMem)
       info->bin.tlsSpace += (scan.file_max[TGSI_FILE_TEMPORARY] + 1) * 16;
 
-   if (info->io.genUserClip > 0)
+   if (info->io.genUserClip > 0) {
       info->io.clipDistanceMask = (1 << info->io.genUserClip) - 1;
+
+      for (unsigned int n = 0; n < ((info->io.genUserClip + 3) / 4); ++n) {
+         unsigned int i = info->numOutputs++;
+         info->out[i].id = i;
+         info->out[i].sn = TGSI_SEMANTIC_CLIPDIST;
+         info->out[i].si = n;
+         info->out[i].mask = info->io.clipDistanceMask >> (n * 4);
+      }
+   }
 
    return info->assignSlots(info) == 0;
 }
@@ -867,6 +859,9 @@ bool Source::scanDeclaration(const struct tgsi_full_declaration *decl)
       break;
    case TGSI_FILE_SYSTEM_VALUE:
       switch (sn) {
+      case TGSI_SEMANTIC_INSTANCEID:
+         info->io.instanceId = first;
+         break;
       case TGSI_SEMANTIC_VERTEXID:
          info->io.vertexId = first;
          break;
@@ -963,6 +958,9 @@ bool Source::scanInstruction(const struct tgsi_full_instruction *inst)
          else
             info->out[dst.getIndex(0)].mask |= dst.getMask();
 
+         if (info->out[dst.getIndex(0)].sn == TGSI_SEMANTIC_PSIZE)
+            info->out[dst.getIndex(0)].mask &= 1;
+
          if (isEdgeFlagPassthrough(insn))
             info->io.edgeFlagIn = insn.getSrc(0).getIndex(0);
       } else
@@ -1027,7 +1025,15 @@ public:
    bool run();
 
 private:
+   struct Subroutine
+   {
+      Subroutine(Function *f) : f(f) { }
+      Function *f;
+      ValueMap values;
+   };
+
    Value *getVertexBase(int s);
+   DataArray *getArrayForFile(unsigned file, int idx);
    Value *fetchSrc(int s, int c);
    Value *acquireDst(int d, int c);
    void storeDst(int d, int c, Value *);
@@ -1044,6 +1050,8 @@ private:
 
    bool handleInstruction(const struct tgsi_full_instruction *);
    void exportOutputs();
+   inline Subroutine *getSubroutine(unsigned ip);
+   inline Subroutine *getSubroutine(Function *);
    inline bool isEndOfSubroutine(uint ip);
 
    void loadProjTexCoords(Value *dst[4], Value *src[4], unsigned int mask);
@@ -1062,9 +1070,35 @@ private:
 
    Value *buildDot(int dim);
 
+   class BindArgumentsPass : public Pass {
+   public:
+      BindArgumentsPass(Converter &conv) : conv(conv) { }
+
+   private:
+      Converter &conv;
+      Subroutine *sub;
+
+      template<typename T> inline void
+      updateCallArgs(Instruction *i, void (Instruction::*setArg)(int, Value *),
+                     T (Function::*proto));
+
+      template<typename T> inline void
+      updatePrototype(BitSet *set, void (Function::*updateSet)(),
+                      T (Function::*proto));
+
+   protected:
+      bool visit(Function *);
+      bool visit(BasicBlock *bb) { return false; }
+   };
+
 private:
    const struct tgsi::Source *code;
    const struct nv50_ir_prog_info *info;
+
+   struct {
+      std::map<unsigned, Subroutine> map;
+      Subroutine *cur;
+   } sub;
 
    uint ip; // instruction pointer
 
@@ -1077,8 +1111,8 @@ private:
    DataArray aData; // TGSI_FILE_ADDRESS
    DataArray pData; // TGSI_FILE_PREDICATE
    DataArray oData; // TGSI_FILE_OUTPUT (if outputs in registers)
-   DataArray *lData; // TGSI_FILE_TEMPORARY_ARRAY
-   DataArray *iData; // TGSI_FILE_IMMEDIATE_ARRAY
+   std::vector<DataArray> lData; // TGSI_FILE_TEMPORARY_ARRAY
+   std::vector<DataArray> iData; // TGSI_FILE_IMMEDIATE_ARRAY
 
    Value *zero;
    Value *fragCoord[4];
@@ -1091,9 +1125,6 @@ private:
    Stack joinBBs;  // fork BB, for inserting join ops on ENDIF
    Stack loopBBs;  // loop headers
    Stack breakBBs; // end of / after loop
-   Stack entryBBs; // start of current (inlined) subroutine
-   Stack leaveBBs; // end of current (inlined) subroutine
-   Stack retIPs;   // return instruction pointer
 };
 
 Symbol *
@@ -1251,34 +1282,44 @@ Converter::fetchSrc(int s, int c)
    return applySrcMod(res, s, c);
 }
 
+Converter::DataArray *
+Converter::getArrayForFile(unsigned file, int idx)
+{
+   switch (file) {
+   case TGSI_FILE_TEMPORARY:
+      return &tData;
+   case TGSI_FILE_PREDICATE:
+      return &pData;
+   case TGSI_FILE_ADDRESS:
+      return &aData;
+   case TGSI_FILE_TEMPORARY_ARRAY:
+      assert(idx < code->tempArrayCount);
+      return &lData[idx];
+   case TGSI_FILE_IMMEDIATE_ARRAY:
+      assert(idx < code->immdArrayCount);
+      return &iData[idx];
+   case TGSI_FILE_OUTPUT:
+      assert(prog->getType() == Program::TYPE_FRAGMENT);
+      return &oData;
+   default:
+      assert(!"invalid/unhandled TGSI source file");
+      return NULL;
+   }
+}
+
 Value *
 Converter::fetchSrc(tgsi::Instruction::SrcRegister src, int c, Value *ptr)
 {
+   const int idx2d = src.is2D() ? src.getIndex(1) : 0;
    const int idx = src.getIndex(0);
    const int swz = src.getSwizzle(c);
 
    switch (src.getFile()) {
-   case TGSI_FILE_TEMPORARY:
-      return tData.load(idx, swz, ptr);
-   case TGSI_FILE_PREDICATE:
-      return pData.load(idx, swz, ptr);
-   case TGSI_FILE_ADDRESS:
-      return aData.load(idx, swz, ptr);
-
-   case TGSI_FILE_TEMPORARY_ARRAY:
-      assert(src.is2D() && src.getIndex(1) < code->tempArrayCount);
-      return lData[src.getIndex(1)].load(idx, swz, ptr);
-   case TGSI_FILE_IMMEDIATE_ARRAY:
-      assert(src.is2D() && src.getIndex(1) < code->immdArrayCount);
-      return iData[src.getIndex(1)].load(idx, swz, ptr);
-
    case TGSI_FILE_IMMEDIATE:
       assert(!ptr);
       return loadImm(NULL, info->immd.data[idx * 4 + swz]);
-
    case TGSI_FILE_CONSTANT:
       return mkLoad(TYPE_U32, srcToSym(src, c), ptr);
-
    case TGSI_FILE_INPUT:
       if (prog->getType() == Program::TYPE_FRAGMENT) {
          // don't load masked inputs, won't be assigned a slot
@@ -1289,18 +1330,15 @@ Converter::fetchSrc(tgsi::Instruction::SrcRegister src, int c, Value *ptr)
          return interpolate(src, c, ptr);
       }
       return mkLoad(TYPE_U32, srcToSym(src, c), ptr);
-
+   case TGSI_FILE_OUTPUT:
+      assert(!"load from output file");
+      return NULL;
    case TGSI_FILE_SYSTEM_VALUE:
       assert(!ptr);
       return mkOp1v(OP_RDSV, TYPE_U32, getSSA(), srcToSym(src, c));
-
-   case TGSI_FILE_OUTPUT:
-   case TGSI_FILE_RESOURCE:
-   case TGSI_FILE_SAMPLER:
-   case TGSI_FILE_NULL:
    default:
-      assert(!"invalid/unhandled TGSI source file");
-      return NULL;
+      return getArrayForFile(src.getFile(), idx2d)->load(
+         sub.cur->values, idx, swz, ptr);
    }
 }
 
@@ -1308,35 +1346,20 @@ Value *
 Converter::acquireDst(int d, int c)
 {
    const tgsi::Instruction::DstRegister dst = tgsi.getDst(d);
-
-   if (dst.isMasked(c))
-      return NULL;
-   if (dst.isIndirect(0))
-      return getScratch();
-
+   const unsigned f = dst.getFile();
    const int idx = dst.getIndex(0);
+   const int idx2d = dst.is2D() ? dst.getIndex(1) : 0;
 
-   switch (dst.getFile()) {
-   case TGSI_FILE_TEMPORARY:
-      return tData.acquire(idx, c);
-   case TGSI_FILE_TEMPORARY_ARRAY:
-      return getScratch();
-   case TGSI_FILE_PREDICATE:
-      return pData.acquire(idx, c);
-   case TGSI_FILE_ADDRESS:
-      return aData.acquire(idx, c);
-
-   case TGSI_FILE_OUTPUT:
-      if (prog->getType() == Program::TYPE_FRAGMENT)
-         return oData.acquire(idx, c);
-      // fall through
-   case TGSI_FILE_SYSTEM_VALUE:
-      return getScratch();
-
-   default:
-      assert(!"invalid dst file");
+   if (dst.isMasked(c) || f == TGSI_FILE_RESOURCE)
       return NULL;
-   }
+
+   if (dst.isIndirect(0) ||
+       f == TGSI_FILE_TEMPORARY_ARRAY ||
+       f == TGSI_FILE_SYSTEM_VALUE ||
+       (f == TGSI_FILE_OUTPUT && prog->getType() != Program::TYPE_FRAGMENT))
+      return getScratch();
+
+   return getArrayForFile(f, idx2d)-> acquire(sub.cur->values, idx, c);
 }
 
 void
@@ -1376,38 +1399,26 @@ void
 Converter::storeDst(const tgsi::Instruction::DstRegister dst, int c,
                     Value *val, Value *ptr)
 {
+   const unsigned f = dst.getFile();
    const int idx = dst.getIndex(0);
+   const int idx2d = dst.is2D() ? dst.getIndex(1) : 0;
 
-   switch (dst.getFile()) {
-   case TGSI_FILE_TEMPORARY:
-      tData.store(idx, c, ptr, val);
-      break;
-   case TGSI_FILE_TEMPORARY_ARRAY:
-      assert(dst.is2D() && dst.getIndex(1) < code->tempArrayCount);
-      lData[dst.getIndex(1)].store(idx, c, ptr, val);
-      break;
-   case TGSI_FILE_PREDICATE:
-      pData.store(idx, c, ptr, val);
-      break;
-   case TGSI_FILE_ADDRESS:
-      aData.store(idx, c, ptr, val);
-      break;
-
-   case TGSI_FILE_OUTPUT:
-      if (prog->getType() == Program::TYPE_FRAGMENT)
-         oData.store(idx, c, ptr, val);
-      else
-         mkStore(OP_EXPORT, TYPE_U32, dstToSym(dst, c), ptr, val);
-      break;
-
-   case TGSI_FILE_SYSTEM_VALUE:
+   if (f == TGSI_FILE_SYSTEM_VALUE) {
       assert(!ptr);
       mkOp2(OP_WRSV, TYPE_U32, NULL, dstToSym(dst, c), val);
-      break;
-
-   default:
+   } else
+   if (f == TGSI_FILE_OUTPUT && prog->getType() != Program::TYPE_FRAGMENT) {
+      if (ptr || (info->out[idx].mask & (1 << c)))
+         mkStore(OP_EXPORT, TYPE_U32, dstToSym(dst, c), ptr, val);
+   } else
+   if (f == TGSI_FILE_TEMPORARY ||
+       f == TGSI_FILE_TEMPORARY_ARRAY ||
+       f == TGSI_FILE_PREDICATE ||
+       f == TGSI_FILE_ADDRESS ||
+       f == TGSI_FILE_OUTPUT) {
+      getArrayForFile(f, idx2d)->store(sub.cur->values, idx, c, ptr, val);
+   } else {
       assert(!"invalid dst file");
-      break;
    }
 }
 
@@ -1494,7 +1505,7 @@ Converter::loadProjTexCoords(Value *dst[4], Value *src[4], unsigned int mask)
    int c;
 
    if (insn->op == OP_PINTERP) {
-      bb->insertTail(insn = insn->clone(true));
+      bb->insertTail(insn = cloneForward(func, insn));
       insn->op = OP_LINTERP;
       insn->setInterpolate(NV50_IR_INTERP_LINEAR | insn->getSampleMode());
       insn->setSrc(1, NULL);
@@ -1509,7 +1520,7 @@ Converter::loadProjTexCoords(Value *dst[4], Value *src[4], unsigned int mask)
          continue;
       mask &= ~(1 << c);
 
-      bb->insertTail(insn = insn->clone(true));
+      bb->insertTail(insn = cloneForward(func, insn));
       insn->setInterpolate(NV50_IR_INTERP_PERSPECTIVE | insn->getSampleMode());
       insn->setSrc(1, proj);
       dst[c] = insn->getDef(0);
@@ -1552,8 +1563,8 @@ Converter::handleTEX(Value *dst[4], int R, int S, int L, int C, int Dx, int Dy)
 
    if (texi->op == OP_TXD) {
       for (c = 0; c < tgt.getDim(); ++c) {
-         texi->dPdx[c] = fetchSrc(Dx >> 4, (Dx & 3) + c);
-         texi->dPdy[c] = fetchSrc(Dy >> 4, (Dy & 3) + c);
+         texi->dPdx[c].set(fetchSrc(Dx >> 4, (Dx & 3) + c));
+         texi->dPdy[c].set(fetchSrc(Dy >> 4, (Dy & 3) + c));
       }
    }
 
@@ -1670,6 +1681,30 @@ Converter::handleLIT(Value *dst0[4])
 
       mkCmp(OP_SLCT, CC_GT, TYPE_F32, dst0[2], val3, zero, val0);
    }
+}
+
+Converter::Subroutine *
+Converter::getSubroutine(unsigned ip)
+{
+   std::map<unsigned, Subroutine>::iterator it = sub.map.find(ip);
+
+   if (it == sub.map.end())
+      it = sub.map.insert(std::make_pair(
+              ip, Subroutine(new Function(prog, "SUB", ip)))).first;
+
+   return &it->second;
+}
+
+Converter::Subroutine *
+Converter::getSubroutine(Function *f)
+{
+   unsigned ip = f->getLabel();
+   std::map<unsigned, Subroutine>::iterator it = sub.map.find(ip);
+
+   if (it == sub.map.end())
+      it = sub.map.insert(std::make_pair(ip, Subroutine(f))).first;
+
+   return &it->second;
 }
 
 bool
@@ -2125,56 +2160,55 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
       break;
    case TGSI_OPCODE_BGNSUB:
    {
-      if (!retIPs.getSize()) {
-         // end of main function
-         ip = code->scan.num_instructions - 2; // goto END
-         return true;
-      }
-      BasicBlock *entry = new BasicBlock(func);
-      BasicBlock *leave = new BasicBlock(func);
-      entryBBs.push(entry);
-      leaveBBs.push(leave);
-      bb->cfg.attach(&entry->cfg, Graph::Edge::TREE);
+      Subroutine *s = getSubroutine(ip);
+      BasicBlock *entry = new BasicBlock(s->f);
+      BasicBlock *leave = new BasicBlock(s->f);
+
+      // multiple entrypoints possible, keep the graph connected
+      if (prog->getType() == Program::TYPE_COMPUTE)
+         prog->main->call.attach(&s->f->call, Graph::Edge::TREE);
+
+      sub.cur = s;
+      s->f->setEntry(entry);
+      s->f->setExit(leave);
       setPosition(entry, true);
-   }
       return true;
+   }
    case TGSI_OPCODE_ENDSUB:
    {
-      BasicBlock *leave = reinterpret_cast<BasicBlock *>(leaveBBs.pop().u.p);
-      entryBBs.pop();
-      bb->cfg.attach(&leave->cfg, Graph::Edge::TREE);
-      setPosition(leave, true);
-      ip = retIPs.pop().u.u;
+      sub.cur = getSubroutine(prog->main);
+      setPosition(BasicBlock::get(sub.cur->f->cfg.getRoot()), true);
+      return true;
    }
-      return true;
    case TGSI_OPCODE_CAL:
-      // we don't have function declarations, so inline everything
-      retIPs.push(ip);
-      ip = code->subroutines[tgsi.getLabel()].pc - 1; // +1 after return
+   {
+      Subroutine *s = getSubroutine(tgsi.getLabel());
+      mkFlow(OP_CALL, s->f, CC_ALWAYS, NULL);
+      func->call.attach(&s->f->call, Graph::Edge::TREE);
       return true;
+   }
    case TGSI_OPCODE_RET:
    {
       if (bb->isTerminated())
          return true;
-      BasicBlock *entry = reinterpret_cast<BasicBlock *>(entryBBs.peek().u.p);
-      BasicBlock *leave = reinterpret_cast<BasicBlock *>(leaveBBs.peek().u.p);
+      BasicBlock *leave = BasicBlock::get(func->cfgExit);
+
       if (!isEndOfSubroutine(ip + 1)) {
          // insert a PRERET at the entry if this is an early return
-         FlowInstruction *preRet = new_FlowInstruction(func, OP_PRERET, leave);
-         preRet->fixed = 1;
-         entry->insertHead(preRet);
-         bb->cfg.attach(&leave->cfg, Graph::Edge::CROSS);
+         // (only needed for sharing code in the epilogue)
+         BasicBlock *pos = getBB();
+         setPosition(BasicBlock::get(func->cfg.getRoot()), false);
+         mkFlow(OP_PRERET, leave, CC_ALWAYS, NULL)->fixed = 1;
+         setPosition(pos, true);
       }
-      // everything inlined so RET serves only to wrap up the stack
-      if (entry->getEntry() && entry->getEntry()->op == OP_PRERET)
-         mkFlow(OP_RET, NULL, CC_ALWAYS, NULL)->fixed = 1;
+      mkFlow(OP_RET, NULL, CC_ALWAYS, NULL)->fixed = 1;
+      bb->cfg.attach(&leave->cfg, Graph::Edge::CROSS);
    }
       break;
    case TGSI_OPCODE_END:
    {
       // attach and generate epilogue code
-      BasicBlock *epilogue = reinterpret_cast<BasicBlock *>(leaveBBs.pop().u.p);
-      entryBBs.pop();
+      BasicBlock *epilogue = BasicBlock::get(func->cfgExit);
       bb->cfg.attach(&epilogue->cfg, Graph::Edge::TREE);
       setPosition(epilogue, true);
       if (prog->getType() == Program::TYPE_FRAGMENT)
@@ -2213,13 +2247,13 @@ void
 Converter::handleUserClipPlanes()
 {
    Value *res[8];
-   int i, c;
+   int n, i, c;
 
    for (c = 0; c < 4; ++c) {
       for (i = 0; i < info->io.genUserClip; ++i) {
-         Value *ucp;
-         ucp = mkLoad(TYPE_F32, mkSymbol(FILE_MEMORY_CONST, 15, TYPE_F32,
-                                         i * 16 + c * 4), NULL);
+         Symbol *sym = mkSymbol(FILE_MEMORY_CONST, info->io.ucpBinding,
+                                TYPE_F32, info->io.ucpBase + i * 16 + c * 4);
+         Value *ucp = mkLoad(TYPE_F32, sym, NULL);
          if (c == 0)
             res[i] = mkOp2v(OP_MUL, TYPE_F32, getScratch(), clipVtx[c], ucp);
          else
@@ -2227,8 +2261,15 @@ Converter::handleUserClipPlanes()
       }
    }
 
-   for (i = 0; i < info->io.genUserClip; ++i)
-      mkOp2(OP_WRSV, TYPE_F32, NULL, mkSysVal(SV_CLIP_DISTANCE, i), res[i]);
+   const int first = info->numOutputs - (info->io.genUserClip + 3) / 4;
+
+   for (i = 0; i < info->io.genUserClip; ++i) {
+      n = i / 4 + first;
+      c = i % 4;
+      Symbol *sym =
+         mkSymbol(FILE_SHADER_OUTPUT, 0, TYPE_F32, info->out[n].slot[c] * 4);
+      mkStore(OP_EXPORT, TYPE_F32, sym, NULL, res[i]);
+   }
 }
 
 void
@@ -2236,34 +2277,57 @@ Converter::exportOutputs()
 {
    for (unsigned int i = 0; i < info->numOutputs; ++i) {
       for (unsigned int c = 0; c < 4; ++c) {
-         if (!oData.exists(i, c))
+         if (!oData.exists(sub.cur->values, i, c))
             continue;
          Symbol *sym = mkSymbol(FILE_SHADER_OUTPUT, 0, TYPE_F32,
                                 info->out[i].slot[c] * 4);
-         Value *val = oData.load(i, c, NULL);
+         Value *val = oData.load(sub.cur->values, i, c, NULL);
          if (val)
             mkStore(OP_EXPORT, TYPE_F32, sym, NULL, val);
       }
    }
 }
 
-Converter::Converter(Program *ir, const tgsi::Source *src)
-   : code(src),
+Converter::Converter(Program *ir, const tgsi::Source *code) : BuildUtil(ir),
+     code(code),
      tgsi(NULL),
      tData(this), aData(this), pData(this), oData(this)
 {
-   prog = ir;
    info = code->info;
 
-   DataFile tFile = code->mainTempsInLMem ? FILE_MEMORY_LOCAL : FILE_GPR;
+   const DataFile tFile = code->mainTempsInLMem ? FILE_MEMORY_LOCAL : FILE_GPR;
 
-   tData.setup(0, code->fileSize(TGSI_FILE_TEMPORARY), 4, 4, tFile);
-   pData.setup(0, code->fileSize(TGSI_FILE_PREDICATE), 4, 4, FILE_PREDICATE);
-   aData.setup(0, code->fileSize(TGSI_FILE_ADDRESS), 4, 4, FILE_ADDRESS);
-   oData.setup(0, code->fileSize(TGSI_FILE_OUTPUT), 4, 4, FILE_GPR);
+   const unsigned tSize = code->fileSize(TGSI_FILE_TEMPORARY);
+   const unsigned pSize = code->fileSize(TGSI_FILE_PREDICATE);
+   const unsigned aSize = code->fileSize(TGSI_FILE_ADDRESS);
+   const unsigned oSize = code->fileSize(TGSI_FILE_OUTPUT);
 
-   lData = NULL;
-   iData = NULL;
+   tData.setup(TGSI_FILE_TEMPORARY, 0, 0, tSize, 4, 4, tFile, 0);
+   pData.setup(TGSI_FILE_PREDICATE, 0, 0, pSize, 4, 4, FILE_PREDICATE, 0);
+   aData.setup(TGSI_FILE_ADDRESS, 0, 0, aSize, 4, 4, FILE_ADDRESS, 0);
+   oData.setup(TGSI_FILE_OUTPUT, 0, 0, oSize, 4, 4, FILE_GPR, 0);
+
+   for (int vol = 0, i = 0; i < code->tempArrayCount; ++i) {
+      int len = code->tempArrays[i].u32 >> 2;
+      int dim = code->tempArrays[i].u32 & 3;
+
+      lData.push_back(DataArray(this));
+      lData.back().setup(TGSI_FILE_TEMPORARY_ARRAY, i, vol, len, dim, 4,
+                         FILE_MEMORY_LOCAL, 0);
+
+      vol += (len * dim * 4 + 0xf) & ~0xf;
+   }
+
+   for (int vol = 0, i = 0; i < code->immdArrayCount; ++i) {
+      int len = code->immdArrays[i].u32 >> 2;
+      int dim = code->immdArrays[i].u32 & 3;
+
+      lData.push_back(DataArray(this));
+      lData.back().setup(TGSI_FILE_IMMEDIATE_ARRAY, i, vol, len, dim, 4,
+                         FILE_MEMORY_CONST, 14);
+
+      vol += (len * dim * 4 + 0xf) & ~0xf;
+   }
 
    zero = mkImm((uint32_t)0);
 
@@ -2272,10 +2336,64 @@ Converter::Converter(Program *ir, const tgsi::Source *src)
 
 Converter::~Converter()
 {
-   if (lData)
-      delete[] lData;
-   if (iData)
-      delete[] iData;
+}
+
+template<typename T> inline void
+Converter::BindArgumentsPass::updateCallArgs(
+   Instruction *i, void (Instruction::*setArg)(int, Value *),
+   T (Function::*proto))
+{
+   Function *g = i->asFlow()->target.fn;
+   Subroutine *subg = conv.getSubroutine(g);
+
+   for (unsigned a = 0; a < (g->*proto).size(); ++a) {
+      Value *v = (g->*proto)[a].get();
+      const Converter::Location &l = subg->values.l.find(v)->second;
+      Converter::DataArray *array = conv.getArrayForFile(l.array, l.arrayIdx);
+
+      (i->*setArg)(a, array->acquire(sub->values, l.i, l.c));
+   }
+}
+
+template<typename T> inline void
+Converter::BindArgumentsPass::updatePrototype(
+   BitSet *set, void (Function::*updateSet)(), T (Function::*proto))
+{
+   (func->*updateSet)();
+
+   for (unsigned i = 0; i < set->getSize(); ++i) {
+      Value *v = func->getLValue(i);
+
+      // only include values with a matching TGSI register
+      if (set->test(i) && sub->values.l.find(v) != sub->values.l.end())
+         (func->*proto).push_back(v);
+   }
+}
+
+bool
+Converter::BindArgumentsPass::visit(Function *f)
+{
+   sub = conv.getSubroutine(f);
+
+   for (ArrayList::Iterator bi = f->allBBlocks.iterator();
+        !bi.end(); bi.next()) {
+      for (Instruction *i = BasicBlock::get(bi)->getFirst();
+           i; i = i->next) {
+         if (i->op == OP_CALL && !i->asFlow()->builtin) {
+            updateCallArgs(i, &Instruction::setSrc, &Function::ins);
+            updateCallArgs(i, &Instruction::setDef, &Function::outs);
+         }
+      }
+   }
+
+   if (func == prog->main && prog->getType() != Program::TYPE_COMPUTE)
+      return true;
+   updatePrototype(&BasicBlock::get(f->cfg.getRoot())->liveSet,
+                   &Function::buildLiveSets, &Function::ins);
+   updatePrototype(&BasicBlock::get(f->cfgExit)->defSet,
+                   &Function::buildDefSets, &Function::outs);
+
+   return true;
 }
 
 bool
@@ -2284,39 +2402,11 @@ Converter::run()
    BasicBlock *entry = new BasicBlock(prog->main);
    BasicBlock *leave = new BasicBlock(prog->main);
 
-   if (code->tempArrayCount && !lData) {
-      uint32_t volume = 0;
-      lData = new DataArray[code->tempArrayCount];
-      if (!lData)
-         return false;
-      for (int i = 0; i < code->tempArrayCount; ++i) {
-         int len = code->tempArrays[i].u32 >> 2;
-         int dim = code->tempArrays[i].u32 & 3;
-         lData[i].setParent(this);
-         lData[i].setup(volume, len, dim, 4, FILE_MEMORY_LOCAL);
-         volume += (len * dim * 4 + 0xf) & ~0xf;
-      }
-   }
-   if (code->immdArrayCount && !iData) {
-      uint32_t volume = 0;
-      iData = new DataArray[code->immdArrayCount];
-      if (!iData)
-         return false;
-      for (int i = 0; i < code->immdArrayCount; ++i) {
-         int len = code->immdArrays[i].u32 >> 2;
-         int dim = code->immdArrays[i].u32 & 3;
-         iData[i].setParent(this);
-         iData[i].setup(volume, len, dim, 4, FILE_MEMORY_CONST, 14);
-         volume += (len * dim * 4 + 0xf) & ~0xf;
-      }
-   }
-
    prog->main->setEntry(entry);
    prog->main->setExit(leave);
 
    setPosition(entry, true);
-   entryBBs.push(entry);
-   leaveBBs.push(leave);
+   sub.cur = getSubroutine(prog->main);
 
    if (info->io.genUserClip > 0) {
       for (int c = 0; c < 4; ++c)
@@ -2333,6 +2423,10 @@ Converter::run()
       if (!handleInstruction(&code->insns[ip]))
          return false;
    }
+
+   if (!BindArgumentsPass(*this).run(prog))
+      return false;
+
    return true;
 }
 
@@ -2346,6 +2440,7 @@ Program::makeFromTGSI(struct nv50_ir_prog_info *info)
    tgsi::Source src(info);
    if (!src.scanSource())
       return false;
+   tlsSize = info->bin.tlsSpace;
 
    Converter builder(this, &src);
    return builder.run();

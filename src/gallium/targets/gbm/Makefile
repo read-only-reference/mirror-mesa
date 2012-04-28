@@ -62,7 +62,7 @@ i915_SYS = -ldrm_intel
 # nouveau pipe driver
 nouveau_LIBS = \
 	$(TOP)/src/gallium/winsys/nouveau/drm/libnouveaudrm.a \
-	$(TOP)/src/gallium/drivers/nvfx/libnvfx.a \
+	$(TOP)/src/gallium/drivers/nv30/libnv30.a \
 	$(TOP)/src/gallium/drivers/nv50/libnv50.a \
 	$(TOP)/src/gallium/drivers/nvc0/libnvc0.a \
 	$(TOP)/src/gallium/drivers/nouveau/libnouveau.a
@@ -79,6 +79,12 @@ r600_LIBS = \
 	$(TOP)/src/gallium/winsys/radeon/drm/libradeonwinsys.a \
 	$(TOP)/src/gallium/drivers/r600/libr600.a
 r600_SYS += -ldrm_radeon
+
+# radeonsi pipe driver
+radeonsi_LIBS = \
+	$(TOP)/src/gallium/winsys/radeon/drm/libradeonwinsys.a \
+	$(TOP)/src/gallium/drivers/radeonsi/libradeonsi.a
+radeonsi_SYS += -ldrm_radeon
 
 # vmwgfx pipe driver
 vmwgfx_LIBS = \
@@ -123,6 +129,13 @@ ifneq ($(findstring radeon/drm,$(GALLIUM_WINSYS_DIRS)),)
 ifneq ($(findstring r600,$(GALLIUM_DRIVERS_DIRS)),)
 _pipe_TARGETS_CC += $(PIPE_PREFIX)r600.so
 pipe_SOURCES += pipe_r600.c
+endif
+endif
+
+ifneq ($(findstring radeon/drm,$(GALLIUM_WINSYS_DIRS)),)
+ifneq ($(findstring radeonsi,$(GALLIUM_DRIVERS_DIRS)),)
+_pipe_TARGETS_CC += $(PIPE_PREFIX)radeonsi.so
+pipe_SOURCES += pipe_radeonsi.c
 endif
 endif
 

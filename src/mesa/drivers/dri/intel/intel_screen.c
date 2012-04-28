@@ -108,6 +108,40 @@ const GLuint __driNConfigOptions = 14;
 static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
 #endif /*USE_NEW_INTERFACE */
 
+void
+aub_dump_bmp(struct gl_context *ctx)
+{
+   struct gl_framebuffer *fb = ctx->DrawBuffer;
+
+   for (int i = 0; i < fb->_NumColorDrawBuffers; i++) {
+      struct intel_renderbuffer *irb =
+	 intel_renderbuffer(fb->_ColorDrawBuffers[i]);
+
+      if (irb && irb->mt) {
+	 enum aub_dump_bmp_format format;
+
+	 switch (irb->Base.Base.Format) {
+	 case MESA_FORMAT_ARGB8888:
+	 case MESA_FORMAT_XRGB8888:
+	    format = AUB_DUMP_BMP_FORMAT_ARGB_8888;
+	    break;
+	 default:
+	    continue;
+	 }
+
+	 drm_intel_gem_bo_aub_dump_bmp(irb->mt->region->bo,
+				       irb->draw_x,
+				       irb->draw_y,
+				       irb->Base.Base.Width,
+				       irb->Base.Base.Height,
+				       format,
+				       irb->mt->region->pitch *
+				       irb->mt->region->cpp,
+				       0);
+      }
+   }
+}
+
 static const __DRItexBufferExtension intelTexBufferExtension = {
     { __DRI_TEX_BUFFER, __DRI_TEX_BUFFER_VERSION },
    intelSetTexBuffer,
@@ -131,35 +165,7 @@ intelDRI2Flush(__DRIdrawable *drawable)
       intel_batchbuffer_flush(intel);
 
    if (INTEL_DEBUG & DEBUG_AUB) {
-      struct gl_framebuffer *fb = ctx->DrawBuffer;
-
-      for (int i = 0; i < fb->_NumColorDrawBuffers; i++) {
-	 struct intel_renderbuffer *irb =
-	    intel_renderbuffer(fb->_ColorDrawBuffers[i]);
-
-	 if (irb && irb->mt) {
-	    enum aub_dump_bmp_format format;
-
-	    switch (irb->Base.Base.Format) {
-	    case MESA_FORMAT_ARGB8888:
-	    case MESA_FORMAT_XRGB8888:
-	       format = AUB_DUMP_BMP_FORMAT_ARGB_8888;
-	       break;
-	    default:
-	       continue;
-	    }
-
-	    drm_intel_gem_bo_aub_dump_bmp(irb->mt->region->bo,
-					  irb->draw_x,
-					  irb->draw_y,
-					  irb->Base.Base.Width,
-					  irb->Base.Base.Height,
-					  format,
-					  irb->mt->region->pitch *
-					  irb->mt->region->cpp,
-					  0);
-	 }
-      }
+      aub_dump_bmp(ctx);
    }
 }
 
@@ -764,13 +770,13 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
    intelScreen->hw_must_use_separate_stencil = intelScreen->gen >= 7;
    intelScreen->dri2_has_hiz = INTEL_DRI2_HAS_HIZ_UNKNOWN;
 
-#if defined(I915_PARAM_HAS_LLC)
-   intelScreen->hw_has_llc =
-      intel_get_boolean(intelScreen->driScrnPriv,
-              I915_PARAM_HAS_LLC);
-#else
-   intelScreen->hw_has_llc = intelScreen->gen >= 6;
-#endif
+   int has_llc = 0;
+   bool success = intel_get_param(intelScreen->driScrnPriv, I915_PARAM_HAS_LLC,
+				  &has_llc);
+   if (success && has_llc)
+      intelScreen->hw_has_llc = true;
+   else if (!success && intelScreen->gen >= 6)
+      intelScreen->hw_has_llc = true;
 
    intel_override_separate_stencil(intelScreen);
 
@@ -950,21 +956,27 @@ intelAllocateBuffer(__DRIscreen *screen,
       return NULL;
 
    if (attachment == __DRI_BUFFER_STENCIL) {
-      /* The stencil buffer has quirky pitch requirements.  From Vol 2a,
-       * 11.5.6.2.1 3DSTATE_STENCIL_BUFFER, field "Surface Pitch":
-       *    The pitch must be set to 2x the value computed based on width, as
-       *    the stencil buffer is stored with two rows interleaved.
-       * To accomplish this, we resort to the nasty hack of doubling the
-       * region's cpp and halving its height.
+      /* Stencil buffers use W tiling, a tiling format that the DRM functions
+       * don't properly account for.  Therefore, when we allocate a stencil
+       * buffer that is private to Mesa (see intel_miptree_create), we round
+       * the height and width up to the next multiple of the tile size (64x64)
+       * and then ask DRM to allocate an untiled buffer.  Consequently, the
+       * height and the width stored in the stencil buffer's region structure
+       * are always multiples of 64, even if the stencil buffer itself is
+       * smaller.
+       *
+       * To avoid inconsistencies between how we represent private buffers and
+       * buffers shared with the window system, round up the height and width
+       * for window system buffers too.
        */
       region_width = ALIGN(width, 64);
-      region_height = ALIGN(ALIGN(height, 2) / 2, 64);
-      region_cpp = format / 4;
+      region_height = ALIGN(height, 64);
    } else {
       region_width = width;
       region_height = height;
-      region_cpp = format / 8;
    }
+
+   region_cpp = format / 8;
 
    intelBuffer->region = intel_region_alloc(intelScreen,
                                             tiling,

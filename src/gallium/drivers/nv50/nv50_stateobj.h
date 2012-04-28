@@ -6,13 +6,11 @@
 
 #define NV50_SCISSORS_CLIPPING
 
-#define SB_BEGIN_3D(so, m, s)                                                  \
-   (so)->state[(so)->size++] =                                                 \
-      ((s) << 18) | (NV50_SUBCH_3D << 13) | NV50_3D_##m
+#define SB_BEGIN_3D(so, m, s) \
+   (so)->state[(so)->size++] = NV50_FIFO_PKHDR(NV50_3D(m), s)
 
-#define SB_BEGIN_3D_(so, m, s)                                                 \
-   (so)->state[(so)->size++] =                                                 \
-      ((s) << 18) | (NV50_SUBCH_3D << 13) | m
+#define SB_BEGIN_3D_(so, m, s) \
+   (so)->state[(so)->size++] = NV50_FIFO_PKHDR(SUBC_3D(m), s)
 
 #define SB_DATA(so, u) (so)->state[(so)->size++] = (u)
 
@@ -46,6 +44,7 @@ struct nv50_vertex_stateobj {
    unsigned num_elements;
    uint32_t instance_elts;
    uint32_t instance_bufs;
+   uint16_t vb_access_size[PIPE_MAX_ATTRIBS];
    boolean need_conversion;
    unsigned vertex_size;
    unsigned packet_vertex_limit;

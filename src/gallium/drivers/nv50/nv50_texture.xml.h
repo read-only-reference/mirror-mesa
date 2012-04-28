@@ -8,12 +8,12 @@ http://0x04.net/cgit/index.cgi/rules-ng-ng
 git clone git://0x04.net/rules-ng-ng
 
 The rules-ng-ng source files this header was generated from are:
-- rnndb/nv50_texture.xml (   7947 bytes, from 2011-07-09 13:43:58)
-- ./rnndb/copyright.xml  (   6452 bytes, from 2011-07-09 13:43:58)
-- ./rnndb/nvchipsets.xml (   3617 bytes, from 2011-07-09 13:43:58)
-- ./rnndb/nv50_defs.xml  (   5468 bytes, from 2011-07-09 13:43:58)
+- rnndb/nv50_texture.xml (   8111 bytes, from 2012-04-29 11:17:45)
+- ./rnndb/copyright.xml  (   6452 bytes, from 2011-08-11 18:25:12)
+- ./rnndb/nvchipsets.xml (   3701 bytes, from 2012-03-22 20:40:59)
+- ./rnndb/nv50_defs.xml  (   5468 bytes, from 2011-08-11 18:25:12)
 
-Copyright (C) 2006-2011 by the following authors:
+Copyright (C) 2006-2012 by the following authors:
 - Artur Huillet <arthur.huillet@free.fr> (ahuillet)
 - Ben Skeggs (darktama, darktama_)
 - B. R. <koala_br@users.sourceforge.net> (koala_br)
@@ -147,8 +147,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define NV50_TIC_0_FMT_RGTC1					0x00000027
 #define NV50_TIC_0_FMT_RGTC2					0x00000028
 #define NV50_TIC_0_FMT_S8_Z24					0x00000029
-#define NV50_TIC_0_FMT_Z24_S8					0x0000002a
-#define NV50_TIC_0_FMT_Z24_X8					0x0000002b
+#define NV50_TIC_0_FMT_Z24_X8					0x0000002a
+#define NV50_TIC_0_FMT_Z24_S8					0x0000002b
 #define NV50_TIC_0_FMT_Z24_C8_MS4_CS4				0x0000002c
 #define NV50_TIC_0_FMT_Z24_C8_MS8_CS8				0x0000002d
 #define NV50_TIC_0_FMT_Z24_C8_MS4_CS12				0x0000002e
@@ -265,8 +265,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define NV50_TSC_1_MIPF_NONE					0x00000040
 #define NV50_TSC_1_MIPF_NEAREST					0x00000080
 #define NV50_TSC_1_MIPF_LINEAR					0x000000c0
+#define NVE4_TSC_1_CUBE_SEAMLESS				0x00000200
 #define NV50_TSC_1_LOD_BIAS__MASK				0x01fff000
 #define NV50_TSC_1_LOD_BIAS__SHIFT				12
+#define NVE4_TSC_1_FORCE_NONNORMALIZED_COORDS			0x02000000
 
 #define NV50_TSC_2						0x00000008
 #define NV50_TSC_2_MIN_LOD__MASK				0x00000fff

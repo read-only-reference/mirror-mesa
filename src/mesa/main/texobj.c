@@ -153,6 +153,8 @@ _mesa_initialize_texture_object( struct gl_texture_object *obj,
    obj->Swizzle[3] = GL_ALPHA;
    obj->_Swizzle = SWIZZLE_NOOP;
    obj->Sampler.sRGBDecode = GL_DECODE_EXT;
+   obj->BufferObjectFormat = GL_LUMINANCE8;
+   obj->_BufferObjectFormat = MESA_FORMAT_L8;
 }
 
 
@@ -447,6 +449,14 @@ _mesa_test_texobj_completeness( const struct gl_context *ctx,
    /* We'll set these to FALSE if tests fail below */
    t->_BaseComplete = GL_TRUE;
    t->_MipmapComplete = GL_TRUE;
+
+   if (t->Target == GL_TEXTURE_BUFFER) {
+      /* Buffer textures are always considered complete.  The obvious case where
+       * they would be incomplete (no BO attached) is actually specced to be
+       * undefined rendering results.
+       */
+      return;
+   }
 
    /* Detect cases where the application set the base level to an invalid
     * value.
@@ -755,6 +765,9 @@ _mesa_get_fallback_texture(struct gl_context *ctx, gl_texture_index tex)
          target = GL_TEXTURE_1D;
          break;
       case TEXTURE_BUFFER_INDEX:
+         dims = 0;
+         target = GL_TEXTURE_BUFFER;
+         break;
       case TEXTURE_EXTERNAL_INDEX:
       default:
          /* no-op */
@@ -793,6 +806,8 @@ _mesa_get_fallback_texture(struct gl_context *ctx, gl_texture_index tex)
                                     GL_RGBA, texFormat);
 
          switch (dims) {
+	 case 0:
+	    break;
          case 1:
             ctx->Driver.TexImage1D(ctx, texImage, GL_RGBA,
                                    width, 0,
@@ -824,6 +839,65 @@ _mesa_get_fallback_texture(struct gl_context *ctx, gl_texture_index tex)
    }
    return ctx->Shared->FallbackTex[tex];
 }
+
+
+/**
+ * Compute the size of the given texture object, in bytes.
+ */
+static GLuint
+texture_size(const struct gl_texture_object *texObj)
+{
+   const GLuint numFaces = texObj->Target == GL_TEXTURE_CUBE_MAP ? 6 : 1;
+   GLuint face, level, size = 0;
+
+   for (face = 0; face < numFaces; face++) {
+      for (level = 0; level < MAX_TEXTURE_LEVELS; level++) {
+         const struct gl_texture_image *img = texObj->Image[face][level];
+         if (img) {
+            GLuint sz = _mesa_format_image_size(img->TexFormat, img->Width,
+                                                img->Height, img->Depth);
+            size += sz;
+         }
+      }
+   }
+
+   return size;
+}
+
+
+/**
+ * Callback called from _mesa_HashWalk()
+ */
+static void
+count_tex_size(GLuint key, void *data, void *userData)
+{
+   const struct gl_texture_object *texObj =
+      (const struct gl_texture_object *) data;
+   GLuint *total = (GLuint *) userData;
+
+   *total = *total + texture_size(texObj);
+}
+
+
+/**
+ * Compute total size (in bytes) of all textures for the given context.
+ * For debugging purposes.
+ */
+GLuint
+_mesa_total_texture_memory(struct gl_context *ctx)
+{
+   GLuint tgt, total = 0;
+
+   _mesa_HashWalk(ctx->Shared->TexObjects, count_tex_size, &total);
+
+   /* plus, the default texture objects */
+   for (tgt = 0; tgt < NUM_TEXTURE_TARGETS; tgt++) {
+      total += texture_size(ctx->Shared->DefaultTex[tgt]);
+   }
+
+   return total;
+}
+
 
 
 /*@}*/

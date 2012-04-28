@@ -36,10 +36,12 @@
   */
 
 #include "pipe/p_state.h"
+#include "util/u_draw.h"
 #include "util/u_framebuffer.h"
 #include "util/u_inlines.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
+#include "util/u_vbuf.h"
 #include "tgsi/tgsi_parse.h"
 
 #include "cso_cache/cso_context.h"
@@ -77,6 +79,7 @@ struct sampler_info
 struct cso_context {
    struct pipe_context *pipe;
    struct cso_cache *cache;
+   struct u_vbuf *vbuf;
 
    boolean has_geometry_shader;
    boolean has_streamout;
@@ -230,6 +233,25 @@ static INLINE void sanitize_hash(struct cso_hash *hash, enum cso_cache_type type
    }
 }
 
+static void cso_init_vbuf(struct cso_context *cso)
+{
+   struct u_vbuf_caps caps;
+
+   u_vbuf_get_caps(cso->pipe->screen, &caps);
+
+   /* Install u_vbuf if there is anything unsupported. */
+   if (!caps.buffer_offset_unaligned ||
+       !caps.buffer_stride_unaligned ||
+       !caps.velem_src_offset_unaligned ||
+       !caps.format_fixed32 ||
+       !caps.format_float16 ||
+       !caps.format_float64 ||
+       !caps.format_norm32 ||
+       !caps.format_scaled32 ||
+       !caps.user_vertex_buffers) {
+      cso->vbuf = u_vbuf_create(cso->pipe, &caps);
+   }
+}
 
 struct cso_context *cso_create_context( struct pipe_context *pipe )
 {
@@ -247,6 +269,8 @@ struct cso_context *cso_create_context( struct pipe_context *pipe )
                                    ctx);
 
    ctx->pipe = pipe;
+
+   cso_init_vbuf(ctx);
 
    /* Enable for testing: */
    if (0) cso_set_maximum_cache_size( ctx->cache, 4 );
@@ -266,7 +290,6 @@ out:
    cso_destroy_context( ctx );      
    return NULL;
 }
-
 
 /**
  * Prior to context destruction, this function unbinds all state objects.
@@ -336,6 +359,8 @@ void cso_release_all( struct cso_context *ctx )
 void cso_destroy_context( struct cso_context *ctx )
 {
    if (ctx) {
+      if (ctx->vbuf)
+         u_vbuf_destroy(ctx->vbuf);
       FREE( ctx );
    }
 }
@@ -779,10 +804,16 @@ enum pipe_error cso_set_vertex_elements(struct cso_context *ctx,
                                         unsigned count,
                                         const struct pipe_vertex_element *states)
 {
+   struct u_vbuf *vbuf = ctx->vbuf;
    unsigned key_size, hash_key;
    struct cso_hash_iter iter;
    void *handle;
    struct cso_velems_state velems_state;
+
+   if (vbuf) {
+      u_vbuf_set_vertex_elements(vbuf, count, states);
+      return PIPE_OK;
+   }
 
    /* need to include the count into the stored state data too.
       Otherwise first few count pipe_vertex_elements could be identical even if count
@@ -825,12 +856,26 @@ enum pipe_error cso_set_vertex_elements(struct cso_context *ctx,
 
 void cso_save_vertex_elements(struct cso_context *ctx)
 {
+   struct u_vbuf *vbuf = ctx->vbuf;
+
+   if (vbuf) {
+      u_vbuf_save_vertex_elements(vbuf);
+      return;
+   }
+
    assert(!ctx->velements_saved);
    ctx->velements_saved = ctx->velements;
 }
 
 void cso_restore_vertex_elements(struct cso_context *ctx)
 {
+   struct u_vbuf *vbuf = ctx->vbuf;
+
+   if (vbuf) {
+      u_vbuf_restore_vertex_elements(vbuf);
+      return;
+   }
+
    if (ctx->velements != ctx->velements_saved) {
       ctx->velements = ctx->velements_saved;
       ctx->pipe->bind_vertex_elements_state(ctx->pipe, ctx->velements_saved);
@@ -844,6 +889,13 @@ void cso_set_vertex_buffers(struct cso_context *ctx,
                             unsigned count,
                             const struct pipe_vertex_buffer *buffers)
 {
+   struct u_vbuf *vbuf = ctx->vbuf;
+
+   if (vbuf) {
+      u_vbuf_set_vertex_buffers(vbuf, count, buffers);
+      return;
+   }
+
    if (count != ctx->nr_vertex_buffers ||
        memcmp(buffers, ctx->vertex_buffers,
               sizeof(struct pipe_vertex_buffer) * count) != 0) {
@@ -855,6 +907,13 @@ void cso_set_vertex_buffers(struct cso_context *ctx,
 
 void cso_save_vertex_buffers(struct cso_context *ctx)
 {
+   struct u_vbuf *vbuf = ctx->vbuf;
+
+   if (vbuf) {
+      u_vbuf_save_vertex_buffers(vbuf);
+      return;
+   }
+
    util_copy_vertex_buffers(ctx->vertex_buffers_saved,
                             &ctx->nr_vertex_buffers_saved,
                             ctx->vertex_buffers,
@@ -863,10 +922,24 @@ void cso_save_vertex_buffers(struct cso_context *ctx)
 
 void cso_restore_vertex_buffers(struct cso_context *ctx)
 {
+   unsigned i;
+   struct u_vbuf *vbuf = ctx->vbuf;
+
+   if (vbuf) {
+      u_vbuf_restore_vertex_buffers(vbuf);
+      return;
+   }
+
    util_copy_vertex_buffers(ctx->vertex_buffers,
                             &ctx->nr_vertex_buffers,
                             ctx->vertex_buffers_saved,
                             ctx->nr_vertex_buffers_saved);
+
+   for (i = 0; i < ctx->nr_vertex_buffers_saved; i++) {
+      pipe_resource_reference(&ctx->vertex_buffers_saved[i].buffer, NULL);
+   }
+   ctx->nr_vertex_buffers_saved = 0;
+
    ctx->pipe->set_vertex_buffers(ctx->pipe, ctx->nr_vertex_buffers,
                                  ctx->vertex_buffers);
 }
@@ -1281,4 +1354,50 @@ cso_restore_stream_outputs(struct cso_context *ctx)
 
    ctx->nr_so_targets = ctx->nr_so_targets_saved;
    ctx->nr_so_targets_saved = 0;
+}
+
+/* drawing */
+
+void
+cso_set_index_buffer(struct cso_context *cso,
+                     const struct pipe_index_buffer *ib)
+{
+   struct u_vbuf *vbuf = cso->vbuf;
+
+   if (vbuf) {
+      u_vbuf_set_index_buffer(vbuf, ib);
+   } else {
+      struct pipe_context *pipe = cso->pipe;
+      pipe->set_index_buffer(pipe, ib);
+   }
+}
+
+void
+cso_draw_vbo(struct cso_context *cso,
+             const struct pipe_draw_info *info)
+{
+   struct u_vbuf *vbuf = cso->vbuf;
+
+   if (vbuf) {
+      u_vbuf_draw_vbo(vbuf, info);
+   } else {
+      struct pipe_context *pipe = cso->pipe;
+      pipe->draw_vbo(pipe, info);
+   }
+}
+
+void
+cso_draw_arrays(struct cso_context *cso, uint mode, uint start, uint count)
+{
+   struct pipe_draw_info info;
+
+   util_draw_init_info(&info);
+
+   info.mode = mode;
+   info.start = start;
+   info.count = count;
+   info.min_index = start;
+   info.max_index = start + count - 1;
+
+   cso_draw_vbo(cso, &info);
 }

@@ -58,7 +58,7 @@ static void yyerror(YYLTYPE *loc, _mesa_glsl_parse_state *st, const char *msg)
 %union {
    int n;
    float real;
-   char *identifier;
+   const char *identifier;
 
    struct ast_type_qualifier type_qualifier;
 
@@ -103,6 +103,8 @@ static void yyerror(YYLTYPE *loc, _mesa_glsl_parse_state *st, const char *msg)
 %token SAMPLER2DARRAYSHADOW ISAMPLER1D ISAMPLER2D ISAMPLER3D ISAMPLERCUBE
 %token ISAMPLER1DARRAY ISAMPLER2DARRAY USAMPLER1D USAMPLER2D USAMPLER3D
 %token USAMPLERCUBE USAMPLER1DARRAY USAMPLER2DARRAY
+%token SAMPLER2DRECT ISAMPLER2DRECT USAMPLER2DRECT SAMPLER2DRECTSHADOW
+%token SAMPLERBUFFER ISAMPLERBUFFER USAMPLERBUFFER
 %token SAMPLEREXTERNALOES
 %token STRUCT VOID_TOK WHILE
 %token <identifier> IDENTIFIER TYPE_IDENTIFIER NEW_IDENTIFIER
@@ -130,12 +132,12 @@ static void yyerror(YYLTYPE *loc, _mesa_glsl_parse_state *st, const char *msg)
 %token INLINE_TOK NOINLINE VOLATILE PUBLIC_TOK STATIC EXTERN EXTERNAL
 %token LONG_TOK SHORT_TOK DOUBLE_TOK HALF FIXED_TOK UNSIGNED INPUT_TOK OUPTUT
 %token HVEC2 HVEC3 HVEC4 DVEC2 DVEC3 DVEC4 FVEC2 FVEC3 FVEC4
-%token SAMPLER2DRECT SAMPLER3DRECT SAMPLER2DRECTSHADOW
+%token SAMPLER3DRECT
 %token SIZEOF CAST NAMESPACE USING
 
 %token ERROR_TOK
 
-%token COMMON PARTITION ACTIVE SAMPLERBUFFER FILTER
+%token COMMON PARTITION ACTIVE FILTER
 %token  IMAGE1D  IMAGE2D  IMAGE3D  IMAGECUBE  IMAGE1DARRAY  IMAGE2DARRAY
 %token IIMAGE1D IIMAGE2D IIMAGE3D IIMAGECUBE IIMAGE1DARRAY IIMAGE2DARRAY
 %token UIMAGE1D UIMAGE2D UIMAGE3D UIMAGECUBE UIMAGE1DARRAY UIMAGE2DARRAY
@@ -156,7 +158,7 @@ static void yyerror(YYLTYPE *loc, _mesa_glsl_parse_state *st, const char *msg)
 %type <type_specifier> type_specifier
 %type <type_specifier> type_specifier_no_prec
 %type <type_specifier> type_specifier_nonarray
-%type <n> basic_type_specifier_nonarray
+%type <identifier> basic_type_specifier_nonarray
 %type <fully_specified_type> fully_specified_type
 %type <function> function_prototype
 %type <function> function_header
@@ -1103,8 +1105,14 @@ layout_qualifier_id_list:
 	   if ($1.flags.q.explicit_location)
 	      $$.location = $1.location;
 
+	   if ($1.flags.q.explicit_index)
+	      $$.index = $1.index;
+
 	   if ($3.flags.q.explicit_location)
 	      $$.location = $3.location;
+
+	   if ($3.flags.q.explicit_index)
+	      $$.index = $3.index;
 	}
 	;
 
@@ -1191,6 +1199,20 @@ layout_qualifier_id:
 		    YYERROR;
 		 }
 	      }
+
+	      if (strcmp("index", $1) == 0) {
+	      	 got_one = true;
+
+		 $$.flags.q.explicit_index = 1;
+
+		 if ($3 >= 0) {
+		    $$.index = $3;
+		 } else {
+		    _mesa_glsl_error(& @3, state,
+		                     "invalid index %d specified\n", $3);
+                    YYERROR;
+                 }
+              }
 	   }
 
 	   /* If the identifier didn't match any known layout identifiers,
@@ -1365,58 +1387,63 @@ type_specifier_nonarray:
 	;
 
 basic_type_specifier_nonarray:
-	VOID_TOK		{ $$ = ast_void; }
-	| FLOAT_TOK		{ $$ = ast_float; }
-	| INT_TOK		{ $$ = ast_int; }
-	| UINT_TOK		{ $$ = ast_uint; }
-	| BOOL_TOK		{ $$ = ast_bool; }
-	| VEC2			{ $$ = ast_vec2; }
-	| VEC3			{ $$ = ast_vec3; }
-	| VEC4			{ $$ = ast_vec4; }
-	| BVEC2			{ $$ = ast_bvec2; }
-	| BVEC3			{ $$ = ast_bvec3; }
-	| BVEC4			{ $$ = ast_bvec4; }
-	| IVEC2			{ $$ = ast_ivec2; }
-	| IVEC3			{ $$ = ast_ivec3; }
-	| IVEC4			{ $$ = ast_ivec4; }
-	| UVEC2			{ $$ = ast_uvec2; }
-	| UVEC3			{ $$ = ast_uvec3; }
-	| UVEC4			{ $$ = ast_uvec4; }
-	| MAT2X2		{ $$ = ast_mat2; }
-	| MAT2X3		{ $$ = ast_mat2x3; }
-	| MAT2X4		{ $$ = ast_mat2x4; }
-	| MAT3X2		{ $$ = ast_mat3x2; }
-	| MAT3X3		{ $$ = ast_mat3; }
-	| MAT3X4		{ $$ = ast_mat3x4; }
-	| MAT4X2		{ $$ = ast_mat4x2; }
-	| MAT4X3		{ $$ = ast_mat4x3; }
-	| MAT4X4		{ $$ = ast_mat4; }
-	| SAMPLER1D		{ $$ = ast_sampler1d; }
-	| SAMPLER2D		{ $$ = ast_sampler2d; }
-	| SAMPLER2DRECT		{ $$ = ast_sampler2drect; }
-	| SAMPLER3D		{ $$ = ast_sampler3d; }
-	| SAMPLERCUBE		{ $$ = ast_samplercube; }
-	| SAMPLEREXTERNALOES	{ $$ = ast_samplerexternaloes; }
-	| SAMPLER1DSHADOW	{ $$ = ast_sampler1dshadow; }
-	| SAMPLER2DSHADOW	{ $$ = ast_sampler2dshadow; }
-	| SAMPLER2DRECTSHADOW	{ $$ = ast_sampler2drectshadow; }
-	| SAMPLERCUBESHADOW	{ $$ = ast_samplercubeshadow; }
-	| SAMPLER1DARRAY	{ $$ = ast_sampler1darray; }
-	| SAMPLER2DARRAY	{ $$ = ast_sampler2darray; }
-	| SAMPLER1DARRAYSHADOW	{ $$ = ast_sampler1darrayshadow; }
-	| SAMPLER2DARRAYSHADOW	{ $$ = ast_sampler2darrayshadow; }
-	| ISAMPLER1D		{ $$ = ast_isampler1d; }
-	| ISAMPLER2D		{ $$ = ast_isampler2d; }
-	| ISAMPLER3D		{ $$ = ast_isampler3d; }
-	| ISAMPLERCUBE		{ $$ = ast_isamplercube; }
-	| ISAMPLER1DARRAY	{ $$ = ast_isampler1darray; }
-	| ISAMPLER2DARRAY	{ $$ = ast_isampler2darray; }
-	| USAMPLER1D		{ $$ = ast_usampler1d; }
-	| USAMPLER2D		{ $$ = ast_usampler2d; }
-	| USAMPLER3D		{ $$ = ast_usampler3d; }
-	| USAMPLERCUBE		{ $$ = ast_usamplercube; }
-	| USAMPLER1DARRAY	{ $$ = ast_usampler1darray; }
-	| USAMPLER2DARRAY	{ $$ = ast_usampler2darray; }
+	VOID_TOK		{ $$ = "void"; }
+	| FLOAT_TOK		{ $$ = "float"; }
+	| INT_TOK		{ $$ = "int"; }
+	| UINT_TOK		{ $$ = "uint"; }
+	| BOOL_TOK		{ $$ = "bool"; }
+	| VEC2			{ $$ = "vec2"; }
+	| VEC3			{ $$ = "vec3"; }
+	| VEC4			{ $$ = "vec4"; }
+	| BVEC2			{ $$ = "bvec2"; }
+	| BVEC3			{ $$ = "bvec3"; }
+	| BVEC4			{ $$ = "bvec4"; }
+	| IVEC2			{ $$ = "ivec2"; }
+	| IVEC3			{ $$ = "ivec3"; }
+	| IVEC4			{ $$ = "ivec4"; }
+	| UVEC2			{ $$ = "uvec2"; }
+	| UVEC3			{ $$ = "uvec3"; }
+	| UVEC4			{ $$ = "uvec4"; }
+	| MAT2X2		{ $$ = "mat2"; }
+	| MAT2X3		{ $$ = "mat2x3"; }
+	| MAT2X4		{ $$ = "mat2x4"; }
+	| MAT3X2		{ $$ = "mat3x2"; }
+	| MAT3X3		{ $$ = "mat3"; }
+	| MAT3X4		{ $$ = "mat3x4"; }
+	| MAT4X2		{ $$ = "mat4x2"; }
+	| MAT4X3		{ $$ = "mat4x3"; }
+	| MAT4X4		{ $$ = "mat4"; }
+	| SAMPLER1D		{ $$ = "sampler1D"; }
+	| SAMPLER2D		{ $$ = "sampler2D"; }
+	| SAMPLER2DRECT		{ $$ = "sampler2DRect"; }
+	| SAMPLER3D		{ $$ = "sampler3D"; }
+	| SAMPLERCUBE		{ $$ = "samplerCube"; }
+	| SAMPLEREXTERNALOES	{ $$ = "samplerExternalOES"; }
+	| SAMPLER1DSHADOW	{ $$ = "sampler1DShadow"; }
+	| SAMPLER2DSHADOW	{ $$ = "sampler2DShadow"; }
+	| SAMPLER2DRECTSHADOW	{ $$ = "sampler2DRectShadow"; }
+	| SAMPLERCUBESHADOW	{ $$ = "samplerCubeShadow"; }
+	| SAMPLER1DARRAY	{ $$ = "sampler1DArray"; }
+	| SAMPLER2DARRAY	{ $$ = "sampler2DArray"; }
+	| SAMPLER1DARRAYSHADOW	{ $$ = "sampler1DArrayShadow"; }
+	| SAMPLER2DARRAYSHADOW	{ $$ = "sampler2DArrayShadow"; }
+	| SAMPLERBUFFER		{ $$ = "samplerBuffer"; }
+	| ISAMPLER1D		{ $$ = "isampler1D"; }
+	| ISAMPLER2D		{ $$ = "isampler2D"; }
+	| ISAMPLER2DRECT	{ $$ = "isampler2DRect"; }
+	| ISAMPLER3D		{ $$ = "isampler3D"; }
+	| ISAMPLERCUBE		{ $$ = "isamplerCube"; }
+	| ISAMPLER1DARRAY	{ $$ = "isampler1DArray"; }
+	| ISAMPLER2DARRAY	{ $$ = "isampler2DArray"; }
+	| ISAMPLERBUFFER	{ $$ = "isamplerBuffer"; }
+	| USAMPLER1D		{ $$ = "usampler1D"; }
+	| USAMPLER2D		{ $$ = "usampler2D"; }
+	| USAMPLER2DRECT	{ $$ = "usampler2DRect"; }
+	| USAMPLER3D		{ $$ = "usampler3D"; }
+	| USAMPLERCUBE		{ $$ = "usamplerCube"; }
+	| USAMPLER1DARRAY	{ $$ = "usampler1DArray"; }
+	| USAMPLER2DARRAY	{ $$ = "usampler2DArray"; }
+	| USAMPLERBUFFER	{ $$ = "usamplerBuffer"; }
 	;
 
 precision_qualifier:

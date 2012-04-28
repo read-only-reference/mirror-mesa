@@ -120,6 +120,7 @@ svga_get_paramf(struct pipe_screen *screen, enum pipe_capf param)
       return 15.0;
 
    default:
+      debug_printf("Unexpected PIPE_CAPF_ query %u\n", param);
       return 0;
    }
 }
@@ -139,6 +140,8 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_TWO_SIDED_STENCIL:
       return 1;
+   case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
+      return 0;
    case PIPE_CAP_ANISOTROPIC_FILTER:
       return 1;
    case PIPE_CAP_POINT_SPRITE:
@@ -157,6 +160,13 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_TEXTURE_SWIZZLE:
       return 1;
+   case PIPE_CAP_USER_VERTEX_BUFFERS:
+   case PIPE_CAP_USER_INDEX_BUFFERS:
+      return 0;
+   case PIPE_CAP_USER_CONSTANT_BUFFERS:
+      return 1;
+   case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
+      return 16;
 
    case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
       {
@@ -197,13 +207,44 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
 
    case PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE:
       return 1;
-   case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
-      return 0;
 
+   case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
+      return 1; /* The color outputs of vertex shaders are not clamped */
+   case PIPE_CAP_VERTEX_COLOR_CLAMPED:
+      return 0; /* The driver can't clamp vertex colors */
+   case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
+      return 0; /* The driver can't clamp fragment colors */
+
+   /* Unsupported features */
+   case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
+   case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
+   case PIPE_CAP_SM3:
+   case PIPE_CAP_SHADER_STENCIL_EXPORT:
+   case PIPE_CAP_DEPTH_CLIP_DISABLE:
+   case PIPE_CAP_SEAMLESS_CUBE_MAP:
+   case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
+   case PIPE_CAP_INDEP_BLEND_ENABLE:
+   case PIPE_CAP_INDEP_BLEND_FUNC:
+   case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
+   case PIPE_CAP_PRIMITIVE_RESTART:
+   case PIPE_CAP_TGSI_INSTANCEID:
+   case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
+   case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
+   case PIPE_CAP_MIN_TEXEL_OFFSET:
+   case PIPE_CAP_MAX_TEXEL_OFFSET:
+   case PIPE_CAP_CONDITIONAL_RENDER:
+   case PIPE_CAP_TEXTURE_BARRIER:
+   case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
+   case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
+   case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+   case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
+   case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
+   case PIPE_CAP_GLSL_FEATURE_LEVEL:
       return 0;
 
    default:
+      debug_printf("Unexpected PIPE_CAP_ query %u\n", param);
       return 0;
    }
 }
@@ -259,6 +300,9 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
          return 0;
       case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
          return 16;
+      default:
+         debug_printf("Unexpected vertex shader query %u\n", param);
+         return 0;
       }
       break;
    case PIPE_SHADER_VERTEX:
@@ -302,12 +346,19 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
          return 0;
       case PIPE_SHADER_CAP_INTEGERS:
          return 0;
+      case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+         return 0;
       default:
-         break;
+         debug_printf("Unexpected vertex shader query %u\n", param);
+         return 0;
       }
       break;
+   case PIPE_SHADER_GEOMETRY:
+      /* no support for geometry shaders at this time */
+      return 0;
    default:
-      break;
+      debug_printf("Unexpected vertex shader query %u\n", param);
+      return 0;
    }
    return 0;
 }

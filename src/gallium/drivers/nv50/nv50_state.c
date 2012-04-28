@@ -121,7 +121,7 @@ nv50_blend_state_create(struct pipe_context *pipe,
    boolean emit_common_func = cso->rt[0].blend_enable;
    uint32_t ms;
 
-   if (nv50_context(pipe)->screen->tesla->grclass >= NVA3_3D) {
+   if (nv50_context(pipe)->screen->tesla->oclass >= NVA3_3D_CLASS) {
       SB_BEGIN_3D(so, BLEND_INDEPENDENT, 1);
       SB_DATA    (so, cso->independent_blend_enable);
    }
@@ -142,7 +142,7 @@ nv50_blend_state_create(struct pipe_context *pipe,
             emit_common_func = TRUE;
       }
 
-      if (nv50_context(pipe)->screen->tesla->grclass >= NVA3_3D) {
+      if (nv50_context(pipe)->screen->tesla->oclass >= NVA3_3D_CLASS) {
          emit_common_func = FALSE;
 
          for (i = 0; i < 8; ++i) {
@@ -465,6 +465,13 @@ nv50_sampler_state_create(struct pipe_context *pipe,
                  (nv50_tsc_wrap_mode(cso->wrap_t) << 3) |
                  (nv50_tsc_wrap_mode(cso->wrap_r) << 6));
 
+   if (nouveau_screen(pipe->screen)->class_3d >= NVE4_3D_CLASS) {
+      if (cso->seamless_cube_map)
+         so->tsc[1] |= NVE4_TSC_1_CUBE_SEAMLESS;
+      if (!cso->normalized_coords)
+         so->tsc[1] |= NVE4_TSC_1_FORCE_NONNORMALIZED_COORDS;
+   }
+
    switch (cso->mag_img_filter) {
    case PIPE_TEX_FILTER_LINEAR:
       so->tsc[1] |= NV50_TSC_1_MAGF_LINEAR;
@@ -628,7 +635,7 @@ nv50_stage_set_sampler_views(struct nv50_context *nv50, int s,
 
    nv50->num_textures[s] = nr;
 
-   nv50_bufctx_reset(nv50, NV50_BUFCTX_TEXTURES);
+   nouveau_bufctx_reset(nv50->bufctx_3d, NV50_BIND_TEXTURES);
 
    nv50->dirty |= NV50_NEW_TEXTURES;
 }
@@ -737,19 +744,32 @@ nv50_gp_state_bind(struct pipe_context *pipe, void *hwcso)
 
 static void
 nv50_set_constant_buffer(struct pipe_context *pipe, uint shader, uint index,
-                         struct pipe_resource *res)
+                         struct pipe_constant_buffer *cb)
 {
    struct nv50_context *nv50 = nv50_context(pipe);
+   struct pipe_resource *res = cb ? cb->buffer : NULL;
 
-   if (nv50->constbuf[shader][index])
-      nv50_bufctx_del_resident(nv50, NV50_BUFCTX_CONSTANT,
-			       nv04_resource(nv50->constbuf[shader][index]));
+   if (cb && cb->user_buffer) {
+      res = nouveau_user_buffer_create(pipe->screen, cb->user_buffer,
+                                       cb->buffer_size,
+                                       PIPE_BIND_CONSTANT_BUFFER);
+   }
 
    pipe_resource_reference(&nv50->constbuf[shader][index], res);
 
    nv50->constbuf_dirty[shader] |= 1 << index;
+   if (res)
+      nv50->constbuf_valid[shader] |= 1 << index;
+   else
+      nv50->constbuf_valid[shader] &= ~(1 << index);
+
+   nouveau_bufctx_reset(nv50->bufctx_3d, NV50_BIND_CB(shader, index));
 
    nv50->dirty |= NV50_NEW_CONSTBUF;
+
+   if (cb && cb->user_buffer) {
+      pipe_resource_reference(&res, NULL);
+   }
 }
 
 /* =============================================================================
@@ -801,8 +821,22 @@ nv50_set_framebuffer_state(struct pipe_context *pipe,
                            const struct pipe_framebuffer_state *fb)
 {
    struct nv50_context *nv50 = nv50_context(pipe);
+   unsigned i;
 
-   nv50->framebuffer = *fb;
+   nouveau_bufctx_reset(nv50->bufctx_3d, NV50_BIND_FB);
+
+   for (i = 0; i < fb->nr_cbufs; ++i)
+      pipe_surface_reference(&nv50->framebuffer.cbufs[i], fb->cbufs[i]);
+   for (; i < nv50->framebuffer.nr_cbufs; ++i)
+      pipe_surface_reference(&nv50->framebuffer.cbufs[i], NULL);
+
+   nv50->framebuffer.nr_cbufs = fb->nr_cbufs;
+
+   nv50->framebuffer.width = fb->width;
+   nv50->framebuffer.height = fb->height;
+
+   pipe_surface_reference(&nv50->framebuffer.zsbuf, fb->zsbuf);
+
    nv50->dirty |= NV50_NEW_FRAMEBUFFER;
 }
 
@@ -852,7 +886,7 @@ nv50_set_vertex_buffers(struct pipe_context *pipe,
    memcpy(nv50->vtxbuf, vb, sizeof(*vb) * count);
    nv50->num_vtxbufs = count;
 
-   nv50_bufctx_reset(nv50, NV50_BUFCTX_VERTEX);
+   nouveau_bufctx_reset(nv50->bufctx_3d, NV50_BIND_VERTEX);
 
    nv50->dirty |= NV50_NEW_ARRAYS;
 }
@@ -863,10 +897,15 @@ nv50_set_index_buffer(struct pipe_context *pipe,
 {
    struct nv50_context *nv50 = nv50_context(pipe);
 
-   if (ib) {
-      pipe_resource_reference(&nv50->idxbuf.buffer, ib->buffer);
+   if (nv50->idxbuf.buffer)
+      nouveau_bufctx_reset(nv50->bufctx_3d, NV50_BIND_INDEX);
 
-      memcpy(&nv50->idxbuf, ib, sizeof(nv50->idxbuf));
+   if (ib && ib->buffer) {
+      pipe_resource_reference(&nv50->idxbuf.buffer, ib->buffer);
+      nv50->idxbuf.offset = ib->offset;
+      nv50->idxbuf.index_size = ib->index_size;
+      if (nouveau_resource_mapped_by_gpu(ib->buffer))
+         BCTX_REFN(nv50->bufctx_3d, INDEX, nv04_resource(ib->buffer), RD);
    } else {
       pipe_resource_reference(&nv50->idxbuf.buffer, NULL);
    }
@@ -936,7 +975,5 @@ nv50_init_state_functions(struct nv50_context *nv50)
 
    pipe->set_vertex_buffers = nv50_set_vertex_buffers;
    pipe->set_index_buffer = nv50_set_index_buffer;
-
-   pipe->redefine_user_buffer = u_default_redefine_user_buffer;
 }
 

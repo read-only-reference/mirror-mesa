@@ -29,11 +29,23 @@ def read_ir_files(fs):
         with open(filename) as f:
             fs[function_name] = f.read()
 
+def read_glsl_files(fs):
+    for filename in glob(path.join(path.join(builtins_dir, 'glsl'), '*.glsl')):
+        function_name = path.basename(filename).split('.')[0]
+        (output, returncode) = run_compiler([filename])
+        if (returncode):
+            sys.stderr.write("Failed to compile builtin: " + filename + "\n")
+            sys.stderr.write("Result:\n")
+            sys.stderr.write(output)
+        else:
+            fs[function_name] = output;
+
 # Return a dictionary containing all builtin definitions (even generated)
 def get_builtin_definitions():
     fs = {}
     generate_texture_functions(fs)
     read_ir_files(fs)
+    read_glsl_files(fs)
     return fs
 
 def stringify(s):
@@ -59,7 +71,7 @@ def write_function_definitions():
         print stringify(v), ';'
 
 def run_compiler(args):
-    command = [compiler, '--dump-lir'] + args
+    command = [compiler, '--dump-hir'] + args
     p = Popen(command, 1, stdout=PIPE, shell=False)
     output = p.communicate()[0]
 
@@ -78,6 +90,10 @@ def run_compiler(args):
     # Also toss any duplicate newlines
     output = output.replace('\n\n', '\n')
 
+    # Kill any global variable declarations.  We don't want them.
+    kill_globals = re.compile(r'^\(declare.*\n', re.MULTILINE)
+    output = kill_globals.sub('', output)
+
     return (output, p.returncode)
 
 def write_profile(filename, profile):
@@ -86,10 +102,6 @@ def write_profile(filename, profile):
     if returncode != 0:
         print '#error builtins profile', profile, 'failed to compile'
         return
-
-    # Kill any global variable declarations.  We don't want them.
-    kill_globals = re.compile(r'^\(declare.*\n', re.MULTILINE)
-    proto_ir = kill_globals.sub('', proto_ir)
 
     print 'static const char prototypes_for_' + profile + '[] ='
     print stringify(proto_ir), ';'
@@ -113,7 +125,7 @@ def write_profiles():
 
 def get_profile_list():
     profile_files = []
-    for extension in ['frag', 'vert']:
+    for extension in ['glsl', 'frag', 'vert']:
         path_glob = path.join(
             path.join(builtins_dir, 'profiles'), '*.' + extension)
         profile_files.extend(glob(path_glob))
@@ -260,8 +272,10 @@ _mesa_glsl_initialize_functions(struct _mesa_glsl_parse_state *state)
             check = 'state->target == vertex_shader && '
         elif profile.endswith('_frag'):
             check = 'state->target == fragment_shader && '
+        else:
+            check = ''
 
-        version = re.sub(r'_(vert|frag)$', '', profile)
+        version = re.sub(r'_(glsl|vert|frag)$', '', profile)
         if version.isdigit():
             check += 'state->language_version == ' + version
         else: # an extension name

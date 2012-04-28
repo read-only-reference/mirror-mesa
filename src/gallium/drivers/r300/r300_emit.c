@@ -120,9 +120,9 @@ static void get_rc_constant_state(
         case RC_STATE_R300_TEXSCALE_FACTOR:
             tex = r300_resource(texstate->sampler_views[constant->u.State[1]]->base.texture);
             /* Add a small number to the texture size to work around rounding errors in hw. */
-            vec[0] = tex->b.b.b.width0  / (tex->tex.width0  + 0.001f);
-            vec[1] = tex->b.b.b.height0 / (tex->tex.height0 + 0.001f);
-            vec[2] = tex->b.b.b.depth0  / (tex->tex.depth0  + 0.001f);
+            vec[0] = tex->b.b.width0  / (tex->tex.width0  + 0.001f);
+            vec[1] = tex->b.b.height0 / (tex->tex.height0 + 0.001f);
+            vec[2] = tex->b.b.depth0  / (tex->tex.depth0  + 0.001f);
             vec[3] = 1;
             break;
 
@@ -823,7 +823,7 @@ void r300_emit_textures_state(struct r300_context *r300,
 void r300_emit_vertex_arrays(struct r300_context* r300, int offset,
                              boolean indexed, int instance_id)
 {
-    struct pipe_vertex_buffer *vbuf = r300->vbuf_mgr->real_vertex_buffer;
+    struct pipe_vertex_buffer *vbuf = r300->vertex_buffer;
     struct pipe_vertex_element *velem = r300->velems->velem;
     struct r300_resource *buf;
     int i;
@@ -1030,20 +1030,18 @@ void r300_emit_vs_state(struct r300_context* r300, unsigned size, void* state)
             R300_PVS_VF_MAX_VTX_NUM(12) |
             (r300screen->caps.is_r500 ? R500_TCL_STATE_OPTIMIZATION : 0));
 
-    /* Emit flow control instructions. */
-    if (code->num_fc_ops) {
-
-        OUT_CS_REG(R300_VAP_PVS_FLOW_CNTL_OPC, code->fc_ops);
-        if (r300screen->caps.is_r500) {
-            OUT_CS_REG_SEQ(R500_VAP_PVS_FLOW_CNTL_ADDRS_LW_0, code->num_fc_ops * 2);
-            OUT_CS_TABLE(code->fc_op_addrs.r500, code->num_fc_ops * 2);
-        } else {
-            OUT_CS_REG_SEQ(R300_VAP_PVS_FLOW_CNTL_ADDRS_0, code->num_fc_ops);
-            OUT_CS_TABLE(code->fc_op_addrs.r300, code->num_fc_ops);
-        }
-        OUT_CS_REG_SEQ(R300_VAP_PVS_FLOW_CNTL_LOOP_INDEX_0, code->num_fc_ops);
-        OUT_CS_TABLE(code->fc_loop_index, code->num_fc_ops);
+    /* Emit flow control instructions.  Even if there are no fc instructions,
+     * we still need to write the registers to make sure they are cleared. */
+    OUT_CS_REG(R300_VAP_PVS_FLOW_CNTL_OPC, code->fc_ops);
+    if (r300screen->caps.is_r500) {
+        OUT_CS_REG_SEQ(R500_VAP_PVS_FLOW_CNTL_ADDRS_LW_0, R300_VS_MAX_FC_OPS * 2);
+        OUT_CS_TABLE(code->fc_op_addrs.r500, R300_VS_MAX_FC_OPS * 2);
+    } else {
+        OUT_CS_REG_SEQ(R300_VAP_PVS_FLOW_CNTL_ADDRS_0, R300_VS_MAX_FC_OPS);
+        OUT_CS_TABLE(code->fc_op_addrs.r300, R300_VS_MAX_FC_OPS);
     }
+    OUT_CS_REG_SEQ(R300_VAP_PVS_FLOW_CNTL_LOOP_INDEX_0, R300_VS_MAX_FC_OPS);
+    OUT_CS_TABLE(code->fc_loop_index, R300_VS_MAX_FC_OPS);
 
     END_CS;
 }
@@ -1225,10 +1223,11 @@ validate:
                                 r300_resource(r300->vbo)->domain);
     /* ...vertex buffers for HWTCL path... */
     if (do_validate_vertex_buffers && r300->vertex_arrays_dirty) {
-        struct pipe_vertex_buffer *vbuf = r300->vbuf_mgr->real_vertex_buffer;
-        struct pipe_vertex_buffer *last = r300->vbuf_mgr->real_vertex_buffer +
-                                      r300->vbuf_mgr->nr_real_vertex_buffers;
+        struct pipe_vertex_buffer *vbuf = r300->vertex_buffer;
+        struct pipe_vertex_buffer *last = r300->vertex_buffer +
+                                      r300->nr_vertex_buffers;
         struct pipe_resource *buf;
+
         for (; vbuf != last; vbuf++) {
             buf = vbuf->buffer;
             if (!buf)

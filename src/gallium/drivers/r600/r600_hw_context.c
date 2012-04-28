@@ -75,10 +75,10 @@ void r600_get_backend_mask(struct r600_context *ctx)
 	va = r600_resource_va(&ctx->screen->screen, (void*)buffer);
 
 	/* initialize buffer with zeroes */
-	results = ctx->ws->buffer_map(buffer->buf, ctx->cs, PIPE_TRANSFER_WRITE);
+	results = ctx->ws->buffer_map(buffer->cs_buf, ctx->cs, PIPE_TRANSFER_WRITE);
 	if (results) {
 		memset(results, 0, ctx->max_db * 4 * 4);
-		ctx->ws->buffer_unmap(buffer->buf);
+		ctx->ws->buffer_unmap(buffer->cs_buf);
 
 		/* emit EVENT_WRITE for ZPASS_DONE */
 		cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 2, 0);
@@ -90,14 +90,14 @@ void r600_get_backend_mask(struct r600_context *ctx)
 		cs->buf[cs->cdw++] = r600_context_bo_reloc(ctx, buffer, RADEON_USAGE_WRITE);
 
 		/* analyze results */
-		results = ctx->ws->buffer_map(buffer->buf, ctx->cs, PIPE_TRANSFER_READ);
+		results = ctx->ws->buffer_map(buffer->cs_buf, ctx->cs, PIPE_TRANSFER_READ);
 		if (results) {
 			for(i = 0; i < ctx->max_db; i++) {
 				/* at least highest bit will be set if backend is used */
 				if (results[i*4 + 1])
 					mask |= (1<<i);
 			}
-			ctx->ws->buffer_unmap(buffer->buf);
+			ctx->ws->buffer_unmap(buffer->cs_buf);
 		}
 	}
 
@@ -335,14 +335,6 @@ static const struct r600_reg r600_context_reg_list[] = {
 	{R_028124_CB_CLEAR_GREEN, 0, 0},
 	{R_028128_CB_CLEAR_BLUE, 0, 0},
 	{R_02812C_CB_CLEAR_ALPHA, 0, 0},
-	{R_028140_ALU_CONST_BUFFER_SIZE_PS_0, REG_FLAG_DIRTY_ALWAYS, 0},
-	{R_028144_ALU_CONST_BUFFER_SIZE_PS_1, REG_FLAG_DIRTY_ALWAYS, 0},
-	{R_028180_ALU_CONST_BUFFER_SIZE_VS_0, REG_FLAG_DIRTY_ALWAYS, 0},
-	{R_028184_ALU_CONST_BUFFER_SIZE_VS_1, REG_FLAG_DIRTY_ALWAYS, 0},
-	{R_028940_ALU_CONST_CACHE_PS_0, REG_FLAG_NEED_BO, 0},
-	{R_028944_ALU_CONST_CACHE_PS_1, REG_FLAG_NEED_BO, 0},
-	{R_028980_ALU_CONST_CACHE_VS_0, REG_FLAG_NEED_BO, 0},
-	{R_028984_ALU_CONST_CACHE_VS_1, REG_FLAG_NEED_BO, 0},
 	{R_02823C_CB_SHADER_MASK, 0, 0},
 	{R_028238_CB_TARGET_MASK, 0, 0},
 	{R_028410_SX_ALPHA_TEST_CONTROL, 0, 0},
@@ -660,7 +652,6 @@ void r600_context_fini(struct r600_context *ctx)
 	}
 	r600_free_resource_range(ctx, &ctx->ps_resources, ctx->num_ps_resources);
 	r600_free_resource_range(ctx, &ctx->vs_resources, ctx->num_vs_resources);
-	r600_free_resource_range(ctx, &ctx->fs_resources, ctx->num_fs_resources);
 	free(ctx->blocks);
 }
 
@@ -707,7 +698,6 @@ int r600_setup_block_table(struct r600_context *ctx)
 
 	r600_add_resource_block(ctx, &ctx->ps_resources, ctx->num_ps_resources, &c);
 	r600_add_resource_block(ctx, &ctx->vs_resources, ctx->num_vs_resources, &c);
-	r600_add_resource_block(ctx, &ctx->fs_resources, ctx->num_fs_resources, &c);
 	return 0;
 }
 
@@ -757,14 +747,10 @@ int r600_context_init(struct r600_context *ctx)
 
 	ctx->num_ps_resources = 160;
 	ctx->num_vs_resources = 160;
-	ctx->num_fs_resources = 16;
 	r = r600_resource_range_init(ctx, &ctx->ps_resources, 0, 160, 0x1c);
 	if (r)
 		goto out_err;
 	r = r600_resource_range_init(ctx, &ctx->vs_resources, 0x1180, 160, 0x1c);
-	if (r)
-		goto out_err;
-	r = r600_resource_range_init(ctx, &ctx->fs_resources, 0x2300, 16, 0x1c);
 	if (r)
 		goto out_err;
 
@@ -872,7 +858,7 @@ void r600_context_pipe_state_set(struct r600_context *ctx, struct r600_pipe_stat
 		if (block->pm4_bo_index[id]) {
 			/* find relocation */
 			reloc_id = block->pm4_bo_index[id];
-			pipe_resource_reference((struct pipe_resource**)&block->reloc[reloc_id].bo, &reg->bo->b.b.b);
+			pipe_resource_reference((struct pipe_resource**)&block->reloc[reloc_id].bo, &reg->bo->b.b);
 			block->reloc[reloc_id].bo_usage = reg->bo_usage;
 			/* always force dirty for relocs for now */
 			dirty |= R600_BLOCK_STATUS_DIRTY;
@@ -904,7 +890,6 @@ void r600_context_pipe_state_set_resource(struct r600_context *ctx, struct r600_
 {
 	int dirty;
 	int num_regs = ctx->chip_class >= EVERGREEN ? 8 : 7;
-	boolean is_vertex;
 
 	if (state == NULL) {
 		block->status &= ~(R600_BLOCK_STATUS_ENABLED | R600_BLOCK_STATUS_RESOURCE_DIRTY);
@@ -915,7 +900,6 @@ void r600_context_pipe_state_set_resource(struct r600_context *ctx, struct r600_
 		return;
 	}
 
-	is_vertex = ((state->val[num_regs-1] & 0xc0000000) == 0xc0000000);
 	dirty = block->status & R600_BLOCK_STATUS_RESOURCE_DIRTY;
 
 	if (memcmp(block->reg, state->val, num_regs*4)) {
@@ -928,37 +912,18 @@ void r600_context_pipe_state_set_resource(struct r600_context *ctx, struct r600_
 		dirty |= R600_BLOCK_STATUS_RESOURCE_DIRTY;
 
 	if (!dirty) {
-		if (is_vertex) {
-			if (block->reloc[1].bo->buf != state->bo[0]->buf)
-				dirty |= R600_BLOCK_STATUS_RESOURCE_DIRTY;
-		} else {
-			if ((block->reloc[1].bo->buf != state->bo[0]->buf) ||
-			    (block->reloc[2].bo->buf != state->bo[1]->buf))
-				dirty |= R600_BLOCK_STATUS_RESOURCE_DIRTY;
-		}
+		if ((block->reloc[1].bo->buf != state->bo[0]->buf) ||
+		    (block->reloc[2].bo->buf != state->bo[1]->buf))
+			dirty |= R600_BLOCK_STATUS_RESOURCE_DIRTY;
 	}
 
 	if (dirty) {
-		if (is_vertex) {
-			/* VERTEX RESOURCE, we preted there is 2 bo to relocate so
-			 * we have single case btw VERTEX & TEXTURE resource
-			 */
-			pipe_resource_reference((struct pipe_resource**)&block->reloc[1].bo, &state->bo[0]->b.b.b);
-			block->reloc[1].bo_usage = state->bo_usage[0];
-			pipe_resource_reference((struct pipe_resource**)&block->reloc[2].bo, NULL);
-		} else {
-			/* TEXTURE RESOURCE */
-			pipe_resource_reference((struct pipe_resource**)&block->reloc[1].bo, &state->bo[0]->b.b.b);
-			block->reloc[1].bo_usage = state->bo_usage[0];
-			pipe_resource_reference((struct pipe_resource**)&block->reloc[2].bo, &state->bo[1]->b.b.b);
-			block->reloc[2].bo_usage = state->bo_usage[1];
-		}
+		/* TEXTURE RESOURCE */
+		pipe_resource_reference((struct pipe_resource**)&block->reloc[1].bo, &state->bo[0]->b.b);
+		block->reloc[1].bo_usage = state->bo_usage[0];
+		pipe_resource_reference((struct pipe_resource**)&block->reloc[2].bo, &state->bo[1]->b.b);
+		block->reloc[2].bo_usage = state->bo_usage[1];
 
-		if (is_vertex)
-			block->status |= R600_BLOCK_STATUS_RESOURCE_VERTEX;
-		else
-			block->status &= ~R600_BLOCK_STATUS_RESOURCE_VERTEX;
-	
 		r600_context_dirty_resource_block(ctx, block, dirty, num_regs - 1);
 	}
 }
@@ -973,13 +938,6 @@ void r600_context_pipe_state_set_ps_resource(struct r600_context *ctx, struct r6
 void r600_context_pipe_state_set_vs_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, unsigned rid)
 {
 	struct r600_block *block = ctx->vs_resources.blocks[rid];
-
-	r600_context_pipe_state_set_resource(ctx, state, block);
-}
-
-void r600_context_pipe_state_set_fs_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, unsigned rid)
-{
-	struct r600_block *block = ctx->fs_resources.blocks[rid];
 
 	r600_context_pipe_state_set_resource(ctx, state, block);
 }
@@ -1127,11 +1085,6 @@ void r600_context_block_resource_emit_dirty(struct r600_context *ctx, struct r60
 	int cp_dwords = block->pm4_ndwords;
 	int nbo = block->nbo;
 
-	if (block->status & R600_BLOCK_STATUS_RESOURCE_VERTEX) {
-		nbo = 1;
-		cp_dwords -= 2; /* don't copy the second NOP */
-	}
-
 	for (int j = 0; j < nbo; j++) {
 		if (block->pm4_bo_index[j]) {
 			/* find relocation */
@@ -1163,22 +1116,11 @@ void r600_inval_texture_cache(struct r600_context *ctx)
 
 void r600_inval_vertex_cache(struct r600_context *ctx)
 {
-	if (ctx->family == CHIP_RV610 ||
-	    ctx->family == CHIP_RV620 ||
-	    ctx->family == CHIP_RS780 ||
-	    ctx->family == CHIP_RS880 ||
-	    ctx->family == CHIP_RV710 ||
-	    ctx->family == CHIP_CEDAR ||
-	    ctx->family == CHIP_PALM ||
-	    ctx->family == CHIP_SUMO ||
-	    ctx->family == CHIP_SUMO2 ||
-	    ctx->family == CHIP_CAICOS ||
-	    ctx->family == CHIP_CAYMAN ||
-	    ctx->family == CHIP_ARUBA) {
+	if (ctx->has_vertex_cache) {
+		ctx->surface_sync_cmd.flush_flags |= S_0085F0_VC_ACTION_ENA(1);
+	} else {
 		/* Some GPUs don't have the vertex cache and must use the texture cache instead. */
 		ctx->surface_sync_cmd.flush_flags |= S_0085F0_TC_ACTION_ENA(1);
-	} else {
-		ctx->surface_sync_cmd.flush_flags |= S_0085F0_VC_ACTION_ENA(1);
 	}
 	r600_atom_dirty(ctx, &ctx->surface_sync_cmd.atom);
 }
@@ -1239,8 +1181,7 @@ void r600_context_flush(struct r600_context *ctx, unsigned flags)
 	r600_flush_framebuffer(ctx, true);
 
 	/* partial flush is needed to avoid lockups on some chips with user fences */
-	cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 0, 0);
-	cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_PS_PARTIAL_FLUSH) | EVENT_INDEX(4);
+	r600_context_ps_partial_flush(ctx);
 
 	/* old kernels and userspace don't set SX_MISC, so we must reset it to 0 here */
 	if (ctx->chip_class <= R700) {
@@ -1256,8 +1197,23 @@ void r600_context_flush(struct r600_context *ctx, unsigned flags)
 	ctx->pm4_dirty_cdwords = 0;
 	ctx->flags = 0;
 
+	/* Begin a new CS. */
 	r600_emit_atom(ctx, &ctx->start_cs_cmd.atom);
+
+	/* Invalidate caches. */
+	r600_inval_vertex_cache(ctx);
+	r600_inval_texture_cache(ctx);
+	r600_inval_shader_cache(ctx);
+	r600_flush_framebuffer(ctx, false);
+
+	/* Re-emit states. */
 	r600_atom_dirty(ctx, &ctx->db_misc_state.atom);
+	r600_atom_dirty(ctx, &ctx->vertex_buffer_state);
+
+	ctx->vs_constbuf_state.dirty_mask = ctx->vs_constbuf_state.enabled_mask;
+	ctx->ps_constbuf_state.dirty_mask = ctx->ps_constbuf_state.enabled_mask;
+	r600_constant_buffers_dirty(ctx, &ctx->vs_constbuf_state);
+	r600_constant_buffers_dirty(ctx, &ctx->ps_constbuf_state);
 
 	if (streamout_suspended) {
 		ctx->streamout_start = TRUE;
@@ -1302,8 +1258,7 @@ void r600_context_emit_fence(struct r600_context *ctx, struct r600_resource *fen
 	va = r600_resource_va(&ctx->screen->screen, (void*)fence_bo);
 	va = va + (offset << 2);
 
-	cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 0, 0);
-	cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_PS_PARTIAL_FLUSH) | EVENT_INDEX(4);
+	r600_context_ps_partial_flush(ctx);
 	cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE_EOP, 4, 0);
 	cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_CACHE_FLUSH_AND_INV_TS_EVENT) | EVENT_INDEX(5);
 	cs->buf[cs->cdw++] = va & 0xFFFFFFFFUL;       /* ADDRESS_LO */

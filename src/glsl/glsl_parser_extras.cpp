@@ -713,7 +713,7 @@ ast_declaration::print(void) const
 }
 
 
-ast_declaration::ast_declaration(char *identifier, int is_array,
+ast_declaration::ast_declaration(const char *identifier, int is_array,
 				 ast_expression *array_size,
 				 ast_expression *initializer)
 {
@@ -979,7 +979,7 @@ ast_struct_specifier::print(void) const
 }
 
 
-ast_struct_specifier::ast_struct_specifier(char *identifier,
+ast_struct_specifier::ast_struct_specifier(const char *identifier,
 					   ast_node *declarator_list)
 {
    if (identifier == NULL) {
@@ -1044,6 +1044,7 @@ do_common_optimization(exec_list *ir, bool linked,
    progress = do_swizzle_swizzle(ir) || progress;
    progress = do_noop_swizzle(ir) || progress;
 
+   progress = optimize_split_arrays(ir, linked) || progress;
    progress = optimize_redundant_jumps(ir) || progress;
 
    loop_state *ls = analyze_loop_variables(ir);

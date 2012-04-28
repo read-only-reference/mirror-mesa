@@ -172,12 +172,25 @@ fs_visitor::try_emit_saturate(ir_expression *ir)
    if (!sat_val)
       return false;
 
+   fs_inst *pre_inst = (fs_inst *) this->instructions.get_tail();
+
    sat_val->accept(this);
    fs_reg src = this->result;
 
-   this->result = fs_reg(this, ir->type);
-   fs_inst *inst = emit(BRW_OPCODE_MOV, this->result, src);
-   inst->saturate = true;
+   fs_inst *last_inst = (fs_inst *) this->instructions.get_tail();
+
+   /* If the last instruction from our accept() didn't generate our
+    * src, generate a saturated MOV
+    */
+   fs_inst *modify = get_instruction_generating_reg(pre_inst, last_inst, src);
+   if (!modify || modify->regs_written() != 1) {
+      fs_inst *inst = emit(BRW_OPCODE_MOV, this->result, src);
+      inst->saturate = true;
+   } else {
+      modify->saturate = true;
+      this->result = src;
+   }
+
 
    return true;
 }
@@ -384,7 +397,6 @@ fs_visitor::visit(ir_expression *ir)
 
       inst = emit(BRW_OPCODE_CMP, temp, op[0], op[1]);
       inst->conditional_mod = brw_conditional_for_comparison(ir->operation);
-      emit(BRW_OPCODE_AND, this->result, this->result, fs_reg(0x1));
       break;
 
    case ir_binop_logic_xor:
@@ -430,11 +442,19 @@ fs_visitor::visit(ir_expression *ir)
       break;
    case ir_unop_i2f:
    case ir_unop_u2f:
-   case ir_unop_b2f:
-   case ir_unop_b2i:
    case ir_unop_f2i:
       emit(BRW_OPCODE_MOV, this->result, op[0]);
       break;
+
+   case ir_unop_b2i:
+      inst = emit(BRW_OPCODE_AND, this->result, op[0], fs_reg(1));
+      break;
+   case ir_unop_b2f:
+      temp = fs_reg(this, glsl_type::int_type);
+      emit(BRW_OPCODE_AND, temp, op[0], fs_reg(1));
+      emit(BRW_OPCODE_MOV, this->result, temp);
+      break;
+
    case ir_unop_f2b:
    case ir_unop_i2b:
       temp = this->result;
@@ -446,7 +466,6 @@ fs_visitor::visit(ir_expression *ir)
 
       inst = emit(BRW_OPCODE_CMP, temp, op[0], fs_reg(0.0f));
       inst->conditional_mod = BRW_CONDITIONAL_NZ;
-      inst = emit(BRW_OPCODE_AND, this->result, this->result, fs_reg(1));
       break;
 
    case ir_unop_trunc:
@@ -591,9 +610,6 @@ fs_visitor::try_rewrite_rhs_to_dst(ir_assignment *ir,
                                    fs_inst *pre_rhs_inst,
                                    fs_inst *last_rhs_inst)
 {
-   if (pre_rhs_inst == last_rhs_inst)
-      return false; /* No instructions generated to work with. */
-
    /* Only attempt if we're doing a direct assignment. */
    if (ir->condition ||
        !(ir->lhs->type->is_scalar() ||
@@ -602,20 +618,20 @@ fs_visitor::try_rewrite_rhs_to_dst(ir_assignment *ir,
       return false;
 
    /* Make sure the last instruction generated our source reg. */
-   if (last_rhs_inst->predicated ||
-       last_rhs_inst->force_uncompressed ||
-       last_rhs_inst->force_sechalf ||
-       !src.equals(&last_rhs_inst->dst))
+   fs_inst *modify = get_instruction_generating_reg(pre_rhs_inst,
+						    last_rhs_inst,
+						    src);
+   if (!modify)
       return false;
 
    /* If last_rhs_inst wrote a different number of components than our LHS,
     * we can't safely rewrite it.
     */
-   if (ir->lhs->type->vector_elements != last_rhs_inst->regs_written())
+   if (ir->lhs->type->vector_elements != modify->regs_written())
       return false;
 
    /* Success!  Rewrite the instruction. */
-   last_rhs_inst->dst = dst;
+   modify->dst = dst;
 
    return true;
 }
@@ -974,8 +990,9 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    int base_mrf = 2;
    int reg_width = c->dispatch_width / 8;
    bool header_present = false;
+   int offsets[3];
 
-   if (ir->offset) {
+   if (ir->offset && ir->op != ir_txf) {
       /* The offsets set up by the ir_texture visitor are in the
        * m1 header, so we can't go headerless.
        */
@@ -1038,9 +1055,23 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       mlen += reg_width;
       break;
    case ir_txf:
+      /* It appears that the ld instruction used for txf does its
+       * address bounds check before adding in the offset.  To work
+       * around this, just add the integer offset to the integer texel
+       * coordinate, and don't put the offset in the header.
+       */
+      if (ir->offset) {
+	 ir_constant *offset = ir->offset->as_constant();
+	 offsets[0] = offset->value.i[0];
+	 offsets[1] = offset->value.i[1];
+	 offsets[2] = offset->value.i[2];
+      } else {
+	 memset(offsets, 0, sizeof(offsets));
+      }
+
       /* Unfortunately, the parameters for LD are intermixed: u, lod, v, r. */
-      emit(BRW_OPCODE_MOV,
-	   fs_reg(MRF, base_mrf + mlen, BRW_REGISTER_TYPE_D), coordinate);
+      emit(BRW_OPCODE_ADD,
+	   fs_reg(MRF, base_mrf + mlen, BRW_REGISTER_TYPE_D), coordinate, offsets[0]);
       coordinate.reg_offset++;
       mlen += reg_width;
 
@@ -1049,8 +1080,8 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       mlen += reg_width;
 
       for (int i = 1; i < ir->coordinate->type->vector_elements; i++) {
-	 emit(BRW_OPCODE_MOV,
-	      fs_reg(MRF, base_mrf + mlen, BRW_REGISTER_TYPE_D), coordinate);
+	 emit(BRW_OPCODE_ADD,
+	      fs_reg(MRF, base_mrf + mlen, BRW_REGISTER_TYPE_D), coordinate, offsets[i]);
 	 coordinate.reg_offset++;
 	 mlen += reg_width;
       }
@@ -1112,7 +1143,7 @@ fs_visitor::visit(ir_texture *ir)
       ir->coordinate->accept(this);
    fs_reg coordinate = this->result;
 
-   if (ir->offset != NULL) {
+   if (ir->offset != NULL && !(intel->gen == 7 && ir->op == ir_txf)) {
       uint32_t offset_bits = brw_texture_offset(ir->offset->as_constant());
 
       /* Explicitly set up the message header by copying g0 to msg reg m1. */
@@ -1415,7 +1446,7 @@ fs_visitor::visit(ir_constant *ir)
       }
    } else if (ir->type->is_record()) {
       foreach_list(node, &ir->components) {
-	 ir_instruction *const field = (ir_instruction *) node;
+	 ir_constant *const field = (ir_constant *) node;
 	 const unsigned size = type_size(field->type);
 
 	 field->accept(this);
@@ -1481,19 +1512,9 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
 	 break;
 
       case ir_binop_logic_xor:
-	 inst = emit(BRW_OPCODE_XOR, reg_null_d, op[0], op[1]);
-	 inst->conditional_mod = BRW_CONDITIONAL_NZ;
-	 break;
-
       case ir_binop_logic_or:
-	 inst = emit(BRW_OPCODE_OR, reg_null_d, op[0], op[1]);
-	 inst->conditional_mod = BRW_CONDITIONAL_NZ;
-	 break;
-
       case ir_binop_logic_and:
-	 inst = emit(BRW_OPCODE_AND, reg_null_d, op[0], op[1]);
-	 inst->conditional_mod = BRW_CONDITIONAL_NZ;
-	 break;
+	 goto out;
 
       case ir_unop_f2b:
 	 if (intel->gen >= 6) {
@@ -1534,15 +1555,11 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
       return;
    }
 
+out:
    ir->accept(this);
 
-   if (intel->gen >= 6) {
-      fs_inst *inst = emit(BRW_OPCODE_AND, reg_null_d, this->result, fs_reg(1));
-      inst->conditional_mod = BRW_CONDITIONAL_NZ;
-   } else {
-      fs_inst *inst = emit(BRW_OPCODE_MOV, reg_null_d, this->result);
-      inst->conditional_mod = BRW_CONDITIONAL_NZ;
-   }
+   fs_inst *inst = emit(BRW_OPCODE_AND, reg_null_d, this->result, fs_reg(1));
+   inst->conditional_mod = BRW_CONDITIONAL_NZ;
 }
 
 /**
@@ -1696,6 +1713,7 @@ fs_visitor::visit(ir_loop *ir)
       }
    }
 
+   this->base_ir = NULL;
    emit(BRW_OPCODE_DO);
 
    if (ir->to) {
@@ -1722,6 +1740,7 @@ fs_visitor::visit(ir_loop *ir)
       emit(BRW_OPCODE_ADD, counter, counter, this->result);
    }
 
+   this->base_ir = NULL;
    emit(BRW_OPCODE_WHILE);
 }
 
@@ -2005,7 +2024,10 @@ fs_visitor::emit_fb_writes()
 {
    this->current_annotation = "FB write header";
    bool header_present = true;
-   int base_mrf = 2;
+   /* We can potentially have a message length of up to 15, so we have to set
+    * base_mrf to either 0 or 1 in order to fit in m0..m15.
+    */
+   int base_mrf = 1;
    int nr = base_mrf;
    int reg_width = c->dispatch_width / 8;
 

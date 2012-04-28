@@ -1,4 +1,4 @@
-C_SOURCES := \
+C_SOURCES = \
 	r600_asm.c \
 	r600_blit.c \
 	r600_buffer.c \
@@ -15,3 +15,5 @@ C_SOURCES := \
 	eg_asm.c \
 	r600_translate.c \
 	r600_state_common.c
+
+LLVM_C_SOURCES = r600_llvm.c

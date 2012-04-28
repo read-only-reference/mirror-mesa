@@ -39,6 +39,7 @@ extern "C" {
 #endif
 
 struct cso_context;
+struct u_vbuf;
 
 struct cso_context *cso_create_context( struct pipe_context *pipe );
 
@@ -217,6 +218,19 @@ cso_save_vertex_sampler_views(struct cso_context *cso);
 void
 cso_restore_vertex_sampler_views(struct cso_context *cso);
 
+/* drawing */
+
+void
+cso_set_index_buffer(struct cso_context *cso,
+                     const struct pipe_index_buffer *ib);
+
+void
+cso_draw_vbo(struct cso_context *cso,
+             const struct pipe_draw_info *info);
+
+/* helper drawing function */
+void
+cso_draw_arrays(struct cso_context *cso, uint mode, uint start, uint count);
 
 #ifdef	__cplusplus
 }

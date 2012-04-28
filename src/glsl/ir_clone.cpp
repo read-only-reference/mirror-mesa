@@ -27,6 +27,13 @@
 #include "glsl_types.h"
 #include "program/hash_table.h"
 
+ir_rvalue *
+ir_rvalue::clone(void *mem_ctx, struct hash_table *ht) const
+{
+   /* The only possible instantiation is the generic error value. */
+   return error_value(mem_ctx);
+}
+
 /**
  * Duplicate an IR variable
  *
@@ -50,6 +57,7 @@ ir_variable::clone(void *mem_ctx, struct hash_table *ht) const
    var->origin_upper_left = this->origin_upper_left;
    var->pixel_center_integer = this->pixel_center_integer;
    var->explicit_location = this->explicit_location;
+   var->explicit_index = this->explicit_index;
    var->has_initializer = this->has_initializer;
    var->depth_layout = this->depth_layout;
 
@@ -66,6 +74,9 @@ ir_variable::clone(void *mem_ctx, struct hash_table *ht) const
 
    if (this->explicit_location)
       var->location = this->location;
+
+   if (this->explicit_index)
+      var->index = this->index;
 
    if (this->constant_value)
       var->constant_value = this->constant_value->clone(mem_ctx, ht);
@@ -160,8 +171,9 @@ ir_loop::clone(void *mem_ctx, struct hash_table *ht) const
 ir_call *
 ir_call::clone(void *mem_ctx, struct hash_table *ht) const
 {
-   if (this->type == glsl_type::error_type)
-      return ir_call::get_error_instruction(mem_ctx);
+   ir_dereference_variable *new_return_ref = NULL;
+   if (this->return_deref != NULL)
+      new_return_ref = this->return_deref->clone(mem_ctx, ht);
 
    exec_list new_parameters;
 
@@ -170,7 +182,7 @@ ir_call::clone(void *mem_ctx, struct hash_table *ht) const
       new_parameters.push_tail(ir->clone(mem_ctx, ht));
    }
 
-   return new(mem_ctx) ir_call(this->callee, &new_parameters);
+   return new(mem_ctx) ir_call(this->callee, new_return_ref, &new_parameters);
 }
 
 ir_expression *
@@ -390,9 +402,9 @@ public:
        * table.  If it is found, replace it with the value from the table.
        */
       ir_function_signature *sig =
-	 (ir_function_signature *) hash_table_find(this->ht, ir->get_callee());
+	 (ir_function_signature *) hash_table_find(this->ht, ir->callee);
       if (sig != NULL)
-	 ir->set_callee(sig);
+	 ir->callee = sig;
 
       /* Since this may be used before function call parameters are flattened,
        * the children also need to be processed.

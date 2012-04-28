@@ -60,8 +60,8 @@ static void r600_blitter_begin(struct pipe_context *ctx, enum r600_blitter_op op
 		util_blitter_save_viewport(rctx->blitter, &rctx->viewport);
 	}
 	util_blitter_save_vertex_buffers(rctx->blitter,
-					 rctx->vbuf_mgr->nr_vertex_buffers,
-					 rctx->vbuf_mgr->vertex_buffer);
+					 rctx->nr_vertex_buffers,
+					 rctx->vertex_buffer);
 	util_blitter_save_so_targets(rctx->blitter, rctx->num_so_targets,
 				     (struct pipe_stream_output_target**)rctx->so_targets);
 
@@ -127,8 +127,8 @@ void r600_blit_uncompress_depth(struct pipe_context *ctx, struct r600_resource_t
 	    rctx->family == CHIP_RV620 || rctx->family == CHIP_RV635)
 		depth = 0.0f;
 
-	for (level = 0; level <= texture->resource.b.b.b.last_level; level++) {
-		unsigned num_layers = u_num_layers(&texture->resource.b.b.b, level);
+	for (level = 0; level <= texture->resource.b.b.last_level; level++) {
+		unsigned num_layers = u_num_layers(&texture->resource.b.b, level);
 
 		for (layer = 0; layer < num_layers; layer++) {
 			struct pipe_surface *zsurf, *cbsurf, surf_tmpl;
@@ -139,7 +139,7 @@ void r600_blit_uncompress_depth(struct pipe_context *ctx, struct r600_resource_t
 			surf_tmpl.u.tex.last_layer = layer;
 			surf_tmpl.usage = PIPE_BIND_DEPTH_STENCIL;
 
-			zsurf = ctx->create_surface(ctx, &texture->resource.b.b.b, &surf_tmpl);
+			zsurf = ctx->create_surface(ctx, &texture->resource.b.b, &surf_tmpl);
 
 			surf_tmpl.format = texture->flushed_depth_texture->real_format;
 			surf_tmpl.usage = PIPE_BIND_RENDER_TARGET;
@@ -390,8 +390,8 @@ void r600_blit_push_depth(struct pipe_context *ctx, struct r600_resource_texture
 	struct pipe_box sbox;
 
 	sbox.x = sbox.y = sbox.z = 0;
-	sbox.width = texture->resource.b.b.b.width0;
-	sbox.height = texture->resource.b.b.b.height0;
+	sbox.width = texture->resource.b.b.width0;
+	sbox.height = texture->resource.b.b.height0;
 	/* XXX that might be wrong */
 	sbox.depth = 1;
 

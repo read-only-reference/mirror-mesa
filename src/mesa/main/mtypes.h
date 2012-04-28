@@ -1329,6 +1329,8 @@ struct gl_texture_object
    /** GL_ARB_texture_buffer_object */
    struct gl_buffer_object *BufferObject;
    GLenum BufferObjectFormat;
+   /** Equivalent Mesa format for BufferObjectFormat. */
+   gl_format _BufferObjectFormat;
 
    /** GL_OES_EGL_image_external */
    GLint RequiredTextureImageUnits;
@@ -1597,6 +1599,9 @@ struct gl_array_object
    /** Mask of VERT_BIT_* values indicating which arrays are enabled */
    GLbitfield64 _Enabled;
 
+   /** Mask of VERT_BIT_* values indicating changed/dirty arrays */
+   GLbitfield64 NewArrays;
+
    /**
     * Min of all enabled arrays' _MaxElement.  When arrays reside inside VBOs
     * we can determine the max legal (in bounds) glDrawElements array index.
@@ -1628,9 +1633,6 @@ struct gl_array_attrib
    /** GL 3.1 (slightly different from GL_NV_primitive_restart) */
    GLboolean PrimitiveRestart;
    GLuint RestartIndex;
-
-   GLbitfield64 NewState;		/**< mask of VERT_BIT_* values */
-   GLboolean RebindArrays; /**< whether the VBO module should rebind arrays */
 
    /* GL_ARB_vertex_buffer_object */
    struct gl_buffer_object *ArrayBufferObj;
@@ -2261,6 +2263,7 @@ struct gl_shader_program
     * and they are \b not the values returned by \c glGetFragDataLocation.
     */
    struct string_to_uint_map *FragDataBindings;
+   struct string_to_uint_map *FragDataIndexBindings;
 
    /**
     * Transform feedback varyings last specified by
@@ -2812,6 +2815,9 @@ struct gl_constants
    /* GL_ARB_robustness */
    GLenum ResetStrategy;
 
+   /* GL_ARB_blend_func_extended */
+   GLuint MaxDualSourceDrawBuffers;
+
    /**
     * Whether the implementation strips out and ignores texture borders.
     *
@@ -3057,6 +3063,7 @@ struct gl_matrix_stack
 #define _NEW_BUFFER_OBJECT     (1 << 28)
 #define _NEW_FRAG_CLAMP        (1 << 29)
 #define _NEW_TRANSFORM_FEEDBACK (1 << 30) /**< gl_context::TransformFeedback */
+#define _NEW_VARYING_VP_INPUTS (1 << 31) /**< gl_context::varying_vp_inputs */
 #define _NEW_ALL ~0
 
 /**

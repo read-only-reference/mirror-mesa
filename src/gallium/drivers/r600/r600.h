@@ -28,7 +28,7 @@
 
 #include "../../winsys/radeon/drm/radeon_winsys.h"
 #include "util/u_double_list.h"
-#include "util/u_vbuf.h"
+#include "util/u_transfer.h"
 
 #define R600_ERR(fmt, args...) \
 	fprintf(stderr, "EE %s:%d %s - "fmt, __FILE__, __LINE__, __func__, ##args)
@@ -79,7 +79,7 @@ struct r600_tiling_info {
 };
 
 struct r600_resource {
-	struct u_vbuf_resource		b;
+	struct u_resource		b;
 
 	/* Winsys objects. */
 	struct pb_buffer		*buf;
@@ -127,8 +127,6 @@ struct r600_pipe_resource_state {
 #define R600_BLOCK_STATUS_ENABLED	(1 << 0)
 #define R600_BLOCK_STATUS_DIRTY		(1 << 1)
 #define R600_BLOCK_STATUS_RESOURCE_DIRTY	(1 << 2)
-
-#define R600_BLOCK_STATUS_RESOURCE_VERTEX	(1 << 3)
 
 struct r600_block_reloc {
 	struct r600_resource	*bo;
@@ -202,7 +200,6 @@ void r600_context_fini(struct r600_context *ctx);
 void r600_context_pipe_state_set(struct r600_context *ctx, struct r600_pipe_state *state);
 void r600_context_pipe_state_set_ps_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, unsigned rid);
 void r600_context_pipe_state_set_vs_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, unsigned rid);
-void r600_context_pipe_state_set_fs_resource(struct r600_context *ctx, struct r600_pipe_resource_state *state, unsigned rid);
 void r600_context_pipe_state_set_ps_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id);
 void r600_context_pipe_state_set_vs_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id);
 void r600_context_flush(struct r600_context *ctx, unsigned flags);
@@ -225,34 +222,30 @@ int evergreen_context_init(struct r600_context *ctx);
 void evergreen_context_pipe_state_set_ps_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id);
 void evergreen_context_pipe_state_set_vs_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id);
 
+void _r600_pipe_state_add_reg_bo(struct r600_context *ctx,
+				 struct r600_pipe_state *state,
+				 uint32_t offset, uint32_t value,
+				 uint32_t range_id, uint32_t block_id,
+				 struct r600_resource *bo,
+				 enum radeon_bo_usage usage);
+
 void _r600_pipe_state_add_reg(struct r600_context *ctx,
 			      struct r600_pipe_state *state,
 			      uint32_t offset, uint32_t value,
-			      uint32_t range_id, uint32_t block_id,
-			      struct r600_resource *bo,
-			      enum radeon_bo_usage usage);
+			      uint32_t range_id, uint32_t block_id);
 
 void r600_pipe_state_add_reg_noblock(struct r600_pipe_state *state,
 				     uint32_t offset, uint32_t value,
 				     struct r600_resource *bo,
 				     enum radeon_bo_usage usage);
 
-#define r600_pipe_state_add_reg(state, offset, value, bo, usage) _r600_pipe_state_add_reg(rctx, state, offset, value, CTX_RANGE_ID(offset), CTX_BLOCK_ID(offset), bo, usage)
+#define r600_pipe_state_add_reg_bo(state, offset, value, bo, usage) _r600_pipe_state_add_reg_bo(rctx, state, offset, value, CTX_RANGE_ID(offset), CTX_BLOCK_ID(offset), bo, usage)
+#define r600_pipe_state_add_reg(state, offset, value) _r600_pipe_state_add_reg(rctx, state, offset, value, CTX_RANGE_ID(offset), CTX_BLOCK_ID(offset))
 
 static inline void r600_pipe_state_mod_reg(struct r600_pipe_state *state,
 					   uint32_t value)
 {
 	state->regs[state->nregs].value = value;
-	state->nregs++;
-}
-
-static inline void r600_pipe_state_mod_reg_bo(struct r600_pipe_state *state,
-					      uint32_t value, struct r600_resource *bo,
-					      enum radeon_bo_usage usage)
-{
-	state->regs[state->nregs].value = value;
-	state->regs[state->nregs].bo = bo;
-	state->regs[state->nregs].bo_usage = usage;
 	state->nregs++;
 }
 
