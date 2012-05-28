@@ -83,17 +83,23 @@ The integer capabilities:
 * ``PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR``: Whether the driver supports
   per-instance vertex attribs.
 * ``PIPE_CAP_FRAGMENT_COLOR_CLAMPED``: Whether fragment color clamping is
-  supported.
+  supported.  That is, is the pipe_rasterizer_state::clamp_fragment_color
+  flag supported by the driver?  If not, the state tracker will insert
+  clamping code into the fragment shaders when needed.
+
 * ``PIPE_CAP_MIXED_COLORBUFFER_FORMATS``: Whether mixed colorbuffer formats are
   supported, e.g. RGBA8 and RGBA32F as the first and second colorbuffer, resp.
 * ``PIPE_CAP_VERTEX_COLOR_UNCLAMPED``: Whether the driver is capable of
   outputting unclamped vertex colors from a vertex shader. If unsupported,
   the vertex colors are always clamped. This is the default for DX9 hardware.
 * ``PIPE_CAP_VERTEX_COLOR_CLAMPED``: Whether the driver is capable of
-  clamping vertex colors when they come out of a vertex shader. If unsupported,
+  clamping vertex colors when they come out of a vertex shader, as specified
+  by the pipe_rasterizer_state::clamp_vertex_color flag.  If unsupported,
   the vertex colors are never clamped. This is the default for DX10 hardware.
   If both clamped and unclamped CAPs are supported, the clamping can be
-  controlled through pipe_rasterizer_state.
+  controlled through pipe_rasterizer_state.  If the driver cannot do vertex
+  color clamping, the state tracker may insert clamping code into the vertex
+  shader.
 * ``PIPE_CAP_GLSL_FEATURE_LEVEL``: Whether the driver supports features
   equivalent to a specific GLSL version. E.g. for GLSL 1.3, report 130.
 * ``PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION``: Whether quads adhere to
@@ -110,6 +116,8 @@ The integer capabilities:
 * ``PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY``: This CAP describes
   a hw limitation.  If true, pipe_vertex_element::src_offset must always be
   aligned to 4.  If false, there are no restrictions on src_offset.
+* ``PIPE_CAP_COMPUTE``: Whether the implementation supports the
+  compute entry points defined in pipe_context and pipe_screen.
 * ``PIPE_CAP_USER_INDEX_BUFFERS``: Whether user index buffers are supported.
   If not, the state tracker must upload all indices which are not in hw
   resources.
@@ -192,7 +200,37 @@ to be 0.
   If unsupported, only float opcodes are supported.
 * ``PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS``: THe maximum number of texture
   samplers.
+* ``PIPE_SHADER_CAP_PREFERRED_IR``: Preferred representation of the
+  program.  It should be one of the ``pipe_shader_ir`` enum values.
 
+
+.. _pipe_compute_cap:
+
+PIPE_COMPUTE_CAP_*
+^^^^^^^^^^^^^^^^^^
+
+Compute-specific capabilities. They can be queried using
+pipe_screen::get_compute_param.
+
+* ``PIPE_COMPUTE_CAP_GRID_DIMENSION``: Number of supported dimensions
+  for grid and block coordinates.  Value type: ``uint64_t``.
+* ``PIPE_COMPUTE_CAP_MAX_GRID_SIZE``: Maximum grid size in block
+  units.  Value type: ``uint64_t []``.
+* ``PIPE_COMPUTE_CAP_MAX_BLOCK_SIZE``: Maximum block size in thread
+  units.  Value type: ``uint64_t []``.
+* ``PIPE_COMPUTE_CAP_MAX_THREADS_PER_BLOCK``: Maximum number of threads that
+  a single block can contain.  Value type: ``uint64_t``.
+  This may be less than the product of the components of MAX_BLOCK_SIZE and is
+  usually limited by the number of threads that can be resident simultaneously
+  on a compute unit.
+* ``PIPE_COMPUTE_CAP_MAX_GLOBAL_SIZE``: Maximum size of the GLOBAL
+  resource.  Value type: ``uint64_t``.
+* ``PIPE_COMPUTE_CAP_MAX_LOCAL_SIZE``: Maximum size of the LOCAL
+  resource.  Value type: ``uint64_t``.
+* ``PIPE_COMPUTE_CAP_MAX_PRIVATE_SIZE``: Maximum size of the PRIVATE
+  resource.  Value type: ``uint64_t``.
+* ``PIPE_COMPUTE_CAP_MAX_INPUT_SIZE``: Maximum size of the INPUT
+  resource.  Value type: ``uint64_t``.
 
 .. _pipe_bind:
 
@@ -231,6 +269,12 @@ resources might be created and handled quite differently.
 * ``PIPE_BIND_SCANOUT``: A front color buffer or scanout buffer.
 * ``PIPE_BIND_SHARED``: A sharable buffer that can be given to another
   process.
+* ``PIPE_BIND_GLOBAL``: A buffer that can be mapped into the global
+  address space of a compute program.
+* ``PIPE_BIND_SHADER_RESOURCE``: A buffer or texture that can be
+  bound to the graphics pipeline as a shader resource.
+* ``PIPE_BIND_COMPUTE_RESOURCE``: A buffer or texture that can be
+  bound to the compute program as a shader resource.
 
 .. _pipe_usage:
 

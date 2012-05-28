@@ -35,6 +35,10 @@
 
 #include "brw_context.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern const struct brw_tracked_state brw_blend_constant_color;
 extern const struct brw_tracked_state brw_cc_vp;
 extern const struct brw_tracked_state brw_cc_unit;
@@ -91,6 +95,7 @@ extern const struct brw_tracked_state gen6_color_calc_state;
 extern const struct brw_tracked_state gen6_depth_stencil_state;
 extern const struct brw_tracked_state gen6_gs_state;
 extern const struct brw_tracked_state gen6_gs_binding_table;
+extern const struct brw_tracked_state gen6_multisample_state;
 extern const struct brw_tracked_state gen6_renderbuffer_surfaces;
 extern const struct brw_tracked_state gen6_sampler_state;
 extern const struct brw_tracked_state gen6_scissor_state;
@@ -176,6 +181,8 @@ void *brw_state_batch(struct brw_context *brw,
 
 /* brw_wm_surface_state.c */
 void gen4_init_vtable_surface_functions(struct brw_context *brw);
+uint32_t brw_get_surface_tiling_bits(uint32_t tiling);
+uint32_t brw_get_surface_num_multisamples(unsigned num_samples);
 void brw_create_constant_surface(struct brw_context *brw,
 				 drm_intel_bo *bo,
 				 int width,
@@ -191,6 +198,11 @@ GLuint translate_tex_format(gl_format mesa_format,
 			    GLenum srgb_decode);
 
 /* gen7_wm_surface_state.c */
+void gen7_set_surface_tiling(struct gen7_surface_state *surf, uint32_t tiling);
+void gen7_set_surface_num_multisamples(struct gen7_surface_state *surf,
+                                       unsigned num_samples);
+void gen7_check_surface_setup(struct gen7_surface_state *surf,
+                              bool is_render_target);
 void gen7_init_vtable_surface_functions(struct brw_context *brw);
 void gen7_create_constant_surface(struct brw_context *brw,
 				  drm_intel_bo *bo,
@@ -207,5 +219,9 @@ void upload_default_color(struct brw_context *brw,
 uint32_t
 get_attr_override(struct brw_vue_map *vue_map, int urb_entry_read_offset,
                   int fs_attr, bool two_side_color);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -271,6 +271,9 @@ iter_declaration(
       ctx,
       decl->Declaration.UsageMask );
 
+   if (decl->Declaration.Local)
+      TXT( ", LOCAL" );
+
    if (decl->Declaration.Semantic) {
       TXT( ", " );
       ENM( decl->Semantic.Name, tgsi_semantic_names );
@@ -285,53 +288,64 @@ iter_declaration(
    if (decl->Declaration.File == TGSI_FILE_RESOURCE) {
       TXT(", ");
       ENM(decl->Resource.Resource, tgsi_texture_names);
+      if (decl->Resource.Writable)
+         TXT(", WR");
+      if (decl->Resource.Raw)
+         TXT(", RAW");
+   }
+
+   if (decl->Declaration.File == TGSI_FILE_SAMPLER_VIEW) {
       TXT(", ");
-      if ((decl->Resource.ReturnTypeX == decl->Resource.ReturnTypeY) &&
-          (decl->Resource.ReturnTypeX == decl->Resource.ReturnTypeZ) &&
-          (decl->Resource.ReturnTypeX == decl->Resource.ReturnTypeW)) {
-         ENM(decl->Resource.ReturnTypeX, tgsi_type_names);
+      ENM(decl->SamplerView.Resource, tgsi_texture_names);
+      TXT(", ");
+      if ((decl->SamplerView.ReturnTypeX == decl->SamplerView.ReturnTypeY) &&
+          (decl->SamplerView.ReturnTypeX == decl->SamplerView.ReturnTypeZ) &&
+          (decl->SamplerView.ReturnTypeX == decl->SamplerView.ReturnTypeW)) {
+         ENM(decl->SamplerView.ReturnTypeX, tgsi_type_names);
       } else {
-         ENM(decl->Resource.ReturnTypeX, tgsi_type_names);
+         ENM(decl->SamplerView.ReturnTypeX, tgsi_type_names);
          TXT(", ");
-         ENM(decl->Resource.ReturnTypeY, tgsi_type_names);
+         ENM(decl->SamplerView.ReturnTypeY, tgsi_type_names);
          TXT(", ");
-         ENM(decl->Resource.ReturnTypeZ, tgsi_type_names);
+         ENM(decl->SamplerView.ReturnTypeZ, tgsi_type_names);
          TXT(", ");
-         ENM(decl->Resource.ReturnTypeW, tgsi_type_names);
+         ENM(decl->SamplerView.ReturnTypeW, tgsi_type_names);
+      }
+   }
+
+   if (decl->Declaration.Interpolate) {
+      if (iter->processor.Processor == TGSI_PROCESSOR_FRAGMENT &&
+          decl->Declaration.File == TGSI_FILE_INPUT)
+      {
+         TXT( ", " );
+         ENM( decl->Interp.Interpolate, tgsi_interpolate_names );
       }
 
-   }
+      if (decl->Interp.Centroid) {
+         TXT( ", CENTROID" );
+      }
 
-   if (iter->processor.Processor == TGSI_PROCESSOR_FRAGMENT &&
-       decl->Declaration.File == TGSI_FILE_INPUT)
-   {
-      TXT( ", " );
-      ENM( decl->Declaration.Interpolate, tgsi_interpolate_names );
-   }
-
-   if (decl->Declaration.Centroid) {
-      TXT( ", CENTROID" );
+      if (decl->Interp.CylindricalWrap) {
+         TXT(", CYLWRAP_");
+         if (decl->Interp.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_X) {
+            CHR('X');
+         }
+         if (decl->Interp.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_Y) {
+            CHR('Y');
+         }
+         if (decl->Interp.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_Z) {
+            CHR('Z');
+         }
+         if (decl->Interp.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_W) {
+            CHR('W');
+         }
+      }
    }
 
    if (decl->Declaration.Invariant) {
       TXT( ", INVARIANT" );
    }
 
-   if (decl->Declaration.CylindricalWrap) {
-      TXT(", CYLWRAP_");
-      if (decl->Declaration.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_X) {
-         CHR('X');
-      }
-      if (decl->Declaration.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_Y) {
-         CHR('Y');
-      }
-      if (decl->Declaration.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_Z) {
-         CHR('Z');
-      }
-      if (decl->Declaration.CylindricalWrap & TGSI_CYLINDRICAL_WRAP_W) {
-         CHR('W');
-      }
-   }
 
    if (decl->Declaration.File == TGSI_FILE_IMMEDIATE_ARRAY) {
       unsigned i;

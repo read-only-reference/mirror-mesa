@@ -724,6 +724,63 @@ do {								\
 
 
 
+#define MAT( ATTR, N, face, params )			\
+do {							\
+   if (face != GL_BACK)					\
+      MAT_ATTR( ATTR, N, params ); /* front */		\
+   if (face != GL_FRONT)				\
+      MAT_ATTR( ATTR + 1, N, params ); /* back */	\
+} while (0)
+
+
+/**
+ * Save a glMaterial call found between glBegin/End.
+ * glMaterial calls outside Begin/End are handled in dlist.c.
+ */
+static void GLAPIENTRY
+_save_Materialfv(GLenum face, GLenum pname, const GLfloat *params)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   if (face != GL_FRONT && face != GL_BACK && face != GL_FRONT_AND_BACK) {
+      _mesa_compile_error(ctx, GL_INVALID_ENUM, "glMaterial(face)");
+      return;
+   }
+
+   switch (pname) {
+   case GL_EMISSION:
+      MAT(VBO_ATTRIB_MAT_FRONT_EMISSION, 4, face, params);
+      break;
+   case GL_AMBIENT:
+      MAT(VBO_ATTRIB_MAT_FRONT_AMBIENT, 4, face, params);
+      break;
+   case GL_DIFFUSE:
+      MAT(VBO_ATTRIB_MAT_FRONT_DIFFUSE, 4, face, params);
+      break;
+   case GL_SPECULAR:
+      MAT(VBO_ATTRIB_MAT_FRONT_SPECULAR, 4, face, params);
+      break;
+   case GL_SHININESS:
+      if (*params < 0 || *params > ctx->Const.MaxShininess) {
+         _mesa_compile_error(ctx, GL_INVALID_VALUE, "glMaterial(shininess)");
+      }
+      else {
+         MAT(VBO_ATTRIB_MAT_FRONT_SHININESS, 1, face, params);
+      }
+      break;
+   case GL_COLOR_INDEXES:
+      MAT(VBO_ATTRIB_MAT_FRONT_INDEXES, 3, face, params);
+      break;
+   case GL_AMBIENT_AND_DIFFUSE:
+      MAT(VBO_ATTRIB_MAT_FRONT_AMBIENT, 4, face, params);
+      MAT(VBO_ATTRIB_MAT_FRONT_DIFFUSE, 4, face, params);
+      break;
+   default:
+      _mesa_compile_error(ctx, GL_INVALID_ENUM, "glMaterial(pname)");
+      return;
+   }
+}
+
 
 /* Cope with EvalCoord/CallList called within a begin/end object:
  *     -- Flush current buffer
@@ -1506,6 +1563,9 @@ vbo_print_vertex_list(struct gl_context *ctx, void *data)
 }
 
 
+/**
+ * Called during context creation/init.
+ */
 static void
 _save_current_init(struct gl_context *ctx)
 {
@@ -1529,7 +1589,7 @@ _save_current_init(struct gl_context *ctx)
 
 
 /**
- * Initialize the display list compiler
+ * Initialize the display list compiler.  Called during context creation.
  */
 void
 vbo_save_api_init(struct vbo_save_context *save)

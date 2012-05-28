@@ -1,4 +1,4 @@
-//===-- SIPropagateImmReads.cpp - TODO: Add brief description -------===//
+//===-- SIPropagateImmReads.cpp - Lower Immediate Reads Pass --------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,9 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO: Add full description
+// We can't do this in the ConvertToISA pass, because later passes might
+// create LOADCONST_* instructions that we would miss.  This is why we need 
+// a separate pass for this.
 //
 //===----------------------------------------------------------------------===//
 
@@ -19,19 +21,21 @@
 using namespace llvm;
 
 namespace {
-  class SIPropagateImmReadsPass : public MachineFunctionPass {
 
-  private:
-    static char ID;
-    TargetMachine &TM;
+class SIPropagateImmReadsPass : public MachineFunctionPass {
 
-  public:
-    SIPropagateImmReadsPass(TargetMachine &tm) :
-      MachineFunctionPass(ID), TM(tm) { }
+private:
+  static char ID;
+  TargetMachine &TM;
 
-    virtual bool runOnMachineFunction(MachineFunction &MF);
-  };
-} /* End anonymous namespace */
+public:
+  SIPropagateImmReadsPass(TargetMachine &tm) :
+    MachineFunctionPass(ID), TM(tm) { }
+
+  virtual bool runOnMachineFunction(MachineFunction &MF);
+};
+
+} // End anonymous namespace
 
 char SIPropagateImmReadsPass::ID = 0;
 
@@ -53,12 +57,13 @@ bool SIPropagateImmReadsPass::runOnMachineFunction(MachineFunction &MF)
       switch (MI.getOpcode()) {
       case AMDIL::LOADCONST_f32:
       case AMDIL::LOADCONST_i32:
+      case AMDIL::LOADCONST_i64:
         break;
       default:
         continue;
       }
 
-      /* XXX: Create and use S_MOV_IMM for SREGs */
+      // XXX: Create and use S_MOV_IMM for SREGs
       BuildMI(MBB, I, MBB.findDebugLoc(I), TII->get(AMDIL::V_MOV_IMM))
           .addOperand(MI.getOperand(0))
           .addOperand(MI.getOperand(1));

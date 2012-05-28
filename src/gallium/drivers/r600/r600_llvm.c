@@ -5,6 +5,7 @@
 #include "gallivm/lp_bld_gather.h"
 #include "tgsi/tgsi_parse.h"
 #include "util/u_double_list.h"
+#include "util/u_memory.h"
 
 #include "r600.h"
 #include "r600_asm.h"
@@ -21,10 +22,46 @@ static LLVMValueRef llvm_fetch_const(
 	enum tgsi_opcode_type type,
 	unsigned swizzle)
 {
-	return lp_build_intrinsic_unary(bld_base->base.gallivm->builder,
+	LLVMValueRef idx = lp_build_const_int32(bld_base->base.gallivm,
+			radeon_llvm_reg_index_soa(reg->Register.Index, swizzle));
+	LLVMValueRef cval = build_intrinsic(bld_base->base.gallivm->builder,
 		"llvm.AMDGPU.load.const", bld_base->base.elem_type,
-		lp_build_const_int32(bld_base->base.gallivm,
-		radeon_llvm_reg_index_soa(reg->Register.Index, swizzle)));
+		&idx, 1, LLVMReadNoneAttribute);
+
+	return bitcast(bld_base, type, cval);
+}
+
+static void llvm_load_system_value(
+		struct radeon_llvm_context * ctx,
+		unsigned index,
+		const struct tgsi_full_declaration *decl)
+{
+	unsigned chan;
+
+	switch (decl->Semantic.Name) {
+	case TGSI_SEMANTIC_INSTANCEID: chan = 3; break;
+	case TGSI_SEMANTIC_VERTEXID: chan = 0; break;
+	default: assert(!"unknown system value");
+	}
+
+	LLVMValueRef reg = lp_build_const_int32(
+			ctx->soa.bld_base.base.gallivm, chan);
+	ctx->system_values[index] = build_intrinsic(
+			ctx->soa.bld_base.base.gallivm->builder,
+			"llvm.R600.load.input",
+			ctx->soa.bld_base.base.elem_type, &reg, 1,
+			LLVMReadNoneAttribute);
+}
+
+static LLVMValueRef llvm_fetch_system_value(
+		struct lp_build_tgsi_context * bld_base,
+		const struct tgsi_full_src_register *reg,
+		enum tgsi_opcode_type type,
+		unsigned swizzle)
+{
+	struct radeon_llvm_context * ctx = radeon_llvm_context(bld_base);
+	LLVMValueRef cval = ctx->system_values[reg->Register.Index];
+	return bitcast(bld_base, type, cval);
 }
 
 static void llvm_load_input(
@@ -42,10 +79,11 @@ static void llvm_load_input(
 		LLVMValueRef reg = lp_build_const_int32(
 				ctx->soa.bld_base.base.gallivm,
 				soa_index + (ctx->reserved_reg_count * 4));
-		ctx->inputs[soa_index] = lp_build_intrinsic_unary(
+		ctx->inputs[soa_index] = build_intrinsic(
 				ctx->soa.bld_base.base.gallivm->builder,
 				"llvm.R600.load.input",
-				ctx->soa.bld_base.base.elem_type, reg);
+				ctx->soa.bld_base.base.elem_type, &reg, 1,
+				LLVMReadNoneAttribute);
 	}
 }
 
@@ -59,17 +97,13 @@ static void llvm_emit_prologue(struct lp_build_tgsi_context * bld_base)
 	for (i = 0; i < ctx->reserved_reg_count; i++) {
 		unsigned chan;
 		for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
-			LLVMValueRef reg;
 			LLVMValueRef reg_index = lp_build_const_int32(
 					base->gallivm,
 					radeon_llvm_reg_index_soa(i, chan));
-			reg = lp_build_intrinsic_unary(base->gallivm->builder,
-						"llvm.AMDGPU.reserve.reg",
-						base->elem_type, reg_index);
 			lp_build_intrinsic_unary(base->gallivm->builder,
-				"llvm.AMDGPU.export.reg",
+				"llvm.AMDGPU.reserve.reg",
 				LLVMVoidTypeInContext(base->gallivm->context),
-				reg);
+				reg_index);
 		}
 	}
 }
@@ -85,7 +119,6 @@ static void llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 		unsigned chan;
 		for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
 			LLVMValueRef output;
-			LLVMValueRef store_output;
 			unsigned adjusted_reg_idx = i +
 					ctx->reserved_reg_count;
 			LLVMValueRef reg_index = lp_build_const_int32(
@@ -95,16 +128,11 @@ static void llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 			output = LLVMBuildLoad(base->gallivm->builder,
 				ctx->soa.outputs[i][chan], "");
 
-			store_output = lp_build_intrinsic_binary(
+			lp_build_intrinsic_binary(
 				base->gallivm->builder,
 				"llvm.AMDGPU.store.output",
-				base->elem_type,
-				output, reg_index);
-
-			lp_build_intrinsic_unary(base->gallivm->builder,
-				"llvm.AMDGPU.export.reg",
 				LLVMVoidTypeInContext(base->gallivm->context),
-				store_output);
+				output, reg_index);
 		}
 	}
 }
@@ -115,16 +143,24 @@ static void llvm_emit_tex(
 	struct lp_build_emit_data * emit_data)
 {
 	struct gallivm_state * gallivm = bld_base->base.gallivm;
-	LLVMValueRef args[3];
+	LLVMValueRef args[6];
+	unsigned c, sampler_src;
 
-	args[0] = emit_data->args[0];
-	args[1] = lp_build_const_int32(gallivm,
-					emit_data->inst->Src[1].Register.Index);
-	args[2] = lp_build_const_int32(gallivm,
+	assert(emit_data->arg_count + 2 <= Elements(args));
+
+	for (c = 0; c < emit_data->arg_count; ++c)
+		args[c] = emit_data->args[c];
+
+	sampler_src = emit_data->inst->Instruction.NumSrcRegs-1;
+
+	args[c++] = lp_build_const_int32(gallivm,
+					emit_data->inst->Src[sampler_src].Register.Index);
+	args[c++] = lp_build_const_int32(gallivm,
 					emit_data->inst->Texture.Texture);
-	emit_data->output[0] = lp_build_intrinsic(gallivm->builder,
+
+	emit_data->output[0] = build_intrinsic(gallivm->builder,
 					action->intr_name,
-					emit_data->dst_type, args, 3);
+					emit_data->dst_type, args, c, LLVMReadNoneAttribute);
 }
 
 static void dp_fetch_args(
@@ -165,32 +201,11 @@ static void dp_fetch_args(
 
 static struct lp_build_tgsi_action dot_action = {
 	.fetch_args = dp_fetch_args,
-	.emit = lp_build_tgsi_intrinsic,
+	.emit = build_tgsi_intrinsic_nomem,
 	.intr_name = "llvm.AMDGPU.dp4"
 };
 
-static void txp_fetch_args(
-	struct lp_build_tgsi_context * bld_base,
-	struct lp_build_emit_data * emit_data)
-{
-	LLVMValueRef src_w;
-	unsigned chan;
-	LLVMValueRef coords[4];
 
-	emit_data->dst_type = LLVMVectorType(bld_base->base.elem_type, 4);
-	src_w = lp_build_emit_fetch(bld_base, emit_data->inst, 0, TGSI_CHAN_W);
-
-	for (chan = 0; chan < 3; chan++ ) {
-		LLVMValueRef arg = lp_build_emit_fetch(bld_base,
-						emit_data->inst, 0, chan);
-		coords[chan] = lp_build_emit_llvm_binary(bld_base,
-					TGSI_OPCODE_DIV, arg, src_w);
-	}
-	coords[3] = bld_base->base.one;
-	emit_data->args[0] = lp_build_gather_values(bld_base->base.gallivm,
-						coords, 4);
-	emit_data->arg_count = 1;
-}
 
 LLVMModuleRef r600_tgsi_llvm(
 	struct radeon_llvm_context * ctx,
@@ -204,20 +219,25 @@ LLVMModuleRef r600_tgsi_llvm(
 	bld_base->info = &shader_info;
 	bld_base->userdata = ctx;
 	bld_base->emit_fetch_funcs[TGSI_FILE_CONSTANT] = llvm_fetch_const;
+	bld_base->emit_fetch_funcs[TGSI_FILE_SYSTEM_VALUE] = llvm_fetch_system_value;
 	bld_base->emit_prologue = llvm_emit_prologue;
 	bld_base->emit_epilogue = llvm_emit_epilogue;
 	ctx->userdata = ctx;
 	ctx->load_input = llvm_load_input;
+	ctx->load_system_value = llvm_load_system_value;
 
 	bld_base->op_actions[TGSI_OPCODE_DP2] = dot_action;
 	bld_base->op_actions[TGSI_OPCODE_DP3] = dot_action;
 	bld_base->op_actions[TGSI_OPCODE_DP4] = dot_action;
 	bld_base->op_actions[TGSI_OPCODE_DPH] = dot_action;
+	bld_base->op_actions[TGSI_OPCODE_DDX].emit = llvm_emit_tex;
+	bld_base->op_actions[TGSI_OPCODE_DDY].emit = llvm_emit_tex;
 	bld_base->op_actions[TGSI_OPCODE_TEX].emit = llvm_emit_tex;
 	bld_base->op_actions[TGSI_OPCODE_TXB].emit = llvm_emit_tex;
 	bld_base->op_actions[TGSI_OPCODE_TXD].emit = llvm_emit_tex;
 	bld_base->op_actions[TGSI_OPCODE_TXL].emit = llvm_emit_tex;
-	bld_base->op_actions[TGSI_OPCODE_TXP].fetch_args = txp_fetch_args;
+	bld_base->op_actions[TGSI_OPCODE_TXF].emit = llvm_emit_tex;
+	bld_base->op_actions[TGSI_OPCODE_TXQ].emit = llvm_emit_tex;
 	bld_base->op_actions[TGSI_OPCODE_TXP].emit = llvm_emit_tex;
 
 	lp_build_tgsi_llvm(bld_base, tokens);

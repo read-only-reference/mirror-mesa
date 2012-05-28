@@ -66,19 +66,6 @@ lp_get_printf_arg_count(const char *fmt)
    return count;
 }
 
-LLVMValueRef 
-lp_build_const_string_variable(LLVMModuleRef module,
-                               LLVMContextRef context,
-                               const char *str, int len)
-{
-   LLVMValueRef string = LLVMAddGlobal(module, LLVMArrayType(LLVMInt8TypeInContext(context), len + 1), "");
-   LLVMSetGlobalConstant(string, TRUE);
-   LLVMSetLinkage(string, LLVMInternalLinkage);
-   LLVMSetInitializer(string, LLVMConstStringInContext(context, str, len + 1, TRUE));
-   return string;
-}
- 
-
 /**
  * lp_build_printf.
  *
@@ -94,24 +81,22 @@ lp_build_printf(struct gallivm_state *gallivm, const char *fmt, ...)
    int argcount = lp_get_printf_arg_count(fmt);
    LLVMBuilderRef builder = gallivm->builder;
    LLVMContextRef context = gallivm->context;
-   LLVMModuleRef module = gallivm->module;
    LLVMValueRef params[50];
-   LLVMValueRef fmtarg = lp_build_const_string_variable(module, context,
-                                                        fmt, strlen(fmt) + 1);
-   LLVMValueRef int0 = lp_build_const_int32(gallivm, 0);
-   LLVMValueRef index[2];
-   LLVMValueRef func_printf = LLVMGetNamedFunction(module, "printf");
+   LLVMValueRef fmtarg = lp_build_const_string(gallivm, fmt);
+   LLVMTypeRef printf_type;
+   LLVMValueRef func_printf;
 
    assert(Elements(params) >= argcount + 1);
 
-   index[0] = index[1] = int0;
+   printf_type = LLVMFunctionType(LLVMIntTypeInContext(context, 32), NULL, 0, 1);
 
-   if (!func_printf) {
-      LLVMTypeRef printf_type = LLVMFunctionType(LLVMIntTypeInContext(context, 32), NULL, 0, 1);
-      func_printf = LLVMAddFunction(module, "printf", printf_type);
-   }
+   func_printf = lp_build_const_int_pointer(gallivm, func_to_pointer((func_pointer)debug_printf));
 
-   params[0] = LLVMBuildGEP(builder, fmtarg, index, 2, "");
+   func_printf = LLVMBuildBitCast(gallivm->builder, func_printf,
+                                  LLVMPointerType(printf_type, 0),
+                                  "debug_printf");
+
+   params[0] = fmtarg;
 
    va_start(arglist, fmt);
    for (i = 1; i <= argcount; i++) {
@@ -169,4 +154,31 @@ lp_build_print_ivec4(struct gallivm_state *gallivm,
 
    util_snprintf(format, sizeof(format), "%s %%i %%i %%i %%i\n", msg);
    return lp_build_printf(gallivm, format, x, y, z, w);
+}
+
+
+/**
+ * Print a uint8[16] vector.
+ */
+LLVMValueRef
+lp_build_print_uvec16(struct gallivm_state *gallivm,
+                    const char *msg, LLVMValueRef vec)
+{
+   LLVMBuilderRef builder = gallivm->builder;
+   char format[1000];
+   LLVMValueRef args[16];
+   int i;
+
+   for (i = 0; i < 16; ++i) {
+      args[i] = LLVMBuildExtractElement(builder, vec, lp_build_const_int32(gallivm, i), "");
+   }
+
+   util_snprintf(format, sizeof(format), "%s %%u %%u %%u %%u %%u %%u %%u %%u %%u %%u %%u %%u %%u %%u %%u %%u\n", msg);
+
+   return lp_build_printf(
+            gallivm, format,
+            args[ 0], args[ 1], args[ 2], args[ 3],
+            args[ 4], args[ 5], args[ 6], args[ 7],
+            args[ 8], args[ 9], args[10], args[11],
+            args[12], args[13], args[14], args[15]);
 }

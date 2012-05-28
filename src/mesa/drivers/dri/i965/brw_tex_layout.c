@@ -49,7 +49,10 @@ brw_miptree_layout_texture_array(struct intel_context *intel,
 
    h0 = ALIGN(mt->height0, mt->align_h);
    h1 = ALIGN(minify(mt->height0), mt->align_h);
-   qpitch = (h0 + h1 + (intel->gen >= 7 ? 12 : 11) * mt->align_h);
+   if (mt->array_spacing_lod0)
+      qpitch = h0;
+   else
+      qpitch = (h0 + h1 + (intel->gen >= 7 ? 12 : 11) * mt->align_h);
    if (mt->compressed)
       qpitch /= 4;
 
@@ -115,6 +118,8 @@ brw_miptree_layout(struct intel_context *intel, struct intel_mipmap_tree *mt)
 	       intel_miptree_set_image_offset(mt, level, q, x, y);
 	       x += pack_x_pitch;
 	    }
+            if (x > mt->total_width)
+               mt->total_width = x;
 
 	    x = 0;
 	    y += pack_y_pitch;
@@ -135,10 +140,9 @@ brw_miptree_layout(struct intel_context *intel, struct intel_mipmap_tree *mt)
 	       pack_x_nr <<= 1;
 	    }
 	 } else {
+            pack_x_nr <<= 1;
 	    if (pack_x_pitch > 4) {
 	       pack_x_pitch >>= 1;
-	       pack_x_nr <<= 1;
-	       assert(pack_x_pitch * pack_x_nr <= mt->total_width);
 	    }
 
 	    if (pack_y_pitch > 2) {
@@ -164,7 +168,10 @@ brw_miptree_layout(struct intel_context *intel, struct intel_mipmap_tree *mt)
       break;
 
    default:
-      i945_miptree_layout_2d(mt);
+      if (mt->num_samples > 0 && !mt->msaa_is_interleaved)
+         brw_miptree_layout_texture_array(intel, mt);
+      else
+         i945_miptree_layout_2d(mt);
       break;
    }
    DBG("%s: %dx%dx%d\n", __FUNCTION__,

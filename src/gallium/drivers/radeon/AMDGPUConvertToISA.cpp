@@ -19,22 +19,24 @@
 using namespace llvm;
 
 namespace {
-  class AMDGPUConvertToISAPass : public MachineFunctionPass {
 
-  private:
-    static char ID;
-    TargetMachine &TM;
+class AMDGPUConvertToISAPass : public MachineFunctionPass {
 
-    void lowerFLT(MachineInstr &MI);
+private:
+  static char ID;
+  TargetMachine &TM;
 
-  public:
-    AMDGPUConvertToISAPass(TargetMachine &tm) :
-      MachineFunctionPass(ID), TM(tm) { }
+public:
+  AMDGPUConvertToISAPass(TargetMachine &tm) :
+    MachineFunctionPass(ID), TM(tm) { }
 
-    virtual bool runOnMachineFunction(MachineFunction &MF);
+  virtual bool runOnMachineFunction(MachineFunction &MF);
 
-  };
-} /* End anonymous namespace */
+  virtual const char *getPassName() const {return "AMDGPU Convert to ISA";}
+
+};
+
+} // End anonymous namespace
 
 char AMDGPUConvertToISAPass::ID = 0;
 

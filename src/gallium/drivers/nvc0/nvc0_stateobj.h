@@ -32,6 +32,16 @@ struct nvc0_zsa_stateobj {
    uint32_t state[26];
 };
 
+struct nvc0_constbuf {
+   union {
+      struct pipe_resource *buf;
+      const void *data;
+   } u;
+   uint32_t size;
+   uint16_t offset;
+   boolean user; /* should only be TRUE if u.data is valid and non-NULL */
+};
+
 struct nvc0_vertex_element {
    struct pipe_vertex_element pipe;
    uint32_t state;
@@ -39,11 +49,13 @@ struct nvc0_vertex_element {
 };
 
 struct nvc0_vertex_stateobj {
+   uint32_t min_instance_div[PIPE_MAX_ATTRIBS];
+   uint16_t vb_access_size[PIPE_MAX_ATTRIBS];
    struct translate *translate;
    unsigned num_elements;
    uint32_t instance_elts;
    uint32_t instance_bufs;
-   uint16_t vb_access_size[PIPE_MAX_ATTRIBS];
+   boolean shared_slots;
    boolean need_conversion; /* e.g. VFETCH cannot convert f64 to f32 */
    unsigned size; /* size of vertex in bytes (when packed) */
    struct nvc0_vertex_element element[0];

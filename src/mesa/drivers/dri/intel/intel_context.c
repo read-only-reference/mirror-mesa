@@ -215,7 +215,7 @@ intel_flush_front(struct gl_context *ctx)
     __DRIcontext *driContext = intel->driContext;
     __DRIscreen *const screen = intel->intelScreen->driScrnPriv;
 
-   if ((ctx->DrawBuffer->Name == 0) && intel->front_buffer_dirty) {
+    if (_mesa_is_winsys_fbo(ctx->DrawBuffer) && intel->front_buffer_dirty) {
       if (screen->dri2.loader &&
           (screen->dri2.loader->base.version >= 2)
 	  && (screen->dri2.loader->flushFrontBuffer != NULL) &&
@@ -454,7 +454,7 @@ intel_viewport(struct gl_context *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
     if (intel->saved_viewport)
 	intel->saved_viewport(ctx, x, y, w, h);
 
-    if (ctx->DrawBuffer->Name == 0) {
+    if (_mesa_is_winsys_fbo(ctx->DrawBuffer)) {
        dri2InvalidateDrawable(driContext->driDrawablePriv);
        dri2InvalidateDrawable(driContext->driReadablePriv);
     }
@@ -728,17 +728,7 @@ intelInitContext(struct intel_context *intel,
 
    intel->RenderIndex = ~0;
 
-   switch (ctx->API) {
-   case API_OPENGL:
-      intelInitExtensions(ctx);
-      break;
-   case API_OPENGLES:
-      intelInitExtensionsES1(ctx);
-      break;
-   case API_OPENGLES2:
-      intelInitExtensionsES2(ctx);
-      break;
-   }
+   intelInitExtensions(ctx);
 
    INTEL_DEBUG = driParseDebugString(getenv("INTEL_DEBUG"), debug_control);
    if (INTEL_DEBUG & DEBUG_BUFMGR)
@@ -794,8 +784,10 @@ intelDestroyContext(__DRIcontext * driContextPriv)
       INTEL_FIREVERTICES(intel);
 
       /* Dump a final BMP in case the application doesn't call SwapBuffers */
-      if (INTEL_DEBUG & DEBUG_AUB)
+      if (INTEL_DEBUG & DEBUG_AUB) {
+         intel_batchbuffer_flush(intel);
 	 aub_dump_bmp(&intel->ctx);
+      }
 
       _mesa_meta_free(&intel->ctx);
 

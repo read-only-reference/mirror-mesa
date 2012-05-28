@@ -82,7 +82,6 @@ const unsigned int RESERVED_FUNCS = 1024;
 
 namespace llvm {
 class AMDILInstrPrinter;
-class AMDILTargetMachine;
 class FunctionPass;
 class MCAsmInfo;
 class raw_ostream;
@@ -91,13 +90,9 @@ class TargetMachine;
 
 /// Instruction selection passes.
 FunctionPass*
-  createAMDILISelDag(AMDILTargetMachine &TM AMDIL_OPT_LEVEL_DECL);
+  createAMDILISelDag(TargetMachine &TM AMDIL_OPT_LEVEL_DECL);
 FunctionPass*
   createAMDILPeepholeOpt(TargetMachine &TM AMDIL_OPT_LEVEL_DECL);
-
-/// Pre regalloc passes.
-FunctionPass*
-  createAMDILMachinePeephole(TargetMachine &TM AMDIL_OPT_LEVEL_DECL);
 
 /// Pre emit passes.
 FunctionPass*
@@ -134,13 +129,9 @@ enum AddressSpaces {
   ADDRESS_NONE     = 5, // Address space for unknown memory.
   PARAM_D_ADDRESS  = 6, // Address space for direct addressible parameter memory (CONST0)
   PARAM_I_ADDRESS  = 7, // Address space for indirect addressible parameter memory (VTX1)
-  LAST_ADDRESS     = 8
+  USER_SGPR_ADDRESS = 8, // Address space for USER_SGPRS on SI
+  LAST_ADDRESS     = 9
 };
-
-// We are piggybacking on the CommentFlag enum in MachineInstr.h to
-// set bits in AsmPrinterFlags of the MachineInstruction. We will
-// start at bit 16 and allocate down while LLVM will start at bit
-// 1 and allocate up.
 
 // This union/struct combination is an easy way to read out the
 // exact bits that are needed.
@@ -181,26 +172,6 @@ typedef union ResourceRec {
 
 } // namespace AMDILAS
 
-// The OpSwizzle encodes a subset of all possible
-// swizzle combinations into a number of bits using
-// only the combinations utilized by the backend.
-// The lower 128 are for source swizzles and the
-// upper 128 or for destination swizzles.
-// The valid mappings can be found in the
-// getSrcSwizzle and getDstSwizzle functions of
-// AMDILUtilityFunctions.cpp.
-typedef union SwizzleRec {
-  struct {
-#ifdef __BIG_ENDIAN__
-    unsigned char dst : 1;
-    unsigned char swizzle : 7;
-#else
-    unsigned char swizzle : 7;
-    unsigned char dst : 1;
-#endif
-  } bits;
-  unsigned char u8all;
-} OpSwizzle;
 // Enums corresponding to AMDIL condition codes for IL.  These
 // values must be kept in sync with the ones in the .td file.
 namespace AMDILCC {

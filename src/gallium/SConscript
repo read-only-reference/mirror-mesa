@@ -33,8 +33,11 @@ if env['drm']:
         SConscript([
             'drivers/r300/SConscript',
             'drivers/r600/SConscript',
-            'drivers/radeonsi/SConscript',
         ])
+        if env['llvm']:
+            SConscript([
+                'drivers/radeonsi/SConscript',
+            ])
     # XXX: nouveau drivers have a tight dependency on libdrm, so to enable
     # we need some version logic before we enable them. Also, ATM there is
     # no nouveau target in scons
@@ -55,7 +58,7 @@ SConscript('winsys/sw/null/SConscript')
 
 if not env['embedded']:
     SConscript('state_trackers/vega/SConscript')
-    if env['platform'] not in ['darwin', 'haiku']:
+    if env['platform'] not in ('cygwin', 'darwin', 'haiku', 'sunos'):
         SConscript('state_trackers/egl/SConscript')
 
     if env['x11']:
@@ -121,7 +124,7 @@ SConscript([
 ])
 
 if not env['embedded']:
-    if env['platform'] not in ['darwin', 'haiku']:
+    if env['platform'] not in ('cygwin', 'darwin', 'freebsd', 'haiku', 'sunos'):
         SConscript([
             'targets/egl-static/SConscript'
         ])
@@ -153,8 +156,11 @@ if not env['embedded']:
             SConscript([
                 'targets/dri-r300/SConscript',
                 'targets/dri-r600/SConscript',
-                'targets/dri-radeonsi/SConscript',
             ])
+            if env['llvm']:
+                SConscript([
+                    'targets/dri-radeonsi/SConscript',
+                ])
 
     if env['xorg'] and env['drm']:
         SConscript([

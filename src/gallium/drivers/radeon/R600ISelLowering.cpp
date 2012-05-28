@@ -1,4 +1,4 @@
-//===-- R600ISelLowering.cpp - TODO: Add brief description -------===//
+//===-- R600ISelLowering.cpp - R600 DAG Lowering Implementation -----------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,12 +7,15 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO: Add full description
+// Most of the DAG lowering is handled in AMDGPUISelLowering.cpp.  This file
+// is mostly EmitInstrWithCustomInserter().
 //
 //===----------------------------------------------------------------------===//
 
 #include "R600ISelLowering.h"
+#include "AMDGPUUtil.h"
 #include "R600InstrInfo.h"
+#include "R600MachineFunctionInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 
 using namespace llvm;
@@ -25,9 +28,17 @@ R600TargetLowering::R600TargetLowering(TargetMachine &TM) :
 //  setSchedulingPreference(Sched::VLIW);
   addRegisterClass(MVT::v4f32, &AMDIL::R600_Reg128RegClass);
   addRegisterClass(MVT::f32, &AMDIL::R600_Reg32RegClass);
+  addRegisterClass(MVT::v4i32, &AMDIL::R600_Reg128RegClass);
+  addRegisterClass(MVT::i32, &AMDIL::R600_Reg32RegClass);
+  computeRegisterProperties();
 
   setOperationAction(ISD::EXTRACT_VECTOR_ELT, MVT::v4f32, Legal);
   setOperationAction(ISD::INSERT_VECTOR_ELT, MVT::v4f32, Legal);
+  setOperationAction(ISD::EXTRACT_VECTOR_ELT, MVT::v4i32, Legal);
+  setOperationAction(ISD::INSERT_VECTOR_ELT, MVT::v4i32, Legal);
+
+  setOperationAction(ISD::FSUB, MVT::f32, Expand);
+
 }
 
 MachineBasicBlock * R600TargetLowering::EmitInstrWithCustomInserter(
@@ -35,10 +46,10 @@ MachineBasicBlock * R600TargetLowering::EmitInstrWithCustomInserter(
 {
   MachineFunction * MF = BB->getParent();
   MachineRegisterInfo &MRI = MF->getRegInfo();
+  MachineBasicBlock::iterator I = *MI;
 
   switch (MI->getOpcode()) {
   default: return AMDGPUTargetLowering::EmitInstrWithCustomInserter(MI, BB);
-  /* XXX: Use helper function from AMDGPULowerShaderInstructions here */
   case AMDIL::TGID_X:
     addLiveIn(MI, MF, MRI, TII, AMDIL::T1_X);
     break;
@@ -84,7 +95,129 @@ MachineBasicBlock * R600TargetLowering::EmitInstrWithCustomInserter(
   case AMDIL::LOCAL_SIZE_Z:
     lowerImplicitParameter(MI, *BB, MRI, 8);
     break;
+
+  case AMDIL::CLAMP_R600:
+    MI->getOperand(0).addTargetFlag(MO_FLAG_CLAMP);
+    BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::MOV))
+           .addOperand(MI->getOperand(0))
+           .addOperand(MI->getOperand(1));
+    break;
+
+  case AMDIL::FABS_R600:
+    MI->getOperand(1).addTargetFlag(MO_FLAG_ABS);
+    BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::MOV))
+           .addOperand(MI->getOperand(0))
+           .addOperand(MI->getOperand(1));
+    break;
+
+  case AMDIL::FNEG_R600:
+    MI->getOperand(1).addTargetFlag(MO_FLAG_NEG);
+    BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::MOV))
+            .addOperand(MI->getOperand(0))
+            .addOperand(MI->getOperand(1));
+    break;
+
+  case AMDIL::R600_LOAD_CONST:
+    {
+      int64_t RegIndex = MI->getOperand(1).getImm();
+      unsigned ConstantReg = AMDIL::R600_CReg32RegClass.getRegister(RegIndex);
+      BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::COPY))
+                  .addOperand(MI->getOperand(0))
+                  .addReg(ConstantReg);
+      break;
+    }
+
+  case AMDIL::LOAD_INPUT:
+    {
+      int64_t RegIndex = MI->getOperand(1).getImm();
+      addLiveIn(MI, MF, MRI, TII,
+                AMDIL::R600_TReg32RegClass.getRegister(RegIndex));
+      break;
+    }
+
+  case AMDIL::MASK_WRITE:
+    {
+      unsigned maskedRegister = MI->getOperand(0).getReg();
+      assert(TargetRegisterInfo::isVirtualRegister(maskedRegister));
+      MachineInstr * defInstr = MRI.getVRegDef(maskedRegister);
+      MachineOperand * def = defInstr->findRegisterDefOperand(maskedRegister);
+      def->addTargetFlag(MO_FLAG_MASK);
+      // Return early so the instruction is not erased
+      return BB;
+    }
+
+  case AMDIL::STORE_OUTPUT:
+    {
+      int64_t OutputIndex = MI->getOperand(1).getImm();
+      unsigned OutputReg = AMDIL::R600_TReg32RegClass.getRegister(OutputIndex);
+
+      BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::COPY), OutputReg)
+                  .addOperand(MI->getOperand(0));
+
+      if (!MRI.isLiveOut(OutputReg)) {
+        MRI.addLiveOut(OutputReg);
+      }
+      break;
+    }
+
+  case AMDIL::RESERVE_REG:
+    {
+      R600MachineFunctionInfo * MFI = MF->getInfo<R600MachineFunctionInfo>();
+      int64_t ReservedIndex = MI->getOperand(0).getImm();
+      unsigned ReservedReg =
+                          AMDIL::R600_TReg32RegClass.getRegister(ReservedIndex);
+      MFI->ReservedRegs.push_back(ReservedReg);
+      break;
+    }
+
+  case AMDIL::TXD:
+    {
+      unsigned t0 = MRI.createVirtualRegister(AMDIL::R600_Reg128RegisterClass);
+      unsigned t1 = MRI.createVirtualRegister(AMDIL::R600_Reg128RegisterClass);
+
+      BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::TEX_SET_GRADIENTS_H), t0)
+              .addOperand(MI->getOperand(3))
+              .addOperand(MI->getOperand(4))
+              .addOperand(MI->getOperand(5));
+      BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::TEX_SET_GRADIENTS_V), t1)
+              .addOperand(MI->getOperand(2))
+              .addOperand(MI->getOperand(4))
+              .addOperand(MI->getOperand(5));
+      BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::TEX_SAMPLE_G))
+              .addOperand(MI->getOperand(0))
+              .addOperand(MI->getOperand(1))
+              .addOperand(MI->getOperand(4))
+              .addOperand(MI->getOperand(5))
+              .addReg(t0, RegState::Implicit)
+              .addReg(t1, RegState::Implicit);
+      break;
+    }
+  case AMDIL::TXD_SHADOW:
+    {
+      unsigned t0 = MRI.createVirtualRegister(AMDIL::R600_Reg128RegisterClass);
+      unsigned t1 = MRI.createVirtualRegister(AMDIL::R600_Reg128RegisterClass);
+
+      BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::TEX_SET_GRADIENTS_H), t0)
+              .addOperand(MI->getOperand(3))
+              .addOperand(MI->getOperand(4))
+              .addOperand(MI->getOperand(5));
+      BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::TEX_SET_GRADIENTS_V), t1)
+              .addOperand(MI->getOperand(2))
+              .addOperand(MI->getOperand(4))
+              .addOperand(MI->getOperand(5));
+      BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::TEX_SAMPLE_C_G))
+              .addOperand(MI->getOperand(0))
+              .addOperand(MI->getOperand(1))
+              .addOperand(MI->getOperand(4))
+              .addOperand(MI->getOperand(5))
+              .addReg(t0, RegState::Implicit)
+              .addReg(t1, RegState::Implicit);
+      break;
+    }
+
+
   }
+
   MI->eraseFromParent();
   return BB;
 }

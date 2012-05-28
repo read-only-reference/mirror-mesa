@@ -799,7 +799,8 @@ get_texel_2d_array(const struct sp_sampler_variant *samp,
    const struct pipe_resource *texture = samp->view->texture;
    unsigned level = addr.bits.level;
 
-   assert(layer < texture->array_size);
+   assert(layer < (int) texture->array_size);
+   assert(layer >= 0);
 
    if (x < 0 || x >= (int) u_minify(texture->width0, level) ||
        y < 0 || y >= (int) u_minify(texture->height0, level)) {
@@ -1787,9 +1788,9 @@ img_filter_2d_ewa(struct tgsi_sampler *tgsi_sampler,
    float weight_buffer[TGSI_QUAD_SIZE];
    unsigned buffer_next;
    int j;
-   float den;// = 0.0F;
+   float den; /* = 0.0F; */
    float ddq;
-   float U;// = u0 - tex_u;
+   float U; /* = u0 - tex_u; */
    int v;
 
    /* Scale ellipse formula to directly index the Filter Lookup Table.
@@ -1805,8 +1806,8 @@ img_filter_2d_ewa(struct tgsi_sampler *tgsi_sampler,
     * also the same. Note that texel/image access can only be performed using
     * a quad, i.e. it is not possible to get the pixel value for a single
     * tex coord. In order to have a better performance, the access is buffered
-    * using the s_buffer/t_buffer and weight_buffer. Only when the buffer is full,
-    * then the pixel values are read from the image.
+    * using the s_buffer/t_buffer and weight_buffer. Only when the buffer is
+    * full, then the pixel values are read from the image.
     */
    ddq = 2 * A;
    
@@ -1834,7 +1835,9 @@ img_filter_2d_ewa(struct tgsi_sampler *tgsi_sampler,
 
          int u;
          for (u = u0; u <= u1; ++u) {
-            /* Note that the ellipse has been pre-scaled so F = WEIGHT_LUT_SIZE - 1 */
+            /* Note that the ellipse has been pre-scaled so F =
+             * WEIGHT_LUT_SIZE - 1
+             */
             if (q < WEIGHT_LUT_SIZE) {
                /* as a LUT is used, q must never be negative;
                 * should not happen, though
@@ -1873,10 +1876,11 @@ img_filter_2d_ewa(struct tgsi_sampler *tgsi_sampler,
          }
       }
 
-      /* if the tex coord buffer contains unread values, we will read them now.
-       * Note that in most cases we have to read more pixel values than required,
-       * however, as the img_filter_2d_nearest function(s) does not have a count
-       * parameter, we need to read the whole quad and ignore the unused values
+      /* if the tex coord buffer contains unread values, we will read
+       * them now.  Note that in most cases we have to read more pixel
+       * values than required, however, as the img_filter_2d_nearest
+       * function(s) does not have a count parameter, we need to read
+       * the whole quad and ignore the unused values
        */
       if (buffer_next > 0) {
          unsigned jj;
@@ -1895,11 +1899,9 @@ img_filter_2d_ewa(struct tgsi_sampler *tgsi_sampler,
       }
 
       if (den <= 0.0F) {
-         /* Reaching this place would mean
-          * that no pixels intersected the ellipse.
-          * This should never happen because
-          * the filter we use always
-          * intersects at least one pixel.
+         /* Reaching this place would mean that no pixels intersected
+          * the ellipse.  This should never happen because the filter
+          * we use always intersects at least one pixel.
           */
 
          /*rgba[0]=0;
@@ -1907,7 +1909,8 @@ img_filter_2d_ewa(struct tgsi_sampler *tgsi_sampler,
          rgba[2]=0;
          rgba[3]=0;*/
          /* not enough pixels in resampling, resort to direct interpolation */
-         samp->min_img_filter(tgsi_sampler, s, t, p, NULL, tgsi_sampler_lod_bias, rgba_temp);
+         samp->min_img_filter(tgsi_sampler, s, t, p, NULL,
+                              tgsi_sampler_lod_bias, rgba_temp);
          den = 1;
          num[0] = rgba_temp[0][j];
          num[1] = rgba_temp[1][j];
@@ -2020,7 +2023,6 @@ mip_filter_linear_aniso(struct tgsi_sampler *tgsi_sampler,
 }
 
 
-
 /**
  * Specialized version of mip_filter_linear with hard-wired calls to
  * 2d lambda calculation and 2d_linear_repeat_POT img filters.
@@ -2088,7 +2090,6 @@ mip_filter_linear_2d_linear_repeat_POT(
       print_sample(__FUNCTION__, rgba);
    }
 }
-
 
 
 /**
@@ -2287,9 +2288,11 @@ sample_cube(struct tgsi_sampler *tgsi_sampler,
    samp->compare(tgsi_sampler, ssss, tttt, NULL, c0, control, rgba);
 }
 
-static void do_swizzling(const struct sp_sampler_variant *samp,
-                         float in[TGSI_NUM_CHANNELS][TGSI_QUAD_SIZE],
-                         float out[TGSI_NUM_CHANNELS][TGSI_QUAD_SIZE])
+
+static void
+do_swizzling(const struct sp_sampler_variant *samp,
+             float in[TGSI_NUM_CHANNELS][TGSI_QUAD_SIZE],
+             float out[TGSI_NUM_CHANNELS][TGSI_QUAD_SIZE])
 {
    int j;
    const unsigned swizzle_r = samp->key.bits.swizzle_r;
@@ -2357,6 +2360,7 @@ static void do_swizzling(const struct sp_sampler_variant *samp,
          out[3][j] = in[swizzle_a][j];
    }
 }
+
 
 static void
 sample_swizzle(struct tgsi_sampler *tgsi_sampler,
@@ -2461,6 +2465,19 @@ get_linear_wrap(unsigned mode)
       assert(0);
       return wrap_linear_repeat;
    }
+}
+
+
+/**
+ * Is swizzling needed for the given state key?
+ */
+static INLINE bool
+any_swizzle(union sp_sampler_key key)
+{
+   return (key.bits.swizzle_r != PIPE_SWIZZLE_RED ||
+           key.bits.swizzle_g != PIPE_SWIZZLE_GREEN ||
+           key.bits.swizzle_b != PIPE_SWIZZLE_BLUE ||
+           key.bits.swizzle_a != PIPE_SWIZZLE_ALPHA);
 }
 
 
@@ -2590,6 +2607,7 @@ sp_sampler_variant_destroy( struct sp_sampler_variant *samp )
    FREE(samp);
 }
 
+
 static void
 sample_get_dims(struct tgsi_sampler *tgsi_sampler, int level,
 		int dims[4])
@@ -2630,35 +2648,43 @@ sample_get_dims(struct tgsi_sampler *tgsi_sampler, int level,
     }
 }
 
-/* this function is only used for unfiltered texel gets
-   via the TGSI TXF opcode. */
+/**
+ * This function is only used for getting unfiltered texels via the
+ * TXF opcode.  The GL spec says that out-of-bounds texel fetches
+ * produce undefined results.  Instead of crashing, lets just clamp
+ * coords to the texture image size.
+ */
 static void
 sample_get_texels(struct tgsi_sampler *tgsi_sampler,
-	   const int v_i[TGSI_QUAD_SIZE],
-	   const int v_j[TGSI_QUAD_SIZE],
-	   const int v_k[TGSI_QUAD_SIZE],
-	   const int lod[TGSI_QUAD_SIZE],
-	   const int8_t offset[3],
-	   float rgba[TGSI_NUM_CHANNELS][TGSI_QUAD_SIZE])
+                  const int v_i[TGSI_QUAD_SIZE],
+                  const int v_j[TGSI_QUAD_SIZE],
+                  const int v_k[TGSI_QUAD_SIZE],
+                  const int lod[TGSI_QUAD_SIZE],
+                  const int8_t offset[3],
+                  float rgba[TGSI_NUM_CHANNELS][TGSI_QUAD_SIZE])
 {
    const struct sp_sampler_variant *samp = sp_sampler_variant(tgsi_sampler);
    union tex_tile_address addr;
    const struct pipe_resource *texture = samp->view->texture;
    int j, c;
    const float *tx;
-   bool need_swizzle = (samp->key.bits.swizzle_r != PIPE_SWIZZLE_RED ||
-                        samp->key.bits.swizzle_g != PIPE_SWIZZLE_GREEN ||
-                        samp->key.bits.swizzle_b != PIPE_SWIZZLE_BLUE ||
-                        samp->key.bits.swizzle_a != PIPE_SWIZZLE_ALPHA);
+   const bool need_swizzle = any_swizzle(samp->key);
+   int width, height, depth, layers;
 
    addr.value = 0;
    /* TODO write a better test for LOD */
    addr.bits.level = lod[0];
 
+   width = u_minify(texture->width0, addr.bits.level);
+   height = u_minify(texture->height0, addr.bits.level);
+   depth = u_minify(texture->depth0, addr.bits.level);
+   layers = texture->array_size;
+
    switch(texture->target) {
    case PIPE_TEXTURE_1D:
       for (j = 0; j < TGSI_QUAD_SIZE; j++) {
-	 tx = get_texel_2d(samp, addr, v_i[j] + offset[0], 0);
+         int x = CLAMP(v_i[j] + offset[0], 0, width - 1);
+	 tx = get_texel_2d(samp, addr, x, 0);
 	 for (c = 0; c < 4; c++) {
 	    rgba[c][j] = tx[c];
 	 }
@@ -2666,8 +2692,9 @@ sample_get_texels(struct tgsi_sampler *tgsi_sampler,
       break;
    case PIPE_TEXTURE_1D_ARRAY:
       for (j = 0; j < TGSI_QUAD_SIZE; j++) {
-	 tx = get_texel_1d_array(samp, addr, v_i[j] + offset[0],
-				 v_j[j] + offset[1]);
+         int x = CLAMP(v_i[j] + offset[0], 0, width - 1);
+         int y = CLAMP(v_j[j] + offset[1], 0, layers - 1);
+	 tx = get_texel_1d_array(samp, addr, x, y);
 	 for (c = 0; c < 4; c++) {
 	    rgba[c][j] = tx[c];
 	 }
@@ -2676,8 +2703,9 @@ sample_get_texels(struct tgsi_sampler *tgsi_sampler,
    case PIPE_TEXTURE_2D:
    case PIPE_TEXTURE_RECT:
       for (j = 0; j < TGSI_QUAD_SIZE; j++) {
-	 tx = get_texel_2d(samp, addr, v_i[j] + offset[0],
-			   v_j[j] + offset[1]);
+         int x = CLAMP(v_i[j] + offset[0], 0, width - 1);
+         int y = CLAMP(v_j[j] + offset[1], 0, height - 1);
+	 tx = get_texel_2d(samp, addr, x, y);
 	 for (c = 0; c < 4; c++) {
 	    rgba[c][j] = tx[c];
 	 }
@@ -2685,9 +2713,10 @@ sample_get_texels(struct tgsi_sampler *tgsi_sampler,
       break;
    case PIPE_TEXTURE_2D_ARRAY:
       for (j = 0; j < TGSI_QUAD_SIZE; j++) {
-	 tx = get_texel_2d_array(samp, addr, v_i[j] + offset[0],
-				 v_j[j] + offset[1],
-				 v_k[j] + offset[2]);
+         int x = CLAMP(v_i[j] + offset[0], 0, width - 1);
+         int y = CLAMP(v_j[j] + offset[1], 0, height - 1);
+         int layer = CLAMP(v_k[j] + offset[2], 0, layers - 1);
+	 tx = get_texel_2d_array(samp, addr, x, y, layer);
 	 for (c = 0; c < 4; c++) {
 	    rgba[c][j] = tx[c];
 	 }
@@ -2695,9 +2724,11 @@ sample_get_texels(struct tgsi_sampler *tgsi_sampler,
       break;
    case PIPE_TEXTURE_3D:
       for (j = 0; j < TGSI_QUAD_SIZE; j++) {
-	 tx = get_texel_3d(samp, addr, v_i[j] + offset[0], 
-			   v_j[j] + offset[1],
-			   v_k[j] + offset[2]);
+         int x = CLAMP(v_i[j] + offset[0], 0, width - 1);
+         int y = CLAMP(v_j[j] + offset[1], 0, height - 1);
+         int z = CLAMP(v_k[j] + offset[2], 0, depth - 1);
+
+	 tx = get_texel_3d(samp, addr, x, y, z);
 	 for (c = 0; c < 4; c++) {
 	    rgba[c][j] = tx[c];
 	 }
@@ -2715,6 +2746,8 @@ sample_get_texels(struct tgsi_sampler *tgsi_sampler,
       do_swizzling(samp, rgba_temp, rgba);
    }
 }
+
+
 /**
  * Create a sampler variant for a given set of non-orthogonal state.
  */
@@ -2830,10 +2863,7 @@ sp_create_sampler_variant( const struct pipe_sampler_state *sampler,
       samp->sample_target = samp->compare;
    }
 
-   if (key.bits.swizzle_r != PIPE_SWIZZLE_RED ||
-       key.bits.swizzle_g != PIPE_SWIZZLE_GREEN ||
-       key.bits.swizzle_b != PIPE_SWIZZLE_BLUE ||
-       key.bits.swizzle_a != PIPE_SWIZZLE_ALPHA) {
+   if (any_swizzle(key)) {
       samp->base.get_samples = sample_swizzle;
    }
    else {

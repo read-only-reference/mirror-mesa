@@ -34,9 +34,10 @@ namespace nv50_ir {
 #define QOP_SUB  2
 #define QOP_MOV2 3
 
+//             UL UR LL LR
 #define QUADOP(q, r, s, t)                      \
-   ((QOP_##q << 0) | (QOP_##r << 2) |           \
-    (QOP_##s << 4) | (QOP_##t << 6))
+   ((QOP_##q << 6) | (QOP_##r << 4) |           \
+    (QOP_##s << 2) | (QOP_##t << 0))
 
 class NVC0LegalizeSSA : public Pass
 {
@@ -147,7 +148,13 @@ private:
    };
    bool insertTextureBarriers(Function *);
    inline bool insnDominatedBy(const Instruction *, const Instruction *) const;
-   void findFirstUses(const Instruction *, std::list<TexUse>&);
+   void findFirstUses(const Instruction *tex, const Instruction *def,
+                      std::list<TexUse>&);
+   void findOverwritingDefs(const Instruction *tex, Instruction *insn,
+                            const BasicBlock *term,
+                            std::list<TexUse>&);
+   void addTexUse(std::list<TexUse>&, Instruction *, const Instruction *);
+   const Instruction *recurseDef(const Instruction *);
 
 private:
    LValue *r63;
@@ -169,37 +176,88 @@ NVC0LegalizePostRA::insnDominatedBy(const Instruction *later,
 }
 
 void
-NVC0LegalizePostRA::findFirstUses(const Instruction *insn,
+NVC0LegalizePostRA::addTexUse(std::list<TexUse> &uses,
+                              Instruction *usei, const Instruction *insn)
+{
+   bool add = true;
+   for (std::list<TexUse>::iterator it = uses.begin();
+        it != uses.end();) {
+      if (insnDominatedBy(usei, it->insn)) {
+         add = false;
+         break;
+      }
+      if (insnDominatedBy(it->insn, usei))
+         it = uses.erase(it);
+      else
+         ++it;
+   }
+   if (add)
+      uses.push_back(TexUse(usei, insn));
+}
+
+void
+NVC0LegalizePostRA::findOverwritingDefs(const Instruction *texi,
+                                        Instruction *insn,
+                                        const BasicBlock *term,
+                                        std::list<TexUse> &uses)
+{
+   while (insn->op == OP_MOV && insn->getDef(0)->equals(insn->getSrc(0)))
+      insn = insn->getSrc(0)->getUniqueInsn();
+
+   if (!insn || !insn->bb->reachableBy(texi->bb, term))
+      return;
+
+   switch (insn->op) {
+   /* Values not connected to the tex's definition through any of these should
+    * not be conflicting.
+    */
+   case OP_SPLIT:
+   case OP_MERGE:
+   case OP_PHI:
+   case OP_UNION:
+      /* recurse again */
+      for (int s = 0; insn->srcExists(s); ++s)
+         findOverwritingDefs(texi, insn->getSrc(s)->getUniqueInsn(), term,
+                             uses);
+      break;
+   default:
+      // if (!isTextureOp(insn->op)) // TODO: are TEXes always ordered ?
+      addTexUse(uses, insn, texi);
+      break;
+   }
+}
+
+void
+NVC0LegalizePostRA::findFirstUses(const Instruction *texi,
+                                  const Instruction *insn,
                                   std::list<TexUse> &uses)
 {
    for (int d = 0; insn->defExists(d); ++d) {
       Value *v = insn->getDef(d);
       for (Value::UseIterator u = v->uses.begin(); u != v->uses.end(); ++u) {
          Instruction *usei = (*u)->getInsn();
+
+         if (usei->op == OP_PHI || usei->op == OP_UNION) {
+            // need a barrier before WAW cases
+            for (int s = 0; usei->srcExists(s); ++s) {
+               Instruction *defi = usei->getSrc(s)->getUniqueInsn();
+               if (defi && &usei->src(s) != *u)
+                  findOverwritingDefs(texi, defi, usei->bb, uses);
+            }
+         }
+
          if (usei->op == OP_SPLIT ||
+             usei->op == OP_MERGE ||
              usei->op == OP_PHI ||
              usei->op == OP_UNION) {
             // these uses don't manifest in the machine code
-            findFirstUses(usei, uses);
+            findFirstUses(texi, usei, uses);
          } else
          if (usei->op == OP_MOV && usei->getDef(0)->equals(usei->getSrc(0)) &&
              usei->subOp != NV50_IR_SUBOP_MOV_FINAL) {
-            findFirstUses(usei, uses);
+            findFirstUses(texi, usei, uses);
          } else {
-            bool add = true;
-            for (std::list<TexUse>::iterator it = uses.begin();
-                 it != uses.end();) {
-               if (insnDominatedBy(usei, it->insn)) {
-                  add = false;
-                  break;
-               }
-               if (insnDominatedBy(it->insn, usei))
-                  it = uses.erase(it);
-               else
-                  ++it;
-            }
-            if (add)
-               uses.push_back(TexUse(usei, insn));
+            addTexUse(uses, usei, insn);
          }
       }
    }
@@ -254,7 +312,7 @@ NVC0LegalizePostRA::insertTextureBarriers(Function *fn)
    if (!uses)
       return false;
    for (size_t i = 0; i < texes.size(); ++i)
-      findFirstUses(texes[i], uses[i]);
+      findFirstUses(texes[i], texes[i], uses[i]);
 
    // determine the barrier level at each use
    for (size_t i = 0; i < texes.size(); ++i) {
@@ -323,7 +381,7 @@ NVC0LegalizePostRA::insertTextureBarriers(Function *fn)
    limitS.resize(fn->allBBlocks.getSize());
 
    // cull unneeded barriers (should do that earlier, but for simplicity)
-   IteratorRef bi = fn->cfg.iteratorDFS(true);
+   IteratorRef bi = fn->cfg.iteratorCFG();
    // first calculate min/max outstanding TEXes for each BB
    for (bi->reset(); !bi->end(); bi->next()) {
       Graph::Node *n = reinterpret_cast<Graph::Node *>(bi->get());
@@ -749,21 +807,22 @@ bool
 NVC0LoweringPass::handleTXD(TexInstruction *txd)
 {
    int dim = txd->tex.target.getDim();
-   int arg = txd->tex.target.getDim() + txd->tex.target.isArray();
+   int arg = txd->tex.target.getArgCount();
 
    handleTEX(txd);
-   while (txd->src(arg).exists())
+   while (txd->srcExists(arg))
       ++arg;
 
    txd->tex.derivAll = true;
-   if (dim > 2 || txd->tex.target.isShadow())
+   if (dim > 2 ||
+       txd->tex.target.isCube() ||
+       arg > 4 ||
+       txd->tex.target.isShadow())
       return handleManualTXD(txd);
 
-   assert(arg <= 4); // at most s/t/array, x, y, offset
-
    for (int c = 0; c < dim; ++c) {
-      txd->src(arg + c * 2 + 0).set(txd->dPdx[c]);
-      txd->src(arg + c * 2 + 1).set(txd->dPdy[c]);
+      txd->setSrc(arg + c * 2 + 0, txd->dPdx[c]);
+      txd->setSrc(arg + c * 2 + 1, txd->dPdy[c]);
       txd->dPdx[c].set(NULL);
       txd->dPdy[c].set(NULL);
    }

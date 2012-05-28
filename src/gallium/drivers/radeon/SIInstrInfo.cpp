@@ -1,4 +1,4 @@
-//===-- SIInstrInfo.cpp - TODO: Add brief description -------===//
+//===-- SIInstrInfo.cpp - SI Instruction Information  ---------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO: Add full description
+// SI Implementation of TargetInstrInfo.
 //
 //===----------------------------------------------------------------------===//
 
@@ -80,13 +80,6 @@ unsigned SIInstrInfo::getEncodingBytes(const MachineInstr &MI) const
 MachineInstr * SIInstrInfo::convertToISA(MachineInstr & MI, MachineFunction &MF,
     DebugLoc DL) const
 {
-
-  switch (MI.getOpcode()) {
-    default: break;
-    case AMDIL::ABS_f32: return convertABS_f32(MI, MF, DL);
-    case AMDIL::CLAMP_f32: return convertCLAMP_f32(MI, MF, DL);
-  }
-
   MachineInstr * newMI = AMDGPUInstrInfo::convertToISA(MI, MF, DL);
   const MCInstrDesc &newDesc = get(newMI->getOpcode());
 
@@ -106,68 +99,9 @@ MachineInstr * SIInstrInfo::convertToISA(MachineInstr & MI, MachineFunction &MF,
 unsigned SIInstrInfo::getISAOpcode(unsigned AMDILopcode) const
 {
   switch (AMDILopcode) {
-  case AMDIL::MAD_f32: return AMDIL::V_MAD_LEGACY_F32;
-  default: return AMDGPUInstrInfo::getISAOpcode(AMDILopcode);
+  //XXX We need a better way of detecting end of program
+  case AMDIL::RETURN: return AMDIL::S_ENDPGM;
+  case AMDIL::MOVE_f32: return AMDIL::V_MOV_B32_e32;
+  default: return AMDILopcode;
   }
-}
-
-MachineInstr * SIInstrInfo::convertABS_f32(MachineInstr & absInstr,
-    MachineFunction &MF, DebugLoc DL) const
-{
-  MachineRegisterInfo &MRI = MF.getRegInfo();
-  MachineOperand &dst = absInstr.getOperand(0);
-
-  /* Convert the desination register to the VReg_32 class */
-  if (TargetRegisterInfo::isVirtualRegister(dst.getReg())) {
-    MRI.setRegClass(dst.getReg(), AMDIL::VReg_32RegisterClass);
-  }
-
-  return BuildMI(MF, DL, get(AMDIL::V_MOV_B32_e64))
-                 .addOperand(absInstr.getOperand(0))
-                 .addOperand(absInstr.getOperand(1))
-                /* VSRC1-2 are unused, but we still need to fill all the
-                 * operand slots, so we just reuse the VSRC0 operand */
-                 .addOperand(absInstr.getOperand(1))
-                 .addOperand(absInstr.getOperand(1))
-                 .addImm(1) // ABS
-                 .addImm(0) // CLAMP
-                 .addImm(0) // OMOD
-                 .addImm(0); // NEG
-}
-
-MachineInstr * SIInstrInfo::convertCLAMP_f32(MachineInstr & clampInstr,
-    MachineFunction &MF, DebugLoc DL) const
-{
-  MachineRegisterInfo &MRI = MF.getRegInfo();
-  /* XXX: HACK assume that low == zero and high == one for now until
-   * we have a way to propogate the immediates. */
-
-/*
-  uint32_t zero = (uint32_t)APFloat(0.0f).bitcastToAPInt().getZExtValue();
-  uint32_t one = (uint32_t)APFloat(1.0f).bitcastToAPInt().getZExtValue();
-  uint32_t low = clampInstr.getOperand(2).getImm();
-  uint32_t high = clampInstr.getOperand(3).getImm();
-*/
-//  if (low == zero && high == one) {
-  
-  /* Convert the desination register to the VReg_32 class */
-  if (TargetRegisterInfo::isVirtualRegister(clampInstr.getOperand(0).getReg())) {
-    MRI.setRegClass(clampInstr.getOperand(0).getReg(),
-                    AMDIL::VReg_32RegisterClass);
-  }
-  return BuildMI(MF, DL, get(AMDIL::V_MOV_B32_e64))
-           .addOperand(clampInstr.getOperand(0))
-           .addOperand(clampInstr.getOperand(1))
-          /* VSRC1-2 are unused, but we still need to fill all the
-           * operand slots, so we just reuse the VSRC0 operand */
-           .addOperand(clampInstr.getOperand(1))
-           .addOperand(clampInstr.getOperand(1))
-           .addImm(0) // ABS
-           .addImm(1) // CLAMP
-           .addImm(0) // OMOD
-           .addImm(0); // NEG
-//  } else {
-    /* XXX: Handle other cases */
-//    abort();
-//  }
 }

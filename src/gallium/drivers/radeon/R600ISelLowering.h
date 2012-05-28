@@ -1,4 +1,4 @@
-//===-- R600ISelLowering.h - TODO: Add brief description -------===//
+//===-- R600ISelLowering.h - R600 DAG Lowering Interface -*- C++ -*--------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO: Add full description
+// R600 DAG Lowering interface definition
 //
 //===----------------------------------------------------------------------===//
 
@@ -30,6 +30,10 @@ public:
 private:
   const R600InstrInfo * TII;
 
+  /// lowerImplicitParameter - Each OpenCL kernel has nine implicit parameters
+  /// that are stored in the first nine dwords of a Vertex Buffer.  These
+  /// implicit parameters are represented by pseudo instructions, which are
+  /// lowered to VTX_READ instructions by this function. 
   void lowerImplicitParameter(MachineInstr *MI, MachineBasicBlock &BB,
       MachineRegisterInfo & MRI, unsigned dword_offset) const;
 

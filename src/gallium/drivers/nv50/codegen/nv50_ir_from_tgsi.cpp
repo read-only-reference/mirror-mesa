@@ -347,6 +347,7 @@ static nv50_ir::TexTarget translateTexture(uint tex)
    NV50_IR_TEX_TARG_CASE(SHADOW2D_ARRAY, 2D_ARRAY_SHADOW);
    NV50_IR_TEX_TARG_CASE(SHADOWCUBE, CUBE_SHADOW);
    NV50_IR_TEX_TARG_CASE(SHADOWRECT, RECT_SHADOW);
+   NV50_IR_TEX_TARG_CASE(BUFFER, BUFFER);
 
    case TGSI_TEXTURE_UNKNOWN:
    default:
@@ -548,7 +549,7 @@ static nv50_ir::operation translateOpcode(uint opcode)
    NV50_IR_OPCODE_CASE(SAMPLE_D, TXD);
    NV50_IR_OPCODE_CASE(SAMPLE_L, TXL);
    NV50_IR_OPCODE_CASE(GATHER4, TXG);
-   NV50_IR_OPCODE_CASE(RESINFO, TXQ);
+   NV50_IR_OPCODE_CASE(SVIEWINFO, TXQ);
 
    NV50_IR_OPCODE_CASE(END, EXIT);
 
@@ -597,8 +598,8 @@ public:
 
    int clipVertexOutput;
 
-   uint8_t *resourceTargets; // TGSI_TEXTURE_*
-   unsigned resourceCount;
+   uint8_t *samplerViewTargets; // TGSI_TEXTURE_*
+   unsigned samplerViewCount;
 
 private:
    int inferSysValDirection(unsigned sn) const;
@@ -617,7 +618,7 @@ Source::Source(struct nv50_ir_prog_info *prog) : info(prog)
    if (prog->dbgFlags & NV50_IR_DEBUG_BASIC)
       tgsi_dump(tokens, 0);
 
-   resourceTargets = NULL;
+   samplerViewTargets = NULL;
 
    mainTempsInLMem = FALSE;
 }
@@ -632,8 +633,8 @@ Source::~Source()
    if (info->immd.type)
       FREE(info->immd.type);
 
-   if (resourceTargets)
-      delete[] resourceTargets;
+   if (samplerViewTargets)
+      delete[] samplerViewTargets;
 }
 
 bool Source::scanSource()
@@ -650,8 +651,8 @@ bool Source::scanSource()
 
    clipVertexOutput = -1;
 
-   resourceCount = scan.file_max[TGSI_FILE_RESOURCE] + 1;
-   resourceTargets = new uint8_t[resourceCount];
+   samplerViewCount = scan.file_max[TGSI_FILE_SAMPLER_VIEW] + 1;
+   samplerViewTargets = new uint8_t[samplerViewCount];
 
    info->immd.bufSize = 0;
    tempArrayCount = 0;
@@ -805,7 +806,7 @@ bool Source::scanDeclaration(const struct tgsi_full_declaration *decl)
             info->in[i].si = si;
             if (info->type == PIPE_SHADER_FRAGMENT) {
                // translate interpolation mode
-               switch (decl->Declaration.Interpolate) {
+               switch (decl->Interp.Interpolate) {
                case TGSI_INTERPOLATE_CONSTANT:
                   info->in[i].flat = 1;
                   break;
@@ -818,7 +819,7 @@ bool Source::scanDeclaration(const struct tgsi_full_declaration *decl)
                default:
                   break;
                }
-               if (decl->Declaration.Centroid)
+               if (decl->Interp.Centroid)
                   info->in[i].centroid = 1;
             }
          }
@@ -874,9 +875,9 @@ bool Source::scanDeclaration(const struct tgsi_full_declaration *decl)
          info->sv[i].input = inferSysValDirection(sn);
       }
       break;
-   case TGSI_FILE_RESOURCE:
+   case TGSI_FILE_SAMPLER_VIEW:
       for (i = first; i <= last; ++i)
-         resourceTargets[i] = decl->Resource.Resource;
+         samplerViewTargets[i] = decl->SamplerView.Resource;
       break;
    case TGSI_FILE_IMMEDIATE_ARRAY:
    {
@@ -1000,13 +1001,15 @@ bool Source::scanInstruction(const struct tgsi_full_instruction *inst)
 nv50_ir::TexInstruction::Target
 Instruction::getTexture(const tgsi::Source *code, int s) const
 {
-   if (insn->Instruction.Texture) {
-      return translateTexture(insn->Texture.Texture);
-   } else {
+   switch (getSrc(s).getFile()) {
+   case TGSI_FILE_SAMPLER_VIEW: {
       // XXX: indirect access
       unsigned int r = getSrc(s).getIndex(0);
-      assert(r < code->resourceCount);
-      return translateTexture(code->resourceTargets[r]);
+      assert(r < code->samplerViewCount);
+      return translateTexture(code->samplerViewTargets[r]);
+   }
+   default:
+      return translateTexture(insn->Texture.Texture);
    }
 }
 
@@ -2042,7 +2045,7 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
       handleTXF(dst0, 1);
       break;
    case TGSI_OPCODE_TXQ:
-   case TGSI_OPCODE_RESINFO:
+   case TGSI_OPCODE_SVIEWINFO:
       handleTXQ(dst0, TXQ_DIMS);
       break;
    case TGSI_OPCODE_F2I:

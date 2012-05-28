@@ -163,11 +163,16 @@ void
 fs_visitor::calculate_live_intervals()
 {
    int num_vars = this->virtual_grf_next;
-   int *def = ralloc_array(mem_ctx, int, num_vars);
-   int *use = ralloc_array(mem_ctx, int, num_vars);
 
    if (this->live_intervals_valid)
       return;
+
+   int *def = ralloc_array(mem_ctx, int, num_vars);
+   int *use = ralloc_array(mem_ctx, int, num_vars);
+   ralloc_free(this->virtual_grf_def);
+   ralloc_free(this->virtual_grf_use);
+   this->virtual_grf_def = def;
+   this->virtual_grf_use = use;
 
    for (int i = 0; i < num_vars; i++) {
       def[i] = MAX_INSTRUCTION;
@@ -215,30 +220,25 @@ fs_visitor::calculate_live_intervals()
       }
    }
 
-   ralloc_free(this->virtual_grf_def);
-   ralloc_free(this->virtual_grf_use);
-   this->virtual_grf_def = def;
-   this->virtual_grf_use = use;
-
    this->live_intervals_valid = true;
 }
 
 bool
 fs_visitor::virtual_grf_interferes(int a, int b)
 {
-   int start = MAX2(this->virtual_grf_def[a], this->virtual_grf_def[b]);
-   int end = MIN2(this->virtual_grf_use[a], this->virtual_grf_use[b]);
+   int a_def = this->virtual_grf_def[a], a_use = this->virtual_grf_use[a];
+   int b_def = this->virtual_grf_def[b], b_use = this->virtual_grf_use[b];
 
-   /* We can't handle dead register writes here, without iterating
-    * over the whole instruction stream to find every single dead
-    * write to that register to compare to the live interval of the
-    * other register.  Just assert that dead_code_eliminate() has been
-    * called.
+   /* If there's dead code (def but not use), it would break our test
+    * unless we consider it used.
     */
-   assert((this->virtual_grf_use[a] != -1 ||
-	   this->virtual_grf_def[a] == MAX_INSTRUCTION) &&
-	  (this->virtual_grf_use[b] != -1 ||
-	   this->virtual_grf_def[b] == MAX_INSTRUCTION));
+   if ((a_use == -1 && a_def != MAX_INSTRUCTION) ||
+       (b_use == -1 && b_def != MAX_INSTRUCTION)) {
+      return true;
+   }
+
+   int start = MAX2(a_def, b_def);
+   int end = MIN2(a_use, b_use);
 
    /* If the register is used to store 16 values of less than float
     * size (only the case for pixel_[xy]), then we can't allocate

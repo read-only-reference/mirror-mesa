@@ -94,6 +94,7 @@ namespace llvm
       LOOP_ZERO,
       LOOP_CMP,
       ADDADDR,
+      LAST_NON_MEMORY_OPCODE,
       // ATOMIC Operations
       // Global Memory
       ATOM_G_ADD = ISD::FIRST_TARGET_MEMORY_OPCODE,
@@ -237,11 +238,6 @@ namespace llvm
             const SelectionDAG &DAG,
             unsigned Depth = 0
             ) const;
-
-      virtual MachineBasicBlock*
-        EmitInstrWithCustomInserter(
-            MachineInstr *MI,
-            MachineBasicBlock *MBB) const;
 
       virtual bool 
         getTgtMemIntrinsic(IntrinsicInfo &Info,

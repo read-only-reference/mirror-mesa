@@ -20,14 +20,14 @@
 
 #include "AMDILRegisterInfo.h"
 #include "AMDIL.h"
-#include "AMDILUtilityFunctions.h"
+#include "AMDILInstrInfo.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 
 using namespace llvm;
 
-AMDILRegisterInfo::AMDILRegisterInfo(AMDILTargetMachine &tm,
+AMDILRegisterInfo::AMDILRegisterInfo(TargetMachine &tm,
     const TargetInstrInfo &tii)
 : AMDILGenRegisterInfo(0), // RA???
   TM(tm), TII(tii)
@@ -109,7 +109,9 @@ AMDILRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
     if (!MI.getOperand(x).isFI()) {
       continue;
     }
-    bool def = isStoreInst(TM.getInstrInfo(), &MI);
+    const AMDILInstrInfo * AMDILII =
+                         static_cast<const AMDILInstrInfo *>(TM.getInstrInfo());
+    bool def = AMDILII->isStoreInst(&MI);
     int FrameIndex = MI.getOperand(x).getIndex();
     int64_t Offset = MFI->getObjectOffset(FrameIndex);
     //int64_t Size = MF.getFrameInfo()->getObjectSize(FrameIndex);
@@ -125,7 +127,7 @@ AMDILRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
         MachineOperand::CreateImm(Offset));
     MI.getParent()->insert(II, nMI);
     nMI = MF.CreateMachineInstr(
-        TII.get(AMDIL::ADD_i32), MI.getDebugLoc());
+        TII.get(AMDIL::ADD_INT), MI.getDebugLoc());
     nMI->addOperand(MachineOperand::CreateReg(AMDIL::DFP, true));
     nMI->addOperand(MachineOperand::CreateReg(AMDIL::DFP, false));
     nMI->addOperand(MachineOperand::CreateReg(AMDIL::FP, false));

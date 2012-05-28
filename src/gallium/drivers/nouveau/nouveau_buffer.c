@@ -94,6 +94,9 @@ nouveau_buffer_destroy(struct pipe_screen *pscreen,
    if (res->data && !(res->status & NOUVEAU_BUFFER_STATUS_USER_MEMORY))
       FREE(res->data);
 
+   nouveau_fence_ref(NULL, &res->fence);
+   nouveau_fence_ref(NULL, &res->fence_wr);
+
    FREE(res);
 }
 
@@ -363,10 +366,31 @@ nouveau_buffer_create(struct pipe_screen *pscreen,
    pipe_reference_init(&buffer->base.reference, 1);
    buffer->base.screen = pscreen;
 
-   if ((buffer->base.bind & screen->sysmem_bindings) == screen->sysmem_bindings)
-      ret = nouveau_buffer_allocate(screen, buffer, 0);
-   else
-      ret = nouveau_buffer_allocate(screen, buffer, NOUVEAU_BO_GART);
+   if (buffer->base.bind &
+       (screen->vidmem_bindings & screen->sysmem_bindings)) {
+      switch (buffer->base.usage) {
+      case PIPE_USAGE_DEFAULT:
+      case PIPE_USAGE_IMMUTABLE:
+      case PIPE_USAGE_STATIC:
+         buffer->domain = NOUVEAU_BO_VRAM;
+         break;
+      case PIPE_USAGE_DYNAMIC:
+      case PIPE_USAGE_STAGING:
+      case PIPE_USAGE_STREAM:
+         buffer->domain = NOUVEAU_BO_GART;
+         break;
+      default:
+         assert(0);
+         break;
+      }
+   } else {
+      if (buffer->base.bind & screen->vidmem_bindings)
+         buffer->domain = NOUVEAU_BO_VRAM;
+      else
+      if (buffer->base.bind & screen->sysmem_bindings)
+         buffer->domain = NOUVEAU_BO_GART;
+   }
+   ret = nouveau_buffer_allocate(screen, buffer, buffer->domain);
 
    if (ret == FALSE)
       goto fail;
@@ -523,8 +547,10 @@ nouveau_scratch_runout_release(struct nouveau_context *nv)
 {
    if (!nv->scratch.nr_runout)
       return;
-   while (nv->scratch.nr_runout--)
+   do {
+      --nv->scratch.nr_runout;
       nouveau_bo_ref(NULL, &nv->scratch.runout[nv->scratch.nr_runout]);
+   } while (nv->scratch.nr_runout);
 
    FREE(nv->scratch.runout);
    nv->scratch.end = 0;
@@ -602,30 +628,28 @@ nouveau_scratch_more(struct nouveau_context *nv, unsigned min_size)
    return ret;
 }
 
-/* Upload data to scratch memory and update buffer address.
- * Returns the bo the data resides in, if successful.
- */
-struct nouveau_bo *
+
+/* Copy data to a scratch buffer and return address & bo the data resides in. */
+uint64_t
 nouveau_scratch_data(struct nouveau_context *nv,
-                     struct nv04_resource *buf, unsigned base, unsigned size)
+                     const void *data, unsigned base, unsigned size,
+                     struct nouveau_bo **bo)
 {
-   struct nouveau_bo *bo;
    unsigned bgn = MAX2(base, nv->scratch.offset);
    unsigned end = bgn + size;
 
    if (end >= nv->scratch.end) {
       end = base + size;
       if (!nouveau_scratch_more(nv, end))
-         return NULL;
+         return 0;
       bgn = base;
    }
    nv->scratch.offset = align(end, 4);
 
-   memcpy(nv->scratch.map + bgn, buf->data + base, size);
+   memcpy(nv->scratch.map + bgn, (const uint8_t *)data + base, size);
 
-   bo = nv->scratch.current;
-   buf->address = bo->offset + (bgn - base);
-   return bo;
+   *bo = nv->scratch.current;
+   return (*bo)->offset + (bgn - base);
 }
 
 void *

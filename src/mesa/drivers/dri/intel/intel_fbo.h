@@ -34,6 +34,10 @@
 #include "intel_context.h"
 #include "intel_screen.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct intel_context;
 struct intel_mipmap_tree;
 struct intel_texture_image;
@@ -153,6 +157,11 @@ intel_flip_renderbuffers(struct gl_framebuffer *fb);
 void
 intel_renderbuffer_set_draw_offset(struct intel_renderbuffer *irb);
 
+void
+intel_renderbuffer_fine_offset_masks(struct intel_renderbuffer *irb,
+                                     uint32_t *fine_offset_mask_x,
+                                     uint32_t *fine_offset_mask_y);
+
 uint32_t
 intel_renderbuffer_tile_offsets(struct intel_renderbuffer *irb,
 				uint32_t *tile_x,
@@ -191,5 +200,9 @@ intel_renderbuffer_resolve_hiz(struct intel_context *intel,
 bool
 intel_renderbuffer_resolve_depth(struct intel_context *intel,
 				 struct intel_renderbuffer *irb);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* INTEL_FBO_H */

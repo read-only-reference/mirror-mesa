@@ -564,7 +564,7 @@ ConstantFolding::tryCollapseChainedMULs(Instruction *mul2,
       insn = mul2->getSrc(t)->getInsn();
       if (!mul2->src(t).mod && insn->op == OP_MUL && insn->dType == TYPE_F32)
          mul1 = insn;
-      if (mul1) {
+      if (mul1 && !mul1->saturate) {
          int s1;
 
          if (mul1->src(s1 = 0).getImmediate(imm1) ||
@@ -584,10 +584,11 @@ ConstantFolding::tryCollapseChainedMULs(Instruction *mul2,
             if (f < 0)
                mul1->src(0).mod *= Modifier(NV50_IR_MOD_NEG);
          }
+         mul1->saturate = mul2->saturate;
          return;
       }
    }
-   if (mul2->getDef(0)->refCount() == 1) {
+   if (mul2->getDef(0)->refCount() == 1 && !mul2->saturate) {
       // b = mul a, imm
       // d = mul b, c   -> d = mul_x_imm a, c
       int s2, t2;
@@ -1935,8 +1936,11 @@ FlatteningPass::visit(BasicBlock *bb)
       if (insn && !insn->getPredicate() &&
           !insn->asFlow() &&
           insn->op != OP_TEXBAR &&
+          !isTextureOp(insn->op) && // probably just nve4
           insn->op != OP_LINTERP && // probably just nve4
           insn->op != OP_PINTERP && // probably just nve4
+          ((insn->op != OP_LOAD && insn->op != OP_STORE) ||
+           typeSizeof(insn->dType) <= 4) &&
           !insn->isNop()) {
          insn->join = 1;
          bb->remove(bb->getExit());

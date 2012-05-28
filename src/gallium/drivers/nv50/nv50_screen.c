@@ -73,6 +73,8 @@ nv50_screen_is_format_supported(struct pipe_screen *pscreen,
 static int
 nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 {
+   const uint16_t class_3d = nouveau_screen(pscreen)->class_3d;
+
    switch (param) {
    case PIPE_CAP_MAX_COMBINED_SAMPLERS:
       return 64;
@@ -82,8 +84,8 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 12;
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
       return 14;
-   case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS: /* shader support missing */
-      return 0;
+   case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
+      return 512;
    case PIPE_CAP_MIN_TEXEL_OFFSET:
       return -8;
    case PIPE_CAP_MAX_TEXEL_OFFSET:
@@ -95,7 +97,6 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_ANISOTROPIC_FILTER:
    case PIPE_CAP_SCALED_RESOLVE:
       return 1;
-   case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
    case PIPE_CAP_SEAMLESS_CUBE_MAP:
       return nv50_screen(pscreen)->tesla->oclass >= NVA0_3D_CLASS;
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
@@ -121,11 +122,12 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_OCCLUSION_QUERY:
       return 1;
    case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
-      return 0;
+      return 4;
    case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
-      return 128;
    case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
-      return 32;
+      return 64;
+   case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+      return (class_3d >= NVA0_3D_CLASS) ? 1 : 0;
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
    case PIPE_CAP_INDEP_BLEND_ENABLE:
       return 1;
@@ -149,10 +151,10 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
-   case PIPE_CAP_USER_VERTEX_BUFFERS:
-   case PIPE_CAP_USER_INDEX_BUFFERS:
       return 0; /* state trackers will know better */
    case PIPE_CAP_USER_CONSTANT_BUFFERS:
+   case PIPE_CAP_USER_INDEX_BUFFERS:
+   case PIPE_CAP_USER_VERTEX_BUFFERS:
       return 1;
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 256;
@@ -194,7 +196,7 @@ nv50_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
    case PIPE_SHADER_CAP_MAX_CONSTS:
       return 65536 / 16;
    case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
-      return 14;
+      return NV50_MAX_PIPE_CONSTBUFS;
    case PIPE_SHADER_CAP_MAX_ADDRS:
       return 1;
    case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
@@ -435,10 +437,7 @@ nv50_screen_init_hwctx(struct nv50_screen *screen, unsigned tls_space)
    PUSH_DATA (push, screen->uniforms->offset + (3 << 16));
    PUSH_DATA (push, (NV50_CB_AUX << 16) | 0x0200);
 
-   BEGIN_NI04(push, NV50_3D(SET_PROGRAM_CB), 6);
-   PUSH_DATA (push, (NV50_CB_PVP << 12) | 0x001);
-   PUSH_DATA (push, (NV50_CB_PGP << 12) | 0x021);
-   PUSH_DATA (push, (NV50_CB_PFP << 12) | 0x031);
+   BEGIN_NI04(push, NV50_3D(SET_PROGRAM_CB), 3);
    PUSH_DATA (push, (NV50_CB_AUX << 12) | 0xf01);
    PUSH_DATA (push, (NV50_CB_AUX << 12) | 0xf21);
    PUSH_DATA (push, (NV50_CB_AUX << 12) | 0xf31);
@@ -533,11 +532,17 @@ nv50_screen_create(struct nouveau_device *dev)
       return NULL;
    pscreen = &screen->base.base;
 
-   screen->base.sysmem_bindings = PIPE_BIND_CONSTANT_BUFFER;
-
    ret = nouveau_screen_init(&screen->base, dev);
    if (ret)
       FAIL_SCREEN_INIT("nouveau_screen_init failed: %d\n", ret);
+
+   /* TODO: Prevent FIFO prefetch before transfer of index buffers and
+    *  admit them to VRAM.
+    */
+   screen->base.vidmem_bindings |= PIPE_BIND_CONSTANT_BUFFER |
+      PIPE_BIND_VERTEX_BUFFER;
+   screen->base.sysmem_bindings |=
+      PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_INDEX_BUFFER;
 
    screen->base.pushbuf->user_priv = screen;
    screen->base.pushbuf->rsvd_kick = 5;

@@ -1,4 +1,4 @@
-//===-- SIRegisterInfo.cpp - TODO: Add brief description -------===//
+//===-- SIRegisterInfo.cpp - SI Register Information ---------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO: Add full description
+// This file contains the SI implementation of the TargetRegisterInfo class.
 //
 //===----------------------------------------------------------------------===//
 
@@ -37,16 +37,6 @@ unsigned SIRegisterInfo::getBinaryCode(unsigned reg) const
     case AMDIL::M0: return 124;
     case AMDIL::SREG_LIT_0: return 128;
     default: return getHWRegNum(reg);
-  }
-}
-
-bool SIRegisterInfo::isBaseRegClass(unsigned regClassID) const
-{
-  switch (regClassID) {
-  default: return true;
-  case AMDIL::AllReg_32RegClassID:
-  case AMDIL::AllReg_64RegClassID:
-    return false;
   }
 }
 

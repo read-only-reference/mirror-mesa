@@ -1,4 +1,4 @@
-//===-- SIISelLowering.cpp - TODO: Add brief description -------===//
+//===-- SIISelLowering.cpp - SI DAG Lowering Implementation ---------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO: Add full description
+// Most of the DAG lowering is handled in AMDGPUISelLowering.cpp.  This file is
+// mostly EmitInstrWithCustomInserter().
 //
 //===----------------------------------------------------------------------===//
 
@@ -24,25 +25,68 @@ SITargetLowering::SITargetLowering(TargetMachine &TM) :
 {
   addRegisterClass(MVT::v4f32, &AMDIL::VReg_128RegClass);
   addRegisterClass(MVT::f32, &AMDIL::VReg_32RegClass);
+  addRegisterClass(MVT::i32, &AMDIL::VReg_32RegClass);
+  addRegisterClass(MVT::i64, &AMDIL::VReg_64RegClass);
+
+  addRegisterClass(MVT::v4i32, &AMDIL::SReg_128RegClass);
+  addRegisterClass(MVT::v8i32, &AMDIL::SReg_256RegClass);
+
+  computeRegisterProperties();
 
   setOperationAction(ISD::EXTRACT_VECTOR_ELT, MVT::v4f32, Legal);
   setOperationAction(ISD::INSERT_VECTOR_ELT, MVT::v4f32, Legal);
+
+  setOperationAction(ISD::ADD, MVT::i64, Legal);
+  setOperationAction(ISD::ADD, MVT::i32, Legal);
+
 }
 
 MachineBasicBlock * SITargetLowering::EmitInstrWithCustomInserter(
     MachineInstr * MI, MachineBasicBlock * BB) const
 {
-  const struct TargetInstrInfo * TII = getTargetMachine().getInstrInfo();
+  const TargetInstrInfo * TII = getTargetMachine().getInstrInfo();
   MachineRegisterInfo & MRI = BB->getParent()->getRegInfo();
   MachineBasicBlock::iterator I = MI;
 
   if (TII->get(MI->getOpcode()).TSFlags & SIInstrFlags::NEED_WAIT) {
     AppendS_WAITCNT(MI, *BB, llvm::next(I));
+    return BB;
   }
 
   switch (MI->getOpcode()) {
   default:
     return AMDGPUTargetLowering::EmitInstrWithCustomInserter(MI, BB);
+
+  case AMDIL::CLAMP_SI:
+    BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::V_MOV_B32_e64))
+           .addOperand(MI->getOperand(0))
+           .addOperand(MI->getOperand(1))
+           // VSRC1-2 are unused, but we still need to fill all the
+           // operand slots, so we just reuse the VSRC0 operand
+           .addOperand(MI->getOperand(1))
+           .addOperand(MI->getOperand(1))
+           .addImm(0) // ABS
+           .addImm(1) // CLAMP
+           .addImm(0) // OMOD
+           .addImm(0); // NEG
+    MI->eraseFromParent();
+    break;
+
+  case AMDIL::FABS_SI:
+    BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::V_MOV_B32_e64))
+                 .addOperand(MI->getOperand(0))
+                 .addOperand(MI->getOperand(1))
+                 // VSRC1-2 are unused, but we still need to fill all the
+                 // operand slots, so we just reuse the VSRC0 operand
+                 .addOperand(MI->getOperand(1))
+                 .addOperand(MI->getOperand(1))
+                 .addImm(1) // ABS
+                 .addImm(0) // CLAMP
+                 .addImm(0) // OMOD
+                 .addImm(0); // NEG
+    MI->eraseFromParent();
+    break;
+
   case AMDIL::SI_INTERP:
     LowerSI_INTERP(MI, *BB, I, MRI);
     break;
@@ -140,10 +184,13 @@ void SITargetLowering::LowerSI_V_CNDLT(MachineInstr *MI, MachineBasicBlock &BB,
 void SITargetLowering::lowerUSE_SGPR(MachineInstr *MI,
     MachineFunction * MF, MachineRegisterInfo & MRI) const
 {
-  const struct TargetInstrInfo * TII = getTargetMachine().getInstrInfo();
+  const TargetInstrInfo * TII = getTargetMachine().getInstrInfo();
   unsigned dstReg = MI->getOperand(0).getReg();
   int64_t newIndex = MI->getOperand(1).getImm();
   const TargetRegisterClass * dstClass = MRI.getRegClass(dstReg);
+  unsigned DwordWidth = dstClass->getSize() / 4;
+  assert(newIndex % DwordWidth == 0 && "USER_SGPR not properly aligned");
+  newIndex = newIndex / DwordWidth;
 
   unsigned newReg = dstClass->getRegister(newIndex);
   addLiveIn(MI, MF, MRI, TII, newReg); 

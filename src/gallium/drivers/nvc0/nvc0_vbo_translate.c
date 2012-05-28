@@ -65,8 +65,11 @@ nvc0_vertex_configure_translate(struct nvc0_context *nvc0, int32_t index_bias)
       const uint8_t *map;
       const struct pipe_vertex_buffer *vb = &nvc0->vtxbuf[i];
 
-      map = nouveau_resource_map_offset(&nvc0->base,
-               nv04_resource(vb->buffer), vb->buffer_offset, NOUVEAU_BO_RD);
+      if (likely(!vb->buffer))
+         map = (const uint8_t *)vb->user_buffer;
+      else
+         map = nouveau_resource_map_offset(&nvc0->base,
+            nv04_resource(vb->buffer), vb->buffer_offset, NOUVEAU_BO_RD);
 
       if (index_bias && !unlikely(nvc0->vertex->instance_bufs & (1 << i)))
          map += (intptr_t)index_bias * vb->stride;
@@ -78,11 +81,13 @@ nvc0_vertex_configure_translate(struct nvc0_context *nvc0, int32_t index_bias)
 static INLINE void
 nvc0_push_map_idxbuf(struct push_context *ctx, struct nvc0_context *nvc0)
 {
-   struct nv04_resource *buf = nv04_resource(nvc0->idxbuf.buffer);
-   unsigned offset = nvc0->idxbuf.offset;
-
-   ctx->idxbuf = nouveau_resource_map_offset(&nvc0->base,
-                    buf, offset, NOUVEAU_BO_RD);
+   if (nvc0->idxbuf.buffer) {
+      struct nv04_resource *buf = nv04_resource(nvc0->idxbuf.buffer);
+      ctx->idxbuf = nouveau_resource_map_offset(&nvc0->base,
+         buf, nvc0->idxbuf.offset, NOUVEAU_BO_RD);
+   } else {
+      ctx->idxbuf = nvc0->idxbuf.user_buffer;
+   }
 }
 
 static INLINE void

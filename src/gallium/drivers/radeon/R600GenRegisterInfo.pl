@@ -1,20 +1,23 @@
-#===-- R600GenRegisterInfo.pl - TODO: Add brief description -------===#
+#===-- R600GenRegisterInfo.pl - Script for generating register info files --===#
 #
 #                     The LLVM Compiler Infrastructure
 #
 # This file is distributed under the University of Illinois Open Source
 # License. See LICENSE.TXT for details.
 #
-#===----------------------------------------------------------------------===#
+#===------------------------------------------------------------------------===#
 #
-# TODO: Add full description
+# This perl script prints to stdout .td code to be used as R600RegisterInfo.td
+# it also generates a file called R600HwRegInfo.include, which contains helper
+# functions for determining the hw encoding of registers.
 #
-#===----------------------------------------------------------------------===#
+#===------------------------------------------------------------------------===#
 
 use strict;
 use warnings;
 
-use AMDGPUConstants;
+use constant CONST_REG_COUNT => 1024;
+use constant TEMP_REG_COUNT => 128;
 
 my $CREG_MAX = CONST_REG_COUNT - 1;
 my $TREG_MAX = TEMP_REG_COUNT - 1;
@@ -81,7 +84,7 @@ def R600_Reg32 : RegisterClass <"AMDIL", [f32, i32], 32, (add
     R600_CReg32,
     ZERO, HALF, ONE, ONE_INT, PV_X, ALU_LITERAL_X, NEG_ONE, NEG_HALF)>;
 
-def R600_Reg128 : RegisterClass<"AMDIL", [v4f32], 128, (add
+def R600_Reg128 : RegisterClass<"AMDIL", [v4f32, v4i32], 128, (add
     $t128_string)>
 {
   let SubRegClasses = [(R600_TReg32 sel_x, sel_y, sel_z, sel_w)];
@@ -170,3 +173,24 @@ sub print_reg_defs {
   return @reg_list;
 }
 
+#Helper functions
+sub get_hw_index {
+  my ($index) = @_;
+  return int($index / 4);
+}
+
+sub get_chan_str {
+  my ($index) = @_;
+  my $chan = $index % 4;
+  if ($chan == 0 )  {
+    return 'X';
+  } elsif ($chan == 1) {
+    return 'Y';
+  } elsif ($chan == 2) {
+    return 'Z';
+  } elsif ($chan == 3) {
+    return 'W';
+  } else {
+    die("Unknown chan value: $chan");
+  }
+}

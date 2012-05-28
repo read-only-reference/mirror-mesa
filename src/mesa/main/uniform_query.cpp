@@ -46,6 +46,8 @@ _mesa_GetActiveUniformARB(GLhandleARB program, GLuint index,
    struct gl_shader_program *shProg =
       _mesa_lookup_shader_program_err(ctx, program, "glGetActiveUniform");
 
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
+
    if (!shProg)
       return;
 
@@ -780,6 +782,16 @@ _mesa_uniform_matrix(struct gl_context *ctx, struct gl_shader_program *shProg,
       _mesa_error(ctx, GL_INVALID_OPERATION,
 		  "glUniformMatrix(matrix size mismatch)");
       return;
+   }
+
+   /* GL_INVALID_VALUE is generated if `transpose' is not GL_FALSE.
+    * http://www.khronos.org/opengles/sdk/docs/man/xhtml/glUniform.xml */
+   if (ctx->API == API_OPENGLES || ctx->API == API_OPENGLES2) {
+      if (transpose) {
+	 _mesa_error(ctx, GL_INVALID_VALUE,
+		     "glUniformMatrix(matrix transpose is not GL_FALSE)");
+	 return;
+      }
    }
 
    if (ctx->Shader.Flags & GLSL_UNIFORMS) {

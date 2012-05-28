@@ -1,4 +1,4 @@
-//===-- R600InstrInfo.h - TODO: Add brief description -------===//
+//===-- R600InstrInfo.h - R600 Instruction Info Interface -------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO: Add full description
+// Interface definition for R600InstrInfo
 //
 //===----------------------------------------------------------------------===//
 
@@ -21,13 +21,6 @@
 #include <map>
 
 namespace llvm {
-
-  struct InstrGroup {
-    unsigned amdil;
-    unsigned r600;
-    unsigned eg;
-    unsigned cayman;
-  };
 
   class AMDGPUTargetMachine;
   class MachineFunction;
@@ -52,9 +45,7 @@ namespace llvm {
   bool isTrig(const MachineInstr &MI) const;
 
   unsigned getLSHRop() const;
-  unsigned getMULHI_UINT() const;
-  unsigned getMULLO_UINT() const;
-  unsigned getRECIP_UINT() const;
+  unsigned getASHRop() const;
 
   };
 

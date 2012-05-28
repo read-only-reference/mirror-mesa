@@ -189,6 +189,33 @@ intel_unmap_renderbuffer(struct gl_context *ctx,
 
 
 /**
+ * Round up the requested multisample count to the next supported sample size.
+ */
+static unsigned
+quantize_num_samples(struct intel_context *intel, unsigned num_samples)
+{
+   switch (intel->gen) {
+   case 6:
+      /* Gen6 supports only 4x multisampling. */
+      if (num_samples > 0)
+         return 4;
+      else
+         return 0;
+   case 7:
+      /* TODO: Gen7 supports only 4x multisampling at the moment. */
+      if (num_samples > 0)
+         return 4;
+      else
+         return 0;
+      return 0;
+   default:
+      /* MSAA unsupported */
+      return 0;
+   }
+}
+
+
+/**
  * Called via glRenderbufferStorageEXT() to set the format and allocate
  * storage for a user-created renderbuffer.
  */
@@ -199,6 +226,7 @@ intel_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffer
 {
    struct intel_context *intel = intel_context(ctx);
    struct intel_renderbuffer *irb = intel_renderbuffer(rb);
+   rb->NumSamples = quantize_num_samples(intel, rb->NumSamples);
 
    ASSERT(rb->Name != 0);
 
@@ -237,13 +265,17 @@ intel_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffer
        _mesa_lookup_enum_by_nr(internalFormat),
        _mesa_get_format_name(rb->Format), width, height);
 
+   if (width == 0 || height == 0)
+      return true;
+
    irb->mt = intel_miptree_create_for_renderbuffer(intel, rb->Format,
-						   width, height);
+						   width, height,
+                                                   rb->NumSamples);
    if (!irb->mt)
       return false;
 
    if (intel->vtbl.is_hiz_depth_format(intel, rb->Format)) {
-      bool ok = intel_miptree_alloc_hiz(intel, irb->mt);
+      bool ok = intel_miptree_alloc_hiz(intel, irb->mt, rb->NumSamples);
       if (!ok) {
 	 intel_miptree_release(&irb->mt);
 	 return false;
@@ -492,7 +524,7 @@ intel_renderbuffer_update_wrapper(struct intel_context *intel,
 
    if (mt->hiz_mt == NULL &&
        intel->vtbl.is_hiz_depth_format(intel, rb->Format)) {
-      intel_miptree_alloc_hiz(intel, mt);
+      intel_miptree_alloc_hiz(intel, mt, 0 /* num_samples */);
       if (!mt->hiz_mt)
 	 return false;
    }
@@ -532,25 +564,14 @@ intel_renderbuffer_tile_offsets(struct intel_renderbuffer *irb,
 				uint32_t *tile_y)
 {
    struct intel_region *region = irb->mt->region;
-   int cpp = region->cpp;
-   uint32_t pitch = region->pitch * cpp;
+   uint32_t mask_x, mask_y;
 
-   if (region->tiling == I915_TILING_NONE) {
-      *tile_x = 0;
-      *tile_y = 0;
-      return irb->draw_x * cpp + irb->draw_y * pitch;
-   } else if (region->tiling == I915_TILING_X) {
-      *tile_x = irb->draw_x % (512 / cpp);
-      *tile_y = irb->draw_y % 8;
-      return ((irb->draw_y / 8) * (8 * pitch) +
-	      (irb->draw_x - *tile_x) / (512 / cpp) * 4096);
-   } else {
-      assert(region->tiling == I915_TILING_Y);
-      *tile_x = irb->draw_x % (128 / cpp);
-      *tile_y = irb->draw_y % 32;
-      return ((irb->draw_y / 32) * (32 * pitch) +
-	      (irb->draw_x - *tile_x) / (128 / cpp) * 4096);
-   }
+   intel_region_get_tile_masks(region, &mask_x, &mask_y);
+
+   *tile_x = irb->draw_x & mask_x;
+   *tile_y = irb->draw_y & mask_y;
+   return intel_region_get_aligned_offset(region, irb->draw_x & ~mask_x,
+                                          irb->draw_y & ~mask_y);
 }
 
 /**
@@ -830,6 +851,15 @@ intel_blit_framebuffer(struct gl_context *ctx,
                                                     mask, filter);
    if (mask == 0x0)
       return;
+
+#ifndef I915
+   mask = brw_blorp_framebuffer(intel_context(ctx),
+                                srcX0, srcY0, srcX1, srcY1,
+                                dstX0, dstY0, dstX1, dstY1,
+                                mask, filter);
+   if (mask == 0x0)
+      return;
+#endif
 
    _mesa_meta_BlitFramebuffer(ctx,
                               srcX0, srcY0, srcX1, srcY1,

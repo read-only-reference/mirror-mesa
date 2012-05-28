@@ -39,9 +39,14 @@ upload_wm_state(struct brw_context *brw)
    const struct brw_fragment_program *fp =
       brw_fragment_program_const(brw->fragment_program);
    bool writes_depth = false;
-   uint32_t dw1;
+   bool multisampled = false;
+   uint32_t dw1, dw2;
 
-   dw1 = 0;
+   /* _NEW_BUFFERS */
+   if (ctx->DrawBuffer->_ColorDrawBuffers[0])
+      multisampled = ctx->DrawBuffer->_ColorDrawBuffers[0]->NumSamples > 0;
+
+   dw1 = dw2 = 0;
    dw1 |= GEN7_WM_STATISTICS_ENABLE;
    dw1 |= GEN7_WM_LINE_AA_WIDTH_1_0;
    dw1 |= GEN7_WM_LINE_END_CAP_AA_WIDTH_0_5;
@@ -74,11 +79,18 @@ upload_wm_state(struct brw_context *brw)
        dw1 & GEN7_WM_KILL_ENABLE) {
       dw1 |= GEN7_WM_DISPATCH_ENABLE;
    }
+   if (multisampled) {
+      dw1 |= GEN7_WM_MSRAST_ON_PATTERN;
+      dw2 |= GEN7_WM_MSDISPMODE_PERPIXEL;
+   } else {
+      dw1 |= GEN7_WM_MSRAST_OFF_PIXEL;
+      dw2 |= GEN7_WM_MSDISPMODE_PERSAMPLE;
+   }
 
    BEGIN_BATCH(3);
    OUT_BATCH(_3DSTATE_WM << 16 | (3 - 2));
    OUT_BATCH(dw1);
-   OUT_BATCH(0);
+   OUT_BATCH(dw2);
    ADVANCE_BATCH();
 }
 
@@ -97,6 +109,7 @@ static void
 upload_ps_state(struct brw_context *brw)
 {
    struct intel_context *intel = &brw->intel;
+   struct gl_context *ctx = &intel->ctx;
    uint32_t dw2, dw4, dw5;
    const int max_threads_shift = brw->intel.is_haswell ?
       HSW_PS_MAX_THREADS_SHIFT : IVB_PS_MAX_THREADS_SHIFT;
@@ -164,6 +177,17 @@ upload_ps_state(struct brw_context *brw)
    if (brw->wm.prog_data->nr_params > 0)
       dw4 |= GEN7_PS_PUSH_CONSTANT_ENABLE;
 
+   /* CACHE_NEW_WM_PROG | _NEW_COLOR
+    *
+    * The hardware wedges if you have this bit set but don't turn on any dual
+    * source blend factors.
+    */
+   if (brw->wm.prog_data->dual_src_blend &&
+       (ctx->Color.BlendEnabled & 1) &&
+       ctx->Color.Blend[0]._UsesDualSrc) {
+      dw4 |= GEN7_PS_DUAL_SOURCE_BLEND_ENABLE;
+   }
+
    /* BRW_NEW_FRAGMENT_PROGRAM */
    if (brw->fragment_program->Base.InputsRead != 0)
       dw4 |= GEN7_PS_ATTRIBUTE_ENABLE;
@@ -201,7 +225,8 @@ upload_ps_state(struct brw_context *brw)
 
 const struct brw_tracked_state gen7_ps_state = {
    .dirty = {
-      .mesa  = _NEW_PROGRAM_CONSTANTS,
+      .mesa  = (_NEW_PROGRAM_CONSTANTS |
+		_NEW_COLOR),
       .brw   = (BRW_NEW_FRAGMENT_PROGRAM |
 		BRW_NEW_PS_BINDING_TABLE |
 		BRW_NEW_BATCH),

@@ -49,6 +49,8 @@ extern "C" {
 #include "glsl/glsl_types.h"
 #include "glsl/ir.h"
 
+class fs_bblock;
+
 enum register_file {
    BAD_FILE,
    ARF,
@@ -126,18 +128,18 @@ public:
    fs_reg(enum register_file file, int reg, uint32_t type);
    fs_reg(class fs_visitor *v, const struct glsl_type *type);
 
-   bool equals(fs_reg *r)
+   bool equals(const fs_reg &r) const
    {
-      return (file == r->file &&
-	      reg == r->reg &&
-	      reg_offset == r->reg_offset &&
-	      type == r->type &&
-	      negate == r->negate &&
-	      abs == r->abs &&
-	      memcmp(&fixed_hw_reg, &r->fixed_hw_reg,
+      return (file == r.file &&
+	      reg == r.reg &&
+	      reg_offset == r.reg_offset &&
+	      type == r.type &&
+	      negate == r.negate &&
+	      abs == r.abs &&
+	      memcmp(&fixed_hw_reg, &r.fixed_hw_reg,
 		     sizeof(fixed_hw_reg)) == 0 &&
-	      smear == r->smear &&
-	      imm.u == r->imm.u);
+	      smear == r.smear &&
+	      imm.u == r.imm.u);
    }
 
    /** Register file: ARF, GRF, MRF, IMM. */
@@ -172,26 +174,6 @@ public:
 static const fs_reg reg_undef;
 static const fs_reg reg_null_f(ARF, BRW_ARF_NULL, BRW_REGISTER_TYPE_F);
 static const fs_reg reg_null_d(ARF, BRW_ARF_NULL, BRW_REGISTER_TYPE_D);
-
-class ip_record : public exec_node {
-public:
-   static void* operator new(size_t size, void *ctx)
-   {
-      void *node;
-
-      node = rzalloc_size(ctx, size);
-      assert(node != NULL);
-
-      return node;
-   }
-
-   ip_record(int ip)
-   {
-      this->ip = ip;
-   }
-
-   int ip;
-};
 
 class fs_inst : public exec_node {
 public:
@@ -291,10 +273,10 @@ public:
    bool equals(fs_inst *inst)
    {
       return (opcode == inst->opcode &&
-	      dst.equals(&inst->dst) &&
-	      src[0].equals(&inst->src[0]) &&
-	      src[1].equals(&inst->src[1]) &&
-	      src[2].equals(&inst->src[2]) &&
+	      dst.equals(inst->dst) &&
+	      src[0].equals(inst->src[0]) &&
+	      src[1].equals(inst->src[1]) &&
+	      src[2].equals(inst->src[2]) &&
 	      saturate == inst->saturate &&
 	      predicated == inst->predicated &&
 	      conditional_mod == inst->conditional_mod &&
@@ -507,14 +489,19 @@ public:
    void calculate_live_intervals();
    bool propagate_constants();
    bool opt_algebraic();
+   bool opt_cse();
+   bool opt_cse_local(fs_bblock *block, exec_list *aeb);
+   bool opt_copy_propagate();
+   bool opt_copy_propagate_local(void *mem_ctx, fs_bblock *block,
+				 exec_list *acp);
    bool register_coalesce();
+   bool register_coalesce_2();
    bool compute_to_mrf();
    bool dead_code_eliminate();
    bool remove_dead_constants();
    bool remove_duplicate_mrf_writes();
    bool virtual_grf_interferes(int a, int b);
    void schedule_instructions();
-   void patch_discard_jumps_to_fb_writes();
    void fail(const char *msg, ...);
 
    void push_force_uncompressed();
@@ -582,6 +569,7 @@ public:
    void emit_assignment_writes(fs_reg &l, fs_reg &r,
 			       const glsl_type *type, bool predicated);
    void resolve_ud_negate(fs_reg *reg);
+   void resolve_bool_comparison(ir_rvalue *rvalue, fs_reg *reg);
 
    struct brw_reg interp_reg(int location, int channel);
    int setup_uniform_values(int loc, const glsl_type *type);
@@ -598,7 +586,6 @@ public:
    struct gl_shader_program *prog;
    void *mem_ctx;
    exec_list instructions;
-   exec_list discard_halt_patches;
 
    /* Delayed setup of c->prog_data.params[] due to realloc of
     * ParamValues[] during compile.
@@ -623,6 +610,7 @@ public:
    struct hash_table *variable_ht;
    ir_variable *frag_depth;
    fs_reg outputs[BRW_MAX_DRAW_BUFFERS];
+   fs_reg dual_src_output;
    int first_non_payload_grf;
    int max_grf;
    int urb_setup[FRAG_ATTRIB_MAX];

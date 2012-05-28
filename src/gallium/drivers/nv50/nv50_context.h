@@ -48,6 +48,7 @@
 #define NV50_NEW_CONSTBUF     (1 << 18)
 #define NV50_NEW_TEXTURES     (1 << 19)
 #define NV50_NEW_SAMPLERS     (1 << 20)
+#define NV50_NEW_STRMOUT      (1 << 21)
 #define NV50_NEW_CONTEXT      (1 << 31)
 
 #define NV50_BIND_FB          0
@@ -56,9 +57,10 @@
 #define NV50_BIND_INDEX       3
 #define NV50_BIND_TEXTURES    4
 #define NV50_BIND_CB(s, i)   (5 + 16 * (s) + (i))
-#define NV50_BIND_SCREEN     53
-#define NV50_BIND_TLS        54
-#define NV50_BIND_COUNT      55
+#define NV50_BIND_SO         53
+#define NV50_BIND_SCREEN     54
+#define NV50_BIND_TLS        55
+#define NV50_BIND_COUNT      56
 #define NV50_BIND_2D          0
 #define NV50_BIND_M2MF        0
 #define NV50_BIND_FENCE       1
@@ -88,15 +90,18 @@ struct nv50_context {
       uint32_t semantic_color;
       uint32_t semantic_psize;
       int32_t index_bias;
+      boolean uniform_buffer_bound[3];
       boolean prim_restart;
       boolean point_sprite;
       boolean rt_serialize;
       boolean flushed;
+      boolean rasterizer_discard;
       uint8_t tls_required;
       uint8_t num_vtxbufs;
       uint8_t num_vtxelts;
       uint8_t num_textures[3];
       uint8_t num_samplers[3];
+      uint8_t prim_size;
       uint16_t scissor;
    } state;
 
@@ -109,7 +114,7 @@ struct nv50_context {
    struct nv50_program *gmtyprog;
    struct nv50_program *fragprog;
 
-   struct pipe_resource *constbuf[3][16];
+   struct nv50_constbuf constbuf[3][NV50_MAX_PIPE_CONSTBUFS];
    uint16_t constbuf_dirty[3];
    uint16_t constbuf_valid[3];
 
@@ -118,13 +123,20 @@ struct nv50_context {
    struct pipe_index_buffer idxbuf;
    uint32_t vbo_fifo; /* bitmask of vertex elements to be pushed to FIFO */
    uint32_t vbo_user; /* bitmask of vertex buffers pointing to user memory */
+   uint32_t vbo_constant; /* bitmask of user buffers with stride 0 */
    uint32_t vb_elt_first; /* from pipe_draw_info, for vertex upload */
    uint32_t vb_elt_limit; /* max - min element (count - 1) */
+   uint32_t instance_off; /* base vertex for instanced arrays */
+   uint32_t instance_max; /* max instance for current draw call */
 
    struct pipe_sampler_view *textures[3][PIPE_MAX_SAMPLERS];
    unsigned num_textures[3];
    struct nv50_tsc_entry *samplers[3][PIPE_MAX_SAMPLERS];
    unsigned num_samplers[3];
+
+   uint8_t num_so_targets;
+   uint8_t so_targets_dirty;
+   struct pipe_stream_output_target *so_target[4];
 
    struct pipe_framebuffer_state framebuffer;
    struct pipe_blend_color blend_colour;
@@ -155,6 +167,20 @@ nv50_context_screen(struct nv50_context *nv50)
    return nv50_screen(&nv50->base.screen->base);
 }
 
+/* return index used in nv50_context arrays for a specific shader type */
+static INLINE unsigned
+nv50_context_shader_stage(unsigned pipe)
+{
+   switch (pipe) {
+   case PIPE_SHADER_VERTEX: return 0;
+   case PIPE_SHADER_FRAGMENT: return 1;
+   case PIPE_SHADER_GEOMETRY: return 2;
+   case PIPE_SHADER_COMPUTE: return 3;
+   default:
+      assert(!"invalid/unhandled shader type");
+      return 0;
+   }
+}
 
 /* nv50_context.c */
 struct pipe_context *nv50_create(struct pipe_screen *, void *);
@@ -168,6 +194,14 @@ extern struct draw_stage *nv50_draw_render_stage(struct nv50_context *);
 
 /* nv50_query.c */
 void nv50_init_query_functions(struct nv50_context *);
+void nv50_query_pushbuf_submit(struct nouveau_pushbuf *,
+                               struct pipe_query *, unsigned result_offset);
+void nv84_query_fifo_wait(struct nouveau_pushbuf *, struct pipe_query *);
+void nva0_so_target_save_offset(struct pipe_context *,
+                                struct pipe_stream_output_target *,
+                                unsigned index, boolean seralize);
+
+#define NVA0_QUERY_STREAM_OUTPUT_BUFFER_OFFSET (PIPE_QUERY_TYPES + 0)
 
 /* nv50_shader_state.c */
 void nv50_vertprog_validate(struct nv50_context *);
@@ -177,6 +211,7 @@ void nv50_fp_linkage_validate(struct nv50_context *);
 void nv50_gp_linkage_validate(struct nv50_context *);
 void nv50_constbufs_validate(struct nv50_context *);
 void nv50_validate_derived_rs(struct nv50_context *);
+void nv50_stream_output_validate(struct nv50_context *);
 
 /* nv50_state.c */
 extern void nv50_init_state_functions(struct nv50_context *);

@@ -325,8 +325,10 @@ lp_emit_store_aos(
    if (reg->Register.WriteMask != TGSI_WRITEMASK_XYZW) {
       LLVMValueRef writemask;
 
-      writemask = lp_build_const_mask_aos(bld->bld_base.base.gallivm, bld->bld_base.base.type,
-                                          reg->Register.WriteMask);
+      writemask = lp_build_const_mask_aos_swizzled(bld->bld_base.base.gallivm,
+                                                   bld->bld_base.base.type,
+                                                   reg->Register.WriteMask,
+                                                   bld->swizzles);
 
       if (mask) {
          mask = LLVMBuildAnd(builder, mask, writemask, "");
@@ -1089,6 +1091,7 @@ lp_build_tgsi_aos(struct gallivm_state *gallivm,
       debug_printf("2222222222222222222222222222 \n");
    }
    tgsi_parse_free(&parse);
+   FREE(bld.bld_base.instructions);
 
    if (0) {
       LLVMModuleRef module = LLVMGetGlobalParent(

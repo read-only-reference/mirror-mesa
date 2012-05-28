@@ -291,6 +291,8 @@ brw_format_for_mesa_format(gl_format mesa_format)
       [MESA_FORMAT_RGBA8888_REV] = BRW_SURFACEFORMAT_R8G8B8A8_UNORM,
       [MESA_FORMAT_ARGB8888] = BRW_SURFACEFORMAT_B8G8R8A8_UNORM,
       [MESA_FORMAT_ARGB8888_REV] = 0,
+      [MESA_FORMAT_RGBX8888] = 0,
+      [MESA_FORMAT_RGBX8888_REV] = BRW_SURFACEFORMAT_R8G8B8X8_UNORM,
       [MESA_FORMAT_XRGB8888] = BRW_SURFACEFORMAT_B8G8R8X8_UNORM,
       [MESA_FORMAT_XRGB8888_REV] = 0,
       [MESA_FORMAT_RGB888] = 0,
@@ -618,7 +620,7 @@ translate_tex_format(gl_format mesa_format,
    }
 }
 
-static uint32_t
+uint32_t
 brw_get_surface_tiling_bits(uint32_t tiling)
 {
    switch (tiling) {
@@ -630,6 +632,17 @@ brw_get_surface_tiling_bits(uint32_t tiling)
       return 0;
    }
 }
+
+
+uint32_t
+brw_get_surface_num_multisamples(unsigned num_samples)
+{
+   if (num_samples > 0)
+      return BRW_SURFACE_MULTISAMPLECOUNT_4;
+   else
+      return BRW_SURFACE_MULTISAMPLECOUNT_1;
+}
+
 
 static void
 brw_update_texture_surface( struct gl_context *ctx, GLuint unit )
@@ -941,7 +954,9 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
 				       intel_image->base.Base.Level,
 				       intel_image->base.Base.Level,
 				       width, height, depth,
-				       true);
+				       true,
+                                       0 /* num_samples */,
+                                       false /* msaa_is_interleaved */);
 
 	 intel_miptree_copy_teximage(intel, intel_image, new_mt);
 	 intel_miptree_reference(&irb->mt, intel_image->mt);
@@ -959,8 +974,11 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
 
    switch (rb_format) {
    case MESA_FORMAT_SARGB8:
-      /* without GL_EXT_framebuffer_sRGB we shouldn't bind sRGB
-	 surfaces to the blend/update as sRGB */
+      /* _NEW_BUFFERS
+       *
+       * Without GL_EXT_framebuffer_sRGB we shouldn't bind sRGB surfaces to the
+       * blend/update as sRGB.
+       */
       if (ctx->Color.sRGBEnabled)
 	 format = brw_format_for_mesa_format(rb_format);
       else
@@ -988,7 +1006,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
    surf[3] = (brw_get_surface_tiling_bits(region->tiling) |
 	      ((region->pitch * region->cpp) - 1) << BRW_SURFACE_PITCH_SHIFT);
 
-   surf[4] = 0;
+   surf[4] = brw_get_surface_num_multisamples(mt->num_samples);
 
    assert(brw->has_surface_tile_offset || (tile_x == 0 && tile_y == 0));
    /* Note that the low bits of these fields are missing, so

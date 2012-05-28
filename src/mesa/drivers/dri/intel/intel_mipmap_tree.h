@@ -33,6 +33,10 @@
 #include "intel_regions.h"
 #include "intel_resolve_map.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* A layer on top of the intel_regions code which adds:
  *
  * - Code to size and layout a region to hold a set of mipmaps.
@@ -165,12 +169,38 @@ struct intel_mipmap_tree
 
    GLuint width0, height0, depth0; /**< Level zero image dimensions */
    GLuint cpp;
+   GLuint num_samples;
    bool compressed;
+
+   /**
+    * For 1D array, 2D array, cube, and 2D multisampled surfaces on Gen7: true
+    * if the surface only contains LOD 0, and hence no space is for LOD's
+    * other than 0 in between array slices.
+    *
+    * Corresponds to the surface_array_spacing bit in gen7_surface_state.
+    */
+   bool array_spacing_lod0;
+
+   /**
+    * For MSAA buffers, there are two possible layouts:
+    * - Interleaved, in which the additional samples are accommodated
+    *   by scaling up the width and height of the surface.
+    * - Sliced, in which the surface is stored as a 2D array, with
+    *   array slice n containing all pixel data for sample n.
+    *
+    * This value is true if num_samples > 0 and the format is interleaved.
+    */
+   bool msaa_is_interleaved;
 
    /* Derived from the above:
     */
    GLuint total_width;
    GLuint total_height;
+
+   /* The 3DSTATE_CLEAR_PARAMS value associated with the last depth clear to
+    * this depth mipmap tree, if any.
+    */
+   uint32_t depth_clear_value;
 
    /* Includes image offset tables:
     */
@@ -227,7 +257,9 @@ struct intel_mipmap_tree *intel_miptree_create(struct intel_context *intel,
                                                GLuint width0,
                                                GLuint height0,
                                                GLuint depth0,
-					       bool expect_accelerated_upload);
+					       bool expect_accelerated_upload,
+                                               GLuint num_samples,
+                                               bool msaa_is_interleaved);
 
 struct intel_mipmap_tree *
 intel_miptree_create_for_region(struct intel_context *intel,
@@ -246,7 +278,8 @@ struct intel_mipmap_tree*
 intel_miptree_create_for_renderbuffer(struct intel_context *intel,
                                       gl_format format,
                                       uint32_t width,
-                                      uint32_t height);
+                                      uint32_t height,
+                                      uint32_t num_samples);
 
 /** \brief Assert that the level and layer are valid for the miptree. */
 static inline void
@@ -337,7 +370,8 @@ intel_miptree_s8z24_gather(struct intel_context *intel,
 
 bool
 intel_miptree_alloc_hiz(struct intel_context *intel,
-			struct intel_mipmap_tree *mt);
+			struct intel_mipmap_tree *mt,
+                        GLuint num_samples);
 
 void
 intel_miptree_slice_set_needs_hiz_resolve(struct intel_mipmap_tree *mt,
@@ -412,5 +446,24 @@ intel_miptree_unmap(struct intel_context *intel,
 		    struct intel_mipmap_tree *mt,
 		    unsigned int level,
 		    unsigned int slice);
+
+#ifdef I915
+static inline void
+intel_hiz_exec(struct intel_context *intel, struct intel_mipmap_tree *mt,
+	       unsigned int level, unsigned int layer, enum gen6_hiz_op op)
+{
+   /* Stub on i915.  It would be nice if we didn't execute resolve code at all
+    * there.
+    */
+}
+#else
+void
+intel_hiz_exec(struct intel_context *intel, struct intel_mipmap_tree *mt,
+	       unsigned int level, unsigned int layer, enum gen6_hiz_op op);
+#endif
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -1,4 +1,4 @@
-//===-- AMDGPUTargetMachine.cpp - TODO: Add brief description -------===//
+//===-- AMDGPUTargetMachine.cpp - TargetMachine for hw codegen targets-----===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,16 +7,15 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO: Add full description
+// The AMDGPU target machine contains all of the hardware specific information
+// needed to emit code for R600 and SI GPUs.
 //
 //===----------------------------------------------------------------------===//
 
 #include "AMDGPUTargetMachine.h"
 #include "AMDGPU.h"
-#include "AMDILTargetMachine.h"
 #include "R600ISelLowering.h"
 #include "R600InstrInfo.h"
-#include "R600KernelParameters.h"
 #include "SIISelLowering.h"
 #include "SIInstrInfo.h"
 #include "llvm/Analysis/Passes.h"
@@ -33,6 +32,11 @@
 
 using namespace llvm;
 
+extern "C" void LLVMInitializeAMDGPUTarget() {
+  // Register the target
+  RegisterTargetMachine<AMDGPUTargetMachine> X(TheAMDGPUTarget);
+}
+
 AMDGPUTargetMachine::AMDGPUTargetMachine(const Target &T, StringRef TT,
     StringRef CPU, StringRef FS,
   TargetOptions Options,
@@ -40,12 +44,16 @@ AMDGPUTargetMachine::AMDGPUTargetMachine(const Target &T, StringRef TT,
   CodeGenOpt::Level OptLevel
 )
 :
-  AMDILTargetMachine(T, TT, CPU, FS, Options, RM, CM, OptLevel),
+  LLVMTargetMachine(T, TT, CPU, FS, Options, RM, CM, OptLevel),
   Subtarget(TT, CPU, FS),
+  DataLayout(Subtarget.getDataLayout()),
+  FrameLowering(TargetFrameLowering::StackGrowsUp,
+      Subtarget.device()->getStackAlignment(), 0),
+  IntrinsicInfo(this),
   mDump(false)
 
 {
-  /* TLInfo uses InstrInfo so it must be initialized after. */
+  // TLInfo uses InstrInfo so it must be initialized after.
   if (Subtarget.device()->getGeneration() <= AMDILDeviceInfo::HD6XXX) {
     InstrInfo = new R600InstrInfo(*this);
     TLInfo = new R600TargetLowering(*this);
@@ -63,8 +71,8 @@ bool AMDGPUTargetMachine::addPassesToEmitFile(PassManagerBase &PM,
                                               formatted_raw_ostream &Out,
                                               CodeGenFileType FileType,
                                               bool DisableVerify) {
-  /* XXX: Hack here addPassesToEmitFile will fail, but this is Ok since we are
-   * only using it to access addPassesToGenerateCode() */
+  // XXX: Hack here addPassesToEmitFile will fail, but this is Ok since we are
+  // only using it to access addPassesToGenerateCode()
   bool fail = LLVMTargetMachine::addPassesToEmitFile(PM, Out, FileType,
                                                      DisableVerify);
   assert(fail);
@@ -112,31 +120,28 @@ AMDGPUPassConfig::addPreISel()
 {
   const AMDILSubtarget &ST = TM->getSubtarget<AMDILSubtarget>();
   if (ST.device()->getGeneration() <= AMDILDeviceInfo::HD6XXX) {
-    PM.add(createR600KernelParametersPass(
+    PM->add(createR600KernelParametersPass(
                      getAMDGPUTargetMachine().getTargetData()));
   }
   return false;
 }
 
 bool AMDGPUPassConfig::addInstSelector() {
-  PM.add(createAMDILPeepholeOpt(*TM));
-  PM.add(createAMDILISelDag(getAMDGPUTargetMachine()));
+  PM->add(createAMDILPeepholeOpt(*TM));
+  PM->add(createAMDILISelDag(getAMDGPUTargetMachine()));
   return false;
 }
 
 bool AMDGPUPassConfig::addPreRegAlloc() {
   const AMDILSubtarget &ST = TM->getSubtarget<AMDILSubtarget>();
 
-  PM.add(createAMDGPUReorderPreloadInstructionsPass(*TM));
   if (ST.device()->getGeneration() <= AMDILDeviceInfo::HD6XXX) {
-    PM.add(createR600LowerShaderInstructionsPass(*TM));
-    PM.add(createR600LowerInstructionsPass(*TM));
+    PM->add(createR600LowerInstructionsPass(*TM));
   } else {
-    PM.add(createSILowerShaderInstructionsPass(*TM));
-    PM.add(createSIAssignInterpRegsPass(*TM));
+    PM->add(createSIAssignInterpRegsPass(*TM));
   }
-  PM.add(createAMDGPULowerInstructionsPass(*TM));
-  PM.add(createAMDGPUConvertToISAPass(*TM));
+  PM->add(createAMDGPULowerInstructionsPass(*TM));
+  PM->add(createAMDGPUConvertToISAPass(*TM));
   return false;
 }
 
@@ -150,10 +155,10 @@ bool AMDGPUPassConfig::addPreSched2() {
 
 bool AMDGPUPassConfig::addPreEmitPass() {
   const AMDILSubtarget &ST = TM->getSubtarget<AMDILSubtarget>();
-  PM.add(createAMDILCFGPreparationPass(*TM));
-  PM.add(createAMDILCFGStructurizerPass(*TM));
+  PM->add(createAMDILCFGPreparationPass(*TM));
+  PM->add(createAMDILCFGStructurizerPass(*TM));
   if (ST.device()->getGeneration() == AMDILDeviceInfo::HD7XXX) {
-    PM.add(createSIPropagateImmReadsPass(*TM));
+    PM->add(createSIPropagateImmReadsPass(*TM));
   }
 
   return false;

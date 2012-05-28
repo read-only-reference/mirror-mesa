@@ -1,13 +1,9 @@
-//===-- AMDGPU.h - TODO: Add brief description -------===//
+//===-- AMDGPU.h - MachineFunction passes hw codegen --------------*- C++ -*-=//
 //
 //                     The LLVM Compiler Infrastructure
 //
 // This file is distributed under the University of Illinois Open Source
 // License. See LICENSE.TXT for details.
-//
-//===----------------------------------------------------------------------===//
-//
-// TODO: Add full description
 //
 //===----------------------------------------------------------------------===//
 
@@ -19,29 +15,24 @@
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
-    class FunctionPass;
-    class AMDGPUTargetMachine;
 
-    FunctionPass *createR600CodeEmitterPass(formatted_raw_ostream &OS);
-    FunctionPass *createR600LowerShaderInstructionsPass(TargetMachine &tm);
-    FunctionPass *createR600LowerInstructionsPass(TargetMachine &tm);
+class FunctionPass;
+class AMDGPUTargetMachine;
 
-    FunctionPass *createSIAssignInterpRegsPass(TargetMachine &tm);
-    FunctionPass *createSIInitMachineFunctionInfoPass(TargetMachine &tm);
-    FunctionPass *createSILowerShaderInstructionsPass(TargetMachine &tm);
-    FunctionPass *createSIPropagateImmReadsPass(TargetMachine &tm);
-    FunctionPass *createSICodeEmitterPass(formatted_raw_ostream &OS);
+// R600 Passes
+FunctionPass* createR600KernelParametersPass(const TargetData* TD);
+FunctionPass *createR600CodeEmitterPass(formatted_raw_ostream &OS);
+FunctionPass *createR600LowerInstructionsPass(TargetMachine &tm);
 
-    FunctionPass *createAMDGPUReorderPreloadInstructionsPass(TargetMachine &tm);
+// SI Passes
+FunctionPass *createSIAssignInterpRegsPass(TargetMachine &tm);
+FunctionPass *createSIPropagateImmReadsPass(TargetMachine &tm);
+FunctionPass *createSICodeEmitterPass(formatted_raw_ostream &OS);
 
-    FunctionPass *createAMDGPULowerInstructionsPass(TargetMachine &tm);
-    FunctionPass *createAMDGPULowerShaderInstructionsPass(TargetMachine &tm);
+// Passes common to R600 and SI
+FunctionPass *createAMDGPULowerInstructionsPass(TargetMachine &tm);
+FunctionPass *createAMDGPUConvertToISAPass(TargetMachine &tm);
 
-    FunctionPass *createAMDGPUDelimitInstGroupsPass(TargetMachine &tm);
+} // End namespace llvm
 
-    FunctionPass *createAMDGPUConvertToISAPass(TargetMachine &tm);
-
-    FunctionPass *createAMDGPUFixRegClassesPass(TargetMachine &tm);
-
-} /* End namespace llvm */
-#endif /* AMDGPU_H */
+#endif // AMDGPU_H

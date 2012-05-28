@@ -37,7 +37,7 @@ USER_CXXFLAGS="$CXXFLAGS"
 dnl Versions for external dependencies
 LIBDRM_REQUIRED=2.4.24
 LIBDRM_RADEON_REQUIRED=2.4.31
-LIBDRM_INTEL_REQUIRED=2.4.32
+LIBDRM_INTEL_REQUIRED=2.4.34
 LIBDRM_NVVIEUX_REQUIRED=2.4.33
 LIBDRM_NOUVEAU_REQUIRED=2.4.33
 DRI2PROTO_REQUIRED=2.6
@@ -50,6 +50,7 @@ AC_PROG_CPP
 AC_PROG_CC
 AC_PROG_CXX
 AM_PROG_CC_C_O
+AM_PROG_AS
 AC_CHECK_PROGS([MAKE], [gmake make])
 AC_CHECK_PROGS([PYTHON2], [python2 python])
 AC_PROG_SED
@@ -70,6 +71,11 @@ fi
 AC_PROG_LEX
 
 AC_PATH_PROG([PERL], [perl])
+
+AC_CHECK_PROG(INDENT, indent, indent, cat)
+if test "x$INDENT" != "xcat"; then
+    AC_SUBST(INDENT_FLAGS, '-i4 -nut -br -brs -npcs -ce -T GLubyte -T GLbyte -T Bool')
+fi
 
 dnl Our fallback install-sh is a symlink to minstall. Use the existing
 dnl configuration in that case.
@@ -109,11 +115,11 @@ if test "x$GCC" = xyes -a "x$acv_mesa_CLANG" = xno; then
 
     GCC_VERSION=`$CC -dumpversion`
     if test $? -eq 0; then
-        major=`echo $GCC_VERSION | cut -d. -f1`
-        minor=`echo $GCC_VERSION | cut -d. -f2`
+        GCC_VERSION_MAJOR=`echo $GCC_VERSION | cut -d. -f1`
+        GCC_VERSION_MINOR=`echo $GCC_VERSION | cut -d. -f2`
     fi
 
-    if test $major -lt 3 -o $major -eq 3 -a $minor -lt 3 ; then
+    if test $GCC_VERSION_MAJOR -lt 3 -o $GCC_VERSION_MAJOR -eq 3 -a $GCC_VERSION_MINOR -lt 3 ; then
         AC_MSG_RESULT([no])
         AC_MSG_ERROR([If using GCC, version 3.3.0 or later is required.])
     else
@@ -436,7 +442,7 @@ AC_ARG_ENABLE([asm],
 )
 asm_arch=""
 ASM_FLAGS=""
-MESA_ASM_SOURCES=""
+MESA_ASM_FILES=""
 GLAPI_ASM_SOURCES=""
 AC_MSG_CHECKING([whether to enable assembly])
 test "x$enable_asm" = xno && AC_MSG_RESULT([no])
@@ -485,19 +491,19 @@ if test "x$enable_asm" = xyes; then
     case "$asm_arch" in
     x86)
         ASM_FLAGS="-DUSE_X86_ASM -DUSE_MMX_ASM -DUSE_3DNOW_ASM -DUSE_SSE_ASM"
-        MESA_ASM_SOURCES='$(X86_SOURCES)'
+        MESA_ASM_FILES='$(X86_FILES)'
         GLAPI_ASM_SOURCES='$(X86_API)'
         AC_MSG_RESULT([yes, x86])
         ;;
     x86_64)
         ASM_FLAGS="-DUSE_X86_64_ASM"
-        MESA_ASM_SOURCES='$(X86-64_SOURCES)'
+        MESA_ASM_FILES='$(X86_64_FILES)'
         GLAPI_ASM_SOURCES='$(X86-64_API)'
         AC_MSG_RESULT([yes, x86_64])
         ;;
     sparc)
         ASM_FLAGS="-DUSE_SPARC_ASM"
-        MESA_ASM_SOURCES='$(SPARC_SOURCES)'
+        MESA_ASM_FILES='$(SPARC_FILES)'
         GLAPI_ASM_SOURCES='$(SPARC_API)'
         AC_MSG_RESULT([yes, sparc])
         ;;
@@ -507,7 +513,7 @@ if test "x$enable_asm" = xyes; then
     esac
 fi
 AC_SUBST([ASM_FLAGS])
-AC_SUBST([MESA_ASM_SOURCES])
+AC_SUBST([MESA_ASM_FILES])
 AC_SUBST([GLAPI_ASM_SOURCES])
 
 dnl PIC code macro
@@ -616,7 +622,11 @@ AC_ARG_ENABLE([va],
          [enable va library @<:@default=auto@:>@])],
    [enable_va="$enableval"],
    [enable_va=auto])
-
+AC_ARG_ENABLE([opencl],
+   [AS_HELP_STRING([--enable-opencl],
+         [enable OpenCL library @<:@default=no@:>@])],
+   [enable_opencl="$enableval"],
+   [enable_opencl=no])
 AC_ARG_ENABLE([xlib_glx],
     [AS_HELP_STRING([--enable-xlib-glx],
         [make GLX library Xlib-based instead of DRI-based @<:@default=disable@:>@])],
@@ -638,10 +648,16 @@ AC_ARG_ENABLE([gallium_gbm],
     [enable_gallium_gbm=auto])
 
 AC_ARG_ENABLE([r600-llvm-compiler],
-    [AS_HELP_STRING([--enable-r600-llvm-compilerl],
-        [Enable experimental LLVM backend for graphics shaders @<:default=disable@:>@])],
+    [AS_HELP_STRING([--enable-r600-llvm-compiler],
+        [Enable experimental LLVM backend for graphics shaders @<:@default=disable@:>@])],
     [enable_r600_llvm="$enableval"],
     [enable_r600_llvm=no])
+
+AC_ARG_ENABLE([gallium_tests],
+    [AS_HELP_STRING([--enable-gallium-tests],
+        [Enable optional Gallium tests) @<:@default=disable@:>@])],
+    [enable_gallium_tests="$enableval"],
+    [enable_gallium_tests=no])
 
 # Option for Gallium drivers
 GALLIUM_DRIVERS_DEFAULT="r300,r600,svga,swrast"
@@ -670,7 +686,8 @@ if test "x$enable_opengl" = xno -a \
         "x$enable_d3d1x" = xno -a \
         "x$enable_xvmc" = xno -a \
         "x$enable_vdpau" = xno -a \
-        "x$enable_va" = xno; then
+        "x$enable_va" = xno -a \
+        "x$enable_opencl" = xno; then
     AC_MSG_ERROR([at least one API should be enabled])
 fi
 
@@ -825,7 +842,7 @@ fi
 # build glsl and mesa if OpenGL or OpenGL ES is enabled
 case "x$enable_opengl$enable_gles1$enable_gles2" in
 x*yes*)
-    CORE_DIRS="$CORE_DIRS glsl mesa"
+    CORE_DIRS="mapi/glapi/gen $CORE_DIRS glsl mesa"
     ;;
 esac
 
@@ -1076,7 +1093,9 @@ if test "x$enable_dri" = xyes && test "x$driglx_direct" = xyes ; then
     DRI_CFLAGS='$(CFLAGS_NOVISIBILITY) -DUSE_DRICORE'
     DRI_CXXFLAGS='$(CXXFLAGS_NOVISIBILITY) -DUSE_DRICORE'
     MESA_MODULES='$(DRICORE_LIBS) $(DRICORE_GLSL_LIBS)'
+    HAVE_DRICORE=yes
 fi
+AM_CONDITIONAL(HAVE_DRICORE, test x$HAVE_DRICORE = xyes)
 AC_SUBST([DRICORE_LIBS])
 AC_SUBST([DRICORE_GLSL_LIBS])
 AC_SUBST([DRICORE_LIB_DEPS])
@@ -1477,6 +1496,7 @@ if test "x$enable_gallium_gbm" = xyes; then
     GALLIUM_STATE_TRACKERS_DIRS="gbm $GALLIUM_STATE_TRACKERS_DIRS"
     GALLIUM_TARGET_DIRS="$GALLIUM_TARGET_DIRS gbm"
     HAVE_ST_GBM="yes"
+    enable_gallium_loader=yes
 fi
 
 dnl
@@ -1594,6 +1614,24 @@ if test "x$enable_va" = xyes; then
     AC_MSG_WARN([vaapi state tracker currently unmaintained])
     GALLIUM_STATE_TRACKERS_DIRS="$GALLIUM_STATE_TRACKERS_DIRS va"
     HAVE_ST_VA="yes"
+fi
+
+dnl
+dnl OpenCL configuration
+dnl
+
+if test "x$enable_opencl" = xyes; then
+    if test "x$with_gallium_drivers" = x; then
+        AC_MSG_ERROR([cannot enable OpenCL without Gallium])
+    fi
+
+    if test $GCC_VERSION_MAJOR -lt 4 -o $GCC_VERSION_MAJOR -eq 4 -a $GCC_VERSION_MINOR -lt 6; then
+        AC_MSG_ERROR([gcc >= 4.6 is required to build clover])
+    fi
+
+    GALLIUM_STATE_TRACKERS_DIRS="$GALLIUM_STATE_TRACKERS_DIRS clover"
+    GALLIUM_TARGET_DIRS="$GALLIUM_TARGET_DIRS opencl"
+    enable_gallium_loader=yes
 fi
 
 dnl
@@ -1800,7 +1838,7 @@ if test "x$enable_gallium_llvm" = xyes; then
 
     if test "x$LLVM_CONFIG" != xno; then
 	LLVM_VERSION=`$LLVM_CONFIG --version | sed 's/svn.*//g'`
-	LLVM_CFLAGS=`$LLVM_CONFIG --cppflags|sed -e 's/-DNDEBUG\>//g' -e 's/-pedantic//g'`
+	LLVM_CFLAGS=`$LLVM_CONFIG --cppflags|sed -e 's/-DNDEBUG\>//g' -e 's/-pedantic//g' -e 's/-Wcovered-switch-default//g'`
 	if test "x$with_llvm_shared_libs" = xyes; then
 	    dnl We can't use $LLVM_VERSION because it has 'svn' stripped out,
 	    LLVM_LIBS="-lLLVM-`$LLVM_CONFIG --version`"
@@ -1828,6 +1866,14 @@ AC_ARG_WITH([xvmc-libdir],
     [XVMC_LIB_INSTALL_DIR='${libdir}'])
 AC_SUBST([XVMC_LIB_INSTALL_DIR])
 
+dnl
+dnl Gallium Tests
+dnl
+if test "x$enable_gallium_tests" = xyes; then
+    SRC_DIRS="$SRC_DIRS gallium/tests/trivial"
+    enable_gallium_loader=yes
+fi
+
 dnl Directory for VDPAU libs
 AC_ARG_WITH([vdpau-libdir],
     [AS_HELP_STRING([--with-vdpau-libdir=DIR],
@@ -1843,6 +1889,14 @@ AC_ARG_WITH([va-libdir],
     [VA_LIB_INSTALL_DIR="$withval"],
     [VA_LIB_INSTALL_DIR='${libdir}/va'])
 AC_SUBST([VA_LIB_INSTALL_DIR])
+
+dnl Directory for OpenCL libs
+AC_ARG_WITH([opencl-libdir],
+    [AS_HELP_STRING([--with-opencl-libdir=DIR],
+        [directory for the OpenCL libraries @<:@default=${libdir}/opencl@:>@])],
+    [OPENCL_LIB_INSTALL_DIR="$withval"],
+    [OPENCL_LIB_INSTALL_DIR='${libdir}/opencl'])
+AC_SUBST([OPENCL_LIB_INSTALL_DIR])
 
 dnl
 dnl Gallium helper functions
@@ -1884,6 +1938,17 @@ gallium_require_llvm() {
     fi
 }
 
+gallium_require_drm_loader() {
+    if test "x$enable_gallium_loader" = xyes; then
+        PKG_CHECK_MODULES([LIBUDEV], [libudev], [],
+                          AC_MSG_ERROR([Gallium drm loader requrires libudev]))
+        if test "x$have_libdrm" != xyes; then
+            AC_MSG_ERROR([Gallium drm loader requires libdrm >= $LIBDRM_REQUIRED])
+        fi
+        enable_gallium_drm_loader=yes
+    fi
+}
+
 dnl Gallium drivers
 dnl Duplicates in GALLIUM_DRIVERS_DIRS are removed by sorting it after this block
 if test "x$with_gallium_drivers" != x; then
@@ -1911,6 +1976,7 @@ if test "x$with_gallium_drivers" != x; then
             ;;
         xr600)
             PKG_CHECK_MODULES([RADEON], [libdrm_radeon >= $LIBDRM_RADEON_REQUIRED])
+            gallium_require_drm_loader
             GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS r600"
             if test "x$enable_r600_llvm" = xyes; then
                 if test "x$LLVM_VERSION" != "x3.1"; then
@@ -1922,6 +1988,8 @@ if test "x$with_gallium_drivers" != x; then
             gallium_check_st "radeon/drm" "dri-r600" "xorg-r600" "" "xvmc-r600" "vdpau-r600" "va-r600"
             ;;
         xradeonsi)
+            PKG_CHECK_MODULES([RADEON], [libdrm_radeon >= $LIBDRM_RADEON_REQUIRED])
+            gallium_require_drm_loader
             GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS radeonsi"
             if test "x$LLVM_VERSION" != "x3.1"; then
                 AC_MSG_ERROR([LLVM 3.1 is required to build the radeonsi driver.])
@@ -1931,6 +1999,7 @@ if test "x$with_gallium_drivers" != x; then
             ;;
         xnouveau)
             PKG_CHECK_MODULES([NOUVEAU], [libdrm_nouveau >= $LIBDRM_NOUVEAU_REQUIRED])
+            gallium_require_drm_loader
             GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS nouveau nv30 nv50 nvc0"
             gallium_check_st "nouveau/drm" "dri-nouveau" "xorg-nouveau" "" "xvmc-nouveau" "vdpau-nouveau"
             ;;
@@ -1967,6 +2036,25 @@ if test "x$with_gallium_drivers" != x; then
     done
 fi
 
+if test "x$enable_gallium_loader" = xyes; then
+    GALLIUM_WINSYS_DIRS="$GALLIUM_WINSYS_DIRS sw/null"
+    GALLIUM_PIPE_LOADER_DEFINES="-DHAVE_PIPE_LOADER_SW"
+    GALLIUM_PIPE_LOADER_LIBS="\$(TOP)/src/gallium/auxiliary/pipe-loader/libpipe_loader.a"
+    GALLIUM_PIPE_LOADER_LIBS="$GALLIUM_PIPE_LOADER_LIBS \$(TOP)/src/gallium/winsys/sw/null/libws_null.a"
+
+    if test "x$HAVE_WINSYS_XLIB" = xyes; then
+        GALLIUM_PIPE_LOADER_DEFINES="$GALLIUM_PIPE_LOADER_DEFINES -DHAVE_PIPE_LOADER_XLIB"
+        GALLIUM_PIPE_LOADER_LIBS="$GALLIUM_PIPE_LOADER_LIBS \$(TOP)/src/gallium/winsys/sw/xlib/libws_xlib.a"
+    fi
+
+    if test "x$enable_gallium_drm_loader" = xyes; then
+        GALLIUM_PIPE_LOADER_DEFINES="$GALLIUM_PIPE_LOADER_DEFINES -DHAVE_PIPE_LOADER_DRM"
+    fi
+
+    AC_SUBST([GALLIUM_PIPE_LOADER_DEFINES])
+    AC_SUBST([GALLIUM_PIPE_LOADER_LIBS])
+fi
+
 dnl Tell Automake which drivers to build
 for driver in $GALLIUM_DRIVERS_DIRS; do
     case "x$driver" in
@@ -1990,7 +2078,17 @@ AM_CONDITIONAL(HAVE_IDENTITY_GALLIUM, test x$HAVE_IDENTITY_GALLIUM = xyes)
 AM_CONDITIONAL(HAVE_NOOP_GALLIUM, test x$HAVE_NOOP_GALLIUM = xyes)
 AM_CONDITIONAL(NEED_RADEON_GALLIUM, test x$NEED_RADEON_GALLIUM = xyes)
 AM_CONDITIONAL(USE_R600_LLVM_COMPILER, test x$USE_R600_LLVM_COMPILER = xyes)
+AM_CONDITIONAL(HAVE_LOADER_GALLIUM, test x$enable_gallium_loader = xyes)
+AM_CONDITIONAL(HAVE_DRM_LOADER_GALLIUM, test x$enable_gallium_drm_loader = xyes)
 AC_SUBST([GALLIUM_MAKE_DIRS])
+
+AM_CONDITIONAL(HAVE_X11_DRIVER, echo "$DRIVER_DIRS" | grep 'x11' >/dev/null 2>&1)
+AM_CONDITIONAL(HAVE_DRI_DRIVER, echo "$DRIVER_DIRS" | grep 'dri' >/dev/null 2>&1)
+AM_CONDITIONAL(HAVE_OSMESA_DRIVER, echo "$DRIVER_DIRS" | grep 'osmesa' >/dev/null 2>&1)
+
+AM_CONDITIONAL(HAVE_X86_ASM, echo "$ASM_FLAGS" | grep 'X86_ASM' >/dev/null 2>&1)
+AM_CONDITIONAL(HAVE_X86_64_ASM, echo "$ASM_FLAGS" | grep 'X86_64_ASM' >/dev/null 2>&1)
+AM_CONDITIONAL(HAVE_SPARC_ASM, echo "$ASM_FLAGS" | grep 'SPARC_ASM' >/dev/null 2>&1)
 
 dnl prepend CORE_DIRS to SRC_DIRS
 SRC_DIRS="$CORE_DIRS $SRC_DIRS"
@@ -2005,9 +2103,12 @@ CXXFLAGS="$CXXFLAGS $USER_CXXFLAGS"
 
 dnl Substitute the config
 AC_CONFIG_FILES([configs/autoconf
+		src/gallium/auxiliary/pipe-loader/Makefile
+		src/gallium/state_trackers/clover/Makefile
 		src/gallium/drivers/Makefile
 		src/gallium/drivers/r300/Makefile
 		src/gallium/drivers/r600/Makefile
+		src/gallium/targets/opencl/Makefile
 		src/gbm/Makefile
 		src/gbm/main/gbm.pc
 		src/egl/drivers/Makefile
@@ -2023,6 +2124,7 @@ AC_CONFIG_FILES([configs/autoconf
 		src/glx/Makefile
 		src/mapi/shared-glapi/Makefile
 		src/gtest/Makefile
+		src/mesa/libdricore/Makefile
 		src/mesa/drivers/dri/dri.pc
 		src/mesa/drivers/dri/Makefile
 		src/mesa/drivers/dri/common/Makefile

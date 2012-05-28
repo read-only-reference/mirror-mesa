@@ -1,4 +1,4 @@
-//===-- AMDILInstructions.td - TODO: Add brief description -------===//
+//===-- AMDILInstructions.td - AMDIL Instruction definitions --------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -14,17 +14,9 @@ let isReMaterializable = 1, isAsCheapAsAMove = 1 in {
   defm MOVE       : UnaryOpMC<IL_OP_MOV, IL_mov>;
   defm PHIMOVE    : UnaryOpMC<IL_OP_MOV, IL_phimov>;
 }
-defm BINARY_NOT : UnaryOpMC<IL_OP_I_NOT, IL_not>;
-defm BINARY_OR  : BinaryOpMC<IL_OP_I_OR, IL_or>;
-defm BINARY_AND : BinaryOpMC<IL_OP_AND, IL_and>;
-defm BINARY_XOR : BinaryOpMC<IL_OP_I_XOR, IL_xor>;
-defm AND        : BinaryOpMCInt<IL_OP_AND, and>;
 defm CMOV       : BinaryOpMC<IL_OP_CMOV, IL_cmov>;
 defm DIV_INF    : BinaryOpMC<IL_OP_DIV_INF, IL_div_inf>;
 defm SMAX       : BinaryOpMCInt<IL_OP_I_MAX, IL_smax>;
-// This opcode has custom swizzle pattern encoded in Swizzle Encoder for 64bit
-// instructions
-defm CMOVLOG    : TernaryOpMC<IL_OP_CMOV_LOGICAL, IL_cmov_logical>;
 // This opcode has a custom swizzle pattern in the Swizzle Encoder and 
 // should never be selected in ISel. It should only be generated in the
 // I/O expansion code. These are different from the CMOVLOG instruction
@@ -58,17 +50,7 @@ def INTTOANY_i16: OneInOneOut<IL_OP_MOV, (outs GPRI16:$dst), (ins GPRI32:$src0),
 //===---------------------------------------------------------------------===//
 // Signed 32bit integer math instructions start here
 //===---------------------------------------------------------------------===//
-defm NEGATE     : UnaryOpMCi32<IL_OP_I_NEGATE, IL_inegate>;
-defm SMUL       : BinaryOpMCi32<IL_OP_I_MUL, mul>;
-defm SMULHI     : BinaryOpMCi32<IL_OP_I_MUL_HIGH, mulhs>;
-defm SHL        : BinaryOpMCi32Const<IL_OP_I_SHL, shl>;
-defm SHR        : BinaryOpMCi32Const<IL_OP_I_SHR, sra>;
-defm SHLVEC     : BinaryOpMCi32<IL_OP_I_SHL, shl>;
-defm SHRVEC     : BinaryOpMCi32<IL_OP_I_SHR, sra>;
-defm ADD        : BinaryOpMCi32<IL_OP_I_ADD, add>;
-defm CUSTOM_XOR : BinaryOpMCInt<IL_OP_I_XOR, xor>;
 // get rid of the addri via the tablegen instead of custom lowered instruction
-defm CUSTOM_ADD : BinaryOpMCi32<IL_OP_I_ADD, IL_add>;
 defm EADD   : BinaryOpMCi32<IL_OP_I_ADD, adde>;
 def INTTOANY_i32: OneInOneOut<IL_OP_MOV, (outs GPRI32:$dst), (ins GPRI32:$src0),
     !strconcat(IL_OP_MOV.Text, " $dst, $src0"), 
@@ -92,7 +74,6 @@ def ADDri       : TwoInOneOut<IL_OP_I_ADD, (outs GPRI32:$dst),
 defm IFFB_HI    : UnaryOpMCi32<IL_OP_I_FFB_HI, IL_ffb_hi>;
 defm IFFB_LO    : UnaryOpMCi32<IL_OP_I_FFB_LO, IL_ffb_lo>;
 let mayLoad = 0, mayStore = 0 in {
-defm ABS : UnaryIntrinsicInt<IL_OP_ABS, int_AMDIL_abs>;
 defm BITCOUNT : UnaryIntrinsicInt<IL_OP_IBIT_COUNT, int_AMDIL_bit_count_i32>;
 defm FFB_LO : UnaryIntrinsicInt<IL_OP_I_FFB_LO, int_AMDIL_bit_find_first_lo>;
 defm FFB_HI : UnaryIntrinsicInt<IL_OP_I_FFB_HI, int_AMDIL_bit_find_first_hi>;
@@ -106,10 +87,7 @@ defm IMAD24  : TernaryIntrinsicInt<IL_OP_I_MAD24, int_AMDIL_mad24_i32>;
 }
 defm CARRY  : BinaryIntrinsicInt<IL_OP_I_CARRY, int_AMDIL_carry_i32>;
 defm BORROW  : BinaryIntrinsicInt<IL_OP_I_BORROW, int_AMDIL_borrow_i32>;
-defm IMIN  : BinaryIntrinsicInt<IL_OP_I_MIN, int_AMDIL_min_i32>;
 defm IMAX  : BinaryIntrinsicInt<IL_OP_I_MAX, int_AMDIL_max_i32>;
-defm CMOV_LOG  : TernaryIntrinsicInt<IL_OP_CMOV_LOGICAL,
-          int_AMDIL_cmov_logical>;
 defm IBIT_EXTRACT : TernaryIntrinsicInt<IL_OP_IBIT_EXTRACT,
           int_AMDIL_bit_extract_i32>;
 defm IMAD  : TernaryIntrinsicInt<IL_OP_I_MAD, int_AMDIL_mad_i32>;
@@ -132,9 +110,6 @@ def FTOV4U8_i32 : OneInOneOut<IL_OP_F2U4, (outs GPRI32:$dst),
 // Unsigned 32bit integer math instructions start here
 //===---------------------------------------------------------------------===//
 defm UMUL       : BinaryOpMCi32<IL_OP_U_MUL, IL_umul>;
-defm UMULHI     : BinaryOpMCi32<IL_OP_U_MUL_HIGH, mulhu>;
-defm USHR       : BinaryOpMCi32Const<IL_OP_U_SHR, srl>;
-defm USHRVEC    : BinaryOpMCi32<IL_OP_U_SHR, srl>;
 defm UDIV       : BinaryOpMCi32<IL_OP_U_DIV, udiv>;
 defm NATIVE_UDIV  : BinaryIntrinsicInt<IL_OP_U_DIV, int_AMDIL_udiv>;
 let mayLoad=0, mayStore=0 in {
@@ -143,7 +118,6 @@ defm UBIT_REVERSE : UnaryIntrinsicInt<IL_OP_UBIT_REVERSE,
 defm UMULHI_INT : BinaryIntrinsicInt<IL_OP_U_MUL_HIGH, int_AMDIL_mulhi_u32>;
 defm UMULHI24   : BinaryIntrinsicInt<IL_OP_U_MULHI24, int_AMDIL_mulhi24_u32>;
 defm UMUL24     : BinaryIntrinsicInt<IL_OP_U_MUL24, int_AMDIL_mul24_u32>;
-defm UMIN  : BinaryIntrinsicInt<IL_OP_U_MIN, int_AMDIL_min_u32>;
 defm UMAX  : BinaryIntrinsicInt<IL_OP_U_MAX, int_AMDIL_max_u32>;
 defm UBIT_EXTRACT : TernaryIntrinsicInt<IL_OP_UBIT_EXTRACT,
           int_AMDIL_bit_extract_u32>;
@@ -175,8 +149,6 @@ def LADD        : TwoInOneOut<IL_OP_I64_ADD, (outs GPRI64:$dst),
                   (ins GPRI64:$src1, GPRI64:$src2),
                   !strconcat(IL_OP_I64_ADD.Text, " $dst, $src1, $src2"),
                 [(set GPRI64:$dst, (IL_add GPRI64:$src1, GPRI64:$src2))]>;
-defm IMIN64 : BinaryIntrinsicLong<IL_OP_I64_MIN, int_AMDIL_min_i32>;
-defm UMIN64 : BinaryIntrinsicLong<IL_OP_U64_MIN, int_AMDIL_min_u32>;
 defm IMAX64 : BinaryIntrinsicLong<IL_OP_I64_MAX, int_AMDIL_max_i32>;
 defm UMAX64 : BinaryIntrinsicLong<IL_OP_U64_MAX, int_AMDIL_max_u32>;
 }
@@ -219,34 +191,20 @@ def LUSHR        : TwoInOneOut<IL_OP_U64_SHR, (outs GPRI64:$dst),
 //===---------------------------------------------------------------------===//
 // Generic Float Instructions
 //===---------------------------------------------------------------------===//
-let hasIEEEFlag = 1 in {
-defm MUL_IEEE  : BinaryOpMCFloat<IL_OP_MUL_IEEE, IL_OP_D_MUL, fmul>;
-}
-defm ADD  : BinaryOpMCFloat<IL_OP_ADD, IL_OP_D_ADD, fadd>;
 //===---------------------------------------------------------------------===//
 // float math instructions start here
 //===---------------------------------------------------------------------===//
 let mayLoad=0, mayStore=0 in {
-defm ABS : UnaryIntrinsicFloat<IL_OP_ABS, int_AMDIL_fabs>;
-defm FRAC : UnaryIntrinsicFloat<IL_OP_FRC, int_AMDIL_fraction>;
 defm PIREDUCE : UnaryIntrinsicFloat<IL_OP_PI_REDUCE, int_AMDIL_pireduce>;
-defm ROUND_NEAREST : UnaryIntrinsicFloat<IL_OP_ROUND_NEAR,
-          int_AMDIL_round_nearest>;
 defm ROUND_NEGINF : UnaryIntrinsicFloat<IL_OP_ROUND_NEG_INF,
           int_AMDIL_round_neginf>;
-defm ROUND_POSINF : UnaryIntrinsicFloat<IL_OP_ROUND_POS_INF,
-          int_AMDIL_round_posinf>;
 defm ROUND_ZERO : UnaryIntrinsicFloat<IL_OP_ROUND_ZERO,
           int_AMDIL_round_zero>;
 defm ACOS : UnaryIntrinsicFloatScalar<IL_OP_ACOS, int_AMDIL_acos>;
 defm ATAN : UnaryIntrinsicFloatScalar<IL_OP_ATAN, int_AMDIL_atan>;
 defm ASIN : UnaryIntrinsicFloatScalar<IL_OP_ASIN, int_AMDIL_asin>;
 defm TAN : UnaryIntrinsicFloatScalar<IL_OP_TAN, int_AMDIL_tan>;
-defm SIN : UnaryIntrinsicFloatScalar<IL_OP_SIN, int_AMDIL_sin>;
-defm COS : UnaryIntrinsicFloatScalar<IL_OP_COS, int_AMDIL_cos>;
 defm SQRT : UnaryIntrinsicFloatScalar<IL_OP_SQRT, int_AMDIL_sqrt>;
-defm EXP : UnaryIntrinsicFloatScalar<IL_OP_EXP, int_AMDIL_exp>;
-defm EXPVEC : UnaryIntrinsicFloat<IL_OP_EXP_VEC, int_AMDIL_exp_vec>;
 defm SQRTVEC : UnaryIntrinsicFloat<IL_OP_SQRT_VEC, int_AMDIL_sqrt_vec>;
 defm COSVEC : UnaryIntrinsicFloat<IL_OP_COS_VEC, int_AMDIL_cos_vec>;
 defm SINVEC : UnaryIntrinsicFloat<IL_OP_SIN_VEC, int_AMDIL_sin_vec>;
@@ -260,36 +218,25 @@ defm POW : BinaryIntrinsicFloat<IL_OP_POW, int_AMDIL_pow>;
 
 let hasIEEEFlag = 1 in {
   let mayLoad = 0, mayStore=0 in {
-defm MIN  : BinaryIntrinsicFloat<IL_OP_MIN, int_AMDIL_min>;
-defm MAX  : BinaryIntrinsicFloat<IL_OP_MAX, int_AMDIL_max>;
-defm MAD  : TernaryIntrinsicFloat<IL_OP_MAD, int_AMDIL_mad>;
   }
 defm MOD  : BinaryOpMCf32<IL_OP_MOD, frem>;
 }
 let hasZeroOpFlag = 1 in {
   let mayLoad = 0, mayStore=0 in {
 defm LN  : UnaryIntrinsicFloatScalar<IL_OP_LN, int_AMDIL_ln>;
-defm LOG : UnaryIntrinsicFloatScalar<IL_OP_LOG, int_AMDIL_log>;
 defm RSQ : UnaryIntrinsicFloatScalar<IL_OP_RSQ, int_AMDIL_rsq>;
 defm DIV  : BinaryIntrinsicFloat<IL_OP_DIV, int_AMDIL_div>;
   }
 }
   let mayLoad = 0, mayStore=0 in {
-defm CLAMP : TernaryIntrinsicFloat<IL_OP_CLAMP, int_AMDIL_clamp>;
 defm FMA  : TernaryIntrinsicFloat<IL_OP_FMA, int_AMDIL_fma>;
 defm LERP  : TernaryIntrinsicFloat<IL_OP_LERP, int_AMDIL_lerp>;
   }
 defm SUB  : BinaryOpMCf32<IL_OP_SUB, fsub>;
-defm FABS  : UnaryOpMCf32<IL_OP_ABS, fabs>;
-defm FMAD  : TernaryOpMCf32<IL_OP_MAD, IL_mad>;
 defm NEAR : UnaryOpMCf32<IL_OP_ROUND_NEAR, fnearbyint>;
 defm RND_Z : UnaryOpMCf32<IL_OP_ROUND_ZERO, ftrunc>;
 
 // This opcode has custom swizzle pattern encoded in Swizzle Encoder
-def NEG_f32         : OneInOneOut<IL_OP_MOV, (outs GPRF32:$dst),
-  (ins GPRF32:$src0),
-    !strconcat(IL_OP_MOV.Text, " $dst, $src0"),
-    [(set GPRF32:$dst, (fneg GPRF32:$src0))]>;
 def INTTOANY_f32    : OneInOneOut<IL_OP_MOV, (outs GPRF32:$dst),
   (ins GPRI32:$src0),
     !strconcat(IL_OP_MOV.Text, " $dst, $src0"),
@@ -380,7 +327,6 @@ def NEG_v2f64       : OneInOneOut<IL_OP_MOV, (outs GPRV2F64:$dst),
     !strconcat(IL_OP_MOV.Text, " $dst, $src0"),
     [(set GPRV2F64:$dst, (fneg GPRV2F64:$src0))]>;
   let mayLoad = 0, mayStore=0 in {
-defm MIN  : BinaryIntrinsicDouble<IL_OP_D_MIN, int_AMDIL_min>;
 defm MAX  : BinaryIntrinsicDouble<IL_OP_D_MAX, int_AMDIL_max>;
 defm DIV  : BinaryIntrinsicDouble<IL_OP_D_DIV, int_AMDIL_div>;
 defm MAD  : TernaryIntrinsicDouble<IL_OP_D_MAD, int_AMDIL_mad>;
@@ -463,12 +409,6 @@ let Predicates = [HasSW64Bit] in {
 def MACRO__shr_i64   : BinaryMacro<GPRI64, GPRI64, GPRI32, srl>;
 def MACRO__shl_i64   : BinaryMacro<GPRI64, GPRI64, GPRI32, shl>;
 def MACRO__sra_i64   : BinaryMacro<GPRI64, GPRI64, GPRI32, sra>;
-}
-//===---------------------------------------------------------------------===//
-// Comparison Instructions
-//===---------------------------------------------------------------------===//
-let usesCustomInserter = 1 in {
-    defm CMP : Compare<"Pseudo comparison instr">;
 }
 //===---------------------------------------------------------------------===//
 // 32-bit floating point operations
@@ -704,14 +644,6 @@ def ULLT        : TwoInOneOut<IL_OP_U64_LT, (outs GPRI64:$dst),
 def FTOD        : UnaryOp<IL_OP_F_2_D,         fextend,     GPRF64, GPRF32>;
 // f64 ==> f32
 def DTOF        : UnaryOp<IL_OP_D_2_F,         IL_d2f,     GPRF32, GPRF64>;
-// f32 ==> i32 signed
-def FTOI        : UnaryOp<IL_OP_FTOI,          fp_to_sint, GPRI32, GPRF32>;
-def FTOI_v2i32  : UnaryOp<IL_OP_FTOI,          fp_to_sint, GPRV2I32, GPRV2F32>;
-def FTOI_v4i32  : UnaryOp<IL_OP_FTOI,          fp_to_sint, GPRV4I32, GPRV4F32>;
-// i32 ==> f32 signed
-def ITOF        : UnaryOp<IL_OP_ITOF,          sint_to_fp, GPRF32, GPRI32>;
-def ITOF_v2f32  : UnaryOp<IL_OP_ITOF,          sint_to_fp, GPRV2F32, GPRV2I32>;
-def ITOF_v4f32  : UnaryOp<IL_OP_ITOF,          sint_to_fp, GPRV4F32, GPRV4I32>;
 // f32 ==> i32 unsigned
 def FTOU        : UnaryOp<IL_OP_FTOU,          fp_to_uint, GPRI32, GPRF32>;
 def FTOU_v2i32  : UnaryOp<IL_OP_FTOU,          fp_to_uint, GPRV2I32, GPRV2F32>;

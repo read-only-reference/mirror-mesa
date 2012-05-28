@@ -1,4 +1,4 @@
-//===-- R600InstrInfo.cpp - TODO: Add brief description -------===//
+//===-- R600InstrInfo.cpp - R600 Instruction Information ------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO: Add full description
+// R600 Implementation of TargetInstrInfo.
 //
 //===----------------------------------------------------------------------===//
 
@@ -64,17 +64,31 @@ R600InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
 unsigned R600InstrInfo::getISAOpcode(unsigned opcode) const
 {
   switch (opcode) {
-    default: return AMDGPUInstrInfo::getISAOpcode(opcode);
-    case AMDIL::CUSTOM_ADD_i32:
-      return AMDIL::ADD_INT;
-    case AMDIL::CUSTOM_XOR_i32:
-      return AMDIL::XOR_INT;
+    default: return opcode;
+    case AMDIL::IEQ:
+      return AMDIL::SETE_INT;
+    case AMDIL::INE:
+      return AMDIL::SETNE_INT;
+    case AMDIL::IGE:
+      return AMDIL::SETGE_INT;
     case AMDIL::MOVE_f32:
     case AMDIL::MOVE_i32:
       return AMDIL::MOV;
-    case AMDIL::SHR_i32:
-      return getLSHRop();
+    case AMDIL::UGE:
+      return AMDIL::SETGE_UINT;
+    case AMDIL::UGT:
+      return AMDIL::SETGT_UINT;
   }
+}
+
+unsigned R600InstrInfo::getASHRop() const
+{
+	unsigned gen = TM.getSubtarget<AMDILSubtarget>().device()->getGeneration();
+	if (gen < AMDILDeviceInfo::HD5XXX) {
+		return AMDIL::ASHR_r600;
+	} else {
+		return AMDIL::ASHR_eg;
+	}
 }
 
 unsigned R600InstrInfo::getLSHRop() const
@@ -84,40 +98,5 @@ unsigned R600InstrInfo::getLSHRop() const
     return AMDIL::LSHR_r600;
   } else {
     return AMDIL::LSHR_eg;
-  }
-}
-
-unsigned R600InstrInfo::getMULHI_UINT() const
-{
-  unsigned gen = TM.getSubtarget<AMDILSubtarget>().device()->getGeneration();
-
-  if (gen < AMDILDeviceInfo::HD5XXX) {
-    return AMDIL::MULHI_UINT_r600;
-  } else {
-    return AMDIL::MULHI_UINT_eg;
-  }
-}
-
-unsigned R600InstrInfo::getMULLO_UINT() const
-{
-  unsigned gen = TM.getSubtarget<AMDILSubtarget>().device()->getGeneration();
-
-  if (gen < AMDILDeviceInfo::HD5XXX) {
-    return AMDIL::MULLO_UINT_r600;
-  } else {
-    return AMDIL::MULLO_UINT_eg;
-  }
-}
-
-unsigned R600InstrInfo::getRECIP_UINT() const
-{
-  const AMDILDevice * dev = TM.getSubtarget<AMDILSubtarget>().device();
-
-  if (dev->getGeneration() < AMDILDeviceInfo::HD5XXX) {
-    return AMDIL::RECIP_UINT_r600;
-  } else if (dev->getDeviceFlag() != OCL_DEVICE_CAYMAN) {
-    return AMDIL::RECIP_UINT_eg;
-  } else {
-    return AMDIL::RECIP_UINT_cm;
   }
 }

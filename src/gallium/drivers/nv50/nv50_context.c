@@ -86,8 +86,9 @@ nv50_context_unreference_resources(struct nv50_context *nv50)
       for (i = 0; i < nv50->num_textures[s]; ++i)
          pipe_sampler_view_reference(&nv50->textures[s][i], NULL);
 
-      for (i = 0; i < 16; ++i)
-         pipe_resource_reference(&nv50->constbuf[s][i], NULL);
+      for (i = 0; i < NV50_MAX_PIPE_CONSTBUFS; ++i)
+         if (!nv50->constbuf[s][i].user)
+            pipe_resource_reference(&nv50->constbuf[s][i].u.buf, NULL);
    }
 }
 
@@ -139,6 +140,7 @@ nv50_create(struct pipe_screen *pscreen, void *priv)
    nv50->base.screen    = &screen->base;
    nv50->base.copy_data = nv50_m2mf_copy_linear;
    nv50->base.push_data = nv50_sifc_linear_u8;
+   nv50->base.push_cb   = nv50_cb_push;
 
    nv50->screen = screen;
    pipe->screen = pscreen;

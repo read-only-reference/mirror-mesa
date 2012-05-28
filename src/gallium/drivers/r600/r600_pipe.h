@@ -119,15 +119,10 @@ struct r600_screen {
 	enum chip_class			chip_class;
 	struct radeon_info		info;
 	struct r600_tiling_info		tiling_info;
-	struct util_slab_mempool	pool_buffers;
 	struct r600_pipe_fences		fences;
 
-	unsigned			num_contexts;
 	bool				use_surface_alloc;
 	int 				glsl_feature_level;
-
-	/* for thread-safe write accessing to num_contexts */
-	pipe_mutex			mutex_num_contexts;
 };
 
 struct r600_pipe_sampler_view {
@@ -161,6 +156,7 @@ struct r600_pipe_dsa {
 	ubyte				valuemask[2];
 	ubyte				writemask[2];
 	bool				is_flush;
+	unsigned                        sx_alpha_test_control;
 };
 
 struct r600_vertex_element
@@ -250,6 +246,7 @@ struct r600_context {
 	struct pipe_framebuffer_state	framebuffer;
 	unsigned			cb_target_mask;
 	unsigned			fb_cb_shader_mask;
+	unsigned			sx_alpha_test_control;
 	unsigned			cb_shader_mask;
 	unsigned			cb_color_control;
 	unsigned			pa_sc_line_stipple;
@@ -343,7 +340,6 @@ struct r600_context {
 	void			*dummy_pixel_shader;
 
 	boolean			dual_src_blend;
-	unsigned color0_format;
 
 	/* Vertex and index buffers. */
 	bool			vertex_buffers_dirty;
@@ -399,9 +395,6 @@ bool r600_init_resource(struct r600_screen *rscreen,
 			unsigned bind, unsigned usage);
 struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 					 const struct pipe_resource *templ);
-struct pipe_resource *r600_user_buffer_create(struct pipe_screen *screen,
-					      void *ptr, unsigned bytes,
-					      unsigned bind);
 
 /* r600_pipe.c */
 void r600_flush(struct pipe_context *ctx, struct pipe_fence_handle **fence,

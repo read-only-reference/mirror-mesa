@@ -51,11 +51,6 @@
  */
 #define BRILINEAR_FACTOR 2
 
-static LLVMValueRef
-lp_build_minify(struct lp_build_context *bld,
-                LLVMValueRef base_size,
-                LLVMValueRef level);
-
 /**
  * Does the given texture wrap mode allow sampling the texture border color?
  * XXX maybe move this into gallium util code.
@@ -349,7 +344,7 @@ lp_build_brilinear_lod(struct lp_build_context *bld,
  * Combined log2 and brilinear lod computation.
  *
  * It's in all identical to calling lp_build_fast_log2() and
- * lp_build_brilinear_lod() above, but by combining we can compute the interger
+ * lp_build_brilinear_lod() above, but by combining we can compute the integer
  * and fractional part independently.
  */
 static void
@@ -670,7 +665,7 @@ lp_build_get_const_mipmap_level(struct lp_build_sample_context *bld,
  * Codegen equivalent for u_minify().
  * Return max(1, base_size >> level);
  */
-static LLVMValueRef
+LLVMValueRef
 lp_build_minify(struct lp_build_context *bld,
                 LLVMValueRef base_size,
                 LLVMValueRef level)

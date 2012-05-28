@@ -72,7 +72,6 @@ void _vbo_InvalidateState( struct gl_context *ctx, GLuint new_state );
 
 
 typedef void (*vbo_draw_func)( struct gl_context *ctx,
-			       const struct gl_client_array **arrays,
 			       const struct _mesa_prim *prims,
 			       GLuint nr_prims,
 			       const struct _mesa_index_buffer *ib,
@@ -157,6 +156,12 @@ void vbo_bind_arrays(struct gl_context *ctx);
 
 size_t
 count_tessellated_primitives(const struct _mesa_prim *prim);
+
+void
+vbo_sw_primitive_restart(struct gl_context *ctx,
+                         const struct _mesa_prim *prim,
+                         GLuint nr_prims,
+                         const struct _mesa_index_buffer *ib);
 
 void GLAPIENTRY
 _es_Color4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a);

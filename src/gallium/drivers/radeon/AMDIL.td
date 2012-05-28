@@ -1,4 +1,4 @@
-//===-- AMDIL.td - TODO: Add brief description -------===//
+//===-- AMDIL.td - AMDIL Tablegen files --*- tablegen -*-------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -14,6 +14,7 @@ include "AMDILVersion.td"
 include "R600Schedule.td"
 include "SISchedule.td"
 include "Processors.td"
+include "AMDGPUInstrInfo.td"
 include "AMDGPUIntrinsics.td"
 include "AMDGPURegisterInfo.td"
 include "AMDGPUInstructions.td"

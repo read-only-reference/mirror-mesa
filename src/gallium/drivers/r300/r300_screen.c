@@ -103,9 +103,6 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
         case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
         case PIPE_CAP_VERTEX_COLOR_CLAMPED:
-        case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
-        case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
-        case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
         case PIPE_CAP_USER_INDEX_BUFFERS:
         case PIPE_CAP_USER_CONSTANT_BUFFERS:
             return 1;
@@ -149,12 +146,19 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
         case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
         case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
-        case PIPE_CAP_USER_VERTEX_BUFFERS:
+        case PIPE_CAP_COMPUTE:
             return 0;
 
         /* SWTCL-only features. */
         case PIPE_CAP_PRIMITIVE_RESTART:
+        case PIPE_CAP_USER_VERTEX_BUFFERS:
             return !r300screen->caps.has_tcl;
+
+        /* HWTCL-only features / limitations. */
+        case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
+        case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
+        case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
+            return r300screen->caps.has_tcl;
 
         /* Texturing. */
         case PIPE_CAP_MAX_COMBINED_SAMPLERS:
@@ -220,6 +224,8 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
         case PIPE_SHADER_CAP_SUBROUTINES:
         case PIPE_SHADER_CAP_INTEGERS:
             return 0;
+        case PIPE_SHADER_CAP_PREFERRED_IR:
+            return PIPE_SHADER_IR_TGSI;
         }
         break;
     case PIPE_SHADER_VERTEX:
@@ -266,6 +272,8 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
         case PIPE_SHADER_CAP_INTEGERS:
         case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
             return 0;
+        case PIPE_SHADER_CAP_PREFERRED_IR:
+            return PIPE_SHADER_IR_TGSI;
         }
         break;
     }
@@ -426,11 +434,19 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
     }
 
     /* Check vertex buffer format support. */
-    if (usage & PIPE_BIND_VERTEX_BUFFER &&
-        /* Half float is supported on >= R400. */
-        (is_r400 || is_r500 || !is_half_float) &&
-        r300_translate_vertex_data_type(format) != R300_INVALID_FORMAT) {
-        retval |= PIPE_BIND_VERTEX_BUFFER;
+    if (usage & PIPE_BIND_VERTEX_BUFFER) {
+        if (r300_screen(screen)->caps.has_tcl) {
+            /* Half float is supported on >= R400. */
+            if ((is_r400 || is_r500 || !is_half_float) &&
+                r300_translate_vertex_data_type(format) != R300_INVALID_FORMAT) {
+                retval |= PIPE_BIND_VERTEX_BUFFER;
+            }
+        } else {
+            /* SW TCL */
+            if (!util_format_is_pure_integer(format)) {
+                retval |= PIPE_BIND_VERTEX_BUFFER;
+            }
+        }
     }
 
     /* Transfers are always supported. */
@@ -446,9 +462,6 @@ static void r300_destroy_screen(struct pipe_screen* pscreen)
 {
     struct r300_screen* r300screen = r300_screen(pscreen);
     struct radeon_winsys *rws = radeon_winsys(pscreen);
-
-    util_slab_destroy(&r300screen->pool_buffers);
-    pipe_mutex_destroy(r300screen->num_contexts_mutex);
 
     if (rws)
       rws->destroy(rws);
@@ -521,12 +534,6 @@ struct pipe_screen* r300_screen_create(struct radeon_winsys *rws)
 
     if (r300screen->info.drm_minor < 8)
         r300screen->caps.has_us_format = FALSE;
-
-    pipe_mutex_init(r300screen->num_contexts_mutex);
-
-    util_slab_create(&r300screen->pool_buffers,
-                     sizeof(struct r300_resource), 64,
-                     UTIL_SLAB_SINGLETHREADED);
 
     r300screen->rws = rws;
     r300screen->screen.destroy = r300_destroy_screen;

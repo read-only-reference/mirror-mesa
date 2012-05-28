@@ -632,6 +632,20 @@ static unsigned eg_tile_split(unsigned tile_split)
     return tile_split;
 }
 
+static unsigned eg_tile_split_rev(unsigned eg_tile_split)
+{
+    switch (eg_tile_split) {
+    case 64:    return 0;
+    case 128:   return 1;
+    case 256:   return 2;
+    case 512:   return 3;
+    default:
+    case 1024:  return 4;
+    case 2048:  return 5;
+    case 4096:  return 6;
+    }
+}
+
 static void radeon_bo_get_tiling(struct pb_buffer *_buf,
                                  enum radeon_bo_layout *microtiled,
                                  enum radeon_bo_layout *macrotiled,
@@ -673,6 +687,10 @@ static void radeon_bo_set_tiling(struct pb_buffer *_buf,
                                  struct radeon_winsys_cs *rcs,
                                  enum radeon_bo_layout microtiled,
                                  enum radeon_bo_layout macrotiled,
+                                 unsigned bankw, unsigned bankh,
+                                 unsigned tile_split,
+                                 unsigned stencil_tile_split,
+                                 unsigned mtilea,
                                  uint32_t pitch)
 {
     struct radeon_bo *bo = get_radeon_bo(_buf);
@@ -698,6 +716,21 @@ static void radeon_bo_set_tiling(struct pb_buffer *_buf,
 
     if (macrotiled == RADEON_LAYOUT_TILED)
         args.tiling_flags |= RADEON_BO_FLAGS_MACRO_TILE;
+
+    args.tiling_flags |= (bankw & RADEON_TILING_EG_BANKW_MASK) <<
+        RADEON_TILING_EG_BANKW_SHIFT;
+    args.tiling_flags |= (bankh & RADEON_TILING_EG_BANKH_MASK) <<
+        RADEON_TILING_EG_BANKH_SHIFT;
+    if (tile_split) {
+	args.tiling_flags |= (eg_tile_split_rev(tile_split) &
+			      RADEON_TILING_EG_TILE_SPLIT_MASK) <<
+	    RADEON_TILING_EG_TILE_SPLIT_SHIFT;
+    }
+    args.tiling_flags |= (stencil_tile_split &
+			  RADEON_TILING_EG_STENCIL_TILE_SPLIT_MASK) <<
+        RADEON_TILING_EG_STENCIL_TILE_SPLIT_SHIFT;
+    args.tiling_flags |= (mtilea & RADEON_TILING_EG_MACRO_TILE_ASPECT_MASK) <<
+        RADEON_TILING_EG_MACRO_TILE_ASPECT_SHIFT;
 
     args.handle = bo->handle;
     args.pitch = pitch;

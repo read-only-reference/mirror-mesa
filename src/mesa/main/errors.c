@@ -802,21 +802,20 @@ output_if_debug(const char *prefixString, const char *outputString,
 {
    static int debug = -1;
 
-   /* Check the MESA_DEBUG environment variable if it hasn't
-    * been checked yet.  We only have to check it once...
+   /* Init the local 'debug' var once.
+    * Note: the _mesa_init_debug() function should have been called
+    * by now so MESA_DEBUG_FLAGS will be initialized.
     */
    if (debug == -1) {
-      char *env = _mesa_getenv("MESA_DEBUG");
-
-      /* In a debug build, we print warning messages *unless*
-       * MESA_DEBUG is 0.  In a non-debug build, we don't
-       * print warning messages *unless* MESA_DEBUG is
-       * set *to any value*.
-       */
 #ifdef DEBUG
-      debug = (env != NULL && atoi(env) == 0) ? 0 : 1;
+      /* in debug builds, print messages unless MESA_DEBUG="silent" */
+      if (MESA_DEBUG_FLAGS & DEBUG_SILENT)
+         debug = 0;
+      else
+         debug = 1;
 #else
-      debug = (env != NULL) ? 1 : 0;
+      /* in release builds, be silent unless MESA_DEBUG is set */
+      debug = _mesa_getenv("MESA_DEBUG") != NULL;
 #endif
    }
 
@@ -1060,6 +1059,49 @@ _mesa_debug( const struct gl_context *ctx, const char *fmtString, ... )
 #endif /* DEBUG */
    (void) ctx;
    (void) fmtString;
+}
+
+
+/**
+ * Report debug information from the shader compiler via GL_ARB_debug_output.
+ *
+ * \param ctx GL context.
+ * \param type The namespace to which this message belongs.
+ * \param id The message ID within the given namespace.
+ * \param msg The message to output. Need not be null-terminated.
+ * \param len The length of 'msg'. If negative, 'msg' must be null-terminated.
+ */
+void
+_mesa_shader_debug( struct gl_context *ctx, GLenum type, GLuint id,
+                    const char *msg, int len )
+{
+   GLenum source = GL_DEBUG_SOURCE_SHADER_COMPILER_ARB,
+          severity;
+
+   switch (type) {
+   case GL_DEBUG_TYPE_ERROR_ARB:
+      assert(id < SHADER_ERROR_COUNT);
+      severity = GL_DEBUG_SEVERITY_HIGH_ARB;
+      break;
+   case GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR_ARB:
+   case GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR_ARB:
+   case GL_DEBUG_TYPE_PORTABILITY_ARB:
+   case GL_DEBUG_TYPE_PERFORMANCE_ARB:
+   case GL_DEBUG_TYPE_OTHER_ARB:
+      assert(0 && "other categories not implemented yet");
+   default:
+      _mesa_problem(ctx, "bad enum in _mesa_shader_debug()");
+      return;
+   }
+
+   if (len < 0)
+      len = strlen(msg);
+
+   /* Truncate the message if necessary. */
+   if (len >= MAX_DEBUG_MESSAGE_LENGTH)
+      len = MAX_DEBUG_MESSAGE_LENGTH - 1;
+
+   _mesa_log_msg(ctx, source, type, id, severity, len, msg);
 }
 
 /*@}*/

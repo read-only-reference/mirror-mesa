@@ -232,28 +232,24 @@ draw_print_arrays(struct draw_context *draw, uint prim, int start, uint count)
       uint j;
 
       if (draw->pt.user.eltSize) {
-         const char *elts;
-
          /* indexed arrays */
-         elts = (const char *) draw->pt.user.elts;
-         elts += draw->pt.index_buffer.offset;
 
          switch (draw->pt.user.eltSize) {
          case 1:
             {
-               const ubyte *elem = (const ubyte *) elts;
+               const ubyte *elem = (const ubyte *) draw->pt.user.elts;
                ii = elem[start + i];
             }
             break;
          case 2:
             {
-               const ushort *elem = (const ushort *) elts;
+               const ushort *elem = (const ushort *) draw->pt.user.elts;
                ii = elem[start + i];
             }
             break;
          case 4:
             {
-               const uint *elem = (const uint *) elts;
+               const uint *elem = (const uint *) draw->pt.user.elts;
                ii = elem[start + i];
             }
             break;
@@ -466,9 +462,6 @@ draw_vbo(struct draw_context *draw,
    if (info->indexed)
       assert(draw->pt.user.elts);
 
-   draw->pt.user.eltSize =
-      (info->indexed) ? draw->pt.index_buffer.index_size : 0;
-
    draw->pt.user.eltBias = info->index_bias;
    draw->pt.user.min_index = info->min_index;
    draw->pt.user.max_index = info->max_index;
@@ -505,7 +498,6 @@ draw_vbo(struct draw_context *draw,
       draw_print_arrays(draw, info->mode, info->start, MIN2(info->count, 20));
 
    index_limit = util_draw_max_index(draw->pt.vertex_buffer,
-                                     draw->pt.nr_vertex_buffers,
                                      draw->pt.vertex_element,
                                      draw->pt.nr_vertex_elements,
                                      info);

@@ -43,7 +43,7 @@ static void r600_buffer_destroy(struct pipe_screen *screen,
 	struct r600_resource *rbuffer = r600_resource(buf);
 
 	pb_reference(&rbuffer->buf, NULL);
-	util_slab_free(&rscreen->pool_buffers, rbuffer);
+	FREE(rbuffer);
 }
 
 static struct pipe_transfer *r600_get_transfer(struct pipe_context *ctx,
@@ -164,7 +164,7 @@ struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 	/* XXX We probably want a different alignment for buffers and textures. */
 	unsigned alignment = 4096;
 
-	rbuffer = util_slab_alloc(&rscreen->pool_buffers);
+	rbuffer = MALLOC_STRUCT(r600_resource);
 
 	rbuffer->b.b = *templ;
 	pipe_reference_init(&rbuffer->b.b.reference, 1);
@@ -172,34 +172,9 @@ struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 	rbuffer->b.vtbl = &r600_buffer_vtbl;
 
 	if (!r600_init_resource(rscreen, rbuffer, templ->width0, alignment, templ->bind, templ->usage)) {
-		util_slab_free(&rscreen->pool_buffers, rbuffer);
+		FREE(rbuffer);
 		return NULL;
 	}
-	return &rbuffer->b.b;
-}
-
-struct pipe_resource *r600_user_buffer_create(struct pipe_screen *screen,
-					      void *ptr, unsigned bytes,
-					      unsigned bind)
-{
-	struct r600_screen *rscreen = (struct r600_screen*)screen;
-	struct r600_resource *rbuffer;
-
-	rbuffer = util_slab_alloc(&rscreen->pool_buffers);
-
-	pipe_reference_init(&rbuffer->b.b.reference, 1);
-	rbuffer->b.vtbl = &r600_buffer_vtbl;
-	rbuffer->b.b.screen = screen;
-	rbuffer->b.b.target = PIPE_BUFFER;
-	rbuffer->b.b.format = PIPE_FORMAT_R8_UNORM;
-	rbuffer->b.b.usage = PIPE_USAGE_IMMUTABLE;
-	rbuffer->b.b.bind = bind;
-	rbuffer->b.b.width0 = bytes;
-	rbuffer->b.b.height0 = 1;
-	rbuffer->b.b.depth0 = 1;
-	rbuffer->b.b.array_size = 1;
-	rbuffer->b.b.flags = 0;
-	rbuffer->buf = NULL;
 	return &rbuffer->b.b;
 }
 

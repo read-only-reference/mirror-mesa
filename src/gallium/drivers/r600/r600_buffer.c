@@ -26,15 +26,15 @@
  */
 #include "r600_pipe.h"
 #include "util/u_upload_mgr.h"
+#include "util/u_memory.h"
 
 static void r600_buffer_destroy(struct pipe_screen *screen,
 				struct pipe_resource *buf)
 {
-	struct r600_screen *rscreen = (struct r600_screen*)screen;
 	struct r600_resource *rbuffer = r600_resource(buf);
 
 	pb_reference(&rbuffer->buf, NULL);
-	util_slab_free(&rscreen->pool_buffers, rbuffer);
+	FREE(rbuffer);
 }
 
 static struct pipe_transfer *r600_get_transfer(struct pipe_context *ctx,
@@ -86,14 +86,13 @@ static void *r600_buffer_transfer_map(struct pipe_context *pipe,
 	struct r600_context *rctx = (struct r600_context*)pipe;
 	uint8_t *data;
 
-	if (transfer->usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE) {
-		/* When mapping for read, we only need to check if the GPU is writing to it. */
-		enum radeon_bo_usage rusage = transfer->usage & PIPE_TRANSFER_WRITE ?
-			RADEON_USAGE_READWRITE : RADEON_USAGE_WRITE;
+	if (transfer->usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE &&
+	    !(transfer->usage & PIPE_TRANSFER_UNSYNCHRONIZED)) {
+		assert(transfer->usage & PIPE_TRANSFER_WRITE);
 
 		/* Check if mapping this buffer would cause waiting for the GPU. */
-		if (rctx->ws->cs_is_buffer_referenced(rctx->cs, rbuffer->cs_buf, rusage) ||
-		    rctx->ws->buffer_is_busy(rbuffer->buf, rusage)) {
+		if (rctx->ws->cs_is_buffer_referenced(rctx->cs, rbuffer->cs_buf, RADEON_USAGE_READWRITE) ||
+		    rctx->ws->buffer_is_busy(rbuffer->buf, RADEON_USAGE_READWRITE)) {
 			unsigned i;
 
 			/* Discard the buffer. */
@@ -208,7 +207,7 @@ struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 	/* XXX We probably want a different alignment for buffers and textures. */
 	unsigned alignment = 4096;
 
-	rbuffer = util_slab_alloc(&rscreen->pool_buffers);
+	rbuffer = MALLOC_STRUCT(r600_resource);
 
 	rbuffer->b.b = *templ;
 	pipe_reference_init(&rbuffer->b.b.reference, 1);
@@ -216,33 +215,8 @@ struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 	rbuffer->b.vtbl = &r600_buffer_vtbl;
 
 	if (!r600_init_resource(rscreen, rbuffer, templ->width0, alignment, templ->bind, templ->usage)) {
-		util_slab_free(&rscreen->pool_buffers, rbuffer);
+		FREE(rbuffer);
 		return NULL;
 	}
-	return &rbuffer->b.b;
-}
-
-struct pipe_resource *r600_user_buffer_create(struct pipe_screen *screen,
-					      void *ptr, unsigned bytes,
-					      unsigned bind)
-{
-	struct r600_screen *rscreen = (struct r600_screen*)screen;
-	struct r600_resource *rbuffer;
-
-	rbuffer = util_slab_alloc(&rscreen->pool_buffers);
-
-	pipe_reference_init(&rbuffer->b.b.reference, 1);
-	rbuffer->b.vtbl = &r600_buffer_vtbl;
-	rbuffer->b.b.screen = screen;
-	rbuffer->b.b.target = PIPE_BUFFER;
-	rbuffer->b.b.format = PIPE_FORMAT_R8_UNORM;
-	rbuffer->b.b.usage = PIPE_USAGE_IMMUTABLE;
-	rbuffer->b.b.bind = bind;
-	rbuffer->b.b.width0 = bytes;
-	rbuffer->b.b.height0 = 1;
-	rbuffer->b.b.depth0 = 1;
-	rbuffer->b.b.array_size = 1;
-	rbuffer->b.b.flags = 0;
-	rbuffer->buf = NULL;
 	return &rbuffer->b.b;
 }

@@ -871,6 +871,31 @@ static boolean emit_floor(struct svga_shader_emitter *emit,
 }
 
 
+/* Translate the following TGSI CEIL instruction.
+ *    CEIL  DST, SRC
+ * To the following SVGA3D instruction sequence.
+ *    FRC  TMP, -SRC
+ *    ADD  DST, SRC, TMP
+ */
+static boolean emit_ceil(struct svga_shader_emitter *emit,
+                         const struct tgsi_full_instruction *insn)
+{
+   SVGA3dShaderDestToken dst = translate_dst_register(emit, insn, 0);
+   const struct src_register src0 = translate_src_register(emit, &insn->Src[0]);
+   SVGA3dShaderDestToken temp = get_temp(emit);
+
+   /* FRC  TMP, -SRC */
+   if (!submit_op1(emit, inst_token(SVGA3DOP_FRC), temp, negate(src0)))
+      return FALSE;
+
+   /* ADD DST, SRC, TMP */
+   if (!submit_op2(emit, inst_token(SVGA3DOP_ADD), dst, src0, src(temp)))
+      return FALSE;
+
+   return TRUE;
+}
+
+
 /* Translate the following TGSI CMP instruction.
  *    CMP  DST, SRC0, SRC1, SRC2
  * To the following SVGA3D instruction sequence.
@@ -1603,10 +1628,12 @@ static boolean emit_tex(struct svga_shader_emitter *emit,
                       emit->key.fkey.tex[unit].swizzle_b != PIPE_SWIZZLE_BLUE ||
                       emit->key.fkey.tex[unit].swizzle_a != PIPE_SWIZZLE_ALPHA);
 
-   /* If doing compare processing or tex swizzle, need to put fetched color into
-    * a temporary so it can be used as a source later on.
+   boolean saturate = insn->Instruction.Saturate != TGSI_SAT_NONE;
+
+   /* If doing compare processing or tex swizzle or saturation, we need to put
+    * the fetched color into a temporary so it can be used as a source later on.
     */
-   if (compare || swizzle) {
+   if (compare || swizzle || saturate) {
       tex_result = get_temp( emit );
    }
    else {
@@ -1633,7 +1660,7 @@ static boolean emit_tex(struct svga_shader_emitter *emit,
    if (compare) {
       SVGA3dShaderDestToken dst2;
 
-      if (swizzle)
+      if (swizzle || saturate)
          dst2 = tex_result;
       else
          dst2 = dst;
@@ -1685,8 +1712,13 @@ static boolean emit_tex(struct svga_shader_emitter *emit,
       }
    }
 
-   if (swizzle) {
-      /* swizzle from tex_result to dst */
+   if (saturate && !swizzle) {
+      /* MOV_SAT real_dst, dst */
+      if (!submit_op1( emit, inst_token( SVGA3DOP_MOV ), dst, src(tex_result) ))
+         return FALSE;
+   }
+   else if (swizzle) {
+      /* swizzle from tex_result to dst (handles saturation too, if any) */
       emit_tex_swizzle(emit,
                        dst, src(tex_result),
                        emit->key.fkey.tex[unit].swizzle_r,
@@ -2434,6 +2466,9 @@ static boolean svga_emit_instruction( struct svga_shader_emitter *emit,
    case TGSI_OPCODE_FLR:
    case TGSI_OPCODE_TRUNC:        /* should be TRUNC, not FLR */
       return emit_floor( emit, insn );
+
+   case TGSI_OPCODE_CEIL:
+      return emit_ceil( emit, insn );
 
    case TGSI_OPCODE_CMP:
       return emit_cmp( emit, insn );

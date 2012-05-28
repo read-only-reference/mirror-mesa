@@ -51,9 +51,9 @@ using namespace llvm;
 #ifndef EXTERNAL_LLVM
 extern "C" {
 
-void LLVMInitializeAMDILTargetMC(void);
-void LLVMInitializeAMDILTarget(void);
-void LLVMInitializeAMDILTargetInfo(void);
+void LLVMInitializeAMDGPUTargetMC(void);
+void LLVMInitializeAMDGPUTarget(void);
+void LLVMInitializeAMDGPUTargetInfo(void);
 }
 #endif
 
@@ -75,9 +75,9 @@ radeon_llvm_compile(LLVMModuleRef M, unsigned char ** bytes,
    InitializeAllTargets();
    InitializeAllTargetMCs();
 #else
-   LLVMInitializeAMDILTargetInfo();
-   LLVMInitializeAMDILTarget();
-   LLVMInitializeAMDILTargetMC();
+   LLVMInitializeAMDGPUTargetInfo();
+   LLVMInitializeAMDGPUTarget();
+   LLVMInitializeAMDGPUTargetMC();
 #endif
    std::string err;
    const Target * AMDGPUTarget = TargetRegistry::lookupTarget("r600", err);
@@ -93,19 +93,20 @@ radeon_llvm_compile(LLVMModuleRef M, unsigned char ** bytes,
    AMDGPUTriple.setArch(Arch);
 
    Module * mod = unwrap(M);
-   std::string FS = gpu_family;
+   std::string FS;
    TargetOptions TO;
 
+   if (dump) {
+      mod->dump();
+      FS += "+DumpCode";
+   }
+
    std::auto_ptr<TargetMachine> tm(AMDGPUTarget->createTargetMachine(
-                     AMDGPUTriple.getTriple(), gpu_family, "" /* Features */,
+                     AMDGPUTriple.getTriple(), gpu_family, FS,
                      TO, Reloc::Default, CodeModel::Default,
                      CodeGenOpt::Default
                      ));
    TargetMachine &AMDGPUTargetMachine = *tm.get();
-   /* XXX: Use TargetMachine.Options in 3.0 */
-   if (dump) {
-      mod->dump();
-   }
    PassManager PM;
    PM.add(new TargetData(*AMDGPUTargetMachine.getTargetData()));
    PM.add(createPromoteMemoryToRegisterPass());

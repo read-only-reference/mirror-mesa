@@ -72,9 +72,13 @@ fs_visitor::visit(ir_variable *ir)
    } else if (ir->mode == ir_var_out) {
       reg = new(this->mem_ctx) fs_reg(this, ir->type);
 
-      if (ir->location == FRAG_RESULT_COLOR) {
+      if (ir->index > 0) {
+	 assert(ir->location == FRAG_RESULT_DATA0);
+	 assert(ir->index == 1);
+	 this->dual_src_output = *reg;
+      } else if (ir->location == FRAG_RESULT_COLOR) {
 	 /* Writing gl_FragColor outputs to all color regions. */
-	 for (int i = 0; i < MAX2(c->key.nr_color_regions, 1); i++) {
+	 for (unsigned int i = 0; i < MAX2(c->key.nr_color_regions, 1); i++) {
 	    this->outputs[i] = *reg;
 	 }
       } else if (ir->location == FRAG_RESULT_DEPTH) {
@@ -395,6 +399,9 @@ fs_visitor::visit(ir_expression *ir)
       resolve_ud_negate(&op[0]);
       resolve_ud_negate(&op[1]);
 
+      resolve_bool_comparison(ir->operands[0], &op[0]);
+      resolve_bool_comparison(ir->operands[1], &op[1]);
+
       inst = emit(BRW_OPCODE_CMP, temp, op[0], op[1]);
       inst->conditional_mod = brw_conditional_for_comparison(ir->operation);
       break;
@@ -566,7 +573,7 @@ fs_visitor::emit_assignment_writes(fs_reg &l, fs_reg &r,
 	 l.type = brw_type_for_base_type(type);
 	 r.type = brw_type_for_base_type(type);
 
-	 if (predicated || !l.equals(&r)) {
+	 if (predicated || !l.equals(r)) {
 	    fs_inst *inst = emit(BRW_OPCODE_MOV, l, r);
 	    inst->predicated = predicated;
 	 }
@@ -1253,7 +1260,8 @@ fs_visitor::visit(ir_texture *ir)
    }
 
    if (ir->coordinate && needs_gl_clamp) {
-      for (int i = 0; i < MIN2(ir->coordinate->type->vector_elements, 3); i++) {
+      for (unsigned int i = 0;
+	   i < MIN2(ir->coordinate->type->vector_elements, 3); i++) {
 	 if (c->key.tex.gl_clamp_mask[i] & (1 << sampler)) {
 	    fs_reg chan = coordinate;
 	    chan.reg_offset += i;
@@ -1542,6 +1550,9 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
       case ir_binop_all_equal:
       case ir_binop_nequal:
       case ir_binop_any_nequal:
+	 resolve_bool_comparison(expr->operands[0], &op[0]);
+	 resolve_bool_comparison(expr->operands[1], &op[1]);
+
 	 inst = emit(BRW_OPCODE_CMP, reg_null_cmp, op[0], op[1]);
 	 inst->conditional_mod =
 	    brw_conditional_for_comparison(expr->operation);
@@ -2030,9 +2041,23 @@ fs_visitor::emit_fb_writes()
    int base_mrf = 1;
    int nr = base_mrf;
    int reg_width = c->dispatch_width / 8;
+   bool do_dual_src = this->dual_src_output.file != BAD_FILE;
 
+   if (c->dispatch_width == 16 && do_dual_src) {
+      fail("GL_ARB_blend_func_extended not yet supported in 16-wide.");
+      do_dual_src = false;
+   }
+
+   /* From the Sandy Bridge PRM, volume 4, page 198:
+    *
+    *     "Dispatched Pixel Enables. One bit per pixel indicating
+    *      which pixels were originally enabled when the thread was
+    *      dispatched. This field is only required for the end-of-
+    *      thread message and on all dual-source messages."
+    */
    if (intel->gen >= 6 &&
        !this->kill_emitted &&
+       !do_dual_src &&
        c->key.nr_color_regions == 1) {
       header_present = false;
    }
@@ -2052,6 +2077,8 @@ fs_visitor::emit_fb_writes()
    /* Reserve space for color. It'll be filled in per MRT below. */
    int color_mrf = nr;
    nr += 4 * reg_width;
+   if (do_dual_src)
+      nr += 4;
 
    if (c->source_depth_to_render_target) {
       if (intel->gen == 6 && c->dispatch_width == 16) {
@@ -2081,6 +2108,42 @@ fs_visitor::emit_fb_writes()
       emit(BRW_OPCODE_MOV, fs_reg(MRF, nr),
 	   fs_reg(brw_vec8_grf(c->dest_depth_reg, 0)));
       nr += reg_width;
+   }
+
+   if (do_dual_src) {
+      fs_reg src0 = this->outputs[0];
+      fs_reg src1 = this->dual_src_output;
+
+      this->current_annotation = ralloc_asprintf(this->mem_ctx,
+						 "FB write src0");
+      for (int i = 0; i < 4; i++) {
+	 fs_inst *inst = emit(BRW_OPCODE_MOV,
+			      fs_reg(MRF, color_mrf + i, src0.type),
+			      src0);
+	 src0.reg_offset++;
+	 inst->saturate = c->key.clamp_fragment_color;
+      }
+
+      this->current_annotation = ralloc_asprintf(this->mem_ctx,
+						 "FB write src1");
+      for (int i = 0; i < 4; i++) {
+	 fs_inst *inst = emit(BRW_OPCODE_MOV,
+			      fs_reg(MRF, color_mrf + 4 + i, src1.type),
+			      src1);
+	 src1.reg_offset++;
+	 inst->saturate = c->key.clamp_fragment_color;
+      }
+
+      fs_inst *inst = emit(FS_OPCODE_FB_WRITE);
+      inst->target = 0;
+      inst->base_mrf = base_mrf;
+      inst->mlen = nr - base_mrf;
+      inst->eot = true;
+      inst->header_present = header_present;
+
+      c->prog_data.dual_src_blend = true;
+      this->current_annotation = NULL;
+      return;
    }
 
    for (int target = 0; target < c->key.nr_color_regions; target++) {
@@ -2127,5 +2190,16 @@ fs_visitor::resolve_ud_negate(fs_reg *reg)
 
    fs_reg temp = fs_reg(this, glsl_type::uint_type);
    emit(BRW_OPCODE_MOV, temp, *reg);
+   *reg = temp;
+}
+
+void
+fs_visitor::resolve_bool_comparison(ir_rvalue *rvalue, fs_reg *reg)
+{
+   if (rvalue->type != glsl_type::bool_type)
+      return;
+
+   fs_reg temp = fs_reg(this, glsl_type::bool_type);
+   emit(BRW_OPCODE_AND, temp, *reg, fs_reg(1));
    *reg = temp;
 }

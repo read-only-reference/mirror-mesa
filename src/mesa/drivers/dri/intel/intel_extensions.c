@@ -44,7 +44,8 @@ intelInitExtensions(struct gl_context *ctx)
 
    ctx->Extensions.ARB_draw_elements_base_vertex = true;
    ctx->Extensions.ARB_explicit_attrib_location = true;
-   ctx->Extensions.ARB_framebuffer_object = true;
+   if (ctx->API == API_OPENGL)
+      ctx->Extensions.ARB_framebuffer_object = true;
    ctx->Extensions.ARB_half_float_pixel = true;
    ctx->Extensions.ARB_map_buffer_range = true;
    ctx->Extensions.ARB_point_sprite = true;
@@ -89,6 +90,7 @@ intelInitExtensions(struct gl_context *ctx)
 #if FEATURE_OES_EGL_image
    ctx->Extensions.OES_EGL_image = true;
 #endif
+   ctx->Extensions.OES_draw_texture = true;
 
    if (intel->gen >= 6)
       ctx->Const.GLSLVersion = 130;
@@ -99,6 +101,11 @@ intelInitExtensions(struct gl_context *ctx)
    if (intel->gen == 6 ||
        (intel->gen == 7 && intel->intelScreen->kernel_has_gen7_sol_reset))
       ctx->Extensions.EXT_transform_feedback = true;
+
+   if (intel->gen >= 6) {
+      ctx->Extensions.ARB_blend_func_extended = true;
+      ctx->Extensions.ARB_draw_buffers_blend = true;
+   }
 
    if (intel->gen >= 5)
       ctx->Extensions.EXT_timer_query = true;
@@ -162,5 +169,9 @@ intelInitExtensions(struct gl_context *ctx)
    }
    else if (driQueryOptionb(&intel->optionCache, "force_s3tc_enable")) {
       ctx->Extensions.EXT_texture_compression_s3tc = true;
+   }
+
+   if (intel->gen >= 4) {
+      ctx->Extensions.NV_primitive_restart = true;
    }
 }

@@ -7,31 +7,32 @@
 //
 //==-----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "structcfg"
-#ifdef DEBUG
-#define DEBUGME (DebugFlag && isCurrentDebugType(DEBUG_TYPE))
-#else
 #define DEBUGME 0
-#endif
+#define DEBUG_TYPE "structcfg"
 
-#include "AMDILTargetMachine.h"
+#include "AMDIL.h"
+#include "AMDILRegisterInfo.h"
 #include "AMDILUtilityFunctions.h"
 #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/DominatorInternals.h"
+#include "llvm/Analysis/Dominators.h"
+#include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineDominators.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineFunctionAnalysis.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineFunctionPass.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/MachineLoopInfo.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/Target/TargetInstrInfo.h"
 
 #define FirstNonDebugInstr(A) A->begin()
 using namespace llvm;
 
-// bixia TODO: move this out to analysis lib. Make this work for both target
-// AMDIL and CBackend.
 // TODO: move-begin.
 
 //===----------------------------------------------------------------------===//
@@ -108,23 +109,6 @@ void ReverseVector(SmallVector<NodeT *, DEFAULT_VEC_SLOTS> &Src) {
 // MachinePostDominatorTree
 //
 //===----------------------------------------------------------------------===//
-
-#include "AMDILTargetMachine.h"
-#include "AMDILUtilityFunctions.h"
-#include "llvm/ADT/SCCIterator.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/ADT/Statistic.h"
-#include "llvm/Analysis/DominatorInternals.h"
-#include "llvm/Analysis/Dominators.h"
-#include "llvm/CodeGen/MachineDominators.h"
-#include "llvm/CodeGen/MachineDominators.h"
-#include "llvm/CodeGen/MachineFunction.h"
-#include "llvm/CodeGen/MachineFunctionAnalysis.h"
-#include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/CodeGen/MachineFunctionPass.h"
-#include "llvm/CodeGen/MachineJumpTableInfo.h"
-#include "llvm/CodeGen/MachineLoopInfo.h"
-#include "llvm/CodeGen/MachineRegisterInfo.h"
 
 namespace llvm {
 
@@ -3156,10 +3140,6 @@ struct CFGStructTraits<AMDILCFGStructurizer>
          iterEnd = srcBlk->end();
          iter != iterEnd; ++iter) {
       MachineInstr *instr = func->CloneMachineInstr(iter);
-      // This is a workaround for LLVM bugzilla 8420 because CloneMachineInstr
-      // does not clone the AsmPrinterFlags.
-      instr->setAsmPrinterFlag(
-         (llvm::MachineInstr::CommentFlag)iter->getAsmPrinterFlags());
       newBlk->push_back(instr);
     }
     return newBlk;

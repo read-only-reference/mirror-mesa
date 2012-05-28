@@ -1,4 +1,4 @@
-//===-- AMDGPUTargetMachine.h - TODO: Add brief description -------===//
+//===-- AMDGPUTargetMachine.h - AMDGPU TargetMachine Interface --*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO: Add full description
+//  The AMDGPU TargetMachine interface definition for hw codgen targets.
 //
 //===----------------------------------------------------------------------===//
 
@@ -15,7 +15,9 @@
 #define AMDGPU_TARGET_MACHINE_H
 
 #include "AMDGPUInstrInfo.h"
-#include "AMDILTargetMachine.h"
+#include "AMDILFrameLowering.h"
+#include "AMDILIntrinsicInfo.h"
+#include "AMDILSubtarget.h"
 #include "R600ISelLowering.h"
 #include "llvm/ADT/OwningPtr.h"
 #include "llvm/Target/TargetData.h"
@@ -24,13 +26,15 @@ namespace llvm {
 
 MCAsmInfo* createMCAsmInfo(const Target &T, StringRef TT);
 
-class AMDGPUTargetMachine : public AMDILTargetMachine {
+class AMDGPUTargetMachine : public LLVMTargetMachine {
+
   AMDILSubtarget Subtarget;
-     const AMDGPUInstrInfo * InstrInfo;
-     AMDGPUTargetLowering * TLInfo;
-     AMDILGlobalManager *mGM;
-     AMDILKernelManager *mKM;
-     bool mDump;
+  const TargetData DataLayout;
+  AMDILFrameLowering FrameLowering;
+  AMDILIntrinsicInfo IntrinsicInfo;
+  const AMDGPUInstrInfo * InstrInfo;
+  AMDGPUTargetLowering * TLInfo;
+  bool mDump;
 
 public:
    AMDGPUTargetMachine(const Target &T, StringRef TT, StringRef FS,
@@ -39,6 +43,12 @@ public:
                        Reloc::Model RM, CodeModel::Model CM,
                        CodeGenOpt::Level OL);
    ~AMDGPUTargetMachine();
+   virtual const AMDILFrameLowering* getFrameLowering() const {
+     return &FrameLowering;
+   }
+   virtual const AMDILIntrinsicInfo* getIntrinsicInfo() const {
+     return &IntrinsicInfo;
+   }
    virtual const AMDGPUInstrInfo *getInstrInfo() const {return InstrInfo;}
    virtual const AMDILSubtarget *getSubtargetImpl() const {return &Subtarget; }
    virtual const AMDGPURegisterInfo *getRegisterInfo() const {
@@ -47,16 +57,14 @@ public:
    virtual AMDGPUTargetLowering * getTargetLowering() const {
       return TLInfo;
    }
+   virtual const TargetData* getTargetData() const { return &DataLayout; }
    virtual TargetPassConfig *createPassConfig(PassManagerBase &PM);
    virtual bool addPassesToEmitFile(PassManagerBase &PM,
                                               formatted_raw_ostream &Out,
                                               CodeGenFileType FileType,
                                               bool DisableVerify);
-public:
-   void dumpCode() { mDump = true; }
-   bool shouldDumpCode() const { return mDump; }
 };
 
-} /* End namespace llvm */
+} // End namespace llvm
 
-#endif /* AMDGPU_TARGET_MACHINE_H */
+#endif // AMDGPU_TARGET_MACHINE_H

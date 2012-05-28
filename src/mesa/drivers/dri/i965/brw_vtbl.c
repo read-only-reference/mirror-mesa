@@ -49,8 +49,8 @@
 #include "brw_vs.h"
 #include "brw_wm.h"
 
-#include "gen6_hiz.h"
-#include "gen7_hiz.h"
+#include "gen6_blorp.h"
+#include "gen7_blorp.h"
 
 #include "glsl/ralloc.h"
 
@@ -234,20 +234,9 @@ void brwInitVtbl( struct brw_context *brw )
    brw->intel.vtbl.destroy = brw_destroy_context;
    brw->intel.vtbl.update_draw_buffer = brw_update_draw_buffer;
    brw->intel.vtbl.debug_batch = brw_debug_batch;
+   brw->intel.vtbl.annotate_aub = brw_annotate_aub;
    brw->intel.vtbl.render_target_supported = brw_render_target_supported;
    brw->intel.vtbl.is_hiz_depth_format = brw_is_hiz_depth_format;
-
-   if (brw->intel.has_hiz) {
-      if (brw->intel.gen == 7) {
-         brw->intel.vtbl.resolve_depth_slice = gen7_resolve_depth_slice;
-         brw->intel.vtbl.resolve_hiz_slice = gen7_resolve_hiz_slice;
-      } else if (brw->intel.gen == 6) {
-         brw->intel.vtbl.resolve_depth_slice = gen6_resolve_depth_slice;
-         brw->intel.vtbl.resolve_hiz_slice = gen6_resolve_hiz_slice;
-      } else {
-         assert(0);
-      }
-   }
 
    if (brw->intel.gen >= 7) {
       gen7_init_vtable_surface_functions(brw);

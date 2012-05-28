@@ -45,12 +45,14 @@
 
 #include "pipe/p_state.h"
 #include "util/u_debug.h"
+#include "util/u_format.h"
 
 #include "gallivm/lp_bld_type.h"
 #include "gallivm/lp_bld_const.h"
 #include "gallivm/lp_bld_arit.h"
 #include "gallivm/lp_bld_logic.h"
 #include "gallivm/lp_bld_swizzle.h"
+#include "gallivm/lp_bld_bitarit.h"
 #include "gallivm/lp_bld_debug.h"
 
 #include "lp_bld_blend.h"
@@ -300,25 +302,39 @@ lp_build_blend_func(struct lp_build_context *bld,
 }
 
 
+/**
+ * Performs blending of src and dst pixels
+ *
+ * @param blend         the blend state of the shader variant
+ * @param cbuf_format   format of the colour buffer
+ * @param type          data type of the pixel vector
+ * @param rt            rt number
+ * @param src           blend src
+ * @param dst           blend dst
+ * @param mask          optional mask to apply to the blending result
+ * @param const_        const blend color
+ * @param swizzle       swizzle values for RGBA
+ *
+ * @return the result of blending src and dst
+ */
 LLVMValueRef
 lp_build_blend_aos(struct gallivm_state *gallivm,
                    const struct pipe_blend_state *blend,
+                   const enum pipe_format *cbuf_format,
                    struct lp_type type,
                    unsigned rt,
                    LLVMValueRef src,
                    LLVMValueRef dst,
+                   LLVMValueRef mask,
                    LLVMValueRef const_,
-                   unsigned alpha_swizzle)
+                   const unsigned char swizzle[4])
 {
    struct lp_build_blend_aos_context bld;
    LLVMValueRef src_term;
    LLVMValueRef dst_term;
-
-   /* FIXME: color masking not implemented yet */
-   assert(blend->rt[rt].colormask == 0xf);
-
-   if(!blend->rt[rt].blend_enable)
-      return src;
+   LLVMValueRef result;
+   unsigned alpha_swizzle = swizzle[3];
+   boolean fullcolormask;
 
    /* Setup build context */
    memset(&bld, 0, sizeof bld);
@@ -327,30 +343,59 @@ lp_build_blend_aos(struct gallivm_state *gallivm,
    bld.dst = dst;
    bld.const_ = const_;
 
-   /* TODO: There are still a few optimization opportunities here. For certain
-    * combinations it is possible to reorder the operations and therefore saving
-    * some instructions. */
+   if (!blend->rt[rt].blend_enable) {
+      result = src;
+   } else {
 
-   src_term = lp_build_blend_factor(&bld, src, blend->rt[rt].rgb_src_factor,
-                                    blend->rt[rt].alpha_src_factor, alpha_swizzle);
-   dst_term = lp_build_blend_factor(&bld, dst, blend->rt[rt].rgb_dst_factor,
-                                    blend->rt[rt].alpha_dst_factor, alpha_swizzle);
+      /* TODO: There are still a few optimization opportunities here. For certain
+       * combinations it is possible to reorder the operations and therefore saving
+       * some instructions. */
 
-   lp_build_name(src_term, "src_term");
-   lp_build_name(dst_term, "dst_term");
+      src_term = lp_build_blend_factor(&bld, src, blend->rt[rt].rgb_src_factor,
+                                       blend->rt[rt].alpha_src_factor, alpha_swizzle);
+      dst_term = lp_build_blend_factor(&bld, dst, blend->rt[rt].rgb_dst_factor,
+                                       blend->rt[rt].alpha_dst_factor, alpha_swizzle);
 
-   if(blend->rt[rt].rgb_func == blend->rt[rt].alpha_func) {
-      return lp_build_blend_func(&bld.base, blend->rt[rt].rgb_func, src_term, dst_term);
+      lp_build_name(src_term, "src_term");
+      lp_build_name(dst_term, "dst_term");
+
+      if(blend->rt[rt].rgb_func == blend->rt[rt].alpha_func) {
+         result = lp_build_blend_func(&bld.base, blend->rt[rt].rgb_func, src_term, dst_term);
+      }
+      else {
+         /* Seperate RGB / A functions */
+
+         LLVMValueRef rgb;
+         LLVMValueRef alpha;
+
+         rgb   = lp_build_blend_func(&bld.base, blend->rt[rt].rgb_func,   src_term, dst_term);
+         alpha = lp_build_blend_func(&bld.base, blend->rt[rt].alpha_func, src_term, dst_term);
+
+         result = lp_build_blend_swizzle(&bld, rgb, alpha, LP_BUILD_BLEND_SWIZZLE_RGBA, alpha_swizzle);
+      }
    }
-   else {
-      /* Seperate RGB / A functions */
 
-      LLVMValueRef rgb;
-      LLVMValueRef alpha;
+   /* Check if color mask is necessary */
+   fullcolormask = util_format_colormask_full(util_format_description(cbuf_format[rt]), blend->rt[rt].colormask);
 
-      rgb   = lp_build_blend_func(&bld.base, blend->rt[rt].rgb_func,   src_term, dst_term);
-      alpha = lp_build_blend_func(&bld.base, blend->rt[rt].alpha_func, src_term, dst_term);
+   if (!fullcolormask) {
+      LLVMValueRef color_mask;
 
-      return lp_build_blend_swizzle(&bld, rgb, alpha, LP_BUILD_BLEND_SWIZZLE_RGBA, alpha_swizzle);
+      color_mask = lp_build_const_mask_aos_swizzled(gallivm, bld.base.type, blend->rt[rt].colormask, swizzle);
+      lp_build_name(color_mask, "color_mask");
+
+      /* Combine with input mask if necessary */
+      if (mask) {
+         mask = lp_build_and(&bld.base, color_mask, mask);
+      } else {
+         mask = color_mask;
+      }
    }
+
+   /* Apply mask, if one exists */
+   if (mask) {
+      result = lp_build_select(&bld.base, mask, result, dst);
+   }
+
+   return result;
 }

@@ -30,6 +30,7 @@
 #include "main/context.h"
 #include "main/macros.h"
 #include "main/enums.h"
+#include "main/fbobject.h"
 #include "main/dd.h"
 #include "main/state.h"
 
@@ -545,7 +546,7 @@ i830Scissor(struct gl_context * ctx, GLint x, GLint y, GLsizei w, GLsizei h)
 
    DBG("%s %d,%d %dx%d\n", __FUNCTION__, x, y, w, h);
 
-   if (ctx->DrawBuffer->Name == 0) {
+   if (_mesa_is_winsys_fbo(ctx->DrawBuffer)) {
       x1 = x;
       y1 = ctx->DrawBuffer->Height - (y + h);
       x2 = x + w - 1;
@@ -861,7 +862,7 @@ i830Enable(struct gl_context * ctx, GLenum cap, GLboolean state)
          if (ctx->DrawBuffer) {
             struct intel_renderbuffer *irbStencil
                = intel_get_renderbuffer(ctx->DrawBuffer, BUFFER_STENCIL);
-            hw_stencil = (irbStencil && irbStencil->mt->region);
+            hw_stencil = (irbStencil && irbStencil->mt);
          }
          if (hw_stencil) {
             I830_STATECHANGE(i830, I830_UPLOAD_CTX);

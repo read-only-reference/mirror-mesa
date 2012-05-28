@@ -38,6 +38,10 @@
 #include "brw_defines.h"
 #include "program/prog_instruction.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define BRW_SWIZZLE4(a,b,c,d) (((a)<<0) | ((b)<<2) | ((c)<<4) | ((d)<<6))
 #define BRW_GET_SWZ(swz, idx) (((swz) >> ((idx)*2)) & 0x3)
 
@@ -946,6 +950,7 @@ void brw_fb_WRITE(struct brw_compile *p,
 		  int dispatch_width,
 		   GLuint msg_reg_nr,
 		   struct brw_reg src0,
+		   GLuint msg_control,
 		   GLuint binding_table_index,
 		   GLuint msg_length,
 		   GLuint response_length,
@@ -1043,7 +1048,6 @@ struct brw_instruction *brw_WHILE(struct brw_compile *p);
 struct brw_instruction *brw_BREAK(struct brw_compile *p);
 struct brw_instruction *brw_CONT(struct brw_compile *p);
 struct brw_instruction *gen6_CONT(struct brw_compile *p);
-struct brw_instruction *gen6_HALT(struct brw_compile *p);
 /* Forward jumps:
  */
 void brw_land_fwd_jump(struct brw_compile *p, int jmp_insn_idx);
@@ -1106,5 +1110,9 @@ uint32_t brw_swap_cmod(uint32_t cmod);
 void brw_optimize(struct brw_compile *p);
 void brw_remove_duplicate_mrf_moves(struct brw_compile *p);
 void brw_remove_grf_to_mrf_moves(struct brw_compile *p);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

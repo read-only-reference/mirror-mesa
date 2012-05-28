@@ -26,6 +26,7 @@
 #include "brw_defines.h"
 #include "brw_util.h"
 #include "intel_batchbuffer.h"
+#include "main/fbobject.h"
 
 static void
 upload_clip_state(struct brw_context *brw)
@@ -38,7 +39,7 @@ upload_clip_state(struct brw_context *brw)
    uint32_t nonperspective_barycentric_enable_flag = 0;
 
    /* _NEW_BUFFERS */
-   bool render_to_fbo = brw->intel.ctx.DrawBuffer->Name != 0;
+   bool render_to_fbo = _mesa_is_user_fbo(brw->intel.ctx.DrawBuffer);
 
    /* CACHE_NEW_WM_PROG */
    if (brw->wm.prog_data->barycentric_interp_modes &
@@ -100,6 +101,7 @@ upload_clip_state(struct brw_context *brw)
 	     GEN6_CLIP_MODE_NORMAL |
              nonperspective_barycentric_enable_flag |
 	     GEN6_CLIP_XY_TEST |
+	     GEN6_CLIP_GB_TEST |
 	     userclip << GEN6_USER_CLIP_CLIP_DISTANCES_SHIFT |
 	     depth_clamp |
 	     provoking);

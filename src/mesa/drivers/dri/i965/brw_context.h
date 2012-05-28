@@ -37,6 +37,9 @@
 #include "brw_structs.h"
 #include "main/imports.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Glossary:
  *
@@ -190,32 +193,70 @@ struct brw_state_flags {
    GLuint cache;
 };
 
+#define AUB_TRACE_TYPE_MASK		0x0000ff00
+#define AUB_TRACE_TYPE_NOTYPE		(0 << 8)
+#define AUB_TRACE_TYPE_BATCH		(1 << 8)
+#define AUB_TRACE_TYPE_VERTEX_BUFFER	(5 << 8)
+#define AUB_TRACE_TYPE_2D_MAP		(6 << 8)
+#define AUB_TRACE_TYPE_CUBE_MAP		(7 << 8)
+#define AUB_TRACE_TYPE_VOLUME_MAP	(9 << 8)
+#define AUB_TRACE_TYPE_1D_MAP		(10 << 8)
+#define AUB_TRACE_TYPE_CONSTANT_BUFFER	(11 << 8)
+#define AUB_TRACE_TYPE_CONSTANT_URB	(12 << 8)
+#define AUB_TRACE_TYPE_INDEX_BUFFER	(13 << 8)
+#define AUB_TRACE_TYPE_GENERAL		(14 << 8)
+#define AUB_TRACE_TYPE_SURFACE		(15 << 8)
+
+/**
+ * state_struct_type enum values are encoded with the top 16 bits representing
+ * the type to be delivered to the .aub file, and the bottom 16 bits
+ * representing the subtype.  This macro performs the encoding.
+ */
+#define ENCODE_SS_TYPE(type, subtype) (((type) << 16) | (subtype))
+
 enum state_struct_type {
-   AUB_TRACE_VS_STATE =			1,
-   AUB_TRACE_GS_STATE =			2,
-   AUB_TRACE_CLIP_STATE =		3,
-   AUB_TRACE_SF_STATE =			4,
-   AUB_TRACE_WM_STATE =			5,
-   AUB_TRACE_CC_STATE =			6,
-   AUB_TRACE_CLIP_VP_STATE =		7,
-   AUB_TRACE_SF_VP_STATE =		8,
-   AUB_TRACE_CC_VP_STATE =		0x9,
-   AUB_TRACE_SAMPLER_STATE =		0xa,
-   AUB_TRACE_KERNEL_INSTRUCTIONS =	0xb,
-   AUB_TRACE_SCRATCH_SPACE =		0xc,
-   AUB_TRACE_SAMPLER_DEFAULT_COLOR =    0xd,
+   AUB_TRACE_VS_STATE =			ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 1),
+   AUB_TRACE_GS_STATE =			ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 2),
+   AUB_TRACE_CLIP_STATE =		ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 3),
+   AUB_TRACE_SF_STATE =			ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 4),
+   AUB_TRACE_WM_STATE =			ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 5),
+   AUB_TRACE_CC_STATE =			ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 6),
+   AUB_TRACE_CLIP_VP_STATE =		ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 7),
+   AUB_TRACE_SF_VP_STATE =		ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 8),
+   AUB_TRACE_CC_VP_STATE =		ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 0x9),
+   AUB_TRACE_SAMPLER_STATE =		ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 0xa),
+   AUB_TRACE_KERNEL_INSTRUCTIONS =	ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 0xb),
+   AUB_TRACE_SCRATCH_SPACE =		ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 0xc),
+   AUB_TRACE_SAMPLER_DEFAULT_COLOR =    ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 0xd),
 
-   AUB_TRACE_SCISSOR_STATE =		0x15,
-   AUB_TRACE_BLEND_STATE =		0x16,
-   AUB_TRACE_DEPTH_STENCIL_STATE =	0x17,
+   AUB_TRACE_SCISSOR_STATE =		ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 0x15),
+   AUB_TRACE_BLEND_STATE =		ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 0x16),
+   AUB_TRACE_DEPTH_STENCIL_STATE =	ENCODE_SS_TYPE(AUB_TRACE_TYPE_GENERAL, 0x17),
 
-   /* Not written to .aub files the same way the structures above are. */
-   AUB_TRACE_NO_TYPE =			0x100,
-   AUB_TRACE_BINDING_TABLE =		0x101,
-   AUB_TRACE_SURFACE_STATE =		0x102,
-   AUB_TRACE_VS_CONSTANTS =		0x103,
-   AUB_TRACE_WM_CONSTANTS =		0x104,
+   AUB_TRACE_VERTEX_BUFFER =		ENCODE_SS_TYPE(AUB_TRACE_TYPE_VERTEX_BUFFER, 0),
+   AUB_TRACE_BINDING_TABLE =		ENCODE_SS_TYPE(AUB_TRACE_TYPE_SURFACE, 0x100),
+   AUB_TRACE_SURFACE_STATE =		ENCODE_SS_TYPE(AUB_TRACE_TYPE_SURFACE, 0x200),
+   AUB_TRACE_VS_CONSTANTS =		ENCODE_SS_TYPE(AUB_TRACE_TYPE_CONSTANT_BUFFER, 0),
+   AUB_TRACE_WM_CONSTANTS =		ENCODE_SS_TYPE(AUB_TRACE_TYPE_CONSTANT_BUFFER, 1),
 };
+
+/**
+ * Decode a state_struct_type value to determine the type that should be
+ * stored in the .aub file.
+ */
+static inline uint32_t AUB_TRACE_TYPE(enum state_struct_type ss_type)
+{
+   return (ss_type & 0xFFFF0000) >> 16;
+}
+
+/**
+ * Decode a state_struct_type value to determine the subtype that should be
+ * stored in the .aub file.
+ */
+static inline uint32_t AUB_TRACE_SUBTYPE(enum state_struct_type ss_type)
+{
+   return ss_type & 0xFFFF;
+}
 
 /** Subclass of Mesa vertex program */
 struct brw_vertex_program {
@@ -268,6 +309,7 @@ struct brw_wm_prog_data {
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params;
    bool error;
+   bool dual_src_blend;
    int dispatch_width;
    uint32_t prog_offset_16;
 
@@ -533,6 +575,7 @@ enum brw_cache_id {
    BRW_CC_VP,
    BRW_CC_UNIT,
    BRW_WM_PROG,
+   BRW_BLORP_BLIT_PROG,
    BRW_SAMPLER,
    BRW_WM_UNIT,
    BRW_SF_PROG,
@@ -997,6 +1040,12 @@ struct brw_context
 
    uint32_t render_target_format[MESA_FORMAT_COUNT];
    bool format_supported_as_render_target[MESA_FORMAT_COUNT];
+
+   /* PrimitiveRestart */
+   struct {
+      bool in_progress;
+      bool enable_cut_index;
+   } prim_restart;
 };
 
 
@@ -1036,6 +1085,7 @@ void brw_emit_query_end(struct brw_context *brw);
  * brw_state_dump.c
  */
 void brw_debug_batch(struct intel_context *intel);
+void brw_annotate_aub(struct intel_context *intel);
 
 /*======================================================================
  * brw_tex.c
@@ -1087,6 +1137,29 @@ brw_end_transform_feedback(struct gl_context *ctx,
 void
 gen7_end_transform_feedback(struct gl_context *ctx,
 			    struct gl_transform_feedback_object *obj);
+
+/* brw_blorp_blit.cpp */
+GLbitfield
+brw_blorp_framebuffer(struct intel_context *intel,
+                      GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
+                      GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
+                      GLbitfield mask, GLenum filter);
+
+/* gen6_multisample_state.c */
+void
+gen6_emit_3dstate_multisample(struct brw_context *brw,
+                              unsigned num_samples);
+void
+gen6_emit_3dstate_sample_mask(struct brw_context *brw,
+                              unsigned num_samples);
+
+/* gen7_urb.c */
+void
+gen7_allocate_push_constants(struct brw_context *brw);
+
+void
+gen7_emit_urb_state(struct brw_context *brw, GLuint nr_vs_entries,
+                    GLuint vs_size, GLuint vs_start);
 
 
 
@@ -1187,5 +1260,9 @@ brw_program_reloc(struct brw_context *brw, uint32_t state_offset,
 }
 
 bool brw_do_cubemap_normalize(struct exec_list *instructions);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

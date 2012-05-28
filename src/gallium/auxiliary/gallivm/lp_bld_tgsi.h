@@ -122,6 +122,11 @@ struct lp_tgsi_info
    unsigned indirect_textures:1;
 
    /*
+    * Whether any immediate values are outside the range of 0 and 1
+    */
+   unsigned unclamped_immediates:1;
+
+   /*
     * Texture opcode description. Aimed at detecting and described direct
     * texture opcodes.
     */
@@ -165,6 +170,13 @@ struct lp_build_sampler_soa
                         LLVMValueRef lod_bias, /* optional */
                         LLVMValueRef explicit_lod, /* optional */
                         LLVMValueRef *texel);
+
+   void
+   (*emit_size_query)( const struct lp_build_sampler_soa *sampler,
+                       struct gallivm_state *gallivm,
+                       unsigned unit,
+                       LLVMValueRef explicit_lod, /* optional */
+                       LLVMValueRef *sizes_out);
 };
 
 

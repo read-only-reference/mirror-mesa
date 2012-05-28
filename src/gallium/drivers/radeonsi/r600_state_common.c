@@ -628,12 +628,15 @@ static void r600_vertex_buffer_update(struct r600_context *rctx)
 		ptr[0] = va & 0xFFFFFFFF;
 		ptr[1] = (S_008F04_BASE_ADDRESS_HI(va >> 32) |
 			  S_008F04_STRIDE(vertex_buffer->stride));
-		ptr[2] = (vertex_buffer->buffer->width0 - offset) / vertex_buffer->stride;
-		/* XXX: Hardcoding RGBA */
-		ptr[3] = (S_008F0C_DST_SEL_X(V_008F0C_SQ_SEL_X) |
-			  S_008F0C_DST_SEL_Y(V_008F0C_SQ_SEL_Y) |
-			  S_008F0C_DST_SEL_Z(V_008F0C_SQ_SEL_Z) |
-			  S_008F0C_DST_SEL_W(V_008F0C_SQ_SEL_W) |
+		if (vertex_buffer->stride > 0)
+			ptr[2] = ((vertex_buffer->buffer->width0 - offset) /
+				  vertex_buffer->stride);
+		else
+			ptr[2] = vertex_buffer->buffer->width0 - offset;
+		ptr[3] = (S_008F0C_DST_SEL_X(si_map_swizzle(desc->swizzle[0])) |
+			  S_008F0C_DST_SEL_Y(si_map_swizzle(desc->swizzle[1])) |
+			  S_008F0C_DST_SEL_Z(si_map_swizzle(desc->swizzle[2])) |
+			  S_008F0C_DST_SEL_W(si_map_swizzle(desc->swizzle[3])) |
 			  S_008F0C_NUM_FORMAT(num_format) |
 			  S_008F0C_DATA_FORMAT(data_format));
 
@@ -808,8 +811,9 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
 		r600_pipe_state_mod_reg(&rctx->vgt, rctx->pa_su_sc_mode_cntl);
 	}
 	r600_pipe_state_mod_reg(&rctx->vgt,
-				rctx->pa_cl_vs_out_cntl /*|
-				(rctx->rasterizer->clip_plane_enable & rctx->vs_shader->shader.clip_dist_write)*/);
+				prim == PIPE_PRIM_POINTS ? rctx->pa_cl_vs_out_cntl : 0
+				/*| (rctx->rasterizer->clip_plane_enable &
+				  rctx->vs_shader->shader.clip_dist_write)*/);
 	r600_pipe_state_mod_reg(&rctx->vgt,
 				rctx->pa_cl_clip_cntl /*|
 				(rctx->vs_shader->shader.clip_dist_write ||
@@ -845,9 +849,7 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
 					      RADEON_USAGE_READ);
 	}
 
-	if (rctx->chip_class >= CAYMAN) {
-		evergreen_context_draw(rctx, &rdraw);
-	}
+	si_context_draw(rctx, &rdraw);
 
 	rctx->flags |= R600_CONTEXT_DST_CACHES_DIRTY | R600_CONTEXT_DRAW_PENDING;
 

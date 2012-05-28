@@ -1,4 +1,4 @@
-//===-- SIInstructions.td - TODO: Add brief description -------===//
+//===-- SIInstructions.td - SI Instruction Defintions ---------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -6,17 +6,24 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
-//
-// TODO: Add full description
-//
-//===----------------------------------------------------------------------===//
+
+def load_user_sgpr : PatFrag<(ops node:$ptr),
+  (load node:$ptr),
+  [{
+    const Value *Src = cast<LoadSDNode>(N)->getSrcValue();
+    if (Src) {
+      PointerType * PT = dyn_cast<PointerType>(Src->getType());
+      return PT && PT->getAddressSpace() == AMDILAS::USER_SGPR_ADDRESS;
+    }
+    return false;
+  }]
+>;
 
 
 def isSI : Predicate<"Subtarget.device()"
                             "->getGeneration() == AMDILDeviceInfo::HD7XXX">;
 
 let Predicates = [isSI] in {
-let Gen = AMDGPUGen.SI  in {
 
 def S_MOV_B32 : SOP1_32 <0x00000003, "S_MOV_B32", []>;
 def S_MOV_B64 : SOP1_64 <0x00000004, "S_MOV_B64", []>;
@@ -351,20 +358,16 @@ def TBUFFER_LOAD_FORMAT_XYZW : MTBUF_Load_Helper <0x00000003, "TBUFFER_LOAD_FORM
 //def TBUFFER_STORE_FORMAT_XYZ : MTBUF_ <0x00000006, "TBUFFER_STORE_FORMAT_XYZ", []>;
 //def TBUFFER_STORE_FORMAT_XYZW : MTBUF_ <0x00000007, "TBUFFER_STORE_FORMAT_XYZW", []>;
 
-let mayLoad = 0, neverHasSideEffects = 1 in {
-
-defm S_LOAD_DWORD : SMRD_Helper <0x00000000, "S_LOAD_DWORD", SReg_32>;
+defm S_LOAD_DWORD : SMRD_Helper <0x00000000, "S_LOAD_DWORD", SReg_32, f32>;
 //def S_LOAD_DWORDX2 : SMRD_DWORDX2 <0x00000001, "S_LOAD_DWORDX2", []>;
-defm S_LOAD_DWORDX4 : SMRD_Helper <0x00000002, "S_LOAD_DWORDX4", SReg_128>;
-defm S_LOAD_DWORDX8 : SMRD_Helper <0x00000003, "S_LOAD_DWORDX8", SReg_256>;
+defm S_LOAD_DWORDX4 : SMRD_Helper <0x00000002, "S_LOAD_DWORDX4", SReg_128, v4i32>;
+defm S_LOAD_DWORDX8 : SMRD_Helper <0x00000003, "S_LOAD_DWORDX8", SReg_256, v8i32>;
 //def S_LOAD_DWORDX16 : SMRD_DWORDX16 <0x00000004, "S_LOAD_DWORDX16", []>;
 //def S_BUFFER_LOAD_DWORD : SMRD_ <0x00000008, "S_BUFFER_LOAD_DWORD", []>;
 //def S_BUFFER_LOAD_DWORDX2 : SMRD_DWORDX2 <0x00000009, "S_BUFFER_LOAD_DWORDX2", []>;
 //def S_BUFFER_LOAD_DWORDX4 : SMRD_DWORDX4 <0x0000000a, "S_BUFFER_LOAD_DWORDX4", []>;
 //def S_BUFFER_LOAD_DWORDX8 : SMRD_DWORDX8 <0x0000000b, "S_BUFFER_LOAD_DWORDX8", []>;
 //def S_BUFFER_LOAD_DWORDX16 : SMRD_DWORDX16 <0x0000000c, "S_BUFFER_LOAD_DWORDX16", []>;
-
-} // End mayLoad, neverHasSideEffects
 
 //def S_MEMTIME : SMRD_ <0x0000001e, "S_MEMTIME", []>;
 //def S_DCACHE_INV : SMRD_ <0x0000001f, "S_DCACHE_INV", []>;
@@ -466,7 +469,7 @@ def IMAGE_SAMPLE : MIMG_Load_Helper <0x00000020, "IMAGE_SAMPLE">;
 //def V_NOP : VOP1_ <0x00000000, "V_NOP", []>;
 
 let neverHasSideEffects = 1 in {
-defm V_MOV_B32 : VOP1_32 <0x00000001, "V_MOV_B32", [], AMDILInst.MOVE_f32>;
+defm V_MOV_B32 : VOP1_32 <0x00000001, "V_MOV_B32", []>;
 }  // End neverHasSideEffects
 defm V_READFIRSTLANE_B32 : VOP1_32 <0x00000002, "V_READFIRSTLANE_B32", []>;
 //defm V_CVT_I32_F64 : VOP1_32 <0x00000003, "V_CVT_I32_F64", []>;
@@ -594,7 +597,10 @@ def V_CNDMASK_B32 : VOP2_Helper <
 defm V_READLANE_B32 : VOP2_32 <0x00000001, "V_READLANE_B32", []>;
 defm V_WRITELANE_B32 : VOP2_32 <0x00000002, "V_WRITELANE_B32", []>;
 
-defm V_ADD_F32 : VOP2_32 <0x00000003, "V_ADD_F32", [], AMDILInst.ADD_f32>;
+defm V_ADD_F32 : VOP2_32 <
+  0x00000003, "V_ADD_F32",
+  [(set VReg_32:$dst, (fadd AllReg_32:$src0, VReg_32:$src1))]
+>;
 
 defm V_SUB_F32 : VOP2_32 <0x00000004, "V_SUB_F32", []>;
 defm V_SUBREV_F32 : VOP2_32 <0x00000005, "V_SUBREV_F32", []>;
@@ -610,8 +616,9 @@ defm V_MUL_F32 : VOP2_32 <0x00000008, "V_MUL_F32", []>;
 //defm V_MUL_HI_U32_U24 : VOP2_32 <0x0000000c, "V_MUL_HI_U32_U24", []>;
 defm V_MIN_LEGACY_F32 : VOP2_32 <0x0000000d, "V_MIN_LEGACY_F32", []>;
 
-defm V_MAX_LEGACY_F32 : VOP2_32 <0x0000000e, "V_MAX_LEGACY_F32", [],
-                                 AMDILInst.MAX_f32>;
+defm V_MAX_LEGACY_F32 : VOP2_32 <0x0000000e, "V_MAX_LEGACY_F32",
+  [(set VReg_32:$dst, (AMDGPUfmax AllReg_32:$src0, VReg_32:$src1))]
+>;
 defm V_MIN_F32 : VOP2_32 <0x0000000f, "V_MIN_F32", []>;
 defm V_MAX_F32 : VOP2_32 <0x00000010, "V_MAX_F32", []>;
 defm V_MIN_I32 : VOP2_32 <0x00000011, "V_MIN_I32", []>;
@@ -800,6 +807,13 @@ def CONFIG_WRITE : InstSI <
   field bits<32> Inst = 0;
 }
 
+def LOAD_CONST : AMDGPUShaderInst <
+  (outs GPRF32:$dst),
+  (ins i32imm:$src),
+  "LOAD_CONST $dst, $src",
+  [(set GPRF32:$dst, (int_AMDGPU_load_const imm:$src))]
+>;
+
 let usesCustomInserter = 1 in {
 
 def SI_V_CNDLT : InstSI <
@@ -824,28 +838,19 @@ def SI_INTERP_CONST : InstSI <
                                                  imm:$attr, SReg_32:$params))]
 >;
 
-
 def USE_SGPR_32 : InstSI <
   (outs SReg_32:$dst),
   (ins i32imm:$src0),
   "USE_SGPR_32",
-  [(set SReg_32:$dst, (int_SI_use_sgpr imm:$src0))]
-
-> {
-  field bits<32> Inst = 0;
-  let PreloadReg = 1;
-}
+  [(set (i32 SReg_32:$dst), (load_user_sgpr imm:$src0))]
+>;
 
 def USE_SGPR_64 : InstSI <
   (outs SReg_64:$dst),
   (ins i32imm:$src0),
   "USE_SGPR_64",
-  [(set SReg_64:$dst, (int_SI_use_sgpr imm:$src0))]
-
-> {
-  field bits<32> Inst = 0;
-  let PreloadReg = 1;
-}
+  [(set (i64 SReg_64:$dst), (load_user_sgpr imm:$src0))]
+>;
 
 def VS_LOAD_BUFFER_INDEX : InstSI <
   (outs VReg_32:$dst),
@@ -854,40 +859,20 @@ def VS_LOAD_BUFFER_INDEX : InstSI <
   [(set VReg_32:$dst, (int_SI_vs_load_buffer_index))]> {
 
   field bits<32> Inst = 0;
-  let PreloadReg = 1;
 }
 
 } // end usesCustomInserter 
 
 } // end IsCodeGenOnly, isPseudo
 
-} // end Gen = AMDGPUGen.SI
-
 /* int_SI_vs_load_input */
 def : Pat<
-  (int_SI_vs_load_input SReg_64:$tlst_sgpr, IMM8bit:$t_offset, IMM12bit:$attr_offset,
+  (int_SI_vs_load_input SReg_128:$tlst, IMM12bit:$attr_offset,
                         VReg_32:$buf_idx_vgpr),
   (BUFFER_LOAD_FORMAT_XYZW imm:$attr_offset, 0, 1, 0, 0, 0,
-                          VReg_32:$buf_idx_vgpr,
-                          (S_LOAD_DWORDX4_IMM imm:$t_offset, SReg_64:$tlst_sgpr),
-                          0, 0, (i32 SREG_LIT_0))
+                           VReg_32:$buf_idx_vgpr, SReg_128:$tlst,
+                           0, 0, (i32 SREG_LIT_0))
 >;
-
-/* int_SI_load_const */
-
-def : Pat <
-  (int_SI_load_const SReg_64:$const_ptr, IMM8bit:$offset),
-  (S_LOAD_DWORD_IMM imm:$offset, SReg_64:$const_ptr)
->;
-
-
-/* XXX: Complete this pattern with some form of a scalar move immediate */
-/*
-def : Pat <
-  (int_SI_load_const SReg_64:$const_ptr, imm:$offset),
-  (S_LOAD_DWORD_SGPR imm:$offset, SReg_64:$const_ptr)
->;
-*/
 
 /* int_SI_export */
 def : Pat <
@@ -899,13 +884,13 @@ def : Pat <
 
 /* int_SI_sample */
 def : Pat <
-  (int_SI_sample imm:$writemask, VReg_128:$coord, SReg_64:$rsrc, imm:$rsrc_offset,
-                 SReg_64:$sampler, imm:$sampler_offset),
+  (int_SI_sample imm:$writemask, VReg_128:$coord, SReg_256:$rsrc, SReg_128:$sampler),
   (IMAGE_SAMPLE imm:$writemask, 0, 0, 0, 0, 0, 0, 0, VReg_128:$coord,
-                (S_LOAD_DWORDX8_IMM imm:$rsrc_offset, SReg_64:$rsrc), /* Resource */
-                (S_LOAD_DWORDX4_IMM imm:$sampler_offset, SReg_64:$sampler)) /* Sampler */
+                SReg_256:$rsrc, SReg_128:$sampler)
 >;
 
+def CLAMP_SI : CLAMP<VReg_32>;
+def FABS_SI : FABS<VReg_32>;
 
 def : Extract_Element <f32, v4f32, VReg_128, 0, sel_x>;
 def : Extract_Element <f32, v4f32, VReg_128, 1, sel_y>;
@@ -934,6 +919,24 @@ def : Pat <
              imm:$attr, SReg_32:$params)
 >;
 
+def : Pat <
+  (int_SI_fs_interp_linear_centroid imm:$attr_chan, imm:$attr, SReg_32:$params),
+  (SI_INTERP (f32 LINEAR_CENTROID_I), (f32 LINEAR_CENTROID_J), imm:$attr_chan,
+             imm:$attr, SReg_32:$params)
+>;
+
+def : Pat <
+  (int_SI_fs_interp_persp_center imm:$attr_chan, imm:$attr, SReg_32:$params),
+  (SI_INTERP (f32 PERSP_CENTER_I), (f32 PERSP_CENTER_J), imm:$attr_chan,
+             imm:$attr, SReg_32:$params)
+>;
+
+def : Pat <
+  (int_SI_fs_interp_persp_centroid imm:$attr_chan, imm:$attr, SReg_32:$params),
+  (SI_INTERP (f32 PERSP_CENTROID_I), (f32 PERSP_CENTROID_J), imm:$attr_chan,
+             imm:$attr, SReg_32:$params)
+>;
+
 /********** ================== **********/
 /********** Intrinsic Patterns **********/
 /********** ================== **********/
@@ -941,5 +944,13 @@ def : Pat <
 /* llvm.AMDGPU.pow */
 /* XXX: We are using IEEE MUL, not the 0 * anything = 0 MUL, is this correct? */
 def : POW_Common <V_LOG_F32_e32, V_EXP_F32_e32, V_MUL_F32_e32, VReg_32>;
+
+/********** ================== **********/
+/**********   VOP3 Patterns    **********/
+/********** ================== **********/
+
+def : Pat <(f32 (IL_mad AllReg_32:$src0, AllReg_32:$src1, AllReg_32:$src2)),
+           (V_MAD_LEGACY_F32 AllReg_32:$src0, AllReg_32:$src1, AllReg_32:$src2,
+            0, 0, 0, 0)>;
 
 } // End isSI predicate

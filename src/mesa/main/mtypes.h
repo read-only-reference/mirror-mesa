@@ -755,6 +755,11 @@ struct gl_colorbuffer_attrib
       GLenum DstA;               /**< Alpha blend dest term */
       GLenum EquationRGB;        /**< GL_ADD, GL_SUBTRACT, etc. */
       GLenum EquationA;          /**< GL_ADD, GL_SUBTRACT, etc. */
+      /**
+       * Set if any blend factor uses SRC1.  Computed at the time blend factors
+       * get set.
+       */
+      GLboolean _UsesDualSrc;
    } Blend[MAX_DRAW_BUFFERS];
    /** Are the blend func terms currently different for each buffer/target? */
    GLboolean _BlendFuncPerBuffer;
@@ -1636,6 +1641,11 @@ struct gl_array_attrib
 
    /* GL_ARB_vertex_buffer_object */
    struct gl_buffer_object *ArrayBufferObj;
+
+   /**
+    * Vertex arrays as consumed by a driver.
+    * The array pointer is set up only by the VBO module. */
+   const struct gl_client_array **_DrawArrays; /**< 0..VERT_ATTRIB_MAX-1 */
 };
 
 
@@ -2350,6 +2360,7 @@ struct gl_shader_program
 #define GLSL_NOP_VERT 0x20  /**< Force no-op vertex shaders */
 #define GLSL_NOP_FRAG 0x40  /**< Force no-op fragment shaders */
 #define GLSL_USE_PROG 0x80  /**< Log glUseProgram calls */
+#define GLSL_REPORT_ERRORS 0x100  /**< Print compilation errors */
 
 
 /**
@@ -2840,6 +2851,11 @@ struct gl_constants
     */
    GLboolean GLSLSkipStrictMaxVaryingLimitCheck;
    GLboolean GLSLSkipStrictMaxUniformLimitCheck;
+
+   /**
+    * Force software support for primitive restart in the VBO module.
+    */
+   GLboolean PrimitiveRestartInSoftware;
 };
 
 
@@ -3252,6 +3268,17 @@ typedef enum
    API_OPENGLES2
 } gl_api;
 
+/**
+ * Driver-specific state flags.
+ *
+ * These are or'd with gl_context::NewDriverState to notify a driver about
+ * a state change. The driver sets the flags at context creation and
+ * the meaning of the bits set is opaque to core Mesa.
+ */
+struct gl_driver_flags
+{
+   GLbitfield NewArray;             /**< Vertex array state */
+};
 
 /**
  * Mesa rendering context.
@@ -3411,6 +3438,9 @@ struct gl_context
 
    GLenum RenderMode;        /**< either GL_RENDER, GL_SELECT, GL_FEEDBACK */
    GLbitfield NewState;      /**< bitwise-or of _NEW_* flags */
+   GLbitfield NewDriverState;/**< bitwise-or of flags from DriverFlags */
+
+   struct gl_driver_flags DriverFlags;
 
    GLboolean ViewportInitialized;  /**< has viewport size been initialized? */
 
@@ -3503,7 +3533,10 @@ enum _verbose
 /** The MESA_DEBUG_FLAGS var is a bitmask of these flags */
 enum _debug
 {
-   DEBUG_ALWAYS_FLUSH		= 0x1
+   DEBUG_SILENT                 = (1 << 0),
+   DEBUG_ALWAYS_FLUSH		= (1 << 1),
+   DEBUG_INCOMPLETE_TEXTURE     = (1 << 2),
+   DEBUG_INCOMPLETE_FBO         = (1 << 3)
 };
 
 

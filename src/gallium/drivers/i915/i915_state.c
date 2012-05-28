@@ -672,15 +672,15 @@ static void i915_set_constant_buffer(struct pipe_context *pipe,
    unsigned new_num = 0;
    boolean diff = TRUE;
 
+   /* XXX don't support geom shaders now */
+   if (shader == PIPE_SHADER_GEOMETRY)
+      return;
+
    if (cb && cb->user_buffer) {
       buf = i915_user_buffer_create(pipe->screen, cb->user_buffer,
                                     cb->buffer_size,
                                     PIPE_BIND_CONSTANT_BUFFER);
    }
-
-   /* XXX don't support geom shaders now */
-   if (shader == PIPE_SHADER_GEOMETRY)
-      return;
 
    /* if we have a new buffer compare it with the old one */
    if (buf) {
@@ -1048,9 +1048,6 @@ static void i915_set_index_buffer(struct pipe_context *pipe,
       memcpy(&i915->index_buffer, ib, sizeof(i915->index_buffer));
    else
       memset(&i915->index_buffer, 0, sizeof(i915->index_buffer));
-
-   /* pass-through to draw module */
-   draw_set_index_buffer(i915->draw, ib);
 }
 
 static void

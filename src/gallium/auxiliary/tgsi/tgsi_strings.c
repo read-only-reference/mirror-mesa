@@ -32,11 +32,12 @@
 #include "tgsi_strings.h"
 
 
-const char *tgsi_processor_type_names[3] =
+const char *tgsi_processor_type_names[4] =
 {
    "FRAG",
    "VERT",
-   "GEOM"
+   "GEOM",
+   "COMP"
 };
 
 const char *tgsi_file_names[TGSI_FILE_COUNT] =
@@ -53,7 +54,8 @@ const char *tgsi_file_names[TGSI_FILE_COUNT] =
    "SV",
    "IMMX",
    "TEMPX",
-   "RES"
+   "RES",
+   "SVIEW"
 };
 
 const char *tgsi_semantic_names[TGSI_SEMANTIC_COUNT] =
@@ -72,12 +74,16 @@ const char *tgsi_semantic_names[TGSI_SEMANTIC_COUNT] =
    "VERTEXID",
    "STENCIL",
    "CLIPDIST",
-   "CLIPVERTEX"
+   "CLIPVERTEX",
+   "GRID_SIZE",
+   "BLOCK_ID",
+   "BLOCK_SIZE",
+   "THREAD_ID"
 };
 
 const char *tgsi_texture_names[TGSI_TEXTURE_COUNT] =
 {
-   "UNKNOWN",
+   "BUFFER",
    "1D",
    "2D",
    "3D",
@@ -90,7 +96,8 @@ const char *tgsi_texture_names[TGSI_TEXTURE_COUNT] =
    "2DARRAY",
    "SHADOW1DARRAY",
    "SHADOW2DARRAY",
-   "SHADOWCUBE"
+   "SHADOWCUBE",
+   "UNKNOWN"
 };
 
 const char *tgsi_property_names[TGSI_PROPERTY_COUNT] =

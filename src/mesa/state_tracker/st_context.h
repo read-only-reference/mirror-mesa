@@ -49,6 +49,7 @@ struct u_upload_mgr;
 #define ST_NEW_FRAMEBUFFER             (1 << 3)
 #define ST_NEW_EDGEFLAGS_DATA          (1 << 4)
 #define ST_NEW_GEOMETRY_PROGRAM        (1 << 5)
+#define ST_NEW_VERTEX_ARRAYS           (1 << 6)
 
 
 struct st_state_flags {
@@ -78,7 +79,6 @@ struct st_context
    struct draw_stage *feedback_stage;  /**< For GL_FEEDBACK rendermode */
    struct draw_stage *selection_stage;  /**< For GL_SELECT rendermode */
    struct draw_stage *rastpos_stage;  /**< For glRasterPos */
-   GLboolean sw_primitive_restart;
    GLboolean clamp_frag_color_in_shader;
    GLboolean clamp_vert_color_in_shader;
 

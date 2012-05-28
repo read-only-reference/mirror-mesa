@@ -1,4 +1,4 @@
-//===-- SICodeEmitter.cpp - TODO: Add brief description -------===//
+//===-- SICodeEmitter.cpp - SI Code Emitter -------------------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO: Add full description
+// The SI code emitter produces machine code that can be executed directly on
+// the GPU device.
 //
 //===----------------------------------------------------------------------===//
 
@@ -48,14 +49,27 @@ namespace {
         _OS(OS), TM(NULL) { }
     const char *getPassName() const { return "SI Code Emitter"; }
     bool runOnMachineFunction(MachineFunction &MF);
+
+    /// getMachineOpValue - Return the encoding for MO
     virtual uint64_t getMachineOpValue(const MachineInstr &MI,
                                        const MachineOperand &MO) const;
+
+    /// GPR4AlignEncode - Encoding for when 4 consectuive registers are used 
     virtual unsigned GPR4AlignEncode(const MachineInstr  &MI, unsigned OpNo)
                                                                       const;
+
+    /// GPR2AlignEncode - Encoding for when 2 consecutive registers are used
     virtual unsigned GPR2AlignEncode(const MachineInstr &MI, unsigned OpNo)
                                                                       const;
+    /// i32LiteralEncode - Encode an i32 literal this is used as an operand
+    /// for an instruction in place of a register.
     virtual uint64_t i32LiteralEncode(const MachineInstr &MI, unsigned OpNo)
                                                                       const;
+    /// SMRDmemriEncode - Encoding for SMRD indexed loads
+    virtual uint32_t SMRDmemriEncode(const MachineInstr &MI, unsigned OpNo)
+                                                                     const;
+
+    /// VOPPostEncode - Post-Encoder method for VOP instructions 
     virtual uint64_t VOPPostEncode(const MachineInstr &MI,
                                    uint64_t Value) const;
   };
@@ -144,8 +158,6 @@ bool SICodeEmitter::runOnMachineFunction(MachineFunction &MF)
 {
   MF.dump();
   TM = &MF.getTarget();
-  const AMDGPUInstrInfo * TII =
-                        static_cast<const AMDGPUInstrInfo*>(TM->getInstrInfo());
 
   emitState(MF);
 
@@ -155,8 +167,7 @@ bool SICodeEmitter::runOnMachineFunction(MachineFunction &MF)
     for (MachineBasicBlock::iterator I = MBB.begin(), E = MBB.end();
                                                       I != E; ++I) {
       MachineInstr &MI = *I;
-      if (!TII->isRegPreload(MI) && MI.getOpcode() != AMDIL::KILL
-          && MI.getOpcode() != AMDIL::RETURN) {
+      if (MI.getOpcode() != AMDIL::KILL && MI.getOpcode() != AMDIL::RETURN) {
         emitInstr(MI);
       }
     }
@@ -176,8 +187,6 @@ void SICodeEmitter::emitInstr(MachineInstr &MI)
     abort();
   }
 
-//  hwInst |= SII->getBinaryCode(MI);
-
   unsigned bytes = SII->getEncodingBytes(MI);
   outputBytes(hwInst, bytes);
 }
@@ -196,8 +205,8 @@ uint64_t SICodeEmitter::getMachineOpValue(const MachineInstr &MI,
     return MO.getImm();
 
   case MachineOperand::MO_FPImmediate:
-    /* XXX: Not all instructions can use inline literals */
-    /* XXX: We should make sure this is a 32-bit constant */
+    // XXX: Not all instructions can use inline literals
+    // XXX: We should make sure this is a 32-bit constant
     return LITERAL_REG | (MO.getFPImm()->getValueAPF().bitcastToAPInt().getZExtValue() << 32);
   default:
     llvm_unreachable("Encoding of this operand type is not supported yet.");
@@ -232,9 +241,39 @@ uint64_t SICodeEmitter::i32LiteralEncode(const MachineInstr &MI,
   return LITERAL_REG | (MI.getOperand(OpNo).getImm() << 32);
 }
 
-/* Set the "VGPR" bit for VOP args that can take either a VGPR or a SGPR.
- * XXX: It would be nice if we could handle this without a PostEncode function.
- */
+#define SMRD_OFFSET_MASK 0xff
+#define SMRD_IMM_SHIFT 8
+#define SMRD_SBASE_MASK 0x3f
+#define SMRD_SBASE_SHIFT 9
+/// SMRDmemriEncode - This function is responsibe for encoding the offset
+/// and the base ptr for SMRD instructions it should return a bit string in
+/// this format:
+///
+/// OFFSET = bits{7-0}
+/// IMM    = bits{8}
+/// SBASE  = bits{14-9}
+///
+uint32_t SICodeEmitter::SMRDmemriEncode(const MachineInstr &MI,
+    unsigned OpNo) const
+{
+  uint32_t encoding;
+
+  const MachineOperand &OffsetOp = MI.getOperand(OpNo + 1);
+
+  //XXX: Use this function for SMRD loads with register offsets
+  assert(OffsetOp.isImm());
+
+  encoding =
+      (getMachineOpValue(MI, OffsetOp) & SMRD_OFFSET_MASK)
+    | (1 << SMRD_IMM_SHIFT) //XXX If the Offset is a register we shouldn't set this bit
+    | ((GPR2AlignEncode(MI, OpNo) & SMRD_SBASE_MASK) << SMRD_SBASE_SHIFT)
+    ;
+
+  return encoding;
+}
+
+/// Set the "VGPR" bit for VOP args that can take either a VGPR or a SGPR.
+/// XXX: It would be nice if we could handle this without a PostEncode function.
 uint64_t SICodeEmitter::VOPPostEncode(const MachineInstr &MI,
     uint64_t Value) const
 {
@@ -251,7 +290,7 @@ uint64_t SICodeEmitter::VOPPostEncode(const MachineInstr &MI,
     vgprBitOffset = 0;
   }
 
-  /* Add one to skip over the destination reg operand. */
+  // Add one to skip over the destination reg operand.
   for (unsigned opIdx = 1; opIdx < numSrcOps + 1; opIdx++) {
     if (!MI.getOperand(opIdx).isReg()) {
       continue;

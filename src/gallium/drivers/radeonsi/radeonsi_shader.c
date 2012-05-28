@@ -66,58 +66,103 @@ static struct si_shader_context * si_shader_context(
 #define CENTROID_OFSET 4
 
 #define USE_SGPR_MAX_SUFFIX_LEN 5
+#define CONST_ADDR_SPACE 2
+#define USER_SGPR_ADDR_SPACE 8
 
 enum sgpr_type {
+	SGPR_CONST_PTR_F32,
+	SGPR_CONST_PTR_V4I32,
+	SGPR_CONST_PTR_V8I32,
 	SGPR_I32,
-	SGPR_I64,
-	SGPR_PTR_V4I32,
-	SGPR_PTR_V8I32
+	SGPR_I64
 };
 
+/**
+ * Build an LLVM bytecode indexed load using LLVMBuildGEP + LLVMBuildLoad
+ *
+ * @param offset The offset parameter specifies the number of
+ * elements to offset, not the number of bytes or dwords.  An element is the
+ * the type pointed to by the base_ptr parameter (e.g. int is the element of
+ * an int* pointer)
+ *
+ * When LLVM lowers the load instruction, it will convert the element offset
+ * into a dword offset automatically.
+ *
+ */
+static LLVMValueRef build_indexed_load(
+	struct gallivm_state * gallivm,
+	LLVMValueRef base_ptr,
+	LLVMValueRef offset)
+{
+	LLVMValueRef computed_ptr = LLVMBuildGEP(
+		gallivm->builder, base_ptr, &offset, 1, "");
+
+	return LLVMBuildLoad(gallivm->builder, computed_ptr, "");
+}
+
+/**
+ * Load a value stored in one of the user SGPRs
+ *
+ * @param sgpr This is the sgpr to load the value from.  If you need to load a
+ * value that is stored in consecutive SGPR registers (e.g. a 64-bit pointer),
+ * then you should pass the index of the first SGPR that holds the value.  For
+ * example, if you want to load a pointer that is stored in SGPRs 2 and 3, then
+ * use pass 2 for the sgpr parameter.
+ *
+ * The value of the sgpr parameter must also be aligned to the width of the type
+ * being loaded, so that the sgpr parameter is divisible by the dword width of the
+ * type.  For example, if the value being loaded is two dwords wide, then the sgpr
+ * parameter must be divisible by two.
+ */
 static LLVMValueRef use_sgpr(
 	struct gallivm_state * gallivm,
 	enum sgpr_type type,
 	unsigned sgpr)
 {
 	LLVMValueRef sgpr_index;
-	LLVMValueRef sgpr_value;
 	LLVMTypeRef ret_type;
+	LLVMValueRef ptr;
 
 	sgpr_index = lp_build_const_int32(gallivm, sgpr);
 
-	if (type == SGPR_I32) {
-		ret_type = LLVMInt32TypeInContext(gallivm->context);
-		return lp_build_intrinsic_unary(gallivm->builder,
-						"llvm.SI.use.sgpr.i32",
-						ret_type, sgpr_index);
-	}
-
-	ret_type = LLVMInt64TypeInContext(gallivm->context);
-	sgpr_value = lp_build_intrinsic_unary(gallivm->builder,
-				"llvm.SI.use.sgpr.i64",
-				 ret_type, sgpr_index);
-
 	switch (type) {
+	case SGPR_CONST_PTR_F32:
+		assert(sgpr % 2 == 0);
+		ret_type = LLVMFloatTypeInContext(gallivm->context);
+		ret_type = LLVMPointerType(ret_type, CONST_ADDR_SPACE);
+		break;
+
+	case SGPR_I32:
+		ret_type = LLVMInt32TypeInContext(gallivm->context);
+		break;
+
 	case SGPR_I64:
-		return sgpr_value;
-	case SGPR_PTR_V4I32:
+		assert(sgpr % 2 == 0);
+		ret_type= LLVMInt64TypeInContext(gallivm->context);
+		break;
+
+	case SGPR_CONST_PTR_V4I32:
+		assert(sgpr % 2 == 0);
 		ret_type = LLVMInt32TypeInContext(gallivm->context);
 		ret_type = LLVMVectorType(ret_type, 4);
-		ret_type = LLVMPointerType(ret_type,
-					0 /*XXX: Specify address space*/);
-		return LLVMBuildIntToPtr(gallivm->builder, sgpr_value,
-								ret_type, "");
-	case SGPR_PTR_V8I32:
+		ret_type = LLVMPointerType(ret_type, CONST_ADDR_SPACE);
+		break;
+
+	case SGPR_CONST_PTR_V8I32:
+		assert(sgpr % 2 == 0);
 		ret_type = LLVMInt32TypeInContext(gallivm->context);
 		ret_type = LLVMVectorType(ret_type, 8);
-		ret_type = LLVMPointerType(ret_type,
-					0 /*XXX: Specify address space*/);
-		return LLVMBuildIntToPtr(gallivm->builder, sgpr_value,
-								ret_type, "");
+		ret_type = LLVMPointerType(ret_type, CONST_ADDR_SPACE);
+		break;
+
 	default:
 		assert(!"Unsupported SGPR type in use_sgpr()");
 		return NULL;
 	}
+
+	ret_type = LLVMPointerType(ret_type, USER_SGPR_ADDR_SPACE);
+	ptr = LLVMBuildIntToPtr(gallivm->builder, sgpr_index, ret_type, "");
+	return LLVMBuildLoad(gallivm->builder, ptr, "");
 }
 
 static void declare_input_vs(
@@ -127,9 +172,10 @@ static void declare_input_vs(
 {
 	LLVMValueRef t_list_ptr;
 	LLVMValueRef t_offset;
+	LLVMValueRef t_list;
 	LLVMValueRef attribute_offset;
 	LLVMValueRef buffer_index_reg;
-	LLVMValueRef args[4];
+	LLVMValueRef args[3];
 	LLVMTypeRef vec4_type;
 	LLVMValueRef input;
 	struct lp_build_context * uint = &si_shader_ctx->radeon_bld.soa.bld_base.uint_bld;
@@ -138,13 +184,17 @@ static void declare_input_vs(
 	struct pipe_vertex_element *velem = &rctx->vertex_elements->elements[input_index];
 	unsigned chan;
 
+	/* Load the T list */
 	/* XXX: Communicate with the rest of the driver about which SGPR the T#
 	 * list pointer is going to be stored in.  Hard code to SGPR[6:7] for
  	 * now */
-	t_list_ptr = use_sgpr(base->gallivm, SGPR_I64, 3);
+	t_list_ptr = use_sgpr(base->gallivm, SGPR_CONST_PTR_V4I32, 6);
 
-	t_offset = lp_build_const_int32(base->gallivm,
-					4 * velem->vertex_buffer_index);
+	t_offset = lp_build_const_int32(base->gallivm, velem->vertex_buffer_index);
+
+	t_list = build_indexed_load(base->gallivm, t_list_ptr, t_offset);
+
+	/* Build the attribute offset */
 	attribute_offset = lp_build_const_int32(base->gallivm, velem->src_offset);
 
 	/* Load the buffer index is always, which is always stored in VGPR0
@@ -153,12 +203,11 @@ static void declare_input_vs(
 		"llvm.SI.vs.load.buffer.index", uint->elem_type, NULL, 0);
 
 	vec4_type = LLVMVectorType(base->elem_type, 4);
-	args[0] = t_list_ptr;
-	args[1] = t_offset;
-	args[2] = attribute_offset;
-	args[3] = buffer_index_reg;
+	args[0] = t_list;
+	args[1] = attribute_offset;
+	args[2] = buffer_index_reg;
 	input = lp_build_intrinsic(base->gallivm->builder,
-		"llvm.SI.vs.load.input", vec4_type, args, 4);
+		"llvm.SI.vs.load.input", vec4_type, args, 3);
 
 	/* Break up the vec4 into individual components */
 	for (chan = 0; chan < 4; chan++) {
@@ -199,18 +248,31 @@ static void declare_input_fs(
 	LLVMValueRef attr_number = lp_build_const_int32(gallivm, input_index);
 
 	/* XXX: Handle all possible interpolation modes */
-	switch (decl->Declaration.Interpolate) {
+	switch (decl->Interp.Interpolate) {
 	case TGSI_INTERPOLATE_COLOR:
-		if (si_shader_ctx->rctx->rasterizer->flatshade)
+		if (si_shader_ctx->rctx->rasterizer->flatshade) {
 			intr_name = "llvm.SI.fs.interp.constant";
-		else
-			intr_name = "llvm.SI.fs.interp.linear.center";
+		} else {
+			if (decl->Interp.Centroid)
+				intr_name = "llvm.SI.fs.interp.persp.centroid";
+			else
+				intr_name = "llvm.SI.fs.interp.persp.center";
+		}
 		break;
 	case TGSI_INTERPOLATE_CONSTANT:
 		intr_name = "llvm.SI.fs.interp.constant";
 		break;
 	case TGSI_INTERPOLATE_LINEAR:
-		intr_name = "llvm.SI.fs.interp.linear.center";
+		if (decl->Interp.Centroid)
+			intr_name = "llvm.SI.fs.interp.linear.centroid";
+		else
+			intr_name = "llvm.SI.fs.interp.linear.center";
+		break;
+	case TGSI_INTERPOLATE_PERSPECTIVE:
+		if (decl->Interp.Centroid)
+			intr_name = "llvm.SI.fs.interp.persp.centroid";
+		else
+			intr_name = "llvm.SI.fs.interp.persp.center";
 		break;
 	default:
 		fprintf(stderr, "Warning: Unhandled interpolation mode.\n");
@@ -261,7 +323,7 @@ static LLVMValueRef fetch_constant(
 
 	/* XXX: Assume the pointer to the constant buffer is being stored in
 	 * SGPR[0:1] */
-	const_ptr = use_sgpr(base->gallivm, SGPR_I64, 0);
+	const_ptr = use_sgpr(base->gallivm, SGPR_CONST_PTR_F32, 0);
 
 	/* XXX: This assumes that the constant buffer is not packed, so
 	 * CONST[0].x will have an offset of 0 and CONST[1].x will have an
@@ -269,29 +331,7 @@ static LLVMValueRef fetch_constant(
 	offset = lp_build_const_int32(base->gallivm,
 					(reg->Register.Index * 4) + swizzle);
 
-	return lp_build_intrinsic_binary(base->gallivm->builder,
-		"llvm.SI.load.const", base->elem_type, const_ptr, offset);
-}
-
-
-/* Declare some intrinsics with the correct attributes */
-static void si_llvm_emit_prologue(struct lp_build_tgsi_context * bld_base)
-{
-	LLVMValueRef function;
-	struct gallivm_state * gallivm = bld_base->base.gallivm;
-
-	LLVMTypeRef i64 = LLVMInt64TypeInContext(gallivm->context);
-	LLVMTypeRef i32 = LLVMInt32TypeInContext(gallivm->context);
-
-	/* declare i32 @llvm.SI.use.sgpr.i32(i32) */
-	function = lp_declare_intrinsic(gallivm->module, "llvm.SI.use.sgpr.i32",
-					i32, &i32, 1);
-	LLVMAddFunctionAttr(function, LLVMReadNoneAttribute);
-
-	/* declare i64 @llvm.SI.use.sgpr.i64(i32) */
-	function = lp_declare_intrinsic(gallivm->module, "llvm.SI.use.sgpr.i64",
-					i64, &i32, 1);
-	LLVMAddFunctionAttr(function, LLVMReadNoneAttribute);
+	return build_indexed_load(base->gallivm, const_ptr, offset);
 }
 
 /* XXX: This is partially implemented for VS only at this point.  It is not complete */
@@ -331,14 +371,14 @@ static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 			i = shader->ninput++;
 			shader->input[i].name = d->Semantic.Name;
 			shader->input[i].sid = d->Semantic.Index;
-			shader->input[i].interpolate = d->Declaration.Interpolate;
-			shader->input[i].centroid = d->Declaration.Centroid;
+			shader->input[i].interpolate = d->Interp.Interpolate;
+			shader->input[i].centroid = d->Interp.Centroid;
 			break;
 		case TGSI_FILE_OUTPUT:
 			i = shader->noutput++;
 			shader->output[i].name = d->Semantic.Name;
 			shader->output[i].sid = d->Semantic.Index;
-			shader->output[i].interpolate = d->Declaration.Interpolate;
+			shader->output[i].interpolate = d->Interp.Interpolate;
 			break;
 		}
 
@@ -368,6 +408,7 @@ static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 			case TGSI_SEMANTIC_COLOR:
 				if (si_shader_ctx->type == TGSI_PROCESSOR_VERTEX) {
 					target = V_008DFC_SQ_EXP_PARAM + param_count;
+					shader->output[i].param_offset = param_count;
 					param_count++;
 				} else {
 					target = V_008DFC_SQ_EXP_MRT + color_count;
@@ -376,6 +417,7 @@ static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 				break;
 			case TGSI_SEMANTIC_GENERIC:
 				target = V_008DFC_SQ_EXP_PARAM + param_count;
+				shader->output[i].param_offset = param_count;
 				param_count++;
 				break;
 			default:
@@ -442,6 +484,9 @@ static void tex_fetch_args(
 	struct lp_build_tgsi_context * bld_base,
 	struct lp_build_emit_data * emit_data)
 {
+	LLVMValueRef ptr;
+	LLVMValueRef offset;
+
 	/* WriteMask */
 	emit_data->args[0] = lp_build_const_int32(bld_base->base.gallivm,
 				emit_data->inst->Dst[0].Register.WriteMask);
@@ -452,14 +497,18 @@ static void tex_fetch_args(
 							0, LP_CHAN_ALL);
 
 	/* Resource */
-	emit_data->args[2] = use_sgpr(bld_base->base.gallivm, SGPR_I64, 2);
-	emit_data->args[3] = lp_build_const_int32(bld_base->base.gallivm,
-						  8 * emit_data->inst->Src[1].Register.Index);
+	ptr = use_sgpr(bld_base->base.gallivm, SGPR_CONST_PTR_V8I32, 4);
+	offset = lp_build_const_int32(bld_base->base.gallivm,
+				  8 * emit_data->inst->Src[1].Register.Index);
+	emit_data->args[2] = build_indexed_load(bld_base->base.gallivm,
+						ptr, offset);
 
 	/* Sampler */
-	emit_data->args[4] = use_sgpr(bld_base->base.gallivm, SGPR_I64, 1);
-	emit_data->args[5] = lp_build_const_int32(bld_base->base.gallivm,
-						  4 * emit_data->inst->Src[1].Register.Index);
+	ptr = use_sgpr(bld_base->base.gallivm, SGPR_CONST_PTR_V4I32, 2);
+	offset = lp_build_const_int32(bld_base->base.gallivm,
+				  4 * emit_data->inst->Src[1].Register.Index);
+	emit_data->args[3] = build_indexed_load(bld_base->base.gallivm,
+						ptr, offset);
 
 	/* Dimensions */
 	/* XXX: We might want to pass this information to the shader at some. */
@@ -467,7 +516,7 @@ static void tex_fetch_args(
 					emit_data->inst->Texture.Texture);
 */
 
-	emit_data->arg_count = 6;
+	emit_data->arg_count = 4;
 	/* XXX: To optimize, we could use a float or v2f32, if the last bits of
 	 * the writemask are clear */
 	emit_data->dst_type = LLVMVectorType(
@@ -501,7 +550,6 @@ int si_pipe_shader_create(
 	tgsi_scan_shader(shader->tokens, &shader_info);
 	bld_base->info = &shader_info;
 	bld_base->emit_fetch_funcs[TGSI_FILE_CONSTANT] = fetch_constant;
-	bld_base->emit_prologue = si_llvm_emit_prologue;
 	bld_base->emit_epilogue = si_llvm_emit_epilogue;
 
 	bld_base->op_actions[TGSI_OPCODE_TEX] = tex_action;

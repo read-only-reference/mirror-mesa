@@ -1,4 +1,4 @@
-//===-- AMDGPULowerInstructions.cpp - TODO: Add brief description -------===//
+//===-- AMDGPULowerInstructions.cpp - AMDGPU lowering pass ----------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -7,7 +7,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// TODO: Add full description
+// This pass lowers unsupported AMDIL MachineInstrs to LLVM pseudo 
+// MachineInstrs for hw codegen targets.
 //
 //===----------------------------------------------------------------------===//
 
@@ -22,22 +23,26 @@
 using namespace llvm;
 
 namespace {
-  class AMDGPULowerInstructionsPass : public MachineFunctionPass {
 
-  private:
-    static char ID;
-    TargetMachine &TM;
-    void lowerVCREATE_v4f32(MachineInstr &MI, MachineBasicBlock::iterator I,
-                              MachineBasicBlock &MBB, MachineFunction &MF);
+class AMDGPULowerInstructionsPass : public MachineFunctionPass {
 
-  public:
-    AMDGPULowerInstructionsPass(TargetMachine &tm) :
-      MachineFunctionPass(ID), TM(tm) { }
+private:
+  static char ID;
+  TargetMachine &TM;
+  void lowerVCREATE_v4(MachineInstr &MI, MachineBasicBlock::iterator I,
+                            MachineBasicBlock &MBB, MachineFunction &MF);
 
-    virtual bool runOnMachineFunction(MachineFunction &MF);
+public:
+  AMDGPULowerInstructionsPass(TargetMachine &tm) :
+    MachineFunctionPass(ID), TM(tm) { }
 
-  };
-} /* End anonymous namespace */
+  virtual bool runOnMachineFunction(MachineFunction &MF);
+
+  virtual const char *getPassName() const {return "AMDGPU Lower Instructions";}
+
+};
+
+} // End anonymous namespace
 
 char AMDGPULowerInstructionsPass::ID = 0;
 
@@ -56,8 +61,9 @@ bool AMDGPULowerInstructionsPass::runOnMachineFunction(MachineFunction &MF)
 
       switch (MI.getOpcode()) {
       default: continue;
-      case AMDIL::VCREATE_v4f32: lowerVCREATE_v4f32(MI, I, MBB, MF); break;
-
+      case AMDIL::VCREATE_v4f32:
+      case AMDIL::VCREATE_v4i32:
+        lowerVCREATE_v4(MI, I, MBB, MF); break;
       }
       MI.eraseFromParent();
     }
@@ -65,7 +71,7 @@ bool AMDGPULowerInstructionsPass::runOnMachineFunction(MachineFunction &MF)
   return false;
 }
 
-void AMDGPULowerInstructionsPass::lowerVCREATE_v4f32(MachineInstr &MI,
+void AMDGPULowerInstructionsPass::lowerVCREATE_v4(MachineInstr &MI,
     MachineBasicBlock::iterator I, MachineBasicBlock &MBB, MachineFunction &MF)
 {
   MachineRegisterInfo & MRI = MF.getRegInfo();

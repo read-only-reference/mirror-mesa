@@ -99,7 +99,9 @@ intel_miptree_create_for_teximage(struct intel_context *intel,
 			       width,
 			       height,
 			       depth,
-			       expect_accelerated_upload);
+			       expect_accelerated_upload,
+                               0 /* num_samples */,
+                               false /* msaa_is_interleaved */);
 }
 
 /* There are actually quite a few combinations this will work for,
@@ -321,8 +323,8 @@ intelSetTexBuffer2(__DRIcontext *pDRICtx, GLint target,
    struct intel_renderbuffer *rb;
    struct gl_texture_object *texObj;
    struct gl_texture_image *texImage;
-   int level = 0, internalFormat;
-   gl_format texFormat;
+   int level = 0, internalFormat = 0;
+   gl_format texFormat = MESA_FORMAT_NONE;
 
    texObj = _mesa_get_current_tex_object(ctx, target);
    intelObj = intel_texture_object(texObj);

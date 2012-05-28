@@ -62,6 +62,7 @@ extern "C" {
 #define PIPE_MAX_GEOMETRY_SAMPLERS  16
 #define PIPE_MAX_SHADER_INPUTS    32
 #define PIPE_MAX_SHADER_OUTPUTS   32
+#define PIPE_MAX_SHADER_SAMPLER_VIEWS 32
 #define PIPE_MAX_SHADER_RESOURCES 32
 #define PIPE_MAX_TEXTURE_LEVELS   16
 #define PIPE_MAX_SO_BUFFERS        4
@@ -337,6 +338,7 @@ struct pipe_surface
    unsigned height;              /**< logical height in pixels */
 
    unsigned usage;               /**< bitmask of PIPE_BIND_x */
+   unsigned writable:1;          /**< writable shader resource */
 
    union {
       struct {
@@ -591,6 +593,13 @@ struct pipe_resolve_info
    unsigned mask; /**< PIPE_MASK_RGBA, Z, S or ZS */
 };
 
+struct pipe_compute_state
+{
+   const void *prog; /**< Compute program to be executed. */
+   unsigned req_local_mem; /**< Required size of the LOCAL resource. */
+   unsigned req_private_mem; /**< Required size of the PRIVATE resource. */
+   unsigned req_input_mem; /**< Required size of the INPUT resource. */
+};
 
 #ifdef __cplusplus
 }

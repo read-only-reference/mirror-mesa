@@ -345,13 +345,16 @@ generate_fs(struct gallivm_state *gallivm,
                                            0);
 
       if (color0 != -1 && outputs[color0][3]) {
+         const struct util_format_description *cbuf_format_desc;
          LLVMValueRef alpha = LLVMBuildLoad(builder, outputs[color0][3], "alpha");
          LLVMValueRef alpha_ref_value;
 
          alpha_ref_value = lp_jit_context_alpha_ref_value(gallivm, context_ptr);
          alpha_ref_value = lp_build_broadcast(gallivm, vec_type, alpha_ref_value);
 
-         lp_build_alpha_test(gallivm, key->alpha.func, type,
+         cbuf_format_desc = util_format_description(key->cbuf_format[0]);
+
+         lp_build_alpha_test(gallivm, key->alpha.func, type, cbuf_format_desc,
                              &mask, alpha, alpha_ref_value,
                              (depth_mode & LATE_DEPTH_TEST) != 0);
       }
@@ -555,7 +558,7 @@ generate_fragment(struct llvmpipe_context *lp,
 	 if (key->flatshade)
 	    inputs[i].interp = LP_INTERP_CONSTANT;
 	 else
-	    inputs[i].interp = LP_INTERP_LINEAR;
+	    inputs[i].interp = LP_INTERP_PERSPECTIVE;
       }
    }
 
@@ -924,6 +927,7 @@ generate_variant(struct llvmpipe_context *lp,
                  const struct lp_fragment_shader_variant_key *key)
 {
    struct lp_fragment_shader_variant *variant;
+   const struct util_format_description *cbuf0_format_desc;
    boolean fullcolormask;
 
    variant = CALLOC_STRUCT(lp_fragment_shader_variant);
@@ -942,12 +946,8 @@ generate_variant(struct llvmpipe_context *lp,
     */
    fullcolormask = FALSE;
    if (key->nr_cbufs == 1) {
-      const struct util_format_description *format_desc;
-      format_desc = util_format_description(key->cbuf_format[0]);
-      if ((~key->blend.rt[0].colormask &
-           util_format_colormask(format_desc)) == 0) {
-         fullcolormask = TRUE;
-      }
+      cbuf0_format_desc = util_format_description(key->cbuf_format[0]);
+      fullcolormask = util_format_colormask_full(cbuf0_format_desc, key->blend.rt[0].colormask);
    }
 
    variant->opaque =
@@ -1177,7 +1177,8 @@ llvmpipe_set_constant_buffer(struct pipe_context *pipe,
    const void *data;
 
    if (cb && cb->user_buffer) {
-      constants = llvmpipe_user_buffer_create(pipe->screen, cb->user_buffer,
+      constants = llvmpipe_user_buffer_create(pipe->screen,
+                                              (void *) cb->user_buffer,
                                               cb->buffer_size,
                                               PIPE_BIND_CONSTANT_BUFFER);
    }

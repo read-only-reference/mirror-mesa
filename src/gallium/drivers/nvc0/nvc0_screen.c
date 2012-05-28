@@ -139,10 +139,10 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
-   case PIPE_CAP_USER_VERTEX_BUFFERS:
-   case PIPE_CAP_USER_INDEX_BUFFERS:
       return 0; /* state trackers will know better */
    case PIPE_CAP_USER_CONSTANT_BUFFERS:
+   case PIPE_CAP_USER_INDEX_BUFFERS:
+   case PIPE_CAP_USER_VERTEX_BUFFERS:
       return 1;
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 256;
@@ -190,7 +190,7 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
    case PIPE_SHADER_CAP_MAX_CONSTS:
       return 65536 / 16;
    case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
-      return 14;
+      return NVC0_MAX_PIPE_CONSTBUFS;
    case PIPE_SHADER_CAP_MAX_ADDRS:
       return 1;
    case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
@@ -418,8 +418,6 @@ nvc0_screen_create(struct nouveau_device *dev)
       return NULL;
    pscreen = &screen->base.base;
 
-   screen->base.sysmem_bindings = PIPE_BIND_CONSTANT_BUFFER;
-
    ret = nouveau_screen_init(&screen->base, dev);
    if (ret) {
       nvc0_screen_destroy(pscreen);
@@ -428,6 +426,11 @@ nvc0_screen_create(struct nouveau_device *dev)
    chan = screen->base.channel;
    push = screen->base.pushbuf;
    push->user_priv = screen;
+
+   screen->base.vidmem_bindings |= PIPE_BIND_CONSTANT_BUFFER |
+      PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_INDEX_BUFFER;
+   screen->base.sysmem_bindings |=
+      PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_INDEX_BUFFER;
 
    pscreen->destroy = nvc0_screen_destroy;
    pscreen->context_create = nvc0_create;

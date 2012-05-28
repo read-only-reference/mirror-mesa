@@ -763,9 +763,12 @@ lp_build_min(struct lp_build_context *bld,
    if(a == b)
       return a;
 
-   if(bld->type.norm) {
-      if(a == bld->zero || b == bld->zero)
-         return bld->zero;
+   if (bld->type.norm) {
+      if (!bld->type.sign) {
+         if (a == bld->zero || b == bld->zero) {
+            return bld->zero;
+         }
+      }
       if(a == bld->one)
          return b;
       if(b == bld->one)
@@ -797,10 +800,14 @@ lp_build_max(struct lp_build_context *bld,
    if(bld->type.norm) {
       if(a == bld->one || b == bld->one)
          return bld->one;
-      if(a == bld->zero)
-         return b;
-      if(b == bld->zero)
-         return a;
+      if (!bld->type.sign) {
+         if (a == bld->zero) {
+            return b;
+         }
+         if (b == bld->zero) {
+            return a;
+         }
+      }
    }
 
    return lp_build_max_simple(bld, a, b);
@@ -926,6 +933,7 @@ lp_build_sgn(struct lp_build_context *bld,
    }
    else
    {
+      /* signed int/norm/fixed point */
       LLVMValueRef minus_one = lp_build_const_vec(bld->gallivm, type, -1.0);
       cond = lp_build_cmp(bld, PIPE_FUNC_GREATER, a, bld->zero);
       res = lp_build_select(bld, cond, bld->one, minus_one);

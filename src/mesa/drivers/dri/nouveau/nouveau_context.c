@@ -33,6 +33,7 @@
 
 #include "main/dd.h"
 #include "main/framebuffer.h"
+#include "main/fbobject.h"
 #include "main/light.h"
 #include "main/state.h"
 #include "main/version.h"
@@ -80,6 +81,13 @@ nouveau_context_create(gl_api api,
 	   nouveau_context_destroy(dri_ctx);
 	   *error = __DRI_CTX_ERROR_BAD_VERSION;
 	   return GL_FALSE;
+	}
+
+	if (nouveau_bo_new(context_dev(ctx), NOUVEAU_BO_VRAM, 0, 4096,
+			   NULL, &nctx->fence)) {
+		nouveau_context_destroy(dri_ctx);
+		*error = __DRI_CTX_ERROR_NO_MEMORY;
+		return GL_FALSE;
 	}
 
 	*error = __DRI_CTX_ERROR_SUCCESS;
@@ -208,6 +216,7 @@ nouveau_context_destroy(__DRIcontext *dri_ctx)
 	struct nouveau_context *nctx = dri_ctx->driverPrivate;
 	struct gl_context *ctx = &nctx->base;
 
+	nouveau_bo_ref(NULL, &nctx->fence);
 	context_drv(ctx)->context_destroy(ctx);
 }
 
@@ -396,11 +405,11 @@ nouveau_validate_framebuffer(struct gl_context *ctx)
 	__DRIdrawable *dri_draw = dri_ctx->driDrawablePriv;
 	__DRIdrawable *dri_read = dri_ctx->driReadablePriv;
 
-	if (ctx->DrawBuffer->Name == 0)
+	if (_mesa_is_winsys_fbo(ctx->DrawBuffer))
 		validate_framebuffer(dri_ctx, dri_draw,
 				     &dri_ctx->dri2.draw_stamp);
 
-	if (ctx->ReadBuffer->Name == 0)
+	if (_mesa_is_winsys_fbo(ctx->ReadBuffer))
 		validate_framebuffer(dri_ctx, dri_read,
 				     &dri_ctx->dri2.read_stamp);
 

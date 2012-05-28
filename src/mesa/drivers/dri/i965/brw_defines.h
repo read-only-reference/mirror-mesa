@@ -167,6 +167,8 @@
 
 #define BRW_SPRITE_POINT_ENABLE  16
 
+#define BRW_CUT_INDEX_ENABLE     (1 << 10)
+
 #define BRW_INDEX_BYTE     0
 #define BRW_INDEX_WORD     1
 #define BRW_INDEX_DWORD    2
@@ -437,6 +439,9 @@
 #define BRW_SURFACE_BUFFER  4
 #define BRW_SURFACE_NULL    7
 
+#define GEN7_SURFACE_ARYSPC_FULL	0
+#define GEN7_SURFACE_ARYSPC_LOD0	1
+
 /* Surface state DW2 */
 #define BRW_SURFACE_HEIGHT_SHIFT	19
 #define BRW_SURFACE_HEIGHT_MASK		INTEL_MASK(31, 19)
@@ -456,6 +461,13 @@
 /* Surface state DW4 */
 #define BRW_SURFACE_MIN_LOD_SHIFT	28
 #define BRW_SURFACE_MIN_LOD_MASK	INTEL_MASK(31, 28)
+#define BRW_SURFACE_MULTISAMPLECOUNT_1  (0 << 4)
+#define BRW_SURFACE_MULTISAMPLECOUNT_4  (2 << 4)
+#define GEN7_SURFACE_MULTISAMPLECOUNT_1 0
+#define GEN7_SURFACE_MULTISAMPLECOUNT_4 2
+#define GEN7_SURFACE_MULTISAMPLECOUNT_8 3
+#define GEN7_SURFACE_MSFMT_MSS			0
+#define GEN7_SURFACE_MSFMT_DEPTH_STENCIL	1
 
 /* Surface state DW5 */
 #define BRW_SURFACE_X_OFFSET_SHIFT		25
@@ -825,6 +837,7 @@ enum brw_message_target {
 #define GEN5_SAMPLER_MESSAGE_SAMPLE_LOD_COMPARE  6
 #define GEN5_SAMPLER_MESSAGE_SAMPLE_LD           7
 #define GEN5_SAMPLER_MESSAGE_SAMPLE_RESINFO      10
+#define GEN7_SAMPLER_MESSAGE_SAMPLE_LD2DSS       31
 
 /* for GEN5 only */
 #define BRW_SAMPLER_SIMD_MODE_SIMD4X2                   0
@@ -1305,6 +1318,7 @@ enum brw_wm_barycentric_interp_mode {
 # define GEN6_WM_MSRAST_OFF_PATTERN			(1 << 1)
 # define GEN6_WM_MSRAST_ON_PIXEL			(2 << 1)
 # define GEN6_WM_MSRAST_ON_PATTERN			(3 << 1)
+# define GEN6_WM_MSDISPMODE_PERSAMPLE			(0 << 0)
 # define GEN6_WM_MSDISPMODE_PERPIXEL			(1 << 0)
 /* DW7: kernel 1 pointer */
 /* DW8: kernel 2 pointer */
@@ -1388,6 +1402,7 @@ enum brw_wm_barycentric_interp_mode {
 # define GEN7_WM_MSRAST_ON_PIXEL			(2 << 0)
 # define GEN7_WM_MSRAST_ON_PATTERN			(3 << 0)
 /* DW2 */
+# define GEN7_WM_MSDISPMODE_PERSAMPLE			(0 << 31)
 # define GEN7_WM_MSDISPMODE_PERPIXEL			(1 << 31)
 
 #define _3DSTATE_PS				0x7820 /* GEN7+ */
@@ -1459,8 +1474,10 @@ enum brw_wm_barycentric_interp_mode {
 #define GEN7_3DSTATE_HIER_DEPTH_BUFFER		0x7807
 
 #define _3DSTATE_CLEAR_PARAMS			0x7910 /* ILK, SNB */
-# define DEPTH_CLEAR_VALID				(1 << 15)
+# define GEN5_DEPTH_CLEAR_VALID				(1 << 15)
 /* DW1: depth clear value */
+/* DW2 */
+# define GEN7_DEPTH_CLEAR_VALID				(1 << 0)
 
 #define _3DSTATE_SO_DECL_LIST			0x7917 /* GEN7+ */
 /* DW1 */

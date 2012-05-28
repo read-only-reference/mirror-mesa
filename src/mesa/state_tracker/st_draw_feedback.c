@@ -91,7 +91,6 @@ set_feedback_vertex_format(struct gl_context *ctx)
  */
 void
 st_feedback_draw_vbo(struct gl_context *ctx,
-                     const struct gl_client_array **arrays,
                      const struct _mesa_prim *prims,
                      GLuint nr_prims,
                      const struct _mesa_index_buffer *ib,
@@ -110,6 +109,7 @@ st_feedback_draw_vbo(struct gl_context *ctx,
    struct pipe_index_buffer ibuffer;
    struct pipe_transfer *vb_transfer[PIPE_MAX_ATTRIBS] = {NULL};
    struct pipe_transfer *ib_transfer = NULL;
+   const struct gl_client_array **arrays = ctx->Array._DrawArrays;
    GLuint attr, i;
    const GLubyte *low_addr = NULL;
    const void *mapped_indices = NULL;
@@ -232,8 +232,9 @@ st_feedback_draw_vbo(struct gl_context *ctx,
          mapped_indices = ib->ptr;
       }
 
-      draw_set_index_buffer(draw, &ibuffer);
-      draw_set_mapped_index_buffer(draw, mapped_indices);
+      draw_set_indexes(draw,
+                       (ubyte *) mapped_indices + ibuffer.offset,
+                       ibuffer.index_size);
    }
 
    /* set the constant buffer */
@@ -252,9 +253,7 @@ st_feedback_draw_vbo(struct gl_context *ctx,
     * unmap vertex/index buffers
     */
    if (ib) {
-      draw_set_mapped_index_buffer(draw, NULL);
-      draw_set_index_buffer(draw, NULL);
-
+      draw_set_indexes(draw, NULL, 0);
       if (ib_transfer)
          pipe_buffer_unmap(pipe, ib_transfer);
       pipe_resource_reference(&ibuffer.buffer, NULL);

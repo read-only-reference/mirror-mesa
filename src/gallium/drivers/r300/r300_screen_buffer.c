@@ -53,16 +53,15 @@ void r300_upload_index_buffer(struct r300_context *r300,
 static void r300_buffer_destroy(struct pipe_screen *screen,
 				struct pipe_resource *buf)
 {
-    struct r300_screen *r300screen = r300_screen(screen);
     struct r300_resource *rbuf = r300_resource(buf);
 
-    if (rbuf->constant_buffer)
-        FREE(rbuf->constant_buffer);
+    if (rbuf->malloced_buffer)
+        FREE(rbuf->malloced_buffer);
 
     if (rbuf->buf)
         pb_reference(&rbuf->buf, NULL);
 
-    util_slab_free(&r300screen->pool_buffers, rbuf);
+    FREE(rbuf);
 }
 
 static struct pipe_transfer*
@@ -108,8 +107,8 @@ r300_buffer_transfer_map( struct pipe_context *pipe,
     uint8_t *map;
     enum pipe_transfer_usage usage;
 
-    if (rbuf->constant_buffer)
-        return (uint8_t *) rbuf->constant_buffer + transfer->box.x;
+    if (rbuf->malloced_buffer)
+        return (uint8_t *) rbuf->malloced_buffer + transfer->box.x;
 
     /* Buffers are never used for write, therefore mapping for read can be
      * unsynchronized. */
@@ -151,7 +150,7 @@ struct pipe_resource *r300_buffer_create(struct pipe_screen *screen,
     struct r300_resource *rbuf;
     unsigned alignment = 16;
 
-    rbuf = util_slab_alloc(&r300screen->pool_buffers);
+    rbuf = MALLOC_STRUCT(r300_resource);
 
     rbuf->b.b = *templ;
     rbuf->b.vtbl = &r300_buffer_vtbl;
@@ -159,11 +158,13 @@ struct pipe_resource *r300_buffer_create(struct pipe_screen *screen,
     rbuf->b.b.screen = screen;
     rbuf->domain = RADEON_DOMAIN_GTT;
     rbuf->buf = NULL;
-    rbuf->constant_buffer = NULL;
+    rbuf->malloced_buffer = NULL;
 
-    /* Alloc constant buffers in RAM. */
-    if (templ->bind & PIPE_BIND_CONSTANT_BUFFER) {
-        rbuf->constant_buffer = MALLOC(templ->width0);
+    /* Alloc constant buffers and SWTCL buffers in RAM. */
+    if (templ->bind & PIPE_BIND_CONSTANT_BUFFER ||
+        (!r300screen->caps.has_tcl &&
+         (templ->bind & (PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_INDEX_BUFFER)))) {
+        rbuf->malloced_buffer = MALLOC(templ->width0);
         return &rbuf->b.b;
     }
 
@@ -172,39 +173,12 @@ struct pipe_resource *r300_buffer_create(struct pipe_screen *screen,
                                        rbuf->b.b.width0, alignment,
                                        rbuf->b.b.bind, rbuf->domain);
     if (!rbuf->buf) {
-        util_slab_free(&r300screen->pool_buffers, rbuf);
+        FREE(rbuf);
         return NULL;
     }
 
     rbuf->cs_buf =
         r300screen->rws->buffer_get_cs_handle(rbuf->buf);
 
-    return &rbuf->b.b;
-}
-
-struct pipe_resource *r300_user_buffer_create(struct pipe_screen *screen,
-					      void *ptr, unsigned size,
-					      unsigned bind)
-{
-    struct r300_screen *r300screen = r300_screen(screen);
-    struct r300_resource *rbuf;
-
-    rbuf = util_slab_alloc(&r300screen->pool_buffers);
-
-    pipe_reference_init(&rbuf->b.b.reference, 1);
-    rbuf->b.b.screen = screen;
-    rbuf->b.b.target = PIPE_BUFFER;
-    rbuf->b.b.format = PIPE_FORMAT_R8_UNORM;
-    rbuf->b.b.usage = PIPE_USAGE_IMMUTABLE;
-    rbuf->b.b.bind = bind;
-    rbuf->b.b.width0 = ~0;
-    rbuf->b.b.height0 = 1;
-    rbuf->b.b.depth0 = 1;
-    rbuf->b.b.array_size = 1;
-    rbuf->b.b.flags = 0;
-    rbuf->b.vtbl = &r300_buffer_vtbl;
-    rbuf->domain = RADEON_DOMAIN_GTT;
-    rbuf->buf = NULL;
-    rbuf->constant_buffer = NULL;
     return &rbuf->b.b;
 }

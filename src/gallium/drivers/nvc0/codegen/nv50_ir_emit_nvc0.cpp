@@ -960,7 +960,7 @@ void CodeEmitterNVC0::emitTEXBAR(const Instruction *i)
    code[0] = 0x00000006 | (i->subOp << 26);
    code[1] = 0xf0000000;
    emitPredicate(i);
-   emitCondCode(i->predSrc >= 0 ? i->cc : CC_ALWAYS, 5);
+   emitCondCode(i->flagsSrc >= 0 ? i->cc : CC_ALWAYS, 5);
 }
 
 void CodeEmitterNVC0::emitTEXCSAA(const TexInstruction *i)
@@ -1020,7 +1020,7 @@ CodeEmitterNVC0::emitTEX(const TexInstruction *i)
       code[1] |= 0x02000000;
    }
 
-   if (i->tex.derivAll)
+   if (i->op != OP_TXD && i->tex.derivAll)
       code[1] |= 1 << 13;
 
    defId(i->def(0), 14);
