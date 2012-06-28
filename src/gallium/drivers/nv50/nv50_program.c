@@ -343,10 +343,14 @@ nv50_program_translate(struct nv50_program *prog, uint16_t chipset)
       NOUVEAU_ERR("shader translation failed: %i\n", ret);
       goto out;
    }
+   if (info->bin.syms) /* we don't need them yet */
+      FREE(info->bin.syms);
+
    prog->code = info->bin.code;
    prog->code_size = info->bin.codeSize;
    prog->fixups = info->bin.relocData;
    prog->max_gpr = MAX2(4, (info->bin.maxGPR >> 1) + 1);
+   prog->tls_space = info->bin.tlsSpace;
 
    if (prog->type == PIPE_SHADER_FRAGMENT) {
       if (info->prop.fp.writesDepth) {
@@ -396,6 +400,12 @@ nv50_program_upload_code(struct nv50_context *nv50, struct nv50_program *prog)
    }
    prog->code_base = prog->mem->start;
 
+   ret = nv50_tls_realloc(nv50->screen, prog->tls_space);
+   if (ret < 0)
+      return FALSE;
+   if (ret > 0)
+      nv50->state.new_tls_space = TRUE;
+
    if (prog->fixups)
       nv50_ir_relocate_code(prog->fixups, prog->code, prog->code_base, 0, 0);
 
@@ -423,6 +433,9 @@ nv50_program_destroy(struct nv50_context *nv50, struct nv50_program *p)
 
    if (p->fixups)
       FREE(p->fixups);
+
+   if (p->so)
+      FREE(p->so);
 
    memset(p, 0, sizeof(*p));
 

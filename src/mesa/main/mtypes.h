@@ -630,6 +630,26 @@ struct gl_config
 
 
 /**
+ * Material state.
+ */
+struct gl_material
+{
+   GLfloat Attrib[MAT_ATTRIB_MAX][4];
+};
+
+
+/**
+ * Light state flags.
+ */
+/*@{*/
+#define LIGHT_SPOT         0x1
+#define LIGHT_LOCAL_VIEWER 0x2
+#define LIGHT_POSITIONAL   0x4
+#define LIGHT_NEED_VERTICES (LIGHT_POSITIONAL|LIGHT_LOCAL_VIEWER)
+/*@}*/
+
+
+/**
  * Light source state.
  */
 struct gl_light
@@ -654,7 +674,7 @@ struct gl_light
     * \name Derived fields
     */
    /*@{*/
-   GLbitfield _Flags;		/**< State */
+   GLbitfield _Flags;		/**< Mask of LIGHT_x bits defined above */
 
    GLfloat _Position[4];	/**< position in eye/obj coordinates */
    GLfloat _VP_inf_norm[3];	/**< Norm direction to infinite light */
@@ -679,15 +699,6 @@ struct gl_lightmodel
    GLboolean TwoSide;		/**< Two (or one) sided lighting? */
    GLenum ColorControl;		/**< either GL_SINGLE_COLOR
 				 *    or GL_SEPARATE_SPECULAR_COLOR */
-};
-
-
-/**
- * Material state.
- */
-struct gl_material
-{
-   GLfloat Attrib[MAT_ATTRIB_MAX][4];
 };
 
 
@@ -912,16 +923,6 @@ struct gl_hint_attrib
    GLenum FragmentShaderDerivative; /**< GL_ARB_fragment_shader */
 };
 
-/**
- * Light state flags.
- */
-/*@{*/
-#define LIGHT_SPOT         0x1
-#define LIGHT_LOCAL_VIEWER 0x2
-#define LIGHT_POSITIONAL   0x4
-#define LIGHT_NEED_VERTICES (LIGHT_POSITIONAL|LIGHT_LOCAL_VIEWER)
-/*@}*/
-
 
 /**
  * Lighting attribute group (GL_LIGHT_BIT).
@@ -932,20 +933,19 @@ struct gl_light_attrib
    struct gl_lightmodel Model;		/**< Lighting model */
 
    /**
-    * Must flush FLUSH_VERTICES before referencing:
+    * Front and back material values.
+    * Note: must call FLUSH_VERTICES() before using.
     */
-   /*@{*/
-   struct gl_material Material; 	/**< Includes front & back values */
-   /*@}*/
+   struct gl_material Material;
 
    GLboolean Enabled;			/**< Lighting enabled flag */
    GLenum ShadeModel;			/**< GL_FLAT or GL_SMOOTH */
    GLenum ProvokingVertex;              /**< GL_EXT_provoking_vertex */
    GLenum ColorMaterialFace;		/**< GL_FRONT, BACK or FRONT_AND_BACK */
    GLenum ColorMaterialMode;		/**< GL_AMBIENT, GL_DIFFUSE, etc */
-   GLbitfield ColorMaterialBitmask;	/**< bitmask formed from Face and Mode */
+   GLbitfield _ColorMaterialBitmask;	/**< bitmask formed from Face and Mode */
    GLboolean ColorMaterialEnabled;
-   GLenum ClampVertexColor;
+   GLenum ClampVertexColor;             /**< GL_TRUE, GL_FALSE, GL_FIXED_ONLY */
    GLboolean _ClampVertexColor;
 
    struct gl_light EnabledList;         /**< List sentinel */
@@ -1181,46 +1181,6 @@ typedef enum
 
 
 /**
- * TexGenEnabled flags.
- */
-/*@{*/
-#define S_BIT 1
-#define T_BIT 2
-#define R_BIT 4
-#define Q_BIT 8
-#define STR_BITS (S_BIT | T_BIT | R_BIT)
-/*@}*/
-
-
-/**
- * Bit flag versions of the corresponding GL_ constants.
- */
-/*@{*/
-#define TEXGEN_SPHERE_MAP        0x1
-#define TEXGEN_OBJ_LINEAR        0x2
-#define TEXGEN_EYE_LINEAR        0x4
-#define TEXGEN_REFLECTION_MAP_NV 0x8
-#define TEXGEN_NORMAL_MAP_NV     0x10
-
-#define TEXGEN_NEED_NORMALS      (TEXGEN_SPHERE_MAP        | \
-				  TEXGEN_REFLECTION_MAP_NV | \
-				  TEXGEN_NORMAL_MAP_NV)
-#define TEXGEN_NEED_EYE_COORD    (TEXGEN_SPHERE_MAP        | \
-				  TEXGEN_REFLECTION_MAP_NV | \
-				  TEXGEN_NORMAL_MAP_NV     | \
-				  TEXGEN_EYE_LINEAR)
-/*@}*/
-
-
-
-/** Tex-gen enabled for texture unit? */
-#define ENABLE_TEXGEN(unit) (1 << (unit))
-
-/** Non-identity texture matrix for texture unit? */
-#define ENABLE_TEXMAT(unit) (1 << (unit))
-
-
-/**
  * Texture image state.  Drivers will typically create a subclass of this
  * with extra fields for memory buffers, etc.
  */
@@ -1364,6 +1324,46 @@ struct gl_tex_env_combine_state
    GLuint _NumArgsRGB;   /**< Number of inputs used for the RGB combiner */
    GLuint _NumArgsA;     /**< Number of inputs used for the A combiner */
 };
+
+
+/**
+ * TexGenEnabled flags.
+ */
+/*@{*/
+#define S_BIT 1
+#define T_BIT 2
+#define R_BIT 4
+#define Q_BIT 8
+#define STR_BITS (S_BIT | T_BIT | R_BIT)
+/*@}*/
+
+
+/**
+ * Bit flag versions of the corresponding GL_ constants.
+ */
+/*@{*/
+#define TEXGEN_SPHERE_MAP        0x1
+#define TEXGEN_OBJ_LINEAR        0x2
+#define TEXGEN_EYE_LINEAR        0x4
+#define TEXGEN_REFLECTION_MAP_NV 0x8
+#define TEXGEN_NORMAL_MAP_NV     0x10
+
+#define TEXGEN_NEED_NORMALS      (TEXGEN_SPHERE_MAP        | \
+				  TEXGEN_REFLECTION_MAP_NV | \
+				  TEXGEN_NORMAL_MAP_NV)
+#define TEXGEN_NEED_EYE_COORD    (TEXGEN_SPHERE_MAP        | \
+				  TEXGEN_REFLECTION_MAP_NV | \
+				  TEXGEN_NORMAL_MAP_NV     | \
+				  TEXGEN_EYE_LINEAR)
+/*@}*/
+
+
+
+/** Tex-gen enabled for texture unit? */
+#define ENABLE_TEXGEN(unit) (1 << (unit))
+
+/** Non-identity texture matrix for texture unit? */
+#define ENABLE_TEXMAT(unit) (1 << (unit))
 
 
 /**
@@ -1795,7 +1795,7 @@ struct gl_transform_feedback_info
     * hardware back-ends to determine the correct stride when interleaving
     * multiple transform feedback outputs in the same buffer.
     */
-   unsigned BufferStride[MAX_FEEDBACK_ATTRIBS];
+   unsigned BufferStride[MAX_FEEDBACK_BUFFERS];
 };
 
 
@@ -1812,13 +1812,13 @@ struct gl_transform_feedback_object
                                 at least once? */
 
    /** The feedback buffers */
-   GLuint BufferNames[MAX_FEEDBACK_ATTRIBS];
-   struct gl_buffer_object *Buffers[MAX_FEEDBACK_ATTRIBS];
+   GLuint BufferNames[MAX_FEEDBACK_BUFFERS];
+   struct gl_buffer_object *Buffers[MAX_FEEDBACK_BUFFERS];
 
    /** Start of feedback data in dest buffer */
-   GLintptr Offset[MAX_FEEDBACK_ATTRIBS];
+   GLintptr Offset[MAX_FEEDBACK_BUFFERS];
    /** Max data to put into dest buffer (in bytes) */
-   GLsizeiptr Size[MAX_FEEDBACK_ATTRIBS];
+   GLsizeiptr Size[MAX_FEEDBACK_BUFFERS];
 };
 
 
@@ -2021,6 +2021,12 @@ struct gl_fragment_program
     * GLSL, the value is INTERP_QUALIFIER_NONE.
     */
    enum glsl_interp_qualifier InterpQualifier[FRAG_ATTRIB_MAX];
+
+   /**
+    * Bitfield indicating, for each fragment shader input, 1 if that input
+    * uses centroid interpolation, 0 otherwise.  Unused inputs are 0.
+    */
+   GLbitfield64 IsCentroid;
 };
 
 
@@ -2709,6 +2715,9 @@ struct gl_program_constants
    /* ES 2.0 and GL_ARB_ES2_compatibility */
    struct gl_precision LowFloat, MediumFloat, HighFloat;
    struct gl_precision LowInt, MediumInt, HighInt;
+   /* GL_ARB_uniform_buffer_object */
+   GLuint MaxUniformBlocks;
+   GLuint MaxCombinedUniformComponents;
 };
 
 
@@ -2774,6 +2783,15 @@ struct gl_constants
    GLuint MaxVertexVaryingComponents;   /**< Between vert and geom shader */
    GLuint MaxGeometryVaryingComponents; /**< Between geom and frag shader */
 
+   /** @{
+    * GL_ARB_uniform_buffer_object
+    */
+   GLuint MaxCombinedUniformBlocks;
+   GLuint MaxUniformBufferBindings;
+   GLuint MaxUniformBlockSize;
+   GLuint UniformBufferOffsetAlignment;
+   /** @} */
+
    /** GL_ARB_geometry_shader4 */
    GLuint MaxGeometryOutputVertices;
    GLuint MaxGeometryTotalOutputComponents;
@@ -2816,7 +2834,7 @@ struct gl_constants
    GLbitfield ProfileMask;   /**< Mask of CONTEXT_x_PROFILE_BIT */
 
    /** GL_EXT_transform_feedback */
-   GLuint MaxTransformFeedbackSeparateAttribs;
+   GLuint MaxTransformFeedbackBuffers;
    GLuint MaxTransformFeedbackSeparateComponents;
    GLuint MaxTransformFeedbackInterleavedComponents;
 
@@ -2869,6 +2887,7 @@ struct gl_extensions
    GLboolean dummy_true;  /* Set true by _mesa_init_extensions(). */
    GLboolean dummy_false; /* Set false by _mesa_init_extensions(). */
    GLboolean ARB_ES2_compatibility;
+   GLboolean ARB_base_instance;
    GLboolean ARB_blend_func_extended;
    GLboolean ARB_color_buffer_float;
    GLboolean ARB_conservative_depth;
@@ -2895,6 +2914,7 @@ struct gl_extensions
    GLboolean ARB_point_sprite;
    GLboolean ARB_sampler_objects;
    GLboolean ARB_seamless_cube_map;
+   GLboolean ARB_shader_bit_encoding;
    GLboolean ARB_shader_objects;
    GLboolean ARB_shader_stencil_export;
    GLboolean ARB_shader_texture_lod;
@@ -2994,6 +3014,7 @@ struct gl_extensions
    GLboolean NV_light_max_exponent;
    GLboolean NV_point_sprite;
    GLboolean NV_primitive_restart;
+   GLboolean NV_read_buffer;
    GLboolean NV_texture_barrier;
    GLboolean NV_texgen_reflection;
    GLboolean NV_texture_env_combine4;
@@ -3179,12 +3200,6 @@ struct gl_dlist_state
    GLubyte ActiveMaterialSize[MAT_ATTRIB_MAX];
    GLfloat CurrentMaterial[MAT_ATTRIB_MAX][4];
 
-   GLubyte ActiveIndex;
-   GLfloat CurrentIndex;
-   
-   GLubyte ActiveEdgeFlag;
-   GLboolean CurrentEdgeFlag;
-
    struct {
       /* State known to have been set by the currently-compiling display
        * list.  Used to eliminate some redundant state changes.
@@ -3278,6 +3293,20 @@ typedef enum
 struct gl_driver_flags
 {
    GLbitfield NewArray;             /**< Vertex array state */
+};
+
+struct gl_uniform_buffer_binding
+{
+   struct gl_buffer_object *BufferObject;
+   /** Start of uniform block data in the buffer */
+   GLintptr Offset;
+   /** Size of data allowed to be referenced from the buffer (in bytes) */
+   GLsizeiptr Size;
+   /**
+    * glBindBufferBase() indicates that the Size should be ignored and only
+    * limited by the current size of the BufferObject.
+    */
+   GLboolean AutomaticSize;
 };
 
 /**
@@ -3415,6 +3444,21 @@ struct gl_context
 
    struct gl_buffer_object *CopyReadBuffer; /**< GL_ARB_copy_buffer */
    struct gl_buffer_object *CopyWriteBuffer; /**< GL_ARB_copy_buffer */
+
+   /**
+    * Current GL_ARB_uniform_buffer_object binding referenced by
+    * GL_UNIFORM_BUFFER target for glBufferData, glMapBuffer, etc.
+    */
+   struct gl_buffer_object *UniformBuffer;
+
+   /**
+    * Array of uniform buffers for GL_ARB_uniform_buffer_object and GL 3.1.
+    * This is set up using glBindBufferRange() or glBindBufferBase().  They are
+    * associated with uniform blocks by glUniformBlockBinding()'s state in the
+    * shader program.
+    */
+   struct gl_uniform_buffer_binding *UniformBufferBindings;
+
    /*@}*/
 
    struct gl_meta_state *Meta;  /**< for "meta" operations */

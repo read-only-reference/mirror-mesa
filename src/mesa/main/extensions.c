@@ -78,6 +78,7 @@ struct extension {
 static const struct extension extension_table[] = {
    /* ARB Extensions */
    { "GL_ARB_ES2_compatibility",                   o(ARB_ES2_compatibility),                   GL,             2009 },
+   { "GL_ARB_base_instance",                       o(ARB_base_instance),                       GL,             2011 },
    { "GL_ARB_blend_func_extended",                 o(ARB_blend_func_extended),                 GL,             2009 },
    { "GL_ARB_color_buffer_float",                  o(ARB_color_buffer_float),                  GL,             2004 },
    { "GL_ARB_copy_buffer",                         o(ARB_copy_buffer),                         GL,             2008 },
@@ -112,6 +113,7 @@ static const struct extension extension_table[] = {
    { "GL_ARB_robustness",                          o(dummy_true),                              GL,             2010 },
    { "GL_ARB_sampler_objects",                     o(ARB_sampler_objects),                     GL,             2009 },
    { "GL_ARB_seamless_cube_map",                   o(ARB_seamless_cube_map),                   GL,             2009 },
+   { "GL_ARB_shader_bit_encoding",                 o(ARB_shader_bit_encoding),                 GL,             2010 },
    { "GL_ARB_shader_objects",                      o(ARB_shader_objects),                      GL,             2002 },
    { "GL_ARB_shader_stencil_export",               o(ARB_shader_stencil_export),               GL,             2009 },
    { "GL_ARB_shader_texture_lod",                  o(ARB_shader_texture_lod),                  GL,             2009 },
@@ -139,7 +141,7 @@ static const struct extension extension_table[] = {
    { "GL_ARB_texture_swizzle",                     o(EXT_texture_swizzle),                     GL,             2008 },
    { "GL_ARB_transform_feedback2",                 o(ARB_transform_feedback2),                 GL,             2010 },
    { "GL_ARB_transpose_matrix",                    o(ARB_transpose_matrix),                    GL,             1999 },
-   { "GL_ARB_uniform_buffer_object",               o(ARB_uniform_buffer_object),               GL,             2002 },
+   { "GL_ARB_uniform_buffer_object",               o(ARB_uniform_buffer_object),               GL,             2009 },
    { "GL_ARB_vertex_array_bgra",                   o(EXT_vertex_array_bgra),                   GL,             2008 },
    { "GL_ARB_vertex_array_object",                 o(ARB_vertex_array_object),                 GL,             2006 },
    { "GL_ARB_vertex_buffer_object",                o(dummy_true),                              GL,             2003 },
@@ -299,6 +301,7 @@ static const struct extension extension_table[] = {
    { "GL_NV_packed_depth_stencil",                 o(EXT_packed_depth_stencil),                GL,             2000 },
    { "GL_NV_point_sprite",                         o(NV_point_sprite),                         GL,             2001 },
    { "GL_NV_primitive_restart",                    o(NV_primitive_restart),                    GL,             2002 },
+   { "GL_NV_read_buffer",                          o(dummy_true),                              ES2,            2011 },
    { "GL_NV_texgen_reflection",                    o(NV_texgen_reflection),                    GL,             1999 },
    { "GL_NV_texture_barrier",                      o(NV_texture_barrier),                      GL,             2009 },
    { "GL_NV_texture_env_combine4",                 o(NV_texture_env_combine4),                 GL,             1999 },

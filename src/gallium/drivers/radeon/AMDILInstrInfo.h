@@ -18,7 +18,7 @@
 #include "llvm/Target/TargetInstrInfo.h"
 
 #define GET_INSTRINFO_HEADER
-#include "AMDILGenInstrInfo.inc"
+#include "AMDGPUGenInstrInfo.inc"
 
 namespace llvm {
   // AMDIL - This namespace holds all of the target specific flags that
@@ -77,7 +77,7 @@ public:
   virtual void copyPhysReg(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator MI, DebugLoc DL,
                            unsigned DestReg, unsigned SrcReg,
-                           bool KillSrc) const;
+                           bool KillSrc) const = 0;
 
   void storeRegToStackSlot(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator MI,
@@ -147,6 +147,13 @@ public:
   bool isLocalAtomic(llvm::MachineInstr *MI) const;
   bool isGlobalAtomic(llvm::MachineInstr *MI) const;
   bool isArenaAtomic(llvm::MachineInstr *MI) const;
+
+  virtual MachineInstr * getMovImmInstr(MachineFunction *MF, unsigned DstReg,
+                                        int64_t Imm) const = 0;
+
+  virtual unsigned getIEQOpcode() const = 0;
+
+  virtual bool isMov(unsigned Opcode) const = 0;
 };
 
 }

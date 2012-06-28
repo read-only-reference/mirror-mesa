@@ -23,6 +23,7 @@ class AMDGPUTargetLowering : public AMDILTargetLowering
 {
 private:
   SDValue LowerINTRINSIC_WO_CHAIN(SDValue Op, SelectionDAG &DAG) const;
+  SDValue BitcastLOAD(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerUDIVREM(SDValue Op, SelectionDAG &DAG) const;
 
@@ -56,7 +57,8 @@ namespace AMDGPUISD
 
 enum
 {
-  AMDGPU_FIRST = AMDILISD::LAST_NON_MEMORY_OPCODE,
+  AMDGPU_FIRST = AMDILISD::LAST_ISD_NUMBER,
+  BITALIGN,
   FRACT,
   FMAX,
   SMAX,

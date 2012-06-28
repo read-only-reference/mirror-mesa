@@ -13,7 +13,11 @@
 
 #include "R600InstrInfo.h"
 #include "AMDGPUTargetMachine.h"
+#include "AMDILSubtarget.h"
 #include "R600RegisterInfo.h"
+
+#define GET_INSTRINFO_CTOR
+#include "AMDGPUGenDFAPacketizer.inc"
 
 using namespace llvm;
 
@@ -31,6 +35,11 @@ const R600RegisterInfo &R600InstrInfo::getRegisterInfo() const
 bool R600InstrInfo::isTrig(const MachineInstr &MI) const
 {
   return get(MI.getOpcode()).TSFlags & R600_InstFlag::TRIG;
+}
+
+bool R600InstrInfo::isVector(const MachineInstr &MI) const
+{
+  return get(MI.getOpcode()).TSFlags & R600_InstFlag::VECTOR;
 }
 
 void
@@ -61,42 +70,36 @@ R600InstrInfo::copyPhysReg(MachineBasicBlock &MBB,
   }
 }
 
-unsigned R600InstrInfo::getISAOpcode(unsigned opcode) const
+MachineInstr * R600InstrInfo::getMovImmInstr(MachineFunction *MF,
+                                             unsigned DstReg, int64_t Imm) const
 {
-  switch (opcode) {
-    default: return opcode;
-    case AMDIL::IEQ:
-      return AMDIL::SETE_INT;
-    case AMDIL::INE:
-      return AMDIL::SETNE_INT;
-    case AMDIL::IGE:
-      return AMDIL::SETGE_INT;
-    case AMDIL::MOVE_f32:
-    case AMDIL::MOVE_i32:
-      return AMDIL::MOV;
-    case AMDIL::UGE:
-      return AMDIL::SETGE_UINT;
-    case AMDIL::UGT:
-      return AMDIL::SETGT_UINT;
+  MachineInstr * MI = MF->CreateMachineInstr(get(AMDIL::MOV), DebugLoc());
+  MachineInstrBuilder(MI).addReg(DstReg, RegState::Define);
+  MachineInstrBuilder(MI).addReg(AMDIL::ALU_LITERAL_X);
+  MachineInstrBuilder(MI).addImm(Imm);
+
+  return MI;
+}
+
+unsigned R600InstrInfo::getIEQOpcode() const
+{
+  return AMDIL::SETE_INT;
+}
+
+bool R600InstrInfo::isMov(unsigned Opcode) const
+{
+  switch(Opcode) {
+  default: return false;
+  case AMDIL::MOV:
+  case AMDIL::MOV_IMM_F32:
+  case AMDIL::MOV_IMM_I32:
+    return true;
   }
 }
 
-unsigned R600InstrInfo::getASHRop() const
+DFAPacketizer *R600InstrInfo::CreateTargetScheduleState(const TargetMachine *TM,
+    const ScheduleDAG *DAG) const
 {
-	unsigned gen = TM.getSubtarget<AMDILSubtarget>().device()->getGeneration();
-	if (gen < AMDILDeviceInfo::HD5XXX) {
-		return AMDIL::ASHR_r600;
-	} else {
-		return AMDIL::ASHR_eg;
-	}
-}
-
-unsigned R600InstrInfo::getLSHRop() const
-{
-  unsigned gen = TM.getSubtarget<AMDILSubtarget>().device()->getGeneration();
-  if (gen < AMDILDeviceInfo::HD5XXX) {
-    return AMDIL::LSHR_r600;
-  } else {
-    return AMDIL::LSHR_eg;
-  }
+  const InstrItineraryData *II = TM->getInstrItineraryData();
+  return TM->getSubtarget<AMDILSubtarget>().createDFAPacketizer(II);
 }

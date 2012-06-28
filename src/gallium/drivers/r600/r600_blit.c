@@ -342,7 +342,7 @@ static void r600_resource_copy_region(struct pipe_context *ctx,
 	}
 
 	if (rsrc->is_depth && !rsrc->is_flushing_texture)
-		r600_texture_depth_flush(ctx, src, FALSE);
+		r600_texture_depth_flush(ctx, src);
 
 	restore_orig[0] = restore_orig[1] = FALSE;
 
@@ -383,20 +383,4 @@ void r600_init_blit_functions(struct r600_context *rctx)
 	rctx->context.clear_render_target = r600_clear_render_target;
 	rctx->context.clear_depth_stencil = r600_clear_depth_stencil;
 	rctx->context.resource_copy_region = r600_resource_copy_region;
-}
-
-void r600_blit_push_depth(struct pipe_context *ctx, struct r600_resource_texture *texture)
-{
-	struct pipe_box sbox;
-
-	sbox.x = sbox.y = sbox.z = 0;
-	sbox.width = texture->resource.b.b.width0;
-	sbox.height = texture->resource.b.b.height0;
-	/* XXX that might be wrong */
-	sbox.depth = 1;
-
-	r600_hw_copy_region(ctx, (struct pipe_resource *)texture, 0,
-			    0, 0, 0,
-			    (struct pipe_resource *)texture->flushed_depth_texture, 0,
-			    &sbox);
 }

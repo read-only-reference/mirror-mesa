@@ -46,8 +46,8 @@ class brw_blorp_mip_info
 public:
    brw_blorp_mip_info();
 
-   virtual void set(struct intel_mipmap_tree *mt,
-                    unsigned int level, unsigned int layer);
+   void set(struct intel_mipmap_tree *mt,
+            unsigned int level, unsigned int layer);
    void get_draw_offsets(uint32_t *draw_x, uint32_t *draw_y) const;
 
    void get_miplevel_dims(uint32_t *width, uint32_t *height) const
@@ -66,8 +66,9 @@ class brw_blorp_surface_info : public brw_blorp_mip_info
 public:
    brw_blorp_surface_info();
 
-   virtual void set(struct intel_mipmap_tree *mt,
-                    unsigned int level, unsigned int layer);
+void set(struct brw_context *brw,
+         struct intel_mipmap_tree *mt,
+            unsigned int level, unsigned int layer);
 
    /* Setting this flag indicates that the buffer's contents are W-tiled
     * stencil data, but the surface state should be set up for Y tiled
@@ -90,6 +91,12 @@ public:
     * ARYSPC_LOD0 mode.  Ignored prior to Gen7.
     */
    bool array_spacing_lod0;
+
+   /**
+    * Format that should be used when setting up the surface state for this
+    * surface.  Should correspond to one of the BRW_SURFACEFORMAT_* enums.
+    */
+   uint32_t brw_surfaceformat;
 };
 
 

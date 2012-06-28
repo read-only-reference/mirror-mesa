@@ -89,6 +89,16 @@ class ir_instruction : public exec_node {
 public:
    enum ir_node_type ir_type;
 
+   /**
+    * GCC 4.7+ and clang warn when deleting an ir_instruction unless
+    * there's a virtual destructor present.  Because we almost
+    * universally use ralloc for our memory management of
+    * ir_instructions, the destructor doesn't need to do any work.
+    */
+   virtual ~ir_instruction()
+   {
+   }
+
    /** ir_print_visitor helper for debugging. */
    void print(void) const;
 
@@ -191,7 +201,8 @@ public:
     * for vector and scalar types that have all elements set to the value
     * zero (or \c false for booleans).
     *
-    * \sa ir_constant::has_value, ir_rvalue::is_one, ir_rvalue::is_negative_one
+    * \sa ir_constant::has_value, ir_rvalue::is_one, ir_rvalue::is_negative_one,
+    *     ir_constant::is_basis
     */
    virtual bool is_zero() const;
 
@@ -203,7 +214,8 @@ public:
     * for vector and scalar types that have all elements set to the value
     * one (or \c true for booleans).
     *
-    * \sa ir_constant::has_value, ir_rvalue::is_zero, ir_rvalue::is_negative_one
+    * \sa ir_constant::has_value, ir_rvalue::is_zero, ir_rvalue::is_negative_one,
+    *     ir_constant::is_basis
     */
    virtual bool is_one() const;
 
@@ -213,11 +225,26 @@ public:
     * The base implementation of this function always returns \c false.  The
     * \c ir_constant class over-rides this function to return \c true \b only
     * for vector and scalar types that have all elements set to the value
-    * negative one.  For boolean times, the result is always \c false.
+    * negative one.  For boolean types, the result is always \c false.
     *
     * \sa ir_constant::has_value, ir_rvalue::is_zero, ir_rvalue::is_one
+    *     ir_constant::is_basis
     */
    virtual bool is_negative_one() const;
+
+   /**
+    * Determine if an r-value is a basis vector
+    *
+    * The base implementation of this function always returns \c false.  The
+    * \c ir_constant class over-rides this function to return \c true \b only
+    * for vector and scalar types that have one element set to the value one,
+    * and the other elements set to the value zero.  For boolean types, the
+    * result is always \c false.
+    *
+    * \sa ir_constant::has_value, ir_rvalue::is_zero, ir_rvalue::is_one,
+    *     is_constant::is_negative_one
+    */
+   virtual bool is_basis() const;
 
 
    /**
@@ -326,7 +353,7 @@ public:
    const struct glsl_type *type;
 
    /**
-    * Delcared name of the variable
+    * Declared name of the variable
     */
    const char *name;
 
@@ -864,19 +891,24 @@ enum ir_expression_operation {
    ir_unop_rcp,
    ir_unop_rsq,
    ir_unop_sqrt,
-   ir_unop_exp,      /**< Log base e on gentype */
-   ir_unop_log,	     /**< Natural log on gentype */
+   ir_unop_exp,         /**< Log base e on gentype */
+   ir_unop_log,	        /**< Natural log on gentype */
    ir_unop_exp2,
    ir_unop_log2,
-   ir_unop_f2i,      /**< Float-to-integer conversion. */
-   ir_unop_i2f,      /**< Integer-to-float conversion. */
-   ir_unop_f2b,      /**< Float-to-boolean conversion */
-   ir_unop_b2f,      /**< Boolean-to-float conversion */
-   ir_unop_i2b,      /**< int-to-boolean conversion */
-   ir_unop_b2i,      /**< Boolean-to-int conversion */
-   ir_unop_u2f,      /**< Unsigned-to-float conversion. */
-   ir_unop_i2u,      /**< Integer-to-unsigned conversion. */
-   ir_unop_u2i,      /**< Unsigned-to-integer conversion. */
+   ir_unop_f2i,         /**< Float-to-integer conversion. */
+   ir_unop_f2u,         /**< Float-to-unsigned conversion. */
+   ir_unop_i2f,         /**< Integer-to-float conversion. */
+   ir_unop_f2b,         /**< Float-to-boolean conversion */
+   ir_unop_b2f,         /**< Boolean-to-float conversion */
+   ir_unop_i2b,         /**< int-to-boolean conversion */
+   ir_unop_b2i,         /**< Boolean-to-int conversion */
+   ir_unop_u2f,         /**< Unsigned-to-float conversion. */
+   ir_unop_i2u,         /**< Integer-to-unsigned conversion. */
+   ir_unop_u2i,         /**< Unsigned-to-integer conversion. */
+   ir_unop_bitcast_i2f, /**< Bit-identical int-to-float "conversion" */
+   ir_unop_bitcast_f2i, /**< Bit-identical float-to-int "conversion" */
+   ir_unop_bitcast_u2f, /**< Bit-identical uint-to-float "conversion" */
+   ir_unop_bitcast_f2u, /**< Bit-identical float-to-uint "conversion" */
    ir_unop_any,
 
    /**
@@ -1729,13 +1761,14 @@ public:
     * Determine whether a constant has the same value as another constant
     *
     * \sa ir_constant::is_zero, ir_constant::is_one,
-    * ir_constant::is_negative_one
+    * ir_constant::is_negative_one, ir_constant::is_basis
     */
    bool has_value(const ir_constant *) const;
 
    virtual bool is_zero() const;
    virtual bool is_one() const;
    virtual bool is_negative_one() const;
+   virtual bool is_basis() const;
 
    /**
     * Value of the constant.

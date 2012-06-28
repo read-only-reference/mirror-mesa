@@ -1,13 +1,13 @@
-<HTML>
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html lang="en">
+<head>
+  <meta http-equiv="content-type" content="text/html; charset=utf-8">
+  <title>Compiling and Installing</title>
+  <link rel="stylesheet" type="text/css" href="mesa.css">
+</head>
+<body>
 
-<TITLE>Compiling and Installing</TITLE>
-
-<link rel="stylesheet" type="text/css" href="mesa.css"></head>
-
-<BODY>
-
-
-<H1>Compiling and Installing</H1>
+<h1>Compiling and Installing</h1>
 
 <ol>
 <li><a href="#prereq-general">Prerequisites for building</a>
@@ -16,16 +16,14 @@
   <li><a href="#prereq-dri">For DRI and hardware acceleration</a>
   </ul>
 <li><a href="#autoconf">Building with autoconf (Linux/Unix/X11)</a>
-<li><a href="#scons">Building with SCons (Windows)</a>
-<li><a href="#legacy">Building with legacy Makefiles (deprecated)</a>
+<li><a href="#scons">Building with SCons (Windows/Linux)</a>
 <li><a href="#other">Building for other systems</a>
 <li><a href="#libs">Library Information</a>
-<li><a href="#pkg-config">Building OpenGL programs with pkg-config
+<li><a href="#pkg-config">Building OpenGL programs with pkg-config</a>
 </ol>
 
 
-<a name="prereq-general">
-<h1>1. Prerequisites for building</h1>
+<h1 id="prereq-general">1. Prerequisites for building</h1>
 
 <h2>1.1 General</h2>
 <ul>
@@ -47,8 +45,7 @@ To build OpenGL ES 1.1 and 2.0 you'll also need
 </ul>
 
 
-<a name="prereq-dri">
-<h3>1.2 For DRI and hardware acceleration</h3>
+<h3 id="prereq-dri">1.2 For DRI and hardware acceleration</h3>
 
 <p>
 The following are required for DRI-based hardware acceleration with Mesa:
@@ -62,10 +59,10 @@ version 2.4.33 or later
 <li>Xorg server version 1.5 or later
 <li>Linux 2.6.28 or later
 </ul>
-</p>
 <p>
 If you're using a fedora distro the following command should install all
 the needed dependencies:
+</p>
 <pre>
   sudo yum install flex bison imake libtool xorg-x11-proto-devel libdrm-devel \
   gcc-c++ xorg-x11-server-devel libXi-devel libXmu-devel libXdamage-devel git \
@@ -74,8 +71,7 @@ the needed dependencies:
 
 
 
-<a name="autoconf">
-<H1>2. Building with autoconf (Linux/Unix/X11)</H1>
+<h1 id="autoconf">2. Building with autoconf (Linux/Unix/X11)</h1>
 
 <p>
 The primary method to build Mesa on Unix systems is with autoconf.
@@ -83,19 +79,20 @@ The primary method to build Mesa on Unix systems is with autoconf.
 
 <p>
 The general approach is the standard:
+</p>
 <pre>
   ./configure
   make
   sudo make install
 </pre>
+<p>
 But please read the <a href="autoconf.html">detailed autoconf instructions</a>
 for more details.
 </p>
 
 
 
-<a name="scons">
-<H1>3. Building with SCons (Windows)</H1>
+<h1 id="scons">3. Building with SCons (Windows/Linux)</h1>
 
 <p>
 To build Mesa with SCons on Linux or Windows do
@@ -120,8 +117,8 @@ To build Mesa with SCons for Windows on Linux using the MinGW crosscompiler tool
 This will create:
 </p>
 <ul>
-<li>build/windows-x86-debug/mesa/drivers/windows/gdi/opengl32.dll &mdash; Mesa + swrast, binary compatible with Windows's opengl32.dll 
-<li>build/windows-x86-debug/gallium/targets/libgl-gdi/opengl32.dll &mdash; Mesa + Gallium + softpipe, binary compatible with Windows's opengl32.dll 
+<li>build/windows-x86-debug/mesa/drivers/windows/gdi/opengl32.dll &mdash; Mesa + swrast, binary compatible with Windows's opengl32.dll
+<li>build/windows-x86-debug/gallium/targets/libgl-gdi/opengl32.dll &mdash; Mesa + Gallium + softpipe, binary compatible with Windows's opengl32.dll
 </ul>
 <p>
 Put them all in the same directory to test them.
@@ -129,133 +126,21 @@ Put them all in the same directory to test them.
 
 
 
-<a name="legacy">
-<h1>4. Building with legacy Makefiles (deprecated)</h1>
-
-<p>
-The legacy Mesa build system is based on a collection of pre-defined
-system configurations.
-Some of these might work for older systems not supported by autoconf.
-</p>
-<p>
-To see the list of configurations, just type <code>make</code>.
-Then choose a configuration from the list and type <code>make</code>
-<em>configname</em>.
-</p>
-
-<p>
-Mesa may be built in several different ways using the predefined configurations:
-</p>
-<ul>
-<li><b><em>Stand-alone/Xlib mode</em></b> - Mesa will be compiled as
-a software renderer using Xlib to do all rendering.
-The libGL.so library will be a self-contained rendering library that will
-allow you to run OpenGL/GLX applications on any X server (regardless of
-whether it supports the GLX X server extension).
-You will <em>not</em> be able to use hardware 3D acceleration.
-<p>
-To compile stand-alone Mesa type <code>make</code> in the top-level directory.
-You'll see a list of supported system configurations.
-Choose one from the list (such as linux-x86), and type:
-</p>
-<pre>
-    make linux-x86
-</pre>
-<p>This will produce libGL.so and several other libraries</p>
-</li>
-
-<li><b><em>DRI/accelerated</em></b> - The DRI hardware drivers for
-accelerated OpenGL rendering (for ATI, Intel, Matrox, etc) will be built.
-The libGL.so library will support the GLX extension and will load/use
-the DRI hardware drivers.
-
-
-<p>
-Build Mesa and the DRI hardware drivers by running
-</p>
-<pre>
-   make linux-dri
-</pre>
-<p>
-There are also <code>linux-dri-x86</code>, <code>linux-dri-x86-64</code>, 
-and <code>linux-ppc</code> configurations which are optimized for those
-architectures.
-</p>
-<p>
-Make sure you have the prerequisite versions of DRM and Xserver mentioned
-above.
-</p>
-
-</ul>
-
-
-<p>
-Later, if you want to rebuild for a different configuration run
-<code>make realclean</code> before rebuilding.
-</p>
-
-
-
-<a name="install">
-<H2>Installing the header and library files</H2>
-
-<p>
-The standard location for the OpenGL header files on Unix-type systems is
-in <code>/usr/include/GL/</code>.
-The standard location for the libraries is <code>/usr/lib/</code>.
-For more information see, the
-<a href="http://oss.sgi.com/projects/ogl-sample/ABI/" target="_parent">
-Linux/OpenGL ABI specification</a>.
-</p>
-
-<p>
-If you'd like Mesa to co-exist with another implementation of OpenGL that's
-already installed, you'll have to choose different directories, like
-<code>/usr/local/include/GL/</code> and <code>/usr/local/lib/</code>.
-</p>
-
-<p>
-To install Mesa's headers and libraries, run <code>make install</code>.
-But first, check the Mesa/configs/default file and examine the values
-of the <b>INSTALL_DIR</b> and <b>DRI_DRIVER_INSTALL_DIR</b> variables.
-Change them if needed, then run <code>make install</code>.
-</p>
-
-<p>
-The variable
-<b>DESTDIR</b> may also be used to install the contents to a temporary
-staging directory.
-This can be useful for package management.
-For example: <code>make install DESTDIR=/somepath/</code>
-</p>
-
-<p>
-Note: at runtime you can use the LD_LIBRARY_PATH environment variable
-(on Linux at least) to switch
-between the Mesa libraries and other vendor's libraries whenever you want.
-This is a handy way to compare multiple OpenGL implementations.
-</p>
-
-
-
-
-<a name="other">
-<H1>5. Building for other systems</H1>
+<h1 id="other">4. Building for other systems</h1>
 
 <p>
 Documentation for other environments (some may be very out of date):
 </p>
 
-<UL>
-<li><A HREF="README.VMS">README.VMS</A> - VMS
-<LI><A HREF="README.CYGWIN">README.CYGWIN</A> - Cygwin
-<LI><A HREF="README.WIN32">README.WIN32</A> - Win32
-</UL>
+<ul>
+<li><a href="README.VMS">README.VMS</a> - VMS
+<li><a href="README.CYGWIN">README.CYGWIN</a> - Cygwin
+<li><a href="README.WIN32">README.WIN32</a> - Win32
+</ul>
 
 
 
-<a name="libs">
-<H1>6. Library Information</H1>
+<h1 id="libs">5. Library Information</h1>
 
 <p>
 When compilation has finished, look in the top-level <code>lib/</code>
@@ -299,8 +184,7 @@ versions of libGL and device drivers.
 </p>
 
 
-<a name="pkg-config">
-<H1>7. Building OpenGL programs with pkg-config</H1>
+<h1 id="pkg-config">6. Building OpenGL programs with pkg-config</h1>
 
 <p>
 Running <code>make install</code> will install package configuration files

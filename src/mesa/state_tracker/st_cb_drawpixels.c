@@ -217,7 +217,7 @@ st_make_drawpix_z_stencil_program(struct st_context *st,
    if (!p)
       return NULL;
 
-   p->NumInstructions = write_depth ? 2 : 1;
+   p->NumInstructions = write_depth ? 3 : 1;
    p->NumInstructions += write_stencil ? 1 : 0;
 
    p->Instructions = _mesa_alloc_instructions(p->NumInstructions);
@@ -237,6 +237,13 @@ st_make_drawpix_z_stencil_program(struct st_context *st,
       p->Instructions[ic].SrcReg[0].Index = FRAG_ATTRIB_TEX0;
       p->Instructions[ic].TexSrcUnit = 0;
       p->Instructions[ic].TexSrcTarget = TEXTURE_2D_INDEX;
+      ic++;
+      /* MOV result.color, fragment.color; */
+      p->Instructions[ic].Opcode = OPCODE_MOV;
+      p->Instructions[ic].DstReg.File = PROGRAM_OUTPUT;
+      p->Instructions[ic].DstReg.Index = FRAG_RESULT_COLOR;
+      p->Instructions[ic].SrcReg[0].File = PROGRAM_INPUT;
+      p->Instructions[ic].SrcReg[0].Index = FRAG_ATTRIB_COL0;
       ic++;
    }
 
@@ -260,8 +267,10 @@ st_make_drawpix_z_stencil_program(struct st_context *st,
 
    p->InputsRead = FRAG_BIT_TEX0 | FRAG_BIT_COL0;
    p->OutputsWritten = 0;
-   if (write_depth)
+   if (write_depth) {
       p->OutputsWritten |= BITFIELD64_BIT(FRAG_RESULT_DEPTH);
+      p->OutputsWritten |= BITFIELD64_BIT(FRAG_RESULT_COLOR);
+   }
    if (write_stencil)
       p->OutputsWritten |= BITFIELD64_BIT(FRAG_RESULT_STENCIL);
 
@@ -1047,6 +1056,28 @@ get_depth_stencil_fp_variant(struct st_context *st, GLboolean write_depth,
 
 
 /**
+ * Clamp glDrawPixels width and height to the maximum texture size.
+ */
+static void
+clamp_size(struct pipe_context *pipe, GLsizei *width, GLsizei *height,
+           struct gl_pixelstore_attrib *unpack)
+{
+   const unsigned maxSize = 
+      1 << (pipe->screen->get_param(pipe->screen,
+                                    PIPE_CAP_MAX_TEXTURE_2D_LEVELS) - 1);
+
+   if (*width > maxSize) {
+      if (unpack->RowLength == 0)
+         unpack->RowLength = *width;
+      *width = maxSize;
+   }
+   if (*height > maxSize) {
+      *height = maxSize;
+   }
+}
+
+
+/**
  * Called via ctx->Driver.DrawPixels()
  */
 static void
@@ -1063,6 +1094,20 @@ st_DrawPixels(struct gl_context *ctx, GLint x, GLint y,
    struct pipe_sampler_view *sv[2];
    int num_sampler_view = 1;
    struct st_fp_variant *fpv;
+   struct gl_pixelstore_attrib clippedUnpack;
+
+   /* Mesa state should be up to date by now */
+   assert(ctx->NewState == 0x0);
+
+   st_validate_state(st);
+
+   /* Limit the size of the glDrawPixels to the max texture size.
+    * Strictly speaking, that's not correct but since we don't handle
+    * larger images yet, this is better than crashing.
+    */
+   clippedUnpack = *unpack;
+   unpack = &clippedUnpack;
+   clamp_size(st->pipe, &width, &height, &clippedUnpack);
 
    if (format == GL_DEPTH_STENCIL)
       write_stencil = write_depth = GL_TRUE;
@@ -1078,11 +1123,6 @@ st_DrawPixels(struct gl_context *ctx, GLint x, GLint y,
                           unpack, pixels);
       return;
    }
-
-   /* Mesa state should be up to date by now */
-   assert(ctx->NewState == 0x0);
-
-   st_validate_state(st);
 
    /*
     * Get vertex/fragment shaders

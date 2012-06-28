@@ -1337,6 +1337,46 @@ save_DrawElementsInstancedBaseVertexARB(GLenum mode,
 	       "glDrawElementsInstancedBaseVertex() during display list compile");
 }
 
+/* GL_ARB_base_instance. */
+static void GLAPIENTRY
+save_DrawArraysInstancedBaseInstance(GLenum mode,
+                                     GLint first,
+                                     GLsizei count,
+                                     GLsizei primcount,
+                                     GLuint baseinstance)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   _mesa_error(ctx, GL_INVALID_OPERATION,
+	       "glDrawArraysInstancedBaseInstance() during display list compile");
+}
+
+static void APIENTRY
+save_DrawElementsInstancedBaseInstance(GLenum mode,
+                                       GLsizei count,
+                                       GLenum type,
+                                       const void *indices,
+                                       GLsizei primcount,
+                                       GLuint baseinstance)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   _mesa_error(ctx, GL_INVALID_OPERATION,
+	       "glDrawElementsInstancedBaseInstance() during display list compile");
+}
+
+static void APIENTRY
+save_DrawElementsInstancedBaseVertexBaseInstance(GLenum mode,
+                                                 GLsizei count,
+                                                 GLenum type,
+                                                 const void *indices,
+                                                 GLsizei primcount,
+                                                 GLint basevertex,
+                                                 GLuint baseinstance)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   _mesa_error(ctx, GL_INVALID_OPERATION,
+	       "glDrawElementsInstancedBaseVertexBaseInstance() during display list compile");
+}
+
 static void invalidate_saved_current_state( struct gl_context *ctx )
 {
    GLint i;
@@ -10445,6 +10485,9 @@ _mesa_create_save_table(void)
    /* GL_ARB_debug_output (no dlist support) */
    _mesa_init_errors_dispatch(table);
 
+   /* GL_NV_primitive_restart */
+   SET_PrimitiveRestartIndexNV(table, _mesa_PrimitiveRestartIndex);
+
    return table;
 }
 
@@ -10812,6 +10855,11 @@ _mesa_save_vtxfmt_init(GLvertexformat * vfmt)
 
    /* GL_ARB_draw_elements_base_vertex */
    vfmt->DrawElementsInstancedBaseVertex = save_DrawElementsInstancedBaseVertexARB;
+
+   /* GL_ARB_base_instance */
+   vfmt->DrawArraysInstancedBaseInstance = save_DrawArraysInstancedBaseInstance;
+   vfmt->DrawElementsInstancedBaseInstance = save_DrawElementsInstancedBaseInstance;
+   vfmt->DrawElementsInstancedBaseVertexBaseInstance = save_DrawElementsInstancedBaseVertexBaseInstance;
 
    /* The driver is required to implement these as
     * 1) They can probably do a better job.

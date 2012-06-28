@@ -3,13 +3,30 @@ AUTOMAKE_OPTIONS = subdir-objects
 lib_LTLIBRARIES = libOpenCL.la
 
 libOpenCL_la_LDFLAGS = \
+	$(LLVM_LDFLAGS) \
 	-version-number 1:0
 
 libOpenCL_la_LIBADD = \
 	$(top_builddir)/src/gallium/state_trackers/clover/libclover.la \
 	$(top_builddir)/src/gallium/auxiliary/libgallium.a \
 	$(GALLIUM_PIPE_LOADER_LIBS) $(LIBUDEV_LIBS) \
-	-ldl
+	-ldl \
+	-lclangCodeGen \
+	-lclangFrontendTool \
+	-lclangFrontend \
+	-lclangDriver \
+	-lclangSerialization \
+	-lclangCodeGen \
+	-lclangParse \
+	-lclangSema \
+	-lclangAnalysis \
+	-lclangRewrite \
+	-lclangAST \
+	-lclangLex \
+	-lclangBasic \
+	-lclangEdit \
+	$(LLVM_LIBS)
+
 
 libOpenCL_la_SOURCES =
 

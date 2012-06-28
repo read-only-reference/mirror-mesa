@@ -419,6 +419,28 @@ fs_visitor::emit_fragcoord_interpolation(ir_variable *ir)
    return reg;
 }
 
+fs_inst *
+fs_visitor::emit_linterp(const fs_reg &attr, const fs_reg &interp,
+                         glsl_interp_qualifier interpolation_mode,
+                         bool is_centroid)
+{
+   brw_wm_barycentric_interp_mode barycoord_mode;
+   if (is_centroid) {
+      if (interpolation_mode == INTERP_QUALIFIER_SMOOTH)
+         barycoord_mode = BRW_WM_PERSPECTIVE_CENTROID_BARYCENTRIC;
+      else
+         barycoord_mode = BRW_WM_NONPERSPECTIVE_CENTROID_BARYCENTRIC;
+   } else {
+      if (interpolation_mode == INTERP_QUALIFIER_SMOOTH)
+         barycoord_mode = BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
+      else
+         barycoord_mode = BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC;
+   }
+   return emit(FS_OPCODE_LINTERP, attr,
+               this->delta_x[barycoord_mode],
+               this->delta_y[barycoord_mode], interp);
+}
+
 fs_reg *
 fs_visitor::emit_general_interpolation(ir_variable *ir)
 {
@@ -482,14 +504,8 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
 		  emit(BRW_OPCODE_MOV, attr, fs_reg(1.0f));
 	       } else {
 		  struct brw_reg interp = interp_reg(location, k);
-                  brw_wm_barycentric_interp_mode barycoord_mode;
-                  if (interpolation_mode == INTERP_QUALIFIER_SMOOTH)
-                     barycoord_mode = BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
-                  else
-                     barycoord_mode = BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC;
-                  emit(FS_OPCODE_LINTERP, attr,
-                       this->delta_x[barycoord_mode],
-                       this->delta_y[barycoord_mode], fs_reg(interp));
+                  emit_linterp(attr, fs_reg(interp), interpolation_mode,
+                               ir->centroid);
 		  if (intel->gen < 6) {
 		     emit(BRW_OPCODE_MUL, attr, attr, this->pixel_w);
 		  }
@@ -1848,6 +1864,13 @@ brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
    struct brw_context *brw = brw_context(ctx);
    struct brw_wm_prog_key key;
 
+   /* As a temporary measure we assume that all programs use dFdy() (and hence
+    * need to be compiled differently depending on whether we're rendering to
+    * an FBO).  FIXME: set this bool correctly based on the contents of the
+    * program.
+    */
+   bool program_uses_dfdy = true;
+
    if (!prog->_LinkedShaders[MESA_SHADER_FRAGMENT])
       return true;
 
@@ -1892,6 +1915,9 @@ brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
 
    if (fp->Base.InputsRead & FRAG_BIT_WPOS) {
       key.drawable_height = ctx->DrawBuffer->Height;
+   }
+
+   if ((fp->Base.InputsRead & FRAG_BIT_WPOS) || program_uses_dfdy) {
       key.render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
    }
 

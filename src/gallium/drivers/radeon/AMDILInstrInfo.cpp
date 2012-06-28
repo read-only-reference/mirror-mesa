@@ -22,12 +22,12 @@
 #include "llvm/Instructions.h"
 
 #define GET_INSTRINFO_CTOR
-#include "AMDILGenInstrInfo.inc"
+#include "AMDGPUGenInstrInfo.inc"
 
 using namespace llvm;
 
 AMDILInstrInfo::AMDILInstrInfo(TargetMachine &tm)
-  : AMDILGenInstrInfo(AMDIL::ADJCALLSTACKDOWN, AMDIL::ADJCALLSTACKUP),
+  : AMDILGenInstrInfo(),
     RI(tm, *this),
     TM(tm) {
 }
@@ -154,12 +154,8 @@ unsigned int AMDILInstrInfo::getBranchInstr(const MachineOperand &op) const {
   
   switch (MI->getDesc().OpInfo->RegClass) {
   default: // FIXME: fallthrough??
-  case AMDIL::GPRI8RegClassID:  return AMDIL::BRANCH_COND_i8;
-  case AMDIL::GPRI16RegClassID: return AMDIL::BRANCH_COND_i16;
   case AMDIL::GPRI32RegClassID: return AMDIL::BRANCH_COND_i32;
-  case AMDIL::GPRI64RegClassID: return AMDIL::BRANCH_COND_i64;
   case AMDIL::GPRF32RegClassID: return AMDIL::BRANCH_COND_f32;
-  case AMDIL::GPRF64RegClassID: return AMDIL::BRANCH_COND_f64;
   };
 }
 
@@ -244,21 +240,6 @@ MachineBasicBlock::iterator skipFlowControl(MachineBasicBlock *MBB) {
 }
 
 void
-AMDILInstrInfo::copyPhysReg(MachineBasicBlock &MBB,
-                            MachineBasicBlock::iterator MI, DebugLoc DL,
-                            unsigned DestReg, unsigned SrcReg,
-                            bool KillSrc) const
-{
-  BuildMI(MBB, MI, DL, get(AMDIL::MOVE_v4i32), DestReg)
-    .addReg(SrcReg, getKillRegState(KillSrc));
-  return;
-#if 0
-  DEBUG(dbgs() << "Cannot copy " << RI.getName(SrcReg)
-               << " to " << RI.getName(DestReg) << '\n');
-  abort();
-#endif
-}
-void
 AMDILInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
                                     MachineBasicBlock::iterator MI,
                                     unsigned SrcReg, bool isKill,
@@ -272,56 +253,11 @@ AMDILInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
   
   DebugLoc DL;
   switch (RC->getID()) {
-  default:
-    Opc = AMDIL::PRIVATESTORE_v4i32;
-    break;
   case AMDIL::GPRF32RegClassID:
     Opc = AMDIL::PRIVATESTORE_f32;
     break;
-  case AMDIL::GPRF64RegClassID:
-    Opc = AMDIL::PRIVATESTORE_f64;
-    break;
-  case AMDIL::GPRI16RegClassID:
-    Opc = AMDIL::PRIVATESTORE_i16;
-    break;
   case AMDIL::GPRI32RegClassID:
     Opc = AMDIL::PRIVATESTORE_i32;
-    break;
-  case AMDIL::GPRI8RegClassID:
-    Opc = AMDIL::PRIVATESTORE_i8;
-    break;
-  case AMDIL::GPRI64RegClassID:
-    Opc = AMDIL::PRIVATESTORE_i64;
-    break;
-  case AMDIL::GPRV2F32RegClassID:
-    Opc = AMDIL::PRIVATESTORE_v2f32;
-    break;
-  case AMDIL::GPRV2F64RegClassID:
-    Opc = AMDIL::PRIVATESTORE_v2f64;
-    break;
-  case AMDIL::GPRV2I16RegClassID:
-    Opc = AMDIL::PRIVATESTORE_v2i16;
-    break;
-  case AMDIL::GPRV2I32RegClassID:
-    Opc = AMDIL::PRIVATESTORE_v2i32;
-    break;
-  case AMDIL::GPRV2I8RegClassID:
-    Opc = AMDIL::PRIVATESTORE_v2i8;
-    break;
-  case AMDIL::GPRV2I64RegClassID:
-    Opc = AMDIL::PRIVATESTORE_v2i64;
-    break;
-  case AMDIL::GPRV4F32RegClassID:
-    Opc = AMDIL::PRIVATESTORE_v4f32;
-    break;
-  case AMDIL::GPRV4I16RegClassID:
-    Opc = AMDIL::PRIVATESTORE_v4i16;
-    break;
-  case AMDIL::GPRV4I32RegClassID:
-    Opc = AMDIL::PRIVATESTORE_v4i32;
-    break;
-  case AMDIL::GPRV4I8RegClassID:
-    Opc = AMDIL::PRIVATESTORE_v4i8;
     break;
   }
   if (MI != MBB.end()) DL = MI->getDebugLoc();
@@ -352,56 +288,11 @@ AMDILInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
   MachineFrameInfo &MFI = *MF.getFrameInfo();
   DebugLoc DL;
   switch (RC->getID()) {
-  default:
-    Opc = AMDIL::PRIVATELOAD_v4i32;
-    break;
   case AMDIL::GPRF32RegClassID:
     Opc = AMDIL::PRIVATELOAD_f32;
     break;
-  case AMDIL::GPRF64RegClassID:
-    Opc = AMDIL::PRIVATELOAD_f64;
-    break;
-  case AMDIL::GPRI16RegClassID:
-    Opc = AMDIL::PRIVATELOAD_i16;
-    break;
   case AMDIL::GPRI32RegClassID:
     Opc = AMDIL::PRIVATELOAD_i32;
-    break;
-  case AMDIL::GPRI8RegClassID:
-    Opc = AMDIL::PRIVATELOAD_i8;
-    break;
-  case AMDIL::GPRI64RegClassID:
-    Opc = AMDIL::PRIVATELOAD_i64;
-    break;
-  case AMDIL::GPRV2F32RegClassID:
-    Opc = AMDIL::PRIVATELOAD_v2f32;
-    break;
-  case AMDIL::GPRV2F64RegClassID:
-    Opc = AMDIL::PRIVATELOAD_v2f64;
-    break;
-  case AMDIL::GPRV2I16RegClassID:
-    Opc = AMDIL::PRIVATELOAD_v2i16;
-    break;
-  case AMDIL::GPRV2I32RegClassID:
-    Opc = AMDIL::PRIVATELOAD_v2i32;
-    break;
-  case AMDIL::GPRV2I8RegClassID:
-    Opc = AMDIL::PRIVATELOAD_v2i8;
-    break;
-  case AMDIL::GPRV2I64RegClassID:
-    Opc = AMDIL::PRIVATELOAD_v2i64;
-    break;
-  case AMDIL::GPRV4F32RegClassID:
-    Opc = AMDIL::PRIVATELOAD_v4f32;
-    break;
-  case AMDIL::GPRV4I16RegClassID:
-    Opc = AMDIL::PRIVATELOAD_v4i16;
-    break;
-  case AMDIL::GPRV4I32RegClassID:
-    Opc = AMDIL::PRIVATELOAD_v4i32;
-    break;
-  case AMDIL::GPRV4I8RegClassID:
-    Opc = AMDIL::PRIVATELOAD_v4i8;
     break;
   }
 
@@ -527,17 +418,6 @@ bool AMDILInstrInfo::isLoadInst(MachineInstr *MI) const {
 
 bool AMDILInstrInfo::isSWSExtLoadInst(MachineInstr *MI) const
 {
-switch (MI->getOpcode()) {
-    default:
-      break;
-      ExpandCaseToByteShortTypes(AMDIL::LOCALLOAD);
-      ExpandCaseToByteShortTypes(AMDIL::GLOBALLOAD);
-      ExpandCaseToByteShortTypes(AMDIL::REGIONLOAD);
-      ExpandCaseToByteShortTypes(AMDIL::PRIVATELOAD);
-      ExpandCaseToByteShortTypes(AMDIL::CPOOLLOAD);
-      ExpandCaseToByteShortTypes(AMDIL::CONSTANTLOAD);
-      return true;
-  };
   return false;
 }
 

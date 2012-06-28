@@ -21,6 +21,7 @@ class AMDGPUInst <dag outs, dag ins, string asm, list<dag> pattern> : Instructio
   let InOperandList = ins;
   let AsmString = asm;
   let Pattern = pattern;
+  let Itinerary = NullALU;
   let TSFlags{42-40} = Gen;
   let TSFlags{63-48} = AMDILOp;
 }
@@ -102,6 +103,12 @@ class Insert_Element <ValueType elem_type, ValueType vec_type,
   (vec_type (vector_insert (vec_type vec_class:$vec),
                            (elem_type elem_class:$elem), sub_idx)),
   (INSERT_SUBREG vec_class:$vec, elem_class:$elem, sub_reg)
+>;
+
+// Vector Build pattern
+class Vector_Build <ValueType vecType, RegisterClass elemClass> : Pat <
+  (IL_vbuild elemClass:$src),
+  (INSERT_SUBREG (vecType (IMPLICIT_DEF)), elemClass:$src, sel_x)
 >;
 
 // bitconvert pattern

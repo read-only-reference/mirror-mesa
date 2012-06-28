@@ -126,7 +126,8 @@ The integer capabilities:
   resources.
 * ``PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT``: Describes the required
   alignment of pipe_constant_buffer::buffer_offset.
-
+* ``PIPE_CAP_START_INSTANCE``: Whether the driver supports
+  pipe_draw_info::start_instance.
 
 
 .. _pipe_capf:
@@ -212,6 +213,11 @@ PIPE_COMPUTE_CAP_*
 Compute-specific capabilities. They can be queried using
 pipe_screen::get_compute_param.
 
+* ``PIPE_COMPUTE_CAP_IR_TARGET``: A description of the target as a target
+  triple specification of the form ``processor-manufacturer-os`` that will
+  be passed on to the compiler.  This CAP is only relevant for drivers
+  that specify PIPE_SHADER_IR_LLVM for their preferred IR.
+  Value type: null-terminated string.
 * ``PIPE_COMPUTE_CAP_GRID_DIMENSION``: Number of supported dimensions
   for grid and block coordinates.  Value type: ``uint64_t``.
 * ``PIPE_COMPUTE_CAP_MAX_GRID_SIZE``: Maximum grid size in block

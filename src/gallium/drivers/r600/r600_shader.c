@@ -109,6 +109,7 @@ int r600_pipe_shader_create(struct pipe_context *ctx, struct r600_pipe_shader *s
 {
 	static int dump_shaders = -1;
 	struct r600_context *rctx = (struct r600_context *)ctx;
+	struct r600_pipe_shader_selector *sel = shader->selector;
 	int r;
 
 	/* Would like some magic "get_bool_option_once" routine.
@@ -118,16 +119,16 @@ int r600_pipe_shader_create(struct pipe_context *ctx, struct r600_pipe_shader *s
 
 	if (dump_shaders) {
 		fprintf(stderr, "--------------------------------------------------------------\n");
-		tgsi_dump(shader->tokens, 0);
+		tgsi_dump(sel->tokens, 0);
 
-		if (shader->so.num_outputs) {
+		if (sel->so.num_outputs) {
 			unsigned i;
 			fprintf(stderr, "STREAMOUT\n");
-			for (i = 0; i < shader->so.num_outputs; i++) {
-				unsigned mask = ((1 << shader->so.output[i].num_components) - 1) <<
-						shader->so.output[i].start_component;
+			for (i = 0; i < sel->so.num_outputs; i++) {
+				unsigned mask = ((1 << sel->so.output[i].num_components) - 1) <<
+						sel->so.output[i].start_component;
 				fprintf(stderr, "  %i: MEM_STREAM0_BUF%i OUT[%i].%s%s%s%s\n", i,
-					shader->so.output[i].output_buffer, shader->so.output[i].register_index,
+					sel->so.output[i].output_buffer, sel->so.output[i].register_index,
 				        mask & 1 ? "x" : "_",
 				        (mask >> 1) & 1 ? "y" : "_",
 				        (mask >> 2) & 1 ? "z" : "_",
@@ -156,8 +157,6 @@ void r600_pipe_shader_destroy(struct pipe_context *ctx, struct r600_pipe_shader 
 {
 	pipe_resource_reference((struct pipe_resource**)&shader->bo, NULL);
 	r600_bytecode_clear(&shader->shader.bc);
-
-	memset(&shader->shader,0,sizeof(struct r600_shader));
 }
 
 /*
@@ -224,6 +223,51 @@ static int tgsi_loop_brk_cont(struct r600_shader_ctx *ctx);
  * These functions are used to transform the output of the LLVM backend into
  * struct r600_bytecode.
  */
+
+static void r600_bytecode_from_byte_stream(struct r600_shader_ctx *ctx,
+				unsigned char * bytes,	unsigned num_bytes);
+
+#ifdef HAVE_OPENCL
+int r600_compute_shader_create(struct pipe_context * ctx,
+	LLVMModuleRef mod,  struct r600_bytecode * bytecode)
+{
+	struct r600_context *r600_ctx = (struct r600_context *)ctx;
+	unsigned char * bytes;
+	unsigned byte_count;
+	struct r600_shader_ctx shader_ctx;
+	unsigned dump = 0;
+
+	if (debug_get_bool_option("R600_DUMP_SHADERS", FALSE)) {
+		dump = 1;
+	}
+
+	r600_llvm_compile(mod, &bytes, &byte_count, r600_ctx->family , dump);
+	shader_ctx.bc = bytecode;
+	r600_bytecode_init(shader_ctx.bc, r600_ctx->chip_class, r600_ctx->family);
+	shader_ctx.bc->type = TGSI_PROCESSOR_COMPUTE;
+	r600_bytecode_from_byte_stream(&shader_ctx, bytes, byte_count);
+	if (shader_ctx.bc->chip_class == CAYMAN) {
+		cm_bytecode_add_cf_end(shader_ctx.bc);
+	}
+	r600_bytecode_build(shader_ctx.bc);
+	if (dump) {
+		r600_bytecode_dump(shader_ctx.bc);
+	}
+	return 1;
+}
+
+#endif /* HAVE_OPENCL */
+
+static uint32_t i32_from_byte_stream(unsigned char * bytes,
+		unsigned * bytes_read)
+{
+	unsigned i;
+	uint32_t out = 0;
+	for (i = 0; i < 4; i++) {
+		out |= bytes[(*bytes_read)++] << (8 * i);
+	}
+	return out;
+}
 
 static unsigned r600_src_from_byte_stream(unsigned char * bytes,
 		unsigned bytes_read, struct r600_bytecode_alu * alu, unsigned src_idx)
@@ -410,25 +454,36 @@ static int r600_vtx_from_byte_stream(struct r600_shader_ctx *ctx,
 	unsigned char * bytes, unsigned bytes_read)
 {
 	struct r600_bytecode_vtx vtx;
+
+	uint32_t word0 = i32_from_byte_stream(bytes, &bytes_read);
+        uint32_t word1 = i32_from_byte_stream(bytes, &bytes_read);
+	uint32_t word2 = i32_from_byte_stream(bytes, &bytes_read);
+
 	memset(&vtx, 0, sizeof(vtx));
-	vtx.inst = bytes[bytes_read++];
-	vtx.fetch_type = bytes[bytes_read++];
-	vtx.buffer_id = bytes[bytes_read++];
-	vtx.src_gpr = bytes[bytes_read++];
-	vtx.src_sel_x = bytes[bytes_read++];
-	vtx.mega_fetch_count = bytes[bytes_read++];
-	vtx.dst_gpr = bytes[bytes_read++];
-	vtx.dst_sel_x = bytes[bytes_read++];
-	vtx.dst_sel_y = bytes[bytes_read++];
-	vtx.dst_sel_z = bytes[bytes_read++];
-	vtx.dst_sel_w = bytes[bytes_read++];
-	vtx.use_const_fields = bytes[bytes_read++];
-	vtx.data_format = bytes[bytes_read++];
-	vtx.num_format_all = bytes[bytes_read++];
-	vtx.format_comp_all = bytes[bytes_read++];
-	vtx.srf_mode_all = bytes[bytes_read++];
-	vtx.offset = bytes[bytes_read++];
-	vtx.endian = bytes[bytes_read++];
+
+	/* WORD0 */
+	vtx.inst = G_SQ_VTX_WORD0_VTX_INST(word0);
+	vtx.fetch_type = G_SQ_VTX_WORD0_FETCH_TYPE(word0);
+	vtx.buffer_id = G_SQ_VTX_WORD0_BUFFER_ID(word0);
+	vtx.src_gpr = G_SQ_VTX_WORD0_SRC_GPR(word0);
+	vtx.src_sel_x = G_SQ_VTX_WORD0_SRC_SEL_X(word0);
+	vtx.mega_fetch_count = G_SQ_VTX_WORD0_MEGA_FETCH_COUNT(word0);
+
+	/* WORD1 */
+	vtx.dst_gpr = G_SQ_VTX_WORD1_GPR_DST_GPR(word1);
+	vtx.dst_sel_x = G_SQ_VTX_WORD1_DST_SEL_X(word1);
+	vtx.dst_sel_y = G_SQ_VTX_WORD1_DST_SEL_Y(word1);
+	vtx.dst_sel_z = G_SQ_VTX_WORD1_DST_SEL_Z(word1);
+	vtx.dst_sel_w = G_SQ_VTX_WORD1_DST_SEL_W(word1);
+	vtx.use_const_fields = G_SQ_VTX_WORD1_USE_CONST_FIELDS(word1);
+	vtx.data_format = G_SQ_VTX_WORD1_DATA_FORMAT(word1);
+	vtx.num_format_all = G_SQ_VTX_WORD1_NUM_FORMAT_ALL(word1);
+	vtx.format_comp_all = G_SQ_VTX_WORD1_FORMAT_COMP_ALL(word1);
+	vtx.srf_mode_all = G_SQ_VTX_WORD1_SRF_MODE_ALL(word1);
+
+	/* WORD 2*/
+	vtx.offset = G_SQ_VTX_WORD2_OFFSET(word2);
+	vtx.endian = G_SQ_VTX_WORD2_ENDIAN_SWAP(word2);
 
 	if (r600_bytecode_add_vtx(ctx->bc, &vtx)) {
 		fprintf(stderr, "Error adding vtx\n");
@@ -765,6 +820,12 @@ static int tgsi_declaration(struct r600_shader_ctx *ctx)
 				ctx->cv_output = i;
 				break;
 			}
+		} else if (ctx->type == TGSI_PROCESSOR_FRAGMENT) {
+			switch (d->Semantic.Name) {
+			case TGSI_SEMANTIC_COLOR:
+				ctx->shader->nr_ps_max_color_exports++;
+				break;
+			}
 		}
 		break;
 	case TGSI_FILE_CONSTANT:
@@ -1082,8 +1143,8 @@ static int process_twoside_color_inputs(struct r600_shader_ctx *ctx)
 static int r600_shader_from_tgsi(struct r600_context * rctx, struct r600_pipe_shader *pipeshader)
 {
 	struct r600_shader *shader = &pipeshader->shader;
-	struct tgsi_token *tokens = pipeshader->tokens;
-	struct pipe_stream_output_info so = pipeshader->so;
+	struct tgsi_token *tokens = pipeshader->selector->tokens;
+	struct pipe_stream_output_info so = pipeshader->selector->so;
 	struct tgsi_full_immediate *immediate;
 	struct tgsi_full_property *property;
 	struct r600_shader_ctx ctx;
@@ -1117,8 +1178,10 @@ static int r600_shader_from_tgsi(struct r600_context * rctx, struct r600_pipe_sh
 	ctx.colors_used = 0;
 	ctx.clip_vertex_write = 0;
 
+	shader->nr_ps_color_exports = 0;
+	shader->nr_ps_max_color_exports = 0;
+
 	shader->two_side = (ctx.type == TGSI_PROCESSOR_FRAGMENT) && rctx->two_side;
-	shader->nr_cbufs = rctx->nr_cbufs;
 
 	/* register allocations */
 	/* Values [0,127] correspond to GPR[0..127].
@@ -1252,6 +1315,9 @@ static int r600_shader_from_tgsi(struct r600_context * rctx, struct r600_pipe_sh
 			goto out_err;
 		}
 	}
+
+	if (shader->fs_write_all && rctx->chip_class >= EVERGREEN)
+		shader->nr_ps_max_color_exports = 8;
 
 	if (ctx.fragcoord_input >= 0) {
 		if (ctx.bc->chip_class == CAYMAN) {
@@ -1492,10 +1558,17 @@ static int r600_shader_from_tgsi(struct r600_context * rctx, struct r600_pipe_sh
 			break;
 		case TGSI_PROCESSOR_FRAGMENT:
 			if (shader->output[i].name == TGSI_SEMANTIC_COLOR) {
+				/* never export more colors than the number of CBs */
+				if (next_pixel_base && next_pixel_base >= (rctx->nr_cbufs + rctx->dual_src_blend * 1)) {
+					/* skip export */
+					j--;
+					continue;
+				}
 				output[j].array_base = next_pixel_base++;
 				output[j].type = V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_PIXEL;
+				shader->nr_ps_color_exports++;
 				if (shader->fs_write_all && (rctx->chip_class >= EVERGREEN)) {
-					for (k = 1; k < shader->nr_cbufs; k++) {
+					for (k = 1; k < rctx->nr_cbufs; k++) {
 						j++;
 						memset(&output[j], 0, sizeof(struct r600_bytecode_output));
 						output[j].gpr = shader->output[i].gpr;
@@ -1509,6 +1582,7 @@ static int r600_shader_from_tgsi(struct r600_context * rctx, struct r600_pipe_sh
 						output[j].array_base = next_pixel_base++;
 						output[j].inst = BC_INST(ctx.bc, V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_EXPORT);
 						output[j].type = V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_PIXEL;
+						shader->nr_ps_color_exports++;
 					}
 				}
 			} else if (shader->output[i].name == TGSI_SEMANTIC_POSITION) {
@@ -1559,7 +1633,7 @@ static int r600_shader_from_tgsi(struct r600_context * rctx, struct r600_pipe_sh
 	}
 
 	/* add fake pixel export */
-	if (ctx.type == TGSI_PROCESSOR_FRAGMENT && j == 0) {
+	if (ctx.type == TGSI_PROCESSOR_FRAGMENT && next_pixel_base == 0) {
 		memset(&output[j], 0, sizeof(struct r600_bytecode_output));
 		output[j].gpr = 0;
 		output[j].elem_size = 3;

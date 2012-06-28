@@ -50,6 +50,7 @@ AMDGPUTargetMachine::AMDGPUTargetMachine(const Target &T, StringRef TT,
   FrameLowering(TargetFrameLowering::StackGrowsUp,
       Subtarget.device()->getStackAlignment(), 0),
   IntrinsicInfo(this),
+  InstrItins(&Subtarget.getInstrItineraryData()),
   mDump(false)
 
 {
@@ -135,12 +136,9 @@ bool AMDGPUPassConfig::addInstSelector() {
 bool AMDGPUPassConfig::addPreRegAlloc() {
   const AMDILSubtarget &ST = TM->getSubtarget<AMDILSubtarget>();
 
-  if (ST.device()->getGeneration() <= AMDILDeviceInfo::HD6XXX) {
-    PM->add(createR600LowerInstructionsPass(*TM));
-  } else {
+  if (ST.device()->getGeneration() > AMDILDeviceInfo::HD6XXX) {
     PM->add(createSIAssignInterpRegsPass(*TM));
   }
-  PM->add(createAMDGPULowerInstructionsPass(*TM));
   PM->add(createAMDGPUConvertToISAPass(*TM));
   return false;
 }
@@ -154,12 +152,8 @@ bool AMDGPUPassConfig::addPreSched2() {
 }
 
 bool AMDGPUPassConfig::addPreEmitPass() {
-  const AMDILSubtarget &ST = TM->getSubtarget<AMDILSubtarget>();
   PM->add(createAMDILCFGPreparationPass(*TM));
   PM->add(createAMDILCFGStructurizerPass(*TM));
-  if (ST.device()->getGeneration() == AMDILDeviceInfo::HD7XXX) {
-    PM->add(createSIPropagateImmReadsPass(*TM));
-  }
 
   return false;
 }

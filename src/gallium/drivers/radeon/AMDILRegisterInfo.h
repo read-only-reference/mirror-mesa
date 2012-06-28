@@ -17,7 +17,7 @@
 #include "llvm/Target/TargetRegisterInfo.h"
 
 #define GET_REGINFO_HEADER
-#include "AMDILGenRegisterInfo.inc"
+#include "AMDGPUGenRegisterInfo.inc"
 // See header file for explanation
 
 namespace llvm
@@ -80,6 +80,11 @@ namespace llvm
 
     int64_t
       getStackSize() const;
+
+    virtual const TargetRegisterClass * getCFGStructurizerRegClass(MVT VT)
+                                                                      const {
+      return AMDIL::GPRI32RegisterClass;
+    }
     private:
     mutable int64_t baseOffset;
     mutable int64_t nextFuncOffset;

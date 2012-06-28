@@ -60,6 +60,9 @@ fixup_mirroring(bool &mirror, GLint &coord0, GLint &coord1)
  * For clarity, the nomenclature of this function assumes we are clipping and
  * scissoring the X coordinate; the exact same logic applies for Y
  * coordinates.
+ *
+ * Note: this function may also be used to account for clipping of source
+ * coordinates, by swapping the roles of src and dst.
  */
 static inline bool
 clip_or_scissor(bool mirror, GLint &src_x0, GLint &src_x1, GLint &dst_x0,
@@ -151,19 +154,6 @@ try_blorp_blit(struct intel_context *intel,
    if (!src_mt) return false;
    if (buffer_bit == GL_STENCIL_BUFFER_BIT && src_mt->stencil_mt)
       src_mt = src_mt->stencil_mt;
-   switch (src_mt->format) {
-   case MESA_FORMAT_ARGB8888:
-   case MESA_FORMAT_X8_Z24:
-   case MESA_FORMAT_S8:
-      break; /* Supported */
-   default:
-      /* Unsupported format.
-       *
-       * TODO: need to support all formats that are allowed as multisample
-       * render targets.
-       */
-      return false;
-   }
 
    /* Validate destination */
    if (!dst_rb) return false;
@@ -172,19 +162,14 @@ try_blorp_blit(struct intel_context *intel,
    if (!dst_mt) return false;
    if (buffer_bit == GL_STENCIL_BUFFER_BIT && dst_mt->stencil_mt)
       dst_mt = dst_mt->stencil_mt;
-   switch (dst_mt->format) {
-   case MESA_FORMAT_ARGB8888:
-   case MESA_FORMAT_X8_Z24:
-   case MESA_FORMAT_S8:
-      break; /* Supported */
-   default:
-      /* Unsupported format.
-       *
-       * TODO: need to support all formats that are allowed as multisample
-       * render targets.
-       */
+
+   /* Blorp blits can't translate from one format to another.  For that we'll
+    * have to fall back to the meta-op blit.  Note: the meta-op blit doesn't
+    * support multisampled blits, but fortunately this is ok because
+    * multisampled blits require identical source and destination formats.
+    */
+   if (src_mt->format != dst_mt->format)
       return false;
-   }
 
    /* Account for the fact that in the system framebuffer, the origin is at
     * the lower left.
@@ -221,9 +206,14 @@ try_blorp_blit(struct intel_context *intel,
       return true;
    }
 
-   /* TODO: Clipping the source rectangle is not yet implemented. */
-   if (srcX0 < 0 || (GLuint) srcX1 > read_fb->Width) return false;
-   if (srcY0 < 0 || (GLuint) srcY1 > read_fb->Height) return false;
+   /* If the source rectangle needs to be clipped or scissored, do so. */
+   if (!(clip_or_scissor(mirror_x, dstX0, dstX1, srcX0, srcX1,
+                         0, read_fb->Width) &&
+         clip_or_scissor(mirror_y, dstY0, dstY1, srcY0, srcY1,
+                         0, read_fb->Height))) {
+      /* Everything got clipped/scissored away, so the blit was successful. */
+      return true;
+   }
 
    /* Get ready to blit.  This includes depth resolving the src and dst
     * buffers if necessary.
@@ -1274,8 +1264,8 @@ brw_blorp_blit_params::brw_blorp_blit_params(struct brw_context *brw,
                                              GLuint dst_x1, GLuint dst_y1,
                                              bool mirror_x, bool mirror_y)
 {
-   src.set(src_mt, 0, 0);
-   dst.set(dst_mt, 0, 0);
+   src.set(brw, src_mt, 0, 0);
+   dst.set(brw, dst_mt, 0, 0);
 
    use_wm_prog = true;
    memset(&wm_prog_key, 0, sizeof(wm_prog_key));

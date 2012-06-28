@@ -20,7 +20,11 @@ libcltgsi_la_SOURCES = \
 	tgsi/compiler.cpp
 
 libclllvm_la_CXXFLAGS = \
-	-std=c++98
+	-std=c++98 \
+	$(LLVM_CPPFLAGS) \
+	$(DEFINES) \
+	-DLIBCLC_PATH=\"$(LIBCLC_PATH)/\" \
+	-DCLANG_RESOURCE_DIR=\"$(CLANG_RESOURCE_DIR)\"
 
 libclllvm_la_SOURCES = \
 	llvm/invocation.cpp

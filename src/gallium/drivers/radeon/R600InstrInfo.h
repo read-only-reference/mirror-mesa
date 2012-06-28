@@ -23,6 +23,8 @@
 namespace llvm {
 
   class AMDGPUTargetMachine;
+  class DFAPacketizer;
+  class ScheduleDAG;
   class MachineFunction;
   class MachineInstr;
   class MachineInstrBuilder;
@@ -41,13 +43,21 @@ namespace llvm {
                            unsigned DestReg, unsigned SrcReg,
                            bool KillSrc) const;
 
-  virtual unsigned getISAOpcode(unsigned opcode) const;
   bool isTrig(const MachineInstr &MI) const;
 
-  unsigned getLSHRop() const;
-  unsigned getASHRop() const;
+  /// isVector - Vector instructions are instructions that must fill all
+  /// instruction slots within an instruction group.
+  bool isVector(const MachineInstr &MI) const;
 
-  };
+  virtual MachineInstr * getMovImmInstr(MachineFunction *MF, unsigned DstReg,
+                                        int64_t Imm) const;
+
+  virtual unsigned getIEQOpcode() const;
+  virtual bool isMov(unsigned Opcode) const;
+
+  DFAPacketizer *CreateTargetScheduleState(const TargetMachine *TM,
+                                           const ScheduleDAG *DAG) const;
+};
 
 } // End llvm namespace
 
@@ -58,7 +68,8 @@ namespace R600_InstFlag {
 		REDUCTION = (1 << 2),
 		FC = (1 << 3),
 		TRIG = (1 << 4),
-		OP3 = (1 << 5)
+		OP3 = (1 << 5),
+		VECTOR = (1 << 6)
 	};
 }
 

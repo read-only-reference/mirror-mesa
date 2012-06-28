@@ -115,6 +115,7 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_depth_buffer_float = true;
       ctx->Extensions.ARB_depth_clamp = true;
       ctx->Extensions.ARB_draw_instanced = true;
+      ctx->Extensions.ARB_instanced_arrays = true;
       ctx->Extensions.ARB_fragment_coord_conventions = true;
       ctx->Extensions.ARB_fragment_program_shadow = true;
       ctx->Extensions.ARB_fragment_shader = true;
@@ -122,6 +123,7 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_occlusion_query = true;
       ctx->Extensions.ARB_point_sprite = true;
       ctx->Extensions.ARB_seamless_cube_map = true;
+      ctx->Extensions.ARB_shader_bit_encoding = true;
       ctx->Extensions.ARB_shader_texture_lod = true;
 #ifdef TEXTURE_FLOAT_ENABLED
       ctx->Extensions.ARB_texture_float = true;

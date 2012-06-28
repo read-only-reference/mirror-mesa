@@ -4,15 +4,16 @@ GENERATED_SOURCES := \
 	R600RegisterInfo.td		\
 	SIRegisterInfo.td		\
 	SIRegisterGetHWRegNum.inc		\
-	AMDILGenRegisterInfo.inc	\
-	AMDILGenInstrInfo.inc		\
-	AMDILGenAsmWriter.inc		\
-	AMDILGenDAGISel.inc		\
-	AMDILGenCallingConv.inc		\
-	AMDILGenSubtargetInfo.inc		\
-	AMDILGenEDInfo.inc		\
-	AMDILGenIntrinsics.inc		\
-	AMDILGenCodeEmitter.inc
+	AMDGPUGenRegisterInfo.inc	\
+	AMDGPUGenInstrInfo.inc		\
+	AMDGPUGenAsmWriter.inc		\
+	AMDGPUGenDAGISel.inc		\
+	AMDGPUGenCallingConv.inc		\
+	AMDGPUGenSubtargetInfo.inc		\
+	AMDGPUGenEDInfo.inc		\
+	AMDGPUGenIntrinsics.inc		\
+	AMDGPUGenCodeEmitter.inc	\
+	AMDGPUGenDFAPacketizer.inc
 
 CPP_SOURCES := \
 	AMDIL7XXDevice.cpp		\
@@ -33,7 +34,6 @@ CPP_SOURCES := \
 	AMDGPUTargetMachine.cpp		\
 	AMDGPUISelLowering.cpp		\
 	AMDGPUConvertToISA.cpp		\
-	AMDGPULowerInstructions.cpp		\
 	AMDGPUInstrInfo.cpp		\
 	AMDGPURegisterInfo.cpp		\
 	AMDGPUUtil.cpp			\
@@ -41,7 +41,6 @@ CPP_SOURCES := \
 	R600ISelLowering.cpp		\
 	R600InstrInfo.cpp		\
 	R600KernelParameters.cpp	\
-	R600LowerInstructions.cpp	\
 	R600MachineFunctionInfo.cpp	\
 	R600RegisterInfo.cpp		\
 	SIAssignInterpRegs.cpp		\
@@ -49,7 +48,6 @@ CPP_SOURCES := \
 	SIInstrInfo.cpp			\
 	SIISelLowering.cpp		\
 	SIMachineFunctionInfo.cpp	\
-	SIPropagateImmReads.cpp		\
 	SIRegisterInfo.cpp		\
 	MCTargetDesc/AMDILMCAsmInfo.cpp	\
 	MCTargetDesc/AMDILMCTargetDesc.cpp	\

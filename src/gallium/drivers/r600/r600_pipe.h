@@ -28,8 +28,11 @@
 
 #include "util/u_slab.h"
 #include "r600.h"
+#include "r600_llvm.h"
+#include "r600_public.h"
 #include "r600_shader.h"
 #include "r600_resource.h"
+#include "evergreen_compute.h"
 
 #define R600_MAX_CONST_BUFFERS 2
 #define R600_MAX_CONST_BUFFER_SIZE 4096
@@ -98,8 +101,15 @@ enum r600_pipe_state_id {
 	R600_PIPE_STATE_RESOURCE,
 	R600_PIPE_STATE_POLYGON_OFFSET,
 	R600_PIPE_STATE_FETCH_SHADER,
+	R600_PIPE_STATE_SPI,
 	R600_PIPE_NSTATES
 };
+
+struct compute_memory_pool;
+void compute_memory_pool_delete(struct compute_memory_pool* pool);
+struct compute_memory_pool* compute_memory_pool_new(
+	int64_t initial_size_in_dw,
+	struct r600_screen *rscreen);
 
 struct r600_pipe_fences {
 	struct r600_resource		*bo;
@@ -118,11 +128,18 @@ struct r600_screen {
 	unsigned			family;
 	enum chip_class			chip_class;
 	struct radeon_info		info;
+	bool				has_streamout;
 	struct r600_tiling_info		tiling_info;
 	struct r600_pipe_fences		fences;
 
 	bool				use_surface_alloc;
 	int 				glsl_feature_level;
+
+	/*for compute global memory binding, we allocate stuff here, instead of
+	 * buffers.
+	 * XXX: Not sure if this is the best place for global_pool.  Also,
+	 * it's not thread safe, so it won't work with multiple contexts. */
+	struct compute_memory_pool *global_pool;
 };
 
 struct r600_pipe_sampler_view {
@@ -168,18 +185,37 @@ struct r600_vertex_element
 	struct r600_pipe_state		rstate;
 };
 
+struct r600_pipe_shader;
+
+struct r600_pipe_shader_selector {
+	struct r600_pipe_shader *current;
+
+	struct tgsi_token       *tokens;
+	struct pipe_stream_output_info  so;
+
+	unsigned	num_shaders;
+
+	/* PIPE_SHADER_[VERTEX|FRAGMENT|...] */
+	unsigned	type;
+
+	unsigned	nr_ps_max_color_exports;
+};
+
 struct r600_pipe_shader {
+	struct r600_pipe_shader_selector *selector;
+	struct r600_pipe_shader	*next_variant;
 	struct r600_shader		shader;
 	struct r600_pipe_state		rstate;
 	struct r600_resource		*bo;
 	struct r600_resource		*bo_fetch;
 	struct r600_vertex_element	vertex_elements;
-	struct tgsi_token		*tokens;
 	unsigned	sprite_coord_enable;
 	unsigned	flatshade;
 	unsigned	pa_cl_vs_out_cntl;
-	unsigned        ps_cb_shader_mask;
-	struct pipe_stream_output_info	so;
+	unsigned	ps_cb_shader_mask;
+	unsigned	key;
+	unsigned		db_shader_control;
+	unsigned		ps_depth_export;
 };
 
 struct r600_pipe_sampler_state {
@@ -248,6 +284,7 @@ struct r600_context {
 	unsigned			fb_cb_shader_mask;
 	unsigned			sx_alpha_test_control;
 	unsigned			cb_shader_mask;
+	unsigned			db_shader_control;
 	unsigned			cb_color_control;
 	unsigned			pa_sc_line_stipple;
 	unsigned			pa_cl_clip_cntl;
@@ -255,8 +292,9 @@ struct r600_context {
 	struct pipe_stencil_ref		stencil_ref;
 	struct pipe_viewport_state	viewport;
 	struct pipe_clip_state		clip;
-	struct r600_pipe_shader 	*ps_shader;
-	struct r600_pipe_shader 	*vs_shader;
+	struct r600_pipe_shader_selector 	*ps_shader;
+	struct r600_pipe_shader_selector 	*vs_shader;
+	struct r600_pipe_compute	*cs_shader;
 	struct r600_pipe_rasterizer	*rasterizer;
 	struct r600_pipe_state          vgt;
 	struct r600_pipe_state          spi;
@@ -266,7 +304,9 @@ struct r600_context {
 	unsigned			saved_render_cond_mode;
 	/* shader information */
 	boolean				two_side;
+	boolean				spi_dirty;
 	unsigned			sprite_coord_enable;
+	boolean				flatshade;
 	boolean				export_16bpc;
 	unsigned			alpha_ref;
 	boolean				alpha_ref_dirty;
@@ -382,10 +422,11 @@ boolean evergreen_is_format_supported(struct pipe_screen *screen,
 				      unsigned sample_count,
 				      unsigned usage);
 
+void evergreen_update_dual_export_state(struct r600_context * rctx);
+
 /* r600_blit.c */
 void r600_init_blit_functions(struct r600_context *rctx);
 void r600_blit_uncompress_depth(struct pipe_context *ctx, struct r600_resource_texture *texture);
-void r600_blit_push_depth(struct pipe_context *ctx, struct r600_resource_texture *texture);
 void r600_flush_depth_textures(struct r600_context *rctx);
 
 /* r600_buffer.c */
@@ -412,9 +453,11 @@ void r600_init_context_resource_functions(struct r600_context *r600);
 
 /* r600_shader.c */
 int r600_pipe_shader_create(struct pipe_context *ctx, struct r600_pipe_shader *shader);
+#ifdef HAVE_OPENCL
+int r600_compute_shader_create(struct pipe_context * ctx,
+	LLVMModuleRef mod,  struct r600_bytecode * bytecode);
+#endif
 void r600_pipe_shader_destroy(struct pipe_context *ctx, struct r600_pipe_shader *shader);
-int r600_find_vs_semantic_index(struct r600_shader *vs,
-				struct r600_shader *ps, int id);
 
 /* r600_state.c */
 void r600_set_scissor_state(struct r600_context *rctx,
@@ -433,6 +476,7 @@ boolean r600_is_format_supported(struct pipe_screen *screen,
 				 enum pipe_texture_target target,
 				 unsigned sample_count,
 				 unsigned usage);
+void r600_update_dual_export_state(struct r600_context * rctx);
 
 /* r600_texture.c */
 void r600_init_screen_texture_functions(struct pipe_screen *screen);
@@ -474,8 +518,10 @@ void r600_sampler_view_destroy(struct pipe_context *ctx,
 			       struct pipe_sampler_view *state);
 void r600_delete_state(struct pipe_context *ctx, void *state);
 void r600_bind_vertex_elements(struct pipe_context *ctx, void *state);
-void *r600_create_shader_state(struct pipe_context *ctx,
-			       const struct pipe_shader_state *state);
+void *r600_create_shader_state_ps(struct pipe_context *ctx,
+                   const struct pipe_shader_state *state);
+void *r600_create_shader_state_vs(struct pipe_context *ctx,
+                   const struct pipe_shader_state *state);
 void r600_bind_ps_shader(struct pipe_context *ctx, void *state);
 void r600_bind_vs_shader(struct pipe_context *ctx, void *state);
 void r600_delete_ps_shader(struct pipe_context *ctx, void *state);

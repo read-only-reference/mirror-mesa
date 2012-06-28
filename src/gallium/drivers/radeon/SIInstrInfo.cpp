@@ -77,31 +77,28 @@ unsigned SIInstrInfo::getEncodingBytes(const MachineInstr &MI) const
   }
 }
 
-MachineInstr * SIInstrInfo::convertToISA(MachineInstr & MI, MachineFunction &MF,
-    DebugLoc DL) const
+MachineInstr * SIInstrInfo::getMovImmInstr(MachineFunction *MF, unsigned DstReg,
+                                           int64_t Imm) const
 {
-  MachineInstr * newMI = AMDGPUInstrInfo::convertToISA(MI, MF, DL);
-  const MCInstrDesc &newDesc = get(newMI->getOpcode());
+  MachineInstr * MI = MF->CreateMachineInstr(get(AMDIL::V_MOV_IMM_I32), DebugLoc());
+  MachineInstrBuilder(MI).addReg(DstReg, RegState::Define);
+  MachineInstrBuilder(MI).addImm(Imm);
 
-  /* If this instruction was converted to a VOP3, we need to add the extra
-   * operands for abs, clamp, omod, and negate. */
-  if (getEncodingType(*newMI) == SIInstrEncodingType::VOP3
-      && newMI->getNumOperands() < newDesc.getNumOperands()) {
-    MachineInstrBuilder builder(newMI);
-    for (unsigned op_idx = newMI->getNumOperands();
-                  op_idx < newDesc.getNumOperands(); op_idx++) {
-      builder.addImm(0);
-    }
-  }
-  return newMI;
+  return MI;
+
 }
 
-unsigned SIInstrInfo::getISAOpcode(unsigned AMDILopcode) const
+bool SIInstrInfo::isMov(unsigned Opcode) const
 {
-  switch (AMDILopcode) {
-  //XXX We need a better way of detecting end of program
-  case AMDIL::RETURN: return AMDIL::S_ENDPGM;
-  case AMDIL::MOVE_f32: return AMDIL::V_MOV_B32_e32;
-  default: return AMDILopcode;
+  switch(Opcode) {
+  default: return false;
+  case AMDIL::S_MOV_B32:
+  case AMDIL::S_MOV_B64:
+  case AMDIL::V_MOV_B32_e32:
+  case AMDIL::V_MOV_B32_e64:
+  case AMDIL::V_MOV_IMM_F32:
+  case AMDIL::V_MOV_IMM_I32:
+  case AMDIL::S_MOV_IMM_I32:
+    return true;
   }
 }

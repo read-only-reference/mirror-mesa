@@ -143,6 +143,7 @@ brw_compute_barycentric_interp_modes(bool shade_model_flat,
    for (attr = 0; attr < FRAG_ATTRIB_MAX; ++attr) {
       enum glsl_interp_qualifier interp_qualifier =
          fprog->InterpQualifier[attr];
+      bool is_centroid = fprog->IsCentroid & BITFIELD64_BIT(attr);
       bool is_gl_Color = attr == FRAG_ATTRIB_COL0 || attr == FRAG_ATTRIB_COL1;
 
       /* Ignore unused inputs. */
@@ -154,13 +155,23 @@ brw_compute_barycentric_interp_modes(bool shade_model_flat,
          continue;
 
       if (interp_qualifier == INTERP_QUALIFIER_NOPERSPECTIVE) {
-         barycentric_interp_modes |=
-            1 << BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC;
+         if (is_centroid) {
+            barycentric_interp_modes |=
+               1 << BRW_WM_NONPERSPECTIVE_CENTROID_BARYCENTRIC;
+         } else {
+            barycentric_interp_modes |=
+               1 << BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC;
+         }
       } else if (interp_qualifier == INTERP_QUALIFIER_SMOOTH ||
                  (!(shade_model_flat && is_gl_Color) &&
                   interp_qualifier == INTERP_QUALIFIER_NONE)) {
-         barycentric_interp_modes |=
-            1 << BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
+         if (is_centroid) {
+            barycentric_interp_modes |=
+               1 << BRW_WM_PERSPECTIVE_CENTROID_BARYCENTRIC;
+         } else {
+            barycentric_interp_modes |=
+               1 << BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
+         }
       }
    }
 
@@ -411,6 +422,7 @@ static void brw_wm_populate_key( struct brw_context *brw,
 				 struct brw_wm_prog_key *key )
 {
    struct gl_context *ctx = &brw->intel.ctx;
+   struct intel_context *intel = &brw->intel;
    /* BRW_NEW_FRAGMENT_PROGRAM */
    const struct brw_fragment_program *fp = 
       (struct brw_fragment_program *)brw->fragment_program;
@@ -419,34 +431,43 @@ static void brw_wm_populate_key( struct brw_context *brw,
    GLuint line_aa;
    GLuint i;
 
+   /* As a temporary measure we assume that all programs use dFdy() (and hence
+    * need to be compiled differently depending on whether we're rendering to
+    * an FBO).  FIXME: set this bool correctly based on the contents of the
+    * program.
+    */
+   bool program_uses_dfdy = true;
+
    memset(key, 0, sizeof(*key));
 
    /* Build the index for table lookup
     */
    /* _NEW_COLOR */
    key->alpha_test = ctx->Color.AlphaEnabled;
-   if (fp->program.UsesKill ||
-       ctx->Color.AlphaEnabled)
-      lookup |= IZ_PS_KILL_ALPHATEST_BIT;
 
-   if (fp->program.Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_DEPTH))
-      lookup |= IZ_PS_COMPUTES_DEPTH_BIT;
+   if (intel->gen < 6) {
+      if (fp->program.UsesKill || ctx->Color.AlphaEnabled)
+	 lookup |= IZ_PS_KILL_ALPHATEST_BIT;
 
-   /* _NEW_DEPTH */
-   if (ctx->Depth.Test)
-      lookup |= IZ_DEPTH_TEST_ENABLE_BIT;
+      if (fp->program.Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_DEPTH))
+	 lookup |= IZ_PS_COMPUTES_DEPTH_BIT;
 
-   if (ctx->Depth.Test &&  
-       ctx->Depth.Mask) /* ?? */
-      lookup |= IZ_DEPTH_WRITE_ENABLE_BIT;
+      /* _NEW_DEPTH */
+      if (ctx->Depth.Test)
+	 lookup |= IZ_DEPTH_TEST_ENABLE_BIT;
 
-   /* _NEW_STENCIL */
-   if (ctx->Stencil._Enabled) {
-      lookup |= IZ_STENCIL_TEST_ENABLE_BIT;
+      if (ctx->Depth.Test && ctx->Depth.Mask) /* ?? */
+	 lookup |= IZ_DEPTH_WRITE_ENABLE_BIT;
 
-      if (ctx->Stencil.WriteMask[0] ||
-	  ctx->Stencil.WriteMask[ctx->Stencil._BackFace])
-	 lookup |= IZ_STENCIL_WRITE_ENABLE_BIT;
+      /* _NEW_STENCIL */
+      if (ctx->Stencil._Enabled) {
+	 lookup |= IZ_STENCIL_TEST_ENABLE_BIT;
+
+	 if (ctx->Stencil.WriteMask[0] ||
+	     ctx->Stencil.WriteMask[ctx->Stencil._BackFace])
+	    lookup |= IZ_STENCIL_WRITE_ENABLE_BIT;
+      }
+      key->iz_lookup = lookup;
    }
 
    line_aa = AA_NEVER;
@@ -475,7 +496,6 @@ static void brw_wm_populate_key( struct brw_context *brw,
       }
    }
 
-   key->iz_lookup = lookup;
    key->line_aa = line_aa;
    key->stats_wm = brw->intel.stats_wm;
 
@@ -517,6 +537,9 @@ static void brw_wm_populate_key( struct brw_context *brw,
     */
    if (fp->program.Base.InputsRead & FRAG_BIT_WPOS) {
       key->drawable_height = ctx->DrawBuffer->Height;
+   }
+
+   if ((fp->program.Base.InputsRead & FRAG_BIT_WPOS) || program_uses_dfdy) {
       key->render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
    }
 

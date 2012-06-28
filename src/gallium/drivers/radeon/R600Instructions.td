@@ -18,8 +18,9 @@ class InstR600 <bits<32> inst, dag outs, dag ins, string asm, list<dag> pattern,
     : AMDGPUInst <outs, ins, asm, pattern> {
 
   field bits<32> Inst;
-	bit Trig = 0;
+  bit Trig = 0;
   bit Op3 = 0;
+  bit isVector = 0; 
 
   let Inst = inst;
   let Namespace = "AMDIL";
@@ -31,6 +32,10 @@ class InstR600 <bits<32> inst, dag outs, dag ins, string asm, list<dag> pattern,
 
   let TSFlags{4} = Trig;
   let TSFlags{5} = Op3;
+
+  // Vector instructions are instructions that must fill all slots in an
+  // instruction group
+  let TSFlags{6} = isVector;
 }
 
 class InstR600ISA <dag outs, dag ins, string asm, list<dag> pattern> :
@@ -41,11 +46,17 @@ class InstR600ISA <dag outs, dag ins, string asm, list<dag> pattern> :
   let Namespace = "AMDIL";
 }
 
-def MEMri : Operand<iPTRAny> {
+def MEMxi : Operand<iPTR> {
+  let MIOperandInfo = (ops R600_TReg32_X:$ptr, i32imm:$index);
+}
+
+def MEMrr : Operand<iPTR> {
   let MIOperandInfo = (ops R600_Reg32:$ptr, R600_Reg32:$index);
 }
 
 def ADDRParam : ComplexPattern<i32, 2, "SelectADDRParam", [], []>;
+def ADDRDWord : ComplexPattern<i32, 1, "SelectADDRDWord", [], []>;
+def ADDRVTX_READ : ComplexPattern<i32, 2, "SelectADDRVTX_READ", [], []>;
 
 class R600_ALU {
 
@@ -160,13 +171,12 @@ def COND_LE : PatLeaf <
                      case ISD::SETLE: return true;}}}]
 >;
 
-class EG_CF_RAT <bits <8> cf_inst, bits <6> rat_inst, dag outs, dag ins,
-                 string asm> :
-    InstR600ISA <outs, ins, asm, []>
+class EG_CF_RAT <bits <8> cf_inst, bits <6> rat_inst, bits<4> rat_id, dag outs,
+                 dag ins, string asm, list<dag> pattern> :
+    InstR600ISA <outs, ins, asm, pattern>
 {
   bits<7>  RW_GPR;
   bits<7>  INDEX_GPR;
-  bits<4>  RAT_ID;
 
   bits<2>  RIM;
   bits<2>  TYPE;
@@ -182,7 +192,7 @@ class EG_CF_RAT <bits <8> cf_inst, bits <6> rat_inst, dag outs, dag ins,
   bits<1>  BARRIER;
 
   /* CF_ALLOC_EXPORT_WORD0_RAT */
-  let Inst{3-0}   = RAT_ID;
+  let Inst{3-0}   = rat_id;
   let Inst{9-4}   = rat_inst;
   let Inst{10}    = 0; /* Reserved */
   let Inst{12-11} = RIM;
@@ -221,7 +231,6 @@ def store_global : PatFrag<(ops node:$value, node:$ptr),
 def load_param : PatFrag<(ops node:$ptr),
                          (load node:$ptr),
                           [{
-                           return true;
                            const Value *Src = cast<LoadSDNode>(N)->getSrcValue();
                            if (Src) {
                                 PointerType * PT = dyn_cast<PointerType>(Src->getType());
@@ -262,6 +271,10 @@ def load_param : PatFrag<(ops node:$ptr),
 */
 def isR600 : Predicate<"Subtarget.device()"
                             "->getGeneration() == AMDILDeviceInfo::HD4XXX">;
+def isR700 : Predicate<"Subtarget.device()"
+                            "->getGeneration() == AMDILDeviceInfo::HD4XXX &&"
+                            "Subtarget.device()->getDeviceFlag()"
+                            ">= OCL_DEVICE_RV710">;
 def isEG : Predicate<"Subtarget.device()"
                             "->getGeneration() >= AMDILDeviceInfo::HD5XXX && "
                             "Subtarget.device()->getDeviceFlag() != OCL_DEVICE_CAYMAN">;
@@ -366,6 +379,25 @@ def FLOOR : R600_1OP <
 >;
 
 def MOV : R600_1OP <0x19, "MOV", []>;
+
+class MOV_IMM <ValueType vt, Operand immType> : InstR600 <0x19,
+  (outs R600_Reg32:$dst),
+  (ins R600_Reg32:$alu_literal, immType:$imm),
+  "MOV_IMM $dst, $imm",
+  [], AnyALU
+>;
+
+def MOV_IMM_I32 : MOV_IMM<i32, i32imm>;
+def : Pat <
+  (imm:$val),
+  (MOV_IMM_I32 (i32 ALU_LITERAL_X), imm:$val)
+>;
+
+def MOV_IMM_F32 : MOV_IMM<f32, f32imm>;
+def : Pat <
+  (fpimm:$val),
+  (MOV_IMM_F32 (i32 ALU_LITERAL_X), fpimm:$val)
+>;
 
 def KILLGT : R600_2OP <
   0x2D, "KILLGT",
@@ -679,14 +711,12 @@ class RECIPSQRT_IEEE_Common <bits<32> inst> : R600_1OP <
 >;
 
 class SIN_Common <bits<32> inst> : R600_1OP <
-  inst, "SIN",
-  [(set R600_Reg32:$dst, (int_AMDIL_sin R600_Reg32:$src))]>{
+  inst, "SIN", []>{
   let Trig = 1;
 }
 
 class COS_Common <bits<32> inst> : R600_1OP <
-  inst, "COS",
-  [(set R600_Reg32:$dst, (int_AMDIL_cos R600_Reg32:$src))]> {
+  inst, "COS", []> {
   let Trig = 1;
 }
 
@@ -750,140 +780,74 @@ let Predicates = [isR600] in {
 
 }
 
-/* ----------------- */
-/* R700+ Trig helper */
-/* ----------------- */
-
-/*
-class TRIG_HELPER_r700 <InstR600 trig_inst>: Pat <
-  (trig_inst R600_Reg32:$src),
-  (trig_inst (fmul R600_Reg32:$src, (PI))))
+// Helper pattern for normalizing inputs to triginomic instructions for R700+
+// cards.
+class TRIG_eg <InstR600 trig, Intrinsic intr> : Pat<
+  (intr R600_Reg32:$src),
+  (trig (MUL (MOV_IMM_I32 (i32 ALU_LITERAL_X), CONST.TWO_PI_INV), R600_Reg32:$src))
 >;
-*/
 
-/* ---------------------- */
-/* Evergreen Instructions */
-/* ---------------------- */
+//===----------------------------------------------------------------------===//
+// R700 Only instructions
+//===----------------------------------------------------------------------===//
 
+let Predicates = [isR700] in {
+  def SIN_r700 : SIN_Common<0x6E>;
+  def COS_r700 : COS_Common<0x6F>;
+
+  // R700 normalizes inputs to SIN/COS the same as EG
+  def : TRIG_eg <SIN_r700, int_AMDGPU_sin>;
+  def : TRIG_eg <COS_r700, int_AMDGPU_cos>;
+}
+
+//===----------------------------------------------------------------------===//
+// Evergreen Only instructions
+//===----------------------------------------------------------------------===//
 
 let Predicates = [isEG] in {
+  
+def RECIP_IEEE_eg : RECIP_IEEE_Common<0x86>;
 
-def RAT_WRITE_CACHELESS_eg :
-    EG_CF_RAT <0x57, 0x2, (outs), (ins R600_TReg32_X:$rw_gpr,
-                                   R600_TReg32_X:$index_gpr, i32imm:$rat_id), "">
-{
-  let RIM         = 0;
-  /* XXX: Have a separate instruction for non-indexed writes. */
-  let TYPE        = 1;
-  let RW_REL      = 0;
-  let ELEM_SIZE   = 0;
+def MULLO_INT_eg : MULLO_INT_Common<0x8F>;
+def MULHI_INT_eg : MULHI_INT_Common<0x90>;
+def MULLO_UINT_eg : MULLO_UINT_Common<0x91>;
+def MULHI_UINT_eg : MULHI_UINT_Common<0x92>;
+def RECIP_UINT_eg : RECIP_UINT_Common<0x94>;
 
-  let ARRAY_SIZE  = 0;
-  let COMP_MASK   = 1;
-  let BURST_COUNT = 0;
-  let VPM         = 0;
-  let EOP         = 0;
-  let MARK        = 0;
-  let BARRIER     = 1;
-}
-
-def VTX_READ_eg : InstR600ISA < (outs R600_TReg32_X:$dst),
-                                (ins R600_TReg32_X:$src, i32imm:$buffer_id),
-                                "VTX_READ_eg $dst, $src", []>
-{
-/*
-  bits<7> DST_GPR;
-  bits<7> SRC_GPR;
-  bits<8> BUFFER_ID;
-*/
-  /* If any of these field below need to be calculated at compile time, and
-   * a ins operand for them and move them to the list of operands above. */
-
-  /* XXX: This instruction is manual encoded, so none of these values are used.
-   */
-/*
-  bits<5> VC_INST          = 0; //VC_INST_FETCH
-  bits<2> FETCH_TYPE       = 2;
-  bits<1> FETCH_WHOLE_QUAD = 1;
-  bits<1> SRC_REL          = 0;
-  bits<2> SRC_SEL_X        = 0;
-  bits<6> MEGA_FETCH_COUNT = 4;
-*/
-/*
-
-  bits<1> DST_REL          = 0;
-  bits<3> DST_SEL_X        = 0;
-  bits<3> DST_SEL_Y        = 7; //Masked
-  bits<3> DST_SEL_Z        = 7; //Masked
-  bits<3> DST_SEL_W        = 7; //Masked
-  bits<1> USE_CONST_FIELDS = 1; //Masked
-  bits<6> DATA_FORMAT      = 0;
-  bits<2> NUM_FORMAT_ALL   = 0;
-  bits<1> FORMAT_COMP_ALL  = 0;
-  bits<1> SRF_MODE_ALL     = 0;
-*/
-
-/*
-  let Inst{4-0}   = VC_INST;
-  let Inst{6-5}   = FETCH_TYPE;
-  let Inst{7}     = FETCH_WHOLE_QUAD;
-  let Inst{15-8}  = BUFFER_ID;
-  let Inst{22-16} = SRC_GPR;
-  let Inst{23}    = SRC_REL;
-  let Inst{25-24} = SRC_SEL_X;
-  let Inst{31-26} = MEGA_FETCH_COUNT;
-*/
-  /* DST_GPR is OK to leave uncommented, because LLVM 3.0 only prevents you
-   * from statically setting bits > 31.  This field will be set by
-   * getMachineValueOp which can set bits > 31.
-   */
-//  let Inst{32-38} = DST_GPR;
-
-  /* XXX: Uncomment for LLVM 3.1 which supports 64-bit instructions */
-
-/*
-  let Inst{39}    = DST_REL;
-  let Inst{40}    = 0; //Reserved
-  let Inst{43-41} = DST_SEL_X;
-  let Inst{46-44} = DST_SEL_Y;
-  let Inst{49-47} = DST_SEL_Z;
-  let Inst{52-50} = DST_SEL_W;
-  let Inst{53}    = USE_CONST_FIELDS;
-  let Inst{59-54} = DATA_FORMAT;
-  let Inst{61-60} = NUM_FORMAT_ALL;
-  let Inst{62}    = FORMAT_COMP_ALL;
-  let Inst{63}    = SRF_MODE_ALL;
-*/
-}
-
-/* XXX: Need to convert PTR to rat_id */
-/*
-def : Pat <(store_global (f32 R600_Reg32:$value), node:$ptr),
-           (RAT_WRITE_CACHELESS_eg (INSERT_SUBREG (v4f32 (IMPLICIT_DEF)),
-                                                  (f32 R600_Reg32:$value),
-                                                   sel_x),
-                                    (f32 ZERO), 0, R600_Reg32:$ptr)>;
-*/
-
-class VTX_Param_Read_Pattern <ValueType vt> : Pat <
-    (vt (load_param ADDRParam:$mem)),
-    (VTX_READ_eg (i32 R600_Reg32:$mem), 0)>;
-
-def : VTX_Param_Read_Pattern <f32>;
-def : VTX_Param_Read_Pattern <i32>;
-
-} // End isEG Predicate
+} // End Predicates = [isEG]
 
 /* ------------------------------- */
 /* Evergreen / Cayman Instructions */
 /* ------------------------------- */
 
 let Predicates = [isEGorCayman] in {
-  
-class TRIG_eg <InstR600 trig, Intrinsic intr> : Pat<
-  (intr R600_Reg32:$src),
-  (trig (MUL (MOV (LOADCONST_i32 CONST.TWO_PI_INV)), R600_Reg32:$src))
->;
+
+  // BFE_UINT - bit_extract, an optimization for mask and shift
+  // Src0 = Input
+  // Src1 = Offset
+  // Src2 = Width
+  //
+  // bit_extract = (Input << (32 - Offset - Width)) >> (32 - Width)
+  //
+  // Example Usage:
+  // (Offset, Width)
+  //
+  // (0, 8)           = (Input << 24) >> 24  = (Input &  0xff)       >> 0
+  // (8, 8)           = (Input << 16) >> 24  = (Input &  0xffff)     >> 8
+  // (16,8)           = (Input <<  8) >> 24  = (Input &  0xffffff)   >> 16
+  // (24,8)           = (Input <<  0) >> 24  = (Input &  0xffffffff) >> 24
+  def BFE_UINT_eg : R600_3OP <0x4, "BFE_UINT",
+    [(set R600_Reg32:$dst, (int_AMDIL_bit_extract_u32 R600_Reg32:$src0,
+                                                      R600_Reg32:$src1,
+                                                      R600_Reg32:$src2))],
+    VecALU
+  >;
+
+  def BIT_ALIGN_INT_eg : R600_3OP <0xC, "BIT_ALIGN_INT",
+    [(set R600_Reg32:$dst, (AMDGPUbitalign R600_Reg32:$src0, R600_Reg32:$src1,
+                                          R600_Reg32:$src2))],
+    VecALU
+  >;
 
   def MULADD_eg : MULADD_Common<0x14>;
   def ASHR_eg : ASHR_Common<0x15>;
@@ -897,16 +861,10 @@ class TRIG_eg <InstR600 trig, Intrinsic intr> : Pat<
   def LOG_CLAMPED_eg : LOG_CLAMPED_Common<0x82>;
   def LOG_IEEE_eg : LOG_IEEE_Common<0x83>;
   def RECIP_CLAMPED_eg : RECIP_CLAMPED_Common<0x84>;
-  def RECIP_IEEE_eg : RECIP_IEEE_Common<0x86>;
   def RECIPSQRT_CLAMPED_eg : RECIPSQRT_CLAMPED_Common<0x87>;
   def RECIPSQRT_IEEE_eg : RECIPSQRT_IEEE_Common<0x89>;
   def SIN_eg : SIN_Common<0x8D>;
   def COS_eg : COS_Common<0x8E>;
-  def MULLO_INT_eg : MULLO_INT_Common<0x8F>;
-  def MULHI_INT_eg : MULHI_INT_Common<0x90>;
-  def MULLO_UINT_eg : MULLO_UINT_Common<0x91>;
-  def MULHI_UINT_eg : MULHI_UINT_Common<0x92>;
-  def RECIP_UINT_eg : RECIP_UINT_Common<0x94>;
   def DOT4_eg : DOT4_Common<0xBE>;
   def CUBE_eg : CUBE_Common<0xC0>;
 
@@ -935,12 +893,178 @@ class TRIG_eg <InstR600 trig, Intrinsic intr> : Pat<
 
   def : Pat<(fp_to_uint R600_Reg32:$src),
     (FLT_TO_UINT_eg (TRUNC R600_Reg32:$src))>;
+
+//===----------------------------------------------------------------------===//
+// Memory read/write instructions
+//===----------------------------------------------------------------------===//
+
+let usesCustomInserter = 1 in {
+
+def RAT_WRITE_CACHELESS_eg : EG_CF_RAT <0x57, 0x2, 0, (outs),
+  (ins R600_TReg32_X:$rw_gpr, R600_TReg32_X:$index_gpr),
+  "RAT_WRITE_CACHELESS_eg $rw_gpr, $index_gpr",
+  [(global_store (i32 R600_TReg32_X:$rw_gpr), R600_TReg32_X:$index_gpr)]>
+{
+  let RIM         = 0;
+  /* XXX: Have a separate instruction for non-indexed writes. */
+  let TYPE        = 1;
+  let RW_REL      = 0;
+  let ELEM_SIZE   = 0;
+
+  let ARRAY_SIZE  = 0;
+  let COMP_MASK   = 1;
+  let BURST_COUNT = 0;
+  let VPM         = 0;
+  let EOP         = 0;
+  let MARK        = 0;
+  let BARRIER     = 1;
+}
+
+} // End usesCustomInserter = 1
+
+// Floating point global_store
+def : Pat <
+  (global_store (f32 R600_TReg32_X:$val), R600_TReg32_X:$ptr),
+  (RAT_WRITE_CACHELESS_eg R600_TReg32_X:$val, R600_TReg32_X:$ptr)
+>;
+
+class VTX_READ_eg <bits<8> buffer_id, dag outs, list<dag> pattern>
+    : InstR600ISA <outs, (ins MEMxi:$ptr), "VTX_READ_eg $dst, $ptr", pattern> {
+
+  // Operands
+  bits<7> DST_GPR;
+  bits<7> SRC_GPR;
+
+  // Static fields
+  bits<5> VC_INST = 0;
+  bits<2> FETCH_TYPE = 2;
+  bits<1> FETCH_WHOLE_QUAD = 0;
+  bits<8> BUFFER_ID = buffer_id;
+  bits<1> SRC_REL = 0;
+  // XXX: We can infer this field based on the SRC_GPR.  This would allow us
+  // to store vertex addresses in any channel, not just X.
+  bits<2> SRC_SEL_X = 0;
+  bits<6> MEGA_FETCH_COUNT;
+  bits<1> DST_REL = 0;
+  bits<3> DST_SEL_X;
+  bits<3> DST_SEL_Y;
+  bits<3> DST_SEL_Z;
+  bits<3> DST_SEL_W;
+  // The docs say that if this bit is set, then DATA_FORMAT, NUM_FORMAT_ALL,
+  // FORMAT_COMP_ALL, SRF_MODE_ALL, and ENDIAN_SWAP fields will be ignored,
+  // however, based on my testing if USE_CONST_FIELDS is set, then all
+  // these fields need to be set to 0.
+  bits<1> USE_CONST_FIELDS = 0;
+  bits<6> DATA_FORMAT;
+  bits<2> NUM_FORMAT_ALL = 1;
+  bits<1> FORMAT_COMP_ALL = 0;
+  bits<1> SRF_MODE_ALL = 0;
+
+  // LLVM can only encode 64-bit instructions, so these fields are manually
+  // encoded in R600CodeEmitter
+  //
+  // bits<16> OFFSET;
+  // bits<2>  ENDIAN_SWAP = 0;
+  // bits<1>  CONST_BUF_NO_STRIDE = 0;
+  // bits<1>  MEGA_FETCH = 0;
+  // bits<1>  ALT_CONST = 0;
+  // bits<2>  BUFFER_INDEX_MODE = 0;
+
+  // VTX_WORD0
+  let Inst{4-0}   = VC_INST;
+  let Inst{6-5}   = FETCH_TYPE;
+  let Inst{7}     = FETCH_WHOLE_QUAD;
+  let Inst{15-8}  = BUFFER_ID;
+  let Inst{22-16} = SRC_GPR;
+  let Inst{23}    = SRC_REL;
+  let Inst{25-24} = SRC_SEL_X;
+  let Inst{31-26} = MEGA_FETCH_COUNT;
+
+  // VTX_WORD1_GPR
+  let Inst{38-32} = DST_GPR;
+  let Inst{39}    = DST_REL;
+  let Inst{40}    = 0; // Reserved
+  let Inst{43-41} = DST_SEL_X;
+  let Inst{46-44} = DST_SEL_Y;
+  let Inst{49-47} = DST_SEL_Z;
+  let Inst{52-50} = DST_SEL_W;
+  let Inst{53}    = USE_CONST_FIELDS;
+  let Inst{59-54} = DATA_FORMAT;
+  let Inst{61-60} = NUM_FORMAT_ALL;
+  let Inst{62}    = FORMAT_COMP_ALL;
+  let Inst{63}    = SRF_MODE_ALL;
+
+  // VTX_WORD2 (LLVM can only encode 64-bit instructions, so WORD2 encoding
+  // is done in R600CodeEmitter
+  //
+  // Inst{79-64} = OFFSET;
+  // Inst{81-80} = ENDIAN_SWAP;
+  // Inst{82}    = CONST_BUF_NO_STRIDE;
+  // Inst{83}    = MEGA_FETCH;
+  // Inst{84}    = ALT_CONST;
+  // Inst{86-85} = BUFFER_INDEX_MODE;
+  // Inst{95-86} = 0; Reserved
+
+  // VTX_WORD3 (Padding)
+  //
+  // Inst{127-96} = 0;
+}
+
+class VTX_READ_32_eg <bits<8> buffer_id, list<dag> pattern>
+    : VTX_READ_eg <buffer_id, (outs R600_TReg32_X:$dst), pattern> {
+
+  let MEGA_FETCH_COUNT = 4;
+  let DST_SEL_X        = 0;
+  let DST_SEL_Y        = 7;   // Masked
+  let DST_SEL_Z        = 7;   // Masked
+  let DST_SEL_W        = 7;   // Masked
+  let DATA_FORMAT      = 0xD; // COLOR_32
+}
+
+def VTX_READ_PARAM_eg : VTX_READ_32_eg <0,
+  [(set (i32 R600_TReg32_X:$dst), (load_param ADDRVTX_READ:$ptr))]
+>;
+
+def VTX_READ_GLOBAL_eg : VTX_READ_32_eg <1,
+  [(set (i32 R600_TReg32_X:$dst), (global_load ADDRVTX_READ:$ptr))]
+>;
+
+class VTX_READ_128_eg <bits<8> buffer_id, list<dag> pattern>
+    : VTX_READ_eg <buffer_id, (outs R600_Reg128:$dst), pattern> {
+
+  let MEGA_FETCH_COUNT = 16;
+  let DST_SEL_X        =  0;
+  let DST_SEL_Y        =  1;
+  let DST_SEL_Z        =  2;
+  let DST_SEL_W        =  3;
+  let DATA_FORMAT      =  0x22; // COLOR_32_32_32_32
+}
+
+def VTX_READ_GLOBAL_128_eg : VTX_READ_128_eg <1,
+  [(set (v4i32 R600_Reg128:$dst), (global_load ADDRVTX_READ:$ptr))]
+>;
+
 }
 
 let Predicates = [isCayman] in {
 
-  /* XXX: I'm not sure if this opcode is correct. */
-  def RECIP_UINT_cm : RECIP_UINT_Common<0x77>;
+let isVector = 1 in { 
+
+def RECIP_IEEE_cm : RECIP_IEEE_Common<0x86>;
+
+def MULLO_INT_cm : MULLO_INT_Common<0x8F>;
+def MULHI_INT_cm : MULHI_INT_Common<0x90>;
+def MULLO_UINT_cm : MULLO_UINT_Common<0x91>;
+def MULHI_UINT_cm : MULHI_UINT_Common<0x92>;
+
+} // End isVector = 1
+
+// RECIP_UINT emulation for Cayman
+def : Pat <
+  (AMDGPUurecip R600_Reg32:$src0),
+  (FLT_TO_UINT_eg (MUL_IEEE (RECIP_IEEE_cm (UINT_TO_FLT_eg R600_Reg32:$src0)),
+                            (MOV_IMM_I32 (i32 ALU_LITERAL_X), 0x4f800000)))
+>;
 
 } // End isCayman
 
@@ -1073,18 +1197,6 @@ def MASK_WRITE : AMDGPUShaderInst <
 
 } // End usesCustomInserter = 1
 
-let isPseudo = 1 in {
-
-def LOAD_VTX : AMDGPUShaderInst <
-    (outs R600_Reg32:$dst),
-    (ins MEMri:$mem),
-    "LOAD_VTX",
-    [(set (i32 R600_Reg32:$dst), (load_param ADDRParam:$mem))]
->;
-
-
-} //End isPseudo
-
 //===----------------------------------------------------------------------===//
 // ISel Patterns
 //===----------------------------------------------------------------------===//
@@ -1176,9 +1288,13 @@ def : Insert_Element <i32, v4i32, R600_Reg32, R600_Reg128, 5, sel_y>;
 def : Insert_Element <i32, v4i32, R600_Reg32, R600_Reg128, 6, sel_z>;
 def : Insert_Element <i32, v4i32, R600_Reg32, R600_Reg128, 7, sel_w>;
 
+def : Vector_Build <v4f32, R600_Reg32>;
+def : Vector_Build <v4i32, R600_Reg32>;
+
 // bitconvert patterns
 
 def : BitConvert <i32, f32, R600_Reg32>;
 def : BitConvert <f32, i32, R600_Reg32>;
+def : BitConvert <v4f32, v4i32, R600_Reg128>;
 
 } // End isR600toCayman Predicate

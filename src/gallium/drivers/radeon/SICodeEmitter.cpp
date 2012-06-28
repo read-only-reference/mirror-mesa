@@ -156,8 +156,12 @@ void SICodeEmitter::emitState(MachineFunction & MF)
 
 bool SICodeEmitter::runOnMachineFunction(MachineFunction &MF)
 {
-  MF.dump();
   TM = &MF.getTarget();
+  const AMDILSubtarget &STM = TM->getSubtarget<AMDILSubtarget>();
+
+  if (STM.dumpCode()) {
+    MF.dump();
+  }
 
   emitState(MF);
 
@@ -172,6 +176,10 @@ bool SICodeEmitter::runOnMachineFunction(MachineFunction &MF)
       }
     }
   }
+  // Emit S_END_PGM
+  MachineInstr * End = BuildMI(MF, DebugLoc(),
+                               TM->getInstrInfo()->get(AMDIL::S_ENDPGM));
+  emitInstr(*End);
   return false;
 }
 

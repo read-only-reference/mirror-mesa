@@ -245,6 +245,9 @@ generate_fs(struct gallivm_state *gallivm,
    unsigned chan;
    unsigned cbuf;
    unsigned depth_mode;
+   struct lp_bld_tgsi_system_values system_values;
+
+   memset(&system_values, 0, sizeof(system_values));
 
    if (key->depth.enabled ||
        key->stencil[0].enabled ||
@@ -334,7 +337,7 @@ generate_fs(struct gallivm_state *gallivm,
    
    /* Build the actual shader */
    lp_build_tgsi_soa(gallivm, tokens, type, &mask,
-                     consts_ptr, NULL, /* sys values array */
+                     consts_ptr, &system_values,
                      interp->pos, interp->inputs,
                      outputs, sampler, &shader->info.base);
 
@@ -1014,6 +1017,7 @@ llvmpipe_create_fs_state(struct pipe_context *pipe,
 
    for (i = 0; i < shader->info.base.num_inputs; i++) {
       shader->inputs[i].usage_mask = shader->info.base.input_usage_mask[i];
+      shader->inputs[i].cyl_wrap = shader->info.base.input_cylindrical_wrap[i];
 
       switch (shader->info.base.input_interpolate[i]) {
       case TGSI_INTERPOLATE_CONSTANT:

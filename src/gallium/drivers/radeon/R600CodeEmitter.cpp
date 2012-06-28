@@ -21,6 +21,7 @@
 #include "AMDILCodeEmitter.h"
 #include "AMDILInstrInfo.h"
 #include "AMDILUtilityFunctions.h"
+#include "R600InstrInfo.h"
 #include "R600RegisterInfo.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -50,6 +51,7 @@ private:
 
   bool isCube;
   bool isReduction;
+  bool isVector;
   unsigned currentElement;
   bool isLast;
 
@@ -58,7 +60,7 @@ private:
 public:
 
   R600CodeEmitter(formatted_raw_ostream &OS) : MachineFunctionPass(ID),
-      _OS(OS), TM(NULL), isCube(false), isReduction(false),
+      _OS(OS), TM(NULL), isCube(false), isReduction(false), isVector(false),
       isLast(true) { }
 
   const char *getPassName() const { return "AMDGPU Machine Code Emitter"; }
@@ -144,6 +146,7 @@ bool R600CodeEmitter::runOnMachineFunction(MachineFunction &MF) {
   TM = &MF.getTarget();
   MRI = &MF.getRegInfo();
   TRI = static_cast<const R600RegisterInfo *>(TM->getRegisterInfo());
+  const R600InstrInfo * TII = static_cast<const R600InstrInfo *>(TM->getInstrInfo());
   const AMDILSubtarget &STM = TM->getSubtarget<AMDILSubtarget>();
   std::string gpu = STM.getDeviceName();
 
@@ -157,6 +160,9 @@ bool R600CodeEmitter::runOnMachineFunction(MachineFunction &MF) {
      for (MachineBasicBlock::iterator I = MBB.begin(), E = MBB.end();
                                                        I != E; ++I) {
           MachineInstr &MI = *I;
+	  isReduction = AMDGPU::isReductionOp(MI.getOpcode());
+	  isVector = TII->isVector(MI);
+	  isCube = AMDGPU::isCubeOp(MI.getOpcode());
           if (MI.getNumOperands() > 1 && MI.getOperand(0).isReg() && MI.getOperand(0).isDead()) {
             continue;
           }
@@ -164,22 +170,17 @@ bool R600CodeEmitter::runOnMachineFunction(MachineFunction &MF) {
             emitTexInstr(MI);
           } else if (AMDGPU::isFCOp(MI.getOpcode())){
             emitFCInstr(MI);
-          } else if (AMDGPU::isReductionOp(MI.getOpcode())) {
-            isReduction = true;
+          } else if (isReduction || isVector || isCube) {
             isLast = false;
+            // XXX: On Cayman, some (all?) of the vector instructions only need
+            // to fill the first three slots.
             for (currentElement = 0; currentElement < 4; currentElement++) {
               isLast = (currentElement == 3);
               emitALUInstr(MI);
             }
             isReduction = false;
-          } else if (AMDGPU::isCubeOp(MI.getOpcode())) {
-              isCube = true;
-              isLast = false;
-              for (currentElement = 0; currentElement < 4; currentElement++) {
-                isLast = (currentElement == 3);
-                emitALUInstr(MI);
-              }
-              isCube = false;
+	    isVector = false;
+	    isCube = false;
           } else if (MI.getOpcode() == AMDIL::RETURN ||
                      MI.getOpcode() == AMDIL::BUNDLE ||
                      MI.getOpcode() == AMDIL::KILL) {
@@ -202,62 +203,16 @@ bool R600CodeEmitter::runOnMachineFunction(MachineFunction &MF) {
                 emit(inst);
                 break;
               }
-            case AMDIL::VTX_READ_eg:
+            case AMDIL::VTX_READ_PARAM_eg:
+            case AMDIL::VTX_READ_GLOBAL_eg:
+            case AMDIL::VTX_READ_GLOBAL_128_eg:
               {
+                uint64_t InstWord01 = getBinaryCodeForInstr(MI);
+                uint32_t InstWord2 = MI.getOperand(2).getImm(); // Offset
+
                 emitByte(INSTR_VTX);
-                // inst
-                emitByte(0);
-
-                // fetch_type
-                emitByte(2);
-
-                // buffer_id
-                emitByte(MI.getOperand(2).getImm());
-
-                // src_gpr
-                emitByte(getHWReg(MI.getOperand(1).getReg()));
-
-                // src_sel_x
-                emitByte(TRI->getHWRegChan(MI.getOperand(1).getReg()));
-
-                // mega_fetch_count
-                emitByte(3);
-
-                // dst_gpr
-                emitByte(getHWReg(MI.getOperand(0).getReg()));
-
-                // dst_sel_x
-                emitByte(0);
-
-                // dst_sel_y
-                emitByte(7);
-
-                // dst_sel_z
-                emitByte(7);
-
-                // dst_sel_w
-                emitByte(7);
-
-                // use_const_fields
-                emitByte(1);
-
-                // data_format
-                emitByte(0);
-
-                // num_format_all
-                emitByte(0);
-
-                // format_comp_all
-                emitByte(0);
-
-                // srf_mode_all
-                emitByte(0);
-
-                // offset
-                emitByte(0);
-
-                // endian
-                emitByte(0);
+                emit(InstWord01);
+                emit(InstWord2);
                 break;
               }
 
@@ -388,7 +343,7 @@ void R600CodeEmitter::emitDst(const MachineOperand & MO)
     emitByte(getHWReg(MO.getReg()));
 
     // Emit the element of the destination register (1 byte)
-    if (isReduction || isCube) {
+    if (isReduction || isCube || isVector) {
       emitByte(currentElement);
     } else {
       emitByte(TRI->getHWRegChan(MO.getReg()));
@@ -402,8 +357,9 @@ void R600CodeEmitter::emitDst(const MachineOperand & MO)
     }
 
     // Emit writemask (1 byte).
-    if ((isReduction && currentElement != TRI->getHWRegChan(MO.getReg()))
-         || MO.getTargetFlags() & MO_FLAG_MASK) {
+    if (((isReduction || isVector) &&
+          currentElement != TRI->getHWRegChan(MO.getReg()))
+       || MO.getTargetFlags() & MO_FLAG_MASK) {
       emitByte(0);
     } else {
       emitByte(1);
@@ -653,5 +609,5 @@ uint64_t R600CodeEmitter::getMachineOpValue(const MachineInstr &MI,
   }
 }
 
-#include "AMDILGenCodeEmitter.inc"
+#include "AMDGPUGenCodeEmitter.inc"
 

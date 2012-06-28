@@ -534,13 +534,17 @@ public:
 			   struct brw_reg src);
    void generate_discard(fs_inst *inst);
    void generate_ddx(fs_inst *inst, struct brw_reg dst, struct brw_reg src);
-   void generate_ddy(fs_inst *inst, struct brw_reg dst, struct brw_reg src);
+   void generate_ddy(fs_inst *inst, struct brw_reg dst, struct brw_reg src,
+                     bool negate_value);
    void generate_spill(fs_inst *inst, struct brw_reg src);
    void generate_unspill(fs_inst *inst, struct brw_reg dst);
    void generate_pull_constant_load(fs_inst *inst, struct brw_reg dst);
 
    void emit_dummy_fs();
    fs_reg *emit_fragcoord_interpolation(ir_variable *ir);
+   fs_inst *emit_linterp(const fs_reg &attr, const fs_reg &interp,
+                         glsl_interp_qualifier interpolation_mode,
+                         bool is_centroid);
    fs_reg *emit_frontfacing_interpolation(ir_variable *ir);
    fs_reg *emit_general_interpolation(ir_variable *ir);
    void emit_interpolation_setup_gen4();
@@ -610,6 +614,7 @@ public:
    struct hash_table *variable_ht;
    ir_variable *frag_depth;
    fs_reg outputs[BRW_MAX_DRAW_BUFFERS];
+   unsigned output_components[BRW_MAX_DRAW_BUFFERS];
    fs_reg dual_src_output;
    int first_non_payload_grf;
    int max_grf;

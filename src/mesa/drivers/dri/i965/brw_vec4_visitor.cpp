@@ -1254,6 +1254,23 @@ vec4_visitor::visit(ir_expression *ir)
    case ir_unop_rsq:
       emit_math(SHADER_OPCODE_RSQ, result_dst, op[0]);
       break;
+
+   case ir_unop_bitcast_i2f:
+   case ir_unop_bitcast_u2f:
+      this->result = op[0];
+      this->result.type = BRW_REGISTER_TYPE_F;
+      break;
+
+   case ir_unop_bitcast_f2i:
+      this->result = op[0];
+      this->result.type = BRW_REGISTER_TYPE_D;
+      break;
+
+   case ir_unop_bitcast_f2u:
+      this->result = op[0];
+      this->result.type = BRW_REGISTER_TYPE_UD;
+      break;
+
    case ir_unop_i2f:
    case ir_unop_i2u:
    case ir_unop_u2i:
@@ -1261,6 +1278,7 @@ vec4_visitor::visit(ir_expression *ir)
    case ir_unop_b2f:
    case ir_unop_b2i:
    case ir_unop_f2i:
+   case ir_unop_f2u:
       emit(MOV(result_dst, op[0]));
       break;
    case ir_unop_f2b:
@@ -1838,7 +1856,7 @@ vec4_visitor::visit(ir_texture *ir)
    inst->dst = dst_reg(this, ir->type);
    inst->shadow_compare = ir->shadow_comparitor != NULL;
 
-   if (ir->offset != NULL && !(intel->gen >= 7 && ir->op == ir_txf))
+   if (ir->offset != NULL && ir->op != ir_txf)
       inst->texture_offset = brw_texture_offset(ir->offset->as_constant());
 
    /* MRF for the first parameter */
@@ -1859,7 +1877,7 @@ vec4_visitor::visit(ir_texture *ir)
 	 zero_mask |= (1 << i);
 
       ir->coordinate->accept(this);
-      if (ir->offset && intel->gen >= 7 && ir->op == ir_txf) {
+      if (ir->offset && ir->op == ir_txf) {
 	 /* It appears that the ld instruction used for txf does its
 	  * address bounds check before adding in the offset.  To work
 	  * around this, just add the integer offset to the integer

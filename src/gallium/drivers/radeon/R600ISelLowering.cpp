@@ -25,20 +25,17 @@ R600TargetLowering::R600TargetLowering(TargetMachine &TM) :
     TII(static_cast<const R600InstrInfo*>(TM.getInstrInfo()))
 {
   setOperationAction(ISD::MUL, MVT::i64, Expand);
-//  setSchedulingPreference(Sched::VLIW);
   addRegisterClass(MVT::v4f32, &AMDIL::R600_Reg128RegClass);
   addRegisterClass(MVT::f32, &AMDIL::R600_Reg32RegClass);
   addRegisterClass(MVT::v4i32, &AMDIL::R600_Reg128RegClass);
   addRegisterClass(MVT::i32, &AMDIL::R600_Reg32RegClass);
   computeRegisterProperties();
 
-  setOperationAction(ISD::EXTRACT_VECTOR_ELT, MVT::v4f32, Legal);
-  setOperationAction(ISD::INSERT_VECTOR_ELT, MVT::v4f32, Legal);
-  setOperationAction(ISD::EXTRACT_VECTOR_ELT, MVT::v4i32, Legal);
-  setOperationAction(ISD::INSERT_VECTOR_ELT, MVT::v4i32, Legal);
-
   setOperationAction(ISD::FSUB, MVT::f32, Expand);
 
+  setOperationAction(ISD::ROTL, MVT::i32, Custom);
+
+  setSchedulingPreference(Sched::VLIW);
 }
 
 MachineBasicBlock * R600TargetLowering::EmitInstrWithCustomInserter(
@@ -146,6 +143,29 @@ MachineBasicBlock * R600TargetLowering::EmitInstrWithCustomInserter(
       return BB;
     }
 
+  case AMDIL::RAT_WRITE_CACHELESS_eg:
+    {
+      // Convert to DWORD address
+      unsigned NewAddr = MRI.createVirtualRegister(
+                                             AMDIL::R600_TReg32_XRegisterClass);
+      unsigned ShiftValue = MRI.createVirtualRegister(
+                                              AMDIL::R600_TReg32RegisterClass);
+
+      // XXX In theory, we should be able to pass ShiftValue directly to
+      // the LSHR_eg instruction as an inline literal, but I tried doing it
+      // this way and it didn't produce the correct results.
+      BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::MOV), ShiftValue)
+              .addReg(AMDIL::ALU_LITERAL_X)
+              .addImm(2);
+      BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDIL::LSHR_eg), NewAddr)
+              .addOperand(MI->getOperand(1))
+              .addReg(ShiftValue);
+      BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(MI->getOpcode()))
+              .addOperand(MI->getOperand(0))
+              .addReg(NewAddr);
+      break;
+    }
+
   case AMDIL::STORE_OUTPUT:
     {
       int64_t OutputIndex = MI->getOperand(1).getImm();
@@ -226,15 +246,41 @@ void R600TargetLowering::lowerImplicitParameter(MachineInstr *MI, MachineBasicBl
     MachineRegisterInfo & MRI, unsigned dword_offset) const
 {
   MachineBasicBlock::iterator I = *MI;
-  unsigned offsetReg = MRI.createVirtualRegister(&AMDIL::R600_TReg32_XRegClass);
+  unsigned PtrReg = MRI.createVirtualRegister(&AMDIL::R600_TReg32_XRegClass);
   MRI.setRegClass(MI->getOperand(0).getReg(), &AMDIL::R600_TReg32_XRegClass);
 
-  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDIL::MOV), offsetReg)
+  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDIL::MOV), PtrReg)
           .addReg(AMDIL::ALU_LITERAL_X)
           .addImm(dword_offset * 4);
 
-  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDIL::VTX_READ_eg))
+  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDIL::VTX_READ_PARAM_eg))
           .addOperand(MI->getOperand(0))
-          .addReg(offsetReg)
+          .addReg(PtrReg)
           .addImm(0);
+}
+
+//===----------------------------------------------------------------------===//
+// Custom DAG Lowering Operations
+//===----------------------------------------------------------------------===//
+
+
+SDValue R600TargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const
+{
+  switch (Op.getOpcode()) {
+  default: return AMDGPUTargetLowering::LowerOperation(Op, DAG);
+  case ISD::ROTL: return LowerROTL(Op, DAG);
+  }
+}
+
+SDValue R600TargetLowering::LowerROTL(SDValue Op, SelectionDAG &DAG) const
+{
+  DebugLoc DL = Op.getDebugLoc();
+  EVT VT = Op.getValueType();
+
+  return DAG.getNode(AMDGPUISD::BITALIGN, DL, VT,
+                     Op.getOperand(0),
+                     Op.getOperand(0),
+                     DAG.getNode(ISD::SUB, DL, VT,
+                                 DAG.getConstant(32, MVT::i32),
+                                 Op.getOperand(1)));
 }

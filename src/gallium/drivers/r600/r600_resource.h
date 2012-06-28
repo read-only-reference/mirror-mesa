@@ -34,6 +34,13 @@ struct r600_transfer {
 	unsigned			offset;
 };
 
+struct compute_memory_item;
+
+struct r600_resource_global {
+	struct r600_resource base;
+	struct compute_memory_item *chunk;
+};
+
 struct r600_resource_texture {
 	struct r600_resource		resource;
 
@@ -65,6 +72,7 @@ struct r600_surface {
 	unsigned			aligned_height;
 };
 
+void r600_resource_destroy(struct pipe_screen *screen, struct pipe_resource *res);
 void r600_init_screen_resource_functions(struct pipe_screen *screen);
 
 /* r600_texture */
@@ -79,7 +87,10 @@ static INLINE struct r600_resource *r600_resource(struct pipe_resource *r)
 	return (struct r600_resource*)r;
 }
 
-int r600_texture_depth_flush(struct pipe_context *ctx, struct pipe_resource *texture, boolean just_create);
+void r600_init_flushed_depth_texture(struct pipe_context *ctx,
+				     struct pipe_resource *texture);
+void r600_texture_depth_flush(struct pipe_context *ctx,
+			      struct pipe_resource *texture);
 
 /* r600_texture.c texture transfer functions. */
 struct pipe_transfer* r600_texture_get_transfer(struct pipe_context *ctx,

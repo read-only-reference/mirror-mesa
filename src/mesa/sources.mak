@@ -1,5 +1,7 @@
 ### Lists of source files, included by Makefiles
 
+SRCDIR ?= .
+
 # this is part of MAIN_FILES
 MAIN_ES_FILES = \
 	$(SRCDIR)/main/api_exec_es1.c \
@@ -196,6 +198,7 @@ VBO_FILES = \
 
 STATETRACKER_FILES = \
 	$(SRCDIR)/state_tracker/st_atom.c \
+	$(SRCDIR)/state_tracker/st_atom_array.c \
 	$(SRCDIR)/state_tracker/st_atom_blend.c \
 	$(SRCDIR)/state_tracker/st_atom_clip.c \
 	$(SRCDIR)/state_tracker/st_atom_constbuf.c \

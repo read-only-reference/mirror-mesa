@@ -42,14 +42,11 @@ public:
   /// number of bytes.
   unsigned getEncodingBytes(const MachineInstr &MI) const;
 
-  /// convertToISA - Convert the AMDIL MachineInstr to a supported SI
-  ///MachineInstr
-  virtual MachineInstr * convertToISA(MachineInstr & MI, MachineFunction &MF,
-                                        DebugLoc DL) const;
+  virtual MachineInstr * getMovImmInstr(MachineFunction *MF, unsigned DstReg,
+                                        int64_t Imm) const;
 
-  /// getISAOpcode - This function takes an AMDIL opcode as an argument and
-  /// returns an equivalent SI opcode.
-  virtual unsigned getISAOpcode(unsigned AMDILopcode) const;
+  virtual unsigned getIEQOpcode() const { assert(!"Implement"); return 0;}
+  virtual bool isMov(unsigned Opcode) const;
 
   };
 

@@ -55,9 +55,6 @@ const TargetRegisterClass *
 R600RegisterInfo::getISARegClass(const TargetRegisterClass * rc) const
 {
   switch (rc->getID()) {
-  case AMDIL::GPRV4F32RegClassID:
-  case AMDIL::GPRV4I32RegClassID:
-    return &AMDIL::R600_Reg128RegClass;
   case AMDIL::GPRF32RegClassID:
   case AMDIL::GPRI32RegClassID:
     return &AMDIL::R600_Reg32RegClass;
@@ -94,4 +91,12 @@ unsigned R600RegisterInfo::getHWRegChan(unsigned reg) const
   }
 }
 
+const TargetRegisterClass * R600RegisterInfo::getCFGStructurizerRegClass(
+                                                                   MVT VT) const
+{
+  switch(VT.SimpleTy) {
+  default:
+  case MVT::i32: return AMDIL::R600_TReg32RegisterClass;
+  }
+}
 #include "R600HwRegInfo.include"

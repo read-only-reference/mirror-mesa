@@ -222,6 +222,7 @@ void st_init_limits(struct st_context *st)
          options->MaxUnrollIterations = MIN2(screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_MAX_INSTRUCTIONS), 65536);
       else
          options->MaxUnrollIterations = 255; /* SM3 limit */
+      options->LowerClipDistance = true;
    }
 
    /* PIPE_SHADER_CAP_MAX_INPUTS for the FS specifies the maximum number
@@ -235,8 +236,9 @@ void st_init_limits(struct st_context *st)
 
    c->UniformBooleanTrue = ~0;
 
-   c->MaxTransformFeedbackSeparateAttribs =
+   c->MaxTransformFeedbackBuffers =
       screen->get_param(screen, PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS);
+   c->MaxTransformFeedbackBuffers = MIN2(c->MaxTransformFeedbackBuffers, MAX_FEEDBACK_BUFFERS);
    c->MaxTransformFeedbackSeparateComponents =
       screen->get_param(screen, PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS);
    c->MaxTransformFeedbackInterleavedComponents =
@@ -337,6 +339,7 @@ void st_init_extensions(struct st_context *st)
    GLboolean *extensions = (GLboolean *) &ctx->Extensions;
 
    static const struct st_extension_cap_mapping cap_mapping[] = {
+      { o(ARB_base_instance),                PIPE_CAP_START_INSTANCE                   },
       { o(ARB_depth_clamp),                  PIPE_CAP_DEPTH_CLIP_DISABLE               },
       { o(ARB_depth_texture),                PIPE_CAP_TEXTURE_SHADOW_MAP               },
       { o(ARB_draw_buffers_blend),           PIPE_CAP_INDEP_BLEND_FUNC                 },
@@ -590,6 +593,10 @@ void st_init_extensions(struct st_context *st)
    if (!ctx->Mesa_DXTn && !st_get_s3tc_override()) {
       ctx->Extensions.EXT_texture_compression_s3tc = GL_FALSE;
       ctx->Extensions.S3_s3tc = GL_FALSE;
+   }
+
+   if (ctx->Const.NativeIntegers) {
+      ctx->Extensions.ARB_shader_bit_encoding = GL_TRUE;
    }
 
    if (screen->get_shader_param(screen, PIPE_SHADER_GEOMETRY,

@@ -139,6 +139,7 @@ def generate(env):
 
     env['gcc'] = 'gcc' in os.path.basename(env['CC']).split('-')
     env['msvc'] = env['CC'] == 'cl'
+    env['suncc'] = env['platform'] == 'sunos' and os.path.basename(env['CC']) == 'cc'
 
     if env['msvc'] and env['toolchain'] == 'default' and env['machine'] == 'x86_64':
         # MSVC x64 support is broken in earlier versions of scons
@@ -151,6 +152,7 @@ def generate(env):
     ppc = env['machine'] == 'ppc'
     gcc = env['gcc']
     msvc = env['msvc']
+    suncc = env['suncc']
 
     # Determine whether we are cross compiling; in particular, whether we need
     # to compile code generators with a different compiler as the target code.
@@ -327,7 +329,8 @@ def generate(env):
                 #'-march=pentium4',
             ]
             if distutils.version.LooseVersion(ccversion) >= distutils.version.LooseVersion('4.2') \
-               and (platform != 'windows' or env['build'] == 'debug' or True):
+               and (platform != 'windows' or env['build'] == 'debug' or True) \
+               and platform != 'haiku':
                 # NOTE: We need to ensure stack is realigned given that we
                 # produce shared objects, and have no control over the stack
                 # alignment policy of the application. Therefore we need
@@ -346,6 +349,14 @@ def generate(env):
             if platform in ['windows', 'darwin']:
                 # Workaround http://gcc.gnu.org/bugzilla/show_bug.cgi?id=37216
                 ccflags += ['-fno-common']
+            if platform in ['haiku']:
+                # Make optimizations compatible with Pentium or higher on Haiku
+                ccflags += [
+                    '-mstackrealign', # ensure stack is aligned
+                    '-march=i586', # Haiku target is Pentium
+                    '-mtune=i686', # use i686 where we can
+                    '-mmmx' # use mmx math where we can
+                ]
         if env['machine'] == 'x86_64':
             ccflags += ['-m64']
             if platform == 'darwin':

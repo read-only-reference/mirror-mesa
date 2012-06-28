@@ -146,6 +146,15 @@ struct lp_tgsi_info
 };
 
 /**
+ * Reference to system values.
+ */
+struct lp_bld_tgsi_system_values {
+   LLVMValueRef instance_id;
+   LLVMValueRef vertex_id;
+};
+
+
+/**
  * Sampler code generation interface.
  *
  * Although texture sampling is a requirement for TGSI translation, it is
@@ -205,7 +214,7 @@ lp_build_tgsi_soa(struct gallivm_state *gallivm,
                   struct lp_type type,
                   struct lp_build_mask_context *mask,
                   LLVMValueRef consts_ptr,
-                  LLVMValueRef system_values_array,
+                  const struct lp_bld_tgsi_system_values *system_values,
                   const LLVMValueRef *pos,
                   const LLVMValueRef (*inputs)[4],
                   LLVMValueRef (*outputs)[4],
@@ -223,13 +232,6 @@ lp_build_tgsi_aos(struct gallivm_state *gallivm,
                   LLVMValueRef *outputs,
                   struct lp_build_sampler_aos *sampler,
                   const struct tgsi_shader_info *info);
-
-
-LLVMValueRef
-lp_build_system_values_array(struct gallivm_state *gallivm,
-                             const struct tgsi_shader_info *info,
-                             LLVMValueRef instance_id,
-                             LLVMValueRef facing);
 
 
 struct lp_exec_mask {
@@ -388,7 +390,7 @@ struct lp_build_tgsi_soa_context
     */
    LLVMValueRef inputs_array;
 
-   LLVMValueRef system_values_array;
+   struct lp_bld_tgsi_system_values system_values;
 
    /** bitmask indicating which register files are accessed indirectly */
    unsigned indirect_files;
