@@ -79,20 +79,29 @@ struct lp_build_interp_soa_context
 {
    /* TGSI_QUAD_SIZE x float */
    struct lp_build_context coeff_bld;
+   struct lp_build_context setup_bld;
 
    unsigned num_attribs;
    unsigned mask[1 + PIPE_MAX_SHADER_INPUTS]; /**< TGSI_WRITE_MASK_x */
    enum lp_interp interp[1 + PIPE_MAX_SHADER_INPUTS];
+   boolean simple_interp;
+   boolean dynamic_offsets;
 
    LLVMValueRef x;
    LLVMValueRef y;
 
-   LLVMValueRef a   [1 + PIPE_MAX_SHADER_INPUTS][TGSI_NUM_CHANNELS];
+   LLVMValueRef a[1 + PIPE_MAX_SHADER_INPUTS][TGSI_NUM_CHANNELS];
    LLVMValueRef dadq[1 + PIPE_MAX_SHADER_INPUTS][TGSI_NUM_CHANNELS];
+   LLVMValueRef a0aos[1 + PIPE_MAX_SHADER_INPUTS];
+   LLVMValueRef dadxaos[1 + PIPE_MAX_SHADER_INPUTS];
+   LLVMValueRef dadyaos[1 + PIPE_MAX_SHADER_INPUTS];
 
    LLVMValueRef oow;
 
    LLVMValueRef attribs[1 + PIPE_MAX_SHADER_INPUTS][TGSI_NUM_CHANNELS];
+
+   LLVMValueRef xoffset_store;
+   LLVMValueRef yoffset_store;
 
    /*
     * Convenience pointers. Callers may access this one.
@@ -109,6 +118,7 @@ lp_build_interp_soa_init(struct lp_build_interp_soa_context *bld,
                          const struct lp_shader_input *inputs,
                          LLVMBuilderRef builder,
                          struct lp_type type,
+                         boolean dynamic_offsets,
                          LLVMValueRef a0_ptr,
                          LLVMValueRef dadx_ptr,
                          LLVMValueRef dady_ptr,
@@ -118,12 +128,21 @@ lp_build_interp_soa_init(struct lp_build_interp_soa_context *bld,
 void
 lp_build_interp_soa_update_inputs(struct lp_build_interp_soa_context *bld,
                                   struct gallivm_state *gallivm,
-                                  int quad_index);
+                                  int quad_start_index);
 
 void
 lp_build_interp_soa_update_pos(struct lp_build_interp_soa_context *bld,
                                struct gallivm_state *gallivm,
-                               int quad_index);
+                               int quad__start_index);
 
+void
+lp_build_interp_soa_update_inputs_dyn(struct lp_build_interp_soa_context *bld,
+                                      struct gallivm_state *gallivm,
+                                      LLVMValueRef quad_start_index);
+
+void
+lp_build_interp_soa_update_pos_dyn(struct lp_build_interp_soa_context *bld,
+                                   struct gallivm_state *gallivm,
+                                   LLVMValueRef quad_start_index);
 
 #endif /* LP_BLD_INTERP_H */

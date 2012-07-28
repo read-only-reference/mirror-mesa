@@ -30,6 +30,7 @@
 #include "util/u_format.h"
 #include "util/u_format_s3tc.h"
 #include "util/u_video.h"
+#include "os/os_time.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_screen.h"
 #include "draw/draw_context.h"
@@ -165,6 +166,8 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_START_INSTANCE:
       return 0;
+   case PIPE_CAP_QUERY_TIMESTAMP:
+      return 1;
    }
    /* should only get here on unhandled cases */
    debug_printf("Unexpected PIPE_CAP %d query\n", param);
@@ -174,9 +177,7 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
 static int
 softpipe_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe_shader_cap param)
 {
-#ifdef HAVE_LLVM
    struct softpipe_screen *sp_screen = softpipe_screen(screen);
-#endif
    switch(shader)
    {
    case PIPE_SHADER_FRAGMENT:
@@ -185,20 +186,16 @@ softpipe_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe
    case PIPE_SHADER_GEOMETRY:
       switch (param) {
       case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
-#ifdef HAVE_LLVM
          if (sp_screen->use_llvm)
             /* Softpipe doesn't yet know how to tell draw/llvm about textures */
             return 0;
-#endif
-         return PIPE_MAX_VERTEX_SAMPLERS;
-      case PIPE_SHADER_CAP_INTEGERS:
-#ifdef HAVE_LLVM /* gallivm doesn't support integers yet */
-         if (sp_screen->use_llvm)
-            return 0;
-#endif
-         /* fallthrough */
+	 else
+            return PIPE_MAX_VERTEX_SAMPLERS;
       default:
-         return draw_get_shader_param(shader, param);
+	 if (sp_screen->use_llvm)
+            return draw_get_shader_param(shader, param);
+         else
+            return draw_get_shader_param_no_llvm(shader, param);
       }
    default:
       return 0;
@@ -360,6 +357,12 @@ softpipe_flush_frontbuffer(struct pipe_screen *_screen,
       winsys->displaytarget_display(winsys, texture->dt, context_private);
 }
 
+static uint64_t
+softpipe_get_timestamp(struct pipe_screen *_screen)
+{
+   return os_time_get()*1000;
+}
+
 /**
  * Create a new pipe_screen object
  * Note: we're not presently subclassing pipe_screen (no softpipe_screen).
@@ -382,6 +385,7 @@ softpipe_create_screen(struct sw_winsys *winsys)
    screen->base.get_shader_param = softpipe_get_shader_param;
    screen->base.get_paramf = softpipe_get_paramf;
    screen->base.get_video_param = softpipe_get_video_param;
+   screen->base.get_timestamp = softpipe_get_timestamp;
    screen->base.is_format_supported = softpipe_is_format_supported;
    screen->base.is_video_format_supported = vl_video_buffer_is_format_supported;
    screen->base.context_create = softpipe_create_context;

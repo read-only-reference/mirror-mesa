@@ -180,13 +180,17 @@ gen7_blorp_emit_surface_state(struct brw_context *brw,
       pitch_bytes *= 2;
    surf->ss3.pitch = pitch_bytes - 1;
 
-   gen7_set_surface_num_multisamples(surf, surface->num_samples);
+   gen7_set_surface_msaa(surf, surface->num_samples, surface->msaa_layout);
+   if (surface->msaa_layout == INTEL_MSAA_LAYOUT_CMS) {
+      gen7_set_surface_mcs_info(brw, surf, wm_surf_offset,
+                                surface->mt->mcs_mt, is_render_target);
+   }
 
    if (intel->is_haswell) {
-      surf->ss7.shader_chanel_select_r = HSW_SCS_RED;
-      surf->ss7.shader_chanel_select_g = HSW_SCS_GREEN;
-      surf->ss7.shader_chanel_select_b = HSW_SCS_BLUE;
-      surf->ss7.shader_chanel_select_a = HSW_SCS_ALPHA;
+      surf->ss7.shader_channel_select_r = HSW_SCS_RED;
+      surf->ss7.shader_channel_select_g = HSW_SCS_GREEN;
+      surf->ss7.shader_channel_select_b = HSW_SCS_BLUE;
+      surf->ss7.shader_channel_select_a = HSW_SCS_ALPHA;
    }
 
    /* Emit relocation to surface contents */

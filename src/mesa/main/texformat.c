@@ -258,6 +258,16 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
          ; /* fallthrough */
    }
 
+   if (ctx->Extensions.ARB_ES2_compatibility) {
+      switch (internalFormat) {
+         case GL_RGB565:
+            RETURN_IF_SUPPORTED(MESA_FORMAT_RGB565);
+            break;
+         default:
+         ; /* fallthrough */
+      }
+   }
+
    if (ctx->Extensions.MESA_ycbcr_texture) {
       if (internalFormat == GL_YCBCR_MESA) {
          if (type == GL_UNSIGNED_SHORT_8_8_MESA)
@@ -877,6 +887,7 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
       switch (internalFormat) {
       case GL_RGB10_A2UI:
          RETURN_IF_SUPPORTED(MESA_FORMAT_ARGB2101010_UINT);
+         RETURN_IF_SUPPORTED(MESA_FORMAT_ABGR2101010_UINT);
          break;
       default:
          break;
@@ -884,7 +895,7 @@ _mesa_choose_tex_format( struct gl_context *ctx, GLint internalFormat,
    }
    /* GL_BGRA can be an internal format *only* in OpenGL ES (1.x or 2.0).
     */
-   if (ctx->API != API_OPENGL) {
+   if (_mesa_is_gles(ctx)) {
       switch (internalFormat) {
       case GL_BGRA:
 	 RETURN_IF_SUPPORTED(MESA_FORMAT_ARGB8888);

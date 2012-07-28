@@ -59,15 +59,6 @@
 static struct gl_renderbuffer *
 intel_new_renderbuffer(struct gl_context * ctx, GLuint name);
 
-bool
-intel_framebuffer_has_hiz(struct gl_framebuffer *fb)
-{
-   struct intel_renderbuffer *rb = NULL;
-   if (fb)
-      rb = intel_get_renderbuffer(fb, BUFFER_DEPTH);
-   return rb && rb->mt && rb->mt->hiz_mt;
-}
-
 struct intel_region*
 intel_get_rb_region(struct gl_framebuffer *fb, GLuint attIndex)
 {
@@ -202,8 +193,10 @@ quantize_num_samples(struct intel_context *intel, unsigned num_samples)
       else
          return 0;
    case 7:
-      /* TODO: Gen7 supports only 4x multisampling at the moment. */
-      if (num_samples > 0)
+      /* Gen7 supports 4x and 8x multisampling. */
+      if (num_samples > 4)
+         return 8;
+      else if (num_samples > 0)
          return 4;
       else
          return 0;
@@ -227,8 +220,6 @@ intel_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffer
    struct intel_context *intel = intel_context(ctx);
    struct intel_renderbuffer *irb = intel_renderbuffer(rb);
    rb->NumSamples = quantize_num_samples(intel, rb->NumSamples);
-
-   ASSERT(rb->Name != 0);
 
    switch (internalFormat) {
    default:
@@ -279,6 +270,14 @@ intel_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffer
       if (!ok) {
 	 intel_miptree_release(&irb->mt);
 	 return false;
+      }
+   }
+
+   if (irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS) {
+      bool ok = intel_miptree_alloc_mcs(intel, irb->mt, rb->NumSamples);
+      if (!ok) {
+         intel_miptree_release(&irb->mt);
+         return false;
       }
    }
 
@@ -360,7 +359,7 @@ intel_resize_buffers(struct gl_context *ctx, struct gl_framebuffer *fb,
 
    fb->Initialized = true; /* XXX remove someday */
 
-   if (fb->Name != 0) {
+   if (_mesa_is_user_fbo(fb)) {
       return;
    }
 
@@ -415,6 +414,23 @@ intel_create_renderbuffer(gl_format format)
    /* intel-specific methods */
    rb->Delete = intel_delete_renderbuffer;
    rb->AllocStorage = intel_alloc_window_storage;
+
+   return irb;
+}
+
+/**
+ * Private window-system buffers (as opposed to ones shared with the display
+ * server created with intel_create_renderbuffer()) are most similar in their
+ * handling to user-created renderbuffers, but they have a resize handler that
+ * may be called at intel_update_renderbuffers() time.
+ */
+struct intel_renderbuffer *
+intel_create_private_renderbuffer(gl_format format)
+{
+   struct intel_renderbuffer *irb;
+
+   irb = intel_create_renderbuffer(format);
+   irb->Base.Base.AllocStorage = intel_alloc_renderbuffer_storage;
 
    return irb;
 }

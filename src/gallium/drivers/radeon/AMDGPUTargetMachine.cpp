@@ -55,7 +55,7 @@ AMDGPUTargetMachine::AMDGPUTargetMachine(const Target &T, StringRef TT,
 
 {
   // TLInfo uses InstrInfo so it must be initialized after.
-  if (Subtarget.device()->getGeneration() <= AMDILDeviceInfo::HD6XXX) {
+  if (Subtarget.device()->getGeneration() <= AMDGPUDeviceInfo::HD6XXX) {
     InstrInfo = new R600InstrInfo(*this);
     TLInfo = new R600TargetLowering(*this);
   } else {
@@ -78,11 +78,11 @@ bool AMDGPUTargetMachine::addPassesToEmitFile(PassManagerBase &PM,
                                                      DisableVerify);
   assert(fail);
 
-  const AMDILSubtarget &STM = getSubtarget<AMDILSubtarget>();
+  const AMDGPUSubtarget &STM = getSubtarget<AMDGPUSubtarget>();
   std::string gpu = STM.getDeviceName();
   if (gpu == "SI") {
     PM.add(createSICodeEmitterPass(Out));
-  } else if (Subtarget.device()->getGeneration() <= AMDILDeviceInfo::HD6XXX) {
+  } else if (Subtarget.device()->getGeneration() <= AMDGPUDeviceInfo::HD6XXX) {
     PM.add(createR600CodeEmitterPass(Out));
   } else {
     abort();
@@ -119,8 +119,8 @@ TargetPassConfig *AMDGPUTargetMachine::createPassConfig(PassManagerBase &PM) {
 bool
 AMDGPUPassConfig::addPreISel()
 {
-  const AMDILSubtarget &ST = TM->getSubtarget<AMDILSubtarget>();
-  if (ST.device()->getGeneration() <= AMDILDeviceInfo::HD6XXX) {
+  const AMDGPUSubtarget &ST = TM->getSubtarget<AMDGPUSubtarget>();
+  if (ST.device()->getGeneration() <= AMDGPUDeviceInfo::HD6XXX) {
     PM->add(createR600KernelParametersPass(
                      getAMDGPUTargetMachine().getTargetData()));
   }
@@ -128,15 +128,15 @@ AMDGPUPassConfig::addPreISel()
 }
 
 bool AMDGPUPassConfig::addInstSelector() {
-  PM->add(createAMDILPeepholeOpt(*TM));
-  PM->add(createAMDILISelDag(getAMDGPUTargetMachine()));
+  PM->add(createAMDGPUPeepholeOpt(*TM));
+  PM->add(createAMDGPUISelDag(getAMDGPUTargetMachine()));
   return false;
 }
 
 bool AMDGPUPassConfig::addPreRegAlloc() {
-  const AMDILSubtarget &ST = TM->getSubtarget<AMDILSubtarget>();
+  const AMDGPUSubtarget &ST = TM->getSubtarget<AMDGPUSubtarget>();
 
-  if (ST.device()->getGeneration() > AMDILDeviceInfo::HD6XXX) {
+  if (ST.device()->getGeneration() > AMDGPUDeviceInfo::HD6XXX) {
     PM->add(createSIAssignInterpRegsPass(*TM));
   }
   PM->add(createAMDGPUConvertToISAPass(*TM));
@@ -152,8 +152,8 @@ bool AMDGPUPassConfig::addPreSched2() {
 }
 
 bool AMDGPUPassConfig::addPreEmitPass() {
-  PM->add(createAMDILCFGPreparationPass(*TM));
-  PM->add(createAMDILCFGStructurizerPass(*TM));
+  PM->add(createAMDGPUCFGPreparationPass(*TM));
+  PM->add(createAMDGPUCFGStructurizerPass(*TM));
 
   return false;
 }

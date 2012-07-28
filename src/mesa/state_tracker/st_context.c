@@ -187,6 +187,8 @@ st_create_context_priv( struct gl_context *ctx, struct pipe_context *pipe )
    st->pixel_xfer.cache = _mesa_new_program_cache();
 
    st->force_msaa = st_get_msaa();
+   st->has_stencil_export =
+      screen->get_param(screen, PIPE_CAP_SHADER_STENCIL_EXPORT);
 
    /* GL limits and extensions */
    st_init_limits(st);
@@ -209,9 +211,9 @@ struct st_context *st_create_context(gl_api api, struct pipe_context *pipe,
    struct dd_function_table funcs;
 
    /* Sanity checks */
-   assert(MESA_SHADER_VERTEX == PIPE_SHADER_VERTEX);
-   assert(MESA_SHADER_FRAGMENT == PIPE_SHADER_FRAGMENT);
-   assert(MESA_SHADER_GEOMETRY == PIPE_SHADER_GEOMETRY);
+   STATIC_ASSERT(MESA_SHADER_VERTEX == PIPE_SHADER_VERTEX);
+   STATIC_ASSERT(MESA_SHADER_FRAGMENT == PIPE_SHADER_FRAGMENT);
+   STATIC_ASSERT(MESA_SHADER_GEOMETRY == PIPE_SHADER_GEOMETRY);
 
    memset(&funcs, 0, sizeof(funcs));
    st_init_driver_functions(&funcs);

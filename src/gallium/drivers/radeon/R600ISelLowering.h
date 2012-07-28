@@ -38,8 +38,13 @@ private:
   void lowerImplicitParameter(MachineInstr *MI, MachineBasicBlock &BB,
       MachineRegisterInfo & MRI, unsigned dword_offset) const;
 
+  SDValue LowerBR_CC(SDValue Op, SelectionDAG &DAG) const;
+
   /// LowerROTL - Lower ROTL opcode to BITALIGN
   SDValue LowerROTL(SDValue Op, SelectionDAG &DAG) const;
+
+  SDValue LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
+  SDValue LowerSETCC(SDValue Op, SelectionDAG &DAG) const;
 
 };
 

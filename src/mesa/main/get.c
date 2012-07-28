@@ -328,6 +328,7 @@ EXTRA_EXT(ARB_sync);
 EXTRA_EXT(ARB_vertex_shader);
 EXTRA_EXT(EXT_transform_feedback);
 EXTRA_EXT(ARB_transform_feedback2);
+EXTRA_EXT(ARB_transform_feedback3);
 EXTRA_EXT(EXT_pixel_buffer_object);
 EXTRA_EXT(ARB_vertex_program);
 EXTRA_EXT2(NV_point_sprite, ARB_point_sprite);
@@ -342,6 +343,7 @@ EXTRA_EXT(ARB_texture_buffer_object);
 EXTRA_EXT(OES_EGL_image_external);
 EXTRA_EXT(ARB_blend_func_extended);
 EXTRA_EXT(ARB_uniform_buffer_object);
+EXTRA_EXT(ARB_timer_query);
 
 static const int
 extra_ARB_vertex_program_ARB_fragment_program_NV_vertex_program[] = {
@@ -389,6 +391,7 @@ extra_NV_read_buffer_api_gl[] = {
 #define API_OPENGL_BIT (1 << API_OPENGL)
 #define API_OPENGLES_BIT (1 << API_OPENGLES)
 #define API_OPENGLES2_BIT (1 << API_OPENGLES2)
+#define API_OPENGL_CORE_BIT (1 << API_OPENGL_CORE)
 
 /* This is the big table describing all the enums we accept in
  * glGet*v().  The table is partitioned into six parts: enums
@@ -403,7 +406,9 @@ extra_NV_read_buffer_api_gl[] = {
 static const struct value_desc values[] = {
    /* Enums shared between OpenGL, GLES1 and GLES2 */
    { 0, 0, TYPE_API_MASK,
-     API_OPENGL_BIT | API_OPENGLES_BIT | API_OPENGLES2_BIT, NO_EXTRA},
+     API_OPENGL_BIT | API_OPENGLES_BIT | API_OPENGLES2_BIT |
+       API_OPENGL_CORE_BIT,
+     NO_EXTRA},
    { GL_ALPHA_BITS, BUFFER_INT(Visual.alphaBits), extra_new_buffers },
    { GL_BLEND, CONTEXT_BIT0(Color.BlendEnabled), NO_EXTRA },
    { GL_BLEND_SRC, CONTEXT_ENUM(Color.Blend[0].SrcRGB), NO_EXTRA },
@@ -532,7 +537,7 @@ static const struct value_desc values[] = {
 
 #if FEATURE_GL || FEATURE_ES1
    /* Enums in OpenGL and GLES1 */
-   { 0, 0, TYPE_API_MASK, API_OPENGL_BIT | API_OPENGLES_BIT, NO_EXTRA },
+   { 0, 0, TYPE_API_MASK, API_OPENGL_BIT | API_OPENGLES_BIT | API_OPENGL_CORE_BIT, NO_EXTRA },
    { GL_MAX_LIGHTS, CONTEXT_INT(Const.MaxLights), NO_EXTRA },
    { GL_LIGHT0, CONTEXT_BOOL(Light.Light[0].Enabled), NO_EXTRA },
    { GL_LIGHT1, CONTEXT_BOOL(Light.Light[1].Enabled), NO_EXTRA },
@@ -794,7 +799,7 @@ static const struct value_desc values[] = {
 
 #if FEATURE_GL
    /* Remaining enums are only in OpenGL */
-   { 0, 0, TYPE_API_MASK, API_OPENGL_BIT, NO_EXTRA },
+   { 0, 0, TYPE_API_MASK, API_OPENGL_BIT | API_OPENGL_CORE_BIT, NO_EXTRA },
    { GL_ACCUM_RED_BITS, BUFFER_INT(Visual.accumRedBits), NO_EXTRA },
    { GL_ACCUM_GREEN_BITS, BUFFER_INT(Visual.accumGreenBits), NO_EXTRA },
    { GL_ACCUM_BLUE_BITS, BUFFER_INT(Visual.accumBlueBits), NO_EXTRA },
@@ -1246,6 +1251,14 @@ static const struct value_desc values[] = {
    { GL_TRANSFORM_FEEDBACK_BINDING, LOC_CUSTOM, TYPE_INT, 0,
      extra_ARB_transform_feedback2 },
 
+   /* GL_ARB_transform_feedback3 */
+   { GL_MAX_TRANSFORM_FEEDBACK_BUFFERS,
+     CONTEXT_INT(Const.MaxTransformFeedbackBuffers),
+     extra_ARB_transform_feedback3 },
+   { GL_MAX_VERTEX_STREAMS,
+     CONTEXT_INT(Const.MaxVertexStreams),
+     extra_ARB_transform_feedback3 },
+
    /* GL_ARB_geometry_shader4 */
    { GL_MAX_GEOMETRY_TEXTURE_IMAGE_UNITS_ARB,
      CONTEXT_INT(Const.MaxGeometryTextureImageUnits),
@@ -1352,6 +1365,9 @@ static const struct value_desc values[] = {
      extra_ARB_uniform_buffer_object },
 
    { GL_UNIFORM_BUFFER_BINDING, LOC_CUSTOM, TYPE_INT, 0, extra_ARB_uniform_buffer_object },
+
+   /* GL_ARB_timer_query */
+   { GL_TIMESTAMP, LOC_CUSTOM, TYPE_INT64, 0, extra_ARB_timer_query }
 
 #endif /* FEATURE_GL */
 };
@@ -1807,7 +1823,16 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
    case GL_UNIFORM_BUFFER_BINDING:
       v->value_int = ctx->UniformBuffer->Name;
       break;
-   }   
+   /* GL_ARB_timer_query */
+   case GL_TIMESTAMP:
+      if (ctx->Driver.GetTimestamp) {
+         v->value_int64 = ctx->Driver.GetTimestamp(ctx);
+      }
+      else {
+         _mesa_problem(ctx, "driver doesn't implement GetTimestamp");
+      }
+      break;
+   }
 }
 
 /**
@@ -1865,7 +1890,7 @@ check_extra(struct gl_context *ctx, const char *func, const struct value_desc *d
 	 }
 	 break;
       case EXTRA_API_GL:
-	 if (ctx->API == API_OPENGL) {
+	 if (_mesa_is_desktop_gl(ctx)) {
 	    total++;
 	    enabled++;
 	 }

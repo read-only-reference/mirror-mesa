@@ -283,14 +283,6 @@ struct brw_shader_program {
    struct gl_shader_program base;
 };
 
-enum param_conversion {
-   PARAM_NO_CONVERT,
-   PARAM_CONVERT_F2I,
-   PARAM_CONVERT_F2U,
-   PARAM_CONVERT_F2B,
-   PARAM_CONVERT_ZERO,
-};
-
 /* Data about a particular attempt to compile a program.  Note that
  * there can be many of these, each in a different GL state
  * corresponding to a different brw_wm_prog_key struct, with different
@@ -323,9 +315,7 @@ struct brw_wm_prog_data {
     * _mesa_load_state_parameters has been called at runtime).
     */
    const float *param[MAX_UNIFORMS * 4]; /* should be: BRW_MAX_CURBE */
-   enum param_conversion param_convert[MAX_UNIFORMS * 4];
    const float *pull_param[MAX_UNIFORMS * 4];
-   enum param_conversion pull_param_convert[MAX_UNIFORMS * 4];
 };
 
 /**
@@ -725,6 +715,15 @@ struct brw_context
    bool has_pln;
    bool precompile;
 
+   /**
+    * Some versions of Gen hardware don't do centroid interpolation correctly
+    * on unlit pixels, causing incorrect values for derivatives near triangle
+    * edges.  Enabling this flag causes the fragment shader to use
+    * non-centroid interpolation for unlit pixels, at the expense of two extra
+    * fragment shader instructions.
+    */
+   bool needs_unlit_centroid_workaround;
+
    struct {
       struct brw_state_flags dirty;
    } state;
@@ -962,6 +961,12 @@ struct brw_context
 
       drm_intel_bo *scratch_bo;
 
+      /**
+       * Buffer object used in place of multisampled null render targets on
+       * Gen6.  See brw_update_null_renderbuffer_surface().
+       */
+      drm_intel_bo *multisampled_null_render_target_bo;
+
       /** Offset in the program cache to the WM program */
       uint32_t prog_offset;
 
@@ -1038,6 +1043,8 @@ struct brw_context
       uint32_t offset_0_batch_start;
       uint32_t primitives_generated;
       uint32_t primitives_written;
+      bool counting_primitives_generated;
+      bool counting_primitives_written;
    } sol;
 
    uint32_t render_target_format[MESA_FORMAT_COUNT];
@@ -1202,37 +1209,6 @@ brw_fragment_program_const(const struct gl_fragment_program *p)
    return (const struct brw_fragment_program *) p;
 }
 
-static inline
-float convert_param(enum param_conversion conversion, const float *param)
-{
-   union {
-      float f;
-      uint32_t u;
-      int32_t i;
-   } fi;
-
-   switch (conversion) {
-   case PARAM_NO_CONVERT:
-      return *param;
-   case PARAM_CONVERT_F2I:
-      fi.i = *param;
-      return fi.f;
-   case PARAM_CONVERT_F2U:
-      fi.u = *param;
-      return fi.f;
-   case PARAM_CONVERT_F2B:
-      if (*param != 0.0)
-	 fi.i = 1;
-      else
-	 fi.i = 0;
-      return fi.f;
-   case PARAM_CONVERT_ZERO:
-      return 0.0;
-   default:
-      return *param;
-   }
-}
-
 /**
  * Pre-gen6, the register file of the EUs was shared between threads,
  * and each thread used some subset allocated on a 16-register block
@@ -1265,6 +1241,7 @@ brw_program_reloc(struct brw_context *brw, uint32_t state_offset,
 }
 
 bool brw_do_cubemap_normalize(struct exec_list *instructions);
+bool brw_lower_texture_gradients(struct exec_list *instructions);
 
 #ifdef __cplusplus
 }

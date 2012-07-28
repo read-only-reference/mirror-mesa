@@ -97,6 +97,12 @@ void set(struct brw_context *brw,
     * surface.  Should correspond to one of the BRW_SURFACEFORMAT_* enums.
     */
    uint32_t brw_surfaceformat;
+
+   /**
+    * For MSAA surfaces, MSAA layout that should be used when setting up the
+    * surface state for this surface.
+    */
+   intel_msaa_layout msaa_layout;
 };
 
 
@@ -192,26 +198,35 @@ struct brw_blorp_blit_prog_key
     */
    unsigned tex_samples;
 
+   /* MSAA layout that has been configured in the surface state for texturing
+    * from.
+    */
+   intel_msaa_layout tex_layout;
+
    /* Actual number of samples per pixel in the source image. */
    unsigned src_samples;
 
-   /* If src_samples > 0, whether or not the source image uses an interleaved
-    * MSAA layout.  False if src_samples == 0.
-    */
-   bool src_interleaved;
+   /* Actual MSAA layout used by the source image. */
+   intel_msaa_layout src_layout;
 
    /* Number of samples per pixel that have been configured in the render
     * target.
     */
    unsigned rt_samples;
 
+   /* MSAA layout that has been configured in the render target. */
+   intel_msaa_layout rt_layout;
+
    /* Actual number of samples per pixel in the destination image. */
    unsigned dst_samples;
 
-   /* If dst_samples > 0, whether or not the destination image uses an
-    * interleaved MSAA layout.  False if dst_samples == 0.
+   /* Actual MSAA layout used by the destination image. */
+   intel_msaa_layout dst_layout;
+
+   /* Type of the data to be read from the texture (one of
+    * BRW_REGISTER_TYPE_{UD,D,F}).
     */
-   bool dst_interleaved;
+   unsigned texture_data_type;
 
    /* True if the source image is W tiled.  If true, the surface state for the
     * source image must be configured as Y tiled, and tex_samples must be 0.

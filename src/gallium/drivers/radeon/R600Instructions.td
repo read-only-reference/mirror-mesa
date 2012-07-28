@@ -23,7 +23,7 @@ class InstR600 <bits<32> inst, dag outs, dag ins, string asm, list<dag> pattern,
   bit isVector = 0; 
 
   let Inst = inst;
-  let Namespace = "AMDIL";
+  let Namespace = "AMDGPU";
   let OutOperandList = outs;
   let InOperandList = ins;
   let AsmString = asm;
@@ -43,7 +43,7 @@ class InstR600ISA <dag outs, dag ins, string asm, list<dag> pattern> :
 {
   field bits<64> Inst;
 
-  let Namespace = "AMDIL";
+  let Namespace = "AMDGPU";
 }
 
 def MEMxi : Operand<iPTR> {
@@ -130,47 +130,6 @@ def TEX_SHADOW : PatLeaf<
   }]
 >;
 
-def COND_EQ : PatLeaf <
-  (cond),
-  [{switch(N->get()){{default: return false;
-                     case ISD::SETOEQ: case ISD::SETUEQ:
-                     case ISD::SETEQ: return true;}}}]
->;
-
-def COND_NE : PatLeaf <
-  (cond),
-  [{switch(N->get()){{default: return false;
-                     case ISD::SETONE: case ISD::SETUNE:
-                     case ISD::SETNE: return true;}}}]
->;
-def COND_GT : PatLeaf <
-  (cond),
-  [{switch(N->get()){{default: return false;
-                     case ISD::SETOGT: case ISD::SETUGT:
-                     case ISD::SETGT: return true;}}}]
->;
-
-def COND_GE : PatLeaf <
-  (cond),
-  [{switch(N->get()){{default: return false;
-                     case ISD::SETOGE: case ISD::SETUGE:
-                     case ISD::SETGE: return true;}}}]
->;
-
-def COND_LT : PatLeaf <
-  (cond),
-  [{switch(N->get()){{default: return false;
-                     case ISD::SETOLT: case ISD::SETULT:
-                     case ISD::SETLT: return true;}}}]
->;
-
-def COND_LE : PatLeaf <
-  (cond),
-  [{switch(N->get()){{default: return false;
-                     case ISD::SETOLE: case ISD::SETULE:
-                     case ISD::SETLE: return true;}}}]
->;
-
 class EG_CF_RAT <bits <8> cf_inst, bits <6> rat_inst, bits<4> rat_id, dag outs,
                  dag ins, string asm, list<dag> pattern> :
     InstR600ISA <outs, ins, asm, pattern>
@@ -234,7 +193,7 @@ def load_param : PatFrag<(ops node:$ptr),
                            const Value *Src = cast<LoadSDNode>(N)->getSrcValue();
                            if (Src) {
                                 PointerType * PT = dyn_cast<PointerType>(Src->getType());
-                                return PT && PT->getAddressSpace() == AMDILAS::PARAM_I_ADDRESS;
+                                return PT && PT->getAddressSpace() == AMDGPUAS::PARAM_I_ADDRESS;
                            }
                            return false;
                           }]>;
@@ -270,23 +229,23 @@ def load_param : PatFrag<(ops node:$ptr),
 //}
 */
 def isR600 : Predicate<"Subtarget.device()"
-                            "->getGeneration() == AMDILDeviceInfo::HD4XXX">;
+                            "->getGeneration() == AMDGPUDeviceInfo::HD4XXX">;
 def isR700 : Predicate<"Subtarget.device()"
-                            "->getGeneration() == AMDILDeviceInfo::HD4XXX &&"
+                            "->getGeneration() == AMDGPUDeviceInfo::HD4XXX &&"
                             "Subtarget.device()->getDeviceFlag()"
                             ">= OCL_DEVICE_RV710">;
 def isEG : Predicate<"Subtarget.device()"
-                            "->getGeneration() >= AMDILDeviceInfo::HD5XXX && "
+                            "->getGeneration() >= AMDGPUDeviceInfo::HD5XXX && "
                             "Subtarget.device()->getDeviceFlag() != OCL_DEVICE_CAYMAN">;
 def isCayman : Predicate<"Subtarget.device()"
                             "->getDeviceFlag() == OCL_DEVICE_CAYMAN">;
 def isEGorCayman : Predicate<"Subtarget.device()"
-                            "->getGeneration() == AMDILDeviceInfo::HD5XXX"
+                            "->getGeneration() == AMDGPUDeviceInfo::HD5XXX"
 			    "|| Subtarget.device()->getGeneration() =="
-			    "AMDILDeviceInfo::HD6XXX">;
+			    "AMDGPUDeviceInfo::HD6XXX">;
 
 def isR600toCayman : Predicate<
-                     "Subtarget.device()->getGeneration() <= AMDILDeviceInfo::HD6XXX">;
+                     "Subtarget.device()->getGeneration() <= AMDGPUDeviceInfo::HD6XXX">;
 
 
 let Predicates = [isR600toCayman] in { 
@@ -1021,14 +980,6 @@ class VTX_READ_32_eg <bits<8> buffer_id, list<dag> pattern>
   let DATA_FORMAT      = 0xD; // COLOR_32
 }
 
-def VTX_READ_PARAM_eg : VTX_READ_32_eg <0,
-  [(set (i32 R600_TReg32_X:$dst), (load_param ADDRVTX_READ:$ptr))]
->;
-
-def VTX_READ_GLOBAL_eg : VTX_READ_32_eg <1,
-  [(set (i32 R600_TReg32_X:$dst), (global_load ADDRVTX_READ:$ptr))]
->;
-
 class VTX_READ_128_eg <bits<8> buffer_id, list<dag> pattern>
     : VTX_READ_eg <buffer_id, (outs R600_Reg128:$dst), pattern> {
 
@@ -1040,9 +991,39 @@ class VTX_READ_128_eg <bits<8> buffer_id, list<dag> pattern>
   let DATA_FORMAT      =  0x22; // COLOR_32_32_32_32
 }
 
-def VTX_READ_GLOBAL_128_eg : VTX_READ_128_eg <1,
-  [(set (v4i32 R600_Reg128:$dst), (global_load ADDRVTX_READ:$ptr))]
+//===----------------------------------------------------------------------===//
+// VTX Read from parameter memory space
+//===----------------------------------------------------------------------===//
+
+class VTX_READ_PARAM_32_eg <ValueType vt> : VTX_READ_32_eg <0,
+  [(set (vt R600_TReg32_X:$dst), (load_param ADDRVTX_READ:$ptr))]
 >;
+
+def VTX_READ_PARAM_i32_eg : VTX_READ_PARAM_32_eg<i32>;
+def VTX_READ_PARAM_f32_eg : VTX_READ_PARAM_32_eg<f32>;
+
+
+//===----------------------------------------------------------------------===//
+// VTX Read from global memory space
+//===----------------------------------------------------------------------===//
+
+// 32-bit reads
+
+class VTX_READ_GLOBAL_eg <ValueType vt> : VTX_READ_32_eg <1,
+  [(set (vt R600_TReg32_X:$dst), (global_load ADDRVTX_READ:$ptr))]
+>;
+
+def VTX_READ_GLOBAL_i32_eg : VTX_READ_GLOBAL_eg<i32>;
+def VTX_READ_GLOBAL_f32_eg : VTX_READ_GLOBAL_eg<f32>;
+
+// 128-bit reads
+
+class VTX_READ_GLOBAL_128_eg <ValueType vt> : VTX_READ_128_eg <1,
+  [(set (vt R600_Reg128:$dst), (global_load ADDRVTX_READ:$ptr))]
+>;
+
+def VTX_READ_GLOBAL_v4i32_eg : VTX_READ_GLOBAL_128_eg<v4i32>;
+def VTX_READ_GLOBAL_v4f32_eg : VTX_READ_GLOBAL_128_eg<v4f32>;
 
 }
 

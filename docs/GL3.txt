@@ -42,8 +42,8 @@ GLX_ARB_create_context (GLX 1.4 is required)          DONE
 
 GL 3.1:
 
-GLSL 1.40                                             missing: UBOS, inverse(),
-                                                      highp change
+GLSL 1.40                                             needs UBOs (in progress)
+Forward compatibile context support/deprecations      not started
 Instanced drawing (GL_ARB_draw_instanced)             DONE (i965, gallium, swrast)
 Buffer copying (GL_ARB_copy_buffer)                   DONE (i965, r300, r600, swrast)
 Primitive restart (GL_NV_primitive_restart)           DONE (i965, r600)
@@ -80,7 +80,7 @@ GL_ARB_sampler_objects                                DONE (i965, r300, r600)
 GL_ARB_shader_bit_encoding                            DONE
 GL_ARB_texture_rgb10_a2ui                             DONE (r600)
 GL_ARB_texture_swizzle                                DONE (same as EXT version) (i965, r300, r600, swrast)
-GL_ARB_timer_query                                    ~60% done (the EXT variant)
+GL_ARB_timer_query                                    DONE
 GL_ARB_instanced_arrays                               DONE (i965, r300, r600)
 GL_ARB_vertex_type_2_10_10_10_rev                     DONE (r600)
 
@@ -91,6 +91,7 @@ GLSL 4.0                                             not started
 GL_ARB_texture_query_lod                             not started
 GL_ARB_draw_buffers_blend                            DONE (i965, r600, softpipe)
 GL_ARB_draw_indirect                                 not started
+GL_ARB_gpu_shader5                                   not started
 GL_ARB_gpu_shader_fp64                               not started
 GL_ARB_sample_shading                                not started
 GL_ARB_shader_subroutine                             not started
@@ -99,7 +100,7 @@ GL_ARB_texture_buffer_object_rgb32                   not started
 GL_ARB_texture_cube_map_array                        not started
 GL_ARB_texture_gather                                not started
 GL_ARB_transform_feedback2                           DONE
-GL_ARB_transform_feedback3                           not started
+GL_ARB_transform_feedback3                           DONE
 
 
 GL 4.1:
@@ -114,12 +115,13 @@ GL_ARB_viewport_array                                not started
 
 
 GL 4.2:
+
 GLSL 4.2                                             not started
 GL_ARB_texture_compression_bptc                      not started
 GL_ARB_compressed_texture_pixel_storage              not started
 GL_ARB_shader_atomic_counters                        not started
 GL_ARB_texture_storage                               DONE (r300, r600, swrast)
-GL_ARB_transform_feedback_instanced                  not started
+GL_ARB_transform_feedback_instanced                  DONE
 GL_ARB_base_instance                                 DONE (nv50, nvc0, r600, radeonsi)
 GL_ARB_shader_image_load_store                       not started
 GL_ARB_conservative_depth                            DONE (softpipe)

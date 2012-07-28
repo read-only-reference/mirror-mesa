@@ -41,7 +41,9 @@
 
 enum {
    DISABLE = 0,
-   GL  = 1 << API_OPENGL,
+   GLL = 1 << API_OPENGL,       /* GL Legacy / Compatibility */
+   GLC = 1 << API_OPENGL_CORE,  /* GL Core */
+   GL  = (1 << API_OPENGL) | (1 << API_OPENGL_CORE),
    ES1 = 1 << API_OPENGLES,
    ES2 = 1 << API_OPENGLES2,
 };
@@ -139,7 +141,10 @@ static const struct extension extension_table[] = {
    { "GL_ARB_texture_rg",                          o(ARB_texture_rg),                          GL,             2008 },
    { "GL_ARB_texture_storage",                     o(ARB_texture_storage),                     GL,             2011 },
    { "GL_ARB_texture_swizzle",                     o(EXT_texture_swizzle),                     GL,             2008 },
+   { "GL_ARB_timer_query",                         o(ARB_timer_query),                         GL,             2010 },
    { "GL_ARB_transform_feedback2",                 o(ARB_transform_feedback2),                 GL,             2010 },
+   { "GL_ARB_transform_feedback3",                 o(ARB_transform_feedback3),                 GL,             2010 },
+   { "GL_ARB_transform_feedback_instanced",        o(ARB_transform_feedback_instanced),        GL,             2011 },
    { "GL_ARB_transpose_matrix",                    o(ARB_transpose_matrix),                    GL,             1999 },
    { "GL_ARB_uniform_buffer_object",               o(ARB_uniform_buffer_object),               GL,             2009 },
    { "GL_ARB_vertex_array_bgra",                   o(EXT_vertex_array_bgra),                   GL,             2008 },
@@ -200,6 +205,7 @@ static const struct extension extension_table[] = {
    { "GL_EXT_texture_env_dot3",                    o(EXT_texture_env_dot3),                    GL,             2000 },
    { "GL_EXT_texture_filter_anisotropic",          o(EXT_texture_filter_anisotropic),          GL | ES1 | ES2, 1999 },
    { "GL_EXT_texture_format_BGRA8888",             o(dummy_true),                                   ES1 | ES2, 2005 },
+   { "GL_EXT_texture_rg",                          o(ARB_texture_rg),                                     ES2, 2011 },
    { "GL_EXT_read_format_bgra",                    o(dummy_true),                                   ES1 | ES2, 2009 },
    { "GL_EXT_texture_integer",                     o(EXT_texture_integer),                     GL,             2006 },
    { "GL_EXT_texture_lod_bias",                    o(dummy_true),                              GL | ES1,       1999 },

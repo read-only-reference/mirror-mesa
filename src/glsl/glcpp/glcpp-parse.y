@@ -213,7 +213,7 @@ expanded_line:
 		parser->new_line_number = $2;
 		ralloc_asprintf_rewrite_tail (&parser->output,
 					      &parser->output_length,
-					      "#line %" PRIiMAX,
+					      "#line %" PRIiMAX "\n",
 					      $2);
 	}
 |	LINE_EXPANDED integer_constant integer_constant NEWLINE {
@@ -223,7 +223,7 @@ expanded_line:
 		parser->new_source_number = $3;
 		ralloc_asprintf_rewrite_tail (&parser->output,
 					      &parser->output_length,
-					      "#line %" PRIiMAX " %" PRIiMAX,
+					      "#line %" PRIiMAX " %" PRIiMAX "\n",
 					      $2, $3);
 	}
 ;
@@ -1186,6 +1186,9 @@ glcpp_parser_create (const struct gl_extensions *extensions, int api)
 
 	   if (extensions->ARB_shader_bit_encoding)
 	      add_builtin_define(parser, "GL_ARB_shader_bit_encoding", 1);
+
+	   if (extensions->ARB_uniform_buffer_object)
+	      add_builtin_define(parser, "GL_ARB_uniform_buffer_object", 1);
 	}
 
 	language_version = 110;

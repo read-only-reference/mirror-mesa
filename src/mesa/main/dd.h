@@ -820,6 +820,12 @@ struct dd_function_table {
                                                   GLuint name);
    void (*DeleteSamplerObject)(struct gl_context *ctx,
                                struct gl_sampler_object *samp);
+
+   /**
+    * \name Return a timestamp in nanoseconds as defined by GL_ARB_timer_query.
+    * This should be equivalent to glGetInteger64v(GL_TIMESTAMP);
+    */
+   uint64_t (*GetTimestamp)(struct gl_context *ctx);
 };
 
 
@@ -1046,6 +1052,14 @@ typedef struct {
                                                                   GLsizei primcount, GLint basevertex,
                                                                   GLuint baseinstance);
    void (GLAPIENTRYP DrawTransformFeedback)(GLenum mode, GLuint name);
+   void (GLAPIENTRYP DrawTransformFeedbackStream)(GLenum mode, GLuint name,
+                                                  GLuint stream);
+   void (GLAPIENTRYP DrawTransformFeedbackInstanced)(GLenum mode, GLuint name,
+                                                     GLsizei primcount);
+   void (GLAPIENTRYP DrawTransformFeedbackStreamInstanced)(GLenum mode,
+                                                           GLuint name,
+                                                           GLuint stream,
+                                                           GLsizei primcount);
    /*@}*/
 
    /**

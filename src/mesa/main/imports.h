@@ -99,21 +99,13 @@ typedef union { GLfloat f; GLint i; } fi_type;
 /***
  *** SQRTF: single-precision square root
  ***/
-#if 0 /* _mesa_sqrtf() not accurate enough - temporarily disabled */
-#  define SQRTF(X)  _mesa_sqrtf(X)
-#else
-#  define SQRTF(X)  (float) sqrt((float) (X))
-#endif
+#define SQRTF(X)  (float) sqrt((float) (X))
 
 
 /***
  *** INV_SQRTF: single-precision inverse square root
  ***/
-#if 0
-#define INV_SQRTF(X) _mesa_inv_sqrt(X)
-#else
-#define INV_SQRTF(X) (1.0F / SQRTF(X))  /* this is faster on a P4 */
-#endif
+#define INV_SQRTF(X) (1.0F / SQRTF(X))
 
 
 /**
@@ -127,7 +119,7 @@ typedef union { GLfloat f; GLint i; } fi_type;
 #define asinf(f) ((float) asin(f))
 #define atan2f(x,y) ((float) atan2(x,y))
 #define atanf(f) ((float) atan(f))
-#define cielf(f) ((float) ciel(f))
+#define ceilf(f) ((float) ceil(f))
 #define cosf(f) ((float) cos(f))
 #define coshf(f) ((float) cosh(f))
 #define expf(f) ((float) exp(f))
@@ -566,21 +558,6 @@ _mesa_exec_free( void *addr );
 extern void *
 _mesa_realloc( void *oldBuffer, size_t oldSize, size_t newSize );
 
-extern void
-_mesa_memset16( unsigned short *dst, unsigned short val, size_t n );
-
-extern double
-_mesa_sqrtd(double x);
-
-extern float
-_mesa_sqrtf(float x);
-
-extern float
-_mesa_inv_sqrtf(float x);
-
-extern void
-_mesa_init_sqrt_table(void);
-
 
 #ifndef FFS_DEFINED
 #define FFS_DEFINED 1
@@ -644,16 +621,6 @@ _mesa_vsnprintf(char *str, size_t size, const char *fmt, va_list arg);
 #if defined(_MSC_VER) && !defined(snprintf)
 #define snprintf _snprintf
 #endif
-
-
-/**
- * On Mingw32 we need to use __mingw_fprintf() to parse formats such
- * as "0x%llx", and possibly others
- */
-#ifdef __MINGW32__
-#define fprintf __mingw_fprintf
-#endif
-
 
 
 #ifdef __cplusplus

@@ -116,11 +116,6 @@
 #define PKT3_PREDICATE(x)               (((x) >> 0) & 0x1)
 #define PKT0(index, count) (PKT_TYPE_S(0) | PKT0_BASE_INDEX_S(index) | PKT_COUNT_S(count))
 
-#define RADEON_CP_PACKET3_COMPUTE_MODE 0x00000002
-
-/*Evergreen Compute packet3*/
-#define PKT3C(op, count, predicate) (PKT_TYPE_S(3) | PKT3_IT_OPCODE_S(op) | PKT_COUNT_S(count) | PKT3_PREDICATE(predicate) | RADEON_CP_PACKET3_COMPUTE_MODE)
-
 /* Registers */
 #define R_0084FC_CP_STRMOUT_CNTL		     0x000084FC
 #define   S_0084FC_OFFSET_UPDATE_DONE(x)		(((x) & 0x1) << 0)
@@ -482,6 +477,8 @@
 #define   S_028808_MODE(x)                             (((x) & 0x7) << 4)
 #define   G_028808_MODE(x)                             (((x) >> 4) & 0x7)
 #define   C_028808_MODE                                0xFFFFFF8F
+#define     V_028808_CB_DISABLE				0
+#define     V_028808_CB_NORMAL				1
 #define   S_028808_ROP3(x)                             (((x) & 0xFF) << 16)
 #define   G_028808_ROP3(x)                             (((x) >> 16) & 0xFF)
 #define   C_028808_ROP3                                0xFF00FFFF

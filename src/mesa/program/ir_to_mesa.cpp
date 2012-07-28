@@ -334,7 +334,7 @@ dst_reg address_reg = dst_reg(PROGRAM_ADDRESS, WRITEMASK_X);
 static int
 swizzle_for_size(int size)
 {
-   int size_swizzles[4] = {
+   static const int size_swizzles[4] = {
       MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_X, SWIZZLE_X, SWIZZLE_X),
       MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_Y, SWIZZLE_Y, SWIZZLE_Y),
       MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_Y, SWIZZLE_Z, SWIZZLE_Z),
@@ -2157,8 +2157,6 @@ ir_to_mesa_visitor::visit(ir_return *ir)
 void
 ir_to_mesa_visitor::visit(ir_discard *ir)
 {
-   struct gl_fragment_program *fp = (struct gl_fragment_program *)this->prog;
-
    if (ir->condition) {
       ir->condition->accept(this);
       this->result.negate = ~this->result.negate;
@@ -2166,8 +2164,6 @@ ir_to_mesa_visitor::visit(ir_discard *ir)
    } else {
       emit(ir, OPCODE_KIL_NV);
    }
-
-   fp->UsesKill = GL_TRUE;
 }
 
 void
@@ -3118,6 +3114,12 @@ _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader)
 	 printf("%s\n", shader->InfoLog);
       }
    }
+
+   if (shader->UniformBlocks)
+      ralloc_free(shader->UniformBlocks);
+   shader->NumUniformBlocks = state->num_uniform_blocks;
+   shader->UniformBlocks = state->uniform_blocks;
+   ralloc_steal(shader, shader->UniformBlocks);
 
    /* Retain any live IR, but trash the rest. */
    reparent_ir(shader->ir, shader->ir);

@@ -128,6 +128,7 @@ check_valid_to_render(struct gl_context *ctx, const char *function)
 
 #if FEATURE_GL
    case API_OPENGL:
+   case API_OPENGL_CORE:
       {
          const struct gl_shader_program *vsProg =
             ctx->Shader.CurrentVertexProgram;
@@ -272,7 +273,8 @@ _mesa_validate_DrawElements(struct gl_context *ctx,
 			    GLenum mode, GLsizei count, GLenum type,
 			    const GLvoid *indices, GLint basevertex)
 {
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH_WITH_RETVAL(ctx, GL_FALSE);
+   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
+   FLUSH_CURRENT(ctx, 0);
 
    if (count <= 0) {
       if (count < 0)
@@ -330,7 +332,8 @@ _mesa_validate_MultiDrawElements(struct gl_context *ctx,
 {
    unsigned i;
 
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH_WITH_RETVAL(ctx, GL_FALSE);
+   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
+   FLUSH_CURRENT(ctx, 0);
 
    for (i = 0; i < primcount; i++) {
       if (count[i] <= 0) {
@@ -398,7 +401,8 @@ _mesa_validate_DrawRangeElements(struct gl_context *ctx, GLenum mode,
 				 GLsizei count, GLenum type,
 				 const GLvoid *indices, GLint basevertex)
 {
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH_WITH_RETVAL(ctx, GL_FALSE);
+   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
+   FLUSH_CURRENT(ctx, 0);
 
    if (count <= 0) {
       if (count < 0)
@@ -456,7 +460,8 @@ GLboolean
 _mesa_validate_DrawArrays(struct gl_context *ctx,
 			  GLenum mode, GLint start, GLsizei count)
 {
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH_WITH_RETVAL(ctx, GL_FALSE);
+   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
+   FLUSH_CURRENT(ctx, 0);
 
    if (count <= 0) {
       if (count < 0)
@@ -484,7 +489,8 @@ GLboolean
 _mesa_validate_DrawArraysInstanced(struct gl_context *ctx, GLenum mode, GLint first,
                                    GLsizei count, GLsizei numInstances)
 {
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH_WITH_RETVAL(ctx, GL_FALSE);
+   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
+   FLUSH_CURRENT(ctx, 0);
 
    if (count <= 0) {
       if (count < 0)
@@ -528,7 +534,8 @@ _mesa_validate_DrawElementsInstanced(struct gl_context *ctx,
                                      const GLvoid *indices, GLsizei numInstances,
                                      GLint basevertex)
 {
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH_WITH_RETVAL(ctx, GL_FALSE);
+   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
+   FLUSH_CURRENT(ctx, 0);
 
    if (count <= 0) {
       if (count < 0)
@@ -587,25 +594,42 @@ _mesa_validate_DrawElementsInstanced(struct gl_context *ctx,
 GLboolean
 _mesa_validate_DrawTransformFeedback(struct gl_context *ctx,
                                      GLenum mode,
-                                     struct gl_transform_feedback_object *obj)
+                                     struct gl_transform_feedback_object *obj,
+                                     GLuint stream,
+                                     GLsizei numInstances)
 {
-   ASSERT_OUTSIDE_BEGIN_END_AND_FLUSH_WITH_RETVAL(ctx, GL_FALSE);
+   ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
+   FLUSH_CURRENT(ctx, 0);
 
-   if (!_mesa_valid_prim_mode(ctx, mode, "glDrawTransformFeedback")) {
+   if (!_mesa_valid_prim_mode(ctx, mode, "glDrawTransformFeedback*(mode)")) {
       return GL_FALSE;
    }
 
    if (!obj) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glDrawTransformFeedback(name)");
+      _mesa_error(ctx, GL_INVALID_VALUE, "glDrawTransformFeedback*(name)");
       return GL_FALSE;
    }
 
    if (!obj->EndedAnytime) {
-      _mesa_error(ctx, GL_INVALID_OPERATION, "glDrawTransformFeedback");
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glDrawTransformFeedback*");
       return GL_FALSE;
    }
 
-   if (!check_valid_to_render(ctx, "glDrawTransformFeedback")) {
+   if (stream >= ctx->Const.MaxVertexStreams) {
+      _mesa_error(ctx, GL_INVALID_VALUE,
+                  "glDrawTransformFeedbackStream*(index>=MaxVertexStream)");
+      return GL_FALSE;
+   }
+
+   if (numInstances <= 0) {
+      if (numInstances < 0)
+         _mesa_error(ctx, GL_INVALID_VALUE,
+                     "glDrawTransformFeedback*Instanced(numInstances=%d)",
+                     numInstances);
+      return GL_FALSE;
+   }
+
+   if (!check_valid_to_render(ctx, "glDrawTransformFeedback*")) {
       return GL_FALSE;
    }
 

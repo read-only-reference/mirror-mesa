@@ -26,7 +26,8 @@
 #include "r600.h"
 
 /* flag to indicate a resource is to be used as a transfer so should not be tiled */
-#define R600_RESOURCE_FLAG_TRANSFER     PIPE_RESOURCE_FLAG_DRV_PRIV
+#define R600_RESOURCE_FLAG_TRANSFER		PIPE_RESOURCE_FLAG_DRV_PRIV
+#define R600_RESOURCE_FLAG_FLUSHED_DEPTH	(PIPE_RESOURCE_FLAG_DRV_PRIV << 1)
 
 struct r600_transfer {
 	struct pipe_transfer		transfer;
@@ -58,7 +59,8 @@ struct r600_resource_texture {
 	unsigned			size;
 	unsigned			tile_type;
 	bool				is_depth;
-	unsigned			dirty_db;
+	bool				is_rat;
+	unsigned			dirty_db_mask; /* each bit says if that miplevel is dirty */
 	struct r600_resource_texture    *stencil; /* Stencil is in a separate buffer on Evergreen. */
 	struct r600_resource_texture	*flushed_depth_texture;
 	boolean				is_flushing_texture;
@@ -87,10 +89,9 @@ static INLINE struct r600_resource *r600_resource(struct pipe_resource *r)
 	return (struct r600_resource*)r;
 }
 
-void r600_init_flushed_depth_texture(struct pipe_context *ctx,
-				     struct pipe_resource *texture);
-void r600_texture_depth_flush(struct pipe_context *ctx,
-			      struct pipe_resource *texture);
+bool r600_init_flushed_depth_texture(struct pipe_context *ctx,
+				     struct pipe_resource *texture,
+				     struct r600_resource_texture **staging);
 
 /* r600_texture.c texture transfer functions. */
 struct pipe_transfer* r600_texture_get_transfer(struct pipe_context *ctx,

@@ -355,6 +355,7 @@ void st_init_extensions(struct st_context *st)
       { o(ARB_shadow),                       PIPE_CAP_TEXTURE_SHADOW_MAP               },
       { o(ARB_texture_non_power_of_two),     PIPE_CAP_NPOT_TEXTURES                    },
       { o(ARB_transform_feedback2),          PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME       },
+      { o(ARB_transform_feedback3),          PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME       },
 
       { o(EXT_blend_equation_separate),      PIPE_CAP_BLEND_EQUATION_SEPARATE          },
       { o(EXT_draw_buffers2),                PIPE_CAP_INDEP_BLEND_ENABLE               },
@@ -578,6 +579,7 @@ void st_init_extensions(struct st_context *st)
 
       /* Extensions that only depend on GLSL 1.3. */
       ctx->Extensions.ARB_conservative_depth = GL_TRUE;
+      ctx->Extensions.ARB_shader_bit_encoding = GL_TRUE;
    } else {
       /* Optional integer support for GLSL 1.2. */
       if (screen->get_shader_param(screen, PIPE_SHADER_VERTEX,
@@ -593,10 +595,6 @@ void st_init_extensions(struct st_context *st)
    if (!ctx->Mesa_DXTn && !st_get_s3tc_override()) {
       ctx->Extensions.EXT_texture_compression_s3tc = GL_FALSE;
       ctx->Extensions.S3_s3tc = GL_FALSE;
-   }
-
-   if (ctx->Const.NativeIntegers) {
-      ctx->Extensions.ARB_shader_bit_encoding = GL_TRUE;
    }
 
    if (screen->get_shader_param(screen, PIPE_SHADER_GEOMETRY,
@@ -639,4 +637,14 @@ void st_init_extensions(struct st_context *st)
 
    if (ctx->Const.MaxDualSourceDrawBuffers > 0)
       ctx->Extensions.ARB_blend_func_extended = GL_TRUE;
+
+   if (screen->get_param(screen, PIPE_CAP_TIMER_QUERY) &&
+       screen->get_param(screen, PIPE_CAP_QUERY_TIMESTAMP)) {
+      ctx->Extensions.ARB_timer_query = GL_TRUE;
+   }
+
+   if (ctx->Extensions.ARB_transform_feedback2 &&
+       ctx->Extensions.ARB_draw_instanced) {
+      ctx->Extensions.ARB_transform_feedback_instanced = GL_TRUE;
+   }
 }

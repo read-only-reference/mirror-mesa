@@ -44,7 +44,7 @@ intelInitExtensions(struct gl_context *ctx)
 
    ctx->Extensions.ARB_draw_elements_base_vertex = true;
    ctx->Extensions.ARB_explicit_attrib_location = true;
-   if (ctx->API == API_OPENGL)
+   if (_mesa_is_desktop_gl(ctx))
       ctx->Extensions.ARB_framebuffer_object = true;
    ctx->Extensions.ARB_half_float_pixel = true;
    ctx->Extensions.ARB_map_buffer_range = true;
@@ -91,6 +91,7 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.OES_EGL_image = true;
 #endif
    ctx->Extensions.OES_draw_texture = true;
+   ctx->Extensions.OES_compressed_ETC1_RGB8_texture = true;
 
    if (intel->gen >= 6)
       ctx->Const.GLSLVersion = 130;
@@ -103,7 +104,7 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.EXT_transform_feedback = true;
 
    if (intel->gen >= 6) {
-      ctx->Extensions.ARB_blend_func_extended = true;
+      ctx->Extensions.ARB_blend_func_extended = !driQueryOptionb(&intel->optionCache, "disable_blend_func_extended");
       ctx->Extensions.ARB_draw_buffers_blend = true;
    }
 

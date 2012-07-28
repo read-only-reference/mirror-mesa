@@ -712,7 +712,7 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    /* g0 header. */
    mlen = 1;
 
-   if (ir->shadow_comparitor && ir->op != ir_txd) {
+   if (ir->shadow_comparitor) {
       for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
 	 emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen + i), coordinate);
 	 coordinate.reg_offset++;
@@ -931,7 +931,7 @@ fs_visitor::emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    }
    mlen += vector_elements * reg_width;
 
-   if (ir->shadow_comparitor && ir->op != ir_txd) {
+   if (ir->shadow_comparitor) {
       mlen = MAX2(mlen, header_present + 4 * reg_width);
 
       ir->shadow_comparitor->accept(this);
@@ -1038,7 +1038,7 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       base_mrf--;
    }
 
-   if (ir->shadow_comparitor && ir->op != ir_txd) {
+   if (ir->shadow_comparitor) {
       ir->shadow_comparitor->accept(this);
       emit(BRW_OPCODE_MOV, fs_reg(MRF, base_mrf + mlen), this->result);
       mlen += reg_width;
@@ -1163,19 +1163,6 @@ fs_visitor::visit(ir_texture *ir)
    int sampler = _mesa_get_sampler_uniform_value(ir->sampler, prog, &fp->Base);
    sampler = fp->Base.SamplerUnits[sampler];
 
-   /* Our hardware doesn't have a sample_d_c message, so shadow compares
-    * for textureGrad/TXD need to be emulated with instructions.
-    */
-   bool hw_compare_supported = ir->op != ir_txd;
-   if (ir->shadow_comparitor && !hw_compare_supported) {
-      assert(c->key.tex.compare_funcs[sampler] != GL_NONE);
-      /* No need to even sample for GL_ALWAYS or GL_NEVER...bail early */
-      if (c->key.tex.compare_funcs[sampler] == GL_ALWAYS)
-	 return swizzle_result(ir, fs_reg(1.0f), sampler);
-      else if (c->key.tex.compare_funcs[sampler] == GL_NEVER)
-	 return swizzle_result(ir, fs_reg(0.0f), sampler);
-   }
-
    if (ir->coordinate)
       ir->coordinate->accept(this);
    fs_reg coordinate = this->result;
@@ -1223,11 +1210,6 @@ fs_visitor::visit(ir_texture *ir)
 	 this->result = fs_reg(this, ir->type);
 	 return;
       }
-
-      c->prog_data.param_convert[c->prog_data.nr_params] =
-	 PARAM_NO_CONVERT;
-      c->prog_data.param_convert[c->prog_data.nr_params + 1] =
-	 PARAM_NO_CONVERT;
 
       scale_x = fs_reg(UNIFORM, c->prog_data.nr_params);
       scale_y = fs_reg(UNIFORM, c->prog_data.nr_params + 1);
@@ -1325,47 +1307,8 @@ fs_visitor::visit(ir_texture *ir)
 
    inst->sampler = sampler;
 
-   if (ir->shadow_comparitor) {
-      if (hw_compare_supported) {
-	 inst->shadow_compare = true;
-      } else {
-	 ir->shadow_comparitor->accept(this);
-	 fs_reg ref = this->result;
-
-	 fs_reg value = dst;
-	 dst = fs_reg(this, glsl_type::vec4_type);
-
-	 /* FINISHME: This needs to be done pre-filtering. */
-
-	 uint32_t conditional = 0;
-	 switch (c->key.tex.compare_funcs[sampler]) {
-	 /* GL_ALWAYS and GL_NEVER were handled at the top of the function */
-	 case GL_LESS:     conditional = BRW_CONDITIONAL_L;   break;
-	 case GL_GREATER:  conditional = BRW_CONDITIONAL_G;   break;
-	 case GL_LEQUAL:   conditional = BRW_CONDITIONAL_LE;  break;
-	 case GL_GEQUAL:   conditional = BRW_CONDITIONAL_GE;  break;
-	 case GL_EQUAL:    conditional = BRW_CONDITIONAL_EQ;  break;
-	 case GL_NOTEQUAL: conditional = BRW_CONDITIONAL_NEQ; break;
-	 default: assert(!"Should not get here: bad shadow compare function");
-	 }
-
-	 /* Use conditional moves to load 0 or 1 as the result */
-	 this->current_annotation = "manual shadow comparison";
-	 for (int i = 0; i < 4; i++) {
-	    inst = emit(BRW_OPCODE_MOV, dst, fs_reg(0.0f));
-
-	    inst = emit(BRW_OPCODE_CMP, reg_null_f, ref, value);
-	    inst->conditional_mod = conditional;
-
-	    inst = emit(BRW_OPCODE_MOV, dst, fs_reg(1.0f));
-	    inst->predicated = true;
-
-	    dst.reg_offset++;
-	    value.reg_offset++;
-	 }
-	 dst.reg_offset = 0;
-      }
-   }
+   if (ir->shadow_comparitor)
+      inst->shadow_compare = true;
 
    swizzle_result(ir, dst, sampler);
 }
@@ -1452,7 +1395,6 @@ fs_visitor::visit(ir_discard *ir)
    assert(ir->condition == NULL); /* FINISHME */
 
    emit(FS_OPCODE_DISCARD);
-   kill_emitted = true;
 }
 
 void
@@ -2086,7 +2028,7 @@ fs_visitor::emit_fb_writes()
     *      thread message and on all dual-source messages."
     */
    if (intel->gen >= 6 &&
-       !this->kill_emitted &&
+       !this->fp->UsesKill &&
        !do_dual_src &&
        c->key.nr_color_regions == 1) {
       header_present = false;
@@ -2193,13 +2135,11 @@ fs_visitor::emit_fb_writes()
    }
 
    if (c->key.nr_color_regions == 0) {
-      if (c->key.alpha_test) {
-	 /* If the alpha test is enabled but there's no color buffer,
-	  * we still need to send alpha out the pipeline to our null
-	  * renderbuffer.
-	  */
-	 emit_color_write(0, 3, color_mrf);
-      }
+      /* Even if there's no color buffers enabled, we still need to send
+       * alpha out the pipeline to our null renderbuffer to support
+       * alpha-testing, alpha-to-coverage, and so on.
+       */
+      emit_color_write(0, 3, color_mrf);
 
       fs_inst *inst = emit(FS_OPCODE_FB_WRITE);
       inst->base_mrf = base_mrf;
@@ -2232,4 +2172,64 @@ fs_visitor::resolve_bool_comparison(ir_rvalue *rvalue, fs_reg *reg)
    fs_reg temp = fs_reg(this, glsl_type::bool_type);
    emit(BRW_OPCODE_AND, temp, *reg, fs_reg(1));
    *reg = temp;
+}
+
+fs_visitor::fs_visitor(struct brw_wm_compile *c, struct gl_shader_program *prog,
+                       struct brw_shader *shader)
+{
+   this->c = c;
+   this->p = &c->func;
+   this->brw = p->brw;
+   this->fp = (struct gl_fragment_program *)
+      prog->_LinkedShaders[MESA_SHADER_FRAGMENT]->Program;
+   this->prog = prog;
+   this->intel = &brw->intel;
+   this->ctx = &intel->ctx;
+   this->mem_ctx = ralloc_context(NULL);
+   this->shader = shader;
+   this->failed = false;
+   this->variable_ht = hash_table_ctor(0,
+                                       hash_table_pointer_hash,
+                                       hash_table_pointer_compare);
+
+   /* There's a question that appears to be left open in the spec:
+    * How do implicit dst conversions interact with the CMP
+    * instruction or conditional mods?  On gen6, the instruction:
+    *
+    * CMP null<d> src0<f> src1<f>
+    *
+    * will do src1 - src0 and compare that result as if it was an
+    * integer.  On gen4, it will do src1 - src0 as float, convert
+    * the result to int, and compare as int.  In between, it
+    * appears that it does src1 - src0 and does the compare in the
+    * execution type so dst type doesn't matter.
+    */
+   if (this->intel->gen > 4)
+      this->reg_null_cmp = reg_null_d;
+   else
+      this->reg_null_cmp = reg_null_f;
+
+   this->frag_depth = NULL;
+   memset(this->outputs, 0, sizeof(this->outputs));
+   this->first_non_payload_grf = 0;
+   this->max_grf = intel->gen >= 7 ? GEN7_MRF_HACK_START : BRW_MAX_GRF;
+
+   this->current_annotation = NULL;
+   this->base_ir = NULL;
+
+   this->virtual_grf_sizes = NULL;
+   this->virtual_grf_count = 0;
+   this->virtual_grf_array_size = 0;
+   this->virtual_grf_def = NULL;
+   this->virtual_grf_use = NULL;
+   this->live_intervals_valid = false;
+
+   this->force_uncompressed_stack = 0;
+   this->force_sechalf_stack = 0;
+}
+
+fs_visitor::~fs_visitor()
+{
+   ralloc_free(this->mem_ctx);
+   hash_table_dtor(this->variable_ht);
 }

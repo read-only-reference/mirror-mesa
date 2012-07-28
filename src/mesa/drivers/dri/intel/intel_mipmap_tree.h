@@ -138,6 +138,42 @@ struct intel_mipmap_level
    } *slice;
 };
 
+/**
+ * Enum for keeping track of the different MSAA layouts supported by Gen7.
+ */
+enum intel_msaa_layout
+{
+   /**
+    * Ordinary surface with no MSAA.
+    */
+   INTEL_MSAA_LAYOUT_NONE,
+
+   /**
+    * Interleaved Multisample Surface.  The additional samples are
+    * accommodated by scaling up the width and the height of the surface so
+    * that all the samples corresponding to a pixel are located at nearby
+    * memory locations.
+    */
+   INTEL_MSAA_LAYOUT_IMS,
+
+   /**
+    * Uncompressed Multisample Surface.  The surface is stored as a 2D array,
+    * with array slice n containing all pixel data for sample n.
+    */
+   INTEL_MSAA_LAYOUT_UMS,
+
+   /**
+    * Compressed Multisample Surface.  The surface is stored as in
+    * INTEL_MSAA_LAYOUT_UMS, but there is an additional buffer called the MCS
+    * (Multisample Control Surface) buffer.  Each pixel in the MCS buffer
+    * indicates the mapping from sample number to array slice.  This allows
+    * the common case (where all samples constituting a pixel have the same
+    * color value) to be stored efficiently by just using a single array
+    * slice.
+    */
+   INTEL_MSAA_LAYOUT_CMS,
+};
+
 struct intel_mipmap_tree
 {
    /* Effectively the key:
@@ -154,6 +190,9 @@ struct intel_mipmap_tree
     * MESA_FORMAT_Z32_FLOAT_X24S8, then mt->format will be
     * MESA_FORMAT_Z32_FLOAT, otherwise for MESA_FORMAT_S8_Z24 objects it will be
     * MESA_FORMAT_X8_Z24.
+    *
+    * For ETC1 textures, this is MESA_FORMAT_RGBX8888_REV if the hardware
+    * lacks support for ETC1. See @ref wraps_etc1.
     */
    gl_format format;
 
@@ -182,15 +221,9 @@ struct intel_mipmap_tree
    bool array_spacing_lod0;
 
    /**
-    * For MSAA buffers, there are two possible layouts:
-    * - Interleaved, in which the additional samples are accommodated
-    *   by scaling up the width and height of the surface.
-    * - Sliced, in which the surface is stored as a 2D array, with
-    *   array slice n containing all pixel data for sample n.
-    *
-    * This value is true if num_samples > 0 and the format is interleaved.
+    * MSAA layout used by this buffer.
     */
-   bool msaa_is_interleaved;
+   enum intel_msaa_layout msaa_layout;
 
    /* Derived from the above:
     */
@@ -209,6 +242,10 @@ struct intel_mipmap_tree
    /* The data is held here:
     */
    struct intel_region *region;
+
+   /* Offset into region bo where miptree starts:
+    */
+   uint32_t offset;
 
    /**
     * \brief HiZ miptree
@@ -242,6 +279,27 @@ struct intel_mipmap_tree
     */
    struct intel_mipmap_tree *stencil_mt;
 
+   /**
+    * \brief MCS miptree for multisampled textures.
+    *
+    * This miptree contains the "multisample control surface", which stores
+    * the necessary information to implement compressed MSAA on Gen7+
+    * (INTEL_MSAA_FORMAT_CMS).
+    */
+   struct intel_mipmap_tree *mcs_mt;
+
+   /**
+    * \brief The miptree contains RGBX data that was originally ETC1 data.
+    *
+    * On hardware that lacks support for ETC1 textures, we do the
+    * following on calls to glCompressedTexImage2D(GL_ETC1_RGB8_OES):
+    *   1. Create a miptree whose format is MESA_FORMAT_RGBX8888_REV with
+    *      the wraps_etc1 flag set.
+    *   2. Translate the ETC1 data into RGBX.
+    *   3. Store the RGBX data into the miptree and discard the ETC1 data.
+    */
+   bool wraps_etc1;
+
    /* These are also refcounted:
     */
    GLuint refcount;
@@ -259,7 +317,7 @@ struct intel_mipmap_tree *intel_miptree_create(struct intel_context *intel,
                                                GLuint depth0,
 					       bool expect_accelerated_upload,
                                                GLuint num_samples,
-                                               bool msaa_is_interleaved);
+                                               enum intel_msaa_layout msaa_layout);
 
 struct intel_mipmap_tree *
 intel_miptree_create_for_region(struct intel_context *intel,
@@ -353,6 +411,11 @@ intel_miptree_s8z24_gather(struct intel_context *intel,
                            struct intel_mipmap_tree *mt,
                            uint32_t level,
                            uint32_t layer);
+
+bool
+intel_miptree_alloc_mcs(struct intel_context *intel,
+                        struct intel_mipmap_tree *mt,
+                        GLuint num_samples);
 
 /**
  * \name Miptree HiZ functions

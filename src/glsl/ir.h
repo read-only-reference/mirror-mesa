@@ -453,13 +453,24 @@ public:
     *   - Vertex shader output: one of the values from \c gl_vert_result.
     *   - Fragment shader input: one of the values from \c gl_frag_attrib.
     *   - Fragment shader output: one of the values from \c gl_frag_result.
-    *   - Uniforms: Per-stage uniform slot number.
+    *   - Uniforms: Per-stage uniform slot number for default uniform block.
+    *   - Uniforms: Index within the uniform block definition for UBO members.
     *   - Other: This field is not currently used.
     *
     * If the variable is a uniform, shader input, or shader output, and the
     * slot has not been assigned, the value will be -1.
     */
    int location;
+
+   /**
+    * Uniform block number for uniforms.
+    *
+    * This index is into the shader's list of uniform blocks, not the
+    * linked program's merged list.
+    *
+    * If the variable is not in a uniform block, the value will be -1.
+    */
+   int uniform_block;
 
    /**
     * output index for dual source blending.
@@ -1016,7 +1027,7 @@ enum ir_expression_operation {
    /**
     * A sentinel marking the last of all operations.
     */
-   ir_last_opcode = ir_last_binop
+   ir_last_opcode = ir_quadop_vector
 };
 
 class ir_expression : public ir_rvalue {
@@ -1245,7 +1256,6 @@ public:
    {
       this->ir_type = ir_type_loop_jump;
       this->mode = mode;
-      this->loop = loop;
    }
 
    virtual ir_loop_jump *clone(void *mem_ctx, struct hash_table *) const;
@@ -1269,9 +1279,6 @@ public:
 
    /** Mode selector for the jump instruction. */
    enum jump_mode mode;
-private:
-   /** Loop containing this break instruction. */
-   ir_loop *loop;
 };
 
 /**
@@ -1345,7 +1352,8 @@ enum ir_texture_opcode {
 class ir_texture : public ir_rvalue {
 public:
    ir_texture(enum ir_texture_opcode op)
-      : op(op), projector(NULL), shadow_comparitor(NULL), offset(NULL)
+      : op(op), coordinate(NULL), projector(NULL), shadow_comparitor(NULL),
+        offset(NULL)
    {
       this->ir_type = ir_type_texture;
    }

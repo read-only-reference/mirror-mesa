@@ -22,15 +22,13 @@ CPP_SOURCES := \
 	AMDILDeviceInfo.cpp		\
 	AMDILEvergreenDevice.cpp	\
 	AMDILFrameLowering.cpp		\
-	AMDILInstrInfo.cpp		\
 	AMDILIntrinsicInfo.cpp		\
 	AMDILISelDAGToDAG.cpp		\
 	AMDILISelLowering.cpp		\
 	AMDILNIDevice.cpp		\
 	AMDILPeepholeOptimizer.cpp	\
-	AMDILRegisterInfo.cpp		\
 	AMDILSIDevice.cpp		\
-	AMDILSubtarget.cpp		\
+	AMDGPUSubtarget.cpp		\
 	AMDGPUTargetMachine.cpp		\
 	AMDGPUISelLowering.cpp		\
 	AMDGPUConvertToISA.cpp		\

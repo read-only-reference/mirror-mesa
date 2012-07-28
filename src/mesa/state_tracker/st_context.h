@@ -31,6 +31,7 @@
 #include "main/mtypes.h"
 #include "pipe/p_state.h"
 #include "state_tracker/st_api.h"
+#include "main/fbobject.h"
 
 struct bitmap_cache;
 struct blit_state;
@@ -81,7 +82,7 @@ struct st_context
    struct draw_stage *rastpos_stage;  /**< For glRasterPos */
    GLboolean clamp_frag_color_in_shader;
    GLboolean clamp_vert_color_in_shader;
-
+   boolean has_stencil_export; /**< can do shader stencil export? */
 
    /* On old libGL's for linux we need to invalidate the drawables
     * on glViewpport calls, this is set via a option.
@@ -117,6 +118,8 @@ struct st_context
       GLuint num_vertex_textures;
 
       GLuint poly_stipple[32];  /**< In OpenGL's bottom-to-top order */
+
+      GLuint fb_orientation;
    } state;
 
    char vendor[100];
@@ -236,7 +239,7 @@ void st_invalidate_state(struct gl_context * ctx, GLuint new_state);
 static INLINE GLuint
 st_fb_orientation(const struct gl_framebuffer *fb)
 {
-   if (fb && fb->Name == 0) {
+   if (fb && _mesa_is_winsys_fbo(fb)) {
       /* Drawing into a window (on-screen buffer).
        *
        * Negate Y scale to flip image vertically.

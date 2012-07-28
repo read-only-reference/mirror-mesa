@@ -102,12 +102,10 @@ int get_compute_resource_num(void);
 #define evergreen_mult_reg_set(res, index, array) evergreen_mult_reg_set_(res, index, array, sizeof(array))
 
 void evergreen_set_rat(struct r600_pipe_compute *pipe, int id, struct r600_resource* bo, int start, int size);
-void evergreen_set_lds(struct r600_pipe_compute *pipe, int num_lds, int size, int num_waves);
 void evergreen_set_gds(struct r600_pipe_compute *pipe, uint32_t addr, uint32_t size);
 void evergreen_set_export(struct r600_pipe_compute *pipe, struct r600_resource* bo, int offset, int size);
 void evergreen_set_loop_const(struct r600_pipe_compute *pipe, int id, int count, int init, int inc);
 void evergreen_set_tmp_ring(struct r600_pipe_compute *pipe, struct r600_resource* bo, int offset, int size, int se);
-void evergreen_set_vtx_resource(struct r600_pipe_compute *pipe, struct r600_resource* bo, int id, uint64_t offset, int writable);
 void evergreen_set_tex_resource(struct r600_pipe_compute *pipe, struct r600_pipe_sampler_view* view, int id);
 void evergreen_set_sampler_resource(struct r600_pipe_compute *pipe, struct compute_sampler_state *sampler, int id);
 void evergreen_set_const_cache(struct r600_pipe_compute *pipe, int cache_id, struct r600_resource* cbo, int size, int offset);
