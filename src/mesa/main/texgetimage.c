@@ -306,7 +306,8 @@ get_tex_rgba_uncompressed(struct gl_context *ctx, GLuint dimensions,
    GLuint img, row;
    GLfloat (*rgba)[4];
    GLuint (*rgba_uint)[4];
-   GLboolean is_integer = _mesa_is_format_integer_color(texImage->TexFormat);
+   GLboolean tex_is_integer = _mesa_is_format_integer_color(texImage->TexFormat);
+   GLboolean tex_is_uint = _mesa_is_format_unsigned(texImage->TexFormat);
 
    /* Allocate buffer for one row of texels */
    rgba = (GLfloat (*)[4]) malloc(4 * width * sizeof(GLfloat));
@@ -358,12 +359,19 @@ get_tex_rgba_uncompressed(struct gl_context *ctx, GLuint dimensions,
                                              width, height, format, type,
                                              img, row, 0);
 
-	    if (is_integer) {
+	    if (tex_is_integer) {
 	       _mesa_unpack_uint_rgba_row(texFormat, width, src, rgba_uint);
                if (rebaseFormat)
                   _mesa_rebase_rgba_uint(width, rgba_uint, rebaseFormat);
-	       _mesa_pack_rgba_span_int(ctx, width, rgba_uint,
-					format, type, dest);
+               if (tex_is_uint) {
+                  _mesa_pack_rgba_span_from_uints(ctx, width,
+                                                  (GLuint (*)[4]) rgba_uint,
+                                                  format, type, dest);
+               } else {
+                  _mesa_pack_rgba_span_from_ints(ctx, width,
+                                                 (GLint (*)[4]) rgba_uint,
+                                                 format, type, dest);
+               }
 	    } else {
 	       _mesa_unpack_rgba_row(texFormat, width, src, rgba);
                if (rebaseFormat)
@@ -634,6 +642,36 @@ _mesa_get_compressed_teximage(struct gl_context *ctx,
 }
 
 
+/**
+ * Validate the texture target enum supplied to glTexImage or
+ * glCompressedTexImage.
+ */
+static GLboolean
+legal_getteximage_target(struct gl_context *ctx, GLenum target)
+{
+   switch (target) {
+   case GL_TEXTURE_1D:
+   case GL_TEXTURE_2D:
+   case GL_TEXTURE_3D:
+      return GL_TRUE;
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_X_ARB:
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_Y_ARB:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y_ARB:
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_Z_ARB:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB:
+      return ctx->Extensions.ARB_texture_cube_map;
+   case GL_TEXTURE_RECTANGLE_NV:
+      return ctx->Extensions.NV_texture_rectangle;
+   case GL_TEXTURE_1D_ARRAY_EXT:
+   case GL_TEXTURE_2D_ARRAY_EXT:
+      return (ctx->Extensions.MESA_texture_array ||
+              ctx->Extensions.EXT_texture_array);
+   default:
+      return GL_FALSE;
+   }
+}
+
 
 /**
  * Do error checking for a glGetTexImage() call.
@@ -650,11 +688,12 @@ getteximage_error_check(struct gl_context *ctx, GLenum target, GLint level,
    const GLuint dimensions = (target == GL_TEXTURE_3D) ? 3 : 2;
    GLenum baseFormat, err;
 
-   if (maxLevels == 0) {
+   if (!legal_getteximage_target(ctx, target)) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexImage(target=0x%x)", target);
       return GL_TRUE;
    }
 
+   assert(maxLevels != 0);
    if (level < 0 || level >= maxLevels) {
       _mesa_error( ctx, GL_INVALID_VALUE, "glGetTexImage(level)" );
       return GL_TRUE;
@@ -668,7 +707,7 @@ getteximage_error_check(struct gl_context *ctx, GLenum target, GLint level,
 
    texObj = _mesa_get_current_tex_object(ctx, target);
 
-   if (!texObj || _mesa_is_proxy_texture(target)) {
+   if (!texObj) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetTexImage(target)");
       return GL_TRUE;
    }
@@ -812,22 +851,16 @@ getcompressedteximage_error_check(struct gl_context *ctx, GLenum target,
    const GLint maxLevels = _mesa_max_texture_levels(ctx, target);
    GLuint compressedSize;
 
-   if (maxLevels == 0) {
+   if (!legal_getteximage_target(ctx, target)) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glGetCompressedTexImage(target=0x%x)",
                   target);
       return GL_TRUE;
    }
 
+   assert(maxLevels != 0);
    if (level < 0 || level >= maxLevels) {
       _mesa_error(ctx, GL_INVALID_VALUE,
                   "glGetCompressedTexImageARB(bad level = %d)", level);
-      return GL_TRUE;
-   }
-
-   if (_mesa_is_proxy_texture(target)) {
-      _mesa_error(ctx, GL_INVALID_ENUM,
-                  "glGetCompressedTexImageARB(bad target = %s)",
-                  _mesa_lookup_enum_by_nr(target));
       return GL_TRUE;
    }
 

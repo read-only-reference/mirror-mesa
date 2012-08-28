@@ -33,8 +33,10 @@ _mesa_get_samplerobj(struct gl_context *ctx, GLuint unit)
 {
    if (ctx->Texture.Unit[unit].Sampler)
       return ctx->Texture.Unit[unit].Sampler;
-   else
+   else if (ctx->Texture.Unit[unit]._Current)
       return &ctx->Texture.Unit[unit]._Current->Sampler;
+   else
+      return NULL;
 }
 
 
@@ -77,5 +79,16 @@ _mesa_init_sampler_object_functions(struct dd_function_table *driver);
 extern void
 _mesa_init_sampler_object_dispatch(struct _glapi_table *disp);
 
+extern void GLAPIENTRY
+_mesa_BindSampler(GLuint unit, GLuint sampler);
+
+extern void GLAPIENTRY
+_mesa_GenSamplers(GLsizei count, GLuint *samplers);
+
+extern void GLAPIENTRY
+_mesa_DeleteSamplers(GLsizei count, const GLuint *samplers);
+
+extern void GLAPIENTRY
+_mesa_SamplerParameteri(GLuint sampler, GLenum pname, GLint param);
 
 #endif /* SAMPLEROBJ_H */

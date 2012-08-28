@@ -64,6 +64,7 @@ struct brw_wm_prog_key {
    GLuint stats_wm:1;
    GLuint flat_shade:1;
    GLuint nr_color_regions:5;
+   GLuint sample_alpha_to_coverage:1;
    GLuint render_to_fbo:1;
    GLuint clamp_fragment_color:1;
    GLuint line_aa:2;
@@ -480,5 +481,8 @@ bool do_wm_prog(struct brw_context *brw,
 		struct gl_shader_program *prog,
 		struct brw_fragment_program *fp,
 		struct brw_wm_prog_key *key);
+void brw_wm_debug_recompile(struct brw_context *brw,
+                            struct gl_shader_program *prog,
+                            const struct brw_wm_prog_key *key);
 
 #endif

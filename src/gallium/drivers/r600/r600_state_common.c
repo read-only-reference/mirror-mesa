@@ -27,10 +27,12 @@
 #include "r600_formats.h"
 #include "r600d.h"
 
-#include "util/u_blitter.h"
+#include "util/u_draw_quad.h"
 #include "util/u_upload_mgr.h"
 #include "tgsi/tgsi_parse.h"
 #include <byteswap.h>
+
+#define R600_PRIM_RECTANGLE_LIST PIPE_PRIM_MAX
 
 static void r600_emit_command_buffer(struct r600_context *rctx, struct r600_atom *atom)
 {
@@ -153,7 +155,8 @@ static bool r600_conv_pipe_prim(unsigned pprim, unsigned *prim)
 		-1,
 		-1,
 		-1,
-		-1
+		-1,
+		V_008958_DI_PT_RECTLIST
 	};
 
 	*prim = prim_conv[pprim];
@@ -165,18 +168,15 @@ static bool r600_conv_pipe_prim(unsigned pprim, unsigned *prim)
 }
 
 /* common state between evergreen and r600 */
-void r600_bind_blend_state(struct pipe_context *ctx, void *state)
+
+static void r600_bind_blend_state_internal(struct r600_context *rctx,
+		struct r600_pipe_blend *blend)
 {
-	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct r600_pipe_blend *blend = (struct r600_pipe_blend *)state;
 	struct r600_pipe_state *rstate;
 	bool update_cb = false;
 
-	if (state == NULL)
-		return;
 	rstate = &blend->rstate;
 	rctx->states[rstate->id] = rstate;
-	rctx->dual_src_blend = blend->dual_src_blend;
 	r600_context_pipe_state_set(rctx, rstate);
 
 	if (rctx->cb_misc_state.blend_colormask != blend->cb_target_mask) {
@@ -195,6 +195,22 @@ void r600_bind_blend_state(struct pipe_context *ctx, void *state)
 	if (update_cb) {
 		r600_atom_dirty(rctx, &rctx->cb_misc_state.atom);
 	}
+}
+
+void r600_bind_blend_state(struct pipe_context *ctx, void *state)
+{
+	struct r600_context *rctx = (struct r600_context *)ctx;
+	struct r600_pipe_blend *blend = (struct r600_pipe_blend *)state;
+
+	if (blend == NULL)
+		return;
+
+	rctx->blend = blend;
+	rctx->alpha_to_one = blend->alpha_to_one;
+	rctx->dual_src_blend = blend->dual_src_blend;
+
+	if (!rctx->blend_override)
+		r600_bind_blend_state_internal(rctx, blend);
 }
 
 void r600_set_blend_color(struct pipe_context *ctx,
@@ -320,6 +336,7 @@ void r600_bind_rs_state(struct pipe_context *ctx, void *state)
 	rctx->two_side = rs->two_side;
 	rctx->pa_sc_line_stipple = rs->pa_sc_line_stipple;
 	rctx->pa_cl_clip_cntl = rs->pa_cl_clip_cntl;
+	rctx->multisample_enable = rs->multisample_enable;
 
 	rctx->rasterizer = rs;
 
@@ -367,6 +384,74 @@ void r600_sampler_view_destroy(struct pipe_context *ctx,
 
 	pipe_resource_reference(&state->texture, NULL);
 	FREE(resource);
+}
+
+static void r600_bind_samplers(struct pipe_context *pipe,
+                               unsigned shader,
+			       unsigned start,
+			       unsigned count, void **states)
+{
+	struct r600_context *rctx = (struct r600_context *)pipe;
+	struct r600_textures_info *dst;
+	int seamless_cube_map = -1;
+	unsigned i;
+
+	assert(start == 0); /* XXX fix below */
+
+	switch (shader) {
+	case PIPE_SHADER_VERTEX:
+		dst = &rctx->vs_samplers;
+		break;
+	case PIPE_SHADER_FRAGMENT:
+		dst = &rctx->ps_samplers;
+		break;
+	default:
+		debug_error("bad shader in r600_bind_samplers()");
+		return;
+	}
+
+	memcpy(dst->samplers, states, sizeof(void*) * count);
+	dst->n_samplers = count;
+	dst->atom_sampler.num_dw = 0;
+
+	for (i = 0; i < count; i++) {
+		struct r600_pipe_sampler_state *sampler = states[i];
+
+		if (sampler == NULL) {
+			continue;
+		}
+		if (sampler->border_color_use) {
+			dst->atom_sampler.num_dw += 11;
+			rctx->flags |= R600_PARTIAL_FLUSH;
+		} else {
+			dst->atom_sampler.num_dw += 5;
+		}
+		seamless_cube_map = sampler->seamless_cube_map;
+	}
+	if (rctx->chip_class <= R700 && seamless_cube_map != -1 && seamless_cube_map != rctx->seamless_cube_map.enabled) {
+		/* change in TA_CNTL_AUX need a pipeline flush */
+		rctx->flags |= R600_PARTIAL_FLUSH;
+		rctx->seamless_cube_map.enabled = seamless_cube_map;
+		r600_atom_dirty(rctx, &rctx->seamless_cube_map.atom);
+	}
+	if (dst->atom_sampler.num_dw) {
+		r600_atom_dirty(rctx, &dst->atom_sampler);
+	}
+}
+
+void r600_bind_vs_samplers(struct pipe_context *ctx, unsigned count, void **states)
+{
+	r600_bind_samplers(ctx, PIPE_SHADER_VERTEX, 0, count, states);
+}
+
+void r600_bind_ps_samplers(struct pipe_context *ctx, unsigned count, void **states)
+{
+	r600_bind_samplers(ctx, PIPE_SHADER_FRAGMENT, 0, count, states);
+}
+
+void r600_delete_sampler(struct pipe_context *ctx, void *state)
+{
+	free(state);
 }
 
 void r600_delete_state(struct pipe_context *ctx, void *state)
@@ -490,11 +575,14 @@ void r600_sampler_views_dirty(struct r600_context *rctx,
 	}
 }
 
-void r600_set_sampler_views(struct r600_context *rctx,
-			    struct r600_textures_info *dst,
+void r600_set_sampler_views(struct pipe_context *pipe,
+			    unsigned shader,
+			    unsigned start,
 			    unsigned count,
 			    struct pipe_sampler_view **views)
 {
+	struct r600_context *rctx = (struct r600_context *) pipe;
+	struct r600_textures_info *dst;
 	struct r600_pipe_sampler_view **rviews = (struct r600_pipe_sampler_view **)views;
 	unsigned i;
 	/* This sets 1-bit for textures with index >= count. */
@@ -503,7 +591,23 @@ void r600_set_sampler_views(struct r600_context *rctx,
 	uint32_t new_mask = 0;
 
 	/* Set textures with index >= count to NULL. */
-	uint32_t remaining_mask = dst->views.enabled_mask & disable_mask;
+	uint32_t remaining_mask;
+
+	assert(start == 0); /* XXX fix below */
+
+	switch (shader) {
+	case PIPE_SHADER_VERTEX:
+		dst = &rctx->vs_samplers;
+		break;
+	case PIPE_SHADER_FRAGMENT:
+		dst = &rctx->ps_samplers;
+		break;
+	default:
+		debug_error("bad shader in r600_set_sampler_views()");
+		return;
+	}
+
+	remaining_mask = dst->views.enabled_mask & disable_mask;
 
 	while (remaining_mask) {
 		i = u_bit_scan(&remaining_mask);
@@ -518,13 +622,20 @@ void r600_set_sampler_views(struct r600_context *rctx,
 		}
 
 		if (rviews[i]) {
-			struct r600_resource_texture *rtex =
-				(struct r600_resource_texture*)rviews[i]->base.texture;
+			struct r600_texture *rtex =
+				(struct r600_texture*)rviews[i]->base.texture;
 
 			if (rtex->is_depth && !rtex->is_flushing_texture) {
-				dst->views.depth_texture_mask |= 1 << i;
+				dst->views.compressed_depthtex_mask |= 1 << i;
 			} else {
-				dst->views.depth_texture_mask &= ~(1 << i);
+				dst->views.compressed_depthtex_mask &= ~(1 << i);
+			}
+
+			/* Track compressed colorbuffers for Evergreen (Cayman doesn't need this). */
+			if (rctx->chip_class != CAYMAN && rtex->cmask_size && rtex->fmask_size) {
+				dst->views.compressed_colortex_mask |= 1 << i;
+			} else {
+				dst->views.compressed_colortex_mask &= ~(1 << i);
 			}
 
 			/* Changing from array to non-arrays textures and vice
@@ -532,7 +643,7 @@ void r600_set_sampler_views(struct r600_context *rctx,
 			if (rctx->chip_class <= R700 &&
 			    (rviews[i]->base.texture->target == PIPE_TEXTURE_1D_ARRAY ||
 			     rviews[i]->base.texture->target == PIPE_TEXTURE_2D_ARRAY) != dst->is_array_sampler[i]) {
-				dst->samplers_dirty = true;
+				r600_atom_dirty(rctx, &dst->atom_sampler);
 			}
 
 			pipe_sampler_view_reference((struct pipe_sampler_view **)&dst->views.views[i], views[i]);
@@ -547,7 +658,8 @@ void r600_set_sampler_views(struct r600_context *rctx,
 	dst->views.dirty_mask &= dst->views.enabled_mask;
 	dst->views.enabled_mask |= new_mask;
 	dst->views.dirty_mask |= new_mask;
-	dst->views.depth_texture_mask &= dst->views.enabled_mask;
+	dst->views.compressed_depthtex_mask &= dst->views.enabled_mask;
+	dst->views.compressed_colortex_mask &= dst->views.enabled_mask;
 
 	r600_sampler_views_dirty(rctx, &dst->views);
 }
@@ -583,7 +695,8 @@ static INLINE unsigned r600_shader_selector_key(struct pipe_context * ctx,
 
 	if (sel->type == PIPE_SHADER_FRAGMENT) {
 		key = rctx->two_side |
-				MIN2(sel->nr_ps_max_color_exports, rctx->nr_cbufs + rctx->dual_src_blend) << 1;
+		      ((rctx->alpha_to_one && rctx->multisample_enable && !rctx->cb0_is_integer) << 1) |
+		      (MIN2(sel->nr_ps_max_color_exports, rctx->nr_cbufs + rctx->dual_src_blend) << 2);
 	} else
 		key = 0;
 
@@ -920,23 +1033,36 @@ void r600_set_so_targets(struct pipe_context *ctx,
 	rctx->streamout_append_bitmask = append_bitmask;
 }
 
+void r600_set_sample_mask(struct pipe_context *pipe, unsigned sample_mask)
+{
+	struct r600_context *rctx = (struct r600_context*)pipe;
+
+	if (rctx->sample_mask.sample_mask == (uint16_t)sample_mask)
+		return;
+
+	rctx->sample_mask.sample_mask = sample_mask;
+	r600_atom_dirty(rctx, &rctx->sample_mask.atom);
+}
+
 static void r600_update_derived_state(struct r600_context *rctx)
 {
 	struct pipe_context * ctx = (struct pipe_context*)rctx;
-	unsigned ps_dirty = 0;
+	unsigned ps_dirty = 0, blend_override;
 
 	if (!rctx->blitter->running) {
-		/* Flush depth textures which need to be flushed. */
-		if (rctx->vs_samplers.views.depth_texture_mask) {
-			r600_flush_depth_textures(rctx, &rctx->vs_samplers.views);
+		/* Decompress textures if needed. */
+		if (rctx->vs_samplers.views.compressed_depthtex_mask) {
+			r600_decompress_depth_textures(rctx, &rctx->vs_samplers.views);
 		}
-		if (rctx->ps_samplers.views.depth_texture_mask) {
-			r600_flush_depth_textures(rctx, &rctx->ps_samplers.views);
+		if (rctx->ps_samplers.views.compressed_depthtex_mask) {
+			r600_decompress_depth_textures(rctx, &rctx->ps_samplers.views);
 		}
-	}
-
-	if (rctx->chip_class < EVERGREEN) {
-		r600_update_sampler_states(rctx);
+		if (rctx->vs_samplers.views.compressed_colortex_mask) {
+			r600_decompress_color_textures(rctx, &rctx->vs_samplers.views);
+		}
+		if (rctx->ps_samplers.views.compressed_colortex_mask) {
+			r600_decompress_color_textures(rctx, &rctx->ps_samplers.views);
+		}
 	}
 
 	r600_shader_select(ctx, rctx->ps_shader, &ps_dirty);
@@ -955,7 +1081,16 @@ static void r600_update_derived_state(struct r600_context *rctx)
 
 	if (ps_dirty)
 		r600_context_pipe_state_set(rctx, &rctx->ps_shader->current->rstate);
-		
+
+	blend_override = (rctx->dual_src_blend &&
+			rctx->ps_shader->current->nr_ps_color_outputs < 2);
+
+	if (blend_override != rctx->blend_override) {
+		rctx->blend_override = blend_override;
+		r600_bind_blend_state_internal(rctx,
+				blend_override ? rctx->no_blend : rctx->blend);
+	}
+
 	if (rctx->chip_class >= EVERGREEN) {
 		evergreen_update_dual_export_state(rctx);
 	} else {
@@ -978,6 +1113,7 @@ static unsigned r600_conv_prim_to_gs_out(unsigned mode)
 		V_028A6C_OUTPRIM_TYPE_TRISTRIP,
 		V_028A6C_OUTPRIM_TYPE_LINESTRIP,
 		V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		V_028A6C_OUTPRIM_TYPE_TRISTRIP,
 		V_028A6C_OUTPRIM_TYPE_TRISTRIP,
 		V_028A6C_OUTPRIM_TYPE_TRISTRIP
 	};
@@ -1010,6 +1146,13 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
 	}
 
 	r600_update_derived_state(rctx);
+
+	/* partial flush triggered by border color change */
+	if (rctx->flags & R600_PARTIAL_FLUSH) {
+		rctx->flags &= ~R600_PARTIAL_FLUSH;
+		r600_write_value(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		r600_write_value(cs, EVENT_TYPE(EVENT_TYPE_PS_PARTIAL_FLUSH) | EVENT_INDEX(4));
+	}
 
 	if (info.indexed) {
 		/* Initialize the index buffer struct. */
@@ -1133,12 +1276,87 @@ void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
 	/* Set the depth buffer as dirty. */
 	if (rctx->framebuffer.zsbuf) {
 		struct pipe_surface *surf = rctx->framebuffer.zsbuf;
-		struct r600_resource_texture *rtex = (struct r600_resource_texture *)surf->texture;
+		struct r600_texture *rtex = (struct r600_texture *)surf->texture;
 
-		rtex->dirty_db_mask |= 1 << surf->u.tex.level;
+		rtex->dirty_level_mask |= 1 << surf->u.tex.level;
+	}
+	if (rctx->compressed_cb_mask) {
+		struct pipe_surface *surf;
+		struct r600_texture *rtex;
+		unsigned mask = rctx->compressed_cb_mask;
+
+		do {
+			unsigned i = u_bit_scan(&mask);
+			surf = rctx->framebuffer.cbufs[i];
+			rtex = (struct r600_texture*)surf->texture;
+
+			rtex->dirty_level_mask |= 1 << surf->u.tex.level;
+
+		} while (mask);
 	}
 
 	pipe_resource_reference(&ib.buffer, NULL);
+}
+
+void r600_draw_rectangle(struct blitter_context *blitter,
+			 unsigned x1, unsigned y1, unsigned x2, unsigned y2, float depth,
+			 enum blitter_attrib_type type, const union pipe_color_union *attrib)
+{
+	struct r600_context *rctx = (struct r600_context*)util_blitter_get_pipe(blitter);
+	struct pipe_viewport_state viewport;
+	struct pipe_resource *buf = NULL;
+	unsigned offset = 0;
+	float *vb;
+
+	if (type == UTIL_BLITTER_ATTRIB_TEXCOORD) {
+		util_blitter_draw_rectangle(blitter, x1, y1, x2, y2, depth, type, attrib);
+		return;
+	}
+
+	/* Some operations (like color resolve on r6xx) don't work
+	 * with the conventional primitive types.
+	 * One that works is PT_RECTLIST, which we use here. */
+
+	/* setup viewport */
+	viewport.scale[0] = 1.0f;
+	viewport.scale[1] = 1.0f;
+	viewport.scale[2] = 1.0f;
+	viewport.scale[3] = 1.0f;
+	viewport.translate[0] = 0.0f;
+	viewport.translate[1] = 0.0f;
+	viewport.translate[2] = 0.0f;
+	viewport.translate[3] = 0.0f;
+	rctx->context.set_viewport_state(&rctx->context, &viewport);
+
+	/* Upload vertices. The hw rectangle has only 3 vertices,
+	 * I guess the 4th one is derived from the first 3.
+	 * The vertex specification should match u_blitter's vertex element state. */
+	u_upload_alloc(rctx->uploader, 0, sizeof(float) * 24, &offset, &buf, (void**)&vb);
+	vb[0] = x1;
+	vb[1] = y1;
+	vb[2] = depth;
+	vb[3] = 1;
+
+	vb[8] = x1;
+	vb[9] = y2;
+	vb[10] = depth;
+	vb[11] = 1;
+
+	vb[16] = x2;
+	vb[17] = y1;
+	vb[18] = depth;
+	vb[19] = 1;
+
+	if (attrib) {
+		memcpy(vb+4, attrib->f, sizeof(float)*4);
+		memcpy(vb+12, attrib->f, sizeof(float)*4);
+		memcpy(vb+20, attrib->f, sizeof(float)*4);
+	}
+
+	/* draw */
+	util_draw_vertex_buffer(&rctx->context, NULL, buf, offset,
+				R600_PRIM_RECTANGLE_LIST, 3, 2);
+	pipe_resource_reference(&buf, NULL);
 }
 
 void _r600_pipe_state_add_reg_bo(struct r600_context *ctx,

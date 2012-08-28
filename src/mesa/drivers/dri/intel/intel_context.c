@@ -188,12 +188,45 @@ intelGetString(struct gl_context * ctx, GLenum name)
 	 break;
       case PCI_CHIP_HASWELL_GT1:
       case PCI_CHIP_HASWELL_GT2:
+      case PCI_CHIP_HASWELL_GT2_PLUS:
+      case PCI_CHIP_HASWELL_SDV_GT1:
+      case PCI_CHIP_HASWELL_SDV_GT2:
+      case PCI_CHIP_HASWELL_SDV_GT2_PLUS:
+      case PCI_CHIP_HASWELL_ULT_GT1:
+      case PCI_CHIP_HASWELL_ULT_GT2:
+      case PCI_CHIP_HASWELL_ULT_GT2_PLUS:
+      case PCI_CHIP_HASWELL_CRW_GT1:
+      case PCI_CHIP_HASWELL_CRW_GT2:
+      case PCI_CHIP_HASWELL_CRW_GT2_PLUS:
 	 chipset = "Intel(R) Haswell Desktop";
 	 break;
       case PCI_CHIP_HASWELL_M_GT1:
       case PCI_CHIP_HASWELL_M_GT2:
-      case PCI_CHIP_HASWELL_M_ULT_GT2:
+      case PCI_CHIP_HASWELL_M_GT2_PLUS:
+      case PCI_CHIP_HASWELL_SDV_M_GT1:
+      case PCI_CHIP_HASWELL_SDV_M_GT2:
+      case PCI_CHIP_HASWELL_SDV_M_GT2_PLUS:
+      case PCI_CHIP_HASWELL_ULT_M_GT1:
+      case PCI_CHIP_HASWELL_ULT_M_GT2:
+      case PCI_CHIP_HASWELL_ULT_M_GT2_PLUS:
+      case PCI_CHIP_HASWELL_CRW_M_GT1:
+      case PCI_CHIP_HASWELL_CRW_M_GT2:
+      case PCI_CHIP_HASWELL_CRW_M_GT2_PLUS:
 	 chipset = "Intel(R) Haswell Mobile";
+	 break;
+      case PCI_CHIP_HASWELL_S_GT1:
+      case PCI_CHIP_HASWELL_S_GT2:
+      case PCI_CHIP_HASWELL_S_GT2_PLUS:
+      case PCI_CHIP_HASWELL_SDV_S_GT1:
+      case PCI_CHIP_HASWELL_SDV_S_GT2:
+      case PCI_CHIP_HASWELL_SDV_S_GT2_PLUS:
+      case PCI_CHIP_HASWELL_ULT_S_GT1:
+      case PCI_CHIP_HASWELL_ULT_S_GT2:
+      case PCI_CHIP_HASWELL_ULT_S_GT2_PLUS:
+      case PCI_CHIP_HASWELL_CRW_S_GT1:
+      case PCI_CHIP_HASWELL_CRW_S_GT2:
+      case PCI_CHIP_HASWELL_CRW_S_GT2_PLUS:
+	 chipset = "Intel(R) Haswell Server";
 	 break;
       default:
          chipset = "Unknown Intel Chipset";
@@ -208,19 +241,60 @@ intelGetString(struct gl_context * ctx, GLenum name)
    }
 }
 
+void
+intel_downsample_for_dri2_flush(struct intel_context *intel,
+                                __DRIdrawable *drawable)
+{
+   if (intel->gen < 6) {
+      /* MSAA is not supported, so don't waste time checking for
+       * a multisample buffer.
+       */
+      return;
+   }
+
+   struct gl_framebuffer *fb = drawable->driverPrivate;
+   struct intel_renderbuffer *rb;
+
+   /* Usually, only the back buffer will need to be downsampled. However,
+    * the front buffer will also need it if the user has rendered into it.
+    */
+   static const gl_buffer_index buffers[2] = {
+         BUFFER_BACK_LEFT,
+         BUFFER_FRONT_LEFT,
+   };
+
+   for (int i = 0; i < 2; ++i) {
+      rb = intel_get_renderbuffer(fb, buffers[i]);
+      if (rb == NULL || rb->mt == NULL)
+         continue;
+      intel_miptree_downsample(intel, rb->mt);
+   }
+}
+
 static void
 intel_flush_front(struct gl_context *ctx)
 {
    struct intel_context *intel = intel_context(ctx);
     __DRIcontext *driContext = intel->driContext;
+    __DRIdrawable *driDrawable = driContext->driDrawablePriv;
     __DRIscreen *const screen = intel->intelScreen->driScrnPriv;
 
     if (_mesa_is_winsys_fbo(ctx->DrawBuffer) && intel->front_buffer_dirty) {
       if (screen->dri2.loader->flushFrontBuffer != NULL &&
-          driContext->driDrawablePriv &&
-	  driContext->driDrawablePriv->loaderPrivate) {
-	 (*screen->dri2.loader->flushFrontBuffer)(driContext->driDrawablePriv,
-						  driContext->driDrawablePriv->loaderPrivate);
+          driDrawable &&
+          driDrawable->loaderPrivate) {
+
+         /* Downsample before flushing FAKE_FRONT_LEFT to FRONT_LEFT.
+          *
+          * This potentially downsamples both front and back buffer. It
+          * is unnecessary to downsample the back, but harms nothing except
+          * performance. And no one cares about front-buffer render
+          * performance.
+          */
+         intel_downsample_for_dri2_flush(intel, driDrawable);
+
+         screen->dri2.loader->flushFrontBuffer(driDrawable,
+                                               driDrawable->loaderPrivate);
 
 	 /* We set the dirty bit in intel_prepare_render() if we're
 	  * front buffer rendering once we get there.
@@ -394,7 +468,8 @@ static const struct dri_debug_control debug_control[] = {
    { "ioctl", DEBUG_IOCTL},
    { "blit",  DEBUG_BLIT},
    { "mip",   DEBUG_MIPTREE},
-   { "fall",  DEBUG_FALLBACKS},
+   { "fall",  DEBUG_PERF},
+   { "perf",  DEBUG_PERF},
    { "verb",  DEBUG_VERBOSE},
    { "bat",   DEBUG_BATCH},
    { "pix",   DEBUG_PIXEL},
@@ -425,7 +500,8 @@ intelInvalidateState(struct gl_context * ctx, GLuint new_state)
 {
     struct intel_context *intel = intel_context(ctx);
 
-   _swrast_InvalidateState(ctx, new_state);
+    if (ctx->swrast_context)
+       _swrast_InvalidateState(ctx, new_state);
    _vbo_InvalidateState(ctx, new_state);
 
    intel->NewGLState |= new_state;
@@ -494,7 +570,6 @@ intelInitDriverFunctions(struct dd_function_table *functions)
    intelInitTextureImageFuncs(functions);
    intelInitTextureSubImageFuncs(functions);
    intelInitTextureCopyImageFuncs(functions);
-   intelInitStateFuncs(functions);
    intelInitClearFuncs(functions);
    intelInitBufferFuncs(functions);
    intelInitPixelFuncs(functions);
@@ -622,15 +697,25 @@ intelInitContext(struct intel_context *intel,
       ctx->Const.MaxRenderbufferSize = 2048;
    }
 
-   /* Initialize the software rasterizer and helper modules. */
-   _swrast_CreateContext(ctx);
+   /* Initialize the software rasterizer and helper modules.
+    *
+    * As of GL 3.1 core, the gen4+ driver doesn't need the swrast context for
+    * software fallbacks (which we have to support on legacy GL to do weird
+    * glDrawPixels(), glBitmap(), and other functions).
+    */
+   if (intel->gen <= 3 || api != API_OPENGL_CORE) {
+      _swrast_CreateContext(ctx);
+   }
+
    _vbo_CreateContext(ctx);
-   _tnl_CreateContext(ctx);
-   _swsetup_CreateContext(ctx);
- 
-   /* Configure swrast to match hardware characteristics: */
-   _swrast_allow_pixel_fog(ctx, false);
-   _swrast_allow_vertex_fog(ctx, true);
+   if (ctx->swrast_context) {
+      _tnl_CreateContext(ctx);
+      _swsetup_CreateContext(ctx);
+
+      /* Configure swrast to match hardware characteristics: */
+      _swrast_allow_pixel_fog(ctx, false);
+      _swrast_allow_vertex_fog(ctx, true);
+   }
 
    _mesa_meta_init(ctx);
 
@@ -683,10 +768,12 @@ intelInitContext(struct intel_context *intel,
    intel->prim.primitive = ~0;
 
    /* Force all software fallbacks */
+#ifdef I915
    if (driQueryOptionb(&intel->optionCache, "no_rast")) {
       fprintf(stderr, "disabling 3D rasterization\n");
       intel->no_rast = 1;
    }
+#endif
 
    if (driQueryOptionb(&intel->optionCache, "always_flush_batch")) {
       fprintf(stderr, "flushing batchbuffer before/after each draw call\n");
@@ -706,6 +793,7 @@ intelDestroyContext(__DRIcontext * driContextPriv)
 {
    struct intel_context *intel =
       (struct intel_context *) driContextPriv->driverPrivate;
+   struct gl_context *ctx = &intel->ctx;
 
    assert(intel);               /* should never be null */
    if (intel) {
@@ -721,11 +809,14 @@ intelDestroyContext(__DRIcontext * driContextPriv)
 
       intel->vtbl.destroy(intel);
 
-      _swsetup_DestroyContext(&intel->ctx);
-      _tnl_DestroyContext(&intel->ctx);
+      if (ctx->swrast_context) {
+         _swsetup_DestroyContext(&intel->ctx);
+         _tnl_DestroyContext(&intel->ctx);
+      }
       _vbo_DestroyContext(&intel->ctx);
 
-      _swrast_DestroyContext(&intel->ctx);
+      if (ctx->swrast_context)
+         _swrast_DestroyContext(&intel->ctx);
       intel->Fallback = 0x0;      /* don't call _swrast_Flush later */
 
       intel_batchbuffer_free(intel);
@@ -893,14 +984,24 @@ intel_process_dri2_buffer(struct intel_context *intel,
    if (!rb)
       return;
 
+   unsigned num_samples = rb->Base.Base.NumSamples;
+
    /* We try to avoid closing and reopening the same BO name, because the first
     * use of a mapping of the buffer involves a bunch of page faulting which is
     * moderately expensive.
     */
-   if (rb->mt &&
-       rb->mt->region &&
-       rb->mt->region->name == buffer->name)
-      return;
+   if (num_samples == 0) {
+       if (rb->mt &&
+           rb->mt->region &&
+           rb->mt->region->name == buffer->name)
+          return;
+   } else {
+       if (rb->mt &&
+           rb->mt->singlesample_mt &&
+           rb->mt->singlesample_mt->region &&
+           rb->mt->singlesample_mt->region->name == buffer->name)
+          return;
+   }
 
    if (unlikely(INTEL_DEBUG & DEBUG_DRI)) {
       fprintf(stderr,
@@ -920,9 +1021,10 @@ intel_process_dri2_buffer(struct intel_context *intel,
    if (!region)
       return;
 
-   rb->mt = intel_miptree_create_for_region(intel,
-                                            GL_TEXTURE_2D,
-                                            intel_rb_format(rb),
-                                            region);
+   rb->mt = intel_miptree_create_for_dri2_buffer(intel,
+                                                 buffer->attachment,
+                                                 intel_rb_format(rb),
+                                                 num_samples,
+                                                 region);
    intel_region_release(&region);
 }

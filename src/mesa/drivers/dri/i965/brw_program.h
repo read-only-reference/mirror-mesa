@@ -31,7 +31,7 @@ struct brw_sampler_prog_key_data {
    /**
     * EXT_texture_swizzle and DEPTH_TEXTURE_MODE swizzles.
     */
-   uint16_t swizzles[BRW_MAX_TEX_UNIT];
+   uint16_t swizzles[MAX_SAMPLERS];
 
    uint16_t gl_clamp_mask[3];
 
@@ -45,5 +45,7 @@ struct brw_sampler_prog_key_data {
 void brw_populate_sampler_prog_key_data(struct gl_context *ctx,
 				        const struct gl_program *prog,
 				        struct brw_sampler_prog_key_data *key);
+bool brw_debug_recompile_sampler_key(const struct brw_sampler_prog_key_data *old_key,
+                                     const struct brw_sampler_prog_key_data *key);
 
 #endif

@@ -305,9 +305,8 @@ brw_predraw_resolve_buffers(struct brw_context *brw)
 
    /* Resolve the depth buffer's HiZ buffer. */
    depth_irb = intel_get_renderbuffer(ctx->DrawBuffer, BUFFER_DEPTH);
-   if (depth_irb && depth_irb->mt) {
+   if (depth_irb)
       intel_renderbuffer_resolve_hiz(intel, depth_irb);
-   }
 
    /* Resolve depth buffer of each enabled depth texture. */
    for (int i = 0; i < BRW_MAX_TEX_UNIT; i++) {
@@ -326,18 +325,28 @@ brw_predraw_resolve_buffers(struct brw_context *brw)
  * If the depth buffer was written to and if it has an accompanying HiZ
  * buffer, then mark that it needs a depth resolve.
  *
- * (In the future, this will also mark needed MSAA resolves).
+ * If the color buffer is a multisample window system buffer, then
+ * mark that it needs a downsample.
  */
 static void brw_postdraw_set_buffers_need_resolve(struct brw_context *brw)
 {
+   struct intel_context *intel = &brw->intel;
    struct gl_context *ctx = &brw->intel.ctx;
    struct gl_framebuffer *fb = ctx->DrawBuffer;
-   struct intel_renderbuffer *depth_irb =
-	 intel_get_renderbuffer(fb, BUFFER_DEPTH);
 
-   if (depth_irb && ctx->Depth.Mask) {
+   struct intel_renderbuffer *front_irb = NULL;
+   struct intel_renderbuffer *back_irb = intel_get_renderbuffer(fb, BUFFER_BACK_LEFT);
+   struct intel_renderbuffer *depth_irb = intel_get_renderbuffer(fb, BUFFER_DEPTH);
+
+   if (intel->is_front_buffer_rendering)
+      front_irb = intel_get_renderbuffer(fb, BUFFER_FRONT_LEFT);
+
+   if (front_irb)
+      intel_renderbuffer_set_needs_downsample(front_irb);
+   if (back_irb)
+      intel_renderbuffer_set_needs_downsample(back_irb);
+   if (depth_irb && ctx->Depth.Mask)
       intel_renderbuffer_set_needs_depth_resolve(depth_irb);
-   }
 }
 
 static int
@@ -423,8 +432,11 @@ static bool brw_try_draw_prims( struct gl_context *ctx,
     */
    brw_validate_textures( brw );
 
-   /* Resolves must occur after updating state and finalizing textures but
-    * before setting up any hardware state for this draw call.
+   intel_prepare_render(intel);
+
+   /* Resolves must occur after updating renderbuffers, updating context state,
+    * and finalizing textures but before setting up any hardware state for
+    * this draw call.
     */
    brw_predraw_resolve_buffers(brw);
 
@@ -445,8 +457,6 @@ static bool brw_try_draw_prims( struct gl_context *ctx,
     * Note this is where brw->vs->prog_data.inputs_read is calculated,
     * so can't access it earlier.
     */
-
-   intel_prepare_render(intel);
 
    for (i = 0; i < nr_prims; i++) {
       int estimated_max_prim_size;
@@ -481,12 +491,6 @@ retry:
       if (brw->state.dirty.brw) {
 	 intel->no_batch_wrap = true;
 	 brw_upload_state(brw);
-
-	 if (unlikely(brw->intel.Fallback)) {
-	    intel->no_batch_wrap = false;
-	    retval = false;
-	    goto out;
-	 }
       }
 
       if (intel->gen >= 7)
@@ -523,7 +527,6 @@ retry:
 
    if (intel->always_flush_batch)
       intel_batchbuffer_flush(intel);
- out:
 
    brw_state_cache_check_size(brw);
    brw_postdraw_set_buffers_need_resolve(brw);
@@ -541,7 +544,6 @@ void brw_draw_prims( struct gl_context *ctx,
 		     struct gl_transform_feedback_object *tfb_vertcount )
 {
    const struct gl_client_array **arrays = ctx->Array._DrawArrays;
-   bool retval;
 
    if (!_mesa_check_conditional_render(ctx))
       return;
@@ -568,20 +570,23 @@ void brw_draw_prims( struct gl_context *ctx,
       }
    }
 
-   /* Make a first attempt at drawing:
+   /* Do GL_SELECT and GL_FEEDBACK rendering using swrast, even though it
+    * won't support all the extensions we support.
     */
-   retval = brw_try_draw_prims(ctx, arrays, prim, nr_prims, ib, min_index, max_index);
-
-   /* Otherwise, we really are out of memory.  Pass the drawing
-    * command to the software tnl module and which will in turn call
-    * swrast to do the drawing.
-    */
-   if (!retval) {
-       _swsetup_Wakeup(ctx);
-       _tnl_wakeup(ctx);
+   if (ctx->RenderMode != GL_RENDER) {
+      perf_debug("%s render mode not supported in hardware\n",
+                 _mesa_lookup_enum_by_nr(ctx->RenderMode));
+      _swsetup_Wakeup(ctx);
+      _tnl_wakeup(ctx);
       _tnl_draw_prims(ctx, arrays, prim, nr_prims, ib, min_index, max_index);
+      return;
    }
 
+   /* Try drawing with the hardware, but don't do anything else if we can't
+    * manage it.  swrast doesn't support our featureset, so we can't fall back
+    * to it.
+    */
+   brw_try_draw_prims(ctx, arrays, prim, nr_prims, ib, min_index, max_index);
 }
 
 void brw_draw_init( struct brw_context *brw )

@@ -240,8 +240,11 @@ int r600_context_add_block(struct r600_context *ctx, const struct r600_reg *reg,
 /* R600/R700 configuration */
 static const struct r600_reg r600_config_reg_list[] = {
 	{R_008958_VGT_PRIMITIVE_TYPE, 0, 0},
+	{R_008B40_PA_SC_AA_SAMPLE_LOCS_2S, 0, 0},
+	{R_008B44_PA_SC_AA_SAMPLE_LOCS_4S, 0, 0},
+	{R_008B48_PA_SC_AA_SAMPLE_LOCS_8S_WD0, 0, 0},
+	{R_008B4C_PA_SC_AA_SAMPLE_LOCS_8S_WD1, 0, 0},
 	{R_008C04_SQ_GPR_RESOURCE_MGMT_1, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
-	{R_009508_TA_CNTL_AUX, REG_FLAG_ENABLE_ALWAYS | REG_FLAG_FLUSH_CHANGE, 0},
 };
 
 static const struct r600_reg r600_ctl_const_list[] = {
@@ -261,6 +264,7 @@ static const struct r600_reg r600_context_reg_list[] = {
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_0280C0_CB_COLOR0_TILE, REG_FLAG_NEED_BO, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
+	{R_028100_CB_COLOR0_MASK, 0, 0},
 	{R_028044_CB_COLOR1_BASE, REG_FLAG_NEED_BO|REG_FLAG_RV6XX_SBU, SURFACE_BASE_UPDATE_COLOR(1)},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_0280A4_CB_COLOR1_INFO, REG_FLAG_NEED_BO, 0},
@@ -270,6 +274,7 @@ static const struct r600_reg r600_context_reg_list[] = {
 	{R_0280E4_CB_COLOR1_FRAG, REG_FLAG_NEED_BO, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_0280C4_CB_COLOR1_TILE, REG_FLAG_NEED_BO, 0},
+	{R_028104_CB_COLOR1_MASK, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028048_CB_COLOR2_BASE, REG_FLAG_NEED_BO|REG_FLAG_RV6XX_SBU, SURFACE_BASE_UPDATE_COLOR(2)},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
@@ -280,6 +285,7 @@ static const struct r600_reg r600_context_reg_list[] = {
 	{R_0280E8_CB_COLOR2_FRAG, REG_FLAG_NEED_BO, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_0280C8_CB_COLOR2_TILE, REG_FLAG_NEED_BO, 0},
+	{R_028108_CB_COLOR2_MASK, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_02804C_CB_COLOR3_BASE, REG_FLAG_NEED_BO|REG_FLAG_RV6XX_SBU, SURFACE_BASE_UPDATE_COLOR(3)},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
@@ -290,6 +296,7 @@ static const struct r600_reg r600_context_reg_list[] = {
 	{R_0280EC_CB_COLOR3_FRAG, REG_FLAG_NEED_BO, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_0280CC_CB_COLOR3_TILE, REG_FLAG_NEED_BO, 0},
+	{R_02810C_CB_COLOR3_MASK, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028050_CB_COLOR4_BASE, REG_FLAG_NEED_BO|REG_FLAG_RV6XX_SBU, SURFACE_BASE_UPDATE_COLOR(4)},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
@@ -300,6 +307,7 @@ static const struct r600_reg r600_context_reg_list[] = {
 	{R_0280F0_CB_COLOR4_FRAG, REG_FLAG_NEED_BO, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_0280D0_CB_COLOR4_TILE, REG_FLAG_NEED_BO, 0},
+	{R_028110_CB_COLOR4_MASK, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028054_CB_COLOR5_BASE, REG_FLAG_NEED_BO|REG_FLAG_RV6XX_SBU, SURFACE_BASE_UPDATE_COLOR(5)},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
@@ -310,6 +318,7 @@ static const struct r600_reg r600_context_reg_list[] = {
 	{R_0280F4_CB_COLOR5_FRAG, REG_FLAG_NEED_BO, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_0280D4_CB_COLOR5_TILE, REG_FLAG_NEED_BO, 0},
+	{R_028114_CB_COLOR5_MASK, 0, 0},
 	{R_028058_CB_COLOR6_BASE, REG_FLAG_NEED_BO|REG_FLAG_RV6XX_SBU, SURFACE_BASE_UPDATE_COLOR(6)},
 	{R_0280B8_CB_COLOR6_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028078_CB_COLOR6_SIZE, 0, 0},
@@ -318,6 +327,7 @@ static const struct r600_reg r600_context_reg_list[] = {
 	{R_0280F8_CB_COLOR6_FRAG, REG_FLAG_NEED_BO, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_0280D8_CB_COLOR6_TILE, REG_FLAG_NEED_BO, 0},
+	{R_028118_CB_COLOR6_MASK, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_02805C_CB_COLOR7_BASE, REG_FLAG_NEED_BO|REG_FLAG_RV6XX_SBU, SURFACE_BASE_UPDATE_COLOR(7)},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
@@ -326,6 +336,7 @@ static const struct r600_reg r600_context_reg_list[] = {
 	{R_02809C_CB_COLOR7_VIEW, 0, 0},
 	{R_0280FC_CB_COLOR7_FRAG, REG_FLAG_NEED_BO, 0},
 	{R_0280DC_CB_COLOR7_TILE, REG_FLAG_NEED_BO, 0},
+	{R_02811C_CB_COLOR7_MASK, 0, 0},
 	{R_028120_CB_CLEAR_RED, 0, 0},
 	{R_028124_CB_CLEAR_GREEN, 0, 0},
 	{R_028128_CB_CLEAR_BLUE, 0, 0},
@@ -359,6 +370,7 @@ static const struct r600_reg r600_context_reg_list[] = {
 	{R_028A6C_VGT_GS_OUT_PRIM_TYPE, 0, 0},
 	{R_028D24_DB_HTILE_SURFACE, 0, 0},
 	{R_028D34_DB_PREFETCH_LIMIT, 0, 0},
+	{R_028D44_DB_ALPHA_TO_MASK, 0, 0},
 	{R_028204_PA_SC_WINDOW_SCISSOR_TL, 0, 0},
 	{R_028208_PA_SC_WINDOW_SCISSOR_BR, 0, 0},
 	{R_028250_PA_SC_VPORT_SCISSOR_0_TL, 0, 0},
@@ -377,6 +389,8 @@ static const struct r600_reg r600_context_reg_list[] = {
 	{R_028A04_PA_SU_POINT_MINMAX, 0, 0},
 	{R_028A08_PA_SU_LINE_CNTL, 0, 0},
 	{R_028A0C_PA_SC_LINE_STIPPLE, 0, 0},
+	{R_028C00_PA_SC_LINE_CNTL, 0, 0},
+	{R_028C04_PA_SC_AA_CONFIG, 0, 0},
 	{R_028C08_PA_SU_VTX_CNTL, 0, 0},
 	{R_028DF8_PA_SU_POLY_OFFSET_DB_FMT_CNTL, 0, 0},
 	{R_028DFC_PA_SU_POLY_OFFSET_CLAMP, 0, 0},
@@ -504,40 +518,9 @@ static const struct r600_reg r600_context_reg_list[] = {
 	{R_028408_VGT_INDX_OFFSET, 0, 0},
 	{R_02840C_VGT_MULTI_PRIM_IB_RESET_INDX, 0, 0},
 	{R_028A94_VGT_MULTI_PRIM_IB_RESET_EN, 0, 0},
+	{R_028C1C_PA_SC_AA_SAMPLE_LOCS_MCTX, 0, 0},
+	{R_028C20_PA_SC_AA_SAMPLE_LOCS_8S_WD1_MCTX, 0, 0},
 };
-
-/* SHADER SAMPLER R600/R700/EG/CM */
-int r600_state_sampler_init(struct r600_context *ctx, uint32_t offset)
-{
-	struct r600_reg r600_shader_sampler[] = {
-		{R_03C000_SQ_TEX_SAMPLER_WORD0_0, 0, 0},
-		{R_03C004_SQ_TEX_SAMPLER_WORD1_0, 0, 0},
-		{R_03C008_SQ_TEX_SAMPLER_WORD2_0, 0, 0},
-	};
-	unsigned nreg = Elements(r600_shader_sampler);
-
-	for (int i = 0; i < nreg; i++) {
-		r600_shader_sampler[i].offset += offset;
-	}
-	return r600_context_add_block(ctx, r600_shader_sampler, nreg, PKT3_SET_SAMPLER, R600_SAMPLER_OFFSET);
-}
-
-/* SHADER SAMPLER BORDER R600/R700 */
-static int r600_state_sampler_border_init(struct r600_context *ctx, uint32_t offset)
-{
-	struct r600_reg r600_shader_sampler_border[] = {
-		{R_00A400_TD_PS_SAMPLER0_BORDER_RED, 0, 0},
-		{R_00A404_TD_PS_SAMPLER0_BORDER_GREEN, 0, 0},
-		{R_00A408_TD_PS_SAMPLER0_BORDER_BLUE, 0, 0},
-		{R_00A40C_TD_PS_SAMPLER0_BORDER_ALPHA, 0, 0},
-	};
-	unsigned nreg = Elements(r600_shader_sampler_border);
-
-	for (int i = 0; i < nreg; i++) {
-		r600_shader_sampler_border[i].offset += offset;
-	}
-	return r600_context_add_block(ctx, r600_shader_sampler_border, nreg, PKT3_SET_CONFIG_REG, R600_CONFIG_REG_OFFSET);
-}
 
 static int r600_loop_const_init(struct r600_context *ctx, uint32_t offset)
 {
@@ -630,32 +613,6 @@ int r600_context_init(struct r600_context *ctx)
 				   Elements(r600_ctl_const_list), PKT3_SET_CTL_CONST, R600_CTL_CONST_OFFSET);
 	if (r)
 		goto out_err;
-
-	/* PS SAMPLER BORDER */
-	for (int j = 0, offset = 0; j < 18; j++, offset += 0x10) {
-		r = r600_state_sampler_border_init(ctx, offset);
-		if (r)
-			goto out_err;
-	}
-
-	/* VS SAMPLER BORDER */
-	for (int j = 0, offset = 0x200; j < 18; j++, offset += 0x10) {
-		r = r600_state_sampler_border_init(ctx, offset);
-		if (r)
-			goto out_err;
-	}
-	/* PS SAMPLER */
-	for (int j = 0, offset = 0; j < 18; j++, offset += 0xC) {
-		r = r600_state_sampler_init(ctx, offset);
-		if (r)
-			goto out_err;
-	}
-	/* VS SAMPLER */
-	for (int j = 0, offset = 0xD8; j < 18; j++, offset += 0xC) {
-		r = r600_state_sampler_init(ctx, offset);
-		if (r)
-			goto out_err;
-	}
 
 	/* PS loop const */
 	r600_loop_const_init(ctx, 0);
@@ -836,89 +793,6 @@ void r600_context_pipe_state_set(struct r600_context *ctx, struct r600_pipe_stat
 	}
 }
 
-void r600_context_pipe_state_set_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned offset)
-{
-	struct r600_range *range;
-	struct r600_block *block;
-	int i;
-	int dirty;
-
-	range = &ctx->range[CTX_RANGE_ID(offset)];
-	block = range->blocks[CTX_BLOCK_ID(offset)];
-	if (state == NULL) {
-		block->status &= ~(R600_BLOCK_STATUS_ENABLED | R600_BLOCK_STATUS_DIRTY);
-		LIST_DELINIT(&block->list);
-		LIST_DELINIT(&block->enable_list);
-		return;
-	}
-	dirty = block->status & R600_BLOCK_STATUS_DIRTY;
-
-	for (i = 0; i < 3; i++) {
-		if (block->reg[i] != state->regs[i].value) {
-			block->reg[i] = state->regs[i].value;
-			dirty |= R600_BLOCK_STATUS_DIRTY;
-		}
-	}
-
-	if (dirty)
-		r600_context_dirty_block(ctx, block, dirty, 2);
-}
-
-static inline void r600_context_pipe_state_set_sampler_border(struct r600_context *ctx, struct r600_pipe_state *state, unsigned offset)
-{
-	struct r600_range *range;
-	struct r600_block *block;
-	int i;
-	int dirty;
-
-	range = &ctx->range[CTX_RANGE_ID(offset)];
-	block = range->blocks[CTX_BLOCK_ID(offset)];
-	if (state == NULL) {
-		block->status &= ~(R600_BLOCK_STATUS_ENABLED | R600_BLOCK_STATUS_DIRTY);
-		LIST_DELINIT(&block->list);
-		LIST_DELINIT(&block->enable_list);
-		return;
-	}
-	if (state->nregs <= 3) {
-		return;
-	}
-	dirty = block->status & R600_BLOCK_STATUS_DIRTY;
-	for (i = 0; i < 4; i++) {
-		if (block->reg[i] != state->regs[i + 3].value) {
-			block->reg[i] = state->regs[i + 3].value;
-			dirty |= R600_BLOCK_STATUS_DIRTY;
-		}
-	}
-
-	/* We have to flush the shaders before we change the border color
-	 * registers, or previous draw commands that haven't completed yet
-	 * will end up using the new border color. */
-	if (dirty & R600_BLOCK_STATUS_DIRTY)
-		r600_context_ps_partial_flush(ctx);
-	if (dirty)
-		r600_context_dirty_block(ctx, block, dirty, 3);
-}
-
-void r600_context_pipe_state_set_ps_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id)
-{
-	unsigned offset;
-
-	offset = R_03C000_SQ_TEX_SAMPLER_WORD0_0 + 12*id;
-	r600_context_pipe_state_set_sampler(ctx, state, offset);
-	offset = R_00A400_TD_PS_SAMPLER0_BORDER_RED + 16*id;
-	r600_context_pipe_state_set_sampler_border(ctx, state, offset);
-}
-
-void r600_context_pipe_state_set_vs_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id)
-{
-	unsigned offset;
-
-	offset = R_03C000_SQ_TEX_SAMPLER_WORD0_0 + 12*(id + 18);
-	r600_context_pipe_state_set_sampler(ctx, state, offset);
-	offset = R_00A600_TD_VS_SAMPLER0_BORDER_RED + 16*id;
-	r600_context_pipe_state_set_sampler_border(ctx, state, offset);
-}
-
 /**
  * @param pkt_flags should be set to RADEON_CP_PACKET3_COMPUTE_MODE if this
  * block will be used for compute shaders.
@@ -1091,6 +965,13 @@ void r600_context_flush(struct r600_context *ctx, unsigned flags)
 	r600_atom_dirty(ctx, &ctx->alphatest_state.atom);
 	r600_atom_dirty(ctx, &ctx->cb_misc_state.atom);
 	r600_atom_dirty(ctx, &ctx->db_misc_state.atom);
+	/* reemit sampler, will only matter if atom_sampler.num_dw != 0 */
+	r600_atom_dirty(ctx, &ctx->vs_samplers.atom_sampler);
+	r600_atom_dirty(ctx, &ctx->ps_samplers.atom_sampler);
+	if (ctx->chip_class <= R700) {
+		r600_atom_dirty(ctx, &ctx->seamless_cube_map.atom);
+	}
+	r600_atom_dirty(ctx, &ctx->sample_mask.atom);
 
 	ctx->vertex_buffer_state.dirty_mask = ctx->vertex_buffer_state.enabled_mask;
 	r600_vertex_buffers_dirty(ctx);

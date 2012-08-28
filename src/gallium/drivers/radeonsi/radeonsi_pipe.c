@@ -37,6 +37,7 @@
 #include "util/u_pack_color.h"
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
+#include "util/u_simple_shaders.h"
 #include "util/u_upload_mgr.h"
 #include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
@@ -116,7 +117,7 @@ static struct r600_fence *r600_create_fence(struct r600_context *rctx)
 	pipe_reference_init(&fence->reference, 1);
 
 	rscreen->fences.data[fence->index] = 0;
-	r600_context_emit_fence(rctx, rscreen->fences.bo, fence->index, 1);
+	si_context_emit_fence(rctx, rscreen->fences.bo, fence->index, 1);
 
 	/* Create a dummy BO so that fence_finish without a timeout can sleep waiting for completion */
 	fence->sleep_bo = si_resource_create_custom(&rctx->screen->screen, PIPE_USAGE_STAGING, 1);
@@ -148,7 +149,7 @@ void radeonsi_flush(struct pipe_context *ctx, struct pipe_fence_handle **fence,
 		ctx->render_condition(ctx, NULL, 0);
 	}
 
-	r600_context_flush(rctx, flags);
+	si_context_flush(rctx, flags);
 
 	/* Re-enable render condition. */
 	if (render_cond) {
@@ -171,6 +172,9 @@ static void r600_destroy_context(struct pipe_context *context)
 {
 	struct r600_context *rctx = (struct r600_context *)context;
 
+	if (rctx->dummy_pixel_shader) {
+		rctx->context.delete_fs_state(&rctx->context, rctx->dummy_pixel_shader);
+	}
 	rctx->context.delete_depth_stencil_alpha_state(&rctx->context, rctx->custom_dsa_flush);
 	util_unreference_framebuffer_state(&rctx->framebuffer);
 
@@ -202,15 +206,13 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	rctx->family = rscreen->family;
 	rctx->chip_class = rscreen->chip_class;
 
-	r600_init_blit_functions(rctx);
+	si_init_blit_functions(rctx);
 	r600_init_query_functions(rctx);
 	r600_init_context_resource_functions(rctx);
-	r600_init_surface_functions(rctx);
+	si_init_surface_functions(rctx);
 
 	rctx->context.create_video_decoder = vl_create_decoder;
 	rctx->context.create_video_buffer = vl_video_buffer_create;
-
-	r600_init_common_atoms(rctx);
 
 	switch (rctx->chip_class) {
 	case TAHITI:
@@ -247,9 +249,13 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		return NULL;
 	}
 
-	LIST_INITHEAD(&rctx->dirty_states);
+	si_get_backend_mask(rctx); /* this emits commands and must be last */
 
-	r600_get_backend_mask(rctx); /* this emits commands and must be last */
+	rctx->dummy_pixel_shader =
+		util_make_fragment_cloneinput_shader(&rctx->context, 0,
+						     TGSI_SEMANTIC_GENERIC,
+						     TGSI_INTERPOLATE_CONSTANT);
+	rctx->context.bind_fs_state(&rctx->context, rctx->dummy_pixel_shader);
 
 	return &rctx->context;
 }
@@ -340,6 +346,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 0;
 
 	/* Stream output. */
+#if 0
 	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
 		return debug_get_bool_option("R600_STREAMOUT", FALSE) ? 4 : 0;
 	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
@@ -347,6 +354,12 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
 	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
 		return 16*4;
+#endif
+	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
+	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
+	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
+	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
+		return 0;
 
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:

@@ -198,7 +198,7 @@ radeon_mipmap_tree* radeon_miptree_create(radeonContextPtr rmesa,
 	mt->mesaFormat = mesaFormat;
 	mt->refcount = 1;
 	mt->target = target;
-	mt->faces = (target == GL_TEXTURE_CUBE_MAP) ? 6 : 1;
+	mt->faces = _mesa_num_tex_faces(target);
 	mt->baseLevel = baseLevel;
 	mt->numLevels = numLevels;
 	mt->width0 = width0;
@@ -249,7 +249,7 @@ void radeon_miptree_unreference(radeon_mipmap_tree **ptr)
  * @param[out] pminLod minimal LOD
  * @param[out] pmaxLod maximal LOD
  */
-static void calculate_min_max_lod(struct gl_texture_object *tObj,
+static void calculate_min_max_lod(struct gl_sampler_object *samp, struct gl_texture_object *tObj,
 				       unsigned *pminLod, unsigned *pmaxLod)
 {
 	int minLod, maxLod;
@@ -260,15 +260,15 @@ static void calculate_min_max_lod(struct gl_texture_object *tObj,
 	case GL_TEXTURE_2D:
 	case GL_TEXTURE_3D:
 	case GL_TEXTURE_CUBE_MAP:
-		if (tObj->Sampler.MinFilter == GL_NEAREST || tObj->Sampler.MinFilter == GL_LINEAR) {
+		if (samp->MinFilter == GL_NEAREST || samp->MinFilter == GL_LINEAR) {
 			/* GL_NEAREST and GL_LINEAR only care about GL_TEXTURE_BASE_LEVEL.
 			*/
 			minLod = maxLod = tObj->BaseLevel;
 		} else {
-			minLod = tObj->BaseLevel + (GLint)(tObj->Sampler.MinLod);
+			minLod = tObj->BaseLevel + (GLint)(samp->MinLod);
 			minLod = MAX2(minLod, tObj->BaseLevel);
 			minLod = MIN2(minLod, tObj->MaxLevel);
-			maxLod = tObj->BaseLevel + (GLint)(tObj->Sampler.MaxLod + 0.5);
+			maxLod = tObj->BaseLevel + (GLint)(samp->MaxLod + 0.5);
 			maxLod = MIN2(maxLod, tObj->MaxLevel);
 			maxLod = MIN2(maxLod, tObj->Image[0][minLod]->MaxLog2 + minLod);
 			maxLod = MAX2(maxLod, minLod); /* need at least one level */
@@ -536,17 +536,19 @@ static radeon_mipmap_tree * get_biggest_matching_miptree(radeonTexObj *texObj,
  * If individual images are stored in different mipmap trees
  * use the mipmap tree that has the most of the correct data.
  */
-int radeon_validate_texture_miptree(struct gl_context * ctx, struct gl_texture_object *texObj)
+int radeon_validate_texture_miptree(struct gl_context * ctx,
+				    struct gl_sampler_object *samp,
+				    struct gl_texture_object *texObj)
 {
 	radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
 	radeonTexObj *t = radeon_tex_obj(texObj);
 	radeon_mipmap_tree *dst_miptree;
 
-	if (t->validated || t->image_override) {
+	if (samp == &texObj->Sampler && (t->validated || t->image_override)) {
 		return GL_TRUE;
 	}
 
-	calculate_min_max_lod(&t->base, &t->minLod, &t->maxLod);
+	calculate_min_max_lod(samp, &t->base, &t->minLod, &t->maxLod);
 
 	radeon_print(RADEON_TEXTURE, RADEON_NORMAL,
 			"%s: Validating texture %p now, minLod = %d, maxLod = %d\n",
@@ -567,7 +569,7 @@ int radeon_validate_texture_miptree(struct gl_context * ctx, struct gl_texture_o
 			"%s: Using miptree %p\n", __FUNCTION__, t->mt);
 	}
 
-	const unsigned faces = texObj->Target == GL_TEXTURE_CUBE_MAP ? 6 : 1;
+	const unsigned faces = _mesa_num_tex_faces(texObj->Target);
 	unsigned face, level;
 	radeon_texture_image *img;
 	/* Validate only the levels that will actually be used during rendering */

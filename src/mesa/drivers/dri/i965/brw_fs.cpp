@@ -954,11 +954,22 @@ fs_visitor::calculate_urb_setup()
    } else {
       /* FINISHME: The sf doesn't map VS->FS inputs for us very well. */
       for (unsigned int i = 0; i < VERT_RESULT_MAX; i++) {
+         /* Point size is packed into the header, not as a general attribute */
+         if (i == VERT_RESULT_PSIZ)
+            continue;
+
 	 if (c->key.vp_outputs_written & BITFIELD64_BIT(i)) {
 	    int fp_index = _mesa_vert_result_to_frag_attrib((gl_vert_result) i);
 
+	    /* The back color slot is skipped when the front color is
+	     * also written to.  In addition, some slots can be
+	     * written in the vertex shader and not read in the
+	     * fragment shader.  So the register number must always be
+	     * incremented, mapped or not.
+	     */
 	    if (fp_index >= 0)
-	       urb_setup[fp_index] = urb_next++;
+	       urb_setup[fp_index] = urb_next;
+            urb_next++;
 	 }
       }
 
@@ -968,7 +979,7 @@ fs_visitor::calculate_urb_setup()
        *
        * See compile_sf_prog() for more info.
        */
-      if (brw->fragment_program->Base.InputsRead & BITFIELD64_BIT(FRAG_ATTRIB_PNTC))
+      if (fp->Base.InputsRead & BITFIELD64_BIT(FRAG_ATTRIB_PNTC))
          urb_setup[FRAG_ATTRIB_PNTC] = urb_next++;
    }
 
@@ -1214,9 +1225,11 @@ fs_visitor::setup_pull_constants()
 	    continue;
 
 	 fs_reg dst = fs_reg(this, glsl_type::float_type);
+	 fs_reg index = fs_reg((unsigned)SURF_INDEX_FRAG_CONST_BUFFER);
+	 fs_reg offset = fs_reg((unsigned)(((uniform_nr -
+					     pull_uniform_base) * 4) & ~15));
 	 fs_inst *pull = new(mem_ctx) fs_inst(FS_OPCODE_PULL_CONSTANT_LOAD,
-					      dst);
-	 pull->offset = ((uniform_nr - pull_uniform_base) * 4) & ~15;
+					      dst, index, offset);
 	 pull->ir = inst->ir;
 	 pull->annotation = inst->annotation;
 	 pull->base_mrf = 14;
@@ -1374,6 +1387,11 @@ fs_visitor::propagate_constants()
 		  scan_inst->src[0].imm.f = 1.0f / scan_inst->src[0].imm.f;
 		  progress = true;
 	       }
+	       break;
+
+            case FS_OPCODE_PULL_CONSTANT_LOAD:
+	       scan_inst->src[i] = inst->src[0];
+	       progress = true;
 	       break;
 
 	    default:
@@ -2044,9 +2062,17 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
 	       struct gl_shader_program *prog)
 {
    struct intel_context *intel = &brw->intel;
+   bool start_busy = false;
+   float start_time = 0;
 
    if (!prog)
       return false;
+
+   if (unlikely(INTEL_DEBUG & DEBUG_PERF)) {
+      start_busy = (intel->batch.last_bo &&
+                    drm_intel_bo_busy(intel->batch.last_bo));
+      start_time = get_time();
+   }
 
    struct brw_shader *shader =
      (brw_shader *) prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
@@ -2078,10 +2104,24 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
       c->dispatch_width = 16;
       fs_visitor v2(c, prog, shader);
       v2.import_uniforms(&v);
-      v2.run();
+      if (!v2.run()) {
+         perf_debug("16-wide shader failed to compile, falling back to "
+                    "8-wide at a 10-20%% performance cost: %s", v2.fail_msg);
+      }
    }
 
    c->prog_data.dispatch_width = 8;
+
+   if (unlikely(INTEL_DEBUG & DEBUG_PERF)) {
+      if (shader->compiled_once)
+         brw_wm_debug_recompile(brw, prog, &c->key);
+      shader->compiled_once = true;
+
+      if (start_busy && !drm_intel_bo_busy(intel->batch.last_bo)) {
+         perf_debug("FS compile took %.03f ms and stalled the GPU\n",
+                    (get_time() - start_time) * 1000);
+      }
+   }
 
    return true;
 }
@@ -2090,6 +2130,7 @@ bool
 brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
 {
    struct brw_context *brw = brw_context(ctx);
+   struct intel_context *intel = &brw->intel;
    struct brw_wm_prog_key key;
 
    if (!prog->_LinkedShaders[MESA_SHADER_FRAGMENT])
@@ -2102,34 +2143,50 @@ brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
 
    memset(&key, 0, sizeof(key));
 
-   if (fp->UsesKill)
-      key.iz_lookup |= IZ_PS_KILL_ALPHATEST_BIT;
+   if (intel->gen < 6) {
+      if (fp->UsesKill)
+         key.iz_lookup |= IZ_PS_KILL_ALPHATEST_BIT;
 
-   if (fp->Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_DEPTH))
-      key.iz_lookup |= IZ_PS_COMPUTES_DEPTH_BIT;
+      if (fp->Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_DEPTH))
+         key.iz_lookup |= IZ_PS_COMPUTES_DEPTH_BIT;
 
-   /* Just assume depth testing. */
-   key.iz_lookup |= IZ_DEPTH_TEST_ENABLE_BIT;
-   key.iz_lookup |= IZ_DEPTH_WRITE_ENABLE_BIT;
+      /* Just assume depth testing. */
+      key.iz_lookup |= IZ_DEPTH_TEST_ENABLE_BIT;
+      key.iz_lookup |= IZ_DEPTH_WRITE_ENABLE_BIT;
+   }
 
-   key.vp_outputs_written |= BITFIELD64_BIT(FRAG_ATTRIB_WPOS);
+   if (prog->Name != 0)
+      key.proj_attrib_mask = 0xffffffff;
+
+   if (intel->gen < 6)
+      key.vp_outputs_written |= BITFIELD64_BIT(FRAG_ATTRIB_WPOS);
+
    for (int i = 0; i < FRAG_ATTRIB_MAX; i++) {
       if (!(fp->Base.InputsRead & BITFIELD64_BIT(i)))
 	 continue;
 
-      key.proj_attrib_mask |= 1 << i;
+      if (prog->Name == 0)
+         key.proj_attrib_mask |= 1 << i;
 
-      int vp_index = _mesa_vert_result_to_frag_attrib((gl_vert_result) i);
+      if (intel->gen < 6) {
+         int vp_index = _mesa_vert_result_to_frag_attrib((gl_vert_result) i);
 
-      if (vp_index >= 0)
-	 key.vp_outputs_written |= BITFIELD64_BIT(vp_index);
+         if (vp_index >= 0)
+            key.vp_outputs_written |= BITFIELD64_BIT(vp_index);
+      }
    }
 
    key.clamp_fragment_color = true;
 
-   for (int i = 0; i < BRW_MAX_TEX_UNIT; i++) {
-      /* FINISHME: depth compares might use (0,0,0,W) for example */
-      key.tex.swizzles[i] = SWIZZLE_XYZW;
+   for (int i = 0; i < MAX_SAMPLERS; i++) {
+      if (fp->Base.ShadowSamplers & (1 << i)) {
+         /* Assume DEPTH_TEXTURE_MODE is the default: X, X, X, 1 */
+         key.tex.swizzles[i] =
+            MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_X, SWIZZLE_X, SWIZZLE_ONE);
+      } else {
+         /* Color sampler: assume no swizzling. */
+         key.tex.swizzles[i] = SWIZZLE_XYZW;
+      }
    }
 
    if (fp->Base.InputsRead & FRAG_BIT_WPOS) {

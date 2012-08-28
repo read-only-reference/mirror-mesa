@@ -3200,6 +3200,7 @@ _mesa_texstore_rgba_int8(TEXSTORE_PARAMS)
 						     srcPacking);
       const GLuint *src = tempImage;
       GLint img, row;
+      GLboolean is_unsigned = _mesa_is_type_unsigned(srcType);
       if (!tempImage)
          return GL_FALSE;
       for (img = 0; img < srcDepth; img++) {
@@ -3207,8 +3208,14 @@ _mesa_texstore_rgba_int8(TEXSTORE_PARAMS)
          for (row = 0; row < srcHeight; row++) {
             GLbyte *dstTexel = (GLbyte *) dstRow;
             GLint i;
-            for (i = 0; i < srcWidth * components; i++) {
-               dstTexel[i] = (GLbyte) src[i];
+            if (is_unsigned) {
+               for (i = 0; i < srcWidth * components; i++) {
+                  dstTexel[i] = (GLbyte) MIN2(src[i], 0x7f);
+               }
+            } else {
+               for (i = 0; i < srcWidth * components; i++) {
+                  dstTexel[i] = (GLbyte) CLAMP((GLint) src[i], -0x80, 0x7f);
+               }
             }
             dstRow += dstRowStride;
             src += srcWidth * components;
@@ -3270,6 +3277,7 @@ _mesa_texstore_rgba_int16(TEXSTORE_PARAMS)
 						     srcPacking);
       const GLuint *src = tempImage;
       GLint img, row;
+      GLboolean is_unsigned = _mesa_is_type_unsigned(srcType);
       if (!tempImage)
          return GL_FALSE;
       for (img = 0; img < srcDepth; img++) {
@@ -3277,8 +3285,14 @@ _mesa_texstore_rgba_int16(TEXSTORE_PARAMS)
          for (row = 0; row < srcHeight; row++) {
             GLshort *dstTexel = (GLshort *) dstRow;
             GLint i;
-            for (i = 0; i < srcWidth * components; i++) {
-               dstTexel[i] = (GLint) src[i];
+            if (is_unsigned) {
+               for (i = 0; i < srcWidth * components; i++) {
+                  dstTexel[i] = (GLshort) MIN2(src[i], 0x7fff);
+               }
+            } else {
+               for (i = 0; i < srcWidth * components; i++) {
+                  dstTexel[i] = (GLshort)CLAMP((GLint) src[i], -0x8000, 0x7fff);
+               }
             }
             dstRow += dstRowStride;
             src += srcWidth * components;
@@ -3340,6 +3354,7 @@ _mesa_texstore_rgba_int32(TEXSTORE_PARAMS)
 						     srcPacking);
       const GLuint *src = tempImage;
       GLint img, row;
+      GLboolean is_unsigned = _mesa_is_type_unsigned(srcType);
       if (!tempImage)
          return GL_FALSE;
       for (img = 0; img < srcDepth; img++) {
@@ -3347,8 +3362,14 @@ _mesa_texstore_rgba_int32(TEXSTORE_PARAMS)
          for (row = 0; row < srcHeight; row++) {
             GLint *dstTexel = (GLint *) dstRow;
             GLint i;
-            for (i = 0; i < srcWidth * components; i++) {
-               dstTexel[i] = (GLint) src[i];
+            if (is_unsigned) {
+               for (i = 0; i < srcWidth * components; i++) {
+                  dstTexel[i] = (GLint) MIN2(src[i], 0x7fffffff);
+               }
+            } else {
+               for (i = 0; i < srcWidth * components; i++) {
+                  dstTexel[i] = (GLint) src[i];
+               }
             }
             dstRow += dstRowStride;
             src += srcWidth * components;
@@ -3407,6 +3428,7 @@ _mesa_texstore_rgba_uint8(TEXSTORE_PARAMS)
                               srcFormat, srcType, srcAddr, srcPacking);
       const GLuint *src = tempImage;
       GLint img, row;
+      GLboolean is_unsigned = _mesa_is_type_unsigned(srcType);
       if (!tempImage)
          return GL_FALSE;
       for (img = 0; img < srcDepth; img++) {
@@ -3414,8 +3436,14 @@ _mesa_texstore_rgba_uint8(TEXSTORE_PARAMS)
          for (row = 0; row < srcHeight; row++) {
             GLubyte *dstTexel = (GLubyte *) dstRow;
             GLint i;
-            for (i = 0; i < srcWidth * components; i++) {
-               dstTexel[i] = (GLubyte) CLAMP(src[i], 0, 0xff);
+            if (is_unsigned) {
+               for (i = 0; i < srcWidth * components; i++) {
+                  dstTexel[i] = (GLubyte) MIN2(src[i], 0xff);
+               }
+            } else {
+               for (i = 0; i < srcWidth * components; i++) {
+                  dstTexel[i] = (GLubyte) CLAMP((GLint) src[i], 0, 0xff);
+               }
             }
             dstRow += dstRowStride;
             src += srcWidth * components;
@@ -3474,6 +3502,7 @@ _mesa_texstore_rgba_uint16(TEXSTORE_PARAMS)
                               srcFormat, srcType, srcAddr, srcPacking);
       const GLuint *src = tempImage;
       GLint img, row;
+      GLboolean is_unsigned = _mesa_is_type_unsigned(srcType);
       if (!tempImage)
          return GL_FALSE;
       for (img = 0; img < srcDepth; img++) {
@@ -3481,8 +3510,14 @@ _mesa_texstore_rgba_uint16(TEXSTORE_PARAMS)
          for (row = 0; row < srcHeight; row++) {
             GLushort *dstTexel = (GLushort *) dstRow;
             GLint i;
-            for (i = 0; i < srcWidth * components; i++) {
-               dstTexel[i] = (GLushort) CLAMP(src[i], 0, 0xffff);
+            if (is_unsigned) {
+               for (i = 0; i < srcWidth * components; i++) {
+                  dstTexel[i] = (GLushort) MIN2(src[i], 0xffff);
+              }
+            } else {
+               for (i = 0; i < srcWidth * components; i++) {
+                  dstTexel[i] = (GLushort) CLAMP((GLint) src[i], 0, 0xffff);
+               }
             }
             dstRow += dstRowStride;
             src += srcWidth * components;
@@ -3540,6 +3575,7 @@ _mesa_texstore_rgba_uint32(TEXSTORE_PARAMS)
                               srcWidth, srcHeight, srcDepth,
                               srcFormat, srcType, srcAddr, srcPacking);
       const GLuint *src = tempImage;
+      GLboolean is_unsigned = _mesa_is_type_unsigned(srcType);
       GLint img, row;
       if (!tempImage)
          return GL_FALSE;
@@ -3548,8 +3584,14 @@ _mesa_texstore_rgba_uint32(TEXSTORE_PARAMS)
          for (row = 0; row < srcHeight; row++) {
             GLuint *dstTexel = (GLuint *) dstRow;
             GLint i;
-            for (i = 0; i < srcWidth * components; i++) {
-               dstTexel[i] = src[i];
+            if (is_unsigned) {
+               for (i = 0; i < srcWidth * components; i++) {
+                  dstTexel[i] = src[i];
+               }
+            } else {
+               for (i = 0; i < srcWidth * components; i++) {
+                  dstTexel[i] = MAX2((GLint) src[i], 0);
+               }
             }
             dstRow += dstRowStride;
             src += srcWidth * components;
@@ -3867,6 +3909,7 @@ _mesa_texstore_argb2101010_uint(TEXSTORE_PARAMS)
                                                      srcPacking);
       const GLuint *src = tempImage;
       GLint img, row, col;
+      GLboolean is_unsigned = _mesa_is_type_unsigned(srcType);
       if (!tempImage)
          return GL_FALSE;
       for (img = 0; img < srcDepth; img++) {
@@ -3874,14 +3917,26 @@ _mesa_texstore_argb2101010_uint(TEXSTORE_PARAMS)
 
          for (row = 0; row < srcHeight; row++) {
             GLuint *dstUI = (GLuint *) dstRow;
-            for (col = 0; col < srcWidth; col++) {
-               GLushort a,r,g,b;
-               r = src[RCOMP];
-               g = src[GCOMP];
-               b = src[BCOMP];
-               a = src[ACOMP];
-               dstUI[col] = (a << 30) | (r << 20) | (g << 10) | (b);
-               src += 4;
+            if (is_unsigned) {
+               for (col = 0; col < srcWidth; col++) {
+                  GLushort a,r,g,b;
+                  r = MIN2(src[RCOMP], 0x3ff);
+                  g = MIN2(src[GCOMP], 0x3ff);
+                  b = MIN2(src[BCOMP], 0x3ff);
+                  a = MIN2(src[ACOMP], 0x003);
+                  dstUI[col] = (a << 30) | (r << 20) | (g << 10) | (b);
+                  src += 4;
+               }
+            } else {
+               for (col = 0; col < srcWidth; col++) {
+                  GLushort a,r,g,b;
+                  r = CLAMP((GLint) src[RCOMP], 0, 0x3ff);
+                  g = CLAMP((GLint) src[GCOMP], 0, 0x3ff);
+                  b = CLAMP((GLint) src[BCOMP], 0, 0x3ff);
+                  a = CLAMP((GLint) src[ACOMP], 0, 0x003);
+                  dstUI[col] = (a << 30) | (r << 20) | (g << 10) | (b);
+                  src += 4;
+               }
             }
             dstRow += dstRowStride;
          }
@@ -4336,25 +4391,22 @@ void
 _mesa_store_teximage(struct gl_context *ctx,
                      GLuint dims,
                      struct gl_texture_image *texImage,
-                     GLint internalFormat,
-                     GLint width, GLint height, GLint depth, GLint border,
                      GLenum format, GLenum type, const GLvoid *pixels,
                      const struct gl_pixelstore_attrib *packing)
 {
    assert(dims == 1 || dims == 2 || dims == 3);
 
-   if (width == 0 || height == 0 || depth == 0)
+   if (texImage->Width == 0 || texImage->Height == 0 || texImage->Depth == 0)
       return;
 
    /* allocate storage for texture data */
-   if (!ctx->Driver.AllocTextureImageBuffer(ctx, texImage, texImage->TexFormat,
-                                            width, height, depth)) {
+   if (!ctx->Driver.AllocTextureImageBuffer(ctx, texImage)) {
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "glTexImage%uD", dims);
       return;
    }
 
    store_texsubimage(ctx, texImage,
-                     0, 0, 0, width, height, depth,
+                     0, 0, 0, texImage->Width, texImage->Height, texImage->Depth,
                      format, type, pixels, packing, "glTexImage");
 }
 
@@ -4382,9 +4434,6 @@ _mesa_store_texsubimage(struct gl_context *ctx, GLuint dims,
 void
 _mesa_store_compressed_teximage(struct gl_context *ctx, GLuint dims,
                                 struct gl_texture_image *texImage,
-                                GLint internalFormat,
-                                GLint width, GLint height, GLint depth,
-                                GLint border,
                                 GLsizei imageSize, const GLvoid *data)
 {
    /* only 2D compressed images are supported at this time */
@@ -4403,15 +4452,14 @@ _mesa_store_compressed_teximage(struct gl_context *ctx, GLuint dims,
    ASSERT(texImage->Depth == 1);
 
    /* allocate storage for texture data */
-   if (!ctx->Driver.AllocTextureImageBuffer(ctx, texImage, texImage->TexFormat,
-                                            width, height, 1)) {
+   if (!ctx->Driver.AllocTextureImageBuffer(ctx, texImage)) {
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexImage2D");
       return;
    }
 
    _mesa_store_compressed_texsubimage(ctx, dims, texImage,
                                       0, 0, 0,
-                                      width, height, depth,
+                                      texImage->Width, texImage->Height, texImage->Depth,
                                       texImage->TexFormat,
                                       imageSize, data);
 }

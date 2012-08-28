@@ -192,14 +192,10 @@ dri2CreateContextAttribs(__DRIscreen *screen, int api,
 	mesa_api = API_OPENGLES2;
 	break;
     case __DRI_API_OPENGL_CORE:
+        mesa_api = API_OPENGL_CORE;
+        break;
     default:
 	*error = __DRI_CTX_ERROR_BAD_API;
-	return NULL;
-    }
-
-    if (mesa_api != API_OPENGL && num_attribs != 0) {
-	*error = __DRI_CTX_ERROR_UNKNOWN_ATTRIBUTE;
-	assert(!"Should not get here.");
 	return NULL;
     }
 
@@ -224,23 +220,54 @@ dri2CreateContextAttribs(__DRIscreen *screen, int api,
 	}
     }
 
+    /* Mesa does not support the GL_ARB_compatibilty extension or the
+     * compatibility profile.  This means that we treat a API_OPENGL 3.1 as
+     * API_OPENGL_CORE and reject API_OPENGL 3.2+.
+     */
+    if (mesa_api == API_OPENGL && major_version == 3 && minor_version == 1)
+       mesa_api = API_OPENGL_CORE;
+
+    if (mesa_api == API_OPENGL
+        && ((major_version > 3)
+            || (major_version == 3 && minor_version >= 2))) {
+       *error = __DRI_CTX_ERROR_BAD_API;
+       return NULL;
+    }
+
+    /* The EGL_KHR_create_context spec says:
+     *
+     *     "Flags are only defined for OpenGL context creation, and specifying
+     *     a flags value other than zero for other types of contexts,
+     *     including OpenGL ES contexts, will generate an error."
+     *
+     * The GLX_EXT_create_context_es2_profile specification doesn't say
+     * anything specific about this case.  However, none of the known flags
+     * have any meaning in an ES context, so this seems safe.
+     */
+    if (mesa_api != API_OPENGL
+        && mesa_api != API_OPENGL_CORE
+        && flags != 0) {
+	*error = __DRI_CTX_ERROR_BAD_FLAG;
+	return NULL;
+    }
+
     /* There are no forward-compatible contexts before OpenGL 3.0.  The
      * GLX_ARB_create_context spec says:
      *
      *     "Forward-compatible contexts are defined only for OpenGL versions
      *     3.0 and later."
      *
-     * Moreover, Mesa can't fulfill the requirements of a forward-looking
-     * context.  Return failure if a forward-looking context is requested.
+     * Forward-looking contexts are supported by silently converting the
+     * requested API to API_OPENGL_CORE.
      *
      * In Mesa, a debug context is the same as a regular context.
      */
     if ((flags & __DRI_CTX_FLAG_FORWARD_COMPATIBLE) != 0) {
-	*error = __DRI_CTX_ERROR_BAD_FLAG;
-	return NULL;
+       mesa_api = API_OPENGL_CORE;
     }
 
-    if ((flags & ~__DRI_CTX_FLAG_DEBUG) != 0) {
+    if ((flags & ~(__DRI_CTX_FLAG_DEBUG | __DRI_CTX_FLAG_FORWARD_COMPATIBLE))
+        != 0) {
 	*error = __DRI_CTX_ERROR_UNKNOWN_FLAG;
 	return NULL;
     }

@@ -189,7 +189,10 @@ struct intel_context
        * Surface state operations (i965+ only)
        * \{
        */
-      void (*update_texture_surface)(struct gl_context *ctx, unsigned unit);
+      void (*update_texture_surface)(struct gl_context *ctx,
+                                     unsigned unit,
+                                     uint32_t *binding_table,
+                                     unsigned surf_index);
       void (*update_renderbuffer_surface)(struct brw_context *brw,
 					  struct gl_renderbuffer *rb,
 					  unsigned unit);
@@ -197,6 +200,7 @@ struct intel_context
 					       unsigned unit);
       void (*create_constant_surface)(struct brw_context *brw,
 				      drm_intel_bo *bo,
+				      uint32_t offset,
 				      int width,
 				      uint32_t *out_offset);
       /** \} */
@@ -430,7 +434,7 @@ extern int INTEL_DEBUG;
 #define DEBUG_IOCTL	0x4
 #define DEBUG_BLIT	0x8
 #define DEBUG_MIPTREE   0x10
-#define DEBUG_FALLBACKS	0x20
+#define DEBUG_PERF	0x20
 #define DEBUG_VERBOSE	0x40
 #define DEBUG_BATCH     0x80
 #define DEBUG_PIXEL     0x100
@@ -459,7 +463,12 @@ extern int INTEL_DEBUG;
 } while(0)
 
 #define fallback_debug(...) do {				\
-	if (unlikely(INTEL_DEBUG & DEBUG_FALLBACKS))		\
+	if (unlikely(INTEL_DEBUG & DEBUG_PERF))			\
+		printf(__VA_ARGS__);				\
+} while(0)
+
+#define perf_debug(...) do {					\
+	if (unlikely(INTEL_DEBUG & DEBUG_PERF))			\
 		printf(__VA_ARGS__);				\
 } while(0)
 
@@ -502,7 +511,6 @@ void intel_init_syncobj_functions(struct dd_function_table *functions);
 /* ================================================================
  * intel_state.c:
  */
-extern void intelInitStateFuncs(struct dd_function_table *functions);
 
 #define COMPAREFUNC_ALWAYS		0
 #define COMPAREFUNC_NEVER		0x1
@@ -570,6 +578,10 @@ extern int intel_translate_logic_op(GLenum opcode);
 void intel_update_renderbuffers(__DRIcontext *context,
 				__DRIdrawable *drawable);
 void intel_prepare_render(struct intel_context *intel);
+
+void
+intel_downsample_for_dri2_flush(struct intel_context *intel,
+                                __DRIdrawable *drawable);
 
 void i915_set_buf_info_for_region(uint32_t *state, struct intel_region *region,
 				  uint32_t buffer_id);

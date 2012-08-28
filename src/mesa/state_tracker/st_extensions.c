@@ -487,7 +487,6 @@ void st_init_extensions(struct st_context *st)
    ctx->Extensions.ARB_half_float_pixel = GL_TRUE;
    ctx->Extensions.ARB_half_float_vertex = GL_TRUE;
    ctx->Extensions.ARB_map_buffer_range = GL_TRUE;
-   ctx->Extensions.ARB_sampler_objects = GL_TRUE;
    ctx->Extensions.ARB_shader_objects = GL_TRUE;
    ctx->Extensions.ARB_shading_language_100 = GL_TRUE;
    ctx->Extensions.ARB_texture_border_clamp = GL_TRUE; /* XXX temp */
@@ -496,7 +495,6 @@ void st_init_extensions(struct st_context *st)
    ctx->Extensions.ARB_texture_env_crossbar = GL_TRUE;
    ctx->Extensions.ARB_texture_env_dot3 = GL_TRUE;
    ctx->Extensions.ARB_texture_storage = GL_TRUE;
-   ctx->Extensions.ARB_vertex_array_object = GL_TRUE;
    ctx->Extensions.ARB_vertex_program = GL_TRUE;
    ctx->Extensions.ARB_vertex_shader = GL_TRUE;
    ctx->Extensions.ARB_window_pos = GL_TRUE;
@@ -516,8 +514,6 @@ void st_init_extensions(struct st_context *st)
    ctx->Extensions.EXT_separate_shader_objects = GL_TRUE;
    ctx->Extensions.EXT_texture_env_dot3 = GL_TRUE;
    ctx->Extensions.EXT_vertex_array_bgra = GL_TRUE;
-
-   ctx->Extensions.APPLE_vertex_array_object = GL_TRUE;
 
    ctx->Extensions.ATI_texture_env_combine3 = GL_TRUE;
 
@@ -647,4 +643,6 @@ void st_init_extensions(struct st_context *st)
        ctx->Extensions.ARB_draw_instanced) {
       ctx->Extensions.ARB_transform_feedback_instanced = GL_TRUE;
    }
+   if (st->options.force_glsl_extensions_warn)
+	   ctx->Const.ForceGLSLExtensionsWarn = 1;
 }

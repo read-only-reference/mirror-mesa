@@ -50,30 +50,6 @@
 #define R600_BIG_ENDIAN 0
 #endif
 
-enum r600_atom_flags {
-	/* When set, atoms are added at the beginning of the dirty list
-	 * instead of the end. */
-	EMIT_EARLY = (1 << 0)
-};
-
-/* This encapsulates a state or an operation which can emitted into the GPU
- * command stream. It's not limited to states only, it can be used for anything
- * that wants to write commands into the CS (e.g. cache flushes). */
-struct r600_atom {
-	void (*emit)(struct r600_context *ctx, struct r600_atom *state);
-
-	unsigned		num_dw;
-	enum r600_atom_flags	flags;
-	bool			dirty;
-
-	struct list_head	head;
-};
-
-struct r600_atom_surface_sync {
-	struct r600_atom atom;
-	unsigned flush_flags; /* CP_COHER_CNTL */
-};
-
 struct r600_pipe_fences {
 	struct si_resource		*bo;
 	unsigned			*data;
@@ -150,15 +126,16 @@ struct r600_context {
 	unsigned			pa_cl_vs_out_cntl;
 	/* for saving when using blitter */
 	struct pipe_stencil_ref		stencil_ref;
-	struct si_pipe_shader		*ps_shader;
-	struct si_pipe_shader		*vs_shader;
+	struct si_pipe_shader_selector	*ps_shader;
+	struct si_pipe_shader_selector	*vs_shader;
 	struct pipe_query		*current_render_cond;
 	unsigned			current_render_cond_mode;
 	struct pipe_query		*saved_render_cond;
 	unsigned			saved_render_cond_mode;
 	/* shader information */
 	unsigned			sprite_coord_enable;
-	boolean				export_16bpc;
+	unsigned			export_16bpc;
+	unsigned			spi_shader_col_format;
 	unsigned			alpha_ref;
 	boolean				alpha_ref_dirty;
 	struct r600_textures_info	vs_samplers;
@@ -171,17 +148,11 @@ struct r600_context {
 
 	unsigned default_ps_gprs, default_vs_gprs;
 
-	/* States based on r600_state. */
-	struct list_head		dirty_states;
-	struct r600_atom_surface_sync	atom_surface_sync;
-	struct r600_atom		atom_r6xx_flush_and_inv;
-
 	/* Below are variables from the old r600_context.
 	 */
 	struct radeon_winsys_cs	*cs;
 
 	unsigned		pm4_dirty_cdwords;
-	unsigned		init_dwords;
 
 	/* The list of active queries. Only one query of each type can be active. */
 	struct list_head	active_query_list;
@@ -206,44 +177,28 @@ struct r600_context {
 	struct pipe_vertex_buffer vertex_buffer[PIPE_MAX_ATTRIBS];
 	unsigned		nr_vertex_buffers;
 
+	/* With rasterizer discard, there doesn't have to be a pixel shader.
+	 * In that case, we bind this one: */
+	struct si_pipe_shader	*dummy_pixel_shader;
+
 	/* SI state handling */
 	union si_state	queued;
 	union si_state	emitted;
 };
 
-static INLINE void r600_emit_atom(struct r600_context *rctx, struct r600_atom *atom)
-{
-	atom->emit(rctx, atom);
-	atom->dirty = false;
-	if (atom->head.next && atom->head.prev)
-		LIST_DELINIT(&atom->head);
-}
-
-static INLINE void r600_atom_dirty(struct r600_context *rctx, struct r600_atom *state)
-{
-	if (!state->dirty) {
-		if (state->flags & EMIT_EARLY) {
-			LIST_ADD(&state->head, &rctx->dirty_states);
-		} else {
-			LIST_ADDTAIL(&state->head, &rctx->dirty_states);
-		}
-		state->dirty = true;
-	}
-}
-
 /* r600_blit.c */
-void r600_init_blit_functions(struct r600_context *rctx);
-void r600_blit_uncompress_depth(struct pipe_context *ctx, struct r600_resource_texture *texture);
+void si_init_blit_functions(struct r600_context *rctx);
+void si_blit_uncompress_depth(struct pipe_context *ctx, struct r600_resource_texture *texture);
 void r600_blit_push_depth(struct pipe_context *ctx, struct r600_resource_texture *texture);
-void r600_flush_depth_textures(struct r600_context *rctx);
+void si_flush_depth_textures(struct r600_context *rctx);
 
 /* r600_buffer.c */
-bool r600_init_resource(struct r600_screen *rscreen,
-			struct si_resource *res,
-			unsigned size, unsigned alignment,
-			unsigned bind, unsigned usage);
-struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
-					 const struct pipe_resource *templ);
+bool si_init_resource(struct r600_screen *rscreen,
+		      struct si_resource *res,
+		      unsigned size, unsigned alignment,
+		      unsigned bind, unsigned usage);
+struct pipe_resource *si_buffer_create(struct pipe_screen *screen,
+				       const struct pipe_resource *templ);
 void r600_upload_index_buffer(struct r600_context *rctx,
 			      struct pipe_index_buffer *ib, unsigned count);
 
@@ -258,24 +213,14 @@ void r600_init_query_functions(struct r600_context *rctx);
 /* r600_resource.c */
 void r600_init_context_resource_functions(struct r600_context *r600);
 
-/* radeonsi_shader.c */
-int si_pipe_shader_create(struct pipe_context *ctx, struct si_pipe_shader *shader);
-void si_pipe_shader_destroy(struct pipe_context *ctx, struct si_pipe_shader *shader);
-
 /* r600_texture.c */
 void r600_init_screen_texture_functions(struct pipe_screen *screen);
-void r600_init_surface_functions(struct r600_context *r600);
-unsigned r600_texture_get_offset(struct r600_resource_texture *rtex,
-					unsigned level, unsigned layer);
+void si_init_surface_functions(struct r600_context *r600);
 
 /* r600_translate.c */
 void r600_translate_index_buffer(struct r600_context *r600,
 				 struct pipe_index_buffer *ib,
 				 unsigned count);
-
-/* r600_state_common.c */
-void r600_init_common_atoms(struct r600_context *rctx);
-unsigned r600_get_cb_flush_flags(struct r600_context *rctx);
 
 /*
  * common helpers

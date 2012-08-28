@@ -192,13 +192,25 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028A6C_VGT_GS_OUT_PRIM_TYPE, 0, 0},
 	{R_028ABC_DB_HTILE_SURFACE, 0, 0},
 	{R_028B54_VGT_SHADER_STAGES_EN, 0, 0},
+	{R_028B70_DB_ALPHA_TO_MASK, 0, 0},
 	{R_028B78_PA_SU_POLY_OFFSET_DB_FMT_CNTL, 0, 0},
 	{R_028B7C_PA_SU_POLY_OFFSET_CLAMP, 0, 0},
 	{R_028B80_PA_SU_POLY_OFFSET_FRONT_SCALE, 0, 0},
 	{R_028B84_PA_SU_POLY_OFFSET_FRONT_OFFSET, 0, 0},
 	{R_028B88_PA_SU_POLY_OFFSET_BACK_SCALE, 0, 0},
 	{R_028B8C_PA_SU_POLY_OFFSET_BACK_OFFSET, 0, 0},
+	{R_028C00_PA_SC_LINE_CNTL, 0, 0},
+	{R_028C04_PA_SC_AA_CONFIG, 0, 0},
 	{R_028C08_PA_SU_VTX_CNTL, 0, 0},
+	{GROUP_FORCE_NEW_BLOCK, 0, 0},
+	{R_028C1C_PA_SC_AA_SAMPLE_LOCS_0, 0, 0},
+	{R_028C20_PA_SC_AA_SAMPLE_LOCS_1, 0, 0},
+	{R_028C24_PA_SC_AA_SAMPLE_LOCS_2, 0, 0},
+	{R_028C28_PA_SC_AA_SAMPLE_LOCS_3, 0, 0},
+	{R_028C2C_PA_SC_AA_SAMPLE_LOCS_4, 0, 0},
+	{R_028C30_PA_SC_AA_SAMPLE_LOCS_5, 0, 0},
+	{R_028C34_PA_SC_AA_SAMPLE_LOCS_6, 0, 0},
+	{R_028C38_PA_SC_AA_SAMPLE_LOCS_7, 0, 0},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028C60_CB_COLOR0_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028C64_CB_COLOR0_PITCH, 0, 0},
@@ -207,6 +219,14 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028C70_CB_COLOR0_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028C74_CB_COLOR0_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028C78_CB_COLOR0_DIM, 0, 0},
+	{R_028C7C_CB_COLOR0_CMASK, REG_FLAG_NEED_BO},
+	{R_028C80_CB_COLOR0_CMASK_SLICE},
+	{R_028C84_CB_COLOR0_FMASK, REG_FLAG_NEED_BO},
+	{R_028C88_CB_COLOR0_FMASK_SLICE},
+	{R_028C8C_CB_COLOR0_CLEAR_WORD0},
+	{R_028C90_CB_COLOR0_CLEAR_WORD1},
+	{R_028C94_CB_COLOR0_CLEAR_WORD2},
+	{R_028C98_CB_COLOR0_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028C9C_CB_COLOR1_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028CA0_CB_COLOR1_PITCH, 0, 0},
@@ -215,6 +235,14 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028CAC_CB_COLOR1_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028CB0_CB_COLOR1_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028CB4_CB_COLOR1_DIM, 0, 0},
+	{R_028CB8_CB_COLOR1_CMASK, REG_FLAG_NEED_BO, 0},
+	{R_028CBC_CB_COLOR1_CMASK_SLICE, 0, 0},
+	{R_028CC0_CB_COLOR1_FMASK, REG_FLAG_NEED_BO, 0},
+	{R_028CC4_CB_COLOR1_FMASK_SLICE, 0, 0},
+	{R_028CC8_CB_COLOR1_CLEAR_WORD0},
+	{R_028CCC_CB_COLOR1_CLEAR_WORD1},
+	{R_028CD0_CB_COLOR1_CLEAR_WORD2},
+	{R_028CD4_CB_COLOR1_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028CD8_CB_COLOR2_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028CDC_CB_COLOR2_PITCH, 0, 0},
@@ -223,6 +251,14 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028CE8_CB_COLOR2_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028CEC_CB_COLOR2_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028CF0_CB_COLOR2_DIM, 0, 0},
+	{R_028CF4_CB_COLOR2_CMASK, REG_FLAG_NEED_BO, 0},
+	{R_028CF8_CB_COLOR2_CMASK_SLICE, 0, 0},
+	{R_028CFC_CB_COLOR2_FMASK, REG_FLAG_NEED_BO, 0},
+	{R_028D00_CB_COLOR2_FMASK_SLICE, 0, 0},
+	{R_028D04_CB_COLOR2_CLEAR_WORD0},
+	{R_028D08_CB_COLOR2_CLEAR_WORD1},
+	{R_028D0C_CB_COLOR2_CLEAR_WORD2},
+	{R_028D10_CB_COLOR2_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028D14_CB_COLOR3_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028D18_CB_COLOR3_PITCH, 0, 0},
@@ -231,6 +267,14 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028D24_CB_COLOR3_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028D28_CB_COLOR3_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028D2C_CB_COLOR3_DIM, 0, 0},
+	{R_028D30_CB_COLOR3_CMASK, REG_FLAG_NEED_BO},
+	{R_028D34_CB_COLOR3_CMASK_SLICE},
+	{R_028D38_CB_COLOR3_FMASK, REG_FLAG_NEED_BO},
+	{R_028D3C_CB_COLOR3_FMASK_SLICE},
+	{R_028D40_CB_COLOR3_CLEAR_WORD0},
+	{R_028D44_CB_COLOR3_CLEAR_WORD1},
+	{R_028D48_CB_COLOR3_CLEAR_WORD2},
+	{R_028D4C_CB_COLOR3_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028D50_CB_COLOR4_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028D54_CB_COLOR4_PITCH, 0, 0},
@@ -239,6 +283,14 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028D60_CB_COLOR4_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028D64_CB_COLOR4_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028D68_CB_COLOR4_DIM, 0, 0},
+	{R_028D6C_CB_COLOR4_CMASK, REG_FLAG_NEED_BO},
+	{R_028D70_CB_COLOR4_CMASK_SLICE},
+	{R_028D74_CB_COLOR4_FMASK, REG_FLAG_NEED_BO},
+	{R_028D78_CB_COLOR4_FMASK_SLICE},
+	{R_028D7C_CB_COLOR4_CLEAR_WORD0},
+	{R_028D80_CB_COLOR4_CLEAR_WORD1},
+	{R_028D84_CB_COLOR4_CLEAR_WORD2},
+	{R_028D88_CB_COLOR4_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028D8C_CB_COLOR5_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028D90_CB_COLOR5_PITCH, 0, 0},
@@ -247,6 +299,14 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028D9C_CB_COLOR5_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028DA0_CB_COLOR5_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028DA4_CB_COLOR5_DIM, 0, 0},
+	{R_028DA8_CB_COLOR5_CMASK, REG_FLAG_NEED_BO},
+	{R_028DAC_CB_COLOR5_CMASK_SLICE},
+	{R_028DB0_CB_COLOR5_FMASK, REG_FLAG_NEED_BO},
+	{R_028DB4_CB_COLOR5_FMASK_SLICE},
+	{R_028DB8_CB_COLOR5_CLEAR_WORD0},
+	{R_028DBC_CB_COLOR5_CLEAR_WORD1},
+	{R_028DC0_CB_COLOR5_CLEAR_WORD2},
+	{R_028DC4_CB_COLOR5_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028DC8_CB_COLOR6_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028DCC_CB_COLOR6_PITCH, 0, 0},
@@ -255,6 +315,14 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028DD8_CB_COLOR6_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028DDC_CB_COLOR6_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028DE0_CB_COLOR6_DIM, 0, 0},
+	{R_028DE4_CB_COLOR6_CMASK, REG_FLAG_NEED_BO},
+	{R_028DE8_CB_COLOR6_CMASK_SLICE},
+	{R_028DEC_CB_COLOR6_FMASK, REG_FLAG_NEED_BO},
+	{R_028DF0_CB_COLOR6_FMASK_SLICE},
+	{R_028DF4_CB_COLOR6_CLEAR_WORD0},
+	{R_028DF8_CB_COLOR6_CLEAR_WORD1},
+	{R_028DFC_CB_COLOR6_CLEAR_WORD2},
+	{R_028E00_CB_COLOR6_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028E04_CB_COLOR7_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028E08_CB_COLOR7_PITCH, 0, 0},
@@ -263,6 +331,14 @@ static const struct r600_reg evergreen_context_reg_list[] = {
 	{R_028E14_CB_COLOR7_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028E18_CB_COLOR7_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028E1C_CB_COLOR7_DIM, 0, 0},
+	{R_028E20_CB_COLOR7_CMASK, REG_FLAG_NEED_BO},
+	{R_028E24_CB_COLOR7_CMASK_SLICE},
+	{R_028E28_CB_COLOR7_FMASK, REG_FLAG_NEED_BO},
+	{R_028E2C_CB_COLOR7_FMASK_SLICE},
+	{R_028E30_CB_COLOR7_CLEAR_WORD0},
+	{R_028E34_CB_COLOR7_CLEAR_WORD1},
+	{R_028E38_CB_COLOR7_CLEAR_WORD2},
+	{R_028E3C_CB_COLOR7_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028E40_CB_COLOR8_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028E44_CB_COLOR8_PITCH, 0, 0},
@@ -424,6 +500,7 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028798_CB_BLEND6_CONTROL, 0, 0},
 	{R_02879C_CB_BLEND7_CONTROL, 0, 0},
 	{R_028800_DB_DEPTH_CONTROL, 0, 0},
+	{CM_R_028804_DB_EQAA},
 	{R_028808_CB_COLOR_CONTROL, 0, 0},
 	{R_02880C_DB_SHADER_CONTROL, 0, 0},
 	{R_028810_PA_CL_CLIP_CNTL, 0, 0},
@@ -454,12 +531,15 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028A6C_VGT_GS_OUT_PRIM_TYPE, 0, 0},
 	{R_028ABC_DB_HTILE_SURFACE, 0, 0},
 	{R_028B54_VGT_SHADER_STAGES_EN, 0, 0},
+	{R_028B70_DB_ALPHA_TO_MASK, 0, 0},
 	{R_028B78_PA_SU_POLY_OFFSET_DB_FMT_CNTL, 0, 0},
 	{R_028B7C_PA_SU_POLY_OFFSET_CLAMP, 0, 0},
 	{R_028B80_PA_SU_POLY_OFFSET_FRONT_SCALE, 0, 0},
 	{R_028B84_PA_SU_POLY_OFFSET_FRONT_OFFSET, 0, 0},
 	{R_028B88_PA_SU_POLY_OFFSET_BACK_SCALE, 0, 0},
 	{R_028B8C_PA_SU_POLY_OFFSET_BACK_OFFSET, 0, 0},
+	{CM_R_028BDC_PA_SC_LINE_CNTL, 0, 0},
+	{CM_R_028BE0_PA_SC_AA_CONFIG, 0, 0},
 	{CM_R_028BE4_PA_SU_VTX_CNTL, 0, 0},
 	{CM_R_028BF8_PA_SC_AA_SAMPLE_LOCS_PIXEL_X0Y0_0, 0, 0},
 	{CM_R_028BFC_PA_SC_AA_SAMPLE_LOCS_PIXEL_X0Y0_1, 0, 0},
@@ -485,6 +565,14 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028C70_CB_COLOR0_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028C74_CB_COLOR0_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028C78_CB_COLOR0_DIM, 0, 0},
+	{R_028C7C_CB_COLOR0_CMASK, REG_FLAG_NEED_BO},
+	{R_028C80_CB_COLOR0_CMASK_SLICE},
+	{R_028C84_CB_COLOR0_FMASK, REG_FLAG_NEED_BO},
+	{R_028C88_CB_COLOR0_FMASK_SLICE},
+	{R_028C8C_CB_COLOR0_CLEAR_WORD0},
+	{R_028C90_CB_COLOR0_CLEAR_WORD1},
+	{R_028C94_CB_COLOR0_CLEAR_WORD2},
+	{R_028C98_CB_COLOR0_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028C9C_CB_COLOR1_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028CA0_CB_COLOR1_PITCH, 0, 0},
@@ -493,6 +581,14 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028CAC_CB_COLOR1_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028CB0_CB_COLOR1_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028CB4_CB_COLOR1_DIM, 0, 0},
+	{R_028CB8_CB_COLOR1_CMASK, REG_FLAG_NEED_BO, 0},
+	{R_028CBC_CB_COLOR1_CMASK_SLICE, 0, 0},
+	{R_028CC0_CB_COLOR1_FMASK, REG_FLAG_NEED_BO, 0},
+	{R_028CC4_CB_COLOR1_FMASK_SLICE, 0, 0},
+	{R_028CC8_CB_COLOR1_CLEAR_WORD0},
+	{R_028CCC_CB_COLOR1_CLEAR_WORD1},
+	{R_028CD0_CB_COLOR1_CLEAR_WORD2},
+	{R_028CD4_CB_COLOR1_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028CD8_CB_COLOR2_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028CDC_CB_COLOR2_PITCH, 0, 0},
@@ -501,6 +597,14 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028CE8_CB_COLOR2_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028CEC_CB_COLOR2_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028CF0_CB_COLOR2_DIM, 0, 0},
+	{R_028CF4_CB_COLOR2_CMASK, REG_FLAG_NEED_BO, 0},
+	{R_028CF8_CB_COLOR2_CMASK_SLICE, 0, 0},
+	{R_028CFC_CB_COLOR2_FMASK, REG_FLAG_NEED_BO, 0},
+	{R_028D00_CB_COLOR2_FMASK_SLICE, 0, 0},
+	{R_028D04_CB_COLOR2_CLEAR_WORD0},
+	{R_028D08_CB_COLOR2_CLEAR_WORD1},
+	{R_028D0C_CB_COLOR2_CLEAR_WORD2},
+	{R_028D10_CB_COLOR2_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028D14_CB_COLOR3_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028D18_CB_COLOR3_PITCH, 0, 0},
@@ -509,6 +613,14 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028D24_CB_COLOR3_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028D28_CB_COLOR3_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028D2C_CB_COLOR3_DIM, 0, 0},
+	{R_028D30_CB_COLOR3_CMASK, REG_FLAG_NEED_BO},
+	{R_028D34_CB_COLOR3_CMASK_SLICE},
+	{R_028D38_CB_COLOR3_FMASK, REG_FLAG_NEED_BO},
+	{R_028D3C_CB_COLOR3_FMASK_SLICE},
+	{R_028D40_CB_COLOR3_CLEAR_WORD0},
+	{R_028D44_CB_COLOR3_CLEAR_WORD1},
+	{R_028D48_CB_COLOR3_CLEAR_WORD2},
+	{R_028D4C_CB_COLOR3_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028D50_CB_COLOR4_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028D54_CB_COLOR4_PITCH, 0, 0},
@@ -517,6 +629,14 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028D60_CB_COLOR4_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028D64_CB_COLOR4_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028D68_CB_COLOR4_DIM, 0, 0},
+	{R_028D6C_CB_COLOR4_CMASK, REG_FLAG_NEED_BO},
+	{R_028D70_CB_COLOR4_CMASK_SLICE},
+	{R_028D74_CB_COLOR4_FMASK, REG_FLAG_NEED_BO},
+	{R_028D78_CB_COLOR4_FMASK_SLICE},
+	{R_028D7C_CB_COLOR4_CLEAR_WORD0},
+	{R_028D80_CB_COLOR4_CLEAR_WORD1},
+	{R_028D84_CB_COLOR4_CLEAR_WORD2},
+	{R_028D88_CB_COLOR4_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028D8C_CB_COLOR5_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028D90_CB_COLOR5_PITCH, 0, 0},
@@ -525,6 +645,14 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028D9C_CB_COLOR5_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028DA0_CB_COLOR5_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028DA4_CB_COLOR5_DIM, 0, 0},
+	{R_028DA8_CB_COLOR5_CMASK, REG_FLAG_NEED_BO},
+	{R_028DAC_CB_COLOR5_CMASK_SLICE},
+	{R_028DB0_CB_COLOR5_FMASK, REG_FLAG_NEED_BO},
+	{R_028DB4_CB_COLOR5_FMASK_SLICE},
+	{R_028DB8_CB_COLOR5_CLEAR_WORD0},
+	{R_028DBC_CB_COLOR5_CLEAR_WORD1},
+	{R_028DC0_CB_COLOR5_CLEAR_WORD2},
+	{R_028DC4_CB_COLOR5_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028DC8_CB_COLOR6_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028DCC_CB_COLOR6_PITCH, 0, 0},
@@ -533,6 +661,14 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028DD8_CB_COLOR6_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028DDC_CB_COLOR6_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028DE0_CB_COLOR6_DIM, 0, 0},
+	{R_028DE4_CB_COLOR6_CMASK, REG_FLAG_NEED_BO},
+	{R_028DE8_CB_COLOR6_CMASK_SLICE},
+	{R_028DEC_CB_COLOR6_FMASK, REG_FLAG_NEED_BO},
+	{R_028DF0_CB_COLOR6_FMASK_SLICE},
+	{R_028DF4_CB_COLOR6_CLEAR_WORD0},
+	{R_028DF8_CB_COLOR6_CLEAR_WORD1},
+	{R_028DFC_CB_COLOR6_CLEAR_WORD2},
+	{R_028E00_CB_COLOR6_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028E04_CB_COLOR7_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028E08_CB_COLOR7_PITCH, 0, 0},
@@ -541,6 +677,14 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028E14_CB_COLOR7_INFO, REG_FLAG_NEED_BO, 0},
 	{R_028E18_CB_COLOR7_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028E1C_CB_COLOR7_DIM, 0, 0},
+	{R_028E20_CB_COLOR7_CMASK, REG_FLAG_NEED_BO},
+	{R_028E24_CB_COLOR7_CMASK_SLICE},
+	{R_028E28_CB_COLOR7_FMASK, REG_FLAG_NEED_BO},
+	{R_028E2C_CB_COLOR7_FMASK_SLICE},
+	{R_028E30_CB_COLOR7_CLEAR_WORD0},
+	{R_028E34_CB_COLOR7_CLEAR_WORD1},
+	{R_028E38_CB_COLOR7_CLEAR_WORD2},
+	{R_028E3C_CB_COLOR7_CLEAR_WORD3},
 	{GROUP_FORCE_NEW_BLOCK, 0, 0},
 	{R_028E40_CB_COLOR8_BASE, REG_FLAG_NEED_BO, 0},
 	{R_028E44_CB_COLOR8_PITCH, 0, 0},
@@ -574,37 +718,6 @@ static const struct r600_reg cayman_context_reg_list[] = {
 	{R_028EA8_CB_COLOR11_ATTRIB, REG_FLAG_NEED_BO, 0},
 	{R_028EAC_CB_COLOR11_DIM, 0, 0},
 };
-
-/* SHADER SAMPLER BORDER EG/CM */
-static int evergreen_state_sampler_border_init(struct r600_context *ctx, uint32_t offset, unsigned id)
-{
-	struct r600_reg r600_shader_sampler_border[] = {
-		{R_00A400_TD_PS_SAMPLER0_BORDER_INDEX, 0, 0},
-		{R_00A404_TD_PS_SAMPLER0_BORDER_RED, 0, 0},
-		{R_00A408_TD_PS_SAMPLER0_BORDER_GREEN, 0, 0},
-		{R_00A40C_TD_PS_SAMPLER0_BORDER_BLUE, 0, 0},
-		{R_00A410_TD_PS_SAMPLER0_BORDER_ALPHA, 0, 0},
-	};
-	unsigned nreg = Elements(r600_shader_sampler_border);
-	unsigned fake_offset = (offset - R_00A400_TD_PS_SAMPLER0_BORDER_INDEX) * 0x100 + 0x40000 + id * 0x1C;
-	struct r600_range *range;
-	struct r600_block *block;
-	int r;
-
-	for (int i = 0; i < nreg; i++) {
-		r600_shader_sampler_border[i].offset -= R_00A400_TD_PS_SAMPLER0_BORDER_INDEX;
-		r600_shader_sampler_border[i].offset += fake_offset;
-	}
-	r = r600_context_add_block(ctx, r600_shader_sampler_border, nreg, PKT3_SET_CONFIG_REG, 0);
-	if (r) {
-		return r;
-	}
-	/* set proper offset */
-	range = &ctx->range[CTX_RANGE_ID(r600_shader_sampler_border[0].offset)];
-	block = range->blocks[CTX_BLOCK_ID(r600_shader_sampler_border[0].offset)];
-	block->pm4[1] = (offset - EVERGREEN_CONFIG_REG_OFFSET) >> 2;
-	return 0;
-}
 
 static int evergreen_loop_const_init(struct r600_context *ctx, uint32_t offset)
 {
@@ -646,32 +759,6 @@ int evergreen_context_init(struct r600_context *ctx)
 	if (r)
 		goto out_err;
 
-
-	/* PS SAMPLER */
-	for (int j = 0, offset = 0; j < 18; j++, offset += 0xC) {
-		r = r600_state_sampler_init(ctx, offset);
-		if (r)
-			goto out_err;
-	}
-	/* VS SAMPLER */
-	for (int j = 0, offset = 0xD8; j < 18; j++, offset += 0xC) {
-		r = r600_state_sampler_init(ctx, offset);
-		if (r)
-			goto out_err;
-	}
-	/* PS SAMPLER BORDER */
-	for (int j = 0; j < 18; j++) {
-		r = evergreen_state_sampler_border_init(ctx, R_00A400_TD_PS_SAMPLER0_BORDER_INDEX, j);
-		if (r)
-			goto out_err;
-	}
-	/* VS SAMPLER BORDER */
-	for (int j = 0; j < 18; j++) {
-		r = evergreen_state_sampler_border_init(ctx, R_00A414_TD_VS_SAMPLER0_BORDER_INDEX, j);
-		if (r)
-			goto out_err;
-	}
-
 	/* PS loop const */
 	evergreen_loop_const_init(ctx, 0);
 	/* VS loop const */
@@ -686,66 +773,6 @@ int evergreen_context_init(struct r600_context *ctx)
 out_err:
 	r600_context_fini(ctx);
 	return r;
-}
-
-static inline void evergreen_context_pipe_state_set_sampler_border(struct r600_context *ctx, struct r600_pipe_state *state, unsigned offset, unsigned id)
-{
-	unsigned fake_offset = (offset - R_00A400_TD_PS_SAMPLER0_BORDER_INDEX) * 0x100 + 0x40000 + id * 0x1C;
-	struct r600_range *range;
-	struct r600_block *block;
-	int i;
-	int dirty;
-
-	range = &ctx->range[CTX_RANGE_ID(fake_offset)];
-	block = range->blocks[CTX_BLOCK_ID(fake_offset)];
-	if (state == NULL) {
-		block->status &= ~(R600_BLOCK_STATUS_ENABLED | R600_BLOCK_STATUS_DIRTY);
-		LIST_DELINIT(&block->list);
-		LIST_DELINIT(&block->enable_list);
-		return;
-	}
-	if (state->nregs <= 3) {
-		return;
-	}
-
-	dirty = block->status & R600_BLOCK_STATUS_DIRTY;
-	if (block->reg[0] != id) {
-		block->reg[0] = id;
-		dirty |= R600_BLOCK_STATUS_DIRTY;
-	}
-
-	for (i = 1; i < 5; i++) {
-		if (block->reg[i] != state->regs[i + 2].value) {
-			block->reg[i] = state->regs[i + 2].value;
-			dirty |= R600_BLOCK_STATUS_DIRTY;
-		}
-	}
-
-	/* We have to flush the shaders before we change the border color
-	 * registers, or previous draw commands that haven't completed yet
-	 * will end up using the new border color. */
-	if (dirty & R600_BLOCK_STATUS_DIRTY)
-		r600_context_ps_partial_flush(ctx);
-	if (dirty)
-		r600_context_dirty_block(ctx, block, dirty, 4);
-}
-
-void evergreen_context_pipe_state_set_ps_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id)
-{
-	unsigned offset;
-
-	offset = R_03C000_SQ_TEX_SAMPLER_WORD0_0 + 12*id;
-	r600_context_pipe_state_set_sampler(ctx, state, offset);
-	evergreen_context_pipe_state_set_sampler_border(ctx, state, R_00A400_TD_PS_SAMPLER0_BORDER_INDEX, id);
-}
-
-void evergreen_context_pipe_state_set_vs_sampler(struct r600_context *ctx, struct r600_pipe_state *state, unsigned id)
-{
-	unsigned offset;
-
-	offset = R_03C000_SQ_TEX_SAMPLER_WORD0_0 + 12*(id + 18);
-	r600_context_pipe_state_set_sampler(ctx, state, offset);
-	evergreen_context_pipe_state_set_sampler_border(ctx, state, R_00A414_TD_VS_SAMPLER0_BORDER_INDEX, id);
 }
 
 void evergreen_flush_vgt_streamout(struct r600_context *ctx)

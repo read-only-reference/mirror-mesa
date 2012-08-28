@@ -107,14 +107,22 @@ brw_fast_clear_depth(struct gl_context *ctx)
     * a previous clear had happened at a different clear value and resolve it
     * first.
     */
-   if (ctx->Scissor.Enabled)
+   if (ctx->Scissor.Enabled) {
+      perf_debug("Failed to fast clear depth due to scissor being enabled.  "
+                 "Possible 5%% performance win if avoided.\n");
       return false;
+   }
 
    /* The rendered area has to be 8x4 samples, not resolved pixels, so we look
     * at the miptree slice dimensions instead of renderbuffer size.
     */
    if (mt->level[depth_irb->mt_level].width % 8 != 0 ||
        mt->level[depth_irb->mt_level].height % 4 != 0) {
+      perf_debug("Failed to fast clear depth due to width/height %d,%d not "
+                 "being aligned to 8,4.  Possible 5%% performance win if "
+                 "avoided\n",
+                 mt->level[depth_irb->mt_level].width,
+                 mt->level[depth_irb->mt_level].height);
       return false;
    }
 
@@ -185,11 +193,9 @@ brw_fast_clear_depth(struct gl_context *ctx)
       intel_batchbuffer_emit_mi_flush(intel);
    }
 
-   /* Now, the entire HiZ buffer contains data that needs to be resolved to the
-    * entire depth buffer (so any previous resolve records should get tossed
-    * out).
+   /* Now, the HiZ buffer contains data that needs to be resolved to the depth
+    * buffer.
     */
-   intel_resolve_map_clear(&mt->hiz_map);
    intel_renderbuffer_set_needs_depth_resolve(depth_irb);
 
    return true;
@@ -226,7 +232,12 @@ brw_clear(struct gl_context *ctx, GLbitfield mask)
    if (tri_mask) {
       debug_mask("tri", tri_mask);
       mask &= ~tri_mask;
-      _mesa_meta_glsl_Clear(&intel->ctx, tri_mask);
+
+      if (ctx->API == API_OPENGLES) {
+         _mesa_meta_Clear(&intel->ctx, tri_mask);
+      } else {
+         _mesa_meta_glsl_Clear(&intel->ctx, tri_mask);
+      }
    }
 
    /* Any strange buffers get passed off to swrast */

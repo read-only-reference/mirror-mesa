@@ -218,8 +218,6 @@ do_vs_prog(struct brw_context *brw,
       c.prog_data.inputs_read |= VERT_BIT_EDGEFLAG;
    }
 
-   brw_compute_vue_map(&c);
-
    /* Put dummy slots into the VUE for the SF to put the replaced
     * point sprite coords in.  We shouldn't need these dummy slots,
     * which take up precious URB space, but it would mean that the SF
@@ -230,6 +228,8 @@ do_vs_prog(struct brw_context *brw,
       if (c.key.point_coord_replace & (1 << i))
 	 c.prog_data.outputs_written |= BITFIELD64_BIT(VERT_RESULT_TEX0 + i);
    }
+
+   brw_compute_vue_map(&c);
 
    if (0) {
       _mesa_fprint_program_opt(stdout, &c.vp->program.Base, PROG_PRINT_DEBUG,
@@ -250,10 +250,19 @@ do_vs_prog(struct brw_context *brw,
    if (c.prog_data.nr_pull_params)
       c.prog_data.num_surfaces = 1;
    if (c.vp->program.Base.SamplersUsed)
-      c.prog_data.num_surfaces = BRW_MAX_VS_SURFACES;
+      c.prog_data.num_surfaces = SURF_INDEX_VS_TEXTURE(BRW_MAX_TEX_UNIT);
+   if (prog &&
+       prog->_LinkedShaders[MESA_SHADER_VERTEX]->NumUniformBlocks) {
+      c.prog_data.num_surfaces =
+	 SURF_INDEX_VS_UBO(prog->_LinkedShaders[MESA_SHADER_VERTEX]->NumUniformBlocks);
+   }
 
    /* Scratch space is used for register spilling */
    if (c.last_scratch) {
+      perf_debug("Vertex shader triggered register spilling.  "
+                 "Try reducing the number of live vec4 values to "
+                 "improve performance.\n");
+
       c.prog_data.total_scratch = brw_get_scratch_size(c.last_scratch);
 
       brw_get_scratch_bo(intel, &brw->vs.scratch_bo,
@@ -288,6 +297,77 @@ do_vs_prog(struct brw_context *brw,
    return true;
 }
 
+static bool
+key_debug(const char *name, int a, int b)
+{
+   if (a != b) {
+      perf_debug("  %s %d->%d\n", name, a, b);
+      return true;
+   }
+   return false;
+}
+
+void
+brw_vs_debug_recompile(struct brw_context *brw,
+                       struct gl_shader_program *prog,
+                       const struct brw_vs_prog_key *key)
+{
+   struct brw_cache_item *c = NULL;
+   const struct brw_vs_prog_key *old_key = NULL;
+   bool found = false;
+
+   perf_debug("Recompiling vertex shader for program %d\n", prog->Name);
+
+   for (unsigned int i = 0; i < brw->cache.size; i++) {
+      for (c = brw->cache.items[i]; c; c = c->next) {
+         if (c->cache_id == BRW_VS_PROG) {
+            old_key = c->key;
+
+            if (old_key->program_string_id == key->program_string_id)
+               break;
+         }
+      }
+      if (c)
+         break;
+   }
+
+   if (!c) {
+      perf_debug("  Didn't find previous compile in the shader cache for "
+                 "debug\n");
+      return;
+   }
+
+   for (unsigned int i = 0; i < VERT_ATTRIB_MAX; i++) {
+      found |= key_debug("GL_FIXED rescaling",
+                         old_key->gl_fixed_input_size[i],
+                         key->gl_fixed_input_size[i]);
+   }
+
+   found |= key_debug("user clip flags",
+                      old_key->userclip_active, key->userclip_active);
+
+   found |= key_debug("user clipping planes as push constants",
+                      old_key->nr_userclip_plane_consts,
+                      key->nr_userclip_plane_consts);
+
+   found |= key_debug("clip distance enable",
+                      old_key->uses_clip_distance, key->uses_clip_distance);
+   found |= key_debug("clip plane enable bitfield",
+                      old_key->userclip_planes_enabled_gen_4_5,
+                      key->userclip_planes_enabled_gen_4_5);
+   found |= key_debug("copy edgeflag",
+                      old_key->copy_edgeflag, key->copy_edgeflag);
+   found |= key_debug("PointCoord replace",
+                      old_key->point_coord_replace, key->point_coord_replace);
+   found |= key_debug("vertex color clamping",
+                      old_key->clamp_vertex_color, key->clamp_vertex_color);
+
+   found |= brw_debug_recompile_sampler_key(&old_key->tex, &key->tex);
+
+   if (!found) {
+      perf_debug("  Something else\n");
+   }
+}
 
 static void brw_upload_vs_prog(struct brw_context *brw)
 {
@@ -319,8 +399,12 @@ static void brw_upload_vs_prog(struct brw_context *brw)
             = _mesa_logbase2(ctx->Transform.ClipPlanesEnabled) + 1;
       }
    }
-   key.copy_edgeflag = (ctx->Polygon.FrontMode != GL_FILL ||
-			ctx->Polygon.BackMode != GL_FILL);
+
+   /* _NEW_POLYGON */
+   if (intel->gen < 6) {
+      key.copy_edgeflag = (ctx->Polygon.FrontMode != GL_FILL ||
+                           ctx->Polygon.BackMode != GL_FILL);
+   }
 
    /* _NEW_LIGHT | _NEW_BUFFERS */
    key.clamp_vertex_color = ctx->Light._ClampVertexColor;
@@ -390,6 +474,17 @@ brw_vs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
 
    key.program_string_id = bvp->id;
    key.clamp_vertex_color = true;
+
+   for (int i = 0; i < MAX_SAMPLERS; i++) {
+      if (vp->Base.ShadowSamplers & (1 << i)) {
+         /* Assume DEPTH_TEXTURE_MODE is the default: X, X, X, 1 */
+         key.tex.swizzles[i] =
+            MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_X, SWIZZLE_X, SWIZZLE_ONE);
+      } else {
+         /* Color sampler: assume no swizzling. */
+         key.tex.swizzles[i] = SWIZZLE_XYZW;
+      }
+   }
 
    success = do_vs_prog(brw, prog, bvp, &key);
 

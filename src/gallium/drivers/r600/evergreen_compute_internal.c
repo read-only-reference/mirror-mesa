@@ -266,6 +266,9 @@ void evergreen_set_rat(
 
 	struct r600_pipe_state * state = CALLOC_STRUCT(r600_pipe_state);
 	struct pipe_surface rat_templ;
+	struct r600_surface *surf;
+	struct r600_resource *res;
+	struct r600_context *rctx = pipe->ctx;
 
 	COMPUTE_DBG("bind rat: %i \n", id);
 
@@ -291,9 +294,26 @@ void evergreen_set_rat(
 	 * of this driver. */
 	pipe->ctx->compute_cb_target_mask |= (0xf << (id * 4));
 
+	surf = (struct r600_surface*)pipe->ctx->framebuffer.cbufs[id];
+	res = (struct r600_resource*)surf->base.texture;
+
+	evergreen_init_color_surface(rctx, surf);
 
 	/* Get the CB register writes for the RAT */
-	evergreen_cb(pipe->ctx, state, &pipe->ctx->framebuffer, id);
+	r600_pipe_state_add_reg_bo(state, R_028C60_CB_COLOR0_BASE + id * 0x3C,
+				   surf->cb_color_base, res, RADEON_USAGE_READWRITE);
+	r600_pipe_state_add_reg(state, R_028C78_CB_COLOR0_DIM + id * 0x3C,
+				surf->cb_color_dim);
+	r600_pipe_state_add_reg_bo(state, R_028C70_CB_COLOR0_INFO + id * 0x3C,
+				   surf->cb_color_info, res, RADEON_USAGE_READWRITE);
+	r600_pipe_state_add_reg(state, R_028C64_CB_COLOR0_PITCH + id * 0x3C,
+				surf->cb_color_pitch);
+	r600_pipe_state_add_reg(state, R_028C68_CB_COLOR0_SLICE + id * 0x3C,
+				surf->cb_color_slice);
+	r600_pipe_state_add_reg(state, R_028C6C_CB_COLOR0_VIEW + id * 0x3C,
+				surf->cb_color_view);
+	r600_pipe_state_add_reg_bo(state, R_028C74_CB_COLOR0_ATTRIB + id * 0x3C,
+				   surf->cb_color_attrib, res, RADEON_USAGE_READWRITE);
 
 	/* Add the register blocks to the dirty list */
         free(pipe->ctx->states[R600_PIPE_STATE_FRAMEBUFFER]);
@@ -477,8 +497,8 @@ void evergreen_set_tex_resource(
 {
 	struct evergreen_compute_resource* res =
 		get_empty_res(pipe, COMPUTE_RESOURCE_TEX, id);
-	struct r600_resource_texture *tmp =
-		(struct r600_resource_texture*)view->base.texture;
+	struct r600_texture *tmp =
+		(struct r600_texture*)view->base.texture;
 
 	unsigned format, endian;
 	uint32_t word4 = 0, yuv_format = 0, pitch = 0;
@@ -502,8 +522,8 @@ void evergreen_set_tex_resource(
 	height = view->base.texture->height0;
 	depth = view->base.texture->depth0;
 
-	pitch = align(tmp->pitch_in_blocks[0] *
-		util_format_get_blockwidth(tmp->real_format), 8);
+	pitch = align(tmp->surface.level[0].nblk_x *
+		util_format_get_blockwidth(tmp->resource.b.b.format), 8);
 	array_mode = tmp->array_mode[0];
 	tile_type = tmp->tile_type;
 
@@ -520,8 +540,8 @@ void evergreen_set_tex_resource(
 	evergreen_emit_raw_value(res, (S_030004_TEX_HEIGHT(height - 1) |
 				S_030004_TEX_DEPTH(depth - 1) |
 				S_030004_ARRAY_MODE(array_mode)));
-	evergreen_emit_raw_value(res, tmp->offset[0] >> 8);
-	evergreen_emit_raw_value(res, tmp->offset[0] >> 8);
+	evergreen_emit_raw_value(res, tmp->surface.level[0].offset >> 8);
+	evergreen_emit_raw_value(res, tmp->surface.level[0].offset >> 8);
 	evergreen_emit_raw_value(res, (word4 |
 				S_030010_SRF_MODE_ALL(V_030010_SRF_MODE_ZERO_CLAMP_MINUS_ONE) |
 				S_030010_ENDIAN_SWAP(endian) |
@@ -538,7 +558,9 @@ void evergreen_set_tex_resource(
 
 	res->usage = RADEON_USAGE_READ;
 
-	res->coher_bo_size = tmp->offset[0] + util_format_get_blockwidth(tmp->real_format)*view->base.texture->width0*height*depth;
+	res->coher_bo_size = tmp->surface.level[0].offset +
+			     util_format_get_blockwidth(tmp->resource.b.b.format) *
+			     view->base.texture->width0*height*depth;
 
 	r600_inval_texture_cache(pipe->ctx);
 

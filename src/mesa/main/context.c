@@ -431,7 +431,7 @@ one_time_init( struct gl_context *ctx )
        * when an app is linked to libGLES*, there are not enough dynamic
        * entries.
        */
-      if (_mesa_is_desktop_gl(ctx))
+      if (_mesa_is_desktop_gl(ctx) || ctx->API == API_OPENGLES2)
          _mesa_init_remap_table();
    }
 
@@ -476,7 +476,8 @@ _mesa_init_current(struct gl_context *ctx)
  * Important: drivers should override these with actual limits.
  */
 static void
-init_program_limits(GLenum type, struct gl_program_constants *prog)
+init_program_limits(struct gl_context *ctx, GLenum type,
+                    struct gl_program_constants *prog)
 {
    prog->MaxInstructions = MAX_PROGRAM_INSTRUCTIONS;
    prog->MaxAluInstructions = MAX_PROGRAM_INSTRUCTIONS;
@@ -542,7 +543,9 @@ init_program_limits(GLenum type, struct gl_program_constants *prog)
    prog->LowInt = prog->HighInt = prog->MediumInt;
 
    prog->MaxUniformBlocks = 12;
-   prog->MaxCombinedUniformComponents = prog->MaxUniformComponents;
+   prog->MaxCombinedUniformComponents = (prog->MaxUniformComponents +
+                                         ctx->Const.MaxUniformBlockSize / 4 *
+                                         prog->MaxUniformBlocks);
 }
 
 
@@ -589,14 +592,21 @@ _mesa_init_constants(struct gl_context *ctx)
    ctx->Const.MaxSpotExponent = 128.0;
    ctx->Const.MaxViewportWidth = MAX_VIEWPORT_WIDTH;
    ctx->Const.MaxViewportHeight = MAX_VIEWPORT_HEIGHT;
+
+   /** GL_ARB_uniform_buffer_object */
+   ctx->Const.MaxCombinedUniformBlocks = 36;
+   ctx->Const.MaxUniformBufferBindings = 36;
+   ctx->Const.MaxUniformBlockSize = 16384;
+   ctx->Const.UniformBufferOffsetAlignment = 1;
+
 #if FEATURE_ARB_vertex_program
-   init_program_limits(GL_VERTEX_PROGRAM_ARB, &ctx->Const.VertexProgram);
+   init_program_limits(ctx, GL_VERTEX_PROGRAM_ARB, &ctx->Const.VertexProgram);
 #endif
 #if FEATURE_ARB_fragment_program
-   init_program_limits(GL_FRAGMENT_PROGRAM_ARB, &ctx->Const.FragmentProgram);
+   init_program_limits(ctx, GL_FRAGMENT_PROGRAM_ARB, &ctx->Const.FragmentProgram);
 #endif
 #if FEATURE_ARB_geometry_shader4
-   init_program_limits(MESA_GEOMETRY_PROGRAM, &ctx->Const.GeometryProgram);
+   init_program_limits(ctx, MESA_GEOMETRY_PROGRAM, &ctx->Const.GeometryProgram);
 #endif
    ctx->Const.MaxProgramMatrices = MAX_PROGRAM_MATRICES;
    ctx->Const.MaxProgramMatrixStackDepth = MAX_PROGRAM_MATRIX_STACK_DEPTH;
@@ -654,12 +664,6 @@ _mesa_init_constants(struct gl_context *ctx)
    ctx->Const.MaxTransformFeedbackSeparateComponents = 4 * MAX_FEEDBACK_ATTRIBS;
    ctx->Const.MaxTransformFeedbackInterleavedComponents = 4 * MAX_FEEDBACK_ATTRIBS;
    ctx->Const.MaxVertexStreams = 1;
-
-   /** GL_ARB_uniform_buffer_object */
-   ctx->Const.MaxCombinedUniformBlocks = 36;
-   ctx->Const.MaxUniformBufferBindings = 36;
-   ctx->Const.MaxUniformBlockSize = 16384;
-   ctx->Const.UniformBufferOffsetAlignment = 1;
 
    /* GL 3.2: hard-coded for now: */
    ctx->Const.ProfileMask = GL_CONTEXT_COMPATIBILITY_PROFILE_BIT;
@@ -960,20 +964,16 @@ _mesa_initialize_context(struct gl_context *ctx,
 #if FEATURE_dispatch
    /* setup the API dispatch tables */
    switch (ctx->API) {
-#if FEATURE_GL
+#if FEATURE_GL || FEATURE_ES2
    case API_OPENGL:
    case API_OPENGL_CORE:
+   case API_OPENGLES2:
       ctx->Exec = _mesa_create_exec_table(ctx);
       break;
 #endif
 #if FEATURE_ES1
    case API_OPENGLES:
       ctx->Exec = _mesa_create_exec_table_es1();
-      break;
-#endif
-#if FEATURE_ES2
-   case API_OPENGLES2:
-      ctx->Exec = _mesa_create_exec_table_es2();
       break;
 #endif
    default:
@@ -1008,7 +1008,6 @@ _mesa_initialize_context(struct gl_context *ctx,
 
    switch (ctx->API) {
    case API_OPENGL:
-   case API_OPENGL_CORE:
 #if FEATURE_dlist
       ctx->Save = _mesa_create_save_table();
       if (!ctx->Save) {
@@ -1019,6 +1018,7 @@ _mesa_initialize_context(struct gl_context *ctx,
 
       _mesa_install_save_vtxfmt( ctx, &ctx->ListState.ListVtxfmt );
 #endif
+   case API_OPENGL_CORE:
       break;
    case API_OPENGLES:
       /**

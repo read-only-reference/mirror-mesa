@@ -33,6 +33,7 @@
 #include "mipmap.h"
 #include "mtypes.h"
 #include "teximage.h"
+#include "texobj.h"
 #include "texstore.h"
 #include "image.h"
 #include "macros.h"
@@ -1817,7 +1818,7 @@ _mesa_prepare_mipmap_level(struct gl_context *ctx,
                            GLsizei width, GLsizei height, GLsizei depth,
                            GLsizei border, GLenum intFormat, gl_format format)
 {
-   const GLuint numFaces = texObj->Target == GL_TEXTURE_CUBE_MAP ? 6 : 1;
+   const GLuint numFaces = _mesa_num_tex_faces(texObj->Target);
    GLuint face;
 
    if (texObj->Immutable) {
@@ -1865,8 +1866,7 @@ _mesa_prepare_mipmap_level(struct gl_context *ctx,
                                     width, height, depth,
                                     border, intFormat, format);
 
-         ctx->Driver.AllocTextureImageBuffer(ctx, dstImage,
-                                             format, width, height, depth);
+         ctx->Driver.AllocTextureImageBuffer(ctx, dstImage);
 
          /* in case the mipmap level is part of an FBO: */
          _mesa_update_fbo_texture(ctx, texObj, face, level);

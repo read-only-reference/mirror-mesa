@@ -61,7 +61,7 @@ gen7_set_surface_msaa(struct gen7_surface_state *surf, unsigned num_samples,
 {
    if (num_samples > 4)
       surf->ss4.num_multisamples = GEN7_SURFACE_MULTISAMPLECOUNT_8;
-   else if (num_samples > 0)
+   else if (num_samples > 1)
       surf->ss4.num_multisamples = GEN7_SURFACE_MULTISAMPLECOUNT_4;
    else
       surf->ss4.num_multisamples = GEN7_SURFACE_MULTISAMPLECOUNT_1;
@@ -203,11 +203,13 @@ gen7_check_surface_setup(struct gen7_surface_state *surf,
 
 
 static void
-gen7_update_buffer_texture_surface(struct gl_context *ctx, GLuint unit)
+gen7_update_buffer_texture_surface(struct gl_context *ctx,
+                                   unsigned unit,
+                                   uint32_t *binding_table,
+                                   unsigned surf_index)
 {
    struct brw_context *brw = brw_context(ctx);
    struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
-   const GLuint surf_index = SURF_INDEX_TEXTURE(unit);
    struct gen7_surface_state *surf;
    struct intel_buffer_object *intel_obj =
       intel_buffer_object(tObj->BufferObject);
@@ -216,7 +218,7 @@ gen7_update_buffer_texture_surface(struct gl_context *ctx, GLuint unit)
    int texel_size = _mesa_get_format_bytes(format);
 
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-			  sizeof(*surf), 32, &brw->wm.surf_offset[surf_index]);
+			  sizeof(*surf), 32, &binding_table[surf_index]);
    memset(surf, 0, sizeof(*surf));
 
    surf->ss0.surface_type = BRW_SURFACE_BUFFER;
@@ -237,7 +239,7 @@ gen7_update_buffer_texture_surface(struct gl_context *ctx, GLuint unit)
        * a separate cache and is just the sampler cache.
        */
       drm_intel_bo_emit_reloc(brw->intel.batch.bo,
-			      (brw->wm.surf_offset[surf_index] +
+			      (binding_table[surf_index] +
 			       offsetof(struct gen7_surface_state, ss1)),
 			      bo, 0,
 			      I915_GEM_DOMAIN_SAMPLER, 0);
@@ -261,7 +263,10 @@ gen7_update_buffer_texture_surface(struct gl_context *ctx, GLuint unit)
 }
 
 static void
-gen7_update_texture_surface(struct gl_context *ctx, GLuint unit)
+gen7_update_texture_surface(struct gl_context *ctx,
+                            unsigned unit,
+                            uint32_t *binding_table,
+                            unsigned surf_index)
 {
    struct brw_context *brw = brw_context(ctx);
    struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
@@ -269,23 +274,22 @@ gen7_update_texture_surface(struct gl_context *ctx, GLuint unit)
    struct intel_mipmap_tree *mt = intelObj->mt;
    struct gl_texture_image *firstImage = tObj->Image[0][tObj->BaseLevel];
    struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit);
-   const GLuint surf_index = SURF_INDEX_TEXTURE(unit);
    struct gen7_surface_state *surf;
    int width, height, depth;
 
    if (tObj->Target == GL_TEXTURE_BUFFER) {
-      gen7_update_buffer_texture_surface(ctx, unit);
+      gen7_update_buffer_texture_surface(ctx, unit, binding_table, surf_index);
       return;
    }
 
    /* We don't support MSAA for textures. */
    assert(!mt->array_spacing_lod0);
-   assert(mt->num_samples == 0);
+   assert(mt->num_samples <= 1);
 
    intel_miptree_get_dimensions_for_image(firstImage, &width, &height, &depth);
 
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-			  sizeof(*surf), 32, &brw->wm.surf_offset[surf_index]);
+			  sizeof(*surf), 32, &binding_table[surf_index]);
    memset(surf, 0, sizeof(*surf));
 
    if (mt->align_h == 4)
@@ -296,7 +300,7 @@ gen7_update_texture_surface(struct gl_context *ctx, GLuint unit)
    surf->ss0.surface_type = translate_tex_target(tObj->Target);
    surf->ss0.surface_format = translate_tex_format(mt->format,
                                                    firstImage->InternalFormat,
-                                                   sampler->DepthMode,
+                                                   tObj->DepthMode,
                                                    sampler->sRGBDecode);
    if (tObj->Target == GL_TEXTURE_CUBE_MAP) {
       surf->ss0.cube_pos_x = 1;
@@ -347,7 +351,7 @@ gen7_update_texture_surface(struct gl_context *ctx, GLuint unit)
 
    /* Emit relocation to surface contents */
    drm_intel_bo_emit_reloc(brw->intel.batch.bo,
-			   brw->wm.surf_offset[surf_index] +
+			   binding_table[surf_index] +
 			   offsetof(struct gen7_surface_state, ss1),
 			   intelObj->mt->region->bo, intelObj->mt->offset,
 			   I915_GEM_DOMAIN_SAMPLER, 0);
@@ -362,6 +366,7 @@ gen7_update_texture_surface(struct gl_context *ctx, GLuint unit)
 void
 gen7_create_constant_surface(struct brw_context *brw,
 			     drm_intel_bo *bo,
+			     uint32_t offset,
 			     int width,
 			     uint32_t *out_offset)
 {
@@ -378,7 +383,7 @@ gen7_create_constant_surface(struct brw_context *brw,
    surf->ss0.render_cache_read_write = 1;
 
    assert(bo);
-   surf->ss1.base_addr = bo->offset; /* reloc */
+   surf->ss1.base_addr = bo->offset + offset; /* reloc */
 
    surf->ss2.width = w & 0x7f;            /* bits 6:0 of size or width */
    surf->ss2.height = (w >> 7) & 0x1fff;  /* bits 19:7 of size or width */
@@ -400,7 +405,7 @@ gen7_create_constant_surface(struct brw_context *brw,
    drm_intel_bo_emit_reloc(brw->intel.batch.bo,
 			   (*out_offset +
 			    offsetof(struct gen7_surface_state, ss1)),
-			   bo, 0,
+			   bo, offset,
 			   I915_GEM_DOMAIN_SAMPLER, 0);
 
    gen7_check_surface_setup(surf, false /* is_render_target */);

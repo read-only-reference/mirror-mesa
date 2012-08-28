@@ -13,6 +13,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "SIISelLowering.h"
+#include "AMDIL.h"
+#include "AMDILIntrinsicInfo.h"
 #include "SIInstrInfo.h"
 #include "SIRegisterInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -43,6 +45,13 @@ SITargetLowering::SITargetLowering(TargetMachine &TM) :
   setOperationAction(ISD::ADD, MVT::i32, Legal);
 
   setOperationAction(ISD::BR_CC, MVT::i32, Custom);
+
+  setOperationAction(ISD::INTRINSIC_WO_CHAIN, MVT::Other, Custom);
+
+  // We need to custom lower loads from the USER_SGPR address space, so we can
+  // add the SGPRs as livein registers.
+  setOperationAction(ISD::LOAD, MVT::i32, Custom);
+  setOperationAction(ISD::LOAD, MVT::i64, Custom);
 
   setOperationAction(ISD::SELECT_CC, MVT::f32, Custom);
   setOperationAction(ISD::SELECT_CC, MVT::i32, Custom);
@@ -99,23 +108,32 @@ MachineBasicBlock * SITargetLowering::EmitInstrWithCustomInserter(
     MI->eraseFromParent();
     break;
 
+  case AMDGPU::FNEG_SI:
+    BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDGPU::V_MOV_B32_e64))
+                 .addOperand(MI->getOperand(0))
+                 .addOperand(MI->getOperand(1))
+                 // VSRC1-2 are unused, but we still need to fill all the
+                 // operand slots, so we just reuse the VSRC0 operand
+                 .addOperand(MI->getOperand(1))
+                 .addOperand(MI->getOperand(1))
+                 .addImm(0) // ABS
+                 .addImm(0) // CLAMP
+                 .addImm(0) // OMOD
+                 .addImm(1); // NEG
+    MI->eraseFromParent();
+    break;
+
   case AMDGPU::SI_INTERP:
     LowerSI_INTERP(MI, *BB, I, MRI);
     break;
   case AMDGPU::SI_INTERP_CONST:
-    LowerSI_INTERP_CONST(MI, *BB, I);
+    LowerSI_INTERP_CONST(MI, *BB, I, MRI);
+    break;
+  case AMDGPU::SI_KIL:
+    LowerSI_KIL(MI, *BB, I, MRI);
     break;
   case AMDGPU::SI_V_CNDLT:
     LowerSI_V_CNDLT(MI, *BB, I, MRI);
-    break;
-  case AMDGPU::USE_SGPR_32:
-  case AMDGPU::USE_SGPR_64:
-    lowerUSE_SGPR(MI, BB->getParent(), MRI);
-    MI->eraseFromParent();
-    break;
-  case AMDGPU::VS_LOAD_BUFFER_INDEX:
-    addLiveIn(MI, BB->getParent(), MRI, TII, AMDGPU::VGPR0);
-    MI->eraseFromParent();
     break;
   }
   return BB;
@@ -132,6 +150,7 @@ void SITargetLowering::LowerSI_INTERP(MachineInstr *MI, MachineBasicBlock &BB,
     MachineBasicBlock::iterator I, MachineRegisterInfo & MRI) const
 {
   unsigned tmp = MRI.createVirtualRegister(&AMDGPU::VReg_32RegClass);
+  unsigned M0 = MRI.createVirtualRegister(&AMDGPU::M0RegRegClass);
   MachineOperand dst = MI->getOperand(0);
   MachineOperand iReg = MI->getOperand(1);
   MachineOperand jReg = MI->getOperand(2);
@@ -139,41 +158,76 @@ void SITargetLowering::LowerSI_INTERP(MachineInstr *MI, MachineBasicBlock &BB,
   MachineOperand attr = MI->getOperand(4);
   MachineOperand params = MI->getOperand(5);
 
-  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::S_MOV_B32))
-          .addReg(AMDGPU::M0)
+  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::S_MOV_B32), M0)
           .addOperand(params);
 
   BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::V_INTERP_P1_F32), tmp)
           .addOperand(iReg)
           .addOperand(attr_chan)
-          .addOperand(attr);
+          .addOperand(attr)
+	  .addReg(M0);
 
   BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::V_INTERP_P2_F32))
           .addOperand(dst)
           .addReg(tmp)
           .addOperand(jReg)
           .addOperand(attr_chan)
-          .addOperand(attr);
+          .addOperand(attr)
+	  .addReg(M0);
 
   MI->eraseFromParent();
 }
 
 void SITargetLowering::LowerSI_INTERP_CONST(MachineInstr *MI,
-    MachineBasicBlock &BB, MachineBasicBlock::iterator I) const
+    MachineBasicBlock &BB, MachineBasicBlock::iterator I,
+    MachineRegisterInfo &MRI) const
 {
   MachineOperand dst = MI->getOperand(0);
   MachineOperand attr_chan = MI->getOperand(1);
   MachineOperand attr = MI->getOperand(2);
   MachineOperand params = MI->getOperand(3);
+  unsigned M0 = MRI.createVirtualRegister(&AMDGPU::M0RegRegClass);
 
-  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::S_MOV_B32))
-          .addReg(AMDGPU::M0)
+  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::S_MOV_B32), M0)
           .addOperand(params);
 
   BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::V_INTERP_MOV_F32))
           .addOperand(dst)
           .addOperand(attr_chan)
-          .addOperand(attr);
+          .addOperand(attr)
+	  .addReg(M0);
+
+  MI->eraseFromParent();
+}
+
+void SITargetLowering::LowerSI_KIL(MachineInstr *MI, MachineBasicBlock &BB,
+    MachineBasicBlock::iterator I, MachineRegisterInfo & MRI) const
+{
+  // Clear this pixel from the exec mask if the operand is negative
+  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::V_CMPX_LE_F32_e32),
+          AMDGPU::VCC)
+          .addReg(AMDGPU::SREG_LIT_0)
+          .addOperand(MI->getOperand(0));
+
+  // If the exec mask is non-zero, skip the next two instructions
+  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::S_CBRANCH_EXECNZ))
+          .addImm(3)
+          .addReg(AMDGPU::EXEC);
+
+  // Exec mask is zero: Export to NULL target...
+  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::EXP))
+          .addImm(0)
+          .addImm(0x09) // V_008DFC_SQ_EXP_NULL
+          .addImm(0)
+          .addImm(1)
+          .addImm(1)
+          .addReg(AMDGPU::SREG_LIT_0)
+          .addReg(AMDGPU::SREG_LIT_0)
+          .addReg(AMDGPU::SREG_LIT_0)
+          .addReg(AMDGPU::SREG_LIT_0);
+
+  // ... and terminate wavefront
+  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::S_ENDPGM));
 
   MI->eraseFromParent();
 }
@@ -195,21 +249,6 @@ void SITargetLowering::LowerSI_V_CNDLT(MachineInstr *MI, MachineBasicBlock &BB,
   MI->eraseFromParent();
 }
 
-void SITargetLowering::lowerUSE_SGPR(MachineInstr *MI,
-    MachineFunction * MF, MachineRegisterInfo & MRI) const
-{
-  const TargetInstrInfo * TII = getTargetMachine().getInstrInfo();
-  unsigned dstReg = MI->getOperand(0).getReg();
-  int64_t newIndex = MI->getOperand(1).getImm();
-  const TargetRegisterClass * dstClass = MRI.getRegClass(dstReg);
-  unsigned DwordWidth = dstClass->getSize() / 4;
-  assert(newIndex % DwordWidth == 0 && "USER_SGPR not properly aligned");
-  newIndex = newIndex / DwordWidth;
-
-  unsigned newReg = dstClass->getRegister(newIndex);
-  addLiveIn(MI, MF, MRI, TII, newReg); 
-}
-
 EVT SITargetLowering::getSetCCResultType(EVT VT) const
 {
   return MVT::i1;
@@ -224,9 +263,23 @@ SDValue SITargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG) const
   switch (Op.getOpcode()) {
   default: return AMDGPUTargetLowering::LowerOperation(Op, DAG);
   case ISD::BR_CC: return LowerBR_CC(Op, DAG);
+  case ISD::LOAD: return LowerLOAD(Op, DAG);
   case ISD::SELECT_CC: return LowerSELECT_CC(Op, DAG);
   case ISD::AND: return Loweri1ContextSwitch(Op, DAG, ISD::AND);
+  case ISD::INTRINSIC_WO_CHAIN: {
+    unsigned IntrinsicID =
+                         cast<ConstantSDNode>(Op.getOperand(0))->getZExtValue();
+    EVT VT = Op.getValueType();
+    switch (IntrinsicID) {
+    case AMDGPUIntrinsic::SI_vs_load_buffer_index:
+      return CreateLiveInRegister(DAG, &AMDGPU::VReg_32RegClass,
+                                  AMDGPU::VGPR0, VT);
+    default: return AMDGPUTargetLowering::LowerOperation(Op, DAG);
+    }
+    break;
   }
+  }
+  return SDValue();
 }
 
 /// Loweri1ContextSwitch - The function is for lowering i1 operations on the
@@ -274,6 +327,48 @@ SDValue SITargetLowering::LowerBR_CC(SDValue Op, SelectionDAG &DAG) const
       MVT::Other, Chain,
       JumpT, CmpValue);
   return Result;
+}
+
+SDValue SITargetLowering::LowerLOAD(SDValue Op, SelectionDAG &DAG) const
+{
+  EVT VT = Op.getValueType();
+  LoadSDNode *Ptr = dyn_cast<LoadSDNode>(Op);
+
+  assert(Ptr);
+
+  unsigned AddrSpace = Ptr->getPointerInfo().getAddrSpace();
+
+  // We only need to lower USER_SGPR address space loads
+  if (AddrSpace != AMDGPUAS::USER_SGPR_ADDRESS) {
+    return SDValue();
+  }
+
+  // Loads from the USER_SGPR address space can only have constant value
+  // pointers.
+  ConstantSDNode *BasePtr = dyn_cast<ConstantSDNode>(Ptr->getBasePtr());
+  assert(BasePtr);
+
+  unsigned TypeDwordWidth = VT.getSizeInBits() / 32;
+  const TargetRegisterClass * dstClass;
+  switch (TypeDwordWidth) {
+    default:
+      assert(!"USER_SGPR value size not implemented");
+      return SDValue();
+    case 1:
+      dstClass = &AMDGPU::SReg_32RegClass;
+      break;
+    case 2:
+      dstClass = &AMDGPU::SReg_64RegClass;
+      break;
+  }
+  uint64_t Index = BasePtr->getZExtValue();
+  assert(Index % TypeDwordWidth == 0 && "USER_SGPR not properly aligned");
+  unsigned SGPRIndex = Index / TypeDwordWidth;
+  unsigned Reg = dstClass->getRegister(SGPRIndex);
+
+  DAG.ReplaceAllUsesOfValueWith(Op, CreateLiveInRegister(DAG, dstClass, Reg,
+                                                         VT));
+  return SDValue();
 }
 
 SDValue SITargetLowering::LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const

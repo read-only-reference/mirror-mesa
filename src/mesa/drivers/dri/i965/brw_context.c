@@ -75,27 +75,81 @@ bool
 brwCreateContext(int api,
 	         const struct gl_config *mesaVis,
 		 __DRIcontext *driContextPriv,
+                 unsigned major_version,
+                 unsigned minor_version,
+                 uint32_t flags,
+                 unsigned *error,
 	         void *sharedContextPrivate)
 {
    __DRIscreen *sPriv = driContextPriv->driScreenPriv;
    struct intel_screen *screen = sPriv->driverPrivate;
    struct dd_function_table functions;
-   struct brw_context *brw = rzalloc(NULL, struct brw_context);
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
    unsigned i;
 
+   /* Filter against the requested API and version.
+    */
+   switch (api) {
+   case API_OPENGL: {
+#ifdef TEXTURE_FLOAT_ENABLED
+      const unsigned max_version =
+         (screen->gen == 6 ||
+          (screen->gen == 7 && screen->kernel_has_gen7_sol_reset))
+         ? 30 : 21;
+#else
+      const unsigned max_version = 21;
+#endif
+      const unsigned req_version = major_version * 10 + minor_version;
+
+      if (req_version > max_version) {
+         *error = __DRI_CTX_ERROR_BAD_VERSION;
+         return false;
+      }
+      break;
+   }
+   case API_OPENGLES:
+   case API_OPENGLES2:
+      break;
+   case API_OPENGL_CORE: {
+#ifdef TEXTURE_FLOAT_ENABLED
+      const unsigned max_version =
+         (screen->gen == 6 ||
+          (screen->gen == 7 && screen->kernel_has_gen7_sol_reset))
+         ? 31 : 0;
+      const unsigned req_version = major_version * 10 + minor_version;
+
+      if (req_version > max_version) {
+         *error = (max_version == 0)
+            ? __DRI_CTX_ERROR_BAD_API : __DRI_CTX_ERROR_BAD_VERSION;
+         return false;
+      }
+      break;
+#else
+      *error = __DRI_CTX_ERROR_BAD_API;
+      return false;
+#endif
+   }
+   default:
+      *error = __DRI_CTX_ERROR_BAD_API;
+      return false;
+   }
+
+   struct brw_context *brw = rzalloc(NULL, struct brw_context);
    if (!brw) {
       printf("%s: failed to alloc context\n", __FUNCTION__);
+      *error = __DRI_CTX_ERROR_NO_MEMORY;
       return false;
    }
 
    brwInitDriverFunctions(screen, &functions);
 
+   struct intel_context *intel = &brw->intel;
+   struct gl_context *ctx = &intel->ctx;
+
    if (!intelInitContext( intel, api, mesaVis, driContextPriv,
 			  sharedContextPrivate, &functions )) {
       printf("%s: failed to init intel context\n", __FUNCTION__);
       FREE(brw);
+      *error = __DRI_CTX_ERROR_NO_MEMORY;
       return false;
    }
 
@@ -106,7 +160,9 @@ brwCreateContext(int api,
    /* Initialize swrast, tnl driver tables: */
    intelInitSpanFuncs(ctx);
 
-   TNL_CONTEXT(ctx)->Driver.RunPipeline = _tnl_run_pipeline;
+   TNLcontext *tnl = TNL_CONTEXT(ctx);
+   if (tnl)
+      tnl->Driver.RunPipeline = _tnl_run_pipeline;
 
    ctx->Const.MaxDualSourceDrawBuffers = 1;
    ctx->Const.MaxDrawBuffers = BRW_MAX_DRAW_BUFFERS;
@@ -222,6 +278,8 @@ brwCreateContext(int api,
    if (intel->gen >= 6)
        ctx->Const.QuadsFollowProvokingVertexConvention = false;
 
+   ctx->Const.QueryCounterBits.Timestamp = 36;
+
    if (intel->is_g4x || intel->gen >= 5) {
       brw->CMD_VF_STATISTICS = GM45_3DSTATE_VF_STATISTICS;
       brw->CMD_PIPELINE_SELECT = CMD_PIPELINE_SELECT_GM45;
@@ -320,6 +378,13 @@ brwCreateContext(int api,
    ctx->Const.UniformBooleanTrue = 1;
 
    ctx->Const.ForceGLSLExtensionsWarn = driQueryOptionb(&intel->optionCache, "force_glsl_extensions_warn");
+
+   ctx->Const.ContextFlags = 0;
+   if ((flags & __DRI_CTX_FLAG_FORWARD_COMPATIBLE) != 0)
+      ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT;
+
+   if ((flags & __DRI_CTX_FLAG_DEBUG) != 0)
+      ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_DEBUG_BIT;
 
    return true;
 }

@@ -26,6 +26,7 @@ doxygen:
 
 check-local:
 	$(MAKE) -C src/mapi/glapi/tests check
+	$(MAKE) -C src/mapi/shared-glapi/tests check
 	$(MAKE) -C src/mesa/main/tests check
 	$(MAKE) -C src/glsl/tests check
 	$(MAKE) -C src/glx/tests check
@@ -51,7 +52,7 @@ distclean-local:
 
 # Rules for making release tarballs
 
-PACKAGE_VERSION=8.1-devel
+PACKAGE_VERSION=9.0-devel
 PACKAGE_DIR = Mesa-$(PACKAGE_VERSION)
 PACKAGE_NAME = MesaLib-$(PACKAGE_VERSION)
 

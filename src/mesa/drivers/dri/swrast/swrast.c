@@ -268,7 +268,7 @@ swrast_delete_renderbuffer(struct gl_renderbuffer *rb)
     TRACE;
 
     free(xrb->Base.Buffer);
-    free(xrb);
+    _mesa_delete_renderbuffer(rb);
 }
 
 /* see bytes_per_line in libGL */
@@ -632,13 +632,14 @@ viewport(struct gl_context *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
 }
 
 static gl_format swrastChooseTextureFormat(struct gl_context * ctx,
+                                           GLenum target,
 					   GLint internalFormat,
 					   GLenum format,
 					   GLenum type)
 {
     if (internalFormat == GL_RGB)
 	return MESA_FORMAT_XRGB8888;
-    return _mesa_choose_tex_format(ctx, internalFormat, format, type);
+    return _mesa_choose_tex_format(ctx, target, internalFormat, format, type);
 }
 
 static void
@@ -719,11 +720,20 @@ dri_create_context(gl_api api,
      */
     (void) flags;
 
-    if (api == API_OPENGL
-	&& (major_version > 2
-	    || (major_version == 2 && minor_version > 1))) {
-       *error = __DRI_CTX_ERROR_BAD_VERSION;
-       goto context_fail;
+    switch (api) {
+    case API_OPENGL:
+        if (major_version > 2
+	    || (major_version == 2 && minor_version > 1)) {
+            *error = __DRI_CTX_ERROR_BAD_VERSION;
+            return GL_FALSE;
+        }
+        break;
+    case API_OPENGLES:
+    case API_OPENGLES2:
+        break;
+    case API_OPENGL_CORE:
+        *error = __DRI_CTX_ERROR_BAD_API;
+        return GL_FALSE;
     }
 
     ctx = CALLOC_STRUCT(dri_context);
@@ -771,6 +781,8 @@ dri_create_context(gl_api api,
     _mesa_enable_sw_extensions(mesaCtx);
 
     switch (api) {
+    case API_OPENGL_CORE:
+        /* XXX fix me, fall-through for now */
     case API_OPENGL:
         _mesa_enable_1_3_extensions(mesaCtx);
         _mesa_enable_1_4_extensions(mesaCtx);

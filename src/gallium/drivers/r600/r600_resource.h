@@ -42,42 +42,89 @@ struct r600_resource_global {
 	struct compute_memory_item *chunk;
 };
 
-struct r600_resource_texture {
+struct r600_texture {
 	struct r600_resource		resource;
 
-	/* If this resource is a depth-stencil buffer on evergreen, this contains
-	 * the depth part of the format. There is a separate stencil resource
-	 * for the stencil buffer below. */
-	enum pipe_format		real_format;
-
-	unsigned			offset[PIPE_MAX_TEXTURE_LEVELS];
-	unsigned			pitch_in_bytes[PIPE_MAX_TEXTURE_LEVELS];  /* transfer */
-	unsigned			pitch_in_blocks[PIPE_MAX_TEXTURE_LEVELS]; /* texture resource */
-	unsigned			layer_size[PIPE_MAX_TEXTURE_LEVELS];
 	unsigned			array_mode[PIPE_MAX_TEXTURE_LEVELS];
 	unsigned			pitch_override;
 	unsigned			size;
 	unsigned			tile_type;
 	bool				is_depth;
 	bool				is_rat;
-	unsigned			dirty_db_mask; /* each bit says if that miplevel is dirty */
-	struct r600_resource_texture    *stencil; /* Stencil is in a separate buffer on Evergreen. */
-	struct r600_resource_texture	*flushed_depth_texture;
+	unsigned			dirty_level_mask; /* each bit says if that mipmap is compressed */
+	struct r600_texture		*flushed_depth_texture;
 	boolean				is_flushing_texture;
 	struct radeon_surface		surface;
+
+	/* FMASK and CMASK can only be used with MSAA textures for now.
+	 * MSAA textures cannot have mipmaps. */
+	unsigned			fmask_offset, fmask_size, fmask_bank_height;
+	unsigned			cmask_offset, cmask_size, cmask_slice_tile_max;
 };
 
 #define R600_TEX_IS_TILED(tex, level) ((tex)->array_mode[level] != V_038000_ARRAY_LINEAR_GENERAL && (tex)->array_mode[level] != V_038000_ARRAY_LINEAR_ALIGNED)
 
+struct r600_fmask_info {
+	unsigned size;
+	unsigned alignment;
+	unsigned bank_height;
+};
+
+struct r600_cmask_info {
+	unsigned size;
+	unsigned alignment;
+	unsigned slice_tile_max;
+};
+
 struct r600_surface {
 	struct pipe_surface		base;
-	unsigned			aligned_height;
+
+	bool color_initialized;
+	bool depth_initialized;
+
+	/* Misc. color flags. */
+	bool alphatest_bypass;
+	bool export_16bpc;
+
+	/* Color registers. */
+	unsigned cb_color_info;
+	unsigned cb_color_base;
+	unsigned cb_color_view;
+	unsigned cb_color_size;		/* R600 only */
+	unsigned cb_color_dim;		/* EG only */
+	unsigned cb_color_pitch;	/* EG only */
+	unsigned cb_color_slice;	/* EG only */
+	unsigned cb_color_attrib;	/* EG only */
+	unsigned cb_color_fmask;	/* CB_COLORn_FMASK (EG) or CB_COLORn_FRAG (r600) */
+	unsigned cb_color_fmask_slice;	/* EG only */
+	unsigned cb_color_cmask;	/* CB_COLORn_CMASK (EG) or CB_COLORn_TILE (r600) */
+	unsigned cb_color_cmask_slice;	/* EG only */
+	unsigned cb_color_mask;		/* R600 only */
+	struct r600_resource *cb_buffer_fmask; /* Used for FMASK relocations. R600 only */
+	struct r600_resource *cb_buffer_cmask; /* Used for CMASK relocations. R600 only */
+
+	/* DB registers. */
+	unsigned db_depth_info;		/* DB_Z_INFO (EG) or DB_DEPTH_INFO (r600) */
+	unsigned db_depth_base;		/* DB_Z_READ/WRITE_BASE (EG) or DB_DEPTH_BASE (r600) */
+	unsigned db_depth_view;
+	unsigned db_depth_size;
+	unsigned db_depth_slice;	/* EG only */
+	unsigned db_stencil_base;	/* EG only */
+	unsigned db_stencil_info;	/* EG only */
+	unsigned db_prefetch_limit;	/* R600 only */
 };
 
 void r600_resource_destroy(struct pipe_screen *screen, struct pipe_resource *res);
 void r600_init_screen_resource_functions(struct pipe_screen *screen);
 
 /* r600_texture */
+void r600_texture_get_fmask_info(struct r600_screen *rscreen,
+				 struct r600_texture *rtex,
+				 unsigned nr_samples,
+				 struct r600_fmask_info *out);
+void r600_texture_get_cmask_info(struct r600_screen *rscreen,
+				 struct r600_texture *rtex,
+				 struct r600_cmask_info *out);
 struct pipe_resource *r600_texture_create(struct pipe_screen *screen,
 					const struct pipe_resource *templ);
 struct pipe_resource *r600_texture_from_handle(struct pipe_screen *screen,
@@ -91,7 +138,7 @@ static INLINE struct r600_resource *r600_resource(struct pipe_resource *r)
 
 bool r600_init_flushed_depth_texture(struct pipe_context *ctx,
 				     struct pipe_resource *texture,
-				     struct r600_resource_texture **staging);
+				     struct r600_texture **staging);
 
 /* r600_texture.c texture transfer functions. */
 struct pipe_transfer* r600_texture_get_transfer(struct pipe_context *ctx,

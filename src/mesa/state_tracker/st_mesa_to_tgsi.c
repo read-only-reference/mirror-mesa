@@ -680,7 +680,7 @@ compile_instruction(
 {
    struct ureg_program *ureg = t->ureg;
    GLuint i;
-   struct ureg_dst dst[1];
+   struct ureg_dst dst[1] = { { 0 } };
    struct ureg_src src[4];
    unsigned num_dst;
    unsigned num_src;
@@ -1198,7 +1198,7 @@ st_translate_mesa_program(
     * for these, so we put all the translated regs in t->constants.
     */
    if (program->Parameters) {
-      t->constants = CALLOC( program->Parameters->NumParameters,
+      t->constants = calloc( program->Parameters->NumParameters,
                              sizeof t->constants[0] );
       if (t->constants == NULL) {
          ret = PIPE_ERROR_OUT_OF_MEMORY;

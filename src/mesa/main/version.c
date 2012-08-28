@@ -33,22 +33,25 @@
  * are point-separated version numbers, such as "3.0".
  */
 static void
-override_version(struct gl_context *ctx, GLuint *major, GLuint *minor)
+override_version(struct gl_context *ctx)
 {
    const char *env_var = "MESA_GL_VERSION_OVERRIDE";
    const char *version;
    int n;
+   int major, minor;
 
    version = getenv(env_var);
    if (!version) {
       return;
    }
 
-   n = sscanf(version, "%u.%u", major, minor);
+   n = sscanf(version, "%u.%u", &major, &minor);
    if (n != 2) {
       fprintf(stderr, "error: invalid value for %s: %s\n", env_var, version);
       return;
    }
+
+   ctx->Version = major * 10 + minor;
 }
 
 /**
@@ -134,7 +137,6 @@ compute_version(struct gl_context *ctx)
                               ctx->Extensions.ARB_texture_float &&
                               ctx->Extensions.ARB_texture_rg &&
                               ctx->Extensions.ARB_texture_compression_rgtc &&
-                              ctx->Extensions.APPLE_vertex_array_object &&
                               ctx->Extensions.EXT_draw_buffers2 &&
                               ctx->Extensions.ARB_framebuffer_object &&
                               ctx->Extensions.EXT_framebuffer_sRGB &&
@@ -170,12 +172,12 @@ compute_version(struct gl_context *ctx)
                               ctx->Extensions.ARB_explicit_attrib_location &&
                               ctx->Extensions.ARB_instanced_arrays &&
                               ctx->Extensions.ARB_occlusion_query2 &&
-                              ctx->Extensions.ARB_sampler_objects &&
                               ctx->Extensions.ARB_shader_bit_encoding &&
                               ctx->Extensions.ARB_texture_rgb10_a2ui &&
                               ctx->Extensions.ARB_timer_query &&
                               ctx->Extensions.ARB_vertex_type_2_10_10_10_rev &&
                               ctx->Extensions.EXT_texture_swizzle);
+                              /* ARB_sampler_objects is always enabled in mesa */
 
    if (ver_3_3) {
       major = 3;
@@ -218,10 +220,9 @@ compute_version(struct gl_context *ctx)
       minor = 2;
    }
 
-   ctx->VersionMajor = major;
-   ctx->VersionMinor = minor;
+   ctx->Version = major * 10 + minor;
 
-   override_version(ctx, &ctx->VersionMajor, &ctx->VersionMinor);
+   override_version(ctx);
 
    ctx->VersionString = (char *) malloc(max);
    if (ctx->VersionString) {
@@ -231,7 +232,7 @@ compute_version(struct gl_context *ctx)
 		     " (" MESA_GIT_SHA1 ")"
 #endif
 		     ,
-		     ctx->VersionMajor, ctx->VersionMinor);
+		     ctx->Version / 10, ctx->Version % 10);
    }
 }
 
@@ -248,11 +249,9 @@ compute_version_es1(struct gl_context *ctx)
                               ctx->Extensions.EXT_point_parameters);
 
    if (ver_1_1) {
-      ctx->VersionMajor = 1;
-      ctx->VersionMinor = 1;
+      ctx->Version = 11;
    } else if (ver_1_0) {
-      ctx->VersionMajor = 1;
-      ctx->VersionMinor = 0;
+      ctx->Version = 10;
    } else {
       _mesa_problem(ctx, "Incomplete OpenGL ES 1.0 support.");
    }
@@ -265,7 +264,7 @@ compute_version_es1(struct gl_context *ctx)
 		     " (" MESA_GIT_SHA1 ")"
 #endif
 		     ,
-		     ctx->VersionMinor);
+		     ctx->Version % 10);
    }
 }
 
@@ -285,8 +284,7 @@ compute_version_es2(struct gl_context *ctx)
                               ctx->Extensions.ARB_texture_non_power_of_two &&
                               ctx->Extensions.EXT_blend_equation_separate);
    if (ver_2_0) {
-      ctx->VersionMajor = 2;
-      ctx->VersionMinor = 0;
+      ctx->Version = 20;
    } else {
       _mesa_problem(ctx, "Incomplete OpenGL ES 2.0 support.");
    }
@@ -303,14 +301,14 @@ compute_version_es2(struct gl_context *ctx)
 }
 
 /**
- * Set the context's VersionMajor, VersionMinor, VersionString fields.
+ * Set the context's Version and VersionString fields.
  * This should only be called once as part of context initialization
  * or to perform version check for GLX_ARB_create_context_profile.
  */
 void
 _mesa_compute_version(struct gl_context *ctx)
 {
-   if (ctx->VersionMajor)
+   if (ctx->Version)
       return;
 
    switch (ctx->API) {

@@ -115,7 +115,6 @@ def IL_retflag       : SDNode<"AMDGPUISD::RET_FLAG", SDTNone,
 // Instructions
 //===--------------------------------------------------------------------===//
 // Floating point math functions
-def IL_cmov_logical : SDNode<"AMDGPUISD::CMOVLOG", SDTIL_GenTernaryOp>;
 def IL_div_inf      : SDNode<"AMDGPUISD::DIV_INF", SDTIL_GenBinaryOp>;
 def IL_mad          : SDNode<"AMDGPUISD::MAD", SDTIL_GenTernaryOp>;
 
@@ -218,18 +217,11 @@ include "AMDILIntrinsics.td"
 // Custom Inserter for Branches and returns, this eventually will be a
 // seperate pass
 //===---------------------------------------------------------------------===//
-let isTerminator = 1 in {
+let isTerminator = 1, usesCustomInserter = 1 in {
   def BRANCH : ILFormat<(outs), (ins brtarget:$target),
       "; Pseudo unconditional branch instruction",
       [(br bb:$target)]>;
   defm BRANCH_COND : BranchConditional<IL_brcond>;
-}
-//===---------------------------------------------------------------------===//
-// return instructions
-//===---------------------------------------------------------------------===//
-let isTerminator = 1, isReturn = 1, isBarrier = 1, hasCtrlDep = 1 in {
-  def RETURN          : ILFormat<(outs), (ins variable_ops),
-      "RETURN", [(IL_retflag)]>;
 }
 
 //===---------------------------------------------------------------------===//

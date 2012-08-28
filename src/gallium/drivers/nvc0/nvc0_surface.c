@@ -33,6 +33,7 @@
 #include "nvc0_resource.h"
 
 #include "nv50/nv50_defs.xml.h"
+#include "nv50/nv50_texture.xml.h"
 
 #define NVC0_ENG2D_SUPPORTED_FORMATS 0xff9ccfe1cce3ccc9ULL
 
@@ -457,7 +458,6 @@ struct nvc0_blitctx
       unsigned num_samplers[5];
       struct pipe_sampler_view *texture[2];
       struct nv50_tsc_entry *sampler[2];
-      enum pipe_format format;
       unsigned dirty;
    } saved;
    struct nvc0_program vp;
@@ -665,15 +665,20 @@ nvc0_blitctx_make_sampler(struct nvc0_blitctx *blit)
 
    blit->sampler[0].id = -1;
 
-   blit->sampler[0].tsc[0] = 0x00000092;
-   blit->sampler[0].tsc[1] = 0x00000051;
+   blit->sampler[0].tsc[0] = NV50_TSC_0_SRGB_CONVERSION_ALLOWED |
+      (NV50_TSC_WRAP_CLAMP_TO_EDGE << NV50_TSC_0_WRAPS__SHIFT) |
+      (NV50_TSC_WRAP_CLAMP_TO_EDGE << NV50_TSC_0_WRAPT__SHIFT) |
+      (NV50_TSC_WRAP_CLAMP_TO_EDGE << NV50_TSC_0_WRAPR__SHIFT);
+   blit->sampler[0].tsc[1] =
+      NV50_TSC_1_MAGF_NEAREST | NV50_TSC_1_MINF_NEAREST | NV50_TSC_1_MIPF_NONE;
 
    /* clamp to edge, min/max lod = 0, bilinear filtering */
 
    blit->sampler[1].id = -1;
 
-   blit->sampler[1].tsc[0] = 0x00000092;
-   blit->sampler[1].tsc[1] = 0x00000062;
+   blit->sampler[1].tsc[0] = blit->sampler[0].tsc[0];
+   blit->sampler[1].tsc[1] =
+      NV50_TSC_1_MAGF_LINEAR | NV50_TSC_1_MINF_LINEAR | NV50_TSC_1_MIPF_NONE;
 }
 
 /* Since shaders cannot export stencil, we cannot copy stencil values when
@@ -728,19 +733,26 @@ nvc0_blitctx_get_color_mask_and_fp(struct nvc0_blitctx *blit,
 }
 
 static void
-nvc0_blit_set_dst(struct nvc0_context *nvc0, struct pipe_surface *surf,
-                  struct nvc0_blitctx *blit)
+nvc0_blit_set_dst(struct nvc0_context *nvc0,
+                  struct pipe_resource *res, unsigned level, unsigned layer)
 {
-   blit->saved.format = surf->format;
+   struct pipe_context *pipe = &nvc0->base.pipe;
+   struct pipe_surface templ;
 
-   if (util_format_is_depth_or_stencil(surf->format))
-      surf->format = nvc0_blit_zeta_to_colour_format(surf->format);
+   if (util_format_is_depth_or_stencil(res->format))
+      templ.format = nvc0_blit_zeta_to_colour_format(res->format);
+   else
+      templ.format = res->format;
 
-   nvc0->framebuffer.cbufs[0] = surf;
+   templ.usage = PIPE_USAGE_STREAM;
+   templ.u.tex.level = level;
+   templ.u.tex.first_layer = templ.u.tex.last_layer = layer;
+
+   nvc0->framebuffer.cbufs[0] = nvc0_miptree_surface_new(pipe, res, &templ);
    nvc0->framebuffer.nr_cbufs = 1;
    nvc0->framebuffer.zsbuf = NULL;
-   nvc0->framebuffer.width = surf->width;
-   nvc0->framebuffer.height = surf->height;
+   nvc0->framebuffer.width = nvc0->framebuffer.cbufs[0]->width;
+   nvc0->framebuffer.height = nvc0->framebuffer.cbufs[0]->height;
 }
 
 static INLINE void
@@ -893,7 +905,7 @@ nvc0_blitctx_post_blit(struct nvc0_context *nvc0, struct nvc0_blitctx *blit)
 {
    int s;
 
-   nvc0->framebuffer.cbufs[0]->format = blit->saved.format;
+   pipe_surface_reference(&nvc0->framebuffer.cbufs[0], NULL);
 
    nvc0->framebuffer.width = blit->saved.fb.width;
    nvc0->framebuffer.height = blit->saved.fb.height;
@@ -942,7 +954,7 @@ nvc0_resource_resolve(struct pipe_context *pipe,
    struct nvc0_blitctx *blit = screen->blitctx;
    struct nouveau_pushbuf *push = screen->base.pushbuf;
    struct pipe_resource *src = info->src.res;
-   struct pipe_resource *dst = info->dst.surface->texture;
+   struct pipe_resource *dst = info->dst.res;
    float x0, x1, y0, y1;
    float x_range, y_range;
 
@@ -958,8 +970,8 @@ nvc0_resource_resolve(struct pipe_context *pipe,
 
    nvc0_blitctx_pre_blit(blit, nvc0);
 
-   nvc0_blit_set_dst(nvc0, info->dst.surface, blit);
-   nvc0_blit_set_src(nvc0, src, 0, info->src.layer, blit->filter);
+   nvc0_blit_set_dst(nvc0, dst, info->dst.level, info->dst.layer);
+   nvc0_blit_set_src(nvc0, src, 0,               info->src.layer, blit->filter);
 
    nvc0_blitctx_prepare_state(blit);
 

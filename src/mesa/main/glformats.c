@@ -790,37 +790,45 @@ _mesa_is_compressed_format(struct gl_context *ctx, GLenum format)
    switch (format) {
    case GL_COMPRESSED_RGB_S3TC_DXT1_EXT:
    case GL_COMPRESSED_RGBA_S3TC_DXT1_EXT:
+      return ctx->Extensions.EXT_texture_compression_s3tc;
    case GL_COMPRESSED_RGBA_S3TC_DXT3_EXT:
    case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
-      return ctx->Extensions.EXT_texture_compression_s3tc;
+      return _mesa_is_desktop_gl(ctx)
+         && ctx->Extensions.EXT_texture_compression_s3tc;
    case GL_RGB_S3TC:
    case GL_RGB4_S3TC:
    case GL_RGBA_S3TC:
    case GL_RGBA4_S3TC:
-      return ctx->Extensions.S3_s3tc;
+      return _mesa_is_desktop_gl(ctx) && ctx->Extensions.S3_s3tc;
    case GL_COMPRESSED_SRGB_S3TC_DXT1_EXT:
    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT:
    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT:
    case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
-      return ctx->Extensions.EXT_texture_sRGB
+      return _mesa_is_desktop_gl(ctx)
+         && ctx->Extensions.EXT_texture_sRGB
          && ctx->Extensions.EXT_texture_compression_s3tc;
    case GL_COMPRESSED_RGB_FXT1_3DFX:
    case GL_COMPRESSED_RGBA_FXT1_3DFX:
-      return ctx->Extensions.TDFX_texture_compression_FXT1;
+      return _mesa_is_desktop_gl(ctx)
+         && ctx->Extensions.TDFX_texture_compression_FXT1;
    case GL_COMPRESSED_RED_RGTC1:
    case GL_COMPRESSED_SIGNED_RED_RGTC1:
    case GL_COMPRESSED_RG_RGTC2:
    case GL_COMPRESSED_SIGNED_RG_RGTC2:
-      return ctx->Extensions.ARB_texture_compression_rgtc;
+      return _mesa_is_desktop_gl(ctx)
+         && ctx->Extensions.ARB_texture_compression_rgtc;
    case GL_COMPRESSED_LUMINANCE_LATC1_EXT:
    case GL_COMPRESSED_SIGNED_LUMINANCE_LATC1_EXT:
    case GL_COMPRESSED_LUMINANCE_ALPHA_LATC2_EXT:
    case GL_COMPRESSED_SIGNED_LUMINANCE_ALPHA_LATC2_EXT:
-      return ctx->Extensions.EXT_texture_compression_latc;
+      return ctx->API == API_OPENGL
+         && ctx->Extensions.EXT_texture_compression_latc;
    case GL_COMPRESSED_LUMINANCE_ALPHA_3DC_ATI:
-      return ctx->Extensions.ATI_texture_compression_3dc;
+      return ctx->API == API_OPENGL
+         && ctx->Extensions.ATI_texture_compression_3dc;
    case GL_ETC1_RGB8_OES:
-      return ctx->Extensions.OES_compressed_ETC1_RGB8_texture;
+      return _mesa_is_gles(ctx)
+         && ctx->Extensions.OES_compressed_ETC1_RGB8_texture;
 #if FEATURE_ES
    case GL_PALETTE4_RGB8_OES:
    case GL_PALETTE4_RGBA8_OES:
@@ -959,6 +967,45 @@ _mesa_base_format_has_channel(GLenum base_format, GLenum pname)
    }
 
    return GL_FALSE;
+}
+
+
+/**
+ * If format is a generic compressed format, return the corresponding
+ * non-compressed format.  For other formats, return the format as-is.
+ */
+GLenum
+_mesa_generic_compressed_format_to_uncompressed_format(GLenum format)
+{
+   switch (format) {
+   case GL_COMPRESSED_RED:
+      return GL_RED;
+   case GL_COMPRESSED_RG:
+      return GL_RG;
+   case GL_COMPRESSED_RGB:
+      return GL_RGB;
+   case GL_COMPRESSED_RGBA:
+      return GL_RGBA;
+   case GL_COMPRESSED_ALPHA:
+      return GL_ALPHA;
+   case GL_COMPRESSED_LUMINANCE:
+      return GL_LUMINANCE;
+   case GL_COMPRESSED_LUMINANCE_ALPHA:
+      return GL_LUMINANCE_ALPHA;
+   case GL_COMPRESSED_INTENSITY:
+      return GL_INTENSITY;
+   /* sRGB formats */
+   case GL_COMPRESSED_SRGB:
+      return GL_SRGB;
+   case GL_COMPRESSED_SRGB_ALPHA:
+      return GL_SRGB_ALPHA;
+   case GL_COMPRESSED_SLUMINANCE:
+      return GL_SLUMINANCE;
+   case GL_COMPRESSED_SLUMINANCE_ALPHA:
+      return GL_SLUMINANCE_ALPHA;
+   default:
+      return format;
+   }
 }
 
 
@@ -1237,7 +1284,7 @@ _mesa_error_check_format_and_type(const struct gl_context *ctx,
             case GL_UNSIGNED_SHORT:
             case GL_INT:
             case GL_UNSIGNED_INT:
-               return (ctx->VersionMajor >= 3 ||
+               return (ctx->Version >= 30 ||
                        ctx->Extensions.EXT_texture_integer)
                   ? GL_NO_ERROR : GL_INVALID_ENUM;
             default:
@@ -1252,7 +1299,7 @@ _mesa_error_check_format_and_type(const struct gl_context *ctx,
             case GL_UNSIGNED_SHORT:
             case GL_INT:
             case GL_UNSIGNED_INT:
-               return (ctx->VersionMajor >= 3 ||
+               return (ctx->Version >= 30 ||
                        ctx->Extensions.EXT_texture_integer)
                   ? GL_NO_ERROR : GL_INVALID_ENUM;
             case GL_UNSIGNED_BYTE_3_3_2:
@@ -1274,7 +1321,7 @@ _mesa_error_check_format_and_type(const struct gl_context *ctx,
             case GL_INT:
             case GL_UNSIGNED_INT:
             /* NOTE: no packed formats w/ BGR format */
-               return (ctx->VersionMajor >= 3 ||
+               return (ctx->Version >= 30 ||
                        ctx->Extensions.EXT_texture_integer)
                   ? GL_NO_ERROR : GL_INVALID_ENUM;
             default:
@@ -1290,7 +1337,7 @@ _mesa_error_check_format_and_type(const struct gl_context *ctx,
             case GL_UNSIGNED_SHORT:
             case GL_INT:
             case GL_UNSIGNED_INT:
-               return (ctx->VersionMajor >= 3 ||
+               return (ctx->Version >= 30 ||
                        ctx->Extensions.EXT_texture_integer)
                   ? GL_NO_ERROR : GL_INVALID_ENUM;
             case GL_UNSIGNED_SHORT_4_4_4_4:

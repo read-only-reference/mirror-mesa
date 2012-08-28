@@ -164,6 +164,7 @@ public:
 
    int mlen; /**< SEND message length */
    int base_mrf; /**< First MRF in the SEND message, if mlen is nonzero. */
+   uint32_t texture_offset; /**< Texture offset bitfield */
    int sampler;
    int target; /**< MRT target. */
    bool eot;
@@ -291,7 +292,9 @@ public:
                      bool negate_value);
    void generate_spill(fs_inst *inst, struct brw_reg src);
    void generate_unspill(fs_inst *inst, struct brw_reg dst);
-   void generate_pull_constant_load(fs_inst *inst, struct brw_reg dst);
+   void generate_pull_constant_load(fs_inst *inst, struct brw_reg dst,
+				    struct brw_reg index,
+				    struct brw_reg offset);
    void generate_mov_dispatch_to_flags();
 
    void emit_dummy_fs();
@@ -303,12 +306,13 @@ public:
    fs_reg *emit_general_interpolation(ir_variable *ir);
    void emit_interpolation_setup_gen4();
    void emit_interpolation_setup_gen6();
+   fs_reg emit_texcoord(ir_texture *ir, int sampler, int texunit);
    fs_inst *emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
-			      int sampler);
+			      fs_reg shadow_comp, fs_reg lod, fs_reg lod2);
    fs_inst *emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
-			      int sampler);
+			      fs_reg shadow_comp, fs_reg lod, fs_reg lod2);
    fs_inst *emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
-			      int sampler);
+			      fs_reg shadow_comp, fs_reg lod, fs_reg lod2);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0, fs_reg src1);
    bool try_emit_saturate(ir_expression *ir);

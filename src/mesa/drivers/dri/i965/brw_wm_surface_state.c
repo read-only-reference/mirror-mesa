@@ -325,6 +325,7 @@ brw_format_for_mesa_format(gl_format mesa_format)
       [MESA_FORMAT_RG1616] = BRW_SURFACEFORMAT_R16G16_UNORM,
       [MESA_FORMAT_RG1616_REV] = 0,
       [MESA_FORMAT_ARGB2101010] = BRW_SURFACEFORMAT_B10G10R10A2_UNORM,
+      [MESA_FORMAT_ABGR2101010_UINT] = BRW_SURFACEFORMAT_R10G10B10A2_UINT,
       [MESA_FORMAT_Z24_S8] = 0,
       [MESA_FORMAT_S8_Z24] = 0,
       [MESA_FORMAT_Z16] = 0,
@@ -645,7 +646,7 @@ brw_get_surface_tiling_bits(uint32_t tiling)
 uint32_t
 brw_get_surface_num_multisamples(unsigned num_samples)
 {
-   if (num_samples > 0)
+   if (num_samples > 1)
       return BRW_SURFACE_MULTISAMPLECOUNT_4;
    else
       return BRW_SURFACE_MULTISAMPLECOUNT_1;
@@ -653,12 +654,14 @@ brw_get_surface_num_multisamples(unsigned num_samples)
 
 
 static void
-brw_update_buffer_texture_surface(struct gl_context *ctx, GLuint unit)
+brw_update_buffer_texture_surface(struct gl_context *ctx,
+                                  unsigned unit,
+                                  uint32_t *binding_table,
+                                  unsigned surf_index)
 {
    struct brw_context *brw = brw_context(ctx);
    struct intel_context *intel = &brw->intel;
    struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
-   const GLuint surf_index = SURF_INDEX_TEXTURE(unit);
    uint32_t *surf;
    struct intel_buffer_object *intel_obj =
       intel_buffer_object(tObj->BufferObject);
@@ -673,7 +676,7 @@ brw_update_buffer_texture_surface(struct gl_context *ctx, GLuint unit)
    }
 
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-			  6 * 4, 32, &brw->wm.surf_offset[surf_index]);
+			  6 * 4, 32, &binding_table[surf_index]);
 
    surf[0] = (BRW_SURFACE_BUFFER << BRW_SURFACE_TYPE_SHIFT |
 	      (brw_format_for_mesa_format(format) << BRW_SURFACE_FORMAT_SHIFT));
@@ -686,7 +689,7 @@ brw_update_buffer_texture_surface(struct gl_context *ctx, GLuint unit)
 
       /* Emit relocation to surface contents. */
       drm_intel_bo_emit_reloc(brw->intel.batch.bo,
-			      brw->wm.surf_offset[surf_index] + 4,
+			      binding_table[surf_index] + 4,
 			      bo, 0, I915_GEM_DOMAIN_SAMPLER, 0);
 
       int w = intel_obj->Base.Size / texel_size;
@@ -705,7 +708,10 @@ brw_update_buffer_texture_surface(struct gl_context *ctx, GLuint unit)
 }
 
 static void
-brw_update_texture_surface( struct gl_context *ctx, GLuint unit )
+brw_update_texture_surface(struct gl_context *ctx,
+                           unsigned unit,
+                           uint32_t *binding_table,
+                           unsigned surf_index)
 {
    struct brw_context *brw = brw_context(ctx);
    struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
@@ -713,26 +719,25 @@ brw_update_texture_surface( struct gl_context *ctx, GLuint unit )
    struct intel_mipmap_tree *mt = intelObj->mt;
    struct gl_texture_image *firstImage = tObj->Image[0][tObj->BaseLevel];
    struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit);
-   const GLuint surf_index = SURF_INDEX_TEXTURE(unit);
    uint32_t *surf;
    int width, height, depth;
 
    if (tObj->Target == GL_TEXTURE_BUFFER) {
-      brw_update_buffer_texture_surface(ctx, unit);
+      brw_update_buffer_texture_surface(ctx, unit, binding_table, surf_index);
       return;
    }
 
    intel_miptree_get_dimensions_for_image(firstImage, &width, &height, &depth);
 
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-			  6 * 4, 32, &brw->wm.surf_offset[surf_index]);
+			  6 * 4, 32, &binding_table[surf_index]);
 
    surf[0] = (translate_tex_target(tObj->Target) << BRW_SURFACE_TYPE_SHIFT |
 	      BRW_SURFACE_MIPMAPLAYOUT_BELOW << BRW_SURFACE_MIPLAYOUT_SHIFT |
 	      BRW_SURFACE_CUBEFACE_ENABLES |
 	      (translate_tex_format(mt->format,
 				    firstImage->InternalFormat,
-				    sampler->DepthMode,
+				    tObj->DepthMode,
 				    sampler->sRGBDecode) <<
 	       BRW_SURFACE_FORMAT_SHIFT));
 
@@ -753,7 +758,7 @@ brw_update_texture_surface( struct gl_context *ctx, GLuint unit )
 
    /* Emit relocation to surface contents */
    drm_intel_bo_emit_reloc(brw->intel.batch.bo,
-			   brw->wm.surf_offset[surf_index] + 4,
+			   binding_table[surf_index] + 4,
 			   intelObj->mt->region->bo,
                            intelObj->mt->offset,
 			   I915_GEM_DOMAIN_SAMPLER, 0);
@@ -766,6 +771,7 @@ brw_update_texture_surface( struct gl_context *ctx, GLuint unit )
 void
 brw_create_constant_surface(struct brw_context *brw,
 			    drm_intel_bo *bo,
+			    uint32_t offset,
 			    int width,
 			    uint32_t *out_offset)
 {
@@ -783,7 +789,7 @@ brw_create_constant_surface(struct brw_context *brw,
    if (intel->gen >= 6)
       surf[0] |= BRW_SURFACE_RC_READ_WRITE;
 
-   surf[1] = bo->offset; /* reloc */
+   surf[1] = bo->offset + offset; /* reloc */
 
    surf[2] = ((w & 0x7f) << BRW_SURFACE_WIDTH_SHIFT |
 	      ((w >> 7) & 0x1fff) << BRW_SURFACE_HEIGHT_SHIFT);
@@ -800,7 +806,7 @@ brw_create_constant_surface(struct brw_context *brw,
     */
    drm_intel_bo_emit_reloc(brw->intel.batch.bo,
 			   *out_offset + 4,
-			   bo, 0,
+			   bo, offset,
 			   I915_GEM_DOMAIN_SAMPLER, 0);
 }
 
@@ -936,7 +942,7 @@ brw_upload_wm_pull_constants(struct brw_context *brw)
    }
    drm_intel_gem_bo_unmap_gtt(brw->wm.const_bo);
 
-   intel->vtbl.create_constant_surface(brw, brw->wm.const_bo,
+   intel->vtbl.create_constant_surface(brw, brw->wm.const_bo, 0,
 				       params->NumParameters,
 				       &brw->wm.surf_offset[surf_index]);
 
@@ -987,7 +993,7 @@ brw_update_null_renderbuffer_surface(struct brw_context *brw, unsigned int unit)
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
 			  6 * 4, 32, &brw->wm.surf_offset[unit]);
 
-   if (fb->Visual.samples > 0) {
+   if (fb->Visual.samples > 1) {
       /* On Gen6, null render targets seem to cause GPU hangs when
        * multisampling.  So work around this problem by rendering into dummy
        * color buffer.
@@ -1232,22 +1238,45 @@ const struct brw_tracked_state gen6_renderbuffer_surfaces = {
 static void
 brw_update_texture_surfaces(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->intel.ctx;
+   struct intel_context *intel = &brw->intel;
+   struct gl_context *ctx = &intel->ctx;
 
-   for (unsigned i = 0; i < BRW_MAX_TEX_UNIT; i++) {
-      const struct gl_texture_unit *texUnit = &ctx->Texture.Unit[i];
-      const GLuint surf = SURF_INDEX_TEXTURE(i);
+   /* BRW_NEW_VERTEX_PROGRAM and BRW_NEW_FRAGMENT_PROGRAM:
+    * Unfortunately, we're stuck using the gl_program structs until the
+    * ARB_fragment_program front-end gets converted to GLSL IR.  These
+    * have the downside that SamplerUnits is split and only contains the
+    * mappings for samplers active in that stage.
+    */
+   struct gl_program *vs = (struct gl_program *) brw->vertex_program;
+   struct gl_program *fs = (struct gl_program *) brw->fragment_program;
 
-      /* _NEW_TEXTURE */
-      if (texUnit->_ReallyEnabled) {
-	 brw->intel.vtbl.update_texture_surface(ctx, i);
-      } else {
-         brw->wm.surf_offset[surf] = 0;
+   unsigned num_samplers = _mesa_bitcount(vs->SamplersUsed | fs->SamplersUsed);
+
+   for (unsigned s = 0; s < num_samplers; s++) {
+      brw->vs.surf_offset[SURF_INDEX_VS_TEXTURE(s)] = 0;
+      brw->wm.surf_offset[SURF_INDEX_TEXTURE(s)] = 0;
+
+      if (vs->SamplersUsed & (1 << s)) {
+         const unsigned unit = vs->SamplerUnits[s];
+
+         /* _NEW_TEXTURE */
+         if (ctx->Texture.Unit[unit]._ReallyEnabled) {
+            intel->vtbl.update_texture_surface(ctx, unit,
+                                               brw->vs.surf_offset,
+                                               SURF_INDEX_VS_TEXTURE(s));
+         }
       }
 
-      /* For now, just mirror the texture setup to the VS slots. */
-      brw->vs.surf_offset[SURF_INDEX_VS_TEXTURE(i)] =
-	 brw->wm.surf_offset[surf];
+      if (fs->SamplersUsed & (1 << s)) {
+         const unsigned unit = fs->SamplerUnits[s];
+
+         /* _NEW_TEXTURE */
+         if (ctx->Texture.Unit[unit]._ReallyEnabled) {
+            intel->vtbl.update_texture_surface(ctx, unit,
+                                               brw->wm.surf_offset,
+                                               SURF_INDEX_TEXTURE(s));
+         }
+      }
    }
 
    brw->state.dirty.brw |= BRW_NEW_SURFACES;
@@ -1256,10 +1285,71 @@ brw_update_texture_surfaces(struct brw_context *brw)
 const struct brw_tracked_state brw_texture_surfaces = {
    .dirty = {
       .mesa = _NEW_TEXTURE,
-      .brw = BRW_NEW_BATCH,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_VERTEX_PROGRAM |
+             BRW_NEW_FRAGMENT_PROGRAM,
       .cache = 0
    },
    .emit = brw_update_texture_surfaces,
+};
+
+void
+brw_upload_ubo_surfaces(struct brw_context *brw,
+			struct gl_shader *shader,
+			uint32_t *surf_offsets)
+{
+   struct gl_context *ctx = &brw->intel.ctx;
+   struct intel_context *intel = &brw->intel;
+
+   if (!shader)
+      return;
+
+   for (int i = 0; i < shader->NumUniformBlocks; i++) {
+      struct gl_uniform_buffer_binding *binding;
+      struct intel_buffer_object *intel_bo;
+
+      binding = &ctx->UniformBufferBindings[shader->UniformBlocks[i].Binding];
+      intel_bo = intel_buffer_object(binding->BufferObject);
+      drm_intel_bo *bo = intel_bufferobj_buffer(intel, intel_bo, INTEL_READ);
+
+      /* Because behavior for referencing outside of the binding's size in the
+       * glBindBufferRange case is undefined, we can just bind the whole buffer
+       * glBindBufferBase wants and be a correct implementation.
+       */
+      int size = bo->size - binding->Offset;
+      size = ALIGN(size, 16) / 16; /* The interface takes a number of vec4s */
+
+      intel->vtbl.create_constant_surface(brw, bo, binding->Offset,
+					  size,
+					  &surf_offsets[i]);
+   }
+
+   if (shader->NumUniformBlocks)
+      brw->state.dirty.brw |= BRW_NEW_SURFACES;
+}
+
+static void
+brw_upload_wm_ubo_surfaces(struct brw_context *brw)
+{
+   struct gl_context *ctx = &brw->intel.ctx;
+   /* _NEW_PROGRAM */
+   struct gl_shader_program *prog = ctx->Shader._CurrentFragmentProgram;
+
+   if (!prog)
+      return;
+
+   brw_upload_ubo_surfaces(brw, prog->_LinkedShaders[MESA_SHADER_FRAGMENT],
+			   &brw->wm.surf_offset[SURF_INDEX_WM_UBO(0)]);
+}
+
+const struct brw_tracked_state brw_wm_ubo_surfaces = {
+   .dirty = {
+      .mesa = (_NEW_PROGRAM |
+	       _NEW_BUFFER_OBJECT),
+      .brw = BRW_NEW_BATCH,
+      .cache = 0,
+   },
+   .emit = brw_upload_wm_ubo_surfaces,
 };
 
 /**

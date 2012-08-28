@@ -58,8 +58,6 @@ extern "C" {
 #define PIPE_MAX_COLOR_BUFS        8
 #define PIPE_MAX_CONSTANT_BUFFERS 32
 #define PIPE_MAX_SAMPLERS         16
-#define PIPE_MAX_VERTEX_SAMPLERS  16
-#define PIPE_MAX_GEOMETRY_SAMPLERS  16
 #define PIPE_MAX_SHADER_INPUTS    32
 #define PIPE_MAX_SHADER_OUTPUTS   32
 #define PIPE_MAX_SHADER_SAMPLER_VIEWS 32
@@ -387,12 +385,12 @@ struct pipe_sampler_view
  */
 struct pipe_box
 {
-   unsigned x;
-   unsigned y;
-   unsigned z;
-   unsigned width;
-   unsigned height;
-   unsigned depth;
+   int x;
+   int y;
+   int z;
+   int width;
+   int height;
+   int depth;
 };
 
 
@@ -572,7 +570,9 @@ struct pipe_draw_info
 struct pipe_resolve_info
 {
    struct {
-      struct pipe_surface *surface;
+      struct pipe_resource *res;
+      unsigned level;
+      unsigned layer;
       int x0; /**< always left */
       int y0; /**< always top */
       int x1; /**< determines scale if PIPE_CAP_SCALED_RESOLVE is supported */
@@ -585,7 +585,7 @@ struct pipe_resolve_info
       int x0;
       int y0;
       int x1; /**< may be < x0 only if PIPE_CAP_SCALED_RESOLVE is supported */
-      int y1; /**< may be < y0 even if PIPE_CAP_SCALED_RESOLVE not supported */
+      int y1; /**< may be < y1 even if PIPE_CAP_SCALED_RESOLVE not supported */
    } src;
 
    unsigned mask; /**< PIPE_MASK_RGBA, Z, S or ZS */

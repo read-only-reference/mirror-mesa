@@ -35,6 +35,7 @@
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/TargetRegistry.h>
 #include <llvm/Support/TargetSelect.h>
+#include <llvm/Support/Threading.h>
 #include <llvm/Target/TargetData.h>
 #include <llvm/Target/TargetMachine.h>
 
@@ -51,11 +52,26 @@ using namespace llvm;
 #ifndef EXTERNAL_LLVM
 extern "C" {
 
+void LLVMInitializeAMDGPUAsmPrinter(void);
 void LLVMInitializeAMDGPUTargetMC(void);
 void LLVMInitializeAMDGPUTarget(void);
 void LLVMInitializeAMDGPUTargetInfo(void);
 }
 #endif
+
+namespace {
+
+class LLVMEnsureMultithreaded {
+public:
+   LLVMEnsureMultithreaded()
+   {
+      llvm_start_multithreaded();
+   }
+};
+
+static LLVMEnsureMultithreaded lLVMEnsureMultithreaded;
+
+}
 
 /**
  * Compile an LLVM module to machine code.
@@ -78,6 +94,7 @@ radeon_llvm_compile(LLVMModuleRef M, unsigned char ** bytes,
    LLVMInitializeAMDGPUTargetInfo();
    LLVMInitializeAMDGPUTarget();
    LLVMInitializeAMDGPUTargetMC();
+   LLVMInitializeAMDGPUAsmPrinter();
 #endif
    std::string err;
    const Target * AMDGPUTarget = TargetRegistry::lookupTarget("r600", err);
@@ -117,7 +134,7 @@ radeon_llvm_compile(LLVMModuleRef M, unsigned char ** bytes,
    formatted_raw_ostream out(oStream);
 
    /* Optional extra paramater true / false to disable verify */
-   if (AMDGPUTargetMachine.addPassesToEmitFile(PM, out, TargetMachine::CGFT_AssemblyFile,
+   if (AMDGPUTargetMachine.addPassesToEmitFile(PM, out, TargetMachine::CGFT_ObjectFile,
                                                true)){
       fprintf(stderr, "AddingPasses failed.\n");
       return 1;

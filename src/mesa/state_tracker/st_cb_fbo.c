@@ -232,7 +232,7 @@ st_renderbuffer_delete(struct gl_renderbuffer *rb)
    pipe_surface_reference(&strb->surface, NULL);
    pipe_resource_reference(&strb->texture, NULL);
    free(strb->data);
-   free(strb);
+   _mesa_delete_renderbuffer(rb);
 }
 
 
@@ -458,6 +458,12 @@ st_render_texture(struct gl_context *ctx,
     * passed to the pipe as a (color/depth) render target.
     */
    st_invalidate_state(ctx, _NEW_BUFFERS);
+
+
+   /* Need to trigger a call to update_framebuffer() since we just
+    * attached a new renderbuffer.
+    */
+   ctx->NewState |= _NEW_BUFFERS;
 }
 
 

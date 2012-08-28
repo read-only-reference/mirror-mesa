@@ -144,8 +144,7 @@ _mesa_initialize_texture_object( struct gl_texture_object *obj,
    obj->Sampler.MaxAnisotropy = 1.0;
    obj->Sampler.CompareMode = GL_NONE;         /* ARB_shadow */
    obj->Sampler.CompareFunc = GL_LEQUAL;       /* ARB_shadow */
-   obj->Sampler.CompareFailValue = 0.0F;       /* ARB_shadow_ambient */
-   obj->Sampler.DepthMode = GL_LUMINANCE;      /* ARB_depth_texture */
+   obj->DepthMode = GL_LUMINANCE;
    obj->Sampler.CubeMapSeamless = GL_FALSE;
    obj->Swizzle[0] = GL_RED;
    obj->Swizzle[1] = GL_GREEN;
@@ -257,9 +256,8 @@ _mesa_copy_texture_object( struct gl_texture_object *dest,
    dest->Sampler.MaxAnisotropy = src->Sampler.MaxAnisotropy;
    dest->Sampler.CompareMode = src->Sampler.CompareMode;
    dest->Sampler.CompareFunc = src->Sampler.CompareFunc;
-   dest->Sampler.CompareFailValue = src->Sampler.CompareFailValue;
    dest->Sampler.CubeMapSeamless = src->Sampler.CubeMapSeamless;
-   dest->Sampler.DepthMode = src->Sampler.DepthMode;
+   dest->DepthMode = src->DepthMode;
    dest->Sampler.sRGBDecode = src->Sampler.sRGBDecode;
    dest->_MaxLevel = src->_MaxLevel;
    dest->_MaxLambda = src->_MaxLambda;
@@ -579,7 +577,7 @@ _mesa_test_texobj_completeness( const struct gl_context *ctx,
       GLint i;
       const GLint minLevel = baseLevel;
       const GLint maxLevel = t->_MaxLevel;
-      const GLuint numFaces = t->Target == GL_TEXTURE_CUBE_MAP ? 6 : 1;
+      const GLuint numFaces = _mesa_num_tex_faces(t->Target);
       GLuint width, height, depth, face;
 
       if (minLevel > maxLevel) {
@@ -785,7 +783,8 @@ _mesa_get_fallback_texture(struct gl_context *ctx, gl_texture_index tex)
       texObj->Sampler.MinFilter = GL_NEAREST;
       texObj->Sampler.MagFilter = GL_NEAREST;
 
-      texFormat = ctx->Driver.ChooseTextureFormat(ctx, GL_RGBA, GL_RGBA,
+      texFormat = ctx->Driver.ChooseTextureFormat(ctx, target,
+                                                  GL_RGBA, GL_RGBA,
                                                   GL_UNSIGNED_BYTE);
 
       /* need a loop here just for cube maps */
@@ -807,8 +806,7 @@ _mesa_get_fallback_texture(struct gl_context *ctx, gl_texture_index tex)
                                     0, /* border */
                                     GL_RGBA, texFormat);
 
-         ctx->Driver.TexImage(ctx, dims, texImage, GL_RGBA,
-                              width, height, depth, 0,
+         ctx->Driver.TexImage(ctx, dims, texImage,
                               GL_RGBA, GL_UNSIGNED_BYTE, texel,
                               &ctx->DefaultPacking);
       }
@@ -829,7 +827,7 @@ _mesa_get_fallback_texture(struct gl_context *ctx, gl_texture_index tex)
 static GLuint
 texture_size(const struct gl_texture_object *texObj)
 {
-   const GLuint numFaces = texObj->Target == GL_TEXTURE_CUBE_MAP ? 6 : 1;
+   const GLuint numFaces = _mesa_num_tex_faces(texObj->Target);
    GLuint face, level, size = 0;
 
    for (face = 0; face < numFaces; face++) {
@@ -880,7 +878,58 @@ _mesa_total_texture_memory(struct gl_context *ctx)
    return total;
 }
 
+static struct gl_texture_object *
+invalidate_tex_image_error_check(struct gl_context *ctx, GLuint texture,
+                                 GLint level, const char *name)
+{
+   /* The GL_ARB_invalidate_subdata spec says:
+    *
+    *     "If <texture> is zero or is not the name of a texture, the error
+    *     INVALID_VALUE is generated."
+    *
+    * This performs the error check in a different order than listed in the
+    * spec.  We have to get the texture object before we can validate the
+    * other parameters against values in the texture object.
+    */
+   struct gl_texture_object *const t = _mesa_lookup_texture(ctx, texture);
+   if (texture == 0 || t == NULL) {
+      _mesa_error(ctx, GL_INVALID_VALUE, "%s(texture)", name);
+      return NULL;
+   }
 
+   /* The GL_ARB_invalidate_subdata spec says:
+    *
+    *     "If <level> is less than zero or greater than the base 2 logarithm
+    *     of the maximum texture width, height, or depth, the error
+    *     INVALID_VALUE is generated."
+    */
+   if (level < 0 || level > t->MaxLevel) {
+      _mesa_error(ctx, GL_INVALID_VALUE, "%s(level)", name);
+      return NULL;
+   }
+
+   /* The GL_ARB_invalidate_subdata spec says:
+    *
+    *     "If the target of <texture> is TEXTURE_RECTANGLE, TEXTURE_BUFFER,
+    *     TEXTURE_2D_MULTISAMPLE, or TEXTURE_2D_MULTISAMPLE_ARRAY, and <level>
+    *     is not zero, the error INVALID_VALUE is generated."
+    */
+   if (level != 0) {
+      switch (t->Target) {
+      case GL_TEXTURE_RECTANGLE:
+      case GL_TEXTURE_BUFFER:
+      case GL_TEXTURE_2D_MULTISAMPLE:
+      case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
+         _mesa_error(ctx, GL_INVALID_VALUE, "%s(level)", name);
+         return NULL;
+
+      default:
+         break;
+      }
+   }
+
+   return t;
+}
 
 /*@}*/
 
@@ -1070,27 +1119,39 @@ _mesa_DeleteTextures( GLsizei n, const GLuint *textures)
  * \return TEXTURE_x_INDEX or -1 if target is invalid
  */
 static GLint
-target_enum_to_index(GLenum target)
+target_enum_to_index(struct gl_context *ctx, GLenum target)
 {
    switch (target) {
    case GL_TEXTURE_1D:
-      return TEXTURE_1D_INDEX;
+      return _mesa_is_desktop_gl(ctx) ? TEXTURE_1D_INDEX : -1;
    case GL_TEXTURE_2D:
       return TEXTURE_2D_INDEX;
    case GL_TEXTURE_3D:
       return TEXTURE_3D_INDEX;
    case GL_TEXTURE_CUBE_MAP_ARB:
-      return TEXTURE_CUBE_INDEX;
+      return ctx->Extensions.ARB_texture_cube_map
+         ? TEXTURE_CUBE_INDEX : -1;
    case GL_TEXTURE_RECTANGLE_NV:
-      return TEXTURE_RECT_INDEX;
+      return _mesa_is_desktop_gl(ctx) && ctx->Extensions.NV_texture_rectangle
+         ? TEXTURE_RECT_INDEX : -1;
    case GL_TEXTURE_1D_ARRAY_EXT:
-      return TEXTURE_1D_ARRAY_INDEX;
+      return _mesa_is_desktop_gl(ctx)
+         && (ctx->Extensions.EXT_texture_array
+             || ctx->Extensions.MESA_texture_array)
+         ? TEXTURE_1D_ARRAY_INDEX : -1;
    case GL_TEXTURE_2D_ARRAY_EXT:
-      return TEXTURE_2D_ARRAY_INDEX;
+      return (_mesa_is_desktop_gl(ctx)
+              && (ctx->Extensions.EXT_texture_array
+                  || ctx->Extensions.MESA_texture_array))
+         || _mesa_is_gles3(ctx)
+         ? TEXTURE_2D_ARRAY_INDEX : -1;
    case GL_TEXTURE_BUFFER_ARB:
-      return TEXTURE_BUFFER_INDEX;
+      return _mesa_is_desktop_gl(ctx)
+         && ctx->Extensions.ARB_texture_buffer_object
+         ? TEXTURE_BUFFER_INDEX : -1;
    case GL_TEXTURE_EXTERNAL_OES:
-      return TEXTURE_EXTERNAL_INDEX;
+      return _mesa_is_gles(ctx) && ctx->Extensions.OES_EGL_image_external
+         ? TEXTURE_EXTERNAL_INDEX : -1;
    default:
       return -1;
    }
@@ -1125,7 +1186,7 @@ _mesa_BindTexture( GLenum target, GLuint texName )
       _mesa_debug(ctx, "glBindTexture %s %d\n",
                   _mesa_lookup_enum_by_nr(target), (GLint) texName);
 
-   targetIndex = target_enum_to_index(target);
+   targetIndex = target_enum_to_index(ctx, target);
    if (targetIndex < 0) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glBindTexture(target)");
       return;
@@ -1155,6 +1216,11 @@ _mesa_BindTexture( GLenum target, GLuint texName )
          }
       }
       else {
+         if (ctx->API == API_OPENGL_CORE) {
+            _mesa_error(ctx, GL_INVALID_OPERATION, "glBindTexture");
+            return;
+         }
+
          /* if this is a new texture id, allocate a texture object now */
          newTexObj = ctx->Driver.NewTextureObject(ctx, texName, target);
          if (!newTexObj) {
@@ -1347,6 +1413,166 @@ _mesa_unlock_context_textures( struct gl_context *ctx )
 {
    assert(ctx->Shared->TextureStateStamp == ctx->TextureStateTimestamp);
    _glthread_UNLOCK_MUTEX(ctx->Shared->TexMutex);
+}
+
+void GLAPIENTRY
+_mesa_InvalidateTexSubImage(GLuint texture, GLint level, GLint xoffset,
+                            GLint yoffset, GLint zoffset, GLsizei width,
+                            GLsizei height, GLsizei depth)
+{
+   struct gl_texture_object *t;
+   struct gl_texture_image *image;
+   GET_CURRENT_CONTEXT(ctx);
+
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
+
+   t = invalidate_tex_image_error_check(ctx, texture, level,
+                                        "glInvalidateTexSubImage");
+
+   /* The GL_ARB_invalidate_subdata spec says:
+    *
+    *     "...the specified subregion must be between -<b> and <dim>+<b> where
+    *     <dim> is the size of the dimension of the texture image, and <b> is
+    *     the size of the border of that texture image, otherwise
+    *     INVALID_VALUE is generated (border is not applied to dimensions that
+    *     don't exist in a given texture target)."
+    */
+   image = t->Image[0][level];
+   if (image) {
+      int xBorder;
+      int yBorder;
+      int zBorder;
+      int imageWidth;
+      int imageHeight;
+      int imageDepth;
+
+      /* The GL_ARB_invalidate_subdata spec says:
+       *
+       *     "For texture targets that don't have certain dimensions, this
+       *     command treats those dimensions as having a size of 1. For
+       *     example, to invalidate a portion of a two-dimensional texture,
+       *     the application would use <zoffset> equal to zero and <depth>
+       *     equal to one."
+       */
+      switch (t->Target) {
+      case GL_TEXTURE_BUFFER:
+         xBorder = 0;
+         yBorder = 0;
+         zBorder = 0;
+         imageWidth = 1;
+         imageHeight = 1;
+         imageDepth = 1;
+         break;
+      case GL_TEXTURE_1D:
+         xBorder = image->Border;
+         yBorder = 0;
+         zBorder = 0;
+         imageWidth = image->Width;
+         imageHeight = 1;
+         imageDepth = 1;
+         break;
+      case GL_TEXTURE_1D_ARRAY:
+         xBorder = image->Border;
+         yBorder = 0;
+         zBorder = 0;
+         imageWidth = image->Width;
+         imageHeight = image->Height;
+         imageDepth = 1;
+         break;
+      case GL_TEXTURE_2D:
+      case GL_TEXTURE_CUBE_MAP:
+      case GL_TEXTURE_RECTANGLE:
+      case GL_TEXTURE_2D_MULTISAMPLE:
+         xBorder = image->Border;
+         yBorder = image->Border;
+         zBorder = 0;
+         imageWidth = image->Width;
+         imageHeight = image->Height;
+         imageDepth = 1;
+         break;
+      case GL_TEXTURE_2D_ARRAY:
+      case GL_TEXTURE_CUBE_MAP_ARRAY:
+         xBorder = image->Border;
+         yBorder = image->Border;
+         zBorder = 0;
+         imageWidth = image->Width;
+         imageHeight = image->Height;
+         imageDepth = image->Depth;
+         break;
+      case GL_TEXTURE_3D:
+         xBorder = image->Border;
+         yBorder = image->Border;
+         zBorder = image->Border;
+         imageWidth = image->Width;
+         imageHeight = image->Height;
+         imageDepth = image->Depth;
+         break;
+      default:
+         assert(!"Should not get here.");
+         xBorder = 0;
+         yBorder = 0;
+         zBorder = 0;
+         imageWidth = 0;
+         imageHeight = 0;
+         imageDepth = 0;
+         break;
+      }
+
+      if (xoffset < -xBorder) {
+         _mesa_error(ctx, GL_INVALID_VALUE, "glInvalidateSubTexImage(xoffset)");
+         return;
+      }
+
+      if (xoffset + width > imageWidth + xBorder) {
+         _mesa_error(ctx, GL_INVALID_VALUE,
+                     "glInvalidateSubTexImage(xoffset+width)");
+         return;
+      }
+
+      if (yoffset < -yBorder) {
+         _mesa_error(ctx, GL_INVALID_VALUE, "glInvalidateSubTexImage(yoffset)");
+         return;
+      }
+
+      if (yoffset + height > imageHeight + yBorder) {
+         _mesa_error(ctx, GL_INVALID_VALUE,
+                     "glInvalidateSubTexImage(yoffset+height)");
+         return;
+      }
+
+      if (zoffset < -zBorder) {
+         _mesa_error(ctx, GL_INVALID_VALUE,
+                     "glInvalidateSubTexImage(zoffset)");
+         return;
+      }
+
+      if (zoffset + depth  > imageDepth + zBorder) {
+         _mesa_error(ctx, GL_INVALID_VALUE,
+                     "glInvalidateSubTexImage(zoffset+depth)");
+         return;
+      }
+   }
+
+   /* We don't actually do anything for this yet.  Just return after
+    * validating the parameters and generating the required errors.
+    */
+   return;
+}
+
+void GLAPIENTRY
+_mesa_InvalidateTexImage(GLuint texture, GLint level)
+{
+   GET_CURRENT_CONTEXT(ctx);
+
+   ASSERT_OUTSIDE_BEGIN_END(ctx);
+
+   invalidate_tex_image_error_check(ctx, texture, level,
+                                    "glInvalidateTexImage");
+
+   /* We don't actually do anything for this yet.  Just return after
+    * validating the parameters and generating the required errors.
+    */
+   return;
 }
 
 /*@}*/

@@ -70,7 +70,7 @@ brw_shader_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
    if (brw->precompile && !brw_fs_precompile(ctx, prog))
       return false;
 
-   if (!brw_vs_precompile(ctx, prog))
+   if (brw->precompile && !brw_vs_precompile(ctx, prog))
       return false;
 
    return true;
@@ -98,7 +98,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       struct gl_program *prog =
 	 ctx->Driver.NewProgram(ctx, targets[stage], shader->base.Name);
       if (!prog)
-	return NULL;
+	return false;
       prog->Parameters = _mesa_new_parameter_list();
 
       _mesa_generate_parameters_list_for_uniforms(shProg, &shader->base,
@@ -145,6 +145,9 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 
       lower_variable_index_to_cond_assign(shader->ir,
 					  input, output, temp, uniform);
+
+      /* FINISHME: Do this before the variable index lowering. */
+      lower_ubo_reference(&shader->base, shader->ir);
 
       do {
 	 progress = false;

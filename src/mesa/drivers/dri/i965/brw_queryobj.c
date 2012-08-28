@@ -25,25 +25,109 @@
  *
  */
 
-/** @file support for ARB_query_object
+/** @file brw_queryobj.c
  *
- * ARB_query_object is implemented by using the PIPE_CONTROL command to stall
- * execution on the completion of previous depth tests, and write the
- * current PS_DEPTH_COUNT to a buffer object.
+ * Support for query objects (GL_ARB_occlusion_query, GL_ARB_timer_query,
+ * GL_EXT_transform_feedback, and friends).
  *
- * We use before and after counts when drawing during a query so that
- * we don't pick up other clients' query data in ours.  To reduce overhead,
- * a single BO is used to record the query data for all active queries at
- * once.  This also gives us a simple bound on how much batchbuffer space is
- * required for handling queries, so that we can be sure that we won't
- * have to emit a batchbuffer without getting the ending PS_DEPTH_COUNT.
+ * The hardware provides a PIPE_CONTROL command that can report the number of
+ * fragments that passed the depth test, or the hardware timer.  They are
+ * appropriately synced with the stage of the pipeline for our extensions'
+ * needs.
+ *
+ * To avoid getting samples from another context's rendering in our results,
+ * we capture the counts at the start and end of every batchbuffer while the
+ * query is active, and sum up the differences.  (We should do so for
+ * GL_TIME_ELAPSED as well, but don't).
  */
 #include "main/imports.h"
 
 #include "brw_context.h"
+#include "brw_defines.h"
 #include "brw_state.h"
 #include "intel_batchbuffer.h"
 #include "intel_reg.h"
+
+static void
+write_timestamp(struct intel_context *intel, drm_intel_bo *query_bo, int idx)
+{
+   if (intel->gen >= 6) {
+      /* Emit workaround flushes: */
+      if (intel->gen == 6) {
+         /* The timestamp write below is a non-zero post-sync op, which on
+          * Gen6 necessitates a CS stall.  CS stalls need stall at scoreboard
+          * set.  See the comments for intel_emit_post_sync_nonzero_flush().
+          */
+         BEGIN_BATCH(4);
+         OUT_BATCH(_3DSTATE_PIPE_CONTROL | (4 - 2));
+         OUT_BATCH(PIPE_CONTROL_CS_STALL | PIPE_CONTROL_STALL_AT_SCOREBOARD);
+         OUT_BATCH(0);
+         OUT_BATCH(0);
+         ADVANCE_BATCH();
+      }
+
+      BEGIN_BATCH(5);
+      OUT_BATCH(_3DSTATE_PIPE_CONTROL | (5 - 2));
+      OUT_BATCH(PIPE_CONTROL_WRITE_TIMESTAMP);
+      OUT_RELOC(query_bo,
+                I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
+                PIPE_CONTROL_GLOBAL_GTT_WRITE |
+                idx * sizeof(uint64_t));
+      OUT_BATCH(0);
+      OUT_BATCH(0);
+      ADVANCE_BATCH();
+   } else {
+      BEGIN_BATCH(4);
+      OUT_BATCH(_3DSTATE_PIPE_CONTROL | (4 - 2) |
+                PIPE_CONTROL_WRITE_TIMESTAMP);
+      OUT_RELOC(query_bo,
+                I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
+                PIPE_CONTROL_GLOBAL_GTT_WRITE |
+                idx * sizeof(uint64_t));
+      OUT_BATCH(0);
+      OUT_BATCH(0);
+      ADVANCE_BATCH();
+   }
+}
+
+static void
+write_depth_count(struct intel_context *intel, drm_intel_bo *query_bo, int idx)
+{
+   if (intel->gen >= 6) {
+      /* Emit Sandybridge workaround flush: */
+      if (intel->gen == 6)
+         intel_emit_post_sync_nonzero_flush(intel);
+
+      BEGIN_BATCH(5);
+      OUT_BATCH(_3DSTATE_PIPE_CONTROL | (5 - 2));
+      OUT_BATCH(PIPE_CONTROL_DEPTH_STALL |
+                PIPE_CONTROL_WRITE_DEPTH_COUNT);
+      OUT_RELOC(query_bo,
+                I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
+                PIPE_CONTROL_GLOBAL_GTT_WRITE |
+                (idx * sizeof(uint64_t)));
+      OUT_BATCH(0);
+      OUT_BATCH(0);
+      ADVANCE_BATCH();
+   } else {
+      BEGIN_BATCH(4);
+      OUT_BATCH(_3DSTATE_PIPE_CONTROL | (4 - 2) |
+                PIPE_CONTROL_DEPTH_STALL |
+                PIPE_CONTROL_WRITE_DEPTH_COUNT);
+      /* This object could be mapped cacheable, but we don't have an exposed
+       * mechanism to support that.  Since it's going uncached, tell GEM that
+       * we're writing to it.  The usual clflush should be all that's required
+       * to pick up the results.
+       */
+      OUT_RELOC(query_bo,
+                I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
+                PIPE_CONTROL_GLOBAL_GTT_WRITE |
+                (idx * sizeof(uint64_t)));
+      OUT_BATCH(0);
+      OUT_BATCH(0);
+      ADVANCE_BATCH();
+   }
+}
 
 /** Waits on the query object's BO and totals the results for this query */
 static void
@@ -58,6 +142,12 @@ brw_queryobj_get_results(struct gl_context *ctx,
    if (query->bo == NULL)
       return;
 
+   if (unlikely(INTEL_DEBUG & DEBUG_PERF)) {
+      if (drm_intel_bo_busy(query->bo)) {
+         perf_debug("Stalling on the GPU waiting for a query object.\n");
+      }
+   }
+
    drm_intel_bo_map(query->bo, false);
    results = query->bo->virtual;
    switch (query->Base.Target) {
@@ -66,6 +156,32 @@ brw_queryobj_get_results(struct gl_context *ctx,
 	 query->Base.Result += 80 * (results[1] - results[0]);
       else
 	 query->Base.Result += 1000 * ((results[1] >> 32) - (results[0] >> 32));
+      break;
+
+   case GL_TIMESTAMP:
+      if (intel->gen >= 6) {
+         /* Our timer is a clock that increments every 80ns (regardless of
+          * other clock scaling in the system).  The timestamp register we can
+          * read for glGetTimestamp() masks out the top 32 bits, so we do that
+          * here too to let the two counters be compared against each other.
+          *
+          * If we just multiplied that 32 bits of data by 80, it would roll
+          * over at a non-power-of-two, so an application couldn't use
+          * GL_QUERY_COUNTER_BITS to handle rollover correctly.  Instead, we
+          * report 36 bits and truncate at that (rolling over 5 times as often
+          * as the HW counter), and when the 32-bit counter rolls over, it
+          * happens to also be at a rollover in the reported value from near
+          * (1<<36) to 0.
+          *
+          * The low 32 bits rolls over in ~343 seconds.  Our 36-bit result
+          * rolls over every ~69 seconds.
+          */
+	 query->Base.Result = 80 * (results[1] & 0xffffffff);
+         query->Base.Result &= (1ull << 36) - 1;
+      } else {
+	 query->Base.Result = 1000 * (results[1] >> 32);
+      }
+
       break;
 
    case GL_SAMPLES_PASSED_ARB:
@@ -127,32 +243,8 @@ brw_begin_query(struct gl_context *ctx, struct gl_query_object *q)
    switch (query->Base.Target) {
    case GL_TIME_ELAPSED_EXT:
       drm_intel_bo_unreference(query->bo);
-      query->bo = drm_intel_bo_alloc(intel->bufmgr, "timer query",
-				     4096, 4096);
-
-      if (intel->gen >= 6) {
-	  BEGIN_BATCH(4);
-	  OUT_BATCH(_3DSTATE_PIPE_CONTROL);
-	  OUT_BATCH(PIPE_CONTROL_WRITE_TIMESTAMP);
-	  OUT_RELOC(query->bo,
-		  I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-		  PIPE_CONTROL_GLOBAL_GTT_WRITE |
-		  0);
-	  OUT_BATCH(0);
-	  ADVANCE_BATCH();
-      
-      } else {
-	  BEGIN_BATCH(4);
-	  OUT_BATCH(_3DSTATE_PIPE_CONTROL |
-		  PIPE_CONTROL_WRITE_TIMESTAMP);
-	  OUT_RELOC(query->bo,
-		  I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-		  PIPE_CONTROL_GLOBAL_GTT_WRITE |
-		  0);
-	  OUT_BATCH(0);
-	  OUT_BATCH(0);
-	  ADVANCE_BATCH();
-      }
+      query->bo = drm_intel_bo_alloc(intel->bufmgr, "timer query", 4096, 4096);
+      write_timestamp(intel, query->bo, 0);
       break;
 
    case GL_SAMPLES_PASSED_ARB:
@@ -199,31 +291,14 @@ brw_end_query(struct gl_context *ctx, struct gl_query_object *q)
    struct brw_query_object *query = (struct brw_query_object *)q;
 
    switch (query->Base.Target) {
-   case GL_TIME_ELAPSED_EXT:
-      if (intel->gen >= 6) {
-	  BEGIN_BATCH(4);
-	  OUT_BATCH(_3DSTATE_PIPE_CONTROL);
-	  OUT_BATCH(PIPE_CONTROL_WRITE_TIMESTAMP);
-	  OUT_RELOC(query->bo,
-		  I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-		  PIPE_CONTROL_GLOBAL_GTT_WRITE |
-		  8);
-	  OUT_BATCH(0);
-	  ADVANCE_BATCH();
-      
-      } else {
-	  BEGIN_BATCH(4);
-	  OUT_BATCH(_3DSTATE_PIPE_CONTROL |
-		  PIPE_CONTROL_WRITE_TIMESTAMP);
-	  OUT_RELOC(query->bo,
-		  I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-		  PIPE_CONTROL_GLOBAL_GTT_WRITE |
-		  8);
-	  OUT_BATCH(0);
-	  OUT_BATCH(0);
-	  ADVANCE_BATCH();
-      }
+   case GL_TIMESTAMP:
+      drm_intel_bo_unreference(query->bo);
+      query->bo = drm_intel_bo_alloc(intel->bufmgr, "timer query",
+				     4096, 4096);
+      /* FALLTHROUGH */
 
+   case GL_TIME_ELAPSED_EXT:
+      write_timestamp(intel, query->bo, 1);
       intel_batchbuffer_flush(intel);
       break;
 
@@ -336,43 +411,7 @@ brw_emit_query_begin(struct brw_context *brw)
    if (!query || brw->query.active)
       return;
 
-   if (intel->gen >= 6) {
-       BEGIN_BATCH(8);
-
-       /* workaround: CS stall required before depth stall. */
-       OUT_BATCH(_3DSTATE_PIPE_CONTROL);
-       OUT_BATCH(PIPE_CONTROL_CS_STALL);
-       OUT_BATCH(0); /* write address */
-       OUT_BATCH(0); /* write data */
-
-       OUT_BATCH(_3DSTATE_PIPE_CONTROL);
-       OUT_BATCH(PIPE_CONTROL_DEPTH_STALL |
-	         PIPE_CONTROL_WRITE_DEPTH_COUNT);
-       OUT_RELOC(brw->query.bo,
-	         I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-		 PIPE_CONTROL_GLOBAL_GTT_WRITE |
-		 ((brw->query.index * 2) * sizeof(uint64_t)));
-       OUT_BATCH(0);
-       ADVANCE_BATCH();
-       
-   } else {
-       BEGIN_BATCH(4);
-       OUT_BATCH(_3DSTATE_PIPE_CONTROL |
-	       PIPE_CONTROL_DEPTH_STALL |
-	       PIPE_CONTROL_WRITE_DEPTH_COUNT);
-       /* This object could be mapped cacheable, but we don't have an exposed
-	* mechanism to support that.  Since it's going uncached, tell GEM that
-	* we're writing to it.  The usual clflush should be all that's required
-	* to pick up the results.
-	*/
-       OUT_RELOC(brw->query.bo,
-	       I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-	       PIPE_CONTROL_GLOBAL_GTT_WRITE |
-	       ((brw->query.index * 2) * sizeof(uint64_t)));
-       OUT_BATCH(0);
-       OUT_BATCH(0);
-       ADVANCE_BATCH();
-   }
+   write_depth_count(intel, brw->query.bo, brw->query.index * 2);
 
    if (query->bo != brw->query.bo) {
       if (query->bo != NULL)
@@ -394,40 +433,26 @@ brw_emit_query_end(struct brw_context *brw)
    if (!brw->query.active)
       return;
 
-   if (intel->gen >= 6) {
-       BEGIN_BATCH(8);
-       /* workaround: CS stall required before depth stall. */
-       OUT_BATCH(_3DSTATE_PIPE_CONTROL);
-       OUT_BATCH(PIPE_CONTROL_CS_STALL);
-       OUT_BATCH(0); /* write address */
-       OUT_BATCH(0); /* write data */
-
-       OUT_BATCH(_3DSTATE_PIPE_CONTROL);
-       OUT_BATCH(PIPE_CONTROL_DEPTH_STALL |
-	         PIPE_CONTROL_WRITE_DEPTH_COUNT);
-       OUT_RELOC(brw->query.bo,
-	         I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-		 PIPE_CONTROL_GLOBAL_GTT_WRITE |
-		 ((brw->query.index * 2 + 1) * sizeof(uint64_t)));
-       OUT_BATCH(0);
-       ADVANCE_BATCH();
-   
-   } else {
-       BEGIN_BATCH(4);
-       OUT_BATCH(_3DSTATE_PIPE_CONTROL |
-	       PIPE_CONTROL_DEPTH_STALL |
-	       PIPE_CONTROL_WRITE_DEPTH_COUNT);
-       OUT_RELOC(brw->query.bo,
-	       I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION,
-	       PIPE_CONTROL_GLOBAL_GTT_WRITE |
-	       ((brw->query.index * 2 + 1) * sizeof(uint64_t)));
-       OUT_BATCH(0);
-       OUT_BATCH(0);
-       ADVANCE_BATCH();
-   }
+   write_depth_count(intel, brw->query.bo, brw->query.index * 2 + 1);
 
    brw->query.active = false;
    brw->query.index++;
+}
+
+static uint64_t
+brw_get_timestamp(struct gl_context *ctx)
+{
+   struct intel_context *intel = intel_context(ctx);
+   uint64_t result = 0;
+
+   drm_intel_reg_read(intel->bufmgr, TIMESTAMP, &result);
+
+   /* See logic in brw_queryobj_get_results() */
+   result = result >> 32;
+   result *= 80;
+   result &= (1ull << 36) - 1;
+
+   return result;
 }
 
 void brw_init_queryobj_functions(struct dd_function_table *functions)
@@ -438,4 +463,5 @@ void brw_init_queryobj_functions(struct dd_function_table *functions)
    functions->EndQuery = brw_end_query;
    functions->CheckQuery = brw_check_query;
    functions->WaitQuery = brw_wait_query;
+   functions->GetTimestamp = brw_get_timestamp;
 }

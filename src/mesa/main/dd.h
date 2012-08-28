@@ -189,12 +189,15 @@ struct dd_function_table {
    /*@{*/
 
    /**
-    * Choose actual hardware texture format given the user-provided source
-    * image format and type and the desired internal format.  In some
-    * cases, srcFormat and srcType can be GL_NONE.
+    * Choose actual hardware texture format given the texture target, the
+    * user-provided source image format and type and the desired internal
+    * format.  In some cases, srcFormat and srcType can be GL_NONE.
+    * Note:  target may be GL_TEXTURE_CUBE_MAP, but never
+    * GL_TEXTURE_CUBE_MAP_[POSITIVE/NEGATIVE]_[XYZ].
     * Called by glTexImage(), etc.
     */
-   gl_format (*ChooseTextureFormat)( struct gl_context *ctx, GLint internalFormat,
+   gl_format (*ChooseTextureFormat)( struct gl_context *ctx,
+                                     GLenum target, GLint internalFormat,
                                      GLenum srcFormat, GLenum srcType );
 
    /**
@@ -208,8 +211,6 @@ struct dd_function_table {
     */
    void (*TexImage)(struct gl_context *ctx, GLuint dims,
                     struct gl_texture_image *texImage,
-                    GLint internalFormat,
-                    GLint width, GLint height, GLint depth, GLint border,
                     GLenum format, GLenum type, const GLvoid *pixels,
                     const struct gl_pixelstore_attrib *packing);
 
@@ -273,9 +274,6 @@ struct dd_function_table {
     */
    void (*CompressedTexImage)(struct gl_context *ctx, GLuint dims,
                               struct gl_texture_image *texImage,
-                              GLint internalFormat,
-                              GLsizei width, GLsizei height, GLsizei depth,
-                              GLint border,
                               GLsizei imageSize, const GLvoid *data);
 
    /**
@@ -329,9 +327,7 @@ struct dd_function_table {
 
    /** Called to allocate memory for a single texture image */
    GLboolean (*AllocTextureImageBuffer)(struct gl_context *ctx,
-                                        struct gl_texture_image *texImage,
-                                        gl_format format, GLsizei width,
-                                        GLsizei height, GLsizei depth);
+                                        struct gl_texture_image *texImage);
 
    /** Free the memory for a single texture image */
    void (*FreeTextureImageBuffer)(struct gl_context *ctx,
@@ -402,6 +398,13 @@ struct dd_function_table {
     */
    GLboolean (*ProgramStringNotify)(struct gl_context *ctx, GLenum target, 
                                     struct gl_program *prog);
+
+   /**
+    * Notify driver that the sampler uniforms for the current program have
+    * changed.  On some drivers, this may require shader recompiles.
+    */
+   void (*SamplerUniformChange)(struct gl_context *ctx, GLenum target,
+                                struct gl_program *prog);
 
    /** Query if program can be loaded onto hardware */
    GLboolean (*IsProgramNative)(struct gl_context *ctx, GLenum target, 

@@ -29,6 +29,7 @@
 #include "llvm/Support/raw_os_ostream.h"
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
+#include <llvm/CodeGen/Passes.h>
 
 using namespace llvm;
 
@@ -66,31 +67,6 @@ AMDGPUTargetMachine::AMDGPUTargetMachine(const Target &T, StringRef TT,
 
 AMDGPUTargetMachine::~AMDGPUTargetMachine()
 {
-}
-
-bool AMDGPUTargetMachine::addPassesToEmitFile(PassManagerBase &PM,
-                                              formatted_raw_ostream &Out,
-                                              CodeGenFileType FileType,
-                                              bool DisableVerify) {
-  // XXX: Hack here addPassesToEmitFile will fail, but this is Ok since we are
-  // only using it to access addPassesToGenerateCode()
-  bool fail = LLVMTargetMachine::addPassesToEmitFile(PM, Out, FileType,
-                                                     DisableVerify);
-  assert(fail);
-
-  const AMDGPUSubtarget &STM = getSubtarget<AMDGPUSubtarget>();
-  std::string gpu = STM.getDeviceName();
-  if (gpu == "SI") {
-    PM.add(createSICodeEmitterPass(Out));
-  } else if (Subtarget.device()->getGeneration() <= AMDGPUDeviceInfo::HD6XXX) {
-    PM.add(createR600CodeEmitterPass(Out));
-  } else {
-    abort();
-    return true;
-  }
-  PM.add(createGCInfoDeleter());
-
-  return false;
 }
 
 namespace {
@@ -148,12 +124,22 @@ bool AMDGPUPassConfig::addPostRegAlloc() {
 }
 
 bool AMDGPUPassConfig::addPreSched2() {
+
+  addPass(IfConverterID);
   return false;
 }
 
 bool AMDGPUPassConfig::addPreEmitPass() {
   PM->add(createAMDGPUCFGPreparationPass(*TM));
   PM->add(createAMDGPUCFGStructurizerPass(*TM));
+
+  const AMDGPUSubtarget &ST = TM->getSubtarget<AMDGPUSubtarget>();
+  if (ST.device()->getGeneration() <= AMDGPUDeviceInfo::HD6XXX) {
+    PM->add(createR600ExpandSpecialInstrsPass(*TM));
+    addPass(FinalizeMachineBundlesID);
+  } else {
+    PM->add(createSILowerLiteralConstantsPass(*TM));
+  }
 
   return false;
 }

@@ -25,6 +25,11 @@
 #define GET_INSTRINFO_ENUM
 #include "AMDGPUGenInstrInfo.inc"
 
+#define OPCODE_IS_ZERO_INT 0x00000045
+#define OPCODE_IS_NOT_ZERO_INT 0x00000042
+#define OPCODE_IS_ZERO 0x00000020
+#define OPCODE_IS_NOT_ZERO 0x00000023
+
 namespace llvm {
 
 class AMDGPUTargetMachine;
@@ -38,8 +43,6 @@ private:
   TargetMachine &TM;
   bool getNextBranchInstr(MachineBasicBlock::iterator &iter,
                           MachineBasicBlock &MBB) const;
-  unsigned int getBranchInstr(const MachineOperand &op) const;
-
 public:
   explicit AMDGPUInstrInfo(TargetMachine &tm);
 
@@ -66,18 +69,6 @@ public:
                         MachineBasicBlock::iterator &MBBI,
                         LiveVariables *LV) const;
 
-  bool AnalyzeBranch(MachineBasicBlock &MBB, MachineBasicBlock *&TBB,
-                     MachineBasicBlock *&FBB,
-                     SmallVectorImpl<MachineOperand> &Cond,
-                     bool AllowModify) const;
-
-  unsigned RemoveBranch(MachineBasicBlock &MBB) const;
-
-  unsigned
-  InsertBranch(MachineBasicBlock &MBB, MachineBasicBlock *TBB,
-               MachineBasicBlock *FBB,
-               const SmallVectorImpl<MachineOperand> &Cond,
-               DebugLoc DL) const;
 
   virtual void copyPhysReg(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator MI, DebugLoc DL,
@@ -147,7 +138,7 @@ public:
 
   /// convertToISA - Convert the AMDIL MachineInstr to a supported ISA
   /// MachineInstr
-  virtual MachineInstr * convertToISA(MachineInstr & MI, MachineFunction &MF,
+  virtual void convertToISA(MachineInstr & MI, MachineFunction &MF,
     DebugLoc DL) const;
 
 };

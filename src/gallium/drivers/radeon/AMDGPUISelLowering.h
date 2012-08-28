@@ -29,15 +29,11 @@ private:
 
 protected:
 
-  /// addLiveIn - This functions adds reg to the live in list of the entry block
-  /// and emits a copy from reg to MI.getOperand(0).
-  ///
-  //  Some registers are loaded with values before the program
-  /// begins to execute.  The loading of these values is modeled with pseudo
-  /// instructions which are lowered using this function. 
-  void addLiveIn(MachineInstr * MI, MachineFunction * MF,
-                 MachineRegisterInfo & MRI, const TargetInstrInfo * TII,
-		 unsigned reg) const;
+  /// CreateLiveInRegister - Helper function that adds Reg to the LiveIn list
+  /// of the DAG's MachineFunction.  This returns a Register SDNode representing
+  /// Reg.
+  SDValue CreateLiveInRegister(SelectionDAG &DAG, const TargetRegisterClass *RC,
+                                                  unsigned Reg, EVT VT) const;
 
   bool isHWTrueValue(SDValue Op) const;
   bool isHWFalseValue(SDValue Op) const;
@@ -95,7 +91,6 @@ private:
   SDValue LowerSDIV32(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSDIV64(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerBUILD_VECTOR(SDValue Op, SelectionDAG &DAG) const;
-  SDValue LowerSELECT(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSIGN_EXTEND_INREG(SDValue Op, SelectionDAG &DAG) const;
   EVT genIntType(uint32_t size = 32, uint32_t numEle = 1) const;
   SDValue LowerBRCOND(SDValue Op, SelectionDAG &DAG) const;
@@ -109,7 +104,6 @@ enum
 {
   // AMDIL ISD Opcodes
   FIRST_NUMBER = ISD::BUILTIN_OP_END,
-  CMOVLOG,     // 32bit FP Conditional move logical instruction
   MAD,         // 32bit Fused Multiply Add instruction
   VBUILD,      // scalar to vector mov instruction
   CALL,        // Function call based on a single integer

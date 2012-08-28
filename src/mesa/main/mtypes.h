@@ -1250,12 +1250,8 @@ struct gl_sampler_object
    GLfloat MaxAnisotropy;	/**< GL_EXT_texture_filter_anisotropic */
    GLenum CompareMode;		/**< GL_ARB_shadow */
    GLenum CompareFunc;		/**< GL_ARB_shadow */
-   GLfloat CompareFailValue;    /**< GL_ARB_shadow_ambient */
    GLenum sRGBDecode;           /**< GL_DECODE_EXT or GL_SKIP_DECODE_EXT */
    GLboolean CubeMapSeamless;   /**< GL_AMD_seamless_cubemap_per_texture */
-
-   /* deprecated sampler state */
-   GLenum DepthMode;		/**< GL_ARB_depth_texture */
 };
 
 
@@ -1271,6 +1267,8 @@ struct gl_texture_object
    GLenum Target;               /**< GL_TEXTURE_1D, GL_TEXTURE_2D, etc. */
 
    struct gl_sampler_object Sampler;
+
+   GLenum DepthMode;		/**< GL_ARB_depth_texture */
 
    GLfloat Priority;		/**< in [0,1] */
    GLint BaseLevel;		/**< min mipmap level, OpenGL 1.2 */
@@ -2822,6 +2820,14 @@ struct gl_constants
    GLuint MaxProgramMatrices;
    GLuint MaxProgramMatrixStackDepth;
 
+   struct {
+      GLuint SamplesPassed;
+      GLuint TimeElapsed;
+      GLuint Timestamp;
+      GLuint PrimitivesGenerated;
+      GLuint PrimitivesWritten;
+   } QueryCounterBits;
+
    /** vertex array / buffer object bounds checking */
    GLboolean CheckArrayBounds;
 
@@ -2966,7 +2972,6 @@ struct gl_extensions
    GLboolean ARB_occlusion_query;
    GLboolean ARB_occlusion_query2;
    GLboolean ARB_point_sprite;
-   GLboolean ARB_sampler_objects;
    GLboolean ARB_seamless_cube_map;
    GLboolean ARB_shader_bit_encoding;
    GLboolean ARB_shader_objects;
@@ -2974,7 +2979,6 @@ struct gl_extensions
    GLboolean ARB_shader_texture_lod;
    GLboolean ARB_shading_language_100;
    GLboolean ARB_shadow;
-   GLboolean ARB_shadow_ambient;
    GLboolean ARB_sync;
    GLboolean ARB_texture_border_clamp;
    GLboolean ARB_texture_buffer_object;
@@ -2995,7 +2999,6 @@ struct gl_extensions
    GLboolean ARB_transform_feedback_instanced;
    GLboolean ARB_transpose_matrix;
    GLboolean ARB_uniform_buffer_object;
-   GLboolean ARB_vertex_array_object;
    GLboolean ARB_vertex_program;
    GLboolean ARB_vertex_shader;
    GLboolean ARB_vertex_type_2_10_10_10_rev;
@@ -3048,7 +3051,6 @@ struct gl_extensions
    /* vendor extensions */
    GLboolean AMD_seamless_cubemap_per_texture;
    GLboolean APPLE_packed_pixels;
-   GLboolean APPLE_vertex_array_object;
    GLboolean APPLE_object_purgeable;
    GLboolean ATI_envmap_bumpmap;
    GLboolean ATI_texture_compression_3dc;
@@ -3426,8 +3428,8 @@ struct gl_context
    /** Extension information */
    struct gl_extensions Extensions;
 
-   /** Version info */
-   GLuint VersionMajor, VersionMinor;
+   /** GL version integer, for example 31 for GL 3.1, or 20 for GLES 2.0. */
+   GLuint Version;
    char *VersionString;
 
    /** \name State attribute stack (for glPush/PopAttrib) */

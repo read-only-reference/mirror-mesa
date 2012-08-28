@@ -32,9 +32,30 @@
 
 #define NUMBER_OF_STATES (sizeof(union si_state) / sizeof(struct si_pm4_state *))
 
+void si_pm4_cmd_begin(struct si_pm4_state *state, unsigned opcode)
+{
+	state->last_opcode = opcode;
+	state->last_pm4 = state->ndw++;
+}
+
+void si_pm4_cmd_add(struct si_pm4_state *state, uint32_t dw)
+{
+	state->pm4[state->ndw++] = dw;
+}
+
+void si_pm4_cmd_end(struct si_pm4_state *state, bool predicate)
+{
+	unsigned count;
+	count = state->ndw - state->last_pm4 - 2;
+	state->pm4[state->last_pm4] = PKT3(state->last_opcode,
+					   count, predicate);
+
+	assert(state->ndw <= SI_PM4_MAX_DW);
+}
+
 void si_pm4_set_reg(struct si_pm4_state *state, unsigned reg, uint32_t val)
 {
-	unsigned opcode, count;
+	unsigned opcode;
 
 	if (reg >= SI_CONFIG_REG_OFFSET && reg <= SI_CONFIG_REG_END) {
 		opcode = PKT3_SET_CONFIG_REG;
@@ -55,17 +76,13 @@ void si_pm4_set_reg(struct si_pm4_state *state, unsigned reg, uint32_t val)
 	reg >>= 2;
 
 	if (opcode != state->last_opcode || reg != (state->last_reg + 1)) {
-		state->last_opcode = opcode;
-		state->last_pm4 = state->ndw++;
-		state->pm4[state->ndw++] = reg;
+		si_pm4_cmd_begin(state, opcode);
+		si_pm4_cmd_add(state, reg);
 	}
 
 	state->last_reg = reg;
-	count = state->ndw - state->last_pm4 - 1;
-	state->pm4[state->last_pm4] = PKT3(opcode, count, 0);
-	state->pm4[state->ndw++] = val;
-
-	assert(state->ndw <= SI_PM4_MAX_DW);
+	si_pm4_cmd_add(state, val);
+	si_pm4_cmd_end(state, false);
 }
 
 void si_pm4_add_bo(struct si_pm4_state *state,
@@ -77,6 +94,36 @@ void si_pm4_add_bo(struct si_pm4_state *state,
 
 	si_resource_reference(&state->bo[idx], bo);
 	state->bo_usage[idx] = usage;
+}
+
+void si_pm4_sh_data_begin(struct si_pm4_state *state)
+{
+	si_pm4_cmd_begin(state, PKT3_NOP);
+}
+
+void si_pm4_sh_data_add(struct si_pm4_state *state, uint32_t dw)
+{
+	si_pm4_cmd_add(state, dw);
+}
+
+void si_pm4_sh_data_end(struct si_pm4_state *state, unsigned reg)
+{
+	unsigned offs = state->last_pm4 + 1;
+
+	/* Bail if no data was added */
+	if (state->ndw == offs) {
+		state->ndw--;
+		return;
+	}
+
+	si_pm4_cmd_end(state, false);
+
+	si_pm4_cmd_begin(state, PKT3_SET_SH_REG_OFFSET);
+	si_pm4_cmd_add(state, (reg - SI_SH_REG_OFFSET) >> 2);
+	state->relocs[state->nrelocs++] = state->ndw;
+	si_pm4_cmd_add(state, offs << 2);
+	si_pm4_cmd_add(state, 0);
+	si_pm4_cmd_end(state, false);
 }
 
 void si_pm4_inval_shader_cache(struct si_pm4_state *state)
@@ -114,19 +161,18 @@ void si_pm4_free_state(struct r600_context *rctx,
 	if (state == NULL)
 		return;
 
-	if (rctx->emitted.array[idx] == state) {
+	if (idx != ~0 && rctx->emitted.array[idx] == state) {
 		rctx->emitted.array[idx] = NULL;
 	}
 
 	for (int i = 0; i < state->nbo; ++i) {
-		si_resource_reference(&state->bo[idx], NULL);
+		si_resource_reference(&state->bo[i], NULL);
 	}
 	FREE(state);
 }
 
-unsigned si_pm4_dirty_dw(struct r600_context *rctx)
+uint32_t si_pm4_sync_flags(struct r600_context *rctx)
 {
-	unsigned count = 0;
 	uint32_t cp_coher_cntl = 0;
 
 	for (int i = 0; i < NUMBER_OF_STATES; ++i) {
@@ -135,19 +181,14 @@ unsigned si_pm4_dirty_dw(struct r600_context *rctx)
 		if (!state || rctx->emitted.array[i] == state)
 			continue;
 
-		count += state->ndw;
 		cp_coher_cntl |= state->cp_coher_cntl;
 	}
-
-	//TODO
-	rctx->atom_surface_sync.flush_flags |= cp_coher_cntl;
-	r600_atom_dirty(rctx, &rctx->atom_surface_sync.atom);
-	return count;
+	return cp_coher_cntl;
 }
 
-void si_pm4_emit_dirty(struct r600_context *rctx)
+unsigned si_pm4_dirty_dw(struct r600_context *rctx)
 {
-	struct radeon_winsys_cs *cs = rctx->cs;
+	unsigned count = 0;
 
 	for (int i = 0; i < NUMBER_OF_STATES; ++i) {
 		struct si_pm4_state *state = rctx->queued.array[i];
@@ -155,14 +196,38 @@ void si_pm4_emit_dirty(struct r600_context *rctx)
 		if (!state || rctx->emitted.array[i] == state)
 			continue;
 
-		for (int j = 0; j < state->nbo; ++j) {
-			r600_context_bo_reloc(rctx, state->bo[j],
-					      state->bo_usage[j]);
-		}
+		count += state->ndw;
+	}
 
-		memcpy(&cs->buf[cs->cdw], state->pm4, state->ndw * 4);
-		cs->cdw += state->ndw;
+	return count;
+}
 
+void si_pm4_emit(struct r600_context *rctx, struct si_pm4_state *state)
+{
+	struct radeon_winsys_cs *cs = rctx->cs;
+	for (int i = 0; i < state->nbo; ++i) {
+		r600_context_bo_reloc(rctx, state->bo[i],
+				      state->bo_usage[i]);
+	}
+
+	memcpy(&cs->buf[cs->cdw], state->pm4, state->ndw * 4);
+
+	for (int i = 0; i < state->nrelocs; ++i) {
+		cs->buf[cs->cdw + state->relocs[i]] += cs->cdw << 2;
+	}
+
+	cs->cdw += state->ndw;
+}
+
+void si_pm4_emit_dirty(struct r600_context *rctx)
+{
+	for (int i = 0; i < NUMBER_OF_STATES; ++i) {
+		struct si_pm4_state *state = rctx->queued.array[i];
+
+		if (!state || rctx->emitted.array[i] == state)
+			continue;
+
+		si_pm4_emit(rctx, state);
 		rctx->emitted.array[i] = state;
 	}
 }

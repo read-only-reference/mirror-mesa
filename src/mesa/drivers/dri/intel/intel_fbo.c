@@ -95,7 +95,7 @@ intel_delete_renderbuffer(struct gl_renderbuffer *rb)
 
    intel_miptree_release(&irb->mt);
 
-   free(irb);
+   _mesa_delete_renderbuffer(rb);
 }
 
 /**
@@ -182,8 +182,8 @@ intel_unmap_renderbuffer(struct gl_context *ctx,
 /**
  * Round up the requested multisample count to the next supported sample size.
  */
-static unsigned
-quantize_num_samples(struct intel_context *intel, unsigned num_samples)
+unsigned
+intel_quantize_num_samples(struct intel_screen *intel, unsigned num_samples)
 {
    switch (intel->gen) {
    case 6:
@@ -202,7 +202,15 @@ quantize_num_samples(struct intel_context *intel, unsigned num_samples)
          return 0;
       return 0;
    default:
-      /* MSAA unsupported */
+      /* MSAA unsupported.  However, a careful reading of
+       * EXT_framebuffer_multisample reveals that we need to permit
+       * num_samples to be 1 (since num_samples is permitted to be as high as
+       * GL_MAX_SAMPLES, and GL_MAX_SAMPLES must be at least 1).  Since
+       * platforms before Gen6 don't support MSAA, this is safe, because
+       * multisampling won't happen anyhow.
+       */
+      if (num_samples > 0)
+         return 1;
       return 0;
    }
 }
@@ -218,8 +226,9 @@ intel_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffer
                                  GLuint width, GLuint height)
 {
    struct intel_context *intel = intel_context(ctx);
+   struct intel_screen *screen = intel->intelScreen;
    struct intel_renderbuffer *irb = intel_renderbuffer(rb);
-   rb->NumSamples = quantize_num_samples(intel, rb->NumSamples);
+   rb->NumSamples = intel_quantize_num_samples(screen, rb->NumSamples);
 
    switch (internalFormat) {
    default:
@@ -228,7 +237,8 @@ intel_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffer
        * except they're less useful because you can't texture with
        * them.
        */
-      rb->Format = intel->ctx.Driver.ChooseTextureFormat(ctx, internalFormat,
+      rb->Format = intel->ctx.Driver.ChooseTextureFormat(ctx, GL_TEXTURE_2D,
+							 internalFormat,
 							 GL_NONE, GL_NONE);
       break;
    case GL_STENCIL_INDEX:
@@ -264,22 +274,6 @@ intel_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffer
                                                    rb->NumSamples);
    if (!irb->mt)
       return false;
-
-   if (intel->vtbl.is_hiz_depth_format(intel, rb->Format)) {
-      bool ok = intel_miptree_alloc_hiz(intel, irb->mt, rb->NumSamples);
-      if (!ok) {
-	 intel_miptree_release(&irb->mt);
-	 return false;
-      }
-   }
-
-   if (irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS) {
-      bool ok = intel_miptree_alloc_mcs(intel, irb->mt, rb->NumSamples);
-      if (!ok) {
-         intel_miptree_release(&irb->mt);
-         return false;
-      }
-   }
 
    return true;
 }
@@ -388,9 +382,11 @@ intel_nop_alloc_storage(struct gl_context * ctx, struct gl_renderbuffer *rb,
 /**
  * Create a new intel_renderbuffer which corresponds to an on-screen window,
  * not a user-created renderbuffer.
+ *
+ * \param num_samples must be quantized.
  */
 struct intel_renderbuffer *
-intel_create_renderbuffer(gl_format format)
+intel_create_renderbuffer(gl_format format, unsigned num_samples)
 {
    struct intel_renderbuffer *irb;
    struct gl_renderbuffer *rb;
@@ -410,6 +406,7 @@ intel_create_renderbuffer(gl_format format)
    rb->_BaseFormat = _mesa_get_format_base_format(format);
    rb->Format = format;
    rb->InternalFormat = rb->_BaseFormat;
+   rb->NumSamples = num_samples;
 
    /* intel-specific methods */
    rb->Delete = intel_delete_renderbuffer;
@@ -423,13 +420,15 @@ intel_create_renderbuffer(gl_format format)
  * server created with intel_create_renderbuffer()) are most similar in their
  * handling to user-created renderbuffers, but they have a resize handler that
  * may be called at intel_update_renderbuffers() time.
+ *
+ * \param num_samples must be quantized.
  */
 struct intel_renderbuffer *
-intel_create_private_renderbuffer(gl_format format)
+intel_create_private_renderbuffer(gl_format format, unsigned num_samples)
 {
    struct intel_renderbuffer *irb;
 
-   irb = intel_create_renderbuffer(format);
+   irb = intel_create_renderbuffer(format, num_samples);
    irb->Base.Base.AllocStorage = intel_alloc_renderbuffer_storage;
 
    return irb;
@@ -881,6 +880,16 @@ intel_blit_framebuffer(struct gl_context *ctx,
                               srcX0, srcY0, srcX1, srcY1,
                               dstX0, dstY0, dstX1, dstY1,
                               mask, filter);
+}
+
+/**
+ * This is a no-op except on multisample buffers shared with DRI2.
+ */
+void
+intel_renderbuffer_set_needs_downsample(struct intel_renderbuffer *irb)
+{
+   if (irb->mt && irb->mt->singlesample_mt)
+      irb->mt->need_downsample = true;
 }
 
 void

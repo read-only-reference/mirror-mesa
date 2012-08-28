@@ -13,9 +13,9 @@
 
 #include "AMDGPUISelLowering.h"
 #include "AMDILIntrinsicInfo.h"
-#include "AMDGPUUtil.h"
-#include "llvm/CodeGen/SelectionDAG.h"
+#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/CodeGen/TargetLoweringObjectFileImpl.h"
 
 using namespace llvm;
@@ -89,7 +89,6 @@ SDValue AMDGPUTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG)
   case ISD::SDIV: return LowerSDIV(Op, DAG);
   case ISD::SREM: return LowerSREM(Op, DAG);
   case ISD::BUILD_VECTOR: return LowerBUILD_VECTOR(Op, DAG);
-  case ISD::SELECT: return LowerSELECT(Op, DAG);
   case ISD::SIGN_EXTEND_INREG: return LowerSIGN_EXTEND_INREG(Op, DAG);
   case ISD::BRCOND: return LowerBRCOND(Op, DAG);
   // AMDGPU DAG lowering
@@ -311,11 +310,19 @@ bool AMDGPUTargetLowering::isHWFalseValue(SDValue Op) const
   return false;
 }
 
-void AMDGPUTargetLowering::addLiveIn(MachineInstr * MI,
-    MachineFunction * MF, MachineRegisterInfo & MRI,
-    const TargetInstrInfo * TII, unsigned reg) const
-{
-  AMDGPU::utilAddLiveIn(MF, MRI, TII, reg, MI->getOperand(0).getReg());
+SDValue AMDGPUTargetLowering::CreateLiveInRegister(SelectionDAG &DAG,
+                                                  const TargetRegisterClass *RC,
+                                                   unsigned Reg, EVT VT) const {
+  MachineFunction &MF = DAG.getMachineFunction();
+  MachineRegisterInfo &MRI = MF.getRegInfo();
+  unsigned VirtualRegister;
+  if (!MRI.isLiveIn(Reg)) {
+    VirtualRegister = MRI.createVirtualRegister(RC);
+    MRI.addLiveIn(Reg, VirtualRegister);
+  } else {
+    VirtualRegister = MRI.getLiveInVirtReg(Reg);
+  }
+  return DAG.getRegister(VirtualRegister, VT);
 }
 
 #define NODE_NAME_CASE(node) case AMDGPUISD::node: return #node;
@@ -325,7 +332,6 @@ const char* AMDGPUTargetLowering::getTargetNodeName(unsigned Opcode) const
   switch (Opcode) {
   default: return 0;
   // AMDIL DAG nodes
-  NODE_NAME_CASE(CMOVLOG);
   NODE_NAME_CASE(MAD);
   NODE_NAME_CASE(CALL);
   NODE_NAME_CASE(UMUL);

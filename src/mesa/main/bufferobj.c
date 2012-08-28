@@ -30,7 +30,7 @@
  * \author Brian Paul, Ian Romanick
  */
 
-
+#include <stdbool.h>
 #include "glheader.h"
 #include "enums.h"
 #include "hash.h"
@@ -68,6 +68,12 @@ static struct gl_buffer_object DummyBufferObject;
 static inline struct gl_buffer_object **
 get_buffer_target(struct gl_context *ctx, GLenum target)
 {
+   /* Other targets are only supported in desktop OpenGL and OpenGL ES 3.0.
+    */
+   if (!_mesa_is_desktop_gl(ctx) && !_mesa_is_gles3(ctx)
+       && target != GL_ARRAY_BUFFER && target != GL_ELEMENT_ARRAY_BUFFER)
+      return NULL;
+
    switch (target) {
    case GL_ARRAY_BUFFER_ARB:
       return &ctx->Array.ArrayBufferObj;
@@ -89,7 +95,8 @@ get_buffer_target(struct gl_context *ctx, GLenum target)
       break;
 #endif
    case GL_TEXTURE_BUFFER:
-      if (ctx->Extensions.ARB_texture_buffer_object) {
+      if (_mesa_is_desktop_gl(ctx)
+          && ctx->Extensions.ARB_texture_buffer_object) {
          return &ctx->Texture.BufferObject;
       }
       break;
@@ -131,7 +138,7 @@ get_buffer(struct gl_context *ctx, const char *func, GLenum target)
 }
 
 
-static inline GLenum
+static inline GLbitfield
 default_access_mode(const struct gl_context *ctx)
 {
    /* Table 2.6 on page 31 (page 44 of the PDF) of the OpenGL 1.5 spec says:
@@ -150,7 +157,7 @@ default_access_mode(const struct gl_context *ctx)
     * The difference is because GL_OES_mapbuffer only supports mapping buffers
     * write-only.
     */
-   return (ctx->API == API_OPENGLES)
+   return _mesa_is_gles(ctx)
       ? GL_MAP_WRITE_BIT : (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
 }
 
@@ -656,6 +663,28 @@ _mesa_free_buffer_objects( struct gl_context *ctx )
    ctx->UniformBufferBindings = NULL;
 }
 
+static void
+handle_bind_buffer_gen(struct gl_context *ctx,
+		       GLenum target,
+		       GLuint buffer,
+		       struct gl_buffer_object **buf_handle)
+{
+   struct gl_buffer_object *buf = *buf_handle;
+
+   if (!buf || buf == &DummyBufferObject) {
+      /* If this is a new buffer object id, or one which was generated but
+       * never used before, allocate a buffer object now.
+       */
+      ASSERT(ctx->Driver.NewBufferObject);
+      buf = ctx->Driver.NewBufferObject(ctx, buffer, target);
+      if (!buf) {
+	 _mesa_error(ctx, GL_OUT_OF_MEMORY, "glBindBufferARB");
+	 return;
+      }
+      _mesa_HashInsert(ctx->Shared->BufferObjects, buffer, buf);
+      *buf_handle = buf;
+   }
+}
 
 /**
  * Bind the specified target to buffer for the specified context.
@@ -691,18 +720,11 @@ bind_buffer_object(struct gl_context *ctx, GLenum target, GLuint buffer)
    else {
       /* non-default buffer object */
       newBufObj = _mesa_lookup_bufferobj(ctx, buffer);
-      if (!newBufObj || newBufObj == &DummyBufferObject) {
-         /* If this is a new buffer object id, or one which was generated but
-          * never used before, allocate a buffer object now.
-          */
-         ASSERT(ctx->Driver.NewBufferObject);
-         newBufObj = ctx->Driver.NewBufferObject(ctx, buffer, target);
-         if (!newBufObj) {
-            _mesa_error(ctx, GL_OUT_OF_MEMORY, "glBindBufferARB");
-            return;
-         }
-         _mesa_HashInsert(ctx->Shared->BufferObjects, buffer, newBufObj);
+      if (newBufObj == NULL && ctx->API == API_OPENGL_CORE) {
+         _mesa_error(ctx, GL_INVALID_OPERATION, "glBindBuffer(non-gen name)");
+         return;
       }
+      handle_bind_buffer_gen(ctx, target, buffer, &newBufObj);
    }
    
    /* bind new buffer */
@@ -875,6 +897,13 @@ _mesa_DeleteBuffersARB(GLsizei n, const GLuint *ids)
             }
          }
 
+         /* unbind UBO binding points */
+         for (j = 0; j < ctx->Const.MaxUniformBufferBindings; j++) {
+            if (ctx->UniformBufferBindings[j].BufferObject == bufObj) {
+               _mesa_BindBufferBase( GL_UNIFORM_BUFFER, j, 0 );
+            }
+         }
+
          if (ctx->UniformBuffer == bufObj) {
             _mesa_BindBufferARB( GL_UNIFORM_BUFFER, 0 );
          }
@@ -984,6 +1013,7 @@ _mesa_BufferDataARB(GLenum target, GLsizeiptrARB size,
 {
    GET_CURRENT_CONTEXT(ctx);
    struct gl_buffer_object *bufObj;
+   bool valid_usage;
    ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (MESA_VERBOSE & VERBOSE_API)
@@ -999,18 +1029,30 @@ _mesa_BufferDataARB(GLenum target, GLsizeiptrARB size,
 
    switch (usage) {
    case GL_STREAM_DRAW_ARB:
+      valid_usage = (ctx->API != API_OPENGLES);
+      break;
+
+   case GL_STATIC_DRAW_ARB:
+   case GL_DYNAMIC_DRAW_ARB:
+      valid_usage = true;
+      break;
+
    case GL_STREAM_READ_ARB:
    case GL_STREAM_COPY_ARB:
-   case GL_STATIC_DRAW_ARB:
    case GL_STATIC_READ_ARB:
    case GL_STATIC_COPY_ARB:
-   case GL_DYNAMIC_DRAW_ARB:
    case GL_DYNAMIC_READ_ARB:
    case GL_DYNAMIC_COPY_ARB:
-      /* OK */
+      valid_usage = _mesa_is_desktop_gl(ctx) || _mesa_is_gles3(ctx);
       break;
+
    default:
-      _mesa_error(ctx, GL_INVALID_ENUM, "glBufferDataARB(usage)");
+      valid_usage = false;
+      break;
+   }
+
+   if (!valid_usage) {
+      _mesa_error(ctx, GL_INVALID_ENUM, "glBufferData(usage)");
       return;
    }
 
@@ -1097,20 +1139,29 @@ _mesa_MapBufferARB(GLenum target, GLenum access)
    struct gl_buffer_object * bufObj;
    GLbitfield accessFlags;
    void *map;
+   bool valid_access;
 
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, NULL);
 
    switch (access) {
    case GL_READ_ONLY_ARB:
       accessFlags = GL_MAP_READ_BIT;
+      valid_access = _mesa_is_desktop_gl(ctx);
       break;
    case GL_WRITE_ONLY_ARB:
       accessFlags = GL_MAP_WRITE_BIT;
+      valid_access = true;
       break;
    case GL_READ_WRITE_ARB:
       accessFlags = GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;
+      valid_access = _mesa_is_desktop_gl(ctx);
       break;
    default:
+      valid_access = false;
+      break;
+   }
+
+   if (!valid_access) {
       _mesa_error(ctx, GL_INVALID_ENUM, "glMapBufferARB(access)");
       return NULL;
    }
@@ -1264,17 +1315,20 @@ _mesa_GetBufferParameterivARB(GLenum target, GLenum pname, GLint *params)
       *params = _mesa_bufferobj_mapped(bufObj);
       return;
    case GL_BUFFER_ACCESS_FLAGS:
-      if (!ctx->Extensions.ARB_map_buffer_range)
+      if ((!_mesa_is_desktop_gl(ctx) || !ctx->Extensions.ARB_map_buffer_range)
+          && !_mesa_is_gles3(ctx))
          goto invalid_pname;
       *params = bufObj->AccessFlags;
       return;
    case GL_BUFFER_MAP_OFFSET:
-      if (!ctx->Extensions.ARB_map_buffer_range)
+      if ((!_mesa_is_desktop_gl(ctx) || !ctx->Extensions.ARB_map_buffer_range)
+          && !_mesa_is_gles3(ctx))
          goto invalid_pname;
       *params = (GLint) bufObj->Offset;
       return;
    case GL_BUFFER_MAP_LENGTH:
-      if (!ctx->Extensions.ARB_map_buffer_range)
+      if ((!_mesa_is_desktop_gl(ctx) || !ctx->Extensions.ARB_map_buffer_range)
+          && !_mesa_is_gles3(ctx))
          goto invalid_pname;
       *params = (GLint) bufObj->Length;
       return;
@@ -2089,6 +2143,7 @@ _mesa_BindBufferRange(GLenum target, GLuint index,
    } else {
       bufObj = _mesa_lookup_bufferobj(ctx, buffer);
    }
+   handle_bind_buffer_gen(ctx, target, buffer, &bufObj);
 
    if (!bufObj) {
       _mesa_error(ctx, GL_INVALID_OPERATION,
@@ -2134,6 +2189,7 @@ _mesa_BindBufferBase(GLenum target, GLuint index, GLuint buffer)
    } else {
       bufObj = _mesa_lookup_bufferobj(ctx, buffer);
    }
+   handle_bind_buffer_gen(ctx, target, buffer, &bufObj);
 
    if (!bufObj) {
       _mesa_error(ctx, GL_INVALID_OPERATION,
@@ -2180,8 +2236,100 @@ _mesa_BindBufferBase(GLenum target, GLuint index, GLuint buffer)
    }
 }
 
+static void GLAPIENTRY
+_mesa_InvalidateBufferSubData(GLuint buffer, GLintptr offset,
+                              GLsizeiptr length)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   struct gl_buffer_object *bufObj;
+   const GLintptr end = offset + length;
+
+   bufObj = _mesa_lookup_bufferobj(ctx, buffer);
+   if (!bufObj) {
+      _mesa_error(ctx, GL_INVALID_VALUE,
+                  "glInvalidateBufferSubData(name = 0x%x) invalid object",
+                  buffer);
+      return;
+   }
+
+   /* The GL_ARB_invalidate_subdata spec says:
+    *
+    *     "An INVALID_VALUE error is generated if <offset> or <length> is
+    *     negative, or if <offset> + <length> is greater than the value of
+    *     BUFFER_SIZE."
+    */
+   if (end < 0 || end > bufObj->Size) {
+      _mesa_error(ctx, GL_INVALID_VALUE,
+                  "glInvalidateBufferSubData(invalid offset or length)");
+      return;
+   }
+
+   /* The GL_ARB_invalidate_subdata spec says:
+    *
+    *     "An INVALID_OPERATION error is generated if the buffer is currently
+    *     mapped by MapBuffer, or if the invalidate range intersects the range
+    *     currently mapped by MapBufferRange."
+    */
+   if (_mesa_bufferobj_mapped(bufObj)) {
+      const GLintptr mapEnd = bufObj->Offset + bufObj->Length;
+
+      /* The regions do not overlap if and only if the end of the discard
+       * region is before the mapped region or the start of the discard region
+       * is after the mapped region.
+       *
+       * Note that 'end' and 'mapEnd' are the first byte *after* the discard
+       * region and the mapped region, repsectively.  It is okay for that byte
+       * to be mapped (for 'end') or discarded (for 'mapEnd').
+       */
+      if (!(end <= bufObj->Offset || offset >= mapEnd)) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glInvalidateBufferSubData(intersection with mapped "
+                     "range)");
+         return;
+      }
+   }
+
+   /* We don't actually do anything for this yet.  Just return after
+    * validating the parameters and generating the required errors.
+    */
+   return;
+}
+
+static void GLAPIENTRY
+_mesa_InvalidateBufferData(GLuint buffer)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   struct gl_buffer_object *bufObj;
+
+   bufObj = _mesa_lookup_bufferobj(ctx, buffer);
+   if (!bufObj) {
+      _mesa_error(ctx, GL_INVALID_VALUE,
+                  "glInvalidateBufferData(name = 0x%x) invalid object",
+                  buffer);
+      return;
+   }
+
+   /* The GL_ARB_invalidate_subdata spec says:
+    *
+    *     "An INVALID_OPERATION error is generated if the buffer is currently
+    *     mapped by MapBuffer, or if the invalidate range intersects the range
+    *     currently mapped by MapBufferRange."
+    */
+   if (_mesa_bufferobj_mapped(bufObj)) {
+      _mesa_error(ctx, GL_INVALID_OPERATION,
+                  "glInvalidateBufferData(intersection with mapped "
+                  "range)");
+      return;
+   }
+
+   /* We don't actually do anything for this yet.  Just return after
+    * validating the parameters and generating the required errors.
+    */
+   return;
+}
+
 void
-_mesa_init_bufferobj_dispatch(struct _glapi_table *disp)
+_mesa_init_bufferobj_dispatch(struct gl_context *ctx, struct _glapi_table *disp)
 {
    SET_BindBufferARB(disp, _mesa_BindBufferARB);
    SET_BufferDataARB(disp, _mesa_BufferDataARB);
@@ -2194,6 +2342,14 @@ _mesa_init_bufferobj_dispatch(struct _glapi_table *disp)
    SET_IsBufferARB(disp, _mesa_IsBufferARB);
    SET_MapBufferARB(disp, _mesa_MapBufferARB);
    SET_UnmapBufferARB(disp, _mesa_UnmapBufferARB);
-   SET_BindBufferRangeEXT(disp, _mesa_BindBufferRange);
-   SET_BindBufferBaseEXT(disp, _mesa_BindBufferBase);
+
+   if (_mesa_is_desktop_gl(ctx) || _mesa_is_gles3(ctx)) {
+      SET_BindBufferRangeEXT(disp, _mesa_BindBufferRange);
+      SET_BindBufferBaseEXT(disp, _mesa_BindBufferBase);
+   }
+
+   if (_mesa_is_desktop_gl(ctx)) {
+      SET_InvalidateBufferData(disp, _mesa_InvalidateBufferData);
+      SET_InvalidateBufferSubData(disp, _mesa_InvalidateBufferSubData);
+   }
 }

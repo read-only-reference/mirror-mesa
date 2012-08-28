@@ -38,10 +38,18 @@ MESA_GLAPI_OUTPUTS = \
 	$(MESA_GLAPI_DIR)/glapitable.h \
 	$(MESA_GLAPI_DIR)/glapi_gentable.c
 
-MESA_GLAPI_ASM_OUTPUTS = \
-	$(MESA_GLAPI_DIR)/glapi_x86.S \
-	$(MESA_GLAPI_DIR)/glapi_x86-64.S \
-	$(MESA_GLAPI_DIR)/glapi_sparc.S
+MESA_GLAPI_ASM_OUTPUTS =
+if HAVE_X86_ASM
+MESA_GLAPI_ASM_OUTPUTS += $(MESA_GLAPI_DIR)/glapi_x86.S
+endif
+
+if HAVE_X86_64_ASM
+MESA_GLAPI_ASM_OUTPUTS += $(MESA_GLAPI_DIR)/glapi_x86-64.S
+endif
+
+if HAVE_SPARC_ASM
+MESA_GLAPI_ASM_OUTPUTS += $(MESA_GLAPI_DIR)/glapi_sparc.S
+endif
 
 MESA_OUTPUTS = \
 	$(MESA_GLAPI_OUTPUTS) \
@@ -176,7 +184,7 @@ $(XORG_GLAPI_DIR)/%.h: $(MESA_GLAPI_DIR)/%.h
 
 $(MESA_GLAPI_DIR)/glapi_mapi_tmp.h: $(MESA_MAPI_DIR)/mapi_abi.py $(COMMON_ES)
 	$(PYTHON_GEN) $< \
-		--printer glapi --mode lib gl_and_es_API.xml > $@
+		--printer glapi --mode lib $(srcdir)/gl_and_es_API.xml > $@
 
 $(MESA_GLAPI_DIR)/glprocs.h: gl_procs.py $(COMMON)
 	$(PYTHON_GEN) $< -f $(srcdir)/gl_API.xml > $@

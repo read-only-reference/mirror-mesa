@@ -114,12 +114,15 @@ st_get_msaa(void)
 
 
 static struct st_context *
-st_create_context_priv( struct gl_context *ctx, struct pipe_context *pipe )
+st_create_context_priv( struct gl_context *ctx, struct pipe_context *pipe,
+		const struct st_config_options *options)
 {
    struct pipe_screen *screen = pipe->screen;
    uint i;
    struct st_context *st = ST_CALLOC_STRUCT( st_context );
    
+   st->options = *options;
+
    ctx->st = st;
 
    st->ctx = ctx;
@@ -163,7 +166,10 @@ st_create_context_priv( struct gl_context *ctx, struct pipe_context *pipe )
    else
       st->internal_target = PIPE_TEXTURE_RECT;
 
-   for (i = 0; i < 3; i++) {
+   /* Vertex element objects used for drawing rectangles for glBitmap,
+    * glDrawPixels, glClear, etc.
+    */
+   for (i = 0; i < Elements(st->velems_util_draw); i++) {
       memset(&st->velems_util_draw[i], 0, sizeof(struct pipe_vertex_element));
       st->velems_util_draw[i].src_offset = i * 4 * sizeof(float);
       st->velems_util_draw[i].instance_divisor = 0;
@@ -204,7 +210,8 @@ static void st_init_driver_flags(struct gl_driver_flags *f)
 
 struct st_context *st_create_context(gl_api api, struct pipe_context *pipe,
                                      const struct gl_config *visual,
-                                     struct st_context *share)
+                                     struct st_context *share,
+                                     const struct st_config_options *options)
 {
    struct gl_context *ctx;
    struct gl_context *shareCtx = share ? share->ctx : NULL;
@@ -231,13 +238,13 @@ struct st_context *st_create_context(gl_api api, struct pipe_context *pipe,
    if (debug_get_option_mesa_mvp_dp4())
       _mesa_set_mvp_with_dp4( ctx, GL_TRUE );
 
-   return st_create_context_priv(ctx, pipe);
+   return st_create_context_priv(ctx, pipe, options);
 }
 
 
 static void st_destroy_context_priv( struct st_context *st )
 {
-   uint i;
+   uint shader, i;
 
    st_destroy_atoms( st );
    st_destroy_draw( st );
@@ -248,8 +255,11 @@ static void st_destroy_context_priv( struct st_context *st )
    st_destroy_drawpix(st);
    st_destroy_drawtex(st);
 
-   for (i = 0; i < Elements(st->state.sampler_views); i++) {
-      pipe_sampler_view_release(st->pipe, &st->state.sampler_views[i]);
+   for (shader = 0; shader < Elements(st->state.sampler_views); shader++) {
+      for (i = 0; i < Elements(st->state.sampler_views[0]); i++) {
+         pipe_sampler_view_release(st->pipe,
+                                   &st->state.sampler_views[shader][i]);
+      }
    }
 
    if (st->default_texture) {

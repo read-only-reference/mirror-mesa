@@ -103,9 +103,7 @@ radeonDeleteTextureImage(struct gl_context *ctx, struct gl_texture_image *img)
 
 static GLboolean
 radeonAllocTextureImageBuffer(struct gl_context *ctx,
-			      struct gl_texture_image *timage,
-			      gl_format format, GLsizei width,
-			      GLsizei height, GLsizei depth)
+			      struct gl_texture_image *timage)
 {
 	radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
 	radeon_texture_image *image = get_radeon_texture_image(timage);
@@ -313,6 +311,7 @@ static gl_format radeonChoose8888TexFormat(radeonContextPtr rmesa,
 }
 
 gl_format radeonChooseTextureFormat_mesa(struct gl_context * ctx,
+					 GLenum target,
 					 GLint internalFormat,
 					 GLenum format,
 					 GLenum type)
@@ -573,38 +572,6 @@ static void teximage_assign_miptree(radeonContextPtr rmesa,
 				"%s Failed to allocate miptree.\n", __func__);
 }
 
-/**
- * All glTexImage calls go through this function.
- */
-static void radeon_teximage(
-	struct gl_context *ctx, int dims,
-	struct gl_texture_image *texImage,
-	GLint internalFormat,
-	GLint width, GLint height, GLint depth,
-	GLsizei imageSize,
-	GLenum format, GLenum type, const GLvoid * pixels,
-	const struct gl_pixelstore_attrib *packing,
-	int compressed)
-{
-	_mesa_store_teximage(ctx, dims, texImage, internalFormat,
-			     width, height, depth, 0,
-			     format, type, pixels,
-			     packing);
-}
-
-static void
-radeonTexImage(struct gl_context * ctx, GLuint dims,
-		      struct gl_texture_image *texImage,
-		      GLint internalFormat,
-		      GLint width, GLint height, GLint depth,
-		      GLint border,
-		      GLenum format, GLenum type, const GLvoid * pixels,
-		      const struct gl_pixelstore_attrib *packing)
-{
-	radeon_teximage(ctx, dims, texImage, internalFormat, width, height, depth,
-		0, format, type, pixels, packing, 0);
-}
-
 unsigned radeonIsFormatRenderable(gl_format mesa_format)
 {
 	if (mesa_format == _radeon_texformat_argb8888 || mesa_format == _radeon_texformat_rgb565 ||
@@ -725,8 +692,6 @@ radeon_init_common_texture_funcs(radeonContextPtr radeon,
 
 	functions->ChooseTextureFormat	= radeonChooseTextureFormat_mesa;
 
-	functions->TexImage = radeonTexImage;
-
 	functions->CopyTexSubImage = radeonCopyTexSubImage;
 
 	functions->Bitmap = _mesa_meta_Bitmap;
@@ -786,7 +751,7 @@ radeon_swrast_map_texture_images(struct gl_context *ctx,
 				 struct gl_texture_object *texObj)
 {
 	radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
-	GLuint nr_faces = (texObj->Target == GL_TEXTURE_CUBE_MAP) ? 6 : 1;
+	GLuint nr_faces = _mesa_num_tex_faces(texObj->Target);
 	int i, face;
 
 	for (i = texObj->BaseLevel; i <= texObj->_MaxLevel; i++) {
@@ -802,7 +767,7 @@ radeon_swrast_unmap_texture_images(struct gl_context *ctx,
 				   struct gl_texture_object *texObj)
 {
 	radeonContextPtr rmesa = RADEON_CONTEXT(ctx);
-	GLuint nr_faces = (texObj->Target == GL_TEXTURE_CUBE_MAP) ? 6 : 1;
+	GLuint nr_faces = _mesa_num_tex_faces(texObj->Target);
 	int i, face;
 
 	for (i = texObj->BaseLevel; i <= texObj->_MaxLevel; i++) {

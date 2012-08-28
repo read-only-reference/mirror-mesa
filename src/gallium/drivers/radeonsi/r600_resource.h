@@ -46,13 +46,7 @@ struct r600_resource_texture {
 	 * for the stencil buffer below. */
 	enum pipe_format		real_format;
 
-	unsigned			offset[PIPE_MAX_TEXTURE_LEVELS];
-	unsigned			pitch_in_bytes[PIPE_MAX_TEXTURE_LEVELS];  /* transfer */
-	unsigned			pitch_in_blocks[PIPE_MAX_TEXTURE_LEVELS]; /* texture resource */
-	unsigned			layer_size[PIPE_MAX_TEXTURE_LEVELS];
-	unsigned			array_mode[PIPE_MAX_TEXTURE_LEVELS];
 	unsigned			pitch_override;
-	unsigned			size;
 	unsigned			depth;
 	unsigned			dirty_db;
 	struct r600_resource_texture	*flushed_depth_texture;
@@ -60,36 +54,21 @@ struct r600_resource_texture {
 	struct radeon_surface		surface;
 };
 
-#define R600_TEX_IS_TILED(tex, level) ((tex)->array_mode[level] != V_009910_ARRAY_LINEAR_GENERAL && (tex)->array_mode[level] != V_009910_ARRAY_LINEAR_ALIGNED)
-
 struct r600_surface {
 	struct pipe_surface		base;
-	unsigned			aligned_height;
 };
 
 void r600_init_screen_resource_functions(struct pipe_screen *screen);
 
 /* r600_texture */
-struct pipe_resource *r600_texture_create(struct pipe_screen *screen,
+struct pipe_resource *si_texture_create(struct pipe_screen *screen,
 					const struct pipe_resource *templ);
-struct pipe_resource *r600_texture_from_handle(struct pipe_screen *screen,
-						const struct pipe_resource *base,
-						struct winsys_handle *whandle);
+struct pipe_resource *si_texture_from_handle(struct pipe_screen *screen,
+					     const struct pipe_resource *base,
+					     struct winsys_handle *whandle);
 
 int r600_texture_depth_flush(struct pipe_context *ctx, struct pipe_resource *texture, boolean just_create);
 
-/* r600_texture.c texture transfer functions. */
-struct pipe_transfer* r600_texture_get_transfer(struct pipe_context *ctx,
-						struct pipe_resource *texture,
-						unsigned level,
-						unsigned usage,
-						const struct pipe_box *box);
-void r600_texture_transfer_destroy(struct pipe_context *ctx,
-				   struct pipe_transfer *trans);
-void* r600_texture_transfer_map(struct pipe_context *ctx,
-				struct pipe_transfer* transfer);
-void r600_texture_transfer_unmap(struct pipe_context *ctx,
-				 struct pipe_transfer* transfer);
 
 struct r600_context;
 

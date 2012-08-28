@@ -68,42 +68,9 @@ struct si_vertex_element
 	struct pipe_vertex_element	elements[PIPE_MAX_ATTRIBS];
 };
 
-struct si_shader_io {
-	unsigned		name;
-	unsigned		gpr;
-	unsigned		done;
-	int			sid;
-	unsigned		param_offset;
-	unsigned		interpolate;
-	bool			centroid;
-};
-
-struct si_shader {
-	unsigned		ninput;
-	unsigned		noutput;
-	struct si_shader_io	input[32];
-	struct si_shader_io	output[32];
-	bool			uses_kill;
-	bool			fs_write_all;
-	unsigned		nr_cbufs;
-};
-
-struct si_pipe_shader {
-	struct si_shader		shader;
-	struct si_pm4_state		*pm4;
-	struct si_resource		*bo;
-	struct si_vertex_element	vertex_elements;
-	struct tgsi_token		*tokens;
-	unsigned			num_sgprs;
-	unsigned			num_vgprs;
-	unsigned			spi_ps_input_ena;
-	unsigned			sprite_coord_enable;
-	struct pipe_stream_output_info	so;
-	unsigned			so_strides[4];
-};
-
 union si_state {
 	struct {
+		struct si_pm4_state		*sync;
 		struct si_pm4_state		*init;
 		struct si_state_blend		*blend;
 		struct si_pm4_state		*blend_color;
@@ -126,6 +93,7 @@ union si_state {
 		struct si_pm4_state		*vertex_buffers;
 		struct si_pm4_state		*texture_barrier;
 		struct si_pm4_state		*draw_info;
+		struct si_pm4_state		*draw;
 	} named;
 	struct si_pm4_state	*array[0];
 };
@@ -136,7 +104,7 @@ union si_state {
 #define si_pm4_bind_state(rctx, member, value) \
 	do { \
 		(rctx)->queued.named.member = (value); \
-	} while(0);
+	} while(0)
 
 #define si_pm4_delete_state(rctx, member, value) \
 	do { \
@@ -145,7 +113,7 @@ union si_state {
 		} \
 		si_pm4_free_state(rctx, (struct si_pm4_state *)(value), \
 				  si_pm4_block_idx(member)); \
-	} while(0);
+	} while(0)
 
 #define si_pm4_set_state(rctx, member, value) \
 	do { \
@@ -155,18 +123,39 @@ union si_state {
 				si_pm4_block_idx(member)); \
 			(rctx)->queued.named.member = (value); \
 		} \
-	} while(0);
+	} while(0)
 
 /* si_state.c */
+struct si_pipe_shader_selector;
+
 bool si_is_format_supported(struct pipe_screen *screen,
 			    enum pipe_format format,
 			    enum pipe_texture_target target,
 			    unsigned sample_count,
 			    unsigned usage);
+int si_shader_select(struct pipe_context *ctx,
+		     struct si_pipe_shader_selector *sel,
+		     unsigned *dirty);
 void si_init_state_functions(struct r600_context *rctx);
 void si_init_config(struct r600_context *rctx);
 
+/* si_state_streamout.c */
+struct pipe_stream_output_target *
+si_create_so_target(struct pipe_context *ctx,
+		    struct pipe_resource *buffer,
+		    unsigned buffer_offset,
+		    unsigned buffer_size);
+void si_so_target_destroy(struct pipe_context *ctx,
+			  struct pipe_stream_output_target *target);
+void si_set_so_targets(struct pipe_context *ctx,
+		       unsigned num_targets,
+		       struct pipe_stream_output_target **targets,
+		       unsigned append_bitmask);
+
 /* si_state_draw.c */
 void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo);
+
+/* si_commands.c */
+void si_cmd_surface_sync(struct si_pm4_state *pm4, uint32_t cp_coher_cntl);
 
 #endif

@@ -26,7 +26,7 @@ endif
 
 SUBDIRS=. tests
 
-GLAPI_LIB = ../mapi/glapi/libglapi.la
+GLAPI_LIB = $(top_builddir)/src/mapi/glapi/libglapi.la
 
 if HAVE_XF86VIDMODE
 EXTRA_DEFINES_XF86VIDMODE = -DXF86VIDMODE
@@ -37,6 +37,8 @@ AM_CFLAGS = \
 	-I$(top_srcdir)/include/GL/internal \
 	-I$(top_srcdir)/src/mapi \
 	-I$(top_srcdir)/src/mapi/glapi \
+	-I$(top_builddir)/src/mapi \
+	-I$(top_builddir)/src/mapi/glapi \
 	$(SHARED_GLAPI_CFLAGS) \
 	$(EXTRA_DEFINES_XF86VIDMODE) \
 	-D_REENTRANT \
@@ -111,6 +113,3 @@ all-local: lib@GL_LIB@.la
 	$(MKDIR_P) $(top_builddir)/$(LIB_DIR);
 	ln -f .libs/lib@GL_LIB@.so.1.2.0 $(top_builddir)/$(LIB_DIR)/lib@GL_LIB@.so.1
 	ln -sf lib@GL_LIB@.so.1 $(top_builddir)/$(LIB_DIR)/lib@GL_LIB@.so
-
-$(GLAPI_LIB):
-	@$(MAKE) -C $(TOP)/src/mapi/glapi

@@ -7,24 +7,12 @@
 //
 //===----------------------------------------------------------------------===//
 
-def load_user_sgpr : PatFrag<(ops node:$ptr),
-  (load node:$ptr),
-  [{
-    const Value *Src = cast<LoadSDNode>(N)->getSrcValue();
-    if (Src) {
-      PointerType * PT = dyn_cast<PointerType>(Src->getType());
-      return PT && PT->getAddressSpace() == AMDGPUAS::USER_SGPR_ADDRESS;
-    }
-    return false;
-  }]
->;
-
-
 def isSI : Predicate<"Subtarget.device()"
                             "->getGeneration() == AMDGPUDeviceInfo::HD7XXX">;
 
 let Predicates = [isSI] in {
 
+let neverHasSideEffects = 1 in {
 def S_MOV_B32 : SOP1_32 <0x00000003, "S_MOV_B32", []>;
 def S_MOV_B64 : SOP1_64 <0x00000004, "S_MOV_B64", []>;
 def S_CMOV_B32 : SOP1_32 <0x00000005, "S_CMOV_B32", []>;
@@ -35,6 +23,7 @@ def S_WQM_B32 : SOP1_32 <0x00000009, "S_WQM_B32", []>;
 def S_WQM_B64 : SOP1_64 <0x0000000a, "S_WQM_B64", []>;
 def S_BREV_B32 : SOP1_32 <0x0000000b, "S_BREV_B32", []>;
 def S_BREV_B64 : SOP1_64 <0x0000000c, "S_BREV_B64", []>;
+} // End neverHasSideEffects = 1
 ////def S_BCNT0_I32_B32 : SOP1_BCNT0 <0x0000000d, "S_BCNT0_I32_B32", []>;
 ////def S_BCNT0_I32_B64 : SOP1_BCNT0 <0x0000000e, "S_BCNT0_I32_B64", []>;
 ////def S_BCNT1_I32_B32 : SOP1_BCNT1 <0x0000000f, "S_BCNT1_I32_B32", []>;
@@ -118,14 +107,24 @@ def S_GETREG_REGRD_B32 : SOPK_32 <0x00000014, "S_GETREG_REGRD_B32", []>;
 //def EXP : EXP_ <0x00000000, "EXP", []>;
 
 defm V_CMP_F_F32 : VOPC_32 <0x00000000, "V_CMP_F_F32", []>;
-defm V_CMP_LT_F32 : VOPC_32 <0x00000001, "V_CMP_LT_F32", []>;
+defm V_CMP_LT_F32 : VOPC_32 <0x00000001, "V_CMP_LT_F32",
+  [(set VCCReg:$dst, (setcc (f32 AllReg_32:$src0), VReg_32:$src1, COND_LT))]
+>;
 defm V_CMP_EQ_F32 : VOPC_32 <0x00000002, "V_CMP_EQ_F32",
   [(set VCCReg:$dst, (setcc (f32 AllReg_32:$src0), VReg_32:$src1, COND_EQ))]
 >;
-defm V_CMP_LE_F32 : VOPC_32 <0x00000003, "V_CMP_LE_F32", []>;
-defm V_CMP_GT_F32 : VOPC_32 <0x00000004, "V_CMP_GT_F32", []>;
-defm V_CMP_LG_F32 : VOPC_32 <0x00000005, "V_CMP_LG_F32", []>;
-defm V_CMP_GE_F32 : VOPC_32 <0x00000006, "V_CMP_GE_F32", []>;
+defm V_CMP_LE_F32 : VOPC_32 <0x00000003, "V_CMP_LE_F32",
+  [(set VCCReg:$dst, (setcc (f32 AllReg_32:$src0), VReg_32:$src1, COND_LE))]
+>;
+defm V_CMP_GT_F32 : VOPC_32 <0x00000004, "V_CMP_GT_F32",
+  [(set VCCReg:$dst, (setcc (f32 AllReg_32:$src0), VReg_32:$src1, COND_GT))]
+>;
+defm V_CMP_LG_F32 : VOPC_32 <0x00000005, "V_CMP_LG_F32",
+  [(set VCCReg:$dst, (setcc (f32 AllReg_32:$src0), VReg_32:$src1, COND_NE))]
+>;
+defm V_CMP_GE_F32 : VOPC_32 <0x00000006, "V_CMP_GE_F32",
+  [(set VCCReg:$dst, (setcc (f32 AllReg_32:$src0), VReg_32:$src1, COND_GE))]
+>;
 defm V_CMP_O_F32 : VOPC_32 <0x00000007, "V_CMP_O_F32", []>;
 defm V_CMP_U_F32 : VOPC_32 <0x00000008, "V_CMP_U_F32", []>;
 defm V_CMP_NGE_F32 : VOPC_32 <0x00000009, "V_CMP_NGE_F32", []>;
@@ -503,7 +502,9 @@ defm V_MOV_B32 : VOP1_32 <0x00000001, "V_MOV_B32", []>;
 defm V_READFIRSTLANE_B32 : VOP1_32 <0x00000002, "V_READFIRSTLANE_B32", []>;
 //defm V_CVT_I32_F64 : VOP1_32 <0x00000003, "V_CVT_I32_F64", []>;
 //defm V_CVT_F64_I32 : VOP1_64 <0x00000004, "V_CVT_F64_I32", []>;
-//defm V_CVT_F32_I32 : VOP1_32 <0x00000005, "V_CVT_F32_I32", []>;
+defm V_CVT_F32_I32 : VOP1_32 <0x00000005, "V_CVT_F32_I32",
+  [(set VReg_32:$dst, (fp_to_sint AllReg_32:$src0))]
+>;
 //defm V_CVT_F32_U32 : VOP1_32 <0x00000006, "V_CVT_F32_U32", []>;
 //defm V_CVT_U32_F32 : VOP1_32 <0x00000007, "V_CVT_U32_F32", []>;
 //defm V_CVT_I32_F32 : VOP1_32 <0x00000008, "V_CVT_I32_F32", []>;
@@ -531,7 +532,9 @@ defm V_LOG_CLAMP_F32 : VOP1_32 <0x00000026, "V_LOG_CLAMP_F32", []>;
 defm V_LOG_F32 : VOP1_32 <0x00000027, "V_LOG_F32", []>;
 defm V_RCP_CLAMP_F32 : VOP1_32 <0x00000028, "V_RCP_CLAMP_F32", []>;
 defm V_RCP_LEGACY_F32 : VOP1_32 <0x00000029, "V_RCP_LEGACY_F32", []>;
-defm V_RCP_F32 : VOP1_32 <0x0000002a, "V_RCP_F32", []>;
+defm V_RCP_F32 : VOP1_32 <0x0000002a, "V_RCP_F32",
+  [(set VReg_32:$dst, (int_AMDGPU_rcp AllReg_32:$src0))]
+>;
 defm V_RCP_IFLAG_F32 : VOP1_32 <0x0000002b, "V_RCP_IFLAG_F32", []>;
 defm V_RSQ_CLAMP_F32 : VOP1_32 <0x0000002c, "V_RSQ_CLAMP_F32", []>;
 defm V_RSQ_LEGACY_F32 : VOP1_32 <
@@ -565,39 +568,43 @@ defm V_MOVRELSD_B32 : VOP1_32 <0x00000044, "V_MOVRELSD_B32", []>;
 def V_INTERP_P1_F32 : VINTRP <
   0x00000000,
   (outs VReg_32:$dst),
-  (ins VReg_32:$i, i32imm:$attr_chan, i32imm:$attr),
+  (ins VReg_32:$i, i32imm:$attr_chan, i32imm:$attr, M0Reg:$m0),
   "V_INTERP_P1_F32",
-  []
->;
+  []> {
+  let DisableEncoding = "$m0";
+}
 
 def V_INTERP_P2_F32 : VINTRP <
   0x00000001,
   (outs VReg_32:$dst),
-  (ins VReg_32:$src0, VReg_32:$j, i32imm:$attr_chan, i32imm:$attr),
+  (ins VReg_32:$src0, VReg_32:$j, i32imm:$attr_chan, i32imm:$attr, M0Reg:$m0),
   "V_INTERP_P2_F32",
   []> {
 
   let Constraints = "$src0 = $dst";
-  let DisableEncoding = "$src0";
+  let DisableEncoding = "$src0,$m0";
 
 }
 
 def V_INTERP_MOV_F32 : VINTRP <
   0x00000002,
   (outs VReg_32:$dst),
-  (ins i32imm:$attr_chan, i32imm:$attr),
+  (ins i32imm:$attr_chan, i32imm:$attr, M0Reg:$m0),
   "V_INTERP_MOV_F32",
   []> {
   let VSRC = 0;
+  let DisableEncoding = "$m0";
 }
 
-//def V_INTERP_MOV_F32 : VINTRP_32 <0x00000002, "V_INTERP_MOV_F32", []>;
 //def S_NOP : SOPP_ <0x00000000, "S_NOP", []>;
 
 let isTerminator = 1 in {
 
-def S_ENDPGM : SOPP <0x00000001, (ins), "S_ENDPGM", []> {
+def S_ENDPGM : SOPP <0x00000001, (ins), "S_ENDPGM",
+  [(IL_retflag)]> {
   let SIMM16 = 0;
+  let isBarrier = 1;
+  let hasCtrlDep = 1;
 }
 
 let isBranch = 1 in {
@@ -628,8 +635,19 @@ def S_CBRANCH_VCCNZ : SOPP <
   "S_CBRANCH_VCCNZ",
   []
 >;
-//def S_CBRANCH_EXECZ : SOPP_ <0x00000008, "S_CBRANCH_EXECZ", []>;
-//def S_CBRANCH_EXECNZ : SOPP_ <0x00000009, "S_CBRANCH_EXECNZ", []>;
+
+let DisableEncoding = "$exec" in {
+def S_CBRANCH_EXECZ : SOPP <
+  0x00000008, (ins brtarget:$target, EXECReg:$exec),
+  "S_CBRANCH_EXECZ",
+  []
+>;
+def S_CBRANCH_EXECNZ : SOPP <
+  0x00000009, (ins brtarget:$target, EXECReg:$exec),
+  "S_CBRANCH_EXECNZ",
+  []
+>;
+} // End DisableEncoding = "$exec"
 
 
 } // End isBranch = 1
@@ -687,7 +705,9 @@ defm V_MUL_F32 : VOP2_32 <0x00000008, "V_MUL_F32", []>;
 //defm V_MUL_HI_I32_I24 : VOP2_32 <0x0000000a, "V_MUL_HI_I32_I24", []>;
 //defm V_MUL_U32_U24 : VOP2_32 <0x0000000b, "V_MUL_U32_U24", []>;
 //defm V_MUL_HI_U32_U24 : VOP2_32 <0x0000000c, "V_MUL_HI_U32_U24", []>;
-defm V_MIN_LEGACY_F32 : VOP2_32 <0x0000000d, "V_MIN_LEGACY_F32", []>;
+defm V_MIN_LEGACY_F32 : VOP2_32 <0x0000000d, "V_MIN_LEGACY_F32",
+  [(set VReg_32:$dst, (AMDGPUfmin AllReg_32:$src0, VReg_32:$src1))]
+>;
 
 defm V_MAX_LEGACY_F32 : VOP2_32 <0x0000000e, "V_MAX_LEGACY_F32",
   [(set VReg_32:$dst, (AMDGPUfmax AllReg_32:$src0, VReg_32:$src1))]
@@ -724,7 +744,9 @@ defm V_LDEXP_F32 : VOP2_32 <0x0000002b, "V_LDEXP_F32", []>;
 ////def V_CVT_PKACCUM_U8_F32 : VOP2_U8 <0x0000002c, "V_CVT_PKACCUM_U8_F32", []>;
 ////def V_CVT_PKNORM_I16_F32 : VOP2_I16 <0x0000002d, "V_CVT_PKNORM_I16_F32", []>;
 ////def V_CVT_PKNORM_U16_F32 : VOP2_U16 <0x0000002e, "V_CVT_PKNORM_U16_F32", []>;
-////def V_CVT_PKRTZ_F16_F32 : VOP2_F16 <0x0000002f, "V_CVT_PKRTZ_F16_F32", []>;
+defm V_CVT_PKRTZ_F16_F32 : VOP2_32 <0x0000002f, "V_CVT_PKRTZ_F16_F32",
+ [(set VReg_32:$dst, (int_SI_packf16 AllReg_32:$src0, VReg_32:$src1))]
+>;
 ////def V_CVT_PK_U16_U32 : VOP2_U16 <0x00000030, "V_CVT_PK_U16_U32", []>;
 ////def V_CVT_PK_I16_I32 : VOP2_I16 <0x00000031, "V_CVT_PK_I16_I32", []>;
 def S_CMP_EQ_I32 : SOPC_32 <0x00000000, "S_CMP_EQ_I32", []>;
@@ -865,21 +887,21 @@ def S_BFE_I64 : SOP2_64 <0x0000002a, "S_BFE_I64", []>;
 //def S_CBRANCH_G_FORK : SOP2_ <0x0000002b, "S_CBRANCH_G_FORK", []>;
 def S_ABSDIFF_I32 : SOP2_32 <0x0000002c, "S_ABSDIFF_I32", []>;
 
-class V_MOV_IMM <Operand immType, SDNode immNode> : VOP1 <
-  0x1,
+class V_MOV_IMM <Operand immType, SDNode immNode> : InstSI <
   (outs VReg_32:$dst),
   (ins immType:$src0),
   "V_MOV_IMM",
    [(set VReg_32:$dst, (immNode:$src0))]
 >;
 
+let isCodeGenOnly = 1, isPseudo = 1 in {
+
 def V_MOV_IMM_I32 : V_MOV_IMM<i32imm, imm>;
 def V_MOV_IMM_F32 : V_MOV_IMM<f32imm, fpimm>;
 
-def S_MOV_IMM_I32 : SOP1 <
-  0x3,
+def S_MOV_IMM_I32 : InstSI <
   (outs SReg_32:$dst),
-  (ins i32Literal:$src0),
+  (ins i32imm:$src0),
   "S_MOV_IMM_I32",
   [(set SReg_32:$dst, (imm:$src0))]
 >;
@@ -888,13 +910,24 @@ def S_MOV_IMM_I32 : SOP1 <
 // type for indices on load and store instructions.  The pattern for
 // S_MOV_IMM_I64 will only match i64 immediates that can fit into 32-bits,
 // which the hardware can handle.
-def S_MOV_IMM_I64 : SOP1 <
-  0x3,
+def S_MOV_IMM_I64 : InstSI <
   (outs SReg_64:$dst),
-  (ins i64Literal:$src0),
+  (ins i64imm:$src0),
   "S_MOV_IMM_I64 $dst, $src0",
   [(set SReg_64:$dst, (IMM32bitIn64bit:$src0))]
 >;
+
+} // End isCodeGenOnly, isPseudo = 1
+
+class SI_LOAD_LITERAL<Operand ImmType> :
+    Enc32 <(outs), (ins ImmType:$imm), "LOAD_LITERAL $imm", []> {
+
+  bits<32> imm;
+  let Inst{31-0} = imm;
+}
+
+def SI_LOAD_LITERAL_I32 : SI_LOAD_LITERAL<i32imm>;
+def SI_LOAD_LITERAL_F32 : SI_LOAD_LITERAL<f32imm>;
 
 let isCodeGenOnly = 1, isPseudo = 1 in {
 
@@ -944,28 +977,12 @@ def SI_INTERP_CONST : InstSI <
                                                  imm:$attr, SReg_32:$params))]
 >;
 
-def USE_SGPR_32 : InstSI <
-  (outs SReg_32:$dst),
-  (ins i32imm:$src0),
-  "USE_SGPR_32",
-  [(set (i32 SReg_32:$dst), (load_user_sgpr imm:$src0))]
+def SI_KIL : InstSI <
+	(outs),
+	(ins VReg_32:$src),
+	"SI_KIL $src",
+	[(int_AMDGPU_kill VReg_32:$src)]
 >;
-
-def USE_SGPR_64 : InstSI <
-  (outs SReg_64:$dst),
-  (ins i32imm:$src0),
-  "USE_SGPR_64",
-  [(set (i64 SReg_64:$dst), (load_user_sgpr imm:$src0))]
->;
-
-def VS_LOAD_BUFFER_INDEX : InstSI <
-  (outs VReg_32:$dst),
-  (ins),
-  "VS_LOAD_BUFFER_INDEX",
-  [(set VReg_32:$dst, (int_SI_vs_load_buffer_index))]> {
-
-  field bits<32> Inst = 0;
-}
 
 } // end usesCustomInserter 
 
@@ -1015,6 +1032,7 @@ def : Pat <
 
 def CLAMP_SI : CLAMP<VReg_32>;
 def FABS_SI : FABS<VReg_32>;
+def FNEG_SI : FNEG<VReg_32>;
 
 def : Extract_Element <f32, v4f32, VReg_128, 0, sel_x>;
 def : Extract_Element <f32, v4f32, VReg_128, 1, sel_y>;
@@ -1044,13 +1062,6 @@ def : Pat <
   (i1 (SIvcc_bitcast SReg_64:$vcc)),
   (COPY_TO_REGCLASS SReg_64:$vcc, VCCReg)
 >;
-
-/*
-def : Pat<
-  (int_SI_vs_load_buffer_index),
-  (COPY_TO_REGCLASS (f32 VGPR0), VReg_32)
->; 
-*/ 
 
 /********** ===================== **********/
 /********** Interpolation Paterns **********/
@@ -1087,6 +1098,11 @@ def : Pat <
 /* llvm.AMDGPU.pow */
 /* XXX: We are using IEEE MUL, not the 0 * anything = 0 MUL, is this correct? */
 def : POW_Common <V_LOG_F32_e32, V_EXP_F32_e32, V_MUL_F32_e32, VReg_32>;
+
+def : Pat <
+  (int_AMDGPU_div AllReg_32:$src0, AllReg_32:$src1),
+  (V_MUL_LEGACY_F32_e32 AllReg_32:$src0, (V_RCP_LEGACY_F32_e32 AllReg_32:$src1))
+>;
 
 /********** ================== **********/
 /**********   VOP3 Patterns    **********/

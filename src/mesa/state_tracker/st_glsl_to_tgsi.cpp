@@ -1867,6 +1867,10 @@ glsl_to_tgsi_visitor::visit(ir_expression *ir)
       assert(!"GLSL 1.30 features unsupported");
       break;
 
+   case ir_binop_ubo_load:
+      assert(!"not yet supported");
+      break;
+
    case ir_quadop_vector:
       /* This operation should have already been handled.
        */
@@ -4024,7 +4028,7 @@ dst_register(struct st_translate *t,
 static struct ureg_src
 src_register(struct st_translate *t,
              gl_register_file file,
-             GLuint index)
+             GLint index)
 {
    switch(file) {
    case PROGRAM_UNDEFINED:
@@ -4032,7 +4036,7 @@ src_register(struct st_translate *t,
 
    case PROGRAM_TEMPORARY:
       assert(index >= 0);
-      assert(index < Elements(t->temps));
+      assert(index < (int) Elements(t->temps));
       if (ureg_dst_is_undef(t->temps[index]))
          t->temps[index] = ureg_DECL_local_temporary(t->ureg);
       return ureg_src(t->temps[index]);
@@ -4065,7 +4069,7 @@ src_register(struct st_translate *t,
       return ureg_src(t->address[index]);
 
    case PROGRAM_SYSTEM_VALUE:
-      assert(index < Elements(t->systemValues));
+      assert(index < (int) Elements(t->systemValues));
       return t->systemValues[index];
 
    default:
@@ -4174,6 +4178,7 @@ translate_tex_offset(struct st_translate *t,
    offset.SwizzleX = in_offset->SwizzleX;
    offset.SwizzleY = in_offset->SwizzleY;
    offset.SwizzleZ = in_offset->SwizzleZ;
+   offset.Padding = 0;
 
    return offset;
 }
@@ -4790,7 +4795,7 @@ get_mesa_program(struct gl_context *ctx,
                  struct gl_shader_program *shader_program,
                  struct gl_shader *shader)
 {
-   glsl_to_tgsi_visitor* v = new glsl_to_tgsi_visitor();
+   glsl_to_tgsi_visitor* v;
    struct gl_program *prog;
    GLenum target;
    const char *target_string;
@@ -4822,6 +4827,7 @@ get_mesa_program(struct gl_context *ctx,
    if (!prog)
       return NULL;
    prog->Parameters = _mesa_new_parameter_list();
+   v = new glsl_to_tgsi_visitor();
    v->ctx = ctx;
    v->prog = prog;
    v->shader_program = shader_program;

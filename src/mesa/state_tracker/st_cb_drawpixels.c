@@ -679,8 +679,8 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
 
    cso_save_rasterizer(cso);
    cso_save_viewport(cso);
-   cso_save_samplers(cso);
-   cso_save_fragment_sampler_views(cso);
+   cso_save_samplers(cso, PIPE_SHADER_FRAGMENT);
+   cso_save_sampler_views(cso, PIPE_SHADER_FRAGMENT);
    cso_save_fragment_shader(cso);
    cso_save_stream_outputs(cso);
    cso_save_vertex_shader(cso);
@@ -697,7 +697,8 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
       struct pipe_rasterizer_state rasterizer;
       memset(&rasterizer, 0, sizeof(rasterizer));
       rasterizer.clamp_fragment_color = !st->clamp_frag_color_in_shader &&
-                                        ctx->Color._ClampFragmentColor;
+                                        ctx->Color._ClampFragmentColor &&
+                                        !ctx->DrawBuffer->_IntegerColor;
       rasterizer.gl_rasterization_rules = 1;
       rasterizer.depth_clip = !ctx->Transform.DepthClamp;
       rasterizer.scissor = ctx->Scissor.Enabled;
@@ -751,11 +752,11 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
       sampler.mag_img_filter = PIPE_TEX_FILTER_NEAREST;
       sampler.normalized_coords = normalized;
 
-      cso_single_sampler(cso, 0, &sampler);
+      cso_single_sampler(cso, PIPE_SHADER_FRAGMENT, 0, &sampler);
       if (num_sampler_view > 1) {
-         cso_single_sampler(cso, 1, &sampler);
+         cso_single_sampler(cso, PIPE_SHADER_FRAGMENT, 1, &sampler);
       }
-      cso_single_sampler_done(cso);
+      cso_single_sampler_done(cso, PIPE_SHADER_FRAGMENT);
    }
 
    /* viewport state: viewport matching window dims */
@@ -778,7 +779,7 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
    cso_set_stream_outputs(st->cso_context, 0, NULL, 0);
 
    /* texture state: */
-   cso_set_fragment_sampler_views(cso, num_sampler_view, sv);
+   cso_set_sampler_views(cso, PIPE_SHADER_FRAGMENT, num_sampler_view, sv);
 
    /* Compute Gallium window coords (y=0=top) with pixel zoom.
     * Recall that these coords are transformed by the current
@@ -804,8 +805,8 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
    /* restore state */
    cso_restore_rasterizer(cso);
    cso_restore_viewport(cso);
-   cso_restore_samplers(cso);
-   cso_restore_fragment_sampler_views(cso);
+   cso_restore_samplers(cso, PIPE_SHADER_FRAGMENT);
+   cso_restore_sampler_views(cso, PIPE_SHADER_FRAGMENT);
    cso_restore_fragment_shader(cso);
    cso_restore_vertex_shader(cso);
    cso_restore_geometry_shader(cso);
@@ -1026,7 +1027,8 @@ get_color_fp_variant(struct st_context *st)
                        ctx->Pixel.AlphaScale != 1.0);
    key.pixelMaps = ctx->Pixel.MapColorFlag;
    key.clamp_color = st->clamp_frag_color_in_shader &&
-                     st->ctx->Color._ClampFragmentColor;
+                     st->ctx->Color._ClampFragmentColor &&
+                     !st->ctx->DrawBuffer->_IntegerColor;
 
    fpv = st_get_fp_variant(st, st->fp, &key);
 

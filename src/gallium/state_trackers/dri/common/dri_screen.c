@@ -43,6 +43,8 @@
 
 #define MSAA_VISUAL_MAX_SAMPLES 8
 
+#undef false
+
 PUBLIC const char __driConfigOptions[] =
    DRI_CONF_BEGIN
       DRI_CONF_SECTION_PERFORMANCE
@@ -60,9 +62,16 @@ PUBLIC const char __driConfigOptions[] =
          DRI_CONF_PP_JIMENEZMLAA(0, 0, 32)
          DRI_CONF_PP_JIMENEZMLAA_COLOR(0, 0, 32)
       DRI_CONF_SECTION_END
+
+      DRI_CONF_SECTION_DEBUG
+         DRI_CONF_FORCE_GLSL_EXTENSIONS_WARN(false)
+      DRI_CONF_SECTION_END
+
    DRI_CONF_END;
 
-static const uint __driNConfigOptions = 9;
+#define false 0
+
+static const uint __driNConfigOptions = 10;
 
 static const __DRIconfig **
 dri_fill_in_modes(struct dri_screen *screen,
@@ -219,16 +228,12 @@ dri_fill_in_modes(struct dri_screen *screen,
 
    if (pixel_bits == 16) {
       configs = configs_r5g6b5;
-      if (configs_a8r8g8b8)
-         configs = configs ? driConcatConfigs(configs, configs_a8r8g8b8) : configs_a8r8g8b8;
-      if (configs_x8r8g8b8)
-	 configs = configs ? driConcatConfigs(configs, configs_x8r8g8b8) : configs_x8r8g8b8;
+      configs = driConcatConfigs(configs, configs_a8r8g8b8);
+      configs = driConcatConfigs(configs, configs_x8r8g8b8);
    } else {
       configs = configs_a8r8g8b8;
-      if (configs_x8r8g8b8)
-	 configs = configs ? driConcatConfigs(configs, configs_x8r8g8b8) : configs_x8r8g8b8;
-      if (configs_r5g6b5)
-         configs = configs ? driConcatConfigs(configs, configs_r5g6b5) : configs_r5g6b5;
+      configs = driConcatConfigs(configs, configs_x8r8g8b8);
+      configs = driConcatConfigs(configs, configs_r5g6b5);
    }
 
    if (configs == NULL) {

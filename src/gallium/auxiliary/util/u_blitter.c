@@ -81,6 +81,12 @@ struct blitter_context_priv
    void *fs_texfetch_depthstencil[PIPE_MAX_TEXTURE_TYPES];
    void *fs_texfetch_stencil[PIPE_MAX_TEXTURE_TYPES];
 
+   /* FS which outputs one sample from a multisample texture. */
+   void *fs_texfetch_col_msaa[PIPE_MAX_TEXTURE_TYPES];
+   void *fs_texfetch_depth_msaa[PIPE_MAX_TEXTURE_TYPES];
+   void *fs_texfetch_depthstencil_msaa[PIPE_MAX_TEXTURE_TYPES];
+   void *fs_texfetch_stencil_msaa[PIPE_MAX_TEXTURE_TYPES];
+
    /* Blend state. */
    void *blend_write_color;   /**< blend state with writemask of RGBA */
    void *blend_keep_color;    /**< blend state with writemask of 0 */
@@ -117,13 +123,6 @@ struct blitter_context_priv
    boolean has_stencil_export;
 };
 
-static void blitter_draw_rectangle(struct blitter_context *blitter,
-                                   unsigned x, unsigned y,
-                                   unsigned width, unsigned height,
-                                   float depth,
-                                   enum blitter_attrib_type type,
-                                   const union pipe_color_union *attrib);
-
 
 struct blitter_context *util_blitter_create(struct pipe_context *pipe)
 {
@@ -140,7 +139,7 @@ struct blitter_context *util_blitter_create(struct pipe_context *pipe)
       return NULL;
 
    ctx->base.pipe = pipe;
-   ctx->base.draw_rectangle = blitter_draw_rectangle;
+   ctx->base.draw_rectangle = util_blitter_draw_rectangle;
 
    /* init state objects for them to be considered invalid */
    ctx->base.saved_blend_state = INVALID_PTR;
@@ -439,6 +438,12 @@ static void blitter_restore_fragment_states(struct blitter_context_priv *ctx)
    pipe->bind_blend_state(pipe, ctx->base.saved_blend_state);
    ctx->base.saved_blend_state = INVALID_PTR;
 
+   /* Sample mask. */
+   if (ctx->base.is_sample_mask_saved) {
+      pipe->set_sample_mask(pipe, ctx->base.saved_sample_mask);
+      ctx->base.is_sample_mask_saved = FALSE;
+   }
+
    /* Miscellaneous states. */
    /* XXX check whether these are saved and whether they need to be restored
     * (depending on the operation) */
@@ -553,7 +558,8 @@ static void get_texcoords(struct pipe_sampler_view *src,
 {
    struct pipe_resource *tex = src->texture;
    unsigned level = src->u.tex.first_level;
-   boolean normalized = tex->target != PIPE_TEXTURE_RECT;
+   boolean normalized = tex->target != PIPE_TEXTURE_RECT &&
+                        tex->nr_samples <= 1;
 
    if (normalized) {
       out[0] = x1 / (float)u_minify(src_width0,  level);
@@ -587,7 +593,7 @@ static void set_texcoords_in_vertices(const float coord[4],
 static void blitter_set_texcoords(struct blitter_context_priv *ctx,
                                   struct pipe_sampler_view *src,
                                   unsigned src_width0, unsigned src_height0,
-                                  unsigned layer,
+                                  unsigned layer, unsigned sample,
                                   unsigned x1, unsigned y1,
                                   unsigned x2, unsigned y2)
 {
@@ -624,8 +630,16 @@ static void blitter_set_texcoords(struct blitter_context_priv *ctx,
       break;
 
    case PIPE_TEXTURE_2D_ARRAY:
-      for (i = 0; i < 4; i++)
-         ctx->vertices[i][1][2] = layer; /*r*/
+      for (i = 0; i < 4; i++) {
+         ctx->vertices[i][1][2] = layer;  /*r*/
+         ctx->vertices[i][1][3] = sample; /*q*/
+      }
+      break;
+
+   case PIPE_TEXTURE_2D:
+      for (i = 0; i < 4; i++) {
+         ctx->vertices[i][1][2] = sample; /*r*/
+      }
       break;
 
    default:;
@@ -666,81 +680,149 @@ void *blitter_get_fs_col(struct blitter_context_priv *ctx, unsigned num_cbufs,
 
 static INLINE
 void *blitter_get_fs_texfetch_col(struct blitter_context_priv *ctx,
-                                  unsigned tex_target)
+                                  struct pipe_resource *tex)
 {
    struct pipe_context *pipe = ctx->base.pipe;
 
-   assert(tex_target < PIPE_MAX_TEXTURE_TYPES);
+   assert(tex->target < PIPE_MAX_TEXTURE_TYPES);
 
-   /* Create the fragment shader on-demand. */
-   if (!ctx->fs_texfetch_col[tex_target]) {
-      unsigned tgsi_tex = util_pipe_tex_to_tgsi_tex(tex_target);
+   if (tex->nr_samples > 1) {
+      void **shader = &ctx->fs_texfetch_col_msaa[tex->target];
 
-      ctx->fs_texfetch_col[tex_target] =
-        util_make_fragment_tex_shader(pipe, tgsi_tex, TGSI_INTERPOLATE_LINEAR);
+      /* Create the fragment shader on-demand. */
+      if (!*shader) {
+         unsigned tgsi_tex = util_pipe_tex_to_tgsi_tex(tex->target,
+                                                       tex->nr_samples);
+
+         *shader = util_make_fs_blit_msaa_color(pipe, tgsi_tex);
+      }
+
+      return *shader;
+   } else {
+      void **shader = &ctx->fs_texfetch_col[tex->target];
+
+      /* Create the fragment shader on-demand. */
+      if (!*shader) {
+         unsigned tgsi_tex = util_pipe_tex_to_tgsi_tex(tex->target, 0);
+
+         *shader =
+            util_make_fragment_tex_shader(pipe, tgsi_tex,
+                                          TGSI_INTERPOLATE_LINEAR);
+      }
+
+      return *shader;
    }
-
-   return ctx->fs_texfetch_col[tex_target];
 }
 
 static INLINE
 void *blitter_get_fs_texfetch_depth(struct blitter_context_priv *ctx,
-                                    unsigned tex_target)
+                                    struct pipe_resource *tex)
 {
    struct pipe_context *pipe = ctx->base.pipe;
 
-   assert(tex_target < PIPE_MAX_TEXTURE_TYPES);
+   assert(tex->target < PIPE_MAX_TEXTURE_TYPES);
 
-   /* Create the fragment shader on-demand. */
-   if (!ctx->fs_texfetch_depth[tex_target]) {
-      unsigned tgsi_tex = util_pipe_tex_to_tgsi_tex(tex_target);
+   if (tex->nr_samples > 1) {
+      void **shader = &ctx->fs_texfetch_depth_msaa[tex->target];
 
-      ctx->fs_texfetch_depth[tex_target] =
-         util_make_fragment_tex_shader_writedepth(pipe, tgsi_tex,
-                                                  TGSI_INTERPOLATE_LINEAR);
+      /* Create the fragment shader on-demand. */
+      if (!*shader) {
+         unsigned tgsi_tex = util_pipe_tex_to_tgsi_tex(tex->target,
+                                                       tex->nr_samples);
+
+         *shader =
+            util_make_fs_blit_msaa_depth(pipe, tgsi_tex);
+      }
+
+      return *shader;
+   } else {
+      void **shader = &ctx->fs_texfetch_depth[tex->target];
+
+      /* Create the fragment shader on-demand. */
+      if (!*shader) {
+         unsigned tgsi_tex = util_pipe_tex_to_tgsi_tex(tex->target, 0);
+
+         *shader =
+            util_make_fragment_tex_shader_writedepth(pipe, tgsi_tex,
+                                                     TGSI_INTERPOLATE_LINEAR);
+      }
+
+      return *shader;
    }
-
-   return ctx->fs_texfetch_depth[tex_target];
 }
 
 static INLINE
 void *blitter_get_fs_texfetch_depthstencil(struct blitter_context_priv *ctx,
-                                           unsigned tex_target)
+                                           struct pipe_resource *tex)
 {
    struct pipe_context *pipe = ctx->base.pipe;
 
-   assert(tex_target < PIPE_MAX_TEXTURE_TYPES);
+   assert(tex->target < PIPE_MAX_TEXTURE_TYPES);
 
-   /* Create the fragment shader on-demand. */
-   if (!ctx->fs_texfetch_depthstencil[tex_target]) {
-      unsigned tgsi_tex = util_pipe_tex_to_tgsi_tex(tex_target);
+   if (tex->nr_samples > 1) {
+      void **shader = &ctx->fs_texfetch_depthstencil_msaa[tex->target];
 
-      ctx->fs_texfetch_depthstencil[tex_target] =
-         util_make_fragment_tex_shader_writedepthstencil(pipe, tgsi_tex,
-                                                  TGSI_INTERPOLATE_LINEAR);
+      /* Create the fragment shader on-demand. */
+      if (!*shader) {
+         unsigned tgsi_tex = util_pipe_tex_to_tgsi_tex(tex->target,
+                                                       tex->nr_samples);
+
+         *shader =
+            util_make_fs_blit_msaa_depthstencil(pipe, tgsi_tex);
+      }
+
+      return *shader;
+   } else {
+      void **shader = &ctx->fs_texfetch_depthstencil[tex->target];
+
+      /* Create the fragment shader on-demand. */
+      if (!*shader) {
+         unsigned tgsi_tex = util_pipe_tex_to_tgsi_tex(tex->target, 0);
+
+         *shader =
+            util_make_fragment_tex_shader_writedepthstencil(pipe, tgsi_tex,
+                                                     TGSI_INTERPOLATE_LINEAR);
+      }
+
+      return *shader;
    }
-
-   return ctx->fs_texfetch_depthstencil[tex_target];
 }
 
 static INLINE
 void *blitter_get_fs_texfetch_stencil(struct blitter_context_priv *ctx,
-                                      unsigned tex_target)
+                                      struct pipe_resource *tex)
 {
    struct pipe_context *pipe = ctx->base.pipe;
 
-   assert(tex_target < PIPE_MAX_TEXTURE_TYPES);
+   assert(tex->target < PIPE_MAX_TEXTURE_TYPES);
 
-   /* Create the fragment shader on-demand. */
-   if (!ctx->fs_texfetch_stencil[tex_target]) {
-      unsigned tgsi_tex = util_pipe_tex_to_tgsi_tex(tex_target);
+   if (tex->nr_samples > 1) {
+      void **shader = &ctx->fs_texfetch_stencil_msaa[tex->target];
 
-      ctx->fs_texfetch_stencil[tex_target] =
-         util_make_fragment_tex_shader_writestencil(pipe, tgsi_tex,
-                                                    TGSI_INTERPOLATE_LINEAR);
+      /* Create the fragment shader on-demand. */
+      if (!*shader) {
+         unsigned tgsi_tex = util_pipe_tex_to_tgsi_tex(tex->target,
+                                                       tex->nr_samples);
+
+         *shader =
+            util_make_fs_blit_msaa_stencil(pipe, tgsi_tex);
+      }
+
+      return *shader;
+   } else {
+      void **shader = &ctx->fs_texfetch_stencil[tex->target];
+
+      /* Create the fragment shader on-demand. */
+      if (!*shader) {
+         unsigned tgsi_tex = util_pipe_tex_to_tgsi_tex(tex->target, 0);
+
+         *shader =
+            util_make_fragment_tex_shader_writestencil(pipe, tgsi_tex,
+                                                       TGSI_INTERPOLATE_LINEAR);
+      }
+
+      return *shader;
    }
-
-   return ctx->fs_texfetch_stencil[tex_target];
 }
 
 static void blitter_set_common_draw_rect_state(struct blitter_context_priv *ctx)
@@ -773,12 +855,12 @@ static void blitter_draw(struct blitter_context_priv *ctx,
    pipe_resource_reference(&buf, NULL);
 }
 
-static void blitter_draw_rectangle(struct blitter_context *blitter,
-                                   unsigned x1, unsigned y1,
-                                   unsigned x2, unsigned y2,
-                                   float depth,
-                                   enum blitter_attrib_type type,
-                                   const union pipe_color_union *attrib)
+void util_blitter_draw_rectangle(struct blitter_context *blitter,
+                                 unsigned x1, unsigned y1,
+                                 unsigned x2, unsigned y2,
+                                 float depth,
+                                 enum blitter_attrib_type type,
+                                 const union pipe_color_union *attrib)
 {
    struct blitter_context_priv *ctx = (struct blitter_context_priv*)blitter;
 
@@ -848,6 +930,7 @@ static void util_blitter_clear_custom(struct blitter_context *blitter,
       pipe->bind_vertex_elements_state(pipe, ctx->velem_state);
    }
    pipe->bind_fs_state(pipe, blitter_get_fs_col(ctx, num_cbufs, int_format));
+   pipe->set_sample_mask(pipe, ~0);
 
    blitter_set_common_draw_rect_state(ctx);
    blitter_set_dst_dimensions(ctx, width, height);
@@ -872,7 +955,7 @@ void util_blitter_clear(struct blitter_context *blitter,
                              NULL, NULL);
 }
 
-void util_blitter_clear_depth_custom(struct blitter_context *blitter,
+void util_blitter_custom_clear_depth(struct blitter_context *blitter,
                                      unsigned width, unsigned height,
                                      double depth, void *custom_dsa)
 {
@@ -882,10 +965,26 @@ void util_blitter_clear_depth_custom(struct blitter_context *blitter,
 }
 
 static
-boolean is_overlap(unsigned sx1, unsigned sx2, unsigned sy1, unsigned sy2,
-                   unsigned dx1, unsigned dx2, unsigned dy1, unsigned dy2)
+boolean is_overlap(unsigned dstx, unsigned dsty, unsigned dstz,
+		   const struct pipe_box *srcbox)
 {
-   return sx1 < dx2 && sx2 > dx1 && sy1 < dy2 && sy2 > dy1;
+   struct pipe_box src = *srcbox;
+
+   if (src.width < 0) {
+      src.x += src.width;
+      src.width = -src.width;
+   }
+   if (src.height < 0) {
+      src.y += src.height;
+      src.height = -src.height;
+   }
+   if (src.depth < 0) {
+      src.z += src.depth;
+      src.depth = -src.depth;
+   }
+   return src.x < dstx+src.width && src.x+src.width > dstx &&
+          src.y < dsty+src.height && src.y+src.height > dsty &&
+          src.z < dstz+src.depth && src.z+src.depth > dstz;
 }
 
 void util_blitter_default_dst_texture(struct pipe_surface *dst_templ,
@@ -925,66 +1024,89 @@ void util_blitter_default_src_texture(struct pipe_sampler_view *src_templ,
     src_templ->swizzle_a = PIPE_SWIZZLE_ALPHA;
 }
 
+boolean util_blitter_is_copy_supported(struct blitter_context *blitter,
+                                       const struct pipe_resource *dst,
+                                       const struct pipe_resource *src,
+                                       unsigned mask)
+{
+   struct blitter_context_priv *ctx = (struct blitter_context_priv*)blitter;
+   struct pipe_screen *screen = ctx->base.pipe->screen;
+
+   if (dst) {
+      unsigned bind;
+      boolean is_stencil;
+      const struct util_format_description *desc =
+            util_format_description(dst->format);
+
+      is_stencil = util_format_has_stencil(desc);
+
+      /* Stencil export must be supported for stencil copy. */
+      if ((mask & PIPE_MASK_S) && is_stencil && !ctx->has_stencil_export) {
+         return FALSE;
+      }
+
+      if (is_stencil || util_format_has_depth(desc))
+         bind = PIPE_BIND_DEPTH_STENCIL;
+      else
+         bind = PIPE_BIND_RENDER_TARGET;
+
+      if (!screen->is_format_supported(screen, dst->format, dst->target,
+                                       dst->nr_samples, bind)) {
+         return FALSE;
+      }
+   }
+
+   if (src) {
+      if (!screen->is_format_supported(screen, src->format, src->target,
+                                 src->nr_samples, PIPE_BIND_SAMPLER_VIEW)) {
+         return FALSE;
+      }
+
+      /* Check stencil sampler support for stencil copy. */
+      if (util_format_has_stencil(util_format_description(src->format))) {
+         enum pipe_format stencil_format =
+               util_format_stencil_only(src->format);
+         assert(stencil_format != PIPE_FORMAT_NONE);
+
+         if (stencil_format != src->format &&
+             !screen->is_format_supported(screen, stencil_format, src->target,
+                                 src->nr_samples, PIPE_BIND_SAMPLER_VIEW)) {
+            return FALSE;
+         }
+      }
+   }
+
+   return TRUE;
+}
+
 void util_blitter_copy_texture(struct blitter_context *blitter,
                                struct pipe_resource *dst,
-                               unsigned dstlevel,
+                               unsigned dst_level, unsigned dst_sample_mask,
                                unsigned dstx, unsigned dsty, unsigned dstz,
                                struct pipe_resource *src,
-                               unsigned srclevel,
-                               const struct pipe_box *srcbox,
-                               boolean ignore_stencil)
+                               unsigned src_level, unsigned src_sample,
+                               const struct pipe_box *srcbox)
 {
    struct blitter_context_priv *ctx = (struct blitter_context_priv*)blitter;
    struct pipe_context *pipe = ctx->base.pipe;
-   struct pipe_screen *screen = pipe->screen;
    struct pipe_surface *dst_view, dst_templ;
    struct pipe_sampler_view src_templ, *src_view;
-   unsigned bind;
-   boolean is_stencil, is_depth;
-   const struct util_format_description *src_desc =
-         util_format_description(src->format);
 
-   /* Give up if textures are not set. */
    assert(dst && src);
-   if (!dst || !src)
-      return;
-
    assert(src->target < PIPE_MAX_TEXTURE_TYPES);
 
-   /* Is this a ZS format? */
-   is_depth = util_format_has_depth(src_desc);
-   is_stencil = util_format_has_stencil(src_desc);
-
-   if (is_depth || is_stencil)
-      bind = PIPE_BIND_DEPTH_STENCIL;
-   else
-      bind = PIPE_BIND_RENDER_TARGET;
-
-   /* Check if we can sample from and render to the surfaces. */
-   /* (assuming copying a stencil buffer is not possible) */
-   if ((!ignore_stencil && is_stencil && !ctx->has_stencil_export) ||
-       !screen->is_format_supported(screen, dst->format, dst->target,
-                                    dst->nr_samples, bind) ||
-       !screen->is_format_supported(screen, src->format, src->target,
-                                    src->nr_samples, PIPE_BIND_SAMPLER_VIEW)) {
-      blitter_set_running_flag(ctx);
-      util_resource_copy_region(pipe, dst, dstlevel, dstx, dsty, dstz,
-                                src, srclevel, srcbox);
-      blitter_unset_running_flag(ctx);
-      return;
-   }
-
    /* Initialize the surface. */
-   util_blitter_default_dst_texture(&dst_templ, dst, dstlevel, dstz, srcbox);
+   util_blitter_default_dst_texture(&dst_templ, dst, dst_level, dstz, srcbox);
    dst_view = pipe->create_surface(pipe, dst, &dst_templ);
 
    /* Initialize the sampler view. */
-   util_blitter_default_src_texture(&src_templ, src, srclevel);
+   util_blitter_default_src_texture(&src_templ, src, src_level);
    src_view = pipe->create_sampler_view(pipe, src, &src_templ);
 
    /* Copy. */
-   util_blitter_copy_texture_view(blitter, dst_view, dstx, dsty, src_view,
-                                  srcbox, src->width0, src->height0);
+   util_blitter_copy_texture_view(blitter, dst_view, dst_sample_mask, dstx,
+				  dsty, src_view, src_sample, srcbox,
+				  src->width0, src->height0, PIPE_MASK_RGBAZS);
 
    pipe_surface_reference(&dst_view, NULL);
    pipe_sampler_view_reference(&src_view, NULL);
@@ -992,38 +1114,40 @@ void util_blitter_copy_texture(struct blitter_context *blitter,
 
 void util_blitter_copy_texture_view(struct blitter_context *blitter,
                                     struct pipe_surface *dst,
+                                    unsigned dst_sample_mask,
                                     unsigned dstx, unsigned dsty,
                                     struct pipe_sampler_view *src,
+                                    unsigned src_sample,
                                     const struct pipe_box *srcbox,
-                                    unsigned src_width0, unsigned src_height0)
+                                    unsigned src_width0, unsigned src_height0,
+                                    unsigned mask)
 {
    struct blitter_context_priv *ctx = (struct blitter_context_priv*)blitter;
    struct pipe_context *pipe = ctx->base.pipe;
    struct pipe_framebuffer_state fb_state;
    enum pipe_texture_target src_target = src->texture->target;
-   unsigned width = srcbox->width;
-   unsigned height = srcbox->height;
-   boolean is_stencil, is_depth;
+   int abs_width = abs(srcbox->width);
+   int abs_height = abs(srcbox->height);
+   boolean blit_stencil, blit_depth;
    const struct util_format_description *src_desc =
          util_format_description(src->format);
 
-   is_depth = util_format_has_depth(src_desc);
-   is_stencil = util_format_has_stencil(src_desc);
+   blit_depth = util_format_has_depth(src_desc) && (mask & PIPE_MASK_Z);
+   blit_stencil = util_format_has_stencil(src_desc) && (mask & PIPE_MASK_S);
 
    /* If you want a fallback for stencil copies,
     * use util_blitter_copy_texture. */
-   if (is_stencil && !ctx->has_stencil_export) {
-      is_stencil = FALSE;
+   if (blit_stencil && !ctx->has_stencil_export) {
+      blit_stencil = FALSE;
 
-      if (!is_depth)
+      if (!blit_depth)
          return;
    }
 
    /* Sanity checks. */
    if (dst->texture == src->texture &&
        dst->u.tex.level == src->u.tex.first_level) {
-      assert(!is_overlap(srcbox->x, srcbox->x + width, srcbox->y, srcbox->y + height,
-                         dstx, dstx + width, dsty, dsty + height));
+      assert(!is_overlap(dstx, dsty, 0, srcbox));
    }
    /* XXX should handle 3d regions */
    assert(srcbox->depth == 1);
@@ -1039,24 +1163,24 @@ void util_blitter_copy_texture_view(struct blitter_context *blitter,
    fb_state.width = dst->width;
    fb_state.height = dst->height;
 
-   if (is_depth || is_stencil) {
+   if (blit_depth || blit_stencil) {
       pipe->bind_blend_state(pipe, ctx->blend_keep_color);
 
-      if (is_depth && is_stencil) {
+      if (blit_depth && blit_stencil) {
          pipe->bind_depth_stencil_alpha_state(pipe,
                                               ctx->dsa_write_depth_stencil);
          pipe->bind_fs_state(pipe,
-               blitter_get_fs_texfetch_depthstencil(ctx, src_target));
-      } else if (is_depth) {
+               blitter_get_fs_texfetch_depthstencil(ctx, src->texture));
+      } else if (blit_depth) {
          pipe->bind_depth_stencil_alpha_state(pipe,
                                               ctx->dsa_write_depth_keep_stencil);
          pipe->bind_fs_state(pipe,
-               blitter_get_fs_texfetch_depth(ctx, src_target));
+               blitter_get_fs_texfetch_depth(ctx, src->texture));
       } else { /* is_stencil */
          pipe->bind_depth_stencil_alpha_state(pipe,
                                               ctx->dsa_keep_depth_write_stencil);
          pipe->bind_fs_state(pipe,
-               blitter_get_fs_texfetch_stencil(ctx, src_target));
+               blitter_get_fs_texfetch_stencil(ctx, src->texture));
       }
 
       fb_state.nr_cbufs = 0;
@@ -1065,14 +1189,14 @@ void util_blitter_copy_texture_view(struct blitter_context *blitter,
       pipe->bind_blend_state(pipe, ctx->blend_write_color);
       pipe->bind_depth_stencil_alpha_state(pipe, ctx->dsa_keep_depth_stencil);
       pipe->bind_fs_state(pipe,
-            blitter_get_fs_texfetch_col(ctx, src_target));
+            blitter_get_fs_texfetch_col(ctx, src->texture));
 
       fb_state.nr_cbufs = 1;
       fb_state.cbufs[0] = dst;
       fb_state.zsbuf = 0;
    }
 
-   if (is_depth && is_stencil) {
+   if (blit_depth && blit_stencil) {
       /* Setup two samplers, one for depth and the other one for stencil. */
       struct pipe_sampler_view templ;
       struct pipe_sampler_view *views[2];
@@ -1096,50 +1220,36 @@ void util_blitter_copy_texture_view(struct blitter_context *blitter,
 
    pipe->bind_vertex_elements_state(pipe, ctx->velem_state);
    pipe->set_framebuffer_state(pipe, &fb_state);
+   pipe->set_sample_mask(pipe, dst_sample_mask);
 
    blitter_set_common_draw_rect_state(ctx);
    blitter_set_dst_dimensions(ctx, dst->width, dst->height);
 
-   switch (src_target) {
+   if ((src_target == PIPE_TEXTURE_1D ||
+        src_target == PIPE_TEXTURE_2D ||
+        src_target == PIPE_TEXTURE_RECT) &&
+       src->texture->nr_samples <= 1) {
       /* Draw the quad with the draw_rectangle callback. */
-      case PIPE_TEXTURE_1D:
-      case PIPE_TEXTURE_2D:
-      case PIPE_TEXTURE_RECT:
-         {
-            /* Set texture coordinates. - use a pipe color union
-             * for interface purposes.
-             * XXX pipe_color_union is a wrong name since we use that to set
-             * texture coordinates too.
-             */
-            union pipe_color_union coord;
-            get_texcoords(src, src_width0, src_height0, srcbox->x, srcbox->y,
-                          srcbox->x+width, srcbox->y+height, coord.f);
 
-            /* Draw. */
-            blitter->draw_rectangle(blitter, dstx, dsty, dstx+width, dsty+height, 0,
-                                    UTIL_BLITTER_ATTRIB_TEXCOORD, &coord);
-         }
-         break;
+      /* Set texture coordinates. - use a pipe color union
+       * for interface purposes.
+       * XXX pipe_color_union is a wrong name since we use that to set
+       * texture coordinates too.
+       */
+      union pipe_color_union coord;
+      get_texcoords(src, src_width0, src_height0, srcbox->x, srcbox->y,
+                    srcbox->x+srcbox->width, srcbox->y+srcbox->height, coord.f);
 
+      /* Draw. */
+      blitter->draw_rectangle(blitter, dstx, dsty, dstx+abs_width, dsty+abs_height, 0,
+                              UTIL_BLITTER_ATTRIB_TEXCOORD, &coord);
+   } else {
       /* Draw the quad with the generic codepath. */
-      default:
-         /* Set texture coordinates. */
-         switch (src_target) {
-         case PIPE_TEXTURE_1D_ARRAY:
-         case PIPE_TEXTURE_2D_ARRAY:
-         case PIPE_TEXTURE_3D:
-         case PIPE_TEXTURE_CUBE:
-            blitter_set_texcoords(ctx, src, src_width0, src_height0, srcbox->z,
-                                  srcbox->y, srcbox->x,
-                                  srcbox->x + width, srcbox->y + height);
-            break;
-
-         default:
-            assert(0);
-         }
-
-         blitter_draw(ctx, dstx, dsty, dstx+width, dsty+height, 0);
-         break;
+      blitter_set_texcoords(ctx, src, src_width0, src_height0, srcbox->z,
+                            src_sample,
+                            srcbox->x, srcbox->y,
+                            srcbox->x + srcbox->width, srcbox->y + srcbox->height);
+      blitter_draw(ctx, dstx, dsty, dstx+abs_width, dsty+abs_height, 0);
    }
 
    blitter_restore_vertex_states(ctx);
@@ -1183,6 +1293,7 @@ void util_blitter_clear_render_target(struct blitter_context *blitter,
    fb_state.cbufs[0] = dstsurf;
    fb_state.zsbuf = 0;
    pipe->set_framebuffer_state(pipe, &fb_state);
+   pipe->set_sample_mask(pipe, ~0);
 
    blitter_set_common_draw_rect_state(ctx);
    blitter_set_dst_dimensions(ctx, dstsurf->width, dstsurf->height);
@@ -1248,6 +1359,7 @@ void util_blitter_clear_depth_stencil(struct blitter_context *blitter,
    fb_state.cbufs[0] = 0;
    fb_state.zsbuf = dstsurf;
    pipe->set_framebuffer_state(pipe, &fb_state);
+   pipe->set_sample_mask(pipe, ~0);
 
    blitter_set_common_draw_rect_state(ctx);
    blitter_set_dst_dimensions(ctx, dstsurf->width, dstsurf->height);
@@ -1264,6 +1376,7 @@ void util_blitter_clear_depth_stencil(struct blitter_context *blitter,
 void util_blitter_custom_depth_stencil(struct blitter_context *blitter,
 				       struct pipe_surface *zsurf,
 				       struct pipe_surface *cbsurf,
+				       unsigned sample_mask,
 				       void *dsa_stage, float depth)
 {
    struct blitter_context_priv *ctx = (struct blitter_context_priv*)blitter;
@@ -1299,6 +1412,7 @@ void util_blitter_custom_depth_stencil(struct blitter_context *blitter,
    }
    fb_state.zsbuf = zsurf;
    pipe->set_framebuffer_state(pipe, &fb_state);
+   pipe->set_sample_mask(pipe, sample_mask);
 
    blitter_set_common_draw_rect_state(ctx);
    blitter_set_dst_dimensions(ctx, zsurf->width, zsurf->height);
@@ -1369,4 +1483,112 @@ void util_blitter_copy_buffer(struct blitter_context *blitter,
    blitter_restore_vertex_states(ctx);
    blitter_unset_running_flag(ctx);
    pipe_so_target_reference(&so_target, NULL);
+}
+
+/* probably radeon specific */
+void util_blitter_custom_resolve_color(struct blitter_context *blitter,
+				       struct pipe_resource *dst,
+				       unsigned dst_level,
+				       unsigned dst_layer,
+				       struct pipe_resource *src,
+				       unsigned src_layer,
+				       unsigned sample_mask,
+				       void *custom_blend)
+{
+   struct blitter_context_priv *ctx = (struct blitter_context_priv*)blitter;
+   struct pipe_context *pipe = ctx->base.pipe;
+   struct pipe_framebuffer_state fb_state;
+   struct pipe_surface *srcsurf, *dstsurf, surf_tmpl;
+
+   blitter_set_running_flag(ctx);
+   blitter_check_saved_vertex_states(ctx);
+   blitter_check_saved_fragment_states(ctx);
+
+   /* bind states */
+   pipe->bind_blend_state(pipe, custom_blend);
+   pipe->bind_depth_stencil_alpha_state(pipe, ctx->dsa_keep_depth_stencil);
+   pipe->bind_vertex_elements_state(pipe, ctx->velem_state);
+   pipe->bind_fs_state(pipe, blitter_get_fs_col(ctx, 1, FALSE));
+   pipe->set_sample_mask(pipe, sample_mask);
+
+   memset(&surf_tmpl, 0, sizeof(surf_tmpl));
+   surf_tmpl.format = dst->format;
+   surf_tmpl.u.tex.level = dst_level;
+   surf_tmpl.u.tex.first_layer = dst_layer;
+   surf_tmpl.u.tex.last_layer = dst_layer;
+   surf_tmpl.usage = PIPE_BIND_RENDER_TARGET;
+
+   dstsurf = pipe->create_surface(pipe, dst, &surf_tmpl);
+
+   surf_tmpl.u.tex.level = 0;
+   surf_tmpl.u.tex.first_layer = src_layer;
+   surf_tmpl.u.tex.last_layer = src_layer;
+
+   srcsurf = pipe->create_surface(pipe, src, &surf_tmpl);
+
+   /* set a framebuffer state */
+   fb_state.width = src->width0;
+   fb_state.height = src->height0;
+   fb_state.nr_cbufs = 2;
+   fb_state.cbufs[0] = srcsurf;
+   fb_state.cbufs[1] = dstsurf;
+   fb_state.zsbuf = NULL;
+   pipe->set_framebuffer_state(pipe, &fb_state);
+
+   blitter_set_common_draw_rect_state(ctx);
+   blitter_set_dst_dimensions(ctx, src->width0, src->height0);
+   blitter->draw_rectangle(blitter, 0, 0, src->width0, src->height0,
+                           0, 0, NULL);
+   blitter_restore_fb_state(ctx);
+   blitter_restore_vertex_states(ctx);
+   blitter_restore_fragment_states(ctx);
+   blitter_unset_running_flag(ctx);
+
+   pipe_surface_reference(&srcsurf, NULL);
+   pipe_surface_reference(&dstsurf, NULL);
+}
+
+void util_blitter_custom_color(struct blitter_context *blitter,
+                               struct pipe_surface *dstsurf,
+                               void *custom_blend)
+{
+   struct blitter_context_priv *ctx = (struct blitter_context_priv*)blitter;
+   struct pipe_context *pipe = ctx->base.pipe;
+   struct pipe_framebuffer_state fb_state;
+
+   assert(dstsurf->texture);
+   if (!dstsurf->texture)
+      return;
+
+   /* check the saved state */
+   blitter_set_running_flag(ctx);
+   blitter_check_saved_vertex_states(ctx);
+   blitter_check_saved_fragment_states(ctx);
+   blitter_check_saved_fb_state(ctx);
+
+   /* bind states */
+   pipe->bind_blend_state(pipe, custom_blend);
+   pipe->bind_depth_stencil_alpha_state(pipe, ctx->dsa_keep_depth_stencil);
+   pipe->bind_fs_state(pipe, blitter_get_fs_col(ctx, 1, FALSE));
+   pipe->bind_vertex_elements_state(pipe, ctx->velem_state);
+   pipe->set_sample_mask(pipe, (1ull << MAX2(1, dstsurf->texture->nr_samples)) - 1);
+
+   /* set a framebuffer state */
+   fb_state.width = dstsurf->width;
+   fb_state.height = dstsurf->height;
+   fb_state.nr_cbufs = 1;
+   fb_state.cbufs[0] = dstsurf;
+   fb_state.zsbuf = 0;
+   pipe->set_framebuffer_state(pipe, &fb_state);
+   pipe->set_sample_mask(pipe, ~0);
+
+   blitter_set_common_draw_rect_state(ctx);
+   blitter_set_dst_dimensions(ctx, dstsurf->width, dstsurf->height);
+   blitter->draw_rectangle(blitter, 0, 0, dstsurf->width, dstsurf->height,
+                           0, 0, NULL);
+
+   blitter_restore_vertex_states(ctx);
+   blitter_restore_fragment_states(ctx);
+   blitter_restore_fb_state(ctx);
+   blitter_unset_running_flag(ctx);
 }

@@ -38,7 +38,13 @@
 #include "state.h"
 #include "glformats.h"
 #include "fbobject.h"
+#include "teximage.h"
 
+/* Inexplicably, GL_HALF_FLOAT_OES has a different value than GL_HALF_FLOAT.
+ */
+#ifndef GL_HALF_FLOAT_OES
+#define GL_HALF_FLOAT_OES 0x8D61
+#endif
 
 /**
  * Tries to implement glReadPixels() of GL_DEPTH_COMPONENT using memcpy of the
@@ -322,6 +328,8 @@ slow_read_rgba_pixels( struct gl_context *ctx,
    void *rgba;
    GLubyte *dst, *map;
    int dstStride, stride, j;
+   GLboolean dst_is_integer = _mesa_is_enum_format_integer(format);
+   GLboolean dst_is_uint = _mesa_is_format_unsigned(rbFormat);
 
    dstStride = _mesa_image_row_stride(packing, width, format, type);
    dst = (GLubyte *) _mesa_image_address2d(packing, pixels, width, height,
@@ -339,12 +347,17 @@ slow_read_rgba_pixels( struct gl_context *ctx,
       goto done;
 
    for (j = 0; j < height; j++) {
-      if (_mesa_is_enum_format_integer(format)) {
+      if (dst_is_integer) {
 	 _mesa_unpack_uint_rgba_row(rbFormat, width, map, (GLuint (*)[4]) rgba);
          _mesa_rebase_rgba_uint(width, (GLuint (*)[4]) rgba,
                                 rb->_BaseFormat);
-	 _mesa_pack_rgba_span_int(ctx, width, (GLuint (*)[4]) rgba, format,
-                                  type, dst);
+         if (dst_is_uint) {
+            _mesa_pack_rgba_span_from_uints(ctx, width, (GLuint (*)[4]) rgba, format,
+                                            type, dst);
+         } else {
+            _mesa_pack_rgba_span_from_ints(ctx, width, (GLint (*)[4]) rgba, format,
+                                           type, dst);
+         }
       } else {
 	 _mesa_unpack_rgba_row(rbFormat, width, map, (GLfloat (*)[4]) rgba);
          _mesa_rebase_rgba_float(width, (GLfloat (*)[4]) rgba,
@@ -690,6 +703,33 @@ _mesa_ReadnPixelsARB( GLint x, GLint y, GLsizei width, GLsizei height,
       _mesa_error( ctx, GL_INVALID_VALUE,
                    "glReadPixels(width=%d height=%d)", width, height );
       return;
+   }
+
+   /* OpenGL ES 1.x and OpenGL ES 2.0 impose additional restrictions on the
+    * combinations of format and type that can be used.
+    *
+    * Technically, only two combinations are actually allowed:
+    * GL_RGBA/GL_UNSIGNED_BYTE, and some implementation-specific internal
+    * preferred combination.  This code doesn't know what that preferred
+    * combination is, and Mesa can handle anything valid.  Just work instead.
+    */
+   if (_mesa_is_gles(ctx) && ctx->Version < 30) {
+      err = _mesa_es_error_check_format_and_type(format, type, 2);
+      if (err == GL_NO_ERROR) {
+         if (type == GL_FLOAT || type == GL_HALF_FLOAT_OES) {
+            err = GL_INVALID_OPERATION;
+         } else if (format == GL_DEPTH_COMPONENT
+                    || format == GL_DEPTH_STENCIL) {
+            err = GL_INVALID_ENUM;
+         }
+      }
+
+      if (err != GL_NO_ERROR) {
+         _mesa_error(ctx, err, "glReadPixels(invalid format %s and/or type %s)",
+                     _mesa_lookup_enum_by_nr(format),
+                     _mesa_lookup_enum_by_nr(type));
+         return;
+      }
    }
 
    if (ctx->NewState)

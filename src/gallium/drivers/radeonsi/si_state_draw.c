@@ -29,6 +29,7 @@
 #include "util/u_blitter.h"
 #include "tgsi/tgsi_parse.h"
 #include "radeonsi_pipe.h"
+#include "radeonsi_shader.h"
 #include "si_state.h"
 #include "sid.h"
 
@@ -102,7 +103,7 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 	unsigned num_sgprs, num_user_sgprs;
 	int ninterp = 0;
 	boolean have_linear = FALSE, have_centroid = FALSE, have_perspective = FALSE;
-	unsigned spi_baryc_cntl;
+	unsigned spi_baryc_cntl, spi_ps_input_ena;
 	uint64_t va;
 
 	if (si_pipe_shader_create(ctx, shader))
@@ -167,16 +168,24 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 			S_0286E0_LINEAR_CENTROID_CNTL(1) : S_0286E0_LINEAR_CENTER_CNTL(1);
 
 	si_pm4_set_reg(pm4, R_0286E0_SPI_BARYC_CNTL, spi_baryc_cntl);
-	si_pm4_set_reg(pm4, R_0286CC_SPI_PS_INPUT_ENA, shader->spi_ps_input_ena);
-	si_pm4_set_reg(pm4, R_0286D0_SPI_PS_INPUT_ADDR, shader->spi_ps_input_ena);
+	spi_ps_input_ena = shader->spi_ps_input_ena;
+	/* we need to enable at least one of them, otherwise we hang the GPU */
+	if (!G_0286CC_PERSP_SAMPLE_ENA(spi_ps_input_ena) &&
+	    !G_0286CC_PERSP_CENTROID_ENA(spi_ps_input_ena) &&
+	    !G_0286CC_PERSP_PULL_MODEL_ENA(spi_ps_input_ena) &&
+	    !G_0286CC_LINEAR_SAMPLE_ENA(spi_ps_input_ena) &&
+	    !G_0286CC_LINEAR_CENTER_ENA(spi_ps_input_ena) &&
+	    !G_0286CC_LINEAR_CENTROID_ENA(spi_ps_input_ena) &&
+	    !G_0286CC_LINE_STIPPLE_TEX_ENA(spi_ps_input_ena)) {
+
+		spi_ps_input_ena |= S_0286CC_PERSP_SAMPLE_ENA(1);
+	}
+	si_pm4_set_reg(pm4, R_0286CC_SPI_PS_INPUT_ENA, spi_ps_input_ena);
+	si_pm4_set_reg(pm4, R_0286D0_SPI_PS_INPUT_ADDR, spi_ps_input_ena);
 	si_pm4_set_reg(pm4, R_0286D8_SPI_PS_IN_CONTROL, spi_ps_in_control);
 
 	/* XXX: Depends on Z buffer format? */
 	si_pm4_set_reg(pm4, R_028710_SPI_SHADER_Z_FORMAT, 0);
-
-	/* XXX: Depends on color buffer format? */
-	si_pm4_set_reg(pm4, R_028714_SPI_SHADER_COL_FORMAT,
-		       S_028714_COL0_EXPORT_FORMAT(V_028714_SPI_SHADER_32_ABGR));
 
 	va = r600_resource_va(ctx->screen, (void *)shader->bo);
 	si_pm4_add_bo(pm4, shader->bo, RADEON_USAGE_READ);
@@ -250,7 +259,8 @@ static bool si_update_draw_info_state(struct r600_context *rctx,
 	si_pm4_set_reg(pm4, R_008958_VGT_PRIMITIVE_TYPE, prim);
 	si_pm4_set_reg(pm4, R_028400_VGT_MAX_VTX_INDX, ~0);
 	si_pm4_set_reg(pm4, R_028404_VGT_MIN_VTX_INDX, 0);
-	si_pm4_set_reg(pm4, R_028408_VGT_INDX_OFFSET, info->index_bias);
+	si_pm4_set_reg(pm4, R_028408_VGT_INDX_OFFSET,
+		       info->indexed ? info->index_bias : info->start);
 	si_pm4_set_reg(pm4, R_02840C_VGT_MULTI_PRIM_IB_RESET_INDX, info->restart_index);
 	si_pm4_set_reg(pm4, R_028A94_VGT_MULTI_PRIM_IB_RESET_EN, info->primitive_restart);
 #if 0
@@ -304,8 +314,8 @@ static void si_update_alpha_ref(struct r600_context *rctx)
 
 static void si_update_spi_map(struct r600_context *rctx)
 {
-	struct si_shader *ps = &rctx->ps_shader->shader;
-	struct si_shader *vs = &rctx->vs_shader->shader;
+	struct si_shader *ps = &rctx->ps_shader->current->shader;
+	struct si_shader *vs = &rctx->vs_shader->current->shader;
 	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
 	unsigned i, j, tmp;
 
@@ -349,29 +359,39 @@ static void si_update_spi_map(struct r600_context *rctx)
 static void si_update_derived_state(struct r600_context *rctx)
 {
 	struct pipe_context * ctx = (struct pipe_context*)rctx;
+	unsigned ps_dirty = 0;
 
 	if (!rctx->blitter->running) {
 		if (rctx->have_depth_fb || rctx->have_depth_texture)
-			r600_flush_depth_textures(rctx);
+			si_flush_depth_textures(rctx);
 	}
 
-	if ((rctx->ps_shader->shader.fs_write_all &&
-	     (rctx->ps_shader->shader.nr_cbufs != rctx->framebuffer.nr_cbufs)) ||
-	    (rctx->sprite_coord_enable &&
-	     (rctx->ps_shader->sprite_coord_enable != rctx->sprite_coord_enable))) {
-		si_pipe_shader_destroy(&rctx->context, rctx->ps_shader);
-	}
+	si_shader_select(ctx, rctx->ps_shader, &ps_dirty);
 
 	if (rctx->alpha_ref_dirty) {
 		si_update_alpha_ref(rctx);
 	}
 
-	if (!rctx->vs_shader->bo) {
-		si_pipe_shader_vs(ctx, rctx->vs_shader);
+	if (!rctx->vs_shader->current->pm4) {
+		si_pipe_shader_vs(ctx, rctx->vs_shader->current);
 	}
 
-	if (!rctx->ps_shader->bo) {
-		si_pipe_shader_ps(ctx, rctx->ps_shader);
+	if (!rctx->ps_shader->current->pm4) {
+		si_pipe_shader_ps(ctx, rctx->ps_shader->current);
+		ps_dirty = 0;
+	}
+	if (!rctx->ps_shader->current->bo) {
+		if (!rctx->dummy_pixel_shader->pm4)
+			si_pipe_shader_ps(ctx, rctx->dummy_pixel_shader);
+		else
+			si_pm4_bind_state(rctx, vs, rctx->dummy_pixel_shader->pm4);
+
+		ps_dirty = 0;
+	}
+
+	if (ps_dirty) {
+		si_pm4_bind_state(rctx, ps, rctx->ps_shader->current->pm4);
+		rctx->shader_dirty = true;
 	}
 
 	if (rctx->shader_dirty) {
@@ -385,9 +405,7 @@ static void si_vertex_buffer_update(struct r600_context *rctx)
 	struct pipe_context *ctx = &rctx->context;
 	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
 	bool bound[PIPE_MAX_ATTRIBS] = {};
-	struct si_resource *t_list_buffer;
 	unsigned i, count;
-	uint32_t *ptr;
 	uint64_t va;
 
 	si_pm4_inval_vertex_cache(pm4);
@@ -396,19 +414,8 @@ static void si_vertex_buffer_update(struct r600_context *rctx)
 	count = rctx->vertex_elements->count;
 	assert(count <= 256 / 4);
 
-	t_list_buffer = si_resource_create_custom(ctx->screen, PIPE_USAGE_IMMUTABLE,
-						  4 * 4 * count);
-	if (t_list_buffer == NULL) {
-		FREE(pm4);
-		return;
-	}
-	si_pm4_add_bo(pm4, t_list_buffer, RADEON_USAGE_READ);
-
-	ptr = (uint32_t*)rctx->ws->buffer_map(t_list_buffer->cs_buf,
-					      rctx->cs,
-					      PIPE_TRANSFER_WRITE);
-
-	for (i = 0 ; i < count; i++, ptr += 4) {
+	si_pm4_sh_data_begin(pm4);
+	for (i = 0 ; i < count; i++) {
 		struct pipe_vertex_element *ve = &rctx->vertex_elements->elements[i];
 		struct pipe_vertex_buffer *vb;
 		struct si_resource *rbuffer;
@@ -430,38 +437,88 @@ static void si_vertex_buffer_update(struct r600_context *rctx)
 		va += offset;
 
 		/* Fill in T# buffer resource description */
-		ptr[0] = va & 0xFFFFFFFF;
-		ptr[1] = (S_008F04_BASE_ADDRESS_HI(va >> 32) |
-			  S_008F04_STRIDE(vb->stride));
-		if (vb->stride > 0)
-			ptr[2] = (vb->buffer->width0 - offset) / vb->stride;
-		else
-			ptr[2] = vb->buffer->width0 - offset;
-		ptr[3] = rctx->vertex_elements->rsrc_word3[i];
+		si_pm4_sh_data_add(pm4, va & 0xFFFFFFFF);
+		si_pm4_sh_data_add(pm4, (S_008F04_BASE_ADDRESS_HI(va >> 32) |
+					 S_008F04_STRIDE(vb->stride)));
+		si_pm4_sh_data_add(pm4, (vb->buffer->width0 - offset) /
+					 MAX2(vb->stride, 1));
+		si_pm4_sh_data_add(pm4, rctx->vertex_elements->rsrc_word3[i]);
 
 		if (!bound[ve->vertex_buffer_index]) {
 			si_pm4_add_bo(pm4, rbuffer, RADEON_USAGE_READ);
 			bound[ve->vertex_buffer_index] = true;
 		}
 	}
-
-	va = r600_resource_va(ctx->screen, (void*)t_list_buffer);
-	si_pm4_set_reg(pm4, R_00B148_SPI_SHADER_USER_DATA_VS_6, va);
-	si_pm4_set_reg(pm4, R_00B14C_SPI_SHADER_USER_DATA_VS_7, va >> 32);
+	si_pm4_sh_data_end(pm4, R_00B148_SPI_SHADER_USER_DATA_VS_6);
 	si_pm4_set_state(rctx, vertex_buffers, pm4);
 }
 
-void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
+static void si_state_draw(struct r600_context *rctx,
+			  const struct pipe_draw_info *info,
+			  const struct pipe_index_buffer *ib)
+{
+	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
+
+	/* queries need some special values
+	 * (this is non-zero if any query is active) */
+	if (rctx->num_cs_dw_queries_suspend) {
+		struct si_state_dsa *dsa = rctx->queued.named.dsa;
+
+		si_pm4_set_reg(pm4, R_028004_DB_COUNT_CONTROL,
+			       S_028004_PERFECT_ZPASS_COUNTS(1));
+		si_pm4_set_reg(pm4, R_02800C_DB_RENDER_OVERRIDE,
+			       dsa->db_render_override |
+			       S_02800C_NOOP_CULL_DISABLE(1));
+	}
+
+	/* draw packet */
+	si_pm4_cmd_begin(pm4, PKT3_INDEX_TYPE);
+	if (ib->index_size == 4) {
+		si_pm4_cmd_add(pm4, V_028A7C_VGT_INDEX_32 | (R600_BIG_ENDIAN ?
+				V_028A7C_VGT_DMA_SWAP_32_BIT : 0));
+	} else {
+		si_pm4_cmd_add(pm4, V_028A7C_VGT_INDEX_16 | (R600_BIG_ENDIAN ?
+				V_028A7C_VGT_DMA_SWAP_16_BIT : 0));
+	}
+	si_pm4_cmd_end(pm4, rctx->predicate_drawing);
+
+	si_pm4_cmd_begin(pm4, PKT3_NUM_INSTANCES);
+	si_pm4_cmd_add(pm4, info->instance_count);
+	si_pm4_cmd_end(pm4, rctx->predicate_drawing);
+
+	if (info->indexed) {
+		uint64_t va;
+		va = r600_resource_va(&rctx->screen->screen, ib->buffer);
+		va += ib->offset;
+
+		si_pm4_add_bo(pm4, (struct si_resource *)ib->buffer, RADEON_USAGE_READ);
+		si_pm4_cmd_begin(pm4, PKT3_DRAW_INDEX_2);
+		si_pm4_cmd_add(pm4, (ib->buffer->width0 - ib->offset) /
+					rctx->index_buffer.index_size);
+		si_pm4_cmd_add(pm4, va);
+		si_pm4_cmd_add(pm4, (va >> 32UL) & 0xFF);
+		si_pm4_cmd_add(pm4, info->count);
+		si_pm4_cmd_add(pm4, V_0287F0_DI_SRC_SEL_DMA);
+		si_pm4_cmd_end(pm4, rctx->predicate_drawing);
+	} else {
+		si_pm4_cmd_begin(pm4, PKT3_DRAW_INDEX_AUTO);
+		si_pm4_cmd_add(pm4, info->count);
+		si_pm4_cmd_add(pm4, V_0287F0_DI_SRC_SEL_AUTO_INDEX |
+			       (info->count_from_stream_output ?
+				S_0287F0_USE_OPAQUE(1) : 0));
+		si_pm4_cmd_end(pm4, rctx->predicate_drawing);
+	}
+	si_pm4_set_state(rctx, draw, pm4);
+}
+
+void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct si_state_dsa *dsa = rctx->queued.named.dsa;
-	struct pipe_draw_info info = *dinfo;
-	struct r600_draw rdraw = {};
 	struct pipe_index_buffer ib = {};
-	struct r600_atom *state = NULL, *next_state = NULL;
+	uint32_t cp_coher_cntl;
 
-	if ((!info.count && (info.indexed || !info.count_from_stream_output)) ||
-	    (info.indexed && !rctx->index_buffer.buffer)) {
+	if ((!info->count && (info->indexed || !info->count_from_stream_output)) ||
+	    (info->indexed && !rctx->index_buffer.buffer)) {
 		return;
 	}
 
@@ -471,71 +528,55 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo)
 	si_update_derived_state(rctx);
 	si_vertex_buffer_update(rctx);
 
-	rdraw.vgt_num_indices = info.count;
-	rdraw.vgt_num_instances = info.instance_count;
-
-	if (info.indexed) {
+	if (info->indexed) {
 		/* Initialize the index buffer struct. */
 		pipe_resource_reference(&ib.buffer, rctx->index_buffer.buffer);
 		ib.index_size = rctx->index_buffer.index_size;
-		ib.offset = rctx->index_buffer.offset + info.start * ib.index_size;
+		ib.offset = rctx->index_buffer.offset + info->start * ib.index_size;
 
 		/* Translate or upload, if needed. */
-		r600_translate_index_buffer(rctx, &ib, info.count);
+		r600_translate_index_buffer(rctx, &ib, info->count);
 
 		if (ib.user_buffer) {
-			r600_upload_index_buffer(rctx, &ib, info.count);
+			r600_upload_index_buffer(rctx, &ib, info->count);
 		}
 
-		/* Initialize the r600_draw struct with index buffer info. */
-		if (ib.index_size == 4) {
-			rdraw.vgt_index_type = V_028A7C_VGT_INDEX_32 |
-				(R600_BIG_ENDIAN ? V_028A7C_VGT_DMA_SWAP_32_BIT : 0);
-		} else {
-			rdraw.vgt_index_type = V_028A7C_VGT_INDEX_16 |
-				(R600_BIG_ENDIAN ? V_028A7C_VGT_DMA_SWAP_16_BIT : 0);
-		}
-		rdraw.indices = (struct si_resource*)ib.buffer;
-		rdraw.indices_bo_offset = ib.offset;
-		rdraw.vgt_draw_initiator = V_0287F0_DI_SRC_SEL_DMA;
-	} else {
-		info.index_bias = info.start;
-		rdraw.vgt_draw_initiator = V_0287F0_DI_SRC_SEL_AUTO_INDEX;
-		if (info.count_from_stream_output) {
-			rdraw.vgt_draw_initiator |= S_0287F0_USE_OPAQUE(1);
-
-			r600_context_draw_opaque_count(rctx, (struct r600_so_target*)info.count_from_stream_output);
-		}
+	} else if (info->count_from_stream_output) {
+		r600_context_draw_opaque_count(rctx, (struct r600_so_target*)info->count_from_stream_output);
 	}
 
-	rctx->vs_shader_so_strides = rctx->vs_shader->so_strides;
+	rctx->vs_shader_so_strides = rctx->vs_shader->current->so_strides;
 
-	if (!si_update_draw_info_state(rctx, &info))
+	if (!si_update_draw_info_state(rctx, info))
 		return;
 
-	rdraw.db_render_override = dsa->db_render_override;
-	rdraw.db_render_control = dsa->db_render_control;
+	si_state_draw(rctx, info, &ib);
+
+	cp_coher_cntl = si_pm4_sync_flags(rctx);
+	if (cp_coher_cntl) {
+		struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
+		si_cmd_surface_sync(pm4, cp_coher_cntl);
+		si_pm4_set_state(rctx, sync, pm4);
+	}
 
 	/* Emit states. */
 	rctx->pm4_dirty_cdwords += si_pm4_dirty_dw(rctx);
 
-	r600_need_cs_space(rctx, 0, TRUE);
+	si_need_cs_space(rctx, 0, TRUE);
 
-	LIST_FOR_EACH_ENTRY_SAFE(state, next_state, &rctx->dirty_states, head) {
-		r600_emit_atom(rctx, state);
-	}
 	si_pm4_emit_dirty(rctx);
 	rctx->pm4_dirty_cdwords = 0;
 
+#if 0
 	/* Enable stream out if needed. */
 	if (rctx->streamout_start) {
 		r600_context_streamout_begin(rctx);
 		rctx->streamout_start = FALSE;
 	}
+#endif
 
-	si_context_draw(rctx, &rdraw);
 
-	rctx->flags |= R600_CONTEXT_DST_CACHES_DIRTY | R600_CONTEXT_DRAW_PENDING;
+	rctx->flags |= R600_CONTEXT_DST_CACHES_DIRTY;
 
 	if (rctx->framebuffer.zsbuf)
 	{
