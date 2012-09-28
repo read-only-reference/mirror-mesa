@@ -381,7 +381,7 @@ static void
 brw_update_primitive_count(struct brw_context *brw,
                            const struct _mesa_prim *prim)
 {
-   uint32_t count = count_tessellated_primitives(prim);
+   uint32_t count = vbo_count_tessellated_primitives(prim);
    brw->sol.primitives_generated += count;
    if (brw->intel.ctx.TransformFeedback.CurrentObject->Active &&
        !brw->intel.ctx.TransformFeedback.CurrentObject->Paused) {
@@ -450,13 +450,6 @@ static bool brw_try_draw_prims( struct gl_context *ctx,
    brw->vb.min_index = min_index;
    brw->vb.max_index = max_index;
    brw->state.dirty.brw |= BRW_NEW_VERTICES;
-
-   /* Have to validate state quite late.  Will rebuild tnl_program,
-    * which depends on varying information.  
-    * 
-    * Note this is where brw->vs->prog_data.inputs_read is calculated,
-    * so can't access it earlier.
-    */
 
    for (i = 0; i < nr_prims; i++) {
       int estimated_max_prim_size;

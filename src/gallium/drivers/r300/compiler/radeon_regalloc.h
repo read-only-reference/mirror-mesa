@@ -1,5 +1,5 @@
 /*
- * Copyright 2010 Jerome Glisse <glisse@freedesktop.org>
+ * Copyright 2012 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -20,26 +20,43 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
- * Authors:
- *      Jerome Glisse
+ * Author: Tom Stellard <thomas.stellard@amd.com>
  */
-#include "r600.h"
-#include "r600_hw_context_priv.h"
-#include "radeonsi_pipe.h"
-#include "sid.h"
-#include "util/u_memory.h"
-#include <errno.h>
 
-int si_context_init(struct r600_context *ctx)
-{
-	int r;
+#ifndef RADEON_REGALLOC_H
+#define RADEON_REGALLOC_H
 
-	LIST_INITHEAD(&ctx->active_query_list);
+struct ra_regs;
 
-	ctx->cs = ctx->ws->cs_create(ctx->ws);
+enum rc_reg_class {
+	RC_REG_CLASS_SINGLE,
+	RC_REG_CLASS_DOUBLE,
+	RC_REG_CLASS_TRIPLE,
+	RC_REG_CLASS_ALPHA,
+	RC_REG_CLASS_SINGLE_PLUS_ALPHA,
+	RC_REG_CLASS_DOUBLE_PLUS_ALPHA,
+	RC_REG_CLASS_TRIPLE_PLUS_ALPHA,
+	RC_REG_CLASS_X,
+	RC_REG_CLASS_Y,
+	RC_REG_CLASS_Z,
+	RC_REG_CLASS_XY,
+	RC_REG_CLASS_YZ,
+	RC_REG_CLASS_XZ,
+	RC_REG_CLASS_XW,
+	RC_REG_CLASS_YW,
+	RC_REG_CLASS_ZW,
+	RC_REG_CLASS_XYW,
+	RC_REG_CLASS_YZW,
+	RC_REG_CLASS_XZW,
+	RC_REG_CLASS_COUNT
+};
 
-	ctx->max_db = 8;
-	return 0;
-}
+struct rc_regalloc_state {
+	struct ra_regs *regs;
+	unsigned class_ids[RC_REG_CLASS_COUNT];
+};
 
+void rc_init_regalloc_state(struct rc_regalloc_state *s);
+void rc_destroy_regalloc_state(struct rc_regalloc_state *s);
 
+#endif /* RADEON_REGALLOC_H */

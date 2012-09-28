@@ -239,6 +239,8 @@ pipe_screen::get_compute_param.
   resource.  Value type: ``uint64_t``.
 * ``PIPE_COMPUTE_CAP_MAX_INPUT_SIZE``: Maximum size of the INPUT
   resource.  Value type: ``uint64_t``.
+* ``PIPE_COMPUTE_CAP_MAX_MEM_ALLOC_SIZE``: Maximum size of a memory object
+  allocation in bytes.  Value type: ``uint64_t``.
 
 .. _pipe_bind:
 
@@ -357,6 +359,16 @@ the maximum allowed legal value is 32.
 **geom_flags** is a bitmask of PIPE_TEXTURE_GEOM_x flags.
 
 Returns TRUE if all usages can be satisfied.
+
+
+can_create_resource
+^^^^^^^^^^^^^^^^^^^
+
+Check if a resource can actually be created (but don't actually allocate any
+memory).  This is used to implement OpenGL's proxy textures.  Typically, a
+driver will simply check if the total size of the given resource is less than
+some limit.
+
 
 .. _resource_create:
 

@@ -239,7 +239,7 @@ __glXReadPixelReply( Display *dpy, struct glx_context * gc, unsigned max_dim,
 
     size = reply.length * 4;
     if (size != 0) {
-        void * buf = Xmalloc( size );
+        void * buf = malloc( size );
 
         if ( buf == NULL ) {
             _XEatData(dpy, size);
@@ -255,7 +255,7 @@ __glXReadPixelReply( Display *dpy, struct glx_context * gc, unsigned max_dim,
 
             __glEmptyImage(gc, 3, width, height, depth, format, type,
                            buf, dest);
-            Xfree(buf);
+            free(buf);
         }
     }
 }
@@ -423,9 +423,9 @@ __indirect_get_proc_address(const char *name)
 				print ''
 				print '#if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL)'
 				print '    if (gc->isDirect) {'
-				print '        const _glapi_proc *const table = GET_DISPATCH();'
+				print '        const _glapi_proc *const disp_table = (_glapi_proc *)GET_DISPATCH();'
 				print '        PFNGL%sPROC p =' % (name.upper())
-				print '            (PFNGL%sPROC) table[%d];' % (name.upper(), func.offset)
+				print '            (PFNGL%sPROC) disp_table[%d];' % (name.upper(), func.offset)
 				print '    %sp(%s);' % (ret_string, func.get_called_parameter_string())
 				print '    } else'
 				print '#endif'
@@ -970,7 +970,7 @@ struct _glapi_table * __glXNewIndirectAPI( void )
     int o;
 
     entries = _glapi_get_dispatch_table_size();
-    table = (_glapi_proc *) Xmalloc(entries * sizeof(_glapi_proc));
+    table = malloc(entries * sizeof(_glapi_proc));
 
     /* first, set all entries to point to no-op functions */
     for (i = 0; i < entries; i++) {

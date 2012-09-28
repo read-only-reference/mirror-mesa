@@ -34,6 +34,7 @@ AMDGPUTargetLowering::AMDGPUTargetLowering(TargetMachine &TM) :
   // for them.
   setOperationAction(ISD::FCEIL,  MVT::f32, Legal);
   setOperationAction(ISD::FEXP2,  MVT::f32, Legal);
+  setOperationAction(ISD::FPOW,   MVT::f32, Legal);
   setOperationAction(ISD::FRINT,  MVT::f32, Legal);
 
   setOperationAction(ISD::UDIV, MVT::i32, Expand);
@@ -53,8 +54,6 @@ SDValue AMDGPUTargetLowering::LowerFormalArguments(
                                       DebugLoc DL, SelectionDAG &DAG,
                                       SmallVectorImpl<SDValue> &InVals) const
 {
-  // Lowering of arguments happens in R600LowerKernelParameters, so we can
-  // ignore the arguments here.
   for (unsigned i = 0, e = Ins.size(); i < e; ++i) {
     InVals.push_back(SDValue());
   }
@@ -88,7 +87,6 @@ SDValue AMDGPUTargetLowering::LowerOperation(SDValue Op, SelectionDAG &DAG)
   // AMDIL DAG lowering
   case ISD::SDIV: return LowerSDIV(Op, DAG);
   case ISD::SREM: return LowerSREM(Op, DAG);
-  case ISD::BUILD_VECTOR: return LowerBUILD_VECTOR(Op, DAG);
   case ISD::SIGN_EXTEND_INREG: return LowerSIGN_EXTEND_INREG(Op, DAG);
   case ISD::BRCOND: return LowerBRCOND(Op, DAG);
   // AMDGPU DAG lowering
@@ -336,7 +334,6 @@ const char* AMDGPUTargetLowering::getTargetNodeName(unsigned Opcode) const
   NODE_NAME_CASE(CALL);
   NODE_NAME_CASE(UMUL);
   NODE_NAME_CASE(DIV_INF);
-  NODE_NAME_CASE(VBUILD);
   NODE_NAME_CASE(RET_FLAG);
   NODE_NAME_CASE(BRANCH_COND);
 
@@ -349,5 +346,7 @@ const char* AMDGPUTargetLowering::getTargetNodeName(unsigned Opcode) const
   NODE_NAME_CASE(SMIN)
   NODE_NAME_CASE(UMIN)
   NODE_NAME_CASE(URECIP)
+  NODE_NAME_CASE(INTERP)
+  NODE_NAME_CASE(INTERP_P0)
   }
 }

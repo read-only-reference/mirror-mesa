@@ -62,7 +62,7 @@ brw_new_shader_program(struct gl_context *ctx, GLuint name)
  * what non-orthogonal state will be set, in the hope that it reflects
  * the eventual NOS used, and thus allows us to produce link failures.
  */
-bool
+static bool
 brw_shader_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
 {
    struct brw_context *brw = brw_context(ctx);
@@ -143,8 +143,14 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       bool temp = stage == MESA_SHADER_FRAGMENT;
       bool uniform = stage == MESA_SHADER_FRAGMENT;
 
-      lower_variable_index_to_cond_assign(shader->ir,
-					  input, output, temp, uniform);
+      bool lowered_variable_indexing =
+         lower_variable_index_to_cond_assign(shader->ir,
+                                             input, output, temp, uniform);
+
+      if (unlikely((INTEL_DEBUG & DEBUG_PERF) && lowered_variable_indexing)) {
+         perf_debug("Unsupported form of variable indexing in FS; falling "
+                    "back to very inefficient code generation\n");
+      }
 
       /* FINISHME: Do this before the variable index lowering. */
       lower_ubo_reference(&shader->base, shader->ir);
@@ -210,6 +216,15 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       _mesa_associate_uniform_storage(ctx, shProg, prog->Parameters);
 
       _mesa_reference_program(ctx, &prog, NULL);
+
+      if (ctx->Shader.Flags & GLSL_DUMP) {
+         static const char *target_strings[]
+            = { "vertex", "fragment", "geometry" };
+         printf("\n");
+         printf("GLSL IR for linked %s program %d:\n", target_strings[stage],
+                shProg->Name);
+         _mesa_print_ir(shader->base.ir, NULL);
+      }
    }
 
    if (!brw_shader_precompile(ctx, shProg))

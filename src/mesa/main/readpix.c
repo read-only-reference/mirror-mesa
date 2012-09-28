@@ -38,13 +38,7 @@
 #include "state.h"
 #include "glformats.h"
 #include "fbobject.h"
-#include "teximage.h"
 
-/* Inexplicably, GL_HALF_FLOAT_OES has a different value than GL_HALF_FLOAT.
- */
-#ifndef GL_HALF_FLOAT_OES
-#define GL_HALF_FLOAT_OES 0x8D61
-#endif
 
 /**
  * Tries to implement glReadPixels() of GL_DEPTH_COMPONENT using memcpy of the
@@ -143,7 +137,7 @@ read_depth_pixels( struct gl_context *ctx,
       return;
    }
 
-   depthValues = (GLfloat *) malloc(width * sizeof(GLfloat));
+   depthValues = malloc(width * sizeof(GLfloat));
 
    if (depthValues) {
       /* General case (slower) */
@@ -191,7 +185,7 @@ read_stencil_pixels( struct gl_context *ctx,
       return;
    }
 
-   stencil = (GLubyte *) malloc(width * sizeof(GLubyte));
+   stencil = malloc(width * sizeof(GLubyte));
 
    if (stencil) {
       /* process image row by row */
@@ -486,7 +480,7 @@ fast_read_depth_stencil_pixels_separate(struct gl_context *ctx,
       return GL_TRUE;  /* don't bother trying the slow path */
    }
 
-   stencilVals = (GLubyte *) malloc(width * sizeof(GLubyte));
+   stencilVals = malloc(width * sizeof(GLubyte));
 
    if (stencilVals) {
       for (j = 0; j < height; j++) {
@@ -557,8 +551,8 @@ slow_read_depth_stencil_pixels_separate(struct gl_context *ctx,
       stencilStride = depthStride;
    }
 
-   stencilVals = (GLubyte *) malloc(width * sizeof(GLubyte));
-   depthVals = (GLfloat *) malloc(width * sizeof(GLfloat));
+   stencilVals = malloc(width * sizeof(GLubyte));
+   depthVals = malloc(width * sizeof(GLfloat));
 
    if (stencilVals && depthVals) {
       for (j = 0; j < height; j++) {

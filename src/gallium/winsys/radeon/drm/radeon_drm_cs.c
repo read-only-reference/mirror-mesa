@@ -214,9 +214,10 @@ int radeon_get_reloc(struct radeon_cs_context *csc, struct radeon_bo *bo)
     unsigned hash = bo->handle & (sizeof(csc->is_handle_added)-1);
 
     if (csc->is_handle_added[hash]) {
-        reloc = csc->relocs_hashlist[hash];
+        i = csc->reloc_indices_hashlist[hash];
+        reloc = &csc->relocs[i];
         if (reloc->handle == bo->handle) {
-            return csc->reloc_indices_hashlist[hash];
+            return i;
         }
 
         /* Hash collision, look for the BO in the list of relocs linearly. */
@@ -233,7 +234,6 @@ int radeon_get_reloc(struct radeon_cs_context *csc, struct radeon_bo *bo)
                  *         AAAAAAAAAAABBBBBBBBBBBBBBCCCCCCCC
                  * will collide here: ^ and here:   ^,
                  * meaning that we should get very few collisions in the end. */
-                csc->relocs_hashlist[hash] = reloc;
                 csc->reloc_indices_hashlist[hash] = i;
                 /*printf("write_reloc collision, hash: %i, handle: %i\n", hash, bo->handle);*/
                 return i;
@@ -257,10 +257,11 @@ static unsigned radeon_add_reloc(struct radeon_cs_context *csc,
     enum radeon_bo_domain wd = usage & RADEON_USAGE_WRITE ? domains : 0;
 
     if (csc->is_handle_added[hash]) {
-        reloc = csc->relocs_hashlist[hash];
+        i = csc->reloc_indices_hashlist[hash];
+        reloc = &csc->relocs[i];
         if (reloc->handle == bo->handle) {
             update_reloc_domains(reloc, rd, wd, added_domains);
-            return csc->reloc_indices_hashlist[hash];
+            return i;
         }
 
         /* Hash collision, look for the BO in the list of relocs linearly. */
@@ -270,7 +271,6 @@ static unsigned radeon_add_reloc(struct radeon_cs_context *csc,
             if (reloc->handle == bo->handle) {
                 update_reloc_domains(reloc, rd, wd, added_domains);
 
-                csc->relocs_hashlist[hash] = reloc;
                 csc->reloc_indices_hashlist[hash] = i;
                 /*printf("write_reloc collision, hash: %i, handle: %i\n", hash, bo->handle);*/
                 return i;
@@ -284,10 +284,10 @@ static unsigned radeon_add_reloc(struct radeon_cs_context *csc,
         csc->nrelocs += 10;
 
         size = csc->nrelocs * sizeof(struct radeon_bo*);
-        csc->relocs_bo = (struct radeon_bo**)realloc(csc->relocs_bo, size);
+        csc->relocs_bo = realloc(csc->relocs_bo, size);
 
         size = csc->nrelocs * sizeof(struct drm_radeon_cs_reloc);
-        csc->relocs = (struct drm_radeon_cs_reloc*)realloc(csc->relocs, size);
+        csc->relocs = realloc(csc->relocs, size);
 
         csc->chunks[1].chunk_data = (uint64_t)(uintptr_t)csc->relocs;
     }
@@ -303,7 +303,6 @@ static unsigned radeon_add_reloc(struct radeon_cs_context *csc,
     reloc->flags = 0;
 
     csc->is_handle_added[hash] = TRUE;
-    csc->relocs_hashlist[hash] = reloc;
     csc->reloc_indices_hashlist[hash] = csc->crelocs;
 
     csc->chunks[1].length_dw += RELOC_DWORDS;

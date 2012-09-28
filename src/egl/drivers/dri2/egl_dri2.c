@@ -611,8 +611,7 @@ dri2_terminate(_EGLDriver *drv, _EGLDisplay *disp)
       close(dri2_dpy->fd);
    if (dri2_dpy->driver)
       dlclose(dri2_dpy->driver);
-   if (dri2_dpy->device_name)
-      free(dri2_dpy->device_name);
+   free(dri2_dpy->device_name);
 
    if (disp->PlatformDisplay == NULL) {
       switch (disp->Platform) {
@@ -1478,11 +1477,9 @@ _eglBuiltInDriverDRI2(const char *args)
 
    (void) args;
 
-   dri2_drv = malloc(sizeof *dri2_drv);
+   dri2_drv = calloc(1, sizeof *dri2_drv);
    if (!dri2_drv)
       return NULL;
-
-   memset(dri2_drv, 0, sizeof *dri2_drv);
 
    if (!dri2_load(&dri2_drv->base)) {
       free(dri2_drv);

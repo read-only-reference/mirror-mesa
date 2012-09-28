@@ -173,6 +173,7 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
+   case PIPE_CAP_TEXTURE_MULTISAMPLE:
       return 0;
    default:
       NOUVEAU_ERR("unknown PIPE_CAP %d\n", param);
@@ -267,8 +268,8 @@ nv50_screen_destroy(struct pipe_screen *pscreen)
    if (screen->base.pushbuf)
       screen->base.pushbuf->user_priv = NULL;
 
-   if (screen->blitctx)
-      FREE(screen->blitctx);
+   if (screen->blitter)
+      nv50_blitter_destroy(screen);
 
    nouveau_bo_ref(NULL, &screen->code);
    nouveau_bo_ref(NULL, &screen->tls_bo);
@@ -281,8 +282,7 @@ nv50_screen_destroy(struct pipe_screen *pscreen)
    nouveau_heap_destroy(&screen->gp_code_heap);
    nouveau_heap_destroy(&screen->fp_code_heap);
 
-   if (screen->tic.entries)
-      FREE(screen->tic.entries);
+   FREE(screen->tic.entries);
 
    nouveau_object_del(&screen->tesla);
    nouveau_object_del(&screen->eng2d);
@@ -751,7 +751,7 @@ nv50_screen_create(struct nouveau_device *dev)
    screen->tic.entries = CALLOC(4096, sizeof(void *));
    screen->tsc.entries = screen->tic.entries + 2048;
 
-   if (!nv50_blitctx_create(screen))
+   if (!nv50_blitter_create(screen))
       goto fail;
 
    nv50_screen_init_hwctx(screen);

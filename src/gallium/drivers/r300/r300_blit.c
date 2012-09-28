@@ -42,6 +42,9 @@ enum r300_blitter_op /* bitmask */
     R300_COPY          = R300_STOP_QUERY | R300_SAVE_FRAMEBUFFER |
                          R300_SAVE_TEXTURES | R300_IGNORE_RENDER_COND,
 
+    R300_BLIT          = R300_STOP_QUERY | R300_SAVE_FRAMEBUFFER |
+                         R300_SAVE_TEXTURES | R300_IGNORE_RENDER_COND,
+
     R300_DECOMPRESS    = R300_STOP_QUERY | R300_IGNORE_RENDER_COND,
 };
 
@@ -62,6 +65,7 @@ static void r300_blitter_begin(struct r300_context* r300, enum r300_blitter_op o
     util_blitter_save_fragment_shader(r300->blitter, r300->fs.state);
     util_blitter_save_vertex_shader(r300->blitter, r300->vs_state.state);
     util_blitter_save_viewport(r300->blitter, &r300->viewport);
+    util_blitter_save_scissor(r300->blitter, r300->scissor_state.state);
     util_blitter_save_vertex_buffers(r300->blitter, r300->nr_vertex_buffers,
                                      r300->vertex_buffer);
     util_blitter_save_vertex_elements(r300->blitter, r300->velems);
@@ -577,13 +581,50 @@ static void r300_resource_copy_region(struct pipe_context *pipe,
     src_view = r300_create_sampler_view_custom(pipe, src, &src_templ, src_width0, src_height0);
 
     r300_blitter_begin(r300, R300_COPY);
-    util_blitter_copy_texture_view(r300->blitter, dst_view, ~0, dstx, dsty,
-                                   src_view, 0, src_box,
-                                   src_width0, src_height0, PIPE_MASK_RGBAZS);
+    util_blitter_blit_generic(r300->blitter, dst_view, dstx, dsty,
+                              abs(src_box->width), abs(src_box->height),
+                              src_view, src_box,
+                              src_width0, src_height0, PIPE_MASK_RGBAZS,
+                              PIPE_TEX_FILTER_NEAREST, NULL, FALSE);
     r300_blitter_end(r300);
 
     pipe_surface_reference(&dst_view, NULL);
     pipe_sampler_view_reference(&src_view, NULL);
+}
+
+static void r300_blit(struct pipe_context *pipe,
+                      const struct pipe_blit_info *blit_info)
+{
+    struct r300_context *r300 = r300_context(pipe);
+    struct pipe_framebuffer_state *fb =
+        (struct pipe_framebuffer_state*)r300->fb_state.state;
+    struct pipe_blit_info info = *blit_info;
+
+    /* Decompress ZMASK. */
+    if (r300->zmask_in_use && !r300->locked_zbuffer) {
+        if (fb->zsbuf->texture == info.src.resource ||
+            fb->zsbuf->texture == info.dst.resource) {
+            r300_decompress_zmask(r300);
+        }
+    }
+
+    /* Blit a combined depth-stencil resource as color.
+     * S8Z24 is the only supported stencil format. */
+    if ((info.mask & PIPE_MASK_S) &&
+        info.src.format == PIPE_FORMAT_S8_UINT_Z24_UNORM &&
+        info.dst.format == PIPE_FORMAT_S8_UINT_Z24_UNORM) {
+        info.src.format = PIPE_FORMAT_B8G8R8A8_UNORM;
+        info.dst.format = PIPE_FORMAT_B8G8R8A8_UNORM;
+        if (info.mask & PIPE_MASK_Z) {
+            info.mask = PIPE_MASK_RGBA; /* depth+stencil */
+        } else {
+            info.mask = PIPE_MASK_B; /* stencil only */
+        }
+    }
+
+    r300_blitter_begin(r300, R300_BLIT);
+    util_blitter_blit(r300->blitter, &info);
+    r300_blitter_end(r300);
 }
 
 void r300_init_blit_functions(struct r300_context *r300)
@@ -592,4 +633,5 @@ void r300_init_blit_functions(struct r300_context *r300)
     r300->context.clear_render_target = r300_clear_render_target;
     r300->context.clear_depth_stencil = r300_clear_depth_stencil;
     r300->context.resource_copy_region = r300_resource_copy_region;
+    r300->context.blit = r300_blit;
 }

@@ -190,7 +190,7 @@ static const struct __DRI2flushExtensionRec intelFlushExtension = {
     dri2InvalidateDrawable,
 };
 
-struct intel_image_format intel_image_formats[] = {
+static struct intel_image_format intel_image_formats[] = {
    { __DRI_IMAGE_FOURCC_ARGB8888, __DRI_IMAGE_COMPONENTS_RGBA, 1,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB8888, 4 } } },
 
@@ -248,7 +248,7 @@ intel_allocate_image(int dri_format, void *loaderPrivate)
 {
     __DRIimage *image;
 
-    image = CALLOC(sizeof *image);
+    image = calloc(1, sizeof *image);
     if (image == NULL)
 	return NULL;
 
@@ -309,7 +309,7 @@ intel_create_image_from_name(__DRIscreen *screen,
 						  cpp, width, height,
 						  pitch, name, "image");
     if (image->region == NULL) {
-       FREE(image);
+       free(image);
        return NULL;
     }
 
@@ -333,7 +333,7 @@ intel_create_image_from_renderbuffer(__DRIcontext *context,
    }
 
    irb = intel_renderbuffer(rb);
-   image = CALLOC(sizeof *image);
+   image = calloc(1, sizeof *image);
    if (image == NULL)
       return NULL;
 
@@ -371,7 +371,7 @@ static void
 intel_destroy_image(__DRIimage *image)
 {
     intel_region_release(&image->region);
-    FREE(image);
+    free(image);
 }
 
 static __DRIimage *
@@ -397,7 +397,7 @@ intel_create_image(__DRIscreen *screen,
    image->region =
       intel_region_alloc(intelScreen, tiling, cpp, width, height, true);
    if (image->region == NULL) {
-      FREE(image);
+      free(image);
       return NULL;
    }
    
@@ -440,13 +440,13 @@ intel_dup_image(__DRIimage *orig_image, void *loaderPrivate)
 {
    __DRIimage *image;
 
-   image = CALLOC(sizeof *image);
+   image = calloc(1, sizeof *image);
    if (image == NULL)
       return NULL;
 
    intel_region_reference(&image->region, orig_image->region);
    if (image->region == NULL) {
-      FREE(image);
+      free(image);
       return NULL;
    }
 
@@ -543,13 +543,13 @@ intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
     pitch = stride / cpp;
     if (offset + height * cpp * pitch > parent->region->bo->size) {
        _mesa_warning(NULL, "intel_create_sub_image: subimage out of bounds");
-       FREE(image);
+       free(image);
        return NULL;
     }
 
     image->region = calloc(sizeof(*image->region), 1);
     if (image->region == NULL) {
-       FREE(image);
+       free(image);
        return NULL;
     }
 
@@ -564,7 +564,7 @@ intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
     image->region->screen = parent->region->screen;
     image->offset = offset;
 
-    intel_region_get_tile_masks(image->region, &mask_x, &mask_y);
+    intel_region_get_tile_masks(image->region, &mask_x, &mask_y, false);
     if (offset & mask_x)
        _mesa_warning(NULL,
                      "intel_create_sub_image: offset not on tile boundary");
@@ -639,7 +639,7 @@ intelDestroyScreen(__DRIscreen * sPriv)
    _mesa_HashDeleteAll(intelScreen->named_regions, nop_callback, NULL);
    _mesa_DeleteHashTable(intelScreen->named_regions);
 
-   FREE(intelScreen);
+   free(intelScreen);
    sPriv->driverPrivate = NULL;
 }
 
@@ -778,11 +778,12 @@ intelCreateContext(gl_api api,
 		   unsigned *error,
                    void *sharedContextPrivate)
 {
-   __DRIscreen *sPriv = driContextPriv->driScreenPriv;
-   struct intel_screen *intelScreen = sPriv->driverPrivate;
    bool success = false;
 
 #ifdef I915
+   __DRIscreen *sPriv = driContextPriv->driScreenPriv;
+   struct intel_screen *intelScreen = sPriv->driverPrivate;
+
    if (IS_9XX(intelScreen->deviceID)) {
       success = i915CreateContext(api, mesaVis, driContextPriv,
                                   major_version, minor_version, error,
@@ -820,7 +821,9 @@ intelCreateContext(gl_api api,
    if (success)
       return true;
 
-   intelDestroyContext(driContextPriv);
+   if (driContextPriv->driverPrivate != NULL)
+      intelDestroyContext(driContextPriv);
+
    return false;
 }
 
@@ -908,8 +911,9 @@ intel_detect_swizzling(struct intel_screen *screen)
 static __DRIconfig**
 intel_screen_make_configs(__DRIscreen *dri_screen)
 {
+   /* GLX_SWAP_COPY_OML is not supported due to page flipping. */
    static const GLenum back_buffer_modes[] = {
-       GLX_NONE, GLX_SWAP_UNDEFINED_OML, GLX_SWAP_COPY_OML
+       GLX_SWAP_UNDEFINED_OML, GLX_NONE,
    };
 
    static const uint8_t singlesample_samples[1] = {0};
@@ -954,8 +958,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
                                      depth_bits,
                                      stencil_bits,
                                      num_depth_stencil_bits,
-                                     back_buffer_modes,
-                                     ARRAY_SIZE(back_buffer_modes),
+                                     back_buffer_modes, 2,
                                      singlesample_samples, 1,
                                      false);
       configs = driConcatConfigs(configs, new_configs);
@@ -977,7 +980,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
 
       new_configs = driCreateConfigs(fb_format[i], fb_type[i],
                                      depth_bits, stencil_bits, 1,
-                                     back_buffer_modes + 1, 1,
+                                     back_buffer_modes, 1,
                                      singlesample_samples, 1,
                                      true);
       configs = driConcatConfigs(configs, new_configs);
@@ -994,7 +997,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
     *
     * Only doublebuffer configs with GLX_SWAP_UNDEFINED_OML behavior are
     * supported.  Singlebuffer configs are not supported because no one wants
-    * them. GLX_SWAP_COPY_OML is not supported due to page flipping.
+    * them.
     */
    for (int i = 0; i < ARRAY_SIZE(fb_format); i++) {
       if (screen->gen < 6)
@@ -1024,7 +1027,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
                                      depth_bits,
                                      stencil_bits,
                                      num_depth_stencil_bits,
-                                     back_buffer_modes + 1, 1,
+                                     back_buffer_modes, 1,
                                      multisample_samples,
                                      num_msaa_modes,
                                      false);
@@ -1061,7 +1064,7 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
    }
 
    /* Allocate the private area */
-   intelScreen = CALLOC(sizeof *intelScreen);
+   intelScreen = calloc(1, sizeof *intelScreen);
    if (!intelScreen) {
       fprintf(stderr, "\nERROR!  Allocating private area failed\n");
       return false;
@@ -1143,7 +1146,7 @@ intelAllocateBuffer(__DRIscreen *screen,
    assert(attachment == __DRI_BUFFER_FRONT_LEFT ||
           attachment == __DRI_BUFFER_BACK_LEFT);
 
-   intelBuffer = CALLOC(sizeof *intelBuffer);
+   intelBuffer = calloc(1, sizeof *intelBuffer);
    if (intelBuffer == NULL)
       return NULL;
 
@@ -1156,7 +1159,7 @@ intelAllocateBuffer(__DRIscreen *screen,
                                             true);
    
    if (intelBuffer->region == NULL) {
-	   FREE(intelBuffer);
+	   free(intelBuffer);
 	   return NULL;
    }
    

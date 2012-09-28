@@ -35,7 +35,7 @@ private:
   static char ID;
   TargetMachine &TM;
 
-  void AddLiveIn(MachineFunction * MF,  MachineRegisterInfo & MRI,
+  void addLiveIn(MachineFunction * MF,  MachineRegisterInfo & MRI,
                  unsigned physReg, unsigned virtReg);
 
 public:
@@ -52,11 +52,12 @@ public:
 char SIAssignInterpRegsPass::ID = 0;
 
 #define INTERP_VALUES 16
+#define REQUIRED_VALUE_MAX_INDEX 7
 
-struct interp_info {
-  bool enabled;
-  unsigned regs[3];
-  unsigned reg_count;
+struct InterpInfo {
+  bool Enabled;
+  unsigned Regs[3];
+  unsigned RegCount;
 };
 
 
@@ -67,7 +68,7 @@ FunctionPass *llvm::createSIAssignInterpRegsPass(TargetMachine &tm) {
 bool SIAssignInterpRegsPass::runOnMachineFunction(MachineFunction &MF)
 {
 
-  struct interp_info InterpUse[INTERP_VALUES] = {
+  struct InterpInfo InterpUse[INTERP_VALUES] = {
     {false, {AMDGPU::PERSP_SAMPLE_I, AMDGPU::PERSP_SAMPLE_J}, 2},
     {false, {AMDGPU::PERSP_CENTER_I, AMDGPU::PERSP_CENTER_J}, 2},
     {false, {AMDGPU::PERSP_CENTROID_I, AMDGPU::PERSP_CENTROID_J}, 2},
@@ -87,39 +88,53 @@ bool SIAssignInterpRegsPass::runOnMachineFunction(MachineFunction &MF)
   };
 
   SIMachineFunctionInfo * MFI = MF.getInfo<SIMachineFunctionInfo>();
+  // This pass is only needed for pixel shaders.
+  if (MFI->ShaderType != ShaderType::PIXEL) {
+    return false;
+  }
   MachineRegisterInfo &MRI = MF.getRegInfo();
+  bool ForceEnable = true;
 
-  /* First pass, mark the interpolation values that are used. */
-  for (unsigned interp_idx = 0; interp_idx < INTERP_VALUES; interp_idx++) {
-    for (unsigned reg_idx = 0; reg_idx < InterpUse[interp_idx].reg_count;
-                                                               reg_idx++) {
-      InterpUse[interp_idx].enabled =
-                            !MRI.use_empty(InterpUse[interp_idx].regs[reg_idx]);
+  // First pass, mark the interpolation values that are used.
+  for (unsigned InterpIdx = 0; InterpIdx < INTERP_VALUES; InterpIdx++) {
+    for (unsigned RegIdx = 0; RegIdx < InterpUse[InterpIdx].RegCount;
+                                                               RegIdx++) {
+      InterpUse[InterpIdx].Enabled = InterpUse[InterpIdx].Enabled ||
+                            !MRI.use_empty(InterpUse[InterpIdx].Regs[RegIdx]);
+      if (InterpUse[InterpIdx].Enabled &&
+          InterpIdx <= REQUIRED_VALUE_MAX_INDEX) {
+        ForceEnable = false;
+      }
     }
   }
 
-  unsigned used_vgprs = 0;
+  // At least one interpolation mode must be enabled or else the GPU will hang.
+  if (ForceEnable) {
+    InterpUse[0].Enabled = true;
+  }
 
-  /* Second pass, replace with VGPRs. */
-  for (unsigned interp_idx = 0; interp_idx < INTERP_VALUES; interp_idx++) {
-    if (!InterpUse[interp_idx].enabled) {
+  unsigned UsedVgprs = 0;
+
+  // Second pass, replace with VGPRs.
+  for (unsigned InterpIdx = 0; InterpIdx < INTERP_VALUES; InterpIdx++) {
+    if (!InterpUse[InterpIdx].Enabled) {
       continue;
     }
-    MFI->spi_ps_input_addr |= (1 << interp_idx);
+    MFI->SPIPSInputAddr |= (1 << InterpIdx);
 
-    for (unsigned reg_idx = 0; reg_idx < InterpUse[interp_idx].reg_count;
-                                                  reg_idx++, used_vgprs++) {
-      unsigned new_reg = AMDGPU::VReg_32RegClass.getRegister(used_vgprs);
-      unsigned virt_reg = MRI.createVirtualRegister(&AMDGPU::VReg_32RegClass);
-      MRI.replaceRegWith(InterpUse[interp_idx].regs[reg_idx], virt_reg);
-      AddLiveIn(&MF, MRI, new_reg, virt_reg);
+    for (unsigned RegIdx = 0; RegIdx < InterpUse[InterpIdx].RegCount;
+                                                  RegIdx++, UsedVgprs++) {
+      unsigned NewReg = AMDGPU::VReg_32RegClass.getRegister(UsedVgprs);
+      unsigned VirtReg = MRI.createVirtualRegister(&AMDGPU::VReg_32RegClass);
+      MRI.replaceRegWith(InterpUse[InterpIdx].Regs[RegIdx], VirtReg);
+      addLiveIn(&MF, MRI, NewReg, VirtReg);
     }
   }
 
   return false;
 }
 
-void SIAssignInterpRegsPass::AddLiveIn(MachineFunction * MF,
+void SIAssignInterpRegsPass::addLiveIn(MachineFunction * MF,
                            MachineRegisterInfo & MRI,
                            unsigned physReg, unsigned virtReg)
 {

@@ -206,9 +206,21 @@ intelTexImage(struct gl_context * ctx,
               GLenum format, GLenum type, const void *pixels,
               const struct gl_pixelstore_attrib *unpack)
 {
+   bool ok;
+
    DBG("%s target %s level %d %dx%dx%d\n", __FUNCTION__,
        _mesa_lookup_enum_by_nr(texImage->TexObject->Target),
        texImage->Level, texImage->Width, texImage->Height, texImage->Depth);
+
+   ok = intel_texsubimage_tiled_memcpy(ctx, dims, texImage,
+                                       0, 0, 0, /*x,y,z offsets*/
+                                       texImage->Width,
+                                       texImage->Height,
+                                       texImage->Depth,
+                                       format, type, pixels, unpack,
+                                       true /*for_glTexImage*/);
+   if (ok)
+      return;
 
    /* Attempt to use the blitter for PBO image uploads.
     */
@@ -326,7 +338,6 @@ intelSetTexBuffer(__DRIcontext *pDRICtx, GLint target, __DRIdrawable *dPriv)
    intelSetTexBuffer2(pDRICtx, target, __DRI_TEXTURE_FORMAT_RGBA, dPriv);
 }
 
-#if FEATURE_OES_EGL_image
 static void
 intel_image_target_texture_2d(struct gl_context *ctx, GLenum target,
 			      struct gl_texture_object *texObj,
@@ -347,14 +358,10 @@ intel_image_target_texture_2d(struct gl_context *ctx, GLenum target,
 				  target, image->internal_format,
                                   image->format, image->offset);
 }
-#endif
 
 void
 intelInitTextureImageFuncs(struct dd_function_table *functions)
 {
    functions->TexImage = intelTexImage;
-
-#if FEATURE_OES_EGL_image
    functions->EGLImageTargetTexture2D = intel_image_target_texture_2d;
-#endif
 }

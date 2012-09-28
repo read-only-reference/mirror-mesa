@@ -1172,8 +1172,7 @@ void r300_draw_flush_vbuf(struct r300_context *r300)
  * would be computed and stored twice, which makes the clear/copy codepaths
  * somewhat inefficient. Instead we use a rectangular point sprite. */
 void r300_blitter_draw_rectangle(struct blitter_context *blitter,
-                                 unsigned x1, unsigned y1,
-                                 unsigned x2, unsigned y2,
+                                 int x1, int y1, int x2, int y2,
                                  float depth,
                                  enum blitter_attrib_type type,
                                  const union pipe_color_union *attrib)
@@ -1255,6 +1254,7 @@ done:
     r300->sprite_coord_enable = last_sprite_coord_enable;
 }
 
+#if 0
 static void r300_resource_resolve(struct pipe_context *pipe,
                                   const struct pipe_resolve_info *info)
 {
@@ -1304,6 +1304,7 @@ static void r300_resource_resolve(struct pipe_context *pipe,
     pipe_surface_reference(&srcsurf, NULL);
     pipe_surface_reference(&dstsurf, NULL);
 }
+#endif
 
 void r300_init_render_functions(struct r300_context *r300)
 {
@@ -1313,8 +1314,6 @@ void r300_init_render_functions(struct r300_context *r300)
     } else {
         r300->context.draw_vbo = r300_swtcl_draw_vbo;
     }
-
-    r300->context.resource_resolve = r300_resource_resolve;
 
     /* Plug in the two-sided stencil reference value fallback if needed. */
     if (!r300->screen->caps.is_r500)

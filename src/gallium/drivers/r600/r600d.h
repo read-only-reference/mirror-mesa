@@ -110,6 +110,7 @@
 #define PKT3_SURFACE_BASE_UPDATE               0x73
 #define		SURFACE_BASE_UPDATE_DEPTH      (1 << 0)
 #define		SURFACE_BASE_UPDATE_COLOR(x)   (2 << (x))
+#define		SURFACE_BASE_UPDATE_COLOR_NUM(x) (((1 << x) - 1) << 1)
 #define		SURFACE_BASE_UPDATE_STRMOUT(x) (0x200 << (x))
 
 #define EVENT_TYPE_PS_PARTIAL_FLUSH            0x10
@@ -118,6 +119,7 @@
 #define EVENT_TYPE_CACHE_FLUSH_AND_INV_EVENT   0x16
 #define EVENT_TYPE_SO_VGTSTREAMOUT_FLUSH	0x1f
 #define EVENT_TYPE_SAMPLE_STREAMOUTSTATS	0x20
+#define EVENT_TYPE_FLUSH_AND_INV_CB_META	46 /* supported on r700+ */
 #define		EVENT_TYPE(x)                           ((x) << 0)
 #define		EVENT_INDEX(x)                          ((x) << 8)
                 /* 0 - any non-TS event
@@ -2194,6 +2196,15 @@
 #define   S_028C08_PIX_CENTER_HALF(x)                  (((x) & 0x1) << 0)
 #define   G_028C08_PIX_CENTER_HALF(x)                  (((x) >> 0) & 0x1)
 #define   C_028C08_PIX_CENTER_HALF                     0xFFFFFFFE
+#define   S_028C08_QUANT_MODE(x)                       (((x) & 0x7) << 3)
+#define   G_028C08_QUANT_MODE(x)                       (((x) >> 3) & 0x7)
+#define   C_028C08_QUANT_MODE                          0xFFFFFFC7
+#define     V_028C08_X_1_16TH                          0x00
+#define     V_028C08_X_1_8TH                           0x01
+#define     V_028C08_X_1_4TH                           0x02
+#define     V_028C08_X_1_2                             0x03
+#define     V_028C08_X_1                               0x04
+#define     V_028C08_X_1_256TH                         0x05
 #define R_028C1C_PA_SC_AA_SAMPLE_LOCS_MCTX           0x028C1C
 #define R_028C48_PA_SC_AA_MASK                       0x028C48
 #define R_028810_PA_CL_CLIP_CNTL                     0x028810
@@ -3332,9 +3343,21 @@
 #define   S_0085F0_DB_DEST_BASE_ENA(x)                 (((x) & 0x1) << 14)
 #define   G_0085F0_DB_DEST_BASE_ENA(x)                 (((x) >> 14) & 0x1)
 #define   C_0085F0_DB_DEST_BASE_ENA                    0xFFFFBFFF
+/* r600 only start */
 #define   S_0085F0_CR_DEST_BASE_ENA(x)                 (((x) & 0x1) << 15)
 #define   G_0085F0_CR_DEST_BASE_ENA(x)                 (((x) >> 15) & 0x1)
 #define   C_0085F0_CR_DEST_BASE_ENA                    0xFFFF7FFF
+/* r600 only end */
+/* evergreen only start */
+#define   S_0085F0_CB8_DEST_BASE_ENA(x)                (((x) & 0x1) << 15)
+#define   G_0085F0_CB8_DEST_BASE_ENA(x)                (((x) >> 15) & 0x1)
+#define   S_0085F0_CB9_DEST_BASE_ENA(x)                (((x) & 0x1) << 16)
+#define   G_0085F0_CB9_DEST_BASE_ENA(x)                (((x) >> 16) & 0x1)
+#define   S_0085F0_CB10_DEST_BASE_ENA(x)               (((x) & 0x1) << 17)
+#define   G_0085F0_CB10_DEST_BASE_ENA(x)               (((x) >> 17) & 0x1)
+#define   S_0085F0_CB11_DEST_BASE_ENA(x)               (((x) & 0x1) << 18)
+#define   G_0085F0_CB11_DEST_BASE_ENA(x)               (((x) >> 18) & 0x1)
+/* evergreen only end */
 #define   S_0085F0_TC_ACTION_ENA(x)                    (((x) & 0x1) << 23)
 #define   G_0085F0_TC_ACTION_ENA(x)                    (((x) >> 23) & 0x1)
 #define   C_0085F0_TC_ACTION_ENA                       0xFF7FFFFF
@@ -3575,10 +3598,12 @@
 #define R_028144_ALU_CONST_BUFFER_SIZE_PS_1          0x00028144
 #define R_028180_ALU_CONST_BUFFER_SIZE_VS_0          0x00028180
 #define R_028184_ALU_CONST_BUFFER_SIZE_VS_1          0x00028184
+#define R_0281C0_ALU_CONST_BUFFER_SIZE_GS_0          0x000281C0
 #define R_028940_ALU_CONST_CACHE_PS_0                0x00028940
 #define R_028944_ALU_CONST_CACHE_PS_1                0x00028944
 #define R_028980_ALU_CONST_CACHE_VS_0                0x00028980
 #define R_028984_ALU_CONST_CACHE_VS_1                0x00028984
+#define R_0289C0_ALU_CONST_CACHE_GS_0                0x000289C0
 
 #define R_03CFF0_SQ_VTX_BASE_VTX_LOC                 0x03CFF0
 #define R_03CFF4_SQ_VTX_START_INST_LOC               0x03CFF4

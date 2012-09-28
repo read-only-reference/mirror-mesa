@@ -39,6 +39,7 @@ extern "C" {
 
 struct pipe_blend_color;
 struct pipe_blend_state;
+struct pipe_blit_info;
 struct pipe_box;
 struct pipe_clip_state;
 struct pipe_constant_buffer;
@@ -280,7 +281,7 @@ struct pipe_context {
    /**
     * Resource functions for blit-like functionality
     *
-    * If a driver supports multisampling, resource_resolve must be available.
+    * If a driver supports multisampling, blit must implement color resolve.
     */
    /*@{*/
 
@@ -297,12 +298,11 @@ struct pipe_context {
                                 unsigned src_level,
                                 const struct pipe_box *src_box);
 
-   /**
-    * Resolve a multisampled resource into a non-multisampled one.
-    * Source and destination must be of the same format.
+   /* Optimal hardware path for blitting pixels.
+    * Scaling, format conversion, up- and downsampling (resolve) are allowed.
     */
-   void (*resource_resolve)(struct pipe_context *pipe,
-                            const struct pipe_resolve_info *info);
+   void (*blit)(struct pipe_context *pipe,
+                const struct pipe_blit_info *info);
 
    /*@}*/
 
@@ -506,6 +506,10 @@ struct pipe_context {
     * PIPE_COMPUTE_CAP_GRID_DIMENSION that determine the layout of the
     * grid (in block units) and working block (in thread units) to be
     * used, respectively.
+    *
+    * \a pc For drivers that use PIPE_SHADER_IR_LLVM as their prefered IR,
+    * this value will be the index of the kernel in the opencl.kernels
+    * metadata list.
     *
     * \a input will be used to initialize the INPUT resource, and it
     * should point to a buffer of at least

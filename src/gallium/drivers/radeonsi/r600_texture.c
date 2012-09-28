@@ -254,13 +254,6 @@ static void r600_texture_destroy(struct pipe_screen *screen,
 	FREE(rtex);
 }
 
-/* Needs adjustment for pixelformat:
- */
-static INLINE unsigned u_box_volume( const struct pipe_box *box )
-{
-	return box->width * box->depth * box->height;
-};
-
 static struct pipe_transfer* si_texture_get_transfer(struct pipe_context *ctx,
 						     struct pipe_resource *texture,
 						     unsigned level,
@@ -282,9 +275,6 @@ static struct pipe_transfer* si_texture_get_transfer(struct pipe_context *ctx,
 	 */
 	if (rtex->surface.level[level].mode != RADEON_SURF_MODE_LINEAR_ALIGNED &&
 	    rtex->surface.level[level].mode != RADEON_SURF_MODE_LINEAR)
-		use_staging_texture = TRUE;
-
-	if ((usage & PIPE_TRANSFER_READ) && u_box_volume(box) > 1024)
 		use_staging_texture = TRUE;
 
 	/* XXX: Use a staging texture for uploads if the underlying BO
@@ -523,7 +513,7 @@ struct pipe_resource *si_texture_create(struct pipe_screen *screen,
 {
 	struct r600_screen *rscreen = (struct r600_screen*)screen;
 	struct radeon_surface surface;
-	unsigned array_mode = 0;
+	unsigned array_mode = V_009910_ARRAY_LINEAR_ALIGNED;
 	int r;
 
 #if 0
@@ -589,7 +579,7 @@ struct pipe_resource *si_texture_from_handle(struct pipe_screen *screen,
 	struct r600_screen *rscreen = (struct r600_screen*)screen;
 	struct pb_buffer *buf = NULL;
 	unsigned stride = 0;
-	unsigned array_mode = 0;
+	unsigned array_mode = V_009910_ARRAY_LINEAR_ALIGNED;
 	enum radeon_bo_layout micro, macro;
 	struct radeon_surface surface;
 	int r;
@@ -614,7 +604,7 @@ struct pipe_resource *si_texture_from_handle(struct pipe_screen *screen,
 	else if (micro == RADEON_LAYOUT_TILED)
 		array_mode = V_009910_ARRAY_1D_TILED_THIN1;
 	else
-		array_mode = 0;
+		array_mode = V_009910_ARRAY_LINEAR_ALIGNED;
 
 	r = r600_init_surface(&surface, templ, array_mode);
 	if (r) {

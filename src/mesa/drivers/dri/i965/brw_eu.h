@@ -112,6 +112,7 @@ struct brw_compile {
    struct brw_instruction *store;
    int store_size;
    GLuint nr_insn;
+   unsigned int next_insn_offset;
 
    void *mem_ctx;
 
@@ -813,6 +814,7 @@ void brw_set_acc_write_control(struct brw_compile *p, GLuint value);
 
 void brw_init_compile(struct brw_context *, struct brw_compile *p,
 		      void *mem_ctx);
+void brw_dump_compile(struct brw_compile *p, FILE *out, int start, int end);
 const GLuint *brw_get_program( struct brw_compile *p, GLuint *sz );
 
 struct brw_instruction *brw_next_insn(struct brw_compile *p, GLuint opcode);
@@ -1104,6 +1106,20 @@ void brw_set_src1(struct brw_compile *p,
 void brw_set_uip_jip(struct brw_compile *p);
 
 uint32_t brw_swap_cmod(uint32_t cmod);
+
+/* brw_eu_compact.c */
+void brw_init_compaction_tables(struct intel_context *intel);
+void brw_compact_instructions(struct brw_compile *p);
+void brw_uncompact_instruction(struct intel_context *intel,
+			       struct brw_instruction *dst,
+			       struct brw_compact_instruction *src);
+bool brw_try_compact_instruction(struct brw_compile *p,
+                                 struct brw_compact_instruction *dst,
+                                 struct brw_instruction *src);
+
+void brw_debug_compact_uncompact(struct intel_context *intel,
+				 struct brw_instruction *orig,
+				 struct brw_instruction *uncompacted);
 
 /* brw_optimize.c */
 void brw_optimize(struct brw_compile *p);

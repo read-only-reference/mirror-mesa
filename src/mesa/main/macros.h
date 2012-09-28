@@ -665,13 +665,13 @@ LEN_SQUARED_2FV(const GLfloat v[2])
 static inline GLfloat
 LEN_3FV(const GLfloat v[3])
 {
-   return SQRTF(LEN_SQUARED_3FV(v));
+   return sqrtf(LEN_SQUARED_3FV(v));
 }
 
 static inline GLfloat
 LEN_2FV(const GLfloat v[2])
 {
-   return SQRTF(LEN_SQUARED_2FV(v));
+   return sqrtf(LEN_SQUARED_2FV(v));
 }
 
 
@@ -686,6 +686,21 @@ NORMALIZE_3FV(GLfloat v[3])
       v[1] *= len;
       v[2] *= len;
    }
+}
+
+
+/** Is float value negative? */
+static inline GLboolean
+IS_NEGATIVE(float x)
+{
+   return signbit(x) != 0;
+}
+
+/** Test two floats have opposite signs */
+static inline GLboolean
+DIFFERENT_SIGNS(GLfloat x, GLfloat y)
+{
+   return signbit(x) != signbit(y);
 }
 
 

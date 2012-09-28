@@ -1878,6 +1878,7 @@ static int r600_bytecode_cf_build(struct r600_bytecode *bc, struct r600_bytecode
 	case V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
 	case V_SQ_CF_WORD1_SQ_CF_INST_POP:
 	case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
+	case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_DX10:
 	case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
 	case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
 	case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
@@ -1952,6 +1953,7 @@ int r600_bytecode_build(struct r600_bytecode *bc)
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_POP:
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_DX10:
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
@@ -1986,7 +1988,7 @@ int r600_bytecode_build(struct r600_bytecode *bc)
 			case V_SQ_CF_WORD1_SQ_CF_INST_JUMP:
 			case V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
 			case V_SQ_CF_WORD1_SQ_CF_INST_POP:
-			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_DX10:
 			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
 			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
 			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
@@ -2089,6 +2091,7 @@ int r600_bytecode_build(struct r600_bytecode *bc)
 			case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_MEM_STREAM3_BUF1:
 			case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_MEM_STREAM3_BUF2:
 			case EG_V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_MEM_STREAM3_BUF3:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_DX10:
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
@@ -2172,6 +2175,7 @@ int r600_bytecode_build(struct r600_bytecode *bc)
 			case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_MEM_STREAM2:
 			case V_SQ_CF_ALLOC_EXPORT_WORD1_SQ_CF_INST_MEM_STREAM3:
 			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_DX10:
 			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
 			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
 			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
@@ -2360,6 +2364,7 @@ void r600_bytecode_dump(struct r600_bytecode *bc)
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_POP:
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
+			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_DX10:
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
 			case EG_V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
@@ -2454,6 +2459,7 @@ void r600_bytecode_dump(struct r600_bytecode *bc)
 			case V_SQ_CF_WORD1_SQ_CF_INST_ELSE:
 			case V_SQ_CF_WORD1_SQ_CF_INST_POP:
 			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_NO_AL:
+			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_START_DX10:
 			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_END:
 			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_CONTINUE:
 			case V_SQ_CF_WORD1_SQ_CF_INST_LOOP_BREAK:
@@ -2752,31 +2758,47 @@ int r600_vertex_elements_build_fetch_shader(struct r600_context *rctx, struct r6
 	unsigned fetch_resource_start = rctx->chip_class >= EVERGREEN ? 0 : 160;
 	unsigned format, num_format, format_comp, endian;
 	uint32_t *bytecode;
-	int i, r;
+	int i, j, r;
 
 	memset(&bc, 0, sizeof(bc));
 	r600_bytecode_init(&bc, rctx->chip_class, rctx->family);
 
 	for (i = 0; i < ve->count; i++) {
 		if (elements[i].instance_divisor > 1) {
-			struct r600_bytecode_alu alu;
-
-			memset(&alu, 0, sizeof(alu));
-			alu.inst = BC_INST(&bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_UINT);
-			alu.src[0].sel = 0;
-			alu.src[0].chan = 3;
-
-			alu.src[1].sel = V_SQ_ALU_SRC_LITERAL;
-			alu.src[1].value = (1ll << 32) / elements[i].instance_divisor + 1;
-
-			alu.dst.sel = i + 1;
-			alu.dst.chan = 3;
-			alu.dst.write = 1;
-			alu.last = 1;
-
-			if ((r = r600_bytecode_add_alu(&bc, &alu))) {
-				r600_bytecode_clear(&bc);
-				return r;
+			if (rctx->chip_class == CAYMAN) {
+				for (j = 0; j < 4; j++) {
+					struct r600_bytecode_alu alu;
+					memset(&alu, 0, sizeof(alu));
+					alu.inst = BC_INST(&bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_UINT);
+					alu.src[0].sel = 0;
+					alu.src[0].chan = 3;
+					alu.src[1].sel = V_SQ_ALU_SRC_LITERAL;
+					alu.src[1].value = (1ll << 32) / elements[i].instance_divisor + 1;
+					alu.dst.sel = i + 1;
+					alu.dst.chan = j;
+					alu.dst.write = j == 3;
+					alu.last = j == 3;
+					if ((r = r600_bytecode_add_alu(&bc, &alu))) {
+						r600_bytecode_clear(&bc);
+						return r;
+					}
+				}
+			} else {
+				struct r600_bytecode_alu alu;
+				memset(&alu, 0, sizeof(alu));
+				alu.inst = BC_INST(&bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULHI_UINT);
+				alu.src[0].sel = 0;
+				alu.src[0].chan = 3;
+				alu.src[1].sel = V_SQ_ALU_SRC_LITERAL;
+				alu.src[1].value = (1ll << 32) / elements[i].instance_divisor + 1;
+				alu.dst.sel = i + 1;
+				alu.dst.chan = 3;
+				alu.dst.write = 1;
+				alu.last = 1;
+				if ((r = r600_bytecode_add_alu(&bc, &alu))) {
+					r600_bytecode_clear(&bc);
+					return r;
+				}
 			}
 		}
 	}
@@ -2873,4 +2895,47 @@ int r600_vertex_elements_build_fetch_shader(struct r600_context *rctx, struct r6
 		r600_fetch_shader(&rctx->context, ve);
 
 	return 0;
+}
+
+void r600_bytecode_alu_read(struct r600_bytecode_alu *alu, uint32_t word0, uint32_t word1)
+{
+	/* WORD0 */
+	alu->src[0].sel = G_SQ_ALU_WORD0_SRC0_SEL(word0);
+	alu->src[0].rel = G_SQ_ALU_WORD0_SRC0_REL(word0);
+	alu->src[0].chan = G_SQ_ALU_WORD0_SRC0_CHAN(word0);
+	alu->src[0].neg = G_SQ_ALU_WORD0_SRC0_NEG(word0);
+	alu->src[1].sel = G_SQ_ALU_WORD0_SRC1_SEL(word0);
+	alu->src[1].rel = G_SQ_ALU_WORD0_SRC1_REL(word0);
+	alu->src[1].chan = G_SQ_ALU_WORD0_SRC1_CHAN(word0);
+	alu->src[1].neg = G_SQ_ALU_WORD0_SRC1_NEG(word0);
+	alu->index_mode = G_SQ_ALU_WORD0_INDEX_MODE(word0);
+	alu->pred_sel = G_SQ_ALU_WORD0_PRED_SEL(word0);
+	alu->last = G_SQ_ALU_WORD0_LAST(word0);
+
+	/* WORD1 */
+	alu->bank_swizzle = G_SQ_ALU_WORD1_BANK_SWIZZLE(word1);
+	alu->dst.sel = G_SQ_ALU_WORD1_DST_GPR(word1);
+	alu->dst.rel = G_SQ_ALU_WORD1_DST_REL(word1);
+	alu->dst.chan = G_SQ_ALU_WORD1_DST_CHAN(word1);
+	alu->dst.clamp = G_SQ_ALU_WORD1_CLAMP(word1);
+	if (G_SQ_ALU_WORD1_ENCODING(word1)) /*ALU_DWORD1_OP3*/
+	{
+		alu->is_op3 = 1;
+		alu->src[2].sel = G_SQ_ALU_WORD1_OP3_SRC2_SEL(word1);
+		alu->src[2].rel = G_SQ_ALU_WORD1_OP3_SRC2_REL(word1);
+		alu->src[2].chan = G_SQ_ALU_WORD1_OP3_SRC2_CHAN(word1);
+		alu->src[2].neg = G_SQ_ALU_WORD1_OP3_SRC2_NEG(word1);
+		alu->inst = G_SQ_ALU_WORD1_OP3_ALU_INST(word1);
+	}
+	else /*ALU_DWORD1_OP2*/
+	{
+		alu->src[0].abs = G_SQ_ALU_WORD1_OP2_SRC0_ABS(word1);
+		alu->src[1].abs = G_SQ_ALU_WORD1_OP2_SRC1_ABS(word1);
+		alu->inst = G_SQ_ALU_WORD1_OP2_ALU_INST(word1);
+		alu->omod = G_SQ_ALU_WORD1_OP2_OMOD(word1);
+		alu->dst.write = G_SQ_ALU_WORD1_OP2_WRITE_MASK(word1);
+		alu->update_pred = G_SQ_ALU_WORD1_OP2_UPDATE_PRED(word1);
+		alu->execute_mask =
+			G_SQ_ALU_WORD1_OP2_UPDATE_EXECUTE_MASK(word1);
+	}
 }

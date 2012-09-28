@@ -25,6 +25,7 @@ FunctionPass *createR600ExpandSpecialInstrsPass(TargetMachine &tm);
 
 // SI Passes
 FunctionPass *createSIAssignInterpRegsPass(TargetMachine &tm);
+FunctionPass *createSILowerFlowControlPass(TargetMachine &tm);
 FunctionPass *createSICodeEmitterPass(formatted_raw_ostream &OS);
 FunctionPass *createSILowerLiteralConstantsPass(TargetMachine &tm);
 
@@ -32,5 +33,14 @@ FunctionPass *createSILowerLiteralConstantsPass(TargetMachine &tm);
 FunctionPass *createAMDGPUConvertToISAPass(TargetMachine &tm);
 
 } // End namespace llvm
+
+namespace ShaderType {
+  enum Type {
+    PIXEL = 0,
+    VERTEX = 1,
+    GEOMETRY = 2,
+    COMPUTE = 3
+  };
+}
 
 #endif // AMDGPU_H

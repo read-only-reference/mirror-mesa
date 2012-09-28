@@ -269,7 +269,6 @@ DRI2Connect(Display * dpy, XID window, char **driverName, char **deviceName)
    XExtDisplayInfo *info = DRI2FindDisplay(dpy);
    xDRI2ConnectReply rep;
    xDRI2ConnectReq *req;
-   char *prime;
 
    XextCheckExtension(dpy, info, dri2ExtensionName, False);
 
@@ -281,13 +280,16 @@ DRI2Connect(Display * dpy, XID window, char **driverName, char **deviceName)
 
    req->driverType = DRI2DriverDRI;
 #ifdef DRI2DriverPrimeShift
-   prime = getenv("DRI_PRIME");
-   if (prime) {
-      uint32_t primeid;
-      errno = 0;
-      primeid = strtoul(prime, NULL, 0);
-      if (errno == 0)
-         req->driverType |= ((primeid & DRI2DriverPrimeMask) << DRI2DriverPrimeShift);
+   {
+      char *prime = getenv("DRI_PRIME");
+      if (prime) {
+         uint32_t primeid;
+         errno = 0;
+         primeid = strtoul(prime, NULL, 0);
+         if (errno == 0)
+            req->driverType |=
+               ((primeid & DRI2DriverPrimeMask) << DRI2DriverPrimeShift);
+      }
    }
 #endif
 
@@ -303,7 +305,7 @@ DRI2Connect(Display * dpy, XID window, char **driverName, char **deviceName)
       return False;
    }
 
-   *driverName = Xmalloc(rep.driverNameLength + 1);
+   *driverName = malloc(rep.driverNameLength + 1);
    if (*driverName == NULL) {
       _XEatData(dpy,
                 ((rep.driverNameLength + 3) & ~3) +
@@ -315,9 +317,9 @@ DRI2Connect(Display * dpy, XID window, char **driverName, char **deviceName)
    _XReadPad(dpy, *driverName, rep.driverNameLength);
    (*driverName)[rep.driverNameLength] = '\0';
 
-   *deviceName = Xmalloc(rep.deviceNameLength + 1);
+   *deviceName = malloc(rep.deviceNameLength + 1);
    if (*deviceName == NULL) {
-      Xfree(*driverName);
+      free(*driverName);
       _XEatData(dpy, ((rep.deviceNameLength + 3) & ~3));
       UnlockDisplay(dpy);
       SyncHandle();
@@ -431,7 +433,7 @@ DRI2GetBuffers(Display * dpy, XID drawable,
    *height = rep.height;
    *outCount = rep.count;
 
-   buffers = Xmalloc(rep.count * sizeof buffers[0]);
+   buffers = malloc(rep.count * sizeof buffers[0]);
    if (buffers == NULL) {
       _XEatData(dpy, rep.count * sizeof repBuffer);
       UnlockDisplay(dpy);
@@ -490,7 +492,7 @@ DRI2GetBuffersWithFormat(Display * dpy, XID drawable,
    *height = rep.height;
    *outCount = rep.count;
 
-   buffers = Xmalloc(rep.count * sizeof buffers[0]);
+   buffers = malloc(rep.count * sizeof buffers[0]);
    if (buffers == NULL) {
       _XEatData(dpy, rep.count * sizeof repBuffer);
       UnlockDisplay(dpy);

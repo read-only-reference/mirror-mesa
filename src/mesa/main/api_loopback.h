@@ -32,17 +32,8 @@
 
 struct _glapi_table;
 
-#if FEATURE_beginend
-
-extern void _mesa_loopback_init_api_table( struct _glapi_table *dest );
-
-#else /* FEATURE_beginend */
-
-static inline void
-_mesa_loopback_init_api_table( struct _glapi_table *dest )
-{
-}
-
-#endif /* FEATURE_beginend */
+extern void
+_mesa_loopback_init_api_table(const struct gl_context *ctx,
+                              struct _glapi_table *dest);
 
 #endif /* API_LOOPBACK_H */

@@ -42,15 +42,12 @@
 #include "swrast/s_context.h"
 
 
-#if FEATURE_texture_fxt1
-
-
 static void
 fxt1_encode (GLuint width, GLuint height, GLint comps,
              const void *source, GLint srcRowStride,
              void *dest, GLint destRowStride);
 
-void
+static void
 fxt1_decode_1 (const void *texture, GLint stride,
                GLint i, GLint j, GLubyte *rgba);
 
@@ -99,8 +96,7 @@ _mesa_texstore_rgb_fxt1(TEXSTORE_PARAMS)
    fxt1_encode(srcWidth, srcHeight, 3, pixels, srcRowStride,
                dst, dstRowStride);
 
-   if (tempImage)
-      free((void*) tempImage);
+   free((void*) tempImage);
 
    return GL_TRUE;
 }
@@ -149,8 +145,7 @@ _mesa_texstore_rgba_fxt1(TEXSTORE_PARAMS)
    fxt1_encode(srcWidth, srcHeight, 4, pixels, srcRowStride,
                dst, dstRowStride);
 
-   if (tempImage)
-      free((void*) tempImage);
+   free((void*) tempImage);
 
    return GL_TRUE;
 }
@@ -1363,9 +1358,7 @@ fxt1_encode (GLuint width, GLuint height, GLint comps,
    }
 
  cleanUp:
-   if (newSource != NULL) {
-      free(newSource);
-   }
+   free(newSource);
 }
 
 
@@ -1623,7 +1616,7 @@ fxt1_decode_1ALPHA (const GLubyte *code, GLint t, GLubyte *rgba)
 }
 
 
-void
+static void
 fxt1_decode_1 (const void *texture, GLint stride, /* in pixels */
                GLint i, GLint j, GLubyte *rgba)
 {
@@ -1650,6 +1643,3 @@ fxt1_decode_1 (const void *texture, GLint stride, /* in pixels */
 
    decode_1[mode](code, t, rgba);
 }
-
-
-#endif /* FEATURE_texture_fxt1 */

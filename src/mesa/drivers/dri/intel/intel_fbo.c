@@ -220,7 +220,7 @@ intel_quantize_num_samples(struct intel_screen *intel, unsigned num_samples)
  * Called via glRenderbufferStorageEXT() to set the format and allocate
  * storage for a user-created renderbuffer.
  */
-GLboolean
+static GLboolean
 intel_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffer *rb,
                                  GLenum internalFormat,
                                  GLuint width, GLuint height)
@@ -279,7 +279,6 @@ intel_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffer
 }
 
 
-#if FEATURE_OES_EGL_image
 static void
 intel_image_target_renderbuffer_storage(struct gl_context *ctx,
 					struct gl_renderbuffer *rb,
@@ -323,7 +322,6 @@ intel_image_target_renderbuffer_storage(struct gl_context *ctx,
    rb->_BaseFormat = _mesa_base_fbo_format(&intel->ctx,
 					   image->internal_format);
 }
-#endif
 
 /**
  * Called for each hardware renderbuffer when a _window_ is resized.
@@ -581,12 +579,12 @@ intel_renderbuffer_tile_offsets(struct intel_renderbuffer *irb,
    struct intel_region *region = irb->mt->region;
    uint32_t mask_x, mask_y;
 
-   intel_region_get_tile_masks(region, &mask_x, &mask_y);
+   intel_region_get_tile_masks(region, &mask_x, &mask_y, false);
 
    *tile_x = irb->draw_x & mask_x;
    *tile_y = irb->draw_y & mask_y;
    return intel_region_get_aligned_offset(region, irb->draw_x & ~mask_x,
-                                          irb->draw_y & ~mask_y);
+                                          irb->draw_y & ~mask_y, false);
 }
 
 /**
@@ -956,9 +954,6 @@ intel_fbo_init(struct intel_context *intel)
    intel->ctx.Driver.ResizeBuffers = intel_resize_buffers;
    intel->ctx.Driver.ValidateFramebuffer = intel_validate_framebuffer;
    intel->ctx.Driver.BlitFramebuffer = intel_blit_framebuffer;
-
-#if FEATURE_OES_EGL_image
    intel->ctx.Driver.EGLImageTargetRenderbufferStorage =
       intel_image_target_renderbuffer_storage;
-#endif   
 }

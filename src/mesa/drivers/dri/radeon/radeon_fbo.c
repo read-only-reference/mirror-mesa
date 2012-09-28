@@ -560,7 +560,6 @@ radeon_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffe
    return GL_TRUE;
 }
 
-#if FEATURE_OES_EGL_image
 static void
 radeon_image_target_renderbuffer_storage(struct gl_context *ctx,
                                          struct gl_renderbuffer *rb,
@@ -600,7 +599,6 @@ radeon_image_target_renderbuffer_storage(struct gl_context *ctx,
    rb->_BaseFormat = _mesa_base_fbo_format(radeon->glCtx,
                                            image->internal_format);
 }
-#endif
 
 /**
  * Called for each hardware renderbuffer when a _window_ is resized.
@@ -946,7 +944,6 @@ radeon_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 
 void radeon_fbo_init(struct radeon_context *radeon)
 {
-#if FEATURE_EXT_framebuffer_object
   radeon->glCtx->Driver.NewFramebuffer = radeon_new_framebuffer;
   radeon->glCtx->Driver.NewRenderbuffer = radeon_new_renderbuffer;
   radeon->glCtx->Driver.MapRenderbuffer = radeon_map_renderbuffer;
@@ -957,14 +954,9 @@ void radeon_fbo_init(struct radeon_context *radeon)
   radeon->glCtx->Driver.FinishRenderTexture = radeon_finish_render_texture;
   radeon->glCtx->Driver.ResizeBuffers = radeon_resize_buffers;
   radeon->glCtx->Driver.ValidateFramebuffer = radeon_validate_framebuffer;
-#endif
-#if FEATURE_EXT_framebuffer_blit
   radeon->glCtx->Driver.BlitFramebuffer = _mesa_meta_BlitFramebuffer;
-#endif
-#if FEATURE_OES_EGL_image
   radeon->glCtx->Driver.EGLImageTargetRenderbufferStorage =
 	  radeon_image_target_renderbuffer_storage;
-#endif
 }
 
   

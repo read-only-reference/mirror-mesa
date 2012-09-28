@@ -27,7 +27,17 @@ public:
   virtual MachineBasicBlock * EmitInstrWithCustomInserter(MachineInstr *MI,
       MachineBasicBlock * BB) const;
   virtual SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const;
-
+  virtual SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const;
+  void ReplaceNodeResults(SDNode * N,
+      SmallVectorImpl<SDValue> &Results,
+      SelectionDAG &DAG) const;
+  virtual SDValue LowerFormalArguments(
+                                      SDValue Chain,
+                                      CallingConv::ID CallConv,
+                                      bool isVarArg,
+                                      const SmallVectorImpl<ISD::InputArg> &Ins,
+                                      DebugLoc DL, SelectionDAG &DAG,
+                                      SmallVectorImpl<SDValue> &InVals) const;
 private:
   const R600InstrInfo * TII;
 
@@ -48,7 +58,10 @@ private:
 
   SDValue LowerSELECT_CC(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerSETCC(SDValue Op, SelectionDAG &DAG) const;
-
+  SDValue LowerInputFace(SDNode *Op, SelectionDAG &DAG) const;
+  SDValue LowerFPTOUINT(SDValue Op, SelectionDAG &DAG) const;
+  
+  bool isZero(SDValue Op) const;
 };
 
 } // End namespace llvm;

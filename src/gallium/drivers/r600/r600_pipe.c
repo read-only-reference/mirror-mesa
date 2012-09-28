@@ -174,7 +174,7 @@ static void r600_destroy_context(struct pipe_context *context)
 	if (rctx->custom_blend_decompress) {
 		rctx->context.delete_blend_state(&rctx->context, rctx->custom_blend_decompress);
 	}
-	util_unreference_framebuffer_state(&rctx->framebuffer);
+	util_unreference_framebuffer_state(&rctx->framebuffer.state);
 
 	r600_context_fini(rctx);
 
@@ -223,8 +223,8 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	rctx->ws = rscreen->ws;
 	rctx->family = rscreen->family;
 	rctx->chip_class = rscreen->chip_class;
+	rctx->keep_tiling_flags = rscreen->info.drm_minor >= 12;
 
-	LIST_INITHEAD(&rctx->dirty_states);
 	LIST_INITHEAD(&rctx->active_timer_queries);
 	LIST_INITHEAD(&rctx->active_nontimer_queries);
 	LIST_INITHEAD(&rctx->dirty);
@@ -238,12 +238,12 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	r600_init_query_functions(rctx);
 	r600_init_context_resource_functions(rctx);
 	r600_init_surface_functions(rctx);
-	rctx->context.draw_vbo = r600_draw_vbo;
+
 
 	rctx->context.create_video_decoder = vl_create_decoder;
 	rctx->context.create_video_buffer = vl_video_buffer_create;
 
-	r600_init_common_atoms(rctx);
+	r600_init_common_state_functions(rctx);
 
 	switch (rctx->chip_class) {
 	case R600:
@@ -287,7 +287,6 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 
 	rctx->cs = rctx->ws->cs_create(rctx->ws);
 	rctx->ws->cs_set_flush_callback(rctx->cs, r600_flush_from_winsys, rctx);
-	r600_emit_atom(rctx, &rctx->start_cs_cmd.atom);
 
         rctx->uploader = u_upload_create(&rctx->context, 1024 * 1024, 256,
                                          PIPE_BIND_INDEX_BUFFER |
@@ -300,6 +299,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		goto fail;
 	rctx->blitter->draw_rectangle = r600_draw_rectangle;
 
+	r600_begin_new_cs(rctx);
 	r600_get_backend_mask(rctx); /* this emits commands and must be last */
 
 	if (rctx->chip_class == R600)
@@ -407,6 +407,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_COMPUTE:
 	case PIPE_CAP_START_INSTANCE:
 	case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
+        case PIPE_CAP_TEXTURE_MULTISAMPLE:
 		return 1;
 
 	case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
@@ -664,6 +665,22 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 			/* XXX: This is what the proprietary driver reports, we
 			 * may want to use a different value. */
 			*max_local_size = 32768;
+		}
+		return sizeof(uint64_t);
+
+	case PIPE_COMPUTE_CAP_MAX_MEM_ALLOC_SIZE:
+		if (ret) {
+			uint64_t max_global_size;
+			uint64_t * max_mem_alloc_size = ret;
+			r600_get_compute_param(screen,
+					PIPE_COMPUTE_CAP_MAX_GLOBAL_SIZE,
+					&max_global_size);
+			/* OpenCL requres this value be at least
+			 * max(MAX_GLOBAL_SIZE / 4, 128 * 1024 *1024)
+			 * I'm really not sure what value to report here, but
+			 * MAX_GLOBAL_SIZE / 4 seems resonable.
+			 */
+			*max_mem_alloc_size = max_global_size / 4;
 		}
 		return sizeof(uint64_t);
 

@@ -599,15 +599,10 @@ _mesa_init_constants(struct gl_context *ctx)
    ctx->Const.MaxUniformBlockSize = 16384;
    ctx->Const.UniformBufferOffsetAlignment = 1;
 
-#if FEATURE_ARB_vertex_program
    init_program_limits(ctx, GL_VERTEX_PROGRAM_ARB, &ctx->Const.VertexProgram);
-#endif
-#if FEATURE_ARB_fragment_program
    init_program_limits(ctx, GL_FRAGMENT_PROGRAM_ARB, &ctx->Const.FragmentProgram);
-#endif
-#if FEATURE_ARB_geometry_shader4
    init_program_limits(ctx, MESA_GEOMETRY_PROGRAM, &ctx->Const.GeometryProgram);
-#endif
+
    ctx->Const.MaxProgramMatrices = MAX_PROGRAM_MATRICES;
    ctx->Const.MaxProgramMatrixStackDepth = MAX_PROGRAM_MATRIX_STACK_DEPTH;
 
@@ -617,23 +612,17 @@ _mesa_init_constants(struct gl_context *ctx)
    /* GL_ARB_draw_buffers */
    ctx->Const.MaxDrawBuffers = MAX_DRAW_BUFFERS;
 
-#if FEATURE_EXT_framebuffer_object
    ctx->Const.MaxColorAttachments = MAX_COLOR_ATTACHMENTS;
    ctx->Const.MaxRenderbufferSize = MAX_RENDERBUFFER_SIZE;
-#endif
 
-#if FEATURE_ARB_vertex_shader
    ctx->Const.MaxVertexTextureImageUnits = MAX_VERTEX_TEXTURE_IMAGE_UNITS;
    ctx->Const.MaxCombinedTextureImageUnits = MAX_COMBINED_TEXTURE_IMAGE_UNITS;
    ctx->Const.MaxVarying = MAX_VARYING;
-#endif
-#if FEATURE_ARB_geometry_shader4
    ctx->Const.MaxGeometryTextureImageUnits = MAX_GEOMETRY_TEXTURE_IMAGE_UNITS;
    ctx->Const.MaxVertexVaryingComponents = MAX_VERTEX_VARYING_COMPONENTS;
    ctx->Const.MaxGeometryVaryingComponents = MAX_GEOMETRY_VARYING_COMPONENTS;
    ctx->Const.MaxGeometryOutputVertices = MAX_GEOMETRY_OUTPUT_VERTICES;
    ctx->Const.MaxGeometryTotalOutputComponents = MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS;
-#endif
 
    /* Shading language version */
    if (_mesa_is_desktop_gl(ctx)) {
@@ -808,8 +797,8 @@ init_attrib_groups(struct gl_context *ctx)
    /* Miscellaneous */
    ctx->NewState = _NEW_ALL;
    ctx->NewDriverState = ~0;
-   ctx->ErrorValue = (GLenum) GL_NO_ERROR;
-   ctx->ResetStatus = (GLenum) GL_NO_ERROR;
+   ctx->ErrorValue = GL_NO_ERROR;
+   ctx->ResetStatus = GL_NO_ERROR;
    ctx->varying_vp_inputs = VERT_BIT_ALL;
 
    return GL_TRUE;
@@ -843,8 +832,8 @@ update_default_objects(struct gl_context *ctx)
  * This helps prevents a segfault when someone calls a GL function without
  * first checking if the extension's supported.
  */
-static int
-generic_nop(void)
+int
+_mesa_generic_nop(void)
 {
    GET_CURRENT_CONTEXT(ctx);
    _mesa_error(ctx, GL_INVALID_OPERATION,
@@ -871,12 +860,12 @@ _mesa_alloc_dispatch_table(int size)
    /* should never happen, but just in case */
    numEntries = MAX2(numEntries, size);
 
-   table = (struct _glapi_table *) malloc(numEntries * sizeof(_glapi_proc));
+   table = malloc(numEntries * sizeof(_glapi_proc));
    if (table) {
       _glapi_proc *entry = (_glapi_proc *) table;
       GLint i;
       for (i = 0; i < numEntries; i++) {
-         entry[i] = (_glapi_proc) generic_nop;
+         entry[i] = (_glapi_proc) _mesa_generic_nop;
       }
    }
    return table;
@@ -932,6 +921,10 @@ _mesa_initialize_context(struct gl_context *ctx,
    ctx->WinSysDrawBuffer = NULL;
    ctx->WinSysReadBuffer = NULL;
 
+   if (_mesa_is_desktop_gl(ctx)) {
+      _mesa_override_gl_version(ctx);
+   }
+
    /* misc one-time initializations */
    one_time_init(ctx);
 
@@ -961,7 +954,6 @@ _mesa_initialize_context(struct gl_context *ctx,
       return GL_FALSE;
    }
 
-#if FEATURE_dispatch
    /* setup the API dispatch tables */
    switch (ctx->API) {
 #if FEATURE_GL || FEATURE_ES2
@@ -985,7 +977,6 @@ _mesa_initialize_context(struct gl_context *ctx,
       _mesa_reference_shared_state(ctx, &ctx->Shared, NULL);
       return GL_FALSE;
    }
-#endif
    ctx->CurrentDispatch = ctx->Exec;
 
    ctx->FragmentProgram._MaintainTexEnvProgram
@@ -1008,8 +999,7 @@ _mesa_initialize_context(struct gl_context *ctx,
 
    switch (ctx->API) {
    case API_OPENGL:
-#if FEATURE_dlist
-      ctx->Save = _mesa_create_save_table();
+      ctx->Save = _mesa_create_save_table(ctx);
       if (!ctx->Save) {
          _mesa_reference_shared_state(ctx, &ctx->Shared, NULL);
 	 free(ctx->Exec);
@@ -1017,7 +1007,7 @@ _mesa_initialize_context(struct gl_context *ctx,
       }
 
       _mesa_install_save_vtxfmt( ctx, &ctx->ListState.ListVtxfmt );
-#endif
+      /* fall-through */
    case API_OPENGL_CORE:
       break;
    case API_OPENGLES:
@@ -1075,7 +1065,7 @@ _mesa_create_context(gl_api api,
    ASSERT(visual);
    /*ASSERT(driverContext);*/
 
-   ctx = (struct gl_context *) calloc(1, sizeof(struct gl_context));
+   ctx = calloc(1, sizeof(struct gl_context));
    if (!ctx)
       return NULL;
 
@@ -1138,12 +1128,9 @@ _mesa_free_context_data( struct gl_context *ctx )
    _mesa_free_varray_data(ctx);
    _mesa_free_transform_feedback(ctx);
 
-#if FEATURE_ARB_pixel_buffer_object
    _mesa_reference_buffer_object(ctx, &ctx->Pack.BufferObj, NULL);
    _mesa_reference_buffer_object(ctx, &ctx->Unpack.BufferObj, NULL);
    _mesa_reference_buffer_object(ctx, &ctx->DefaultPacking.BufferObj, NULL);
-#endif
-
    _mesa_reference_buffer_object(ctx, &ctx->Array.ArrayBufferObj, NULL);
 
    /* free dispatch tables */
@@ -1158,11 +1145,9 @@ _mesa_free_context_data( struct gl_context *ctx )
 
    _mesa_free_errors_data(ctx);
 
-   if (ctx->Extensions.String)
-      free((void *) ctx->Extensions.String);
+   free((void *)ctx->Extensions.String);
 
-   if (ctx->VersionString)
-      free(ctx->VersionString);
+   free(ctx->VersionString);
 
    /* unbind the context if it's currently bound */
    if (ctx == _mesa_get_current_context()) {

@@ -105,14 +105,15 @@ alloc_layout_array(unsigned num_slices, unsigned width, unsigned height)
  */
 static boolean
 llvmpipe_texture_layout(struct llvmpipe_screen *screen,
-                        struct llvmpipe_resource *lpr)
+                        struct llvmpipe_resource *lpr,
+                        boolean allocate)
 {
    struct pipe_resource *pt = &lpr->base;
    unsigned level;
    unsigned width = pt->width0;
    unsigned height = pt->height0;
    unsigned depth = pt->depth0;
-   size_t total_size = 0;
+   uint64_t total_size = 0;
 
    assert(LP_MAX_TEXTURE_2D_LEVELS <= LP_MAX_TEXTURE_LEVELS);
    assert(LP_MAX_TEXTURE_3D_LEVELS <= LP_MAX_TEXTURE_LEVELS);
@@ -139,6 +140,12 @@ llvmpipe_texture_layout(struct llvmpipe_screen *screen,
 
          lpr->row_stride[level] = align(nblocksx * block_size, 16);
 
+         /* if row_stride * height > LP_MAX_TEXTURE_SIZE */
+         if (lpr->row_stride[level] > LP_MAX_TEXTURE_SIZE / nblocksy) {
+            /* image too large */
+            goto fail;
+         }
+
          lpr->img_stride[level] = lpr->row_stride[level] * nblocksy;
       }
 
@@ -163,13 +170,23 @@ llvmpipe_texture_layout(struct llvmpipe_screen *screen,
 
          lpr->num_slices_faces[level] = num_slices;
 
-         lpr->layout[level] = alloc_layout_array(num_slices, width, height);
-         if (!lpr->layout[level]) {
-            goto fail;
+         if (allocate) {
+            lpr->layout[level] = alloc_layout_array(num_slices, width, height);
+            if (!lpr->layout[level]) {
+               goto fail;
+            }
          }
       }
 
-      total_size += lpr->num_slices_faces[level] * lpr->img_stride[level];
+      /* if img_stride * num_slices_faces > LP_MAX_TEXTURE_SIZE */
+      if (lpr->img_stride[level] >
+          LP_MAX_TEXTURE_SIZE / lpr->num_slices_faces[level]) {
+         /* volume too large */
+         goto fail;
+      }
+
+      total_size += (uint64_t) lpr->num_slices_faces[level]
+                  * (uint64_t) lpr->img_stride[level];
       if (total_size > LP_MAX_TEXTURE_SIZE) {
          goto fail;
       }
@@ -184,14 +201,26 @@ llvmpipe_texture_layout(struct llvmpipe_screen *screen,
 
 fail:
    for (level = 0; level <= pt->last_level; level++) {
-      if (lpr->layout[level]) {
-         FREE(lpr->layout[level]);
-      }
+      FREE(lpr->layout[level]);
    }
 
    return FALSE;
 }
 
+
+/**
+ * Check the size of the texture specified by 'res'.
+ * \return TRUE if OK, FALSE if too large.
+ */
+static boolean
+llvmpipe_can_create_resource(struct pipe_screen *screen,
+                             const struct pipe_resource *res)
+{
+   struct llvmpipe_resource lpr;
+   memset(&lpr, 0, sizeof(lpr));
+   lpr.base = *res;
+   return llvmpipe_texture_layout(llvmpipe_screen(screen), &lpr, FALSE);
+}
 
 
 static boolean
@@ -266,7 +295,7 @@ llvmpipe_resource_create(struct pipe_screen *_screen,
       }
       else {
          /* texture map */
-         if (!llvmpipe_texture_layout(screen, lpr))
+         if (!llvmpipe_texture_layout(screen, lpr, TRUE))
             goto fail;
          assert(lpr->layout[0][0] == LP_TEX_LAYOUT_NONE);
       }
@@ -1438,6 +1467,7 @@ llvmpipe_init_screen_resource_funcs(struct pipe_screen *screen)
    screen->resource_destroy = llvmpipe_resource_destroy;
    screen->resource_from_handle = llvmpipe_resource_from_handle;
    screen->resource_get_handle = llvmpipe_resource_get_handle;
+   screen->can_create_resource = llvmpipe_can_create_resource;
 }
 
 

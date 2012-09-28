@@ -124,12 +124,6 @@ def IL_mad          : SDNode<"AMDGPUISD::MAD", SDTIL_GenTernaryOp>;
 def IL_umul        : SDNode<"AMDGPUISD::UMUL"    , SDTIntBinOp,
     [SDNPCommutative, SDNPAssociative]>;
 
-//===----------------------------------------------------------------------===//
-// Vector functions
-//===----------------------------------------------------------------------===//
-def IL_vbuild     : SDNode<"AMDGPUISD::VBUILD", SDTIL_GenVecBuild,
-    []>;
-
 //===--------------------------------------------------------------------===//
 // Custom Pattern DAG Nodes
 //===--------------------------------------------------------------------===//
@@ -217,7 +211,7 @@ include "AMDILIntrinsics.td"
 // Custom Inserter for Branches and returns, this eventually will be a
 // seperate pass
 //===---------------------------------------------------------------------===//
-let isTerminator = 1, usesCustomInserter = 1 in {
+let isTerminator = 1, usesCustomInserter = 1, isBranch = 1, isBarrier = 1 in {
   def BRANCH : ILFormat<(outs), (ins brtarget:$target),
       "; Pseudo unconditional branch instruction",
       [(br bb:$target)]>;

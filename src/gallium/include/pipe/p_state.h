@@ -565,31 +565,26 @@ struct pipe_draw_info
 
 
 /**
- * Information to describe a resource_resolve call.
+ * Information to describe a blit call.
  */
-struct pipe_resolve_info
+struct pipe_blit_info
 {
    struct {
-      struct pipe_resource *res;
+      struct pipe_resource *resource;
       unsigned level;
-      unsigned layer;
-      int x0; /**< always left */
-      int y0; /**< always top */
-      int x1; /**< determines scale if PIPE_CAP_SCALED_RESOLVE is supported */
-      int y1; /**< determines scale if PIPE_CAP_SCALED_RESOLVE is supported */
-   } dst;
+      struct pipe_box box; /**< negative width, height only legal for src */
+      /* For pipe_surface-like format casting: */
+      enum pipe_format format; /**< must be supported for sampling (src)
+                               or rendering (dst), ZS is always supported */
+   } dst, src;
 
-   struct {
-      struct pipe_resource *res;
-      unsigned layer;
-      int x0;
-      int y0;
-      int x1; /**< may be < x0 only if PIPE_CAP_SCALED_RESOLVE is supported */
-      int y1; /**< may be < y1 even if PIPE_CAP_SCALED_RESOLVE not supported */
-   } src;
+   unsigned mask; /**< bitmask of PIPE_MASK_R/G/B/A/Z/S */
+   unsigned filter; /**< PIPE_TEX_FILTER_* */
 
-   unsigned mask; /**< PIPE_MASK_RGBA, Z, S or ZS */
+   boolean scissor_enable;
+   struct pipe_scissor_state scissor;
 };
+
 
 /**
  * Structure used as a header for serialized LLVM programs.

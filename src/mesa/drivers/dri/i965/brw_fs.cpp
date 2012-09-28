@@ -528,8 +528,6 @@ fs_visitor::setup_uniform_values(int loc, const glsl_type *type)
       for (unsigned int i = 0; i < type->vector_elements; i++) {
 	 unsigned int param = c->prog_data.nr_params++;
 
-	 assert(param < ARRAY_SIZE(c->prog_data.param));
-
 	 this->param_index[param] = loc;
 	 this->param_offset[param] = i;
       }
@@ -1413,14 +1411,6 @@ fs_visitor::propagate_constants()
 }
 
 
-/**
- * Attempts to move immediate constants into the immediate
- * constant slot of following instructions.
- *
- * Immediate constants are a bit tricky -- they have to be in the last
- * operand slot, you can't do abs/negate on them,
- */
-
 bool
 fs_visitor::opt_algebraic()
 {
@@ -1957,6 +1947,12 @@ fs_visitor::run()
    brw_wm_payload_setup(brw, c);
 
    if (c->dispatch_width == 16) {
+      /* We have to do a compaction pass now, or the one at the end of
+       * execution will squash down where our prog_offset start needs
+       * to be.
+       */
+      brw_compact_instructions(p);
+
       /* align to 64 byte boundary. */
       while ((c->func.nr_insn * sizeof(struct brw_instruction)) % 64) {
 	 brw_NOP(p);

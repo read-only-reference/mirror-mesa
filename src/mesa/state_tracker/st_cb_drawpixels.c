@@ -71,8 +71,6 @@
 #include "cso_cache/cso_context.h"
 
 
-#if FEATURE_drawpix
-
 /**
  * Check if the given program is:
  * 0: MOVE result.color, fragment.color;
@@ -875,8 +873,8 @@ draw_stencil_pixels(struct gl_context *ctx, GLint x, GLint y,
    pixels = _mesa_map_pbo_source(ctx, &clippedUnpack, pixels);
    assert(pixels);
 
-   sValues = (GLubyte *) malloc(width * sizeof(GLubyte));
-   zValues = (GLuint *) malloc(width * sizeof(GLuint));
+   sValues = malloc(width * sizeof(GLubyte));
+   zValues = malloc(width * sizeof(GLuint));
 
    if (sValues && zValues) {
       GLint row;
@@ -1598,7 +1596,7 @@ st_CopyPixels(struct gl_context *ctx, GLint srcx, GLint srcy,
       /* copy image from ptRead surface to ptTex surface */
       if (type == GL_COLOR) {
          /* alternate path using get/put_tile() */
-         GLfloat *buf = (GLfloat *) malloc(width * height * 4 * sizeof(GLfloat));
+         GLfloat *buf = malloc(width * height * 4 * sizeof(GLfloat));
          enum pipe_format readFormat, drawFormat;
          readFormat = util_format_linear(rbRead->texture->format);
          drawFormat = util_format_linear(pt->format);
@@ -1610,7 +1608,7 @@ st_CopyPixels(struct gl_context *ctx, GLint srcx, GLint srcy,
       }
       else {
          /* GL_DEPTH */
-         GLuint *buf = (GLuint *) malloc(width * height * sizeof(GLuint));
+         GLuint *buf = malloc(width * height * sizeof(GLuint));
          pipe_get_tile_z(pipe, ptRead, 0, 0, readW, readH, buf);
          pipe_put_tile_z(pipe, ptTex, pack.SkipPixels, pack.SkipRows,
                          readW, readH, buf);
@@ -1661,5 +1659,3 @@ st_destroy_drawpix(struct st_context *st)
    if (st->drawpix.vert_shaders[1])
       cso_delete_vertex_shader(st->cso_context, st->drawpix.vert_shaders[1]);
 }
-
-#endif /* FEATURE_drawpix */

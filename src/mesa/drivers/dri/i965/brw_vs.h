@@ -104,7 +104,6 @@ struct brw_vs_compile {
    struct brw_reg tmp;
 
    struct {	
-       bool used_in_src;
        struct brw_reg reg;
    } output_regs[128];
 
@@ -123,5 +122,8 @@ bool brw_vs_precompile(struct gl_context *ctx, struct gl_shader_program *prog);
 void brw_vs_debug_recompile(struct brw_context *brw,
                             struct gl_shader_program *prog,
                             const struct brw_vs_prog_key *key);
+bool brw_vs_prog_data_compare(const void *a, const void *b,
+                              int aux_size, const void *key);
+void brw_vs_prog_data_free(const void *in_prog_data);
 
 #endif

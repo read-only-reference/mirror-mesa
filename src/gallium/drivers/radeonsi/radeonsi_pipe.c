@@ -172,6 +172,8 @@ static void r600_destroy_context(struct pipe_context *context)
 {
 	struct r600_context *rctx = (struct r600_context *)context;
 
+	si_resource_reference(&rctx->border_color_table, NULL);
+
 	if (rctx->dummy_pixel_shader) {
 		rctx->context.delete_fs_state(&rctx->context, rctx->dummy_pixel_shader);
 	}
@@ -217,10 +219,9 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	switch (rctx->chip_class) {
 	case TAHITI:
 		si_init_state_functions(rctx);
-		if (si_context_init(rctx)) {
-			r600_destroy_context(&rctx->context);
-			return NULL;
-		}
+		LIST_INITHEAD(&rctx->active_query_list);
+		rctx->cs = rctx->ws->cs_create(rctx->ws);
+		rctx->max_db = 8;
 		si_init_config(rctx);
 		break;
 	default:
@@ -292,7 +293,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	switch (param) {
 	/* Supported features (boolean caps). */
-	case PIPE_CAP_NPOT_TEXTURES:
 	case PIPE_CAP_TWO_SIDED_STENCIL:
 	case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
 	case PIPE_CAP_ANISOTROPIC_FILTER:
@@ -324,6 +324,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_USER_INDEX_BUFFERS:
 	case PIPE_CAP_USER_CONSTANT_BUFFERS:
 	case PIPE_CAP_START_INSTANCE:
+	case PIPE_CAP_NPOT_TEXTURES:
 		return 1;
 
 	case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
@@ -343,6 +344,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
+	case PIPE_CAP_TEXTURE_MULTISAMPLE:
 		return 0;
 
 	/* Stream output. */
@@ -367,7 +369,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
 			return 15;
 	case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
-		return rscreen->info.drm_minor >= 9 ? 16384 : 0;
+		return /*rscreen->info.drm_minor >= 9 ? 16384 :*/ 0;
 	case PIPE_CAP_MAX_COMBINED_SAMPLERS:
 		return 32;
 
@@ -450,9 +452,9 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		/* FIXME Isn't this equal to TEMPS? */
 		return 1; /* Max native address registers */
 	case PIPE_SHADER_CAP_MAX_CONSTS:
-		return R600_MAX_CONST_BUFFER_SIZE;
+		return 64;
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
-		return R600_MAX_CONST_BUFFERS;
+		return 1;
 	case PIPE_SHADER_CAP_MAX_PREDS:
 		return 0; /* FIXME */
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:

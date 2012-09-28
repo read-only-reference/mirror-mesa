@@ -253,6 +253,35 @@ brw_wm_payload_setup(struct brw_context *brw,
    }
 }
 
+bool
+brw_wm_prog_data_compare(const void *in_a, const void *in_b,
+                         int aux_size, const void *in_key)
+{
+   const struct brw_wm_prog_data *a = in_a;
+   const struct brw_wm_prog_data *b = in_b;
+
+   /* Compare all the struct up to the pointers. */
+   if (memcmp(a, b, offsetof(struct brw_wm_prog_data, param)))
+      return false;
+
+   if (memcmp(a->param, b->param, a->nr_params * sizeof(void *)))
+      return false;
+
+   if (memcmp(a->pull_param, b->pull_param, a->nr_pull_params * sizeof(void *)))
+      return false;
+
+   return true;
+}
+
+void
+brw_wm_prog_data_free(const void *in_prog_data)
+{
+   const struct brw_wm_prog_data *prog_data = in_prog_data;
+
+   ralloc_free((void *)prog_data->param);
+   ralloc_free((void *)prog_data->pull_param);
+}
+
 /**
  * All Mesa program -> GPU code generation goes through this function.
  * Depending on the instructions used (i.e. flow control instructions)
@@ -266,7 +295,11 @@ bool do_wm_prog(struct brw_context *brw,
    struct intel_context *intel = &brw->intel;
    struct brw_wm_compile *c;
    const GLuint *program;
+   struct gl_shader *fs = NULL;
    GLuint program_size;
+
+   if (prog)
+      fs = prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
 
    c = brw->wm.compile_data;
    if (c == NULL) {
@@ -290,6 +323,28 @@ bool do_wm_prog(struct brw_context *brw,
       c->vreg = vreg;
       c->refs = refs;
    }
+
+   /* Allocate the references to the uniforms that will end up in the
+    * prog_data associated with the compiled program, and which will be freed
+    * by the state cache.
+    */
+   if (fs) {
+      int param_count = fs->num_uniform_components;
+      /* The backend also sometimes adds params for texture size. */
+      param_count += 2 * BRW_MAX_TEX_UNIT;
+
+      c->prog_data.param = rzalloc_array(c, const float *, param_count);
+      c->prog_data.pull_param = rzalloc_array(c, const float *, param_count);
+   } else {
+      /* brw_wm_pass0.c will also add references to 0.0 and 1.0 which are
+       * uploaded as push parameters.
+       */
+      int param_count = (fp->program.Base.Parameters->NumParameters + 2) * 4;
+      c->prog_data.param = rzalloc_array(c, const float *, param_count);
+      /* The old backend never does pull constants. */
+      c->prog_data.pull_param = NULL;
+   }
+
    memcpy(&c->key, key, sizeof(*key));
 
    c->fp = fp;
@@ -436,6 +491,8 @@ brw_populate_sampler_prog_key_data(struct gl_context *ctx,
 				   const struct gl_program *prog,
 				   struct brw_sampler_prog_key_data *key)
 {
+   struct intel_context *intel = intel_context(ctx);
+
    for (int s = 0; s < MAX_SAMPLERS; s++) {
       key->swizzles[s] = SWIZZLE_NOOP;
 
@@ -449,61 +506,22 @@ brw_populate_sampler_prog_key_data(struct gl_context *ctx,
 	 const struct gl_texture_object *t = unit->_Current;
 	 const struct gl_texture_image *img = t->Image[0][t->BaseLevel];
 	 struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit_id);
-	 int swizzles[SWIZZLE_NIL + 1] = {
-	    SWIZZLE_X,
-	    SWIZZLE_Y,
-	    SWIZZLE_Z,
-	    SWIZZLE_W,
-	    SWIZZLE_ZERO,
-	    SWIZZLE_ONE,
-	    SWIZZLE_NIL
-	 };
 
-	 if (img->_BaseFormat == GL_DEPTH_COMPONENT ||
-	     img->_BaseFormat == GL_DEPTH_STENCIL) {
-	    /* We handle GL_DEPTH_TEXTURE_MODE here instead of as surface
-	     * format overrides because shadow comparison always returns the
-	     * result of the comparison in all channels anyway.
-	     */
-	    switch (t->DepthMode) {
-	    case GL_ALPHA:
-	       swizzles[0] = SWIZZLE_ZERO;
-	       swizzles[1] = SWIZZLE_ZERO;
-	       swizzles[2] = SWIZZLE_ZERO;
-	       swizzles[3] = SWIZZLE_X;
-	       break;
-	    case GL_LUMINANCE:
-	       swizzles[0] = SWIZZLE_X;
-	       swizzles[1] = SWIZZLE_X;
-	       swizzles[2] = SWIZZLE_X;
-	       swizzles[3] = SWIZZLE_ONE;
-	       break;
-	    case GL_INTENSITY:
-	       swizzles[0] = SWIZZLE_X;
-	       swizzles[1] = SWIZZLE_X;
-	       swizzles[2] = SWIZZLE_X;
-	       swizzles[3] = SWIZZLE_X;
-	       break;
-	    case GL_RED:
-	       swizzles[0] = SWIZZLE_X;
-	       swizzles[1] = SWIZZLE_ZERO;
-	       swizzles[2] = SWIZZLE_ZERO;
-	       swizzles[3] = SWIZZLE_ONE;
-	       break;
-	    }
-	 }
+         const bool alpha_depth = t->DepthMode == GL_ALPHA &&
+            (img->_BaseFormat == GL_DEPTH_COMPONENT ||
+             img->_BaseFormat == GL_DEPTH_STENCIL);
+
+         /* Haswell handles texture swizzling as surface format overrides
+          * (except for GL_ALPHA); all other platforms need MOVs in the shader.
+          */
+         if (!intel->is_haswell || alpha_depth)
+            key->swizzles[s] = brw_get_texture_swizzle(t);
 
 	 if (img->InternalFormat == GL_YCBCR_MESA) {
 	    key->yuvtex_mask |= 1 << s;
 	    if (img->TexFormat == MESA_FORMAT_YCBCR)
 		key->yuvtex_swap_mask |= 1 << s;
 	 }
-
-	 key->swizzles[s] =
-	    MAKE_SWIZZLE4(swizzles[GET_SWZ(t->_Swizzle, 0)],
-			  swizzles[GET_SWZ(t->_Swizzle, 1)],
-			  swizzles[GET_SWZ(t->_Swizzle, 2)],
-			  swizzles[GET_SWZ(t->_Swizzle, 3)]);
 
 	 if (sampler->MinFilter != GL_NEAREST &&
 	     sampler->MagFilter != GL_NEAREST) {

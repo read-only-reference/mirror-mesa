@@ -41,9 +41,6 @@
 #include "r600_resource.h"
 #include "sid.h"
 
-#define R600_MAX_CONST_BUFFERS 1
-#define R600_MAX_CONST_BUFFER_SIZE 4096
-
 #ifdef PIPE_ARCH_BIG_ENDIAN
 #define R600_BIG_ENDIAN 1
 #else
@@ -79,6 +76,7 @@ struct si_pipe_sampler_view {
 
 struct si_pipe_sampler_state {
 	uint32_t			val[4];
+	float				border_color[4];
 };
 
 /* needed for blitter save */
@@ -140,7 +138,8 @@ struct r600_context {
 	boolean				alpha_ref_dirty;
 	struct r600_textures_info	vs_samplers;
 	struct r600_textures_info	ps_samplers;
-	boolean				shader_dirty;
+	struct si_resource		*border_color_table;
+	unsigned			border_color_offset;
 
 	struct u_upload_mgr	        *uploader;
 	struct util_slab_mempool	pool_transfers;

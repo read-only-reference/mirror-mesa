@@ -103,6 +103,7 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 	unsigned num_sgprs, num_user_sgprs;
 	int ninterp = 0;
 	boolean have_linear = FALSE, have_centroid = FALSE, have_perspective = FALSE;
+	unsigned fragcoord_interp_mode = 0;
 	unsigned spi_baryc_cntl, spi_ps_input_ena;
 	uint64_t va;
 
@@ -116,6 +117,20 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 
 	db_shader_control = S_02880C_Z_ORDER(V_02880C_EARLY_Z_THEN_LATE_Z);
 	for (i = 0; i < shader->shader.ninput; i++) {
+		if (shader->shader.input[i].name == TGSI_SEMANTIC_POSITION) {
+			if (shader->shader.input[i].centroid) {
+				/* fragcoord_interp_mode will be written to
+				 * SPI_BARYC_CNTL.POS_FLOAT_LOCATION
+				 * Possible vaules:
+				 * 0 -> Position = pixel center (default)
+				 * 1 -> Position = pixel centroid
+				 * 2 -> Position = iterated sample number XXX:
+				 *                        What does this mean?
+			 	 */
+				fragcoord_interp_mode = 1;
+			}
+			continue;
+		}
 		ninterp++;
 		/* XXX: Flat shading hangs the GPU */
 		if (shader->shader.input[i].interpolate == TGSI_INTERPOLATE_CONSTANT ||
@@ -166,20 +181,20 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 	if (have_linear)
 		spi_baryc_cntl |= have_centroid ?
 			S_0286E0_LINEAR_CENTROID_CNTL(1) : S_0286E0_LINEAR_CENTER_CNTL(1);
+	spi_baryc_cntl |= S_0286E0_POS_FLOAT_LOCATION(fragcoord_interp_mode);
 
 	si_pm4_set_reg(pm4, R_0286E0_SPI_BARYC_CNTL, spi_baryc_cntl);
 	spi_ps_input_ena = shader->spi_ps_input_ena;
 	/* we need to enable at least one of them, otherwise we hang the GPU */
-	if (!G_0286CC_PERSP_SAMPLE_ENA(spi_ps_input_ena) &&
-	    !G_0286CC_PERSP_CENTROID_ENA(spi_ps_input_ena) &&
-	    !G_0286CC_PERSP_PULL_MODEL_ENA(spi_ps_input_ena) &&
-	    !G_0286CC_LINEAR_SAMPLE_ENA(spi_ps_input_ena) &&
-	    !G_0286CC_LINEAR_CENTER_ENA(spi_ps_input_ena) &&
-	    !G_0286CC_LINEAR_CENTROID_ENA(spi_ps_input_ena) &&
-	    !G_0286CC_LINE_STIPPLE_TEX_ENA(spi_ps_input_ena)) {
+	assert(G_0286CC_PERSP_SAMPLE_ENA(spi_ps_input_ena) ||
+	    G_0286CC_PERSP_CENTER_ENA(spi_ps_input_ena) ||
+	    G_0286CC_PERSP_CENTROID_ENA(spi_ps_input_ena) ||
+	    G_0286CC_PERSP_PULL_MODEL_ENA(spi_ps_input_ena) ||
+	    G_0286CC_LINEAR_SAMPLE_ENA(spi_ps_input_ena) ||
+	    G_0286CC_LINEAR_CENTER_ENA(spi_ps_input_ena) ||
+	    G_0286CC_LINEAR_CENTROID_ENA(spi_ps_input_ena) ||
+	    G_0286CC_LINE_STIPPLE_TEX_ENA(spi_ps_input_ena));
 
-		spi_ps_input_ena |= S_0286CC_PERSP_SAMPLE_ENA(1);
-	}
 	si_pm4_set_reg(pm4, R_0286CC_SPI_PS_INPUT_ENA, spi_ps_input_ena);
 	si_pm4_set_reg(pm4, R_0286D0_SPI_PS_INPUT_ADDR, spi_ps_input_ena);
 	si_pm4_set_reg(pm4, R_0286D8_SPI_PS_IN_CONTROL, spi_ps_in_control);
@@ -391,12 +406,10 @@ static void si_update_derived_state(struct r600_context *rctx)
 
 	if (ps_dirty) {
 		si_pm4_bind_state(rctx, ps, rctx->ps_shader->current->pm4);
-		rctx->shader_dirty = true;
 	}
 
-	if (rctx->shader_dirty) {
+	if (si_pm4_state_changed(rctx, ps) || si_pm4_state_changed(rctx, vs)) {
 		si_update_spi_map(rctx);
-		rctx->shader_dirty = false;
 	}
 }
 
@@ -440,7 +453,7 @@ static void si_vertex_buffer_update(struct r600_context *rctx)
 		si_pm4_sh_data_add(pm4, va & 0xFFFFFFFF);
 		si_pm4_sh_data_add(pm4, (S_008F04_BASE_ADDRESS_HI(va >> 32) |
 					 S_008F04_STRIDE(vb->stride)));
-		si_pm4_sh_data_add(pm4, (vb->buffer->width0 - offset) /
+		si_pm4_sh_data_add(pm4, (vb->buffer->width0 - vb->buffer_offset) /
 					 MAX2(vb->stride, 1));
 		si_pm4_sh_data_add(pm4, rctx->vertex_elements->rsrc_word3[i]);
 
@@ -487,26 +500,20 @@ static void si_state_draw(struct r600_context *rctx,
 	si_pm4_cmd_end(pm4, rctx->predicate_drawing);
 
 	if (info->indexed) {
+		uint32_t max_size = (ib->buffer->width0 - ib->offset) /
+				 rctx->index_buffer.index_size;
 		uint64_t va;
 		va = r600_resource_va(&rctx->screen->screen, ib->buffer);
 		va += ib->offset;
 
 		si_pm4_add_bo(pm4, (struct si_resource *)ib->buffer, RADEON_USAGE_READ);
-		si_pm4_cmd_begin(pm4, PKT3_DRAW_INDEX_2);
-		si_pm4_cmd_add(pm4, (ib->buffer->width0 - ib->offset) /
-					rctx->index_buffer.index_size);
-		si_pm4_cmd_add(pm4, va);
-		si_pm4_cmd_add(pm4, (va >> 32UL) & 0xFF);
-		si_pm4_cmd_add(pm4, info->count);
-		si_pm4_cmd_add(pm4, V_0287F0_DI_SRC_SEL_DMA);
-		si_pm4_cmd_end(pm4, rctx->predicate_drawing);
+		si_cmd_draw_index_2(pm4, max_size, va, info->count,
+				    V_0287F0_DI_SRC_SEL_DMA,
+				    rctx->predicate_drawing);
 	} else {
-		si_pm4_cmd_begin(pm4, PKT3_DRAW_INDEX_AUTO);
-		si_pm4_cmd_add(pm4, info->count);
-		si_pm4_cmd_add(pm4, V_0287F0_DI_SRC_SEL_AUTO_INDEX |
-			       (info->count_from_stream_output ?
-				S_0287F0_USE_OPAQUE(1) : 0));
-		si_pm4_cmd_end(pm4, rctx->predicate_drawing);
+		uint32_t initiator = V_0287F0_DI_SRC_SEL_AUTO_INDEX;
+		initiator |= S_0287F0_USE_OPAQUE(!!info->count_from_stream_output);
+		si_cmd_draw_index_auto(pm4, info->count, initiator, rctx->predicate_drawing);
 	}
 	si_pm4_set_state(rctx, draw, pm4);
 }

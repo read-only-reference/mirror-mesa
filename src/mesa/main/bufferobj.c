@@ -87,13 +87,11 @@ get_buffer_target(struct gl_context *ctx, GLenum target)
       return &ctx->CopyReadBuffer;
    case GL_COPY_WRITE_BUFFER:
       return &ctx->CopyWriteBuffer;
-#if FEATURE_EXT_transform_feedback
    case GL_TRANSFORM_FEEDBACK_BUFFER:
       if (ctx->Extensions.EXT_transform_feedback) {
          return &ctx->TransformFeedback.CurrentBuffer;
       }
       break;
-#endif
    case GL_TEXTURE_BUFFER:
       if (_mesa_is_desktop_gl(ctx)
           && ctx->Extensions.ARB_texture_buffer_object) {
@@ -264,8 +262,7 @@ _mesa_delete_buffer_object(struct gl_context *ctx,
 {
    (void) ctx;
 
-   if (bufObj->Data)
-      free(bufObj->Data);
+   free(bufObj->Data);
 
    /* assign strange values here to help w/ debugging */
    bufObj->RefCount = -1000;
@@ -1671,7 +1668,6 @@ _mesa_FlushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr length)
 }
 
 
-#if FEATURE_APPLE_object_purgeable
 static GLenum
 buffer_object_purgeable(struct gl_context *ctx, GLuint name, GLenum option)
 {
@@ -2046,8 +2042,6 @@ _mesa_GetObjectParameterivAPPLE(GLenum objectType, GLuint name, GLenum pname,
    }
 }
 
-#endif /* FEATURE_APPLE_object_purgeable */
-
 static void
 set_ubo_binding(struct gl_context *ctx,
 		int index,
@@ -2338,7 +2332,9 @@ _mesa_init_bufferobj_dispatch(struct gl_context *ctx, struct _glapi_table *disp)
    SET_GenBuffersARB(disp, _mesa_GenBuffersARB);
    SET_GetBufferParameterivARB(disp, _mesa_GetBufferParameterivARB);
    SET_GetBufferPointervARB(disp, _mesa_GetBufferPointervARB);
-   SET_GetBufferSubDataARB(disp, _mesa_GetBufferSubDataARB);
+   if (ctx->API != API_OPENGLES2) {
+      SET_GetBufferSubDataARB(disp, _mesa_GetBufferSubDataARB);
+   }
    SET_IsBufferARB(disp, _mesa_IsBufferARB);
    SET_MapBufferARB(disp, _mesa_MapBufferARB);
    SET_UnmapBufferARB(disp, _mesa_UnmapBufferARB);

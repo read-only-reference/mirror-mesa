@@ -21,6 +21,8 @@
 
 SUBDIRS = src
 
+ACLOCAL_AMFLAGS = -I m4
+
 doxygen:
 	cd doxygen && $(MAKE)
 
@@ -52,7 +54,7 @@ distclean-local:
 
 # Rules for making release tarballs
 
-PACKAGE_VERSION=9.0-devel
+PACKAGE_VERSION=9.1-devel
 PACKAGE_DIR = Mesa-$(PACKAGE_VERSION)
 PACKAGE_NAME = MesaLib-$(PACKAGE_VERSION)
 

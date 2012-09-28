@@ -67,5 +67,12 @@ _mesa_EnableClientState( GLenum cap );
 extern void GLAPIENTRY
 _mesa_DisableClientState( GLenum cap );
 
+extern void
+_mesa_set_multisample(struct gl_context *ctx, GLboolean state);
+
+extern void
+_mesa_set_framebuffer_srgb(struct gl_context *ctx, GLboolean state);
+
+
 
 #endif

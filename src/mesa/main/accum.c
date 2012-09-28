@@ -36,9 +36,6 @@
 #include "main/dispatch.h"
 
 
-#if FEATURE_accum
-
-
 void GLAPIENTRY
 _mesa_ClearAccum( GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha )
 {
@@ -289,7 +286,7 @@ accum_or_load(struct gl_context *ctx, GLfloat value,
       GLuint i, j;
       GLfloat (*rgba)[4];
 
-      rgba = (GLfloat (*)[4]) malloc(width * 4 * sizeof(GLfloat));
+      rgba = malloc(width * 4 * sizeof(GLfloat));
       if (rgba) {
          for (j = 0; j < height; j++) {
             GLshort *acc = (GLshort *) accMap;
@@ -381,8 +378,8 @@ accum_return(struct gl_context *ctx, GLfloat value,
          GLint i, j;
          GLfloat (*rgba)[4], (*dest)[4];
 
-         rgba = (GLfloat (*)[4]) malloc(width * 4 * sizeof(GLfloat));
-         dest = (GLfloat (*)[4]) malloc(width * 4 * sizeof(GLfloat));
+         rgba = malloc(width * 4 * sizeof(GLfloat));
+         dest = malloc(width * 4 * sizeof(GLfloat));
 
          if (rgba && dest) {
             for (j = 0; j < height; j++) {
@@ -494,9 +491,6 @@ _mesa_accum(struct gl_context *ctx, GLenum op, GLfloat value)
       break;
    }
 }
-
-
-#endif /* FEATURE_accum */
 
 
 void 

@@ -249,16 +249,24 @@ defm V_CMPSX_NEQ_F64 : VOPC_64 <0x0000007d, "V_CMPSX_NEQ_F64", []>;
 defm V_CMPSX_NLT_F64 : VOPC_64 <0x0000007e, "V_CMPSX_NLT_F64", []>;
 defm V_CMPSX_TRU_F64 : VOPC_64 <0x0000007f, "V_CMPSX_TRU_F64", []>;
 defm V_CMP_F_I32 : VOPC_32 <0x00000080, "V_CMP_F_I32", []>;
-defm V_CMP_LT_I32 : VOPC_32 <0x00000081, "V_CMP_LT_I32", []>;
+defm V_CMP_LT_I32 : VOPC_32 <0x00000081, "V_CMP_LT_I32",
+  [(set VCCReg:$dst, (setcc (i32 AllReg_32:$src0), VReg_32:$src1, SETLT))]
+>;
 defm V_CMP_EQ_I32 : VOPC_32 <0x00000082, "V_CMP_EQ_I32",
   [(set VCCReg:$dst, (setcc (i32 AllReg_32:$src0), VReg_32:$src1, SETEQ))]
 >;
-defm V_CMP_LE_I32 : VOPC_32 <0x00000083, "V_CMP_LE_I32", []>;
-defm V_CMP_GT_I32 : VOPC_32 <0x00000084, "V_CMP_GT_I32", []>;
+defm V_CMP_LE_I32 : VOPC_32 <0x00000083, "V_CMP_LE_I32",
+  [(set VCCReg:$dst, (setcc (i32 AllReg_32:$src0), VReg_32:$src1, SETLE))]
+>;
+defm V_CMP_GT_I32 : VOPC_32 <0x00000084, "V_CMP_GT_I32",
+  [(set VCCReg:$dst, (setcc (i32 AllReg_32:$src0), VReg_32:$src1, SETGT))]
+>;
 defm V_CMP_NE_I32 : VOPC_32 <0x00000085, "V_CMP_NE_I32",
   [(set VCCReg:$dst, (setcc (i32 AllReg_32:$src0), VReg_32:$src1, SETNE))]
 >;
-defm V_CMP_GE_I32 : VOPC_32 <0x00000086, "V_CMP_GE_I32", []>;
+defm V_CMP_GE_I32 : VOPC_32 <0x00000086, "V_CMP_GE_I32",
+  [(set VCCReg:$dst, (setcc (i32 AllReg_32:$src0), VReg_32:$src1, SETGE))]
+>;
 defm V_CMP_T_I32 : VOPC_32 <0x00000087, "V_CMP_T_I32", []>;
 defm V_CMPX_F_I32 : VOPC_32 <0x00000090, "V_CMPX_F_I32", []>;
 defm V_CMPX_LT_I32 : VOPC_32 <0x00000091, "V_CMPX_LT_I32", []>;
@@ -503,11 +511,13 @@ defm V_READFIRSTLANE_B32 : VOP1_32 <0x00000002, "V_READFIRSTLANE_B32", []>;
 //defm V_CVT_I32_F64 : VOP1_32 <0x00000003, "V_CVT_I32_F64", []>;
 //defm V_CVT_F64_I32 : VOP1_64 <0x00000004, "V_CVT_F64_I32", []>;
 defm V_CVT_F32_I32 : VOP1_32 <0x00000005, "V_CVT_F32_I32",
-  [(set VReg_32:$dst, (fp_to_sint AllReg_32:$src0))]
+  [(set VReg_32:$dst, (sint_to_fp AllReg_32:$src0))]
 >;
 //defm V_CVT_F32_U32 : VOP1_32 <0x00000006, "V_CVT_F32_U32", []>;
 //defm V_CVT_U32_F32 : VOP1_32 <0x00000007, "V_CVT_U32_F32", []>;
-//defm V_CVT_I32_F32 : VOP1_32 <0x00000008, "V_CVT_I32_F32", []>;
+defm V_CVT_I32_F32 : VOP1_32 <0x00000008, "V_CVT_I32_F32",
+  [(set VReg_32:$dst, (fp_to_sint AllReg_32:$src0))]
+>;
 defm V_MOV_FED_B32 : VOP1_32 <0x00000009, "V_MOV_FED_B32", []>;
 ////def V_CVT_F16_F32 : VOP1_F16 <0x0000000a, "V_CVT_F16_F32", []>;
 //defm V_CVT_F32_F16 : VOP1_32 <0x0000000b, "V_CVT_F32_F16", []>;
@@ -522,12 +532,20 @@ defm V_MOV_FED_B32 : VOP1_32 <0x00000009, "V_MOV_FED_B32", []>;
 //defm V_CVT_F32_UBYTE3 : VOP1_32 <0x00000014, "V_CVT_F32_UBYTE3", []>;
 //defm V_CVT_U32_F64 : VOP1_32 <0x00000015, "V_CVT_U32_F64", []>;
 //defm V_CVT_F64_U32 : VOP1_64 <0x00000016, "V_CVT_F64_U32", []>;
-defm V_FRACT_F32 : VOP1_32 <0x00000020, "V_FRACT_F32", []>;
+defm V_FRACT_F32 : VOP1_32 <0x00000020, "V_FRACT_F32",
+  [(set VReg_32:$dst, (AMDGPUfract AllReg_32:$src0))]
+>;
 defm V_TRUNC_F32 : VOP1_32 <0x00000021, "V_TRUNC_F32", []>;
 defm V_CEIL_F32 : VOP1_32 <0x00000022, "V_CEIL_F32", []>;
-defm V_RNDNE_F32 : VOP1_32 <0x00000023, "V_RNDNE_F32", []>;
-defm V_FLOOR_F32 : VOP1_32 <0x00000024, "V_FLOOR_F32", []>;
-defm V_EXP_F32 : VOP1_32 <0x00000025, "V_EXP_F32", []>;
+defm V_RNDNE_F32 : VOP1_32 <0x00000023, "V_RNDNE_F32",
+  [(set VReg_32:$dst, (frint AllReg_32:$src0))]
+>;
+defm V_FLOOR_F32 : VOP1_32 <0x00000024, "V_FLOOR_F32",
+  [(set VReg_32:$dst, (int_AMDGPU_floor AllReg_32:$src0))]
+>;
+defm V_EXP_F32 : VOP1_32 <0x00000025, "V_EXP_F32",
+  [(set VReg_32:$dst, (fexp2 AllReg_32:$src0))]
+>;
 defm V_LOG_CLAMP_F32 : VOP1_32 <0x00000026, "V_LOG_CLAMP_F32", []>;
 defm V_LOG_F32 : VOP1_32 <0x00000027, "V_LOG_F32", []>;
 defm V_RCP_CLAMP_F32 : VOP1_32 <0x00000028, "V_RCP_CLAMP_F32", []>;
@@ -670,17 +688,17 @@ def S_WAITCNT : SOPP <0x0000000c, (ins i32imm:$simm16), "S_WAITCNT $simm16",
 
 /* XXX: No VOP3 version of this instruction yet */
 def V_CNDMASK_B32 : VOP2 <0x00000000, (outs VReg_32:$dst),
-  (ins VCCReg:$vcc, AllReg_32:$src0, VReg_32:$src1), "V_CNDMASK_B32",
+  (ins AllReg_32:$src0, VReg_32:$src1, VCCReg:$vcc), "V_CNDMASK_B32",
   [(set (i32 VReg_32:$dst),
-   (select VCCReg:$vcc, AllReg_32:$src0, VReg_32:$src1))] > {
+   (select VCCReg:$vcc, VReg_32:$src1, AllReg_32:$src0))] > {
 
   let DisableEncoding = "$vcc";
 }
 
 //f32 pattern for V_CNDMASK_B32
 def : Pat <
-  (f32 (select VCCReg:$vcc, AllReg_32:$src0, VReg_32:$src1)),
-  (V_CNDMASK_B32 VCCReg:$vcc, AllReg_32:$src0, VReg_32:$src1)
+  (f32 (select VCCReg:$vcc, VReg_32:$src0, AllReg_32:$src1)),
+  (V_CNDMASK_B32 AllReg_32:$src1, VReg_32:$src0, VCCReg:$vcc)
 >;
 
 defm V_READLANE_B32 : VOP2_32 <0x00000001, "V_READLANE_B32", []>;
@@ -700,7 +718,10 @@ defm V_MUL_LEGACY_F32 : VOP2_32 <
   0x00000007, "V_MUL_LEGACY_F32",
   [(set VReg_32:$dst, (int_AMDGPU_mul AllReg_32:$src0, VReg_32:$src1))]
 >;
-defm V_MUL_F32 : VOP2_32 <0x00000008, "V_MUL_F32", []>;
+
+defm V_MUL_F32 : VOP2_32 <0x00000008, "V_MUL_F32",
+  [(set VReg_32:$dst, (fmul AllReg_32:$src0, VReg_32:$src1))]
+>;
 //defm V_MUL_I32_I24 : VOP2_32 <0x00000009, "V_MUL_I32_I24", []>;
 //defm V_MUL_HI_I32_I24 : VOP2_32 <0x0000000a, "V_MUL_HI_I32_I24", []>;
 //defm V_MUL_U32_U24 : VOP2_32 <0x0000000b, "V_MUL_U32_U24", []>;
@@ -724,9 +745,15 @@ defm V_ASHR_I32 : VOP2_32 <0x00000017, "V_ASHR_I32", []>;
 defm V_ASHRREV_I32 : VOP2_32 <0x00000018, "V_ASHRREV_I32", []>;
 defm V_LSHL_B32 : VOP2_32 <0x00000019, "V_LSHL_B32", []>;
 defm V_LSHLREV_B32 : VOP2_32 <0x0000001a, "V_LSHLREV_B32", []>;
-defm V_AND_B32 : VOP2_32 <0x0000001b, "V_AND_B32", []>;
-defm V_OR_B32 : VOP2_32 <0x0000001c, "V_OR_B32", []>;
-defm V_XOR_B32 : VOP2_32 <0x0000001d, "V_XOR_B32", []>;
+defm V_AND_B32 : VOP2_32 <0x0000001b, "V_AND_B32",
+  [(set VReg_32:$dst, (and AllReg_32:$src0, VReg_32:$src1))]
+>;
+defm V_OR_B32 : VOP2_32 <0x0000001c, "V_OR_B32",
+  [(set VReg_32:$dst, (or AllReg_32:$src0, VReg_32:$src1))]
+>;
+defm V_XOR_B32 : VOP2_32 <0x0000001d, "V_XOR_B32",
+  [(set VReg_32:$dst, (xor AllReg_32:$src0, VReg_32:$src1))]
+>;
 defm V_BFM_B32 : VOP2_32 <0x0000001e, "V_BFM_B32", []>;
 defm V_MAC_F32 : VOP2_32 <0x0000001f, "V_MAC_F32", []>;
 defm V_MADMK_F32 : VOP2_32 <0x00000020, "V_MADMK_F32", []>;
@@ -734,8 +761,14 @@ defm V_MADAK_F32 : VOP2_32 <0x00000021, "V_MADAK_F32", []>;
 //defm V_BCNT_U32_B32 : VOP2_32 <0x00000022, "V_BCNT_U32_B32", []>;
 //defm V_MBCNT_LO_U32_B32 : VOP2_32 <0x00000023, "V_MBCNT_LO_U32_B32", []>;
 //defm V_MBCNT_HI_U32_B32 : VOP2_32 <0x00000024, "V_MBCNT_HI_U32_B32", []>;
-defm V_ADD_I32 : VOP2_32 <0x00000025, "V_ADD_I32", []>;
-defm V_SUB_I32 : VOP2_32 <0x00000026, "V_SUB_I32", []>;
+let Defs = [VCC] in { // Carry-out goes to VCC
+defm V_ADD_I32 : VOP2_32 <0x00000025, "V_ADD_I32",
+  [(set VReg_32:$dst, (add (i32 AllReg_32:$src0), (i32 VReg_32:$src1)))]
+>;
+defm V_SUB_I32 : VOP2_32 <0x00000026, "V_SUB_I32",
+  [(set VReg_32:$dst, (sub (i32 AllReg_32:$src0), (i32 VReg_32:$src1)))]
+>;
+} // End Defs = [VCC]
 defm V_SUBREV_I32 : VOP2_32 <0x00000027, "V_SUBREV_I32", []>;
 defm V_ADDC_U32 : VOP2_32 <0x00000028, "V_ADDC_U32", []>;
 defm V_SUBB_U32 : VOP2_32 <0x00000029, "V_SUBB_U32", []>;
@@ -984,6 +1017,13 @@ def SI_KIL : InstSI <
 	[(int_AMDGPU_kill VReg_32:$src)]
 >;
 
+def SI_WQM : InstSI <
+	(outs),
+	(ins),
+	"SI_WQM",
+	[(int_SI_wqm)]
+>;
+
 } // end usesCustomInserter 
 
 // SI Psuedo branch instructions.  These are used by the CFG structurizer pass
@@ -1044,8 +1084,8 @@ def : Insert_Element <f32, v4f32, VReg_32, VReg_128, 5, sel_y>;
 def : Insert_Element <f32, v4f32, VReg_32, VReg_128, 6, sel_z>;
 def : Insert_Element <f32, v4f32, VReg_32, VReg_128, 7, sel_w>;
 
-def : Vector_Build <v4f32, VReg_32>;
-def : Vector_Build <v4i32, SReg_32>;
+def : Vector_Build <v4f32, VReg_128, f32, VReg_32>;
+def : Vector_Build <v4i32, SReg_128, i32, SReg_32>;
 
 def : BitConvert <i32, f32, SReg_32>;
 def : BitConvert <i32, f32, VReg_32>;
@@ -1089,6 +1129,26 @@ def : Pat <
   (int_SI_fs_interp_persp_centroid imm:$attr_chan, imm:$attr, SReg_32:$params),
   (SI_INTERP (f32 PERSP_CENTROID_I), (f32 PERSP_CENTROID_J), imm:$attr_chan,
              imm:$attr, SReg_32:$params)
+>;
+
+def : Pat <
+  (int_SI_fs_read_pos 0),
+  (f32 POS_X_FLOAT)
+>;
+
+def : Pat <
+  (int_SI_fs_read_pos 1),
+  (f32 POS_Y_FLOAT)
+>;
+
+def : Pat <
+  (int_SI_fs_read_pos 2),
+  (f32 POS_Z_FLOAT)
+>;
+
+def : Pat <
+  (int_SI_fs_read_pos 3),
+  (f32 POS_W_FLOAT)
 >;
 
 /********** ================== **********/

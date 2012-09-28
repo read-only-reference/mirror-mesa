@@ -544,7 +544,6 @@ _mesa_is_color_format(GLenum format)
       case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
       case GL_COMPRESSED_RGB_FXT1_3DFX:
       case GL_COMPRESSED_RGBA_FXT1_3DFX:
-#if FEATURE_EXT_texture_sRGB
       case GL_SRGB_EXT:
       case GL_SRGB8_EXT:
       case GL_SRGB_ALPHA_EXT:
@@ -561,7 +560,6 @@ _mesa_is_color_format(GLenum format)
       case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
       case GL_COMPRESSED_SLUMINANCE_EXT:
       case GL_COMPRESSED_SLUMINANCE_ALPHA_EXT:
-#endif /* FEATURE_EXT_texture_sRGB */
       case GL_COMPRESSED_RED_RGTC1:
       case GL_COMPRESSED_SIGNED_RED_RGTC1:
       case GL_COMPRESSED_RG_RGTC2:
@@ -1373,4 +1371,73 @@ _mesa_error_check_format_and_type(const struct gl_context *ctx,
          return GL_INVALID_ENUM;
    }
    return GL_NO_ERROR;
+}
+
+
+/**
+ * Do error checking of format/type combinations for OpenGL ES glReadPixels
+ * and glTex[Sub]Image.
+ * \return error code, or GL_NO_ERROR.
+ */
+GLenum
+_mesa_es_error_check_format_and_type(GLenum format, GLenum type,
+                                     unsigned dimensions)
+{
+   GLboolean type_valid = GL_TRUE;
+
+   switch (format) {
+   case GL_ALPHA:
+   case GL_LUMINANCE:
+   case GL_LUMINANCE_ALPHA:
+      type_valid = (type == GL_UNSIGNED_BYTE
+                    || type == GL_FLOAT
+                    || type == GL_HALF_FLOAT_OES);
+      break;
+
+   case GL_RGB:
+      type_valid = (type == GL_UNSIGNED_BYTE
+                    || type == GL_UNSIGNED_SHORT_5_6_5
+                    || type == GL_FLOAT
+                    || type == GL_HALF_FLOAT_OES);
+      break;
+
+   case GL_RGBA:
+      type_valid = (type == GL_UNSIGNED_BYTE
+                    || type == GL_UNSIGNED_SHORT_4_4_4_4
+                    || type == GL_UNSIGNED_SHORT_5_5_5_1
+                    || type == GL_FLOAT
+                    || type == GL_HALF_FLOAT_OES
+                    || type == GL_UNSIGNED_INT_2_10_10_10_REV);
+      break;
+
+   case GL_DEPTH_COMPONENT:
+      /* This format is filtered against invalid dimensionalities elsewhere.
+       */
+      type_valid = (type == GL_UNSIGNED_SHORT
+                    || type == GL_UNSIGNED_INT);
+      break;
+
+   case GL_DEPTH_STENCIL:
+      /* This format is filtered against invalid dimensionalities elsewhere.
+       */
+      type_valid = (type == GL_UNSIGNED_INT_24_8);
+      break;
+
+   case GL_BGRA_EXT:
+      type_valid = (type == GL_UNSIGNED_BYTE);
+
+      /* This feels like a bug in the EXT_texture_format_BGRA8888 spec, but
+       * the format does not appear to be allowed for 3D textures in OpenGL
+       * ES.
+       */
+      if (dimensions != 2)
+         return GL_INVALID_VALUE;
+
+      break;
+
+   default:
+      return GL_INVALID_VALUE;
+   }
+
+   return type_valid ? GL_NO_ERROR : GL_INVALID_OPERATION;
 }

@@ -23,6 +23,7 @@
  *
  */
 
+#include "util/u_format.h"
 #include "util/u_format_s3tc.h"
 
 #include "nouveau/nv_object.xml.h"
@@ -117,6 +118,7 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
    case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
    case PIPE_CAP_START_INSTANCE:
+   case PIPE_CAP_TEXTURE_MULTISAMPLE:
       return 0;
    case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
@@ -244,16 +246,8 @@ nv30_screen_is_format_supported(struct pipe_screen *pscreen,
    if (!(0x00000017 & (1 << sample_count)))
       return FALSE;
 
-   if (!util_format_s3tc_enabled) {
-      switch (format) {
-      case PIPE_FORMAT_DXT1_RGB:
-      case PIPE_FORMAT_DXT1_RGBA:
-      case PIPE_FORMAT_DXT3_RGBA:
-      case PIPE_FORMAT_DXT5_RGBA:
-         return FALSE;
-      default:
-         break;
-      }
+   if (!util_format_is_supported(format, bindings)) {
+      return FALSE;
    }
 
    /* transfers & shared are always supported */

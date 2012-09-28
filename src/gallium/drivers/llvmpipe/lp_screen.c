@@ -35,6 +35,7 @@
 #include "pipe/p_defines.h"
 #include "pipe/p_screen.h"
 #include "draw/draw_context.h"
+#include "gallivm/lp_bld_type.h"
 
 #include "lp_texture.h"
 #include "lp_fence.h"
@@ -95,7 +96,9 @@ static const char *
 llvmpipe_get_name(struct pipe_screen *screen)
 {
    static char buf[100];
-   util_snprintf(buf, sizeof(buf), "llvmpipe (LLVM 0x%x)", HAVE_LLVM);
+   util_snprintf(buf, sizeof(buf), "llvmpipe (LLVM %u.%u, %u bits)",
+		 HAVE_LLVM >> 8, HAVE_LLVM & 0xff,
+		 lp_native_vector_width );
    return buf;
 }
 
@@ -137,7 +140,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
       return LP_MAX_TEXTURE_3D_LEVELS;
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
-      return LP_MAX_TEXTURE_2D_LEVELS;
+      return LP_MAX_TEXTURE_CUBE_LEVELS;
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
       return 1;
    case PIPE_CAP_INDEP_BLEND_ENABLE:
@@ -208,6 +211,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 16;
    case PIPE_CAP_START_INSTANCE:
    case PIPE_CAP_QUERY_TIMESTAMP:
+   case PIPE_CAP_TEXTURE_MULTISAMPLE:
       return 0;
    }
    /* should only get here on unhandled cases */
@@ -291,6 +295,10 @@ llvmpipe_is_format_supported( struct pipe_screen *_screen,
 
    format_desc = util_format_description(format);
    if (!format_desc)
+      return FALSE;
+
+   /* Z16 support is missing, which breaks the blit */
+   if (format == PIPE_FORMAT_Z16_UNORM)
       return FALSE;
 
    assert(target == PIPE_BUFFER ||

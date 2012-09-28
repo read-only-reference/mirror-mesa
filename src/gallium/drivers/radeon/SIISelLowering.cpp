@@ -16,6 +16,7 @@
 #include "AMDIL.h"
 #include "AMDILIntrinsicInfo.h"
 #include "SIInstrInfo.h"
+#include "SIMachineFunctionInfo.h"
 #include "SIRegisterInfo.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -77,7 +78,7 @@ MachineBasicBlock * SITargetLowering::EmitInstrWithCustomInserter(
   switch (MI->getOpcode()) {
   default:
     return AMDGPUTargetLowering::EmitInstrWithCustomInserter(MI, BB);
-
+  case AMDGPU::BRANCH: return BB;
   case AMDGPU::CLAMP_SI:
     BuildMI(*BB, I, BB->findDebugLoc(I), TII->get(AMDGPU::V_MOV_B32_e64))
            .addOperand(MI->getOperand(0))
@@ -122,6 +123,11 @@ MachineBasicBlock * SITargetLowering::EmitInstrWithCustomInserter(
                  .addImm(1); // NEG
     MI->eraseFromParent();
     break;
+  case AMDGPU::SHADER_TYPE:
+    BB->getParent()->getInfo<SIMachineFunctionInfo>()->ShaderType =
+                                        MI->getOperand(0).getImm();
+    MI->eraseFromParent();
+    break;
 
   case AMDGPU::SI_INTERP:
     LowerSI_INTERP(MI, *BB, I, MRI);
@@ -131,6 +137,9 @@ MachineBasicBlock * SITargetLowering::EmitInstrWithCustomInserter(
     break;
   case AMDGPU::SI_KIL:
     LowerSI_KIL(MI, *BB, I, MRI);
+    break;
+  case AMDGPU::SI_WQM:
+    LowerSI_WQM(MI, *BB, I, MRI);
     break;
   case AMDGPU::SI_V_CNDLT:
     LowerSI_V_CNDLT(MI, *BB, I, MRI);
@@ -144,6 +153,16 @@ void SITargetLowering::AppendS_WAITCNT(MachineInstr *MI, MachineBasicBlock &BB,
 {
   BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::S_WAITCNT))
           .addImm(0);
+}
+
+
+void SITargetLowering::LowerSI_WQM(MachineInstr *MI, MachineBasicBlock &BB,
+    MachineBasicBlock::iterator I, MachineRegisterInfo & MRI) const
+{
+  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::S_WQM_B64), AMDGPU::EXEC)
+          .addReg(AMDGPU::EXEC);
+
+  MI->eraseFromParent();
 }
 
 void SITargetLowering::LowerSI_INTERP(MachineInstr *MI, MachineBasicBlock &BB,
@@ -235,16 +254,16 @@ void SITargetLowering::LowerSI_KIL(MachineInstr *MI, MachineBasicBlock &BB,
 void SITargetLowering::LowerSI_V_CNDLT(MachineInstr *MI, MachineBasicBlock &BB,
     MachineBasicBlock::iterator I, MachineRegisterInfo & MRI) const
 {
-  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::V_CMP_LT_F32_e32),
+  BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::V_CMP_GT_F32_e32),
           AMDGPU::VCC)
-          .addOperand(MI->getOperand(1))
-          .addReg(AMDGPU::SREG_LIT_0);
+          .addReg(AMDGPU::SREG_LIT_0)
+          .addOperand(MI->getOperand(1));
 
   BuildMI(BB, I, BB.findDebugLoc(I), TII->get(AMDGPU::V_CNDMASK_B32))
           .addOperand(MI->getOperand(0))
-	  .addReg(AMDGPU::VCC)
+          .addOperand(MI->getOperand(3))
           .addOperand(MI->getOperand(2))
-          .addOperand(MI->getOperand(3));
+	  .addReg(AMDGPU::VCC);
 
   MI->eraseFromParent();
 }

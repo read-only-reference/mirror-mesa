@@ -151,6 +151,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
+   case PIPE_CAP_TEXTURE_MULTISAMPLE:
       return 0;
    default:
       NOUVEAU_ERR("unknown PIPE_CAP %d\n", param);
@@ -256,8 +257,8 @@ nvc0_screen_destroy(struct pipe_screen *pscreen)
    if (screen->base.pushbuf)
       screen->base.pushbuf->user_priv = NULL;
 
-   if (screen->blitctx)
-      FREE(screen->blitctx);
+   if (screen->blitter)
+      nvc0_blitter_destroy(screen);
 
    nouveau_bo_ref(NULL, &screen->text);
    nouveau_bo_ref(NULL, &screen->uniform_bo);
@@ -269,8 +270,7 @@ nvc0_screen_destroy(struct pipe_screen *pscreen)
    nouveau_heap_destroy(&screen->lib_code);
    nouveau_heap_destroy(&screen->text_heap);
 
-   if (screen->tic.entries)
-      FREE(screen->tic.entries);
+   FREE(screen->tic.entries);
 
    nouveau_mm_destroy(screen->mm_VRAM_fe0);
 
@@ -747,7 +747,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    mm_config.nvc0.memtype = 0xfe0;
    screen->mm_VRAM_fe0 = nouveau_mm_create(dev, NOUVEAU_BO_VRAM, &mm_config);
 
-   if (!nvc0_blitctx_create(screen))
+   if (!nvc0_blitter_create(screen))
       goto fail;
 
    nouveau_fence_new(&screen->base, &screen->base.fence.current, FALSE);

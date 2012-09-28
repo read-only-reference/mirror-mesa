@@ -35,6 +35,8 @@
 #include "r600_resource.h"
 #include "evergreen_compute.h"
 
+#define R600_NUM_ATOMS 29
+
 #define R600_MAX_CONST_BUFFERS 2
 #define R600_MAX_CONST_BUFFER_SIZE 4096
 
@@ -44,23 +46,14 @@
 #define R600_BIG_ENDIAN 0
 #endif
 
-enum r600_atom_flags {
-	/* When set, atoms are added at the beginning of the dirty list
-	 * instead of the end. */
-	EMIT_EARLY = (1 << 0)
-};
-
 /* This encapsulates a state or an operation which can emitted into the GPU
  * command stream. It's not limited to states only, it can be used for anything
  * that wants to write commands into the CS (e.g. cache flushes). */
 struct r600_atom {
 	void (*emit)(struct r600_context *ctx, struct r600_atom *state);
-
+	unsigned		id;
 	unsigned		num_dw;
-	enum r600_atom_flags	flags;
 	bool			dirty;
-
-	struct list_head	head;
 };
 
 /* This is an atom containing GPU commands that never change.
@@ -70,11 +63,6 @@ struct r600_command_buffer {
 	uint32_t *buf;
 	unsigned max_num_dw;
 	unsigned pkt_flags;
-};
-
-struct r600_surface_sync_cmd {
-	struct r600_atom atom;
-	unsigned flush_flags; /* CP_COHER_CNTL */
 };
 
 struct r600_db_misc_state {
@@ -96,6 +84,14 @@ struct r600_cb_misc_state {
 	bool dual_src_blend;
 };
 
+struct r600_clip_misc_state {
+	struct r600_atom atom;
+	unsigned pa_cl_clip_cntl;   /* from rasterizer    */
+	unsigned pa_cl_vs_out_cntl; /* from vertex shader */
+	unsigned clip_plane_enable; /* from rasterizer    */
+	unsigned clip_dist_write;   /* from vertex shader */
+};
+
 struct r600_alphatest_state {
 	struct r600_atom atom;
 	unsigned sx_alpha_test_control; /* this comes from dsa state */
@@ -104,9 +100,41 @@ struct r600_alphatest_state {
 	bool cb0_export_16bpc; /* from set_framebuffer_state */
 };
 
+struct r600_vgt_state {
+	struct r600_atom atom;
+	uint32_t vgt_multi_prim_ib_reset_en;
+	uint32_t vgt_multi_prim_ib_reset_indx;
+};
+
+struct r600_vgt2_state {
+	struct r600_atom atom;
+	uint32_t vgt_indx_offset;
+};
+
+struct r600_blend_color {
+	struct r600_atom atom;
+	struct pipe_blend_color state;
+};
+
+struct r600_clip_state {
+	struct r600_atom atom;
+	struct pipe_clip_state state;
+};
+
 struct r600_cs_shader_state {
 	struct r600_atom atom;
+	unsigned kernel_index;
 	struct r600_pipe_compute *shader;
+};
+
+struct r600_framebuffer {
+	struct r600_atom atom;
+	struct pipe_framebuffer_state state;
+	unsigned compressed_cb_mask;
+	unsigned nr_samples;
+	bool export_16bpc;
+	bool cb0_is_integer;
+	bool is_msaa_resolve;
 };
 
 struct r600_sample_mask {
@@ -114,27 +142,31 @@ struct r600_sample_mask {
 	uint16_t sample_mask; /* there are only 8 bits on EG, 16 bits on Cayman */
 };
 
+struct r600_stencil_ref
+{
+	ubyte ref_value[2];
+	ubyte valuemask[2];
+	ubyte writemask[2];
+};
+
+struct r600_stencil_ref_state {
+	struct r600_atom atom;
+	struct r600_stencil_ref state;
+	struct pipe_stencil_ref pipe_state;
+};
+
+struct r600_viewport_state {
+	struct r600_atom atom;
+	struct pipe_viewport_state state;
+};
+
 enum r600_pipe_state_id {
 	R600_PIPE_STATE_BLEND = 0,
-	R600_PIPE_STATE_BLEND_COLOR,
-	R600_PIPE_STATE_CONFIG,
-	R600_PIPE_STATE_SEAMLESS_CUBEMAP,
-	R600_PIPE_STATE_CLIP,
 	R600_PIPE_STATE_SCISSOR,
-	R600_PIPE_STATE_VIEWPORT,
 	R600_PIPE_STATE_RASTERIZER,
-	R600_PIPE_STATE_VGT,
-	R600_PIPE_STATE_FRAMEBUFFER,
 	R600_PIPE_STATE_DSA,
-	R600_PIPE_STATE_STENCIL_REF,
-	R600_PIPE_STATE_PS_SHADER,
-	R600_PIPE_STATE_VS_SHADER,
-	R600_PIPE_STATE_CONSTANT,
-	R600_PIPE_STATE_SAMPLER,
-	R600_PIPE_STATE_RESOURCE,
 	R600_PIPE_STATE_POLYGON_OFFSET,
 	R600_PIPE_STATE_FETCH_SHADER,
-	R600_PIPE_STATE_SPI,
 	R600_PIPE_NSTATES
 };
 
@@ -232,6 +264,13 @@ struct r600_pipe_shader_selector {
 	unsigned	nr_ps_max_color_exports;
 };
 
+struct r600_shader_key {
+	unsigned color_two_side:1;
+	unsigned alpha_to_one:1;
+	unsigned dual_src_blend:1;
+	unsigned nr_cbufs:4;
+};
+
 struct r600_pipe_shader {
 	struct r600_pipe_shader_selector *selector;
 	struct r600_pipe_shader	*next_variant;
@@ -244,7 +283,7 @@ struct r600_pipe_shader {
 	unsigned	flatshade;
 	unsigned	pa_cl_vs_out_cntl;
 	unsigned	nr_ps_color_outputs;
-	unsigned	key;
+	struct r600_shader_key	key;
 	unsigned		db_shader_control;
 	unsigned		ps_depth_export;
 };
@@ -273,11 +312,17 @@ struct r600_samplerview_state {
 	uint32_t			compressed_colortex_mask;
 };
 
+struct r600_sampler_states {
+	struct r600_atom		atom;
+	struct r600_pipe_sampler_state	*states[NUM_TEX_UNITS];
+	uint32_t			enabled_mask;
+	uint32_t			dirty_mask;
+	uint32_t			has_bordercolor_mask; /* which states contain the border color */
+};
+
 struct r600_textures_info {
 	struct r600_samplerview_state	views;
-	struct r600_atom		atom_sampler;
-	struct r600_pipe_sampler_state	*samplers[NUM_TEX_UNITS];
-	unsigned			n_samplers;
+	struct r600_sampler_states	states;
 	bool				is_array_sampler[NUM_TEX_UNITS];
 };
 
@@ -297,13 +342,6 @@ struct r600_fence_block {
 
 #define R600_CONSTANT_ARRAY_SIZE 256
 #define R600_RESOURCE_ARRAY_SIZE 160
-
-struct r600_stencil_ref
-{
-	ubyte ref_value[2];
-	ubyte valuemask[2];
-	ubyte writemask[2];
-};
 
 struct r600_constbuf_state
 {
@@ -327,6 +365,7 @@ struct r600_context {
 	enum radeon_family		family;
 	enum chip_class			chip_class;
 	boolean				has_vertex_cache;
+	boolean				keep_tiling_flags;
 	unsigned			r6xx_num_clause_temp_gprs;
 	void				*custom_dsa_flush;
 	void				*custom_blend_resolve;
@@ -336,63 +375,61 @@ struct r600_context {
 	struct radeon_winsys		*ws;
 	struct r600_pipe_state		*states[R600_PIPE_NSTATES];
 	struct r600_vertex_element	*vertex_elements;
-	struct pipe_framebuffer_state	framebuffer;
-	unsigned			compressed_cb_mask;
 	unsigned			compute_cb_target_mask;
 	unsigned			db_shader_control;
 	unsigned			pa_sc_line_stipple;
-	unsigned			pa_cl_clip_cntl;
 	/* for saving when using blitter */
-	struct pipe_stencil_ref		stencil_ref;
-	struct pipe_viewport_state	viewport;
-	struct pipe_clip_state		clip;
+	struct pipe_scissor_state	scissor;
 	struct r600_pipe_shader_selector 	*ps_shader;
 	struct r600_pipe_shader_selector 	*vs_shader;
 	struct r600_pipe_rasterizer	*rasterizer;
-	struct r600_pipe_state          vgt;
 	struct r600_pipe_state          spi;
 	struct pipe_query		*current_render_cond;
 	unsigned			current_render_cond_mode;
-	struct pipe_query		*saved_render_cond;
-	unsigned			saved_render_cond_mode;
 	/* shader information */
 	boolean				two_side;
 	boolean				spi_dirty;
 	unsigned			sprite_coord_enable;
 	boolean				flatshade;
-	boolean				export_16bpc;
-	unsigned			nr_cbufs;
 	bool				alpha_to_one;
 	bool				multisample_enable;
-	bool				cb0_is_integer;
 
 	struct u_upload_mgr	        *uploader;
 	struct util_slab_mempool	pool_transfers;
 
 	unsigned default_ps_gprs, default_vs_gprs;
 
+	/******************************/
 	/* States based on r600_atom. */
-	struct list_head		dirty_states;
+	struct r600_atom		*atoms[R600_NUM_ATOMS];
+	/* States for CS initialization. */
 	struct r600_command_buffer	start_cs_cmd; /* invariant state mostly */
 	/** Compute specific registers initializations.  The start_cs_cmd atom
 	 *  must be emitted before start_compute_cs_cmd. */
-        struct r600_command_buffer      start_compute_cs_cmd;
-	struct r600_surface_sync_cmd	surface_sync_cmd;
-	struct r600_atom		r6xx_flush_and_inv_cmd;
+	struct r600_command_buffer      start_compute_cs_cmd;
+	/* Register states. */
 	struct r600_alphatest_state	alphatest_state;
+	struct r600_blend_color		blend_color;
 	struct r600_cb_misc_state	cb_misc_state;
+	struct r600_clip_misc_state	clip_misc_state;
+	struct r600_clip_state		clip_state;
 	struct r600_db_misc_state	db_misc_state;
+	struct r600_framebuffer		framebuffer;
+	struct r600_seamless_cube_map	seamless_cube_map;
+	struct r600_stencil_ref_state	stencil_ref;
+	struct r600_vgt_state		vgt_state;
+	struct r600_vgt2_state		vgt2_state;
+	struct r600_sample_mask		sample_mask;
+	struct r600_viewport_state	viewport;
+	/* Shaders and shader resources. */
+	struct r600_cs_shader_state	cs_shader_state;
+	struct r600_constbuf_state	constbuf_state[PIPE_SHADER_TYPES];
+	struct r600_textures_info	samplers[PIPE_SHADER_TYPES];
 	/** Vertex buffers for fetch shaders */
 	struct r600_vertexbuf_state	vertex_buffer_state;
 	/** Vertex buffers for compute shaders */
 	struct r600_vertexbuf_state	cs_vertex_buffer_state;
-	struct r600_constbuf_state	vs_constbuf_state;
-	struct r600_constbuf_state	ps_constbuf_state;
-	struct r600_textures_info	vs_samplers;
-	struct r600_textures_info	ps_samplers;
-	struct r600_seamless_cube_map	seamless_cube_map;
-	struct r600_cs_shader_state	cs_shader_state;
-	struct r600_sample_mask		sample_mask;
+	/******************************/
 
 	/* current external blend state (from state tracker) */
 	struct r600_pipe_blend		*blend;
@@ -426,6 +463,10 @@ struct r600_context {
 	struct list_head	active_nontimer_queries;
 	unsigned		num_cs_dw_nontimer_queries_suspend;
 
+	bool			timer_queries_suspended;
+	bool			nontimer_queries_suspended;
+	bool			streamout_suspended;
+
 	unsigned		num_cs_dw_streamout_end;
 
 	unsigned		backend_mask;
@@ -439,9 +480,8 @@ struct r600_context {
 	unsigned		streamout_append_bitmask;
 
 	/* There is no scissor enable bit on r6xx, so we must use a workaround.
-	 * These track the current scissor state. */
+	 * This tracks if the scissor is enabled. */
 	bool			scissor_enable;
-	struct pipe_scissor_state scissor_state;
 
 	/* With rasterizer discard, there doesn't have to be a pixel shader.
 	 * In that case, we bind this one: */
@@ -458,26 +498,21 @@ struct r600_context {
 	 * for anything useful. */
 	struct r600_resource *dummy_fmask;
 	struct r600_resource *dummy_cmask;
+
+	/* Last draw state (-1 = unset). */
+	int			last_primitive_type; /* Last primitive type used in draw_vbo. */
+	int			last_start_instance;
 };
 
 static INLINE void r600_emit_atom(struct r600_context *rctx, struct r600_atom *atom)
 {
 	atom->emit(rctx, atom);
 	atom->dirty = false;
-	if (atom->head.next && atom->head.prev)
-		LIST_DELINIT(&atom->head);
 }
 
 static INLINE void r600_atom_dirty(struct r600_context *rctx, struct r600_atom *state)
 {
-	if (!state->dirty) {
-		if (state->flags & EMIT_EARLY) {
-			LIST_ADD(&state->head, &rctx->dirty_states);
-		} else {
-			LIST_ADDTAIL(&state->head, &rctx->dirty_states);
-		}
-		state->dirty = true;
-	}
+	state->dirty = true;
 }
 
 /* evergreen_state.c */
@@ -544,7 +579,9 @@ void r600_resume_timer_queries(struct r600_context *ctx);
 void r600_init_context_resource_functions(struct r600_context *r600);
 
 /* r600_shader.c */
-int r600_pipe_shader_create(struct pipe_context *ctx, struct r600_pipe_shader *shader);
+int r600_pipe_shader_create(struct pipe_context *ctx,
+			    struct r600_pipe_shader *shader,
+			    struct r600_shader_key key);
 #ifdef HAVE_OPENCL
 int r600_compute_shader_create(struct pipe_context * ctx,
 	LLVMModuleRef mod,  struct r600_bytecode * bytecode);
@@ -587,70 +624,26 @@ void r600_translate_index_buffer(struct r600_context *r600,
 				 unsigned count);
 
 /* r600_state_common.c */
-void r600_init_atom(struct r600_atom *atom,
+void r600_init_common_state_functions(struct r600_context *rctx);
+void r600_emit_alphatest_state(struct r600_context *rctx, struct r600_atom *atom);
+void r600_emit_blend_color(struct r600_context *rctx, struct r600_atom *atom);
+void r600_emit_vgt_state(struct r600_context *rctx, struct r600_atom *atom);
+void r600_emit_vgt2_state(struct r600_context *rctx, struct r600_atom *atom);
+void r600_emit_clip_misc_state(struct r600_context *rctx, struct r600_atom *atom);
+void r600_emit_stencil_ref(struct r600_context *rctx, struct r600_atom *atom);
+void r600_emit_viewport_state(struct r600_context *rctx, struct r600_atom *atom);
+void r600_init_atom(struct r600_context *rctx, struct r600_atom *atom, unsigned id,
 		    void (*emit)(struct r600_context *ctx, struct r600_atom *state),
-		    unsigned num_dw, enum r600_atom_flags flags);
-void r600_init_common_atoms(struct r600_context *rctx);
-unsigned r600_get_cb_flush_flags(struct r600_context *rctx);
-void r600_texture_barrier(struct pipe_context *ctx);
-void r600_set_index_buffer(struct pipe_context *ctx,
-			   const struct pipe_index_buffer *ib);
+		    unsigned num_dw);
 void r600_vertex_buffers_dirty(struct r600_context *rctx);
-void r600_set_vertex_buffers(struct pipe_context *ctx, unsigned count,
-			     const struct pipe_vertex_buffer *input);
 void r600_sampler_views_dirty(struct r600_context *rctx,
 			      struct r600_samplerview_state *state);
-void r600_set_sampler_views(struct pipe_context *pipe,
-                            unsigned shader,
-                            unsigned start,
-			    unsigned count,
-			    struct pipe_sampler_view **views);
-void r600_bind_vs_samplers(struct pipe_context *ctx, unsigned count, void **states);
-void r600_bind_ps_samplers(struct pipe_context *ctx, unsigned count, void **states);
-void *r600_create_vertex_elements(struct pipe_context *ctx,
-				  unsigned count,
-				  const struct pipe_vertex_element *elements);
-void r600_delete_vertex_element(struct pipe_context *ctx, void *state);
-void r600_bind_blend_state(struct pipe_context *ctx, void *state);
-void r600_set_blend_color(struct pipe_context *ctx,
-			  const struct pipe_blend_color *state);
-void r600_bind_dsa_state(struct pipe_context *ctx, void *state);
+void r600_sampler_states_dirty(struct r600_context *rctx,
+			       struct r600_sampler_states *state);
 void r600_set_max_scissor(struct r600_context *rctx);
-void r600_bind_rs_state(struct pipe_context *ctx, void *state);
-void r600_delete_rs_state(struct pipe_context *ctx, void *state);
-void r600_sampler_view_destroy(struct pipe_context *ctx,
-			       struct pipe_sampler_view *state);
-void r600_delete_sampler(struct pipe_context *ctx, void *state);
-void r600_delete_state(struct pipe_context *ctx, void *state);
-void r600_bind_vertex_elements(struct pipe_context *ctx, void *state);
-void *r600_create_shader_state_ps(struct pipe_context *ctx,
-                   const struct pipe_shader_state *state);
-void *r600_create_shader_state_vs(struct pipe_context *ctx,
-                   const struct pipe_shader_state *state);
-void r600_bind_ps_shader(struct pipe_context *ctx, void *state);
-void r600_bind_vs_shader(struct pipe_context *ctx, void *state);
-void r600_delete_ps_shader(struct pipe_context *ctx, void *state);
-void r600_delete_vs_shader(struct pipe_context *ctx, void *state);
 void r600_constant_buffers_dirty(struct r600_context *rctx, struct r600_constbuf_state *state);
-void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint index,
-			      struct pipe_constant_buffer *cb);
-struct pipe_stream_output_target *
-r600_create_so_target(struct pipe_context *ctx,
-		      struct pipe_resource *buffer,
-		      unsigned buffer_offset,
-		      unsigned buffer_size);
-void r600_so_target_destroy(struct pipe_context *ctx,
-			    struct pipe_stream_output_target *target);
-void r600_set_so_targets(struct pipe_context *ctx,
-			 unsigned num_targets,
-			 struct pipe_stream_output_target **targets,
-			 unsigned append_bitmask);
-void r600_set_sample_mask(struct pipe_context *pipe, unsigned sample_mask);
-void r600_set_pipe_stencil_ref(struct pipe_context *ctx,
-			       const struct pipe_stencil_ref *state);
-void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info);
 void r600_draw_rectangle(struct blitter_context *blitter,
-			 unsigned x1, unsigned y1, unsigned x2, unsigned y2, float depth,
+			 int x1, int y1, int x2, int y2, float depth,
 			 enum blitter_attrib_type type, const union pipe_color_union *attrib);
 uint32_t r600_translate_stencil_op(int s_op);
 uint32_t r600_translate_fill(uint32_t func);
@@ -772,7 +765,7 @@ static INLINE void eg_store_loop_const(struct r600_command_buffer *cb, unsigned 
 	r600_store_value(cb, value);
 }
 
-void r600_init_command_buffer(struct r600_command_buffer *cb, unsigned num_dw, enum r600_atom_flags flags);
+void r600_init_command_buffer(struct r600_context *rctx, struct r600_command_buffer *cb, unsigned id, unsigned num_dw);
 void r600_release_command_buffer(struct r600_command_buffer *cb);
 
 /*

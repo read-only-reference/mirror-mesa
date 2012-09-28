@@ -6,9 +6,10 @@ dnl Tell the user about autoconf.html in the --help output
 m4_divert_once([HELP_END], [
 See docs/autoconf.html for more details on the options for Mesa.])
 
-AC_INIT([Mesa], [9.0.0],
+AC_INIT([Mesa], [9.1.0],
     [https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa])
 AC_CONFIG_AUX_DIR([bin])
+AC_CONFIG_MACRO_DIR([m4])
 AC_CANONICAL_HOST
 AM_INIT_AUTOMAKE([foreign])
 
@@ -25,6 +26,10 @@ m4_ifdef([AM_PROG_AR], [AM_PROG_AR])
 
 LT_PREREQ([2.2])
 LT_INIT([disable-static])
+
+dnl Set internal versions
+OSMESA_VERSION=8
+AC_SUBST([OSMESA_VERSION])
 
 dnl Versions for external dependencies
 LIBDRM_REQUIRED=2.4.24
@@ -495,6 +500,16 @@ AC_SUBST([DLOPEN_LIBS])
 dnl See if posix_memalign is available
 AC_CHECK_FUNC([posix_memalign], [DEFINES="$DEFINES -DHAVE_POSIX_MEMALIGN"])
 
+dnl signbit() is a macro in glibc's math.h, so AC_CHECK_FUNC fails. To handle
+dnl this, use AC_CHECK_DECLS and fallback to AC_CHECK_FUNC in case it fails.
+AC_CHECK_DECLS([signbit],[],
+               AC_CHECK_FUNC([signbit],[],
+                             AC_MSG_ERROR([could not find signbit()])),
+               [#include <math.h>])
+
+dnl Check for pthreads
+AX_PTHREAD
+
 dnl SELinux awareness.
 AC_ARG_ENABLE([selinux],
     [AS_HELP_STRING([--enable-selinux],
@@ -509,6 +524,7 @@ if test "x$enable_selinux" = "xyes"; then
     SELINUX_LIBS="-lselinux"
     DEFINES="$DEFINES -DMESA_SELINUX"
 fi
+AC_SUBST([SELINUX_LIBS])
 
 dnl Options for APIs
 AC_ARG_ENABLE([opengl],
@@ -563,11 +579,13 @@ AC_ARG_ENABLE([xa],
         [enable build of the XA X Acceleration API @<:@default=no@:>@])],
     [enable_xa="$enableval"],
     [enable_xa=no])
-AC_ARG_ENABLE([d3d1x],
-    [AS_HELP_STRING([--enable-d3d1x],
-        [enable support for Direct3D 10 & 11 low-level API @<:@default=no@:>@])],
-    [enable_d3d1x="$enableval"],
-    [enable_d3d1x=no])
+dnl Broken, unmaintained. Don't want to see bug reports about it without patches.
+enable_d3d1x=no
+dnl AC_ARG_ENABLE([d3d1x],
+dnl     [AS_HELP_STRING([--enable-d3d1x],
+dnl         [enable support for Direct3D 10 & 11 low-level API @<:@default=no@:>@])],
+dnl     [enable_d3d1x="$enableval"],
+dnl     [enable_d3d1x=no])
 AC_ARG_ENABLE([gbm],
    [AS_HELP_STRING([--enable-gbm],
          [enable gbm library @<:@default=auto@:>@])],
@@ -855,13 +873,12 @@ xyesyes)
 xyesno)
     # DRI-based GLX
     PKG_CHECK_MODULES([GLPROTO], [glproto >= $GLPROTO_REQUIRED])
-    GL_PC_REQ_PRIV="glproto >= $GLPROTO_REQUIRED"
     if test x"$driglx_direct" = xyes; then
         if test "x$have_libdrm" != xyes; then
             AC_MSG_ERROR([Direct rendering requires libdrm >= $LIBDRM_REQUIRED])
         fi
         PKG_CHECK_MODULES([DRI2PROTO], [dri2proto >= $DRI2PROTO_REQUIRED])
-        GL_PC_REQ_PRIV="$GL_PC_REQ_PRIV libdrm >= $LIBDRM_REQUIRED dri2proto >= $DRI2PROTO_REQUIRED"
+        GL_PC_REQ_PRIV="$GL_PC_REQ_PRIV libdrm >= $LIBDRM_REQUIRED"
     fi
 
     # find the DRI deps for libGL
@@ -893,6 +910,7 @@ GLESv1_CM_PC_LIB_PRIV="-lm -lpthread $DLOPEN_LIBS"
 GLESv2_LIB_DEPS="$LIBDRM_LIBS -lm -lpthread $DLOPEN_LIBS"
 GLESv2_PC_LIB_PRIV="-lm -lpthread $DLOPEN_LIBS"
 
+AC_SUBST([X11_INCLUDES])
 AC_SUBST([GL_LIB_DEPS])
 AC_SUBST([GL_PC_REQ_PRIV])
 AC_SUBST([GL_PC_LIB_PRIV])
@@ -903,12 +921,7 @@ AC_SUBST([GLESv1_CM_PC_LIB_PRIV])
 AC_SUBST([GLESv2_LIB_DEPS])
 AC_SUBST([GLESv2_PC_LIB_PRIV])
 
-GLAPI_LIB_DEPS="-lpthread $SELINUX_LIBS"
-AC_SUBST([GLAPI_LIB_DEPS])
-
-
 DRI_LIB_DEPS="\$(top_builddir)/src/mesa/libdricore/libdricore${VERSION}.la"
-GALLIUM_DRI_LIB_DEPS="\$(TOP)/\$(LIB_DIR)/libdricore${VERSION}.so"
 
 AC_SUBST([HAVE_XF86VIDMODE])
 
@@ -1919,10 +1932,6 @@ AM_CONDITIONAL(HAVE_X11_DRIVER, echo "$DRIVER_DIRS" | grep 'x11' >/dev/null 2>&1
 AM_CONDITIONAL(HAVE_X86_ASM, echo "$DEFINES" | grep 'X86_ASM' >/dev/null 2>&1)
 AM_CONDITIONAL(HAVE_X86_64_ASM, echo "$DEFINES" | grep 'X86_64_ASM' >/dev/null 2>&1)
 AM_CONDITIONAL(HAVE_SPARC_ASM, echo "$DEFINES" | grep 'SPARC_ASM' >/dev/null 2>&1)
-
-# To pass as an argument to libtool's -version-number flag
-VERSION_NUMBER=`echo "$VERSION" | $SED 's/\./:/g'`
-AC_SUBST([VERSION_NUMBER])
 
 dnl prepend CORE_DIRS to SRC_DIRS
 SRC_DIRS="$CORE_DIRS $SRC_DIRS"

@@ -73,19 +73,32 @@ gl_target_to_pipe(GLenum target)
 {
    switch (target) {
    case GL_TEXTURE_1D:
+   case GL_PROXY_TEXTURE_1D:
       return PIPE_TEXTURE_1D;
    case GL_TEXTURE_2D:
+   case GL_PROXY_TEXTURE_2D:
    case GL_TEXTURE_EXTERNAL_OES:
       return PIPE_TEXTURE_2D;
    case GL_TEXTURE_RECTANGLE_NV:
+   case GL_PROXY_TEXTURE_RECTANGLE_NV:
       return PIPE_TEXTURE_RECT;
    case GL_TEXTURE_3D:
+   case GL_PROXY_TEXTURE_3D:
       return PIPE_TEXTURE_3D;
    case GL_TEXTURE_CUBE_MAP_ARB:
+   case GL_PROXY_TEXTURE_CUBE_MAP_ARB:
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
       return PIPE_TEXTURE_CUBE;
    case GL_TEXTURE_1D_ARRAY_EXT:
+   case GL_PROXY_TEXTURE_1D_ARRAY_EXT:
       return PIPE_TEXTURE_1D_ARRAY;
    case GL_TEXTURE_2D_ARRAY_EXT:
+   case GL_PROXY_TEXTURE_2D_ARRAY_EXT:
       return PIPE_TEXTURE_2D_ARRAY;
    case GL_TEXTURE_BUFFER:
       return PIPE_BUFFER;
@@ -562,61 +575,40 @@ decompress_with_blit(struct gl_context * ctx,
    struct pipe_context *pipe = st->pipe;
    struct st_texture_image *stImage = st_texture_image(texImage);
    struct st_texture_object *stObj = st_texture_object(texImage->TexObject);
-   struct pipe_sampler_view *src_view;
    const GLuint width = texImage->Width;
    const GLuint height = texImage->Height;
-   struct pipe_surface *dst_surface;
    struct pipe_resource *dst_texture;
    struct pipe_transfer *tex_xfer;
-   unsigned bind = (PIPE_BIND_RENDER_TARGET | /* util_blit may choose to render */
-		    PIPE_BIND_TRANSFER_READ);
+   struct pipe_blit_info blit;
+   unsigned bind = (PIPE_BIND_RENDER_TARGET | PIPE_BIND_TRANSFER_READ);
 
    /* create temp / dest surface */
-   if (!util_create_rgba_surface(pipe, width, height, bind,
-                                 &dst_texture, &dst_surface)) {
-      _mesa_problem(ctx, "util_create_rgba_surface() failed "
+   if (!util_create_rgba_texture(pipe, width, height, bind,
+                                 &dst_texture)) {
+      _mesa_problem(ctx, "util_create_rgba_texture() failed "
                     "in decompress_with_blit()");
       return;
    }
 
-   /* Disable conditional rendering. */
-   if (st->render_condition) {
-      pipe->render_condition(pipe, NULL, 0);
-   }
-
-   /* Create sampler view that limits fetches to the source mipmap level */
-   {
-      struct pipe_sampler_view sv_temp;
-
-      u_sampler_view_default_template(&sv_temp, stObj->pt, stObj->pt->format);
-
-      sv_temp.format = util_format_linear(sv_temp.format);
-      sv_temp.u.tex.first_level =
-      sv_temp.u.tex.last_level = texImage->Level;
-
-      src_view = pipe->create_sampler_view(pipe, stObj->pt, &sv_temp);
-      if (!src_view) {
-         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glGetTexImage");
-         return;
-      }
-   }
+   blit.src.resource = stObj->pt;
+   blit.src.level = texImage->Level;
+   blit.src.format = util_format_linear(stObj->pt->format);
+   blit.dst.resource = dst_texture;
+   blit.dst.level = 0;
+   blit.dst.format = dst_texture->format;
+   blit.src.box.x = blit.dst.box.x = 0;
+   blit.src.box.y = blit.dst.box.y = 0;
+   blit.src.box.z = 0; /* XXX compressed array textures? */
+   blit.dst.box.z = 0;
+   blit.src.box.width = blit.dst.box.width = width;
+   blit.src.box.height = blit.dst.box.height = height;
+   blit.src.box.depth = blit.dst.box.depth = 1;
+   blit.mask = PIPE_MASK_RGBA;
+   blit.filter = PIPE_TEX_FILTER_NEAREST;
+   blit.scissor_enable = FALSE;
 
    /* blit/render/decompress */
-   util_blit_pixels_tex(st->blit,
-                        src_view,      /* pipe_resource (src) */
-                        0, 0,             /* src x0, y0 */
-                        width, height,    /* src x1, y1 */
-                        dst_surface,      /* pipe_surface (dst) */
-                        0, 0,             /* dst x0, y0 */
-                        width, height,    /* dst x1, y1 */
-                        0.0,              /* z */
-                        PIPE_TEX_MIPFILTER_NEAREST);
-
-   /* Restore conditional rendering state. */
-   if (st->render_condition) {
-      pipe->render_condition(pipe, st->render_condition,
-                             st->condition_mode);
-   }
+   st->pipe->blit(st->pipe, &blit);
 
    /* map the dst_surface so we can read from it */
    tex_xfer = pipe_get_transfer(pipe,
@@ -648,7 +640,7 @@ decompress_with_blit(struct gl_context * ctx,
       enum pipe_format pformat = util_format_linear(dst_texture->format);
       GLfloat *rgba;
 
-      rgba = (GLfloat *) malloc(width * 4 * sizeof(GLfloat));
+      rgba = malloc(width * 4 * sizeof(GLfloat));
       if (!rgba) {
          _mesa_error(ctx, GL_OUT_OF_MEMORY, "glGetTexImage()");
          goto end;
@@ -678,10 +670,7 @@ end:
 
    pipe->transfer_destroy(pipe, tex_xfer);
 
-   /* destroy the temp / dest surface */
-   util_destroy_rgba_surface(dst_texture, dst_surface);
-
-   pipe_sampler_view_release(pipe, &src_view);
+   pipe_resource_reference(&dst_texture, NULL);
 }
 
 
@@ -775,7 +764,7 @@ fallback_copy_texsubimage(struct gl_context *ctx,
          yStep = 1;
       }
 
-      data = (uint *) malloc(width * sizeof(uint));
+      data = malloc(width * sizeof(uint));
 
       if (data) {
          /* To avoid a large temp memory allocation, do copy row by row */
@@ -796,7 +785,7 @@ fallback_copy_texsubimage(struct gl_context *ctx,
    else {
       /* RGBA format */
       GLfloat *tempSrc =
-         (GLfloat *) malloc(width * height * 4 * sizeof(GLfloat));
+         malloc(width * height * 4 * sizeof(GLfloat));
 
       if (tempSrc && texDest) {
          const GLint dims = 2;
@@ -835,8 +824,7 @@ fallback_copy_texsubimage(struct gl_context *ctx,
          _mesa_error(ctx, GL_OUT_OF_MEMORY, "glTexSubImage");
       }
 
-      if (tempSrc)
-         free(tempSrc);
+      free(tempSrc);
    }
 
    st_texture_image_unmap(st, stImage);
@@ -1358,6 +1346,57 @@ st_AllocTextureStorage(struct gl_context *ctx,
 }
 
 
+static GLboolean
+st_TestProxyTexImage(struct gl_context *ctx, GLenum target,
+                     GLint level, gl_format format,
+                     GLint width, GLint height,
+                     GLint depth, GLint border)
+{
+   struct st_context *st = st_context(ctx);
+   struct pipe_context *pipe = st->pipe;
+
+   if (width == 0 || height == 0 || depth == 0) {
+      /* zero-sized images are legal, and always fit! */
+      return GL_TRUE;
+   }
+
+   if (pipe->screen->can_create_resource) {
+      /* Ask the gallium driver if the texture is too large */
+      struct gl_texture_object *texObj =
+         _mesa_get_current_tex_object(ctx, target);
+      struct pipe_resource pt;
+
+      /* Setup the pipe_resource object
+       */
+      memset(&pt, 0, sizeof(pt));
+
+      pt.target = gl_target_to_pipe(target);
+      pt.format = st_mesa_format_to_pipe_format(format);
+
+      st_gl_texture_dims_to_pipe_dims(target,
+                                      width, height, depth,
+                                      &pt.width0, &pt.height0,
+                                      &pt.depth0, &pt.array_size);
+
+      if (level == 0 && (texObj->Sampler.MinFilter == GL_LINEAR ||
+                         texObj->Sampler.MinFilter == GL_NEAREST)) {
+         /* assume just one mipmap level */
+         pt.last_level = 0;
+      }
+      else {
+         /* assume a full set of mipmaps */
+         pt.last_level = _mesa_logbase2(MAX3(width, height, depth));
+      }
+
+      return pipe->screen->can_create_resource(pipe->screen, &pt);
+   }
+   else {
+      /* Use core Mesa fallback */
+      return _mesa_test_proxy_teximage(ctx, target, level, format,
+                                       width, height, depth, border);
+   }
+}
+
 
 void
 st_init_texture_functions(struct dd_function_table *functions)
@@ -1385,7 +1424,7 @@ st_init_texture_functions(struct dd_function_table *functions)
    functions->UnmapTextureImage = st_UnmapTextureImage;
 
    /* XXX Temporary until we can query pipe's texture sizes */
-   functions->TestProxyTexImage = _mesa_test_proxy_teximage;
+   functions->TestProxyTexImage = st_TestProxyTexImage;
 
    functions->AllocTextureStorage = st_AllocTextureStorage;
 }

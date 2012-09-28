@@ -101,6 +101,9 @@ union si_state {
 #define si_pm4_block_idx(member) \
 	(offsetof(union si_state, named.member) / sizeof(struct si_pm4_state *))
 
+#define si_pm4_state_changed(rctx, member) \
+	((rctx)->queued.named.member != (rctx)->emitted.named.member)
+
 #define si_pm4_bind_state(rctx, member, value) \
 	do { \
 		(rctx)->queued.named.member = (value); \
@@ -156,6 +159,12 @@ void si_set_so_targets(struct pipe_context *ctx,
 void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *dinfo);
 
 /* si_commands.c */
+void si_cmd_context_control(struct si_pm4_state *pm4);
+void si_cmd_draw_index_2(struct si_pm4_state *pm4, uint32_t max_size,
+			 uint64_t index_base, uint32_t index_count,
+			 uint32_t initiator, bool predicate);
+void si_cmd_draw_index_auto(struct si_pm4_state *pm4, uint32_t count,
+			    uint32_t initiator, bool predicate);
 void si_cmd_surface_sync(struct si_pm4_state *pm4, uint32_t cp_coher_cntl);
 
 #endif

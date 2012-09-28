@@ -74,6 +74,14 @@ def COND_LE : PatLeaf <
                      case ISD::SETLE: return true;}}}]
 >;
 
+//===----------------------------------------------------------------------===//
+// Load/Store Pattern Fragments
+//===----------------------------------------------------------------------===//
+
+def zextloadi8_global : PatFrag<(ops node:$ptr), (zextloadi8 node:$ptr), [{
+    return isGlobalLoad(dyn_cast<LoadSDNode>(N));
+}]>;
+
 class Constants {
 int TWO_PI = 0x40c90fdb;
 int PI = 0x40490fdb;
@@ -114,6 +122,13 @@ class FNEG <RegisterClass rc> : AMDGPUShaderInst <
   [(set rc:$dst, (fneg rc:$src0))]
 >;
 
+def SHADER_TYPE : AMDGPUShaderInst <
+  (outs),
+  (ins i32imm:$type),
+  "SHADER_TYPE $type",
+  [(int_AMDGPU_shader_type imm:$type)]
+>;
+
 } // End isCodeGenOnly = 1, isPseudo = 1, hasCustomInserter = 1
 
 /* Generic helper patterns for intrinsics */
@@ -121,7 +136,7 @@ class FNEG <RegisterClass rc> : AMDGPUShaderInst <
 
 class POW_Common <AMDGPUInst log_ieee, AMDGPUInst exp_ieee, AMDGPUInst mul,
                   RegisterClass rc> : Pat <
-  (int_AMDGPU_pow rc:$src0, rc:$src1),
+  (fpow rc:$src0, rc:$src1),
   (exp_ieee (mul rc:$src1, (log_ieee rc:$src0)))
 >;
 
@@ -147,9 +162,13 @@ class Insert_Element <ValueType elem_type, ValueType vec_type,
 >;
 
 // Vector Build pattern
-class Vector_Build <ValueType vecType, RegisterClass elemClass> : Pat <
-  (IL_vbuild elemClass:$src),
-  (INSERT_SUBREG (vecType (IMPLICIT_DEF)), elemClass:$src, sel_x)
+class Vector_Build <ValueType vecType, RegisterClass vectorClass,
+                    ValueType elemType, RegisterClass elemClass> : Pat <
+  (vecType (build_vector (elemType elemClass:$x), (elemType elemClass:$y),
+                         (elemType elemClass:$z), (elemType elemClass:$w))),
+  (INSERT_SUBREG (INSERT_SUBREG (INSERT_SUBREG (INSERT_SUBREG
+  (vecType (IMPLICIT_DEF)), elemClass:$x, sel_x), elemClass:$y, sel_y),
+                            elemClass:$z, sel_z), elemClass:$w, sel_w)
 >;
 
 // bitconvert pattern

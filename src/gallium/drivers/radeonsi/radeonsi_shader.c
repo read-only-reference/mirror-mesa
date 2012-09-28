@@ -48,25 +48,6 @@
 #include <errno.h>
 #include <stdio.h>
 
-/*
-static ps_remap_inputs(
-	struct tgsi_llvm_context * tl_ctx,
-	unsigned tgsi_index,
-	unsigned tgsi_chan)
-{
-	:
-}
-
-struct si_input
-{
-	struct list_head head;
-	unsigned tgsi_index;
-	unsigned tgsi_chan;
-	unsigned order;
-};
-*/
-
-
 struct si_shader_context
 {
 	struct radeon_llvm_context radeon_bld;
@@ -75,7 +56,7 @@ struct si_shader_context
 	struct tgsi_token * tokens;
 	struct si_pipe_shader *shader;
 	unsigned type; /* TGSI_PROCESSOR_* specifies the type of shader. */
-/*	unsigned num_inputs; */
+	unsigned ninput_emitted;
 /*	struct list_head inputs; */
 /*	unsigned * input_mappings *//* From TGSI to SI hw */
 /*	struct tgsi_shader_info info;*/
@@ -261,6 +242,7 @@ static void declare_input_fs(
 	struct lp_build_context * base =
 				&si_shader_ctx->radeon_bld.soa.bld_base.base;
 	struct gallivm_state * gallivm = base->gallivm;
+	LLVMTypeRef input_type = LLVMFloatTypeInContext(gallivm->context);
 
 	/* This value is:
 	 * [15:0] NewPrimMask (Bit mask for each quad.  It is set it the
@@ -277,6 +259,20 @@ static void declare_input_fs(
 
 	/* XXX: Is this the input_index? */
 	LLVMValueRef attr_number = lp_build_const_int32(gallivm, input_index);
+
+	if (decl->Semantic.Name == TGSI_SEMANTIC_POSITION) {
+		for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
+			LLVMValueRef args[1];
+			unsigned soa_index =
+				radeon_llvm_reg_index_soa(input_index, chan);
+			args[0] = lp_build_const_int32(gallivm, chan);
+			si_shader_ctx->radeon_bld.inputs[soa_index] =
+				build_intrinsic(base->gallivm->builder,
+					"llvm.SI.fs.read.pos", input_type,
+					args, 1, LLVMReadNoneAttribute);
+		}
+		return;
+	}
 
 	/* XXX: Handle all possible interpolation modes */
 	switch (decl->Interp.Interpolate) {
@@ -319,12 +315,19 @@ static void declare_input_fs(
 		return;
 	}
 
+	if (!si_shader_ctx->ninput_emitted++) {
+		/* Enable whole quad mode */
+		lp_build_intrinsic(gallivm->builder,
+				   "llvm.SI.wqm",
+				   LLVMVoidTypeInContext(gallivm->context),
+				   NULL, 0);
+	}
+
 	/* XXX: Could there be more than TGSI_NUM_CHANNELS (4) ? */
 	for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
 		LLVMValueRef args[3];
 		LLVMValueRef llvm_chan = lp_build_const_int32(gallivm, chan);
 		unsigned soa_index = radeon_llvm_reg_index_soa(input_index, chan);
-		LLVMTypeRef input_type = LLVMFloatTypeInContext(gallivm->context);
 		args[0] = llvm_chan;
 		args[1] = attr_number;
 		args[2] = params;
@@ -357,10 +360,18 @@ static LLVMValueRef fetch_constant(
 	unsigned swizzle)
 {
 	struct lp_build_context * base = &bld_base->base;
+	unsigned idx;
 
 	LLVMValueRef const_ptr;
 	LLVMValueRef offset;
 	LLVMValueRef load;
+
+	/* currently not supported */
+	if (reg->Register.Indirect) {
+		assert(0);
+		load = lp_build_const_int32(base->gallivm, 0);
+		return bitcast(bld_base, type, load);
+	}
 
 	/* XXX: Assume the pointer to the constant buffer is being stored in
 	 * SGPR[0:1] */
@@ -369,8 +380,14 @@ static LLVMValueRef fetch_constant(
 	/* XXX: This assumes that the constant buffer is not packed, so
 	 * CONST[0].x will have an offset of 0 and CONST[1].x will have an
 	 * offset of 4. */
-	offset = lp_build_const_int32(base->gallivm,
-					(reg->Register.Index * 4) + swizzle);
+	idx = (reg->Register.Index * 4) + swizzle;
+
+	/* index loads above 255 are currently not supported */
+	if (idx > 255) {
+		assert(0);
+		idx = 0;
+	}
+	offset = lp_build_const_int32(base->gallivm, idx);
 
 	load = build_indexed_load(base->gallivm, const_ptr, offset);
 	return bitcast(bld_base, type, load);
@@ -454,6 +471,17 @@ static void si_llvm_init_export_args(struct lp_build_tgsi_context *bld_base,
 	 * stage. */
 }
 
+static void si_llvm_emit_prologue(struct lp_build_tgsi_context *bld_base)
+{
+	struct si_shader_context *si_shader_ctx = si_shader_context(bld_base);
+	struct gallivm_state *gallivm = bld_base->base.gallivm;
+	lp_build_intrinsic_unary(gallivm->builder,
+			"llvm.AMDGPU.shader.type",
+			LLVMVoidTypeInContext(gallivm->context),
+			lp_build_const_int32(gallivm, si_shader_ctx->type));
+}
+
+
 /* XXX: This is partially implemented for VS only at this point.  It is not complete */
 static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 {
@@ -516,6 +544,7 @@ static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 					color_count++;
 				}
 				break;
+			case TGSI_SEMANTIC_FOG:
 			case TGSI_SEMANTIC_GENERIC:
 				target = V_008DFC_SQ_EXP_PARAM + param_count;
 				shader->output[i].param_offset = param_count;
@@ -675,13 +704,14 @@ int si_pipe_shader_create(
 
 	dump = debug_get_bool_option("RADEON_DUMP_SHADERS", FALSE);
 
-	memset(&si_shader_ctx.radeon_bld, 0, sizeof(si_shader_ctx.radeon_bld));
+	memset(&si_shader_ctx, 0, sizeof(si_shader_ctx));
 	radeon_llvm_context_init(&si_shader_ctx.radeon_bld);
 	bld_base = &si_shader_ctx.radeon_bld.soa.bld_base;
 
 	tgsi_scan_shader(sel->tokens, &shader_info);
 	bld_base->info = &shader_info;
 	bld_base->emit_fetch_funcs[TGSI_FILE_CONSTANT] = fetch_constant;
+	bld_base->emit_prologue = si_llvm_emit_prologue;
 	bld_base->emit_epilogue = si_llvm_emit_epilogue;
 
 	bld_base->op_actions[TGSI_OPCODE_TEX] = tex_action;

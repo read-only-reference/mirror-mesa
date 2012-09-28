@@ -95,11 +95,6 @@ TargetPassConfig *AMDGPUTargetMachine::createPassConfig(PassManagerBase &PM) {
 bool
 AMDGPUPassConfig::addPreISel()
 {
-  const AMDGPUSubtarget &ST = TM->getSubtarget<AMDGPUSubtarget>();
-  if (ST.device()->getGeneration() <= AMDGPUDeviceInfo::HD6XXX) {
-    PM->add(createR600KernelParametersPass(
-                     getAMDGPUTargetMachine().getTargetData()));
-  }
   return false;
 }
 
@@ -139,6 +134,7 @@ bool AMDGPUPassConfig::addPreEmitPass() {
     addPass(FinalizeMachineBundlesID);
   } else {
     PM->add(createSILowerLiteralConstantsPass(*TM));
+    PM->add(createSILowerFlowControlPass(*TM));
   }
 
   return false;

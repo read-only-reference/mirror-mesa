@@ -83,9 +83,6 @@ typedef struct {
 #define NUM_TYPES 8
 
 
-#if FEATURE_arrayelt
-
-
 static const int ColorFuncs[2][NUM_TYPES] = {
    {
       _gloffset_Color3bv,
@@ -1426,7 +1423,7 @@ GLboolean _ae_create_context( struct gl_context *ctx )
    FogCoordFuncs[6] = _gloffset_FogCoordfvEXT;
    FogCoordFuncs[7] = _gloffset_FogCoorddvEXT;
 
-   ctx->aelt_context = CALLOC( sizeof(AEcontext) );
+   ctx->aelt_context = calloc(1, sizeof(AEcontext));
    if (!ctx->aelt_context)
       return GL_FALSE;
 
@@ -1438,7 +1435,7 @@ GLboolean _ae_create_context( struct gl_context *ctx )
 void _ae_destroy_context( struct gl_context *ctx )
 {
    if ( AE_CONTEXT( ctx ) ) {
-      FREE( ctx->aelt_context );
+      free(ctx->aelt_context);
       ctx->aelt_context = NULL;
    }
 }
@@ -1711,6 +1708,3 @@ void _mesa_install_arrayelt_vtxfmt(struct _glapi_table *disp,
 {
    SET_ArrayElement(disp, vfmt->ArrayElement);
 }
-
-
-#endif /* FEATURE_arrayelt */

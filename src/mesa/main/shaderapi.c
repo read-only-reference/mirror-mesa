@@ -167,18 +167,12 @@ static bool
 validate_shader_target(const struct gl_context *ctx, GLenum type)
 {
    switch (type) {
-#if FEATURE_ARB_fragment_shader
    case GL_FRAGMENT_SHADER:
       return ctx->Extensions.ARB_fragment_shader;
-#endif
-#if FEATURE_ARB_vertex_shader
    case GL_VERTEX_SHADER:
       return ctx->Extensions.ARB_vertex_shader;
-#endif
-#if FEATURE_ARB_geometry_shader4
    case GL_GEOMETRY_SHADER_ARB:
       return _mesa_is_desktop_gl(ctx) && ctx->Extensions.ARB_geometry_shader4;
-#endif
    default:
       return false;
    }
@@ -377,7 +371,7 @@ detach_shader(struct gl_context *ctx, GLuint program, GLuint shader)
          _mesa_reference_shader(ctx, &shProg->Shaders[i], NULL);
 
          /* alloc new, smaller array */
-         newList = (struct gl_shader **)
+         newList =
             malloc((n - 1) * sizeof(struct gl_shader *));
          if (!newList) {
             _mesa_error(ctx, GL_OUT_OF_MEMORY, "glDetachShader");
@@ -473,21 +467,17 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname, GLint *param
    struct gl_shader_program *shProg
       = _mesa_lookup_shader_program(ctx, program);
 
-#if FEATURE_EXT_transform_feedback
    /* Is transform feedback available in this context?
     */
    const bool has_xfb =
       (ctx->API == API_OPENGL && ctx->Extensions.EXT_transform_feedback)
       || ctx->API == API_OPENGL_CORE
       || _mesa_is_gles3(ctx);
-#endif
 
-#if FEATURE_ARB_geometry_shader4
    /* Are geometry shaders available in this context?
     */
    const bool has_gs =
       _mesa_is_desktop_gl(ctx) && ctx->Extensions.ARB_geometry_shader4;
-#endif
 
    /* Are uniform buffer objects available in this context?
     */
@@ -542,7 +532,6 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname, GLint *param
       *params = max_len;
       return;
    }
-#if FEATURE_EXT_transform_feedback
    case GL_TRANSFORM_FEEDBACK_VARYINGS:
       if (!has_xfb)
          break;
@@ -558,8 +547,6 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname, GLint *param
          break;
       *params = shProg->TransformFeedback.BufferMode;
       return;
-#endif
-#if FEATURE_ARB_geometry_shader4
    case GL_GEOMETRY_VERTICES_OUT_ARB:
       if (!has_gs)
          break;
@@ -575,7 +562,6 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname, GLint *param
          break;
       *params = shProg->Geom.OutputType;
       return;
-#endif
    case GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH: {
       unsigned i;
       GLint max_len = 0;
@@ -703,9 +689,7 @@ shader_source(struct gl_context *ctx, GLuint shader, const GLchar *source)
       return;
 
    /* free old shader source string and install new one */
-   if (sh->Source) {
-      free((void *) sh->Source);
-   }
+   free((void *)sh->Source);
    sh->Source = source;
    sh->CompileStatus = GL_FALSE;
 #ifdef DEBUG
@@ -862,7 +846,6 @@ use_shader_program(struct gl_context *ctx, GLenum type,
    struct gl_shader_program **target;
 
    switch (type) {
-#if FEATURE_ARB_vertex_shader
    case GL_VERTEX_SHADER:
       target = &ctx->Shader.CurrentVertexProgram;
       if ((shProg == NULL)
@@ -870,8 +853,6 @@ use_shader_program(struct gl_context *ctx, GLenum type,
 	 shProg = NULL;
       }
       break;
-#endif
-#if FEATURE_ARB_geometry_shader4
    case GL_GEOMETRY_SHADER_ARB:
       target = &ctx->Shader.CurrentGeometryProgram;
       if ((shProg == NULL)
@@ -879,8 +860,6 @@ use_shader_program(struct gl_context *ctx, GLenum type,
 	 shProg = NULL;
       }
       break;
-#endif
-#if FEATURE_ARB_fragment_shader
    case GL_FRAGMENT_SHADER:
       target = &ctx->Shader.CurrentFragmentProgram;
       if ((shProg == NULL)
@@ -888,7 +867,6 @@ use_shader_program(struct gl_context *ctx, GLenum type,
 	 shProg = NULL;
       }
       break;
-#endif
    default:
       return false;
    }
@@ -901,17 +879,12 @@ use_shader_program(struct gl_context *ctx, GLenum type,
        * semantics of glDeleteProgram are maintained.
        */
       switch (type) {
-#if FEATURE_ARB_vertex_shader
       case GL_VERTEX_SHADER:
 	 /* Empty for now. */
 	 break;
-#endif
-#if FEATURE_ARB_geometry_shader4
       case GL_GEOMETRY_SHADER_ARB:
 	 /* Empty for now. */
 	 break;
-#endif
-#if FEATURE_ARB_fragment_shader
       case GL_FRAGMENT_SHADER:
 	 if (*target == ctx->Shader._CurrentFragmentProgram) {
 	    _mesa_reference_shader_program(ctx,
@@ -919,7 +892,6 @@ use_shader_program(struct gl_context *ctx, GLenum type,
 					   NULL);
 	 }
 	 break;
-#endif
       }
 
       _mesa_reference_shader_program(ctx, target, shProg);
@@ -1299,7 +1271,7 @@ read_shader(const char *fname)
       return NULL;
    }
 
-   buffer = (char *) malloc(max);
+   buffer = malloc(max);
    len = fread(buffer, 1, max, f);
    buffer[len] = 0;
 
@@ -1336,7 +1308,7 @@ _mesa_ShaderSourceARB(GLhandleARB shaderObj, GLsizei count,
     * This array holds offsets of where the appropriate string ends, thus the
     * last element will be set to the total length of the source code.
     */
-   offsets = (GLint *) malloc(count * sizeof(GLint));
+   offsets = malloc(count * sizeof(GLint));
    if (offsets == NULL) {
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "glShaderSourceARB");
       return;
@@ -1363,7 +1335,7 @@ _mesa_ShaderSourceARB(GLhandleARB shaderObj, GLsizei count,
     * valgrind warnings in the parser/grammer code.
     */
    totalLength = offsets[count - 1] + 2;
-   source = (GLcharARB *) malloc(totalLength * sizeof(GLcharARB));
+   source = malloc(totalLength * sizeof(GLcharARB));
    if (source == NULL) {
       free((GLvoid *) offsets);
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "glShaderSourceARB");
@@ -1535,8 +1507,6 @@ _mesa_ShaderBinary(GLint n, const GLuint* shaders, GLenum binaryformat,
 #endif /* FEATURE_ES2 */
 
 
-#if FEATURE_ARB_geometry_shader4
-
 void GLAPIENTRY
 _mesa_ProgramParameteriARB(GLuint program, GLenum pname, GLint value)
 {
@@ -1597,8 +1567,6 @@ _mesa_ProgramParameteriARB(GLuint program, GLenum pname, GLint value)
       break;
    }
 }
-
-#endif
 
 void
 _mesa_use_shader_program(struct gl_context *ctx, GLenum type,
@@ -1718,25 +1686,29 @@ _mesa_CreateShaderProgramEXT(GLenum type, const GLchar *string)
  * Plug in shader-related functions into API dispatch table.
  */
 void
-_mesa_init_shader_dispatch(struct _glapi_table *exec)
+_mesa_init_shader_dispatch(const struct gl_context *ctx,
+                           struct _glapi_table *exec)
 {
 #if FEATURE_GL
    /* GL_ARB_vertex/fragment_shader */
-   SET_DeleteObjectARB(exec, _mesa_DeleteObjectARB);
-   SET_GetHandleARB(exec, _mesa_GetHandleARB);
-   SET_DetachObjectARB(exec, _mesa_DetachObjectARB);
-   SET_CreateShaderObjectARB(exec, _mesa_CreateShaderObjectARB);
+   if (ctx->API != API_OPENGLES2) {
+      SET_DeleteObjectARB(exec, _mesa_DeleteObjectARB);
+      SET_GetHandleARB(exec, _mesa_GetHandleARB);
+      SET_DetachObjectARB(exec, _mesa_DetachObjectARB);
+      SET_CreateShaderObjectARB(exec, _mesa_CreateShaderObjectARB);
+      SET_CreateProgramObjectARB(exec, _mesa_CreateProgramObjectARB);
+      SET_AttachObjectARB(exec, _mesa_AttachObjectARB);
+      SET_GetObjectParameterfvARB(exec, _mesa_GetObjectParameterfvARB);
+      SET_GetObjectParameterivARB(exec, _mesa_GetObjectParameterivARB);
+      SET_GetInfoLogARB(exec, _mesa_GetInfoLogARB);
+      SET_GetAttachedObjectsARB(exec, _mesa_GetAttachedObjectsARB);
+   }
+
    SET_ShaderSourceARB(exec, _mesa_ShaderSourceARB);
    SET_CompileShaderARB(exec, _mesa_CompileShaderARB);
-   SET_CreateProgramObjectARB(exec, _mesa_CreateProgramObjectARB);
-   SET_AttachObjectARB(exec, _mesa_AttachObjectARB);
    SET_LinkProgramARB(exec, _mesa_LinkProgramARB);
    SET_UseProgramObjectARB(exec, _mesa_UseProgramObjectARB);
    SET_ValidateProgramARB(exec, _mesa_ValidateProgramARB);
-   SET_GetObjectParameterfvARB(exec, _mesa_GetObjectParameterfvARB);
-   SET_GetObjectParameterivARB(exec, _mesa_GetObjectParameterivARB);
-   SET_GetInfoLogARB(exec, _mesa_GetInfoLogARB);
-   SET_GetAttachedObjectsARB(exec, _mesa_GetAttachedObjectsARB);
    SET_GetShaderSourceARB(exec, _mesa_GetShaderSourceARB);
 
    /* OpenGL 2.0 */
@@ -1754,31 +1726,37 @@ _mesa_init_shader_dispatch(struct _glapi_table *exec)
    SET_IsProgram(exec, _mesa_IsProgram);
    SET_IsShader(exec, _mesa_IsShader);
 
-#if FEATURE_ARB_vertex_shader
+   /* GL_ARB_vertex_shader */
    SET_BindAttribLocationARB(exec, _mesa_BindAttribLocationARB);
    SET_GetActiveAttribARB(exec, _mesa_GetActiveAttribARB);
    SET_GetAttribLocationARB(exec, _mesa_GetAttribLocationARB);
-#endif
 
-#if FEATURE_ARB_geometry_shader4
-   SET_ProgramParameteriARB(exec, _mesa_ProgramParameteriARB);
-#endif
+   if (ctx->API != API_OPENGLES2) {
+      SET_ProgramParameteriARB(exec, _mesa_ProgramParameteriARB);
 
-   SET_UseShaderProgramEXT(exec, _mesa_UseShaderProgramEXT);
-   SET_ActiveProgramEXT(exec, _mesa_ActiveProgramEXT);
-   SET_CreateShaderProgramEXT(exec, _mesa_CreateShaderProgramEXT);
+      SET_UseShaderProgramEXT(exec, _mesa_UseShaderProgramEXT);
+      SET_ActiveProgramEXT(exec, _mesa_ActiveProgramEXT);
+      SET_CreateShaderProgramEXT(exec, _mesa_CreateShaderProgramEXT);
+   }
 
    /* GL_EXT_gpu_shader4 / GL 3.0 */
-   SET_BindFragDataLocationEXT(exec, _mesa_BindFragDataLocation);
-   SET_GetFragDataLocationEXT(exec, _mesa_GetFragDataLocation);
+   if (ctx->API != API_OPENGLES2) {
+      SET_BindFragDataLocationEXT(exec, _mesa_BindFragDataLocation);
+   }
+   if (ctx->API != API_OPENGLES2 || _mesa_is_gles3(ctx)) {
+      SET_GetFragDataLocationEXT(exec, _mesa_GetFragDataLocation);
+   }
 
    /* GL_ARB_ES2_compatibility */
    SET_ReleaseShaderCompiler(exec, _mesa_ReleaseShaderCompiler);
    SET_GetShaderPrecisionFormat(exec, _mesa_GetShaderPrecisionFormat);
+   SET_ShaderBinary(exec, _mesa_ShaderBinary);
 
    /* GL_ARB_blend_func_extended */
-   SET_BindFragDataLocationIndexed(exec, _mesa_BindFragDataLocationIndexed);
-   SET_GetFragDataIndex(exec, _mesa_GetFragDataIndex);
+   if (ctx->API != API_OPENGLES2) {
+      SET_BindFragDataLocationIndexed(exec, _mesa_BindFragDataLocationIndexed);
+      SET_GetFragDataIndex(exec, _mesa_GetFragDataIndex);
+   }
 #endif /* FEATURE_GL */
 }
 
