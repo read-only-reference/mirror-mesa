@@ -44,9 +44,6 @@ gen6_upload_vs_push_constants(struct brw_context *brw)
    unsigned int nr_params = brw->vs.prog_data->nr_params / 4;
    bool uses_clip_distance = vp->program.UsesClipDistance;
 
-   if (brw->vertex_program->IsNVProgram)
-      _mesa_load_tracked_matrices(ctx);
-
    /* Updates the ParamaterValues[i] pointers for all parameters of the
     * basic type of PROGRAM_STATE_VAR.
     */
@@ -65,6 +62,8 @@ gen6_upload_vs_push_constants(struct brw_context *brw)
 			      (MAX_CLIP_PLANES + nr_params) *
 			      4 * sizeof(float),
 			      32, &brw->vs.push_const_offset);
+
+      float *save_param = param;
 
       if (brw->vs.prog_data->uses_new_param_layout) {
 	 for (i = 0; i < brw->vs.prog_data->nr_params; i++) {
@@ -105,7 +104,7 @@ gen6_upload_vs_push_constants(struct brw_context *brw)
       if (0) {
 	 printf("VS constant buffer:\n");
 	 for (i = 0; i < params_uploaded; i++) {
-	    float *buf = param + i * 4;
+	    float *buf = save_param + i * 4;
 	    printf("%d: %f %f %f %f\n",
 		   i, buf[0], buf[1], buf[2], buf[3]);
 	 }

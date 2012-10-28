@@ -1,6 +1,6 @@
 /**************************************************************************
  *
- * Copyright 2010 Thomas Balling Sørensen.
+ * Copyright 2012 Marek Olšák <maraeo@gmail.com>
  * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -18,46 +18,34 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL TUNGSTEN GRAPHICS AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * IN NO EVENT SHALL THE AUTHORS AND/OR THEIR SUPPLIERS BE LIABLE FOR
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  **************************************************************************/
 
- #include <va/va.h>
- #include <va/va_backend.h>
- 
- #include "va_private.h"
+#ifndef U_HELPERS_H
+#define U_HELPERS_H
 
-VAStatus
-vlVaQueryDisplayAttributes(VADriverContextP ctx, VADisplayAttribute *attr_list, int *num_attributes)
-{
-   if (!ctx)
-      return VA_STATUS_ERROR_INVALID_CONTEXT;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-   if (!(attr_list && num_attributes))
-      return VA_STATUS_ERROR_UNKNOWN;
+#include "pipe/p_state.h"
 
-   *num_attributes = 0;
+void util_set_vertex_buffers_mask(struct pipe_vertex_buffer *dst,
+                                  uint32_t *enabled_buffers,
+                                  const struct pipe_vertex_buffer *src,
+                                  unsigned start_slot, unsigned count);
 
-   return VA_STATUS_SUCCESS;
+void util_set_vertex_buffers_count(struct pipe_vertex_buffer *dst,
+                                   unsigned *dst_count,
+                                   const struct pipe_vertex_buffer *src,
+                                   unsigned start_slot, unsigned count);
+
+#ifdef __cplusplus
 }
+#endif
 
-VAStatus
-vlVaGetDisplayAttributes(VADriverContextP ctx, VADisplayAttribute *attr_list, int num_attributes)
-{
-   if (!ctx)
-      return VA_STATUS_ERROR_INVALID_CONTEXT;
-
-   return VA_STATUS_ERROR_UNIMPLEMENTED;
-}
-
-VAStatus
-vlVaSetDisplayAttributes(VADriverContextP ctx, VADisplayAttribute *attr_list, int num_attributes)
-{
-   if (!ctx)
-      return VA_STATUS_ERROR_INVALID_CONTEXT;
-
-   return VA_STATUS_ERROR_UNIMPLEMENTED;
-}
+#endif

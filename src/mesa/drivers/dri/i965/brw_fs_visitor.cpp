@@ -44,7 +44,6 @@ extern "C" {
 #include "brw_eu.h"
 #include "brw_wm.h"
 }
-#include "brw_shader.h"
 #include "brw_fs.h"
 #include "glsl/glsl_types.h"
 #include "glsl/ir_optimization.h"
@@ -83,7 +82,7 @@ fs_visitor::visit(ir_variable *ir)
 	    this->output_components[i] = 4;
 	 }
       } else if (ir->location == FRAG_RESULT_DEPTH) {
-	 this->frag_depth = ir;
+	 this->frag_depth = *reg;
       } else {
 	 /* gl_FragData or a user-defined FS output */
 	 assert(ir->location >= FRAG_RESULT_DATA0 &&
@@ -175,6 +174,24 @@ fs_visitor::visit(ir_dereference_array *ir)
       this->result.reg_offset += index->value.i[0] * element_size;
    } else {
       assert(!"FINISHME: non-constant array element");
+   }
+}
+
+void
+fs_visitor::emit_minmax(uint32_t conditionalmod, fs_reg dst,
+                        fs_reg src0, fs_reg src1)
+{
+   fs_inst *inst;
+
+   if (intel->gen >= 6) {
+      inst = emit(BRW_OPCODE_SEL, dst, src0, src1);
+      inst->conditional_mod = conditionalmod;
+   } else {
+      inst = emit(BRW_OPCODE_CMP, reg_null_cmp, src0, src1);
+      inst->conditional_mod = conditionalmod;
+
+      inst = emit(BRW_OPCODE_SEL, dst, src0, src1);
+      inst->predicate = BRW_PREDICATE_NORMAL;
    }
 }
 
@@ -312,12 +329,12 @@ fs_visitor::visit(ir_expression *ir)
       inst = emit(BRW_OPCODE_CMP, reg_null_f, op[0], fs_reg(0.0f));
       inst->conditional_mod = BRW_CONDITIONAL_G;
       inst = emit(BRW_OPCODE_MOV, this->result, fs_reg(1.0f));
-      inst->predicated = true;
+      inst->predicate = BRW_PREDICATE_NORMAL;
 
       inst = emit(BRW_OPCODE_CMP, reg_null_f, op[0], fs_reg(0.0f));
       inst->conditional_mod = BRW_CONDITIONAL_L;
       inst = emit(BRW_OPCODE_MOV, this->result, fs_reg(-1.0f));
-      inst->predicated = true;
+      inst->predicate = BRW_PREDICATE_NORMAL;
 
       break;
    case ir_unop_rcp:
@@ -515,40 +532,12 @@ fs_visitor::visit(ir_expression *ir)
       break;
 
    case ir_binop_min:
-      resolve_ud_negate(&op[0]);
-      resolve_ud_negate(&op[1]);
-
-      if (intel->gen >= 6) {
-	 inst = emit(BRW_OPCODE_SEL, this->result, op[0], op[1]);
-	 inst->conditional_mod = BRW_CONDITIONAL_L;
-      } else {
-	 /* Unalias the destination */
-	 this->result = fs_reg(this, ir->type);
-
-	 inst = emit(BRW_OPCODE_CMP, this->result, op[0], op[1]);
-	 inst->conditional_mod = BRW_CONDITIONAL_L;
-
-	 inst = emit(BRW_OPCODE_SEL, this->result, op[0], op[1]);
-	 inst->predicated = true;
-      }
-      break;
    case ir_binop_max:
       resolve_ud_negate(&op[0]);
       resolve_ud_negate(&op[1]);
-
-      if (intel->gen >= 6) {
-	 inst = emit(BRW_OPCODE_SEL, this->result, op[0], op[1]);
-	 inst->conditional_mod = BRW_CONDITIONAL_GE;
-      } else {
-	 /* Unalias the destination */
-	 this->result = fs_reg(this, ir->type);
-
-	 inst = emit(BRW_OPCODE_CMP, this->result, op[0], op[1]);
-	 inst->conditional_mod = BRW_CONDITIONAL_G;
-
-	 inst = emit(BRW_OPCODE_SEL, this->result, op[0], op[1]);
-	 inst->predicated = true;
-      }
+      emit_minmax(ir->operation == ir_binop_min ?
+                  BRW_CONDITIONAL_L : BRW_CONDITIONAL_GE,
+                  this->result, op[0], op[1]);
       break;
 
    case ir_binop_pow:
@@ -634,7 +623,7 @@ fs_visitor::emit_assignment_writes(fs_reg &l, fs_reg &r,
 
 	 if (predicated || !l.equals(r)) {
 	    fs_inst *inst = emit(BRW_OPCODE_MOV, l, r);
-	    inst->predicated = predicated;
+	    inst->predicate = predicated ? BRW_PREDICATE_NORMAL : BRW_PREDICATE_NONE;
 	 }
 
 	 l.reg_offset++;
@@ -735,7 +724,7 @@ fs_visitor::visit(ir_assignment *ir)
 	 if (ir->write_mask & (1 << i)) {
 	    inst = emit(BRW_OPCODE_MOV, l, r);
 	    if (ir->condition)
-	       inst->predicated = true;
+	       inst->predicate = BRW_PREDICATE_NORMAL;
 	    r.reg_offset++;
 	 }
 	 l.reg_offset++;
@@ -1159,32 +1148,19 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    return inst;
 }
 
-/**
- * Emit code to produce the coordinates for a texture lookup.
- *
- * Returns the fs_reg containing the texture coordinate (as opposed to
- * setting this->result).
- */
 fs_reg
-fs_visitor::emit_texcoord(ir_texture *ir, int sampler, int texunit)
+fs_visitor::rescale_texcoord(ir_texture *ir, fs_reg coordinate,
+                             bool is_rect, int sampler, int texunit)
 {
    fs_inst *inst = NULL;
-
-   if (!ir->coordinate)
-      return fs_reg(); /* Return the default BAD_FILE register. */
-
-   ir->coordinate->accept(this);
-   fs_reg coordinate = this->result;
-
    bool needs_gl_clamp = true;
-
    fs_reg scale_x, scale_y;
 
    /* The 965 requires the EU to do the normalization of GL rectangle
     * texture coordinates.  We use the program parameter state
     * tracking to get the scaling factor.
     */
-   if (ir->sampler->type->sampler_dimensionality == GLSL_SAMPLER_DIM_RECT &&
+   if (is_rect &&
        (intel->gen < 6 ||
 	(intel->gen >= 6 && (c->key.tex.gl_clamp_mask[0] & (1 << sampler) ||
 			     c->key.tex.gl_clamp_mask[1] & (1 << sampler))))) {
@@ -1220,8 +1196,7 @@ fs_visitor::emit_texcoord(ir_texture *ir, int sampler, int texunit)
     * texture coordinates.  We use the program parameter state
     * tracking to get the scaling factor.
     */
-   if (intel->gen < 6 &&
-       ir->sampler->type->sampler_dimensionality == GLSL_SAMPLER_DIM_RECT) {
+   if (intel->gen < 6 && is_rect) {
       fs_reg dst = fs_reg(this, ir->coordinate->type);
       fs_reg src = coordinate;
       coordinate = dst;
@@ -1230,7 +1205,7 @@ fs_visitor::emit_texcoord(ir_texture *ir, int sampler, int texunit)
       dst.reg_offset++;
       src.reg_offset++;
       emit(BRW_OPCODE_MUL, dst, src, scale_y);
-   } else if (ir->sampler->type->sampler_dimensionality == GLSL_SAMPLER_DIM_RECT) {
+   } else if (is_rect) {
       /* On gen6+, the sampler handles the rectangle coordinates
        * natively, without needing rescaling.  But that means we have
        * to do GL_CLAMP clamping at the [0, width], [0, height] scale,
@@ -1292,7 +1267,15 @@ fs_visitor::visit(ir_texture *ir)
     * done before loading any values into MRFs for the sampler message since
     * generating these values may involve SEND messages that need the MRFs.
     */
-   fs_reg coordinate = emit_texcoord(ir, sampler, texunit);
+   fs_reg coordinate;
+   if (ir->coordinate) {
+      ir->coordinate->accept(this);
+
+      coordinate = rescale_texcoord(ir, this->result,
+                                    ir->sampler->type->sampler_dimensionality ==
+                                    GLSL_SAMPLER_DIM_RECT,
+                                    sampler, texunit);
+   }
 
    fs_reg shadow_comparitor;
    if (ir->shadow_comparitor) {
@@ -1690,7 +1673,7 @@ fs_visitor::visit(ir_if *ir)
       emit_bool_to_cond_code(ir->condition);
 
       inst = emit(BRW_OPCODE_IF);
-      inst->predicated = true;
+      inst->predicate = BRW_PREDICATE_NORMAL;
    }
 
    foreach_list(node, &ir->then_instructions) {
@@ -1747,7 +1730,7 @@ fs_visitor::visit(ir_loop *ir)
       inst->conditional_mod = brw_conditional_for_comparison(ir->cmp);
 
       inst = emit(BRW_OPCODE_BREAK);
-      inst->predicated = true;
+      inst->predicate = BRW_PREDICATE_NORMAL;
    }
 
    foreach_list(node, &ir->body_instructions) {
@@ -2111,10 +2094,8 @@ fs_visitor::emit_fb_writes()
 
       if (c->computes_depth) {
 	 /* Hand over gl_FragDepth. */
-	 assert(this->frag_depth);
-	 fs_reg depth = *(variable_storage(this->frag_depth));
-
-	 emit(BRW_OPCODE_MOV, fs_reg(MRF, nr), depth);
+	 assert(this->frag_depth.file != BAD_FILE);
+	 emit(BRW_OPCODE_MOV, fs_reg(MRF, nr), this->frag_depth);
       } else {
 	 /* Pass through the payload depth. */
 	 emit(BRW_OPCODE_MOV, fs_reg(MRF, nr),
@@ -2246,8 +2227,7 @@ fs_visitor::fs_visitor(struct brw_wm_compile *c, struct gl_shader_program *prog,
    this->c = c;
    this->p = &c->func;
    this->brw = p->brw;
-   this->fp = (struct gl_fragment_program *)
-      prog->_LinkedShaders[MESA_SHADER_FRAGMENT]->Program;
+   this->fp = &c->fp->program;
    this->prog = prog;
    this->intel = &brw->intel;
    this->ctx = &intel->ctx;
@@ -2275,7 +2255,6 @@ fs_visitor::fs_visitor(struct brw_wm_compile *c, struct gl_shader_program *prog,
    else
       this->reg_null_cmp = reg_null_f;
 
-   this->frag_depth = NULL;
    memset(this->outputs, 0, sizeof(this->outputs));
    memset(this->output_components, 0, sizeof(this->output_components));
    this->first_non_payload_grf = 0;

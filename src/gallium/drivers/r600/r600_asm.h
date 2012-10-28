@@ -23,10 +23,7 @@
 #ifndef R600_ASM_H
 #define R600_ASM_H
 
-#include "r600.h"
-
-struct r600_vertex_element;
-struct r600_context;
+#include "r600_pipe.h"
 
 struct r600_bytecode_alu_src {
 	unsigned			sel;
@@ -65,6 +62,7 @@ struct r600_bytecode_alu {
 struct r600_bytecode_tex {
 	struct list_head		list;
 	unsigned			inst;
+	unsigned			inst_mod;
 	unsigned			resource_id;
 	unsigned			src_gpr;
 	unsigned			src_rel;
@@ -198,6 +196,7 @@ struct r600_cf_callstack {
 
 struct r600_bytecode {
 	enum chip_class			chip_class;
+	enum r600_msaa_texture_mode	msaa_texture_mode;
 	int				type;
 	struct list_head		cf;
 	struct r600_bytecode_cf		*cf_last;
@@ -222,7 +221,10 @@ struct r600_bytecode {
 int eg_bytecode_cf_build(struct r600_bytecode *bc, struct r600_bytecode_cf *cf);
 
 /* r600_asm.c */
-void r600_bytecode_init(struct r600_bytecode *bc, enum chip_class chip_class, enum radeon_family family);
+void r600_bytecode_init(struct r600_bytecode *bc,
+			enum chip_class chip_class,
+			enum radeon_family family,
+			enum r600_msaa_texture_mode msaa_texture_mode);
 void r600_bytecode_clear(struct r600_bytecode *bc);
 int r600_bytecode_add_alu(struct r600_bytecode *bc, const struct r600_bytecode_alu *alu);
 int r600_bytecode_add_vtx(struct r600_bytecode *bc, const struct r600_bytecode_vtx *vtx);
@@ -237,7 +239,9 @@ void r600_bytecode_alu_read(struct r600_bytecode_alu *alu, uint32_t word0, uint3
 
 int cm_bytecode_add_cf_end(struct r600_bytecode *bc);
 
-int r600_vertex_elements_build_fetch_shader(struct r600_context *rctx, struct r600_vertex_element *ve);
+void *r600_create_vertex_fetch_shader(struct pipe_context *ctx,
+				      unsigned count,
+				      const struct pipe_vertex_element *elements);
 
 /* r700_asm.c */
 void r700_bytecode_cf_vtx_build(uint32_t *bytecode, const struct r600_bytecode_cf *cf);

@@ -187,7 +187,7 @@ vec4_visitor::SCRATCH_READ(dst_reg dst, src_reg index)
    inst = new(mem_ctx) vec4_instruction(this, VS_OPCODE_SCRATCH_READ,
 					dst, index);
    inst->base_mrf = 14;
-   inst->mlen = 1;
+   inst->mlen = 2;
 
    return inst;
 }
@@ -200,7 +200,7 @@ vec4_visitor::SCRATCH_WRITE(dst_reg dst, src_reg src, src_reg index)
    inst = new(mem_ctx) vec4_instruction(this, VS_OPCODE_SCRATCH_WRITE,
 					dst, src, index);
    inst->base_mrf = 13;
-   inst->mlen = 2;
+   inst->mlen = 3;
 
    return inst;
 }
@@ -2443,6 +2443,8 @@ vec4_visitor::get_pull_constant_offset(vec4_instruction *inst,
 /**
  * Emits an instruction before @inst to load the value named by @orig_src
  * from scratch space at @base_offset to @temp.
+ *
+ * @base_offset is measured in 32-byte units (the size of a register).
  */
 void
 vec4_visitor::emit_scratch_read(vec4_instruction *inst,
@@ -2458,22 +2460,46 @@ vec4_visitor::emit_scratch_read(vec4_instruction *inst,
 /**
  * Emits an instruction after @inst to store the value to be written
  * to @orig_dst to scratch space at @base_offset, from @temp.
+ *
+ * @base_offset is measured in 32-byte units (the size of a register).
  */
 void
-vec4_visitor::emit_scratch_write(vec4_instruction *inst,
-				 src_reg temp, dst_reg orig_dst,
-				 int base_offset)
+vec4_visitor::emit_scratch_write(vec4_instruction *inst, int base_offset)
 {
-   int reg_offset = base_offset + orig_dst.reg_offset;
-   src_reg index = get_scratch_offset(inst, orig_dst.reladdr, reg_offset);
+   int reg_offset = base_offset + inst->dst.reg_offset;
+   src_reg index = get_scratch_offset(inst, inst->dst.reladdr, reg_offset);
+
+   /* Create a temporary register to store *inst's result in.
+    *
+    * We have to be careful in MOVing from our temporary result register in
+    * the scratch write.  If we swizzle from channels of the temporary that
+    * weren't initialized, it will confuse live interval analysis, which will
+    * make spilling fail to make progress.
+    */
+   src_reg temp = src_reg(this, glsl_type::vec4_type);
+   temp.type = inst->dst.type;
+   int first_writemask_chan = ffs(inst->dst.writemask) - 1;
+   int swizzles[4];
+   for (int i = 0; i < 4; i++)
+      if (inst->dst.writemask & (1 << i))
+         swizzles[i] = i;
+      else
+         swizzles[i] = first_writemask_chan;
+   temp.swizzle = BRW_SWIZZLE4(swizzles[0], swizzles[1],
+                               swizzles[2], swizzles[3]);
 
    dst_reg dst = dst_reg(brw_writemask(brw_vec8_grf(0, 0),
-				       orig_dst.writemask));
+				       inst->dst.writemask));
    vec4_instruction *write = SCRATCH_WRITE(dst, temp, index);
    write->predicate = inst->predicate;
    write->ir = inst->ir;
    write->annotation = inst->annotation;
    inst->insert_after(write);
+
+   inst->dst.file = temp.file;
+   inst->dst.reg = temp.reg;
+   inst->dst.reg_offset = temp.reg_offset;
+   inst->dst.reladdr = NULL;
 }
 
 /**
@@ -2501,7 +2527,7 @@ vec4_visitor::move_grf_array_access_to_scratch()
       if (inst->dst.file == GRF && inst->dst.reladdr &&
 	  scratch_loc[inst->dst.reg] == -1) {
 	 scratch_loc[inst->dst.reg] = c->last_scratch;
-	 c->last_scratch += this->virtual_grf_sizes[inst->dst.reg] * 8 * 4;
+	 c->last_scratch += this->virtual_grf_sizes[inst->dst.reg];
       }
 
       for (int i = 0 ; i < 3; i++) {
@@ -2510,7 +2536,7 @@ vec4_visitor::move_grf_array_access_to_scratch()
 	 if (src->file == GRF && src->reladdr &&
 	     scratch_loc[src->reg] == -1) {
 	    scratch_loc[src->reg] = c->last_scratch;
-	    c->last_scratch += this->virtual_grf_sizes[src->reg] * 8 * 4;
+	    c->last_scratch += this->virtual_grf_sizes[src->reg];
 	 }
       }
    }
@@ -2528,14 +2554,7 @@ vec4_visitor::move_grf_array_access_to_scratch()
       current_annotation = inst->annotation;
 
       if (inst->dst.file == GRF && scratch_loc[inst->dst.reg] != -1) {
-	 src_reg temp = src_reg(this, glsl_type::vec4_type);
-
-	 emit_scratch_write(inst, temp, inst->dst, scratch_loc[inst->dst.reg]);
-
-	 inst->dst.file = temp.file;
-	 inst->dst.reg = temp.reg;
-	 inst->dst.reg_offset = temp.reg_offset;
-	 inst->dst.reladdr = NULL;
+	 emit_scratch_write(inst, scratch_loc[inst->dst.reg]);
       }
 
       for (int i = 0 ; i < 3; i++) {

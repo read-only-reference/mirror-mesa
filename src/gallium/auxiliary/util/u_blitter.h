@@ -98,16 +98,16 @@ struct blitter_context
    boolean is_sample_mask_saved;
    unsigned saved_sample_mask;
 
-   int saved_num_sampler_states;
+   unsigned saved_num_sampler_states;
    void *saved_sampler_states[PIPE_MAX_SAMPLERS];
 
-   int saved_num_sampler_views;
+   unsigned saved_num_sampler_views;
    struct pipe_sampler_view *saved_sampler_views[PIPE_MAX_SAMPLERS];
 
-   int saved_num_vertex_buffers;
-   struct pipe_vertex_buffer saved_vertex_buffers[PIPE_MAX_ATTRIBS];
+   unsigned vb_slot;
+   struct pipe_vertex_buffer saved_vertex_buffer;
 
-   int saved_num_so_targets;
+   unsigned saved_num_so_targets;
    struct pipe_stream_output_target *saved_so_targets[PIPE_MAX_SO_BUFFERS];
 
    struct pipe_query *saved_render_cond_query;
@@ -134,6 +134,12 @@ struct pipe_context *util_blitter_get_pipe(struct blitter_context *blitter)
 {
    return blitter->pipe;
 }
+
+/**
+ * Override PIPE_CAP_TEXTURE_MULTISAMPLE as reported by the driver.
+ */
+void util_blitter_set_texture_multisample(struct blitter_context *blitter,
+                                          boolean supported);
 
 /* The default function to draw a rectangle. This can only be used
  * inside of the draw_rectangle callback if the driver overrides it. */
@@ -344,7 +350,8 @@ void util_blitter_custom_resolve_color(struct blitter_context *blitter,
                                        struct pipe_resource *src,
                                        unsigned src_layer,
 				       unsigned sampled_mask,
-                                       void *custom_blend);
+                                       void *custom_blend,
+                                       enum pipe_format format);
 
 /* The functions below should be used to save currently bound constant state
  * objects inside a driver. The objects are automatically restored at the end
@@ -434,7 +441,7 @@ void util_blitter_save_scissor(struct blitter_context *blitter,
 static INLINE
 void util_blitter_save_fragment_sampler_states(
                   struct blitter_context *blitter,
-                  int num_sampler_states,
+                  unsigned num_sampler_states,
                   void **sampler_states)
 {
    assert(num_sampler_states <= Elements(blitter->saved_sampler_states));
@@ -446,7 +453,7 @@ void util_blitter_save_fragment_sampler_states(
 
 static INLINE void
 util_blitter_save_fragment_sampler_views(struct blitter_context *blitter,
-                                         int num_views,
+                                         unsigned num_views,
                                          struct pipe_sampler_view **views)
 {
    unsigned i;
@@ -459,22 +466,18 @@ util_blitter_save_fragment_sampler_views(struct blitter_context *blitter,
 }
 
 static INLINE void
-util_blitter_save_vertex_buffers(struct blitter_context *blitter,
-                                 int num_vertex_buffers,
-                                 struct pipe_vertex_buffer *vertex_buffers)
+util_blitter_save_vertex_buffer_slot(struct blitter_context *blitter,
+                                     struct pipe_vertex_buffer *vertex_buffers)
 {
-   assert(num_vertex_buffers <= Elements(blitter->saved_vertex_buffers));
-
-   blitter->saved_num_vertex_buffers = 0;
-   util_copy_vertex_buffers(blitter->saved_vertex_buffers,
-                            (unsigned*)&blitter->saved_num_vertex_buffers,
-                            vertex_buffers,
-                            num_vertex_buffers);
+   pipe_resource_reference(&blitter->saved_vertex_buffer.buffer,
+                           vertex_buffers[blitter->vb_slot].buffer);
+   memcpy(&blitter->saved_vertex_buffer, &vertex_buffers[blitter->vb_slot],
+          sizeof(struct pipe_vertex_buffer));
 }
 
 static INLINE void
 util_blitter_save_so_targets(struct blitter_context *blitter,
-                             int num_targets,
+                             unsigned num_targets,
                              struct pipe_stream_output_target **targets)
 {
    unsigned i;

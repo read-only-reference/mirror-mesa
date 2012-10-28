@@ -49,7 +49,6 @@
 #define PROGRAM_ANY_CONST ((1 << PROGRAM_LOCAL_PARAM) |  \
                            (1 << PROGRAM_ENV_PARAM) |    \
                            (1 << PROGRAM_STATE_VAR) |    \
-                           (1 << PROGRAM_NAMED_PARAM) |  \
                            (1 << PROGRAM_CONSTANT) |     \
                            (1 << PROGRAM_UNIFORM))
 
@@ -119,11 +118,8 @@ static unsigned *get_label( struct st_translate *t,
    unsigned i;
 
    if (t->labels_count + 1 >= t->labels_size) {
-      unsigned old_size = t->labels_size;
       t->labels_size = 1 << (util_logbase2(t->labels_size) + 1);
-      t->labels = REALLOC( t->labels, 
-                           old_size * sizeof t->labels[0], 
-                           t->labels_size * sizeof t->labels[0] );
+      t->labels = realloc(t->labels, t->labels_size * sizeof t->labels[0]);
       if (t->labels == NULL) {
          static unsigned dummy;
          t->error = TRUE;
@@ -147,11 +143,8 @@ static void set_insn_start( struct st_translate *t,
                             unsigned start )
 {
    if (t->insn_count + 1 >= t->insn_size) {
-      unsigned old_size = t->insn_size;
       t->insn_size = 1 << (util_logbase2(t->insn_size) + 1);
-      t->insn = REALLOC( t->insn, 
-                         old_size * sizeof t->insn[0], 
-                         t->insn_size * sizeof t->insn[0] );
+      t->insn = realloc(t->insn, t->insn_size * sizeof t->insn[0]);
       if (t->insn == NULL) {
          t->error = TRUE;
          return;
@@ -221,7 +214,6 @@ src_register( struct st_translate *t,
          t->temps[index] = ureg_DECL_temporary( t->ureg );
       return ureg_src(t->temps[index]);
 
-   case PROGRAM_NAMED_PARAM:
    case PROGRAM_ENV_PARAM:
    case PROGRAM_LOCAL_PARAM:
    case PROGRAM_UNIFORM:
@@ -543,8 +535,6 @@ translate_opcode( unsigned op )
       return TGSI_OPCODE_BGNLOOP;
    case OPCODE_BGNSUB:
       return TGSI_OPCODE_BGNSUB;
-   case OPCODE_BRA:
-      return TGSI_OPCODE_BRA;
    case OPCODE_BRK:
       return TGSI_OPCODE_BRK;
    case OPCODE_CAL:
@@ -1056,19 +1046,10 @@ st_translate_mesa_program(
     */
    if (procType == TGSI_PROCESSOR_FRAGMENT) {
       for (i = 0; i < numInputs; i++) {
-         if (program->InputFlags[0] & PROG_PARAM_BIT_CYL_WRAP) {
-            t->inputs[i] = ureg_DECL_fs_input_cyl(ureg,
-                                                  inputSemanticName[i],
-                                                  inputSemanticIndex[i],
-                                                  interpMode[i],
-                                                  TGSI_CYLINDRICAL_WRAP_X);
-         }
-         else {
-            t->inputs[i] = ureg_DECL_fs_input(ureg,
-                                              inputSemanticName[i],
-                                              inputSemanticIndex[i],
-                                              interpMode[i]);
-         }
+         t->inputs[i] = ureg_DECL_fs_input(ureg,
+                                           inputSemanticName[i],
+                                           inputSemanticIndex[i],
+                                           interpMode[i]);
       }
 
       if (program->InputsRead & FRAG_BIT_WPOS) {
@@ -1172,6 +1153,7 @@ st_translate_mesa_program(
                struct pipe_screen *pscreen = st->pipe->screen;
                assert(procType == TGSI_PROCESSOR_VERTEX);
                assert(pscreen->get_shader_param(pscreen, PIPE_SHADER_VERTEX, PIPE_SHADER_CAP_INTEGERS));
+               (void) pscreen;  /* silence non-debug build warnings */
                if (!ctx->Const.NativeIntegers) {
                   struct ureg_dst temp = ureg_DECL_local_temporary(t->ureg);
                   ureg_U2F( t->ureg, ureg_writemask(temp, TGSI_WRITEMASK_X), t->systemValues[i]);
@@ -1210,7 +1192,6 @@ st_translate_mesa_program(
          case PROGRAM_ENV_PARAM:
          case PROGRAM_LOCAL_PARAM:
          case PROGRAM_STATE_VAR:
-         case PROGRAM_NAMED_PARAM:
          case PROGRAM_UNIFORM:
             t->constants[i] = ureg_DECL_constant( ureg, i );
             break;
@@ -1278,5 +1259,5 @@ out:
 void
 st_free_tokens(const struct tgsi_token *tokens)
 {
-   free((void *)tokens);
+   ureg_free_tokens(tokens);
 }

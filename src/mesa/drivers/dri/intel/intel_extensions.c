@@ -83,8 +83,6 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.MESA_ycbcr_texture = true;
    ctx->Extensions.NV_blend_square = true;
    ctx->Extensions.NV_texture_rectangle = true;
-   ctx->Extensions.NV_vertex_program = true;
-   ctx->Extensions.NV_vertex_program1_1 = true;
    ctx->Extensions.TDFX_texture_compression_FXT1 = true;
    ctx->Extensions.OES_EGL_image = true;
    ctx->Extensions.OES_draw_texture = true;
@@ -160,6 +158,7 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ATI_envmap_bumpmap = true;
       ctx->Extensions.MESA_texture_array = true;
       ctx->Extensions.NV_conditional_render = true;
+      ctx->Extensions.OES_standard_derivatives = true;
    }
 
    if (intel->gen >= 3) {
@@ -182,6 +181,7 @@ intelInitExtensions(struct gl_context *ctx)
    }
 
    if (intel->ctx.Mesa_DXTn) {
+      ctx->Extensions.ANGLE_texture_compression_dxt = true;
       ctx->Extensions.EXT_texture_compression_s3tc = true;
       ctx->Extensions.S3_s3tc = true;
    }

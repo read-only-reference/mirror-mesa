@@ -39,92 +39,6 @@
 
 #include "glsl/ralloc.h"
 
-/** Return number of src args for given instruction */
-GLuint brw_wm_nr_args( GLuint opcode )
-{
-   switch (opcode) {
-   case WM_FRONTFACING:
-   case WM_PIXELXY:
-      return 0;
-   case WM_CINTERP:
-   case WM_WPOSXY:
-   case WM_DELTAXY:
-      return 1;
-   case WM_LINTERP:
-   case WM_PIXELW:
-      return 2;
-   case WM_FB_WRITE:
-   case WM_PINTERP:
-      return 3;
-   default:
-      assert(opcode < MAX_OPCODE);
-      return _mesa_num_inst_src_regs(opcode);
-   }
-}
-
-
-GLuint brw_wm_is_scalar_result( GLuint opcode )
-{
-   switch (opcode) {
-   case OPCODE_COS:
-   case OPCODE_EX2:
-   case OPCODE_LG2:
-   case OPCODE_POW:
-   case OPCODE_RCP:
-   case OPCODE_RSQ:
-   case OPCODE_SIN:
-   case OPCODE_DP2:
-   case OPCODE_DP3:
-   case OPCODE_DP4:
-   case OPCODE_DPH:
-   case OPCODE_DST:
-      return 1;
-      
-   default:
-      return 0;
-   }
-}
-
-
-/**
- * Do GPU code generation for non-GLSL shader.  non-GLSL shaders have
- * no flow control instructions so we can more readily do SSA-style
- * optimizations.
- */
-static void
-brw_wm_non_glsl_emit(struct brw_context *brw, struct brw_wm_compile *c)
-{
-   /* Augment fragment program.  Add instructions for pre- and
-    * post-fragment-program tasks such as interpolation and fogging.
-    */
-   brw_wm_pass_fp(c);
-
-   /* Translate to intermediate representation.  Build register usage
-    * chains.
-    */
-   brw_wm_pass0(c);
-
-   /* Dead code removal.
-    */
-   brw_wm_pass1(c);
-
-   /* Register allocation.
-    * Divide by two because we operate on 16 pixels at a time and require
-    * two GRF entries for each logical shader register.
-    */
-   c->grf_limit = BRW_WM_MAX_GRF / 2;
-
-   brw_wm_pass2(c);
-
-   /* how many general-purpose registers are used */
-   c->prog_data.reg_blocks = brw_register_blocks(c->max_wm_grf);
-
-   /* Emit GEN4 code.
-    */
-   brw_wm_emit(c);
-}
-
-
 /**
  * Return a bitfield where bit n is set if barycentric interpolation mode n
  * (see enum brw_wm_barycentric_interp_mode) is needed by the fragment shader.
@@ -313,15 +227,7 @@ bool do_wm_prog(struct brw_context *brw,
          return false;
       }
    } else {
-      void *instruction = c->instruction;
-      void *prog_instructions = c->prog_instructions;
-      void *vreg = c->vreg;
-      void *refs = c->refs;
       memset(c, 0, sizeof(*brw->wm.compile_data));
-      c->instruction = instruction;
-      c->prog_instructions = prog_instructions;
-      c->vreg = vreg;
-      c->refs = refs;
    }
 
    /* Allocate the references to the uniforms that will end up in the
@@ -348,7 +254,6 @@ bool do_wm_prog(struct brw_context *brw,
    memcpy(&c->key, key, sizeof(*key));
 
    c->fp = fp;
-   c->env_param = brw->intel.ctx.FragmentProgram.Parameters;
 
    brw_init_compile(brw, &c->func, c);
 
@@ -356,23 +261,7 @@ bool do_wm_prog(struct brw_context *brw,
       brw_compute_barycentric_interp_modes(brw, c->key.flat_shade,
                                            &fp->program);
 
-   if (prog && prog->_LinkedShaders[MESA_SHADER_FRAGMENT]) {
-      if (!brw_wm_fs_emit(brw, c, prog))
-	 return false;
-   } else {
-      if (!c->instruction) {
-	 c->instruction = rzalloc_array(c, struct brw_wm_instruction, BRW_WM_MAX_INSN);
-	 c->prog_instructions = rzalloc_array(c, struct prog_instruction, BRW_WM_MAX_INSN);
-	 c->vreg = rzalloc_array(c, struct brw_wm_value, BRW_WM_MAX_VREG);
-	 c->refs = rzalloc_array(c, struct brw_wm_ref, BRW_WM_MAX_REF);
-      }
-
-      /* Fallback for fixed function and ARB_fp shaders. */
-      c->dispatch_width = 16;
-      brw_wm_payload_setup(brw, c);
-      brw_wm_non_glsl_emit(brw, c);
-      c->prog_data.dispatch_width = 16;
-   }
+   brw_wm_fs_emit(brw, c, prog);
 
    /* Scratch space is used for register spilling */
    if (c->last_scratch) {

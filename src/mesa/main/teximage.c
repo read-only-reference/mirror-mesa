@@ -203,6 +203,18 @@ _mesa_base_tex_format( struct gl_context *ctx, GLint internalFormat )
       }
    }
 
+   /* GL_COMPRESSED_RGBA_S3TC_DXT3_ANGLE && GL_COMPRESSED_RGBA_S3TC_DXT5_ANGLE */
+   if (ctx->API == API_OPENGLES2 &&
+       ctx->Extensions.ANGLE_texture_compression_dxt) {
+      switch (internalFormat) {
+         case GL_COMPRESSED_RGBA_S3TC_DXT3_EXT:
+         case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
+            return GL_RGBA;
+         default:
+            ; /* fallthrough */
+      }
+   }
+
    if (ctx->Extensions.S3_s3tc) {
       switch (internalFormat) {
          case GL_RGB_S3TC:
@@ -1937,9 +1949,6 @@ compressed_texture_error_check(struct gl_context *ctx, GLint dimensions,
 {
    const GLint maxLevels = _mesa_max_texture_levels(ctx, target);
    GLint expectedSize;
-   GLenum choose_format;
-   GLenum choose_type;
-   GLenum proxy_format;
    GLenum error = GL_NO_ERROR;
    char *reason = ""; /* no error */
 
@@ -1957,7 +1966,6 @@ compressed_texture_error_check(struct gl_context *ctx, GLint dimensions,
    }
 
    switch (internalFormat) {
-#if FEATURE_ES
    case GL_PALETTE4_RGB8_OES:
    case GL_PALETTE4_RGBA8_OES:
    case GL_PALETTE4_R5_G6_B5_OES:
@@ -1968,10 +1976,6 @@ compressed_texture_error_check(struct gl_context *ctx, GLint dimensions,
    case GL_PALETTE8_R5_G6_B5_OES:
    case GL_PALETTE8_RGBA4_OES:
    case GL_PALETTE8_RGB5_A1_OES:
-      _mesa_cpal_compressed_format_type(internalFormat, &choose_format,
-					&choose_type);
-      proxy_format = choose_format;
-
       /* check level (note that level should be zero or less!) */
       if (level > 0 || level < -maxLevels) {
 	 reason = "level";
@@ -2000,13 +2004,8 @@ compressed_texture_error_check(struct gl_context *ctx, GLint dimensions,
        */
       level = -level;
       break;
-#endif
 
    default:
-      choose_format = GL_NONE;
-      choose_type = GL_NONE;
-      proxy_format = internalFormat;
-
       /* check level */
       if (level < 0 || level >= maxLevels) {
 	 reason = "level";
@@ -2041,28 +2040,6 @@ compressed_texture_error_check(struct gl_context *ctx, GLint dimensions,
       reason = "width != height";
       error = GL_INVALID_VALUE;
       goto error;
-   }
-
-   /* check image size against compression block size */
-   /* XXX possibly move this into the _mesa_legal_texture_dimensions() func */
-   {
-      gl_format texFormat =
-         ctx->Driver.ChooseTextureFormat(ctx, target, proxy_format,
-					 choose_format, choose_type);
-      GLuint bw, bh;
-
-      _mesa_get_format_block_size(texFormat, &bw, &bh);
-      if ((width > bw && width % bw > 0) ||
-          (height > bh && height % bh > 0)) {
-         /*
-          * Per GL_ARB_texture_compression:  GL_INVALID_OPERATION is
-          * generated [...] if any parameter combinations are not
-          * supported by the specific compressed internal format. 
-          */
-         reason = "invalid width or height for compression format";
-         error = GL_INVALID_OPERATION;
-         goto error;
-      }
    }
 
    /* check image size in bytes */
@@ -2881,13 +2858,15 @@ teximage(struct gl_context *ctx, GLboolean compressed, GLuint dims,
                                        border, internalFormat, texFormat);
 
             /* Give the texture to the driver.  <pixels> may be null. */
-            if (compressed) {
-               ctx->Driver.CompressedTexImage(ctx, dims, texImage,
-                                              imageSize, pixels);
-            }
-            else {
-               ctx->Driver.TexImage(ctx, dims, texImage, format,
-                                    type, pixels, unpack);
+            if (width > 0 && height > 0 && depth > 0) {
+               if (compressed) {
+                  ctx->Driver.CompressedTexImage(ctx, dims, texImage,
+                                                 imageSize, pixels);
+               }
+               else {
+                  ctx->Driver.TexImage(ctx, dims, texImage, format,
+                                       type, pixels, unpack);
+               }
             }
 
             check_gen_mipmap(ctx, target, texObj, level);
@@ -3413,8 +3392,8 @@ compressed_subtexture_error_check(struct gl_context *ctx, GLint dims,
          break;
       default:
          targetOK = GL_FALSE;
-       }
-    }
+      }
+   }
    else {
       assert(dims == 1 || dims == 3);
       /* no 1D or 3D compressed textures at this time */

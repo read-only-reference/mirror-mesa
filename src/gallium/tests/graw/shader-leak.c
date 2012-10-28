@@ -87,6 +87,7 @@ static void set_vertices( void )
    handle = ctx->create_vertex_elements_state(ctx, 2, ve);
    ctx->bind_vertex_elements_state(ctx, handle);
 
+   memset(&vbuf, 0, sizeof vbuf);
 
    vbuf.stride = sizeof(struct vertex);
    vbuf.buffer_offset = 0;
@@ -96,7 +97,7 @@ static void set_vertices( void )
                                               sizeof(vertices),
                                               vertices);
 
-   ctx->set_vertex_buffers(ctx, 1, &vbuf);
+   ctx->set_vertex_buffers(ctx, 0, 1, &vbuf);
 }
 
 static void set_vertex_shader( void )

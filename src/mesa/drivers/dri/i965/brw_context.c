@@ -226,7 +226,6 @@ brwCreateContext(int api,
    for (i = 0; i <= MESA_SHADER_FRAGMENT; i++) {
       ctx->ShaderCompilerOptions[i].MaxIfDepth = intel->gen < 6 ? 16 : UINT_MAX;
       ctx->ShaderCompilerOptions[i].EmitCondCodes = true;
-      ctx->ShaderCompilerOptions[i].EmitNVTempInitialization = true;
       ctx->ShaderCompilerOptions[i].EmitNoNoise = true;
       ctx->ShaderCompilerOptions[i].EmitNoMainReturn = true;
       ctx->ShaderCompilerOptions[i].EmitNoIndirectInput = true;
@@ -254,10 +253,10 @@ brwCreateContext(int api,
       MIN2(ctx->Const.VertexProgram.MaxNativeParameters,
 	   ctx->Const.VertexProgram.MaxEnvParams);
 
-   ctx->Const.FragmentProgram.MaxNativeInstructions = (16 * 1024);
-   ctx->Const.FragmentProgram.MaxNativeAluInstructions = (16 * 1024);
-   ctx->Const.FragmentProgram.MaxNativeTexInstructions = (16 * 1024);
-   ctx->Const.FragmentProgram.MaxNativeTexIndirections = (16 * 1024);
+   ctx->Const.FragmentProgram.MaxNativeInstructions = (1 * 1024);
+   ctx->Const.FragmentProgram.MaxNativeAluInstructions = (1 * 1024);
+   ctx->Const.FragmentProgram.MaxNativeTexInstructions = (1 * 1024);
+   ctx->Const.FragmentProgram.MaxNativeTexIndirections = (1 * 1024);
    ctx->Const.FragmentProgram.MaxNativeAttribs = 12;
    ctx->Const.FragmentProgram.MaxNativeTemps = 256;
    ctx->Const.FragmentProgram.MaxNativeAddressRegs = 0;
@@ -389,6 +388,8 @@ brwCreateContext(int api,
 
    if ((flags & __DRI_CTX_FLAG_DEBUG) != 0)
       ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_DEBUG_BIT;
+
+   brw_fs_alloc_reg_sets(brw);
 
    return true;
 }

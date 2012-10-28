@@ -158,7 +158,6 @@ struct blitter_context *util_blitter_create(struct pipe_context *pipe)
    ctx->base.saved_fb_state.nr_cbufs = ~0;
    ctx->base.saved_num_sampler_views = ~0;
    ctx->base.saved_num_sampler_states = ~0;
-   ctx->base.saved_num_vertex_buffers = ~0;
    ctx->base.saved_num_so_targets = ~0;
 
    ctx->has_geometry_shader =
@@ -241,11 +240,14 @@ struct blitter_context *util_blitter_create(struct pipe_context *pipe)
       ctx->rs_discard_state = pipe->create_rasterizer_state(pipe, &rs_state);
    }
 
+   ctx->base.vb_slot = 0; /* 0 for now */
+
    /* vertex elements states */
    memset(&velem[0], 0, sizeof(velem[0]) * 2);
    for (i = 0; i < 2; i++) {
       velem[i].src_offset = i * 4 * sizeof(float);
       velem[i].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
+      velem[i].vertex_buffer_index = ctx->base.vb_slot;
    }
    ctx->velem_state = pipe->create_vertex_elements_state(pipe, 2, &velem[0]);
 
@@ -253,20 +255,25 @@ struct blitter_context *util_blitter_create(struct pipe_context *pipe)
       memset(&velem[0], 0, sizeof(velem[0]) * 2);
       velem[0].src_offset = 0;
       velem[0].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
+      velem[0].vertex_buffer_index = ctx->base.vb_slot;
       velem[1].src_offset = 4 * sizeof(float);
       velem[1].src_format = PIPE_FORMAT_R32G32B32A32_SINT;
+      velem[1].vertex_buffer_index = ctx->base.vb_slot;
       ctx->velem_sint_state = pipe->create_vertex_elements_state(pipe, 2, &velem[0]);
 
       memset(&velem[0], 0, sizeof(velem[0]) * 2);
       velem[0].src_offset = 0;
       velem[0].src_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
+      velem[0].vertex_buffer_index = ctx->base.vb_slot;
       velem[1].src_offset = 4 * sizeof(float);
       velem[1].src_format = PIPE_FORMAT_R32G32B32A32_UINT;
+      velem[1].vertex_buffer_index = ctx->base.vb_slot;
       ctx->velem_uint_state = pipe->create_vertex_elements_state(pipe, 2, &velem[0]);
    }
 
    if (ctx->has_stream_out) {
       velem[0].src_format = PIPE_FORMAT_R32_UINT;
+      velem[0].vertex_buffer_index = ctx->base.vb_slot;
       ctx->velem_state_readbuf = pipe->create_vertex_elements_state(pipe, 1, &velem[0]);
    }
 
@@ -359,6 +366,14 @@ void util_blitter_destroy(struct blitter_context *blitter)
    FREE(ctx);
 }
 
+void util_blitter_set_texture_multisample(struct blitter_context *blitter,
+                                          boolean supported)
+{
+   struct blitter_context_priv *ctx = (struct blitter_context_priv*)blitter;
+
+   ctx->has_texture_multisample = supported;
+}
+
 static void blitter_set_running_flag(struct blitter_context_priv *ctx)
 {
    if (ctx->base.running) {
@@ -379,7 +394,6 @@ static void blitter_unset_running_flag(struct blitter_context_priv *ctx)
 
 static void blitter_check_saved_vertex_states(struct blitter_context_priv *ctx)
 {
-   assert(ctx->base.saved_num_vertex_buffers != ~0);
    assert(ctx->base.saved_velem_state != INVALID_PTR);
    assert(ctx->base.saved_vs != INVALID_PTR);
    assert(!ctx->has_geometry_shader || ctx->base.saved_gs != INVALID_PTR);
@@ -392,18 +406,10 @@ static void blitter_restore_vertex_states(struct blitter_context_priv *ctx)
    struct pipe_context *pipe = ctx->base.pipe;
    unsigned i;
 
-   /* Vertex buffers. */
-   pipe->set_vertex_buffers(pipe,
-                            ctx->base.saved_num_vertex_buffers,
-                            ctx->base.saved_vertex_buffers);
-
-   for (i = 0; i < ctx->base.saved_num_vertex_buffers; i++) {
-      if (ctx->base.saved_vertex_buffers[i].buffer) {
-         pipe_resource_reference(&ctx->base.saved_vertex_buffers[i].buffer,
-                                 NULL);
-      }
-   }
-   ctx->base.saved_num_vertex_buffers = ~0;
+   /* Vertex buffer. */
+   pipe->set_vertex_buffers(pipe, ctx->base.vb_slot, 1,
+                            &ctx->base.saved_vertex_buffer);
+   pipe_resource_reference(&ctx->base.saved_vertex_buffer.buffer, NULL);
 
    /* Vertex elements. */
    pipe->bind_vertex_elements_state(pipe, ctx->base.saved_velem_state);
@@ -606,10 +612,10 @@ static void get_texcoords(struct pipe_sampler_view *src,
       out[2] = x2 / (float)u_minify(src_width0,  level);
       out[3] = y2 / (float)u_minify(src_height0, level);
    } else {
-      out[0] = x1;
-      out[1] = y1;
-      out[2] = x2;
-      out[3] = y2;
+      out[0] = (float) x1;
+      out[1] = (float) y1;
+      out[2] = (float) x2;
+      out[3] = (float) y2;
    }
 }
 
@@ -664,19 +670,19 @@ static void blitter_set_texcoords(struct blitter_context_priv *ctx,
 
    case PIPE_TEXTURE_1D_ARRAY:
       for (i = 0; i < 4; i++)
-         ctx->vertices[i][1][1] = layer; /*t*/
+         ctx->vertices[i][1][1] = (float) layer; /*t*/
       break;
 
    case PIPE_TEXTURE_2D_ARRAY:
       for (i = 0; i < 4; i++) {
-         ctx->vertices[i][1][2] = layer;  /*r*/
-         ctx->vertices[i][1][3] = sample; /*q*/
+         ctx->vertices[i][1][2] = (float) layer;  /*r*/
+         ctx->vertices[i][1][3] = (float) sample; /*q*/
       }
       break;
 
    case PIPE_TEXTURE_2D:
       for (i = 0; i < 4; i++) {
-         ctx->vertices[i][1][2] = sample; /*r*/
+         ctx->vertices[i][1][2] = (float) sample; /*r*/
       }
       break;
 
@@ -927,8 +933,8 @@ static void blitter_draw(struct blitter_context_priv *ctx,
    u_upload_data(ctx->upload, 0, sizeof(ctx->vertices), ctx->vertices,
                  &offset, &buf);
    u_upload_unmap(ctx->upload);
-   util_draw_vertex_buffer(ctx->base.pipe, NULL, buf, offset,
-                           PIPE_PRIM_TRIANGLE_FAN, 4, 2);
+   util_draw_vertex_buffer(ctx->base.pipe, NULL, buf, ctx->base.vb_slot,
+                           offset, PIPE_PRIM_TRIANGLE_FAN, 4, 2);
    pipe_resource_reference(&buf, NULL);
 }
 
@@ -1010,7 +1016,7 @@ static void util_blitter_clear_custom(struct blitter_context *blitter,
 
    blitter_set_common_draw_rect_state(ctx, FALSE);
    blitter_set_dst_dimensions(ctx, width, height);
-   blitter->draw_rectangle(blitter, 0, 0, width, height, depth,
+   blitter->draw_rectangle(blitter, 0, 0, width, height, (float) depth,
                            UTIL_BLITTER_ATTRIB_COLOR, color);
 
    blitter_restore_vertex_states(ctx);
@@ -1569,7 +1575,8 @@ void util_blitter_clear_depth_stencil(struct blitter_context *blitter,
 
    blitter_set_common_draw_rect_state(ctx, FALSE);
    blitter_set_dst_dimensions(ctx, dstsurf->width, dstsurf->height);
-   blitter->draw_rectangle(blitter, dstx, dsty, dstx+width, dsty+height, depth,
+   blitter->draw_rectangle(blitter, dstx, dsty, dstx+width, dsty+height,
+                           (float) depth,
                            UTIL_BLITTER_ATTRIB_NONE, NULL);
 
    blitter_restore_vertex_states(ctx);
@@ -1678,7 +1685,7 @@ void util_blitter_copy_buffer(struct blitter_context *blitter,
    vb.buffer_offset = srcx;
    vb.stride = 4;
 
-   pipe->set_vertex_buffers(pipe, 1, &vb);
+   pipe->set_vertex_buffers(pipe, ctx->base.vb_slot, 1, &vb);
    pipe->bind_vertex_elements_state(pipe, ctx->velem_state_readbuf);
    pipe->bind_vs_state(pipe, ctx->vs_pos_only);
    if (ctx->has_geometry_shader)
@@ -1704,7 +1711,8 @@ void util_blitter_custom_resolve_color(struct blitter_context *blitter,
 				       struct pipe_resource *src,
 				       unsigned src_layer,
 				       unsigned sample_mask,
-				       void *custom_blend)
+				       void *custom_blend,
+                                       enum pipe_format format)
 {
    struct blitter_context_priv *ctx = (struct blitter_context_priv*)blitter;
    struct pipe_context *pipe = ctx->base.pipe;
@@ -1724,7 +1732,7 @@ void util_blitter_custom_resolve_color(struct blitter_context *blitter,
    pipe->set_sample_mask(pipe, sample_mask);
 
    memset(&surf_tmpl, 0, sizeof(surf_tmpl));
-   surf_tmpl.format = dst->format;
+   surf_tmpl.format = format;
    surf_tmpl.u.tex.level = dst_level;
    surf_tmpl.u.tex.first_layer = dst_layer;
    surf_tmpl.u.tex.last_layer = dst_layer;
@@ -1880,11 +1888,11 @@ static boolean is_box_inside_resource(const struct pipe_resource *res,
    }
 
    return box->x >= 0 &&
-          box->x + box->width <= width &&
+          box->x + box->width <= (int) width &&
           box->y >= 0 &&
-          box->y + box->height <= height &&
+          box->y + box->height <= (int) height &&
           box->z >= 0 &&
-          box->z + box->depth <= depth;
+          box->z + box->depth <= (int) depth;
 }
 
 static unsigned get_sample_count(const struct pipe_resource *res)

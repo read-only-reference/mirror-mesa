@@ -125,11 +125,8 @@ DRI_CONF_BEGIN
     DRI_CONF_SECTION_DEBUG
         DRI_CONF_NO_RAST(false)
     DRI_CONF_SECTION_END
-    DRI_CONF_SECTION_SOFTWARE
-        DRI_CONF_NV_VERTEX_PROGRAM(false)
-    DRI_CONF_SECTION_END
 DRI_CONF_END;
-static const GLuint __driNConfigOptions = 17;
+static const GLuint __driNConfigOptions = 16;
 
 #endif
 
@@ -192,7 +189,7 @@ radeonDRI2Flush(__DRIdrawable *drawable)
     radeonContextPtr rmesa;
 
     rmesa = (radeonContextPtr) drawable->driContextPriv->driverPrivate;
-    radeonFlush(rmesa->glCtx);
+    radeonFlush(&rmesa->glCtx);
 }
 
 static const struct __DRI2flushExtensionRec radeonFlushExtension = {
@@ -267,9 +264,9 @@ radeon_create_image_from_renderbuffer(__DRIcontext *context,
    struct gl_renderbuffer *rb;
    struct radeon_renderbuffer *rrb;
 
-   rb = _mesa_lookup_renderbuffer(radeon->glCtx, renderbuffer);
+   rb = _mesa_lookup_renderbuffer(&radeon->glCtx, renderbuffer);
    if (!rb) {
-      _mesa_error(radeon->glCtx,
+      _mesa_error(&radeon->glCtx,
                   GL_INVALID_OPERATION, "glRenderbufferExternalMESA");
       return NULL;
    }
@@ -713,8 +710,11 @@ radeonDestroyBuffer(__DRIdrawable *driDrawPriv)
 static const
 __DRIconfig **radeonInitScreen2(__DRIscreen *psp)
 {
-   GLenum fb_format[3];
-   GLenum fb_type[3];
+   static const gl_format formats[3] = {
+      MESA_FORMAT_RGB565,
+      MESA_FORMAT_XRGB8888,
+      MESA_FORMAT_ARGB8888
+   };
    /* GLX_SWAP_COPY_OML is only supported because the Intel driver doesn't
     * support pageflipping at all.
     */
@@ -739,19 +739,10 @@ __DRIconfig **radeonInitScreen2(__DRIscreen *psp)
 
    msaa_samples_array[0] = 0;
 
-   fb_format[0] = GL_RGB;
-   fb_type[0] = GL_UNSIGNED_SHORT_5_6_5;
-
-   fb_format[1] = GL_BGR;
-   fb_type[1] = GL_UNSIGNED_INT_8_8_8_8_REV;
-
-   fb_format[2] = GL_BGRA;
-   fb_type[2] = GL_UNSIGNED_INT_8_8_8_8_REV;
-
-   for (color = 0; color < ARRAY_SIZE(fb_format); color++) {
+   for (color = 0; color < ARRAY_SIZE(formats); color++) {
       __DRIconfig **new_configs;
 
-      new_configs = driCreateConfigs(fb_format[color], fb_type[color],
+      new_configs = driCreateConfigs(formats[color],
 				     depth_bits,
 				     stencil_bits,
 				     ARRAY_SIZE(depth_bits),

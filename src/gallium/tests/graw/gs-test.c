@@ -248,6 +248,8 @@ static void set_vertices( void )
    handle = ctx->create_vertex_elements_state(ctx, 4, ve);
    ctx->bind_vertex_elements_state(ctx, handle);
 
+   memset(&vbuf, 0, sizeof vbuf);
+
    vbuf.stride = sizeof( struct vertex );
    vbuf.buffer_offset = 0;
    if (draw_strip) {
@@ -264,7 +266,7 @@ static void set_vertices( void )
                                                  vertices);
    }
 
-   ctx->set_vertex_buffers(ctx, 1, &vbuf);
+   ctx->set_vertex_buffers(ctx, 0, 1, &vbuf);
 }
 
 static void set_vertex_shader( void )
@@ -433,12 +435,10 @@ static void init_tex( void )
    {
       struct pipe_transfer *t;
       uint32_t *ptr;
-      t = pipe_get_transfer(ctx, samptex,
-                            0, 0, /* level, layer */
-                            PIPE_TRANSFER_READ,
-                            0, 0, SIZE, SIZE); /* x, y, width, height */
-
-      ptr = ctx->transfer_map(ctx, t);
+      ptr = pipe_transfer_map(ctx, samptex,
+                              0, 0, /* level, layer */
+                              PIPE_TRANSFER_READ,
+                              0, 0, SIZE, SIZE, &t); /* x, y, width, height */
 
       if (memcmp(ptr, tex2d, sizeof tex2d) != 0) {
          assert(0);
@@ -446,8 +446,6 @@ static void init_tex( void )
       }
 
       ctx->transfer_unmap(ctx, t);
-
-      ctx->transfer_destroy(ctx, t);
    }
 
    memset(&sv_template, 0, sizeof sv_template);

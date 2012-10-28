@@ -1023,28 +1023,26 @@ struct brw_context
       uint32_t bind_bo_offset;
       uint32_t surf_offset[BRW_MAX_WM_SURFACES];
 
-      /** @{ register allocator */
+      struct {
+         struct ra_regs *regs;
 
-      struct ra_regs *regs;
+         /** Array of the ra classes for the unaligned contiguous
+          * register block sizes used.
+          */
+         int *classes;
 
-      /** Array of the ra classes for the unaligned contiguous
-       * register block sizes used.
-       */
-      int *classes;
+         /**
+          * Mapping for register-allocated objects in *regs to the first
+          * GRF for that object.
+          */
+         uint8_t *ra_reg_to_grf;
 
-      /**
-       * Mapping for register-allocated objects in *regs to the first
-       * GRF for that object.
-      */
-      uint8_t *ra_reg_to_grf;
-
-      /**
-       * ra class for the aligned pairs we use for PLN, which doesn't
-       * appear in *classes.
-       */
-      int aligned_pairs_class;
-
-      /** @} */
+         /**
+          * ra class for the aligned pairs we use for PLN, which doesn't
+          * appear in *classes.
+          */
+         int aligned_pairs_class;
+      } reg_sets[2];
    } wm;
 
 
@@ -1059,7 +1057,7 @@ struct brw_context
       struct brw_query_object *obj;
       drm_intel_bo *bo;
       int index;
-      bool active;
+      bool begin_emitted;
    } query;
    /* Used to give every program string a unique id
     */
@@ -1128,10 +1126,18 @@ bool brwCreateContext(int api,
 		      void *sharedContextPrivate);
 
 /*======================================================================
+ * brw_misc_state.c
+ */
+void brw_get_depthstencil_tile_masks(struct intel_mipmap_tree *depth_mt,
+                                     struct intel_mipmap_tree *stencil_mt,
+                                     uint32_t *out_tile_mask_x,
+                                     uint32_t *out_tile_mask_y);
+void brw_workaround_depthstencil_alignment(struct brw_context *brw);
+
+/*======================================================================
  * brw_queryobj.c
  */
 void brw_init_queryobj_functions(struct dd_function_table *functions);
-void brw_prepare_query_begin(struct brw_context *brw);
 void brw_emit_query_begin(struct brw_context *brw);
 void brw_emit_query_end(struct brw_context *brw);
 
@@ -1164,6 +1170,10 @@ void brw_upload_urb_fence(struct brw_context *brw);
 /* brw_curbe.c
  */
 void brw_upload_cs_urb_state(struct brw_context *brw);
+
+/* brw_fs_reg_allocate.cpp
+ */
+void brw_fs_alloc_reg_sets(struct brw_context *brw);
 
 /* brw_disasm.c */
 int brw_disasm (FILE *file, struct brw_instruction *inst, int gen);
@@ -1288,6 +1298,14 @@ brw_program_reloc(struct brw_context *brw, uint32_t state_offset,
 
 bool brw_do_cubemap_normalize(struct exec_list *instructions);
 bool brw_lower_texture_gradients(struct exec_list *instructions);
+
+struct opcode_desc {
+    char    *name;
+    int	    nsrc;
+    int	    ndst;
+};
+
+extern const struct opcode_desc opcode_descs[128];
 
 #ifdef __cplusplus
 }

@@ -38,7 +38,8 @@ sources := \
 	program/program_parse.tab.c \
 	program/lex.yy.c \
 	main/dispatch.h \
-	main/remap_helper.h
+	main/remap_helper.h \
+	main/get_hash.h
 
 LOCAL_SRC_FILES := $(filter-out $(sources), $(LOCAL_SRC_FILES))
 
@@ -75,10 +76,10 @@ define local-l-to-c
 	$(hide) $(LEX) -o$@ $<
 endef
 
-define local-y-to-c-and-h
+define mesa_local-y-to-c-and-h
 	@mkdir -p $(dir $@)
 	@echo "Mesa Yacc: $(PRIVATE_MODULE) <= $<"
-	$(hide) $(YACC) -o $@ $<
+	$(hide) $(YACC) -o $@ -p "_mesa_program_" $<
 endef
 
 define es-gen
@@ -104,7 +105,7 @@ $(intermediates)/main/api_exec_%_remap_helper.h: $(es_hdr_deps)
 	$(call es-gen, -c $*)
 
 $(intermediates)/program/program_parse.tab.c: $(LOCAL_PATH)/program/program_parse.y
-	$(local-y-to-c-and-h)
+	$(mesa_local-y-to-c-and-h)
 
 $(intermediates)/program/lex.yy.c: $(LOCAL_PATH)/program/program_lexer.l
 	$(local-l-to-c)
@@ -136,7 +137,7 @@ $(intermediates)/main/dispatch.h: $(es_hdr_deps)
 	$(call es-gen, $* -m remap_table)
 
 $(intermediates)/main/remap_helper.h: PRIVATE_SCRIPT := $(MESA_PYTHON2) $(glapi)/remap_helper.py
-$(intermediates)/main/remap_helper.h: PRIVATE_XML := -f $(glapi)/gl_API.xml
+$(intermediates)/main/remap_helper.h: PRIVATE_XML := -f $(glapi)/gl_and_es_API.xml
 
 $(intermediates)/main/remap_helper.h: $(es_hdr_deps)
 	$(call es-gen, $*)
@@ -146,3 +147,10 @@ $(intermediates)/main/enums.c: PRIVATE_XML := -f $(glapi)/gl_and_es_API.xml
 
 $(intermediates)/main/enums.c: $(es_src_deps)
 	$(call es-gen)
+
+GET_HASH_GEN := $(LOCAL_PATH)/main/get_hash_generator.py
+GET_HASH_GEN_FLAGS := $(patsubst %,-a %,$(MESA_ENABLED_APIS))
+
+$(intermediates)/main/get_hash.h: $(glapi)/gl_and_es_API.xml \
+               $(LOCAL_PATH)/main/get_hash_params.py $(GET_HASH_GEN)
+	@$(MESA_PYTHON2) $(GET_HASH_GEN) $(GET_HASH_GEN_FLAGS) -f $< > $@

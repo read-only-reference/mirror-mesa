@@ -19,7 +19,11 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
 
-SUBDIRS = x86 x86-64 . libdricore drivers
+if NEED_LIBDRICORE
+DRICORE_SUBDIR = libdricore
+endif
+
+SUBDIRS = x86 x86-64 . $(DRICORE_SUBDIR) drivers
 
 gldir = $(includedir)/GL
 gl_HEADERS = $(top_srcdir)/include/GL/*.h
@@ -52,6 +56,7 @@ BUILT_SOURCES = \
 	main/api_exec_es1_dispatch.h \
 	main/api_exec_es1_remap_helper.h \
 	main/api_exec_es1.c \
+	main/get_hash.h \
 	program/program_parse.tab.c \
 	program/program_parse.tab.h \
 	program/lex.yy.c
@@ -79,6 +84,17 @@ program/lex.yy.c: program/program_lexer.l
 	$(MKDIR_P) program
 	$(AM_V_GEN) $(LEX) --never-interactive --outfile=$@ $<
 
+GET_HASH_GEN = main/get_hash_generator.py
+GET_HASH_GEN_FLAGS := $(patsubst -DFEATURE_%=1,-a %, \
+			$(patsubst -DFEATURE_%=0,,$(API_DEFINES)))
+
+main/get_hash.h: $(GLAPI)/gl_and_es_API.xml main/get_hash_params.py 	\
+		 $(GET_HASH_GEN) Makefile
+	$(AM_V_GEN)set -e;						\
+	$(PYTHON2) $(PYTHON_FLAGS) $(srcdir)/$(GET_HASH_GEN) 		\
+		$(GET_HASH_GEN_FLAGS) -f $< > $@.tmp;			\
+	mv $@.tmp $@;
+
 noinst_LTLIBRARIES =
 if NEED_LIBMESA
 noinst_LTLIBRARIES += libmesa.la
@@ -94,8 +110,8 @@ BUILDDIR = $(top_builddir)/src/mesa/
 include sources.mak
 
 AM_CPPFLAGS = $(API_DEFINES) $(DEFINES) $(INCLUDE_DIRS)
-AM_CFLAGS = $(LLVM_CFLAGS)
-AM_CXXFLAGS = $(LLVM_CFLAGS)
+AM_CFLAGS = $(LLVM_CFLAGS) $(VISIBILITY_CFLAGS)
+AM_CXXFLAGS = $(LLVM_CFLAGS) $(VISIBILITY_CXXFLAGS)
 
 # cannot just add $(MESA_ASM_FILES) to libmesa_la_SOURCES as it contains a configure substitution
 MESA_ASM_FILES_FOR_ARCH =

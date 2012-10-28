@@ -24,6 +24,7 @@
 #include "r600_llvm.h"
 #include "r600_formats.h"
 #include "r600_opcodes.h"
+#include "r600_shader.h"
 #include "r600d.h"
 
 #include "pipe/p_shader_tokens.h"
@@ -191,6 +192,7 @@ struct r600_shader_ctx {
 	uint32_t				*literals;
 	uint32_t				nliterals;
 	uint32_t				max_driver_temp_used;
+	boolean use_llvm;
 	/* needed for evergreen interpolation */
 	boolean                                 input_centroid;
 	boolean                                 input_linear;
@@ -329,6 +331,7 @@ static unsigned r600_alu_from_byte_stream(struct r600_shader_ctx *ctx,
 			alu.src[src_idx].sel += 512;
 	}
 
+#if HAVE_LLVM < 0x0302
 	if (alu.inst == CTX_INST(V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETNE) ||
 	    alu.inst == CTX_INST(V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETE) ||
 	    alu.inst == CTX_INST(V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_PRED_SETE_INT) ||
@@ -339,6 +342,7 @@ static unsigned r600_alu_from_byte_stream(struct r600_shader_ctx *ctx,
 		alu.src[1].chan = 0;
 		alu.last = 1;
 	}
+#endif
 
 	if (alu.execute_mask) {
 		alu.pred_sel = 0;
@@ -756,10 +760,12 @@ static int evergreen_interp_input(struct r600_shader_ctx *ctx, int index)
 
 	if (ctx->shader->input[index].spi_sid) {
 		ctx->shader->input[index].lds_pos = ctx->shader->nlds++;
-		if (ctx->shader->input[index].interpolate > 0) {
-			r = evergreen_interp_alu(ctx, index);
-		} else {
-			r = evergreen_interp_flat(ctx, index);
+		if (!ctx->use_llvm) {
+			if (ctx->shader->input[index].interpolate > 0) {
+				r = evergreen_interp_alu(ctx, index);
+			} else {
+				r = evergreen_interp_flat(ctx, index);
+			}
 		}
 	}
 	return r;
@@ -1132,38 +1138,19 @@ static int process_twoside_color_inputs(struct r600_shader_ctx *ctx)
 {
 	int i, r, count = ctx->shader->ninput;
 
-	/* additional inputs will be allocated right after the existing inputs,
-	 * we won't need them after the color selection, so we don't need to
-	 * reserve these gprs for the rest of the shader code and to adjust
-	 * output offsets etc. */
-	int gpr = ctx->file_offset[TGSI_FILE_INPUT] +
-			ctx->info.file_max[TGSI_FILE_INPUT] + 1;
-
-	if (ctx->face_gpr == -1) {
-		i = ctx->shader->ninput++;
-		ctx->shader->input[i].name = TGSI_SEMANTIC_FACE;
-		ctx->shader->input[i].spi_sid = 0;
-		ctx->shader->input[i].gpr = gpr++;
-		ctx->face_gpr = ctx->shader->input[i].gpr;
-	}
-
 	for (i = 0; i < count; i++) {
 		if (ctx->shader->input[i].name == TGSI_SEMANTIC_COLOR) {
-			int ni = ctx->shader->ninput++;
-			memcpy(&ctx->shader->input[ni],&ctx->shader->input[i], sizeof(struct r600_shader_io));
-			ctx->shader->input[ni].name = TGSI_SEMANTIC_BCOLOR;
-			ctx->shader->input[ni].spi_sid = r600_spi_sid(&ctx->shader->input[ni]);
-			ctx->shader->input[ni].gpr = gpr++;
-
+			unsigned back_facing_reg = ctx->shader->input[i].potential_back_facing_reg;
 			if (ctx->bc->chip_class >= EVERGREEN) {
-				r = evergreen_interp_input(ctx, ni);
+				if ((r = evergreen_interp_input(ctx, back_facing_reg)))
+					return r;
+			}
+			
+			if (!ctx->use_llvm) {
+				r = select_twoside_color(ctx, i, back_facing_reg);
 				if (r)
 					return r;
 			}
-
-			r = select_twoside_color(ctx, i, ni);
-			if (r)
-				return r;
 		}
 	}
 	return 0;
@@ -1196,7 +1183,8 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 	ctx.shader = shader;
 	ctx.native_integers = true;
 
-	r600_bytecode_init(ctx.bc, rscreen->chip_class, rscreen->family);
+	r600_bytecode_init(ctx.bc, rscreen->chip_class, rscreen->family,
+			   rscreen->msaa_texture_support);
 	ctx.tokens = tokens;
 	tgsi_scan_shader(tokens, &ctx.info);
 	tgsi_parse_init(&ctx.parse, tokens);
@@ -1258,6 +1246,7 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 		use_llvm = 0;
 	}
 #endif
+	ctx.use_llvm = use_llvm;
 
 	if (use_llvm) {
 		ctx.file_offset[TGSI_FILE_OUTPUT] =
@@ -1323,6 +1312,41 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 			goto out_err;
 		}
 	}
+	
+	/* Process two side if needed */
+	if (shader->two_side && ctx.colors_used) {
+		int i, count = ctx.shader->ninput;
+		unsigned next_lds_loc = ctx.shader->nlds;
+
+		/* additional inputs will be allocated right after the existing inputs,
+		 * we won't need them after the color selection, so we don't need to
+		 * reserve these gprs for the rest of the shader code and to adjust
+		 * output offsets etc. */
+		int gpr = ctx.file_offset[TGSI_FILE_INPUT] +
+				ctx.info.file_max[TGSI_FILE_INPUT] + 1;
+
+		if (ctx.face_gpr == -1) {
+			i = ctx.shader->ninput++;
+			ctx.shader->input[i].name = TGSI_SEMANTIC_FACE;
+			ctx.shader->input[i].spi_sid = 0;
+			ctx.shader->input[i].gpr = gpr++;
+			ctx.face_gpr = ctx.shader->input[i].gpr;
+		}
+
+		for (i = 0; i < count; i++) {
+			if (ctx.shader->input[i].name == TGSI_SEMANTIC_COLOR) {
+				int ni = ctx.shader->ninput++;
+				memcpy(&ctx.shader->input[ni],&ctx.shader->input[i], sizeof(struct r600_shader_io));
+				ctx.shader->input[ni].name = TGSI_SEMANTIC_BCOLOR;
+				ctx.shader->input[ni].spi_sid = r600_spi_sid(&ctx.shader->input[ni]);
+				ctx.shader->input[ni].gpr = gpr++;
+				// TGSI to LLVM needs to know the lds position of inputs.
+				// Non LLVM path computes it later (in process_twoside_color)
+				ctx.shader->input[ni].lds_pos = next_lds_loc++;
+				ctx.shader->input[i].potential_back_facing_reg = ni;
+			}
+		}
+	}
 
 /* LLVM backend setup */
 #ifdef R600_USE_LLVM
@@ -1360,7 +1384,7 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 	if (shader->fs_write_all && rscreen->chip_class >= EVERGREEN)
 		shader->nr_ps_max_color_exports = 8;
 
-	if (ctx.fragcoord_input >= 0) {
+	if (ctx.fragcoord_input >= 0 && !use_llvm) {
 		if (ctx.bc->chip_class == CAYMAN) {
 			for (j = 0 ; j < 4; j++) {
 				struct r600_bytecode_alu alu;
@@ -1600,7 +1624,7 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 		case TGSI_PROCESSOR_FRAGMENT:
 			if (shader->output[i].name == TGSI_SEMANTIC_COLOR) {
 				/* never export more colors than the number of CBs */
-				if (next_pixel_base && next_pixel_base >= key.nr_cbufs + key.dual_src_blend) {
+				if (next_pixel_base && next_pixel_base >= key.nr_cbufs) {
 					/* skip export */
 					j--;
 					continue;
@@ -3781,10 +3805,15 @@ static int tgsi_tex(struct r600_shader_ctx *ctx)
 	unsigned src_gpr;
 	int r, i, j;
 	int opcode;
+	bool read_compressed_msaa = ctx->bc->msaa_texture_mode == MSAA_TEXTURE_COMPRESSED &&
+				    inst->Instruction.Opcode == TGSI_OPCODE_TXF &&
+				    (inst->Texture.Texture == TGSI_TEXTURE_2D_MSAA ||
+				     inst->Texture.Texture == TGSI_TEXTURE_2D_ARRAY_MSAA);
 	/* Texture fetch instructions can only use gprs as source.
 	 * Also they cannot negate the source or take the absolute value */
-	const boolean src_requires_loading = inst->Instruction.Opcode != TGSI_OPCODE_TXQ_LZ &&
-                                             tgsi_tex_src_requires_loading(ctx, 0);
+	const boolean src_requires_loading = (inst->Instruction.Opcode != TGSI_OPCODE_TXQ_LZ &&
+                                              tgsi_tex_src_requires_loading(ctx, 0)) ||
+					     read_compressed_msaa;
 	boolean src_loaded = FALSE;
 	unsigned sampler_src_reg = inst->Instruction.Opcode == TGSI_OPCODE_TXQ_LZ ? 0 : 1;
 	uint8_t offset_x = 0, offset_y = 0, offset_z = 0;
@@ -4053,6 +4082,127 @@ static int tgsi_tex(struct r600_shader_ctx *ctx)
 		}
 		src_loaded = TRUE;
 		src_gpr = ctx->temp_reg;
+	}
+
+	/* Obtain the sample index for reading a compressed MSAA color texture.
+	 * To read the FMASK, we use the ldfptr instruction, which tells us
+	 * where the samples are stored.
+	 * For uncompressed 8x MSAA surfaces, ldfptr should return 0x76543210,
+	 * which is the identity mapping. Each nibble says which physical sample
+	 * should be fetched to get that sample.
+	 *
+	 * Assume src.z contains the sample index. It should be modified like this:
+	 *   src.z = (ldfptr() >> (src.z * 4)) & 0xF;
+	 * Then fetch the texel with src.
+	 */
+	if (read_compressed_msaa) {
+		unsigned sample_chan = inst->Texture.Texture == TGSI_TEXTURE_2D_MSAA ? 3 : 4;
+		unsigned temp = r600_get_temp(ctx);
+		assert(src_loaded);
+
+		/* temp.w = ldfptr() */
+		memset(&tex, 0, sizeof(struct r600_bytecode_tex));
+		tex.inst = SQ_TEX_INST_LD;
+		tex.inst_mod = 1; /* to indicate this is ldfptr */
+		tex.sampler_id = tgsi_tex_get_src_gpr(ctx, sampler_src_reg);
+		tex.resource_id = tex.sampler_id + R600_MAX_CONST_BUFFERS;
+		tex.src_gpr = src_gpr;
+		tex.dst_gpr = temp;
+		tex.dst_sel_x = 7; /* mask out these components */
+		tex.dst_sel_y = 7;
+		tex.dst_sel_z = 7;
+		tex.dst_sel_w = 0; /* store X */
+		tex.src_sel_x = 0;
+		tex.src_sel_y = 1;
+		tex.src_sel_z = 2;
+		tex.src_sel_w = 3;
+		tex.offset_x = offset_x;
+		tex.offset_y = offset_y;
+		tex.offset_z = offset_z;
+		r = r600_bytecode_add_tex(ctx->bc, &tex);
+		if (r)
+			return r;
+
+		/* temp.x = sample_index*4 */
+		if (ctx->bc->chip_class == CAYMAN) {
+			for (i = 0 ; i < 4; i++) {
+				memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+				alu.inst = ctx->inst_info->r600_opcode;
+				alu.src[0].sel = src_gpr;
+				alu.src[0].chan = sample_chan;
+				alu.src[1].sel = V_SQ_ALU_SRC_LITERAL;
+				alu.src[1].value = 4;
+				alu.dst.sel = temp;
+				alu.dst.chan = i;
+				alu.dst.write = i == 0;
+				if (i == 3)
+					alu.last = 1;
+				r = r600_bytecode_add_alu(ctx->bc, &alu);
+				if (r)
+					return r;
+			}
+		} else {
+			memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+			alu.inst = CTX_INST(V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MULLO_INT);
+			alu.src[0].sel = src_gpr;
+			alu.src[0].chan = sample_chan;
+			alu.src[1].sel = V_SQ_ALU_SRC_LITERAL;
+			alu.src[1].value = 4;
+			alu.dst.sel = temp;
+			alu.dst.chan = 0;
+			alu.dst.write = 1;
+			alu.last = 1;
+			r = r600_bytecode_add_alu(ctx->bc, &alu);
+			if (r)
+				return r;
+		}
+
+		/* sample_index = temp.w >> temp.x */
+		memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+		alu.inst = CTX_INST(V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_LSHR_INT);
+		alu.src[0].sel = temp;
+		alu.src[0].chan = 3;
+		alu.src[1].sel = temp;
+		alu.src[1].chan = 0;
+		alu.dst.sel = src_gpr;
+		alu.dst.chan = sample_chan;
+		alu.dst.write = 1;
+		alu.last = 1;
+		r = r600_bytecode_add_alu(ctx->bc, &alu);
+		if (r)
+			return r;
+
+		/* sample_index & 0xF */
+		memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+		alu.inst = CTX_INST(V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_AND_INT);
+		alu.src[0].sel = src_gpr;
+		alu.src[0].chan = sample_chan;
+		alu.src[1].sel = V_SQ_ALU_SRC_LITERAL;
+		alu.src[1].value = 0xF;
+		alu.dst.sel = src_gpr;
+		alu.dst.chan = sample_chan;
+		alu.dst.write = 1;
+		alu.last = 1;
+		r = r600_bytecode_add_alu(ctx->bc, &alu);
+		if (r)
+			return r;
+#if 0
+		/* visualize the FMASK */
+		for (i = 0; i < 4; i++) {
+			memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+			alu.inst = CTX_INST(V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_INT_TO_FLT);
+			alu.src[0].sel = src_gpr;
+			alu.src[0].chan = sample_chan;
+			alu.dst.sel = ctx->file_offset[inst->Dst[0].Register.File] + inst->Dst[0].Register.Index;
+			alu.dst.chan = i;
+			alu.dst.write = 1;
+			alu.last = 1;
+			r = r600_bytecode_add_alu(ctx->bc, &alu);
+			if (r)
+				return r;
+		}
+		return 0;
+#endif
 	}
 
 	opcode = ctx->inst_info->r600_opcode;

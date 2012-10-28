@@ -294,8 +294,7 @@ void evergreen_set_rat(
 	pipe->ctx->compute_cb_target_mask |= (0xf << (id * 4));
 
 	surf = (struct r600_surface*)pipe->ctx->framebuffer.state.cbufs[id];
-
-	evergreen_init_color_surface(rctx, surf);
+	evergreen_init_color_surface_rat(rctx, surf);
 }
 
 void evergreen_set_gds(

@@ -37,6 +37,7 @@
 #include "main/accum.h"
 #include "main/formats.h"
 #include "main/macros.h"
+#include "main/glformats.h"
 #include "program/prog_instruction.h"
 #include "st_context.h"
 #include "st_atom.h"
@@ -175,7 +176,9 @@ draw_quad(struct st_context *st,
    /* draw */
    util_draw_vertex_buffer(pipe,
                            st->cso_context,
-                           vbuf, offset,
+                           vbuf,
+                           cso_get_aux_vertex_buffer_slot(st->cso_context),
+                           offset,
                            PIPE_PRIM_TRIANGLE_FAN,
                            4,  /* verts */
                            2); /* attribs/vert */
@@ -224,7 +227,7 @@ clear_with_quad(struct gl_context *ctx,
    cso_save_vertex_shader(st->cso_context);
    cso_save_geometry_shader(st->cso_context);
    cso_save_vertex_elements(st->cso_context);
-   cso_save_vertex_buffers(st->cso_context);
+   cso_save_aux_vertex_buffer_slot(st->cso_context);
 
    /* blend state: RGBA masking */
    {
@@ -301,9 +304,13 @@ clear_with_quad(struct gl_context *ctx,
    cso_set_geometry_shader_handle(st->cso_context, NULL);
 
    if (ctx->DrawBuffer->_ColorDrawBuffers[0]) {
-      st_translate_color(ctx->Color.ClearColor.f,
-                               ctx->DrawBuffer->_ColorDrawBuffers[0]->_BaseFormat,
-                               clearColor.f);
+      struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0];
+      GLboolean is_integer = _mesa_is_enum_format_integer(rb->InternalFormat);
+
+      st_translate_color(&ctx->Color.ClearColor,
+                         &clearColor,
+                         ctx->DrawBuffer->_ColorDrawBuffers[0]->_BaseFormat,
+                         is_integer);
    }
 
    /* draw quad matching scissor rect */
@@ -320,7 +327,7 @@ clear_with_quad(struct gl_context *ctx,
    cso_restore_vertex_shader(st->cso_context);
    cso_restore_geometry_shader(st->cso_context);
    cso_restore_vertex_elements(st->cso_context);
-   cso_restore_vertex_buffers(st->cso_context);
+   cso_restore_aux_vertex_buffer_slot(st->cso_context);
    cso_restore_stream_outputs(st->cso_context);
 }
 
@@ -540,9 +547,13 @@ st_Clear(struct gl_context *ctx, GLbitfield mask)
          clear_buffers |= PIPE_CLEAR_DEPTHSTENCIL;
 
       if (ctx->DrawBuffer->_ColorDrawBuffers[0]) {
-         st_translate_color(ctx->Color.ClearColor.f,
+         struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[0];
+         GLboolean is_integer = _mesa_is_enum_format_integer(rb->InternalFormat);
+
+         st_translate_color(&ctx->Color.ClearColor,
+                            &clearColor,
 			    ctx->DrawBuffer->_ColorDrawBuffers[0]->_BaseFormat,
-			    clearColor.f);
+			    is_integer);
       }
 
       st->pipe->clear(st->pipe, clear_buffers, &clearColor,

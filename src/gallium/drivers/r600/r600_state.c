@@ -21,6 +21,7 @@
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #include "r600_formats.h"
+#include "r600_shader.h"
 #include "r600d.h"
 
 #include "pipe/p_shader_tokens.h"
@@ -584,7 +585,7 @@ boolean r600_is_format_supported(struct pipe_screen *screen,
 		return FALSE;
 
 	if (sample_count > 1) {
-		if (rscreen->info.drm_minor < 22)
+		if (!rscreen->has_msaa)
 			return FALSE;
 
 		/* R11G11B10 is broken on R6xx. */
@@ -642,54 +643,58 @@ boolean r600_is_format_supported(struct pipe_screen *screen,
 	return retval == usage;
 }
 
-void r600_polygon_offset_update(struct r600_context *rctx)
+static void r600_emit_polygon_offset(struct r600_context *rctx, struct r600_atom *a)
 {
-	struct r600_pipe_state state;
+	struct radeon_winsys_cs *cs = rctx->cs;
+	struct r600_poly_offset_state *state = (struct r600_poly_offset_state*)a;
+	float offset_units = state->offset_units;
+	float offset_scale = state->offset_scale;
 
-	state.id = R600_PIPE_STATE_POLYGON_OFFSET;
-	state.nregs = 0;
-	if (rctx->rasterizer && rctx->framebuffer.state.zsbuf) {
-		float offset_units = rctx->rasterizer->offset_units;
-		unsigned offset_db_fmt_cntl = 0, depth;
-
-		switch (rctx->framebuffer.state.zsbuf->format) {
-		case PIPE_FORMAT_Z24X8_UNORM:
-		case PIPE_FORMAT_Z24_UNORM_S8_UINT:
-			depth = -24;
-			offset_units *= 2.0f;
-			break;
-		case PIPE_FORMAT_Z32_FLOAT:
-		case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
-			depth = -23;
-			offset_units *= 1.0f;
-			offset_db_fmt_cntl |= S_028DF8_POLY_OFFSET_DB_IS_FLOAT_FMT(1);
-			break;
-		case PIPE_FORMAT_Z16_UNORM:
-			depth = -16;
-			offset_units *= 4.0f;
-			break;
-		default:
-			return;
-		}
-		/* XXX some of those reg can be computed with cso */
-		offset_db_fmt_cntl |= S_028DF8_POLY_OFFSET_NEG_NUM_DB_BITS(depth);
-		r600_pipe_state_add_reg(&state,
-				R_028E00_PA_SU_POLY_OFFSET_FRONT_SCALE,
-				fui(rctx->rasterizer->offset_scale));
-		r600_pipe_state_add_reg(&state,
-				R_028E04_PA_SU_POLY_OFFSET_FRONT_OFFSET,
-				fui(offset_units));
-		r600_pipe_state_add_reg(&state,
-				R_028E08_PA_SU_POLY_OFFSET_BACK_SCALE,
-				fui(rctx->rasterizer->offset_scale));
-		r600_pipe_state_add_reg(&state,
-				R_028E0C_PA_SU_POLY_OFFSET_BACK_OFFSET,
-				fui(offset_units));
-		r600_pipe_state_add_reg(&state,
-				R_028DF8_PA_SU_POLY_OFFSET_DB_FMT_CNTL,
-				offset_db_fmt_cntl);
-		r600_context_pipe_state_set(rctx, &state);
+	switch (state->zs_format) {
+	case PIPE_FORMAT_Z24X8_UNORM:
+	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
+		offset_units *= 2.0f;
+		break;
+	case PIPE_FORMAT_Z16_UNORM:
+		offset_units *= 4.0f;
+		break;
+	default:;
 	}
+
+	r600_write_context_reg_seq(cs, R_028E00_PA_SU_POLY_OFFSET_FRONT_SCALE, 4);
+	r600_write_value(cs, fui(offset_scale));
+	r600_write_value(cs, fui(offset_units));
+	r600_write_value(cs, fui(offset_scale));
+	r600_write_value(cs, fui(offset_units));
+}
+
+static uint32_t r600_get_blend_control(const struct pipe_blend_state *state, unsigned i)
+{
+	int j = state->independent_blend_enable ? i : 0;
+
+	unsigned eqRGB = state->rt[j].rgb_func;
+	unsigned srcRGB = state->rt[j].rgb_src_factor;
+	unsigned dstRGB = state->rt[j].rgb_dst_factor;
+
+	unsigned eqA = state->rt[j].alpha_func;
+	unsigned srcA = state->rt[j].alpha_src_factor;
+	unsigned dstA = state->rt[j].alpha_dst_factor;
+	uint32_t bc = 0;
+
+	if (!state->rt[j].blend_enable)
+		return 0;
+
+	bc |= S_028804_COLOR_COMB_FCN(r600_translate_blend_function(eqRGB));
+	bc |= S_028804_COLOR_SRCBLEND(r600_translate_blend_factor(srcRGB));
+	bc |= S_028804_COLOR_DESTBLEND(r600_translate_blend_factor(dstRGB));
+
+	if (srcA != srcRGB || dstA != dstRGB || eqA != eqRGB) {
+		bc |= S_028804_SEPARATE_ALPHA_BLEND(1);
+		bc |= S_028804_ALPHA_COMB_FCN(r600_translate_blend_function(eqA));
+		bc |= S_028804_ALPHA_SRCBLEND(r600_translate_blend_factor(srcA));
+		bc |= S_028804_ALPHA_DESTBLEND(r600_translate_blend_factor(dstA));
+	}
+	return bc;
 }
 
 static void *r600_create_blend_state_mode(struct pipe_context *ctx,
@@ -697,16 +702,15 @@ static void *r600_create_blend_state_mode(struct pipe_context *ctx,
 					  int mode)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct r600_pipe_blend *blend = CALLOC_STRUCT(r600_pipe_blend);
-	struct r600_pipe_state *rstate;
 	uint32_t color_control = 0, target_mask = 0;
+	struct r600_blend_state *blend = CALLOC_STRUCT(r600_blend_state);
 
-	if (blend == NULL) {
+	if (!blend) {
 		return NULL;
 	}
-	rstate = &blend->rstate;
 
-	rstate->id = R600_PIPE_STATE_BLEND;
+	r600_init_command_buffer(&blend->buffer, 20);
+	r600_init_command_buffer(&blend->buffer_no_blend, 20);
 
 	/* R600 does not support per-MRT blends */
 	if (rctx->family > CHIP_R600)
@@ -739,55 +743,41 @@ static void *r600_create_blend_state_mode(struct pipe_context *ctx,
 	else
 		color_control |= S_028808_SPECIAL_OP(V_028808_DISABLE);
 
-	blend->cb_target_mask = target_mask;
-	blend->cb_color_control = color_control;
 	/* only MRT0 has dual src blend */
 	blend->dual_src_blend = util_blend_state_is_dual(state, 0);
-	for (int i = 0; i < 8; i++) {
-		/* state->rt entries > 0 only written if independent blending */
-		const int j = state->independent_blend_enable ? i : 0;
+	blend->cb_target_mask = target_mask;
+	blend->cb_color_control = color_control;
+	blend->cb_color_control_no_blend = color_control & C_028808_TARGET_BLEND_ENABLE;
+	blend->alpha_to_one = state->alpha_to_one;
 
-		unsigned eqRGB = state->rt[j].rgb_func;
-		unsigned srcRGB = state->rt[j].rgb_src_factor;
-		unsigned dstRGB = state->rt[j].rgb_dst_factor;
+	r600_store_context_reg(&blend->buffer, R_028D44_DB_ALPHA_TO_MASK,
+			       S_028D44_ALPHA_TO_MASK_ENABLE(state->alpha_to_coverage) |
+			       S_028D44_ALPHA_TO_MASK_OFFSET0(2) |
+			       S_028D44_ALPHA_TO_MASK_OFFSET1(2) |
+			       S_028D44_ALPHA_TO_MASK_OFFSET2(2) |
+			       S_028D44_ALPHA_TO_MASK_OFFSET3(2));
 
-		unsigned eqA = state->rt[j].alpha_func;
-		unsigned srcA = state->rt[j].alpha_src_factor;
-		unsigned dstA = state->rt[j].alpha_dst_factor;
-		uint32_t bc = 0;
+	/* Copy over the registers set so far into buffer_no_blend. */
+	memcpy(blend->buffer_no_blend.buf, blend->buffer.buf, blend->buffer.num_dw * 4);
+	blend->buffer_no_blend.num_dw = blend->buffer.num_dw;
 
-		if (!state->rt[j].blend_enable)
-			continue;
-
-		bc |= S_028804_COLOR_COMB_FCN(r600_translate_blend_function(eqRGB));
-		bc |= S_028804_COLOR_SRCBLEND(r600_translate_blend_factor(srcRGB));
-		bc |= S_028804_COLOR_DESTBLEND(r600_translate_blend_factor(dstRGB));
-
-		if (srcA != srcRGB || dstA != dstRGB || eqA != eqRGB) {
-			bc |= S_028804_SEPARATE_ALPHA_BLEND(1);
-			bc |= S_028804_ALPHA_COMB_FCN(r600_translate_blend_function(eqA));
-			bc |= S_028804_ALPHA_SRCBLEND(r600_translate_blend_factor(srcA));
-			bc |= S_028804_ALPHA_DESTBLEND(r600_translate_blend_factor(dstA));
-		}
-
-		/* R600 does not support per-MRT blends */
-		if (rctx->family > CHIP_R600)
-			r600_pipe_state_add_reg(rstate, R_028780_CB_BLEND0_CONTROL + i * 4, bc);
-		if (i == 0)
-			r600_pipe_state_add_reg(rstate, R_028804_CB_BLEND_CONTROL, bc);
+	/* Only add blend registers if blending is enabled. */
+	if (!G_028808_TARGET_BLEND_ENABLE(color_control)) {
+		return blend;
 	}
 
-	r600_pipe_state_add_reg(rstate, R_028D44_DB_ALPHA_TO_MASK,
-				S_028D44_ALPHA_TO_MASK_ENABLE(state->alpha_to_coverage) |
-				S_028D44_ALPHA_TO_MASK_OFFSET0(2) |
-				S_028D44_ALPHA_TO_MASK_OFFSET1(2) |
-				S_028D44_ALPHA_TO_MASK_OFFSET2(2) |
-				S_028D44_ALPHA_TO_MASK_OFFSET3(2));
+	/* The first R600 does not support per-MRT blends */
+	r600_store_context_reg(&blend->buffer, R_028804_CB_BLEND_CONTROL,
+			       r600_get_blend_control(state, 0));
 
-	blend->alpha_to_one = state->alpha_to_one;
-	return rstate;
+	if (rctx->family > CHIP_R600) {
+		r600_store_context_reg_seq(&blend->buffer, R_028780_CB_BLEND0_CONTROL, 8);
+		for (int i = 0; i < 8; i++) {
+			r600_store_value(&blend->buffer, r600_get_blend_control(state, i));
+		}
+	}
+	return blend;
 }
-
 
 static void *r600_create_blend_state(struct pipe_context *ctx,
 				     const struct pipe_blend_state *state)
@@ -798,23 +788,20 @@ static void *r600_create_blend_state(struct pipe_context *ctx,
 static void *r600_create_dsa_state(struct pipe_context *ctx,
 				   const struct pipe_depth_stencil_alpha_state *state)
 {
-	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct r600_pipe_dsa *dsa = CALLOC_STRUCT(r600_pipe_dsa);
 	unsigned db_depth_control, alpha_test_control, alpha_ref;
-	struct r600_pipe_state *rstate;
+	struct r600_dsa_state *dsa = CALLOC_STRUCT(r600_dsa_state);
 
 	if (dsa == NULL) {
 		return NULL;
 	}
+
+	r600_init_command_buffer(&dsa->buffer, 3);
 
 	dsa->valuemask[0] = state->stencil[0].valuemask;
 	dsa->valuemask[1] = state->stencil[1].valuemask;
 	dsa->writemask[0] = state->stencil[0].writemask;
 	dsa->writemask[1] = state->stencil[1].writemask;
 
-	rstate = &dsa->rstate;
-
-	rstate->id = R600_PIPE_STATE_DSA;
 	db_depth_control = S_028800_Z_ENABLE(state->depth.enabled) |
 		S_028800_Z_WRITE_ENABLE(state->depth.writemask) |
 		S_028800_ZFUNC(state->depth.func);
@@ -847,32 +834,24 @@ static void *r600_create_dsa_state(struct pipe_context *ctx,
 	dsa->sx_alpha_test_control = alpha_test_control & 0xff;
 	dsa->alpha_ref = alpha_ref;
 
-	r600_pipe_state_add_reg(rstate, R_028800_DB_DEPTH_CONTROL, db_depth_control);
-	return rstate;
+	r600_store_context_reg(&dsa->buffer, R_028800_DB_DEPTH_CONTROL, db_depth_control);
+	return dsa;
 }
 
 static void *r600_create_rs_state(struct pipe_context *ctx,
 				  const struct pipe_rasterizer_state *state)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct r600_pipe_rasterizer *rs = CALLOC_STRUCT(r600_pipe_rasterizer);
-	struct r600_pipe_state *rstate;
-	unsigned tmp;
-	unsigned prov_vtx = 1, polygon_dual_mode;
-	unsigned sc_mode_cntl;
+	unsigned tmp, sc_mode_cntl, spi_interp;
 	float psize_min, psize_max;
+	struct r600_rasterizer_state *rs = CALLOC_STRUCT(r600_rasterizer_state);
 
 	if (rs == NULL) {
 		return NULL;
 	}
 
-	polygon_dual_mode = (state->fill_front != PIPE_POLYGON_MODE_FILL ||
-				state->fill_back != PIPE_POLYGON_MODE_FILL);
+	r600_init_command_buffer(&rs->buffer, 30);
 
-	if (state->flatshade_first)
-		prov_vtx = 0;
-
-	rstate = &rs->rstate;
 	rs->flatshade = state->flatshade;
 	rs->sprite_coord_enable = state->sprite_coord_enable;
 	rs->two_side = state->light_twoside;
@@ -890,24 +869,7 @@ static void *r600_create_rs_state(struct pipe_context *ctx,
 	/* offset */
 	rs->offset_units = state->offset_units;
 	rs->offset_scale = state->offset_scale * 12.0f;
-
-	rstate->id = R600_PIPE_STATE_RASTERIZER;
-	tmp = S_0286D4_FLAT_SHADE_ENA(1);
-	if (state->sprite_coord_enable) {
-		tmp |= S_0286D4_PNT_SPRITE_ENA(1) |
-			S_0286D4_PNT_SPRITE_OVRD_X(2) |
-			S_0286D4_PNT_SPRITE_OVRD_Y(3) |
-			S_0286D4_PNT_SPRITE_OVRD_Z(0) |
-			S_0286D4_PNT_SPRITE_OVRD_W(1);
-		if (state->sprite_coord_mode != PIPE_SPRITE_COORD_UPPER_LEFT) {
-			tmp |= S_0286D4_PNT_SPRITE_TOP_1(1);
-		}
-	}
-	r600_pipe_state_add_reg(rstate, R_0286D4_SPI_INTERP_CONTROL_0, tmp);
-
-	/* point size 12.4 fixed point */
-	tmp = r600_pack_float_12p4(state->point_size/2);
-	r600_pipe_state_add_reg(rstate, R_028A00_PA_SU_POINT_SIZE, S_028A00_HEIGHT(tmp) | S_028A00_WIDTH(tmp));
+	rs->offset_enable = state->offset_point || state->offset_line || state->offset_tri;
 
 	if (state->point_size_per_vertex) {
 		psize_min = util_get_min_point_size(state);
@@ -917,57 +879,68 @@ static void *r600_create_rs_state(struct pipe_context *ctx,
 		psize_min = state->point_size;
 		psize_max = state->point_size;
 	}
-	/* Divide by two, because 0.5 = 1 pixel. */
-	r600_pipe_state_add_reg(rstate, R_028A04_PA_SU_POINT_MINMAX,
-				S_028A04_MIN_SIZE(r600_pack_float_12p4(psize_min/2)) |
-				S_028A04_MAX_SIZE(r600_pack_float_12p4(psize_max/2)));
 
-	tmp = r600_pack_float_12p4(state->line_width/2);
-	r600_pipe_state_add_reg(rstate, R_028A08_PA_SU_LINE_CNTL, S_028A08_WIDTH(tmp));
-
+	sc_mode_cntl = S_028A4C_MSAA_ENABLE(state->multisample) |
+		       S_028A4C_LINE_STIPPLE_ENABLE(state->line_stipple_enable) |
+		       S_028A4C_FORCE_EOV_CNTDWN_ENABLE(1);
 	if (rctx->chip_class >= R700) {
-		sc_mode_cntl =
-			S_028A4C_MSAA_ENABLE(state->multisample) |
-			S_028A4C_FORCE_EOV_CNTDWN_ENABLE(1) |
-			S_028A4C_FORCE_EOV_REZ_ENABLE(1) |
-			S_028A4C_R700_ZMM_LINE_OFFSET(1) |
-			S_028A4C_R700_VPORT_SCISSOR_ENABLE(state->scissor);
+		sc_mode_cntl |= S_028A4C_FORCE_EOV_REZ_ENABLE(1) |
+				S_028A4C_R700_ZMM_LINE_OFFSET(1) |
+				S_028A4C_R700_VPORT_SCISSOR_ENABLE(state->scissor);
 	} else {
-		sc_mode_cntl =
-			S_028A4C_MSAA_ENABLE(state->multisample) |
-			S_028A4C_WALK_ALIGN8_PRIM_FITS_ST(1) |
-			S_028A4C_FORCE_EOV_CNTDWN_ENABLE(1);
+		sc_mode_cntl |= S_028A4C_WALK_ALIGN8_PRIM_FITS_ST(1);
 		rs->scissor_enable = state->scissor;
 	}
-	sc_mode_cntl |= S_028A4C_LINE_STIPPLE_ENABLE(state->line_stipple_enable);
-	
-	r600_pipe_state_add_reg(rstate, R_028A4C_PA_SC_MODE_CNTL, sc_mode_cntl);
 
-	r600_pipe_state_add_reg(rstate, R_028C08_PA_SU_VTX_CNTL,
-				S_028C08_PIX_CENTER_HALF(state->gl_rasterization_rules) |
-				S_028C08_QUANT_MODE(V_028C08_X_1_256TH));
+	spi_interp = S_0286D4_FLAT_SHADE_ENA(1);
+	if (state->sprite_coord_enable) {
+		spi_interp |= S_0286D4_PNT_SPRITE_ENA(1) |
+			      S_0286D4_PNT_SPRITE_OVRD_X(2) |
+			      S_0286D4_PNT_SPRITE_OVRD_Y(3) |
+			      S_0286D4_PNT_SPRITE_OVRD_Z(0) |
+			      S_0286D4_PNT_SPRITE_OVRD_W(1);
+		if (state->sprite_coord_mode != PIPE_SPRITE_COORD_UPPER_LEFT) {
+			spi_interp |= S_0286D4_PNT_SPRITE_TOP_1(1);
+		}
+	}
 
-	r600_pipe_state_add_reg(rstate, R_028DFC_PA_SU_POLY_OFFSET_CLAMP, fui(state->offset_clamp));
-	r600_pipe_state_add_reg(rstate, R_028814_PA_SU_SC_MODE_CNTL,
-				S_028814_PROVOKING_VTX_LAST(prov_vtx) |
-				S_028814_CULL_FRONT(state->cull_face & PIPE_FACE_FRONT ? 1 : 0) |
-				S_028814_CULL_BACK(state->cull_face & PIPE_FACE_BACK ? 1 : 0) |
-				S_028814_FACE(!state->front_ccw) |
-				S_028814_POLY_OFFSET_FRONT_ENABLE(state->offset_tri) |
-				S_028814_POLY_OFFSET_BACK_ENABLE(state->offset_tri) |
-				S_028814_POLY_OFFSET_PARA_ENABLE(state->offset_tri) |
-				S_028814_POLY_MODE(polygon_dual_mode) |
-				S_028814_POLYMODE_FRONT_PTYPE(r600_translate_fill(state->fill_front)) |
-				S_028814_POLYMODE_BACK_PTYPE(r600_translate_fill(state->fill_back)));
-	r600_pipe_state_add_reg(rstate, R_028350_SX_MISC, S_028350_MULTIPASS(state->rasterizer_discard));
-	return rstate;
+	r600_store_context_reg_seq(&rs->buffer, R_028A00_PA_SU_POINT_SIZE, 3);
+	/* point size 12.4 fixed point (divide by two, because 0.5 = 1 pixel. */
+	tmp = r600_pack_float_12p4(state->point_size/2);
+	r600_store_value(&rs->buffer, /* R_028A00_PA_SU_POINT_SIZE */
+			 S_028A00_HEIGHT(tmp) | S_028A00_WIDTH(tmp));
+	r600_store_value(&rs->buffer, /* R_028A04_PA_SU_POINT_MINMAX */
+			 S_028A04_MIN_SIZE(r600_pack_float_12p4(psize_min/2)) |
+			 S_028A04_MAX_SIZE(r600_pack_float_12p4(psize_max/2)));
+	r600_store_value(&rs->buffer, /* R_028A08_PA_SU_LINE_CNTL */
+			 S_028A08_WIDTH(r600_pack_float_12p4(state->line_width/2)));
+
+	r600_store_context_reg(&rs->buffer, R_0286D4_SPI_INTERP_CONTROL_0, spi_interp);
+	r600_store_context_reg(&rs->buffer, R_028A4C_PA_SC_MODE_CNTL, sc_mode_cntl);
+	r600_store_context_reg(&rs->buffer, R_028C08_PA_SU_VTX_CNTL,
+			       S_028C08_PIX_CENTER_HALF(state->gl_rasterization_rules) |
+			       S_028C08_QUANT_MODE(V_028C08_X_1_256TH));
+	r600_store_context_reg(&rs->buffer, R_028DFC_PA_SU_POLY_OFFSET_CLAMP, fui(state->offset_clamp));
+	r600_store_context_reg(&rs->buffer, R_028814_PA_SU_SC_MODE_CNTL,
+			       S_028814_PROVOKING_VTX_LAST(!state->flatshade_first) |
+			       S_028814_CULL_FRONT(state->cull_face & PIPE_FACE_FRONT ? 1 : 0) |
+			       S_028814_CULL_BACK(state->cull_face & PIPE_FACE_BACK ? 1 : 0) |
+			       S_028814_FACE(!state->front_ccw) |
+			       S_028814_POLY_OFFSET_FRONT_ENABLE(state->offset_tri) |
+			       S_028814_POLY_OFFSET_BACK_ENABLE(state->offset_tri) |
+			       S_028814_POLY_OFFSET_PARA_ENABLE(state->offset_tri) |
+			       S_028814_POLY_MODE(state->fill_front != PIPE_POLYGON_MODE_FILL ||
+						  state->fill_back != PIPE_POLYGON_MODE_FILL) |
+			       S_028814_POLYMODE_FRONT_PTYPE(r600_translate_fill(state->fill_front)) |
+			       S_028814_POLYMODE_BACK_PTYPE(r600_translate_fill(state->fill_back)));
+	r600_store_context_reg(&rs->buffer, R_028350_SX_MISC, S_028350_MULTIPASS(state->rasterizer_discard));
+	return rs;
 }
 
 static void *r600_create_sampler_state(struct pipe_context *ctx,
 					const struct pipe_sampler_state *state)
 {
 	struct r600_pipe_sampler_state *ss = CALLOC_STRUCT(r600_pipe_sampler_state);
-	union util_color uc;
 	unsigned aniso_flag_offset = state->max_anisotropy > 1 ? 4 : 0;
 
 	if (ss == NULL) {
@@ -975,41 +948,38 @@ static void *r600_create_sampler_state(struct pipe_context *ctx,
 	}
 
 	ss->seamless_cube_map = state->seamless_cube_map;
-	ss->border_color_use = false;
-	util_pack_color(state->border_color.f, PIPE_FORMAT_B8G8R8A8_UNORM, &uc);
+	ss->border_color_use = sampler_state_needs_border_color(state);
+
 	/* R_03C000_SQ_TEX_SAMPLER_WORD0_0 */
-	ss->tex_sampler_words[0] = S_03C000_CLAMP_X(r600_tex_wrap(state->wrap_s)) |
-				S_03C000_CLAMP_Y(r600_tex_wrap(state->wrap_t)) |
-				S_03C000_CLAMP_Z(r600_tex_wrap(state->wrap_r)) |
-				S_03C000_XY_MAG_FILTER(r600_tex_filter(state->mag_img_filter) | aniso_flag_offset) |
-				S_03C000_XY_MIN_FILTER(r600_tex_filter(state->min_img_filter) | aniso_flag_offset) |
-				S_03C000_MIP_FILTER(r600_tex_mipfilter(state->min_mip_filter)) |
-				S_03C000_MAX_ANISO(r600_tex_aniso_filter(state->max_anisotropy)) |
-				S_03C000_DEPTH_COMPARE_FUNCTION(r600_tex_compare(state->compare_func)) |
-				S_03C000_BORDER_COLOR_TYPE(uc.ui ? V_03C000_SQ_TEX_BORDER_COLOR_REGISTER : 0);
+	ss->tex_sampler_words[0] =
+		S_03C000_CLAMP_X(r600_tex_wrap(state->wrap_s)) |
+		S_03C000_CLAMP_Y(r600_tex_wrap(state->wrap_t)) |
+		S_03C000_CLAMP_Z(r600_tex_wrap(state->wrap_r)) |
+		S_03C000_XY_MAG_FILTER(r600_tex_filter(state->mag_img_filter) | aniso_flag_offset) |
+		S_03C000_XY_MIN_FILTER(r600_tex_filter(state->min_img_filter) | aniso_flag_offset) |
+		S_03C000_MIP_FILTER(r600_tex_mipfilter(state->min_mip_filter)) |
+		S_03C000_MAX_ANISO(r600_tex_aniso_filter(state->max_anisotropy)) |
+		S_03C000_DEPTH_COMPARE_FUNCTION(r600_tex_compare(state->compare_func)) |
+		S_03C000_BORDER_COLOR_TYPE(ss->border_color_use ? V_03C000_SQ_TEX_BORDER_COLOR_REGISTER : 0);
 	/* R_03C004_SQ_TEX_SAMPLER_WORD1_0 */
-	ss->tex_sampler_words[1] = S_03C004_MIN_LOD(S_FIXED(CLAMP(state->min_lod, 0, 15), 6)) |
-				S_03C004_MAX_LOD(S_FIXED(CLAMP(state->max_lod, 0, 15), 6)) |
-				S_03C004_LOD_BIAS(S_FIXED(CLAMP(state->lod_bias, -16, 16), 6));
+	ss->tex_sampler_words[1] =
+		S_03C004_MIN_LOD(S_FIXED(CLAMP(state->min_lod, 0, 15), 6)) |
+		S_03C004_MAX_LOD(S_FIXED(CLAMP(state->max_lod, 0, 15), 6)) |
+		S_03C004_LOD_BIAS(S_FIXED(CLAMP(state->lod_bias, -16, 16), 6));
 	/* R_03C008_SQ_TEX_SAMPLER_WORD2_0 */
 	ss->tex_sampler_words[2] = S_03C008_TYPE(1);
-	if (uc.ui) {
-		ss->border_color_use = true;
-		/* R_00A400_TD_PS_SAMPLER0_BORDER_RED */
-		ss->border_color[0] = fui(state->border_color.f[0]);
-		/* R_00A404_TD_PS_SAMPLER0_BORDER_GREEN */
-		ss->border_color[1] = fui(state->border_color.f[1]);
-		/* R_00A408_TD_PS_SAMPLER0_BORDER_BLUE */
-		ss->border_color[2] = fui(state->border_color.f[2]);
-		/* R_00A40C_TD_PS_SAMPLER0_BORDER_ALPHA */
-		ss->border_color[3] = fui(state->border_color.f[3]);
+
+	if (ss->border_color_use) {
+		memcpy(&ss->border_color, &state->border_color, sizeof(state->border_color));
 	}
 	return ss;
 }
 
-static struct pipe_sampler_view *r600_create_sampler_view(struct pipe_context *ctx,
-							struct pipe_resource *texture,
-							const struct pipe_sampler_view *state)
+struct pipe_sampler_view *
+r600_create_sampler_view_custom(struct pipe_context *ctx,
+				struct pipe_resource *texture,
+				const struct pipe_sampler_view *state,
+				unsigned width_first_level, unsigned height_first_level)
 {
 	struct r600_pipe_sampler_view *view = CALLOC_STRUCT(r600_pipe_sampler_view);
 	struct r600_texture *tmp = (struct r600_texture*)texture;
@@ -1055,8 +1025,8 @@ static struct pipe_sampler_view *r600_create_sampler_view(struct pipe_context *c
 
 	offset_level = state->u.tex.first_level;
 	last_level = state->u.tex.last_level - offset_level;
-	width = tmp->surface.level[offset_level].npix_x;
-	height = tmp->surface.level[offset_level].npix_y;
+	width = width_first_level;
+	height = height_first_level;
 	depth = tmp->surface.level[offset_level].npix_z;
 	pitch = tmp->surface.level[offset_level].nblk_x * util_format_get_blockwidth(state->format);
 	tile_type = tmp->tile_type;
@@ -1116,6 +1086,18 @@ static struct pipe_sampler_view *r600_create_sampler_view(struct pipe_context *c
 	return &view->base;
 }
 
+static struct pipe_sampler_view *
+r600_create_sampler_view(struct pipe_context *ctx,
+			 struct pipe_resource *tex,
+			 const struct pipe_sampler_view *state)
+{
+	struct r600_texture *rtex = (struct r600_texture*)tex;
+
+	return r600_create_sampler_view_custom(ctx, tex, state,
+					       rtex->surface.level[state->u.tex.first_level].npix_x,
+					       rtex->surface.level[state->u.tex.first_level].npix_y);
+}
+
 static void r600_emit_clip_state(struct r600_context *rctx, struct r600_atom *atom)
 {
 	struct radeon_winsys_cs *cs = rctx->cs;
@@ -1130,39 +1112,35 @@ static void r600_set_polygon_stipple(struct pipe_context *ctx,
 {
 }
 
-void r600_set_scissor_state(struct r600_context *rctx,
-			    const struct pipe_scissor_state *state)
+static void r600_emit_scissor_state(struct r600_context *rctx, struct r600_atom *atom)
 {
-	struct r600_pipe_state *rstate = CALLOC_STRUCT(r600_pipe_state);
-	uint32_t tl, br;
+	struct radeon_winsys_cs *cs = rctx->cs;
+	struct pipe_scissor_state *state = &rctx->scissor.scissor;
 
-	if (rstate == NULL)
-		return;
-
-	rstate->id = R600_PIPE_STATE_SCISSOR;
-	tl = S_028240_TL_X(state->minx) | S_028240_TL_Y(state->miny) | S_028240_WINDOW_OFFSET_DISABLE(1);
-	br = S_028244_BR_X(state->maxx) | S_028244_BR_Y(state->maxy);
-	r600_pipe_state_add_reg(rstate,
-				R_028250_PA_SC_VPORT_SCISSOR_0_TL, tl);
-	r600_pipe_state_add_reg(rstate,
-				R_028254_PA_SC_VPORT_SCISSOR_0_BR, br);
-
-	free(rctx->states[R600_PIPE_STATE_SCISSOR]);
-	rctx->states[R600_PIPE_STATE_SCISSOR] = rstate;
-	r600_context_pipe_state_set(rctx, rstate);
+	if (rctx->chip_class != R600 || rctx->scissor.enable) {
+		r600_write_context_reg_seq(cs, R_028250_PA_SC_VPORT_SCISSOR_0_TL, 2);
+		r600_write_value(cs, S_028240_TL_X(state->minx) | S_028240_TL_Y(state->miny) |
+				     S_028240_WINDOW_OFFSET_DISABLE(1));
+		r600_write_value(cs, S_028244_BR_X(state->maxx) | S_028244_BR_Y(state->maxy));
+	} else {
+		r600_write_context_reg_seq(cs, R_028250_PA_SC_VPORT_SCISSOR_0_TL, 2);
+		r600_write_value(cs, S_028240_TL_X(0) | S_028240_TL_Y(0) |
+				     S_028240_WINDOW_OFFSET_DISABLE(1));
+		r600_write_value(cs, S_028244_BR_X(8192) | S_028244_BR_Y(8192));
+	}
 }
 
-static void r600_pipe_set_scissor_state(struct pipe_context *ctx,
-					const struct pipe_scissor_state *state)
+static void r600_set_scissor_state(struct pipe_context *ctx,
+				   const struct pipe_scissor_state *state)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 
-	rctx->scissor = *state;
+	rctx->scissor.scissor = *state;
 
-	if (rctx->chip_class == R600 && !rctx->scissor_enable)
+	if (rctx->chip_class == R600 && !rctx->scissor.enable)
 		return;
 
-	r600_set_scissor_state(rctx, state);
+	rctx->scissor.atom.dirty = true;
 }
 
 static struct r600_resource *r600_buffer_create_helper(struct r600_screen *rscreen,
@@ -1442,6 +1420,25 @@ static void r600_init_depth_surface(struct r600_context *rctx,
 	surf->db_depth_size = S_028000_PITCH_TILE_MAX(pitch) | S_028000_SLICE_TILE_MAX(slice);
 	surf->db_prefetch_limit = (rtex->surface.level[level].nblk_y / 8) - 1;
 
+	switch (surf->base.format) {
+	case PIPE_FORMAT_Z24X8_UNORM:
+	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
+		surf->pa_su_poly_offset_db_fmt_cntl =
+			S_028DF8_POLY_OFFSET_NEG_NUM_DB_BITS((char)-24);
+		break;
+	case PIPE_FORMAT_Z32_FLOAT:
+	case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
+		surf->pa_su_poly_offset_db_fmt_cntl =
+			S_028DF8_POLY_OFFSET_NEG_NUM_DB_BITS((char)-23) |
+			S_028DF8_POLY_OFFSET_DB_IS_FLOAT_FMT(1);
+		break;
+	case PIPE_FORMAT_Z16_UNORM:
+		surf->pa_su_poly_offset_db_fmt_cntl =
+			S_028DF8_POLY_OFFSET_NEG_NUM_DB_BITS((char)-16);
+		break;
+	default:;
+	}
+
 	surf->depth_initialized = true;
 }
 
@@ -1520,7 +1517,7 @@ static void r600_set_framebuffer_state(struct pipe_context *ctx,
 		surf = (struct r600_surface*)state->cbufs[0];
 		if (rctx->alphatest_state.bypass != surf->alphatest_bypass) {
 			rctx->alphatest_state.bypass = surf->alphatest_bypass;
-			r600_atom_dirty(rctx, &rctx->alphatest_state.atom);
+			rctx->alphatest_state.atom.dirty = true;
 		}
 	}
 
@@ -1532,18 +1529,23 @@ static void r600_set_framebuffer_state(struct pipe_context *ctx,
 			r600_init_depth_surface(rctx, surf);
 		}
 
-		r600_polygon_offset_update(rctx);
+		if (state->zsbuf->format != rctx->poly_offset_state.zs_format) {
+			rctx->poly_offset_state.zs_format = state->zsbuf->format;
+			rctx->poly_offset_state.atom.dirty = true;
+		}
 	}
 
 	if (rctx->cb_misc_state.nr_cbufs != state->nr_cbufs) {
 		rctx->cb_misc_state.nr_cbufs = state->nr_cbufs;
-		r600_atom_dirty(rctx, &rctx->cb_misc_state.atom);
+		rctx->cb_misc_state.atom.dirty = true;
 	}
 
 	if (state->nr_cbufs == 0 && rctx->alphatest_state.bypass) {
 		rctx->alphatest_state.bypass = false;
-		r600_atom_dirty(rctx, &rctx->alphatest_state.atom);
+		rctx->alphatest_state.atom.dirty = true;
 	}
+
+	r600_update_db_shader_control(rctx);
 
 	/* Calculate the CS size. */
 	rctx->framebuffer.atom.num_dw =
@@ -1555,7 +1557,7 @@ static void r600_set_framebuffer_state(struct pipe_context *ctx,
 
 	}
 	if (rctx->framebuffer.state.zsbuf) {
-		rctx->framebuffer.atom.num_dw += 13;
+		rctx->framebuffer.atom.num_dw += 16;
 	} else if (rctx->screen->info.drm_minor >= 18) {
 		rctx->framebuffer.atom.num_dw += 3;
 	}
@@ -1563,7 +1565,7 @@ static void r600_set_framebuffer_state(struct pipe_context *ctx,
 		rctx->framebuffer.atom.num_dw += 2;
 	}
 
-	r600_atom_dirty(rctx, &rctx->framebuffer.atom);
+	rctx->framebuffer.atom.dirty = true;
 }
 
 #define FILL_SREG(s0x, s0y, s1x, s1y, s2x, s2y, s3x, s3y)  \
@@ -1585,10 +1587,10 @@ static void r600_emit_msaa_state(struct r600_context *rctx, int nr_samples)
 	};
 	static unsigned max_dist_4x = 6;
 	static uint32_t sample_locs_8x[] = {
-		FILL_SREG(-2, -5, 3, -4, -1, 5, -6, -2),
-		FILL_SREG( 6,  0, 0,  0, -5, 3,  4,  4),
+		FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
+		FILL_SREG(-7, -1, -3, -7,  7, -3, -5,  7),
 	};
-	static unsigned max_dist_8x = 8;
+	static unsigned max_dist_8x = 7;
 
 	struct radeon_winsys_cs *cs = rctx->cs;
 	unsigned max_dist = 0;
@@ -1746,6 +1748,9 @@ static void r600_emit_framebuffer_state(struct r600_context *rctx, struct r600_a
 						       (struct r600_resource*)state->zsbuf->texture,
 						       RADEON_USAGE_READWRITE);
 
+		r600_write_context_reg(cs, R_028DF8_PA_SU_POLY_OFFSET_DB_FMT_CNTL,
+				       surf->pa_su_poly_offset_db_fmt_cntl);
+
 		r600_write_context_reg_seq(cs, R_028000_DB_DEPTH_SIZE, 2);
 		r600_write_value(cs, surf->db_depth_size); /* R_028000_DB_DEPTH_SIZE */
 		r600_write_value(cs, surf->db_depth_view); /* R_028004_DB_DEPTH_VIEW */
@@ -1849,6 +1854,15 @@ static void r600_emit_db_misc_state(struct r600_context *rctx, struct r600_atom 
 	r600_write_context_reg_seq(cs, R_028D0C_DB_RENDER_CONTROL, 2);
 	r600_write_value(cs, db_render_control); /* R_028D0C_DB_RENDER_CONTROL */
 	r600_write_value(cs, db_render_override); /* R_028D10_DB_RENDER_OVERRIDE */
+	r600_write_context_reg(cs, R_02880C_DB_SHADER_CONTROL, a->db_shader_control);
+}
+
+static void r600_emit_config_state(struct r600_context *rctx, struct r600_atom *atom)
+{
+	struct radeon_winsys_cs *cs = rctx->cs;
+	struct r600_config_state *a = (struct r600_config_state*)atom;
+
+	r600_write_config_reg(cs, R_008C04_SQ_GPR_RESOURCE_MGMT_1, a->sq_gpr_resource_mgmt_1);
 }
 
 static void r600_emit_vertex_buffers(struct r600_context *rctx, struct r600_atom *atom)
@@ -1974,7 +1988,6 @@ static void r600_emit_sampler_views(struct r600_context *rctx,
 		r600_write_value(cs, (resource_id_base + resource_index) * 7);
 		r600_write_array(cs, 7, rview->tex_resource_words);
 
-		/* XXX The kernel needs two relocations. This is stupid. */
 		reloc = r600_context_bo_reloc(rctx, rview->tex_resource,
 					      RADEON_USAGE_READ);
 		r600_write_value(cs, PKT3(PKT3_NOP, 0, 0));
@@ -2050,7 +2063,7 @@ static void r600_emit_sampler_states(struct r600_context *rctx,
 			offset = border_color_reg;
 			offset += i * 16;
 			r600_write_config_reg_seq(cs, offset, 4);
-			r600_write_array(cs, 4, rstate->border_color);
+			r600_write_array(cs, 4, rstate->border_color.ui);
 		}
 	}
 	texinfo->states.dirty_mask = 0;
@@ -2095,6 +2108,17 @@ static void r600_emit_sample_mask(struct r600_context *rctx, struct r600_atom *a
 			       mask | (mask << 8) | (mask << 16) | (mask << 24));
 }
 
+static void r600_emit_vertex_fetch_shader(struct r600_context *rctx, struct r600_atom *a)
+{
+	struct radeon_winsys_cs *cs = rctx->cs;
+	struct r600_cso_state *state = (struct r600_cso_state*)a;
+	struct r600_resource *shader = (struct r600_resource*)state->cso;
+
+	r600_write_context_reg(cs, R_028894_SQ_PGM_START_FS, 0);
+	r600_write_value(cs, PKT3(PKT3_NOP, 0, 0));
+	r600_write_value(cs, r600_context_bo_reloc(rctx, shader, RADEON_USAGE_READ));
+}
+
 void r600_init_state_functions(struct r600_context *rctx)
 {
 	unsigned id = 4;
@@ -2137,12 +2161,19 @@ void r600_init_state_functions(struct r600_context *rctx)
 
 	r600_init_atom(rctx, &rctx->alphatest_state.atom, id++, r600_emit_alphatest_state, 6);
 	r600_init_atom(rctx, &rctx->blend_color.atom, id++, r600_emit_blend_color, 6);
+	r600_init_atom(rctx, &rctx->blend_state.atom, id++, r600_emit_cso_state, 0);
 	r600_init_atom(rctx, &rctx->cb_misc_state.atom, id++, r600_emit_cb_misc_state, 7);
 	r600_init_atom(rctx, &rctx->clip_misc_state.atom, id++, r600_emit_clip_misc_state, 6);
 	r600_init_atom(rctx, &rctx->clip_state.atom, id++, r600_emit_clip_state, 26);
-	r600_init_atom(rctx, &rctx->db_misc_state.atom, id++, r600_emit_db_misc_state, 4);
+	r600_init_atom(rctx, &rctx->db_misc_state.atom, id++, r600_emit_db_misc_state, 7);
+	r600_init_atom(rctx, &rctx->dsa_state.atom, id++, r600_emit_cso_state, 0);
+	r600_init_atom(rctx, &rctx->poly_offset_state.atom, id++, r600_emit_polygon_offset, 6);
+	r600_init_atom(rctx, &rctx->rasterizer_state.atom, id++, r600_emit_cso_state, 0);
+	r600_init_atom(rctx, &rctx->scissor.atom, id++, r600_emit_scissor_state, 4);
+	r600_init_atom(rctx, &rctx->config_state.atom, id++, r600_emit_config_state, 3);
 	r600_init_atom(rctx, &rctx->stencil_ref.atom, id++, r600_emit_stencil_ref, 4);
 	r600_init_atom(rctx, &rctx->viewport.atom, id++, r600_emit_viewport_state, 8);
+	r600_init_atom(rctx, &rctx->vertex_fetch_shader.atom, id++, r600_emit_vertex_fetch_shader, 5);
 
 	rctx->context.create_blend_state = r600_create_blend_state;
 	rctx->context.create_depth_stencil_alpha_state = r600_create_dsa_state;
@@ -2151,39 +2182,65 @@ void r600_init_state_functions(struct r600_context *rctx)
 	rctx->context.create_sampler_view = r600_create_sampler_view;
 	rctx->context.set_framebuffer_state = r600_set_framebuffer_state;
 	rctx->context.set_polygon_stipple = r600_set_polygon_stipple;
-	rctx->context.set_scissor_state = r600_pipe_set_scissor_state;
+	rctx->context.set_scissor_state = r600_set_scissor_state;
 }
 
 /* Adjust GPR allocation on R6xx/R7xx */
-void r600_adjust_gprs(struct r600_context *rctx)
+bool r600_adjust_gprs(struct r600_context *rctx)
 {
-	struct r600_pipe_state rstate;
-	unsigned num_ps_gprs = rctx->default_ps_gprs;
-	unsigned num_vs_gprs = rctx->default_vs_gprs;
+	unsigned num_ps_gprs = rctx->ps_shader->current->shader.bc.ngpr;
+	unsigned num_vs_gprs = rctx->vs_shader->current->shader.bc.ngpr;
+	unsigned new_num_ps_gprs = num_ps_gprs;
+	unsigned new_num_vs_gprs = num_vs_gprs;
+	unsigned cur_num_ps_gprs = G_008C04_NUM_PS_GPRS(rctx->config_state.sq_gpr_resource_mgmt_1);
+	unsigned cur_num_vs_gprs = G_008C04_NUM_VS_GPRS(rctx->config_state.sq_gpr_resource_mgmt_1);
+	unsigned def_num_ps_gprs = rctx->default_ps_gprs;
+	unsigned def_num_vs_gprs = rctx->default_vs_gprs;
+	unsigned def_num_clause_temp_gprs = rctx->r6xx_num_clause_temp_gprs;
+	/* hardware will reserve twice num_clause_temp_gprs */
+	unsigned max_gprs = def_num_ps_gprs + def_num_vs_gprs + def_num_clause_temp_gprs * 2;
 	unsigned tmp;
-	int diff;
 
-	if (rctx->ps_shader->current->shader.bc.ngpr > rctx->default_ps_gprs) {
-		diff = rctx->ps_shader->current->shader.bc.ngpr - rctx->default_ps_gprs;
-		num_vs_gprs -= diff;
-		num_ps_gprs += diff;
+	/* the sum of all SQ_GPR_RESOURCE_MGMT*.NUM_*_GPRS must <= to max_gprs */
+	if (new_num_ps_gprs > cur_num_ps_gprs || new_num_vs_gprs > cur_num_vs_gprs) {
+		/* try to use switch back to default */
+		if (new_num_ps_gprs > def_num_ps_gprs || new_num_vs_gprs > def_num_vs_gprs) {
+			/* always privilege vs stage so that at worst we have the
+			 * pixel stage producing wrong output (not the vertex
+			 * stage) */
+			new_num_ps_gprs = max_gprs - (new_num_vs_gprs + def_num_clause_temp_gprs * 2);
+			new_num_vs_gprs = num_vs_gprs;
+		} else {
+			new_num_ps_gprs = def_num_ps_gprs;
+			new_num_vs_gprs = def_num_vs_gprs;
+		}
+	} else {
+		return true;
 	}
 
-	if (rctx->vs_shader->current->shader.bc.ngpr > rctx->default_vs_gprs)
-	{
-		diff = rctx->vs_shader->current->shader.bc.ngpr - rctx->default_vs_gprs;
-		num_ps_gprs -= diff;
-		num_vs_gprs += diff;
+	/* SQ_PGM_RESOURCES_*.NUM_GPRS must always be program to a value <=
+	 * SQ_GPR_RESOURCE_MGMT*.NUM_*_GPRS otherwise the GPU will lockup
+	 * Also if a shader use more gpr than SQ_GPR_RESOURCE_MGMT*.NUM_*_GPRS
+	 * it will lockup. So in this case just discard the draw command
+	 * and don't change the current gprs repartitions.
+	 */
+	if (num_ps_gprs > new_num_ps_gprs || num_vs_gprs > new_num_vs_gprs) {
+		R600_ERR("ps & vs shader require too many register (%d + %d) "
+			 "for a combined maximum of %d\n",
+			 num_ps_gprs, num_vs_gprs, max_gprs);
+		return false;
 	}
 
-	tmp = 0;
-	tmp |= S_008C04_NUM_PS_GPRS(num_ps_gprs);
-	tmp |= S_008C04_NUM_VS_GPRS(num_vs_gprs);
-	tmp |= S_008C04_NUM_CLAUSE_TEMP_GPRS(rctx->r6xx_num_clause_temp_gprs);
-	rstate.nregs = 0;
-	r600_pipe_state_add_reg(&rstate, R_008C04_SQ_GPR_RESOURCE_MGMT_1, tmp);
-
-	r600_context_pipe_state_set(rctx, &rstate);
+	/* in some case we endup recomputing the current value */
+	tmp = S_008C04_NUM_PS_GPRS(new_num_ps_gprs) |
+		S_008C04_NUM_VS_GPRS(new_num_vs_gprs) |
+		S_008C04_NUM_CLAUSE_TEMP_GPRS(def_num_clause_temp_gprs);
+	if (rctx->config_state.sq_gpr_resource_mgmt_1 != tmp) {
+		rctx->config_state.sq_gpr_resource_mgmt_1 = tmp;
+		rctx->config_state.atom.dirty = true;
+		rctx->flags |= R600_CONTEXT_PS_PARTIAL_FLUSH;
+	}
+	return true;
 }
 
 void r600_init_atom_start_cs(struct r600_context *rctx)
@@ -2209,7 +2266,7 @@ void r600_init_atom_start_cs(struct r600_context *rctx)
 	struct r600_command_buffer *cb = &rctx->start_cs_cmd;
 	uint32_t tmp;
 
-	r600_init_command_buffer(rctx, cb, 0, 256);
+	r600_init_command_buffer(cb, 256);
 
 	/* R6xx requires this packet at the start of each command buffer */
 	if (rctx->chip_class == R600) {
@@ -2220,6 +2277,10 @@ void r600_init_atom_start_cs(struct r600_context *rctx)
 	r600_store_value(cb, PKT3(PKT3_CONTEXT_CONTROL, 1, 0));
 	r600_store_value(cb, 0x80000000);
 	r600_store_value(cb, 0x80000000);
+
+	/* We're setting config registers here. */
+	r600_store_value(cb, PKT3(PKT3_EVENT_WRITE, 0, 0));
+	r600_store_value(cb, EVENT_TYPE(EVENT_TYPE_PS_PARTIAL_FLUSH) | EVENT_INDEX(4));
 
 	family = rctx->family;
 	ps_prio = 0;
@@ -2458,10 +2519,6 @@ void r600_init_atom_start_cs(struct r600_context *rctx)
 
 	r600_store_context_reg(cb, R_028B20_VGT_STRMOUT_BUFFER_EN, 0);
 
-	r600_store_context_reg_seq(cb, R_028400_VGT_MAX_VTX_INDX, 2);
-	r600_store_value(cb, ~0); /* R_028400_VGT_MAX_VTX_INDX */
-	r600_store_value(cb, 0); /* R_028404_VGT_MIN_VTX_INDX */
-
 	r600_store_ctl_const(cb, R_03CFF0_SQ_VTX_BASE_VTX_LOC, 0);
 
 	r600_store_context_reg_seq(cb, R_028028_DB_STENCIL_CLEAR, 2);
@@ -2517,6 +2574,12 @@ void r600_init_atom_start_cs(struct r600_context *rctx)
 	r600_store_value(cb, 0); /* R_0288CC_SQ_PGM_CF_OFFSET_PS */
 	r600_store_value(cb, 0); /* R_0288D0_SQ_PGM_CF_OFFSET_VS */
 
+        r600_store_context_reg(cb, R_0288E0_SQ_VTX_SEMANTIC_CLEAR, ~0);
+
+        r600_store_context_reg_seq(cb, R_028400_VGT_MAX_VTX_INDX, 2);
+	r600_store_value(cb, ~0); /* R_028400_VGT_MAX_VTX_INDX */
+	r600_store_value(cb, 0); /* R_028404_VGT_MIN_VTX_INDX */
+
 	r600_store_context_reg(cb, R_0288A4_SQ_PGM_RESOURCES_FS, 0);
 	r600_store_context_reg(cb, R_0288DC_SQ_PGM_CF_OFFSET_FS, 0);
 
@@ -2541,6 +2604,7 @@ void r600_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shad
 	unsigned tmp, sid, ufi = 0;
 	int need_linear = 0;
 	unsigned z_export = 0, stencil_export = 0;
+	unsigned sprite_coord_enable = rctx->rasterizer ? rctx->rasterizer->sprite_coord_enable : 0;
 
 	rstate->nregs = 0;
 
@@ -2561,7 +2625,7 @@ void r600_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shad
 			tmp |= S_028644_FLAT_SHADE(1);
 
 		if (rshader->input[i].name == TGSI_SEMANTIC_GENERIC &&
-				rctx->sprite_coord_enable & (1 << rshader->input[i].sid)) {
+		    sprite_coord_enable & (1 << rshader->input[i].sid)) {
 			tmp |= S_028644_PT_SPRITE_TEX(1);
 		}
 
@@ -2645,7 +2709,7 @@ void r600_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shad
 	shader->db_shader_control = db_shader_control;
 	shader->ps_depth_export = z_export | stencil_export;
 
-	shader->sprite_coord_enable = rctx->sprite_coord_enable;
+	shader->sprite_coord_enable = sprite_coord_enable;
 	if (rctx->rasterizer)
 		shader->flatshade = rctx->rasterizer->flatshade;
 }
@@ -2700,24 +2764,9 @@ void r600_pipe_shader_vs(struct pipe_context *ctx, struct r600_pipe_shader *shad
 		S_02881C_USE_VTX_POINT_SIZE(rshader->vs_out_point_size);
 }
 
-void r600_fetch_shader(struct pipe_context *ctx,
-		       struct r600_vertex_element *ve)
-{
-	struct r600_pipe_state *rstate;
-	struct r600_context *rctx = (struct r600_context *)ctx;
-
-	rstate = &ve->rstate;
-	rstate->id = R600_PIPE_STATE_FETCH_SHADER;
-	rstate->nregs = 0;
-	r600_pipe_state_add_reg_bo(rstate, R_028894_SQ_PGM_START_FS,
-				0,
-				ve->fetch_shader, RADEON_USAGE_READ);
-}
-
 void *r600_create_resolve_blend(struct r600_context *rctx)
 {
 	struct pipe_blend_state blend;
-	struct r600_pipe_state *rstate;
 	unsigned i;
 
 	memset(&blend, 0, sizeof(blend));
@@ -2732,32 +2781,27 @@ void *r600_create_resolve_blend(struct r600_context *rctx)
 		blend.rt[i].alpha_src_factor = PIPE_BLENDFACTOR_ZERO;
 		blend.rt[i].alpha_dst_factor = PIPE_BLENDFACTOR_ZERO;
 	}
-	rstate = r600_create_blend_state_mode(&rctx->context, &blend, V_028808_SPECIAL_RESOLVE_BOX);
-	return rstate;
+	return r600_create_blend_state_mode(&rctx->context, &blend, V_028808_SPECIAL_RESOLVE_BOX);
 }
 
 void *r700_create_resolve_blend(struct r600_context *rctx)
 {
 	struct pipe_blend_state blend;
-	struct r600_pipe_state *rstate;
 
 	memset(&blend, 0, sizeof(blend));
 	blend.independent_blend_enable = true;
 	blend.rt[0].colormask = 0xf;
-	rstate = r600_create_blend_state_mode(&rctx->context, &blend, V_028808_SPECIAL_RESOLVE_BOX);
-	return rstate;
+	return r600_create_blend_state_mode(&rctx->context, &blend, V_028808_SPECIAL_RESOLVE_BOX);
 }
 
 void *r600_create_decompress_blend(struct r600_context *rctx)
 {
 	struct pipe_blend_state blend;
-	struct r600_pipe_state *rstate;
 
 	memset(&blend, 0, sizeof(blend));
 	blend.independent_blend_enable = true;
 	blend.rt[0].colormask = 0xf;
-	rstate = r600_create_blend_state_mode(&rctx->context, &blend, V_028808_SPECIAL_EXPAND_SAMPLES);
-	return rstate;
+	return r600_create_blend_state_mode(&rctx->context, &blend, V_028808_SPECIAL_EXPAND_SAMPLES);
 }
 
 void *r600_create_db_flush_dsa(struct r600_context *rctx)
@@ -2784,7 +2828,7 @@ void *r600_create_db_flush_dsa(struct r600_context *rctx)
 	return rctx->context.create_depth_stencil_alpha_state(&rctx->context, &dsa);
 }
 
-void r600_update_dual_export_state(struct r600_context * rctx)
+void r600_update_db_shader_control(struct r600_context * rctx)
 {
 	bool dual_export = rctx->framebuffer.export_16bpc &&
 			   !rctx->ps_shader->current->ps_depth_export;
@@ -2792,12 +2836,8 @@ void r600_update_dual_export_state(struct r600_context * rctx)
 	unsigned db_shader_control = rctx->ps_shader->current->db_shader_control |
 				     S_02880C_DUAL_EXPORT_ENABLE(dual_export);
 
-	if (db_shader_control != rctx->db_shader_control) {
-		struct r600_pipe_state rstate;
-
-		rctx->db_shader_control = db_shader_control;
-		rstate.nregs = 0;
-		r600_pipe_state_add_reg(&rstate, R_02880C_DB_SHADER_CONTROL, db_shader_control);
-		r600_context_pipe_state_set(rctx, &rstate);
+	if (db_shader_control != rctx->db_misc_state.db_shader_control) {
+		rctx->db_misc_state.db_shader_control = db_shader_control;
+		rctx->db_misc_state.atom.dirty = true;
 	}
 }

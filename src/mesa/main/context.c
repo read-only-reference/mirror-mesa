@@ -129,9 +129,7 @@
 #include "vtxfmt.h"
 #include "program/program.h"
 #include "program/prog_print.h"
-#if _HAVE_FULL_GL
 #include "math/m_matrix.h"
-#endif
 #include "main/dispatch.h" /* for _gloffset_COUNT */
 
 #ifdef USE_SPARC_ASM
@@ -404,9 +402,6 @@ one_time_init( struct gl_context *ctx )
 
       _mesa_get_cpu_features();
 
-      /* context dependence is never a one-time thing... */
-      _mesa_init_get_hash(ctx);
-
       for (i = 0; i < 256; i++) {
          _mesa_ubyte_to_float_color_tab[i] = (float) i / 255.0F;
       }
@@ -425,6 +420,8 @@ one_time_init( struct gl_context *ctx )
 
    /* per-API one-time init */
    if (!(api_init_mask & (1 << ctx->API))) {
+      _mesa_init_get_hash(ctx);
+
       /*
        * This is fine as ES does not use the remap table, but it may not be
        * future-proof.  We cannot always initialize the remap table because
@@ -491,7 +488,7 @@ init_program_limits(struct gl_context *ctx, GLenum type,
    switch (type) {
    case GL_VERTEX_PROGRAM_ARB:
       prog->MaxParameters = MAX_VERTEX_PROGRAM_PARAMS;
-      prog->MaxAttribs = MAX_NV_VERTEX_PROGRAM_INPUTS;
+      prog->MaxAttribs = MAX_VERTEX_GENERIC_ATTRIBS;
       prog->MaxAddressRegs = MAX_VERTEX_PROGRAM_ADDRESS_REGS;
       prog->MaxUniformComponents = 4 * MAX_UNIFORMS;
       break;
@@ -502,8 +499,8 @@ init_program_limits(struct gl_context *ctx, GLenum type,
       prog->MaxUniformComponents = 4 * MAX_UNIFORMS;
       break;
    case MESA_GEOMETRY_PROGRAM:
-      prog->MaxParameters = MAX_NV_VERTEX_PROGRAM_PARAMS;
-      prog->MaxAttribs = MAX_NV_VERTEX_PROGRAM_INPUTS;
+      prog->MaxParameters = MAX_VERTEX_PROGRAM_PARAMS;
+      prog->MaxAttribs = MAX_VERTEX_GENERIC_ATTRIBS;
       prog->MaxAddressRegs = MAX_VERTEX_PROGRAM_ADDRESS_REGS;
       prog->MaxUniformComponents = MAX_GEOMETRY_UNIFORM_COMPONENTS;
       break;
@@ -617,7 +614,7 @@ _mesa_init_constants(struct gl_context *ctx)
 
    ctx->Const.MaxVertexTextureImageUnits = MAX_VERTEX_TEXTURE_IMAGE_UNITS;
    ctx->Const.MaxCombinedTextureImageUnits = MAX_COMBINED_TEXTURE_IMAGE_UNITS;
-   ctx->Const.MaxVarying = MAX_VARYING;
+   ctx->Const.MaxVarying = 16; /* old limit not to break tnl and swrast */
    ctx->Const.MaxGeometryTextureImageUnits = MAX_GEOMETRY_TEXTURE_IMAGE_UNITS;
    ctx->Const.MaxVertexVaryingComponents = MAX_VERTEX_VARYING_COMPONENTS;
    ctx->Const.MaxGeometryVaryingComponents = MAX_GEOMETRY_VARYING_COMPONENTS;
@@ -687,11 +684,6 @@ check_context_limits(struct gl_context *ctx)
    /* shader-related checks */
    assert(ctx->Const.FragmentProgram.MaxLocalParams <= MAX_PROGRAM_LOCAL_PARAMS);
    assert(ctx->Const.VertexProgram.MaxLocalParams <= MAX_PROGRAM_LOCAL_PARAMS);
-
-   assert(MAX_NV_FRAGMENT_PROGRAM_TEMPS <= MAX_PROGRAM_TEMPS);
-   assert(MAX_NV_VERTEX_PROGRAM_TEMPS <= MAX_PROGRAM_TEMPS);
-   assert(MAX_NV_VERTEX_PROGRAM_INPUTS <= VERT_ATTRIB_MAX);
-   assert(MAX_NV_VERTEX_PROGRAM_OUTPUTS <= VERT_RESULT_MAX);
 
    /* Texture unit checks */
    assert(ctx->Const.MaxTextureImageUnits > 0);
@@ -897,20 +889,17 @@ _mesa_alloc_dispatch_table(int size)
  *        etc with, or NULL
  * \param driverFunctions table of device driver functions for this context
  *        to use
- * \param driverContext pointer to driver-specific context data
  */
 GLboolean
 _mesa_initialize_context(struct gl_context *ctx,
                          gl_api api,
                          const struct gl_config *visual,
                          struct gl_context *share_list,
-                         const struct dd_function_table *driverFunctions,
-                         void *driverContext)
+                         const struct dd_function_table *driverFunctions)
 {
    struct gl_shared_state *shared;
    int i;
 
-   /*ASSERT(driverContext);*/
    assert(driverFunctions->NewTextureObject);
    assert(driverFunctions->FreeTextureImageBuffer);
 
@@ -934,7 +923,6 @@ _mesa_initialize_context(struct gl_context *ctx,
     * textures.
     */
    ctx->Driver = *driverFunctions;
-   ctx->DriverCtx = driverContext;
 
    if (share_list) {
       /* share state with another context */
@@ -1049,7 +1037,6 @@ _mesa_initialize_context(struct gl_context *ctx,
  * \param share_list another context to share display lists with or NULL
  * \param driverFunctions points to the dd_function_table into which the
  *        driver has plugged in all its special functions.
- * \param driverContext points to the device driver's private context state
  * 
  * \return pointer to a new __struct gl_contextRec or NULL if error.
  */
@@ -1057,20 +1044,18 @@ struct gl_context *
 _mesa_create_context(gl_api api,
                      const struct gl_config *visual,
                      struct gl_context *share_list,
-                     const struct dd_function_table *driverFunctions,
-                     void *driverContext)
+                     const struct dd_function_table *driverFunctions)
 {
    struct gl_context *ctx;
 
    ASSERT(visual);
-   /*ASSERT(driverContext);*/
 
    ctx = calloc(1, sizeof(struct gl_context));
    if (!ctx)
       return NULL;
 
    if (_mesa_initialize_context(ctx, api, visual, share_list,
-                                driverFunctions, driverContext)) {
+                                driverFunctions)) {
       return ctx;
    }
    else {
@@ -1173,7 +1158,6 @@ _mesa_destroy_context( struct gl_context *ctx )
 }
 
 
-#if _HAVE_FULL_GL
 /**
  * Copy attribute groups from one context to another.
  * 
@@ -1294,7 +1278,6 @@ _mesa_copy_context( const struct gl_context *src, struct gl_context *dst,
    dst->NewState = _NEW_ALL;
    dst->NewDriverState = ~0;
 }
-#endif
 
 
 /**
@@ -1471,8 +1454,6 @@ _mesa_make_current( struct gl_context *newCtx,
 
 #if 1
          /* We want to get rid of these lines: */
-
-#if _HAVE_FULL_GL
          if (!drawBuffer->Initialized) {
             initialize_framebuffer_size(newCtx, drawBuffer);
          }
@@ -1481,8 +1462,6 @@ _mesa_make_current( struct gl_context *newCtx,
          }
 
 	 _mesa_resizebuffers(newCtx);
-#endif
-
 #else
          /* We want the drawBuffer and readBuffer to be initialized by
           * the driver.

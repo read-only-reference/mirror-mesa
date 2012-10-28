@@ -621,7 +621,7 @@ galahad_context_set_fragment_sampler_views(struct pipe_context *_pipe,
 
 static void
 galahad_context_set_vertex_buffers(struct pipe_context *_pipe,
-                            unsigned num_buffers,
+                            unsigned start_slot, unsigned num_buffers,
                             const struct pipe_vertex_buffer *_buffers)
 {
    struct galahad_context *glhd_pipe = galahad_context(_pipe);
@@ -638,7 +638,7 @@ galahad_context_set_vertex_buffers(struct pipe_context *_pipe,
    }
 
    pipe->set_vertex_buffers(pipe,
-                            num_buffers,
+                            start_slot, num_buffers,
                             buffers);
 }
 
@@ -723,27 +723,31 @@ galahad_context_resource_copy_region(struct pipe_context *_pipe,
 
 static void
 galahad_context_blit(struct pipe_context *_pipe,
-                     const struct pipe_blit_info *info)
+                     const struct pipe_blit_info *_info)
 {
    struct galahad_context *glhd_pipe = galahad_context(_pipe);
    struct pipe_context *pipe = glhd_pipe->pipe;
+   struct pipe_blit_info info = *_info;
 
-   if (info->dst.box.width < 0 ||
-       info->dst.box.height < 0)
+   info.dst.resource = galahad_resource_unwrap(info.dst.resource);
+   info.src.resource = galahad_resource_unwrap(info.src.resource);
+
+   if (info.dst.box.width < 0 ||
+       info.dst.box.height < 0)
       glhd_error("Destination dimensions are negative");
 
-   if (info->filter != PIPE_TEX_FILTER_NEAREST &&
-       info->src.resource->target != PIPE_TEXTURE_3D &&
-       info->dst.box.depth != info->src.box.depth)
+   if (info.filter != PIPE_TEX_FILTER_NEAREST &&
+       info.src.resource->target != PIPE_TEXTURE_3D &&
+       info.dst.box.depth != info.src.box.depth)
       glhd_error("Filtering in z-direction on non-3D texture");
 
-   if (util_format_is_depth_or_stencil(info->dst.format) !=
-       util_format_is_depth_or_stencil(info->src.format))
+   if (util_format_is_depth_or_stencil(info.dst.format) !=
+       util_format_is_depth_or_stencil(info.src.format))
       glhd_error("Invalid format conversion: %s <- %s\n",
-                 util_format_name(info->dst.format),
-                 util_format_name(info->src.format));
+                 util_format_name(info.dst.format),
+                 util_format_name(info.src.format));
 
-   pipe->blit(pipe, info);
+   pipe->blit(pipe, &info);
 }
 
 static void
@@ -877,57 +881,34 @@ galahad_context_surface_destroy(struct pipe_context *_pipe,
 }
 
 
-
-static struct pipe_transfer *
-galahad_context_get_transfer(struct pipe_context *_context,
-                              struct pipe_resource *_resource,
-                              unsigned level,
-                              unsigned usage,
-                              const struct pipe_box *box)
+static void *
+galahad_context_transfer_map(struct pipe_context *_context,
+                             struct pipe_resource *_resource,
+                             unsigned level,
+                             unsigned usage,
+                             const struct pipe_box *box,
+                             struct pipe_transfer **transfer)
 {
    struct galahad_context *glhd_context = galahad_context(_context);
    struct galahad_resource *glhd_resource = galahad_resource(_resource);
    struct pipe_context *context = glhd_context->pipe;
    struct pipe_resource *resource = glhd_resource->resource;
    struct pipe_transfer *result;
+   void *map;
 
-   result = context->get_transfer(context,
-                                  resource,
-                                  level,
-                                  usage,
-                                  box);
-
-   if (result)
-      return galahad_transfer_create(glhd_context, glhd_resource, result);
-   return NULL;
-}
-
-static void
-galahad_context_transfer_destroy(struct pipe_context *_pipe,
-                                  struct pipe_transfer *_transfer)
-{
-   galahad_transfer_destroy(galahad_context(_pipe),
-                             galahad_transfer(_transfer));
-}
-
-static void *
-galahad_context_transfer_map(struct pipe_context *_context,
-                              struct pipe_transfer *_transfer)
-{
-   struct galahad_context *glhd_context = galahad_context(_context);
-   struct galahad_transfer *glhd_transfer = galahad_transfer(_transfer);
-   struct pipe_context *context = glhd_context->pipe;
-   struct pipe_transfer *transfer = glhd_transfer->transfer;
-
-   struct galahad_resource *glhd_resource = galahad_resource(_transfer->resource);
+   map = context->transfer_map(context,
+                               resource,
+                               level,
+                               usage,
+                               box, &result);
+   if (!map)
+      return NULL;
 
    glhd_resource->map_count++;
 
-   return context->transfer_map(context,
-                                transfer);
+   *transfer = galahad_transfer_create(glhd_context, glhd_resource, result);
+   return *transfer ? map : NULL;
 }
-
-
 
 static void
 galahad_context_transfer_flush_region(struct pipe_context *_context,
@@ -943,7 +924,6 @@ galahad_context_transfer_flush_region(struct pipe_context *_context,
                                   transfer,
                                   box);
 }
-
 
 static void
 galahad_context_transfer_unmap(struct pipe_context *_context,
@@ -964,6 +944,9 @@ galahad_context_transfer_unmap(struct pipe_context *_context,
 
    context->transfer_unmap(context,
                            transfer);
+
+   galahad_transfer_destroy(galahad_context(_context),
+                             galahad_transfer(_transfer));
 }
 
 
@@ -1088,8 +1071,6 @@ galahad_context_create(struct pipe_screen *_screen, struct pipe_context *pipe)
    GLHD_PIPE_INIT(sampler_view_destroy);
    GLHD_PIPE_INIT(create_surface);
    GLHD_PIPE_INIT(surface_destroy);
-   GLHD_PIPE_INIT(get_transfer);
-   GLHD_PIPE_INIT(transfer_destroy);
    GLHD_PIPE_INIT(transfer_map);
    GLHD_PIPE_INIT(transfer_flush_region);
    GLHD_PIPE_INIT(transfer_unmap);

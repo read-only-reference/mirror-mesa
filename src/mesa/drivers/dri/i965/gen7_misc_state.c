@@ -42,48 +42,11 @@ static void emit_depthbuffer(struct brw_context *brw)
 			    *stencil_mt = NULL,
 			    *hiz_mt = NULL;
 
-   /* Amount by which drawing should be offset in order to draw to the
-    * appropriate miplevel/zoffset/cubeface.  We will extract these values
-    * from depth_irb or stencil_irb once we determine which is present.
-    */
-   uint32_t draw_x = 0, draw_y = 0;
-
-   /* Masks used to determine how much of the draw_x and draw_y offsets should
-    * be performed using the fine adjustment of "depth coordinate offset X/Y"
-    * (dw5 of 3DSTATE_DEPTH_BUFFER).  Any remaining coarse adjustment will be
-    * performed by changing the base addresses of the buffers.
-    *
-    * Since the HiZ, depth, and stencil buffers all use the same "depth
-    * coordinate offset X/Y" values, we need to make sure that the coarse
-    * adjustment will be possible to apply to all three buffers.  Since coarse
-    * adjustment can only be applied in multiples of the tile size, we will OR
-    * together the tile masks of all the buffers to determine which offsets to
-    * perform as fine adjustments.
-    */
-   uint32_t tile_mask_x = 0, tile_mask_y = 0;
-
    if (drb)
       depth_mt = drb->mt;
 
-   if (depth_mt) {
+   if (depth_mt)
       hiz_mt = depth_mt->hiz_mt;
-
-      intel_region_get_tile_masks(depth_mt->region,
-                                  &tile_mask_x, &tile_mask_y, false);
-
-      if (hiz_mt) {
-         uint32_t hiz_tile_mask_x, hiz_tile_mask_y;
-         intel_region_get_tile_masks(hiz_mt->region,
-                                     &hiz_tile_mask_x, &hiz_tile_mask_y,
-                                     false);
-
-         /* Each HiZ row represents 2 rows of pixels */
-         hiz_tile_mask_y = hiz_tile_mask_y << 1 | 1;
-
-         tile_mask_x |= hiz_tile_mask_x;
-         tile_mask_y |= hiz_tile_mask_y;
-      }
-   }
 
    if (srb) {
       stencil_mt = srb->mt;
@@ -91,11 +54,44 @@ static void emit_depthbuffer(struct brw_context *brw)
 	 stencil_mt = stencil_mt->stencil_mt;
 
       assert(stencil_mt->format == MESA_FORMAT_S8);
-
-      /* Stencil buffer uses 64x64 tiles. */
-      tile_mask_x |= 63;
-      tile_mask_y |= 63;
    }
+
+   uint32_t tile_mask_x, tile_mask_y;
+   brw_get_depthstencil_tile_masks(depth_mt, stencil_mt,
+                                   &tile_mask_x, &tile_mask_y);
+
+   /* The intra-tile offsets should already have been forced into agreement by
+    * gen7_workaround_depthstencil_alignment().
+    */
+   uint32_t tile_x = 0, tile_y = 0;
+   if (depth_mt) {
+      tile_x = drb->draw_x & tile_mask_x;
+      tile_y = drb->draw_y & tile_mask_y;
+
+      if (stencil_mt) {
+         assert((srb->draw_x & tile_mask_x) == tile_x);
+         assert((srb->draw_y & tile_mask_y) == tile_y);
+      }
+   } else if (stencil_mt) {
+      tile_x = srb->draw_x & tile_mask_x;
+      tile_y = srb->draw_y & tile_mask_y;
+   }
+
+   /* According to the Sandy Bridge PRM, volume 2 part 1, pp326-327
+    * (3DSTATE_DEPTH_BUFFER dw5), in the documentation for "Depth
+    * Coordinate Offset X/Y":
+    *
+    *   "The 3 LSBs of both offsets must be zero to ensure correct
+    *   alignment"
+    *
+    * This should already have been corrected by
+    * gen6_workaround_depthstencil_alignment.
+    */
+   WARN_ONCE((tile_x & 7) || (tile_y & 7),
+             "Depth/stencil buffer needs alignment to 8-pixel boundaries.\n"
+             "Truncating offset, bad rendering may occur.\n");
+   tile_x &= ~7;
+   tile_y &= ~7;
 
    /* Gen7 doesn't support packed depth/stencil */
    assert(stencil_mt == NULL || depth_mt != stencil_mt);
@@ -106,36 +102,12 @@ static void emit_depthbuffer(struct brw_context *brw)
    if (depth_mt == NULL) {
       uint32_t dw1 = BRW_DEPTHFORMAT_D32_FLOAT << 18;
       uint32_t dw3 = 0;
-      uint32_t tile_x = 0, tile_y = 0;
 
       if (stencil_mt == NULL) {
 	 dw1 |= (BRW_SURFACE_NULL << 29);
       } else {
 	 /* _NEW_STENCIL: enable stencil buffer writes */
 	 dw1 |= ((ctx->Stencil.WriteMask != 0) << 27);
-
-         draw_x = srb->draw_x;
-         draw_y = srb->draw_y;
-         tile_x = draw_x & tile_mask_x;
-         tile_y = draw_y & tile_mask_y;
-
-         /* According to the Sandy Bridge PRM, volume 2 part 1, pp326-327
-          * (3DSTATE_DEPTH_BUFFER dw5), in the documentation for "Depth
-          * Coordinate Offset X/Y":
-          *
-          *   "The 3 LSBs of both offsets must be zero to ensure correct
-          *   alignment"
-          *
-          * We have no guarantee that tile_x and tile_y are correctly aligned,
-          * since they are determined by the mipmap layout, which is only
-          * aligned to multiples of 4.
-          *
-          * So, to avoid hanging the GPU, just smash the low order 3 bits of
-          * tile_x and tile_y to 0.  This is a temporary workaround until we
-          * come up with a better solution.
-          */
-         tile_x &= ~7;
-         tile_y &= ~7;
 
 	 /* 3DSTATE_STENCIL_BUFFER inherits surface type and dimensions. */
 	 dw1 |= (BRW_SURFACE_2D << 29);
@@ -154,34 +126,11 @@ static void emit_depthbuffer(struct brw_context *brw)
       ADVANCE_BATCH();
    } else {
       struct intel_region *region = depth_mt->region;
-      uint32_t tile_x, tile_y, offset;
-
-      draw_x = drb->draw_x;
-      draw_y = drb->draw_y;
-      tile_x = draw_x & tile_mask_x;
-      tile_y = draw_y & tile_mask_y;
-
-      /* According to the Sandy Bridge PRM, volume 2 part 1, pp326-327
-       * (3DSTATE_DEPTH_BUFFER dw5), in the documentation for "Depth
-       * Coordinate Offset X/Y":
-       *
-       *   "The 3 LSBs of both offsets must be zero to ensure correct
-       *   alignment"
-       *
-       * We have no guarantee that tile_x and tile_y are correctly aligned,
-       * since they are determined by the mipmap layout, which is only aligned
-       * to multiples of 4.
-       *
-       * So, to avoid hanging the GPU, just smash the low order 3 bits of
-       * tile_x and tile_y to 0.  This is a temporary workaround until we come
-       * up with a better solution.
-       */
-      tile_x &= ~7;
-      tile_y &= ~7;
+      uint32_t offset;
 
       offset = intel_region_get_aligned_offset(region,
-                                               draw_x & ~tile_mask_x,
-                                               draw_y & ~tile_mask_y,
+                                               drb->draw_x & ~tile_mask_x,
+                                               drb->draw_y & ~tile_mask_y,
                                                false);
 
       assert(region->tiling == I915_TILING_Y);
@@ -215,8 +164,8 @@ static void emit_depthbuffer(struct brw_context *brw)
    } else {
       uint32_t hiz_offset =
          intel_region_get_aligned_offset(hiz_mt->region,
-                                         draw_x & ~tile_mask_x,
-                                         (draw_y & ~tile_mask_y) / 2,
+                                         drb->draw_x & ~tile_mask_x,
+                                         (drb->draw_y & ~tile_mask_y) / 2,
                                          false);
       BEGIN_BATCH(3);
       OUT_BATCH(GEN7_3DSTATE_HIER_DEPTH_BUFFER << 16 | (3 - 2));
@@ -242,8 +191,8 @@ static void emit_depthbuffer(struct brw_context *brw)
        * that the region is untiled; in fact it's W tiled.
        */
       uint32_t stencil_offset =
-         (draw_y & ~tile_mask_y) * stencil_mt->region->pitch +
-         (draw_x & ~tile_mask_x) * 64;
+         (srb->draw_y & ~tile_mask_y) * stencil_mt->region->pitch +
+         (srb->draw_x & ~tile_mask_x) * 64;
 
       BEGIN_BATCH(3);
       OUT_BATCH(GEN7_3DSTATE_STENCIL_BUFFER << 16 | (3 - 2));

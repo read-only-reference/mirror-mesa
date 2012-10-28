@@ -133,8 +133,7 @@ nv50_miptree_get_handle(struct pipe_screen *pscreen,
    if (!mt || !mt->base.bo)
       return FALSE;
 
-   stride = util_format_get_stride(mt->base.base.format,
-                                   mt->base.base.width0);
+   stride = mt->level[0].pitch;
 
    return nouveau_screen_bo_get_handle(pscreen,
                                        mt->base.bo,
@@ -146,8 +145,6 @@ const struct u_resource_vtbl nv50_miptree_vtbl =
 {
    nv50_miptree_get_handle,         /* get_handle */
    nv50_miptree_destroy,            /* resource_destroy */
-   nv50_miptree_transfer_new,       /* get_transfer */
-   nv50_miptree_transfer_del,       /* transfer_destroy */
    nv50_miptree_transfer_map,       /* transfer_map */
    u_default_transfer_flush_region, /* transfer_flush_region */
    nv50_miptree_transfer_unmap,     /* transfer_unmap */

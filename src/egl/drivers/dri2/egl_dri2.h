@@ -100,11 +100,15 @@ struct dri2_egl_display
    __DRItexBufferExtension  *tex_buffer;
    __DRIimageExtension      *image;
    __DRIrobustnessExtension *robustness;
+   __DRI2configQueryExtension *config;
    int                       fd;
 
    int                       own_device;
    int                       swap_available;
    int                       invalidate_available;
+   int                       min_swap_interval;
+   int                       max_swap_interval;
+   int                       default_swap_interval;
 #ifdef HAVE_DRM_PLATFORM
    struct gbm_dri_device    *gbm_dri;
 #endif
@@ -122,8 +126,10 @@ struct dri2_egl_display
 
 #ifdef HAVE_WAYLAND_PLATFORM
    struct wl_display        *wl_dpy;
+   struct wl_registry       *wl_registry;
    struct wl_drm            *wl_server_drm;
    struct wl_drm            *wl_drm;
+   struct wl_event_queue    *wl_queue;
    int			     authenticated;
    int			     formats;
 #endif
@@ -174,7 +180,7 @@ struct dri2_egl_surface
    __DRIbuffer           *dri_buffers[__DRI_BUFFER_COUNT];
    __DRIbuffer           *third_buffer;
    __DRIbuffer           *pending_buffer;
-   EGLBoolean             block_swap_buffers;
+   struct wl_callback    *frame_callback;
    int			  format;
 #endif
 

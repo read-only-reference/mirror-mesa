@@ -26,6 +26,7 @@
  **************************************************************************/
 
 #include <errno.h>
+#include <time.h>
 #include "main/glheader.h"
 #include "main/context.h"
 #include "main/framebuffer.h"
@@ -669,6 +670,8 @@ intelCreateBuffer(__DRIscreen * driScrnPriv,
 
    if (mesaVis->redBits == 5)
       rgbFormat = MESA_FORMAT_RGB565;
+   else if (mesaVis->sRGBCapable)
+      rgbFormat = MESA_FORMAT_SARGB8;
    else if (mesaVis->alphaBits == 0)
       rgbFormat = MESA_FORMAT_XRGB8888;
    else
@@ -911,6 +914,12 @@ intel_detect_swizzling(struct intel_screen *screen)
 static __DRIconfig**
 intel_screen_make_configs(__DRIscreen *dri_screen)
 {
+   static const gl_format formats[3] = {
+      MESA_FORMAT_RGB565,
+      MESA_FORMAT_XRGB8888,
+      MESA_FORMAT_ARGB8888
+   };
+
    /* GLX_SWAP_COPY_OML is not supported due to page flipping. */
    static const GLenum back_buffer_modes[] = {
        GLX_SWAP_UNDEFINED_OML, GLX_NONE,
@@ -920,41 +929,35 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
    static const uint8_t multisample_samples[2]  = {4, 8};
 
    struct intel_screen *screen = dri_screen->driverPrivate;
-   GLenum fb_format[3];
-   GLenum fb_type[3];
    uint8_t depth_bits[4], stencil_bits[4];
    __DRIconfig **configs = NULL;
 
-   fb_format[0] = GL_RGB;
-   fb_type[0] = GL_UNSIGNED_SHORT_5_6_5;
-
-   fb_format[1] = GL_BGR;
-   fb_type[1] = GL_UNSIGNED_INT_8_8_8_8_REV;
-
-   fb_format[2] = GL_BGRA;
-   fb_type[2] = GL_UNSIGNED_INT_8_8_8_8_REV;
-
    /* Generate singlesample configs without accumulation buffer. */
-   for (int i = 0; i < ARRAY_SIZE(fb_format); i++) {
+   for (int i = 0; i < ARRAY_SIZE(formats); i++) {
       __DRIconfig **new_configs;
-      const int num_depth_stencil_bits = 2;
+      int num_depth_stencil_bits = 2;
 
       /* Starting with DRI2 protocol version 1.1 we can request a depth/stencil
        * buffer that has a different number of bits per pixel than the color
-       * buffer.  This isn't yet supported here.
+       * buffer, gen >= 6 supports this.
        */
       depth_bits[0] = 0;
       stencil_bits[0] = 0;
 
-      if (fb_type[i] == GL_UNSIGNED_SHORT_5_6_5) {
+      if (formats[i] == MESA_FORMAT_RGB565) {
          depth_bits[1] = 16;
          stencil_bits[1] = 0;
+         if (screen->gen >= 6) {
+             depth_bits[2] = 24;
+             stencil_bits[2] = 8;
+             num_depth_stencil_bits = 3;
+         }
       } else {
          depth_bits[1] = 24;
          stencil_bits[1] = 8;
       }
 
-      new_configs = driCreateConfigs(fb_format[i], fb_type[i],
+      new_configs = driCreateConfigs(formats[i],
                                      depth_bits,
                                      stencil_bits,
                                      num_depth_stencil_bits,
@@ -967,10 +970,10 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
    /* Generate the minimum possible set of configs that include an
     * accumulation buffer.
     */
-   for (int i = 0; i < ARRAY_SIZE(fb_format); i++) {
+   for (int i = 0; i < ARRAY_SIZE(formats); i++) {
       __DRIconfig **new_configs;
 
-      if (fb_type[i] == GL_UNSIGNED_SHORT_5_6_5) {
+      if (formats[i] == MESA_FORMAT_RGB565) {
          depth_bits[0] = 16;
          stencil_bits[0] = 0;
       } else {
@@ -978,7 +981,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
          stencil_bits[0] = 8;
       }
 
-      new_configs = driCreateConfigs(fb_format[i], fb_type[i],
+      new_configs = driCreateConfigs(formats[i],
                                      depth_bits, stencil_bits, 1,
                                      back_buffer_modes, 1,
                                      singlesample_samples, 1,
@@ -999,7 +1002,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
     * supported.  Singlebuffer configs are not supported because no one wants
     * them.
     */
-   for (int i = 0; i < ARRAY_SIZE(fb_format); i++) {
+   for (int i = 0; i < ARRAY_SIZE(formats); i++) {
       if (screen->gen < 6)
          break;
 
@@ -1010,7 +1013,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
       depth_bits[0] = 0;
       stencil_bits[0] = 0;
 
-      if (fb_type[i] == GL_UNSIGNED_SHORT_5_6_5) {
+      if (formats[i] == MESA_FORMAT_RGB565) {
          depth_bits[1] = 16;
          stencil_bits[1] = 0;
       } else {
@@ -1023,7 +1026,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
       else if (screen->gen == 6)
          num_msaa_modes = 1;
 
-      new_configs = driCreateConfigs(fb_format[i], fb_type[i],
+      new_configs = driCreateConfigs(formats[i],
                                      depth_bits,
                                      stencil_bits,
                                      num_depth_stencil_bits,

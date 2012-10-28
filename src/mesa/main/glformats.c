@@ -791,8 +791,10 @@ _mesa_is_compressed_format(struct gl_context *ctx, GLenum format)
       return ctx->Extensions.EXT_texture_compression_s3tc;
    case GL_COMPRESSED_RGBA_S3TC_DXT3_EXT:
    case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
-      return _mesa_is_desktop_gl(ctx)
-         && ctx->Extensions.EXT_texture_compression_s3tc;
+      return (_mesa_is_desktop_gl(ctx) &&
+	      ctx->Extensions.EXT_texture_compression_s3tc) ||
+	     (ctx->API == API_OPENGLES2 &&
+	      ctx->Extensions.ANGLE_texture_compression_dxt);
    case GL_RGB_S3TC:
    case GL_RGB4_S3TC:
    case GL_RGBA_S3TC:
@@ -827,7 +829,6 @@ _mesa_is_compressed_format(struct gl_context *ctx, GLenum format)
    case GL_ETC1_RGB8_OES:
       return _mesa_is_gles(ctx)
          && ctx->Extensions.OES_compressed_ETC1_RGB8_texture;
-#if FEATURE_ES
    case GL_PALETTE4_RGB8_OES:
    case GL_PALETTE4_RGBA8_OES:
    case GL_PALETTE4_R5_G6_B5_OES:
@@ -839,7 +840,6 @@ _mesa_is_compressed_format(struct gl_context *ctx, GLenum format)
    case GL_PALETTE8_RGBA4_OES:
    case GL_PALETTE8_RGB5_A1_OES:
       return ctx->API == API_OPENGLES;
-#endif
    default:
       return GL_FALSE;
    }

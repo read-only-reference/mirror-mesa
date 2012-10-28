@@ -27,6 +27,7 @@
 #include "util/u_memory.h"
 #include "util/u_framebuffer.h"
 #include "util/u_blitter.h"
+#include "util/u_helpers.h"
 #include "util/u_math.h"
 #include "util/u_pack_color.h"
 #include "tgsi/tgsi_parse.h"
@@ -378,6 +379,8 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 	if (rs == NULL) {
 		return NULL;
 	}
+
+	rs->two_side = state->light_twoside;
 
 	polygon_dual_mode = (state->fill_front != PIPE_POLYGON_MODE_FILL ||
 				state->fill_back != PIPE_POLYGON_MODE_FILL);
@@ -1442,11 +1445,11 @@ static bool si_is_zs_format_supported(enum pipe_format format)
 	return si_translate_dbformat(format) != ~0U;
 }
 
-bool si_is_format_supported(struct pipe_screen *screen,
-			    enum pipe_format format,
-			    enum pipe_texture_target target,
-			    unsigned sample_count,
-			    unsigned usage)
+boolean si_is_format_supported(struct pipe_screen *screen,
+                               enum pipe_format format,
+                               enum pipe_texture_target target,
+                               unsigned sample_count,
+                               unsigned usage)
 {
 	unsigned retval = 0;
 
@@ -1801,18 +1804,7 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	tl_y = 0;
 	br_x = state->width;
 	br_y = state->height;
-#if 0 /* These shouldn't be necessary on SI, see PA_SC_ENHANCE register */
-	/* EG hw workaround */
-	if (br_x == 0)
-		tl_x = 1;
-	if (br_y == 0)
-		tl_y = 1;
-	/* cayman hw workaround */
-	if (rctx->chip_class == CAYMAN) {
-		if (br_x == 1 && br_y == 1)
-			br_x = 2;
-	}
-#endif
+
 	tl = S_028240_TL_X(tl_x) | S_028240_TL_Y(tl_y);
 	br = S_028244_BR_X(br_x) | S_028244_BR_Y(br_y);
 
@@ -1841,19 +1833,21 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
  */
 
 /* Compute the key for the hw shader variant */
-static INLINE unsigned si_shader_selector_key(struct pipe_context *ctx,
-					      struct si_pipe_shader_selector *sel)
+static INLINE struct si_shader_key si_shader_selector_key(struct pipe_context *ctx,
+							  struct si_pipe_shader_selector *sel)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
-	unsigned key = 0;
+	struct si_shader_key key;
+	memset(&key, 0, sizeof(key));
 
 	if (sel->type == PIPE_SHADER_FRAGMENT) {
 		if (sel->fs_write_all)
-			key |= rctx->framebuffer.nr_cbufs;
-		key |= rctx->export_16bpc << 4;
-		/*if (rctx->queued.named.rasterizer)
-			  key |= rctx->queued.named.rasterizer->flatshade << 12;*/
-		/*key |== rctx->two_side << 13;*/
+			key.nr_cbufs = rctx->framebuffer.nr_cbufs;
+		key.export_16bpc = rctx->export_16bpc;
+		if (rctx->queued.named.rasterizer) {
+			key.color_two_side = rctx->queued.named.rasterizer->two_side;
+			/*key.flatshade = rctx->queued.named.rasterizer->flatshade;*/
+		}
 	}
 
 	return key;
@@ -1865,7 +1859,7 @@ int si_shader_select(struct pipe_context *ctx,
 		     struct si_pipe_shader_selector *sel,
 		     unsigned *dirty)
 {
-	unsigned key;
+	struct si_shader_key key;
 	struct si_pipe_shader * shader = NULL;
 	int r;
 
@@ -1875,7 +1869,7 @@ int si_shader_select(struct pipe_context *ctx,
 	 * This path is also used for most shaders that don't need multiple
 	 * variants, it will cost just a computation of the key and this
 	 * test. */
-	if (likely(sel->current && sel->current->key == key)) {
+	if (likely(sel->current && memcmp(&sel->current->key, &key, sizeof(key)) == 0)) {
 		return 0;
 	}
 
@@ -1883,7 +1877,7 @@ int si_shader_select(struct pipe_context *ctx,
 	if (sel->num_shaders > 1) {
 		struct si_pipe_shader *p = sel->current, *c = p->next_variant;
 
-		while (c && c->key != key) {
+		while (c && memcmp(&c->key, &key, sizeof(key)) != 0) {
 			p = c;
 			c = c->next_variant;
 		}
@@ -1898,10 +1892,10 @@ int si_shader_select(struct pipe_context *ctx,
 		shader = CALLOC(1, sizeof(struct si_pipe_shader));
 		shader->selector = sel;
 
-		r = si_pipe_shader_create(ctx, shader);
+		r = si_pipe_shader_create(ctx, shader, key);
 		if (unlikely(r)) {
-			R600_ERR("Failed to build shader variant (type=%u, key=%u) %d\n",
-				 sel->type, key, r);
+			R600_ERR("Failed to build shader variant (type=%u) %d\n",
+				 sel->type, r);
 			sel->current = NULL;
 			return r;
 		}
@@ -2278,7 +2272,7 @@ static void si_set_ps_sampler_view(struct pipe_context *ctx, unsigned count,
 			pipe_sampler_view_reference((struct pipe_sampler_view **)&rctx->ps_samplers.views[i], NULL);
 	}
 
-	si_pm4_sh_data_end(pm4, R_00B040_SPI_SHADER_USER_DATA_PS_4);
+	si_pm4_sh_data_end(pm4, R_00B030_SPI_SHADER_USER_DATA_PS_0, SI_SGPR_RESOURCE);
 
 out:
 	si_pm4_set_state(rctx, ps_sampler_views, pm4);
@@ -2345,7 +2339,7 @@ static void si_bind_ps_sampler(struct pipe_context *ctx, unsigned count, void **
 			si_pm4_sh_data_add(pm4, rstates[i] ? rstates[i]->val[j] : 0);
 		}
 	}
-	si_pm4_sh_data_end(pm4, R_00B038_SPI_SHADER_USER_DATA_PS_2);
+	si_pm4_sh_data_end(pm4, R_00B030_SPI_SHADER_USER_DATA_PS_0, SI_SGPR_SAMPLER);
 
 	if (border_color_table) {
 		uint64_t va_offset =
@@ -2382,7 +2376,7 @@ static void si_set_constant_buffer(struct pipe_context *ctx, uint shader, uint i
 	struct si_resource *rbuffer = cb ? si_resource(cb->buffer) : NULL;
 	struct si_pm4_state *pm4;
 	uint64_t va_offset;
-	uint32_t offset;
+	uint32_t reg, offset;
 
 	/* Note that the state tracker can unbind constant buffers by
 	 * passing NULL here.
@@ -2404,14 +2398,16 @@ static void si_set_constant_buffer(struct pipe_context *ctx, uint shader, uint i
 
 	switch (shader) {
 	case PIPE_SHADER_VERTEX:
-		si_pm4_set_reg(pm4, R_00B130_SPI_SHADER_USER_DATA_VS_0, va_offset);
-		si_pm4_set_reg(pm4, R_00B134_SPI_SHADER_USER_DATA_VS_1, va_offset >> 32);
+		reg = R_00B130_SPI_SHADER_USER_DATA_VS_0 + SI_SGPR_CONST * 4;
+		si_pm4_set_reg(pm4, reg, va_offset);
+		si_pm4_set_reg(pm4, reg + 4, va_offset >> 32);
 		si_pm4_set_state(rctx, vs_const, pm4);
 		break;
 
 	case PIPE_SHADER_FRAGMENT:
-		si_pm4_set_reg(pm4, R_00B030_SPI_SHADER_USER_DATA_PS_0, va_offset);
-		si_pm4_set_reg(pm4, R_00B034_SPI_SHADER_USER_DATA_PS_1, va_offset >> 32);
+		reg = R_00B030_SPI_SHADER_USER_DATA_PS_0 + SI_SGPR_CONST * 4;
+		si_pm4_set_reg(pm4, reg, va_offset);
+		si_pm4_set_reg(pm4, reg + 4, va_offset >> 32);
 		si_pm4_set_state(rctx, ps_const, pm4);
 		break;
 
@@ -2493,12 +2489,12 @@ static void si_delete_vertex_element(struct pipe_context *ctx, void *state)
 	FREE(state);
 }
 
-static void si_set_vertex_buffers(struct pipe_context *ctx, unsigned count,
+static void si_set_vertex_buffers(struct pipe_context *ctx, unsigned start_slot, unsigned count,
 				  const struct pipe_vertex_buffer *buffers)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 
-	util_copy_vertex_buffers(rctx->vertex_buffer, &rctx->nr_vertex_buffers, buffers, count);
+	util_set_vertex_buffers_count(rctx->vertex_buffer, &rctx->nr_vertex_buffers, buffers, start_slot, count);
 }
 
 static void si_set_index_buffer(struct pipe_context *ctx,
@@ -2630,6 +2626,8 @@ void si_init_config(struct r600_context *rctx)
 	si_pm4_set_reg(pm4, R_028BD8_PA_SC_CENTROID_PRIORITY_1, 0xfedcba98);
 
 	si_pm4_set_reg(pm4, R_028804_DB_EQAA, 0x110000);
+
+	si_pm4_set_reg(pm4, R_02882C_PA_SU_PRIM_FILTER_CNTL, 0);
 
 	si_pm4_set_state(rctx, init, pm4);
 }

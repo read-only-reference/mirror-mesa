@@ -794,6 +794,7 @@ vec4_visitor::run()
    move_uniform_array_access_to_pull_constants();
    pack_uniform_registers();
    move_push_constants_to_pull_constants();
+   split_virtual_grfs();
 
    bool progress;
    do {
@@ -809,7 +810,24 @@ vec4_visitor::run()
       return false;
 
    setup_payload();
-   reg_allocate();
+
+   if (false) {
+      /* Debug of register spilling: Go spill everything. */
+      const int grf_count = virtual_grf_count;
+      float spill_costs[virtual_grf_count];
+      bool no_spill[virtual_grf_count];
+      evaluate_spill_costs(spill_costs, no_spill);
+      for (int i = 0; i < grf_count; i++) {
+         if (no_spill[i])
+            continue;
+         spill_reg(i);
+      }
+   }
+
+   while (!reg_allocate()) {
+      if (failed)
+         break;
+   }
 
    if (failed)
       return false;

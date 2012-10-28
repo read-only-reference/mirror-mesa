@@ -55,6 +55,7 @@ struct si_shader_context
 	struct tgsi_parse_context parse;
 	struct tgsi_token * tokens;
 	struct si_pipe_shader *shader;
+	struct si_shader_key key;
 	unsigned type; /* TGSI_PROCESSOR_* specifies the type of shader. */
 	unsigned ninput_emitted;
 /*	struct list_head inputs; */
@@ -191,15 +192,11 @@ static void declare_input_vs(
 	LLVMValueRef input;
 	struct lp_build_context * uint = &si_shader_ctx->radeon_bld.soa.bld_base.uint_bld;
 	struct lp_build_context * base = &si_shader_ctx->radeon_bld.soa.bld_base.base;
-	struct r600_context *rctx = si_shader_ctx->rctx;
 	//struct pipe_vertex_element *velem = &rctx->vertex_elements->elements[input_index];
 	unsigned chan;
 
 	/* Load the T list */
-	/* XXX: Communicate with the rest of the driver about which SGPR the T#
-	 * list pointer is going to be stored in.  Hard code to SGPR[6:7] for
- 	 * now */
-	t_list_ptr = use_sgpr(base->gallivm, SGPR_CONST_PTR_V4I32, 6);
+	t_list_ptr = use_sgpr(base->gallivm, SGPR_CONST_PTR_V4I32, SI_SGPR_VERTEX_BUFFER);
 
 	t_offset = lp_build_const_int32(base->gallivm, input_index);
 
@@ -239,6 +236,7 @@ static void declare_input_fs(
 {
 	const char * intr_name;
 	unsigned chan;
+	struct si_shader *shader = &si_shader_ctx->shader->shader;
 	struct lp_build_context * base =
 				&si_shader_ctx->radeon_bld.soa.bld_base.base;
 	struct gallivm_state * gallivm = base->gallivm;
@@ -251,14 +249,8 @@ static void declare_input_fs(
 	 * [32:16] ParamOffset
 	 *
 	 */
-	/* XXX: This register number must be identical to the S_00B02C_USER_SGPR
-	 * register field value
-	 */
-	LLVMValueRef params = use_sgpr(base->gallivm, SGPR_I32, 6);
-
-
-	/* XXX: Is this the input_index? */
-	LLVMValueRef attr_number = lp_build_const_int32(gallivm, input_index);
+	LLVMValueRef params = use_sgpr(base->gallivm, SGPR_I32, SI_PS_NUM_USER_SGPR);
+	LLVMValueRef attr_number;
 
 	if (decl->Semantic.Name == TGSI_SEMANTIC_POSITION) {
 		for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
@@ -273,6 +265,37 @@ static void declare_input_fs(
 		}
 		return;
 	}
+
+	if (decl->Semantic.Name == TGSI_SEMANTIC_FACE) {
+		LLVMValueRef face, is_face_positive;
+
+		face = build_intrinsic(gallivm->builder,
+				       "llvm.SI.fs.read.face",
+				       input_type,
+				       NULL, 0, LLVMReadNoneAttribute);
+		is_face_positive = LLVMBuildFCmp(gallivm->builder,
+						 LLVMRealUGT, face,
+						 lp_build_const_float(gallivm, 0.0f),
+						 "");
+
+		si_shader_ctx->radeon_bld.inputs[radeon_llvm_reg_index_soa(input_index, 0)] =
+			LLVMBuildSelect(gallivm->builder,
+					is_face_positive,
+					lp_build_const_float(gallivm, 1.0f),
+					lp_build_const_float(gallivm, 0.0f),
+					"");
+		si_shader_ctx->radeon_bld.inputs[radeon_llvm_reg_index_soa(input_index, 1)] =
+		si_shader_ctx->radeon_bld.inputs[radeon_llvm_reg_index_soa(input_index, 2)] =
+			lp_build_const_float(gallivm, 0.0f);
+		si_shader_ctx->radeon_bld.inputs[radeon_llvm_reg_index_soa(input_index, 3)] =
+			lp_build_const_float(gallivm, 1.0f);
+
+		return;
+	}
+
+	shader->input[input_index].param_offset = shader->ninterp++;
+	attr_number = lp_build_const_int32(gallivm,
+					   shader->input[input_index].param_offset);
 
 	/* XXX: Handle all possible interpolation modes */
 	switch (decl->Interp.Interpolate) {
@@ -324,16 +347,59 @@ static void declare_input_fs(
 	}
 
 	/* XXX: Could there be more than TGSI_NUM_CHANNELS (4) ? */
-	for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
+	if (decl->Semantic.Name == TGSI_SEMANTIC_COLOR &&
+	    si_shader_ctx->key.color_two_side) {
 		LLVMValueRef args[3];
-		LLVMValueRef llvm_chan = lp_build_const_int32(gallivm, chan);
-		unsigned soa_index = radeon_llvm_reg_index_soa(input_index, chan);
-		args[0] = llvm_chan;
-		args[1] = attr_number;
+		LLVMValueRef face, is_face_positive;
+		LLVMValueRef back_attr_number =
+			lp_build_const_int32(gallivm,
+					     shader->input[input_index].param_offset + 1);
+
+		face = build_intrinsic(gallivm->builder,
+				       "llvm.SI.fs.read.face",
+				       input_type,
+				       NULL, 0, LLVMReadNoneAttribute);
+		is_face_positive = LLVMBuildFCmp(gallivm->builder,
+						 LLVMRealUGT, face,
+						 lp_build_const_float(gallivm, 0.0f),
+						 "");
+
 		args[2] = params;
-		si_shader_ctx->radeon_bld.inputs[soa_index] =
-			build_intrinsic(base->gallivm->builder, intr_name,
-				input_type, args, 3, LLVMReadOnlyAttribute);
+		for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
+			LLVMValueRef llvm_chan = lp_build_const_int32(gallivm, chan);
+			unsigned soa_index = radeon_llvm_reg_index_soa(input_index, chan);
+			LLVMValueRef front, back;
+
+			args[0] = llvm_chan;
+			args[1] = attr_number;
+			front = build_intrinsic(base->gallivm->builder, intr_name,
+						input_type, args, 3, LLVMReadOnlyAttribute);
+
+			args[1] = back_attr_number;
+			back = build_intrinsic(base->gallivm->builder, intr_name,
+					       input_type, args, 3, LLVMReadOnlyAttribute);
+
+			si_shader_ctx->radeon_bld.inputs[soa_index] =
+				LLVMBuildSelect(gallivm->builder,
+						is_face_positive,
+						front,
+						back,
+						"");
+		}
+
+		shader->ninterp++;
+	} else {
+		for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
+			LLVMValueRef args[3];
+			LLVMValueRef llvm_chan = lp_build_const_int32(gallivm, chan);
+			unsigned soa_index = radeon_llvm_reg_index_soa(input_index, chan);
+			args[0] = llvm_chan;
+			args[1] = attr_number;
+			args[2] = params;
+			si_shader_ctx->radeon_bld.inputs[soa_index] =
+				build_intrinsic(base->gallivm->builder, intr_name,
+						input_type, args, 3, LLVMReadOnlyAttribute);
+		}
 	}
 }
 
@@ -373,9 +439,7 @@ static LLVMValueRef fetch_constant(
 		return bitcast(bld_base, type, load);
 	}
 
-	/* XXX: Assume the pointer to the constant buffer is being stored in
-	 * SGPR[0:1] */
-	const_ptr = use_sgpr(base->gallivm, SGPR_CONST_PTR_F32, 0);
+	const_ptr = use_sgpr(base->gallivm, SGPR_CONST_PTR_F32, SI_SGPR_CONST);
 
 	/* XXX: This assumes that the constant buffer is not packed, so
 	 * CONST[0].x will have an offset of 0 and CONST[1].x will have an
@@ -412,7 +476,7 @@ static void si_llvm_init_export_args(struct lp_build_tgsi_context *bld_base,
 
 		if (cbuf >= 0 && cbuf < 8) {
 			struct r600_context *rctx = si_shader_ctx->rctx;
-			compressed = (rctx->export_16bpc >> cbuf) & 0x1;
+			compressed = (si_shader_ctx->key.export_16bpc >> cbuf) & 0x1;
 		}
 	}
 
@@ -536,6 +600,7 @@ static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 				break;
 			case TGSI_SEMANTIC_COLOR:
 				if (si_shader_ctx->type == TGSI_PROCESSOR_VERTEX) {
+			case TGSI_SEMANTIC_BCOLOR:
 					target = V_008DFC_SQ_EXP_PARAM + param_count;
 					shader->output[i].param_offset = param_count;
 					param_count++;
@@ -652,14 +717,14 @@ static void tex_fetch_args(
 							 0, LP_CHAN_ALL);
 
 	/* Resource */
-	ptr = use_sgpr(bld_base->base.gallivm, SGPR_CONST_PTR_V8I32, 4);
+	ptr = use_sgpr(bld_base->base.gallivm, SGPR_CONST_PTR_V8I32, SI_SGPR_RESOURCE);
 	offset = lp_build_const_int32(bld_base->base.gallivm,
 				  emit_data->inst->Src[1].Register.Index);
 	emit_data->args[2] = build_indexed_load(bld_base->base.gallivm,
 						ptr, offset);
 
 	/* Sampler */
-	ptr = use_sgpr(bld_base->base.gallivm, SGPR_CONST_PTR_V4I32, 2);
+	ptr = use_sgpr(bld_base->base.gallivm, SGPR_CONST_PTR_V4I32, SI_SGPR_SAMPLER);
 	offset = lp_build_const_int32(bld_base->base.gallivm,
 				  emit_data->inst->Src[1].Register.Index);
 	emit_data->args[3] = build_indexed_load(bld_base->base.gallivm,
@@ -688,7 +753,8 @@ static const struct lp_build_tgsi_action tex_action = {
 
 int si_pipe_shader_create(
 	struct pipe_context *ctx,
-	struct si_pipe_shader *shader)
+	struct si_pipe_shader *shader,
+	struct si_shader_key key)
 {
 	struct r600_context *rctx = (struct r600_context*)ctx;
 	struct si_pipe_shader_selector *sel = shader->selector;
@@ -703,6 +769,10 @@ int si_pipe_shader_create(
 	bool dump;
 
 	dump = debug_get_bool_option("RADEON_DUMP_SHADERS", FALSE);
+
+	assert(shader->shader.noutput == 0);
+	assert(shader->shader.ninterp == 0);
+	assert(shader->shader.ninput == 0);
 
 	memset(&si_shader_ctx, 0, sizeof(si_shader_ctx));
 	radeon_llvm_context_init(&si_shader_ctx.radeon_bld);
@@ -721,6 +791,7 @@ int si_pipe_shader_create(
 	si_shader_ctx.tokens = sel->tokens;
 	tgsi_parse_init(&si_shader_ctx.parse, si_shader_ctx.tokens);
 	si_shader_ctx.shader = shader;
+	si_shader_ctx.key = key;
 	si_shader_ctx.type = si_shader_ctx.parse.FullHeader.Processor.Processor;
 	si_shader_ctx.rctx = rctx;
 

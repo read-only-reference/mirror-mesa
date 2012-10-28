@@ -66,6 +66,53 @@ static LLVMValueRef llvm_fetch_system_value(
 	return bitcast(bld_base, type, cval);
 }
 
+static LLVMValueRef
+llvm_load_input_helper(
+	struct radeon_llvm_context * ctx,
+	const char *intrinsic, unsigned idx)
+{
+	LLVMValueRef reg = lp_build_const_int32(
+		ctx->soa.bld_base.base.gallivm,
+		idx);
+	return build_intrinsic(
+		ctx->soa.bld_base.base.gallivm->builder,
+		intrinsic,
+		ctx->soa.bld_base.base.elem_type, &reg, 1,
+		LLVMReadNoneAttribute);
+}
+
+static LLVMValueRef
+llvm_face_select_helper(
+	struct radeon_llvm_context * ctx,
+	const char *intrinsic, unsigned face_register,
+	unsigned frontcolor_register, unsigned backcolor_regiser)
+{
+
+	LLVMValueRef backcolor = llvm_load_input_helper(
+		ctx,
+		intrinsic,
+		backcolor_regiser);
+	LLVMValueRef front_color = llvm_load_input_helper(
+		ctx,
+		intrinsic,
+		frontcolor_register);
+	LLVMValueRef face = llvm_load_input_helper(
+		ctx,
+		"llvm.R600.load.input",
+		face_register);
+	LLVMValueRef is_face_positive = LLVMBuildFCmp(
+		ctx->soa.bld_base.base.gallivm->builder,
+		LLVMRealUGT, face,
+		lp_build_const_float(ctx->soa.bld_base.base.gallivm, 0.0f),
+		"");
+	return LLVMBuildSelect(
+		ctx->soa.bld_base.base.gallivm->builder,
+		is_face_positive,
+		front_color,
+		backcolor,
+		"");
+}
+
 static void llvm_load_input(
 	struct radeon_llvm_context * ctx,
 	unsigned input_index,
@@ -73,19 +120,86 @@ static void llvm_load_input(
 {
 	unsigned chan;
 
+	const char *intrinsics = "llvm.R600.load.input";
+	unsigned offset = 4 * ctx->reserved_reg_count;
+
+	if (ctx->type == TGSI_PROCESSOR_FRAGMENT && ctx->chip_class >= EVERGREEN) {
+		switch (decl->Interp.Interpolate) {
+		case TGSI_INTERPOLATE_COLOR:
+		case TGSI_INTERPOLATE_PERSPECTIVE:
+			offset = 0;
+			intrinsics = "llvm.R600.load.input.perspective";
+			break;
+		case TGSI_INTERPOLATE_LINEAR:
+			offset = 0;
+			intrinsics = "llvm.R600.load.input.linear";
+			break;
+		case TGSI_INTERPOLATE_CONSTANT:
+			offset = 0;
+			intrinsics = "llvm.R600.load.input.constant";
+			break;
+		default:
+			assert(0 && "Unknow Interpolate mode");
+		}
+	}
+
 	for (chan = 0; chan < 4; chan++) {
 		unsigned soa_index = radeon_llvm_reg_index_soa(input_index,
 								chan);
 
-		/* The * 4 is assuming that we are in soa mode. */
-		LLVMValueRef reg = lp_build_const_int32(
-				ctx->soa.bld_base.base.gallivm,
-				soa_index + (ctx->reserved_reg_count * 4));
-		ctx->inputs[soa_index] = build_intrinsic(
-				ctx->soa.bld_base.base.gallivm->builder,
+		switch (decl->Semantic.Name) {
+		case TGSI_SEMANTIC_FACE:
+			ctx->inputs[soa_index] = llvm_load_input_helper(ctx,
 				"llvm.R600.load.input",
-				ctx->soa.bld_base.base.elem_type, &reg, 1,
-				LLVMReadNoneAttribute);
+				4 * ctx->face_input);
+			break;
+		case TGSI_SEMANTIC_POSITION:
+			if (ctx->type != TGSI_PROCESSOR_FRAGMENT || chan != 3) {
+				ctx->inputs[soa_index] = llvm_load_input_helper(ctx,
+					"llvm.R600.load.input",
+					soa_index + (ctx->reserved_reg_count * 4));
+			} else {
+				LLVMValueRef w_coord = llvm_load_input_helper(ctx,
+				"llvm.R600.load.input",
+				soa_index + (ctx->reserved_reg_count * 4));
+				ctx->inputs[soa_index] = LLVMBuildFDiv(ctx->gallivm.builder,
+				lp_build_const_float(&(ctx->gallivm), 1.0f), w_coord, "");
+			}
+			break;
+		case TGSI_SEMANTIC_COLOR:
+			if (ctx->two_side) {
+				unsigned front_location, back_location;
+				unsigned back_reg = ctx->r600_inputs[input_index]
+					.potential_back_facing_reg;
+				if (ctx->chip_class >= EVERGREEN) {
+					front_location = 4 * ctx->r600_inputs[input_index].lds_pos + chan;
+					back_location = 4 * ctx->r600_inputs[back_reg].lds_pos + chan;
+				} else {
+					front_location = soa_index + 4 * ctx->reserved_reg_count;
+					back_location = radeon_llvm_reg_index_soa(
+						ctx->r600_inputs[back_reg].gpr,
+						chan);
+				}
+				ctx->inputs[soa_index] = llvm_face_select_helper(ctx,
+					intrinsics,
+					4 * ctx->face_input, front_location, back_location);
+				break;
+			}
+		default:
+			{
+				unsigned location;
+				if (ctx->chip_class >= EVERGREEN) {
+					location = 4 * ctx->r600_inputs[input_index].lds_pos + chan;
+				} else {
+					location = soa_index + 4 * ctx->reserved_reg_count;
+				}
+				/* The * 4 is assuming that we are in soa mode. */
+				ctx->inputs[soa_index] = llvm_load_input_helper(ctx,
+					intrinsics, location);
+					
+			break;
+			}
+		}
 	}
 }
 

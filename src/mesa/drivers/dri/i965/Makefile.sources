@@ -74,13 +74,7 @@ i965_C_FILES = \
 	brw_vs_surface_state.c \
 	brw_vtbl.c \
 	brw_wm.c \
-	brw_wm_debug.c \
-	brw_wm_emit.c \
-	brw_wm_fp.c \
 	brw_wm_iz.c \
-	brw_wm_pass0.c \
-	brw_wm_pass1.c \
-	brw_wm_pass2.c \
 	brw_wm_sampler_state.c \
 	brw_wm_state.c \
 	brw_wm_surface_state.c \
@@ -113,12 +107,13 @@ i965_C_FILES = \
 i965_CXX_FILES = \
 	brw_blorp.cpp \
 	brw_blorp_blit.cpp \
+	brw_cfg.cpp \
 	brw_cubemap_normalize.cpp \
 	brw_fs.cpp \
-	brw_fs_cfg.cpp \
 	brw_fs_cse.cpp \
 	brw_fs_copy_propagation.cpp \
 	brw_fs_emit.cpp \
+	brw_fs_fp.cpp \
 	brw_fs_live_variables.cpp \
 	brw_fs_visitor.cpp \
 	brw_fs_channel_expressions.cpp \
@@ -130,6 +125,7 @@ i965_CXX_FILES = \
 	brw_vec4.cpp \
 	brw_vec4_emit.cpp \
 	brw_vec4_copy_propagation.cpp \
+	brw_vec4_live_variables.cpp \
 	brw_vec4_reg_allocate.cpp \
 	brw_vec4_visitor.cpp \
 	gen6_blorp.cpp \

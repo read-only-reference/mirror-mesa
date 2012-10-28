@@ -516,14 +516,12 @@ void debug_dump_surface(struct pipe_context *pipe,
     */
    texture = surface->texture;
 
-   transfer = pipe_get_transfer(pipe, texture, surface->u.tex.level,
-                                surface->u.tex.first_layer,
-                                PIPE_TRANSFER_READ,
-                                0, 0, surface->width, surface->height);
-
-   data = pipe->transfer_map(pipe, transfer);
+   data = pipe_transfer_map(pipe, texture, surface->u.tex.level,
+                            surface->u.tex.first_layer,
+                            PIPE_TRANSFER_READ,
+                            0, 0, surface->width, surface->height, &transfer);
    if(!data)
-      goto error;
+      return;
 
    debug_dump_image(prefix,
                     texture->format,
@@ -534,8 +532,6 @@ void debug_dump_surface(struct pipe_context *pipe,
                     data);
 
    pipe->transfer_unmap(pipe, transfer);
-error:
-   pipe->transfer_destroy(pipe, transfer);
 }
 
 
@@ -597,20 +593,21 @@ debug_dump_surface_bmp(struct pipe_context *pipe,
 {
    struct pipe_transfer *transfer;
    struct pipe_resource *texture = surface->texture;
+   void *ptr;
 
-   transfer = pipe_get_transfer(pipe, texture, surface->u.tex.level,
-                                surface->u.tex.first_layer, PIPE_TRANSFER_READ,
-                                0, 0, surface->width, surface->height);
+   ptr = pipe_transfer_map(pipe, texture, surface->u.tex.level,
+                           surface->u.tex.first_layer, PIPE_TRANSFER_READ,
+                           0, 0, surface->width, surface->height, &transfer);
 
-   debug_dump_transfer_bmp(pipe, filename, transfer);
+   debug_dump_transfer_bmp(pipe, filename, transfer, ptr);
 
-   pipe->transfer_destroy(pipe, transfer);
+   pipe->transfer_unmap(pipe, transfer);
 }
 
 void
 debug_dump_transfer_bmp(struct pipe_context *pipe,
                         const char *filename,
-                        struct pipe_transfer *transfer)
+                        struct pipe_transfer *transfer, void *ptr)
 {
    float *rgba;
 
@@ -624,7 +621,7 @@ debug_dump_transfer_bmp(struct pipe_context *pipe,
    if(!rgba)
       goto error1;
 
-   pipe_get_tile_rgba(pipe, transfer, 0, 0,
+   pipe_get_tile_rgba(transfer, ptr, 0, 0,
                       transfer->box.width, transfer->box.height,
                       rgba);
 
@@ -693,5 +690,46 @@ debug_dump_float_rgba_bmp(const char *filename,
 error1:
    ;
 }
+
+
+/**
+ * Print PIPE_TRANSFER_x flags with a message.
+ */
+void
+debug_print_transfer_flags(const char *msg, unsigned usage)
+{
+#define FLAG(x)  { x, #x }
+   static const struct {
+      unsigned bit;
+      const char *name;
+   } flags[] = {
+      FLAG(PIPE_TRANSFER_READ),
+      FLAG(PIPE_TRANSFER_WRITE),
+      FLAG(PIPE_TRANSFER_MAP_DIRECTLY),
+      FLAG(PIPE_TRANSFER_DISCARD_RANGE),
+      FLAG(PIPE_TRANSFER_DONTBLOCK),
+      FLAG(PIPE_TRANSFER_UNSYNCHRONIZED),
+      FLAG(PIPE_TRANSFER_FLUSH_EXPLICIT),
+      FLAG(PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE)
+   };
+   unsigned i;
+
+   debug_printf("%s ", msg);
+
+   for (i = 0; i < Elements(flags); i++) {
+      if (usage & flags[i].bit) {
+         debug_printf("%s", flags[i].name);
+         usage &= ~flags[i].bit;
+         if (usage) {
+            debug_printf(" | ");
+         }
+      }
+   }
+
+   debug_printf("\n");
+#undef FLAG
+}
+
+
 
 #endif

@@ -144,7 +144,7 @@ public:
    src_reg *reladdr;
 };
 
-class vec4_instruction : public exec_node {
+class vec4_instruction : public backend_instruction {
 public:
    /* Callers of this ralloc-based new need not call delete. It's
     * easier to just ralloc_free 'ctx' (or any of its ancestors). */
@@ -167,13 +167,10 @@ public:
    struct brw_reg get_dst(void);
    struct brw_reg get_src(int i);
 
-   enum opcode opcode; /* BRW_OPCODE_* or FS_OPCODE_* */
    dst_reg dst;
    src_reg src[3];
 
    bool saturate;
-   bool predicate_inverse;
-   uint32_t predicate;
 
    int conditional_mod; /**< BRW_CONDITIONAL_* */
 
@@ -198,7 +195,7 @@ public:
    bool is_math();
 };
 
-class vec4_visitor : public ir_visitor
+class vec4_visitor : public backend_visitor
 {
 public:
    vec4_visitor(struct brw_vs_compile *c,
@@ -215,17 +212,9 @@ public:
       return dst_reg(retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
    }
 
-   struct brw_context *brw;
    const struct gl_vertex_program *vp;
-   struct intel_context *intel;
-   struct gl_context *ctx;
    struct brw_vs_compile *c;
    struct brw_vs_prog_data *prog_data;
-   struct brw_compile *p;
-   struct brw_shader *shader;
-   struct gl_shader_program *prog;
-   void *mem_ctx;
-   exec_list instructions;
 
    char *fail_msg;
    bool failed;
@@ -312,14 +301,18 @@ public:
    int setup_attributes(int payload_reg);
    int setup_uniforms(int payload_reg);
    void setup_payload();
-   void reg_allocate_trivial();
-   void reg_allocate();
+   bool reg_allocate_trivial();
+   bool reg_allocate();
+   void evaluate_spill_costs(float *spill_costs, bool *no_spill);
+   int choose_spill_reg(struct ra_graph *g);
+   void spill_reg(int spill_reg);
    void move_grf_array_access_to_scratch();
    void move_uniform_array_access_to_pull_constants();
    void move_push_constants_to_pull_constants();
    void split_uniform_registers();
    void pack_uniform_registers();
    void calculate_live_intervals();
+   void split_virtual_grfs();
    bool dead_code_eliminate();
    bool virtual_grf_interferes(int a, int b);
    bool opt_copy_propagation();
@@ -423,8 +416,6 @@ public:
 			  src_reg orig_src,
 			  int base_offset);
    void emit_scratch_write(vec4_instruction *inst,
-			   src_reg temp,
-			   dst_reg orig_dst,
 			   int base_offset);
    void emit_pull_constant_load(vec4_instruction *inst,
 				dst_reg dst,
@@ -478,6 +469,9 @@ public:
 				    struct brw_reg dst,
 				    struct brw_reg index,
 				    struct brw_reg offset);
+
+   void dump_instruction(vec4_instruction *inst);
+   void dump_instructions();
 };
 
 } /* namespace brw */

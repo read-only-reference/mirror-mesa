@@ -55,7 +55,7 @@ static void r300_buffer_destroy(struct pipe_screen *screen,
 {
     struct r300_resource *rbuf = r300_resource(buf);
 
-    FREE(rbuf->malloced_buffer);
+    align_free(rbuf->malloced_buffer);
 
     if (rbuf->buf)
         pb_reference(&rbuf->buf, NULL);
@@ -63,79 +63,62 @@ static void r300_buffer_destroy(struct pipe_screen *screen,
     FREE(rbuf);
 }
 
-static struct pipe_transfer*
-r300_buffer_get_transfer(struct pipe_context *context,
-                         struct pipe_resource *resource,
-                         unsigned level,
-                         unsigned usage,
-                         const struct pipe_box *box)
-{
-   struct r300_context *r300 = r300_context(context);
-   struct pipe_transfer *transfer =
-         util_slab_alloc(&r300->pool_transfers);
-
-   transfer->resource = resource;
-   transfer->level = level;
-   transfer->usage = usage;
-   transfer->box = *box;
-   transfer->stride = 0;
-   transfer->layer_stride = 0;
-   transfer->data = NULL;
-
-   /* Note strides are zero, this is ok for buffers, but not for
-    * textures 2d & higher at least.
-    */
-   return transfer;
-}
-
-static void r300_buffer_transfer_destroy(struct pipe_context *pipe,
-                                         struct pipe_transfer *transfer)
-{
-   struct r300_context *r300 = r300_context(pipe);
-   util_slab_free(&r300->pool_transfers, transfer);
-}
-
 static void *
-r300_buffer_transfer_map( struct pipe_context *pipe,
-			  struct pipe_transfer *transfer )
+r300_buffer_transfer_map( struct pipe_context *context,
+                          struct pipe_resource *resource,
+                          unsigned level,
+                          unsigned usage,
+                          const struct pipe_box *box,
+                          struct pipe_transfer **ptransfer )
 {
-    struct r300_context *r300 = r300_context(pipe);
-    struct r300_screen *r300screen = r300_screen(pipe->screen);
-    struct radeon_winsys *rws = r300screen->rws;
-    struct r300_resource *rbuf = r300_resource(transfer->resource);
+    struct r300_context *r300 = r300_context(context);
+    struct radeon_winsys *rws = r300->screen->rws;
+    struct r300_resource *rbuf = r300_resource(resource);
+    struct pipe_transfer *transfer;
     uint8_t *map;
-    enum pipe_transfer_usage usage;
 
-    if (rbuf->malloced_buffer)
-        return (uint8_t *) rbuf->malloced_buffer + transfer->box.x;
+    transfer = util_slab_alloc(&r300->pool_transfers);
+    transfer->resource = resource;
+    transfer->level = level;
+    transfer->usage = usage;
+    transfer->box = *box;
+    transfer->stride = 0;
+    transfer->layer_stride = 0;
+
+    if (rbuf->malloced_buffer) {
+        *ptransfer = transfer;
+        return (uint8_t *) rbuf->malloced_buffer + box->x;
+    }
 
     /* Buffers are never used for write, therefore mapping for read can be
      * unsynchronized. */
-    usage = transfer->usage;
     if (!(usage & PIPE_TRANSFER_WRITE)) {
        usage |= PIPE_TRANSFER_UNSYNCHRONIZED;
     }
 
     map = rws->buffer_map(rbuf->cs_buf, r300->cs, usage);
 
-    if (map == NULL)
+    if (map == NULL) {
+        util_slab_free(&r300->pool_transfers, transfer);
         return NULL;
+    }
 
-    return map + transfer->box.x;
+    *ptransfer = transfer;
+    return map + box->x;
 }
 
 static void r300_buffer_transfer_unmap( struct pipe_context *pipe,
-			    struct pipe_transfer *transfer )
+                                        struct pipe_transfer *transfer )
 {
-    /* no-op */
+    struct r300_context *r300 = r300_context(pipe);
+
+    util_slab_free(&r300->pool_transfers, transfer);
 }
 
 static const struct u_resource_vtbl r300_buffer_vtbl =
 {
    NULL,                               /* get_handle */
    r300_buffer_destroy,                /* resource_destroy */
-   r300_buffer_get_transfer,           /* get_transfer */
-   r300_buffer_transfer_destroy,       /* transfer_destroy */
    r300_buffer_transfer_map,           /* transfer_map */
    NULL,                               /* transfer_flush_region */
    r300_buffer_transfer_unmap,         /* transfer_unmap */
@@ -163,7 +146,7 @@ struct pipe_resource *r300_buffer_create(struct pipe_screen *screen,
     if (templ->bind & PIPE_BIND_CONSTANT_BUFFER ||
         (!r300screen->caps.has_tcl &&
          (templ->bind & (PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_INDEX_BUFFER)))) {
-        rbuf->malloced_buffer = MALLOC(templ->width0);
+        rbuf->malloced_buffer = align_malloc(templ->width0, 64);
         return &rbuf->b.b;
     }
 

@@ -265,102 +265,6 @@ src_reg::equals(src_reg *r)
 	   imm.u == r->imm.u);
 }
 
-void
-vec4_visitor::calculate_live_intervals()
-{
-   int *def = ralloc_array(mem_ctx, int, virtual_grf_count);
-   int *use = ralloc_array(mem_ctx, int, virtual_grf_count);
-   int loop_depth = 0;
-   int loop_start = 0;
-
-   if (this->live_intervals_valid)
-      return;
-
-   for (int i = 0; i < virtual_grf_count; i++) {
-      def[i] = MAX_INSTRUCTION;
-      use[i] = -1;
-   }
-
-   int ip = 0;
-   foreach_list(node, &this->instructions) {
-      vec4_instruction *inst = (vec4_instruction *)node;
-
-      if (inst->opcode == BRW_OPCODE_DO) {
-	 if (loop_depth++ == 0)
-	    loop_start = ip;
-      } else if (inst->opcode == BRW_OPCODE_WHILE) {
-	 loop_depth--;
-
-	 if (loop_depth == 0) {
-	    /* Patches up the use of vars marked for being live across
-	     * the whole loop.
-	     */
-	    for (int i = 0; i < virtual_grf_count; i++) {
-	       if (use[i] == loop_start) {
-		  use[i] = ip;
-	       }
-	    }
-	 }
-      } else {
-	 for (unsigned int i = 0; i < 3; i++) {
-	    if (inst->src[i].file == GRF) {
-	       int reg = inst->src[i].reg;
-
-	       if (!loop_depth) {
-		  use[reg] = ip;
-	       } else {
-		  def[reg] = MIN2(loop_start, def[reg]);
-		  use[reg] = loop_start;
-
-		  /* Nobody else is going to go smash our start to
-		   * later in the loop now, because def[reg] now
-		   * points before the bb header.
-		   */
-	       }
-	    }
-	 }
-	 if (inst->dst.file == GRF) {
-	    int reg = inst->dst.reg;
-
-	    if (!loop_depth) {
-	       def[reg] = MIN2(def[reg], ip);
-	    } else {
-	       def[reg] = MIN2(def[reg], loop_start);
-	    }
-	 }
-      }
-
-      ip++;
-   }
-
-   ralloc_free(this->virtual_grf_def);
-   ralloc_free(this->virtual_grf_use);
-   this->virtual_grf_def = def;
-   this->virtual_grf_use = use;
-
-   this->live_intervals_valid = true;
-}
-
-bool
-vec4_visitor::virtual_grf_interferes(int a, int b)
-{
-   int start = MAX2(this->virtual_grf_def[a], this->virtual_grf_def[b]);
-   int end = MIN2(this->virtual_grf_use[a], this->virtual_grf_use[b]);
-
-   /* We can't handle dead register writes here, without iterating
-    * over the whole instruction stream to find every single dead
-    * write to that register to compare to the live interval of the
-    * other register.  Just assert that dead_code_eliminate() has been
-    * called.
-    */
-   assert((this->virtual_grf_use[a] != -1 ||
-	   this->virtual_grf_def[a] == MAX_INSTRUCTION) &&
-	  (this->virtual_grf_use[b] != -1 ||
-	   this->virtual_grf_def[b] == MAX_INSTRUCTION));
-
-   return start < end;
-}
-
 /**
  * Must be called after calculate_live_intervales() to remove unused
  * writes to registers -- register allocation will fail otherwise
@@ -850,6 +754,7 @@ vec4_visitor::opt_compute_to_mrf()
 	       scan_inst->dst.file = MRF;
 	       scan_inst->dst.reg = mrf;
 	       scan_inst->dst.reg_offset = 0;
+	       scan_inst->dst.writemask &= inst->dst.writemask;
 	       scan_inst->saturate |= inst->saturate;
 	    }
 	    scan_inst = (vec4_instruction *)scan_inst->next;
@@ -863,6 +768,149 @@ vec4_visitor::opt_compute_to_mrf()
       live_intervals_valid = false;
 
    return progress;
+}
+
+/**
+ * Splits virtual GRFs requesting more than one contiguous physical register.
+ *
+ * We initially create large virtual GRFs for temporary structures, arrays,
+ * and matrices, so that the dereference visitor functions can add reg_offsets
+ * to work their way down to the actual member being accessed.
+ *
+ * Unlike in the FS visitor, though, we have no SEND messages that return more
+ * than 1 register.  We also don't do any array access in register space,
+ * which would have required contiguous physical registers.  Thus, all those
+ * large virtual GRFs can be split up into independent single-register virtual
+ * GRFs, making allocation and optimization easier.
+ */
+void
+vec4_visitor::split_virtual_grfs()
+{
+   int num_vars = this->virtual_grf_count;
+   int new_virtual_grf[num_vars];
+
+   memset(new_virtual_grf, 0, sizeof(new_virtual_grf));
+
+   /* Allocate new space for split regs.  Note that the virtual
+    * numbers will be contiguous.
+    */
+   for (int i = 0; i < num_vars; i++) {
+      if (this->virtual_grf_sizes[i] == 1)
+         continue;
+
+      new_virtual_grf[i] = virtual_grf_alloc(1);
+      for (int j = 2; j < this->virtual_grf_sizes[i]; j++) {
+         int reg = virtual_grf_alloc(1);
+         assert(reg == new_virtual_grf[i] + j - 1);
+         (void) reg;
+      }
+      this->virtual_grf_sizes[i] = 1;
+   }
+
+   foreach_list(node, &this->instructions) {
+      vec4_instruction *inst = (vec4_instruction *)node;
+
+      if (inst->dst.file == GRF &&
+	  new_virtual_grf[inst->dst.reg] &&
+	  inst->dst.reg_offset != 0) {
+	 inst->dst.reg = (new_virtual_grf[inst->dst.reg] +
+			  inst->dst.reg_offset - 1);
+	 inst->dst.reg_offset = 0;
+      }
+      for (int i = 0; i < 3; i++) {
+	 if (inst->src[i].file == GRF &&
+	     new_virtual_grf[inst->src[i].reg] &&
+	     inst->src[i].reg_offset != 0) {
+	    inst->src[i].reg = (new_virtual_grf[inst->src[i].reg] +
+				inst->src[i].reg_offset - 1);
+	    inst->src[i].reg_offset = 0;
+	 }
+      }
+   }
+   this->live_intervals_valid = false;
+}
+
+void
+vec4_visitor::dump_instruction(vec4_instruction *inst)
+{
+   if (inst->opcode < ARRAY_SIZE(opcode_descs) &&
+       opcode_descs[inst->opcode].name) {
+      printf("%s ", opcode_descs[inst->opcode].name);
+   } else {
+      printf("op%d ", inst->opcode);
+   }
+
+   switch (inst->dst.file) {
+   case GRF:
+      printf("vgrf%d.%d", inst->dst.reg, inst->dst.reg_offset);
+      break;
+   case MRF:
+      printf("m%d", inst->dst.reg);
+      break;
+   case BAD_FILE:
+      printf("(null)");
+      break;
+   default:
+      printf("???");
+      break;
+   }
+   if (inst->dst.writemask != WRITEMASK_XYZW) {
+      printf(".");
+      if (inst->dst.writemask & 1)
+         printf("x");
+      if (inst->dst.writemask & 2)
+         printf("y");
+      if (inst->dst.writemask & 4)
+         printf("z");
+      if (inst->dst.writemask & 8)
+         printf("w");
+   }
+   printf(", ");
+
+   for (int i = 0; i < 3; i++) {
+      switch (inst->src[i].file) {
+      case GRF:
+         printf("vgrf%d", inst->src[i].reg);
+         break;
+      case ATTR:
+         printf("attr%d", inst->src[i].reg);
+         break;
+      case UNIFORM:
+         printf("u%d", inst->src[i].reg);
+         break;
+      case BAD_FILE:
+         printf("(null)");
+         break;
+      default:
+         printf("???");
+         break;
+      }
+
+      if (inst->src[i].reg_offset)
+         printf(".%d", inst->src[i].reg_offset);
+
+      static const char *chans[4] = {"x", "y", "z", "w"};
+      printf(".");
+      for (int c = 0; c < 4; c++) {
+         printf("%s", chans[BRW_GET_SWZ(inst->src[i].swizzle, c)]);
+      }
+
+      if (i < 3)
+         printf(", ");
+   }
+
+   printf("\n");
+}
+
+void
+vec4_visitor::dump_instructions()
+{
+   int ip = 0;
+   foreach_list_safe(node, &this->instructions) {
+      vec4_instruction *inst = (vec4_instruction *)node;
+      printf("%d: ", ip++);
+      dump_instruction(inst);
+   }
 }
 
 } /* namespace brw */

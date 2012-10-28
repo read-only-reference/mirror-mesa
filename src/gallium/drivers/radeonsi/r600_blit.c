@@ -61,9 +61,7 @@ static void r600_blitter_begin(struct pipe_context *ctx, enum r600_blitter_op op
 	if (rctx->queued.named.viewport) {
 		util_blitter_save_viewport(rctx->blitter, &rctx->queued.named.viewport->viewport);
 	}
-	util_blitter_save_vertex_buffers(rctx->blitter,
-					 rctx->nr_vertex_buffers,
-					 rctx->vertex_buffer);
+	util_blitter_save_vertex_buffer_slot(rctx->blitter, rctx->vertex_buffer);
 	util_blitter_save_so_targets(rctx->blitter, rctx->num_so_targets,
 				     (struct pipe_stream_output_target**)rctx->so_targets);
 
@@ -272,7 +270,6 @@ static void r600_compressed_to_blittable(struct pipe_resource *tex,
 				   struct texture_orig_info *orig)
 {
 	struct r600_resource_texture *rtex = (struct r600_resource_texture*)tex;
-	struct r600_screen *rscreen = (struct r600_screen *)tex->screen;
 	unsigned pixsize = util_format_get_blocksize(rtex->real_format);
 	int new_format;
 	int new_height, new_width;
@@ -307,7 +304,6 @@ static void r600_reset_blittable_to_compressed(struct pipe_resource *tex,
 					       struct texture_orig_info *orig)
 {
 	struct r600_resource_texture *rtex = (struct r600_resource_texture*)tex;
-	struct r600_screen *rscreen = (struct r600_screen *)tex->screen;
 
 	tex->format = orig->format;
 	tex->width0 = orig->width0;

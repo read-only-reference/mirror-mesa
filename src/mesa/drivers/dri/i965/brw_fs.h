@@ -45,11 +45,12 @@ extern "C" {
 #include "brw_context.h"
 #include "brw_eu.h"
 #include "brw_wm.h"
+#include "brw_shader.h"
 }
 #include "glsl/glsl_types.h"
 #include "glsl/ir.h"
 
-class fs_bblock;
+class bblock_t;
 namespace {
    class acp_entry;
 }
@@ -124,7 +125,7 @@ static const fs_reg reg_undef;
 static const fs_reg reg_null_f(ARF, BRW_ARF_NULL, BRW_REGISTER_TYPE_F);
 static const fs_reg reg_null_d(ARF, BRW_ARF_NULL, BRW_REGISTER_TYPE_D);
 
-class fs_inst : public exec_node {
+class fs_inst : public backend_instruction {
 public:
    /* Callers of this ralloc-based new need not call delete. It's
     * easier to just ralloc_free 'ctx' (or any of its ancestors). */
@@ -154,12 +155,9 @@ public:
    bool is_tex();
    bool is_math();
 
-   enum opcode opcode; /* BRW_OPCODE_* or FS_OPCODE_* */
    fs_reg dst;
    fs_reg src[3];
    bool saturate;
-   bool predicated;
-   bool predicate_inverse;
    int conditional_mod; /**< BRW_CONDITIONAL_* */
 
    int mlen; /**< SEND message length */
@@ -177,12 +175,12 @@ public:
    /** @{
     * Annotation for the generated IR.  One of the two can be set.
     */
-   ir_instruction *ir;
+   const void *ir;
    const char *annotation;
    /** @} */
 };
 
-class fs_visitor : public ir_visitor
+class fs_visitor : public backend_visitor
 {
 public:
 
@@ -235,19 +233,22 @@ public:
    void assign_urb_setup();
    bool assign_regs();
    void assign_regs_trivial();
+   void setup_payload_interference(struct ra_graph *g, int payload_reg_count,
+                                   int first_payload_node);
+   void setup_mrf_hack_interference(struct ra_graph *g,
+                                    int first_mrf_hack_node);
    int choose_spill_reg(struct ra_graph *g);
    void spill_reg(int spill_reg);
    void split_virtual_grfs();
    void setup_pull_constants();
    void calculate_live_intervals();
-   bool propagate_constants();
    bool opt_algebraic();
    bool opt_cse();
-   bool opt_cse_local(fs_bblock *block, exec_list *aeb);
+   bool opt_cse_local(bblock_t *block, exec_list *aeb);
    bool opt_copy_propagate();
    bool try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry);
-   bool opt_copy_propagate_local(void *mem_ctx, fs_bblock *block,
-				 exec_list *acp);
+   bool try_constant_propagate(fs_inst *inst, acp_entry *entry);
+   bool opt_copy_propagate_local(void *mem_ctx, bblock_t *block);
    bool register_coalesce();
    bool register_coalesce_2();
    bool compute_to_mrf();
@@ -306,7 +307,8 @@ public:
    fs_reg *emit_general_interpolation(ir_variable *ir);
    void emit_interpolation_setup_gen4();
    void emit_interpolation_setup_gen6();
-   fs_reg emit_texcoord(ir_texture *ir, int sampler, int texunit);
+   fs_reg rescale_texcoord(ir_texture *ir, fs_reg coordinate,
+                           bool is_rect, int sampler, int texunit);
    fs_inst *emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
 			      fs_reg shadow_comp, fs_reg lod, fs_reg lod2);
    fs_inst *emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
@@ -315,11 +317,36 @@ public:
 			      fs_reg shadow_comp, fs_reg lod, fs_reg lod2);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0, fs_reg src1);
+   void emit_minmax(uint32_t conditionalmod, fs_reg dst,
+                    fs_reg src0, fs_reg src1);
    bool try_emit_saturate(ir_expression *ir);
    bool try_emit_mad(ir_expression *ir, int mul_arg);
    void emit_bool_to_cond_code(ir_rvalue *condition);
    void emit_if_gen6(ir_if *ir);
    void emit_unspill(fs_inst *inst, fs_reg reg, uint32_t spill_offset);
+
+   void emit_fragment_program_code();
+   void setup_fp_regs();
+   fs_reg get_fp_src_reg(const prog_src_register *src);
+   fs_reg get_fp_dst_reg(const prog_dst_register *dst);
+   void emit_fp_alu1(enum opcode opcode,
+                     const struct prog_instruction *fpi,
+                     fs_reg dst, fs_reg src);
+   void emit_fp_alu2(enum opcode opcode,
+                     const struct prog_instruction *fpi,
+                     fs_reg dst, fs_reg src0, fs_reg src1);
+   void emit_fp_scalar_write(const struct prog_instruction *fpi,
+                             fs_reg dst, fs_reg src);
+   void emit_fp_scalar_math(enum opcode opcode,
+                            const struct prog_instruction *fpi,
+                            fs_reg dst, fs_reg src);
+
+   void emit_fp_minmax(const struct prog_instruction *fpi,
+                       fs_reg dst, fs_reg src0, fs_reg src1);
+
+   void emit_fp_sop(uint32_t conditional_mod,
+                    const struct prog_instruction *fpi,
+                    fs_reg dst, fs_reg src0, fs_reg src1, fs_reg one);
 
    void emit_color_write(int target, int index, int first_color_mrf);
    void emit_fb_writes();
@@ -338,16 +365,8 @@ public:
    void setup_builtin_uniform_values(ir_variable *ir);
    int implied_mrf_writes(fs_inst *inst);
 
-   struct brw_context *brw;
    const struct gl_fragment_program *fp;
-   struct intel_context *intel;
-   struct gl_context *ctx;
    struct brw_wm_compile *c;
-   struct brw_compile *p;
-   struct brw_shader *shader;
-   struct gl_shader_program *prog;
-   void *mem_ctx;
-   exec_list instructions;
 
    /* Delayed setup of c->prog_data.params[] due to realloc of
     * ParamValues[] during compile.
@@ -370,17 +389,21 @@ public:
    int *params_remap;
 
    struct hash_table *variable_ht;
-   ir_variable *frag_depth;
+   fs_reg frag_depth;
    fs_reg outputs[BRW_MAX_DRAW_BUFFERS];
    unsigned output_components[BRW_MAX_DRAW_BUFFERS];
    fs_reg dual_src_output;
    int first_non_payload_grf;
+   /** Either BRW_MAX_GRF or GEN7_MRF_HACK_START */
    int max_grf;
    int urb_setup[FRAG_ATTRIB_MAX];
 
+   fs_reg *fp_temp_regs;
+   fs_reg *fp_input_regs;
+
    /** @{ debug annotation info */
    const char *current_annotation;
-   ir_instruction *base_ir;
+   const void *base_ir;
    /** @} */
 
    bool failed;
@@ -402,7 +425,7 @@ public:
    int force_uncompressed_stack;
    int force_sechalf_stack;
 
-   class fs_bblock *bblock;
+   class bblock_t *bblock;
 };
 
 bool brw_do_channel_expressions(struct exec_list *instructions);

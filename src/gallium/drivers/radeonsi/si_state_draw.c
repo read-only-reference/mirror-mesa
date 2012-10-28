@@ -45,9 +45,6 @@ static void si_pipe_shader_vs(struct pipe_context *ctx, struct si_pipe_shader *s
 	unsigned nparams, i;
 	uint64_t va;
 
-	if (si_pipe_shader_create(ctx, shader))
-		return;
-
 	si_pm4_delete_state(rctx, vs, shader->pm4);
 	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
 
@@ -78,7 +75,7 @@ static void si_pipe_shader_vs(struct pipe_context *ctx, struct si_pipe_shader *s
 	si_pm4_set_reg(pm4, R_00B120_SPI_SHADER_PGM_LO_VS, va >> 8);
 	si_pm4_set_reg(pm4, R_00B124_SPI_SHADER_PGM_HI_VS, va >> 40);
 
-	num_user_sgprs = 8;
+	num_user_sgprs = SI_VS_NUM_USER_SGPR;
 	num_sgprs = shader->num_sgprs;
 	if (num_user_sgprs > num_sgprs)
 		num_sgprs = num_user_sgprs;
@@ -101,14 +98,10 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 	struct si_pm4_state *pm4;
 	unsigned i, exports_ps, num_cout, spi_ps_in_control, db_shader_control;
 	unsigned num_sgprs, num_user_sgprs;
-	int ninterp = 0;
 	boolean have_linear = FALSE, have_centroid = FALSE, have_perspective = FALSE;
 	unsigned fragcoord_interp_mode = 0;
 	unsigned spi_baryc_cntl, spi_ps_input_ena;
 	uint64_t va;
-
-	if (si_pipe_shader_create(ctx, shader))
-		return;
 
 	si_pm4_delete_state(rctx, ps, shader->pm4);
 	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
@@ -117,7 +110,8 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 
 	db_shader_control = S_02880C_Z_ORDER(V_02880C_EARLY_Z_THEN_LATE_Z);
 	for (i = 0; i < shader->shader.ninput; i++) {
-		if (shader->shader.input[i].name == TGSI_SEMANTIC_POSITION) {
+		switch (shader->shader.input[i].name) {
+		case TGSI_SEMANTIC_POSITION:
 			if (shader->shader.input[i].centroid) {
 				/* fragcoord_interp_mode will be written to
 				 * SPI_BARYC_CNTL.POS_FLOAT_LOCATION
@@ -129,9 +123,11 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 			 	 */
 				fragcoord_interp_mode = 1;
 			}
+			/* Fall through */
+		case TGSI_SEMANTIC_FACE:
 			continue;
 		}
-		ninterp++;
+
 		/* XXX: Flat shading hangs the GPU */
 		if (shader->shader.input[i].interpolate == TGSI_INTERPOLATE_CONSTANT ||
 		    (shader->shader.input[i].interpolate == TGSI_INTERPOLATE_COLOR &&
@@ -172,7 +168,7 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 		exports_ps = 2;
 	}
 
-	spi_ps_in_control = S_0286D8_NUM_INTERP(ninterp);
+	spi_ps_in_control = S_0286D8_NUM_INTERP(shader->shader.ninterp);
 
 	spi_baryc_cntl = 0;
 	if (have_perspective)
@@ -207,7 +203,7 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 	si_pm4_set_reg(pm4, R_00B020_SPI_SHADER_PGM_LO_PS, va >> 8);
 	si_pm4_set_reg(pm4, R_00B024_SPI_SHADER_PGM_HI_PS, va >> 40);
 
-	num_user_sgprs = 6;
+	num_user_sgprs = SI_PS_NUM_USER_SGPR;
 	num_sgprs = shader->num_sgprs;
 	if (num_user_sgprs > num_sgprs)
 		num_sgprs = num_user_sgprs;
@@ -335,11 +331,15 @@ static void si_update_spi_map(struct r600_context *rctx)
 	unsigned i, j, tmp;
 
 	for (i = 0; i < ps->ninput; i++) {
+		unsigned name = ps->input[i].name;
+		unsigned param_offset = ps->input[i].param_offset;
+
+bcolor:
 		tmp = 0;
 
 #if 0
 		/* XXX: Flat shading hangs the GPU */
-		if (ps->input[i].name == TGSI_SEMANTIC_POSITION ||
+		if (name == TGSI_SEMANTIC_POSITION ||
 		    ps->input[i].interpolate == TGSI_INTERPOLATE_CONSTANT ||
 		    (ps->input[i].interpolate == TGSI_INTERPOLATE_COLOR &&
 		     rctx->rasterizer && rctx->rasterizer->flatshade)) {
@@ -347,13 +347,13 @@ static void si_update_spi_map(struct r600_context *rctx)
 		}
 #endif
 
-		if (ps->input[i].name == TGSI_SEMANTIC_GENERIC &&
+		if (name == TGSI_SEMANTIC_GENERIC &&
 		    rctx->sprite_coord_enable & (1 << ps->input[i].sid)) {
 			tmp |= S_028644_PT_SPRITE_TEX(1);
 		}
 
 		for (j = 0; j < vs->noutput; j++) {
-			if (ps->input[i].name == vs->output[j].name &&
+			if (name == vs->output[j].name &&
 			    ps->input[i].sid == vs->output[j].sid) {
 				tmp |= S_028644_OFFSET(vs->output[j].param_offset);
 				break;
@@ -365,7 +365,16 @@ static void si_update_spi_map(struct r600_context *rctx)
 			tmp |= S_028644_OFFSET(0x20);
 		}
 
-		si_pm4_set_reg(pm4, R_028644_SPI_PS_INPUT_CNTL_0 + i * 4, tmp);
+		si_pm4_set_reg(pm4,
+			       R_028644_SPI_PS_INPUT_CNTL_0 + param_offset * 4,
+			       tmp);
+
+		if (name == TGSI_SEMANTIC_COLOR &&
+		    rctx->ps_shader->current->key.color_two_side) {
+			name = TGSI_SEMANTIC_BCOLOR;
+			param_offset++;
+			goto bcolor;
+		}
 	}
 
 	si_pm4_set_state(rctx, spi, pm4);
@@ -462,7 +471,7 @@ static void si_vertex_buffer_update(struct r600_context *rctx)
 			bound[ve->vertex_buffer_index] = true;
 		}
 	}
-	si_pm4_sh_data_end(pm4, R_00B148_SPI_SHADER_USER_DATA_VS_6);
+	si_pm4_sh_data_end(pm4, R_00B130_SPI_SHADER_USER_DATA_VS_0, SI_SGPR_VERTEX_BUFFER);
 	si_pm4_set_state(rctx, vertex_buffers, pm4);
 }
 

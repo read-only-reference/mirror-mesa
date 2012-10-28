@@ -125,8 +125,7 @@ swrastFillInModes(__DRIscreen *psp,
     __DRIconfig **configs;
     unsigned depth_buffer_factor;
     unsigned back_buffer_factor;
-    GLenum fb_format;
-    GLenum fb_type;
+    gl_format format;
 
     /* GLX_SWAP_COPY_OML is only supported because the Intel driver doesn't
      * support pageflipping at all.
@@ -161,21 +160,14 @@ swrastFillInModes(__DRIscreen *psp,
     back_buffer_factor = 2;
 
     switch (pixel_bits) {
-    case 8:
-	fb_format = GL_RGB;
-	fb_type = GL_UNSIGNED_BYTE_2_3_3_REV;
-	break;
     case 16:
-	fb_format = GL_RGB;
-	fb_type = GL_UNSIGNED_SHORT_5_6_5;
+	format = MESA_FORMAT_RGB565;
 	break;
     case 24:
-	fb_format = GL_BGR;
-	fb_type = GL_UNSIGNED_INT_8_8_8_8_REV;
+        format = MESA_FORMAT_XRGB8888;
 	break;
     case 32:
-	fb_format = GL_BGRA;
-	fb_type = GL_UNSIGNED_INT_8_8_8_8_REV;
+	format = MESA_FORMAT_ARGB8888;
 	break;
     default:
 	fprintf(stderr, "[%s:%u] bad depth %d\n", __func__, __LINE__,
@@ -183,7 +175,7 @@ swrastFillInModes(__DRIscreen *psp,
 	return NULL;
     }
 
-    configs = driCreateConfigs(fb_format, fb_type,
+    configs = driCreateConfigs(format,
 			       depth_bits_array, stencil_bits_array,
 			       depth_buffer_factor, back_buffer_modes,
 			       back_buffer_factor, msaa_samples_array, 1,
@@ -656,14 +648,9 @@ swrast_init_driver_functions(struct dd_function_table *driver)
 
 static const char *es2_extensions[] = {
    /* Used by mesa internally (cf all_mesa_extensions in ../common/utils.c) */
-   "GL_ARB_transpose_matrix",
-   "GL_ARB_window_pos",
    "GL_EXT_blend_func_separate",
-   "GL_EXT_compiled_vertex_array",
    "GL_EXT_framebuffer_blit",
-   "GL_IBM_multimode_draw_arrays",
    "GL_MESA_window_pos",
-   "GL_NV_vertex_program",
 
    /* Required by GLES2 */
    "GL_ARB_fragment_program",
@@ -756,7 +743,7 @@ dri_create_context(gl_api api,
     mesaCtx = &ctx->Base;
 
     /* basic context setup */
-    if (!_mesa_initialize_context(mesaCtx, api, visual, sharedCtx, &functions, (void *) cPriv)) {
+    if (!_mesa_initialize_context(mesaCtx, api, visual, sharedCtx, &functions)) {
 	*error = __DRI_CTX_ERROR_NO_MEMORY;
 	goto context_fail;
     }

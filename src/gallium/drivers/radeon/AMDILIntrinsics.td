@@ -66,7 +66,6 @@ let TargetPrefix = "AMDIL", isTarget = 1 in {
 }
 
 let TargetPrefix = "AMDIL", isTarget = 1 in {
-  def int_AMDIL_fabs : GCCBuiltin<"__amdil_fabs">, UnaryIntFloat;
   def int_AMDIL_abs : GCCBuiltin<"__amdil_abs">, UnaryIntInt;
 
   def int_AMDIL_bit_extract_i32 : GCCBuiltin<"__amdil_ibit_extract">,
@@ -147,8 +146,6 @@ let TargetPrefix = "AMDIL", isTarget = 1 in {
           UnaryIntFloat;
   def int_AMDIL_round_neginf : GCCBuiltin<"__amdil_round_neginf">,
           UnaryIntFloat;
-  def int_AMDIL_round_posinf : GCCBuiltin<"__amdil_round_posinf">,
-          UnaryIntFloat;
   def int_AMDIL_round_zero : GCCBuiltin<"__amdil_round_zero">,
           UnaryIntFloat;
   def int_AMDIL_acos : GCCBuiltin<"__amdil_acos">,
@@ -179,8 +176,6 @@ let TargetPrefix = "AMDIL", isTarget = 1 in {
   def int_AMDIL_exp_vec : GCCBuiltin<"__amdil_exp_vec">,
           UnaryIntFloat;
   def int_AMDIL_exn : GCCBuiltin<"__amdil_exn">,
-          UnaryIntFloat;
-  def int_AMDIL_log : GCCBuiltin<"__amdil_log">,
           UnaryIntFloat;
   def int_AMDIL_log_vec : GCCBuiltin<"__amdil_log_vec">,
           UnaryIntFloat;

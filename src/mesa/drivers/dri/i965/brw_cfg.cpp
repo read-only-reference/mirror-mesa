@@ -26,25 +26,25 @@
  */
 
 #include "brw_fs.h"
-#include "brw_fs_cfg.h"
+#include "brw_cfg.h"
 
-/** @file brw_fs_cfg.cpp
+/** @file brw_cfg_t.cpp
  *
  * Walks the shader instructions generated and creates a set of basic
  * blocks with successor/predecessor edges connecting them.
  */
 
-static fs_bblock *
+static bblock_t *
 pop_stack(exec_list *list)
 {
-   fs_bblock_link *link = (fs_bblock_link *)list->get_tail();
-   fs_bblock *block = link->block;
+   bblock_link *link = (bblock_link *)list->get_tail();
+   bblock_t *block = link->block;
    link->remove();
 
    return block;
 }
 
-fs_bblock::fs_bblock()
+bblock_t::bblock_t()
 {
    start = NULL;
    end = NULL;
@@ -54,19 +54,19 @@ fs_bblock::fs_bblock()
 }
 
 void
-fs_bblock::add_successor(void *mem_ctx, fs_bblock *successor)
+bblock_t::add_successor(void *mem_ctx, bblock_t *successor)
 {
    successor->parents.push_tail(this->make_list(mem_ctx));
    children.push_tail(successor->make_list(mem_ctx));
 }
 
-fs_bblock_link *
-fs_bblock::make_list(void *mem_ctx)
+bblock_link *
+bblock_t::make_list(void *mem_ctx)
 {
-   return new(mem_ctx) fs_bblock_link(this);
+   return new(mem_ctx) bblock_link(this);
 }
 
-fs_cfg::fs_cfg(fs_visitor *v)
+cfg_t::cfg_t(backend_visitor *v)
 {
    mem_ctx = ralloc_context(v->mem_ctx);
    block_list.make_empty();
@@ -74,18 +74,18 @@ fs_cfg::fs_cfg(fs_visitor *v)
    ip = 0;
    cur = NULL;
 
-   fs_bblock *entry = new_block();
-   fs_bblock *cur_if = NULL, *cur_else = NULL, *cur_endif = NULL;
-   fs_bblock *cur_do = NULL, *cur_while = NULL;
+   bblock_t *entry = new_block();
+   bblock_t *cur_if = NULL, *cur_else = NULL, *cur_endif = NULL;
+   bblock_t *cur_do = NULL, *cur_while = NULL;
    exec_list if_stack, else_stack, endif_stack, do_stack, while_stack;
-   fs_bblock *next;
+   bblock_t *next;
 
    set_next_block(entry);
 
-   entry->start = (fs_inst *)v->instructions.get_head();
+   entry->start = (backend_instruction *)v->instructions.get_head();
 
    foreach_list(node, &v->instructions) {
-      fs_inst *inst = (fs_inst *)node;
+      backend_instruction *inst = (backend_instruction *)node;
 
       cur->end = inst;
 
@@ -112,7 +112,7 @@ fs_cfg::fs_cfg(fs_visitor *v)
 	  * instructions.
 	  */
 	 next = new_block();
-	 next->start = (fs_inst *)inst->next;
+	 next->start = (backend_instruction *)inst->next;
 	 cur_if->add_successor(mem_ctx, next);
 
 	 set_next_block(next);
@@ -122,7 +122,7 @@ fs_cfg::fs_cfg(fs_visitor *v)
 	 cur->add_successor(mem_ctx, cur_endif);
 
 	 next = new_block();
-	 next->start = (fs_inst *)inst->next;
+	 next->start = (backend_instruction *)inst->next;
 	 cur_if->add_successor(mem_ctx, next);
 	 cur_else = next;
 
@@ -130,7 +130,7 @@ fs_cfg::fs_cfg(fs_visitor *v)
 	 break;
 
       case BRW_OPCODE_ENDIF:
-	 cur_endif->start = (fs_inst *)inst->next;
+	 cur_endif->start = (backend_instruction *)inst->next;
 	 cur->add_successor(mem_ctx, cur_endif);
 	 set_next_block(cur_endif);
 
@@ -159,7 +159,7 @@ fs_cfg::fs_cfg(fs_visitor *v)
 	  * instructions.
 	  */
 	 next = new_block();
-	 next->start = (fs_inst *)inst->next;
+	 next->start = (backend_instruction *)inst->next;
 	 cur->add_successor(mem_ctx, next);
 	 cur_do = next;
 
@@ -170,8 +170,8 @@ fs_cfg::fs_cfg(fs_visitor *v)
 	 cur->add_successor(mem_ctx, cur_do);
 
 	 next = new_block();
-	 next->start = (fs_inst *)inst->next;
-	 if (inst->predicated)
+	 next->start = (backend_instruction *)inst->next;
+	 if (inst->predicate)
 	    cur->add_successor(mem_ctx, next);
 
 	 set_next_block(next);
@@ -181,15 +181,15 @@ fs_cfg::fs_cfg(fs_visitor *v)
 	 cur->add_successor(mem_ctx, cur_while);
 
 	 next = new_block();
-	 next->start = (fs_inst *)inst->next;
-	 if (inst->predicated)
+	 next->start = (backend_instruction *)inst->next;
+	 if (inst->predicate)
 	    cur->add_successor(mem_ctx, next);
 
 	 set_next_block(next);
 	 break;
 
       case BRW_OPCODE_WHILE:
-	 cur_while->start = (fs_inst *)inst->next;
+	 cur_while->start = (backend_instruction *)inst->next;
 
 	 cur->add_successor(mem_ctx, cur_do);
 	 set_next_block(cur_while);
@@ -209,21 +209,21 @@ fs_cfg::fs_cfg(fs_visitor *v)
    make_block_array();
 }
 
-fs_cfg::~fs_cfg()
+cfg_t::~cfg_t()
 {
    ralloc_free(mem_ctx);
 }
 
-fs_bblock *
-fs_cfg::new_block()
+bblock_t *
+cfg_t::new_block()
 {
-   fs_bblock *block = new(mem_ctx) fs_bblock();
+   bblock_t *block = new(mem_ctx) bblock_t();
 
    return block;
 }
 
 void
-fs_cfg::set_next_block(fs_bblock *block)
+cfg_t::set_next_block(bblock_t *block)
 {
    if (cur) {
       assert(cur->end->next == block->start);
@@ -237,13 +237,13 @@ fs_cfg::set_next_block(fs_bblock *block)
 }
 
 void
-fs_cfg::make_block_array()
+cfg_t::make_block_array()
 {
-   blocks = ralloc_array(mem_ctx, fs_bblock *, num_blocks);
+   blocks = ralloc_array(mem_ctx, bblock_t *, num_blocks);
 
    int i = 0;
    foreach_list(block_node, &block_list) {
-      fs_bblock_link *link = (fs_bblock_link *)block_node;
+      bblock_link *link = (bblock_link *)block_node;
       blocks[i++] = link->block;
    }
    assert(i == num_blocks);

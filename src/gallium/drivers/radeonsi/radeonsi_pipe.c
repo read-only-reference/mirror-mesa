@@ -289,7 +289,6 @@ static const char* r600_get_name(struct pipe_screen* pscreen)
 static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 {
 	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
-	enum radeon_family family = rscreen->family;
 
 	switch (param) {
 	/* Supported features (boolean caps). */
@@ -327,6 +326,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_NPOT_TEXTURES:
 		return 1;
 
+        case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
+                return 64;
+
 	case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
 		return 256;
 
@@ -345,6 +347,8 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
+	case PIPE_CAP_COMPUTE:
+	case PIPE_CAP_QUERY_TIMESTAMP:
 		return 0;
 
 	/* Stream output. */
@@ -394,9 +398,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 static float r600_get_paramf(struct pipe_screen* pscreen,
 			     enum pipe_capf param)
 {
-	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
-	enum radeon_family family = rscreen->family;
-
 	switch (param) {
 	case PIPE_CAPF_MAX_LINE_WIDTH:
 	case PIPE_CAPF_MAX_LINE_WIDTH_AA:
@@ -418,7 +419,6 @@ static float r600_get_paramf(struct pipe_screen* pscreen,
 
 static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enum pipe_shader_cap param)
 {
-	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
 	switch(shader)
 	{
 	case PIPE_SHADER_FRAGMENT:
@@ -470,6 +470,8 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		return 0;
 	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
 		return 16;
+	case PIPE_SHADER_CAP_PREFERRED_IR:
+		return PIPE_SHADER_IR_TGSI;
 	}
 	return 0;
 }

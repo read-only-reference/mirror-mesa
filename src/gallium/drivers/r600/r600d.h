@@ -988,6 +988,7 @@
 #define   G_0287F0_SOURCE_SELECT(x)                    (((x) >> 0) & 0x3)
 #define   C_0287F0_SOURCE_SELECT                       0xFFFFFFFC
 #define     V_0287F0_DI_SRC_SEL_DMA                    0
+#define     V_0287F0_DI_SRC_SEL_IMMEDIATE              1
 #define     V_0287F0_DI_SRC_SEL_AUTO_INDEX             2
 #define   S_0287F0_MAJOR_MODE(x)                       (((x) & 0x3) << 2)
 #define   G_0287F0_MAJOR_MODE(x)                       (((x) >> 2) & 0x3)
@@ -2822,6 +2823,7 @@
 #define R_0283F4_SQ_VTX_SEMANTIC_29                  0x0283F4
 #define R_0283F8_SQ_VTX_SEMANTIC_30                  0x0283F8
 #define R_0283FC_SQ_VTX_SEMANTIC_31                  0x0283FC
+#define R_0288E0_SQ_VTX_SEMANTIC_CLEAR               0x0288E0
 #define R_028400_VGT_MAX_VTX_INDX                    0x028400
 #define   S_028400_MAX_INDX(x)                         (((x) & 0xFFFFFFFF) << 0)
 #define   G_028400_MAX_INDX(x)                         (((x) >> 0) & 0xFFFFFFFF)

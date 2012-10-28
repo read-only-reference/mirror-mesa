@@ -399,7 +399,7 @@ def RNDNE : R600_1OP <
 
 def FLOOR : R600_1OP <
   0x14, "FLOOR",
-  [(set R600_Reg32:$dst, (int_AMDGPU_floor R600_Reg32:$src))]
+  [(set R600_Reg32:$dst, (ffloor R600_Reg32:$src))]
 >;
 
 def MOV : InstR600 <0x19, (outs R600_Reg32:$dst),
@@ -761,7 +761,7 @@ class LOG_CLAMPED_Common <bits<11> inst> : R600_1OP <
 
 class LOG_IEEE_Common <bits<11> inst> : R600_1OP <
   inst, "LOG_IEEE",
-  [(set R600_Reg32:$dst, (int_AMDIL_log R600_Reg32:$src))]
+  [(set R600_Reg32:$dst, (flog2 R600_Reg32:$src))]
 >;
 
 class LSHL_Common <bits<11> inst> : R600_2OP <
@@ -905,8 +905,13 @@ let Predicates = [isR600] in {
 
 // Helper pattern for normalizing inputs to triginomic instructions for R700+
 // cards.
-class TRIG_eg <InstR600 trig, Intrinsic intr> : Pat<
-  (intr R600_Reg32:$src),
+class COS_PAT <InstR600 trig> : Pat<
+  (fcos R600_Reg32:$src),
+  (trig (MUL (MOV_IMM_I32 (i32 ALU_LITERAL_X), CONST.TWO_PI_INV), R600_Reg32:$src))
+>;
+
+class SIN_PAT <InstR600 trig> : Pat<
+  (fsin R600_Reg32:$src),
   (trig (MUL (MOV_IMM_I32 (i32 ALU_LITERAL_X), CONST.TWO_PI_INV), R600_Reg32:$src))
 >;
 
@@ -919,8 +924,8 @@ let Predicates = [isR700] in {
   def COS_r700 : COS_Common<0x6F>;
 
   // R700 normalizes inputs to SIN/COS the same as EG
-  def : TRIG_eg <SIN_r700, int_AMDGPU_sin>;
-  def : TRIG_eg <COS_r700, int_AMDGPU_cos>;
+  def : SIN_PAT <SIN_r700>;
+  def : COS_PAT <COS_r700>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -997,8 +1002,8 @@ let Predicates = [isEGorCayman] in {
   def SSG_eg : SSG_Common<CNDGT_eg, CNDGE_eg>;
   def TGSI_LIT_Z_eg : TGSI_LIT_Z_Common<MUL_LIT_eg, LOG_CLAMPED_eg, EXP_IEEE_eg>;
 
-  def : TRIG_eg <SIN_eg, int_AMDGPU_sin>;
-  def : TRIG_eg <COS_eg, int_AMDGPU_cos>;
+  def : SIN_PAT <SIN_eg>;
+  def : COS_PAT <COS_eg>;
 
   def FLT_TO_INT_eg : FLT_TO_INT_Common<0x50> {
     let Pattern = [];
@@ -1017,6 +1022,9 @@ let Predicates = [isEGorCayman] in {
 
   def : Pat<(fp_to_uint R600_Reg32:$src),
     (FLT_TO_UINT_eg (TRUNC R600_Reg32:$src))>;
+
+  def : Pat<(fsqrt R600_Reg32:$src),
+    (MUL R600_Reg32:$src, (RECIPSQRT_CLAMPED_eg R600_Reg32:$src))>;
 
 //===----------------------------------------------------------------------===//
 // Memory read/write instructions

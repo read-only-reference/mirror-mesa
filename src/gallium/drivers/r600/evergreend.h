@@ -43,6 +43,7 @@
 #define EVERGREEN_CTL_CONST_OFFSET                  0x0003CFF0
 #define EVERGREEN_CTL_CONST_END                     0x0003FF0C
 
+#define EVENT_TYPE_CS_PARTIAL_FLUSH            0x07
 #define EVENT_TYPE_PS_PARTIAL_FLUSH            0x10
 #define EVENT_TYPE_ZPASS_DONE                  0x15
 #define EVENT_TYPE_CACHE_FLUSH_AND_INV_EVENT   0x16
@@ -365,9 +366,16 @@
 #define   S_028C70_RAT(x)                              (((x) & 0x1) << 26)
 #define   G_028C70_RAT(x)                              (((x) >> 26) & 0x1)
 #define   C_028C70_RAT                                 0xFBFFFFFF
+/* RESOURCE_TYPE is only used for compute shaders */
 #define   S_028C70_RESOURCE_TYPE(x)                    (((x) & 0x7) << 27)
 #define   G_028C70_RESOURCE_TYPE(x)                    (((x) >> 27) & 0x7)
 #define   C_028C70_RESOURCE_TYPE                       0xC7FFFFFF
+#define     V_028C70_BUFFER                            0x0
+#define     V_028C70_TEXTURE1D                         0x1
+#define     V_028C70_TEXTURE1DARRAY                    0x2
+#define     V_028C70_TEXTURE2D                         0x3
+#define     V_028C70_TEXTURE2DARRAY                    0x4
+#define     V_028C70_TEXTURE3D                         0x5
 
 #define R_028C74_CB_COLOR0_ATTRIB                      0x028C74
 #define   S_028C74_NON_DISP_TILING_ORDER(x)            (((x) & 0x1) << 4)
@@ -478,7 +486,7 @@
 #define      V_028808_CB_ELIMINATE_FAST_CLEAR          0x00000002
 #define      V_028808_CB_RESOLVE                       0x00000003
 #define      V_028808_CB_DECOMPRESS                    0x00000004
-#define      V_028808_CB_FASK_DECOMPRESS               0x00000005
+#define      V_028808_CB_FMASK_DECOMPRESS              0x00000005
 #define   S_028808_ROP3(x)                             (((x) & 0xFF) << 16)
 #define   G_028808_ROP3(x)                             (((x) >> 16) & 0xFF)
 #define   C_028808_ROP3                                0xFF00FFFF
@@ -1701,6 +1709,7 @@
 #define R_0283F4_SQ_VTX_SEMANTIC_29                  0x000283F4
 #define R_0283F8_SQ_VTX_SEMANTIC_30                  0x000283F8
 #define R_0283FC_SQ_VTX_SEMANTIC_31                  0x000283FC
+#define R_0288F0_SQ_VTX_SEMANTIC_CLEAR               0x000288F0
 #define R_0282D0_PA_SC_VPORT_ZMIN_0                  0x000282D0
 #define R_0282D4_PA_SC_VPORT_ZMAX_0                  0x000282D4
 #define R_028400_VGT_MAX_VTX_INDX                    0x00028400

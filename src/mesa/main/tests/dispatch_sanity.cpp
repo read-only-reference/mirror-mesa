@@ -43,8 +43,6 @@ extern "C" {
 #include "main/mfeatures.h"
 }
 
-#if FEATURE_ES2
-
 #include <gtest/gtest.h>
 
 extern "C" {
@@ -75,6 +73,12 @@ struct function {
 };
 
 extern const struct function gles2_functions_possible[];
+extern const struct function gles3_functions_possible[];
+
+#if FEATURE_ES1
+extern "C" _glapi_table *_mesa_create_exec_table_es1(void);
+extern const struct function gles11_functions_possible[];
+#endif /* FEATURE_ES1 */
 
 class DispatchSanity_test : public ::testing::Test {
 public:
@@ -97,6 +101,16 @@ DispatchSanity_test::SetUp()
    _mesa_init_driver_functions(&driver_functions);
 }
 
+static const char *
+offset_to_proc_name_safe(unsigned offset)
+{
+   const char *name = _glapi_get_proc_name(offset);
+   return name ? name : "???";
+}
+
+/* Scan through the dispatch table and check that all the functions in
+ * _glapi_proc *table exist. When found, set their pointers in the table
+ * to _mesa_generic_nop.  */
 static void
 validate_functions(_glapi_proc *table, const struct function *function_table)
 {
@@ -116,12 +130,28 @@ validate_functions(_glapi_proc *table, const struct function *function_table)
 
       table[offset] = (_glapi_proc) _mesa_generic_nop;
    }
+}
 
+/* Scan through the table and ensure that there is nothing except
+ * _mesa_generic_nop (as set by validate_functions().  */
+static void
+validate_nops(const _glapi_proc *table)
+{
    const unsigned size = _glapi_get_dispatch_table_size();
    for (unsigned i = 0; i < size; i++) {
-      EXPECT_EQ((_glapi_proc) _mesa_generic_nop, table[i]) << "i = " << i;
+      EXPECT_EQ((_glapi_proc) _mesa_generic_nop, table[i])
+         << "i = " << i << " (" << offset_to_proc_name_safe(i) << ")";
    }
 }
+
+#if FEATURE_ES1
+TEST_F(DispatchSanity_test, GLES11)
+{
+   _glapi_proc *exec = (_glapi_proc *) _mesa_create_exec_table_es1();
+   validate_functions(exec, gles11_functions_possible);
+   validate_nops(exec);
+}
+#endif /* FEATURE_ES1 */
 
 TEST_F(DispatchSanity_test, GLES2)
 {
@@ -130,8 +160,7 @@ TEST_F(DispatchSanity_test, GLES2)
                             API_OPENGLES2, //api,
                             &visual,
                             NULL, //&share_list,
-                            &driver_functions,
-                            (void *) NULL);
+                            &driver_functions);
 
    _swrast_CreateContext(&ctx);
    _vbo_CreateContext(&ctx);
@@ -139,7 +168,221 @@ TEST_F(DispatchSanity_test, GLES2)
    _swsetup_CreateContext(&ctx);
 
    validate_functions((_glapi_proc *) ctx.Exec, gles2_functions_possible);
+   validate_nops((_glapi_proc *) ctx.Exec);
 }
+
+TEST_F(DispatchSanity_test, GLES3)
+{
+   ctx.Version = 30;
+   _mesa_initialize_context(&ctx,
+                            API_OPENGLES2, //api,
+                            &visual,
+                            NULL, //&share_list,
+                            &driver_functions);
+
+   _swrast_CreateContext(&ctx);
+   _vbo_CreateContext(&ctx);
+   _tnl_CreateContext(&ctx);
+   _swsetup_CreateContext(&ctx);
+
+   validate_functions((_glapi_proc *) ctx.Exec, gles2_functions_possible);
+   validate_functions((_glapi_proc *) ctx.Exec, gles3_functions_possible);
+   validate_nops((_glapi_proc *) ctx.Exec);
+}
+
+#if FEATURE_ES1
+const struct function gles11_functions_possible[] = {
+   { "glActiveTexture", _gloffset_ActiveTextureARB },
+   { "glAlphaFunc", _gloffset_AlphaFunc },
+   { "glAlphaFuncx", -1 },
+   { "glBindBuffer", -1 },
+   { "glBindFramebufferOES", -1 },
+   { "glBindRenderbufferOES", -1 },
+   { "glBindTexture", _gloffset_BindTexture },
+   { "glBlendEquationOES", _gloffset_BlendEquation },
+   { "glBlendEquationSeparateOES", -1 },
+   { "glBlendFunc", _gloffset_BlendFunc },
+   { "glBlendFuncSeparateOES", -1 },
+   { "glBufferData", -1 },
+   { "glBufferSubData", -1 },
+   { "glCheckFramebufferStatusOES", -1 },
+   { "glClear", _gloffset_Clear },
+   { "glClearColor", _gloffset_ClearColor },
+   { "glClearColorx", -1 },
+   { "glClearDepthf", -1 },
+   { "glClearDepthx", -1 },
+   { "glClearStencil", _gloffset_ClearStencil },
+   { "glClientActiveTexture", _gloffset_ClientActiveTextureARB },
+   { "glClipPlanef", -1 },
+   { "glClipPlanex", -1 },
+   { "glColor4f", _gloffset_Color4f },
+   { "glColor4ub", _gloffset_Color4ub },
+   { "glColor4x", -1 },
+   { "glColorMask", _gloffset_ColorMask },
+   { "glColorPointer", _gloffset_ColorPointer },
+   { "glCompressedTexImage2D", -1 },
+   { "glCompressedTexSubImage2D", -1 },
+   { "glCopyTexImage2D", _gloffset_CopyTexImage2D },
+   { "glCopyTexSubImage2D", _gloffset_CopyTexSubImage2D },
+   { "glCullFace", _gloffset_CullFace },
+   { "glDeleteBuffers", -1 },
+   { "glDeleteFramebuffersOES", -1 },
+   { "glDeleteRenderbuffersOES", -1 },
+   { "glDeleteTextures", _gloffset_DeleteTextures },
+   { "glDepthFunc", _gloffset_DepthFunc },
+   { "glDepthMask", _gloffset_DepthMask },
+   { "glDepthRangef", -1 },
+   { "glDepthRangex", -1 },
+   { "glDisable", _gloffset_Disable },
+   { "glDisableClientState", _gloffset_DisableClientState },
+   { "glDrawArrays", _gloffset_DrawArrays },
+   { "glDrawElements", _gloffset_DrawElements },
+   { "glDrawTexfOES", -1 },
+   { "glDrawTexfvOES", -1 },
+   { "glDrawTexiOES", -1 },
+   { "glDrawTexivOES", -1 },
+   { "glDrawTexsOES", -1 },
+   { "glDrawTexsvOES", -1 },
+   { "glDrawTexxOES", -1 },
+   { "glDrawTexxvOES", -1 },
+   { "glEGLImageTargetRenderbufferStorageOES", -1 },
+   { "glEGLImageTargetTexture2DOES", -1 },
+   { "glEnable", _gloffset_Enable },
+   { "glEnableClientState", _gloffset_EnableClientState },
+   { "glFinish", _gloffset_Finish },
+   { "glFlush", _gloffset_Flush },
+   { "glFogf", _gloffset_Fogf },
+   { "glFogfv", _gloffset_Fogfv },
+   { "glFogx", -1 },
+   { "glFogxv", -1 },
+   { "glFramebufferRenderbufferOES", -1 },
+   { "glFramebufferTexture2DOES", -1 },
+   { "glFrontFace", _gloffset_FrontFace },
+   { "glFrustumf", -1 },
+   { "glFrustumx", -1 },
+   { "glGenBuffers", -1 },
+   { "glGenFramebuffersOES", -1 },
+   { "glGenRenderbuffersOES", -1 },
+   { "glGenTextures", _gloffset_GenTextures },
+   { "glGenerateMipmapOES", -1 },
+   { "glGetBooleanv", _gloffset_GetBooleanv },
+   { "glGetBufferParameteriv", -1 },
+   { "glGetBufferPointervOES", -1 },
+   { "glGetClipPlanef", -1 },
+   { "glGetClipPlanex", -1 },
+   { "glGetError", _gloffset_GetError },
+   { "glGetFixedv", -1 },
+   { "glGetFloatv", _gloffset_GetFloatv },
+   { "glGetFramebufferAttachmentParameterivOES", -1 },
+   { "glGetIntegerv", _gloffset_GetIntegerv },
+   { "glGetLightfv", _gloffset_GetLightfv },
+   { "glGetLightxv", -1 },
+   { "glGetMaterialfv", _gloffset_GetMaterialfv },
+   { "glGetMaterialxv", -1 },
+   { "glGetPointerv", _gloffset_GetPointerv },
+   { "glGetRenderbufferParameterivOES", -1 },
+   { "glGetString", _gloffset_GetString },
+   { "glGetTexEnvfv", _gloffset_GetTexEnvfv },
+   { "glGetTexEnviv", _gloffset_GetTexEnviv },
+   { "glGetTexEnvxv", -1 },
+   { "glGetTexGenfvOES", _gloffset_GetTexGenfv },
+   { "glGetTexGenivOES", _gloffset_GetTexGeniv },
+   { "glGetTexGenxvOES", -1 },
+   { "glGetTexParameterfv", _gloffset_GetTexParameterfv },
+   { "glGetTexParameteriv", _gloffset_GetTexParameteriv },
+   { "glGetTexParameterxv", -1 },
+   { "glHint", _gloffset_Hint },
+   { "glIsBuffer", -1 },
+   { "glIsEnabled", _gloffset_IsEnabled },
+   { "glIsFramebufferOES", -1 },
+   { "glIsRenderbufferOES", -1 },
+   { "glIsTexture", _gloffset_IsTexture },
+   { "glLightModelf", _gloffset_LightModelf },
+   { "glLightModelfv", _gloffset_LightModelfv },
+   { "glLightModelx", -1 },
+   { "glLightModelxv", -1 },
+   { "glLightf", _gloffset_Lightf },
+   { "glLightfv", _gloffset_Lightfv },
+   { "glLightx", -1 },
+   { "glLightxv", -1 },
+   { "glLineWidth", _gloffset_LineWidth },
+   { "glLineWidthx", -1 },
+   { "glLoadIdentity", _gloffset_LoadIdentity },
+   { "glLoadMatrixf", _gloffset_LoadMatrixf },
+   { "glLoadMatrixx", -1 },
+   { "glLogicOp", _gloffset_LogicOp },
+   { "glMapBufferOES", -1 },
+   { "glMaterialf", _gloffset_Materialf },
+   { "glMaterialfv", _gloffset_Materialfv },
+   { "glMaterialx", -1 },
+   { "glMaterialxv", -1 },
+   { "glMatrixMode", _gloffset_MatrixMode },
+   { "glMultMatrixf", _gloffset_MultMatrixf },
+   { "glMultMatrixx", -1 },
+   { "glMultiDrawArraysEXT", -1 },
+   { "glMultiDrawElementsEXT", -1 },
+   { "glMultiTexCoord4f", _gloffset_MultiTexCoord4fARB },
+   { "glMultiTexCoord4x", -1 },
+   { "glNormal3f", _gloffset_Normal3f },
+   { "glNormal3x", -1 },
+   { "glNormalPointer", _gloffset_NormalPointer },
+   { "glOrthof", -1 },
+   { "glOrthox", -1 },
+   { "glPixelStorei", _gloffset_PixelStorei },
+   { "glPointParameterf", -1 },
+   { "glPointParameterfv", -1 },
+   { "glPointParameterx", -1 },
+   { "glPointParameterxv", -1 },
+   { "glPointSize", _gloffset_PointSize },
+   { "glPointSizePointerOES", -1 },
+   { "glPointSizex", -1 },
+   { "glPolygonOffset", _gloffset_PolygonOffset },
+   { "glPolygonOffsetx", -1 },
+   { "glPopMatrix", _gloffset_PopMatrix },
+   { "glPushMatrix", _gloffset_PushMatrix },
+   { "glQueryMatrixxOES", -1 },
+   { "glReadPixels", _gloffset_ReadPixels },
+   { "glRenderbufferStorageOES", -1 },
+   { "glRotatef", _gloffset_Rotatef },
+   { "glRotatex", -1 },
+   { "glSampleCoverage", -1 },
+   { "glSampleCoveragex", -1 },
+   { "glScalef", _gloffset_Scalef },
+   { "glScalex", -1 },
+   { "glScissor", _gloffset_Scissor },
+   { "glShadeModel", _gloffset_ShadeModel },
+   { "glStencilFunc", _gloffset_StencilFunc },
+   { "glStencilMask", _gloffset_StencilMask },
+   { "glStencilOp", _gloffset_StencilOp },
+   { "glTexCoordPointer", _gloffset_TexCoordPointer },
+   { "glTexEnvf", _gloffset_TexEnvf },
+   { "glTexEnvfv", _gloffset_TexEnvfv },
+   { "glTexEnvi", _gloffset_TexEnvi },
+   { "glTexEnviv", _gloffset_TexEnviv },
+   { "glTexEnvx", -1 },
+   { "glTexEnvxv", -1 },
+   { "glTexGenfOES", _gloffset_TexGenf },
+   { "glTexGenfvOES", _gloffset_TexGenfv },
+   { "glTexGeniOES", _gloffset_TexGeni },
+   { "glTexGenivOES", _gloffset_TexGeniv },
+   { "glTexGenxOES", -1 },
+   { "glTexGenxvOES", -1 },
+   { "glTexImage2D", _gloffset_TexImage2D },
+   { "glTexParameterf", _gloffset_TexParameterf },
+   { "glTexParameterfv", _gloffset_TexParameterfv },
+   { "glTexParameteri", _gloffset_TexParameteri },
+   { "glTexParameteriv", _gloffset_TexParameteriv },
+   { "glTexParameterx", -1 },
+   { "glTexParameterxv", -1 },
+   { "glTexSubImage2D", _gloffset_TexSubImage2D },
+   { "glTranslatef", _gloffset_Translatef },
+   { "glTranslatex", -1 },
+   { "glUnmapBufferOES", -1 },
+   { "glVertexPointer", _gloffset_VertexPointer },
+   { "glViewport", _gloffset_Viewport },
+   { NULL, -1 }
+};
+#endif /* FEATURE_ES1 */
 
 const struct function gles2_functions_possible[] = {
    { "glActiveTexture", _gloffset_ActiveTextureARB },
@@ -196,6 +439,7 @@ const struct function gles2_functions_possible[] = {
    { "glEnableVertexAttribArray", -1 },
    { "glFinish", _gloffset_Finish },
    { "glFlush", _gloffset_Flush },
+   { "glFlushMappedBufferRangeEXT", -1 },
    { "glFramebufferRenderbuffer", -1 },
    { "glFramebufferTexture2D", -1 },
    { "glFramebufferTexture3DOES", -1 },
@@ -245,6 +489,7 @@ const struct function gles2_functions_possible[] = {
    { "glLineWidth", _gloffset_LineWidth },
    { "glLinkProgram", -1 },
    { "glMapBufferOES", -1 },
+   { "glMapBufferRangeEXT", -1 },
    { "glMultiDrawArraysEXT", -1 },
    { "glMultiDrawElementsEXT", -1 },
    { "glPixelStorei", _gloffset_PixelStorei },
@@ -306,4 +551,131 @@ const struct function gles2_functions_possible[] = {
    { NULL, -1 }
 };
 
-#endif /* FEATURE_ES2 */
+const struct function gles3_functions_possible[] = {
+   { "glBeginQuery", -1 },
+   { "glBeginTransformFeedback", -1 },
+   { "glBindBufferBase", -1 },
+   { "glBindBufferRange", -1 },
+   { "glBindSampler", -1 },
+   { "glBindTransformFeedback", -1 },
+   // We check for the aliased -OES version in GLES 2
+   // { "glBindVertexArray", -1 },
+   { "glBlitFramebuffer", -1 },
+   { "glClearBufferfi", -1 },
+   { "glClearBufferfv", -1 },
+   { "glClearBufferiv", -1 },
+   { "glClearBufferuiv", -1 },
+   { "glClientWaitSync", -1 },
+   // We check for the aliased -OES version in GLES 2
+   // { "glCompressedTexImage3D", -1 },
+   // We check for the aliased -OES version in GLES 2
+   // { "glCompressedTexSubImage3D", -1 },
+   { "glCopyBufferSubData", -1 },
+   // We check for the aliased -OES version in GLES 2
+   // { "glCopyTexSubImage3D", -1 },
+   { "glDeleteQueries", -1 },
+   { "glDeleteSamplers", -1 },
+   { "glDeleteSync", -1 },
+   { "glDeleteTransformFeedbacks", -1 },
+   // We check for the aliased -OES version in GLES 2
+   // { "glDeleteVertexArrays", -1 },
+   { "glDrawArraysInstanced", -1 },
+   // We check for the aliased -NV version in GLES 2
+   // { "glDrawBuffers", -1 },
+   { "glDrawElementsInstanced", -1 },
+   { "glDrawRangeElements", -1 },
+   { "glEndQuery", -1 },
+   { "glEndTransformFeedback", -1 },
+   { "glFenceSync", -1 },
+   // We check for the aliased -EXT version in GLES 2
+   // { "glFlushMappedBufferRange", -1 },
+   { "glFramebufferTextureLayer", -1 },
+   { "glGenQueries", -1 },
+   { "glGenSamplers", -1 },
+   { "glGenTransformFeedbacks", -1 },
+   // We check for the aliased -OES version in GLES 2
+   // { "glGenVertexArrays", -1 },
+   { "glGetActiveUniformBlockiv", -1 },
+   { "glGetActiveUniformBlockName", -1 },
+   { "glGetActiveUniformsiv", -1 },
+   // We have an implementation (added Jan 1 2010, 1fbc7193) but never tested...
+   // { "glGetBufferParameteri64v", -1 },
+   // We check for the aliased -OES version in GLES 2
+   // { "glGetBufferPointerv", -1 },
+   { "glGetFragDataLocation", -1 },
+   /// XXX: Missing implementation of glGetInteger64i_v
+   // { "glGetInteger64i_v", -1 },
+   { "glGetInteger64v", -1 },
+   { "glGetIntegeri_v", -1 },
+   // XXX: Missing implementation of ARB_internalformat_query
+   // { "glGetInternalformativ", -1 },
+   // XXX: Missing implementation of ARB_get_program_binary
+   /// { "glGetProgramBinary", -1 },
+   { "glGetQueryiv", -1 },
+   { "glGetQueryObjectuiv", -1 },
+   { "glGetSamplerParameterfv", -1 },
+   { "glGetSamplerParameteriv", -1 },
+   { "glGetStringi", -1 },
+   { "glGetSynciv", -1 },
+   { "glGetTransformFeedbackVarying", -1 },
+   { "glGetUniformBlockIndex", -1 },
+   { "glGetUniformIndices", -1 },
+   { "glGetUniformuiv", -1 },
+   { "glGetVertexAttribIiv", -1 },
+   { "glGetVertexAttribIuiv", -1 },
+   { "glInvalidateFramebuffer", -1 },
+   { "glInvalidateSubFramebuffer", -1 },
+   { "glIsQuery", -1 },
+   { "glIsSampler", -1 },
+   { "glIsSync", -1 },
+   { "glIsTransformFeedback", -1 },
+   // We check for the aliased -OES version in GLES 2
+   // { "glIsVertexArray", -1 },
+   // We check for the aliased -EXT version in GLES 2
+   // { "glMapBufferRange", -1 },
+   { "glPauseTransformFeedback", -1 },
+   // XXX: Missing implementation of ARB_get_program_binary
+   // { "glProgramBinary", -1 },
+   // XXX: Missing implementation of ARB_get_program_binary
+   // { "glProgramParameteri", -1 },
+   // We check for the aliased -NV version in GLES 2
+   // { "glReadBuffer", -1 },
+   { "glRenderbufferStorageMultisample", -1 },
+   { "glResumeTransformFeedback", -1 },
+   { "glSamplerParameterf", -1 },
+   { "glSamplerParameterfv", -1 },
+   { "glSamplerParameteri", -1 },
+   { "glSamplerParameteriv", -1 },
+   // We check for the aliased -OES version in GLES 2
+   // { "glTexImage3D", -1 },
+   { "glTexStorage2D", -1 },
+   { "glTexStorage3D", -1 },
+   // We check for the aliased -OES version in GLES 2
+   // { "glTexSubImage3D", -1 },
+   { "glTransformFeedbackVaryings", -1 },
+   { "glUniform1ui", -1 },
+   { "glUniform1uiv", -1 },
+   { "glUniform2ui", -1 },
+   { "glUniform2uiv", -1 },
+   { "glUniform3ui", -1 },
+   { "glUniform3uiv", -1 },
+   { "glUniform4ui", -1 },
+   { "glUniform4uiv", -1 },
+   { "glUniformBlockBinding", -1 },
+   { "glUniformMatrix2x3fv", -1 },
+   { "glUniformMatrix2x4fv", -1 },
+   { "glUniformMatrix3x2fv", -1 },
+   { "glUniformMatrix3x4fv", -1 },
+   { "glUniformMatrix4x2fv", -1 },
+   { "glUniformMatrix4x3fv", -1 },
+   // We check for the aliased -OES version in GLES 2
+   // { "glUnmapBuffer", -1 },
+   { "glVertexAttribDivisor", -1 },
+   { "glVertexAttribI4i", -1 },
+   { "glVertexAttribI4iv", -1 },
+   { "glVertexAttribI4ui", -1 },
+   { "glVertexAttribI4uiv", -1 },
+   { "glVertexAttribIPointer", -1 },
+   { "glWaitSync", -1 },
+   { NULL, -1 }
+};

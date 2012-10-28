@@ -23,6 +23,9 @@
 #include "nv50_ir.h"
 #include "nv50_ir_target.h"
 
+#define __STDC_FORMAT_MACROS
+#include <inttypes.h>
+
 namespace nv50_ir {
 
 enum TextStyle
@@ -391,7 +394,7 @@ int ImmediateValue::print(char *buf, size_t size, DataType ty) const
    case TYPE_U64:
    case TYPE_S64:
    default:
-      PRINT("0x%016lx", reg.data.u64);
+      PRINT("0x%016"PRIx64, reg.data.u64);
       break;
    }
    return pos;

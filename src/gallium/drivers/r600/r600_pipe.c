@@ -159,9 +159,6 @@ static void r600_destroy_context(struct pipe_context *context)
 	pipe_resource_reference((struct pipe_resource**)&rctx->dummy_cmask, NULL);
 	pipe_resource_reference((struct pipe_resource**)&rctx->dummy_fmask, NULL);
 
-	if (rctx->no_blend) {
-		rctx->context.delete_blend_state(&rctx->context, rctx->no_blend);
-	}
 	if (rctx->dummy_pixel_shader) {
 		rctx->context.delete_fs_state(&rctx->context, rctx->dummy_pixel_shader);
 	}
@@ -174,6 +171,9 @@ static void r600_destroy_context(struct pipe_context *context)
 	if (rctx->custom_blend_decompress) {
 		rctx->context.delete_blend_state(&rctx->context, rctx->custom_blend_decompress);
 	}
+	if (rctx->custom_blend_fmask_decompress) {
+		rctx->context.delete_blend_state(&rctx->context, rctx->custom_blend_fmask_decompress);
+	}
 	util_unreference_framebuffer_state(&rctx->framebuffer.state);
 
 	r600_context_fini(rctx);
@@ -181,10 +181,6 @@ static void r600_destroy_context(struct pipe_context *context)
 	if (rctx->blitter) {
 		util_blitter_destroy(rctx->blitter);
 	}
-	for (int i = 0; i < R600_PIPE_NSTATES; i++) {
-		free(rctx->states[i]);
-	}
-
 	if (rctx->uploader) {
 		u_upload_destroy(rctx->uploader);
 	}
@@ -204,7 +200,6 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 {
 	struct r600_context *rctx = CALLOC_STRUCT(r600_context);
 	struct r600_screen* rscreen = (struct r600_screen *)screen;
-	struct pipe_blend_state no_blend = {};
 
 	if (rctx == NULL)
 		return NULL;
@@ -272,6 +267,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		rctx->custom_dsa_flush = evergreen_create_db_flush_dsa(rctx);
 		rctx->custom_blend_resolve = evergreen_create_resolve_blend(rctx);
 		rctx->custom_blend_decompress = evergreen_create_decompress_blend(rctx);
+		rctx->custom_blend_fmask_decompress = evergreen_create_fmask_decompress_blend(rctx);
 		rctx->has_vertex_cache = !(rctx->family == CHIP_CEDAR ||
 					   rctx->family == CHIP_PALM ||
 					   rctx->family == CHIP_SUMO ||
@@ -297,22 +293,17 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	rctx->blitter = util_blitter_create(&rctx->context);
 	if (rctx->blitter == NULL)
 		goto fail;
+	util_blitter_set_texture_multisample(rctx->blitter, rscreen->has_msaa);
 	rctx->blitter->draw_rectangle = r600_draw_rectangle;
 
 	r600_begin_new_cs(rctx);
 	r600_get_backend_mask(rctx); /* this emits commands and must be last */
-
-	if (rctx->chip_class == R600)
-		r600_set_max_scissor(rctx);
 
 	rctx->dummy_pixel_shader =
 		util_make_fragment_cloneinput_shader(&rctx->context, 0,
 						     TGSI_SEMANTIC_GENERIC,
 						     TGSI_INTERPOLATE_CONSTANT);
 	rctx->context.bind_fs_state(&rctx->context, rctx->dummy_pixel_shader);
-
-	no_blend.rt[0].colormask = 0xF;
-	rctx->no_blend = rctx->context.create_blend_state(&rctx->context, &no_blend);
 
 	return &rctx->context;
 
@@ -407,14 +398,19 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_COMPUTE:
 	case PIPE_CAP_START_INSTANCE:
 	case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
-        case PIPE_CAP_TEXTURE_MULTISAMPLE:
 		return 1;
+
+        case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
+                return 64;
 
 	case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
 		return 256;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
 		return 130;
+
+	case PIPE_CAP_TEXTURE_MULTISAMPLE:
+		return rscreen->msaa_texture_support != MSAA_TEXTURE_SAMPLE_ZERO;
 
 	/* Supported except the original R600. */
 	case PIPE_CAP_INDEP_BLEND_ENABLE:
@@ -444,7 +440,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return rscreen->has_streamout ? 1 : 0;
 	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
 	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
-		return 16*4;
+		return 32*4;
 
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
@@ -535,10 +531,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH:
 		return 8; /* XXX */
 	case PIPE_SHADER_CAP_MAX_INPUTS:
-		if(shader == PIPE_SHADER_FRAGMENT)
-			return 34;
-		else
-			return 32;
+		return 32;
 	case PIPE_SHADER_CAP_MAX_TEMPS:
 		return 256; /* Max native temporaries. */
 	case PIPE_SHADER_CAP_MAX_ADDRS:
@@ -645,10 +638,9 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 	case PIPE_COMPUTE_CAP_MAX_GLOBAL_SIZE:
 		if (ret) {
 			uint64_t * max_global_size = ret;
-			/* XXX: This is 64kb for now until we get the
-			 * compute memory pool working correctly.
-			 */
-			*max_global_size = 1024 * 16 * 4;
+			/* XXX: This is what the proprietary driver reports, we
+			 * may want to use a different value. */
+			*max_global_size = 201326592;
 		}
 		return sizeof(uint64_t);
 
@@ -950,12 +942,38 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 	/* Figure out streamout kernel support. */
 	switch (rscreen->chip_class) {
 	case R600:
+		if (rscreen->family < CHIP_RS780) {
+			rscreen->has_streamout = rscreen->info.drm_minor >= 14;
+		} else {
+			rscreen->has_streamout = rscreen->info.drm_minor >= 23;
+		}
+		break;
+	case R700:
+		rscreen->has_streamout = rscreen->info.drm_minor >= 17;
+		break;
 	case EVERGREEN:
 	case CAYMAN:
 		rscreen->has_streamout = rscreen->info.drm_minor >= 14;
 		break;
+	}
+
+	/* MSAA support. */
+	switch (rscreen->chip_class) {
+	case R600:
 	case R700:
-		rscreen->has_streamout = rscreen->info.drm_minor >= 17;
+		rscreen->has_msaa = rscreen->info.drm_minor >= 22;
+		rscreen->msaa_texture_support = MSAA_TEXTURE_DECOMPRESSED;
+		break;
+	case EVERGREEN:
+		rscreen->has_msaa = rscreen->info.drm_minor >= 19;
+		rscreen->msaa_texture_support =
+			rscreen->info.drm_minor >= 24 ? MSAA_TEXTURE_COMPRESSED :
+							MSAA_TEXTURE_DECOMPRESSED;
+		break;
+	case CAYMAN:
+		rscreen->has_msaa = rscreen->info.drm_minor >= 19;
+		/* We should be able to read compressed MSAA textures, but it doesn't work. */
+		rscreen->msaa_texture_support = MSAA_TEXTURE_SAMPLE_ZERO;
 		break;
 	}
 

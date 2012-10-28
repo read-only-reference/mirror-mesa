@@ -42,35 +42,6 @@
 #include "evergreen_compute_internal.h"
 #include <inttypes.h>
 
-static struct r600_texture * create_pool_texture(struct r600_screen * screen,
-		unsigned size_in_dw)
-{
-
-	struct pipe_resource templ;
-	struct r600_texture * tex;
-
-	if (size_in_dw == 0) {
-		return NULL;
-	}
-	memset(&templ, 0, sizeof(templ));
-	templ.target = PIPE_TEXTURE_1D;
-	templ.format = PIPE_FORMAT_R32_UINT;
-	templ.bind = PIPE_BIND_CUSTOM;
-	templ.usage = PIPE_USAGE_IMMUTABLE;
-	templ.flags = 0;
-	templ.width0 = size_in_dw;
-	templ.height0 = 1;
-	templ.depth0 = 1;
-	templ.array_size = 1;
-
-	tex = (struct r600_texture *)r600_texture_create(
-						&screen->screen, &templ);
-	/* XXX: Propagate this error */
-	assert(tex && "Out of memory");
-	tex->is_rat = 1;
-	return tex;
-}
-
 /**
  * Creates a new pool
  */
@@ -93,14 +64,11 @@ static void compute_memory_pool_init(struct compute_memory_pool * pool,
 	COMPUTE_DBG("* compute_memory_pool_init() initial_size_in_dw = %ld\n",
 		initial_size_in_dw);
 
-	/* XXX: pool->shadow is used when the buffer needs to be resized, but
-	 * resizing does not work at the moment.
-	 * pool->shadow = (uint32_t*)CALLOC(4, pool->size_in_dw);
-	 */
+	pool->shadow = (uint32_t*)CALLOC(initial_size_in_dw, 4);
 	pool->next_id = 1;
 	pool->size_in_dw = initial_size_in_dw;
-	pool->bo = (struct r600_resource*)create_pool_texture(pool->screen,
-							pool->size_in_dw);
+	pool->bo = (struct r600_resource*)r600_compute_buffer_alloc_vram(pool->screen,
+							pool->size_in_dw * 4);
 }
 
 /**
@@ -164,6 +132,11 @@ struct compute_memory_item* compute_memory_postalloc_chunk(
 	COMPUTE_DBG("* compute_memory_postalloc_chunck() start_in_dw = %ld\n",
 		start_in_dw);
 
+	/* Check if we can insert it in the front of the list */
+	if (pool->item_list && pool->item_list->start_in_dw > start_in_dw) {
+		return NULL;
+	}
+
 	for (item = pool->item_list; item; item = item->next) {
 		if (item->next) {
 			if (item->start_in_dw < start_in_dw
@@ -193,19 +166,9 @@ void compute_memory_grow_pool(struct compute_memory_pool* pool,
 
 	assert(new_size_in_dw >= pool->size_in_dw);
 
-	assert(!pool->bo && "Growing the global memory pool is not yet "
-		"supported.  You will see this message if you are trying to"
-		"use more than 64 kb of memory");
-
 	if (!pool->bo) {
-		compute_memory_pool_init(pool, 1024 * 16);
+		compute_memory_pool_init(pool, MAX2(new_size_in_dw, 1024 * 16));
 	} else {
-		/* XXX: Growing memory pools does not work at the moment.  I think
-		 * it is because we are using fragment shaders to copy data to
-		 * the new texture and some of the compute registers are being
-		 * included in the 3D command stream. */
-		fprintf(stderr, "Warning: growing the global memory pool to"
-				"more than 64 kb is not yet supported\n");
 		new_size_in_dw += 1024 - (new_size_in_dw % 1024);
 
 		COMPUTE_DBG("  Aligned size = %d\n", new_size_in_dw);
@@ -216,9 +179,9 @@ void compute_memory_grow_pool(struct compute_memory_pool* pool,
 		pool->screen->screen.resource_destroy(
 			(struct pipe_screen *)pool->screen,
 			(struct pipe_resource *)pool->bo);
-		pool->bo = (struct r600_resource*)create_pool_texture(
+		pool->bo = (struct r600_resource*)r600_compute_buffer_alloc_vram(
 							pool->screen,
-							pool->size_in_dw);
+							pool->size_in_dw * 4);
 		compute_memory_shadow(pool, pipe, 0);
 	}
 }
@@ -365,12 +328,24 @@ void compute_memory_finalize_pending(struct compute_memory_pool* pool,
 			struct compute_memory_item *pos;
 
 			pos = compute_memory_postalloc_chunk(pool, start_in_dw);
-			item->prev = pos;
-			item->next = pos->next;
-			pos->next = item;
-
-			if (item->next) {
-				item->next->prev = item;
+			if (pos) {
+				item->prev = pos;
+				item->next = pos->next;
+				pos->next = item;
+				if (item->next) {
+					item->next->prev = item;
+				}
+			} else {
+				/* Add item to the front of the list */
+				item->next = pool->item_list->next;
+				if (pool->item_list->next) {
+					pool->item_list->next->prev = item;
+				}
+				item->prev = pool->item_list->prev;
+				if (pool->item_list->prev) {
+					pool->item_list->prev->next = item;
+				}
+				pool->item_list = item;
 			}
 		}
 		else {
@@ -478,27 +453,22 @@ void compute_memory_transfer(
 		"offset_in_chunk = %d, size = %d\n", device_to_host,
 		offset_in_chunk, size);
 
-	if (device_to_host)
-	{
-		xfer = pipe->get_transfer(pipe, gart, 0, PIPE_TRANSFER_READ,
+	if (device_to_host) {
+		map = pipe->transfer_map(pipe, gart, 0, PIPE_TRANSFER_READ,
 			&(struct pipe_box) { .width = aligned_size,
-			.height = 1, .depth = 1 });
-		assert(xfer);
-		map = pipe->transfer_map(pipe, xfer);
+			.height = 1, .depth = 1 }, &xfer);
+                assert(xfer);
 		assert(map);
 		memcpy(data, map + internal_offset, size);
 		pipe->transfer_unmap(pipe, xfer);
-		pipe->transfer_destroy(pipe, xfer);
 	} else {
-		xfer = pipe->get_transfer(pipe, gart, 0, PIPE_TRANSFER_WRITE,
+		map = pipe->transfer_map(pipe, gart, 0, PIPE_TRANSFER_WRITE,
 			&(struct pipe_box) { .width = aligned_size,
-			.height = 1, .depth = 1 });
+			.height = 1, .depth = 1 }, &xfer);
 		assert(xfer);
-		map = pipe->transfer_map(pipe, xfer);
 		assert(map);
 		memcpy(map + internal_offset, data, size);
 		pipe->transfer_unmap(pipe, xfer);
-		pipe->transfer_destroy(pipe, xfer);
 	}
 }
 

@@ -43,6 +43,7 @@ struct si_state_viewport {
 struct si_state_rasterizer {
 	struct si_pm4_state	pm4;
 	bool			flatshade;
+	bool			two_side;
 	unsigned		sprite_coord_enable;
 	unsigned		pa_sc_line_stipple;
 	unsigned		pa_su_sc_mode_cntl;
@@ -131,11 +132,11 @@ union si_state {
 /* si_state.c */
 struct si_pipe_shader_selector;
 
-bool si_is_format_supported(struct pipe_screen *screen,
-			    enum pipe_format format,
-			    enum pipe_texture_target target,
-			    unsigned sample_count,
-			    unsigned usage);
+boolean si_is_format_supported(struct pipe_screen *screen,
+                               enum pipe_format format,
+                               enum pipe_texture_target target,
+                               unsigned sample_count,
+                               unsigned usage);
 int si_shader_select(struct pipe_context *ctx,
 		     struct si_pipe_shader_selector *sel,
 		     unsigned *dirty);

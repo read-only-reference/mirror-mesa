@@ -74,7 +74,6 @@ extern "C" {
 #define PROGRAM_ANY_CONST ((1 << PROGRAM_LOCAL_PARAM) |  \
                            (1 << PROGRAM_ENV_PARAM) |    \
                            (1 << PROGRAM_STATE_VAR) |    \
-                           (1 << PROGRAM_NAMED_PARAM) |  \
                            (1 << PROGRAM_CONSTANT) |     \
                            (1 << PROGRAM_UNIFORM))
 
@@ -536,7 +535,6 @@ glsl_to_tgsi_visitor::emit(ir_instruction *ir, unsigned op,
       case PROGRAM_LOCAL_PARAM:
       case PROGRAM_ENV_PARAM:
       case PROGRAM_STATE_VAR:
-      case PROGRAM_NAMED_PARAM:
       case PROGRAM_CONSTANT:
       case PROGRAM_UNIFORM:
          this->indirect_addr_consts = true;
@@ -558,7 +556,6 @@ glsl_to_tgsi_visitor::emit(ir_instruction *ir, unsigned op,
             case PROGRAM_LOCAL_PARAM:
             case PROGRAM_ENV_PARAM:
             case PROGRAM_STATE_VAR:
-            case PROGRAM_NAMED_PARAM:
             case PROGRAM_CONSTANT:
             case PROGRAM_UNIFORM:
                this->indirect_addr_consts = true;
@@ -633,6 +630,11 @@ glsl_to_tgsi_visitor::get_opcode(ir_instruction *ir, unsigned op,
 {
    int type = GLSL_TYPE_FLOAT;
    
+   assert(src0.type != GLSL_TYPE_ARRAY);
+   assert(src0.type != GLSL_TYPE_STRUCT);
+   assert(src1.type != GLSL_TYPE_ARRAY);
+   assert(src1.type != GLSL_TYPE_STRUCT);
+
    if (src0.type == GLSL_TYPE_FLOAT || src1.type == GLSL_TYPE_FLOAT)
       type = GLSL_TYPE_FLOAT;
    else if (native_integers)
@@ -1074,8 +1076,12 @@ glsl_to_tgsi_visitor::visit(ir_variable *ir)
                assert(index == storage->index + (int)i);
             }
          } else {
-            st_src_reg src(PROGRAM_STATE_VAR, index,
-                  native_integers ? ir->type->base_type : GLSL_TYPE_FLOAT);
+         	/* We use GLSL_TYPE_FLOAT here regardless of the actual type of
+         	 * the data being moved since MOV does not care about the type of
+         	 * data it is moving, and we don't want to declare registers with
+         	 * array or struct types.
+         	 */
+            st_src_reg src(PROGRAM_STATE_VAR, index, GLSL_TYPE_FLOAT);
             src.swizzle = slots[i].swizzle;
             emit(ir, TGSI_OPCODE_MOV, dst, src);
             /* even a float takes up a whole vec4 reg in a struct/array. */
@@ -2042,6 +2048,9 @@ glsl_to_tgsi_visitor::visit(ir_dereference_array *ir)
    else
       src.swizzle = SWIZZLE_NOOP;
 
+   /* Change the register type to the element type of the array. */
+   src.type = ir->type->base_type;
+
    this->result = src;
 }
 
@@ -2067,6 +2076,7 @@ glsl_to_tgsi_visitor::visit(ir_dereference_record *ir)
       this->result.swizzle = SWIZZLE_NOOP;
 
    this->result.index += offset;
+   this->result.type = ir->type->base_type;
 }
 
 /**
@@ -2286,6 +2296,10 @@ glsl_to_tgsi_visitor::visit(ir_assignment *ir)
       inst->dead_mask = inst->dst.writemask;
    } else {
       for (i = 0; i < type_size(ir->lhs->type); i++) {
+         if (ir->rhs->type->is_array())
+         	r.type = ir->rhs->type->element_type()->base_type;
+         else if (ir->rhs->type->is_record())
+         	r.type = ir->rhs->type->fields.structure[i].type->base_type;
          emit(ir, TGSI_OPCODE_MOV, l, r);
          l.index++;
          r.index++;
@@ -4041,7 +4055,6 @@ src_register(struct st_translate *t,
          t->temps[index] = ureg_DECL_local_temporary(t->ureg);
       return ureg_src(t->temps[index]);
 
-   case PROGRAM_NAMED_PARAM:
    case PROGRAM_ENV_PARAM:
    case PROGRAM_LOCAL_PARAM:
    case PROGRAM_UNIFORM:
@@ -4692,7 +4705,6 @@ st_translate_program(
          case PROGRAM_ENV_PARAM:
          case PROGRAM_LOCAL_PARAM:
          case PROGRAM_STATE_VAR:
-         case PROGRAM_NAMED_PARAM:
          case PROGRAM_UNIFORM:
             t->constants[i] = ureg_DECL_constant(ureg, i);
             break;

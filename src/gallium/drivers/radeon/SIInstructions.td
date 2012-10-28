@@ -541,7 +541,7 @@ defm V_RNDNE_F32 : VOP1_32 <0x00000023, "V_RNDNE_F32",
   [(set VReg_32:$dst, (frint AllReg_32:$src0))]
 >;
 defm V_FLOOR_F32 : VOP1_32 <0x00000024, "V_FLOOR_F32",
-  [(set VReg_32:$dst, (int_AMDGPU_floor AllReg_32:$src0))]
+  [(set VReg_32:$dst, (ffloor AllReg_32:$src0))]
 >;
 defm V_EXP_F32 : VOP1_32 <0x00000025, "V_EXP_F32",
   [(set VReg_32:$dst, (fexp2 AllReg_32:$src0))]
@@ -1129,6 +1129,11 @@ def : Pat <
   (int_SI_fs_interp_persp_centroid imm:$attr_chan, imm:$attr, SReg_32:$params),
   (SI_INTERP (f32 PERSP_CENTROID_I), (f32 PERSP_CENTROID_J), imm:$attr_chan,
              imm:$attr, SReg_32:$params)
+>;
+
+def : Pat <
+  (int_SI_fs_read_face),
+  (f32 FRONT_FACE)
 >;
 
 def : Pat <

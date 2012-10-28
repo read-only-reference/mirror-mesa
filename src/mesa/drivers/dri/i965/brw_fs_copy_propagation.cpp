@@ -22,7 +22,7 @@
  */
 
 #include "brw_fs.h"
-#include "brw_fs_cfg.h"
+#include "brw_cfg.h"
 
 namespace { /* avoid conflict with opt_copy_propagation_elements */
 struct acp_entry : public exec_node {
@@ -34,6 +34,9 @@ struct acp_entry : public exec_node {
 bool
 fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
 {
+   if (entry->src.file == IMM)
+      return false;
+
    if (inst->src[arg].file != entry->dst.file ||
        inst->src[arg].reg != entry->dst.reg ||
        inst->src[arg].reg_offset != entry->dst.reg_offset) {
@@ -64,6 +67,121 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
    return true;
 }
 
+
+bool
+fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
+{
+   bool progress = false;
+
+   if (entry->src.file != IMM)
+      return false;
+
+   for (int i = 2; i >= 0; i--) {
+      if (inst->src[i].file != entry->dst.file ||
+          inst->src[i].reg != entry->dst.reg ||
+          inst->src[i].reg_offset != entry->dst.reg_offset)
+         continue;
+
+      /* Don't bother with cases that should have been taken care of by the
+       * GLSL compiler's constant folding pass.
+       */
+      if (inst->src[i].negate || inst->src[i].abs)
+         continue;
+
+      switch (inst->opcode) {
+      case BRW_OPCODE_MOV:
+         inst->src[i] = entry->src;
+         progress = true;
+         break;
+
+      case BRW_OPCODE_MUL:
+      case BRW_OPCODE_ADD:
+         if (i == 1) {
+            inst->src[i] = entry->src;
+            progress = true;
+         } else if (i == 0 && inst->src[1].file != IMM) {
+            /* Fit this constant in by commuting the operands.
+             * Exception: we can't do this for 32-bit integer MUL
+             * because it's asymmetric.
+             */
+            if (inst->opcode == BRW_OPCODE_MUL &&
+                (inst->src[1].type == BRW_REGISTER_TYPE_D ||
+                 inst->src[1].type == BRW_REGISTER_TYPE_UD))
+               break;
+            inst->src[0] = inst->src[1];
+            inst->src[1] = entry->src;
+            progress = true;
+         }
+         break;
+
+      case BRW_OPCODE_CMP:
+      case BRW_OPCODE_IF:
+         if (i == 1) {
+            inst->src[i] = entry->src;
+            progress = true;
+         } else if (i == 0 && inst->src[1].file != IMM) {
+            uint32_t new_cmod;
+
+            new_cmod = brw_swap_cmod(inst->conditional_mod);
+            if (new_cmod != ~0u) {
+               /* Fit this constant in by swapping the operands and
+                * flipping the test
+                */
+               inst->src[0] = inst->src[1];
+               inst->src[1] = entry->src;
+               inst->conditional_mod = new_cmod;
+               progress = true;
+            }
+         }
+         break;
+
+      case BRW_OPCODE_SEL:
+         if (i == 1) {
+            inst->src[i] = entry->src;
+            progress = true;
+         } else if (i == 0 && inst->src[1].file != IMM) {
+            inst->src[0] = inst->src[1];
+            inst->src[1] = entry->src;
+
+            /* If this was predicated, flipping operands means
+             * we also need to flip the predicate.
+             */
+            if (inst->conditional_mod == BRW_CONDITIONAL_NONE) {
+               inst->predicate_inverse =
+                  !inst->predicate_inverse;
+            }
+            progress = true;
+         }
+         break;
+
+      case SHADER_OPCODE_RCP:
+         /* The hardware doesn't do math on immediate values
+          * (because why are you doing that, seriously?), but
+          * the correct answer is to just constant fold it
+          * anyway.
+          */
+         assert(i == 0);
+         if (inst->src[0].imm.f != 0.0f) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->src[0] = entry->src;
+            inst->src[0].imm.f = 1.0f / inst->src[0].imm.f;
+            progress = true;
+         }
+         break;
+
+      case FS_OPCODE_PULL_CONSTANT_LOAD:
+         inst->src[i] = entry->src;
+         progress = true;
+         break;
+
+      default:
+         break;
+      }
+   }
+
+   return progress;
+}
+
 /** @file brw_fs_copy_propagation.cpp
  *
  * Support for local copy propagation by walking the list of instructions
@@ -77,34 +195,51 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
  * list.
  */
 bool
-fs_visitor::opt_copy_propagate_local(void *mem_ctx,
-				     fs_bblock *block, exec_list *acp)
+fs_visitor::opt_copy_propagate_local(void *mem_ctx, bblock_t *block)
 {
    bool progress = false;
+   int acp_count = 16;
+   exec_list acp[acp_count];
 
-   for (fs_inst *inst = block->start;
+   for (fs_inst *inst = (fs_inst *)block->start;
 	inst != block->end->next;
 	inst = (fs_inst *)inst->next) {
 
       /* Try propagating into this instruction. */
-      foreach_list(entry_node, acp) {
-	 acp_entry *entry = (acp_entry *)entry_node;
+      for (int i = 0; i < 3; i++) {
+         if (inst->src[i].file != GRF)
+            continue;
 
-	 for (int i = 0; i < 3; i++) {
-	    if (try_copy_propagate(inst, i, entry))
-	       progress = true;
-	 }
+         foreach_list(entry_node, &acp[inst->src[i].reg % acp_count]) {
+            acp_entry *entry = (acp_entry *)entry_node;
+
+            if (try_constant_propagate(inst, entry))
+               progress = true;
+
+            if (try_copy_propagate(inst, i, entry))
+               progress = true;
+         }
       }
 
       /* kill the destination from the ACP */
       if (inst->dst.file == GRF) {
-	 foreach_list_safe(entry_node, acp) {
+	 foreach_list_safe(entry_node, &acp[inst->dst.reg % acp_count]) {
 	    acp_entry *entry = (acp_entry *)entry_node;
 
-	    if (inst->overwrites_reg(entry->dst) ||
-                inst->overwrites_reg(entry->src)) {
+	    if (inst->overwrites_reg(entry->dst)) {
 	       entry->remove();
 	    }
+	 }
+
+         /* Oops, we only have the chaining hash based on the destination, not
+          * the source, so walk across the entire table.
+          */
+         for (int i = 0; i < acp_count; i++) {
+            foreach_list_safe(entry_node, &acp[i]) {
+               acp_entry *entry = (acp_entry *)entry_node;
+               if (inst->overwrites_reg(entry->src))
+                  entry->remove();
+            }
 	 }
       }
 
@@ -114,17 +249,18 @@ fs_visitor::opt_copy_propagate_local(void *mem_ctx,
 	  ((inst->src[0].file == GRF &&
 	    (inst->src[0].reg != inst->dst.reg ||
 	     inst->src[0].reg_offset != inst->dst.reg_offset)) ||
-	   inst->src[0].file == UNIFORM) &&
+           inst->src[0].file == UNIFORM ||
+           inst->src[0].file == IMM) &&
 	  inst->src[0].type == inst->dst.type &&
 	  !inst->saturate &&
-	  !inst->predicated &&
+	  !inst->predicate &&
 	  !inst->force_uncompressed &&
 	  !inst->force_sechalf &&
 	  inst->src[0].smear == -1) {
 	 acp_entry *entry = ralloc(mem_ctx, acp_entry);
 	 entry->dst = inst->dst;
 	 entry->src = inst->src[0];
-	 acp->push_tail(entry);
+	 acp[entry->dst.reg % acp_count].push_tail(entry);
       }
    }
 
@@ -137,13 +273,12 @@ fs_visitor::opt_copy_propagate()
    bool progress = false;
    void *mem_ctx = ralloc_context(this->mem_ctx);
 
-   fs_cfg cfg(this);
+   cfg_t cfg(this);
 
    for (int b = 0; b < cfg.num_blocks; b++) {
-      fs_bblock *block = cfg.blocks[b];
-      exec_list acp;
+      bblock_t *block = cfg.blocks[b];
 
-      progress = opt_copy_propagate_local(mem_ctx, block, &acp) || progress;
+      progress = opt_copy_propagate_local(mem_ctx, block) || progress;
    }
 
    ralloc_free(mem_ctx);
