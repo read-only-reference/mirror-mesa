@@ -168,8 +168,8 @@ get_query_binding_point(struct gl_context *ctx, GLenum target)
 }
 
 
-static void GLAPIENTRY
-_mesa_GenQueriesARB(GLsizei n, GLuint *ids)
+void GLAPIENTRY
+_mesa_GenQueries(GLsizei n, GLuint *ids)
 {
    GLuint first;
    GET_CURRENT_CONTEXT(ctx);
@@ -207,8 +207,8 @@ _mesa_GenQueriesARB(GLsizei n, GLuint *ids)
 }
 
 
-static void GLAPIENTRY
-_mesa_DeleteQueriesARB(GLsizei n, const GLuint *ids)
+void GLAPIENTRY
+_mesa_DeleteQueries(GLsizei n, const GLuint *ids)
 {
    GLint i;
    GET_CURRENT_CONTEXT(ctx);
@@ -216,7 +216,7 @@ _mesa_DeleteQueriesARB(GLsizei n, const GLuint *ids)
    FLUSH_VERTICES(ctx, 0);
 
    if (MESA_VERBOSE & VERBOSE_API)
-      _mesa_debug(ctx, "glDeleeteQueries(%d)\n", n);
+      _mesa_debug(ctx, "glDeleteQueries(%d)\n", n);
 
    if (n < 0) {
       _mesa_error(ctx, GL_INVALID_VALUE, "glDeleteQueriesARB(n < 0)");
@@ -243,8 +243,8 @@ _mesa_DeleteQueriesARB(GLsizei n, const GLuint *ids)
 }
 
 
-static GLboolean GLAPIENTRY
-_mesa_IsQueryARB(GLuint id)
+GLboolean GLAPIENTRY
+_mesa_IsQuery(GLuint id)
 {
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
@@ -279,7 +279,7 @@ query_error_check_index(struct gl_context *ctx, GLenum target, GLuint index)
    return GL_TRUE;
 }
 
-static void GLAPIENTRY
+void GLAPIENTRY
 _mesa_BeginQueryIndexed(GLenum target, GLuint index, GLuint id)
 {
    struct gl_query_object *q, **bindpt;
@@ -321,13 +321,19 @@ _mesa_BeginQueryIndexed(GLenum target, GLuint index, GLuint id)
 
    q = _mesa_lookup_query_object(ctx, id);
    if (!q) {
-      /* create new object */
-      q = ctx->Driver.NewQueryObject(ctx, id);
-      if (!q) {
-         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glBeginQuery{Indexed}");
+      if (ctx->API != API_OPENGL_COMPAT) {
+         _mesa_error(ctx, GL_INVALID_OPERATION,
+                     "glBeginQuery{Indexed}(non-gen name)");
          return;
+      } else {
+         /* create new object */
+         q = ctx->Driver.NewQueryObject(ctx, id);
+         if (!q) {
+            _mesa_error(ctx, GL_OUT_OF_MEMORY, "glBeginQuery{Indexed}");
+            return;
+         }
+         _mesa_HashInsert(ctx->Query.QueryObjects, id, q);
       }
-      _mesa_HashInsert(ctx->Query.QueryObjects, id, q);
    }
    else {
       /* pre-existing object */
@@ -350,7 +356,7 @@ _mesa_BeginQueryIndexed(GLenum target, GLuint index, GLuint id)
 }
 
 
-static void GLAPIENTRY
+void GLAPIENTRY
 _mesa_EndQueryIndexed(GLenum target, GLuint index)
 {
    struct gl_query_object *q, **bindpt;
@@ -396,19 +402,19 @@ _mesa_EndQueryIndexed(GLenum target, GLuint index)
    ctx->Driver.EndQuery(ctx, q);
 }
 
-static void GLAPIENTRY
-_mesa_BeginQueryARB(GLenum target, GLuint id)
+void GLAPIENTRY
+_mesa_BeginQuery(GLenum target, GLuint id)
 {
    _mesa_BeginQueryIndexed(target, 0, id);
 }
 
-static void GLAPIENTRY
-_mesa_EndQueryARB(GLenum target)
+void GLAPIENTRY
+_mesa_EndQuery(GLenum target)
 {
    _mesa_EndQueryIndexed(target, 0);
 }
 
-static void GLAPIENTRY
+void GLAPIENTRY
 _mesa_QueryCounter(GLuint id, GLenum target)
 {
    struct gl_query_object *q;
@@ -465,7 +471,7 @@ _mesa_QueryCounter(GLuint id, GLenum target)
 }
 
 
-static void GLAPIENTRY
+void GLAPIENTRY
 _mesa_GetQueryIndexediv(GLenum target, GLuint index, GLenum pname,
                         GLint *params)
 {
@@ -540,14 +546,14 @@ _mesa_GetQueryIndexediv(GLenum target, GLuint index, GLenum pname,
    }
 }
 
-static void GLAPIENTRY
-_mesa_GetQueryivARB(GLenum target, GLenum pname, GLint *params)
+void GLAPIENTRY
+_mesa_GetQueryiv(GLenum target, GLenum pname, GLint *params)
 {
    _mesa_GetQueryIndexediv(target, 0, pname, params);
 }
 
-static void GLAPIENTRY
-_mesa_GetQueryObjectivARB(GLuint id, GLenum pname, GLint *params)
+void GLAPIENTRY
+_mesa_GetQueryObjectiv(GLuint id, GLenum pname, GLint *params)
 {
    struct gl_query_object *q = NULL;
    GET_CURRENT_CONTEXT(ctx);
@@ -597,8 +603,8 @@ _mesa_GetQueryObjectivARB(GLuint id, GLenum pname, GLint *params)
 }
 
 
-static void GLAPIENTRY
-_mesa_GetQueryObjectuivARB(GLuint id, GLenum pname, GLuint *params)
+void GLAPIENTRY
+_mesa_GetQueryObjectuiv(GLuint id, GLenum pname, GLuint *params)
 {
    struct gl_query_object *q = NULL;
    GET_CURRENT_CONTEXT(ctx);
@@ -651,8 +657,8 @@ _mesa_GetQueryObjectuivARB(GLuint id, GLenum pname, GLuint *params)
 /**
  * New with GL_EXT_timer_query
  */
-static void GLAPIENTRY
-_mesa_GetQueryObjecti64vEXT(GLuint id, GLenum pname, GLint64EXT *params)
+void GLAPIENTRY
+_mesa_GetQueryObjecti64v(GLuint id, GLenum pname, GLint64EXT *params)
 {
    struct gl_query_object *q = NULL;
    GET_CURRENT_CONTEXT(ctx);
@@ -692,8 +698,8 @@ _mesa_GetQueryObjecti64vEXT(GLuint id, GLenum pname, GLint64EXT *params)
 /**
  * New with GL_EXT_timer_query
  */
-static void GLAPIENTRY
-_mesa_GetQueryObjectui64vEXT(GLuint id, GLenum pname, GLuint64EXT *params)
+void GLAPIENTRY
+_mesa_GetQueryObjectui64v(GLuint id, GLenum pname, GLuint64EXT *params)
 {
    struct gl_query_object *q = NULL;
    GET_CURRENT_CONTEXT(ctx);
@@ -734,20 +740,20 @@ void
 _mesa_init_queryobj_dispatch(const struct gl_context *ctx,
                              struct _glapi_table *disp)
 {
-   SET_GenQueriesARB(disp, _mesa_GenQueriesARB);
-   SET_DeleteQueriesARB(disp, _mesa_DeleteQueriesARB);
-   SET_IsQueryARB(disp, _mesa_IsQueryARB);
-   SET_BeginQueryARB(disp, _mesa_BeginQueryARB);
-   SET_EndQueryARB(disp, _mesa_EndQueryARB);
-   SET_GetQueryivARB(disp, _mesa_GetQueryivARB);
-   SET_GetQueryObjectuivARB(disp, _mesa_GetQueryObjectuivARB);
+   SET_GenQueries(disp, _mesa_GenQueries);
+   SET_DeleteQueries(disp, _mesa_DeleteQueries);
+   SET_IsQuery(disp, _mesa_IsQuery);
+   SET_BeginQuery(disp, _mesa_BeginQuery);
+   SET_EndQuery(disp, _mesa_EndQuery);
+   SET_GetQueryiv(disp, _mesa_GetQueryiv);
+   SET_GetQueryObjectuiv(disp, _mesa_GetQueryObjectuiv);
 
    if (_mesa_is_desktop_gl(ctx)) {
-      SET_GetQueryObjectivARB(disp, _mesa_GetQueryObjectivARB);
+      SET_GetQueryObjectiv(disp, _mesa_GetQueryObjectiv);
       SET_QueryCounter(disp, _mesa_QueryCounter);
 
-      SET_GetQueryObjecti64vEXT(disp, _mesa_GetQueryObjecti64vEXT);
-      SET_GetQueryObjectui64vEXT(disp, _mesa_GetQueryObjectui64vEXT);
+      SET_GetQueryObjecti64v(disp, _mesa_GetQueryObjecti64v);
+      SET_GetQueryObjectui64v(disp, _mesa_GetQueryObjectui64v);
 
       SET_BeginQueryIndexed(disp, _mesa_BeginQueryIndexed);
       SET_EndQueryIndexed(disp, _mesa_EndQueryIndexed);

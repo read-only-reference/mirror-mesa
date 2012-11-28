@@ -69,7 +69,7 @@ static int r600_init_surface(struct r600_screen *rscreen,
 			     struct radeon_surface *surface,
 			     const struct pipe_resource *ptex,
 			     unsigned array_mode,
-			     bool is_transfer, bool is_flushed_depth)
+			     bool is_flushed_depth)
 {
 	const struct util_format_description *desc =
 		util_format_description(ptex->format);
@@ -87,8 +87,7 @@ static int r600_init_surface(struct r600_screen *rscreen,
 	surface->array_size = 1;
 	surface->last_level = ptex->last_level;
 
-	if (rscreen->chip_class >= EVERGREEN &&
-	    !is_transfer && !is_flushed_depth &&
+	if (rscreen->chip_class >= EVERGREEN && !is_flushed_depth &&
 	    ptex->format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT) {
 		surface->bpe = 4; /* stencil is allocated separately on evergreen */
 	} else {
@@ -133,6 +132,7 @@ static int r600_init_surface(struct r600_screen *rscreen,
 		surface->array_size = ptex->array_size;
 		break;
 	case PIPE_TEXTURE_2D_ARRAY:
+	case PIPE_TEXTURE_CUBE_ARRAY: /* cube array layout like 2d layout for now */
 		surface->flags |= RADEON_SURF_SET(RADEON_SURF_TYPE_2D_ARRAY, TYPE);
 		surface->array_size = ptex->array_size;
 		break;
@@ -147,11 +147,12 @@ static int r600_init_surface(struct r600_screen *rscreen,
 		surface->flags |= RADEON_SURF_SCANOUT;
 	}
 
-	if (!is_transfer && !is_flushed_depth && is_depth) {
+	if (!is_flushed_depth && is_depth) {
 		surface->flags |= RADEON_SURF_ZBUFFER;
 
 		if (is_stencil) {
-			surface->flags |= RADEON_SURF_SBUFFER;
+			surface->flags |= RADEON_SURF_SBUFFER |
+                                          RADEON_SURF_HAS_SBUFFER_MIPTREE;
 		}
 	}
 	return 0;
@@ -179,7 +180,8 @@ static int r600_setup_surface(struct pipe_screen *screen,
 		rtex->surface.level[0].pitch_bytes = pitch_in_bytes_override;
 		rtex->surface.level[0].slice_size = pitch_in_bytes_override * rtex->surface.level[0].nblk_y;
 		if (rtex->surface.flags & RADEON_SURF_SBUFFER) {
-			rtex->surface.stencil_offset = rtex->surface.level[0].slice_size;
+			rtex->surface.stencil_offset =
+			rtex->surface.stencil_level[0].offset = rtex->surface.level[0].slice_size;
 		}
 	}
 	for (i = 0; i <= ptex->last_level; i++) {
@@ -365,6 +367,8 @@ static void r600_texture_allocate_cmask(struct r600_screen *rscreen,
 #endif
 }
 
+DEBUG_GET_ONCE_BOOL_OPTION(print_texdepth, "R600_PRINT_TEXDEPTH", FALSE);
+
 static struct r600_texture *
 r600_texture_create_object(struct pipe_screen *screen,
 			   const struct pipe_resource *base,
@@ -411,6 +415,9 @@ r600_texture_create_object(struct pipe_screen *screen,
 		return NULL;
 	}
 
+	/* Tiled depth textures utilize the non-displayable tile order. */
+	rtex->non_disp_tiling = rtex->is_depth && rtex->surface.level[0].mode >= RADEON_SURF_MODE_1D;
+
 	/* Now create the backing buffer. */
 	if (!buf && alloc_bo) {
 		unsigned base_align = rtex->surface.bo_alignment;
@@ -421,9 +428,10 @@ r600_texture_create_object(struct pipe_screen *screen,
 			return NULL;
 		}
 	} else if (buf) {
+		/* This is usually the window framebuffer. We want it in VRAM, always. */
 		resource->buf = buf;
 		resource->cs_buf = rscreen->ws->buffer_get_cs_handle(buf);
-		resource->domains = RADEON_DOMAIN_GTT | RADEON_DOMAIN_VRAM;
+		resource->domains = RADEON_DOMAIN_VRAM;
 	}
 
 	if (rtex->cmask_size) {
@@ -431,6 +439,52 @@ r600_texture_create_object(struct pipe_screen *screen,
 		char *ptr = rscreen->ws->buffer_map(resource->cs_buf, NULL, PIPE_TRANSFER_WRITE);
 		memset(ptr + rtex->cmask_offset, 0xCC, rtex->cmask_size);
 		rscreen->ws->buffer_unmap(resource->cs_buf);
+	}
+
+	if (debug_get_option_print_texdepth() && rtex->is_depth && rtex->non_disp_tiling) {
+		printf("Texture: npix_x=%u, npix_y=%u, npix_z=%u, blk_w=%u, "
+		       "blk_h=%u, blk_d=%u, array_size=%u, last_level=%u, "
+		       "bpe=%u, nsamples=%u, flags=%u\n",
+		       rtex->surface.npix_x, rtex->surface.npix_y,
+		       rtex->surface.npix_z, rtex->surface.blk_w,
+		       rtex->surface.blk_h, rtex->surface.blk_d,
+		       rtex->surface.array_size, rtex->surface.last_level,
+		       rtex->surface.bpe, rtex->surface.nsamples,
+		       rtex->surface.flags);
+		if (rtex->surface.flags & RADEON_SURF_ZBUFFER) {
+			for (int i = 0; i <= rtex->surface.last_level; i++) {
+				printf("  Z %i: offset=%llu, slice_size=%llu, npix_x=%u, "
+				       "npix_y=%u, npix_z=%u, nblk_x=%u, nblk_y=%u, "
+				       "nblk_z=%u, pitch_bytes=%u, mode=%u\n",
+				       i, (unsigned long long)rtex->surface.level[i].offset,
+				       (unsigned long long)rtex->surface.level[i].slice_size,
+				       rtex->surface.level[i].npix_x,
+				       rtex->surface.level[i].npix_y,
+				       rtex->surface.level[i].npix_z,
+				       rtex->surface.level[i].nblk_x,
+				       rtex->surface.level[i].nblk_y,
+				       rtex->surface.level[i].nblk_z,
+				       rtex->surface.level[i].pitch_bytes,
+				       rtex->surface.level[i].mode);
+			}
+		}
+		if (rtex->surface.flags & RADEON_SURF_SBUFFER) {
+			for (int i = 0; i <= rtex->surface.last_level; i++) {
+				printf("  S %i: offset=%llu, slice_size=%llu, npix_x=%u, "
+				       "npix_y=%u, npix_z=%u, nblk_x=%u, nblk_y=%u, "
+				       "nblk_z=%u, pitch_bytes=%u, mode=%u\n",
+				       i, (unsigned long long)rtex->surface.stencil_level[i].offset,
+				       (unsigned long long)rtex->surface.stencil_level[i].slice_size,
+				       rtex->surface.stencil_level[i].npix_x,
+				       rtex->surface.stencil_level[i].npix_y,
+				       rtex->surface.stencil_level[i].npix_z,
+				       rtex->surface.stencil_level[i].nblk_x,
+				       rtex->surface.stencil_level[i].nblk_y,
+				       rtex->surface.stencil_level[i].nblk_z,
+				       rtex->surface.stencil_level[i].pitch_bytes,
+				       rtex->surface.stencil_level[i].mode);
+			}
+		}
 	}
 	return rtex;
 }
@@ -440,25 +494,31 @@ struct pipe_resource *r600_texture_create(struct pipe_screen *screen,
 {
 	struct r600_screen *rscreen = (struct r600_screen*)screen;
 	struct radeon_surface surface;
-	unsigned array_mode = 0;
+	const struct util_format_description *desc = util_format_description(templ->format);
+	unsigned array_mode;
 	int r;
 
-	if (!(templ->flags & R600_RESOURCE_FLAG_TRANSFER)) {
+	/* Default tiling mode for staging textures. */
+	array_mode = V_038000_ARRAY_LINEAR_ALIGNED;
+
+	/* Tiling doesn't work with the 422 (SUBSAMPLED) formats. That's not an issue,
+	 * because 422 formats are used for videos, which prefer linear buffers
+	 * for fast uploads anyway. */
+	if (!(templ->flags & R600_RESOURCE_FLAG_TRANSFER) &&
+	    desc->layout != UTIL_FORMAT_LAYOUT_SUBSAMPLED) {
 		if (!(templ->bind & PIPE_BIND_SCANOUT) &&
 		    templ->usage != PIPE_USAGE_STAGING &&
-		    templ->usage != PIPE_USAGE_STREAM) {
+		    templ->usage != PIPE_USAGE_STREAM &&
+		    templ->target != PIPE_TEXTURE_1D &&
+		    templ->target != PIPE_TEXTURE_1D_ARRAY &&
+		    templ->height0 > 3) {
 			array_mode = V_038000_ARRAY_2D_TILED_THIN1;
 		} else if (util_format_is_compressed(templ->format)) {
 			array_mode = V_038000_ARRAY_1D_TILED_THIN1;
 		}
 	}
 
-	/* XXX tiling is broken for the 422 formats */
-	if (util_format_description(templ->format)->layout == UTIL_FORMAT_LAYOUT_SUBSAMPLED)
-		array_mode = V_038000_ARRAY_LINEAR_ALIGNED;
-
 	r = r600_init_surface(rscreen, &surface, templ, array_mode,
-			      templ->flags & R600_RESOURCE_FLAG_TRANSFER,
 			      templ->flags & R600_RESOURCE_FLAG_FLUSHED_DEPTH);
 	if (r) {
 		return NULL;
@@ -546,9 +606,9 @@ struct pipe_resource *r600_texture_from_handle(struct pipe_screen *screen,
 	else if (micro == RADEON_LAYOUT_TILED)
 		array_mode = V_0280A0_ARRAY_1D_TILED_THIN1;
 	else
-		array_mode = 0;
+		array_mode = V_038000_ARRAY_LINEAR_ALIGNED;
 
-	r = r600_init_surface(rscreen, &surface, templ, array_mode, false, false);
+	r = r600_init_surface(rscreen, &surface, templ, array_mode, false);
 	if (r) {
 		return NULL;
 	}
@@ -590,6 +650,7 @@ bool r600_init_flushed_depth_texture(struct pipe_context *ctx,
 	}
 
 	(*flushed_depth_texture)->is_flushing_texture = TRUE;
+	(*flushed_depth_texture)->non_disp_tiling = false;
 	return true;
 }
 
@@ -844,7 +905,7 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen,
 
 	/* Colorspace (return non-RGB formats directly). */
 	switch (desc->colorspace) {
-		/* Depth stencil formats */
+	/* Depth stencil formats */
 	case UTIL_FORMAT_COLORSPACE_ZS:
 		switch (format) {
 		case PIPE_FORMAT_Z16_UNORM:

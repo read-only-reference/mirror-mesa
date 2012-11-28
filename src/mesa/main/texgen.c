@@ -129,7 +129,7 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
             _mesa_error( ctx, GL_INVALID_ENUM, "glTexGenfv(param)" );
             return;
          }
-         if (ctx->API != API_OPENGL
+         if (ctx->API != API_OPENGL_COMPAT
              && (bit & (TEXGEN_REFLECTION_MAP_NV | TEXGEN_NORMAL_MAP_NV)) == 0) {
             _mesa_error( ctx, GL_INVALID_ENUM, "glTexGenfv(param)" );
             return;
@@ -143,7 +143,7 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
 
    case GL_OBJECT_PLANE:
       {
-         if (ctx->API != API_OPENGL) {
+         if (ctx->API != API_OPENGL_COMPAT) {
             _mesa_error( ctx, GL_INVALID_ENUM, "glTexGenfv(param)" );
             return;
          }
@@ -158,7 +158,7 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
       {
          GLfloat tmp[4];
 
-         if (ctx->API != API_OPENGL) {
+         if (ctx->API != API_OPENGL_COMPAT) {
             _mesa_error( ctx, GL_INVALID_ENUM, "glTexGenfv(param)" );
             return;
          }
@@ -186,7 +186,7 @@ _mesa_TexGenfv( GLenum coord, GLenum pname, const GLfloat *params )
 }
 
 
-static void GLAPIENTRY
+void GLAPIENTRY
 _mesa_TexGeniv(GLenum coord, GLenum pname, const GLint *params )
 {
    GLfloat p[4];
@@ -203,7 +203,7 @@ _mesa_TexGeniv(GLenum coord, GLenum pname, const GLint *params )
 }
 
 
-static void GLAPIENTRY
+void GLAPIENTRY
 _mesa_TexGend(GLenum coord, GLenum pname, GLdouble param )
 {
    GLfloat p[4];
@@ -212,7 +212,6 @@ _mesa_TexGend(GLenum coord, GLenum pname, GLdouble param )
    _mesa_TexGenfv( coord, pname, p );
 }
 
-#if FEATURE_ES1
 
 void GLAPIENTRY
 _es_GetTexGenfv(GLenum coord, GLenum pname, GLfloat *params)
@@ -250,9 +249,8 @@ _es_TexGenfv(GLenum coord, GLenum pname, const GLfloat *params)
    _mesa_TexGenfv(GL_R, pname, params);
 }
 
-#endif
 
-static void GLAPIENTRY
+void GLAPIENTRY
 _mesa_TexGendv(GLenum coord, GLenum pname, const GLdouble *params )
 {
    GLfloat p[4];
@@ -290,7 +288,7 @@ _mesa_TexGeni( GLenum coord, GLenum pname, GLint param )
 
 
 
-static void GLAPIENTRY
+void GLAPIENTRY
 _mesa_GetTexGendv( GLenum coord, GLenum pname, GLdouble *params )
 {
    struct gl_texture_unit *texUnit;
@@ -354,14 +352,14 @@ _mesa_GetTexGenfv( GLenum coord, GLenum pname, GLfloat *params )
       params[0] = ENUM_TO_FLOAT(texgen->Mode);
       break;
    case GL_OBJECT_PLANE:
-      if (ctx->API != API_OPENGL) {
+      if (ctx->API != API_OPENGL_COMPAT) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glGetTexGenfv(param)" );
          return;
       }
       COPY_4V(params, texgen->ObjectPlane);
       break;
    case GL_EYE_PLANE:
-      if (ctx->API != API_OPENGL) {
+      if (ctx->API != API_OPENGL_COMPAT) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glGetTexGenfv(param)" );
          return;
       }
@@ -400,7 +398,7 @@ _mesa_GetTexGeniv( GLenum coord, GLenum pname, GLint *params )
       params[0] = texgen->Mode;
       break;
    case GL_OBJECT_PLANE:
-      if (ctx->API != API_OPENGL) {
+      if (ctx->API != API_OPENGL_COMPAT) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glGetTexGeniv(param)" );
          return;
       }
@@ -410,7 +408,7 @@ _mesa_GetTexGeniv( GLenum coord, GLenum pname, GLint *params )
       params[3] = (GLint) texgen->ObjectPlane[3];
       break;
    case GL_EYE_PLANE:
-      if (ctx->API != API_OPENGL) {
+      if (ctx->API != API_OPENGL_COMPAT) {
          _mesa_error( ctx, GL_INVALID_ENUM, "glGetTexGeniv(param)" );
          return;
       }
@@ -422,19 +420,4 @@ _mesa_GetTexGeniv( GLenum coord, GLenum pname, GLint *params )
    default:
       _mesa_error( ctx, GL_INVALID_ENUM, "glGetTexGeniv(pname)" );
    }
-}
-
-
-void
-_mesa_init_texgen_dispatch(struct _glapi_table *disp)
-{
-   SET_GetTexGendv(disp, _mesa_GetTexGendv);
-   SET_GetTexGenfv(disp, _mesa_GetTexGenfv);
-   SET_GetTexGeniv(disp, _mesa_GetTexGeniv);
-   SET_TexGend(disp, _mesa_TexGend);
-   SET_TexGendv(disp, _mesa_TexGendv);
-   SET_TexGenf(disp, _mesa_TexGenf);
-   SET_TexGenfv(disp, _mesa_TexGenfv);
-   SET_TexGeni(disp, _mesa_TexGeni);
-   SET_TexGeniv(disp, _mesa_TexGeniv);
 }

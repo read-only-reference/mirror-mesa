@@ -90,6 +90,7 @@ _mesa_alloc_shared_state(struct gl_context *ctx)
    for (i = 0; i < NUM_TEXTURE_TARGETS; i++) {
       /* NOTE: the order of these enums matches the TEXTURE_x_INDEX values */
       static const GLenum targets[] = {
+         GL_TEXTURE_CUBE_MAP_ARRAY,
          GL_TEXTURE_BUFFER,
          GL_TEXTURE_2D_ARRAY_EXT,
          GL_TEXTURE_1D_ARRAY_EXT,
@@ -252,10 +253,11 @@ delete_framebuffer_cb(GLuint id, void *data, void *userData)
 static void
 delete_renderbuffer_cb(GLuint id, void *data, void *userData)
 {
+   struct gl_context *ctx = (struct gl_context *) userData;
    struct gl_renderbuffer *rb = (struct gl_renderbuffer *) data;
    rb->RefCount = 0;  /* see comment for FBOs above */
    if (rb->Delete)
-      rb->Delete(rb);
+      rb->Delete(ctx, rb);
 }
 
 

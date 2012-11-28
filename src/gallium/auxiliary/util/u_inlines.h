@@ -114,6 +114,22 @@ pipe_surface_reference(struct pipe_surface **ptr, struct pipe_surface *surf)
    *ptr = surf;
 }
 
+/**
+ * Similar to pipe_surface_reference() but always set the pointer to NULL
+ * and pass in an explicit context.  The explicit context avoids the problem
+ * of using a deleted context's surface_destroy() method when freeing a surface
+ * that's shared by multiple contexts.
+ */
+static INLINE void
+pipe_surface_release(struct pipe_context *pipe, struct pipe_surface **ptr)
+{
+   if (pipe_reference_described(&(*ptr)->reference, NULL,
+                                (debug_reference_descriptor)debug_describe_surface))
+      pipe->surface_destroy(pipe, *ptr);
+   *ptr = NULL;
+}
+
+
 static INLINE void
 pipe_resource_reference(struct pipe_resource **ptr, struct pipe_resource *tex)
 {
@@ -522,6 +538,9 @@ util_pipe_tex_to_tgsi_tex(enum pipe_texture_target pipe_tex_target,
    case PIPE_TEXTURE_2D_ARRAY:
       return nr_samples > 1 ? TGSI_TEXTURE_2D_ARRAY_MSAA :
                               TGSI_TEXTURE_2D_ARRAY;
+
+   case PIPE_TEXTURE_CUBE_ARRAY:
+      return TGSI_TEXTURE_CUBE_ARRAY;
 
    default:
       assert(0 && "unexpected texture target");

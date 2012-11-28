@@ -72,8 +72,6 @@ static void brw_destroy_context( struct intel_context *intel )
    brw_destroy_state(brw);
    brw_draw_destroy( brw );
 
-   ralloc_free(brw->wm.compile_data);
-
    dri_bo_release(&brw->curbe.curbe_bo);
    dri_bo_release(&brw->vs.const_bo);
    dri_bo_release(&brw->wm.const_bo);
@@ -196,7 +194,6 @@ static void brw_new_batch( struct intel_context *intel )
     */
    brw->sol.offset_0_batch_start = brw->sol.svbi_0_starting_index;
 
-   brw->vb.nr_current_buffers = 0;
    brw->ib.type = -1;
 
    /* Mark that the current program cache BO has been used by the GPU.

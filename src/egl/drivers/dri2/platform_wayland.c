@@ -97,6 +97,16 @@ static struct wl_buffer_listener wl_buffer_listener = {
    wl_buffer_release
 };
 
+static void
+resize_callback(struct wl_egl_window *wl_win, void *data)
+{
+   struct dri2_egl_surface *dri2_surf = data;
+   struct dri2_egl_display *dri2_dpy =
+      dri2_egl_display(dri2_surf->base.Resource.Display);
+
+   (*dri2_dpy->flush->invalidate)(dri2_surf->dri_drawable);
+}
+
 /**
  * Called via eglCreateWindowSurface(), drv->API.CreateWindowSurface().
  */
@@ -141,6 +151,9 @@ dri2_create_surface(_EGLDriver *drv, _EGLDisplay *disp, EGLint type,
    switch (type) {
    case EGL_WINDOW_BIT:
       dri2_surf->wl_win = (struct wl_egl_window *) window;
+
+      dri2_surf->wl_win->private = dri2_surf;
+      dri2_surf->wl_win->resize_callback = resize_callback;
 
       dri2_surf->base.Width =  -1;
       dri2_surf->base.Height = -1;
@@ -211,6 +224,15 @@ dri2_destroy_surface(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *surf)
    if (dri2_surf->third_buffer) {
       dri2_dpy->dri2->releaseBuffer(dri2_dpy->dri_screen,
                                     dri2_surf->third_buffer);
+   }
+
+   if (dri2_surf->frame_callback)
+      wl_callback_destroy(dri2_surf->frame_callback);
+
+
+   if (dri2_surf->base.Type == EGL_WINDOW_BIT) {
+      dri2_surf->wl_win->private = NULL;
+      dri2_surf->wl_win->resize_callback = NULL;
    }
 
    free(surf);
@@ -397,6 +419,9 @@ dri2_get_buffers_with_format(__DRIdrawable * driDrawable,
    struct dri2_egl_display *dri2_dpy =
       dri2_egl_display(dri2_surf->base.Resource.Display);
    int i;
+
+   /* There might be a buffer release already queued that wasn't processed */
+   wl_display_dispatch_queue_pending(dri2_dpy->wl_dpy, dri2_dpy->wl_queue);
 
    if (dri2_surf->base.Type == EGL_WINDOW_BIT &&
        (dri2_surf->base.Width != dri2_surf->wl_win->width || 

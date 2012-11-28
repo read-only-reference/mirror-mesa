@@ -101,72 +101,6 @@ brw_compute_barycentric_interp_modes(struct brw_context *brw,
    return barycentric_interp_modes;
 }
 
-
-void
-brw_wm_payload_setup(struct brw_context *brw,
-		     struct brw_wm_compile *c)
-{
-   struct intel_context *intel = &brw->intel;
-   bool uses_depth = (c->fp->program.Base.InputsRead &
-		      (1 << FRAG_ATTRIB_WPOS)) != 0;
-   unsigned barycentric_interp_modes = c->prog_data.barycentric_interp_modes;
-   int i;
-
-   if (intel->gen >= 6) {
-      /* R0-1: masks, pixel X/Y coordinates. */
-      c->nr_payload_regs = 2;
-      /* R2: only for 32-pixel dispatch.*/
-
-      /* R3-26: barycentric interpolation coordinates.  These appear in the
-       * same order that they appear in the brw_wm_barycentric_interp_mode
-       * enum.  Each set of coordinates occupies 2 registers if dispatch width
-       * == 8 and 4 registers if dispatch width == 16.  Coordinates only
-       * appear if they were enabled using the "Barycentric Interpolation
-       * Mode" bits in WM_STATE.
-       */
-      for (i = 0; i < BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT; ++i) {
-         if (barycentric_interp_modes & (1 << i)) {
-            c->barycentric_coord_reg[i] = c->nr_payload_regs;
-            c->nr_payload_regs += 2;
-            if (c->dispatch_width == 16) {
-               c->nr_payload_regs += 2;
-            }
-         }
-      }
-
-      /* R27: interpolated depth if uses source depth */
-      if (uses_depth) {
-	 c->source_depth_reg = c->nr_payload_regs;
-	 c->nr_payload_regs++;
-	 if (c->dispatch_width == 16) {
-	    /* R28: interpolated depth if not 8-wide. */
-	    c->nr_payload_regs++;
-	 }
-      }
-      /* R29: interpolated W set if GEN6_WM_USES_SOURCE_W.
-       */
-      if (uses_depth) {
-	 c->source_w_reg = c->nr_payload_regs;
-	 c->nr_payload_regs++;
-	 if (c->dispatch_width == 16) {
-	    /* R30: interpolated W if not 8-wide. */
-	    c->nr_payload_regs++;
-	 }
-      }
-      /* R31: MSAA position offsets. */
-      /* R32-: bary for 32-pixel. */
-      /* R58-59: interp W for 32-pixel. */
-
-      if (c->fp->program.Base.OutputsWritten &
-	  BITFIELD64_BIT(FRAG_RESULT_DEPTH)) {
-	 c->source_depth_to_render_target = true;
-	 c->computes_depth = true;
-      }
-   } else {
-      brw_wm_lookup_iz(intel, c);
-   }
-}
-
 bool
 brw_wm_prog_data_compare(const void *in_a, const void *in_b,
                          int aux_size, const void *in_key)
@@ -215,53 +149,32 @@ bool do_wm_prog(struct brw_context *brw,
    if (prog)
       fs = prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
 
-   c = brw->wm.compile_data;
-   if (c == NULL) {
-      brw->wm.compile_data = rzalloc(NULL, struct brw_wm_compile);
-      c = brw->wm.compile_data;
-      if (c == NULL) {
-         /* Ouch - big out of memory problem.  Can't continue
-          * without triggering a segfault, no way to signal,
-          * so just return.
-          */
-         return false;
-      }
-   } else {
-      memset(c, 0, sizeof(*brw->wm.compile_data));
-   }
+   c = rzalloc(NULL, struct brw_wm_compile);
 
    /* Allocate the references to the uniforms that will end up in the
     * prog_data associated with the compiled program, and which will be freed
     * by the state cache.
     */
+   int param_count;
    if (fs) {
-      int param_count = fs->num_uniform_components;
-      /* The backend also sometimes adds params for texture size. */
-      param_count += 2 * BRW_MAX_TEX_UNIT;
-
-      c->prog_data.param = rzalloc_array(c, const float *, param_count);
-      c->prog_data.pull_param = rzalloc_array(c, const float *, param_count);
+      param_count = fs->num_uniform_components;
    } else {
-      /* brw_wm_pass0.c will also add references to 0.0 and 1.0 which are
-       * uploaded as push parameters.
-       */
-      int param_count = (fp->program.Base.Parameters->NumParameters + 2) * 4;
-      c->prog_data.param = rzalloc_array(c, const float *, param_count);
-      /* The old backend never does pull constants. */
-      c->prog_data.pull_param = NULL;
+      param_count = fp->program.Base.Parameters->NumParameters * 4;
    }
+   /* The backend also sometimes adds params for texture size. */
+   param_count += 2 * BRW_MAX_TEX_UNIT;
+   c->prog_data.param = rzalloc_array(NULL, const float *, param_count);
+   c->prog_data.pull_param = rzalloc_array(NULL, const float *, param_count);
 
    memcpy(&c->key, key, sizeof(*key));
-
-   c->fp = fp;
-
-   brw_init_compile(brw, &c->func, c);
 
    c->prog_data.barycentric_interp_modes =
       brw_compute_barycentric_interp_modes(brw, c->key.flat_shade,
                                            &fp->program);
 
-   brw_wm_fs_emit(brw, c, prog);
+   program = brw_wm_fs_emit(brw, c, &fp->program, prog, &program_size);
+   if (program == NULL)
+      return false;
 
    /* Scratch space is used for register spilling */
    if (c->last_scratch) {
@@ -278,15 +191,13 @@ bool do_wm_prog(struct brw_context *brw,
    if (unlikely(INTEL_DEBUG & DEBUG_WM))
       fprintf(stderr, "\n");
 
-   /* get the program
-    */
-   program = brw_get_program(&c->func, &program_size);
-
    brw_upload_cache(&brw->cache, BRW_WM_PROG,
 		    &c->key, sizeof(c->key),
 		    program, program_size,
 		    &c->prog_data, sizeof(c->prog_data),
 		    &brw->wm.prog_offset, &brw->wm.prog_data);
+
+   ralloc_free(c);
 
    return true;
 }
@@ -361,6 +272,7 @@ brw_wm_debug_recompile(struct brw_context *brw,
    found |= key_debug("depth statistics", old_key->stats_wm, key->stats_wm);
    found |= key_debug("flat shading", old_key->flat_shade, key->flat_shade);
    found |= key_debug("number of color buffers", old_key->nr_color_regions, key->nr_color_regions);
+   found |= key_debug("sample alpha to coverage", old_key->sample_alpha_to_coverage, key->sample_alpha_to_coverage);
    found |= key_debug("rendering to FBO", old_key->render_to_fbo, key->render_to_fbo);
    found |= key_debug("fragment color clamping", old_key->clamp_fragment_color, key->clamp_fragment_color);
    found |= key_debug("line smoothing", old_key->line_aa, key->line_aa);

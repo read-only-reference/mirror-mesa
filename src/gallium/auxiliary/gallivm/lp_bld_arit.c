@@ -116,7 +116,12 @@ lp_build_min_simple(struct lp_build_context *bld,
          }
       }
    }
-   else if (util_cpu_caps.has_sse2 && type.length >= 2) {
+   else if (type.floating && util_cpu_caps.has_altivec) {
+      if (type.width == 32 && type.length == 4) {
+         intrinsic = "llvm.ppc.altivec.vminfp";
+         intr_size = 128;
+      }
+   } else if (util_cpu_caps.has_sse2 && type.length >= 2) {
       intr_size = 128;
       if ((type.width == 8 || type.width == 16) &&
           (type.width * type.length <= 64) &&
@@ -144,6 +149,27 @@ lp_build_min_simple(struct lp_build_context *bld,
             intrinsic = "llvm.x86.sse41.pminsd";
          }
       }
+   } else if (util_cpu_caps.has_altivec) {
+     intr_size = 128;
+     if (type.width == 8) {
+       if (!type.sign) {
+         intrinsic = "llvm.ppc.altivec.vminub";
+       } else {
+         intrinsic = "llvm.ppc.altivec.vminsb";
+       }
+     } else if (type.width == 16) {
+       if (!type.sign) {
+         intrinsic = "llvm.ppc.altivec.vminuh";
+       } else {
+         intrinsic = "llvm.ppc.altivec.vminsh";
+       }
+     } else if (type.width == 32) {
+       if (!type.sign) {
+         intrinsic = "llvm.ppc.altivec.vminuw";
+       } else {
+         intrinsic = "llvm.ppc.altivec.vminsw";
+       }
+     }
    }
 
    if(intrinsic) {
@@ -206,7 +232,12 @@ lp_build_max_simple(struct lp_build_context *bld,
          }
       }
    }
-   else if (util_cpu_caps.has_sse2 && type.length >= 2) {
+   else if (type.floating && util_cpu_caps.has_altivec) {
+      if (type.width == 32 || type.length == 4) {
+         intrinsic = "llvm.ppc.altivec.vmaxfp";
+         intr_size = 128;
+      }
+   } else if (util_cpu_caps.has_sse2 && type.length >= 2) {
       intr_size = 128;
       if ((type.width == 8 || type.width == 16) &&
           (type.width * type.length <= 64) &&
@@ -235,6 +266,27 @@ lp_build_max_simple(struct lp_build_context *bld,
             intrinsic = "llvm.x86.sse41.pmaxsd";
          }
       }
+   } else if (util_cpu_caps.has_altivec) {
+     intr_size = 128;
+     if (type.width == 8) {
+       if (!type.sign) {
+         intrinsic = "llvm.ppc.altivec.vmaxub";
+       } else {
+         intrinsic = "llvm.ppc.altivec.vmaxsb";
+       }
+     } else if (type.width == 16) {
+       if (!type.sign) {
+         intrinsic = "llvm.ppc.altivec.vmaxuh";
+       } else {
+         intrinsic = "llvm.ppc.altivec.vmaxsh";
+       }
+     } else if (type.width == 32) {
+       if (!type.sign) {
+         intrinsic = "llvm.ppc.altivec.vmaxuw";
+       } else {
+         intrinsic = "llvm.ppc.altivec.vmaxsw";
+       }
+     }
    }
 
    if(intrinsic) {
@@ -313,13 +365,19 @@ lp_build_add(struct lp_build_context *bld,
       if(a == bld->one || b == bld->one)
         return bld->one;
 
-      if(util_cpu_caps.has_sse2 &&
-         type.width * type.length == 128 &&
-         !type.floating && !type.fixed) {
-         if(type.width == 8)
-            intrinsic = type.sign ? "llvm.x86.sse2.padds.b" : "llvm.x86.sse2.paddus.b";
-         if(type.width == 16)
-            intrinsic = type.sign ? "llvm.x86.sse2.padds.w" : "llvm.x86.sse2.paddus.w";
+      if (type.width * type.length == 128 &&
+          !type.floating && !type.fixed) {
+         if(util_cpu_caps.has_sse2) {
+           if(type.width == 8)
+             intrinsic = type.sign ? "llvm.x86.sse2.padds.b" : "llvm.x86.sse2.paddus.b";
+           if(type.width == 16)
+             intrinsic = type.sign ? "llvm.x86.sse2.padds.w" : "llvm.x86.sse2.paddus.w";
+         } else if (util_cpu_caps.has_altivec) {
+           if(type.width == 8)
+              intrinsic = type.sign ? "llvm.ppc.altivec.vaddsbs" : "llvm.ppc.altivec.vaddubs";
+           if(type.width == 16)
+              intrinsic = type.sign ? "llvm.ppc.altivec.vaddsws" : "llvm.ppc.altivec.vadduws";
+         }
       }
    
       if(intrinsic)
@@ -584,13 +642,19 @@ lp_build_sub(struct lp_build_context *bld,
       if(b == bld->one)
         return bld->zero;
 
-      if(util_cpu_caps.has_sse2 &&
-         type.width * type.length == 128 &&
-         !type.floating && !type.fixed) {
-         if(type.width == 8)
-            intrinsic = type.sign ? "llvm.x86.sse2.psubs.b" : "llvm.x86.sse2.psubus.b";
-         if(type.width == 16)
-            intrinsic = type.sign ? "llvm.x86.sse2.psubs.w" : "llvm.x86.sse2.psubus.w";
+      if (type.width * type.length == 128 &&
+          !type.floating && !type.fixed) {
+         if (util_cpu_caps.has_sse2) {
+           if(type.width == 8)
+              intrinsic = type.sign ? "llvm.x86.sse2.psubs.b" : "llvm.x86.sse2.psubus.b";
+           if(type.width == 16)
+              intrinsic = type.sign ? "llvm.x86.sse2.psubs.w" : "llvm.x86.sse2.psubus.w";
+         } else if (util_cpu_caps.has_altivec) {
+           if(type.width == 8)
+              intrinsic = type.sign ? "llvm.ppc.altivec.vsubsbs" : "llvm.ppc.altivec.vsububs";
+           if(type.width == 16)
+              intrinsic = type.sign ? "llvm.ppc.altivec.vsubsws" : "llvm.ppc.altivec.vsubuws";
+         }
       }
    
       if(intrinsic)
@@ -691,6 +755,35 @@ lp_build_mul_u8n(struct gallivm_state *gallivm,
    return ab;
 }
 
+/**
+ * Normalized 16bit multiplication.
+ *
+ * Utilises same principle as above code.
+ */
+static LLVMValueRef
+lp_build_mul_u16n(struct gallivm_state *gallivm,
+                 struct lp_type i32_type,
+                 LLVMValueRef a, LLVMValueRef b)
+{
+   LLVMBuilderRef builder = gallivm->builder;
+   LLVMValueRef c16;
+   LLVMValueRef ab;
+
+   assert(!i32_type.floating);
+   assert(lp_check_value(i32_type, a));
+   assert(lp_check_value(i32_type, b));
+
+   c16 = lp_build_const_int_vec(gallivm, i32_type, 16);
+
+   /* ab/65535 ~= (ab + (ab >> 16) + 0x8000) >> 16 */
+   ab = LLVMBuildMul(builder, a, b, "");
+   ab = LLVMBuildAdd(builder, ab, LLVMBuildLShr(builder, ab, c16, ""), "");
+   ab = LLVMBuildAdd(builder, ab, lp_build_const_int_vec(gallivm, i32_type, 0x8000), "");
+
+   ab = LLVMBuildLShr(builder, ab, c16, "");
+
+   return ab;
+}
 
 /**
  * Generate a * b
@@ -733,6 +826,22 @@ lp_build_mul(struct lp_build_context *bld,
 
          ab = lp_build_pack2(bld->gallivm, i16_type, type, abl, abh);
          
+         return ab;
+      }
+
+      if(type.width == 16) {
+         struct lp_type i32_type = lp_wider_type(type);
+         LLVMValueRef al, ah, bl, bh, abl, abh, ab;
+
+         lp_build_unpack2(bld->gallivm, type, i32_type, a, &al, &ah);
+         lp_build_unpack2(bld->gallivm, type, i32_type, b, &bl, &bh);
+
+         /* PMULLW, PSRLW, PADDW */
+         abl = lp_build_mul_u16n(bld->gallivm, i32_type, al, bl);
+         abh = lp_build_mul_u16n(bld->gallivm, i32_type, ah, bh);
+
+         ab = lp_build_pack2(bld->gallivm, i32_type, type, abl, abh);
+
          return ab;
       }
 
@@ -1261,24 +1370,26 @@ lp_build_int_to_float(struct lp_build_context *bld,
 }
 
 static boolean
-sse41_rounding_available(const struct lp_type type)
+arch_rounding_available(const struct lp_type type)
 {
    if ((util_cpu_caps.has_sse4_1 &&
        (type.length == 1 || type.width*type.length == 128)) ||
        (util_cpu_caps.has_avx && type.width*type.length == 256))
       return TRUE;
+   else if ((util_cpu_caps.has_altivec &&
+            (type.width == 32 && type.length == 4)))
+      return TRUE;
 
    return FALSE;
 }
 
-enum lp_build_round_sse41_mode
+enum lp_build_round_mode
 {
-   LP_BUILD_ROUND_SSE41_NEAREST = 0,
-   LP_BUILD_ROUND_SSE41_FLOOR = 1,
-   LP_BUILD_ROUND_SSE41_CEIL = 2,
-   LP_BUILD_ROUND_SSE41_TRUNCATE = 3
+   LP_BUILD_ROUND_NEAREST = 0,
+   LP_BUILD_ROUND_FLOOR = 1,
+   LP_BUILD_ROUND_CEIL = 2,
+   LP_BUILD_ROUND_TRUNCATE = 3
 };
-
 
 /**
  * Helper for SSE4.1's ROUNDxx instructions.
@@ -1289,7 +1400,7 @@ enum lp_build_round_sse41_mode
 static INLINE LLVMValueRef
 lp_build_round_sse41(struct lp_build_context *bld,
                      LLVMValueRef a,
-                     enum lp_build_round_sse41_mode mode)
+                     enum lp_build_round_mode mode)
 {
    LLVMBuilderRef builder = bld->gallivm->builder;
    const struct lp_type type = bld->type;
@@ -1427,6 +1538,51 @@ lp_build_iround_nearest_sse2(struct lp_build_context *bld,
 }
 
 
+/*
+ */
+static INLINE LLVMValueRef
+lp_build_round_altivec(struct lp_build_context *bld,
+                       LLVMValueRef a,
+                       enum lp_build_round_mode mode)
+{
+   LLVMBuilderRef builder = bld->gallivm->builder;
+   const struct lp_type type = bld->type;
+   const char *intrinsic = NULL;
+
+   assert(type.floating);
+
+   assert(lp_check_value(type, a));
+   assert(util_cpu_caps.has_altivec);
+
+   switch (mode) {
+   case LP_BUILD_ROUND_NEAREST:
+      intrinsic = "llvm.ppc.altivec.vrfin";
+      break;
+   case LP_BUILD_ROUND_FLOOR:
+      intrinsic = "llvm.ppc.altivec.vrfim";
+      break;
+   case LP_BUILD_ROUND_CEIL:
+      intrinsic = "llvm.ppc.altivec.vrfip";
+      break;
+   case LP_BUILD_ROUND_TRUNCATE:
+      intrinsic = "llvm.ppc.altivec.vrfiz";
+      break;
+   }
+
+   return lp_build_intrinsic_unary(builder, intrinsic, bld->vec_type, a);
+}
+
+static INLINE LLVMValueRef
+lp_build_round_arch(struct lp_build_context *bld,
+                    LLVMValueRef a,
+                    enum lp_build_round_mode mode)
+{
+   if (util_cpu_caps.has_sse4_1)
+     return lp_build_round_sse41(bld, a, mode);
+   else /* (util_cpu_caps.has_altivec) */
+     return lp_build_round_altivec(bld, a, mode);
+}
+
 /**
  * Return the integer part of a float (vector) value (== round toward zero).
  * The returned value is a float (vector).
@@ -1442,8 +1598,8 @@ lp_build_trunc(struct lp_build_context *bld,
    assert(type.floating);
    assert(lp_check_value(type, a));
 
-   if (sse41_rounding_available(type)) {
-      return lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_TRUNCATE);
+   if (arch_rounding_available(type)) {
+      return lp_build_round_arch(bld, a, LP_BUILD_ROUND_TRUNCATE);
    }
    else {
       LLVMTypeRef vec_type = lp_build_vec_type(bld->gallivm, type);
@@ -1472,8 +1628,8 @@ lp_build_round(struct lp_build_context *bld,
    assert(type.floating);
    assert(lp_check_value(type, a));
 
-   if (sse41_rounding_available(type)) {
-      return lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_NEAREST);
+   if (arch_rounding_available(type)) {
+      return lp_build_round_arch(bld, a, LP_BUILD_ROUND_NEAREST);
    }
    else {
       LLVMTypeRef vec_type = lp_build_vec_type(bld->gallivm, type);
@@ -1500,8 +1656,8 @@ lp_build_floor(struct lp_build_context *bld,
    assert(type.floating);
    assert(lp_check_value(type, a));
 
-   if (sse41_rounding_available(type)) {
-      return lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_FLOOR);
+   if (arch_rounding_available(type)) {
+      return lp_build_round_arch(bld, a, LP_BUILD_ROUND_FLOOR);
    }
    else {
       LLVMTypeRef vec_type = lp_build_vec_type(bld->gallivm, type);
@@ -1528,8 +1684,8 @@ lp_build_ceil(struct lp_build_context *bld,
    assert(type.floating);
    assert(lp_check_value(type, a));
 
-   if (sse41_rounding_available(type)) {
-      return lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_CEIL);
+   if (arch_rounding_available(type)) {
+      return lp_build_round_arch(bld, a, LP_BUILD_ROUND_CEIL);
    }
    else {
       LLVMTypeRef vec_type = lp_build_vec_type(bld->gallivm, type);
@@ -1626,8 +1782,8 @@ lp_build_iround(struct lp_build_context *bld,
        (util_cpu_caps.has_avx && type.width == 32 && type.length == 8)) {
       return lp_build_iround_nearest_sse2(bld, a);
    }
-   if (sse41_rounding_available(type)) {
-      res = lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_NEAREST);
+   if (arch_rounding_available(type)) {
+      res = lp_build_round_arch(bld, a, LP_BUILD_ROUND_NEAREST);
    }
    else {
       LLVMValueRef half;
@@ -1678,8 +1834,8 @@ lp_build_ifloor(struct lp_build_context *bld,
 
    res = a;
    if (type.sign) {
-      if (sse41_rounding_available(type)) {
-         res = lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_FLOOR);
+      if (arch_rounding_available(type)) {
+         res = lp_build_round_arch(bld, a, LP_BUILD_ROUND_FLOOR);
       }
       else {
          /* Take the sign bit and add it to 1 constant */
@@ -1735,8 +1891,8 @@ lp_build_iceil(struct lp_build_context *bld,
    assert(type.floating);
    assert(lp_check_value(type, a));
 
-   if (sse41_rounding_available(type)) {
-      res = lp_build_round_sse41(bld, a, LP_BUILD_ROUND_SSE41_CEIL);
+   if (arch_rounding_available(type)) {
+      res = lp_build_round_arch(bld, a, LP_BUILD_ROUND_CEIL);
    }
    else {
       LLVMTypeRef vec_type = bld->vec_type;
@@ -1796,7 +1952,7 @@ lp_build_ifloor_fract(struct lp_build_context *bld,
    assert(type.floating);
    assert(lp_check_value(type, a));
 
-   if (sse41_rounding_available(type)) {
+   if (arch_rounding_available(type)) {
       /*
        * floor() is easier.
        */

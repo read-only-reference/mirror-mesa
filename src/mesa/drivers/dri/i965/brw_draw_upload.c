@@ -252,10 +252,28 @@ static GLuint get_surface_type( GLenum type, GLuint size,
          else {
             return ubyte_types_norm[size];
          }
+      /* See GL_ARB_vertex_type_2_10_10_10_rev.
+       * W/A: the hardware doesn't really support the formats we'd
+       * like to use here, so upload everything as UINT and fix
+       * it in the shader
+       */
+      case GL_INT_2_10_10_10_REV:
+      case GL_UNSIGNED_INT_2_10_10_10_REV:
+         assert(size == 4);
+         return BRW_SURFACEFORMAT_R10G10B10A2_UINT;
       default: assert(0); return 0;
-      }      
+      }
    }
    else {
+      /* See GL_ARB_vertex_type_2_10_10_10_rev.
+       * W/A: the hardware doesn't really support the formats we'd
+       * like to use here, so upload everything as UINT and fix
+       * it in the shader
+       */
+      if (type == GL_INT_2_10_10_10_REV || type == GL_UNSIGNED_INT_2_10_10_10_REV) {
+         assert(size == 4);
+         return BRW_SURFACEFORMAT_R10G10B10A2_UINT;
+      }
       assert(format == GL_RGBA); /* sanity check */
       switch (type) {
       case GL_DOUBLE: return double_types[size];
@@ -290,6 +308,11 @@ static GLuint get_size( GLenum type )
    case GL_UNSIGNED_SHORT: return sizeof(GLushort);
    case GL_UNSIGNED_BYTE: return sizeof(GLubyte);
    case GL_FIXED: return sizeof(GLuint);
+   /* packed formats: always have 4 components, and element size is
+    * 4 bytes, so pretend each component is 1 byte.
+    */
+   case GL_INT_2_10_10_10_REV: return sizeof(GLbyte);
+   case GL_UNSIGNED_INT_2_10_10_10_REV: return sizeof(GLubyte);
    default: assert(0); return 0;
    }
 }
@@ -311,13 +334,13 @@ copy_array_to_vbo_array(struct brw_context *brw,
 			struct brw_vertex_buffer *buffer,
 			GLuint dst_stride)
 {
-   if (min == -1) {
-      /* If we don't have computed min/max bounds, then this must be a use of
-       * the current attribute, which has a 0 stride.  Otherwise, we wouldn't
-       * know what data to upload.
-       */
-      assert(element->glarray->StrideB == 0);
+   const int src_stride = element->glarray->StrideB;
 
+   /* If the source stride is zero, we just want to upload the current
+    * attribute once and set the buffer's stride to 0.  There's no need
+    * to replicate it out.
+    */
+   if (src_stride == 0) {
       intel_upload_data(&brw->intel, element->glarray->Ptr,
                         element->element_size,
                         element->element_size,
@@ -327,7 +350,6 @@ copy_array_to_vbo_array(struct brw_context *brw,
       return;
    }
 
-   int src_stride = element->glarray->StrideB;
    const unsigned char *src = element->glarray->Ptr + min * src_stride;
    int count = max - min + 1;
    GLuint size = count * dst_stride;
@@ -358,8 +380,8 @@ static void brw_prepare_vertices(struct brw_context *brw)
    GLbitfield64 vs_inputs = brw->vs.prog_data->inputs_read;
    const unsigned char *ptr = NULL;
    GLuint interleaved = 0;
-   unsigned int min_index = brw->vb.min_index;
-   unsigned int max_index = brw->vb.max_index;
+   unsigned int min_index = brw->vb.min_index + brw->basevertex;
+   unsigned int max_index = brw->vb.max_index + brw->basevertex;
    int delta, i, j;
 
    struct brw_vertex_element *upload[VERT_ATTRIB_MAX];
@@ -536,34 +558,6 @@ static void brw_prepare_vertices(struct brw_context *brw)
       upload[i]->offset = 0;
    }
 
-   /* can we simply extend the current vb? */
-   if (j == brw->vb.nr_current_buffers) {
-      int delta = 0;
-      for (i = 0; i < j; i++) {
-	 int d;
-
-	 if (brw->vb.current_buffers[i].handle != brw->vb.buffers[i].bo->handle ||
-	     brw->vb.current_buffers[i].stride != brw->vb.buffers[i].stride ||
-	     brw->vb.current_buffers[i].step_rate != brw->vb.buffers[i].step_rate)
-	    break;
-
-	 d = brw->vb.buffers[i].offset - brw->vb.current_buffers[i].offset;
-	 if (d < 0)
-	    break;
-	 if (i == 0)
-	    delta = d / brw->vb.current_buffers[i].stride;
-	 if (delta * brw->vb.current_buffers[i].stride != d)
-	    break;
-      }
-
-      if (i == j) {
-	 brw->vb.start_vertex_bias += delta;
-	 while (--j >= 0)
-	    drm_intel_bo_unreference(brw->vb.buffers[j].bo);
-	 j = 0;
-      }
-   }
-
    brw->vb.nr_buffers = j;
 }
 
@@ -644,13 +638,7 @@ static void brw_emit_vertices(struct brw_context *brw)
 	 } else
 	    OUT_BATCH(0);
 	 OUT_BATCH(buffer->step_rate);
-
-	 brw->vb.current_buffers[i].handle = buffer->bo->handle;
-	 brw->vb.current_buffers[i].offset = buffer->offset;
-	 brw->vb.current_buffers[i].stride = buffer->stride;
-	 brw->vb.current_buffers[i].step_rate = buffer->step_rate;
       }
-      brw->vb.nr_current_buffers = i;
       ADVANCE_BATCH();
    }
 

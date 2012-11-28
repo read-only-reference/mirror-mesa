@@ -132,6 +132,93 @@ fs_inst::fs_inst(enum opcode opcode, fs_reg dst,
       assert(src[2].reg_offset >= 0);
 }
 
+#define ALU1(op)                                                        \
+   fs_inst *                                                            \
+   fs_visitor::op(fs_reg dst, fs_reg src0)                              \
+   {                                                                    \
+      return new(mem_ctx) fs_inst(BRW_OPCODE_##op, dst, src0);          \
+   }
+
+#define ALU2(op)                                                        \
+   fs_inst *                                                            \
+   fs_visitor::op(fs_reg dst, fs_reg src0, fs_reg src1)                 \
+   {                                                                    \
+      return new(mem_ctx) fs_inst(BRW_OPCODE_##op, dst, src0, src1);    \
+   }
+
+ALU1(NOT)
+ALU1(MOV)
+ALU1(FRC)
+ALU1(RNDD)
+ALU1(RNDE)
+ALU1(RNDZ)
+ALU2(ADD)
+ALU2(MUL)
+ALU2(MACH)
+ALU2(AND)
+ALU2(OR)
+ALU2(XOR)
+ALU2(SHL)
+ALU2(SHR)
+ALU2(ASR)
+
+/** Gen4 predicated IF. */
+fs_inst *
+fs_visitor::IF(uint32_t predicate)
+{
+   fs_inst *inst = new(mem_ctx) fs_inst(BRW_OPCODE_IF);
+   inst->predicate = predicate;
+   return inst;
+}
+
+/** Gen6+ IF with embedded comparison. */
+fs_inst *
+fs_visitor::IF(fs_reg src0, fs_reg src1, uint32_t condition)
+{
+   assert(intel->gen >= 6);
+   fs_inst *inst = new(mem_ctx) fs_inst(BRW_OPCODE_IF,
+                                        reg_null_d, src0, src1);
+   inst->conditional_mod = condition;
+   return inst;
+}
+
+/**
+ * CMP: Sets the low bit of the destination channels with the result
+ * of the comparison, while the upper bits are undefined, and updates
+ * the flag register with the packed 16 bits of the result.
+ */
+fs_inst *
+fs_visitor::CMP(fs_reg dst, fs_reg src0, fs_reg src1, uint32_t condition)
+{
+   fs_inst *inst;
+
+   /* Take the instruction:
+    *
+    * CMP null<d> src0<f> src1<f>
+    *
+    * Original gen4 does type conversion to the destination type before
+    * comparison, producing garbage results for floating point comparisons.
+    * gen5 does the comparison on the execution type (resolved source types),
+    * so dst type doesn't matter.  gen6 does comparison and then uses the
+    * result as if it was the dst type with no conversion, which happens to
+    * mostly work out for float-interpreted-as-int since our comparisons are
+    * for >0, =0, <0.
+    */
+   if (intel->gen == 4) {
+      dst.type = src0.type;
+      if (dst.file == FIXED_HW_REG)
+	 dst.fixed_hw_reg.type = dst.type;
+   }
+
+   resolve_ud_negate(&src0);
+   resolve_ud_negate(&src1);
+
+   inst = new(mem_ctx) fs_inst(BRW_OPCODE_CMP, dst, src0, src1);
+   inst->conditional_mod = condition;
+
+   return inst;
+}
+
 bool
 fs_inst::equals(fs_inst *inst)
 {
@@ -266,6 +353,24 @@ fs_reg::equals(const fs_reg &r) const
            imm.u == r.imm.u);
 }
 
+bool
+fs_reg::is_zero() const
+{
+   if (file != IMM)
+      return false;
+
+   return type == BRW_REGISTER_TYPE_F ? imm.f == 0.0 : imm.i == 0;
+}
+
+bool
+fs_reg::is_one() const
+{
+   if (file != IMM)
+      return false;
+
+   return type == BRW_REGISTER_TYPE_F ? imm.f == 1.0 : imm.i == 1;
+}
+
 int
 fs_visitor::type_size(const struct glsl_type *type)
 {
@@ -396,11 +501,11 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
    case SHADER_OPCODE_LOG2:
    case SHADER_OPCODE_SIN:
    case SHADER_OPCODE_COS:
-      return 1 * c->dispatch_width / 8;
+      return 1 * dispatch_width / 8;
    case SHADER_OPCODE_POW:
    case SHADER_OPCODE_INT_QUOTIENT:
    case SHADER_OPCODE_INT_REMAINDER:
-      return 2 * c->dispatch_width / 8;
+      return 2 * dispatch_width / 8;
    case SHADER_OPCODE_TEX:
    case FS_OPCODE_TXB:
    case SHADER_OPCODE_TXD:
@@ -600,15 +705,15 @@ fs_visitor::emit_fragcoord_interpolation(ir_variable *ir)
 
    /* gl_FragCoord.x */
    if (ir->pixel_center_integer) {
-      emit(BRW_OPCODE_MOV, wpos, this->pixel_x);
+      emit(MOV(wpos, this->pixel_x));
    } else {
-      emit(BRW_OPCODE_ADD, wpos, this->pixel_x, fs_reg(0.5f));
+      emit(ADD(wpos, this->pixel_x, fs_reg(0.5f)));
    }
    wpos.reg_offset++;
 
    /* gl_FragCoord.y */
    if (!flip && ir->pixel_center_integer) {
-      emit(BRW_OPCODE_MOV, wpos, this->pixel_y);
+      emit(MOV(wpos, this->pixel_y));
    } else {
       fs_reg pixel_y = this->pixel_y;
       float offset = (ir->pixel_center_integer ? 0.0 : 0.5);
@@ -618,14 +723,13 @@ fs_visitor::emit_fragcoord_interpolation(ir_variable *ir)
 	 offset += c->key.drawable_height - 1.0;
       }
 
-      emit(BRW_OPCODE_ADD, wpos, pixel_y, fs_reg(offset));
+      emit(ADD(wpos, pixel_y, fs_reg(offset)));
    }
    wpos.reg_offset++;
 
    /* gl_FragCoord.z */
    if (intel->gen >= 6) {
-      emit(BRW_OPCODE_MOV, wpos,
-	   fs_reg(brw_vec8_grf(c->source_depth_reg, 0)));
+      emit(MOV(wpos, fs_reg(brw_vec8_grf(c->source_depth_reg, 0))));
    } else {
       emit(FS_OPCODE_LINTERP, wpos,
            this->delta_x[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC],
@@ -771,10 +875,7 @@ fs_visitor::emit_frontfacing_interpolation(ir_variable *ir)
       /* bit 31 is "primitive is back face", so checking < (1 << 31) gives
        * us front face
        */
-      fs_inst *inst = emit(BRW_OPCODE_CMP, *reg,
-			   fs_reg(r1_6ud),
-			   fs_reg(1u << 31));
-      inst->conditional_mod = BRW_CONDITIONAL_L;
+      emit(CMP(*reg, fs_reg(r1_6ud), fs_reg(1u << 31), BRW_CONDITIONAL_L));
       emit(BRW_OPCODE_AND, *reg, *reg, fs_reg(1u));
    }
 
@@ -818,7 +919,7 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src)
 
    if (intel->gen < 6) {
       inst->base_mrf = 2;
-      inst->mlen = c->dispatch_width / 8;
+      inst->mlen = dispatch_width / 8;
    }
 
    return inst;
@@ -881,7 +982,7 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1)
       inst = emit(opcode, dst, op0, reg_null_f);
 
       inst->base_mrf = base_mrf;
-      inst->mlen = 2 * c->dispatch_width / 8;
+      inst->mlen = 2 * dispatch_width / 8;
    }
    return inst;
 }
@@ -894,7 +995,7 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1)
 void
 fs_visitor::setup_paramvalues_refs()
 {
-   if (c->dispatch_width != 8)
+   if (dispatch_width != 8)
       return;
 
    /* Set up the pointers to ParamValues now that that array is finalized. */
@@ -909,7 +1010,7 @@ void
 fs_visitor::assign_curb_setup()
 {
    c->prog_data.curb_read_length = ALIGN(c->prog_data.nr_params, 8) / 8;
-   if (c->dispatch_width == 8) {
+   if (dispatch_width == 8) {
       c->prog_data.first_curbe_grf = c->nr_payload_regs;
    } else {
       c->prog_data.first_curbe_grf_16 = c->nr_payload_regs;
@@ -1102,10 +1203,95 @@ fs_visitor::split_virtual_grfs()
    this->live_intervals_valid = false;
 }
 
+/**
+ * Remove unused virtual GRFs and compact the virtual_grf_* arrays.
+ *
+ * During code generation, we create tons of temporary variables, many of
+ * which get immediately killed and are never used again.  Yet, in later
+ * optimization and analysis passes, such as compute_live_intervals, we need
+ * to loop over all the virtual GRFs.  Compacting them can save a lot of
+ * overhead.
+ */
+void
+fs_visitor::compact_virtual_grfs()
+{
+   /* Mark which virtual GRFs are used, and count how many. */
+   int remap_table[this->virtual_grf_count];
+   memset(remap_table, -1, sizeof(remap_table));
+
+   foreach_list(node, &this->instructions) {
+      const fs_inst *inst = (const fs_inst *) node;
+
+      if (inst->dst.file == GRF)
+         remap_table[inst->dst.reg] = 0;
+
+      for (int i = 0; i < 3; i++) {
+         if (inst->src[i].file == GRF)
+            remap_table[inst->src[i].reg] = 0;
+      }
+   }
+
+   /* In addition to registers used in instructions, fs_visitor keeps
+    * direct references to certain special values which must be patched:
+    */
+   fs_reg *special[] = {
+      &frag_depth, &pixel_x, &pixel_y, &pixel_w, &wpos_w, &dual_src_output,
+      &outputs[0], &outputs[1], &outputs[2], &outputs[3],
+      &outputs[4], &outputs[5], &outputs[6], &outputs[7],
+      &delta_x[0], &delta_x[1], &delta_x[2],
+      &delta_x[3], &delta_x[4], &delta_x[5],
+      &delta_y[0], &delta_y[1], &delta_y[2],
+      &delta_y[3], &delta_y[4], &delta_y[5],
+   };
+   STATIC_ASSERT(BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT == 6);
+   STATIC_ASSERT(BRW_MAX_DRAW_BUFFERS == 8);
+
+   /* Treat all special values as used, to be conservative */
+   for (unsigned i = 0; i < ARRAY_SIZE(special); i++) {
+      if (special[i]->file == GRF)
+	 remap_table[special[i]->reg] = 0;
+   }
+
+   /* Compact the GRF arrays. */
+   int new_index = 0;
+   for (int i = 0; i < this->virtual_grf_count; i++) {
+      if (remap_table[i] != -1) {
+         remap_table[i] = new_index;
+         virtual_grf_sizes[new_index] = virtual_grf_sizes[i];
+         if (live_intervals_valid) {
+            virtual_grf_use[new_index] = virtual_grf_use[i];
+            virtual_grf_def[new_index] = virtual_grf_def[i];
+         }
+         ++new_index;
+      }
+   }
+
+   this->virtual_grf_count = new_index;
+
+   /* Patch all the instructions to use the newly renumbered registers */
+   foreach_list(node, &this->instructions) {
+      fs_inst *inst = (fs_inst *) node;
+
+      if (inst->dst.file == GRF)
+         inst->dst.reg = remap_table[inst->dst.reg];
+
+      for (int i = 0; i < 3; i++) {
+         if (inst->src[i].file == GRF)
+            inst->src[i].reg = remap_table[inst->src[i].reg];
+      }
+   }
+
+   /* Patch all the references to special values */
+   for (unsigned i = 0; i < ARRAY_SIZE(special); i++) {
+      if (special[i]->file == GRF && remap_table[special[i]->reg] != -1)
+	 special[i]->reg = remap_table[special[i]->reg];
+   }
+}
+
 bool
 fs_visitor::remove_dead_constants()
 {
-   if (c->dispatch_width == 8) {
+   if (dispatch_width == 8) {
       this->params_remap = ralloc_array(mem_ctx, int, c->prog_data.nr_params);
 
       for (unsigned int i = 0; i < c->prog_data.nr_params; i++)
@@ -1199,7 +1385,7 @@ fs_visitor::setup_pull_constants()
    if (c->prog_data.nr_params <= max_uniform_components)
       return;
 
-   if (c->dispatch_width == 16) {
+   if (dispatch_width == 16) {
       fail("Pull constants not supported in 16-wide\n");
       return;
    }
@@ -1253,8 +1439,6 @@ fs_visitor::opt_algebraic()
 {
    bool progress = false;
 
-   calculate_live_intervals();
-
    foreach_list(node, &this->instructions) {
       fs_inst *inst = (fs_inst *)node;
 
@@ -1264,8 +1448,7 @@ fs_visitor::opt_algebraic()
 	    continue;
 
 	 /* a * 1.0 = a */
-	 if (inst->src[1].type == BRW_REGISTER_TYPE_F &&
-	     inst->src[1].imm.f == 1.0) {
+	 if (inst->src[1].is_one()) {
 	    inst->opcode = BRW_OPCODE_MOV;
 	    inst->src[1] = reg_undef;
 	    progress = true;
@@ -1273,10 +1456,9 @@ fs_visitor::opt_algebraic()
 	 }
 
          /* a * 0.0 = 0.0 */
-         if (inst->src[1].type == BRW_REGISTER_TYPE_F &&
-             inst->src[1].imm.f == 0.0) {
+         if (inst->src[1].is_zero()) {
             inst->opcode = BRW_OPCODE_MOV;
-            inst->src[0] = fs_reg(0.0f);
+            inst->src[0] = inst->src[1];
             inst->src[1] = reg_undef;
             progress = true;
             break;
@@ -1288,8 +1470,7 @@ fs_visitor::opt_algebraic()
             continue;
 
          /* a + 0.0 = a */
-         if (inst->src[1].type == BRW_REGISTER_TYPE_F &&
-             inst->src[1].imm.f == 0.0) {
+         if (inst->src[1].is_zero()) {
             inst->opcode = BRW_OPCODE_MOV;
             inst->src[1] = reg_undef;
             progress = true;
@@ -1545,7 +1726,7 @@ fs_visitor::compute_to_mrf()
       int mrf_high;
       if (inst->dst.reg & BRW_MRF_COMPR4) {
 	 mrf_high = mrf_low + 4;
-      } else if (c->dispatch_width == 16 &&
+      } else if (dispatch_width == 16 &&
 		 (!inst->force_uncompressed && !inst->force_sechalf)) {
 	 mrf_high = mrf_low + 1;
       } else {
@@ -1650,7 +1831,7 @@ fs_visitor::compute_to_mrf()
 
 	    if (scan_inst->dst.reg & BRW_MRF_COMPR4) {
 	       scan_mrf_high = scan_mrf_low + 4;
-	    } else if (c->dispatch_width == 16 &&
+	    } else if (dispatch_width == 16 &&
 		       (!scan_inst->force_uncompressed &&
 			!scan_inst->force_sechalf)) {
 	       scan_mrf_high = scan_mrf_low + 1;
@@ -1701,7 +1882,7 @@ fs_visitor::remove_duplicate_mrf_writes()
    bool progress = false;
 
    /* Need to update the MRF tracking for compressed instructions. */
-   if (c->dispatch_width == 16)
+   if (dispatch_width == 16)
       return false;
 
    memset(last_mrf_move, 0, sizeof(last_mrf_move));
@@ -1769,6 +1950,95 @@ fs_visitor::remove_duplicate_mrf_writes()
    return progress;
 }
 
+void
+fs_visitor::dump_instruction(fs_inst *inst)
+{
+   if (inst->opcode < ARRAY_SIZE(opcode_descs) &&
+       opcode_descs[inst->opcode].name) {
+      printf("%s", opcode_descs[inst->opcode].name);
+   } else {
+      printf("op%d", inst->opcode);
+   }
+   if (inst->saturate)
+      printf(".sat");
+   printf(" ");
+
+   switch (inst->dst.file) {
+   case GRF:
+      printf("vgrf%d", inst->dst.reg);
+      if (inst->dst.reg_offset)
+         printf("+%d", inst->dst.reg_offset);
+      break;
+   case MRF:
+      printf("m%d", inst->dst.reg);
+      break;
+   case BAD_FILE:
+      printf("(null)");
+      break;
+   case UNIFORM:
+      printf("***u%d***", inst->dst.reg);
+      break;
+   default:
+      printf("???");
+      break;
+   }
+   printf(", ");
+
+   for (int i = 0; i < 3; i++) {
+      if (inst->src[i].negate)
+         printf("-");
+      if (inst->src[i].abs)
+         printf("|");
+      switch (inst->src[i].file) {
+      case GRF:
+         printf("vgrf%d", inst->src[i].reg);
+         if (inst->src[i].reg_offset)
+            printf("+%d", inst->src[i].reg_offset);
+         break;
+      case MRF:
+         printf("***m%d***", inst->src[i].reg);
+         break;
+      case UNIFORM:
+         printf("u%d", inst->src[i].reg);
+         if (inst->src[i].reg_offset)
+            printf(".%d", inst->src[i].reg_offset);
+         break;
+      case BAD_FILE:
+         printf("(null)");
+         break;
+      default:
+         printf("???");
+         break;
+      }
+      if (inst->src[i].abs)
+         printf("|");
+
+      if (i < 3)
+         printf(", ");
+   }
+
+   printf(" ");
+
+   if (inst->force_uncompressed)
+      printf("1sthalf ");
+
+   if (inst->force_sechalf)
+      printf("2ndhalf ");
+
+   printf("\n");
+}
+
+void
+fs_visitor::dump_instructions()
+{
+   int ip = 0;
+   foreach_list(node, &this->instructions) {
+      fs_inst *inst = (fs_inst *)node;
+      printf("%d: ", ip++);
+      dump_instruction(inst);
+   }
+}
+
 /**
  * Possibly returns an instruction that set up @param reg.
  *
@@ -1798,31 +2068,73 @@ fs_visitor::get_instruction_generating_reg(fs_inst *start,
    }
 }
 
+void
+fs_visitor::setup_payload_gen6()
+{
+   struct intel_context *intel = &brw->intel;
+   bool uses_depth =
+      (fp->Base.InputsRead & (1 << FRAG_ATTRIB_WPOS)) != 0;
+   unsigned barycentric_interp_modes = c->prog_data.barycentric_interp_modes;
+
+   assert(intel->gen >= 6);
+
+   /* R0-1: masks, pixel X/Y coordinates. */
+   c->nr_payload_regs = 2;
+   /* R2: only for 32-pixel dispatch.*/
+
+   /* R3-26: barycentric interpolation coordinates.  These appear in the
+    * same order that they appear in the brw_wm_barycentric_interp_mode
+    * enum.  Each set of coordinates occupies 2 registers if dispatch width
+    * == 8 and 4 registers if dispatch width == 16.  Coordinates only
+    * appear if they were enabled using the "Barycentric Interpolation
+    * Mode" bits in WM_STATE.
+    */
+   for (int i = 0; i < BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT; ++i) {
+      if (barycentric_interp_modes & (1 << i)) {
+         c->barycentric_coord_reg[i] = c->nr_payload_regs;
+         c->nr_payload_regs += 2;
+         if (dispatch_width == 16) {
+            c->nr_payload_regs += 2;
+         }
+      }
+   }
+
+   /* R27: interpolated depth if uses source depth */
+   if (uses_depth) {
+      c->source_depth_reg = c->nr_payload_regs;
+      c->nr_payload_regs++;
+      if (dispatch_width == 16) {
+         /* R28: interpolated depth if not 8-wide. */
+         c->nr_payload_regs++;
+      }
+   }
+   /* R29: interpolated W set if GEN6_WM_USES_SOURCE_W. */
+   if (uses_depth) {
+      c->source_w_reg = c->nr_payload_regs;
+      c->nr_payload_regs++;
+      if (dispatch_width == 16) {
+         /* R30: interpolated W if not 8-wide. */
+         c->nr_payload_regs++;
+      }
+   }
+   /* R31: MSAA position offsets. */
+   /* R32-: bary for 32-pixel. */
+   /* R58-59: interp W for 32-pixel. */
+
+   if (fp->Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_DEPTH)) {
+      c->source_depth_to_render_target = true;
+   }
+}
+
 bool
 fs_visitor::run()
 {
-   uint32_t prog_offset_16 = 0;
    uint32_t orig_nr_params = c->prog_data.nr_params;
 
-   brw_wm_payload_setup(brw, c);
-
-   if (c->dispatch_width == 16) {
-      /* We have to do a compaction pass now, or the one at the end of
-       * execution will squash down where our prog_offset start needs
-       * to be.
-       */
-      brw_compact_instructions(p);
-
-      /* align to 64 byte boundary. */
-      while ((c->func.nr_insn * sizeof(struct brw_instruction)) % 64) {
-	 brw_NOP(p);
-      }
-
-      /* Save off the start of this 16-wide program in case we succeed. */
-      prog_offset_16 = c->func.nr_insn * sizeof(struct brw_instruction);
-
-      brw_set_compression_control(p, BRW_COMPRESSION_COMPRESSED);
-   }
+   if (intel->gen >= 6)
+      setup_payload_gen6();
+   else
+      setup_payload_gen4();
 
    if (0) {
       emit_dummy_fs();
@@ -1860,15 +2172,17 @@ fs_visitor::run()
       do {
 	 progress = false;
 
+         compact_virtual_grfs();
+
 	 progress = remove_duplicate_mrf_writes() || progress;
 
 	 progress = opt_algebraic() || progress;
 	 progress = opt_cse() || progress;
 	 progress = opt_copy_propagate() || progress;
+	 progress = dead_code_eliminate() || progress;
 	 progress = register_coalesce() || progress;
 	 progress = register_coalesce_2() || progress;
 	 progress = compute_to_mrf() || progress;
-	 progress = dead_code_eliminate() || progress;
       } while (progress);
 
       remove_dead_constants();
@@ -1900,13 +2214,10 @@ fs_visitor::run()
    if (failed)
       return false;
 
-   generate_code();
-
-   if (c->dispatch_width == 8) {
+   if (dispatch_width == 8) {
       c->prog_data.reg_blocks = brw_register_blocks(grf_used);
    } else {
       c->prog_data.reg_blocks_16 = brw_register_blocks(grf_used);
-      c->prog_data.prog_offset_16 = prog_offset_16;
 
       /* Make sure we didn't try to sneak in an extra uniform */
       assert(orig_nr_params == c->prog_data.nr_params);
@@ -1916,9 +2227,11 @@ fs_visitor::run()
    return !failed;
 }
 
-bool
+const unsigned *
 brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
-	       struct gl_shader_program *prog)
+               struct gl_fragment_program *fp,
+               struct gl_shader_program *prog,
+               unsigned *final_assembly_size)
 {
    struct intel_context *intel = &brw->intel;
    bool start_busy = false;
@@ -1941,16 +2254,14 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
          printf("\n\n");
       } else {
          printf("ARB_fragment_program %d ir for native fragment shader\n",
-                c->fp->program.Base.Id);
-         _mesa_print_program(&c->fp->program.Base);
+                fp->Base.Id);
+         _mesa_print_program(&fp->Base);
       }
    }
 
    /* Now the main event: Visit the shader IR and generate our FS IR for it.
     */
-   c->dispatch_width = 8;
-
-   fs_visitor v(c, prog, shader);
+   fs_visitor v(brw, c, prog, fp, 8);
    if (!v.run()) {
       prog->LinkStatus = false;
       ralloc_strcat(&prog->InfoLog, v.fail_msg);
@@ -1958,16 +2269,18 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
       _mesa_problem(NULL, "Failed to compile fragment shader: %s\n",
 		    v.fail_msg);
 
-      return false;
+      return NULL;
    }
 
+   exec_list *simd16_instructions = NULL;
+   fs_visitor v2(brw, c, prog, fp, 16);
    if (intel->gen >= 5 && c->prog_data.nr_pull_params == 0) {
-      c->dispatch_width = 16;
-      fs_visitor v2(c, prog, shader);
       v2.import_uniforms(&v);
       if (!v2.run()) {
          perf_debug("16-wide shader failed to compile, falling back to "
                     "8-wide at a 10-20%% performance cost: %s", v2.fail_msg);
+      } else {
+         simd16_instructions = &v2.instructions;
       }
    }
 
@@ -1984,7 +2297,9 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
       }
    }
 
-   return true;
+   fs_generator g(brw, c, prog, fp, v.dual_src_output.file != BAD_FILE);
+   return g.generate_assembly(&v.instructions, simd16_instructions,
+                              final_assembly_size);
 }
 
 bool

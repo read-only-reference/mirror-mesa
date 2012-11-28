@@ -188,18 +188,27 @@ public:
    /** @{
     * Annotation for the generated IR.  One of the two can be set.
     */
-   ir_instruction *ir;
+   const void *ir;
    const char *annotation;
 
    bool is_tex();
    bool is_math();
 };
 
+/**
+ * The vertex shader front-end.
+ *
+ * Translates either GLSL IR or Mesa IR (for ARB_vertex_program and
+ * fixed-function) into VS IR.
+ */
 class vec4_visitor : public backend_visitor
 {
 public:
-   vec4_visitor(struct brw_vs_compile *c,
-		struct gl_shader_program *prog, struct brw_shader *shader);
+   vec4_visitor(struct brw_context *brw,
+                struct brw_vs_compile *c,
+		struct gl_shader_program *prog,
+		struct brw_shader *shader,
+		void *mem_ctx);
    ~vec4_visitor();
 
    dst_reg dst_null_f()
@@ -223,7 +232,7 @@ public:
     * GLSL IR currently being processed, which is associated with our
     * driver IR instructions for debugging purposes.
     */
-   ir_instruction *base_ir;
+   const void *base_ir;
    const char *current_annotation;
 
    int *virtual_grf_sizes;
@@ -234,6 +243,9 @@ public:
    int *virtual_grf_def;
    int *virtual_grf_use;
    dst_reg userplane[MAX_CLIP_PLANES];
+
+   src_reg *vp_temp_regs;
+   src_reg vp_addr_reg;
 
    /**
     * This is the size to be used for an array with an element per
@@ -249,7 +261,7 @@ public:
 
    void reladdr_to_temp(ir_instruction *ir, src_reg *reg, int *num_reladdr);
 
-   src_reg src_reg_for_float(float val);
+   bool need_all_constants_in_pull_buffer;
 
    /**
     * \name Visit methods
@@ -349,6 +361,10 @@ public:
    vec4_instruction *XOR(dst_reg dst, src_reg src0, src_reg src1);
    vec4_instruction *DP3(dst_reg dst, src_reg src0, src_reg src1);
    vec4_instruction *DP4(dst_reg dst, src_reg src0, src_reg src1);
+   vec4_instruction *DPH(dst_reg dst, src_reg src0, src_reg src1);
+   vec4_instruction *SHL(dst_reg dst, src_reg src0, src_reg src1);
+   vec4_instruction *SHR(dst_reg dst, src_reg src0, src_reg src1);
+   vec4_instruction *ASR(dst_reg dst, src_reg src0, src_reg src1);
    vec4_instruction *CMP(dst_reg dst, src_reg src0, src_reg src1,
 			 uint32_t condition);
    vec4_instruction *IF(src_reg src0, src_reg src1, uint32_t condition);
@@ -368,9 +384,19 @@ public:
    /** Walks an exec_list of ir_instruction and sends it through this visitor. */
    void visit_instructions(const exec_list *list);
 
+   void setup_vp_regs();
+   void emit_attribute_fixups();
+   void emit_vertex_program_code();
+   void emit_vp_sop(uint32_t condmod, dst_reg dst,
+                    src_reg src0, src_reg src1, src_reg one);
+   dst_reg get_vp_dst_reg(const prog_dst_register &dst);
+   src_reg get_vp_src_reg(const prog_src_register &src);
+
    void emit_bool_to_cond_code(ir_rvalue *ir, uint32_t *predicate);
    void emit_bool_comparison(unsigned int op, dst_reg dst, src_reg src0, src_reg src1);
    void emit_if_gen6(ir_if *ir);
+
+   void emit_minmax(uint32_t condmod, dst_reg dst, src_reg src0, src_reg src1);
 
    void emit_block_move(dst_reg *dst, src_reg *src,
 			const struct glsl_type *type, uint32_t predicate);
@@ -427,7 +453,28 @@ public:
 
    bool process_move_condition(ir_rvalue *ir);
 
-   void generate_code();
+   void dump_instruction(vec4_instruction *inst);
+   void dump_instructions();
+};
+
+/**
+ * The vertex shader code generator.
+ *
+ * Translates VS IR to actual i965 assembly code.
+ */
+class vec4_generator
+{
+public:
+   vec4_generator(struct brw_context *brw,
+                  struct brw_vs_compile *c,
+                  struct gl_shader_program *prog,
+                  void *mem_ctx);
+   ~vec4_generator();
+
+   const unsigned *generate_assembly(exec_list *insts, unsigned *asm_size);
+
+private:
+   void generate_code(exec_list *instructions);
    void generate_vs_instruction(vec4_instruction *inst,
 				struct brw_reg dst,
 				struct brw_reg *src);
@@ -470,8 +517,18 @@ public:
 				    struct brw_reg index,
 				    struct brw_reg offset);
 
-   void dump_instruction(vec4_instruction *inst);
-   void dump_instructions();
+   struct brw_context *brw;
+   struct intel_context *intel;
+   struct gl_context *ctx;
+
+   struct brw_compile *p;
+   struct brw_vs_compile *c;
+
+   struct gl_shader_program *prog;
+   struct gl_shader *shader;
+   const struct gl_vertex_program *vp;
+
+   void *mem_ctx;
 };
 
 } /* namespace brw */

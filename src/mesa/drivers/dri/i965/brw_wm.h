@@ -77,11 +77,8 @@ struct brw_wm_prog_key {
 };
 
 struct brw_wm_compile {
-   struct brw_compile func;
    struct brw_wm_prog_key key;
    struct brw_wm_prog_data prog_data;
-
-   struct brw_fragment_program *fp;
 
    uint8_t source_depth_reg;
    uint8_t source_w_reg;
@@ -89,20 +86,22 @@ struct brw_wm_compile {
    uint8_t dest_depth_reg;
    uint8_t barycentric_coord_reg[BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT];
    uint8_t nr_payload_regs;
-   GLuint computes_depth:1;	/* could be derived from program string */
    GLuint source_depth_to_render_target:1;
    GLuint runtime_check_aads_emit:1;
 
    GLuint last_scratch;
-
-   GLuint dispatch_width;
 };
 
-void brw_wm_lookup_iz(struct intel_context *intel,
-		      struct brw_wm_compile *c);
-
-bool brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
-		    struct gl_shader_program *prog);
+/**
+ * Compile a fragment shader.
+ *
+ * Returns the final assembly and the program's size.
+ */
+const unsigned *brw_wm_fs_emit(struct brw_context *brw,
+                               struct brw_wm_compile *c,
+                               struct gl_fragment_program *fp,
+                               struct gl_shader_program *prog,
+                               unsigned *final_assembly_size);
 
 GLboolean brw_link_shader(struct gl_context *ctx, struct gl_shader_program *prog);
 struct gl_shader *brw_new_shader(struct gl_context *ctx, GLuint name, GLuint type);
@@ -111,8 +110,6 @@ struct gl_shader_program *brw_new_shader_program(struct gl_context *ctx, GLuint 
 bool brw_color_buffer_write_enabled(struct brw_context *brw);
 bool brw_render_target_supported(struct intel_context *intel,
 				 struct gl_renderbuffer *rb);
-void brw_wm_payload_setup(struct brw_context *brw,
-			  struct brw_wm_compile *c);
 bool do_wm_prog(struct brw_context *brw,
 		struct gl_shader_program *prog,
 		struct brw_fragment_program *fp,

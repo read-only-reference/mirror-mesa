@@ -647,9 +647,10 @@ static void blitter_set_texcoords(struct blitter_context_priv *ctx,
 
    get_texcoords(src, src_width0, src_height0, x1, y1, x2, y2, coord);
 
-   if (src->texture->target == PIPE_TEXTURE_CUBE) {
+   if (src->texture->target == PIPE_TEXTURE_CUBE ||
+       src->texture->target == PIPE_TEXTURE_CUBE_ARRAY) {
       set_texcoords_in_vertices(coord, &face_coord[0][0], 2);
-      util_map_texcoords2d_onto_cubemap(layer,
+      util_map_texcoords2d_onto_cubemap(layer % 6,
                                         /* pointer, stride in floats */
                                         &face_coord[0][0], 2,
                                         &ctx->vertices[0][1][0], 8);
@@ -876,13 +877,15 @@ void util_blitter_cache_all_shaders(struct blitter_context *blitter)
    struct blitter_context_priv *ctx = (struct blitter_context_priv*)blitter;
    struct pipe_screen *screen = blitter->pipe->screen;
    unsigned num_cbufs, i, target, max_samples;
-   boolean has_arraytex;
+   boolean has_arraytex, has_cubearraytex;
 
    num_cbufs = MAX2(screen->get_param(screen,
                                       PIPE_CAP_MAX_RENDER_TARGETS), 1);
    max_samples = ctx->has_texture_multisample ? 2 : 1;
    has_arraytex = screen->get_param(screen,
                                     PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS) != 0;
+   has_cubearraytex = screen->get_param(screen,
+                                    PIPE_CAP_CUBE_MAP_ARRAY) != 0;
 
    for (i = 0; i < num_cbufs; i++) {
       blitter_get_fs_col(ctx, i, FALSE);
@@ -897,6 +900,9 @@ void util_blitter_cache_all_shaders(struct blitter_context *blitter)
               target == PIPE_TEXTURE_2D_ARRAY)) {
             continue;
          }
+         if (!has_cubearraytex &&
+             (target == PIPE_TEXTURE_CUBE_ARRAY))
+            continue;
 
          blitter_get_fs_texfetch_col(ctx, target, i);
          blitter_get_fs_texfetch_depth(ctx, target, i);
@@ -1609,7 +1615,8 @@ void util_blitter_custom_depth_stencil(struct blitter_context *blitter,
    blitter_disable_render_cond(ctx);
 
    /* bind states */
-   pipe->bind_blend_state(pipe, ctx->blend[PIPE_MASK_RGBA]);
+   pipe->bind_blend_state(pipe, cbsurf ? ctx->blend[PIPE_MASK_RGBA] :
+                                         ctx->blend[0]);
    pipe->bind_depth_stencil_alpha_state(pipe, dsa_stage);
    ctx->bind_fs_state(pipe, blitter_get_fs_col(ctx, 0, FALSE));
    pipe->bind_vertex_elements_state(pipe, ctx->velem_state);
@@ -1883,6 +1890,12 @@ static boolean is_box_inside_resource(const struct pipe_resource *res,
       width = u_minify(res->width0, level);
       height = u_minify(res->height0, level);
       depth = res->array_size;
+      break;
+   case PIPE_TEXTURE_CUBE_ARRAY:
+      width = u_minify(res->width0, level);
+      height = u_minify(res->height0, level);
+      depth = res->array_size;
+      assert(res->array_size % 6 == 0);
       break;
    case PIPE_MAX_TEXTURE_TYPES:;
    }

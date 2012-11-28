@@ -245,28 +245,6 @@ _mesa_init_transform_feedback_functions(struct dd_function_table *driver)
 }
 
 
-void
-_mesa_init_transform_feedback_dispatch(const struct gl_context *ctx,
-                                       struct _glapi_table *disp)
-{
-   /* EXT_transform_feedback */
-   SET_BeginTransformFeedbackEXT(disp, _mesa_BeginTransformFeedback);
-   SET_EndTransformFeedbackEXT(disp, _mesa_EndTransformFeedback);
-   if (_mesa_is_desktop_gl(ctx)) {
-      SET_BindBufferOffsetEXT(disp, _mesa_BindBufferOffsetEXT);
-   }
-   SET_TransformFeedbackVaryingsEXT(disp, _mesa_TransformFeedbackVaryings);
-   SET_GetTransformFeedbackVaryingEXT(disp, _mesa_GetTransformFeedbackVarying);
-   /* ARB_transform_feedback2 */
-   SET_BindTransformFeedback(disp, _mesa_BindTransformFeedback);
-   SET_DeleteTransformFeedbacks(disp, _mesa_DeleteTransformFeedbacks);
-   SET_GenTransformFeedbacks(disp, _mesa_GenTransformFeedbacks);
-   SET_IsTransformFeedback(disp, _mesa_IsTransformFeedback);
-   SET_PauseTransformFeedback(disp, _mesa_PauseTransformFeedback);
-   SET_ResumeTransformFeedback(disp, _mesa_ResumeTransformFeedback);
-}
-
-
 /**
  ** Begin API functions
  **/
@@ -534,7 +512,8 @@ _mesa_BindBufferOffsetEXT(GLenum target, GLuint index, GLuint buffer,
  */
 void GLAPIENTRY
 _mesa_TransformFeedbackVaryings(GLuint program, GLsizei count,
-                                const GLchar **varyings, GLenum bufferMode)
+                                const GLchar * const *varyings,
+                                GLenum bufferMode)
 {
    struct gl_shader_program *shProg;
    GLint i;
@@ -599,7 +578,7 @@ _mesa_TransformFeedbackVaryings(GLuint program, GLsizei count,
    }
 
    /* free existing varyings, if any */
-   for (i = 0; i < shProg->TransformFeedback.NumVarying; i++) {
+   for (i = 0; i < (GLint) shProg->TransformFeedback.NumVarying; i++) {
       free(shProg->TransformFeedback.VaryingNames[i]);
    }
    free(shProg->TransformFeedback.VaryingNames);
@@ -614,7 +593,7 @@ _mesa_TransformFeedbackVaryings(GLuint program, GLsizei count,
    }
 
    /* Save the new names and the count */
-   for (i = 0; i < (GLuint) count; i++) {
+   for (i = 0; i < count; i++) {
       shProg->TransformFeedback.VaryingNames[i] = _mesa_strdup(varyings[i]);
    }
    shProg->TransformFeedback.NumVarying = count;
@@ -643,14 +622,14 @@ _mesa_GetTransformFeedbackVarying(GLuint program, GLuint index,
    shProg = _mesa_lookup_shader_program(ctx, program);
    if (!shProg) {
       _mesa_error(ctx, GL_INVALID_VALUE,
-                  "glGetTransformFeedbackVaryings(program=%u)", program);
+                  "glGetTransformFeedbackVarying(program=%u)", program);
       return;
    }
 
    linked_xfb_info = &shProg->LinkedTransformFeedback;
    if (index >= (GLuint) linked_xfb_info->NumVarying) {
       _mesa_error(ctx, GL_INVALID_VALUE,
-                  "glGetTransformFeedbackVaryings(index=%u)", index);
+                  "glGetTransformFeedbackVarying(index=%u)", index);
       return;
    }
 

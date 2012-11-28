@@ -262,7 +262,6 @@ static inline uint32_t AUB_TRACE_SUBTYPE(enum state_struct_type ss_type)
 struct brw_vertex_program {
    struct gl_vertex_program program;
    GLuint id;
-   bool use_const_buffer;
 };
 
 
@@ -279,10 +278,6 @@ struct brw_shader {
 
    /** Shader IR transformed for native compile, at link time. */
    struct exec_list *ir;
-};
-
-struct brw_shader_program {
-   struct gl_shader_program base;
 };
 
 /* Data about a particular attempt to compile a program.  Note that
@@ -452,7 +447,6 @@ struct brw_vs_prog_data {
     */
    GLuint urb_entry_size;
 
-   bool uses_new_param_layout;
    bool uses_vertexid;
    bool userclip;
 
@@ -462,14 +456,6 @@ struct brw_vs_prog_data {
    const float **param;
    const float **pull_param;
 };
-
-
-/* Size == 0 if output either not written, or always [0,0,0,1]
- */
-struct brw_vs_ouput_sizes {
-   GLubyte output_size[VERT_RESULT_MAX];
-};
-
 
 /** Number of texture sampler units */
 #define BRW_MAX_TEX_UNIT 16
@@ -773,16 +759,10 @@ struct brw_context
    struct {
       struct brw_vertex_element inputs[VERT_ATTRIB_MAX];
       struct brw_vertex_buffer buffers[VERT_ATTRIB_MAX];
-      struct {
-	      uint32_t handle;
-	      uint32_t offset;
-	      uint32_t stride;
-	      uint32_t step_rate;
-      } current_buffers[VERT_ATTRIB_MAX];
 
       struct brw_vertex_element *enabled[VERT_ATTRIB_MAX];
       GLuint nr_enabled;
-      GLuint nr_buffers, nr_current_buffers;
+      GLuint nr_buffers;
 
       /* Summary of size and varying of active arrays, so we can check
        * for changes to this state:
@@ -985,7 +965,6 @@ struct brw_context
 
    struct {
       struct brw_wm_prog_data *prog_data;
-      struct brw_wm_compile *compile_data;
 
       /** Input sizes, calculated from active vertex program.
        * One bit per fragment program input attribute.
@@ -1093,20 +1072,24 @@ struct brw_context
       bool enable_cut_index;
    } prim_restart;
 
+   /** Computed depth/stencil/hiz state from the current attached
+    * renderbuffers, valid only during the drawing state upload loop after
+    * brw_workaround_depthstencil_alignment().
+    */
+   struct {
+      struct intel_mipmap_tree *depth_mt;
+      struct intel_mipmap_tree *stencil_mt;
+      struct intel_mipmap_tree *hiz_mt;
+
+      /* Inter-tile (page-aligned) byte offsets. */
+      uint32_t depth_offset, hiz_offset, stencil_offset;
+      /* Intra-tile x,y offsets for drawing to depth/stencil/hiz */
+      uint32_t tile_x, tile_y;
+   } depthstencil;
+
    uint32_t num_instances;
+   int basevertex;
 };
-
-
-
-#define BRW_PACKCOLOR8888(r,g,b,a)  ((r<<24) | (g<<16) | (b<<8) | a)
-
-struct brw_instruction_info {
-    char    *name;
-    int	    nsrc;
-    int	    ndst;
-    bool is_arith;
-};
-extern const struct brw_instruction_info brw_opcodes[128];
 
 /*======================================================================
  * brw_vtbl.c

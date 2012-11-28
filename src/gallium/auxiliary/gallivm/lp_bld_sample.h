@@ -157,11 +157,17 @@ struct lp_sampler_dynamic_state
                   struct gallivm_state *gallivm,
                   unsigned unit);
 
-   /** Obtain pointer to array of pointers to mimpap levels */
+   /** Obtain pointer to base of texture */
    LLVMValueRef
-   (*data_ptr)( const struct lp_sampler_dynamic_state *state,
+   (*base_ptr)( const struct lp_sampler_dynamic_state *state,
                 struct gallivm_state *gallivm,
                 unsigned unit);
+
+   /** Obtain pointer to array of mipmap offsets */
+   LLVMValueRef
+   (*mip_offsets)( const struct lp_sampler_dynamic_state *state,
+                   struct gallivm_state *gallivm,
+                   unsigned unit);
 
    /** Obtain texture min lod (returns float) */
    LLVMValueRef
@@ -204,6 +210,9 @@ struct lp_build_sample_context
    /** SIMD vector width */
    unsigned vector_width;
 
+   /** number of lod values (valid are 1, length/4, length) */
+   unsigned num_lods;
+
    /** regular scalar float type */
    struct lp_type float_type;
    struct lp_build_context float_bld;
@@ -224,10 +233,18 @@ struct lp_build_sample_context
    struct lp_build_context int_coord_bld;
 
    /** Unsigned integer texture size */
+   struct lp_type int_size_in_type;
+   struct lp_build_context int_size_in_bld;
+
+   /** Float incoming texture size */
+   struct lp_type float_size_in_type;
+   struct lp_build_context float_size_in_bld;
+
+   /** Unsigned integer texture size (might be per quad) */
    struct lp_type int_size_type;
    struct lp_build_context int_size_bld;
 
-   /** Unsigned integer texture size */
+   /** Float texture size (might be per quad) */
    struct lp_type float_size_type;
    struct lp_build_context float_size_bld;
 
@@ -246,7 +263,8 @@ struct lp_build_sample_context
    /* Common dynamic state values */
    LLVMValueRef row_stride_array;
    LLVMValueRef img_stride_array;
-   LLVMValueRef data_array;
+   LLVMValueRef base_ptr;
+   LLVMValueRef mip_offsets;
 
    /** Integer vector with texture width, height, depth */
    LLVMValueRef int_size;
@@ -285,14 +303,20 @@ apply_sampler_swizzle(struct lp_build_sample_context *bld,
    lp_build_swizzle_soa_inplace(&bld->texel_bld, texel, swizzles);
 }
 
-
+/*
+ * not really dimension as such, this indicates the amount of
+ * "normal" texture coords subject to minification, wrapping etc.
+ */
 static INLINE unsigned
 texture_dims(enum pipe_texture_target tex)
 {
    switch (tex) {
    case PIPE_TEXTURE_1D:
+   case PIPE_TEXTURE_1D_ARRAY:
+   case PIPE_BUFFER:
       return 1;
    case PIPE_TEXTURE_2D:
+   case PIPE_TEXTURE_2D_ARRAY:
    case PIPE_TEXTURE_RECT:
    case PIPE_TEXTURE_CUBE:
       return 2;
@@ -348,6 +372,11 @@ lp_build_get_mipmap_level(struct lp_build_sample_context *bld,
                           LLVMValueRef level);
 
 
+LLVMValueRef
+lp_build_get_mip_offsets(struct lp_build_sample_context *bld,
+                         LLVMValueRef level);
+
+
 void
 lp_build_mipmap_level_sizes(struct lp_build_sample_context *bld,
                             LLVMValueRef ilevel,
@@ -358,7 +387,7 @@ lp_build_mipmap_level_sizes(struct lp_build_sample_context *bld,
 
 void
 lp_build_extract_image_sizes(struct lp_build_sample_context *bld,
-                             struct lp_type size_type,
+                             struct lp_build_context *size_bld,
                              struct lp_type coord_type,
                              LLVMValueRef size,
                              LLVMValueRef *out_width,
@@ -411,9 +440,10 @@ lp_build_sample_soa(struct gallivm_state *gallivm,
                     const struct lp_sampler_static_state *static_state,
                     struct lp_sampler_dynamic_state *dynamic_state,
                     struct lp_type fp_type,
+                    boolean is_fetch,
                     unsigned unit,
-                    unsigned num_coords,
                     const LLVMValueRef *coords,
+                    const LLVMValueRef *offsets,
                     const struct lp_derivatives *derivs,
                     LLVMValueRef lod_bias,
                     LLVMValueRef explicit_lod,
@@ -441,7 +471,6 @@ lp_build_size_query_soa(struct gallivm_state *gallivm,
 void
 lp_build_sample_nop(struct gallivm_state *gallivm, 
                     struct lp_type type,
-                    unsigned num_coords,
                     const LLVMValueRef *coords,
                     LLVMValueRef texel_out[4]);
 

@@ -474,7 +474,14 @@ static bool brw_try_draw_prims( struct gl_context *ctx,
       intel_batchbuffer_require_space(intel, estimated_max_prim_size, false);
       intel_batchbuffer_save_state(intel);
 
-      brw->num_instances = prim->num_instances;
+      if (brw->num_instances != prim->num_instances) {
+         brw->num_instances = prim->num_instances;
+         brw->state.dirty.brw |= BRW_NEW_VERTICES;
+      }
+      if (brw->basevertex != prim->basevertex) {
+         brw->basevertex = prim->basevertex;
+         brw->state.dirty.brw |= BRW_NEW_VERTICES;
+      }
       if (intel->gen < 6)
 	 brw_set_prim(brw, &prim[i]);
       else
@@ -552,21 +559,12 @@ void brw_draw_prims( struct gl_context *ctx,
       return;
    }
 
-   if (!vbo_all_varyings_in_vbos(arrays)) {
-      if (!index_bounds_valid)
-	 vbo_get_minmax_indices(ctx, prim, ib, &min_index, &max_index, nr_prims);
-
-      /* Decide if we want to rebase.  If so we end up recursing once
-       * only into this function.
-       */
-      if (min_index != 0 && !vbo_any_varyings_in_vbos(arrays)) {
-	 vbo_rebase_prims(ctx, arrays,
-			  prim, nr_prims,
-			  ib, min_index, max_index,
-			  brw_draw_prims );
-	 return;
-      }
-   }
+   /* If we're going to have to upload any of the user's vertex arrays, then
+    * get the minimum and maximum of their index buffer so we know what range
+    * to upload.
+    */
+   if (!vbo_all_varyings_in_vbos(arrays) && !index_bounds_valid)
+      vbo_get_minmax_indices(ctx, prim, ib, &min_index, &max_index, nr_prims);
 
    /* Do GL_SELECT and GL_FEEDBACK rendering using swrast, even though it
     * won't support all the extensions we support.

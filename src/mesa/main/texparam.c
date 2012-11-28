@@ -64,7 +64,7 @@ validate_texture_wrap_mode(struct gl_context * ctx, GLenum target, GLenum wrap)
       /* GL_CLAMP was removed in the core profile, and it has never existed in
        * OpenGL ES.
        */
-      supported = (ctx->API == API_OPENGL)
+      supported = (ctx->API == API_OPENGL_COMPAT)
          && (target != GL_TEXTURE_EXTERNAL_OES);
       break;
 
@@ -168,6 +168,11 @@ get_texobj(struct gl_context *ctx, GLenum target, GLboolean get)
    case GL_TEXTURE_EXTERNAL_OES:
       if (_mesa_is_gles(ctx) && ctx->Extensions.OES_EGL_image_external) {
          return texUnit->CurrentTex[TEXTURE_EXTERNAL_INDEX];
+      }
+      break;
+   case GL_TEXTURE_CUBE_MAP_ARRAY:
+      if (ctx->Extensions.ARB_texture_cube_map_array) {
+         return texUnit->CurrentTex[TEXTURE_CUBE_ARRAY_INDEX];
       }
       break;
    default:
@@ -344,7 +349,7 @@ set_tex_parameteri(struct gl_context *ctx,
       if (texObj->MaxLevel == params[0])
          return GL_FALSE;
       if (params[0] < 0 || texObj->Target == GL_TEXTURE_RECTANGLE_ARB) {
-         _mesa_error(ctx, GL_INVALID_OPERATION,
+         _mesa_error(ctx, GL_INVALID_VALUE,
                      "glTexParameter(param=%d)", params[0]);
          return GL_FALSE;
       }
@@ -353,7 +358,7 @@ set_tex_parameteri(struct gl_context *ctx,
       return GL_TRUE;
 
    case GL_GENERATE_MIPMAP_SGIS:
-      if (ctx->API != API_OPENGL && ctx->API != API_OPENGLES)
+      if (ctx->API != API_OPENGL_COMPAT && ctx->API != API_OPENGLES)
          goto invalid_pname;
 
       if (params[0] && texObj->Target == GL_TEXTURE_EXTERNAL_OES)
@@ -413,7 +418,7 @@ set_tex_parameteri(struct gl_context *ctx,
       /* GL_DEPTH_TEXTURE_MODE_ARB is removed in core-profile and it has never
        * existed in OpenGL ES.
        */
-      if (ctx->API == API_OPENGL && ctx->Extensions.ARB_depth_texture) {
+      if (ctx->API == API_OPENGL_COMPAT && ctx->Extensions.ARB_depth_texture) {
          if (texObj->DepthMode == params[0])
             return GL_FALSE;
          if (params[0] == GL_LUMINANCE ||
@@ -557,7 +562,7 @@ set_tex_parameterf(struct gl_context *ctx,
       return GL_TRUE;
 
    case GL_TEXTURE_PRIORITY:
-      if (ctx->API != API_OPENGL)
+      if (ctx->API != API_OPENGL_COMPAT)
          goto invalid_pname;
 
       flush(ctx);
@@ -590,7 +595,7 @@ set_tex_parameterf(struct gl_context *ctx,
        * It was removed in core-profile, and it has never existed in OpenGL
        * ES.
        */
-      if (ctx->API != API_OPENGL)
+      if (ctx->API != API_OPENGL_COMPAT)
          goto invalid_pname;
 
       if (texObj->Sampler.LodBias != params[0]) {
@@ -1323,13 +1328,13 @@ _mesa_GetTexParameterfv( GLenum target, GLenum pname, GLfloat *params )
          }
          break;
       case GL_TEXTURE_RESIDENT:
-         if (ctx->API != API_OPENGL)
+         if (ctx->API != API_OPENGL_COMPAT)
             goto invalid_pname;
 
          *params = 1.0F;
          break;
       case GL_TEXTURE_PRIORITY:
-         if (ctx->API != API_OPENGL)
+         if (ctx->API != API_OPENGL_COMPAT)
             goto invalid_pname;
 
          *params = obj->Priority;
@@ -1361,7 +1366,7 @@ _mesa_GetTexParameterfv( GLenum target, GLenum pname, GLfloat *params )
          *params = obj->Sampler.MaxAnisotropy;
          break;
       case GL_GENERATE_MIPMAP_SGIS:
-         if (ctx->API != API_OPENGL && ctx->API != API_OPENGLES)
+         if (ctx->API != API_OPENGL_COMPAT && ctx->API != API_OPENGLES)
             goto invalid_pname;
 
 	 *params = (GLfloat) obj->GenerateMipmap;
@@ -1382,12 +1387,12 @@ _mesa_GetTexParameterfv( GLenum target, GLenum pname, GLfloat *params )
          /* GL_DEPTH_TEXTURE_MODE_ARB is removed in core-profile and it has
           * never existed in OpenGL ES.
           */
-         if (ctx->API != API_OPENGL || !ctx->Extensions.ARB_depth_texture)
+         if (ctx->API != API_OPENGL_COMPAT || !ctx->Extensions.ARB_depth_texture)
             goto invalid_pname;
          *params = (GLfloat) obj->DepthMode;
          break;
       case GL_TEXTURE_LOD_BIAS:
-         if (ctx->API != API_OPENGL)
+         if (ctx->API != API_OPENGL_COMPAT)
             goto invalid_pname;
 
          *params = obj->Sampler.LodBias;
@@ -1505,13 +1510,13 @@ _mesa_GetTexParameteriv( GLenum target, GLenum pname, GLint *params )
          }
          break;
       case GL_TEXTURE_RESIDENT:
-         if (ctx->API != API_OPENGL)
+         if (ctx->API != API_OPENGL_COMPAT)
             goto invalid_pname;
 
          *params = 1;
          break;
       case GL_TEXTURE_PRIORITY:
-         if (ctx->API != API_OPENGL)
+         if (ctx->API != API_OPENGL_COMPAT)
             goto invalid_pname;
 
          *params = FLOAT_TO_INT(obj->Priority);
@@ -1543,7 +1548,7 @@ _mesa_GetTexParameteriv( GLenum target, GLenum pname, GLint *params )
          *params = (GLint) obj->Sampler.MaxAnisotropy;
          break;
       case GL_GENERATE_MIPMAP_SGIS:
-         if (ctx->API != API_OPENGL && ctx->API != API_OPENGLES)
+         if (ctx->API != API_OPENGL_COMPAT && ctx->API != API_OPENGLES)
             goto invalid_pname;
 
 	 *params = (GLint) obj->GenerateMipmap;
@@ -1561,12 +1566,12 @@ _mesa_GetTexParameteriv( GLenum target, GLenum pname, GLint *params )
          *params = (GLint) obj->Sampler.CompareFunc;
          break;
       case GL_DEPTH_TEXTURE_MODE_ARB:
-         if (ctx->API != API_OPENGL || !ctx->Extensions.ARB_depth_texture)
+         if (ctx->API != API_OPENGL_COMPAT || !ctx->Extensions.ARB_depth_texture)
             goto invalid_pname;
          *params = (GLint) obj->DepthMode;
          break;
       case GL_TEXTURE_LOD_BIAS:
-         if (ctx->API != API_OPENGL)
+         if (ctx->API != API_OPENGL_COMPAT)
             goto invalid_pname;
 
          *params = (GLint) obj->Sampler.LodBias;

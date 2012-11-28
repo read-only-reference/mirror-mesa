@@ -39,7 +39,6 @@
 #include "lp_query.h"
 #include "lp_rast.h"
 #include "lp_rast_priv.h"
-#include "lp_tile_soa.h"
 #include "gallivm/lp_bld_debug.h"
 #include "lp_scene.h"
 #include "lp_tex_sample.h"
@@ -76,12 +75,6 @@ lp_rast_end( struct lp_rasterizer *rast )
    lp_scene_end_rasterization( rast->curr_scene );
 
    rast->curr_scene = NULL;
-
-#ifdef DEBUG
-   if (0)
-      debug_printf("Post render scene: tile unswizzle: %u tile swizzle: %u\n",
-                   lp_tile_unswizzle_count, lp_tile_swizzle_count);
-#endif
 }
 
 
@@ -151,49 +144,35 @@ lp_rast_clear_color(struct lp_rasterizer_task *task,
                     const union lp_rast_cmd_arg arg)
 {
    const struct lp_scene *scene = task->scene;
-   const uint8_t *clear_color = arg.clear_color;
+   uint8_t clear_color[4];
 
    unsigned i;
 
-   LP_DBG(DEBUG_RAST, "%s 0x%x,0x%x,0x%x,0x%x\n", __FUNCTION__, 
+   for (i = 0; i < 4; ++i) {
+      clear_color[i] = float_to_ubyte(arg.clear_color[i]);
+   }
+
+   LP_DBG(DEBUG_RAST, "%s 0x%x,0x%x,0x%x,0x%x\n", __FUNCTION__,
               clear_color[0],
               clear_color[1],
               clear_color[2],
               clear_color[3]);
 
-   if (clear_color[0] == clear_color[1] &&
-       clear_color[1] == clear_color[2] &&
-       clear_color[2] == clear_color[3]) {
-      /* clear to grayscale value {x, x, x, x} */
-      for (i = 0; i < scene->fb.nr_cbufs; i++) {
-         uint8_t *ptr =
-            lp_rast_get_color_tile_pointer(task, i, LP_TEX_USAGE_WRITE_ALL);
-	 memset(ptr, clear_color[0], TILE_SIZE * TILE_SIZE * 4);
-      }
-   }
-   else {
-      /* Non-gray color.
-       * Note: if the swizzled tile layout changes (see TILE_PIXEL) this code
-       * will need to change.  It'll be pretty obvious when clearing no longer
-       * works.
-       */
-      const unsigned chunk = TILE_SIZE / 4;
-      for (i = 0; i < scene->fb.nr_cbufs; i++) {
-         uint8_t *c =
-            lp_rast_get_color_tile_pointer(task, i, LP_TEX_USAGE_WRITE_ALL);
-         unsigned j;
+   for (i = 0; i < scene->fb.nr_cbufs; i++) {
+      const struct lp_scene *scene = task->scene;
+      union util_color uc;
 
-         for (j = 0; j < 4 * TILE_SIZE; j++) {
-            memset(c, clear_color[0], chunk);
-            c += chunk;
-            memset(c, clear_color[1], chunk);
-            c += chunk;
-            memset(c, clear_color[2], chunk);
-            c += chunk;
-            memset(c, clear_color[3], chunk);
-            c += chunk;
-         }
-      }
+      util_pack_color(arg.clear_color,
+                      scene->fb.cbufs[i]->format, &uc);
+
+      util_fill_rect(scene->cbufs[i].map,
+                     scene->fb.cbufs[i]->format,
+                     scene->cbufs[i].stride,
+                     task->x,
+                     task->y,
+                     TILE_SIZE,
+                     TILE_SIZE,
+                     &uc);
    }
 
    LP_COUNT(nr_color_tile_clear);
@@ -291,40 +270,6 @@ lp_rast_clear_zstencil(struct lp_rasterizer_task *task,
 
 
 /**
- * Convert the color tile from tiled to linear layout.
- * This is generally only done when we're flushing the scene just prior to
- * SwapBuffers.  If we didn't do this here, we'd have to convert the entire
- * tiled color buffer to linear layout in the llvmpipe_texture_unmap()
- * function.  It's better to do it here to take advantage of
- * threading/parallelism.
- * This is a bin command which is stored in all bins.
- */
-static void
-lp_rast_store_linear_color( struct lp_rasterizer_task *task )
-{
-   const struct lp_scene *scene = task->scene;
-   unsigned buf;
-
-   for (buf = 0; buf < scene->fb.nr_cbufs; buf++) {
-      struct pipe_surface *cbuf = scene->fb.cbufs[buf];
-      const unsigned layer = cbuf->u.tex.first_layer;
-      const unsigned level = cbuf->u.tex.level;
-      struct llvmpipe_resource *lpt = llvmpipe_resource(cbuf->texture);
-
-      if (!task->color_tiles[buf])
-         continue;
-
-      llvmpipe_unswizzle_cbuf_tile(lpt,
-                                   layer,
-                                   level,
-                                   task->x, task->y,
-                                   task->color_tiles[buf]);
-   }
-}
-
-
-
-/**
  * Run the shader on all blocks in a tile.  This is used when a tile is
  * completely contained inside a triangle.
  * This is a bin command called during bin processing.
@@ -358,13 +303,16 @@ lp_rast_shade_tile(struct lp_rasterizer_task *task,
    for (y = 0; y < TILE_SIZE; y += 4){
       for (x = 0; x < TILE_SIZE; x += 4) {
          uint8_t *color[PIPE_MAX_COLOR_BUFS];
+         unsigned stride[PIPE_MAX_COLOR_BUFS];
          uint32_t *depth;
          unsigned i;
 
          /* color buffer */
-         for (i = 0; i < scene->fb.nr_cbufs; i++)
-            color[i] = lp_rast_get_color_block_pointer(task, i,
-                                                       tile_x + x, tile_y + y);
+         for (i = 0; i < scene->fb.nr_cbufs; i++){
+            stride[i] = scene->cbufs[i].stride;
+
+            color[i] = lp_rast_get_unswizzled_color_block_pointer(task, i, tile_x + x, tile_y + y);
+         }
 
          /* depth buffer */
          depth = lp_rast_get_depth_block_pointer(task, tile_x + x, tile_y + y);
@@ -380,7 +328,8 @@ lp_rast_shade_tile(struct lp_rasterizer_task *task,
                                             color,
                                             depth,
                                             0xffff,
-                                            &task->vis_counter);
+                                            &task->vis_counter,
+                                            stride);
          END_JIT_CALL();
       }
    }
@@ -396,19 +345,11 @@ static void
 lp_rast_shade_tile_opaque(struct lp_rasterizer_task *task,
                           const union lp_rast_cmd_arg arg)
 {
-   const struct lp_scene *scene = task->scene;
-   unsigned i;
-
    LP_DBG(DEBUG_RAST, "%s\n", __FUNCTION__);
 
    assert(task->state);
    if (!task->state) {
       return;
-   }
-
-   /* this will prevent converting the layout from tiled to linear */
-   for (i = 0; i < scene->fb.nr_cbufs; i++) {
-      (void)lp_rast_get_color_tile_pointer(task, i, LP_TEX_USAGE_WRITE_ALL);
    }
 
    lp_rast_shade_tile(task, arg);
@@ -431,6 +372,7 @@ lp_rast_shade_quads_mask(struct lp_rasterizer_task *task,
    struct lp_fragment_shader_variant *variant = state->variant;
    const struct lp_scene *scene = task->scene;
    uint8_t *color[PIPE_MAX_COLOR_BUFS];
+   unsigned stride[PIPE_MAX_COLOR_BUFS];
    void *depth;
    unsigned i;
 
@@ -447,15 +389,16 @@ lp_rast_shade_quads_mask(struct lp_rasterizer_task *task,
 
    /* color buffer */
    for (i = 0; i < scene->fb.nr_cbufs; i++) {
-      color[i] = lp_rast_get_color_block_pointer(task, i, x, y);
-      assert(lp_check_alignment(color[i], 16));
+      stride[i] = scene->cbufs[i].stride;
+
+      color[i] = lp_rast_get_unswizzled_color_block_pointer(task, i, x, y);
    }
 
    /* depth buffer */
    depth = lp_rast_get_depth_block_pointer(task, x, y);
 
 
-   assert(lp_check_alignment(state->jit_context.blend_color, 16));
+   assert(lp_check_alignment(state->jit_context.u8_blend_color, 16));
 
    /* run shader on 4x4 block */
    BEGIN_JIT_CALL(state, task);
@@ -468,7 +411,8 @@ lp_rast_shade_quads_mask(struct lp_rasterizer_task *task,
                                          color,
                                          depth,
                                          mask,
-                                         &task->vis_counter);
+                                         &task->vis_counter,
+                                         stride);
    END_JIT_CALL();
 }
 
@@ -518,85 +462,11 @@ lp_rast_set_state(struct lp_rasterizer_task *task,
 
 
 /**
- * Set top row and left column of the tile's pixels to white.  For debugging.
- */
-static void
-outline_tile(uint8_t *tile)
-{
-   const uint8_t val = 0xff;
-   unsigned i;
-
-   for (i = 0; i < TILE_SIZE; i++) {
-      TILE_PIXEL(tile, i, 0, 0) = val;
-      TILE_PIXEL(tile, i, 0, 1) = val;
-      TILE_PIXEL(tile, i, 0, 2) = val;
-      TILE_PIXEL(tile, i, 0, 3) = val;
-
-      TILE_PIXEL(tile, 0, i, 0) = val;
-      TILE_PIXEL(tile, 0, i, 1) = val;
-      TILE_PIXEL(tile, 0, i, 2) = val;
-      TILE_PIXEL(tile, 0, i, 3) = val;
-   }
-}
-
-
-/**
- * Draw grid of gray lines at 16-pixel intervals across the tile to
- * show the sub-tile boundaries.  For debugging.
- */
-static void
-outline_subtiles(uint8_t *tile)
-{
-   const uint8_t val = 0x80;
-   const unsigned step = 16;
-   unsigned i, j;
-
-   for (i = 0; i < TILE_SIZE; i += step) {
-      for (j = 0; j < TILE_SIZE; j++) {
-         TILE_PIXEL(tile, i, j, 0) = val;
-         TILE_PIXEL(tile, i, j, 1) = val;
-         TILE_PIXEL(tile, i, j, 2) = val;
-         TILE_PIXEL(tile, i, j, 3) = val;
-
-         TILE_PIXEL(tile, j, i, 0) = val;
-         TILE_PIXEL(tile, j, i, 1) = val;
-         TILE_PIXEL(tile, j, i, 2) = val;
-         TILE_PIXEL(tile, j, i, 3) = val;
-      }
-   }
-
-   outline_tile(tile);
-}
-
-
-
-/**
  * Called when we're done writing to a color tile.
  */
 static void
 lp_rast_tile_end(struct lp_rasterizer_task *task)
 {
-#ifdef DEBUG
-   if (LP_DEBUG & (DEBUG_SHOW_SUBTILES | DEBUG_SHOW_TILES)) {
-      const struct lp_scene *scene = task->scene;
-      unsigned buf;
-
-      for (buf = 0; buf < scene->fb.nr_cbufs; buf++) {
-         uint8_t *color = lp_rast_get_color_block_pointer(task, buf,
-                                                          task->x, task->y);
-
-         if (LP_DEBUG & DEBUG_SHOW_SUBTILES)
-            outline_subtiles(color);
-         else if (LP_DEBUG & DEBUG_SHOW_TILES)
-            outline_tile(color);
-      }
-   }
-#else
-   (void) outline_subtiles;
-#endif
-
-   lp_rast_store_linear_color(task);
-
    if (task->query) {
       union lp_rast_cmd_arg dummy = {0};
       lp_rast_end_query(task, dummy);

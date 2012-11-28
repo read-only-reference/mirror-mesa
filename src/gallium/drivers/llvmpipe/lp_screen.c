@@ -60,8 +60,6 @@ static const struct debug_named_value lp_debug_flags[] = {
    { "rast",   DEBUG_RAST, NULL },
    { "query",  DEBUG_QUERY, NULL },
    { "screen", DEBUG_SCREEN, NULL },
-   { "show_tiles",    DEBUG_SHOW_TILES, NULL },
-   { "show_subtiles", DEBUG_SHOW_SUBTILES, NULL },
    { "counters", DEBUG_COUNTERS, NULL },
    { "scene", DEBUG_SCENE, NULL },
    { "fence", DEBUG_FENCE, NULL },
@@ -141,6 +139,8 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return LP_MAX_TEXTURE_3D_LEVELS;
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
       return LP_MAX_TEXTURE_CUBE_LEVELS;
+   case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
+      return LP_MAX_TEXTURE_ARRAY_LAYERS;
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
       return 1;
    case PIPE_CAP_INDEP_BLEND_ENABLE:
@@ -157,8 +157,6 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE:
       return 1;
-   case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
-      return 0;
    case PIPE_CAP_DEPTH_CLIP_DISABLE:
       return 0;
    case PIPE_CAP_SHADER_STENCIL_EXPORT:
@@ -175,9 +173,11 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 0;
    case PIPE_CAP_SCALED_RESOLVE:
       return 0;
+   /* this is a lie could support arbitrary large offsets */
    case PIPE_CAP_MIN_TEXEL_OFFSET:
+      return -8;
    case PIPE_CAP_MAX_TEXEL_OFFSET:
-      return 0;
+      return 7;
    case PIPE_CAP_CONDITIONAL_RENDER:
       return 1;
    case PIPE_CAP_TEXTURE_BARRIER:
@@ -191,7 +191,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 0;
    case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
    case PIPE_CAP_VERTEX_COLOR_CLAMPED:
-      return 0;
+      return 1;
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
       return 120;
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
@@ -213,6 +213,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_QUERY_TIMESTAMP:
    case PIPE_CAP_TEXTURE_MULTISAMPLE:
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
+   case PIPE_CAP_CUBE_MAP_ARRAY:
       return 0;
    }
    /* should only get here on unhandled cases */
@@ -304,7 +305,9 @@ llvmpipe_is_format_supported( struct pipe_screen *_screen,
 
    assert(target == PIPE_BUFFER ||
           target == PIPE_TEXTURE_1D ||
+          target == PIPE_TEXTURE_1D_ARRAY ||
           target == PIPE_TEXTURE_2D ||
+          target == PIPE_TEXTURE_2D_ARRAY ||
           target == PIPE_TEXTURE_RECT ||
           target == PIPE_TEXTURE_3D ||
           target == PIPE_TEXTURE_CUBE);
@@ -312,20 +315,19 @@ llvmpipe_is_format_supported( struct pipe_screen *_screen,
    if (sample_count > 1)
       return FALSE;
 
-   if (format_desc->format == PIPE_FORMAT_R11G11B10_FLOAT ||
-       format_desc->format == PIPE_FORMAT_R9G9B9E5_FLOAT) 
-     return TRUE;
-
    if (bind & PIPE_BIND_RENDER_TARGET) {
-      if (format_desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS ||
-          format_desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB)
+      if (format_desc->colorspace != UTIL_FORMAT_COLORSPACE_RGB)
          return FALSE;
 
       if (format_desc->layout != UTIL_FORMAT_LAYOUT_PLAIN)
          return FALSE;
+      assert(format_desc->block.width == 1);
+      assert(format_desc->block.height == 1);
 
-      if (format_desc->block.width != 1 ||
-          format_desc->block.height != 1)
+      if (format_desc->is_mixed)
+         return FALSE;
+
+      if (!format_desc->is_array && !format_desc->is_bitmask)
          return FALSE;
    }
 

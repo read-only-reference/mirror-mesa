@@ -187,7 +187,7 @@ _mesa_MatrixMode( GLenum mode )
    case GL_MATRIX5_ARB:
    case GL_MATRIX6_ARB:
    case GL_MATRIX7_ARB:
-      if (ctx->API == API_OPENGL
+      if (ctx->API == API_OPENGL_COMPAT
           && (ctx->Extensions.ARB_vertex_program ||
               ctx->Extensions.ARB_fragment_program)) {
          const GLuint m = mode - GL_MATRIX0_ARB;
@@ -489,7 +489,7 @@ _mesa_Translated( GLdouble x, GLdouble y, GLdouble z )
 
 
 void GLAPIENTRY
-_mesa_LoadTransposeMatrixfARB( const GLfloat *m )
+_mesa_LoadTransposeMatrixf( const GLfloat *m )
 {
    GLfloat tm[16];
    if (!m) return;
@@ -499,7 +499,7 @@ _mesa_LoadTransposeMatrixfARB( const GLfloat *m )
 
 
 void GLAPIENTRY
-_mesa_LoadTransposeMatrixdARB( const GLdouble *m )
+_mesa_LoadTransposeMatrixd( const GLdouble *m )
 {
    GLfloat tm[16];
    if (!m) return;
@@ -509,7 +509,7 @@ _mesa_LoadTransposeMatrixdARB( const GLdouble *m )
 
 
 void GLAPIENTRY
-_mesa_MultTransposeMatrixfARB( const GLfloat *m )
+_mesa_MultTransposeMatrixf( const GLfloat *m )
 {
    GLfloat tm[16];
    if (!m) return;
@@ -519,7 +519,7 @@ _mesa_MultTransposeMatrixfARB( const GLfloat *m )
 
 
 void GLAPIENTRY
-_mesa_MultTransposeMatrixdARB( const GLdouble *m )
+_mesa_MultTransposeMatrixd( const GLdouble *m )
 {
    GLfloat tm[16];
    if (!m) return;
@@ -746,7 +746,7 @@ void _mesa_free_matrix_data( struct gl_context *ctx )
  */
 void _mesa_init_transform( struct gl_context *ctx )
 {
-   GLint i;
+   GLuint i;
 
    /* Transformation group */
    ctx->Transform.MatrixMode = GL_MODELVIEW;

@@ -101,9 +101,11 @@ static void yyerror(YYLTYPE *loc, _mesa_glsl_parse_state *st, const char *msg)
 %token MAT4X2 MAT4X3 MAT4X4
 %token SAMPLER1D SAMPLER2D SAMPLER3D SAMPLERCUBE SAMPLER1DSHADOW SAMPLER2DSHADOW
 %token SAMPLERCUBESHADOW SAMPLER1DARRAY SAMPLER2DARRAY SAMPLER1DARRAYSHADOW
-%token SAMPLER2DARRAYSHADOW ISAMPLER1D ISAMPLER2D ISAMPLER3D ISAMPLERCUBE
-%token ISAMPLER1DARRAY ISAMPLER2DARRAY USAMPLER1D USAMPLER2D USAMPLER3D
-%token USAMPLERCUBE USAMPLER1DARRAY USAMPLER2DARRAY
+%token SAMPLER2DARRAYSHADOW SAMPLERCUBEARRAY SAMPLERCUBEARRAYSHADOW
+%token ISAMPLER1D ISAMPLER2D ISAMPLER3D ISAMPLERCUBE
+%token ISAMPLER1DARRAY ISAMPLER2DARRAY ISAMPLERCUBEARRAY
+%token USAMPLER1D USAMPLER2D USAMPLER3D USAMPLERCUBE USAMPLER1DARRAY
+%token USAMPLER2DARRAY USAMPLERCUBEARRAY
 %token SAMPLER2DRECT ISAMPLER2DRECT USAMPLER2DRECT SAMPLER2DRECTSHADOW
 %token SAMPLERBUFFER ISAMPLERBUFFER USAMPLERBUFFER
 %token SAMPLEREXTERNALOES
@@ -236,6 +238,7 @@ static void yyerror(YYLTYPE *loc, _mesa_glsl_parse_state *st, const char *msg)
 %type <node> conditionopt
 %type <node> for_init_statement
 %type <for_rest_statement> for_rest_statement
+%type <n> integer_constant
 %%
 
 translation_unit: 
@@ -1120,6 +1123,10 @@ layout_qualifier_id_list:
 	}
 	;
 
+integer_constant:
+	INTCONSTANT { $$ = $1; }
+	| UINTCONSTANT { $$ = $1; }
+
 layout_qualifier_id:
 	any_identifier
 	{
@@ -1189,7 +1196,7 @@ layout_qualifier_id:
 	      YYERROR;
 	   }
 	}
-	| any_identifier '=' INTCONSTANT
+	| any_identifier '=' integer_constant
 	{
 	   memset(& $$, 0, sizeof($$));
 
@@ -1467,6 +1474,8 @@ basic_type_specifier_nonarray:
 	| SAMPLER1DARRAYSHADOW	{ $$ = "sampler1DArrayShadow"; }
 	| SAMPLER2DARRAYSHADOW	{ $$ = "sampler2DArrayShadow"; }
 	| SAMPLERBUFFER		{ $$ = "samplerBuffer"; }
+	| SAMPLERCUBEARRAY	{ $$ = "samplerCubeArray"; }
+	| SAMPLERCUBEARRAYSHADOW { $$ = "samplerCubeArrayShadow"; }
 	| ISAMPLER1D		{ $$ = "isampler1D"; }
 	| ISAMPLER2D		{ $$ = "isampler2D"; }
 	| ISAMPLER2DRECT	{ $$ = "isampler2DRect"; }
@@ -1475,6 +1484,7 @@ basic_type_specifier_nonarray:
 	| ISAMPLER1DARRAY	{ $$ = "isampler1DArray"; }
 	| ISAMPLER2DARRAY	{ $$ = "isampler2DArray"; }
 	| ISAMPLERBUFFER	{ $$ = "isamplerBuffer"; }
+	| ISAMPLERCUBEARRAY	{ $$ = "isamplerCubeArray"; }
 	| USAMPLER1D		{ $$ = "usampler1D"; }
 	| USAMPLER2D		{ $$ = "usampler2D"; }
 	| USAMPLER2DRECT	{ $$ = "usampler2DRect"; }
@@ -1483,6 +1493,7 @@ basic_type_specifier_nonarray:
 	| USAMPLER1DARRAY	{ $$ = "usampler1DArray"; }
 	| USAMPLER2DARRAY	{ $$ = "usampler2DArray"; }
 	| USAMPLERBUFFER	{ $$ = "usamplerBuffer"; }
+	| USAMPLERCUBEARRAY	{ $$ = "usamplerCubeArray"; }
 	;
 
 precision_qualifier:

@@ -84,10 +84,10 @@ intel_miptree_create_for_teximage(struct intel_context *intel,
 	  intelImage->base.Base.Level == firstLevel &&
 	  (intel->gen < 4 || firstLevel == 0)) {
 	 lastLevel = firstLevel;
-      } else if (intelObj->base.Target == GL_TEXTURE_EXTERNAL_OES) {
-	 lastLevel = firstLevel;
       } else {
-	 lastLevel = firstLevel + _mesa_logbase2(MAX2(MAX2(width, height), depth));
+	 lastLevel = (firstLevel +
+                      _mesa_get_tex_max_num_levels(intelObj->base.Target,
+                                                   width, height, depth) - 1);
       }
    }
 
@@ -167,6 +167,12 @@ try_pbo_upload(struct gl_context *ctx,
       return false;
    }
 
+   if (image->TexObject->Target == GL_TEXTURE_1D_ARRAY ||
+       image->TexObject->Target == GL_TEXTURE_2D_ARRAY) {
+      DBG("%s: no support for array textures\n", __FUNCTION__);
+      return false;
+   }
+
    dst_buffer = intelImage->mt->region->bo;
    src_buffer = intel_bufferobj_source(intel, pbo, 64, &src_offset);
    /* note: potential 64-bit ptr to 32-bit int cast */
@@ -178,7 +184,7 @@ try_pbo_upload(struct gl_context *ctx,
       src_stride = image->Width;
 
    intel_miptree_get_image_offset(intelImage->mt, intelImage->base.Base.Level,
-				  intelImage->base.Base.Face, 0,
+				  intelImage->base.Base.Face,
 				  &dst_x, &dst_y);
 
    dst_stride = intelImage->mt->region->pitch;

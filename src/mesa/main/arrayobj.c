@@ -359,7 +359,7 @@ bind_vertex_array(struct gl_context *ctx, GLuint id, GLboolean genRequired)
       newObj = lookup_arrayobj(ctx, id);
       if (!newObj) {
          if (genRequired) {
-            _mesa_error(ctx, GL_INVALID_OPERATION, "glBindVertexArray(id)");
+            _mesa_error(ctx, GL_INVALID_OPERATION, "glBindVertexArray(non-gen name)");
             return;
          }
 
@@ -431,7 +431,7 @@ _mesa_BindVertexArrayAPPLE( GLuint id )
  * \param ids    Array of \c n array object IDs.
  */
 void GLAPIENTRY
-_mesa_DeleteVertexArraysAPPLE(GLsizei n, const GLuint *ids)
+_mesa_DeleteVertexArrays(GLsizei n, const GLuint *ids)
 {
    GET_CURRENT_CONTEXT(ctx);
    GLsizei i;
@@ -541,7 +541,7 @@ _mesa_GenVertexArraysAPPLE(GLsizei n, GLuint *arrays)
  *          \c GL_FALSE otherwise.
  */
 GLboolean GLAPIENTRY
-_mesa_IsVertexArrayAPPLE( GLuint id )
+_mesa_IsVertexArray( GLuint id )
 {
    struct gl_array_object * obj;
    GET_CURRENT_CONTEXT(ctx);

@@ -81,8 +81,10 @@ dri_create_context(gl_api api, const struct gl_config * visual,
    case API_OPENGLES2:
       attribs.profile = ST_PROFILE_OPENGL_ES2;
       break;
-   case API_OPENGL:
-      attribs.profile = ST_PROFILE_DEFAULT;
+   case API_OPENGL_COMPAT:
+   case API_OPENGL_CORE:
+      attribs.profile = api == API_OPENGL_COMPAT ? ST_PROFILE_DEFAULT
+                                                 : ST_PROFILE_OPENGL_CORE;
       attribs.major = major_version;
       attribs.minor = minor_version;
 
@@ -150,7 +152,9 @@ dri_create_context(gl_api api, const struct gl_config * visual,
    // Context successfully created. See if post-processing is requested.
    dri_pp_query(ctx);
 
-   ctx->pp = pp_init(screen->base.screen, ctx->pp_enabled);
+   if (ctx->st->cso_context) {
+      ctx->pp = pp_init(ctx->st->pipe, ctx->pp_enabled, ctx->st->cso_context);
+   }
 
    *error = __DRI_CTX_ERROR_SUCCESS;
    return GL_TRUE;

@@ -173,7 +173,7 @@ gl_shader *
 read_builtins(GLenum target, const char *protos, const char **functions, unsigned count)
 {
    struct gl_context fakeCtx;
-   fakeCtx.API = API_OPENGL;
+   fakeCtx.API = API_OPENGL_COMPAT;
    fakeCtx.Const.GLSLVersion = 140;
    fakeCtx.Extensions.ARB_ES2_compatibility = true;
    fakeCtx.Const.ForceGLSLExtensionsWarn = false;
@@ -187,6 +187,7 @@ read_builtins(GLenum target, const char *protos, const char **functions, unsigne
    st->EXT_texture_array_enable = true;
    st->OES_EGL_image_external_enable = true;
    st->ARB_shader_bit_encoding_enable = true;
+   st->ARB_texture_cube_map_array_enable = true;
    _mesa_glsl_initialize_types(st);
 
    sh->ir = new(sh) exec_list;

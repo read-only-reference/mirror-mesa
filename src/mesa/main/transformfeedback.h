@@ -46,10 +46,6 @@ _mesa_validate_transform_feedback_buffers(struct gl_context *ctx);
 extern void
 _mesa_init_transform_feedback_functions(struct dd_function_table *driver);
 
-extern void
-_mesa_init_transform_feedback_dispatch(const struct gl_context *ctx,
-                                       struct _glapi_table *disp);
-
 
 /*** GL_EXT_transform_feedback ***/
 
@@ -77,7 +73,8 @@ _mesa_BindBufferOffsetEXT(GLenum target, GLuint index, GLuint buffer,
 
 extern void GLAPIENTRY
 _mesa_TransformFeedbackVaryings(GLuint program, GLsizei count,
-                                const GLchar **varyings, GLenum bufferMode);
+                                const GLchar * const *varyings,
+                                GLenum bufferMode);
 
 extern void GLAPIENTRY
 _mesa_GetTransformFeedbackVarying(GLuint program, GLuint index,

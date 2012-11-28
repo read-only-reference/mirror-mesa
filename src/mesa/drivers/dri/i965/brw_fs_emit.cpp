@@ -37,8 +37,31 @@ extern "C" {
 #include "brw_cfg.h"
 #include "glsl/ir_print_visitor.h"
 
+fs_generator::fs_generator(struct brw_context *brw,
+                           struct brw_wm_compile *c,
+                           struct gl_shader_program *prog,
+                           struct gl_fragment_program *fp,
+                           bool dual_source_output)
+
+   : brw(brw), c(c), prog(prog), fp(fp), dual_source_output(dual_source_output)
+{
+   intel = &brw->intel;
+   ctx = &intel->ctx;
+
+   shader = prog ? prog->_LinkedShaders[MESA_SHADER_FRAGMENT] : NULL;
+
+   mem_ctx = c;
+
+   p = rzalloc(mem_ctx, struct brw_compile);
+   brw_init_compile(brw, p, mem_ctx);
+}
+
+fs_generator::~fs_generator()
+{
+}
+
 void
-fs_visitor::generate_fb_write(fs_inst *inst)
+fs_generator::generate_fb_write(fs_inst *inst)
 {
    bool eot = inst->eot;
    struct brw_reg implied_header;
@@ -91,9 +114,9 @@ fs_visitor::generate_fb_write(fs_inst *inst)
       implied_header = brw_null_reg();
    }
 
-   if (this->dual_src_output.file != BAD_FILE)
+   if (this->dual_source_output)
       msg_control = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD8_DUAL_SOURCE_SUBSPAN01;
-   else if (c->dispatch_width == 16)
+   else if (dispatch_width == 16)
       msg_control = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD16_SINGLE_SOURCE;
    else
       msg_control = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD8_SINGLE_SOURCE_SUBSPAN01;
@@ -101,7 +124,7 @@ fs_visitor::generate_fb_write(fs_inst *inst)
    brw_pop_insn_state(p);
 
    brw_fb_WRITE(p,
-		c->dispatch_width,
+		dispatch_width,
 		inst->base_mrf,
 		implied_header,
 		msg_control,
@@ -119,7 +142,7 @@ fs_visitor::generate_fb_write(fs_inst *inst)
  * interpolation.
  */
 void
-fs_visitor::generate_pixel_xy(struct brw_reg dst, bool is_x)
+fs_generator::generate_pixel_xy(struct brw_reg dst, bool is_x)
 {
    struct brw_reg g1_uw = retype(brw_vec1_grf(1, 0), BRW_REGISTER_TYPE_UW);
    struct brw_reg src;
@@ -133,7 +156,7 @@ fs_visitor::generate_pixel_xy(struct brw_reg dst, bool is_x)
       deltas = brw_imm_v(0x11001100);
    }
 
-   if (c->dispatch_width == 16) {
+   if (dispatch_width == 16) {
       dst = vec16(dst);
    }
 
@@ -147,7 +170,7 @@ fs_visitor::generate_pixel_xy(struct brw_reg dst, bool is_x)
 }
 
 void
-fs_visitor::generate_linterp(fs_inst *inst,
+fs_generator::generate_linterp(fs_inst *inst,
 			     struct brw_reg dst, struct brw_reg *src)
 {
    struct brw_reg delta_x = src[0];
@@ -165,7 +188,7 @@ fs_visitor::generate_linterp(fs_inst *inst,
 }
 
 void
-fs_visitor::generate_math1_gen7(fs_inst *inst,
+fs_generator::generate_math1_gen7(fs_inst *inst,
 			        struct brw_reg dst,
 			        struct brw_reg src0)
 {
@@ -178,7 +201,7 @@ fs_visitor::generate_math1_gen7(fs_inst *inst,
 }
 
 void
-fs_visitor::generate_math2_gen7(fs_inst *inst,
+fs_generator::generate_math2_gen7(fs_inst *inst,
 			        struct brw_reg dst,
 			        struct brw_reg src0,
 			        struct brw_reg src1)
@@ -188,7 +211,7 @@ fs_visitor::generate_math2_gen7(fs_inst *inst,
 }
 
 void
-fs_visitor::generate_math1_gen6(fs_inst *inst,
+fs_generator::generate_math1_gen6(fs_inst *inst,
 			        struct brw_reg dst,
 			        struct brw_reg src0)
 {
@@ -203,7 +226,7 @@ fs_visitor::generate_math1_gen6(fs_inst *inst,
 	    BRW_MATH_DATA_VECTOR,
 	    BRW_MATH_PRECISION_FULL);
 
-   if (c->dispatch_width == 16) {
+   if (dispatch_width == 16) {
       brw_set_compression_control(p, BRW_COMPRESSION_2NDHALF);
       brw_math(p, sechalf(dst),
 	       op,
@@ -215,7 +238,7 @@ fs_visitor::generate_math1_gen6(fs_inst *inst,
 }
 
 void
-fs_visitor::generate_math2_gen6(fs_inst *inst,
+fs_generator::generate_math2_gen6(fs_inst *inst,
 			        struct brw_reg dst,
 			        struct brw_reg src0,
 			        struct brw_reg src1)
@@ -227,7 +250,7 @@ fs_visitor::generate_math2_gen6(fs_inst *inst,
    brw_set_compression_control(p, BRW_COMPRESSION_NONE);
    brw_math2(p, dst, op, src0, src1);
 
-   if (c->dispatch_width == 16) {
+   if (dispatch_width == 16) {
       brw_set_compression_control(p, BRW_COMPRESSION_2NDHALF);
       brw_math2(p, sechalf(dst), op, sechalf(src0), sechalf(src1));
       brw_set_compression_control(p, BRW_COMPRESSION_COMPRESSED);
@@ -235,7 +258,7 @@ fs_visitor::generate_math2_gen6(fs_inst *inst,
 }
 
 void
-fs_visitor::generate_math_gen4(fs_inst *inst,
+fs_generator::generate_math_gen4(fs_inst *inst,
 			       struct brw_reg dst,
 			       struct brw_reg src)
 {
@@ -250,7 +273,7 @@ fs_visitor::generate_math_gen4(fs_inst *inst,
 	    BRW_MATH_DATA_VECTOR,
 	    BRW_MATH_PRECISION_FULL);
 
-   if (c->dispatch_width == 16) {
+   if (dispatch_width == 16) {
       brw_set_compression_control(p, BRW_COMPRESSION_2NDHALF);
       brw_math(p, sechalf(dst),
 	       op,
@@ -263,7 +286,7 @@ fs_visitor::generate_math_gen4(fs_inst *inst,
 }
 
 void
-fs_visitor::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
+fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
 {
    int msg_type = -1;
    int rlen = 4;
@@ -282,7 +305,7 @@ fs_visitor::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
       break;
    }
 
-   if (c->dispatch_width == 16)
+   if (dispatch_width == 16)
       simd_mode = BRW_SAMPLER_SIMD_MODE_SIMD16;
 
    if (intel->gen >= 5) {
@@ -328,7 +351,7 @@ fs_visitor::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
 	 /* Note that G45 and older determines shadow compare and dispatch width
 	  * from message length for most messages.
 	  */
-	 assert(c->dispatch_width == 8);
+	 assert(dispatch_width == 8);
 	 msg_type = BRW_SAMPLER_MESSAGE_SIMD8_SAMPLE;
 	 if (inst->shadow_compare) {
 	    assert(inst->mlen == 6);
@@ -447,7 +470,7 @@ fs_visitor::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
  * ((ss0.tl - ss0.bl)x4 (ss1.tl - ss1.bl)x4)
  */
 void
-fs_visitor::generate_ddx(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
+fs_generator::generate_ddx(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
 {
    struct brw_reg src0 = brw_reg(src.file, src.nr, 1,
 				 BRW_REGISTER_TYPE_F,
@@ -469,7 +492,7 @@ fs_visitor::generate_ddx(fs_inst *inst, struct brw_reg dst, struct brw_reg src)
  * left.
  */
 void
-fs_visitor::generate_ddy(fs_inst *inst, struct brw_reg dst, struct brw_reg src,
+fs_generator::generate_ddy(fs_inst *inst, struct brw_reg dst, struct brw_reg src,
                          bool negate_value)
 {
    struct brw_reg src0 = brw_reg(src.file, src.nr, 0,
@@ -491,7 +514,7 @@ fs_visitor::generate_ddy(fs_inst *inst, struct brw_reg dst, struct brw_reg src,
 }
 
 void
-fs_visitor::generate_discard(fs_inst *inst)
+fs_generator::generate_discard(fs_inst *inst)
 {
    struct brw_reg f0 = brw_flag_reg();
 
@@ -543,7 +566,7 @@ fs_visitor::generate_discard(fs_inst *inst)
 }
 
 void
-fs_visitor::generate_spill(fs_inst *inst, struct brw_reg src)
+fs_generator::generate_spill(fs_inst *inst, struct brw_reg src)
 {
    assert(inst->mlen != 0);
 
@@ -555,7 +578,7 @@ fs_visitor::generate_spill(fs_inst *inst, struct brw_reg src)
 }
 
 void
-fs_visitor::generate_unspill(fs_inst *inst, struct brw_reg dst)
+fs_generator::generate_unspill(fs_inst *inst, struct brw_reg dst)
 {
    assert(inst->mlen != 0);
 
@@ -585,7 +608,7 @@ fs_visitor::generate_unspill(fs_inst *inst, struct brw_reg dst)
 }
 
 void
-fs_visitor::generate_pull_constant_load(fs_inst *inst, struct brw_reg dst,
+fs_generator::generate_pull_constant_load(fs_inst *inst, struct brw_reg dst,
 					struct brw_reg index,
 					struct brw_reg offset)
 {
@@ -632,7 +655,7 @@ fs_visitor::generate_pull_constant_load(fs_inst *inst, struct brw_reg dst,
  * Used only on Gen6 and above.
  */
 void
-fs_visitor::generate_mov_dispatch_to_flags()
+fs_generator::generate_mov_dispatch_to_flags()
 {
    struct brw_reg f0 = brw_flag_reg();
    struct brw_reg g1 = retype(brw_vec1_grf(1, 7), BRW_REGISTER_TYPE_UW);
@@ -722,7 +745,7 @@ brw_reg_from_fs_reg(fs_reg *reg)
 }
 
 void
-fs_visitor::generate_code()
+fs_generator::generate_code(exec_list *instructions)
 {
    int last_native_insn_offset = p->next_insn_offset;
    const char *last_annotation_string = NULL;
@@ -731,18 +754,18 @@ fs_visitor::generate_code()
    if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
       if (shader) {
          printf("Native code for fragment shader %d (%d-wide dispatch):\n",
-                prog->Name, c->dispatch_width);
+                prog->Name, dispatch_width);
       } else {
          printf("Native code for fragment program %d (%d-wide dispatch):\n",
-                c->fp->program.Base.Id, c->dispatch_width);
+                fp->Base.Id, dispatch_width);
       }
    }
 
    cfg_t *cfg = NULL;
    if (unlikely(INTEL_DEBUG & DEBUG_WM))
-      cfg = new(mem_ctx) cfg_t(this);
+      cfg = new(mem_ctx) cfg_t(mem_ctx, instructions);
 
-   foreach_list(node, &this->instructions) {
+   foreach_list(node, instructions) {
       fs_inst *inst = (fs_inst *)node;
       struct brw_reg src[3], dst;
 
@@ -807,7 +830,7 @@ fs_visitor::generate_code()
       brw_set_predicate_inverse(p, inst->predicate_inverse);
       brw_set_saturate(p, inst->saturate);
 
-      if (inst->force_uncompressed || c->dispatch_width == 8) {
+      if (inst->force_uncompressed || dispatch_width == 8) {
 	 brw_set_compression_control(p, BRW_COMPRESSION_NONE);
       } else if (inst->force_sechalf) {
 	 brw_set_compression_control(p, BRW_COMPRESSION_2NDHALF);
@@ -833,7 +856,7 @@ fs_visitor::generate_code()
 
       case BRW_OPCODE_MAD:
 	 brw_set_access_mode(p, BRW_ALIGN_16);
-	 if (c->dispatch_width == 16) {
+	 if (dispatch_width == 16) {
 	    brw_set_compression_control(p, BRW_COMPRESSION_NONE);
 	    brw_MAD(p, dst, src[0], src[1], src[2]);
 	    brw_set_compression_control(p, BRW_COMPRESSION_2NDHALF);
@@ -893,7 +916,7 @@ fs_visitor::generate_code()
 	    assert(intel->gen == 6);
 	    gen6_IF(p, inst->conditional_mod, src[0], src[1]);
 	 } else {
-	    brw_IF(p, c->dispatch_width == 16 ? BRW_EXECUTE_16 : BRW_EXECUTE_8);
+	    brw_IF(p, dispatch_width == 16 ? BRW_EXECUTE_16 : BRW_EXECUTE_8);
 	 }
 	 break;
 
@@ -1006,13 +1029,13 @@ fs_visitor::generate_code()
          break;
 
       default:
-	 if (inst->opcode < (int)ARRAY_SIZE(brw_opcodes)) {
+	 if (inst->opcode < (int) ARRAY_SIZE(opcode_descs)) {
 	    _mesa_problem(ctx, "Unsupported opcode `%s' in FS",
-			  brw_opcodes[inst->opcode].name);
+			  opcode_descs[inst->opcode].name);
 	 } else {
 	    _mesa_problem(ctx, "Unsupported opcode %d in FS", inst->opcode);
 	 }
-	 fail("unsupported opcode in FS\n");
+	 abort();
       }
 
       if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
@@ -1053,4 +1076,36 @@ fs_visitor::generate_code()
    if (0) {
       brw_dump_compile(p, stdout, 0, p->next_insn_offset);
    }
+}
+
+const unsigned *
+fs_generator::generate_assembly(exec_list *simd8_instructions,
+                                exec_list *simd16_instructions,
+                                unsigned *assembly_size)
+{
+   dispatch_width = 8;
+   generate_code(simd8_instructions);
+
+   if (simd16_instructions) {
+      /* We have to do a compaction pass now, or the one at the end of
+       * execution will squash down where our prog_offset start needs
+       * to be.
+       */
+      brw_compact_instructions(p);
+
+      /* align to 64 byte boundary. */
+      while ((p->nr_insn * sizeof(struct brw_instruction)) % 64) {
+         brw_NOP(p);
+      }
+
+      /* Save off the start of this 16-wide program */
+      c->prog_data.prog_offset_16 = p->nr_insn * sizeof(struct brw_instruction);
+
+      brw_set_compression_control(p, BRW_COMPRESSION_COMPRESSED);
+
+      dispatch_width = 16;
+      generate_code(simd16_instructions);
+   }
+
+   return brw_get_program(p, assembly_size);
 }

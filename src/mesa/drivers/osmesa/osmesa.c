@@ -386,9 +386,9 @@ compute_row_addresses( OSMesaContext osmesa )
  * Don't use _mesa_delete_renderbuffer since we can't free rb->Buffer.
  */
 static void
-osmesa_delete_renderbuffer(struct gl_renderbuffer *rb)
+osmesa_delete_renderbuffer(struct gl_context *ctx, struct gl_renderbuffer *rb)
 {
-   free(rb);
+   _mesa_delete_renderbuffer(ctx, rb);
 }
 
 
@@ -709,7 +709,7 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       functions.GetBufferSize = NULL;
 
       if (!_mesa_initialize_context(&osmesa->mesa,
-                                    API_OPENGL,
+                                    API_OPENGL_COMPAT,
                                     osmesa->gl_visual,
                                     sharelist ? &sharelist->mesa
                                               : (struct gl_context *) NULL,

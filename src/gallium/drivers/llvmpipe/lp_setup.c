@@ -390,7 +390,7 @@ lp_setup_try_clear( struct lp_setup_context *setup,
 
    if (flags & PIPE_CLEAR_COLOR) {
       for (i = 0; i < 4; i++)
-         color_arg.clear_color[i] = float_to_ubyte(color[i]);
+         color_arg.clear_color[i] = color[i];
    }
 
    if (flags & PIPE_CLEAR_DEPTHSTENCIL) {
@@ -653,9 +653,15 @@ lp_setup_set_fragment_sampler_views(struct lp_setup_context *setup,
          jit_tex = &setup->fs.current.jit_context.textures[i];
          jit_tex->width = tex->width0;
          jit_tex->height = tex->height0;
-         jit_tex->depth = tex->depth0;
          jit_tex->first_level = view->u.tex.first_level;
          jit_tex->last_level = tex->last_level;
+
+         if (tex->target == PIPE_TEXTURE_3D) {
+            jit_tex->depth = tex->depth0;
+         }
+         else {
+            jit_tex->depth = tex->array_size;
+         }
 
          /* We're referencing the texture's internal data, so save a
           * reference to it.
@@ -663,24 +669,46 @@ lp_setup_set_fragment_sampler_views(struct lp_setup_context *setup,
          pipe_resource_reference(&setup->fs.current_tex[i], tex);
 
          if (!lp_tex->dt) {
-            /* regular texture - setup array of mipmap level pointers */
+            /* regular texture - setup array of mipmap level offsets */
+            void *mip_ptr;
             int j;
+            /*
+             * XXX this is messed up we don't want to accidentally trigger
+             * tiled->linear conversion for levels we don't need.
+             * So ask for first_level data (which will allocate all levels)
+             * then if successful get base ptr.
+             */
+            mip_ptr = llvmpipe_get_texture_image_all(lp_tex, view->u.tex.first_level,
+                                                     LP_TEX_USAGE_READ,
+                                                     LP_TEX_LAYOUT_LINEAR);
+            if ((LP_PERF & PERF_TEX_MEM) || !mip_ptr) {
+               /* out of memory - use dummy tile memory */
+               jit_tex->base = lp_dummy_tile;
+               jit_tex->width = TILE_SIZE/8;
+               jit_tex->height = TILE_SIZE/8;
+               jit_tex->depth = 1;
+               jit_tex->first_level = 0;
+               jit_tex->last_level = 0;
+            }
+            else {
+               jit_tex->base = lp_tex->linear_img.data;
+            }
             for (j = view->u.tex.first_level; j <= tex->last_level; j++) {
-               jit_tex->data[j] =
-                  llvmpipe_get_texture_image_all(lp_tex, j, LP_TEX_USAGE_READ,
-                                                 LP_TEX_LAYOUT_LINEAR);
+               mip_ptr = llvmpipe_get_texture_image_all(lp_tex, j,
+                                                        LP_TEX_USAGE_READ,
+                                                        LP_TEX_LAYOUT_LINEAR);
+               jit_tex->mip_offsets[j] = (uint8_t *)mip_ptr - (uint8_t *)jit_tex->base;
+               /*
+                * could get mip offset directly but need call above to
+                * invoke tiled->linear conversion.
+                */
+               assert(lp_tex->linear_mip_offsets[j] == jit_tex->mip_offsets[j]);
                jit_tex->row_stride[j] = lp_tex->row_stride[j];
                jit_tex->img_stride[j] = lp_tex->img_stride[j];
 
-               if ((LP_PERF & PERF_TEX_MEM) ||
-		   !jit_tex->data[j]) {
+               if (jit_tex->base == lp_dummy_tile) {
                   /* out of memory - use dummy tile memory */
-                  jit_tex->data[j] = lp_dummy_tile;
-                  jit_tex->width = TILE_SIZE/8;
-                  jit_tex->height = TILE_SIZE/8;
-                  jit_tex->depth = 1;
-                  jit_tex->first_level = 0;
-                  jit_tex->last_level = 0;
+                  jit_tex->mip_offsets[j] = 0;
                   jit_tex->row_stride[j] = 0;
                   jit_tex->img_stride[j] = 0;
                }
@@ -693,11 +721,12 @@ lp_setup_set_fragment_sampler_views(struct lp_setup_context *setup,
              */
             struct llvmpipe_screen *screen = llvmpipe_screen(tex->screen);
             struct sw_winsys *winsys = screen->winsys;
-            jit_tex->data[0] = winsys->displaytarget_map(winsys, lp_tex->dt,
-							 PIPE_TRANSFER_READ);
+            jit_tex->base = winsys->displaytarget_map(winsys, lp_tex->dt,
+                                                         PIPE_TRANSFER_READ);
             jit_tex->row_stride[0] = lp_tex->row_stride[0];
             jit_tex->img_stride[0] = lp_tex->img_stride[0];
-            assert(jit_tex->data[0]);
+            jit_tex->mip_offsets[0] = 0;
+            assert(jit_tex->base);
          }
       }
    }
@@ -782,12 +811,24 @@ try_update_scene_state( struct lp_setup_context *setup )
 
    if(setup->dirty & LP_SETUP_NEW_BLEND_COLOR) {
       uint8_t *stored;
+      float* fstored;
       unsigned i, j;
+      unsigned size;
 
-      stored = lp_scene_alloc_aligned(scene, 4 * 16, 16);
+      /* Alloc u8_blend_color (16 x i8) and f_blend_color (4 or 8 x f32) */
+      size  = 4 * 16 * sizeof(uint8_t);
+      size += (LP_MAX_VECTOR_LENGTH / 4) * sizeof(float);
+      stored = lp_scene_alloc_aligned(scene, size, LP_MAX_VECTOR_LENGTH);
+
       if (!stored) {
          assert(!new_scene);
          return FALSE;
+      }
+
+      /* Store floating point colour */
+      fstored = (float*)(stored + 4*16);
+      for (i = 0; i < (LP_MAX_VECTOR_LENGTH / 4); ++i) {
+         fstored[i] = setup->blend_color.current.color[i % 4];
       }
 
       /* smear each blend color component across 16 ubyte elements */
@@ -798,7 +839,8 @@ try_update_scene_state( struct lp_setup_context *setup )
       }
 
       setup->blend_color.stored = stored;
-      setup->fs.current.jit_context.blend_color = setup->blend_color.stored;
+      setup->fs.current.jit_context.u8_blend_color = stored;
+      setup->fs.current.jit_context.f_blend_color = fstored;
       setup->dirty |= LP_SETUP_NEW_FS;
    }
 

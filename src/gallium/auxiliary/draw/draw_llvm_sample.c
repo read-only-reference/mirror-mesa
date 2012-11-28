@@ -146,9 +146,10 @@ DRAW_LLVM_TEXTURE_MEMBER(height,     DRAW_JIT_TEXTURE_HEIGHT, TRUE)
 DRAW_LLVM_TEXTURE_MEMBER(depth,      DRAW_JIT_TEXTURE_DEPTH, TRUE)
 DRAW_LLVM_TEXTURE_MEMBER(first_level,DRAW_JIT_TEXTURE_FIRST_LEVEL, TRUE)
 DRAW_LLVM_TEXTURE_MEMBER(last_level, DRAW_JIT_TEXTURE_LAST_LEVEL, TRUE)
+DRAW_LLVM_TEXTURE_MEMBER(base_ptr,   DRAW_JIT_TEXTURE_BASE, TRUE)
 DRAW_LLVM_TEXTURE_MEMBER(row_stride, DRAW_JIT_TEXTURE_ROW_STRIDE, FALSE)
 DRAW_LLVM_TEXTURE_MEMBER(img_stride, DRAW_JIT_TEXTURE_IMG_STRIDE, FALSE)
-DRAW_LLVM_TEXTURE_MEMBER(data_ptr,   DRAW_JIT_TEXTURE_DATA, FALSE)
+DRAW_LLVM_TEXTURE_MEMBER(mip_offsets, DRAW_JIT_TEXTURE_MIP_OFFSETS, FALSE)
 DRAW_LLVM_TEXTURE_MEMBER(min_lod,    DRAW_JIT_TEXTURE_MIN_LOD, TRUE)
 DRAW_LLVM_TEXTURE_MEMBER(max_lod,    DRAW_JIT_TEXTURE_MAX_LOD, TRUE)
 DRAW_LLVM_TEXTURE_MEMBER(lod_bias,   DRAW_JIT_TEXTURE_LOD_BIAS, TRUE)
@@ -170,9 +171,10 @@ static void
 draw_llvm_sampler_soa_emit_fetch_texel(const struct lp_build_sampler_soa *base,
                                        struct gallivm_state *gallivm,
                                        struct lp_type type,
+                                       boolean is_fetch,
                                        unsigned unit,
-                                       unsigned num_coords,
                                        const LLVMValueRef *coords,
+                                       const LLVMValueRef *offsets,
                                        const struct lp_derivatives *derivs,
                                        LLVMValueRef lod_bias, /* optional */
                                        LLVMValueRef explicit_lod, /* optional */
@@ -186,8 +188,10 @@ draw_llvm_sampler_soa_emit_fetch_texel(const struct lp_build_sampler_soa *base,
                        &sampler->dynamic_state.static_state[unit],
                        &sampler->dynamic_state.base,
                        type,
+                       is_fetch,
                        unit,
-                       num_coords, coords,
+                       coords,
+                       offsets,
                        derivs,
                        lod_bias, explicit_lod,
                        texel);
@@ -212,7 +216,7 @@ draw_llvm_sampler_soa_emit_size_query(const struct lp_build_sampler_soa *base,
    lp_build_size_query_soa(gallivm,
                            &sampler->dynamic_state.static_state[unit],
                            &sampler->dynamic_state.base,
-			   type,
+                           type,
                            unit,
                            explicit_lod,
                            sizes_out);
@@ -238,7 +242,8 @@ draw_llvm_sampler_soa_create(const struct lp_sampler_static_state *static_state,
    sampler->dynamic_state.base.last_level = draw_llvm_texture_last_level;
    sampler->dynamic_state.base.row_stride = draw_llvm_texture_row_stride;
    sampler->dynamic_state.base.img_stride = draw_llvm_texture_img_stride;
-   sampler->dynamic_state.base.data_ptr = draw_llvm_texture_data_ptr;
+   sampler->dynamic_state.base.base_ptr = draw_llvm_texture_base_ptr;
+   sampler->dynamic_state.base.mip_offsets = draw_llvm_texture_mip_offsets;
    sampler->dynamic_state.base.min_lod = draw_llvm_texture_min_lod;
    sampler->dynamic_state.base.max_lod = draw_llvm_texture_max_lod;
    sampler->dynamic_state.base.lod_bias = draw_llvm_texture_lod_bias;

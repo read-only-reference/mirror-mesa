@@ -100,7 +100,7 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 	unsigned num_sgprs, num_user_sgprs;
 	boolean have_linear = FALSE, have_centroid = FALSE, have_perspective = FALSE;
 	unsigned fragcoord_interp_mode = 0;
-	unsigned spi_baryc_cntl, spi_ps_input_ena;
+	unsigned spi_baryc_cntl, spi_ps_input_ena, spi_shader_z_format;
 	uint64_t va;
 
 	si_pm4_delete_state(rctx, ps, shader->pm4);
@@ -145,9 +145,9 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 		if (shader->shader.output[i].name == TGSI_SEMANTIC_POSITION)
 			db_shader_control |= S_02880C_Z_EXPORT_ENABLE(1);
 		if (shader->shader.output[i].name == TGSI_SEMANTIC_STENCIL)
-			db_shader_control |= 0; // XXX OP_VAL or TEST_VAL?
+			db_shader_control |= S_02880C_STENCIL_TEST_VAL_EXPORT_ENABLE(1);
 	}
-	if (shader->shader.uses_kill)
+	if (shader->shader.uses_kill || shader->key.alpha_func != PIPE_FUNC_ALWAYS)
 		db_shader_control |= S_02880C_KILL_ENABLE(1);
 
 	exports_ps = 0;
@@ -195,8 +195,13 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 	si_pm4_set_reg(pm4, R_0286D0_SPI_PS_INPUT_ADDR, spi_ps_input_ena);
 	si_pm4_set_reg(pm4, R_0286D8_SPI_PS_IN_CONTROL, spi_ps_in_control);
 
-	/* XXX: Depends on Z buffer format? */
-	si_pm4_set_reg(pm4, R_028710_SPI_SHADER_Z_FORMAT, 0);
+	if (G_02880C_STENCIL_TEST_VAL_EXPORT_ENABLE(db_shader_control))
+		spi_shader_z_format = V_028710_SPI_SHADER_32_GR;
+	else if (G_02880C_Z_EXPORT_ENABLE(db_shader_control))
+		spi_shader_z_format = V_028710_SPI_SHADER_32_R;
+	else
+		spi_shader_z_format = 0;
+	si_pm4_set_reg(pm4, R_028710_SPI_SHADER_Z_FORMAT, spi_shader_z_format);
 
 	va = r600_resource_va(ctx->screen, (void *)shader->bo);
 	si_pm4_add_bo(pm4, shader->bo, RADEON_USAGE_READ);
@@ -306,23 +311,6 @@ static bool si_update_draw_info_state(struct r600_context *rctx,
 	return true;
 }
 
-static void si_update_alpha_ref(struct r600_context *rctx)
-{
-#if 0
-        unsigned alpha_ref;
-        struct r600_pipe_state rstate;
-
-        alpha_ref = rctx->alpha_ref;
-        rstate.nregs = 0;
-        if (rctx->export_16bpc)
-                alpha_ref &= ~0x1FFF;
-        si_pm4_set_reg(&rstate, R_028438_SX_ALPHA_REF, alpha_ref);
-
-	si_pm4_set_state(rctx, TODO, pm4);
-        rctx->alpha_ref_dirty = false;
-#endif
-}
-
 static void si_update_spi_map(struct r600_context *rctx)
 {
 	struct si_shader *ps = &rctx->ps_shader->current->shader;
@@ -391,10 +379,6 @@ static void si_update_derived_state(struct r600_context *rctx)
 	}
 
 	si_shader_select(ctx, rctx->ps_shader, &ps_dirty);
-
-	if (rctx->alpha_ref_dirty) {
-		si_update_alpha_ref(rctx);
-	}
 
 	if (!rctx->vs_shader->current->pm4) {
 		si_pipe_shader_vs(ctx, rctx->vs_shader->current);

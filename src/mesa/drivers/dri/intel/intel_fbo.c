@@ -87,7 +87,7 @@ intel_new_framebuffer(struct gl_context * ctx, GLuint name)
 
 /** Called by gl_renderbuffer::Delete() */
 static void
-intel_delete_renderbuffer(struct gl_renderbuffer *rb)
+intel_delete_renderbuffer(struct gl_context *ctx, struct gl_renderbuffer *rb)
 {
    struct intel_renderbuffer *irb = intel_renderbuffer(rb);
 
@@ -95,7 +95,7 @@ intel_delete_renderbuffer(struct gl_renderbuffer *rb)
 
    intel_miptree_release(&irb->mt);
 
-   _mesa_delete_renderbuffer(rb);
+   _mesa_delete_renderbuffer(ctx, rb);
 }
 
 /**
@@ -493,20 +493,6 @@ intel_framebuffer_renderbuffer(struct gl_context * ctx,
    intel_draw_buffer(ctx);
 }
 
-/**
- * \par Special case for separate stencil
- *
- *     When wrapping a depthstencil texture that uses separate stencil, this
- *     function is recursively called twice: once to create \c
- *     irb->wrapped_depth and again to create \c irb->wrapped_stencil.  On the
- *     call to create \c irb->wrapped_depth, the \c format and \c
- *     internal_format parameters do not match \c mt->format. In that case, \c
- *     mt->format is MESA_FORMAT_S8_Z24 and \c format is \c
- *     MESA_FORMAT_X8_Z24.
- *
- * @return true on success
- */
-
 static bool
 intel_renderbuffer_update_wrapper(struct intel_context *intel,
                                   struct intel_renderbuffer *irb,
@@ -553,7 +539,6 @@ intel_renderbuffer_set_draw_offset(struct intel_renderbuffer *irb)
    /* compute offset of the particular 2D image within the texture region */
    intel_miptree_get_image_offset(irb->mt,
 				  irb->mt_level,
-				  0, /* face, which we ignore */
 				  irb->mt_layer,
 				  &dst_x, &dst_y);
 

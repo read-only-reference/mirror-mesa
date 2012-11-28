@@ -31,6 +31,7 @@
 #include "gallivm/lp_bld_const.h"
 #include "gallivm/lp_bld_gather.h"
 #include "gallivm/lp_bld_intr.h"
+#include "gallivm/lp_bld_logic.h"
 #include "gallivm/lp_bld_tgsi.h"
 #include "radeon_llvm.h"
 #include "radeon_llvm_emit.h"
@@ -495,7 +496,11 @@ static void si_llvm_init_export_args(struct lp_build_tgsi_context *bld_base,
 						LLVMInt32TypeInContext(base->gallivm->context),
 						args, 2,
 						LLVMReadNoneAttribute);
-			args[chan + 7] = args[chan + 5];
+			args[chan + 7] = args[chan + 5] =
+				LLVMBuildBitCast(base->gallivm->builder,
+						 args[chan + 5],
+						 LLVMFloatTypeInContext(base->gallivm->context),
+						 "");
 		}
 
 		/* Set COMPR flag */
@@ -546,6 +551,37 @@ static void si_llvm_emit_prologue(struct lp_build_tgsi_context *bld_base)
 }
 
 
+static void si_alpha_test(struct lp_build_tgsi_context *bld_base,
+			  unsigned index)
+{
+	struct si_shader_context *si_shader_ctx = si_shader_context(bld_base);
+	struct gallivm_state *gallivm = bld_base->base.gallivm;
+
+	if (si_shader_ctx->key.alpha_func != PIPE_FUNC_NEVER) {
+		LLVMValueRef out_ptr = si_shader_ctx->radeon_bld.soa.outputs[index][3];
+		LLVMValueRef alpha_pass =
+			lp_build_cmp(&bld_base->base,
+				     si_shader_ctx->key.alpha_func,
+				     LLVMBuildLoad(gallivm->builder, out_ptr, ""),
+				     lp_build_const_float(gallivm, si_shader_ctx->key.alpha_ref));
+		LLVMValueRef arg =
+			lp_build_select(&bld_base->base,
+					alpha_pass,
+					lp_build_const_float(gallivm, 1.0f),
+					lp_build_const_float(gallivm, -1.0f));
+
+		build_intrinsic(gallivm->builder,
+				"llvm.AMDGPU.kill",
+				LLVMVoidTypeInContext(gallivm->context),
+				&arg, 1, 0);
+	} else {
+		build_intrinsic(gallivm->builder,
+				"llvm.AMDGPU.kilp",
+				LLVMVoidTypeInContext(gallivm->context),
+				NULL, 0, 0);
+	}
+}
+
 /* XXX: This is partially implemented for VS only at this point.  It is not complete */
 static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 {
@@ -555,14 +591,15 @@ static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 	struct lp_build_context * uint =
 				&si_shader_ctx->radeon_bld.soa.bld_base.uint_bld;
 	struct tgsi_parse_context *parse = &si_shader_ctx->parse;
+	LLVMValueRef args[9];
 	LLVMValueRef last_args[9] = { 0 };
 	unsigned color_count = 0;
 	unsigned param_count = 0;
+	int depth_index = -1, stencil_index = -1;
 
 	while (!tgsi_parse_end_of_tokens(parse)) {
 		struct tgsi_full_declaration *d =
 					&parse->FullToken.FullDeclaration;
-		LLVMValueRef args[9];
 		unsigned target;
 		unsigned index;
 		int i;
@@ -595,9 +632,19 @@ static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 			/* Select the correct target */
 			switch(d->Semantic.Name) {
 			case TGSI_SEMANTIC_PSIZE:
-			case TGSI_SEMANTIC_POSITION:
 				target = V_008DFC_SQ_EXP_POS;
 				break;
+			case TGSI_SEMANTIC_POSITION:
+				if (si_shader_ctx->type == TGSI_PROCESSOR_VERTEX) {
+					target = V_008DFC_SQ_EXP_POS;
+					break;
+				} else {
+					depth_index = index;
+					continue;
+				}
+			case TGSI_SEMANTIC_STENCIL:
+				stencil_index = index;
+				continue;
 			case TGSI_SEMANTIC_COLOR:
 				if (si_shader_ctx->type == TGSI_PROCESSOR_VERTEX) {
 			case TGSI_SEMANTIC_BCOLOR:
@@ -606,6 +653,10 @@ static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 					param_count++;
 				} else {
 					target = V_008DFC_SQ_EXP_MRT + color_count;
+					if (color_count == 0 &&
+					    si_shader_ctx->key.alpha_func != PIPE_FUNC_ALWAYS)
+						si_alpha_test(bld_base, index);
+
 					color_count++;
 				}
 				break;
@@ -643,6 +694,52 @@ static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 			}
 
 		}
+	}
+
+	if (depth_index >= 0 || stencil_index >= 0) {
+		LLVMValueRef out_ptr;
+		unsigned mask = 0;
+
+		/* Specify the target we are exporting */
+		args[3] = lp_build_const_int32(base->gallivm, V_008DFC_SQ_EXP_MRTZ);
+
+		if (depth_index >= 0) {
+			out_ptr = si_shader_ctx->radeon_bld.soa.outputs[depth_index][2];
+			args[5] = LLVMBuildLoad(base->gallivm->builder, out_ptr, "");
+			mask |= 0x1;
+
+			if (stencil_index < 0) {
+				args[6] =
+				args[7] =
+				args[8] = args[5];
+			}
+		}
+
+		if (stencil_index >= 0) {
+			out_ptr = si_shader_ctx->radeon_bld.soa.outputs[stencil_index][1];
+			args[7] =
+			args[8] =
+			args[6] = LLVMBuildLoad(base->gallivm->builder, out_ptr, "");
+			mask |= 0x2;
+
+			if (depth_index < 0)
+				args[5] = args[6];
+		}
+
+		/* Specify which components to enable */
+		args[0] = lp_build_const_int32(base->gallivm, mask);
+
+		args[1] =
+		args[2] =
+		args[4] = uint->zero;
+
+		if (last_args[0])
+			lp_build_intrinsic(base->gallivm->builder,
+					   "llvm.SI.export",
+					   LLVMVoidTypeInContext(base->gallivm->context),
+					   args, 9);
+		else
+			memcpy(last_args, args, sizeof(args));
 	}
 
 	if (!last_args[0]) {
@@ -750,6 +847,18 @@ static const struct lp_build_tgsi_action tex_action = {
 	.intr_name = "llvm.SI.sample"
 };
 
+static const struct lp_build_tgsi_action txb_action = {
+	.fetch_args = tex_fetch_args,
+	.emit = lp_build_tgsi_intrinsic,
+	.intr_name = "llvm.SI.sample.bias"
+};
+
+static const struct lp_build_tgsi_action txl_action = {
+	.fetch_args = tex_fetch_args,
+	.emit = lp_build_tgsi_intrinsic,
+	.intr_name = "llvm.SI.sample.lod"
+};
+
 
 int si_pipe_shader_create(
 	struct pipe_context *ctx,
@@ -779,12 +888,15 @@ int si_pipe_shader_create(
 	bld_base = &si_shader_ctx.radeon_bld.soa.bld_base;
 
 	tgsi_scan_shader(sel->tokens, &shader_info);
+	shader->shader.uses_kill = shader_info.uses_kill;
 	bld_base->info = &shader_info;
 	bld_base->emit_fetch_funcs[TGSI_FILE_CONSTANT] = fetch_constant;
 	bld_base->emit_prologue = si_llvm_emit_prologue;
 	bld_base->emit_epilogue = si_llvm_emit_epilogue;
 
 	bld_base->op_actions[TGSI_OPCODE_TEX] = tex_action;
+	bld_base->op_actions[TGSI_OPCODE_TXB] = txb_action;
+	bld_base->op_actions[TGSI_OPCODE_TXL] = txl_action;
 	bld_base->op_actions[TGSI_OPCODE_TXP] = tex_action;
 
 	si_shader_ctx.radeon_bld.load_input = declare_input;

@@ -87,6 +87,9 @@ legal_texobj_target(struct gl_context *ctx, GLuint dims, GLenum target)
       case GL_PROXY_TEXTURE_2D_ARRAY:
          return (ctx->Extensions.MESA_texture_array ||
                  ctx->Extensions.EXT_texture_array);
+      case GL_TEXTURE_CUBE_MAP_ARRAY:
+      case GL_PROXY_TEXTURE_CUBE_MAP_ARRAY:
+         return ctx->Extensions.ARB_texture_cube_map_array;
       default:
          return GL_FALSE;
       }
@@ -211,7 +214,6 @@ tex_storage_error_check(struct gl_context *ctx, GLuint dims, GLenum target,
                         GLsizei width, GLsizei height, GLsizei depth)
 {
    struct gl_texture_object *texObj;
-   GLuint maxDim;
    GLboolean legalFormat;
 
    /* check internal format - note that only sized formats are allowed */
@@ -291,8 +293,7 @@ tex_storage_error_check(struct gl_context *ctx, GLuint dims, GLenum target,
    }
 
    /* check levels against width/height/depth */
-   maxDim = MAX3(width, height, depth);
-   if (levels > _mesa_logbase2(maxDim) + 1) {
+   if (levels > _mesa_get_tex_max_num_levels(target, width, height, depth)) {
       _mesa_error(ctx, GL_INVALID_OPERATION,
                   "glTexStorage%uD(too many levels for max texture dimension)",
                   dims);

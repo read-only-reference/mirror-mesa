@@ -1146,6 +1146,7 @@ struct gl_stencil_attrib
  */
 typedef enum
 {
+   TEXTURE_CUBE_ARRAY_INDEX,
    TEXTURE_BUFFER_INDEX,
    TEXTURE_2D_ARRAY_INDEX,
    TEXTURE_1D_ARRAY_INDEX,
@@ -1164,6 +1165,7 @@ typedef enum
  * Used for Texture.Unit[]._ReallyEnabled flags.
  */
 /*@{*/
+#define TEXTURE_CUBE_ARRAY_BIT (1 << TEXTURE_CUBE_ARRAY_INDEX)
 #define TEXTURE_BUFFER_BIT   (1 << TEXTURE_BUFFER_INDEX)
 #define TEXTURE_2D_ARRAY_BIT (1 << TEXTURE_2D_ARRAY_INDEX)
 #define TEXTURE_1D_ARRAY_BIT (1 << TEXTURE_1D_ARRAY_INDEX)
@@ -1201,7 +1203,8 @@ struct gl_texture_image
    GLuint WidthLog2;		/**< = log2(Width2) */
    GLuint HeightLog2;		/**< = log2(Height2) */
    GLuint DepthLog2;		/**< = log2(Depth2) */
-   GLuint MaxLog2;		/**< = MAX(WidthLog2, HeightLog2) */
+   GLuint MaxNumLevels;		/**< = maximum possible number of mipmap
+                                       levels, computed from the dimensions */
 
    struct gl_texture_object *TexObject;  /**< Pointer back to parent object */
    GLuint Level;                /**< Which mipmap level am I? */
@@ -2602,7 +2605,7 @@ struct gl_renderbuffer
    gl_format Format;      /**< The actual renderbuffer memory format */
 
    /** Delete this renderbuffer */
-   void (*Delete)(struct gl_renderbuffer *rb);
+   void (*Delete)(struct gl_context *ctx, struct gl_renderbuffer *rb);
 
    /** Allocate new storage for this renderbuffer */
    GLboolean (*AllocStorage)(struct gl_context *ctx,
@@ -2973,6 +2976,7 @@ struct gl_extensions
    GLboolean ARB_texture_buffer_object;
    GLboolean ARB_texture_compression_rgtc;
    GLboolean ARB_texture_cube_map;
+   GLboolean ARB_texture_cube_map_array;
    GLboolean ARB_texture_env_combine;
    GLboolean ARB_texture_env_crossbar;
    GLboolean ARB_texture_env_dot3;
@@ -3311,7 +3315,7 @@ struct gl_debug_state
  */
 typedef enum
 {
-   API_OPENGL,      /* legacy / compatibility contexts */
+   API_OPENGL_COMPAT,      /* legacy / compatibility contexts */
    API_OPENGLES,
    API_OPENGLES2,
    API_OPENGL_CORE,

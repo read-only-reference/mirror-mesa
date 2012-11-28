@@ -71,6 +71,7 @@ struct r600_screen {
 
 struct si_pipe_sampler_view {
 	struct pipe_sampler_view	base;
+	struct si_resource		*resource;
 	uint32_t			state[8];
 };
 
@@ -134,8 +135,6 @@ struct r600_context {
 	unsigned			sprite_coord_enable;
 	unsigned			export_16bpc;
 	unsigned			spi_shader_col_format;
-	unsigned			alpha_ref;
-	boolean				alpha_ref_dirty;
 	struct r600_textures_info	vs_samplers;
 	struct r600_textures_info	ps_samplers;
 	struct si_resource		*border_color_table;

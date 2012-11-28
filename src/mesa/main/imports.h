@@ -81,7 +81,7 @@ extern "C" {
  * these casts generate warnings.
  * The following union typedef is used to solve that.
  */
-typedef union { GLfloat f; GLint i; } fi_type;
+typedef union { GLfloat f; GLint i; GLuint u; } fi_type;
 
 
 
@@ -213,8 +213,6 @@ static inline int IS_INF_OR_NAN( float x )
 #elif defined(isfinite)
 #define IS_INF_OR_NAN(x)        (!isfinite(x))
 #elif defined(finite)
-#define IS_INF_OR_NAN(x)        (!finite(x))
-#elif defined(__VMS)
 #define IS_INF_OR_NAN(x)        (!finite(x))
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
 #define IS_INF_OR_NAN(x)        (!isfinite(x))

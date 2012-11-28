@@ -594,7 +594,6 @@ class gl_parameter(object):
             return self.type_expr.format_string()
 
 
-
 class gl_function( gl_item ):
     def __init__(self, element, context):
         self.context = context
@@ -606,6 +605,9 @@ class gl_function( gl_item ):
         self.offset = -1
         self.initialized = 0
         self.images = []
+        self.exec_flavor = 'mesa'
+        self.desktop = True
+        self.deprecated = None
 
         # self.entry_point_api_map[name][api] is a decimal value
         # indicating the earliest version of the given API in which
@@ -613,9 +615,17 @@ class gl_function( gl_item ):
         # the first level of the map; the second level of the map only
         # lists APIs which contain the entry point in at least one
         # version.  For example,
-        # self.entry_point_gles_map['ClipPlanex'] == { 'es1':
+        # self.entry_point_api_map['ClipPlanex'] == { 'es1':
         # Decimal('1.1') }.
         self.entry_point_api_map = {}
+
+        # self.api_map[api] is a decimal value indicating the earliest
+        # version of the given API in which ANY alias for the function
+        # exists.  The map only lists APIs which contain the function
+        # in at least one version.  For example, for the ClipPlanex
+        # function, self.entry_point_api_map == { 'es1':
+        # Decimal('1.1') }.
+        self.api_map = {}
 
         self.assign_offset = 0
 
@@ -651,15 +661,30 @@ class gl_function( gl_item ):
             version_str = element.nsProp(api, None)
             assert version_str is not None
             if version_str != 'none':
-                self.entry_point_api_map[name][api] = Decimal(version_str)
+                version_decimal = Decimal(version_str)
+                self.entry_point_api_map[name][api] = version_decimal
+                if api not in self.api_map or \
+                        version_decimal < self.api_map[api]:
+                    self.api_map[api] = version_decimal
+
+        exec_flavor = element.nsProp('exec', None)
+        if exec_flavor:
+            self.exec_flavor = exec_flavor
+
+        deprecated = element.nsProp('deprecated', None)
+        if deprecated != 'none':
+            self.deprecated = Decimal(deprecated)
+
+        if not is_attr_true(element, 'desktop'):
+            self.desktop = False
 
         if alias:
             true_name = alias
         else:
             true_name = name
 
-            # Only try to set the offset when a non-alias
-            # entry-point is being processes.
+            # Only try to set the offset when a non-alias entry-point
+            # is being processed.
 
             offset = element.nsProp( "offset", None )
             if offset:
@@ -757,8 +782,11 @@ class gl_function( gl_item ):
         return self.images
 
 
-    def parameterIterator(self):
-        return self.parameters.__iter__();
+    def parameterIterator(self, name = None):
+        if name is not None:
+            return self.entry_point_parameters[name].__iter__();
+        else:
+            return self.parameters.__iter__();
 
 
     def get_parameter_string(self, entrypoint = None):

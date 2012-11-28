@@ -335,6 +335,7 @@ EXTRA_EXT(ARB_blend_func_extended);
 EXTRA_EXT(ARB_uniform_buffer_object);
 EXTRA_EXT(ARB_timer_query);
 EXTRA_EXT(ARB_map_buffer_alignment);
+EXTRA_EXT(ARB_texture_cube_map_array);
 
 static const int
 extra_NV_primitive_restart[] = {
@@ -394,7 +395,7 @@ print_table_stats(int api)
    int i, j, collisions[11], count, hash, mask;
    const struct value_desc *d;
    const char *api_names[] = {
-      [API_OPENGL] = "GL",
+      [API_OPENGL_COMPAT] = "GL",
       [API_OPENGL_CORE] = "GL_CORE",
       [API_OPENGLES] = "GLES",
       [API_OPENGLES2] = "GLES2",
@@ -667,6 +668,7 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
    case GL_TEXTURE_BINDING_CUBE_MAP_ARB:
    case GL_TEXTURE_BINDING_RECTANGLE_NV:
    case GL_TEXTURE_BINDING_EXTERNAL_OES:
+   case GL_TEXTURE_BINDING_CUBE_MAP_ARRAY:
       unit = ctx->Texture.CurrentUnit;
       v->value_int =
 	 ctx->Texture.Unit[unit].CurrentTex[d->offset]->Name;
@@ -1480,7 +1482,7 @@ _mesa_GetDoublev(GLenum pname, GLdouble *params)
 }
 
 static enum value_type
-find_value_indexed(const char *func, GLenum pname, int index, union value *v)
+find_value_indexed(const char *func, GLenum pname, GLuint index, union value *v)
 {
    GET_CURRENT_CONTEXT(ctx);
 
@@ -1612,7 +1614,7 @@ find_value_indexed(const char *func, GLenum pname, int index, union value *v)
 }
 
 void GLAPIENTRY
-_mesa_GetBooleanIndexedv( GLenum pname, GLuint index, GLboolean *params )
+_mesa_GetBooleani_v( GLenum pname, GLuint index, GLboolean *params )
 {
    union value v;
    enum value_type type =
@@ -1637,7 +1639,7 @@ _mesa_GetBooleanIndexedv( GLenum pname, GLuint index, GLboolean *params )
 }
 
 void GLAPIENTRY
-_mesa_GetIntegerIndexedv( GLenum pname, GLuint index, GLint *params )
+_mesa_GetIntegeri_v( GLenum pname, GLuint index, GLint *params )
 {
    union value v;
    enum value_type type =
@@ -1686,7 +1688,6 @@ _mesa_GetInteger64Indexedv( GLenum pname, GLuint index, GLint64 *params )
    }
 }
 
-#if FEATURE_ES1
 void GLAPIENTRY
 _mesa_GetFixedv(GLenum pname, GLfixed *params)
 {
@@ -1772,4 +1773,3 @@ _mesa_GetFixedv(GLenum pname, GLfixed *params)
       break;
    }
 }
-#endif

@@ -401,7 +401,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 1;
 
         case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
-                return 64;
+                return R600_MAP_BUFFER_ALIGNMENT;
 
 	case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
 		return 256;
@@ -420,6 +420,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	/* Supported on Evergreen. */
 	case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
+	case PIPE_CAP_CUBE_MAP_ARRAY:
 		return family >= CHIP_CEDAR ? 1 : 0;
 
 	/* Unsupported features. */
@@ -540,7 +541,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_MAX_CONSTS:
 		return R600_MAX_CONST_BUFFER_SIZE;
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
-		return R600_MAX_CONST_BUFFERS-1;
+		return R600_MAX_USER_CONST_BUFFERS;
 	case PIPE_SHADER_CAP_MAX_PREDS:
 		return 0; /* nothing uses this */
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:

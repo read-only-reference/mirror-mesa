@@ -108,6 +108,7 @@ _mesa_initialize_texture_object( struct gl_texture_object *obj,
           target == GL_TEXTURE_1D_ARRAY_EXT ||
           target == GL_TEXTURE_2D_ARRAY_EXT ||
           target == GL_TEXTURE_EXTERNAL_OES ||
+          target == GL_TEXTURE_CUBE_MAP_ARRAY ||
           target == GL_TEXTURE_BUFFER);
 
    memset(obj, 0, sizeof(*obj));
@@ -316,6 +317,7 @@ valid_texture_object(const struct gl_texture_object *tex)
    case GL_TEXTURE_2D_ARRAY_EXT:
    case GL_TEXTURE_BUFFER:
    case GL_TEXTURE_EXTERNAL_OES:
+   case GL_TEXTURE_CUBE_MAP_ARRAY:
       return GL_TRUE;
    case 0x99:
       _mesa_problem(NULL, "invalid reference to a deleted texture object");
@@ -443,7 +445,7 @@ _mesa_test_texobj_completeness( const struct gl_context *ctx,
 {
    const GLint baseLevel = t->BaseLevel;
    const struct gl_texture_image *baseImage;
-   GLint maxLog2 = 0, maxLevels = 0;
+   GLint maxLevels = 0;
 
    /* We'll set these to FALSE if tests fail below */
    t->_BaseComplete = GL_TRUE;
@@ -499,30 +501,22 @@ _mesa_test_texobj_completeness( const struct gl_context *ctx,
    switch (t->Target) {
    case GL_TEXTURE_1D:
    case GL_TEXTURE_1D_ARRAY_EXT:
-      maxLog2 = baseImage->WidthLog2;
       maxLevels = ctx->Const.MaxTextureLevels;
       break;
    case GL_TEXTURE_2D:
    case GL_TEXTURE_2D_ARRAY_EXT:
-      maxLog2 = MAX2(baseImage->WidthLog2,
-                     baseImage->HeightLog2);
       maxLevels = ctx->Const.MaxTextureLevels;
       break;
    case GL_TEXTURE_3D:
-      maxLog2 = MAX3(baseImage->WidthLog2,
-                     baseImage->HeightLog2,
-                     baseImage->DepthLog2);
       maxLevels = ctx->Const.Max3DTextureLevels;
       break;
    case GL_TEXTURE_CUBE_MAP_ARB:
-      maxLog2 = MAX2(baseImage->WidthLog2,
-                     baseImage->HeightLog2);
+   case GL_TEXTURE_CUBE_MAP_ARRAY:
       maxLevels = ctx->Const.MaxCubeTextureLevels;
       break;
    case GL_TEXTURE_RECTANGLE_NV:
    case GL_TEXTURE_BUFFER:
    case GL_TEXTURE_EXTERNAL_OES:
-      maxLog2 = 0;  /* not applicable */
       maxLevels = 1;  /* no mipmapping */
       break;
    default:
@@ -532,7 +526,8 @@ _mesa_test_texobj_completeness( const struct gl_context *ctx,
 
    ASSERT(maxLevels > 0);
 
-   t->_MaxLevel = baseLevel + maxLog2;  /* 'p' in the GL spec */
+   t->_MaxLevel =
+      baseLevel + baseImage->MaxNumLevels - 1; /* 'p' in the GL spec */
    t->_MaxLevel = MIN2(t->_MaxLevel, t->MaxLevel);
    t->_MaxLevel = MIN2(t->_MaxLevel, maxLevels - 1); /* 'q' in the GL spec */
 
@@ -599,7 +594,7 @@ _mesa_test_texobj_completeness( const struct gl_context *ctx,
          if (height > 1 && t->Target != GL_TEXTURE_1D_ARRAY) {
             height /= 2;
          }
-         if (depth > 1 && t->Target != GL_TEXTURE_2D_ARRAY) {
+         if (depth > 1 && t->Target != GL_TEXTURE_2D_ARRAY && t->Target != GL_TEXTURE_CUBE_MAP_ARRAY) {
             depth /= 2;
          }
 
@@ -767,6 +762,10 @@ _mesa_get_fallback_texture(struct gl_context *ctx, gl_texture_index tex)
       case TEXTURE_BUFFER_INDEX:
          dims = 0;
          target = GL_TEXTURE_BUFFER;
+         break;
+     case TEXTURE_CUBE_ARRAY_INDEX:
+         dims = 3;
+         target = GL_TEXTURE_CUBE_MAP_ARRAY;
          break;
       case TEXTURE_EXTERNAL_INDEX:
          dims = 2;
@@ -1155,6 +1154,8 @@ target_enum_to_index(struct gl_context *ctx, GLenum target)
    case GL_TEXTURE_EXTERNAL_OES:
       return _mesa_is_gles(ctx) && ctx->Extensions.OES_EGL_image_external
          ? TEXTURE_EXTERNAL_INDEX : -1;
+   case GL_TEXTURE_CUBE_MAP_ARRAY:
+      return TEXTURE_CUBE_ARRAY_INDEX;
    default:
       return -1;
    }
@@ -1220,7 +1221,7 @@ _mesa_BindTexture( GLenum target, GLuint texName )
       }
       else {
          if (ctx->API == API_OPENGL_CORE) {
-            _mesa_error(ctx, GL_INVALID_OPERATION, "glBindTexture");
+            _mesa_error(ctx, GL_INVALID_OPERATION, "glBindTexture(non-gen name)");
             return;
          }
 

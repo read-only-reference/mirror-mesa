@@ -378,7 +378,8 @@ void st_init_extensions(struct st_context *st)
        * support the GL_POINT_SPRITE_R_MODE_NV option. */
       { o(MESA_texture_array),               PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS         },
 
-      { o(OES_standard_derivatives),         PIPE_CAP_SM3                              }
+      { o(OES_standard_derivatives),         PIPE_CAP_SM3                              },
+      { o(ARB_texture_cube_map_array),       PIPE_CAP_CUBE_MAP_ARRAY                   }
    };
 
    /* Required: render target and sampler support */
@@ -526,7 +527,7 @@ void st_init_extensions(struct st_context *st)
    ctx->Extensions.NV_texture_rectangle = GL_TRUE;
 
    ctx->Extensions.OES_EGL_image = GL_TRUE;
-   if (ctx->API != API_OPENGL)
+   if (ctx->API != API_OPENGL_COMPAT)
       ctx->Extensions.OES_EGL_image_external = GL_TRUE;
    ctx->Extensions.OES_draw_texture = GL_TRUE;
 

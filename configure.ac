@@ -10,7 +10,7 @@ AC_INIT([Mesa], [9.1.0],
     [https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa])
 AC_CONFIG_AUX_DIR([bin])
 AC_CONFIG_MACRO_DIR([m4])
-AC_CANONICAL_HOST
+AC_CANONICAL_SYSTEM
 AM_INIT_AUTOMAKE([foreign])
 
 dnl http://people.gnome.org/~walters/docs/build-api.txt
@@ -24,16 +24,13 @@ m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 
 m4_ifdef([AM_PROG_AR], [AM_PROG_AR])
 
-LT_PREREQ([2.2])
-LT_INIT([disable-static])
-
 dnl Set internal versions
 OSMESA_VERSION=8
 AC_SUBST([OSMESA_VERSION])
 
 dnl Versions for external dependencies
 LIBDRM_REQUIRED=2.4.24
-LIBDRM_RADEON_REQUIRED=2.4.39
+LIBDRM_RADEON_REQUIRED=2.4.40
 LIBDRM_INTEL_REQUIRED=2.4.38
 LIBDRM_NVVIEUX_REQUIRED=2.4.33
 LIBDRM_NOUVEAU_REQUIRED=2.4.33
@@ -45,7 +42,9 @@ LIBKMS_XORG_REQUIRED=1.0.0
 dnl Check for progs
 AC_PROG_CPP
 AC_PROG_CC
+AX_PROG_CC_FOR_BUILD
 AC_PROG_CXX
+AX_PROG_CXX_FOR_BUILD
 AM_PROG_CC_C_O
 AM_PROG_AS
 AC_CHECK_PROGS([MAKE], [gmake make])
@@ -53,6 +52,9 @@ AC_CHECK_PROGS([PYTHON2], [python2 python])
 AC_PROG_SED
 AC_PROG_MKDIR_P
 AC_PATH_PROG([MKDEP], [makedepend])
+
+LT_PREREQ([2.2])
+LT_INIT([disable-static])
 
 if test "x$MKDEP" = "x"; then
     AC_MSG_ERROR([makedepend is required to build Mesa])
@@ -155,6 +157,21 @@ dnl Cache LDFLAGS and CPPFLAGS so we can add to them and restore later
 _SAVE_LDFLAGS="$LDFLAGS"
 _SAVE_CPPFLAGS="$CPPFLAGS"
 
+dnl build host compiler macros
+DEFINES_FOR_BUILD=""
+AC_SUBST([DEFINES_FOR_BUILD])
+case "$build_os" in
+linux*|*-gnu*|gnu*)
+    DEFINES_FOR_BUILD="$DEFINES_FOR_BUILD -D_GNU_SOURCE"
+    ;;
+solaris*)
+    DEFINES_FOR_BUILD="$DEFINES_FOR_BUILD -DSVR4"
+    ;;
+cygwin*)
+    DEFINES_FOR_BUILD="$DEFINES_FOR_BUILD"
+    ;;
+esac
+
 dnl Compiler macros
 DEFINES=""
 AC_SUBST([DEFINES])
@@ -177,6 +194,7 @@ if test "x$GCC" = xyes; then
         CFLAGS="$CFLAGS -Wall -std=gnu99"
         ;;
     *)
+        CFLAGS_FOR_BUILD="$CFLAGS_FOR_BUILD -Wall -std=c99"
         CFLAGS="$CFLAGS -Wall -std=c99"
         ;;
     esac
@@ -206,13 +224,16 @@ if test "x$GCC" = xyes; then
     CFLAGS=$save_CFLAGS
 
     # Work around aliasing bugs - developers should comment this out
+    CFLAGS_FOR_BUILD="$CFLAGS_FOR_BUILD -fno-strict-aliasing"
     CFLAGS="$CFLAGS -fno-strict-aliasing"
 
     # gcc's builtin memcmp is slower than glibc's
     # http://gcc.gnu.org/bugzilla/show_bug.cgi?id=43052
+    CFLAGS_FOR_BUILD="$CFLAGS_FOR_BUILD -fno-builtin-memcmp"
     CFLAGS="$CFLAGS -fno-builtin-memcmp"
 fi
 if test "x$GXX" = xyes; then
+    CXXFLAGS_FOR_BUILD="$CXXFLAGS_FOR_BUILD -Wall"
     CXXFLAGS="$CXXFLAGS -Wall"
 
     # Enable -fvisibility=hidden if using a gcc that supports it
@@ -229,10 +250,12 @@ if test "x$GXX" = xyes; then
     CXXFLAGS=$save_CXXFLAGS
 
     # Work around aliasing bugs - developers should comment this out
+    CXXFLAGS_FOR_BUILD="$CXXFLAGS_FOR_BUILD -fno-strict-aliasing"
     CXXFLAGS="$CXXFLAGS -fno-strict-aliasing"
 
     # gcc's builtin memcmp is slower than glibc's
     # http://gcc.gnu.org/bugzilla/show_bug.cgi?id=43052
+    CXXFLAGS_FOR_BUILD="$CXXFLAGS_FOR_BUILD -fno-builtin-memcmp"
     CXXFLAGS="$CXXFLAGS -fno-builtin-memcmp"
 fi
 
@@ -316,6 +339,14 @@ AC_ARG_ENABLE([debug],
     [enable_debug=no]
 )
 if test "x$enable_debug" = xyes; then
+    DEFINES_FOR_BUILD="$DEFINES_FOR_BUILD -DDEBUG"
+    if test "x$GCC_FOR_BUILD" = xyes; then
+        CFLAGS_FOR_BUILD="$CFLAGS_FOR_BUILD -g"
+    fi
+    if test "x$GXX_FOR_BUILD" = xyes; then
+        CXXFLAGS_FOR_BUILD="$CXXFLAGS_FOR_BUILD -g"
+    fi
+
     DEFINES="$DEFINES -DDEBUG"
     if test "x$GCC" = xyes; then
         CFLAGS="$CFLAGS -g"
@@ -846,7 +877,7 @@ cygwin*)
 esac
 AC_ARG_ENABLE([driglx-direct],
     [AS_HELP_STRING([--disable-driglx-direct],
-        [enable direct rendering in GLX and EGL for DRI \
+        [disable direct rendering in GLX and EGL for DRI \
             @<:@default=auto@:>@])],
     [driglx_direct="$enableval"],
     [driglx_direct="$driglx_direct_default"])
@@ -1242,10 +1273,6 @@ if test "x$enable_egl" = xyes; then
 
     if test "$enable_static" != yes; then
         # build egl_glx when libGL is built
-        if test "x$enable_glx" = xyes; then
-	    HAVE_EGL_DRIVER_GLX=1
-        fi
-
         PKG_CHECK_MODULES([LIBUDEV], [libudev > 150],
                           [have_libudev=yes],[have_libudev=no])
         if test "$have_libudev" = yes; then
@@ -1503,8 +1530,7 @@ for plat in $egl_platforms; do
 		;;
 
 	wayland)
-		PKG_CHECK_MODULES([WAYLAND], [wayland-client >= 0.99.0 wayland-server >= 0.99.0],, \
-				  [AC_MSG_ERROR([cannot find libwayland-client])])
+		PKG_CHECK_MODULES([WAYLAND], [wayland-client >= 1.0.2 wayland-server >= 1.0.2])
 		GALLIUM_WINSYS_DIRS="$GALLIUM_WINSYS_DIRS sw/wayland"
 
                 WAYLAND_PREFIX=`$PKG_CONFIG --variable=prefix wayland-client`
@@ -1514,6 +1540,10 @@ for plat in $egl_platforms; do
 
 	x11)
 		PKG_CHECK_MODULES([XCB_DRI2], [x11-xcb xcb-dri2 >= 1.8 xcb-xfixes])
+
+                if test "x$enable_glx" = xyes; then
+                        HAVE_EGL_DRIVER_GLX=1
+                fi
 		;;
 
 	drm)
@@ -1610,6 +1640,21 @@ AC_ARG_WITH([llvm-prefix],
     [llvm_prefix=""])
 
 
+# Call this inside ` ` to get the return value.
+# $1 is the llvm-config command with arguments.
+strip_unwanted_llvm_flags() {
+    # Use \> (marks the end of the word)
+    echo `$1` | sed \
+	-e 's/-DNDEBUG\>//g' \
+	-e 's/-pedantic\>//g' \
+	-e 's/-Wcovered-switch-default\>//g' \
+	-e 's/-O.\>//g' \
+	-e 's/-g\>//g' \
+	-e 's/-Wall\>//g' \
+	-e 's/-fomit-frame-pointer\>//g'
+}
+
+
 if test "x$with_gallium_drivers" = x; then
     enable_gallium_llvm=no
 fi
@@ -1627,7 +1672,6 @@ if test "x$enable_gallium_llvm" = xyes; then
 
     if test "x$LLVM_CONFIG" != xno; then
 	LLVM_VERSION=`$LLVM_CONFIG --version | sed 's/svn.*//g'`
-	LLVM_CFLAGS=`$LLVM_CONFIG --cppflags|sed -e 's/-DNDEBUG\>//g' -e 's/-pedantic//g' -e 's/-Wcovered-switch-default//g'`
 	if test "x$with_llvm_shared_libs" = xyes; then
 	    dnl We can't use $LLVM_VERSION because it has 'svn' stripped out,
 	    LLVM_LIBS="-lLLVM-`$LLVM_CONFIG --version`"
@@ -1644,8 +1688,9 @@ if test "x$enable_gallium_llvm" = xyes; then
 	fi
 	LLVM_LDFLAGS=`$LLVM_CONFIG --ldflags`
 	LLVM_BINDIR=`$LLVM_CONFIG --bindir`
-	LLVM_CXXFLAGS=`$LLVM_CONFIG --cxxflags`
-	LLVM_CPPFLAGS=`$LLVM_CONFIG --cppflags`
+	LLVM_CPPFLAGS=`strip_unwanted_llvm_flags "$LLVM_CONFIG --cppflags"`
+	LLVM_CFLAGS=$LLVM_CPPFLAGS   # CPPFLAGS seem to be sufficient
+	LLVM_CXXFLAGS=`strip_unwanted_llvm_flags "$LLVM_CONFIG --cxxflags"`
 	LLVM_INCLUDEDIR=`$LLVM_CONFIG --includedir`
 	LLVM_LIBDIR=`$LLVM_CONFIG --libdir`
 	DEFINES="${DEFINES} -DHAVE_LLVM=`echo $LLVM_VERSION | sed -e 's/\([[0-9]]\)\.\([[0-9]]\)/0x0\10\2/g'`"
@@ -1748,15 +1793,23 @@ gallium_require_drm_loader() {
 }
 
 radeon_llvm_check() {
-    LLVM_VERSION_MAJOR=`echo $LLVM_VERSION | cut -d. -f1`
-    if test "$LLVM_VERSION_MAJOR" -lt "3" -o "x$LLVM_VERSION" = "x3.0"; then
-        AC_MSG_ERROR([LLVM 3.1 or newer is required for the r600/radeonsi llvm compiler.])
+    LLVM_REQUIRED_VERSION_MAJOR="3"
+    LLVM_REQUIRED_VERSION_MINOR="2"
+    LLVM_AVAILABLE_VERSION_MAJOR=`echo $LLVM_VERSION | cut -d. -f1`
+    LLVM_AVAILABLE_VERSION_MINOR=`echo $LLVM_VERSION | cut -d. -f2`
+    if test "$LLVM_AVAILABLE_VERSION_MAJOR" -lt "$LLVM_REQUIRED_VERSION_MAJOR" -o [ "$LLVM_AVAILABLE_VERSION_MAJOR" -eq "$LLVM_REQUIRED_VERSION_MAJOR" -a "$LLVM_AVAILABLE_VERSION_MINOR" -lt "$LLVM_REQUIRED_VERSION_MINOR" ] ; then
+        AC_MSG_ERROR([LLVM $LLVM_REQUIRED_VERSION_MAJOR.$LLVM_REQUIRED_VERSION_MINOR or newer with AMDGPU target enabled is required.
+                     To use the r600/radeonsi LLVM backend, you need to fetch the LLVM source from:
+                     git://people.freedesktop.org/~tstellar/llvm master
+                     and build with --enable-experimental-targets=AMDGPU])
     fi
-    if test "$LLVM_VERSION_MAJOR" -ge "3" -a "x$LLVM_VERSION" != "x3.1" && $LLVM_CONFIG --targets-built | grep -qv '\<AMDGPU\>' ; then
-        AC_MSG_ERROR([To use the r600/radeonsi LLVM backend with LLVM 3.2 and newer, you need to fetch the LLVM source from:
+    if test true && $LLVM_CONFIG --targets-built | grep -qv '\<AMDGPU\>' ; then
+        AC_MSG_ERROR([LLVM AMDGPU Target not enabled.
+                      To use the r600/radeonsi LLVM backend, you need to fetch the LLVM source from:
                       git://people.freedesktop.org/~tstellar/llvm master
                       and build with --enable-experimental-targets=AMDGPU])
     fi
+    AC_MSG_WARN([Please ensure you use the latest llvm tree from git://people.freedesktop.org/~tstellar/llvm master before submitting a bug])
     if test "x$LLVM_VERSION" = "x3.2"; then
         LLVM_LIBS="$LLVM_LIBS `$LLVM_CONFIG --libs amdgpu`"
     fi
@@ -1940,6 +1993,7 @@ AC_CONFIG_FILES([configs/current
 		src/gbm/Makefile
 		src/gbm/main/gbm.pc
 		src/glsl/Makefile
+		src/glsl/builtin_compiler/Makefile
 		src/glsl/glcpp/Makefile
 		src/glsl/tests/Makefile
 		src/glx/Makefile
@@ -1973,6 +2027,8 @@ AC_CONFIG_FILES([configs/current
 		src/mesa/drivers/x11/Makefile
 		src/mesa/libdricore/Makefile
 		src/mesa/main/tests/Makefile
+		src/mesa/main/tests/hash_table/Makefile
+		src/mesa/program/Makefile
 		src/mesa/x86-64/Makefile
 		src/mesa/x86/Makefile])
 
@@ -2092,6 +2148,12 @@ echo "        CFLAGS:          $cflags"
 echo "        CXXFLAGS:        $cxxflags"
 echo "        Macros:          $defines"
 echo ""
+if test "x$MESA_LLVM" = x1; then
+    echo "        LLVM_CFLAGS:     $LLVM_CFLAGS"
+    echo "        LLVM_CXXFLAGS:   $LLVM_CXXFLAGS"
+    echo "        LLVM_CPPFLAGS:   $LLVM_CPPFLAGS"
+    echo ""
+fi
 echo "        PYTHON2:         $PYTHON2"
 
 echo ""

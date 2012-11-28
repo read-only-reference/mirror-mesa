@@ -206,7 +206,7 @@ read_buffer_enum_to_index(GLenum buffer)
  * Called by glDrawBuffer().
  * Specify which renderbuffer(s) to draw into for the first color output.
  * <buffer> can name zero, one, two or four renderbuffers!
- * \sa _mesa_DrawBuffersARB
+ * \sa _mesa_DrawBuffers
  *
  * \param buffer  buffer token such as GL_LEFT or GL_FRONT_AND_BACK, etc.
  *
@@ -280,7 +280,7 @@ _mesa_DrawBuffer(GLenum buffer)
  *                 GL_FRONT_AND_BACK is illegal.
  */
 void GLAPIENTRY
-_mesa_DrawBuffersARB(GLsizei n, const GLenum *buffers)
+_mesa_DrawBuffers(GLsizei n, const GLenum *buffers)
 {
    GLint output;
    GLbitfield usedBufferMask, supportedMask;
@@ -353,7 +353,7 @@ updated_drawbuffers(struct gl_context *ctx)
 {
    FLUSH_VERTICES(ctx, _NEW_BUFFERS);
 
-   if (ctx->API == API_OPENGL && !ctx->Extensions.ARB_ES2_compatibility) {
+   if (ctx->API == API_OPENGL_COMPAT && !ctx->Extensions.ARB_ES2_compatibility) {
       struct gl_framebuffer *fb = ctx->DrawBuffer;
 
       /* Flag the FBO as requiring validation. */

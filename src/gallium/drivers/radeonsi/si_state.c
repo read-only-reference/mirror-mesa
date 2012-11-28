@@ -510,11 +510,13 @@ static void si_update_dsa_stencil_ref(struct r600_context *rctx)
 	si_pm4_set_reg(pm4, R_028430_DB_STENCILREFMASK,
 		       S_028430_STENCILTESTVAL(ref->ref_value[0]) |
 		       S_028430_STENCILMASK(dsa->valuemask[0]) |
-		       S_028430_STENCILWRITEMASK(dsa->writemask[0]));
+		       S_028430_STENCILWRITEMASK(dsa->writemask[0]) |
+		       S_028430_STENCILOPVAL(1));
 	si_pm4_set_reg(pm4, R_028434_DB_STENCILREFMASK_BF,
 		       S_028434_STENCILTESTVAL_BF(ref->ref_value[1]) |
 		       S_028434_STENCILMASK_BF(dsa->valuemask[1]) |
-		       S_028434_STENCILWRITEMASK_BF(dsa->writemask[1]));
+		       S_028434_STENCILWRITEMASK_BF(dsa->writemask[1]) |
+		       S_028434_STENCILOPVAL_BF(1));
 
 	si_pm4_set_state(rctx, dsa_stencil_ref, pm4);
 }
@@ -564,7 +566,7 @@ static void *si_create_dsa_state(struct pipe_context *ctx,
 {
 	struct si_state_dsa *dsa = CALLOC_STRUCT(si_state_dsa);
 	struct si_pm4_state *pm4 = &dsa->pm4;
-	unsigned db_depth_control, /* alpha_test_control, */ alpha_ref;
+	unsigned db_depth_control;
 	unsigned db_render_override, db_render_control;
 	uint32_t db_stencil_control = 0;
 
@@ -599,14 +601,12 @@ static void *si_create_dsa_state(struct pipe_context *ctx,
 	}
 
 	/* alpha */
-	//alpha_test_control = 0;
-	alpha_ref = 0;
 	if (state->alpha.enabled) {
-		//alpha_test_control = S_028410_ALPHA_FUNC(state->alpha.func);
-		//alpha_test_control |= S_028410_ALPHA_TEST_ENABLE(1);
-		alpha_ref = fui(state->alpha.ref_value);
+		dsa->alpha_func = state->alpha.func;
+		dsa->alpha_ref = state->alpha.ref_value;
+	} else {
+		dsa->alpha_func = PIPE_FUNC_ALWAYS;
 	}
-	dsa->alpha_ref = alpha_ref;
 
 	/* misc */
 	db_render_control = 0;
@@ -642,10 +642,6 @@ static void si_bind_dsa_state(struct pipe_context *ctx, void *state)
 
 	si_pm4_bind_state(rctx, dsa, dsa);
 	si_update_dsa_stencil_ref(rctx);
-
-	// TODO
-        rctx->alpha_ref = dsa->alpha_ref;
-        rctx->alpha_ref_dirty = true;
 }
 
 static void si_delete_dsa_state(struct pipe_context *ctx, void *state)
@@ -835,7 +831,7 @@ static uint32_t si_translate_colorformat(enum pipe_format format)
 	case PIPE_FORMAT_R4A4_UNORM:
 	case PIPE_FORMAT_A4R4_UNORM:
 	default:
-		return ~0U; /* Unsupported. */
+		return V_028C70_COLOR_INVALID; /* Unsupported. */
 	}
 }
 
@@ -1104,8 +1100,8 @@ static unsigned si_colorformat_max_comp_size(uint32_t colorformat)
 static uint32_t si_translate_dbformat(enum pipe_format format)
 {
 	switch (format) {
-	//case PIPE_FORMAT_Z16_UNORM:
-	//	return V_028040_Z_16;
+	case PIPE_FORMAT_Z16_UNORM:
+		return V_028040_Z_16;
 	case PIPE_FORMAT_Z24X8_UNORM:
 	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
 		return V_028040_Z_24; /* XXX no longer supported on SI */
@@ -1113,7 +1109,7 @@ static uint32_t si_translate_dbformat(enum pipe_format format)
 	case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
 		return V_028040_Z_32_FLOAT;
 	default:
-		return ~0U;
+		return V_028040_Z_INVALID;
 	}
 }
 
@@ -1436,13 +1432,13 @@ static bool si_is_vertex_format_supported(struct pipe_screen *screen, enum pipe_
 
 static bool si_is_colorbuffer_format_supported(enum pipe_format format)
 {
-	return si_translate_colorformat(format) != ~0U &&
+	return si_translate_colorformat(format) != V_028C70_COLOR_INVALID &&
 		si_translate_colorswap(format) != ~0U;
 }
 
 static bool si_is_zs_format_supported(enum pipe_format format)
 {
-	return si_translate_dbformat(format) != ~0U;
+	return si_translate_dbformat(format) != V_028040_Z_INVALID;
 }
 
 boolean si_is_format_supported(struct pipe_screen *screen,
@@ -1610,6 +1606,10 @@ static void si_cb(struct r600_context *rctx, struct si_pm4_state *pm4,
 	}
 
 	format = si_translate_colorformat(surf->base.format);
+	if (format == V_028C70_COLOR_INVALID) {
+		R600_ERR("Invalid CB format: %d, disabling CB.\n", surf->base.format);
+	}
+	assert(format != V_028C70_COLOR_INVALID);
 	swap = si_translate_colorswap(surf->base.format);
 	if (rtex->resource.b.b.usage == PIPE_USAGE_STAGING) {
 		endian = V_028C70_ENDIAN_NONE;
@@ -1638,8 +1638,6 @@ static void si_cb(struct r600_context *rctx, struct si_pm4_state *pm4,
 		S_028C70_BLEND_BYPASS(blend_bypass) |
 		S_028C70_NUMBER_TYPE(ntype) |
 		S_028C70_ENDIAN(endian);
-
-	rctx->alpha_ref_dirty = true;
 
 	offset += r600_resource_va(rctx->context.screen, state->cbufs[cb]->texture);
 	offset >>= 8;
@@ -1682,8 +1680,8 @@ static void si_db(struct r600_context *rctx, struct si_pm4_state *pm4,
 	uint64_t z_offs, s_offs;
 
 	if (state->zsbuf == NULL) {
-		si_pm4_set_reg(pm4, R_028040_DB_Z_INFO, 0);
-		si_pm4_set_reg(pm4, R_028044_DB_STENCIL_INFO, 0);
+		si_pm4_set_reg(pm4, R_028040_DB_Z_INFO, S_028040_FORMAT(V_028040_Z_INVALID));
+		si_pm4_set_reg(pm4, R_028044_DB_STENCIL_INFO, S_028044_FORMAT(V_028044_STENCIL_INVALID));
 		return;
 	}
 
@@ -1693,12 +1691,14 @@ static void si_db(struct r600_context *rctx, struct si_pm4_state *pm4,
 
 	format = si_translate_dbformat(rtex->real_format);
 
-	z_offs = r600_resource_va(rctx->context.screen, surf->base.texture);
-	z_offs += rtex->surface.level[level].offset;
+	if (format == V_028040_Z_INVALID) {
+		R600_ERR("Invalid DB format: %d, disabling DB.\n", rtex->real_format);
+	}
+	assert(format != V_028040_Z_INVALID);
 
-	s_offs = r600_resource_va(rctx->context.screen, surf->base.texture);
-	s_offs += rtex->surface.stencil_offset;
-	z_offs += rtex->surface.level[level].offset / 4;
+	s_offs = z_offs = r600_resource_va(rctx->context.screen, surf->base.texture);
+	z_offs += rtex->surface.level[level].offset;
+	s_offs += rtex->surface.stencil_level[level].offset;
 
 	z_offs >>= 8;
 	s_offs >>= 8;
@@ -1710,7 +1710,10 @@ static void si_db(struct r600_context *rctx, struct si_pm4_state *pm4,
 	}
 
 	z_info = S_028040_FORMAT(format);
-	s_info = S_028044_FORMAT(1);
+	if (rtex->surface.flags & RADEON_SURF_SBUFFER)
+		s_info = S_028044_FORMAT(V_028044_STENCIL_8);
+	else
+		s_info = S_028044_FORMAT(V_028044_STENCIL_INVALID);
 
 	if (rtex->surface.level[level].mode == RADEON_SURF_MODE_1D) {
 		z_info |= S_028040_TILE_MODE_INDEX(4);
@@ -1735,8 +1738,8 @@ static void si_db(struct r600_context *rctx, struct si_pm4_state *pm4,
 	} else {
 		R600_ERR("Invalid DB tiling mode %d!\n",
 			 rtex->surface.level[level].mode);
-		si_pm4_set_reg(pm4, R_028040_DB_Z_INFO, 0);
-		si_pm4_set_reg(pm4, R_028044_DB_STENCIL_INFO, 0);
+		si_pm4_set_reg(pm4, R_028040_DB_Z_INFO, S_028040_FORMAT(V_028040_Z_INVALID));
+		si_pm4_set_reg(pm4, R_028044_DB_STENCIL_INFO, S_028044_FORMAT(V_028044_STENCIL_INVALID));
 		return;
 	}
 
@@ -1744,19 +1747,9 @@ static void si_db(struct r600_context *rctx, struct si_pm4_state *pm4,
 		       S_028008_SLICE_START(state->zsbuf->u.tex.first_layer) |
 		       S_028008_SLICE_MAX(state->zsbuf->u.tex.last_layer));
 
-	si_pm4_set_reg(pm4, R_02803C_DB_DEPTH_INFO, 0x1);
-	if (format != ~0U) {
-		si_pm4_set_reg(pm4, R_028040_DB_Z_INFO, z_info);
-
-	} else {
-		si_pm4_set_reg(pm4, R_028040_DB_Z_INFO, 0);
-	}
-
-	if (rtex->surface.flags & RADEON_SURF_SBUFFER) {
-		si_pm4_set_reg(pm4, R_028044_DB_STENCIL_INFO, s_info);
-	} else {
-		si_pm4_set_reg(pm4, R_028044_DB_STENCIL_INFO, 0);
-	}
+	si_pm4_set_reg(pm4, R_02803C_DB_DEPTH_INFO, S_02803C_ADDR5_SWIZZLE_MASK(1));
+	si_pm4_set_reg(pm4, R_028040_DB_Z_INFO, z_info);
+	si_pm4_set_reg(pm4, R_028044_DB_STENCIL_INFO, s_info);
 
 	si_pm4_add_bo(pm4, &rtex->resource, RADEON_USAGE_READWRITE);
 	si_pm4_set_reg(pm4, R_028048_DB_Z_READ_BASE, z_offs);
@@ -1847,6 +1840,12 @@ static INLINE struct si_shader_key si_shader_selector_key(struct pipe_context *c
 		if (rctx->queued.named.rasterizer) {
 			key.color_two_side = rctx->queued.named.rasterizer->two_side;
 			/*key.flatshade = rctx->queued.named.rasterizer->flatshade;*/
+		}
+		if (rctx->queued.named.dsa) {
+			key.alpha_func = rctx->queued.named.dsa->alpha_func;
+			key.alpha_ref = rctx->queued.named.dsa->alpha_ref;
+		} else {
+			key.alpha_func = PIPE_FUNC_ALWAYS;
 		}
 	}
 
@@ -2086,7 +2085,10 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 	if (tmp->depth && !tmp->is_flushing_texture) {
 		r600_texture_depth_flush(ctx, texture, TRUE);
 		tmp = tmp->flushed_depth_texture;
+		texture = &tmp->resource.b.b;
 	}
+
+	view->resource = &tmp->resource;
 
 	/* not supported any more */
 	//endian = si_colorformat_endian_swap(format);
@@ -2230,16 +2232,12 @@ static void *si_create_sampler_state(struct pipe_context *ctx,
 	return rstate;
 }
 
-static void si_set_vs_sampler_view(struct pipe_context *ctx, unsigned count,
-				   struct pipe_sampler_view **views)
+static struct si_pm4_state *si_set_sampler_view(struct r600_context *rctx,
+						unsigned count,
+						struct pipe_sampler_view **views,
+						struct r600_textures_info *samplers,
+						unsigned user_data_reg)
 {
-	assert(count == 0);
-}
-
-static void si_set_ps_sampler_view(struct pipe_context *ctx, unsigned count,
-				   struct pipe_sampler_view **views)
-{
-	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct si_pipe_sampler_view **resource = (struct si_pipe_sampler_view **)views;
 	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
 	int i, j;
@@ -2253,14 +2251,11 @@ static void si_set_ps_sampler_view(struct pipe_context *ctx, unsigned count,
 	si_pm4_sh_data_begin(pm4);
 	for (i = 0; i < count; i++) {
 		pipe_sampler_view_reference(
-			(struct pipe_sampler_view **)&rctx->ps_samplers.views[i],
+			(struct pipe_sampler_view **)&samplers->views[i],
 			views[i]);
 
-		if (views[i]) {
-			struct r600_resource_texture *tex = (void *)resource[i]->base.texture;
-
-			si_pm4_add_bo(pm4, &tex->resource, RADEON_USAGE_READ);
-		}
+		if (views[i])
+			si_pm4_add_bo(pm4, resource[i]->resource, RADEON_USAGE_READ);
 
 		for (j = 0; j < Elements(resource[i]->state); ++j) {
 			si_pm4_sh_data_add(pm4, resource[i] ? resource[i]->state[j] : 0);
@@ -2268,26 +2263,45 @@ static void si_set_ps_sampler_view(struct pipe_context *ctx, unsigned count,
 	}
 
 	for (i = count; i < NUM_TEX_UNITS; i++) {
-		if (rctx->ps_samplers.views[i])
-			pipe_sampler_view_reference((struct pipe_sampler_view **)&rctx->ps_samplers.views[i], NULL);
+		if (samplers->views[i])
+			pipe_sampler_view_reference((struct pipe_sampler_view **)&samplers->views[i], NULL);
 	}
 
-	si_pm4_sh_data_end(pm4, R_00B030_SPI_SHADER_USER_DATA_PS_0, SI_SGPR_RESOURCE);
+	si_pm4_sh_data_end(pm4, user_data_reg, SI_SGPR_RESOURCE);
 
 out:
-	si_pm4_set_state(rctx, ps_sampler_views, pm4);
 	rctx->have_depth_texture = has_depth;
 	rctx->ps_samplers.n_views = count;
+	return pm4;
 }
 
-static void si_bind_vs_sampler(struct pipe_context *ctx, unsigned count, void **states)
-{
-	assert(count == 0);
-}
-
-static void si_bind_ps_sampler(struct pipe_context *ctx, unsigned count, void **states)
+static void si_set_vs_sampler_view(struct pipe_context *ctx, unsigned count,
+				   struct pipe_sampler_view **views)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
+	struct si_pm4_state *pm4;
+
+	pm4 = si_set_sampler_view(rctx, count, views, &rctx->vs_samplers,
+			    R_00B130_SPI_SHADER_USER_DATA_VS_0);
+	si_pm4_set_state(rctx, vs_sampler_views, pm4);
+}
+
+static void si_set_ps_sampler_view(struct pipe_context *ctx, unsigned count,
+				   struct pipe_sampler_view **views)
+{
+	struct r600_context *rctx = (struct r600_context *)ctx;
+	struct si_pm4_state *pm4;
+
+	pm4 = si_set_sampler_view(rctx, count, views, &rctx->ps_samplers,
+				  R_00B030_SPI_SHADER_USER_DATA_PS_0);
+	si_pm4_set_state(rctx, ps_sampler_views, pm4);
+}
+
+static struct si_pm4_state *si_bind_sampler(struct r600_context *rctx, unsigned count,
+					    void **states,
+					    struct r600_textures_info *samplers,
+					    unsigned user_data_reg)
+{
 	struct si_pipe_sampler_state **rstates = (struct si_pipe_sampler_state **)states;
 	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
 	uint32_t *border_color_table = NULL;
@@ -2310,7 +2324,7 @@ static void si_bind_ps_sampler(struct pipe_context *ctx, unsigned count, void **
 				rctx->border_color_offset = 0;
 
 				rctx->border_color_table =
-					si_resource_create_custom(ctx->screen,
+					si_resource_create_custom(&rctx->screen->screen,
 								  PIPE_USAGE_STAGING,
 								  4096 * 4 * 4);
 			}
@@ -2339,22 +2353,43 @@ static void si_bind_ps_sampler(struct pipe_context *ctx, unsigned count, void **
 			si_pm4_sh_data_add(pm4, rstates[i] ? rstates[i]->val[j] : 0);
 		}
 	}
-	si_pm4_sh_data_end(pm4, R_00B030_SPI_SHADER_USER_DATA_PS_0, SI_SGPR_SAMPLER);
+	si_pm4_sh_data_end(pm4, user_data_reg, SI_SGPR_SAMPLER);
 
 	if (border_color_table) {
 		uint64_t va_offset =
-			r600_resource_va(ctx->screen, (void*)rctx->border_color_table);
+			r600_resource_va(&rctx->screen->screen,
+					 (void*)rctx->border_color_table);
 
 		si_pm4_set_reg(pm4, R_028080_TA_BC_BASE_ADDR, va_offset >> 8);
 		rctx->ws->buffer_unmap(rctx->border_color_table->cs_buf);
 		si_pm4_add_bo(pm4, rctx->border_color_table, RADEON_USAGE_READ);
 	}
 
-	memcpy(rctx->ps_samplers.samplers, states, sizeof(void*) * count);
+	memcpy(samplers->samplers, states, sizeof(void*) * count);
 
 out:
+	samplers->n_samplers = count;
+	return pm4;
+}
+
+static void si_bind_vs_sampler(struct pipe_context *ctx, unsigned count, void **states)
+{
+	struct r600_context *rctx = (struct r600_context *)ctx;
+	struct si_pm4_state *pm4;
+
+	pm4 = si_bind_sampler(rctx, count, states, &rctx->vs_samplers,
+			      R_00B130_SPI_SHADER_USER_DATA_VS_0);
+	si_pm4_set_state(rctx, vs_sampler, pm4);
+}
+
+static void si_bind_ps_sampler(struct pipe_context *ctx, unsigned count, void **states)
+{
+	struct r600_context *rctx = (struct r600_context *)ctx;
+	struct si_pm4_state *pm4;
+
+	pm4 = si_bind_sampler(rctx, count, states, &rctx->ps_samplers,
+			      R_00B030_SPI_SHADER_USER_DATA_PS_0);
 	si_pm4_set_state(rctx, ps_sampler, pm4);
-	rctx->ps_samplers.n_samplers = count;
 }
 
 static void si_set_sample_mask(struct pipe_context *pipe, unsigned sample_mask)
@@ -2619,7 +2654,8 @@ void si_init_config(struct r600_context *rctx)
 		       S_028AA8_PRIMGROUP_SIZE(63));
 	si_pm4_set_reg(pm4, R_028AB4_VGT_REUSE_OFF, 0x00000000);
 	si_pm4_set_reg(pm4, R_028AB8_VGT_VTX_CNT_EN, 0x0);
-	si_pm4_set_reg(pm4, R_008A14_PA_CL_ENHANCE, (3 << 1) | 1);
+	si_pm4_set_reg(pm4, R_008A14_PA_CL_ENHANCE, S_008A14_NUM_CLIP_SEQ(3) |
+		       S_008A14_CLIP_VTX_REORDER_ENA(1));
 
 	si_pm4_set_reg(pm4, R_028B54_VGT_SHADER_STAGES_EN, 0);
 	si_pm4_set_reg(pm4, R_028BD4_PA_SC_CENTROID_PRIORITY_0, 0x76543210);
@@ -2628,6 +2664,17 @@ void si_init_config(struct r600_context *rctx)
 	si_pm4_set_reg(pm4, R_028804_DB_EQAA, 0x110000);
 
 	si_pm4_set_reg(pm4, R_02882C_PA_SU_PRIM_FILTER_CNTL, 0);
+
+	switch (rctx->screen->family) {
+	case CHIP_TAHITI:
+	case CHIP_PITCAIRN:
+		si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x2a00126a);
+		break;
+	case CHIP_VERDE:
+	default:
+		si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x0000124a);
+		break;
+	}
 
 	si_pm4_set_state(rctx, init, pm4);
 }

@@ -41,9 +41,9 @@
 
 enum {
    DISABLE = 0,
-   GLL = 1 << API_OPENGL,       /* GL Legacy / Compatibility */
+   GLL = 1 << API_OPENGL_COMPAT,       /* GL Legacy / Compatibility */
    GLC = 1 << API_OPENGL_CORE,  /* GL Core */
-   GL  = (1 << API_OPENGL) | (1 << API_OPENGL_CORE),
+   GL  = (1 << API_OPENGL_COMPAT) | (1 << API_OPENGL_CORE),
    ES1 = 1 << API_OPENGLES,
    ES2 = 1 << API_OPENGLES2,
 };
@@ -129,6 +129,7 @@ static const struct extension extension_table[] = {
    { "GL_ARB_texture_compression",                 o(dummy_true),                              GLL,            2000 },
    { "GL_ARB_texture_compression_rgtc",            o(ARB_texture_compression_rgtc),            GL,             2004 },
    { "GL_ARB_texture_cube_map",                    o(ARB_texture_cube_map),                    GLL,            1999 },
+   { "GL_ARB_texture_cube_map_array",              o(ARB_texture_cube_map_array),              GLL,             2009 },
    { "GL_ARB_texture_env_add",                     o(dummy_true),                              GLL,            1999 },
    { "GL_ARB_texture_env_combine",                 o(ARB_texture_env_combine),                 GLL,            2001 },
    { "GL_ARB_texture_env_crossbar",                o(ARB_texture_env_crossbar),                GLL,            2001 },

@@ -23,6 +23,7 @@
 
 #include "brw_vec4.h"
 extern "C" {
+#include "main/context.h"
 #include "main/macros.h"
 #include "program/prog_parameter.h"
 #include "program/sampler.h"
@@ -119,6 +120,10 @@ ALU2(OR)
 ALU2(XOR)
 ALU2(DP3)
 ALU2(DP4)
+ALU2(DPH)
+ALU2(SHL)
+ALU2(SHR)
+ALU2(ASR)
 
 /** Gen4 predicated IF. */
 vec4_instruction *
@@ -525,29 +530,40 @@ vec4_visitor::setup_uniform_clipplane_values()
 {
    gl_clip_plane *clip_planes = brw_select_clip_planes(ctx);
 
-   /* Pre-Gen6, we compact clip planes.  For example, if the user
-    * enables just clip planes 0, 1, and 3, we will enable clip planes
-    * 0, 1, and 2 in the hardware, and we'll move clip plane 3 to clip
-    * plane 2.  This simplifies the implementation of the Gen6 clip
-    * thread.
-    *
-    * In Gen6 and later, we don't compact clip planes, because this
-    * simplifies the implementation of gl_ClipDistance.
-    */
-   int compacted_clipplane_index = 0;
-   for (int i = 0; i < c->key.nr_userclip_plane_consts; ++i) {
-      if (intel->gen < 6 &&
-          !(c->key.userclip_planes_enabled_gen_4_5 & (1 << i))) {
-         continue;
+   if (intel->gen < 6) {
+      /* Pre-Gen6, we compact clip planes.  For example, if the user
+       * enables just clip planes 0, 1, and 3, we will enable clip planes
+       * 0, 1, and 2 in the hardware, and we'll move clip plane 3 to clip
+       * plane 2.  This simplifies the implementation of the Gen6 clip
+       * thread.
+       */
+      int compacted_clipplane_index = 0;
+      for (int i = 0; i < MAX_CLIP_PLANES; ++i) {
+	 if (!(c->key.userclip_planes_enabled_gen_4_5 & (1 << i)))
+	    continue;
+
+	 this->uniform_vector_size[this->uniforms] = 4;
+	 this->userplane[compacted_clipplane_index] = dst_reg(UNIFORM, this->uniforms);
+	 this->userplane[compacted_clipplane_index].type = BRW_REGISTER_TYPE_F;
+	 for (int j = 0; j < 4; ++j) {
+	    c->prog_data.param[this->uniforms * 4 + j] = &clip_planes[i][j];
+	 }
+	 ++compacted_clipplane_index;
+	 ++this->uniforms;
       }
-      this->uniform_vector_size[this->uniforms] = 4;
-      this->userplane[compacted_clipplane_index] = dst_reg(UNIFORM, this->uniforms);
-      this->userplane[compacted_clipplane_index].type = BRW_REGISTER_TYPE_F;
-      for (int j = 0; j < 4; ++j) {
-         c->prog_data.param[this->uniforms * 4 + j] = &clip_planes[i][j];
+   } else {
+      /* In Gen6 and later, we don't compact clip planes, because this
+       * simplifies the implementation of gl_ClipDistance.
+       */
+      for (int i = 0; i < c->key.nr_userclip_plane_consts; ++i) {
+	 this->uniform_vector_size[this->uniforms] = 4;
+	 this->userplane[i] = dst_reg(UNIFORM, this->uniforms);
+	 this->userplane[i].type = BRW_REGISTER_TYPE_F;
+	 for (int j = 0; j < 4; ++j) {
+	    c->prog_data.param[this->uniforms * 4 + j] = &clip_planes[i][j];
+	 }
+	 ++this->uniforms;
       }
-      ++compacted_clipplane_index;
-      ++this->uniforms;
    }
 }
 
@@ -784,6 +800,128 @@ vec4_visitor::emit_if_gen6(ir_if *ir)
    emit(IF(this->result, src_reg(0), BRW_CONDITIONAL_NZ));
 }
 
+static dst_reg
+with_writemask(dst_reg const & r, int mask)
+{
+   dst_reg result = r;
+   result.writemask = mask;
+   return result;
+}
+
+void
+vec4_visitor::emit_attribute_fixups()
+{
+   dst_reg sign_recovery_shift;
+   dst_reg normalize_factor;
+   dst_reg es3_normalize_factor;
+
+   for (int i = 0; i < VERT_ATTRIB_MAX; i++) {
+      if (prog_data->inputs_read & BITFIELD64_BIT(i)) {
+         uint8_t wa_flags = c->key.gl_attrib_wa_flags[i];
+         dst_reg reg(ATTR, i);
+         dst_reg reg_d = reg;
+         reg_d.type = BRW_REGISTER_TYPE_D;
+         dst_reg reg_ud = reg;
+         reg_ud.type = BRW_REGISTER_TYPE_UD;
+
+         /* Do GL_FIXED rescaling for GLES2.0.  Our GL_FIXED attributes
+          * come in as floating point conversions of the integer values.
+          */
+         if (wa_flags & BRW_ATTRIB_WA_COMPONENT_MASK) {
+            dst_reg dst = reg;
+            dst.type = brw_type_for_base_type(glsl_type::vec4_type);
+            dst.writemask = (1 << (wa_flags & BRW_ATTRIB_WA_COMPONENT_MASK)) - 1;
+            emit(MUL(dst, src_reg(dst), src_reg(1.0f / 65536.0f)));
+         }
+
+         /* Do sign recovery for 2101010 formats if required. */
+         if (wa_flags & BRW_ATTRIB_WA_SIGN) {
+            if (sign_recovery_shift.file == BAD_FILE) {
+               /* shift constant: <22,22,22,30> */
+               sign_recovery_shift = dst_reg(this, glsl_type::uvec4_type);
+               emit(MOV(with_writemask(sign_recovery_shift, WRITEMASK_XYZ), src_reg(22u)));
+               emit(MOV(with_writemask(sign_recovery_shift, WRITEMASK_W), src_reg(30u)));
+            }
+
+            emit(SHL(reg_ud, src_reg(reg_ud), src_reg(sign_recovery_shift)));
+            emit(ASR(reg_d, src_reg(reg_d), src_reg(sign_recovery_shift)));
+         }
+
+         /* Apply BGRA swizzle if required. */
+         if (wa_flags & BRW_ATTRIB_WA_BGRA) {
+            src_reg temp = src_reg(reg);
+            temp.swizzle = BRW_SWIZZLE4(2,1,0,3);
+            emit(MOV(reg, temp));
+         }
+
+         if (wa_flags & BRW_ATTRIB_WA_NORMALIZE) {
+            /* ES 3.0 has different rules for converting signed normalized
+             * fixed-point numbers than desktop GL.
+             */
+            if (_mesa_is_gles3(ctx) && (wa_flags & BRW_ATTRIB_WA_SIGN)) {
+               /* According to equation 2.2 of the ES 3.0 specification,
+                * signed normalization conversion is done by:
+                *
+                * f = c / (2^(b-1)-1)
+                */
+               if (es3_normalize_factor.file == BAD_FILE) {
+                  /* mul constant: 1 / (2^(b-1) - 1) */
+                  es3_normalize_factor = dst_reg(this, glsl_type::vec4_type);
+                  emit(MOV(with_writemask(es3_normalize_factor, WRITEMASK_XYZ),
+                           src_reg(1.0f / ((1<<9) - 1))));
+                  emit(MOV(with_writemask(es3_normalize_factor, WRITEMASK_W),
+                           src_reg(1.0f / ((1<<1) - 1))));
+               }
+
+               dst_reg dst = reg;
+               dst.type = brw_type_for_base_type(glsl_type::vec4_type);
+               emit(MOV(dst, src_reg(reg_d)));
+               emit(MUL(dst, src_reg(dst), src_reg(es3_normalize_factor)));
+               emit_minmax(BRW_CONDITIONAL_G, dst, src_reg(dst), src_reg(-1.0f));
+            } else {
+               /* The following equations are from the OpenGL 3.2 specification:
+                *
+                * 2.1 unsigned normalization
+                * f = c/(2^n-1)
+                *
+                * 2.2 signed normalization
+                * f = (2c+1)/(2^n-1)
+                *
+                * Both of these share a common divisor, which is represented by
+                * "normalize_factor" in the code below.
+                */
+               if (normalize_factor.file == BAD_FILE) {
+                  /* 1 / (2^b - 1) for b=<10,10,10,2> */
+                  normalize_factor = dst_reg(this, glsl_type::vec4_type);
+                  emit(MOV(with_writemask(normalize_factor, WRITEMASK_XYZ),
+                           src_reg(1.0f / ((1<<10) - 1))));
+                  emit(MOV(with_writemask(normalize_factor, WRITEMASK_W),
+                           src_reg(1.0f / ((1<<2) - 1))));
+               }
+
+               dst_reg dst = reg;
+               dst.type = brw_type_for_base_type(glsl_type::vec4_type);
+               emit(MOV(dst, src_reg((wa_flags & BRW_ATTRIB_WA_SIGN) ? reg_d : reg_ud)));
+
+               /* For signed normalization, we want the numerator to be 2c+1. */
+               if (wa_flags & BRW_ATTRIB_WA_SIGN) {
+                  emit(MUL(dst, src_reg(dst), src_reg(2.0f)));
+                  emit(ADD(dst, src_reg(dst), src_reg(1.0f)));
+               }
+
+               emit(MUL(dst, src_reg(dst), src_reg(normalize_factor)));
+            }
+         }
+
+         if (wa_flags & BRW_ATTRIB_WA_SCALE) {
+            dst_reg dst = reg;
+            dst.type = brw_type_for_base_type(glsl_type::vec4_type);
+            emit(MOV(dst, src_reg((wa_flags & BRW_ATTRIB_WA_SIGN) ? reg_d : reg_ud)));
+         }
+      }
+   }
+}
+
 void
 vec4_visitor::visit(ir_variable *ir)
 {
@@ -795,19 +933,6 @@ vec4_visitor::visit(ir_variable *ir)
    switch (ir->mode) {
    case ir_var_in:
       reg = new(mem_ctx) dst_reg(ATTR, ir->location);
-
-      /* Do GL_FIXED rescaling for GLES2.0.  Our GL_FIXED attributes
-       * come in as floating point conversions of the integer values.
-       */
-      for (int i = ir->location; i < ir->location + type_size(ir->type); i++) {
-	 if (!c->key.gl_fixed_input_size[i])
-	    continue;
-
-	 dst_reg dst = *reg;
-         dst.type = brw_type_for_base_type(ir->type);
-	 dst.writemask = (1 << c->key.gl_fixed_input_size[i]) - 1;
-	 emit(MUL(dst, src_reg(dst), src_reg(1.0f / 65536.0f)));
-      }
       break;
 
    case ir_var_out:
@@ -995,6 +1120,23 @@ vec4_visitor::emit_bool_comparison(unsigned int op,
 
    dst.type = BRW_REGISTER_TYPE_D;
    emit(AND(dst, src_reg(dst), src_reg(0x1)));
+}
+
+void
+vec4_visitor::emit_minmax(uint32_t conditionalmod, dst_reg dst,
+                          src_reg src0, src_reg src1)
+{
+   vec4_instruction *inst;
+
+   if (intel->gen >= 6) {
+      inst = emit(BRW_OPCODE_SEL, dst, src0, src1);
+      inst->conditional_mod = conditionalmod;
+   } else {
+      emit(CMP(dst, src0, src1, conditionalmod));
+
+      inst = emit(BRW_OPCODE_SEL, dst, src0, src1);
+      inst->predicate = BRW_PREDICATE_NORMAL;
+   }
 }
 
 void
@@ -1271,26 +1413,10 @@ vec4_visitor::visit(ir_expression *ir)
       break;
 
    case ir_binop_min:
-      if (intel->gen >= 6) {
-	 inst = emit(BRW_OPCODE_SEL, result_dst, op[0], op[1]);
-	 inst->conditional_mod = BRW_CONDITIONAL_L;
-      } else {
-	 emit(CMP(result_dst, op[0], op[1], BRW_CONDITIONAL_L));
-
-	 inst = emit(BRW_OPCODE_SEL, result_dst, op[0], op[1]);
-	 inst->predicate = BRW_PREDICATE_NORMAL;
-      }
+      emit_minmax(BRW_CONDITIONAL_L, result_dst, op[0], op[1]);
       break;
    case ir_binop_max:
-      if (intel->gen >= 6) {
-	 inst = emit(BRW_OPCODE_SEL, result_dst, op[0], op[1]);
-	 inst->conditional_mod = BRW_CONDITIONAL_G;
-      } else {
-	 emit(CMP(result_dst, op[0], op[1], BRW_CONDITIONAL_G));
-
-	 inst = emit(BRW_OPCODE_SEL, result_dst, op[0], op[1]);
-	 inst->predicate = BRW_PREDICATE_NORMAL;
-      }
+      emit_minmax(BRW_CONDITIONAL_G, result_dst, op[0], op[1]);
       break;
 
    case ir_binop_pow:
@@ -1311,14 +1437,14 @@ vec4_visitor::visit(ir_expression *ir)
       break;
 
    case ir_binop_lshift:
-      inst = emit(BRW_OPCODE_SHL, result_dst, op[0], op[1]);
+      inst = emit(SHL(result_dst, op[0], op[1]));
       break;
 
    case ir_binop_rshift:
       if (ir->type->base_type == GLSL_TYPE_INT)
-	 inst = emit(BRW_OPCODE_ASR, result_dst, op[0], op[1]);
+         inst = emit(ASR(result_dst, op[0], op[1]));
       else
-	 inst = emit(BRW_OPCODE_SHR, result_dst, op[0], op[1]);
+         inst = emit(SHR(result_dst, op[0], op[1]));
       break;
 
    case ir_binop_ubo_load: {
@@ -1337,7 +1463,7 @@ vec4_visitor::visit(ir_expression *ir)
       if (const_offset_ir) {
          offset = src_reg(const_offset / 16);
       } else {
-         emit(BRW_OPCODE_SHR, dst_reg(offset), offset, src_reg(4));
+         emit(SHR(dst_reg(offset), offset, src_reg(4)));
       }
 
       vec4_instruction *pull =
@@ -2680,27 +2806,27 @@ vec4_visitor::resolve_ud_negate(src_reg *reg)
    *reg = temp;
 }
 
-vec4_visitor::vec4_visitor(struct brw_vs_compile *c,
+vec4_visitor::vec4_visitor(struct brw_context *brw,
+			   struct brw_vs_compile *c,
 			   struct gl_shader_program *prog,
-			   struct brw_shader *shader)
+			   struct brw_shader *shader,
+			   void *mem_ctx)
 {
    this->c = c;
-   this->p = &c->func;
-   this->brw = p->brw;
+   this->brw = brw;
    this->intel = &brw->intel;
    this->ctx = &intel->ctx;
    this->prog = prog;
    this->shader = shader;
 
-   this->mem_ctx = ralloc_context(NULL);
+   this->mem_ctx = mem_ctx;
    this->failed = false;
 
    this->base_ir = NULL;
    this->current_annotation = NULL;
 
    this->c = c;
-   this->vp = (struct gl_vertex_program *)
-     prog->_LinkedShaders[MESA_SHADER_VERTEX]->Program;
+   this->vp = &c->vp->program;
    this->prog_data = &c->prog_data;
 
    this->variable_ht = hash_table_ctor(0,
@@ -2723,7 +2849,6 @@ vec4_visitor::vec4_visitor(struct brw_vs_compile *c,
 
 vec4_visitor::~vec4_visitor()
 {
-   ralloc_free(this->mem_ctx);
    hash_table_dtor(this->variable_ht);
 }
 

@@ -53,9 +53,10 @@ struct lp_jit_texture
    uint32_t depth;
    uint32_t first_level;
    uint32_t last_level;
+   const void *base;
    uint32_t row_stride[LP_MAX_TEXTURE_LEVELS];
    uint32_t img_stride[LP_MAX_TEXTURE_LEVELS];
-   const void *data[LP_MAX_TEXTURE_LEVELS];
+   uint32_t mip_offsets[LP_MAX_TEXTURE_LEVELS];
    /* sampler state, actually */
    float min_lod;
    float max_lod;
@@ -70,9 +71,10 @@ enum {
    LP_JIT_TEXTURE_DEPTH,
    LP_JIT_TEXTURE_FIRST_LEVEL,
    LP_JIT_TEXTURE_LAST_LEVEL,
+   LP_JIT_TEXTURE_BASE,
    LP_JIT_TEXTURE_ROW_STRIDE,
    LP_JIT_TEXTURE_IMG_STRIDE,
-   LP_JIT_TEXTURE_DATA,
+   LP_JIT_TEXTURE_MIP_OFFSETS,
    LP_JIT_TEXTURE_MIN_LOD,
    LP_JIT_TEXTURE_MAX_LOD,
    LP_JIT_TEXTURE_LOD_BIAS,
@@ -101,8 +103,8 @@ struct lp_jit_context
 
    uint32_t stencil_ref_front, stencil_ref_back;
 
-   /* FIXME: store (also?) in floats */
-   uint8_t *blend_color;
+   uint8_t *u8_blend_color;
+   float *f_blend_color;
 
    struct lp_jit_texture textures[PIPE_MAX_SAMPLERS];
 };
@@ -117,7 +119,8 @@ enum {
    LP_JIT_CTX_ALPHA_REF,
    LP_JIT_CTX_STENCIL_REF_FRONT,
    LP_JIT_CTX_STENCIL_REF_BACK,
-   LP_JIT_CTX_BLEND_COLOR,
+   LP_JIT_CTX_U8_BLEND_COLOR,
+   LP_JIT_CTX_F_BLEND_COLOR,
    LP_JIT_CTX_TEXTURES,
    LP_JIT_CTX_COUNT
 };
@@ -135,14 +138,33 @@ enum {
 #define lp_jit_context_stencil_ref_back_value(_gallivm, _ptr) \
    lp_build_struct_get(_gallivm, _ptr, LP_JIT_CTX_STENCIL_REF_BACK, "stencil_ref_back")
 
-#define lp_jit_context_blend_color(_gallivm, _ptr) \
-   lp_build_struct_get(_gallivm, _ptr, LP_JIT_CTX_BLEND_COLOR, "blend_color")
+#define lp_jit_context_u8_blend_color(_gallivm, _ptr) \
+   lp_build_struct_get(_gallivm, _ptr, LP_JIT_CTX_U8_BLEND_COLOR, "u8_blend_color")
+
+#define lp_jit_context_f_blend_color(_gallivm, _ptr) \
+   lp_build_struct_get(_gallivm, _ptr, LP_JIT_CTX_F_BLEND_COLOR, "f_blend_color")
 
 #define lp_jit_context_textures(_gallivm, _ptr) \
    lp_build_struct_get_ptr(_gallivm, _ptr, LP_JIT_CTX_TEXTURES, "textures")
 
 
 
+/**
+ * typedef for fragment shader function
+ *
+ * @param context       jit context
+ * @param x             block start x
+ * @param y             block start y
+ * @param facing        is front facing
+ * @param a0            shader input a0
+ * @param dadx          shader input dadx
+ * @param dady          shader input dady
+ * @param color         color buffer
+ * @param depth         depth buffer
+ * @param mask          mask of visible pixels in block
+ * @param thread_data   task thread data
+ * @param stride        color buffer row stride in bytes
+ */
 typedef void
 (*lp_jit_frag_func)(const struct lp_jit_context *context,
                     uint32_t x,
@@ -154,7 +176,8 @@ typedef void
                     uint8_t **color,
                     void *depth,
                     uint32_t mask,
-                    uint32_t *counter);
+                    uint32_t *counter,
+                    unsigned *stride);
 
 
 void
