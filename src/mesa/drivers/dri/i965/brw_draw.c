@@ -34,6 +34,7 @@
 #include "main/state.h"
 #include "main/enums.h"
 #include "main/macros.h"
+#include "main/transformfeedback.h"
 #include "tnl/tnl.h"
 #include "vbo/vbo_context.h"
 #include "swrast/swrast.h"
@@ -381,10 +382,11 @@ static void
 brw_update_primitive_count(struct brw_context *brw,
                            const struct _mesa_prim *prim)
 {
-   uint32_t count = vbo_count_tessellated_primitives(prim);
+   uint32_t count
+      = vbo_count_tessellated_primitives(prim->mode, prim->count,
+                                         prim->num_instances);
    brw->sol.primitives_generated += count;
-   if (brw->intel.ctx.TransformFeedback.CurrentObject->Active &&
-       !brw->intel.ctx.TransformFeedback.CurrentObject->Paused) {
+   if (_mesa_is_xfb_active_and_unpaused(&brw->intel.ctx)) {
       /* Update brw->sol.svbi_0_max_index to reflect the amount by which the
        * hardware is going to increment SVBI 0 when this drawing operation
        * occurs.  This is necessary because the kernel does not (yet) save and
@@ -434,16 +436,16 @@ static bool brw_try_draw_prims( struct gl_context *ctx,
 
    intel_prepare_render(intel);
 
+   /* This workaround has to happen outside of brw_state_upload() because it
+    * may flush the batchbuffer for a blit, affecting the state flags.
+    */
+   brw_workaround_depthstencil_alignment(brw);
+
    /* Resolves must occur after updating renderbuffers, updating context state,
     * and finalizing textures but before setting up any hardware state for
     * this draw call.
     */
    brw_predraw_resolve_buffers(brw);
-
-   /* This workaround has to happen outside of brw_state_upload() because it
-    * may flush the batchbuffer for a blit, affecting the state flags.
-    */
-   brw_workaround_depthstencil_alignment(brw);
 
    /* Bind all inputs, derive varying and size information:
     */

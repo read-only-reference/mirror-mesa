@@ -37,6 +37,7 @@
 #include "draw/draw_context.h"
 #include "gallivm/lp_bld_type.h"
 
+#include "os/os_time.h"
 #include "lp_texture.h"
 #include "lp_fence.h"
 #include "lp_jit.h"
@@ -116,7 +117,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
       return 0;
    case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
-      return 0;
+      return PIPE_MAX_SO_BUFFERS;
    case PIPE_CAP_ANISOTROPIC_FILTER:
       return 0;
    case PIPE_CAP_POINT_SPRITE:
@@ -125,8 +126,10 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return PIPE_MAX_COLOR_BUFS;
    case PIPE_CAP_OCCLUSION_QUERY:
       return 1;
-   case PIPE_CAP_TIMER_QUERY:
+   case PIPE_CAP_QUERY_TIME_ELAPSED:
       return 0;
+   case PIPE_CAP_QUERY_TIMESTAMP:
+      return 1;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
       return 1;
    case PIPE_CAP_TEXTURE_SHADOW_MAP:
@@ -184,8 +187,9 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 0;
    case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
    case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
+      return 16*4;
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
-      return 0;
+      return 1;
    case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
       return 0;
@@ -200,8 +204,9 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 0;
    case PIPE_CAP_USER_VERTEX_BUFFERS:
    case PIPE_CAP_USER_INDEX_BUFFERS:
-   case PIPE_CAP_USER_CONSTANT_BUFFERS:
       return 1;
+   case PIPE_CAP_USER_CONSTANT_BUFFERS:
+      return 0;
    case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
@@ -210,10 +215,10 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 16;
    case PIPE_CAP_START_INSTANCE:
-   case PIPE_CAP_QUERY_TIMESTAMP:
    case PIPE_CAP_TEXTURE_MULTISAMPLE:
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
    case PIPE_CAP_CUBE_MAP_ARRAY:
+   case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
       return 0;
    }
    /* should only get here on unhandled cases */
@@ -446,7 +451,11 @@ llvmpipe_fence_finish(struct pipe_screen *screen,
    return TRUE;
 }
 
-
+static uint64_t
+llvmpipe_get_timestamp(struct pipe_screen *_screen)
+{
+   return os_time_get_nano();
+}
 
 /**
  * Create a new pipe_screen object
@@ -490,6 +499,8 @@ llvmpipe_create_screen(struct sw_winsys *winsys)
    screen->base.fence_reference = llvmpipe_fence_reference;
    screen->base.fence_signalled = llvmpipe_fence_signalled;
    screen->base.fence_finish = llvmpipe_fence_finish;
+
+   screen->base.get_timestamp = llvmpipe_get_timestamp;
 
    llvmpipe_init_screen_resource_funcs(&screen->base);
 

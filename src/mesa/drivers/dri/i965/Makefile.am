@@ -36,6 +36,7 @@ AM_CFLAGS = \
 	-I$(top_srcdir)/src/mesa/drivers/dri/common \
 	-I$(top_srcdir)/src/mesa/drivers/dri/intel \
 	-I$(top_srcdir)/src/mesa/drivers/dri/intel/server \
+	-I$(top_srcdir)/src/gtest/include \
 	$(DEFINES) \
 	$(API_DEFINES) \
 	$(VISIBILITY_CFLAGS) \
@@ -66,8 +67,16 @@ i965_dri_la_SOURCES =
 i965_dri_la_LIBADD = $(COMMON_LIBS)
 i965_dri_la_LDFLAGS = -module -avoid-version -shared
 
-TESTS = test_eu_compact
-check_PROGRAMS = test_eu_compact
+TESTS = \
+        test_eu_compact \
+        test_vec4_register_coalesce
+check_PROGRAMS = $(TESTS)
+
+test_vec4_register_coalesce_SOURCES = \
+	test_vec4_register_coalesce.cpp
+test_vec4_register_coalesce_LDADD = \
+        $(TEST_LIBS) \
+        $(top_builddir)/src/gtest/libgtest.la
 
 test_eu_compact_SOURCES = \
 	test_eu_compact.c

@@ -308,6 +308,48 @@ _mesa_bytes_per_pixel(GLenum format, GLenum type)
 
 
 /**
+ * Get the number of bytes for a vertex attrib with the given number of
+ * components and type.
+ *
+ * \param comps number of components.
+ * \param type data type.
+ *
+ * \return bytes per attribute, or -1 if a bad comps/type combination was given.
+ */
+GLint
+_mesa_bytes_per_vertex_attrib(GLint comps, GLenum type)
+{
+   switch (type) {
+   case GL_BYTE:
+   case GL_UNSIGNED_BYTE:
+      return comps * sizeof(GLubyte);
+   case GL_SHORT:
+   case GL_UNSIGNED_SHORT:
+      return comps * sizeof(GLshort);
+   case GL_INT:
+   case GL_UNSIGNED_INT:
+      return comps * sizeof(GLint);
+   case GL_FLOAT:
+      return comps * sizeof(GLfloat);
+   case GL_HALF_FLOAT_ARB:
+      return comps * sizeof(GLhalfARB);
+   case GL_DOUBLE:
+      return comps * sizeof(GLdouble);
+   case GL_FIXED:
+      return comps * sizeof(GLfixed);
+   case GL_INT_2_10_10_10_REV:
+   case GL_UNSIGNED_INT_2_10_10_10_REV:
+      if (comps == 4)
+         return sizeof(GLuint);
+      else
+         return -1;
+   default:
+      return -1;
+   }
+}
+
+
+/**
  * Test if the given format is an integer (non-normalized) format.
  */
 GLboolean
@@ -570,6 +612,16 @@ _mesa_is_color_format(GLenum format)
       case GL_COMPRESSED_SIGNED_LUMINANCE_ALPHA_LATC2_EXT:
       case GL_COMPRESSED_LUMINANCE_ALPHA_3DC_ATI:
       case GL_ETC1_RGB8_OES:
+      case GL_COMPRESSED_RGB8_ETC2:
+      case GL_COMPRESSED_SRGB8_ETC2:
+      case GL_COMPRESSED_RGBA8_ETC2_EAC:
+      case GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC:
+      case GL_COMPRESSED_R11_EAC:
+      case GL_COMPRESSED_RG11_EAC:
+      case GL_COMPRESSED_SIGNED_R11_EAC:
+      case GL_COMPRESSED_SIGNED_RG11_EAC:
+      case GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2:
+      case GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2:
       /* generic integer formats */
       case GL_RED_INTEGER_EXT:
       case GL_GREEN_INTEGER_EXT:
@@ -829,6 +881,17 @@ _mesa_is_compressed_format(struct gl_context *ctx, GLenum format)
    case GL_ETC1_RGB8_OES:
       return _mesa_is_gles(ctx)
          && ctx->Extensions.OES_compressed_ETC1_RGB8_texture;
+   case GL_COMPRESSED_RGB8_ETC2:
+   case GL_COMPRESSED_SRGB8_ETC2:
+   case GL_COMPRESSED_RGBA8_ETC2_EAC:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC:
+   case GL_COMPRESSED_R11_EAC:
+   case GL_COMPRESSED_RG11_EAC:
+   case GL_COMPRESSED_SIGNED_R11_EAC:
+   case GL_COMPRESSED_SIGNED_RG11_EAC:
+   case GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2:
+   case GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2:
+      return _mesa_is_gles3(ctx);
    case GL_PALETTE4_RGB8_OES:
    case GL_PALETTE4_RGBA8_OES:
    case GL_PALETTE4_R5_G6_B5_OES:

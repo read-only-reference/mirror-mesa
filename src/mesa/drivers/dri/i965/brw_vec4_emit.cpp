@@ -141,6 +141,8 @@ vec4_generator::vec4_generator(struct brw_context *brw,
    intel = &brw->intel;
    vp = &c->vp->program;
 
+   shader = prog ? prog->_LinkedShaders[MESA_SHADER_VERTEX] : NULL;
+
    p = rzalloc(mem_ctx, struct brw_compile);
    brw_init_compile(brw, p, mem_ctx);
 }
@@ -461,6 +463,7 @@ vec4_generator::generate_scratch_read(vec4_instruction *inst,
 			   msg_type,
 			   BRW_DATAPORT_READ_TARGET_RENDER_CACHE,
 			   2, /* mlen */
+                           true, /* header_present */
 			   1 /* rlen */);
 }
 
@@ -594,6 +597,7 @@ vec4_generator::generate_pull_constant_load(vec4_instruction *inst,
 			   msg_type,
 			   BRW_DATAPORT_READ_TARGET_DATA_CACHE,
 			   2, /* mlen */
+                           true, /* header_present */
 			   1 /* rlen */);
 }
 
@@ -654,6 +658,10 @@ vec4_generator::generate_vs_instruction(vec4_instruction *instruction,
 
    case VS_OPCODE_PULL_CONSTANT_LOAD:
       generate_pull_constant_load(inst, dst, src[0], src[1]);
+      break;
+
+   case SHADER_OPCODE_SHADER_TIME_ADD:
+      brw_shader_time_add(p, inst->base_mrf, SURF_INDEX_VS_SHADER_TIME);
       break;
 
    default:
@@ -719,6 +727,7 @@ vec4_generator::generate_code(exec_list *instructions)
       brw_set_predicate_control(p, inst->predicate);
       brw_set_predicate_inverse(p, inst->predicate_inverse);
       brw_set_saturate(p, inst->saturate);
+      brw_set_mask_control(p, inst->force_writemask_all);
 
       switch (inst->opcode) {
       case BRW_OPCODE_MOV:

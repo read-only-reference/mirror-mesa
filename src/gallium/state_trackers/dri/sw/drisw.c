@@ -158,10 +158,10 @@ drisw_swap_buffers(__DRIdrawable *dPriv)
 }
 
 static void
-drisw_flush_frontbuffer(struct dri_drawable *drawable,
+drisw_flush_frontbuffer(struct dri_context *ctx,
+                        struct dri_drawable *drawable,
                         enum st_attachment_type statt)
 {
-   struct dri_context *ctx = dri_get_current(drawable->sPriv);
    struct pipe_resource *ptex;
 
    if (!ctx)
@@ -311,7 +311,7 @@ drisw_init_screen(__DRIscreen * sPriv)
    pscreen = drisw_create_screen(&drisw_lf);
    /* dri_init_screen_helper checks pscreen for us */
 
-   configs = dri_init_screen_helper(screen, pscreen, 32);
+   configs = dri_init_screen_helper(screen, pscreen);
    if (!configs)
       goto fail;
 

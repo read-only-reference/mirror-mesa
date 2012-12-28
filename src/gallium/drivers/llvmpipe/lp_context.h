@@ -72,7 +72,7 @@ struct llvmpipe_context {
    struct pipe_blend_color blend_color;
    struct pipe_stencil_ref stencil_ref;
    struct pipe_clip_state clip;
-   struct pipe_resource *constants[PIPE_SHADER_TYPES][PIPE_MAX_CONSTANT_BUFFERS];
+   struct pipe_constant_buffer constants[PIPE_SHADER_TYPES][LP_MAX_TGSI_CONST_BUFFERS];
    struct pipe_framebuffer_state framebuffer;
    struct pipe_poly_stipple poly_stipple;
    struct pipe_scissor_state scissor;
@@ -81,12 +81,6 @@ struct llvmpipe_context {
    struct pipe_viewport_state viewport;
    struct pipe_vertex_buffer vertex_buffer[PIPE_MAX_ATTRIBS];
    struct pipe_index_buffer index_buffer;
-   struct {
-      struct llvmpipe_resource *buffer[PIPE_MAX_SO_BUFFERS];
-      int offset[PIPE_MAX_SO_BUFFERS];
-      int so_count[PIPE_MAX_SO_BUFFERS];
-      int num_buffers;
-   } so_target;
    struct pipe_resource *mapped_vs_tex[PIPE_MAX_SAMPLERS];
 
    unsigned num_samplers[PIPE_SHADER_TYPES];
@@ -94,9 +88,14 @@ struct llvmpipe_context {
 
    unsigned num_vertex_buffers;
 
+   struct draw_so_target *so_targets[PIPE_MAX_SO_BUFFERS];
+   int num_so_targets;
+   struct pipe_query_data_so_statistics so_stats;
+   unsigned num_primitives_generated;
+
    unsigned dirty; /**< Mask of LP_NEW_x flags */
 
-   int active_query_count;
+   unsigned active_occlusion_query;
 
    /** Mapped vertex buffers */
    ubyte *mapped_vbuffer[PIPE_MAX_ATTRIBS];

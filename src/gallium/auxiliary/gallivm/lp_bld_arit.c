@@ -45,6 +45,8 @@
  */
 
 
+#include <float.h>
+
 #include "util/u_memory.h"
 #include "util/u_debug.h"
 #include "util/u_math.h"
@@ -58,9 +60,9 @@
 #include "lp_bld_logic.h"
 #include "lp_bld_pack.h"
 #include "lp_bld_debug.h"
+#include "lp_bld_bitarit.h"
 #include "lp_bld_arit.h"
 
-#include "float.h"
 
 #define EXP_POLY_DEGREE 5
 
@@ -679,8 +681,12 @@ lp_build_sub(struct lp_build_context *bld,
 }
 
 
+
 /**
- * Normalized 8bit multiplication.
+ * Normalized multiplication.
+ *
+ * There are several approaches for (using 8-bit normalized multiplication as
+ * an example):
  *
  * - alpha plus one
  *
@@ -688,7 +694,7 @@ lp_build_sub(struct lp_build_context *bld,
  *    
  *       a*b/255 ~= (a*(b + 1)) >> 256
  *    
- *     which is the fastest method that satisfies the following OpenGL criteria
+ *     which is the fastest method that satisfies the following OpenGL criteria of
  *    
  *       0*0 = 0 and 255*255 = 255
  *
@@ -704,7 +710,7 @@ lp_build_sub(struct lp_build_context *bld,
  *
  *     note that just by itself it doesn't satisfies the OpenGL criteria, as
  *     255*255 = 254, so the special case b = 255 must be accounted or roundoff
- *     must be used
+ *     must be used.
  *
  * - geometric series plus rounding
  *
@@ -713,7 +719,9 @@ lp_build_sub(struct lp_build_context *bld,
  *
  *       t/255 ~= (t + (t >> 8) + 0x80) >> 8
  *
- *     achieving the exact results
+ *     achieving the exact results.
+ *
+ *
  *
  * @sa Alvy Ray Smith, Image Compositing Fundamentals, Tech Memo 4, Aug 15, 1995, 
  *     ftp://ftp.alvyray.com/Acrobat/4_Comp.pdf
@@ -721,66 +729,53 @@ lp_build_sub(struct lp_build_context *bld,
  *     http://www.stereopsis.com/doubleblend.html
  */
 static LLVMValueRef
-lp_build_mul_u8n(struct gallivm_state *gallivm,
-                 struct lp_type i16_type,
-                 LLVMValueRef a, LLVMValueRef b)
+lp_build_mul_norm(struct gallivm_state *gallivm,
+                  struct lp_type wide_type,
+                  LLVMValueRef a, LLVMValueRef b)
 {
    LLVMBuilderRef builder = gallivm->builder;
-   LLVMValueRef c8;
+   struct lp_build_context bld;
+   unsigned n;
+   LLVMValueRef half;
    LLVMValueRef ab;
 
-   assert(!i16_type.floating);
-   assert(lp_check_value(i16_type, a));
-   assert(lp_check_value(i16_type, b));
+   assert(!wide_type.floating);
+   assert(lp_check_value(wide_type, a));
+   assert(lp_check_value(wide_type, b));
 
-   c8 = lp_build_const_int_vec(gallivm, i16_type, 8);
-   
-#if 0
-   
-   /* a*b/255 ~= (a*(b + 1)) >> 256 */
-   b = LLVMBuildAdd(builder, b, lp_build_const_int_vec(gallium, i16_type, 1), "");
+   lp_build_context_init(&bld, gallivm, wide_type);
+
+   n = wide_type.width / 2;
+   if (wide_type.sign) {
+      --n;
+   }
+
+   /*
+    * TODO: for 16bits normalized SSE2 vectors we could consider using PMULHUW
+    * http://ssp.impulsetrain.com/2011/07/03/multiplying-normalized-16-bit-numbers-with-sse2/
+    */
+
+   /*
+    * a*b / (2**n - 1) ~= (a*b + (a*b >> n) + half) >> n
+    */
+
    ab = LLVMBuildMul(builder, a, b, "");
+   ab = LLVMBuildAdd(builder, ab, lp_build_shr_imm(&bld, ab, n), "");
 
-#else
-   
-   /* ab/255 ~= (ab + (ab >> 8) + 0x80) >> 8 */
-   ab = LLVMBuildMul(builder, a, b, "");
-   ab = LLVMBuildAdd(builder, ab, LLVMBuildLShr(builder, ab, c8, ""), "");
-   ab = LLVMBuildAdd(builder, ab, lp_build_const_int_vec(gallivm, i16_type, 0x80), "");
+   /*
+    * half = sgn(ab) * 0.5 * (2 ** n) = sgn(ab) * (1 << (n - 1))
+    */
 
-#endif
-   
-   ab = LLVMBuildLShr(builder, ab, c8, "");
+   half = lp_build_const_int_vec(gallivm, wide_type, 1 << (n - 1));
+   if (wide_type.sign) {
+      LLVMValueRef minus_half = LLVMBuildNeg(builder, half, "");
+      LLVMValueRef sign = lp_build_shr_imm(&bld, half, wide_type.width - 1);
+      half = lp_build_select(&bld, sign, minus_half, half);
+   }
+   ab = LLVMBuildAdd(builder, ab, half, "");
 
-   return ab;
-}
-
-/**
- * Normalized 16bit multiplication.
- *
- * Utilises same principle as above code.
- */
-static LLVMValueRef
-lp_build_mul_u16n(struct gallivm_state *gallivm,
-                 struct lp_type i32_type,
-                 LLVMValueRef a, LLVMValueRef b)
-{
-   LLVMBuilderRef builder = gallivm->builder;
-   LLVMValueRef c16;
-   LLVMValueRef ab;
-
-   assert(!i32_type.floating);
-   assert(lp_check_value(i32_type, a));
-   assert(lp_check_value(i32_type, b));
-
-   c16 = lp_build_const_int_vec(gallivm, i32_type, 16);
-
-   /* ab/65535 ~= (ab + (ab >> 16) + 0x8000) >> 16 */
-   ab = LLVMBuildMul(builder, a, b, "");
-   ab = LLVMBuildAdd(builder, ab, LLVMBuildLShr(builder, ab, c16, ""), "");
-   ab = LLVMBuildAdd(builder, ab, lp_build_const_int_vec(gallivm, i32_type, 0x8000), "");
-
-   ab = LLVMBuildLShr(builder, ab, c16, "");
+   /* Final division */
+   ab = lp_build_shr_imm(&bld, ab, n);
 
    return ab;
 }
@@ -812,41 +807,20 @@ lp_build_mul(struct lp_build_context *bld,
    if(a == bld->undef || b == bld->undef)
       return bld->undef;
 
-   if(!type.floating && !type.fixed && type.norm) {
-      if(type.width == 8) {
-         struct lp_type i16_type = lp_wider_type(type);
-         LLVMValueRef al, ah, bl, bh, abl, abh, ab;
+   if (!type.floating && !type.fixed && type.norm) {
+      struct lp_type wide_type = lp_wider_type(type);
+      LLVMValueRef al, ah, bl, bh, abl, abh, ab;
 
-         lp_build_unpack2(bld->gallivm, type, i16_type, a, &al, &ah);
-         lp_build_unpack2(bld->gallivm, type, i16_type, b, &bl, &bh);
+      lp_build_unpack2(bld->gallivm, type, wide_type, a, &al, &ah);
+      lp_build_unpack2(bld->gallivm, type, wide_type, b, &bl, &bh);
 
-         /* PMULLW, PSRLW, PADDW */
-         abl = lp_build_mul_u8n(bld->gallivm, i16_type, al, bl);
-         abh = lp_build_mul_u8n(bld->gallivm, i16_type, ah, bh);
+      /* PMULLW, PSRLW, PADDW */
+      abl = lp_build_mul_norm(bld->gallivm, wide_type, al, bl);
+      abh = lp_build_mul_norm(bld->gallivm, wide_type, ah, bh);
 
-         ab = lp_build_pack2(bld->gallivm, i16_type, type, abl, abh);
-         
-         return ab;
-      }
+      ab = lp_build_pack2(bld->gallivm, wide_type, type, abl, abh);
 
-      if(type.width == 16) {
-         struct lp_type i32_type = lp_wider_type(type);
-         LLVMValueRef al, ah, bl, bh, abl, abh, ab;
-
-         lp_build_unpack2(bld->gallivm, type, i32_type, a, &al, &ah);
-         lp_build_unpack2(bld->gallivm, type, i32_type, b, &bl, &bh);
-
-         /* PMULLW, PSRLW, PADDW */
-         abl = lp_build_mul_u16n(bld->gallivm, i32_type, al, bl);
-         abh = lp_build_mul_u16n(bld->gallivm, i32_type, ah, bh);
-
-         ab = lp_build_pack2(bld->gallivm, i32_type, type, abl, abh);
-
-         return ab;
-      }
-
-      /* FIXME */
-      assert(0);
+      return ab;
    }
 
    if(type.fixed)
@@ -988,7 +962,10 @@ lp_build_div(struct lp_build_context *bld,
 
 
 /**
- * Linear interpolation -- without any checks.
+ * Linear interpolation helper.
+ *
+ * @param normalized whether we are interpolating normalized values,
+ *        encoded in normalized integers, twice as wide.
  *
  * @sa http://www.stereopsis.com/doubleblend.html
  */
@@ -996,8 +973,10 @@ static INLINE LLVMValueRef
 lp_build_lerp_simple(struct lp_build_context *bld,
                      LLVMValueRef x,
                      LLVMValueRef v0,
-                     LLVMValueRef v1)
+                     LLVMValueRef v1,
+                     bool normalized)
 {
+   unsigned half_width = bld->type.width/2;
    LLVMBuilderRef builder = bld->gallivm->builder;
    LLVMValueRef delta;
    LLVMValueRef res;
@@ -1008,16 +987,39 @@ lp_build_lerp_simple(struct lp_build_context *bld,
 
    delta = lp_build_sub(bld, v1, v0);
 
-   res = lp_build_mul(bld, x, delta);
+   if (normalized) {
+      if (!bld->type.sign) {
+         /*
+          * Scale x from [0, 2**n - 1] to [0, 2**n] by adding the
+          * most-significant-bit to the lowest-significant-bit, so that
+          * later we can just divide by 2**n instead of 2**n - 1.
+          */
+         x = lp_build_add(bld, x, lp_build_shr_imm(bld, x, half_width - 1));
+
+         /* (x * delta) >> n */
+         res = lp_build_mul(bld, x, delta);
+         res = lp_build_shr_imm(bld, res, half_width);
+      } else {
+         /*
+          * The rescaling trick above doesn't work for signed numbers, so
+          * use the 2**n - 1 divison approximation in lp_build_mul_norm
+          * instead.
+          */
+         res = lp_build_mul_norm(bld->gallivm, bld->type, x, delta);
+      }
+   } else {
+      res = lp_build_mul(bld, x, delta);
+   }
 
    res = lp_build_add(bld, v0, res);
 
-   if (bld->type.fixed) {
+   if ((normalized && !bld->type.sign) || bld->type.fixed) {
+      /* We need to mask out the high order bits when lerping 8bit normalized colors stored on 16bits */
       /* XXX: This step is necessary for lerping 8bit colors stored on 16bits,
-       * but it will be wrong for other uses. Basically we need a more
-       * powerful lp_type, capable of further distinguishing the values
+       * but it will be wrong for true fixed point use cases. Basically we need
+       * a more powerful lp_type, capable of further distinguishing the values
        * interpretation from the value storage. */
-      res = LLVMBuildAnd(builder, res, lp_build_const_int_vec(bld->gallivm, bld->type, (1 << bld->type.width/2) - 1), "");
+      res = LLVMBuildAnd(builder, res, lp_build_const_int_vec(bld->gallivm, bld->type, (1 << half_width) - 1), "");
    }
 
    return res;
@@ -1033,7 +1035,6 @@ lp_build_lerp(struct lp_build_context *bld,
               LLVMValueRef v0,
               LLVMValueRef v1)
 {
-   LLVMBuilderRef builder = bld->gallivm->builder;
    const struct lp_type type = bld->type;
    LLVMValueRef res;
 
@@ -1045,17 +1046,15 @@ lp_build_lerp(struct lp_build_context *bld,
       struct lp_type wide_type;
       struct lp_build_context wide_bld;
       LLVMValueRef xl, xh, v0l, v0h, v1l, v1h, resl, resh;
-      LLVMValueRef shift;
 
       assert(type.length >= 2);
-      assert(!type.sign);
 
       /*
-       * Create a wider type, enough to hold the intermediate result of the
-       * multiplication.
+       * Create a wider integer type, enough to hold the
+       * intermediate result of the multiplication.
        */
       memset(&wide_type, 0, sizeof wide_type);
-      wide_type.fixed  = TRUE;
+      wide_type.sign   = type.sign;
       wide_type.width  = type.width*2;
       wide_type.length = type.length/2;
 
@@ -1066,26 +1065,15 @@ lp_build_lerp(struct lp_build_context *bld,
       lp_build_unpack2(bld->gallivm, type, wide_type, v1, &v1l, &v1h);
 
       /*
-       * Scale x from [0, 255] to [0, 256]
-       */
-
-      shift = lp_build_const_int_vec(bld->gallivm, wide_type, type.width - 1);
-
-      xl = lp_build_add(&wide_bld, xl,
-                        LLVMBuildAShr(builder, xl, shift, ""));
-      xh = lp_build_add(&wide_bld, xh,
-                        LLVMBuildAShr(builder, xh, shift, ""));
-
-      /*
        * Lerp both halves.
        */
 
-      resl = lp_build_lerp_simple(&wide_bld, xl, v0l, v1l);
-      resh = lp_build_lerp_simple(&wide_bld, xh, v0h, v1h);
+      resl = lp_build_lerp_simple(&wide_bld, xl, v0l, v1l, TRUE);
+      resh = lp_build_lerp_simple(&wide_bld, xh, v0h, v1h, TRUE);
 
       res = lp_build_pack2(bld->gallivm, wide_type, type, resl, resh);
    } else {
-      res = lp_build_lerp_simple(bld, x, v0, v1);
+      res = lp_build_lerp_simple(bld, x, v0, v1, FALSE);
    }
 
    return res;

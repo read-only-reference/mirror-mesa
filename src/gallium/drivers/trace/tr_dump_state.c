@@ -76,6 +76,7 @@ void trace_dump_resource_template(const struct pipe_resource *templat)
    trace_dump_member_end();
 
    trace_dump_member(uint, templat, last_level);
+   trace_dump_member(uint, templat, nr_samples);
    trace_dump_member(uint, templat, usage);
    trace_dump_member(uint, templat, bind);
    trace_dump_member(uint, templat, flags);
@@ -542,8 +543,6 @@ void trace_dump_surface_template(const struct pipe_surface *state,
    trace_dump_member(format, state, format);
    trace_dump_member(uint, state, width);
    trace_dump_member(uint, state, height);
-
-   trace_dump_member(uint, state, usage);
 
    trace_dump_member_begin("u");
    trace_dump_struct_begin(""); /* anonymous */

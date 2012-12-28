@@ -65,6 +65,7 @@ translate_tex_target(GLenum target)
       return BRW_SURFACE_3D;
 
    case GL_TEXTURE_CUBE_MAP: 
+   case GL_TEXTURE_CUBE_MAP_ARRAY:
       return BRW_SURFACE_CUBE;
 
    default: 
@@ -568,6 +569,21 @@ brw_init_surface_formats(struct brw_context *brw)
     * during glCompressedTexImage2D(). See intel_mipmap_tree::wraps_etc1.
     */
    ctx->TextureFormatSupported[MESA_FORMAT_ETC1_RGB8] = true;
+
+   /* On hardware that lacks support for ETC2, we map ETC2 to a suitable
+    * MESA_FORMAT during glCompressedTexImage2D().
+    * See intel_mipmap_tree::wraps_etc2.
+    */
+   ctx->TextureFormatSupported[MESA_FORMAT_ETC2_RGB8] = true;
+   ctx->TextureFormatSupported[MESA_FORMAT_ETC2_SRGB8] = true;
+   ctx->TextureFormatSupported[MESA_FORMAT_ETC2_RGBA8_EAC] = true;
+   ctx->TextureFormatSupported[MESA_FORMAT_ETC2_SRGB8_ALPHA8_EAC] = true;
+   ctx->TextureFormatSupported[MESA_FORMAT_ETC2_R11_EAC] = true;
+   ctx->TextureFormatSupported[MESA_FORMAT_ETC2_RG11_EAC] = true;
+   ctx->TextureFormatSupported[MESA_FORMAT_ETC2_SIGNED_R11_EAC] = true;
+   ctx->TextureFormatSupported[MESA_FORMAT_ETC2_SIGNED_RG11_EAC] = true;
+   ctx->TextureFormatSupported[MESA_FORMAT_ETC2_RGB8_PUNCHTHROUGH_ALPHA1] = true;
+   ctx->TextureFormatSupported[MESA_FORMAT_ETC2_SRGB8_PUNCHTHROUGH_ALPHA1] = true;
 }
 
 bool
@@ -1010,7 +1026,7 @@ brw_upload_wm_pull_constants(struct brw_context *brw)
    drm_intel_gem_bo_unmap_gtt(brw->wm.const_bo);
 
    intel->vtbl.create_constant_surface(brw, brw->wm.const_bo, 0,
-				       params->NumParameters,
+				       ALIGN(brw->wm.prog_data->nr_pull_params, 4) / 4,
 				       &brw->wm.surf_offset[surf_index]);
 
    brw->state.dirty.brw |= BRW_NEW_SURFACES;
@@ -1405,8 +1421,15 @@ const struct brw_tracked_state brw_wm_ubo_surfaces = {
 static void
 brw_upload_wm_binding_table(struct brw_context *brw)
 {
+   struct intel_context *intel = &brw->intel;
    uint32_t *bind;
    int i;
+
+   if (INTEL_DEBUG & DEBUG_SHADER_TIME) {
+      intel->vtbl.create_constant_surface(brw, brw->shader_time.bo, 0,
+                                          brw->shader_time.bo->size,
+                                          &brw->wm.surf_offset[SURF_INDEX_WM_SHADER_TIME]);
+   }
 
    /* Might want to calculate nr_surfaces first, to avoid taking up so much
     * space for the binding table.

@@ -953,15 +953,16 @@ r300_texture_create_object(struct r300_screen *rscreen,
                            struct pb_buffer *buffer)
 {
     struct radeon_winsys *rws = rscreen->rws;
-    struct r300_resource *tex = CALLOC_STRUCT(r300_resource);
-    if (!tex) {
-        if (buffer)
-            pb_reference(&buffer, NULL);
-        return NULL;
+    struct r300_resource *tex = NULL;
+
+    if (base->nr_samples > 1) {
+        goto fail;
     }
 
-    if (base->nr_samples > 1)
-        return NULL;
+    tex = CALLOC_STRUCT(r300_resource);
+    if (!tex) {
+        goto fail;
+    }
 
     pipe_reference_init(&tex->b.b.reference, 1);
     tex->b.b.screen = &rscreen->screen;
@@ -979,14 +980,28 @@ r300_texture_create_object(struct r300_screen *rscreen,
 
     r300_texture_desc_init(rscreen, tex, base);
 
+    /* Figure out the ideal placement for the texture.. */
+    if (tex->domain & RADEON_DOMAIN_VRAM &&
+        tex->tex.size_in_bytes >= rscreen->info.vram_size) {
+        tex->domain &= ~RADEON_DOMAIN_VRAM;
+        tex->domain |= RADEON_DOMAIN_GTT;
+    }
+    if (tex->domain & RADEON_DOMAIN_GTT &&
+        tex->tex.size_in_bytes >= rscreen->info.gart_size) {
+        tex->domain &= ~RADEON_DOMAIN_GTT;
+    }
+    /* Just fail if the texture is too large. */
+    if (!tex->domain) {
+        goto fail;
+    }
+
     /* Create the backing buffer if needed. */
     if (!tex->buf) {
-        tex->buf = rws->buffer_create(rws, tex->tex.size_in_bytes, 2048,
-                                      base->bind, tex->domain);
+        tex->buf = rws->buffer_create(rws, tex->tex.size_in_bytes, 2048, TRUE,
+                                      tex->domain);
 
         if (!tex->buf) {
-            FREE(tex);
-            return NULL;
+            goto fail;
         }
     }
 
@@ -998,6 +1013,12 @@ r300_texture_create_object(struct r300_screen *rscreen,
             tex->tex.stride_in_bytes[0]);
 
     return tex;
+
+fail:
+    FREE(tex);
+    if (buffer)
+        pb_reference(&buffer, NULL);
+    return NULL;
 }
 
 /* Create a new texture. */
@@ -1088,7 +1109,6 @@ struct pipe_surface* r300_create_surface_custom(struct pipe_context * ctx,
         surface->base.format = surf_tmpl->format;
         surface->base.width = u_minify(width0_override, level);
         surface->base.height = u_minify(height0_override, level);
-        surface->base.usage = surf_tmpl->usage;
         surface->base.u.tex.level = level;
         surface->base.u.tex.first_layer = surf_tmpl->u.tex.first_layer;
         surface->base.u.tex.last_layer = surf_tmpl->u.tex.last_layer;

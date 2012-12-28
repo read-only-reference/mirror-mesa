@@ -288,7 +288,11 @@ static void* r300_create_blend_state(struct pipe_context* pipe,
                          dstRGB == PIPE_BLENDFACTOR_ZERO) &&
                         (dstA == PIPE_BLENDFACTOR_SRC_COLOR ||
                          dstA == PIPE_BLENDFACTOR_SRC_ALPHA ||
-                         dstA == PIPE_BLENDFACTOR_ZERO)) {
+                         dstA == PIPE_BLENDFACTOR_ZERO) &&
+                        (srcRGB != PIPE_BLENDFACTOR_DST_COLOR &&
+                         srcRGB != PIPE_BLENDFACTOR_DST_ALPHA &&
+                         srcRGB != PIPE_BLENDFACTOR_INV_DST_COLOR &&
+                         srcRGB != PIPE_BLENDFACTOR_INV_DST_ALPHA)) {
                          blend_control |= R500_SRC_ALPHA_0_NO_READ;
                     }
 
@@ -297,7 +301,11 @@ static void* r300_create_blend_state(struct pipe_context* pipe,
                          dstRGB == PIPE_BLENDFACTOR_ZERO) &&
                         (dstA == PIPE_BLENDFACTOR_INV_SRC_COLOR ||
                          dstA == PIPE_BLENDFACTOR_INV_SRC_ALPHA ||
-                         dstA == PIPE_BLENDFACTOR_ZERO)) {
+                         dstA == PIPE_BLENDFACTOR_ZERO) &&
+                        (srcRGB != PIPE_BLENDFACTOR_DST_COLOR &&
+                         srcRGB != PIPE_BLENDFACTOR_DST_ALPHA &&
+                         srcRGB != PIPE_BLENDFACTOR_INV_DST_COLOR &&
+                         srcRGB != PIPE_BLENDFACTOR_INV_DST_ALPHA)) {
                          blend_control |= R500_SRC_ALPHA_1_NO_READ;
                     }
                 }
@@ -578,10 +586,6 @@ static void*
         dsa->z_stencil_control |=
             (r300_translate_depth_stencil_function(state->depth.func) <<
                 R300_Z_FUNC_SHIFT);
-    } else {
-        /* We must enable depth test, otherwise occlusion queries won't work. */
-        dsa->z_buffer_control |= R300_Z_ENABLE;
-        dsa->z_stencil_control |= R300_ZS_ALWAYS;
     }
 
     /* Stencil buffer setup. */
@@ -665,13 +669,11 @@ static void*
     OUT_CB_REG(R500_FG_ALPHA_VALUE, dsa->alpha_value);
     END_CB;
 
-    /* We must enable depth test, otherwise occlusion queries won't work.
-     * We setup a dummy zbuffer to silent the CS checker, see emit_fb_state. */
     BEGIN_CB(dsa->cb_zb_no_readwrite, 10);
     OUT_CB_REG(R300_FG_ALPHA_FUNC, dsa->alpha_function);
     OUT_CB_REG_SEQ(R300_ZB_CNTL, 3);
-    OUT_CB(R300_Z_ENABLE);
-    OUT_CB(R300_ZS_ALWAYS);
+    OUT_CB(0);
+    OUT_CB(0);
     OUT_CB(0);
     OUT_CB_REG(R500_ZB_STENCILREFMASK_BF, 0);
     OUT_CB_REG(R500_FG_ALPHA_VALUE, dsa->alpha_value);
@@ -680,8 +682,8 @@ static void*
     BEGIN_CB(dsa->cb_fp16_zb_no_readwrite, 10);
     OUT_CB_REG(R300_FG_ALPHA_FUNC, dsa->alpha_function_fp16);
     OUT_CB_REG_SEQ(R300_ZB_CNTL, 3);
-    OUT_CB(R300_Z_ENABLE);
-    OUT_CB(R300_ZS_ALWAYS);
+    OUT_CB(0);
+    OUT_CB(0);
     OUT_CB(0);
     OUT_CB_REG(R500_ZB_STENCILREFMASK_BF, 0);
     OUT_CB_REG(R500_FG_ALPHA_VALUE, dsa->alpha_value);
@@ -827,14 +829,12 @@ void r300_mark_fb_state_dirty(struct r300_context *r300,
     /* Now compute the fb_state atom size. */
     r300->fb_state.size = 2 + (8 * state->nr_cbufs);
 
-    if (r300->cbzb_clear) {
+    if (r300->cbzb_clear)
         r300->fb_state.size += 10;
-    } else if (state->zsbuf) {
+    else if (state->zsbuf) {
         r300->fb_state.size += 10;
         if (r300->hyperz_enabled)
             r300->fb_state.size += 8;
-    } else if (state->nr_cbufs) {
-        r300->fb_state.size += 10;
     }
 
     /* The size of the rest of atoms stays the same. */
@@ -1205,7 +1205,8 @@ static void* r300_create_rs_state(struct pipe_context* pipe,
 
     if (r300_screen(pipe->screen)->caps.has_tcl) {
        vap_clip_cntl = (state->clip_plane_enable & 63) |
-                       R300_PS_UCP_MODE_CLIP_AS_TRIFAN;
+                       R300_PS_UCP_MODE_CLIP_AS_TRIFAN |
+                       (state->depth_clip ? 0 : R300_CLIP_DISABLE);
     } else {
        vap_clip_cntl = R300_CLIP_DISABLE;
     }

@@ -83,6 +83,7 @@ struct st_context
    GLboolean clamp_frag_color_in_shader;
    GLboolean clamp_vert_color_in_shader;
    boolean has_stencil_export; /**< can do shader stencil export? */
+   boolean has_time_elapsed;
 
    /* On old libGL's for linux we need to invalidate the drawables
     * on glViewpport calls, this is set via a option.
@@ -185,15 +186,10 @@ struct st_context
 
    struct cso_context *cso_context;
 
-   int force_msaa;
    void *winsys_drawable_handle;
 
    /* The number of vertex buffers from the last call of validate_arrays. */
    unsigned last_num_vbuffers;
-
-   /* Active render condition. */
-   struct pipe_query *render_condition;
-   unsigned condition_mode;
 
    int32_t draw_stamp;
    int32_t read_stamp;
@@ -264,9 +260,6 @@ st_fb_orientation(const struct gl_framebuffer *fb)
 /** clear-alloc a struct-sized object, with casting */
 #define ST_CALLOC_STRUCT(T)   (struct T *) calloc(1, sizeof(struct T))
 
-
-extern int
-st_get_msaa(void);
 
 extern struct st_context *
 st_create_context(gl_api api, struct pipe_context *pipe,

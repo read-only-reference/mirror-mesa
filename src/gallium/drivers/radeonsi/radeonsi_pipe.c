@@ -349,6 +349,8 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
 	case PIPE_CAP_COMPUTE:
 	case PIPE_CAP_QUERY_TIMESTAMP:
+	case PIPE_CAP_CUBE_MAP_ARRAY:
+	case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
 		return 0;
 
 	/* Stream output. */
@@ -383,7 +385,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 8;
 
 	/* Timer queries, present when the clock frequency is non zero. */
-	case PIPE_CAP_TIMER_QUERY:
+	case PIPE_CAP_QUERY_TIME_ELAPSED:
 		return rscreen->info.r600_clock_crystal_freq != 0;
 
 	case PIPE_CAP_MIN_TEXEL_OFFSET:

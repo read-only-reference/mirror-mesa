@@ -93,8 +93,8 @@ get_buffer_target(struct gl_context *ctx, GLenum target)
       }
       break;
    case GL_TEXTURE_BUFFER:
-      if (_mesa_is_desktop_gl(ctx)
-          && ctx->Extensions.ARB_texture_buffer_object) {
+      if (ctx->API == API_OPENGL_CORE &&
+          ctx->Extensions.ARB_texture_buffer_object) {
          return &ctx->Texture.BufferObject;
       }
       break;
@@ -2160,17 +2160,19 @@ _mesa_BindBufferRange(GLenum target, GLuint index,
       return;
    }
 
-   if (size <= 0) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glBindBufferRange(size=%d)",
-		  (int) size);
-      return;
-   }
+   if (buffer != 0) {
+      if (size <= 0) {
+         _mesa_error(ctx, GL_INVALID_VALUE, "glBindBufferRange(size=%d)",
+                     (int) size);
+         return;
+      }
 
-   if (offset + size > bufObj->Size) {
-      _mesa_error(ctx, GL_INVALID_VALUE,
-                  "glBindBufferRange(offset + size %d > buffer size %d)",
-		  (int) (offset + size), (int) (bufObj->Size));
-      return;
+      if (offset + size > bufObj->Size) {
+         _mesa_error(ctx, GL_INVALID_VALUE,
+                     "glBindBufferRange(offset + size %d > buffer size %d)",
+                     (int) (offset + size), (int) (bufObj->Size));
+         return;
+      }
    }
 
    switch (target) {

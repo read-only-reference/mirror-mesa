@@ -33,24 +33,6 @@
 #ifndef BRW_STRUCTS_H
 #define BRW_STRUCTS_H
 
-
-/** Number of general purpose registers (VS, WM, etc) */
-#define BRW_MAX_GRF 128
-
-/**
- * First GRF used for the MRF hack.
- *
- * On gen7, MRFs are no longer used, and contiguous GRFs are used instead.  We
- * haven't converted our compiler to be aware of this, so it asks for MRFs and
- * brw_eu_emit.c quietly converts them to be accesses of the top GRFs.  The
- * register allocators have to be careful of this to avoid corrupting the "MRF"s
- * with actual GRF allocations.
- */
-#define GEN7_MRF_HACK_START 112.
-
-/** Number of message register file registers */
-#define BRW_MAX_MRF 16
-
 /* These seem to be passed around as function args, so it works out
  * better to keep them as #defines:
  */
@@ -1064,8 +1046,9 @@ struct brw_instruction
 	 GLuint src0_horiz_stride:2;
 	 GLuint src0_width:3;
 	 GLuint src0_vert_stride:4;
+	 GLuint flag_subreg_nr:1;
 	 GLuint flag_reg_nr:1;
-	 GLuint pad:6;
+	 GLuint pad:5;
       } da1;
 
       struct
@@ -1078,8 +1061,9 @@ struct brw_instruction
 	 GLuint src0_horiz_stride:2;
 	 GLuint src0_width:3;
 	 GLuint src0_vert_stride:4;
+	 GLuint flag_subreg_nr:1;
 	 GLuint flag_reg_nr:1;
-	 GLuint pad:6;	
+	 GLuint pad:5;
       } ia1;
 
       struct
@@ -1095,8 +1079,9 @@ struct brw_instruction
 	 GLuint src0_swz_w:2;
 	 GLuint pad0:1;
 	 GLuint src0_vert_stride:4;
+	 GLuint flag_subreg_nr:1;
 	 GLuint flag_reg_nr:1;
-	 GLuint pad1:6;
+	 GLuint pad1:5;
       } da16;
 
       struct
@@ -1112,8 +1097,9 @@ struct brw_instruction
 	 GLuint src0_swz_w:2;
 	 GLuint pad0:1;
 	 GLuint src0_vert_stride:4;
+	 GLuint flag_subreg_nr:1;
 	 GLuint flag_reg_nr:1;
-	 GLuint pad1:6;
+	 GLuint pad1:5;
       } ia16;
 
       /* Extended Message Descriptor for Ironlake (Gen5) SEND instruction.
@@ -1184,8 +1170,7 @@ struct brw_instruction
 	 GLuint src1_horiz_stride:2;
 	 GLuint src1_width:3;
 	 GLuint src1_vert_stride:4;
-	 GLuint flag_reg_nr:1;
-	 GLuint pad1:6;	
+	 GLuint pad1:7;
       } ia1;
 
       struct
@@ -1201,8 +1186,7 @@ struct brw_instruction
 	 GLuint src1_swz_w:2;
 	 GLuint pad1:1;
 	 GLuint src1_vert_stride:4;
-	 GLuint flag_reg_nr:1;
-	 GLuint pad2:6;
+	 GLuint pad2:7;
       } ia16;
 
 
@@ -1547,7 +1531,7 @@ struct brw_compact_instruction {
       unsigned sub_reg_index:5;   /* 18-22 */
       unsigned acc_wr_control:1;  /* 23-23 */
       unsigned conditionalmod:4;  /* 24-27 */
-      unsigned flag_reg_nr:1;     /* 28-28 */
+      unsigned flag_subreg_nr:1;     /* 28-28 */
       unsigned cmpt_ctrl:1;       /* 29-29 */
       unsigned src0_index:2;      /* 30-31 */
    } dw0;

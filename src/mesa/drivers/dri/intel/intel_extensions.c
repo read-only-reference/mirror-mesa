@@ -45,8 +45,7 @@ intelInitExtensions(struct gl_context *ctx)
 
    ctx->Extensions.ARB_draw_elements_base_vertex = true;
    ctx->Extensions.ARB_explicit_attrib_location = true;
-   if (_mesa_is_desktop_gl(ctx))
-      ctx->Extensions.ARB_framebuffer_object = true;
+   ctx->Extensions.ARB_framebuffer_object = true;
    ctx->Extensions.ARB_half_float_pixel = true;
    ctx->Extensions.ARB_map_buffer_range = true;
    ctx->Extensions.ARB_point_sprite = true;
@@ -90,11 +89,7 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.ARB_texture_rgb10_a2ui = true;
 
    if (intel->gen >= 6)
-      if (ctx->API == API_OPENGL_CORE) {
-         ctx->Const.GLSLVersion = 140;
-      } else {
-         ctx->Const.GLSLVersion = 130;
-      }
+      ctx->Const.GLSLVersion = 140;
    else
       ctx->Const.GLSLVersion = 120;
    _mesa_override_glsl_version(ctx);
@@ -107,10 +102,8 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_blend_func_extended = !driQueryOptionb(&intel->optionCache, "disable_blend_func_extended");
       ctx->Extensions.ARB_draw_buffers_blend = true;
       ctx->Extensions.ARB_uniform_buffer_object = true;
-
-      if (ctx->API == API_OPENGL_CORE) {
-         ctx->Extensions.ARB_texture_buffer_object = true;
-      }
+      ctx->Extensions.ARB_texture_buffer_object = true;
+      ctx->Extensions.ARB_texture_cube_map_array = true;
    }
 
    if (intel->gen >= 5)

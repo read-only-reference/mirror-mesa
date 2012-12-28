@@ -98,7 +98,7 @@ static void evergreen_cs_set_vertex_buffer(
 
 	/* The vertex instructions in the compute shaders use the texture cache,
 	 * so we need to invalidate it. */
-	rctx->flags |= R600_CONTEXT_TEX_FLUSH;
+	rctx->flags |= R600_CONTEXT_INVAL_READ_CACHES;
 	state->enabled_mask |= 1 << vb_index;
 	state->dirty_mask |= 1 << vb_index;
 	state->atom.dirty = true;
@@ -329,7 +329,7 @@ static void compute_emit_cs(struct r600_context *ctx, const uint *block_layout,
 	 */
 	r600_emit_command_buffer(ctx->cs, &ctx->start_compute_cs_cmd);
 
-	ctx->flags |= R600_CONTEXT_CB_FLUSH;
+	ctx->flags |= R600_CONTEXT_WAIT_IDLE | R600_CONTEXT_FLUSH_AND_INV;
 	r600_flush_emit(ctx);
 
 	/* Emit colorbuffers. */
@@ -409,7 +409,7 @@ static void compute_emit_cs(struct r600_context *ctx, const uint *block_layout,
 
 	/* XXX evergreen_flush_emit() hardcodes the CP_COHER_SIZE to 0xffffffff
 	 */
-	ctx->flags |= R600_CONTEXT_CB_FLUSH;
+	ctx->flags |= R600_CONTEXT_INVAL_READ_CACHES;
 	r600_flush_emit(ctx);
 
 #if 0
@@ -468,7 +468,7 @@ void evergreen_emit_cs_shader(
 	r600_write_value(cs, r600_context_bo_reloc(rctx, kernel->code_bo,
 							RADEON_USAGE_READ));
 
-	rctx->flags |= R600_CONTEXT_SHADERCONST_FLUSH;
+	rctx->flags |= R600_CONTEXT_INVAL_READ_CACHES;
 }
 
 static void evergreen_launch_grid(
@@ -804,15 +804,19 @@ struct pipe_resource *r600_compute_global_buffer_create(
 	struct pipe_screen *screen,
 	const struct pipe_resource *templ)
 {
+	struct r600_resource_global* result = NULL;
+	struct r600_screen* rscreen = NULL;
+	int size_in_dw = 0;
+
 	assert(templ->target == PIPE_BUFFER);
 	assert(templ->bind & PIPE_BIND_GLOBAL);
 	assert(templ->array_size == 1 || templ->array_size == 0);
 	assert(templ->depth0 == 1 || templ->depth0 == 0);
 	assert(templ->height0 == 1 || templ->height0 == 0);
 
-	struct r600_resource_global* result = (struct r600_resource_global*)
-		CALLOC(sizeof(struct r600_resource_global), 1);
-	struct r600_screen* rscreen = (struct r600_screen*)screen;
+	result = (struct r600_resource_global*)
+	CALLOC(sizeof(struct r600_resource_global), 1);
+	rscreen = (struct r600_screen*)screen;
 
 	COMPUTE_DBG("*** r600_compute_global_buffer_create\n");
 	COMPUTE_DBG("width = %u array_size = %u\n", templ->width0,
@@ -823,7 +827,7 @@ struct pipe_resource *r600_compute_global_buffer_create(
 	result->base.b.b = *templ;
 	pipe_reference_init(&result->base.b.b.reference, 1);
 
-	int size_in_dw = (templ->width0+3) / 4;
+	size_in_dw = (templ->width0+3) / 4;
 
 	result->chunk = compute_memory_alloc(rscreen->global_pool, size_in_dw);
 
@@ -840,11 +844,14 @@ void r600_compute_global_buffer_destroy(
 	struct pipe_screen *screen,
 	struct pipe_resource *res)
 {
+	struct r600_resource_global* buffer = NULL;
+	struct r600_screen* rscreen = NULL;
+
 	assert(res->target == PIPE_BUFFER);
 	assert(res->bind & PIPE_BIND_GLOBAL);
 
-	struct r600_resource_global* buffer = (struct r600_resource_global*)res;
-	struct r600_screen* rscreen = (struct r600_screen*)screen;
+	buffer = (struct r600_resource_global*)res;
+	rscreen = (struct r600_screen*)screen;
 
 	compute_memory_free(rscreen->global_pool, buffer->chunk->id);
 
@@ -911,12 +918,14 @@ void r600_compute_global_transfer_unmap(
 	struct pipe_context *ctx_,
 	struct pipe_transfer* transfer)
 {
+	struct r600_context *ctx = NULL;
+	struct r600_resource_global* buffer = NULL;
+
 	assert(transfer->resource->target == PIPE_BUFFER);
 	assert(transfer->resource->bind & PIPE_BIND_GLOBAL);
 
-	struct r600_context *ctx = (struct r600_context *)ctx_;
-	struct r600_resource_global* buffer =
-		(struct r600_resource_global*)transfer->resource;
+	ctx = (struct r600_context *)ctx_;
+	buffer = (struct r600_resource_global*)transfer->resource;
 
 	COMPUTE_DBG("* r600_compute_global_transfer_unmap()\n");
 

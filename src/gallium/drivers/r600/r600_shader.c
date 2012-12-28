@@ -108,6 +108,26 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 				 struct r600_pipe_shader *pipeshader,
 				 struct r600_shader_key key);
 
+static void r600_dump_streamout(struct pipe_stream_output_info *so)
+{
+	unsigned i;
+
+	fprintf(stderr, "STREAMOUT\n");
+	for (i = 0; i < so->num_outputs; i++) {
+		unsigned mask = ((1 << so->output[i].num_components) - 1) <<
+				so->output[i].start_component;
+		fprintf(stderr, "  %i: MEM_STREAM0_BUF%i[%i..%i] <- OUT[%i].%s%s%s%s%s\n",
+			i, so->output[i].output_buffer,
+			so->output[i].dst_offset, so->output[i].dst_offset + so->output[i].num_components - 1,
+			so->output[i].register_index,
+			mask & 1 ? "x" : "",
+		        mask & 2 ? "y" : "",
+		        mask & 4 ? "z" : "",
+		        mask & 8 ? "w" : "",
+			so->output[i].dst_offset < so->output[i].start_component ? " (will lower)" : "");
+	}
+}
+
 int r600_pipe_shader_create(struct pipe_context *ctx,
 			    struct r600_pipe_shader *shader,
 			    struct r600_shader_key key)
@@ -127,18 +147,7 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 		tgsi_dump(sel->tokens, 0);
 
 		if (sel->so.num_outputs) {
-			unsigned i;
-			fprintf(stderr, "STREAMOUT\n");
-			for (i = 0; i < sel->so.num_outputs; i++) {
-				unsigned mask = ((1 << sel->so.output[i].num_components) - 1) <<
-						sel->so.output[i].start_component;
-				fprintf(stderr, "  %i: MEM_STREAM0_BUF%i OUT[%i].%s%s%s%s\n", i,
-					sel->so.output[i].output_buffer, sel->so.output[i].register_index,
-				        mask & 1 ? "x" : "_",
-				        (mask >> 1) & 1 ? "y" : "_",
-				        (mask >> 2) & 1 ? "z" : "_",
-				        (mask >> 3) & 1 ? "w" : "_");
-			}
+			r600_dump_streamout(&sel->so);
 		}
 	}
 	r = r600_shader_from_tgsi(rctx->screen, shader, key);
@@ -345,6 +354,12 @@ static unsigned r600_alu_from_byte_stream(struct r600_shader_ctx *ctx,
 	}
 #endif
 
+	if (alu.inst == CTX_INST(V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOVA_INT)) {
+		ctx->bc->ar_reg = alu.src[0].sel;
+		ctx->bc->ar_loaded = 0;
+		return bytes_read;
+	}
+
 	if (alu.execute_mask) {
 		alu.pred_sel = 0;
 		r600_bytecode_add_alu_type(ctx->bc, &alu, CTX_INST(V_SQ_CF_ALU_WORD1_SQ_CF_INST_ALU_PUSH_BEFORE));
@@ -459,6 +474,8 @@ static unsigned r600_tex_from_byte_stream(struct r600_shader_ctx *ctx,
 	tex.src_sel_z = bytes[bytes_read++];
 	tex.src_sel_w = bytes[bytes_read++];
 
+	tex.inst_mod = 0;
+
 	r600_bytecode_add_tex(ctx->bc, &tex);
 
 	return bytes_read;
@@ -510,10 +527,11 @@ static int r600_vtx_from_byte_stream(struct r600_shader_ctx *ctx,
 static int r600_export_from_byte_stream(struct r600_shader_ctx *ctx,
 	unsigned char * bytes, unsigned bytes_read)
 {
+	uint32_t word0 = 0, word1 = 0;
 	struct r600_bytecode_output output;
 	memset(&output, 0, sizeof(struct r600_bytecode_output));
-	uint32_t word0 = i32_from_byte_stream(bytes, &bytes_read);
-	uint32_t word1 = i32_from_byte_stream(bytes, &bytes_read);
+	word0 = i32_from_byte_stream(bytes, &bytes_read);
+	word1 = i32_from_byte_stream(bytes, &bytes_read);
 	if (ctx->bc->chip_class >= EVERGREEN)
 		eg_bytecode_export_read(&output, word0,word1);
 	else
@@ -1459,6 +1477,9 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 		}
 	}
 
+	/* Reset the temporary register counter. */
+	ctx.max_driver_temp_used = 0;
+
 	/* Get instructions if we are using the LLVM backend. */
 	if (use_llvm) {
 		r600_bytecode_from_byte_stream(&ctx, inst_bytes, inst_byte_count);
@@ -1468,15 +1489,20 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 	noutput = shader->noutput;
 
 	if (ctx.clip_vertex_write) {
+		unsigned clipdist_temp[2];
+
+		clipdist_temp[0] = r600_get_temp(&ctx);
+		clipdist_temp[1] = r600_get_temp(&ctx);
+
 		/* need to convert a clipvertex write into clipdistance writes and not export
 		   the clip vertex anymore */
 
 		memset(&shader->output[noutput], 0, 2*sizeof(struct r600_shader_io));
 		shader->output[noutput].name = TGSI_SEMANTIC_CLIPDIST;
-		shader->output[noutput].gpr = ctx.temp_reg;
+		shader->output[noutput].gpr = clipdist_temp[0];
 		noutput++;
 		shader->output[noutput].name = TGSI_SEMANTIC_CLIPDIST;
-		shader->output[noutput].gpr = ctx.temp_reg+1;
+		shader->output[noutput].gpr = clipdist_temp[1];
 		noutput++;
 
 		/* reset spi_sid for clipvertex output to avoid confusing spi */
@@ -1499,7 +1525,7 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 				alu.src[1].kc_bank = R600_UCP_CONST_BUFFER;
 				alu.src[1].chan = j;
 
-				alu.dst.sel = ctx.temp_reg + oreg;
+				alu.dst.sel = clipdist_temp[oreg];
 				alu.dst.chan = j;
 				alu.dst.write = (j == ochan);
 				if (j == 3)
@@ -1513,24 +1539,64 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 
 	/* Add stream outputs. */
 	if (ctx.type == TGSI_PROCESSOR_VERTEX && so.num_outputs) {
-		for (i = 0; i < so.num_outputs; i++) {
-			struct r600_bytecode_output output;
+		unsigned so_gpr[PIPE_MAX_SHADER_OUTPUTS];
 
+		/* Sanity checking. */
+		if (so.num_outputs > PIPE_MAX_SHADER_OUTPUTS) {
+			R600_ERR("Too many stream outputs: %d\n", so.num_outputs);
+			r = -EINVAL;
+			goto out_err;
+		}
+		for (i = 0; i < so.num_outputs; i++) {
 			if (so.output[i].output_buffer >= 4) {
-				R600_ERR("exceeded the max number of stream output buffers, got: %d\n",
+				R600_ERR("Exceeded the max number of stream output buffers, got: %d\n",
 					 so.output[i].output_buffer);
 				r = -EINVAL;
 				goto out_err;
 			}
+		}
+
+		/* Initialize locations where the outputs are stored. */
+		for (i = 0; i < so.num_outputs; i++) {
+			so_gpr[i] = shader->output[so.output[i].register_index].gpr;
+
+			/* Lower outputs with dst_offset < start_component.
+			 *
+			 * We can only output 4D vectors with a write mask, e.g. we can
+			 * only output the W component at offset 3, etc. If we want
+			 * to store Y, Z, or W at buffer offset 0, we need to use MOV
+			 * to move it to X and output X. */
 			if (so.output[i].dst_offset < so.output[i].start_component) {
-			   R600_ERR("stream_output - dst_offset cannot be less than start_component\n");
-			   r = -EINVAL;
-			   goto out_err;
+				unsigned tmp = r600_get_temp(&ctx);
+
+				for (j = 0; j < so.output[i].num_components; j++) {
+					struct r600_bytecode_alu alu;
+					memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+					alu.inst = BC_INST(ctx.bc, V_SQ_ALU_WORD1_OP2_SQ_OP2_INST_MOV);
+					alu.src[0].sel = so_gpr[i];
+					alu.src[0].chan = so.output[i].start_component + j;
+
+					alu.dst.sel = tmp;
+					alu.dst.chan = j;
+					alu.dst.write = 1;
+					if (j == so.output[i].num_components - 1)
+						alu.last = 1;
+					r = r600_bytecode_add_alu(ctx.bc, &alu);
+					if (r)
+						return r;
+				}
+				so.output[i].start_component = 0;
+				so_gpr[i] = tmp;
 			}
+		}
+
+		/* Write outputs to buffers. */
+		for (i = 0; i < so.num_outputs; i++) {
+			struct r600_bytecode_output output;
 
 			memset(&output, 0, sizeof(struct r600_bytecode_output));
-			output.gpr = shader->output[so.output[i].register_index].gpr;
-			output.elem_size = 0;
+			output.gpr = so_gpr[i];
+			output.elem_size = so.output[i].num_components;
 			output.array_base = so.output[i].dst_offset - so.output[i].start_component;
 			output.type = V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_WRITE;
 			output.burst_count = 1;
@@ -3821,7 +3887,7 @@ static int tgsi_tex(struct r600_shader_ctx *ctx)
 					     read_compressed_msaa;
 	boolean src_loaded = FALSE;
 	unsigned sampler_src_reg = inst->Instruction.Opcode == TGSI_OPCODE_TXQ_LZ ? 0 : 1;
-	uint8_t offset_x = 0, offset_y = 0, offset_z = 0;
+	int8_t offset_x = 0, offset_y = 0, offset_z = 0;
 	boolean has_txq_cube_array_z = false;
 
 	if (inst->Instruction.Opcode == TGSI_OPCODE_TXQ &&

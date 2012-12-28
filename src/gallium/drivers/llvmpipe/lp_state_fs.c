@@ -839,7 +839,8 @@ load_unswizzled_block(struct gallivm_state *gallivm,
                       unsigned block_height,
                       LLVMValueRef* dst,
                       struct lp_type dst_type,
-                      unsigned dst_count)
+                      unsigned dst_count,
+                      unsigned dst_alignment)
 {
    LLVMBuilderRef builder = gallivm->builder;
    unsigned row_size = dst_count / block_height;
@@ -866,9 +867,7 @@ load_unswizzled_block(struct gallivm_state *gallivm,
 
       dst[i] = LLVMBuildLoad(builder, dst_ptr, "");
 
-      if ((dst_type.length % 3) == 0) {
-         lp_set_load_alignment(dst[i], dst_type.width / 8);
-      }
+      lp_set_load_alignment(dst[i], dst_alignment);
    }
 }
 
@@ -884,7 +883,8 @@ store_unswizzled_block(struct gallivm_state *gallivm,
                        unsigned block_height,
                        LLVMValueRef* src,
                        struct lp_type src_type,
-                       unsigned src_count)
+                       unsigned src_count,
+                       unsigned src_alignment)
 {
    LLVMBuilderRef builder = gallivm->builder;
    unsigned row_size = src_count / block_height;
@@ -911,9 +911,7 @@ store_unswizzled_block(struct gallivm_state *gallivm,
 
       src_ptr = LLVMBuildStore(builder, src[i], src_ptr);
 
-      if ((src_type.length % 3) == 0) {
-         lp_set_store_alignment(src_ptr, src_type.width / 8);
-      }
+      lp_set_store_alignment(src_ptr, src_alignment);
    }
 }
 
@@ -1077,18 +1075,16 @@ convert_to_blend_type(struct gallivm_state *gallivm,
                       const struct util_format_description *src_fmt,
                       struct lp_type src_type,
                       struct lp_type dst_type,
-                      LLVMValueRef* src,
-                      unsigned num_srcs,
-                      LLVMValueRef* dst)
+                      LLVMValueRef* src, // and dst
+                      unsigned num_srcs)
 {
+   LLVMValueRef *dst = src;
    LLVMBuilderRef builder = gallivm->builder;
    struct lp_type blend_type;
    struct lp_type mem_type;
    unsigned i, j, k;
    unsigned pixels = 16 / num_srcs;
    bool is_arith;
-
-   memcpy(dst, src, sizeof(LLVMValueRef) * num_srcs);
 
    lp_mem_type_from_format_desc(src_fmt, &mem_type);
    lp_blend_type_from_format_desc(src_fmt, &blend_type);
@@ -1179,18 +1175,16 @@ convert_from_blend_type(struct gallivm_state *gallivm,
                         const struct util_format_description *src_fmt,
                         struct lp_type src_type,
                         struct lp_type dst_type,
-                        LLVMValueRef* src,
-                        unsigned num_srcs,
-                        LLVMValueRef* dst)
+                        LLVMValueRef* src, // and dst
+                        unsigned num_srcs)
 {
+   LLVMValueRef* dst = src;
    unsigned i, j, k;
    struct lp_type mem_type;
    struct lp_type blend_type;
    LLVMBuilderRef builder = gallivm->builder;
    unsigned pixels = 16 / num_srcs;
    bool is_arith;
-
-   memcpy(dst, src, sizeof(LLVMValueRef) * num_srcs);
 
    lp_mem_type_from_format_desc(src_fmt, &mem_type);
    lp_blend_type_from_format_desc(src_fmt, &blend_type);
@@ -1333,12 +1327,26 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
 
    const struct util_format_description* out_format_desc = util_format_description(out_format);
 
+   unsigned dst_alignment;
+
    bool pad_inline = is_arithmetic_format(out_format_desc);
    bool has_alpha = false;
 
    src_channels = TGSI_NUM_CHANNELS;
    mask_type = lp_int32_vec4_type();
    mask_type.length = fs_type.length;
+
+   /* Compute the alignment of the destination pointer in bytes */
+#if 0
+   dst_alignment = (block_width * out_format_desc->block.bits + 7)/(out_format_desc->block.width * 8);
+#else
+   /* FIXME -- currently we're fetching pixels one by one, instead of row by row */
+   dst_alignment = (1 * out_format_desc->block.bits + 7)/(out_format_desc->block.width * 8);
+#endif
+   /* Force power-of-two alignment by extracting only the least-significant-bit */
+   dst_alignment = 1 << (ffs(dst_alignment) - 1);
+   /* Resource base and stride pointers are aligned to 16 bytes, so that's the maximum alignment we can guarantee */
+   dst_alignment = MIN2(dst_alignment, 16);
 
    /* Do not bother executing code when mask is empty.. */
    if (do_branch) {
@@ -1616,7 +1624,8 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
 
    dst_type.length *= 16 / dst_count;
 
-   load_unswizzled_block(gallivm, color_ptr, stride, block_width, block_height, dst, dst_type, dst_count);
+   load_unswizzled_block(gallivm, color_ptr, stride, block_width, block_height,
+                         dst, dst_type, dst_count, dst_alignment);
 
 
    /*
@@ -1636,7 +1645,7 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
    /*
     * Blending
     */
-   convert_to_blend_type(gallivm, out_format_desc, dst_type, row_type, dst, src_count, dst);
+   convert_to_blend_type(gallivm, out_format_desc, dst_type, row_type, dst, src_count);
 
    for (i = 0; i < src_count; ++i) {
       dst[i] = lp_build_blend_aos(gallivm,
@@ -1654,7 +1663,7 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
                                   pad_inline ? 4 : dst_channels);
    }
 
-   convert_from_blend_type(gallivm, out_format_desc, row_type, dst_type, dst, src_count, dst);
+   convert_from_blend_type(gallivm, out_format_desc, row_type, dst_type, dst, src_count);
 
    /* Split the blend rows back to memory rows */
    if (dst_count > src_count) {
@@ -1681,7 +1690,8 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
    /*
     * Store blend result to memory
     */
-   store_unswizzled_block(gallivm, color_ptr, stride, block_width, block_height, dst, dst_type, dst_count);
+   store_unswizzled_block(gallivm, color_ptr, stride, block_width, block_height,
+                          dst, dst_type, dst_count, dst_alignment);
 
    if (do_branch) {
       lp_build_mask_end(&mask_ctx);
@@ -2302,8 +2312,6 @@ llvmpipe_bind_fs_state(struct pipe_context *pipe, void *fs)
    if (llvmpipe->fs == fs)
       return;
 
-   draw_flush(llvmpipe->draw);
-
    llvmpipe->fs = (struct lp_fragment_shader *) fs;
 
    draw_bind_fragment_shader(llvmpipe->draw,
@@ -2398,32 +2406,32 @@ llvmpipe_set_constant_buffer(struct pipe_context *pipe,
 {
    struct llvmpipe_context *llvmpipe = llvmpipe_context(pipe);
    struct pipe_resource *constants = cb ? cb->buffer : NULL;
-   unsigned size;
-   const void *data;
-
-   if (cb && cb->user_buffer) {
-      constants = llvmpipe_user_buffer_create(pipe->screen,
-                                              (void *) cb->user_buffer,
-                                              cb->buffer_size,
-                                              PIPE_BIND_CONSTANT_BUFFER);
-   }
-
-   size = constants ? constants->width0 : 0;
-   data = constants ? llvmpipe_resource_data(constants) : NULL;
 
    assert(shader < PIPE_SHADER_TYPES);
-   assert(index < PIPE_MAX_CONSTANT_BUFFERS);
-
-   if(llvmpipe->constants[shader][index] == constants)
-      return;
-
-   draw_flush(llvmpipe->draw);
+   assert(index < Elements(llvmpipe->constants[shader]));
 
    /* note: reference counting */
-   pipe_resource_reference(&llvmpipe->constants[shader][index], constants);
+   util_copy_constant_buffer(&llvmpipe->constants[shader][index], cb);
 
-   if(shader == PIPE_SHADER_VERTEX ||
-      shader == PIPE_SHADER_GEOMETRY) {
+   if (shader == PIPE_SHADER_VERTEX ||
+       shader == PIPE_SHADER_GEOMETRY) {
+      /* Pass the constants to the 'draw' module */
+      const unsigned size = cb ? cb->buffer_size : 0;
+      const ubyte *data;
+
+      if (constants) {
+         data = (ubyte *) llvmpipe_resource_data(constants);
+      }
+      else if (cb && cb->user_buffer) {
+         data = (ubyte *) cb->user_buffer;
+      }
+      else {
+         data = NULL;
+      }
+
+      if (data)
+         data += cb->buffer_offset;
+
       draw_set_mapped_constant_buffer(llvmpipe->draw, shader,
                                       index, data, size);
    }
@@ -2488,7 +2496,7 @@ make_variant_key(struct llvmpipe_context *lp,
    /* alpha.ref_value is passed in jit_context */
 
    key->flatshade = lp->rasterizer->flatshade;
-   if (lp->active_query_count) {
+   if (lp->active_occlusion_query) {
       key->occlusion_count = TRUE;
    }
 

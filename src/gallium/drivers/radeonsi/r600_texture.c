@@ -500,7 +500,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 		unsigned size = rtex->surface.bo_size;
 
 		base_align = rtex->surface.bo_alignment;
-		if (!si_init_resource(rscreen, resource, size, base_align, base->bind, base->usage)) {
+		if (!si_init_resource(rscreen, resource, size, base_align, FALSE, base->usage)) {
 			FREE(rtex);
 			return NULL;
 		}
@@ -562,7 +562,6 @@ static struct pipe_surface *r600_create_surface(struct pipe_context *pipe,
 	surface->base.format = surf_tmpl->format;
 	surface->base.width = rtex->surface.level[level].npix_x;
 	surface->base.height = rtex->surface.level[level].npix_y;
-	surface->base.usage = surf_tmpl->usage;
 	surface->base.texture = texture;
 	surface->base.u.tex.first_layer = surf_tmpl->u.tex.first_layer;
 	surface->base.u.tex.last_layer = surf_tmpl->u.tex.last_layer;

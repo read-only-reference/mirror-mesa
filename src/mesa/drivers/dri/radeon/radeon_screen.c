@@ -193,7 +193,7 @@ radeonDRI2Flush(__DRIdrawable *drawable)
 }
 
 static const struct __DRI2flushExtensionRec radeonFlushExtension = {
-    { __DRI2_FLUSH, __DRI2_FLUSH_VERSION },
+    { __DRI2_FLUSH, 3 },
     radeonDRI2Flush,
     dri2InvalidateDrawable,
 };
@@ -510,8 +510,10 @@ radeonCreateScreen2(__DRIscreen *sPriv)
    }
 
    ret = radeon_set_screen_flags(screen, device_id);
-   if (ret == -1)
+   if (ret == -1) {
+     free(screen);
      return NULL;
+   }
 
    if (getenv("RADEON_NO_TCL"))
 	   screen->chip_flags &= ~RADEON_CHIPSET_TCL;

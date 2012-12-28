@@ -84,7 +84,7 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_OCCLUSION_QUERY:
       return 1;
-   case PIPE_CAP_TIMER_QUERY:
+   case PIPE_CAP_QUERY_TIME_ELAPSED:
       return 1;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
       return 1;
@@ -127,7 +127,7 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_SEAMLESS_CUBE_MAP:
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
-      return 0;
+      return 1;
    case PIPE_CAP_SCALED_RESOLVE:
       return 0;
    case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
@@ -147,7 +147,7 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
       return 0;
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
-      return 130;
+      return 140;
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
       return 0;
    case PIPE_CAP_COMPUTE:
@@ -155,10 +155,10 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_USER_VERTEX_BUFFERS:
    case PIPE_CAP_USER_INDEX_BUFFERS:
    case PIPE_CAP_USER_CONSTANT_BUFFERS:
+   case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
       return 1;
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 16;
-   case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
    case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
    case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
@@ -170,6 +170,8 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 0;
    case PIPE_CAP_QUERY_TIMESTAMP:
    case PIPE_CAP_CUBE_MAP_ARRAY:
+      return 1;
+   case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
       return 1;
    }
    /* should only get here on unhandled cases */
@@ -364,7 +366,7 @@ softpipe_flush_frontbuffer(struct pipe_screen *_screen,
 static uint64_t
 softpipe_get_timestamp(struct pipe_screen *_screen)
 {
-   return os_time_get()*1000;
+   return os_time_get_nano();
 }
 
 /**

@@ -28,13 +28,16 @@
 
 #include "util/u_blitter.h"
 #include "util/u_slab.h"
+#include "util/u_suballoc.h"
 #include "r600.h"
 #include "r600_llvm.h"
 #include "r600_public.h"
 #include "r600_resource.h"
 #include "evergreen_compute.h"
 
-#define R600_NUM_ATOMS 36
+#define R600_NUM_ATOMS 37
+
+#define R600_TRACE_CS 0
 
 #define R600_MAX_USER_CONST_BUFFERS 1
 #define R600_MAX_DRIVER_CONST_BUFFERS 2
@@ -76,15 +79,21 @@ struct r600_command_buffer {
 	unsigned pkt_flags;
 };
 
+struct r600_db_state {
+	struct r600_atom		atom;
+	struct r600_surface		*rsurf;
+};
+
 struct r600_db_misc_state {
-	struct r600_atom atom;
-	bool occlusion_query_enabled;
-	bool flush_depthstencil_through_cb;
-	bool flush_depthstencil_in_place;
-	bool copy_depth, copy_stencil;
-	unsigned copy_sample;
-	unsigned log_samples;
-	unsigned db_shader_control;
+	struct r600_atom		atom;
+	bool				occlusion_query_enabled;
+	bool				flush_depthstencil_through_cb;
+	bool				flush_depthstencil_in_place;
+	bool				copy_depth, copy_stencil;
+	unsigned			copy_sample;
+	unsigned			log_samples;
+	unsigned			db_shader_control;
+	bool				htile_clear;
 };
 
 struct r600_cb_misc_state {
@@ -219,6 +228,7 @@ struct r600_screen {
 	bool				has_streamout;
 	bool				has_msaa;
 	enum r600_msaa_texture_mode	msaa_texture_support;
+	bool				use_hyperz;
 	struct r600_tiling_info		tiling_info;
 	struct r600_pipe_fences		fences;
 
@@ -227,6 +237,11 @@ struct r600_screen {
 	 * XXX: Not sure if this is the best place for global_pool.  Also,
 	 * it's not thread safe, so it won't work with multiple contexts. */
 	struct compute_memory_pool *global_pool;
+#if R600_TRACE_CS
+	struct r600_resource		*trace_bo;
+	uint32_t			*trace_ptr;
+	unsigned			cs_count;
+#endif
 };
 
 struct r600_pipe_sampler_view {
@@ -382,6 +397,11 @@ struct r600_scissor_state
 	bool				enable; /* r6xx only */
 };
 
+struct r600_fetch_shader {
+	struct r600_resource		*buffer;
+	unsigned			offset;
+};
+
 struct r600_context {
 	struct pipe_context		context;
 	struct r600_screen		*screen;
@@ -389,6 +409,8 @@ struct r600_context {
 	struct radeon_winsys_cs		*cs;
 	struct blitter_context		*blitter;
 	struct u_upload_mgr	        *uploader;
+	struct u_suballocator		*allocator_so_filled_size;
+	struct u_suballocator		*allocator_fetch_shader;
 	struct util_slab_mempool	pool_transfers;
 
 	/* Hardware info. */
@@ -431,6 +453,7 @@ struct r600_context {
 	struct r600_clip_misc_state	clip_misc_state;
 	struct r600_clip_state		clip_state;
 	struct r600_db_misc_state	db_misc_state;
+	struct r600_db_state		db_state;
 	struct r600_cso_state		dsa_state;
 	struct r600_framebuffer		framebuffer;
 	struct r600_poly_offset_state	poly_offset_state;
@@ -473,18 +496,12 @@ struct r600_context {
 	/* Queries. */
 	/* The list of active queries. Only one query of each type can be active. */
 	int				num_occlusion_queries;
-	/* Manage queries in two separate groups:
-	 * The timer ones and the others (streamout, occlusion).
-	 *
-	 * We do this because we should only suspend non-timer queries for u_blitter,
-	 * and later if the non-timer queries are suspended, the context flush should
-	 * only suspend and resume the timer queries. */
-	struct list_head		active_timer_queries;
-	unsigned			num_cs_dw_timer_queries_suspend;
+	/* Keep track of non-timer queries, because they should be suspended
+	 * during context flushing.
+	 * The timer queries (TIME_ELAPSED) shouldn't be suspended. */
 	struct list_head		active_nontimer_queries;
 	unsigned			num_cs_dw_nontimer_queries_suspend;
-	/* Flags if queries have been suspended. */
-	bool				timer_queries_suspended;
+	/* If queries have been suspended. */
 	bool				nontimer_queries_suspended;
 
 	/* Render condition. */
@@ -517,10 +534,19 @@ static INLINE void r600_emit_command_buffer(struct radeon_winsys_cs *cs,
 	cs->cdw += cb->num_dw;
 }
 
+#if R600_TRACE_CS
+void r600_trace_emit(struct r600_context *rctx);
+#endif
+
 static INLINE void r600_emit_atom(struct r600_context *rctx, struct r600_atom *atom)
 {
 	atom->emit(rctx, atom);
 	atom->dirty = false;
+#if R600_TRACE_CS
+	if (rctx->screen->trace_bo) {
+		r600_trace_emit(rctx);
+	}
+#endif
 }
 
 static INLINE void r600_set_cso_state(struct r600_cso_state *state, void *cso)
@@ -591,7 +617,7 @@ void r600_decompress_color_textures(struct r600_context *rctx,
 bool r600_init_resource(struct r600_screen *rscreen,
 			struct r600_resource *res,
 			unsigned size, unsigned alignment,
-			unsigned bind, unsigned usage);
+			bool use_reusable_pool, unsigned usage);
 struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 					 const struct pipe_resource *templ,
 					 unsigned alignment);
@@ -604,8 +630,6 @@ void r600_flush(struct pipe_context *ctx, struct pipe_fence_handle **fence,
 void r600_init_query_functions(struct r600_context *rctx);
 void r600_suspend_nontimer_queries(struct r600_context *ctx);
 void r600_resume_nontimer_queries(struct r600_context *ctx);
-void r600_suspend_timer_queries(struct r600_context *ctx);
-void r600_resume_timer_queries(struct r600_context *ctx);
 
 /* r600_resource.c */
 void r600_init_context_resource_functions(struct r600_context *r600);
@@ -910,6 +934,22 @@ static INLINE uint64_t r600_resource_va(struct pipe_screen *screen, struct pipe_
 	struct r600_resource *rresource = (struct r600_resource*)resource;
 
 	return rscreen->ws->buffer_get_virtual_address(rresource->cs_buf);
+}
+
+static INLINE unsigned u_max_layer(struct pipe_resource *r, unsigned level)
+{
+	switch (r->target) {
+	case PIPE_TEXTURE_CUBE:
+		return 6 - 1;
+	case PIPE_TEXTURE_3D:
+		return u_minify(r->depth0, level) - 1;
+	case PIPE_TEXTURE_1D_ARRAY:
+	case PIPE_TEXTURE_2D_ARRAY:
+	case PIPE_TEXTURE_CUBE_ARRAY:
+		return r->array_size - 1;
+	default:
+		return 0;
+	}
 }
 
 #endif

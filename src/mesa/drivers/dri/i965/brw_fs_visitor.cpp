@@ -117,10 +117,11 @@ fs_visitor::visit(ir_variable *ir)
 	 return;
       }
 
+      param_size[param_index] = type_size(ir->type);
       if (!strncmp(ir->name, "gl_", 3)) {
 	 setup_builtin_uniform_values(ir);
       } else {
-	 setup_uniform_values(ir->location, ir->type);
+	 setup_uniform_values(ir);
       }
 
       reg = new(this->mem_ctx) fs_reg(UNIFORM, param_index);
@@ -160,21 +161,41 @@ fs_visitor::visit(ir_dereference_record *ir)
 void
 fs_visitor::visit(ir_dereference_array *ir)
 {
-   ir_constant *index;
-   int element_size;
+   ir_constant *constant_index;
+   fs_reg src;
+   int element_size = type_size(ir->type);
+
+   constant_index = ir->array_index->as_constant();
 
    ir->array->accept(this);
-   index = ir->array_index->as_constant();
+   src = this->result;
+   src.type = brw_type_for_base_type(ir->type);
 
-   element_size = type_size(ir->type);
-   this->result.type = brw_type_for_base_type(ir->type);
-
-   if (index) {
-      assert(this->result.file == UNIFORM || this->result.file == GRF);
-      this->result.reg_offset += index->value.i[0] * element_size;
+   if (constant_index) {
+      assert(src.file == UNIFORM || src.file == GRF);
+      src.reg_offset += constant_index->value.i[0] * element_size;
    } else {
-      assert(!"FINISHME: non-constant array element");
+      /* Variable index array dereference.  We attach the variable index
+       * component to the reg as a pointer to a register containing the
+       * offset.  Currently only uniform arrays are supported in this patch,
+       * and that reladdr pointer is resolved by
+       * move_uniform_array_access_to_pull_constants().  All other array types
+       * are lowered by lower_variable_index_to_cond_assign().
+       */
+      ir->array_index->accept(this);
+
+      fs_reg index_reg;
+      index_reg = fs_reg(this, glsl_type::int_type);
+      emit(BRW_OPCODE_MUL, index_reg, this->result, fs_reg(element_size));
+
+      if (src.reladdr) {
+         emit(BRW_OPCODE_ADD, index_reg, *src.reladdr, index_reg);
+      }
+
+      src.reladdr = ralloc(mem_ctx, fs_reg);
+      memcpy(src.reladdr, &index_reg, sizeof(index_reg));
    }
+   this->result = src;
 }
 
 void
@@ -395,17 +416,11 @@ fs_visitor::visit(ir_expression *ir)
       }
       break;
    case ir_binop_div:
-      if (intel->gen >= 7 && dispatch_width == 16)
-	 fail("16-wide INTDIV unsupported\n");
-
       /* Floating point should be lowered by DIV_TO_MUL_RCP in the compiler. */
       assert(ir->type->is_integer());
       emit_math(SHADER_OPCODE_INT_QUOTIENT, this->result, op[0], op[1]);
       break;
    case ir_binop_mod:
-      if (intel->gen >= 7 && dispatch_width == 16)
-	 fail("16-wide INTDIV unsupported\n");
-
       /* Floating point should be lowered by MOD_TO_FRACT in the compiler. */
       assert(ir->type->is_integer());
       emit_math(SHADER_OPCODE_INT_REMAINDER, this->result, op[0], op[1]);
@@ -551,38 +566,78 @@ fs_visitor::visit(ir_expression *ir)
       break;
 
    case ir_binop_ubo_load:
+      /* This IR node takes a constant uniform block and a constant or
+       * variable byte offset within the block and loads a vector from that.
+       */
       ir_constant *uniform_block = ir->operands[0]->as_constant();
-      ir_constant *offset = ir->operands[1]->as_constant();
-
-      fs_reg packed_consts = fs_reg(this, glsl_type::float_type);
-      packed_consts.type = result.type;
+      ir_constant *const_offset = ir->operands[1]->as_constant();
       fs_reg surf_index = fs_reg((unsigned)SURF_INDEX_WM_UBO(uniform_block->value.u[0]));
-      fs_inst *pull = emit(fs_inst(FS_OPCODE_PULL_CONSTANT_LOAD,
-                                   packed_consts,
-                                   surf_index,
-                                   fs_reg(offset->value.u[0])));
-      pull->base_mrf = 14;
-      pull->mlen = 1;
+      if (const_offset) {
+         fs_reg packed_consts = fs_reg(this, glsl_type::float_type);
+         packed_consts.type = result.type;
 
-      packed_consts.smear = offset->value.u[0] % 16 / 4;
-      for (int i = 0; i < ir->type->vector_elements; i++) {
-         /* UBO bools are any nonzero value.  We consider bools to be
-          * values with the low bit set to 1.  Convert them using CMP.
-          */
-         if (ir->type->base_type == GLSL_TYPE_BOOL) {
-            emit(CMP(result, packed_consts, fs_reg(0u), BRW_CONDITIONAL_NZ));
+         if (intel->gen >= 7) {
+            fs_reg const_offset_reg = fs_reg(const_offset->value.u[0] / 16);
+            fs_reg payload = fs_reg(this, glsl_type::uint_type);
+            struct brw_reg g0 = retype(brw_vec8_grf(0, 0),
+                                       BRW_REGISTER_TYPE_UD);
+            fs_inst *setup = emit(MOV(payload, fs_reg(g0)));
+            setup->force_writemask_all = true;
+            /* We don't need the second half of this vgrf to be filled with g1
+             * in the 16-wide case, but if we use force_uncompressed then live
+             * variable analysis won't consider this a def!
+             */
+
+            emit(FS_OPCODE_SET_GLOBAL_OFFSET, payload,
+                 payload, const_offset_reg);
+            emit(FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7, packed_consts,
+                 surf_index, payload);
          } else {
-            emit(MOV(result, packed_consts));
+            fs_reg const_offset_reg = fs_reg(const_offset->value.u[0]);
+            fs_inst *pull = emit(fs_inst(FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD,
+                                         packed_consts,
+                                         surf_index,
+                                         const_offset_reg));
+            pull->base_mrf = 14;
+            pull->mlen = 1;
          }
 
-         packed_consts.smear++;
-         result.reg_offset++;
+         packed_consts.smear = const_offset->value.u[0] % 16 / 4;
+         for (int i = 0; i < ir->type->vector_elements; i++) {
+            /* UBO bools are any nonzero value.  We consider bools to be
+             * values with the low bit set to 1.  Convert them using CMP.
+             */
+            if (ir->type->base_type == GLSL_TYPE_BOOL) {
+               emit(CMP(result, packed_consts, fs_reg(0u), BRW_CONDITIONAL_NZ));
+            } else {
+               emit(MOV(result, packed_consts));
+            }
 
-         /* The std140 packing rules don't allow vectors to cross 16-byte
-          * boundaries, and a reg is 32 bytes.
-          */
-         assert(packed_consts.smear < 8);
+            packed_consts.smear++;
+            result.reg_offset++;
+
+            /* The std140 packing rules don't allow vectors to cross 16-byte
+             * boundaries, and a reg is 32 bytes.
+             */
+            assert(packed_consts.smear < 8);
+         }
+      } else {
+         /* Turn the byte offset into a dword offset. */
+         fs_reg base_offset = fs_reg(this, glsl_type::int_type);
+         emit(SHR(base_offset, op[1], fs_reg(2)));
+
+         for (int i = 0; i < ir->type->vector_elements; i++) {
+            fs_reg offset = fs_reg(this, glsl_type::int_type);
+            emit(ADD(offset, base_offset, fs_reg(i)));
+            emit(VARYING_PULL_CONSTANT_LOAD(result, surf_index, offset));
+
+            if (ir->type->base_type == GLSL_TYPE_BOOL)
+               emit(CMP(result, result, fs_reg(0), BRW_CONDITIONAL_NZ));
+
+            result.reg_offset++;
+         }
       }
+
       result.reg_offset = 0;
       break;
    }
@@ -662,7 +717,7 @@ fs_visitor::try_rewrite_rhs_to_dst(ir_assignment *ir,
    /* If last_rhs_inst wrote a different number of components than our LHS,
     * we can't safely rewrite it.
     */
-   if (ir->lhs->type->vector_elements != modify->regs_written())
+   if (virtual_grf_sizes[dst.reg] != modify->regs_written())
       return false;
 
    /* Success!  Rewrite the instruction. */
@@ -1048,13 +1103,18 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
 	 coordinate.reg_offset++;
 	 mlen += reg_width;
 
-	 emit(MOV(fs_reg(MRF, base_mrf + mlen), lod));
-	 lod.reg_offset++;
-	 mlen += reg_width;
+         /* For cube map array, the coordinate is (u,v,r,ai) but there are
+          * only derivatives for (u, v, r).
+          */
+         if (i < ir->lod_info.grad.dPdx->type->vector_elements) {
+            emit(MOV(fs_reg(MRF, base_mrf + mlen), lod));
+            lod.reg_offset++;
+            mlen += reg_width;
 
-	 emit(MOV(fs_reg(MRF, base_mrf + mlen), lod2));
-	 lod2.reg_offset++;
-	 mlen += reg_width;
+            emit(MOV(fs_reg(MRF, base_mrf + mlen), lod2));
+            lod2.reg_offset++;
+            mlen += reg_width;
+         }
       }
       break;
    }
@@ -1160,13 +1220,10 @@ fs_visitor::rescale_texcoord(ir_texture *ir, fs_reg coordinate,
 
       GLuint index = _mesa_add_state_reference(params,
 					       (gl_state_index *)tokens);
-
-      this->param_index[c->prog_data.nr_params] = index;
-      this->param_offset[c->prog_data.nr_params] = 0;
-      c->prog_data.nr_params++;
-      this->param_index[c->prog_data.nr_params] = index;
-      this->param_offset[c->prog_data.nr_params] = 1;
-      c->prog_data.nr_params++;
+      c->prog_data.param[c->prog_data.nr_params++] =
+         &fp->Base.Parameters->ParameterValues[index][0].f;
+      c->prog_data.param[c->prog_data.nr_params++] =
+         &fp->Base.Parameters->ParameterValues[index][1].f;
    }
 
    /* The 965 requires the EU to do the normalization of GL rectangle
@@ -1235,6 +1292,10 @@ fs_visitor::visit(ir_texture *ir)
    fs_inst *inst = NULL;
 
    int sampler = _mesa_get_sampler_uniform_value(ir->sampler, prog, &fp->Base);
+   /* FINISHME: We're failing to recompile our programs when the sampler is
+    * updated.  This only matters for the texture rectangle scale parameters
+    * (pre-gen6, or gen6+ with GL_CLAMP).
+    */
    int texunit = fp->Base.SamplerUnits[sampler];
 
    /* Should be lowered by do_lower_texture_projection */
@@ -1309,6 +1370,17 @@ fs_visitor::visit(ir_texture *ir)
 
    if (ir->shadow_comparitor)
       inst->shadow_compare = true;
+
+   /* fixup #layers for cube map arrays */
+   if (ir->op == ir_txs) {
+      glsl_type const *type = ir->sampler->type;
+      if (type->sampler_dimensionality == GLSL_SAMPLER_DIM_CUBE &&
+          type->sampler_array) {
+         fs_reg depth = dst;
+         depth.reg_offset = 2;
+         emit_math(SHADER_OPCODE_INT_QUOTIENT, depth, depth, fs_reg(6));
+      }
+   }
 
    swizzle_result(ir, dst, sampler);
 }
@@ -1394,7 +1466,31 @@ fs_visitor::visit(ir_discard *ir)
 {
    assert(ir->condition == NULL); /* FINISHME */
 
-   emit(FS_OPCODE_DISCARD);
+   /* We track our discarded pixels in f0.1.  By predicating on it, we can
+    * update just the flag bits that aren't yet discarded.  By emitting a
+    * CMP of g0 != g0, all our currently executing channels will get turned
+    * off.
+    */
+   fs_reg some_reg = fs_reg(retype(brw_vec8_grf(0, 0),
+                                   BRW_REGISTER_TYPE_UW));
+   fs_inst *cmp = emit(CMP(reg_null_f, some_reg, some_reg,
+                           BRW_CONDITIONAL_NZ));
+   cmp->predicate = BRW_PREDICATE_NORMAL;
+   cmp->flag_subreg = 1;
+
+   if (intel->gen >= 6) {
+      /* For performance, after a discard, jump to the end of the shader.
+       * However, many people will do foliage by discarding based on a
+       * texture's alpha mask, and then continue on to texture with the
+       * remaining pixels.  To avoid trashing the derivatives for those
+       * texture samples, we'll only jump if all of the pixels in the subspan
+       * have been discarded.
+       */
+      fs_inst *discard_jump = emit(FS_OPCODE_DISCARD_JUMP);
+      discard_jump->flag_subreg = 1;
+      discard_jump->predicate = BRW_PREDICATE_ALIGN1_ANY4H;
+      discard_jump->predicate_inverse = true;
+   }
 }
 
 void
@@ -1785,6 +1881,16 @@ fs_visitor::emit(fs_inst *inst)
    this->instructions.push_tail(inst);
 
    return inst;
+}
+
+void
+fs_visitor::emit(exec_list list)
+{
+   foreach_list_safe(node, &list) {
+      fs_inst *inst = (fs_inst *)node;
+      inst->remove();
+      emit(inst);
+   }
 }
 
 /** Emits a dummy fragment shader consisting of magenta for bringup purposes. */
@@ -2215,6 +2321,8 @@ fs_visitor::fs_visitor(struct brw_context *brw,
 
    this->force_uncompressed_stack = 0;
    this->force_sechalf_stack = 0;
+
+   memset(&this->param_size, 0, sizeof(this->param_size));
 }
 
 fs_visitor::~fs_visitor()

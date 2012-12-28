@@ -219,6 +219,45 @@ fs_visitor::CMP(fs_reg dst, fs_reg src0, fs_reg src1, uint32_t condition)
    return inst;
 }
 
+exec_list
+fs_visitor::VARYING_PULL_CONSTANT_LOAD(fs_reg dst, fs_reg surf_index,
+                                       fs_reg offset)
+{
+   exec_list instructions;
+   fs_inst *inst;
+
+   if (intel->gen >= 7) {
+      inst = new(mem_ctx) fs_inst(FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7,
+                                  dst, surf_index, offset);
+      instructions.push_tail(inst);
+   } else {
+      int base_mrf = 13;
+      bool header_present = true;
+
+      fs_reg mrf = fs_reg(MRF, base_mrf + header_present);
+      mrf.type = BRW_REGISTER_TYPE_D;
+
+      /* On gen6+ we want the dword offset passed in, but on gen4/5 we need a
+       * dword-aligned byte offset.
+       */
+      if (intel->gen == 6) {
+         instructions.push_tail(MOV(mrf, offset));
+      } else {
+         instructions.push_tail(MUL(mrf, offset, fs_reg(4)));
+      }
+      inst = MOV(mrf, offset);
+      inst = new(mem_ctx) fs_inst(FS_OPCODE_VARYING_PULL_CONSTANT_LOAD,
+                                  dst, surf_index);
+      inst->header_present = header_present;
+      inst->base_mrf = base_mrf;
+      inst->mlen = header_present + dispatch_width / 8;
+
+      instructions.push_tail(inst);
+   }
+
+   return instructions;
+}
+
 bool
 fs_inst::equals(fs_inst *inst)
 {
@@ -288,6 +327,26 @@ fs_inst::is_math()
            opcode == SHADER_OPCODE_POW);
 }
 
+bool
+fs_inst::is_send_from_grf()
+{
+   return (opcode == FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7 ||
+           (opcode == FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD &&
+            src[1].file == GRF));
+}
+
+bool
+fs_visitor::can_do_source_mods(fs_inst *inst)
+{
+   if (intel->gen == 6 && inst->is_math())
+      return false;
+
+   if (inst->is_send_from_grf())
+      return false;
+
+   return true;
+}
+
 void
 fs_reg::init()
 {
@@ -347,6 +406,7 @@ fs_reg::equals(const fs_reg &r) const
            type == r.type &&
            negate == r.negate &&
            abs == r.abs &&
+           !reladdr && !r.reladdr &&
            memcmp(&fixed_hw_reg, &r.fixed_hw_reg,
                   sizeof(fixed_hw_reg)) == 0 &&
            smear == r.smear &&
@@ -399,6 +459,127 @@ fs_visitor::type_size(const struct glsl_type *type)
       assert(!"not reached");
       return 0;
    }
+}
+
+fs_reg
+fs_visitor::get_timestamp()
+{
+   assert(intel->gen >= 7);
+
+   fs_reg ts = fs_reg(retype(brw_vec1_reg(BRW_ARCHITECTURE_REGISTER_FILE,
+                                          BRW_ARF_TIMESTAMP,
+                                          0),
+                             BRW_REGISTER_TYPE_UD));
+
+   fs_reg dst = fs_reg(this, glsl_type::uint_type);
+
+   fs_inst *mov = emit(MOV(dst, ts));
+   /* We want to read the 3 fields we care about (mostly field 0, but also 2)
+    * even if it's not enabled in the dispatch.
+    */
+   mov->force_writemask_all = true;
+   mov->force_uncompressed = true;
+
+   /* The caller wants the low 32 bits of the timestamp.  Since it's running
+    * at the GPU clock rate of ~1.2ghz, it will roll over every ~3 seconds,
+    * which is plenty of time for our purposes.  It is identical across the
+    * EUs, but since it's tracking GPU core speed it will increment at a
+    * varying rate as render P-states change.
+    *
+    * The caller could also check if render P-states have changed (or anything
+    * else that might disrupt timing) by setting smear to 2 and checking if
+    * that field is != 0.
+    */
+   dst.smear = 0;
+
+   return dst;
+}
+
+void
+fs_visitor::emit_shader_time_begin()
+{
+   current_annotation = "shader time start";
+   shader_start_time = get_timestamp();
+}
+
+void
+fs_visitor::emit_shader_time_end()
+{
+   current_annotation = "shader time end";
+
+   enum shader_time_shader_type type, written_type, reset_type;
+   if (dispatch_width == 8) {
+      type = ST_FS8;
+      written_type = ST_FS8_WRITTEN;
+      reset_type = ST_FS8_RESET;
+   } else {
+      assert(dispatch_width == 16);
+      type = ST_FS16;
+      written_type = ST_FS16_WRITTEN;
+      reset_type = ST_FS16_RESET;
+   }
+
+   fs_reg shader_end_time = get_timestamp();
+
+   /* Check that there weren't any timestamp reset events (assuming these
+    * were the only two timestamp reads that happened).
+    */
+   fs_reg reset = shader_end_time;
+   reset.smear = 2;
+   fs_inst *test = emit(AND(reg_null_d, reset, fs_reg(1u)));
+   test->conditional_mod = BRW_CONDITIONAL_Z;
+   emit(IF(BRW_PREDICATE_NORMAL));
+
+   push_force_uncompressed();
+   fs_reg start = shader_start_time;
+   start.negate = true;
+   fs_reg diff = fs_reg(this, glsl_type::uint_type);
+   emit(ADD(diff, start, shader_end_time));
+
+   /* If there were no instructions between the two timestamp gets, the diff
+    * is 2 cycles.  Remove that overhead, so I can forget about that when
+    * trying to determine the time taken for single instructions.
+    */
+   emit(ADD(diff, diff, fs_reg(-2u)));
+
+   emit_shader_time_write(type, diff);
+   emit_shader_time_write(written_type, fs_reg(1u));
+   emit(BRW_OPCODE_ELSE);
+   emit_shader_time_write(reset_type, fs_reg(1u));
+   emit(BRW_OPCODE_ENDIF);
+
+   pop_force_uncompressed();
+}
+
+void
+fs_visitor::emit_shader_time_write(enum shader_time_shader_type type,
+                                   fs_reg value)
+{
+   /* Choose an index in the buffer and set up tracking information for our
+    * printouts.
+    */
+   int shader_time_index = brw->shader_time.num_entries++;
+   assert(shader_time_index <= brw->shader_time.max_entries);
+   brw->shader_time.types[shader_time_index] = type;
+   if (prog) {
+      _mesa_reference_shader_program(ctx,
+                                     &brw->shader_time.programs[shader_time_index],
+                                     prog);
+   }
+
+   int base_mrf = 6;
+
+   fs_reg offset_mrf = fs_reg(MRF, base_mrf);
+   offset_mrf.type = BRW_REGISTER_TYPE_UD;
+   emit(MOV(offset_mrf, fs_reg(shader_time_index * 4)));
+
+   fs_reg time_mrf = fs_reg(MRF, base_mrf + 1);
+   time_mrf.type = BRW_REGISTER_TYPE_UD;
+   emit(MOV(time_mrf, value));
+
+   fs_inst *inst = emit(fs_inst(SHADER_OPCODE_SHADER_TIME_ADD));
+   inst->base_mrf = base_mrf;
+   inst->mlen = 2;
 }
 
 void
@@ -513,11 +694,15 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
    case SHADER_OPCODE_TXL:
    case SHADER_OPCODE_TXS:
       return 1;
+   case SHADER_OPCODE_SHADER_TIME_ADD:
+      return 0;
    case FS_OPCODE_FB_WRITE:
       return 2;
-   case FS_OPCODE_PULL_CONSTANT_LOAD:
+   case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
    case FS_OPCODE_UNSPILL:
       return 1;
+   case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD:
+      return inst->header_present;
    case FS_OPCODE_SPILL:
       return 2;
    default:
@@ -607,57 +792,41 @@ fs_visitor::import_uniforms(fs_visitor *v)
  * get stored, rather than in some global gl_shader_program uniform
  * store.
  */
-int
-fs_visitor::setup_uniform_values(int loc, const glsl_type *type)
+void
+fs_visitor::setup_uniform_values(ir_variable *ir)
 {
-   unsigned int offset = 0;
+   int namelen = strlen(ir->name);
 
-   if (type->is_matrix()) {
-      const glsl_type *column = glsl_type::get_instance(GLSL_TYPE_FLOAT,
-							type->vector_elements,
-							1);
+   /* The data for our (non-builtin) uniforms is stored in a series of
+    * gl_uniform_driver_storage structs for each subcomponent that
+    * glGetUniformLocation() could name.  We know it's been set up in the same
+    * order we'd walk the type, so walk the list of storage and find anything
+    * with our name, or the prefix of a component that starts with our name.
+    */
+   unsigned params_before = c->prog_data.nr_params;
+   for (unsigned u = 0; u < prog->NumUserUniformStorage; u++) {
+      struct gl_uniform_storage *storage = &prog->UniformStorage[u];
 
-      for (unsigned int i = 0; i < type->matrix_columns; i++) {
-	 offset += setup_uniform_values(loc + offset, column);
+      if (strncmp(ir->name, storage->name, namelen) != 0 ||
+          (storage->name[namelen] != 0 &&
+           storage->name[namelen] != '.' &&
+           storage->name[namelen] != '[')) {
+         continue;
       }
 
-      return offset;
+      unsigned slots = storage->type->component_slots();
+      if (storage->array_elements)
+         slots *= storage->array_elements;
+
+      for (unsigned i = 0; i < slots; i++) {
+         c->prog_data.param[c->prog_data.nr_params++] =
+            &storage->storage[i].f;
+      }
    }
 
-   switch (type->base_type) {
-   case GLSL_TYPE_FLOAT:
-   case GLSL_TYPE_UINT:
-   case GLSL_TYPE_INT:
-   case GLSL_TYPE_BOOL:
-      for (unsigned int i = 0; i < type->vector_elements; i++) {
-	 unsigned int param = c->prog_data.nr_params++;
-
-	 this->param_index[param] = loc;
-	 this->param_offset[param] = i;
-      }
-      return 1;
-
-   case GLSL_TYPE_STRUCT:
-      for (unsigned int i = 0; i < type->length; i++) {
-	 offset += setup_uniform_values(loc + offset,
-					type->fields.structure[i].type);
-      }
-      return offset;
-
-   case GLSL_TYPE_ARRAY:
-      for (unsigned int i = 0; i < type->length; i++) {
-	 offset += setup_uniform_values(loc + offset, type->fields.array);
-      }
-      return offset;
-
-   case GLSL_TYPE_SAMPLER:
-      /* The sampler takes up a slot, but we don't use any values from it. */
-      return 1;
-
-   default:
-      assert(!"not reached");
-      return 0;
-   }
+   /* Make sure we actually initialized the right amount of stuff here. */
+   assert(params_before + ir->type->component_slots() ==
+          c->prog_data.nr_params);
 }
 
 
@@ -689,9 +858,8 @@ fs_visitor::setup_builtin_uniform_values(ir_variable *ir)
 	    break;
 	 last_swiz = swiz;
 
-	 this->param_index[c->prog_data.nr_params] = index;
-	 this->param_offset[c->prog_data.nr_params] = swiz;
-	 c->prog_data.nr_params++;
+	 c->prog_data.param[c->prog_data.nr_params++] =
+            &fp->Base.Parameters->ParameterValues[index][swiz].f;
       }
    }
 }
@@ -882,6 +1050,33 @@ fs_visitor::emit_frontfacing_interpolation(ir_variable *ir)
    return reg;
 }
 
+fs_reg
+fs_visitor::fix_math_operand(fs_reg src)
+{
+   /* Can't do hstride == 0 args on gen6 math, so expand it out. We
+    * might be able to do better by doing execsize = 1 math and then
+    * expanding that result out, but we would need to be careful with
+    * masking.
+    *
+    * The hardware ignores source modifiers (negate and abs) on math
+    * instructions, so we also move to a temp to set those up.
+    */
+   if (intel->gen == 6 && src.file != UNIFORM && src.file != IMM &&
+       !src.abs && !src.negate)
+      return src;
+
+   /* Gen7 relaxes most of the above restrictions, but still can't use IMM
+    * operands to math
+    */
+   if (intel->gen >= 7 && src.file != IMM)
+      return src;
+
+   fs_reg expanded = fs_reg(this, glsl_type::float_type);
+   expanded.type = src.type;
+   emit(BRW_OPCODE_MOV, expanded, src);
+   return expanded;
+}
+
 fs_inst *
 fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src)
 {
@@ -907,13 +1102,8 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src)
     * Gen 6 hardware ignores source modifiers (negate and abs) on math
     * instructions, so we also move to a temp to set those up.
     */
-   if (intel->gen == 6 && (src.file == UNIFORM ||
-			   src.abs ||
-			   src.negate)) {
-      fs_reg expanded = fs_reg(this, glsl_type::float_type);
-      emit(BRW_OPCODE_MOV, expanded, src);
-      src = expanded;
-   }
+   if (intel->gen >= 6)
+      src = fix_math_operand(src);
 
    fs_inst *inst = emit(opcode, dst, src);
 
@@ -932,36 +1122,21 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1)
    fs_inst *inst;
 
    switch (opcode) {
-   case SHADER_OPCODE_POW:
    case SHADER_OPCODE_INT_QUOTIENT:
    case SHADER_OPCODE_INT_REMAINDER:
+      if (intel->gen >= 7 && dispatch_width == 16)
+	 fail("16-wide INTDIV unsupported\n");
+      break;
+   case SHADER_OPCODE_POW:
       break;
    default:
       assert(!"not reached: unsupported binary math opcode.");
       return NULL;
    }
 
-   if (intel->gen >= 7) {
-      inst = emit(opcode, dst, src0, src1);
-   } else if (intel->gen == 6) {
-      /* Can't do hstride == 0 args to gen6 math, so expand it out.
-       *
-       * The hardware ignores source modifiers (negate and abs) on math
-       * instructions, so we also move to a temp to set those up.
-       */
-      if (src0.file == UNIFORM || src0.abs || src0.negate) {
-	 fs_reg expanded = fs_reg(this, glsl_type::float_type);
-	 expanded.type = src0.type;
-	 emit(BRW_OPCODE_MOV, expanded, src0);
-	 src0 = expanded;
-      }
-
-      if (src1.file == UNIFORM || src1.abs || src1.negate) {
-	 fs_reg expanded = fs_reg(this, glsl_type::float_type);
-	 expanded.type = src1.type;
-	 emit(BRW_OPCODE_MOV, expanded, src1);
-	 src1 = expanded;
-      }
+   if (intel->gen >= 6) {
+      src0 = fix_math_operand(src0);
+      src1 = fix_math_operand(src1);
 
       inst = emit(opcode, dst, src0, src1);
    } else {
@@ -985,25 +1160,6 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1)
       inst->mlen = 2 * dispatch_width / 8;
    }
    return inst;
-}
-
-/**
- * To be called after the last _mesa_add_state_reference() call, to
- * set up prog_data.param[] for assign_curb_setup() and
- * setup_pull_constants().
- */
-void
-fs_visitor::setup_paramvalues_refs()
-{
-   if (dispatch_width != 8)
-      return;
-
-   /* Set up the pointers to ParamValues now that that array is finalized. */
-   for (unsigned int i = 0; i < c->prog_data.nr_params; i++) {
-      c->prog_data.param[i] =
-	 (const float *)fp->Base.Parameters->ParameterValues[this->param_index[i]] +
-	 this->param_offset[i];
-   }
 }
 
 void
@@ -1336,9 +1492,6 @@ fs_visitor::remove_dead_constants()
 	 if (remapped == -1)
 	    continue;
 
-	 /* We've already done setup_paramvalues_refs() so no need to worry
-	  * about param_index and param_offset.
-	  */
 	 c->prog_data.param[remapped] = c->prog_data.param[i];
       }
 
@@ -1367,6 +1520,81 @@ fs_visitor::remove_dead_constants()
    return true;
 }
 
+/*
+ * Implements array access of uniforms by inserting a
+ * PULL_CONSTANT_LOAD instruction.
+ *
+ * Unlike temporary GRF array access (where we don't support it due to
+ * the difficulty of doing relative addressing on instruction
+ * destinations), we could potentially do array access of uniforms
+ * that were loaded in GRF space as push constants.  In real-world
+ * usage we've seen, though, the arrays being used are always larger
+ * than we could load as push constants, so just always move all
+ * uniform array access out to a pull constant buffer.
+ */
+void
+fs_visitor::move_uniform_array_access_to_pull_constants()
+{
+   int pull_constant_loc[c->prog_data.nr_params];
+
+   for (unsigned int i = 0; i < c->prog_data.nr_params; i++) {
+      pull_constant_loc[i] = -1;
+   }
+
+   /* Walk through and find array access of uniforms.  Put a copy of that
+    * uniform in the pull constant buffer.
+    *
+    * Note that we don't move constant-indexed accesses to arrays.  No
+    * testing has been done of the performance impact of this choice.
+    */
+   foreach_list_safe(node, &this->instructions) {
+      fs_inst *inst = (fs_inst *)node;
+
+      for (int i = 0 ; i < 3; i++) {
+         if (inst->src[i].file != UNIFORM || !inst->src[i].reladdr)
+            continue;
+
+         int uniform = inst->src[i].reg;
+
+         /* If this array isn't already present in the pull constant buffer,
+          * add it.
+          */
+         if (pull_constant_loc[uniform] == -1) {
+            const float **values = &c->prog_data.param[uniform];
+
+            pull_constant_loc[uniform] = c->prog_data.nr_pull_params;
+
+            assert(param_size[uniform]);
+
+            for (int j = 0; j < param_size[uniform]; j++) {
+               c->prog_data.pull_param[c->prog_data.nr_pull_params++] =
+                  values[j];
+            }
+         }
+
+         /* Set up the annotation tracking for new generated instructions. */
+         base_ir = inst->ir;
+         current_annotation = inst->annotation;
+
+         fs_reg offset = fs_reg(this, glsl_type::int_type);
+         inst->insert_before(ADD(offset, *inst->src[i].reladdr,
+                                 fs_reg(pull_constant_loc[uniform] +
+                                        inst->src[i].reg_offset)));
+
+         fs_reg surf_index = fs_reg((unsigned)SURF_INDEX_FRAG_CONST_BUFFER);
+         fs_reg temp = fs_reg(this, glsl_type::float_type);
+         exec_list list = VARYING_PULL_CONSTANT_LOAD(temp,
+                                                     surf_index, offset);
+         inst->insert_before(&list);
+
+         inst->src[i].file = temp.file;
+         inst->src[i].reg = temp.reg;
+         inst->src[i].reg_offset = temp.reg_offset;
+         inst->src[i].reladdr = NULL;
+      }
+   }
+}
+
 /**
  * Choose accesses from the UNIFORM file to demote to using the pull
  * constant buffer.
@@ -1393,8 +1621,31 @@ fs_visitor::setup_pull_constants()
    /* Just demote the end of the list.  We could probably do better
     * here, demoting things that are rarely used in the program first.
     */
-   int pull_uniform_base = max_uniform_components;
-   int pull_uniform_count = c->prog_data.nr_params - pull_uniform_base;
+   unsigned int pull_uniform_base = max_uniform_components;
+
+   int pull_constant_loc[c->prog_data.nr_params];
+   for (unsigned int i = 0; i < c->prog_data.nr_params; i++) {
+      if (i < pull_uniform_base) {
+         pull_constant_loc[i] = -1;
+      } else {
+         pull_constant_loc[i] = -1;
+         /* If our constant is already being uploaded for reladdr purposes,
+          * reuse it.
+          */
+         for (unsigned int j = 0; j < c->prog_data.nr_pull_params; j++) {
+            if (c->prog_data.pull_param[j] == c->prog_data.param[i]) {
+               pull_constant_loc[i] = j;
+               break;
+            }
+         }
+         if (pull_constant_loc[i] == -1) {
+            int pull_index = c->prog_data.nr_pull_params++;
+            c->prog_data.pull_param[pull_index] = c->prog_data.param[i];
+            pull_constant_loc[i] = pull_index;;
+         }
+      }
+   }
+   c->prog_data.nr_params = pull_uniform_base;
 
    foreach_list(node, &this->instructions) {
       fs_inst *inst = (fs_inst *)node;
@@ -1403,16 +1654,19 @@ fs_visitor::setup_pull_constants()
 	 if (inst->src[i].file != UNIFORM)
 	    continue;
 
-	 int uniform_nr = inst->src[i].reg + inst->src[i].reg_offset;
-	 if (uniform_nr < pull_uniform_base)
+         int pull_index = pull_constant_loc[inst->src[i].reg +
+                                            inst->src[i].reg_offset];
+         if (pull_index == -1)
 	    continue;
+
+         assert(!inst->src[i].reladdr);
 
 	 fs_reg dst = fs_reg(this, glsl_type::float_type);
 	 fs_reg index = fs_reg((unsigned)SURF_INDEX_FRAG_CONST_BUFFER);
-	 fs_reg offset = fs_reg((unsigned)(((uniform_nr -
-					     pull_uniform_base) * 4) & ~15));
-	 fs_inst *pull = new(mem_ctx) fs_inst(FS_OPCODE_PULL_CONSTANT_LOAD,
-					      dst, index, offset);
+	 fs_reg offset = fs_reg((unsigned)(pull_index * 4) & ~15);
+	 fs_inst *pull =
+            new(mem_ctx) fs_inst(FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD,
+                                 dst, index, offset);
 	 pull->ir = inst->ir;
 	 pull->annotation = inst->annotation;
 	 pull->base_mrf = 14;
@@ -1423,15 +1677,9 @@ fs_visitor::setup_pull_constants()
 	 inst->src[i].file = GRF;
 	 inst->src[i].reg = dst.reg;
 	 inst->src[i].reg_offset = 0;
-	 inst->src[i].smear = (uniform_nr - pull_uniform_base) & 3;
+	 inst->src[i].smear = pull_index & 3;
       }
    }
-
-   for (int i = 0; i < pull_uniform_count; i++) {
-      c->prog_data.pull_param[i] = c->prog_data.param[pull_uniform_base + i];
-   }
-   c->prog_data.nr_params -= pull_uniform_count;
-   c->prog_data.nr_pull_params = pull_uniform_count;
 }
 
 bool
@@ -1550,7 +1798,7 @@ fs_visitor::register_coalesce_2()
       int reg_to = inst->dst.reg;
       int reg_to_offset = inst->dst.reg_offset;
 
-      foreach_list_safe(node, &this->instructions) {
+      foreach_list(node, &this->instructions) {
 	 fs_inst *scan_inst = (fs_inst *)node;
 
 	 if (scan_inst->dst.file == GRF &&
@@ -1568,7 +1816,28 @@ fs_visitor::register_coalesce_2()
       }
 
       inst->remove();
+
+      /* We don't need to recalculate live intervals inside the loop despite
+       * flagging live_intervals_valid because we only use live intervals for
+       * the interferes test, and we must have had a situation where the
+       * intervals were:
+       *
+       *  from  to
+       *  ^
+       *  |
+       *  v
+       *        ^
+       *        |
+       *        v
+       *
+       * Some register R that might get coalesced with one of these two could
+       * only be referencing "to", otherwise "from"'s range would have been
+       * longer.  R's range could also only start at the end of "to" or later,
+       * otherwise it will conflict with "to" when we try to coalesce "to"
+       * into Rw anyway.
+       */
       live_intervals_valid = false;
+
       progress = true;
       continue;
    }
@@ -1619,7 +1888,9 @@ fs_visitor::register_coalesce()
 	  inst->dst.type != inst->src[0].type)
 	 continue;
 
-      bool has_source_modifiers = inst->src[0].abs || inst->src[0].negate;
+      bool has_source_modifiers = (inst->src[0].abs ||
+                                   inst->src[0].negate ||
+                                   inst->src[0].file == UNIFORM);
 
       /* Found a move of a GRF to a GRF.  Let's see if we can coalesce
        * them: check for no writes to either one until the exit of the
@@ -1642,10 +1913,8 @@ fs_visitor::register_coalesce()
 	  * unusual register regions, so avoid coalescing those for
 	  * now.  We should do something more specific.
 	  */
-	 if (intel->gen >= 6 &&
-	     scan_inst->is_math() &&
-	     (has_source_modifiers || inst->src[0].file == UNIFORM)) {
-	    interfered = true;
+	 if (has_source_modifiers && !can_do_source_mods(scan_inst)) {
+            interfered = true;
 	    break;
 	 }
 
@@ -1953,6 +2222,12 @@ fs_visitor::remove_duplicate_mrf_writes()
 void
 fs_visitor::dump_instruction(fs_inst *inst)
 {
+   if (inst->predicate) {
+      printf("(%cf0.%d) ",
+             inst->predicate_inverse ? '-' : '+',
+             inst->flag_subreg);
+   }
+
    if (inst->opcode < ARRAY_SIZE(opcode_descs) &&
        opcode_descs[inst->opcode].name) {
       printf("%s", opcode_descs[inst->opcode].name);
@@ -1961,7 +2236,17 @@ fs_visitor::dump_instruction(fs_inst *inst)
    }
    if (inst->saturate)
       printf(".sat");
+   if (inst->conditional_mod) {
+      printf(".cmod");
+      if (!inst->predicate &&
+          (intel->gen < 5 || (inst->opcode != BRW_OPCODE_SEL &&
+                              inst->opcode != BRW_OPCODE_IF &&
+                              inst->opcode != BRW_OPCODE_WHILE))) {
+         printf(".f0.%d\n", inst->flag_subreg);
+      }
+   }
    printf(" ");
+
 
    switch (inst->dst.file) {
    case GRF:
@@ -2061,6 +2346,7 @@ fs_visitor::get_instruction_generating_reg(fs_inst *start,
        end->predicate ||
        end->force_uncompressed ||
        end->force_sechalf ||
+       reg.reladdr ||
        !reg.equals(end->dst)) {
       return NULL;
    } else {
@@ -2129,6 +2415,7 @@ fs_visitor::setup_payload_gen6()
 bool
 fs_visitor::run()
 {
+   sanity_param_count = fp->Base.Parameters->NumParameters;
    uint32_t orig_nr_params = c->prog_data.nr_params;
 
    if (intel->gen >= 6)
@@ -2139,11 +2426,22 @@ fs_visitor::run()
    if (0) {
       emit_dummy_fs();
    } else {
+      if (INTEL_DEBUG & DEBUG_SHADER_TIME)
+         emit_shader_time_begin();
+
       calculate_urb_setup();
       if (intel->gen < 6)
 	 emit_interpolation_setup_gen4();
       else
 	 emit_interpolation_setup_gen6();
+
+      /* We handle discards by keeping track of the still-live pixels in f0.1.
+       * Initialize it with the dispatched pixels.
+       */
+      if (fp->UsesKill) {
+         fs_inst *discard_init = emit(FS_OPCODE_MOV_DISPATCH_TO_FLAGS);
+         discard_init->flag_subreg = 1;
+      }
 
       /* Generate FS IR for main().  (the visitor only descends into
        * functions called "main").
@@ -2158,14 +2456,18 @@ fs_visitor::run()
       } else {
          emit_fragment_program_code();
       }
+      base_ir = NULL;
       if (failed)
 	 return false;
+
+      if (INTEL_DEBUG & DEBUG_SHADER_TIME)
+         emit_shader_time_end();
 
       emit_fb_writes();
 
       split_virtual_grfs();
 
-      setup_paramvalues_refs();
+      move_uniform_array_access_to_pull_constants();
       setup_pull_constants();
 
       bool progress;
@@ -2187,7 +2489,7 @@ fs_visitor::run()
 
       remove_dead_constants();
 
-      schedule_instructions();
+      schedule_instructions(false);
 
       assign_curb_setup();
       assign_urb_setup();
@@ -2214,6 +2516,8 @@ fs_visitor::run()
    if (failed)
       return false;
 
+   schedule_instructions(true);
+
    if (dispatch_width == 8) {
       c->prog_data.reg_blocks = brw_register_blocks(grf_used);
    } else {
@@ -2223,6 +2527,13 @@ fs_visitor::run()
       assert(orig_nr_params == c->prog_data.nr_params);
       (void) orig_nr_params;
    }
+
+   /* If any state parameters were appended, then ParameterValues could have
+    * been realloced, in which case the driver uniform storage set up by
+    * _mesa_associate_uniform_storage() would point to freed memory.  Make
+    * sure that didn't happen.
+    */
+   assert(sanity_param_count == fp->Base.Parameters->NumParameters);
 
    return !failed;
 }
@@ -2286,6 +2597,11 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
 
    c->prog_data.dispatch_width = 8;
 
+   fs_generator g(brw, c, prog, fp, v.dual_src_output.file != BAD_FILE);
+   const unsigned *generated = g.generate_assembly(&v.instructions,
+                                                   simd16_instructions,
+                                                   final_assembly_size);
+
    if (unlikely(INTEL_DEBUG & DEBUG_PERF) && shader) {
       if (shader->compiled_once)
          brw_wm_debug_recompile(brw, prog, &c->key);
@@ -2297,9 +2613,7 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
       }
    }
 
-   fs_generator g(brw, c, prog, fp, v.dual_src_output.file != BAD_FILE);
-   return g.generate_assembly(&v.instructions, simd16_instructions,
-                              final_assembly_size);
+   return generated;
 }
 
 bool

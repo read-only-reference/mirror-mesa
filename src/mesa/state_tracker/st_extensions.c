@@ -70,6 +70,8 @@ void st_init_limits(struct st_context *st)
    struct pipe_screen *screen = st->pipe->screen;
    struct gl_constants *c = &st->ctx->Const;
    gl_shader_type sh;
+   boolean can_ubo = TRUE;
+   int max_const_buffers;
 
    c->MaxTextureLevels
       = _min(screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_2D_LEVELS),
@@ -218,6 +220,17 @@ void st_init_limits(struct st_context *st)
       options->EmitNoIndirectUniform = !screen->get_shader_param(screen, sh,
                                         PIPE_SHADER_CAP_INDIRECT_CONST_ADDR);
 
+      if (pc->MaxNativeInstructions) {
+         if (options->EmitNoIndirectUniform)
+         can_ubo = FALSE;
+
+         max_const_buffers = screen->get_shader_param(screen, sh,
+                                                      PIPE_SHADER_CAP_MAX_CONST_BUFFERS);
+         /* we need 13 buffers - 1 constant, 12 UBO */
+         if (max_const_buffers < 13)
+            can_ubo = FALSE;
+      }
+
       if (options->EmitNoLoops)
          options->MaxUnrollIterations = MIN2(screen->get_shader_param(screen, sh, PIPE_SHADER_CAP_MAX_INSTRUCTIONS), 65536);
       else
@@ -251,6 +264,9 @@ void st_init_limits(struct st_context *st)
 
    c->GLSLSkipStrictMaxVaryingLimitCheck =
       screen->get_param(screen, PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS);
+
+   if (can_ubo)
+      st->ctx->Extensions.ARB_uniform_buffer_object = GL_TRUE;
 }
 
 
@@ -355,6 +371,7 @@ void st_init_extensions(struct st_context *st)
       { o(ARB_shader_texture_lod),           PIPE_CAP_SM3                              },
       { o(ARB_shadow),                       PIPE_CAP_TEXTURE_SHADOW_MAP               },
       { o(ARB_texture_non_power_of_two),     PIPE_CAP_NPOT_TEXTURES                    },
+      { o(ARB_timer_query),                  PIPE_CAP_QUERY_TIMESTAMP                  },
       { o(ARB_transform_feedback2),          PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME       },
       { o(ARB_transform_feedback3),          PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME       },
 
@@ -366,7 +383,6 @@ void st_init_extensions(struct st_context *st)
       { o(EXT_texture_filter_anisotropic),   PIPE_CAP_ANISOTROPIC_FILTER               },
       { o(EXT_texture_mirror_clamp),         PIPE_CAP_TEXTURE_MIRROR_CLAMP             },
       { o(EXT_texture_swizzle),              PIPE_CAP_TEXTURE_SWIZZLE                  },
-      { o(EXT_timer_query),                  PIPE_CAP_TIMER_QUERY                      },
       { o(EXT_transform_feedback),           PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS        },
 
       { o(AMD_seamless_cubemap_per_texture), PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE    },
@@ -478,6 +494,14 @@ void st_init_extensions(struct st_context *st)
           PIPE_FORMAT_B10G10R10A2_SSCALED } },
    };
 
+   static const struct st_extension_format_mapping tbo_rgb32[] = {
+      { {o(ARB_texture_buffer_object_rgb32) },
+        { PIPE_FORMAT_R32G32B32_FLOAT,
+          PIPE_FORMAT_R32G32B32_UINT,
+          PIPE_FORMAT_R32G32B32_SINT,
+        } },
+   };
+
    /*
     * Extensions that are supported by all Gallium drivers:
     */
@@ -553,7 +577,9 @@ void st_init_extensions(struct st_context *st)
    /* Figure out GLSL support. */
    glsl_feature_level = screen->get_param(screen, PIPE_CAP_GLSL_FEATURE_LEVEL);
 
-   if (glsl_feature_level >= 130) {
+   if (glsl_feature_level >= 140) {
+      ctx->Const.GLSLVersion = 140;
+   } else if (glsl_feature_level >= 130) {
       ctx->Const.GLSLVersion = 130;
    } else {
       ctx->Const.GLSLVersion = 120;
@@ -626,9 +652,12 @@ void st_init_extensions(struct st_context *st)
    if (ctx->Const.MaxDualSourceDrawBuffers > 0)
       ctx->Extensions.ARB_blend_func_extended = GL_TRUE;
 
-   if (screen->get_param(screen, PIPE_CAP_TIMER_QUERY) &&
-       screen->get_param(screen, PIPE_CAP_QUERY_TIMESTAMP)) {
-      ctx->Extensions.ARB_timer_query = GL_TRUE;
+   st->has_time_elapsed =
+      screen->get_param(screen, PIPE_CAP_QUERY_TIME_ELAPSED);
+
+   if (st->has_time_elapsed ||
+       ctx->Extensions.ARB_timer_query) {
+      ctx->Extensions.EXT_timer_query = GL_TRUE;
    }
 
    if (ctx->Extensions.ARB_transform_feedback2 &&
@@ -642,5 +671,25 @@ void st_init_extensions(struct st_context *st)
       screen->get_param(screen, PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT);
    if (ctx->Const.MinMapBufferAlignment >= 64) {
       ctx->Extensions.ARB_map_buffer_alignment = GL_TRUE;
+   }
+   if (screen->get_param(screen, PIPE_CAP_TEXTURE_BUFFER_OBJECTS)) {
+      ctx->Extensions.ARB_texture_buffer_object = GL_TRUE;
+      init_format_extensions(st, tbo_rgb32, Elements(tbo_rgb32),
+                             PIPE_BUFFER, PIPE_BIND_SAMPLER_VIEW);
+   }
+
+
+   /* Unpacking a varying in the fragment shader costs 1 texture indirection.
+    * If the number of available texture indirections is very limited, then we
+    * prefer to disable varying packing rather than run the risk of varying
+    * packing preventing a shader from running.
+    */
+   if (screen->get_shader_param(screen, PIPE_SHADER_FRAGMENT,
+                                PIPE_SHADER_CAP_MAX_TEX_INDIRECTIONS) <= 8) {
+      /* We can't disable varying packing if transform feedback is available,
+       * because transform feedback code assumes a packed varying layout.
+       */
+      if (!ctx->Extensions.EXT_transform_feedback)
+         ctx->Const.DisableVaryingPacking = GL_TRUE;
    }
 }

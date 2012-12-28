@@ -1048,9 +1048,9 @@ int brw_disasm (FILE *file, struct brw_instruction *inst, int gen)
     if (inst->header.predicate_control) {
 	string (file, "(");
 	err |= control (file, "predicate inverse", pred_inv, inst->header.predicate_inverse, NULL);
-	string (file, "f0");
-	if (inst->bits2.da1.flag_reg_nr)
-	    format (file, ".%d", inst->bits2.da1.flag_reg_nr);
+	format (file, "f%d", gen >= 7 ? inst->bits2.da1.flag_reg_nr : 0);
+	if (inst->bits2.da1.flag_subreg_nr)
+	    format (file, ".%d", inst->bits2.da1.flag_subreg_nr);
 	if (inst->header.access_mode == BRW_ALIGN_1)
 	    err |= control (file, "predicate control align1", pred_ctrl_align1,
 			    inst->header.predicate_control, NULL);
@@ -1069,9 +1069,23 @@ int brw_disasm (FILE *file, struct brw_instruction *inst, int gen)
 	err |= control (file, "function", math_function,
 			inst->header.destreg__conditionalmod, NULL);
     } else if (inst->header.opcode != BRW_OPCODE_SEND &&
-	       inst->header.opcode != BRW_OPCODE_SENDC)
+	       inst->header.opcode != BRW_OPCODE_SENDC) {
 	err |= control (file, "conditional modifier", conditional_modifier,
 			inst->header.destreg__conditionalmod, NULL);
+
+        /* If we're using the conditional modifier, print which flags reg is
+         * used for it.  Note that on gen6+, the embedded-condition SEL and
+         * control flow doesn't update flags.
+         */
+	if (inst->header.destreg__conditionalmod &&
+            (gen < 6 || (inst->header.opcode != BRW_OPCODE_SEL &&
+                         inst->header.opcode != BRW_OPCODE_IF &&
+                         inst->header.opcode != BRW_OPCODE_WHILE))) {
+	    format (file, ".f%d", gen >= 7 ? inst->bits2.da1.flag_reg_nr : 0);
+	    if (inst->bits2.da1.flag_subreg_nr)
+		format (file, ".%d", inst->bits2.da1.flag_subreg_nr);
+        }
+    }
 
     if (inst->header.opcode != BRW_OPCODE_NOP) {
 	string (file, "(");
@@ -1098,14 +1112,19 @@ int brw_disasm (FILE *file, struct brw_instruction *inst, int gen)
        if (opcode[inst->header.opcode].ndst > 0) {
 	  pad (file, 16);
 	  err |= dest (file, inst);
-       } else if (gen >= 6 && (inst->header.opcode == BRW_OPCODE_IF ||
+       } else if (gen == 7 && (inst->header.opcode == BRW_OPCODE_ELSE ||
+			       inst->header.opcode == BRW_OPCODE_ENDIF ||
+			       inst->header.opcode == BRW_OPCODE_WHILE)) {
+	  format (file, " %d", inst->bits3.break_cont.jip);
+       } else if (gen == 6 && (inst->header.opcode == BRW_OPCODE_IF ||
 			       inst->header.opcode == BRW_OPCODE_ELSE ||
 			       inst->header.opcode == BRW_OPCODE_ENDIF ||
 			       inst->header.opcode == BRW_OPCODE_WHILE)) {
 	  format (file, " %d", inst->bits1.branch_gen6.jump_count);
-       } else if (gen >= 6 && (inst->header.opcode == BRW_OPCODE_BREAK ||
-			       inst->header.opcode == BRW_OPCODE_CONTINUE ||
-			       inst->header.opcode == BRW_OPCODE_HALT)) {
+       } else if ((gen >= 6 && (inst->header.opcode == BRW_OPCODE_BREAK ||
+                                inst->header.opcode == BRW_OPCODE_CONTINUE ||
+                                inst->header.opcode == BRW_OPCODE_HALT)) ||
+                  (gen == 7 && inst->header.opcode == BRW_OPCODE_IF)) {
 	  format (file, " %d %d", inst->bits3.break_cont.uip, inst->bits3.break_cont.jip);
        } else if (inst->header.opcode == BRW_OPCODE_JMPI) {
 	  format (file, " %d", inst->bits3.d);

@@ -143,7 +143,28 @@ brwProgramStringNotify(struct gl_context *ctx,
       _tnl_program_string(ctx, target, prog);
    }
 
+   brw_add_texrect_params(prog);
+
    return true;
+}
+
+void
+brw_add_texrect_params(struct gl_program *prog)
+{
+   for (int texunit = 0; texunit < BRW_MAX_TEX_UNIT; texunit++) {
+      if (!(prog->TexturesUsed[texunit] & (1 << TEXTURE_RECT_INDEX)))
+         continue;
+
+      int tokens[STATE_LENGTH] = {
+         STATE_INTERNAL,
+         STATE_TEXRECT_SCALE,
+         texunit,
+         0,
+         0
+      };
+
+      _mesa_add_state_reference(prog->Parameters, (gl_state_index *)tokens);
+   }
 }
 
 /* Per-thread scratch space is a power-of-two multiple of 1KB. */
@@ -189,3 +210,218 @@ void brwInitFragProgFuncs( struct dd_function_table *functions )
    functions->LinkShader = brw_link_shader;
 }
 
+void
+brw_init_shader_time(struct brw_context *brw)
+{
+   struct intel_context *intel = &brw->intel;
+
+   const int max_entries = 4096;
+   brw->shader_time.bo = drm_intel_bo_alloc(intel->bufmgr, "shader time",
+                                            max_entries * 4, 4096);
+   brw->shader_time.programs = rzalloc_array(brw, struct gl_shader_program *,
+                                             max_entries);
+   brw->shader_time.types = rzalloc_array(brw, enum shader_time_shader_type,
+                                          max_entries);
+   brw->shader_time.cumulative = rzalloc_array(brw, uint64_t,
+                                               max_entries);
+   brw->shader_time.max_entries = max_entries;
+}
+
+static int
+compare_time(const void *a, const void *b)
+{
+   uint64_t * const *a_val = a;
+   uint64_t * const *b_val = b;
+
+   /* We don't just subtract because we're turning the value to an int. */
+   if (**a_val < **b_val)
+      return -1;
+   else if (**a_val == **b_val)
+      return 0;
+   else
+      return 1;
+}
+
+static void
+get_written_and_reset(struct brw_context *brw, int i,
+                      uint64_t *written, uint64_t *reset)
+{
+   enum shader_time_shader_type type = brw->shader_time.types[i];
+   assert(type == ST_VS || type == ST_FS8 || type == ST_FS16);
+
+   /* Find where we recorded written and reset. */
+   int wi, ri;
+
+   for (wi = i; brw->shader_time.types[wi] != type + 1; wi++)
+      ;
+
+   for (ri = i; brw->shader_time.types[ri] != type + 2; ri++)
+      ;
+
+   *written = brw->shader_time.cumulative[wi];
+   *reset = brw->shader_time.cumulative[ri];
+}
+
+static void
+print_shader_time_line(const char *name, int shader_num,
+                       uint64_t time, uint64_t total)
+{
+   printf("%s", name);
+   for (int i = strlen(name); i < 10; i++)
+      printf(" ");
+   printf("%4d: ", shader_num);
+
+   printf("%16lld (%7.2f Gcycles)      %4.1f%%\n",
+          (long long)time,
+          (double)time / 1000000000.0,
+          (double)time / total * 100.0);
+}
+
+static void
+brw_report_shader_time(struct brw_context *brw)
+{
+   if (!brw->shader_time.bo || !brw->shader_time.num_entries)
+      return;
+
+   uint64_t scaled[brw->shader_time.num_entries];
+   uint64_t *sorted[brw->shader_time.num_entries];
+   uint64_t total_by_type[ST_FS16 + 1];
+   memset(total_by_type, 0, sizeof(total_by_type));
+   double total = 0;
+   for (int i = 0; i < brw->shader_time.num_entries; i++) {
+      uint64_t written = 0, reset = 0;
+      enum shader_time_shader_type type = brw->shader_time.types[i];
+
+      sorted[i] = &scaled[i];
+
+      switch (type) {
+      case ST_VS_WRITTEN:
+      case ST_VS_RESET:
+      case ST_FS8_WRITTEN:
+      case ST_FS8_RESET:
+      case ST_FS16_WRITTEN:
+      case ST_FS16_RESET:
+         /* We'll handle these when along with the time. */
+         scaled[i] = 0;
+         continue;
+
+      case ST_VS:
+      case ST_FS8:
+      case ST_FS16:
+         get_written_and_reset(brw, i, &written, &reset);
+         break;
+
+      default:
+         /* I sometimes want to print things that aren't the 3 shader times.
+          * Just print the sum in that case.
+          */
+         written = 1;
+         reset = 0;
+         break;
+      }
+
+      uint64_t time = brw->shader_time.cumulative[i];
+      if (written) {
+         scaled[i] = time / written * (written + reset);
+      } else {
+         scaled[i] = time;
+      }
+
+      switch (type) {
+      case ST_VS:
+      case ST_FS8:
+      case ST_FS16:
+         total_by_type[type] += scaled[i];
+         break;
+      default:
+         break;
+      }
+
+      total += scaled[i];
+   }
+
+   if (total == 0) {
+      printf("No shader time collected yet\n");
+      return;
+   }
+
+   qsort(sorted, brw->shader_time.num_entries, sizeof(sorted[0]), compare_time);
+
+   printf("\n");
+   printf("type   ID      cycles spent                   %% of total\n");
+   for (int s = 0; s < brw->shader_time.num_entries; s++) {
+      /* Work back from the sorted pointers times to a time to print. */
+      int i = sorted[s] - scaled;
+
+      if (scaled[i] == 0)
+         continue;
+
+      int shader_num = -1;
+      if (brw->shader_time.programs[i]) {
+         shader_num = brw->shader_time.programs[i]->Name;
+      }
+
+      switch (brw->shader_time.types[i]) {
+      case ST_VS:
+         print_shader_time_line("vs", shader_num, scaled[i], total);
+         break;
+      case ST_FS8:
+         print_shader_time_line("fs8", shader_num, scaled[i], total);
+         break;
+      case ST_FS16:
+         print_shader_time_line("fs16", shader_num, scaled[i], total);
+         break;
+      default:
+         print_shader_time_line("other", shader_num, scaled[i], total);
+         break;
+      }
+   }
+
+   printf("\n");
+   print_shader_time_line("total vs", -1, total_by_type[ST_VS], total);
+   print_shader_time_line("total fs8", -1, total_by_type[ST_FS8], total);
+   print_shader_time_line("total fs16", -1, total_by_type[ST_FS16], total);
+}
+
+static void
+brw_collect_shader_time(struct brw_context *brw)
+{
+   if (!brw->shader_time.bo)
+      return;
+
+   /* This probably stalls on the last rendering.  We could fix that by
+    * delaying reading the reports, but it doesn't look like it's a big
+    * overhead compared to the cost of tracking the time in the first place.
+    */
+   drm_intel_bo_map(brw->shader_time.bo, true);
+
+   uint32_t *times = brw->shader_time.bo->virtual;
+
+   for (int i = 0; i < brw->shader_time.num_entries; i++) {
+      brw->shader_time.cumulative[i] += times[i];
+   }
+
+   /* Zero the BO out to clear it out for our next collection.
+    */
+   memset(times, 0, brw->shader_time.bo->size);
+   drm_intel_bo_unmap(brw->shader_time.bo);
+}
+
+void
+brw_collect_and_report_shader_time(struct brw_context *brw)
+{
+   brw_collect_shader_time(brw);
+
+   if (brw->shader_time.report_time == 0 ||
+       get_time() - brw->shader_time.report_time >= 1.0) {
+      brw_report_shader_time(brw);
+      brw->shader_time.report_time = get_time();
+   }
+}
+
+void
+brw_destroy_shader_time(struct brw_context *brw)
+{
+   drm_intel_bo_unreference(brw->shader_time.bo);
+   brw->shader_time.bo = NULL;
+}

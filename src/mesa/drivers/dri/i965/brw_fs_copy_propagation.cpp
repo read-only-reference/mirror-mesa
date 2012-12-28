@@ -216,9 +216,8 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
 
    bool has_source_modifiers = entry->src.abs || entry->src.negate;
 
-   if (intel->gen == 6 && inst->is_math() &&
-       (has_source_modifiers || entry->src.file == UNIFORM ||
-        entry->src.smear != -1))
+   if ((has_source_modifiers || entry->src.file == UNIFORM ||
+        entry->src.smear != -1) && !can_do_source_mods(inst))
       return false;
 
    inst->src[arg].file = entry->src.file;
@@ -336,7 +335,7 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
          }
          break;
 
-      case FS_OPCODE_PULL_CONSTANT_LOAD:
+      case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
          inst->src[i] = entry->src;
          progress = true;
          break;

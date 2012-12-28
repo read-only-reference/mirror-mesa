@@ -111,6 +111,11 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return nv50_screen(pscreen)->tesla->oclass >= NVA0_3D_CLASS;
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
       return 0;
+   case PIPE_CAP_CUBE_MAP_ARRAY:
+      return 0;
+      /*
+      return nv50_screen(pscreen)->tesla->oclass >= NVA3_3D_CLASS;
+      */
    case PIPE_CAP_TWO_SIDED_STENCIL:
    case PIPE_CAP_DEPTH_CLIP_DISABLE:
    case PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE:
@@ -129,7 +134,7 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_COLOR_CLAMPED:
       return 1;
    case PIPE_CAP_QUERY_TIMESTAMP:
-   case PIPE_CAP_TIMER_QUERY:
+   case PIPE_CAP_QUERY_TIME_ELAPSED:
    case PIPE_CAP_OCCLUSION_QUERY:
       return 1;
    case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
@@ -176,6 +181,7 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_TEXTURE_MULTISAMPLE:
+   case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
       return 0;
    default:
       NOUVEAU_ERR("unknown PIPE_CAP %d\n", param);

@@ -27,6 +27,7 @@
 #include "r600d.h"
 #include "util/u_memory.h"
 #include <errno.h>
+#include <unistd.h>
 
 /* Get backends mask */
 void r600_get_backend_mask(struct r600_context *ctx)
@@ -369,6 +370,11 @@ void r600_need_cs_space(struct r600_context *ctx, unsigned num_dw,
 		for (i = 0; i < R600_NUM_ATOMS; i++) {
 			if (ctx->atoms[i] && ctx->atoms[i]->dirty) {
 				num_dw += ctx->atoms[i]->num_dw;
+#if R600_TRACE_CS
+				if (ctx->screen->trace_bo) {
+					num_dw += R600_TRACE_CS_DWORDS;
+				}
+#endif
 			}
 		}
 
@@ -376,11 +382,15 @@ void r600_need_cs_space(struct r600_context *ctx, unsigned num_dw,
 
 		/* The upper-bound of how much space a draw command would take. */
 		num_dw += R600_MAX_FLUSH_CS_DWORDS + R600_MAX_DRAW_CS_DWORDS;
+#if R600_TRACE_CS
+		if (ctx->screen->trace_bo) {
+			num_dw += R600_TRACE_CS_DWORDS;
+		}
+#endif
 	}
 
 	/* Count in queries_suspend. */
 	num_dw += ctx->num_cs_dw_nontimer_queries_suspend;
-	num_dw += ctx->num_cs_dw_timer_queries_suspend;
 
 	/* Count in streamout_end at the end of CS. */
 	num_dw += ctx->num_cs_dw_streamout_end;
@@ -424,7 +434,7 @@ void r600_context_dirty_block(struct r600_context *ctx,
 		LIST_ADDTAIL(&block->list,&ctx->dirty);
 
 		if (block->flags & REG_FLAG_FLUSH_CHANGE) {
-			ctx->flags |= R600_CONTEXT_PS_PARTIAL_FLUSH;
+			ctx->flags |= R600_CONTEXT_WAIT_IDLE;
 		}
 	}
 }
@@ -595,14 +605,11 @@ out:
 void r600_flush_emit(struct r600_context *rctx)
 {
 	struct radeon_winsys_cs *cs = rctx->cs;
+	unsigned cp_coher_cntl = 0;
+	unsigned emit_flush = 0;
 
 	if (!rctx->flags) {
 		return;
-	}
-
-	if (rctx->flags & R600_CONTEXT_PS_PARTIAL_FLUSH) {
-		cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 0, 0);
-		cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_PS_PARTIAL_FLUSH) | EVENT_INDEX(4);
 	}
 
 	if (rctx->chip_class >= R700 &&
@@ -614,110 +621,54 @@ void r600_flush_emit(struct r600_context *rctx)
 	if (rctx->flags & R600_CONTEXT_FLUSH_AND_INV) {
 		cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 0, 0);
 		cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_CACHE_FLUSH_AND_INV_EVENT) | EVENT_INDEX(0);
-
-		/* DB flushes are special due to errata with hyperz, we need to
-		 * insert a no-op, so that the cache has time to really flush.
-		 */
-		if (rctx->chip_class <= R700 &&
-		    rctx->flags & R600_CONTEXT_HTILE_ERRATA) {
-			cs->buf[cs->cdw++] = PKT3(PKT3_NOP, 31, 0);
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
-			cs->buf[cs->cdw++] = 0xdeadcafe;
+		if (rctx->chip_class >= EVERGREEN) {
+			cp_coher_cntl = S_0085F0_CB0_DEST_BASE_ENA(1) |
+					S_0085F0_CB1_DEST_BASE_ENA(1) |
+					S_0085F0_CB2_DEST_BASE_ENA(1) |
+					S_0085F0_CB3_DEST_BASE_ENA(1) |
+					S_0085F0_CB4_DEST_BASE_ENA(1) |
+					S_0085F0_CB5_DEST_BASE_ENA(1) |
+					S_0085F0_CB6_DEST_BASE_ENA(1) |
+					S_0085F0_CB7_DEST_BASE_ENA(1) |
+					S_0085F0_CB8_DEST_BASE_ENA(1) |
+					S_0085F0_CB9_DEST_BASE_ENA(1) |
+					S_0085F0_CB10_DEST_BASE_ENA(1) |
+					S_0085F0_CB11_DEST_BASE_ENA(1) |
+					S_0085F0_DB_DEST_BASE_ENA(1) |
+					S_0085F0_TC_ACTION_ENA(1) |
+					S_0085F0_CB_ACTION_ENA(1) |
+					S_0085F0_DB_ACTION_ENA(1) |
+					S_0085F0_SH_ACTION_ENA(1) |
+					S_0085F0_SMX_ACTION_ENA(1) |
+					S_0085F0_FULL_CACHE_ENA(1);
+		} else {
+			cp_coher_cntl = S_0085F0_SMX_ACTION_ENA(1) |
+					S_0085F0_SH_ACTION_ENA(1) |
+					S_0085F0_VC_ACTION_ENA(1) |
+					S_0085F0_TC_ACTION_ENA(1) |
+					S_0085F0_FULL_CACHE_ENA(1);
 		}
 	}
 
-	if (rctx->flags & (R600_CONTEXT_CB_FLUSH |
-			   R600_CONTEXT_DB_FLUSH |
-		           R600_CONTEXT_SHADERCONST_FLUSH |
-		           R600_CONTEXT_TEX_FLUSH |
-		           R600_CONTEXT_VTX_FLUSH |
-		           R600_CONTEXT_STREAMOUT_FLUSH)) {
-		/* anything left (cb, vtx, shader, streamout) can be flushed
-		 * using the surface sync packet
-		 */
-		unsigned flags = 0;
+	if (rctx->flags & R600_CONTEXT_INVAL_READ_CACHES) {
+		cp_coher_cntl |= S_0085F0_VC_ACTION_ENA(1) |
+				S_0085F0_TC_ACTION_ENA(1) |
+				S_0085F0_FULL_CACHE_ENA(1);
+		emit_flush = 1;
+	}
 
-		if (rctx->flags & R600_CONTEXT_CB_FLUSH) {
-			flags |= S_0085F0_CB_ACTION_ENA(1) |
-				 S_0085F0_CB0_DEST_BASE_ENA(1) |
-				 S_0085F0_CB1_DEST_BASE_ENA(1) |
-				 S_0085F0_CB2_DEST_BASE_ENA(1) |
-				 S_0085F0_CB3_DEST_BASE_ENA(1) |
-				 S_0085F0_CB4_DEST_BASE_ENA(1) |
-				 S_0085F0_CB5_DEST_BASE_ENA(1) |
-				 S_0085F0_CB6_DEST_BASE_ENA(1) |
-				 S_0085F0_CB7_DEST_BASE_ENA(1);
+	if (rctx->family >= CHIP_RV770 && rctx->flags & R600_CONTEXT_STREAMOUT_FLUSH) {
+		cp_coher_cntl |= S_0085F0_SO0_DEST_BASE_ENA(1) |
+				S_0085F0_SO1_DEST_BASE_ENA(1) |
+				S_0085F0_SO2_DEST_BASE_ENA(1) |
+				S_0085F0_SO3_DEST_BASE_ENA(1) |
+				S_0085F0_SMX_ACTION_ENA(1);
+		emit_flush = 1;
+	}
 
-			if (rctx->chip_class >= EVERGREEN) {
-				flags |= S_0085F0_CB8_DEST_BASE_ENA(1) |
-					 S_0085F0_CB9_DEST_BASE_ENA(1) |
-					 S_0085F0_CB10_DEST_BASE_ENA(1) |
-					 S_0085F0_CB11_DEST_BASE_ENA(1);
-			}
-
-			/* RV670 errata
-			 * (CB1_DEST_BASE_ENA is also required, which is
-			 * included unconditionally above). */
-			if (rctx->family == CHIP_RV670 ||
-			    rctx->family == CHIP_RS780 ||
-			    rctx->family == CHIP_RS880) {
-				flags |= S_0085F0_DEST_BASE_0_ENA(1);
-			}
-		}
-
-		if (rctx->flags & R600_CONTEXT_STREAMOUT_FLUSH) {
-			flags |= S_0085F0_SO0_DEST_BASE_ENA(1) |
-				 S_0085F0_SO1_DEST_BASE_ENA(1) |
-				 S_0085F0_SO2_DEST_BASE_ENA(1) |
-				 S_0085F0_SO3_DEST_BASE_ENA(1) |
-				 S_0085F0_SMX_ACTION_ENA(1);
-
-			/* RV670 errata */
-			if (rctx->family == CHIP_RV670 ||
-			    rctx->family == CHIP_RS780 ||
-			    rctx->family == CHIP_RS880) {
-				flags |= S_0085F0_DEST_BASE_0_ENA(1);
-			}
-		}
-
-		flags |= (rctx->flags & R600_CONTEXT_DB_FLUSH) ? S_0085F0_DB_ACTION_ENA(1) |
-								 S_0085F0_DB_DEST_BASE_ENA(1): 0;
-		flags |= (rctx->flags & R600_CONTEXT_SHADERCONST_FLUSH) ? S_0085F0_SH_ACTION_ENA(1) : 0;
-		flags |= (rctx->flags & R600_CONTEXT_TEX_FLUSH) ? S_0085F0_TC_ACTION_ENA(1) : 0;
-		flags |= (rctx->flags & R600_CONTEXT_VTX_FLUSH) ? S_0085F0_VC_ACTION_ENA(1) : 0;
-
+	if (emit_flush) {
 		cs->buf[cs->cdw++] = PKT3(PKT3_SURFACE_SYNC, 3, 0);
-		cs->buf[cs->cdw++] = flags;           /* CP_COHER_CNTL */
+		cs->buf[cs->cdw++] = cp_coher_cntl;   /* CP_COHER_CNTL */
 		cs->buf[cs->cdw++] = 0xffffffff;      /* CP_COHER_SIZE */
 		cs->buf[cs->cdw++] = 0;               /* CP_COHER_BASE */
 		cs->buf[cs->cdw++] = 0x0000000A;      /* POLL_INTERVAL */
@@ -739,15 +690,10 @@ void r600_context_flush(struct r600_context *ctx, unsigned flags)
 	if (cs->cdw == ctx->start_cs_cmd.num_dw)
 		return;
 
-	ctx->timer_queries_suspended = false;
 	ctx->nontimer_queries_suspended = false;
 	ctx->streamout_suspended = false;
 
 	/* suspend queries */
-	if (ctx->num_cs_dw_timer_queries_suspend) {
-		r600_suspend_timer_queries(ctx);
-		ctx->timer_queries_suspended = true;
-	}
 	if (ctx->num_cs_dw_nontimer_queries_suspend) {
 		r600_suspend_nontimer_queries(ctx);
 		ctx->nontimer_queries_suspended = true;
@@ -758,16 +704,10 @@ void r600_context_flush(struct r600_context *ctx, unsigned flags)
 		ctx->streamout_suspended = true;
 	}
 
-	/* partial flush is needed to avoid lockups on some chips with user fences */
-	ctx->flags |= R600_CONTEXT_PS_PARTIAL_FLUSH;
-
-	/* flush the framebuffer */
-	ctx->flags |= R600_CONTEXT_CB_FLUSH | R600_CONTEXT_DB_FLUSH;
-
-	/* R6xx errata */
-	if (ctx->chip_class == R600) {
-		ctx->flags |= R600_CONTEXT_FLUSH_AND_INV;
-	}
+	/* flush is needed to avoid lockups on some chips with user fences
+	 * this will also flush the framebuffer cache
+	 */
+	ctx->flags |= R600_CONTEXT_WAIT_IDLE | R600_CONTEXT_FLUSH_AND_INV;
 
 	r600_flush_emit(ctx);
 
@@ -782,7 +722,37 @@ void r600_context_flush(struct r600_context *ctx, unsigned flags)
 	}
 
 	/* Flush the CS. */
+#if R600_TRACE_CS
+	if (ctx->screen->trace_bo) {
+		struct r600_screen *rscreen = ctx->screen;
+		unsigned i;
+
+		for (i = 0; i < cs->cdw; i++) {
+			fprintf(stderr, "[%4d] [%5d] 0x%08x\n", rscreen->cs_count, i, cs->buf[i]);
+		}
+		rscreen->cs_count++;
+	}
+#endif
 	ctx->ws->cs_flush(ctx->cs, flags);
+#if R600_TRACE_CS
+	if (ctx->screen->trace_bo) {
+		struct r600_screen *rscreen = ctx->screen;
+		unsigned i;
+
+		for (i = 0; i < 10; i++) {
+			usleep(5);
+			if (!ctx->ws->buffer_is_busy(rscreen->trace_bo->buf, RADEON_USAGE_READWRITE)) {
+				break;
+			}
+		}
+		if (i == 10) {
+			fprintf(stderr, "timeout on cs lockup likely happen at cs %d dw %d\n",
+				rscreen->trace_ptr[1], rscreen->trace_ptr[0]);
+		} else {
+			fprintf(stderr, "cs %d executed in %dms\n", rscreen->trace_ptr[1], i * 5);
+		}
+	}
+#endif
 
 	r600_begin_new_cs(ctx);
 }
@@ -805,6 +775,7 @@ void r600_begin_new_cs(struct r600_context *ctx)
 	ctx->clip_misc_state.atom.dirty = true;
 	ctx->clip_state.atom.dirty = true;
 	ctx->db_misc_state.atom.dirty = true;
+	ctx->db_state.atom.dirty = true;
 	ctx->framebuffer.atom.dirty = true;
 	ctx->poly_offset_state.atom.dirty = true;
 	ctx->vgt_state.atom.dirty = true;
@@ -850,9 +821,6 @@ void r600_begin_new_cs(struct r600_context *ctx)
 	}
 
 	/* resume queries */
-	if (ctx->timer_queries_suspended) {
-		r600_resume_timer_queries(ctx);
-	}
 	if (ctx->nontimer_queries_suspended) {
 		r600_resume_nontimer_queries(ctx);
 	}
@@ -884,9 +852,7 @@ void r600_context_emit_fence(struct r600_context *ctx, struct r600_resource *fen
 	va = r600_resource_va(&ctx->screen->screen, (void*)fence_bo);
 	va = va + (offset << 2);
 
-	ctx->flags &= ~R600_CONTEXT_PS_PARTIAL_FLUSH;
-	cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 0, 0);
-	cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_PS_PARTIAL_FLUSH) | EVENT_INDEX(4);
+	r600_write_config_reg(cs, R_008040_WAIT_UNTIL, S_008040_WAIT_3D_IDLE(1));
 
 	cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE_EOP, 4, 0);
 	cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_CACHE_FLUSH_AND_INV_TS_EVENT) | EVENT_INDEX(5);
@@ -1005,7 +971,7 @@ void r600_context_streamout_begin(struct r600_context *ctx)
 
 			if (ctx->streamout_append_bitmask & (1 << i)) {
 				va = r600_resource_va(&ctx->screen->screen,
-						      (void*)t[i]->filled_size);
+						      (void*)t[i]->buf_filled_size) + t[i]->buf_filled_size_offset;
 				/* Append. */
 				cs->buf[cs->cdw++] = PKT3(PKT3_STRMOUT_BUFFER_UPDATE, 4, 0);
 				cs->buf[cs->cdw++] = STRMOUT_SELECT_BUFFER(i) |
@@ -1017,7 +983,7 @@ void r600_context_streamout_begin(struct r600_context *ctx)
 
 				cs->buf[cs->cdw++] = PKT3(PKT3_NOP, 0, 0);
 				cs->buf[cs->cdw++] =
-					r600_context_bo_reloc(ctx,  t[i]->filled_size,
+					r600_context_bo_reloc(ctx,  t[i]->buf_filled_size,
 							      RADEON_USAGE_READ);
 			} else {
 				/* Start from the beginning. */
@@ -1054,7 +1020,7 @@ void r600_context_streamout_end(struct r600_context *ctx)
 	for (i = 0; i < ctx->num_so_targets; i++) {
 		if (t[i]) {
 			va = r600_resource_va(&ctx->screen->screen,
-					      (void*)t[i]->filled_size);
+					      (void*)t[i]->buf_filled_size) + t[i]->buf_filled_size_offset;
 			cs->buf[cs->cdw++] = PKT3(PKT3_STRMOUT_BUFFER_UPDATE, 4, 0);
 			cs->buf[cs->cdw++] = STRMOUT_SELECT_BUFFER(i) |
 						       STRMOUT_OFFSET_SOURCE(STRMOUT_OFFSET_NONE) |
@@ -1066,22 +1032,21 @@ void r600_context_streamout_end(struct r600_context *ctx)
 
 			cs->buf[cs->cdw++] = PKT3(PKT3_NOP, 0, 0);
 			cs->buf[cs->cdw++] =
-				r600_context_bo_reloc(ctx,  t[i]->filled_size,
+				r600_context_bo_reloc(ctx,  t[i]->buf_filled_size,
 						      RADEON_USAGE_WRITE);
 
 		}
 	}
 
 	if (ctx->chip_class >= EVERGREEN) {
+		ctx->flags |= R600_CONTEXT_STREAMOUT_FLUSH;
 		evergreen_set_streamout_enable(ctx, 0);
 	} else {
+		if (ctx->chip_class >= R700) {
+			ctx->flags |= R600_CONTEXT_STREAMOUT_FLUSH;
+		}
 		r600_set_streamout_enable(ctx, 0);
 	}
-	ctx->flags |= R600_CONTEXT_STREAMOUT_FLUSH;
-
-	/* R6xx errata */
-	if (ctx->chip_class == R600) {
-		ctx->flags |= R600_CONTEXT_FLUSH_AND_INV;
-	}
+	ctx->flags |= R600_CONTEXT_WAIT_IDLE | R600_CONTEXT_FLUSH_AND_INV;
 	ctx->num_cs_dw_streamout_end = 0;
 }

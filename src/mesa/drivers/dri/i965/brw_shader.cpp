@@ -100,9 +100,6 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 	return false;
       prog->Parameters = _mesa_new_parameter_list();
 
-      _mesa_generate_parameters_list_for_uniforms(shProg, &shader->base,
-						  prog->Parameters);
-
       if (stage == 0) {
 	 struct gl_vertex_program *vp = (struct gl_vertex_program *) prog;
 	 vp->UsesClipDistance = shProg->Vert.UsesClipDistance;
@@ -140,7 +137,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       bool input = true;
       bool output = stage == MESA_SHADER_FRAGMENT;
       bool temp = stage == MESA_SHADER_FRAGMENT;
-      bool uniform = stage == MESA_SHADER_FRAGMENT;
+      bool uniform = false;
 
       bool lowered_variable_indexing =
          lower_variable_index_to_cond_assign(shader->ir,
@@ -176,7 +173,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
        * uniforms that are used.  This has to be done now (during linking).
        * Code generation doesn't happen until the first time this shader is
        * used for rendering.  Waiting until then to generate the parameters is
-       * too late.  At that point, the values for the built-in informs won't
+       * too late.  At that point, the values for the built-in uniforms won't
        * get sent to the shader.
        */
       foreach_list(node, shader->ir) {
@@ -207,6 +204,8 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       _mesa_update_shader_textures_used(shProg, prog);
 
       _mesa_reference_program(ctx, &shader->base.Program, prog);
+
+      brw_add_texrect_params(prog);
 
       /* This has to be done last.  Any operation that can cause
        * prog->ParameterValues to get reallocated (e.g., anything that adds a

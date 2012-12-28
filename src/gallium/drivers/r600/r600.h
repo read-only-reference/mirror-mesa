@@ -175,22 +175,18 @@ struct r600_so_target {
 	struct pipe_stream_output_target b;
 
 	/* The buffer where BUFFER_FILLED_SIZE is stored. */
-	struct r600_resource	*filled_size;
+	struct r600_resource	*buf_filled_size;
+	unsigned		buf_filled_size_offset;
+
 	unsigned		stride_in_dw;
 	unsigned		so_index;
 };
 
-#define R600_CONTEXT_PS_PARTIAL_FLUSH		(1 << 0)
-#define R600_CONTEXT_CB_FLUSH			(1 << 1)
-#define R600_CONTEXT_DB_FLUSH			(1 << 2)
-#define R600_CONTEXT_SHADERCONST_FLUSH		(1 << 3)
-#define R600_CONTEXT_TEX_FLUSH			(1 << 4)
-#define R600_CONTEXT_VTX_FLUSH			(1 << 5)
-#define R600_CONTEXT_STREAMOUT_FLUSH		(1 << 6)
-#define R600_CONTEXT_WAIT_IDLE			(1 << 7)
-#define R600_CONTEXT_FLUSH_AND_INV		(1 << 8)
-#define R600_CONTEXT_HTILE_ERRATA		(1 << 9)
-#define R600_CONTEXT_FLUSH_AND_INV_CB_META	(1 << 10)
+#define R600_CONTEXT_INVAL_READ_CACHES		(1 << 0)
+#define R600_CONTEXT_STREAMOUT_FLUSH		(1 << 1)
+#define R600_CONTEXT_WAIT_IDLE			(1 << 2)
+#define R600_CONTEXT_FLUSH_AND_INV		(1 << 3)
+#define R600_CONTEXT_FLUSH_AND_INV_CB_META	(1 << 4)
 
 struct r600_context;
 struct r600_screen;

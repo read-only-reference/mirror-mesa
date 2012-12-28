@@ -351,20 +351,16 @@ lp_build_sample_wrap_linear(struct lp_build_sample_context *bld,
       }
 
    case PIPE_TEX_WRAP_CLAMP_TO_BORDER:
-      {
-         LLVMValueRef min;
-         if (bld->static_state->normalized_coords) {
-            /* scale coord to length */
-            coord = lp_build_mul(coord_bld, coord, length_f);
-         }
-         /* was: clamp to [-0.5, length + 0.5], then sub 0.5 */
-         coord = lp_build_sub(coord_bld, coord, half);
-         min = lp_build_const_vec(bld->gallivm, coord_bld->type, -1.0F);
-         coord = lp_build_clamp(coord_bld, coord, min, length_f);
-         /* convert to int, compute lerp weight */
-         lp_build_ifloor_fract(coord_bld, coord, &coord0, &weight);
-         coord1 = lp_build_add(int_coord_bld, coord0, int_coord_bld->one);
+      if (bld->static_state->normalized_coords) {
+         /* scale coord to length */
+         coord = lp_build_mul(coord_bld, coord, length_f);
       }
+      /* was: clamp to [-0.5, length + 0.5], then sub 0.5 */
+      /* can skip clamp (though might not work for very large coord values */
+      coord = lp_build_sub(coord_bld, coord, half);
+      /* convert to int, compute lerp weight */
+      lp_build_ifloor_fract(coord_bld, coord, &coord0, &weight);
+      coord1 = lp_build_add(int_coord_bld, coord0, int_coord_bld->one);
       break;
 
    case PIPE_TEX_WRAP_MIRROR_REPEAT:
@@ -438,9 +434,9 @@ lp_build_sample_wrap_linear(struct lp_build_sample_context *bld,
          }
 
          /* was: clamp to [-0.5, length + 0.5] then sub 0.5 */
-         /* skip -0.5 clamp (always positive), do sub first */
+         /* skip clamp - always positive, and other side
+            only potentially matters for very large coords */
          coord = lp_build_sub(coord_bld, coord, half);
-         coord = lp_build_min(coord_bld, coord, length_f);
 
          /* convert to int, compute lerp weight */
          lp_build_ifloor_fract(coord_bld, coord, &coord0, &weight);
@@ -514,22 +510,12 @@ lp_build_sample_wrap_nearest(struct lp_build_sample_context *bld,
       break;
 
    case PIPE_TEX_WRAP_CLAMP_TO_BORDER:
-      /* Note: this is the same as CLAMP_TO_EDGE, except min = -1 */
-      {
-         LLVMValueRef min, max;
-
-         if (bld->static_state->normalized_coords) {
-            /* scale coord to length */
-            coord = lp_build_mul(coord_bld, coord, length_f);
-         }
-
-         icoord = lp_build_ifloor(coord_bld, coord);
-
-         /* clamp to [-1, length] */
-         min = lp_build_negate(int_coord_bld, int_coord_bld->one);
-         max = length;
-         icoord = lp_build_clamp(int_coord_bld, icoord, min, max);
+      if (bld->static_state->normalized_coords) {
+         /* scale coord to length */
+         coord = lp_build_mul(coord_bld, coord, length_f);
       }
+      /* no clamp necessary, border masking will handle this */
+      icoord = lp_build_ifloor(coord_bld, coord);
       break;
 
    case PIPE_TEX_WRAP_MIRROR_REPEAT:
@@ -573,9 +559,6 @@ lp_build_sample_wrap_nearest(struct lp_build_sample_context *bld,
 
       /* itrunc == ifloor here */
       icoord = lp_build_itrunc(coord_bld, coord);
-
-      /* clamp to [0, length] */
-      icoord = lp_build_min(int_coord_bld, icoord, length);
       break;
 
    default:
@@ -990,6 +973,27 @@ lp_build_sample_mipmap(struct lp_build_sample_context *bld,
    }
 }
 
+
+/**
+ * Clamp layer coord to valid values.
+ */
+static LLVMValueRef
+lp_build_layer_coord(struct lp_build_sample_context *bld,
+                     unsigned unit,
+                     LLVMValueRef layer)
+{
+   LLVMValueRef maxlayer;
+
+   maxlayer = bld->dynamic_state->depth(bld->dynamic_state,
+                                        bld->gallivm, unit);
+   maxlayer = lp_build_sub(&bld->int_bld, maxlayer, bld->int_bld.one);
+   maxlayer = lp_build_broadcast_scalar(&bld->int_coord_bld, maxlayer);
+   return lp_build_clamp(&bld->int_coord_bld, layer,
+                         bld->int_coord_bld.zero, maxlayer);
+
+}
+
+
 /**
  * Calculate cube face, lod, mip levels.
  */
@@ -1035,23 +1039,13 @@ lp_build_sample_common(struct lp_build_sample_context *bld,
       face_derivs.ddx_ddy[1] = NULL;
       derivs = &face_derivs;
    }
-   else if (target == PIPE_TEXTURE_1D_ARRAY ||
-            target == PIPE_TEXTURE_2D_ARRAY) {
-      LLVMValueRef layer, maxlayer;
-
-      if (target == PIPE_TEXTURE_1D_ARRAY) {
-         layer = *t;
-      }
-      else {
-         layer = *r;
-      }
-      layer = lp_build_iround(&bld->coord_bld, layer);
-      maxlayer = bld->dynamic_state->depth(bld->dynamic_state,
-                                           bld->gallivm, unit);
-      maxlayer = lp_build_sub(&bld->int_bld, maxlayer, bld->int_bld.one);
-      maxlayer = lp_build_broadcast_scalar(&bld->int_coord_bld, maxlayer);
-      *r = lp_build_clamp(&bld->int_coord_bld, layer,
-                          bld->int_coord_bld.zero, maxlayer);
+   else if (target == PIPE_TEXTURE_1D_ARRAY) {
+      *r = lp_build_iround(&bld->coord_bld, *t);
+      *r = lp_build_layer_coord(bld, unit, *r);
+   }
+   else if (target == PIPE_TEXTURE_2D_ARRAY) {
+      *r = lp_build_iround(&bld->coord_bld, *r);
+      *r = lp_build_layer_coord(bld, unit, *r);
    }
 
    /*
@@ -1222,6 +1216,7 @@ lp_build_fetch_texel(struct lp_build_sample_context *bld,
    struct lp_build_context *perquadi_bld = &bld->perquadi_bld;
    struct lp_build_context *int_coord_bld = &bld->int_coord_bld;
    unsigned dims = bld->dims, chan;
+   unsigned target = bld->static_state->target;
    LLVMValueRef size, ilevel;
    LLVMValueRef row_stride_vec = NULL, img_stride_vec = NULL;
    LLVMValueRef x = coords[0], y = coords[1], z = coords[2];
@@ -1243,6 +1238,16 @@ lp_build_fetch_texel(struct lp_build_sample_context *bld,
                                &row_stride_vec, &img_stride_vec);
    lp_build_extract_image_sizes(bld, &bld->int_size_bld, int_coord_bld->type,
                                 size, &width, &height, &depth);
+
+   if (target == PIPE_TEXTURE_1D_ARRAY ||
+       target == PIPE_TEXTURE_2D_ARRAY) {
+      if (target == PIPE_TEXTURE_1D_ARRAY) {
+         z = lp_build_layer_coord(bld, unit, y);
+      }
+      else {
+         z = lp_build_layer_coord(bld, unit, z);
+      }
+   }
 
    /* This is a lot like border sampling */
    if (offsets[0]) {
@@ -1698,12 +1703,17 @@ lp_build_size_query_soa(struct gallivm_state *gallivm,
    LLVMValueRef lod;
    LLVMValueRef size;
    int dims, i;
+   boolean has_array = FALSE;
    struct lp_build_context bld_int_vec;
 
    switch (static_state->target) {
    case PIPE_TEXTURE_1D:
    case PIPE_BUFFER:
       dims = 1;
+      break;
+   case PIPE_TEXTURE_1D_ARRAY:
+      dims = 1;
+      has_array = TRUE;
       break;
    case PIPE_TEXTURE_2D:
    case PIPE_TEXTURE_CUBE:
@@ -1713,7 +1723,10 @@ lp_build_size_query_soa(struct gallivm_state *gallivm,
    case PIPE_TEXTURE_3D:
       dims = 3;
       break;
-
+   case PIPE_TEXTURE_2D_ARRAY:
+      dims = 2;
+      has_array = TRUE;
+      break;
    default:
       assert(0);
       return;
@@ -1753,8 +1766,13 @@ lp_build_size_query_soa(struct gallivm_state *gallivm,
    }
 
    size = lp_build_minify(&bld_int_vec, size, lod);
+ 
+   if (has_array)
+      size = LLVMBuildInsertElement(gallivm->builder, size,
+                                    dynamic_state->depth(dynamic_state, gallivm, unit),
+                                    lp_build_const_int32(gallivm, dims), "");
 
-   for (i=0; i < dims; i++) {
+   for (i = 0; i < dims + (has_array ? 1 : 0); i++) {
       sizes_out[i] = lp_build_extract_broadcast(gallivm, bld_int_vec.type, int_type,
                                                 size,
                                                 lp_build_const_int32(gallivm, i));

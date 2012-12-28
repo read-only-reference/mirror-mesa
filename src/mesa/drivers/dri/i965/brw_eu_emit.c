@@ -236,10 +236,24 @@ void
 brw_set_src0(struct brw_compile *p, struct brw_instruction *insn,
 	     struct brw_reg reg)
 {
+   struct brw_context *brw = p->brw;
+   struct intel_context *intel = &brw->intel;
+
    if (reg.type != BRW_ARCHITECTURE_REGISTER_FILE)
       assert(reg.nr < 128);
 
    gen7_convert_mrf_to_grf(p, &reg);
+
+   if (intel->gen >= 6 && (insn->header.opcode == BRW_OPCODE_SEND ||
+                           insn->header.opcode == BRW_OPCODE_SENDC)) {
+      /* Any source modifiers or regions will be ignored, since this just
+       * identifies the MRF/GRF to start reading the message contents from.
+       * Check for some likely failures.
+       */
+      assert(!reg.negate);
+      assert(!reg.abs);
+      assert(reg.address_mode == BRW_ADDRESS_DIRECT);
+   }
 
    validate_reg(insn, reg);
 
@@ -317,7 +331,8 @@ void brw_set_src1(struct brw_compile *p,
 {
    assert(reg.file != BRW_MESSAGE_REGISTER_FILE);
 
-   assert(reg.nr < 128);
+   if (reg.type != BRW_ARCHITECTURE_REGISTER_FILE)
+      assert(reg.nr < 128);
 
    gen7_convert_mrf_to_grf(p, &reg);
 
@@ -605,6 +620,7 @@ brw_set_dp_read_message(struct brw_compile *p,
 			GLuint msg_type,
 			GLuint target_cache,
 			GLuint msg_length,
+                        bool header_present,
 			GLuint response_length)
 {
    struct brw_context *brw = p->brw;
@@ -623,7 +639,7 @@ brw_set_dp_read_message(struct brw_compile *p,
    }
 
    brw_set_message_descriptor(p, insn, sfid, msg_length, response_length,
-			      true, false);
+			      header_present, false);
 
    if (intel->gen >= 7) {
       insn->bits3.gen7_dp.binding_table_index = binding_table_index;
@@ -1445,6 +1461,24 @@ struct brw_instruction *brw_CONT(struct brw_compile *p)
    return insn;
 }
 
+struct brw_instruction *gen6_HALT(struct brw_compile *p)
+{
+   struct brw_instruction *insn;
+
+   insn = next_insn(p, BRW_OPCODE_HALT);
+   brw_set_dest(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
+   brw_set_src0(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
+   brw_set_src1(p, insn, brw_imm_d(0x0)); /* UIP and JIP, updated later. */
+
+   if (p->compressed) {
+      insn->header.execution_size = BRW_EXECUTE_16;
+   } else {
+      insn->header.compression_control = BRW_COMPRESSION_NONE;
+      insn->header.execution_size = BRW_EXECUTE_8;
+   }
+   return insn;
+}
+
 /* DO/WHILE loop:
  *
  * The DO/WHILE is just an unterminated loop -- break or continue are
@@ -1952,6 +1986,7 @@ brw_oword_block_read_scratch(struct brw_compile *p,
 			      BRW_DATAPORT_READ_MESSAGE_OWORD_BLOCK_READ, /* msg_type */
 			      BRW_DATAPORT_READ_TARGET_RENDER_CACHE,
 			      1, /* msg_length */
+                              true, /* header_present */
 			      rlen);
    }
 }
@@ -2009,6 +2044,7 @@ void brw_oword_block_read(struct brw_compile *p,
 			   BRW_DATAPORT_READ_MESSAGE_OWORD_BLOCK_READ,
 			   BRW_DATAPORT_READ_TARGET_DATA_CACHE,
 			   1, /* msg_length */
+                           true, /* header_present */
 			   1); /* response_length (1 reg, 2 owords!) */
 
    brw_pop_insn_state(p);
@@ -2281,11 +2317,12 @@ brw_find_next_block_end(struct brw_compile *p, int start)
       case BRW_OPCODE_ENDIF:
       case BRW_OPCODE_ELSE:
       case BRW_OPCODE_WHILE:
+      case BRW_OPCODE_HALT:
 	 return ip;
       }
    }
-   assert(!"not reached");
-   return start + 1;
+
+   return 0;
 }
 
 /* There is no DO instruction on gen6, so to find the end of the loop
@@ -2318,7 +2355,7 @@ brw_find_loop_end(struct brw_compile *p, int start)
 }
 
 /* After program generation, go back and update the UIP and JIP of
- * BREAK and CONT instructions to their correct locations.
+ * BREAK, CONT, and HALT instructions to their correct locations.
  */
 void
 brw_set_uip_jip(struct brw_compile *p)
@@ -2342,21 +2379,49 @@ brw_set_uip_jip(struct brw_compile *p)
 	 continue;
       }
 
+      int block_end_ip = brw_find_next_block_end(p, ip);
       switch (insn->header.opcode) {
       case BRW_OPCODE_BREAK:
-	 insn->bits3.break_cont.jip =
-            (brw_find_next_block_end(p, ip) - ip) / scale;
+         assert(block_end_ip != 0);
+	 insn->bits3.break_cont.jip = (block_end_ip - ip) / scale;
 	 /* Gen7 UIP points to WHILE; Gen6 points just after it */
 	 insn->bits3.break_cont.uip =
 	    (brw_find_loop_end(p, ip) - ip +
              (intel->gen == 6 ? 16 : 0)) / scale;
 	 break;
       case BRW_OPCODE_CONTINUE:
-	 insn->bits3.break_cont.jip =
-            (brw_find_next_block_end(p, ip) - ip) / scale;
+         assert(block_end_ip != 0);
+	 insn->bits3.break_cont.jip = (block_end_ip - ip) / scale;
 	 insn->bits3.break_cont.uip =
             (brw_find_loop_end(p, ip) - ip) / scale;
 
+	 assert(insn->bits3.break_cont.uip != 0);
+	 assert(insn->bits3.break_cont.jip != 0);
+
+      case BRW_OPCODE_ENDIF:
+         if (block_end_ip == 0)
+            insn->bits3.break_cont.jip = 2;
+         else
+            insn->bits3.break_cont.jip = (block_end_ip - ip) / scale;
+	 break;
+
+      case BRW_OPCODE_HALT:
+	 /* From the Sandy Bridge PRM (volume 4, part 2, section 8.3.19):
+	  *
+	  *    "In case of the halt instruction not inside any conditional
+	  *     code block, the value of <JIP> and <UIP> should be the
+	  *     same. In case of the halt instruction inside conditional code
+	  *     block, the <UIP> should be the end of the program, and the
+	  *     <JIP> should be end of the most inner conditional code block."
+	  *
+	  * The uip will have already been set by whoever set up the
+	  * instruction.
+	  */
+	 if (block_end_ip == 0) {
+	    insn->bits3.break_cont.jip = insn->bits3.break_cont.uip;
+	 } else {
+	    insn->bits3.break_cont.jip = (block_end_ip - ip) / scale;
+	 }
 	 assert(insn->bits3.break_cont.uip != 0);
 	 assert(insn->bits3.break_cont.jip != 0);
 	 break;
@@ -2429,4 +2494,56 @@ brw_svb_write(struct brw_compile *p,
                             send_commit_msg, /* response_length */
                             0, /* end_of_thread */
                             send_commit_msg); /* send_commit_msg */
+}
+
+/**
+ * This instruction is generated as a single-channel align1 instruction by
+ * both the VS and FS stages when using INTEL_DEBUG=shader_time.
+ *
+ * We can't use the typed atomic op in the FS because that has the execution
+ * mask ANDed with the pixel mask, but we just want to write the one dword for
+ * all the pixels.
+ *
+ * We don't use the SIMD4x2 atomic ops in the VS because want to just write
+ * one u32.  So we use the same untyped atomic write message as the pixel
+ * shader.
+ *
+ * The untyped atomic operation requires a BUFFER surface type with RAW
+ * format, and is only accessible through the legacy DATA_CACHE dataport
+ * messages.
+ */
+void brw_shader_time_add(struct brw_compile *p,
+                         int base_mrf,
+                         uint32_t surf_index)
+{
+   struct intel_context *intel = &p->brw->intel;
+   assert(intel->gen >= 7);
+
+   brw_push_insn_state(p);
+   brw_set_access_mode(p, BRW_ALIGN_1);
+   brw_set_mask_control(p, BRW_MASK_DISABLE);
+   struct brw_instruction *send = brw_next_insn(p, BRW_OPCODE_SEND);
+   brw_pop_insn_state(p);
+
+   /* We use brw_vec1_reg and unmasked because we want to increment the given
+    * offset only once.
+    */
+   brw_set_dest(p, send, brw_vec1_reg(BRW_ARCHITECTURE_REGISTER_FILE,
+                                      BRW_ARF_NULL, 0));
+   brw_set_src0(p, send, brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE,
+                                      base_mrf, 0));
+
+   bool header_present = false;
+   bool eot = false;
+   uint32_t mlen = 2; /* offset, value */
+   uint32_t rlen = 0;
+   brw_set_message_descriptor(p, send,
+                              GEN7_SFID_DATAPORT_DATA_CACHE,
+                              mlen, rlen, header_present, eot);
+
+   send->bits3.ud |= 6 << 14; /* untyped atomic op */
+   send->bits3.ud |= 0 << 13; /* no return data */
+   send->bits3.ud |= 1 << 12; /* SIMD8 mode */
+   send->bits3.ud |= BRW_AOP_ADD << 8;
+   send->bits3.ud |= surf_index << 0;
 }

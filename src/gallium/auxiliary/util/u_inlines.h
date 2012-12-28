@@ -188,14 +188,12 @@ pipe_so_target_reference(struct pipe_stream_output_target **ptr,
 
 static INLINE void
 pipe_surface_reset(struct pipe_context *ctx, struct pipe_surface* ps,
-                   struct pipe_resource *pt, unsigned level, unsigned layer,
-                   unsigned flags)
+                   struct pipe_resource *pt, unsigned level, unsigned layer)
 {
    pipe_resource_reference(&ps->texture, pt);
    ps->format = pt->format;
    ps->width = u_minify(pt->width0, level);
    ps->height = u_minify(pt->height0, level);
-   ps->usage = flags;
    ps->u.tex.level = level;
    ps->u.tex.first_layer = ps->u.tex.last_layer = layer;
    ps->context = ctx;
@@ -203,12 +201,11 @@ pipe_surface_reset(struct pipe_context *ctx, struct pipe_surface* ps,
 
 static INLINE void
 pipe_surface_init(struct pipe_context *ctx, struct pipe_surface* ps,
-                  struct pipe_resource *pt, unsigned level, unsigned layer,
-                  unsigned flags)
+                  struct pipe_resource *pt, unsigned level, unsigned layer)
 {
    ps->texture = 0;
    pipe_reference_init(&ps->reference, 1);
-   pipe_surface_reset(ctx, ps, pt, level, layer, flags);
+   pipe_surface_reset(ctx, ps, pt, level, layer);
 }
 
 /* Return true if the surfaces are equal. */
@@ -547,6 +544,26 @@ util_pipe_tex_to_tgsi_tex(enum pipe_texture_target pipe_tex_target,
       return TGSI_TEXTURE_UNKNOWN;
    }
 }
+
+
+static INLINE void
+util_copy_constant_buffer(struct pipe_constant_buffer *dst,
+                          const struct pipe_constant_buffer *src)
+{
+   if (src) {
+      pipe_resource_reference(&dst->buffer, src->buffer);
+      dst->buffer_offset = src->buffer_offset;
+      dst->buffer_size = src->buffer_size;
+      dst->user_buffer = src->user_buffer;
+   }
+   else {
+      pipe_resource_reference(&dst->buffer, NULL);
+      dst->buffer_offset = 0;
+      dst->buffer_size = 0;
+      dst->user_buffer = NULL;
+   }
+}
+
 
 #ifdef __cplusplus
 }

@@ -697,7 +697,6 @@ nv50_blit_set_dst(struct nv50_blitctx *ctx,
    else
       templ.format = format;
 
-   templ.usage = PIPE_USAGE_STREAM;
    templ.u.tex.level = level;
    templ.u.tex.first_layer = templ.u.tex.last_layer = layer;
 
@@ -959,6 +958,7 @@ nv50_blit_3d(struct nv50_context *nv50, const struct pipe_blit_info *info)
       y1 /= fv;
    }
 
+   /* XXX: multiply by 6 for cube arrays ? */
    dz = (float)info->src.box.depth / (float)info->dst.box.depth;
    z = (float)info->src.box.z;
    if (nv50_miptree(src)->layout_3d)

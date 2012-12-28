@@ -66,7 +66,8 @@ static void *r600_buffer_get_transfer(struct pipe_context *ctx,
                                       unsigned usage,
                                       const struct pipe_box *box,
 				      struct pipe_transfer **ptransfer,
-				      void *data, struct r600_resource *staging)
+				      void *data, struct r600_resource *staging,
+				      unsigned offset)
 {
 	struct r600_context *rctx = (struct r600_context*)ctx;
 	struct r600_transfer *transfer = util_slab_alloc(&rctx->pool_transfers);
@@ -77,8 +78,7 @@ static void *r600_buffer_get_transfer(struct pipe_context *ctx,
 	transfer->transfer.box = *box;
 	transfer->transfer.stride = 0;
 	transfer->transfer.layer_stride = 0;
-	transfer->staging = NULL;
-	transfer->offset = 0;
+	transfer->offset = offset;
 	transfer->staging = staging;
 	*ptransfer = &transfer->transfer;
 	return data;
@@ -112,7 +112,7 @@ static void *r600_buffer_transfer_map(struct pipe_context *ctx,
 			/* Create a new one in the same pipe_resource. */
 			/* XXX We probably want a different alignment for buffers and textures. */
 			r600_init_resource(rctx->screen, rbuffer, rbuffer->b.b.width0, 4096,
-					   rbuffer->b.b.bind, rbuffer->b.b.usage);
+					   TRUE, rbuffer->b.b.usage);
 
 			/* We changed the buffer, now we need to bind it where the old one was bound. */
 			/* Vertex buffers. */
@@ -147,18 +147,17 @@ static void *r600_buffer_transfer_map(struct pipe_context *ctx,
 		if (rctx->ws->cs_is_buffer_referenced(rctx->cs, rbuffer->cs_buf, RADEON_USAGE_READWRITE) ||
 		    rctx->ws->buffer_is_busy(rbuffer->buf, RADEON_USAGE_READWRITE)) {
 			/* Do a wait-free write-only transfer using a temporary buffer. */
-			struct r600_resource *staging = (struct r600_resource*)
-				pipe_buffer_create(ctx->screen, PIPE_BIND_VERTEX_BUFFER,
-						   PIPE_USAGE_STAGING,
-						   box->width + (box->x % R600_MAP_BUFFER_ALIGNMENT));
-			data = rctx->ws->buffer_map(staging->cs_buf, rctx->cs, PIPE_TRANSFER_WRITE);
+			unsigned offset;
+			struct r600_resource *staging = NULL;
 
-			if (!data)
-				return NULL;
+			u_upload_alloc(rctx->uploader, 0, box->width + (box->x % R600_MAP_BUFFER_ALIGNMENT),
+				       &offset, (struct pipe_resource**)&staging, (void**)&data);
 
-			data += box->x % R600_MAP_BUFFER_ALIGNMENT;
-			return r600_buffer_get_transfer(ctx, resource, level, usage, box,
-							ptransfer, data, staging);
+			if (staging) {
+				data += box->x % R600_MAP_BUFFER_ALIGNMENT;
+				return r600_buffer_get_transfer(ctx, resource, level, usage, box,
+								ptransfer, data, staging, offset);
+			}
 		}
 	}
 
@@ -169,7 +168,7 @@ static void *r600_buffer_transfer_map(struct pipe_context *ctx,
 	data += box->x;
 
 	return r600_buffer_get_transfer(ctx, resource, level, usage, box,
-					ptransfer, data, NULL);
+					ptransfer, data, NULL, 0);
 }
 
 static void r600_buffer_transfer_unmap(struct pipe_context *pipe,
@@ -180,7 +179,8 @@ static void r600_buffer_transfer_unmap(struct pipe_context *pipe,
 
 	if (rtransfer->staging) {
 		struct pipe_box box;
-		u_box_1d(transfer->box.x % R600_MAP_BUFFER_ALIGNMENT, transfer->box.width, &box);
+		u_box_1d(rtransfer->offset + transfer->box.x % R600_MAP_BUFFER_ALIGNMENT,
+			 transfer->box.width, &box);
 
 		/* Copy the staging buffer into the original one. */
 		r600_copy_buffer(pipe, transfer->resource, transfer->box.x,
@@ -203,7 +203,7 @@ static const struct u_resource_vtbl r600_buffer_vtbl =
 bool r600_init_resource(struct r600_screen *rscreen,
 			struct r600_resource *res,
 			unsigned size, unsigned alignment,
-			unsigned bind, unsigned usage)
+			bool use_reusable_pool, unsigned usage)
 {
 	uint32_t initial_domain, domains;
 
@@ -234,7 +234,9 @@ bool r600_init_resource(struct r600_screen *rscreen,
 		break;
 	}
 
-	res->buf = rscreen->ws->buffer_create(rscreen->ws, size, alignment, bind, initial_domain);
+	res->buf = rscreen->ws->buffer_create(rscreen->ws, size, alignment,
+                                              use_reusable_pool,
+                                              initial_domain);
 	if (!res->buf) {
 		return false;
 	}
@@ -258,7 +260,7 @@ struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 	rbuffer->b.b.screen = screen;
 	rbuffer->b.vtbl = &r600_buffer_vtbl;
 
-	if (!r600_init_resource(rscreen, rbuffer, templ->width0, alignment, templ->bind, templ->usage)) {
+	if (!r600_init_resource(rscreen, rbuffer, templ->width0, alignment, TRUE, templ->usage)) {
 		FREE(rbuffer);
 		return NULL;
 	}

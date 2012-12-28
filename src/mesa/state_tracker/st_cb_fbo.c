@@ -206,7 +206,7 @@ st_renderbuffer_alloc_storage(struct gl_context * ctx,
    if (!strb->texture)
       return FALSE;
 
-   u_surface_default_template(&surf_tmpl, strb->texture, templ.bind);
+   u_surface_default_template(&surf_tmpl, strb->texture);
    strb->surface = pipe->create_surface(pipe,
                                         strb->texture,
                                         &surf_tmpl);
@@ -228,10 +228,10 @@ static void
 st_renderbuffer_delete(struct gl_context *ctx, struct gl_renderbuffer *rb)
 {
    struct st_renderbuffer *strb = st_renderbuffer(rb);
-   struct st_context *st = st_context(ctx);
-   struct pipe_context *pipe = st->pipe;
-
-   pipe_surface_release(pipe, &strb->surface);
+   if (ctx) {
+      struct st_context *st = st_context(ctx);
+      pipe_surface_release(st->pipe, &strb->surface);
+   }
    pipe_resource_reference(&strb->texture, NULL);
    free(strb->data);
    _mesa_delete_renderbuffer(ctx, rb);
@@ -444,7 +444,6 @@ st_render_texture(struct gl_context *ctx,
    memset(&surf_tmpl, 0, sizeof(surf_tmpl));
    surf_tmpl.format = ctx->Color.sRGBEnabled
       ? strb->texture->format : util_format_linear(strb->texture->format);
-   surf_tmpl.usage = PIPE_BIND_RENDER_TARGET;
    surf_tmpl.u.tex.level = strb->rtt_level;
    surf_tmpl.u.tex.first_layer = strb->rtt_face + strb->rtt_slice;
    surf_tmpl.u.tex.last_layer = strb->rtt_face + strb->rtt_slice;

@@ -27,6 +27,7 @@
 #include "pipe/p_shader_tokens.h"
 #include "util/u_blitter.h"
 #include "util/u_format_s3tc.h"
+#include "util/u_memory.h"
 #include "util/u_simple_shaders.h"
 #include "util/u_upload_mgr.h"
 #include "vl/vl_decoder.h"
@@ -184,6 +185,12 @@ static void r600_destroy_context(struct pipe_context *context)
 	if (rctx->uploader) {
 		u_upload_destroy(rctx->uploader);
 	}
+	if (rctx->allocator_so_filled_size) {
+		u_suballocator_destroy(rctx->allocator_so_filled_size);
+	}
+	if (rctx->allocator_fetch_shader) {
+		u_suballocator_destroy(rctx->allocator_fetch_shader);
+	}
 	util_slab_destroy(&rctx->pool_transfers);
 
 	r600_release_command_buffer(&rctx->start_cs_cmd);
@@ -220,7 +227,6 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	rctx->chip_class = rscreen->chip_class;
 	rctx->keep_tiling_flags = rscreen->info.drm_minor >= 12;
 
-	LIST_INITHEAD(&rctx->active_timer_queries);
 	LIST_INITHEAD(&rctx->active_nontimer_queries);
 	LIST_INITHEAD(&rctx->dirty);
 	LIST_INITHEAD(&rctx->enable_list);
@@ -288,6 +294,16 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
                                          PIPE_BIND_INDEX_BUFFER |
                                          PIPE_BIND_CONSTANT_BUFFER);
         if (!rctx->uploader)
+                goto fail;
+
+	rctx->allocator_fetch_shader = u_suballocator_create(&rctx->context, 64 * 1024, 256,
+							     0, PIPE_USAGE_STATIC, FALSE);
+        if (!rctx->allocator_fetch_shader)
+                goto fail;
+
+	rctx->allocator_so_filled_size = u_suballocator_create(&rctx->context, 4096, 4,
+                                                               0, PIPE_USAGE_STATIC, TRUE);
+        if (!rctx->allocator_so_filled_size)
                 goto fail;
 
 	rctx->blitter = util_blitter_create(&rctx->context);
@@ -432,6 +448,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
+	case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
 		return 0;
 
 	/* Stream output. */
@@ -463,7 +480,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 8;
 
 	/* Timer queries, present when the clock frequency is non zero. */
-	case PIPE_CAP_TIMER_QUERY:
+	case PIPE_CAP_QUERY_TIME_ELAPSED:
 		return rscreen->info.r600_clock_crystal_freq != 0;
 	case PIPE_CAP_QUERY_TIMESTAMP:
 		return rscreen->info.drm_minor >= 20 &&
@@ -705,6 +722,12 @@ static void r600_destroy_screen(struct pipe_screen* pscreen)
 		rscreen->ws->buffer_unmap(rscreen->fences.bo->cs_buf);
 		pipe_resource_reference((struct pipe_resource**)&rscreen->fences.bo, NULL);
 	}
+#if R600_TRACE_CS
+	if (rscreen->trace_bo) {
+		rscreen->ws->buffer_unmap(rscreen->trace_bo->cs_buf);
+		pipe_resource_reference((struct pipe_resource**)&rscreen->trace_bo, NULL);
+	}
+#endif
 	pipe_mutex_destroy(rscreen->fences.mutex);
 
 	rscreen->ws->destroy(rscreen->ws);
@@ -1014,7 +1037,29 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 	LIST_INITHEAD(&rscreen->fences.blocks);
 	pipe_mutex_init(rscreen->fences.mutex);
 
+	/* Hyperz is very lockup prone any code that touch related part should be
+	 * carefully tested especialy on r6xx/r7xx Development show that some piglit
+	 * case were triggering lockup quickly such as :
+	 * piglit/bin/depthstencil-render-miplevels 1024 d=s=z24_s8
+	 */
+	rscreen->use_hyperz = debug_get_bool_option("R600_HYPERZ", TRUE);
+	rscreen->use_hyperz = rscreen->info.drm_minor >= 26 ? rscreen->use_hyperz : FALSE;
+
 	rscreen->global_pool = compute_memory_pool_new(rscreen);
+
+#if R600_TRACE_CS
+	rscreen->cs_count = 0;
+	if (rscreen->info.drm_minor >= 28) {
+		rscreen->trace_bo = (struct r600_resource*)pipe_buffer_create(&rscreen->screen,
+										PIPE_BIND_CUSTOM,
+										PIPE_USAGE_STAGING,
+										4096);
+		if (rscreen->trace_bo) {
+			rscreen->trace_ptr = rscreen->ws->buffer_map(rscreen->trace_bo->cs_buf, NULL,
+									PIPE_TRANSFER_UNSYNCHRONIZED);
+		}
+	}
+#endif
 
 	return &rscreen->screen;
 }

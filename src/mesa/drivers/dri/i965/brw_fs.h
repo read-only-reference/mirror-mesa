@@ -121,11 +121,33 @@ public:
       uint32_t u;
       float f;
    } imm;
+
+   fs_reg *reladdr;
 };
 
 static const fs_reg reg_undef;
 static const fs_reg reg_null_f(ARF, BRW_ARF_NULL, BRW_REGISTER_TYPE_F);
 static const fs_reg reg_null_d(ARF, BRW_ARF_NULL, BRW_REGISTER_TYPE_D);
+
+class ip_record : public exec_node {
+public:
+   static void* operator new(size_t size, void *ctx)
+   {
+      void *node;
+
+      node = rzalloc_size(ctx, size);
+      assert(node != NULL);
+
+      return node;
+   }
+
+   ip_record(int ip)
+   {
+      this->ip = ip;
+   }
+
+   int ip;
+};
 
 class fs_inst : public backend_instruction {
 public:
@@ -156,11 +178,17 @@ public:
    bool overwrites_reg(const fs_reg &reg);
    bool is_tex();
    bool is_math();
+   bool is_send_from_grf();
 
    fs_reg dst;
    fs_reg src[3];
    bool saturate;
    int conditional_mod; /**< BRW_CONDITIONAL_* */
+
+   /* Chooses which flag subregister (f0.0 or f0.1) is used for conditional
+    * mod and predication.
+    */
+   uint8_t flag_subreg;
 
    int mlen; /**< SEND message length */
    int base_mrf; /**< First MRF in the SEND message, if mlen is nonzero. */
@@ -172,6 +200,7 @@ public:
    bool shadow_compare;
    bool force_uncompressed;
    bool force_sechalf;
+   bool force_writemask_all;
    uint32_t offset; /* spill/unspill offset */
 
    /** @{
@@ -222,8 +251,11 @@ public:
 
    void swizzle_result(ir_texture *ir, fs_reg orig_val, int sampler);
 
+   bool can_do_source_mods(fs_inst *inst);
+
    fs_inst *emit(fs_inst inst);
    fs_inst *emit(fs_inst *inst);
+   void emit(exec_list list);
 
    fs_inst *emit(enum opcode opcode);
    fs_inst *emit(enum opcode opcode, fs_reg dst);
@@ -258,10 +290,12 @@ public:
 					   fs_inst *end,
 					   fs_reg reg);
 
+   exec_list VARYING_PULL_CONSTANT_LOAD(fs_reg dst, fs_reg surf_index,
+                                        fs_reg offset);
+
    bool run();
    void setup_payload_gen4();
    void setup_payload_gen6();
-   void setup_paramvalues_refs();
    void assign_curb_setup();
    void calculate_urb_setup();
    void assign_urb_setup();
@@ -275,6 +309,7 @@ public:
    void spill_reg(int spill_reg);
    void split_virtual_grfs();
    void compact_virtual_grfs();
+   void move_uniform_array_access_to_pull_constants();
    void setup_pull_constants();
    void calculate_live_intervals();
    bool opt_algebraic();
@@ -292,7 +327,7 @@ public:
    bool remove_dead_constants();
    bool remove_duplicate_mrf_writes();
    bool virtual_grf_interferes(int a, int b);
-   void schedule_instructions();
+   void schedule_instructions(bool post_reg_alloc);
    void fail(const char *msg, ...);
 
    void push_force_uncompressed();
@@ -317,6 +352,7 @@ public:
 			      fs_reg shadow_comp, fs_reg lod, fs_reg lod2);
    fs_inst *emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
 			      fs_reg shadow_comp, fs_reg lod, fs_reg lod2);
+   fs_reg fix_math_operand(fs_reg src);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0, fs_reg src1);
    void emit_minmax(uint32_t conditionalmod, fs_reg dst,
@@ -352,6 +388,12 @@ public:
 
    void emit_color_write(int target, int index, int first_color_mrf);
    void emit_fb_writes();
+
+   void emit_shader_time_begin();
+   void emit_shader_time_end();
+   void emit_shader_time_write(enum shader_time_shader_type type,
+                               fs_reg value);
+
    bool try_rewrite_rhs_to_dst(ir_assignment *ir,
 			       fs_reg dst,
 			       fs_reg src,
@@ -362,8 +404,10 @@ public:
    void resolve_ud_negate(fs_reg *reg);
    void resolve_bool_comparison(ir_rvalue *rvalue, fs_reg *reg);
 
+   fs_reg get_timestamp();
+
    struct brw_reg interp_reg(int location, int channel);
-   int setup_uniform_values(int loc, const glsl_type *type);
+   void setup_uniform_values(ir_variable *ir);
    void setup_builtin_uniform_values(ir_variable *ir);
    int implied_mrf_writes(fs_inst *inst);
 
@@ -372,12 +416,9 @@ public:
 
    const struct gl_fragment_program *fp;
    struct brw_wm_compile *c;
+   unsigned int sanity_param_count;
 
-   /* Delayed setup of c->prog_data.params[] due to realloc of
-    * ParamValues[] during compile.
-    */
-   int param_index[MAX_UNIFORMS * 4];
-   int param_offset[MAX_UNIFORMS * 4];
+   int param_size[MAX_UNIFORMS * 4];
 
    int *virtual_grf_sizes;
    int virtual_grf_count;
@@ -423,6 +464,7 @@ public:
    fs_reg pixel_w;
    fs_reg delta_x[BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT];
    fs_reg delta_y[BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT];
+   fs_reg shader_start_time;
 
    int grf_used;
 
@@ -475,16 +517,32 @@ private:
    void generate_math_gen4(fs_inst *inst,
 			   struct brw_reg dst,
 			   struct brw_reg src);
-   void generate_discard(fs_inst *inst);
    void generate_ddx(fs_inst *inst, struct brw_reg dst, struct brw_reg src);
    void generate_ddy(fs_inst *inst, struct brw_reg dst, struct brw_reg src,
                      bool negate_value);
    void generate_spill(fs_inst *inst, struct brw_reg src);
    void generate_unspill(fs_inst *inst, struct brw_reg dst);
-   void generate_pull_constant_load(fs_inst *inst, struct brw_reg dst,
-				    struct brw_reg index,
-				    struct brw_reg offset);
-   void generate_mov_dispatch_to_flags();
+   void generate_uniform_pull_constant_load(fs_inst *inst, struct brw_reg dst,
+                                            struct brw_reg index,
+                                            struct brw_reg offset);
+   void generate_uniform_pull_constant_load_gen7(fs_inst *inst,
+                                                 struct brw_reg dst,
+                                                 struct brw_reg surf_index,
+                                                 struct brw_reg offset);
+   void generate_varying_pull_constant_load(fs_inst *inst, struct brw_reg dst,
+                                            struct brw_reg index);
+   void generate_varying_pull_constant_load_gen7(fs_inst *inst,
+                                                 struct brw_reg dst,
+                                                 struct brw_reg index,
+                                                 struct brw_reg offset);
+   void generate_mov_dispatch_to_flags(fs_inst *inst);
+   void generate_set_global_offset(fs_inst *inst,
+                                   struct brw_reg dst,
+                                   struct brw_reg src,
+                                   struct brw_reg offset);
+   void generate_discard_jump(fs_inst *inst);
+
+   void patch_discard_jumps_to_fb_writes();
 
    struct brw_context *brw;
    struct intel_context *intel;
@@ -499,6 +557,7 @@ private:
 
    unsigned dispatch_width; /**< 8 or 16 */
 
+   exec_list discard_halt_patches;
    bool dual_source_output;
    void *mem_ctx;
 };

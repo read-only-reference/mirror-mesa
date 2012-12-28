@@ -79,6 +79,8 @@ struct st_context;
 struct gl_uniform_storage;
 struct prog_instruction;
 struct gl_program_parameter_list;
+struct set;
+struct set_entry;
 /*@}*/
 
 
@@ -1593,7 +1595,7 @@ struct gl_array_object
    /**
     * Has this array object been bound?
     */
-   GLboolean _Used;
+   GLboolean EverBound;
 
    /** Vertex attribute arrays */
    struct gl_client_array VertexAttrib[VERT_ATTRIB_MAX];
@@ -1805,6 +1807,18 @@ struct gl_transform_feedback_object
    GLboolean Paused;  /**< Is transform feedback paused? */
    GLboolean EndedAnytime; /**< Has EndTransformFeedback been called
                                 at least once? */
+   GLboolean EverBound; /**< Has this object been bound? */
+
+   /**
+    * GLES: if Active is true, remaining number of primitives which can be
+    * rendered without overflow.  This is necessary to track because GLES
+    * requires us to generate INVALID_OPERATION if a call to glDrawArrays or
+    * glDrawArraysInstanced would overflow transform feedback buffers.
+    * Undefined if Active is false.
+    *
+    * Not tracked for desktop GL since it's unnecessary.
+    */
+   unsigned GlesRemainingPrims;
 
    /** The feedback buffers */
    GLuint BufferNames[MAX_FEEDBACK_BUFFERS];
@@ -1812,8 +1826,19 @@ struct gl_transform_feedback_object
 
    /** Start of feedback data in dest buffer */
    GLintptr Offset[MAX_FEEDBACK_BUFFERS];
-   /** Max data to put into dest buffer (in bytes) */
+
+   /**
+    * Max data to put into dest buffer (in bytes).  Computed based on
+    * RequestedSize and the actual size of the buffer.
+    */
    GLsizeiptr Size[MAX_FEEDBACK_BUFFERS];
+
+   /**
+    * Size that was specified when the buffer was bound.  If the buffer was
+    * bound with glBindBufferBase() or glBindBufferOffsetEXT(), this value is
+    * zero.
+    */
+   GLsizeiptr RequestedSize[MAX_FEEDBACK_BUFFERS];
 };
 
 
@@ -2184,6 +2209,7 @@ struct gl_shader
    struct gl_sl_pragmas Pragmas;
 
    unsigned Version;       /**< GLSL version used for linking */
+   GLboolean IsES;         /**< True if this shader uses GLSL ES */
 
    /**
     * \name Sampler tracking
@@ -2386,6 +2412,7 @@ struct gl_shader_program
    GLchar *InfoLog;
 
    unsigned Version;       /**< GLSL version used for linking */
+   GLboolean IsES;         /**< True if this program uses GLSL ES */
 
    /**
     * Per-stage shaders resulting from the first stage of linking.
@@ -2509,7 +2536,6 @@ struct gl_query_state
 /** Sync object state */
 struct gl_sync_object
 {
-   struct simple_node link;
    GLenum Type;               /**< GL_SYNC_FENCE */
    GLuint Name;               /**< Fence name */
    GLint RefCount;            /**< Reference count */
@@ -2576,7 +2602,7 @@ struct gl_shared_state
    struct _mesa_HashTable *FrameBuffers;
 
    /* GL_ARB_sync */
-   struct simple_node SyncObjects;
+   struct set *SyncObjects;
 
    /** GL_ARB_sampler_objects */
    struct _mesa_HashTable *SamplerObjects;
@@ -2925,6 +2951,17 @@ struct gl_constants
 
    /** GL_ARB_map_buffer_alignment */
    GLuint MinMapBufferAlignment;
+
+   /**
+    * Disable varying packing.  This is out of spec, but potentially useful
+    * for older platforms that supports a limited number of texture
+    * indirections--on these platforms, unpacking the varyings in the fragment
+    * shader increases the number of texture indirections by 1, which might
+    * make some shaders not executable at all.
+    *
+    * Drivers that support transform feedback must set this value to GL_FALSE.
+    */
+   GLboolean DisableVaryingPacking;
 };
 
 
@@ -2939,6 +2976,7 @@ struct gl_extensions
    GLboolean dummy_false; /* Set false by _mesa_init_extensions(). */
    GLboolean ANGLE_texture_compression_dxt;
    GLboolean ARB_ES2_compatibility;
+   GLboolean ARB_ES3_compatibility;
    GLboolean ARB_base_instance;
    GLboolean ARB_blend_func_extended;
    GLboolean ARB_color_buffer_float;
@@ -2974,6 +3012,7 @@ struct gl_extensions
    GLboolean ARB_sync;
    GLboolean ARB_texture_border_clamp;
    GLboolean ARB_texture_buffer_object;
+   GLboolean ARB_texture_buffer_object_rgb32;
    GLboolean ARB_texture_compression_rgtc;
    GLboolean ARB_texture_cube_map;
    GLboolean ARB_texture_cube_map_array;

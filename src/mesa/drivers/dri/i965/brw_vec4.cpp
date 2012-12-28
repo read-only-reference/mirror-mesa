@@ -26,6 +26,7 @@
 
 extern "C" {
 #include "main/macros.h"
+#include "main/shaderobj.h"
 #include "program/prog_print.h"
 #include "program/prog_parameter.h"
 }
@@ -248,6 +249,8 @@ vec4_visitor::implied_mrf_writes(vec4_instruction *inst)
       return 2;
    case VS_OPCODE_SCRATCH_WRITE:
       return 3;
+   case SHADER_OPCODE_SHADER_TIME_ADD:
+      return 0;
    default:
       assert(!"not reached");
       return inst->mlen;
@@ -597,13 +600,92 @@ vec4_visitor::move_push_constants_to_pull_constants()
    pack_uniform_registers();
 }
 
+bool
+vec4_instruction::can_reswizzle_dst(int dst_writemask,
+                                    int swizzle,
+                                    int swizzle_mask)
+{
+   /* If this instruction sets anything not referenced by swizzle, then we'd
+    * totally break it when we reswizzle.
+    */
+   if (dst.writemask & ~swizzle_mask)
+      return false;
+
+   switch (opcode) {
+   case BRW_OPCODE_DP4:
+   case BRW_OPCODE_DP3:
+   case BRW_OPCODE_DP2:
+      return true;
+   default:
+      /* Check if there happens to be no reswizzling required. */
+      for (int c = 0; c < 4; c++) {
+         int bit = 1 << BRW_GET_SWZ(swizzle, c);
+         /* Skip components of the swizzle not used by the dst. */
+         if (!(dst_writemask & (1 << c)))
+            continue;
+
+         /* We don't do the reswizzling yet, so just sanity check that we
+          * don't have to.
+          */
+         if (bit != (1 << c))
+            return false;
+      }
+      return true;
+   }
+}
+
+/**
+ * For any channels in the swizzle's source that were populated by this
+ * instruction, rewrite the instruction to put the appropriate result directly
+ * in those channels.
+ *
+ * e.g. for swizzle=yywx, MUL a.xy b c -> MUL a.yy_x b.yy z.yy_x
+ */
+void
+vec4_instruction::reswizzle_dst(int dst_writemask, int swizzle)
+{
+   int new_writemask = 0;
+
+   switch (opcode) {
+   case BRW_OPCODE_DP4:
+   case BRW_OPCODE_DP3:
+   case BRW_OPCODE_DP2:
+      for (int c = 0; c < 4; c++) {
+         int bit = 1 << BRW_GET_SWZ(swizzle, c);
+         /* Skip components of the swizzle not used by the dst. */
+         if (!(dst_writemask & (1 << c)))
+            continue;
+         /* If we were populating this component, then populate the
+          * corresponding channel of the new dst.
+          */
+         if (dst.writemask & bit)
+            new_writemask |= (1 << c);
+      }
+      dst.writemask = new_writemask;
+      break;
+   default:
+      for (int c = 0; c < 4; c++) {
+         int bit = 1 << BRW_GET_SWZ(swizzle, c);
+         /* Skip components of the swizzle not used by the dst. */
+         if (!(dst_writemask & (1 << c)))
+            continue;
+
+         /* We don't do the reswizzling yet, so just sanity check that we
+          * don't have to.
+          */
+         assert(bit == (1 << c));
+      }
+      break;
+   }
+}
+
 /*
- * Tries to reduce extra MOV instructions by taking GRFs that get just
- * written and then MOVed into an MRF and making the original write of
- * the GRF write directly to the MRF instead.
+ * Tries to reduce extra MOV instructions by taking temporary GRFs that get
+ * just written and then MOVed into another reg and making the original write
+ * of the GRF write directly to the final destination instead.
  */
 bool
-vec4_visitor::opt_compute_to_mrf()
+vec4_visitor::opt_register_coalesce()
 {
    bool progress = false;
    int next_ip = 0;
@@ -617,50 +699,46 @@ vec4_visitor::opt_compute_to_mrf()
       next_ip++;
 
       if (inst->opcode != BRW_OPCODE_MOV ||
+          (inst->dst.file != GRF && inst->dst.file != MRF) ||
 	  inst->predicate ||
-	  inst->dst.file != MRF || inst->src[0].file != GRF ||
+	  inst->src[0].file != GRF ||
 	  inst->dst.type != inst->src[0].type ||
 	  inst->src[0].abs || inst->src[0].negate || inst->src[0].reladdr)
 	 continue;
 
-      int mrf = inst->dst.reg;
+      bool to_mrf = (inst->dst.file == MRF);
 
-      /* Can't compute-to-MRF this GRF if someone else was going to
+      /* Can't coalesce this GRF if someone else was going to
        * read it later.
        */
       if (this->virtual_grf_use[inst->src[0].reg] > ip)
 	 continue;
 
-      /* We need to check interference with the MRF between this
-       * instruction and the earliest instruction involved in writing
-       * the GRF we're eliminating.  To do that, keep track of which
-       * of our source channels we've seen initialized.
+      /* We need to check interference with the final destination between this
+       * instruction and the earliest instruction involved in writing the GRF
+       * we're eliminating.  To do that, keep track of which of our source
+       * channels we've seen initialized.
        */
       bool chans_needed[4] = {false, false, false, false};
       int chans_remaining = 0;
+      int swizzle_mask = 0;
       for (int i = 0; i < 4; i++) {
 	 int chan = BRW_GET_SWZ(inst->src[0].swizzle, i);
 
 	 if (!(inst->dst.writemask & (1 << i)))
 	    continue;
 
-	 /* We don't handle compute-to-MRF across a swizzle.  We would
-	  * need to be able to rewrite instructions above to output
-	  * results to different channels.
-	  */
-	 if (chan != i)
-	    chans_remaining = 5;
+         swizzle_mask |= (1 << chan);
 
 	 if (!chans_needed[chan]) {
 	    chans_needed[chan] = true;
 	    chans_remaining++;
 	 }
       }
-      if (chans_remaining > 4)
-	 continue;
 
-      /* Now walk up the instruction stream trying to see if we can
-       * rewrite everything writing to the GRF into the MRF instead.
+      /* Now walk up the instruction stream trying to see if we can rewrite
+       * everything writing to the temporary to write into the destination
+       * instead.
        */
       vec4_instruction *scan_inst;
       for (scan_inst = (vec4_instruction *)inst->prev;
@@ -669,22 +747,28 @@ vec4_visitor::opt_compute_to_mrf()
 	 if (scan_inst->dst.file == GRF &&
 	     scan_inst->dst.reg == inst->src[0].reg &&
 	     scan_inst->dst.reg_offset == inst->src[0].reg_offset) {
-	    /* Found something writing to the reg we want to turn into
-	     * a compute-to-MRF.
-	     */
+            /* Found something writing to the reg we want to coalesce away. */
+            if (to_mrf) {
+               /* SEND instructions can't have MRF as a destination. */
+               if (scan_inst->mlen)
+                  break;
 
-	    /* SEND instructions can't have MRF as a destination. */
-	    if (scan_inst->mlen)
-	       break;
+               if (intel->gen >= 6) {
+                  /* gen6 math instructions must have the destination be
+                   * GRF, so no compute-to-MRF for them.
+                   */
+                  if (scan_inst->is_math()) {
+                     break;
+                  }
+               }
+            }
 
-	    if (intel->gen >= 6) {
-	       /* gen6 math instructions must have the destination be
-		* GRF, so no compute-to-MRF for them.
-		*/
-	       if (scan_inst->is_math()) {
-		  break;
-	       }
-	    }
+            /* If we can't handle the swizzle, bail. */
+            if (!scan_inst->can_reswizzle_dst(inst->dst.writemask,
+                                              inst->src[0].swizzle,
+                                              swizzle_mask)) {
+               break;
+            }
 
 	    /* Mark which channels we found unconditional writes for. */
 	    if (!scan_inst->predicate) {
@@ -701,9 +785,8 @@ vec4_visitor::opt_compute_to_mrf()
 	       break;
 	 }
 
-	 /* We don't handle flow control here.  Most computation of
-	  * values that end up in MRFs are shortly before the MRF
-	  * write anyway.
+	 /* We don't handle flow control here.  Most computation of values
+	  * that could be coalesced happens just before their use.
 	  */
 	 if (scan_inst->opcode == BRW_OPCODE_DO ||
 	     scan_inst->opcode == BRW_OPCODE_WHILE ||
@@ -712,9 +795,11 @@ vec4_visitor::opt_compute_to_mrf()
 	    break;
 	 }
 
-	 /* You can't read from an MRF, so if someone else reads our
-	  * MRF's source GRF that we wanted to rewrite, that stops us.
-	  */
+         /* You can't read from an MRF, so if someone else reads our MRF's
+          * source GRF that we wanted to rewrite, that stops us.  If it's a
+          * GRF we're trying to coalesce to, we don't actually handle
+          * rewriting sources so bail in that case as well.
+          */
 	 bool interfered = false;
 	 for (int i = 0; i < 3; i++) {
 	    if (scan_inst->src[i].file == GRF &&
@@ -726,40 +811,52 @@ vec4_visitor::opt_compute_to_mrf()
 	 if (interfered)
 	    break;
 
-	 /* If somebody else writes our MRF here, we can't
-	  * compute-to-MRF before that.
-	  */
-	 if (scan_inst->dst.file == MRF && mrf == scan_inst->dst.reg)
+         /* If somebody else writes our destination here, we can't coalesce
+          * before that.
+          */
+         if (scan_inst->dst.file == inst->dst.file &&
+             scan_inst->dst.reg == inst->dst.reg) {
 	    break;
+         }
 
-	 if (scan_inst->mlen > 0) {
-	    /* Found a SEND instruction, which means that there are
-	     * live values in MRFs from base_mrf to base_mrf +
-	     * scan_inst->mlen - 1.  Don't go pushing our MRF write up
-	     * above it.
-	     */
-	    if (mrf >= scan_inst->base_mrf &&
-		mrf < scan_inst->base_mrf + scan_inst->mlen) {
-	       break;
-	    }
-	 }
+         /* Check for reads of the register we're trying to coalesce into.  We
+          * can't go rewriting instructions above that to put some other value
+          * in the register instead.
+          */
+         if (to_mrf && scan_inst->mlen > 0) {
+            if (inst->dst.reg >= scan_inst->base_mrf &&
+                inst->dst.reg < scan_inst->base_mrf + scan_inst->mlen) {
+               break;
+            }
+         } else {
+            for (int i = 0; i < 3; i++) {
+               if (scan_inst->src[i].file == inst->dst.file &&
+                   scan_inst->src[i].reg == inst->dst.reg &&
+                   scan_inst->src[i].reg_offset == inst->src[0].reg_offset) {
+                  interfered = true;
+               }
+            }
+            if (interfered)
+               break;
+         }
       }
 
       if (chans_remaining == 0) {
-	 /* If we've made it here, we have an inst we want to
-	  * compute-to-MRF, and a scan_inst pointing to the earliest
-	  * instruction involved in computing the value.  Now go
-	  * rewrite the instruction stream between the two.
+	 /* If we've made it here, we have an MOV we want to coalesce out, and
+	  * a scan_inst pointing to the earliest instruction involved in
+	  * computing the value.  Now go rewrite the instruction stream
+	  * between the two.
 	  */
 
 	 while (scan_inst != inst) {
 	    if (scan_inst->dst.file == GRF &&
 		scan_inst->dst.reg == inst->src[0].reg &&
 		scan_inst->dst.reg_offset == inst->src[0].reg_offset) {
-	       scan_inst->dst.file = MRF;
-	       scan_inst->dst.reg = mrf;
-	       scan_inst->dst.reg_offset = 0;
-	       scan_inst->dst.writemask &= inst->dst.writemask;
+               scan_inst->reswizzle_dst(inst->dst.writemask,
+                                        inst->src[0].swizzle);
+	       scan_inst->dst.file = inst->dst.file;
+	       scan_inst->dst.reg = inst->dst.reg;
+	       scan_inst->dst.reg_offset = inst->dst.reg_offset;
 	       scan_inst->saturate |= inst->saturate;
 	    }
 	    scan_inst = (vec4_instruction *)scan_inst->next;
@@ -1039,9 +1136,114 @@ vec4_visitor::setup_payload(void)
    this->first_non_payload_grf = reg;
 }
 
+src_reg
+vec4_visitor::get_timestamp()
+{
+   assert(intel->gen >= 7);
+
+   src_reg ts = src_reg(brw_reg(BRW_ARCHITECTURE_REGISTER_FILE,
+                                BRW_ARF_TIMESTAMP,
+                                0,
+                                BRW_REGISTER_TYPE_UD,
+                                BRW_VERTICAL_STRIDE_0,
+                                BRW_WIDTH_4,
+                                BRW_HORIZONTAL_STRIDE_4,
+                                BRW_SWIZZLE_XYZW,
+                                WRITEMASK_XYZW));
+
+   dst_reg dst = dst_reg(this, glsl_type::uvec4_type);
+
+   vec4_instruction *mov = emit(MOV(dst, ts));
+   /* We want to read the 3 fields we care about (mostly field 0, but also 2)
+    * even if it's not enabled in the dispatch.
+    */
+   mov->force_writemask_all = true;
+
+   return src_reg(dst);
+}
+
+void
+vec4_visitor::emit_shader_time_begin()
+{
+   current_annotation = "shader time start";
+   shader_start_time = get_timestamp();
+}
+
+void
+vec4_visitor::emit_shader_time_end()
+{
+   current_annotation = "shader time end";
+   src_reg shader_end_time = get_timestamp();
+
+
+   /* Check that there weren't any timestamp reset events (assuming these
+    * were the only two timestamp reads that happened).
+    */
+   src_reg reset_end = shader_end_time;
+   reset_end.swizzle = BRW_SWIZZLE_ZZZZ;
+   vec4_instruction *test = emit(AND(dst_null_d(), reset_end, src_reg(1u)));
+   test->conditional_mod = BRW_CONDITIONAL_Z;
+
+   emit(IF(BRW_PREDICATE_NORMAL));
+
+   /* Take the current timestamp and get the delta. */
+   shader_start_time.negate = true;
+   dst_reg diff = dst_reg(this, glsl_type::uint_type);
+   emit(ADD(diff, shader_start_time, shader_end_time));
+
+   /* If there were no instructions between the two timestamp gets, the diff
+    * is 2 cycles.  Remove that overhead, so I can forget about that when
+    * trying to determine the time taken for single instructions.
+    */
+   emit(ADD(diff, src_reg(diff), src_reg(-2u)));
+
+   emit_shader_time_write(ST_VS, src_reg(diff));
+   emit_shader_time_write(ST_VS_WRITTEN, src_reg(1u));
+   emit(BRW_OPCODE_ELSE);
+   emit_shader_time_write(ST_VS_RESET, src_reg(1u));
+   emit(BRW_OPCODE_ENDIF);
+}
+
+void
+vec4_visitor::emit_shader_time_write(enum shader_time_shader_type type,
+                                     src_reg value)
+{
+   /* Choose an index in the buffer and set up tracking information for our
+    * printouts.
+    */
+   int shader_time_index = brw->shader_time.num_entries++;
+   assert(shader_time_index <= brw->shader_time.max_entries);
+   brw->shader_time.types[shader_time_index] = type;
+   if (prog) {
+      _mesa_reference_shader_program(ctx,
+                                     &brw->shader_time.programs[shader_time_index],
+                                     prog);
+   }
+
+   int base_mrf = 6;
+
+   dst_reg offset_mrf = dst_reg(MRF, base_mrf);
+   offset_mrf.type = BRW_REGISTER_TYPE_UD;
+   emit(MOV(offset_mrf, src_reg(shader_time_index * 4)));
+
+   dst_reg time_mrf = dst_reg(MRF, base_mrf + 1);
+   time_mrf.type = BRW_REGISTER_TYPE_UD;
+   emit(MOV(time_mrf, src_reg(value)));
+
+   vec4_instruction *inst;
+   inst = emit(SHADER_OPCODE_SHADER_TIME_ADD);
+   inst->base_mrf = base_mrf;
+   inst->mlen = 2;
+}
+
 bool
 vec4_visitor::run()
 {
+   sanity_param_count = vp->Base.Parameters->NumParameters;
+
+   if (INTEL_DEBUG & DEBUG_SHADER_TIME)
+      emit_shader_time_begin();
+
    emit_attribute_fixups();
 
    /* Generate VS IR for main().  (the visitor only descends into
@@ -1052,9 +1254,13 @@ vec4_visitor::run()
    } else {
       emit_vertex_program_code();
    }
+   base_ir = NULL;
 
    if (c->key.userclip_active && !c->key.uses_clip_distance)
       setup_uniform_clipplane_values();
+
+   if (INTEL_DEBUG & DEBUG_SHADER_TIME)
+      emit_shader_time_end();
 
    emit_urb_writes();
 
@@ -1086,7 +1292,7 @@ vec4_visitor::run()
       progress = dead_code_eliminate() || progress;
       progress = opt_copy_propagation() || progress;
       progress = opt_algebraic() || progress;
-      progress = opt_compute_to_mrf() || progress;
+      progress = opt_register_coalesce() || progress;
    } while (progress);
 
 
@@ -1112,6 +1318,13 @@ vec4_visitor::run()
       if (failed)
          break;
    }
+
+   /* If any state parameters were appended, then ParameterValues could have
+    * been realloced, in which case the driver uniform storage set up by
+    * _mesa_associate_uniform_storage() would point to freed memory.  Make
+    * sure that didn't happen.
+    */
+   assert(sanity_param_count == vp->Base.Parameters->NumParameters);
 
    return !failed;
 }
@@ -1158,6 +1371,17 @@ brw_vs_emit(struct brw_context *brw,
       }
    }
 
+   vec4_visitor v(brw, c, prog, shader, mem_ctx);
+   if (!v.run()) {
+      prog->LinkStatus = false;
+      ralloc_strcat(&prog->InfoLog, v.fail_msg);
+      return NULL;
+   }
+
+   vec4_generator g(brw, c, prog, mem_ctx);
+   const unsigned *generated =g.generate_assembly(&v.instructions,
+                                                  final_assembly_size);
+
    if (unlikely(INTEL_DEBUG & DEBUG_PERF) && shader) {
       if (shader->compiled_once) {
          brw_vs_debug_recompile(brw, prog, &c->key);
@@ -1169,15 +1393,7 @@ brw_vs_emit(struct brw_context *brw,
       shader->compiled_once = true;
    }
 
-   vec4_visitor v(brw, c, prog, shader, mem_ctx);
-   if (!v.run()) {
-      prog->LinkStatus = false;
-      ralloc_strcat(&prog->InfoLog, v.fail_msg);
-      return NULL;
-   }
-
-   vec4_generator g(brw, c, prog, mem_ctx);
-   return g.generate_assembly(&v.instructions, final_assembly_size);
+   return generated;
 }
 
 } /* extern "C" */

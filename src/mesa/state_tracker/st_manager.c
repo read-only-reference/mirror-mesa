@@ -224,8 +224,7 @@ st_framebuffer_validate(struct st_framebuffer *stfb,
          continue;
       }
 
-      u_surface_default_template(&surf_tmpl, textures[i],
-                                 PIPE_BIND_RENDER_TARGET);
+      u_surface_default_template(&surf_tmpl, textures[i]);
       ps = st->pipe->create_surface(st->pipe, textures[i], &surf_tmpl);
       if (ps) {
          pipe_surface_reference(&strb->surface, ps);
@@ -285,7 +284,6 @@ st_framebuffer_add_renderbuffer(struct st_framebuffer *stfb,
 {
    struct gl_renderbuffer *rb;
    enum pipe_format format;
-   int samples;
    boolean sw;
 
    if (!stfb->iface)
@@ -313,11 +311,7 @@ st_framebuffer_add_renderbuffer(struct st_framebuffer *stfb,
    if (format == PIPE_FORMAT_NONE)
       return FALSE;
 
-   samples = stfb->iface->visual->samples;
-   if (!samples)
-      samples = st_get_msaa();
-
-   rb = st_new_renderbuffer_fb(format, samples, sw);
+   rb = st_new_renderbuffer_fb(format, stfb->iface->visual->samples, sw);
    if (!rb)
       return FALSE;
 
@@ -398,7 +392,7 @@ st_visual_to_context_mode(const struct st_visual *visual,
                UTIL_FORMAT_COLORSPACE_RGB, 3);
    }
 
-   if (visual->samples) {
+   if (visual->samples > 1) {
       mode->sampleBuffers = 1;
       mode->samples = visual->samples;
    }
@@ -653,8 +647,6 @@ st_api_create_context(struct st_api *stapi, struct st_manager *smapi,
 
    /* need to perform version check */
    if (attribs->major > 1 || attribs->minor > 0) {
-      _mesa_compute_version(st->ctx);
-
       /* Is the actual version less than the requested version?
        */
       if (st->ctx->Version < attribs->major * 10 + attribs->minor) {
@@ -789,7 +781,7 @@ st_manager_flush_frontbuffer(struct st_context *st)
 
    /* never a dummy fb */
    assert(&stfb->Base != _mesa_get_incomplete_framebuffer());
-   stfb->iface->flush_front(stfb->iface, ST_ATTACHMENT_FRONT_LEFT);
+   stfb->iface->flush_front(&st->iface, stfb->iface, ST_ATTACHMENT_FRONT_LEFT);
 }
 
 /**
@@ -797,8 +789,7 @@ st_manager_flush_frontbuffer(struct st_context *st)
  * FIXME: I think this should operate on resources, not surfaces
  */
 struct pipe_surface *
-st_manager_get_egl_image_surface(struct st_context *st,
-                                 void *eglimg, unsigned usage)
+st_manager_get_egl_image_surface(struct st_context *st, void *eglimg)
 {
    struct st_manager *smapi =
       (struct st_manager *) st->iface.st_context_private;
@@ -812,7 +803,7 @@ st_manager_get_egl_image_surface(struct st_context *st,
    if (!smapi->get_egl_image(smapi, eglimg, &stimg))
       return NULL;
 
-   u_surface_default_template(&surf_tmpl, stimg.texture, usage);
+   u_surface_default_template(&surf_tmpl, stimg.texture);
    surf_tmpl.u.tex.level = stimg.level;
    surf_tmpl.u.tex.first_layer = stimg.layer;
    surf_tmpl.u.tex.last_layer = stimg.layer;
@@ -899,7 +890,7 @@ static const struct st_api st_gl_api = {
    ST_PROFILE_OPENGL_ES2_MASK |
 #endif
    0,
-   0,
+   ST_API_FEATURE_MS_VISUALS_MASK,
    st_api_destroy,
    st_api_get_proc_address,
    st_api_create_context,

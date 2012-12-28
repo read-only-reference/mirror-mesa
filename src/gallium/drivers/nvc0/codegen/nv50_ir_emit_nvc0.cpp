@@ -110,7 +110,6 @@ private:
    void emitTEX(const TexInstruction *);
    void emitTEXCSAA(const TexInstruction *);
    void emitTXQ(const TexInstruction *);
-   void emitPIXLD(const TexInstruction *);
 
    void emitQUADOP(const Instruction *, uint8_t qOp, uint8_t laneMask);
 
@@ -648,17 +647,17 @@ CodeEmitterNVC0::emitLogicOp(const Instruction *i, uint8_t subOp)
       if (isLIMM(i->src(1), TYPE_U32)) {
          emitForm_A(i, HEX64(38000000, 00000002));
 
-         if (i->srcExists(2))
+         if (i->flagsDef >= 0)
             code[1] |= 1 << 26;
       } else {
          emitForm_A(i, HEX64(68000000, 00000003));
 
-         if (i->srcExists(2))
+         if (i->flagsDef >= 0)
             code[1] |= 1 << 16;
       }
       code[0] |= subOp << 6;
 
-      if (i->srcExists(2)) // carry
+      if (i->flagsSrc >= 0) // carry
          code[0] |= 1 << 5;
 
       if (i->src(0).mod & Modifier(NV50_IR_MOD_NOT)) code[0] |= 1 << 9;

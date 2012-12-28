@@ -813,6 +813,23 @@ static void tex_fetch_args(
 		emit_data->args[1] = lp_build_emit_fetch(bld_base, emit_data->inst,
 							 0, LP_CHAN_ALL);
 
+	if (inst->Instruction.Opcode == TGSI_OPCODE_TEX2 ||
+		inst->Instruction.Opcode == TGSI_OPCODE_TXB2 ||
+		inst->Instruction.Opcode == TGSI_OPCODE_TXL2) {
+		/* These instructions have additional operand that should be packed
+		 * into the cube coord vector by radeon_llvm_emit_prepare_cube_coords.
+		 * That operand should be passed as a float value in the args array
+		 * right after the coord vector. After packing it's not used anymore,
+		 * that's why arg_count is not increased */
+		emit_data->args[2] = lp_build_emit_fetch(bld_base, inst, 1, 0);
+	}
+
+	if ((inst->Texture.Texture == TGSI_TEXTURE_CUBE ||
+	     inst->Texture.Texture == TGSI_TEXTURE_SHADOWCUBE) &&
+	    inst->Instruction.Opcode != TGSI_OPCODE_TXQ) {
+		radeon_llvm_emit_prepare_cube_coords(bld_base, emit_data, 1);
+	}
+
 	/* Resource */
 	ptr = use_sgpr(bld_base->base.gallivm, SGPR_CONST_PTR_V8I32, SI_SGPR_RESOURCE);
 	offset = lp_build_const_int32(bld_base->base.gallivm,

@@ -70,7 +70,7 @@ void brw_set_predicate_control_flag_value( struct brw_compile *p, GLuint value )
    if (value != 0xff) {
       if (value != p->flag_value) {
 	 brw_push_insn_state(p);
-	 brw_MOV(p, brw_flag_reg(), brw_imm_uw(value));
+	 brw_MOV(p, brw_flag_reg(0, 0), brw_imm_uw(value));
 	 p->flag_value = value;
 	 brw_pop_insn_state(p);
       }
@@ -92,6 +92,12 @@ void brw_set_predicate_inverse(struct brw_compile *p, bool predicate_inverse)
 void brw_set_conditionalmod( struct brw_compile *p, GLuint conditional )
 {
    p->current->header.destreg__conditionalmod = conditional;
+}
+
+void brw_set_flag_reg(struct brw_compile *p, int reg, int subreg)
+{
+   p->current->bits2.da1.flag_reg_nr = reg;
+   p->current->bits2.da1.flag_subreg_nr = subreg;
 }
 
 void brw_set_access_mode( struct brw_compile *p, GLuint access_mode )

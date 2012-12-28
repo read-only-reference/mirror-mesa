@@ -199,14 +199,44 @@ intel_miptree_create(struct intel_context *intel,
    struct intel_mipmap_tree *mt;
    uint32_t tiling = I915_TILING_NONE;
    GLenum base_format;
-   bool wraps_etc1 = false;
+   gl_format tex_format = format;
+   gl_format etc_format = MESA_FORMAT_NONE;
    GLuint total_width, total_height;
 
-   if (format == MESA_FORMAT_ETC1_RGB8) {
+   switch (format) {
+   case MESA_FORMAT_ETC1_RGB8:
       format = MESA_FORMAT_RGBX8888_REV;
-      wraps_etc1 = true;
+      break;
+   case MESA_FORMAT_ETC2_RGB8:
+      format = MESA_FORMAT_RGBX8888_REV;
+      break;
+   case MESA_FORMAT_ETC2_SRGB8:
+   case MESA_FORMAT_ETC2_SRGB8_ALPHA8_EAC:
+   case MESA_FORMAT_ETC2_SRGB8_PUNCHTHROUGH_ALPHA1:
+      format = MESA_FORMAT_SARGB8;
+      break;
+   case MESA_FORMAT_ETC2_RGBA8_EAC:
+   case MESA_FORMAT_ETC2_RGB8_PUNCHTHROUGH_ALPHA1:
+      format = MESA_FORMAT_RGBA8888_REV;
+      break;
+   case MESA_FORMAT_ETC2_R11_EAC:
+      format = MESA_FORMAT_R16;
+      break;
+   case MESA_FORMAT_ETC2_SIGNED_R11_EAC:
+      format = MESA_FORMAT_SIGNED_R16;
+      break;
+   case MESA_FORMAT_ETC2_RG11_EAC:
+      format = MESA_FORMAT_RG1616;
+      break;
+   case MESA_FORMAT_ETC2_SIGNED_RG11_EAC:
+      format = MESA_FORMAT_SIGNED_GR1616;
+      break;
+   default:
+      /* Non ETC1 / ETC2 format */
+      break;
    }
 
+   etc_format = (format != tex_format) ? tex_format : MESA_FORMAT_NONE;
    base_format = _mesa_get_format_base_format(format);
 
    if (intel->use_texture_tiling && !_mesa_is_format_compressed(format)) {
@@ -257,7 +287,8 @@ intel_miptree_create(struct intel_context *intel,
       total_height = ALIGN(total_height, 64);
    }
 
-   mt->wraps_etc1 = wraps_etc1;
+   mt->wraps_etc = (etc_format != MESA_FORMAT_NONE) ? true : false;
+   mt->etc_format = etc_format;
    mt->region = intel_region_alloc(intel->intelScreen,
 				   tiling,
 				   mt->cpp,
@@ -570,15 +601,22 @@ intel_miptree_match_image(struct intel_mipmap_tree *mt,
    GLuint level = intelImage->base.Base.Level;
    int width, height, depth;
 
-   if (target_to_target(image->TexObject->Target) != mt->target)
-      return false;
+   /* glTexImage* choose the texture object based on the target passed in, and
+    * objects can't change targets over their lifetimes, so this should be
+    * true.
+    */
+   assert(target_to_target(image->TexObject->Target) == mt->target);
 
-   if (image->TexFormat != mt->format &&
-       !(image->TexFormat == MESA_FORMAT_S8_Z24 &&
-	 mt->format == MESA_FORMAT_X8_Z24 &&
-	 mt->stencil_mt)) {
+   gl_format mt_format = mt->format;
+   if (mt->format == MESA_FORMAT_X8_Z24 && mt->stencil_mt)
+      mt_format = MESA_FORMAT_S8_Z24;
+   if (mt->format == MESA_FORMAT_Z32_FLOAT && mt->stencil_mt)
+      mt_format = MESA_FORMAT_Z32_FLOAT_X24S8;
+   if (mt->etc_format != MESA_FORMAT_NONE)
+      mt_format = mt->etc_format;
+
+   if (image->TexFormat != mt_format)
       return false;
-   }
 
    intel_miptree_get_dimensions_for_image(image, &width, &height, &depth);
 
@@ -733,6 +771,8 @@ intel_miptree_copy_teximage(struct intel_context *intel,
 			    struct intel_mipmap_tree *dst_mt)
 {
    struct intel_mipmap_tree *src_mt = intelImage->mt;
+   struct intel_texture_object *intel_obj =
+      intel_texture_object(intelImage->base.Base.TexObject);
    int level = intelImage->base.Base.Level;
    int face = intelImage->base.Base.Face;
    GLuint depth = intelImage->base.Base.Depth;
@@ -742,6 +782,7 @@ intel_miptree_copy_teximage(struct intel_context *intel,
    }
 
    intel_miptree_reference(&intelImage->mt, dst_mt);
+   intel_obj->needs_validate = true;
 }
 
 bool
@@ -822,7 +863,7 @@ intel_miptree_alloc_hiz(struct intel_context *intel,
    /* MSAA HiZ surfaces always use IMS layout. */
    mt->hiz_mt = intel_miptree_create(intel,
                                      mt->target,
-                                     MESA_FORMAT_X8_Z24,
+                                     mt->format,
                                      mt->first_level,
                                      mt->last_level,
                                      mt->width0,
@@ -1254,55 +1295,52 @@ intel_miptree_unmap_s8(struct intel_context *intel,
 }
 
 static void
-intel_miptree_map_etc1(struct intel_context *intel,
-                       struct intel_mipmap_tree *mt,
-                       struct intel_miptree_map *map,
-                       unsigned int level,
-                       unsigned int slice)
+intel_miptree_map_etc(struct intel_context *intel,
+                      struct intel_mipmap_tree *mt,
+                      struct intel_miptree_map *map,
+                      unsigned int level,
+                      unsigned int slice)
 {
-   /* For justification of these invariants,
-    * see intel_mipmap_tree:wraps_etc1.
+   /* For justification see intel_mipmap_tree:wraps_etc.
     */
-   assert(mt->wraps_etc1);
-   assert(mt->format == MESA_FORMAT_RGBX8888_REV);
+   assert(mt->wraps_etc);
 
-   /* From the GL_OES_compressed_ETC1_RGB8_texture spec:
-    *   INVALID_OPERATION is generated by CompressedTexSubImage2D,
-    *   TexSubImage2D, or CopyTexSubImage2D if the texture image <level>
-    *   bound to <target> has internal format ETC1_RGB8_OES.
-    *
-    * This implies that intel_miptree_map_etc1() can only be called from
-    * glCompressedTexImage2D, and hence the assertions below hold.
-    */
+   if (mt->etc_format == MESA_FORMAT_ETC1_RGB8) {
+      assert(mt->format == MESA_FORMAT_RGBX8888_REV);
+   }
+
    assert(map->mode & GL_MAP_WRITE_BIT);
    assert(map->mode & GL_MAP_INVALIDATE_RANGE_BIT);
-   assert(map->x == 0);
-   assert(map->y == 0);
 
-   map->stride = _mesa_format_row_stride(MESA_FORMAT_ETC1_RGB8, map->w);
-   map->buffer = malloc(_mesa_format_image_size(MESA_FORMAT_ETC1_RGB8,
+   map->stride = _mesa_format_row_stride(mt->etc_format, map->w);
+   map->buffer = malloc(_mesa_format_image_size(mt->etc_format,
                                                 map->w, map->h, 1));
    map->ptr = map->buffer;
 }
 
 static void
-intel_miptree_unmap_etc1(struct intel_context *intel,
-                         struct intel_mipmap_tree *mt,
-                         struct intel_miptree_map *map,
-                         unsigned int level,
-                         unsigned int slice)
+intel_miptree_unmap_etc(struct intel_context *intel,
+                        struct intel_mipmap_tree *mt,
+                        struct intel_miptree_map *map,
+                        unsigned int level,
+                        unsigned int slice)
 {
    uint32_t image_x;
    uint32_t image_y;
    intel_miptree_get_image_offset(mt, level, slice, &image_x, &image_y);
 
-   uint8_t *xbgr = intel_region_map(intel, mt->region, map->mode)
-                 + image_y * mt->region->pitch * mt->region->cpp
-                 + image_x * mt->region->cpp;
+   uint8_t *dst = intel_region_map(intel, mt->region, map->mode)
+                + image_y * mt->region->pitch * mt->region->cpp
+                + image_x * mt->region->cpp;
 
-   _mesa_etc1_unpack_rgba8888(xbgr, mt->region->pitch * mt->region->cpp,
-                              map->ptr, map->stride,
-                              map->w, map->h);
+   if (mt->etc_format == MESA_FORMAT_ETC1_RGB8)
+      _mesa_etc1_unpack_rgba8888(dst, mt->region->pitch * mt->region->cpp,
+                                 map->ptr, map->stride,
+                                 map->w, map->h);
+   else
+      _mesa_unpack_etc2_format(dst, mt->region->pitch * mt->region->cpp,
+                               map->ptr, map->stride,
+                               map->w, map->h, mt->etc_format);
 
    intel_region_unmap(intel, mt->region);
    free(map->buffer);
@@ -1524,8 +1562,8 @@ intel_miptree_map_singlesample(struct intel_context *intel,
 
    if (mt->format == MESA_FORMAT_S8) {
       intel_miptree_map_s8(intel, mt, map, level, slice);
-   } else if (mt->wraps_etc1) {
-      intel_miptree_map_etc1(intel, mt, map, level, slice);
+   } else if (mt->wraps_etc) {
+      intel_miptree_map_etc(intel, mt, map, level, slice);
    } else if (mt->stencil_mt) {
       intel_miptree_map_depthstencil(intel, mt, map, level, slice);
    } else if (intel->has_llc &&
@@ -1562,8 +1600,8 @@ intel_miptree_unmap_singlesample(struct intel_context *intel,
 
    if (mt->format == MESA_FORMAT_S8) {
       intel_miptree_unmap_s8(intel, mt, map, level, slice);
-   } else if (mt->wraps_etc1) {
-      intel_miptree_unmap_etc1(intel, mt, map, level, slice);
+   } else if (mt->wraps_etc) {
+      intel_miptree_unmap_etc(intel, mt, map, level, slice);
    } else if (mt->stencil_mt) {
       intel_miptree_unmap_depthstencil(intel, mt, map, level, slice);
    } else if (map->bo) {

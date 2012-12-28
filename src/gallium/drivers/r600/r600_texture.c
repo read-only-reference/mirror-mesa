@@ -31,17 +31,37 @@
 #include "util/u_format_s3tc.h"
 #include "util/u_memory.h"
 
+
 /* Copy from a full GPU texture to a transfer's staging one. */
 static void r600_copy_to_staging_texture(struct pipe_context *ctx, struct r600_transfer *rtransfer)
 {
 	struct pipe_transfer *transfer = (struct pipe_transfer*)rtransfer;
-	struct pipe_resource *texture = transfer->resource;
+	struct pipe_resource *dst = &rtransfer->staging->b.b;
+	struct pipe_resource *src = transfer->resource;
 
-	ctx->resource_copy_region(ctx, &rtransfer->staging->b.b,
-				0, 0, 0, 0, texture, transfer->level,
-				&transfer->box);
+	if (src->nr_samples <= 1) {
+		ctx->resource_copy_region(ctx, dst, 0, 0, 0, 0,
+					  src, transfer->level, &transfer->box);
+	} else {
+		/* Resolve the resource. */
+		struct pipe_blit_info blit;
+
+		memset(&blit, 0, sizeof(blit));
+	        blit.src.resource = src;
+	        blit.src.format = src->format;
+	        blit.src.level = transfer->level;
+	        blit.src.box = transfer->box;
+	        blit.dst.resource = dst;
+	        blit.dst.format = dst->format;
+	        blit.dst.box.width = transfer->box.width;
+	        blit.dst.box.height = transfer->box.height;
+	        blit.dst.box.depth = transfer->box.depth;
+	        blit.mask = PIPE_MASK_RGBA;
+	        blit.filter = PIPE_TEX_FILTER_NEAREST;
+
+		ctx->blit(ctx, &blit);
+	}
 }
-
 
 /* Copy from a transfer's staging texture to a full GPU one. */
 static void r600_copy_from_staging_texture(struct pipe_context *ctx, struct r600_transfer *rtransfer)
@@ -304,7 +324,6 @@ static void r600_texture_allocate_fmask(struct r600_screen *rscreen,
 	r600_texture_get_fmask_info(rscreen, rtex,
 				    rtex->resource.b.b.nr_samples, &fmask);
 
-	/* Reserve space for FMASK while converting bits back to bytes. */
 	rtex->fmask_bank_height = fmask.bank_height;
 	rtex->fmask_offset = align(rtex->size, fmask.alignment);
 	rtex->fmask_size = fmask.size;
@@ -374,7 +393,6 @@ r600_texture_create_object(struct pipe_screen *screen,
 			   const struct pipe_resource *base,
 			   unsigned pitch_in_bytes_override,
 			   struct pb_buffer *buf,
-			   boolean alloc_bo,
 			   struct radeon_surface *surface)
 {
 	struct r600_texture *rtex;
@@ -404,7 +422,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 		return NULL;
 	}
 
-	if (base->nr_samples > 1 && !rtex->is_depth && alloc_bo) {
+	if (base->nr_samples > 1 && !rtex->is_depth && !buf) {
 		r600_texture_allocate_cmask(rscreen, rtex);
 		r600_texture_allocate_fmask(rscreen, rtex);
 	}
@@ -418,16 +436,54 @@ r600_texture_create_object(struct pipe_screen *screen,
 	/* Tiled depth textures utilize the non-displayable tile order. */
 	rtex->non_disp_tiling = rtex->is_depth && rtex->surface.level[0].mode >= RADEON_SURF_MODE_1D;
 
+	/* only enable hyperz for PIPE_TEXTURE_2D not for PIPE_TEXTURE_2D_ARRAY
+	 * Thought it might still be interessting to use hyperz for texture
+	 * array without using fast clear features
+	 */
+	rtex->htile = NULL;
+	if (!(base->flags & (R600_RESOURCE_FLAG_TRANSFER | R600_RESOURCE_FLAG_FLUSHED_DEPTH)) &&
+	    util_format_is_depth_or_stencil(base->format) &&
+	    rscreen->use_hyperz &&
+	    base->target == PIPE_TEXTURE_2D &&
+	    rtex->surface.level[0].nblk_x >= 32 &&
+	    rtex->surface.level[0].nblk_y >= 32) {
+		unsigned sw = rtex->surface.level[0].nblk_x * rtex->surface.blk_w;
+		unsigned sh = rtex->surface.level[0].nblk_y * rtex->surface.blk_h;
+		unsigned htile_size;
+		unsigned npipes = rscreen->info.r600_num_tile_pipes;
+
+		/* this alignment and htile size only apply to linear htile buffer */
+		sw = align(sw, 16 << 3);
+		sh = align(sh, npipes << 3);
+		htile_size = (sw >> 3) * (sh >> 3) * 4;
+		/* must be aligned with 2K * npipes */
+		htile_size = align(htile_size, (2 << 10) * npipes);
+
+		rtex->htile = (struct r600_resource*)pipe_buffer_create(&rscreen->screen, PIPE_BIND_CUSTOM,
+									PIPE_USAGE_STATIC, htile_size);
+		if (rtex->htile == NULL) {
+			/* this is not a fatal error as we can still keep rendering
+			 * without htile buffer
+			 */
+			R600_ERR("r600: failed to create bo for htile buffers\n");
+		} else {
+			void *ptr;
+			ptr = rscreen->ws->buffer_map(rtex->htile->cs_buf, NULL, PIPE_TRANSFER_WRITE);
+			memset(ptr, 0x0, htile_size);
+			rscreen->ws->buffer_unmap(rtex->htile->cs_buf);
+		}
+	}
+
 	/* Now create the backing buffer. */
-	if (!buf && alloc_bo) {
+	if (!buf) {
 		unsigned base_align = rtex->surface.bo_alignment;
 		unsigned usage = R600_TEX_IS_TILED(rtex, 0) ? PIPE_USAGE_STATIC : base->usage;
 
-		if (!r600_init_resource(rscreen, resource, rtex->size, base_align, base->bind, usage)) {
+		if (!r600_init_resource(rscreen, resource, rtex->size, base_align, FALSE, usage)) {
 			FREE(rtex);
 			return NULL;
 		}
-	} else if (buf) {
+	} else {
 		/* This is usually the window framebuffer. We want it in VRAM, always. */
 		resource->buf = buf;
 		resource->cs_buf = rscreen->ws->buffer_get_cs_handle(buf);
@@ -506,12 +562,14 @@ struct pipe_resource *r600_texture_create(struct pipe_screen *screen,
 	 * for fast uploads anyway. */
 	if (!(templ->flags & R600_RESOURCE_FLAG_TRANSFER) &&
 	    desc->layout != UTIL_FORMAT_LAYOUT_SUBSAMPLED) {
-		if (!(templ->bind & PIPE_BIND_SCANOUT) &&
-		    templ->usage != PIPE_USAGE_STAGING &&
-		    templ->usage != PIPE_USAGE_STREAM &&
-		    templ->target != PIPE_TEXTURE_1D &&
-		    templ->target != PIPE_TEXTURE_1D_ARRAY &&
-		    templ->height0 > 3) {
+		if (templ->flags & R600_RESOURCE_FLAG_FORCE_TILING) {
+			array_mode = V_038000_ARRAY_2D_TILED_THIN1;
+		} else if (!(templ->bind & PIPE_BIND_SCANOUT) &&
+			   templ->usage != PIPE_USAGE_STAGING &&
+			   templ->usage != PIPE_USAGE_STREAM &&
+			   templ->target != PIPE_TEXTURE_1D &&
+			   templ->target != PIPE_TEXTURE_1D_ARRAY &&
+			   templ->height0 > 3) {
 			array_mode = V_038000_ARRAY_2D_TILED_THIN1;
 		} else if (util_format_is_compressed(templ->format)) {
 			array_mode = V_038000_ARRAY_1D_TILED_THIN1;
@@ -528,7 +586,7 @@ struct pipe_resource *r600_texture_create(struct pipe_screen *screen,
 		return NULL;
 	}
 	return (struct pipe_resource *)r600_texture_create_object(screen, templ,
-								  0, NULL, TRUE, &surface);
+								  0, NULL, &surface);
 }
 
 struct pipe_surface *r600_create_surface_custom(struct pipe_context *pipe,
@@ -538,6 +596,8 @@ struct pipe_surface *r600_create_surface_custom(struct pipe_context *pipe,
 {
 	struct r600_surface *surface = CALLOC_STRUCT(r600_surface);
 
+        assert(templ->u.tex.first_layer <= u_max_layer(texture, templ->u.tex.level));
+        assert(templ->u.tex.last_layer <= u_max_layer(texture, templ->u.tex.level));
 	assert(templ->u.tex.first_layer == templ->u.tex.last_layer);
 	if (surface == NULL)
 		return NULL;
@@ -547,7 +607,6 @@ struct pipe_surface *r600_create_surface_custom(struct pipe_context *pipe,
 	surface->base.format = templ->format;
 	surface->base.width = width;
 	surface->base.height = height;
-	surface->base.usage = templ->usage;
 	surface->base.u = templ->u;
 	return &surface->base;
 }
@@ -613,7 +672,7 @@ struct pipe_resource *r600_texture_from_handle(struct pipe_screen *screen,
 		return NULL;
 	}
 	return (struct pipe_resource *)r600_texture_create_object(screen, templ,
-								  stride, buf, FALSE, &surface);
+								  stride, buf, &surface);
 }
 
 bool r600_init_flushed_depth_texture(struct pipe_context *ctx,
@@ -714,6 +773,13 @@ static void *r600_texture_transfer_map(struct pipe_context *ctx,
 		/* XXX: when discard is true, no need to read back from depth texture
 		*/
 		struct r600_texture *staging_depth;
+
+		assert(rtex->resource.b.b.nr_samples <= 1);
+		if (rtex->resource.b.b.nr_samples > 1) {
+			R600_ERR("mapping MSAA zbuffer unimplemented\n");
+			FREE(trans);
+			return NULL;
+		}
 
 		if (!r600_init_flushed_depth_texture(ctx, texture, &staging_depth)) {
 			R600_ERR("failed to create temporary texture to hold untiled copy\n");

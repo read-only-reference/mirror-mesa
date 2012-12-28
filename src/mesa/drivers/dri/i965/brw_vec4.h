@@ -171,6 +171,7 @@ public:
    src_reg src[3];
 
    bool saturate;
+   bool force_writemask_all;
 
    int conditional_mod; /**< BRW_CONDITIONAL_* */
 
@@ -193,6 +194,8 @@ public:
 
    bool is_tex();
    bool is_math();
+   bool can_reswizzle_dst(int dst_writemask, int swizzle, int swizzle_mask);
+   void reswizzle_dst(int dst_writemask, int swizzle);
 };
 
 /**
@@ -224,6 +227,7 @@ public:
    const struct gl_vertex_program *vp;
    struct brw_vs_compile *c;
    struct brw_vs_prog_data *prog_data;
+   unsigned int sanity_param_count;
 
    char *fail_msg;
    bool failed;
@@ -301,6 +305,8 @@ public:
    int uniform_vector_size[MAX_UNIFORMS];
    int uniforms;
 
+   src_reg shader_start_time;
+
    struct hash_table *variable_ht;
 
    bool run(void);
@@ -308,7 +314,7 @@ public:
 
    int virtual_grf_alloc(int size);
    void setup_uniform_clipplane_values();
-   int setup_uniform_values(int loc, const glsl_type *type);
+   void setup_uniform_values(ir_variable *ir);
    void setup_builtin_uniform_values(ir_variable *ir);
    int setup_attributes(int payload_reg);
    int setup_uniforms(int payload_reg);
@@ -329,7 +335,7 @@ public:
    bool virtual_grf_interferes(int a, int b);
    bool opt_copy_propagation();
    bool opt_algebraic();
-   bool opt_compute_to_mrf();
+   bool opt_register_coalesce();
 
    vec4_instruction *emit(vec4_instruction *inst);
 
@@ -423,6 +429,7 @@ public:
    void emit_math2_gen6(enum opcode opcode, dst_reg dst, src_reg src0, src_reg src1);
    void emit_math2_gen4(enum opcode opcode, dst_reg dst, src_reg src0, src_reg src1);
    void emit_math(enum opcode opcode, dst_reg dst, src_reg src0, src_reg src1);
+   src_reg fix_math_operand(src_reg src);
 
    void swizzle_result(ir_texture *ir, src_reg orig_val, int sampler);
 
@@ -432,6 +439,11 @@ public:
    void emit_generic_urb_slot(dst_reg reg, int vert_result);
    void emit_urb_slot(int mrf, int vert_result);
    void emit_urb_writes(void);
+
+   void emit_shader_time_begin();
+   void emit_shader_time_end();
+   void emit_shader_time_write(enum shader_time_shader_type type,
+                               src_reg value);
 
    src_reg get_scratch_offset(vec4_instruction *inst,
 			      src_reg *reladdr, int reg_offset);
@@ -450,6 +462,8 @@ public:
 
    bool try_emit_sat(ir_expression *ir);
    void resolve_ud_negate(src_reg *reg);
+
+   src_reg get_timestamp();
 
    bool process_move_condition(ir_rvalue *ir);
 

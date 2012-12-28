@@ -602,7 +602,6 @@ llvmpipe_create_surface(struct pipe_context *pipe,
       ps->format = surf_tmpl->format;
       ps->width = u_minify(pt->width0, surf_tmpl->u.tex.level);
       ps->height = u_minify(pt->height0, surf_tmpl->u.tex.level);
-      ps->usage = surf_tmpl->usage;
 
       ps->u.tex.level = surf_tmpl->u.tex.level;
       ps->u.tex.first_layer = surf_tmpl->u.tex.first_layer;
@@ -669,8 +668,12 @@ llvmpipe_transfer_map( struct pipe_context *pipe,
       }
    }
 
-   if (resource == llvmpipe->constants[PIPE_SHADER_FRAGMENT][0])
+   /* Check if we're mapping the current constant buffer */
+   if ((usage & PIPE_TRANSFER_WRITE) &&
+       resource == llvmpipe->constants[PIPE_SHADER_FRAGMENT][0].buffer) {
+      /* constants may have changed */
       llvmpipe->dirty |= LP_NEW_CONSTANTS;
+   }
 
    lpt = CALLOC_STRUCT(llvmpipe_transfer);
    if (!lpt)

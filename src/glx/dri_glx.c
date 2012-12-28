@@ -684,10 +684,14 @@ driCreateDrawable(struct glx_screen *base,
 
 static int64_t
 driSwapBuffers(__GLXDRIdrawable * pdraw, int64_t unused1, int64_t unused2,
-	       int64_t unused3)
+	       int64_t unused3, Bool flush)
 {
    struct dri_screen *psc = (struct dri_screen *) pdraw->psc;
    struct dri_drawable *pdp = (struct dri_drawable *) pdraw;
+
+   if (flush) {
+      glFlush();
+   }
 
    (*psc->core->swapBuffers) (pdp->driDrawable);
    return 0;
@@ -695,10 +699,14 @@ driSwapBuffers(__GLXDRIdrawable * pdraw, int64_t unused1, int64_t unused2,
 
 static void
 driCopySubBuffer(__GLXDRIdrawable * pdraw,
-                 int x, int y, int width, int height)
+                 int x, int y, int width, int height, Bool flush)
 {
    struct dri_drawable *pdp = (struct dri_drawable *) pdraw;
    struct dri_screen *psc = (struct dri_screen *) pdp->base.psc;
+
+   if (flush) {
+      glFlush();
+   }
 
    (*psc->driCopySubBuffer->copySubBuffer) (pdp->driDrawable,
 					    x, y, width, height);
@@ -805,7 +813,6 @@ driCreateScreen(int screen, struct glx_display *priv)
    }
 
    psc->driver = driOpenDriver(driverName);
-   free(driverName);
    if (psc->driver == NULL)
       goto cleanup;
 
@@ -847,10 +854,14 @@ driCreateScreen(int screen, struct glx_display *priv)
    psp->setSwapInterval = driSetSwapInterval;
    psp->getSwapInterval = driGetSwapInterval;
 
+   free(driverName);
+
    return &psc->base;
 
 cleanup:
    CriticalErrorMessageF("failed to load driver: %s\n", driverName);
+
+   free(driverName);
 
    if (psc->driver)
       dlclose(psc->driver);

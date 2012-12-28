@@ -35,8 +35,11 @@ include $(CLEAR_VARS)
 
 LOCAL_MODULE := libmesa_glsl_utils
 
+LOCAL_C_INCLUDES := $(MESA_TOP)/src/glsl
+
 LOCAL_SRC_FILES := \
-	program/hash_table.c \
+	main/hash_table.c \
+	program/prog_hash_table.c \
 	program/symbol_table.c
 
 include $(MESA_COMMON_MK)
@@ -51,8 +54,11 @@ include $(CLEAR_VARS)
 LOCAL_MODULE := libmesa_glsl_utils
 LOCAL_IS_HOST_MODULE := true
 
+LOCAL_C_INCLUDES := $(MESA_TOP)/src/glsl
+
 LOCAL_SRC_FILES := \
-	program/hash_table.c \
+	main/hash_table.c \
+	program/prog_hash_table.c \
 	program/symbol_table.c
 
 include $(MESA_COMMON_MK)

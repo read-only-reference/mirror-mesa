@@ -61,11 +61,52 @@ fs_generator::~fs_generator()
 }
 
 void
+fs_generator::patch_discard_jumps_to_fb_writes()
+{
+   if (intel->gen < 6 || this->discard_halt_patches.is_empty())
+      return;
+
+   /* There is a somewhat strange undocumented requirement of using
+    * HALT, according to the simulator.  If some channel has HALTed to
+    * a particular UIP, then by the end of the program, every channel
+    * must have HALTed to that UIP.  Furthermore, the tracking is a
+    * stack, so you can't do the final halt of a UIP after starting
+    * halting to a new UIP.
+    *
+    * Symptoms of not emitting this instruction on actual hardware
+    * included GPU hangs and sparkly rendering on the piglit discard
+    * tests.
+    */
+   struct brw_instruction *last_halt = gen6_HALT(p);
+   last_halt->bits3.break_cont.uip = 2;
+   last_halt->bits3.break_cont.jip = 2;
+
+   int ip = p->nr_insn;
+
+   foreach_list(node, &this->discard_halt_patches) {
+      ip_record *patch_ip = (ip_record *)node;
+      struct brw_instruction *patch = &p->store[patch_ip->ip];
+
+      assert(patch->header.opcode == BRW_OPCODE_HALT);
+      /* HALT takes a half-instruction distance from the pre-incremented IP. */
+      patch->bits3.break_cont.uip = (ip - patch_ip->ip) * 2;
+   }
+
+   this->discard_halt_patches.make_empty();
+}
+
+void
 fs_generator::generate_fb_write(fs_inst *inst)
 {
    bool eot = inst->eot;
    struct brw_reg implied_header;
    uint32_t msg_control;
+
+   /* Note that the jumps emitted to this point mean that the g0 ->
+    * base_mrf setup must be inside of this function, so that we jump
+    * to a point containing it.
+    */
+   patch_discard_jumps_to_fb_writes();
 
    /* Header is 2 regs, g0 and g1 are the contents. g0 will be implied
     * move, here's g1.
@@ -73,6 +114,17 @@ fs_generator::generate_fb_write(fs_inst *inst)
    brw_push_insn_state(p);
    brw_set_mask_control(p, BRW_MASK_DISABLE);
    brw_set_compression_control(p, BRW_COMPRESSION_NONE);
+
+   if (fp->UsesKill) {
+      struct brw_reg pixel_mask;
+
+      if (intel->gen >= 6)
+         pixel_mask = retype(brw_vec1_grf(1, 7), BRW_REGISTER_TYPE_UW);
+      else
+         pixel_mask = retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_UW);
+
+      brw_MOV(p, pixel_mask, brw_flag_reg(0, 1));
+   }
 
    if (inst->header_present) {
       if (intel->gen >= 6) {
@@ -514,55 +566,20 @@ fs_generator::generate_ddy(fs_inst *inst, struct brw_reg dst, struct brw_reg src
 }
 
 void
-fs_generator::generate_discard(fs_inst *inst)
+fs_generator::generate_discard_jump(fs_inst *inst)
 {
-   struct brw_reg f0 = brw_flag_reg();
+   assert(intel->gen >= 6);
 
-   if (intel->gen >= 6) {
-      struct brw_reg g1 = retype(brw_vec1_grf(1, 7), BRW_REGISTER_TYPE_UW);
-      struct brw_reg some_register;
+   /* This HALT will be patched up at FB write time to point UIP at the end of
+    * the program, and at brw_uip_jip() JIP will be set to the end of the
+    * current block (or the program).
+    */
+   this->discard_halt_patches.push_tail(new(mem_ctx) ip_record(p->nr_insn));
 
-      /* As of gen6, we no longer have the mask register to look at,
-       * so life gets a bit more complicated.
-       */
-
-      /* Load the flag register with all ones. */
-      brw_push_insn_state(p);
-      brw_set_mask_control(p, BRW_MASK_DISABLE);
-      brw_MOV(p, f0, brw_imm_uw(0xffff));
-      brw_pop_insn_state(p);
-
-      /* Do a comparison that should always fail, to produce 0s in the flag
-       * reg where we have active channels.
-       */
-      some_register = retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UW);
-      brw_CMP(p, retype(brw_null_reg(), BRW_REGISTER_TYPE_UD),
-	      BRW_CONDITIONAL_NZ, some_register, some_register);
-
-      /* Undo CMP's whacking of predication*/
-      brw_set_predicate_control(p, BRW_PREDICATE_NONE);
-
-      brw_push_insn_state(p);
-      brw_set_mask_control(p, BRW_MASK_DISABLE);
-      brw_AND(p, g1, f0, g1);
-      brw_pop_insn_state(p);
-   } else {
-      struct brw_reg g0 = retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_UW);
-
-      brw_push_insn_state(p);
-      brw_set_mask_control(p, BRW_MASK_DISABLE);
-      brw_set_compression_control(p, BRW_COMPRESSION_NONE);
-
-      /* Unlike the 965, we have the mask reg, so we just need
-       * somewhere to invert that (containing channels to be disabled)
-       * so it can be ANDed with the mask of pixels still to be
-       * written. Use the flag reg for consistency with gen6+.
-       */
-      brw_NOT(p, f0, brw_mask_reg(1)); /* IMASK */
-      brw_AND(p, g0, f0, g0);
-
-      brw_pop_insn_state(p);
-   }
+   brw_push_insn_state(p);
+   brw_set_mask_control(p, BRW_MASK_DISABLE);
+   gen6_HALT(p);
+   brw_pop_insn_state(p);
 }
 
 void
@@ -608,9 +625,10 @@ fs_generator::generate_unspill(fs_inst *inst, struct brw_reg dst)
 }
 
 void
-fs_generator::generate_pull_constant_load(fs_inst *inst, struct brw_reg dst,
-					struct brw_reg index,
-					struct brw_reg offset)
+fs_generator::generate_uniform_pull_constant_load(fs_inst *inst,
+                                                  struct brw_reg dst,
+                                                  struct brw_reg index,
+                                                  struct brw_reg offset)
 {
    assert(inst->mlen != 0);
 
@@ -647,6 +665,130 @@ fs_generator::generate_pull_constant_load(fs_inst *inst, struct brw_reg dst,
    }
 }
 
+void
+fs_generator::generate_uniform_pull_constant_load_gen7(fs_inst *inst,
+                                                       struct brw_reg dst,
+                                                       struct brw_reg index,
+                                                       struct brw_reg offset)
+{
+   assert(inst->mlen == 0);
+
+   assert(index.file == BRW_IMMEDIATE_VALUE &&
+	  index.type == BRW_REGISTER_TYPE_UD);
+   uint32_t surf_index = index.dw1.ud;
+
+   assert(offset.file == BRW_GENERAL_REGISTER_FILE);
+
+   brw_push_insn_state(p);
+   brw_set_compression_control(p, BRW_COMPRESSION_NONE);
+   brw_set_mask_control(p, BRW_MASK_DISABLE);
+   struct brw_instruction *send = brw_next_insn(p, BRW_OPCODE_SEND);
+   brw_pop_insn_state(p);
+
+   brw_set_dest(p, send, dst);
+   brw_set_src0(p, send, offset);
+   if (intel->gen < 6)
+      send->header.destreg__conditionalmod = inst->base_mrf;
+
+   uint32_t msg_control = BRW_DATAPORT_OWORD_BLOCK_2_OWORDS;
+   uint32_t msg_type = BRW_DATAPORT_READ_MESSAGE_OWORD_BLOCK_READ;
+   bool header_present = true;
+   brw_set_dp_read_message(p, send,
+                           surf_index,
+                           msg_control,
+                           msg_type,
+                           BRW_DATAPORT_READ_TARGET_DATA_CACHE,
+                           1,
+                           header_present,
+                           1);
+}
+
+void
+fs_generator::generate_varying_pull_constant_load(fs_inst *inst,
+                                                  struct brw_reg dst,
+                                                  struct brw_reg index)
+{
+   assert(intel->gen < 7); /* Should use the gen7 variant. */
+   assert(inst->header_present);
+
+   assert(index.file == BRW_IMMEDIATE_VALUE &&
+	  index.type == BRW_REGISTER_TYPE_UD);
+   uint32_t surf_index = index.dw1.ud;
+
+   uint32_t msg_type, msg_control, rlen;
+   if (intel->gen >= 6)
+      msg_type = GEN6_DATAPORT_READ_MESSAGE_DWORD_SCATTERED_READ;
+   else if (intel->gen == 5 || intel->is_g4x)
+      msg_type = G45_DATAPORT_READ_MESSAGE_DWORD_SCATTERED_READ;
+   else
+      msg_type = BRW_DATAPORT_READ_MESSAGE_DWORD_SCATTERED_READ;
+
+   if (dispatch_width == 16) {
+      msg_control = BRW_DATAPORT_DWORD_SCATTERED_BLOCK_16DWORDS;
+      rlen = 2;
+   } else {
+      msg_control = BRW_DATAPORT_DWORD_SCATTERED_BLOCK_8DWORDS;
+      rlen = 1;
+   }
+
+   struct brw_reg header = brw_vec8_grf(0, 0);
+   gen6_resolve_implied_move(p, &header, inst->base_mrf);
+
+   struct brw_instruction *send = brw_next_insn(p, BRW_OPCODE_SEND);
+   brw_set_dest(p, send, dst);
+   brw_set_src0(p, send, header);
+   if (intel->gen < 6)
+      send->header.destreg__conditionalmod = inst->base_mrf;
+   brw_set_dp_read_message(p, send,
+                           surf_index,
+                           msg_control,
+                           msg_type,
+                           BRW_DATAPORT_READ_TARGET_DATA_CACHE,
+                           inst->mlen,
+                           inst->header_present,
+                           rlen);
+}
+
+void
+fs_generator::generate_varying_pull_constant_load_gen7(fs_inst *inst,
+                                                       struct brw_reg dst,
+                                                       struct brw_reg index,
+                                                       struct brw_reg offset)
+{
+   assert(intel->gen >= 7);
+   /* Varying-offset pull constant loads are treated as a normal expression on
+    * gen7, so the fact that it's a send message is hidden at the IR level.
+    */
+   assert(!inst->header_present);
+   assert(!inst->mlen);
+
+   assert(index.file == BRW_IMMEDIATE_VALUE &&
+	  index.type == BRW_REGISTER_TYPE_UD);
+   uint32_t surf_index = index.dw1.ud;
+
+   uint32_t msg_control, rlen, mlen;
+   if (dispatch_width == 16) {
+      msg_control = BRW_DATAPORT_DWORD_SCATTERED_BLOCK_16DWORDS;
+      mlen = rlen = 2;
+   } else {
+      msg_control = BRW_DATAPORT_DWORD_SCATTERED_BLOCK_8DWORDS;
+      mlen = rlen = 1;
+   }
+
+   struct brw_instruction *send = brw_next_insn(p, BRW_OPCODE_SEND);
+   brw_set_dest(p, send, dst);
+   brw_set_src0(p, send, offset);
+   if (intel->gen < 6)
+      send->header.destreg__conditionalmod = inst->base_mrf;
+   brw_set_dp_read_message(p, send,
+                           surf_index,
+                           msg_control,
+                           GEN7_DATAPORT_DC_DWORD_SCATTERED_READ,
+                           BRW_DATAPORT_READ_TARGET_DATA_CACHE,
+                           mlen,
+                           inst->header_present,
+                           rlen);
+}
 
 /**
  * Cause the current pixel/sample mask (from R1.7 bits 15:0) to be transferred
@@ -655,15 +797,19 @@ fs_generator::generate_pull_constant_load(fs_inst *inst, struct brw_reg dst,
  * Used only on Gen6 and above.
  */
 void
-fs_generator::generate_mov_dispatch_to_flags()
+fs_generator::generate_mov_dispatch_to_flags(fs_inst *inst)
 {
-   struct brw_reg f0 = brw_flag_reg();
-   struct brw_reg g1 = retype(brw_vec1_grf(1, 7), BRW_REGISTER_TYPE_UW);
+   struct brw_reg flags = brw_flag_reg(0, inst->flag_subreg);
+   struct brw_reg dispatch_mask;
 
-   assert (intel->gen >= 6);
+   if (intel->gen >= 6)
+      dispatch_mask = retype(brw_vec1_grf(1, 7), BRW_REGISTER_TYPE_UW);
+   else
+      dispatch_mask = retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_UW);
+
    brw_push_insn_state(p);
    brw_set_mask_control(p, BRW_MASK_DISABLE);
-   brw_MOV(p, f0, g1);
+   brw_MOV(p, flags, dispatch_mask);
    brw_pop_insn_state(p);
 }
 
@@ -742,6 +888,35 @@ brw_reg_from_fs_reg(fs_reg *reg)
       brw_reg = negate(brw_reg);
 
    return brw_reg;
+}
+
+/**
+ * Sets the second dword of a vgrf for gen7+ message setup.
+ *
+ * For setting up gen7 messages in VGRFs, we need to be able to set the second
+ * dword for some payloads where in the MRF world we'd have just used
+ * brw_message_reg().  We don't want to bake it into the send message's code
+ * generation because that means we don't get a chance to schedule the
+ * instructions.
+ */
+void
+fs_generator::generate_set_global_offset(fs_inst *inst,
+                                         struct brw_reg dst,
+                                         struct brw_reg src,
+                                         struct brw_reg value)
+{
+   /* We use a matching src and dst to get the information on how this
+    * instruction works exposed to various optimization passes that would
+    * otherwise treat it as completely overwriting the dst.
+    */
+   assert(src.file == dst.file && src.nr == dst.nr);
+   assert(value.file == BRW_IMMEDIATE_VALUE);
+
+   brw_push_insn_state(p);
+   brw_set_compression_control(p, BRW_COMPRESSION_NONE);
+   brw_set_mask_control(p, BRW_MASK_DISABLE);
+   brw_MOV(p, retype(brw_vec1_reg(dst.file, dst.nr, 2), value.type), value);
+   brw_pop_insn_state(p);
 }
 
 void
@@ -828,7 +1003,9 @@ fs_generator::generate_code(exec_list *instructions)
       brw_set_conditionalmod(p, inst->conditional_mod);
       brw_set_predicate_control(p, inst->predicate);
       brw_set_predicate_inverse(p, inst->predicate_inverse);
+      brw_set_flag_reg(p, 0, inst->flag_subreg);
       brw_set_saturate(p, inst->saturate);
+      brw_set_mask_control(p, inst->force_writemask_all);
 
       if (inst->force_uncompressed || dispatch_width == 8) {
 	 brw_set_compression_control(p, BRW_COMPRESSION_NONE);
@@ -994,9 +1171,6 @@ fs_generator::generate_code(exec_list *instructions)
       case SHADER_OPCODE_TXS:
 	 generate_tex(inst, dst, src[0]);
 	 break;
-      case FS_OPCODE_DISCARD:
-	 generate_discard(inst);
-	 break;
       case FS_OPCODE_DDX:
 	 generate_ddx(inst, dst, src[0]);
 	 break;
@@ -1016,8 +1190,20 @@ fs_generator::generate_code(exec_list *instructions)
 	 generate_unspill(inst, dst);
 	 break;
 
-      case FS_OPCODE_PULL_CONSTANT_LOAD:
-	 generate_pull_constant_load(inst, dst, src[0], src[1]);
+      case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
+	 generate_uniform_pull_constant_load(inst, dst, src[0], src[1]);
+	 break;
+
+      case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7:
+	 generate_uniform_pull_constant_load_gen7(inst, dst, src[0], src[1]);
+	 break;
+
+      case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD:
+	 generate_varying_pull_constant_load(inst, dst, src[0]);
+	 break;
+
+      case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7:
+	 generate_varying_pull_constant_load_gen7(inst, dst, src[0], src[1]);
 	 break;
 
       case FS_OPCODE_FB_WRITE:
@@ -1025,7 +1211,19 @@ fs_generator::generate_code(exec_list *instructions)
 	 break;
 
       case FS_OPCODE_MOV_DISPATCH_TO_FLAGS:
-         generate_mov_dispatch_to_flags();
+         generate_mov_dispatch_to_flags(inst);
+         break;
+
+      case FS_OPCODE_DISCARD_JUMP:
+         generate_discard_jump(inst);
+         break;
+
+      case SHADER_OPCODE_SHADER_TIME_ADD:
+         brw_shader_time_add(p, inst->base_mrf, SURF_INDEX_WM_SHADER_TIME);
+         break;
+
+      case FS_OPCODE_SET_GLOBAL_OFFSET:
+         generate_set_global_offset(inst, dst, src[0], src[1]);
          break;
 
       default:

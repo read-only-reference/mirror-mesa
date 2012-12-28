@@ -98,22 +98,6 @@ static void r600_blitter_end(struct pipe_context *ctx)
         r600_resume_nontimer_queries(rctx);
 }
 
-static unsigned u_max_layer(struct pipe_resource *r, unsigned level)
-{
-	switch (r->target) {
-	case PIPE_TEXTURE_CUBE:
-		return 6 - 1;
-	case PIPE_TEXTURE_3D:
-		return u_minify(r->depth0, level) - 1;
-	case PIPE_TEXTURE_1D_ARRAY:
-	case PIPE_TEXTURE_2D_ARRAY:
-	case PIPE_TEXTURE_CUBE_ARRAY:
-		return r->array_size - 1;
-	default:
-		return 0;
-	}
-}
-
 static unsigned u_max_sample(struct pipe_resource *r)
 {
 	return r->nr_samples ? r->nr_samples - 1 : 0;
@@ -182,7 +166,6 @@ void r600_blit_decompress_depth(struct pipe_context *ctx,
 				surf_tmpl.u.tex.level = level;
 				surf_tmpl.u.tex.first_layer = layer;
 				surf_tmpl.u.tex.last_layer = layer;
-				surf_tmpl.usage = PIPE_BIND_DEPTH_STENCIL;
 
 				zsurf = ctx->create_surface(ctx, &texture->resource.b.b, &surf_tmpl);
 
@@ -190,7 +173,6 @@ void r600_blit_decompress_depth(struct pipe_context *ctx,
 				surf_tmpl.u.tex.level = level;
 				surf_tmpl.u.tex.first_layer = layer;
 				surf_tmpl.u.tex.last_layer = layer;
-				surf_tmpl.usage = PIPE_BIND_RENDER_TARGET;
 				cbsurf = ctx->create_surface(ctx,
 						&flushed_depth_texture->resource.b.b, &surf_tmpl);
 
@@ -231,7 +213,6 @@ static void r600_blit_decompress_depth_in_place(struct r600_context *rctx,
 	rctx->db_misc_state.atom.dirty = true;
 
 	surf_tmpl.format = texture->resource.b.b.format;
-	surf_tmpl.usage = PIPE_BIND_DEPTH_STENCIL;
 
 	for (level = first_level; level <= last_level; level++) {
 		if (!(texture->dirty_level_mask & (1 << level)))
@@ -348,7 +329,6 @@ static void r600_blit_decompress_color(struct pipe_context *ctx,
 			surf_tmpl.u.tex.level = level;
 			surf_tmpl.u.tex.first_layer = layer;
 			surf_tmpl.u.tex.last_layer = layer;
-			surf_tmpl.usage = PIPE_BIND_RENDER_TARGET;
 			cbsurf = ctx->create_surface(ctx, &rtex->resource.b.b, &surf_tmpl);
 
 			r600_blitter_begin(ctx, R600_DECOMPRESS);
@@ -428,6 +408,8 @@ static boolean is_simple_msaa_resolve(const struct pipe_blit_info *info)
 {
 	unsigned dst_width = u_minify(info->dst.resource->width0, info->dst.level);
 	unsigned dst_height = u_minify(info->dst.resource->height0, info->dst.level);
+	struct r600_texture *dst = (struct r600_texture*)info->dst.resource;
+	unsigned dst_tile_mode = dst->surface.level[info->dst.level].mode;
 
 	return info->dst.resource->format == info->src.resource->format &&
 		info->dst.resource->format == info->dst.format &&
@@ -443,7 +425,10 @@ static boolean is_simple_msaa_resolve(const struct pipe_blit_info *info)
 		info->src.box.x == 0 &&
 		info->src.box.y == 0 &&
 		info->src.box.width == dst_width &&
-		info->src.box.height == dst_height;
+		info->src.box.height == dst_height &&
+		/* Dst must be tiled. If it's not, we have to use a temporary
+		 * resource which is tiled. */
+		dst_tile_mode >= RADEON_SURF_MODE_1D;
 }
 
 static void r600_clear(struct pipe_context *ctx, unsigned buffers,
@@ -453,11 +438,39 @@ static void r600_clear(struct pipe_context *ctx, unsigned buffers,
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct pipe_framebuffer_state *fb = &rctx->framebuffer.state;
 
+	/* if hyperz enabled just clear hyperz */
+	if (fb->zsbuf && (buffers & PIPE_CLEAR_DEPTH)) {
+		struct r600_texture *rtex;
+		unsigned level = fb->zsbuf->u.tex.level;
+
+		rtex = (struct r600_texture*)fb->zsbuf->texture;
+
+		/* We can't use hyperz fast clear if each slice of a texture
+		 * array are clear to different value. To simplify code just
+		 * disable fast clear for texture array.
+		 */
+		/* Only use htile for first level */
+		if (rtex->htile && !level && rtex->surface.array_size == 1) {
+			if (rtex->depth_clear != depth) {
+				rtex->depth_clear = depth;
+				rctx->db_state.atom.dirty = true;
+			}
+			rctx->db_misc_state.htile_clear = true;
+			rctx->db_misc_state.atom.dirty = true;
+		}
+	}
+
 	r600_blitter_begin(ctx, R600_CLEAR);
 	util_blitter_clear(rctx->blitter, fb->width, fb->height,
 			   fb->nr_cbufs, buffers, fb->nr_cbufs ? fb->cbufs[0]->format : PIPE_FORMAT_NONE,
 			   color, depth, stencil);
 	r600_blitter_end(ctx);
+
+	/* disable fast clear */
+	if (rctx->db_misc_state.htile_clear) {
+		rctx->db_misc_state.htile_clear = false;
+		rctx->db_misc_state.atom.dirty = true;
+	}
 }
 
 static void r600_clear_render_target(struct pipe_context *ctx,
@@ -721,7 +734,7 @@ static void r600_msaa_color_resolve(struct pipe_context *ctx,
 	templ.nr_samples = 0;
 	templ.usage = PIPE_USAGE_STATIC;
 	templ.bind = PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW;
-	templ.flags = 0;
+	templ.flags = R600_RESOURCE_FLAG_FORCE_TILING; /* dst must not have a linear layout */
 
 	tmp = screen->resource_create(screen, &templ);
 

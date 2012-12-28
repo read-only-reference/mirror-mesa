@@ -29,9 +29,13 @@
 
 #include "util/u_framebuffer.h"
 #include "util/u_inlines.h"
-#include "util/u_memory.h"
 
 #include "pipe/p_state.h"
+
+/* u_memory.h conflicts with st/mesa */
+#ifndef Elements
+#define Elements(x) (sizeof(x)/sizeof((x)[0]))
+#endif
 
 
 #ifdef __cplusplus
@@ -148,17 +152,6 @@ void util_blitter_draw_rectangle(struct blitter_context *blitter,
                                  enum blitter_attrib_type type,
                                  const union pipe_color_union *attrib);
 
-/**
- * Try to do a blit using resource_copy_region. The function calls
- * resource_copy_region if the blit description is compatible with it.
- *
- * It returns TRUE if the blit was done using resource_copy_region.
- *
- * It returns FALSE otherwise and the caller must fall back to a more generic
- * codepath for the blit operation. (e.g. by using u_blitter)
- */
-boolean util_try_blit_via_copy_region(struct pipe_context *ctx,
-                                      const struct pipe_blit_info *blit);
 
 /*
  * These states must be saved before any of the following functions are called:
