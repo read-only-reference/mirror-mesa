@@ -159,6 +159,40 @@
 #define PKT3_PRED_S(x)               (((x) >> 0) & 0x1)
 #define PKT0(index, count) (PKT_TYPE_S(0) | PKT0_BASE_INDEX_S(index) | PKT_COUNT_S(count))
 
+#define PKT3_CP_DMA					0x41
+/* 1. header
+ * 2. SRC_ADDR_LO [31:0]
+ * 3. CP_SYNC [31] | SRC_ADDR_HI [7:0]
+ * 4. DST_ADDR_LO [31:0]
+ * 5. DST_ADDR_HI [7:0]
+ * 6. COMMAND [29:22] | BYTE_COUNT [20:0]
+ */
+#define PKT3_CP_DMA_CP_SYNC       (1 << 31)
+/* COMMAND */
+#define PKT3_CP_DMA_CMD_SRC_SWAP(x) ((x) << 23)
+/* 0 - none
+ * 1 - 8 in 16
+ * 2 - 8 in 32
+ * 3 - 8 in 64
+ */
+#define PKT3_CP_DMA_CMD_DST_SWAP(x) ((x) << 24)
+/* 0 - none
+ * 1 - 8 in 16
+ * 2 - 8 in 32
+ * 3 - 8 in 64
+ */
+#define PKT3_CP_DMA_CMD_SAS       (1 << 26)
+/* 0 - memory
+ * 1 - register
+ */
+#define PKT3_CP_DMA_CMD_DAS       (1 << 27)
+/* 0 - memory
+ * 1 - register
+ */
+#define PKT3_CP_DMA_CMD_SAIC      (1 << 28)
+#define PKT3_CP_DMA_CMD_DAIC      (1 << 29)
+
+
 /* Registers */
 #define R_008490_CP_STRMOUT_CNTL		     0x008490
 #define   S_008490_OFFSET_UPDATE_DONE(x)		(((x) & 0x1) << 0)
@@ -3646,5 +3680,20 @@
 #define SQ_TEX_INST_SAMPLE_C_G_L	0x1D
 #define SQ_TEX_INST_SAMPLE_C_G_LB	0x1E
 #define SQ_TEX_INST_SAMPLE_C_G_LZ	0x1F
+
+/* async DMA packets */
+#define DMA_PACKET(cmd, t, s, n)	((((cmd) & 0xF) << 28) |	\
+					(((t) & 0x1) << 23) |		\
+					(((s) & 0x1) << 22) |		\
+					(((n) & 0xFFFF) << 0))
+/* async DMA Packet types */
+#define DMA_PACKET_WRITE		0x2
+#define DMA_PACKET_COPY			0x3
+#define DMA_PACKET_INDIRECT_BUFFER	0x4
+#define DMA_PACKET_SEMAPHORE		0x5
+#define DMA_PACKET_FENCE		0x6
+#define DMA_PACKET_TRAP			0x7
+#define DMA_PACKET_CONSTANT_FILL	0xd /* 7xx only */
+#define DMA_PACKET_NOP			0xf
 
 #endif

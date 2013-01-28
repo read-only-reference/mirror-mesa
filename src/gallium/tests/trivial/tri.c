@@ -216,7 +216,8 @@ static void init_prog(struct program *p)
 	}
 
 	/* fragment shader */
-	p->fs = util_make_fragment_passthrough_shader(p->pipe);
+	p->fs = util_make_fragment_passthrough_shader(p->pipe,
+                    TGSI_SEMANTIC_COLOR, TGSI_INTERPOLATE_PERSPECTIVE);
 }
 
 static void close_prog(struct program *p)
@@ -266,7 +267,7 @@ static void draw(struct program *p)
 	                        3,  /* verts */
 	                        2); /* attribs/vert */
 
-        p->pipe->flush(p->pipe, NULL);
+        p->pipe->flush(p->pipe, NULL, 0);
 
 	debug_dump_surface_bmp(p->pipe, "result.bmp", p->framebuffer.cbufs[0]);
 }

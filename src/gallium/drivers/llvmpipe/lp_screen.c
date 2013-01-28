@@ -158,8 +158,6 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 0;
    case PIPE_CAP_PRIMITIVE_RESTART:
       return 1;
-   case PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE:
-      return 1;
    case PIPE_CAP_DEPTH_CLIP_DISABLE:
       return 0;
    case PIPE_CAP_SHADER_STENCIL_EXPORT:
@@ -304,10 +302,6 @@ llvmpipe_is_format_supported( struct pipe_screen *_screen,
    if (!format_desc)
       return FALSE;
 
-   /* Z16 support is missing, which breaks the blit */
-   if (format == PIPE_FORMAT_Z16_UNORM)
-      return FALSE;
-
    assert(target == PIPE_BUFFER ||
           target == PIPE_TEXTURE_1D ||
           target == PIPE_TEXTURE_1D_ARRAY ||
@@ -334,6 +328,20 @@ llvmpipe_is_format_supported( struct pipe_screen *_screen,
 
       if (!format_desc->is_array && !format_desc->is_bitmask)
          return FALSE;
+
+      /*
+       * XXX refuse formats known to crash in generate_unswizzled_blend().
+       * These include all 3-channel 24bit RGB8 variants, plus 48bit
+       * (except those using floats) 3-channel RGB16 variants (the latter
+       * seems to be more of a llvm bug though).
+       * The mesa state tracker only seems to use these for SINT/UINT formats.
+       */
+      if (format_desc->is_array && format_desc->nr_channels == 3) {
+         if (format_desc->block.bits == 24 || (format_desc->block.bits == 48 &&
+               !util_format_is_float(format))) {
+            return FALSE;
+         }
+      }
    }
 
    if (bind & PIPE_BIND_DISPLAY_TARGET) {
@@ -348,9 +356,14 @@ llvmpipe_is_format_supported( struct pipe_screen *_screen,
       if (format_desc->colorspace != UTIL_FORMAT_COLORSPACE_ZS)
          return FALSE;
 
-      /* FIXME: Temporary restriction. See lp_state_fs.c. */
-      if (format_desc->block.bits != 32)
+      /* TODO: Support Z32_FLOAT_S8X24_UINT. See lp_bld_depth.c. */
+      if (format_desc->block.bits > 32)
          return FALSE;
+
+      /* TODO: Support stencil-only formats */
+      if (format_desc->swizzle[0] == UTIL_FORMAT_SWIZZLE_NONE) {
+         return FALSE;
+      }
    }
 
    if (format_desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
@@ -358,13 +371,9 @@ llvmpipe_is_format_supported( struct pipe_screen *_screen,
    }
 
    /*
-    * Everything can be supported by u_format.
+    * Everything can be supported by u_format
+    * (those without fetch_rgba_float might be not but shouldn't hit that)
     */
-
-   if (format_desc->colorspace != UTIL_FORMAT_COLORSPACE_ZS &&
-       !format_desc->fetch_rgba_float) {
-      return FALSE;
-   }
 
    return TRUE;
 }

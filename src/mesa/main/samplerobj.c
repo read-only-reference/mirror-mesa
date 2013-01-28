@@ -110,7 +110,7 @@ _mesa_reference_sampler_object_(struct gl_context *ctx,
 /**
  * Initialize the fields of the given sampler object.
  */
-void
+static void
 _mesa_init_sampler_object(struct gl_sampler_object *sampObj, GLuint name)
 {
    sampObj->Name = name;
@@ -151,7 +151,7 @@ _mesa_new_sampler_object(struct gl_context *ctx, GLuint name)
 /**
  * Fallback for ctx->Driver.DeleteSamplerObject();
  */
-void
+static void
 _mesa_delete_sampler_object(struct gl_context *ctx,
                             struct gl_sampler_object *sampObj)
 {
@@ -165,8 +165,6 @@ _mesa_GenSamplers(GLsizei count, GLuint *samplers)
    GET_CURRENT_CONTEXT(ctx);
    GLuint first;
    GLint i;
-
-   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx, "glGenSamplers(%d)\n", count);
@@ -197,7 +195,6 @@ _mesa_DeleteSamplers(GLsizei count, const GLuint *samplers)
    GET_CURRENT_CONTEXT(ctx);
    GLsizei i;
 
-   ASSERT_OUTSIDE_BEGIN_END(ctx);
    FLUSH_VERTICES(ctx, 0);
 
    if (count < 0) {
@@ -691,8 +688,6 @@ _mesa_SamplerParameterf(GLuint sampler, GLenum pname, GLfloat param)
    GLuint res;
    GET_CURRENT_CONTEXT(ctx);
 
-   ASSERT_OUTSIDE_BEGIN_END(ctx);
-
    sampObj = _mesa_lookup_samplerobj(ctx, sampler);
    if (!sampObj) {
       _mesa_error(ctx, GL_INVALID_VALUE, "glSamplerParameterf(sampler %u)",
@@ -868,8 +863,6 @@ _mesa_SamplerParameterfv(GLuint sampler, GLenum pname, const GLfloat *params)
    struct gl_sampler_object *sampObj;
    GLuint res;
    GET_CURRENT_CONTEXT(ctx);
-
-   ASSERT_OUTSIDE_BEGIN_END(ctx);
 
    sampObj = _mesa_lookup_samplerobj(ctx, sampler);
    if (!sampObj) {
@@ -1440,28 +1433,4 @@ _mesa_init_sampler_object_functions(struct dd_function_table *driver)
 {
    driver->NewSamplerObject = _mesa_new_sampler_object;
    driver->DeleteSamplerObject = _mesa_delete_sampler_object;
-}
-
-
-void
-_mesa_init_sampler_object_dispatch(const struct gl_context *ctx,
-                                   struct _glapi_table *disp)
-{
-   SET_GenSamplers(disp, _mesa_GenSamplers);
-   SET_DeleteSamplers(disp, _mesa_DeleteSamplers);
-   SET_IsSampler(disp, _mesa_IsSampler);
-   SET_BindSampler(disp, _mesa_BindSampler);
-   SET_SamplerParameteri(disp, _mesa_SamplerParameteri);
-   SET_SamplerParameterf(disp, _mesa_SamplerParameterf);
-   SET_SamplerParameteriv(disp, _mesa_SamplerParameteriv);
-   SET_SamplerParameterfv(disp, _mesa_SamplerParameterfv);
-   SET_GetSamplerParameteriv(disp, _mesa_GetSamplerParameteriv);
-   SET_GetSamplerParameterfv(disp, _mesa_GetSamplerParameterfv);
-
-   if (_mesa_is_desktop_gl(ctx)) {
-      SET_SamplerParameterIiv(disp, _mesa_SamplerParameterIiv);
-      SET_SamplerParameterIuiv(disp, _mesa_SamplerParameterIuiv);
-      SET_GetSamplerParameterIiv(disp, _mesa_GetSamplerParameterIiv);
-      SET_GetSamplerParameterIuiv(disp, _mesa_GetSamplerParameterIuiv);
-   }
 }

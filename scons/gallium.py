@@ -361,8 +361,7 @@ def generate(env):
                 ccflags += [
                     '-mstackrealign', # ensure stack is aligned
                     '-march=i586', # Haiku target is Pentium
-                    '-mtune=i686', # use i686 where we can
-                    '-mmmx' # use mmx math where we can
+                    '-mtune=i686' # use i686 where we can
                 ]
         if env['machine'] == 'x86_64':
             ccflags += ['-m64']
@@ -400,7 +399,6 @@ def generate(env):
             ccflags += [
               '/Od', # disable optimizations
               '/Oi', # enable intrinsic functions
-              '/Oy-', # disable frame pointer omission
             ]
         else:
             ccflags += [
@@ -412,6 +410,7 @@ def generate(env):
             ]
         else:
             ccflags += [
+                '/Oy-', # disable frame pointer omission
                 '/GL-', # disable whole program optimization
             ]
         ccflags += [

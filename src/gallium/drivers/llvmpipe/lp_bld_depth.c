@@ -299,45 +299,44 @@ lp_build_stencil_op(struct lp_build_context *bld,
 
 
 /**
- * Return a type appropriate for depth/stencil testing.
+ * Return a type that matches the depth/stencil format.
  */
 struct lp_type
 lp_depth_type(const struct util_format_description *format_desc,
               unsigned length)
 {
    struct lp_type type;
-   unsigned swizzle;
+   unsigned z_swizzle;
 
    assert(format_desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS);
    assert(format_desc->block.width == 1);
    assert(format_desc->block.height == 1);
 
-   swizzle = format_desc->swizzle[0];
-   assert(swizzle < 4);
-
    memset(&type, 0, sizeof type);
    type.width = format_desc->block.bits;
 
-   if(format_desc->channel[swizzle].type == UTIL_FORMAT_TYPE_FLOAT) {
-      type.floating = TRUE;
-      assert(swizzle == 0);
-      assert(format_desc->channel[swizzle].size == format_desc->block.bits);
-   }
-   else if(format_desc->channel[swizzle].type == UTIL_FORMAT_TYPE_UNSIGNED) {
-      assert(format_desc->block.bits <= 32);
-      assert(format_desc->channel[swizzle].normalized);
-      if (format_desc->channel[swizzle].size < format_desc->block.bits) {
-         /* Prefer signed integers when possible, as SSE has less support
-          * for unsigned comparison;
-          */
-         type.sign = TRUE;
+   z_swizzle = format_desc->swizzle[0];
+   if (z_swizzle < 4) {
+      if (format_desc->channel[z_swizzle].type == UTIL_FORMAT_TYPE_FLOAT) {
+         type.floating = TRUE;
+         assert(z_swizzle == 0);
+         assert(format_desc->channel[z_swizzle].size == format_desc->block.bits);
       }
+      else if(format_desc->channel[z_swizzle].type == UTIL_FORMAT_TYPE_UNSIGNED) {
+         assert(format_desc->block.bits <= 32);
+         assert(format_desc->channel[z_swizzle].normalized);
+         if (format_desc->channel[z_swizzle].size < format_desc->block.bits) {
+            /* Prefer signed integers when possible, as SSE has less support
+             * for unsigned comparison;
+             */
+            type.sign = TRUE;
+         }
+      }
+      else
+         assert(0);
    }
-   else
-      assert(0);
 
-   assert(type.width <= length);
-   type.length = length / type.width;
+   type.length = length;
 
    return type;
 }
@@ -546,6 +545,7 @@ lp_build_depth_stencil_test(struct gallivm_state *gallivm,
                             boolean do_branch)
 {
    LLVMBuilderRef builder = gallivm->builder;
+   struct lp_type zs_type;
    struct lp_type z_type;
    struct lp_build_context z_bld;
    struct lp_build_context s_bld;
@@ -573,11 +573,14 @@ lp_build_depth_stencil_test(struct gallivm_state *gallivm,
       assert(z_src_type.norm);
    }
 
-   /* Pick the depth type. */
-   z_type = lp_depth_type(format_desc, z_src_type.width*z_src_type.length);
+   /* Pick the type matching the depth-stencil format. */
+   zs_type = lp_depth_type(format_desc, z_src_type.length);
 
-   /* FIXME: Cope with a depth test type with a different bit width. */
-   assert(z_type.width == z_src_type.width);
+   /* Pick the intermediate type for depth operations. */
+   z_type = zs_type;
+   /* FIXME: Cope with a depth test type with higher bit width. */
+   assert(zs_type.width <= z_src_type.width);
+   z_type.width = z_src_type.width;
    assert(z_type.length == z_src_type.length);
 
    /* FIXME: for non-float depth/stencil might generate better code
@@ -601,24 +604,29 @@ lp_build_depth_stencil_test(struct gallivm_state *gallivm,
       assert(format_desc->block.height == 1);
 
       if (stencil[0].enabled) {
-         assert(format_desc->format == PIPE_FORMAT_Z24_UNORM_S8_UINT ||
-                format_desc->format == PIPE_FORMAT_S8_UINT_Z24_UNORM);
+         assert(s_swizzle < 4);
+         assert(format_desc->channel[s_swizzle].type == UTIL_FORMAT_TYPE_UNSIGNED);
+         assert(format_desc->channel[s_swizzle].pure_integer);
+         assert(!format_desc->channel[s_swizzle].normalized);
+         assert(format_desc->channel[s_swizzle].size == 8);
       }
 
-      assert(z_swizzle < 4);
-      assert(format_desc->block.bits == z_type.width);
-      if (z_type.floating) {
-         assert(z_swizzle == 0);
-         assert(format_desc->channel[z_swizzle].type ==
-                UTIL_FORMAT_TYPE_FLOAT);
-         assert(format_desc->channel[z_swizzle].size ==
-                format_desc->block.bits);
-      }
-      else {
-         assert(format_desc->channel[z_swizzle].type ==
-                UTIL_FORMAT_TYPE_UNSIGNED);
-         assert(format_desc->channel[z_swizzle].normalized);
-         assert(!z_type.fixed);
+      if (depth->enabled) {
+         assert(z_swizzle < 4);
+         assert(format_desc->block.bits <= z_type.width);
+         if (z_type.floating) {
+            assert(z_swizzle == 0);
+            assert(format_desc->channel[z_swizzle].type ==
+                   UTIL_FORMAT_TYPE_FLOAT);
+            assert(format_desc->channel[z_swizzle].size ==
+                   format_desc->block.bits);
+         }
+         else {
+            assert(format_desc->channel[z_swizzle].type ==
+                   UTIL_FORMAT_TYPE_UNSIGNED);
+            assert(format_desc->channel[z_swizzle].normalized);
+            assert(!z_type.fixed);
+         }
       }
    }
 
@@ -633,8 +641,12 @@ lp_build_depth_stencil_test(struct gallivm_state *gallivm,
    /* Load current z/stencil value from z/stencil buffer */
    zs_dst_ptr = LLVMBuildBitCast(builder,
                                  zs_dst_ptr,
-                                 LLVMPointerType(z_bld.vec_type, 0), "");
+                                 LLVMPointerType(lp_build_vec_type(gallivm, zs_type), 0), "");
    zs_dst = LLVMBuildLoad(builder, zs_dst_ptr, "");
+   if (format_desc->block.bits < z_type.width) {
+      /* Extend destination ZS values (e.g., when reading from Z16_UNORM) */
+      zs_dst = LLVMBuildZExt(builder, zs_dst, z_bld.vec_type, "");
+   }
 
    lp_build_name(zs_dst, "zs_dst");
 
@@ -850,11 +862,23 @@ lp_build_depth_stencil_test(struct gallivm_state *gallivm,
 
 
 void
-lp_build_depth_write(LLVMBuilderRef builder,
+lp_build_depth_write(struct gallivm_state *gallivm,
+                     struct lp_type z_src_type,
                      const struct util_format_description *format_desc,
                      LLVMValueRef zs_dst_ptr,
                      LLVMValueRef zs_value)
 {
+   LLVMBuilderRef builder = gallivm->builder;
+
+   if (format_desc->block.bits < z_src_type.width) {
+      /* Truncate income ZS values (e.g., when writing to Z16_UNORM) */
+      LLVMTypeRef zs_type = LLVMIntTypeInContext(gallivm->context, format_desc->block.bits);
+      if (z_src_type.length > 1) {
+         zs_type = LLVMVectorType(zs_type, z_src_type.length);
+      }
+      zs_value = LLVMBuildTrunc(builder, zs_value, zs_type, "");
+   }
+
    zs_dst_ptr = LLVMBuildBitCast(builder, zs_dst_ptr,
                                  LLVMPointerType(LLVMTypeOf(zs_value), 0), "");
 
@@ -874,17 +898,27 @@ lp_build_deferred_depth_write(struct gallivm_state *gallivm,
    struct lp_build_context z_bld;
    LLVMValueRef z_dst;
    LLVMBuilderRef builder = gallivm->builder;
+   LLVMValueRef mask_value;
 
    /* XXX: pointlessly redo type logic:
     */
-   z_type = lp_depth_type(format_desc, z_src_type.width*z_src_type.length);
+   z_type = lp_depth_type(format_desc, z_src_type.length);
    lp_build_context_init(&z_bld, gallivm, z_type);
 
    zs_dst_ptr = LLVMBuildBitCast(builder, zs_dst_ptr,
                                  LLVMPointerType(z_bld.vec_type, 0), "");
 
    z_dst = LLVMBuildLoad(builder, zs_dst_ptr, "zsbufval");
-   z_dst = lp_build_select(&z_bld, lp_build_mask_value(mask), zs_value, z_dst);
+
+   mask_value = lp_build_mask_value(mask);
+
+   if (z_type.width < z_src_type.width) {
+      /* Truncate incoming ZS and mask values (e.g., when writing to Z16_UNORM) */
+      zs_value = LLVMBuildTrunc(builder, zs_value, z_bld.vec_type, "");
+      mask_value = LLVMBuildTrunc(builder, mask_value, z_bld.int_vec_type, "");
+   }
+
+   z_dst = lp_build_select(&z_bld, mask_value, zs_value, z_dst);
 
    LLVMBuildStore(builder, z_dst, zs_dst_ptr);
 }

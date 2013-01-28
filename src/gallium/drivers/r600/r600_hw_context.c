@@ -32,7 +32,7 @@
 /* Get backends mask */
 void r600_get_backend_mask(struct r600_context *ctx)
 {
-	struct radeon_winsys_cs *cs = ctx->cs;
+	struct radeon_winsys_cs *cs = ctx->rings.gfx.cs;
 	struct r600_resource *buffer;
 	uint32_t *results;
 	unsigned num_backends = ctx->screen->info.r600_num_backends;
@@ -72,11 +72,10 @@ void r600_get_backend_mask(struct r600_context *ctx)
 				   PIPE_USAGE_STAGING, ctx->max_db*16);
 	if (!buffer)
 		goto err;
-
 	va = r600_resource_va(&ctx->screen->screen, (void*)buffer);
 
 	/* initialize buffer with zeroes */
-	results = ctx->ws->buffer_map(buffer->cs_buf, ctx->cs, PIPE_TRANSFER_WRITE);
+	results = r600_buffer_mmap_sync_with_rings(ctx, buffer, PIPE_TRANSFER_WRITE);
 	if (results) {
 		memset(results, 0, ctx->max_db * 4 * 4);
 		ctx->ws->buffer_unmap(buffer->cs_buf);
@@ -88,10 +87,10 @@ void r600_get_backend_mask(struct r600_context *ctx)
 		cs->buf[cs->cdw++] = (va >> 32UL) & 0xFF;
 
 		cs->buf[cs->cdw++] = PKT3(PKT3_NOP, 0, 0);
-		cs->buf[cs->cdw++] = r600_context_bo_reloc(ctx, buffer, RADEON_USAGE_WRITE);
+		cs->buf[cs->cdw++] = r600_context_bo_reloc(ctx, &ctx->rings.gfx, buffer, RADEON_USAGE_WRITE);
 
 		/* analyze results */
-		results = ctx->ws->buffer_map(buffer->cs_buf, ctx->cs, PIPE_TRANSFER_READ);
+		results = r600_buffer_mmap_sync_with_rings(ctx, buffer, PIPE_TRANSFER_READ);
 		if (results) {
 			for(i = 0; i < ctx->max_db; i++) {
 				/* at least highest bit will be set if backend is used */
@@ -360,8 +359,18 @@ out_err:
 void r600_need_cs_space(struct r600_context *ctx, unsigned num_dw,
 			boolean count_draw_in)
 {
+	if (!ctx->ws->cs_memory_below_limit(ctx->rings.gfx.cs, ctx->vram, ctx->gtt)) {
+		ctx->gtt = 0;
+		ctx->vram = 0;
+		ctx->rings.gfx.flush(ctx, RADEON_FLUSH_ASYNC);
+		return;
+	}
+	/* all will be accounted once relocation are emited */
+	ctx->gtt = 0;
+	ctx->vram = 0;
+
 	/* The number of dwords we already used in the CS so far. */
-	num_dw += ctx->cs->cdw;
+	num_dw += ctx->rings.gfx.cs->cdw;
 
 	if (count_draw_in) {
 		unsigned i;
@@ -413,7 +422,7 @@ void r600_need_cs_space(struct r600_context *ctx, unsigned num_dw,
 
 	/* Flush if there's not enough space. */
 	if (num_dw > RADEON_MAX_CMDBUF_DWORDS) {
-		r600_flush(&ctx->context, NULL, RADEON_FLUSH_ASYNC);
+		ctx->rings.gfx.flush(ctx, RADEON_FLUSH_ASYNC);
 	}
 }
 
@@ -434,7 +443,7 @@ void r600_context_dirty_block(struct r600_context *ctx,
 		LIST_ADDTAIL(&block->list,&ctx->dirty);
 
 		if (block->flags & REG_FLAG_FLUSH_CHANGE) {
-			ctx->flags |= R600_CONTEXT_WAIT_IDLE;
+			ctx->flags |= R600_CONTEXT_WAIT_3D_IDLE;
 		}
 	}
 }
@@ -543,7 +552,7 @@ void r600_context_pipe_state_set(struct r600_context *ctx, struct r600_pipe_stat
 void r600_context_block_emit_dirty(struct r600_context *ctx, struct r600_block *block,
 	unsigned pkt_flags)
 {
-	struct radeon_winsys_cs *cs = ctx->cs;
+	struct radeon_winsys_cs *cs = ctx->rings.gfx.cs;
 	int optional = block->nbo == 0 && !(block->flags & REG_FLAG_DIRTY_ALWAYS);
 	int cp_dwords = block->pm4_ndwords, start_dword = 0;
 	int new_dwords = 0;
@@ -560,7 +569,7 @@ void r600_context_block_emit_dirty(struct r600_context *ctx, struct r600_block *
 				struct r600_block_reloc *reloc = &block->reloc[block->pm4_bo_index[j]];
 				if (reloc->bo) {
 					block->pm4[reloc->bo_pm4_index] =
-							r600_context_bo_reloc(ctx, reloc->bo, reloc->bo_usage);
+							r600_context_bo_reloc(ctx, &ctx->rings.gfx, reloc->bo, reloc->bo_usage);
 				} else {
 					block->pm4[reloc->bo_pm4_index] = 0;
 				}
@@ -604,12 +613,29 @@ out:
 
 void r600_flush_emit(struct r600_context *rctx)
 {
-	struct radeon_winsys_cs *cs = rctx->cs;
+	struct radeon_winsys_cs *cs = rctx->rings.gfx.cs;
 	unsigned cp_coher_cntl = 0;
+	unsigned wait_until = 0;
 	unsigned emit_flush = 0;
 
 	if (!rctx->flags) {
 		return;
+	}
+
+	if (rctx->flags & R600_CONTEXT_WAIT_3D_IDLE) {
+		wait_until |= S_008040_WAIT_3D_IDLE(1);
+	}
+	if (rctx->flags & R600_CONTEXT_WAIT_CP_DMA_IDLE) {
+		wait_until |= S_008040_WAIT_CP_DMA_IDLE(1);
+	}
+
+	if (wait_until) {
+		/* Use of WAIT_UNTIL is deprecated on Cayman+ */
+		if (rctx->family >= CHIP_CAYMAN) {
+			/* emit a PS partial flush on Cayman/TN */
+			cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 0, 0);
+			cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_PS_PARTIAL_FLUSH) | EVENT_INDEX(4);
+		}
 	}
 
 	if (rctx->chip_class >= R700 &&
@@ -674,9 +700,12 @@ void r600_flush_emit(struct r600_context *rctx)
 		cs->buf[cs->cdw++] = 0x0000000A;      /* POLL_INTERVAL */
 	}
 
-	if (rctx->flags & R600_CONTEXT_WAIT_IDLE) {
-		/* wait for things to settle */
-		r600_write_config_reg(cs, R_008040_WAIT_UNTIL, S_008040_WAIT_3D_IDLE(1));
+	if (wait_until) {
+		/* Use of WAIT_UNTIL is deprecated on Cayman+ */
+		if (rctx->family < CHIP_CAYMAN) {
+			/* wait for things to settle */
+			r600_write_config_reg(cs, R_008040_WAIT_UNTIL, wait_until);
+		}
 	}
 
 	/* everything is properly flushed */
@@ -685,7 +714,7 @@ void r600_flush_emit(struct r600_context *rctx)
 
 void r600_context_flush(struct r600_context *ctx, unsigned flags)
 {
-	struct radeon_winsys_cs *cs = ctx->cs;
+	struct radeon_winsys_cs *cs = ctx->rings.gfx.cs;
 
 	if (cs->cdw == ctx->start_cs_cmd.num_dw)
 		return;
@@ -707,7 +736,10 @@ void r600_context_flush(struct r600_context *ctx, unsigned flags)
 	/* flush is needed to avoid lockups on some chips with user fences
 	 * this will also flush the framebuffer cache
 	 */
-	ctx->flags |= R600_CONTEXT_WAIT_IDLE | R600_CONTEXT_FLUSH_AND_INV;
+	ctx->flags |= R600_CONTEXT_FLUSH_AND_INV |
+		      R600_CONTEXT_FLUSH_AND_INV_CB_META |
+		      R600_CONTEXT_WAIT_3D_IDLE |
+		      R600_CONTEXT_WAIT_CP_DMA_IDLE;
 
 	r600_flush_emit(ctx);
 
@@ -733,7 +765,7 @@ void r600_context_flush(struct r600_context *ctx, unsigned flags)
 		rscreen->cs_count++;
 	}
 #endif
-	ctx->ws->cs_flush(ctx->cs, flags);
+	ctx->ws->cs_flush(ctx->rings.gfx.cs, flags);
 #if R600_TRACE_CS
 	if (ctx->screen->trace_bo) {
 		struct r600_screen *rscreen = ctx->screen;
@@ -753,8 +785,6 @@ void r600_context_flush(struct r600_context *ctx, unsigned flags)
 		}
 	}
 #endif
-
-	r600_begin_new_cs(ctx);
 }
 
 void r600_begin_new_cs(struct r600_context *ctx)
@@ -764,9 +794,11 @@ void r600_begin_new_cs(struct r600_context *ctx)
 
 	ctx->pm4_dirty_cdwords = 0;
 	ctx->flags = 0;
+	ctx->gtt = 0;
+	ctx->vram = 0;
 
 	/* Begin a new CS. */
-	r600_emit_command_buffer(ctx->cs, &ctx->start_cs_cmd);
+	r600_emit_command_buffer(ctx->rings.gfx.cs, &ctx->start_cs_cmd);
 
 	/* Re-emit states. */
 	ctx->alphatest_state.atom.dirty = true;
@@ -844,7 +876,7 @@ void r600_begin_new_cs(struct r600_context *ctx)
 
 void r600_context_emit_fence(struct r600_context *ctx, struct r600_resource *fence_bo, unsigned offset, unsigned value)
 {
-	struct radeon_winsys_cs *cs = ctx->cs;
+	struct radeon_winsys_cs *cs = ctx->rings.gfx.cs;
 	uint64_t va;
 
 	r600_need_cs_space(ctx, 10, FALSE);
@@ -852,7 +884,13 @@ void r600_context_emit_fence(struct r600_context *ctx, struct r600_resource *fen
 	va = r600_resource_va(&ctx->screen->screen, (void*)fence_bo);
 	va = va + (offset << 2);
 
-	r600_write_config_reg(cs, R_008040_WAIT_UNTIL, S_008040_WAIT_3D_IDLE(1));
+	/* Use of WAIT_UNTIL is deprecated on Cayman+ */
+	if (ctx->family >= CHIP_CAYMAN) {
+		cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 0, 0);
+		cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_PS_PARTIAL_FLUSH) | EVENT_INDEX(4);
+	} else {
+		r600_write_config_reg(cs, R_008040_WAIT_UNTIL, S_008040_WAIT_3D_IDLE(1));
+	}
 
 	cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE_EOP, 4, 0);
 	cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_CACHE_FLUSH_AND_INV_TS_EVENT) | EVENT_INDEX(5);
@@ -862,12 +900,12 @@ void r600_context_emit_fence(struct r600_context *ctx, struct r600_resource *fen
 	cs->buf[cs->cdw++] = value;                   /* DATA_LO */
 	cs->buf[cs->cdw++] = 0;                       /* DATA_HI */
 	cs->buf[cs->cdw++] = PKT3(PKT3_NOP, 0, 0);
-	cs->buf[cs->cdw++] = r600_context_bo_reloc(ctx, fence_bo, RADEON_USAGE_WRITE);
+	cs->buf[cs->cdw++] = r600_context_bo_reloc(ctx, &ctx->rings.gfx, fence_bo, RADEON_USAGE_WRITE);
 }
 
 static void r600_flush_vgt_streamout(struct r600_context *ctx)
 {
-	struct radeon_winsys_cs *cs = ctx->cs;
+	struct radeon_winsys_cs *cs = ctx->rings.gfx.cs;
 
 	r600_write_config_reg(cs, R_008490_CP_STRMOUT_CNTL, 0);
 
@@ -885,7 +923,7 @@ static void r600_flush_vgt_streamout(struct r600_context *ctx)
 
 static void r600_set_streamout_enable(struct r600_context *ctx, unsigned buffer_enable_bit)
 {
-	struct radeon_winsys_cs *cs = ctx->cs;
+	struct radeon_winsys_cs *cs = ctx->rings.gfx.cs;
 
 	if (buffer_enable_bit) {
 		r600_write_context_reg(cs, R_028AB0_VGT_STRMOUT_EN, S_028AB0_STREAMOUT(1));
@@ -897,7 +935,7 @@ static void r600_set_streamout_enable(struct r600_context *ctx, unsigned buffer_
 
 void r600_context_streamout_begin(struct r600_context *ctx)
 {
-	struct radeon_winsys_cs *cs = ctx->cs;
+	struct radeon_winsys_cs *cs = ctx->rings.gfx.cs;
 	struct r600_so_target **t = ctx->so_targets;
 	unsigned *stride_in_dw = ctx->vs_shader->so.stride;
 	unsigned buffer_en, i, update_flags = 0;
@@ -953,7 +991,7 @@ void r600_context_streamout_begin(struct r600_context *ctx)
 
 			cs->buf[cs->cdw++] = PKT3(PKT3_NOP, 0, 0);
 			cs->buf[cs->cdw++] =
-				r600_context_bo_reloc(ctx, r600_resource(t[i]->b.buffer),
+				r600_context_bo_reloc(ctx, &ctx->rings.gfx, r600_resource(t[i]->b.buffer),
 						      RADEON_USAGE_WRITE);
 
 			/* R7xx requires this packet after updating BUFFER_BASE.
@@ -965,7 +1003,7 @@ void r600_context_streamout_begin(struct r600_context *ctx)
 
 				cs->buf[cs->cdw++] = PKT3(PKT3_NOP, 0, 0);
 				cs->buf[cs->cdw++] =
-					r600_context_bo_reloc(ctx, r600_resource(t[i]->b.buffer),
+					r600_context_bo_reloc(ctx, &ctx->rings.gfx, r600_resource(t[i]->b.buffer),
 							      RADEON_USAGE_WRITE);
 			}
 
@@ -983,7 +1021,7 @@ void r600_context_streamout_begin(struct r600_context *ctx)
 
 				cs->buf[cs->cdw++] = PKT3(PKT3_NOP, 0, 0);
 				cs->buf[cs->cdw++] =
-					r600_context_bo_reloc(ctx,  t[i]->buf_filled_size,
+					r600_context_bo_reloc(ctx,  &ctx->rings.gfx, t[i]->buf_filled_size,
 							      RADEON_USAGE_READ);
 			} else {
 				/* Start from the beginning. */
@@ -1006,7 +1044,7 @@ void r600_context_streamout_begin(struct r600_context *ctx)
 
 void r600_context_streamout_end(struct r600_context *ctx)
 {
-	struct radeon_winsys_cs *cs = ctx->cs;
+	struct radeon_winsys_cs *cs = ctx->rings.gfx.cs;
 	struct r600_so_target **t = ctx->so_targets;
 	unsigned i;
 	uint64_t va;
@@ -1032,7 +1070,7 @@ void r600_context_streamout_end(struct r600_context *ctx)
 
 			cs->buf[cs->cdw++] = PKT3(PKT3_NOP, 0, 0);
 			cs->buf[cs->cdw++] =
-				r600_context_bo_reloc(ctx,  t[i]->buf_filled_size,
+				r600_context_bo_reloc(ctx,  &ctx->rings.gfx, t[i]->buf_filled_size,
 						      RADEON_USAGE_WRITE);
 
 		}
@@ -1047,6 +1085,122 @@ void r600_context_streamout_end(struct r600_context *ctx)
 		}
 		r600_set_streamout_enable(ctx, 0);
 	}
-	ctx->flags |= R600_CONTEXT_WAIT_IDLE | R600_CONTEXT_FLUSH_AND_INV;
+	ctx->flags |= R600_CONTEXT_WAIT_3D_IDLE | R600_CONTEXT_FLUSH_AND_INV;
 	ctx->num_cs_dw_streamout_end = 0;
+}
+
+/* The max number of bytes to copy per packet. */
+#define CP_DMA_MAX_BYTE_COUNT ((1 << 21) - 8)
+
+void r600_cp_dma_copy_buffer(struct r600_context *rctx,
+			     struct pipe_resource *dst, uint64_t dst_offset,
+			     struct pipe_resource *src, uint64_t src_offset,
+			     unsigned size)
+{
+	struct radeon_winsys_cs *cs = rctx->rings.gfx.cs;
+
+	assert(size);
+	assert(rctx->chip_class != R600);
+
+	/* CP DMA doesn't work on R600 (flushing seems to be unreliable). */
+	if (rctx->chip_class == R600) {
+		return;
+	}
+
+	dst_offset += r600_resource_va(&rctx->screen->screen, dst);
+	src_offset += r600_resource_va(&rctx->screen->screen, src);
+
+	/* We flush the caches, because we might read from or write
+	 * to resources which are bound right now. */
+	rctx->flags |= R600_CONTEXT_INVAL_READ_CACHES |
+		       R600_CONTEXT_FLUSH_AND_INV |
+		       R600_CONTEXT_FLUSH_AND_INV_CB_META |
+		       R600_CONTEXT_STREAMOUT_FLUSH |
+		       R600_CONTEXT_WAIT_3D_IDLE;
+
+	/* There are differences between R700 and EG in CP DMA,
+	 * but we only use the common bits here. */
+	while (size) {
+		unsigned sync = 0;
+		unsigned byte_count = MIN2(size, CP_DMA_MAX_BYTE_COUNT);
+		unsigned src_reloc, dst_reloc;
+
+		r600_need_cs_space(rctx, 10 + (rctx->flags ? R600_MAX_FLUSH_CS_DWORDS : 0), FALSE);
+
+		/* Flush the caches for the first copy only. */
+		if (rctx->flags) {
+			r600_flush_emit(rctx);
+		}
+
+		/* Do the synchronization after the last copy, so that all data is written to memory. */
+		if (size == byte_count) {
+			sync = PKT3_CP_DMA_CP_SYNC;
+		}
+
+		/* This must be done after r600_need_cs_space. */
+		src_reloc = r600_context_bo_reloc(rctx, &rctx->rings.gfx, (struct r600_resource*)src, RADEON_USAGE_READ);
+		dst_reloc = r600_context_bo_reloc(rctx, &rctx->rings.gfx, (struct r600_resource*)dst, RADEON_USAGE_WRITE);
+
+		r600_write_value(cs, PKT3(PKT3_CP_DMA, 4, 0));
+		r600_write_value(cs, src_offset);	/* SRC_ADDR_LO [31:0] */
+		r600_write_value(cs, sync | ((src_offset >> 32) & 0xff));		/* CP_SYNC [31] | SRC_ADDR_HI [7:0] */
+		r600_write_value(cs, dst_offset);	/* DST_ADDR_LO [31:0] */
+		r600_write_value(cs, (dst_offset >> 32) & 0xff);		/* DST_ADDR_HI [7:0] */
+		r600_write_value(cs, byte_count);	/* COMMAND [29:22] | BYTE_COUNT [20:0] */
+
+		r600_write_value(cs, PKT3(PKT3_NOP, 0, 0));
+		r600_write_value(cs, src_reloc);
+		r600_write_value(cs, PKT3(PKT3_NOP, 0, 0));
+		r600_write_value(cs, dst_reloc);
+
+		size -= byte_count;
+		src_offset += byte_count;
+		dst_offset += byte_count;
+	}
+}
+
+void r600_need_dma_space(struct r600_context *ctx, unsigned num_dw)
+{
+	/* The number of dwords we already used in the DMA so far. */
+	num_dw += ctx->rings.dma.cs->cdw;
+	/* Flush if there's not enough space. */
+	if (num_dw > RADEON_MAX_CMDBUF_DWORDS) {
+		ctx->rings.dma.flush(ctx, RADEON_FLUSH_ASYNC);
+	}
+}
+
+void r600_dma_copy(struct r600_context *rctx,
+		struct pipe_resource *dst,
+		struct pipe_resource *src,
+		uint64_t dst_offset,
+		uint64_t src_offset,
+		uint64_t size)
+{
+	struct radeon_winsys_cs *cs = rctx->rings.dma.cs;
+	unsigned i, ncopy, csize, shift;
+	struct r600_resource *rdst = (struct r600_resource*)dst;
+	struct r600_resource *rsrc = (struct r600_resource*)src;
+
+	/* make sure that the dma ring is only one active */
+	rctx->rings.gfx.flush(rctx, RADEON_FLUSH_ASYNC);
+
+	size >>= 2;
+	shift = 2;
+	ncopy = (size / 0xffff) + !!(size % 0xffff);
+
+	r600_need_dma_space(rctx, ncopy * 5);
+	for (i = 0; i < ncopy; i++) {
+		csize = size < 0xffff ? size : 0xffff;
+		/* emit reloc before writting cs so that cs is always in consistent state */
+		r600_context_bo_reloc(rctx, &rctx->rings.dma, rsrc, RADEON_USAGE_READ);
+		r600_context_bo_reloc(rctx, &rctx->rings.dma, rdst, RADEON_USAGE_WRITE);
+		cs->buf[cs->cdw++] = DMA_PACKET(DMA_PACKET_COPY, 0, 0, csize);
+		cs->buf[cs->cdw++] = dst_offset & 0xfffffffc;
+		cs->buf[cs->cdw++] = src_offset & 0xfffffffc;
+		cs->buf[cs->cdw++] = (dst_offset >> 32UL) & 0xff;
+		cs->buf[cs->cdw++] = (src_offset >> 32UL) & 0xff;
+		dst_offset += csize << shift;
+		src_offset += csize << shift;
+		size -= csize;
+	}
 }

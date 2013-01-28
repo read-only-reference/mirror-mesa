@@ -109,12 +109,6 @@ struct dd_function_table {
                           GLuint width, GLuint height);
 
    /**
-    * Called whenever an error is generated.  
-    * __struct gl_contextRec::ErrorValue contains the error value.
-    */
-   void (*Error)( struct gl_context *ctx );
-
-   /**
     * This is called whenever glFinish() is called.
     */
    void (*Finish)( struct gl_context *ctx );
@@ -199,6 +193,22 @@ struct dd_function_table {
    gl_format (*ChooseTextureFormat)( struct gl_context *ctx,
                                      GLenum target, GLint internalFormat,
                                      GLenum srcFormat, GLenum srcType );
+
+   /**
+    * Determine sample counts support for a particular format
+    *
+    * \param ctx            GL context
+    * \param internalFormat GL format enum
+    * \param samples        Buffer to hold the returned sample counts.
+    *                       Drivers \b must \b not return more than 16 counts.
+    *
+    * \returns
+    * The number of sample counts actually written to \c samples.  If
+    * \c internaFormat is not renderable, zero is returned.
+    */
+   size_t (*QuerySamplesForFormat)(struct gl_context *ctx,
+                                   GLenum internalFormat,
+                                   int samples[16]);
 
    /**
     * Called by glTexImage[123]D() and glCopyTexImage[12]D()
@@ -705,14 +715,6 @@ struct dd_function_table {
     */
    void (*FlushVertices)( struct gl_context *ctx, GLuint flags );
    void (*SaveFlushVertices)( struct gl_context *ctx );
-
-   /**
-    * \brief Hook for drivers to prepare for a glBegin/glEnd block
-    *
-    * This hook is called in vbo_exec_Begin() before any action, including
-    * state updates, occurs.
-    */
-   void (*PrepareExecBegin)( struct gl_context *ctx );
 
    /**
     * Give the driver the opportunity to hook in its own vtxfmt for

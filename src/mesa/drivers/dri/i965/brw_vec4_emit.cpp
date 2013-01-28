@@ -278,8 +278,13 @@ vec4_generator::generate_tex(vec4_instruction *inst,
 	 }
 	 break;
       case SHADER_OPCODE_TXD:
-	 /* There is no sample_d_c message; comparisons are done manually. */
-	 msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_DERIVS;
+         if (inst->shadow_compare) {
+            /* Gen7.5+.  Otherwise, lowered by brw_lower_texture_gradients(). */
+            assert(intel->is_haswell);
+            msg_type = HSW_SAMPLER_MESSAGE_SAMPLE_DERIV_COMPARE;
+         } else {
+            msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_DERIVS;
+         }
 	 break;
       case SHADER_OPCODE_TXF:
 	 msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_LD;
@@ -802,6 +807,14 @@ vec4_generator::generate_code(exec_list *instructions)
       case BRW_OPCODE_DP2:
 	 brw_DP2(p, dst, src[0], src[1]);
 	 break;
+
+      case BRW_OPCODE_F32TO16:
+         brw_F32TO16(p, dst, src[0]);
+         break;
+
+      case BRW_OPCODE_F16TO32:
+         brw_F16TO32(p, dst, src[0]);
+         break;
 
       case BRW_OPCODE_IF:
 	 if (inst->src[0].file != BAD_FILE) {

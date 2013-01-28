@@ -789,9 +789,11 @@ dri2XcbSwapBuffers(Display *dpy,
 
    swap_buffers_reply =
       xcb_dri2_swap_buffers_reply(c, swap_buffers_cookie, NULL);
-   ret = merge_counter(swap_buffers_reply->swap_hi,
-                       swap_buffers_reply->swap_lo);
-   free(swap_buffers_reply);
+   if (swap_buffers_reply) {
+      ret = merge_counter(swap_buffers_reply->swap_hi,
+                          swap_buffers_reply->swap_lo);
+      free(swap_buffers_reply);
+   }
    return ret;
 }
 
@@ -1062,8 +1064,9 @@ dri2BindExtensions(struct dri2_screen *psc, const __DRIextension **extensions)
    __glXEnableDirectExtension(&psc->base, "GLX_MESA_swap_control");
    __glXEnableDirectExtension(&psc->base, "GLX_SGI_make_current_read");
 
-   /* FIXME: if DRI2 version supports it... */
-   __glXEnableDirectExtension(&psc->base, "GLX_INTEL_swap_event");
+   if (psc->dri2->base.version >= 4) {
+      __glXEnableDirectExtension(&psc->base, "GLX_INTEL_swap_event");
+   }
 
    if (psc->dri2->base.version >= 3) {
       const unsigned mask = psc->dri2->getAPIMask(psc->driScreen);

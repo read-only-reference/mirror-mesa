@@ -35,43 +35,6 @@
 
 struct winsys_handle;
 
-enum radeon_family {
-	CHIP_UNKNOWN,
-	CHIP_R600,
-	CHIP_RV610,
-	CHIP_RV630,
-	CHIP_RV670,
-	CHIP_RV620,
-	CHIP_RV635,
-	CHIP_RS780,
-	CHIP_RS880,
-	CHIP_RV770,
-	CHIP_RV730,
-	CHIP_RV710,
-	CHIP_RV740,
-	CHIP_CEDAR,
-	CHIP_REDWOOD,
-	CHIP_JUNIPER,
-	CHIP_CYPRESS,
-	CHIP_HEMLOCK,
-	CHIP_PALM,
-	CHIP_SUMO,
-	CHIP_SUMO2,
-	CHIP_BARTS,
-	CHIP_TURKS,
-	CHIP_CAICOS,
-	CHIP_CAYMAN,
-	CHIP_ARUBA,
-	CHIP_LAST,
-};
-
-enum chip_class {
-	R600,
-	R700,
-	EVERGREEN,
-	CAYMAN,
-};
-
 struct r600_tiling_info {
 	unsigned num_channels;
 	unsigned num_banks;
@@ -184,9 +147,10 @@ struct r600_so_target {
 
 #define R600_CONTEXT_INVAL_READ_CACHES		(1 << 0)
 #define R600_CONTEXT_STREAMOUT_FLUSH		(1 << 1)
-#define R600_CONTEXT_WAIT_IDLE			(1 << 2)
-#define R600_CONTEXT_FLUSH_AND_INV		(1 << 3)
-#define R600_CONTEXT_FLUSH_AND_INV_CB_META	(1 << 4)
+#define R600_CONTEXT_WAIT_3D_IDLE		(1 << 2)
+#define R600_CONTEXT_WAIT_CP_DMA_IDLE		(1 << 3)
+#define R600_CONTEXT_FLUSH_AND_INV		(1 << 4)
+#define R600_CONTEXT_FLUSH_AND_INV_CB_META	(1 << 5)
 
 struct r600_context;
 struct r600_screen;
@@ -206,7 +170,38 @@ void r600_flush_emit(struct r600_context *ctx);
 void r600_context_streamout_begin(struct r600_context *ctx);
 void r600_context_streamout_end(struct r600_context *ctx);
 void r600_need_cs_space(struct r600_context *ctx, unsigned num_dw, boolean count_draw_in);
+void r600_need_dma_space(struct r600_context *ctx, unsigned num_dw);
+void r600_dma_copy(struct r600_context *rctx,
+		struct pipe_resource *dst,
+		struct pipe_resource *src,
+		uint64_t dst_offset,
+		uint64_t src_offset,
+		uint64_t size);
+boolean r600_dma_blit(struct pipe_context *ctx,
+			struct pipe_resource *dst,
+			unsigned dst_level,
+			unsigned dst_x, unsigned dst_y, unsigned dst_z,
+			struct pipe_resource *src,
+			unsigned src_level,
+			const struct pipe_box *src_box);
+void evergreen_dma_copy(struct r600_context *rctx,
+		struct pipe_resource *dst,
+		struct pipe_resource *src,
+		uint64_t dst_offset,
+		uint64_t src_offset,
+		uint64_t size);
+boolean evergreen_dma_blit(struct pipe_context *ctx,
+			struct pipe_resource *dst,
+			unsigned dst_level,
+			unsigned dst_x, unsigned dst_y, unsigned dst_z,
+			struct pipe_resource *src,
+			unsigned src_level,
+			const struct pipe_box *src_box);
 void r600_context_block_emit_dirty(struct r600_context *ctx, struct r600_block *block, unsigned pkt_flags);
+void r600_cp_dma_copy_buffer(struct r600_context *rctx,
+			     struct pipe_resource *dst, uint64_t dst_offset,
+			     struct pipe_resource *src, uint64_t src_offset,
+			     unsigned size);
 
 int evergreen_context_init(struct r600_context *ctx);
 

@@ -58,6 +58,28 @@
  * Mesa's Driver Functions
  ***************************************/
 
+static size_t
+brw_query_samples_for_format(struct gl_context *ctx, GLenum internalFormat,
+                             int samples[16])
+{
+   struct intel_context *intel = intel_context(ctx);
+
+   switch (intel->gen) {
+   case 7:
+      samples[0] = 8;
+      samples[1] = 4;
+      return 2;
+
+   case 6:
+      samples[0] = 4;
+      return 1;
+
+   default:
+      samples[0] = 1;
+      return 1;
+   }
+}
+
 static void brwInitDriverFunctions(struct intel_screen *screen,
 				   struct dd_function_table *functions)
 {
@@ -66,6 +88,7 @@ static void brwInitDriverFunctions(struct intel_screen *screen,
    brwInitFragProgFuncs( functions );
    brw_init_queryobj_functions(functions);
 
+   functions->QuerySamplesForFormat = brw_query_samples_for_format;
    functions->BeginTransformFeedback = brw_begin_transform_feedback;
 
    if (screen->gen >= 7)
@@ -87,46 +110,7 @@ brwCreateContext(int api,
    __DRIscreen *sPriv = driContextPriv->driScreenPriv;
    struct intel_screen *screen = sPriv->driverPrivate;
    struct dd_function_table functions;
-   const unsigned req_version = major_version * 10 + minor_version;
-   unsigned max_supported_version = 0;
    unsigned i;
-
-#ifdef TEXTURE_FLOAT_ENABLED
-   bool has_texture_float = true;
-#else
-   bool has_texture_float = false;
-#endif
-
-   bool supports_gl30 = has_texture_float &&
-                        (screen->gen == 6 ||
-                         (screen->gen == 7 &&
-                          screen->kernel_has_gen7_sol_reset));
-
-   /* Determine max_supported_version. */
-   switch (api) {
-   case API_OPENGL_COMPAT:
-      max_supported_version = supports_gl30 ? 30 : 21;
-      break;
-   case API_OPENGLES:
-      max_supported_version = 11;
-      break;
-   case API_OPENGLES2:
-      max_supported_version = 20;
-      break;
-   case API_OPENGL_CORE:
-      max_supported_version = supports_gl30 ? 31 : 0;
-      break;
-   default:
-      break;
-   }
-
-   if (max_supported_version == 0) {
-      *error = __DRI_CTX_ERROR_BAD_API;
-      return false;
-   } else if (req_version > max_supported_version) {
-      *error = __DRI_CTX_ERROR_BAD_VERSION;
-      return false;
-   }
 
    struct brw_context *brw = rzalloc(NULL, struct brw_context);
    if (!brw) {
@@ -147,10 +131,12 @@ brwCreateContext(int api,
    struct intel_context *intel = &brw->intel;
    struct gl_context *ctx = &intel->ctx;
 
-   if (!intelInitContext( intel, api, mesaVis, driContextPriv,
-			  sharedContextPrivate, &functions )) {
+   if (!intelInitContext( intel, api, major_version, minor_version,
+                          mesaVis, driContextPriv,
+			  sharedContextPrivate, &functions,
+			  error)) {
       printf("%s: failed to init intel context\n", __FUNCTION__);
-      *error = __DRI_CTX_ERROR_NO_MEMORY;
+      ralloc_free(brw);
       return false;
    }
 
@@ -292,7 +278,23 @@ brwCreateContext(int api,
    }
 
    /* WM maximum threads is number of EUs times number of threads per EU. */
-   if (intel->gen >= 7) {
+   assert(intel->gen <= 7);
+
+   if (intel->is_haswell) {
+      if (intel->gt == 1) {
+	 brw->max_wm_threads = 102;
+	 brw->max_vs_threads = 70;
+	 brw->urb.size = 128;
+	 brw->urb.max_vs_entries = 640;
+	 brw->urb.max_gs_entries = 256;
+      } else if (intel->gt == 2) {
+	 brw->max_wm_threads = 204;
+	 brw->max_vs_threads = 280;
+	 brw->urb.size = 256;
+	 brw->urb.max_vs_entries = 1664;
+	 brw->urb.max_gs_entries = 640;
+      }
+   } else if (intel->gen == 7) {
       if (intel->gt == 1) {
 	 brw->max_wm_threads = 48;
 	 brw->max_vs_threads = 36;
@@ -377,6 +379,8 @@ brwCreateContext(int api,
 
    ctx->Const.ForceGLSLExtensionsWarn = driQueryOptionb(&intel->optionCache, "force_glsl_extensions_warn");
 
+   ctx->Const.DisableGLSLLineContinuations = driQueryOptionb(&intel->optionCache, "disable_glsl_line_continuations");
+
    ctx->Const.ContextFlags = 0;
    if ((flags & __DRI_CTX_FLAG_FORWARD_COMPATIBLE) != 0)
       ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT;
@@ -391,7 +395,7 @@ brwCreateContext(int api,
 
    _mesa_compute_version(ctx);
 
-   _mesa_initialize_exec_table(ctx);
+   _mesa_initialize_dispatch_tables(ctx);
    _mesa_initialize_vbo_vtxfmt(ctx);
 
    return true;

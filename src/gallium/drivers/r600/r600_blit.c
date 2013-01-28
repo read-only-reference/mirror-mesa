@@ -503,15 +503,18 @@ static void r600_clear_depth_stencil(struct pipe_context *ctx,
 	r600_blitter_end(ctx);
 }
 
-void r600_copy_buffer(struct pipe_context *ctx, struct
-		      pipe_resource *dst, unsigned dstx,
+void r600_copy_buffer(struct pipe_context *ctx, struct pipe_resource *dst, unsigned dstx,
 		      struct pipe_resource *src, const struct pipe_box *src_box)
 {
 	struct r600_context *rctx = (struct r600_context*)ctx;
 
-	if (rctx->screen->has_streamout &&
-	    /* Require dword alignment. */
-	    dstx % 4 == 0 && src_box->x % 4 == 0 && src_box->width % 4 == 0) {
+	/* CP DMA doesn't work on R600 (flushing seems to be unreliable). */
+	if (rctx->screen->info.drm_minor >= 27 && rctx->chip_class >= R700) {
+		r600_cp_dma_copy_buffer(rctx, dst, dstx, src, src_box->x, src_box->width);
+	}
+	else if (rctx->screen->has_streamout &&
+		 /* Require 4-byte alignment. */
+		 dstx % 4 == 0 && src_box->x % 4 == 0 && src_box->width % 4 == 0) {
 		r600_blitter_begin(ctx, R600_COPY_BUFFER);
 		util_blitter_copy_buffer(rctx->blitter, dst, dstx, src, src_box->x, src_box->width);
 		r600_blitter_end(ctx);
@@ -539,12 +542,10 @@ static void r600_resource_copy_region(struct pipe_context *ctx,
 				      const struct pipe_box *src_box)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct r600_texture *rsrc = (struct r600_texture*)src;
-	struct r600_texture *rdst = (struct r600_texture*)dst;
 	struct pipe_surface *dst_view, dst_templ;
 	struct pipe_sampler_view src_templ, *src_view;
 	unsigned dst_width, dst_height, src_width0, src_height0, src_widthFL, src_heightFL;
-	struct pipe_box sbox;
+	struct pipe_box sbox, dstbox;
 	bool copy_all_samples;
 
 	/* Handle buffers first. */
@@ -562,14 +563,14 @@ static void r600_resource_copy_region(struct pipe_context *ctx,
 		return; /* error */
 	}
 
-	dst_width = rdst->surface.level[dst_level].npix_x;
-	dst_height = rdst->surface.level[dst_level].npix_y;
+	dst_width = u_minify(dst->width0, dst_level);
+        dst_height = u_minify(dst->height0, dst_level);
 	src_width0 = src->width0;
 	src_height0 = src->height0;
-	src_widthFL = rsrc->surface.level[src_level].npix_x;
-	src_heightFL = rsrc->surface.level[src_level].npix_y;
+        src_widthFL = u_minify(src->width0, src_level);
+        src_heightFL = u_minify(src->height0, src_level);
 
-	util_blitter_default_dst_texture(&dst_templ, dst, dst_level, dstz, src_box);
+	util_blitter_default_dst_texture(&dst_templ, dst, dst_level, dstz);
 	util_blitter_default_src_texture(&src_templ, src, src_level);
 
 	if (util_format_is_compressed(src->format)) {
@@ -581,12 +582,12 @@ static void r600_resource_copy_region(struct pipe_context *ctx,
 			src_templ.format = PIPE_FORMAT_R32G32B32A32_UINT; /* 128-bit block */
 		dst_templ.format = src_templ.format;
 
-		dst_width = util_format_get_nblocksx(dst->format, rdst->surface.level[dst_level].npix_x);
-		dst_height = util_format_get_nblocksy(dst->format, rdst->surface.level[dst_level].npix_y);
-		src_width0 = util_format_get_nblocksx(src->format, src->width0);
-		src_height0 = util_format_get_nblocksy(src->format, src->height0);
-		src_widthFL = util_format_get_nblocksx(src->format, rsrc->surface.level[src_level].npix_x);
-		src_heightFL = util_format_get_nblocksy(src->format, rsrc->surface.level[src_level].npix_y);
+		dst_width = util_format_get_nblocksx(dst->format, dst_width);
+		dst_height = util_format_get_nblocksy(dst->format, dst_height);
+		src_width0 = util_format_get_nblocksx(src->format, src_width0);
+		src_height0 = util_format_get_nblocksy(src->format, src_height0);
+		src_widthFL = util_format_get_nblocksx(src->format, src_widthFL);
+		src_heightFL = util_format_get_nblocksy(src->format, src_heightFL);
 
 		dstx = util_format_get_nblocksx(dst->format, dstx);
 		dsty = util_format_get_nblocksy(dst->format, dsty);
@@ -605,9 +606,9 @@ static void r600_resource_copy_region(struct pipe_context *ctx,
 			src_templ.format = PIPE_FORMAT_R8G8B8A8_UINT;
 			dst_templ.format = PIPE_FORMAT_R8G8B8A8_UINT;
 
-			dst_width = util_format_get_nblocksx(dst->format, rdst->surface.level[dst_level].npix_x);
-			src_width0 = util_format_get_nblocksx(src->format, src->width0);
-			src_widthFL = util_format_get_nblocksx(src->format, rsrc->surface.level[src_level].npix_x);
+			dst_width = util_format_get_nblocksx(dst->format, dst_width);
+			src_width0 = util_format_get_nblocksx(src->format, src_width0);
+			src_widthFL = util_format_get_nblocksx(src->format, src_widthFL);
 
 			dstx = util_format_get_nblocksx(dst->format, dstx);
 
@@ -623,10 +624,22 @@ static void r600_resource_copy_region(struct pipe_context *ctx,
 				dst_templ.format = PIPE_FORMAT_R8_UNORM;
 				src_templ.format = PIPE_FORMAT_R8_UNORM;
 				break;
+                        case 2:
+				dst_templ.format = PIPE_FORMAT_R8G8_UNORM;
+				src_templ.format = PIPE_FORMAT_R8G8_UNORM;
+				break;
 			case 4:
 				dst_templ.format = PIPE_FORMAT_R8G8B8A8_UNORM;
 				src_templ.format = PIPE_FORMAT_R8G8B8A8_UNORM;
 				break;
+                        case 8:
+                                dst_templ.format = PIPE_FORMAT_R16G16B16A16_UINT;
+                                src_templ.format = PIPE_FORMAT_R16G16B16A16_UINT;
+                                break;
+                        case 16:
+                                dst_templ.format = PIPE_FORMAT_R32G32B32A32_UINT;
+                                src_templ.format = PIPE_FORMAT_R32G32B32A32_UINT;
+                                break;
 			default:
 				fprintf(stderr, "Unhandled format %s with blocksize %u\n",
 					util_format_short_name(src->format), blocksize);
@@ -647,10 +660,12 @@ static void r600_resource_copy_region(struct pipe_context *ctx,
 
 	copy_all_samples = rctx->screen->msaa_texture_support != MSAA_TEXTURE_SAMPLE_ZERO;
 
+        u_box_3d(dstx, dsty, dstz, abs(src_box->width), abs(src_box->height),
+                 abs(src_box->depth), &dstbox);
+
 	/* Copy. */
 	r600_blitter_begin(ctx, R600_COPY_TEXTURE);
-	util_blitter_blit_generic(rctx->blitter, dst_view, dstx, dsty,
-				  abs(src_box->width), abs(src_box->height),
+	util_blitter_blit_generic(rctx->blitter, dst_view, &dstbox,
 				  src_view, src_box, src_width0, src_height0,
 				  PIPE_MASK_RGBAZS, PIPE_TEX_FILTER_NEAREST, NULL,
 				  copy_all_samples);

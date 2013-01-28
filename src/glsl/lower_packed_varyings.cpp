@@ -66,6 +66,14 @@
  * performance.  However, hopefully in most cases the performance loss will
  * either be absorbed by a later optimization pass, or it will be offset by
  * memory bandwidth savings (because fewer varyings are used).
+ *
+ * This lowering pass also packs flat floats, ints, and uints together, by
+ * using ivec4 as the base type of flat "varyings", and using appropriate
+ * casts to convert floats and uints into ints.
+ *
+ * This lowering pass also handles varyings whose type is a struct or an array
+ * of struct.  Structs are packed in order and with no gaps, so there may be a
+ * performance penalty due to structure elements being double-parked.
  */
 
 #include "glsl_symbol_table.h"
@@ -90,6 +98,8 @@ public:
    void run(exec_list *instructions);
 
 private:
+   ir_assignment *bitwise_assign_pack(ir_rvalue *lhs, ir_rvalue *rhs);
+   ir_assignment *bitwise_assign_unpack(ir_rvalue *lhs, ir_rvalue *rhs);
    unsigned lower_rvalue(ir_rvalue *rvalue, unsigned fine_location,
                          ir_variable *unpacked_var, const char *name);
    unsigned lower_arraylike(ir_rvalue *rvalue, unsigned array_size,
@@ -129,8 +139,8 @@ private:
    ir_variable **packed_varyings;
 
    /**
-    * Type of varying which is being lowered in this pass (either ir_var_in or
-    * ir_var_out).
+    * Type of varying which is being lowered in this pass (either
+    * ir_var_shader_in or ir_var_shader_out).
     */
    const ir_variable_mode mode;
 
@@ -181,6 +191,75 @@ lower_packed_varyings_visitor::run(exec_list *instructions)
    }
 }
 
+
+/**
+ * Make an ir_assignment from \c rhs to \c lhs, performing appropriate
+ * bitcasts if necessary to match up types.
+ *
+ * This function is called when packing varyings.
+ */
+ir_assignment *
+lower_packed_varyings_visitor::bitwise_assign_pack(ir_rvalue *lhs,
+                                                   ir_rvalue *rhs)
+{
+   if (lhs->type->base_type != rhs->type->base_type) {
+      /* Since we only mix types in flat varyings, and we always store flat
+       * varyings as type ivec4, we need only produce conversions from (uint
+       * or float) to int.
+       */
+      assert(lhs->type->base_type == GLSL_TYPE_INT);
+      switch (rhs->type->base_type) {
+      case GLSL_TYPE_UINT:
+         rhs = new(this->mem_ctx)
+            ir_expression(ir_unop_u2i, lhs->type, rhs);
+         break;
+      case GLSL_TYPE_FLOAT:
+         rhs = new(this->mem_ctx)
+            ir_expression(ir_unop_bitcast_f2i, lhs->type, rhs);
+         break;
+      default:
+         assert(!"Unexpected type conversion while lowering varyings");
+         break;
+      }
+   }
+   return new(this->mem_ctx) ir_assignment(lhs, rhs);
+}
+
+
+/**
+ * Make an ir_assignment from \c rhs to \c lhs, performing appropriate
+ * bitcasts if necessary to match up types.
+ *
+ * This function is called when unpacking varyings.
+ */
+ir_assignment *
+lower_packed_varyings_visitor::bitwise_assign_unpack(ir_rvalue *lhs,
+                                                     ir_rvalue *rhs)
+{
+   if (lhs->type->base_type != rhs->type->base_type) {
+      /* Since we only mix types in flat varyings, and we always store flat
+       * varyings as type ivec4, we need only produce conversions from int to
+       * (uint or float).
+       */
+      assert(rhs->type->base_type == GLSL_TYPE_INT);
+      switch (lhs->type->base_type) {
+      case GLSL_TYPE_UINT:
+         rhs = new(this->mem_ctx)
+            ir_expression(ir_unop_i2u, lhs->type, rhs);
+         break;
+      case GLSL_TYPE_FLOAT:
+         rhs = new(this->mem_ctx)
+            ir_expression(ir_unop_bitcast_i2f, lhs->type, rhs);
+         break;
+      default:
+         assert(!"Unexpected type conversion while lowering varyings");
+         break;
+      }
+   }
+   return new(this->mem_ctx) ir_assignment(lhs, rhs);
+}
+
+
 /**
  * Recursively pack or unpack the given varying (or portion of a varying) by
  * traversing all of its constituent vectors.
@@ -199,10 +278,20 @@ lower_packed_varyings_visitor::lower_rvalue(ir_rvalue *rvalue,
                                             ir_variable *unpacked_var,
                                             const char *name)
 {
-   /* FINISHME: Support for "varying" records in GLSL 1.50. */
-   assert(!rvalue->type->is_record());
-
-   if (rvalue->type->is_array()) {
+   if (rvalue->type->is_record()) {
+      for (unsigned i = 0; i < rvalue->type->length; i++) {
+         if (i != 0)
+            rvalue = rvalue->clone(this->mem_ctx, NULL);
+         const char *field_name = rvalue->type->fields.structure[i].name;
+         ir_dereference_record *dereference_record = new(this->mem_ctx)
+            ir_dereference_record(rvalue, field_name);
+         char *deref_name
+            = ralloc_asprintf(this->mem_ctx, "%s.%s", name, field_name);
+         fine_location = this->lower_rvalue(dereference_record, fine_location,
+                                            unpacked_var, deref_name);
+      }
+      return fine_location;
+   } else if (rvalue->type->is_array()) {
       /* Arrays are packed/unpacked by considering each array element in
        * sequence.
        */
@@ -261,13 +350,13 @@ lower_packed_varyings_visitor::lower_rvalue(ir_rvalue *rvalue,
                                                           unpacked_var, name));
       ir_swizzle *swizzle = new(this->mem_ctx)
          ir_swizzle(packed_deref, swizzle_values, components);
-      if (this->mode == ir_var_out) {
-         ir_assignment *assignment = new(this->mem_ctx)
-            ir_assignment(swizzle, rvalue);
+      if (this->mode == ir_var_shader_out) {
+         ir_assignment *assignment
+            = this->bitwise_assign_pack(swizzle, rvalue);
          this->main_instructions->push_tail(assignment);
       } else {
-         ir_assignment *assignment = new(this->mem_ctx)
-            ir_assignment(rvalue, swizzle);
+         ir_assignment *assignment
+            = this->bitwise_assign_unpack(rvalue, swizzle);
          this->main_instructions->push_head(assignment);
       }
       return fine_location + components;
@@ -306,8 +395,9 @@ lower_packed_varyings_visitor::lower_arraylike(ir_rvalue *rvalue,
  * If no packed varying has been created for the given varying location yet,
  * create it and add it to the shader before returning it.
  *
- * The newly created varying inherits its base type (float, uint, or int) and
- * interpolation parameters from \c unpacked_var.
+ * The newly created varying inherits its interpolation parameters from \c
+ * unpacked_var.  Its base type is ivec4 if we are lowering a flat varying,
+ * vec4 otherwise.
  */
 ir_variable *
 lower_packed_varyings_visitor::get_packed_varying(unsigned location,
@@ -318,8 +408,11 @@ lower_packed_varyings_visitor::get_packed_varying(unsigned location,
    assert(slot < locations_used);
    if (this->packed_varyings[slot] == NULL) {
       char *packed_name = ralloc_asprintf(this->mem_ctx, "packed:%s", name);
-      const glsl_type *packed_type = glsl_type::get_instance(
-            unpacked_var->type->get_scalar_type()->base_type, 4, 1);
+      const glsl_type *packed_type;
+      if (unpacked_var->interpolation == INTERP_QUALIFIER_FLAT)
+         packed_type = glsl_type::ivec4_type;
+      else
+         packed_type = glsl_type::vec4_type;
       ir_variable *packed_var = new(this->mem_ctx)
          ir_variable(packed_type, packed_name, this->mode);
       packed_var->centroid = unpacked_var->centroid;

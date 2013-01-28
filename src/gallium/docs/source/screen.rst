@@ -61,8 +61,6 @@ The integer capabilities:
 * ``PIPE_CAP_INDEP_BLEND_FUNC``: Whether per-rendertarget blend functions are
   available. If 0, then the first rendertarget's blend functions affect all
   MRTs.
-* ``PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE``: Whether clearing only depth or only
-  stencil in a combined depth-stencil buffer is supported.
 * ``PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS``: The maximum number of texture array
   layers supported. If 0, the array textures are not supported at all and
   the ARRAY texture targets are invalid.
@@ -136,6 +134,9 @@ The integer capabilities:
   expected for a pointer returned by transfer_map if the resource is
   PIPE_BUFFER. In other words, the pointer returned by transfer_map is
   always aligned to this value.
+* ``PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT``: Describes the required
+  alignment for pipe_sampler_view::u.buf.first_element, in bytes.
+  If a driver does not support first/last_element, it should return 0.
 
 
 .. _pipe_capf:

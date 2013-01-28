@@ -43,6 +43,14 @@ static void r300_flush_and_cleanup(struct r300_context *r300, unsigned flags)
     if (r300->screen->caps.is_r500)
         r500_emit_index_bias(r300, 0);
 
+    /* The DDX doesn't set these regs. */
+    if (r300->screen->info.drm_minor >= 6) {
+        CS_LOCALS(r300);
+        OUT_CS_REG_SEQ(R300_GB_MSPOS0, 2);
+        OUT_CS(0x66666666);
+        OUT_CS(0x6666666);
+    }
+
     r300->flush_counter++;
     r300->rws->cs_flush(r300->cs, flags);
     r300->dirty_hw = 0;
@@ -69,9 +77,6 @@ void r300_flush(struct pipe_context *pipe,
 {
     struct r300_context *r300 = r300_context(pipe);
     struct pb_buffer **rfence = (struct pb_buffer**)fence;
-
-    if (r300->draw && !r300->draw_vbo_locked)
-	r300_draw_flush_vbuf(r300);
 
     if (r300->screen->info.drm_minor >= 12) {
         flags |= RADEON_FLUSH_KEEP_TILING_FLAGS;
@@ -133,9 +138,12 @@ void r300_flush(struct pipe_context *pipe,
 }
 
 static void r300_flush_wrapped(struct pipe_context *pipe,
-                               struct pipe_fence_handle **fence)
+                               struct pipe_fence_handle **fence,
+                               enum pipe_flush_flags flags)
 {
-    r300_flush(pipe, 0, fence);
+    r300_flush(pipe,
+               flags & PIPE_FLUSH_END_OF_FRAME ? RADEON_FLUSH_END_OF_FRAME : 0,
+               fence);
 }
 
 void r300_init_flush_functions(struct r300_context* r300)

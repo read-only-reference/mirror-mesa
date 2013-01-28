@@ -440,8 +440,27 @@ static void r300_bind_blend_state(struct pipe_context* pipe,
                                   void* state)
 {
     struct r300_context* r300 = r300_context(pipe);
+    struct r300_blend_state *blend  = (struct r300_blend_state*)state;
+    boolean last_alpha_to_one = r300->alpha_to_one;
+    boolean last_alpha_to_coverage = r300->alpha_to_coverage;
 
     UPDATE_STATE(state, r300->blend_state);
+
+    if (!blend)
+        return;
+
+    r300->alpha_to_one = blend->state.alpha_to_one;
+    r300->alpha_to_coverage = blend->state.alpha_to_coverage;
+
+    if (r300->alpha_to_one != last_alpha_to_one && r300->msaa_enable &&
+        r300->fs_status == FRAGMENT_SHADER_VALID) {
+        r300->fs_status = FRAGMENT_SHADER_MAYBE_DIRTY;
+    }
+
+    if (r300->alpha_to_coverage != last_alpha_to_coverage &&
+        r300->msaa_enable) {
+        r300_mark_atom_dirty(r300, &r300->dsa_state);
+    }
 }
 
 /* Free blend state. */
@@ -553,45 +572,42 @@ static void r300_set_clip_state(struct pipe_context* pipe,
     }
 }
 
-static void
-r300_set_sample_mask(struct pipe_context *pipe,
-                     unsigned sample_mask)
-{
-}
-
-
 /* Create a new depth, stencil, and alpha state based on the CSO dsa state.
  *
  * This contains the depth buffer, stencil buffer, alpha test, and such.
  * On the Radeon, depth and stencil buffer setup are intertwined, which is
  * the reason for some of the strange-looking assignments across registers. */
-static void*
-        r300_create_dsa_state(struct pipe_context* pipe,
-                              const struct pipe_depth_stencil_alpha_state* state)
+static void* r300_create_dsa_state(struct pipe_context* pipe,
+                          const struct pipe_depth_stencil_alpha_state* state)
 {
-    struct r300_capabilities *caps = &r300_screen(pipe->screen)->caps;
+    boolean is_r500 = r300_screen(pipe->screen)->caps.is_r500;
     struct r300_dsa_state* dsa = CALLOC_STRUCT(r300_dsa_state);
     CB_LOCALS;
+    uint32_t alpha_value_fp16 = 0;
+    uint32_t z_buffer_control = 0;
+    uint32_t z_stencil_control = 0;
+    uint32_t stencil_ref_mask = 0;
+    uint32_t stencil_ref_bf = 0;
 
     dsa->dsa = *state;
 
     /* Depth test setup. - separate write mask depth for decomp flush */
     if (state->depth.writemask) {
-        dsa->z_buffer_control |= R300_Z_WRITE_ENABLE;
+        z_buffer_control |= R300_Z_WRITE_ENABLE;
     }
 
     if (state->depth.enabled) {
-        dsa->z_buffer_control |= R300_Z_ENABLE;
+        z_buffer_control |= R300_Z_ENABLE;
 
-        dsa->z_stencil_control |=
+        z_stencil_control |=
             (r300_translate_depth_stencil_function(state->depth.func) <<
                 R300_Z_FUNC_SHIFT);
     }
 
     /* Stencil buffer setup. */
     if (state->stencil[0].enabled) {
-        dsa->z_buffer_control |= R300_STENCIL_ENABLE;
-        dsa->z_stencil_control |=
+        z_buffer_control |= R300_STENCIL_ENABLE;
+        z_stencil_control |=
             (r300_translate_depth_stencil_function(state->stencil[0].func) <<
                 R300_S_FRONT_FUNC_SHIFT) |
             (r300_translate_stencil_op(state->stencil[0].fail_op) <<
@@ -601,15 +617,15 @@ static void*
             (r300_translate_stencil_op(state->stencil[0].zfail_op) <<
                 R300_S_FRONT_ZFAIL_OP_SHIFT);
 
-        dsa->stencil_ref_mask =
+        stencil_ref_mask =
                 (state->stencil[0].valuemask << R300_STENCILMASK_SHIFT) |
                 (state->stencil[0].writemask << R300_STENCILWRITEMASK_SHIFT);
 
         if (state->stencil[1].enabled) {
             dsa->two_sided = TRUE;
 
-            dsa->z_buffer_control |= R300_STENCIL_FRONT_BACK;
-            dsa->z_stencil_control |=
+            z_buffer_control |= R300_STENCIL_FRONT_BACK;
+            z_stencil_control |=
             (r300_translate_depth_stencil_function(state->stencil[1].func) <<
                 R300_S_BACK_FUNC_SHIFT) |
             (r300_translate_stencil_op(state->stencil[1].fail_op) <<
@@ -619,12 +635,12 @@ static void*
             (r300_translate_stencil_op(state->stencil[1].zfail_op) <<
                 R300_S_BACK_ZFAIL_OP_SHIFT);
 
-            dsa->stencil_ref_bf =
+            stencil_ref_bf =
                 (state->stencil[1].valuemask << R300_STENCILMASK_SHIFT) |
                 (state->stencil[1].writemask << R300_STENCILWRITEMASK_SHIFT);
 
-            if (caps->is_r500) {
-                dsa->z_buffer_control |= R500_STENCIL_REFMASK_FRONT_BACK;
+            if (is_r500) {
+                z_buffer_control |= R500_STENCIL_REFMASK_FRONT_BACK;
             } else {
                 dsa->two_sided_stencil_ref =
                   (state->stencil[0].valuemask != state->stencil[1].valuemask ||
@@ -640,53 +656,25 @@ static void*
             R300_FG_ALPHA_FUNC_ENABLE;
 
         dsa->alpha_function |= float_to_ubyte(state->alpha.ref_value);
-        dsa->alpha_value = util_float_to_half(state->alpha.ref_value);
-
-        if (caps->is_r500) {
-            dsa->alpha_function_fp16 = dsa->alpha_function |
-                                       R500_FG_ALPHA_FUNC_FP16_ENABLE;
-            dsa->alpha_function |= R500_FG_ALPHA_FUNC_8BIT;
-        }
+        alpha_value_fp16 = util_float_to_half(state->alpha.ref_value);
     }
 
-    BEGIN_CB(&dsa->cb_begin, 10);
-    OUT_CB_REG(R300_FG_ALPHA_FUNC, dsa->alpha_function);
+    BEGIN_CB(&dsa->cb_begin, 8);
     OUT_CB_REG_SEQ(R300_ZB_CNTL, 3);
-    OUT_CB(dsa->z_buffer_control);
-    OUT_CB(dsa->z_stencil_control);
-    OUT_CB(dsa->stencil_ref_mask);
-    OUT_CB_REG(R500_ZB_STENCILREFMASK_BF, dsa->stencil_ref_bf);
-    OUT_CB_REG(R500_FG_ALPHA_VALUE, dsa->alpha_value);
+    OUT_CB(z_buffer_control);
+    OUT_CB(z_stencil_control);
+    OUT_CB(stencil_ref_mask);
+    OUT_CB_REG(R500_ZB_STENCILREFMASK_BF, stencil_ref_bf);
+    OUT_CB_REG(R500_FG_ALPHA_VALUE, alpha_value_fp16);
     END_CB;
 
-    BEGIN_CB(&dsa->cb_begin_fp16, 10);
-    OUT_CB_REG(R300_FG_ALPHA_FUNC, dsa->alpha_function_fp16);
-    OUT_CB_REG_SEQ(R300_ZB_CNTL, 3);
-    OUT_CB(dsa->z_buffer_control);
-    OUT_CB(dsa->z_stencil_control);
-    OUT_CB(dsa->stencil_ref_mask);
-    OUT_CB_REG(R500_ZB_STENCILREFMASK_BF, dsa->stencil_ref_bf);
-    OUT_CB_REG(R500_FG_ALPHA_VALUE, dsa->alpha_value);
-    END_CB;
-
-    BEGIN_CB(dsa->cb_zb_no_readwrite, 10);
-    OUT_CB_REG(R300_FG_ALPHA_FUNC, dsa->alpha_function);
+    BEGIN_CB(dsa->cb_zb_no_readwrite, 8);
     OUT_CB_REG_SEQ(R300_ZB_CNTL, 3);
     OUT_CB(0);
     OUT_CB(0);
     OUT_CB(0);
     OUT_CB_REG(R500_ZB_STENCILREFMASK_BF, 0);
-    OUT_CB_REG(R500_FG_ALPHA_VALUE, dsa->alpha_value);
-    END_CB;
-
-    BEGIN_CB(dsa->cb_fp16_zb_no_readwrite, 10);
-    OUT_CB_REG(R300_FG_ALPHA_FUNC, dsa->alpha_function_fp16);
-    OUT_CB_REG_SEQ(R300_ZB_CNTL, 3);
-    OUT_CB(0);
-    OUT_CB(0);
-    OUT_CB(0);
-    OUT_CB_REG(R500_ZB_STENCILREFMASK_BF, 0);
-    OUT_CB_REG(R500_FG_ALPHA_VALUE, dsa->alpha_value);
+    OUT_CB_REG(R500_FG_ALPHA_VALUE, alpha_value_fp16);
     END_CB;
 
     return (void*)dsa;
@@ -837,7 +825,37 @@ void r300_mark_fb_state_dirty(struct r300_context *r300,
             r300->fb_state.size += 8;
     }
 
+    if (r300->cmask_in_use) {
+        r300->fb_state.size += 6;
+        if (r300->screen->caps.is_r500 && r300->screen->info.drm_minor >= 29) {
+            r300->fb_state.size += 3;
+        }
+    }
+
     /* The size of the rest of atoms stays the same. */
+}
+
+static unsigned r300_get_num_samples(struct r300_context *r300)
+{
+    struct pipe_framebuffer_state* fb =
+            (struct pipe_framebuffer_state*)r300->fb_state.state;
+    unsigned i, num_samples;
+
+    if (!fb->nr_cbufs && !fb->zsbuf)
+        return 1;
+
+    num_samples = 6;
+
+    for (i = 0; i < fb->nr_cbufs; i++)
+        num_samples = MIN2(num_samples, fb->cbufs[i]->texture->nr_samples);
+
+    if (fb->zsbuf)
+        num_samples = MIN2(num_samples, fb->zsbuf->texture->nr_samples);
+
+    if (!num_samples)
+        num_samples = 1;
+
+    return num_samples;
 }
 
 static void
@@ -893,6 +911,11 @@ r300_set_framebuffer_state(struct pipe_context* pipe,
     }
     assert(state->zsbuf || (r300->locked_zbuffer && !unlock_zbuffer) || !r300->zmask_in_use);
 
+    /* Set whether CMASK can be used. */
+    r300->cmask_in_use =
+        state->nr_cbufs == 1 &&
+        r300->screen->cmask_resource == state->cbufs[0]->texture;
+
     /* Need to reset clamping or colormask. */
     r300_mark_atom_dirty(r300, &r300->blend_state);
 
@@ -935,22 +958,22 @@ r300_set_framebuffer_state(struct pipe_context* pipe,
         }
     }
 
-    /* Set up AA config. */
-    if (state->nr_cbufs && state->cbufs[0]->texture->nr_samples > 1) {
-        aa->aa_config = R300_GB_AA_CONFIG_AA_ENABLE;
+    r300->num_samples = r300_get_num_samples(r300);
 
-        switch (state->cbufs[0]->texture->nr_samples) {
+    /* Set up AA config. */
+    if (r300->num_samples > 1) {
+        switch (r300->num_samples) {
         case 2:
-            aa->aa_config |= R300_GB_AA_CONFIG_NUM_AA_SUBSAMPLES_2;
-            break;
-        case 3:
-            aa->aa_config |= R300_GB_AA_CONFIG_NUM_AA_SUBSAMPLES_3;
+            aa->aa_config = R300_GB_AA_CONFIG_AA_ENABLE |
+                            R300_GB_AA_CONFIG_NUM_AA_SUBSAMPLES_2;
             break;
         case 4:
-            aa->aa_config |= R300_GB_AA_CONFIG_NUM_AA_SUBSAMPLES_4;
+            aa->aa_config = R300_GB_AA_CONFIG_AA_ENABLE |
+                            R300_GB_AA_CONFIG_NUM_AA_SUBSAMPLES_4;
             break;
         case 6:
-            aa->aa_config |= R300_GB_AA_CONFIG_NUM_AA_SUBSAMPLES_6;
+            aa->aa_config = R300_GB_AA_CONFIG_AA_ENABLE |
+                            R300_GB_AA_CONFIG_NUM_AA_SUBSAMPLES_6;
             break;
         }
     } else {
@@ -1275,6 +1298,7 @@ static void r300_bind_rs_state(struct pipe_context* pipe, void* state)
     struct r300_rs_state* rs = (struct r300_rs_state*)state;
     int last_sprite_coord_enable = r300->sprite_coord_enable;
     boolean last_two_sided_color = r300->two_sided_color;
+    boolean last_msaa_enable = r300->msaa_enable;
 
     if (r300->draw && rs) {
         draw_set_rasterizer_state(r300->draw, &rs->rs_draw, state);
@@ -1284,10 +1308,12 @@ static void r300_bind_rs_state(struct pipe_context* pipe, void* state)
         r300->polygon_offset_enabled = rs->polygon_offset_enable;
         r300->sprite_coord_enable = rs->rs.sprite_coord_enable;
         r300->two_sided_color = rs->rs.light_twoside;
+        r300->msaa_enable = rs->rs.multisample;
     } else {
         r300->polygon_offset_enabled = FALSE;
         r300->sprite_coord_enable = 0;
         r300->two_sided_color = FALSE;
+        r300->msaa_enable = FALSE;
     }
 
     UPDATE_STATE(state, r300->rs_state);
@@ -1296,6 +1322,17 @@ static void r300_bind_rs_state(struct pipe_context* pipe, void* state)
     if (last_sprite_coord_enable != r300->sprite_coord_enable ||
         last_two_sided_color != r300->two_sided_color) {
         r300_mark_atom_dirty(r300, &r300->rs_block_state);
+    }
+
+    if (last_msaa_enable != r300->msaa_enable) {
+        if (r300->alpha_to_coverage) {
+            r300_mark_atom_dirty(r300, &r300->dsa_state);
+        }
+
+        if (r300->alpha_to_one &&
+            r300->fs_status == FRAGMENT_SHADER_VALID) {
+            r300->fs_status = FRAGMENT_SHADER_MAYBE_DIRTY;
+        }
     }
 }
 
@@ -1566,6 +1603,16 @@ r300_sampler_view_destroy(struct pipe_context *pipe,
    FREE(view);
 }
 
+static void r300_set_sample_mask(struct pipe_context *pipe,
+                                 unsigned mask)
+{
+    struct r300_context* r300 = r300_context(pipe);
+
+    *((unsigned*)r300->sample_mask.state) = mask;
+
+    r300_mark_atom_dirty(r300, &r300->sample_mask);
+}
+
 static void r300_set_scissor_state(struct pipe_context* pipe,
                                    const struct pipe_scissor_state* state)
 {
@@ -1658,6 +1705,9 @@ static void r300_set_vertex_buffers_swtcl(struct pipe_context* pipe,
                                   &r300->nr_vertex_buffers,
                                   buffers, start_slot, count);
     draw_set_vertex_buffers(r300->draw, start_slot, count, buffers);
+
+    if (!buffers)
+        return;
 
     for (i = 0; i < count; i++) {
         if (buffers[i].user_buffer) {

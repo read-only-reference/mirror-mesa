@@ -3,7 +3,7 @@ AUTOMAKE_OPTIONS = subdir-objects
 AM_CPPFLAGS = \
 	$(GALLIUM_PIPE_LOADER_DEFINES) \
 	-DMESA_VERSION=\"$(MESA_VERSION)\" \
-	-DPIPE_SEARCH_DIR=\"$(OPENCL_LIB_INSTALL_DIR)\" \
+	-DPIPE_SEARCH_DIR=\"$(libdir)/gallium-pipe\" \
 	-I$(top_srcdir)/include \
 	-I$(top_srcdir)/src/gallium/include \
 	-I$(top_srcdir)/src/gallium/drivers \
@@ -23,7 +23,8 @@ libclllvm_la_CXXFLAGS = \
 	-std=c++98 \
 	$(LLVM_CPPFLAGS) \
 	$(DEFINES) \
-	-DLIBCLC_PATH=\"$(LIBCLC_PATH)/\" \
+	-DLIBCLC_INCLUDEDIR=\"$(LIBCLC_INCLUDEDIR)/\" \
+	-DLIBCLC_LIBEXECDIR=\"$(LIBCLC_LIBEXECDIR)/\" \
 	-DCLANG_RESOURCE_DIR=\"$(CLANG_RESOURCE_DIR)\"
 
 libclllvm_la_SOURCES = \

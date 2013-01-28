@@ -265,8 +265,11 @@ void st_init_limits(struct st_context *st)
    c->GLSLSkipStrictMaxVaryingLimitCheck =
       screen->get_param(screen, PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS);
 
-   if (can_ubo)
+   if (can_ubo) {
       st->ctx->Extensions.ARB_uniform_buffer_object = GL_TRUE;
+      st->ctx->Const.UniformBufferOffsetAlignment =
+         screen->get_param(screen, PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT);
+   }
 }
 
 
@@ -451,7 +454,7 @@ void st_init_extensions(struct st_context *st)
           PIPE_FORMAT_LATC2_SNORM } },
 
       { { o(EXT_texture_compression_s3tc),
-          o(S3_s3tc) },
+          o(ANGLE_texture_compression_dxt) },
         { PIPE_FORMAT_DXT1_RGB,
           PIPE_FORMAT_DXT1_RGBA,
           PIPE_FORMAT_DXT3_RGBA,
@@ -513,6 +516,7 @@ void st_init_extensions(struct st_context *st)
    ctx->Extensions.ARB_fragment_shader = GL_TRUE;
    ctx->Extensions.ARB_half_float_pixel = GL_TRUE;
    ctx->Extensions.ARB_half_float_vertex = GL_TRUE;
+   ctx->Extensions.ARB_internalformat_query = GL_TRUE;
    ctx->Extensions.ARB_map_buffer_range = GL_TRUE;
    ctx->Extensions.ARB_shader_objects = GL_TRUE;
    ctx->Extensions.ARB_shading_language_100 = GL_TRUE;
@@ -530,7 +534,6 @@ void st_init_extensions(struct st_context *st)
    ctx->Extensions.EXT_blend_minmax = GL_TRUE;
    ctx->Extensions.EXT_framebuffer_blit = GL_TRUE;
    ctx->Extensions.EXT_framebuffer_object = GL_TRUE;
-   ctx->Extensions.EXT_framebuffer_multisample = GL_TRUE;
    ctx->Extensions.EXT_fog_coord = GL_TRUE;
    ctx->Extensions.EXT_gpu_program_parameters = GL_TRUE;
    ctx->Extensions.EXT_pixel_buffer_object = GL_TRUE;
@@ -591,9 +594,10 @@ void st_init_extensions(struct st_context *st)
       ctx->Const.NativeIntegers = GL_TRUE;
       ctx->Const.MaxClipPlanes = 8;
 
-      /* Extensions that only depend on GLSL 1.3. */
+      /* Extensions that either depend on GLSL 1.30 or are a subset thereof. */
       ctx->Extensions.ARB_conservative_depth = GL_TRUE;
       ctx->Extensions.ARB_shader_bit_encoding = GL_TRUE;
+      ctx->Extensions.OES_depth_texture_cube_map = GL_TRUE;
    } else {
       /* Optional integer support for GLSL 1.2. */
       if (screen->get_shader_param(screen, PIPE_SHADER_VERTEX,
@@ -608,7 +612,7 @@ void st_init_extensions(struct st_context *st)
 
    if (!ctx->Mesa_DXTn && !st_get_s3tc_override()) {
       ctx->Extensions.EXT_texture_compression_s3tc = GL_FALSE;
-      ctx->Extensions.S3_s3tc = GL_FALSE;
+      ctx->Extensions.ANGLE_texture_compression_dxt = GL_FALSE;
    }
 
    if (screen->get_shader_param(screen, PIPE_SHADER_GEOMETRY,
@@ -648,6 +652,13 @@ void st_init_extensions(struct st_context *st)
          break;
       }
    }
+   if (ctx->Const.MaxSamples == 1) {
+      /* one sample doesn't really make sense */
+      ctx->Const.MaxSamples = 0;
+   }
+   else if (ctx->Const.MaxSamples >= 2) {
+      ctx->Extensions.EXT_framebuffer_multisample = GL_TRUE;
+   }
 
    if (ctx->Const.MaxDualSourceDrawBuffers > 0)
       ctx->Extensions.ARB_blend_func_extended = GL_TRUE;
@@ -674,6 +685,13 @@ void st_init_extensions(struct st_context *st)
    }
    if (screen->get_param(screen, PIPE_CAP_TEXTURE_BUFFER_OBJECTS)) {
       ctx->Extensions.ARB_texture_buffer_object = GL_TRUE;
+
+      ctx->Const.TextureBufferOffsetAlignment =
+         screen->get_param(screen, PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT);
+
+      if (ctx->Const.TextureBufferOffsetAlignment)
+         ctx->Extensions.ARB_texture_buffer_range = GL_TRUE;
+
       init_format_extensions(st, tbo_rgb32, Elements(tbo_rgb32),
                              PIPE_BUFFER, PIPE_BIND_SAMPLER_VIEW);
    }

@@ -288,6 +288,12 @@ enum pipe_transfer_usage {
 
 };
 
+/**
+ * Flags for the flush function.
+ */
+enum pipe_flush_flags {
+   PIPE_FLUSH_END_OF_FRAME = (1 << 0)
+};
 
 /*
  * Resource binding flags -- state tracker must specify in advance all
@@ -451,7 +457,6 @@ enum pipe_cap {
    PIPE_CAP_INDEP_BLEND_ENABLE = 33,
    /** different blend funcs per rendertarget */
    PIPE_CAP_INDEP_BLEND_FUNC = 34,
-   PIPE_CAP_DEPTHSTENCIL_CLEAR_SEPARATE = 35,
    PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS = 36,
    PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT = 37,
    PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT = 38,
@@ -492,7 +497,8 @@ enum pipe_cap {
    PIPE_CAP_TEXTURE_MULTISAMPLE = 74,
    PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT = 75,
    PIPE_CAP_CUBE_MAP_ARRAY = 76,
-   PIPE_CAP_TEXTURE_BUFFER_OBJECTS = 77
+   PIPE_CAP_TEXTURE_BUFFER_OBJECTS = 77,
+   PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT = 78
 };
 
 /**

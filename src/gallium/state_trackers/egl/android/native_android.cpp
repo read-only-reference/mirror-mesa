@@ -147,18 +147,12 @@ get_pipe_format(int native)
 
 #ifndef ANDROID_BACKEND_NO_DRM
 
-#include <gralloc_drm_handle.h>
+#include <gralloc_drm.h>
 static int
 get_handle_name(buffer_handle_t handle)
 {
-   struct gralloc_drm_handle_t *dh;
-
-   /* check that the buffer is allocated by drm_gralloc and cast */
-   dh = gralloc_drm_handle(handle);
-
-   return (dh) ? dh->name : 0;
+   return gralloc_drm_get_gem_handle(handle);
 }
-
 #else
 
 static int
@@ -387,7 +381,7 @@ copy_resources(struct native_display *ndpy,
 
    u_box_origin_2d(src->width0, src->height0, &box);
    pipe->resource_copy_region(pipe, dst, 0, 0, 0, 0, src, 0, &box);
-   pipe->flush(pipe, NULL);
+   pipe->flush(pipe, NULL, 0);
 }
 
 static boolean

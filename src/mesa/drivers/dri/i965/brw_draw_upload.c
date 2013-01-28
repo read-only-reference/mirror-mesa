@@ -25,13 +25,12 @@
  * 
  **************************************************************************/
 
-#undef NDEBUG
-
 #include "main/glheader.h"
 #include "main/bufferobj.h"
 #include "main/context.h"
 #include "main/enums.h"
 #include "main/macros.h"
+#include "main/glformats.h"
 
 #include "brw_draw.h"
 #include "brw_defines.h"
@@ -63,6 +62,14 @@ static GLuint half_float_types[5] = {
    BRW_SURFACEFORMAT_R16G16_FLOAT,
    BRW_SURFACEFORMAT_R16G16B16A16_FLOAT,
    BRW_SURFACEFORMAT_R16G16B16A16_FLOAT
+};
+
+static GLuint fixed_point_types[5] = {
+   0,
+   BRW_SURFACEFORMAT_R32_SFIXED,
+   BRW_SURFACEFORMAT_R32G32_SFIXED,
+   BRW_SURFACEFORMAT_R32G32B32_SFIXED,
+   BRW_SURFACEFORMAT_R32G32B32A32_SFIXED,
 };
 
 static GLuint uint_types_direct[5] = {
@@ -215,16 +222,20 @@ static GLuint byte_types_scale[5] = {
  * the appopriate hardware surface type.
  * Format will be GL_RGBA or possibly GL_BGRA for GLubyte[4] color arrays.
  */
-static GLuint get_surface_type( GLenum type, GLuint size,
-                                GLenum format, bool normalized, bool integer )
+static unsigned
+get_surface_type(struct intel_context *intel,
+                 const struct gl_client_array *glarray)
 {
+   int size = glarray->Size;
+
    if (unlikely(INTEL_DEBUG & DEBUG_VERTS))
       printf("type %s size %d normalized %d\n", 
-		   _mesa_lookup_enum_by_nr(type), size, normalized);
+             _mesa_lookup_enum_by_nr(glarray->Type),
+             glarray->Size, glarray->Normalized);
 
-   if (integer) {
-      assert(format == GL_RGBA); /* sanity check */
-      switch (type) {
+   if (glarray->Integer) {
+      assert(glarray->Format == GL_RGBA); /* sanity check */
+      switch (glarray->Type) {
       case GL_INT: return int_types_direct[size];
       case GL_SHORT: return short_types_direct[size];
       case GL_BYTE: return byte_types_direct[size];
@@ -233,8 +244,8 @@ static GLuint get_surface_type( GLenum type, GLuint size,
       case GL_UNSIGNED_BYTE: return ubyte_types_direct[size];
       default: assert(0); return 0;
       }
-   } else if (normalized) {
-      switch (type) {
+   } else if (glarray->Normalized) {
+      switch (glarray->Type) {
       case GL_DOUBLE: return double_types[size];
       case GL_FLOAT: return float_types[size];
       case GL_HALF_FLOAT: return half_float_types[size];
@@ -244,7 +255,7 @@ static GLuint get_surface_type( GLenum type, GLuint size,
       case GL_UNSIGNED_INT: return uint_types_norm[size];
       case GL_UNSIGNED_SHORT: return ushort_types_norm[size];
       case GL_UNSIGNED_BYTE:
-         if (format == GL_BGRA) {
+         if (glarray->Format == GL_BGRA) {
             /* See GL_EXT_vertex_array_bgra */
             assert(size == 4);
             return BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
@@ -253,13 +264,25 @@ static GLuint get_surface_type( GLenum type, GLuint size,
             return ubyte_types_norm[size];
          }
       /* See GL_ARB_vertex_type_2_10_10_10_rev.
-       * W/A: the hardware doesn't really support the formats we'd
+       * W/A: Pre-Haswell, the hardware doesn't really support the formats we'd
        * like to use here, so upload everything as UINT and fix
        * it in the shader
        */
       case GL_INT_2_10_10_10_REV:
+         assert(size == 4);
+         if (intel->gen >= 8 || intel->is_haswell) {
+            return glarray->Format == GL_BGRA
+               ? BRW_SURFACEFORMAT_B10G10R10A2_SNORM
+               : BRW_SURFACEFORMAT_R10G10B10A2_SNORM;
+         }
+         return BRW_SURFACEFORMAT_R10G10B10A2_UINT;
       case GL_UNSIGNED_INT_2_10_10_10_REV:
          assert(size == 4);
+         if (intel->gen >= 8 || intel->is_haswell) {
+            return glarray->Format == GL_BGRA
+               ? BRW_SURFACEFORMAT_B10G10R10A2_UNORM
+               : BRW_SURFACEFORMAT_R10G10B10A2_UNORM;
+         }
          return BRW_SURFACEFORMAT_R10G10B10A2_UINT;
       default: assert(0); return 0;
       }
@@ -270,12 +293,25 @@ static GLuint get_surface_type( GLenum type, GLuint size,
        * like to use here, so upload everything as UINT and fix
        * it in the shader
        */
-      if (type == GL_INT_2_10_10_10_REV || type == GL_UNSIGNED_INT_2_10_10_10_REV) {
+      if (glarray->Type == GL_INT_2_10_10_10_REV) {
          assert(size == 4);
+         if (intel->gen >= 8 || intel->is_haswell) {
+            return glarray->Format == GL_BGRA
+               ? BRW_SURFACEFORMAT_B10G10R10A2_SSCALED
+               : BRW_SURFACEFORMAT_R10G10B10A2_SSCALED;
+         }
+         return BRW_SURFACEFORMAT_R10G10B10A2_UINT;
+      } else if (glarray->Type == GL_UNSIGNED_INT_2_10_10_10_REV) {
+         assert(size == 4);
+         if (intel->gen >= 8 || intel->is_haswell) {
+            return glarray->Format == GL_BGRA
+               ? BRW_SURFACEFORMAT_B10G10R10A2_USCALED
+               : BRW_SURFACEFORMAT_R10G10B10A2_USCALED;
+         }
          return BRW_SURFACEFORMAT_R10G10B10A2_UINT;
       }
-      assert(format == GL_RGBA); /* sanity check */
-      switch (type) {
+      assert(glarray->Format == GL_RGBA); /* sanity check */
+      switch (glarray->Type) {
       case GL_DOUBLE: return double_types[size];
       case GL_FLOAT: return float_types[size];
       case GL_HALF_FLOAT: return half_float_types[size];
@@ -285,35 +321,16 @@ static GLuint get_surface_type( GLenum type, GLuint size,
       case GL_UNSIGNED_INT: return uint_types_scale[size];
       case GL_UNSIGNED_SHORT: return ushort_types_scale[size];
       case GL_UNSIGNED_BYTE: return ubyte_types_scale[size];
-      /* This produces GL_FIXED inputs as values between INT32_MIN and
-       * INT32_MAX, which will be scaled down by 1/65536 by the VS.
-       */
-      case GL_FIXED: return int_types_scale[size];
+      case GL_FIXED:
+         if (intel->gen >= 8 || intel->is_haswell)
+            return fixed_point_types[size];
+
+         /* This produces GL_FIXED inputs as values between INT32_MIN and
+          * INT32_MAX, which will be scaled down by 1/65536 by the VS.
+          */
+         return int_types_scale[size];
       default: assert(0); return 0;
       }
-   }
-}
-
-
-static GLuint get_size( GLenum type )
-{
-   switch (type) {
-   case GL_DOUBLE: return sizeof(GLdouble);
-   case GL_FLOAT: return sizeof(GLfloat);
-   case GL_HALF_FLOAT: return sizeof(GLhalfARB);
-   case GL_INT: return sizeof(GLint);
-   case GL_SHORT: return sizeof(GLshort);
-   case GL_BYTE: return sizeof(GLbyte);
-   case GL_UNSIGNED_INT: return sizeof(GLuint);
-   case GL_UNSIGNED_SHORT: return sizeof(GLushort);
-   case GL_UNSIGNED_BYTE: return sizeof(GLubyte);
-   case GL_FIXED: return sizeof(GLuint);
-   /* packed formats: always have 4 components, and element size is
-    * 4 bytes, so pretend each component is 1 byte.
-    */
-   case GL_INT_2_10_10_10_REV: return sizeof(GLbyte);
-   case GL_UNSIGNED_INT_2_10_10_10_REV: return sizeof(GLubyte);
-   default: assert(0); return 0;
    }
 }
 
@@ -342,8 +359,8 @@ copy_array_to_vbo_array(struct brw_context *brw,
     */
    if (src_stride == 0) {
       intel_upload_data(&brw->intel, element->glarray->Ptr,
-                        element->element_size,
-                        element->element_size,
+                        element->glarray->_ElementSize,
+                        element->glarray->_ElementSize,
 			&buffer->bo, &buffer->offset);
 
       buffer->stride = 0;
@@ -399,8 +416,6 @@ static void brw_prepare_vertices(struct brw_context *brw)
       vs_inputs |= VERT_BIT_EDGEFLAG;
    }
 
-   /* First build an array of pointers to ve's in vb.inputs_read
-    */
    if (0)
       printf("%s %d..%d\n", __FUNCTION__, min_index, max_index);
 
@@ -411,8 +426,7 @@ static void brw_prepare_vertices(struct brw_context *brw)
       struct brw_vertex_element *input = &brw->vb.inputs[i];
 
       vs_inputs &= ~BITFIELD64_BIT(i);
-      if (input->glarray->Size && get_size(input->glarray->Type))
-         brw->vb.enabled[brw->vb.nr_enabled++] = input;
+      brw->vb.enabled[brw->vb.nr_enabled++] = input;
    }
 
    if (brw->vb.nr_enabled == 0)
@@ -424,9 +438,6 @@ static void brw_prepare_vertices(struct brw_context *brw)
    for (i = j = 0; i < brw->vb.nr_enabled; i++) {
       struct brw_vertex_element *input = brw->vb.enabled[i];
       const struct gl_client_array *glarray = input->glarray;
-      int type_size = get_size(glarray->Type);
-
-      input->element_size = type_size * glarray->Size;
 
       if (_mesa_is_bufferobj(glarray->BufferObj)) {
 	 struct intel_buffer_object *intel_buffer =
@@ -454,7 +465,7 @@ static void brw_prepare_vertices(struct brw_context *brw)
 
 	    /* Named buffer object: Just reference its contents directly. */
             buffer->bo = intel_bufferobj_source(intel,
-                                                intel_buffer, type_size,
+                                                intel_buffer, 1,
 						&buffer->offset);
 	    drm_intel_bo_reference(buffer->bo);
 	    buffer->offset += (uintptr_t)glarray->Ptr;
@@ -489,11 +500,6 @@ static void brw_prepare_vertices(struct brw_context *brw)
 	 else if (interleaved != glarray->StrideB ||
 		  (uintptr_t)(glarray->Ptr - ptr) > interleaved)
 	 {
-	    interleaved = 0;
-	 }
-	 else if ((uintptr_t)(glarray->Ptr - ptr) & (type_size -1))
-	 {
-	    /* enforce natural alignment (for doubles) */
 	    interleaved = 0;
 	 }
 
@@ -541,7 +547,7 @@ static void brw_prepare_vertices(struct brw_context *brw)
       struct brw_vertex_buffer *buffer = &brw->vb.buffers[j];
       if (upload[i]->glarray->InstanceDivisor == 0) {
          copy_array_to_vbo_array(brw, upload[i], min_index, max_index,
-                                 buffer, upload[i]->element_size);
+                                 buffer, upload[i]->glarray->_ElementSize);
       } else {
          /* This is an instanced attribute, since its InstanceDivisor
           * is not zero. Therefore, its data will be stepped after the
@@ -550,7 +556,7 @@ static void brw_prepare_vertices(struct brw_context *brw)
          uint32_t instanced_attr_max_index =
             (brw->num_instances - 1) / upload[i]->glarray->InstanceDivisor;
          copy_array_to_vbo_array(brw, upload[i], 0, instanced_attr_max_index,
-                                 buffer, upload[i]->element_size);
+                                 buffer, upload[i]->glarray->_ElementSize);
       }
       buffer->offset -= delta * buffer->stride;
       buffer->step_rate = upload[i]->glarray->InstanceDivisor;
@@ -659,11 +665,7 @@ static void brw_emit_vertices(struct brw_context *brw)
    OUT_BATCH((_3DSTATE_VERTEX_ELEMENTS << 16) | (2 * nr_elements - 1));
    for (i = 0; i < brw->vb.nr_enabled; i++) {
       struct brw_vertex_element *input = brw->vb.enabled[i];
-      uint32_t format = get_surface_type(input->glarray->Type,
-					 input->glarray->Size,
-					 input->glarray->Format,
-					 input->glarray->Normalized,
-                                         input->glarray->Integer);
+      uint32_t format = get_surface_type(intel, input->glarray);
       uint32_t comp0 = BRW_VE1_COMPONENT_STORE_SRC;
       uint32_t comp1 = BRW_VE1_COMPONENT_STORE_SRC;
       uint32_t comp2 = BRW_VE1_COMPONENT_STORE_SRC;
@@ -724,11 +726,7 @@ static void brw_emit_vertices(struct brw_context *brw)
    }
 
    if (intel->gen >= 6 && gen6_edgeflag_input) {
-      uint32_t format = get_surface_type(gen6_edgeflag_input->glarray->Type,
-                                         gen6_edgeflag_input->glarray->Size,
-                                         gen6_edgeflag_input->glarray->Format,
-                                         gen6_edgeflag_input->glarray->Normalized,
-                                         gen6_edgeflag_input->glarray->Integer);
+      uint32_t format = get_surface_type(intel, gen6_edgeflag_input->glarray);
 
       OUT_BATCH((gen6_edgeflag_input->buffer << GEN6_VE0_INDEX_SHIFT) |
                 GEN6_VE0_VALID |
@@ -790,7 +788,7 @@ static void brw_upload_indices(struct brw_context *brw)
    if (index_buffer == NULL)
       return;
 
-   ib_type_size = get_size(index_buffer->type);
+   ib_type_size = _mesa_sizeof_type(index_buffer->type);
    ib_size = ib_type_size * index_buffer->count;
    bufferobj = index_buffer->obj;
 
@@ -809,7 +807,7 @@ static void brw_upload_indices(struct brw_context *brw)
       /* If the index buffer isn't aligned to its element size, we have to
        * rebase it into a temporary.
        */
-       if ((get_size(index_buffer->type) - 1) & offset) {
+       if ((ib_type_size - 1) & offset) {
            GLubyte *map = ctx->Driver.MapBufferRange(ctx,
 						     offset,
 						     ib_size,
