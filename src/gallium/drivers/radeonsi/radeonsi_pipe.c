@@ -280,6 +280,7 @@ static const char *r600_get_family_name(enum radeon_family family)
 	case CHIP_TAHITI: return "AMD TAHITI";
 	case CHIP_PITCAIRN: return "AMD PITCAIRN";
 	case CHIP_VERDE: return "AMD CAPE VERDE";
+	case CHIP_OLAND: return "AMD OLAND";
 	default: return "AMD unknown";
 	}
 }
@@ -355,6 +356,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_QUERY_TIMESTAMP:
 	case PIPE_CAP_CUBE_MAP_ARRAY:
 	case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
+	case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
 		return 0;
 
 	/* Stream output. */
@@ -379,7 +381,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
 			return 15;
 	case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
-		return /*rscreen->info.drm_minor >= 9 ? 16384 :*/ 0;
+		return 16384;
 	case PIPE_CAP_MAX_COMBINED_SAMPLERS:
 		return 32;
 
@@ -438,7 +440,6 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		return 0;
 	}
 
-	/* TODO: all these should be fixed, since r600 surely supports much more! */
 	switch (param) {
 	case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
 	case PIPE_SHADER_CAP_MAX_ALU_INSTRUCTIONS:
@@ -446,25 +447,24 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_MAX_TEX_INDIRECTIONS:
 		return 16384;
 	case PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH:
-		return 8; /* FIXME */
+		return 32;
 	case PIPE_SHADER_CAP_MAX_INPUTS:
-		if(shader == PIPE_SHADER_FRAGMENT)
-			return 34;
-		else
-			return 32;
+		return 32;
 	case PIPE_SHADER_CAP_MAX_TEMPS:
 		return 256; /* Max native temporaries. */
 	case PIPE_SHADER_CAP_MAX_ADDRS:
 		/* FIXME Isn't this equal to TEMPS? */
 		return 1; /* Max native address registers */
 	case PIPE_SHADER_CAP_MAX_CONSTS:
-		return 64;
+		return 4096; /* actually only memory limits this */
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
 		return 1;
 	case PIPE_SHADER_CAP_MAX_PREDS:
 		return 0; /* FIXME */
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
 		return 1;
+	case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
+		return 0;
 	case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
 	case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
 	case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:

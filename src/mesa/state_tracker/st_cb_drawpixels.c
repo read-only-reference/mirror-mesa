@@ -484,17 +484,29 @@ make_texture(struct st_context *st,
    gl_format mformat;
    struct pipe_resource *pt;
    enum pipe_format pipeFormat;
-   GLenum baseInternalFormat, intFormat;
+   GLenum baseInternalFormat;
 
-   intFormat = internal_format(ctx, format, type);
-   baseInternalFormat = _mesa_base_tex_format(ctx, intFormat);
+   /* Choose a pixel format for the temp texture which will hold the
+    * image to draw.
+    */
+   pipeFormat = st_choose_matching_format(pipe->screen, PIPE_BIND_SAMPLER_VIEW,
+                                          format, type, unpack->SwapBytes);
 
-   mformat = st_ChooseTextureFormat_renderable(ctx, intFormat,
-                                               format, type, GL_FALSE);
-   assert(mformat);
+   if (pipeFormat != PIPE_FORMAT_NONE) {
+      mformat = st_pipe_format_to_mesa_format(pipeFormat);
+      baseInternalFormat = _mesa_get_format_base_format(mformat);
+   }
+   else {
+      /* Use the generic approach. */
+      GLenum intFormat = internal_format(ctx, format, type);
 
-   pipeFormat = st_mesa_format_to_pipe_format(mformat);
-   assert(pipeFormat);
+      baseInternalFormat = _mesa_base_tex_format(ctx, intFormat);
+      pipeFormat = st_choose_format(st, intFormat, format, type,
+                                    PIPE_TEXTURE_2D, 0, PIPE_BIND_SAMPLER_VIEW,
+                                    FALSE);
+      assert(pipeFormat != PIPE_FORMAT_NONE);
+      mformat = st_pipe_format_to_mesa_format(pipeFormat);
+   }
 
    pixels = _mesa_map_pbo_source(ctx, unpack, pixels);
    if (!pixels)
@@ -1462,8 +1474,8 @@ st_CopyPixels(struct gl_context *ctx, GLint srcx, GLint srcy,
       driver_vp = make_passthrough_vertex_shader(st, GL_FALSE);
 
       if (st->pixel_xfer.pixelmap_enabled) {
-	  sv[1] = st->pixel_xfer.pixelmap_sampler_view;
-	  num_sampler_view++;
+         sv[1] = st->pixel_xfer.pixelmap_sampler_view;
+         num_sampler_view++;
       }
    }
    else {
@@ -1497,16 +1509,18 @@ st_CopyPixels(struct gl_context *ctx, GLint srcx, GLint srcy,
    else {
       /* srcFormat can't be used as a texture format */
       if (type == GL_DEPTH) {
-         texFormat = st_choose_format(screen, GL_DEPTH_COMPONENT,
+         texFormat = st_choose_format(st, GL_DEPTH_COMPONENT,
                                       GL_NONE, GL_NONE, st->internal_target,
-				      sample_count, PIPE_BIND_DEPTH_STENCIL);
+                                      sample_count, PIPE_BIND_DEPTH_STENCIL,
+                                      FALSE);
          assert(texFormat != PIPE_FORMAT_NONE);
       }
       else {
          /* default color format */
-         texFormat = st_choose_format(screen, GL_RGBA,
+         texFormat = st_choose_format(st, GL_RGBA,
                                       GL_NONE, GL_NONE, st->internal_target,
-                                      sample_count, PIPE_BIND_SAMPLER_VIEW);
+                                      sample_count, PIPE_BIND_SAMPLER_VIEW,
+                                      FALSE);
          assert(texFormat != PIPE_FORMAT_NONE);
       }
    }

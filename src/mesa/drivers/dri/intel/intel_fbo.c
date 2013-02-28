@@ -202,15 +202,7 @@ intel_quantize_num_samples(struct intel_screen *intel, unsigned num_samples)
          return 0;
       return 0;
    default:
-      /* MSAA unsupported.  However, a careful reading of
-       * EXT_framebuffer_multisample reveals that we need to permit
-       * num_samples to be 1 (since num_samples is permitted to be as high as
-       * GL_MAX_SAMPLES, and GL_MAX_SAMPLES must be at least 1).  Since
-       * platforms before Gen6 don't support MSAA, this is safe, because
-       * multisampling won't happen anyhow.
-       */
-      if (num_samples > 0)
-         return 1;
+      /* MSAA unsupported. */
       return 0;
    }
 }
@@ -529,6 +521,36 @@ intel_renderbuffer_update_wrapper(struct intel_context *intel,
    }
 
    return true;
+}
+
+/**
+ * Create a fake intel_renderbuffer that wraps a gl_texture_image.
+ */
+struct intel_renderbuffer *
+intel_create_fake_renderbuffer_wrapper(struct intel_context *intel,
+                                       struct gl_texture_image *image)
+{
+   struct gl_context *ctx = &intel->ctx;
+   struct intel_renderbuffer *irb;
+   struct gl_renderbuffer *rb;
+
+   irb = CALLOC_STRUCT(intel_renderbuffer);
+   if (!irb) {
+      _mesa_error(ctx, GL_OUT_OF_MEMORY, "creating renderbuffer");
+      return NULL;
+   }
+
+   rb = &irb->Base.Base;
+
+   _mesa_init_renderbuffer(rb, 0);
+   rb->ClassID = INTEL_RB_CLASS;
+
+   if (!intel_renderbuffer_update_wrapper(intel, irb, image, image->Face)) {
+      intel_delete_renderbuffer(ctx, rb);
+      return NULL;
+   }
+
+   return irb;
 }
 
 void

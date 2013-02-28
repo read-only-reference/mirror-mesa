@@ -128,11 +128,6 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 			continue;
 		}
 
-		/* XXX: Flat shading hangs the GPU */
-		if (shader->shader.input[i].interpolate == TGSI_INTERPOLATE_CONSTANT ||
-		    (shader->shader.input[i].interpolate == TGSI_INTERPOLATE_COLOR &&
-		     rctx->queued.named.rasterizer->flatshade))
-			have_linear = TRUE;
 		if (shader->shader.input[i].interpolate == TGSI_INTERPOLATE_LINEAR)
 			have_linear = TRUE;
 		if (shader->shader.input[i].interpolate == TGSI_INTERPOLATE_PERSPECTIVE)
@@ -324,18 +319,18 @@ static void si_update_spi_map(struct r600_context *rctx)
 		unsigned name = ps->input[i].name;
 		unsigned param_offset = ps->input[i].param_offset;
 
+		if (name == TGSI_SEMANTIC_POSITION)
+			/* Read from preloaded VGPRs, not parameters */
+			continue;
+
 bcolor:
 		tmp = 0;
 
-#if 0
-		/* XXX: Flat shading hangs the GPU */
-		if (name == TGSI_SEMANTIC_POSITION ||
-		    ps->input[i].interpolate == TGSI_INTERPOLATE_CONSTANT ||
+		if (ps->input[i].interpolate == TGSI_INTERPOLATE_CONSTANT ||
 		    (ps->input[i].interpolate == TGSI_INTERPOLATE_COLOR &&
-		     rctx->rasterizer && rctx->rasterizer->flatshade)) {
+		     rctx->ps_shader->current->key.flatshade)) {
 			tmp |= S_028644_FLAT_SHADE(1);
 		}
-#endif
 
 		if (name == TGSI_SEMANTIC_GENERIC &&
 		    rctx->sprite_coord_enable & (1 << ps->input[i].sid)) {
@@ -524,10 +519,8 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	struct pipe_index_buffer ib = {};
 	uint32_t cp_coher_cntl;
 
-	if ((!info->count && (info->indexed || !info->count_from_stream_output)) ||
-	    (info->indexed && !rctx->index_buffer.buffer)) {
+	if (!info->count && (info->indexed || !info->count_from_stream_output))
 		return;
-	}
 
 	if (!rctx->ps_shader || !rctx->vs_shader)
 		return;
@@ -538,13 +531,14 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	if (info->indexed) {
 		/* Initialize the index buffer struct. */
 		pipe_resource_reference(&ib.buffer, rctx->index_buffer.buffer);
+		ib.user_buffer = rctx->index_buffer.user_buffer;
 		ib.index_size = rctx->index_buffer.index_size;
 		ib.offset = rctx->index_buffer.offset + info->start * ib.index_size;
 
 		/* Translate or upload, if needed. */
 		r600_translate_index_buffer(rctx, &ib, info->count);
 
-		if (ib.user_buffer) {
+		if (ib.user_buffer && !ib.buffer) {
 			r600_upload_index_buffer(rctx, &ib, info->count);
 		}
 

@@ -23,6 +23,21 @@ When an instruction has a scalar result, the result is usually copied into
 each of the components of *dst*. When this happens, the result is said to be
 *replicated* to *dst*. :opcode:`RCP` is one such instruction.
 
+Modifiers
+^^^^^^^^^^^^^^^
+
+TGSI supports modifiers on inputs (as well as saturate modifier on instructions).
+
+For inputs which have a floating point type, both absolute value and negation
+modifiers are supported (with absolute value being applied first).
+TGSI_OPCODE_MOV is considered to have float input type for applying modifiers.
+
+For inputs which have signed type only the negate modifier is supported. This
+includes instructions which are otherwise ignorant if the type is signed or
+unsigned, such as TGSI_OPCODE_UADD.
+
+For inputs with unsigned type no modifiers are allowed.
+
 Instruction Set
 ---------------
 
@@ -87,6 +102,15 @@ This instruction replicates its result.
 .. math::
 
   dst = \frac{1}{\sqrt{|src.x|}}
+
+
+.. opcode:: SQRT - Square Root
+
+This instruction replicates its result.
+
+.. math::
+
+  dst = {\sqrt{src.x}}
 
 
 .. opcode:: EXP - Approximate Exponential Base 2
@@ -1374,9 +1398,10 @@ instructions. If in doubt double check Direct3D documentation.
 
 .. opcode:: SAMPLE_I_MS - Just like SAMPLE_I but allows fetch data from
                multi-sampled surfaces.
+               SAMPLE_I_MS dst, address, sampler_view, sample
 
 .. opcode:: SAMPLE_B - Just like the SAMPLE instruction with the
-               exception that an additiona bias is applied to the
+               exception that an additional bias is applied to the
                level of detail computed as part of the instruction
                execution.
                SAMPLE_B dst, address, sampler_view, sampler, lod_bias
@@ -1385,7 +1410,7 @@ instructions. If in doubt double check Direct3D documentation.
 
 .. opcode:: SAMPLE_C - Similar to the SAMPLE instruction but it
                performs a comparison filter. The operands to SAMPLE_C
-               are identical to SAMPLE, except that tere is an additional
+               are identical to SAMPLE, except that there is an additional
                float32 operand, reference value, which must be a register
                with single-component, or a scalar literal.
                SAMPLE_C makes the hardware use the current samplers
@@ -1414,11 +1439,10 @@ instructions. If in doubt double check Direct3D documentation.
 
 .. opcode:: SAMPLE_L - SAMPLE_L is identical to the SAMPLE opcode except
                that the LOD is provided directly as a scalar value,
-               representing no anisotropy. Source addresses A channel
-               is used as the LOD.
-               SAMPLE_L dst, address, sampler_view, sampler
+               representing no anisotropy.
+               SAMPLE_L dst, address, sampler_view, sampler, explicit_lod
                e.g.
-               SAMPLE_L TEMP[0], TEMP[1], SVIEW[0], SAMP[0]
+               SAMPLE_L TEMP[0], TEMP[1], SVIEW[0], SAMP[0], TEMP[2].x
 
 .. opcode:: GATHER4 - Gathers the four texels to be used in a bi-linear
                filtering operation and packs them into a single register.
@@ -1435,7 +1459,7 @@ instructions. If in doubt double check Direct3D documentation.
 
 .. opcode:: SVIEWINFO - query the dimensions of a given sampler view.
                dst receives width, height, depth or array size and
-               number of mipmap levels. The dst can have a writemask
+               number of mipmap levels as int4. The dst can have a writemask
                which will specify what info is the caller interested
                in.
                SVIEWINFO dst, src_mip_level, sampler_view

@@ -581,18 +581,15 @@ draw_num_shader_outputs(const struct draw_context *draw)
  * This might only be used by software drivers for the time being.
  */
 void
-draw_texture_samplers(struct draw_context *draw,
-                      uint shader,
-                      uint num_samplers,
-                      struct tgsi_sampler **samplers)
+draw_texture_sampler(struct draw_context *draw,
+                     uint shader,
+                     struct tgsi_sampler *sampler)
 {
    if (shader == PIPE_SHADER_VERTEX) {
-      draw->vs.tgsi.num_samplers = num_samplers;
-      draw->vs.tgsi.samplers = samplers;
+      draw->vs.tgsi.sampler = sampler;
    } else {
       debug_assert(shader == PIPE_SHADER_GEOMETRY);
-      draw->gs.tgsi.num_samplers = num_samplers;
-      draw->gs.tgsi.samplers = samplers;
+      draw->gs.tgsi.sampler = sampler;
    }
 }
 
@@ -764,6 +761,8 @@ draw_set_sampler_views(struct draw_context *draw,
    debug_assert(shader_stage < PIPE_SHADER_TYPES);
    debug_assert(num <= PIPE_MAX_SHADER_SAMPLER_VIEWS);
 
+   draw_do_flush( draw, DRAW_FLUSH_STATE_CHANGE );
+
    for (i = 0; i < num; ++i)
       draw->sampler_views[shader_stage][i] = views[i];
    for (i = num; i < PIPE_MAX_SHADER_SAMPLER_VIEWS; ++i)
@@ -783,6 +782,8 @@ draw_set_samplers(struct draw_context *draw,
    debug_assert(shader_stage < PIPE_SHADER_TYPES);
    debug_assert(num <= PIPE_MAX_SAMPLERS);
 
+   draw_do_flush( draw, DRAW_FLUSH_STATE_CHANGE );
+
    for (i = 0; i < num; ++i)
       draw->samplers[shader_stage][i] = samplers[i];
    for (i = num; i < PIPE_MAX_SAMPLERS; ++i)
@@ -799,7 +800,7 @@ draw_set_samplers(struct draw_context *draw,
 void
 draw_set_mapped_texture(struct draw_context *draw,
                         unsigned shader_stage,
-                        unsigned sampler_idx,
+                        unsigned sview_idx,
                         uint32_t width, uint32_t height, uint32_t depth,
                         uint32_t first_level, uint32_t last_level,
                         const void *base_ptr,
@@ -811,7 +812,7 @@ draw_set_mapped_texture(struct draw_context *draw,
 #ifdef HAVE_LLVM
       if (draw->llvm)
          draw_llvm_set_mapped_texture(draw,
-                                      sampler_idx,
+                                      sview_idx,
                                       width, height, depth, first_level,
                                       last_level, base_ptr,
                                       row_stride, img_stride, mip_offsets);

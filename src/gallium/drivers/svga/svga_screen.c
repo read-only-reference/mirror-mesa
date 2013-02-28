@@ -256,6 +256,7 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
    case PIPE_CAP_CUBE_MAP_ARRAY:
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
+   case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
       return 0;
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
       return 1;
@@ -306,6 +307,8 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
          return 1;
       case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
          return 1;
+      case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
+         return 0;
       case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
       case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
       case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
@@ -351,6 +354,8 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
          return 1;
       case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
          return 1;
+      case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
+         return 0;
       case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
       case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
          return 1;

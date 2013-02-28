@@ -22,6 +22,7 @@
  */
 #include "r600_pipe.h"
 #include "r600_public.h"
+#include "r600_isa.h"
 
 #include <errno.h>
 #include "pipe/p_shader_tokens.h"
@@ -260,6 +261,8 @@ static void r600_destroy_context(struct pipe_context *context)
 {
 	struct r600_context *rctx = (struct r600_context *)context;
 
+	r600_isa_destroy(rctx->isa);
+
 	pipe_resource_reference((struct pipe_resource**)&rctx->dummy_cmask, NULL);
 	pipe_resource_reference((struct pipe_resource**)&rctx->dummy_fmask, NULL);
 
@@ -419,7 +422,11 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 
 	rctx->allocator_so_filled_size = u_suballocator_create(&rctx->context, 4096, 4,
 								0, PIPE_USAGE_STATIC, TRUE);
-        if (!rctx->allocator_so_filled_size)
+	if (!rctx->allocator_so_filled_size)
+		goto fail;
+
+	rctx->isa = calloc(1, sizeof(struct r600_isa));
+	if (!rctx->isa || r600_isa_init(rctx, rctx->isa))
 		goto fail;
 
 	rctx->blitter = util_blitter_create(&rctx->context);
@@ -564,6 +571,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
+	case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
 		return 0;
 
 	/* Stream output. */
@@ -654,7 +662,6 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		return 0;
 	}
 
-	/* XXX: all these should be fixed, since r600 surely supports much more! */
 	switch (param) {
 	case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
 	case PIPE_SHADER_CAP_MAX_ALU_INSTRUCTIONS:
@@ -662,7 +669,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_MAX_TEX_INDIRECTIONS:
 		return 16384;
 	case PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH:
-		return 8; /* XXX */
+		return 32;
 	case PIPE_SHADER_CAP_MAX_INPUTS:
 		return 32;
 	case PIPE_SHADER_CAP_MAX_TEMPS:
@@ -678,6 +685,8 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		return 0; /* nothing uses this */
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
 		return 1;
+	case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
+		return 0;
 	case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
 	case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
 	case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:

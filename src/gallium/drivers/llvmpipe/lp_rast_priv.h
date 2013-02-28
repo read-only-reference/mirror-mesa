@@ -94,8 +94,8 @@ struct lp_rasterizer_task
    /** "my" index */
    unsigned thread_index;
 
-   /* occlude counter for visiable pixels */
-   uint32_t vis_counter;
+   /* occlude counter for visible pixels */
+   struct lp_jit_thread_data thread_data;
    uint64_t query_start;
    struct llvmpipe_query *query[PIPE_QUERY_TYPES];
 
@@ -196,7 +196,7 @@ lp_rast_get_unswizzled_color_tile_pointer(struct lp_rasterizer_task *task,
       struct pipe_surface *cbuf = scene->fb.cbufs[buf];
       assert(cbuf);
 
-      format_bytes = util_format_description(cbuf->format)->block.bits / 8;
+      format_bytes = util_format_get_blocksize(cbuf->format);
       task->color_tiles[buf] = scene->cbufs[buf].map + scene->cbufs[buf].stride * task->y + format_bytes * task->x;
    }
 
@@ -221,7 +221,7 @@ lp_rast_get_unswizzled_color_block_pointer(struct lp_rasterizer_task *task,
    assert((y % TILE_VECTOR_HEIGHT) == 0);
    assert(buf < task->scene->fb.nr_cbufs);
 
-   format_bytes = util_format_description(task->scene->fb.cbufs[buf]->format)->block.bits / 8;
+   format_bytes = util_format_get_blocksize(task->scene->fb.cbufs[buf]->format);
 
    color = lp_rast_get_unswizzled_color_tile_pointer(task, buf, LP_TEX_USAGE_READ_WRITE);
    assert(color);
@@ -276,7 +276,7 @@ lp_rast_shade_quads_all( struct lp_rasterizer_task *task,
                                       color,
                                       depth,
                                       0xffff,
-                                      &task->vis_counter,
+                                      &task->thread_data,
                                       stride );
    END_JIT_CALL();
 }

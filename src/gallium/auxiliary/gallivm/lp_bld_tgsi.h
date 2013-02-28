@@ -68,7 +68,8 @@ enum lp_build_tex_modifier {
    LP_BLD_TEX_MODIFIER_PROJECTED,
    LP_BLD_TEX_MODIFIER_LOD_BIAS,
    LP_BLD_TEX_MODIFIER_EXPLICIT_LOD,
-   LP_BLD_TEX_MODIFIER_EXPLICIT_DERIV
+   LP_BLD_TEX_MODIFIER_EXPLICIT_DERIV,
+   LP_BLD_TEX_MODIFIER_LOD_ZERO
 };
 
 
@@ -104,7 +105,8 @@ struct lp_tgsi_texture_info
 {
    struct lp_tgsi_channel_info coord[4];
    unsigned target:8; /* TGSI_TEXTURE_* */
-   unsigned unit:8;  /* Sampler unit */
+   unsigned sampler_unit:8;  /* Sampler unit */
+   unsigned texture_unit:8;  /* Texture unit */
    unsigned modifier:8; /* LP_BLD_TEX_MODIFIER_* */
 };
 
@@ -187,6 +189,7 @@ struct lp_build_sampler_soa
                        struct gallivm_state *gallivm,
                        struct lp_type type,
                        unsigned unit,
+                       boolean need_nr_mips,
                        LLVMValueRef explicit_lod, /* optional */
                        LLVMValueRef *sizes_out);
 };
@@ -309,6 +312,8 @@ struct lp_build_tgsi_context
     * should compute 1 / sqrt (src0.x) */
    struct lp_build_tgsi_action rsq_action;
 
+   struct lp_build_tgsi_action sqrt_action;
+
    const struct tgsi_shader_info *info;
 
    lp_build_emit_fetch_fn emit_fetch_funcs[TGSI_FILE_COUNT];
@@ -368,6 +373,8 @@ struct lp_build_tgsi_soa_context
    LLVMValueRef (*outputs)[TGSI_NUM_CHANNELS];
 
    const struct lp_build_sampler_soa *sampler;
+
+   struct tgsi_declaration_sampler_view sv[PIPE_MAX_SHADER_SAMPLER_VIEWS];
 
    LLVMValueRef immediates[LP_MAX_TGSI_IMMEDIATES][TGSI_NUM_CHANNELS];
    LLVMValueRef temps[LP_MAX_TGSI_TEMPS][TGSI_NUM_CHANNELS];

@@ -146,6 +146,13 @@ fs_inst::fs_inst(enum opcode opcode, fs_reg dst,
       return new(mem_ctx) fs_inst(BRW_OPCODE_##op, dst, src0, src1);    \
    }
 
+#define ALU3(op)                                                        \
+   fs_inst *                                                            \
+   fs_visitor::op(fs_reg dst, fs_reg src0, fs_reg src1, fs_reg src2)    \
+   {                                                                    \
+      return new(mem_ctx) fs_inst(BRW_OPCODE_##op, dst, src0, src1, src2);\
+   }
+
 ALU1(NOT)
 ALU1(MOV)
 ALU1(FRC)
@@ -161,6 +168,7 @@ ALU2(XOR)
 ALU2(SHL)
 ALU2(SHR)
 ALU2(ASR)
+ALU3(LRP)
 
 /** Gen4 predicated IF. */
 fs_inst *
@@ -258,6 +266,26 @@ fs_visitor::VARYING_PULL_CONSTANT_LOAD(fs_reg dst, fs_reg surf_index,
    return instructions;
 }
 
+/**
+ * A helper for MOV generation for fixing up broken hardware SEND dependency
+ * handling.
+ */
+fs_inst *
+fs_visitor::DEP_RESOLVE_MOV(int grf)
+{
+   fs_inst *inst = MOV(brw_null_reg(), fs_reg(GRF, grf, BRW_REGISTER_TYPE_F));
+
+   inst->ir = NULL;
+   inst->annotation = "send dependency resolve";
+
+   /* The caller always wants uncompressed to emit the minimal extra
+    * dependencies, and to avoid having to deal with aligning its regs to 2.
+    */
+   inst->force_uncompressed = true;
+
+   return inst;
+}
+
 bool
 fs_inst::equals(fs_inst *inst)
 {
@@ -325,6 +353,23 @@ fs_inst::is_math()
            opcode == SHADER_OPCODE_INT_QUOTIENT ||
            opcode == SHADER_OPCODE_INT_REMAINDER ||
            opcode == SHADER_OPCODE_POW);
+}
+
+bool
+fs_inst::is_control_flow()
+{
+   switch (opcode) {
+   case BRW_OPCODE_DO:
+   case BRW_OPCODE_WHILE:
+   case BRW_OPCODE_IF:
+   case BRW_OPCODE_ELSE:
+   case BRW_OPCODE_ENDIF:
+   case BRW_OPCODE_BREAK:
+   case BRW_OPCODE_CONTINUE:
+      return true;
+   default:
+      return false;
+   }
 }
 
 bool
@@ -1673,8 +1718,6 @@ fs_visitor::setup_pull_constants()
                                  dst, index, offset);
 	 pull->ir = inst->ir;
 	 pull->annotation = inst->annotation;
-	 pull->base_mrf = 14;
-	 pull->mlen = 1;
 
 	 inst->insert_before(pull);
 
@@ -1894,6 +1937,7 @@ fs_visitor::register_coalesce()
 
       bool has_source_modifiers = (inst->src[0].abs ||
                                    inst->src[0].negate ||
+                                   inst->src[0].smear != -1 ||
                                    inst->src[0].file == UNIFORM);
 
       /* Found a move of a GRF to a GRF.  Let's see if we can coalesce
@@ -2025,11 +2069,6 @@ fs_visitor::compute_to_mrf()
 	     * into a compute-to-MRF.
 	     */
 
-            /* SENDs can only write to GRFs, so no compute-to-MRF. */
-	    if (scan_inst->mlen) {
-	       break;
-	    }
-
 	    /* If it's predicated, it (probably) didn't populate all
 	     * the channels.  We might be able to rewrite everything
 	     * that writes that reg, but it would require smarter
@@ -2050,7 +2089,7 @@ fs_visitor::compute_to_mrf()
 	    if (scan_inst->mlen)
 	       break;
 
-	    if (intel->gen >= 6) {
+	    if (intel->gen == 6) {
 	       /* gen6 math instructions must have the destination be
 		* GRF, so no compute-to-MRF for them.
 		*/
@@ -2070,16 +2109,12 @@ fs_visitor::compute_to_mrf()
 	    break;
 	 }
 
-	 /* We don't handle flow control here.  Most computation of
+	 /* We don't handle control flow here.  Most computation of
 	  * values that end up in MRFs are shortly before the MRF
 	  * write anyway.
 	  */
-	 if (scan_inst->opcode == BRW_OPCODE_DO ||
-	     scan_inst->opcode == BRW_OPCODE_WHILE ||
-	     scan_inst->opcode == BRW_OPCODE_ELSE ||
-	     scan_inst->opcode == BRW_OPCODE_ENDIF) {
+	 if (scan_inst->is_control_flow() && scan_inst->opcode != BRW_OPCODE_IF)
 	    break;
-	 }
 
 	 /* You can't read from an MRF, so if someone else reads our
 	  * MRF's source GRF that we wanted to rewrite, that stops us.
@@ -2163,16 +2198,8 @@ fs_visitor::remove_duplicate_mrf_writes()
    foreach_list_safe(node, &this->instructions) {
       fs_inst *inst = (fs_inst *)node;
 
-      switch (inst->opcode) {
-      case BRW_OPCODE_DO:
-      case BRW_OPCODE_WHILE:
-      case BRW_OPCODE_IF:
-      case BRW_OPCODE_ELSE:
-      case BRW_OPCODE_ENDIF:
+      if (inst->is_control_flow()) {
 	 memset(last_mrf_move, 0, sizeof(last_mrf_move));
-	 continue;
-      default:
-	 break;
       }
 
       if (inst->opcode == BRW_OPCODE_MOV &&
@@ -2223,6 +2250,265 @@ fs_visitor::remove_duplicate_mrf_writes()
    return progress;
 }
 
+static void
+clear_deps_for_inst_src(fs_inst *inst, int dispatch_width, bool *deps,
+                        int first_grf, int grf_len)
+{
+   bool inst_16wide = (dispatch_width > 8 &&
+                       !inst->force_uncompressed &&
+                       !inst->force_sechalf);
+
+   /* Clear the flag for registers that actually got read (as expected). */
+   for (int i = 0; i < 3; i++) {
+      int grf;
+      if (inst->src[i].file == GRF) {
+         grf = inst->src[i].reg;
+      } else if (inst->src[i].file == FIXED_HW_REG &&
+                 inst->src[i].fixed_hw_reg.file == BRW_GENERAL_REGISTER_FILE) {
+         grf = inst->src[i].fixed_hw_reg.nr;
+      } else {
+         continue;
+      }
+
+      if (grf >= first_grf &&
+          grf < first_grf + grf_len) {
+         deps[grf - first_grf] = false;
+         if (inst_16wide)
+            deps[grf - first_grf + 1] = false;
+      }
+   }
+}
+
+/**
+ * Implements this workaround for the original 965:
+ *
+ *     "[DevBW, DevCL] Implementation Restrictions: As the hardware does not
+ *      check for post destination dependencies on this instruction, software
+ *      must ensure that there is no destination hazard for the case of ‘write
+ *      followed by a posted write’ shown in the following example.
+ *
+ *      1. mov r3 0
+ *      2. send r3.xy <rest of send instruction>
+ *      3. mov r2 r3
+ *
+ *      Due to no post-destination dependency check on the ‘send’, the above
+ *      code sequence could have two instructions (1 and 2) in flight at the
+ *      same time that both consider ‘r3’ as the target of their final writes.
+ */
+void
+fs_visitor::insert_gen4_pre_send_dependency_workarounds(fs_inst *inst)
+{
+   int write_len = inst->regs_written() * dispatch_width / 8;
+   int first_write_grf = inst->dst.reg;
+   bool needs_dep[BRW_MAX_MRF];
+   assert(write_len < (int)sizeof(needs_dep) - 1);
+
+   memset(needs_dep, false, sizeof(needs_dep));
+   memset(needs_dep, true, write_len);
+
+   clear_deps_for_inst_src(inst, dispatch_width,
+                           needs_dep, first_write_grf, write_len);
+
+   /* Walk backwards looking for writes to registers we're writing which
+    * aren't read since being written.  If we hit the start of the program,
+    * we assume that there are no outstanding dependencies on entry to the
+    * program.
+    */
+   for (fs_inst *scan_inst = (fs_inst *)inst->prev;
+        scan_inst != NULL;
+        scan_inst = (fs_inst *)scan_inst->prev) {
+
+      /* If we hit control flow, assume that there *are* outstanding
+       * dependencies, and force their cleanup before our instruction.
+       */
+      if (scan_inst->is_control_flow()) {
+         for (int i = 0; i < write_len; i++) {
+            if (needs_dep[i]) {
+               inst->insert_before(DEP_RESOLVE_MOV(first_write_grf + i));
+            }
+         }
+      }
+
+      bool scan_inst_16wide = (dispatch_width > 8 &&
+                               !scan_inst->force_uncompressed &&
+                               !scan_inst->force_sechalf);
+
+      /* We insert our reads as late as possible on the assumption that any
+       * instruction but a MOV that might have left us an outstanding
+       * dependency has more latency than a MOV.
+       */
+      if (scan_inst->dst.file == GRF &&
+          scan_inst->dst.reg >= first_write_grf &&
+          scan_inst->dst.reg < first_write_grf + write_len &&
+          needs_dep[scan_inst->dst.reg - first_write_grf]) {
+         inst->insert_before(DEP_RESOLVE_MOV(scan_inst->dst.reg));
+         needs_dep[scan_inst->dst.reg - first_write_grf] = false;
+         if (scan_inst_16wide)
+            needs_dep[scan_inst->dst.reg - first_write_grf + 1] = false;
+      }
+
+      /* Clear the flag for registers that actually got read (as expected). */
+      clear_deps_for_inst_src(scan_inst, dispatch_width,
+                              needs_dep, first_write_grf, write_len);
+
+      /* Continue the loop only if we haven't resolved all the dependencies */
+      int i;
+      for (i = 0; i < write_len; i++) {
+         if (needs_dep[i])
+            break;
+      }
+      if (i == write_len)
+         return;
+   }
+}
+
+/**
+ * Implements this workaround for the original 965:
+ *
+ *     "[DevBW, DevCL] Errata: A destination register from a send can not be
+ *      used as a destination register until after it has been sourced by an
+ *      instruction with a different destination register.
+ */
+void
+fs_visitor::insert_gen4_post_send_dependency_workarounds(fs_inst *inst)
+{
+   int write_len = inst->regs_written() * dispatch_width / 8;
+   int first_write_grf = inst->dst.reg;
+   bool needs_dep[BRW_MAX_MRF];
+   assert(write_len < (int)sizeof(needs_dep) - 1);
+
+   memset(needs_dep, false, sizeof(needs_dep));
+   memset(needs_dep, true, write_len);
+   /* Walk forwards looking for writes to registers we're writing which aren't
+    * read before being written.
+    */
+   for (fs_inst *scan_inst = (fs_inst *)inst->next;
+        !scan_inst->is_tail_sentinel();
+        scan_inst = (fs_inst *)scan_inst->next) {
+      /* If we hit control flow, force resolve all remaining dependencies. */
+      if (scan_inst->is_control_flow()) {
+         for (int i = 0; i < write_len; i++) {
+            if (needs_dep[i])
+               scan_inst->insert_before(DEP_RESOLVE_MOV(first_write_grf + i));
+         }
+      }
+
+      /* Clear the flag for registers that actually got read (as expected). */
+      clear_deps_for_inst_src(scan_inst, dispatch_width,
+                              needs_dep, first_write_grf, write_len);
+
+      /* We insert our reads as late as possible since they're reading the
+       * result of a SEND, which has massive latency.
+       */
+      if (scan_inst->dst.file == GRF &&
+          scan_inst->dst.reg >= first_write_grf &&
+          scan_inst->dst.reg < first_write_grf + write_len &&
+          needs_dep[scan_inst->dst.reg - first_write_grf]) {
+         scan_inst->insert_before(DEP_RESOLVE_MOV(scan_inst->dst.reg));
+         needs_dep[scan_inst->dst.reg - first_write_grf] = false;
+      }
+
+      /* Continue the loop only if we haven't resolved all the dependencies */
+      int i;
+      for (i = 0; i < write_len; i++) {
+         if (needs_dep[i])
+            break;
+      }
+      if (i == write_len)
+         return;
+   }
+
+   /* If we hit the end of the program, resolve all remaining dependencies out
+    * of paranoia.
+    */
+   fs_inst *last_inst = (fs_inst *)this->instructions.get_tail();
+   assert(last_inst->eot);
+   for (int i = 0; i < write_len; i++) {
+      if (needs_dep[i])
+         last_inst->insert_before(DEP_RESOLVE_MOV(first_write_grf + i));
+   }
+}
+
+void
+fs_visitor::insert_gen4_send_dependency_workarounds()
+{
+   if (intel->gen != 4 || intel->is_g4x)
+      return;
+
+   /* Note that we're done with register allocation, so GRF fs_regs always
+    * have a .reg_offset of 0.
+    */
+
+   foreach_list_safe(node, &this->instructions) {
+      fs_inst *inst = (fs_inst *)node;
+
+      if (inst->mlen != 0 && inst->dst.file == GRF) {
+         insert_gen4_pre_send_dependency_workarounds(inst);
+         insert_gen4_post_send_dependency_workarounds(inst);
+      }
+   }
+}
+
+/**
+ * Turns the generic expression-style uniform pull constant load instruction
+ * into a hardware-specific series of instructions for loading a pull
+ * constant.
+ *
+ * The expression style allows the CSE pass before this to optimize out
+ * repeated loads from the same offset, and gives the pre-register-allocation
+ * scheduling full flexibility, while the conversion to native instructions
+ * allows the post-register-allocation scheduler the best information
+ * possible.
+ */
+void
+fs_visitor::lower_uniform_pull_constant_loads()
+{
+   foreach_list(node, &this->instructions) {
+      fs_inst *inst = (fs_inst *)node;
+
+      if (inst->opcode != FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD)
+         continue;
+
+      if (intel->gen >= 7) {
+         fs_reg const_offset_reg = inst->src[1];
+         assert(const_offset_reg.file == IMM &&
+                const_offset_reg.type == BRW_REGISTER_TYPE_UD);
+         const_offset_reg.imm.u /= 16;
+         fs_reg payload = fs_reg(this, glsl_type::uint_type);
+         struct brw_reg g0 = retype(brw_vec8_grf(0, 0),
+                                    BRW_REGISTER_TYPE_UD);
+
+         fs_inst *setup1 = MOV(payload, fs_reg(g0));
+         setup1->force_writemask_all = true;
+         /* We don't need the second half of this vgrf to be filled with g1
+          * in the 16-wide case, but if we use force_uncompressed then live
+          * variable analysis won't consider this a def!
+          */
+
+         fs_inst *setup2 = new(mem_ctx) fs_inst(FS_OPCODE_SET_GLOBAL_OFFSET,
+                                                payload, payload,
+                                                const_offset_reg);
+
+         setup1->ir = inst->ir;
+         setup1->annotation = inst->annotation;
+         inst->insert_before(setup1);
+         setup2->ir = inst->ir;
+         setup2->annotation = inst->annotation;
+         inst->insert_before(setup2);
+         inst->opcode = FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7;
+         inst->src[1] = payload;
+      } else {
+         /* Before register allocation, we didn't tell the scheduler about the
+          * MRF we use.  We know it's safe to use this MRF because nothing
+          * else does except for register spill/unspill, which generates and
+          * uses its MRF within a single IR instruction.
+          */
+         inst->base_mrf = 14;
+         inst->mlen = 1;
+      }
+   }
+}
+
 void
 fs_visitor::dump_instruction(fs_inst *inst)
 {
@@ -2236,7 +2522,20 @@ fs_visitor::dump_instruction(fs_inst *inst)
        opcode_descs[inst->opcode].name) {
       printf("%s", opcode_descs[inst->opcode].name);
    } else {
-      printf("op%d", inst->opcode);
+      switch (inst->opcode) {
+      case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
+         printf("uniform_pull_const");
+         break;
+      case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7:
+         printf("uniform_pull_const_gen7");
+         break;
+      case FS_OPCODE_SET_GLOBAL_OFFSET:
+         printf("set_global_offset");
+         break;
+      default:
+         printf("op%d", inst->opcode);
+         break;
+      }
    }
    if (inst->saturate)
       printf(".sat");
@@ -2294,6 +2593,22 @@ fs_visitor::dump_instruction(fs_inst *inst)
          break;
       case BAD_FILE:
          printf("(null)");
+         break;
+      case IMM:
+         switch (inst->src[i].type) {
+         case BRW_REGISTER_TYPE_F:
+            printf("%ff", inst->src[i].imm.f);
+            break;
+         case BRW_REGISTER_TYPE_D:
+            printf("%dd", inst->src[i].imm.i);
+            break;
+         case BRW_REGISTER_TYPE_UD:
+            printf("%uu", inst->src[i].imm.u);
+            break;
+         default:
+            printf("???");
+            break;
+         }
          break;
       default:
          printf("???");
@@ -2495,6 +2810,8 @@ fs_visitor::run()
 
       schedule_instructions(false);
 
+      lower_uniform_pull_constant_loads();
+
       assign_curb_setup();
       assign_urb_setup();
 
@@ -2516,6 +2833,12 @@ fs_visitor::run()
    }
    assert(force_uncompressed_stack == 0);
    assert(force_sechalf_stack == 0);
+
+   /* This must come after all optimization and register allocation, since
+    * it inserts dead code that happens to have side effects, and it does
+    * so based on the actual physical registers in use.
+    */
+   insert_gen4_send_dependency_workarounds();
 
    if (failed)
       return false;

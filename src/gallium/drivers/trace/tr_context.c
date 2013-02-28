@@ -700,6 +700,7 @@ trace_context_set_constant_buffer(struct pipe_context *_pipe,
    if (constant_buffer) {
       cb = *constant_buffer;
       cb.buffer = trace_resource_unwrap(tr_ctx, constant_buffer->buffer);
+      constant_buffer = &cb;
    }
 
    trace_dump_call_begin("pipe_context", "set_constant_buffer");
@@ -709,8 +710,7 @@ trace_context_set_constant_buffer(struct pipe_context *_pipe,
    trace_dump_arg(uint, index);
    trace_dump_arg(constant_buffer, constant_buffer);
 
-   pipe->set_constant_buffer(pipe, shader, index,
-                             constant_buffer ? &cb : NULL);
+   pipe->set_constant_buffer(pipe, shader, index, constant_buffer);
 
    trace_dump_call_end();
 }
@@ -852,6 +852,8 @@ trace_context_sampler_view_destroy(struct pipe_context *_pipe,
    struct pipe_context *pipe = tr_ctx->pipe;
    struct pipe_sampler_view *view = tr_view->sampler_view;
 
+   assert(_view->context == _pipe);
+
    trace_dump_call_begin("pipe_context", "sampler_view_destroy");
 
    trace_dump_arg(ptr, pipe);
@@ -897,7 +899,7 @@ trace_context_create_surface(struct pipe_context *_pipe,
 
    trace_dump_call_end();
 
-   result = trace_surf_create(tr_res, result);
+   result = trace_surf_create(tr_ctx, tr_res, result);
 
    return result;
 }
@@ -1610,3 +1612,16 @@ trace_context_create(struct trace_screen *tr_scr,
 error1:
    return pipe;
 }
+
+
+/**
+ * Sanity checker: check that the given context really is a 
+ * trace context (and not the wrapped driver's context).
+ */
+void
+trace_context_check(const struct pipe_context *pipe)
+{
+   struct trace_context *tr_ctx = (struct trace_context *) pipe;
+   assert(tr_ctx->base.destroy == trace_context_destroy);
+}
+

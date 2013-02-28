@@ -112,17 +112,17 @@ compute_msaa_layout(struct intel_context *intel, gl_format format)
  *        intel_miptree_create_for_region(). If true, then do not create
  *        \c stencil_mt.
  */
-static struct intel_mipmap_tree *
-intel_miptree_create_internal(struct intel_context *intel,
-			      GLenum target,
-			      gl_format format,
-			      GLuint first_level,
-			      GLuint last_level,
-			      GLuint width0,
-			      GLuint height0,
-			      GLuint depth0,
-			      bool for_region,
-                              GLuint num_samples)
+struct intel_mipmap_tree *
+intel_miptree_create_layout(struct intel_context *intel,
+                            GLenum target,
+                            gl_format format,
+                            GLuint first_level,
+                            GLuint last_level,
+                            GLuint width0,
+                            GLuint height0,
+                            GLuint depth0,
+                            bool for_region,
+                            GLuint num_samples)
 {
    struct intel_mipmap_tree *mt = calloc(sizeof(*mt), 1);
    int compress_byte = 0;
@@ -325,7 +325,7 @@ intel_miptree_create(struct intel_context *intel,
       format = MESA_FORMAT_SIGNED_R16;
       break;
    case MESA_FORMAT_ETC2_RG11_EAC:
-      format = MESA_FORMAT_RG1616;
+      format = MESA_FORMAT_GR1616;
       break;
    case MESA_FORMAT_ETC2_SIGNED_RG11_EAC:
       format = MESA_FORMAT_SIGNED_GR1616;
@@ -365,7 +365,7 @@ intel_miptree_create(struct intel_context *intel,
 	 tiling = I915_TILING_X;
    }
 
-   mt = intel_miptree_create_internal(intel, target, format,
+   mt = intel_miptree_create_layout(intel, target, format,
 				      first_level, last_level, width0,
 				      height0, depth0,
 				      false, num_samples);
@@ -390,7 +390,6 @@ intel_miptree_create(struct intel_context *intel,
       total_height = ALIGN(total_height, 64);
    }
 
-   mt->wraps_etc = (etc_format != MESA_FORMAT_NONE) ? true : false;
    mt->etc_format = etc_format;
    mt->region = intel_region_alloc(intel->intelScreen,
 				   tiling,
@@ -408,7 +407,6 @@ intel_miptree_create(struct intel_context *intel,
    return mt;
 }
 
-
 struct intel_mipmap_tree *
 intel_miptree_create_for_region(struct intel_context *intel,
 				GLenum target,
@@ -417,7 +415,7 @@ intel_miptree_create_for_region(struct intel_context *intel,
 {
    struct intel_mipmap_tree *mt;
 
-   mt = intel_miptree_create_internal(intel, target, format,
+   mt = intel_miptree_create_layout(intel, target, format,
 				      0, 0,
 				      region->width, region->height, 1,
 				      true, 0 /* num_samples */);
@@ -686,6 +684,21 @@ intel_miptree_get_image_offset(struct intel_mipmap_tree *mt,
 
    *x = mt->level[level].slice[slice].x_offset;
    *y = mt->level[level].slice[slice].y_offset;
+}
+
+void
+intel_miptree_get_tile_offsets(struct intel_mipmap_tree *mt,
+                               GLuint level, GLuint slice,
+                               uint32_t *tile_x,
+                               uint32_t *tile_y)
+{
+   struct intel_region *region = mt->region;
+   uint32_t mask_x, mask_y;
+
+   intel_region_get_tile_masks(region, &mask_x, &mask_y, false);
+
+   *tile_x = mt->level[level].slice[slice].x_offset & mask_x;
+   *tile_y = mt->level[level].slice[slice].y_offset & mask_y;
 }
 
 static void
@@ -1106,7 +1119,7 @@ intel_miptree_map_gtt(struct intel_context *intel,
    assert(y % bh == 0);
    y /= bh;
 
-   base = intel_region_map(intel, mt->region, map->mode);
+   base = intel_region_map(intel, mt->region, map->mode) + mt->offset;
 
    if (base == NULL)
       map->ptr = NULL;
@@ -1166,7 +1179,7 @@ intel_miptree_map_blit(struct intel_context *intel,
    if (!intelEmitCopyBlit(intel,
 			  mt->region->cpp,
 			  mt->region->pitch, mt->region->bo,
-			  0, mt->region->tiling,
+			  mt->offset, mt->region->tiling,
 			  map->stride, map->bo,
 			  0, I915_TILING_NONE,
 			  x, y,
@@ -1295,10 +1308,7 @@ intel_miptree_map_etc(struct intel_context *intel,
                       unsigned int level,
                       unsigned int slice)
 {
-   /* For justification see intel_mipmap_tree:wraps_etc.
-    */
-   assert(mt->wraps_etc);
-
+   assert(mt->etc_format != MESA_FORMAT_NONE);
    if (mt->etc_format == MESA_FORMAT_ETC1_RGB8) {
       assert(mt->format == MESA_FORMAT_RGBX8888_REV);
    }
@@ -1561,7 +1571,7 @@ intel_miptree_map_singlesample(struct intel_context *intel,
 
    if (mt->format == MESA_FORMAT_S8) {
       intel_miptree_map_s8(intel, mt, map, level, slice);
-   } else if (mt->wraps_etc) {
+   } else if (mt->etc_format != MESA_FORMAT_NONE) {
       intel_miptree_map_etc(intel, mt, map, level, slice);
    } else if (mt->stencil_mt) {
       intel_miptree_map_depthstencil(intel, mt, map, level, slice);
@@ -1619,7 +1629,7 @@ intel_miptree_unmap_singlesample(struct intel_context *intel,
 
    if (mt->format == MESA_FORMAT_S8) {
       intel_miptree_unmap_s8(intel, mt, map, level, slice);
-   } else if (mt->wraps_etc) {
+   } else if (mt->etc_format != MESA_FORMAT_NONE) {
       intel_miptree_unmap_etc(intel, mt, map, level, slice);
    } else if (mt->stencil_mt) {
       intel_miptree_unmap_depthstencil(intel, mt, map, level, slice);

@@ -163,6 +163,28 @@ llvmpipe_transfer(struct pipe_transfer *pt)
 void llvmpipe_init_screen_resource_funcs(struct pipe_screen *screen);
 void llvmpipe_init_context_resource_funcs(struct pipe_context *pipe);
 
+
+static INLINE boolean
+llvmpipe_resource_is_texture(const struct pipe_resource *resource)
+{
+   switch (resource->target) {
+   case PIPE_BUFFER:
+      return FALSE;
+   case PIPE_TEXTURE_1D:
+   case PIPE_TEXTURE_1D_ARRAY:
+   case PIPE_TEXTURE_2D:
+   case PIPE_TEXTURE_2D_ARRAY:
+   case PIPE_TEXTURE_RECT:
+   case PIPE_TEXTURE_3D:
+   case PIPE_TEXTURE_CUBE:
+      return TRUE;
+   default:
+      assert(0);
+      return FALSE;
+   }
+}
+
+
 static INLINE unsigned
 llvmpipe_resource_stride(struct pipe_resource *resource,
                         unsigned level)
@@ -228,13 +250,6 @@ extern void
 llvmpipe_print_resources(void);
 
 
-extern void
-llvmpipe_init_screen_texture_funcs(struct pipe_screen *screen);
-
-extern void
-llvmpipe_init_context_texture_funcs(struct pipe_context *pipe);
-
-
 #define LP_UNREFERENCED         0
 #define LP_REFERENCED_FOR_READ  (1 << 0)
 #define LP_REFERENCED_FOR_WRITE (1 << 1)
@@ -242,7 +257,7 @@ llvmpipe_init_context_texture_funcs(struct pipe_context *pipe);
 unsigned int
 llvmpipe_is_resource_referenced( struct pipe_context *pipe,
                                  struct pipe_resource *presource,
-                                 unsigned level, int layer);
+                                 unsigned level);
 
 unsigned
 llvmpipe_get_format_alignment(enum pipe_format format);

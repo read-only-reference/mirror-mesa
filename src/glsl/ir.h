@@ -1118,6 +1118,13 @@ enum ir_expression_operation {
     */
    ir_last_binop = ir_binop_ubo_load,
 
+   ir_triop_lrp,
+
+   /**
+    * A sentinel marking the last of the ternary operations.
+    */
+   ir_last_triop = ir_triop_lrp,
+
    ir_quadop_vector,
 
    /**
@@ -1128,24 +1135,19 @@ enum ir_expression_operation {
 
 class ir_expression : public ir_rvalue {
 public:
+   ir_expression(int op, const struct glsl_type *type,
+                 ir_rvalue *op0, ir_rvalue *op1 = NULL,
+                 ir_rvalue *op2 = NULL, ir_rvalue *op3 = NULL);
+
    /**
     * Constructor for unary operation expressions
     */
-   ir_expression(int op, const struct glsl_type *type, ir_rvalue *);
    ir_expression(int op, ir_rvalue *);
 
    /**
     * Constructor for binary operation expressions
     */
-   ir_expression(int op, const struct glsl_type *type,
-		 ir_rvalue *, ir_rvalue *);
    ir_expression(int op, ir_rvalue *op0, ir_rvalue *op1);
-
-   /**
-    * Constructor for quad operator expressions
-    */
-   ir_expression(int op, const struct glsl_type *type,
-		 ir_rvalue *, ir_rvalue *, ir_rvalue *, ir_rvalue *);
 
    virtual ir_expression *as_expression()
    {
@@ -1448,8 +1450,8 @@ enum ir_texture_opcode {
 class ir_texture : public ir_rvalue {
 public:
    ir_texture(enum ir_texture_opcode op)
-      : op(op), coordinate(NULL), projector(NULL), shadow_comparitor(NULL),
-        offset(NULL)
+      : op(op), sampler(NULL), coordinate(NULL), projector(NULL),
+        shadow_comparitor(NULL), offset(NULL)
    {
       this->ir_type = ir_type_texture;
    }

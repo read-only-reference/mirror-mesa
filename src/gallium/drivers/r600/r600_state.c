@@ -222,6 +222,18 @@ static uint32_t r600_translate_colorswap(enum pipe_format format)
 	case PIPE_FORMAT_L32A32_UINT:
 	case PIPE_FORMAT_L32A32_SINT:
 	case PIPE_FORMAT_L32A32_FLOAT:
+        case PIPE_FORMAT_R8A8_UNORM:
+	case PIPE_FORMAT_R8A8_SNORM:
+	case PIPE_FORMAT_R8A8_UINT:
+	case PIPE_FORMAT_R8A8_SINT:
+	case PIPE_FORMAT_R16A16_UNORM:
+	case PIPE_FORMAT_R16A16_SNORM:
+	case PIPE_FORMAT_R16A16_UINT:
+	case PIPE_FORMAT_R16A16_SINT:
+	case PIPE_FORMAT_R16A16_FLOAT:
+	case PIPE_FORMAT_R32A32_UINT:
+	case PIPE_FORMAT_R32A32_SINT:
+	case PIPE_FORMAT_R32A32_FLOAT:
 		return V_0280A0_SWAP_ALT;
 	case PIPE_FORMAT_R8G8_UNORM:
 	case PIPE_FORMAT_R8G8_SNORM:
@@ -253,6 +265,10 @@ static uint32_t r600_translate_colorswap(enum pipe_format format)
 	case PIPE_FORMAT_R8G8B8A8_SNORM:
 	case PIPE_FORMAT_R8G8B8A8_UNORM:
 	case PIPE_FORMAT_R8G8B8X8_UNORM:
+	case PIPE_FORMAT_R8G8B8X8_SNORM:
+	case PIPE_FORMAT_R8G8B8X8_SRGB:
+	case PIPE_FORMAT_R8G8B8X8_UINT:
+	case PIPE_FORMAT_R8G8B8X8_SINT:
 	case PIPE_FORMAT_R8G8B8A8_SINT:
 	case PIPE_FORMAT_R8G8B8A8_UINT:
 		return V_0280A0_SWAP_STD;
@@ -266,10 +282,6 @@ static uint32_t r600_translate_colorswap(enum pipe_format format)
 	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
 		return V_0280A0_SWAP_STD;
 
-	case PIPE_FORMAT_X8Z24_UNORM:
-	case PIPE_FORMAT_S8_UINT_Z24_UNORM:
-		return V_0280A0_SWAP_STD;
-
 	case PIPE_FORMAT_R10G10B10A2_UNORM:
 	case PIPE_FORMAT_R10G10B10X2_SNORM:
 	case PIPE_FORMAT_R10SG10SB10SA2U_NORM:
@@ -277,6 +289,7 @@ static uint32_t r600_translate_colorswap(enum pipe_format format)
 
 	case PIPE_FORMAT_B10G10R10A2_UNORM:
 	case PIPE_FORMAT_B10G10R10A2_UINT:
+	case PIPE_FORMAT_B10G10R10X2_UNORM:
 		return V_0280A0_SWAP_ALT;
 
 	case PIPE_FORMAT_R11G11B10_FLOAT:
@@ -300,6 +313,11 @@ static uint32_t r600_translate_colorswap(enum pipe_format format)
 	case PIPE_FORMAT_R16G16B16A16_UINT:
 	case PIPE_FORMAT_R16G16B16A16_SINT:
 	case PIPE_FORMAT_R16G16B16A16_FLOAT:
+	case PIPE_FORMAT_R16G16B16X16_UNORM:
+	case PIPE_FORMAT_R16G16B16X16_SNORM:
+	case PIPE_FORMAT_R16G16B16X16_FLOAT:
+	case PIPE_FORMAT_R16G16B16X16_UINT:
+	case PIPE_FORMAT_R16G16B16X16_SINT:
 	case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
 
 	/* 128-bit buffers. */
@@ -308,6 +326,9 @@ static uint32_t r600_translate_colorswap(enum pipe_format format)
 	case PIPE_FORMAT_R32G32B32A32_UNORM:
 	case PIPE_FORMAT_R32G32B32A32_SINT:
 	case PIPE_FORMAT_R32G32B32A32_UINT:
+	case PIPE_FORMAT_R32G32B32X32_FLOAT:
+	case PIPE_FORMAT_R32G32B32X32_UINT:
+	case PIPE_FORMAT_R32G32B32X32_SINT:
 		return V_0280A0_SWAP_STD;
 	default:
 		R600_ERR("unsupported colorswap format %d\n", format);
@@ -368,6 +389,10 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 	case PIPE_FORMAT_R8G8_SNORM:
 	case PIPE_FORMAT_R8G8_UINT:
 	case PIPE_FORMAT_R8G8_SINT:
+        case PIPE_FORMAT_R8A8_UNORM:
+	case PIPE_FORMAT_R8A8_SNORM:
+	case PIPE_FORMAT_R8A8_UINT:
+	case PIPE_FORMAT_R8A8_SINT:
 		return V_0280A0_COLOR_8_8;
 
 	case PIPE_FORMAT_R16_UNORM:
@@ -404,6 +429,10 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 	case PIPE_FORMAT_R8G8B8A8_SNORM:
 	case PIPE_FORMAT_R8G8B8A8_UNORM:
 	case PIPE_FORMAT_R8G8B8X8_UNORM:
+	case PIPE_FORMAT_R8G8B8X8_SNORM:
+	case PIPE_FORMAT_R8G8B8X8_SRGB:
+	case PIPE_FORMAT_R8G8B8X8_UINT:
+	case PIPE_FORMAT_R8G8B8X8_SINT:
 	case PIPE_FORMAT_R8SG8SB8UX8U_NORM:
 	case PIPE_FORMAT_X8B8G8R8_UNORM:
 	case PIPE_FORMAT_X8R8G8B8_UNORM:
@@ -415,16 +444,13 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 	case PIPE_FORMAT_R10G10B10X2_SNORM:
 	case PIPE_FORMAT_B10G10R10A2_UNORM:
 	case PIPE_FORMAT_B10G10R10A2_UINT:
+	case PIPE_FORMAT_B10G10R10X2_UNORM:
 	case PIPE_FORMAT_R10SG10SB10SA2U_NORM:
 		return V_0280A0_COLOR_2_10_10_10;
 
 	case PIPE_FORMAT_Z24X8_UNORM:
 	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
 		return V_0280A0_COLOR_8_24;
-
-	case PIPE_FORMAT_X8Z24_UNORM:
-	case PIPE_FORMAT_S8_UINT_Z24_UNORM:
-		return V_0280A0_COLOR_24_8;
 
 	case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
 		return V_0280A0_COLOR_X24_8_32_FLOAT;
@@ -448,6 +474,7 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 
 	case PIPE_FORMAT_R16G16_FLOAT:
 	case PIPE_FORMAT_L16A16_FLOAT:
+        case PIPE_FORMAT_R16A16_FLOAT:
 		return V_0280A0_COLOR_16_16_FLOAT;
 
 	case PIPE_FORMAT_R16G16_UNORM:
@@ -458,6 +485,10 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 	case PIPE_FORMAT_L16A16_SNORM:
 	case PIPE_FORMAT_L16A16_UINT:
 	case PIPE_FORMAT_L16A16_SINT:
+        case PIPE_FORMAT_R16A16_UNORM:
+	case PIPE_FORMAT_R16A16_SNORM:
+	case PIPE_FORMAT_R16A16_UINT:
+	case PIPE_FORMAT_R16A16_SINT:
 		return V_0280A0_COLOR_16_16;
 
 	case PIPE_FORMAT_R11G11B10_FLOAT:
@@ -468,13 +499,19 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 	case PIPE_FORMAT_R16G16B16A16_SINT:
 	case PIPE_FORMAT_R16G16B16A16_UNORM:
 	case PIPE_FORMAT_R16G16B16A16_SNORM:
+	case PIPE_FORMAT_R16G16B16X16_UNORM:
+	case PIPE_FORMAT_R16G16B16X16_SNORM:
+	case PIPE_FORMAT_R16G16B16X16_UINT:
+	case PIPE_FORMAT_R16G16B16X16_SINT:
 		return V_0280A0_COLOR_16_16_16_16;
 
 	case PIPE_FORMAT_R16G16B16A16_FLOAT:
+	case PIPE_FORMAT_R16G16B16X16_FLOAT:
 		return V_0280A0_COLOR_16_16_16_16_FLOAT;
 
 	case PIPE_FORMAT_R32G32_FLOAT:
 	case PIPE_FORMAT_L32A32_FLOAT:
+        case PIPE_FORMAT_R32A32_FLOAT:
 		return V_0280A0_COLOR_32_32_FLOAT;
 
 	case PIPE_FORMAT_R32G32_SINT:
@@ -485,11 +522,14 @@ static uint32_t r600_translate_colorformat(enum pipe_format format)
 
 	/* 128-bit buffers. */
 	case PIPE_FORMAT_R32G32B32A32_FLOAT:
+	case PIPE_FORMAT_R32G32B32X32_FLOAT:
 		return V_0280A0_COLOR_32_32_32_32_FLOAT;
 	case PIPE_FORMAT_R32G32B32A32_SNORM:
 	case PIPE_FORMAT_R32G32B32A32_UNORM:
 	case PIPE_FORMAT_R32G32B32A32_SINT:
 	case PIPE_FORMAT_R32G32B32A32_UINT:
+	case PIPE_FORMAT_R32G32B32X32_UINT:
+	case PIPE_FORMAT_R32G32B32X32_SINT:
 		return V_0280A0_COLOR_32_32_32_32;
 
 	/* YUV buffers. */
@@ -802,6 +842,7 @@ static void *r600_create_dsa_state(struct pipe_context *ctx,
 	dsa->valuemask[1] = state->stencil[1].valuemask;
 	dsa->writemask[0] = state->stencil[0].writemask;
 	dsa->writemask[1] = state->stencil[1].writemask;
+	dsa->zwritemask = state->depth.writemask;
 
 	db_depth_control = S_028800_Z_ENABLE(state->depth.enabled) |
 		S_028800_Z_WRITE_ENABLE(state->depth.writemask) |
@@ -1940,6 +1981,13 @@ static void r600_emit_db_misc_state(struct r600_context *rctx, struct r600_atom 
 	if (rctx->db_state.rsurf && rctx->db_state.rsurf->htile_enabled) {
 		/* FORCE_OFF means HiZ/HiS are determined by DB_SHADER_CONTROL */
 		db_render_override |= S_028D10_FORCE_HIZ_ENABLE(V_028D10_FORCE_OFF);
+		/* This is to fix a lockup when hyperz and alpha test are enabled at
+		 * the same time somehow GPU get confuse on which order to pick for
+		 * z test
+		 */
+		if (rctx->alphatest_state.sx_alpha_test_control) {
+			db_render_override |= S_028D10_FORCE_SHADER_Z_ORDER(1);
+		}
 	} else {
 		db_render_override |= S_028D10_FORCE_HIZ_ENABLE(V_028D10_FORCE_DISABLE);
 	}
@@ -2748,7 +2796,7 @@ void r600_pipe_shader_ps(struct pipe_context *ctx, struct r600_pipe_shader *shad
 				tmp);
 	}
 
-	db_shader_control = S_02880C_Z_ORDER(V_02880C_EARLY_Z_THEN_LATE_Z);
+	db_shader_control = 0;
 	for (i = 0; i < rshader->noutput; i++) {
 		if (rshader->output[i].name == TGSI_SEMANTIC_POSITION)
 			z_export = 1;
@@ -2943,6 +2991,19 @@ void r600_update_db_shader_control(struct r600_context * rctx)
 	unsigned db_shader_control = rctx->ps_shader->current->db_shader_control |
 				     S_02880C_DUAL_EXPORT_ENABLE(dual_export);
 
+	/* When alpha test is enabled we can't trust the hw to make the proper
+	 * decision on the order in which ztest should be run related to fragment
+	 * shader execution.
+	 *
+	 * If alpha test is enabled perform z test after fragment. RE_Z (early
+	 * z test but no write to the zbuffer) seems to cause lockup on r6xx/r7xx
+	 */
+	if (rctx->alphatest_state.sx_alpha_test_control) {
+		db_shader_control |= S_02880C_Z_ORDER(V_02880C_LATE_Z);
+	} else {
+		db_shader_control |= S_02880C_Z_ORDER(V_02880C_EARLY_Z_THEN_LATE_Z);
+	}
+
 	if (db_shader_control != rctx->db_misc_state.db_shader_control) {
 		rctx->db_misc_state.db_shader_control = db_shader_control;
 		rctx->db_misc_state.atom.dirty = true;
@@ -3001,7 +3062,8 @@ static boolean r600_dma_copy_tile(struct r600_context *rctx,
 	if (dst_mode == RADEON_SURF_MODE_LINEAR) {
 		/* T2L */
 		array_mode = r600_array_mode(src_mode);
-		slice_tile_max = (((pitch * rsrc->surface.level[src_level].npix_y) >> 6) / bpp) - 1;
+		slice_tile_max = (rsrc->surface.level[src_level].nblk_x * rsrc->surface.level[src_level].nblk_y) >> 6;
+		slice_tile_max = slice_tile_max ? slice_tile_max - 1 : 0;
 		/* linear height must be the same as the slice tile max height, it's ok even
 		 * if the linear destination/source have smaller heigh as the size of the
 		 * dma packet will be using the copy_height which is always smaller or equal
@@ -3019,7 +3081,8 @@ static boolean r600_dma_copy_tile(struct r600_context *rctx,
 	} else {
 		/* L2T */
 		array_mode = r600_array_mode(dst_mode);
-		slice_tile_max = (((pitch * rdst->surface.level[dst_level].npix_y) >> 6) / bpp) - 1;
+		slice_tile_max = (rdst->surface.level[dst_level].nblk_x * rdst->surface.level[dst_level].nblk_y) >> 6;
+		slice_tile_max = slice_tile_max ? slice_tile_max - 1 : 0;
 		/* linear height must be the same as the slice tile max height, it's ok even
 		 * if the linear destination/source have smaller heigh as the size of the
 		 * dma packet will be using the copy_height which is always smaller or equal
@@ -3040,14 +3103,15 @@ static boolean r600_dma_copy_tile(struct r600_context *rctx,
 		return FALSE;
 	}
 
-	size = (copy_height * pitch) >> 2;
-	ncopy = (size / 0x0000ffff) + !!(size % 0x0000ffff);
+	/* It's a r6xx/r7xx limitation, the blit must be on 8 boundary for number
+	 * line in the blit. Compute max 8 line we can copy in the size limit
+	 */
+	cheight = ((0x0000ffff << 2) / pitch) & 0xfffffff8;
+	ncopy = (copy_height / cheight) + !!(copy_height % cheight);
 	r600_need_dma_space(rctx, ncopy * 7);
+
 	for (i = 0; i < ncopy; i++) {
-		cheight = copy_height;
-		if (((cheight * pitch) >> 2) > 0x0000ffff) {
-			cheight = (0x0000ffff << 2) / pitch;
-		}
+		cheight = cheight > copy_height ? copy_height : cheight;
 		size = (cheight * pitch) >> 2;
 		/* emit reloc before writting cs so that cs is always in consistent state */
 		r600_context_bo_reloc(rctx, &rctx->rings.dma, &rsrc->resource, RADEON_USAGE_READ);

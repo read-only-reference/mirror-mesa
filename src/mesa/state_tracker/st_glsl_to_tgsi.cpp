@@ -322,6 +322,7 @@ public:
    
    int glsl_version;
    bool native_integers;
+   bool have_sqrt;
 
    variable_storage *find_variable_storage(ir_variable *var);
 
@@ -1286,11 +1287,12 @@ glsl_to_tgsi_visitor::try_emit_mad_for_and_not(ir_expression *ir, int try_operan
 bool
 glsl_to_tgsi_visitor::try_emit_sat(ir_expression *ir)
 {
-   /* Saturates were only introduced to vertex programs in
-    * NV_vertex_program3, so don't give them to drivers in the VP.
+   /* Emit saturates in the vertex shader only if SM 3.0 is supported.
     */
-   if (this->prog->Target == GL_VERTEX_PROGRAM_ARB)
+   if (this->prog->Target == GL_VERTEX_PROGRAM_ARB &&
+       !st_context(this->ctx)->has_shader_model3) {
       return false;
+   }
 
    ir_rvalue *sat_src = ir->as_rvalue_to_saturate();
    if (!sat_src)
@@ -1761,13 +1763,18 @@ glsl_to_tgsi_visitor::visit(ir_expression *ir)
       break;
 
    case ir_unop_sqrt:
-      /* sqrt(x) = x * rsq(x). */
-      emit_scalar(ir, TGSI_OPCODE_RSQ, result_dst, op[0]);
-      emit(ir, TGSI_OPCODE_MUL, result_dst, result_src, op[0]);
-      /* For incoming channels <= 0, set the result to 0. */
-      op[0].negate = ~op[0].negate;
-      emit(ir, TGSI_OPCODE_CMP, result_dst,
-        		  op[0], result_src, st_src_reg_for_float(0.0));
+      if (have_sqrt) {
+         emit_scalar(ir, TGSI_OPCODE_SQRT, result_dst, op[0]);
+      }
+      else {
+         /* sqrt(x) = x * rsq(x). */
+         emit_scalar(ir, TGSI_OPCODE_RSQ, result_dst, op[0]);
+         emit(ir, TGSI_OPCODE_MUL, result_dst, result_src, op[0]);
+         /* For incoming channels <= 0, set the result to 0. */
+         op[0].negate = ~op[0].negate;
+         emit(ir, TGSI_OPCODE_CMP, result_dst,
+              op[0], result_src, st_src_reg_for_float(0.0));
+      }
       break;
    case ir_unop_rsq:
       emit_scalar(ir, TGSI_OPCODE_RSQ, result_dst, op[0]);
@@ -2925,32 +2932,12 @@ glsl_to_tgsi_visitor::visit(ir_discard *ir)
 void
 glsl_to_tgsi_visitor::visit(ir_if *ir)
 {
-   glsl_to_tgsi_instruction *cond_inst, *if_inst;
-   glsl_to_tgsi_instruction *prev_inst;
-
-   prev_inst = (glsl_to_tgsi_instruction *)this->instructions.get_tail();
+   glsl_to_tgsi_instruction *if_inst;
 
    ir->condition->accept(this);
    assert(this->result.file != PROGRAM_UNDEFINED);
 
-   if (this->options->EmitCondCodes) {
-      cond_inst = (glsl_to_tgsi_instruction *)this->instructions.get_tail();
-
-      /* See if we actually generated any instruction for generating
-       * the condition.  If not, then cook up a move to a temp so we
-       * have something to set cond_update on.
-       */
-      if (cond_inst == prev_inst) {
-         st_src_reg temp = get_temp(glsl_type::bool_type);
-         cond_inst = emit(ir->condition, TGSI_OPCODE_MOV, st_dst_reg(temp), result);
-      }
-      cond_inst->cond_update = GL_TRUE;
-
-      if_inst = emit(ir->condition, TGSI_OPCODE_IF);
-      if_inst->dst.cond_mask = COND_NE;
-   } else {
-      if_inst = emit(ir->condition, TGSI_OPCODE_IF, undef_dst, this->result);
-   }
+   if_inst = emit(ir->condition, TGSI_OPCODE_IF, undef_dst, this->result);
 
    this->instructions.push_tail(if_inst);
 
@@ -4956,18 +4943,23 @@ get_mesa_program(struct gl_context *ctx,
    bool progress;
    struct gl_shader_compiler_options *options =
          &ctx->ShaderCompilerOptions[_mesa_shader_type_to_index(shader->Type)];
+   struct pipe_screen *pscreen = ctx->st->pipe->screen;
+   unsigned ptarget;
 
    switch (shader->Type) {
    case GL_VERTEX_SHADER:
       target = GL_VERTEX_PROGRAM_ARB;
+      ptarget = PIPE_SHADER_VERTEX;
       target_string = "vertex";
       break;
    case GL_FRAGMENT_SHADER:
       target = GL_FRAGMENT_PROGRAM_ARB;
+      ptarget = PIPE_SHADER_FRAGMENT;
       target_string = "fragment";
       break;
    case GL_GEOMETRY_SHADER:
       target = GL_GEOMETRY_PROGRAM_NV;
+      ptarget = PIPE_SHADER_GEOMETRY;
       target_string = "geometry";
       break;
    default:
@@ -4988,6 +4980,9 @@ get_mesa_program(struct gl_context *ctx,
    v->options = options;
    v->glsl_version = ctx->Const.GLSLVersion;
    v->native_integers = ctx->Const.NativeIntegers;
+
+   v->have_sqrt = pscreen->get_shader_param(pscreen, ptarget,
+                                            PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED);
 
    _mesa_generate_parameters_list_for_uniforms(shader_program, shader,
 					       prog->Parameters);
@@ -5161,21 +5156,53 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       const struct gl_shader_compiler_options *options =
             &ctx->ShaderCompilerOptions[_mesa_shader_type_to_index(prog->_LinkedShaders[i]->Type)];
 
+      /* If there are forms of indirect addressing that the driver
+       * cannot handle, perform the lowering pass.
+       */
+      if (options->EmitNoIndirectInput || options->EmitNoIndirectOutput ||
+          options->EmitNoIndirectTemp || options->EmitNoIndirectUniform) {
+         lower_variable_index_to_cond_assign(ir,
+                                             options->EmitNoIndirectInput,
+                                             options->EmitNoIndirectOutput,
+                                             options->EmitNoIndirectTemp,
+                                             options->EmitNoIndirectUniform);
+      }
+
+      if (ctx->Extensions.ARB_shading_language_packing) {
+         unsigned lower_inst = LOWER_PACK_SNORM_2x16 |
+                               LOWER_UNPACK_SNORM_2x16 |
+                               LOWER_PACK_UNORM_2x16 |
+                               LOWER_UNPACK_UNORM_2x16 |
+                               LOWER_PACK_SNORM_4x8 |
+                               LOWER_UNPACK_SNORM_4x8 |
+                               LOWER_UNPACK_UNORM_4x8 |
+                               LOWER_PACK_UNORM_4x8 |
+                               LOWER_PACK_HALF_2x16 |
+                               LOWER_UNPACK_HALF_2x16;
+
+         lower_packing_builtins(ir, lower_inst);
+      }
+
+      do_mat_op_to_vec(ir);
+      lower_instructions(ir,
+                         MOD_TO_FRACT |
+                         DIV_TO_MUL_RCP |
+                         EXP_TO_EXP2 |
+                         LOG_TO_LOG2 |
+                         LRP_TO_ARITH |
+                         (options->EmitNoPow ? POW_TO_EXP2 : 0) |
+                         (!ctx->Const.NativeIntegers ? INT_DIV_TO_MUL_RCP : 0));
+
+      lower_ubo_reference(prog->_LinkedShaders[i], ir);
+      do_vec_index_to_cond_assign(ir);
+      lower_quadop_vector(ir, false);
+      lower_noise(ir);
+      if (options->MaxIfDepth == 0) {
+         lower_discard(ir);
+      }
+
       do {
-         unsigned what_to_lower = MOD_TO_FRACT | DIV_TO_MUL_RCP |
-            EXP_TO_EXP2 | LOG_TO_LOG2;
-         if (options->EmitNoPow)
-            what_to_lower |= POW_TO_EXP2;
-         if (!ctx->Const.NativeIntegers)
-            what_to_lower |= INT_DIV_TO_MUL_RCP;
-
          progress = false;
-
-         /* Lowering */
-         do_mat_op_to_vec(ir);
-         lower_instructions(ir, what_to_lower);
-
-         lower_ubo_reference(prog->_LinkedShaders[i], ir);
 
          progress = do_lower_jumps(ir, true, true, options->EmitNoMainReturn, options->EmitNoCont, options->EmitNoLoops) || progress;
 
@@ -5183,30 +5210,7 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
 					   options->MaxUnrollIterations)
 	   || progress;
 
-         progress = lower_quadop_vector(ir, false) || progress;
-
-         if (options->MaxIfDepth == 0)
-            progress = lower_discard(ir) || progress;
-
          progress = lower_if_to_cond_assign(ir, options->MaxIfDepth) || progress;
-
-         if (options->EmitNoNoise)
-            progress = lower_noise(ir) || progress;
-
-         /* If there are forms of indirect addressing that the driver
-          * cannot handle, perform the lowering pass.
-          */
-         if (options->EmitNoIndirectInput || options->EmitNoIndirectOutput
-             || options->EmitNoIndirectTemp || options->EmitNoIndirectUniform)
-           progress =
-             lower_variable_index_to_cond_assign(ir,
-        					 options->EmitNoIndirectInput,
-        					 options->EmitNoIndirectOutput,
-        					 options->EmitNoIndirectTemp,
-        					 options->EmitNoIndirectUniform)
-             || progress;
-
-         progress = do_vec_index_to_cond_assign(ir) || progress;
 
       } while (progress);
 

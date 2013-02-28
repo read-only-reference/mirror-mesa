@@ -36,12 +36,6 @@
 #include "intel_batchbuffer.h"
 #include "intel_buffers.h"
 
-/* This is used to initialize brw->state.atoms[].  We could use this
- * list directly except for a single atom, brw_constant_buffer, which
- * has a .dirty value which changes according to the parameters of the
- * current fragment and vertex programs, and so cannot be a static
- * value.
- */
 static const struct brw_tracked_state *gen4_atoms[] =
 {
    &brw_wm_input_sizes,
@@ -352,6 +346,10 @@ static struct dirty_bit_map mesa_bits[] = {
    DEFINE_BIT(_NEW_TRACK_MATRIX),
    DEFINE_BIT(_NEW_PROGRAM),
    DEFINE_BIT(_NEW_PROGRAM_CONSTANTS),
+   DEFINE_BIT(_NEW_BUFFER_OBJECT),
+   DEFINE_BIT(_NEW_FRAG_CLAMP),
+   DEFINE_BIT(_NEW_TRANSFORM_FEEDBACK),
+   DEFINE_BIT(_NEW_VARYING_VP_INPUTS),
    {0, 0, 0}
 };
 
@@ -365,23 +363,26 @@ static struct dirty_bit_map brw_bits[] = {
    DEFINE_BIT(BRW_NEW_PRIMITIVE),
    DEFINE_BIT(BRW_NEW_CONTEXT),
    DEFINE_BIT(BRW_NEW_WM_INPUT_DIMENSIONS),
-   DEFINE_BIT(BRW_NEW_PROGRAM_CACHE),
    DEFINE_BIT(BRW_NEW_PSP),
    DEFINE_BIT(BRW_NEW_SURFACES),
-   DEFINE_BIT(BRW_NEW_INDICES),
-   DEFINE_BIT(BRW_NEW_INDEX_BUFFER),
-   DEFINE_BIT(BRW_NEW_VERTICES),
-   DEFINE_BIT(BRW_NEW_BATCH),
-   DEFINE_BIT(BRW_NEW_VS_CONSTBUF),
    DEFINE_BIT(BRW_NEW_VS_BINDING_TABLE),
    DEFINE_BIT(BRW_NEW_GS_BINDING_TABLE),
    DEFINE_BIT(BRW_NEW_PS_BINDING_TABLE),
+   DEFINE_BIT(BRW_NEW_INDICES),
+   DEFINE_BIT(BRW_NEW_VERTICES),
+   DEFINE_BIT(BRW_NEW_BATCH),
+   DEFINE_BIT(BRW_NEW_INDEX_BUFFER),
+   DEFINE_BIT(BRW_NEW_VS_CONSTBUF),
+   DEFINE_BIT(BRW_NEW_PROGRAM_CACHE),
    DEFINE_BIT(BRW_NEW_STATE_BASE_ADDRESS),
+   DEFINE_BIT(BRW_NEW_SOL_INDICES),
    {0, 0, 0}
 };
 
 static struct dirty_bit_map cache_bits[] = {
    DEFINE_BIT(CACHE_NEW_BLEND_STATE),
+   DEFINE_BIT(CACHE_NEW_DEPTH_STENCIL_STATE),
+   DEFINE_BIT(CACHE_NEW_COLOR_CALC_STATE),
    DEFINE_BIT(CACHE_NEW_CC_VP),
    DEFINE_BIT(CACHE_NEW_CC_UNIT),
    DEFINE_BIT(CACHE_NEW_WM_PROG),

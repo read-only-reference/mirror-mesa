@@ -165,32 +165,13 @@ lp_rast_clear_color(struct lp_rasterizer_task *task,
 
          for (i = 0; i < scene->fb.nr_cbufs; i++) {
             enum pipe_format format = scene->fb.cbufs[i]->format;
-            /*
-             * XXX the format_write_4i/ui functions do clamping to max value
-             * and I'm not sure that's actually right - spec doesn't seem to
-             * say much about that topic. If it is should probably adjust the
-             * border color handling to do the same. If not and chopping off
-             * bits is the way to go, the write_4i and write_4ui functions
-             * would be identical.
-             */
-            if (util_format_is_pure_sint(format)) {
-               int rgba[4];
-               rgba[0] = arg.clear_color.i[0];
-               rgba[1] = arg.clear_color.i[1];
-               rgba[2] = arg.clear_color.i[2];
-               rgba[3] = arg.clear_color.i[3];
 
-               util_format_write_4i(format, rgba, 0, &uc, 0, 0, 0, 1, 1);
+            if (util_format_is_pure_sint(format)) {
+               util_format_write_4i(format, arg.clear_color.i, 0, &uc, 0, 0, 0, 1, 1);
             }
             else {
-               unsigned rgba[4];
-               rgba[0] = arg.clear_color.ui[0];
-               rgba[1] = arg.clear_color.ui[1];
-               rgba[2] = arg.clear_color.ui[2];
-               rgba[3] = arg.clear_color.ui[3];
-
                assert(util_format_is_pure_uint(format));
-               util_format_write_4ui(format, rgba, 0, &uc, 0, 0, 0, 1, 1);
+               util_format_write_4ui(format, arg.clear_color.ui, 0, &uc, 0, 0, 0, 1, 1);
             }
 
             util_fill_rect(scene->cbufs[i].map,
@@ -386,7 +367,7 @@ lp_rast_shade_tile(struct lp_rasterizer_task *task,
                                             color,
                                             depth,
                                             0xffff,
-                                            &task->vis_counter,
+                                            &task->thread_data,
                                             stride);
          END_JIT_CALL();
       }
@@ -469,7 +450,7 @@ lp_rast_shade_quads_mask(struct lp_rasterizer_task *task,
                                          color,
                                          depth,
                                          mask,
-                                         &task->vis_counter,
+                                         &task->thread_data,
                                          stride);
    END_JIT_CALL();
 }
@@ -491,7 +472,7 @@ lp_rast_begin_query(struct lp_rasterizer_task *task,
 
    switch (pq->type) {
    case PIPE_QUERY_OCCLUSION_COUNTER:
-      task->vis_counter = 0;
+      task->thread_data.vis_counter = 0;
       break;
    case PIPE_QUERY_PRIMITIVES_GENERATED:
    case PIPE_QUERY_PRIMITIVES_EMITTED:
@@ -519,7 +500,7 @@ lp_rast_end_query(struct lp_rasterizer_task *task,
 
    switch (pq->type) {
    case PIPE_QUERY_OCCLUSION_COUNTER:
-      pq->count[task->thread_index] += task->vis_counter;
+      pq->count[task->thread_index] += task->thread_data.vis_counter;
       break;
    case PIPE_QUERY_TIMESTAMP:
       pq->count[task->thread_index] = os_time_get_nano();
@@ -866,8 +847,6 @@ lp_rast_create( unsigned num_threads )
 
    /* for synchronizing rasterization threads */
    pipe_barrier_init( &rast->barrier, rast->num_threads );
-
-   memset(lp_swizzled_cbuf, 0, sizeof lp_swizzled_cbuf);
 
    memset(lp_dummy_tile, 0, sizeof lp_dummy_tile);
 

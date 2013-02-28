@@ -44,7 +44,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "main/fbobject.h"
 #include "swrast/s_renderbuffer.h"
 
-#define STANDALONE_MMIO
 #include "radeon_chipset.h"
 #include "radeon_macros.h"
 #include "radeon_screen.h"
@@ -700,8 +699,6 @@ radeonDestroyBuffer(__DRIdrawable *driDrawPriv)
     radeon_cleanup_renderbuffers(rfb);
     _mesa_reference_framebuffer((struct gl_framebuffer **)(&(driDrawPriv->driverPrivate)), NULL);
 }
-
-#define ARRAY_SIZE(a) (sizeof (a) / sizeof ((a)[0]))
 
 /**
  * This is the driver specific part of the createNewScreen entry point.

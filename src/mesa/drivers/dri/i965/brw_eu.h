@@ -175,6 +175,7 @@ ALU2(DP2)
 ALU2(LINE)
 ALU2(PLN)
 ALU3(MAD)
+ALU3(LRP)
 
 ROUND(RNDZ)
 ROUND(RNDE)
@@ -265,7 +266,6 @@ void brw_SAMPLE(struct brw_compile *p,
 		struct brw_reg src0,
 		GLuint binding_table_index,
 		GLuint sampler,
-		GLuint writemask,
 		GLuint msg_type,
 		GLuint response_length,
 		GLuint msg_length,

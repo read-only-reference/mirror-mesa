@@ -127,7 +127,7 @@ struct lp_sampler_dynamic_state
 {
    /* First callbacks for sampler view state */
 
-   /** Obtain the base texture width (returns int32) */
+   /** Obtain the base texture width (or number of elements) (returns int32) */
    LLVMValueRef
    (*width)( const struct lp_sampler_dynamic_state *state,
              struct gallivm_state *gallivm,
@@ -139,7 +139,7 @@ struct lp_sampler_dynamic_state
               struct gallivm_state *gallivm,
               unsigned texture_unit);
 
-   /** Obtain the base texture depth (returns int32) */
+   /** Obtain the base texture depth (or array size) (returns int32) */
    LLVMValueRef
    (*depth)( const struct lp_sampler_dynamic_state *state,
              struct gallivm_state *gallivm,
@@ -487,6 +487,7 @@ lp_build_size_query_soa(struct gallivm_state *gallivm,
                         struct lp_sampler_dynamic_state *dynamic_state,
                         struct lp_type int_type,
                         unsigned texture_unit,
+                        boolean need_nr_mips,
                         LLVMValueRef explicit_lod,
                         LLVMValueRef *sizes_out);
 

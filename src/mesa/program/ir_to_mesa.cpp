@@ -1478,6 +1478,13 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
       assert(!"not supported");
       break;
 
+   case ir_triop_lrp:
+      /* ir_triop_lrp operands are (x, y, a) while
+       * OPCODE_LRP operands are (a, y, x) to match ARB_fragment_program.
+       */
+      emit(ir, OPCODE_LRP, result_dst, op[2], op[1], op[0]);
+      break;
+
    case ir_quadop_vector:
       /* This operation should have already been handled.
        */
@@ -2375,7 +2382,7 @@ print_program(struct prog_instruction *mesa_instructions,
    }
 }
 
-class add_uniform_to_shader : public uniform_field_visitor {
+class add_uniform_to_shader : public program_resource_visitor {
 public:
    add_uniform_to_shader(struct gl_shader_program *shader_program,
 			 struct gl_program_parameter_list *params)
@@ -2387,7 +2394,7 @@ public:
    void process(ir_variable *var)
    {
       this->idx = -1;
-      this->uniform_field_visitor::process(var);
+      this->program_resource_visitor::process(var);
 
       var->location = this->idx;
    }

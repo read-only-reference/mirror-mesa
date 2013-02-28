@@ -199,6 +199,30 @@ fs_visitor::visit(ir_dereference_array *ir)
 }
 
 void
+fs_visitor::emit_lrp(fs_reg dst, fs_reg x, fs_reg y, fs_reg a)
+{
+   if (intel->gen < 6 || x.file != GRF || y.file != GRF || a.file != GRF) {
+      /* We can't use the LRP instruction.  Emit x*(1-a) + y*a. */
+      fs_reg y_times_a           = fs_reg(this, glsl_type::float_type);
+      fs_reg one_minus_a         = fs_reg(this, glsl_type::float_type);
+      fs_reg x_times_one_minus_a = fs_reg(this, glsl_type::float_type);
+
+      emit(MUL(y_times_a, y, a));
+
+      a.negate = !a.negate;
+      emit(ADD(one_minus_a, fs_reg(1.0f), a));
+      emit(MUL(x_times_one_minus_a, x, one_minus_a));
+
+      emit(ADD(dst, x_times_one_minus_a, y_times_a));
+   } else {
+      /* The LRP instruction actually does op1 * op0 + op2 * (1 - op0), so
+       * we need to reorder the operands.
+       */
+      emit(LRP(dst, a, y, x));
+   }
+}
+
+void
 fs_visitor::emit_minmax(uint32_t conditionalmod, fs_reg dst,
                         fs_reg src0, fs_reg src1)
 {
@@ -291,10 +315,10 @@ void
 fs_visitor::visit(ir_expression *ir)
 {
    unsigned int operand;
-   fs_reg op[2], temp;
+   fs_reg op[3], temp;
    fs_inst *inst;
 
-   assert(ir->get_num_operands() <= 2);
+   assert(ir->get_num_operands() <= 3);
 
    if (try_emit_saturate(ir))
       return;
@@ -586,7 +610,7 @@ fs_visitor::visit(ir_expression *ir)
    case ir_binop_pack_half_2x16_split:
       emit(FS_OPCODE_PACK_HALF_2x16_SPLIT, this->result, op[0], op[1]);
       break;
-   case ir_binop_ubo_load:
+   case ir_binop_ubo_load: {
       /* This IR node takes a constant uniform block and a constant or
        * variable byte offset within the block and loads a vector from that.
        */
@@ -597,31 +621,9 @@ fs_visitor::visit(ir_expression *ir)
          fs_reg packed_consts = fs_reg(this, glsl_type::float_type);
          packed_consts.type = result.type;
 
-         if (intel->gen >= 7) {
-            fs_reg const_offset_reg = fs_reg(const_offset->value.u[0] / 16);
-            fs_reg payload = fs_reg(this, glsl_type::uint_type);
-            struct brw_reg g0 = retype(brw_vec8_grf(0, 0),
-                                       BRW_REGISTER_TYPE_UD);
-            fs_inst *setup = emit(MOV(payload, fs_reg(g0)));
-            setup->force_writemask_all = true;
-            /* We don't need the second half of this vgrf to be filled with g1
-             * in the 16-wide case, but if we use force_uncompressed then live
-             * variable analysis won't consider this a def!
-             */
-
-            emit(FS_OPCODE_SET_GLOBAL_OFFSET, payload,
-                 payload, const_offset_reg);
-            emit(FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7, packed_consts,
-                 surf_index, payload);
-         } else {
-            fs_reg const_offset_reg = fs_reg(const_offset->value.u[0]);
-            fs_inst *pull = emit(fs_inst(FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD,
-                                         packed_consts,
-                                         surf_index,
-                                         const_offset_reg));
-            pull->base_mrf = 14;
-            pull->mlen = 1;
-         }
+         fs_reg const_offset_reg = fs_reg(const_offset->value.u[0] & ~15);
+         emit(fs_inst(FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD,
+                      packed_consts, surf_index, const_offset_reg));
 
          packed_consts.smear = const_offset->value.u[0] % 16 / 4;
          for (int i = 0; i < ir->type->vector_elements; i++) {
@@ -660,6 +662,11 @@ fs_visitor::visit(ir_expression *ir)
       }
 
       result.reg_offset = 0;
+      break;
+   }
+
+   case ir_triop_lrp:
+      emit_lrp(this->result, op[0], op[1], op[2]);
       break;
    }
 }

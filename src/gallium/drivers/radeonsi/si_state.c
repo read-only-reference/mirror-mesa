@@ -314,6 +314,8 @@ static void si_update_fb_rs_state(struct r600_context *rctx)
 
 	offset_units = rctx->queued.named.rasterizer->offset_units;
 	switch (rctx->framebuffer.zsbuf->texture->format) {
+	case PIPE_FORMAT_S8_UINT_Z24_UNORM:
+	case PIPE_FORMAT_X8Z24_UNORM:
 	case PIPE_FORMAT_Z24X8_UNORM:
 	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
 		depth = -24;
@@ -419,8 +421,7 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 	rs->offset_units = state->offset_units;
 	rs->offset_scale = state->offset_scale * 12.0f;
 
-	/* XXX: Flat shading hangs the GPU */
-	tmp = S_0286D4_FLAT_SHADE_ENA(0);
+	tmp = S_0286D4_FLAT_SHADE_ENA(1);
 	if (state->sprite_coord_enable) {
 		tmp |= S_0286D4_PNT_SPRITE_ENA(1) |
 			S_0286D4_PNT_SPRITE_OVRD_X(V_0286D4_SPI_PNT_SPRITE_SEL_S) |
@@ -720,7 +721,6 @@ static uint32_t si_translate_colorformat(enum pipe_format format)
 	case PIPE_FORMAT_L8A8_SNORM:
 	case PIPE_FORMAT_L8A8_UINT:
 	case PIPE_FORMAT_L8A8_SINT:
-	case PIPE_FORMAT_L8A8_SRGB:
 	case PIPE_FORMAT_R8G8_SNORM:
 	case PIPE_FORMAT_R8G8_UNORM:
 	case PIPE_FORMAT_R8G8_UINT:
@@ -754,10 +754,13 @@ static uint32_t si_translate_colorformat(enum pipe_format format)
 	case PIPE_FORMAT_R8G8B8A8_SNORM:
 	case PIPE_FORMAT_R8G8B8A8_UNORM:
 	case PIPE_FORMAT_R8G8B8X8_UNORM:
+	case PIPE_FORMAT_R8G8B8X8_SNORM:
+	case PIPE_FORMAT_R8G8B8X8_SRGB:
+	case PIPE_FORMAT_R8G8B8X8_UINT:
+	case PIPE_FORMAT_R8G8B8X8_SINT:
 	case PIPE_FORMAT_R8SG8SB8UX8U_NORM:
 	case PIPE_FORMAT_X8B8G8R8_UNORM:
 	case PIPE_FORMAT_X8R8G8B8_UNORM:
-	case PIPE_FORMAT_R8G8B8_UNORM:
 	case PIPE_FORMAT_R8G8B8A8_SSCALED:
 	case PIPE_FORMAT_R8G8B8A8_USCALED:
 	case PIPE_FORMAT_R8G8B8A8_SINT:
@@ -768,6 +771,7 @@ static uint32_t si_translate_colorformat(enum pipe_format format)
 	case PIPE_FORMAT_R10G10B10X2_SNORM:
 	case PIPE_FORMAT_B10G10R10A2_UNORM:
 	case PIPE_FORMAT_B10G10R10A2_UINT:
+	case PIPE_FORMAT_B10G10R10X2_UNORM:
 	case PIPE_FORMAT_R10SG10SB10SA2U_NORM:
 		return V_028C70_COLOR_2_10_10_10;
 
@@ -775,6 +779,7 @@ static uint32_t si_translate_colorformat(enum pipe_format format)
 	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
 		return V_028C70_COLOR_8_24;
 
+	case PIPE_FORMAT_S8X24_UINT:
 	case PIPE_FORMAT_X8Z24_UNORM:
 	case PIPE_FORMAT_S8_UINT_Z24_UNORM:
 		return V_028C70_COLOR_24_8;
@@ -804,16 +809,18 @@ static uint32_t si_translate_colorformat(enum pipe_format format)
 		return V_028C70_COLOR_10_11_11;
 
 	/* 64-bit buffers. */
-	case PIPE_FORMAT_R16G16B16_USCALED:
-	case PIPE_FORMAT_R16G16B16_SSCALED:
 	case PIPE_FORMAT_R16G16B16A16_UINT:
 	case PIPE_FORMAT_R16G16B16A16_SINT:
 	case PIPE_FORMAT_R16G16B16A16_USCALED:
 	case PIPE_FORMAT_R16G16B16A16_SSCALED:
 	case PIPE_FORMAT_R16G16B16A16_UNORM:
 	case PIPE_FORMAT_R16G16B16A16_SNORM:
-	case PIPE_FORMAT_R16G16B16_FLOAT:
 	case PIPE_FORMAT_R16G16B16A16_FLOAT:
+	case PIPE_FORMAT_R16G16B16X16_UNORM:
+	case PIPE_FORMAT_R16G16B16X16_SNORM:
+	case PIPE_FORMAT_R16G16B16X16_FLOAT:
+	case PIPE_FORMAT_R16G16B16X16_UINT:
+	case PIPE_FORMAT_R16G16B16X16_SINT:
 		return V_028C70_COLOR_16_16_16_16;
 
 	case PIPE_FORMAT_L32A32_FLOAT:
@@ -834,6 +841,9 @@ static uint32_t si_translate_colorformat(enum pipe_format format)
 	case PIPE_FORMAT_R32G32B32A32_SINT:
 	case PIPE_FORMAT_R32G32B32A32_UINT:
 	case PIPE_FORMAT_R32G32B32A32_FLOAT:
+	case PIPE_FORMAT_R32G32B32X32_FLOAT:
+	case PIPE_FORMAT_R32G32B32X32_UINT:
+	case PIPE_FORMAT_R32G32B32X32_SINT:
 		return V_028C70_COLOR_32_32_32_32;
 
 	/* YUV buffers. */
@@ -898,7 +908,6 @@ static uint32_t si_translate_colorswap(enum pipe_format format)
 	case PIPE_FORMAT_L8A8_SNORM:
 	case PIPE_FORMAT_L8A8_UINT:
 	case PIPE_FORMAT_L8A8_SINT:
-	case PIPE_FORMAT_L8A8_SRGB:
 		return V_028C70_SWAP_ALT;
 	case PIPE_FORMAT_R8G8_SNORM:
 	case PIPE_FORMAT_R8G8_UNORM:
@@ -944,6 +953,10 @@ static uint32_t si_translate_colorswap(enum pipe_format format)
 	case PIPE_FORMAT_R8G8B8A8_SINT:
 	case PIPE_FORMAT_R8G8B8A8_UINT:
 	case PIPE_FORMAT_R8G8B8X8_UNORM:
+	case PIPE_FORMAT_R8G8B8X8_SNORM:
+	case PIPE_FORMAT_R8G8B8X8_SRGB:
+	case PIPE_FORMAT_R8G8B8X8_UINT:
+	case PIPE_FORMAT_R8G8B8X8_SINT:
 		return V_028C70_SWAP_STD;
 
 	case PIPE_FORMAT_A8B8G8R8_UNORM:
@@ -955,9 +968,10 @@ static uint32_t si_translate_colorswap(enum pipe_format format)
 	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
 		return V_028C70_SWAP_STD;
 
+	case PIPE_FORMAT_S8X24_UINT:
 	case PIPE_FORMAT_X8Z24_UNORM:
 	case PIPE_FORMAT_S8_UINT_Z24_UNORM:
-		return V_028C70_SWAP_STD;
+		return V_028C70_SWAP_STD_REV;
 
 	case PIPE_FORMAT_R10G10B10A2_UNORM:
 	case PIPE_FORMAT_R10G10B10X2_SNORM:
@@ -966,6 +980,7 @@ static uint32_t si_translate_colorswap(enum pipe_format format)
 
 	case PIPE_FORMAT_B10G10R10A2_UNORM:
 	case PIPE_FORMAT_B10G10R10A2_UINT:
+	case PIPE_FORMAT_B10G10R10X2_UNORM:
 		return V_028C70_SWAP_ALT;
 
 	case PIPE_FORMAT_R11G11B10_FLOAT:
@@ -1001,6 +1016,11 @@ static uint32_t si_translate_colorswap(enum pipe_format format)
 	case PIPE_FORMAT_R16G16B16A16_UINT:
 	case PIPE_FORMAT_R16G16B16A16_SINT:
 	case PIPE_FORMAT_R16G16B16A16_FLOAT:
+	case PIPE_FORMAT_R16G16B16X16_UNORM:
+	case PIPE_FORMAT_R16G16B16X16_SNORM:
+	case PIPE_FORMAT_R16G16B16X16_FLOAT:
+	case PIPE_FORMAT_R16G16B16X16_UINT:
+	case PIPE_FORMAT_R16G16B16X16_SINT:
 	case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
 		return V_028C70_SWAP_STD;
 
@@ -1017,6 +1037,9 @@ static uint32_t si_translate_colorswap(enum pipe_format format)
 	case PIPE_FORMAT_R32G32B32A32_USCALED:
 	case PIPE_FORMAT_R32G32B32A32_SINT:
 	case PIPE_FORMAT_R32G32B32A32_UINT:
+	case PIPE_FORMAT_R32G32B32X32_FLOAT:
+	case PIPE_FORMAT_R32G32B32X32_UINT:
+	case PIPE_FORMAT_R32G32B32X32_SINT:
 		return V_028C70_SWAP_STD;
 	default:
 		R600_ERR("unsupported colorswap format %d\n", format);
@@ -1119,9 +1142,11 @@ static uint32_t si_translate_dbformat(enum pipe_format format)
 	switch (format) {
 	case PIPE_FORMAT_Z16_UNORM:
 		return V_028040_Z_16;
+	case PIPE_FORMAT_S8_UINT_Z24_UNORM:
+	case PIPE_FORMAT_X8Z24_UNORM:
 	case PIPE_FORMAT_Z24X8_UNORM:
 	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
-		return V_028040_Z_24; /* XXX no longer supported on SI */
+		return V_028040_Z_24; /* deprecated on SI */
 	case PIPE_FORMAT_Z32_FLOAT:
 	case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
 		return V_028040_Z_32_FLOAT;
@@ -1154,14 +1179,14 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen,
 		case PIPE_FORMAT_Z24_UNORM_S8_UINT:
 			return V_008F14_IMG_DATA_FORMAT_8_24;
 		case PIPE_FORMAT_X8Z24_UNORM:
+		case PIPE_FORMAT_S8X24_UINT:
 		case PIPE_FORMAT_S8_UINT_Z24_UNORM:
 			return V_008F14_IMG_DATA_FORMAT_24_8;
-		case PIPE_FORMAT_X32_S8X24_UINT:
-		case PIPE_FORMAT_S8X24_UINT:
 		case PIPE_FORMAT_S8_UINT:
 			return V_008F14_IMG_DATA_FORMAT_8;
 		case PIPE_FORMAT_Z32_FLOAT:
 			return V_008F14_IMG_DATA_FORMAT_32;
+		case PIPE_FORMAT_X32_S8X24_UINT:
 		case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
 			return V_008F14_IMG_DATA_FORMAT_X24_8_32;
 		default:
@@ -1172,6 +1197,8 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen,
 		goto out_unknown; /* TODO */
 
 	case UTIL_FORMAT_COLORSPACE_SRGB:
+		if (desc->nr_channels != 4 && desc->nr_channels != 1)
+			goto out_unknown;
 		break;
 
 	default:
@@ -1523,6 +1550,8 @@ static unsigned si_tile_mode_index(struct r600_resource_texture *rtex, unsigned 
 			switch (rtex->real_format) {
 			case PIPE_FORMAT_Z16_UNORM:
 				return 5;
+			case PIPE_FORMAT_S8_UINT_Z24_UNORM:
+			case PIPE_FORMAT_X8Z24_UNORM:
 			case PIPE_FORMAT_Z24X8_UNORM:
 			case PIPE_FORMAT_Z24_UNORM_S8_UINT:
 			case PIPE_FORMAT_Z32_FLOAT:
@@ -1586,7 +1615,7 @@ static void si_cb(struct r600_context *rctx, struct si_pm4_state *pm4,
 	struct r600_surface *surf;
 	unsigned level = state->cbufs[cb]->u.tex.level;
 	unsigned pitch, slice;
-	unsigned color_info;
+	unsigned color_info, color_attrib;
 	unsigned tile_mode_index;
 	unsigned format, swap, ntype, endian;
 	uint64_t offset;
@@ -1624,15 +1653,19 @@ static void si_cb(struct r600_context *rctx, struct si_pm4_state *pm4,
 		if (desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB)
 			ntype = V_028C70_NUMBER_SRGB;
 		else if (desc->channel[i].type == UTIL_FORMAT_TYPE_SIGNED) {
-			if (desc->channel[i].normalized)
-				ntype = V_028C70_NUMBER_SNORM;
-			else if (desc->channel[i].pure_integer)
+			if (desc->channel[i].pure_integer) {
 				ntype = V_028C70_NUMBER_SINT;
+			} else {
+				assert(desc->channel[i].normalized);
+				ntype = V_028C70_NUMBER_SNORM;
+			}
 		} else if (desc->channel[i].type == UTIL_FORMAT_TYPE_UNSIGNED) {
-			if (desc->channel[i].normalized)
-				ntype = V_028C70_NUMBER_UNORM;
-			else if (desc->channel[i].pure_integer)
+			if (desc->channel[i].pure_integer) {
 				ntype = V_028C70_NUMBER_UINT;
+			} else {
+				assert(desc->channel[i].normalized);
+				ntype = V_028C70_NUMBER_UNORM;
+			}
 		}
 	}
 
@@ -1670,6 +1703,9 @@ static void si_cb(struct r600_context *rctx, struct si_pm4_state *pm4,
 		S_028C70_NUMBER_TYPE(ntype) |
 		S_028C70_ENDIAN(endian);
 
+	color_attrib = S_028C74_TILE_MODE_INDEX(tile_mode_index) |
+		S_028C74_FORCE_DST_ALPHA_1(desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_1);
+
 	offset += r600_resource_va(rctx->context.screen, state->cbufs[cb]->texture);
 	offset >>= 8;
 
@@ -1687,8 +1723,7 @@ static void si_cb(struct r600_context *rctx, struct si_pm4_state *pm4,
 			       S_028C6C_SLICE_MAX(state->cbufs[cb]->u.tex.last_layer));
 	}
 	si_pm4_set_reg(pm4, R_028C70_CB_COLOR0_INFO + cb * 0x3C, color_info);
-	si_pm4_set_reg(pm4, R_028C74_CB_COLOR0_ATTRIB + cb * 0x3C,
-		       S_028C74_TILE_MODE_INDEX(tile_mode_index));
+	si_pm4_set_reg(pm4, R_028C74_CB_COLOR0_ATTRIB + cb * 0x3C, color_attrib);
 
 	/* Determine pixel shader export format */
 	max_comp_size = si_colorformat_max_comp_size(format);
@@ -1848,7 +1883,7 @@ static INLINE struct si_shader_key si_shader_selector_key(struct pipe_context *c
 		key.export_16bpc = rctx->export_16bpc;
 		if (rctx->queued.named.rasterizer) {
 			key.color_two_side = rctx->queued.named.rasterizer->two_side;
-			/*key.flatshade = rctx->queued.named.rasterizer->flatshade;*/
+			key.flatshade = rctx->queued.named.rasterizer->flatshade;
 		}
 		if (rctx->queued.named.dsa) {
 			key.alpha_func = rctx->queued.named.dsa->alpha_func;
@@ -1905,6 +1940,7 @@ int si_shader_select(struct pipe_context *ctx,
 			R600_ERR("Failed to build shader variant (type=%u) %d\n",
 				 sel->type, r);
 			sel->current = NULL;
+			FREE(shader);
 			return r;
 		}
 
@@ -2053,6 +2089,7 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 	unsigned char state_swizzle[4], swizzle[4];
 	unsigned height, depth, width;
 	enum pipe_format pipe_format = state->format;
+	struct radeon_surface_level *surflevel;
 	int first_non_void;
 	uint64_t va;
 
@@ -2072,37 +2109,84 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 	state_swizzle[2] = state->swizzle_b;
 	state_swizzle[3] = state->swizzle_a;
 
+	surflevel = tmp->surface.level;
+
 	/* Texturing with separate depth and stencil. */
 	if (tmp->is_depth && !tmp->is_flushing_texture) {
 		switch (pipe_format) {
 		case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
 			pipe_format = PIPE_FORMAT_Z32_FLOAT;
 			break;
+		case PIPE_FORMAT_X8Z24_UNORM:
+		case PIPE_FORMAT_S8_UINT_Z24_UNORM:
+			/* Z24 is always stored like this. */
+			pipe_format = PIPE_FORMAT_Z24X8_UNORM;
+			break;
 		case PIPE_FORMAT_X24S8_UINT:
 		case PIPE_FORMAT_S8X24_UINT:
 		case PIPE_FORMAT_X32_S8X24_UINT:
 			pipe_format = PIPE_FORMAT_S8_UINT;
+			surflevel = tmp->surface.stencil_level;
 			break;
 		default:;
 		}
 	}
 
 	desc = util_format_description(pipe_format);
-	util_format_compose_swizzles(desc->swizzle, state_swizzle, swizzle);
+
+	if (desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS) {
+		const unsigned char swizzle_xxxx[4] = {0, 0, 0, 0};
+		const unsigned char swizzle_yyyy[4] = {1, 1, 1, 1};
+
+		switch (pipe_format) {
+		case PIPE_FORMAT_S8_UINT_Z24_UNORM:
+		case PIPE_FORMAT_X24S8_UINT:
+		case PIPE_FORMAT_X32_S8X24_UINT:
+		case PIPE_FORMAT_X8Z24_UNORM:
+			util_format_compose_swizzles(swizzle_yyyy, state_swizzle, swizzle);
+			break;
+		default:
+			util_format_compose_swizzles(swizzle_xxxx, state_swizzle, swizzle);
+		}
+	} else {
+		util_format_compose_swizzles(desc->swizzle, state_swizzle, swizzle);
+	}
 
 	first_non_void = util_format_get_first_non_void_channel(pipe_format);
-	if (first_non_void < 0) {
-		num_format = V_008F14_IMG_NUM_FORMAT_FLOAT;
-	} else switch (desc->channel[first_non_void].type) {
-	case UTIL_FORMAT_TYPE_FLOAT:
-		num_format = V_008F14_IMG_NUM_FORMAT_FLOAT;
-		break;
-	case UTIL_FORMAT_TYPE_SIGNED:
-		num_format = V_008F14_IMG_NUM_FORMAT_SNORM;
-		break;
-	case UTIL_FORMAT_TYPE_UNSIGNED:
-	default:
+
+	switch (pipe_format) {
+	case PIPE_FORMAT_S8_UINT_Z24_UNORM:
 		num_format = V_008F14_IMG_NUM_FORMAT_UNORM;
+		break;
+	default:
+		if (first_non_void < 0) {
+			num_format = V_008F14_IMG_NUM_FORMAT_FLOAT;
+		} else if (desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB) {
+			num_format = V_008F14_IMG_NUM_FORMAT_SRGB;
+		} else {
+			num_format = V_008F14_IMG_NUM_FORMAT_UNORM;
+
+			switch (desc->channel[first_non_void].type) {
+			case UTIL_FORMAT_TYPE_FLOAT:
+				num_format = V_008F14_IMG_NUM_FORMAT_FLOAT;
+				break;
+			case UTIL_FORMAT_TYPE_SIGNED:
+				if (desc->channel[first_non_void].normalized)
+					num_format = V_008F14_IMG_NUM_FORMAT_SNORM;
+				else if (desc->channel[first_non_void].pure_integer)
+					num_format = V_008F14_IMG_NUM_FORMAT_SINT;
+				else
+					num_format = V_008F14_IMG_NUM_FORMAT_SSCALED;
+				break;
+			case UTIL_FORMAT_TYPE_UNSIGNED:
+				if (desc->channel[first_non_void].normalized)
+					num_format = V_008F14_IMG_NUM_FORMAT_UNORM;
+				else if (desc->channel[first_non_void].pure_integer)
+					num_format = V_008F14_IMG_NUM_FORMAT_UINT;
+				else
+					num_format = V_008F14_IMG_NUM_FORMAT_USCALED;
+			}
+		}
 	}
 
 	format = si_translate_texformat(ctx->screen, pipe_format, desc, first_non_void);
@@ -2115,10 +2199,10 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 	/* not supported any more */
 	//endian = si_colorformat_endian_swap(format);
 
-	width = tmp->surface.level[0].npix_x;
-	height = tmp->surface.level[0].npix_y;
-	depth = tmp->surface.level[0].npix_z;
-	pitch = tmp->surface.level[0].nblk_x * util_format_get_blockwidth(pipe_format);
+	width = surflevel[0].npix_x;
+	height = surflevel[0].npix_y;
+	depth = surflevel[0].npix_z;
+	pitch = surflevel[0].nblk_x * util_format_get_blockwidth(pipe_format);
 
 	if (texture->target == PIPE_TEXTURE_1D_ARRAY) {
 	        height = 1;
@@ -2128,7 +2212,7 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 	}
 
 	va = r600_resource_va(ctx->screen, texture);
-	va += tmp->surface.level[0].offset;
+	va += surflevel[0].offset;
 	view->state[0] = va >> 8;
 	view->state[1] = (S_008F14_BASE_ADDRESS_HI(va >> 40) |
 			  S_008F14_DATA_FORMAT(format) |
@@ -2439,6 +2523,7 @@ static void si_set_constant_buffer(struct pipe_context *ctx, uint shader, uint i
 
 	default:
 		R600_ERR("unsupported %d\n", shader);
+		FREE(pm4);
 	}
 
 	if (cb->buffer != &rbuffer->b.b)
@@ -2476,10 +2561,20 @@ static void *si_create_vertex_elements(struct pipe_context *ctx,
 			num_format = V_008F0C_BUF_NUM_FORMAT_USCALED; /* XXX */
 			break;
 		case UTIL_FORMAT_TYPE_SIGNED:
-			num_format = V_008F0C_BUF_NUM_FORMAT_SNORM;
+			if (desc->channel[first_non_void].normalized)
+				num_format = V_008F0C_BUF_NUM_FORMAT_SNORM;
+			else if (desc->channel[first_non_void].pure_integer)
+				num_format = V_008F0C_BUF_NUM_FORMAT_SINT;
+			else
+				num_format = V_008F0C_BUF_NUM_FORMAT_SSCALED;
 			break;
 		case UTIL_FORMAT_TYPE_UNSIGNED:
-			num_format = V_008F0C_BUF_NUM_FORMAT_UNORM;
+			if (desc->channel[first_non_void].normalized)
+				num_format = V_008F0C_BUF_NUM_FORMAT_UNORM;
+			else if (desc->channel[first_non_void].pure_integer)
+				num_format = V_008F0C_BUF_NUM_FORMAT_UINT;
+			else
+				num_format = V_008F0C_BUF_NUM_FORMAT_USCALED;
 			break;
 		case UTIL_FORMAT_TYPE_FLOAT:
 		default:
@@ -2665,8 +2760,13 @@ void si_init_config(struct r600_context *rctx)
 		si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x2a00126a);
 		break;
 	case CHIP_VERDE:
-	default:
 		si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x0000124a);
+		break;
+	case CHIP_OLAND:
+		si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x00000082);
+		break;
+	default:
+		si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x00000000);
 		break;
 	}
 

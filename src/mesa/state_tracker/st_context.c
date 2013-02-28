@@ -146,7 +146,6 @@ st_create_context_priv( struct gl_context *ctx, struct pipe_context *pipe,
    st_init_clear(st);
    st_init_draw( st );
    st_init_generate_mipmap(st);
-   st_init_blit(st);
 
    if(pipe->screen->get_param(pipe->screen, PIPE_CAP_NPOT_TEXTURES))
       st->internal_target = PIPE_TEXTURE_2D;
@@ -182,6 +181,7 @@ st_create_context_priv( struct gl_context *ctx, struct pipe_context *pipe,
 
    st->has_stencil_export =
       screen->get_param(screen, PIPE_CAP_SHADER_STENCIL_EXPORT);
+   st->has_shader_model3 = screen->get_param(screen, PIPE_CAP_SM3);
 
    /* GL limits and extensions */
    st_init_limits(st);
@@ -241,7 +241,6 @@ static void st_destroy_context_priv( struct st_context *st )
    st_destroy_atoms( st );
    st_destroy_draw( st );
    st_destroy_generate_mipmap(st);
-   st_destroy_blit(st);
    st_destroy_clear(st);
    st_destroy_bitmap(st);
    st_destroy_drawpix(st);

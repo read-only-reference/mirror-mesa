@@ -60,28 +60,6 @@ static struct llvmpipe_resource resource_list;
 static unsigned id_counter = 0;
 
 
-static INLINE boolean
-resource_is_texture(const struct pipe_resource *resource)
-{
-   switch (resource->target) {
-   case PIPE_BUFFER:
-      return FALSE;
-   case PIPE_TEXTURE_1D:
-   case PIPE_TEXTURE_1D_ARRAY:
-   case PIPE_TEXTURE_2D:
-   case PIPE_TEXTURE_2D_ARRAY:
-   case PIPE_TEXTURE_RECT:
-   case PIPE_TEXTURE_3D:
-   case PIPE_TEXTURE_CUBE:
-      return TRUE;
-   default:
-      assert(0);
-      return FALSE;
-   }
-}
-
-
-
 /**
  * Allocate storage for llvmpipe_texture::layout array.
  * The number of elements is width_in_tiles * height_in_tiles.
@@ -240,8 +218,8 @@ llvmpipe_displaytarget_layout(struct llvmpipe_screen *screen,
    /* Round up the surface size to a multiple of the tile size to
     * avoid tile clipping.
     */
-   const unsigned width = align(lpr->base.width0, TILE_SIZE);
-   const unsigned height = align(lpr->base.height0, TILE_SIZE);
+   const unsigned width = MAX2(1, align(lpr->base.width0, TILE_SIZE));
+   const unsigned height = MAX2(1, align(lpr->base.height0, TILE_SIZE));
    const unsigned width_t = width / TILE_SIZE;
    const unsigned height_t = height / TILE_SIZE;
 
@@ -294,8 +272,10 @@ llvmpipe_resource_create(struct pipe_screen *_screen,
 
    /* assert(lpr->base.bind); */
 
-   if (resource_is_texture(&lpr->base)) {
-      if (lpr->base.bind & PIPE_BIND_DISPLAY_TARGET) {
+   if (llvmpipe_resource_is_texture(&lpr->base)) {
+      if (lpr->base.bind & (PIPE_BIND_DISPLAY_TARGET |
+                            PIPE_BIND_SCANOUT |
+                            PIPE_BIND_SHARED)) {
          /* displayable surface */
          if (!llvmpipe_displaytarget_layout(screen, lpr))
             goto fail;
@@ -311,14 +291,18 @@ llvmpipe_resource_create(struct pipe_screen *_screen,
    }
    else {
       /* other data (vertex buffer, const buffer, etc) */
-      const enum pipe_format format = templat->format;
-      const uint w = templat->width0 / util_format_get_blockheight(format);
-      /* XXX buffers should only have one dimension, those values should be 1 */
-      const uint h = templat->height0 / util_format_get_blockwidth(format);
-      const uint d = templat->depth0;
-      const uint bpp = util_format_get_blocksize(format);
-      const uint bytes = w * h * d * bpp;
+      const uint bytes = templat->width0;
+      assert(util_format_get_blocksize(templat->format) == 1);
+      assert(templat->height0 == 1);
+      assert(templat->depth0 == 1);
+      assert(templat->last_level == 0);
       lpr->data = align_malloc(bytes, 16);
+      /*
+       * buffers don't really have stride but it's probably safer
+       * (for code doing same calculations for buffers and textures)
+       * to put something sane in there.
+       */
+      lpr->row_stride[0] = bytes;
       if (!lpr->data)
          goto fail;
       memset(lpr->data, 0, bytes);
@@ -357,7 +341,7 @@ llvmpipe_resource_destroy(struct pipe_screen *pscreen,
 
       FREE(lpr->layout[0]);
    }
-   else if (resource_is_texture(pt)) {
+   else if (llvmpipe_resource_is_texture(pt)) {
       /* regular texture */
       uint level;
 
@@ -447,7 +431,7 @@ llvmpipe_resource_map(struct pipe_resource *resource,
 
       return map2;
    }
-   else if (resource_is_texture(resource)) {
+   else if (llvmpipe_resource_is_texture(resource)) {
 
       map = llvmpipe_get_texture_image(lpr, layer, level,
                                        tex_usage, layout);
@@ -492,7 +476,7 @@ llvmpipe_resource_data(struct pipe_resource *resource)
 {
    struct llvmpipe_resource *lpr = llvmpipe_resource(resource);
 
-   assert(!resource_is_texture(resource));
+   assert(!llvmpipe_resource_is_texture(resource));
 
    return lpr->data;
 }
@@ -593,6 +577,7 @@ llvmpipe_create_surface(struct pipe_context *pipe,
    struct pipe_surface *ps;
 
    assert(surf_tmpl->u.tex.level <= pt->last_level);
+   assert(pt->bind & (PIPE_BIND_DEPTH_STENCIL | PIPE_BIND_RENDER_TARGET));
 
    ps = CALLOC_STRUCT(pipe_surface);
    if (ps) {
@@ -600,12 +585,23 @@ llvmpipe_create_surface(struct pipe_context *pipe,
       pipe_resource_reference(&ps->texture, pt);
       ps->context = pipe;
       ps->format = surf_tmpl->format;
-      ps->width = u_minify(pt->width0, surf_tmpl->u.tex.level);
-      ps->height = u_minify(pt->height0, surf_tmpl->u.tex.level);
-
-      ps->u.tex.level = surf_tmpl->u.tex.level;
-      ps->u.tex.first_layer = surf_tmpl->u.tex.first_layer;
-      ps->u.tex.last_layer = surf_tmpl->u.tex.last_layer;
+      if (llvmpipe_resource_is_texture(pt)) {
+         assert(surf_tmpl->u.tex.level <= pt->last_level);
+         ps->width = u_minify(pt->width0, surf_tmpl->u.tex.level);
+         ps->height = u_minify(pt->height0, surf_tmpl->u.tex.level);
+         ps->u.tex.level = surf_tmpl->u.tex.level;
+         ps->u.tex.first_layer = surf_tmpl->u.tex.first_layer;
+         ps->u.tex.last_layer = surf_tmpl->u.tex.last_layer;
+      }
+      else {
+         /* setting width as number of elements should get us correct renderbuffer width */
+         ps->width = surf_tmpl->u.buf.last_element - surf_tmpl->u.buf.first_element + 1;
+         ps->height = pt->height0;
+         ps->u.buf.first_element = surf_tmpl->u.buf.first_element;
+         ps->u.buf.last_element = surf_tmpl->u.buf.last_element;
+         assert(ps->u.buf.first_element <= ps->u.buf.last_element);
+         assert(ps->u.buf.last_element < ps->width);
+      }
    }
    return ps;
 }
@@ -655,7 +651,6 @@ llvmpipe_transfer_map( struct pipe_context *pipe,
       boolean do_not_block = !!(usage & PIPE_TRANSFER_DONTBLOCK);
       if (!llvmpipe_flush_resource(pipe, resource,
                                    level,
-                                   box->depth > 1 ? -1 : box->z,
                                    read_only,
                                    TRUE, /* cpu_access */
                                    do_not_block,
@@ -757,11 +752,19 @@ llvmpipe_transfer_unmap(struct pipe_context *pipe,
 unsigned int
 llvmpipe_is_resource_referenced( struct pipe_context *pipe,
                                  struct pipe_resource *presource,
-                                 unsigned level, int layer)
+                                 unsigned level)
 {
    struct llvmpipe_context *llvmpipe = llvmpipe_context( pipe );
 
-   if (presource->target == PIPE_BUFFER)
+   /*
+    * XXX checking only resources with the right bind flags
+    * is unsafe since with opengl state tracker we can end up
+    * with resources bound to places they weren't supposed to be
+    * (buffers bound as sampler views is one possibility here).
+    */
+   if (!(presource->bind & (PIPE_BIND_DEPTH_STENCIL |
+                            PIPE_BIND_RENDER_TARGET |
+                            PIPE_BIND_SAMPLER_VIEW)))
       return LP_UNREFERENCED;
 
    return lp_setup_is_resource_referenced(llvmpipe->setup, presource);
@@ -968,7 +971,7 @@ llvmpipe_get_texture_tile_layout(const struct llvmpipe_resource *lpr,
                                  unsigned x, unsigned y)
 {
    uint i;
-   assert(resource_is_texture(&lpr->base));
+   assert(llvmpipe_resource_is_texture(&lpr->base));
    assert(x < lpr->tiles_per_row[level]);
    i = face_slice * lpr->tiles_per_image[level]
       + y * lpr->tiles_per_row[level] + x;
@@ -983,7 +986,7 @@ llvmpipe_set_texture_tile_layout(struct llvmpipe_resource *lpr,
                                  enum lp_texture_layout layout)
 {
    uint i;
-   assert(resource_is_texture(&lpr->base));
+   assert(llvmpipe_resource_is_texture(&lpr->base));
    assert(x < lpr->tiles_per_row[level]);
    i = face_slice * lpr->tiles_per_image[level]
       + y * lpr->tiles_per_row[level] + x;
@@ -1265,7 +1268,7 @@ llvmpipe_get_texture_tile_linear(struct llvmpipe_resource *lpr,
    boolean convert;
    uint8_t *tiled_image, *linear_image;
 
-   assert(resource_is_texture(&lpr->base));
+   assert(llvmpipe_resource_is_texture(&lpr->base));
    assert(x % TILE_SIZE == 0);
    assert(y % TILE_SIZE == 0);
 
@@ -1365,12 +1368,17 @@ llvmpipe_resource_size(const struct pipe_resource *resource)
    const struct llvmpipe_resource *lpr = llvmpipe_resource_const(resource);
    unsigned lvl, size = 0;
 
-   for (lvl = 0; lvl <= lpr->base.last_level; lvl++) {
-      if (lpr->linear_img.data)
-         size += tex_image_size(lpr, lvl, LP_TEX_LAYOUT_LINEAR);
+   if (llvmpipe_resource_is_texture(resource)) {
+      for (lvl = 0; lvl <= lpr->base.last_level; lvl++) {
+         if (lpr->linear_img.data)
+            size += tex_image_size(lpr, lvl, LP_TEX_LAYOUT_LINEAR);
 
-      if (lpr->tiled_img.data)
-         size += tex_image_size(lpr, lvl, LP_TEX_LAYOUT_TILED);
+         if (lpr->tiled_img.data)
+            size += tex_image_size(lpr, lvl, LP_TEX_LAYOUT_TILED);
+      }
+   }
+   else {
+      size = resource->width0;
    }
 
    return size;

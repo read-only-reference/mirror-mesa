@@ -301,7 +301,6 @@ struct brw_wm_prog_data {
 
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params;
-   bool error;
    bool dual_src_blend;
    int dispatch_width;
    uint32_t prog_offset_16;
@@ -449,7 +448,6 @@ struct brw_vs_prog_data {
    GLuint urb_entry_size;
 
    bool uses_vertexid;
-   bool userclip;
 
    int num_surfaces;
 
@@ -907,7 +905,6 @@ struct brw_context
 
    struct {
       struct brw_vs_prog_data *prog_data;
-      int8_t *constant_map; /* variable array following prog_data */
 
       drm_intel_bo *scratch_bo;
       drm_intel_bo *const_bo;
@@ -1216,6 +1213,14 @@ brw_blorp_framebuffer(struct intel_context *intel,
                       GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                       GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                       GLbitfield mask, GLenum filter);
+
+bool
+brw_blorp_copytexsubimage(struct intel_context *intel,
+                          struct gl_renderbuffer *src_rb,
+                          struct gl_texture_image *dst_image,
+                          int srcX0, int srcY0,
+                          int dstX0, int dstY0,
+                          int width, int height);
 
 /* gen6_multisample_state.c */
 void

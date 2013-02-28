@@ -469,6 +469,7 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
     */
    if (inst->texture_offset) {
       brw_push_insn_state(p);
+      brw_set_mask_control(p, BRW_MASK_DISABLE);
       brw_set_compression_control(p, BRW_COMPRESSION_NONE);
       /* Explicitly set up the message header by copying g0 to the MRF. */
       brw_MOV(p, retype(brw_message_reg(inst->base_mrf), BRW_REGISTER_TYPE_UD),
@@ -490,7 +491,6 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
 	      src,
               SURF_INDEX_TEXTURE(inst->sampler),
 	      inst->sampler,
-	      WRITEMASK_XYZW,
 	      msg_type,
 	      rlen,
 	      inst->mlen,
@@ -604,29 +604,8 @@ fs_generator::generate_unspill(fs_inst *inst, struct brw_reg dst)
 {
    assert(inst->mlen != 0);
 
-   /* Clear any post destination dependencies that would be ignored by
-    * the block read.  See the B-Spec for pre-gen5 send instruction.
-    *
-    * This could use a better solution, since texture sampling and
-    * math reads could potentially run into it as well -- anywhere
-    * that we have a SEND with a destination that is a register that
-    * was written but not read within the last N instructions (what's
-    * N?  unsure).  This is rare because of dead code elimination, but
-    * not impossible.
-    */
-   if (intel->gen == 4 && !intel->is_g4x)
-      brw_MOV(p, brw_null_reg(), dst);
-
    brw_oword_block_read_scratch(p, dst, brw_message_reg(inst->base_mrf), 1,
 				inst->offset);
-
-   if (intel->gen == 4 && !intel->is_g4x) {
-      /* gen4 errata: destination from a send can't be used as a
-       * destination until it's been read.  Just read it so we don't
-       * have to worry.
-       */
-      brw_MOV(p, brw_null_reg(), dst);
-   }
 }
 
 void
@@ -636,19 +615,6 @@ fs_generator::generate_uniform_pull_constant_load(fs_inst *inst,
                                                   struct brw_reg offset)
 {
    assert(inst->mlen != 0);
-
-   /* Clear any post destination dependencies that would be ignored by
-    * the block read.  See the B-Spec for pre-gen5 send instruction.
-    *
-    * This could use a better solution, since texture sampling and
-    * math reads could potentially run into it as well -- anywhere
-    * that we have a SEND with a destination that is a register that
-    * was written but not read within the last N instructions (what's
-    * N?  unsure).  This is rare because of dead code elimination, but
-    * not impossible.
-    */
-   if (intel->gen == 4 && !intel->is_g4x)
-      brw_MOV(p, brw_null_reg(), dst);
 
    assert(index.file == BRW_IMMEDIATE_VALUE &&
 	  index.type == BRW_REGISTER_TYPE_UD);
@@ -660,14 +626,6 @@ fs_generator::generate_uniform_pull_constant_load(fs_inst *inst,
 
    brw_oword_block_read(p, dst, brw_message_reg(inst->base_mrf),
 			read_offset, surf_index);
-
-   if (intel->gen == 4 && !intel->is_g4x) {
-      /* gen4 errata: destination from a send can't be used as a
-       * destination until it's been read.  Just read it so we don't
-       * have to worry.
-       */
-      brw_MOV(p, brw_null_reg(), dst);
-   }
 }
 
 void
@@ -1133,6 +1091,20 @@ fs_generator::generate_code(exec_list *instructions)
 	    brw_set_compression_control(p, BRW_COMPRESSION_COMPRESSED);
 	 } else {
 	    brw_MAD(p, dst, src[0], src[1], src[2]);
+	 }
+	 brw_set_access_mode(p, BRW_ALIGN_1);
+	 break;
+
+      case BRW_OPCODE_LRP:
+	 brw_set_access_mode(p, BRW_ALIGN_16);
+	 if (dispatch_width == 16) {
+	    brw_set_compression_control(p, BRW_COMPRESSION_NONE);
+	    brw_LRP(p, dst, src[0], src[1], src[2]);
+	    brw_set_compression_control(p, BRW_COMPRESSION_2NDHALF);
+	    brw_LRP(p, sechalf(dst), sechalf(src[0]), sechalf(src[1]), sechalf(src[2]));
+	    brw_set_compression_control(p, BRW_COMPRESSION_COMPRESSED);
+	 } else {
+	    brw_LRP(p, dst, src[0], src[1], src[2]);
 	 }
 	 brw_set_access_mode(p, BRW_ALIGN_1);
 	 break;

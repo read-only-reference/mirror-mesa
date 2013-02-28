@@ -34,7 +34,6 @@
 #include "main/fbobject.h"
 
 struct bitmap_cache;
-struct blit_state;
 struct dd_function_table;
 struct draw_context;
 struct draw_stage;
@@ -84,6 +83,7 @@ struct st_context
    GLboolean clamp_vert_color_in_shader;
    boolean has_stencil_export; /**< can do shader stencil export? */
    boolean has_time_elapsed;
+   boolean has_shader_model3;
 
    /* On old libGL's for linux we need to invalidate the drawables
     * on glViewpport calls, this is set via a option.
@@ -181,7 +181,6 @@ struct st_context
 
    enum pipe_texture_target internal_target;
    struct gen_mipmap_state *gen_mipmap;
-   struct blit_state *blit;
 
    struct cso_context *cso_context;
 

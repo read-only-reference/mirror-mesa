@@ -360,20 +360,6 @@ struct intel_mipmap_tree
     */
    struct intel_mipmap_tree *mcs_mt;
 
-   /**
-    * \brief The miptree contains uncompressed data that was originally
-    * ETC1/ETC2 data.
-    *
-    * On hardware that lacks support for ETC1/ETC2 textures, we do the following
-    * on calls to glCompressedTexImage2D() with an ETC1/ETC2 texture format:
-    *   1. Create a miptree whose format is a suitable uncompressed mesa format
-    *      with the wraps_etc flag set.
-    *   2. Translate the ETC1/ETC2 data into uncompressed mesa format.
-    *   3. Store the uncompressed  data into the miptree and discard the ETC1/ETC2
-    *      data.
-    */
-   bool wraps_etc;
-
    /* These are also refcounted:
     */
    GLuint refcount;
@@ -392,6 +378,18 @@ struct intel_mipmap_tree *intel_miptree_create(struct intel_context *intel,
 					       bool expect_accelerated_upload,
                                                GLuint num_samples,
                                                bool force_y_tiling);
+
+struct intel_mipmap_tree *
+intel_miptree_create_layout(struct intel_context *intel,
+                            GLenum target,
+                            gl_format format,
+                            GLuint first_level,
+                            GLuint last_level,
+                            GLuint width0,
+                            GLuint height0,
+                            GLuint depth0,
+                            bool for_region,
+                            GLuint num_samples);
 
 struct intel_mipmap_tree *
 intel_miptree_create_for_region(struct intel_context *intel,
@@ -454,6 +452,12 @@ intel_miptree_get_image_offset(struct intel_mipmap_tree *mt,
 void
 intel_miptree_get_dimensions_for_image(struct gl_texture_image *image,
                                        int *width, int *height, int *depth);
+
+void
+intel_miptree_get_tile_offsets(struct intel_mipmap_tree *mt,
+                               GLuint level, GLuint slice,
+                               uint32_t *tile_x,
+                               uint32_t *tile_y);
 
 void intel_miptree_set_level_info(struct intel_mipmap_tree *mt,
                                   GLuint level,

@@ -31,6 +31,7 @@
 #include <stdbool.h>
 #include <assert.h>
 #include "main/formats.h"
+#include "main/macros.h"
 #include "intel_context.h"
 #include "intel_screen.h"
 
@@ -139,6 +140,10 @@ struct gl_renderbuffer*
 intel_create_wrapped_renderbuffer(struct gl_context * ctx,
 				  int width, int height,
 				  gl_format format);
+
+struct intel_renderbuffer *
+intel_create_fake_renderbuffer_wrapper(struct intel_context *intel,
+                                       struct gl_texture_image *image);
 
 extern void
 intel_fbo_init(struct intel_context *intel);

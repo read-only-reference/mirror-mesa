@@ -298,7 +298,8 @@ struct r600_dsa_state {
 	unsigned			alpha_ref;
 	ubyte				valuemask[2];
 	ubyte				writemask[2];
-	unsigned                        sx_alpha_test_control;
+	unsigned			zwritemask;
+	unsigned			sx_alpha_test_control;
 };
 
 struct r600_pipe_shader;
@@ -513,6 +514,7 @@ struct r600_context {
 	bool				alpha_to_one;
 	bool				force_blend_disable;
 	boolean				dual_src_blend;
+	unsigned			zwritemask;
 
 	/* Index buffer. */
 	struct pipe_index_buffer	index_buffer;
@@ -552,6 +554,8 @@ struct r600_context {
 	struct list_head		dirty;
 	struct list_head		enable_list;
 	unsigned			pm4_dirty_cdwords;
+
+	struct r600_isa		*isa;
 };
 
 static INLINE void r600_emit_command_buffer(struct radeon_winsys_cs *cs,
@@ -984,22 +988,6 @@ static INLINE uint64_t r600_resource_va(struct pipe_screen *screen, struct pipe_
 	struct r600_resource *rresource = (struct r600_resource*)resource;
 
 	return rscreen->ws->buffer_get_virtual_address(rresource->cs_buf);
-}
-
-static INLINE unsigned u_max_layer(struct pipe_resource *r, unsigned level)
-{
-	switch (r->target) {
-	case PIPE_TEXTURE_CUBE:
-		return 6 - 1;
-	case PIPE_TEXTURE_3D:
-		return u_minify(r->depth0, level) - 1;
-	case PIPE_TEXTURE_1D_ARRAY:
-	case PIPE_TEXTURE_2D_ARRAY:
-	case PIPE_TEXTURE_CUBE_ARRAY:
-		return r->array_size - 1;
-	default:
-		return 0;
-	}
 }
 
 static INLINE void r600_context_add_resource_size(struct pipe_context *ctx, struct pipe_resource *r)

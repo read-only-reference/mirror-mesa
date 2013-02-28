@@ -57,7 +57,7 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
    { 1, 2, 0, 0, 0, 0, COMP, "SUB", TGSI_OPCODE_SUB },
    { 1, 3, 0, 0, 0, 0, COMP, "LRP", TGSI_OPCODE_LRP },
    { 1, 3, 0, 0, 0, 0, COMP, "CND", TGSI_OPCODE_CND },
-   { 0, 0, 0, 0, 0, 0, NONE, "", 20 },      /* removed */
+   { 1, 1, 0, 0, 0, 0, REPL, "SQRT", TGSI_OPCODE_SQRT },
    { 1, 3, 0, 0, 0, 0, REPL, "DP2A", TGSI_OPCODE_DP2A },
    { 0, 0, 0, 0, 0, 0, NONE, "", 22 },      /* removed */
    { 0, 0, 0, 0, 0, 0, NONE, "", 23 },      /* removed */
@@ -185,12 +185,12 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
 
    { 1, 3, 0, 0, 0, 0, OTHR, "SAMPLE",      TGSI_OPCODE_SAMPLE },
    { 1, 2, 0, 0, 0, 0, OTHR, "SAMPLE_I",    TGSI_OPCODE_SAMPLE_I },
-   { 1, 2, 0, 0, 0, 0, OTHR, "SAMPLE_I_MS", TGSI_OPCODE_SAMPLE_I_MS },
+   { 1, 3, 0, 0, 0, 0, OTHR, "SAMPLE_I_MS", TGSI_OPCODE_SAMPLE_I_MS },
    { 1, 4, 0, 0, 0, 0, OTHR, "SAMPLE_B",    TGSI_OPCODE_SAMPLE_B },
    { 1, 4, 0, 0, 0, 0, OTHR, "SAMPLE_C",    TGSI_OPCODE_SAMPLE_C },
    { 1, 4, 0, 0, 0, 0, OTHR, "SAMPLE_C_LZ", TGSI_OPCODE_SAMPLE_C_LZ },
    { 1, 5, 0, 0, 0, 0, OTHR, "SAMPLE_D",    TGSI_OPCODE_SAMPLE_D },
-   { 1, 3, 0, 0, 0, 0, OTHR, "SAMPLE_L",    TGSI_OPCODE_SAMPLE_L },
+   { 1, 4, 0, 0, 0, 0, OTHR, "SAMPLE_L",    TGSI_OPCODE_SAMPLE_L },
    { 1, 3, 0, 0, 0, 0, OTHR, "GATHER4",     TGSI_OPCODE_GATHER4 },
    { 1, 2, 0, 0, 0, 0, OTHR, "SVIEWINFO",   TGSI_OPCODE_SVIEWINFO },
    { 1, 2, 0, 0, 0, 0, OTHR, "SAMPLE_POS",  TGSI_OPCODE_SAMPLE_POS },
@@ -277,9 +277,9 @@ tgsi_opcode_infer_src_type( uint opcode )
    case TGSI_OPCODE_AND:
    case TGSI_OPCODE_OR:
    case TGSI_OPCODE_XOR:
+   /* XXX some src args may be signed for SAD ? */
    case TGSI_OPCODE_SAD:
    case TGSI_OPCODE_U2F:
-   case TGSI_OPCODE_UADD:
    case TGSI_OPCODE_UDIV:
    case TGSI_OPCODE_UMOD:
    case TGSI_OPCODE_UMAD:
@@ -293,7 +293,10 @@ tgsi_opcode_infer_src_type( uint opcode )
    case TGSI_OPCODE_USHR:
    case TGSI_OPCODE_SHL:
    case TGSI_OPCODE_TXQ:
+   case TGSI_OPCODE_SVIEWINFO:
    case TGSI_OPCODE_TXF:
+   case TGSI_OPCODE_SAMPLE_I:
+   case TGSI_OPCODE_SAMPLE_I_MS:
       return TGSI_TYPE_UNSIGNED;
    case TGSI_OPCODE_MOD:
    case TGSI_OPCODE_I2F:
@@ -307,6 +310,8 @@ tgsi_opcode_infer_src_type( uint opcode )
    case TGSI_OPCODE_IABS:
    case TGSI_OPCODE_ISSG:
    case TGSI_OPCODE_UARL:
+   /* UADD is both signed and unsigned require signed for working modifiers */
+   case TGSI_OPCODE_UADD:
       return TGSI_TYPE_SIGNED;
    default:
       return TGSI_TYPE_FLOAT;
@@ -328,7 +333,6 @@ tgsi_opcode_infer_dst_type( uint opcode )
    case TGSI_OPCODE_OR:
    case TGSI_OPCODE_XOR:
    case TGSI_OPCODE_SAD:
-   case TGSI_OPCODE_UADD:
    case TGSI_OPCODE_UDIV:
    case TGSI_OPCODE_UMOD:
    case TGSI_OPCODE_UMAD:
@@ -343,6 +347,7 @@ tgsi_opcode_infer_dst_type( uint opcode )
    case TGSI_OPCODE_SHL:
    case TGSI_OPCODE_TXQ:
    case TGSI_OPCODE_TXQ_LZ:
+   case TGSI_OPCODE_SVIEWINFO:
       return TGSI_TYPE_UNSIGNED;
    case TGSI_OPCODE_F2I:
    case TGSI_OPCODE_IDIV:
@@ -358,6 +363,7 @@ tgsi_opcode_infer_dst_type( uint opcode )
    case TGSI_OPCODE_ARR:
    case TGSI_OPCODE_IABS:
    case TGSI_OPCODE_ISSG:
+   case TGSI_OPCODE_UADD:
       return TGSI_TYPE_SIGNED;
    default:
       return TGSI_TYPE_FLOAT;

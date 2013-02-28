@@ -132,10 +132,9 @@ draw_num_shader_outputs(const struct draw_context *draw);
 
 
 void
-draw_texture_samplers(struct draw_context *draw,
-                      uint shader_type,
-                      uint num_samplers,
-                      struct tgsi_sampler **samplers);
+draw_texture_sampler(struct draw_context *draw,
+                     uint shader_type,
+                     struct tgsi_sampler *sampler);
 
 void
 draw_set_sampler_views(struct draw_context *draw,
@@ -151,7 +150,7 @@ draw_set_samplers(struct draw_context *draw,
 void
 draw_set_mapped_texture(struct draw_context *draw,
                         unsigned shader_stage,
-                        unsigned sampler_idx,
+                        unsigned sview_idx,
                         uint32_t width, uint32_t height, uint32_t depth,
                         uint32_t first_level, uint32_t last_level,
                         const void *base,

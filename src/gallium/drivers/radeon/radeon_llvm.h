@@ -31,8 +31,8 @@
 #include "gallivm/lp_bld_init.h"
 #include "gallivm/lp_bld_tgsi.h"
 
-#define RADEON_LLVM_MAX_INPUTS 16 * 4
-#define RADEON_LLVM_MAX_OUTPUTS 16 * 4
+#define RADEON_LLVM_MAX_INPUTS 32 * 4
+#define RADEON_LLVM_MAX_OUTPUTS 32 * 4
 #define RADEON_LLVM_MAX_BRANCH_DEPTH 16
 #define RADEON_LLVM_MAX_LOOP_DEPTH 16
 
@@ -64,6 +64,7 @@ struct radeon_llvm_context {
 	struct pipe_stream_output_info *stream_outputs;
 	unsigned color_buffer_count;
 	unsigned fs_color_all;
+	unsigned alpha_to_one;
 
 	/*=== Front end configuration ===*/
 
@@ -155,7 +156,7 @@ static inline LLVMValueRef bitcast(
 
 void radeon_llvm_emit_prepare_cube_coords(struct lp_build_tgsi_context * bld_base,
                                           struct lp_build_emit_data * emit_data,
-                                          unsigned coord_arg);
+                                          LLVMValueRef *coords_arg);
 
 void radeon_llvm_context_init(struct radeon_llvm_context * ctx);
 

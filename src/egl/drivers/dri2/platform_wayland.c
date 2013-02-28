@@ -446,6 +446,7 @@ dri2_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    struct dri2_egl_surface *dri2_surf = dri2_egl_surface(draw);
+   __DRIbuffer buffer;
    int i, ret = 0;
 
    while (dri2_surf->frame_callback && ret != -1)
@@ -462,6 +463,13 @@ dri2_swap_buffers(_EGLDriver *drv, _EGLDisplay *disp, _EGLSurface *draw)
    for (i = 0; i < ARRAY_SIZE(dri2_surf->color_buffers); i++)
       if (dri2_surf->color_buffers[i].age > 0)
          dri2_surf->color_buffers[i].age++;
+
+   /* Make sure we have a back buffer in case we're swapping without ever
+    * rendering. */
+   if (get_back_bo(dri2_surf, &buffer) < 0) {
+      _eglError(EGL_BAD_ALLOC, "dri2_swap_buffers");
+      return EGL_FALSE;
+   }
 
    dri2_surf->back->age = 1;
    dri2_surf->current = dri2_surf->back;
@@ -671,6 +679,10 @@ dri2_initialize_wayland(_EGLDriver *drv, _EGLDisplay *disp)
    }
 
    dri2_dpy->wl_queue = wl_display_create_queue(dri2_dpy->wl_dpy);
+
+   if (dri2_dpy->own_device)
+      wl_display_dispatch_pending(dri2_dpy->wl_dpy);
+
    dri2_dpy->wl_registry = wl_display_get_registry(dri2_dpy->wl_dpy);
    wl_proxy_set_queue((struct wl_proxy *) dri2_dpy->wl_registry,
                       dri2_dpy->wl_queue);

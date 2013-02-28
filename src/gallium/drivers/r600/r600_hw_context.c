@@ -201,8 +201,10 @@ int r600_context_add_block(struct r600_context *ctx, const struct r600_reg *reg,
 			/* create block table if it doesn't exist */
 			if (!range->blocks)
 				range->blocks = calloc(1 << HASH_SHIFT, sizeof(void *));
-			if (!range->blocks)
+			if (!range->blocks) {
+				free(block);
 				return -1;
+			}
 
 			range->blocks[CTX_BLOCK_ID(reg[i + j].offset)] = block;
 		}
@@ -633,9 +635,13 @@ void r600_flush_emit(struct r600_context *rctx)
 		/* Use of WAIT_UNTIL is deprecated on Cayman+ */
 		if (rctx->family >= CHIP_CAYMAN) {
 			/* emit a PS partial flush on Cayman/TN */
-			cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 0, 0);
-			cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_PS_PARTIAL_FLUSH) | EVENT_INDEX(4);
+			rctx->flags |= R600_CONTEXT_PS_PARTIAL_FLUSH;
 		}
+	}
+
+	if (rctx->flags & R600_CONTEXT_PS_PARTIAL_FLUSH) {
+		cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 0, 0);
+		cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_PS_PARTIAL_FLUSH) | EVENT_INDEX(4);
 	}
 
 	if (rctx->chip_class >= R700 &&
@@ -674,6 +680,7 @@ void r600_flush_emit(struct r600_context *rctx)
 					S_0085F0_TC_ACTION_ENA(1) |
 					S_0085F0_FULL_CACHE_ENA(1);
 		}
+		emit_flush = 1;
 	}
 
 	if (rctx->flags & R600_CONTEXT_INVAL_READ_CACHES) {
@@ -683,7 +690,7 @@ void r600_flush_emit(struct r600_context *rctx)
 		emit_flush = 1;
 	}
 
-	if (rctx->family >= CHIP_RV770 && rctx->flags & R600_CONTEXT_STREAMOUT_FLUSH) {
+	if (rctx->flags & R600_CONTEXT_STREAMOUT_FLUSH) {
 		cp_coher_cntl |= S_0085F0_SO0_DEST_BASE_ENA(1) |
 				S_0085F0_SO1_DEST_BASE_ENA(1) |
 				S_0085F0_SO2_DEST_BASE_ENA(1) |
@@ -1157,6 +1164,9 @@ void r600_cp_dma_copy_buffer(struct r600_context *rctx,
 		src_offset += byte_count;
 		dst_offset += byte_count;
 	}
+
+	/* Invalidate the read caches. */
+	rctx->flags |= R600_CONTEXT_INVAL_READ_CACHES;
 }
 
 void r600_need_dma_space(struct r600_context *ctx, unsigned num_dw)

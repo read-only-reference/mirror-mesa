@@ -322,21 +322,58 @@ util_clear_render_target(struct pipe_context *pipe,
    assert(dst->texture);
    if (!dst->texture)
       return;
-   /* XXX: should handle multiple layers */
-   dst_map = pipe_transfer_map(pipe,
-                               dst->texture,
-                               dst->u.tex.level,
-                               dst->u.tex.first_layer,
-                               PIPE_TRANSFER_WRITE,
-                               dstx, dsty, width, height, &dst_trans);
+
+   if (dst->texture->target == PIPE_BUFFER) {
+      /*
+       * The fill naturally works on the surface format, however
+       * the transfer uses resource format which is just bytes for buffers.
+       */
+      unsigned dx, w;
+      unsigned pixstride = util_format_get_blocksize(dst->format);
+      dx = (dst->u.buf.first_element + dstx) * pixstride;
+      w = width * pixstride;
+      dst_map = pipe_transfer_map(pipe,
+                                  dst->texture,
+                                  0, 0,
+                                  PIPE_TRANSFER_WRITE,
+                                  dx, 0, w, 1,
+                                  &dst_trans);
+   }
+   else {
+      /* XXX: should handle multiple layers */
+      dst_map = pipe_transfer_map(pipe,
+                                  dst->texture,
+                                  dst->u.tex.level,
+                                  dst->u.tex.first_layer,
+                                  PIPE_TRANSFER_WRITE,
+                                  dstx, dsty, width, height, &dst_trans);
+
+   }
 
    assert(dst_map);
 
    if (dst_map) {
+      enum pipe_format format = dst->format;
       assert(dst_trans->stride > 0);
 
-      util_pack_color(color->f, dst->texture->format, &uc);
-      util_fill_rect(dst_map, dst->texture->format,
+      if (util_format_is_pure_integer(format)) {
+         /*
+          * We expect int/uint clear values here, though some APIs
+          * might disagree (but in any case util_pack_color()
+          * couldn't handle it)...
+          */
+         if (util_format_is_pure_sint(format)) {
+            util_format_write_4i(format, color->i, 0, &uc, 0, 0, 0, 1, 1);
+         }
+         else {
+            assert(util_format_is_pure_uint(format));
+            util_format_write_4ui(format, color->ui, 0, &uc, 0, 0, 0, 1, 1);
+         }
+      }
+      else {
+         util_pack_color(color->f, dst->format, &uc);
+      }
+      util_fill_rect(dst_map, dst->format,
                      dst_trans->stride,
                      0, 0, width, height, &uc);
 
@@ -421,10 +458,10 @@ util_clear_depth_stencil(struct pipe_context *pipe,
          else {
             uint32_t dst_mask;
             if (format == PIPE_FORMAT_Z24_UNORM_S8_UINT)
-               dst_mask = 0xffffff00;
+               dst_mask = 0x00ffffff;
             else {
                assert(format == PIPE_FORMAT_S8_UINT_Z24_UNORM);
-               dst_mask = 0xffffff;
+               dst_mask = 0xffffff00;
             }
             if (clear_flags & PIPE_CLEAR_DEPTH)
                dst_mask = ~dst_mask;

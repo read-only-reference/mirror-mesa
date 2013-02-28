@@ -38,8 +38,12 @@ static LLVMValueRef llvm_fetch_const(
 		LLVMValueRef index = LLVMBuildLoad(bld_base->base.gallivm->builder, bld->addr[reg->Indirect.Index][reg->Indirect.SwizzleX], "");
 		offset[1] = LLVMBuildAdd(bld_base->base.gallivm->builder, offset[1], index, "");
 	}
+	unsigned ConstantAddressSpace = CONSTANT_BUFFER_0_ADDR_SPACE ;
+	if (reg->Register.Dimension) {
+		ConstantAddressSpace += reg->Dimension.Index;
+	}
 	LLVMTypeRef const_ptr_type = LLVMPointerType(LLVMArrayType(LLVMVectorType(bld_base->base.elem_type, 4), 1024),
-							CONSTANT_BUFFER_0_ADDR_SPACE);
+							ConstantAddressSpace);
 	LLVMValueRef const_ptr = LLVMBuildIntToPtr(bld_base->base.gallivm->builder, lp_build_const_int32(bld_base->base.gallivm, 0), const_ptr_type, "");
 	LLVMValueRef ptr = LLVMBuildGEP(bld_base->base.gallivm->builder, const_ptr, offset, 2, "");
 	LLVMValueRef cvecval = LLVMBuildLoad(bld_base->base.gallivm->builder, ptr, "");
@@ -230,6 +234,8 @@ static void llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 			elements[chan] = LLVMBuildLoad(base->gallivm->builder,
 				ctx->soa.outputs[i][chan], "");
 		}
+		if (ctx->alpha_to_one && ctx->type == TGSI_PROCESSOR_FRAGMENT && ctx->r600_outputs[i].name == TGSI_SEMANTIC_COLOR)
+			elements[3] = lp_build_const_float(base->gallivm, 1.0f);
 		LLVMValueRef output = lp_build_gather_values(base->gallivm, elements, 4);
 
 		if (ctx->type == TGSI_PROCESSOR_VERTEX) {
@@ -406,6 +412,34 @@ static void llvm_emit_tex(
 	LLVMValueRef args[6];
 	unsigned c, sampler_src;
 
+	if (emit_data->inst->Texture.Texture == TGSI_TEXTURE_BUFFER) {
+		switch (emit_data->inst->Instruction.Opcode) {
+		case TGSI_OPCODE_TXQ: {
+			LLVMValueRef offset[2] = {
+				LLVMConstInt(LLVMInt64TypeInContext(bld_base->base.gallivm->context), 0, false),
+				lp_build_const_int32(bld_base->base.gallivm, 1)
+			};
+			LLVMTypeRef const_ptr_type = LLVMPointerType(LLVMArrayType(LLVMVectorType(bld_base->base.elem_type, 4), 1024),
+									R600_BUFFER_INFO_CONST_BUFFER);
+			LLVMValueRef const_ptr = LLVMBuildIntToPtr(bld_base->base.gallivm->builder, lp_build_const_int32(bld_base->base.gallivm, 0), const_ptr_type, "");
+			LLVMValueRef ptr = LLVMBuildGEP(bld_base->base.gallivm->builder, const_ptr, offset, 2, "");
+			LLVMValueRef cvecval = LLVMBuildLoad(bld_base->base.gallivm->builder, ptr, "");
+			emit_data->output[0] = cvecval;
+			return;
+		}
+		case TGSI_OPCODE_TXF: {
+			args[0] = LLVMBuildExtractElement(gallivm->builder, emit_data->args[0], lp_build_const_int32(gallivm, 0), "");
+			args[1] = lp_build_const_int32(gallivm, R600_MAX_CONST_BUFFERS);
+			emit_data->output[0] = build_intrinsic(gallivm->builder,
+							"llvm.R600.load.texbuf",
+							emit_data->dst_type, args, 2, LLVMReadNoneAttribute);
+		}
+			return;
+		default:
+			break;
+		}
+	}
+
 	assert(emit_data->arg_count + 2 <= Elements(args));
 
 	for (c = 0; c < emit_data->arg_count; ++c)
@@ -537,6 +571,7 @@ const char * r600_llvm_gpu_string(enum radeon_family family)
 	case CHIP_RV630:
 	case CHIP_RV620:
 	case CHIP_RV635:
+	case CHIP_RV670:
 	case CHIP_RS780:
 	case CHIP_RS880:
 		gpu_family = "r600";
@@ -547,7 +582,6 @@ const char * r600_llvm_gpu_string(enum radeon_family family)
 	case CHIP_RV730:
 		gpu_family = "rv730";
 		break;
-	case CHIP_RV670:
 	case CHIP_RV740:
 	case CHIP_RV770:
 		gpu_family = "rv770";
