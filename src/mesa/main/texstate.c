@@ -661,7 +661,7 @@ update_texture_state( struct gl_context *ctx )
    if (fprog) {
       const GLuint coordMask = (1 << MAX_TEXTURE_COORD_UNITS) - 1;
       ctx->Texture._EnabledCoordUnits
-         = (fprog->InputsRead >> FRAG_ATTRIB_TEX0) & coordMask;
+         = (fprog->InputsRead >> VARYING_SLOT_TEX0) & coordMask;
    }
    else {
       ctx->Texture._EnabledCoordUnits = enabledFragUnits;
@@ -707,6 +707,8 @@ alloc_proxy_textures( struct gl_context *ctx )
     * values!
     */
    static const GLenum targets[] = {
+      GL_TEXTURE_2D_MULTISAMPLE,
+      GL_TEXTURE_2D_MULTISAMPLE_ARRAY,
       GL_TEXTURE_CUBE_MAP_ARRAY,
       GL_TEXTURE_BUFFER,
       GL_TEXTURE_2D_ARRAY_EXT,

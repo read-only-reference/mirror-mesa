@@ -84,6 +84,9 @@ struct st_context
    boolean has_stencil_export; /**< can do shader stencil export? */
    boolean has_time_elapsed;
    boolean has_shader_model3;
+   boolean prefer_blit_based_texture_transfer;
+
+   boolean needs_texcoord_semantic;
 
    /* On old libGL's for linux we need to invalidate the drawables
     * on glViewpport calls, this is set via a option.
@@ -126,7 +129,7 @@ struct st_context
    GLboolean missing_textures;
    GLboolean vertdata_edgeflags;
 
-   /** Mapping from VERT_RESULT_x to post-transformed vertex slot */
+   /** Mapping from VARYING_SLOT_x to post-transformed vertex slot */
    const GLuint *vertex_result_to_slot;
 
    struct st_vertex_program *vp;    /**< Currently bound vertex program */

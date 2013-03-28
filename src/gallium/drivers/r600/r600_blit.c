@@ -58,8 +58,8 @@ static void r600_blitter_begin(struct pipe_context *ctx, enum r600_blitter_op op
 	util_blitter_save_vertex_buffer_slot(rctx->blitter, rctx->vertex_buffer_state.vb);
 	util_blitter_save_vertex_elements(rctx->blitter, rctx->vertex_fetch_shader.cso);
 	util_blitter_save_vertex_shader(rctx->blitter, rctx->vs_shader);
-	util_blitter_save_so_targets(rctx->blitter, rctx->num_so_targets,
-				     (struct pipe_stream_output_target**)rctx->so_targets);
+	util_blitter_save_so_targets(rctx->blitter, rctx->streamout.num_targets,
+				     (struct pipe_stream_output_target**)rctx->streamout.targets);
 	util_blitter_save_rasterizer(rctx->blitter, rctx->rasterizer_state.cso);
 
 	if (op & R600_SAVE_FRAGMENT_STATE) {
@@ -508,8 +508,7 @@ void r600_copy_buffer(struct pipe_context *ctx, struct pipe_resource *dst, unsig
 {
 	struct r600_context *rctx = (struct r600_context*)ctx;
 
-	/* CP DMA doesn't work on R600 (flushing seems to be unreliable). */
-	if (rctx->screen->info.drm_minor >= 27 && rctx->chip_class >= R700) {
+	if (rctx->screen->has_cp_dma) {
 		r600_cp_dma_copy_buffer(rctx, dst, dstx, src, src_box->x, src_box->width);
 	}
 	else if (rctx->screen->has_streamout &&

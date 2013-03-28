@@ -195,9 +195,10 @@ struct dd_function_table {
                                      GLenum srcFormat, GLenum srcType );
 
    /**
-    * Determine sample counts support for a particular format
+    * Determine sample counts support for a particular target and format
     *
     * \param ctx            GL context
+    * \param target         GL target enum
     * \param internalFormat GL format enum
     * \param samples        Buffer to hold the returned sample counts.
     *                       Drivers \b must \b not return more than 16 counts.
@@ -207,6 +208,7 @@ struct dd_function_table {
     * \c internaFormat is not renderable, zero is returned.
     */
    size_t (*QuerySamplesForFormat)(struct gl_context *ctx,
+                                   GLenum target,
                                    GLenum internalFormat,
                                    int samples[16]);
 
@@ -638,6 +640,7 @@ struct dd_function_table {
    struct gl_query_object * (*NewQueryObject)(struct gl_context *ctx, GLuint id);
    void (*DeleteQuery)(struct gl_context *ctx, struct gl_query_object *q);
    void (*BeginQuery)(struct gl_context *ctx, struct gl_query_object *q);
+   void (*QueryCounter)(struct gl_context *ctx, struct gl_query_object *q);
    void (*EndQuery)(struct gl_context *ctx, struct gl_query_object *q);
    void (*CheckQuery)(struct gl_context *ctx, struct gl_query_object *q);
    void (*WaitQuery)(struct gl_context *ctx, struct gl_query_object *q);
@@ -833,6 +836,14 @@ struct dd_function_table {
     * This should be equivalent to glGetInteger64v(GL_TIMESTAMP);
     */
    uint64_t (*GetTimestamp)(struct gl_context *ctx);
+
+   /**
+    * \name GL_ARB_texture_multisample
+    */
+   void (*GetSamplePosition)(struct gl_context *ctx,
+                             struct gl_framebuffer *fb,
+                             GLuint index,
+                             GLfloat *outValue);
 };
 
 

@@ -336,8 +336,10 @@ fs_inst::is_tex()
            opcode == FS_OPCODE_TXB ||
            opcode == SHADER_OPCODE_TXD ||
            opcode == SHADER_OPCODE_TXF ||
+           opcode == SHADER_OPCODE_TXF_MS ||
            opcode == SHADER_OPCODE_TXL ||
-           opcode == SHADER_OPCODE_TXS);
+           opcode == SHADER_OPCODE_TXS ||
+           opcode == SHADER_OPCODE_LOD);
 }
 
 bool
@@ -376,6 +378,7 @@ bool
 fs_inst::is_send_from_grf()
 {
    return (opcode == FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7 ||
+           opcode == SHADER_OPCODE_SHADER_TIME_ADD ||
            (opcode == FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD &&
             src[1].file == GRF));
 }
@@ -604,31 +607,18 @@ void
 fs_visitor::emit_shader_time_write(enum shader_time_shader_type type,
                                    fs_reg value)
 {
-   /* Choose an index in the buffer and set up tracking information for our
-    * printouts.
-    */
-   int shader_time_index = brw->shader_time.num_entries++;
-   assert(shader_time_index <= brw->shader_time.max_entries);
-   brw->shader_time.types[shader_time_index] = type;
-   if (prog) {
-      _mesa_reference_shader_program(ctx,
-                                     &brw->shader_time.programs[shader_time_index],
-                                     prog);
-   }
+   int shader_time_index = brw_get_shader_time_index(brw, prog, &fp->Base,
+                                                     type);
+   fs_reg offset = fs_reg(shader_time_index * SHADER_TIME_STRIDE);
 
-   int base_mrf = 6;
+   fs_reg payload;
+   if (dispatch_width == 8)
+      payload = fs_reg(this, glsl_type::uvec2_type);
+   else
+      payload = fs_reg(this, glsl_type::uint_type);
 
-   fs_reg offset_mrf = fs_reg(MRF, base_mrf);
-   offset_mrf.type = BRW_REGISTER_TYPE_UD;
-   emit(MOV(offset_mrf, fs_reg(shader_time_index * 4)));
-
-   fs_reg time_mrf = fs_reg(MRF, base_mrf + 1);
-   time_mrf.type = BRW_REGISTER_TYPE_UD;
-   emit(MOV(time_mrf, value));
-
-   fs_inst *inst = emit(fs_inst(SHADER_OPCODE_SHADER_TIME_ADD));
-   inst->base_mrf = base_mrf;
-   inst->mlen = 2;
+   emit(fs_inst(SHADER_OPCODE_SHADER_TIME_ADD,
+                fs_reg(), payload, offset, value));
 }
 
 void
@@ -740,11 +730,11 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
    case FS_OPCODE_TXB:
    case SHADER_OPCODE_TXD:
    case SHADER_OPCODE_TXF:
+   case SHADER_OPCODE_TXF_MS:
    case SHADER_OPCODE_TXL:
    case SHADER_OPCODE_TXS:
+   case SHADER_OPCODE_LOD:
       return 1;
-   case SHADER_OPCODE_SHADER_TIME_ADD:
-      return 0;
    case FS_OPCODE_FB_WRITE:
       return 2;
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
@@ -951,7 +941,7 @@ fs_visitor::emit_fragcoord_interpolation(ir_variable *ir)
       emit(FS_OPCODE_LINTERP, wpos,
            this->delta_x[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC],
            this->delta_y[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC],
-           interp_reg(FRAG_ATTRIB_WPOS, 2));
+           interp_reg(VARYING_SLOT_POS, 2));
    }
    wpos.reg_offset++;
 
@@ -1040,9 +1030,10 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
 		* attribute, as well as making brw_vs_constval.c
 		* handle varyings other than gl_TexCoord.
 		*/
-	       if (location >= FRAG_ATTRIB_TEX0 &&
-		   location <= FRAG_ATTRIB_TEX7 &&
-		   k == 3 && !(c->key.proj_attrib_mask & (1 << location))) {
+	       if (location >= VARYING_SLOT_TEX0 &&
+		   location <= VARYING_SLOT_TEX7 &&
+		   k == 3 && !(c->key.proj_attrib_mask
+                               & BITFIELD64_BIT(location))) {
 		  emit(BRW_OPCODE_MOV, attr, fs_reg(1.0f));
 	       } else {
 		  struct brw_reg interp = interp_reg(location, k);
@@ -1242,36 +1233,34 @@ fs_visitor::assign_curb_setup()
 void
 fs_visitor::calculate_urb_setup()
 {
-   for (unsigned int i = 0; i < FRAG_ATTRIB_MAX; i++) {
+   for (unsigned int i = 0; i < VARYING_SLOT_MAX; i++) {
       urb_setup[i] = -1;
    }
 
    int urb_next = 0;
    /* Figure out where each of the incoming setup attributes lands. */
    if (intel->gen >= 6) {
-      for (unsigned int i = 0; i < FRAG_ATTRIB_MAX; i++) {
+      for (unsigned int i = 0; i < VARYING_SLOT_MAX; i++) {
 	 if (fp->Base.InputsRead & BITFIELD64_BIT(i)) {
 	    urb_setup[i] = urb_next++;
 	 }
       }
    } else {
       /* FINISHME: The sf doesn't map VS->FS inputs for us very well. */
-      for (unsigned int i = 0; i < VERT_RESULT_MAX; i++) {
+      for (unsigned int i = 0; i < VARYING_SLOT_MAX; i++) {
          /* Point size is packed into the header, not as a general attribute */
-         if (i == VERT_RESULT_PSIZ)
+         if (i == VARYING_SLOT_PSIZ)
             continue;
 
-	 if (c->key.vp_outputs_written & BITFIELD64_BIT(i)) {
-	    int fp_index = _mesa_vert_result_to_frag_attrib((gl_vert_result) i);
-
+	 if (c->key.input_slots_valid & BITFIELD64_BIT(i)) {
 	    /* The back color slot is skipped when the front color is
 	     * also written to.  In addition, some slots can be
 	     * written in the vertex shader and not read in the
 	     * fragment shader.  So the register number must always be
 	     * incremented, mapped or not.
 	     */
-	    if (fp_index >= 0)
-	       urb_setup[fp_index] = urb_next;
+	    if (_mesa_varying_slot_in_fs((gl_varying_slot) i))
+	       urb_setup[i] = urb_next;
             urb_next++;
 	 }
       }
@@ -1282,8 +1271,8 @@ fs_visitor::calculate_urb_setup()
        *
        * See compile_sf_prog() for more info.
        */
-      if (fp->Base.InputsRead & BITFIELD64_BIT(FRAG_ATTRIB_PNTC))
-         urb_setup[FRAG_ATTRIB_PNTC] = urb_next++;
+      if (fp->Base.InputsRead & BITFIELD64_BIT(VARYING_SLOT_PNTC))
+         urb_setup[VARYING_SLOT_PNTC] = urb_next++;
    }
 
    /* Each attribute is 4 setup channels, each of which is half a reg. */
@@ -1367,6 +1356,13 @@ fs_visitor::split_virtual_grfs()
        */
       if (inst->regs_written() > 1) {
 	 split_grf[inst->dst.reg] = false;
+      }
+
+      /* If we're sending from a GRF, don't split it, on the assumption that
+       * the send is reading the whole thing.
+       */
+      if (inst->is_send_from_grf()) {
+         split_grf[inst->src[0].reg] = false;
       }
    }
 
@@ -2298,7 +2294,8 @@ clear_deps_for_inst_src(fs_inst *inst, int dispatch_width, bool *deps,
 void
 fs_visitor::insert_gen4_pre_send_dependency_workarounds(fs_inst *inst)
 {
-   int write_len = inst->regs_written() * dispatch_width / 8;
+   int reg_size = dispatch_width / 8;
+   int write_len = inst->regs_written() * reg_size;
    int first_write_grf = inst->dst.reg;
    bool needs_dep[BRW_MAX_MRF];
    assert(write_len < (int)sizeof(needs_dep) - 1);
@@ -2337,14 +2334,19 @@ fs_visitor::insert_gen4_pre_send_dependency_workarounds(fs_inst *inst)
        * instruction but a MOV that might have left us an outstanding
        * dependency has more latency than a MOV.
        */
-      if (scan_inst->dst.file == GRF &&
-          scan_inst->dst.reg >= first_write_grf &&
-          scan_inst->dst.reg < first_write_grf + write_len &&
-          needs_dep[scan_inst->dst.reg - first_write_grf]) {
-         inst->insert_before(DEP_RESOLVE_MOV(scan_inst->dst.reg));
-         needs_dep[scan_inst->dst.reg - first_write_grf] = false;
-         if (scan_inst_16wide)
-            needs_dep[scan_inst->dst.reg - first_write_grf + 1] = false;
+      if (scan_inst->dst.file == GRF) {
+         for (int i = 0; i < scan_inst->regs_written(); i++) {
+            int reg = scan_inst->dst.reg + i * reg_size;
+
+            if (reg >= first_write_grf &&
+                reg < first_write_grf + write_len &&
+                needs_dep[reg - first_write_grf]) {
+               inst->insert_before(DEP_RESOLVE_MOV(reg));
+               needs_dep[reg - first_write_grf] = false;
+               if (scan_inst_16wide)
+                  needs_dep[reg - first_write_grf + 1] = false;
+            }
+         }
       }
 
       /* Clear the flag for registers that actually got read (as expected). */
@@ -2459,6 +2461,11 @@ fs_visitor::insert_gen4_send_dependency_workarounds()
  * scheduling full flexibility, while the conversion to native instructions
  * allows the post-register-allocation scheduler the best information
  * possible.
+ *
+ * Note that execution masking for setting up pull constant loads is special:
+ * the channels that need to be written are unrelated to the current execution
+ * mask, since a later instruction will use one of the result channels as a
+ * source operand for all 8 or 16 of its channels.
  */
 void
 fs_visitor::lower_uniform_pull_constant_loads()
@@ -2475,28 +2482,28 @@ fs_visitor::lower_uniform_pull_constant_loads()
                 const_offset_reg.type == BRW_REGISTER_TYPE_UD);
          const_offset_reg.imm.u /= 16;
          fs_reg payload = fs_reg(this, glsl_type::uint_type);
-         struct brw_reg g0 = retype(brw_vec8_grf(0, 0),
-                                    BRW_REGISTER_TYPE_UD);
 
-         fs_inst *setup1 = MOV(payload, fs_reg(g0));
-         setup1->force_writemask_all = true;
-         /* We don't need the second half of this vgrf to be filled with g1
-          * in the 16-wide case, but if we use force_uncompressed then live
-          * variable analysis won't consider this a def!
+         /* This is actually going to be a MOV, but since only the first dword
+          * is accessed, we have a special opcode to do just that one.  Note
+          * that this needs to be an operation that will be considered a def
+          * by live variable analysis, or register allocation will explode.
           */
+         fs_inst *setup = new(mem_ctx) fs_inst(FS_OPCODE_SET_SIMD4X2_OFFSET,
+                                               payload, const_offset_reg);
+         setup->force_writemask_all = true;
 
-         fs_inst *setup2 = new(mem_ctx) fs_inst(FS_OPCODE_SET_GLOBAL_OFFSET,
-                                                payload, payload,
-                                                const_offset_reg);
+         setup->ir = inst->ir;
+         setup->annotation = inst->annotation;
+         inst->insert_before(setup);
 
-         setup1->ir = inst->ir;
-         setup1->annotation = inst->annotation;
-         inst->insert_before(setup1);
-         setup2->ir = inst->ir;
-         setup2->annotation = inst->annotation;
-         inst->insert_before(setup2);
+         /* Similarly, this will only populate the first 4 channels of the
+          * result register (since we only use smear values from 0-3), but we
+          * don't tell the optimizer.
+          */
          inst->opcode = FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7;
          inst->src[1] = payload;
+
+         this->live_intervals_valid = false;
       } else {
          /* Before register allocation, we didn't tell the scheduler about the
           * MRF we use.  We know it's safe to use this MRF because nothing
@@ -2518,25 +2525,7 @@ fs_visitor::dump_instruction(fs_inst *inst)
              inst->flag_subreg);
    }
 
-   if (inst->opcode < ARRAY_SIZE(opcode_descs) &&
-       opcode_descs[inst->opcode].name) {
-      printf("%s", opcode_descs[inst->opcode].name);
-   } else {
-      switch (inst->opcode) {
-      case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
-         printf("uniform_pull_const");
-         break;
-      case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7:
-         printf("uniform_pull_const_gen7");
-         break;
-      case FS_OPCODE_SET_GLOBAL_OFFSET:
-         printf("set_global_offset");
-         break;
-      default:
-         printf("op%d", inst->opcode);
-         break;
-      }
-   }
+   printf("%s", brw_instruction_name(inst->opcode));
    if (inst->saturate)
       printf(".sat");
    if (inst->conditional_mod) {
@@ -2678,7 +2667,7 @@ fs_visitor::setup_payload_gen6()
 {
    struct intel_context *intel = &brw->intel;
    bool uses_depth =
-      (fp->Base.InputsRead & (1 << FRAG_ATTRIB_WPOS)) != 0;
+      (fp->Base.InputsRead & (1 << VARYING_SLOT_POS)) != 0;
    unsigned barycentric_interp_modes = c->prog_data.barycentric_interp_modes;
 
    assert(intel->gen >= 6);
@@ -2779,8 +2768,7 @@ fs_visitor::run()
       if (failed)
 	 return false;
 
-      if (INTEL_DEBUG & DEBUG_SHADER_TIME)
-         emit_shader_time_end();
+      emit(FS_OPCODE_PLACEHOLDER_HALT);
 
       emit_fb_writes();
 
@@ -2875,7 +2863,7 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
    bool start_busy = false;
    float start_time = 0;
 
-   if (unlikely(INTEL_DEBUG & DEBUG_PERF)) {
+   if (unlikely(intel->perf_debug)) {
       start_busy = (intel->batch.last_bo &&
                     drm_intel_bo_busy(intel->batch.last_bo));
       start_time = get_time();
@@ -2930,7 +2918,7 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
                                                    simd16_instructions,
                                                    final_assembly_size);
 
-   if (unlikely(INTEL_DEBUG & DEBUG_PERF) && shader) {
+   if (unlikely(intel->perf_debug) && shader) {
       if (shader->compiled_once)
          brw_wm_debug_recompile(brw, prog, &c->key);
       shader->compiled_once = true;
@@ -2974,23 +2962,27 @@ brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
    }
 
    if (prog->Name != 0)
-      key.proj_attrib_mask = 0xffffffff;
+      key.proj_attrib_mask = ~(GLbitfield64) 0;
+   else {
+      /* Bit VARYING_BIT_POS of key.proj_attrib_mask is never used, so to
+       * avoid unnecessary recompiles, always set it to 1.
+       */
+      key.proj_attrib_mask |= VARYING_BIT_POS;
+   }
 
    if (intel->gen < 6)
-      key.vp_outputs_written |= BITFIELD64_BIT(FRAG_ATTRIB_WPOS);
+      key.input_slots_valid |= BITFIELD64_BIT(VARYING_SLOT_POS);
 
-   for (int i = 0; i < FRAG_ATTRIB_MAX; i++) {
+   for (int i = 0; i < VARYING_SLOT_MAX; i++) {
       if (!(fp->Base.InputsRead & BITFIELD64_BIT(i)))
 	 continue;
 
       if (prog->Name == 0)
-         key.proj_attrib_mask |= 1 << i;
+         key.proj_attrib_mask |= BITFIELD64_BIT(i);
 
       if (intel->gen < 6) {
-         int vp_index = _mesa_vert_result_to_frag_attrib((gl_vert_result) i);
-
-         if (vp_index >= 0)
-            key.vp_outputs_written |= BITFIELD64_BIT(vp_index);
+         if (_mesa_varying_slot_in_fs((gl_varying_slot) i))
+            key.input_slots_valid |= BITFIELD64_BIT(i);
       }
    }
 
@@ -3007,11 +2999,11 @@ brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
       }
    }
 
-   if (fp->Base.InputsRead & FRAG_BIT_WPOS) {
+   if (fp->Base.InputsRead & VARYING_BIT_POS) {
       key.drawable_height = ctx->DrawBuffer->Height;
    }
 
-   if ((fp->Base.InputsRead & FRAG_BIT_WPOS) || program_uses_dfdy) {
+   if ((fp->Base.InputsRead & VARYING_BIT_POS) || program_uses_dfdy) {
       key.render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
    }
 

@@ -388,6 +388,11 @@ static void radeon_bo_destroy(struct pb_buffer *_buf)
     }
 
     pipe_mutex_destroy(bo->map_mutex);
+
+    if (bo->initial_domain & RADEON_DOMAIN_VRAM)
+        bo->rws->allocated_vram -= align(bo->base.size, 4096);
+    else if (bo->initial_domain & RADEON_DOMAIN_GTT)
+        bo->rws->allocated_gtt -= align(bo->base.size, 4096);
     FREE(bo);
 }
 
@@ -576,6 +581,7 @@ static struct pb_buffer *radeon_bomgr_create_bo(struct pb_manager *_mgr,
     bo->rws = mgr->rws;
     bo->handle = args.handle;
     bo->va = 0;
+    bo->initial_domain = rdesc->initial_domains;
     pipe_mutex_init(bo->map_mutex);
 
     if (mgr->va) {
@@ -607,6 +613,11 @@ static struct pb_buffer *radeon_bomgr_create_bo(struct pb_manager *_mgr,
             radeon_bomgr_force_va(mgr, bo->va, bo->va_size);
         }
     }
+
+    if (rdesc->initial_domains & RADEON_DOMAIN_VRAM)
+        rws->allocated_vram += align(size, 4096);
+    else if (rdesc->initial_domains & RADEON_DOMAIN_GTT)
+        rws->allocated_gtt += align(size, 4096);
 
     return &bo->base;
 }
@@ -931,6 +942,9 @@ done:
         }
     }
 
+    ws->allocated_vram += align(open_arg.size, 4096);
+    bo->initial_domain = RADEON_DOMAIN_VRAM;
+
     return (struct pb_buffer*)bo;
 
 fail:
@@ -957,15 +971,15 @@ static boolean radeon_winsys_bo_get_handle(struct pb_buffer *buffer,
 
             bo->flinked = TRUE;
             bo->flink = flink.name;
+
+            pipe_mutex_lock(bo->mgr->bo_handles_mutex);
+            util_hash_table_set(bo->mgr->bo_handles, (void*)(uintptr_t)bo->flink, bo);
+            pipe_mutex_unlock(bo->mgr->bo_handles_mutex);
         }
         whandle->handle = bo->flink;
     } else if (whandle->type == DRM_API_HANDLE_TYPE_KMS) {
         whandle->handle = bo->handle;
     }
-
-    pipe_mutex_lock(bo->mgr->bo_handles_mutex);
-    util_hash_table_set(bo->mgr->bo_handles, (void*)(uintptr_t)whandle->handle, bo);
-    pipe_mutex_unlock(bo->mgr->bo_handles_mutex);
 
     whandle->stride = stride;
     return TRUE;

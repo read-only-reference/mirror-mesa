@@ -153,6 +153,7 @@ enum brw_state_id {
    BRW_STATE_PROGRAM_CACHE,
    BRW_STATE_STATE_BASE_ADDRESS,
    BRW_STATE_SOL_INDICES,
+   BRW_STATE_VUE_MAP_GEOM_OUT,
 };
 
 #define BRW_NEW_URB_FENCE               (1 << BRW_STATE_URB_FENCE)
@@ -182,6 +183,7 @@ enum brw_state_id {
 #define BRW_NEW_PROGRAM_CACHE		(1 << BRW_STATE_PROGRAM_CACHE)
 #define BRW_NEW_STATE_BASE_ADDRESS	(1 << BRW_STATE_STATE_BASE_ADDRESS)
 #define BRW_NEW_SOL_INDICES		(1 << BRW_STATE_SOL_INDICES)
+#define BRW_NEW_VUE_MAP_GEOM_OUT	(1 << BRW_STATE_VUE_MAP_GEOM_OUT)
 
 struct brw_state_flags {
    /** State update flags signalled by mesa internals */
@@ -323,26 +325,27 @@ struct brw_wm_prog_data {
 
 /**
  * Enum representing the i965-specific vertex results that don't correspond
- * exactly to any element of gl_vert_result.  The values of this enum are
- * assigned such that they don't conflict with gl_vert_result.
+ * exactly to any element of gl_varying_slot.  The values of this enum are
+ * assigned such that they don't conflict with gl_varying_slot.
  */
 typedef enum
 {
-   BRW_VERT_RESULT_NDC = VERT_RESULT_MAX,
-   BRW_VERT_RESULT_HPOS_DUPLICATE,
-   BRW_VERT_RESULT_PAD,
-   /*
-    * It's actually not a vert_result but just a _mark_ to let sf aware that
-    * he need do something special to handle gl_PointCoord builtin variable
-    * correctly. see compile_sf_prog() for more info.
+   BRW_VARYING_SLOT_NDC = VARYING_SLOT_MAX,
+   BRW_VARYING_SLOT_POS_DUPLICATE,
+   BRW_VARYING_SLOT_PAD,
+   /**
+    * Technically this is not a varying but just a placeholder that
+    * compile_sf_prog() inserts into its VUE map to cause the gl_PointCoord
+    * builtin variable to be compiled correctly. see compile_sf_prog() for
+    * more info.
     */
-   BRW_VERT_RESULT_PNTC,
-   BRW_VERT_RESULT_MAX
-} brw_vert_result;
+   BRW_VARYING_SLOT_PNTC,
+   BRW_VARYING_SLOT_COUNT
+} brw_varying_slot;
 
 
 /**
- * Data structure recording the relationship between the gl_vert_result enum
+ * Data structure recording the relationship between the gl_varying_slot enum
  * and "slots" within the vertex URB entry (VUE).  A "slot" is defined as a
  * single octaword within the VUE (128 bits).
  *
@@ -354,23 +357,30 @@ typedef enum
  */
 struct brw_vue_map {
    /**
-    * Map from gl_vert_result value to VUE slot.  For gl_vert_results that are
+    * Bitfield representing all varying slots that are (a) stored in this VUE
+    * map, and (b) actually written by the shader.  Does not include any of
+    * the additional varying slots defined in brw_varying_slot.
+    */
+   GLbitfield64 slots_valid;
+
+   /**
+    * Map from gl_varying_slot value to VUE slot.  For gl_varying_slots that are
     * not stored in a slot (because they are not written, or because
     * additional processing is applied before storing them in the VUE), the
     * value is -1.
     */
-   int vert_result_to_slot[BRW_VERT_RESULT_MAX];
+   signed char varying_to_slot[BRW_VARYING_SLOT_COUNT];
 
    /**
-    * Map from VUE slot to gl_vert_result value.  For slots that do not
-    * directly correspond to a gl_vert_result, the value comes from
-    * brw_vert_result.
+    * Map from VUE slot to gl_varying_slot value.  For slots that do not
+    * directly correspond to a gl_varying_slot, the value comes from
+    * brw_varying_slot.
     *
-    * For slots that are not in use, the value is BRW_VERT_RESULT_MAX (this
-    * simplifies code that uses the value stored in slot_to_vert_result to
+    * For slots that are not in use, the value is BRW_VARYING_SLOT_COUNT (this
+    * simplifies code that uses the value stored in slot_to_varying to
     * create a bit mask).
     */
-   int slot_to_vert_result[BRW_VERT_RESULT_MAX];
+   signed char slot_to_varying[BRW_VARYING_SLOT_COUNT];
 
    /**
     * Total number of VUE slots in use
@@ -387,12 +397,13 @@ static inline GLuint brw_vue_slot_to_offset(GLuint slot)
 }
 
 /**
- * Convert a vert_result into a byte offset within the VUE.
+ * Convert a vertex output (brw_varying_slot) into a byte offset within the
+ * VUE.
  */
-static inline GLuint brw_vert_result_to_offset(struct brw_vue_map *vue_map,
-                                               GLuint vert_result)
+static inline GLuint brw_varying_to_offset(struct brw_vue_map *vue_map,
+                                           GLuint varying)
 {
-   return brw_vue_slot_to_offset(vue_map->vert_result_to_slot[vert_result]);
+   return brw_vue_slot_to_offset(vue_map->varying_to_slot[varying]);
 }
 
 
@@ -436,7 +447,6 @@ struct brw_vs_prog_data {
    GLuint curb_read_length;
    GLuint urb_read_length;
    GLuint total_grf;
-   GLbitfield64 outputs_written;
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params; /**< number of dwords referenced by pull_param[] */
    GLuint total_scratch;
@@ -570,6 +580,14 @@ struct brw_vs_prog_data {
 
 #define SURF_INDEX_SOL_BINDING(t)    ((t))
 #define BRW_MAX_GS_SURFACES          SURF_INDEX_SOL_BINDING(BRW_MAX_SOL_BINDINGS)
+
+/**
+ * Stride in bytes between shader_time entries.
+ *
+ * We separate entries by a cacheline to reduce traffic between EUs writing to
+ * different entries.
+ */
+#define SHADER_TIME_STRIDE 64
 
 enum brw_cache_id {
    BRW_BLEND_STATE,
@@ -728,8 +746,7 @@ struct brw_query_object {
 
    /** Last query BO associated with this query. */
    drm_intel_bo *bo;
-   /** First index in bo with query data for this object. */
-   int first_index;
+
    /** Last index in bo with query data for this object. */
    int last_index;
 };
@@ -903,6 +920,15 @@ struct brw_context
       uint32_t offset;
    } sampler;
 
+   /**
+    * Layout of vertex data exiting the geometry portion of the pipleine.
+    * This comes from the geometry shader if one exists, otherwise from the
+    * vertex shader.
+    *
+    * BRW_NEW_VUE_MAP_GEOM_OUT is flagged when the VUE map changes.
+    */
+   struct brw_vue_map vue_map_geom_out;
+
    struct {
       struct brw_vs_prog_data *prog_data;
 
@@ -979,7 +1005,7 @@ struct brw_context
       /** Input sizes, calculated from active vertex program.
        * One bit per fragment program input attribute.
        */
-      GLbitfield input_size_masks[4];
+      GLbitfield64 input_size_masks[4];
 
       /** offsets in the batch to sampler default colors (texture border color)
        */
@@ -1044,8 +1070,6 @@ struct brw_context
 
    struct {
       struct brw_query_object *obj;
-      drm_intel_bo *bo;
-      int index;
       bool begin_emitted;
    } query;
 
@@ -1099,7 +1123,8 @@ struct brw_context
 
    struct {
       drm_intel_bo *bo;
-      struct gl_shader_program **programs;
+      struct gl_shader_program **shader_programs;
+      struct gl_program **programs;
       enum shader_time_shader_type *types;
       uint64_t *cumulative;
       int num_entries;
@@ -1132,7 +1157,8 @@ void brw_get_depthstencil_tile_masks(struct intel_mipmap_tree *depth_mt,
                                      struct intel_mipmap_tree *stencil_mt,
                                      uint32_t *out_tile_mask_x,
                                      uint32_t *out_tile_mask_y);
-void brw_workaround_depthstencil_alignment(struct brw_context *brw);
+void brw_workaround_depthstencil_alignment(struct brw_context *brw,
+                                           GLbitfield clear_mask);
 
 /*======================================================================
  * brw_queryobj.c
@@ -1162,6 +1188,10 @@ int brw_get_scratch_size(int size);
 void brw_get_scratch_bo(struct intel_context *intel,
 			drm_intel_bo **scratch_bo, int size);
 void brw_init_shader_time(struct brw_context *brw);
+int brw_get_shader_time_index(struct brw_context *brw,
+                              struct gl_shader_program *shader_prog,
+                              struct gl_program *prog,
+                              enum shader_time_shader_type type);
 void brw_collect_and_report_shader_time(struct brw_context *brw);
 void brw_destroy_shader_time(struct brw_context *brw);
 
@@ -1229,7 +1259,12 @@ gen6_emit_3dstate_multisample(struct brw_context *brw,
 void
 gen6_emit_3dstate_sample_mask(struct brw_context *brw,
                               unsigned num_samples, float coverage,
-                              bool coverage_invert);
+                              bool coverage_invert, unsigned sample_mask);
+void
+gen6_get_sample_position(struct gl_context *ctx,
+                         struct gl_framebuffer *fb,
+                         GLuint index,
+                         GLfloat *result);
 
 /* gen7_urb.c */
 void

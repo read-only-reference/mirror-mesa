@@ -1067,13 +1067,11 @@ link_intrastage_shaders(void *mem_ctx,
 
    free(linking_shaders);
 
-#ifdef DEBUG
    /* At this point linked should contain all of the linked IR, so
     * validate it to make sure nothing went wrong.
     */
    if (linked)
       validate_ir_tree(linked->ir);
-#endif
 
    /* Make a pass over all variable declarations to ensure that arrays with
     * unspecified sizes have a size specified.  The size is inferred from the
@@ -1777,13 +1775,13 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
    if (prog->_LinkedShaders[MESA_SHADER_VERTEX] != NULL) {
       link_invalidate_variable_locations(
             prog->_LinkedShaders[MESA_SHADER_VERTEX],
-            VERT_ATTRIB_GENERIC0, VERT_RESULT_VAR0);
+            VERT_ATTRIB_GENERIC0, VARYING_SLOT_VAR0);
    }
    /* FINISHME: Geometry shaders not implemented yet */
    if (prog->_LinkedShaders[MESA_SHADER_FRAGMENT] != NULL) {
       link_invalidate_variable_locations(
             prog->_LinkedShaders[MESA_SHADER_FRAGMENT],
-            FRAG_ATTRIB_VAR0, FRAG_RESULT_DATA0);
+            VARYING_SLOT_VAR0, FRAG_RESULT_DATA0);
    }
 
    /* FINISHME: The value of the max_attribute_index parameter is

@@ -1230,6 +1230,12 @@ glcpp_parser_create (const struct gl_extensions *extensions, int api)
 
 	      if (extensions->ARB_shading_language_packing)
 	         add_builtin_define(parser, "GL_ARB_shading_language_packing", 1);
+
+	      if (extensions->ARB_texture_multisample)
+	         add_builtin_define(parser, "GL_ARB_texture_multisample", 1);
+
+	      if (extensions->ARB_texture_query_lod)
+	         add_builtin_define(parser, "GL_ARB_texture_query_lod", 1);
 	   }
 	}
 

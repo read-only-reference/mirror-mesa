@@ -294,6 +294,28 @@ _mesa_TexBufferRange(GLenum target, GLenum internalFormat, GLuint buffer,
                      GLintptr offset, GLsizeiptr size);
 
 
+extern void GLAPIENTRY
+_mesa_TexImage2DMultisample(GLenum target, GLsizei samples,
+                            GLint internalformat, GLsizei width,
+                            GLsizei height, GLboolean fixedsamplelocations);
+
+extern void GLAPIENTRY
+_mesa_TexImage3DMultisample(GLenum target, GLsizei samples,
+                            GLint internalformat, GLsizei width,
+                            GLsizei height, GLsizei depth,
+                            GLboolean fixedsamplelocations);
+
+extern void GLAPIENTRY
+_mesa_TexStorage2DMultisample(GLenum target, GLsizei samples,
+                              GLint internalformat, GLsizei width,
+                              GLsizei height, GLboolean fixedsamplelocations);
+
+extern void GLAPIENTRY
+_mesa_TexStorage3DMultisample(GLenum target, GLsizei samples,
+                              GLint internalformat, GLsizei width,
+                              GLsizei height, GLsizei depth,
+                              GLboolean fixedsamplelocations);
+
 /*@}*/
 
 #ifdef __cplusplus

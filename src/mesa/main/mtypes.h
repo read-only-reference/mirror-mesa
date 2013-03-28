@@ -146,9 +146,6 @@ typedef enum
  * VERT_ATTRIB_TEX
  *   include the classic texture coordinate attributes.
  *   Is a subset of VERT_ATTRIB_FF.
- * VERT_ATTRIB_GENERIC_NV
- *   include the NV shader attributes.
- *   Is a subset of VERT_ATTRIB_FF.
  * VERT_ATTRIB_GENERIC
  *   include the OpenGL 2.0+ GLSL generic shader attributes.
  *   These alias the generic GL_ARB_vertex_shader attributes.
@@ -158,9 +155,6 @@ typedef enum
 
 #define VERT_ATTRIB_TEX(i)          (VERT_ATTRIB_TEX0 + (i))
 #define VERT_ATTRIB_TEX_MAX         MAX_TEXTURE_COORD_UNITS
-
-#define VERT_ATTRIB_GENERIC_NV(i)   (VERT_ATTRIB_POS + (i))
-#define VERT_ATTRIB_GENERIC_NV_MAX  MAX_VERTEX_GENERIC_ATTRIBS
 
 #define VERT_ATTRIB_GENERIC(i)      (VERT_ATTRIB_GENERIC0 + (i))
 #define VERT_ATTRIB_GENERIC_MAX     MAX_VERTEX_GENERIC_ATTRIBS
@@ -198,10 +192,6 @@ typedef enum
 #define VERT_BIT_TEX_ALL         \
    BITFIELD64_RANGE(VERT_ATTRIB_TEX(0), VERT_ATTRIB_TEX_MAX)
 
-#define VERT_BIT_GENERIC_NV(i)   VERT_BIT(VERT_ATTRIB_GENERIC_NV(i))
-#define VERT_BIT_GENERIC_NV_ALL  \
-   BITFIELD64_RANGE(VERT_ATTRIB_GENERIC_NV(0), VERT_ATTRIB_GENERIC_NV_MAX)
-
 #define VERT_BIT_GENERIC(i)      VERT_BIT(VERT_ATTRIB_GENERIC(i))
 #define VERT_BIT_GENERIC_ALL     \
    BITFIELD64_RANGE(VERT_ATTRIB_GENERIC(0), VERT_ATTRIB_GENERIC_MAX)
@@ -209,209 +199,100 @@ typedef enum
 
 
 /**
- * Indexes for vertex program result attributes.  Note that
- * _mesa_vert_result_to_frag_attrib() and _mesa_frag_attrib_to_vert_result() make
- * assumptions about the layout of this enum.
+ * Indexes for vertex shader outputs, geometry shader inputs/outputs, and
+ * fragment shader inputs.
+ *
+ * Note that some of these values are not available to all pipeline stages.
+ *
+ * When this enum is updated, the following code must be updated too:
+ * - vertResults (in prog_print.c's arb_output_attrib_string())
+ * - fragAttribs (in prog_print.c's arb_input_attrib_string())
+ * - _mesa_varying_slot_in_fs()
  */
 typedef enum
 {
-   VERT_RESULT_HPOS = 0,
-   VERT_RESULT_COL0 = 1,
-   VERT_RESULT_COL1 = 2,
-   VERT_RESULT_FOGC = 3,
-   VERT_RESULT_TEX0 = 4,
-   VERT_RESULT_TEX1 = 5,
-   VERT_RESULT_TEX2 = 6,
-   VERT_RESULT_TEX3 = 7,
-   VERT_RESULT_TEX4 = 8,
-   VERT_RESULT_TEX5 = 9,
-   VERT_RESULT_TEX6 = 10,
-   VERT_RESULT_TEX7 = 11,
-   VERT_RESULT_PSIZ = 12,
-   VERT_RESULT_BFC0 = 13,
-   VERT_RESULT_BFC1 = 14,
-   VERT_RESULT_EDGE = 15,
-   VERT_RESULT_CLIP_VERTEX = 16,
-   VERT_RESULT_CLIP_DIST0 = 17,
-   VERT_RESULT_CLIP_DIST1 = 18,
-   VERT_RESULT_VAR0 = 19,  /**< shader varying */
-   VERT_RESULT_MAX = (VERT_RESULT_VAR0 + MAX_VARYING)
-} gl_vert_result;
+   VARYING_SLOT_POS,
+   VARYING_SLOT_COL0, /* COL0 and COL1 must be contiguous */
+   VARYING_SLOT_COL1,
+   VARYING_SLOT_FOGC,
+   VARYING_SLOT_TEX0, /* TEX0-TEX7 must be contiguous */
+   VARYING_SLOT_TEX1,
+   VARYING_SLOT_TEX2,
+   VARYING_SLOT_TEX3,
+   VARYING_SLOT_TEX4,
+   VARYING_SLOT_TEX5,
+   VARYING_SLOT_TEX6,
+   VARYING_SLOT_TEX7,
+   VARYING_SLOT_PSIZ, /* Does not appear in FS */
+   VARYING_SLOT_BFC0, /* Does not appear in FS */
+   VARYING_SLOT_BFC1, /* Does not appear in FS */
+   VARYING_SLOT_EDGE, /* Does not appear in FS */
+   VARYING_SLOT_CLIP_VERTEX, /* Does not appear in FS */
+   VARYING_SLOT_CLIP_DIST0,
+   VARYING_SLOT_CLIP_DIST1,
+   VARYING_SLOT_PRIMITIVE_ID, /* Does not appear in VS */
+   VARYING_SLOT_LAYER, /* Appears only as GS output */
+   VARYING_SLOT_FACE, /* FS only */
+   VARYING_SLOT_PNTC, /* FS only */
+   VARYING_SLOT_VAR0, /* First generic varying slot */
+   VARYING_SLOT_MAX = VARYING_SLOT_VAR0 + MAX_VARYING
+} gl_varying_slot;
+
+
+/**
+ * Bitflags for varying slots.
+ */
+/*@{*/
+#define VARYING_BIT_POS BITFIELD64_BIT(VARYING_SLOT_POS)
+#define VARYING_BIT_COL0 BITFIELD64_BIT(VARYING_SLOT_COL0)
+#define VARYING_BIT_COL1 BITFIELD64_BIT(VARYING_SLOT_COL1)
+#define VARYING_BIT_FOGC BITFIELD64_BIT(VARYING_SLOT_FOGC)
+#define VARYING_BIT_TEX0 BITFIELD64_BIT(VARYING_SLOT_TEX0)
+#define VARYING_BIT_TEX1 BITFIELD64_BIT(VARYING_SLOT_TEX1)
+#define VARYING_BIT_TEX2 BITFIELD64_BIT(VARYING_SLOT_TEX2)
+#define VARYING_BIT_TEX3 BITFIELD64_BIT(VARYING_SLOT_TEX3)
+#define VARYING_BIT_TEX4 BITFIELD64_BIT(VARYING_SLOT_TEX4)
+#define VARYING_BIT_TEX5 BITFIELD64_BIT(VARYING_SLOT_TEX5)
+#define VARYING_BIT_TEX6 BITFIELD64_BIT(VARYING_SLOT_TEX6)
+#define VARYING_BIT_TEX7 BITFIELD64_BIT(VARYING_SLOT_TEX7)
+#define VARYING_BIT_TEX(U) BITFIELD64_BIT(VARYING_SLOT_TEX0 + (U))
+#define VARYING_BITS_TEX_ANY BITFIELD64_RANGE(VARYING_SLOT_TEX0, \
+                                              MAX_TEXTURE_COORD_UNITS)
+#define VARYING_BIT_PSIZ BITFIELD64_BIT(VARYING_SLOT_PSIZ)
+#define VARYING_BIT_BFC0 BITFIELD64_BIT(VARYING_SLOT_BFC0)
+#define VARYING_BIT_BFC1 BITFIELD64_BIT(VARYING_SLOT_BFC1)
+#define VARYING_BIT_EDGE BITFIELD64_BIT(VARYING_SLOT_EDGE)
+#define VARYING_BIT_CLIP_VERTEX BITFIELD64_BIT(VARYING_SLOT_CLIP_VERTEX)
+#define VARYING_BIT_CLIP_DIST0 BITFIELD64_BIT(VARYING_SLOT_CLIP_DIST0)
+#define VARYING_BIT_CLIP_DIST1 BITFIELD64_BIT(VARYING_SLOT_CLIP_DIST1)
+#define VARYING_BIT_PRIMITIVE_ID BITFIELD64_BIT(VARYING_SLOT_PRIMITIVE_ID)
+#define VARYING_BIT_LAYER BITFIELD64_BIT(VARYING_SLOT_LAYER)
+#define VARYING_BIT_FACE BITFIELD64_BIT(VARYING_SLOT_FACE)
+#define VARYING_BIT_PNTC BITFIELD64_BIT(VARYING_SLOT_PNTC)
+#define VARYING_BIT_VAR(V) BITFIELD64_BIT(VARYING_SLOT_VAR0 + (V))
+/*@}*/
 
 
 /*********************************************/
 
 /**
- * Indexes for geometry program attributes.
+ * Determine if the given gl_varying_slot appears in the fragment shader.
  */
-typedef enum
+static inline GLboolean
+_mesa_varying_slot_in_fs(gl_varying_slot slot)
 {
-   GEOM_ATTRIB_POSITION = 0,
-   GEOM_ATTRIB_COLOR0 = 1,
-   GEOM_ATTRIB_COLOR1 = 2,
-   GEOM_ATTRIB_SECONDARY_COLOR0 = 3,
-   GEOM_ATTRIB_SECONDARY_COLOR1 = 4,
-   GEOM_ATTRIB_FOG_FRAG_COORD = 5,
-   GEOM_ATTRIB_POINT_SIZE = 6,
-   GEOM_ATTRIB_CLIP_VERTEX = 7,
-   GEOM_ATTRIB_PRIMITIVE_ID = 8,
-   GEOM_ATTRIB_TEX_COORD = 9,
-
-   GEOM_ATTRIB_VAR0 = 16,
-   GEOM_ATTRIB_MAX = (GEOM_ATTRIB_VAR0 + MAX_VARYING)
-} gl_geom_attrib;
-
-/**
- * Bitflags for geometry attributes.
- * These are used in bitfields in many places.
- */
-/*@{*/
-#define GEOM_BIT_COLOR0      (1 << GEOM_ATTRIB_COLOR0)
-#define GEOM_BIT_COLOR1      (1 << GEOM_ATTRIB_COLOR1)
-#define GEOM_BIT_SCOLOR0     (1 << GEOM_ATTRIB_SECONDARY_COLOR0)
-#define GEOM_BIT_SCOLOR1     (1 << GEOM_ATTRIB_SECONDARY_COLOR1)
-#define GEOM_BIT_TEX_COORD   (1 << GEOM_ATTRIB_TEX_COORD)
-#define GEOM_BIT_FOG_COORD   (1 << GEOM_ATTRIB_FOG_FRAG_COORD)
-#define GEOM_BIT_POSITION    (1 << GEOM_ATTRIB_POSITION)
-#define GEOM_BIT_POINT_SIDE  (1 << GEOM_ATTRIB_POINT_SIZE)
-#define GEOM_BIT_CLIP_VERTEX (1 << GEOM_ATTRIB_CLIP_VERTEX)
-#define GEOM_BIT_PRIM_ID     (1 << GEOM_ATTRIB_PRIMITIVE_ID)
-#define GEOM_BIT_VAR0        (1 << GEOM_ATTRIB_VAR0)
-
-#define GEOM_BIT_VAR(g)  (1 << (GEOM_BIT_VAR0 + (g)))
-/*@}*/
-
-
-/**
- * Indexes for geometry program result attributes
- */
-typedef enum
-{
-   GEOM_RESULT_POS  = 0,
-   GEOM_RESULT_COL0  = 1,
-   GEOM_RESULT_COL1  = 2,
-   GEOM_RESULT_SCOL0 = 3,
-   GEOM_RESULT_SCOL1 = 4,
-   GEOM_RESULT_FOGC = 5,
-   GEOM_RESULT_TEX0 = 6,
-   GEOM_RESULT_TEX1 = 7,
-   GEOM_RESULT_TEX2 = 8,
-   GEOM_RESULT_TEX3 = 9,
-   GEOM_RESULT_TEX4 = 10,
-   GEOM_RESULT_TEX5 = 11,
-   GEOM_RESULT_TEX6 = 12,
-   GEOM_RESULT_TEX7 = 13,
-   GEOM_RESULT_PSIZ = 14,
-   GEOM_RESULT_CLPV = 15,
-   GEOM_RESULT_PRID = 16,
-   GEOM_RESULT_LAYR = 17,
-   GEOM_RESULT_VAR0 = 18,  /**< shader varying, should really be 16 */
-   /* ### we need to -2 because var0 is 18 instead 16 like in the others */
-   GEOM_RESULT_MAX  =  (GEOM_RESULT_VAR0 + MAX_VARYING - 2)
-} gl_geom_result;
-
-
-/**
- * Indexes for fragment program input attributes.  Note that
- * _mesa_vert_result_to_frag_attrib() and frag_attrib_to_vert_result() make
- * assumptions about the layout of this enum.
- */
-typedef enum
-{
-   FRAG_ATTRIB_WPOS = 0,
-   FRAG_ATTRIB_COL0 = 1,
-   FRAG_ATTRIB_COL1 = 2,
-   FRAG_ATTRIB_FOGC = 3,
-   FRAG_ATTRIB_TEX0 = 4,
-   FRAG_ATTRIB_TEX1 = 5,
-   FRAG_ATTRIB_TEX2 = 6,
-   FRAG_ATTRIB_TEX3 = 7,
-   FRAG_ATTRIB_TEX4 = 8,
-   FRAG_ATTRIB_TEX5 = 9,
-   FRAG_ATTRIB_TEX6 = 10,
-   FRAG_ATTRIB_TEX7 = 11,
-   FRAG_ATTRIB_FACE = 12,  /**< front/back face */
-   FRAG_ATTRIB_PNTC = 13,  /**< sprite/point coord */
-   FRAG_ATTRIB_CLIP_DIST0 = 14,
-   FRAG_ATTRIB_CLIP_DIST1 = 15,
-   FRAG_ATTRIB_VAR0 = 16,  /**< shader varying */
-   FRAG_ATTRIB_MAX = (FRAG_ATTRIB_VAR0 + MAX_VARYING)
-} gl_frag_attrib;
-
-
-/**
- * Convert from a gl_vert_result value to the corresponding gl_frag_attrib.
- *
- * VERT_RESULT_HPOS is converted to FRAG_ATTRIB_WPOS.
- *
- * gl_vert_result values which have no corresponding gl_frag_attrib
- * (VERT_RESULT_PSIZ, VERT_RESULT_BFC0, VERT_RESULT_BFC1, and
- * VERT_RESULT_EDGE) are converted to a value of -1.
- */
-static inline int
-_mesa_vert_result_to_frag_attrib(gl_vert_result vert_result)
-{
-   if (vert_result >= VERT_RESULT_CLIP_DIST0)
-      return vert_result - VERT_RESULT_CLIP_DIST0 + FRAG_ATTRIB_CLIP_DIST0;
-   else if (vert_result <= VERT_RESULT_TEX7)
-      return vert_result;
-   else
-      return -1;
+   switch (slot) {
+   case VARYING_SLOT_PSIZ:
+   case VARYING_SLOT_BFC0:
+   case VARYING_SLOT_BFC1:
+   case VARYING_SLOT_EDGE:
+   case VARYING_SLOT_CLIP_VERTEX:
+   case VARYING_SLOT_LAYER:
+      return GL_FALSE;
+   default:
+      return GL_TRUE;
+   }
 }
-
-
-/**
- * Convert from a gl_frag_attrib value to the corresponding gl_vert_result.
- *
- * FRAG_ATTRIB_WPOS is converted to VERT_RESULT_HPOS.
- *
- * gl_frag_attrib values which have no corresponding gl_vert_result
- * (FRAG_ATTRIB_FACE and FRAG_ATTRIB_PNTC) are converted to a value of -1.
- */
-static inline int
-_mesa_frag_attrib_to_vert_result(gl_frag_attrib frag_attrib)
-{
-   if (frag_attrib <= FRAG_ATTRIB_TEX7)
-      return frag_attrib;
-   else if (frag_attrib >= FRAG_ATTRIB_CLIP_DIST0)
-      return frag_attrib - FRAG_ATTRIB_CLIP_DIST0 + VERT_RESULT_CLIP_DIST0;
-   else
-      return -1;
-}
-
-
-/**
- * Bitflags for fragment program input attributes.
- */
-/*@{*/
-#define FRAG_BIT_WPOS  (1 << FRAG_ATTRIB_WPOS)
-#define FRAG_BIT_COL0  (1 << FRAG_ATTRIB_COL0)
-#define FRAG_BIT_COL1  (1 << FRAG_ATTRIB_COL1)
-#define FRAG_BIT_FOGC  (1 << FRAG_ATTRIB_FOGC)
-#define FRAG_BIT_FACE  (1 << FRAG_ATTRIB_FACE)
-#define FRAG_BIT_PNTC  (1 << FRAG_ATTRIB_PNTC)
-#define FRAG_BIT_TEX0  (1 << FRAG_ATTRIB_TEX0)
-#define FRAG_BIT_TEX1  (1 << FRAG_ATTRIB_TEX1)
-#define FRAG_BIT_TEX2  (1 << FRAG_ATTRIB_TEX2)
-#define FRAG_BIT_TEX3  (1 << FRAG_ATTRIB_TEX3)
-#define FRAG_BIT_TEX4  (1 << FRAG_ATTRIB_TEX4)
-#define FRAG_BIT_TEX5  (1 << FRAG_ATTRIB_TEX5)
-#define FRAG_BIT_TEX6  (1 << FRAG_ATTRIB_TEX6)
-#define FRAG_BIT_TEX7  (1 << FRAG_ATTRIB_TEX7)
-#define FRAG_BIT_VAR0  (1 << FRAG_ATTRIB_VAR0)
-
-#define FRAG_BIT_TEX(U)  (FRAG_BIT_TEX0 << (U))
-#define FRAG_BIT_VAR(V)  (FRAG_BIT_VAR0 << (V))
-
-#define FRAG_BITS_TEX_ANY (FRAG_BIT_TEX0|	\
-			   FRAG_BIT_TEX1|	\
-			   FRAG_BIT_TEX2|	\
-			   FRAG_BIT_TEX3|	\
-			   FRAG_BIT_TEX4|	\
-			   FRAG_BIT_TEX5|	\
-			   FRAG_BIT_TEX6|	\
-			   FRAG_BIT_TEX7)
-/*@}*/
 
 
 /**
@@ -993,6 +874,12 @@ struct gl_multisample_attrib
    GLboolean SampleCoverage;
    GLfloat SampleCoverageValue;
    GLboolean SampleCoverageInvert;
+
+   /* ARB_texture_multisample / GL3.2 additions */
+   GLboolean SampleMask;
+   GLbitfield SampleMaskValue; /* GL spec defines this as an array but >32x MSAA is
+                                * madness
+                                */
 };
 
 
@@ -1148,6 +1035,8 @@ struct gl_stencil_attrib
  */
 typedef enum
 {
+   TEXTURE_2D_MULTISAMPLE_INDEX,
+   TEXTURE_2D_MULTISAMPLE_ARRAY_INDEX,
    TEXTURE_CUBE_ARRAY_INDEX,
    TEXTURE_BUFFER_INDEX,
    TEXTURE_2D_ARRAY_INDEX,
@@ -1167,6 +1056,8 @@ typedef enum
  * Used for Texture.Unit[]._ReallyEnabled flags.
  */
 /*@{*/
+#define TEXTURE_2D_MULTISAMPLE_BIT (1 << TEXTURE_2D_MULTISAMPLE_INDEX)
+#define TEXTURE_2D_MULTISAMPLE_ARRAY_BIT (1 << TEXTURE_2D_MULTISAMPLE_ARRAY_INDEX)
 #define TEXTURE_CUBE_ARRAY_BIT (1 << TEXTURE_CUBE_ARRAY_INDEX)
 #define TEXTURE_BUFFER_BIT   (1 << TEXTURE_BUFFER_INDEX)
 #define TEXTURE_2D_ARRAY_BIT (1 << TEXTURE_2D_ARRAY_INDEX)
@@ -1212,6 +1103,10 @@ struct gl_texture_image
    GLuint Level;                /**< Which mipmap level am I? */
    /** Cube map face: index into gl_texture_object::Image[] array */
    GLuint Face;
+
+   /** GL_ARB_texture_multisample */
+   GLuint NumSamples;               /**< Sample count, or 0 for non-multisample */
+   GLboolean FixedSampleLocations;  /**< Same sample locations for all pixels? */
 };
 
 
@@ -1274,6 +1169,7 @@ struct gl_texture_object
    GLfloat Priority;		/**< in [0,1] */
    GLint BaseLevel;		/**< min mipmap level, OpenGL 1.2 */
    GLint MaxLevel;		/**< max mipmap level, OpenGL 1.2 */
+   GLint ImmutableLevels;       /**< ES 3.0 / ARB_texture_view */
    GLint _MaxLevel;		/**< actual max mipmap level (q in the spec) */
    GLfloat _MaxLambda;		/**< = _MaxLevel - BaseLevel (q - b in spec) */
    GLint CropRect[4];           /**< GL_OES_draw_texture */
@@ -1891,6 +1787,7 @@ struct gl_transform_feedback_state
 typedef enum
 {
    PROGRAM_TEMPORARY,   /**< machine->Temporary[] */
+   PROGRAM_ARRAY,       /**< Arrays & Matrixes */
    PROGRAM_INPUT,       /**< machine->Inputs[] */
    PROGRAM_OUTPUT,      /**< machine->Outputs[] */
    PROGRAM_LOCAL_PARAM, /**< gl_program->LocalParams[] */
@@ -2051,7 +1948,7 @@ struct gl_fragment_program
     * For inputs that do not have an interpolation qualifier specified in
     * GLSL, the value is INTERP_QUALIFIER_NONE.
     */
-   enum glsl_interp_qualifier InterpQualifier[FRAG_ATTRIB_MAX];
+   enum glsl_interp_qualifier InterpQualifier[VARYING_SLOT_MAX];
 
    /**
     * Bitfield indicating, for each fragment shader input, 1 if that input
@@ -3027,6 +2924,11 @@ struct gl_constants
     * backslash character ('\') in GLSL source.
     */
    GLboolean DisableGLSLLineContinuations;
+
+   /** GL_ARB_texture_multisample */
+   GLint MaxColorTextureSamples;
+   GLint MaxDepthTextureSamples;
+   GLint MaxIntegerSamples;
 };
 
 
@@ -3090,9 +2992,11 @@ struct gl_extensions
    GLboolean ARB_texture_float;
    GLboolean ARB_texture_multisample;
    GLboolean ARB_texture_non_power_of_two;
+   GLboolean ARB_texture_query_lod;
    GLboolean ARB_texture_rg;
    GLboolean ARB_texture_rgb10_a2ui;
    GLboolean ARB_texture_storage;
+   GLboolean ARB_texture_storage_multisample;
    GLboolean ARB_timer_query;
    GLboolean ARB_transform_feedback2;
    GLboolean ARB_transform_feedback3;
@@ -3349,52 +3253,61 @@ struct gl_dlist_state
    } Current;
 };
 
+/** @{
+ *
+ * These are a mapping of the GL_ARB_debug_output enums to small enums
+ * suitable for use as an array index.
+ */
+
+enum mesa_debug_source {
+   MESA_DEBUG_SOURCE_API,
+   MESA_DEBUG_SOURCE_WINDOW_SYSTEM,
+   MESA_DEBUG_SOURCE_SHADER_COMPILER,
+   MESA_DEBUG_SOURCE_THIRD_PARTY,
+   MESA_DEBUG_SOURCE_APPLICATION,
+   MESA_DEBUG_SOURCE_OTHER,
+   MESA_DEBUG_SOURCE_COUNT,
+};
+
+enum mesa_debug_type {
+   MESA_DEBUG_TYPE_ERROR,
+   MESA_DEBUG_TYPE_DEPRECATED,
+   MESA_DEBUG_TYPE_UNDEFINED,
+   MESA_DEBUG_TYPE_PORTABILITY,
+   MESA_DEBUG_TYPE_PERFORMANCE,
+   MESA_DEBUG_TYPE_OTHER,
+   MESA_DEBUG_TYPE_COUNT,
+};
+
+enum mesa_debug_severity {
+   MESA_DEBUG_SEVERITY_LOW,
+   MESA_DEBUG_SEVERITY_MEDIUM,
+   MESA_DEBUG_SEVERITY_HIGH,
+   MESA_DEBUG_SEVERITY_COUNT,
+};
+
+/** @} */
+
 /**
  * An error, warning, or other piece of debug information for an application
  * to consume via GL_ARB_debug_output.
  */
 struct gl_debug_msg
 {
-   GLenum source;
-   GLenum type;
+   enum mesa_debug_source source;
+   enum mesa_debug_type type;
    GLuint id;
-   GLenum severity;
+   enum mesa_debug_severity severity;
    GLsizei length;
    GLcharARB *message;
 };
 
-typedef enum {
-   API_ERROR_UNKNOWN,
-   API_ERROR_COUNT
-} gl_api_error;
-
-typedef enum {
-   WINSYS_ERROR_UNKNOWN,
-   WINSYS_ERROR_COUNT
-} gl_winsys_error;
-
-typedef enum {
-   SHADER_ERROR_UNKNOWN,
-   SHADER_ERROR_COUNT
-} gl_shader_error;
-
-typedef enum {
-   OTHER_ERROR_UNKNOWN,
-   OTHER_ERROR_OUT_OF_MEMORY,
-   OTHER_ERROR_COUNT
-} gl_other_error;
-
-struct gl_client_namespace
+struct gl_debug_namespace
 {
    struct _mesa_HashTable *IDs;
    unsigned ZeroID; /* a HashTable won't take zero, so store its state here */
-   struct simple_node Severity[3]; /* lists of IDs in the hash table */
-};
-
-struct gl_client_debug
-{
-   GLboolean Defaults[3][2][6]; /* severity, source, type */
-   struct gl_client_namespace Namespaces[2][6]; /* source, type */
+   /** lists of IDs in the hash table at each severity */
+   struct simple_node Severity[MESA_DEBUG_SEVERITY_COUNT];
 };
 
 struct gl_debug_state
@@ -3402,11 +3315,8 @@ struct gl_debug_state
    GLDEBUGPROCARB Callback;
    GLvoid *CallbackData;
    GLboolean SyncOutput;
-   GLboolean ApiErrors[API_ERROR_COUNT];
-   GLboolean WinsysErrors[WINSYS_ERROR_COUNT];
-   GLboolean ShaderErrors[SHADER_ERROR_COUNT];
-   GLboolean OtherErrors[OTHER_ERROR_COUNT];
-   struct gl_client_debug ClientIDs;
+   GLboolean Defaults[MESA_DEBUG_SEVERITY_COUNT][MESA_DEBUG_SOURCE_COUNT][MESA_DEBUG_TYPE_COUNT];
+   struct gl_debug_namespace Namespaces[MESA_DEBUG_SOURCE_COUNT][MESA_DEBUG_TYPE_COUNT];
    struct gl_debug_msg Log[MAX_DEBUG_LOGGED_MESSAGES];
    GLint NumMessages;
    GLint NextMsg;

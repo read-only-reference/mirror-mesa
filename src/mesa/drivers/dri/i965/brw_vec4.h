@@ -194,6 +194,7 @@ public:
 
    bool is_tex();
    bool is_math();
+   bool is_send_from_grf();
    bool can_reswizzle_dst(int dst_writemask, int swizzle, int swizzle_mask);
    void reswizzle_dst(int dst_writemask, int swizzle);
 };
@@ -224,7 +225,7 @@ public:
       return dst_reg(retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
    }
 
-   const struct gl_vertex_program *vp;
+   struct gl_vertex_program *vp;
    struct brw_vs_compile *c;
    struct brw_vs_prog_data *prog_data;
    unsigned int sanity_param_count;
@@ -299,8 +300,8 @@ public:
    /* Regs for vertex results.  Generated at ir_variable visiting time
     * for the ir->location's used.
     */
-   dst_reg output_reg[BRW_VERT_RESULT_MAX];
-   const char *output_reg_annotation[BRW_VERT_RESULT_MAX];
+   dst_reg output_reg[BRW_VARYING_SLOT_COUNT];
+   const char *output_reg_annotation[BRW_VARYING_SLOT_COUNT];
    int uniform_size[MAX_UNIFORMS];
    int uniform_vector_size[MAX_UNIFORMS];
    int uniforms;
@@ -336,6 +337,8 @@ public:
    bool opt_copy_propagation();
    bool opt_algebraic();
    bool opt_register_coalesce();
+
+   bool can_do_source_mods(vec4_instruction *inst);
 
    vec4_instruction *emit(vec4_instruction *inst);
 
@@ -389,6 +392,10 @@ public:
 			       vec4_instruction *pre_rhs_inst,
 			       vec4_instruction *last_rhs_inst);
 
+   bool try_copy_propagation(struct intel_context *intel,
+                             vec4_instruction *inst, int arg,
+                             src_reg *values[4]);
+
    /** Walks an exec_list of ir_instruction and sends it through this visitor. */
    void visit_instructions(const exec_list *list);
 
@@ -441,8 +448,8 @@ public:
    void emit_ndc_computation();
    void emit_psiz_and_flags(struct brw_reg reg);
    void emit_clip_distances(struct brw_reg reg, int offset);
-   void emit_generic_urb_slot(dst_reg reg, int vert_result);
-   void emit_urb_slot(int mrf, int vert_result);
+   void emit_generic_urb_slot(dst_reg reg, int varying);
+   void emit_urb_slot(int mrf, int varying);
    void emit_urb_writes(void);
 
    void emit_shader_time_begin();

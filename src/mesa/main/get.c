@@ -34,6 +34,7 @@
 #include "state.h"
 #include "texcompress.h"
 #include "framebuffer.h"
+#include "samplerobj.h"
 
 /* This is a table driven implemetation of the glGet*v() functions.
  * The basic idea is that most getters just look up an int somewhere
@@ -354,6 +355,7 @@ EXTRA_EXT(ARB_timer_query);
 EXTRA_EXT(ARB_map_buffer_alignment);
 EXTRA_EXT(ARB_texture_cube_map_array);
 EXTRA_EXT(ARB_texture_buffer_range);
+EXTRA_EXT(ARB_texture_multisample);
 
 static const int
 extra_NV_primitive_restart[] = {
@@ -693,6 +695,8 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
    case GL_TEXTURE_BINDING_RECTANGLE_NV:
    case GL_TEXTURE_BINDING_EXTERNAL_OES:
    case GL_TEXTURE_BINDING_CUBE_MAP_ARRAY:
+   case GL_TEXTURE_BINDING_2D_MULTISAMPLE:
+   case GL_TEXTURE_BINDING_2D_MULTISAMPLE_ARRAY:
       unit = ctx->Texture.CurrentUnit;
       v->value_int =
 	 ctx->Texture.Unit[unit].CurrentTex[d->offset]->Name;
@@ -824,7 +828,16 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
       {
          struct gl_sampler_object *samp =
             ctx->Texture.Unit[ctx->Texture.CurrentUnit].Sampler;
-         v->value_int = samp ? samp->Name : 0;
+
+         /*
+          * The sampler object may have been deleted on another context,
+          * so we try to lookup the sampler object before returning its Name.
+          */
+         if (samp && _mesa_lookup_samplerobj(ctx, samp->Name)) {
+            v->value_int = samp->Name;
+         } else {
+            v->value_int = 0;
+         }
       }
       break;
    /* GL_ARB_uniform_buffer_object */
@@ -1631,6 +1644,15 @@ find_value_indexed(const char *func, GLenum pname, GLuint index, union value *v)
       if (!ctx->Extensions.ARB_uniform_buffer_object)
 	 goto invalid_enum;
       v->value_int = ctx->UniformBufferBindings[index].Size;
+      return TYPE_INT;
+
+   /* ARB_texture_multisample / GL3.2 */
+   case GL_SAMPLE_MASK_VALUE:
+      if (index != 0)
+         goto invalid_value;
+      if (!ctx->Extensions.ARB_texture_multisample)
+         goto invalid_enum;
+      v->value_int = ctx->Multisample.SampleMaskValue;
       return TYPE_INT;
    }
 

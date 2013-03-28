@@ -40,7 +40,7 @@ using namespace brw;
  */
 
 /**
- * Sets up the use[] and def[] arrays.
+ * Sets up the use[] and def[] bitsets.
  *
  * The basic-block-level live variable analysis needs to know which
  * variables get used before they're completely defined, and which
@@ -67,8 +67,8 @@ fs_live_variables::setup_def_use()
 	    if (inst->src[i].file == GRF) {
 	       int reg = inst->src[i].reg;
 
-	       if (!bd[b].def[reg])
-		  bd[b].use[reg] = true;
+	       if (!BITSET_TEST(bd[b].def, reg))
+		  BITSET_SET(bd[b].use, reg);
 	    }
 	 }
 
@@ -82,8 +82,8 @@ fs_live_variables::setup_def_use()
 	     !inst->force_uncompressed &&
 	     !inst->force_sechalf) {
 	    int reg = inst->dst.reg;
-	    if (!bd[b].use[reg])
-	       bd[b].def[reg] = true;
+            if (!BITSET_TEST(bd[b].use, reg))
+               BITSET_SET(bd[b].def, reg);
 	 }
 
 	 ip++;
@@ -107,12 +107,12 @@ fs_live_variables::compute_live_variables()
 
       for (int b = 0; b < cfg->num_blocks; b++) {
 	 /* Update livein */
-	 for (int i = 0; i < num_vars; i++) {
-	    if (bd[b].use[i] || (bd[b].liveout[i] && !bd[b].def[i])) {
-	       if (!bd[b].livein[i]) {
-		  bd[b].livein[i] = true;
-		  cont = true;
-	       }
+	 for (int i = 0; i < bitset_words; i++) {
+            BITSET_WORD new_livein = (bd[b].use[i] |
+                                      (bd[b].liveout[i] & ~bd[b].def[i]));
+	    if (new_livein & ~bd[b].livein[i]) {
+               bd[b].livein[i] |= new_livein;
+               cont = true;
 	    }
 	 }
 
@@ -121,11 +121,13 @@ fs_live_variables::compute_live_variables()
 	    bblock_link *link = (bblock_link *)block_node;
 	    bblock_t *block = link->block;
 
-	    for (int i = 0; i < num_vars; i++) {
-	       if (bd[block->block_num].livein[i] && !bd[b].liveout[i]) {
-		  bd[b].liveout[i] = true;
-		  cont = true;
-	       }
+	    for (int i = 0; i < bitset_words; i++) {
+               BITSET_WORD new_liveout = (bd[block->block_num].livein[i] &
+                                          ~bd[b].liveout[i]);
+               if (new_liveout) {
+                  bd[b].liveout[i] |= new_liveout;
+                  cont = true;
+               }
 	    }
 	 }
       }
@@ -140,11 +142,13 @@ fs_live_variables::fs_live_variables(fs_visitor *v, cfg_t *cfg)
    num_vars = v->virtual_grf_count;
    bd = rzalloc_array(mem_ctx, struct block_data, cfg->num_blocks);
 
+   bitset_words = (ALIGN(v->virtual_grf_count, BITSET_WORDBITS) /
+                   BITSET_WORDBITS);
    for (int i = 0; i < cfg->num_blocks; i++) {
-      bd[i].def = rzalloc_array(mem_ctx, bool, num_vars);
-      bd[i].use = rzalloc_array(mem_ctx, bool, num_vars);
-      bd[i].livein = rzalloc_array(mem_ctx, bool, num_vars);
-      bd[i].liveout = rzalloc_array(mem_ctx, bool, num_vars);
+      bd[i].def = rzalloc_array(mem_ctx, BITSET_WORD, bitset_words);
+      bd[i].use = rzalloc_array(mem_ctx, BITSET_WORD, bitset_words);
+      bd[i].livein = rzalloc_array(mem_ctx, BITSET_WORD, bitset_words);
+      bd[i].liveout = rzalloc_array(mem_ctx, BITSET_WORD, bitset_words);
    }
 
    setup_def_use();
@@ -190,6 +194,37 @@ fs_visitor::calculate_live_intervals()
 	    int reg = inst->src[i].reg;
 
 	    use[reg] = ip;
+
+            /* In most cases, a register can be written over safely by the
+             * same instruction that is its last use.  For a single
+             * instruction, the sources are dereferenced before writing of the
+             * destination starts (naturally).  This gets more complicated for
+             * simd16, because the instruction:
+             *
+             * mov(16)      g4<1>F      g4<8,8,1>F   g6<8,8,1>F
+             *
+             * is actually decoded in hardware as:
+             *
+             * mov(8)       g4<1>F      g4<8,8,1>F   g6<8,8,1>F
+             * mov(8)       g5<1>F      g5<8,8,1>F   g7<8,8,1>F
+             *
+             * Which is safe.  However, if we have uniform accesses
+             * happening, we get into trouble:
+             *
+             * mov(8)       g4<1>F      g4<0,1,0>F   g6<8,8,1>F
+             * mov(8)       g5<1>F      g4<0,1,0>F   g7<8,8,1>F
+             *
+             * Now our destination for the first instruction overwrote the
+             * second instruction's src0, and we get garbage for those 8
+             * pixels.  There's a similar issue for the pre-gen6
+             * pixel_x/pixel_y, which are registers of 16-bit values and thus
+             * would get stomped by the first decode as well.
+             */
+            if (dispatch_width == 16 && (inst->src[i].smear ||
+                                         (this->pixel_x.reg == reg ||
+                                          this->pixel_y.reg == reg))) {
+               use[reg]++;
+            }
 	 }
       }
 
@@ -208,12 +243,12 @@ fs_visitor::calculate_live_intervals()
 
    for (int b = 0; b < cfg.num_blocks; b++) {
       for (int i = 0; i < num_vars; i++) {
-	 if (livevars.bd[b].livein[i]) {
+	 if (BITSET_TEST(livevars.bd[b].livein, i)) {
 	    def[i] = MIN2(def[i], cfg.blocks[b]->start_ip);
 	    use[i] = MAX2(use[i], cfg.blocks[b]->start_ip);
 	 }
 
-	 if (livevars.bd[b].liveout[i]) {
+	 if (BITSET_TEST(livevars.bd[b].liveout, i)) {
 	    def[i] = MIN2(def[i], cfg.blocks[b]->end_ip);
 	    use[i] = MAX2(use[i], cfg.blocks[b]->end_ip);
 	 }
@@ -263,29 +298,6 @@ fs_visitor::virtual_grf_interferes(int a, int b)
 
    int start = MAX2(a_def, b_def);
    int end = MIN2(a_use, b_use);
-
-   /* If the register is used to store 16 values of less than float
-    * size (only the case for pixel_[xy]), then we can't allocate
-    * another dword-sized thing to that register that would be used in
-    * the same instruction.  This is because when the GPU decodes (for
-    * example):
-    *
-    * (declare (in ) vec4 gl_FragCoord@0x97766a0)
-    * add(16)         g6<1>F          g6<8,8,1>UW     0.5F { align1 compr };
-    *
-    * it's actually processed as:
-    * add(8)         g6<1>F          g6<8,8,1>UW     0.5F { align1 };
-    * add(8)         g7<1>F          g6.8<8,8,1>UW   0.5F { align1 sechalf };
-    *
-    * so our second half values in g6 got overwritten in the first
-    * half.
-    */
-   if (dispatch_width == 16 && (this->pixel_x.reg == a ||
-				this->pixel_x.reg == b ||
-				this->pixel_y.reg == a ||
-				this->pixel_y.reg == b)) {
-      return start <= end;
-   }
 
    return start < end;
 }

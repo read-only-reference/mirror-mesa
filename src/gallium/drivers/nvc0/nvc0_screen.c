@@ -32,6 +32,10 @@
 
 #include "nvc0_graph_macros.h"
 
+#ifndef NOUVEAU_GETPARAM_GRAPH_UNITS
+# define NOUVEAU_GETPARAM_GRAPH_UNITS 13
+#endif
+
 static boolean
 nvc0_screen_is_format_supported(struct pipe_screen *pscreen,
                                 enum pipe_format format,
@@ -88,12 +92,12 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
    switch (param) {
    case PIPE_CAP_MAX_COMBINED_SAMPLERS:
-      return 16 * PIPE_SHADER_TYPES; /* NOTE: should not count COMPUTE */
+      return 16 * 5;
    case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
       return 15;
    case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
-      return 12;
+      return (class_3d >= NVE4_3D_CLASS) ? 13 : 12;
    case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
       return 2048;
    case PIPE_CAP_MIN_TEXEL_OFFSET:
@@ -114,6 +118,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TWO_SIDED_STENCIL:
    case PIPE_CAP_DEPTH_CLIP_DISABLE:
    case PIPE_CAP_POINT_SPRITE:
+   case PIPE_CAP_TGSI_TEXCOORD:
       return 1;
    case PIPE_CAP_SM3:
       return 1;
@@ -176,6 +181,10 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_TEXTURE_MULTISAMPLE:
       return 0;
+   case PIPE_CAP_COMPUTE:
+      return (class_3d >= NVE4_3D_CLASS) ? 1 : 0;
+   case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
+      return 1;
    default:
       NOUVEAU_ERR("unknown PIPE_CAP %d\n", param);
       return 0;
@@ -186,6 +195,8 @@ static int
 nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
                              enum pipe_shader_cap param)
 {
+   const uint16_t class_3d = nouveau_screen(pscreen)->class_3d;
+
    switch (shader) {
    case PIPE_SHADER_VERTEX:
       /*
@@ -195,11 +206,17 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
    case PIPE_SHADER_GEOMETRY:
    case PIPE_SHADER_FRAGMENT:
       break;
+   case PIPE_SHADER_COMPUTE:
+      if (class_3d < NVE4_3D_CLASS)
+         return 0;
+      break;
    default:
       return 0;
    }
    
    switch (param) {
+   case PIPE_SHADER_CAP_PREFERRED_IR:
+      return PIPE_SHADER_IR_TGSI;
    case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
    case PIPE_SHADER_CAP_MAX_ALU_INSTRUCTIONS:
    case PIPE_SHADER_CAP_MAX_TEX_INSTRUCTIONS:
@@ -210,12 +227,22 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
    case PIPE_SHADER_CAP_MAX_INPUTS:
       if (shader == PIPE_SHADER_VERTEX)
          return 32;
+      /* NOTE: These only count our slots for GENERIC varyings.
+       * The address space may be larger, but the actual hard limit seems to be
+       * less than what the address space layout permits, so don't add TEXCOORD,
+       * COLOR, etc. here.
+       */
       if (shader == PIPE_SHADER_FRAGMENT)
-         return (0x200 + 0x20 + 0x80) / 16; /* generic + colors + TexCoords */
-      return (0x200 + 0x40 + 0x80) / 16; /* without 0x60 for per-patch inputs */
+         return 0x1f0 / 16;
+      /* Actually this counts CLIPVERTEX, which occupies the last generic slot,
+       * and excludes 0x60 per-patch inputs.
+       */
+      return 0x200 / 16;
    case PIPE_SHADER_CAP_MAX_CONSTS:
       return 65536 / 16;
    case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
+      if (shader == PIPE_SHADER_COMPUTE && class_3d >= NVE4_3D_CLASS)
+         return NVE4_MAX_PIPE_CONSTBUFS_COMPUTE;
       return NVC0_MAX_PIPE_CONSTBUFS;
    case PIPE_SHADER_CAP_MAX_ADDRS:
       return 1;
@@ -234,7 +261,7 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
    case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
       return 0;
    case PIPE_SHADER_CAP_SUBROUTINES:
-      return 1; /* but inlining everything, we need function declarations */
+      return 1;
    case PIPE_SHADER_CAP_INTEGERS:
       return 1;
    case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
@@ -270,6 +297,47 @@ nvc0_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
    }
 }
 
+static int
+nvc0_screen_get_compute_param(struct pipe_screen *pscreen,
+                              enum pipe_compute_cap param, void *data)
+{
+   uint64_t *data64 = (uint64_t *)data;
+   const uint16_t obj_class = nvc0_screen(pscreen)->compute->oclass;
+
+   switch (param) {
+   case PIPE_COMPUTE_CAP_GRID_DIMENSION:
+      data64[0] = 3;
+      return 8;
+   case PIPE_COMPUTE_CAP_MAX_GRID_SIZE:
+      data64[0] = (obj_class >= NVE4_COMPUTE_CLASS) ? 0x7fffffff : 65535;
+      data64[1] = 65535;
+      data64[2] = 65535;
+      return 24;
+   case PIPE_COMPUTE_CAP_MAX_BLOCK_SIZE:
+      data64[0] = 1024;
+      data64[1] = 1024;
+      data64[2] = 64;
+      return 24;
+   case PIPE_COMPUTE_CAP_MAX_THREADS_PER_BLOCK:
+      data64[0] = 1024;
+      return 8;
+   case PIPE_COMPUTE_CAP_MAX_GLOBAL_SIZE: /* g[] */
+      data64[0] = (uint64_t)1 << 40;
+      return 8;
+   case PIPE_COMPUTE_CAP_MAX_LOCAL_SIZE: /* s[] */
+      data64[0] = 48 << 10;
+      return 8;
+   case PIPE_COMPUTE_CAP_MAX_PRIVATE_SIZE: /* l[] */
+      data64[0] = 512 << 10;
+      return 8;
+   case PIPE_COMPUTE_CAP_MAX_INPUT_SIZE: /* c[], arbitrary limit */
+      data64[0] = 4096;
+      return 8;
+   default:
+      return 0;
+   }
+}
+
 static void
 nvc0_screen_destroy(struct pipe_screen *pscreen)
 {
@@ -284,6 +352,10 @@ nvc0_screen_destroy(struct pipe_screen *pscreen)
 
    if (screen->blitter)
       nvc0_blitter_destroy(screen);
+   if (screen->pm.prog) {
+      screen->pm.prog->code = NULL; /* hardcoded, don't FREE */
+      nvc0_program_destroy(NULL, screen->pm.prog);
+   }
 
    nouveau_bo_ref(NULL, &screen->text);
    nouveau_bo_ref(NULL, &screen->uniform_bo);
@@ -291,6 +363,7 @@ nvc0_screen_destroy(struct pipe_screen *pscreen)
    nouveau_bo_ref(NULL, &screen->txc);
    nouveau_bo_ref(NULL, &screen->fence.bo);
    nouveau_bo_ref(NULL, &screen->poly_cache);
+   nouveau_bo_ref(NULL, &screen->parm);
 
    nouveau_heap_destroy(&screen->lib_code);
    nouveau_heap_destroy(&screen->text_heap);
@@ -412,6 +485,52 @@ nvc0_screen_fence_update(struct pipe_screen *pscreen)
    return screen->fence.map[0];
 }
 
+static int
+nvc0_screen_init_compute(struct nvc0_screen *screen)
+{
+   screen->base.base.get_compute_param = nvc0_screen_get_compute_param;
+
+   switch (screen->base.device->chipset & 0xf0) {
+   case 0xc0:
+   case 0xd0:
+      return 0;
+   case 0xe0:
+   case 0xf0:
+      return nve4_screen_compute_setup(screen, screen->base.pushbuf);
+   default:
+      return -1;
+   }
+}
+
+boolean
+nvc0_screen_resize_tls_area(struct nvc0_screen *screen,
+                            uint32_t lpos, uint32_t lneg, uint32_t cstack)
+{
+   struct nouveau_bo *bo = NULL;
+   int ret;
+   uint64_t size = (lpos + lneg) * 32 + cstack;
+
+   if (size >= (1 << 20)) {
+      NOUVEAU_ERR("requested TLS size too large: 0x%"PRIx64"\n", size);
+      return FALSE;
+   }
+
+   size *= (screen->base.device->chipset >= 0xe0) ? 64 : 48; /* max warps */
+   size *= screen->mp_count;
+
+   size = align(size, 1 << 17);
+
+   ret = nouveau_bo_new(screen->base.device, NOUVEAU_BO_VRAM, 1 << 17, size,
+                        NULL, &bo);
+   if (ret) {
+      NOUVEAU_ERR("failed to allocate TLS area, size: 0x%"PRIx64"\n", size);
+      return FALSE;
+   }
+   nouveau_bo_ref(NULL, &screen->tls);
+   screen->tls = bo;
+   return TRUE;
+}
+
 #define FAIL_SCREEN_INIT(str, err)                    \
    do {                                               \
       NOUVEAU_ERR(str, err);                          \
@@ -426,6 +545,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    struct pipe_screen *pscreen;
    struct nouveau_object *chan;
    struct nouveau_pushbuf *push;
+   uint64_t value;
    uint32_t obj_class;
    int ret;
    unsigned i;
@@ -465,6 +585,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    pscreen->get_param = nvc0_screen_get_param;
    pscreen->get_shader_param = nvc0_screen_get_shader_param;
    pscreen->get_paramf = nvc0_screen_get_paramf;
+   pscreen->get_driver_query_info = nvc0_screen_get_driver_query_info;
 
    nvc0_screen_init_resource_functions(pscreen);
 
@@ -561,6 +682,11 @@ nvc0_screen_create(struct nouveau_device *dev)
       PUSH_DATA (push, 0x17);
    }
 
+   IMMED_NVC0(push, NVC0_3D(ZETA_COMP_ENABLE), dev->drm_version >= 0x01000101);
+   BEGIN_NVC0(push, NVC0_3D(RT_COMP_ENABLE(0)), 8);
+   for (i = 0; i < 8; ++i)
+           PUSH_DATA(push, dev->drm_version >= 0x01000101);
+
    BEGIN_NVC0(push, NVC0_3D(RT_CONTROL), 1);
    PUSH_DATA (push, 1);
 
@@ -651,18 +777,22 @@ nvc0_screen_create(struct nouveau_device *dev)
    PUSH_DATAh(push, screen->uniform_bo->offset + (5 << 16) + (6 << 9));
    PUSH_DATA (push, screen->uniform_bo->offset + (5 << 16) + (6 << 9));
 
-   /* max MPs * max warps per MP (TODO: ask kernel) */
-   if (screen->eng3d->oclass >= NVE4_3D_CLASS)
-      screen->tls_size = 8 * 64;
-   else
-      screen->tls_size = 16 * 48;
-   screen->tls_size *= NVC0_CAP_MAX_PROGRAM_TEMPS * 16;
-   screen->tls_size = align(screen->tls_size, 1 << 17);
+   if (dev->drm_version >= 0x01000101) {
+      ret = nouveau_getparam(dev, NOUVEAU_GETPARAM_GRAPH_UNITS, &value);
+      if (ret) {
+         NOUVEAU_ERR("NOUVEAU_GETPARAM_GRAPH_UNITS failed.\n");
+         goto fail;
+      }
+   } else {
+      if (dev->chipset >= 0xe0 && dev->chipset < 0xf0)
+         value = (8 << 8) | 4;
+      else
+         value = (16 << 8) | 4;
+   }
+   screen->mp_count = value >> 8;
+   screen->mp_count_compute = screen->mp_count;
 
-   ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 1 << 17,
-                        screen->tls_size, NULL, &screen->tls);
-   if (ret)
-      goto fail;
+   nvc0_screen_resize_tls_area(screen, 128 * 16, 0, 0x200);
 
    BEGIN_NVC0(push, NVC0_3D(CODE_ADDRESS_HIGH), 2);
    PUSH_DATAh(push, screen->text->offset);
@@ -670,8 +800,8 @@ nvc0_screen_create(struct nouveau_device *dev)
    BEGIN_NVC0(push, NVC0_3D(TEMP_ADDRESS_HIGH), 4);
    PUSH_DATAh(push, screen->tls->offset);
    PUSH_DATA (push, screen->tls->offset);
-   PUSH_DATA (push, screen->tls_size >> 32);
-   PUSH_DATA (push, screen->tls_size);
+   PUSH_DATA (push, screen->tls->size >> 32);
+   PUSH_DATA (push, screen->tls->size);
    BEGIN_NVC0(push, NVC0_3D(WARP_TEMP_ALLOC), 1);
    PUSH_DATA (push, 0);
    BEGIN_NVC0(push, NVC0_3D(LOCAL_BASE), 1);
@@ -774,6 +904,9 @@ nvc0_screen_create(struct nouveau_device *dev)
    PUSH_DATA (push, NVC0_3D_POINT_RASTER_RULES_OGL);
 
    IMMED_NVC0(push, NVC0_3D(EDGEFLAG), 1);
+
+   if (nvc0_screen_init_compute(screen))
+      goto fail;
 
    PUSH_KICK (push);
 

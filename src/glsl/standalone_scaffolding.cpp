@@ -60,7 +60,7 @@ _mesa_reference_shader(struct gl_context *ctx, struct gl_shader **ptr,
 }
 
 void
-_mesa_shader_debug(struct gl_context *, GLenum, GLuint,
+_mesa_shader_debug(struct gl_context *, GLenum, GLuint *id,
                    const char *, int)
 {
 }
@@ -102,6 +102,8 @@ void initialize_context_to_defaults(struct gl_context *ctx, gl_api api)
    ctx->Extensions.ARB_shading_language_packing = true;
    ctx->Extensions.OES_standard_derivatives = true;
    ctx->Extensions.ARB_texture_cube_map_array = true;
+   ctx->Extensions.ARB_texture_multisample = true;
+   ctx->Extensions.ARB_texture_query_lod = true;
 
    ctx->Const.GLSLVersion = 120;
 

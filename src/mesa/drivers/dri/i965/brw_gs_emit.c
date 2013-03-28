@@ -431,9 +431,9 @@ gen6_sol_program(struct brw_gs_compile *c, struct brw_gs_prog_key *key,
 
          for (binding = 0; binding < key->num_transform_feedback_bindings;
               ++binding) {
-            unsigned char vert_result =
+            unsigned char varying =
                key->transform_feedback_bindings[binding];
-            unsigned char slot = c->vue_map.vert_result_to_slot[vert_result];
+            unsigned char slot = c->vue_map.varying_to_slot[varying];
             /* From the Sandybridge PRM, Volume 2, Part 1, Section 4.5.1:
              *
              *   "Prior to End of Thread with a URB_WRITE, the kernel must
@@ -446,8 +446,8 @@ gen6_sol_program(struct brw_gs_compile *c, struct brw_gs_prog_key *key,
             struct brw_reg vertex_slot = c->reg.vertex[vertex];
             vertex_slot.nr += slot / 2;
             vertex_slot.subnr = (slot % 2) * 16;
-            /* gl_PointSize is stored in VERT_RESULT_PSIZ.w. */
-            vertex_slot.dw1.bits.swizzle = vert_result == VERT_RESULT_PSIZ
+            /* gl_PointSize is stored in VARYING_SLOT_PSIZ.w. */
+            vertex_slot.dw1.bits.swizzle = varying == VARYING_SLOT_PSIZ
                ? BRW_SWIZZLE_WWWW : key->transform_feedback_swizzles[binding];
             brw_set_access_mode(p, BRW_ALIGN_16);
             brw_MOV(p, stride(c->reg.header, 4, 4, 1),

@@ -80,6 +80,7 @@ PUBLIC const char __driConfigOptions[] =
      DRI_CONF_NO_RAST(false)
      DRI_CONF_ALWAYS_FLUSH_BATCH(false)
      DRI_CONF_ALWAYS_FLUSH_CACHE(false)
+     DRI_CONF_DISABLE_THROTTLING(false)
      DRI_CONF_FORCE_GLSL_EXTENSIONS_WARN(false)
      DRI_CONF_DISABLE_GLSL_LINE_CONTINUATIONS(false)
      DRI_CONF_DISABLE_BLEND_FUNC_EXTENDED(false)
@@ -94,7 +95,7 @@ PUBLIC const char __driConfigOptions[] =
    DRI_CONF_SECTION_END
 DRI_CONF_END;
 
-const GLuint __driNConfigOptions = 16;
+const GLuint __driNConfigOptions = 17;
 
 #include "intel_batchbuffer.h"
 #include "intel_buffers.h"
@@ -546,6 +547,10 @@ intel_query_image(__DRIimage *image, int attrib, int *value)
          return false;
       *value = image->planar_format->components;
       return true;
+   case __DRI_IMAGE_ATTRIB_FD:
+      if (drm_intel_bo_gem_export_to_prime(image->region->bo, value) == 0)
+         return true;
+      return false;
   default:
       return false;
    }
@@ -623,8 +628,8 @@ intel_create_image_from_names(__DRIscreen *screen,
                                          names[0], strides[0],
                                          loaderPrivate);
 
-    if (image == NULL)
-        return NULL;
+   if (image == NULL)
+      return NULL;
 
     image->planar_format = f;
     for (i = 0; i < f->nplanes; i++) {
@@ -635,6 +640,52 @@ intel_create_image_from_names(__DRIscreen *screen,
 
     return image;
 }
+
+static __DRIimage *
+intel_create_image_from_fds(__DRIscreen *screen,
+                            int width, int height, int fourcc,
+                            int *fds, int num_fds, int *strides, int *offsets,
+                            void *loaderPrivate)
+{
+   struct intel_screen *intelScreen = screen->driverPrivate;
+   struct intel_image_format *f = NULL;
+   __DRIimage *image;
+   int i, index;
+
+   if (fds == NULL || num_fds != 1)
+      return NULL;
+
+   for (i = 0; i < ARRAY_SIZE(intel_image_formats); i++) {
+      if (intel_image_formats[i].fourcc == fourcc) {
+         f = &intel_image_formats[i];
+      }
+   }
+
+   if (f == NULL)
+      return NULL;
+
+   image = intel_allocate_image(__DRI_IMAGE_FORMAT_NONE, loaderPrivate);
+   if (image == NULL)
+      return NULL;
+
+   image->region = intel_region_alloc_for_fd(intelScreen,
+                                             1, width, height,
+                                             strides[0], fds[0], "image");
+   if (image->region == NULL) {
+      free(image);
+      return NULL;
+   }
+
+   image->planar_format = f;
+   for (i = 0; i < f->nplanes; i++) {
+      index = f->planes[i].buffer_index;
+      image->offsets[index] = offsets[index];
+      image->strides[index] = strides[index];
+   }
+
+   return image;
+}
+
 
 static __DRIimage *
 intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
@@ -680,7 +731,6 @@ intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
     image->region->bo = parent->region->bo;
     drm_intel_bo_reference(image->region->bo);
     image->region->tiling = parent->region->tiling;
-    image->region->screen = parent->region->screen;
     image->offset = offset;
     intel_setup_image_from_dimensions(image);
 
@@ -693,7 +743,7 @@ intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
 }
 
 static struct __DRIimageExtensionRec intelImageExtension = {
-    .base = { __DRI_IMAGE, 6 },
+    .base = { __DRI_IMAGE, 7 },
 
     .createImageFromName                = intel_create_image_from_name,
     .createImageFromRenderbuffer        = intel_create_image_from_renderbuffer,
@@ -704,7 +754,8 @@ static struct __DRIimageExtensionRec intelImageExtension = {
     .validateUsage                      = intel_validate_usage,
     .createImageFromNames               = intel_create_image_from_names,
     .fromPlanar                         = intel_from_planar,
-    .createImageFromTexture             = intel_create_image_from_texture
+    .createImageFromTexture             = intel_create_image_from_texture,
+    .createImageFromFds                 = intel_create_image_from_fds
 };
 
 static const __DRIextension *intelScreenExtensions[] = {
@@ -743,23 +794,12 @@ intel_get_boolean(__DRIscreen *psp, int param)
 }
 
 static void
-nop_callback(GLuint key, void *data, void *userData)
-{
-}
-
-static void
 intelDestroyScreen(__DRIscreen * sPriv)
 {
    struct intel_screen *intelScreen = sPriv->driverPrivate;
 
    dri_bufmgr_destroy(intelScreen->bufmgr);
    driDestroyOptionInfo(&intelScreen->optionCache);
-
-   /* Some regions may still have references to them at this point, so
-    * flush the hash table to prevent _mesa_DeleteHashTable() from
-    * complaining about the hash not being empty; */
-   _mesa_HashDeleteAll(intelScreen->named_regions, nop_callback, NULL);
-   _mesa_DeleteHashTable(intelScreen->named_regions);
 
    free(intelScreen);
    sPriv->driverPrivate = NULL;
@@ -795,8 +835,15 @@ intelCreateBuffer(__DRIscreen * driScrnPriv,
       rgbFormat = MESA_FORMAT_SARGB8;
    else if (mesaVis->alphaBits == 0)
       rgbFormat = MESA_FORMAT_XRGB8888;
-   else
-      rgbFormat = MESA_FORMAT_ARGB8888;
+   else {
+      if (screen->gen >= 4) {
+         rgbFormat = MESA_FORMAT_SARGB8;
+         fb->Visual.sRGBCapable = true;
+      } else {
+         rgbFormat = MESA_FORMAT_ARGB8888;
+      }
+
+   }
 
    /* setup the hardware-based renderbuffers */
    rb = intel_create_renderbuffer(rgbFormat, num_samples);
@@ -960,8 +1007,6 @@ intel_init_bufmgr(struct intel_screen *intelScreen)
    }
 
    drm_intel_bufmgr_gem_enable_fenced_relocs(intelScreen->bufmgr);
-
-   intelScreen->named_regions = _mesa_NewHashTable();
 
    intelScreen->relaxed_relocations = 0;
    intelScreen->relaxed_relocations |=
@@ -1156,6 +1201,8 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
 static void
 set_max_gl_versions(struct intel_screen *screen)
 {
+   int gl_version_override = _mesa_get_gl_version_override();
+
    switch (screen->gen) {
    case 7:
       if (screen->kernel_has_gen7_sol_reset) {
@@ -1213,6 +1260,14 @@ set_max_gl_versions(struct intel_screen *screen)
    default:
       assert(!"unrecognized intel_screen::gen");
       break;
+   }
+
+   if (gl_version_override >= 31) {
+      screen->max_gl_core_version = MAX2(screen->max_gl_core_version,
+                                         gl_version_override);
+   } else {
+      screen->max_gl_compat_version = MAX2(screen->max_gl_compat_version,
+                                           gl_version_override);
    }
 
 #ifndef FEATURE_ES1
@@ -1297,6 +1352,8 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
    set_max_gl_versions(intelScreen);
 
    psp->api_mask = (1 << __DRI_API_OPENGL);
+   if (intelScreen->max_gl_core_version > 0)
+      psp->api_mask |= (1 << __DRI_API_OPENGL_CORE);
    if (intelScreen->max_gl_es1_version > 0)
       psp->api_mask |= (1 << __DRI_API_GLES);
    if (intelScreen->max_gl_es2_version > 0)

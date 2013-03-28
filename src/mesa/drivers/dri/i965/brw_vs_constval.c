@@ -40,7 +40,7 @@
 struct tracker {
    bool twoside;
    GLubyte active[PROGRAM_OUTPUT+1][MAX_PROGRAM_TEMPS];
-   GLbitfield size_masks[4];  /**< one bit per fragment program input attrib */
+   GLbitfield64 size_masks[4];  /**< one bit per fragment program input attrib */
 };
 
 
@@ -111,13 +111,13 @@ static GLubyte get_active( struct tracker *t,
 }
 
 /**
- * Return the size (1,2,3 or 4) of the output/result for VERT_RESULT_idx.
+ * Return the size (1,2,3 or 4) of the output/result for VARYING_SLOT_idx.
  */
 static GLubyte get_output_size( struct tracker *t,
 				GLuint idx )
 {
    GLubyte active;
-   assert(idx < VERT_RESULT_MAX);
+   assert(idx < VARYING_SLOT_MAX);
    active = t->active[PROGRAM_OUTPUT][idx];
    if (active & (1<<3)) return 4;
    if (active & (1<<2)) return 3;
@@ -133,28 +133,25 @@ static void calc_sizes( struct tracker *t )
    GLint vertRes;
 
    if (t->twoside) {
-      t->active[PROGRAM_OUTPUT][VERT_RESULT_COL0] |= 
-	 t->active[PROGRAM_OUTPUT][VERT_RESULT_BFC0];
+      t->active[PROGRAM_OUTPUT][VARYING_SLOT_COL0] |= 
+	 t->active[PROGRAM_OUTPUT][VARYING_SLOT_BFC0];
 
-      t->active[PROGRAM_OUTPUT][VERT_RESULT_COL1] |= 
-	 t->active[PROGRAM_OUTPUT][VERT_RESULT_BFC1];
+      t->active[PROGRAM_OUTPUT][VARYING_SLOT_COL1] |= 
+	 t->active[PROGRAM_OUTPUT][VARYING_SLOT_BFC1];
    }
 
    /* Examine vertex program output sizes to set the size_masks[] info
     * which describes the fragment program input sizes.
     */
-   for (vertRes = 0; vertRes < VERT_RESULT_MAX; vertRes++) {
-
-      /* map vertex program output index to fragment program input index */
-      GLint fragAttrib = _mesa_vert_result_to_frag_attrib(vertRes);
-      if (fragAttrib < 0)
+   for (vertRes = 0; vertRes < VARYING_SLOT_MAX; vertRes++) {
+      if (!_mesa_varying_slot_in_fs(vertRes))
          continue;
 
       switch (get_output_size(t, vertRes)) {
-      case 4: t->size_masks[4-1] |= 1 << fragAttrib;
-      case 3: t->size_masks[3-1] |= 1 << fragAttrib;
-      case 2: t->size_masks[2-1] |= 1 << fragAttrib;
-      case 1: t->size_masks[1-1] |= 1 << fragAttrib;
+      case 4: t->size_masks[4-1] |= BITFIELD64_BIT(vertRes);
+      case 3: t->size_masks[3-1] |= BITFIELD64_BIT(vertRes);
+      case 2: t->size_masks[2-1] |= BITFIELD64_BIT(vertRes);
+      case 1: t->size_masks[1-1] |= BITFIELD64_BIT(vertRes);
 	 break;
       }
    }
@@ -200,10 +197,10 @@ static void calc_wm_input_sizes( struct brw_context *brw )
     * that correct code is generated.
     */
    if (vp->program.Base.NumInstructions == 0) {
-      brw->wm.input_size_masks[0] = ~0;
-      brw->wm.input_size_masks[1] = ~0;
-      brw->wm.input_size_masks[2] = ~0;
-      brw->wm.input_size_masks[3] = ~0;
+      brw->wm.input_size_masks[0] = ~(GLbitfield64) 0;
+      brw->wm.input_size_masks[1] = ~(GLbitfield64) 0;
+      brw->wm.input_size_masks[2] = ~(GLbitfield64) 0;
+      brw->wm.input_size_masks[3] = ~(GLbitfield64) 0;
       return;
    }
 
@@ -247,10 +244,10 @@ static void calc_wm_input_sizes( struct brw_context *brw )
    if (ctx->Point.PointSprite) {
       for (int i = 0; i < 8; i++) {
          if (ctx->Point.CoordReplace[i]) {
-            t.size_masks[4-1] |= FRAG_BIT_TEX(i);
-            t.size_masks[3-1] |= FRAG_BIT_TEX(i);
-            t.size_masks[2-1] |= FRAG_BIT_TEX(i);
-            t.size_masks[1-1] |= FRAG_BIT_TEX(i);
+            t.size_masks[4-1] |= VARYING_BIT_TEX(i);
+            t.size_masks[3-1] |= VARYING_BIT_TEX(i);
+            t.size_masks[2-1] |= VARYING_BIT_TEX(i);
+            t.size_masks[1-1] |= VARYING_BIT_TEX(i);
          }
       }
    }

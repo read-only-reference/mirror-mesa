@@ -91,16 +91,16 @@ pp_jimenezmlaa_run(struct pp_queue_t *ppq, struct pipe_resource *in,
    /* Init the pixel size constant */
    if (dimensions[0] != p->framebuffer.width ||
        dimensions[1] != p->framebuffer.height) {
-      constants[0] = 1.0 / p->framebuffer.width;
-      constants[1] = 1.0 / p->framebuffer.height;
+      constants[0] = 1.0f / p->framebuffer.width;
+      constants[1] = 1.0f / p->framebuffer.height;
 
       up_consts(p->pipe);
       dimensions[0] = p->framebuffer.width;
       dimensions[1] = p->framebuffer.height;
    }
 
-   pipe_set_constant_buffer(p->pipe, PIPE_SHADER_VERTEX, 0, constbuf);
-   pipe_set_constant_buffer(p->pipe, PIPE_SHADER_FRAGMENT, 0, constbuf);
+   cso_set_constant_buffer_resource(p->cso, PIPE_SHADER_VERTEX, 0, constbuf);
+   cso_set_constant_buffer_resource(p->cso, PIPE_SHADER_FRAGMENT, 0, constbuf);
 
    mstencil.stencil[0].enabled = 1;
    mstencil.stencil[0].valuemask = mstencil.stencil[0].writemask = ~0;

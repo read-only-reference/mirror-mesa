@@ -59,10 +59,12 @@
  ***************************************/
 
 static size_t
-brw_query_samples_for_format(struct gl_context *ctx, GLenum internalFormat,
-                             int samples[16])
+brw_query_samples_for_format(struct gl_context *ctx, GLenum target,
+                             GLenum internalFormat, int samples[16])
 {
    struct intel_context *intel = intel_context(ctx);
+
+   (void) target;
 
    switch (intel->gen) {
    case 7:
@@ -95,6 +97,9 @@ static void brwInitDriverFunctions(struct intel_screen *screen,
       functions->EndTransformFeedback = gen7_end_transform_feedback;
    else
       functions->EndTransformFeedback = brw_end_transform_feedback;
+
+   if (screen->gen >= 6)
+      functions->GetSamplePosition = gen6_get_sample_position;
 }
 
 bool
@@ -135,7 +140,6 @@ brwCreateContext(int api,
                           mesaVis, driContextPriv,
 			  sharedContextPrivate, &functions,
 			  error)) {
-      printf("%s: failed to init intel context\n", __FUNCTION__);
       ralloc_free(brw);
       return false;
    }
@@ -195,10 +199,18 @@ brwCreateContext(int api,
    ctx->Const.MaxTransformFeedbackSeparateComponents =
       BRW_MAX_SOL_BINDINGS / BRW_MAX_SOL_BUFFERS;
 
-   if (intel->gen == 6)
+   if (intel->gen == 6) {
       ctx->Const.MaxSamples = 4;
-   else if (intel->gen >= 7)
+      ctx->Const.MaxColorTextureSamples = 4;
+      ctx->Const.MaxDepthTextureSamples = 4;
+      ctx->Const.MaxIntegerSamples = 4;
+   }
+   else if (intel->gen >= 7) {
       ctx->Const.MaxSamples = 8;
+      ctx->Const.MaxColorTextureSamples = 8;
+      ctx->Const.MaxDepthTextureSamples = 8;
+      ctx->Const.MaxIntegerSamples = 8;
+   }
 
    /* if conformance mode is set, swrast can handle any size AA point */
    ctx->Const.MaxPointSizeAA = 255.0;
@@ -386,8 +398,12 @@ brwCreateContext(int api,
    if ((flags & __DRI_CTX_FLAG_FORWARD_COMPATIBLE) != 0)
       ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT;
 
-   if ((flags & __DRI_CTX_FLAG_DEBUG) != 0)
+   if ((flags & __DRI_CTX_FLAG_DEBUG) != 0) {
       ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_DEBUG_BIT;
+
+      /* Turn on some extra GL_ARB_debug_output generation. */
+      intel->perf_debug = true;
+   }
 
    brw_fs_alloc_reg_sets(brw);
 

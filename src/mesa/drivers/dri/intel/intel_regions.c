@@ -104,66 +104,6 @@ debug_backtrace(void)
 
 #endif
 
-
-
-/* XXX: Thread safety?
- */
-void *
-intel_region_map(struct intel_context *intel, struct intel_region *region,
-                 GLbitfield mode)
-{
-   /* We have the region->map_refcount controlling mapping of the BO because
-    * in software fallbacks we may end up mapping the same buffer multiple
-    * times on Mesa's behalf, so we refcount our mappings to make sure that
-    * the pointer stays valid until the end of the unmap chain.  However, we
-    * must not emit any batchbuffers between the start of mapping and the end
-    * of unmapping, or further use of the map will be incoherent with the GPU
-    * rendering done by that batchbuffer. Hence we assert in
-    * intel_batchbuffer_flush() that that doesn't happen, which means that the
-    * flush is only needed on first map of the buffer.
-    */
-
-   if (unlikely(INTEL_DEBUG & DEBUG_PERF)) {
-      if (drm_intel_bo_busy(region->bo)) {
-         perf_debug("Mapping a busy BO, causing a stall on the GPU.\n");
-      }
-   }
-
-   _DBG("%s %p\n", __FUNCTION__, region);
-   if (!region->map_refcount) {
-      intel_flush(&intel->ctx);
-
-      if (region->tiling != I915_TILING_NONE)
-	 drm_intel_gem_bo_map_gtt(region->bo);
-      else
-	 drm_intel_bo_map(region->bo, true);
-
-      region->map = region->bo->virtual;
-   }
-   if (region->map) {
-      intel->num_mapped_regions++;
-      region->map_refcount++;
-   }
-
-   return region->map;
-}
-
-void
-intel_region_unmap(struct intel_context *intel, struct intel_region *region)
-{
-   _DBG("%s %p\n", __FUNCTION__, region);
-   if (!--region->map_refcount) {
-      if (region->tiling != I915_TILING_NONE)
-	 drm_intel_gem_bo_unmap_gtt(region->bo);
-      else
-	 drm_intel_bo_unmap(region->bo);
-
-      region->map = NULL;
-      --intel->num_mapped_regions;
-      assert(intel->num_mapped_regions >= 0);
-   }
-}
-
 static struct intel_region *
 intel_region_alloc_internal(struct intel_screen *screen,
 			    GLuint cpp,
@@ -183,7 +123,6 @@ intel_region_alloc_internal(struct intel_screen *screen,
    region->refcount = 1;
    region->bo = buffer;
    region->tiling = tiling;
-   region->screen = screen;
 
    _DBG("%s <-- %p\n", __FUNCTION__, region);
    return region;
@@ -225,9 +164,6 @@ intel_region_flink(struct intel_region *region, uint32_t *name)
    if (region->name == 0) {
       if (drm_intel_bo_flink(region->bo, &region->name))
 	 return false;
-      
-      _mesa_HashInsert(region->screen->named_regions,
-		       region->name, region);
    }
 
    *name = region->name;
@@ -241,24 +177,10 @@ intel_region_alloc_for_handle(struct intel_screen *screen,
 			      GLuint width, GLuint height, GLuint pitch,
 			      GLuint handle, const char *name)
 {
-   struct intel_region *region, *dummy;
+   struct intel_region *region;
    drm_intel_bo *buffer;
    int ret;
    uint32_t bit_6_swizzle, tiling;
-
-   region = _mesa_HashLookup(screen->named_regions, handle);
-   if (region != NULL) {
-      dummy = NULL;
-      if (region->width != width || region->height != height ||
-	  region->cpp != cpp || region->pitch != pitch) {
-	 fprintf(stderr,
-		 "Region for name %d already exists but is not compatible\n",
-		 handle);
-	 return NULL;
-      }
-      intel_region_reference(&dummy, region);
-      return dummy;
-   }
 
    buffer = intel_bo_gem_create_from_name(screen->bufmgr, name, handle);
    if (buffer == NULL)
@@ -279,7 +201,39 @@ intel_region_alloc_for_handle(struct intel_screen *screen,
    }
 
    region->name = handle;
-   _mesa_HashInsert(screen->named_regions, handle, region);
+
+   return region;
+}
+
+struct intel_region *
+intel_region_alloc_for_fd(struct intel_screen *screen,
+                          GLuint cpp,
+                          GLuint width, GLuint height, GLuint pitch,
+                          int fd, const char *name)
+{
+   struct intel_region *region;
+   drm_intel_bo *buffer;
+   int ret;
+   uint32_t bit_6_swizzle, tiling;
+
+   buffer = drm_intel_bo_gem_create_from_prime(screen->bufmgr,
+                                               fd, height * pitch);
+   if (buffer == NULL)
+      return NULL;
+   ret = drm_intel_bo_get_tiling(buffer, &tiling, &bit_6_swizzle);
+   if (ret != 0) {
+      fprintf(stderr, "Couldn't get tiling of buffer (%s): %s\n",
+	      name, strerror(-ret));
+      drm_intel_bo_unreference(buffer);
+      return NULL;
+   }
+
+   region = intel_region_alloc_internal(screen, cpp,
+					width, height, pitch, tiling, buffer);
+   if (region == NULL) {
+      drm_intel_bo_unreference(buffer);
+      return NULL;
+   }
 
    return region;
 }
@@ -316,83 +270,11 @@ intel_region_release(struct intel_region **region_handle)
    region->refcount--;
 
    if (region->refcount == 0) {
-      assert(region->map_refcount == 0);
-
       drm_intel_bo_unreference(region->bo);
-
-      if (region->name > 0)
-	 _mesa_HashRemove(region->screen->named_regions, region->name);
 
       free(region);
    }
    *region_handle = NULL;
-}
-
-/*
- * XXX Move this into core Mesa?
- */
-void
-_mesa_copy_rect(GLubyte * dst,
-                GLuint cpp,
-                GLuint dst_pitch,
-                GLuint dst_x,
-                GLuint dst_y,
-                GLuint width,
-                GLuint height,
-                const GLubyte * src,
-                GLuint src_pitch, GLuint src_x, GLuint src_y)
-{
-   GLuint i;
-
-   dst += dst_x * cpp;
-   src += src_x * cpp;
-   dst += dst_y * dst_pitch;
-   src += src_y * src_pitch;
-   width *= cpp;
-
-   if (width == dst_pitch && width == src_pitch)
-      memcpy(dst, src, height * width);
-   else {
-      for (i = 0; i < height; i++) {
-         memcpy(dst, src, width);
-         dst += dst_pitch;
-         src += src_pitch;
-      }
-   }
-}
-
-/* Copy rectangular sub-regions. Need better logic about when to
- * push buffers into AGP - will currently do so whenever possible.
- */
-bool
-intel_region_copy(struct intel_context *intel,
-                  struct intel_region *dst,
-                  GLuint dst_offset,
-                  GLuint dstx, GLuint dsty,
-                  struct intel_region *src,
-                  GLuint src_offset,
-                  GLuint srcx, GLuint srcy, GLuint width, GLuint height,
-		  bool flip,
-		  GLenum logicop)
-{
-   uint32_t src_pitch = src->pitch;
-
-   _DBG("%s\n", __FUNCTION__);
-
-   if (intel == NULL)
-      return false;
-
-   assert(src->cpp == dst->cpp);
-
-   if (flip)
-      src_pitch = -src_pitch;
-
-   return intelEmitCopyBlit(intel,
-			    dst->cpp,
-			    src_pitch, src->bo, src_offset, src->tiling,
-			    dst->pitch, dst->bo, dst_offset, dst->tiling,
-			    srcx, srcy, dstx, dsty, width, height,
-			    logicop);
 }
 
 /**

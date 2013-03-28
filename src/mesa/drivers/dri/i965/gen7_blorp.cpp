@@ -579,6 +579,7 @@ gen7_blorp_emit_depth_stencil_config(struct brw_context *brw,
                                      const brw_blorp_params *params)
 {
    struct intel_context *intel = &brw->intel;
+   struct gl_context *ctx = &intel->ctx;
    uint32_t draw_x = params->depth.x_offset;
    uint32_t draw_y = params->depth.y_offset;
    uint32_t tile_mask_x, tile_mask_y;
@@ -612,6 +613,9 @@ gen7_blorp_emit_depth_stencil_config(struct brw_context *brw,
        * tile_x and tile_y to 0.  This is a temporary workaround until we come
        * up with a better solution.
        */
+      WARN_ONCE((tile_x & 7) || (tile_y & 7),
+                "Depth/stencil buffer needs alignment to 8-pixel boundaries.\n"
+                "Truncating offset, bad rendering may occur.\n");
       tile_x &= ~7;
       tile_y &= ~7;
 
@@ -745,7 +749,7 @@ gen7_blorp_exec(struct intel_context *intel,
    gen6_blorp_emit_batch_head(brw, params);
    gen7_allocate_push_constants(brw);
    gen6_emit_3dstate_multisample(brw, params->num_samples);
-   gen6_emit_3dstate_sample_mask(brw, params->num_samples, 1.0, false);
+   gen6_emit_3dstate_sample_mask(brw, params->num_samples, 1.0, false, ~0u);
    gen6_blorp_emit_state_base_address(brw, params);
    gen6_blorp_emit_vertices(brw, params);
    gen7_blorp_emit_urb_config(brw, params);

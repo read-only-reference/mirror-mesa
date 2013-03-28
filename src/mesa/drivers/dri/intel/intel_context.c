@@ -440,7 +440,8 @@ intel_prepare_render(struct intel_context *intel)
     * so we just us the first batch we emitted after the last swap.
     */
    if (intel->need_throttle && intel->first_post_swapbuffers_batch) {
-      drm_intel_bo_wait_rendering(intel->first_post_swapbuffers_batch);
+      if (!intel->disable_throttling)
+         drm_intel_bo_wait_rendering(intel->first_post_swapbuffers_batch);
       drm_intel_bo_unreference(intel->first_post_swapbuffers_batch);
       intel->first_post_swapbuffers_batch = NULL;
       intel->need_throttle = false;
@@ -470,7 +471,6 @@ static const struct dri_debug_control debug_control[] = {
    { "mip",   DEBUG_MIPTREE},
    { "fall",  DEBUG_PERF},
    { "perf",  DEBUG_PERF},
-   { "verb",  DEBUG_VERBOSE},
    { "bat",   DEBUG_BATCH},
    { "pix",   DEBUG_PIXEL},
    { "buf",   DEBUG_BUFMGR},
@@ -483,10 +483,7 @@ static const struct dri_debug_control debug_control[] = {
    { "vert",  DEBUG_VERTS },
    { "dri",   DEBUG_DRI },
    { "sf",    DEBUG_SF },
-   { "san",   DEBUG_SANITY },
-   { "sleep", DEBUG_SLEEP },
    { "stats", DEBUG_STATS },
-   { "tile",  DEBUG_TILE },
    { "wm",    DEBUG_WM },
    { "urb",   DEBUG_URB },
    { "vs",    DEBUG_VS },
@@ -494,6 +491,7 @@ static const struct dri_debug_control debug_control[] = {
    { "aub",   DEBUG_AUB },
    { "shader_time", DEBUG_SHADER_TIME },
    { "no16",  DEBUG_NO16 },
+   { "blorp", DEBUG_BLORP },
    { NULL,    0 }
 };
 
@@ -803,6 +801,8 @@ intelInitContext(struct intel_context *intel,
               "shader_time debugging requires gen7 (Ivybridge) or better.\n");
       INTEL_DEBUG &= ~DEBUG_SHADER_TIME;
    }
+   if (INTEL_DEBUG & DEBUG_PERF)
+      intel->perf_debug = true;
 
    if (INTEL_DEBUG & DEBUG_AUB)
       drm_intel_bufmgr_gem_set_aub_dump(intel->bufmgr, true);
@@ -840,6 +840,11 @@ intelInitContext(struct intel_context *intel,
    if (driQueryOptionb(&intel->optionCache, "always_flush_cache")) {
       fprintf(stderr, "flushing GPU caches before/after each draw call\n");
       intel->always_flush_cache = 1;
+   }
+
+   if (driQueryOptionb(&intel->optionCache, "disable_throttling")) {
+      fprintf(stderr, "disabling flush throttling\n");
+      intel->disable_throttling = 1;
    }
 
    return true;
@@ -906,6 +911,55 @@ intelUnbindContext(__DRIcontext * driContextPriv)
    return true;
 }
 
+/**
+ * Fixes up the context for GLES23 with our default-to-sRGB-capable behavior
+ * on window system framebuffers.
+ *
+ * Desktop GL is fairly reasonable in its handling of sRGB: You can ask if
+ * your renderbuffer can do sRGB encode, and you can flip a switch that does
+ * sRGB encode if the renderbuffer can handle it.  You can ask specifically
+ * for a visual where you're guaranteed to be capable, but it turns out that
+ * everyone just makes all their ARGB8888 visuals capable and doesn't offer
+ * incapable ones, becuase there's no difference between the two in resources
+ * used.  Applications thus get built that accidentally rely on the default
+ * visual choice being sRGB, so we make ours sRGB capable.  Everything sounds
+ * great...
+ *
+ * But for GLES2/3, they decided that it was silly to not turn on sRGB encode
+ * for sRGB renderbuffers you made with the GL_EXT_texture_sRGB equivalent.
+ * So they removed the enable knob and made it "if the renderbuffer is sRGB
+ * capable, do sRGB encode".  Then, for your window system renderbuffers, you
+ * can ask for sRGB visuals and get sRGB encode, or not ask for sRGB visuals
+ * and get no sRGB encode (assuming that both kinds of visual are available).
+ * Thus our choice to support sRGB by default on our visuals for desktop would
+ * result in broken rendering of GLES apps that aren't expecting sRGB encode.
+ *
+ * Unfortunately, renderbuffer setup happens before a context is created.  So
+ * in intel_screen.c we always set up sRGB, and here, if you're a GLES2/3
+ * context (without an sRGB visual, though we don't have sRGB visuals exposed
+ * yet), we go turn that back off before anyone finds out.
+ */
+static void
+intel_gles3_srgb_workaround(struct intel_context *intel,
+                            struct gl_framebuffer *fb)
+{
+   struct gl_context *ctx = &intel->ctx;
+
+   if (_mesa_is_desktop_gl(ctx) || !fb->Visual.sRGBCapable)
+      return;
+
+   /* Some day when we support the sRGB capable bit on visuals available for
+    * GLES, we'll need to respect that and not disable things here.
+    */
+   fb->Visual.sRGBCapable = false;
+   for (int i = 0; i < BUFFER_COUNT; i++) {
+      if (fb->Attachment[i].Renderbuffer &&
+          fb->Attachment[i].Renderbuffer->Format == MESA_FORMAT_SARGB8) {
+         fb->Attachment[i].Renderbuffer->Format = MESA_FORMAT_ARGB8888;
+      }
+   }
+}
+
 GLboolean
 intelMakeCurrent(__DRIcontext * driContextPriv,
                  __DRIdrawable * driDrawPriv,
@@ -928,6 +982,7 @@ intelMakeCurrent(__DRIcontext * driContextPriv,
    }
 
    if (driContextPriv) {
+      struct gl_context *ctx = &intel->ctx;
       struct gl_framebuffer *fb, *readFb;
       
       if (driDrawPriv == NULL && driReadPriv == NULL) {
@@ -941,13 +996,16 @@ intelMakeCurrent(__DRIcontext * driContextPriv,
       }
 
       intel_prepare_render(intel);
-      _mesa_make_current(&intel->ctx, fb, readFb);
-      
+      _mesa_make_current(ctx, fb, readFb);
+
+      intel_gles3_srgb_workaround(intel, ctx->WinSysDrawBuffer);
+      intel_gles3_srgb_workaround(intel, ctx->WinSysReadBuffer);
+
       /* We do this in intel_prepare_render() too, but intel->ctx.DrawBuffer
        * is NULL at that point.  We can't call _mesa_makecurrent()
        * first, since we need the buffer size for the initial
        * viewport.  So just call intel_draw_buffer() again here. */
-      intel_draw_buffer(&intel->ctx);
+      intel_draw_buffer(ctx);
    }
    else {
       _mesa_make_current(NULL, NULL, NULL);

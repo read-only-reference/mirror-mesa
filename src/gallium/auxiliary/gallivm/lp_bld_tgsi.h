@@ -61,6 +61,7 @@ struct tgsi_shader_info;
 struct lp_build_mask_context;
 struct gallivm_state;
 struct lp_derivatives;
+struct lp_build_tgsi_gs_iface;
 
 
 enum lp_build_tex_modifier {
@@ -224,7 +225,8 @@ lp_build_tgsi_soa(struct gallivm_state *gallivm,
                   const LLVMValueRef (*inputs)[4],
                   LLVMValueRef (*outputs)[4],
                   struct lp_build_sampler_soa *sampler,
-                  const struct tgsi_shader_info *info);
+                  const struct tgsi_shader_info *info,
+                  const struct lp_build_tgsi_gs_iface *gs_iface);
 
 
 void
@@ -243,6 +245,7 @@ struct lp_exec_mask {
    struct lp_build_context *bld;
 
    boolean has_mask;
+   boolean ret_in_main;
 
    LLVMTypeRef int_vec_type;
 
@@ -360,12 +363,41 @@ struct lp_build_tgsi_context
    void (*emit_epilogue)(struct lp_build_tgsi_context*);
 };
 
+struct lp_build_tgsi_gs_iface
+{
+   LLVMValueRef input;
+   void (*emit_vertex)(struct lp_build_tgsi_context * bld_base,
+                       LLVMValueRef (*outputs)[4],
+                       LLVMValueRef emitted_vertices_vec,
+                       void *user_data);
+   void (*end_primitive)(struct lp_build_tgsi_context * bld_base,
+                         LLVMValueRef verts_per_prim_vec,
+                         LLVMValueRef emitted_prims_vec,
+                         void *user_data);
+   void (*gs_epilogue)(struct lp_build_tgsi_context * bld_base,
+                       LLVMValueRef total_emitted_vertices_vec,
+                       LLVMValueRef emitted_prims_vec,
+                       void *user_data);
+   void *user_data;
+};
+
 struct lp_build_tgsi_soa_context
 {
    struct lp_build_tgsi_context bld_base;
 
    /* Builder for scalar elements of shader's data type (float) */
    struct lp_build_context elem_bld;
+
+   const struct lp_build_tgsi_gs_iface *gs_iface;
+   LLVMValueRef emitted_prims_vec;
+   LLVMValueRef total_emitted_vertices_vec;
+   LLVMValueRef emitted_vertices_vec;
+   /* if a shader doesn't have ENDPRIM instruction but it has
+    * a number of EMIT instructions it means the END instruction
+    * implicitly invokes ENDPRIM. handle this via a flag here
+    * in the future maybe we can enforce TGSI to always have
+    * an explicit ENDPRIM */
+   boolean pending_end_primitive;
 
    LLVMValueRef consts_ptr;
    const LLVMValueRef *pos;

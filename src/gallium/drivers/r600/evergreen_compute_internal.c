@@ -36,14 +36,13 @@
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
 #include "util/u_framebuffer.h"
-#include "r600.h"
 #include "r600_resource.h"
 #include "r600_shader.h"
 #include "r600_pipe.h"
 #include "r600_formats.h"
 #include "evergreend.h"
+#include "evergreen_compute.h"
 #include "evergreen_compute_internal.h"
-#include "r600_hw_context_priv.h"
 
 int get_compute_resource_num(void)
 {
@@ -280,7 +279,7 @@ void evergreen_set_rat(
 
 	rctx = pipe->ctx;
 
-	COMPUTE_DBG("bind rat: %i \n", id);
+	COMPUTE_DBG(rctx->screen, "bind rat: %i \n", id);
 
 	/* Create the RAT surface */
 	memset(&rat_templ, 0, sizeof(rat_templ));

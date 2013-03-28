@@ -243,6 +243,7 @@ ir_texture::clone(void *mem_ctx, struct hash_table *ht) const
 
    switch (this->op) {
    case ir_tex:
+   case ir_lod:
       break;
    case ir_txb:
       new_tex->lod_info.bias = this->lod_info.bias->clone(mem_ctx, ht);
@@ -251,6 +252,9 @@ ir_texture::clone(void *mem_ctx, struct hash_table *ht) const
    case ir_txf:
    case ir_txs:
       new_tex->lod_info.lod = this->lod_info.lod->clone(mem_ctx, ht);
+      break;
+   case ir_txf_ms:
+      new_tex->lod_info.sample_index = this->lod_info.sample_index->clone(mem_ctx, ht);
       break;
    case ir_txd:
       new_tex->lod_info.grad.dPdx = this->lod_info.grad.dPdx->clone(mem_ctx, ht);

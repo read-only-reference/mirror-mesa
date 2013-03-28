@@ -1498,7 +1498,7 @@ dri2_export_drm_image_mesa(_EGLDriver *drv, _EGLDisplay *disp, _EGLImage *img,
 #ifdef HAVE_WAYLAND_PLATFORM
 
 static void
-dri2_wl_reference_buffer(void *user_data, uint32_t name,
+dri2_wl_reference_buffer(void *user_data, uint32_t name, int fd,
                          struct wl_drm_buffer *buffer)
 {
    _EGLDisplay *disp = user_data;
@@ -1506,13 +1506,24 @@ dri2_wl_reference_buffer(void *user_data, uint32_t name,
    __DRIimage *img;
    int i, dri_components = 0;
 
-   img = dri2_dpy->image->createImageFromNames(dri2_dpy->dri_screen,
-                                               buffer->buffer.width,
-                                               buffer->buffer.height,
-                                               buffer->format, (int*)&name, 1,
-                                               buffer->stride,
-                                               buffer->offset,
-                                               NULL);
+   if (fd == -1)
+      img = dri2_dpy->image->createImageFromNames(dri2_dpy->dri_screen,
+                                                  buffer->buffer.width,
+                                                  buffer->buffer.height,
+                                                  buffer->format,
+                                                  (int*)&name, 1,
+                                                  buffer->stride,
+                                                  buffer->offset,
+                                                  NULL);
+   else
+      img = dri2_dpy->image->createImageFromFds(dri2_dpy->dri_screen,
+                                                buffer->buffer.width,
+                                                buffer->buffer.height,
+                                                buffer->format,
+                                                &fd, 1,
+                                                buffer->stride,
+                                                buffer->offset,
+                                                NULL);
 
    if (img == NULL)
       return;
@@ -1550,6 +1561,8 @@ dri2_bind_wayland_display_wl(_EGLDriver *drv, _EGLDisplay *disp,
 			     struct wl_display *wl_dpy)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+   int ret, flags = 0;
+   uint64_t cap;
 
    (void) drv;
 
@@ -1559,9 +1572,15 @@ dri2_bind_wayland_display_wl(_EGLDriver *drv, _EGLDisplay *disp,
    wl_drm_callbacks.authenticate =
       (int(*)(void *, uint32_t)) dri2_dpy->authenticate;
 
+   ret = drmGetCap(dri2_dpy->fd, DRM_CAP_PRIME, &cap);
+   if (ret == 0 && cap == (DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT) &&
+       dri2_dpy->image->base.version >= 7 &&
+       dri2_dpy->image->createImageFromFds != NULL)
+      flags |= WAYLAND_DRM_PRIME;
+
    dri2_dpy->wl_server_drm =
 	   wayland_drm_init(wl_dpy, dri2_dpy->device_name,
-                            &wl_drm_callbacks, disp);
+                            &wl_drm_callbacks, disp, flags);
 
    if (!dri2_dpy->wl_server_drm)
 	   return EGL_FALSE;

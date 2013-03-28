@@ -499,15 +499,33 @@ intel_renderbuffer_update_wrapper(struct intel_context *intel,
    rb->Format = image->TexFormat;
    rb->InternalFormat = image->InternalFormat;
    rb->_BaseFormat = image->_BaseFormat;
-   rb->Width = mt->level[level].width;
-   rb->Height = mt->level[level].height;
+   rb->NumSamples = mt->num_samples;
+
+   if (mt->msaa_layout != INTEL_MSAA_LAYOUT_NONE) {
+      assert(level == 0);
+      rb->Width = mt->logical_width0;
+      rb->Height = mt->logical_height0;
+   }
+   else {
+      rb->Width = mt->level[level].width;
+      rb->Height = mt->level[level].height;
+   }
 
    rb->Delete = intel_delete_renderbuffer;
    rb->AllocStorage = intel_nop_alloc_storage;
 
    intel_miptree_check_level_layer(mt, level, layer);
    irb->mt_level = level;
-   irb->mt_layer = layer;
+
+   switch (mt->msaa_layout) {
+      case INTEL_MSAA_LAYOUT_UMS:
+      case INTEL_MSAA_LAYOUT_CMS:
+         irb->mt_layer = layer * mt->num_samples;
+         break;
+
+      default:
+         irb->mt_layer = layer;
+   }
 
    intel_miptree_reference(&irb->mt, mt);
 
@@ -973,7 +991,8 @@ intel_renderbuffer_resolve_depth(struct intel_context *intel,
 
 void
 intel_renderbuffer_move_to_temp(struct intel_context *intel,
-                                struct intel_renderbuffer *irb)
+                                struct intel_renderbuffer *irb,
+                                bool invalidate)
 {
    struct intel_texture_image *intel_image =
       intel_texture_image(irb->tex_image);
@@ -991,7 +1010,8 @@ intel_renderbuffer_move_to_temp(struct intel_context *intel,
                                  irb->mt->num_samples,
                                  false /* force_y_tiling */);
 
-   intel_miptree_copy_teximage(intel, intel_image, new_mt);
+   intel_miptree_copy_teximage(intel, intel_image, new_mt, invalidate);
+
    intel_miptree_reference(&irb->mt, intel_image->mt);
    intel_renderbuffer_set_draw_offset(irb);
    intel_miptree_release(&new_mt);

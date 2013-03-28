@@ -55,18 +55,18 @@ brw_compute_barycentric_interp_modes(struct brw_context *brw,
     * modes are in use, and set the appropriate bits in
     * barycentric_interp_modes.
     */
-   for (attr = 0; attr < FRAG_ATTRIB_MAX; ++attr) {
+   for (attr = 0; attr < VARYING_SLOT_MAX; ++attr) {
       enum glsl_interp_qualifier interp_qualifier =
          fprog->InterpQualifier[attr];
       bool is_centroid = fprog->IsCentroid & BITFIELD64_BIT(attr);
-      bool is_gl_Color = attr == FRAG_ATTRIB_COL0 || attr == FRAG_ATTRIB_COL1;
+      bool is_gl_Color = attr == VARYING_SLOT_COL0 || attr == VARYING_SLOT_COL1;
 
       /* Ignore unused inputs. */
       if (!(fprog->Base.InputsRead & BITFIELD64_BIT(attr)))
          continue;
 
       /* Ignore WPOS and FACE, because they don't require interpolation. */
-      if (attr == FRAG_ATTRIB_WPOS || attr == FRAG_ATTRIB_FACE)
+      if (attr == VARYING_SLOT_POS || attr == VARYING_SLOT_FACE)
          continue;
 
       /* Determine the set (or sets) of barycentric coordinates needed to
@@ -203,7 +203,7 @@ bool do_wm_prog(struct brw_context *brw,
 }
 
 static bool
-key_debug(const char *name, int a, int b)
+key_debug(struct intel_context *intel, const char *name, int a, int b)
 {
    if (a != b) {
       perf_debug("  %s %d->%d\n", name, a, b);
@@ -214,24 +214,25 @@ key_debug(const char *name, int a, int b)
 }
 
 bool
-brw_debug_recompile_sampler_key(const struct brw_sampler_prog_key_data *old_key,
+brw_debug_recompile_sampler_key(struct intel_context *intel,
+                                const struct brw_sampler_prog_key_data *old_key,
                                 const struct brw_sampler_prog_key_data *key)
 {
    bool found = false;
 
    for (unsigned int i = 0; i < MAX_SAMPLERS; i++) {
-      found |= key_debug("EXT_texture_swizzle or DEPTH_TEXTURE_MODE",
+      found |= key_debug(intel, "EXT_texture_swizzle or DEPTH_TEXTURE_MODE",
                          old_key->swizzles[i], key->swizzles[i]);
    }
-   found |= key_debug("GL_CLAMP enabled on any texture unit's 1st coordinate",
+   found |= key_debug(intel, "GL_CLAMP enabled on any texture unit's 1st coordinate",
                       old_key->gl_clamp_mask[0], key->gl_clamp_mask[0]);
-   found |= key_debug("GL_CLAMP enabled on any texture unit's 2nd coordinate",
+   found |= key_debug(intel, "GL_CLAMP enabled on any texture unit's 2nd coordinate",
                       old_key->gl_clamp_mask[1], key->gl_clamp_mask[1]);
-   found |= key_debug("GL_CLAMP enabled on any texture unit's 3rd coordinate",
+   found |= key_debug(intel, "GL_CLAMP enabled on any texture unit's 3rd coordinate",
                       old_key->gl_clamp_mask[2], key->gl_clamp_mask[2]);
-   found |= key_debug("GL_MESA_ycbcr texturing\n",
+   found |= key_debug(intel, "GL_MESA_ycbcr texturing\n",
                       old_key->yuvtex_mask, key->yuvtex_mask);
-   found |= key_debug("GL_MESA_ycbcr UV swapping\n",
+   found |= key_debug(intel, "GL_MESA_ycbcr UV swapping\n",
                       old_key->yuvtex_swap_mask, key->yuvtex_swap_mask);
 
    return found;
@@ -242,6 +243,7 @@ brw_wm_debug_recompile(struct brw_context *brw,
                        struct gl_shader_program *prog,
                        const struct brw_wm_prog_key *key)
 {
+   struct intel_context *intel = &brw->intel;
    struct brw_cache_item *c = NULL;
    const struct brw_wm_prog_key *old_key = NULL;
    bool found = false;
@@ -262,25 +264,35 @@ brw_wm_debug_recompile(struct brw_context *brw,
    }
 
    if (!c) {
-      perf_debug("  Didn't find previous compile in the shader cache for "
-                 "debug\n");
+      perf_debug("  Didn't find previous compile in the shader cache for debug\n");
       return;
    }
 
-   found |= key_debug("alphatest, computed depth, depth test, or depth write",
+   found |= key_debug(intel, "alphatest, computed depth, depth test, or "
+                      "depth write",
                       old_key->iz_lookup, key->iz_lookup);
-   found |= key_debug("depth statistics", old_key->stats_wm, key->stats_wm);
-   found |= key_debug("flat shading", old_key->flat_shade, key->flat_shade);
-   found |= key_debug("number of color buffers", old_key->nr_color_regions, key->nr_color_regions);
-   found |= key_debug("sample alpha to coverage", old_key->sample_alpha_to_coverage, key->sample_alpha_to_coverage);
-   found |= key_debug("rendering to FBO", old_key->render_to_fbo, key->render_to_fbo);
-   found |= key_debug("fragment color clamping", old_key->clamp_fragment_color, key->clamp_fragment_color);
-   found |= key_debug("line smoothing", old_key->line_aa, key->line_aa);
-   found |= key_debug("proj_attrib_mask", old_key->proj_attrib_mask, key->proj_attrib_mask);
-   found |= key_debug("renderbuffer height", old_key->drawable_height, key->drawable_height);
-   found |= key_debug("vertex shader outputs", old_key->vp_outputs_written, key->vp_outputs_written);
+   found |= key_debug(intel, "depth statistics",
+                      old_key->stats_wm, key->stats_wm);
+   found |= key_debug(intel, "flat shading",
+                      old_key->flat_shade, key->flat_shade);
+   found |= key_debug(intel, "number of color buffers",
+                      old_key->nr_color_regions, key->nr_color_regions);
+   found |= key_debug(intel, "sample alpha to coverage",
+                      old_key->sample_alpha_to_coverage, key->sample_alpha_to_coverage);
+   found |= key_debug(intel, "rendering to FBO",
+                      old_key->render_to_fbo, key->render_to_fbo);
+   found |= key_debug(intel, "fragment color clamping",
+                      old_key->clamp_fragment_color, key->clamp_fragment_color);
+   found |= key_debug(intel, "line smoothing",
+                      old_key->line_aa, key->line_aa);
+   found |= key_debug(intel, "proj_attrib_mask",
+                      old_key->proj_attrib_mask, key->proj_attrib_mask);
+   found |= key_debug(intel, "renderbuffer height",
+                      old_key->drawable_height, key->drawable_height);
+   found |= key_debug(intel, "input slots valid",
+                      old_key->input_slots_valid, key->input_slots_valid);
 
-   found |= brw_debug_recompile_sampler_key(&old_key->tex, &key->tex);
+   found |= brw_debug_recompile_sampler_key(intel, &old_key->tex, &key->tex);
 
    if (!found) {
       perf_debug("  Something else\n");
@@ -416,9 +428,13 @@ static void brw_wm_populate_key( struct brw_context *brw,
     * useful for programs using shaders.
     */
    if (ctx->Shader.CurrentFragmentProgram)
-      key->proj_attrib_mask = 0xffffffff;
-   else
-      key->proj_attrib_mask = brw->wm.input_size_masks[4-1];
+      key->proj_attrib_mask = ~(GLbitfield64) 0;
+   else {
+      /* Bit VARYING_BIT_POS of key.proj_attrib_mask is never used, so to
+       * avoid unnecessary recompiles, always set it to 1.
+       */
+      key->proj_attrib_mask = brw->wm.input_size_masks[4-1] | VARYING_BIT_POS;
+   }
 
    /* _NEW_LIGHT */
    key->flat_shade = (ctx->Light.ShadeModel == GL_FLAT);
@@ -450,11 +466,11 @@ static void brw_wm_populate_key( struct brw_context *brw,
     * For DRI2 the origin_x/y will always be (0,0) but we still need the
     * drawable height in order to invert the Y axis.
     */
-   if (fp->program.Base.InputsRead & FRAG_BIT_WPOS) {
+   if (fp->program.Base.InputsRead & VARYING_BIT_POS) {
       key->drawable_height = ctx->DrawBuffer->Height;
    }
 
-   if ((fp->program.Base.InputsRead & FRAG_BIT_WPOS) || program_uses_dfdy) {
+   if ((fp->program.Base.InputsRead & VARYING_BIT_POS) || program_uses_dfdy) {
       key->render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
    }
 
@@ -463,9 +479,9 @@ static void brw_wm_populate_key( struct brw_context *brw,
   /* _NEW_MULTISAMPLE */
    key->sample_alpha_to_coverage = ctx->Multisample.SampleAlphaToCoverage;
 
-   /* CACHE_NEW_VS_PROG */
+   /* BRW_NEW_VUE_MAP_GEOM_OUT */
    if (intel->gen < 6)
-      key->vp_outputs_written = brw->vs.prog_data->outputs_written;
+      key->input_slots_valid = brw->vue_map_geom_out.slots_valid;
 
    /* The unique fragment program ID */
    key->program_string_id = fp->id;
@@ -508,8 +524,8 @@ const struct brw_tracked_state brw_wm_prog = {
 		_NEW_MULTISAMPLE),
       .brw   = (BRW_NEW_FRAGMENT_PROGRAM |
 		BRW_NEW_WM_INPUT_DIMENSIONS |
-		BRW_NEW_REDUCED_PRIMITIVE),
-      .cache = CACHE_NEW_VS_PROG,
+		BRW_NEW_REDUCED_PRIMITIVE |
+                BRW_NEW_VUE_MAP_GEOM_OUT)
    },
    .emit = brw_upload_wm_prog
 };

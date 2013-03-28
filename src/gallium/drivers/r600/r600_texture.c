@@ -25,6 +25,7 @@
  *      Corbin Simpson
  */
 #include "r600_formats.h"
+#include "evergreen_compute.h"
 #include "r600d.h"
 
 #include <errno.h>
@@ -399,8 +400,6 @@ static void r600_texture_allocate_cmask(struct r600_screen *rscreen,
 #endif
 }
 
-DEBUG_GET_ONCE_BOOL_OPTION(print_texdepth, "R600_PRINT_TEXDEPTH", FALSE);
-
 static struct r600_texture *
 r600_texture_create_object(struct pipe_screen *screen,
 			   const struct pipe_resource *base,
@@ -436,8 +435,8 @@ r600_texture_create_object(struct pipe_screen *screen,
 	}
 
 	if (base->nr_samples > 1 && !rtex->is_depth && !buf) {
-		r600_texture_allocate_cmask(rscreen, rtex);
 		r600_texture_allocate_fmask(rscreen, rtex);
+		r600_texture_allocate_cmask(rscreen, rtex);
 	}
 
 	if (!rtex->is_depth && base->nr_samples > 1 &&
@@ -456,7 +455,8 @@ r600_texture_create_object(struct pipe_screen *screen,
 	rtex->htile = NULL;
 	if (!(base->flags & (R600_RESOURCE_FLAG_TRANSFER | R600_RESOURCE_FLAG_FLUSHED_DEPTH)) &&
 	    util_format_is_depth_or_stencil(base->format) &&
-	    rscreen->use_hyperz &&
+	    rscreen->info.drm_minor >= 26 &&
+	    !(rscreen->debug_flags & DBG_NO_HYPERZ) &&
 	    base->target == PIPE_TEXTURE_2D &&
 	    rtex->surface.level[0].nblk_x >= 32 &&
 	    rtex->surface.level[0].nblk_y >= 32) {
@@ -510,7 +510,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 		rscreen->ws->buffer_unmap(resource->cs_buf);
 	}
 
-	if (debug_get_option_print_texdepth() && rtex->is_depth && rtex->non_disp_tiling) {
+	if (rscreen->debug_flags & DBG_TEX_DEPTH && rtex->is_depth && rtex->non_disp_tiling) {
 		printf("Texture: npix_x=%u, npix_y=%u, npix_z=%u, blk_w=%u, "
 		       "blk_h=%u, blk_d=%u, array_size=%u, last_level=%u, "
 		       "bpe=%u, nsamples=%u, flags=%u\n",
@@ -989,7 +989,7 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen,
 	uint32_t result = 0, word4 = 0, yuv_format = 0;
 	const struct util_format_description *desc;
 	boolean uniform = TRUE;
-	static int r600_enable_s3tc = -1;
+	bool enable_s3tc = rscreen->info.drm_minor >= 9;
 	bool is_srgb_valid = FALSE;
 	const unsigned char swizzle_xxxx[4] = {0, 0, 0, 0};
 	const unsigned char swizzle_yyyy[4] = {1, 1, 1, 1};
@@ -1083,15 +1083,8 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen,
 		break;
 	}
 
-	if (r600_enable_s3tc == -1) {
-		if (rscreen->info.drm_minor >= 9)
-			r600_enable_s3tc = 1;
-		else
-			r600_enable_s3tc = debug_get_bool_option("R600_ENABLE_S3TC", FALSE);
-	}
-
 	if (desc->layout == UTIL_FORMAT_LAYOUT_RGTC) {
-		if (!r600_enable_s3tc)
+		if (!enable_s3tc)
 			goto out_unknown;
 
 		switch (format) {
@@ -1116,7 +1109,7 @@ uint32_t r600_translate_texformat(struct pipe_screen *screen,
 
 	if (desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
 
-		if (!r600_enable_s3tc)
+		if (!enable_s3tc)
 			goto out_unknown;
 
 		if (!util_format_s3tc_enabled) {

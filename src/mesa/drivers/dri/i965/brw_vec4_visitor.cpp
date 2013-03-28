@@ -2098,8 +2098,8 @@ vec4_visitor::visit(ir_texture *ir)
       shadow_comparitor = this->result;
    }
 
-   const glsl_type *lod_type;
-   src_reg lod, dPdx, dPdy;
+   const glsl_type *lod_type, *sample_index_type;
+   src_reg lod, dPdx, dPdy, sample_index;
    switch (ir->op) {
    case ir_tex:
       lod = src_reg(0.0f);
@@ -2112,6 +2112,11 @@ vec4_visitor::visit(ir_texture *ir)
       lod = this->result;
       lod_type = ir->lod_info.lod->type;
       break;
+   case ir_txf_ms:
+      ir->lod_info.sample_index->accept(this);
+      sample_index = this->result;
+      sample_index_type = ir->lod_info.sample_index->type;
+      break;
    case ir_txd:
       ir->lod_info.grad.dPdx->accept(this);
       dPdx = this->result;
@@ -2122,6 +2127,7 @@ vec4_visitor::visit(ir_texture *ir)
       lod_type = ir->lod_info.grad.dPdx->type;
       break;
    case ir_txb:
+   case ir_lod:
       break;
    }
 
@@ -2137,11 +2143,18 @@ vec4_visitor::visit(ir_texture *ir)
    case ir_txf:
       inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TXF);
       break;
+   case ir_txf_ms:
+      inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TXF_MS);
+      break;
    case ir_txs:
       inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TXS);
       break;
    case ir_txb:
       assert(!"TXB is not valid for vertex shaders.");
+      break;
+   case ir_lod:
+      assert(!"LOD is not valid for vertex shaders.");
+      break;
    }
 
    bool use_texture_offset = ir->offset != NULL && ir->op != ir_txf;
@@ -2223,8 +2236,17 @@ vec4_visitor::visit(ir_texture *ir)
 	 }
 	 emit(MOV(dst_reg(MRF, mrf, lod_type, writemask), lod));
       } else if (ir->op == ir_txf) {
-	 emit(MOV(dst_reg(MRF, param_base, lod_type, WRITEMASK_W),
-		  lod));
+         emit(MOV(dst_reg(MRF, param_base, lod_type, WRITEMASK_W), lod));
+      } else if (ir->op == ir_txf_ms) {
+         emit(MOV(dst_reg(MRF, param_base + 1, sample_index_type, WRITEMASK_X),
+                  sample_index));
+         inst->mlen++;
+
+         /* on Gen7, there is an additional MCS parameter here after SI,
+          * but we don't bother to emit it since it's always zero. If
+          * we start supporting texturing from CMS surfaces, this will have
+          * to change
+          */
       } else if (ir->op == ir_txd) {
 	 const glsl_type *type = lod_type;
 
@@ -2362,11 +2384,11 @@ void
 vec4_visitor::emit_ndc_computation()
 {
    /* Get the position */
-   src_reg pos = src_reg(output_reg[VERT_RESULT_HPOS]);
+   src_reg pos = src_reg(output_reg[VARYING_SLOT_POS]);
 
    /* Build ndc coords, which are (x/w, y/w, z/w, 1/w) */
    dst_reg ndc = dst_reg(this, glsl_type::vec4_type);
-   output_reg[BRW_VERT_RESULT_NDC] = ndc;
+   output_reg[BRW_VARYING_SLOT_NDC] = ndc;
 
    current_annotation = "NDC";
    dst_reg ndc_w = ndc;
@@ -2385,7 +2407,7 @@ void
 vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
 {
    if (intel->gen < 6 &&
-       ((c->prog_data.outputs_written & BITFIELD64_BIT(VERT_RESULT_PSIZ)) ||
+       ((c->prog_data.vue_map.slots_valid & VARYING_BIT_PSIZ) ||
         c->key.userclip_active || brw->has_negative_rhw_bug)) {
       dst_reg header1 = dst_reg(this, glsl_type::uvec4_type);
       dst_reg header1_w = header1;
@@ -2394,8 +2416,8 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
 
       emit(MOV(header1, 0u));
 
-      if (c->prog_data.outputs_written & BITFIELD64_BIT(VERT_RESULT_PSIZ)) {
-	 src_reg psiz = src_reg(output_reg[VERT_RESULT_PSIZ]);
+      if (c->prog_data.vue_map.slots_valid & VARYING_BIT_PSIZ) {
+	 src_reg psiz = src_reg(output_reg[VARYING_SLOT_PSIZ]);
 
 	 current_annotation = "Point size";
 	 emit(MUL(header1_w, psiz, src_reg((float)(1 << 11))));
@@ -2406,7 +2428,7 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
       for (i = 0; i < c->key.nr_userclip_plane_consts; i++) {
 	 vec4_instruction *inst;
 
-	 inst = emit(DP4(dst_null_f(), src_reg(output_reg[VERT_RESULT_HPOS]),
+	 inst = emit(DP4(dst_null_f(), src_reg(output_reg[VARYING_SLOT_POS]),
                          src_reg(this->userplane[i])));
 	 inst->conditional_mod = BRW_CONDITIONAL_L;
 
@@ -2424,13 +2446,13 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
        * clipped against all fixed planes.
        */
       if (brw->has_negative_rhw_bug) {
-         src_reg ndc_w = src_reg(output_reg[BRW_VERT_RESULT_NDC]);
+         src_reg ndc_w = src_reg(output_reg[BRW_VARYING_SLOT_NDC]);
          ndc_w.swizzle = BRW_SWIZZLE_WWWW;
          emit(CMP(dst_null_f(), ndc_w, src_reg(0.0f), BRW_CONDITIONAL_L));
          vec4_instruction *inst;
          inst = emit(OR(header1_w, src_reg(header1_w), src_reg(1u << 6)));
          inst->predicate = BRW_PREDICATE_NORMAL;
-         inst = emit(MOV(output_reg[BRW_VERT_RESULT_NDC], src_reg(0.0f)));
+         inst = emit(MOV(output_reg[BRW_VARYING_SLOT_NDC], src_reg(0.0f)));
          inst->predicate = BRW_PREDICATE_NORMAL;
       }
 
@@ -2439,9 +2461,9 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
       emit(MOV(retype(reg, BRW_REGISTER_TYPE_UD), 0u));
    } else {
       emit(MOV(retype(reg, BRW_REGISTER_TYPE_D), src_reg(0)));
-      if (c->prog_data.outputs_written & BITFIELD64_BIT(VERT_RESULT_PSIZ)) {
+      if (c->prog_data.vue_map.slots_valid & VARYING_BIT_PSIZ) {
          emit(MOV(brw_writemask(reg, WRITEMASK_W),
-                  src_reg(output_reg[VERT_RESULT_PSIZ])));
+                  src_reg(output_reg[VARYING_SLOT_PSIZ])));
       }
    }
 }
@@ -2469,10 +2491,9 @@ vec4_visitor::emit_clip_distances(struct brw_reg reg, int offset)
     * gl_ClipDistance.  Accordingly, we use gl_ClipVertex to perform clipping
     * if the user wrote to it; otherwise we use gl_Position.
     */
-   gl_vert_result clip_vertex = VERT_RESULT_CLIP_VERTEX;
-   if (!(c->prog_data.outputs_written
-         & BITFIELD64_BIT(VERT_RESULT_CLIP_VERTEX))) {
-      clip_vertex = VERT_RESULT_HPOS;
+   gl_varying_slot clip_vertex = VARYING_SLOT_CLIP_VERTEX;
+   if (!(c->prog_data.vue_map.slots_valid & VARYING_BIT_CLIP_VERTEX)) {
+      clip_vertex = VARYING_SLOT_POS;
    }
 
    for (int i = 0; i + offset < c->key.nr_userclip_plane_consts && i < 4;
@@ -2484,55 +2505,55 @@ vec4_visitor::emit_clip_distances(struct brw_reg reg, int offset)
 }
 
 void
-vec4_visitor::emit_generic_urb_slot(dst_reg reg, int vert_result)
+vec4_visitor::emit_generic_urb_slot(dst_reg reg, int varying)
 {
-   assert (vert_result < VERT_RESULT_MAX);
-   reg.type = output_reg[vert_result].type;
-   current_annotation = output_reg_annotation[vert_result];
+   assert (varying < VARYING_SLOT_MAX);
+   reg.type = output_reg[varying].type;
+   current_annotation = output_reg_annotation[varying];
    /* Copy the register, saturating if necessary */
    vec4_instruction *inst = emit(MOV(reg,
-                                     src_reg(output_reg[vert_result])));
-   if ((vert_result == VERT_RESULT_COL0 ||
-        vert_result == VERT_RESULT_COL1 ||
-        vert_result == VERT_RESULT_BFC0 ||
-        vert_result == VERT_RESULT_BFC1) &&
+                                     src_reg(output_reg[varying])));
+   if ((varying == VARYING_SLOT_COL0 ||
+        varying == VARYING_SLOT_COL1 ||
+        varying == VARYING_SLOT_BFC0 ||
+        varying == VARYING_SLOT_BFC1) &&
        c->key.clamp_vertex_color) {
       inst->saturate = true;
    }
 }
 
 void
-vec4_visitor::emit_urb_slot(int mrf, int vert_result)
+vec4_visitor::emit_urb_slot(int mrf, int varying)
 {
    struct brw_reg hw_reg = brw_message_reg(mrf);
    dst_reg reg = dst_reg(MRF, mrf);
    reg.type = BRW_REGISTER_TYPE_F;
 
-   switch (vert_result) {
-   case VERT_RESULT_PSIZ:
+   switch (varying) {
+   case VARYING_SLOT_PSIZ:
       /* PSIZ is always in slot 0, and is coupled with other flags. */
       current_annotation = "indices, point width, clip flags";
       emit_psiz_and_flags(hw_reg);
       break;
-   case BRW_VERT_RESULT_NDC:
+   case BRW_VARYING_SLOT_NDC:
       current_annotation = "NDC";
-      emit(MOV(reg, src_reg(output_reg[BRW_VERT_RESULT_NDC])));
+      emit(MOV(reg, src_reg(output_reg[BRW_VARYING_SLOT_NDC])));
       break;
-   case BRW_VERT_RESULT_HPOS_DUPLICATE:
-   case VERT_RESULT_HPOS:
+   case BRW_VARYING_SLOT_POS_DUPLICATE:
+   case VARYING_SLOT_POS:
       current_annotation = "gl_Position";
-      emit(MOV(reg, src_reg(output_reg[VERT_RESULT_HPOS])));
+      emit(MOV(reg, src_reg(output_reg[VARYING_SLOT_POS])));
       break;
-   case VERT_RESULT_CLIP_DIST0:
-   case VERT_RESULT_CLIP_DIST1:
+   case VARYING_SLOT_CLIP_DIST0:
+   case VARYING_SLOT_CLIP_DIST1:
       if (this->c->key.uses_clip_distance) {
-         emit_generic_urb_slot(reg, vert_result);
+         emit_generic_urb_slot(reg, varying);
       } else {
          current_annotation = "user clip distances";
-         emit_clip_distances(hw_reg, (vert_result - VERT_RESULT_CLIP_DIST0) * 4);
+         emit_clip_distances(hw_reg, (varying - VARYING_SLOT_CLIP_DIST0) * 4);
       }
       break;
-   case VERT_RESULT_EDGE:
+   case VARYING_SLOT_EDGE:
       /* This is present when doing unfilled polygons.  We're supposed to copy
        * the edge flag from the user-provided vertex array
        * (glEdgeFlagPointer), or otherwise we'll copy from the current value
@@ -2543,11 +2564,11 @@ vec4_visitor::emit_urb_slot(int mrf, int vert_result)
       emit(MOV(reg, src_reg(dst_reg(ATTR, VERT_ATTRIB_EDGEFLAG,
                                     glsl_type::float_type, WRITEMASK_XYZW))));
       break;
-   case BRW_VERT_RESULT_PAD:
+   case BRW_VARYING_SLOT_PAD:
       /* No need to write to this slot */
       break;
    default:
-      emit_generic_urb_slot(reg, vert_result);
+      emit_generic_urb_slot(reg, varying);
       break;
    }
 }
@@ -2611,7 +2632,7 @@ vec4_visitor::emit_urb_writes()
    /* Set up the VUE data for the first URB write */
    int slot;
    for (slot = 0; slot < c->prog_data.vue_map.num_slots; ++slot) {
-      emit_urb_slot(mrf++, c->prog_data.vue_map.slot_to_vert_result[slot]);
+      emit_urb_slot(mrf++, c->prog_data.vue_map.slot_to_varying[slot]);
 
       /* If this was max_usable_mrf, we can't fit anything more into this URB
        * WRITE.
@@ -2622,11 +2643,16 @@ vec4_visitor::emit_urb_writes()
       }
    }
 
+   bool eot = slot >= c->prog_data.vue_map.num_slots;
+   if (eot) {
+      if (INTEL_DEBUG & DEBUG_SHADER_TIME)
+         emit_shader_time_end();
+   }
    current_annotation = "URB write";
    vec4_instruction *inst = emit(VS_OPCODE_URB_WRITE);
    inst->base_mrf = base_mrf;
    inst->mlen = align_interleaved_urb_mlen(brw, mrf - base_mrf);
-   inst->eot = (slot >= c->prog_data.vue_map.num_slots);
+   inst->eot = eot;
 
    /* Optional second URB write */
    if (!inst->eot) {
@@ -2635,7 +2661,12 @@ vec4_visitor::emit_urb_writes()
       for (; slot < c->prog_data.vue_map.num_slots; ++slot) {
 	 assert(mrf < max_usable_mrf);
 
-         emit_urb_slot(mrf++, c->prog_data.vue_map.slot_to_vert_result[slot]);
+         emit_urb_slot(mrf++, c->prog_data.vue_map.slot_to_varying[slot]);
+      }
+
+      if (eot) {
+         if (INTEL_DEBUG & DEBUG_SHADER_TIME)
+            emit_shader_time_end();
       }
 
       current_annotation = "URB write";

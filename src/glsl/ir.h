@@ -120,6 +120,7 @@ public:
    virtual class ir_dereference *       as_dereference()      { return NULL; }
    virtual class ir_dereference_array *	as_dereference_array() { return NULL; }
    virtual class ir_dereference_variable *as_dereference_variable() { return NULL; }
+   virtual class ir_dereference_record *as_dereference_record() { return NULL; }
    virtual class ir_expression *        as_expression()       { return NULL; }
    virtual class ir_rvalue *            as_rvalue()           { return NULL; }
    virtual class ir_loop *              as_loop()             { return NULL; }
@@ -505,8 +506,8 @@ public:
     * The precise meaning of this field depends on the nature of the variable.
     *
     *   - Vertex shader input: one of the values from \c gl_vert_attrib.
-    *   - Vertex shader output: one of the values from \c gl_vert_result.
-    *   - Fragment shader input: one of the values from \c gl_frag_attrib.
+    *   - Vertex shader output: one of the values from \c gl_varying_slot.
+    *   - Fragment shader input: one of the values from \c gl_varying_slot.
     *   - Fragment shader output: one of the values from \c gl_frag_result.
     *   - Uniforms: Per-stage uniform slot number for default uniform block.
     *   - Uniforms: Index within the uniform block definition for UBO members.
@@ -1424,7 +1425,9 @@ enum ir_texture_opcode {
    ir_txl,		/**< Texture look-up with explicit LOD */
    ir_txd,		/**< Texture look-up with partial derivatvies */
    ir_txf,		/**< Texel fetch with explicit LOD */
-   ir_txs		/**< Texture size */
+   ir_txf_ms,           /**< Multisample texture fetch */
+   ir_txs,		/**< Texture size */
+   ir_lod		/**< Texture lod query */
 };
 
 
@@ -1445,7 +1448,10 @@ enum ir_texture_opcode {
  * (txl <type> <sampler> <coordinate> 0 1 ( ) <lod>)
  * (txd <type> <sampler> <coordinate> 0 1 ( ) (dPdx dPdy))
  * (txf <type> <sampler> <coordinate> 0       <lod>)
+ * (txf_ms
+ *      <type> <sampler> <coordinate>         <sample_index>)
  * (txs <type> <sampler> <lod>)
+ * (lod <type> <sampler> <coordinate>)
  */
 class ir_texture : public ir_rvalue {
 public:
@@ -1511,6 +1517,7 @@ public:
    union {
       ir_rvalue *lod;		/**< Floating point LOD */
       ir_rvalue *bias;		/**< Floating point LOD bias */
+      ir_rvalue *sample_index;  /**< MSAA sample index */
       struct {
 	 ir_rvalue *dPdx;	/**< Partial derivative of coordinate wrt X */
 	 ir_rvalue *dPdy;	/**< Partial derivative of coordinate wrt Y */
@@ -1733,6 +1740,11 @@ public:
 					struct hash_table *) const;
 
    virtual ir_constant *constant_expression_value(struct hash_table *variable_context = NULL);
+
+   virtual ir_dereference_record *as_dereference_record()
+   {
+      return this;
+   }
 
    /**
     * Get the variable that is ultimately referenced by an r-value

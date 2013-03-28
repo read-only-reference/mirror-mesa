@@ -137,6 +137,18 @@ The integer capabilities:
 * ``PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT``: Describes the required
   alignment for pipe_sampler_view::u.buf.first_element, in bytes.
   If a driver does not support first/last_element, it should return 0.
+* ``PIPE_CAP_TGSI_TEXCOORD``: This CAP describes a hw limitation.
+  If true, the hardware cannot replace arbitrary shader inputs with sprite
+  coordinates and hence the inputs that are desired to be replaceable must
+  be declared with TGSI_SEMANTIC_TEXCOORD instead of TGSI_SEMANTIC_GENERIC.
+  The rasterizer's sprite_coord_enable state therefore also applies to the
+  TEXCOORD semantic.
+  Also, TGSI_SEMANTIC_PCOORD becomes available, which labels a fragment shader
+  input that will always be replaced with sprite coordinates.
+* ``PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER``: Whether it is preferable
+  to use a blit to implement a texture transfer which needs format conversions
+  and swizzling in state trackers. Generally, all hardware drivers with
+  dedicated memory should return 1 and all software rasterizers should return 0.
 
 
 .. _pipe_capf:
@@ -428,3 +440,15 @@ get_timestamp
 Query a timestamp in nanoseconds. The returned value should match
 PIPE_QUERY_TIMESTAMP. This function returns immediately and doesn't
 wait for rendering to complete (which cannot be achieved with queries).
+
+
+
+get_driver_query_info
+^^^^^^^^^^^^^^^^^^^^^
+
+Return a driver-specific query. If the **info** parameter is NULL,
+the number of available queries is returned.  Otherwise, the driver
+query at the specified **index** is returned in **info**.
+The function returns non-zero on success.
+The driver-specific query is described with the pipe_driver_query_info
+structure.

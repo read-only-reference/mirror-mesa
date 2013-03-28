@@ -7,7 +7,6 @@
 #include "util/u_double_list.h"
 #include "util/u_memory.h"
 
-#include "r600.h"
 #include "r600_asm.h"
 #include "r600_sq.h"
 #include "r600_opcodes.h"
@@ -20,7 +19,7 @@
 
 #if defined R600_USE_LLVM || defined HAVE_OPENCL
 
-#define CONSTANT_BUFFER_0_ADDR_SPACE 9
+#define CONSTANT_BUFFER_0_ADDR_SPACE 8
 #define CONSTANT_BUFFER_1_ADDR_SPACE (CONSTANT_BUFFER_0_ADDR_SPACE + R600_UCP_CONST_BUFFER)
 
 static LLVMValueRef llvm_fetch_const(
@@ -35,7 +34,7 @@ static LLVMValueRef llvm_fetch_const(
 	};
 	if (reg->Register.Indirect) {
 		struct lp_build_tgsi_soa_context *bld = lp_soa_context(bld_base);
-		LLVMValueRef index = LLVMBuildLoad(bld_base->base.gallivm->builder, bld->addr[reg->Indirect.Index][reg->Indirect.SwizzleX], "");
+		LLVMValueRef index = LLVMBuildLoad(bld_base->base.gallivm->builder, bld->addr[reg->Indirect.Index][reg->Indirect.Swizzle], "");
 		offset[1] = LLVMBuildAdd(bld_base->base.gallivm->builder, offset[1], index, "");
 	}
 	unsigned ConstantAddressSpace = CONSTANT_BUFFER_0_ADDR_SPACE ;
@@ -524,6 +523,7 @@ LLVMModuleRef r600_tgsi_llvm(
 	struct tgsi_shader_info shader_info;
 	struct lp_build_tgsi_context * bld_base = &ctx->soa.bld_base;
 	radeon_llvm_context_init(ctx);
+	radeon_llvm_create_func(ctx, NULL, 0);
 	tgsi_scan_shader(tokens, &shader_info);
 
 	bld_base->info = &shader_info;
@@ -618,7 +618,7 @@ const char * r600_llvm_gpu_string(enum radeon_family family)
 	default:
 		gpu_family = "";
 		fprintf(stderr, "Chip not supported by r600 llvm "
-			"backend, please file a bug at bugs.freedesktop.org\n");
+			"backend, please file a bug at " PACKAGE_BUGREPORT "\n");
 		break;
 	}
 	return gpu_family;

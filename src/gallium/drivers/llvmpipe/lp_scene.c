@@ -64,6 +64,21 @@ lp_scene_create( struct pipe_context *pipe )
 
    pipe_mutex_init(scene->mutex);
 
+#ifdef DEBUG
+   /* Do some scene limit sanity checks here */
+   {
+      size_t maxBins = TILES_X * TILES_Y;
+      size_t maxCommandBytes = sizeof(struct cmd_block) * maxBins;
+      size_t maxCommandPlusData = maxCommandBytes + DATA_BLOCK_SIZE;
+      /* We'll need at least one command block per bin.  Make sure that's
+       * less than the max allowed scene size.
+       */
+      assert(maxCommandBytes < LP_SCENE_MAX_SIZE);
+      /* We'll also need space for at least one other data block */
+      assert(maxCommandPlusData <= LP_SCENE_MAX_SIZE);
+   }
+#endif
+
    return scene;
 }
 
@@ -142,7 +157,6 @@ lp_scene_begin_rasterization(struct lp_scene *scene)
    for (i = 0; i < scene->fb.nr_cbufs; i++) {
       struct pipe_surface *cbuf = scene->fb.cbufs[i];
       if (llvmpipe_resource_is_texture(cbuf->texture)) {
-         assert(cbuf->u.tex.first_layer == cbuf->u.tex.last_layer);
          scene->cbufs[i].stride = llvmpipe_resource_stride(cbuf->texture,
                                                            cbuf->u.tex.level);
 
@@ -163,7 +177,6 @@ lp_scene_begin_rasterization(struct lp_scene *scene)
 
    if (fb->zsbuf) {
       struct pipe_surface *zsbuf = scene->fb.zsbuf;
-      assert(zsbuf->u.tex.first_layer == zsbuf->u.tex.last_layer);
       scene->zsbuf.stride = llvmpipe_resource_stride(zsbuf->texture, zsbuf->u.tex.level);
       scene->zsbuf.blocksize = 
          util_format_get_blocksize(zsbuf->texture->format);

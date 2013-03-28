@@ -46,7 +46,7 @@
 #include "gallivm/lp_bld_limits.h"
 #include "draw_llvm.h"
 
-static boolean
+boolean
 draw_get_option_use_llvm(void)
 {
    static boolean first = TRUE;
@@ -792,8 +792,8 @@ draw_set_samplers(struct draw_context *draw,
    draw->num_samplers[shader_stage] = num;
 
 #ifdef HAVE_LLVM
-   if (draw->llvm && shader_stage == PIPE_SHADER_VERTEX)
-      draw_llvm_set_sampler_state(draw);
+   if (draw->llvm)
+      draw_llvm_set_sampler_state(draw, shader_stage);
 #endif
 }
 
@@ -808,16 +808,15 @@ draw_set_mapped_texture(struct draw_context *draw,
                         uint32_t img_stride[PIPE_MAX_TEXTURE_LEVELS],
                         uint32_t mip_offsets[PIPE_MAX_TEXTURE_LEVELS])
 {
-   if (shader_stage == PIPE_SHADER_VERTEX) {
 #ifdef HAVE_LLVM
-      if (draw->llvm)
-         draw_llvm_set_mapped_texture(draw,
-                                      sview_idx,
-                                      width, height, depth, first_level,
-                                      last_level, base_ptr,
-                                      row_stride, img_stride, mip_offsets);
+   if (draw->llvm)
+      draw_llvm_set_mapped_texture(draw,
+                                   shader_stage,
+                                   sview_idx,
+                                   width, height, depth, first_level,
+                                   last_level, base_ptr,
+                                   row_stride, img_stride, mip_offsets);
 #endif
-   }
 }
 
 /**

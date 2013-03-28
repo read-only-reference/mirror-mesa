@@ -436,10 +436,10 @@ static bool brw_try_draw_prims( struct gl_context *ctx,
 
    intel_prepare_render(intel);
 
-   /* This workaround has to happen outside of brw_state_upload() because it
+   /* This workaround has to happen outside of brw_upload_state() because it
     * may flush the batchbuffer for a blit, affecting the state flags.
     */
-   brw_workaround_depthstencil_alignment(brw);
+   brw_workaround_depthstencil_alignment(brw, 0);
 
    /* Resolves must occur after updating renderbuffers, updating context state,
     * and finalizing textures but before setting up any hardware state for
@@ -550,6 +550,7 @@ void brw_draw_prims( struct gl_context *ctx,
 		     GLuint max_index,
 		     struct gl_transform_feedback_object *tfb_vertcount )
 {
+   struct intel_context *intel = intel_context(ctx);
    const struct gl_client_array **arrays = ctx->Array._DrawArrays;
 
    if (!_mesa_check_conditional_render(ctx))

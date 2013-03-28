@@ -66,6 +66,17 @@ extern "C" {
 struct intel_resolve_map;
 struct intel_texture_image;
 
+/**
+ * When calling intel_miptree_map() on an ETC-transcoded-to-RGB miptree or a
+ * depthstencil-split-to-separate-stencil miptree, we'll normally make a
+ * tmeporary and recreate the kind of data requested by Mesa core, since we're
+ * satisfying some glGetTexImage() request or something.
+ *
+ * However, occasionally you want to actually map the miptree's current data
+ * without transcoding back.  This flag to intel_miptree_map() gets you that.
+ */
+#define BRW_MAP_DIRECT_BIT	0x80000000
+
 struct intel_miptree_map {
    /** Bitfield of GL_MAP_READ_BIT, GL_MAP_WRITE_BIT, GL_MAP_INVALIDATE_BIT */
    GLbitfield mode;
@@ -471,7 +482,7 @@ void intel_miptree_set_image_offset(struct intel_mipmap_tree *mt,
 void
 intel_miptree_copy_teximage(struct intel_context *intel,
                             struct intel_texture_image *intelImage,
-                            struct intel_mipmap_tree *dst_mt);
+                            struct intel_mipmap_tree *dst_mt, bool invalidate);
 
 /**
  * Copy the stencil data from \c mt->stencil_mt->region to \c mt->region for
@@ -578,6 +589,12 @@ void i915_miptree_layout(struct intel_mipmap_tree *mt);
 void i945_miptree_layout(struct intel_mipmap_tree *mt);
 void brw_miptree_layout(struct intel_context *intel,
 			struct intel_mipmap_tree *mt);
+
+void *intel_miptree_map_raw(struct intel_context *intel,
+                            struct intel_mipmap_tree *mt);
+
+void intel_miptree_unmap_raw(struct intel_context *intel,
+                             struct intel_mipmap_tree *mt);
 
 void
 intel_miptree_map(struct intel_context *intel,

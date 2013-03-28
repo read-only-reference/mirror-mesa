@@ -42,7 +42,7 @@ upload_sbe_state(struct brw_context *brw)
    int i;
    int attr = 0, input_index = 0;
    int urb_entry_read_offset = 1;
-   uint16_t attr_overrides[FRAG_ATTRIB_MAX];
+   uint16_t attr_overrides[VARYING_SLOT_MAX];
    /* _NEW_BUFFERS */
    bool render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
    uint32_t point_sprite_origin;
@@ -70,21 +70,21 @@ upload_sbe_state(struct brw_context *brw)
     * they source from.
     */
    uint32_t max_source_attr = 0;
-   for (; attr < FRAG_ATTRIB_MAX; attr++) {
+   for (; attr < VARYING_SLOT_MAX; attr++) {
       enum glsl_interp_qualifier interp_qualifier =
          brw->fragment_program->InterpQualifier[attr];
-      bool is_gl_Color = attr == FRAG_ATTRIB_COL0 || attr == FRAG_ATTRIB_COL1;
+      bool is_gl_Color = attr == VARYING_SLOT_COL0 || attr == VARYING_SLOT_COL1;
 
       if (!(brw->fragment_program->Base.InputsRead & BITFIELD64_BIT(attr)))
 	 continue;
 
       if (ctx->Point.PointSprite &&
-	  attr >= FRAG_ATTRIB_TEX0 && attr <= FRAG_ATTRIB_TEX7 &&
-	  ctx->Point.CoordReplace[attr - FRAG_ATTRIB_TEX0]) {
+	  attr >= VARYING_SLOT_TEX0 && attr <= VARYING_SLOT_TEX7 &&
+	  ctx->Point.CoordReplace[attr - VARYING_SLOT_TEX0]) {
 	 dw10 |= (1 << input_index);
       }
 
-      if (attr == FRAG_ATTRIB_PNTC)
+      if (attr == VARYING_SLOT_PNTC)
 	 dw10 |= (1 << input_index);
 
       /* flat shading */
@@ -100,9 +100,9 @@ upload_sbe_state(struct brw_context *brw)
        */
       assert(input_index < 16 || attr == input_index);
 
-      /* CACHE_NEW_VS_PROG | _NEW_LIGHT | _NEW_PROGRAM */
+      /* BRW_NEW_VUE_MAP_GEOM_OUT | _NEW_LIGHT | _NEW_PROGRAM */
       attr_overrides[input_index++] =
-         get_attr_override(&brw->vs.prog_data->vue_map,
+         get_attr_override(&brw->vue_map_geom_out,
 			   urb_entry_read_offset, attr,
                            ctx->VertexProgram._TwoSideEnabled,
                            &max_source_attr);
@@ -123,7 +123,7 @@ upload_sbe_state(struct brw_context *brw)
    dw1 |= urb_entry_read_length << GEN7_SBE_URB_ENTRY_READ_LENGTH_SHIFT |
           urb_entry_read_offset << GEN7_SBE_URB_ENTRY_READ_OFFSET_SHIFT;
 
-   for (; input_index < FRAG_ATTRIB_MAX; input_index++)
+   for (; input_index < VARYING_SLOT_MAX; input_index++)
       attr_overrides[input_index] = 0;
 
    BEGIN_BATCH(14);
@@ -149,8 +149,8 @@ const struct brw_tracked_state gen7_sbe_state = {
 		_NEW_POINT |
 		_NEW_PROGRAM),
       .brw   = (BRW_NEW_CONTEXT |
-		BRW_NEW_FRAGMENT_PROGRAM),
-      .cache = CACHE_NEW_VS_PROG
+		BRW_NEW_FRAGMENT_PROGRAM |
+                BRW_NEW_VUE_MAP_GEOM_OUT)
    },
    .emit = upload_sbe_state,
 };

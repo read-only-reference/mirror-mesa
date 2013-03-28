@@ -60,6 +60,8 @@ translate_tex_target(GLenum target)
    case GL_TEXTURE_2D: 
    case GL_TEXTURE_2D_ARRAY_EXT:
    case GL_TEXTURE_EXTERNAL_OES:
+   case GL_TEXTURE_2D_MULTISAMPLE:
+   case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
       return BRW_SURFACE_2D;
 
    case GL_TEXTURE_3D: 
@@ -628,6 +630,7 @@ translate_tex_format(struct intel_context *intel,
 		     GLenum depth_mode,
 		     GLenum srgb_decode)
 {
+   struct gl_context *ctx = &intel->ctx;
    if (srgb_decode == GL_SKIP_DECODE_EXT)
       mesa_format = _mesa_get_srgb_format_linear(mesa_format);
 
@@ -770,7 +773,8 @@ brw_get_texture_swizzle(const struct gl_context *ctx,
    case GL_RED:
    case GL_RG:
    case GL_RGB:
-      swizzles[3] = SWIZZLE_ONE;
+      if (_mesa_get_format_bits(img->TexFormat, GL_ALPHA_BITS) > 0)
+         swizzles[3] = SWIZZLE_ONE;
       break;
    }
 
@@ -883,7 +887,7 @@ brw_update_texture_surface(struct gl_context *ctx,
 	      (intelObj->mt->region->pitch - 1) <<
 	      BRW_SURFACE_PITCH_SHIFT);
 
-   surf[4] = 0;
+   surf[4] = brw_get_surface_num_multisamples(intelObj->mt->num_samples);
 
    intel_miptree_get_tile_offsets(intelObj->mt, firstImage->Level, 0,
                                   &tile_x, &tile_y);
@@ -1221,7 +1225,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
 	  * select the image.  So, instead, we just make a new single-level
 	  * miptree and render into that.
 	  */
-	 intel_renderbuffer_move_to_temp(intel, irb);
+	 intel_renderbuffer_move_to_temp(intel, irb, false);
 	 mt = irb->mt;
       }
    }
@@ -1479,14 +1483,11 @@ const struct brw_tracked_state brw_wm_ubo_surfaces = {
 static void
 brw_upload_wm_binding_table(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
    uint32_t *bind;
    int i;
 
    if (INTEL_DEBUG & DEBUG_SHADER_TIME) {
-      intel->vtbl.create_constant_surface(brw, brw->shader_time.bo, 0,
-                                          brw->shader_time.bo->size,
-                                          &brw->wm.surf_offset[SURF_INDEX_WM_SHADER_TIME]);
+      gen7_create_shader_time_surface(brw, &brw->wm.surf_offset[SURF_INDEX_WM_SHADER_TIME]);
    }
 
    /* Might want to calculate nr_surfaces first, to avoid taking up so much

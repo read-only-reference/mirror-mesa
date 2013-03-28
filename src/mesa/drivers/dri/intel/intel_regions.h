@@ -46,6 +46,7 @@ extern "C" {
 #endif
 
 struct intel_context;
+struct intel_screen;
 struct intel_buffer_object;
 
 /**
@@ -64,13 +65,10 @@ struct intel_region
    GLuint width;    /**< in pixels */
    GLuint height;   /**< in pixels */
    GLuint pitch;    /**< in bytes */
-   GLubyte *map;    /**< only non-NULL when region is actually mapped */
-   GLuint map_refcount;  /**< Reference count for mapping */
 
    uint32_t tiling; /**< Which tiling mode the region is in */
 
    uint32_t name; /**< Global name for the bo */
-   struct intel_screen *screen;
 };
 
 
@@ -89,6 +87,12 @@ intel_region_alloc_for_handle(struct intel_screen *screen,
 			      GLuint width, GLuint height, GLuint pitch,
 			      unsigned int handle, const char *name);
 
+struct intel_region *
+intel_region_alloc_for_fd(struct intel_screen *screen,
+                          GLuint cpp,
+                          GLuint width, GLuint height, GLuint pitch,
+                          int fd, const char *name);
+
 bool
 intel_region_flink(struct intel_region *region, uint32_t *name);
 
@@ -98,40 +102,6 @@ void intel_region_reference(struct intel_region **dst,
 void intel_region_release(struct intel_region **ib);
 
 void intel_recreate_static_regions(struct intel_context *intel);
-
-/**
- * Map/unmap regions.  This is refcounted also:
- *
- * \param mode  bitmask of GL_MAP_READ_BIT, GL_MAP_WRITE_BIT
- */
-void *intel_region_map(struct intel_context *intel,
-		       struct intel_region *ib,
-		       GLbitfield mode);
-
-void intel_region_unmap(struct intel_context *intel, struct intel_region *ib);
-
-/* Copy rectangular sub-regions
- */
-bool
-intel_region_copy(struct intel_context *intel,
-		  struct intel_region *dest,
-		  GLuint dest_offset,
-		  GLuint destx, GLuint desty,
-		  struct intel_region *src,
-		  GLuint src_offset,
-		  GLuint srcx, GLuint srcy, GLuint width, GLuint height,
-		  bool flip,
-		  GLenum logicop);
-
-void _mesa_copy_rect(GLubyte * dst,
-                GLuint cpp,
-                GLuint dst_pitch,
-                GLuint dst_x,
-                GLuint dst_y,
-                GLuint width,
-                GLuint height,
-                const GLubyte * src,
-                GLuint src_pitch, GLuint src_x, GLuint src_y);
 
 void
 intel_region_get_tile_masks(struct intel_region *region,

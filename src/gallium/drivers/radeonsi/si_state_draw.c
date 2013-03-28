@@ -404,6 +404,11 @@ static void si_update_derived_state(struct r600_context *rctx)
 	}
 
 	if (si_pm4_state_changed(rctx, ps) || si_pm4_state_changed(rctx, vs)) {
+		/* XXX: Emitting the PS state even when only the VS changed
+		 * fixes random failures with piglit glsl-max-varyings.
+		 * Not sure why...
+		 */
+		rctx->emitted.named.ps = NULL;
 		si_update_spi_map(rctx);
 	}
 }
@@ -448,8 +453,14 @@ static void si_vertex_buffer_update(struct r600_context *rctx)
 		si_pm4_sh_data_add(pm4, va & 0xFFFFFFFF);
 		si_pm4_sh_data_add(pm4, (S_008F04_BASE_ADDRESS_HI(va >> 32) |
 					 S_008F04_STRIDE(vb->stride)));
-		si_pm4_sh_data_add(pm4, (vb->buffer->width0 - vb->buffer_offset) /
-					 MAX2(vb->stride, 1));
+		if (vb->stride)
+			/* Round up by rounding down and adding 1 */
+			si_pm4_sh_data_add(pm4,
+					   (vb->buffer->width0 - offset -
+					    util_format_get_blocksize(ve->src_format)) /
+					   vb->stride + 1);
+		else
+			si_pm4_sh_data_add(pm4, vb->buffer->width0 - offset);
 		si_pm4_sh_data_add(pm4, rctx->vertex_elements->rsrc_word3[i]);
 
 		if (!bound[ve->vertex_buffer_index]) {
@@ -568,6 +579,12 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	si_pm4_emit_dirty(rctx);
 	rctx->pm4_dirty_cdwords = 0;
 
+#if R600_TRACE_CS
+	if (rctx->screen->trace_bo) {
+		r600_trace_emit(rctx);
+	}
+#endif
+
 #if 0
 	/* Enable stream out if needed. */
 	if (rctx->streamout_start) {
@@ -575,7 +592,6 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		rctx->streamout_start = FALSE;
 	}
 #endif
-
 
 	rctx->flags |= R600_CONTEXT_DST_CACHES_DIRTY;
 

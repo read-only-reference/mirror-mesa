@@ -330,6 +330,9 @@ st_new_renderbuffer_fb(enum pipe_format format, int samples, boolean sw)
       /* accum buffer */
       strb->Base.InternalFormat = GL_RGBA16_SNORM;
       break;
+   case PIPE_FORMAT_R16G16B16A16_UNORM:
+      strb->Base.InternalFormat = GL_RGBA16;
+      break;
    case PIPE_FORMAT_R8_UNORM:
       strb->Base.InternalFormat = GL_R8;
       break;
@@ -543,30 +546,6 @@ st_validate_attachment(struct gl_context *ctx,
    }
 
    return valid;
-}
-
-
-/**
- * Check if two renderbuffer attachments name a combined depth/stencil
- * renderbuffer.
- */
-GLboolean
-st_is_depth_stencil_combined(const struct gl_renderbuffer_attachment *depth,
-                             const struct gl_renderbuffer_attachment *stencil)
-{
-   assert(depth && stencil);
-
-   if (depth->Type == stencil->Type) {
-      if (depth->Type == GL_RENDERBUFFER_EXT &&
-          depth->Renderbuffer == stencil->Renderbuffer)
-         return GL_TRUE;
-
-      if (depth->Type == GL_TEXTURE &&
-          depth->Texture == stencil->Texture)
-         return GL_TRUE;
-   }
-
-   return GL_FALSE;
 }
  
 

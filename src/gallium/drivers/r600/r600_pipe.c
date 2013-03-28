@@ -23,10 +23,13 @@
 #include "r600_pipe.h"
 #include "r600_public.h"
 #include "r600_isa.h"
+#include "evergreen_compute.h"
+#include "r600d.h"
 
 #include <errno.h>
 #include "pipe/p_shader_tokens.h"
 #include "util/u_blitter.h"
+#include "util/u_debug.h"
 #include "util/u_format_s3tc.h"
 #include "util/u_memory.h"
 #include "util/u_simple_shaders.h"
@@ -35,6 +38,31 @@
 #include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
 #include "os/os_time.h"
+
+static const struct debug_named_value debug_options[] = {
+	/* logging */
+	{ "texdepth", DBG_TEX_DEPTH, "Print texture depth info" },
+	{ "compute", DBG_COMPUTE, "Print compute info" },
+
+	/* shaders */
+	{ "fs", DBG_FS, "Print fetch shaders" },
+	{ "vs", DBG_VS, "Print vertex shaders" },
+	{ "gs", DBG_GS, "Print geometry shaders" },
+	{ "ps", DBG_PS, "Print pixel shaders" },
+	{ "cs", DBG_CS, "Print compute shaders" },
+
+	/* features */
+	{ "nohyperz", DBG_NO_HYPERZ, "Disable Hyper-Z" },
+#if defined(R600_USE_LLVM)
+	{ "nollvm", DBG_NO_LLVM, "Disable the LLVM shader compiler" },
+#endif
+	{ "nocpdma", DBG_NO_CP_DMA, "Disable CP DMA" },
+	{ "nodma", DBG_NO_ASYNC_DMA, "Disable asynchronous DMA" },
+	/* GL uses the word INVALIDATE, gallium uses the word DISCARD */
+	{ "noinvalrange", DBG_NO_DISCARD_RANGE, "Disable handling of INVALIDATE_RANGE map flags" },
+
+	DEBUG_NAMED_VALUE_END /* must be last */
+};
 
 /*
  * pipe_context
@@ -166,12 +194,23 @@ static void r600_flush_gfx_ring(void *ctx, unsigned flags)
 static void r600_flush_dma_ring(void *ctx, unsigned flags)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
+	struct radeon_winsys_cs *cs = rctx->rings.dma.cs;
+	unsigned padding_dw, i;
 
-	if (!rctx->rings.dma.cs->cdw) {
+	if (!cs->cdw) {
 		return;
 	}
+
+	/* Pad the DMA CS to a multiple of 8 dwords. */
+	padding_dw = 8 - cs->cdw % 8;
+	if (padding_dw < 8) {
+		for (i = 0; i < padding_dw; i++) {
+			cs->buf[cs->cdw++] = DMA_PACKET(DMA_PACKET_NOP, 0, 0, 0);
+		}
+	}
+
 	rctx->rings.dma.flushing = true;
-	rctx->ws->cs_flush(rctx->rings.dma.cs, flags);
+	rctx->ws->cs_flush(cs, flags);
 	rctx->rings.dma.flushing = false;
 }
 
@@ -283,8 +322,6 @@ static void r600_destroy_context(struct pipe_context *context)
 	}
 	util_unreference_framebuffer_state(&rctx->framebuffer.state);
 
-	r600_context_fini(rctx);
-
 	if (rctx->blitter) {
 		util_blitter_destroy(rctx->blitter);
 	}
@@ -308,7 +345,6 @@ static void r600_destroy_context(struct pipe_context *context)
 		rctx->ws->cs_destroy(rctx->rings.dma.cs);
 	}
 
-	FREE(rctx->range);
 	FREE(rctx);
 }
 
@@ -337,18 +373,11 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	rctx->keep_tiling_flags = rscreen->info.drm_minor >= 12;
 
 	LIST_INITHEAD(&rctx->active_nontimer_queries);
-	LIST_INITHEAD(&rctx->dirty);
-	LIST_INITHEAD(&rctx->enable_list);
-
-	rctx->range = CALLOC(NUM_RANGES, sizeof(struct r600_range));
-	if (!rctx->range)
-		goto fail;
 
 	r600_init_blit_functions(rctx);
 	r600_init_query_functions(rctx);
 	r600_init_context_resource_functions(rctx);
 	r600_init_surface_functions(rctx);
-
 
 	rctx->context.create_video_decoder = vl_create_decoder;
 	rctx->context.create_video_buffer = vl_video_buffer_create;
@@ -360,8 +389,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	case R700:
 		r600_init_state_functions(rctx);
 		r600_init_atom_start_cs(rctx);
-		if (r600_context_init(rctx))
-			goto fail;
+		rctx->max_db = 4;
 		rctx->custom_dsa_flush = r600_create_db_flush_dsa(rctx);
 		rctx->custom_blend_resolve = rctx->chip_class == R700 ? r700_create_resolve_blend(rctx)
 								      : r600_create_resolve_blend(rctx);
@@ -377,8 +405,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		evergreen_init_state_functions(rctx);
 		evergreen_init_atom_start_cs(rctx);
 		evergreen_init_atom_start_compute_cs(rctx);
-		if (evergreen_context_init(rctx))
-			goto fail;
+		rctx->max_db = 8;
 		rctx->custom_dsa_flush = evergreen_create_db_flush_dsa(rctx);
 		rctx->custom_blend_resolve = evergreen_create_resolve_blend(rctx);
 		rctx->custom_blend_decompress = evergreen_create_decompress_blend(rctx);
@@ -402,7 +429,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	rctx->rings.gfx.flushing = false;
 
 	rctx->rings.dma.cs = NULL;
-	if (rscreen->info.r600_has_dma) {
+	if (rscreen->info.r600_has_dma && !(rscreen->debug_flags & DBG_NO_ASYNC_DMA)) {
 		rctx->rings.dma.cs = rctx->ws->cs_create(rctx->ws, RING_DMA);
 		rctx->rings.dma.flush = r600_flush_dma_ring;
 		rctx->ws->cs_set_flush_callback(rctx->rings.dma.cs, r600_flush_dma_from_winsys, rctx);
@@ -537,7 +564,10 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_START_INSTANCE:
 	case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
 	case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
+        case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
 		return 1;
+	case PIPE_CAP_TGSI_TEXCOORD:
+		return 0;
 
         case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
                 return R600_MAP_BUFFER_ALIGNMENT;
@@ -1047,6 +1077,27 @@ static uint64_t r600_get_timestamp(struct pipe_screen *screen)
 			rscreen->info.r600_clock_crystal_freq;
 }
 
+static int r600_get_driver_query_info(struct pipe_screen *screen,
+				      unsigned index,
+				      struct pipe_driver_query_info *info)
+{
+	struct r600_screen *rscreen = (struct r600_screen*)screen;
+	struct pipe_driver_query_info list[] = {
+		{"draw-calls", R600_QUERY_DRAW_CALLS, 0},
+		{"requested-VRAM", R600_QUERY_REQUESTED_VRAM, rscreen->info.vram_size, TRUE},
+		{"requested-GTT", R600_QUERY_REQUESTED_GTT, rscreen->info.gart_size, TRUE},
+	};
+
+	if (!info)
+		return Elements(list);
+
+	if (index >= Elements(list))
+		return 0;
+
+	*info = list[index];
+	return 1;
+}
+
 struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 {
 	struct r600_screen *rscreen = CALLOC_STRUCT(r600_screen);
@@ -1058,8 +1109,20 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 	rscreen->ws = ws;
 	ws->query_info(ws, &rscreen->info);
 
+	rscreen->debug_flags = debug_get_flags_option("R600_DEBUG", debug_options, 0);
+	if (debug_get_bool_option("R600_DEBUG_COMPUTE", FALSE))
+		rscreen->debug_flags |= DBG_COMPUTE;
+	if (debug_get_bool_option("R600_DUMP_SHADERS", FALSE))
+		rscreen->debug_flags |= DBG_FS | DBG_VS | DBG_GS | DBG_PS | DBG_CS;
+	if (!debug_get_bool_option("R600_HYPERZ", TRUE))
+		rscreen->debug_flags |= DBG_NO_HYPERZ;
+	if (!debug_get_bool_option("R600_LLVM", TRUE))
+		rscreen->debug_flags |= DBG_NO_LLVM;
+	if (debug_get_bool_option("R600_PRINT_TEXDEPTH", FALSE))
+		rscreen->debug_flags |= DBG_TEX_DEPTH;
 	rscreen->family = rscreen->info.family;
 	rscreen->chip_class = rscreen->info.chip_class;
+
 	if (rscreen->family == CHIP_UNKNOWN) {
 		fprintf(stderr, "r600: Unknown chipset 0x%04X\n", rscreen->info.pci_id);
 		FREE(rscreen);
@@ -1111,6 +1174,9 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 		break;
 	}
 
+	rscreen->has_cp_dma = rscreen->info.drm_minor >= 27 &&
+			      !(rscreen->debug_flags & DBG_NO_CP_DMA);
+
 	if (r600_init_tiling(rscreen)) {
 		FREE(rscreen);
 		return NULL;
@@ -1138,6 +1204,7 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 	rscreen->screen.fence_reference = r600_fence_reference;
 	rscreen->screen.fence_signalled = r600_fence_signalled;
 	rscreen->screen.fence_finish = r600_fence_finish;
+	rscreen->screen.get_driver_query_info = r600_get_driver_query_info;
 	r600_init_screen_resource_functions(&rscreen->screen);
 
 	util_format_s3tc_init();
@@ -1148,14 +1215,6 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 	LIST_INITHEAD(&rscreen->fences.pool);
 	LIST_INITHEAD(&rscreen->fences.blocks);
 	pipe_mutex_init(rscreen->fences.mutex);
-
-	/* Hyperz is very lockup prone any code that touch related part should be
-	 * carefully tested especialy on r6xx/r7xx Development show that some piglit
-	 * case were triggering lockup quickly such as :
-	 * piglit/bin/depthstencil-render-miplevels 1024 d=s=z24_s8
-	 */
-	rscreen->use_hyperz = debug_get_bool_option("R600_HYPERZ", TRUE);
-	rscreen->use_hyperz = rscreen->info.drm_minor >= 26 ? rscreen->use_hyperz : FALSE;
 
 	rscreen->global_pool = compute_memory_pool_new(rscreen);
 

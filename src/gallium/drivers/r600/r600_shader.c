@@ -58,55 +58,36 @@ issued in the w slot as well.
 The compiler must issue the source argument to slots z, y, and x
 */
 
-static int r600_pipe_shader(struct pipe_context *ctx, struct r600_pipe_shader *shader)
-{
-	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct r600_shader *rshader = &shader->shader;
-	uint32_t *ptr;
-	int	i;
-
-	/* copy new shader */
-	if (shader->bo == NULL) {
-		shader->bo = (struct r600_resource*)
-			pipe_buffer_create(ctx->screen, PIPE_BIND_CUSTOM, PIPE_USAGE_IMMUTABLE, rshader->bc.ndw * 4);
-		if (shader->bo == NULL) {
-			return -ENOMEM;
-		}
-		ptr = r600_buffer_mmap_sync_with_rings(rctx, shader->bo, PIPE_TRANSFER_WRITE);
-		if (R600_BIG_ENDIAN) {
-			for (i = 0; i < rshader->bc.ndw; ++i) {
-				ptr[i] = bswap_32(rshader->bc.bytecode[i]);
-			}
-		} else {
-			memcpy(ptr, rshader->bc.bytecode, rshader->bc.ndw * sizeof(*ptr));
-		}
-		rctx->ws->buffer_unmap(shader->bo->cs_buf);
-	}
-	/* build state */
-	switch (rshader->processor_type) {
-	case TGSI_PROCESSOR_VERTEX:
-		if (rctx->chip_class >= EVERGREEN) {
-			evergreen_pipe_shader_vs(ctx, shader);
-		} else {
-			r600_pipe_shader_vs(ctx, shader);
-		}
-		break;
-	case TGSI_PROCESSOR_FRAGMENT:
-		if (rctx->chip_class >= EVERGREEN) {
-			evergreen_pipe_shader_ps(ctx, shader);
-		} else {
-			r600_pipe_shader_ps(ctx, shader);
-		}
-		break;
-	default:
-		return -EINVAL;
-	}
-	return 0;
-}
-
 static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 				 struct r600_pipe_shader *pipeshader,
 				 struct r600_shader_key key);
+
+static unsigned tgsi_get_processor_type(const struct tgsi_token *tokens)
+{
+	struct tgsi_parse_context parse;
+
+	if (tgsi_parse_init( &parse, tokens ) != TGSI_PARSE_OK) {
+		debug_printf("tgsi_parse_init() failed in %s:%i!\n", __func__, __LINE__);
+		return ~0;
+	}
+	return parse.FullHeader.Processor.Processor;
+}
+
+static bool r600_can_dump_shader(struct r600_screen *rscreen, unsigned processor_type)
+{
+	switch (processor_type) {
+	case TGSI_PROCESSOR_VERTEX:
+		return (rscreen->debug_flags & DBG_VS) != 0;
+	case TGSI_PROCESSOR_GEOMETRY:
+		return (rscreen->debug_flags & DBG_GS) != 0;
+	case TGSI_PROCESSOR_FRAGMENT:
+		return (rscreen->debug_flags & DBG_PS) != 0;
+	case TGSI_PROCESSOR_COMPUTE:
+		return (rscreen->debug_flags & DBG_CS) != 0;
+	default:
+		return false;
+	}
+}
 
 static void r600_dump_streamout(struct pipe_stream_output_info *so)
 {
@@ -132,19 +113,15 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 			    struct r600_pipe_shader *shader,
 			    struct r600_shader_key key)
 {
-	static int dump_shaders = -1;
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct r600_pipe_shader_selector *sel = shader->selector;
-	int r;
+	int r, i;
+	uint32_t *ptr;
+	bool dump = r600_can_dump_shader(rctx->screen, tgsi_get_processor_type(sel->tokens));
 
 	shader->shader.bc.isa = rctx->isa;
 
-	/* Would like some magic "get_bool_option_once" routine.
-	*/
-	if (dump_shaders == -1)
-		dump_shaders = debug_get_num_option("R600_DUMP_SHADERS", 0);
-
-	if (dump_shaders) {
+	if (dump) {
 		fprintf(stderr, "--------------------------------------------------------------\n");
 		tgsi_dump(sel->tokens, 0);
 
@@ -162,24 +139,58 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 		R600_ERR("building bytecode failed !\n");
 		return r;
 	}
-	if (dump_shaders & 1) {
-		fprintf(stderr, "--------------------------------------------------------------\n");
-		r600_bytecode_dump(&shader->shader.bc);
-		fprintf(stderr, "______________________________________________________________\n");
-	}
-	if (dump_shaders & 2) {
+	if (dump) {
 		fprintf(stderr, "--------------------------------------------------------------\n");
 		r600_bytecode_disasm(&shader->shader.bc);
 		fprintf(stderr, "______________________________________________________________\n");
 	}
 
-	return r600_pipe_shader(ctx, shader);
+
+	/* Store the shader in a buffer. */
+	if (shader->bo == NULL) {
+		shader->bo = (struct r600_resource*)
+			pipe_buffer_create(ctx->screen, PIPE_BIND_CUSTOM, PIPE_USAGE_IMMUTABLE, shader->shader.bc.ndw * 4);
+		if (shader->bo == NULL) {
+			return -ENOMEM;
+		}
+		ptr = r600_buffer_mmap_sync_with_rings(rctx, shader->bo, PIPE_TRANSFER_WRITE);
+		if (R600_BIG_ENDIAN) {
+			for (i = 0; i < shader->shader.bc.ndw; ++i) {
+				ptr[i] = bswap_32(shader->shader.bc.bytecode[i]);
+			}
+		} else {
+			memcpy(ptr, shader->shader.bc.bytecode, shader->shader.bc.ndw * sizeof(*ptr));
+		}
+		rctx->ws->buffer_unmap(shader->bo->cs_buf);
+	}
+
+	/* Build state. */
+	switch (shader->shader.processor_type) {
+	case TGSI_PROCESSOR_VERTEX:
+		if (rctx->chip_class >= EVERGREEN) {
+			evergreen_update_vs_state(ctx, shader);
+		} else {
+			r600_update_vs_state(ctx, shader);
+		}
+		break;
+	case TGSI_PROCESSOR_FRAGMENT:
+		if (rctx->chip_class >= EVERGREEN) {
+			evergreen_update_ps_state(ctx, shader);
+		} else {
+			r600_update_ps_state(ctx, shader);
+		}
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
 }
 
 void r600_pipe_shader_destroy(struct pipe_context *ctx, struct r600_pipe_shader *shader)
 {
 	pipe_resource_reference((struct pipe_resource**)&shader->bo, NULL);
 	r600_bytecode_clear(&shader->shader.bc);
+	r600_release_command_buffer(&shader->command_buffer);
 }
 
 /*
@@ -260,11 +271,7 @@ int r600_compute_shader_create(struct pipe_context * ctx,
 	unsigned char * bytes;
 	unsigned byte_count;
 	struct r600_shader_ctx shader_ctx;
-	unsigned dump = 0;
-
-	if (debug_get_bool_option("R600_DUMP_SHADERS", FALSE)) {
-		dump = 1;
-	}
+	bool dump = (r600_ctx->screen->debug_flags & DBG_CS) != 0;
 
 	r600_llvm_compile(mod, &bytes, &byte_count, r600_ctx->family , dump);
 	shader_ctx.bc = bytecode;
@@ -278,7 +285,7 @@ int r600_compute_shader_create(struct pipe_context * ctx,
 	}
 	r600_bytecode_build(shader_ctx.bc);
 	if (dump) {
-		r600_bytecode_dump(shader_ctx.bc);
+		r600_bytecode_disasm(shader_ctx.bc);
 	}
 	free(bytes);
 	return 1;
@@ -482,29 +489,33 @@ static unsigned r600_tex_from_byte_stream(struct r600_shader_ctx *ctx,
 {
 	struct r600_bytecode_tex tex;
 
-	tex.op = r600_isa_fetch_by_opcode(ctx->bc->isa, bytes[bytes_read++]);
-	tex.resource_id = bytes[bytes_read++];
-	tex.src_gpr = bytes[bytes_read++];
-	tex.src_rel = bytes[bytes_read++];
-	tex.dst_gpr = bytes[bytes_read++];
-	tex.dst_rel = bytes[bytes_read++];
-	tex.dst_sel_x = bytes[bytes_read++];
-	tex.dst_sel_y = bytes[bytes_read++];
-	tex.dst_sel_z = bytes[bytes_read++];
-	tex.dst_sel_w = bytes[bytes_read++];
-	tex.lod_bias = bytes[bytes_read++];
-	tex.coord_type_x = bytes[bytes_read++];
-	tex.coord_type_y = bytes[bytes_read++];
-	tex.coord_type_z = bytes[bytes_read++];
-	tex.coord_type_w = bytes[bytes_read++];
-	tex.offset_x = bytes[bytes_read++];
-	tex.offset_y = bytes[bytes_read++];
-	tex.offset_z = bytes[bytes_read++];
-	tex.sampler_id = bytes[bytes_read++];
-	tex.src_sel_x = bytes[bytes_read++];
-	tex.src_sel_y = bytes[bytes_read++];
-	tex.src_sel_z = bytes[bytes_read++];
-	tex.src_sel_w = bytes[bytes_read++];
+	uint32_t word0 = i32_from_byte_stream(bytes, &bytes_read);
+	uint32_t word1 = i32_from_byte_stream(bytes, &bytes_read);
+	uint32_t word2 = i32_from_byte_stream(bytes, &bytes_read);
+
+	tex.op = r600_isa_fetch_by_opcode(ctx->bc->isa, G_SQ_TEX_WORD0_TEX_INST(word0));
+	tex.resource_id = G_SQ_TEX_WORD0_RESOURCE_ID(word0);
+	tex.src_gpr = G_SQ_TEX_WORD0_SRC_GPR(word0);
+	tex.src_rel = G_SQ_TEX_WORD0_SRC_REL(word0);
+	tex.dst_gpr = G_SQ_TEX_WORD1_DST_GPR(word1);
+	tex.dst_rel = G_SQ_TEX_WORD1_DST_REL(word1);
+	tex.dst_sel_x = G_SQ_TEX_WORD1_DST_SEL_X(word1);
+	tex.dst_sel_y = G_SQ_TEX_WORD1_DST_SEL_Y(word1);
+	tex.dst_sel_z = G_SQ_TEX_WORD1_DST_SEL_Z(word1);
+	tex.dst_sel_w = G_SQ_TEX_WORD1_DST_SEL_W(word1);
+	tex.lod_bias = G_SQ_TEX_WORD1_LOD_BIAS(word1);
+	tex.coord_type_x = G_SQ_TEX_WORD1_COORD_TYPE_X(word1);
+	tex.coord_type_y = G_SQ_TEX_WORD1_COORD_TYPE_Y(word1);
+	tex.coord_type_z = G_SQ_TEX_WORD1_COORD_TYPE_Z(word1);
+	tex.coord_type_w = G_SQ_TEX_WORD1_COORD_TYPE_W(word1);
+	tex.offset_x = G_SQ_TEX_WORD2_OFFSET_X(word2);
+	tex.offset_y = G_SQ_TEX_WORD2_OFFSET_Y(word2);
+	tex.offset_z = G_SQ_TEX_WORD2_OFFSET_Z(word2);
+	tex.sampler_id = G_SQ_TEX_WORD2_SAMPLER_ID(word2);
+	tex.src_sel_x = G_SQ_TEX_WORD2_SRC_SEL_X(word2);
+	tex.src_sel_y = G_SQ_TEX_WORD2_SRC_SEL_Y(word2);
+	tex.src_sel_z = G_SQ_TEX_WORD2_SRC_SEL_Z(word2);
+	tex.src_sel_w = G_SQ_TEX_WORD2_SRC_SEL_W(word2);
 
 	tex.inst_mod = 0;
 
@@ -1240,7 +1251,7 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 	unsigned inst_byte_count = 0;
 
 #ifdef R600_USE_LLVM
-	use_llvm = debug_get_bool_option("R600_LLVM", TRUE);
+	use_llvm = !(rscreen->debug_flags & DBG_NO_LLVM);
 #endif
 	ctx.bc = &shader->bc;
 	ctx.shader = shader;
@@ -1416,7 +1427,8 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 	if (use_llvm) {
 		struct radeon_llvm_context radeon_llvm_ctx;
 		LLVMModuleRef mod;
-		unsigned dump = 0;
+		bool dump = r600_can_dump_shader(rscreen, ctx.type);
+
 		memset(&radeon_llvm_ctx, 0, sizeof(radeon_llvm_ctx));
 		radeon_llvm_ctx.type = ctx.type;
 		radeon_llvm_ctx.two_side = shader->two_side;
@@ -1430,11 +1442,9 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 		radeon_llvm_ctx.clip_vertex = ctx.cv_output;
 		radeon_llvm_ctx.alpha_to_one = key.alpha_to_one;
 		mod = r600_tgsi_llvm(&radeon_llvm_ctx, tokens);
-		if (debug_get_bool_option("R600_DUMP_SHADERS", FALSE)) {
-			dump = 1;
-		}
+
 		if (r600_llvm_compile(mod, &inst_bytes, &inst_byte_count,
-							rscreen->family, dump)) {
+				      rscreen->family, dump)) {
 			FREE(inst_bytes);
 			radeon_llvm_dispose(&radeon_llvm_ctx);
 			use_llvm = 0;

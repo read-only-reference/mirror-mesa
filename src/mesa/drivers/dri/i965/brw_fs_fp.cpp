@@ -412,6 +412,7 @@ fs_visitor::emit_fragment_program_code()
          fs_reg dpdy;
          fs_reg coordinate = src[0];
          fs_reg shadow_c;
+         fs_reg sample_index;
 
          switch (fpi->Opcode) {
          case OPCODE_TEX:
@@ -500,9 +501,9 @@ fs_visitor::emit_fragment_program_code()
 
          fs_inst *inst;
          if (intel->gen >= 7) {
-            inst = emit_texture_gen7(ir, dst, coordinate, shadow_c, lod, dpdy);
+            inst = emit_texture_gen7(ir, dst, coordinate, shadow_c, lod, dpdy, sample_index);
          } else if (intel->gen >= 5) {
-            inst = emit_texture_gen5(ir, dst, coordinate, shadow_c, lod, dpdy);
+            inst = emit_texture_gen5(ir, dst, coordinate, shadow_c, lod, dpdy, sample_index);
          } else {
             inst = emit_texture_gen4(ir, dst, coordinate, shadow_c, lod, dpdy);
          }
@@ -598,8 +599,8 @@ fs_visitor::setup_fp_regs()
       }
    }
 
-   fp_input_regs = rzalloc_array(mem_ctx, fs_reg, FRAG_ATTRIB_MAX);
-   for (int i = 0; i < FRAG_ATTRIB_MAX; i++) {
+   fp_input_regs = rzalloc_array(mem_ctx, fs_reg, VARYING_SLOT_MAX);
+   for (int i = 0; i < VARYING_SLOT_MAX; i++) {
       if (fp->Base.InputsRead & BITFIELD64_BIT(i)) {
          /* Make up a dummy instruction to reuse code for emitting
           * interpolation.
@@ -613,18 +614,18 @@ fs_visitor::setup_fp_regs()
                                                     i);
 
          switch (i) {
-         case FRAG_ATTRIB_WPOS:
+         case VARYING_SLOT_POS:
             ir->pixel_center_integer = fp->PixelCenterInteger;
             ir->origin_upper_left = fp->OriginUpperLeft;
             fp_input_regs[i] = *emit_fragcoord_interpolation(ir);
             break;
-         case FRAG_ATTRIB_FACE:
+         case VARYING_SLOT_FACE:
             fp_input_regs[i] = *emit_frontfacing_interpolation(ir);
             break;
          default:
             fp_input_regs[i] = *emit_general_interpolation(ir);
 
-            if (i == FRAG_ATTRIB_FOGC) {
+            if (i == VARYING_SLOT_FOGC) {
                emit(MOV(regoffset(fp_input_regs[i], 1), fs_reg(0.0f)));
                emit(MOV(regoffset(fp_input_regs[i], 2), fs_reg(0.0f)));
                emit(MOV(regoffset(fp_input_regs[i], 3), fs_reg(1.0f)));

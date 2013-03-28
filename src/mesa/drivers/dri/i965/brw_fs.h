@@ -356,9 +356,11 @@ public:
    fs_inst *emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
 			      fs_reg shadow_comp, fs_reg lod, fs_reg lod2);
    fs_inst *emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
-			      fs_reg shadow_comp, fs_reg lod, fs_reg lod2);
+                              fs_reg shadow_comp, fs_reg lod, fs_reg lod2,
+                              fs_reg sample_index);
    fs_inst *emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
-			      fs_reg shadow_comp, fs_reg lod, fs_reg lod2);
+                              fs_reg shadow_comp, fs_reg lod, fs_reg lod2,
+                              fs_reg sample_index);
    fs_reg fix_math_operand(fs_reg src);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0, fs_reg src1);
@@ -422,7 +424,7 @@ public:
    void dump_instructions();
    void dump_instruction(fs_inst *inst);
 
-   const struct gl_fragment_program *fp;
+   struct gl_fragment_program *fp;
    struct brw_wm_compile *c;
    unsigned int sanity_param_count;
 
@@ -450,7 +452,7 @@ public:
    int first_non_payload_grf;
    /** Either BRW_MAX_GRF or GEN7_MRF_HACK_START */
    int max_grf;
-   int urb_setup[FRAG_ATTRIB_MAX];
+   int urb_setup[VARYING_SLOT_MAX];
 
    fs_reg *fp_temp_regs;
    fs_reg *fp_input_regs;
@@ -544,10 +546,9 @@ private:
                                                  struct brw_reg index,
                                                  struct brw_reg offset);
    void generate_mov_dispatch_to_flags(fs_inst *inst);
-   void generate_set_global_offset(fs_inst *inst,
-                                   struct brw_reg dst,
-                                   struct brw_reg src,
-                                   struct brw_reg offset);
+   void generate_set_simd4x2_offset(fs_inst *inst,
+                                    struct brw_reg dst,
+                                    struct brw_reg offset);
    void generate_discard_jump(fs_inst *inst);
 
    void generate_pack_half_2x16_split(fs_inst *inst,
@@ -557,6 +558,11 @@ private:
    void generate_unpack_half_2x16_split(fs_inst *inst,
                                         struct brw_reg dst,
                                         struct brw_reg src);
+
+   void generate_shader_time_add(fs_inst *inst,
+                                 struct brw_reg payload,
+                                 struct brw_reg offset,
+                                 struct brw_reg value);
 
    void patch_discard_jumps_to_fb_writes();
 

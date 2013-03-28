@@ -239,6 +239,13 @@ struct intel_context
    bool no_batch_wrap;
    bool tnl_pipeline_running; /**< Set while i915's _tnl_run_pipeline. */
 
+   /**
+    * Set if we're either a debug context or the INTEL_DEBUG=perf environment
+    * variable is set, this is the flag indicating to do expensive work that
+    * might lead to a perf_debug() call.
+    */
+   bool perf_debug;
+
    struct
    {
       GLuint id;
@@ -278,6 +285,7 @@ struct intel_context
    bool no_rast;
    bool always_flush_batch;
    bool always_flush_cache;
+   bool disable_throttling;
 
    /* State for intelvb.c and inteltris.c.
     */
@@ -317,14 +325,6 @@ struct intel_context
     * either way.
     */
    bool is_front_buffer_reading;
-
-   /**
-    * Count of intel_regions that are mapped.
-    *
-    * This allows us to assert that no batch buffer is emitted if a
-    * region is mapped.
-    */
-   int num_mapped_regions;
 
    bool use_texture_tiling;
    bool use_early_z;
@@ -421,7 +421,6 @@ extern int INTEL_DEBUG;
 #define DEBUG_BLIT	0x8
 #define DEBUG_MIPTREE   0x10
 #define DEBUG_PERF	0x20
-#define DEBUG_VERBOSE	0x40
 #define DEBUG_BATCH     0x80
 #define DEBUG_PIXEL     0x100
 #define DEBUG_BUFMGR    0x200
@@ -433,16 +432,14 @@ extern int INTEL_DEBUG;
 #define DEBUG_VERTS	0x8000
 #define DEBUG_DRI       0x10000
 #define DEBUG_SF        0x20000
-#define DEBUG_SANITY    0x40000
-#define DEBUG_SLEEP     0x80000
 #define DEBUG_STATS     0x100000
-#define DEBUG_TILE      0x200000
 #define DEBUG_WM        0x400000
 #define DEBUG_URB       0x800000
 #define DEBUG_VS        0x1000000
 #define DEBUG_CLIP      0x2000000
 #define DEBUG_AUB       0x4000000
 #define DEBUG_SHADER_TIME 0x8000000
+#define DEBUG_BLORP     0x10000000
 #define DEBUG_NO16      0x20000000
 
 #ifdef HAVE_ANDROID_PLATFORM
@@ -461,23 +458,29 @@ extern int INTEL_DEBUG;
 		dbg_printf(__VA_ARGS__);			\
 } while(0)
 
-#define fallback_debug(...) do {				\
-	if (unlikely(INTEL_DEBUG & DEBUG_PERF))			\
-		dbg_printf(__VA_ARGS__);			\
-} while(0)
-
 #define perf_debug(...) do {					\
-	if (unlikely(INTEL_DEBUG & DEBUG_PERF))			\
-		dbg_printf(__VA_ARGS__);			\
+   static GLuint msg_id = 0;                                    \
+   if (unlikely(INTEL_DEBUG & DEBUG_PERF))                      \
+      dbg_printf(__VA_ARGS__);                                  \
+   if (intel->perf_debug)                                       \
+      _mesa_gl_debug(&intel->ctx, &msg_id,                      \
+                     MESA_DEBUG_TYPE_PERFORMANCE,               \
+                     MESA_DEBUG_SEVERITY_MEDIUM,                \
+                     __VA_ARGS__);                              \
 } while(0)
 
 #define WARN_ONCE(cond, fmt...) do {                            \
    if (unlikely(cond)) {                                        \
       static bool _warned = false;                              \
+      static GLuint msg_id = 0;                                 \
       if (!_warned) {                                           \
          fprintf(stderr, "WARNING: ");                          \
          fprintf(stderr, fmt);                                  \
          _warned = true;                                        \
+                                                                \
+         _mesa_gl_debug(ctx, &msg_id,                           \
+                        MESA_DEBUG_TYPE_OTHER,                  \
+                        MESA_DEBUG_SEVERITY_HIGH, fmt);         \
       }                                                         \
    }                                                            \
 } while (0)

@@ -1307,7 +1307,7 @@ ir_dereference::is_lvalue() const
 }
 
 
-static const char *tex_opcode_strs[] = { "tex", "txb", "txl", "txd", "txf", "txs" };
+static const char *tex_opcode_strs[] = { "tex", "txb", "txl", "txd", "txf", "txf_ms", "txs", "lod" };
 
 const char *ir_texture::opcode_string()
 {
@@ -1338,6 +1338,9 @@ ir_texture::set_sampler(ir_dereference *sampler, const glsl_type *type)
 
    if (this->op == ir_txs) {
       assert(type->base_type == GLSL_TYPE_INT);
+   } else if (this->op == ir_lod) {
+      assert(type->vector_elements == 2);
+      assert(type->base_type == GLSL_TYPE_FLOAT);
    } else {
       assert(sampler->type->sampler_type == (int) type->base_type);
       if (sampler->type->sampler_shadow)
@@ -1553,7 +1556,7 @@ ir_variable::determine_interpolation_mode(bool flat_shade)
       return (glsl_interp_qualifier) this->interpolation;
    int location = this->location;
    bool is_gl_Color =
-      location == FRAG_ATTRIB_COL0 || location == FRAG_ATTRIB_COL1;
+      location == VARYING_SLOT_COL0 || location == VARYING_SLOT_COL1;
    if (flat_shade && is_gl_Color)
       return INTERP_QUALIFIER_FLAT;
    else

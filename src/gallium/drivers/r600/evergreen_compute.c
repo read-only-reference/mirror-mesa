@@ -38,18 +38,16 @@
 #include "util/u_inlines.h"
 #include "util/u_framebuffer.h"
 #include "pipebuffer/pb_buffer.h"
-#include "r600.h"
 #include "evergreend.h"
 #include "r600_resource.h"
 #include "r600_shader.h"
 #include "r600_pipe.h"
 #include "r600_formats.h"
 #include "evergreen_compute.h"
-#include "r600_hw_context_priv.h"
 #include "evergreen_compute_internal.h"
 #include "compute_memory_pool.h"
 #ifdef HAVE_OPENCL
-#include "llvm_wrapper.h"
+#include "radeon_llvm_util.h"
 #endif
 
 /**
@@ -127,7 +125,7 @@ void *evergreen_create_compute_state(
 	const unsigned char * code;
 	unsigned i;
 
-	COMPUTE_DBG("*** evergreen_create_compute_state\n");
+	COMPUTE_DBG(ctx->screen, "*** evergreen_create_compute_state\n");
 
 	header = cso->prog;
 	code = cso->prog + sizeof(struct pipe_llvm_program_header);
@@ -142,12 +140,12 @@ void *evergreen_create_compute_state(
 	shader->input_size = cso->req_input_mem;
 
 #ifdef HAVE_OPENCL 
-	shader->num_kernels = llvm_get_num_kernels(code, header->num_bytes);
+	shader->num_kernels = radeon_llvm_get_num_kernels(code, header->num_bytes);
 	shader->kernels = CALLOC(sizeof(struct r600_kernel), shader->num_kernels);
 
 	for (i = 0; i < shader->num_kernels; i++) {
 		struct r600_kernel *kernel = &shader->kernels[i];
-		kernel->llvm_module = llvm_get_kernel_module(i, code,
+		kernel->llvm_module = radeon_llvm_get_kernel_module(i, code,
 							header->num_bytes);
 	}
 #endif
@@ -166,7 +164,7 @@ static void evergreen_bind_compute_state(struct pipe_context *ctx_, void *state)
 {
 	struct r600_context *ctx = (struct r600_context *)ctx_;
 
-	COMPUTE_DBG("*** evergreen_bind_compute_state\n");
+	COMPUTE_DBG(ctx->screen, "*** evergreen_bind_compute_state\n");
 
 	ctx->cs_shader_state.shader = (struct r600_pipe_compute *)state;
 }
@@ -231,7 +229,7 @@ void evergreen_compute_upload_input(
 
 	for (i = 0; i < (kernel_parameters_offset_bytes / 4) +
 					(shader->input_size / 4); i++) {
-		COMPUTE_DBG("input %i : %i\n", i,
+		COMPUTE_DBG(ctx->screen, "input %i : %i\n", i,
 			((unsigned*)num_work_groups_start)[i]);
 	}
 
@@ -272,7 +270,7 @@ static void evergreen_emit_direct_dispatch(
 	num_waves = (block_layout[0] * block_layout[1] * block_layout[2] +
 			wave_divisor - 1) / wave_divisor;
 
-	COMPUTE_DBG("Using %u pipes, there are %u wavefronts per thread block\n",
+	COMPUTE_DBG(rctx->screen, "Using %u pipes, there are %u wavefronts per thread block\n",
 							num_pipes, num_waves);
 
 	/* XXX: Partition the LDS between PS/CS.  By default half (4096 dwords
@@ -378,7 +376,7 @@ static void compute_emit_cs(struct r600_context *ctx, const uint *block_layout,
 	for (i = 0; i < get_compute_resource_num(); i++) {
 		if (resources[i].enabled) {
 			int j;
-			COMPUTE_DBG("resnum: %i, cdw: %i\n", i, cs->cdw);
+			COMPUTE_DBG(ctx->screen, "resnum: %i, cdw: %i\n", i, cs->cdw);
 
 			for (j = 0; j < resources[i].cs_end; j++) {
 				if (resources[i].do_reloc[j]) {
@@ -417,9 +415,9 @@ static void compute_emit_cs(struct r600_context *ctx, const uint *block_layout,
 	r600_flush_emit(ctx);
 
 #if 0
-	COMPUTE_DBG("cdw: %i\n", cs->cdw);
+	COMPUTE_DBG(ctx->screen, "cdw: %i\n", cs->cdw);
 	for (i = 0; i < cs->cdw; i++) {
-		COMPUTE_DBG("%4i : 0x%08X\n", i, ctx->cs->buf[i]);
+		COMPUTE_DBG(ctx->screen, "%4i : 0x%08X\n", i, ctx->cs->buf[i]);
 	}
 #endif
 
@@ -430,18 +428,13 @@ static void compute_emit_cs(struct r600_context *ctx, const uint *block_layout,
 
 	ctx->ws->cs_flush(ctx->rings.gfx.cs, flush_flags);
 
-	ctx->pm4_dirty_cdwords = 0;
 	ctx->flags = 0;
 
-	COMPUTE_DBG("shader started\n");
+	COMPUTE_DBG(ctx->screen, "shader started\n");
 
 	ctx->ws->buffer_wait(onebo->buf, 0);
 
-	COMPUTE_DBG("...\n");
-
-	ctx->streamout_start = TRUE;
-	ctx->streamout_append_bitmask = ~0;
-
+	COMPUTE_DBG(ctx->screen, "...\n");
 }
 
 
@@ -483,7 +476,7 @@ static void evergreen_launch_grid(
 	struct r600_context *ctx = (struct r600_context *)ctx_;
 
 #ifdef HAVE_OPENCL 
-	COMPUTE_DBG("*** evergreen_launch_grid: pc = %u\n", pc);
+	COMPUTE_DBG(ctx->screen, "*** evergreen_launch_grid: pc = %u\n", pc);
 
 	struct r600_pipe_compute *shader = ctx->cs_shader_state.shader;
 	if (!shader->kernels[pc].code_bo) {
@@ -510,7 +503,7 @@ static void evergreen_set_compute_resources(struct pipe_context * ctx_,
 	struct r600_context *ctx = (struct r600_context *)ctx_;
 	struct r600_surface **resources = (struct r600_surface **)surfaces;
 
-	COMPUTE_DBG("*** evergreen_set_compute_resources: start = %u count = %u\n",
+	COMPUTE_DBG(ctx->screen, "*** evergreen_set_compute_resources: start = %u count = %u\n",
 			start, count);
 
 	for (int i = 0; i < count; i++)	{
@@ -583,7 +576,7 @@ static void evergreen_set_global_binding(
 	struct r600_resource_global **buffers =
 		(struct r600_resource_global **)resources;
 
-	COMPUTE_DBG("*** evergreen_set_global_binding first = %u n = %u\n",
+	COMPUTE_DBG(ctx->screen, "*** evergreen_set_global_binding first = %u n = %u\n",
 			first, n);
 
 	if (!resources) {
@@ -821,8 +814,8 @@ struct pipe_resource *r600_compute_global_buffer_create(
 	CALLOC(sizeof(struct r600_resource_global), 1);
 	rscreen = (struct r600_screen*)screen;
 
-	COMPUTE_DBG("*** r600_compute_global_buffer_create\n");
-	COMPUTE_DBG("width = %u array_size = %u\n", templ->width0,
+	COMPUTE_DBG(rscreen, "*** r600_compute_global_buffer_create\n");
+	COMPUTE_DBG(rscreen, "width = %u array_size = %u\n", templ->width0,
 			templ->array_size);
 
 	result->base.b.vtbl = &r600_global_buffer_vtbl;
@@ -881,7 +874,7 @@ void *r600_compute_global_transfer_map(
 
 	assert(resource->target == PIPE_BUFFER);
 
-	COMPUTE_DBG("* r600_compute_global_get_transfer()\n"
+	COMPUTE_DBG(rctx->screen, "* r600_compute_global_get_transfer()\n"
 			"level = %u, usage = %u, box(x = %u, y = %u, z = %u "
 			"width = %u, height = %u, depth = %u)\n", level, usage,
 			box->x, box->y, box->z, box->width, box->height,
@@ -902,7 +895,7 @@ void *r600_compute_global_transfer_map(
 
 	///TODO: do it better, mapping is not possible if the pool is too big
 
-	COMPUTE_DBG("* r600_compute_global_transfer_map()\n");
+	COMPUTE_DBG(rctx->screen, "* r600_compute_global_transfer_map()\n");
 
 	if (!(map = r600_buffer_mmap_sync_with_rings(rctx, buffer->chunk->pool->bo, transfer->usage))) {
 		util_slab_free(&rctx->pool_transfers, transfer);
@@ -911,7 +904,7 @@ void *r600_compute_global_transfer_map(
 
 	*ptransfer = transfer;
 
-	COMPUTE_DBG("Buffer: %p + %u (buffer offset in global memory) "
+	COMPUTE_DBG(rctx->screen, "Buffer: %p + %u (buffer offset in global memory) "
 		"+ %u (box.x)\n", map, buffer->chunk->start_in_dw, transfer->box.x);
 	return ((char*)(map + buffer->chunk->start_in_dw)) + transfer->box.x;
 }
@@ -929,7 +922,7 @@ void r600_compute_global_transfer_unmap(
 	ctx = (struct r600_context *)ctx_;
 	buffer = (struct r600_resource_global*)transfer->resource;
 
-	COMPUTE_DBG("* r600_compute_global_transfer_unmap()\n");
+	COMPUTE_DBG(ctx->screen, "* r600_compute_global_transfer_unmap()\n");
 
 	ctx->ws->buffer_unmap(buffer->chunk->pool->bo->cs_buf);
 	util_slab_free(&ctx->pool_transfers, transfer);

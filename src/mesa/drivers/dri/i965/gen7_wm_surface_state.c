@@ -299,10 +299,6 @@ gen7_update_texture_surface(struct gl_context *ctx,
       return;
    }
 
-   /* We don't support MSAA for textures. */
-   assert(!mt->array_spacing_lod0);
-   assert(mt->num_samples <= 1);
-
    intel_miptree_get_dimensions_for_image(firstImage, &width, &height, &depth);
 
    uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
@@ -328,12 +324,17 @@ gen7_update_texture_surface(struct gl_context *ctx,
    if (depth > 1 && tObj->Target != GL_TEXTURE_3D)
       surf[0] |= GEN7_SURFACE_IS_ARRAY;
 
+   if (mt->array_spacing_lod0)
+      surf[0] |= GEN7_SURFACE_ARYSPC_LOD0;
+
    surf[1] = mt->region->bo->offset + mt->offset; /* reloc */
 
    surf[2] = SET_FIELD(width - 1, GEN7_SURFACE_WIDTH) |
              SET_FIELD(height - 1, GEN7_SURFACE_HEIGHT);
    surf[3] = SET_FIELD(depth - 1, BRW_SURFACE_DEPTH) |
              ((intelObj->mt->region->pitch) - 1);
+
+   surf[4] = gen7_surface_msaa_bits(mt->num_samples, mt->msaa_layout);
 
    intel_miptree_get_tile_offsets(intelObj->mt, firstImage->Level, 0,
                                   &tile_x, &tile_y);
@@ -419,6 +420,46 @@ gen7_create_constant_surface(struct brw_context *brw,
 			   *out_offset + 4,
 			   bo, offset,
 			   I915_GEM_DOMAIN_SAMPLER, 0);
+
+   gen7_check_surface_setup(surf, false /* is_render_target */);
+}
+
+/**
+ * Create a surface for shader time.
+ */
+void
+gen7_create_shader_time_surface(struct brw_context *brw, uint32_t *out_offset)
+{
+   struct intel_context *intel = &brw->intel;
+   const int w = brw->shader_time.bo->size - 1;
+
+   uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
+                                    8 * 4, 32, out_offset);
+   memset(surf, 0, 8 * 4);
+
+   surf[0] = BRW_SURFACE_BUFFER << BRW_SURFACE_TYPE_SHIFT |
+             BRW_SURFACEFORMAT_RAW << BRW_SURFACE_FORMAT_SHIFT |
+             BRW_SURFACE_RC_READ_WRITE;
+
+   surf[1] = brw->shader_time.bo->offset; /* reloc */
+
+   surf[2] = SET_FIELD(w & 0x7f, GEN7_SURFACE_WIDTH) |
+             SET_FIELD((w >> 7) & 0x1fff, GEN7_SURFACE_HEIGHT);
+   surf[3] = SET_FIELD((w >> 20) & 0x7f, BRW_SURFACE_DEPTH);
+
+   /* Unlike texture or renderbuffer surfaces, we only do untyped operations
+    * on the shader_time surface, so there's no need to set HSW channel
+    * overrides.
+    */
+
+   /* Emit relocation to surface contents.  Section 5.1.1 of the gen4
+    * bspec ("Data Cache") says that the data cache does not exist as
+    * a separate cache and is just the sampler cache.
+    */
+   drm_intel_bo_emit_reloc(intel->batch.bo,
+                           *out_offset + 4,
+                           brw->shader_time.bo, 0,
+                           I915_GEM_DOMAIN_SAMPLER, 0);
 
    gen7_check_surface_setup(surf, false /* is_render_target */);
 }

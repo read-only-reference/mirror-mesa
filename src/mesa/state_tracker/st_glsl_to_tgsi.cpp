@@ -85,6 +85,11 @@ extern "C" {
  */
 #define MAX_TEMPS         4096
 
+/**
+ * Maximum number of arrays
+ */
+#define MAX_ARRAYS        256
+
 /* will be 4 for GLSL 4.00 */
 #define MAX_GLSL_TEXTURE_OFFSET 1
 
@@ -148,7 +153,7 @@ public:
    explicit st_src_reg(st_dst_reg reg);
 
    gl_register_file file; /**< PROGRAM_* from Mesa */
-   int index; /**< temporary index, VERT_ATTRIB_*, FRAG_ATTRIB_*, etc. */
+   int index; /**< temporary index, VERT_ATTRIB_*, VARYING_SLOT_*, etc. */
    int index2D;
    GLuint swizzle; /**< SWIZZLE_XYZWONEZERO swizzles from Mesa. */
    int negate; /**< NEGATE_XYZW mask from mesa */
@@ -182,7 +187,7 @@ public:
    explicit st_dst_reg(st_src_reg reg);
 
    gl_register_file file; /**< PROGRAM_* from Mesa */
-   int index; /**< temporary index, VERT_ATTRIB_*, FRAG_ATTRIB_*, etc. */
+   int index; /**< temporary index, VERT_ATTRIB_*, VARYING_SLOT_*, etc. */
    int writemask; /**< Bitfield of WRITEMASK_[XYZW] */
    GLuint cond_mask:4;
    int type; /** GLSL_TYPE_* from GLSL IR (enum glsl_base_type) */
@@ -315,9 +320,11 @@ public:
 
    int next_temp;
 
+   unsigned array_sizes[MAX_ARRAYS];
+   unsigned next_array;
+
    int num_address_regs;
    int samplers_used;
-   bool indirect_addr_temps;
    bool indirect_addr_consts;
    
    int glsl_version;
@@ -549,9 +556,6 @@ glsl_to_tgsi_visitor::emit(ir_instruction *ir, unsigned op,
    /* Update indirect addressing status used by TGSI */
    if (dst.reladdr) {
       switch(dst.file) {
-      case PROGRAM_TEMPORARY:
-         this->indirect_addr_temps = true;
-         break;
       case PROGRAM_LOCAL_PARAM:
       case PROGRAM_ENV_PARAM:
       case PROGRAM_STATE_VAR:
@@ -570,9 +574,6 @@ glsl_to_tgsi_visitor::emit(ir_instruction *ir, unsigned op,
       for (i=0; i<3; i++) {
          if(inst->src[i].reladdr) {
             switch(inst->src[i].file) {
-            case PROGRAM_TEMPORARY:
-               this->indirect_addr_temps = true;
-               break;
             case PROGRAM_LOCAL_PARAM:
             case PROGRAM_ENV_PARAM:
             case PROGRAM_STATE_VAR:
@@ -1005,17 +1006,28 @@ glsl_to_tgsi_visitor::get_temp(const glsl_type *type)
    st_src_reg src;
 
    src.type = native_integers ? type->base_type : GLSL_TYPE_FLOAT;
-   src.file = PROGRAM_TEMPORARY;
-   src.index = next_temp;
    src.reladdr = NULL;
-   next_temp += type_size(type);
+   src.negate = 0;
+
+   if (!options->EmitNoIndirectTemp &&
+       (type->is_array() || type->is_matrix())) {
+
+      src.file = PROGRAM_ARRAY;
+      src.index = next_array << 16 | 0x8000;
+      array_sizes[next_array] = type_size(type);
+      ++next_array;
+
+   } else {
+      src.file = PROGRAM_TEMPORARY;
+      src.index = next_temp;
+      next_temp += type_size(type);
+   }
 
    if (type->is_array() || type->is_record()) {
       src.swizzle = SWIZZLE_NOOP;
    } else {
       src.swizzle = swizzle_for_size(type->vector_elements);
    }
-   src.negate = 0;
 
    return src;
 }
@@ -1078,13 +1090,11 @@ glsl_to_tgsi_visitor::visit(ir_variable *ir)
           */
          assert((int) ir->num_state_slots == type_size(ir->type));
 
-         storage = new(mem_ctx) variable_storage(ir, PROGRAM_TEMPORARY,
-        					 this->next_temp);
-         this->variables.push_tail(storage);
-         this->next_temp += type_size(ir->type);
+         dst = st_dst_reg(get_temp(ir->type));
 
-         dst = st_dst_reg(st_src_reg(PROGRAM_TEMPORARY, storage->index,
-               native_integers ? ir->type->base_type : GLSL_TYPE_FLOAT));
+         storage = new(mem_ctx) variable_storage(ir, dst.file, dst.index);
+
+         this->variables.push_tail(storage);
       }
 
 
@@ -1942,6 +1952,10 @@ glsl_to_tgsi_visitor::visit(ir_expression *ir)
       }
       break;
    }
+   case ir_triop_lrp:
+      /* note: we have to reorder the three args here */
+      emit(ir, TGSI_OPCODE_LRP, result_dst, op[2], op[1], op[0]);
+      break;
    case ir_unop_pack_snorm_2x16:
    case ir_unop_pack_unorm_2x16:
    case ir_unop_pack_half_2x16:
@@ -2048,11 +2062,11 @@ glsl_to_tgsi_visitor::visit(ir_dereference_variable *ir)
          break;
       case ir_var_auto:
       case ir_var_temporary:
-         entry = new(mem_ctx) variable_storage(var, PROGRAM_TEMPORARY,
-        				       this->next_temp);
+         st_src_reg src = get_temp(var->type);
+
+         entry = new(mem_ctx) variable_storage(var, src.file, src.index);
          this->variables.push_tail(entry);
 
-         next_temp += type_size(var->type);
          break;
       }
 
@@ -2570,11 +2584,10 @@ glsl_to_tgsi_visitor::get_function_signature(ir_function_signature *sig)
       storage = find_variable_storage(param);
       assert(!storage);
 
-      storage = new(mem_ctx) variable_storage(param, PROGRAM_TEMPORARY,
-        				      this->next_temp);
-      this->variables.push_tail(storage);
+      st_src_reg src = get_temp(param->type);
 
-      this->next_temp += type_size(param->type);
+      storage = new(mem_ctx) variable_storage(param, src.file, src.index);
+      this->variables.push_tail(storage);
    }
 
    if (!sig->return_type->is_void()) {
@@ -2710,16 +2723,28 @@ glsl_to_tgsi_visitor::visit(ir_texture *ir)
    switch (ir->op) {
    case ir_tex:
       opcode = (is_cube_array && ir->shadow_comparitor) ? TGSI_OPCODE_TEX2 : TGSI_OPCODE_TEX; 
+      if (ir->offset) {
+         ir->offset->accept(this);
+         offset = this->result;
+      }
       break;
    case ir_txb:
       opcode = is_cube_array ? TGSI_OPCODE_TXB2 : TGSI_OPCODE_TXB;
       ir->lod_info.bias->accept(this);
       lod_info = this->result;
+      if (ir->offset) {
+         ir->offset->accept(this);
+         offset = this->result;
+      }
       break;
    case ir_txl:
       opcode = is_cube_array ? TGSI_OPCODE_TXL2 : TGSI_OPCODE_TXL;
       ir->lod_info.lod->accept(this);
       lod_info = this->result;
+      if (ir->offset) {
+         ir->offset->accept(this);
+         offset = this->result;
+      }
       break;
    case ir_txd:
       opcode = TGSI_OPCODE_TXD;
@@ -2727,6 +2752,10 @@ glsl_to_tgsi_visitor::visit(ir_texture *ir)
       dx = this->result;
       ir->lod_info.grad.dPdy->accept(this);
       dy = this->result;
+      if (ir->offset) {
+         ir->offset->accept(this);
+         offset = this->result;
+      }
       break;
    case ir_txs:
       opcode = TGSI_OPCODE_TXQ;
@@ -2738,9 +2767,15 @@ glsl_to_tgsi_visitor::visit(ir_texture *ir)
       ir->lod_info.lod->accept(this);
       lod_info = this->result;
       if (ir->offset) {
-	 ir->offset->accept(this);
-	 offset = this->result;
+         ir->offset->accept(this);
+         offset = this->result;
       }
+      break;
+   case ir_txf_ms:
+      assert(!"Unexpected ir_txf_ms opcode");
+      break;
+   case ir_lod:
+      assert(!"Unexpected ir_lod opcode");
       break;
    }
 
@@ -2955,12 +2990,12 @@ glsl_to_tgsi_visitor::glsl_to_tgsi_visitor()
 {
    result.file = PROGRAM_UNDEFINED;
    next_temp = 1;
+   next_array = 0;
    next_signature_id = 1;
    num_immediates = 0;
    current_function = NULL;
    num_address_regs = 0;
    samplers_used = 0;
-   indirect_addr_temps = false;
    indirect_addr_consts = false;
    glsl_version = 0;
    native_integers = false;
@@ -3160,7 +3195,8 @@ glsl_to_tgsi_visitor::simplify_cmp(void)
          assert(inst->dst.index < MAX_TEMPS);
          prevWriteMask = tempWrites[inst->dst.index];
          tempWrites[inst->dst.index] |= inst->dst.writemask;
-      }
+      } else
+         continue;
 
       /* For a CMP to be considered a conditional write, the destination
        * register and source register two must be the same. */
@@ -3798,7 +3834,6 @@ get_pixel_transfer_visitor(struct st_fragment_program *fp,
    v->next_temp = original->next_temp;
    v->num_address_regs = original->num_address_regs;
    v->samplers_used = prog->SamplersUsed = original->samplers_used;
-   v->indirect_addr_temps = original->indirect_addr_temps;
    v->indirect_addr_consts = original->indirect_addr_consts;
    memcpy(&v->immediates, &original->immediates, sizeof(v->immediates));
    v->num_immediates = original->num_immediates;
@@ -3807,14 +3842,14 @@ get_pixel_transfer_visitor(struct st_fragment_program *fp,
     * Get initial pixel color from the texture.
     * TEX colorTemp, fragment.texcoord[0], texture[0], 2D;
     */
-   coord = st_src_reg(PROGRAM_INPUT, FRAG_ATTRIB_TEX0, glsl_type::vec2_type);
+   coord = st_src_reg(PROGRAM_INPUT, VARYING_SLOT_TEX0, glsl_type::vec2_type);
    src0 = v->get_temp(glsl_type::vec4_type);
    dst0 = st_dst_reg(src0);
    inst = v->emit(NULL, TGSI_OPCODE_TEX, dst0, coord);
    inst->sampler = 0;
    inst->tex_target = TEXTURE_2D_INDEX;
 
-   prog->InputsRead |= FRAG_BIT_TEX0;
+   prog->InputsRead |= VARYING_BIT_TEX0;
    prog->SamplersUsed |= (1 << 0); /* mark sampler 0 as used */
    v->samplers_used |= (1 << 0);
 
@@ -3880,7 +3915,7 @@ get_pixel_transfer_visitor(struct st_fragment_program *fp,
       for (int i=0; i<3; i++) {
          src_regs[i] = inst->src[i];
          if (src_regs[i].file == PROGRAM_INPUT &&
-             src_regs[i].index == FRAG_ATTRIB_COL0)
+             src_regs[i].index == VARYING_SLOT_COL0)
          {
             src_regs[i].file = PROGRAM_TEMPORARY;
             src_regs[i].index = src0.index;
@@ -3929,20 +3964,19 @@ get_bitmap_visitor(struct st_fragment_program *fp,
    v->next_temp = original->next_temp;
    v->num_address_regs = original->num_address_regs;
    v->samplers_used = prog->SamplersUsed = original->samplers_used;
-   v->indirect_addr_temps = original->indirect_addr_temps;
    v->indirect_addr_consts = original->indirect_addr_consts;
    memcpy(&v->immediates, &original->immediates, sizeof(v->immediates));
    v->num_immediates = original->num_immediates;
 
    /* TEX tmp0, fragment.texcoord[0], texture[0], 2D; */
-   coord = st_src_reg(PROGRAM_INPUT, FRAG_ATTRIB_TEX0, glsl_type::vec2_type);
+   coord = st_src_reg(PROGRAM_INPUT, VARYING_SLOT_TEX0, glsl_type::vec2_type);
    src0 = v->get_temp(glsl_type::vec4_type);
    dst0 = st_dst_reg(src0);
    inst = v->emit(NULL, TGSI_OPCODE_TEX, dst0, coord);
    inst->sampler = samplerIndex;
    inst->tex_target = TEXTURE_2D_INDEX;
 
-   prog->InputsRead |= FRAG_BIT_TEX0;
+   prog->InputsRead |= VARYING_BIT_TEX0;
    prog->SamplersUsed |= (1 << samplerIndex); /* mark sampler as used */
    v->samplers_used |= (1 << samplerIndex);
 
@@ -3991,6 +4025,7 @@ struct st_translate {
    struct ureg_program *ureg;
 
    struct ureg_dst temps[MAX_TEMPS];
+   struct ureg_dst arrays[MAX_ARRAYS];
    struct ureg_src *constants;
    struct ureg_src *immediates;
    struct ureg_dst outputs[PIPE_MAX_SHADER_OUTPUTS];
@@ -3998,6 +4033,8 @@ struct st_translate {
    struct ureg_dst address[1];
    struct ureg_src samplers[PIPE_MAX_SAMPLERS];
    struct ureg_src systemValues[SYSTEM_VALUE_MAX];
+
+   unsigned array_sizes[MAX_ARRAYS];
 
    const GLuint *inputMapping;
    const GLuint *outputMapping;
@@ -4109,23 +4146,41 @@ dst_register(struct st_translate *t,
              gl_register_file file,
              GLuint index)
 {
+   unsigned array;
+
    switch(file) {
    case PROGRAM_UNDEFINED:
       return ureg_dst_undef();
 
    case PROGRAM_TEMPORARY:
+      assert(index >= 0);
+      assert(index < (int) Elements(t->temps));
+ 
       if (ureg_dst_is_undef(t->temps[index]))
          t->temps[index] = ureg_DECL_local_temporary(t->ureg);
 
       return t->temps[index];
 
+   case PROGRAM_ARRAY:
+      array = index >> 16;
+
+      assert(array >= 0);
+      assert(array < (int) Elements(t->arrays));
+
+      if (ureg_dst_is_undef(t->arrays[array]))
+         t->arrays[array] = ureg_DECL_array_temporary(
+            t->ureg, t->array_sizes[array], TRUE);
+
+      return ureg_dst_array_offset(t->arrays[array],
+                                   (int)(index & 0xFFFF) - 0x8000);
+
    case PROGRAM_OUTPUT:
       if (t->procType == TGSI_PROCESSOR_VERTEX)
-         assert(index < VERT_RESULT_MAX);
+         assert(index < VARYING_SLOT_MAX);
       else if (t->procType == TGSI_PROCESSOR_FRAGMENT)
          assert(index < FRAG_RESULT_MAX);
       else
-         assert(index < GEOM_RESULT_MAX);
+         assert(index < VARYING_SLOT_MAX);
 
       assert(t->outputMapping[index] < Elements(t->outputs));
 
@@ -4153,11 +4208,8 @@ src_register(struct st_translate *t,
       return ureg_src_undef();
 
    case PROGRAM_TEMPORARY:
-      assert(index >= 0);
-      assert(index < (int) Elements(t->temps));
-      if (ureg_dst_is_undef(t->temps[index]))
-         t->temps[index] = ureg_DECL_local_temporary(t->ureg);
-      return ureg_src(t->temps[index]);
+   case PROGRAM_ARRAY:
+      return ureg_src(dst_register(t, file, index));
 
    case PROGRAM_ENV_PARAM:
    case PROGRAM_LOCAL_PARAM:
@@ -4223,10 +4275,10 @@ translate_dst(struct st_translate *t,
       case TGSI_PROCESSOR_VERTEX:
          /* XXX if the geometry shader is present, this must be done there
           * instead of here. */
-         if (dst_reg->index == VERT_RESULT_COL0 ||
-             dst_reg->index == VERT_RESULT_COL1 ||
-             dst_reg->index == VERT_RESULT_BFC0 ||
-             dst_reg->index == VERT_RESULT_BFC1) {
+         if (dst_reg->index == VARYING_SLOT_COL0 ||
+             dst_reg->index == VARYING_SLOT_COL1 ||
+             dst_reg->index == VARYING_SLOT_BFC0 ||
+             dst_reg->index == VARYING_SLOT_BFC1) {
             dst = ureg_saturate(dst);
          }
          break;
@@ -4239,8 +4291,10 @@ translate_dst(struct st_translate *t,
       }
    }
 
-   if (dst_reg->reladdr != NULL)
+   if (dst_reg->reladdr != NULL) {
+      assert(dst_reg->file != PROGRAM_TEMPORARY);
       dst = ureg_dst_indirect(dst, ureg_src(t->address[0]));
+   }
 
    return dst;
 }
@@ -4263,26 +4317,8 @@ translate_src(struct st_translate *t, const st_src_reg *src_reg)
       src = ureg_negate(src);
 
    if (src_reg->reladdr != NULL) {
-      /* Normally ureg_src_indirect() would be used here, but a stupid compiler 
-       * bug in g++ makes ureg_src_indirect (an inline C function) erroneously 
-       * set the bit for src.Negate.  So we have to do the operation manually
-       * here to work around the compiler's problems. */
-      /*src = ureg_src_indirect(src, ureg_src(t->address[0]));*/
-      struct ureg_src addr = ureg_src(t->address[0]);
-      src.Indirect = 1;
-      src.IndirectFile = addr.File;
-      src.IndirectIndex = addr.Index;
-      src.IndirectSwizzle = addr.SwizzleX;
-      
-      if (src_reg->file != PROGRAM_INPUT &&
-          src_reg->file != PROGRAM_OUTPUT) {
-         /* If src_reg->index was negative, it was set to zero in
-          * src_register().  Reassign it now.  But don't do this
-          * for input/output regs since they get remapped while
-          * const buffers don't.
-          */
-         src.Index = src_reg->index;
-      }
+      assert(src_reg->file != PROGRAM_TEMPORARY);
+      src = ureg_src_indirect(src, ureg_src(t->address[0]));
    }
 
    return src;
@@ -4418,7 +4454,7 @@ emit_wpos_adjustment( struct st_translate *t,
 
    struct ureg_src wpostrans = ureg_DECL_constant( ureg, wposTransConst );
    struct ureg_dst wpos_temp = ureg_DECL_temporary( ureg );
-   struct ureg_src wpos_input = t->inputs[t->inputMapping[FRAG_ATTRIB_WPOS]];
+   struct ureg_src wpos_input = t->inputs[t->inputMapping[VARYING_SLOT_POS]];
 
    /* First, apply the coordinate shift: */
    if (adjX || adjY[0] || adjY[1]) {
@@ -4469,7 +4505,7 @@ emit_wpos_adjustment( struct st_translate *t,
 
    /* Use wpos_temp as position input from here on:
     */
-   t->inputs[t->inputMapping[FRAG_ATTRIB_WPOS]] = ureg_src(wpos_temp);
+   t->inputs[t->inputMapping[VARYING_SLOT_POS]] = ureg_src(wpos_temp);
 }
 
 
@@ -4587,21 +4623,21 @@ emit_face_var(struct st_translate *t)
 {
    struct ureg_program *ureg = t->ureg;
    struct ureg_dst face_temp = ureg_DECL_temporary(ureg);
-   struct ureg_src face_input = t->inputs[t->inputMapping[FRAG_ATTRIB_FACE]];
+   struct ureg_src face_input = t->inputs[t->inputMapping[VARYING_SLOT_FACE]];
 
    /* MOV_SAT face_temp, input[face] */
    face_temp = ureg_saturate(face_temp);
    ureg_MOV(ureg, face_temp, face_input);
 
    /* Use face_temp as face input from here on: */
-   t->inputs[t->inputMapping[FRAG_ATTRIB_FACE]] = ureg_src(face_temp);
+   t->inputs[t->inputMapping[VARYING_SLOT_FACE]] = ureg_src(face_temp);
 }
 
 static void
 emit_edgeflags(struct st_translate *t)
 {
    struct ureg_program *ureg = t->ureg;
-   struct ureg_dst edge_dst = t->outputs[t->outputMapping[VERT_RESULT_EDGE]];
+   struct ureg_dst edge_dst = t->outputs[t->outputMapping[VARYING_SLOT_EDGE]];
    struct ureg_src edge_src = t->inputs[t->inputMapping[VERT_ATTRIB_EDGEFLAG]];
 
    ureg_MOV(ureg, edge_dst, edge_src);
@@ -4687,14 +4723,14 @@ st_translate_program(
                                                         is_centroid[i]);
       }
 
-      if (proginfo->InputsRead & FRAG_BIT_WPOS) {
+      if (proginfo->InputsRead & VARYING_BIT_POS) {
          /* Must do this after setting up t->inputs, and before
           * emitting constant references, below:
           */
           emit_wpos(st_context(ctx), t, proginfo, ureg);
       }
 
-      if (proginfo->InputsRead & FRAG_BIT_FACE)
+      if (proginfo->InputsRead & VARYING_BIT_FACE)
          emit_face_var(t);
 
       /*
@@ -4797,16 +4833,9 @@ st_translate_program(
       }
    }
 
-   if (program->indirect_addr_temps) {
-      /* If temps are accessed with indirect addressing, declare temporaries
-       * in sequential order.  Else, we declare them on demand elsewhere.
-       * (Note: the number of temporaries is equal to program->next_temp)
-       */
-      for (i = 0; i < (unsigned)program->next_temp; i++) {
-         /* XXX use TGSI_FILE_TEMPORARY_ARRAY when it's supported by ureg */
-         t->temps[i] = ureg_DECL_local_temporary(t->ureg);
-      }
-   }
+   /* Copy over array sizes
+    */
+   memcpy(t->array_sizes, program->array_sizes, sizeof(unsigned) * program->next_array);
 
    /* Emit constants and uniforms.  TGSI uses a single index space for these, 
     * so we put all the translated regs in t->constants.
@@ -5041,16 +5070,9 @@ get_mesa_program(struct gl_context *ctx,
    v->copy_propagate();
    while (v->eliminate_dead_code_advanced());
 
-   /* FIXME: These passes to optimize temporary registers don't work when there
-    * is indirect addressing of the temporary register space.  We need proper 
-    * array support so that we don't have to give up these passes in every 
-    * shader that uses arrays.
-    */
-   if (!v->indirect_addr_temps) {
-      v->eliminate_dead_code();
-      v->merge_registers();
-      v->renumber_registers();
-   }
+   v->eliminate_dead_code();
+   v->merge_registers();
+   v->renumber_registers();
    
    /* Write the END instruction. */
    v->emit(NULL, TGSI_OPCODE_END);
@@ -5189,7 +5211,6 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
                          DIV_TO_MUL_RCP |
                          EXP_TO_EXP2 |
                          LOG_TO_LOG2 |
-                         LRP_TO_ARITH |
                          (options->EmitNoPow ? POW_TO_EXP2 : 0) |
                          (!ctx->Const.NativeIntegers ? INT_DIV_TO_MUL_RCP : 0));
 

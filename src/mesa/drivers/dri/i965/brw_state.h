@@ -216,6 +216,8 @@ void gen7_set_surface_mcs_info(struct brw_context *brw,
                                bool is_render_target);
 void gen7_check_surface_setup(uint32_t *surf, bool is_render_target);
 void gen7_init_vtable_surface_functions(struct brw_context *brw);
+void gen7_create_shader_time_surface(struct brw_context *brw,
+                                     uint32_t *out_offset);
 
 /* brw_wm_sampler_state.c */
 uint32_t translate_wrap_mode(GLenum wrap, bool using_nearest);
@@ -225,7 +227,7 @@ void upload_default_color(struct brw_context *brw,
 
 /* gen6_sf_state.c */
 uint32_t
-get_attr_override(struct brw_vue_map *vue_map, int urb_entry_read_offset,
+get_attr_override(const struct brw_vue_map *vue_map, int urb_entry_read_offset,
                   int fs_attr, bool two_side_color, uint32_t *max_source_attr);
 
 #ifdef __cplusplus

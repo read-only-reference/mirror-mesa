@@ -2184,6 +2184,7 @@ void brw_urb_WRITE(struct brw_compile *p,
       /* Enable Channel Masks in the URB_WRITE_HWORD message header */
       brw_push_insn_state(p);
       brw_set_access_mode(p, BRW_ALIGN_1);
+      brw_set_mask_control(p, BRW_MASK_DISABLE);
       brw_OR(p, retype(brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE, msg_reg_nr, 5),
 		       BRW_REGISTER_TYPE_UD),
 	        retype(brw_vec1_grf(0, 5), BRW_REGISTER_TYPE_UD),
@@ -2435,7 +2436,7 @@ brw_svb_write(struct brw_compile *p,
  * messages.
  */
 void brw_shader_time_add(struct brw_compile *p,
-                         int base_mrf,
+                         struct brw_reg payload,
                          uint32_t surf_index)
 {
    struct intel_context *intel = &p->brw->intel;
@@ -2452,18 +2453,25 @@ void brw_shader_time_add(struct brw_compile *p,
     */
    brw_set_dest(p, send, brw_vec1_reg(BRW_ARCHITECTURE_REGISTER_FILE,
                                       BRW_ARF_NULL, 0));
-   brw_set_src0(p, send, brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE,
-                                      base_mrf, 0));
+   brw_set_src0(p, send, brw_vec1_reg(payload.file,
+                                      payload.nr, 0));
+
+   uint32_t sfid, msg_type;
+   if (intel->is_haswell) {
+      sfid = HSW_SFID_DATAPORT_DATA_CACHE_1;
+      msg_type = HSW_DATAPORT_DC_PORT1_UNTYPED_ATOMIC_OP;
+   } else {
+      sfid = GEN7_SFID_DATAPORT_DATA_CACHE;
+      msg_type = GEN7_DATAPORT_DC_UNTYPED_ATOMIC_OP;
+   }
 
    bool header_present = false;
    bool eot = false;
    uint32_t mlen = 2; /* offset, value */
    uint32_t rlen = 0;
-   brw_set_message_descriptor(p, send,
-                              GEN7_SFID_DATAPORT_DATA_CACHE,
-                              mlen, rlen, header_present, eot);
+   brw_set_message_descriptor(p, send, sfid, mlen, rlen, header_present, eot);
 
-   send->bits3.ud |= 6 << 14; /* untyped atomic op */
+   send->bits3.ud |= msg_type << 14;
    send->bits3.ud |= 0 << 13; /* no return data */
    send->bits3.ud |= 1 << 12; /* SIMD8 mode */
    send->bits3.ud |= BRW_AOP_ADD << 8;
