@@ -133,15 +133,16 @@ vec4_instruction::get_src(int i)
 }
 
 vec4_generator::vec4_generator(struct brw_context *brw,
-                               struct brw_vs_compile *c,
-                               struct gl_shader_program *prog,
-                               void *mem_ctx)
-   : brw(brw), c(c), prog(prog), mem_ctx(mem_ctx)
+                               struct gl_shader_program *shader_prog,
+                               struct gl_program *prog,
+                               void *mem_ctx,
+                               bool debug_flag)
+   : brw(brw), shader_prog(shader_prog), prog(prog), mem_ctx(mem_ctx),
+     debug_flag(debug_flag)
 {
    intel = &brw->intel;
-   vp = &c->vp->program;
 
-   shader = prog ? prog->_LinkedShaders[MESA_SHADER_VERTEX] : NULL;
+   shader = shader_prog ? shader_prog->_LinkedShaders[MESA_SHADER_VERTEX] : NULL;
 
    p = rzalloc(mem_ctx, struct brw_compile);
    brw_init_compile(brw, p, mem_ctx);
@@ -558,26 +559,10 @@ vec4_generator::generate_pull_constant_load(vec4_instruction *inst,
                                             struct brw_reg index,
                                             struct brw_reg offset)
 {
+   assert(intel->gen <= 7);
    assert(index.file == BRW_IMMEDIATE_VALUE &&
 	  index.type == BRW_REGISTER_TYPE_UD);
    uint32_t surf_index = index.dw1.ud;
-
-   if (intel->gen == 7) {
-      gen6_resolve_implied_move(p, &offset, inst->base_mrf);
-      brw_instruction *insn = brw_next_insn(p, BRW_OPCODE_SEND);
-      brw_set_dest(p, insn, dst);
-      brw_set_src0(p, insn, offset);
-      brw_set_sampler_message(p, insn,
-                              surf_index,
-                              0, /* LD message ignores sampler unit */
-                              GEN5_SAMPLER_MESSAGE_SAMPLE_LD,
-                              1, /* rlen */
-                              1, /* mlen */
-                              false, /* no header */
-                              BRW_SAMPLER_SIMD_MODE_SIMD4X2,
-                              0);
-      return;
-   }
 
    struct brw_reg header = brw_vec8_grf(0, 0);
 
@@ -614,9 +599,32 @@ vec4_generator::generate_pull_constant_load(vec4_instruction *inst,
 }
 
 void
-vec4_generator::generate_vs_instruction(vec4_instruction *instruction,
-                                        struct brw_reg dst,
-                                        struct brw_reg *src)
+vec4_generator::generate_pull_constant_load_gen7(vec4_instruction *inst,
+                                                 struct brw_reg dst,
+                                                 struct brw_reg surf_index,
+                                                 struct brw_reg offset)
+{
+   assert(surf_index.file == BRW_IMMEDIATE_VALUE &&
+	  surf_index.type == BRW_REGISTER_TYPE_UD);
+
+   brw_instruction *insn = brw_next_insn(p, BRW_OPCODE_SEND);
+   brw_set_dest(p, insn, dst);
+   brw_set_src0(p, insn, offset);
+   brw_set_sampler_message(p, insn,
+                           surf_index.dw1.ud,
+                           0, /* LD message ignores sampler unit */
+                           GEN5_SAMPLER_MESSAGE_SAMPLE_LD,
+                           1, /* rlen */
+                           1, /* mlen */
+                           false, /* no header */
+                           BRW_SAMPLER_SIMD_MODE_SIMD4X2,
+                           0);
+}
+
+void
+vec4_generator::generate_vec4_instruction(vec4_instruction *instruction,
+                                          struct brw_reg dst,
+                                          struct brw_reg *src)
 {
    vec4_instruction *inst = (vec4_instruction *)instruction;
 
@@ -673,6 +681,10 @@ vec4_generator::generate_vs_instruction(vec4_instruction *instruction,
       generate_pull_constant_load(inst, dst, src[0], src[1]);
       break;
 
+   case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
+      generate_pull_constant_load_gen7(inst, dst, src[0], src[1]);
+      break;
+
    case SHADER_OPCODE_SHADER_TIME_ADD:
       brw_shader_time_add(p, src[0], SURF_INDEX_VS_SHADER_TIME);
       break;
@@ -695,11 +707,11 @@ vec4_generator::generate_code(exec_list *instructions)
    const char *last_annotation_string = NULL;
    const void *last_annotation_ir = NULL;
 
-   if (unlikely(INTEL_DEBUG & DEBUG_VS)) {
+   if (unlikely(debug_flag)) {
       if (shader) {
-         printf("Native code for vertex shader %d:\n", prog->Name);
+         printf("Native code for vertex shader %d:\n", shader_prog->Name);
       } else {
-         printf("Native code for vertex program %d:\n", c->vp->program.Base.Id);
+         printf("Native code for vertex program %d:\n", prog->Id);
       }
    }
 
@@ -707,7 +719,7 @@ vec4_generator::generate_code(exec_list *instructions)
       vec4_instruction *inst = (vec4_instruction *)node;
       struct brw_reg src[3], dst;
 
-      if (unlikely(INTEL_DEBUG & DEBUG_VS)) {
+      if (unlikely(debug_flag)) {
 	 if (last_annotation_ir != inst->ir) {
 	    last_annotation_ir = inst->ir;
 	    if (last_annotation_ir) {
@@ -717,7 +729,7 @@ vec4_generator::generate_code(exec_list *instructions)
                } else {
                   const prog_instruction *vpi;
                   vpi = (const prog_instruction *) inst->ir;
-                  printf("%d: ", (int)(vpi - vp->Base.Instructions));
+                  printf("%d: ", (int)(vpi - prog->Instructions));
                   _mesa_fprint_instruction_opt(stdout, vpi, 0,
                                                PROG_PRINT_DEBUG, NULL);
                }
@@ -741,6 +753,8 @@ vec4_generator::generate_code(exec_list *instructions)
       brw_set_predicate_inverse(p, inst->predicate_inverse);
       brw_set_saturate(p, inst->saturate);
       brw_set_mask_control(p, inst->force_writemask_all);
+
+      unsigned pre_emit_nr_insn = p->nr_insn;
 
       switch (inst->opcode) {
       case BRW_OPCODE_MOV:
@@ -824,6 +838,10 @@ vec4_generator::generate_code(exec_list *instructions)
          brw_F16TO32(p, dst, src[0]);
          break;
 
+      case BRW_OPCODE_LRP:
+         brw_LRP(p, dst, src[0], src[1], src[2]);
+         break;
+
       case BRW_OPCODE_IF:
 	 if (inst->src[0].file != BAD_FILE) {
 	    /* The instruction has an embedded compare (only allowed on gen6) */
@@ -864,11 +882,24 @@ vec4_generator::generate_code(exec_list *instructions)
 	 break;
 
       default:
-	 generate_vs_instruction(inst, dst, src);
+	 generate_vec4_instruction(inst, dst, src);
 	 break;
       }
 
-      if (unlikely(INTEL_DEBUG & DEBUG_VS)) {
+      if (inst->no_dd_clear || inst->no_dd_check) {
+         assert(p->nr_insn == pre_emit_nr_insn + 1 ||
+                !"no_dd_check or no_dd_clear set for IR emitting more "
+                "than 1 instruction");
+
+         struct brw_instruction *last = &p->store[pre_emit_nr_insn];
+
+         if (inst->no_dd_clear)
+            last->header.dependency_control |= BRW_DEPENDENCY_NOTCLEARED;
+         if (inst->no_dd_check)
+            last->header.dependency_control |= BRW_DEPENDENCY_NOTCHECKED;
+      }
+
+      if (unlikely(debug_flag)) {
 	 brw_dump_compile(p, stdout,
 			  last_native_insn_offset, p->next_insn_offset);
       }
@@ -876,7 +907,7 @@ vec4_generator::generate_code(exec_list *instructions)
       last_native_insn_offset = p->next_insn_offset;
    }
 
-   if (unlikely(INTEL_DEBUG & DEBUG_VS)) {
+   if (unlikely(debug_flag)) {
       printf("\n");
    }
 
@@ -887,7 +918,7 @@ vec4_generator::generate_code(exec_list *instructions)
     * which is often something we want to debug.  So this is here in
     * case you're doing that.
     */
-   if (0 && unlikely(INTEL_DEBUG & DEBUG_VS)) {
+   if (0 && unlikely(debug_flag)) {
       brw_dump_compile(p, stdout, 0, p->next_insn_offset);
    }
 }

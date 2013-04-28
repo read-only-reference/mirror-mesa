@@ -156,6 +156,19 @@ boolean draw_init(struct draw_context *draw)
    return TRUE;
 }
 
+/*
+ * Called whenever we're starting to draw a new instance.
+ * Some internal structures don't want to have to reset internal
+ * members on each invocation (because their state might have to persist
+ * between multiple primitive restart rendering call) but might have to 
+ * for each new instance. 
+ * This is particularly the case for primitive id's in geometry shader.
+ */
+void draw_new_instance(struct draw_context *draw)
+{
+   draw_geometry_shader_new_instance(draw->gs.geometry_shader);
+}
+
 
 void draw_destroy( struct draw_context *draw )
 {
@@ -711,7 +724,9 @@ draw_get_rasterizer_no_cull( struct draw_context *draw,
       rast.scissor = scissor;
       rast.flatshade = flatshade;
       rast.front_ccw = 1;
-      rast.gl_rasterization_rules = draw->rasterizer->gl_rasterization_rules;
+      rast.half_pixel_center = draw->rasterizer->half_pixel_center;
+      rast.bottom_edge_rule = draw->rasterizer->bottom_edge_rule;
+      rast.clip_halfz = draw->rasterizer->clip_halfz;
 
       draw->rasterizer_no_cull[scissor][flatshade] =
          pipe->create_rasterizer_state(pipe, &rast);
@@ -732,22 +747,6 @@ draw_set_mapped_so_targets(struct draw_context *draw,
       draw->so.targets[i] = NULL;
 
    draw->so.num_targets = num_targets;
-}
-
-void
-draw_set_mapped_so_buffers(struct draw_context *draw,
-                           void *buffers[PIPE_MAX_SO_BUFFERS],
-                           unsigned num_buffers)
-{
-}
-
-void
-draw_set_so_state(struct draw_context *draw,
-                  struct pipe_stream_output_info *state)
-{
-   memcpy(&draw->so.state,
-          state,
-          sizeof(struct pipe_stream_output_info));
 }
 
 void
@@ -858,3 +857,19 @@ draw_get_shader_param(unsigned shader, enum pipe_shader_cap param)
    return draw_get_shader_param_no_llvm(shader, param);
 }
 
+/**
+ * Enables or disables collection of statistics.
+ *
+ * Draw module is capable of generating statistics for the vertex
+ * processing pipeline. Collection of that data isn't free and so
+ * it's disabled by default. The users of the module can enable
+ * (or disable) this functionality through this function.
+ * The actual data will be emitted through the VBUF interface,
+ * the 'pipeline_statistics' callback to be exact.
+ */
+void
+draw_collect_pipeline_statistics(struct draw_context *draw,
+                                 boolean enable)
+{
+   draw->collect_statistics = enable;
+}

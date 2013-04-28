@@ -15,21 +15,22 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  *
  * Author: Kristian Høgsberg <krh@bitplanet.net>
  */
 
 #include "glheader.h"
 #include "context.h"
+#include "blend.h"
 #include "enable.h"
 #include "enums.h"
 #include "extensions.h"
 #include "get.h"
 #include "macros.h"
-#include "mfeatures.h"
 #include "mtypes.h"
 #include "state.h"
 #include "texcompress.h"
@@ -140,6 +141,7 @@ enum value_extra {
    EXTRA_VALID_CLIP_DISTANCE,
    EXTRA_FLUSH_CURRENT,
    EXTRA_GLSL_130,
+   EXTRA_EXT_UBO_GS4,
 };
 
 #define NO_EXTRA NULL
@@ -225,7 +227,13 @@ union value {
  * extensions or specific gl versions) or actions (flush current, new
  * buffers) that we need to do before looking up an enum.  We need to
  * declare them all up front so we can refer to them in the value_desc
- * structs below. */
+ * structs below.
+ *
+ * Each EXTRA_ will be executed.  For EXTRA_* enums of extensions and API
+ * versions, listing multiple ones in an array means an error will be thrown
+ * only if none of them are available.  If you need to check for "AND"
+ * behavior, you would need to make a custom EXTRA_ enum.
+ */
 
 static const int extra_new_buffers[] = {
    EXTRA_NEW_BUFFERS,
@@ -280,6 +288,12 @@ static const int extra_EXT_texture_integer[] = {
    EXTRA_END
 };
 
+static const int extra_EXT_texture_integer_and_new_buffers[] = {
+   EXT(EXT_texture_integer),
+   EXTRA_NEW_BUFFERS,
+   EXTRA_END
+};
+
 static const int extra_GLSL_130[] = {
    EXTRA_GLSL_130,
    EXTRA_END
@@ -299,8 +313,7 @@ static const int extra_ARB_transform_feedback2_api_es3[] = {
 };
 
 static const int extra_ARB_uniform_buffer_object_and_geometry_shader[] = {
-   EXT(ARB_uniform_buffer_object),
-   EXT(ARB_geometry_shader4),
+   EXTRA_EXT_UBO_GS4,
    EXTRA_END
 };
 
@@ -313,6 +326,12 @@ static const int extra_ARB_ES2_compatibility_api_es2[] = {
 static const int extra_ARB_ES3_compatibility_api_es3[] = {
    EXT(ARB_ES3_compatibility),
    EXTRA_API_ES3,
+   EXTRA_END
+};
+
+static const int extra_EXT_framebuffer_sRGB_and_new_buffers[] = {
+   EXT(EXT_framebuffer_sRGB),
+   EXTRA_NEW_BUFFERS,
    EXTRA_END
 };
 
@@ -358,6 +377,13 @@ EXTRA_EXT(ARB_texture_buffer_range);
 EXTRA_EXT(ARB_texture_multisample);
 
 static const int
+extra_ARB_color_buffer_float_or_glcore[] = {
+   EXT(ARB_color_buffer_float),
+   EXTRA_API_GL_CORE,
+   EXTRA_END
+};
+
+static const int
 extra_NV_primitive_restart[] = {
    EXT(NV_primitive_restart),
    EXTRA_END
@@ -389,6 +415,13 @@ extra_NV_read_buffer_api_gl[] = {
    EXTRA_END
 };
 
+static const int extra_core_ARB_color_buffer_float_and_new_buffers[] = {
+   EXTRA_API_GL_CORE,
+   EXT(ARB_color_buffer_float),
+   EXTRA_NEW_BUFFERS,
+   EXTRA_END
+};
+
 /* This is the big table describing all the enums we accept in
  * glGet*v().  The table is partitioned into six parts: enums
  * understood by all GL APIs (OpenGL, GLES and GLES2), enums shared
@@ -396,8 +429,7 @@ extra_NV_read_buffer_api_gl[] = {
  * remaining combinations. To look up the enums valid in a given API
  * we will use a hash table specific to that API. These tables are in
  * turn generated at build time and included through get_hash.h.
- * The different sections are guarded by #if FEATURE_GL etc to make
- * sure we only compile in the enums we may need. */
+ */
 
 #include "get_hash.h"
 
@@ -767,13 +799,13 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
       break;
 
    case GL_FOG_COLOR:
-      if(ctx->Color._ClampFragmentColor)
+      if (_mesa_get_clamp_fragment_color(ctx))
          COPY_4FV(v->value_float_4, ctx->Fog.Color);
       else
          COPY_4FV(v->value_float_4, ctx->Fog.ColorUnclamped);
       break;
    case GL_COLOR_CLEAR_VALUE:
-      if(ctx->Color._ClampFragmentColor) {
+      if (_mesa_get_clamp_fragment_color(ctx)) {
          v->value_float_4[0] = CLAMP(ctx->Color.ClearColor.f[0], 0.0F, 1.0F);
          v->value_float_4[1] = CLAMP(ctx->Color.ClearColor.f[1], 0.0F, 1.0F);
          v->value_float_4[2] = CLAMP(ctx->Color.ClearColor.f[2], 0.0F, 1.0F);
@@ -782,13 +814,13 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
          COPY_4FV(v->value_float_4, ctx->Color.ClearColor.f);
       break;
    case GL_BLEND_COLOR_EXT:
-      if(ctx->Color._ClampFragmentColor)
+      if (_mesa_get_clamp_fragment_color(ctx))
          COPY_4FV(v->value_float_4, ctx->Color.BlendColor);
       else
          COPY_4FV(v->value_float_4, ctx->Color.BlendColorUnclamped);
       break;
    case GL_ALPHA_TEST_REF:
-      if(ctx->Color._ClampFragmentColor)
+      if (_mesa_get_clamp_fragment_color(ctx))
          v->value_float = ctx->Color.AlphaRef;
       else
          v->value_float = ctx->Color.AlphaRefUnclamped;
@@ -868,65 +900,57 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
  * \param func name of calling glGet*v() function for error reporting
  * \param d the struct value_desc that has the extra constraints
  *
- * \return GL_FALSE if one of the constraints was not satisfied,
+ * \return GL_FALSE if all of the constraints were not satisfied,
  *     otherwise GL_TRUE.
  */
 static GLboolean
 check_extra(struct gl_context *ctx, const char *func, const struct value_desc *d)
 {
    const GLuint version = ctx->Version;
-   int total, enabled;
+   GLboolean api_check = GL_FALSE;
+   GLboolean api_found = GL_FALSE;
    const int *e;
 
-   total = 0;
-   enabled = 0;
-   for (e = d->extra; *e != EXTRA_END; e++)
+   for (e = d->extra; *e != EXTRA_END; e++) {
       switch (*e) {
       case EXTRA_VERSION_30:
-	 if (version >= 30) {
-	    total++;
-	    enabled++;
-	 }
+         api_check = GL_TRUE;
+         if (version >= 30)
+            api_found = GL_TRUE;
 	 break;
       case EXTRA_VERSION_31:
-	 if (version >= 31) {
-	    total++;
-	    enabled++;
-	 }
+         api_check = GL_TRUE;
+         if (version >= 31)
+            api_found = GL_TRUE;
 	 break;
       case EXTRA_VERSION_32:
-	 if (version >= 32) {
-	    total++;
-	    enabled++;
-	 }
+         api_check = GL_TRUE;
+         if (version >= 32)
+            api_found = GL_TRUE;
 	 break;
       case EXTRA_NEW_FRAG_CLAMP:
          if (ctx->NewState & (_NEW_BUFFERS | _NEW_FRAG_CLAMP))
             _mesa_update_state(ctx);
          break;
       case EXTRA_API_ES2:
-	 if (ctx->API == API_OPENGLES2) {
-	    total++;
-	    enabled++;
-	 }
+         api_check = GL_TRUE;
+         if (ctx->API == API_OPENGLES2)
+            api_found = GL_TRUE;
 	 break;
       case EXTRA_API_ES3:
-	 if (_mesa_is_gles3(ctx)) {
-	    total++;
-	    enabled++;
-	 }
+         api_check = GL_TRUE;
+         if (_mesa_is_gles3(ctx))
+            api_found = GL_TRUE;
 	 break;
       case EXTRA_API_GL:
-	 if (_mesa_is_desktop_gl(ctx)) {
-	    total++;
-	    enabled++;
-	 }
+         api_check = GL_TRUE;
+         if (_mesa_is_desktop_gl(ctx))
+            api_found = GL_TRUE;
 	 break;
       case EXTRA_API_GL_CORE:
-	 if (ctx->API == API_OPENGL_CORE) {
-	    total++;
-	    enabled++;
-	 }
+         api_check = GL_TRUE;
+         if (ctx->API == API_OPENGL_CORE)
+            api_found = GL_TRUE;
 	 break;
       case EXTRA_NEW_BUFFERS:
 	 if (ctx->NewState & _NEW_BUFFERS)
@@ -957,21 +981,26 @@ check_extra(struct gl_context *ctx, const char *func, const struct value_desc *d
 	 }
 	 break;
       case EXTRA_GLSL_130:
-	 if (ctx->Const.GLSLVersion >= 130) {
-	    total++;
-	    enabled++;
-	 }
+         api_check = GL_TRUE;
+         if (ctx->Const.GLSLVersion >= 130)
+            api_found = GL_TRUE;
 	 break;
+      case EXTRA_EXT_UBO_GS4:
+         api_check = GL_TRUE;
+         api_found = (ctx->Extensions.ARB_uniform_buffer_object &&
+                      ctx->Extensions.ARB_geometry_shader4);
+         break;
       case EXTRA_END:
 	 break;
       default: /* *e is a offset into the extension struct */
-	 total++;
+	 api_check = GL_TRUE;
 	 if (*(GLboolean *) ((char *) &ctx->Extensions + *e))
-	    enabled++;
+	    api_found = GL_TRUE;
 	 break;
       }
+   }
 
-   if (total > 0 && enabled == 0) {
+   if (api_check && !api_found) {
       _mesa_error(ctx, GL_INVALID_ENUM, "%s(pname=%s)", func,
                   _mesa_lookup_enum_by_nr(d->pname));
       return GL_FALSE;

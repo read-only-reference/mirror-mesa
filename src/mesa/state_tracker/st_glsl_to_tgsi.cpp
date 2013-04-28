@@ -2683,7 +2683,7 @@ glsl_to_tgsi_visitor::visit(ir_call *ir)
 void
 glsl_to_tgsi_visitor::visit(ir_texture *ir)
 {
-   st_src_reg result_src, coord, cube_sc, lod_info, projector, dx, dy, offset;
+   st_src_reg result_src, coord, cube_sc, lod_info, projector, dx, dy, offset, sample_index;
    st_dst_reg result_dst, coord_dst, cube_sc_dst;
    glsl_to_tgsi_instruction *inst = NULL;
    unsigned opcode = TGSI_OPCODE_NOP;
@@ -2706,6 +2706,7 @@ glsl_to_tgsi_visitor::visit(ir_texture *ir)
        */
       coord = get_temp(glsl_type::vec4_type);
       coord_dst = st_dst_reg(coord);
+      coord_dst.writemask = (1 << ir->coordinate->type->vector_elements) - 1;
       emit(ir, TGSI_OPCODE_MOV, coord_dst, this->result);
    }
 
@@ -2772,7 +2773,9 @@ glsl_to_tgsi_visitor::visit(ir_texture *ir)
       }
       break;
    case ir_txf_ms:
-      assert(!"Unexpected ir_txf_ms opcode");
+      opcode = TGSI_OPCODE_TXF;
+      ir->lod_info.sample_index->accept(this);
+      sample_index = this->result;
       break;
    case ir_lod:
       assert(!"Unexpected ir_lod opcode");
@@ -2859,7 +2862,11 @@ glsl_to_tgsi_visitor::visit(ir_texture *ir)
       }
    }
 
-   if (opcode == TGSI_OPCODE_TXL || opcode == TGSI_OPCODE_TXB ||
+   if (ir->op == ir_txf_ms) {
+      coord_dst.writemask = WRITEMASK_W;
+      emit(ir, TGSI_OPCODE_MOV, coord_dst, sample_index);
+      coord_dst.writemask = WRITEMASK_XYZW;
+   } else if (opcode == TGSI_OPCODE_TXL || opcode == TGSI_OPCODE_TXB ||
        opcode == TGSI_OPCODE_TXF) {
       /* TGSI stores LOD or LOD bias in the last channel of the coords. */
       coord_dst.writemask = WRITEMASK_W;
@@ -2921,6 +2928,10 @@ glsl_to_tgsi_visitor::visit(ir_texture *ir)
    case GLSL_SAMPLER_DIM_EXTERNAL:
       inst->tex_target = TEXTURE_EXTERNAL_INDEX;
       break;
+   case GLSL_SAMPLER_DIM_MS:
+      inst->tex_target = (sampler_type->sampler_array)
+         ? TEXTURE_2D_MULTISAMPLE_ARRAY_INDEX : TEXTURE_2D_MULTISAMPLE_INDEX;
+      break;
    default:
       assert(!"Should not get here.");
    }
@@ -2967,12 +2978,15 @@ glsl_to_tgsi_visitor::visit(ir_discard *ir)
 void
 glsl_to_tgsi_visitor::visit(ir_if *ir)
 {
+   unsigned if_opcode;
    glsl_to_tgsi_instruction *if_inst;
 
    ir->condition->accept(this);
    assert(this->result.file != PROGRAM_UNDEFINED);
 
-   if_inst = emit(ir->condition, TGSI_OPCODE_IF, undef_dst, this->result);
+   if_opcode = native_integers ? TGSI_OPCODE_UIF : TGSI_OPCODE_IF;
+
+   if_inst = emit(ir->condition, if_opcode, undef_dst, this->result);
 
    this->instructions.push_tail(if_inst);
 
@@ -3451,6 +3465,7 @@ glsl_to_tgsi_visitor::copy_propagate(void)
          break;
 
       case TGSI_OPCODE_IF:
+      case TGSI_OPCODE_UIF:
          ++level;
          break;
 
@@ -3653,6 +3668,7 @@ glsl_to_tgsi_visitor::eliminate_dead_code_advanced(void)
          break;
 
       case TGSI_OPCODE_IF:
+      case TGSI_OPCODE_UIF:
          ++level;
          /* fallthrough to default case to mark the condition as read */
       
@@ -4378,6 +4394,7 @@ compile_tgsi_instruction(struct st_translate *t,
    case TGSI_OPCODE_ELSE:
    case TGSI_OPCODE_ENDLOOP:
    case TGSI_OPCODE_IF:
+   case TGSI_OPCODE_UIF:
       assert(num_dst == 0);
       ureg_label_insn(ureg,
                       inst->op,

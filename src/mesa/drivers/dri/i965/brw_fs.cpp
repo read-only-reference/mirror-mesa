@@ -32,6 +32,7 @@ extern "C" {
 
 #include <sys/types.h>
 
+#include "main/hash_table.h"
 #include "main/macros.h"
 #include "main/shaderobj.h"
 #include "main/uniforms.h"
@@ -60,6 +61,9 @@ fs_inst::init()
    this->src[0] = reg_undef;
    this->src[1] = reg_undef;
    this->src[2] = reg_undef;
+
+   /* This will be the case for almost all instructions. */
+   this->regs_written = 1;
 }
 
 fs_inst::fs_inst()
@@ -229,39 +233,58 @@ fs_visitor::CMP(fs_reg dst, fs_reg src0, fs_reg src1, uint32_t condition)
 
 exec_list
 fs_visitor::VARYING_PULL_CONSTANT_LOAD(fs_reg dst, fs_reg surf_index,
-                                       fs_reg offset)
+                                       fs_reg varying_offset,
+                                       uint32_t const_offset)
 {
    exec_list instructions;
    fs_inst *inst;
 
-   if (intel->gen >= 7) {
-      inst = new(mem_ctx) fs_inst(FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7,
-                                  dst, surf_index, offset);
-      instructions.push_tail(inst);
-   } else {
-      int base_mrf = 13;
-      bool header_present = true;
+   /* We have our constant surface use a pitch of 4 bytes, so our index can
+    * be any component of a vector, and then we load 4 contiguous
+    * components starting from that.
+    *
+    * We break down the const_offset to a portion added to the variable
+    * offset and a portion done using reg_offset, which means that if you
+    * have GLSL using something like "uniform vec4 a[20]; gl_FragColor =
+    * a[i]", we'll temporarily generate 4 vec4 loads from offset i * 4, and
+    * CSE can later notice that those loads are all the same and eliminate
+    * the redundant ones.
+    */
+   fs_reg vec4_offset = fs_reg(this, glsl_type::int_type);
+   instructions.push_tail(ADD(vec4_offset,
+                              varying_offset, const_offset & ~3));
 
-      fs_reg mrf = fs_reg(MRF, base_mrf + header_present);
-      mrf.type = BRW_REGISTER_TYPE_D;
-
-      /* On gen6+ we want the dword offset passed in, but on gen4/5 we need a
-       * dword-aligned byte offset.
+   int scale = 1;
+   if (intel->gen == 4 && dispatch_width == 8) {
+      /* Pre-gen5, we can either use a SIMD8 message that requires (header,
+       * u, v, r) as parameters, or we can just use the SIMD16 message
+       * consisting of (header, u).  We choose the second, at the cost of a
+       * longer return length.
        */
-      if (intel->gen == 6) {
-         instructions.push_tail(MOV(mrf, offset));
-      } else {
-         instructions.push_tail(MUL(mrf, offset, fs_reg(4)));
-      }
-      inst = MOV(mrf, offset);
-      inst = new(mem_ctx) fs_inst(FS_OPCODE_VARYING_PULL_CONSTANT_LOAD,
-                                  dst, surf_index);
-      inst->header_present = header_present;
-      inst->base_mrf = base_mrf;
-      inst->mlen = header_present + dispatch_width / 8;
-
-      instructions.push_tail(inst);
+      scale = 2;
    }
+
+   enum opcode op;
+   if (intel->gen >= 7)
+      op = FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7;
+   else
+      op = FS_OPCODE_VARYING_PULL_CONSTANT_LOAD;
+   fs_reg vec4_result = fs_reg(GRF, virtual_grf_alloc(4 * scale), dst.type);
+   inst = new(mem_ctx) fs_inst(op, vec4_result, surf_index, vec4_offset);
+   inst->regs_written = 4 * scale;
+   instructions.push_tail(inst);
+
+   if (intel->gen < 7) {
+      inst->base_mrf = 13;
+      inst->header_present = true;
+      if (intel->gen == 4)
+         inst->mlen = 3;
+      else
+         inst->mlen = 1 + dispatch_width / 8;
+   }
+
+   vec4_result.reg_offset += (const_offset & 3) * scale;
+   instructions.push_tail(MOV(dst, vec4_result));
 
    return instructions;
 }
@@ -307,71 +330,13 @@ fs_inst::equals(fs_inst *inst)
            offset == inst->offset);
 }
 
-int
-fs_inst::regs_written()
-{
-   if (is_tex())
-      return 4;
-
-   /* The SINCOS and INT_DIV_QUOTIENT_AND_REMAINDER math functions return 2,
-    * but we don't currently use them...nor do we have an opcode for them.
-    */
-
-   return 1;
-}
-
 bool
 fs_inst::overwrites_reg(const fs_reg &reg)
 {
    return (reg.file == dst.file &&
            reg.reg == dst.reg &&
            reg.reg_offset >= dst.reg_offset  &&
-           reg.reg_offset < dst.reg_offset + regs_written());
-}
-
-bool
-fs_inst::is_tex()
-{
-   return (opcode == SHADER_OPCODE_TEX ||
-           opcode == FS_OPCODE_TXB ||
-           opcode == SHADER_OPCODE_TXD ||
-           opcode == SHADER_OPCODE_TXF ||
-           opcode == SHADER_OPCODE_TXF_MS ||
-           opcode == SHADER_OPCODE_TXL ||
-           opcode == SHADER_OPCODE_TXS ||
-           opcode == SHADER_OPCODE_LOD);
-}
-
-bool
-fs_inst::is_math()
-{
-   return (opcode == SHADER_OPCODE_RCP ||
-           opcode == SHADER_OPCODE_RSQ ||
-           opcode == SHADER_OPCODE_SQRT ||
-           opcode == SHADER_OPCODE_EXP2 ||
-           opcode == SHADER_OPCODE_LOG2 ||
-           opcode == SHADER_OPCODE_SIN ||
-           opcode == SHADER_OPCODE_COS ||
-           opcode == SHADER_OPCODE_INT_QUOTIENT ||
-           opcode == SHADER_OPCODE_INT_REMAINDER ||
-           opcode == SHADER_OPCODE_POW);
-}
-
-bool
-fs_inst::is_control_flow()
-{
-   switch (opcode) {
-   case BRW_OPCODE_DO:
-   case BRW_OPCODE_WHILE:
-   case BRW_OPCODE_IF:
-   case BRW_OPCODE_ELSE:
-   case BRW_OPCODE_ENDIF:
-   case BRW_OPCODE_BREAK:
-   case BRW_OPCODE_CONTINUE:
-      return true;
-   default:
-      return false;
-   }
+           reg.reg_offset < dst.reg_offset + regs_written);
 }
 
 bool
@@ -477,6 +442,12 @@ fs_reg::is_one() const
       return false;
 
    return type == BRW_REGISTER_TYPE_F ? imm.f == 1.0 : imm.i == 1;
+}
+
+bool
+fs_reg::is_valid_3src() const
+{
+   return file == GRF || file == UNIFORM;
 }
 
 int
@@ -607,8 +578,8 @@ void
 fs_visitor::emit_shader_time_write(enum shader_time_shader_type type,
                                    fs_reg value)
 {
-   int shader_time_index = brw_get_shader_time_index(brw, prog, &fp->Base,
-                                                     type);
+   int shader_time_index =
+      brw_get_shader_time_index(brw, shader_prog, &fp->Base, type);
    fs_reg offset = fs_reg(shader_time_index * SHADER_TIME_STRIDE);
 
    fs_reg payload;
@@ -702,6 +673,22 @@ fs_visitor::pop_force_sechalf()
 }
 
 /**
+ * Returns true if the instruction has a flag that means it won't
+ * update an entire destination register.
+ *
+ * For example, dead code elimination and live variable analysis want to know
+ * when a write to a variable screens off any preceding values that were in
+ * it.
+ */
+bool
+fs_inst::is_partial_write()
+{
+   return (this->predicate ||
+           this->force_uncompressed ||
+           this->force_sechalf);
+}
+
+/**
  * Returns how many MRFs an FS opcode will write over.
  *
  * Note that this is not the 0 or 1 implied writes in an actual gen
@@ -741,7 +728,7 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
    case FS_OPCODE_UNSPILL:
       return 1;
    case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD:
-      return inst->header_present;
+      return inst->mlen;
    case FS_OPCODE_SPILL:
       return 2;
    default:
@@ -843,8 +830,8 @@ fs_visitor::setup_uniform_values(ir_variable *ir)
     * with our name, or the prefix of a component that starts with our name.
     */
    unsigned params_before = c->prog_data.nr_params;
-   for (unsigned u = 0; u < prog->NumUserUniformStorage; u++) {
-      struct gl_uniform_storage *storage = &prog->UniformStorage[u];
+   for (unsigned u = 0; u < shader_prog->NumUserUniformStorage; u++) {
+      struct gl_uniform_storage *storage = &shader_prog->UniformStorage[u];
 
       if (strncmp(ir->name, storage->name, namelen) != 0 ||
           (storage->name[namelen] != 0 &&
@@ -866,6 +853,7 @@ fs_visitor::setup_uniform_values(ir_variable *ir)
    /* Make sure we actually initialized the right amount of stuff here. */
    assert(params_before + ir->type->component_slots() ==
           c->prog_data.nr_params);
+   (void)params_before;
 }
 
 
@@ -957,16 +945,24 @@ fs_visitor::emit_linterp(const fs_reg &attr, const fs_reg &interp,
                          bool is_centroid)
 {
    brw_wm_barycentric_interp_mode barycoord_mode;
-   if (is_centroid) {
-      if (interpolation_mode == INTERP_QUALIFIER_SMOOTH)
-         barycoord_mode = BRW_WM_PERSPECTIVE_CENTROID_BARYCENTRIC;
-      else
-         barycoord_mode = BRW_WM_NONPERSPECTIVE_CENTROID_BARYCENTRIC;
+   if (intel->gen >= 6) {
+      if (is_centroid) {
+         if (interpolation_mode == INTERP_QUALIFIER_SMOOTH)
+            barycoord_mode = BRW_WM_PERSPECTIVE_CENTROID_BARYCENTRIC;
+         else
+            barycoord_mode = BRW_WM_NONPERSPECTIVE_CENTROID_BARYCENTRIC;
+      } else {
+         if (interpolation_mode == INTERP_QUALIFIER_SMOOTH)
+            barycoord_mode = BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
+         else
+            barycoord_mode = BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC;
+      }
    } else {
-      if (interpolation_mode == INTERP_QUALIFIER_SMOOTH)
-         barycoord_mode = BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
-      else
-         barycoord_mode = BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC;
+      /* On Ironlake and below, there is only one interpolation mode.
+       * Centroid interpolation doesn't mean anything on this hardware --
+       * there is no multisampling.
+       */
+      barycoord_mode = BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
    }
    return emit(FS_OPCODE_LINTERP, attr,
                this->delta_x[barycoord_mode],
@@ -1030,31 +1026,24 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
 		* attribute, as well as making brw_vs_constval.c
 		* handle varyings other than gl_TexCoord.
 		*/
-	       if (location >= VARYING_SLOT_TEX0 &&
-		   location <= VARYING_SLOT_TEX7 &&
-		   k == 3 && !(c->key.proj_attrib_mask
-                               & BITFIELD64_BIT(location))) {
-		  emit(BRW_OPCODE_MOV, attr, fs_reg(1.0f));
-	       } else {
-		  struct brw_reg interp = interp_reg(location, k);
-                  emit_linterp(attr, fs_reg(interp), interpolation_mode,
-                               ir->centroid);
-                  if (brw->needs_unlit_centroid_workaround && ir->centroid) {
-                     /* Get the pixel/sample mask into f0 so that we know
-                      * which pixels are lit.  Then, for each channel that is
-                      * unlit, replace the centroid data with non-centroid
-                      * data.
-                      */
-                     emit(FS_OPCODE_MOV_DISPATCH_TO_FLAGS, attr);
-                     fs_inst *inst = emit_linterp(attr, fs_reg(interp),
-                                                  interpolation_mode, false);
-                     inst->predicate = BRW_PREDICATE_NORMAL;
-                     inst->predicate_inverse = true;
-                  }
-		  if (intel->gen < 6) {
-		     emit(BRW_OPCODE_MUL, attr, attr, this->pixel_w);
-		  }
-	       }
+               struct brw_reg interp = interp_reg(location, k);
+               emit_linterp(attr, fs_reg(interp), interpolation_mode,
+                            ir->centroid);
+               if (brw->needs_unlit_centroid_workaround && ir->centroid) {
+                  /* Get the pixel/sample mask into f0 so that we know
+                   * which pixels are lit.  Then, for each channel that is
+                   * unlit, replace the centroid data with non-centroid
+                   * data.
+                   */
+                  emit(FS_OPCODE_MOV_DISPATCH_TO_FLAGS);
+                  fs_inst *inst = emit_linterp(attr, fs_reg(interp),
+                                               interpolation_mode, false);
+                  inst->predicate = BRW_PREDICATE_NORMAL;
+                  inst->predicate_inverse = true;
+               }
+               if (intel->gen < 6) {
+                  emit(BRW_OPCODE_MUL, attr, attr, this->pixel_w);
+               }
 	       attr.reg_offset++;
 	    }
 
@@ -1354,7 +1343,7 @@ fs_visitor::split_virtual_grfs()
       /* If there's a SEND message that requires contiguous destination
        * registers, no splitting is allowed.
        */
-      if (inst->regs_written() > 1) {
+      if (inst->regs_written > 1) {
 	 split_grf[inst->dst.reg] = false;
       }
 
@@ -1621,15 +1610,13 @@ fs_visitor::move_uniform_array_access_to_pull_constants()
          base_ir = inst->ir;
          current_annotation = inst->annotation;
 
-         fs_reg offset = fs_reg(this, glsl_type::int_type);
-         inst->insert_before(ADD(offset, *inst->src[i].reladdr,
-                                 fs_reg(pull_constant_loc[uniform] +
-                                        inst->src[i].reg_offset)));
-
          fs_reg surf_index = fs_reg((unsigned)SURF_INDEX_FRAG_CONST_BUFFER);
          fs_reg temp = fs_reg(this, glsl_type::float_type);
          exec_list list = VARYING_PULL_CONSTANT_LOAD(temp,
-                                                     surf_index, offset);
+                                                     surf_index,
+                                                     *inst->src[i].reladdr,
+                                                     pull_constant_loc[uniform] +
+                                                     inst->src[i].reg_offset);
          inst->insert_before(&list);
 
          inst->src[i].file = temp.file;
@@ -1807,6 +1794,164 @@ fs_visitor::dead_code_eliminate()
    return progress;
 }
 
+struct dead_code_hash_key
+{
+   int vgrf;
+   int reg_offset;
+};
+
+static bool
+dead_code_hash_compare(const void *a, const void *b)
+{
+   return memcmp(a, b, sizeof(struct dead_code_hash_key)) == 0;
+}
+
+static void
+clear_dead_code_hash(struct hash_table *ht)
+{
+   struct hash_entry *entry;
+
+   hash_table_foreach(ht, entry) {
+      _mesa_hash_table_remove(ht, entry);
+   }
+}
+
+static void
+insert_dead_code_hash(struct hash_table *ht,
+                      int vgrf, int reg_offset, fs_inst *inst)
+{
+   /* We don't bother freeing keys, because they'll be GCed with the ht. */
+   struct dead_code_hash_key *key = ralloc(ht, struct dead_code_hash_key);
+
+   key->vgrf = vgrf;
+   key->reg_offset = reg_offset;
+
+   _mesa_hash_table_insert(ht, _mesa_hash_data(key, sizeof(*key)), key, inst);
+}
+
+static struct hash_entry *
+get_dead_code_hash_entry(struct hash_table *ht, int vgrf, int reg_offset)
+{
+   struct dead_code_hash_key key;
+
+   key.vgrf = vgrf;
+   key.reg_offset = reg_offset;
+
+   return _mesa_hash_table_search(ht, _mesa_hash_data(&key, sizeof(key)), &key);
+}
+
+static void
+remove_dead_code_hash(struct hash_table *ht,
+                      int vgrf, int reg_offset)
+{
+   struct hash_entry *entry = get_dead_code_hash_entry(ht, vgrf, reg_offset);
+   if (!entry)
+      return;
+
+   _mesa_hash_table_remove(ht, entry);
+}
+
+/**
+ * Walks basic blocks, removing any regs that are written but not read before
+ * being redefined.
+ *
+ * The dead_code_eliminate() function implements a global dead code
+ * elimination, but it only handles the removing the last write to a register
+ * if it's never read.  This one can handle intermediate writes, but only
+ * within a basic block.
+ */
+bool
+fs_visitor::dead_code_eliminate_local()
+{
+   struct hash_table *ht;
+   bool progress = false;
+
+   ht = _mesa_hash_table_create(mem_ctx, dead_code_hash_compare);
+
+   foreach_list_safe(node, &this->instructions) {
+      fs_inst *inst = (fs_inst *)node;
+
+      /* At a basic block, empty the HT since we don't understand dataflow
+       * here.
+       */
+      if (inst->is_control_flow()) {
+         clear_dead_code_hash(ht);
+         continue;
+      }
+
+      /* Clear the HT of any instructions that got read. */
+      for (int i = 0; i < 3; i++) {
+         fs_reg src = inst->src[i];
+         if (src.file != GRF)
+            continue;
+
+         int read = 1;
+         if (inst->is_send_from_grf())
+            read = virtual_grf_sizes[src.reg] - src.reg_offset;
+
+         for (int reg_offset = src.reg_offset;
+              reg_offset < src.reg_offset + read;
+              reg_offset++) {
+            remove_dead_code_hash(ht, src.reg, reg_offset);
+         }
+      }
+
+      /* Add any update of a GRF to the HT, removing a previous write if it
+       * wasn't read.
+       */
+      if (inst->dst.file == GRF) {
+         if (inst->regs_written > 1) {
+            /* We don't know how to trim channels from an instruction's
+             * writes, so we can't incrementally remove unread channels from
+             * it.  Just remove whatever it overwrites from the table
+             */
+            for (int i = 0; i < inst->regs_written; i++) {
+               remove_dead_code_hash(ht,
+                                     inst->dst.reg,
+                                     inst->dst.reg_offset + i);
+            }
+         } else {
+            struct hash_entry *entry =
+               get_dead_code_hash_entry(ht, inst->dst.reg,
+                                        inst->dst.reg_offset);
+
+            if (inst->is_partial_write()) {
+               /* For a partial write, we can't remove any previous dead code
+                * candidate, since we're just modifying their result, but we can
+                * be dead code eliminiated ourselves.
+                */
+               if (entry) {
+                  entry->data = inst;
+               } else {
+                  insert_dead_code_hash(ht, inst->dst.reg, inst->dst.reg_offset,
+                                        inst);
+               }
+            } else {
+               if (entry) {
+                  /* We're completely updating a channel, and there was a
+                   * previous write to the channel that wasn't read.  Kill it!
+                   */
+                  fs_inst *inst = (fs_inst *)entry->data;
+                  inst->remove();
+                  progress = true;
+                  _mesa_hash_table_remove(ht, entry);
+               }
+
+               insert_dead_code_hash(ht, inst->dst.reg, inst->dst.reg_offset,
+                                     inst);
+            }
+         }
+      }
+   }
+
+   _mesa_hash_table_destroy(ht, NULL);
+
+   if (progress)
+      live_intervals_valid = false;
+
+   return progress;
+}
+
 /**
  * Implements a second type of register coalescing: This one checks if
  * the two regs involved in a raw move don't interfere, in which case
@@ -1823,7 +1968,7 @@ fs_visitor::register_coalesce_2()
       fs_inst *inst = (fs_inst *)node;
 
       if (inst->opcode != BRW_OPCODE_MOV ||
-	  inst->predicate ||
+	  inst->is_partial_write() ||
 	  inst->saturate ||
 	  inst->src[0].file != GRF ||
 	  inst->src[0].negate ||
@@ -1924,7 +2069,7 @@ fs_visitor::register_coalesce()
 	 continue;
 
       if (inst->opcode != BRW_OPCODE_MOV ||
-	  inst->predicate ||
+	  inst->is_partial_write() ||
 	  inst->saturate ||
 	  inst->dst.file != GRF || (inst->src[0].file != GRF &&
 				    inst->src[0].file != UNIFORM)||
@@ -2026,7 +2171,7 @@ fs_visitor::compute_to_mrf()
       next_ip++;
 
       if (inst->opcode != BRW_OPCODE_MOV ||
-	  inst->predicate ||
+	  inst->is_partial_write() ||
 	  inst->dst.file != MRF || inst->src[0].file != GRF ||
 	  inst->dst.type != inst->src[0].type ||
 	  inst->src[0].abs || inst->src[0].negate || inst->src[0].smear != -1)
@@ -2065,21 +2210,19 @@ fs_visitor::compute_to_mrf()
 	     * into a compute-to-MRF.
 	     */
 
-	    /* If it's predicated, it (probably) didn't populate all
-	     * the channels.  We might be able to rewrite everything
+	    /* If this one instruction didn't populate all the
+	     * channels, bail.  We might be able to rewrite everything
 	     * that writes that reg, but it would require smarter
 	     * tracking to delay the rewriting until complete success.
 	     */
-	    if (scan_inst->predicate)
+	    if (scan_inst->is_partial_write())
 	       break;
 
-	    /* If it's half of register setup and not the same half as
-	     * our MOV we're trying to remove, bail for now.
-	     */
-	    if (scan_inst->force_uncompressed != inst->force_uncompressed ||
-		scan_inst->force_sechalf != inst->force_sechalf) {
-	       break;
-	    }
+            /* Things returning more than one register would need us to
+             * understand coalescing out more than one MOV at a time.
+             */
+            if (scan_inst->regs_written > 1)
+               break;
 
 	    /* SEND instructions can't have MRF as a destination. */
 	    if (scan_inst->mlen)
@@ -2235,7 +2378,7 @@ fs_visitor::remove_duplicate_mrf_writes()
       if (inst->opcode == BRW_OPCODE_MOV &&
 	  inst->dst.file == MRF &&
 	  inst->src[0].file == GRF &&
-	  !inst->predicate) {
+	  !inst->is_partial_write()) {
 	 last_mrf_move[inst->dst.reg] = inst;
       }
    }
@@ -2295,7 +2438,7 @@ void
 fs_visitor::insert_gen4_pre_send_dependency_workarounds(fs_inst *inst)
 {
    int reg_size = dispatch_width / 8;
-   int write_len = inst->regs_written() * reg_size;
+   int write_len = inst->regs_written * reg_size;
    int first_write_grf = inst->dst.reg;
    bool needs_dep[BRW_MAX_MRF];
    assert(write_len < (int)sizeof(needs_dep) - 1);
@@ -2324,6 +2467,7 @@ fs_visitor::insert_gen4_pre_send_dependency_workarounds(fs_inst *inst)
                inst->insert_before(DEP_RESOLVE_MOV(first_write_grf + i));
             }
          }
+         return;
       }
 
       bool scan_inst_16wide = (dispatch_width > 8 &&
@@ -2335,7 +2479,7 @@ fs_visitor::insert_gen4_pre_send_dependency_workarounds(fs_inst *inst)
        * dependency has more latency than a MOV.
        */
       if (scan_inst->dst.file == GRF) {
-         for (int i = 0; i < scan_inst->regs_written(); i++) {
+         for (int i = 0; i < scan_inst->regs_written; i++) {
             int reg = scan_inst->dst.reg + i * reg_size;
 
             if (reg >= first_write_grf &&
@@ -2374,7 +2518,7 @@ fs_visitor::insert_gen4_pre_send_dependency_workarounds(fs_inst *inst)
 void
 fs_visitor::insert_gen4_post_send_dependency_workarounds(fs_inst *inst)
 {
-   int write_len = inst->regs_written() * dispatch_width / 8;
+   int write_len = inst->regs_written * dispatch_width / 8;
    int first_write_grf = inst->dst.reg;
    bool needs_dep[BRW_MAX_MRF];
    assert(write_len < (int)sizeof(needs_dep) - 1);
@@ -2393,6 +2537,7 @@ fs_visitor::insert_gen4_post_send_dependency_workarounds(fs_inst *inst)
             if (needs_dep[i])
                scan_inst->insert_before(DEP_RESOLVE_MOV(first_write_grf + i));
          }
+         return;
       }
 
       /* Clear the flag for registers that actually got read (as expected). */
@@ -2477,10 +2622,13 @@ fs_visitor::lower_uniform_pull_constant_loads()
          continue;
 
       if (intel->gen >= 7) {
+         /* The offset arg before was a vec4-aligned byte offset.  We need to
+          * turn it into a dword offset.
+          */
          fs_reg const_offset_reg = inst->src[1];
          assert(const_offset_reg.file == IMM &&
                 const_offset_reg.type == BRW_REGISTER_TYPE_UD);
-         const_offset_reg.imm.u /= 16;
+         const_offset_reg.imm.u /= 4;
          fs_reg payload = fs_reg(this, glsl_type::uint_type);
 
          /* This is actually going to be a MOV, but since only the first dword
@@ -2651,9 +2799,7 @@ fs_visitor::get_instruction_generating_reg(fs_inst *start,
 					   fs_reg reg)
 {
    if (end == start ||
-       end->predicate ||
-       end->force_uncompressed ||
-       end->force_sechalf ||
+       end->is_partial_write() ||
        reg.reladdr ||
        !reg.equals(end->dst)) {
       return NULL;
@@ -2665,7 +2811,6 @@ fs_visitor::get_instruction_generating_reg(fs_inst *start,
 void
 fs_visitor::setup_payload_gen6()
 {
-   struct intel_context *intel = &brw->intel;
    bool uses_depth =
       (fp->Base.InputsRead & (1 << VARYING_SLOT_POS)) != 0;
    unsigned barycentric_interp_modes = c->prog_data.barycentric_interp_modes;
@@ -2789,6 +2934,7 @@ fs_visitor::run()
 	 progress = opt_cse() || progress;
 	 progress = opt_copy_propagate() || progress;
 	 progress = dead_code_eliminate() || progress;
+	 progress = dead_code_eliminate_local() || progress;
 	 progress = register_coalesce() || progress;
 	 progress = register_coalesce_2() || progress;
 	 progress = compute_to_mrf() || progress;
@@ -2874,7 +3020,7 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
       shader = (brw_shader *) prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
 
    if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
-      if (shader) {
+      if (prog) {
          printf("GLSL IR for native fragment shader %d:\n", prog->Name);
          _mesa_print_ir(shader->ir, NULL);
          printf("\n\n");
@@ -2889,11 +3035,13 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
     */
    fs_visitor v(brw, c, prog, fp, 8);
    if (!v.run()) {
-      prog->LinkStatus = false;
-      ralloc_strcat(&prog->InfoLog, v.fail_msg);
+      if (prog) {
+         prog->LinkStatus = false;
+         ralloc_strcat(&prog->InfoLog, v.fail_msg);
+      }
 
       _mesa_problem(NULL, "Failed to compile fragment shader: %s\n",
-		    v.fail_msg);
+                    v.fail_msg);
 
       return NULL;
    }
@@ -2961,15 +3109,6 @@ brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
       key.iz_lookup |= IZ_DEPTH_WRITE_ENABLE_BIT;
    }
 
-   if (prog->Name != 0)
-      key.proj_attrib_mask = ~(GLbitfield64) 0;
-   else {
-      /* Bit VARYING_BIT_POS of key.proj_attrib_mask is never used, so to
-       * avoid unnecessary recompiles, always set it to 1.
-       */
-      key.proj_attrib_mask |= VARYING_BIT_POS;
-   }
-
    if (intel->gen < 6)
       key.input_slots_valid |= BITFIELD64_BIT(VARYING_SLOT_POS);
 
@@ -2977,16 +3116,13 @@ brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
       if (!(fp->Base.InputsRead & BITFIELD64_BIT(i)))
 	 continue;
 
-      if (prog->Name == 0)
-         key.proj_attrib_mask |= BITFIELD64_BIT(i);
-
       if (intel->gen < 6) {
          if (_mesa_varying_slot_in_fs((gl_varying_slot) i))
             key.input_slots_valid |= BITFIELD64_BIT(i);
       }
    }
 
-   key.clamp_fragment_color = true;
+   key.clamp_fragment_color = ctx->API == API_OPENGL_COMPAT;
 
    for (int i = 0; i < MAX_SAMPLERS; i++) {
       if (fp->Base.ShadowSamplers & (1 << i)) {

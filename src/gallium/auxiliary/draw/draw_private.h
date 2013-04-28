@@ -279,7 +279,6 @@ struct draw_context
 
    /** Stream output (vertex feedback) state */
    struct {
-      struct pipe_stream_output_info state;
       struct draw_so_target *targets[PIPE_MAX_SO_BUFFERS];
       uint num_targets;
    } so;
@@ -312,6 +311,9 @@ struct draw_context
    unsigned num_sampler_views[PIPE_SHADER_TYPES];
    const struct pipe_sampler_state *samplers[PIPE_SHADER_TYPES][PIPE_MAX_SAMPLERS];
    unsigned num_samplers[PIPE_SHADER_TYPES];
+
+   struct pipe_query_data_pipeline_statistics statistics;
+   boolean collect_statistics;
 
    void *driver_private;
 };
@@ -353,6 +355,7 @@ struct draw_prim_info {
  * Draw common initialization code
  */
 boolean draw_init(struct draw_context *draw);
+void draw_new_instance(struct draw_context *draw);
 
 /*******************************************************************************
  * Vertex shader code:

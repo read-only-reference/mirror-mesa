@@ -41,6 +41,7 @@
 #include "intel_regions.h"
 
 #include "brw_context.h"
+#include "brw_blorp.h"
 
 #define FILE_DEBUG_FLAG DEBUG_BLIT
 
@@ -114,7 +115,7 @@ brw_fast_clear_depth(struct gl_context *ctx)
    if (intel->gen < 6)
       return false;
 
-   if (!mt->hiz_mt)
+   if (!intel_renderbuffer_has_hiz(depth_irb))
       return false;
 
    /* We only handle full buffer clears -- otherwise you'd have to track whether
@@ -240,6 +241,16 @@ brw_clear(struct gl_context *ctx, GLbitfield mask)
       if (brw_fast_clear_depth(ctx)) {
 	 DBG("fast clear: depth\n");
 	 mask &= ~BUFFER_BIT_DEPTH;
+      }
+   }
+
+   /* BLORP is currently only supported on Gen6+. */
+   if (intel->gen >= 6) {
+      if (mask & BUFFER_BITS_COLOR) {
+         if (brw_blorp_clear_color(intel, fb)) {
+            debug_mask("blorp color", mask & BUFFER_BITS_COLOR);
+            mask &= ~BUFFER_BITS_COLOR;
+         }
       }
    }
 

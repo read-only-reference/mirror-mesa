@@ -394,7 +394,7 @@ setup_sort_vertices(struct setup_context *setup,
     *  - pixel center (0.5, 0.5) for GL, or
     *  - assume (0.0, 0.0) for other APIs.
     */
-   if (setup->softpipe->rasterizer->gl_rasterization_rules) {
+   if (setup->softpipe->rasterizer->half_pixel_center) {
       setup->pixel_offset = 0.5f;
    } else {
       setup->pixel_offset = 0.0f;
@@ -856,6 +856,10 @@ sp_setup_tri(struct setup_context *setup,
    }
 
    flush_spans( setup );
+
+   if (setup->softpipe->active_statistics_queries) {
+      setup->softpipe->pipeline_statistics.c_primitives++;
+   }
 
 #if DEBUG_FRAGS
    printf("Tri: %u frags emitted, %u written\n",

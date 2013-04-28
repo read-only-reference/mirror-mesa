@@ -59,7 +59,7 @@ struct hud_context {
    /* states */
    struct pipe_blend_state alpha_blend;
    struct pipe_depth_stencil_alpha_state dsa;
-   void *fs_color, *fs_texture;
+   void *fs_color, *fs_text;
    struct pipe_rasterizer_state rasterizer;
    void *vs;
    struct pipe_vertex_element velems[2];
@@ -463,7 +463,7 @@ hud_draw(struct hud_context *hud, struct pipe_resource *tex)
    cso_set_constant_buffer(cso, PIPE_SHADER_VERTEX, 0, &hud->constbuf);
 
    /* prepare vertex buffers */
-   hud_alloc_vertices(hud, &hud->bg, 4 * 64, 2 * sizeof(float));
+   hud_alloc_vertices(hud, &hud->bg, 4 * 128, 2 * sizeof(float));
    hud_alloc_vertices(hud, &hud->whitelines, 4 * 256, 2 * sizeof(float));
    hud_alloc_vertices(hud, &hud->text, 4 * 512, 4 * sizeof(float));
 
@@ -475,6 +475,9 @@ hud_draw(struct hud_context *hud, struct pipe_resource *tex)
 
       hud_pane_accumulate_vertices(hud, pane);
    }
+
+   /* unmap the uploader's vertex buffer before drawing */
+   u_upload_flush(hud->uploader);
 
    /* draw accumulated vertices for background quads */
    cso_set_fragment_shader_handle(hud->cso, hud->fs_color);
@@ -519,7 +522,7 @@ hud_draw(struct hud_context *hud, struct pipe_resource *tex)
    if (hud->text.num_vertices) {
       cso_set_vertex_buffers(cso, cso_get_aux_vertex_buffer_slot(cso), 1,
                              &hud->text.vbuf);
-      cso_set_fragment_shader_handle(hud->cso, hud->fs_texture);
+      cso_set_fragment_shader_handle(hud->cso, hud->fs_text);
       cso_draw_arrays(cso, PIPE_PRIM_QUADS, 0, hud->text.num_vertices);
    }
    pipe_resource_reference(&hud->text.vbuf.buffer, NULL);
@@ -614,7 +617,7 @@ hud_pane_add_graph(struct hud_pane *pane, struct hud_graph *gr)
    }
 
    assert(pane->num_graphs < Elements(colors));
-   gr->vertices = malloc(pane->max_num_vertices * sizeof(float) * 2);
+   gr->vertices = MALLOC(pane->max_num_vertices * sizeof(float) * 2);
    gr->color[0] = colors[pane->num_graphs][0];
    gr->color[1] = colors[pane->num_graphs][1];
    gr->color[2] = colors[pane->num_graphs][2];
@@ -688,6 +691,12 @@ has_streamout(struct pipe_screen *screen)
    return screen->get_param(screen, PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS) != 0;
 }
 
+static boolean
+has_pipeline_stats_query(struct pipe_screen *screen)
+{
+   return screen->get_param(screen, PIPE_CAP_QUERY_PIPELINE_STATISTICS) != 0;
+}
+
 static void
 hud_parse_env_var(struct hud_context *hud, const char *env)
 {
@@ -696,17 +705,33 @@ hud_parse_env_var(struct hud_context *hud, const char *env)
    struct hud_pane *pane = NULL;
    unsigned x = 10, y = 10;
    unsigned width = 251, height = 100;
+   unsigned period = 500 * 1000;  /* default period (1/2 second) */
+   const char *period_env;
+
+   /*
+    * The GALLIUM_HUD_PERIOD env var sets the graph update rate.
+    * The env var is in seconds (a float).
+    * Zero means update after every frame.
+    */
+   period_env = getenv("GALLIUM_HUD_PERIOD");
+   if (period_env) {
+      float p = atof(period_env);
+      if (p >= 0.0) {
+         period = (unsigned) (p * 1000 * 1000);
+      }
+   }
 
    while ((num = parse_string(env, name)) != 0) {
       env += num;
 
       if (!pane) {
-         pane = hud_pane_create(x, y, x + width, y + height, 40000, 10);
+         pane = hud_pane_create(x, y, x + width, y + height, period, 10);
          if (!pane)
             return;
       }
 
-      /* add a graph */
+      /* Add a graph. */
+      /* IF YOU CHANGE THIS, UPDATE print_help! */
       if (strcmp(name, "fps") == 0) {
          hud_fps_graph_install(pane);
       }
@@ -716,19 +741,51 @@ hud_parse_env_var(struct hud_context *hud, const char *env)
       else if (sscanf(name, "cpu%u%s", &i, s) == 1) {
          hud_cpu_graph_install(pane, i);
       }
-      else if (strcmp(name, "pixels-rendered") == 0 &&
+      else if (strcmp(name, "samples-passed") == 0 &&
                has_occlusion_query(hud->pipe->screen)) {
-         hud_pipe_query_install(pane, hud->pipe, "pixels-rendered",
-                            PIPE_QUERY_OCCLUSION_COUNTER, 0, FALSE);
+         hud_pipe_query_install(pane, hud->pipe, "samples-passed",
+                                PIPE_QUERY_OCCLUSION_COUNTER, 0, 0, FALSE);
       }
       else if (strcmp(name, "primitives-generated") == 0 &&
                has_streamout(hud->pipe->screen)) {
          hud_pipe_query_install(pane, hud->pipe, "primitives-generated",
-                            PIPE_QUERY_PRIMITIVES_GENERATED, 0, FALSE);
+                                PIPE_QUERY_PRIMITIVES_GENERATED, 0, 0, FALSE);
       }
       else {
-         if (!hud_driver_query_install(pane, hud->pipe, name)){
-            fprintf(stderr, "gallium_hud: unknown driver query '%s'\n", name);
+         boolean processed = FALSE;
+
+         /* pipeline statistics queries */
+         if (has_pipeline_stats_query(hud->pipe->screen)) {
+            static const char *pipeline_statistics_names[] =
+            {
+               "ia-vertices",
+               "ia-primitives",
+               "vs-invocations",
+               "gs-invocations",
+               "gs-primitives",
+               "clipper-invocations",
+               "clipper-primitives-generated",
+               "ps-invocations",
+               "hs-invocations",
+               "ds-invocations",
+               "cs-invocations"
+            };
+            for (i = 0; i < Elements(pipeline_statistics_names); ++i)
+               if (strcmp(name, pipeline_statistics_names[i]) == 0)
+                  break;
+            if (i < Elements(pipeline_statistics_names)) {
+               hud_pipe_query_install(pane, hud->pipe, name,
+                                      PIPE_QUERY_PIPELINE_STATISTICS, i,
+                                      0, FALSE);
+               processed = TRUE;
+            }
+         }
+
+         /* driver queries */
+         if (!processed) {
+            if (!hud_driver_query_install(pane, hud->pipe, name)){
+               fprintf(stderr, "gallium_hud: unknown driver query '%s'\n", name);
+            }
          }
       }
 
@@ -825,9 +882,23 @@ print_help(struct pipe_screen *screen)
       printf("    cpu%i\n", i);
 
    if (has_occlusion_query(screen))
-      puts("    pixels-rendered");
+      puts("    samples-passed");
    if (has_streamout(screen))
       puts("    primitives-generated");
+
+   if (has_pipeline_stats_query(screen)) {
+      puts("    ia-vertices");
+      puts("    ia-primitives");
+      puts("    vs-invocations");
+      puts("    gs-invocations");
+      puts("    gs-primitives");
+      puts("    clipper-invocations");
+      puts("    clipper-primitives-generated");
+      puts("    ps-invocations");
+      puts("    hs-invocations");
+      puts("    ds-invocations");
+      puts("    cs-invocations");
+   }
 
    if (screen->get_driver_query_info){
       struct pipe_driver_query_info info;
@@ -890,12 +961,37 @@ hud_create(struct pipe_context *pipe, struct cso_context *cso)
                                                TGSI_SEMANTIC_COLOR,
                                                TGSI_INTERPOLATE_CONSTANT);
 
-   hud->fs_texture =
-         util_make_fragment_tex_shader(pipe, TGSI_TEXTURE_RECT,
-                                       TGSI_INTERPOLATE_PERSPECTIVE);
+   {
+      /* Read a texture and do .xxxx swizzling. */
+      static const char *fragment_shader_text = {
+         "FRAG\n"
+         "DCL IN[0], GENERIC[0], LINEAR\n"
+         "DCL SAMP[0]\n"
+         "DCL OUT[0], COLOR[0]\n"
+         "DCL TEMP[0]\n"
+
+         "TEX TEMP[0], IN[0], SAMP[0], RECT\n"
+         "MOV OUT[0], TEMP[0].xxxx\n"
+         "END\n"
+      };
+
+      struct tgsi_token tokens[1000];
+      struct pipe_shader_state state = {tokens};
+
+      if (!tgsi_text_translate(fragment_shader_text, tokens, Elements(tokens))) {
+         assert(0);
+         pipe_resource_reference(&hud->font.texture, NULL);
+         u_upload_destroy(hud->uploader);
+         FREE(hud);
+         return NULL;
+      }
+
+      hud->fs_text = pipe->create_fs_state(pipe, &state);
+   }
 
    /* rasterizer */
-   hud->rasterizer.gl_rasterization_rules = 1;
+   hud->rasterizer.half_pixel_center = 1;
+   hud->rasterizer.bottom_edge_rule = 1;
    hud->rasterizer.depth_clip = 1;
    hud->rasterizer.line_width = 1;
    hud->rasterizer.line_last_pixel = 1;
@@ -957,6 +1053,12 @@ hud_create(struct pipe_context *pipe, struct cso_context *cso)
    hud->font_sampler_view = pipe->create_sampler_view(pipe, hud->font.texture,
                                                       &view_templ);
 
+   /* sampler state (for font drawing) */
+   hud->font_sampler_state.wrap_s = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
+   hud->font_sampler_state.wrap_t = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
+   hud->font_sampler_state.wrap_r = PIPE_TEX_WRAP_CLAMP_TO_EDGE;
+   hud->font_sampler_state.normalized_coords = 0;
+
    /* constants */
    hud->constbuf.buffer_size = sizeof(hud->constants);
    hud->constbuf.user_buffer = &hud->constants;
@@ -984,7 +1086,7 @@ hud_destroy(struct hud_context *hud)
    }
 
    pipe->delete_fs_state(pipe, hud->fs_color);
-   pipe->delete_fs_state(pipe, hud->fs_texture);
+   pipe->delete_fs_state(pipe, hud->fs_text);
    pipe->delete_vs_state(pipe, hud->vs);
    pipe_sampler_view_reference(&hud->font_sampler_view, NULL);
    pipe_resource_reference(&hud->font.texture, NULL);

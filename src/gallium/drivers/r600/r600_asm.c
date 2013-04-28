@@ -32,6 +32,8 @@
 #include "util/u_memory.h"
 #include "pipe/p_shader_tokens.h"
 
+#include "sb/sb_public.h"
+
 #define NUM_OF_CYCLES 3
 #define NUM_OF_COMPONENTS 4
 
@@ -87,11 +89,49 @@ static struct r600_bytecode_tex *r600_bytecode_tex(void)
 	return tex;
 }
 
+static unsigned stack_entry_size(enum radeon_family chip) {
+	/* Wavefront size:
+	 *   64: R600/RV670/RV770/Cypress/R740/Barts/Turks/Caicos/
+	 *       Aruba/Sumo/Sumo2/redwood/juniper
+	 *   32: R630/R730/R710/Palm/Cedar
+	 *   16: R610/Rs780
+	 *
+	 * Stack row size:
+	 * 	Wavefront Size                        16  32  48  64
+	 * 	Columns per Row (R6xx/R7xx/R8xx only)  8   8   4   4
+	 * 	Columns per Row (R9xx+)                8   4   4   4 */
+
+	switch (chip) {
+	/* FIXME: are some chips missing here? */
+	/* wavefront size 16 */
+	case CHIP_RV610:
+	case CHIP_RS780:
+	case CHIP_RV620:
+	case CHIP_RS880:
+	/* wavefront size 32 */
+	case CHIP_RV630:
+	case CHIP_RV635:
+	case CHIP_RV730:
+	case CHIP_RV710:
+	case CHIP_PALM:
+	case CHIP_CEDAR:
+		return 8;
+
+	/* wavefront size 64 */
+	default:
+		return 4;
+	}
+}
+
 void r600_bytecode_init(struct r600_bytecode *bc,
 			enum chip_class chip_class,
 			enum radeon_family family,
 			enum r600_msaa_texture_mode msaa_texture_mode)
 {
+	static unsigned next_shader_id = 0;
+
+	bc->debug_id = ++next_shader_id;
+
 	if ((chip_class == R600) &&
 	    (family != CHIP_RV670 && family != CHIP_RS780 && family != CHIP_RS880)) {
 		bc->ar_handling = AR_HANDLE_RV6XX;
@@ -104,9 +144,10 @@ void r600_bytecode_init(struct r600_bytecode *bc,
 	LIST_INITHEAD(&bc->cf);
 	bc->chip_class = chip_class;
 	bc->msaa_texture_mode = msaa_texture_mode;
+	bc->stack.entry_size = stack_entry_size(family);
 }
 
-static int r600_bytecode_add_cf(struct r600_bytecode *bc)
+int r600_bytecode_add_cf(struct r600_bytecode *bc)
 {
 	struct r600_bytecode_cf *cf = r600_bytecode_cf();
 
@@ -489,7 +530,7 @@ static int check_and_set_bank_swizzle(struct r600_bytecode *bc,
 		} else
 			r = 0;
 
-		if (!r && slots[4] && max_slots == 5) {
+		if (!r && max_slots == 5 && slots[4]) {
 			r = check_scalar(bc, slots[4], &bs, bank_swizzle[4]);
 		}
 		if (!r) {
@@ -1459,7 +1500,11 @@ static int r600_bytecode_cf_build(struct r600_bytecode *bc, struct r600_bytecode
 	const struct cf_op_info *cfop = r600_isa_cf(cf->op);
 	unsigned opcode = r600_isa_cf_opcode(bc->isa->hw_class, cf->op);
 
-	if (cfop->flags & CF_ALU) {
+
+	if (cf->op == CF_NATIVE) {
+		bc->bytecode[id++] = cf->isa[0];
+		bc->bytecode[id++] = cf->isa[1];
+	} else if (cfop->flags & CF_ALU) {
 		bc->bytecode[id++] = S_SQ_CF_ALU_WORD0_ADDR(cf->addr >> 1) |
 			S_SQ_CF_ALU_WORD0_KCACHE_MODE0(cf->kcache[0].mode) |
 			S_SQ_CF_ALU_WORD0_KCACHE_BANK0(cf->kcache[0].bank) |
@@ -1522,8 +1567,9 @@ int r600_bytecode_build(struct r600_bytecode *bc)
 	unsigned addr;
 	int i, r;
 
-	if (bc->callstack[0].max > 0)
-		bc->nstack = ((bc->callstack[0].max + 3) >> 2) + 2;
+	if (!bc->nstack) // If not 0, Stack_size already provided by llvm
+		bc->nstack = bc->stack.max_entries;
+
 	if (bc->type == TGSI_PROCESSOR_VERTEX && !bc->nstack) {
 		bc->nstack = 1;
 	}
@@ -1824,8 +1870,8 @@ void r600_bytecode_disasm(struct r600_bytecode *bc)
 		chip = '6';
 		break;
 	}
-	fprintf(stderr, "bytecode %d dw -- %d gprs ---------------------\n",
-	        bc->ndw, bc->ngpr);
+	fprintf(stderr, "bytecode %d dw -- %d gprs -- %d nstack -------------\n",
+	        bc->ndw, bc->ngpr, bc->nstack);
 	fprintf(stderr, "shader %d -- %c\n", index++, chip);
 
 	LIST_FOR_EACH_ENTRY(cf, &bc->cf, list) {
@@ -2341,8 +2387,13 @@ void *r600_create_vertex_fetch_shader(struct pipe_context *ctx,
 			fprintf(stderr, "\n");
 		}
 
+#if 0
 		r600_bytecode_disasm(&bc);
+
 		fprintf(stderr, "______________________________________________________________\n");
+#else
+		r600_sb_bytecode_process(rctx, &bc, NULL, 1 /*dump*/, 0 /*optimize*/);
+#endif
 	}
 
 	fs_size = bc.ndw*4;

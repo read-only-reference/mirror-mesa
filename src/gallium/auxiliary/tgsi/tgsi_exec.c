@@ -3239,6 +3239,7 @@ exec_case(struct tgsi_exec_machine *mach,
    UPDATE_EXEC_MASK(mach);
 }
 
+/* FIXME: this will only work if default is last */
 static void
 exec_default(struct tgsi_exec_machine *mach)
 {
@@ -3445,10 +3446,10 @@ micro_udiv(union tgsi_exec_channel *dst,
            const union tgsi_exec_channel *src0,
            const union tgsi_exec_channel *src1)
 {
-   dst->u[0] = src0->u[0] / src1->u[0];
-   dst->u[1] = src0->u[1] / src1->u[1];
-   dst->u[2] = src0->u[2] / src1->u[2];
-   dst->u[3] = src0->u[3] / src1->u[3];
+   dst->u[0] = src1->u[0] ? src0->u[0] / src1->u[0] : ~0u;
+   dst->u[1] = src1->u[1] ? src0->u[1] / src1->u[1] : ~0u;
+   dst->u[2] = src1->u[2] ? src0->u[2] / src1->u[2] : ~0u;
+   dst->u[3] = src1->u[3] ? src0->u[3] / src1->u[3] : ~0u;
 }
 
 static void
@@ -3490,10 +3491,10 @@ micro_umod(union tgsi_exec_channel *dst,
            const union tgsi_exec_channel *src0,
            const union tgsi_exec_channel *src1)
 {
-   dst->u[0] = src0->u[0] % src1->u[0];
-   dst->u[1] = src0->u[1] % src1->u[1];
-   dst->u[2] = src0->u[2] % src1->u[2];
-   dst->u[3] = src0->u[3] % src1->u[3];
+   dst->u[0] = src1->u[0] ? src0->u[0] % src1->u[0] : ~0u;
+   dst->u[1] = src1->u[1] ? src0->u[1] % src1->u[1] : ~0u;
+   dst->u[2] = src1->u[2] ? src0->u[2] % src1->u[2] : ~0u;
+   dst->u[3] = src1->u[3] ? src0->u[3] % src1->u[3] : ~0u;
 }
 
 static void
@@ -3982,6 +3983,28 @@ exec_instruction(
       mach->CondStack[mach->CondStackTop++] = mach->CondMask;
       FETCH( &r[0], 0, TGSI_CHAN_X );
       /* update CondMask */
+      if( ! r[0].f[0] ) {
+         mach->CondMask &= ~0x1;
+      }
+      if( ! r[0].f[1] ) {
+         mach->CondMask &= ~0x2;
+      }
+      if( ! r[0].f[2] ) {
+         mach->CondMask &= ~0x4;
+      }
+      if( ! r[0].f[3] ) {
+         mach->CondMask &= ~0x8;
+      }
+      UPDATE_EXEC_MASK(mach);
+      /* Todo: If CondMask==0, jump to ELSE */
+      break;
+
+   case TGSI_OPCODE_UIF:
+      /* push CondMask */
+      assert(mach->CondStackTop < TGSI_EXEC_MAX_COND_NESTING);
+      mach->CondStack[mach->CondStackTop++] = mach->CondMask;
+      IFETCH( &r[0], 0, TGSI_CHAN_X );
+      /* update CondMask */
       if( ! r[0].u[0] ) {
          mach->CondMask &= ~0x1;
       }
@@ -4178,7 +4201,7 @@ exec_instruction(
       break;
 
    case TGSI_OPCODE_BREAKC:
-      FETCH(&r[0], 0, TGSI_CHAN_X);
+      IFETCH(&r[0], 0, TGSI_CHAN_X);
       /* update CondMask */
       if (r[0].u[0] && (mach->ExecMask & 0x1)) {
          mach->LoopMask &= ~0x1;
@@ -4400,14 +4423,25 @@ tgsi_exec_machine_run( struct tgsi_exec_machine *mach )
 {
    uint i;
    int pc = 0;
+   uint default_mask = 0xf;
 
-   mach->CondMask = 0xf;
-   mach->LoopMask = 0xf;
-   mach->ContMask = 0xf;
-   mach->FuncMask = 0xf;
-   mach->ExecMask = 0xf;
+   mach->Temps[TEMP_KILMASK_I].xyzw[TEMP_KILMASK_C].u[0] = 0;
+   mach->Temps[TEMP_OUTPUT_I].xyzw[TEMP_OUTPUT_C].u[0] = 0;
 
-   mach->Switch.mask = 0xf;
+   if( mach->Processor == TGSI_PROCESSOR_GEOMETRY ) {
+      mach->Temps[TEMP_PRIMITIVE_I].xyzw[TEMP_PRIMITIVE_C].u[0] = 0;
+      mach->Primitives[0] = 0;
+      /* GS runs on a single primitive for now */
+      default_mask = 0x1;
+   }
+
+   mach->CondMask = default_mask;
+   mach->LoopMask = default_mask;
+   mach->ContMask = default_mask;
+   mach->FuncMask = default_mask;
+   mach->ExecMask = default_mask;
+
+   mach->Switch.mask = default_mask;
 
    assert(mach->CondStackTop == 0);
    assert(mach->LoopStackTop == 0);
@@ -4416,13 +4450,6 @@ tgsi_exec_machine_run( struct tgsi_exec_machine *mach )
    assert(mach->BreakStackTop == 0);
    assert(mach->CallStackTop == 0);
 
-   mach->Temps[TEMP_KILMASK_I].xyzw[TEMP_KILMASK_C].u[0] = 0;
-   mach->Temps[TEMP_OUTPUT_I].xyzw[TEMP_OUTPUT_C].u[0] = 0;
-
-   if( mach->Processor == TGSI_PROCESSOR_GEOMETRY ) {
-      mach->Temps[TEMP_PRIMITIVE_I].xyzw[TEMP_PRIMITIVE_C].u[0] = 0;
-      mach->Primitives[0] = 0;
-   }
 
    /* execute declarations (interpolants) */
    for (i = 0; i < mach->NumDeclarations; i++) {

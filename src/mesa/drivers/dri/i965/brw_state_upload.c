@@ -38,7 +38,6 @@
 
 static const struct brw_tracked_state *gen4_atoms[] =
 {
-   &brw_wm_input_sizes,
    &brw_vs_prog, /* must do before GS prog, state base address. */
    &brw_gs_prog, /* must do before state base address */
    &brw_clip_prog, /* must do before state base address */
@@ -103,7 +102,6 @@ static const struct brw_tracked_state *gen4_atoms[] =
 
 static const struct brw_tracked_state *gen6_atoms[] =
 {
-   &brw_wm_input_sizes,
    &brw_vs_prog, /* must do before state base address */
    &brw_gs_prog, /* must do before state base address */
    &brw_wm_prog, /* must do before state base address */
@@ -175,7 +173,6 @@ static const struct brw_tracked_state *gen6_atoms[] =
 
 static const struct brw_tracked_state *gen7_atoms[] =
 {
-   &brw_wm_input_sizes,
    &brw_vs_prog,
    &brw_wm_prog,
 
@@ -338,7 +335,6 @@ static struct dirty_bit_map mesa_bits[] = {
    DEFINE_BIT(_NEW_TEXTURE),
    DEFINE_BIT(_NEW_TRANSFORM),
    DEFINE_BIT(_NEW_VIEWPORT),
-   DEFINE_BIT(_NEW_PACKUNPACK),
    DEFINE_BIT(_NEW_ARRAY),
    DEFINE_BIT(_NEW_RENDERMODE),
    DEFINE_BIT(_NEW_BUFFERS),
@@ -348,7 +344,6 @@ static struct dirty_bit_map mesa_bits[] = {
    DEFINE_BIT(_NEW_PROGRAM_CONSTANTS),
    DEFINE_BIT(_NEW_BUFFER_OBJECT),
    DEFINE_BIT(_NEW_FRAG_CLAMP),
-   DEFINE_BIT(_NEW_TRANSFORM_FEEDBACK),
    DEFINE_BIT(_NEW_VARYING_VP_INPUTS),
    {0, 0, 0}
 };
@@ -357,12 +352,10 @@ static struct dirty_bit_map brw_bits[] = {
    DEFINE_BIT(BRW_NEW_URB_FENCE),
    DEFINE_BIT(BRW_NEW_FRAGMENT_PROGRAM),
    DEFINE_BIT(BRW_NEW_VERTEX_PROGRAM),
-   DEFINE_BIT(BRW_NEW_INPUT_DIMENSIONS),
    DEFINE_BIT(BRW_NEW_CURBE_OFFSETS),
    DEFINE_BIT(BRW_NEW_REDUCED_PRIMITIVE),
    DEFINE_BIT(BRW_NEW_PRIMITIVE),
    DEFINE_BIT(BRW_NEW_CONTEXT),
-   DEFINE_BIT(BRW_NEW_WM_INPUT_DIMENSIONS),
    DEFINE_BIT(BRW_NEW_PSP),
    DEFINE_BIT(BRW_NEW_SURFACES),
    DEFINE_BIT(BRW_NEW_VS_BINDING_TABLE),
@@ -377,6 +370,8 @@ static struct dirty_bit_map brw_bits[] = {
    DEFINE_BIT(BRW_NEW_STATE_BASE_ADDRESS),
    DEFINE_BIT(BRW_NEW_SOL_INDICES),
    DEFINE_BIT(BRW_NEW_VUE_MAP_GEOM_OUT),
+   DEFINE_BIT(BRW_NEW_TRANSFORM_FEEDBACK),
+   DEFINE_BIT(BRW_NEW_RASTERIZER_DISCARD),
    {0, 0, 0}
 };
 
@@ -444,6 +439,9 @@ void brw_upload_state(struct brw_context *brw)
 
    state->mesa |= brw->intel.NewGLState;
    brw->intel.NewGLState = 0;
+
+   state->brw |= ctx->NewDriverState;
+   ctx->NewDriverState = 0;
 
    if (brw->emit_state_always) {
       state->mesa |= ~0;

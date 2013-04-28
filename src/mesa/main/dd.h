@@ -22,9 +22,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 
@@ -354,7 +355,9 @@ struct dd_function_table {
     * \param mode  bitmask of GL_MAP_READ_BIT, GL_MAP_WRITE_BIT and
     *              GL_MAP_INVALIDATE_RANGE_BIT (if writing)
     * \param mapOut  returns start of mapping of region of interest
-    * \param rowStrideOut  returns row stride (in bytes)
+    * \param rowStrideOut returns row stride (in bytes).  In the case of a
+    * compressed texture, this is the byte stride between one row of blocks
+    * and another.
     */
    void (*MapTextureImage)(struct gl_context *ctx,
 			   struct gl_texture_image *texImage,

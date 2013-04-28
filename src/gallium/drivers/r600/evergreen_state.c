@@ -970,11 +970,11 @@ static void *evergreen_create_rs_state(struct pipe_context *ctx,
 
 	if (rctx->chip_class == CAYMAN) {
 		r600_store_context_reg(&rs->buffer, CM_R_028BE4_PA_SU_VTX_CNTL,
-				       S_028C08_PIX_CENTER_HALF(state->gl_rasterization_rules) |
+				       S_028C08_PIX_CENTER_HALF(state->half_pixel_center) |
 				       S_028C08_QUANT_MODE(V_028C08_X_1_256TH));
 	} else {
 		r600_store_context_reg(&rs->buffer, R_028C08_PA_SU_VTX_CNTL,
-				       S_028C08_PIX_CENTER_HALF(state->gl_rasterization_rules) |
+				       S_028C08_PIX_CENTER_HALF(state->half_pixel_center) |
 				       S_028C08_QUANT_MODE(V_028C08_X_1_256TH));
 	}
 
@@ -1047,6 +1047,8 @@ texture_buffer_sampler_view(struct r600_pipe_sampler_view *view,
 	unsigned swizzle_res;
 	unsigned char swizzle[4];
 	const struct util_format_description *desc;
+	unsigned offset = view->base.u.buf.first_element * stride;
+	unsigned size = (view->base.u.buf.last_element - view->base.u.buf.first_element + 1) * stride;
 
 	swizzle[0] = view->base.swizzle_r;
 	swizzle[1] = view->base.swizzle_g;
@@ -1061,12 +1063,12 @@ texture_buffer_sampler_view(struct r600_pipe_sampler_view *view,
 
 	swizzle_res = r600_get_swizzle_combined(desc->swizzle, swizzle, TRUE);
 
-	va = r600_resource_va(ctx->screen, view->base.texture);
+	va = r600_resource_va(ctx->screen, view->base.texture) + offset;
 	view->tex_resource = &tmp->resource;
 
 	view->skip_mip_address_reloc = true;
 	view->tex_resource_words[0] = va;
-	view->tex_resource_words[1] = width0 - 1;
+	view->tex_resource_words[1] = size - 1;
 	view->tex_resource_words[2] = S_030008_BASE_ADDRESS_HI(va >> 32UL) |
 		S_030008_STRIDE(stride) |
 		S_030008_DATA_FORMAT(format) |
@@ -1689,6 +1691,7 @@ static void evergreen_init_depth_surface(struct r600_context *rctx,
 		surf->db_htile_data_base = va >> 8;
 		surf->db_htile_surface = S_028ABC_HTILE_WIDTH(1) |
 					S_028ABC_HTILE_HEIGHT(1) |
+					S_028ABC_FULL_CACHE(1) |
 					S_028ABC_LINEAR(1);
 		surf->db_depth_info |= S_028040_TILE_SURFACE_ENABLE(1);
 		surf->db_preload_control = 0;
@@ -1868,38 +1871,78 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 	(((s2x) & 0xf) << 16) | (((s2y) & 0xf) << 20) |	   \
 	 (((s3x) & 0xf) << 24) | (((s3y) & 0xf) << 28))
 
+/* 2xMSAA
+ * There are two locations (-4, 4), (4, -4). */
+static uint32_t sample_locs_2x[] = {
+	FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
+	FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
+	FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
+	FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
+};
+static unsigned max_dist_2x = 4;
+/* 4xMSAA
+ * There are 4 locations: (-2, -2), (2, 2), (-6, 6), (6, -6). */
+static uint32_t sample_locs_4x[] = {
+	FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
+	FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
+	FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
+	FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
+};
+static unsigned max_dist_4x = 6;
+/* 8xMSAA */
+static uint32_t sample_locs_8x[] = {
+	FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
+	FILL_SREG(-7, -1, -3, -7,  7, -3, -5,  7),
+	FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
+	FILL_SREG(-7, -1, -3, -7,  7, -3, -5,  7),
+	FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
+	FILL_SREG(-7, -1, -3, -7,  7, -3, -5,  7),
+	FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
+	FILL_SREG(-7, -1, -3, -7,  7, -3, -5,  7),
+};
+static unsigned max_dist_8x = 7;
+
+static void evergreen_get_sample_position(struct pipe_context *ctx,
+				     unsigned sample_count,
+				     unsigned sample_index,
+				     float *out_value)
+{
+	int offset, index;
+	struct {
+		int idx:4;
+	} val;
+	switch (sample_count) {
+	case 1:
+	default:
+		out_value[0] = out_value[1] = 0.5;
+		break;
+	case 2:
+		offset = 4 * (sample_index * 2);
+		val.idx = (sample_locs_2x[0] >> offset) & 0xf;
+		out_value[0] = (float)(val.idx + 8) / 16.0f;
+		val.idx = (sample_locs_2x[0] >> (offset + 4)) & 0xf;
+		out_value[1] = (float)(val.idx + 8) / 16.0f;
+		break;
+	case 4:
+		offset = 4 * (sample_index * 2);
+		val.idx = (sample_locs_4x[0] >> offset) & 0xf;
+		out_value[0] = (float)(val.idx + 8) / 16.0f;
+		val.idx = (sample_locs_4x[0] >> (offset + 4)) & 0xf;
+		out_value[1] = (float)(val.idx + 8) / 16.0f;
+		break;
+	case 8:
+		offset = 4 * (sample_index % 4 * 2);
+		index = (sample_index / 4);
+		val.idx = (sample_locs_8x[index] >> offset) & 0xf;
+		out_value[0] = (float)(val.idx + 8) / 16.0f;
+		val.idx = (sample_locs_8x[index] >> (offset + 4)) & 0xf;
+		out_value[1] = (float)(val.idx + 8) / 16.0f;
+		break;
+	}
+}
+
 static void evergreen_emit_msaa_state(struct r600_context *rctx, int nr_samples)
 {
-	/* 2xMSAA
-	 * There are two locations (-4, 4), (4, -4). */
-	static uint32_t sample_locs_2x[] = {
-		FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
-		FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
-		FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
-		FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
-	};
-	static unsigned max_dist_2x = 4;
-	/* 4xMSAA
-	 * There are 4 locations: (-2, -2), (2, 2), (-6, 6), (6, -6). */
-	static uint32_t sample_locs_4x[] = {
-		FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
-		FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
-		FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
-		FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
-	};
-	static unsigned max_dist_4x = 6;
-	/* 8xMSAA */
-	static uint32_t sample_locs_8x[] = {
-		FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
-		FILL_SREG(-7, -1, -3, -7,  7, -3, -5,  7),
-		FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
-		FILL_SREG(-7, -1, -3, -7,  7, -3, -5,  7),
-		FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
-		FILL_SREG(-7, -1, -3, -7,  7, -3, -5,  7),
-		FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
-		FILL_SREG(-7, -1, -3, -7,  7, -3, -5,  7),
-	};
-	static unsigned max_dist_8x = 7;
 
 	struct radeon_winsys_cs *cs = rctx->rings.gfx.cs;
 	unsigned max_dist = 0;
@@ -1938,58 +1981,88 @@ static void evergreen_emit_msaa_state(struct r600_context *rctx, int nr_samples)
 	}
 }
 
+/* Cayman 8xMSAA */
+static uint32_t cm_sample_locs_8x[] = {
+	FILL_SREG(-2, -5, 3, -4, -1, 5, -6, -2),
+	FILL_SREG(-2, -5, 3, -4, -1, 5, -6, -2),
+	FILL_SREG(-2, -5, 3, -4, -1, 5, -6, -2),
+	FILL_SREG(-2, -5, 3, -4, -1, 5, -6, -2),
+	FILL_SREG( 6,  0, 0,  0, -5, 3,  4,  4),
+	FILL_SREG( 6,  0, 0,  0, -5, 3,  4,  4),
+	FILL_SREG( 6,  0, 0,  0, -5, 3,  4,  4),
+	FILL_SREG( 6,  0, 0,  0, -5, 3,  4,  4),
+};
+static unsigned cm_max_dist_8x = 8;
+/* Cayman 16xMSAA */
+static uint32_t cm_sample_locs_16x[] = {
+	FILL_SREG(-7, -3, 7, 3, 1, -5, -5, 5),
+	FILL_SREG(-7, -3, 7, 3, 1, -5, -5, 5),
+	FILL_SREG(-7, -3, 7, 3, 1, -5, -5, 5),
+	FILL_SREG(-7, -3, 7, 3, 1, -5, -5, 5),
+	FILL_SREG(-3, -7, 3, 7, 5, -1, -1, 1),
+	FILL_SREG(-3, -7, 3, 7, 5, -1, -1, 1),
+	FILL_SREG(-3, -7, 3, 7, 5, -1, -1, 1),
+	FILL_SREG(-3, -7, 3, 7, 5, -1, -1, 1),
+	FILL_SREG(-8, -6, 4, 2, 2, -8, -2, 6),
+	FILL_SREG(-8, -6, 4, 2, 2, -8, -2, 6),
+	FILL_SREG(-8, -6, 4, 2, 2, -8, -2, 6),
+	FILL_SREG(-8, -6, 4, 2, 2, -8, -2, 6),
+	FILL_SREG(-4, -2, 0, 4, 6, -4, -6, 0),
+	FILL_SREG(-4, -2, 0, 4, 6, -4, -6, 0),
+	FILL_SREG(-4, -2, 0, 4, 6, -4, -6, 0),
+	FILL_SREG(-4, -2, 0, 4, 6, -4, -6, 0),
+};
+static unsigned cm_max_dist_16x = 8;
+static void cayman_get_sample_position(struct pipe_context *ctx,
+				       unsigned sample_count,
+				       unsigned sample_index,
+				       float *out_value)
+{
+	int offset, index;
+	struct {
+		int idx:4;
+	} val;
+	switch (sample_count) {
+	case 1:
+	default:
+		out_value[0] = out_value[1] = 0.5;
+		break;
+	case 2:
+		offset = 4 * (sample_index * 2);
+		val.idx = (sample_locs_2x[0] >> offset) & 0xf;
+		out_value[0] = (float)(val.idx + 8) / 16.0f;
+		val.idx = (sample_locs_2x[0] >> (offset + 4)) & 0xf;
+		out_value[1] = (float)(val.idx + 8) / 16.0f;
+		break;
+	case 4:
+		offset = 4 * (sample_index * 2);
+		val.idx = (sample_locs_4x[0] >> offset) & 0xf;
+		out_value[0] = (float)(val.idx + 8) / 16.0f;
+		val.idx = (sample_locs_4x[0] >> (offset + 4)) & 0xf;
+		out_value[1] = (float)(val.idx + 8) / 16.0f;
+		break;
+	case 8:
+		offset = 4 * (sample_index % 4 * 2);
+		index = (sample_index / 4) * 4;
+		val.idx = (cm_sample_locs_8x[index] >> offset) & 0xf;
+		out_value[0] = (float)(val.idx + 8) / 16.0f;
+		val.idx = (cm_sample_locs_8x[index] >> (offset + 4)) & 0xf;
+		out_value[1] = (float)(val.idx + 8) / 16.0f;
+		break;
+	case 16:
+		offset = 4 * (sample_index % 4 * 2);
+		index = (sample_index / 4) * 4;
+		val.idx = (cm_sample_locs_16x[index] >> offset) & 0xf;
+		out_value[0] = (float)(val.idx + 8) / 16.0f;
+		val.idx = (cm_sample_locs_16x[index] >> (offset + 4)) & 0xf;
+		out_value[1] = (float)(val.idx + 8) / 16.0f;
+		break;
+	}
+}
+
 static void cayman_emit_msaa_state(struct r600_context *rctx, int nr_samples)
 {
-	/* 2xMSAA
-	 * There are two locations (-4, 4), (4, -4). */
-	static uint32_t sample_locs_2x[] = {
-		FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
-		FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
-		FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
-		FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
-	};
-	static unsigned max_dist_2x = 4;
-	/* 4xMSAA
-	 * There are 4 locations: (-2, -2), (2, 2), (-6, 6), (6, -6). */
-	static uint32_t sample_locs_4x[] = {
-		FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
-		FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
-		FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
-		FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
-	};
-	static unsigned max_dist_4x = 6;
-	/* 8xMSAA */
-	static uint32_t sample_locs_8x[] = {
-		FILL_SREG(-2, -5, 3, -4, -1, 5, -6, -2),
-		FILL_SREG(-2, -5, 3, -4, -1, 5, -6, -2),
-		FILL_SREG(-2, -5, 3, -4, -1, 5, -6, -2),
-		FILL_SREG(-2, -5, 3, -4, -1, 5, -6, -2),
-		FILL_SREG( 6,  0, 0,  0, -5, 3,  4,  4),
-		FILL_SREG( 6,  0, 0,  0, -5, 3,  4,  4),
-		FILL_SREG( 6,  0, 0,  0, -5, 3,  4,  4),
-		FILL_SREG( 6,  0, 0,  0, -5, 3,  4,  4),
-	};
-	static unsigned max_dist_8x = 8;
-	/* 16xMSAA */
-	static uint32_t sample_locs_16x[] = {
-		FILL_SREG(-7, -3, 7, 3, 1, -5, -5, 5),
-		FILL_SREG(-7, -3, 7, 3, 1, -5, -5, 5),
-		FILL_SREG(-7, -3, 7, 3, 1, -5, -5, 5),
-		FILL_SREG(-7, -3, 7, 3, 1, -5, -5, 5),
-		FILL_SREG(-3, -7, 3, 7, 5, -1, -1, 1),
-		FILL_SREG(-3, -7, 3, 7, 5, -1, -1, 1),
-		FILL_SREG(-3, -7, 3, 7, 5, -1, -1, 1),
-		FILL_SREG(-3, -7, 3, 7, 5, -1, -1, 1),
-		FILL_SREG(-8, -6, 4, 2, 2, -8, -2, 6),
-		FILL_SREG(-8, -6, 4, 2, 2, -8, -2, 6),
-		FILL_SREG(-8, -6, 4, 2, 2, -8, -2, 6),
-		FILL_SREG(-8, -6, 4, 2, 2, -8, -2, 6),
-		FILL_SREG(-4, -2, 0, 4, 6, -4, -6, 0),
-		FILL_SREG(-4, -2, 0, 4, 6, -4, -6, 0),
-		FILL_SREG(-4, -2, 0, 4, 6, -4, -6, 0),
-		FILL_SREG(-4, -2, 0, 4, 6, -4, -6, 0),
-	};
-	static unsigned max_dist_16x = 8;
+
 
 	struct radeon_winsys_cs *cs = rctx->rings.gfx.cs;
 	unsigned max_dist = 0;
@@ -2014,41 +2087,41 @@ static void cayman_emit_msaa_state(struct r600_context *rctx, int nr_samples)
 		break;
 	case 8:
 		r600_write_context_reg_seq(cs, CM_R_028BF8_PA_SC_AA_SAMPLE_LOCS_PIXEL_X0Y0_0, 14);
-		r600_write_value(cs, sample_locs_8x[0]);
-		r600_write_value(cs, sample_locs_8x[4]);
+		r600_write_value(cs, cm_sample_locs_8x[0]);
+		r600_write_value(cs, cm_sample_locs_8x[4]);
 		r600_write_value(cs, 0);
 		r600_write_value(cs, 0);
-		r600_write_value(cs, sample_locs_8x[1]);
-		r600_write_value(cs, sample_locs_8x[5]);
+		r600_write_value(cs, cm_sample_locs_8x[1]);
+		r600_write_value(cs, cm_sample_locs_8x[5]);
 		r600_write_value(cs, 0);
 		r600_write_value(cs, 0);
-		r600_write_value(cs, sample_locs_8x[2]);
-		r600_write_value(cs, sample_locs_8x[6]);
+		r600_write_value(cs, cm_sample_locs_8x[2]);
+		r600_write_value(cs, cm_sample_locs_8x[6]);
 		r600_write_value(cs, 0);
 		r600_write_value(cs, 0);
-		r600_write_value(cs, sample_locs_8x[3]);
-		r600_write_value(cs, sample_locs_8x[7]);
-		max_dist = max_dist_8x;
+		r600_write_value(cs, cm_sample_locs_8x[3]);
+		r600_write_value(cs, cm_sample_locs_8x[7]);
+		max_dist = cm_max_dist_8x;
 		break;
 	case 16:
 		r600_write_context_reg_seq(cs, CM_R_028BF8_PA_SC_AA_SAMPLE_LOCS_PIXEL_X0Y0_0, 16);
-		r600_write_value(cs, sample_locs_16x[0]);
-		r600_write_value(cs, sample_locs_16x[4]);
-		r600_write_value(cs, sample_locs_16x[8]);
-		r600_write_value(cs, sample_locs_16x[12]);
-		r600_write_value(cs, sample_locs_16x[1]);
-		r600_write_value(cs, sample_locs_16x[5]);
-		r600_write_value(cs, sample_locs_16x[9]);
-		r600_write_value(cs, sample_locs_16x[13]);
-		r600_write_value(cs, sample_locs_16x[2]);
-		r600_write_value(cs, sample_locs_16x[6]);
-		r600_write_value(cs, sample_locs_16x[10]);
-		r600_write_value(cs, sample_locs_16x[14]);
-		r600_write_value(cs, sample_locs_16x[3]);
-		r600_write_value(cs, sample_locs_16x[7]);
-		r600_write_value(cs, sample_locs_16x[11]);
-		r600_write_value(cs, sample_locs_16x[15]);
-		max_dist = max_dist_16x;
+		r600_write_value(cs, cm_sample_locs_16x[0]);
+		r600_write_value(cs, cm_sample_locs_16x[4]);
+		r600_write_value(cs, cm_sample_locs_16x[8]);
+		r600_write_value(cs, cm_sample_locs_16x[12]);
+		r600_write_value(cs, cm_sample_locs_16x[1]);
+		r600_write_value(cs, cm_sample_locs_16x[5]);
+		r600_write_value(cs, cm_sample_locs_16x[9]);
+		r600_write_value(cs, cm_sample_locs_16x[13]);
+		r600_write_value(cs, cm_sample_locs_16x[2]);
+		r600_write_value(cs, cm_sample_locs_16x[6]);
+		r600_write_value(cs, cm_sample_locs_16x[10]);
+		r600_write_value(cs, cm_sample_locs_16x[14]);
+		r600_write_value(cs, cm_sample_locs_16x[3]);
+		r600_write_value(cs, cm_sample_locs_16x[7]);
+		r600_write_value(cs, cm_sample_locs_16x[11]);
+		r600_write_value(cs, cm_sample_locs_16x[15]);
+		max_dist = cm_max_dist_16x;
 		break;
 	}
 
@@ -2401,7 +2474,8 @@ static void evergreen_emit_constant_buffers(struct r600_context *rctx,
 					    struct r600_constbuf_state *state,
 					    unsigned buffer_id_base,
 					    unsigned reg_alu_constbuf_size,
-					    unsigned reg_alu_const_cache)
+					    unsigned reg_alu_const_cache,
+					    unsigned pkt_flags)
 {
 	struct radeon_winsys_cs *cs = rctx->rings.gfx.cs;
 	uint32_t dirty_mask = state->dirty_mask;
@@ -2419,14 +2493,15 @@ static void evergreen_emit_constant_buffers(struct r600_context *rctx,
 		va = r600_resource_va(&rctx->screen->screen, &rbuffer->b.b);
 		va += cb->buffer_offset;
 
-		r600_write_context_reg(cs, reg_alu_constbuf_size + buffer_index * 4,
-				       ALIGN_DIVUP(cb->buffer_size >> 4, 16));
-		r600_write_context_reg(cs, reg_alu_const_cache + buffer_index * 4, va >> 8);
+		r600_write_context_reg_flag(cs, reg_alu_constbuf_size + buffer_index * 4,
+				       ALIGN_DIVUP(cb->buffer_size >> 4, 16), pkt_flags);
+		r600_write_context_reg_flag(cs, reg_alu_const_cache + buffer_index * 4, va >> 8,
+						pkt_flags);
 
-		r600_write_value(cs, PKT3(PKT3_NOP, 0, 0));
+		r600_write_value(cs, PKT3(PKT3_NOP, 0, 0) | pkt_flags);
 		r600_write_value(cs, r600_context_bo_reloc(rctx, &rctx->rings.gfx, rbuffer, RADEON_USAGE_READ));
 
-		r600_write_value(cs, PKT3(PKT3_SET_RESOURCE, 8, 0));
+		r600_write_value(cs, PKT3(PKT3_SET_RESOURCE, 8, 0) | pkt_flags);
 		r600_write_value(cs, (buffer_id_base + buffer_index) * 8);
 		r600_write_value(cs, va); /* RESOURCEi_WORD0 */
 		r600_write_value(cs, rbuffer->buf->size - cb->buffer_offset - 1); /* RESOURCEi_WORD1 */
@@ -2444,7 +2519,7 @@ static void evergreen_emit_constant_buffers(struct r600_context *rctx,
 		r600_write_value(cs, 0); /* RESOURCEi_WORD6 */
 		r600_write_value(cs, 0xc0000000); /* RESOURCEi_WORD7 */
 
-		r600_write_value(cs, PKT3(PKT3_NOP, 0, 0));
+		r600_write_value(cs, PKT3(PKT3_NOP, 0, 0) | pkt_flags);
 		r600_write_value(cs, r600_context_bo_reloc(rctx, &rctx->rings.gfx, rbuffer, RADEON_USAGE_READ));
 
 		dirty_mask &= ~(1 << buffer_index);
@@ -2456,21 +2531,32 @@ static void evergreen_emit_vs_constant_buffers(struct r600_context *rctx, struct
 {
 	evergreen_emit_constant_buffers(rctx, &rctx->constbuf_state[PIPE_SHADER_VERTEX], 176,
 					R_028180_ALU_CONST_BUFFER_SIZE_VS_0,
-					R_028980_ALU_CONST_CACHE_VS_0);
+					R_028980_ALU_CONST_CACHE_VS_0,
+					0 /* PKT3 flags */);
 }
 
 static void evergreen_emit_gs_constant_buffers(struct r600_context *rctx, struct r600_atom *atom)
 {
 	evergreen_emit_constant_buffers(rctx, &rctx->constbuf_state[PIPE_SHADER_GEOMETRY], 336,
 					R_0281C0_ALU_CONST_BUFFER_SIZE_GS_0,
-					R_0289C0_ALU_CONST_CACHE_GS_0);
+					R_0289C0_ALU_CONST_CACHE_GS_0,
+					0 /* PKT3 flags */);
 }
 
 static void evergreen_emit_ps_constant_buffers(struct r600_context *rctx, struct r600_atom *atom)
 {
 	evergreen_emit_constant_buffers(rctx, &rctx->constbuf_state[PIPE_SHADER_FRAGMENT], 0,
 				       R_028140_ALU_CONST_BUFFER_SIZE_PS_0,
-				       R_028940_ALU_CONST_CACHE_PS_0);
+				       R_028940_ALU_CONST_CACHE_PS_0,
+				       0 /* PKT3 flags */);
+}
+
+static void evergreen_emit_cs_constant_buffers(struct r600_context *rctx, struct r600_atom *atom)
+{
+	evergreen_emit_constant_buffers(rctx, &rctx->constbuf_state[PIPE_SHADER_COMPUTE], 816,
+					R_028FC0_ALU_CONST_BUFFER_SIZE_LS_0,
+					R_028F40_ALU_CONST_CACHE_LS_0,
+					RADEON_CP_PACKET3_COMPUTE_MODE);
 }
 
 static void evergreen_emit_sampler_views(struct r600_context *rctx,
@@ -3730,6 +3816,7 @@ void evergreen_init_state_functions(struct r600_context *rctx)
 	r600_init_atom(rctx, &rctx->constbuf_state[PIPE_SHADER_VERTEX].atom, id++, evergreen_emit_vs_constant_buffers, 0);
 	r600_init_atom(rctx, &rctx->constbuf_state[PIPE_SHADER_GEOMETRY].atom, id++, evergreen_emit_gs_constant_buffers, 0);
 	r600_init_atom(rctx, &rctx->constbuf_state[PIPE_SHADER_FRAGMENT].atom, id++, evergreen_emit_ps_constant_buffers, 0);
+	r600_init_atom(rctx, &rctx->constbuf_state[PIPE_SHADER_COMPUTE].atom, id++, evergreen_emit_cs_constant_buffers, 0);
 	/* shader program */
 	r600_init_atom(rctx, &rctx->cs_shader_state.atom, id++, evergreen_emit_cs_shader, 0);
 	/* sampler */
@@ -3779,5 +3866,10 @@ void evergreen_init_state_functions(struct r600_context *rctx)
 	rctx->context.set_framebuffer_state = evergreen_set_framebuffer_state;
 	rctx->context.set_polygon_stipple = evergreen_set_polygon_stipple;
 	rctx->context.set_scissor_state = evergreen_set_scissor_state;
+
+	if (rctx->chip_class == EVERGREEN)
+                rctx->context.get_sample_position = evergreen_get_sample_position;
+        else
+                rctx->context.get_sample_position = cayman_get_sample_position;
 	evergreen_init_compute_state_functions(rctx);
 }

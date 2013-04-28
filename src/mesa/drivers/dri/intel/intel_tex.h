@@ -64,17 +64,9 @@ void intel_tex_unmap_level_images(struct intel_context *intel,
 				  struct intel_texture_object *intelObj,
 				  int level);
 
-void intel_tex_map_images(struct intel_context *intel,
-                          struct intel_texture_object *intelObj,
-                          GLbitfield mode);
-
-void intel_tex_unmap_images(struct intel_context *intel,
-                            struct intel_texture_object *intelObj);
 bool
 intel_tex_image_s8z24_create_renderbuffers(struct intel_context *intel,
 					   struct intel_texture_image *image);
-
-int intel_compressed_num_bytes(GLuint mesaFormat);
 
 bool intel_copy_texsubimage(struct intel_context *intel,
                             struct intel_texture_image *intelImage,

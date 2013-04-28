@@ -14,10 +14,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
- * OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 #include "nvc0_context.h"
@@ -61,7 +61,7 @@ nvc0_create_sampler_view(struct pipe_context *pipe,
 {
    uint32_t flags = 0;
 
-   if (res->target == PIPE_TEXTURE_RECT)
+   if (res->target == PIPE_TEXTURE_RECT || res->target == PIPE_BUFFER)
       flags |= NV50_TEXVIEW_SCALED_COORDS;
 
    return nvc0_create_texture_view(pipe, res, templ, flags, res->target);
@@ -78,6 +78,7 @@ nvc0_create_texture_view(struct pipe_context *pipe,
    uint64_t address;
    uint32_t *tic;
    uint32_t swz[4];
+   uint32_t width, height;
    uint32_t depth;
    struct nv50_tic_entry *view;
    struct nv50_miptree *mt;
@@ -122,9 +123,13 @@ nvc0_create_texture_view(struct pipe_context *pipe,
    if (desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB)
       tic[2] |= NV50_TIC_2_COLORSPACE_SRGB;
 
+   if (!(flags & NV50_TEXVIEW_SCALED_COORDS))
+      tic[2] |= NV50_TIC_2_NORMALIZED_COORDS;
+
    /* check for linear storage type */
    if (unlikely(!nouveau_bo_memtype(nv04_resource(texture)->bo))) {
       if (texture->target == PIPE_BUFFER) {
+         assert(!(tic[2] & NV50_TIC_2_NORMALIZED_COORDS));
          address +=
             view->pipe.u.buf.first_element * desc->block.bits / 8;
          tic[2] |= NV50_TIC_2_LINEAR | NV50_TIC_2_TARGET_BUFFER;
@@ -135,8 +140,6 @@ nvc0_create_texture_view(struct pipe_context *pipe,
       } else {
          /* must be 2D texture without mip maps */
          tic[2] |= NV50_TIC_2_LINEAR | NV50_TIC_2_TARGET_RECT;
-         if (texture->target != PIPE_TEXTURE_RECT)
-            tic[2] |= NV50_TIC_2_NORMALIZED_COORDS;
          tic[3] = mt->level[0].pitch;
          tic[4] = mt->base.base.width0;
          tic[5] = (1 << 16) | mt->base.base.height0;
@@ -147,9 +150,6 @@ nvc0_create_texture_view(struct pipe_context *pipe,
       tic[2] |= address >> 32;
       return &view->pipe;
    }
-
-   if (!(flags & NV50_TEXVIEW_SCALED_COORDS))
-      tic[2] |= NV50_TIC_2_NORMALIZED_COORDS;
 
    tic[2] |=
       ((mt->level[0].tile_mode & 0x0f0) << (22 - 4)) |
@@ -169,7 +169,6 @@ nvc0_create_texture_view(struct pipe_context *pipe,
    case PIPE_TEXTURE_1D:
       tic[2] |= NV50_TIC_2_TARGET_1D;
       break;
-/* case PIPE_TEXTURE_2D_MS: */
    case PIPE_TEXTURE_2D:
       tic[2] |= NV50_TIC_2_TARGET_2D;
       break;
@@ -186,7 +185,6 @@ nvc0_create_texture_view(struct pipe_context *pipe,
    case PIPE_TEXTURE_1D_ARRAY:
       tic[2] |= NV50_TIC_2_TARGET_1D_ARRAY;
       break;
-/* case PIPE_TEXTURE_2D_ARRAY_MS: */
    case PIPE_TEXTURE_2D_ARRAY:
       tic[2] |= NV50_TIC_2_TARGET_2D_ARRAY;
       break;
@@ -195,30 +193,35 @@ nvc0_create_texture_view(struct pipe_context *pipe,
       tic[2] |= NV50_TIC_2_TARGET_CUBE_ARRAY;
       break;
    default:
-      NOUVEAU_ERR("invalid texture target: %d\n", mt->base.base.target);
+      NOUVEAU_ERR("unexpected/invalid texture target: %d\n",
+                  mt->base.base.target);
       return FALSE;
    }
 
-   if (mt->base.base.target == PIPE_BUFFER)
-      tic[3] = mt->base.base.width0;
-   else
-      tic[3] = (flags & NV50_TEXVIEW_FILTER_MSAA8) ? 0x20000000 : 0x00300000;
+   tic[3] = (flags & NV50_TEXVIEW_FILTER_MSAA8) ? 0x20000000 : 0x00300000;
 
-   tic[4] = (1 << 31) | (mt->base.base.width0 << mt->ms_x);
+   if (flags & NV50_TEXVIEW_ACCESS_RESOLVE) {
+      width = mt->base.base.width0 << mt->ms_x;
+      height = mt->base.base.height0 << mt->ms_y;
+   } else {
+      width = mt->base.base.width0;
+      height = mt->base.base.height0;
+   }
 
-   tic[5] = (mt->base.base.height0 << mt->ms_y) & 0xffff;
+   tic[4] = (1 << 31) | width;
+
+   tic[5] = height & 0xffff;
    tic[5] |= depth << 16;
    tic[5] |= mt->base.base.last_level << 28;
 
-   tic[6] = (mt->ms_x > 1) ? 0x88000000 : 0x03000000; /* sampling points */
+   /* sampling points: (?) */
+   if (flags & NV50_TEXVIEW_ACCESS_RESOLVE)
+      tic[6] = (mt->ms_x > 1) ? 0x88000000 : 0x03000000;
+   else
+      tic[6] = 0x03000000;
 
    tic[7] = (view->pipe.u.tex.last_level << 4) | view->pipe.u.tex.first_level;
-
-   /*
-   if (mt->base.base.target == PIPE_TEXTURE_2D_MS ||
-       mt->base.base.target == PIPE_TEXTURE_2D_ARRAY_MS)
-      tic[7] |= mt->ms_mode << 12;
-   */
+   tic[7] |= mt->ms_mode << 12;
 
    return &view->pipe;
 }
@@ -265,6 +268,7 @@ nvc0_validate_tic(struct nvc0_context *nvc0, int s)
       if (res->status & NOUVEAU_BUFFER_STATUS_GPU_WRITING) {
          BEGIN_NVC0(push, NVC0_3D(TEX_CACHE_CTL), 1);
          PUSH_DATA (push, (tic->id << 4) | 1);
+         NOUVEAU_DRV_STAT(&nvc0->screen->base, tex_cache_flush_count, 1);
       }
       nvc0->screen->tic.lock[tic->id / 32] |= 1 << (tic->id % 32);
 

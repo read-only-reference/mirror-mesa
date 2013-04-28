@@ -491,14 +491,16 @@ lp_setup_set_triangle_state( struct lp_setup_context *setup,
                              unsigned cull_mode,
                              boolean ccw_is_frontface,
                              boolean scissor,
-                             boolean gl_rasterization_rules)
+                             boolean half_pixel_center,
+                             boolean bottom_edge_rule)
 {
    LP_DBG(DEBUG_SETUP, "%s\n", __FUNCTION__);
 
    setup->ccw_is_frontface = ccw_is_frontface;
    setup->cullmode = cull_mode;
    setup->triangle = first_triangle;
-   setup->pixel_offset = gl_rasterization_rules ? 0.5f : 0.0f;
+   setup->pixel_offset = half_pixel_center ? 0.5f : 0.0f;
+   setup->bottom_edge_rule = bottom_edge_rule;
 
    if (setup->scissor_test != scissor) {
       setup->dirty |= LP_SETUP_NEW_SCISSOR;
@@ -1010,6 +1012,16 @@ try_update_scene_state( struct lp_setup_context *setup )
          u_rect_possible_intersection(&setup->scissor,
                                       &setup->draw_region);
       }
+      /* If the framebuffer is large we have to think about fixed-point
+       * integer overflow.  For 2K by 2K images, coordinates need 15 bits
+       * (2^11 + 4 subpixel bits).  The product of two such numbers would
+       * use 30 bits.  Any larger and we could overflow a 32-bit int.
+       *
+       * To cope with this problem we check if triangles are large and
+       * subdivide them if needed.
+       */
+      setup->subdivide_large_triangles = (setup->fb.width > 2048 &&
+                                          setup->fb.height > 2048);
    }
                                       
    setup->dirty = 0;

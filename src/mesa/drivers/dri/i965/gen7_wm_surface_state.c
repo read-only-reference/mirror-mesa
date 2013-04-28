@@ -21,6 +21,7 @@
  * IN THE SOFTWARE.
  */
 #include "main/mtypes.h"
+#include "main/blend.h"
 #include "main/samplerobj.h"
 #include "program/prog_parameter.h"
 
@@ -269,9 +270,11 @@ gen7_update_buffer_texture_surface(struct gl_context *ctx,
 
       int texel_size = _mesa_get_format_bytes(format);
       int w = intel_obj->Base.Size / texel_size;
+
+      /* note that these differ from GEN6 */
       surf[2] = SET_FIELD(w & 0x7f, GEN7_SURFACE_WIDTH) | /* bits 6:0 of size */
-                SET_FIELD((w >> 7) & 0x1fff, GEN7_SURFACE_HEIGHT); /* 19:7 */
-      surf[3] = SET_FIELD((w >> 20) & 0x7f, BRW_SURFACE_DEPTH) | /* bits 26:20 */
+                SET_FIELD((w >> 7) & 0x3fff, GEN7_SURFACE_HEIGHT); /* 20:7 */
+      surf[3] = SET_FIELD((w >> 21) & 0x3f, BRW_SURFACE_DEPTH) | /* bits 26:21 */
                 (texel_size - 1);
    }
 
@@ -383,11 +386,14 @@ static void
 gen7_create_constant_surface(struct brw_context *brw,
 			     drm_intel_bo *bo,
 			     uint32_t offset,
-			     int width,
-			     uint32_t *out_offset)
+			     uint32_t size,
+			     uint32_t *out_offset,
+                             bool dword_pitch)
 {
    struct intel_context *intel = &brw->intel;
-   const GLint w = width - 1;
+   uint32_t stride = dword_pitch ? 4 : 16;
+   uint32_t elements = ALIGN(size, stride) / stride;
+   const GLint w = elements - 1;
 
    uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
                                     8 * 4, 32, out_offset);
@@ -400,10 +406,11 @@ gen7_create_constant_surface(struct brw_context *brw,
    assert(bo);
    surf[1] = bo->offset + offset; /* reloc */
 
+   /* note that these differ from GEN6 */
    surf[2] = SET_FIELD(w & 0x7f, GEN7_SURFACE_WIDTH) |
-             SET_FIELD((w >> 7) & 0x1fff, GEN7_SURFACE_HEIGHT);
-   surf[3] = SET_FIELD((w >> 20) & 0x7f, BRW_SURFACE_DEPTH) |
-             (16 - 1); /* stride between samples */
+             SET_FIELD((w >> 7) & 0x3fff, GEN7_SURFACE_HEIGHT);
+   surf[3] = SET_FIELD((w >> 21) & 0x3f, BRW_SURFACE_DEPTH) |
+             (stride - 1);
 
    if (intel->is_haswell) {
       surf[7] = SET_FIELD(HSW_SCS_RED,   GEN7_SURFACE_SCS_R) |
@@ -443,9 +450,10 @@ gen7_create_shader_time_surface(struct brw_context *brw, uint32_t *out_offset)
 
    surf[1] = brw->shader_time.bo->offset; /* reloc */
 
+   /* note that these differ from GEN6 */
    surf[2] = SET_FIELD(w & 0x7f, GEN7_SURFACE_WIDTH) |
-             SET_FIELD((w >> 7) & 0x1fff, GEN7_SURFACE_HEIGHT);
-   surf[3] = SET_FIELD((w >> 20) & 0x7f, BRW_SURFACE_DEPTH);
+             SET_FIELD((w >> 7) & 0x3fff, GEN7_SURFACE_HEIGHT);
+   surf[3] = SET_FIELD((w >> 21) & 0x3f, BRW_SURFACE_DEPTH);
 
    /* Unlike texture or renderbuffer surfaces, we only do untyped operations
     * on the shader_time surface, so there's no need to set HSW channel
@@ -522,7 +530,8 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
    struct intel_region *region = irb->mt->region;
    uint32_t tile_x, tile_y;
    uint32_t format;
-   gl_format rb_format = intel_rb_format(irb);
+   /* _NEW_BUFFERS */
+   gl_format rb_format = _mesa_get_render_format(ctx, intel_rb_format(irb));
 
    uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
                                     8 * 4, 32, &brw->wm.surf_offset[unit]);
@@ -531,26 +540,11 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
    /* Render targets can't use IMS layout */
    assert(irb->mt->msaa_layout != INTEL_MSAA_LAYOUT_IMS);
 
-   switch (rb_format) {
-   case MESA_FORMAT_SARGB8:
-      /* _NEW_BUFFERS
-       *
-       * Without GL_EXT_framebuffer_sRGB we shouldn't bind sRGB surfaces to the
-       * blend/update as sRGB.
-       */
-      if (ctx->Color.sRGBEnabled)
-	 format = brw_format_for_mesa_format(rb_format);
-      else
-	 format = BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
-      break;
-   default:
-      assert(brw_render_target_supported(intel, rb));
-      format = brw->render_target_format[rb_format];
-      if (unlikely(!brw->format_supported_as_render_target[rb_format])) {
-	 _mesa_problem(ctx, "%s: renderbuffer format %s unsupported\n",
-		       __FUNCTION__, _mesa_get_format_name(rb_format));
-      }
-      break;
+   assert(brw_render_target_supported(intel, rb));
+   format = brw->render_target_format[rb_format];
+   if (unlikely(!brw->format_supported_as_render_target[rb_format])) {
+      _mesa_problem(ctx, "%s: renderbuffer format %s unsupported\n",
+                    __FUNCTION__, _mesa_get_format_name(rb_format));
    }
 
    surf[0] = BRW_SURFACE_2D << BRW_SURFACE_TYPE_SHIFT |

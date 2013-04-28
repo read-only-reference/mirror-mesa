@@ -62,12 +62,13 @@ nv50_miptree(struct pipe_resource *pt)
 
 #define NV50_TEXVIEW_SCALED_COORDS     (1 << 0)
 #define NV50_TEXVIEW_FILTER_MSAA8      (1 << 1)
+#define NV50_TEXVIEW_ACCESS_RESOLVE    (1 << 2)
 
 
 /* Internal functions:
  */
 boolean
-nv50_miptree_init_layout_linear(struct nv50_miptree *mt);
+nv50_miptree_init_layout_linear(struct nv50_miptree *mt, unsigned pitch_align);
 
 struct pipe_resource *
 nv50_miptree_create(struct pipe_screen *pscreen,

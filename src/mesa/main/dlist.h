@@ -22,9 +22,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 
@@ -33,7 +34,6 @@
 #define DLIST_H
 
 
-#include "main/mfeatures.h"
 #include "main/mtypes.h"
 
 
@@ -71,8 +71,6 @@ extern GLint _mesa_dlist_alloc_opcode( struct gl_context *ctx, GLuint sz,
                                        void (*print)( struct gl_context *, void * ) );
 
 extern void _mesa_delete_list(struct gl_context *ctx, struct gl_display_list *dlist);
-
-extern void _mesa_save_vtxfmt_init( GLvertexformat *vfmt );
 
 extern void _mesa_initialize_save_table(const struct gl_context *);
 

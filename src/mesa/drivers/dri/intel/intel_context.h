@@ -202,14 +202,30 @@ struct intel_context
       void (*create_constant_surface)(struct brw_context *brw,
 				      drm_intel_bo *bo,
 				      uint32_t offset,
-				      int width,
-				      uint32_t *out_offset);
+				      uint32_t size,
+				      uint32_t *out_offset,
+                                      bool dword_pitch);
       /** \} */
+
+      /**
+       * Send the appropriate state packets to configure depth, stencil, and
+       * HiZ buffers (i965+ only)
+       */
+      void (*emit_depth_stencil_hiz)(struct brw_context *brw,
+                                     struct intel_mipmap_tree *depth_mt,
+                                     uint32_t depth_offset,
+                                     uint32_t depthbuffer_format,
+                                     uint32_t depth_surface_type,
+                                     struct intel_mipmap_tree *stencil_mt,
+                                     bool hiz, bool separate_stencil,
+                                     uint32_t width, uint32_t height,
+                                     uint32_t tile_x, uint32_t tile_y);
+
    } vtbl;
 
    GLbitfield Fallback;  /**< mask of INTEL_FALLBACK_x bits */
    GLuint NewGLState;
-
+ 
    dri_bufmgr *bufmgr;
    unsigned int maxBatchSize;
 
@@ -220,6 +236,7 @@ struct intel_context
    int gt;
    bool needs_ff_sync;
    bool is_haswell;
+   bool is_baytrail;
    bool is_g4x;
    bool is_945;
    bool has_separate_stencil;
@@ -266,6 +283,8 @@ struct intel_context
       uint32_t buffer_offset;
       char buffer[4096];
    } upload;
+
+   uint32_t max_gtt_map_object_size;
 
    GLuint stats_wm;
 
@@ -326,7 +345,6 @@ struct intel_context
     */
    bool is_front_buffer_reading;
 
-   bool use_texture_tiling;
    bool use_early_z;
 
    int driFd;

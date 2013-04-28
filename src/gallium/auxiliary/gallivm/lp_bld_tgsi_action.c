@@ -865,9 +865,12 @@ lp_set_default_actions(struct lp_build_tgsi_context * bld_base)
    bld_base->op_actions[TGSI_OPCODE_XPD] = xpd_action;
 
    bld_base->op_actions[TGSI_OPCODE_BREAKC].fetch_args = scalar_unary_fetch_args;
+   bld_base->op_actions[TGSI_OPCODE_SWITCH].fetch_args = scalar_unary_fetch_args;
+   bld_base->op_actions[TGSI_OPCODE_CASE].fetch_args = scalar_unary_fetch_args;
    bld_base->op_actions[TGSI_OPCODE_COS].fetch_args = scalar_unary_fetch_args;
    bld_base->op_actions[TGSI_OPCODE_EX2].fetch_args = scalar_unary_fetch_args;
    bld_base->op_actions[TGSI_OPCODE_IF].fetch_args = scalar_unary_fetch_args;
+   bld_base->op_actions[TGSI_OPCODE_UIF].fetch_args = scalar_unary_fetch_args;
    bld_base->op_actions[TGSI_OPCODE_KIL].fetch_args = kil_fetch_args;
    bld_base->op_actions[TGSI_OPCODE_KILP].fetch_args = kilp_fetch_args;
    bld_base->op_actions[TGSI_OPCODE_RCP].fetch_args = scalar_unary_fetch_args;
@@ -985,6 +988,26 @@ cmp_emit_cpu(
    emit_data->output[emit_data->chan] = lp_build_select(&bld_base->base,
                                 cond, emit_data->args[1], emit_data->args[2]);
 }
+
+/* TGSI_OPCODE_UCMP (CPU Only) */
+static void
+ucmp_emit_cpu(
+   const struct lp_build_tgsi_action * action,
+   struct lp_build_tgsi_context * bld_base,
+   struct lp_build_emit_data * emit_data)
+{
+   LLVMBuilderRef builder = bld_base->base.gallivm->builder;
+   struct lp_build_context *uint_bld = &bld_base->uint_bld;
+   LLVMValueRef unsigned_cond = 
+      LLVMBuildBitCast(builder, emit_data->args[0], uint_bld->vec_type, "");
+   LLVMValueRef cond = lp_build_cmp(uint_bld, PIPE_FUNC_NOTEQUAL,
+                                    unsigned_cond,
+                                    uint_bld->zero);
+   emit_data->output[emit_data->chan] =
+      lp_build_select(&bld_base->base,
+                      cond, emit_data->args[1], emit_data->args[2]);
+}
+
 
 /* TGSI_OPCODE_CND (CPU Only) */
 static void
@@ -1523,8 +1546,23 @@ udiv_emit_cpu(
    struct lp_build_tgsi_context * bld_base,
    struct lp_build_emit_data * emit_data)
 {
-   emit_data->output[emit_data->chan] = lp_build_div(&bld_base->uint_bld,
-                                   emit_data->args[0], emit_data->args[1]);
+   
+   LLVMBuilderRef builder = bld_base->base.gallivm->builder;
+   LLVMValueRef div_mask = lp_build_cmp(&bld_base->uint_bld,
+                                        PIPE_FUNC_EQUAL, emit_data->args[1],
+                                        bld_base->uint_bld.zero);
+   /* We want to make sure that we never divide/mod by zero to not 
+    * generate sigfpe. We don't want to crash just because the 
+    * shader is doing something weird. */
+   LLVMValueRef divisor = LLVMBuildOr(builder,
+                                      div_mask,
+                                      emit_data->args[1], "");
+   LLVMValueRef result = lp_build_div(&bld_base->uint_bld,
+                                      emit_data->args[0], divisor);
+   /* udiv by zero is guaranteed to return 0xffffffff */
+   emit_data->output[emit_data->chan] = LLVMBuildOr(builder,
+                                                    div_mask,
+                                                    result, "");
 }
 
 /* TGSI_OPCODE_UMAX (CPU Only) */
@@ -1556,8 +1594,22 @@ umod_emit_cpu(
    struct lp_build_tgsi_context * bld_base,
    struct lp_build_emit_data * emit_data)
 {
-   emit_data->output[emit_data->chan] = lp_build_mod(&bld_base->uint_bld,
-                                   emit_data->args[0], emit_data->args[1]);
+   LLVMBuilderRef builder = bld_base->base.gallivm->builder;
+   LLVMValueRef div_mask = lp_build_cmp(&bld_base->uint_bld,
+                                        PIPE_FUNC_EQUAL, emit_data->args[1],
+                                        bld_base->uint_bld.zero);
+   /* We want to make sure that we never divide/mod by zero to not 
+    * generate sigfpe. We don't want to crash just because the 
+    * shader is doing something weird. */
+   LLVMValueRef divisor = LLVMBuildOr(builder,
+                                      div_mask,
+                                      emit_data->args[1], "");
+   LLVMValueRef result = lp_build_mod(&bld_base->uint_bld,
+                                      emit_data->args[0], divisor);
+   /* umod by zero is guaranteed to return 0xffffffff */
+   emit_data->output[emit_data->chan] = LLVMBuildOr(builder,
+                                                    div_mask,
+                                                    result, "");
 }
 
 /* TGSI_OPCODE_USET Helper (CPU Only) */
@@ -1701,6 +1753,7 @@ lp_set_default_actions_cpu(
    bld_base->sqrt_action.emit = sqrt_emit_cpu;
 
    bld_base->op_actions[TGSI_OPCODE_UADD].emit = uadd_emit_cpu;
+   bld_base->op_actions[TGSI_OPCODE_UCMP].emit = ucmp_emit_cpu;
    bld_base->op_actions[TGSI_OPCODE_UDIV].emit = udiv_emit_cpu;
    bld_base->op_actions[TGSI_OPCODE_UMAX].emit = umax_emit_cpu;
    bld_base->op_actions[TGSI_OPCODE_UMIN].emit = umin_emit_cpu;

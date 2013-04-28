@@ -17,9 +17,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 
@@ -39,7 +40,6 @@
 #include "image.h"
 #include "imports.h"
 #include "macros.h"
-#include "mfeatures.h"
 #include "multisample.h"
 #include "state.h"
 #include "texcompress.h"
@@ -1536,13 +1536,13 @@ error_check_subtexture_dimensions(struct gl_context *ctx,
    }
 
    /* check xoffset and width */
-   if (xoffset < -destImage->Border) {
+   if (xoffset < - (GLint) destImage->Border) {
       _mesa_error(ctx, GL_INVALID_VALUE, "%s%dD(xoffset)",
                   function, dims);
       return GL_TRUE;
    }
 
-   if (xoffset + subWidth > destImage->Width) {
+   if (xoffset + subWidth > (GLint) destImage->Width) {
       _mesa_error(ctx, GL_INVALID_VALUE, "%s%dD(xoffset+width)",
                   function, dims);
       return GL_TRUE;
@@ -1556,7 +1556,7 @@ error_check_subtexture_dimensions(struct gl_context *ctx,
                      function, dims);
          return GL_TRUE;
       }
-      if (yoffset + subHeight > destImage->Height) {
+      if (yoffset + subHeight > (GLint) destImage->Height) {
          _mesa_error(ctx, GL_INVALID_VALUE, "%s%dD(yoffset+height)",
                      function, dims);
          return GL_TRUE;
@@ -1594,14 +1594,20 @@ error_check_subtexture_dimensions(struct gl_context *ctx,
          return GL_TRUE;
       }
 
-      /* size must be multiple of bw by bh or equal to whole texture size */
-      if ((subWidth % bw != 0) && subWidth != destImage->Width) {
+      /* The size must be a multiple of bw x bh, or we must be using a
+       * offset+size that exactly hits the edge of the image.  This
+       * is important for small mipmap levels (1x1, 2x1, etc) and for
+       * NPOT textures.
+       */
+      if ((subWidth % bw != 0) &&
+          (xoffset + subWidth != (GLint) destImage->Width)) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "%s%dD(width = %d)", function, dims, subWidth);
          return GL_TRUE;
       }
 
-      if ((subHeight % bh != 0) && subHeight != destImage->Height) {
+      if ((subHeight % bh != 0) &&
+          (yoffset + subHeight != (GLint) destImage->Height)) {
          _mesa_error(ctx, GL_INVALID_OPERATION,
                      "%s%dD(height = %d)", function, dims, subHeight);
          return GL_TRUE;
@@ -4348,7 +4354,7 @@ _mesa_TexImage3DMultisample(GLenum target, GLsizei samples,
 
 void GLAPIENTRY
 _mesa_TexStorage2DMultisample(GLenum target, GLsizei samples,
-                              GLint internalformat, GLsizei width,
+                              GLenum internalformat, GLsizei width,
                               GLsizei height, GLboolean fixedsamplelocations)
 {
    teximagemultisample(2, target, samples, internalformat,
@@ -4357,7 +4363,7 @@ _mesa_TexStorage2DMultisample(GLenum target, GLsizei samples,
 
 void GLAPIENTRY
 _mesa_TexStorage3DMultisample(GLenum target, GLsizei samples,
-                              GLint internalformat, GLsizei width,
+                              GLenum internalformat, GLsizei width,
                               GLsizei height, GLsizei depth,
                               GLboolean fixedsamplelocations)
 {

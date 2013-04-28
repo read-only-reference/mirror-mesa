@@ -25,7 +25,6 @@
  * 
  **************************************************************************/
 
-#include "main/mfeatures.h"
 #include "main/version.h"
 
 #include "intel_chipset.h"
@@ -153,8 +152,6 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.EXT_texture_array = true;
       ctx->Extensions.EXT_texture_integer = true;
       ctx->Extensions.EXT_texture_snorm = true;
-      ctx->Extensions.EXT_texture_sRGB = true;
-      ctx->Extensions.EXT_texture_sRGB_decode = true;
       ctx->Extensions.EXT_texture_swizzle = true;
       ctx->Extensions.EXT_vertex_array_bgra = true;
       ctx->Extensions.ATI_envmap_bumpmap = true;
@@ -170,17 +167,15 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_fragment_program = true;
       ctx->Extensions.ARB_shadow = true;
       ctx->Extensions.ARB_texture_non_power_of_two = true;
+      ctx->Extensions.EXT_texture_sRGB = true;
+      ctx->Extensions.EXT_texture_sRGB_decode = true;
       ctx->Extensions.EXT_shadow_funcs = true;
       ctx->Extensions.EXT_stencil_two_side = true;
       ctx->Extensions.ATI_separate_stencil = true;
       ctx->Extensions.ATI_texture_env_combine3 = true;
       ctx->Extensions.NV_texture_env_combine4 = true;
-
-      if (driQueryOptionb(&intel->optionCache, "fragment_shader"))
-	 ctx->Extensions.ARB_fragment_shader = true;
-
-      if (driQueryOptionb(&intel->optionCache, "stub_occlusion_query"))
-	 ctx->Extensions.ARB_occlusion_query = true;
+      ctx->Extensions.ARB_fragment_shader = true;
+      ctx->Extensions.ARB_occlusion_query = true;
    }
 
    if (intel->ctx.Mesa_DXTn

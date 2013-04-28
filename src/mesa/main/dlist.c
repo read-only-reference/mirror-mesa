@@ -18,9 +18,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 
@@ -37,7 +38,6 @@
 #include "api_validate.h"
 #include "atifragshader.h"
 #include "config.h"
-#include "mfeatures.h"
 #include "bufferobj.h"
 #include "arrayobj.h"
 #include "context.h"
@@ -3778,7 +3778,7 @@ save_ShadeModel(GLenum mode)
 
    /* Only save the value if we know the statechange will take effect:
     */
-   if (ctx->Driver.CurrentSavePrimitive == PRIM_OUTSIDE_BEGIN_END)
+   if (!_mesa_inside_dlist_begin_end(ctx))
       ctx->ListState.Current.ShadeModel = mode;
 
    n = alloc_instruction(ctx, OPCODE_SHADE_MODEL, 1);
@@ -5658,7 +5658,7 @@ save_Begin(GLenum mode)
        */
       ctx->Driver.CurrentSavePrimitive = PRIM_INSIDE_UNKNOWN_PRIM;
    }
-   else if (ctx->Driver.CurrentSavePrimitive == PRIM_OUTSIDE_BEGIN_END) {
+   else if (!_mesa_inside_dlist_begin_end(ctx)) {
       ctx->Driver.CurrentSavePrimitive = mode;
    }
    else {
@@ -9548,8 +9548,8 @@ mesa_print_display_list(GLuint list)
 /*****                      Initialization                        *****/
 /**********************************************************************/
 
-void
-_mesa_save_vtxfmt_init(GLvertexformat * vfmt)
+static void
+save_vtxfmt_init(GLvertexformat * vfmt)
 {
    _MESA_INIT_ARRAYELT_VTXFMT(vfmt, _ae_);
 
@@ -9674,7 +9674,7 @@ _mesa_init_display_list(struct gl_context *ctx)
    /* Display List group */
    ctx->List.ListBase = 0;
 
-   _mesa_save_vtxfmt_init(&ctx->ListState.ListVtxfmt);
+   save_vtxfmt_init(&ctx->ListState.ListVtxfmt);
 }
 
 

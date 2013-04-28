@@ -113,6 +113,8 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
    struct brw_context *brw = brw_context(ctx);
    struct intel_context *intel = &brw->intel;
    unsigned int stage;
+   static const char *target_strings[]
+      = { "vertex", "fragment", "geometry" };
 
    for (stage = 0; stage < ARRAY_SIZE(shProg->_LinkedShaders); stage++) {
       struct brw_shader *shader =
@@ -150,8 +152,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
        */
       brw_lower_packing_builtins(brw, (gl_shader_type) stage, shader->ir);
       do_mat_op_to_vec(shader->ir);
-      const int lrp_to_arith = (intel->gen < 6 || stage != MESA_SHADER_FRAGMENT)
-                                ? LRP_TO_ARITH : 0;
+      const int lrp_to_arith = intel->gen < 6 ? LRP_TO_ARITH : 0;
       lower_instructions(shader->ir,
 			 MOD_TO_FRACT |
 			 DIV_TO_MUL_RCP |
@@ -256,12 +257,26 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       _mesa_reference_program(ctx, &prog, NULL);
 
       if (ctx->Shader.Flags & GLSL_DUMP) {
-         static const char *target_strings[]
-            = { "vertex", "fragment", "geometry" };
          printf("\n");
          printf("GLSL IR for linked %s program %d:\n", target_strings[stage],
                 shProg->Name);
          _mesa_print_ir(shader->base.ir, NULL);
+         printf("\n");
+      }
+   }
+
+   if (ctx->Shader.Flags & GLSL_DUMP) {
+      for (unsigned i = 0; i < shProg->NumShaders; i++) {
+         const struct gl_shader *sh = shProg->Shaders[i];
+         if (!sh)
+            continue;
+
+         printf("GLSL %s shader %d source for linked program %d:\n",
+                target_strings[_mesa_shader_type_to_index(sh->Type)],
+                i,
+                shProg->Name);
+         printf("%s", sh->Source);
+         printf("\n");
       }
    }
 
@@ -482,6 +497,8 @@ brw_instruction_name(enum opcode op)
       return "scratch_write";
    case VS_OPCODE_PULL_CONSTANT_LOAD:
       return "pull_constant_load";
+   case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
+      return "pull_constant_load_gen7";
 
    default:
       /* Yes, this leaks.  It's in debug code, it should never occur, and if
@@ -489,5 +506,50 @@ brw_instruction_name(enum opcode op)
        */
       asprintf(&fallback, "op%d", op);
       return fallback;
+   }
+}
+
+bool
+backend_instruction::is_tex()
+{
+   return (opcode == SHADER_OPCODE_TEX ||
+           opcode == FS_OPCODE_TXB ||
+           opcode == SHADER_OPCODE_TXD ||
+           opcode == SHADER_OPCODE_TXF ||
+           opcode == SHADER_OPCODE_TXF_MS ||
+           opcode == SHADER_OPCODE_TXL ||
+           opcode == SHADER_OPCODE_TXS ||
+           opcode == SHADER_OPCODE_LOD);
+}
+
+bool
+backend_instruction::is_math()
+{
+   return (opcode == SHADER_OPCODE_RCP ||
+           opcode == SHADER_OPCODE_RSQ ||
+           opcode == SHADER_OPCODE_SQRT ||
+           opcode == SHADER_OPCODE_EXP2 ||
+           opcode == SHADER_OPCODE_LOG2 ||
+           opcode == SHADER_OPCODE_SIN ||
+           opcode == SHADER_OPCODE_COS ||
+           opcode == SHADER_OPCODE_INT_QUOTIENT ||
+           opcode == SHADER_OPCODE_INT_REMAINDER ||
+           opcode == SHADER_OPCODE_POW);
+}
+
+bool
+backend_instruction::is_control_flow()
+{
+   switch (opcode) {
+   case BRW_OPCODE_DO:
+   case BRW_OPCODE_WHILE:
+   case BRW_OPCODE_IF:
+   case BRW_OPCODE_ELSE:
+   case BRW_OPCODE_ENDIF:
+   case BRW_OPCODE_BREAK:
+   case BRW_OPCODE_CONTINUE:
+      return true;
+   default:
+      return false;
    }
 }

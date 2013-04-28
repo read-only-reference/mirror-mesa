@@ -57,7 +57,7 @@ static void compile_gs_prog( struct brw_context *brw,
    memset(&c, 0, sizeof(c));
    
    c.key = *key;
-   c.vue_map = brw->vs.prog_data->vue_map;
+   c.vue_map = brw->vs.prog_data->base.vue_map;
    c.nr_regs = (c.vue_map.num_slots + 1)/2;
 
    mem_ctx = ralloc_context(NULL);
@@ -167,7 +167,7 @@ static void populate_key( struct brw_context *brw,
    memset(key, 0, sizeof(*key));
 
    /* CACHE_NEW_VS_PROG (part of VUE map) */
-   key->attrs = brw->vs.prog_data->vue_map.slots_valid;
+   key->attrs = brw->vs.prog_data->base.vue_map.slots_valid;
 
    /* BRW_NEW_PRIMITIVE */
    key->primitive = brw->primitive;
@@ -186,7 +186,7 @@ static void populate_key( struct brw_context *brw,
       key->need_gs_prog = false;
    } else if (intel->gen == 6) {
       /* On Gen6, GS is used for transform feedback. */
-      /* _NEW_TRANSFORM_FEEDBACK */
+      /* BRW_NEW_TRANSFORM_FEEDBACK */
       if (_mesa_is_xfb_active_and_unpaused(ctx)) {
          const struct gl_shader_program *shaderprog =
             ctx->Shader.CurrentVertexProgram;
@@ -215,7 +215,7 @@ static void populate_key( struct brw_context *brw,
          }
       }
       /* On Gen6, GS is also used for rasterizer discard. */
-      /* _NEW_RASTERIZER_DISCARD */
+      /* BRW_NEW_RASTERIZER_DISCARD */
       if (ctx->RasterDiscard) {
          key->need_gs_prog = true;
          key->rasterizer_discard = true;
@@ -257,10 +257,10 @@ brw_upload_gs_prog(struct brw_context *brw)
 
 const struct brw_tracked_state brw_gs_prog = {
    .dirty = {
-      .mesa  = (_NEW_LIGHT |
-                _NEW_TRANSFORM_FEEDBACK |
-                _NEW_RASTERIZER_DISCARD),
-      .brw   = BRW_NEW_PRIMITIVE,
+      .mesa  = (_NEW_LIGHT),
+      .brw   = (BRW_NEW_PRIMITIVE |
+                BRW_NEW_TRANSFORM_FEEDBACK |
+                BRW_NEW_RASTERIZER_DISCARD),
       .cache = CACHE_NEW_VS_PROG
    },
    .emit = brw_upload_gs_prog

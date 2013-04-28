@@ -130,18 +130,23 @@ struct draw_jit_context
    struct draw_jit_sampler samplers[PIPE_MAX_SAMPLERS];
 };
 
+enum {
+   DRAW_JIT_CTX_CONSTANTS   = 0,
+   DRAW_JIT_CTX_PLANES      = 1,
+   DRAW_JIT_CTX_VIEWPORT    = 2,
+   DRAW_JIT_CTX_TEXTURES    = 3,
+   DRAW_JIT_CTX_SAMPLERS    = 4,
+   DRAW_JIT_CTX_NUM_FIELDS
+};
 
 #define draw_jit_context_vs_constants(_gallivm, _ptr) \
-   lp_build_struct_get_ptr(_gallivm, _ptr, 0, "vs_constants")
+   lp_build_struct_get_ptr(_gallivm, _ptr, DRAW_JIT_CTX_CONSTANTS, "vs_constants")
 
 #define draw_jit_context_planes(_gallivm, _ptr) \
-   lp_build_struct_get(_gallivm, _ptr, 1, "planes")
+   lp_build_struct_get(_gallivm, _ptr, DRAW_JIT_CTX_PLANES, "planes")
 
 #define draw_jit_context_viewport(_gallivm, _ptr) \
-   lp_build_struct_get(_gallivm, _ptr, 2, "viewport")
-
-#define DRAW_JIT_CTX_TEXTURES 3
-#define DRAW_JIT_CTX_SAMPLERS 4
+   lp_build_struct_get(_gallivm, _ptr, DRAW_JIT_CTX_VIEWPORT, "viewport")
 
 #define draw_jit_context_textures(_gallivm, _ptr) \
    lp_build_struct_get_ptr(_gallivm, _ptr, DRAW_JIT_CTX_TEXTURES, "textures")
@@ -265,7 +270,8 @@ typedef int
                     float inputs[6][PIPE_MAX_SHADER_INPUTS][TGSI_NUM_CHANNELS][TGSI_NUM_CHANNELS],
                     struct vertex_header *output,
                     unsigned num_prims,
-                    unsigned instance_id);
+                    unsigned instance_id,
+                    int *prim_ids);
 
 struct draw_llvm_variant_key
 {

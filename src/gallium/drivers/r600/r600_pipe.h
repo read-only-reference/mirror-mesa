@@ -35,9 +35,7 @@
 #include "r600_public.h"
 #include "r600_resource.h"
 
-#define R600_NUM_ATOMS 40
-
-#define R600_TRACE_CS 0
+#define R600_NUM_ATOMS 41
 
 /* the number of CS dwords for flushing and drawing */
 #define R600_MAX_FLUSH_CS_DWORDS	16
@@ -78,6 +76,7 @@
 #define R600_QUERY_DRAW_CALLS		(PIPE_QUERY_DRIVER_SPECIFIC + 0)
 #define R600_QUERY_REQUESTED_VRAM	(PIPE_QUERY_DRIVER_SPECIFIC + 1)
 #define R600_QUERY_REQUESTED_GTT	(PIPE_QUERY_DRIVER_SPECIFIC + 2)
+#define R600_QUERY_BUFFER_WAIT_TIME	(PIPE_QUERY_DRIVER_SPECIFIC + 3)
 
 struct r600_context;
 struct r600_bytecode;
@@ -244,6 +243,8 @@ typedef boolean (*r600g_dma_blit_t)(struct pipe_context *ctx,
 /* logging */
 #define DBG_TEX_DEPTH		(1 << 0)
 #define DBG_COMPUTE		(1 << 1)
+#define DBG_VM			(1 << 2)
+#define DBG_TRACE_CS		(1 << 3)
 /* shaders */
 #define DBG_FS			(1 << 8)
 #define DBG_VS			(1 << 9)
@@ -256,6 +257,13 @@ typedef boolean (*r600g_dma_blit_t)(struct pipe_context *ctx,
 #define DBG_NO_CP_DMA		(1 << 18)
 #define DBG_NO_ASYNC_DMA	(1 << 19)
 #define DBG_NO_DISCARD_RANGE	(1 << 20)
+/* shader backend */
+#define DBG_SB			(1 << 21)
+#define DBG_SB_CS		(1 << 22)
+#define DBG_SB_DRY_RUN	(1 << 23)
+#define DBG_SB_STAT		(1 << 24)
+#define DBG_SB_DUMP		(1 << 25)
+#define DBG_SB_NO_FALLBACK	(1 << 26)
 
 struct r600_tiling_info {
 	unsigned num_channels;
@@ -282,12 +290,15 @@ struct r600_screen {
 	 * XXX: Not sure if this is the best place for global_pool.  Also,
 	 * it's not thread safe, so it won't work with multiple contexts. */
 	struct compute_memory_pool *global_pool;
-#if R600_TRACE_CS
 	struct r600_resource		*trace_bo;
 	uint32_t			*trace_ptr;
 	unsigned			cs_count;
-#endif
 	r600g_dma_blit_t		dma_blit;
+
+	/* Auxiliary context. Mainly used to initialize resources.
+	 * It must be locked prior to using and flushed before unlocking. */
+	struct pipe_context		*aux_context;
+	pipe_mutex			aux_context_lock;
 };
 
 struct r600_pipe_sampler_view {
@@ -621,6 +632,7 @@ struct r600_context {
 	/* Queries. */
 	/* The list of active queries. Only one query of each type can be active. */
 	int				num_occlusion_queries;
+	int				num_pipelinestat_queries;
 	/* Keep track of non-timer queries, because they should be suspended
 	 * during context flushing.
 	 * The timer queries (TIME_ELAPSED) shouldn't be suspended. */
@@ -635,6 +647,7 @@ struct r600_context {
 	unsigned			current_render_cond_mode;
 	boolean				predicate_drawing;
 
+	void				*sb_context;
 	struct r600_isa		*isa;
 };
 
@@ -646,19 +659,15 @@ static INLINE void r600_emit_command_buffer(struct radeon_winsys_cs *cs,
 	cs->cdw += cb->num_dw;
 }
 
-#if R600_TRACE_CS
 void r600_trace_emit(struct r600_context *rctx);
-#endif
 
 static INLINE void r600_emit_atom(struct r600_context *rctx, struct r600_atom *atom)
 {
 	atom->emit(rctx, atom);
 	atom->dirty = false;
-#if R600_TRACE_CS
 	if (rctx->screen->trace_bo) {
 		r600_trace_emit(rctx);
 	}
-#endif
 }
 
 static INLINE void r600_set_cso_state(struct r600_cso_state *state, void *cso)
@@ -718,6 +727,8 @@ void evergreen_update_db_shader_control(struct r600_context * rctx);
 /* r600_blit.c */
 void r600_copy_buffer(struct pipe_context *ctx, struct pipe_resource *dst, unsigned dstx,
 		      struct pipe_resource *src, const struct pipe_box *src_box);
+void r600_screen_clear_buffer(struct r600_screen *rscreen, struct pipe_resource *dst,
+			      unsigned offset, unsigned size, unsigned char value);
 void r600_init_blit_functions(struct r600_context *rctx);
 void r600_blit_decompress_depth(struct pipe_context *ctx,
 		struct r600_texture *texture,
@@ -746,6 +757,8 @@ boolean r600_rings_is_buffer_referenced(struct r600_context *ctx,
 void *r600_buffer_mmap_sync_with_rings(struct r600_context *ctx,
 					struct r600_resource *resource,
 					unsigned usage);
+const char * r600_llvm_gpu_string(enum radeon_family family);
+
 
 /* r600_query.c */
 void r600_init_query_functions(struct r600_context *rctx);
@@ -817,6 +830,9 @@ void r600_cp_dma_copy_buffer(struct r600_context *rctx,
 			     struct pipe_resource *dst, uint64_t dst_offset,
 			     struct pipe_resource *src, uint64_t src_offset,
 			     unsigned size);
+void evergreen_cp_dma_clear_buffer(struct r600_context *rctx,
+				   struct pipe_resource *dst, uint64_t offset,
+				   unsigned size, uint32_t clear_value);
 void r600_dma_copy(struct r600_context *rctx,
 		struct pipe_resource *dst,
 		struct pipe_resource *src,
@@ -882,6 +898,21 @@ unsigned r600_tex_filter(unsigned filter);
 unsigned r600_tex_mipfilter(unsigned filter);
 unsigned r600_tex_compare(unsigned compare);
 bool sampler_state_needs_border_color(const struct pipe_sampler_state *state);
+
+/* r600_uvd.c */
+struct pipe_video_decoder *r600_uvd_create_decoder(struct pipe_context *context,
+                                                   enum pipe_video_profile profile,
+                                                   enum pipe_video_entrypoint entrypoint,
+                                                   enum pipe_video_chroma_format chroma_format,
+                                                   unsigned width, unsigned height,
+						   unsigned max_references, bool expect_chunked_decode);
+
+struct pipe_video_buffer *r600_video_buffer_create(struct pipe_context *pipe,
+						   const struct pipe_video_buffer *tmpl);
+
+int r600_uvd_get_video_param(struct pipe_screen *screen,
+			     enum pipe_video_profile profile,
+			     enum pipe_video_cap param);
 
 /*
  * Helpers for building command buffers
@@ -1093,6 +1124,15 @@ static INLINE void r600_write_compute_context_reg(struct radeon_winsys_cs *cs, u
 	r600_write_value(cs, value);
 }
 
+static INLINE void r600_write_context_reg_flag(struct radeon_winsys_cs *cs, unsigned reg, unsigned value, unsigned flag)
+{
+	if (flag & RADEON_CP_PACKET3_COMPUTE_MODE) {
+		r600_write_compute_context_reg(cs, reg, value);
+	} else {
+		r600_write_context_reg(cs, reg, value);
+	}
+
+}
 static INLINE void r600_write_ctl_const(struct radeon_winsys_cs *cs, unsigned reg, unsigned value)
 {
 	r600_write_ctl_const_seq(cs, reg, 1);

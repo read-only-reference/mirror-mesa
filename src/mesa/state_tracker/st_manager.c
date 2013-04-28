@@ -28,7 +28,6 @@
 
 #include "main/mtypes.h"
 #include "main/context.h"
-#include "main/mfeatures.h"
 #include "main/texobj.h"
 #include "main/teximage.h"
 #include "main/texstate.h"
@@ -170,9 +169,8 @@ st_context_validate(struct st_context *st,
 
 /**
  * Validate a framebuffer to make sure up-to-date pipe_textures are used.
- * The context we need to pass in is s dummy context needed only to be
- * able to get a pipe context to create pipe surfaces, and to have a
- * context to call _mesa_resize_framebuffer():
+ * The context is only used for creating pipe surfaces and for calling
+ * _mesa_resize_framebuffer().
  * (That should probably be rethought, since those surfaces become
  * drawable state, not context state, and can be freed by another pipe
  * context).
@@ -885,16 +883,10 @@ st_manager_add_color_renderbuffer(struct st_context *st,
 static const struct st_api st_gl_api = {
    "Mesa " PACKAGE_VERSION,
    ST_API_OPENGL,
-#if FEATURE_GL
    ST_PROFILE_DEFAULT_MASK |
    ST_PROFILE_OPENGL_CORE_MASK |
-#endif
-#if FEATURE_ES1
    ST_PROFILE_OPENGL_ES1_MASK |
-#endif
-#if FEATURE_ES2
    ST_PROFILE_OPENGL_ES2_MASK |
-#endif
    0,
    ST_API_FEATURE_MS_VISUALS_MASK,
    st_api_destroy,

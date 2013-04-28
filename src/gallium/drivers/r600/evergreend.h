@@ -118,6 +118,48 @@
 #define PKT3_PREDICATE(x)               (((x) >> 0) & 0x1)
 #define PKT0(index, count) (PKT_TYPE_S(0) | PKT0_BASE_INDEX_S(index) | PKT_COUNT_S(count))
 
+#define PKT3_CP_DMA					0x41
+/* 1. header
+ * 2. SRC_ADDR_LO [31:0] or DATA [31:0]
+ * 3. CP_SYNC [31] | SRC_SEL [30:29] | ENGINE [27] | DST_SEL [21:20] | SRC_ADDR_HI [7:0]
+ * 4. DST_ADDR_LO [31:0]
+ * 5. DST_ADDR_HI [7:0]
+ * 6. COMMAND [29:22] | BYTE_COUNT [20:0]
+ */
+#define PKT3_CP_DMA_CP_SYNC       (1 << 31)
+#define PKT3_CP_DMA_SRC_SEL(x)       ((x) << 29)
+/* 0 - SRC_ADDR
+ * 1 - GDS (program SAS to 1 as well)
+ * 2 - DATA
+ */
+#define PKT3_CP_DMA_DST_SEL(x)       ((x) << 20)
+/* 0 - DST_ADDR
+ * 1 - GDS (program DAS to 1 as well)
+ */
+/* COMMAND */
+#define PKT3_CP_DMA_CMD_SRC_SWAP(x) ((x) << 23)
+/* 0 - none
+ * 1 - 8 in 16
+ * 2 - 8 in 32
+ * 3 - 8 in 64
+ */
+#define PKT3_CP_DMA_CMD_DST_SWAP(x) ((x) << 24)
+/* 0 - none
+ * 1 - 8 in 16
+ * 2 - 8 in 32
+ * 3 - 8 in 64
+ */
+#define PKT3_CP_DMA_CMD_SAS       (1 << 26)
+/* 0 - memory
+ * 1 - register
+ */
+#define PKT3_CP_DMA_CMD_DAS       (1 << 27)
+/* 0 - memory
+ * 1 - register
+ */
+#define PKT3_CP_DMA_CMD_SAIC      (1 << 28)
+#define PKT3_CP_DMA_CMD_DAIC      (1 << 29)
+
 /* Registers */
 #define R_0084FC_CP_STRMOUT_CNTL		     0x000084FC
 #define   S_0084FC_OFFSET_UPDATE_DONE(x)		(((x) & 0x1) << 0)
@@ -1661,6 +1703,7 @@
 #define R_028180_ALU_CONST_BUFFER_SIZE_VS_0          0x00028180
 #define R_028184_ALU_CONST_BUFFER_SIZE_VS_1          0x00028184
 #define R_0281C0_ALU_CONST_BUFFER_SIZE_GS_0          0x000281C0
+#define R_028FC0_ALU_CONST_BUFFER_SIZE_LS_0          0x00028FC0
 #define R_028200_PA_SC_WINDOW_OFFSET                 0x00028200
 #define R_02820C_PA_SC_CLIPRECT_RULE                 0x0002820C
 #define R_028210_PA_SC_CLIPRECT_0_TL                 0x00028210
@@ -1852,6 +1895,7 @@
 #define R_028980_ALU_CONST_CACHE_VS_0                0x00028980
 #define R_028984_ALU_CONST_CACHE_VS_1                0x00028984
 #define R_0289C0_ALU_CONST_CACHE_GS_0                0x000289C0
+#define R_028F40_ALU_CONST_CACHE_LS_0                0x00028F40
 #define R_028A04_PA_SU_POINT_MINMAX                  0x00028A04
 #define   S_028A04_MIN_SIZE(x)                         (((x) & 0xFFFF) << 0)
 #define   G_028A04_MIN_SIZE(x)                         (((x) >> 0) & 0xFFFF)

@@ -93,6 +93,7 @@ public:
    bool equals(const fs_reg &r) const;
    bool is_zero() const;
    bool is_one() const;
+   bool is_valid_3src() const;
 
    /** Register file: ARF, GRF, MRF, IMM. */
    enum register_file file;
@@ -174,12 +175,9 @@ public:
            fs_reg src0, fs_reg src1,fs_reg src2);
 
    bool equals(fs_inst *inst);
-   int regs_written();
    bool overwrites_reg(const fs_reg &reg);
-   bool is_tex();
-   bool is_math();
-   bool is_control_flow();
    bool is_send_from_grf();
+   bool is_partial_write();
 
    fs_reg dst;
    fs_reg src[3];
@@ -192,6 +190,7 @@ public:
    uint8_t flag_subreg;
 
    int mlen; /**< SEND message length */
+   int regs_written; /**< Number of vgrfs written by a SEND message, or 1 */
    int base_mrf; /**< First MRF in the SEND message, if mlen is nonzero. */
    uint32_t texture_offset; /**< Texture offset bitfield */
    int sampler;
@@ -223,7 +222,7 @@ public:
 
    fs_visitor(struct brw_context *brw,
               struct brw_wm_compile *c,
-              struct gl_shader_program *prog,
+              struct gl_shader_program *shader_prog,
               struct gl_fragment_program *fp,
               unsigned dispatch_width);
    ~fs_visitor();
@@ -294,7 +293,8 @@ public:
 					   fs_reg reg);
 
    exec_list VARYING_PULL_CONSTANT_LOAD(fs_reg dst, fs_reg surf_index,
-                                        fs_reg offset);
+                                        fs_reg varying_offset,
+                                        uint32_t const_offset);
 
    bool run();
    void setup_payload_gen4();
@@ -327,6 +327,7 @@ public:
    bool register_coalesce_2();
    bool compute_to_mrf();
    bool dead_code_eliminate();
+   bool dead_code_eliminate_local();
    bool remove_dead_constants();
    bool remove_duplicate_mrf_writes();
    bool virtual_grf_interferes(int a, int b);
@@ -540,7 +541,8 @@ private:
                                                  struct brw_reg surf_index,
                                                  struct brw_reg offset);
    void generate_varying_pull_constant_load(fs_inst *inst, struct brw_reg dst,
-                                            struct brw_reg index);
+                                            struct brw_reg index,
+                                            struct brw_reg offset);
    void generate_varying_pull_constant_load_gen7(fs_inst *inst,
                                                  struct brw_reg dst,
                                                  struct brw_reg index,

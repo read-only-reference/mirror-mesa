@@ -17,9 +17,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 
@@ -32,6 +33,7 @@
 
 #include "glheader.h"
 #include "imports.h"
+#include "blend.h"
 #include "buffers.h"
 #include "context.h"
 #include "enums.h"
@@ -154,6 +156,8 @@ _mesa_initialize_window_framebuffer(struct gl_framebuffer *fb,
 
    fb->Delete = _mesa_destroy_framebuffer;
    fb->_Status = GL_FRAMEBUFFER_COMPLETE_EXT;
+   fb->_AllColorBuffersFixedPoint = !visual->floatMode;
+   fb->_HasSNormOrFloatColorBuffer = visual->floatMode;
 
    compute_depth_max(fb);
 }
@@ -740,6 +744,9 @@ _mesa_update_framebuffer(struct gl_context *ctx)
    update_framebuffer(ctx, drawFb);
    if (readFb != drawFb)
       update_framebuffer(ctx, readFb);
+
+   _mesa_update_clamp_vertex_color(ctx);
+   _mesa_update_clamp_fragment_color(ctx);
 }
 
 

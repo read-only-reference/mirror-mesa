@@ -37,7 +37,7 @@ static void
 gen6_update_sol_surfaces(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->intel.ctx;
-   /* _NEW_TRANSFORM_FEEDBACK */
+   /* BRW_NEW_TRANSFORM_FEEDBACK */
    struct gl_transform_feedback_object *xfb_obj =
       ctx->TransformFeedback.CurrentObject;
    /* BRW_NEW_VERTEX_PROGRAM */
@@ -69,9 +69,10 @@ gen6_update_sol_surfaces(struct brw_context *brw)
 
 const struct brw_tracked_state gen6_sol_surface = {
    .dirty = {
-      .mesa = _NEW_TRANSFORM_FEEDBACK,
+      .mesa = 0,
       .brw = (BRW_NEW_BATCH |
-              BRW_NEW_VERTEX_PROGRAM),
+              BRW_NEW_VERTEX_PROGRAM |
+              BRW_NEW_TRANSFORM_FEEDBACK),
       .cache = 0
    },
    .emit = gen6_update_sol_surfaces,
@@ -147,7 +148,7 @@ gen6_update_sol_indices(struct brw_context *brw)
 const struct brw_tracked_state gen6_sol_indices = {
    .dirty = {
       .mesa = 0,
-      .brw = (BRW_NEW_BATCH |
+      .brw = (BRW_NEW_CONTEXT |
               BRW_NEW_SOL_INDICES),
       .cache = 0
    },
@@ -159,6 +160,7 @@ brw_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
 			     struct gl_transform_feedback_object *obj)
 {
    struct brw_context *brw = brw_context(ctx);
+   struct intel_context *intel = &brw->intel;
    const struct gl_shader_program *vs_prog =
       ctx->Shader.CurrentVertexProgram;
    const struct gl_transform_feedback_info *linked_xfb_info =
@@ -180,6 +182,14 @@ brw_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
    brw->sol.svbi_0_starting_index = 0;
    brw->sol.svbi_0_max_index = max_index;
    brw->sol.offset_0_batch_start = 0;
+
+   if (intel->gen >= 7) {
+      /* Ask the kernel to reset the SO offsets for any previous transform
+       * feedback, so we start at the start of the user's buffer. (note: these
+       * are not the query counters)
+       */
+      intel->batch.needs_sol_reset = true;
+   }
 }
 
 void

@@ -130,12 +130,16 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 0;
    case PIPE_CAP_QUERY_TIMESTAMP:
       return 1;
+   case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
+      return 0;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
       return 1;
    case PIPE_CAP_TEXTURE_SHADOW_MAP:
       return 1;
    case PIPE_CAP_TEXTURE_SWIZZLE:
       return 1;
+   case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
+      return 0;
    case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
       return LP_MAX_TEXTURE_2D_LEVELS;
    case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
@@ -152,9 +156,9 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
    case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
+   case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
       return 1;
    case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
-   case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
       return 0;
    case PIPE_CAP_PRIMITIVE_RESTART:
       return 1;
@@ -357,15 +361,17 @@ llvmpipe_is_format_supported( struct pipe_screen *_screen,
          return FALSE;
    }
 
+   /* TODO: Support Z32_FLOAT_S8X24_UINT. See lp_bld_depth.c. */
+   if (format_desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS &&
+       format_desc->block.bits > 32) {
+      return FALSE;
+   }
+
    if (bind & PIPE_BIND_DEPTH_STENCIL) {
       if (format_desc->layout != UTIL_FORMAT_LAYOUT_PLAIN)
          return FALSE;
 
       if (format_desc->colorspace != UTIL_FORMAT_COLORSPACE_ZS)
-         return FALSE;
-
-      /* TODO: Support Z32_FLOAT_S8X24_UINT. See lp_bld_depth.c. */
-      if (format_desc->block.bits > 32)
          return FALSE;
 
       /* TODO: Support stencil-only formats */
@@ -483,9 +489,10 @@ llvmpipe_create_screen(struct sw_winsys *winsys)
 {
    struct llvmpipe_screen *screen;
 
-#ifdef PIPE_ARCH_X86
-   /* require SSE2 due to LLVM PR6960. */
    util_cpu_detect();
+
+#if defined(PIPE_ARCH_X86) && HAVE_LLVM < 0x0302
+   /* require SSE2 due to LLVM PR6960. */
    if (!util_cpu_caps.has_sse2)
        return NULL;
 #endif

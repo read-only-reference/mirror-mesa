@@ -34,7 +34,6 @@
 #include "main/texobj.h"
 #include "main/hash.h"
 #include "main/fbobject.h"
-#include "main/mfeatures.h"
 #include "main/version.h"
 #include "swrast/s_renderbuffer.h"
 
@@ -55,47 +54,35 @@ PUBLIC const char __driConfigOptions[] =
 	 DRI_CONF_DESC_END
       DRI_CONF_OPT_END
 
-      DRI_CONF_OPT_BEGIN(texture_tiling, bool, true)
-	 DRI_CONF_DESC(en, "Enable texture tiling")
-      DRI_CONF_OPT_END
-
-      DRI_CONF_OPT_BEGIN(hiz, bool, true)
+      DRI_CONF_OPT_BEGIN_B(hiz, "true")
 	 DRI_CONF_DESC(en, "Enable Hierarchical Z on gen6+")
       DRI_CONF_OPT_END
 
-      DRI_CONF_OPT_BEGIN(early_z, bool, false)
+      DRI_CONF_OPT_BEGIN_B(early_z, "false")
 	 DRI_CONF_DESC(en, "Enable early Z in classic mode (unstable, 945-only).")
-      DRI_CONF_OPT_END
-
-      DRI_CONF_OPT_BEGIN(fragment_shader, bool, true)
-	 DRI_CONF_DESC(en, "Enable limited ARB_fragment_shader support on 915/945.")
       DRI_CONF_OPT_END
 
    DRI_CONF_SECTION_END
    DRI_CONF_SECTION_QUALITY
-      DRI_CONF_FORCE_S3TC_ENABLE(false)
+      DRI_CONF_FORCE_S3TC_ENABLE("false")
       DRI_CONF_ALLOW_LARGE_TEXTURES(2)
    DRI_CONF_SECTION_END
    DRI_CONF_SECTION_DEBUG
-     DRI_CONF_NO_RAST(false)
-     DRI_CONF_ALWAYS_FLUSH_BATCH(false)
-     DRI_CONF_ALWAYS_FLUSH_CACHE(false)
-     DRI_CONF_DISABLE_THROTTLING(false)
-     DRI_CONF_FORCE_GLSL_EXTENSIONS_WARN(false)
-     DRI_CONF_DISABLE_GLSL_LINE_CONTINUATIONS(false)
-     DRI_CONF_DISABLE_BLEND_FUNC_EXTENDED(false)
+      DRI_CONF_NO_RAST("false")
+      DRI_CONF_ALWAYS_FLUSH_BATCH("false")
+      DRI_CONF_ALWAYS_FLUSH_CACHE("false")
+      DRI_CONF_DISABLE_THROTTLING("false")
+      DRI_CONF_FORCE_GLSL_EXTENSIONS_WARN("false")
+      DRI_CONF_DISABLE_GLSL_LINE_CONTINUATIONS("false")
+      DRI_CONF_DISABLE_BLEND_FUNC_EXTENDED("false")
 
-      DRI_CONF_OPT_BEGIN(stub_occlusion_query, bool, false)
-	 DRI_CONF_DESC(en, "Enable stub ARB_occlusion_query support on 915/945.")
-      DRI_CONF_OPT_END
-
-      DRI_CONF_OPT_BEGIN(shader_precompile, bool, true)
+      DRI_CONF_OPT_BEGIN_B(shader_precompile, "true")
 	 DRI_CONF_DESC(en, "Perform code generation at shader link time.")
       DRI_CONF_OPT_END
    DRI_CONF_SECTION_END
 DRI_CONF_END;
 
-const GLuint __driNConfigOptions = 17;
+const GLuint __driNConfigOptions = 14;
 
 #include "intel_batchbuffer.h"
 #include "intel_buffers.h"
@@ -372,6 +359,9 @@ intel_create_image_from_name(__DRIscreen *screen,
     int cpp;
 
     image = intel_allocate_image(format, loaderPrivate);
+    if (image == NULL)
+       return NULL;
+
     if (image->format == MESA_FORMAT_NONE)
        cpp = 1;
     else
@@ -508,6 +498,9 @@ intel_create_image(__DRIscreen *screen,
    }
 
    image = intel_allocate_image(format, loaderPrivate);
+   if (image == NULL)
+      return NULL;
+
    cpp = _mesa_get_format_bytes(image->format);
    image->region =
       intel_region_alloc(intelScreen, tiling, cpp, width, height, true);
@@ -711,6 +704,9 @@ intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
     stride = parent->strides[index];
 
     image = intel_allocate_image(dri_format, loaderPrivate);
+    if (image == NULL)
+       return NULL;
+
     if (offset + height * stride > parent->region->bo->size) {
        _mesa_warning(NULL, "intel_create_sub_image: subimage out of bounds");
        free(image);
@@ -989,7 +985,6 @@ static bool
 intel_init_bufmgr(struct intel_screen *intelScreen)
 {
    __DRIscreen *spriv = intelScreen->driScrnPriv;
-   int num_fences = 0;
 
    intelScreen->no_hw = getenv("INTEL_NO_HW") != NULL;
 
@@ -1000,17 +995,12 @@ intel_init_bufmgr(struct intel_screen *intelScreen)
       return false;
    }
 
-   if (!intel_get_param(spriv, I915_PARAM_NUM_FENCES_AVAIL, &num_fences) ||
-       num_fences == 0) {
-      fprintf(stderr, "[%s: %u] Kernel 2.6.29 required.\n", __func__, __LINE__);
-      return false;
-   }
-
    drm_intel_bufmgr_gem_enable_fenced_relocs(intelScreen->bufmgr);
 
-   intelScreen->relaxed_relocations = 0;
-   intelScreen->relaxed_relocations |=
-      intel_get_boolean(spriv, I915_PARAM_HAS_RELAXED_DELTA) << 0;
+   if (!intel_get_boolean(spriv, I915_PARAM_HAS_RELAXED_DELTA)) {
+      fprintf(stderr, "[%s: %u] Kernel 2.6.39 required.\n", __func__, __LINE__);
+      return false;
+   }
 
    return true;
 }
@@ -1231,23 +1221,10 @@ set_max_gl_versions(struct intel_screen *screen)
       screen->max_gl_es2_version = 20;
       break;
    case 3: {
-      bool has_fragment_shader = driQueryOptionb(&screen->optionCache, "fragment_shader");
-      bool has_occlusion_query = driQueryOptionb(&screen->optionCache, "stub_occlusion_query");
-
       screen->max_gl_core_version = 0;
       screen->max_gl_es1_version = 11;
-
-      if (has_fragment_shader && has_occlusion_query) {
-         screen->max_gl_compat_version = 21;
-      } else {
-         screen->max_gl_compat_version = 14;
-      }
-
-      if (has_fragment_shader) {
-         screen->max_gl_es2_version = 20;
-      } else {
-         screen->max_gl_es2_version = 0;
-      }
+      screen->max_gl_compat_version = 21;
+      screen->max_gl_es2_version = 20;
 
       break;
    }

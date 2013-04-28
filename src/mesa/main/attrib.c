@@ -18,9 +18,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 #include "glheader.h"
@@ -43,7 +44,6 @@
 #include "lines.h"
 #include "macros.h"
 #include "matrix.h"
-#include "mfeatures.h"
 #include "multisample.h"
 #include "points.h"
 #include "polygon.h"
@@ -986,7 +986,9 @@ _mesa_PopAttrib(void)
                _mesa_set_enable(ctx, GL_INDEX_LOGIC_OP,
                                 color->IndexLogicOpEnabled);
                _mesa_set_enable(ctx, GL_DITHER, color->DitherFlag);
-               _mesa_ClampColor(GL_CLAMP_FRAGMENT_COLOR_ARB, color->ClampFragmentColor);
+               if (ctx->Extensions.ARB_color_buffer_float)
+                  _mesa_ClampColor(GL_CLAMP_FRAGMENT_COLOR_ARB,
+                                   color->ClampFragmentColor);
                _mesa_ClampColor(GL_CLAMP_READ_COLOR_ARB, color->ClampReadColor);
 
                /* GL_ARB_framebuffer_sRGB / GL_EXT_framebuffer_sRGB */
@@ -1114,7 +1116,10 @@ _mesa_PopAttrib(void)
                /* materials */
                memcpy(&ctx->Light.Material, &light->Material,
                       sizeof(struct gl_material));
-               _mesa_ClampColor(GL_CLAMP_VERTEX_COLOR_ARB, light->ClampVertexColor);
+               if (ctx->Extensions.ARB_color_buffer_float) {
+                  _mesa_ClampColor(GL_CLAMP_VERTEX_COLOR_ARB,
+                                   light->ClampVertexColor);
+               }
             }
             break;
          case GL_LINE_BIT:
@@ -1573,7 +1578,6 @@ _mesa_PopClientAttrib(void)
                copy_pixelstore(ctx, &ctx->Pack, store);
                _mesa_reference_buffer_object(ctx, &store->BufferObj, NULL);
             }
-	    ctx->NewState |= _NEW_PACKUNPACK;
             break;
          case GL_CLIENT_UNPACK_BIT:
             {
@@ -1582,7 +1586,6 @@ _mesa_PopClientAttrib(void)
                copy_pixelstore(ctx, &ctx->Unpack, store);
                _mesa_reference_buffer_object(ctx, &store->BufferObj, NULL);
             }
-	    ctx->NewState |= _NEW_PACKUNPACK;
             break;
          case GL_CLIENT_VERTEX_ARRAY_BIT: {
 	    struct gl_array_attrib * attr =

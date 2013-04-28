@@ -14,10 +14,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
- * OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors: Ben Skeggs
  *
@@ -130,8 +130,9 @@ nv30_resource_copy_region(struct pipe_context *pipe,
    struct nv30_rect src, dst;
 
    if (dstres->target == PIPE_BUFFER && srcres->target == PIPE_BUFFER) {
-      util_resource_copy_region(pipe, dstres, dst_level, dstx, dsty, dstz,
-                                      srcres, src_level, src_box);
+      nouveau_copy_buffer(&nv30->base,
+                          nv04_resource(dstres), dstx,
+                          nv04_resource(srcres), src_box->x, src_box->width);
       return;
    }
 

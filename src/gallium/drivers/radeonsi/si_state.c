@@ -30,6 +30,7 @@
 #include "util/u_helpers.h"
 #include "util/u_math.h"
 #include "util/u_pack_color.h"
+#include "util/u_format_s3tc.h"
 #include "tgsi/tgsi_parse.h"
 #include "radeonsi_pipe.h"
 #include "radeonsi_shader.h"
@@ -459,7 +460,7 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 
 	si_pm4_set_reg(pm4, R_028BDC_PA_SC_LINE_CNTL, 0x00000400);
 	si_pm4_set_reg(pm4, R_028BE4_PA_SU_VTX_CNTL,
-			S_028BE4_PIX_CENTER(state->gl_rasterization_rules));
+			S_028BE4_PIX_CENTER(state->half_pixel_center));
 	si_pm4_set_reg(pm4, R_028BE8_PA_CL_GB_VERT_CLIP_ADJ, 0x3F800000);
 	si_pm4_set_reg(pm4, R_028BEC_PA_CL_GB_VERT_DISC_ADJ, 0x3F800000);
 	si_pm4_set_reg(pm4, R_028BF0_PA_CL_GB_HORZ_CLIP_ADJ, 0x3F800000);
@@ -1164,6 +1165,8 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen,
 				       const struct util_format_description *desc,
 				       int first_non_void)
 {
+	struct r600_screen *rscreen = (struct r600_screen*)screen;
+	bool enable_s3tc = rscreen->info.drm_minor >= 31;
 	boolean uniform = TRUE;
 	int i;
 
@@ -1205,7 +1208,51 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen,
 		break;
 	}
 
-	/* TODO compressed formats */
+	if (desc->layout == UTIL_FORMAT_LAYOUT_RGTC) {
+		if (!enable_s3tc)
+			goto out_unknown;
+
+		switch (format) {
+		case PIPE_FORMAT_RGTC1_SNORM:
+		case PIPE_FORMAT_LATC1_SNORM:
+		case PIPE_FORMAT_RGTC1_UNORM:
+		case PIPE_FORMAT_LATC1_UNORM:
+			return V_008F14_IMG_DATA_FORMAT_BC4;
+		case PIPE_FORMAT_RGTC2_SNORM:
+		case PIPE_FORMAT_LATC2_SNORM:
+		case PIPE_FORMAT_RGTC2_UNORM:
+		case PIPE_FORMAT_LATC2_UNORM:
+			return V_008F14_IMG_DATA_FORMAT_BC5;
+		default:
+			goto out_unknown;
+		}
+	}
+
+	if (desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
+
+		if (!enable_s3tc)
+			goto out_unknown;
+
+		if (!util_format_s3tc_enabled) {
+			goto out_unknown;
+		}
+
+		switch (format) {
+		case PIPE_FORMAT_DXT1_RGB:
+		case PIPE_FORMAT_DXT1_RGBA:
+		case PIPE_FORMAT_DXT1_SRGB:
+		case PIPE_FORMAT_DXT1_SRGBA:
+			return V_008F14_IMG_DATA_FORMAT_BC1;
+		case PIPE_FORMAT_DXT3_RGBA:
+		case PIPE_FORMAT_DXT3_SRGBA:
+			return V_008F14_IMG_DATA_FORMAT_BC2;
+		case PIPE_FORMAT_DXT5_RGBA:
+		case PIPE_FORMAT_DXT5_SRGBA:
+			return V_008F14_IMG_DATA_FORMAT_BC3;
+		default:
+			goto out_unknown;
+		}
+	}
 
 	if (format == PIPE_FORMAT_R9G9B9E5_FLOAT) {
 		return V_008F14_IMG_DATA_FORMAT_5_9_9_9;
@@ -1541,67 +1588,16 @@ boolean si_is_format_supported(struct pipe_screen *screen,
 	return retval == usage;
 }
 
-static unsigned si_tile_mode_index(struct r600_resource_texture *rtex, unsigned level)
+static unsigned si_tile_mode_index(struct r600_resource_texture *rtex, unsigned level, bool stencil)
 {
-	if (util_format_is_depth_or_stencil(rtex->real_format)) {
-		if (rtex->surface.level[level].mode == RADEON_SURF_MODE_1D) {
-			return 4;
-		} else if (rtex->surface.level[level].mode == RADEON_SURF_MODE_2D) {
-			switch (rtex->real_format) {
-			case PIPE_FORMAT_Z16_UNORM:
-				return 5;
-			case PIPE_FORMAT_S8_UINT_Z24_UNORM:
-			case PIPE_FORMAT_X8Z24_UNORM:
-			case PIPE_FORMAT_Z24X8_UNORM:
-			case PIPE_FORMAT_Z24_UNORM_S8_UINT:
-			case PIPE_FORMAT_Z32_FLOAT:
-			case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
-				return 6;
-			default:
-				return 7;
-			}
-		}
-	}
+	unsigned tile_mode_index = 0;
 
-	switch (rtex->surface.level[level].mode) {
-	default:
-		assert(!"Invalid surface mode");
-		/* Fall through */
-	case RADEON_SURF_MODE_LINEAR_ALIGNED:
-		return 8;
-	case RADEON_SURF_MODE_1D:
-		if (rtex->surface.flags & RADEON_SURF_SCANOUT)
-			return 9;
-		else
-			return 13;
-	case RADEON_SURF_MODE_2D:
-		if (rtex->surface.flags & RADEON_SURF_SCANOUT) {
-			switch (util_format_get_blocksize(rtex->real_format)) {
-			case 1:
-				return 10;
-			case 2:
-				return 11;
-			default:
-				assert(!"Invalid block size");
-				/* Fall through */
-			case 4:
-				return 12;
-			}
-		} else {
-			switch (util_format_get_blocksize(rtex->real_format)) {
-			case 1:
-				return 14;
-			case 2:
-				return 15;
-			case 4:
-				return 16;
-			case 8:
-				return 17;
-			default:
-				return 13;
-			}
-		}
+	if (stencil) {
+		tile_mode_index = rtex->surface.stencil_tiling_index[level];
+	} else {
+		tile_mode_index = rtex->surface.tiling_index[level];
 	}
+	return tile_mode_index;
 }
 
 /*
@@ -1638,7 +1634,7 @@ static void si_cb(struct r600_context *rctx, struct si_pm4_state *pm4,
 		slice = slice - 1;
 	}
 
-	tile_mode_index = si_tile_mode_index(rtex, level);
+	tile_mode_index = si_tile_mode_index(rtex, level, false);
 
 	desc = util_format_description(surf->base.format);
 	for (i = 0; i < 4; i++) {
@@ -1780,15 +1776,9 @@ static void si_db(struct r600_context *rctx, struct si_pm4_state *pm4,
 	else
 		s_info = S_028044_FORMAT(V_028044_STENCIL_INVALID);
 
-	tile_mode_index = si_tile_mode_index(rtex, level);
-	if (tile_mode_index < 4 || tile_mode_index > 7) {
-		R600_ERR("Invalid DB tiling mode %d!\n",
-				 rtex->surface.level[level].mode);
-		si_pm4_set_reg(pm4, R_028040_DB_Z_INFO, S_028040_FORMAT(V_028040_Z_INVALID));
-		si_pm4_set_reg(pm4, R_028044_DB_STENCIL_INFO, S_028044_FORMAT(V_028044_STENCIL_INVALID));
-		return;
-	}
+	tile_mode_index = si_tile_mode_index(rtex, level, false);
 	z_info |= S_028040_TILE_MODE_INDEX(tile_mode_index);
+	tile_mode_index = si_tile_mode_index(rtex, level, true);
 	s_info |= S_028044_TILE_MODE_INDEX(tile_mode_index);
 
 	si_pm4_set_reg(pm4, R_028008_DB_DEPTH_VIEW,
@@ -1870,30 +1860,36 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
  */
 
 /* Compute the key for the hw shader variant */
-static INLINE struct si_shader_key si_shader_selector_key(struct pipe_context *ctx,
-							  struct si_pipe_shader_selector *sel)
+static INLINE void si_shader_selector_key(struct pipe_context *ctx,
+					  struct si_pipe_shader_selector *sel,
+					  union si_shader_key *key)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct si_shader_key key;
-	memset(&key, 0, sizeof(key));
+	memset(key, 0, sizeof(*key));
 
-	if (sel->type == PIPE_SHADER_FRAGMENT) {
+	if (sel->type == PIPE_SHADER_VERTEX) {
+		unsigned i;
+		if (!rctx->vertex_elements)
+			return;
+
+		for (i = 0; i < rctx->vertex_elements->count; ++i)
+			key->vs.instance_divisors[i] = rctx->vertex_elements->elements[i].instance_divisor;
+
+	} else if (sel->type == PIPE_SHADER_FRAGMENT) {
 		if (sel->fs_write_all)
-			key.nr_cbufs = rctx->framebuffer.nr_cbufs;
-		key.export_16bpc = rctx->export_16bpc;
+			key->ps.nr_cbufs = rctx->framebuffer.nr_cbufs;
+		key->ps.export_16bpc = rctx->export_16bpc;
 		if (rctx->queued.named.rasterizer) {
-			key.color_two_side = rctx->queued.named.rasterizer->two_side;
-			key.flatshade = rctx->queued.named.rasterizer->flatshade;
+			key->ps.color_two_side = rctx->queued.named.rasterizer->two_side;
+			key->ps.flatshade = rctx->queued.named.rasterizer->flatshade;
 		}
 		if (rctx->queued.named.dsa) {
-			key.alpha_func = rctx->queued.named.dsa->alpha_func;
-			key.alpha_ref = rctx->queued.named.dsa->alpha_ref;
+			key->ps.alpha_func = rctx->queued.named.dsa->alpha_func;
+			key->ps.alpha_ref = rctx->queued.named.dsa->alpha_ref;
 		} else {
-			key.alpha_func = PIPE_FUNC_ALWAYS;
+			key->ps.alpha_func = PIPE_FUNC_ALWAYS;
 		}
 	}
-
-	return key;
 }
 
 /* Select the hw shader variant depending on the current state.
@@ -1902,11 +1898,11 @@ int si_shader_select(struct pipe_context *ctx,
 		     struct si_pipe_shader_selector *sel,
 		     unsigned *dirty)
 {
-	struct si_shader_key key;
+	union si_shader_key key;
 	struct si_pipe_shader * shader = NULL;
 	int r;
 
-	key = si_shader_selector_key(ctx, sel);
+	si_shader_selector_key(ctx, sel, &key);
 
 	/* Check if we don't need to change anything.
 	 * This path is also used for most shaders that don't need multiple
@@ -1934,8 +1930,9 @@ int si_shader_select(struct pipe_context *ctx,
 	if (unlikely(!shader)) {
 		shader = CALLOC(1, sizeof(struct si_pipe_shader));
 		shader->selector = sel;
+		shader->key = key;
 
-		r = si_pipe_shader_create(ctx, shader, key);
+		r = si_pipe_shader_create(ctx, shader);
 		if (unlikely(r)) {
 			R600_ERR("Failed to build shader variant (type=%u) %d\n",
 				 sel->type, r);
@@ -1951,10 +1948,9 @@ int si_shader_select(struct pipe_context *ctx,
 		    sel->num_shaders == 0 &&
 		    shader->shader.fs_write_all) {
 			sel->fs_write_all = 1;
-			key = si_shader_selector_key(ctx, sel);
+			si_shader_selector_key(ctx, sel, &shader->key);
 		}
 
-		shader->key = key;
 		sel->num_shaders++;
 	}
 
@@ -2160,7 +2156,27 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 		break;
 	default:
 		if (first_non_void < 0) {
-			num_format = V_008F14_IMG_NUM_FORMAT_FLOAT;
+			if (util_format_is_compressed(pipe_format)) {
+				switch (pipe_format) {
+				case PIPE_FORMAT_DXT1_SRGB:
+				case PIPE_FORMAT_DXT1_SRGBA:
+				case PIPE_FORMAT_DXT3_SRGBA:
+				case PIPE_FORMAT_DXT5_SRGBA:
+					num_format = V_008F14_IMG_NUM_FORMAT_SRGB;
+					break;
+				case PIPE_FORMAT_RGTC1_SNORM:
+				case PIPE_FORMAT_LATC1_SNORM:
+				case PIPE_FORMAT_RGTC2_SNORM:
+				case PIPE_FORMAT_LATC2_SNORM:
+					num_format = V_008F14_IMG_NUM_FORMAT_SNORM;
+					break;
+				default:
+					num_format = V_008F14_IMG_NUM_FORMAT_UNORM;
+					break;
+				}
+			} else {
+				num_format = V_008F14_IMG_NUM_FORMAT_FLOAT;
+			}
 		} else if (desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB) {
 			num_format = V_008F14_IMG_NUM_FORMAT_SRGB;
 		} else {
@@ -2225,7 +2241,7 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 			  S_008F1C_DST_SEL_W(si_map_swizzle(swizzle[3])) |
 			  S_008F1C_BASE_LEVEL(state->u.tex.first_level) |
 			  S_008F1C_LAST_LEVEL(state->u.tex.last_level) |
-			  S_008F1C_TILING_INDEX(si_tile_mode_index(tmp, 0)) |
+			  S_008F1C_TILING_INDEX(si_tile_mode_index(tmp, 0, false)) |
 			  S_008F1C_POW2_PAD(texture->last_level > 0) |
 			  S_008F1C_TYPE(si_tex_dim(texture->target)));
 	view->state[4] = (S_008F20_DEPTH(depth - 1) | S_008F20_PITCH(pitch - 1));

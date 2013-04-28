@@ -29,6 +29,10 @@
 
 class backend_instruction : public exec_node {
 public:
+   bool is_tex();
+   bool is_math();
+   bool is_control_flow();
+
    enum opcode opcode; /* BRW_OPCODE_* or FS_OPCODE_* */
 
    uint32_t predicate;
@@ -42,7 +46,7 @@ public:
    struct intel_context *intel;
    struct gl_context *ctx;
    struct brw_shader *shader;
-   struct gl_shader_program *prog;
+   struct gl_shader_program *shader_prog;
 
    /** ralloc context for temporary data used during compile */
    void *mem_ctx;

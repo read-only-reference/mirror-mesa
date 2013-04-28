@@ -584,10 +584,11 @@ gen7_blorp_emit_depth_stencil_config(struct brw_context *brw,
    uint32_t draw_y = params->depth.y_offset;
    uint32_t tile_mask_x, tile_mask_y;
 
-   if (params->depth.mt) {
-      brw_get_depthstencil_tile_masks(params->depth.mt, NULL,
-                                      &tile_mask_x, &tile_mask_y);
-   }
+   brw_get_depthstencil_tile_masks(params->depth.mt,
+                                   params->depth.level,
+                                   params->depth.layer,
+                                   NULL,
+                                   &tile_mask_x, &tile_mask_y);
 
    /* 3DSTATE_DEPTH_BUFFER */
    {
@@ -764,17 +765,19 @@ gen7_blorp_exec(struct intel_context *intel,
                                                 depthstencil_offset);
    if (params->use_wm_prog) {
       uint32_t wm_surf_offset_renderbuffer;
-      uint32_t wm_surf_offset_texture;
+      uint32_t wm_surf_offset_texture = 0;
       wm_push_const_offset = gen6_blorp_emit_wm_constants(brw, params);
       wm_surf_offset_renderbuffer =
          gen7_blorp_emit_surface_state(brw, params, &params->dst,
                                        I915_GEM_DOMAIN_RENDER,
                                        I915_GEM_DOMAIN_RENDER,
                                        true /* is_render_target */);
-      wm_surf_offset_texture =
-         gen7_blorp_emit_surface_state(brw, params, &params->src,
-                                       I915_GEM_DOMAIN_SAMPLER, 0,
-                                       false /* is_render_target */);
+      if (params->src.mt) {
+         wm_surf_offset_texture =
+            gen7_blorp_emit_surface_state(brw, params, &params->src,
+                                          I915_GEM_DOMAIN_SAMPLER, 0,
+                                          false /* is_render_target */);
+      }
       wm_bind_bo_offset =
          gen6_blorp_emit_binding_table(brw, params,
                                        wm_surf_offset_renderbuffer,
@@ -806,13 +809,4 @@ gen7_blorp_exec(struct intel_context *intel,
    gen7_blorp_emit_clear_params(brw, params);
    gen6_blorp_emit_drawing_rectangle(brw, params);
    gen7_blorp_emit_primitive(brw, params);
-
-   /* See comments above at first invocation of intel_flush() in
-    * gen6_blorp_emit_batch_head().
-    */
-   intel_flush(ctx);
-
-   /* Be safe. */
-   brw->state.dirty.brw = ~0;
-   brw->state.dirty.cache = ~0;
 }

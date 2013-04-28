@@ -35,6 +35,10 @@ intelNewTextureObject(struct gl_context * ctx, GLuint name, GLenum target)
    (void) ctx;
 
    DBG("%s\n", __FUNCTION__);
+
+   if (obj == NULL)
+      return NULL;
+
    _mesa_initialize_texture_object(&obj->base, name, target);
 
    obj->needs_validate = true;
@@ -60,7 +64,6 @@ intel_alloc_texture_image_buffer(struct gl_context *ctx,
    struct intel_texture_image *intel_image = intel_texture_image(image);
    struct gl_texture_object *texobj = image->TexObject;
    struct intel_texture_object *intel_texobj = intel_texture_object(texobj);
-   GLuint slices;
 
    assert(image->Border == 0);
 
@@ -77,23 +80,8 @@ intel_alloc_texture_image_buffer(struct gl_context *ctx,
     */
    ctx->Driver.FreeTextureImageBuffer(ctx, image);
 
-   /* Allocate the swrast_texture_image::ImageOffsets array now */
-   switch (texobj->Target) {
-   case GL_TEXTURE_3D:
-   case GL_TEXTURE_2D_ARRAY:
-   case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
-      slices = image->Depth;
-      break;
-   case GL_TEXTURE_1D_ARRAY:
-      slices = image->Height;
-      break;
-   default:
-      slices = 1;
-   }
-   assert(!intel_image->base.ImageOffsets);
-   intel_image->base.ImageOffsets = malloc(slices * sizeof(GLuint));
-
-   _swrast_init_texture_image(image);
+   if (!_swrast_init_texture_image(image))
+      return false;
 
    if (intel_texobj->mt &&
        intel_miptree_match_image(intel_texobj->mt, image)) {
@@ -123,31 +111,6 @@ intel_alloc_texture_image_buffer(struct gl_context *ctx,
    return true;
 }
 
-/**
- * Called via ctx->Driver.AllocTextureStorage()
- * Just have to allocate memory for the texture images.
- */
-static GLboolean
-intel_alloc_texture_storage(struct gl_context *ctx,
-                            struct gl_texture_object *texObj,
-                            GLsizei levels, GLsizei width,
-                            GLsizei height, GLsizei depth)
-{
-   const int numFaces = _mesa_num_tex_faces(texObj->Target);
-   int face;
-   int level;
-
-   for (face = 0; face < numFaces; face++) {
-      for (level = 0; level < levels; level++) {
-         struct gl_texture_image *const texImage = texObj->Image[face][level];
-         if (!intel_alloc_texture_image_buffer(ctx, texImage))
-            return false;
-      }
-   }
-
-   return true;
-}
-
 static void
 intel_free_texture_image_buffer(struct gl_context * ctx,
 				struct gl_texture_image *texImage)
@@ -158,13 +121,7 @@ intel_free_texture_image_buffer(struct gl_context * ctx,
 
    intel_miptree_release(&intelImage->mt);
 
-   if (intelImage->base.Buffer) {
-      _mesa_align_free(intelImage->base.Buffer);
-      intelImage->base.Buffer = NULL;
-   }
-
-   free(intelImage->base.ImageOffsets);
-   intelImage->base.ImageOffsets = NULL;
+   _swrast_free_texture_image_buffer(ctx, texImage);
 }
 
 /**
@@ -227,7 +184,6 @@ intelInitTextureFuncs(struct dd_function_table *functions)
    functions->DeleteTexture = intelDeleteTextureObject;
    functions->AllocTextureImageBuffer = intel_alloc_texture_image_buffer;
    functions->FreeTextureImageBuffer = intel_free_texture_image_buffer;
-   functions->AllocTextureStorage = intel_alloc_texture_storage;
    functions->MapTextureImage = intel_map_texture_image;
    functions->UnmapTextureImage = intel_unmap_texture_image;
 }

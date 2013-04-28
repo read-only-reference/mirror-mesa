@@ -77,10 +77,8 @@ fs_live_variables::setup_def_use()
 	  * variable, and thus qualify for being in def[].
 	  */
 	 if (inst->dst.file == GRF &&
-	     inst->regs_written() == v->virtual_grf_sizes[inst->dst.reg] &&
-	     !inst->predicate &&
-	     !inst->force_uncompressed &&
-	     !inst->force_sechalf) {
+	     inst->regs_written == v->virtual_grf_sizes[inst->dst.reg] &&
+	     !inst->is_partial_write()) {
 	    int reg = inst->dst.reg;
             if (!BITSET_TEST(bd[b].use, reg))
                BITSET_SET(bd[b].def, reg);
@@ -142,8 +140,7 @@ fs_live_variables::fs_live_variables(fs_visitor *v, cfg_t *cfg)
    num_vars = v->virtual_grf_count;
    bd = rzalloc_array(mem_ctx, struct block_data, cfg->num_blocks);
 
-   bitset_words = (ALIGN(v->virtual_grf_count, BITSET_WORDBITS) /
-                   BITSET_WORDBITS);
+   bitset_words = BITSET_WORDS(v->virtual_grf_count);
    for (int i = 0; i < cfg->num_blocks; i++) {
       bd[i].def = rzalloc_array(mem_ctx, BITSET_WORD, bitset_words);
       bd[i].use = rzalloc_array(mem_ctx, BITSET_WORD, bitset_words);

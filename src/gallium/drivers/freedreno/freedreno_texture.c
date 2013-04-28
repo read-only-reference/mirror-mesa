@@ -87,13 +87,13 @@ fd_sampler_state_create(struct pipe_context *pctx,
 
 	/* SQ_TEX0_PITCH() must be OR'd in later when we know the bound texture: */
 	so->tex0 =
-		SQ_TEX0_CLAMP_X(tex_clamp(cso->wrap_s)) |
-		SQ_TEX0_CLAMP_Y(tex_clamp(cso->wrap_t)) |
-		SQ_TEX0_CLAMP_Z(tex_clamp(cso->wrap_r));
+		A2XX_SQ_TEX_0_CLAMP_X(tex_clamp(cso->wrap_s)) |
+		A2XX_SQ_TEX_0_CLAMP_Y(tex_clamp(cso->wrap_t)) |
+		A2XX_SQ_TEX_0_CLAMP_Z(tex_clamp(cso->wrap_r));
 
 	so->tex3 =
-		SQ_TEX3_XY_MAG_FILTER(tex_filter(cso->mag_img_filter)) |
-		SQ_TEX3_XY_MIN_FILTER(tex_filter(cso->min_img_filter));
+		A2XX_SQ_TEX_3_XY_MAG_FILTER(tex_filter(cso->mag_img_filter)) |
+		A2XX_SQ_TEX_3_XY_MIN_FILTER(tex_filter(cso->min_img_filter));
 
 	so->tex4 = 0x00000000; /* ??? */
 	so->tex5 = 0x00000200; /* ??? */
@@ -126,10 +126,10 @@ fd_sampler_view_create(struct pipe_context *pctx, struct pipe_resource *prsc,
 	so->tex_resource =  rsc;
 	so->fmt = fd_pipe2surface(cso->format);
 
-	so->tex0 = SQ_TEX0_PITCH(rsc->pitch);
+	so->tex0 = A2XX_SQ_TEX_0_PITCH(rsc->pitch);
 	so->tex2 =
-		SQ_TEX2_HEIGHT(prsc->height0) |
-		SQ_TEX2_WIDTH(prsc->width0);
+		A2XX_SQ_TEX_2_HEIGHT(prsc->height0 - 1) |
+		A2XX_SQ_TEX_2_WIDTH(prsc->width0 - 1);
 	so->tex3 = fd_tex_swiz(cso->format, cso->swizzle_r, cso->swizzle_g,
 			cso->swizzle_b, cso->swizzle_a);
 
@@ -185,6 +185,14 @@ fd_fragtex_sampler_states_bind(struct pipe_context *pctx,
 		unsigned nr, void **hwcso)
 {
 	struct fd_context *ctx = fd_context(pctx);
+
+	/* on a2xx, since there is a flat address space for textures/samplers,
+	 * a change in # of fragment textures/samplers will trigger patching and
+	 * re-emitting the vertex shader:
+	 */
+	if (nr != ctx->fragtex.num_samplers)
+		ctx->dirty |= FD_DIRTY_TEXSTATE;
+
 	bind_sampler_states(&ctx->fragtex, nr, hwcso);
 	ctx->dirty |= FD_DIRTY_FRAGTEX;
 }
@@ -195,6 +203,14 @@ fd_fragtex_set_sampler_views(struct pipe_context *pctx, unsigned nr,
 		struct pipe_sampler_view **views)
 {
 	struct fd_context *ctx = fd_context(pctx);
+
+	/* on a2xx, since there is a flat address space for textures/samplers,
+	 * a change in # of fragment textures/samplers will trigger patching and
+	 * re-emitting the vertex shader:
+	 */
+	if (nr != ctx->fragtex.num_textures)
+		ctx->dirty |= FD_DIRTY_TEXSTATE;
+
 	set_sampler_views(&ctx->fragtex, nr, views);
 	ctx->dirty |= FD_DIRTY_FRAGTEX;
 }
@@ -218,55 +234,24 @@ fd_verttex_set_sampler_views(struct pipe_context *pctx, unsigned nr,
 	ctx->dirty |= FD_DIRTY_VERTTEX;
 }
 
-static bool
-tex_cmp(struct fd_texture_stateobj *tex1, unsigned samp_id1,
-		struct fd_texture_stateobj *tex2, unsigned samp_id2)
-{
-	if ((samp_id1 >= tex1->num_samplers) ||
-			(samp_id2 >= tex2->num_samplers))
-		return false;
-
-	if ((tex1 == tex2) && (samp_id1 == samp_id2))
-		return true;
-
-	if (tex1->textures[samp_id1]->texture != tex2->textures[samp_id2]->texture)
-		return false;
-
-	if (memcmp(&tex1->samplers[samp_id1]->base, &tex2->samplers[samp_id2]->base,
-			sizeof(tex1->samplers[samp_id1]->base)))
-		return false;
-
-	return true;
-}
-
 /* map gallium sampler-id to hw const-idx.. adreno uses a flat address
  * space of samplers (const-idx), so we need to map the gallium sampler-id
  * which is per-shader to a global const-idx space.
+ *
+ * Fragment shader sampler maps directly to const-idx, and vertex shader
+ * is offset by the # of fragment shader samplers.  If the # of fragment
+ * shader samplers changes, this shifts the vertex shader indexes.
+ *
+ * TODO maybe we can do frag shader 0..N  and vert shader N..0 to avoid
+ * this??
  */
 unsigned
 fd_get_const_idx(struct fd_context *ctx, struct fd_texture_stateobj *tex,
 		unsigned samp_id)
 {
-	unsigned i, const_idx = 0;
-
-	/* TODO maybe worth having some sort of cache, because we need to
-	 * do this loop thru all the samplers both when patching shaders
-	 * and also when emitting sampler state..
-	 */
-
-	for (i = 0; i < ctx->verttex.num_samplers; i++) {
-		if (tex_cmp(&ctx->verttex, i, tex, samp_id))
-			return const_idx;
-		const_idx++;
-	}
-
-	for (i = 0; i < ctx->fragtex.num_samplers; i++) {
-		if (tex_cmp(&ctx->fragtex, i, tex, samp_id))
-			return const_idx;
-		const_idx++;
-	}
-
-	return const_idx;
+	if (tex == &ctx->fragtex)
+		return samp_id;
+	return samp_id + ctx->fragtex.num_samplers;
 }
 
 void

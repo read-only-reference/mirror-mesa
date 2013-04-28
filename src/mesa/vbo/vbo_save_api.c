@@ -74,7 +74,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "main/enums.h"
 #include "main/eval.h"
 #include "main/macros.h"
-#include "main/mfeatures.h"
 #include "main/api_validate.h"
 #include "main/api_arrayelt.h"
 #include "main/vtxfmt.h"
@@ -1559,8 +1558,7 @@ vbo_save_EndList(struct gl_context *ctx)
 
    /* EndList called inside a (saved) Begin/End pair?
     */
-   if (ctx->Driver.CurrentSavePrimitive != PRIM_OUTSIDE_BEGIN_END) {
-
+   if (_mesa_inside_dlist_begin_end(ctx)) {
       if (save->prim_count > 0) {
          GLint i = save->prim_count - 1;
          ctx->Driver.CurrentSavePrimitive = PRIM_OUTSIDE_BEGIN_END;

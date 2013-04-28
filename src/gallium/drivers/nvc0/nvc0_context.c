@@ -14,10 +14,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
- * OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 #include "pipe/p_defines.h"
@@ -130,6 +130,7 @@ nvc0_default_kick_notify(struct nouveau_pushbuf *push)
       if (screen->cur_ctx)
          screen->cur_ctx->state.flushed = TRUE;
    }
+   NOUVEAU_DRV_STAT(&screen->base, pushbuf_count, 1);
 }
 
 static int
@@ -213,6 +214,10 @@ nvc0_invalidate_resource_storage(struct nouveau_context *ctx,
    return ref;
 }
 
+static void
+nvc0_context_get_sample_position(struct pipe_context *, unsigned, unsigned,
+                                 float *);
+
 struct pipe_context *
 nvc0_create(struct pipe_screen *pscreen, void *priv)
 {
@@ -258,6 +263,7 @@ nvc0_create(struct pipe_screen *pscreen, void *priv)
 
    pipe->flush = nvc0_flush;
    pipe->texture_barrier = nvc0_texture_barrier;
+   pipe->get_sample_position = nvc0_context_get_sample_position;
 
    if (!screen->cur_ctx) {
       screen->cur_ctx = nvc0;
@@ -341,11 +347,55 @@ nvc0_bufctx_fence(struct nvc0_context *nvc0, struct nouveau_bufctx *bufctx,
 {
    struct nouveau_list *list = on_flush ? &bufctx->current : &bufctx->pending;
    struct nouveau_list *it;
+   NOUVEAU_DRV_STAT_IFD(unsigned count = 0);
 
    for (it = list->next; it != list; it = it->next) {
       struct nouveau_bufref *ref = (struct nouveau_bufref *)it;
       struct nv04_resource *res = ref->priv;
       if (res)
          nvc0_resource_validate(res, (unsigned)ref->priv_data);
+      NOUVEAU_DRV_STAT_IFD(count++);
    }
+   NOUVEAU_DRV_STAT(&nvc0->screen->base, resource_validate_count, count);
+}
+
+static void
+nvc0_context_get_sample_position(struct pipe_context *pipe,
+                                 unsigned sample_count, unsigned sample_index,
+                                 float *xy)
+{
+   static const uint8_t ms1[1][2] = { { 0x8, 0x8 } };
+   static const uint8_t ms2[2][2] = {
+      { 0x4, 0x4 }, { 0xc, 0xc } }; /* surface coords (0,0), (1,0) */
+   static const uint8_t ms4[4][2] = {
+      { 0x6, 0x2 }, { 0xe, 0x6 },   /* (0,0), (1,0) */
+      { 0x2, 0xa }, { 0xa, 0xe } }; /* (0,1), (1,1) */
+   static const uint8_t ms8[8][2] = {
+      { 0x1, 0x7 }, { 0x5, 0x3 },   /* (0,0), (1,0) */
+      { 0x3, 0xd }, { 0x7, 0xb },   /* (0,1), (1,1) */
+      { 0x9, 0x5 }, { 0xf, 0x1 },   /* (2,0), (3,0) */
+      { 0xb, 0xf }, { 0xd, 0x9 } }; /* (2,1), (3,1) */
+#if 0
+   /* NOTE: there are alternative modes for MS2 and MS8, currently not used */
+   static const uint8_t ms8_alt[8][2] = {
+      { 0x9, 0x5 }, { 0x7, 0xb },   /* (2,0), (1,1) */
+      { 0xd, 0x9 }, { 0x5, 0x3 },   /* (3,1), (1,0) */
+      { 0x3, 0xd }, { 0x1, 0x7 },   /* (0,1), (0,0) */
+      { 0xb, 0xf }, { 0xf, 0x1 } }; /* (2,1), (3,0) */
+#endif
+
+   const uint8_t (*ptr)[2];
+
+   switch (sample_count) {
+   case 0:
+   case 1: ptr = ms1; break;
+   case 2: ptr = ms2; break;
+   case 4: ptr = ms4; break;
+   case 8: ptr = ms8; break;
+   default:
+      assert(0);
+      break;
+   }
+   xy[0] = ptr[sample_index][0] * 0.0625f;
+   xy[1] = ptr[sample_index][1] * 0.0625f;
 }

@@ -45,6 +45,9 @@ brw_blorp_blit_miptrees(struct intel_context *intel,
                         int dst_x1, int dst_y1,
                         bool mirror_x, bool mirror_y);
 
+bool
+brw_blorp_clear_color(struct intel_context *intel, struct gl_framebuffer *fb);
+
 #ifdef __cplusplus
 } /* end extern "C" */
 
@@ -67,6 +70,17 @@ public:
             unsigned int level, unsigned int layer);
 
    struct intel_mipmap_tree *mt;
+
+   /**
+    * The miplevel to use.
+    */
+   uint32_t level;
+
+   /**
+    * The 2D layer within the miplevel. Combined, level and layer define the
+    * 2D miptree slice to use.
+    */
+   uint32_t layer;
 
    /**
     * Width of the miplevel to be used.  For surfaces using
@@ -200,6 +214,7 @@ public:
    unsigned num_samples;
    bool use_wm_prog;
    brw_blorp_wm_push_constants wm_push_consts;
+   bool color_write_disable[4];
 };
 
 

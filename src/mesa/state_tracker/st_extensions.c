@@ -29,7 +29,6 @@
 #include "main/imports.h"
 #include "main/context.h"
 #include "main/macros.h"
-#include "main/mfeatures.h"
 #include "main/version.h"
 
 #include "pipe/p_context.h"
@@ -38,7 +37,7 @@
 
 #include "st_context.h"
 #include "st_extensions.h"
-
+#include "st_format.h"
 
 static int _min(int a, int b)
 {
@@ -398,7 +397,8 @@ void st_init_extensions(struct st_context *st)
       { o(MESA_texture_array),               PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS         },
 
       { o(OES_standard_derivatives),         PIPE_CAP_SM3                              },
-      { o(ARB_texture_cube_map_array),       PIPE_CAP_CUBE_MAP_ARRAY                   }
+      { o(ARB_texture_cube_map_array),       PIPE_CAP_CUBE_MAP_ARRAY                   },
+      { o(ARB_texture_multisample),          PIPE_CAP_TEXTURE_MULTISAMPLE              }
    };
 
    /* Required: render target and sampler support */
@@ -629,6 +629,7 @@ void st_init_extensions(struct st_context *st)
       ctx->Const.PrimitiveRestartInSoftware = GL_TRUE;
    }
 
+   /* ARB_color_buffer_float. */
    if (screen->get_param(screen, PIPE_CAP_VERTEX_COLOR_UNCLAMPED)) {
       ctx->Extensions.ARB_color_buffer_float = GL_TRUE;
 
@@ -639,6 +640,16 @@ void st_init_extensions(struct st_context *st)
       if (!screen->get_param(screen, PIPE_CAP_FRAGMENT_COLOR_CLAMPED)) {
          st->clamp_frag_color_in_shader = TRUE;
       }
+
+      /* For drivers which cannot do color clamping, it's better to just
+       * disable ARB_color_buffer_float in the core profile, because
+       * the clamping is deprecated there anyway. */
+      if (ctx->API == API_OPENGL_CORE &&
+          (st->clamp_frag_color_in_shader || st->clamp_vert_color_in_shader)) {
+         st->clamp_vert_color_in_shader = GL_FALSE;
+         st->clamp_frag_color_in_shader = GL_FALSE;
+         ctx->Extensions.ARB_color_buffer_float = GL_FALSE;
+      }
    }
 
    if (screen->fence_finish) {
@@ -647,10 +658,33 @@ void st_init_extensions(struct st_context *st)
 
    /* Maximum sample count. */
    for (i = 16; i > 0; --i) {
-      if (screen->is_format_supported(screen, PIPE_FORMAT_B8G8R8A8_UNORM,
-                                      PIPE_TEXTURE_2D, i,
-                                      PIPE_BIND_RENDER_TARGET)) {
+      enum pipe_format pformat = st_choose_format(st, GL_RGBA,
+                                                  GL_NONE, GL_NONE,
+                                                  PIPE_TEXTURE_2D, i,
+                                                  PIPE_BIND_RENDER_TARGET, FALSE);
+      if (pformat != PIPE_FORMAT_NONE) {
          ctx->Const.MaxSamples = i;
+         ctx->Const.MaxColorTextureSamples = i;
+         break;
+      }
+   }
+   for (i = ctx->Const.MaxSamples; i > 0; --i) {
+      enum pipe_format pformat = st_choose_format(st, GL_DEPTH_STENCIL,
+                                                  GL_NONE, GL_NONE,
+                                                  PIPE_TEXTURE_2D, i,
+                                                  PIPE_BIND_DEPTH_STENCIL, FALSE);
+      if (pformat != PIPE_FORMAT_NONE) {
+         ctx->Const.MaxDepthTextureSamples = i;
+         break;
+      }
+   }
+   for (i = ctx->Const.MaxSamples; i > 0; --i) {
+      enum pipe_format pformat = st_choose_format(st, GL_RGBA_INTEGER,
+                                                  GL_NONE, GL_NONE,
+                                                  PIPE_TEXTURE_2D, i,
+                                                  PIPE_BIND_RENDER_TARGET, FALSE);
+      if (pformat != PIPE_FORMAT_NONE) {
+         ctx->Const.MaxIntegerSamples = i;
          break;
       }
    }
@@ -678,7 +712,10 @@ void st_init_extensions(struct st_context *st)
       ctx->Extensions.ARB_transform_feedback_instanced = GL_TRUE;
    }
    if (st->options.force_glsl_extensions_warn)
-	   ctx->Const.ForceGLSLExtensionsWarn = 1;
+      ctx->Const.ForceGLSLExtensionsWarn = 1;
+
+   if (st->options.disable_glsl_line_continuations)
+      ctx->Const.DisableGLSLLineContinuations = 1;
 
    ctx->Const.MinMapBufferAlignment =
       screen->get_param(screen, PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT);

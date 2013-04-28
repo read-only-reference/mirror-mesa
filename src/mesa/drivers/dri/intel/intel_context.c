@@ -186,6 +186,13 @@ intelGetString(struct gl_context * ctx, GLenum name)
       case PCI_CHIP_IVYBRIDGE_S_GT2:
 	 chipset = "Intel(R) Ivybridge Server";
 	 break;
+      case PCI_CHIP_BAYTRAIL_M_1:
+      case PCI_CHIP_BAYTRAIL_M_2:
+      case PCI_CHIP_BAYTRAIL_M_3:
+      case PCI_CHIP_BAYTRAIL_M_4:
+      case PCI_CHIP_BAYTRAIL_D:
+         chipset = "Intel(R) Bay Trail";
+         break;
       case PCI_CHIP_HASWELL_GT1:
       case PCI_CHIP_HASWELL_GT2:
       case PCI_CHIP_HASWELL_GT2_PLUS:
@@ -682,6 +689,9 @@ intelInitContext(struct intel_context *intel,
 
    if (IS_HASWELL(devID)) {
       intel->is_haswell = true;
+   } else if (IS_BAYTRAIL(devID)) {
+      intel->is_baytrail = true;
+      intel->gt = 1;
    } else if (IS_G4X(devID)) {
       intel->is_g4x = true;
    } else if (IS_945(devID)) {
@@ -694,7 +704,7 @@ intelInitContext(struct intel_context *intel,
 
    intel->has_separate_stencil = intel->intelScreen->hw_has_separate_stencil;
    intel->must_use_separate_stencil = intel->intelScreen->hw_must_use_separate_stencil;
-   intel->has_hiz = intel->gen >= 6 && !intel->is_haswell;
+   intel->has_hiz = intel->gen >= 6;
    intel->has_llc = intel->intelScreen->hw_has_llc;
    intel->has_swizzling = intel->intelScreen->hw_has_swizzling;
 
@@ -707,6 +717,23 @@ intelInitContext(struct intel_context *intel,
       intel->maxBatchSize = 4096;
    else
       intel->maxBatchSize = BATCH_SZ;
+
+   /* Estimate the size of the mappable aperture into the GTT.  There's an
+    * ioctl to get the whole GTT size, but not one to get the mappable subset.
+    * It turns out it's basically always 256MB, though some ancient hardware
+    * was smaller.
+    */
+   uint32_t gtt_size = 256 * 1024 * 1024;
+   if (intel->gen == 2)
+      gtt_size = 128 * 1024 * 1024;
+
+   /* We don't want to map two objects such that a memcpy between them would
+    * just fault one mapping in and then the other over and over forever.  So
+    * we would need to divide the GTT size by 2.  Additionally, some GTT is
+    * taken up by things like the framebuffer and the ringbuffer and such, so
+    * be more conservative.
+    */
+   intel->max_gtt_map_object_size = gtt_size / 4;
 
    intel->bufmgr = intelScreen->bufmgr;
 
@@ -811,8 +838,6 @@ intelInitContext(struct intel_context *intel,
 
    intel_fbo_init(intel);
 
-   intel->use_texture_tiling = driQueryOptionb(&intel->optionCache,
-					       "texture_tiling");
    intel->use_early_z = driQueryOptionb(&intel->optionCache, "early_z");
 
    if (!driQueryOptionb(&intel->optionCache, "hiz")) {
@@ -1041,7 +1066,6 @@ intel_query_dri2_buffers(struct intel_context *intel,
    struct gl_framebuffer *fb = drawable->driverPrivate;
    int i = 0;
    unsigned attachments[8];
-   const int max_attachments = ARRAY_SIZE(attachments) / 2;
 
    struct intel_renderbuffer *front_rb;
    struct intel_renderbuffer *back_rb;
@@ -1062,7 +1086,7 @@ intel_query_dri2_buffers(struct intel_context *intel,
       attachments[i++] = intel_bits_per_pixel(back_rb);
    }
 
-   assert(i <= 2 * max_attachments);
+   assert(i <= ARRAY_SIZE(attachments));
 
    *buffers = screen->dri2.loader->getBuffersWithFormat(drawable,
 							&drawable->w,

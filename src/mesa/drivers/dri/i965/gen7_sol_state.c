@@ -45,7 +45,7 @@ upload_3dstate_so_buffers(struct brw_context *brw)
       ctx->Shader.CurrentVertexProgram;
    const struct gl_transform_feedback_info *linked_xfb_info =
       &vs_prog->LinkedTransformFeedback;
-   /* _NEW_TRANSFORM_FEEDBACK */
+   /* BRW_NEW_TRANSFORM_FEEDBACK */
    struct gl_transform_feedback_object *xfb_obj =
       ctx->TransformFeedback.CurrentObject;
    int i;
@@ -82,12 +82,14 @@ upload_3dstate_so_buffers(struct brw_context *brw)
       end = ALIGN(start + xfb_obj->Size[i], 4);
       assert(end <= bo->size);
 
-      /* Offset the starting offset by the current vertex index into the
-       * feedback buffer, offset register is always set to 0 at the start of the
-       * batchbuffer.
+      /* If we don't have hardware contexts, then we reset our offsets at the
+       * start of every batch, so we track the number of vertices written in
+       * software and increment our pointers by that many.
        */
-      start += brw->sol.offset_0_batch_start * stride;
-      assert(start <= end);
+      if (!intel->hw_ctx) {
+         start += brw->sol.offset_0_batch_start * stride;
+         assert(start <= end);
+      }
 
       BEGIN_BATCH(4);
       OUT_BATCH(_3DSTATE_SO_BUFFER << 16 | (4 - 2));
@@ -114,7 +116,7 @@ upload_3dstate_so_decl_list(struct brw_context *brw,
    /* BRW_NEW_VERTEX_PROGRAM */
    const struct gl_shader_program *vs_prog =
       ctx->Shader.CurrentVertexProgram;
-   /* _NEW_TRANSFORM_FEEDBACK */
+   /* BRW_NEW_TRANSFORM_FEEDBACK */
    const struct gl_transform_feedback_info *linked_xfb_info =
       &vs_prog->LinkedTransformFeedback;
    int i;
@@ -187,13 +189,13 @@ upload_3dstate_streamout(struct brw_context *brw, bool active,
 {
    struct intel_context *intel = &brw->intel;
    struct gl_context *ctx = &intel->ctx;
-   /* _NEW_TRANSFORM_FEEDBACK */
+   /* BRW_NEW_TRANSFORM_FEEDBACK */
    struct gl_transform_feedback_object *xfb_obj =
       ctx->TransformFeedback.CurrentObject;
    uint32_t dw1 = 0, dw2 = 0;
    int i;
 
-   /* _NEW_RASTERIZER_DISCARD */
+   /* BRW_NEW_RASTERIZER_DISCARD */
    if (ctx->RasterDiscard)
       dw1 |= SO_RENDERING_DISABLE;
 
@@ -236,7 +238,7 @@ upload_sol_state(struct brw_context *brw)
 {
    struct intel_context *intel = &brw->intel;
    struct gl_context *ctx = &intel->ctx;
-   /* _NEW_TRANSFORM_FEEDBACK */
+   /* BRW_NEW_TRANSFORM_FEEDBACK */
    bool active = _mesa_is_xfb_active_and_unpaused(ctx);
 
    if (active) {
@@ -244,7 +246,11 @@ upload_sol_state(struct brw_context *brw)
       /* BRW_NEW_VUE_MAP_GEOM_OUT */
       upload_3dstate_so_decl_list(brw, &brw->vue_map_geom_out);
 
-      intel->batch.needs_sol_reset = true;
+      /* If we don't have hardware contexts, then some other client may have
+       * changed the SO write offsets, and we need to rewrite them.
+       */
+      if (!intel->hw_ctx)
+         intel->batch.needs_sol_reset = true;
    }
 
    /* Finally, set up the SOL stage.  This command must always follow updates to
@@ -257,12 +263,12 @@ upload_sol_state(struct brw_context *brw)
 
 const struct brw_tracked_state gen7_sol_state = {
    .dirty = {
-      .mesa  = (_NEW_RASTERIZER_DISCARD |
-		_NEW_LIGHT |
-		_NEW_TRANSFORM_FEEDBACK),
+      .mesa  = (_NEW_LIGHT),
       .brw   = (BRW_NEW_BATCH |
 		BRW_NEW_VERTEX_PROGRAM |
-                BRW_NEW_VUE_MAP_GEOM_OUT)
+                BRW_NEW_VUE_MAP_GEOM_OUT |
+                BRW_NEW_TRANSFORM_FEEDBACK |
+                BRW_NEW_RASTERIZER_DISCARD)
    },
    .emit = upload_sol_state,
 };

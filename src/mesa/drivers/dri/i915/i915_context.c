@@ -44,8 +44,6 @@
 #include "i915_reg.h"
 #include "i915_program.h"
 
-#include "intel_span.h"
-
 /***************************************
  * Mesa's Driver Functions
  ***************************************/
@@ -104,6 +102,8 @@ intel_init_texture_formats(struct gl_context *ctx)
    if (intel_screen->deviceID != PCI_CHIP_I830_M &&
        intel_screen->deviceID != PCI_CHIP_845_G)
       ctx->TextureFormatSupported[MESA_FORMAT_XRGB8888] = true;
+   if (intel->gen == 3)
+      ctx->TextureFormatSupported[MESA_FORMAT_SARGB8] = true;
    ctx->TextureFormatSupported[MESA_FORMAT_ARGB4444] = true;
    ctx->TextureFormatSupported[MESA_FORMAT_ARGB1555] = true;
    ctx->TextureFormatSupported[MESA_FORMAT_RGB565] = true;
@@ -181,7 +181,6 @@ i915CreateContext(int api,
    _math_matrix_ctr(&intel->ViewportMatrix);
 
    /* Initialize swrast, tnl driver tables: */
-   intelInitSpanFuncs(ctx);
    intelInitTriFuncs(ctx);
 
    /* Install the customized pipeline: */
@@ -262,6 +261,7 @@ i915CreateContext(int api,
    fs_options->EmitNoIndirectTemp = true;
 
    ctx->Const.MaxDrawBuffers = 1;
+   ctx->Const.QueryCounterBits.SamplesPassed = 0;
 
    _tnl_init_vertices(ctx, ctx->Const.MaxArrayLockSize + 12,
                       36 * sizeof(GLfloat));

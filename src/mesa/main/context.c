@@ -18,9 +18,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 /**
@@ -77,7 +78,6 @@
 
 
 #include "glheader.h"
-#include "mfeatures.h"
 #include "imports.h"
 #include "accum.h"
 #include "api_exec.h"
@@ -924,7 +924,6 @@ create_beginend_table(const struct gl_context *ctx)
    COPY_DISPATCH(MapBuffer);
    COPY_DISPATCH(UnmapBuffer);
    COPY_DISPATCH(MapBufferRange);
-   COPY_DISPATCH(MapBufferRange);
    COPY_DISPATCH(ObjectPurgeableAPPLE);
    COPY_DISPATCH(ObjectUnpurgeableAPPLE);
 
@@ -1080,6 +1079,7 @@ _mesa_initialize_context(struct gl_context *ctx,
    return GL_TRUE;
 
 fail:
+   _mesa_reference_shared_state(ctx, &ctx->Shared, NULL);
    free(ctx->BeginEnd);
    free(ctx->Exec);
    free(ctx->Save);
@@ -1180,6 +1180,7 @@ _mesa_free_context_data( struct gl_context *ctx )
    _mesa_reference_buffer_object(ctx, &ctx->Array.ArrayBufferObj, NULL);
 
    /* free dispatch tables */
+   free(ctx->BeginEnd);
    free(ctx->Exec);
    free(ctx->Save);
 

@@ -960,7 +960,7 @@ static void *r600_create_rs_state(struct pipe_context *ctx,
 	r600_store_context_reg(&rs->buffer, R_0286D4_SPI_INTERP_CONTROL_0, spi_interp);
 	r600_store_context_reg(&rs->buffer, R_028A4C_PA_SC_MODE_CNTL, sc_mode_cntl);
 	r600_store_context_reg(&rs->buffer, R_028C08_PA_SU_VTX_CNTL,
-			       S_028C08_PIX_CENTER_HALF(state->gl_rasterization_rules) |
+			       S_028C08_PIX_CENTER_HALF(state->half_pixel_center) |
 			       S_028C08_QUANT_MODE(V_028C08_X_1_256TH));
 	r600_store_context_reg(&rs->buffer, R_028DFC_PA_SU_POLY_OFFSET_CLAMP, fui(state->offset_clamp));
 	r600_store_context_reg(&rs->buffer, R_028814_PA_SU_SC_MODE_CNTL,
@@ -1027,17 +1027,19 @@ texture_buffer_sampler_view(struct r600_pipe_sampler_view *view,
 	uint64_t va;
 	int stride = util_format_get_blocksize(view->base.format);
 	unsigned format, num_format, format_comp, endian;
+	unsigned offset = view->base.u.buf.first_element * stride;
+	unsigned size = (view->base.u.buf.last_element - view->base.u.buf.first_element + 1) * stride;
 
 	r600_vertex_data_type(view->base.format,
 			      &format, &num_format, &format_comp,
 			      &endian);
 
-	va = r600_resource_va(ctx->screen, view->base.texture);
+	va = r600_resource_va(ctx->screen, view->base.texture) + offset;
 	view->tex_resource = &tmp->resource;
 
 	view->skip_mip_address_reloc = true;
 	view->tex_resource_words[0] = va;
-	view->tex_resource_words[1] = width0 - 1;
+	view->tex_resource_words[1] = size - 1;
 	view->tex_resource_words[2] = S_038008_BASE_ADDRESS_HI(va >> 32UL) |
 		S_038008_STRIDE(stride) |
 		S_038008_DATA_FORMAT(format) |
@@ -1530,6 +1532,7 @@ static void r600_init_depth_surface(struct r600_context *rctx,
 		surf->db_htile_data_base = va >> 8;
 		surf->db_htile_surface = S_028D24_HTILE_WIDTH(1) |
 					S_028D24_HTILE_HEIGHT(1) |
+					S_028D24_FULL_CACHE(1) |
 					S_028D24_LINEAR(1);
 		/* preload is not working properly on r6xx/r7xx */
 		surf->db_depth_info |= S_028010_TILE_SURFACE_ENABLE(1);
@@ -1684,24 +1687,65 @@ static void r600_set_framebuffer_state(struct pipe_context *ctx,
 	(((s2x) & 0xf) << 16) | (((s2y) & 0xf) << 20) |	   \
 	 (((s3x) & 0xf) << 24) | (((s3y) & 0xf) << 28))
 
+
+static uint32_t sample_locs_2x[] = {
+	FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
+	FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
+};
+static unsigned max_dist_2x = 4;
+
+static uint32_t sample_locs_4x[] = {
+	FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
+	FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
+};
+static unsigned max_dist_4x = 6;
+static uint32_t sample_locs_8x[] = {
+	FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
+	FILL_SREG(-7, -1, -3, -7,  7, -3, -5,  7),
+};
+static unsigned max_dist_8x = 7;
+
+static void r600_get_sample_position(struct pipe_context *ctx,
+				     unsigned sample_count,
+				     unsigned sample_index,
+				     float *out_value)
+{
+	int offset, index;
+	struct {
+		int idx:4;
+	} val;
+	switch (sample_count) {
+	case 1:
+	default:
+		out_value[0] = out_value[1] = 0.5;
+		break;
+	case 2:
+		offset = 4 * (sample_index * 2);
+		val.idx = (sample_locs_2x[0] >> offset) & 0xf;
+		out_value[0] = (float)(val.idx + 8) / 16.0f;
+		val.idx = (sample_locs_2x[0] >> (offset + 4)) & 0xf;
+		out_value[1] = (float)(val.idx + 8) / 16.0f;
+		break;
+	case 4:
+		offset = 4 * (sample_index * 2);
+		val.idx = (sample_locs_4x[0] >> offset) & 0xf;
+		out_value[0] = (float)(val.idx + 8) / 16.0f;
+		val.idx = (sample_locs_4x[0] >> (offset + 4)) & 0xf;
+		out_value[1] = (float)(val.idx + 8) / 16.0f;
+		break;
+	case 8:
+		offset = 4 * (sample_index % 4 * 2);
+		index = (sample_index / 4);
+		val.idx = (sample_locs_8x[index] >> offset) & 0xf;
+		out_value[0] = (float)(val.idx + 8) / 16.0f;
+		val.idx = (sample_locs_8x[index] >> (offset + 4)) & 0xf;
+		out_value[1] = (float)(val.idx + 8) / 16.0f;
+		break;
+	}
+}
+
 static void r600_emit_msaa_state(struct r600_context *rctx, int nr_samples)
 {
-	static uint32_t sample_locs_2x[] = {
-		FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
-		FILL_SREG(-4, 4, 4, -4, -4, 4, 4, -4),
-	};
-	static unsigned max_dist_2x = 4;
-	static uint32_t sample_locs_4x[] = {
-		FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
-		FILL_SREG(-2, -2, 2, 2, -6, 6, 6, -6),
-	};
-	static unsigned max_dist_4x = 6;
-	static uint32_t sample_locs_8x[] = {
-		FILL_SREG(-1,  1,  1,  5,  3, -5,  5,  3),
-		FILL_SREG(-7, -1, -3, -7,  7, -3, -5,  7),
-	};
-	static unsigned max_dist_8x = 7;
-
 	struct radeon_winsys_cs *cs = rctx->rings.gfx.cs;
 	unsigned max_dist = 0;
 
@@ -3209,5 +3253,7 @@ void r600_init_state_functions(struct r600_context *rctx)
 	rctx->context.set_framebuffer_state = r600_set_framebuffer_state;
 	rctx->context.set_polygon_stipple = r600_set_polygon_stipple;
 	rctx->context.set_scissor_state = r600_set_scissor_state;
+
+	rctx->context.get_sample_position = r600_get_sample_position;
 }
 /* this function must be last */

@@ -132,12 +132,10 @@ enum brw_state_id {
    BRW_STATE_URB_FENCE,
    BRW_STATE_FRAGMENT_PROGRAM,
    BRW_STATE_VERTEX_PROGRAM,
-   BRW_STATE_INPUT_DIMENSIONS,
    BRW_STATE_CURBE_OFFSETS,
    BRW_STATE_REDUCED_PRIMITIVE,
    BRW_STATE_PRIMITIVE,
    BRW_STATE_CONTEXT,
-   BRW_STATE_WM_INPUT_DIMENSIONS,
    BRW_STATE_PSP,
    BRW_STATE_SURFACES,
    BRW_STATE_VS_BINDING_TABLE,
@@ -146,25 +144,24 @@ enum brw_state_id {
    BRW_STATE_INDICES,
    BRW_STATE_VERTICES,
    BRW_STATE_BATCH,
-   BRW_STATE_NR_WM_SURFACES,
-   BRW_STATE_NR_VS_SURFACES,
    BRW_STATE_INDEX_BUFFER,
    BRW_STATE_VS_CONSTBUF,
    BRW_STATE_PROGRAM_CACHE,
    BRW_STATE_STATE_BASE_ADDRESS,
    BRW_STATE_SOL_INDICES,
    BRW_STATE_VUE_MAP_GEOM_OUT,
+   BRW_STATE_TRANSFORM_FEEDBACK,
+   BRW_STATE_RASTERIZER_DISCARD,
+   BRW_STATE_STATS_WM,
 };
 
 #define BRW_NEW_URB_FENCE               (1 << BRW_STATE_URB_FENCE)
 #define BRW_NEW_FRAGMENT_PROGRAM        (1 << BRW_STATE_FRAGMENT_PROGRAM)
 #define BRW_NEW_VERTEX_PROGRAM          (1 << BRW_STATE_VERTEX_PROGRAM)
-#define BRW_NEW_INPUT_DIMENSIONS        (1 << BRW_STATE_INPUT_DIMENSIONS)
 #define BRW_NEW_CURBE_OFFSETS           (1 << BRW_STATE_CURBE_OFFSETS)
 #define BRW_NEW_REDUCED_PRIMITIVE       (1 << BRW_STATE_REDUCED_PRIMITIVE)
 #define BRW_NEW_PRIMITIVE               (1 << BRW_STATE_PRIMITIVE)
 #define BRW_NEW_CONTEXT                 (1 << BRW_STATE_CONTEXT)
-#define BRW_NEW_WM_INPUT_DIMENSIONS     (1 << BRW_STATE_WM_INPUT_DIMENSIONS)
 #define BRW_NEW_PSP                     (1 << BRW_STATE_PSP)
 #define BRW_NEW_SURFACES		(1 << BRW_STATE_SURFACES)
 #define BRW_NEW_VS_BINDING_TABLE	(1 << BRW_STATE_VS_BINDING_TABLE)
@@ -184,6 +181,9 @@ enum brw_state_id {
 #define BRW_NEW_STATE_BASE_ADDRESS	(1 << BRW_STATE_STATE_BASE_ADDRESS)
 #define BRW_NEW_SOL_INDICES		(1 << BRW_STATE_SOL_INDICES)
 #define BRW_NEW_VUE_MAP_GEOM_OUT	(1 << BRW_STATE_VUE_MAP_GEOM_OUT)
+#define BRW_NEW_TRANSFORM_FEEDBACK	(1 << BRW_STATE_TRANSFORM_FEEDBACK)
+#define BRW_NEW_RASTERIZER_DISCARD	(1 << BRW_STATE_RASTERIZER_DISCARD)
+#define BRW_NEW_STATS_WM		(1 << BRW_STATE_STATS_WM)
 
 struct brw_state_flags {
    /** State update flags signalled by mesa internals */
@@ -406,6 +406,9 @@ static inline GLuint brw_varying_to_offset(struct brw_vue_map *vue_map,
    return brw_vue_slot_to_offset(vue_map->varying_to_slot[varying]);
 }
 
+void brw_compute_vue_map(struct brw_context *brw, struct brw_vue_map *vue_map,
+                         GLbitfield64 slots_valid, bool userclip_active);
+
 
 struct brw_sf_prog_data {
    GLuint urb_read_length;
@@ -438,10 +441,11 @@ struct brw_gs_prog_data {
    unsigned svbi_postincrement_value;
 };
 
-/* Note: brw_vs_prog_data_compare() must be updated when adding fields to this
- * struct!
+
+/* Note: brw_vec4_prog_data_compare() must be updated when adding fields to
+ * this struct!
  */
-struct brw_vs_prog_data {
+struct brw_vec4_prog_data {
    struct brw_vue_map vue_map;
 
    GLuint curb_read_length;
@@ -451,19 +455,29 @@ struct brw_vs_prog_data {
    GLuint nr_pull_params; /**< number of dwords referenced by pull_param[] */
    GLuint total_scratch;
 
-   GLbitfield64 inputs_read;
-
-   /* Used for calculating urb partitions:
+   /* Used for calculating urb partitions.  In the VS, this is the size of the
+    * URB entry used for both input and output to the thread.  In the GS, this
+    * is the size of the URB entry used for output.
     */
    GLuint urb_entry_size;
 
-   bool uses_vertexid;
-
    int num_surfaces;
 
-   /* These pointers must appear last.  See brw_vs_prog_data_compare(). */
+   /* These pointers must appear last.  See brw_vec4_prog_data_compare(). */
    const float **param;
    const float **pull_param;
+};
+
+
+/* Note: brw_vs_prog_data_compare() must be updated when adding fields to this
+ * struct!
+ */
+struct brw_vs_prog_data {
+   struct brw_vec4_prog_data base;
+
+   GLbitfield64 inputs_read;
+
+   bool uses_vertexid;
 };
 
 /** Number of texture sampler units */
@@ -597,6 +611,7 @@ enum brw_cache_id {
    BRW_CC_UNIT,
    BRW_WM_PROG,
    BRW_BLORP_BLIT_PROG,
+   BRW_BLORP_CLEAR_PROG,
    BRW_SAMPLER,
    BRW_WM_UNIT,
    BRW_SF_PROG,
@@ -735,12 +750,6 @@ struct brw_vertex_element {
    unsigned int offset;
 };
 
-
-
-struct brw_vertex_info {
-   GLuint sizes[ATTRIB_BIT_DWORDS * 2]; /* sizes:2[VERT_ATTRIB_MAX] */
-};
-
 struct brw_query_object {
    struct gl_query_object Base;
 
@@ -795,7 +804,6 @@ struct brw_context
       /* Summary of size and varying of active arrays, so we can check
        * for changes to this state:
        */
-      struct brw_vertex_info info;
       unsigned int min_index, max_index;
 
       /* Offset from start of vertex buffer so we can avoid redefining
@@ -858,15 +866,6 @@ struct brw_context
       GLuint nr_clip_entries;
       GLuint nr_sf_entries;
       GLuint nr_cs_entries;
-
-      /* gen6:
-       * The length of each URB entry owned by the VS (or GS), as
-       * a number of 1024-bit (128-byte) rows.  Should be >= 1.
-       *
-       * gen7: Same meaning, but in 512-bit (64-byte) rows.
-       */
-      GLuint vs_size;
-      GLuint gs_size;
 
       GLuint vs_start;
       GLuint gs_start;
@@ -1002,11 +1001,6 @@ struct brw_context
    struct {
       struct brw_wm_prog_data *prog_data;
 
-      /** Input sizes, calculated from active vertex program.
-       * One bit per fragment program input attribute.
-       */
-      GLbitfield64 input_size_masks[4];
-
       /** offsets in the batch to sampler default colors (texture border color)
        */
       uint32_t sdc_offset[BRW_MAX_TEX_UNIT];
@@ -1110,7 +1104,6 @@ struct brw_context
    struct {
       struct intel_mipmap_tree *depth_mt;
       struct intel_mipmap_tree *stencil_mt;
-      struct intel_mipmap_tree *hiz_mt;
 
       /* Inter-tile (page-aligned) byte offsets. */
       uint32_t depth_offset, hiz_offset, stencil_offset;
@@ -1154,6 +1147,8 @@ bool brwCreateContext(int api,
  * brw_misc_state.c
  */
 void brw_get_depthstencil_tile_masks(struct intel_mipmap_tree *depth_mt,
+                                     uint32_t depth_level,
+                                     uint32_t depth_layer,
                                      struct intel_mipmap_tree *stencil_mt,
                                      uint32_t *out_tile_mask_x,
                                      uint32_t *out_tile_mask_y);
@@ -1351,6 +1346,29 @@ struct opcode_desc {
 };
 
 extern const struct opcode_desc opcode_descs[128];
+
+void
+brw_emit_depthbuffer(struct brw_context *brw);
+
+void
+brw_emit_depth_stencil_hiz(struct brw_context *brw,
+                           struct intel_mipmap_tree *depth_mt,
+                           uint32_t depth_offset, uint32_t depthbuffer_format,
+                           uint32_t depth_surface_type,
+                           struct intel_mipmap_tree *stencil_mt,
+                           bool hiz, bool separate_stencil,
+                           uint32_t width, uint32_t height,
+                           uint32_t tile_x, uint32_t tile_y);
+
+void
+gen7_emit_depth_stencil_hiz(struct brw_context *brw,
+                            struct intel_mipmap_tree *depth_mt,
+                            uint32_t depth_offset, uint32_t depthbuffer_format,
+                            uint32_t depth_surface_type,
+                            struct intel_mipmap_tree *stencil_mt,
+                            bool hiz, bool separate_stencil,
+                            uint32_t width, uint32_t height,
+                            uint32_t tile_x, uint32_t tile_y);
 
 #ifdef __cplusplus
 }

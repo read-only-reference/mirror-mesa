@@ -14,10 +14,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
- * OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 #include "nvc0_video.h"
@@ -356,19 +356,19 @@ nvc0_create_decoder(struct pipe_context *context,
          goto fw_fail;
       }
       r = read(fd, dec->fw_bo->map, 0x4000);
+      close(fd);
+
       if (r < 0) {
          fprintf(stderr, "reading firmware file %s failed: %m\n", path);
          goto fw_fail;
       }
 
       if (r == 0x4000) {
-         close(fd);
          fprintf(stderr, "firmware file %s too large!\n", path);
          goto fw_fail;
       }
 
       if (r & 0xff) {
-         close(fd);
          fprintf(stderr, "firmware file %s wrong size!\n", path);
          goto fw_fail;
       }

@@ -135,6 +135,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
         /* Unsupported features. */
         case PIPE_CAP_QUERY_TIME_ELAPSED:
+        case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
         case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
         case PIPE_CAP_INDEP_BLEND_ENABLE:
         case PIPE_CAP_INDEP_BLEND_FUNC:
@@ -161,6 +162,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_CUBE_MAP_ARRAY:
         case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
         case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
+        case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
             return 0;
 
         /* SWTCL-only features. */

@@ -16,9 +16,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 
@@ -233,7 +234,8 @@ compute_version(struct gl_context *ctx)
    const GLboolean ver_3_0 = (ver_2_1 &&
                               ctx->Const.GLSLVersion >= 130 &&
                               ctx->Const.MaxSamples >= 4 &&
-                              ctx->Extensions.ARB_color_buffer_float &&
+                              (ctx->API == API_OPENGL_CORE ||
+                               ctx->Extensions.ARB_color_buffer_float) &&
                               ctx->Extensions.ARB_depth_buffer_float &&
                               ctx->Extensions.ARB_half_float_pixel &&
                               ctx->Extensions.ARB_half_float_vertex &&

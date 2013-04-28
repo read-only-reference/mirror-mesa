@@ -17,9 +17,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 /**
@@ -757,7 +758,8 @@ _mesa_meta_begin(struct gl_context *ctx, GLbitfield state)
        * it's for the pixel path (ClampFragmentColor is GL_TRUE),
        * regardless of the internal implementation of the metaops.
        */
-      if (ctx->Color.ClampFragmentColor != GL_TRUE)
+      if (ctx->Color.ClampFragmentColor != GL_TRUE &&
+          ctx->Extensions.ARB_color_buffer_float)
 	 _mesa_ClampColor(GL_CLAMP_FRAGMENT_COLOR, GL_FALSE);
    }
 
@@ -767,7 +769,8 @@ _mesa_meta_begin(struct gl_context *ctx, GLbitfield state)
       /* Generally in here we never want vertex color clamping --
        * result clamping is only dependent on fragment clamping.
        */
-      _mesa_ClampColor(GL_CLAMP_VERTEX_COLOR, GL_FALSE);
+      if (ctx->Extensions.ARB_color_buffer_float)
+         _mesa_ClampColor(GL_CLAMP_VERTEX_COLOR, GL_FALSE);
    }
 
    if (state & MESA_META_CONDITIONAL_RENDER) {
@@ -1091,11 +1094,13 @@ _mesa_meta_end(struct gl_context *ctx)
       _mesa_DepthRange(save->DepthNear, save->DepthFar);
    }
 
-   if (state & MESA_META_CLAMP_FRAGMENT_COLOR) {
+   if (state & MESA_META_CLAMP_FRAGMENT_COLOR &&
+       ctx->Extensions.ARB_color_buffer_float) {
       _mesa_ClampColor(GL_CLAMP_FRAGMENT_COLOR, save->ClampFragmentColor);
    }
 
-   if (state & MESA_META_CLAMP_VERTEX_COLOR) {
+   if (state & MESA_META_CLAMP_VERTEX_COLOR &&
+       ctx->Extensions.ARB_color_buffer_float) {
       _mesa_ClampColor(GL_CLAMP_VERTEX_COLOR, save->ClampVertexColor);
    }
 
@@ -2044,7 +2049,8 @@ _mesa_meta_Clear(struct gl_context *ctx, GLbitfield buffers)
       /* leave colormask, glDrawBuffer state as-is */
 
       /* Clears never have the color clamped. */
-      _mesa_ClampColor(GL_CLAMP_FRAGMENT_COLOR, GL_FALSE);
+      if (ctx->Extensions.ARB_color_buffer_float)
+         _mesa_ClampColor(GL_CLAMP_FRAGMENT_COLOR, GL_FALSE);
    }
    else {
       ASSERT(metaSave & MESA_META_COLOR_MASK);
@@ -2295,7 +2301,8 @@ _mesa_meta_glsl_Clear(struct gl_context *ctx, GLbitfield buffers)
       /* leave colormask, glDrawBuffer state as-is */
 
       /* Clears never have the color clamped. */
-      _mesa_ClampColor(GL_CLAMP_FRAGMENT_COLOR, GL_FALSE);
+      if (ctx->Extensions.ARB_color_buffer_float)
+         _mesa_ClampColor(GL_CLAMP_FRAGMENT_COLOR, GL_FALSE);
    }
    else {
       ASSERT(metaSave & MESA_META_COLOR_MASK);
@@ -3042,16 +3049,33 @@ _mesa_meta_check_generate_mipmap_fallback(struct gl_context *ctx, GLenum target,
    GLenum status;
 
    /* check for fallbacks */
-   if (!ctx->Extensions.EXT_framebuffer_object ||
-       target == GL_TEXTURE_3D ||
+   if (!ctx->Extensions.EXT_framebuffer_object) {
+      _mesa_perf_debug(ctx, MESA_DEBUG_SEVERITY_HIGH,
+                       "glGenerateMipmap() without FBOs\n");
+      return GL_TRUE;
+   }
+
+   if (target == GL_TEXTURE_3D ||
        target == GL_TEXTURE_1D_ARRAY ||
        target == GL_TEXTURE_2D_ARRAY) {
+      _mesa_perf_debug(ctx, MESA_DEBUG_SEVERITY_HIGH,
+                       "glGenerateMipmap() to %s target\n",
+                       _mesa_lookup_enum_by_nr(target));
       return GL_TRUE;
    }
 
    srcLevel = texObj->BaseLevel;
    baseImage = _mesa_select_tex_image(ctx, texObj, target, srcLevel);
-   if (!baseImage || _mesa_is_format_compressed(baseImage->TexFormat)) {
+   if (!baseImage) {
+      _mesa_perf_debug(ctx, MESA_DEBUG_SEVERITY_HIGH,
+                       "glGenerateMipmap() couldn't find base teximage\n");
+      return GL_TRUE;
+   }
+
+   if (_mesa_is_format_compressed(baseImage->TexFormat)) {
+      _mesa_perf_debug(ctx, MESA_DEBUG_SEVERITY_HIGH,
+                       "glGenerateMipmap() with %s format\n",
+                       _mesa_get_format_name(baseImage->TexFormat));
       return GL_TRUE;
    }
 
@@ -3061,6 +3085,9 @@ _mesa_meta_check_generate_mipmap_fallback(struct gl_context *ctx, GLenum target,
        * texture sample conversion.  So we won't be able to generate the
        * right colors when rendering.  Need to use a fallback.
        */
+      _mesa_perf_debug(ctx, MESA_DEBUG_SEVERITY_HIGH,
+                       "glGenerateMipmap() of sRGB texture without "
+                       "sRGB decode\n");
       return GL_TRUE;
    }
 
@@ -3097,6 +3124,8 @@ _mesa_meta_check_generate_mipmap_fallback(struct gl_context *ctx, GLenum target,
    _mesa_BindFramebuffer(GL_FRAMEBUFFER_EXT, fboSave);
 
    if (status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+      _mesa_perf_debug(ctx, MESA_DEBUG_SEVERITY_HIGH,
+                       "glGenerateMipmap() got incomplete FBO\n");
       return GL_TRUE;
    }
 

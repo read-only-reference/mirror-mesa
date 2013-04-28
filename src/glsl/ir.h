@@ -131,6 +131,7 @@ public:
    virtual class ir_swizzle *           as_swizzle()          { return NULL; }
    virtual class ir_constant *          as_constant()         { return NULL; }
    virtual class ir_discard *           as_discard()          { return NULL; }
+   virtual class ir_jump *              as_jump()             { return NULL; }
    /*@}*/
 
 protected:
@@ -273,7 +274,8 @@ enum ir_variable_mode {
    ir_var_function_inout,
    ir_var_const_in,	/**< "in" param that must be a constant expression */
    ir_var_system_value, /**< Ex: front-face, instance-id, etc. */
-   ir_var_temporary	/**< Temporary variable generated during compilation. */
+   ir_var_temporary,	/**< Temporary variable generated during compilation. */
+   ir_var_mode_count	/**< Number of variable modes */
 };
 
 /**
@@ -1296,6 +1298,12 @@ protected:
    ir_jump()
    {
       ir_type = ir_type_unset;
+   }
+
+public:
+   virtual ir_jump *as_jump()
+   {
+      return this;
    }
 };
 

@@ -47,11 +47,14 @@
 #include <llvm/Support/Threading.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Scalar.h>
+#include <llvm/Wrap.h>
 #include <llvm-c/Target.h>
 
 #include <iostream>
 #include <stdlib.h>
 #include <stdio.h>
+#include <libelf.h>
+#include <gelf.h>
 
 using namespace llvm;
 
@@ -96,9 +99,8 @@ radeon_llvm_shader_type(LLVMValueRef F, unsigned type)
  * caller's responsibility to free it.
  */
 extern "C" unsigned
-radeon_llvm_compile(LLVMModuleRef M, unsigned char ** bytes,
-                 unsigned * byte_count, const char * gpu_family,
-                 unsigned dump) {
+radeon_llvm_compile(LLVMModuleRef M, struct radeon_llvm_binary *binary,
+                 const char * gpu_family, unsigned dump) {
 
    Triple AMDGPUTriple(sys::getDefaultTargetTriple());
 
@@ -155,9 +157,42 @@ radeon_llvm_compile(LLVMModuleRef M, unsigned char ** bytes,
    out.flush();
    std::string &data = oStream.str();
 
-   *bytes = (unsigned char*)malloc(data.length() * sizeof(unsigned char));
-   memcpy(*bytes, data.c_str(), data.length() * sizeof(unsigned char));
-   *byte_count = data.length();
+   char *elf_buffer;
+
+   /* One of the libelf implementations (http://www.mr511.de/software/english.htm)
+    * requires calling elf_version() before elf_memory().
+    */
+   elf_version(EV_CURRENT);
+   elf_buffer = (char*)malloc(data.length());
+   memcpy(elf_buffer, data.c_str(), data.length());
+
+   Elf *elf = elf_memory(elf_buffer, data.length());
+   Elf_Scn *section = NULL;
+   size_t section_str_index;
+
+   elf_getshdrstrndx(elf, &section_str_index);
+
+   while ((section = elf_nextscn(elf, section))) {
+      const char *name;
+      Elf_Data *section_data = NULL;
+      GElf_Shdr section_header;
+      if (gelf_getshdr(section, &section_header) != &section_header) {
+         fprintf(stderr, "Failed to read ELF section header\n");
+         return 1;
+      }
+      name = elf_strptr(elf, section_str_index, section_header.sh_name);
+      if (!strcmp(name, ".text")) {
+         section_data = elf_getdata(section, section_data);
+         binary->code_size = section_data->d_size;
+         binary->code = (unsigned char*)malloc(binary->code_size * sizeof(unsigned char));
+         memcpy(binary->code, section_data->d_buf, binary->code_size);
+      } else if (!strcmp(name, ".AMDGPU.config")) {
+         section_data = elf_getdata(section, section_data);
+         binary->config_size = section_data->d_size;
+         binary->config = (unsigned char*)malloc(binary->config_size * sizeof(unsigned char));
+         memcpy(binary->config, section_data->d_buf, binary->config_size);
+      }
+   }
 
    return 0;
 }

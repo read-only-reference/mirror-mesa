@@ -18,9 +18,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 /** 
@@ -32,6 +33,7 @@
 
 #include "main/glheader.h"
 #include "main/context.h"
+#include "main/blend.h"
 #include "main/enums.h"
 #include "main/macros.h"
 #include "main/mtypes.h"
@@ -680,7 +682,7 @@ _mesa_GetTexEnvfv( GLenum target, GLenum pname, GLfloat *params )
       if (pname == GL_TEXTURE_ENV_COLOR) {
          if(ctx->NewState & (_NEW_BUFFERS | _NEW_FRAG_CLAMP))
             _mesa_update_state(ctx);
-         if(ctx->Color._ClampFragmentColor)
+         if (_mesa_get_clamp_fragment_color(ctx))
             COPY_4FV( params, texUnit->EnvColor );
          else
             COPY_4FV( params, texUnit->EnvColorUnclamped );

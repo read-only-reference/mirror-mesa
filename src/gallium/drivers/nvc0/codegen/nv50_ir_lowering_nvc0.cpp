@@ -14,10 +14,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
- * OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 #include "nv50/codegen/nv50_ir.h"
@@ -662,6 +662,7 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
 {
    const int dim = i->tex.target.getDim() + i->tex.target.isCube();
    const int arg = i->tex.target.getArgCount();
+   const int lyr = arg - (i->tex.target.isMS() ? 2 : 1);
 
    if (prog->getTarget()->getChipset() >= NVISA_GK104_CHIPSET) {
       if (i->tex.rIndirectSrc >= 0 || i->tex.sIndirectSrc >= 0) {
@@ -683,7 +684,7 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
       }
       if (i->tex.target.isArray()) {
          LValue *layer = new_LValue(func, FILE_GPR);
-         Value *src = i->getSrc(arg - 1);
+         Value *src = i->getSrc(lyr);
          const int sat = (i->op == OP_TXF) ? 1 : 0;
          DataType sTy = (i->op == OP_TXF) ? TYPE_U32 : TYPE_F32;
          bld.mkCvt(OP_CVT, TYPE_U16, layer, sTy, src)->saturate = sat;
@@ -696,7 +697,7 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
    if (dim != arg || i->tex.rIndirectSrc >= 0 || i->tex.sIndirectSrc >= 0) {
       LValue *src = new_LValue(func, FILE_GPR); // 0xttxsaaaa
 
-      Value *arrayIndex = i->tex.target.isArray() ? i->getSrc(arg - 1) : NULL;
+      Value *arrayIndex = i->tex.target.isArray() ? i->getSrc(lyr) : NULL;
       for (int s = dim; s >= 1; --s)
          i->setSrc(s, i->getSrc(s - 1));
       i->setSrc(0, arrayIndex);
@@ -728,11 +729,29 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
    if (i->tex.useOffsets) {
       uint32_t value = 0;
       int n, c;
-      int s = i->srcCount(0xff);
+      int s = i->srcCount(0xff, true);
+      if (i->srcExists(s)) // move potential predicate out of the way
+         i->moveSources(s, 1);
       for (n = 0; n < i->tex.useOffsets; ++n)
          for (c = 0; c < 3; ++c)
             value |= (i->tex.offset[n][c] & 0xf) << (n * 12 + c * 4);
       i->setSrc(s, bld.loadImm(NULL, value));
+   }
+
+   if (prog->getTarget()->getChipset() >= NVISA_GK104_CHIPSET) {
+      //
+      // If TEX requires more than 4 sources, the 2nd register tuple must be
+      // aligned to 4, even if it consists of just a single 4-byte register.
+      //
+      // XXX HACK: We insert 0 sources to avoid the 5 or 6 regs case.
+      //
+      int s = i->srcCount(0xff, true);
+      if (s > 4 && s < 7) {
+         if (i->srcExists(s)) // move potential predicate out of the way
+            i->moveSources(s, 7 - s);
+         while (s < 7)
+            i->setSrc(s++, bld.loadImm(NULL, 0));
+      }
    }
 
    return true;
@@ -1471,7 +1490,7 @@ NVC0LoweringPass::checkPredicate(Instruction *insn)
    // CAUTION: don't use pdst->getInsn, the definition might not be unique,
    //  delay turning PSET(FSET(x,y),0) into PSET(x,y) to a later pass
 
-   bld.mkCmp(OP_SET, CC_NEU, TYPE_U32, pdst, bld.mkImm(0), pred);
+   bld.mkCmp(OP_SET, CC_NEU, insn->dType, pdst, bld.mkImm(0), pred);
 
    insn->setPredicate(insn->cc, pdst);
 }

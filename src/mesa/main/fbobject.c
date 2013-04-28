@@ -18,9 +18,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 
@@ -42,7 +43,6 @@
 #include "glformats.h"
 #include "hash.h"
 #include "macros.h"
-#include "mfeatures.h"
 #include "multisample.h"
 #include "mtypes.h"
 #include "renderbuffer.h"
@@ -784,6 +784,8 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
    numImages = 0;
    fb->Width = 0;
    fb->Height = 0;
+   fb->_AllColorBuffersFixedPoint = GL_TRUE;
+   fb->_HasSNormOrFloatColorBuffer = GL_FALSE;
 
    /* Start at -2 to more easily loop over all attachment points.
     *  -2: depth buffer
@@ -899,6 +901,19 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
 
       /* check if integer color */
       fb->_IntegerColor = _mesa_is_format_integer_color(attFormat);
+
+      /* Update _AllColorBuffersFixedPoint and _HasSNormOrFloatColorBuffer. */
+      if (i >= 0) {
+         GLenum type = _mesa_get_format_datatype(attFormat);
+
+         fb->_AllColorBuffersFixedPoint =
+            fb->_AllColorBuffersFixedPoint &&
+            (type == GL_UNSIGNED_NORMALIZED || type == GL_SIGNED_NORMALIZED);
+
+         fb->_HasSNormOrFloatColorBuffer =
+            fb->_HasSNormOrFloatColorBuffer ||
+            type == GL_SIGNED_NORMALIZED || type == GL_FLOAT;
+      }
 
       /* Error-check width, height, format */
       if (numImages == 1) {
@@ -2710,7 +2725,7 @@ _mesa_GenerateMipmap(GLenum target)
 
    GET_CURRENT_CONTEXT(ctx);
 
-   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
+   FLUSH_VERTICES(ctx, 0);
 
    switch (target) {
    case GL_TEXTURE_1D:
@@ -2894,7 +2909,7 @@ _mesa_BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
    const struct gl_framebuffer *readFb, *drawFb;
    GET_CURRENT_CONTEXT(ctx);
 
-   FLUSH_VERTICES(ctx, _NEW_BUFFERS);
+   FLUSH_VERTICES(ctx, 0);
 
    if (MESA_VERBOSE & VERBOSE_API)
       _mesa_debug(ctx,

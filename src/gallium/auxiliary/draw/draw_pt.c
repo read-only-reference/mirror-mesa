@@ -34,6 +34,7 @@
 #include "draw/draw_gs.h"
 #include "draw/draw_private.h"
 #include "draw/draw_pt.h"
+#include "draw/draw_vbuf.h"
 #include "draw/draw_vs.h"
 #include "tgsi/tgsi_dump.h"
 #include "util/u_math.h"
@@ -451,6 +452,28 @@ draw_arrays_instanced(struct draw_context *draw,
    draw_vbo(draw, &info);
 }
 
+/**
+ * Resolve true values within pipe_draw_info.
+ * If we're rendering from transform feedback/stream output
+ * buffers both the count and max_index need to be computed
+ * from the attached stream output target. 
+ */
+static void
+resolve_draw_info(const struct pipe_draw_info *raw_info,
+                  struct pipe_draw_info *info)
+{
+   memcpy(info, raw_info, sizeof(struct pipe_draw_info));
+
+   if (raw_info->count_from_stream_output) {
+      struct draw_so_target *target =
+         (struct draw_so_target *)info->count_from_stream_output;
+      info->count = target->emitted_vertices;
+
+      /* Stream output draw can not be indexed */
+      debug_assert(!info->indexed);
+      info->max_index = info->count - 1;
+   }
+}
 
 /**
  * Draw vertex arrays.
@@ -465,9 +488,16 @@ draw_vbo(struct draw_context *draw,
    unsigned instance;
    unsigned index_limit;
    unsigned count;
+   struct pipe_draw_info resolved_info;
+
+   resolve_draw_info(info, &resolved_info);
+   info = &resolved_info;
+
    assert(info->instance_count > 0);
    if (info->indexed)
       assert(draw->pt.user.elts);
+   
+   count = info->count;
 
    draw->pt.user.eltBias = info->index_bias;
    draw->pt.user.min_index = info->min_index;
@@ -516,13 +546,12 @@ draw_vbo(struct draw_context *draw,
       return;
    }
 
-   draw->pt.max_index = index_limit - 1;
-
-   count = info->count;
-   if (count == 0) {
-      if (info->count_from_stream_output)
-         count = draw->pt.max_index + 1;
+   /* If we're collecting stats then make sure we start from scratch */
+   if (draw->collect_statistics) {
+      memset(&draw->statistics, 0, sizeof(draw->statistics));
    }
+
+   draw->pt.max_index = index_limit - 1;
 
    /*
     * TODO: We could use draw->pt.max_index to further narrow
@@ -532,11 +561,18 @@ draw_vbo(struct draw_context *draw,
    for (instance = 0; instance < info->instance_count; instance++) {
       draw->instance_id = instance + info->start_instance;
 
+      draw_new_instance(draw);
+
       if (info->primitive_restart) {
          draw_pt_arrays_restart(draw, info);
       }
       else {
          draw_pt_arrays(draw, info->mode, info->start, count);
       }
+   }
+
+   /* If requested emit the pipeline statistics for this run */
+   if (draw->collect_statistics) {
+      draw->render->pipeline_statistics(draw->render, &draw->statistics);
    }
 }

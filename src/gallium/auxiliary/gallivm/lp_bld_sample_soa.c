@@ -1089,7 +1089,7 @@ lp_build_sample_common(struct lp_build_sample_context *bld,
    const unsigned min_filter = bld->static_sampler_state->min_img_filter;
    const unsigned mag_filter = bld->static_sampler_state->mag_img_filter;
    const unsigned target = bld->static_texture_state->target;
-   LLVMValueRef first_level;
+   LLVMValueRef first_level, cube_rho = NULL;
 
    /*
    printf("%s mip %d  min %d  mag %d\n", __FUNCTION__,
@@ -1097,11 +1097,18 @@ lp_build_sample_common(struct lp_build_sample_context *bld,
    */
 
    /*
-    * Choose cube face, recompute texcoords and derivatives for the chosen face.
+    * Choose cube face, recompute texcoords for the chosen face and
+    * compute rho here too (as it requires transform of derivatives).
     */
    if (target == PIPE_TEXTURE_CUBE) {
       LLVMValueRef face, face_s, face_t;
-      lp_build_cube_lookup(bld, *s, *t, *r, &face, &face_s, &face_t);
+      boolean need_derivs;
+      need_derivs = ((min_filter != mag_filter ||
+                      mip_filter != PIPE_TEX_MIPFILTER_NONE) &&
+                      !bld->static_sampler_state->min_max_lod_equal &&
+                      !explicit_lod);
+      lp_build_cube_lookup(bld, *s, *t, *r, derivs, &face, &face_s, &face_t,
+                           &cube_rho, need_derivs);
       *s = face_s; /* vec */
       *t = face_t; /* vec */
       /* use 'r' to indicate cube face */
@@ -1125,7 +1132,7 @@ lp_build_sample_common(struct lp_build_sample_context *bld,
        * distinguish between minification/magnification with one mipmap level.
        */
       lp_build_lod_selector(bld, texture_index, sampler_index,
-                            *s, *t, *r,
+                            *s, *t, *r, cube_rho,
                             derivs, lod_bias, explicit_lod,
                             mip_filter,
                             lod_ipart, lod_fpart);
@@ -1142,11 +1149,10 @@ lp_build_sample_common(struct lp_build_sample_context *bld,
       /* fall-through */
    case PIPE_TEX_MIPFILTER_NONE:
       /* always use mip level 0 */
-      if (target == PIPE_TEXTURE_CUBE) {
+      if (HAVE_LLVM == 0x0207 && target == PIPE_TEXTURE_CUBE) {
          /* XXX this is a work-around for an apparent bug in LLVM 2.7.
           * We should be able to set ilevel0 = const(0) but that causes
           * bad x86 code to be emitted.
-          * XXX should probably disable that on other llvm versions.
           */
          assert(*lod_ipart);
          lp_build_nearest_mip_level(bld, texture_index, *lod_ipart, ilevel0);

@@ -17,9 +17,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 /**
@@ -41,7 +42,6 @@
 #include "main/dispatch.h"
 #include "main/enums.h"
 #include "main/hash.h"
-#include "main/mfeatures.h"
 #include "main/mtypes.h"
 #include "main/shaderapi.h"
 #include "main/shaderobj.h"
@@ -518,9 +518,11 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname, GLint *param
       GLint max_len = 0;
 
       for (i = 0; i < shProg->NumUserUniformStorage; i++) {
-	 /* Add one for the terminating NUL character.
+	 /* Add one for the terminating NUL character for a non-array, and
+	  * 4 for the "[0]" and the NUL for an array.
 	  */
-	 const GLint len = strlen(shProg->UniformStorage[i].name) + 1;
+	 const GLint len = strlen(shProg->UniformStorage[i].name) + 1 +
+	     ((shProg->UniformStorage[i].array_elements != 0) ? 3 : 0);
 
 	 if (len > max_len)
 	    max_len = len;
@@ -1451,8 +1453,10 @@ _mesa_ValidateProgram(GLhandleARB program)
    validate_program(ctx, program);
 }
 
-#ifdef FEATURE_ES2
 
+/**
+ * For OpenGL ES 2.0, GL_ARB_ES2_compatibility
+ */
 void GLAPIENTRY
 _mesa_GetShaderPrecisionFormat(GLenum shadertype, GLenum precisiontype,
                                GLint* range, GLint* precision)
@@ -1505,6 +1509,9 @@ _mesa_GetShaderPrecisionFormat(GLenum shadertype, GLenum precisiontype,
 }
 
 
+/**
+ * For OpenGL ES 2.0, GL_ARB_ES2_compatibility
+ */
 void GLAPIENTRY
 _mesa_ReleaseShaderCompiler(void)
 {
@@ -1512,6 +1519,9 @@ _mesa_ReleaseShaderCompiler(void)
 }
 
 
+/**
+ * For OpenGL ES 2.0, GL_ARB_ES2_compatibility
+ */
 void GLAPIENTRY
 _mesa_ShaderBinary(GLint n, const GLuint* shaders, GLenum binaryformat,
                    const void* binary, GLint length)
@@ -1525,7 +1535,6 @@ _mesa_ShaderBinary(GLint n, const GLuint* shaders, GLenum binaryformat,
    _mesa_error(ctx, GL_INVALID_OPERATION, __FUNCTION__);
 }
 
-#endif /* FEATURE_ES2 */
 
 void GLAPIENTRY
 _mesa_GetProgramBinary(GLuint program, GLsizei bufSize, GLsizei *length,

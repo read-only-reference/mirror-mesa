@@ -18,9 +18,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * BRIAN PAUL BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 /**
@@ -36,7 +37,6 @@
 
 #include "main/glheader.h"
 #include "main/config.h"
-#include "main/mfeatures.h"
 #include "glapi/glapi.h"
 #include "math/m_matrix.h"	/* GLmatrix */
 #include "main/simple_list.h"	/* struct simple_node */
@@ -673,7 +673,6 @@ struct gl_colorbuffer_attrib
    GLenum ClampFragmentColor; /**< GL_TRUE, GL_FALSE or GL_FIXED_ONLY_ARB */
    GLboolean _ClampFragmentColor; /** < with GL_FIXED_ONLY_ARB resolved */
    GLenum ClampReadColor;     /**< GL_TRUE, GL_FALSE or GL_FIXED_ONLY_ARB */
-   GLboolean _ClampReadColor;     /** < with GL_FIXED_ONLY_ARB resolved */
 
    GLboolean sRGBEnabled;	/**< Framebuffer sRGB blending/updating requested */
 };
@@ -1015,6 +1014,7 @@ struct gl_stencil_attrib
    GLboolean TestTwoSide;	/**< GL_EXT_stencil_two_side */
    GLubyte ActiveFace;		/**< GL_EXT_stencil_two_side (0 or 2) */
    GLboolean _Enabled;          /**< Enabled and stencil buffer present */
+   GLboolean _WriteEnabled;     /**< _Enabled and non-zero writemasks */
    GLboolean _TestTwoSide;
    GLubyte _BackFace;           /**< Current back stencil state (1 or 2) */
    GLenum Function[3];		/**< Stencil function */
@@ -1537,8 +1537,8 @@ struct gl_array_attrib
     * \name Primitive restart controls
     *
     * Primitive restart is enabled if either \c PrimitiveRestart or
-    * \c PrimitiveRestart is set.  If \c PrimitiveRestart is set, then
-    * \c RestartIndex is used as the cut vertex.  Otherwise ~0 is used.
+    * \c PrimitiveRestartFixedIndex is set.  If \c PrimitiveRestart is set,
+    * then \c RestartIndex is used as the cut vertex.  Otherwise ~0 is used.
     */
    /*@{*/
    GLboolean PrimitiveRestart;
@@ -1829,7 +1829,8 @@ enum glsl_interp_qualifier
    INTERP_QUALIFIER_NONE = 0,
    INTERP_QUALIFIER_SMOOTH,
    INTERP_QUALIFIER_FLAT,
-   INTERP_QUALIFIER_NOPERSPECTIVE
+   INTERP_QUALIFIER_NOPERSPECTIVE,
+   INTERP_QUALIFIER_COUNT /**< Number of interpolation qualifiers */
 };
 
 
@@ -2660,6 +2661,10 @@ struct gl_framebuffer
    /** Integer color values */
    GLboolean _IntegerColor;
 
+   /* ARB_color_buffer_float */
+   GLboolean _AllColorBuffersFixedPoint; /* no integer, no float */
+   GLboolean _HasSNormOrFloatColorBuffer;
+
    /** Array of all renderbuffer attachments, indexed by BUFFER_* tokens. */
    struct gl_renderbuffer_attachment Attachment[BUFFER_COUNT];
 
@@ -3133,7 +3138,7 @@ struct gl_matrix_stack
 #define _NEW_TEXTURE           (1 << 16)  /**< gl_context::Texture */
 #define _NEW_TRANSFORM         (1 << 17)  /**< gl_context::Transform */
 #define _NEW_VIEWPORT          (1 << 18)  /**< gl_context::Viewport */
-#define _NEW_PACKUNPACK        (1 << 19)  /**< gl_context::Pack, Unpack */
+/* gap, re-use for core Mesa state only; use ctx->DriverFlags otherwise */
 #define _NEW_ARRAY             (1 << 20)  /**< gl_context::Array */
 #define _NEW_RENDERMODE        (1 << 21)  /**< gl_context::RenderMode, etc */
 #define _NEW_BUFFERS           (1 << 22)  /**< gl_context::Visual, DrawBuffer, */
@@ -3144,34 +3149,9 @@ struct gl_matrix_stack
 #define _NEW_PROGRAM_CONSTANTS (1 << 27)
 #define _NEW_BUFFER_OBJECT     (1 << 28)
 #define _NEW_FRAG_CLAMP        (1 << 29)
-#define _NEW_TRANSFORM_FEEDBACK (1 << 30) /**< gl_context::TransformFeedback */
+/* gap, re-use for core Mesa state only; use ctx->DriverFlags otherwise */
 #define _NEW_VARYING_VP_INPUTS (1 << 31) /**< gl_context::varying_vp_inputs */
 #define _NEW_ALL ~0
-
-/**
- * We use _NEW_TRANSFORM for GL_RASTERIZER_DISCARD.  This #define is for
- * clarity.
- */
-#define _NEW_RASTERIZER_DISCARD _NEW_TRANSFORM
-/*@}*/
-
-
-/**
- * \name A bunch of flags that we think might be useful to drivers.
- * 
- * Set in the __struct gl_contextRec::_TriangleCaps bitfield.
- */
-/*@{*/
-#define DD_SEPARATE_SPECULAR        (1 << 0)
-#define DD_TRI_LIGHT_TWOSIDE        (1 << 1)
-#define DD_TRI_UNFILLED             (1 << 2)
-#define DD_TRI_SMOOTH               (1 << 3)
-#define DD_TRI_STIPPLE              (1 << 4)
-#define DD_TRI_OFFSET               (1 << 5)
-#define DD_LINE_SMOOTH              (1 << 6)
-#define DD_LINE_STIPPLE             (1 << 7)
-#define DD_POINT_SMOOTH             (1 << 8)
-#define DD_POINT_ATTEN              (1 << 9)
 /*@}*/
 
 
@@ -3348,7 +3328,14 @@ typedef enum
  */
 struct gl_driver_flags
 {
-   GLbitfield NewArray;             /**< Vertex array state */
+   /** gl_context::Array::_DrawArrays (vertex array state) */
+   GLbitfield NewArray;
+
+   /** gl_context::TransformFeedback::CurrentObject */
+   GLbitfield NewTransformFeedback;
+
+   /** gl_context::RasterDiscard */
+   GLbitfield NewRasterizerDiscard;
 };
 
 struct gl_uniform_buffer_binding
@@ -3564,11 +3551,6 @@ struct gl_context
    GLbitfield64 varying_vp_inputs;  /**< mask of VERT_BIT_* flags */
 
    /** \name Derived state */
-   /*@{*/
-   /** Bitwise-or of DD_* flags.  Note that this bitfield may be used before
-    * state validation so they need to always be current.
-    */
-   GLbitfield _TriangleCaps;
    GLbitfield _ImageTransferState;/**< bitwise-or of IMAGE_*_BIT flags */
    GLfloat _EyeZDir[3];
    GLfloat _ModelViewInvScale;

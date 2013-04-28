@@ -107,6 +107,14 @@ vec4_visitor::emit(enum opcode opcode)
 					   src0, src1);			\
    }
 
+#define ALU3(op)							\
+   vec4_instruction *							\
+   vec4_visitor::op(dst_reg dst, src_reg src0, src_reg src1, src_reg src2)\
+   {									\
+      return new(mem_ctx) vec4_instruction(this, BRW_OPCODE_##op, dst,	\
+					   src0, src1, src2);		\
+   }
+
 ALU1(NOT)
 ALU1(MOV)
 ALU1(FRC)
@@ -127,6 +135,7 @@ ALU2(DPH)
 ALU2(SHL)
 ALU2(SHR)
 ALU2(ASR)
+ALU3(LRP)
 
 /** Gen4 predicated IF. */
 vec4_instruction *
@@ -221,6 +230,29 @@ vec4_visitor::emit_dp(dst_reg dst, src_reg src0, src_reg src1, unsigned elements
    };
 
    emit(dot_opcodes[elements - 2], dst, src0, src1);
+}
+
+src_reg
+vec4_visitor::fix_3src_operand(src_reg src)
+{
+   /* Using vec4 uniforms in SIMD4x2 programs is difficult. You'd like to be
+    * able to use vertical stride of zero to replicate the vec4 uniform, like
+    *
+    *    g3<0;4,1>:f - [0, 4][1, 5][2, 6][3, 7]
+    *
+    * But you can't, since vertical stride is always four in three-source
+    * instructions. Instead, insert a MOV instruction to do the replication so
+    * that the three-source instruction can consume it.
+    */
+
+   /* The MOV is only needed if the source is a uniform or immediate. */
+   if (src.file != UNIFORM && src.file != IMM)
+      return src;
+
+   dst_reg expanded = dst_reg(this, glsl_type::vec4_type);
+   expanded.type = src.type;
+   emit(MOV(expanded, src));
+   return src_reg(expanded);
 }
 
 src_reg
@@ -586,8 +618,8 @@ vec4_visitor::setup_uniform_values(ir_variable *ir)
     * order we'd walk the type, so walk the list of storage and find anything
     * with our name, or the prefix of a component that starts with our name.
     */
-   for (unsigned u = 0; u < prog->NumUserUniformStorage; u++) {
-      struct gl_uniform_storage *storage = &prog->UniformStorage[u];
+   for (unsigned u = 0; u < shader_prog->NumUserUniformStorage; u++) {
+      struct gl_uniform_storage *storage = &shader_prog->UniformStorage[u];
 
       if (strncmp(ir->name, storage->name, namelen) != 0 ||
           (storage->name[namelen] != 0 &&
@@ -605,12 +637,12 @@ vec4_visitor::setup_uniform_values(ir_variable *ir)
 
          int i;
          for (i = 0; i < uniform_vector_size[uniforms]; i++) {
-            c->prog_data.param[uniforms * 4 + i] = &components->f;
+            prog_data->param[uniforms * 4 + i] = &components->f;
             components++;
          }
          for (; i < 4; i++) {
             static float zero = 0;
-            c->prog_data.param[uniforms * 4 + i] = &zero;
+            prog_data->param[uniforms * 4 + i] = &zero;
          }
 
          uniforms++;
@@ -632,14 +664,14 @@ vec4_visitor::setup_uniform_clipplane_values()
        */
       int compacted_clipplane_index = 0;
       for (int i = 0; i < MAX_CLIP_PLANES; ++i) {
-	 if (!(c->key.userclip_planes_enabled_gen_4_5 & (1 << i)))
+	 if (!(key->userclip_planes_enabled_gen_4_5 & (1 << i)))
 	    continue;
 
 	 this->uniform_vector_size[this->uniforms] = 4;
 	 this->userplane[compacted_clipplane_index] = dst_reg(UNIFORM, this->uniforms);
 	 this->userplane[compacted_clipplane_index].type = BRW_REGISTER_TYPE_F;
 	 for (int j = 0; j < 4; ++j) {
-	    c->prog_data.param[this->uniforms * 4 + j] = &clip_planes[i][j];
+	    prog_data->param[this->uniforms * 4 + j] = &clip_planes[i][j];
 	 }
 	 ++compacted_clipplane_index;
 	 ++this->uniforms;
@@ -648,12 +680,12 @@ vec4_visitor::setup_uniform_clipplane_values()
       /* In Gen6 and later, we don't compact clip planes, because this
        * simplifies the implementation of gl_ClipDistance.
        */
-      for (int i = 0; i < c->key.nr_userclip_plane_consts; ++i) {
+      for (int i = 0; i < key->nr_userclip_plane_consts; ++i) {
 	 this->uniform_vector_size[this->uniforms] = 4;
 	 this->userplane[i] = dst_reg(UNIFORM, this->uniforms);
 	 this->userplane[i].type = BRW_REGISTER_TYPE_F;
 	 for (int j = 0; j < 4; ++j) {
-	    c->prog_data.param[this->uniforms * 4 + j] = &clip_planes[i][j];
+	    prog_data->param[this->uniforms * 4 + j] = &clip_planes[i][j];
 	 }
 	 ++this->uniforms;
       }
@@ -676,9 +708,9 @@ vec4_visitor::setup_builtin_uniform_values(ir_variable *ir)
        * ParameterValues directly, since unlike brw_fs.cpp, we never
        * add new state references during compile.
        */
-      int index = _mesa_add_state_reference(this->vp->Base.Parameters,
+      int index = _mesa_add_state_reference(this->prog->Parameters,
 					    (gl_state_index *)slots[i].tokens);
-      float *values = &this->vp->Base.Parameters->ParameterValues[index][0].f;
+      float *values = &this->prog->Parameters->ParameterValues[index][0].f;
 
       this->uniform_vector_size[this->uniforms] = 0;
       /* Add each of the unique swizzled channels of the element.
@@ -689,7 +721,7 @@ vec4_visitor::setup_builtin_uniform_values(ir_variable *ir)
 	 int swiz = GET_SWZ(slots[i].swizzle, j);
 	 last_swiz = swiz;
 
-	 c->prog_data.param[this->uniforms * 4 + j] = &values[swiz];
+	 prog_data->param[this->uniforms * 4 + j] = &values[swiz];
 	 if (swiz <= last_swiz)
 	    this->uniform_vector_size[this->uniforms]++;
       }
@@ -902,15 +934,15 @@ with_writemask(dst_reg const & r, int mask)
 }
 
 void
-vec4_visitor::emit_attribute_fixups()
+vec4_vs_visitor::emit_prolog()
 {
    dst_reg sign_recovery_shift;
    dst_reg normalize_factor;
    dst_reg es3_normalize_factor;
 
    for (int i = 0; i < VERT_ATTRIB_MAX; i++) {
-      if (prog_data->inputs_read & BITFIELD64_BIT(i)) {
-         uint8_t wa_flags = c->key.gl_attrib_wa_flags[i];
+      if (vs_prog_data->inputs_read & BITFIELD64_BIT(i)) {
+         uint8_t wa_flags = vs_compile->key.gl_attrib_wa_flags[i];
          dst_reg reg(ATTR, i);
          dst_reg reg_d = reg;
          reg_d.type = BRW_REGISTER_TYPE_D;
@@ -1015,6 +1047,33 @@ vec4_visitor::emit_attribute_fixups()
    }
 }
 
+
+dst_reg *
+vec4_vs_visitor::make_reg_for_system_value(ir_variable *ir)
+{
+   /* VertexID is stored by the VF as the last vertex element, but
+    * we don't represent it with a flag in inputs_read, so we call
+    * it VERT_ATTRIB_MAX, which setup_attributes() picks up on.
+    */
+   dst_reg *reg = new(mem_ctx) dst_reg(ATTR, VERT_ATTRIB_MAX);
+   vs_prog_data->uses_vertexid = true;
+
+   switch (ir->location) {
+   case SYSTEM_VALUE_VERTEX_ID:
+      reg->writemask = WRITEMASK_X;
+      break;
+   case SYSTEM_VALUE_INSTANCE_ID:
+      reg->writemask = WRITEMASK_Y;
+      break;
+   default:
+      assert(!"not reached");
+      break;
+   }
+
+   return reg;
+}
+
+
 void
 vec4_visitor::visit(ir_variable *ir)
 {
@@ -1068,24 +1127,7 @@ vec4_visitor::visit(ir_variable *ir)
       break;
 
    case ir_var_system_value:
-      /* VertexID is stored by the VF as the last vertex element, but
-       * we don't represent it with a flag in inputs_read, so we call
-       * it VERT_ATTRIB_MAX, which setup_attributes() picks up on.
-       */
-      reg = new(mem_ctx) dst_reg(ATTR, VERT_ATTRIB_MAX);
-      prog_data->uses_vertexid = true;
-
-      switch (ir->location) {
-      case SYSTEM_VALUE_VERTEX_ID:
-	 reg->writemask = WRITEMASK_X;
-	 break;
-      case SYSTEM_VALUE_INSTANCE_ID:
-	 reg->writemask = WRITEMASK_Y;
-	 break;
-      default:
-	 assert(!"not reached");
-	 break;
-      }
+      reg = make_reg_for_system_value(ir);
       break;
 
    default:
@@ -1586,7 +1628,13 @@ vec4_visitor::visit(ir_expression *ir)
    }
 
    case ir_triop_lrp:
-      assert(!"not reached: should be handled by lrp_to_arith");
+      op[0] = fix_3src_operand(op[0]);
+      op[1] = fix_3src_operand(op[1]);
+      op[2] = fix_3src_operand(op[2]);
+      /* Note that the instruction's argument order is reversed from GLSL
+       * and the IR.
+       */
+      emit(LRP(result_dst, op[2], op[1], op[0]));
       break;
 
    case ir_quadop_vector:
@@ -1682,12 +1730,23 @@ vec4_visitor::visit(ir_dereference_variable *ir)
       this->result.swizzle = swizzle_for_size(type->vector_elements);
 }
 
+
+int
+vec4_visitor::compute_array_stride(ir_dereference_array *ir)
+{
+   /* Under normal circumstances array elements are stored consecutively, so
+    * the stride is equal to the size of the array element.
+    */
+   return type_size(ir->type);
+}
+
+
 void
 vec4_visitor::visit(ir_dereference_array *ir)
 {
    ir_constant *constant_index;
    src_reg src;
-   int element_size = type_size(ir->type);
+   int array_stride = compute_array_stride(ir);
 
    constant_index = ir->array_index->constant_expression_value();
 
@@ -1695,7 +1754,7 @@ vec4_visitor::visit(ir_dereference_array *ir)
    src = this->result;
 
    if (constant_index) {
-      src.reg_offset += constant_index->value.i[0] * element_size;
+      src.reg_offset += constant_index->value.i[0] * array_stride;
    } else {
       /* Variable index array dereference.  It eats the "vec4" of the
        * base of the array and an index that offsets the Mesa register
@@ -1705,12 +1764,12 @@ vec4_visitor::visit(ir_dereference_array *ir)
 
       src_reg index_reg;
 
-      if (element_size == 1) {
+      if (array_stride == 1) {
 	 index_reg = this->result;
       } else {
 	 index_reg = src_reg(this, glsl_type::int_type);
 
-	 emit(MUL(dst_reg(index_reg), this->result, src_reg(element_size)));
+	 emit(MUL(dst_reg(index_reg), this->result, src_reg(array_stride)));
       }
 
       if (src.reladdr) {
@@ -2077,7 +2136,8 @@ vec4_visitor::visit(ir_call *ir)
 void
 vec4_visitor::visit(ir_texture *ir)
 {
-   int sampler = _mesa_get_sampler_uniform_value(ir->sampler, prog, &vp->Base);
+   int sampler =
+      _mesa_get_sampler_uniform_value(ir->sampler, shader_prog, prog);
 
    /* Should be lowered by do_lower_texture_projection */
    assert(!ir->projector);
@@ -2098,7 +2158,7 @@ vec4_visitor::visit(ir_texture *ir)
       shadow_comparitor = this->result;
    }
 
-   const glsl_type *lod_type, *sample_index_type;
+   const glsl_type *lod_type = NULL, *sample_index_type = NULL;
    src_reg lod, dPdx, dPdy, sample_index;
    switch (ir->op) {
    case ir_tex:
@@ -2293,7 +2353,7 @@ vec4_visitor::visit(ir_texture *ir)
 void
 vec4_visitor::swizzle_result(ir_texture *ir, src_reg orig_val, int sampler)
 {
-   int s = c->key.tex.swizzles[sampler];
+   int s = key->tex.swizzles[sampler];
 
    this->result = src_reg(this, ir->type);
    dst_reg swizzled_result(this->result);
@@ -2407,8 +2467,8 @@ void
 vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
 {
    if (intel->gen < 6 &&
-       ((c->prog_data.vue_map.slots_valid & VARYING_BIT_PSIZ) ||
-        c->key.userclip_active || brw->has_negative_rhw_bug)) {
+       ((prog_data->vue_map.slots_valid & VARYING_BIT_PSIZ) ||
+        key->userclip_active || brw->has_negative_rhw_bug)) {
       dst_reg header1 = dst_reg(this, glsl_type::uvec4_type);
       dst_reg header1_w = header1;
       header1_w.writemask = WRITEMASK_W;
@@ -2416,7 +2476,7 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
 
       emit(MOV(header1, 0u));
 
-      if (c->prog_data.vue_map.slots_valid & VARYING_BIT_PSIZ) {
+      if (prog_data->vue_map.slots_valid & VARYING_BIT_PSIZ) {
 	 src_reg psiz = src_reg(output_reg[VARYING_SLOT_PSIZ]);
 
 	 current_annotation = "Point size";
@@ -2425,7 +2485,7 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
       }
 
       current_annotation = "Clipping flags";
-      for (i = 0; i < c->key.nr_userclip_plane_consts; i++) {
+      for (i = 0; i < key->nr_userclip_plane_consts; i++) {
 	 vec4_instruction *inst;
 
 	 inst = emit(DP4(dst_null_f(), src_reg(output_reg[VARYING_SLOT_POS]),
@@ -2461,7 +2521,7 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
       emit(MOV(retype(reg, BRW_REGISTER_TYPE_UD), 0u));
    } else {
       emit(MOV(retype(reg, BRW_REGISTER_TYPE_D), src_reg(0)));
-      if (c->prog_data.vue_map.slots_valid & VARYING_BIT_PSIZ) {
+      if (prog_data->vue_map.slots_valid & VARYING_BIT_PSIZ) {
          emit(MOV(brw_writemask(reg, WRITEMASK_W),
                   src_reg(output_reg[VARYING_SLOT_PSIZ])));
       }
@@ -2492,11 +2552,11 @@ vec4_visitor::emit_clip_distances(struct brw_reg reg, int offset)
     * if the user wrote to it; otherwise we use gl_Position.
     */
    gl_varying_slot clip_vertex = VARYING_SLOT_CLIP_VERTEX;
-   if (!(c->prog_data.vue_map.slots_valid & VARYING_BIT_CLIP_VERTEX)) {
+   if (!(prog_data->vue_map.slots_valid & VARYING_BIT_CLIP_VERTEX)) {
       clip_vertex = VARYING_SLOT_POS;
    }
 
-   for (int i = 0; i + offset < c->key.nr_userclip_plane_consts && i < 4;
+   for (int i = 0; i + offset < key->nr_userclip_plane_consts && i < 4;
         ++i) {
       emit(DP4(dst_reg(brw_writemask(reg, 1 << i)),
                src_reg(output_reg[clip_vertex]),
@@ -2517,7 +2577,7 @@ vec4_visitor::emit_generic_urb_slot(dst_reg reg, int varying)
         varying == VARYING_SLOT_COL1 ||
         varying == VARYING_SLOT_BFC0 ||
         varying == VARYING_SLOT_BFC1) &&
-       c->key.clamp_vertex_color) {
+       key->clamp_vertex_color) {
       inst->saturate = true;
    }
 }
@@ -2546,7 +2606,7 @@ vec4_visitor::emit_urb_slot(int mrf, int varying)
       break;
    case VARYING_SLOT_CLIP_DIST0:
    case VARYING_SLOT_CLIP_DIST1:
-      if (this->c->key.uses_clip_distance) {
+      if (this->key->uses_clip_distance) {
          emit_generic_urb_slot(reg, varying);
       } else {
          current_annotation = "user clip distances";
@@ -2594,14 +2654,38 @@ align_interleaved_urb_mlen(struct brw_context *brw, int mlen)
    return mlen;
 }
 
+void
+vec4_vs_visitor::emit_urb_write_header(int mrf)
+{
+   /* No need to do anything for VS; an implied write to this MRF will be
+    * performed by VS_OPCODE_URB_WRITE.
+    */
+   (void) mrf;
+}
+
+vec4_instruction *
+vec4_vs_visitor::emit_urb_write_opcode(bool complete)
+{
+   /* For VS, the URB writes end the thread. */
+   if (complete) {
+      if (INTEL_DEBUG & DEBUG_SHADER_TIME)
+         emit_shader_time_end();
+   }
+
+   vec4_instruction *inst = emit(VS_OPCODE_URB_WRITE);
+   inst->eot = complete;
+
+   return inst;
+}
+
 /**
- * Generates the VUE payload plus the 1 or 2 URB write instructions to
- * complete the VS thread.
+ * Generates the VUE payload plus the necessary URB write instructions to
+ * output it.
  *
  * The VUE layout is documented in Volume 2a.
  */
 void
-vec4_visitor::emit_urb_writes()
+vec4_visitor::emit_vertex()
 {
    /* MRF 0 is reserved for the debugger, so start with message header
     * in MRF 1.
@@ -2620,10 +2704,10 @@ vec4_visitor::emit_urb_writes()
     */
    assert ((max_usable_mrf - base_mrf) % 2 == 0);
 
-   /* First mrf is the g0-based message header containing URB handles and such,
-    * which is implied in VS_OPCODE_URB_WRITE.
+   /* First mrf is the g0-based message header containing URB handles and
+    * such.
     */
-   mrf++;
+   emit_urb_write_header(mrf++);
 
    if (intel->gen < 6) {
       emit_ndc_computation();
@@ -2631,8 +2715,8 @@ vec4_visitor::emit_urb_writes()
 
    /* Set up the VUE data for the first URB write */
    int slot;
-   for (slot = 0; slot < c->prog_data.vue_map.num_slots; ++slot) {
-      emit_urb_slot(mrf++, c->prog_data.vue_map.slot_to_varying[slot]);
+   for (slot = 0; slot < prog_data->vue_map.num_slots; ++slot) {
+      emit_urb_slot(mrf++, prog_data->vue_map.slot_to_varying[slot]);
 
       /* If this was max_usable_mrf, we can't fit anything more into this URB
        * WRITE.
@@ -2643,37 +2727,26 @@ vec4_visitor::emit_urb_writes()
       }
    }
 
-   bool eot = slot >= c->prog_data.vue_map.num_slots;
-   if (eot) {
-      if (INTEL_DEBUG & DEBUG_SHADER_TIME)
-         emit_shader_time_end();
-   }
+   bool complete = slot >= prog_data->vue_map.num_slots;
    current_annotation = "URB write";
-   vec4_instruction *inst = emit(VS_OPCODE_URB_WRITE);
+   vec4_instruction *inst = emit_urb_write_opcode(complete);
    inst->base_mrf = base_mrf;
    inst->mlen = align_interleaved_urb_mlen(brw, mrf - base_mrf);
-   inst->eot = eot;
 
    /* Optional second URB write */
-   if (!inst->eot) {
+   if (!complete) {
       mrf = base_mrf + 1;
 
-      for (; slot < c->prog_data.vue_map.num_slots; ++slot) {
+      for (; slot < prog_data->vue_map.num_slots; ++slot) {
 	 assert(mrf < max_usable_mrf);
 
-         emit_urb_slot(mrf++, c->prog_data.vue_map.slot_to_varying[slot]);
-      }
-
-      if (eot) {
-         if (INTEL_DEBUG & DEBUG_SHADER_TIME)
-            emit_shader_time_end();
+         emit_urb_slot(mrf++, prog_data->vue_map.slot_to_varying[slot]);
       }
 
       current_annotation = "URB write";
-      inst = emit(VS_OPCODE_URB_WRITE);
+      inst = emit_urb_write_opcode(true /* complete */);
       inst->base_mrf = base_mrf;
       inst->mlen = align_interleaved_urb_mlen(brw, mrf - base_mrf);
-      inst->eot = true;
       /* URB destination offset.  In the previous write, we got MRFs
        * 2-13 minus the one header MRF, so 12 regs.  URB offset is in
        * URB row increments, and each of our MRFs is half of one of
@@ -2681,6 +2754,16 @@ vec4_visitor::emit_urb_writes()
        */
       inst->offset = (max_usable_mrf - base_mrf) / 2;
    }
+}
+
+void
+vec4_vs_visitor::emit_thread_end()
+{
+   /* For VS, we always end the thread by emitting a single vertex.
+    * emit_urb_write_opcode() will take care of setting the eot flag on the
+    * SEND instruction.
+    */
+   emit_vertex();
 }
 
 src_reg
@@ -2882,10 +2965,20 @@ vec4_visitor::emit_pull_constant_load(vec4_instruction *inst,
    src_reg offset = get_pull_constant_offset(inst, orig_src.reladdr, reg_offset);
    vec4_instruction *load;
 
-   load = new(mem_ctx) vec4_instruction(this, VS_OPCODE_PULL_CONSTANT_LOAD,
-					temp, index, offset);
-   load->base_mrf = 14;
-   load->mlen = 1;
+   if (intel->gen >= 7) {
+      dst_reg grf_offset = dst_reg(this, glsl_type::int_type);
+      grf_offset.type = offset.type;
+      emit_before(inst, MOV(grf_offset, offset));
+
+      load = new(mem_ctx) vec4_instruction(this,
+                                           VS_OPCODE_PULL_CONSTANT_LOAD_GEN7,
+                                           temp, index, src_reg(grf_offset));
+   } else {
+      load = new(mem_ctx) vec4_instruction(this, VS_OPCODE_PULL_CONSTANT_LOAD,
+                                           temp, index, offset);
+      load->base_mrf = 14;
+      load->mlen = 1;
+   }
    emit_before(inst, load);
 }
 
@@ -2934,7 +3027,8 @@ vec4_visitor::move_uniform_array_access_to_pull_constants()
 	    pull_constant_loc[uniform] = prog_data->nr_pull_params / 4;
 
 	    for (int j = 0; j < uniform_size[uniform] * 4; j++) {
-	       prog_data->pull_param[prog_data->nr_pull_params++] = values[j];
+	       prog_data->pull_param[prog_data->nr_pull_params++]
+                  = values[j];
 	    }
 	 }
 
@@ -2975,16 +3069,20 @@ vec4_visitor::resolve_ud_negate(src_reg *reg)
 }
 
 vec4_visitor::vec4_visitor(struct brw_context *brw,
-			   struct brw_vs_compile *c,
-			   struct gl_shader_program *prog,
+                           struct brw_vec4_compile *c,
+                           struct gl_program *prog,
+                           const struct brw_vec4_prog_key *key,
+                           struct brw_vec4_prog_data *prog_data,
+			   struct gl_shader_program *shader_prog,
 			   struct brw_shader *shader,
-			   void *mem_ctx)
+			   void *mem_ctx,
+                           bool debug_flag)
+   : debug_flag(debug_flag)
 {
-   this->c = c;
    this->brw = brw;
    this->intel = &brw->intel;
    this->ctx = &intel->ctx;
-   this->prog = prog;
+   this->shader_prog = shader_prog;
    this->shader = shader;
 
    this->mem_ctx = mem_ctx;
@@ -2995,8 +3093,9 @@ vec4_visitor::vec4_visitor(struct brw_context *brw,
    memset(this->output_reg_annotation, 0, sizeof(this->output_reg_annotation));
 
    this->c = c;
-   this->vp = &c->vp->program;
-   this->prog_data = &c->prog_data;
+   this->prog = prog;
+   this->key = key;
+   this->prog_data = prog_data;
 
    this->variable_ht = hash_table_ctor(0,
 				       hash_table_pointer_hash,
@@ -3022,6 +3121,21 @@ vec4_visitor::~vec4_visitor()
 }
 
 
+vec4_vs_visitor::vec4_vs_visitor(struct brw_context *brw,
+                                 struct brw_vs_compile *vs_compile,
+                                 struct brw_vs_prog_data *vs_prog_data,
+                                 struct gl_shader_program *prog,
+                                 struct brw_shader *shader,
+                                 void *mem_ctx)
+   : vec4_visitor(brw, &vs_compile->base, &vs_compile->vp->program.Base,
+                  &vs_compile->key.base, &vs_prog_data->base, prog, shader,
+                  mem_ctx, INTEL_DEBUG & DEBUG_VS),
+     vs_compile(vs_compile),
+     vs_prog_data(vs_prog_data)
+{
+}
+
+
 void
 vec4_visitor::fail(const char *format, ...)
 {
@@ -3040,7 +3154,7 @@ vec4_visitor::fail(const char *format, ...)
 
    this->fail_msg = msg;
 
-   if (INTEL_DEBUG & DEBUG_VS) {
+   if (debug_flag) {
       fprintf(stderr, "%s",  msg);
    }
 }

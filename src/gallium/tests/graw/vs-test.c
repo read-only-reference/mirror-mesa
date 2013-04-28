@@ -111,7 +111,7 @@ static void init_fs_constbuf( void )
 
 
    pipe_set_constant_buffer(ctx,
-                            PIPE_SHADER_FRAGMENT, 0,
+                            PIPE_SHADER_VERTEX, 0,
                             constbuf);
 }
 
@@ -453,7 +453,8 @@ static void init( void )
       memset(&rasterizer, 0, sizeof rasterizer);
       rasterizer.cull_face = PIPE_FACE_NONE;
       rasterizer.point_size = 8.0;
-      rasterizer.gl_rasterization_rules = 1;
+      rasterizer.half_pixel_center = 1;
+      rasterizer.bottom_edge_rule = 1;
       rasterizer.depth_clip = 1;
       handle = ctx->create_rasterizer_state(ctx, &rasterizer);
       ctx->bind_rasterizer_state(ctx, handle);

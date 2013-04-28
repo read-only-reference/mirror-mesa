@@ -91,12 +91,14 @@ struct lp_setup_context
    struct lp_fence *last_fence;
    struct llvmpipe_query *active_query[PIPE_QUERY_TYPES];
 
+   boolean subdivide_large_triangles;
    boolean flatshade_first;
    boolean ccw_is_frontface;
    boolean scissor_test;
    boolean point_size_per_vertex;
    boolean rasterizer_discard;
    unsigned cullmode;
+   unsigned bottom_edge_rule;
    float pixel_offset;
    float line_width;
    float point_size;

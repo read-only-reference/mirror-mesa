@@ -149,6 +149,19 @@ The integer capabilities:
   to use a blit to implement a texture transfer which needs format conversions
   and swizzling in state trackers. Generally, all hardware drivers with
   dedicated memory should return 1 and all software rasterizers should return 0.
+* ``PIPE_CAP_QUERY_PIPELINE_STATISTICS``: Whether PIPE_QUERY_PIPELINE_STATISTICS
+  is supported.
+* ``PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK``: Bitmask indicating whether special
+  considerations have to be given to the interaction between the border color
+  in the sampler object and the sampler view used with it.
+  If PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600 is set, the border color
+  may be affected in undefined ways for any kind of permutational swizzle
+  (any swizzle XYZW where X/Y/Z/W are not ZERO, ONE, or R/G/B/A respectively)
+  in the sampler view.
+  If PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50 is set, the border color
+  state should be swizzled manually according to the swizzle in the sampler
+  view it is intended to be used with, or herein undefined results may occur
+  for permutational swizzles.
 
 
 .. _pipe_capf:
@@ -234,10 +247,10 @@ PIPE_COMPUTE_CAP_*
 Compute-specific capabilities. They can be queried using
 pipe_screen::get_compute_param.
 
-* ``PIPE_COMPUTE_CAP_IR_TARGET``: A description of the target as a target
-  triple specification of the form ``processor-manufacturer-os`` that will
-  be passed on to the compiler.  This CAP is only relevant for drivers
-  that specify PIPE_SHADER_IR_LLVM for their preferred IR.
+* ``PIPE_COMPUTE_CAP_IR_TARGET``: A description of the target of the form
+  ``processor-arch-manufacturer-os`` that will be passed on to the compiler.
+  This CAP is only relevant for drivers that specify PIPE_SHADER_IR_LLVM for
+  their preferred IR.
   Value type: null-terminated string.
 * ``PIPE_COMPUTE_CAP_GRID_DIMENSION``: Number of supported dimensions
   for grid and block coordinates.  Value type: ``uint64_t``.

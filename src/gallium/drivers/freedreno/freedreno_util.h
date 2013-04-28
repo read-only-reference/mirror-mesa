@@ -34,13 +34,15 @@
 
 #include "pipe/p_format.h"
 #include "util/u_debug.h"
+#include "util/u_math.h"
 
-#include "freedreno_pm4.h"
-#include "freedreno_a2xx_reg.h"
+#include "adreno_common.xml.h"
+#include "adreno_pm4.xml.h"
+#include "a2xx.xml.h"
 
-enum sq_surfaceformat fd_pipe2surface(enum pipe_format format);
-enum rb_colorformatx fd_pipe2color(enum pipe_format format);
-enum rb_depth_format fd_pipe2depth(enum pipe_format format);
+enum a2xx_sq_surfaceformat fd_pipe2surface(enum pipe_format format);
+enum a2xx_colorformatx fd_pipe2color(enum pipe_format format);
+enum a2xx_rb_depth_format fd_pipe2depth(enum pipe_format format);
 enum pc_di_index_size fd_pipe2index(enum pipe_format format);
 uint32_t fd_tex_swiz(enum pipe_format format, unsigned swizzle_r,
 		unsigned swizzle_g, unsigned swizzle_b, unsigned swizzle_a);
@@ -48,6 +50,8 @@ uint32_t fd_tex_swiz(enum pipe_format format, unsigned swizzle_r,
 
 #define FD_DBG_MSGS   0x1
 #define FD_DBG_DISASM 0x2
+#define FD_DBG_DCLEAR 0x4
+#define FD_DBG_DGMEM  0x8
 extern int fd_mesa_debug;
 
 #define DBG(fmt, ...) \
@@ -55,13 +59,28 @@ extern int fd_mesa_debug;
 			debug_printf("%s:%d: "fmt "\n", \
 				__FUNCTION__, __LINE__, ##__VA_ARGS__); } while (0)
 
-#define ALIGN(v,a) (((v) + (a) - 1) & ~((a) - 1))
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 
-#define min(a, b) (((a) < (b)) ? (a) : (b))
-#define max(a, b) (((a) > (b)) ? (a) : (b))
+#define CP_REG(reg) ((0x4 << 16) | ((unsigned int)((reg) - (0x2000))))
 
+static inline uint32_t DRAW(enum pc_di_primtype prim_type,
+		enum pc_di_src_sel source_select, enum pc_di_index_size index_size,
+		enum pc_di_vis_cull_mode vis_cull_mode)
+{
+	return (prim_type         << 0) |
+			(source_select     << 6) |
+			((index_size & 1)  << 11) |
+			((index_size >> 1) << 13) |
+			(vis_cull_mode     << 9) |
+			(1                 << 14);
+}
+
+/* convert x,y to dword */
+static inline uint32_t xy2d(uint16_t x, uint16_t y)
+{
+	return ((y & 0x3fff) << 16) | (x & 0x3fff);
+}
 
 #define LOG_DWORDS 0
 

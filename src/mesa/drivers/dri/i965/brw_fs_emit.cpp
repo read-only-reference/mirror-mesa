@@ -674,47 +674,66 @@ fs_generator::generate_uniform_pull_constant_load_gen7(fs_inst *inst,
 void
 fs_generator::generate_varying_pull_constant_load(fs_inst *inst,
                                                   struct brw_reg dst,
-                                                  struct brw_reg index)
+                                                  struct brw_reg index,
+                                                  struct brw_reg offset)
 {
    assert(intel->gen < 7); /* Should use the gen7 variant. */
    assert(inst->header_present);
+   assert(inst->mlen);
 
    assert(index.file == BRW_IMMEDIATE_VALUE &&
 	  index.type == BRW_REGISTER_TYPE_UD);
    uint32_t surf_index = index.dw1.ud;
 
-   uint32_t msg_type, msg_control, rlen;
-   if (intel->gen >= 6)
-      msg_type = GEN6_DATAPORT_READ_MESSAGE_DWORD_SCATTERED_READ;
-   else if (intel->gen == 5 || intel->is_g4x)
-      msg_type = G45_DATAPORT_READ_MESSAGE_DWORD_SCATTERED_READ;
-   else
-      msg_type = BRW_DATAPORT_READ_MESSAGE_DWORD_SCATTERED_READ;
-
+   uint32_t simd_mode, rlen, msg_type;
    if (dispatch_width == 16) {
-      msg_control = BRW_DATAPORT_DWORD_SCATTERED_BLOCK_16DWORDS;
-      rlen = 2;
+      simd_mode = BRW_SAMPLER_SIMD_MODE_SIMD16;
+      rlen = 8;
    } else {
-      msg_control = BRW_DATAPORT_DWORD_SCATTERED_BLOCK_8DWORDS;
-      rlen = 1;
+      simd_mode = BRW_SAMPLER_SIMD_MODE_SIMD8;
+      rlen = 4;
    }
+
+   if (intel->gen >= 5)
+      msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_LD;
+   else {
+      /* We always use the SIMD16 message so that we only have to load U, and
+       * not V or R.
+       */
+      msg_type = BRW_SAMPLER_MESSAGE_SIMD16_LD;
+      assert(inst->mlen == 3);
+      assert(inst->regs_written == 8);
+      rlen = 8;
+      simd_mode = BRW_SAMPLER_SIMD_MODE_SIMD16;
+   }
+
+   struct brw_reg offset_mrf = retype(brw_message_reg(inst->base_mrf + 1),
+                                      BRW_REGISTER_TYPE_D);
+   brw_MOV(p, offset_mrf, offset);
 
    struct brw_reg header = brw_vec8_grf(0, 0);
    gen6_resolve_implied_move(p, &header, inst->base_mrf);
 
    struct brw_instruction *send = brw_next_insn(p, BRW_OPCODE_SEND);
+   send->header.compression_control = BRW_COMPRESSION_NONE;
    brw_set_dest(p, send, dst);
    brw_set_src0(p, send, header);
    if (intel->gen < 6)
       send->header.destreg__conditionalmod = inst->base_mrf;
-   brw_set_dp_read_message(p, send,
+
+   /* Our surface is set up as floats, regardless of what actual data is
+    * stored in it.
+    */
+   uint32_t return_format = BRW_SAMPLER_RETURN_FORMAT_FLOAT32;
+   brw_set_sampler_message(p, send,
                            surf_index,
-                           msg_control,
+                           0, /* sampler (unused) */
                            msg_type,
-                           BRW_DATAPORT_READ_TARGET_DATA_CACHE,
+                           rlen,
                            inst->mlen,
                            inst->header_present,
-                           rlen);
+                           simd_mode,
+                           return_format);
 }
 
 void
@@ -734,28 +753,29 @@ fs_generator::generate_varying_pull_constant_load_gen7(fs_inst *inst,
 	  index.type == BRW_REGISTER_TYPE_UD);
    uint32_t surf_index = index.dw1.ud;
 
-   uint32_t msg_control, rlen, mlen;
+   uint32_t simd_mode, rlen, mlen;
    if (dispatch_width == 16) {
-      msg_control = BRW_DATAPORT_DWORD_SCATTERED_BLOCK_16DWORDS;
-      mlen = rlen = 2;
+      mlen = 2;
+      rlen = 8;
+      simd_mode = BRW_SAMPLER_SIMD_MODE_SIMD16;
    } else {
-      msg_control = BRW_DATAPORT_DWORD_SCATTERED_BLOCK_8DWORDS;
-      mlen = rlen = 1;
+      mlen = 1;
+      rlen = 4;
+      simd_mode = BRW_SAMPLER_SIMD_MODE_SIMD8;
    }
 
    struct brw_instruction *send = brw_next_insn(p, BRW_OPCODE_SEND);
    brw_set_dest(p, send, dst);
    brw_set_src0(p, send, offset);
-   if (intel->gen < 6)
-      send->header.destreg__conditionalmod = inst->base_mrf;
-   brw_set_dp_read_message(p, send,
+   brw_set_sampler_message(p, send,
                            surf_index,
-                           msg_control,
-                           GEN7_DATAPORT_DC_DWORD_SCATTERED_READ,
-                           BRW_DATAPORT_READ_TARGET_DATA_CACHE,
+                           0, /* LD message ignores sampler unit */
+                           GEN5_SAMPLER_MESSAGE_SAMPLE_LD,
+                           rlen,
                            mlen,
-                           inst->header_present,
-                           rlen);
+                           false, /* no header */
+                           simd_mode,
+                           0);
 }
 
 /**
@@ -1304,7 +1324,7 @@ fs_generator::generate_code(exec_list *instructions)
 	 break;
 
       case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD:
-	 generate_varying_pull_constant_load(inst, dst, src[0]);
+	 generate_varying_pull_constant_load(inst, dst, src[0], src[1]);
 	 break;
 
       case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7:

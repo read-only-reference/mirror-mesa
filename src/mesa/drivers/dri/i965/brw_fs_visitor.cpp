@@ -201,7 +201,10 @@ fs_visitor::visit(ir_dereference_array *ir)
 void
 fs_visitor::emit_lrp(fs_reg dst, fs_reg x, fs_reg y, fs_reg a)
 {
-   if (intel->gen < 6 || x.file != GRF || y.file != GRF || a.file != GRF) {
+   if (intel->gen < 6 ||
+       !x.is_valid_3src() ||
+       !y.is_valid_3src() ||
+       !a.is_valid_3src()) {
       /* We can't use the LRP instruction.  Emit x*(1-a) + y*a. */
       fs_reg y_times_a           = fs_reg(this, glsl_type::float_type);
       fs_reg one_minus_a         = fs_reg(this, glsl_type::float_type);
@@ -261,7 +264,7 @@ fs_visitor::try_emit_saturate(ir_expression *ir)
     * src, generate a saturated MOV
     */
    fs_inst *modify = get_instruction_generating_reg(pre_inst, last_inst, src);
-   if (!modify || modify->regs_written() != 1) {
+   if (!modify || modify->regs_written != 1) {
       this->result = fs_reg(this, ir->type);
       fs_inst *inst = emit(MOV(this->result, src));
       inst->saturate = true;
@@ -521,7 +524,7 @@ fs_visitor::visit(ir_expression *ir)
       break;
 
    case ir_unop_b2i:
-      inst = emit(AND(this->result, op[0], fs_reg(1)));
+      emit(AND(this->result, op[0], fs_reg(1)));
       break;
    case ir_unop_b2f:
       temp = fs_reg(this, glsl_type::int_type);
@@ -541,14 +544,14 @@ fs_visitor::visit(ir_expression *ir)
       break;
    case ir_unop_ceil:
       op[0].negate = !op[0].negate;
-      inst = emit(RNDD(this->result, op[0]));
+      emit(RNDD(this->result, op[0]));
       this->result.negate = true;
       break;
    case ir_unop_floor:
-      inst = emit(RNDD(this->result, op[0]));
+      emit(RNDD(this->result, op[0]));
       break;
    case ir_unop_fract:
-      inst = emit(FRC(this->result, op[0]));
+      emit(FRC(this->result, op[0]));
       break;
    case ir_unop_round_even:
       emit(RNDE(this->result, op[0]));
@@ -585,27 +588,27 @@ fs_visitor::visit(ir_expression *ir)
       break;
 
    case ir_unop_bit_not:
-      inst = emit(NOT(this->result, op[0]));
+      emit(NOT(this->result, op[0]));
       break;
    case ir_binop_bit_and:
-      inst = emit(AND(this->result, op[0], op[1]));
+      emit(AND(this->result, op[0], op[1]));
       break;
    case ir_binop_bit_xor:
-      inst = emit(XOR(this->result, op[0], op[1]));
+      emit(XOR(this->result, op[0], op[1]));
       break;
    case ir_binop_bit_or:
-      inst = emit(OR(this->result, op[0], op[1]));
+      emit(OR(this->result, op[0], op[1]));
       break;
 
    case ir_binop_lshift:
-      inst = emit(SHL(this->result, op[0], op[1]));
+      emit(SHL(this->result, op[0], op[1]));
       break;
 
    case ir_binop_rshift:
       if (ir->type->base_type == GLSL_TYPE_INT)
-	 inst = emit(ASR(this->result, op[0], op[1]));
+	 emit(ASR(this->result, op[0], op[1]));
       else
-	 inst = emit(SHR(this->result, op[0], op[1]));
+	 emit(SHR(this->result, op[0], op[1]));
       break;
    case ir_binop_pack_half_2x16_split:
       emit(FS_OPCODE_PACK_HALF_2x16_SPLIT, this->result, op[0], op[1]);
@@ -650,9 +653,8 @@ fs_visitor::visit(ir_expression *ir)
          emit(SHR(base_offset, op[1], fs_reg(2)));
 
          for (int i = 0; i < ir->type->vector_elements; i++) {
-            fs_reg offset = fs_reg(this, glsl_type::int_type);
-            emit(ADD(offset, base_offset, fs_reg(i)));
-            emit(VARYING_PULL_CONSTANT_LOAD(result, surf_index, offset));
+            emit(VARYING_PULL_CONSTANT_LOAD(result, surf_index,
+                                            base_offset, i));
 
             if (ir->type->base_type == GLSL_TYPE_BOOL)
                emit(CMP(result, result, fs_reg(0), BRW_CONDITIONAL_NZ));
@@ -747,7 +749,7 @@ fs_visitor::try_rewrite_rhs_to_dst(ir_assignment *ir,
    /* If last_rhs_inst wrote a different number of components than our LHS,
     * we can't safely rewrite it.
     */
-   if (virtual_grf_sizes[dst.reg] != modify->regs_written())
+   if (virtual_grf_sizes[dst.reg] != modify->regs_written)
       return false;
 
    /* Success!  Rewrite the instruction. */
@@ -917,11 +919,10 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
        * this weirdness around to the expected layout.
        */
       orig_dst = dst;
-      const glsl_type *vec_type =
-	 glsl_type::get_instance(ir->type->base_type, 4, 1);
-      dst = fs_reg(this, glsl_type::get_array_instance(vec_type, 2));
-      dst.type = intel->is_g4x ? brw_type_for_base_type(ir->type)
-			       : BRW_REGISTER_TYPE_F;
+      dst = fs_reg(GRF, virtual_grf_alloc(8),
+                   (intel->is_g4x ?
+                    brw_type_for_base_type(ir->type) :
+                    BRW_REGISTER_TYPE_F));
    }
 
    fs_inst *inst = NULL;
@@ -950,6 +951,7 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    inst->base_mrf = base_mrf;
    inst->mlen = mlen;
    inst->header_present = true;
+   inst->regs_written = simd16 ? 8 : 4;
 
    if (simd16) {
       for (int i = 0; i < 4; i++) {
@@ -1091,6 +1093,7 @@ fs_visitor::emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    inst->base_mrf = base_mrf;
    inst->mlen = mlen;
    inst->header_present = header_present;
+   inst->regs_written = 4;
 
    if (mlen > 11) {
       fail("Message length >11 disallowed by hardware\n");
@@ -1246,6 +1249,7 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    inst->base_mrf = base_mrf;
    inst->mlen = mlen;
    inst->header_present = header_present;
+   inst->regs_written = 4;
 
    if (mlen > 11) {
       fail("Message length >11 disallowed by hardware\n");
@@ -1360,7 +1364,8 @@ fs_visitor::visit(ir_texture *ir)
 {
    fs_inst *inst = NULL;
 
-   int sampler = _mesa_get_sampler_uniform_value(ir->sampler, prog, &fp->Base);
+   int sampler =
+      _mesa_get_sampler_uniform_value(ir->sampler, shader_prog, &fp->Base);
    /* FINISHME: We're failing to recompile our programs when the sampler is
     * updated.  This only matters for the texture rectangle scale parameters
     * (pre-gen6, or gen6+ with GL_CLAMP).
@@ -1468,7 +1473,7 @@ fs_visitor::swizzle_result(ir_texture *ir, fs_reg orig_val, int sampler)
 {
    this->result = orig_val;
 
-   if (ir->op == ir_txs)
+   if (ir->op == ir_txs || ir->op == ir_lod)
       return;
 
    if (ir->type == glsl_type::float_type) {
@@ -2370,7 +2375,7 @@ fs_visitor::resolve_bool_comparison(ir_rvalue *rvalue, fs_reg *reg)
 
 fs_visitor::fs_visitor(struct brw_context *brw,
                        struct brw_wm_compile *c,
-                       struct gl_shader_program *prog,
+                       struct gl_shader_program *shader_prog,
                        struct gl_fragment_program *fp,
                        unsigned dispatch_width)
    : dispatch_width(dispatch_width)
@@ -2378,12 +2383,13 @@ fs_visitor::fs_visitor(struct brw_context *brw,
    this->c = c;
    this->brw = brw;
    this->fp = fp;
-   this->prog = prog;
+   this->shader_prog = shader_prog;
    this->intel = &brw->intel;
    this->ctx = &intel->ctx;
    this->mem_ctx = ralloc_context(NULL);
-   if (prog)
-      shader = (struct brw_shader *) prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
+   if (shader_prog)
+      shader = (struct brw_shader *)
+         shader_prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
    else
       shader = NULL;
    this->failed = false;

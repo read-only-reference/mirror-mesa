@@ -14,10 +14,10 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
- * OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
+ * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+ * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 #include <stdint.h>
@@ -35,25 +35,22 @@
 
 #include "nv50_context.h"
 #include "nv50_resource.h"
-#include "nv50_blit.h"
 
 #include "nv50_defs.xml.h"
 #include "nv50_texture.xml.h"
 
+/* these are used in nv50_blit.h */
 #define NV50_ENG2D_SUPPORTED_FORMATS 0xff0843e080608409ULL
+#define NV50_ENG2D_NOCONVERT_FORMATS 0x0008402000000000ULL
+#define NV50_ENG2D_LUMINANCE_FORMATS 0x0008402000000000ULL
+#define NV50_ENG2D_INTENSITY_FORMATS 0x0000000000000000ULL
+#define NV50_ENG2D_OPERATION_FORMATS 0x060001c000608000ULL
 
-/* return TRUE for formats that can be converted among each other by NV50_2D */
-static INLINE boolean
-nv50_2d_format_faithful(enum pipe_format format)
-{
-   uint8_t id = nv50_format_table[format].rt;
-
-   return (id >= 0xc0) &&
-      (NV50_ENG2D_SUPPORTED_FORMATS & (1ULL << (id - 0xc0)));
-}
+#define NOUVEAU_DRIVER 0x50
+#include "nv50_blit.h"
 
 static INLINE uint8_t
-nv50_2d_format(enum pipe_format format)
+nv50_2d_format(enum pipe_format format, boolean dst, boolean dst_src_equal)
 {
    uint8_t id = nv50_format_table[format].rt;
 
@@ -62,6 +59,7 @@ nv50_2d_format(enum pipe_format format)
     */
    if ((id >= 0xc0) && (NV50_ENG2D_SUPPORTED_FORMATS & (1ULL << (id - 0xc0))))
       return id;
+   assert(dst_src_equal);
 
    switch (util_format_get_blocksize(format)) {
    case 1:
@@ -78,7 +76,7 @@ nv50_2d_format(enum pipe_format format)
 static int
 nv50_2d_texture_set(struct nouveau_pushbuf *push, int dst,
                     struct nv50_miptree *mt, unsigned level, unsigned layer,
-                    enum pipe_format pformat)
+                    enum pipe_format pformat, boolean dst_src_pformat_equal)
 {
    struct nouveau_bo *bo = mt->base.bo;
    uint32_t width, height, depth;
@@ -86,7 +84,7 @@ nv50_2d_texture_set(struct nouveau_pushbuf *push, int dst,
    uint32_t mthd = dst ? NV50_2D_DST_FORMAT : NV50_2D_SRC_FORMAT;
    uint32_t offset = mt->level[level].offset;
 
-   format = nv50_2d_format(pformat);
+   format = nv50_2d_format(pformat, dst, dst_src_pformat_equal);
    if (!format) {
       NOUVEAU_ERR("invalid/unsupported surface format: %s\n",
                   util_format_name(pformat));
@@ -155,15 +153,16 @@ nv50_2d_texture_do_copy(struct nouveau_pushbuf *push,
    const enum pipe_format dfmt = dst->base.base.format;
    const enum pipe_format sfmt = src->base.base.format;
    int ret;
+   boolean eqfmt = dfmt == sfmt;
 
    if (!PUSH_SPACE(push, 2 * 16 + 32))
       return PIPE_ERROR;
 
-   ret = nv50_2d_texture_set(push, 1, dst, dst_level, dz, dfmt);
+   ret = nv50_2d_texture_set(push, 1, dst, dst_level, dz, dfmt, eqfmt);
    if (ret)
       return ret;
 
-   ret = nv50_2d_texture_set(push, 0, src, src_level, sz, sfmt);
+   ret = nv50_2d_texture_set(push, 0, src, src_level, sz, sfmt, eqfmt);
    if (ret)
       return ret;
 
@@ -200,10 +199,10 @@ nv50_resource_copy_region(struct pipe_context *pipe,
    boolean m2mf;
    unsigned dst_layer = dstz, src_layer = src_box->z;
 
-   /* Fallback for buffers. */
    if (dst->target == PIPE_BUFFER && src->target == PIPE_BUFFER) {
-      util_resource_copy_region(pipe, dst, dst_level, dstx, dsty, dstz,
-                                src, src_level, src_box);
+      nouveau_copy_buffer(&nv50->base,
+                          nv04_resource(dst), dstx,
+                          nv04_resource(src), src_box->x, src_box->width);
       return;
    }
 
@@ -243,8 +242,8 @@ nv50_resource_copy_region(struct pipe_context *pipe,
    }
 
    assert((src->format == dst->format) ||
-          (nv50_2d_format_faithful(src->format) &&
-           nv50_2d_format_faithful(dst->format)));
+          (nv50_2d_src_format_faithful(src->format) &&
+           nv50_2d_dst_format_faithful(dst->format)));
 
    BCTX_REFN(nv50->bufctx, 2D, nv04_resource(src), RD);
    BCTX_REFN(nv50->bufctx, 2D, nv04_resource(dst), WR);
@@ -751,6 +750,7 @@ nv50_blit_set_src(struct nv50_blitctx *blit,
    }
 
    flags = res->last_level ? 0 : NV50_TEXVIEW_SCALED_COORDS;
+   flags |= NV50_TEXVIEW_ACCESS_RESOLVE;
    if (filter && res->nr_samples == 8)
       flags |= NV50_TEXVIEW_FILTER_MSAA8;
 
@@ -976,6 +976,8 @@ nv50_blit_3d(struct nv50_context *nv50, const struct pipe_blit_info *info)
 
    BEGIN_NV04(push, NV50_3D(VIEWPORT_TRANSFORM_EN), 1);
    PUSH_DATA (push, 0);
+   BEGIN_NV04(push, NV50_3D(VIEW_VOLUME_CLIP_CTRL), 1);
+   PUSH_DATA (push, 0x1);
 
    /* Draw a large triangle in screen coordinates covering the whole
     * render target, with scissors defining the destination region.
@@ -1058,7 +1060,8 @@ nv50_blit_eng2d(struct nv50_context *nv50, const struct pipe_blit_info *info)
    int64_t du_dx, dv_dy;
    int i;
    uint32_t mode;
-   const uint32_t mask = nv50_blit_eng2d_get_mask(info);
+   uint32_t mask = nv50_blit_eng2d_get_mask(info);
+   boolean b;
 
    mode = nv50_blit_get_filter(info) ?
       NV50_2D_BLIT_CONTROL_FILTER_BILINEAR :
@@ -1069,8 +1072,9 @@ nv50_blit_eng2d(struct nv50_context *nv50, const struct pipe_blit_info *info)
    du_dx = ((int64_t)info->src.box.width << 32) / info->dst.box.width;
    dv_dy = ((int64_t)info->src.box.height << 32) / info->dst.box.height;
 
-   nv50_2d_texture_set(push, 1, dst, info->dst.level, dz, info->dst.format);
-   nv50_2d_texture_set(push, 0, src, info->src.level, sz, info->src.format);
+   b = info->dst.format == info->src.format;
+   nv50_2d_texture_set(push, 1, dst, info->dst.level, dz, info->dst.format, b);
+   nv50_2d_texture_set(push, 0, src, info->src.level, sz, info->src.format, b);
 
    if (info->scissor_enable) {
       BEGIN_NV04(push, NV50_2D(CLIP_X), 5);
@@ -1093,6 +1097,17 @@ nv50_blit_eng2d(struct nv50_context *nv50, const struct pipe_blit_info *info)
       PUSH_DATA (push, 0xffffffff);
       BEGIN_NV04(push, NV50_2D(OPERATION), 1);
       PUSH_DATA (push, NV50_2D_OPERATION_ROP);
+   } else
+   if (info->src.format != info->dst.format) {
+      if (info->src.format == PIPE_FORMAT_R8_UNORM ||
+          info->src.format == PIPE_FORMAT_R16_UNORM ||
+          info->src.format == PIPE_FORMAT_R16_FLOAT ||
+          info->src.format == PIPE_FORMAT_R32_FLOAT) {
+         mask = 0xffff0000; /* also makes condition for OPERATION reset true */
+         BEGIN_NV04(push, NV50_2D(BETA4), 2);
+         PUSH_DATA (push, mask);
+         PUSH_DATA (push, NV50_2D_OPERATION_SRCCOPY_PREMULT);
+      }
    }
 
    if (src->ms_x > dst->ms_x || src->ms_y > dst->ms_y) {
@@ -1224,11 +1239,22 @@ nv50_blit(struct pipe_context *pipe, const struct pipe_blit_info *info)
    }
 
    if (!eng3d && info->dst.format != info->src.format) {
-      if (!nv50_2d_format_faithful(info->dst.format) ||
-          !nv50_2d_format_faithful(info->src.format))
+      if (!nv50_2d_dst_format_faithful(info->dst.format) ||
+          !nv50_2d_src_format_faithful(info->src.format)) {
          eng3d = TRUE;
-      if (info->dst.format == PIPE_FORMAT_R8_UNORM ||
-          info->dst.format == PIPE_FORMAT_R16_UNORM)
+      } else
+      if (!nv50_2d_src_format_faithful(info->src.format)) {
+         if (!util_format_is_luminance(info->src.format)) {
+            if (util_format_is_intensity(info->src.format))
+               eng3d = TRUE;
+            else
+            if (!nv50_2d_dst_format_ops_supported(info->dst.format))
+               eng3d = TRUE;
+            else
+               eng3d = !nv50_2d_format_supported(info->src.format);
+         }
+      } else
+      if (util_format_is_luminance_alpha(info->src.format))
          eng3d = TRUE;
    }
 

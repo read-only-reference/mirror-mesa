@@ -35,7 +35,6 @@
 #include "main/bufferobj.h"
 #include "main/format_pack.h"
 #include "main/macros.h"
-#include "main/mfeatures.h"
 #include "main/mtypes.h"
 #include "main/pack.h"
 #include "main/pbo.h"
@@ -294,6 +293,9 @@ static void *
 make_passthrough_vertex_shader(struct st_context *st, 
                                GLboolean passColor)
 {
+   const unsigned texcoord_semantic = st->needs_texcoord_semantic ?
+      TGSI_SEMANTIC_TEXCOORD : TGSI_SEMANTIC_GENERIC;
+
    if (!st->drawpix.vert_shaders[passColor]) {
       struct ureg_program *ureg = ureg_create( TGSI_PROCESSOR_VERTEX );
 
@@ -307,7 +309,7 @@ make_passthrough_vertex_shader(struct st_context *st,
       
       /* MOV result.texcoord0, vertex.attr[1]; */
       ureg_MOV(ureg, 
-               ureg_DECL_output( ureg, TGSI_SEMANTIC_GENERIC, 0 ),
+               ureg_DECL_output( ureg, texcoord_semantic, 0 ),
                ureg_DECL_vs_input( ureg, 1 ));
       
       if (passColor) {
@@ -463,7 +465,7 @@ alloc_texture(struct st_context *st, GLsizei width, GLsizei height,
    struct pipe_resource *pt;
 
    pt = st_texture_create(st, st->internal_target, texFormat, 0,
-                          width, height, 1, 1, PIPE_BIND_SAMPLER_VIEW);
+                          width, height, 1, 1, 0, PIPE_BIND_SAMPLER_VIEW);
 
    return pt;
 }
@@ -707,9 +709,9 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
       struct pipe_rasterizer_state rasterizer;
       memset(&rasterizer, 0, sizeof(rasterizer));
       rasterizer.clamp_fragment_color = !st->clamp_frag_color_in_shader &&
-                                        ctx->Color._ClampFragmentColor &&
-                                        !ctx->DrawBuffer->_IntegerColor;
-      rasterizer.gl_rasterization_rules = 1;
+                                        ctx->Color._ClampFragmentColor;
+      rasterizer.half_pixel_center = 1;
+      rasterizer.bottom_edge_rule = 1;
       rasterizer.depth_clip = !ctx->Transform.DepthClamp;
       rasterizer.scissor = ctx->Scissor.Enabled;
       cso_set_rasterizer(cso, &rasterizer);
@@ -1034,8 +1036,7 @@ get_color_fp_variant(struct st_context *st)
                        ctx->Pixel.AlphaScale != 1.0);
    key.pixelMaps = ctx->Pixel.MapColorFlag;
    key.clamp_color = st->clamp_frag_color_in_shader &&
-                     st->ctx->Color._ClampFragmentColor &&
-                     !st->ctx->DrawBuffer->_IntegerColor;
+                     st->ctx->Color._ClampFragmentColor;
 
    fpv = st_get_fp_variant(st, st->fp, &key);
 

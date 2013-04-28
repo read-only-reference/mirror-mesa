@@ -68,6 +68,7 @@ struct draw_geometry_shader {
    unsigned position_output;
 
    unsigned max_output_vertices;
+   unsigned primitive_boundary;
    unsigned input_primitive;
    unsigned output_primitive;
 
@@ -95,6 +96,7 @@ struct draw_geometry_shader {
    int **llvm_prim_lengths;
    int *llvm_emitted_primitives;
    int *llvm_emitted_vertices;
+   int *llvm_prim_ids;
 #endif
 
    void (*fetch_inputs)(struct draw_geometry_shader *shader,
@@ -111,6 +113,8 @@ struct draw_geometry_shader {
    unsigned (*run)(struct draw_geometry_shader *shader,
                    unsigned input_primitives);
 };
+
+void draw_geometry_shader_new_instance(struct draw_geometry_shader *gs);
 
 /*
  * Returns the number of vertices emitted.

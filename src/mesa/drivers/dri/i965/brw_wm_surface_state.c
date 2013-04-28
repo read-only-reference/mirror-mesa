@@ -31,6 +31,7 @@
                    
 
 #include "main/context.h"
+#include "main/blend.h"
 #include "main/mtypes.h"
 #include "main/samplerobj.h"
 #include "program/prog_parameter.h"
@@ -566,7 +567,20 @@ brw_init_surface_formats(struct brw_context *brw)
    ctx->TextureFormatSupported[MESA_FORMAT_X8_Z24] = true;
    ctx->TextureFormatSupported[MESA_FORMAT_Z32_FLOAT] = true;
    ctx->TextureFormatSupported[MESA_FORMAT_Z32_FLOAT_X24S8] = true;
-   ctx->TextureFormatSupported[MESA_FORMAT_Z16] = true;
+
+   /* It appears that Z16 is slower than Z24 (on Intel Ivybridge and newer
+    * hardware at least), so there's no real reason to prefer it unless you're
+    * under memory (not memory bandwidth) pressure.  Our speculation is that
+    * this is due to either increased fragment shader execution from
+    * GL_LEQUAL/GL_EQUAL depth tests at the reduced precision, or due to
+    * increased depth stalls from a cacheline-based heuristic for detecting
+    * depth stalls.
+    *
+    * However, desktop GL 3.0+ require that you get exactly 16 bits when
+    * asking for DEPTH_COMPONENT16, so we have to respect that.
+    */
+   if (_mesa_is_desktop_gl(ctx))
+      ctx->TextureFormatSupported[MESA_FORMAT_Z16] = true;
 
    /* On hardware that lacks support for ETC1, we map ETC1 to RGBX
     * during glCompressedTexImage2D(). See intel_mipmap_tree::wraps_etc1.
@@ -913,15 +927,18 @@ brw_update_texture_surface(struct gl_context *ctx,
  * Create the constant buffer surface.  Vertex/fragment shader constants will be
  * read from this buffer with Data Port Read instructions/messages.
  */
-void
+static void
 brw_create_constant_surface(struct brw_context *brw,
 			    drm_intel_bo *bo,
 			    uint32_t offset,
-			    int width,
-			    uint32_t *out_offset)
+			    uint32_t size,
+			    uint32_t *out_offset,
+                            bool dword_pitch)
 {
    struct intel_context *intel = &brw->intel;
-   const GLint w = width - 1;
+   uint32_t stride = dword_pitch ? 4 : 16;
+   uint32_t elements = ALIGN(size, stride) / stride;
+   const GLint w = elements - 1;
    uint32_t *surf;
 
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
@@ -940,7 +957,7 @@ brw_create_constant_surface(struct brw_context *brw,
 	      ((w >> 7) & 0x1fff) << BRW_SURFACE_HEIGHT_SHIFT);
 
    surf[3] = (((w >> 20) & 0x7f) << BRW_SURFACE_DEPTH_SHIFT |
-	      (16 - 1) << BRW_SURFACE_PITCH_SHIFT); /* ignored */
+	      (stride - 1) << BRW_SURFACE_PITCH_SHIFT);
 
    surf[4] = 0;
    surf[5] = 0;
@@ -1087,9 +1104,9 @@ brw_upload_wm_pull_constants(struct brw_context *brw)
    }
    drm_intel_gem_bo_unmap_gtt(brw->wm.const_bo);
 
-   intel->vtbl.create_constant_surface(brw, brw->wm.const_bo, 0,
-				       ALIGN(brw->wm.prog_data->nr_pull_params, 4) / 4,
-				       &brw->wm.surf_offset[surf_index]);
+   intel->vtbl.create_constant_surface(brw, brw->wm.const_bo, 0, size,
+				       &brw->wm.surf_offset[surf_index],
+                                       true);
 
    brw->state.dirty.brw |= BRW_NEW_SURFACES;
 }
@@ -1213,7 +1230,8 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
    uint32_t *surf;
    uint32_t tile_x, tile_y;
    uint32_t format = 0;
-   gl_format rb_format = intel_rb_format(irb);
+   /* _NEW_BUFFERS */
+   gl_format rb_format = _mesa_get_render_format(ctx, intel_rb_format(irb));
 
    if (irb->tex_image && !brw->has_surface_tile_offset) {
       intel_renderbuffer_tile_offsets(irb, &tile_x, &tile_y);
@@ -1235,25 +1253,10 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
    surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
 			  6 * 4, 32, &brw->wm.surf_offset[unit]);
 
-   switch (rb_format) {
-   case MESA_FORMAT_SARGB8:
-      /* _NEW_BUFFERS
-       *
-       * Without GL_EXT_framebuffer_sRGB we shouldn't bind sRGB surfaces to the
-       * blend/update as sRGB.
-       */
-      if (ctx->Color.sRGBEnabled)
-	 format = brw_format_for_mesa_format(rb_format);
-      else
-	 format = BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
-      break;
-   default:
-      format = brw->render_target_format[rb_format];
-      if (unlikely(!brw->format_supported_as_render_target[rb_format])) {
-	 _mesa_problem(ctx, "%s: renderbuffer format %s unsupported\n",
-		       __FUNCTION__, _mesa_get_format_name(rb_format));
-      }
-      break;
+   format = brw->render_target_format[rb_format];
+   if (unlikely(!brw->format_supported_as_render_target[rb_format])) {
+      _mesa_problem(ctx, "%s: renderbuffer format %s unsupported\n",
+                    __FUNCTION__, _mesa_get_format_name(rb_format));
    }
 
    surf[0] = (BRW_SURFACE_2D << BRW_SURFACE_TYPE_SHIFT |
@@ -1440,12 +1443,10 @@ brw_upload_ubo_surfaces(struct brw_context *brw,
        * glBindBufferRange case is undefined, we can just bind the whole buffer
        * glBindBufferBase wants and be a correct implementation.
        */
-      int size = bo->size - binding->Offset;
-      size = ALIGN(size, 16) / 16; /* The interface takes a number of vec4s */
-
       intel->vtbl.create_constant_surface(brw, bo, binding->Offset,
-					  size,
-					  &surf_offsets[i]);
+					  bo->size - binding->Offset,
+					  &surf_offsets[i],
+                                          shader->Type == GL_FRAGMENT_SHADER);
    }
 
    if (shader->NumUniformBlocks)

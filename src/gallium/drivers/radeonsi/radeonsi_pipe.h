@@ -50,6 +50,8 @@
 #define R600_TRACE_CS 0
 #define R600_TRACE_CS_DWORDS		6
 
+struct si_pipe_compute;
+
 struct r600_pipe_fences {
 	struct si_resource		*bo;
 	unsigned			*data;
@@ -86,6 +88,10 @@ struct si_pipe_sampler_view {
 struct si_pipe_sampler_state {
 	uint32_t			val[4];
 	float				border_color[4];
+};
+
+struct si_cs_shader_state {
+	struct si_pipe_compute		*program;
 };
 
 /* needed for blitter save */
@@ -139,6 +145,7 @@ struct r600_context {
 	struct pipe_stencil_ref		stencil_ref;
 	struct si_pipe_shader_selector	*ps_shader;
 	struct si_pipe_shader_selector	*vs_shader;
+	struct si_cs_shader_state	cs_shader_state;
 	struct pipe_query		*current_render_cond;
 	unsigned			current_render_cond_mode;
 	struct pipe_query		*saved_render_cond;
@@ -218,6 +225,7 @@ void r600_upload_index_buffer(struct r600_context *rctx,
 /* r600_pipe.c */
 void radeonsi_flush(struct pipe_context *ctx, struct pipe_fence_handle **fence,
 		    unsigned flags);
+const char *r600_get_llvm_processor_name(enum radeon_family family);
 
 /* r600_query.c */
 void r600_init_query_functions(struct r600_context *rctx);
@@ -237,6 +245,20 @@ void r600_translate_index_buffer(struct r600_context *r600,
 #if R600_TRACE_CS
 void r600_trace_emit(struct r600_context *rctx);
 #endif
+
+/* radeonsi_compute.c */
+void si_init_compute_functions(struct r600_context *rctx);
+
+/* radeonsi_uvd.c */
+struct pipe_video_decoder *radeonsi_uvd_create_decoder(struct pipe_context *context,
+						       enum pipe_video_profile profile,
+						       enum pipe_video_entrypoint entrypoint,
+						       enum pipe_video_chroma_format chroma_format,
+						       unsigned width, unsigned height,
+						       unsigned max_references, bool expect_chunked_decode);
+
+struct pipe_video_buffer *radeonsi_video_buffer_create(struct pipe_context *pipe,
+						       const struct pipe_video_buffer *tmpl);
 
 /*
  * common helpers

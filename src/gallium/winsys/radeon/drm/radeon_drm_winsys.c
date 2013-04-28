@@ -90,6 +90,14 @@
 #define RADEON_INFO_TIMESTAMP 0x11
 #endif
 
+#ifndef RADEON_INFO_RING_WORKING
+#define RADEON_INFO_RING_WORKING 0x15
+#endif
+
+#ifndef RADEON_CS_RING_UVD
+#define RADEON_CS_RING_UVD	3
+#endif
+
 static struct util_hash_table *fd_tab = NULL;
 
 /* Enable/disable feature access for one command stream.
@@ -323,6 +331,15 @@ static boolean do_winsys_init(struct radeon_drm_winsys *ws)
         ws->info.r600_has_dma = TRUE;
     }
 
+    /* Check for UVD */
+    ws->info.has_uvd = FALSE;
+    if (ws->info.drm_minor >= 32) {
+	uint32_t value = RADEON_CS_RING_UVD;
+        if (radeon_get_drm_value(ws->fd, RADEON_INFO_RING_WORKING,
+                                 "UVD Ring working", &value))
+            ws->info.has_uvd = value;
+    }
+
     /* Get GEM info. */
     retval = drmCommandWriteRead(ws->fd, DRM_RADEON_GEM_INFO,
             &gem_info, sizeof(gem_info));
@@ -467,32 +484,28 @@ static int radeon_drm_winsys_surface_best(struct radeon_winsys *rws,
     return radeon_surface_best(ws->surf_man, surf);
 }
 
-static uint64_t radeon_query_timestamp(struct radeon_winsys *rws)
-{
-    struct radeon_drm_winsys *ws = (struct radeon_drm_winsys*)rws;
-    uint64_t ts = 0;
-
-    if (ws->info.drm_minor < 20 ||
-        ws->gen < DRV_R600) {
-        assert(0);
-        return 0;
-    }
-
-    radeon_get_drm_value(ws->fd, RADEON_INFO_TIMESTAMP, "timestamp",
-                         (uint32_t*)&ts);
-    return ts;
-}
-
 static uint64_t radeon_query_value(struct radeon_winsys *rws,
                                    enum radeon_value_id value)
 {
     struct radeon_drm_winsys *ws = (struct radeon_drm_winsys*)rws;
+    uint64_t ts = 0;
 
     switch (value) {
     case RADEON_REQUESTED_VRAM_MEMORY:
         return ws->allocated_vram;
     case RADEON_REQUESTED_GTT_MEMORY:
         return ws->allocated_gtt;
+    case RADEON_BUFFER_WAIT_TIME_NS:
+        return ws->buffer_wait_time;
+    case RADEON_TIMESTAMP:
+        if (ws->info.drm_minor < 20 || ws->gen < DRV_R600) {
+            assert(0);
+            return 0;
+        }
+
+        radeon_get_drm_value(ws->fd, RADEON_INFO_TIMESTAMP, "timestamp",
+                             (uint32_t*)&ts);
+        return ts;
     }
     return 0;
 }
@@ -538,7 +551,7 @@ next:
         pipe_mutex_unlock(ws->cs_stack_lock);
 
         if (cs) {
-            radeon_drm_cs_emit_ioctl_oneshot(cs->cst);
+            radeon_drm_cs_emit_ioctl_oneshot(cs, cs->cst);
 
             pipe_mutex_lock(ws->cs_stack_lock);
             for (i = 1; i < p_atomic_read(&ws->ncs); i++) {
@@ -619,7 +632,6 @@ struct radeon_winsys *radeon_drm_winsys_create(int fd)
     ws->base.cs_request_feature = radeon_cs_request_feature;
     ws->base.surface_init = radeon_drm_winsys_surface_init;
     ws->base.surface_best = radeon_drm_winsys_surface_best;
-    ws->base.query_timestamp = radeon_query_timestamp;
     ws->base.query_value = radeon_query_value;
 
     radeon_bomgr_init_functions(ws);

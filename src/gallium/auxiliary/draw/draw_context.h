@@ -60,6 +60,7 @@ struct draw_so_target {
    struct pipe_stream_output_target target;
    void *mapping;
    int internal_offset;
+   int emitted_vertices;
 };
 
 struct draw_context *draw_create( struct pipe_context *pipe );
@@ -170,6 +171,9 @@ void draw_bind_vertex_shader(struct draw_context *draw,
                              struct draw_vertex_shader *dvs);
 void draw_delete_vertex_shader(struct draw_context *draw,
                                struct draw_vertex_shader *dvs);
+void draw_vs_attach_so(struct draw_vertex_shader *dvs,
+                       const struct pipe_stream_output_info *info);
+void draw_vs_reset_so(struct draw_vertex_shader *dvs);
 
 
 /*
@@ -221,18 +225,9 @@ draw_set_mapped_constant_buffer(struct draw_context *draw,
                                 unsigned size);
 
 void
-draw_set_mapped_so_buffers(struct draw_context *draw,
-                           void *buffers[PIPE_MAX_SO_BUFFERS],
-                           unsigned num_buffers);
-
-void
 draw_set_mapped_so_targets(struct draw_context *draw,
                            int num_targets,
                            struct draw_so_target *targets[PIPE_MAX_SO_BUFFERS]);
-
-void
-draw_set_so_state(struct draw_context *draw,
-                  struct pipe_stream_output_info *state);
 
 
 /***********************************************************************
@@ -268,6 +263,13 @@ void draw_set_driver_clipping( struct draw_context *draw,
 
 void draw_set_force_passthrough( struct draw_context *draw, 
                                  boolean enable );
+
+
+/*******************************************************************************
+ * Draw statistics
+ */
+void draw_collect_pipeline_statistics(struct draw_context *draw,
+                                      boolean enable);
 
 /*******************************************************************************
  * Draw pipeline 

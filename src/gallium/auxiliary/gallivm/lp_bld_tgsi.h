@@ -155,6 +155,7 @@ struct lp_tgsi_info
 struct lp_bld_tgsi_system_values {
    LLVMValueRef instance_id;
    LLVMValueRef vertex_id;
+   LLVMValueRef prim_id;
 };
 
 
@@ -221,7 +222,6 @@ lp_build_tgsi_soa(struct gallivm_state *gallivm,
                   struct lp_build_mask_context *mask,
                   LLVMValueRef consts_ptr,
                   const struct lp_bld_tgsi_system_values *system_values,
-                  const LLVMValueRef *pos,
                   const LLVMValueRef (*inputs)[4],
                   LLVMValueRef (*outputs)[4],
                   struct lp_build_sampler_soa *sampler,
@@ -241,6 +241,12 @@ lp_build_tgsi_aos(struct gallivm_state *gallivm,
                   const struct tgsi_shader_info *info);
 
 
+enum lp_exec_mask_break_type {
+   LP_EXEC_MASK_BREAK_TYPE_LOOP,
+   LP_EXEC_MASK_BREAK_TYPE_SWITCH
+};
+
+
 struct lp_exec_mask {
    struct lp_build_context *bld;
 
@@ -252,6 +258,24 @@ struct lp_exec_mask {
    LLVMValueRef cond_stack[LP_MAX_TGSI_NESTING];
    int cond_stack_size;
    LLVMValueRef cond_mask;
+
+   /* keep track if break belongs to switch or loop */
+   enum lp_exec_mask_break_type break_type_stack[LP_MAX_TGSI_NESTING];
+   enum lp_exec_mask_break_type break_type;
+
+   struct {
+      LLVMValueRef switch_val;
+      LLVMValueRef switch_mask;
+      LLVMValueRef switch_mask_default;
+      boolean switch_in_default;
+      unsigned switch_pc;
+   } switch_stack[LP_MAX_TGSI_NESTING];
+   int switch_stack_size;
+   LLVMValueRef switch_val;
+   LLVMValueRef switch_mask;         /* current switch exec mask */
+   LLVMValueRef switch_mask_default; /* reverse of switch mask used for default */
+   boolean switch_in_default;        /* if switch exec is currently in default */
+   unsigned switch_pc;               /* when used points to default or endswitch-1 */
 
    LLVMBasicBlockRef loop_block;
    LLVMValueRef cont_mask;
@@ -365,20 +389,24 @@ struct lp_build_tgsi_context
 
 struct lp_build_tgsi_gs_iface
 {
-   LLVMValueRef input;
-   void (*emit_vertex)(struct lp_build_tgsi_context * bld_base,
+   LLVMValueRef (*fetch_input)(const struct lp_build_tgsi_gs_iface *gs_iface,
+                               struct lp_build_tgsi_context * bld_base,
+                               boolean is_indirect,
+                               LLVMValueRef vertex_index,
+                               LLVMValueRef attrib_index,
+                               LLVMValueRef swizzle_index);
+   void (*emit_vertex)(const struct lp_build_tgsi_gs_iface *gs_iface,
+                       struct lp_build_tgsi_context * bld_base,
                        LLVMValueRef (*outputs)[4],
-                       LLVMValueRef emitted_vertices_vec,
-                       void *user_data);
-   void (*end_primitive)(struct lp_build_tgsi_context * bld_base,
+                       LLVMValueRef emitted_vertices_vec);
+   void (*end_primitive)(const struct lp_build_tgsi_gs_iface *gs_iface,
+                         struct lp_build_tgsi_context * bld_base,
                          LLVMValueRef verts_per_prim_vec,
-                         LLVMValueRef emitted_prims_vec,
-                         void *user_data);
-   void (*gs_epilogue)(struct lp_build_tgsi_context * bld_base,
+                         LLVMValueRef emitted_prims_vec);
+   void (*gs_epilogue)(const struct lp_build_tgsi_gs_iface *gs_iface,
+                       struct lp_build_tgsi_context * bld_base,
                        LLVMValueRef total_emitted_vertices_vec,
-                       LLVMValueRef emitted_prims_vec,
-                       void *user_data);
-   void *user_data;
+                       LLVMValueRef emitted_prims_vec);
 };
 
 struct lp_build_tgsi_soa_context
@@ -389,18 +417,12 @@ struct lp_build_tgsi_soa_context
    struct lp_build_context elem_bld;
 
    const struct lp_build_tgsi_gs_iface *gs_iface;
-   LLVMValueRef emitted_prims_vec;
-   LLVMValueRef total_emitted_vertices_vec;
-   LLVMValueRef emitted_vertices_vec;
-   /* if a shader doesn't have ENDPRIM instruction but it has
-    * a number of EMIT instructions it means the END instruction
-    * implicitly invokes ENDPRIM. handle this via a flag here
-    * in the future maybe we can enforce TGSI to always have
-    * an explicit ENDPRIM */
-   boolean pending_end_primitive;
+   LLVMValueRef emitted_prims_vec_ptr;
+   LLVMValueRef total_emitted_vertices_vec_ptr;
+   LLVMValueRef emitted_vertices_vec_ptr;
+   LLVMValueRef max_output_vertices_vec;
 
    LLVMValueRef consts_ptr;
-   const LLVMValueRef *pos;
    const LLVMValueRef (*inputs)[TGSI_NUM_CHANNELS];
    LLVMValueRef (*outputs)[TGSI_NUM_CHANNELS];
 

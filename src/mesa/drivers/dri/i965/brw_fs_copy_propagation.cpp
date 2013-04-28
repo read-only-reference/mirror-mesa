@@ -104,7 +104,7 @@ fs_copy_prop_dataflow::fs_copy_prop_dataflow(void *mem_ctx, cfg_t *cfg,
 
    acp = rzalloc_array(mem_ctx, struct acp_entry *, num_acp);
 
-   bitset_words = ALIGN(num_acp, BITSET_WORDBITS) / BITSET_WORDBITS;
+   bitset_words = BITSET_WORDS(num_acp);
 
    int next_acp = 0;
    for (int b = 0; b < cfg->num_blocks; b++) {
@@ -262,6 +262,7 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
          progress = true;
          break;
 
+      case BRW_OPCODE_MACH:
       case BRW_OPCODE_MUL:
       case BRW_OPCODE_ADD:
          if (i == 1) {
@@ -269,10 +270,11 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
             progress = true;
          } else if (i == 0 && inst->src[1].file != IMM) {
             /* Fit this constant in by commuting the operands.
-             * Exception: we can't do this for 32-bit integer MUL
+             * Exception: we can't do this for 32-bit integer MUL/MACH
              * because it's asymmetric.
              */
-            if (inst->opcode == BRW_OPCODE_MUL &&
+            if ((inst->opcode == BRW_OPCODE_MUL ||
+                 inst->opcode == BRW_OPCODE_MACH) &&
                 (inst->src[1].type == BRW_REGISTER_TYPE_D ||
                  inst->src[1].type == BRW_REGISTER_TYPE_UD))
                break;
@@ -412,9 +414,7 @@ fs_visitor::opt_copy_propagate_local(void *mem_ctx, bblock_t *block,
            inst->src[0].file == IMM) &&
 	  inst->src[0].type == inst->dst.type &&
 	  !inst->saturate &&
-	  !inst->predicate &&
-	  !inst->force_uncompressed &&
-	  !inst->force_sechalf) {
+	  !inst->is_partial_write()) {
 	 acp_entry *entry = ralloc(mem_ctx, acp_entry);
 	 entry->dst = inst->dst;
 	 entry->src = inst->src[0];
