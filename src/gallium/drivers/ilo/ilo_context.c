@@ -37,29 +37,12 @@
 #include "ilo_screen.h"
 #include "ilo_shader.h"
 #include "ilo_state.h"
+#include "ilo_transfer.h"
 #include "ilo_video.h"
 #include "ilo_context.h"
 
 static void
-ilo_context_new_cp_batch(struct ilo_cp *cp, void *data)
-{
-   struct ilo_context *ilo = ilo_context(data);
-
-   if (cp->ring == ILO_CP_RING_RENDER)
-      ilo_3d_new_cp_batch(ilo->hw3d);
-}
-
-static void
-ilo_context_pre_cp_flush(struct ilo_cp *cp, void *data)
-{
-   struct ilo_context *ilo = ilo_context(data);
-
-   if (cp->ring == ILO_CP_RING_RENDER)
-      ilo_3d_pre_cp_flush(ilo->hw3d);
-}
-
-static void
-ilo_context_post_cp_flush(struct ilo_cp *cp, void *data)
+ilo_context_cp_flushed(struct ilo_cp *cp, void *data)
 {
    struct ilo_context *ilo = ilo_context(data);
 
@@ -70,14 +53,13 @@ ilo_context_post_cp_flush(struct ilo_cp *cp, void *data)
    ilo->last_cp_bo = cp->bo;
    ilo->last_cp_bo->reference(ilo->last_cp_bo);
 
-   if (cp->ring == ILO_CP_RING_RENDER)
-      ilo_3d_post_cp_flush(ilo->hw3d);
+   ilo_3d_cp_flushed(ilo->hw3d);
 }
 
 static void
 ilo_flush(struct pipe_context *pipe,
           struct pipe_fence_handle **f,
-          enum pipe_flush_flags flags)
+          unsigned flags)
 {
    struct ilo_context *ilo = ilo_context(pipe);
 
@@ -135,75 +117,20 @@ ilo_context_create(struct pipe_screen *screen, void *priv)
       return NULL;
 
    ilo->winsys = is->winsys;
-   ilo->devid = is->devid;
-   ilo->gen = is->gen;
+   ilo->dev = &is->dev;
 
-   if (IS_SNB_GT1(ilo->devid) ||
-       IS_IVB_GT1(ilo->devid) ||
-       IS_HSW_GT1(ilo->devid) ||
-       IS_BAYTRAIL(ilo->devid))
-      ilo->gt = 1;
-   else if (IS_SNB_GT2(ilo->devid) ||
-            IS_IVB_GT2(ilo->devid) ||
-            IS_HSW_GT2(ilo->devid))
-      ilo->gt = 2;
-   else
-      ilo->gt = 0;
-
-   /* stolen from classic i965 */
-   /* WM maximum threads is number of EUs times number of threads per EU. */
-   if (ilo->gen >= ILO_GEN(7)) {
-      if (ilo->gt == 1) {
-	 ilo->max_wm_threads = 48;
-	 ilo->max_vs_threads = 36;
-	 ilo->max_gs_threads = 36;
-	 ilo->urb.size = 128;
-	 ilo->urb.max_vs_entries = 512;
-	 ilo->urb.max_gs_entries = 192;
-      } else if (ilo->gt == 2) {
-	 ilo->max_wm_threads = 172;
-	 ilo->max_vs_threads = 128;
-	 ilo->max_gs_threads = 128;
-	 ilo->urb.size = 256;
-	 ilo->urb.max_vs_entries = 704;
-	 ilo->urb.max_gs_entries = 320;
-      } else {
-	 assert(!"Unknown gen7 device.");
-      }
-   } else if (ilo->gen == ILO_GEN(6)) {
-      if (ilo->gt == 2) {
-	 ilo->max_wm_threads = 80;
-	 ilo->max_vs_threads = 60;
-	 ilo->max_gs_threads = 60;
-	 ilo->urb.size = 64;            /* volume 5c.5 section 5.1 */
-	 ilo->urb.max_vs_entries = 256; /* volume 2a (see 3DSTATE_URB) */
-	 ilo->urb.max_gs_entries = 256;
-      } else {
-	 ilo->max_wm_threads = 40;
-	 ilo->max_vs_threads = 24;
-	 ilo->max_gs_threads = 21; /* conservative; 24 if rendering disabled */
-	 ilo->urb.size = 32;            /* volume 5c.5 section 5.1 */
-	 ilo->urb.max_vs_entries = 256; /* volume 2a (see 3DSTATE_URB) */
-	 ilo->urb.max_gs_entries = 256;
-      }
-   }
-
-   ilo->cp = ilo_cp_create(ilo->winsys, is->has_llc);
+   ilo->cp = ilo_cp_create(ilo->winsys, is->dev.has_llc);
    ilo->shader_cache = ilo_shader_cache_create(ilo->winsys);
    if (ilo->cp)
-      ilo->hw3d = ilo_3d_create(ilo->cp, ilo->gen, ilo->gt);
+      ilo->hw3d = ilo_3d_create(ilo->cp, ilo->dev);
 
    if (!ilo->cp || !ilo->shader_cache || !ilo->hw3d) {
       ilo_context_destroy(&ilo->base);
       return NULL;
    }
 
-   ilo_cp_set_hook(ilo->cp, ILO_CP_HOOK_NEW_BATCH,
-         ilo_context_new_cp_batch, (void *) ilo);
-   ilo_cp_set_hook(ilo->cp, ILO_CP_HOOK_PRE_FLUSH,
-         ilo_context_pre_cp_flush, (void *) ilo);
-   ilo_cp_set_hook(ilo->cp, ILO_CP_HOOK_POST_FLUSH,
-         ilo_context_post_cp_flush, (void *) ilo);
+   ilo_cp_set_flush_callback(ilo->cp,
+         ilo_context_cp_flushed, (void *) ilo);
 
    ilo->dirty = ILO_DIRTY_ALL;
 

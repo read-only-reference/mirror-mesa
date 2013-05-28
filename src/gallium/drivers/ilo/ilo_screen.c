@@ -132,7 +132,7 @@ ilo_get_shader_param(struct pipe_screen *screen, unsigned shader,
    case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
       return (shader == PIPE_SHADER_FRAGMENT) ? 0 : 1;
    case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
-      return (shader == PIPE_SHADER_FRAGMENT) ? 0 : 1;
+      return 1;
    case PIPE_SHADER_CAP_SUBROUTINES:
       return 0;
    case PIPE_SHADER_CAP_INTEGERS:
@@ -325,18 +325,18 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_SM3:
       return true;
    case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
-      if (is->gen >= ILO_GEN(7))
-         return 0; /* TODO */
+      if (is->dev.gen >= ILO_GEN(7) && !is->dev.has_gen7_sol_reset)
+         return 0;
       return ILO_MAX_SO_BUFFERS;
    case PIPE_CAP_PRIMITIVE_RESTART:
-      return false; /* TODO */
+      return true;
    case PIPE_CAP_MAX_COMBINED_SAMPLERS:
       return ILO_MAX_SAMPLERS * 2;
    case PIPE_CAP_INDEP_BLEND_ENABLE:
    case PIPE_CAP_INDEP_BLEND_FUNC:
       return true;
    case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
-      return (is->gen >= ILO_GEN(7)) ? 2048 : 512;
+      return (is->dev.gen >= ILO_GEN(7)) ? 2048 : 512;
    case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
    case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
    case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
@@ -368,7 +368,10 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
       return ILO_MAX_SO_BINDINGS;
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
-      return false; /* TODO */
+      if (is->dev.gen >= ILO_GEN(7))
+         return is->dev.has_gen7_sol_reset;
+      else
+         return false; /* TODO */
    case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
       return false;
@@ -392,6 +395,7 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_USER_CONSTANT_BUFFERS:
       return false; /* TODO push constants */
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
+      /* imposed by OWord (Dual) Block Read */
       return 16;
    case PIPE_CAP_START_INSTANCE:
    case PIPE_CAP_QUERY_TIMESTAMP:
@@ -401,10 +405,11 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
       return 0; /* TODO */
    case PIPE_CAP_CUBE_MAP_ARRAY:
-   case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
       return false; /* TODO */
+   case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
+      return true;
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
-      return 0; /* TODO */
+      return 1;
    case PIPE_CAP_TGSI_TEXCOORD:
       return false;
    case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
@@ -413,6 +418,9 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return false; /* TODO */
    case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
       return 0;
+   case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
+      /* a BRW_SURFACE_BUFFER can have up to 2^27 elements */
+      return 1 << 27;
 
    default:
       return 0;
@@ -432,7 +440,7 @@ ilo_get_name(struct pipe_screen *screen)
    const char *chipset;
 
    /* stolen from classic i965 */
-   switch (is->devid) {
+   switch (is->dev.devid) {
    case PCI_CHIP_SANDYBRIDGE_GT1:
    case PCI_CHIP_SANDYBRIDGE_GT2:
    case PCI_CHIP_SANDYBRIDGE_GT2_PLUS:
@@ -467,44 +475,44 @@ ilo_get_name(struct pipe_screen *screen)
       break;
    case PCI_CHIP_HASWELL_GT1:
    case PCI_CHIP_HASWELL_GT2:
-   case PCI_CHIP_HASWELL_GT2_PLUS:
+   case PCI_CHIP_HASWELL_GT3:
    case PCI_CHIP_HASWELL_SDV_GT1:
    case PCI_CHIP_HASWELL_SDV_GT2:
-   case PCI_CHIP_HASWELL_SDV_GT2_PLUS:
+   case PCI_CHIP_HASWELL_SDV_GT3:
    case PCI_CHIP_HASWELL_ULT_GT1:
    case PCI_CHIP_HASWELL_ULT_GT2:
-   case PCI_CHIP_HASWELL_ULT_GT2_PLUS:
+   case PCI_CHIP_HASWELL_ULT_GT3:
    case PCI_CHIP_HASWELL_CRW_GT1:
    case PCI_CHIP_HASWELL_CRW_GT2:
-   case PCI_CHIP_HASWELL_CRW_GT2_PLUS:
+   case PCI_CHIP_HASWELL_CRW_GT3:
       chipset = "Intel(R) Haswell Desktop";
       break;
    case PCI_CHIP_HASWELL_M_GT1:
    case PCI_CHIP_HASWELL_M_GT2:
-   case PCI_CHIP_HASWELL_M_GT2_PLUS:
+   case PCI_CHIP_HASWELL_M_GT3:
    case PCI_CHIP_HASWELL_SDV_M_GT1:
    case PCI_CHIP_HASWELL_SDV_M_GT2:
-   case PCI_CHIP_HASWELL_SDV_M_GT2_PLUS:
+   case PCI_CHIP_HASWELL_SDV_M_GT3:
    case PCI_CHIP_HASWELL_ULT_M_GT1:
    case PCI_CHIP_HASWELL_ULT_M_GT2:
-   case PCI_CHIP_HASWELL_ULT_M_GT2_PLUS:
+   case PCI_CHIP_HASWELL_ULT_M_GT3:
    case PCI_CHIP_HASWELL_CRW_M_GT1:
    case PCI_CHIP_HASWELL_CRW_M_GT2:
-   case PCI_CHIP_HASWELL_CRW_M_GT2_PLUS:
+   case PCI_CHIP_HASWELL_CRW_M_GT3:
       chipset = "Intel(R) Haswell Mobile";
       break;
    case PCI_CHIP_HASWELL_S_GT1:
    case PCI_CHIP_HASWELL_S_GT2:
-   case PCI_CHIP_HASWELL_S_GT2_PLUS:
+   case PCI_CHIP_HASWELL_S_GT3:
    case PCI_CHIP_HASWELL_SDV_S_GT1:
    case PCI_CHIP_HASWELL_SDV_S_GT2:
-   case PCI_CHIP_HASWELL_SDV_S_GT2_PLUS:
+   case PCI_CHIP_HASWELL_SDV_S_GT3:
    case PCI_CHIP_HASWELL_ULT_S_GT1:
    case PCI_CHIP_HASWELL_ULT_S_GT2:
-   case PCI_CHIP_HASWELL_ULT_S_GT2_PLUS:
+   case PCI_CHIP_HASWELL_ULT_S_GT3:
    case PCI_CHIP_HASWELL_CRW_S_GT1:
    case PCI_CHIP_HASWELL_CRW_S_GT2:
-   case PCI_CHIP_HASWELL_CRW_S_GT2_PLUS:
+   case PCI_CHIP_HASWELL_CRW_S_GT3:
       chipset = "Intel(R) Haswell Server";
       break;
    default:
@@ -619,6 +627,78 @@ ilo_screen_destroy(struct pipe_screen *screen)
    FREE(is);
 }
 
+static bool
+init_dev(struct ilo_dev_info *dev, const struct intel_winsys_info *info)
+{
+   dev->devid = info->devid;
+   dev->has_llc = info->has_llc;
+   dev->has_gen7_sol_reset = info->has_gen7_sol_reset;
+   dev->has_address_swizzling = info->has_address_swizzling;
+
+   /*
+    * From the Sandy Bridge PRM, volume 4 part 2, page 18:
+    *
+    *     "[DevSNB]: The GT1 product's URB provides 32KB of storage, arranged
+    *      as 1024 256-bit rows. The GT2 product's URB provides 64KB of
+    *      storage, arranged as 2048 256-bit rows. A row corresponds in size
+    *      to an EU GRF register. Read/write access to the URB is generally
+    *      supported on a row-granular basis."
+    *
+    * From the Ivy Bridge PRM, volume 4 part 2, page 17:
+    *
+    *     "URB Size    URB Rows    URB Rows when SLM Enabled
+    *      128k        4096        2048
+    *      256k        8096        4096"
+    */
+
+   if (IS_HASWELL(info->devid)) {
+      dev->gen = ILO_GEN(7.5);
+
+      if (IS_HSW_GT3(info->devid)) {
+         dev->gt = 3;
+         dev->urb_size = 512 * 1024;
+      }
+      else if (IS_HSW_GT2(info->devid)) {
+         dev->gt = 2;
+         dev->urb_size = 256 * 1024;
+      }
+      else {
+         dev->gt = 1;
+         dev->urb_size = 128 * 1024;
+      }
+   }
+   else if (IS_GEN7(info->devid)) {
+      dev->gen = ILO_GEN(7);
+
+      if (IS_IVB_GT2(info->devid)) {
+         dev->gt = 2;
+         dev->urb_size = 256 * 1024;
+      }
+      else {
+         dev->gt = 1;
+         dev->urb_size = 128 * 1024;
+      }
+   }
+   else if (IS_GEN6(info->devid)) {
+      dev->gen = ILO_GEN(6);
+
+      if (IS_SNB_GT2(info->devid)) {
+         dev->gt = 2;
+         dev->urb_size = 64 * 1024;
+      }
+      else {
+         dev->gt = 1;
+         dev->urb_size = 32 * 1024;
+      }
+   }
+   else {
+      ilo_err("unknown GPU generation\n");
+      return false;
+   }
+
+   return true;
+}
+
 struct pipe_screen *
 ilo_screen_create(struct intel_winsys *ws)
 {
@@ -634,21 +714,10 @@ ilo_screen_create(struct intel_winsys *ws)
    is->winsys = ws;
 
    info = is->winsys->get_info(is->winsys);
-
-   is->devid = info->devid;
-   if (IS_GEN7(info->devid)) {
-      is->gen = ILO_GEN(7);
-   }
-   else if (IS_GEN6(info->devid)) {
-      is->gen = ILO_GEN(6);
-   }
-   else {
-      ilo_err("unknown GPU generation\n");
+   if (!init_dev(&is->dev, info)) {
       FREE(is);
       return NULL;
    }
-
-   is->has_llc = info->has_llc;
 
    util_format_s3tc_init();
 

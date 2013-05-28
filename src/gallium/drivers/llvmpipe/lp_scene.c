@@ -163,8 +163,7 @@ lp_scene_begin_rasterization(struct lp_scene *scene)
          scene->cbufs[i].map = llvmpipe_resource_map(cbuf->texture,
                                                      cbuf->u.tex.level,
                                                      cbuf->u.tex.first_layer,
-                                                     LP_TEX_USAGE_READ_WRITE,
-                                                     LP_TEX_LAYOUT_LINEAR);
+                                                     LP_TEX_USAGE_READ_WRITE);
       }
       else {
          struct llvmpipe_resource *lpr = llvmpipe_resource(cbuf->texture);
@@ -184,8 +183,7 @@ lp_scene_begin_rasterization(struct lp_scene *scene)
       scene->zsbuf.map = llvmpipe_resource_map(zsbuf->texture,
                                                zsbuf->u.tex.level,
                                                zsbuf->u.tex.first_layer,
-                                               LP_TEX_USAGE_READ_WRITE,
-                                               LP_TEX_LAYOUT_NONE);
+                                               LP_TEX_USAGE_READ_WRITE);
    }
 }
 
@@ -470,7 +468,7 @@ lp_scene_bin_iter_begin( struct lp_scene *scene )
  * of work (a bin) to work on.
  */
 struct cmd_bin *
-lp_scene_bin_iter_next( struct lp_scene *scene )
+lp_scene_bin_iter_next( struct lp_scene *scene , int *x, int *y)
 {
    struct cmd_bin *bin = NULL;
 
@@ -487,6 +485,8 @@ lp_scene_bin_iter_next( struct lp_scene *scene )
    }
 
    bin = lp_scene_get_bin(scene, scene->curr_x, scene->curr_y);
+   *x = scene->curr_x;
+   *y = scene->curr_y;
 
 end:
    /*printf("return bin %p at %d, %d\n", (void *) bin, *bin_x, *bin_y);*/
@@ -505,6 +505,8 @@ void lp_scene_begin_binning( struct lp_scene *scene,
 
    scene->tiles_x = align(fb->width, TILE_SIZE) / TILE_SIZE;
    scene->tiles_y = align(fb->height, TILE_SIZE) / TILE_SIZE;
+   scene->width_aligned = align(fb->width, LP_RASTER_BLOCK_SIZE);
+   scene->height_aligned = align(fb->height, LP_RASTER_BLOCK_SIZE);
 
    assert(scene->tiles_x <= TILES_X);
    assert(scene->tiles_y <= TILES_Y);

@@ -54,6 +54,18 @@ enum ilo_debug {
    ILO_DEBUG_NOCACHE   = 1 << 9,
 };
 
+struct ilo_dev_info {
+   /* these mirror intel_winsys_info */
+   int devid;
+   bool has_llc;
+   bool has_gen7_sol_reset;
+   bool has_address_swizzling;
+
+   int gen;
+   int gt;
+   int urb_size;
+};
+
 extern int ilo_debug;
 
 /**

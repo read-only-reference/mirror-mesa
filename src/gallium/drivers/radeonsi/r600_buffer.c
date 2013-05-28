@@ -24,6 +24,7 @@
  *      Jerome Glisse
  *      Corbin Simpson <MostAwesomeDude@gmail.com>
  */
+
 #include <byteswap.h>
 
 #include "pipe/p_screen.h"
@@ -171,11 +172,9 @@ void r600_upload_index_buffer(struct r600_context *rctx,
 }
 
 void r600_upload_const_buffer(struct r600_context *rctx, struct si_resource **rbuffer,
-			      const uint8_t *ptr, unsigned size,
-			      uint32_t *const_offset)
+			const uint8_t *ptr, unsigned size,
+			uint32_t *const_offset)
 {
-	*rbuffer = NULL;
-
 	if (R600_BIG_ENDIAN) {
 		uint32_t *tmpPtr;
 		unsigned i;
@@ -190,11 +189,11 @@ void r600_upload_const_buffer(struct r600_context *rctx, struct si_resource **rb
 		}
 
 		u_upload_data(rctx->uploader, 0, size, tmpPtr, const_offset,
-			      (struct pipe_resource**)rbuffer);
+				(struct pipe_resource**)rbuffer);
 
 		free(tmpPtr);
 	} else {
 		u_upload_data(rctx->uploader, 0, size, ptr, const_offset,
-			      (struct pipe_resource**)rbuffer);
+					(struct pipe_resource**)rbuffer);
 	}
 }

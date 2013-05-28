@@ -94,8 +94,6 @@ struct data_block {
  * For each screen tile we have one of these bins.
  */
 struct cmd_bin {
-   ushort x;
-   ushort y;
    const struct lp_rast_state *last_state;       /* most recent state set in bin */
    struct cmd_block *head;
    struct cmd_block *tail;
@@ -145,6 +143,10 @@ struct lp_scene {
 
    /** list of resources referenced by the scene commands */
    struct resource_ref *resources;
+
+   /** aligned scene width, height */
+   unsigned width_aligned;
+   unsigned height_aligned;
 
    /** Total memory used by the scene (in bytes).  This sums all the
     * data blocks and counts all bins, state, resource references and
@@ -375,7 +377,7 @@ void
 lp_scene_bin_iter_begin( struct lp_scene *scene );
 
 struct cmd_bin *
-lp_scene_bin_iter_next( struct lp_scene *scene );
+lp_scene_bin_iter_next( struct lp_scene *scene, int *x, int *y );
 
 
 

@@ -35,21 +35,21 @@
 #include "ilo_gpe_gen7.h"
 
 static void
-gen7_emit_GPGPU_WALKER(const struct ilo_gpe *gpe,
+gen7_emit_GPGPU_WALKER(const struct ilo_dev_info *dev,
                        struct ilo_cp *cp)
 {
    assert(!"GPGPU_WALKER unsupported");
 }
 
 static void
-gen7_emit_3DSTATE_CLEAR_PARAMS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_CLEAR_PARAMS(const struct ilo_dev_info *dev,
                                uint32_t clear_val,
                                struct ilo_cp *cp)
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x04);
    const uint8_t cmd_len = 3;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
@@ -59,24 +59,24 @@ gen7_emit_3DSTATE_CLEAR_PARAMS(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_DEPTH_BUFFER(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_DEPTH_BUFFER(const struct ilo_dev_info *dev,
                                const struct pipe_surface *surface,
                                const struct pipe_depth_stencil_alpha_state *dsa,
                                bool hiz,
                                struct ilo_cp *cp)
 {
-   ilo_gpe_gen6_emit_3DSTATE_DEPTH_BUFFER(gpe, surface, dsa, hiz, cp);
+   ilo_gpe_gen6_emit_3DSTATE_DEPTH_BUFFER(dev, surface, dsa, hiz, cp);
 }
 
 static void
-gen7_emit_3dstate_pointer(const struct ilo_gpe *gpe,
+gen7_emit_3dstate_pointer(const struct ilo_dev_info *dev,
                           int subop, uint32_t pointer,
                           struct ilo_cp *cp)
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, subop);
    const uint8_t cmd_len = 2;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
@@ -85,24 +85,34 @@ gen7_emit_3dstate_pointer(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_CC_STATE_POINTERS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_CC_STATE_POINTERS(const struct ilo_dev_info *dev,
                                     uint32_t color_calc_state,
                                     struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x0e, color_calc_state, cp);
+   gen7_emit_3dstate_pointer(dev, 0x0e, color_calc_state, cp);
 }
 
 static void
-gen7_emit_3DSTATE_GS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_GS(const struct ilo_dev_info *dev,
                      const struct ilo_shader *gs,
-                     int max_threads, int num_samplers,
+                     int num_samplers,
                      struct ilo_cp *cp)
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x11);
    const uint8_t cmd_len = 7;
    uint32_t dw2, dw4, dw5;
+   int max_threads;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
+
+   switch (dev->gen) {
+   case ILO_GEN(7):
+      max_threads = (dev->gt == 2) ? 128 : 36;
+      break;
+   default:
+      max_threads = 1;
+      break;
+   }
 
    if (!gs) {
       ilo_cp_begin(cp, cmd_len);
@@ -140,7 +150,7 @@ gen7_emit_3DSTATE_GS(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_SF(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_SF(const struct ilo_dev_info *dev,
                      const struct pipe_rasterizer_state *rasterizer,
                      const struct pipe_surface *zs_surf,
                      struct ilo_cp *cp)
@@ -149,9 +159,9 @@ gen7_emit_3DSTATE_SF(const struct ilo_gpe *gpe,
    const uint8_t cmd_len = 7;
    uint32_t dw[6];
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
-   ilo_gpe_gen6_fill_3dstate_sf_raster(gpe, rasterizer,
+   ilo_gpe_gen6_fill_3dstate_sf_raster(dev, rasterizer,
          1, (zs_surf) ? zs_surf->format : PIPE_FORMAT_NONE, true,
          dw, Elements(dw));
 
@@ -162,7 +172,7 @@ gen7_emit_3DSTATE_SF(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_WM(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_WM(const struct ilo_dev_info *dev,
                      const struct ilo_shader *fs,
                      const struct pipe_rasterizer_state *rasterizer,
                      bool cc_may_kill,
@@ -173,7 +183,7 @@ gen7_emit_3DSTATE_WM(const struct ilo_gpe *gpe,
    const int num_samples = 1;
    uint32_t dw1, dw2;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    dw1 = GEN7_WM_STATISTICS_ENABLE |
          GEN7_WM_LINE_AA_WIDTH_2_0;
@@ -272,7 +282,7 @@ gen7_emit_3DSTATE_WM(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3dstate_constant(const struct ilo_gpe *gpe,
+gen7_emit_3dstate_constant(const struct ilo_dev_info *dev,
                            int subop,
                            const uint32_t *bufs, const int *sizes,
                            int num_bufs,
@@ -283,7 +293,7 @@ gen7_emit_3dstate_constant(const struct ilo_gpe *gpe,
    uint32_t dw[6];
    int total_read_length, i;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    /* VS, HS, DS, GS, and PS variants */
    assert(subop >= 0x15 && subop <= 0x1a && subop != 0x18);
@@ -340,34 +350,34 @@ gen7_emit_3dstate_constant(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_CONSTANT_VS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_CONSTANT_VS(const struct ilo_dev_info *dev,
                               const uint32_t *bufs, const int *sizes,
                               int num_bufs,
                               struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_constant(gpe, 0x15, bufs, sizes, num_bufs, cp);
+   gen7_emit_3dstate_constant(dev, 0x15, bufs, sizes, num_bufs, cp);
 }
 
 static void
-gen7_emit_3DSTATE_CONSTANT_GS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_CONSTANT_GS(const struct ilo_dev_info *dev,
                               const uint32_t *bufs, const int *sizes,
                               int num_bufs,
                               struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_constant(gpe, 0x16, bufs, sizes, num_bufs, cp);
+   gen7_emit_3dstate_constant(dev, 0x16, bufs, sizes, num_bufs, cp);
 }
 
 static void
-gen7_emit_3DSTATE_CONSTANT_PS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_CONSTANT_PS(const struct ilo_dev_info *dev,
                               const uint32_t *bufs, const int *sizes,
                               int num_bufs,
                               struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_constant(gpe, 0x17, bufs, sizes, num_bufs, cp);
+   gen7_emit_3dstate_constant(dev, 0x17, bufs, sizes, num_bufs, cp);
 }
 
 static void
-gen7_emit_3DSTATE_SAMPLE_MASK(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_SAMPLE_MASK(const struct ilo_dev_info *dev,
                               unsigned sample_mask,
                               int num_samples,
                               struct ilo_cp *cp)
@@ -376,7 +386,7 @@ gen7_emit_3DSTATE_SAMPLE_MASK(const struct ilo_gpe *gpe,
    const uint8_t cmd_len = 2;
    const unsigned valid_mask = ((1 << num_samples) - 1) | 0x1;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    /*
     * From the Ivy Bridge PRM, volume 2 part 1, page 294:
@@ -396,25 +406,25 @@ gen7_emit_3DSTATE_SAMPLE_MASK(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_CONSTANT_HS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_CONSTANT_HS(const struct ilo_dev_info *dev,
                               const uint32_t *bufs, const int *sizes,
                               int num_bufs,
                               struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_constant(gpe, 0x19, bufs, sizes, num_bufs, cp);
+   gen7_emit_3dstate_constant(dev, 0x19, bufs, sizes, num_bufs, cp);
 }
 
 static void
-gen7_emit_3DSTATE_CONSTANT_DS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_CONSTANT_DS(const struct ilo_dev_info *dev,
                               const uint32_t *bufs, const int *sizes,
                               int num_bufs,
                               struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_constant(gpe, 0x1a, bufs, sizes, num_bufs, cp);
+   gen7_emit_3dstate_constant(dev, 0x1a, bufs, sizes, num_bufs, cp);
 }
 
 static void
-gen7_emit_3DSTATE_HS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_HS(const struct ilo_dev_info *dev,
                      const struct ilo_shader *hs,
                      int max_threads, int num_samplers,
                      struct ilo_cp *cp)
@@ -423,7 +433,7 @@ gen7_emit_3DSTATE_HS(const struct ilo_gpe *gpe,
    const uint8_t cmd_len = 7;
    uint32_t dw1, dw2, dw5;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    if (!hs) {
       ilo_cp_begin(cp, cmd_len);
@@ -465,13 +475,13 @@ gen7_emit_3DSTATE_HS(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_TE(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_TE(const struct ilo_dev_info *dev,
                      struct ilo_cp *cp)
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x1c);
    const uint8_t cmd_len = 4;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
@@ -482,7 +492,7 @@ gen7_emit_3DSTATE_TE(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_DS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_DS(const struct ilo_dev_info *dev,
                      const struct ilo_shader *ds,
                      int max_threads, int num_samplers,
                      struct ilo_cp *cp)
@@ -491,7 +501,7 @@ gen7_emit_3DSTATE_DS(const struct ilo_gpe *gpe,
    const uint8_t cmd_len = 6;
    uint32_t dw2, dw4, dw5;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    if (!ds) {
       ilo_cp_begin(cp, cmd_len);
@@ -531,39 +541,59 @@ gen7_emit_3DSTATE_DS(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_STREAMOUT(const struct ilo_gpe *gpe,
-                            bool enable,
+gen7_emit_3DSTATE_STREAMOUT(const struct ilo_dev_info *dev,
+                            unsigned buffer_mask,
+                            int vertex_attrib_count,
                             bool rasterizer_discard,
-                            bool flatshade_first,
                             struct ilo_cp *cp)
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x1e);
    const uint8_t cmd_len = 3;
+   const bool enable = (buffer_mask != 0);
    uint32_t dw1, dw2;
-   int i;
+   int read_len;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    if (!enable) {
+      dw1 = 0 << SO_RENDER_STREAM_SELECT_SHIFT;
+      if (rasterizer_discard)
+         dw1 |= SO_RENDERING_DISABLE;
+
+      dw2 = 0;
+
       ilo_cp_begin(cp, cmd_len);
       ilo_cp_write(cp, cmd | (cmd_len - 2));
-      ilo_cp_write(cp, (rasterizer_discard) ? SO_RENDERING_DISABLE : 0);
-      ilo_cp_write(cp, 0);
+      ilo_cp_write(cp, dw1);
+      ilo_cp_write(cp, dw2);
       ilo_cp_end(cp);
       return;
    }
 
+   read_len = (vertex_attrib_count + 1) / 2;
+   if (!read_len)
+      read_len = 1;
+
    dw1 = SO_FUNCTION_ENABLE |
-         SO_STATISTICS_ENABLE;
+         0 << SO_RENDER_STREAM_SELECT_SHIFT |
+         SO_STATISTICS_ENABLE |
+         buffer_mask << 8;
+
    if (rasterizer_discard)
       dw1 |= SO_RENDERING_DISABLE;
-   if (!flatshade_first)
-      dw1 |= SO_REORDER_TRAILING;
-   for (i = 0; i < 4; i++)
-      dw1 |= SO_BUFFER_ENABLE(i);
 
-   dw2 = 0 << SO_STREAM_0_VERTEX_READ_OFFSET_SHIFT |
-         0 << SO_STREAM_0_VERTEX_READ_LENGTH_SHIFT;
+   /* API_OPENGL */
+   if (true)
+      dw1 |= SO_REORDER_TRAILING;
+
+   dw2 = 0 << SO_STREAM_3_VERTEX_READ_OFFSET_SHIFT |
+         0 << SO_STREAM_3_VERTEX_READ_LENGTH_SHIFT |
+         0 << SO_STREAM_2_VERTEX_READ_OFFSET_SHIFT |
+         0 << SO_STREAM_2_VERTEX_READ_LENGTH_SHIFT |
+         0 << SO_STREAM_1_VERTEX_READ_OFFSET_SHIFT |
+         0 << SO_STREAM_1_VERTEX_READ_LENGTH_SHIFT |
+         0 << SO_STREAM_0_VERTEX_READ_OFFSET_SHIFT |
+         (read_len - 1) << SO_STREAM_0_VERTEX_READ_LENGTH_SHIFT;
 
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
@@ -573,7 +603,7 @@ gen7_emit_3DSTATE_STREAMOUT(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_SBE(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_SBE(const struct ilo_dev_info *dev,
                       const struct pipe_rasterizer_state *rasterizer,
                       const struct ilo_shader *fs,
                       const struct ilo_shader *last_sh,
@@ -583,9 +613,9 @@ gen7_emit_3DSTATE_SBE(const struct ilo_gpe *gpe,
    const uint8_t cmd_len = 14;
    uint32_t dw[13];
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
-   ilo_gpe_gen6_fill_3dstate_sf_sbe(gpe, rasterizer,
+   ilo_gpe_gen6_fill_3dstate_sf_sbe(dev, rasterizer,
          fs, last_sh, dw, Elements(dw));
 
    ilo_cp_begin(cp, cmd_len);
@@ -595,29 +625,20 @@ gen7_emit_3DSTATE_SBE(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_PS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_PS(const struct ilo_dev_info *dev,
                      const struct ilo_shader *fs,
-                     int max_threads, int num_samplers,
-                     bool dual_blend,
+                     int num_samplers, bool dual_blend,
                      struct ilo_cp *cp)
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x20);
    const uint8_t cmd_len = 8;
    uint32_t dw2, dw4, dw5;
+   int max_threads;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
-   /*
-    * From the Ivy Bridge PRM, volume 2 part 1, page 286:
-    *
-    *     "This field (Maximum Number of Threads) must have an odd value so
-    *      that the max number of PS threads is even."
-    */
-   max_threads &= ~1;
-
-   /* the valid range is [4, 48] */
-   if (max_threads < 4)
-      max_threads = 4;
+   /* see brwCreateContext() */
+   max_threads = (dev->gt == 2) ? 172 : 48;
 
    if (!fs) {
       ilo_cp_begin(cp, cmd_len);
@@ -673,119 +694,119 @@ gen7_emit_3DSTATE_PS(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_VIEWPORT_STATE_POINTERS_SF_CLIP(const struct ilo_dev_info *dev,
                                                   uint32_t sf_clip_viewport,
                                                   struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x21, sf_clip_viewport, cp);
+   gen7_emit_3dstate_pointer(dev, 0x21, sf_clip_viewport, cp);
 }
 
 static void
-gen7_emit_3DSTATE_VIEWPORT_STATE_POINTERS_CC(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_VIEWPORT_STATE_POINTERS_CC(const struct ilo_dev_info *dev,
                                              uint32_t cc_viewport,
                                              struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x23, cc_viewport, cp);
+   gen7_emit_3dstate_pointer(dev, 0x23, cc_viewport, cp);
 }
 
 static void
-gen7_emit_3DSTATE_BLEND_STATE_POINTERS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_BLEND_STATE_POINTERS(const struct ilo_dev_info *dev,
                                        uint32_t blend_state,
                                        struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x24, blend_state, cp);
+   gen7_emit_3dstate_pointer(dev, 0x24, blend_state, cp);
 }
 
 static void
-gen7_emit_3DSTATE_DEPTH_STENCIL_STATE_POINTERS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_DEPTH_STENCIL_STATE_POINTERS(const struct ilo_dev_info *dev,
                                                uint32_t depth_stencil_state,
                                                struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x25, depth_stencil_state, cp);
+   gen7_emit_3dstate_pointer(dev, 0x25, depth_stencil_state, cp);
 }
 
 static void
-gen7_emit_3DSTATE_BINDING_TABLE_POINTERS_VS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_BINDING_TABLE_POINTERS_VS(const struct ilo_dev_info *dev,
                                             uint32_t binding_table,
                                             struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x26, binding_table, cp);
+   gen7_emit_3dstate_pointer(dev, 0x26, binding_table, cp);
 }
 
 static void
-gen7_emit_3DSTATE_BINDING_TABLE_POINTERS_HS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_BINDING_TABLE_POINTERS_HS(const struct ilo_dev_info *dev,
                                             uint32_t binding_table,
                                             struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x27, binding_table, cp);
+   gen7_emit_3dstate_pointer(dev, 0x27, binding_table, cp);
 }
 
 static void
-gen7_emit_3DSTATE_BINDING_TABLE_POINTERS_DS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_BINDING_TABLE_POINTERS_DS(const struct ilo_dev_info *dev,
                                             uint32_t binding_table,
                                             struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x28, binding_table, cp);
+   gen7_emit_3dstate_pointer(dev, 0x28, binding_table, cp);
 }
 
 static void
-gen7_emit_3DSTATE_BINDING_TABLE_POINTERS_GS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_BINDING_TABLE_POINTERS_GS(const struct ilo_dev_info *dev,
                                             uint32_t binding_table,
                                             struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x29, binding_table, cp);
+   gen7_emit_3dstate_pointer(dev, 0x29, binding_table, cp);
 }
 
 static void
-gen7_emit_3DSTATE_BINDING_TABLE_POINTERS_PS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_BINDING_TABLE_POINTERS_PS(const struct ilo_dev_info *dev,
                                             uint32_t binding_table,
                                             struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x2a, binding_table, cp);
+   gen7_emit_3dstate_pointer(dev, 0x2a, binding_table, cp);
 }
 
 static void
-gen7_emit_3DSTATE_SAMPLER_STATE_POINTERS_VS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_SAMPLER_STATE_POINTERS_VS(const struct ilo_dev_info *dev,
                                             uint32_t sampler_state,
                                             struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x2b, sampler_state, cp);
+   gen7_emit_3dstate_pointer(dev, 0x2b, sampler_state, cp);
 }
 
 static void
-gen7_emit_3DSTATE_SAMPLER_STATE_POINTERS_HS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_SAMPLER_STATE_POINTERS_HS(const struct ilo_dev_info *dev,
                                             uint32_t sampler_state,
                                             struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x2c, sampler_state, cp);
+   gen7_emit_3dstate_pointer(dev, 0x2c, sampler_state, cp);
 }
 
 static void
-gen7_emit_3DSTATE_SAMPLER_STATE_POINTERS_DS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_SAMPLER_STATE_POINTERS_DS(const struct ilo_dev_info *dev,
                                             uint32_t sampler_state,
                                             struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x2d, sampler_state, cp);
+   gen7_emit_3dstate_pointer(dev, 0x2d, sampler_state, cp);
 }
 
 static void
-gen7_emit_3DSTATE_SAMPLER_STATE_POINTERS_GS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_SAMPLER_STATE_POINTERS_GS(const struct ilo_dev_info *dev,
                                             uint32_t sampler_state,
                                             struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x2e, sampler_state, cp);
+   gen7_emit_3dstate_pointer(dev, 0x2e, sampler_state, cp);
 }
 
 static void
-gen7_emit_3DSTATE_SAMPLER_STATE_POINTERS_PS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_SAMPLER_STATE_POINTERS_PS(const struct ilo_dev_info *dev,
                                             uint32_t sampler_state,
                                             struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_pointer(gpe, 0x2f, sampler_state, cp);
+   gen7_emit_3dstate_pointer(dev, 0x2f, sampler_state, cp);
 }
 
 static void
-gen7_emit_3dstate_urb(const struct ilo_gpe *gpe,
+gen7_emit_3dstate_urb(const struct ilo_dev_info *dev,
                       int subop, int offset, int size,
                       int entry_size,
                       struct ilo_cp *cp)
@@ -793,9 +814,9 @@ gen7_emit_3dstate_urb(const struct ilo_gpe *gpe,
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, subop);
    const uint8_t cmd_len = 2;
    const int row_size = 64; /* 512 bits */
-   int alloc_size, num_entries;
+   int alloc_size, num_entries, min_entries, max_entries;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    /* VS, HS, DS, and GS variants */
    assert(subop >= 0x30 && subop <= 0x33);
@@ -824,15 +845,26 @@ gen7_emit_3dstate_urb(const struct ilo_gpe *gpe,
 
    switch (subop) {
    case 0x30: /* 3DSTATE_URB_VS */
-      assert(num_entries >= 32);
-      if (gpe->gt == 2 && num_entries > 704)
-         num_entries = 704;
-      else if (gpe->gt == 1 && num_entries > 512)
-         num_entries = 512;
+      min_entries = 32;
+      max_entries = (dev->gt == 2) ? 704 : 512;
+
+      assert(num_entries >= min_entries);
+      if (num_entries > max_entries)
+         num_entries = max_entries;
+      break;
+   case 0x31: /* 3DSTATE_URB_HS */
+      max_entries = (dev->gt == 2) ? 64 : 32;
+      if (num_entries > max_entries)
+         num_entries = max_entries;
       break;
    case 0x32: /* 3DSTATE_URB_DS */
       if (num_entries)
          assert(num_entries >= 138);
+      break;
+   case 0x33: /* 3DSTATE_URB_GS */
+      max_entries = (dev->gt == 2) ? 320 : 192;
+      if (num_entries > max_entries)
+         num_entries = max_entries;
       break;
    default:
       break;
@@ -847,39 +879,39 @@ gen7_emit_3dstate_urb(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_URB_VS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_URB_VS(const struct ilo_dev_info *dev,
                          int offset, int size, int entry_size,
                          struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_urb(gpe, 0x30, offset, size, entry_size, cp);
+   gen7_emit_3dstate_urb(dev, 0x30, offset, size, entry_size, cp);
 }
 
 static void
-gen7_emit_3DSTATE_URB_HS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_URB_HS(const struct ilo_dev_info *dev,
                          int offset, int size, int entry_size,
                          struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_urb(gpe, 0x31, offset, size, entry_size, cp);
+   gen7_emit_3dstate_urb(dev, 0x31, offset, size, entry_size, cp);
 }
 
 static void
-gen7_emit_3DSTATE_URB_DS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_URB_DS(const struct ilo_dev_info *dev,
                          int offset, int size, int entry_size,
                          struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_urb(gpe, 0x32, offset, size, entry_size, cp);
+   gen7_emit_3dstate_urb(dev, 0x32, offset, size, entry_size, cp);
 }
 
 static void
-gen7_emit_3DSTATE_URB_GS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_URB_GS(const struct ilo_dev_info *dev,
                          int offset, int size, int entry_size,
                          struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_urb(gpe, 0x33, offset, size, entry_size, cp);
+   gen7_emit_3dstate_urb(dev, 0x33, offset, size, entry_size, cp);
 }
 
 static void
-gen7_emit_3dstate_push_constant_alloc(const struct ilo_gpe *gpe,
+gen7_emit_3dstate_push_constant_alloc(const struct ilo_dev_info *dev,
                                       int subop, int offset, int size,
                                       struct ilo_cp *cp)
 {
@@ -887,7 +919,7 @@ gen7_emit_3dstate_push_constant_alloc(const struct ilo_gpe *gpe,
    const uint8_t cmd_len = 2;
    int end;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    /* VS, HS, DS, GS, and PS variants */
    assert(subop >= 0x12 && subop <= 0x16);
@@ -938,74 +970,152 @@ gen7_emit_3dstate_push_constant_alloc(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_PUSH_CONSTANT_ALLOC_VS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_PUSH_CONSTANT_ALLOC_VS(const struct ilo_dev_info *dev,
                                          int offset, int size,
                                          struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_push_constant_alloc(gpe, 0x12, offset, size, cp);
+   gen7_emit_3dstate_push_constant_alloc(dev, 0x12, offset, size, cp);
 }
 
 static void
-gen7_emit_3DSTATE_PUSH_CONSTANT_ALLOC_HS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_PUSH_CONSTANT_ALLOC_HS(const struct ilo_dev_info *dev,
                                          int offset, int size,
                                          struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_push_constant_alloc(gpe, 0x13, offset, size, cp);
+   gen7_emit_3dstate_push_constant_alloc(dev, 0x13, offset, size, cp);
 }
 
 static void
-gen7_emit_3DSTATE_PUSH_CONSTANT_ALLOC_DS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_PUSH_CONSTANT_ALLOC_DS(const struct ilo_dev_info *dev,
                                          int offset, int size,
                                          struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_push_constant_alloc(gpe, 0x14, offset, size, cp);
+   gen7_emit_3dstate_push_constant_alloc(dev, 0x14, offset, size, cp);
 }
 
 static void
-gen7_emit_3DSTATE_PUSH_CONSTANT_ALLOC_GS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_PUSH_CONSTANT_ALLOC_GS(const struct ilo_dev_info *dev,
                                          int offset, int size,
                                          struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_push_constant_alloc(gpe, 0x15, offset, size, cp);
+   gen7_emit_3dstate_push_constant_alloc(dev, 0x15, offset, size, cp);
 }
 
 static void
-gen7_emit_3DSTATE_PUSH_CONSTANT_ALLOC_PS(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_PUSH_CONSTANT_ALLOC_PS(const struct ilo_dev_info *dev,
                                          int offset, int size,
                                          struct ilo_cp *cp)
 {
-   gen7_emit_3dstate_push_constant_alloc(gpe, 0x16, offset, size, cp);
+   gen7_emit_3dstate_push_constant_alloc(dev, 0x16, offset, size, cp);
 }
 
 static void
-gen7_emit_3DSTATE_SO_DECL_LIST(const struct ilo_gpe *gpe,
+gen7_emit_3DSTATE_SO_DECL_LIST(const struct ilo_dev_info *dev,
+                               const struct pipe_stream_output_info *so_info,
+                               const struct ilo_shader *sh,
                                struct ilo_cp *cp)
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x1, 0x17);
-   uint8_t cmd_len;
-   uint16_t decls[128];
-   int num_decls, i;
+   uint16_t cmd_len;
+   int buffer_selects, num_entries, i;
+   uint16_t so_decls[128];
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
-   memset(decls, 0, sizeof(decls));
-   num_decls = 0;
+   buffer_selects = 0;
+   num_entries = 0;
 
-   cmd_len = 2 * num_decls + 3;
+   if (so_info) {
+      int buffer_offsets[PIPE_MAX_SO_BUFFERS];
+
+      memset(buffer_offsets, 0, sizeof(buffer_offsets));
+
+      for (i = 0; i < so_info->num_outputs; i++) {
+         unsigned decl, buf, attr, mask;
+
+         buf = so_info->output[i].output_buffer;
+
+         /* pad with holes */
+         assert(buffer_offsets[buf] <= so_info->output[i].dst_offset);
+         while (buffer_offsets[buf] < so_info->output[i].dst_offset) {
+            int num_dwords;
+
+            num_dwords = so_info->output[i].dst_offset - buffer_offsets[buf];
+            if (num_dwords > 4)
+               num_dwords = 4;
+
+            decl = buf << SO_DECL_OUTPUT_BUFFER_SLOT_SHIFT |
+                   SO_DECL_HOLE_FLAG |
+                   ((1 << num_dwords) - 1) << SO_DECL_COMPONENT_MASK_SHIFT;
+
+            so_decls[num_entries++] = decl;
+            buffer_offsets[buf] += num_dwords;
+         }
+
+         /* figure out which attribute is sourced */
+         for (attr = 0; attr < sh->out.count; attr++) {
+            const int idx = sh->out.register_indices[attr];
+            if (idx == so_info->output[i].register_index)
+               break;
+         }
+
+         decl = buf << SO_DECL_OUTPUT_BUFFER_SLOT_SHIFT;
+
+         if (attr < sh->out.count) {
+            mask = ((1 << so_info->output[i].num_components) - 1) <<
+               so_info->output[i].start_component;
+
+            /* PSIZE is at W channel */
+            if (sh->out.semantic_names[attr] == TGSI_SEMANTIC_PSIZE) {
+               assert(mask == 0x1);
+               mask = (mask << 3) & 0xf;
+            }
+
+            decl |= attr << SO_DECL_REGISTER_INDEX_SHIFT |
+                    mask << SO_DECL_COMPONENT_MASK_SHIFT;
+         }
+         else {
+            assert(!"stream output an undefined register");
+            mask = (1 << so_info->output[i].num_components) - 1;
+            decl |= SO_DECL_HOLE_FLAG |
+                    mask << SO_DECL_COMPONENT_MASK_SHIFT;
+         }
+
+         so_decls[num_entries++] = decl;
+         buffer_selects |= 1 << buf;
+         buffer_offsets[buf] += so_info->output[i].num_components;
+      }
+   }
+
+   /*
+    * From the Ivy Bridge PRM, volume 2 part 1, page 201:
+    *
+    *     "Errata: All 128 decls for all four streams must be included
+    *      whenever this command is issued. The "Num Entries [n]" fields still
+    *      contain the actual numbers of valid decls."
+    *
+    * Also note that "DWord Length" has 9 bits for this command, and the type
+    * of cmd_len is thus uint16_t.
+    */
+   cmd_len = 2 * 128 + 3;
 
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
-   ilo_cp_write(cp, 0 << SO_STREAM_TO_BUFFER_SELECTS_0_SHIFT |
-                    0 << SO_STREAM_TO_BUFFER_SELECTS_1_SHIFT |
+   ilo_cp_write(cp, 0 << SO_STREAM_TO_BUFFER_SELECTS_3_SHIFT |
                     0 << SO_STREAM_TO_BUFFER_SELECTS_2_SHIFT |
-                    0 << SO_STREAM_TO_BUFFER_SELECTS_3_SHIFT);
-   ilo_cp_write(cp, num_decls << SO_NUM_ENTRIES_0_SHIFT |
-                    0 << SO_NUM_ENTRIES_1_SHIFT |
+                    0 << SO_STREAM_TO_BUFFER_SELECTS_1_SHIFT |
+                    buffer_selects << SO_STREAM_TO_BUFFER_SELECTS_0_SHIFT);
+   ilo_cp_write(cp, 0 << SO_NUM_ENTRIES_3_SHIFT |
                     0 << SO_NUM_ENTRIES_2_SHIFT |
-                    0 << SO_NUM_ENTRIES_3_SHIFT);
+                    0 << SO_NUM_ENTRIES_1_SHIFT |
+                    num_entries << SO_NUM_ENTRIES_0_SHIFT);
 
-   for (i = 0; i < num_decls; i++) {
-      ilo_cp_write(cp, decls[i]);
+   for (i = 0; i < num_entries; i++) {
+      ilo_cp_write(cp, so_decls[i]);
+      ilo_cp_write(cp, 0);
+   }
+   for (; i < 128; i++) {
+      ilo_cp_write(cp, 0);
       ilo_cp_write(cp, 0);
    }
 
@@ -1013,18 +1123,19 @@ gen7_emit_3DSTATE_SO_DECL_LIST(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_emit_3DSTATE_SO_BUFFER(const struct ilo_gpe *gpe,
-                            int index,
-                            bool enable,
+gen7_emit_3DSTATE_SO_BUFFER(const struct ilo_dev_info *dev,
+                            int index, int base, int stride,
+                            const struct pipe_stream_output_target *so_target,
                             struct ilo_cp *cp)
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x1, 0x18);
    const uint8_t cmd_len = 4;
-   int start, end;
+   struct ilo_buffer *buf;
+   int end;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
-   if (!enable) {
+   if (!so_target || !so_target->buffer) {
       ilo_cp_begin(cp, cmd_len);
       ilo_cp_write(cp, cmd | (cmd_len - 2));
       ilo_cp_write(cp, index << SO_BUFFER_INDEX_SHIFT);
@@ -1034,18 +1145,27 @@ gen7_emit_3DSTATE_SO_BUFFER(const struct ilo_gpe *gpe,
       return;
    }
 
-   start = end = 0;
+   buf = ilo_buffer(so_target->buffer);
+
+   /* DWord-aligned */
+   assert(stride % 4 == 0 && base % 4 == 0);
+   assert(so_target->buffer_offset % 4 == 0);
+
+   stride &= ~3;
+   base = (base + so_target->buffer_offset) & ~3;
+   end = (base + so_target->buffer_size) & ~3;
 
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
-   ilo_cp_write(cp, index << SO_BUFFER_INDEX_SHIFT);
-   ilo_cp_write(cp, start);
-   ilo_cp_write(cp, end);
+   ilo_cp_write(cp, index << SO_BUFFER_INDEX_SHIFT |
+                    stride);
+   ilo_cp_write_bo(cp, base, buf->bo, INTEL_DOMAIN_RENDER, INTEL_DOMAIN_RENDER);
+   ilo_cp_write_bo(cp, end, buf->bo, INTEL_DOMAIN_RENDER, INTEL_DOMAIN_RENDER);
    ilo_cp_end(cp);
 }
 
 static void
-gen7_emit_3DPRIMITIVE(const struct ilo_gpe *gpe,
+gen7_emit_3DPRIMITIVE(const struct ilo_dev_info *dev,
                       const struct pipe_draw_info *info,
                       bool rectlist,
                       struct ilo_cp *cp)
@@ -1058,7 +1178,7 @@ gen7_emit_3DPRIMITIVE(const struct ilo_gpe *gpe,
       GEN7_3DPRIM_VERTEXBUFFER_ACCESS_RANDOM :
       GEN7_3DPRIM_VERTEXBUFFER_ACCESS_SEQUENTIAL;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
@@ -1072,7 +1192,7 @@ gen7_emit_3DPRIMITIVE(const struct ilo_gpe *gpe,
 }
 
 static uint32_t
-gen7_emit_SF_CLIP_VIEWPORT(const struct ilo_gpe *gpe,
+gen7_emit_SF_CLIP_VIEWPORT(const struct ilo_dev_info *dev,
                            const struct pipe_viewport_state *viewports,
                            int num_viewports,
                            struct ilo_cp *cp)
@@ -1082,7 +1202,7 @@ gen7_emit_SF_CLIP_VIEWPORT(const struct ilo_gpe *gpe,
    uint32_t state_offset, *dw;
    int i;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    /*
     * From the Ivy Bridge PRM, volume 2 part 1, page 270:
@@ -1102,9 +1222,9 @@ gen7_emit_SF_CLIP_VIEWPORT(const struct ilo_gpe *gpe,
    for (i = 0; i < num_viewports; i++) {
       const struct pipe_viewport_state *vp = &viewports[i];
 
-      ilo_gpe_gen6_fill_SF_VIEWPORT(gpe, vp, 1, dw, 8);
+      ilo_gpe_gen6_fill_SF_VIEWPORT(dev, vp, 1, dw, 8);
 
-      ilo_gpe_gen6_fill_CLIP_VIEWPORT(gpe, vp, 1, dw + 8, 4);
+      ilo_gpe_gen6_fill_CLIP_VIEWPORT(dev, vp, 1, dw + 8, 4);
 
       dw[12] = 0;
       dw[13] = 0;
@@ -1118,12 +1238,12 @@ gen7_emit_SF_CLIP_VIEWPORT(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_fill_null_SURFACE_STATE(const struct ilo_gpe *gpe,
+gen7_fill_null_SURFACE_STATE(const struct ilo_dev_info *dev,
                              unsigned width, unsigned height,
                              unsigned depth, unsigned lod,
                              uint32_t *dw, int num_dwords)
 {
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
    assert(num_dwords == 8);
 
    /*
@@ -1175,8 +1295,8 @@ gen7_fill_null_SURFACE_STATE(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_fill_buffer_SURFACE_STATE(const struct ilo_gpe *gpe,
-                               const struct ilo_resource *res,
+gen7_fill_buffer_SURFACE_STATE(const struct ilo_dev_info *dev,
+                               const struct ilo_buffer *buf,
                                unsigned offset, unsigned size,
                                unsigned struct_size,
                                enum pipe_format elem_format,
@@ -1190,7 +1310,7 @@ gen7_fill_buffer_SURFACE_STATE(const struct ilo_gpe *gpe,
    int width, height, depth, pitch;
    int surface_type, surface_format, num_entries;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
    assert(num_dwords == 8);
 
    surface_type = (structured) ? 5 : BRW_SURFACE_BUFFER;
@@ -1254,14 +1374,6 @@ gen7_fill_buffer_SURFACE_STATE(const struct ilo_gpe *gpe,
 
    pitch = struct_size;
 
-   /*
-    * From the Ivy Bridge PRM, volume 4 part 1, page 65:
-    *
-    *     "If Surface Type is SURFTYPE_BUFFER, this field (Tiled Surface) must
-    *      be false (because buffers are supported only in linear memory)."
-    */
-   assert(res->tiling == INTEL_TILING_NONE);
-
    pitch--;
    num_entries--;
    /* bits [6:0] */
@@ -1294,8 +1406,8 @@ gen7_fill_buffer_SURFACE_STATE(const struct ilo_gpe *gpe,
 }
 
 static void
-gen7_fill_normal_SURFACE_STATE(const struct ilo_gpe *gpe,
-                               struct ilo_resource *res,
+gen7_fill_normal_SURFACE_STATE(const struct ilo_dev_info *dev,
+                               struct ilo_texture *tex,
                                enum pipe_format format,
                                unsigned first_level, unsigned num_levels,
                                unsigned first_layer, unsigned num_layers,
@@ -1306,11 +1418,14 @@ gen7_fill_normal_SURFACE_STATE(const struct ilo_gpe *gpe,
    int width, height, depth, pitch, lod;
    unsigned layer_offset, x_offset, y_offset;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
    assert(num_dwords == 8);
 
-   surface_type = ilo_gpe_gen6_translate_texture(res->base.target);
+   surface_type = ilo_gpe_gen6_translate_texture(tex->base.target);
    assert(surface_type != BRW_SURFACE_BUFFER);
+
+   if (format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT && tex->separate_s8)
+      format = PIPE_FORMAT_Z32_FLOAT;
 
    if (is_rt)
       surface_format = ilo_translate_render_format(format);
@@ -1318,41 +1433,36 @@ gen7_fill_normal_SURFACE_STATE(const struct ilo_gpe *gpe,
       surface_format = ilo_translate_texture_format(format);
    assert(surface_format >= 0);
 
-   width = res->base.width0;
-   height = res->base.height0;
-   pitch = res->bo_stride;
+   width = tex->base.width0;
+   height = tex->base.height0;
+   depth = (tex->base.target == PIPE_TEXTURE_3D) ?
+      tex->base.depth0 : num_layers;
+   pitch = tex->bo_stride;
 
-   switch (res->base.target) {
-   case PIPE_TEXTURE_3D:
-      depth = res->base.depth0;
-      break;
-   case PIPE_TEXTURE_CUBE:
-   case PIPE_TEXTURE_CUBE_ARRAY:
+   if (surface_type == BRW_SURFACE_CUBE) {
       /*
        * From the Ivy Bridge PRM, volume 4 part 1, page 70:
        *
-       *     "For SURFTYPE_CUBE: For Sampling Engine Surfaces, the range of
+       *     "For SURFTYPE_CUBE:For Sampling Engine Surfaces, the range of
        *      this field is [0,340], indicating the number of cube array
        *      elements (equal to the number of underlying 2D array elements
        *      divided by 6). For other surfaces, this field must be zero."
        *
-       *     "Errata: For SURFTYPE_CUBE sampling engine surfaces, the range of
-       *      this field is limited to [0,85]."
+       * When is_rt is true, we treat the texture as a 2D one to avoid the
+       * restriction.
        */
-      if (!is_rt) {
+      if (is_rt) {
+         surface_type = BRW_SURFACE_2D;
+      }
+      else {
          assert(num_layers % 6 == 0);
          depth = num_layers / 6;
-         break;
       }
-      assert(num_layers == 1);
-      /* fall through */
-   default:
-      depth = num_layers;
-      break;
    }
 
    /* sanity check the size */
    assert(width >= 1 && height >= 1 && depth >= 1 && pitch >= 1);
+   assert(first_layer < 2048 && num_layers <= 2048);
    switch (surface_type) {
    case BRW_SURFACE_1D:
       assert(width <= 16384 && height == 1 && depth <= 2048);
@@ -1362,49 +1472,66 @@ gen7_fill_normal_SURFACE_STATE(const struct ilo_gpe *gpe,
       break;
    case BRW_SURFACE_3D:
       assert(width <= 2048 && height <= 2048 && depth <= 2048);
+      if (!is_rt)
+         assert(first_layer == 0);
       break;
    case BRW_SURFACE_CUBE:
       assert(width <= 16384 && height <= 16384 && depth <= 86);
       assert(width == height);
+      if (is_rt)
+         assert(first_layer == 0);
       break;
    default:
       assert(!"unexpected surface type");
       break;
    }
 
-   /*
-    * Compute the offset to the layer manually.
-    *
-    * For rendering, the hardware requires LOD to be the same for all render
-    * targets and the depth buffer.  We need to compute the offset to the
-    * layer manually and always set LOD to 0.
-    */
    if (is_rt) {
-      /* we lose the capability for layered rendering */
-      assert(num_levels == 1 && num_layers == 1);
+      /*
+       * Compute the offset to the layer manually.
+       *
+       * For rendering, the hardware requires LOD to be the same for all
+       * render targets and the depth buffer.  We need to compute the offset
+       * to the layer manually and always set LOD to 0.
+       */
+      if (true) {
+         /* we lose the capability for layered rendering */
+         assert(num_layers == 1);
 
-      layer_offset = ilo_resource_get_slice_offset(res,
-            first_level, first_layer, true, &x_offset, &y_offset);
+         layer_offset = ilo_texture_get_slice_offset(tex,
+               first_level, first_layer, &x_offset, &y_offset);
 
-      assert(x_offset % 4 == 0);
-      assert(y_offset % 2 == 0);
-      x_offset /= 4;
-      y_offset /= 2;
+         assert(x_offset % 4 == 0);
+         assert(y_offset % 2 == 0);
+         x_offset /= 4;
+         y_offset /= 2;
 
-      /* derive the size for the LOD */
-      width = u_minify(res->base.width0, first_level);
-      height = u_minify(res->base.height0, first_level);
-      if (surface_type == BRW_SURFACE_3D)
-         depth = u_minify(res->base.depth0, first_level);
+         /* derive the size for the LOD */
+         width = u_minify(width, first_level);
+         height = u_minify(height, first_level);
+         if (surface_type == BRW_SURFACE_3D)
+            depth = u_minify(depth, first_level);
+         else
+            depth = 1;
 
-      first_level = 0;
-      first_layer = 0;
-      lod = 0;
+         first_level = 0;
+         first_layer = 0;
+         lod = 0;
+      }
+      else {
+         layer_offset = 0;
+         x_offset = 0;
+         y_offset = 0;
+      }
+
+      assert(num_levels == 1);
+      lod = first_level;
    }
    else {
       layer_offset = 0;
       x_offset = 0;
       y_offset = 0;
+
       lod = num_levels - 1;
    }
 
@@ -1431,7 +1558,7 @@ gen7_fill_normal_SURFACE_STATE(const struct ilo_gpe *gpe,
     *
     *     "For linear surfaces, this field (X Offset) must be zero."
     */
-   if (res->tiling == INTEL_TILING_NONE) {
+   if (tex->tiling == INTEL_TILING_NONE) {
       if (is_rt) {
          const int elem_size = util_format_get_blocksize(format);
          assert(layer_offset % elem_size == 0);
@@ -1443,17 +1570,21 @@ gen7_fill_normal_SURFACE_STATE(const struct ilo_gpe *gpe,
 
    dw[0] = surface_type << BRW_SURFACE_TYPE_SHIFT |
            surface_format << BRW_SURFACE_FORMAT_SHIFT |
-           ilo_gpe_gen6_translate_winsys_tiling(res->tiling) << 13 |
-           GEN7_SURFACE_ARYSPC_FULL;
+           ilo_gpe_gen6_translate_winsys_tiling(tex->tiling) << 13;
 
    if (surface_type != BRW_SURFACE_3D && depth > 1)
       dw[0] |= GEN7_SURFACE_IS_ARRAY;
 
-   if (res->valign_4)
+   if (tex->valign_4)
       dw[0] |= GEN7_SURFACE_VALIGN_4;
 
-   if (res->halign_8)
+   if (tex->halign_8)
       dw[0] |= GEN7_SURFACE_HALIGN_8;
+
+   if (tex->array_spacing_full)
+      dw[0] |= GEN7_SURFACE_ARYSPC_FULL;
+   else
+      dw[0] |= GEN7_SURFACE_ARYSPC_LOD0;
 
    if (render_cache_rw)
       dw[0] |= BRW_SURFACE_RC_READ_WRITE;
@@ -1470,11 +1601,24 @@ gen7_fill_normal_SURFACE_STATE(const struct ilo_gpe *gpe,
            (pitch - 1);
 
    dw[4] = first_layer << 18 |
-           (depth - 1) << 7;
+           (num_layers - 1) << 7;
 
-   if (res->base.nr_samples > 4)
+   /*
+    * MSFMT_MSS means the samples are not interleaved and MSFMT_DEPTH_STENCIL
+    * means the samples are interleaved.  The layouts are the same when the
+    * number of samples is 1.
+    */
+   if (tex->interleaved && tex->base.nr_samples > 1) {
+      assert(!is_rt);
+      dw[4] |= GEN7_SURFACE_MSFMT_DEPTH_STENCIL;
+   }
+   else {
+      dw[4] |= GEN7_SURFACE_MSFMT_MSS;
+   }
+
+   if (tex->base.nr_samples > 4)
       dw[4] |= GEN7_SURFACE_MULTISAMPLECOUNT_8;
-   else if (res->base.nr_samples > 2)
+   else if (tex->base.nr_samples > 2)
       dw[4] |= GEN7_SURFACE_MULTISAMPLECOUNT_4;
    else
       dw[4] |= GEN7_SURFACE_MULTISAMPLECOUNT_1;
@@ -1489,7 +1633,7 @@ gen7_fill_normal_SURFACE_STATE(const struct ilo_gpe *gpe,
 }
 
 static uint32_t
-gen7_emit_SURFACE_STATE(const struct ilo_gpe *gpe,
+gen7_emit_SURFACE_STATE(const struct ilo_dev_info *dev,
                         struct intel_bo *bo, bool for_render,
                         const uint32_t *dw, int num_dwords,
                         struct ilo_cp *cp)
@@ -1499,7 +1643,7 @@ gen7_emit_SURFACE_STATE(const struct ilo_gpe *gpe,
    uint32_t state_offset;
    uint32_t read_domains, write_domain;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
    assert(num_dwords == state_len);
 
    if (for_render) {
@@ -1526,25 +1670,25 @@ gen7_emit_SURFACE_STATE(const struct ilo_gpe *gpe,
 }
 
 static uint32_t
-gen7_emit_surf_SURFACE_STATE(const struct ilo_gpe *gpe,
+gen7_emit_surf_SURFACE_STATE(const struct ilo_dev_info *dev,
                              const struct pipe_surface *surface,
                              struct ilo_cp *cp)
 {
    struct intel_bo *bo;
    uint32_t dw[8];
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    if (surface && surface->texture) {
-      struct ilo_resource *res = ilo_resource(surface->texture);
+      struct ilo_texture *tex = ilo_texture(surface->texture);
 
-      bo = res->bo;
+      bo = tex->bo;
 
       /*
        * classic i965 sets render_cache_rw for constant buffers and sol
        * surfaces but not render buffers.  Why?
        */
-      gen7_fill_normal_SURFACE_STATE(gpe, res, surface->format,
+      gen7_fill_normal_SURFACE_STATE(dev, tex, surface->format,
             surface->u.tex.level, 1,
             surface->u.tex.first_layer,
             surface->u.tex.last_layer - surface->u.tex.first_layer + 1,
@@ -1552,54 +1696,72 @@ gen7_emit_surf_SURFACE_STATE(const struct ilo_gpe *gpe,
    }
    else {
       bo = NULL;
-      gen7_fill_null_SURFACE_STATE(gpe,
+      gen7_fill_null_SURFACE_STATE(dev,
             surface->width, surface->height, 1, 0, dw, Elements(dw));
    }
 
-   return gen7_emit_SURFACE_STATE(gpe, bo, true, dw, Elements(dw), cp);
+   return gen7_emit_SURFACE_STATE(dev, bo, true, dw, Elements(dw), cp);
 }
 
 static uint32_t
-gen7_emit_view_SURFACE_STATE(const struct ilo_gpe *gpe,
+gen7_emit_view_SURFACE_STATE(const struct ilo_dev_info *dev,
                              const struct pipe_sampler_view *view,
                              struct ilo_cp *cp)
 {
-   struct ilo_resource *res = ilo_resource(view->texture);
+   struct intel_bo *bo;
    uint32_t dw[8];
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
-   gen7_fill_normal_SURFACE_STATE(gpe, res, view->format,
-         view->u.tex.first_level,
-         view->u.tex.last_level - view->u.tex.first_level + 1,
-         view->u.tex.first_layer,
-         view->u.tex.last_layer - view->u.tex.first_layer + 1,
-         false, false, dw, Elements(dw));
+   if (view->texture->target == PIPE_BUFFER) {
+      const unsigned elem_size = util_format_get_blocksize(view->format);
+      const unsigned first_elem = view->u.buf.first_element;
+      const unsigned num_elems = view->u.buf.last_element - first_elem + 1;
+      struct ilo_buffer *buf = ilo_buffer(view->texture);
 
-   return gen7_emit_SURFACE_STATE(gpe, res->bo, false, dw, Elements(dw), cp);
+      gen7_fill_buffer_SURFACE_STATE(dev, buf,
+            first_elem * elem_size, num_elems * elem_size,
+            elem_size, view->format, false, false, dw, Elements(dw));
+
+      bo = buf->bo;
+   }
+   else {
+      struct ilo_texture *tex = ilo_texture(view->texture);
+
+      gen7_fill_normal_SURFACE_STATE(dev, tex, view->format,
+            view->u.tex.first_level,
+            view->u.tex.last_level - view->u.tex.first_level + 1,
+            view->u.tex.first_layer,
+            view->u.tex.last_layer - view->u.tex.first_layer + 1,
+            false, false, dw, Elements(dw));
+
+      bo = tex->bo;
+   }
+
+   return gen7_emit_SURFACE_STATE(dev, bo, false, dw, Elements(dw), cp);
 }
 
 static uint32_t
-gen7_emit_cbuf_SURFACE_STATE(const struct ilo_gpe *gpe,
+gen7_emit_cbuf_SURFACE_STATE(const struct ilo_dev_info *dev,
                              const struct pipe_constant_buffer *cbuf,
                              struct ilo_cp *cp)
 {
    const enum pipe_format elem_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
-   struct ilo_resource *res = ilo_resource(cbuf->buffer);
+   struct ilo_buffer *buf = ilo_buffer(cbuf->buffer);
    uint32_t dw[8];
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
-   gen7_fill_buffer_SURFACE_STATE(gpe, res,
+   gen7_fill_buffer_SURFACE_STATE(dev, buf,
          cbuf->buffer_offset, cbuf->buffer_size,
          util_format_get_blocksize(elem_format), elem_format,
          false, false, dw, Elements(dw));
 
-   return gen7_emit_SURFACE_STATE(gpe, res->bo, false, dw, Elements(dw), cp);
+   return gen7_emit_SURFACE_STATE(dev, buf->bo, false, dw, Elements(dw), cp);
 }
 
 static uint32_t
-gen7_emit_SAMPLER_BORDER_COLOR_STATE(const struct ilo_gpe *gpe,
+gen7_emit_SAMPLER_BORDER_COLOR_STATE(const struct ilo_dev_info *dev,
                                      const union pipe_color_union *color,
                                      struct ilo_cp *cp)
 {
@@ -1607,7 +1769,7 @@ gen7_emit_SAMPLER_BORDER_COLOR_STATE(const struct ilo_gpe *gpe,
    const int state_len = 4;
    uint32_t state_offset, *dw;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
 
    dw = ilo_cp_steal_ptr(cp, "SAMPLER_BORDER_COLOR_STATE",
          state_len, state_align, &state_offset);
@@ -1617,7 +1779,7 @@ gen7_emit_SAMPLER_BORDER_COLOR_STATE(const struct ilo_gpe *gpe,
 }
 
 static int
-gen7_estimate_command_size(const struct ilo_gpe *gpe,
+gen7_estimate_command_size(const struct ilo_dev_info *dev,
                            enum ilo_gpe_gen7_command cmd,
                            int arg)
 {
@@ -1698,16 +1860,16 @@ gen7_estimate_command_size(const struct ilo_gpe *gpe,
    const int body = gen7_command_size_table[cmd].body;
    const int count = arg;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
    assert(cmd < ILO_GPE_GEN7_COMMAND_COUNT);
 
    return (likely(count)) ? header + body * count : 0;
 }
 
 static int
-gen7_estimate_state_size(const struct ilo_gpe *gpe,
-                        enum ilo_gpe_gen7_state state,
-                        int arg)
+gen7_estimate_state_size(const struct ilo_dev_info *dev,
+                         enum ilo_gpe_gen7_state state,
+                         int arg)
 {
    static const struct {
       int alignment;
@@ -1733,7 +1895,7 @@ gen7_estimate_state_size(const struct ilo_gpe *gpe,
    const int count = arg;
    int estimate;
 
-   ILO_GPE_VALID_GEN(gpe, 7, 7);
+   ILO_GPE_VALID_GEN(dev, 7, 7);
    assert(state < ILO_GPE_GEN7_STATE_COUNT);
 
    if (likely(count)) {

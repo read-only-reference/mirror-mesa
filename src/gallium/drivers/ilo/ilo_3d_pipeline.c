@@ -64,7 +64,7 @@ static const struct sample_position sample_position_8x[8] = {
 };
 
 struct ilo_3d_pipeline *
-ilo_3d_pipeline_create(struct ilo_cp *cp, int gen, int gt)
+ilo_3d_pipeline_create(struct ilo_cp *cp, const struct ilo_dev_info *dev)
 {
    struct ilo_3d_pipeline *p;
    int i;
@@ -74,9 +74,9 @@ ilo_3d_pipeline_create(struct ilo_cp *cp, int gen, int gt)
       return NULL;
 
    p->cp = cp;
-   p->gen = gen;
+   p->dev = dev;
 
-   switch (p->gen) {
+   switch (p->dev->gen) {
    case ILO_GEN(6):
       ilo_3d_pipeline_init_gen6(p);
       break;
@@ -89,9 +89,6 @@ ilo_3d_pipeline_create(struct ilo_cp *cp, int gen, int gt)
       return NULL;
       break;
    }
-
-   p->gpe.gen = p->gen;
-   p->gpe.gt = gt;
 
    p->invalidate_flags = ILO_3D_PIPELINE_INVALIDATE_ALL;
 
@@ -138,79 +135,12 @@ static void
 handle_invalid_batch_bo(struct ilo_3d_pipeline *p, bool unset)
 {
    if (p->invalidate_flags & ILO_3D_PIPELINE_INVALIDATE_BATCH_BO) {
-      if (p->gen == ILO_GEN(6))
+      if (p->dev->gen == ILO_GEN(6))
          p->state.has_gen6_wa_pipe_control = false;
 
       if (unset)
          p->invalidate_flags &= ~ILO_3D_PIPELINE_INVALIDATE_BATCH_BO;
    }
-}
-
-/* XXX move to u_prim.h */
-static unsigned
-prim_count(unsigned prim, unsigned num_verts)
-{
-   unsigned num_prims;
-
-   u_trim_pipe_prim(prim, &num_verts);
-
-   switch (prim) {
-   case PIPE_PRIM_POINTS:
-      num_prims = num_verts;
-      break;
-   case PIPE_PRIM_LINES:
-      num_prims = num_verts / 2;
-      break;
-   case PIPE_PRIM_LINE_LOOP:
-      num_prims = num_verts;
-      break;
-   case PIPE_PRIM_LINE_STRIP:
-      num_prims = num_verts - 1;
-      break;
-   case PIPE_PRIM_TRIANGLES:
-      num_prims = num_verts / 3;
-      break;
-   case PIPE_PRIM_TRIANGLE_STRIP:
-   case PIPE_PRIM_TRIANGLE_FAN:
-      num_prims = num_verts - 2;
-      break;
-   case PIPE_PRIM_QUADS:
-      num_prims = (num_verts / 4) * 2;
-      break;
-   case PIPE_PRIM_QUAD_STRIP:
-      num_prims = (num_verts / 2 - 1) * 2;
-      break;
-   case PIPE_PRIM_POLYGON:
-      num_prims = num_verts - 2;
-      break;
-   case PIPE_PRIM_LINES_ADJACENCY:
-      num_prims = num_verts / 4;
-      break;
-   case PIPE_PRIM_LINE_STRIP_ADJACENCY:
-      num_prims = num_verts - 3;
-      break;
-   case PIPE_PRIM_TRIANGLES_ADJACENCY:
-      /* u_trim_pipe_prim is wrong? */
-      num_verts += 1;
-
-      num_prims = num_verts / 6;
-      break;
-   case PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY:
-      /* u_trim_pipe_prim is wrong? */
-      if (num_verts >= 6)
-         num_verts -= (num_verts % 2);
-      else
-         num_verts = 0;
-
-      num_prims = (num_verts / 2 - 2);
-      break;
-   default:
-      assert(!"unknown pipe prim");
-      num_prims = 0;
-      break;
-   }
-
-   return num_prims;
 }
 
 /**
@@ -222,15 +152,24 @@ ilo_3d_pipeline_emit_draw(struct ilo_3d_pipeline *p,
                           const struct pipe_draw_info *info,
                           int *prim_generated, int *prim_emitted)
 {
+   const bool so_enabled = (ilo->stream_output_targets.num_targets > 0);
    bool success;
 
-   /*
-    * We keep track of the SVBI in the driver, so that we can restore it when
-    * the HW context is invalidated (by another process).  The value needs to
-    * be reset when the stream output targets are changed.
-    */
-   if (ilo->dirty & ILO_DIRTY_STREAM_OUTPUT_TARGETS)
+   if (ilo->dirty & ILO_DIRTY_STREAM_OUTPUT_TARGETS &&
+       so_enabled && !ilo->stream_output_targets.append_bitmask) {
+      /*
+       * We keep track of the SVBI in the driver, so that we can restore it
+       * when the HW context is invalidated (by another process).  The value
+       * needs to be reset when stream output is enabled and the targets are
+       * changed.
+       */
       p->state.so_num_vertices = 0;
+
+      /* on GEN7+, we need SOL_RESET to reset the SO write offsets */
+      if (p->dev->gen >= ILO_GEN(7))
+         ilo_cp_set_one_off_flags(p->cp, INTEL_EXEC_GEN7_SOL_RESET);
+   }
+
 
    while (true) {
       struct ilo_cp_jmp_buf jmp;
@@ -269,7 +208,7 @@ ilo_3d_pipeline_emit_draw(struct ilo_3d_pipeline *p,
       const int num_verts = u_vertices_per_prim(u_reduced_prim(info->mode));
       const int max_emit =
          (p->state.so_max_vertices - p->state.so_num_vertices) / num_verts;
-      const int generated = prim_count(info->mode, info->count);
+      const int generated = u_reduced_prims_for_vertices(info->mode, info->count);
       const int emitted = MIN2(generated, max_emit);
 
       p->state.so_num_vertices += emitted * num_verts;

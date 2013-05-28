@@ -74,8 +74,6 @@ struct ilo_shader_variant {
  */
 struct ilo_shader {
    struct ilo_shader_variant variant;
-   /* hash of the shader variant for quicker lookup */
-   unsigned hash;
 
    struct {
       int semantic_names[PIPE_MAX_SHADER_INPUTS];
@@ -92,6 +90,7 @@ struct ilo_shader {
    } in;
 
    struct {
+      int register_indices[PIPE_MAX_SHADER_OUTPUTS];
       int semantic_names[PIPE_MAX_SHADER_OUTPUTS];
       int semantic_indices[PIPE_MAX_SHADER_OUTPUTS];
       int count;
@@ -126,8 +125,8 @@ struct ilo_shader {
  * Information about a shader state.
  */
 struct ilo_shader_info {
+   const struct ilo_dev_info *dev;
    int type;
-   int gen;
 
    const struct tgsi_token *tokens;
 

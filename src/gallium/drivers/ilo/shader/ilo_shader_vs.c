@@ -26,6 +26,7 @@
  */
 
 #include "tgsi/tgsi_dump.h"
+#include "tgsi/tgsi_util.h"
 #include "toy_compiler.h"
 #include "toy_tgsi.h"
 #include "toy_legalize.h"
@@ -215,7 +216,7 @@ vs_lower_opcode_tgsi_direct(struct vs_compile_context *vcc,
       vs_lower_opcode_tgsi_in(vcc, inst->dst, dim, idx);
       break;
    case TOY_OPCODE_TGSI_CONST:
-      if (tc->gen >= ILO_GEN(7))
+      if (tc->dev->gen >= ILO_GEN(7))
          vs_lower_opcode_tgsi_const_gen7(vcc, inst->dst, dim, inst->src[1]);
       else
          vs_lower_opcode_tgsi_const_gen6(vcc, inst->dst, dim, inst->src[1]);
@@ -269,7 +270,7 @@ vs_lower_opcode_tgsi_indirect(struct vs_compile_context *vcc,
             indirect_idx = tsrc_from(tmp);
          }
 
-         if (tc->gen >= ILO_GEN(7))
+         if (tc->dev->gen >= ILO_GEN(7))
             vs_lower_opcode_tgsi_const_gen7(vcc, inst->dst, dim, indirect_idx);
          else
             vs_lower_opcode_tgsi_const_gen6(vcc, inst->dst, dim, indirect_idx);
@@ -334,7 +335,7 @@ vs_add_sampler_params(struct toy_compiler *tc, int msg_type, int base_mrf,
       assert(num_coords <= 3);
       tc_MOV(tc, tdst_writemask(tdst_d(m[0]), coords_writemask), coords);
       tc_MOV(tc, tdst_writemask(tdst_d(m[0]), TOY_WRITEMASK_W), bias_or_lod);
-      if (tc->gen >= ILO_GEN(7)) {
+      if (tc->dev->gen >= ILO_GEN(7)) {
          num_params = 4;
       }
       else {
@@ -377,7 +378,7 @@ vs_prepare_tgsi_sampling(struct toy_compiler *tc, const struct toy_inst *inst,
    num_derivs = 0;
    sampler_src = 1;
 
-   num_coords = toy_tgsi_get_texture_coord_dim(inst->tex.target, &ref_pos);
+   num_coords = tgsi_util_get_texture_coord_dim(inst->tex.target, &ref_pos);
 
    /* extract the parameters */
    switch (inst->opcode) {
@@ -554,6 +555,7 @@ vs_lower_opcode_tgsi_sampling(struct vs_compile_context *vcc,
 
    /* write to a temp first */
    tmp = tc_alloc_tmp(tc);
+   tmp.type = inst->dst.type;
    dst = inst->dst;
    inst->dst = tmp;
 
@@ -876,7 +878,7 @@ vs_write_vue(struct vs_compile_context *vcc)
    inst = tc_MOV(tc, header, r0);
    inst->mask_ctrl = BRW_MASK_DISABLE;
 
-   if (tc->gen >= ILO_GEN(7)) {
+   if (tc->dev->gen >= ILO_GEN(7)) {
       inst = tc_OR(tc, tdst_offset(header, 0, 5),
             tsrc_rect(tsrc_offset(r0, 0, 5), TOY_RECT_010),
             tsrc_rect(tsrc_imm_ud(0xff00), TOY_RECT_010));
@@ -914,7 +916,7 @@ vs_write_vue(struct vs_compile_context *vcc)
          eot = false;
       }
 
-      if (tc->gen >= ILO_GEN(7)) {
+      if (tc->dev->gen >= ILO_GEN(7)) {
          /* do not forget about the header */
          msg_len = 1 + num_attrs;
       }
@@ -1056,21 +1058,31 @@ vs_setup_shader_out(struct ilo_shader *sh, const struct toy_tgsi *tgsi,
 
    /* the first two VUEs are always PSIZE and POSITION */
    num_outs = 2;
+   output_map[0] = psize_slot;
+   output_map[1] = pos_slot;
+
+   sh->out.register_indices[0] =
+      (psize_slot >= 0) ? tgsi->outputs[psize_slot].index : -1;
    sh->out.semantic_names[0] = TGSI_SEMANTIC_PSIZE;
    sh->out.semantic_indices[0] = 0;
+
+   sh->out.register_indices[1] =
+      (pos_slot >= 0) ? tgsi->outputs[pos_slot].index : -1;
    sh->out.semantic_names[1] = TGSI_SEMANTIC_POSITION;
    sh->out.semantic_indices[1] = 0;
 
    sh->out.has_pos = true;
-   output_map[0] = psize_slot;
-   output_map[1] = pos_slot;
 
    /* followed by optional clip distances */
    if (output_clipdist) {
+      sh->out.register_indices[num_outs] =
+         (clipdist_slot[0] >= 0) ? tgsi->outputs[clipdist_slot[0]].index : -1;
       sh->out.semantic_names[num_outs] = TGSI_SEMANTIC_CLIPDIST;
       sh->out.semantic_indices[num_outs] = 0;
       output_map[num_outs++] = clipdist_slot[0];
 
+      sh->out.register_indices[num_outs] =
+         (clipdist_slot[1] >= 0) ? tgsi->outputs[clipdist_slot[1]].index : -1;
       sh->out.semantic_names[num_outs] = TGSI_SEMANTIC_CLIPDIST;
       sh->out.semantic_indices[num_outs] = 1;
       output_map[num_outs++] = clipdist_slot[1];
@@ -1086,6 +1098,7 @@ vs_setup_shader_out(struct ilo_shader *sh, const struct toy_tgsi *tgsi,
       if (slot < 0)
          continue;
 
+      sh->out.register_indices[num_outs] = tgsi->outputs[slot].index;
       sh->out.semantic_names[num_outs] = tgsi->outputs[slot].semantic_name;
       sh->out.semantic_indices[num_outs] = tgsi->outputs[slot].semantic_index;
 
@@ -1102,6 +1115,7 @@ vs_setup_shader_out(struct ilo_shader *sh, const struct toy_tgsi *tgsi,
       case TGSI_SEMANTIC_BCOLOR:
          break;
       default:
+         sh->out.register_indices[num_outs] = tgsi->outputs[i].index;
          sh->out.semantic_names[num_outs] = tgsi->outputs[i].semantic_name;
          sh->out.semantic_indices[num_outs] = tgsi->outputs[i].semantic_index;
          output_map[num_outs++] = i;
@@ -1162,7 +1176,7 @@ vs_setup(struct vs_compile_context *vcc,
 
    vcc->variant = variant;
 
-   toy_compiler_init(&vcc->tc, state->info.gen);
+   toy_compiler_init(&vcc->tc, state->info.dev);
    vcc->tc.templ.access_mode = BRW_ALIGN_16;
    vcc->tc.templ.exec_size = BRW_EXECUTE_8;
    vcc->tc.rect_linear_width = 4;
@@ -1198,7 +1212,7 @@ vs_setup(struct vs_compile_context *vcc,
 
    vcc->num_grf_per_vrf = 1;
 
-   if (vcc->tc.gen >= ILO_GEN(7)) {
+   if (vcc->tc.dev->gen >= ILO_GEN(7)) {
       vcc->last_free_grf -= 15;
       vcc->first_free_mrf = vcc->last_free_grf + 1;
       vcc->last_free_mrf = vcc->first_free_mrf + 14;
@@ -1224,7 +1238,7 @@ ilo_shader_compile_vs(const struct ilo_shader_state *state,
    if (!vs_setup(&vcc, state, variant))
       return NULL;
 
-   if (vcc.tc.gen >= ILO_GEN(7)) {
+   if (vcc.tc.dev->gen >= ILO_GEN(7)) {
       need_gs = false;
    }
    else {

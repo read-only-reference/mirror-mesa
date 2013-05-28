@@ -36,7 +36,7 @@
  * \see brw_context.h
  */
 #define ILO_MAX_DRAW_BUFFERS    8
-#define ILO_MAX_CONST_BUFFERS   1
+#define ILO_MAX_CONST_BUFFERS   (1 + 12)
 #define ILO_MAX_SAMPLER_VIEWS   16
 #define ILO_MAX_SAMPLERS        16
 #define ILO_MAX_SO_BINDINGS     64
@@ -71,18 +71,7 @@ struct ilo_context {
    struct pipe_context base;
 
    struct intel_winsys *winsys;
-   int devid;
-   int gen;
-   int gt;
-
-   int max_vs_threads;
-   int max_gs_threads;
-   int max_wm_threads;
-   struct {
-      int size;
-      int max_vs_entries;
-      int max_gs_entries;
-   } urb;
+   struct ilo_dev_info *dev;
 
    struct ilo_cp *cp;
    struct intel_bo *last_cp_bo;
