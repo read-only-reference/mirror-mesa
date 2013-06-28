@@ -629,6 +629,7 @@ struct r600_context {
 	/* Render condition. */
 	struct pipe_query		*current_render_cond;
 	unsigned			current_render_cond_mode;
+	boolean				current_render_cond_cond;
 	boolean				predicate_drawing;
 
 	void				*sb_context;
@@ -755,10 +756,7 @@ void r600_init_context_resource_functions(struct r600_context *r600);
 int r600_pipe_shader_create(struct pipe_context *ctx,
 			    struct r600_pipe_shader *shader,
 			    struct r600_shader_key key);
-#ifdef HAVE_OPENCL
-int r600_compute_shader_create(struct pipe_context * ctx,
-	LLVMModuleRef mod,  struct r600_bytecode * bytecode);
-#endif
+
 void r600_pipe_shader_destroy(struct pipe_context *ctx, struct r600_pipe_shader *shader);
 
 /* r600_state.c */

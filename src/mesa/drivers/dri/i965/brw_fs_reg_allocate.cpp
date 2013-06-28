@@ -28,7 +28,6 @@
 #include "brw_fs.h"
 #include "glsl/glsl_types.h"
 #include "glsl/ir_optimization.h"
-#include "glsl/ir_print_visitor.h"
 
 static void
 assign_reg(int *reg_hw_locations, fs_reg *reg, int reg_width)
@@ -459,7 +458,8 @@ fs_visitor::assign_regs()
       int reg = choose_spill_reg(g);
 
       if (reg == -1) {
-	 fail("no register to spill\n");
+         fail("no register to spill:\n");
+         dump_instructions();
       } else if (dispatch_width == 16) {
 	 fail("Failure to register allocate.  Reduce number of live scalar "
               "values to avoid this.");

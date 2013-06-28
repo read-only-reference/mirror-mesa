@@ -1,6 +1,5 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.6
  *
  * Copyright (C) 1999-2008  Brian Paul   All Rights Reserved.
  * Copyright (C) 2009  VMware, Inc.   All Rights Reserved.
@@ -1046,8 +1045,6 @@ _mesa_PopAttrib(void)
                _mesa_Hint(GL_LINE_SMOOTH_HINT, hint->LineSmooth);
                _mesa_Hint(GL_POLYGON_SMOOTH_HINT, hint->PolygonSmooth);
                _mesa_Hint(GL_FOG_HINT, hint->Fog);
-               _mesa_Hint(GL_CLIP_VOLUME_CLIPPING_HINT_EXT,
-                          hint->ClipVolumeClipping);
 	       _mesa_Hint(GL_TEXTURE_COMPRESSION_HINT_ARB,
 			  hint->TextureCompression);
             }

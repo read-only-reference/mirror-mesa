@@ -24,13 +24,11 @@
 include Makefile.sources
 
 AM_CFLAGS = \
-	-DI915 \
 	-I$(top_srcdir)/include \
 	-I$(top_srcdir)/src/ \
 	-I$(top_srcdir)/src/mapi \
 	-I$(top_srcdir)/src/mesa/ \
 	-I$(top_srcdir)/src/mesa/drivers/dri/common \
-	-I$(top_srcdir)/src/mesa/drivers/dri/intel \
 	-I$(top_srcdir)/src/mesa/drivers/dri/intel/server \
 	-I$(top_builddir)/src/mesa/drivers/dri/common \
 	$(DEFINES) \

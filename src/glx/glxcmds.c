@@ -230,7 +230,7 @@ glx_context_init(struct glx_context *gc,
 {
    gc->majorOpcode = __glXSetupForCommand(psc->display->dpy);
    if (!gc->majorOpcode)
-      return GL_FALSE;
+      return False;
 
    gc->screen = psc->scr;
    gc->psc = psc;
@@ -238,7 +238,7 @@ glx_context_init(struct glx_context *gc,
    gc->isDirect = GL_TRUE;
    gc->currentContextTag = -1;
 
-   return GL_TRUE;
+   return True;
 }
 
 
@@ -435,13 +435,13 @@ glXQueryVersion(Display * dpy, int *major, int *minor)
    /* Init the extension.  This fetches the major and minor version. */
    priv = __glXInitialize(dpy);
    if (!priv)
-      return GL_FALSE;
+      return False;
 
    if (major)
       *major = priv->majorVersion;
    if (minor)
       *minor = priv->minorVersion;
-   return GL_TRUE;
+   return True;
 }
 
 /*
@@ -569,26 +569,25 @@ glXCopyContext(Display * dpy, GLXContext source_user,
  * \param dpy        Display where the context was created.
  * \param contextID  ID of the context to be tested.
  *
- * \returns \c GL_TRUE if the context is direct rendering or not.
+ * \returns \c True if the context is direct rendering or not.
  */
 static Bool
 __glXIsDirect(Display * dpy, GLXContextID contextID)
 {
    CARD8 opcode;
+   xcb_connection_t *c;
+   xcb_generic_error_t *err;
+   xcb_glx_is_direct_reply_t *reply;
+   Bool is_direct;
 
    opcode = __glXSetupForCommand(dpy);
    if (!opcode) {
-      return GL_FALSE;
+      return False;
    }
 
-   xcb_connection_t *c = XGetXCBConnection(dpy);
-   xcb_generic_error_t *err;
-   xcb_glx_is_direct_reply_t *reply = xcb_glx_is_direct_reply(c,
-                                                              xcb_glx_is_direct
-                                                              (c, contextID),
-                                                              &err);
-
-   const Bool is_direct = (reply != NULL && reply->is_direct) ? True : False;
+   c = XGetXCBConnection(dpy);
+   reply = xcb_glx_is_direct_reply(c, xcb_glx_is_direct(c, contextID), &err);
+   is_direct = (reply != NULL && reply->is_direct) ? True : False;
 
    if (err != NULL) {
       __glXSendErrorForXcb(dpy, err);
@@ -602,7 +601,7 @@ __glXIsDirect(Display * dpy, GLXContextID contextID)
 
 /**
  * \todo
- * Shouldn't this function \b always return \c GL_FALSE when
+ * Shouldn't this function \b always return \c False when
  * \c GLX_DIRECT_RENDERING is not defined?  Do we really need to bother with
  * the GLX protocol here at all?
  */
@@ -612,13 +611,13 @@ glXIsDirect(Display * dpy, GLXContext gc_user)
    struct glx_context *gc = (struct glx_context *) gc_user;
 
    if (!gc) {
-      return GL_FALSE;
+      return False;
    }
    else if (gc->isDirect) {
-      return GL_TRUE;
+      return True;
    }
 #ifdef GLX_USE_APPLEGL  /* TODO: indirect on darwin */
-      return GL_FALSE;
+   return False;
 #else
    return __glXIsDirect(dpy, gc->xid);
 #endif
@@ -844,7 +843,7 @@ glXGetConfig(Display * dpy, XVisualInfo * vis, int attribute,
     ** supported by the OpenGL implementation on the server.
     */
    if ((status == GLX_BAD_VISUAL) && (attribute == GLX_USE_GL)) {
-      *value_return = GL_FALSE;
+      *value_return = False;
       status = Success;
    }
 

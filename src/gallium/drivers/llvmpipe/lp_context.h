@@ -97,9 +97,9 @@ struct llvmpipe_context {
    struct pipe_query_data_pipeline_statistics pipeline_statistics;
    unsigned active_statistics_queries;
 
-   unsigned dirty; /**< Mask of LP_NEW_x flags */
+   unsigned active_occlusion_queries;
 
-   unsigned active_occlusion_query;
+   unsigned dirty; /**< Mask of LP_NEW_x flags */
 
    /** Mapped vertex buffers */
    ubyte *mapped_vbuffer[PIPE_MAX_ATTRIBS];
@@ -118,6 +118,9 @@ struct llvmpipe_context {
 
    /** Which vertex shader output slot contains viewport index */
    int viewport_index_slot;
+
+   /** Which geometry shader output slot contains layer */
+   int layer_slot;
 
    /**< minimum resolvable depth value, for polygon offset */   
    double mrd;
@@ -145,6 +148,7 @@ struct llvmpipe_context {
    /** Conditional query object and mode */
    struct pipe_query *render_cond_query;
    uint render_cond_mode;
+   boolean render_cond_cond;
 };
 
 

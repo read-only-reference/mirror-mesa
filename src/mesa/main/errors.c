@@ -5,7 +5,6 @@
 
 /*
  * Mesa 3-D graphics library
- * Version:  7.1
  *
  * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  *
@@ -660,11 +659,11 @@ _mesa_DebugMessageControlARB(GLenum gl_source, GLenum gl_type,
 }
 
 void GLAPIENTRY
-_mesa_DebugMessageCallbackARB(GLDEBUGPROCARB callback, const GLvoid *userParam)
+_mesa_DebugMessageCallbackARB(GLDEBUGPROCARB callback, GLvoid *userParam)
 {
    GET_CURRENT_CONTEXT(ctx);
    ctx->Debug.Callback = callback;
-   ctx->Debug.CallbackData = (void *) userParam;
+   ctx->Debug.CallbackData = userParam;
 }
 
 void

@@ -349,8 +349,6 @@ get_z_shift_and_mask(const struct util_format_description *format_desc,
 {
    unsigned total_bits;
    unsigned z_swizzle;
-   unsigned chan;
-   unsigned padding_left, padding_right;
 
    assert(format_desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS);
    assert(format_desc->block.width == 1);
@@ -365,24 +363,13 @@ get_z_shift_and_mask(const struct util_format_description *format_desc,
       return FALSE;
 
    *width = format_desc->channel[z_swizzle].size;
+   *shift = format_desc->channel[z_swizzle].shift;
 
-   padding_right = 0;
-   for (chan = 0; chan < z_swizzle; ++chan)
-      padding_right += format_desc->channel[chan].size;
-
-   padding_left =
-      total_bits - (padding_right + *width);
-
-   if (padding_left || padding_right) {
-      unsigned long long mask_left = (1ULL << (total_bits - padding_left)) - 1;
-      unsigned long long mask_right = (1ULL << (padding_right)) - 1;
-      *mask = mask_left ^ mask_right;
-   }
-   else {
+   if (*width == total_bits) {
       *mask = 0xffffffff;
+   } else {
+      *mask = ((1 << *width) - 1) << *shift;
    }
-
-   *shift = padding_right;
 
    return TRUE;
 }
@@ -398,7 +385,7 @@ get_s_shift_and_mask(const struct util_format_description *format_desc,
                      unsigned *shift, unsigned *mask)
 {
    unsigned s_swizzle;
-   unsigned chan, sz;
+   unsigned sz;
 
    s_swizzle = format_desc->swizzle[1];
 
@@ -407,16 +394,14 @@ get_s_shift_and_mask(const struct util_format_description *format_desc,
 
    /* just special case 64bit d/s format */
    if (format_desc->block.bits > 32) {
+      /* XXX big-endian? */
       assert(format_desc->format == PIPE_FORMAT_Z32_FLOAT_S8X24_UINT);
       *shift = 0;
       *mask = 0xff;
       return TRUE;
    }
 
-   *shift = 0;
-   for (chan = 0; chan < s_swizzle; chan++)
-      *shift += format_desc->channel[chan].size;
-
+   *shift = format_desc->channel[s_swizzle].shift;
    sz = format_desc->channel[s_swizzle].size;
    *mask = (1U << sz) - 1U;
 
@@ -429,6 +414,7 @@ get_s_shift_and_mask(const struct util_format_description *format_desc,
  * Test the depth mask. Add the number of channel which has none zero mask
  * into the occlusion counter. e.g. maskvalue is {-1, -1, -1, -1}.
  * The counter will add 4.
+ * TODO: could get that out of the fs loop.
  *
  * \param type holds element type of the mask vector.
  * \param maskvalue is the depth test mask.
@@ -457,6 +443,7 @@ lp_build_occlusion_count(struct gallivm_state *gallivm,
                                       LLVMInt32TypeInContext(context), bits);
       count = lp_build_intrinsic_unary(builder, popcntintr,
                                        LLVMInt32TypeInContext(context), bits);
+      count = LLVMBuildZExt(builder, count, LLVMIntTypeInContext(context, 64), "");
    }
    else if(util_cpu_caps.has_avx && type.length == 8) {
       const char *movmskintr = "llvm.x86.avx.movmsk.ps.256";
@@ -467,6 +454,7 @@ lp_build_occlusion_count(struct gallivm_state *gallivm,
                                       LLVMInt32TypeInContext(context), bits);
       count = lp_build_intrinsic_unary(builder, popcntintr,
                                        LLVMInt32TypeInContext(context), bits);
+      count = LLVMBuildZExt(builder, count, LLVMIntTypeInContext(context, 64), "");
    }
    else {
       unsigned i;
@@ -509,8 +497,11 @@ lp_build_occlusion_count(struct gallivm_state *gallivm,
        }
        count = lp_build_intrinsic_unary(builder, popcntintr, counttype, countd);
 
-       if (type.length > 4) {
-          count = LLVMBuildTrunc(builder, count, LLVMIntTypeInContext(context, 32), "");
+       if (type.length > 8) {
+          count = LLVMBuildTrunc(builder, count, LLVMIntTypeInContext(context, 64), "");
+       }
+       else if (type.length < 8) {
+          count = LLVMBuildZExt(builder, count, LLVMIntTypeInContext(context, 64), "");
        }
    }
    newcount = LLVMBuildLoad(builder, counter, "origcount");
@@ -525,6 +516,7 @@ lp_build_occlusion_count(struct gallivm_state *gallivm,
  *
  * \param type  the data type of the fragment depth/stencil values
  * \param format_desc  description of the depth/stencil surface
+ * \param is_1d  whether this resource has only one dimension
  * \param loop_counter  the current loop iteration
  * \param depth_ptr  pointer to the depth/stencil values of this 4x4 block
  * \param depth_stride  stride of the depth/stencil buffer
@@ -535,6 +527,7 @@ void
 lp_build_depth_stencil_load_swizzled(struct gallivm_state *gallivm,
                                      struct lp_type z_src_type,
                                      const struct util_format_description *format_desc,
+                                     boolean is_1d,
                                      LLVMValueRef depth_ptr,
                                      LLVMValueRef depth_stride,
                                      LLVMValueRef *z_fb,
@@ -592,9 +585,14 @@ lp_build_depth_stencil_load_swizzled(struct gallivm_state *gallivm,
    zs_dst_ptr = LLVMBuildGEP(builder, depth_ptr, &depth_offset1, 1, "");
    zs_dst_ptr = LLVMBuildBitCast(builder, zs_dst_ptr, load_ptr_type, "");
    zs_dst1 = LLVMBuildLoad(builder, zs_dst_ptr, "");
-   zs_dst_ptr = LLVMBuildGEP(builder, depth_ptr, &depth_offset2, 1, "");
-   zs_dst_ptr = LLVMBuildBitCast(builder, zs_dst_ptr, load_ptr_type, "");
-   zs_dst2 = LLVMBuildLoad(builder, zs_dst_ptr, "");
+   if (is_1d) {
+      zs_dst2 = lp_build_undef(gallivm, zs_load_type);
+   }
+   else {
+      zs_dst_ptr = LLVMBuildGEP(builder, depth_ptr, &depth_offset2, 1, "");
+      zs_dst_ptr = LLVMBuildBitCast(builder, zs_dst_ptr, load_ptr_type, "");
+      zs_dst2 = LLVMBuildLoad(builder, zs_dst_ptr, "");
+   }
 
    *z_fb = LLVMBuildShuffleVector(builder, zs_dst1, zs_dst2,
                                   LLVMConstVector(shuffles, zs_type.length), "");
@@ -648,6 +646,7 @@ lp_build_depth_stencil_load_swizzled(struct gallivm_state *gallivm,
  *
  * \param type  the data type of the fragment depth/stencil values
  * \param format_desc  description of the depth/stencil surface
+ * \param is_1d  whether this resource has only one dimension
  * \param mask  the alive/dead pixel mask for the quad (vector)
  * \param z_fb  z values read from fb (with padding)
  * \param s_fb  s values read from fb (with padding)
@@ -661,6 +660,7 @@ void
 lp_build_depth_stencil_write_swizzled(struct gallivm_state *gallivm,
                                       struct lp_type z_src_type,
                                       const struct util_format_description *format_desc,
+                                      boolean is_1d,
                                       struct lp_build_mask_context *mask,
                                       LLVMValueRef z_fb,
                                       LLVMValueRef s_fb,
@@ -791,7 +791,9 @@ lp_build_depth_stencil_write_swizzled(struct gallivm_state *gallivm,
    }
 
    LLVMBuildStore(builder, zs_dst1, zs_dst_ptr1);
-   LLVMBuildStore(builder, zs_dst2, zs_dst_ptr2);
+   if (!is_1d) {
+      LLVMBuildStore(builder, zs_dst2, zs_dst_ptr2);
+   }
 }
 
 /**

@@ -29,6 +29,7 @@
 #define ILO_GPE_GEN6_H
 
 #include "ilo_common.h"
+#include "ilo_gpe.h"
 
 #define ILO_GPE_VALID_GEN(dev, min_gen, max_gen) \
    assert((dev)->gen >= ILO_GEN(min_gen) && (dev)->gen <= ILO_GEN(max_gen))
@@ -195,21 +196,20 @@ typedef void
 typedef void
 (*ilo_gpe_gen6_3DSTATE_VERTEX_BUFFERS)(const struct ilo_dev_info *dev,
                                        const struct pipe_vertex_buffer *vbuffers,
-                                       const int *instance_divisors,
-                                       uint32_t vbuffer_mask,
+                                       uint64_t vbuffer_mask,
+                                       const struct ilo_ve_state *ve,
                                        struct ilo_cp *cp);
 
 typedef void
 (*ilo_gpe_gen6_3DSTATE_VERTEX_ELEMENTS)(const struct ilo_dev_info *dev,
-                                        const struct pipe_vertex_element *velements,
-                                        int num_elements,
+                                        const struct ilo_ve_state *ve,
                                         bool last_velement_edgeflag,
                                         bool prepend_generated_ids,
                                         struct ilo_cp *cp);
 
 typedef void
 (*ilo_gpe_gen6_3DSTATE_INDEX_BUFFER)(const struct ilo_dev_info *dev,
-                                     const struct pipe_index_buffer *ib,
+                                     const struct ilo_ib_state *ib,
                                      bool enable_cut_index,
                                      struct ilo_cp *cp);
 
@@ -235,37 +235,37 @@ typedef void
 
 typedef void
 (*ilo_gpe_gen6_3DSTATE_VS)(const struct ilo_dev_info *dev,
-                           const struct ilo_shader *vs,
+                           const struct ilo_shader_state *vs,
                            int num_samplers,
                            struct ilo_cp *cp);
 
 typedef void
 (*ilo_gpe_gen6_3DSTATE_GS)(const struct ilo_dev_info *dev,
-                           const struct ilo_shader *gs,
-                           const struct ilo_shader *vs,
-                           uint32_t vs_offset,
+                           const struct ilo_shader_state *gs,
+                           const struct ilo_shader_state *vs,
+                           int verts_per_prim,
                            struct ilo_cp *cp);
 
 typedef void
 (*ilo_gpe_gen6_3DSTATE_CLIP)(const struct ilo_dev_info *dev,
-                             const struct pipe_rasterizer_state *rasterizer,
-                             bool has_linear_interp,
+                             const struct ilo_rasterizer_state *rasterizer,
+                             const struct ilo_shader_state *fs,
                              bool enable_guardband,
                              int num_viewports,
                              struct ilo_cp *cp);
 
 typedef void
 (*ilo_gpe_gen6_3DSTATE_SF)(const struct ilo_dev_info *dev,
-                           const struct pipe_rasterizer_state *rasterizer,
-                           const struct ilo_shader *fs,
-                           const struct ilo_shader *last_sh,
+                           const struct ilo_rasterizer_state *rasterizer,
+                           const struct ilo_shader_state *fs,
+                           const struct ilo_shader_state *last_sh,
                            struct ilo_cp *cp);
 
 typedef void
 (*ilo_gpe_gen6_3DSTATE_WM)(const struct ilo_dev_info *dev,
-                           const struct ilo_shader *fs,
+                           const struct ilo_shader_state *fs,
                            int num_samplers,
-                           const struct pipe_rasterizer_state *rasterizer,
+                           const struct ilo_rasterizer_state *rasterizer,
                            bool dual_blend, bool cc_may_kill,
                            struct ilo_cp *cp);
 
@@ -300,8 +300,7 @@ typedef void
 
 typedef void
 (*ilo_gpe_gen6_3DSTATE_DEPTH_BUFFER)(const struct ilo_dev_info *dev,
-                                     const struct pipe_surface *surface,
-                                     bool hiz,
+                                     const struct ilo_zs_surface *zs,
                                      struct ilo_cp *cp);
 
 typedef void
@@ -340,12 +339,12 @@ typedef void
 
 typedef void
 (*ilo_gpe_gen6_3DSTATE_STENCIL_BUFFER)(const struct ilo_dev_info *dev,
-                                       const struct pipe_surface *surface,
+                                       const struct ilo_zs_surface *zs,
                                        struct ilo_cp *cp);
 
 typedef void
 (*ilo_gpe_gen6_3DSTATE_HIER_DEPTH_BUFFER)(const struct ilo_dev_info *dev,
-                                          const struct pipe_surface *surface,
+                                          const struct ilo_zs_surface *zs,
                                           struct ilo_cp *cp);
 
 typedef void
@@ -363,12 +362,13 @@ typedef void
 typedef void
 (*ilo_gpe_gen6_3DPRIMITIVE)(const struct ilo_dev_info *dev,
                             const struct pipe_draw_info *info,
+                            const struct ilo_ib_state *ib,
                             bool rectlist,
                             struct ilo_cp *cp);
 
 typedef uint32_t
 (*ilo_gpe_gen6_INTERFACE_DESCRIPTOR_DATA)(const struct ilo_dev_info *dev,
-                                          const struct ilo_shader **cs,
+                                          const struct ilo_shader_state **cs,
                                           uint32_t *sampler_state,
                                           int *num_samplers,
                                           uint32_t *binding_table_state,
@@ -377,20 +377,20 @@ typedef uint32_t
                                           struct ilo_cp *cp);
 typedef uint32_t
 (*ilo_gpe_gen6_SF_VIEWPORT)(const struct ilo_dev_info *dev,
-                            const struct pipe_viewport_state *viewports,
-                            int num_viewports,
+                            const struct ilo_viewport_cso *viewports,
+                            unsigned num_viewports,
                             struct ilo_cp *cp);
 
 typedef uint32_t
 (*ilo_gpe_gen6_CLIP_VIEWPORT)(const struct ilo_dev_info *dev,
-                              const struct pipe_viewport_state *viewports,
-                              int num_viewports,
+                              const struct ilo_viewport_cso *viewports,
+                              unsigned num_viewports,
                               struct ilo_cp *cp);
 
 typedef uint32_t
 (*ilo_gpe_gen6_CC_VIEWPORT)(const struct ilo_dev_info *dev,
-                            const struct pipe_viewport_state *viewports,
-                            int num_viewports,
+                            const struct ilo_viewport_cso *viewports,
+                            unsigned num_viewports,
                             struct ilo_cp *cp);
 
 typedef uint32_t
@@ -402,20 +402,20 @@ typedef uint32_t
 
 typedef uint32_t
 (*ilo_gpe_gen6_BLEND_STATE)(const struct ilo_dev_info *dev,
-                            const struct pipe_blend_state *blend,
-                            const struct pipe_framebuffer_state *framebuffer,
+                            const struct ilo_blend_state *blend,
+                            const struct ilo_fb_state *fb,
                             const struct pipe_alpha_state *alpha,
                             struct ilo_cp *cp);
 
 typedef uint32_t
 (*ilo_gpe_gen6_DEPTH_STENCIL_STATE)(const struct ilo_dev_info *dev,
-                                    const struct pipe_depth_stencil_alpha_state *dsa,
+                                    const struct ilo_dsa_state *dsa,
                                     struct ilo_cp *cp);
 
 typedef uint32_t
 (*ilo_gpe_gen6_SCISSOR_RECT)(const struct ilo_dev_info *dev,
-                             const struct pipe_scissor_state *scissors,
-                             int num_scissors,
+                             const struct ilo_scissor_state *scissor,
+                             unsigned num_viewports,
                              struct ilo_cp *cp);
 
 typedef uint32_t
@@ -425,19 +425,10 @@ typedef uint32_t
                                     struct ilo_cp *cp);
 
 typedef uint32_t
-(*ilo_gpe_gen6_surf_SURFACE_STATE)(const struct ilo_dev_info *dev,
-                                   const struct pipe_surface *surface,
-                                   struct ilo_cp *cp);
-
-typedef uint32_t
-(*ilo_gpe_gen6_view_SURFACE_STATE)(const struct ilo_dev_info *dev,
-                                   const struct pipe_sampler_view *view,
-                                   struct ilo_cp *cp);
-
-typedef uint32_t
-(*ilo_gpe_gen6_cbuf_SURFACE_STATE)(const struct ilo_dev_info *dev,
-                                   const struct pipe_constant_buffer *cbuf,
-                                   struct ilo_cp *cp);
+(*ilo_gpe_gen6_SURFACE_STATE)(const struct ilo_dev_info *dev,
+                              const struct ilo_view_surface *surface,
+                              bool for_render,
+                              struct ilo_cp *cp);
 
 typedef uint32_t
 (*ilo_gpe_gen6_so_SURFACE_STATE)(const struct ilo_dev_info *dev,
@@ -448,15 +439,15 @@ typedef uint32_t
 
 typedef uint32_t
 (*ilo_gpe_gen6_SAMPLER_STATE)(const struct ilo_dev_info *dev,
-                              const struct pipe_sampler_state **samplers,
-                              const struct pipe_sampler_view **sampler_views,
+                              const struct ilo_sampler_cso * const *samplers,
+                              const struct pipe_sampler_view * const *views,
                               const uint32_t *sampler_border_colors,
                               int num_samplers,
                               struct ilo_cp *cp);
 
 typedef uint32_t
 (*ilo_gpe_gen6_SAMPLER_BORDER_COLOR_STATE)(const struct ilo_dev_info *dev,
-                                           const union pipe_color_union *color,
+                                           const struct ilo_sampler_cso *sampler,
                                            struct ilo_cp *cp);
 
 typedef uint32_t
@@ -530,9 +521,7 @@ struct ilo_gpe_gen6 {
    GEN6_EMIT(DEPTH_STENCIL_STATE);
    GEN6_EMIT(SCISSOR_RECT);
    GEN6_EMIT(BINDING_TABLE_STATE);
-   GEN6_EMIT(surf_SURFACE_STATE);
-   GEN6_EMIT(view_SURFACE_STATE);
-   GEN6_EMIT(cbuf_SURFACE_STATE);
+   GEN6_EMIT(SURFACE_STATE);
    GEN6_EMIT(so_SURFACE_STATE);
    GEN6_EMIT(SAMPLER_STATE);
    GEN6_EMIT(SAMPLER_BORDER_COLOR_STATE);
@@ -556,36 +545,16 @@ ilo_gpe_gen6_translate_texture(enum pipe_texture_target target);
 
 void
 ilo_gpe_gen6_fill_3dstate_sf_raster(const struct ilo_dev_info *dev,
-                                    const struct pipe_rasterizer_state *rasterizer,
+                                    const struct ilo_rasterizer_state *rasterizer,
                                     int num_samples,
                                     enum pipe_format depth_format,
-                                    bool separate_stencil,
-                                    uint32_t *dw, int num_dwords);
+                                    uint32_t *payload, unsigned payload_len);
 
 void
 ilo_gpe_gen6_fill_3dstate_sf_sbe(const struct ilo_dev_info *dev,
-                                 const struct pipe_rasterizer_state *rasterizer,
-                                 const struct ilo_shader *fs,
-                                 const struct ilo_shader *last_sh,
+                                 const struct ilo_rasterizer_state *rasterizer,
+                                 const struct ilo_shader_state *fs,
+                                 const struct ilo_shader_state *last_sh,
                                  uint32_t *dw, int num_dwords);
-
-void
-ilo_gpe_gen6_emit_3DSTATE_DEPTH_BUFFER(const struct ilo_dev_info *dev,
-                                       const struct pipe_surface *surface,
-                                       const struct pipe_depth_stencil_alpha_state *dsa,
-                                       bool hiz,
-                                       struct ilo_cp *cp);
-
-void
-ilo_gpe_gen6_fill_SF_VIEWPORT(const struct ilo_dev_info *dev,
-                              const struct pipe_viewport_state *viewports,
-                              int num_viewports,
-                              uint32_t *dw, int num_dwords);
-
-void
-ilo_gpe_gen6_fill_CLIP_VIEWPORT(const struct ilo_dev_info *dev,
-                                const struct pipe_viewport_state *viewports,
-                                int num_viewports,
-                                uint32_t *dw, int num_dwords);
 
 #endif /* ILO_GPE_GEN6_H */

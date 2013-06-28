@@ -171,6 +171,7 @@ draw_pt_emit(struct pt_emit *emit,
    translate->run(translate,
 		  0,
 		  vertex_count,
+                  draw->start_instance,
                   draw->instance_id,
 		  hw_verts );
 
@@ -180,12 +181,6 @@ draw_pt_emit(struct pt_emit *emit,
         i < prim_info->primitive_count;
         start += prim_info->primitive_lengths[i], i++)
    {
-      if (draw->collect_statistics) {
-         draw->statistics.c_invocations +=
-            u_decomposed_prims_for_vertices(prim_info->prim,
-                                            prim_info->primitive_lengths[i]);
-      }
-         
       render->draw_elements(render,
                             elts + start,
                             prim_info->primitive_lengths[i]);
@@ -240,6 +235,7 @@ draw_pt_emit_linear(struct pt_emit *emit,
    translate->run(translate,
                   0,
                   count,
+                  draw->start_instance,
                   draw->instance_id,
                   hw_verts);
 
@@ -259,12 +255,6 @@ draw_pt_emit_linear(struct pt_emit *emit,
         i < prim_info->primitive_count;
         start += prim_info->primitive_lengths[i], i++)
    {
-      if (draw->collect_statistics) {
-         draw->statistics.c_invocations +=
-            u_decomposed_prims_for_vertices(prim_info->prim,
-                                            prim_info->primitive_lengths[i]);
-      }
-
       render->draw_arrays(render,
                           start,
                           prim_info->primitive_lengths[i]);

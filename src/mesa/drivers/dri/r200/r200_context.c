@@ -139,7 +139,6 @@ static const struct tnl_pipeline_stage *r200_pipeline[] = {
  */
 static void r200InitDriverFuncs( struct dd_function_table *functions )
 {
-    functions->GetBufferSize		= NULL; /* OBSOLETE */
     functions->GetString		= r200GetString;
 }
 
@@ -299,11 +298,6 @@ GLboolean r200CreateContext( gl_api api,
    _swsetup_CreateContext( ctx );
    _ae_create_context( ctx );
 
-   /* Set the maximum texture size small enough that we can guarentee that
-    * all texture units can bind a maximal texture and have all of them in
-    * texturable memory at once. Depending on the allow_large_textures driconf
-    * setting allow larger textures.
-    */
    ctx->Const.MaxTextureUnits = driQueryOptioni (&rmesa->radeon.optionCache,
 						 "texture_units");
    ctx->Const.FragmentProgram.MaxTextureImageUnits = ctx->Const.MaxTextureUnits;
@@ -312,8 +306,6 @@ GLboolean r200CreateContext( gl_api api,
    ctx->Const.MaxCombinedTextureImageUnits = ctx->Const.MaxTextureUnits;
 
    ctx->Const.StripTextureBorder = GL_TRUE;
-
-   i = driQueryOptioni( &rmesa->radeon.optionCache, "allow_large_textures");
 
    /* FIXME: When no memory manager is available we should set this 
     * to some reasonable value based on texture memory pool size */
@@ -386,19 +378,15 @@ GLboolean r200CreateContext( gl_api api,
    ctx->Extensions.ARB_texture_env_crossbar = true;
    ctx->Extensions.EXT_blend_color = true;
    ctx->Extensions.EXT_blend_minmax = true;
-   ctx->Extensions.EXT_fog_coord = true;
    ctx->Extensions.EXT_packed_depth_stencil = true;
-   ctx->Extensions.EXT_secondary_color = true;
    ctx->Extensions.EXT_texture_env_dot3 = true;
    ctx->Extensions.EXT_texture_filter_anisotropic = true;
    ctx->Extensions.EXT_texture_mirror_clamp = true;
    ctx->Extensions.ATI_texture_env_combine3 = true;
    ctx->Extensions.ATI_texture_mirror_once = true;
    ctx->Extensions.MESA_pack_invert = true;
-   ctx->Extensions.NV_blend_square = true;
    ctx->Extensions.NV_texture_rectangle = true;
    ctx->Extensions.OES_EGL_image = true;
-   ctx->Extensions.EXT_framebuffer_object = true;
    ctx->Extensions.ARB_occlusion_query = true;
 
    if (!(rmesa->radeon.radeonScreen->chip_flags & R200_CHIPSET_YCBCR_BROKEN)) {

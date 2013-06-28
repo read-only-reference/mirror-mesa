@@ -37,6 +37,7 @@
 #include "util/u_cpu_detect.h"
 #include "util/u_inlines.h"
 #include "util/u_helpers.h"
+#include "util/u_prim.h"
 #include "draw_context.h"
 #include "draw_vs.h"
 #include "draw_gs.h"
@@ -137,6 +138,7 @@ boolean draw_init(struct draw_context *draw)
    draw->clip_z = TRUE;
 
    draw->pt.user.planes = (float (*) [DRAW_TOTAL_CLIP_PLANES][4]) &(draw->plane[0]);
+   draw->pt.user.eltMax = ~0;
 
    if (!draw_pipeline_init( draw ))
       return FALSE;
@@ -548,7 +550,7 @@ draw_get_shader_info(const struct draw_context *draw)
  * function to find those attributes.
  *
  * -1 is returned if the attribute is not found since this is
- * an undefined situtation. Note, that zero is valid and can
+ * an undefined situation. Note, that zero is valid and can
  * be used by any of the attributes, because position is not
  * required to be attribute 0 or even at all present.
  */
@@ -737,7 +739,37 @@ draw_current_shader_clipvertex_output(const struct draw_context *draw)
 uint
 draw_current_shader_clipdistance_output(const struct draw_context *draw, int index)
 {
+   debug_assert(index < PIPE_MAX_CLIP_OR_CULL_DISTANCE_ELEMENT_COUNT);
+   if (draw->gs.geometry_shader)
+      return draw->gs.geometry_shader->clipdistance_output[index];
    return draw->vs.clipdistance_output[index];
+}
+
+
+uint
+draw_current_shader_num_written_clipdistances(const struct draw_context *draw)
+{
+   if (draw->gs.geometry_shader)
+      return draw->gs.geometry_shader->info.num_written_clipdistance;
+   return draw->vs.vertex_shader->info.num_written_clipdistance;
+}
+
+
+uint
+draw_current_shader_culldistance_output(const struct draw_context *draw, int index)
+{
+   debug_assert(index < PIPE_MAX_CLIP_OR_CULL_DISTANCE_ELEMENT_COUNT);
+   if (draw->gs.geometry_shader)
+      return draw->gs.geometry_shader->culldistance_output[index];
+   return draw->vs.vertex_shader->culldistance_output[index];
+}
+
+uint
+draw_current_shader_num_written_culldistances(const struct draw_context *draw)
+{
+   if (draw->gs.geometry_shader)
+      return draw->gs.geometry_shader->info.num_written_culldistance;
+   return draw->vs.vertex_shader->info.num_written_culldistance;
 }
 
 /**
@@ -913,4 +945,28 @@ draw_collect_pipeline_statistics(struct draw_context *draw,
                                  boolean enable)
 {
    draw->collect_statistics = enable;
+}
+
+/**
+ * Computes clipper invocation statistics.
+ *
+ * Figures out how many primitives would have been
+ * sent to the clipper given the specified
+ * prim info data.
+ */
+void
+draw_stats_clipper_primitives(struct draw_context *draw,
+                              const struct draw_prim_info *prim_info)
+{
+   if (draw->collect_statistics) {
+      unsigned start, i;
+      for (start = i = 0;
+           i < prim_info->primitive_count;
+           start += prim_info->primitive_lengths[i], i++)
+      {
+         draw->statistics.c_invocations +=
+            u_decomposed_prims_for_vertices(prim_info->prim,
+                                            prim_info->primitive_lengths[i]);
+      }
+   }
 }

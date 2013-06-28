@@ -1,6 +1,5 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5
  *
  * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
@@ -71,10 +70,6 @@ _mesa_resize_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb,
 
 extern void
 _mesa_resizebuffers( struct gl_context *ctx );
-
-extern void GLAPIENTRY
-_mesa_ResizeBuffersMESA( void );
-
 
 extern void 
 _mesa_update_draw_buffer_bounds(struct gl_context *ctx);

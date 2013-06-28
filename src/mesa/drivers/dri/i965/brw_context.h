@@ -333,7 +333,6 @@ struct brw_wm_prog_data {
 typedef enum
 {
    BRW_VARYING_SLOT_NDC = VARYING_SLOT_MAX,
-   BRW_VARYING_SLOT_POS_DUPLICATE,
    BRW_VARYING_SLOT_PAD,
    /**
     * Technically this is not a varying but just a placeholder that
@@ -606,14 +605,11 @@ struct brw_vs_prog_data {
 #define SHADER_TIME_STRIDE 64
 
 enum brw_cache_id {
-   BRW_BLEND_STATE,
-   BRW_DEPTH_STENCIL_STATE,
-   BRW_COLOR_CALC_STATE,
    BRW_CC_VP,
    BRW_CC_UNIT,
    BRW_WM_PROG,
    BRW_BLORP_BLIT_PROG,
-   BRW_BLORP_CLEAR_PROG,
+   BRW_BLORP_CONST_COLOR_PROG,
    BRW_SAMPLER,
    BRW_WM_UNIT,
    BRW_SF_PROG,
@@ -701,9 +697,6 @@ enum shader_time_shader_type {
 
 /* Flags for brw->state.cache.
  */
-#define CACHE_NEW_BLEND_STATE            (1<<BRW_BLEND_STATE)
-#define CACHE_NEW_DEPTH_STENCIL_STATE    (1<<BRW_DEPTH_STENCIL_STATE)
-#define CACHE_NEW_COLOR_CALC_STATE       (1<<BRW_COLOR_CALC_STATE)
 #define CACHE_NEW_CC_VP                  (1<<BRW_CC_VP)
 #define CACHE_NEW_CC_UNIT                (1<<BRW_CC_UNIT)
 #define CACHE_NEW_WM_PROG                (1<<BRW_WM_PROG)
@@ -1245,6 +1238,7 @@ bool
 brw_blorp_copytexsubimage(struct intel_context *intel,
                           struct gl_renderbuffer *src_rb,
                           struct gl_texture_image *dst_image,
+                          int slice,
                           int srcX0, int srcY0,
                           int dstX0, int dstY0,
                           int width, int height);

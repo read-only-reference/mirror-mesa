@@ -35,9 +35,9 @@
 #include "tgsi/tgsi_scan.h"
 #include "tgsi/tgsi_dump.h"
 #include "util/u_memory.h"
+#include "util/u_math.h"
 #include <stdio.h>
 #include <errno.h>
-#include <byteswap.h>
 
 /* CAYMAN notes 
 Why CAYMAN got loops for lots of instructions is explained here.
@@ -194,7 +194,7 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 		ptr = r600_buffer_mmap_sync_with_rings(rctx, shader->bo, PIPE_TRANSFER_WRITE);
 		if (R600_BIG_ENDIAN) {
 			for (i = 0; i < shader->shader.bc.ndw; ++i) {
-				ptr[i] = bswap_32(shader->shader.bc.bytecode[i]);
+				ptr[i] = util_bswap32(shader->shader.bc.bytecode[i]);
 			}
 		} else {
 			memcpy(ptr, shader->shader.bc.bytecode, shader->shader.bc.ndw * sizeof(*ptr));
@@ -290,38 +290,6 @@ static int tgsi_endif(struct r600_shader_ctx *ctx);
 static int tgsi_bgnloop(struct r600_shader_ctx *ctx);
 static int tgsi_endloop(struct r600_shader_ctx *ctx);
 static int tgsi_loop_brk_cont(struct r600_shader_ctx *ctx);
-
-#ifdef HAVE_OPENCL
-int r600_compute_shader_create(struct pipe_context * ctx,
-	LLVMModuleRef mod,  struct r600_bytecode * bytecode)
-{
-	struct r600_context *r600_ctx = (struct r600_context *)ctx;
-	struct r600_shader_ctx shader_ctx;
-	boolean use_kill = false;
-	bool dump = (r600_ctx->screen->debug_flags & DBG_CS) != 0;
-	unsigned use_sb = r600_ctx->screen->debug_flags & DBG_SB_CS;
-	unsigned sb_disasm = use_sb ||
-			(r600_ctx->screen->debug_flags & DBG_SB_DISASM);
-
-	shader_ctx.bc = bytecode;
-	r600_bytecode_init(shader_ctx.bc, r600_ctx->chip_class, r600_ctx->family,
-			   r600_ctx->screen->has_compressed_msaa_texturing);
-	shader_ctx.bc->type = TGSI_PROCESSOR_COMPUTE;
-	shader_ctx.bc->isa = r600_ctx->isa;
-	r600_llvm_compile(mod, r600_ctx->family,
-				shader_ctx.bc, &use_kill, dump);
-
-	if (dump && !sb_disasm) {
-		r600_bytecode_disasm(shader_ctx.bc);
-	} else if ((dump && sb_disasm) || use_sb) {
-		if (r600_sb_bytecode_process(r600_ctx, shader_ctx.bc, NULL, dump, use_sb))
-			R600_ERR("r600_sb_bytecode_process failed!\n");
-	}
-
-	return 1;
-}
-
-#endif /* HAVE_OPENCL */
 
 static int tgsi_is_supported(struct r600_shader_ctx *ctx)
 {

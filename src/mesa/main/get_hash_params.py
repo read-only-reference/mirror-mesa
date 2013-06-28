@@ -107,9 +107,9 @@ descriptor=[
   [ "IMPLEMENTATION_COLOR_READ_FORMAT_OES", "LOC_CUSTOM, TYPE_INT, 0, extra_new_buffers" ],
 
 # GL_EXT_framebuffer_object
-  [ "FRAMEBUFFER_BINDING_EXT", "BUFFER_INT(Name), extra_EXT_framebuffer_object" ],
-  [ "RENDERBUFFER_BINDING_EXT", "LOC_CUSTOM, TYPE_INT, 0, extra_EXT_framebuffer_object" ],
-  [ "MAX_RENDERBUFFER_SIZE_EXT", "CONTEXT_INT(Const.MaxRenderbufferSize), extra_EXT_framebuffer_object" ],
+  [ "FRAMEBUFFER_BINDING_EXT", "BUFFER_INT(Name), NO_EXTRA" ],
+  [ "RENDERBUFFER_BINDING_EXT", "LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA" ],
+  [ "MAX_RENDERBUFFER_SIZE_EXT", "CONTEXT_INT(Const.MaxRenderbufferSize), NO_EXTRA" ],
 
 # This entry isn't spec'ed for GLES 2, but is needed for Mesa's
 # GLSL:
@@ -258,7 +258,7 @@ descriptor=[
   [ "MAX_DRAW_BUFFERS_ARB", "CONTEXT_INT(Const.MaxDrawBuffers), NO_EXTRA" ],
 
 # GL_EXT_framebuffer_object / GL_NV_fbo_color_attachments
-  [ "MAX_COLOR_ATTACHMENTS", "CONTEXT_INT(Const.MaxColorAttachments), extra_EXT_framebuffer_object" ],
+  [ "MAX_COLOR_ATTACHMENTS", "CONTEXT_INT(Const.MaxColorAttachments), NO_EXTRA" ],
 
 # GL_ARB_draw_buffers / GL_NV_draw_buffers (for ES 2.0)
   [ "DRAW_BUFFER0_ARB", "BUFFER_ENUM(ColorDrawBuffer[0]), NO_EXTRA" ],
@@ -280,7 +280,7 @@ descriptor=[
 # GL_ARB_shader_objects
 # Actually, this token isn't part of GL_ARB_shader_objects, but is
 # close enough for now.
-  [ "CURRENT_PROGRAM", "LOC_CUSTOM, TYPE_INT, 0, extra_ARB_shader_objects" ],
+  [ "CURRENT_PROGRAM", "LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA" ],
 
 # OpenGL 2.0
   [ "STENCIL_BACK_FUNC", "CONTEXT_ENUM(Stencil.Function[1]), NO_EXTRA" ],
@@ -311,8 +311,8 @@ descriptor=[
   [ "SHADER_BINARY_FORMATS", "CONST(0), extra_ARB_ES2_compatibility_api_es2" ],
 
 # GL_ARB_get_program_binary / GL_OES_get_program_binary
-  [ "NUM_PROGRAM_BINARY_FORMATS", "CONST(0), extra_ARB_shader_objects" ],
-  [ "PROGRAM_BINARY_FORMATS", "LOC_CUSTOM, TYPE_INVALID, 0, extra_ARB_shader_objects" ],
+  [ "NUM_PROGRAM_BINARY_FORMATS", "CONST(0), NO_EXTRA" ],
+  [ "PROGRAM_BINARY_FORMATS", "LOC_CUSTOM, TYPE_INVALID, 0, NO_EXTRA" ],
 ]},
 
 # GLES3 is not a typo.
@@ -328,6 +328,9 @@ descriptor=[
   [ "NUM_EXTENSIONS", "LOC_CUSTOM, TYPE_INT, 0, extra_gl30_es3" ],
   [ "MAJOR_VERSION", "LOC_CUSTOM, TYPE_INT, 0, extra_gl30_es3" ],
   [ "MINOR_VERSION", "LOC_CUSTOM, TYPE_INT, 0, extra_gl30_es3" ],
+
+  # GL 3.0 / GLES3
+  [ "MAX_FRAGMENT_INPUT_COMPONENTS", "LOC_CUSTOM, TYPE_INT, 0, extra_gl32_es3" ],
 
 # GL_ARB_ES3_compatibility
   [ "MAX_ELEMENT_INDEX", "CONTEXT_INT64(Const.MaxElementIndex), extra_ARB_ES3_compatibility_api_es3"],
@@ -365,9 +368,17 @@ descriptor=[
 # NOTE: GL_DRAW_FRAMEBUFFER_BINDING_EXT == GL_FRAMEBUFFER_BINDING_EXT
   [ "READ_FRAMEBUFFER_BINDING_EXT", "LOC_CUSTOM, TYPE_INT, 0, extra_EXT_framebuffer_blit" ],
 
+# GL_EXT_gpu_shader4 / GLSL 1.30
+  [ "MIN_PROGRAM_TEXEL_OFFSET", "CONTEXT_INT(Const.MinProgramTexelOffset), extra_GLSL_130_es3" ],
+  [ "MAX_PROGRAM_TEXEL_OFFSET", "CONTEXT_INT(Const.MaxProgramTexelOffset), extra_GLSL_130_es3" ],
+
 # GL_EXT_pixel_buffer_object
   [ "PIXEL_PACK_BUFFER_BINDING_EXT", "LOC_CUSTOM, TYPE_INT, 0, extra_EXT_pixel_buffer_object" ],
   [ "PIXEL_UNPACK_BUFFER_BINDING_EXT", "LOC_CUSTOM, TYPE_INT, 0, extra_EXT_pixel_buffer_object" ],
+
+  # GL_EXT_texture_array
+  [ "TEXTURE_BINDING_2D_ARRAY", "LOC_CUSTOM, TYPE_INT, TEXTURE_2D_ARRAY_INDEX, extra_MESA_texture_array_es3" ],
+  [ "MAX_ARRAY_TEXTURE_LAYERS_EXT", "CONTEXT_INT(Const.MaxArrayTextureLayers), extra_MESA_texture_array_es3" ],
 
 # GL_EXT_transform_feedback
   [ "TRANSFORM_FEEDBACK_BUFFER_BINDING", "LOC_CUSTOM, TYPE_INT, 0, extra_EXT_transform_feedback" ],
@@ -498,8 +509,6 @@ descriptor=[
   [ "TEXTURE_2D_ARRAY_EXT", "LOC_CUSTOM, TYPE_BOOLEAN, NO_OFFSET, NO_EXTRA" ],
   [ "TEXTURE_BINDING_1D", "LOC_CUSTOM, TYPE_INT, TEXTURE_1D_INDEX, NO_EXTRA" ],
   [ "TEXTURE_BINDING_1D_ARRAY", "LOC_CUSTOM, TYPE_INT, TEXTURE_1D_ARRAY_INDEX, extra_MESA_texture_array" ],
-  [ "TEXTURE_BINDING_2D_ARRAY", "LOC_CUSTOM, TYPE_INT, TEXTURE_1D_ARRAY_INDEX, extra_MESA_texture_array" ],
-  [ "MAX_ARRAY_TEXTURE_LAYERS_EXT", "CONTEXT_INT(Const.MaxArrayTextureLayers), extra_MESA_texture_array" ],
   [ "TEXTURE_GEN_S", "LOC_TEXUNIT, TYPE_BIT_0, offsetof(struct gl_texture_unit, TexGenEnabled), NO_EXTRA" ],
   [ "TEXTURE_GEN_T", "LOC_TEXUNIT, TYPE_BIT_1, offsetof(struct gl_texture_unit, TexGenEnabled), NO_EXTRA" ],
   [ "TEXTURE_GEN_R", "LOC_TEXUNIT, TYPE_BIT_2, offsetof(struct gl_texture_unit, TexGenEnabled), NO_EXTRA" ],
@@ -535,19 +544,19 @@ descriptor=[
   [ "TRANSPOSE_TEXTURE_MATRIX_ARB", "CONTEXT_MATRIX_T(TextureMatrixStack), NO_EXTRA" ],
 
 # GL_EXT_secondary_color
-  [ "COLOR_SUM", "CONTEXT_BOOL(Fog.ColorSumEnabled), extra_EXT_secondary_color_ARB_vertex_program" ],
-  [ "CURRENT_SECONDARY_COLOR", "CONTEXT_FIELD(Current.Attrib[VERT_ATTRIB_COLOR1][0], TYPE_FLOATN_4), extra_EXT_secondary_color_flush_current" ],
-  [ "SECONDARY_COLOR_ARRAY", "ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_COLOR1].Enabled), extra_EXT_secondary_color" ],
-  [ "SECONDARY_COLOR_ARRAY_TYPE", "ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_COLOR1].Type), extra_EXT_secondary_color" ],
-  [ "SECONDARY_COLOR_ARRAY_STRIDE", "ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR1].Stride), extra_EXT_secondary_color" ],
-  [ "SECONDARY_COLOR_ARRAY_SIZE", "ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR1].Size), extra_EXT_secondary_color" ],
+  [ "COLOR_SUM", "CONTEXT_BOOL(Fog.ColorSumEnabled), extra_ARB_vertex_program" ],
+  [ "CURRENT_SECONDARY_COLOR", "CONTEXT_FIELD(Current.Attrib[VERT_ATTRIB_COLOR1][0], TYPE_FLOATN_4), extra_flush_current" ],
+  [ "SECONDARY_COLOR_ARRAY", "ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_COLOR1].Enabled), NO_EXTRA" ],
+  [ "SECONDARY_COLOR_ARRAY_TYPE", "ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_COLOR1].Type), NO_EXTRA" ],
+  [ "SECONDARY_COLOR_ARRAY_STRIDE", "ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR1].Stride), NO_EXTRA" ],
+  [ "SECONDARY_COLOR_ARRAY_SIZE", "ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR1].Size), NO_EXTRA" ],
 
 # GL_EXT_fog_coord
-  [ "CURRENT_FOG_COORDINATE", "CONTEXT_FLOAT(Current.Attrib[VERT_ATTRIB_FOG][0]), extra_EXT_fog_coord_flush_current" ],
-  [ "FOG_COORDINATE_ARRAY", "ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_FOG].Enabled), extra_EXT_fog_coord" ],
-  [ "FOG_COORDINATE_ARRAY_TYPE", "ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_FOG].Type), extra_EXT_fog_coord" ],
-  [ "FOG_COORDINATE_ARRAY_STRIDE", "ARRAY_INT(VertexAttrib[VERT_ATTRIB_FOG].Stride), extra_EXT_fog_coord" ],
-  [ "FOG_COORDINATE_SOURCE", "CONTEXT_ENUM(Fog.FogCoordinateSource), extra_EXT_fog_coord" ],
+  [ "CURRENT_FOG_COORDINATE", "CONTEXT_FLOAT(Current.Attrib[VERT_ATTRIB_FOG][0]), extra_flush_current" ],
+  [ "FOG_COORDINATE_ARRAY", "ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_FOG].Enabled), NO_EXTRA" ],
+  [ "FOG_COORDINATE_ARRAY_TYPE", "ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_FOG].Type), NO_EXTRA" ],
+  [ "FOG_COORDINATE_ARRAY_STRIDE", "ARRAY_INT(VertexAttrib[VERT_ATTRIB_FOG].Stride), NO_EXTRA" ],
+  [ "FOG_COORDINATE_SOURCE", "CONTEXT_ENUM(Fog.FogCoordinateSource), NO_EXTRA" ],
 
 # GL_NV_fog_distance
   [ "FOG_DISTANCE_MODE_NV", "CONTEXT_ENUM(Fog.FogDistanceMode), extra_NV_fog_distance" ],
@@ -646,10 +655,6 @@ descriptor=[
 
 # GL_ARB_color_buffer_float
   [ "RGBA_FLOAT_MODE_ARB", "BUFFER_FIELD(Visual.floatMode, TYPE_BOOLEAN), extra_core_ARB_color_buffer_float_and_new_buffers" ],
-
-# GL_EXT_gpu_shader4 / GLSL 1.30
-  [ "MIN_PROGRAM_TEXEL_OFFSET", "CONTEXT_INT(Const.MinProgramTexelOffset), extra_GLSL_130" ],
-  [ "MAX_PROGRAM_TEXEL_OFFSET", "CONTEXT_INT(Const.MaxProgramTexelOffset), extra_GLSL_130" ],
 
 # GL_ARB_texture_buffer_object
   [ "MAX_TEXTURE_BUFFER_SIZE_ARB", "CONTEXT_INT(Const.MaxTextureBufferSize), extra_texture_buffer_object" ],

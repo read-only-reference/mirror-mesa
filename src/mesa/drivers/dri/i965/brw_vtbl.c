@@ -92,66 +92,6 @@ static void brw_destroy_context( struct intel_context *intel )
 }
 
 /**
- * Update the hardware state for drawing into a window or framebuffer object.
- *
- * Called by glDrawBuffer, glBindFramebufferEXT, MakeCurrent, and other
- * places within the driver.
- *
- * Basically, this needs to be called any time the current framebuffer
- * changes, the renderbuffers change, or we need to draw into different
- * color buffers.
- */
-static void
-brw_update_draw_buffer(struct intel_context *intel)
-{
-   struct gl_context *ctx = &intel->ctx;
-   struct gl_framebuffer *fb = ctx->DrawBuffer;
-
-   if (!fb) {
-      /* this can happen during the initial context initialization */
-      return;
-   }
-
-   /* Do this here, not core Mesa, since this function is called from
-    * many places within the driver.
-    */
-   if (ctx->NewState & _NEW_BUFFERS) {
-      /* this updates the DrawBuffer->_NumColorDrawBuffers fields, etc */
-      _mesa_update_framebuffer(ctx);
-      /* this updates the DrawBuffer's Width/Height if it's a FBO */
-      _mesa_update_draw_buffer_bounds(ctx);
-   }
-
-   if (fb->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
-      /* this may occur when we're called by glBindFrameBuffer() during
-       * the process of someone setting up renderbuffers, etc.
-       */
-      /*_mesa_debug(ctx, "DrawBuffer: incomplete user FBO\n");*/
-      return;
-   }
-
-   /* Mesa's Stencil._Enabled field is updated when
-    * _NEW_BUFFERS | _NEW_STENCIL, but i965 code assumes that the value
-    * only changes with _NEW_STENCIL (which seems sensible).  So flag it
-    * here since this is the _NEW_BUFFERS path.
-    */
-   intel->NewGLState |= (_NEW_DEPTH | _NEW_STENCIL);
-
-   /* The driver uses this in places that need to look up
-    * renderbuffers' buffer objects.
-    */
-   intel->NewGLState |= _NEW_BUFFERS;
-
-   /* update viewport/scissor since it depends on window size */
-   intel->NewGLState |= _NEW_VIEWPORT | _NEW_SCISSOR;
-
-   /* Update culling direction which changes depending on the
-    * orientation of the buffer:
-    */
-   intel->NewGLState |= _NEW_POLYGON;
-}
-
-/**
  * called from intel_batchbuffer_flush and children before sending a
  * batchbuffer off.
  *
@@ -242,17 +182,10 @@ static bool brw_is_hiz_depth_format(struct intel_context *intel,
 
 void brwInitVtbl( struct brw_context *brw )
 {
-   brw->intel.vtbl.check_vertex_size = 0;
-   brw->intel.vtbl.emit_state = 0;
-   brw->intel.vtbl.reduced_primitive_state = 0;
-   brw->intel.vtbl.render_start = 0;
-   brw->intel.vtbl.update_texture_state = 0;
-
    brw->intel.vtbl.invalidate_state = brw_invalidate_state;
    brw->intel.vtbl.new_batch = brw_new_batch;
    brw->intel.vtbl.finish_batch = brw_finish_batch;
    brw->intel.vtbl.destroy = brw_destroy_context;
-   brw->intel.vtbl.update_draw_buffer = brw_update_draw_buffer;
    brw->intel.vtbl.debug_batch = brw_debug_batch;
    brw->intel.vtbl.annotate_aub = brw_annotate_aub;
    brw->intel.vtbl.render_target_supported = brw_render_target_supported;

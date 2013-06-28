@@ -31,6 +31,7 @@
 #include "main/macros.h"
 #include "main/version.h"
 #include "main/vtxfmt.h"
+#include "intel_chipset.h"
 #include "intel_tris.h"
 #include "tnl/t_context.h"
 #include "tnl/t_pipeline.h"
@@ -115,7 +116,6 @@ intel_init_texture_formats(struct gl_context *ctx)
    /* Depth and stencil */
    ctx->TextureFormatSupported[MESA_FORMAT_S8_Z24] = true;
    ctx->TextureFormatSupported[MESA_FORMAT_X8_Z24] = true;
-   ctx->TextureFormatSupported[MESA_FORMAT_S8] = intel->has_separate_stencil;
 
    /*
     * This was disabled in initial FBO enabling to avoid combinations

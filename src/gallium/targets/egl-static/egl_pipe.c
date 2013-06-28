@@ -1,6 +1,5 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.10
  *
  * Copyright (C) 2011 LunarG Inc.
  *
@@ -34,7 +33,7 @@
 #include "i915/i915_public.h"
 #include "target-helpers/inline_wrapper_sw_helper.h"
 /* for ilo */
-#include "intel/drm/intel_drm_public.h"
+#include "intel/intel_winsys.h"
 #include "ilo/ilo_public.h"
 /* for nouveau */
 #include "nouveau/drm/nouveau_drm_public.h"
@@ -81,7 +80,7 @@ pipe_ilo_create_screen(int fd)
    struct intel_winsys *iws;
    struct pipe_screen *screen;
 
-   iws = intel_drm_winsys_create(fd);
+   iws = intel_winsys_create_for_fd(fd);
    if (!iws)
       return NULL;
 

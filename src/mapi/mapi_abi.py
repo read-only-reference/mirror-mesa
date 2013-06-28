@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 # Mesa 3-D graphics library
-# Version:  7.9
 #
 # Copyright (C) 2010 LunarG Inc.
 #
@@ -729,7 +728,6 @@ class GLAPIPrinter(ABIPrinter):
 #define GLAPI_PREFIX_STR(func)  "gl"#func
 #endif /* USE_MGL_NAMESPACE */
 
-typedef int GLfixed;
 typedef int GLclampx;
 #endif /* _GLAPI_TMP_H_ */"""
 
@@ -753,7 +751,6 @@ class ES1APIPrinter(GLAPIPrinter):
     def _get_c_header(self):
         header = """#ifndef _GLAPI_TMP_H_
 #define _GLAPI_TMP_H_
-typedef int GLfixed;
 typedef int GLclampx;
 #endif /* _GLAPI_TMP_H_ */"""
 
@@ -777,7 +774,6 @@ class ES2APIPrinter(GLAPIPrinter):
     def _get_c_header(self):
         header = """#ifndef _GLAPI_TMP_H_
 #define _GLAPI_TMP_H_
-typedef int GLfixed;
 typedef int GLclampx;
 #endif /* _GLAPI_TMP_H_ */"""
 
@@ -805,7 +801,6 @@ class SharedGLAPIPrinter(GLAPIPrinter):
     def _get_c_header(self):
         header = """#ifndef _GLAPI_TMP_H_
 #define _GLAPI_TMP_H_
-typedef int GLfixed;
 typedef int GLclampx;
 #endif /* _GLAPI_TMP_H_ */"""
 

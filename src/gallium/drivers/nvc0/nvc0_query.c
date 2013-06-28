@@ -285,7 +285,6 @@ nvc0_query_begin(struct pipe_context *pipe, struct pipe_query *pq)
    case PIPE_QUERY_SO_OVERFLOW_PREDICATE:
       nvc0_query_get(push, q, 0x10, 0x03005002 | (q->index << 5));
       break;
-   case PIPE_QUERY_TIMESTAMP_DISJOINT:
    case PIPE_QUERY_TIME_ELAPSED:
       nvc0_query_get(push, q, 0x10, 0x00005002);
       break;
@@ -360,7 +359,6 @@ nvc0_query_end(struct pipe_context *pipe, struct pipe_query *pq)
       nvc0_query_get(push, q, 0x20, 0x00005002);
       break;
    case PIPE_QUERY_TIMESTAMP:
-   case PIPE_QUERY_TIMESTAMP_DISJOINT:
    case PIPE_QUERY_TIME_ELAPSED:
       nvc0_query_get(push, q, 0, 0x00005002);
       break;
@@ -476,9 +474,9 @@ nvc0_query_result(struct pipe_context *pipe, struct pipe_query *pq,
    case PIPE_QUERY_TIMESTAMP:
       res64[0] = data64[1];
       break;
-   case PIPE_QUERY_TIMESTAMP_DISJOINT: /* u32 sequence, u32 0, u64 time */
+   case PIPE_QUERY_TIMESTAMP_DISJOINT:
       res64[0] = 1000000000;
-      res8[8] = (data64[1] == data64[3]) ? FALSE : TRUE;
+      res8[8] = FALSE;
       break;
    case PIPE_QUERY_TIME_ELAPSED:
       res64[0] = data64[1] - data64[3];
@@ -518,7 +516,8 @@ nvc0_query_fifo_wait(struct nouveau_pushbuf *push, struct pipe_query *pq)
 
 static void
 nvc0_render_condition(struct pipe_context *pipe,
-                      struct pipe_query *pq, uint mode)
+                      struct pipe_query *pq,
+                      boolean condition, uint mode)
 {
    struct nvc0_context *nvc0 = nvc0_context(pipe);
    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
@@ -530,6 +529,7 @@ nvc0_render_condition(struct pipe_context *pipe,
       mode != PIPE_RENDER_COND_BY_REGION_NO_WAIT;
 
    nvc0->cond_query = pq;
+   nvc0->cond_cond = condition;
    nvc0->cond_mode = mode;
 
    if (!pq) {

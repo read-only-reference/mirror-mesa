@@ -28,6 +28,7 @@
 extern "C" {
 #include "main/core.h" /* for struct gl_context */
 #include "main/context.h"
+#include "main/shaderobj.h"
 }
 
 #include "ralloc.h"
@@ -226,6 +227,19 @@ _mesa_glsl_parse_state::process_version_directive(YYLTYPE *locp, int version,
    if (ident) {
       if (strcmp(ident, "es") == 0) {
          es_token_present = true;
+      } else if (version >= 150) {
+         if (strcmp(ident, "core") == 0) {
+            /* Accept the token.  There's no need to record that this is
+             * a core profile shader since that's the only profile we support.
+             */
+         } else if (strcmp(ident, "compatibility") == 0) {
+            _mesa_glsl_error(locp, this,
+                             "The compatibility profile is not supported.\n");
+         } else {
+            _mesa_glsl_error(locp, this,
+                             "\"%s\" is not a valid shading language profile; "
+                             "if present, it must be \"core\".\n", ident);
+         }
       } else {
          _mesa_glsl_error(locp, this,
                           "Illegal text following version number\n");
@@ -289,6 +303,41 @@ _mesa_glsl_parse_state::process_version_directive(YYLTYPE *locp, int version,
    }
 }
 
+extern "C" {
+
+/**
+ * The most common use of _mesa_glsl_shader_target_name(), which is
+ * shared with C code in Mesa core to translate a GLenum to a short
+ * shader stage name in debug printouts.
+ *
+ * It recognizes the PROGRAM variants of the names so it can be used
+ * with a struct gl_program->Target, not just a struct
+ * gl_shader->Type.
+ */
+const char *
+_mesa_glsl_shader_target_name(GLenum type)
+{
+   switch (type) {
+   case GL_VERTEX_SHADER:
+   case GL_VERTEX_PROGRAM_ARB:
+      return "vertex";
+   case GL_FRAGMENT_SHADER:
+   case GL_FRAGMENT_PROGRAM_ARB:
+      return "fragment";
+   case GL_GEOMETRY_SHADER:
+      return "geometry";
+   default:
+      assert(!"Should not get here.");
+      return "unknown";
+   }
+}
+
+} /* extern "C" */
+
+/**
+ * Overloaded C++ variant usable within the compiler for translating
+ * our internal enum into short stage names.
+ */
 const char *
 _mesa_glsl_shader_target_name(enum _mesa_glsl_parser_targets target)
 {
@@ -466,6 +515,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(OES_standard_derivatives,       false, false, true,  false,  true,     OES_standard_derivatives),
    EXT(ARB_texture_cube_map_array,     true,  false, true,  true,  false,     ARB_texture_cube_map_array),
    EXT(ARB_shading_language_packing,   true,  false, true,  true,  false,     ARB_shading_language_packing),
+   EXT(ARB_shading_language_420pack,   true,  true,  true,  true,  false,     ARB_shading_language_420pack),
    EXT(ARB_texture_multisample,        true,  false, true,  true,  false,     ARB_texture_multisample),
    EXT(ARB_texture_query_lod,          false, false, true,  true,  false,     ARB_texture_query_lod),
    EXT(ARB_gpu_shader5,                true,  true,  true,  true,  false,     ARB_gpu_shader5),
@@ -1188,6 +1238,88 @@ ast_struct_specifier::ast_struct_specifier(const char *identifier,
    this->declarations.push_degenerate_list_at_head(&declarator_list->link);
 }
 
+extern "C" {
+
+void
+_mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader,
+                          bool dump_ast, bool dump_hir)
+{
+   struct _mesa_glsl_parse_state *state =
+      new(shader) _mesa_glsl_parse_state(ctx, shader->Type, shader);
+   const char *source = shader->Source;
+
+   state->error = glcpp_preprocess(state, &source, &state->info_log,
+                             &ctx->Extensions, ctx);
+
+   if (!state->error) {
+     _mesa_glsl_lexer_ctor(state, source);
+     _mesa_glsl_parse(state);
+     _mesa_glsl_lexer_dtor(state);
+   }
+
+   if (dump_ast) {
+      foreach_list_const(n, &state->translation_unit) {
+         ast_node *ast = exec_node_data(ast_node, n, link);
+         ast->print();
+      }
+      printf("\n\n");
+   }
+
+   ralloc_free(shader->ir);
+   shader->ir = new(shader) exec_list;
+   if (!state->error && !state->translation_unit.is_empty())
+      _mesa_ast_to_hir(shader->ir, state);
+
+   if (!state->error) {
+      validate_ir_tree(shader->ir);
+
+      /* Print out the unoptimized IR. */
+      if (dump_hir) {
+         _mesa_print_ir(shader->ir, state);
+      }
+   }
+
+
+   if (!state->error && !shader->ir->is_empty()) {
+      struct gl_shader_compiler_options *options =
+         &ctx->ShaderCompilerOptions[_mesa_shader_type_to_index(shader->Type)];
+
+      /* Do some optimization at compile time to reduce shader IR size
+       * and reduce later work if the same shader is linked multiple times
+       */
+      while (do_common_optimization(shader->ir, false, false, 32, options))
+         ;
+
+      validate_ir_tree(shader->ir);
+   }
+
+   if (shader->InfoLog)
+      ralloc_free(shader->InfoLog);
+
+   shader->symbols = state->symbols;
+   shader->CompileStatus = !state->error;
+   shader->InfoLog = state->info_log;
+   shader->Version = state->language_version;
+   shader->InfoLog = state->info_log;
+   shader->IsES = state->es_shader;
+
+   memcpy(shader->builtins_to_link, state->builtins_to_link,
+          sizeof(shader->builtins_to_link[0]) * state->num_builtins_to_link);
+   shader->num_builtins_to_link = state->num_builtins_to_link;
+
+   if (shader->UniformBlocks)
+      ralloc_free(shader->UniformBlocks);
+   shader->NumUniformBlocks = state->num_uniform_blocks;
+   shader->UniformBlocks = state->uniform_blocks;
+   ralloc_steal(shader, shader->UniformBlocks);
+
+   /* Retain any live IR, but trash the rest. */
+   reparent_ir(shader->ir, shader->ir);
+
+   ralloc_free(state);
+}
+
+} /* extern "C" */
 /**
  * Do the set of common optimizations passes
  *

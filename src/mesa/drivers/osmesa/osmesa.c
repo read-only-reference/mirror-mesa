@@ -1,6 +1,5 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5.3
  *
  * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  *
@@ -711,7 +710,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       /* override with our functions */
       functions.GetString = get_string;
       functions.UpdateState = osmesa_update_state;
-      functions.GetBufferSize = NULL;
 
       if (!_mesa_initialize_context(&osmesa->mesa,
                                     API_OPENGL_COMPAT,
@@ -725,11 +723,6 @@ OSMesaCreateContextExt( GLenum format, GLint depthBits, GLint stencilBits,
       }
 
       _mesa_enable_sw_extensions(&(osmesa->mesa));
-      _mesa_enable_1_3_extensions(&(osmesa->mesa));
-      _mesa_enable_1_4_extensions(&(osmesa->mesa));
-      _mesa_enable_1_5_extensions(&(osmesa->mesa));
-      _mesa_enable_2_0_extensions(&(osmesa->mesa));
-      _mesa_enable_2_1_extensions(&(osmesa->mesa));
 
       osmesa->gl_buffer = _mesa_create_framebuffer(osmesa->gl_visual);
       if (!osmesa->gl_buffer) {
@@ -918,7 +911,6 @@ OSMesaMakeCurrent( OSMesaContext osmesa, void *buffer, GLenum type,
     * osmesa_renderbuffer_storage() function to get called.
     */
    _mesa_resize_framebuffer(&osmesa->mesa, osmesa->gl_buffer, width, height);
-   osmesa->gl_buffer->Initialized = GL_TRUE; /* XXX TEMPORARY? */
 
    _mesa_make_current( &osmesa->mesa, osmesa->gl_buffer, osmesa->gl_buffer );
 

@@ -440,7 +440,7 @@ nvc0_create_decoder(struct pipe_context *context,
 
 #if NVC0_DEBUG_FENCE
    ret = nouveau_bo_new(screen->device, NOUVEAU_BO_GART|NOUVEAU_BO_MAP,
-                        0, 0x1000, &cfg, &dec->fence_bo);
+                        0, 0x1000, NULL, &dec->fence_bo);
    if (ret)
       goto fail;
 
@@ -450,36 +450,42 @@ nvc0_create_decoder(struct pipe_context *context,
    dec->comm = (struct comm *)(dec->fence_map + (COMM_OFFSET/sizeof(*dec->fence_map)));
 
    /* So lets test if the fence is working? */
+   nouveau_pushbuf_space(push[0], 6, 1, 0);
+   PUSH_REFN (push[0], dec->fence_bo, NOUVEAU_BO_GART|NOUVEAU_BO_RDWR);
    BEGIN_NVC0(push[0], SUBC_BSP(0x240), 3);
    PUSH_DATAh(push[0], dec->fence_bo->offset);
    PUSH_DATA (push[0], dec->fence_bo->offset);
    PUSH_DATA (push[0], dec->fence_seq);
 
    BEGIN_NVC0(push[0], SUBC_BSP(0x304), 1);
-   PUSH_DATA (push[0], 1);
+   PUSH_DATA (push[0], 0);
    PUSH_KICK (push[0]);
 
+   nouveau_pushbuf_space(push[1], 6, 1, 0);
+   PUSH_REFN (push[1], dec->fence_bo, NOUVEAU_BO_GART|NOUVEAU_BO_RDWR);
    BEGIN_NVC0(push[1], SUBC_VP(0x240), 3);
    PUSH_DATAh(push[1], (dec->fence_bo->offset + 0x10));
    PUSH_DATA (push[1], (dec->fence_bo->offset + 0x10));
    PUSH_DATA (push[1], dec->fence_seq);
 
    BEGIN_NVC0(push[1], SUBC_VP(0x304), 1);
-   PUSH_DATA (push[1], 1);
+   PUSH_DATA (push[1], 0);
    PUSH_KICK (push[1]);
 
+   nouveau_pushbuf_space(push[2], 6, 1, 0);
+   PUSH_REFN (push[2], dec->fence_bo, NOUVEAU_BO_GART|NOUVEAU_BO_RDWR);
    BEGIN_NVC0(push[2], SUBC_PPP(0x240), 3);
    PUSH_DATAh(push[2], (dec->fence_bo->offset + 0x20));
    PUSH_DATA (push[2], (dec->fence_bo->offset + 0x20));
    PUSH_DATA (push[2], dec->fence_seq);
 
    BEGIN_NVC0(push[2], SUBC_PPP(0x304), 1);
-   PUSH_DATA (push[2], 1);
+   PUSH_DATA (push[2], 0);
    PUSH_KICK (push[2]);
 
    usleep(100);
-   while (dec->fence_seq > dec->fence_map[0] &&
-          dec->fence_seq > dec->fence_map[4] &&
+   while (dec->fence_seq > dec->fence_map[0] ||
+          dec->fence_seq > dec->fence_map[4] ||
           dec->fence_seq > dec->fence_map[8]) {
       debug_printf("%u: %u %u %u\n", dec->fence_seq, dec->fence_map[0], dec->fence_map[4], dec->fence_map[8]);
       usleep(100);
@@ -558,8 +564,6 @@ nvc0_video_buffer_create(struct pipe_context *pipe,
    buffer = CALLOC_STRUCT(nvc0_video_buffer);
    if (!buffer)
       return NULL;
-   assert(!(templat->height % 4));
-   assert(!(templat->width % 2));
 
    buffer->base.buffer_format = templat->buffer_format;
    buffer->base.context = pipe;
@@ -578,7 +582,7 @@ nvc0_video_buffer_create(struct pipe_context *pipe,
    templ.bind = PIPE_BIND_SAMPLER_VIEW | PIPE_BIND_RENDER_TARGET;
    templ.format = PIPE_FORMAT_R8_UNORM;
    templ.width0 = buffer->base.width;
-   templ.height0 = buffer->base.height/2;
+   templ.height0 = (buffer->base.height + 1)/2;
    templ.flags = NVC0_RESOURCE_FLAG_VIDEO;
    templ.array_size = 2;
 
@@ -588,8 +592,8 @@ nvc0_video_buffer_create(struct pipe_context *pipe,
 
    templ.format = PIPE_FORMAT_R8G8_UNORM;
    buffer->num_planes = 2;
-   templ.width0 /= 2;
-   templ.height0 /= 2;
+   templ.width0 = (templ.width0 + 1) / 2;
+   templ.height0 = (templ.height0 + 1) / 2;
    for (i = 1; i < buffer->num_planes; ++i) {
       buffer->resources[i] = pipe->screen->resource_create(pipe->screen, &templ);
       if (!buffer->resources[i])

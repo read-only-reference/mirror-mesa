@@ -1,6 +1,5 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.1
  *
  * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  *
@@ -923,16 +922,7 @@ XMesaContext XMesaCreateContext( XMesaVisual v, XMesaContext share_list )
    }
 
    _mesa_enable_sw_extensions(mesaCtx);
-   _mesa_enable_1_3_extensions(mesaCtx);
-   _mesa_enable_1_4_extensions(mesaCtx);
-   _mesa_enable_1_5_extensions(mesaCtx);
-   _mesa_enable_2_0_extensions(mesaCtx);
-   _mesa_enable_2_1_extensions(mesaCtx);
-    if (mesaCtx->Mesa_DXTn) {
-       mesaCtx->Extensions.EXT_texture_compression_s3tc = GL_TRUE;
-       mesaCtx->Extensions.ANGLE_texture_compression_dxt = GL_TRUE; 
-    }
-    mesaCtx->Extensions.TDFX_texture_compression_FXT1 = GL_TRUE;
+
 #if ENABLE_EXT_timer_query
     mesaCtx->Extensions.EXT_timer_query = GL_TRUE;
 #endif
@@ -1194,7 +1184,6 @@ xmesa_check_and_update_buffer_size(XMesaContext xmctx, XMesaBuffer drawBuffer)
       struct gl_context *ctx = xmctx ? &xmctx->mesa : NULL;
       _mesa_resize_framebuffer(ctx, &(drawBuffer->mesa_buffer), width, height);
    }
-   drawBuffer->mesa_buffer.Initialized = GL_TRUE; /* XXX TEMPORARY? */
 }
 
 

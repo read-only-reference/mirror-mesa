@@ -139,6 +139,7 @@ void radeonsi_flush(struct pipe_context *ctx, struct pipe_fence_handle **fence,
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct r600_fence **rfence = (struct r600_fence**)fence;
 	struct pipe_query *render_cond = NULL;
+	boolean render_cond_cond = FALSE;
 	unsigned render_cond_mode = 0;
 
 	if (rfence)
@@ -147,15 +148,16 @@ void radeonsi_flush(struct pipe_context *ctx, struct pipe_fence_handle **fence,
 	/* Disable render condition. */
 	if (rctx->current_render_cond) {
 		render_cond = rctx->current_render_cond;
+		render_cond_cond = rctx->current_render_cond_cond;
 		render_cond_mode = rctx->current_render_cond_mode;
-		ctx->render_condition(ctx, NULL, 0);
+		ctx->render_condition(ctx, NULL, FALSE, 0);
 	}
 
 	si_context_flush(rctx, flags);
 
 	/* Re-enable render condition. */
 	if (render_cond) {
-		ctx->render_condition(ctx, render_cond, render_cond_mode);
+		ctx->render_condition(ctx, render_cond, render_cond_cond, render_cond_mode);
 	}
 }
 
@@ -230,7 +232,14 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	}
 
 	switch (rctx->chip_class) {
-	case TAHITI:
+	case SI:
+		si_init_state_functions(rctx);
+		LIST_INITHEAD(&rctx->active_query_list);
+		rctx->cs = rctx->ws->cs_create(rctx->ws, RING_GFX, NULL);
+		rctx->max_db = 8;
+		si_init_config(rctx);
+		break;
+	case CIK:
 		si_init_state_functions(rctx);
 		LIST_INITHEAD(&rctx->active_query_list);
 		rctx->cs = rctx->ws->cs_create(rctx->ws, RING_GFX, NULL);
@@ -290,6 +299,9 @@ const char *r600_get_llvm_processor_name(enum radeon_family family)
 		case CHIP_VERDE: return "verde";
 		case CHIP_OLAND: return "oland";
 		case CHIP_HAINAN: return "hainan";
+		case CHIP_BONAIRE: return "bonaire";
+		case CHIP_KABINI: return "kabini";
+		case CHIP_KAVERI: return "kaveri";
 		default: return "";
 	}
 }
@@ -302,6 +314,9 @@ static const char *r600_get_family_name(enum radeon_family family)
 	case CHIP_VERDE: return "AMD CAPE VERDE";
 	case CHIP_OLAND: return "AMD OLAND";
 	case CHIP_HAINAN: return "AMD HAINAN";
+	case CHIP_BONAIRE: return "AMD BONAIRE";
+	case CHIP_KAVERI: return "AMD KAVERI";
+	case CHIP_KABINI: return "AMD KABINI";
 	default: return "AMD unknown";
 	}
 }
@@ -792,8 +807,10 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 	}
 
 	/* setup class */
-	if (rscreen->family >= CHIP_TAHITI) {
-		rscreen->chip_class = TAHITI;
+	if (rscreen->family >= CHIP_BONAIRE) {
+		rscreen->chip_class = CIK;
+	} else if (rscreen->family >= CHIP_TAHITI) {
+		rscreen->chip_class = SI;
 	} else {
 		fprintf(stderr, "r600: Unsupported family %d\n", rscreen->family);
 		FREE(rscreen);

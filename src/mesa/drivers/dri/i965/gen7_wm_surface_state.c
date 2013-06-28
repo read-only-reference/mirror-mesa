@@ -295,7 +295,6 @@ gen7_update_texture_surface(struct gl_context *ctx,
    struct intel_mipmap_tree *mt = intelObj->mt;
    struct gl_texture_image *firstImage = tObj->Image[0][tObj->BaseLevel];
    struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit);
-   int width, height, depth;
    uint32_t tile_x, tile_y;
 
    if (tObj->Target == GL_TEXTURE_BUFFER) {
@@ -303,15 +302,12 @@ gen7_update_texture_surface(struct gl_context *ctx,
       return;
    }
 
-   intel_miptree_get_dimensions_for_image(firstImage, &width, &height, &depth);
-
    uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
                                     8 * 4, 32, &binding_table[surf_index]);
    memset(surf, 0, 8 * 4);
 
    uint32_t tex_format = translate_tex_format(intel,
                                               mt->format,
-                                              firstImage->InternalFormat,
                                               tObj->DepthMode,
                                               sampler->sRGBDecode);
 
@@ -325,7 +321,7 @@ gen7_update_texture_surface(struct gl_context *ctx,
    if (mt->align_w == 8)
       surf[0] |= GEN7_SURFACE_HALIGN_8;
 
-   if (depth > 1 && tObj->Target != GL_TEXTURE_3D)
+   if (mt->logical_depth0 > 1 && tObj->Target != GL_TEXTURE_3D)
       surf[0] |= GEN7_SURFACE_IS_ARRAY;
 
    if (mt->array_spacing_lod0)
@@ -335,9 +331,9 @@ gen7_update_texture_surface(struct gl_context *ctx,
    surf[1] += intel_miptree_get_tile_offsets(intelObj->mt, firstImage->Level, 0,
                                              &tile_x, &tile_y);
 
-   surf[2] = SET_FIELD(width - 1, GEN7_SURFACE_WIDTH) |
-             SET_FIELD(height - 1, GEN7_SURFACE_HEIGHT);
-   surf[3] = SET_FIELD(depth - 1, BRW_SURFACE_DEPTH) |
+   surf[2] = SET_FIELD(mt->logical_width0 - 1, GEN7_SURFACE_WIDTH) |
+             SET_FIELD(mt->logical_height0 - 1, GEN7_SURFACE_HEIGHT);
+   surf[3] = SET_FIELD(mt->logical_depth0 - 1, BRW_SURFACE_DEPTH) |
              ((intelObj->mt->region->pitch) - 1);
 
    surf[4] = gen7_surface_msaa_bits(mt->num_samples, mt->msaa_layout);
@@ -545,6 +541,8 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
                                     8 * 4, 32, &brw->wm.surf_offset[unit]);
    memset(surf, 0, 8 * 4);
 
+   intel_miptree_used_for_rendering(irb->mt);
+
    /* Render targets can't use IMS layout */
    assert(irb->mt->msaa_layout != INTEL_MSAA_LAYOUT_IMS);
 
@@ -595,7 +593,7 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
 
    assert(brw->has_surface_tile_offset);
 
-   surf[5] = irb->mt_level;
+   surf[5] = irb->mt_level - irb->mt->first_level;
 
    surf[2] = SET_FIELD(irb->mt->logical_width0 - 1, GEN7_SURFACE_WIDTH) |
              SET_FIELD(irb->mt->logical_height0 - 1, GEN7_SURFACE_HEIGHT);
@@ -607,16 +605,18 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
              min_array_element << GEN7_SURFACE_MIN_ARRAY_ELEMENT_SHIFT |
              (depth - 1) << GEN7_SURFACE_RENDER_TARGET_VIEW_EXTENT_SHIFT;
 
-   if (irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS) {
+   if (irb->mt->mcs_mt) {
       gen7_set_surface_mcs_info(brw, surf, brw->wm.surf_offset[unit],
                                 irb->mt->mcs_mt, true /* is RT */);
    }
 
+   surf[7] = irb->mt->fast_clear_color_value;
+
    if (intel->is_haswell) {
-      surf[7] = SET_FIELD(HSW_SCS_RED,   GEN7_SURFACE_SCS_R) |
-                SET_FIELD(HSW_SCS_GREEN, GEN7_SURFACE_SCS_G) |
-                SET_FIELD(HSW_SCS_BLUE,  GEN7_SURFACE_SCS_B) |
-                SET_FIELD(HSW_SCS_ALPHA, GEN7_SURFACE_SCS_A);
+      surf[7] |= (SET_FIELD(HSW_SCS_RED,   GEN7_SURFACE_SCS_R) |
+                  SET_FIELD(HSW_SCS_GREEN, GEN7_SURFACE_SCS_G) |
+                  SET_FIELD(HSW_SCS_BLUE,  GEN7_SURFACE_SCS_B) |
+                  SET_FIELD(HSW_SCS_ALPHA, GEN7_SURFACE_SCS_A));
    }
 
    drm_intel_bo_emit_reloc(brw->intel.batch.bo,

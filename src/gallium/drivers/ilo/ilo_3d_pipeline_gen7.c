@@ -186,13 +186,13 @@ gen7_pipeline_common_urb(struct ilo_3d_pipeline *p,
                          struct gen6_pipeline_session *session)
 {
    /* 3DSTATE_URB_{VS,GS,HS,DS} */
-   if (DIRTY(VERTEX_ELEMENTS) || DIRTY(VS)) {
-      const struct ilo_shader *vs = (ilo->vs) ? ilo->vs->shader : NULL;
+   if (DIRTY(VE) || DIRTY(VS)) {
       /* the first 16KB are reserved for VS and PS PCBs */
       const int offset = 16 * 1024;
       int vs_entry_size, vs_total_size;
 
-      vs_entry_size = (vs) ? vs->out.count : 0;
+      vs_entry_size = (ilo->vs) ?
+         ilo_shader_get_kernel_param(ilo->vs, ILO_KERNEL_OUTPUT_COUNT) : 0;
 
       /*
        * From the Ivy Bridge PRM, volume 2 part 1, page 35:
@@ -202,8 +202,8 @@ gen7_pipeline_common_urb(struct ilo_3d_pipeline *p,
        *      Allocation Size must be sized to the maximum of the vertex input
        *      and output structures."
        */
-      if (vs_entry_size < ilo->vertex_elements->num_elements)
-         vs_entry_size = ilo->vertex_elements->num_elements;
+      if (vs_entry_size < ilo->ve->count)
+         vs_entry_size = ilo->ve->count;
 
       vs_entry_size *= sizeof(float) * 4;
       vs_total_size = ilo->dev->urb_size - offset;
@@ -288,7 +288,7 @@ gen7_pipeline_vs(struct ilo_3d_pipeline *p,
    const bool emit_3dstate_sampler_state = session->sampler_state_vs_changed;
    /* see gen6_pipeline_vs() */
    const bool emit_3dstate_constant_vs = session->pcb_state_vs_changed;
-   const bool emit_3dstate_vs = (DIRTY(VS) || DIRTY(VERTEX_SAMPLERS));
+   const bool emit_3dstate_vs = (DIRTY(VS) || DIRTY(SAMPLER_VS));
 
    /* emit depth stall before any of the VS commands */
    if (emit_3dstate_binding_table || emit_3dstate_sampler_state ||
@@ -318,7 +318,7 @@ gen7_pipeline_hs(struct ilo_3d_pipeline *p,
    /* 3DSTATE_CONSTANT_HS and 3DSTATE_HS */
    if (session->hw_ctx_changed) {
       p->gen7_3DSTATE_CONSTANT_HS(p->dev, 0, 0, 0, p->cp);
-      p->gen7_3DSTATE_HS(p->dev, NULL, 0, 0, p->cp);
+      p->gen7_3DSTATE_HS(p->dev, NULL, 0, p->cp);
    }
 
    /* 3DSTATE_BINDING_TABLE_POINTERS_HS */
@@ -344,7 +344,7 @@ gen7_pipeline_ds(struct ilo_3d_pipeline *p,
    /* 3DSTATE_CONSTANT_DS and 3DSTATE_DS */
    if (session->hw_ctx_changed) {
       p->gen7_3DSTATE_CONSTANT_DS(p->dev, 0, 0, 0, p->cp);
-      p->gen7_3DSTATE_DS(p->dev, NULL, 0, 0, p->cp);
+      p->gen7_3DSTATE_DS(p->dev, NULL, 0, p->cp);
    }
 
    /* 3DSTATE_BINDING_TABLE_POINTERS_DS */
@@ -377,28 +377,28 @@ gen7_pipeline_sol(struct ilo_3d_pipeline *p,
                   struct gen6_pipeline_session *session)
 {
    const struct pipe_stream_output_info *so_info;
-   const struct ilo_shader *sh;
+   const struct ilo_shader_state *shader;
    bool dirty_sh = false;
 
    if (ilo->gs) {
-      so_info = &ilo->gs->info.stream_output;
-      sh = ilo->gs->shader;
+      shader = ilo->gs;
       dirty_sh = DIRTY(GS);
    }
-   else if (ilo->vs) {
-      so_info = &ilo->vs->info.stream_output;
-      sh = ilo->vs->shader;
+   else {
+      shader = ilo->vs;
       dirty_sh = DIRTY(VS);
    }
+
+   so_info = ilo_shader_get_kernel_so_info(shader);
 
    gen6_pipeline_update_max_svbi(p, ilo, session);
 
    /* 3DSTATE_SO_BUFFER */
-   if ((DIRTY(STREAM_OUTPUT_TARGETS) || dirty_sh) &&
-       ilo->stream_output_targets.num_targets) {
+   if ((DIRTY(SO) || dirty_sh || session->batch_bo_changed) &&
+       ilo->so.enabled) {
       int i;
 
-      for (i = 0; i < ilo->stream_output_targets.num_targets; i++) {
+      for (i = 0; i < ilo->so.count; i++) {
          const int stride = so_info->stride[i] * 4; /* in bytes */
          int base = 0;
 
@@ -409,7 +409,7 @@ gen7_pipeline_sol(struct ilo_3d_pipeline *p,
          }
 
          p->gen7_3DSTATE_SO_BUFFER(p->dev, i, base, stride,
-               ilo->stream_output_targets.targets[i], p->cp);
+               ilo->so.states[i], p->cp);
       }
 
       for (; i < 4; i++)
@@ -417,16 +417,17 @@ gen7_pipeline_sol(struct ilo_3d_pipeline *p,
    }
 
    /* 3DSTATE_SO_DECL_LIST */
-   if (dirty_sh && ilo->stream_output_targets.num_targets)
-      p->gen7_3DSTATE_SO_DECL_LIST(p->dev, so_info, sh, p->cp);
+   if (dirty_sh && ilo->so.enabled)
+      p->gen7_3DSTATE_SO_DECL_LIST(p->dev, so_info, p->cp);
 
    /* 3DSTATE_STREAMOUT */
-   if (DIRTY(STREAM_OUTPUT_TARGETS) || DIRTY(RASTERIZER) || dirty_sh) {
-      const unsigned buffer_mask =
-         (1 << ilo->stream_output_targets.num_targets) - 1;
+   if (DIRTY(SO) || DIRTY(RASTERIZER) || dirty_sh) {
+      const unsigned buffer_mask = (1 << ilo->so.count) - 1;
+      const int output_count = ilo_shader_get_kernel_param(shader,
+            ILO_KERNEL_OUTPUT_COUNT);
 
-      p->gen7_3DSTATE_STREAMOUT(p->dev, buffer_mask, sh->out.count,
-            ilo->rasterizer->rasterizer_discard, p->cp);
+      p->gen7_3DSTATE_STREAMOUT(p->dev, buffer_mask, output_count,
+            ilo->rasterizer->state.rasterizer_discard, p->cp);
    }
 }
 
@@ -437,21 +438,14 @@ gen7_pipeline_sf(struct ilo_3d_pipeline *p,
 {
    /* 3DSTATE_SBE */
    if (DIRTY(RASTERIZER) || DIRTY(VS) || DIRTY(GS) || DIRTY(FS)) {
-      const struct ilo_shader *fs = (ilo->fs)? ilo->fs->shader : NULL;
-      const struct ilo_shader *last_sh =
-         (ilo->gs)? ilo->gs->shader :
-         (ilo->vs)? ilo->vs->shader : NULL;
-
-      p->gen7_3DSTATE_SBE(p->dev,
-            ilo->rasterizer, fs, last_sh, p->cp);
+      p->gen7_3DSTATE_SBE(p->dev, ilo->rasterizer, ilo->fs,
+            (ilo->gs) ? ilo->gs : ilo->vs, ilo->cp);
    }
 
    /* 3DSTATE_SF */
-   if (DIRTY(RASTERIZER) || DIRTY(FRAMEBUFFER)) {
+   if (DIRTY(RASTERIZER) || DIRTY(FB)) {
       gen7_wa_pipe_control_cs_stall(p, true, true);
-
-      p->gen7_3DSTATE_SF(p->dev,
-            ilo->rasterizer, ilo->framebuffer.zsbuf, p->cp);
+      p->gen7_3DSTATE_SF(p->dev, ilo->rasterizer, ilo->fb.state.zsbuf, p->cp);
    }
 }
 
@@ -461,20 +455,15 @@ gen7_pipeline_wm(struct ilo_3d_pipeline *p,
                  struct gen6_pipeline_session *session)
 {
    /* 3DSTATE_WM */
-   if (DIRTY(FS) || DIRTY(BLEND) || DIRTY(DEPTH_STENCIL_ALPHA) ||
-       DIRTY(RASTERIZER)) {
-      const struct ilo_shader *fs = (ilo->fs)? ilo->fs->shader : NULL;
-      const bool cc_may_kill = (ilo->depth_stencil_alpha->alpha.enabled ||
-                                   ilo->blend->alpha_to_coverage);
-
-      if (fs)
-         assert(!fs->pcb.clip_state_size);
+   if (DIRTY(FS) || DIRTY(BLEND) || DIRTY(DSA) || DIRTY(RASTERIZER)) {
+      const bool cc_may_kill = (ilo->dsa->alpha.enabled ||
+                                ilo->blend->alpha_to_coverage);
 
       if (p->dev->gen == ILO_GEN(7) && session->hw_ctx_changed)
          gen7_wa_pipe_control_wm_max_threads_stall(p);
 
-      p->gen7_3DSTATE_WM(p->dev,
-            fs, ilo->rasterizer, cc_may_kill, p->cp);
+      p->gen7_3DSTATE_WM(p->dev, ilo->fs,
+            ilo->rasterizer, cc_may_kill, p->cp);
    }
 
    /* 3DSTATE_BINDING_TABLE_POINTERS_PS */
@@ -494,19 +483,12 @@ gen7_pipeline_wm(struct ilo_3d_pipeline *p,
       p->gen6_3DSTATE_CONSTANT_PS(p->dev, NULL, NULL, 0, p->cp);
 
    /* 3DSTATE_PS */
-   if (DIRTY(FS) || DIRTY(FRAGMENT_SAMPLERS) ||
-       DIRTY(BLEND)) {
-      const struct ilo_shader *fs = (ilo->fs)? ilo->fs->shader : NULL;
-      const int num_samplers =
-         ilo->samplers[PIPE_SHADER_FRAGMENT].num_samplers;
-      const bool dual_blend = (!ilo->blend->logicop_enable &&
-                                  ilo->blend->rt[0].blend_enable &&
-                                  util_blend_state_is_dual(ilo->blend, 0));
+   if (DIRTY(FS) || DIRTY(SAMPLER_FS) || DIRTY(BLEND) ||
+       session->kernel_bo_changed) {
+      const int num_samplers = ilo->sampler[PIPE_SHADER_FRAGMENT].count;
+      const bool dual_blend = ilo->blend->dual_blend;
 
-      if (fs)
-         assert(!fs->pcb.clip_state_size);
-
-      p->gen7_3DSTATE_PS(p->dev, fs, num_samplers, dual_blend, p->cp);
+      p->gen7_3DSTATE_PS(p->dev, ilo->fs, num_samplers, dual_blend, p->cp);
    }
 
    /* 3DSTATE_SCISSOR_STATE_POINTERS */
@@ -517,12 +499,10 @@ gen7_pipeline_wm(struct ilo_3d_pipeline *p,
 
    /* XXX what is the best way to know if this workaround is needed? */
    {
-      const bool emit_3dstate_ps = (DIRTY(FS) ||
-                                       DIRTY(FRAGMENT_SAMPLERS) ||
-                                       DIRTY(BLEND));
+      const bool emit_3dstate_ps =
+         (DIRTY(FS) || DIRTY(SAMPLER_FS) || DIRTY(BLEND));
       const bool emit_3dstate_depth_buffer =
-         (DIRTY(FRAMEBUFFER) || DIRTY(DEPTH_STENCIL_ALPHA) ||
-          session->state_bo_changed);
+         (DIRTY(FB) || DIRTY(DSA) || session->state_bo_changed);
 
       if (emit_3dstate_ps ||
           emit_3dstate_depth_buffer ||
@@ -536,27 +516,24 @@ gen7_pipeline_wm(struct ilo_3d_pipeline *p,
          gen7_wa_pipe_control_wm_depth_stall(p, emit_3dstate_depth_buffer);
    }
 
-   /*
-    * glCopyPixels() with GL_DEPTH, which flushes the context before copying
-    * the depth buffer to a temporary texture, could not update the depth
-    * buffer _sometimes_.  Reissuing 3DSTATE_DEPTH_BUFFER in the new batch
-    * makes the problem gone.
-    */
-
    /* 3DSTATE_DEPTH_BUFFER and 3DSTATE_CLEAR_PARAMS */
-   if (DIRTY(FRAMEBUFFER) || DIRTY(DEPTH_STENCIL_ALPHA) ||
-       session->state_bo_changed) {
-      const bool hiz = false;
+   if (DIRTY(FB) || session->batch_bo_changed) {
+      const struct ilo_zs_surface *zs;
 
-      p->gen7_3DSTATE_DEPTH_BUFFER(p->dev,
-            ilo->framebuffer.zsbuf,
-            ilo->depth_stencil_alpha,
-            hiz, p->cp);
+      if (ilo->fb.state.zsbuf) {
+         const struct ilo_surface_cso *surface =
+            (const struct ilo_surface_cso *) ilo->fb.state.zsbuf;
 
-      p->gen6_3DSTATE_HIER_DEPTH_BUFFER(p->dev,
-            (hiz) ? ilo->framebuffer.zsbuf : NULL, p->cp);
+         assert(!surface->is_rt);
+         zs = &surface->u.zs;
+      }
+      else {
+         zs = &ilo->fb.null_zs;
+      }
 
-      p->gen6_3DSTATE_STENCIL_BUFFER(p->dev, ilo->framebuffer.zsbuf, p->cp);
+      p->gen7_3DSTATE_DEPTH_BUFFER(p->dev, zs, p->cp);
+      p->gen6_3DSTATE_HIER_DEPTH_BUFFER(p->dev, zs, p->cp);
+      p->gen6_3DSTATE_STENCIL_BUFFER(p->dev, zs, p->cp);
 
       /* TODO */
       p->gen6_3DSTATE_CLEAR_PARAMS(p->dev, 0, p->cp);
@@ -569,26 +546,23 @@ gen7_pipeline_wm_multisample(struct ilo_3d_pipeline *p,
                              struct gen6_pipeline_session *session)
 {
    /* 3DSTATE_MULTISAMPLE and 3DSTATE_SAMPLE_MASK */
-   if (DIRTY(SAMPLE_MASK) || DIRTY(FRAMEBUFFER)) {
+   if (DIRTY(SAMPLE_MASK) || DIRTY(FB)) {
       const uint32_t *packed_sample_pos;
-      int num_samples = 1;
 
       gen7_wa_pipe_control_cs_stall(p, true, true);
 
-      if (ilo->framebuffer.nr_cbufs)
-         num_samples = ilo->framebuffer.cbufs[0]->texture->nr_samples;
-
       packed_sample_pos =
-         (num_samples > 4) ? p->packed_sample_position_8x :
-         (num_samples > 1) ? &p->packed_sample_position_4x :
+         (ilo->fb.num_samples > 4) ? p->packed_sample_position_8x :
+         (ilo->fb.num_samples > 1) ? &p->packed_sample_position_4x :
          &p->packed_sample_position_1x;
 
-      p->gen6_3DSTATE_MULTISAMPLE(p->dev, num_samples, packed_sample_pos,
-            ilo->rasterizer->half_pixel_center, p->cp);
+      p->gen6_3DSTATE_MULTISAMPLE(p->dev,
+            ilo->fb.num_samples, packed_sample_pos,
+            ilo->rasterizer->state.half_pixel_center, p->cp);
 
       p->gen7_3DSTATE_SAMPLE_MASK(p->dev,
-            (num_samples > 1) ? ilo->sample_mask : 0x1,
-            num_samples, p->cp);
+            (ilo->fb.num_samples > 1) ? ilo->sample_mask : 0x1,
+            ilo->fb.num_samples, p->cp);
    }
 }
 
@@ -628,12 +602,11 @@ gen7_pipeline_commands(struct ilo_3d_pipeline *p,
 
 static void
 ilo_3d_pipeline_emit_draw_gen7(struct ilo_3d_pipeline *p,
-                               const struct ilo_context *ilo,
-                               const struct pipe_draw_info *info)
+                               const struct ilo_context *ilo)
 {
    struct gen6_pipeline_session session;
 
-   gen6_pipeline_prepare(p, ilo, info, &session);
+   gen6_pipeline_prepare(p, ilo, &session);
 
    session.emit_draw_states = gen6_pipeline_states;
    session.emit_draw_commands = gen7_pipeline_commands;
@@ -736,10 +709,10 @@ gen7_pipeline_estimate_states(const struct ilo_3d_pipeline *p,
     * sampler views (vs, fs)
     * constant buffers (vs, fs)
     */
-   count = ilo->framebuffer.nr_cbufs;
+   count = ilo->fb.state.nr_cbufs;
    for (shader_type = 0; shader_type < PIPE_SHADER_TYPES; shader_type++) {
-      count += ilo->sampler_views[shader_type].num_views;
-      count += ilo->constant_buffers[shader_type].num_buffers;
+      count += ilo->view[shader_type].count;
+      count += util_bitcount(ilo->cbuf[shader_type].enabled_mask);
    }
 
    if (count) {
@@ -749,7 +722,7 @@ gen7_pipeline_estimate_states(const struct ilo_3d_pipeline *p,
 
    /* samplers (vs, fs) */
    for (shader_type = 0; shader_type < PIPE_SHADER_TYPES; shader_type++) {
-      count = ilo->samplers[shader_type].num_samplers;
+      count = ilo->sampler[shader_type].count;
       if (count) {
          size += gen7->estimate_state_size(p->dev,
                ILO_GPE_GEN7_SAMPLER_BORDER_COLOR_STATE, count);
@@ -759,8 +732,10 @@ gen7_pipeline_estimate_states(const struct ilo_3d_pipeline *p,
    }
 
    /* pcb (vs) */
-   if (ilo->vs && ilo->vs->shader->pcb.clip_state_size) {
-      const int pcb_size = ilo->vs->shader->pcb.clip_state_size;
+   if (ilo->vs &&
+       ilo_shader_get_kernel_param(ilo->vs, ILO_KERNEL_VS_PCB_UCP_SIZE)) {
+      const int pcb_size =
+         ilo_shader_get_kernel_param(ilo->vs, ILO_KERNEL_VS_PCB_UCP_SIZE);
 
       size += gen7->estimate_state_size(p->dev,
             ILO_GPE_GEN7_PUSH_CONSTANT_BUFFER, pcb_size);
@@ -845,9 +820,7 @@ ilo_3d_pipeline_init_gen7(struct ilo_3d_pipeline *p)
    GEN6_USE(p, DEPTH_STENCIL_STATE, gen7);
    GEN6_USE(p, SCISSOR_RECT, gen7);
    GEN6_USE(p, BINDING_TABLE_STATE, gen7);
-   GEN6_USE(p, surf_SURFACE_STATE, gen7);
-   GEN6_USE(p, view_SURFACE_STATE, gen7);
-   GEN6_USE(p, cbuf_SURFACE_STATE, gen7);
+   GEN6_USE(p, SURFACE_STATE, gen7);
    GEN6_USE(p, SAMPLER_STATE, gen7);
    GEN6_USE(p, SAMPLER_BORDER_COLOR_STATE, gen7);
    GEN6_USE(p, push_constant_buffer, gen7);

@@ -440,6 +440,7 @@ public:
     * uniform index.
     */
    int *params_remap;
+   int nr_params_remap;
 
    struct hash_table *variable_ht;
    fs_reg frag_depth;
@@ -524,6 +525,9 @@ private:
    void generate_math_gen4(fs_inst *inst,
 			   struct brw_reg dst,
 			   struct brw_reg src);
+   void generate_math_g45(fs_inst *inst,
+			  struct brw_reg dst,
+			  struct brw_reg src);
    void generate_ddx(fs_inst *inst, struct brw_reg dst, struct brw_reg src);
    void generate_ddy(fs_inst *inst, struct brw_reg dst, struct brw_reg src,
                      bool negate_value);

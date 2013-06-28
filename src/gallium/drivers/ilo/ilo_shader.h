@@ -29,214 +29,120 @@
 #define ILO_SHADER_H
 
 #include "ilo_common.h"
-#include "ilo_context.h"
 
-/* XXX The interface needs to be reworked */
+enum ilo_kernel_param {
+   ILO_KERNEL_INPUT_COUNT,
+   ILO_KERNEL_OUTPUT_COUNT,
+   ILO_KERNEL_URB_DATA_START_REG,
 
-/**
- * A shader variant.  It consists of non-orthogonal states of the pipe context
- * affecting the compilation of a shader.
- */
-struct ilo_shader_variant {
-   union {
-      struct {
-         bool rasterizer_discard;
-         int num_ucps;
-      } vs;
+   ILO_KERNEL_VS_INPUT_INSTANCEID,
+   ILO_KERNEL_VS_INPUT_VERTEXID,
+   ILO_KERNEL_VS_INPUT_EDGEFLAG,
+   ILO_KERNEL_VS_PCB_UCP_SIZE,
+   ILO_KERNEL_VS_GEN6_SO,
+   ILO_KERNEL_VS_GEN6_SO_START_REG,
+   ILO_KERNEL_VS_GEN6_SO_POINT_OFFSET,
+   ILO_KERNEL_VS_GEN6_SO_LINE_OFFSET,
+   ILO_KERNEL_VS_GEN6_SO_TRI_OFFSET,
 
-      struct {
-         bool rasterizer_discard;
-         int num_inputs;
-         int semantic_names[PIPE_MAX_SHADER_INPUTS];
-         int semantic_indices[PIPE_MAX_SHADER_INPUTS];
-      } gs;
+   ILO_KERNEL_GS_DISCARD_ADJACENCY,
+   ILO_KERNEL_GS_GEN6_SVBI_POST_INC,
 
-      struct {
-         bool flatshade;
-         int fb_height;
-         int num_cbufs;
-      } fs;
-   } u;
+   ILO_KERNEL_FS_INPUT_Z,
+   ILO_KERNEL_FS_INPUT_W,
+   ILO_KERNEL_FS_OUTPUT_Z,
+   ILO_KERNEL_FS_USE_KILL,
+   ILO_KERNEL_FS_BARYCENTRIC_INTERPOLATIONS,
+   ILO_KERNEL_FS_DISPATCH_16_OFFSET,
 
-   int num_sampler_views;
-   struct {
-      unsigned r:3;
-      unsigned g:3;
-      unsigned b:3;
-      unsigned a:3;
-   } sampler_view_swizzles[ILO_MAX_SAMPLER_VIEWS];
-
-   uint32_t saturate_tex_coords[3];
+   ILO_KERNEL_PARAM_COUNT,
 };
 
-/**
- * A compiled shader.
- */
-struct ilo_shader {
-   struct ilo_shader_variant variant;
+struct ilo_kernel_routing {
+   uint32_t const_interp_enable;
+   uint32_t point_sprite_enable;
+   unsigned source_skip, source_len;
 
-   struct {
-      int semantic_names[PIPE_MAX_SHADER_INPUTS];
-      int semantic_indices[PIPE_MAX_SHADER_INPUTS];
-      int interp[PIPE_MAX_SHADER_INPUTS];
-      bool centroid[PIPE_MAX_SHADER_INPUTS];
-      int count;
-
-      int start_grf;
-      bool has_pos;
-      bool has_linear_interp;
-      int barycentric_interpolation_mode;
-      bool discard_adj;
-   } in;
-
-   struct {
-      int register_indices[PIPE_MAX_SHADER_OUTPUTS];
-      int semantic_names[PIPE_MAX_SHADER_OUTPUTS];
-      int semantic_indices[PIPE_MAX_SHADER_OUTPUTS];
-      int count;
-
-      bool has_pos;
-   } out;
-
-   bool has_kill;
-   bool dispatch_16;
-
-   bool stream_output;
-   int svbi_post_inc;
-   /* for VS stream output / rasterizer discard */
-   int gs_offsets[3];
-   int gs_start_grf;
-
-   void *kernel;
-   int kernel_size;
-
-   /* what does the push constant buffer consist of? */
-   struct {
-      int clip_state_size;
-   } pcb;
-
-   struct list_head list;
-
-   uint32_t cache_seqno;
-   uint32_t cache_offset;
+   bool swizzle_enable;
+   uint16_t swizzles[16];
 };
 
-/**
- * Information about a shader state.
- */
-struct ilo_shader_info {
-   const struct ilo_dev_info *dev;
-   int type;
-
-   const struct tgsi_token *tokens;
-
-   struct pipe_stream_output_info stream_output;
-   struct {
-      unsigned req_local_mem;
-      unsigned req_private_mem;
-      unsigned req_input_mem;
-   } compute;
-
-   bool has_color_interp;
-   bool has_pos;
-   bool has_vertexid;
-   bool has_instanceid;
-   bool fs_color0_writes_all_cbufs;
-
-   int edgeflag_in;
-   int edgeflag_out;
-
-   uint32_t shadow_samplers;
-   int num_samplers;
-};
-
-/**
- * A shader state.
- */
-struct ilo_shader_state {
-   struct ilo_shader_info info;
-
-   struct list_head variants;
-   int num_variants, total_size;
-
-   struct ilo_shader *shader;
-};
-
-struct ilo_shader_cache {
-   struct intel_winsys *winsys;
-   struct intel_bo *bo;
-   int cur, size;
-   bool busy;
-
-   /* starting from 1, incremented whenever a new bo is allocated */
-   uint32_t seqno;
-};
-
-void
-ilo_shader_variant_init(struct ilo_shader_variant *variant,
-                        const struct ilo_shader_info *info,
-                        const struct ilo_context *ilo);
-
-struct ilo_shader_state *
-ilo_shader_state_create(const struct ilo_context *ilo,
-                        int type, const void *templ);
-
-void
-ilo_shader_state_destroy(struct ilo_shader_state *state);
-
-struct ilo_shader *
-ilo_shader_state_add_variant(struct ilo_shader_state *state,
-                             const struct ilo_shader_variant *variant);
-
-bool
-ilo_shader_state_use_variant(struct ilo_shader_state *state,
-                             const struct ilo_shader_variant *variant);
+struct intel_bo;
+struct ilo_context;
+struct ilo_rasterizer_state;
+struct ilo_shader_cache;
+struct ilo_shader_state;
+struct ilo_shader_cso;
 
 struct ilo_shader_cache *
-ilo_shader_cache_create(struct intel_winsys *winsys);
+ilo_shader_cache_create(void);
 
 void
 ilo_shader_cache_destroy(struct ilo_shader_cache *shc);
 
 void
-ilo_shader_cache_set(struct ilo_shader_cache *shc,
-                     struct ilo_shader **shaders,
-                     int num_shaders);
+ilo_shader_cache_add(struct ilo_shader_cache *shc,
+                     struct ilo_shader_state *shader);
 
-static inline void
-ilo_shader_cache_mark_busy(struct ilo_shader_cache *shc)
-{
-   if (shc->cur)
-      shc->busy = true;
-}
+void
+ilo_shader_cache_remove(struct ilo_shader_cache *shc,
+                        struct ilo_shader_state *shader);
 
-struct ilo_shader *
-ilo_shader_compile_vs(const struct ilo_shader_state *state,
-                      const struct ilo_shader_variant *variant);
+int
+ilo_shader_cache_upload(struct ilo_shader_cache *shc,
+                        struct intel_bo *bo, unsigned offset,
+                        bool incremental);
 
-struct ilo_shader *
-ilo_shader_compile_gs(const struct ilo_shader_state *state,
-                      const struct ilo_shader_variant *variant);
+struct ilo_shader_state *
+ilo_shader_create_vs(const struct ilo_dev_info *dev,
+                     const struct pipe_shader_state *state,
+                     const struct ilo_context *precompile);
+
+struct ilo_shader_state *
+ilo_shader_create_gs(const struct ilo_dev_info *dev,
+                     const struct pipe_shader_state *state,
+                     const struct ilo_context *precompile);
+
+struct ilo_shader_state *
+ilo_shader_create_fs(const struct ilo_dev_info *dev,
+                     const struct pipe_shader_state *state,
+                     const struct ilo_context *precompile);
+
+struct ilo_shader_state *
+ilo_shader_create_cs(const struct ilo_dev_info *dev,
+                     const struct pipe_compute_state *state,
+                     const struct ilo_context *precompile);
+
+void
+ilo_shader_destroy(struct ilo_shader_state *shader);
+
+int
+ilo_shader_get_type(const struct ilo_shader_state *shader);
 
 bool
-ilo_shader_compile_gs_passthrough(const struct ilo_shader_state *vs_state,
-                                  const struct ilo_shader_variant *vs_variant,
-                                  const int *so_mapping,
-                                  struct ilo_shader *vs);
+ilo_shader_select_kernel(struct ilo_shader_state *shader,
+                         const struct ilo_context *ilo,
+                         uint32_t dirty);
 
-struct ilo_shader *
-ilo_shader_compile_fs(const struct ilo_shader_state *state,
-                      const struct ilo_shader_variant *variant);
+bool
+ilo_shader_select_kernel_routing(struct ilo_shader_state *shader,
+                                 const struct ilo_shader_state *source,
+                                 const struct ilo_rasterizer_state *rasterizer);
 
-struct ilo_shader *
-ilo_shader_compile_cs(const struct ilo_shader_state *state,
-                      const struct ilo_shader_variant *variant);
+uint32_t
+ilo_shader_get_kernel_offset(const struct ilo_shader_state *shader);
 
-static inline void
-ilo_shader_destroy(struct ilo_shader *sh)
-{
-   FREE(sh->kernel);
-   FREE(sh);
-}
+int
+ilo_shader_get_kernel_param(const struct ilo_shader_state *shader,
+                            enum ilo_kernel_param param);
+
+const struct ilo_shader_cso *
+ilo_shader_get_kernel_cso(const struct ilo_shader_state *shader);
+
+const struct pipe_stream_output_info *
+ilo_shader_get_kernel_so_info(const struct ilo_shader_state *shader);
+
+const struct ilo_kernel_routing *
+ilo_shader_get_kernel_routing(const struct ilo_shader_state *shader);
 
 #endif /* ILO_SHADER_H */

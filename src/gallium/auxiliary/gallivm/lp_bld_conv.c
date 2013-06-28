@@ -80,82 +80,6 @@
 
 
 /**
- * Byte swap on element. It will construct a call to intrinsic llvm.bswap
- * based on the type.
- *
- * @param res           element to byte swap.
- * @param type          int16_t, int32_t, int64_t, float or double
- * @param 
- */
-LLVMValueRef
-lp_build_bswap(struct gallivm_state *gallivm,
-               LLVMValueRef res,
-               struct lp_type type)
-{
-   LLVMTypeRef int_type = LLVMIntTypeInContext(gallivm->context,
-                                               type.width);
-   const char *intrinsic = NULL;
-   if (type.width == 8)
-      return res;
-   if (type.width == 16)
-      intrinsic = "llvm.bswap.i16";
-   else if (type.width == 32)
-     intrinsic = "llvm.bswap.i32";
-   else if (type.width == 64)
-      intrinsic = "llvm.bswap.i64";
-
-   assert (intrinsic != NULL);
-
-   /* In case of a floating-point type cast to a int of same size and then
-    * cast back to fp type.
-    */
-   if (type.floating)
-      res = LLVMBuildBitCast(gallivm->builder, res, int_type, "");
-   res = lp_build_intrinsic_unary(gallivm->builder, intrinsic, int_type, res);
-   if (type.floating)
-      res = LLVMBuildBitCast(gallivm->builder, res,
-                             lp_build_elem_type(gallivm, type), "");
-   return res;
-}
-
-
-/**
- * Byte swap every element in the vector.
- *
- * @param packed        <vector> to convert
- * @param src_type      <vector> type of int16_t, int32_t, int64_t, float or
- *                      double
- * @param dst_type      <vector> type to return
- */
-LLVMValueRef
-lp_build_bswap_vec(struct gallivm_state *gallivm,
-                   LLVMValueRef packed,
-                   struct lp_type src_type_vec,
-                   struct lp_type dst_type_vec)
-{
-   LLVMBuilderRef builder = gallivm->builder;
-   LLVMTypeRef dst_type = lp_build_elem_type(gallivm, dst_type_vec);
-   LLVMValueRef res;
-
-   if (src_type_vec.length == 1) {
-      res = lp_build_bswap(gallivm, packed, src_type_vec);
-      res = LLVMBuildBitCast(gallivm->builder, res, dst_type, "");
-   } else {
-      unsigned i;
-      res = LLVMGetUndef(lp_build_vec_type(gallivm, dst_type_vec));
-      for (i = 0; i < src_type_vec.length; ++i) {
-         LLVMValueRef index = lp_build_const_int32(gallivm, i);
-         LLVMValueRef elem = LLVMBuildExtractElement(builder, packed, index, "");
-         elem = lp_build_bswap(gallivm, elem, src_type_vec);
-         elem = LLVMBuildBitCast(gallivm->builder, elem, dst_type, "");
-         res = LLVMBuildInsertElement(gallivm->builder, res, elem, index, "");
-      }
-   }
-   return res;
-}
-
-
-/**
  * Converts int16 half-float to float32
  * Note this can be performed in 1 instruction if vcvtph2ps exists (f16c/cvt16)
  * [llvm.x86.vcvtph2ps / _mm_cvtph_ps]
@@ -530,24 +454,22 @@ int lp_build_conv_auto(struct gallivm_state *gallivm,
        dst_type->width    == 8)
    {
       /* Special case 4x4f --> 1x16ub */
-      if (src_type.length == 4 && util_cpu_caps.has_sse2)
+      if (src_type.length == 4 &&
+          util_cpu_caps.has_sse2)
       {
-         assert((num_srcs % 4) == 0);
-
-         num_dsts = num_srcs / 4;
-         dst_type->length = 16;
+         num_dsts = (num_srcs + 3) / 4;
+         dst_type->length = num_srcs * 4 >= 16 ? 16 : num_srcs * 4;
 
          lp_build_conv(gallivm, src_type, *dst_type, src, num_srcs, dst, num_dsts);
          return num_dsts;
       }
 
       /* Special case 2x8f --> 1x16ub */
-      if (src_type.length == 8 && util_cpu_caps.has_avx)
+      if (src_type.length == 8 &&
+          util_cpu_caps.has_avx)
       {
-         assert((num_srcs % 2) == 0);
-
-         num_dsts = num_srcs / 2;
-         dst_type->length = 16;
+         num_dsts = (num_srcs + 1) / 2;
+         dst_type->length = num_srcs * 8 >= 16 ? 16 : num_srcs * 8;
 
          lp_build_conv(gallivm, src_type, *dst_type, src, num_srcs, dst, num_dsts);
          return num_dsts;
@@ -602,7 +524,7 @@ lp_build_conv(struct gallivm_state *gallivm,
    num_tmps = num_srcs;
 
 
-   /* Special case 4x4f --> 1x16ub 
+   /* Special case 4x4f --> 1x16ub, 2x4f -> 1x8ub, 1x4f -> 1x4ub
     */
    if (src_type.floating == 1 &&
        src_type.fixed    == 0 &&
@@ -616,19 +538,22 @@ lp_build_conv(struct gallivm_state *gallivm,
        dst_type.sign     == 0 &&
        dst_type.norm     == 1 &&
        dst_type.width    == 8 &&
-       dst_type.length   == 16 &&
 
-       4 * num_dsts      == num_srcs &&
+       ((dst_type.length == 16 && 4 * num_dsts == num_srcs) ||
+        (num_dsts == 1 && dst_type.length * num_srcs == 16 && num_srcs != 3)) &&
 
        util_cpu_caps.has_sse2)
    {
       struct lp_build_context bld;
-      struct lp_type int16_type = dst_type;
-      struct lp_type int32_type = dst_type;
+      struct lp_type int16_type, int32_type;
+      struct lp_type dst_type_ext = dst_type;
       LLVMValueRef const_255f;
       unsigned i, j;
 
       lp_build_context_init(&bld, gallivm, src_type);
+
+      dst_type_ext.length = 16;
+      int16_type = int32_type = dst_type_ext;
 
       int16_type.width *= 2;
       int16_type.length /= 2;
@@ -643,21 +568,34 @@ lp_build_conv(struct gallivm_state *gallivm,
       for (i = 0; i < num_dsts; ++i, src += 4) {
          LLVMValueRef lo, hi;
 
-         for (j = 0; j < 4; ++j) {
+         for (j = 0; j < dst_type.length / 4; ++j) {
             tmp[j] = LLVMBuildFMul(builder, src[j], const_255f, "");
             tmp[j] = lp_build_iround(&bld, tmp[j]);
          }
 
+         if (num_srcs == 1) {
+            tmp[1] = tmp[0];
+         }
+
          /* relying on clamping behavior of sse2 intrinsics here */
          lo = lp_build_pack2(gallivm, int32_type, int16_type, tmp[0], tmp[1]);
-         hi = lp_build_pack2(gallivm, int32_type, int16_type, tmp[2], tmp[3]);
-         dst[i] = lp_build_pack2(gallivm, int16_type, dst_type, lo, hi);
+
+         if (num_srcs < 4) {
+            hi = lo;
+         }
+         else {
+            hi = lp_build_pack2(gallivm, int32_type, int16_type, tmp[2], tmp[3]);
+         }
+         dst[i] = lp_build_pack2(gallivm, int16_type, dst_type_ext, lo, hi);
+      }
+      if (num_srcs < 4) {
+         dst[0] = lp_build_extract_range(gallivm, dst[0], 0, dst_type.length);
       }
 
       return; 
    }
 
-   /* Special case 2x8f --> 1x16ub
+   /* Special case 2x8f --> 1x16ub, 1x8f ->1x8ub
     */
    else if (src_type.floating == 1 &&
       src_type.fixed    == 0 &&
@@ -671,19 +609,22 @@ lp_build_conv(struct gallivm_state *gallivm,
       dst_type.sign     == 0 &&
       dst_type.norm     == 1 &&
       dst_type.width    == 8 &&
-      dst_type.length   == 16 &&
 
-      2 * num_dsts      == num_srcs &&
+      ((dst_type.length == 16 && 2 * num_dsts == num_srcs) ||
+       (num_dsts == 1 && dst_type.length * num_srcs == 8)) &&
 
       util_cpu_caps.has_avx) {
 
       struct lp_build_context bld;
-      struct lp_type int16_type = dst_type;
-      struct lp_type int32_type = dst_type;
+      struct lp_type int16_type, int32_type;
+      struct lp_type dst_type_ext = dst_type;
       LLVMValueRef const_255f;
       unsigned i;
 
       lp_build_context_init(&bld, gallivm, src_type);
+
+      dst_type_ext.length = 16;
+      int16_type = int32_type = dst_type_ext;
 
       int16_type.width *= 2;
       int16_type.length /= 2;
@@ -699,21 +640,30 @@ lp_build_conv(struct gallivm_state *gallivm,
          LLVMValueRef lo, hi, a, b;
 
          a = LLVMBuildFMul(builder, src[0], const_255f, "");
-         b = LLVMBuildFMul(builder, src[1], const_255f, "");
-
          a = lp_build_iround(&bld, a);
-         b = lp_build_iround(&bld, b);
-
          tmp[0] = lp_build_extract_range(gallivm, a, 0, 4);
          tmp[1] = lp_build_extract_range(gallivm, a, 4, 4);
-         tmp[2] = lp_build_extract_range(gallivm, b, 0, 4);
-         tmp[3] = lp_build_extract_range(gallivm, b, 4, 4);
-
          /* relying on clamping behavior of sse2 intrinsics here */
          lo = lp_build_pack2(gallivm, int32_type, int16_type, tmp[0], tmp[1]);
-         hi = lp_build_pack2(gallivm, int32_type, int16_type, tmp[2], tmp[3]);
-         dst[i] = lp_build_pack2(gallivm, int16_type, dst_type, lo, hi);
+
+         if (num_srcs == 1) {
+            hi = lo;
+         }
+         else {
+            b = LLVMBuildFMul(builder, src[1], const_255f, "");
+            b = lp_build_iround(&bld, b);
+            tmp[2] = lp_build_extract_range(gallivm, b, 0, 4);
+            tmp[3] = lp_build_extract_range(gallivm, b, 4, 4);
+            hi = lp_build_pack2(gallivm, int32_type, int16_type, tmp[2], tmp[3]);
+
+         }
+         dst[i] = lp_build_pack2(gallivm, int16_type, dst_type_ext, lo, hi);
       }
+
+      if (num_srcs == 1) {
+         dst[0] = lp_build_extract_range(gallivm, dst[0], 0, dst_type.length);
+      }
+
       return;
    }
 

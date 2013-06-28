@@ -44,11 +44,16 @@ struct ilo_3d {
    int owner_reserve;
 
    bool new_batch;
-   uint32_t shader_cache_seqno;
+
+   struct {
+      struct intel_bo *bo;
+      unsigned used, size;
+   } kernel;
 
    struct {
       struct pipe_query *query;
       unsigned mode;
+      bool cond;
    } render_condition;
 
    struct list_head occlusion_queries;
@@ -76,6 +81,9 @@ ilo_3d_end_query(struct ilo_context *ilo, struct ilo_query *q);
 
 void
 ilo_3d_process_query(struct ilo_context *ilo, struct ilo_query *q);
+
+bool
+ilo_3d_pass_render_condition(struct ilo_context *ilo);
 
 void
 ilo_init_3d_functions(struct ilo_context *ilo);

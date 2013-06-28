@@ -94,6 +94,24 @@ _mesa_ast_to_hir(exec_list *instructions, struct _mesa_glsl_parse_state *state)
    detect_conflicting_assignments(state, instructions);
 
    state->toplevel_ir = NULL;
+
+   /* Move all of the variable declarations to the front of the IR list, and
+    * reverse the order.  This has the (intended!) side effect that vertex
+    * shader inputs and fragment shader outputs will appear in the IR in the
+    * same order that they appeared in the shader code.  This results in the
+    * locations being assigned in the declared order.  Many (arguably buggy)
+    * applications depend on this behavior, and it matches what nearly all
+    * other drivers do.
+    */
+   foreach_list_safe(node, instructions) {
+      ir_variable *const var = ((ir_instruction *) node)->as_variable();
+
+      if (var == NULL)
+         continue;
+
+      var->remove();
+      instructions->push_head(var);
+   }
 }
 
 
@@ -3358,7 +3376,7 @@ ast_jump_statement::hir(exec_list *instructions,
       assert(state->current_function);
 
       if (opt_return_value) {
-	 ir_rvalue *const ret = opt_return_value->hir(instructions, state);
+	 ir_rvalue *ret = opt_return_value->hir(instructions, state);
 
 	 /* The value of the return type can be NULL if the shader says
 	  * 'return foo();' and foo() is a function that returns void.
@@ -3370,17 +3388,46 @@ ast_jump_statement::hir(exec_list *instructions,
 	 const glsl_type *const ret_type =
 	    (ret == NULL) ? glsl_type::void_type : ret->type;
 
-	 /* Implicit conversions are not allowed for return values. */
-	 if (state->current_function->return_type != ret_type) {
+         /* Implicit conversions are not allowed for return values prior to
+          * ARB_shading_language_420pack.
+          */
+         if (state->current_function->return_type != ret_type) {
 	    YYLTYPE loc = this->get_location();
 
-	    _mesa_glsl_error(& loc, state,
-			     "`return' with wrong type %s, in function `%s' "
-			     "returning %s",
-			     ret_type->name,
-			     state->current_function->function_name(),
-			     state->current_function->return_type->name);
-	 }
+            if (state->ARB_shading_language_420pack_enable) {
+               if (!apply_implicit_conversion(state->current_function->return_type,
+                                              ret, state)) {
+                  _mesa_glsl_error(& loc, state,
+                                   "Could not implicitly convert return value "
+                                   "to %s, in function `%s'",
+                                   state->current_function->return_type->name,
+                                   state->current_function->function_name());
+               }
+            } else {
+               _mesa_glsl_error(& loc, state,
+                                "`return' with wrong type %s, in function `%s' "
+                                "returning %s",
+                                ret_type->name,
+                                state->current_function->function_name(),
+                                state->current_function->return_type->name);
+            }
+         } else if (state->current_function->return_type->base_type ==
+                    GLSL_TYPE_VOID) {
+            YYLTYPE loc = this->get_location();
+
+            /* The ARB_shading_language_420pack, GLSL ES 3.0, and GLSL 4.20
+             * specs add a clarification:
+             *
+             *    "A void function can only use return without a return argument, even if
+             *     the return argument has void type. Return statements only accept values:
+             *
+             *         void func1() { }
+             *         void func2() { return func1(); } // illegal return statement"
+             */
+            _mesa_glsl_error(& loc, state,
+                             "void functions can only use `return' without a "
+                             "return argument");
+         }
 
 	 inst = new(ctx) ir_return(ret);
       } else {

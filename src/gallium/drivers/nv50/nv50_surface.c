@@ -458,6 +458,7 @@ struct nv50_blitctx
    enum pipe_texture_target target;
    struct {
       struct pipe_framebuffer_state fb;
+      struct nv50_rasterizer_stateobj *rast;
       struct nv50_program *vp;
       struct nv50_program *gp;
       struct nv50_program *fp;
@@ -467,6 +468,7 @@ struct nv50_blitctx
       struct nv50_tsc_entry *sampler[2];
       uint32_t dirty;
    } saved;
+   struct nv50_rasterizer_stateobj rast;
 };
 
 static void
@@ -836,9 +838,13 @@ nv50_blitctx_pre_blit(struct nv50_blitctx *ctx)
    ctx->saved.fb.cbufs[0] = nv50->framebuffer.cbufs[0];
    ctx->saved.fb.zsbuf = nv50->framebuffer.zsbuf;
 
+   ctx->saved.rast = nv50->rast;
+
    ctx->saved.vp = nv50->vertprog;
    ctx->saved.gp = nv50->gmtyprog;
    ctx->saved.fp = nv50->fragprog;
+
+   nv50->rast = &ctx->rast;
 
    nv50->vertprog = &blitter->vp;
    nv50->gmtyprog = NULL;
@@ -884,6 +890,8 @@ nv50_blitctx_post_blit(struct nv50_blitctx *blit)
    nv50->framebuffer.cbufs[0] = blit->saved.fb.cbufs[0];
    nv50->framebuffer.zsbuf = blit->saved.fb.zsbuf;
 
+   nv50->rast = blit->saved.rast;
+
    nv50->vertprog = blit->saved.vp;
    nv50->gmtyprog = blit->saved.gp;
    nv50->fragprog = blit->saved.fp;
@@ -902,7 +910,7 @@ nv50_blitctx_post_blit(struct nv50_blitctx *blit)
 
    if (nv50->cond_query)
       nv50->base.pipe.render_condition(&nv50->base.pipe, nv50->cond_query,
-                                       nv50->cond_mode);
+                                       nv50->cond_cond, nv50->cond_mode);
 
    nouveau_bufctx_reset(nv50->bufctx_3d, NV50_BIND_FB);
    nouveau_bufctx_reset(nv50->bufctx_3d, NV50_BIND_TEXTURES);
@@ -1327,6 +1335,8 @@ nv50_blitctx_create(struct nv50_context *nv50)
    }
 
    nv50->blit->nv50 = nv50;
+
+   nv50->blit->rast.pipe.half_pixel_center = 1;
 
    return TRUE;
 }

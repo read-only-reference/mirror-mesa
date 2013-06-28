@@ -29,13 +29,14 @@
  * Binning code for points
  */
 
-#include "lp_setup_context.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
+#include "lp_setup_context.h"
 #include "lp_perf.h"
 #include "lp_rast.h"
 #include "lp_state_fs.h"
 #include "lp_state_setup.h"
+#include "lp_context.h"
 #include "tgsi/tgsi_scan.h"
 
 #define NUM_CHANNELS 4
@@ -302,6 +303,7 @@ static boolean
 try_setup_point( struct lp_setup_context *setup,
                  const float (*v0)[4] )
 {
+   struct llvmpipe_context *lp_context = (struct llvmpipe_context *)setup->pipe;
    /* x/y positions in fixed point */
    const struct lp_setup_variant_key *key = &setup->setup.variant->key;
    const int sizeAttr = setup->psize;
@@ -325,11 +327,17 @@ try_setup_point( struct lp_setup_context *setup,
    unsigned nr_planes = 4;
    struct point_info info;
    unsigned scissor_index = 0;
+   unsigned layer = 0;
 
    if (setup->viewport_index_slot > 0) {
       unsigned *udata = (unsigned*)v0[setup->viewport_index_slot];
       scissor_index = lp_clamp_scissor_idx(*udata);
    }
+   if (setup->layer_slot > 0) {
+      layer = *(unsigned*)v0[setup->layer_slot];
+      layer = MIN2(layer, scene->fb_max_layer);
+   }
+
    /* Bounding rectangle (in pixels) */
    {
       /* Yes this is necessary to accurately calculate bounding boxes
@@ -370,6 +378,12 @@ try_setup_point( struct lp_setup_context *setup,
    point->v[0][1] = v0[0][1];
 #endif
 
+   LP_COUNT(nr_tris);
+
+   if (lp_context->active_statistics_queries) {
+      lp_context->pipeline_statistics.c_primitives++;
+   }
+
    info.v0 = v0;
    info.dx01 = 0;
    info.dx12 = fixed_width;
@@ -386,6 +400,7 @@ try_setup_point( struct lp_setup_context *setup,
    point->inputs.frontfacing = TRUE;
    point->inputs.disable = FALSE;
    point->inputs.opaque = FALSE;
+   point->inputs.layer = layer;
 
    {
       struct lp_rast_plane *plane = GET_PLANES(point);

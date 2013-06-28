@@ -712,12 +712,13 @@ gen6_emit_3DSTATE_URB(const struct ilo_dev_info *dev,
 static void
 gen6_emit_3DSTATE_VERTEX_BUFFERS(const struct ilo_dev_info *dev,
                                  const struct pipe_vertex_buffer *vbuffers,
-                                 const int *instance_divisors,
-                                 uint32_t vbuffer_mask,
+                                 uint64_t vbuffer_mask,
+                                 const struct ilo_ve_state *ve,
                                  struct ilo_cp *cp)
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x08);
    uint8_t cmd_len;
+   unsigned hw_idx;
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
 
@@ -725,27 +726,34 @@ gen6_emit_3DSTATE_VERTEX_BUFFERS(const struct ilo_dev_info *dev,
     * From the Sandy Bridge PRM, volume 2 part 1, page 82:
     *
     *     "From 1 to 33 VBs can be specified..."
-    *
-    * Because of the type of vbuffer_mask, this is always the case.
     */
    assert(vbuffer_mask <= (1UL << 33));
 
    if (!vbuffer_mask)
       return;
 
-   cmd_len = 4 * util_bitcount(vbuffer_mask) + 1;
+   cmd_len = 1;
+
+   for (hw_idx = 0; hw_idx < ve->vb_count; hw_idx++) {
+      const unsigned pipe_idx = ve->vb_mapping[hw_idx];
+
+      if (vbuffer_mask & (1 << pipe_idx))
+         cmd_len += 4;
+   }
 
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
 
-   while (vbuffer_mask) {
-      const int index = u_bit_scan(&vbuffer_mask);
-      const struct pipe_vertex_buffer *vb = &vbuffers[index];
-      const int instance_divisor =
-         (instance_divisors) ? instance_divisors[index] : 0;
+   for (hw_idx = 0; hw_idx < ve->vb_count; hw_idx++) {
+      const unsigned instance_divisor = ve->instance_divisors[hw_idx];
+      const unsigned pipe_idx = ve->vb_mapping[hw_idx];
+      const struct pipe_vertex_buffer *vb = &vbuffers[pipe_idx];
       uint32_t dw;
 
-      dw = index << GEN6_VB0_INDEX_SHIFT;
+      if (!(vbuffer_mask & (1 << pipe_idx)))
+         continue;
+
+      dw = hw_idx << GEN6_VB0_INDEX_SHIFT;
 
       if (instance_divisor)
          dw |= GEN6_VB0_ACCESS_INSTANCEDATA;
@@ -759,7 +767,20 @@ gen6_emit_3DSTATE_VERTEX_BUFFERS(const struct ilo_dev_info *dev,
       if (vb->buffer && vb->stride <= 2048) {
          const struct ilo_buffer *buf = ilo_buffer(vb->buffer);
          const uint32_t start_offset = vb->buffer_offset;
-         const uint32_t end_offset = buf->bo->get_size(buf->bo) - 1;
+         /*
+          * As noted in ilo_translate_format(), we treat some 3-component
+          * formats as 4-component formats to work around hardware
+          * limitations.  Imagine the case where the vertex buffer holds a
+          * single PIPE_FORMAT_R16G16B16_FLOAT vertex, and buf->bo_size is 6.
+          * The hardware would not be able to fetch it because the vertex
+          * buffer is expected to hold a PIPE_FORMAT_R16G16B16A16_FLOAT vertex
+          * and that takes at least 8 bytes.
+          *
+          * For the workaround to work, we query the physical size, which is
+          * page aligned, to calculate end_offset so that the last vertex has
+          * a better chance to be fetched.
+          */
+         const uint32_t end_offset = intel_bo_get_size(buf->bo) - 1;
 
          dw |= vb->stride << BRW_VB0_PITCH_SHIFT;
 
@@ -782,16 +803,163 @@ gen6_emit_3DSTATE_VERTEX_BUFFERS(const struct ilo_dev_info *dev,
 }
 
 static void
+ve_set_cso_edgeflag(const struct ilo_dev_info *dev,
+                    struct ilo_ve_cso *cso)
+{
+   int format;
+
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   /*
+    * From the Sandy Bridge PRM, volume 2 part 1, page 94:
+    *
+    *     "- This bit (Edge Flag Enable) must only be ENABLED on the last
+    *        valid VERTEX_ELEMENT structure.
+    *
+    *      - When set, Component 0 Control must be set to VFCOMP_STORE_SRC,
+    *        and Component 1-3 Control must be set to VFCOMP_NOSTORE.
+    *
+    *      - The Source Element Format must be set to the UINT format.
+    *
+    *      - [DevSNB]: Edge Flags are not supported for QUADLIST
+    *        primitives.  Software may elect to convert QUADLIST primitives
+    *        to some set of corresponding edge-flag-supported primitive
+    *        types (e.g., POLYGONs) prior to submission to the 3D pipeline."
+    */
+
+   cso->payload[0] |= GEN6_VE0_EDGE_FLAG_ENABLE;
+   cso->payload[1] =
+         BRW_VE1_COMPONENT_STORE_SRC << BRW_VE1_COMPONENT_0_SHIFT |
+         BRW_VE1_COMPONENT_NOSTORE << BRW_VE1_COMPONENT_1_SHIFT |
+         BRW_VE1_COMPONENT_NOSTORE << BRW_VE1_COMPONENT_2_SHIFT |
+         BRW_VE1_COMPONENT_NOSTORE << BRW_VE1_COMPONENT_3_SHIFT;
+
+   /*
+    * Edge flags have format BRW_SURFACEFORMAT_R8_UINT when defined via
+    * glEdgeFlagPointer(), and format BRW_SURFACEFORMAT_R32_FLOAT when defined
+    * via glEdgeFlag(), as can be seen in vbo_attrib_tmp.h.
+    *
+    * Since all the hardware cares about is whether the flags are zero or not,
+    * we can treat them as BRW_SURFACEFORMAT_R32_UINT in the latter case.
+    */
+   format = (cso->payload[0] >> BRW_VE0_FORMAT_SHIFT) & 0x1ff;
+   if (format == BRW_SURFACEFORMAT_R32_FLOAT) {
+      STATIC_ASSERT(BRW_SURFACEFORMAT_R32_UINT ==
+            BRW_SURFACEFORMAT_R32_FLOAT - 1);
+
+      cso->payload[0] -= (1 << BRW_VE0_FORMAT_SHIFT);
+   }
+   else {
+      assert(format == BRW_SURFACEFORMAT_R8_UINT);
+   }
+}
+
+static void
+ve_init_cso_with_components(const struct ilo_dev_info *dev,
+                            int comp0, int comp1, int comp2, int comp3,
+                            struct ilo_ve_cso *cso)
+{
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   STATIC_ASSERT(Elements(cso->payload) >= 2);
+   cso->payload[0] = GEN6_VE0_VALID;
+   cso->payload[1] =
+         comp0 << BRW_VE1_COMPONENT_0_SHIFT |
+         comp1 << BRW_VE1_COMPONENT_1_SHIFT |
+         comp2 << BRW_VE1_COMPONENT_2_SHIFT |
+         comp3 << BRW_VE1_COMPONENT_3_SHIFT;
+}
+
+static void
+ve_init_cso(const struct ilo_dev_info *dev,
+            const struct pipe_vertex_element *state,
+            unsigned vb_index,
+            struct ilo_ve_cso *cso)
+{
+   int comp[4] = {
+      BRW_VE1_COMPONENT_STORE_SRC,
+      BRW_VE1_COMPONENT_STORE_SRC,
+      BRW_VE1_COMPONENT_STORE_SRC,
+      BRW_VE1_COMPONENT_STORE_SRC,
+   };
+   int format;
+
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   switch (util_format_get_nr_components(state->src_format)) {
+   case 1: comp[1] = BRW_VE1_COMPONENT_STORE_0;
+   case 2: comp[2] = BRW_VE1_COMPONENT_STORE_0;
+   case 3: comp[3] = (util_format_is_pure_integer(state->src_format)) ?
+                     BRW_VE1_COMPONENT_STORE_1_INT :
+                     BRW_VE1_COMPONENT_STORE_1_FLT;
+   }
+
+   format = ilo_translate_vertex_format(state->src_format);
+
+   STATIC_ASSERT(Elements(cso->payload) >= 2);
+   cso->payload[0] =
+      vb_index << GEN6_VE0_INDEX_SHIFT |
+      GEN6_VE0_VALID |
+      format << BRW_VE0_FORMAT_SHIFT |
+      state->src_offset << BRW_VE0_SRC_OFFSET_SHIFT;
+
+   cso->payload[1] =
+         comp[0] << BRW_VE1_COMPONENT_0_SHIFT |
+         comp[1] << BRW_VE1_COMPONENT_1_SHIFT |
+         comp[2] << BRW_VE1_COMPONENT_2_SHIFT |
+         comp[3] << BRW_VE1_COMPONENT_3_SHIFT;
+}
+
+void
+ilo_gpe_init_ve(const struct ilo_dev_info *dev,
+                unsigned num_states,
+                const struct pipe_vertex_element *states,
+                struct ilo_ve_state *ve)
+{
+   unsigned i;
+
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   ve->count = num_states;
+   ve->vb_count = 0;
+
+   for (i = 0; i < num_states; i++) {
+      const unsigned pipe_idx = states[i].vertex_buffer_index;
+      const unsigned instance_divisor = states[i].instance_divisor;
+      unsigned hw_idx;
+
+      /*
+       * map the pipe vb to the hardware vb, which has a fixed instance
+       * divisor
+       */
+      for (hw_idx = 0; hw_idx < ve->vb_count; hw_idx++) {
+         if (ve->vb_mapping[hw_idx] == pipe_idx &&
+             ve->instance_divisors[hw_idx] == instance_divisor)
+            break;
+      }
+
+      /* create one if there is no matching hardware vb */
+      if (hw_idx >= ve->vb_count) {
+         hw_idx = ve->vb_count++;
+
+         ve->vb_mapping[hw_idx] = pipe_idx;
+         ve->instance_divisors[hw_idx] = instance_divisor;
+      }
+
+      ve_init_cso(dev, &states[i], hw_idx, &ve->cso[i]);
+   }
+}
+
+static void
 gen6_emit_3DSTATE_VERTEX_ELEMENTS(const struct ilo_dev_info *dev,
-                                  const struct pipe_vertex_element *velements,
-                                  int num_velements,
+                                  const struct ilo_ve_state *ve,
                                   bool last_velement_edgeflag,
                                   bool prepend_generated_ids,
                                   struct ilo_cp *cp)
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x09);
    uint8_t cmd_len;
-   int format, i;
+   unsigned i;
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
 
@@ -800,118 +968,58 @@ gen6_emit_3DSTATE_VERTEX_ELEMENTS(const struct ilo_dev_info *dev,
     *
     *     "Up to 34 (DevSNB+) vertex elements are supported."
     */
-   assert(num_velements + prepend_generated_ids <= 34);
+   assert(ve->count + prepend_generated_ids <= 34);
 
-   if (!num_velements && !prepend_generated_ids) {
+   if (!ve->count && !prepend_generated_ids) {
+      struct ilo_ve_cso dummy;
+
+      ve_init_cso_with_components(dev,
+            BRW_VE1_COMPONENT_STORE_0,
+            BRW_VE1_COMPONENT_STORE_0,
+            BRW_VE1_COMPONENT_STORE_0,
+            BRW_VE1_COMPONENT_STORE_1_FLT,
+            &dummy);
+
       cmd_len = 3;
-      format = BRW_SURFACEFORMAT_R32G32B32A32_FLOAT;
-
       ilo_cp_begin(cp, cmd_len);
       ilo_cp_write(cp, cmd | (cmd_len - 2));
-      ilo_cp_write(cp,
-            0 << GEN6_VE0_INDEX_SHIFT |
-            GEN6_VE0_VALID |
-            format << BRW_VE0_FORMAT_SHIFT |
-            0 << BRW_VE0_SRC_OFFSET_SHIFT);
-      ilo_cp_write(cp,
-            BRW_VE1_COMPONENT_STORE_0 << BRW_VE1_COMPONENT_0_SHIFT |
-            BRW_VE1_COMPONENT_STORE_0 << BRW_VE1_COMPONENT_1_SHIFT |
-            BRW_VE1_COMPONENT_STORE_0 << BRW_VE1_COMPONENT_2_SHIFT |
-            BRW_VE1_COMPONENT_STORE_1_FLT << BRW_VE1_COMPONENT_3_SHIFT);
+      ilo_cp_write_multi(cp, dummy.payload, 2);
       ilo_cp_end(cp);
 
       return;
    }
 
-   cmd_len = 2 * (num_velements + prepend_generated_ids) + 1;
+   cmd_len = 2 * (ve->count + prepend_generated_ids) + 1;
 
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
 
    if (prepend_generated_ids) {
-      ilo_cp_write(cp, GEN6_VE0_VALID);
-      ilo_cp_write(cp,
-            BRW_VE1_COMPONENT_STORE_VID << BRW_VE1_COMPONENT_0_SHIFT |
-            BRW_VE1_COMPONENT_STORE_IID << BRW_VE1_COMPONENT_1_SHIFT |
-            BRW_VE1_COMPONENT_NOSTORE << BRW_VE1_COMPONENT_2_SHIFT |
-            BRW_VE1_COMPONENT_NOSTORE << BRW_VE1_COMPONENT_3_SHIFT);
+      struct ilo_ve_cso gen_ids;
+
+      ve_init_cso_with_components(dev,
+            BRW_VE1_COMPONENT_STORE_VID,
+            BRW_VE1_COMPONENT_STORE_IID,
+            BRW_VE1_COMPONENT_NOSTORE,
+            BRW_VE1_COMPONENT_NOSTORE,
+            &gen_ids);
+
+      ilo_cp_write_multi(cp, gen_ids.payload, 2);
    }
 
-   for (i = 0; i < num_velements; i++) {
-      const struct pipe_vertex_element *ve = &velements[i];
-      int comp[4] = {
-         BRW_VE1_COMPONENT_STORE_SRC,
-         BRW_VE1_COMPONENT_STORE_SRC,
-         BRW_VE1_COMPONENT_STORE_SRC,
-         BRW_VE1_COMPONENT_STORE_SRC,
-      };
-      int edgeflag_enable;
+   if (last_velement_edgeflag) {
+      struct ilo_ve_cso edgeflag;
 
-      if (last_velement_edgeflag && i == num_velements - 1) {
-         /*
-          * From the Sandy Bridge PRM, volume 2 part 1, page 94:
-          *
-          *     "* This bit (Edge Flag Enable) must only be ENABLED on the
-          *        last valid VERTEX_ELEMENT structure.
-          *
-          *      * When set, Component 0 Control must be set to
-          *        VFCOMP_STORE_SRC, and Component 1-3 Control must be set to
-          *        VFCOMP_NOSTORE.
-          *
-          *      * The Source Element Format must be set to the UINT format.
-          *
-          *      * [DevSNB]: Edge Flags are not supported for QUADLIST
-          *        primitives.  Software may elect to convert QUADLIST
-          *        primitives to some set of corresponding edge-flag-supported
-          *        primitive types (e.g., POLYGONs) prior to submission to the
-          *        3D pipeline."
-          *
-          * Only a limitied set of primitive types could have Edge Flag Enable
-          * set.  The caller should not set last_velement_edgeflag for such
-          * primitive types.
-          */
-         comp[1] = BRW_VE1_COMPONENT_NOSTORE;
-         comp[2] = BRW_VE1_COMPONENT_NOSTORE;
-         comp[3] = BRW_VE1_COMPONENT_NOSTORE;
+      for (i = 0; i < ve->count - 1; i++)
+         ilo_cp_write_multi(cp, ve->cso[i].payload, 2);
 
-         switch (ve->src_format) {
-         case PIPE_FORMAT_R32_FLOAT:
-            format = ilo_translate_vertex_format(PIPE_FORMAT_R32_UINT);
-            break;
-         default:
-            assert(ve->src_format == PIPE_FORMAT_R8_UINT);
-            format = ilo_translate_vertex_format(ve->src_format);
-            break;
-         }
-
-         edgeflag_enable = GEN6_VE0_EDGE_FLAG_ENABLE;
-      }
-      else {
-         switch (util_format_get_nr_components(ve->src_format)) {
-         case 1: comp[1] = BRW_VE1_COMPONENT_STORE_0;
-         case 2: comp[2] = BRW_VE1_COMPONENT_STORE_0;
-         case 3: comp[3] = (util_format_is_pure_integer(ve->src_format)) ?
-                           BRW_VE1_COMPONENT_STORE_1_INT :
-                           BRW_VE1_COMPONENT_STORE_1_FLT;
-         }
-
-         format = ilo_translate_vertex_format(ve->src_format);
-
-         edgeflag_enable = 0;
-      }
-
-      ilo_cp_write(cp,
-            ve->vertex_buffer_index << GEN6_VE0_INDEX_SHIFT |
-            GEN6_VE0_VALID |
-            format << BRW_VE0_FORMAT_SHIFT |
-            edgeflag_enable |
-            ve->src_offset << BRW_VE0_SRC_OFFSET_SHIFT);
-
-      ilo_cp_write(cp,
-            comp[0] << BRW_VE1_COMPONENT_0_SHIFT |
-            comp[1] << BRW_VE1_COMPONENT_1_SHIFT |
-            comp[2] << BRW_VE1_COMPONENT_2_SHIFT |
-            comp[3] << BRW_VE1_COMPONENT_3_SHIFT);
+      edgeflag = ve->cso[i];
+      ve_set_cso_edgeflag(dev, &edgeflag);
+      ilo_cp_write_multi(cp, edgeflag.payload, 2);
+   }
+   else {
+      for (i = 0; i < ve->count; i++)
+         ilo_cp_write_multi(cp, ve->cso[i].payload, 2);
    }
 
    ilo_cp_end(cp);
@@ -919,13 +1027,13 @@ gen6_emit_3DSTATE_VERTEX_ELEMENTS(const struct ilo_dev_info *dev,
 
 static void
 gen6_emit_3DSTATE_INDEX_BUFFER(const struct ilo_dev_info *dev,
-                               const struct pipe_index_buffer *ib,
+                               const struct ilo_ib_state *ib,
                                bool enable_cut_index,
                                struct ilo_cp *cp)
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x0a);
    const uint8_t cmd_len = 3;
-   const struct ilo_buffer *buf = ilo_buffer(ib->buffer);
+   const struct ilo_buffer *buf = ilo_buffer(ib->resource);
    uint32_t start_offset, end_offset;
    int format;
 
@@ -934,21 +1042,18 @@ gen6_emit_3DSTATE_INDEX_BUFFER(const struct ilo_dev_info *dev,
    if (!buf)
       return;
 
-   format = gen6_translate_index_size(ib->index_size);
+   format = gen6_translate_index_size(ib->state.index_size);
 
-   start_offset = ib->offset;
-   /* start_offset must be aligned to index size */
-   if (start_offset % ib->index_size) {
-      /* TODO need a u_upload_mgr to upload the IB to an aligned address */
-      assert(!"unaligned index buffer offset");
-      start_offset -= start_offset % ib->index_size;
-   }
+   /*
+    * set start_offset to 0 here and adjust pipe_draw_info::start with
+    * ib->draw_start_offset in 3DPRIMITIVE
+    */
+   start_offset = 0;
+   end_offset = buf->bo_size;
 
-   /* end_offset must also be aligned */
-   end_offset = buf->bo->get_size(buf->bo);
-   end_offset -= (end_offset % ib->index_size);
-   /* it is inclusive */
-   end_offset -= 1;
+   /* end_offset must also be aligned and is inclusive */
+   end_offset -= (end_offset % ib->state.index_size);
+   end_offset--;
 
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2) |
@@ -1018,30 +1123,18 @@ gen6_emit_3DSTATE_SCISSOR_STATE_POINTERS(const struct ilo_dev_info *dev,
    ilo_cp_end(cp);
 }
 
-static void
-gen6_emit_3DSTATE_VS(const struct ilo_dev_info *dev,
-                     const struct ilo_shader *vs,
-                     int num_samplers,
-                     struct ilo_cp *cp)
+void
+ilo_gpe_init_vs_cso(const struct ilo_dev_info *dev,
+                    const struct ilo_shader_state *vs,
+                    struct ilo_shader_cso *cso)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x10);
-   const uint8_t cmd_len = 6;
+   int start_grf, vue_read_len, max_threads;
    uint32_t dw2, dw4, dw5;
-   int vue_read_len, max_threads;
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
 
-   if (!vs) {
-      ilo_cp_begin(cp, cmd_len);
-      ilo_cp_write(cp, cmd | (cmd_len - 2));
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_end(cp);
-      return;
-   }
+   start_grf = ilo_shader_get_kernel_param(vs, ILO_KERNEL_URB_DATA_START_REG);
+   vue_read_len = ilo_shader_get_kernel_param(vs, ILO_KERNEL_INPUT_COUNT);
 
    /*
     * From the Sandy Bridge PRM, volume 2 part 1, page 135:
@@ -1053,7 +1146,7 @@ gen6_emit_3DSTATE_VS(const struct ilo_dev_info *dev,
     *     "It is UNDEFINED to set this field to 0 indicating no Vertex URB
     *      data to be read and passed to the thread."
     */
-   vue_read_len = (vs->in.count + 1) / 2;
+   vue_read_len = (vue_read_len + 1) / 2;
    if (!vue_read_len)
       vue_read_len = 1;
 
@@ -1087,11 +1180,9 @@ gen6_emit_3DSTATE_VS(const struct ilo_dev_info *dev,
       break;
    }
 
-   dw2 = ((num_samplers + 3) / 4) << GEN6_VS_SAMPLER_COUNT_SHIFT;
-   if (false)
-      dw2 |= GEN6_VS_FLOATING_POINT_MODE_ALT;
+   dw2 = (true) ? 0 : GEN6_VS_FLOATING_POINT_MODE_ALT;
 
-   dw4 = vs->in.start_grf << GEN6_VS_DISPATCH_START_GRF_SHIFT |
+   dw4 = start_grf << GEN6_VS_DISPATCH_START_GRF_SHIFT |
          vue_read_len << GEN6_VS_URB_READ_LENGTH_SHIFT |
          0 << GEN6_VS_URB_ENTRY_READ_OFFSET_SHIFT;
 
@@ -1103,9 +1194,47 @@ gen6_emit_3DSTATE_VS(const struct ilo_dev_info *dev,
    else
       dw5 |= (max_threads - 1) << GEN6_VS_MAX_THREADS_SHIFT;
 
+   STATIC_ASSERT(Elements(cso->payload) >= 3);
+   cso->payload[0] = dw2;
+   cso->payload[1] = dw4;
+   cso->payload[2] = dw5;
+}
+
+static void
+gen6_emit_3DSTATE_VS(const struct ilo_dev_info *dev,
+                     const struct ilo_shader_state *vs,
+                     int num_samplers,
+                     struct ilo_cp *cp)
+{
+   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x10);
+   const uint8_t cmd_len = 6;
+   const struct ilo_shader_cso *cso;
+   uint32_t dw2, dw4, dw5;
+
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   if (!vs) {
+      ilo_cp_begin(cp, cmd_len);
+      ilo_cp_write(cp, cmd | (cmd_len - 2));
+      ilo_cp_write(cp, 0);
+      ilo_cp_write(cp, 0);
+      ilo_cp_write(cp, 0);
+      ilo_cp_write(cp, 0);
+      ilo_cp_write(cp, 0);
+      ilo_cp_end(cp);
+      return;
+   }
+
+   cso = ilo_shader_get_kernel_cso(vs);
+   dw2 = cso->payload[0];
+   dw4 = cso->payload[1];
+   dw5 = cso->payload[2];
+
+   dw2 |= ((num_samplers + 3) / 4) << GEN6_VS_SAMPLER_COUNT_SHIFT;
+
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
-   ilo_cp_write(cp, vs->cache_offset);
+   ilo_cp_write(cp, ilo_shader_get_kernel_offset(vs));
    ilo_cp_write(cp, dw2);
    ilo_cp_write(cp, 0); /* scratch */
    ilo_cp_write(cp, dw4);
@@ -1113,135 +1242,164 @@ gen6_emit_3DSTATE_VS(const struct ilo_dev_info *dev,
    ilo_cp_end(cp);
 }
 
+void
+ilo_gpe_init_gs_cso_gen6(const struct ilo_dev_info *dev,
+                         const struct ilo_shader_state *gs,
+                         struct ilo_shader_cso *cso)
+{
+   int start_grf, vue_read_len, max_threads;
+   uint32_t dw2, dw4, dw5, dw6;
+
+   ILO_GPE_VALID_GEN(dev, 6, 6);
+
+   if (ilo_shader_get_type(gs) == PIPE_SHADER_GEOMETRY) {
+      start_grf = ilo_shader_get_kernel_param(gs,
+            ILO_KERNEL_URB_DATA_START_REG);
+
+      vue_read_len = ilo_shader_get_kernel_param(gs, ILO_KERNEL_INPUT_COUNT);
+   }
+   else {
+      start_grf = ilo_shader_get_kernel_param(gs,
+            ILO_KERNEL_VS_GEN6_SO_START_REG);
+
+      vue_read_len = ilo_shader_get_kernel_param(gs, ILO_KERNEL_OUTPUT_COUNT);
+   }
+
+   /*
+    * From the Sandy Bridge PRM, volume 2 part 1, page 153:
+    *
+    *     "Specifies the amount of URB data read and passed in the thread
+    *      payload for each Vertex URB entry, in 256-bit register increments.
+    *
+    *      It is UNDEFINED to set this field (Vertex URB Entry Read Length) to
+    *      0 indicating no Vertex URB data to be read and passed to the
+    *      thread."
+    */
+   vue_read_len = (vue_read_len + 1) / 2;
+   if (!vue_read_len)
+      vue_read_len = 1;
+
+   /*
+    * From the Sandy Bridge PRM, volume 2 part 1, page 154:
+    *
+    *     "Maximum Number of Threads valid range is [0,27] when Rendering
+    *      Enabled bit is set."
+    *
+    * From the Sandy Bridge PRM, volume 2 part 1, page 173:
+    *
+    *     "Programming Note: If the GS stage is enabled, software must always
+    *      allocate at least one GS URB Entry. This is true even if the GS
+    *      thread never needs to output vertices to the pipeline, e.g., when
+    *      only performing stream output. This is an artifact of the need to
+    *      pass the GS thread an initial destination URB handle."
+    *
+    * As such, we always enable rendering, and limit the number of threads.
+    */
+   if (dev->gt == 2) {
+      /* maximum is 60, but limited to 28 */
+      max_threads = 28;
+   }
+   else {
+      /* maximum is 24, but limited to 21 (see brwCreateContext()) */
+      max_threads = 21;
+   }
+
+   dw2 = GEN6_GS_SPF_MODE;
+
+   dw4 = vue_read_len << GEN6_GS_URB_READ_LENGTH_SHIFT |
+         0 << GEN6_GS_URB_ENTRY_READ_OFFSET_SHIFT |
+         start_grf << GEN6_GS_DISPATCH_START_GRF_SHIFT;
+
+   dw5 = (max_threads - 1) << GEN6_GS_MAX_THREADS_SHIFT |
+         GEN6_GS_STATISTICS_ENABLE |
+         GEN6_GS_SO_STATISTICS_ENABLE |
+         GEN6_GS_RENDERING_ENABLE;
+
+   /*
+    * we cannot make use of GEN6_GS_REORDER because it will reorder
+    * triangle strips according to D3D rules (triangle 2N+1 uses vertices
+    * (2N+1, 2N+3, 2N+2)), instead of GL rules (triangle 2N+1 uses vertices
+    * (2N+2, 2N+1, 2N+3)).
+    */
+   dw6 = GEN6_GS_ENABLE;
+
+   if (ilo_shader_get_kernel_param(gs, ILO_KERNEL_GS_DISCARD_ADJACENCY))
+      dw6 |= GEN6_GS_DISCARD_ADJACENCY;
+
+   if (ilo_shader_get_kernel_param(gs, ILO_KERNEL_VS_GEN6_SO)) {
+      const uint32_t svbi_post_inc =
+         ilo_shader_get_kernel_param(gs, ILO_KERNEL_GS_GEN6_SVBI_POST_INC);
+
+      dw6 |= GEN6_GS_SVBI_PAYLOAD_ENABLE;
+      if (svbi_post_inc) {
+         dw6 |= GEN6_GS_SVBI_POSTINCREMENT_ENABLE |
+                svbi_post_inc << GEN6_GS_SVBI_POSTINCREMENT_VALUE_SHIFT;
+      }
+   }
+
+   STATIC_ASSERT(Elements(cso->payload) >= 4);
+   cso->payload[0] = dw2;
+   cso->payload[1] = dw4;
+   cso->payload[2] = dw5;
+   cso->payload[3] = dw6;
+}
+
 static void
 gen6_emit_3DSTATE_GS(const struct ilo_dev_info *dev,
-                     const struct ilo_shader *gs,
-                     const struct ilo_shader *vs,
-                     uint32_t vs_offset,
+                     const struct ilo_shader_state *gs,
+                     const struct ilo_shader_state *vs,
+                     int verts_per_prim,
                      struct ilo_cp *cp)
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x11);
    const uint8_t cmd_len = 7;
    uint32_t dw1, dw2, dw4, dw5, dw6;
-   int i;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
-   if (!gs && (!vs || !vs->stream_output)) {
+   if (gs) {
+      const struct ilo_shader_cso *cso;
+
+      dw1 = ilo_shader_get_kernel_offset(gs);
+
+      cso = ilo_shader_get_kernel_cso(gs);
+      dw2 = cso->payload[0];
+      dw4 = cso->payload[1];
+      dw5 = cso->payload[2];
+      dw6 = cso->payload[3];
+   }
+   else if (vs && ilo_shader_get_kernel_param(vs, ILO_KERNEL_VS_GEN6_SO)) {
+      struct ilo_shader_cso cso;
+      enum ilo_kernel_param param;
+
+      switch (verts_per_prim) {
+      case 1:
+         param = ILO_KERNEL_VS_GEN6_SO_POINT_OFFSET;
+         break;
+      case 2:
+         param = ILO_KERNEL_VS_GEN6_SO_LINE_OFFSET;
+         break;
+      default:
+         param = ILO_KERNEL_VS_GEN6_SO_TRI_OFFSET;
+         break;
+      }
+
+      dw1 = ilo_shader_get_kernel_offset(vs) +
+         ilo_shader_get_kernel_param(vs, param);
+
+      /* cannot use VS's CSO */
+      ilo_gpe_init_gs_cso_gen6(dev, vs, &cso);
+      dw2 = cso.payload[0];
+      dw4 = cso.payload[1];
+      dw5 = cso.payload[2];
+      dw6 = cso.payload[3];
+   }
+   else {
       dw1 = 0;
       dw2 = 0;
       dw4 = 1 << GEN6_GS_URB_READ_LENGTH_SHIFT;
       dw5 = GEN6_GS_STATISTICS_ENABLE;
       dw6 = 0;
-   }
-   else {
-      int max_threads, vue_read_len;
-
-      /*
-       * From the Sandy Bridge PRM, volume 2 part 1, page 154:
-       *
-       *     "Maximum Number of Threads valid range is [0,27] when Rendering
-       *      Enabled bit is set."
-       *
-       * From the Sandy Bridge PRM, volume 2 part 1, page 173:
-       *
-       *     "Programming Note: If the GS stage is enabled, software must
-       *      always allocate at least one GS URB Entry. This is true even if
-       *      the GS thread never needs to output vertices to the pipeline,
-       *      e.g., when only performing stream output. This is an artifact of
-       *      the need to pass the GS thread an initial destination URB
-       *      handle."
-       *
-       * As such, we always enable rendering, and limit the number of threads.
-       */
-      if (dev->gt == 2) {
-         /* maximum is 60, but limited to 28 */
-         max_threads = 28;
-      }
-      else {
-         /* maximum is 24, but limited to 21 (see brwCreateContext()) */
-         max_threads = 21;
-      }
-
-      if (max_threads > 28)
-         max_threads = 28;
-
-      dw2 = GEN6_GS_SPF_MODE;
-
-      dw5 = (max_threads - 1) << GEN6_GS_MAX_THREADS_SHIFT |
-            GEN6_GS_STATISTICS_ENABLE |
-            GEN6_GS_SO_STATISTICS_ENABLE |
-            GEN6_GS_RENDERING_ENABLE;
-
-      /*
-       * we cannot make use of GEN6_GS_REORDER because it will reorder
-       * triangle strips according to D3D rules (triangle 2N+1 uses vertices
-       * (2N+1, 2N+3, 2N+2)), instead of GL rules (triangle 2N+1 uses vertices
-       * (2N+2, 2N+1, 2N+3)).
-       */
-      dw6 = GEN6_GS_ENABLE;
-
-      if (gs) {
-         /* VS ouputs must match GS inputs */
-         assert(gs->in.count == vs->out.count);
-         for (i = 0; i < gs->in.count; i++) {
-            assert(gs->in.semantic_names[i] == vs->out.semantic_names[i]);
-            assert(gs->in.semantic_indices[i] == vs->out.semantic_indices[i]);
-         }
-
-         /*
-          * From the Sandy Bridge PRM, volume 2 part 1, page 153:
-          *
-          *     "It is UNDEFINED to set this field (Vertex URB Entry Read
-          *      Length) to 0 indicating no Vertex URB data to be read and
-          *      passed to the thread."
-          */
-         vue_read_len = (gs->in.count + 1) / 2;
-         if (!vue_read_len)
-            vue_read_len = 1;
-
-         dw1 = gs->cache_offset;
-         dw4 = vue_read_len << GEN6_GS_URB_READ_LENGTH_SHIFT |
-               0 << GEN6_GS_URB_ENTRY_READ_OFFSET_SHIFT |
-               gs->in.start_grf << GEN6_GS_DISPATCH_START_GRF_SHIFT;
-
-         if (gs->in.discard_adj)
-            dw6 |= GEN6_GS_DISCARD_ADJACENCY;
-
-         if (gs->stream_output) {
-            dw6 |= GEN6_GS_SVBI_PAYLOAD_ENABLE;
-            if (gs->svbi_post_inc) {
-               dw6 |= GEN6_GS_SVBI_POSTINCREMENT_ENABLE |
-                      gs->svbi_post_inc << GEN6_GS_SVBI_POSTINCREMENT_VALUE_SHIFT;
-            }
-         }
-      }
-      else {
-         /*
-          * From the Sandy Bridge PRM, volume 2 part 1, page 153:
-          *
-          *     "It is UNDEFINED to set this field (Vertex URB Entry Read
-          *      Length) to 0 indicating no Vertex URB data to be read and
-          *      passed to the thread."
-          */
-         vue_read_len = (vs->out.count + 1) / 2;
-         if (!vue_read_len)
-            vue_read_len = 1;
-
-         dw1 = vs_offset;
-         dw4 = vue_read_len << GEN6_GS_URB_READ_LENGTH_SHIFT |
-               0 << GEN6_GS_URB_ENTRY_READ_OFFSET_SHIFT |
-               vs->gs_start_grf << GEN6_GS_DISPATCH_START_GRF_SHIFT;
-
-         if (vs->in.discard_adj)
-            dw6 |= GEN6_GS_DISCARD_ADJACENCY;
-
-         dw6 |= GEN6_GS_SVBI_PAYLOAD_ENABLE;
-         if (vs->svbi_post_inc) {
-            dw6 |= GEN6_GS_SVBI_POSTINCREMENT_ENABLE |
-                   vs->svbi_post_inc << GEN6_GS_SVBI_POSTINCREMENT_VALUE_SHIFT;
-         }
-      }
    }
 
    ilo_cp_begin(cp, cmd_len);
@@ -1255,30 +1413,14 @@ gen6_emit_3DSTATE_GS(const struct ilo_dev_info *dev,
    ilo_cp_end(cp);
 }
 
-static void
-gen6_emit_3DSTATE_CLIP(const struct ilo_dev_info *dev,
-                       const struct pipe_rasterizer_state *rasterizer,
-                       bool has_linear_interp,
-                       bool enable_guardband,
-                       int num_viewports,
-                       struct ilo_cp *cp)
+void
+ilo_gpe_init_rasterizer_clip(const struct ilo_dev_info *dev,
+                             const struct pipe_rasterizer_state *state,
+                             struct ilo_rasterizer_clip *clip)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x12);
-   const uint8_t cmd_len = 4;
    uint32_t dw1, dw2, dw3;
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
-
-   if (!rasterizer) {
-      ilo_cp_begin(cp, cmd_len);
-      ilo_cp_write(cp, cmd | (cmd_len - 2));
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_end(cp);
-
-      return;
-   }
 
    dw1 = GEN6_CLIP_STATISTICS_ENABLE;
 
@@ -1295,10 +1437,10 @@ gen6_emit_3DSTATE_CLIP(const struct ilo_dev_info *dev,
       dw1 |= 0 << 19 |
              GEN7_CLIP_EARLY_CULL;
 
-      if (rasterizer->front_ccw)
+      if (state->front_ccw)
          dw1 |= GEN7_CLIP_WINDING_CCW;
 
-      switch (rasterizer->cull_face) {
+      switch (state->cull_face) {
       case PIPE_FACE_NONE:
          dw1 |= GEN7_CLIP_CULLMODE_NONE;
          break;
@@ -1316,38 +1458,18 @@ gen6_emit_3DSTATE_CLIP(const struct ilo_dev_info *dev,
 
    dw2 = GEN6_CLIP_ENABLE |
          GEN6_CLIP_XY_TEST |
-         rasterizer->clip_plane_enable << GEN6_USER_CLIP_CLIP_DISTANCES_SHIFT |
+         state->clip_plane_enable << GEN6_USER_CLIP_CLIP_DISTANCES_SHIFT |
          GEN6_CLIP_MODE_NORMAL;
 
-   if (rasterizer->clip_halfz)
+   if (state->clip_halfz)
       dw2 |= GEN6_CLIP_API_D3D;
    else
       dw2 |= GEN6_CLIP_API_OGL;
 
-   if (rasterizer->depth_clip)
+   if (state->depth_clip)
       dw2 |= GEN6_CLIP_Z_TEST;
 
-   /*
-    * There are several reasons that guard band test should be disabled
-    *
-    *  - when the renderer does not perform 2D clipping
-    *  - GL wide points (to avoid partially visibie object)
-    *  - GL wide or AA lines (to avoid partially visibie object)
-    */
-   if (enable_guardband && true /* API_GL */) {
-      if (rasterizer->point_size_per_vertex || rasterizer->point_size > 1.0f)
-         enable_guardband = false;
-      if (rasterizer->line_smooth || rasterizer->line_width > 1.0f)
-         enable_guardband = false;
-   }
-
-   if (enable_guardband)
-      dw2 |= GEN6_CLIP_GB_TEST;
-
-   if (has_linear_interp)
-      dw2 |= GEN6_CLIP_NON_PERSPECTIVE_BARYCENTRIC_ENABLE;
-
-   if (rasterizer->flatshade_first) {
+   if (state->flatshade_first) {
       dw2 |= 0 << GEN6_CLIP_TRI_PROVOKE_SHIFT |
              0 << GEN6_CLIP_LINE_PROVOKE_SHIFT |
              1 << GEN6_CLIP_TRIFAN_PROVOKE_SHIFT;
@@ -1359,9 +1481,64 @@ gen6_emit_3DSTATE_CLIP(const struct ilo_dev_info *dev,
    }
 
    dw3 = 0x1 << GEN6_CLIP_MIN_POINT_WIDTH_SHIFT |
-         0x7ff << GEN6_CLIP_MAX_POINT_WIDTH_SHIFT |
-         GEN6_CLIP_FORCE_ZERO_RTAINDEX |
-         (num_viewports - 1);
+         0x7ff << GEN6_CLIP_MAX_POINT_WIDTH_SHIFT;
+
+   clip->payload[0] = dw1;
+   clip->payload[1] = dw2;
+   clip->payload[2] = dw3;
+
+   clip->can_enable_guardband = true;
+
+   /*
+    * There are several reasons that guard band test should be disabled
+    *
+    *  - GL wide points (to avoid partially visibie object)
+    *  - GL wide or AA lines (to avoid partially visibie object)
+    */
+   if (state->point_size_per_vertex || state->point_size > 1.0f)
+      clip->can_enable_guardband = false;
+   if (state->line_smooth || state->line_width > 1.0f)
+      clip->can_enable_guardband = false;
+}
+
+static void
+gen6_emit_3DSTATE_CLIP(const struct ilo_dev_info *dev,
+                       const struct ilo_rasterizer_state *rasterizer,
+                       const struct ilo_shader_state *fs,
+                       bool enable_guardband,
+                       int num_viewports,
+                       struct ilo_cp *cp)
+{
+   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x12);
+   const uint8_t cmd_len = 4;
+   uint32_t dw1, dw2, dw3;
+
+   if (rasterizer) {
+      int interps;
+
+      dw1 = rasterizer->clip.payload[0];
+      dw2 = rasterizer->clip.payload[1];
+      dw3 = rasterizer->clip.payload[2];
+
+      if (enable_guardband && rasterizer->clip.can_enable_guardband)
+         dw2 |= GEN6_CLIP_GB_TEST;
+
+      interps = (fs) ?  ilo_shader_get_kernel_param(fs,
+            ILO_KERNEL_FS_BARYCENTRIC_INTERPOLATIONS) : 0;
+
+      if (interps & (1 << BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC |
+                     1 << BRW_WM_NONPERSPECTIVE_CENTROID_BARYCENTRIC |
+                     1 << BRW_WM_NONPERSPECTIVE_SAMPLE_BARYCENTRIC))
+         dw2 |= GEN6_CLIP_NON_PERSPECTIVE_BARYCENTRIC_ENABLE;
+
+      dw3 |= GEN6_CLIP_FORCE_ZERO_RTAINDEX |
+             (num_viewports - 1);
+   }
+   else {
+      dw1 = 0;
+      dw2 = 0;
+      dw3 = 0;
+   }
 
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
@@ -1371,95 +1548,25 @@ gen6_emit_3DSTATE_CLIP(const struct ilo_dev_info *dev,
    ilo_cp_end(cp);
 }
 
-/**
- * Fill in DW2 to DW7 of 3DSTATE_SF.
- */
 void
-ilo_gpe_gen6_fill_3dstate_sf_raster(const struct ilo_dev_info *dev,
-                                    const struct pipe_rasterizer_state *rasterizer,
-                                    int num_samples,
-                                    enum pipe_format depth_format,
-                                    bool separate_stencil,
-                                    uint32_t *dw, int num_dwords)
+ilo_gpe_init_rasterizer_sf(const struct ilo_dev_info *dev,
+                           const struct pipe_rasterizer_state *state,
+                           struct ilo_rasterizer_sf *sf)
 {
    float offset_const, offset_scale, offset_clamp;
-   int format, line_width, point_width;
+   int line_width, point_width;
+   uint32_t dw1, dw2, dw3;
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
-   assert(num_dwords == 6);
-
-   if (!rasterizer) {
-      dw[0] = 0;
-      dw[1] = (num_samples > 1) ? GEN6_SF_MSRAST_ON_PATTERN : 0;
-      dw[2] = 0;
-      dw[3] = 0;
-      dw[4] = 0;
-      dw[5] = 0;
-
-      return;
-   }
 
    /*
     * Scale the constant term.  The minimum representable value used by the HW
     * is not large enouch to be the minimum resolvable difference.
     */
-   offset_const = rasterizer->offset_units * 2.0f;
+   offset_const = state->offset_units * 2.0f;
 
-   offset_scale = rasterizer->offset_scale;
-   offset_clamp = rasterizer->offset_clamp;
-
-   if (separate_stencil) {
-      switch (depth_format) {
-      case PIPE_FORMAT_Z24_UNORM_S8_UINT:
-         depth_format = PIPE_FORMAT_Z24X8_UNORM;
-         break;
-      case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
-         depth_format = PIPE_FORMAT_Z32_FLOAT;;
-         break;
-      case PIPE_FORMAT_S8_UINT:
-         depth_format = PIPE_FORMAT_NONE;
-         break;
-      default:
-         break;
-      }
-   }
-
-   format = gen6_translate_depth_format(depth_format);
-   /* FLOAT surface is assumed when there is no depth buffer */
-   if (format < 0)
-      format = BRW_DEPTHFORMAT_D32_FLOAT;
-
-   /*
-    * Smooth lines should intersect ceil(line_width) or (ceil(line_width) + 1)
-    * pixels in the minor direction.  We have to make the lines slightly
-    * thicker, 0.5 pixel on both sides, so that they intersect that many
-    * pixels are considered into the lines.
-    *
-    * Line width is in U3.7.
-    */
-   line_width = (int) ((rasterizer->line_width +
-            (float) rasterizer->line_smooth) * 128.0f + 0.5f);
-   line_width = CLAMP(line_width, 0, 1023);
-
-   /*
-    * From the Sandy Bridge PRM, volume 2 part 1, page 251:
-    *
-    *     "Software must not program a value of 0.0 when running in
-    *      MSRASTMODE_ON_xxx modes - zero-width lines are not available when
-    *      multisampling rasterization is enabled."
-    */
-   if (rasterizer->multisample) {
-      if (!line_width)
-         line_width = 128; /* 1.0f */
-   }
-   else if (line_width == 128 && !rasterizer->line_smooth) {
-      /* use GIQ rules */
-      line_width = 0;
-   }
-
-   /* in U8.3 */
-   point_width = (int) (rasterizer->point_size * 8.0f + 0.5f);
-   point_width = CLAMP(point_width, 1, 2047);
+   offset_scale = state->offset_scale;
+   offset_clamp = state->offset_clamp;
 
    /*
     * From the Sandy Bridge PRM, volume 2 part 1, page 248:
@@ -1469,13 +1576,11 @@ ilo_gpe_gen6_fill_3dstate_sf_raster(const struct ilo_dev_info *dev,
     *      should be cleared if clipping is disabled or Statistics Enable in
     *      CLIP_STATE is clear."
     */
-   dw[0] = GEN6_SF_STATISTICS_ENABLE |
-           GEN6_SF_VIEWPORT_TRANSFORM_ENABLE;
+   dw1 = GEN6_SF_STATISTICS_ENABLE |
+         GEN6_SF_VIEWPORT_TRANSFORM_ENABLE;
 
    /* XXX GEN6 path seems to work fine for GEN7 */
    if (false && dev->gen >= ILO_GEN(7)) {
-      dw[0] |= format << GEN7_SF_DEPTH_BUFFER_SURFACE_FORMAT_SHIFT;
-
       /*
        * From the Ivy Bridge PRM, volume 2 part 1, page 258:
        *
@@ -1485,15 +1590,13 @@ ilo_gpe_gen6_fill_3dstate_sf_raster(const struct ilo_dev_info *dev,
        *      bias (Slope, Bias) values are used. Setting this bit may have
        *      some degradation of performance for some workloads."
        */
-      if (rasterizer->offset_tri ||
-          rasterizer->offset_line ||
-          rasterizer->offset_point) {
+      if (state->offset_tri || state->offset_line || state->offset_point) {
          /* XXX need to scale offset_const according to the depth format */
-         dw[0] |= GEN6_SF_LEGACY_GLOBAL_DEPTH_BIAS;
+         dw1 |= GEN6_SF_LEGACY_GLOBAL_DEPTH_BIAS;
 
-         dw[0] |= GEN6_SF_GLOBAL_DEPTH_OFFSET_SOLID |
-                  GEN6_SF_GLOBAL_DEPTH_OFFSET_WIREFRAME |
-                  GEN6_SF_GLOBAL_DEPTH_OFFSET_POINT;
+         dw1 |= GEN6_SF_GLOBAL_DEPTH_OFFSET_SOLID |
+                GEN6_SF_GLOBAL_DEPTH_OFFSET_WIREFRAME |
+                GEN6_SF_GLOBAL_DEPTH_OFFSET_POINT;
       }
       else {
          offset_const = 0.0f;
@@ -1502,47 +1605,44 @@ ilo_gpe_gen6_fill_3dstate_sf_raster(const struct ilo_dev_info *dev,
       }
    }
    else {
-      if (dev->gen >= ILO_GEN(7))
-         dw[0] |= format << GEN7_SF_DEPTH_BUFFER_SURFACE_FORMAT_SHIFT;
-
-      if (rasterizer->offset_tri)
-         dw[0] |= GEN6_SF_GLOBAL_DEPTH_OFFSET_SOLID;
-      if (rasterizer->offset_line)
-         dw[0] |= GEN6_SF_GLOBAL_DEPTH_OFFSET_WIREFRAME;
-      if (rasterizer->offset_point)
-         dw[0] |= GEN6_SF_GLOBAL_DEPTH_OFFSET_POINT;
+      if (state->offset_tri)
+         dw1 |= GEN6_SF_GLOBAL_DEPTH_OFFSET_SOLID;
+      if (state->offset_line)
+         dw1 |= GEN6_SF_GLOBAL_DEPTH_OFFSET_WIREFRAME;
+      if (state->offset_point)
+         dw1 |= GEN6_SF_GLOBAL_DEPTH_OFFSET_POINT;
    }
 
-   switch (rasterizer->fill_front) {
+   switch (state->fill_front) {
    case PIPE_POLYGON_MODE_FILL:
-      dw[0] |= GEN6_SF_FRONT_SOLID;
+      dw1 |= GEN6_SF_FRONT_SOLID;
       break;
    case PIPE_POLYGON_MODE_LINE:
-      dw[0] |= GEN6_SF_FRONT_WIREFRAME;
+      dw1 |= GEN6_SF_FRONT_WIREFRAME;
       break;
    case PIPE_POLYGON_MODE_POINT:
-      dw[0] |= GEN6_SF_FRONT_POINT;
+      dw1 |= GEN6_SF_FRONT_POINT;
       break;
    }
 
-   switch (rasterizer->fill_back) {
+   switch (state->fill_back) {
    case PIPE_POLYGON_MODE_FILL:
-      dw[0] |= GEN6_SF_BACK_SOLID;
+      dw1 |= GEN6_SF_BACK_SOLID;
       break;
    case PIPE_POLYGON_MODE_LINE:
-      dw[0] |= GEN6_SF_BACK_WIREFRAME;
+      dw1 |= GEN6_SF_BACK_WIREFRAME;
       break;
    case PIPE_POLYGON_MODE_POINT:
-      dw[0] |= GEN6_SF_BACK_POINT;
+      dw1 |= GEN6_SF_BACK_POINT;
       break;
    }
 
-   if (rasterizer->front_ccw)
-      dw[0] |= GEN6_SF_WINDING_CCW;
+   if (state->front_ccw)
+      dw1 |= GEN6_SF_WINDING_CCW;
 
-   dw[1] = 0;
+   dw2 = 0;
 
-   if (rasterizer->line_smooth) {
+   if (state->line_smooth) {
       /*
        * From the Sandy Bridge PRM, volume 2 part 1, page 251:
        *
@@ -1556,58 +1656,156 @@ ilo_gpe_gen6_fill_3dstate_sf_raster(const struct ilo_dev_info *dev,
        *
        * TODO We do not check those yet.
        */
-      dw[1] |= GEN6_SF_LINE_AA_ENABLE |
-               GEN6_SF_LINE_END_CAP_WIDTH_1_0;
+      dw2 |= GEN6_SF_LINE_AA_ENABLE |
+             GEN6_SF_LINE_END_CAP_WIDTH_1_0;
    }
 
-   switch (rasterizer->cull_face) {
+   switch (state->cull_face) {
    case PIPE_FACE_NONE:
-      dw[1] |= GEN6_SF_CULL_NONE;
+      dw2 |= GEN6_SF_CULL_NONE;
       break;
    case PIPE_FACE_FRONT:
-      dw[1] |= GEN6_SF_CULL_FRONT;
+      dw2 |= GEN6_SF_CULL_FRONT;
       break;
    case PIPE_FACE_BACK:
-      dw[1] |= GEN6_SF_CULL_BACK;
+      dw2 |= GEN6_SF_CULL_BACK;
       break;
    case PIPE_FACE_FRONT_AND_BACK:
-      dw[1] |= GEN6_SF_CULL_BOTH;
+      dw2 |= GEN6_SF_CULL_BOTH;
       break;
    }
 
-   dw[1] |= line_width << GEN6_SF_LINE_WIDTH_SHIFT;
+   /*
+    * Smooth lines should intersect ceil(line_width) or (ceil(line_width) + 1)
+    * pixels in the minor direction.  We have to make the lines slightly
+    * thicker, 0.5 pixel on both sides, so that they intersect that many
+    * pixels are considered into the lines.
+    *
+    * Line width is in U3.7.
+    */
+   line_width = (int) ((state->line_width +
+            (float) state->line_smooth) * 128.0f + 0.5f);
+   line_width = CLAMP(line_width, 0, 1023);
 
-   if (rasterizer->scissor)
-      dw[1] |= GEN6_SF_SCISSOR_ENABLE;
+   if (line_width == 128 && !state->line_smooth) {
+      /* use GIQ rules */
+      line_width = 0;
+   }
 
-   if (num_samples > 1 && rasterizer->multisample)
-      dw[1] |= GEN6_SF_MSRAST_ON_PATTERN;
+   dw2 |= line_width << GEN6_SF_LINE_WIDTH_SHIFT;
 
-   dw[2] = GEN6_SF_LINE_AA_MODE_TRUE |
-           GEN6_SF_VERTEX_SUBPIXEL_8BITS;
+   if (state->scissor)
+      dw2 |= GEN6_SF_SCISSOR_ENABLE;
 
-   if (rasterizer->line_last_pixel)
-      dw[2] |= 1 << 31;
+   dw3 = GEN6_SF_LINE_AA_MODE_TRUE |
+         GEN6_SF_VERTEX_SUBPIXEL_8BITS;
 
-   if (rasterizer->flatshade_first) {
-      dw[2] |= 0 << GEN6_SF_TRI_PROVOKE_SHIFT |
-               0 << GEN6_SF_LINE_PROVOKE_SHIFT |
-               1 << GEN6_SF_TRIFAN_PROVOKE_SHIFT;
+   if (state->line_last_pixel)
+      dw3 |= 1 << 31;
+
+   if (state->flatshade_first) {
+      dw3 |= 0 << GEN6_SF_TRI_PROVOKE_SHIFT |
+             0 << GEN6_SF_LINE_PROVOKE_SHIFT |
+             1 << GEN6_SF_TRIFAN_PROVOKE_SHIFT;
    }
    else {
-      dw[2] |= 2 << GEN6_SF_TRI_PROVOKE_SHIFT |
-               1 << GEN6_SF_LINE_PROVOKE_SHIFT |
-               2 << GEN6_SF_TRIFAN_PROVOKE_SHIFT;
+      dw3 |= 2 << GEN6_SF_TRI_PROVOKE_SHIFT |
+             1 << GEN6_SF_LINE_PROVOKE_SHIFT |
+             2 << GEN6_SF_TRIFAN_PROVOKE_SHIFT;
    }
 
-   if (!rasterizer->point_size_per_vertex)
-      dw[2] |= GEN6_SF_USE_STATE_POINT_WIDTH;
+   if (!state->point_size_per_vertex)
+      dw3 |= GEN6_SF_USE_STATE_POINT_WIDTH;
 
-   dw[2] |= point_width;
+   /* in U8.3 */
+   point_width = (int) (state->point_size * 8.0f + 0.5f);
+   point_width = CLAMP(point_width, 1, 2047);
 
-   dw[3] = fui(offset_const);
-   dw[4] = fui(offset_scale);
-   dw[5] = fui(offset_clamp);
+   dw3 |= point_width;
+
+   STATIC_ASSERT(Elements(sf->payload) >= 6);
+   sf->payload[0] = dw1;
+   sf->payload[1] = dw2;
+   sf->payload[2] = dw3;
+   sf->payload[3] = fui(offset_const);
+   sf->payload[4] = fui(offset_scale);
+   sf->payload[5] = fui(offset_clamp);
+
+   if (state->multisample) {
+      sf->dw_msaa = GEN6_SF_MSRAST_ON_PATTERN;
+
+      /*
+       * From the Sandy Bridge PRM, volume 2 part 1, page 251:
+       *
+       *     "Software must not program a value of 0.0 when running in
+       *      MSRASTMODE_ON_xxx modes - zero-width lines are not available
+       *      when multisampling rasterization is enabled."
+       */
+      if (!line_width) {
+         line_width = 128; /* 1.0f */
+
+         sf->dw_msaa |= line_width << GEN6_SF_LINE_WIDTH_SHIFT;
+      }
+   }
+   else {
+      sf->dw_msaa = 0;
+   }
+}
+
+/**
+ * Fill in DW2 to DW7 of 3DSTATE_SF.
+ */
+void
+ilo_gpe_gen6_fill_3dstate_sf_raster(const struct ilo_dev_info *dev,
+                                    const struct ilo_rasterizer_state *rasterizer,
+                                    int num_samples,
+                                    enum pipe_format depth_format,
+                                    uint32_t *payload, unsigned payload_len)
+{
+   const struct ilo_rasterizer_sf *sf = &rasterizer->sf;
+
+   assert(payload_len == Elements(sf->payload));
+
+   if (sf) {
+      memcpy(payload, sf->payload, sizeof(sf->payload));
+
+      if (num_samples > 1)
+         payload[1] |= sf->dw_msaa;
+
+      if (dev->gen >= ILO_GEN(7)) {
+         int format;
+
+         /* separate stencil */
+         switch (depth_format) {
+         case PIPE_FORMAT_Z24_UNORM_S8_UINT:
+            depth_format = PIPE_FORMAT_Z24X8_UNORM;
+            break;
+         case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
+            depth_format = PIPE_FORMAT_Z32_FLOAT;;
+            break;
+         case PIPE_FORMAT_S8_UINT:
+            depth_format = PIPE_FORMAT_NONE;
+            break;
+         default:
+            break;
+         }
+
+         format = gen6_translate_depth_format(depth_format);
+         /* FLOAT surface is assumed when there is no depth buffer */
+         if (format < 0)
+            format = BRW_DEPTHFORMAT_D32_FLOAT;
+
+         payload[0] |= format << GEN7_SF_DEPTH_BUFFER_SURFACE_FORMAT_SHIFT;
+      }
+   }
+   else {
+      payload[0] = 0;
+      payload[1] = (num_samples > 1) ? GEN6_SF_MSRAST_ON_PATTERN : 0;
+      payload[2] = 0;
+      payload[3] = 0;
+      payload[4] = 0;
+      payload[5] = 0;
+   }
 }
 
 /**
@@ -1615,180 +1813,57 @@ ilo_gpe_gen6_fill_3dstate_sf_raster(const struct ilo_dev_info *dev,
  */
 void
 ilo_gpe_gen6_fill_3dstate_sf_sbe(const struct ilo_dev_info *dev,
-                                 const struct pipe_rasterizer_state *rasterizer,
-                                 const struct ilo_shader *fs,
-                                 const struct ilo_shader *last_sh,
+                                 const struct ilo_rasterizer_state *rasterizer,
+                                 const struct ilo_shader_state *fs,
+                                 const struct ilo_shader_state *last_sh,
                                  uint32_t *dw, int num_dwords)
 {
-   uint32_t point_sprite_enable, const_interp_enable;
-   uint16_t attr_ctrl[PIPE_MAX_SHADER_INPUTS];
-   int vue_offset, vue_len;
-   int dst, max_src, i;
+   int output_count, vue_offset, vue_len;
+   const struct ilo_kernel_routing *routing;
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
    assert(num_dwords == 13);
 
    if (!fs) {
+      memset(dw, 0, sizeof(dw[0]) * num_dwords);
+
       if (dev->gen >= ILO_GEN(7))
          dw[0] = 1 << GEN7_SBE_URB_ENTRY_READ_LENGTH_SHIFT;
       else
          dw[0] = 1 << GEN6_SF_URB_ENTRY_READ_LENGTH_SHIFT;
 
-      for (i = 1; i < num_dwords; i++)
-         dw[i] = 0;
-
       return;
    }
 
-   if (last_sh) {
-      /* skip PSIZE and POSITION (how about the optional CLIPDISTs?) */
-      assert(last_sh->out.semantic_names[0] == TGSI_SEMANTIC_PSIZE);
-      assert(last_sh->out.semantic_names[1] == TGSI_SEMANTIC_POSITION);
-      vue_offset = 2;
-      vue_len = last_sh->out.count - vue_offset;
-   }
-   else {
-      vue_offset = 0;
-      vue_len = fs->in.count;
-   }
+   output_count = ilo_shader_get_kernel_param(fs, ILO_KERNEL_INPUT_COUNT);
+   assert(output_count <= 32);
 
-   point_sprite_enable = 0;
-   const_interp_enable = 0;
-   max_src = (last_sh) ? 0 : fs->in.count - 1;
+   routing = ilo_shader_get_kernel_routing(fs);
 
-   for (dst = 0; dst < fs->in.count; dst++) {
-      const int semantic = fs->in.semantic_names[dst];
-      const int index = fs->in.semantic_indices[dst];
-      const int interp = fs->in.interp[dst];
-      int src;
-      uint16_t ctrl;
-
-      /*
-       * From the Ivy Bridge PRM, volume 2 part 1, page 268:
-       *
-       *     "This field (Point Sprite Texture Coordinate Enable) must be
-       *      programmed to 0 when non-point primitives are rendered."
-       *
-       * TODO We do not check that yet.
-       */
-      if (semantic == TGSI_SEMANTIC_GENERIC &&
-          (rasterizer->sprite_coord_enable & (1 << index)))
-         point_sprite_enable |= 1 << dst;
-
-      if (interp == TGSI_INTERPOLATE_CONSTANT ||
-          (interp == TGSI_INTERPOLATE_COLOR && rasterizer->flatshade))
-         const_interp_enable |= 1 << dst;
-
-      if (!last_sh) {
-         attr_ctrl[dst] = 0;
-         continue;
-      }
-
-      /* find the matching VS/GS OUT for FS IN[i] */
-      ctrl = 0;
-      for (src = 0; src < vue_len; src++) {
-         if (last_sh->out.semantic_names[vue_offset + src] != semantic ||
-             last_sh->out.semantic_indices[vue_offset + src] != index)
-            continue;
-
-         ctrl = src;
-
-         if (semantic == TGSI_SEMANTIC_COLOR && rasterizer->light_twoside &&
-             src < vue_len - 1) {
-            const int next = src + 1;
-
-            if (last_sh->out.semantic_names[vue_offset + next] ==
-                  TGSI_SEMANTIC_BCOLOR &&
-                last_sh->out.semantic_indices[vue_offset + next] == index) {
-               ctrl |= ATTRIBUTE_SWIZZLE_INPUTATTR_FACING <<
-                  ATTRIBUTE_SWIZZLE_SHIFT;
-               src++;
-            }
-         }
-
-         break;
-      }
-
-      /* if there is no COLOR, try BCOLOR */
-      if (src >= vue_len && semantic == TGSI_SEMANTIC_COLOR) {
-         for (src = 0; src < vue_len; src++) {
-            if (last_sh->out.semantic_names[vue_offset + src] !=
-                  TGSI_SEMANTIC_BCOLOR ||
-                last_sh->out.semantic_indices[vue_offset + src] != index)
-               continue;
-
-            ctrl = src;
-            break;
-         }
-      }
-
-      if (src < vue_len) {
-         attr_ctrl[dst] = ctrl;
-         if (max_src < src)
-            max_src = src;
-      }
-      else {
-         /*
-          * The previous shader stage does not output this attribute.  The
-          * value is supposed to be undefined for fs, unless the attribute
-          * goes through point sprite replacement or the attribute is
-          * TGSI_SEMANTIC_POSITION.  In all cases, we do not care which source
-          * attribute is picked.
-          *
-          * We should update the fs code and omit the output of
-          * TGSI_SEMANTIC_POSITION here.
-          */
-         attr_ctrl[dst] = 0;
-      }
-   }
-
-   for (; dst < Elements(attr_ctrl); dst++)
-      attr_ctrl[dst] = 0;
-
-   /* only the first 16 attributes can be remapped */
-   for (dst = 16; dst < Elements(attr_ctrl); dst++)
-      assert(attr_ctrl[dst] == 0 || attr_ctrl[dst] == dst);
-
-   /*
-    * From the Sandy Bridge PRM, volume 2 part 1, page 248:
-    *
-    *     "It is UNDEFINED to set this field (Vertex URB Entry Read Length) to
-    *      0 indicating no Vertex URB data to be read.
-    *
-    *      This field should be set to the minimum length required to read the
-    *      maximum source attribute. The maximum source attribute is indicated
-    *      by the maximum value of the enabled Attribute # Source Attribute if
-    *      Attribute Swizzle Enable is set, Number of Output Attributes-1 if
-    *      enable is not set.
-    *
-    *        read_length = ceiling((max_source_attr+1)/2)
-    *
-    *      [errata] Corruption/Hang possible if length programmed larger than
-    *      recommended"
-    */
-   vue_len = max_src + 1;
-
-   assert(fs->in.count <= 32);
+   vue_offset = routing->source_skip;
    assert(vue_offset % 2 == 0);
+   vue_offset /= 2;
+
+   vue_len = (routing->source_len + 1) / 2;
+   if (!vue_len)
+      vue_len = 1;
 
    if (dev->gen >= ILO_GEN(7)) {
-      dw[0] = fs->in.count << GEN7_SBE_NUM_OUTPUTS_SHIFT |
-              (vue_len + 1) / 2 << GEN7_SBE_URB_ENTRY_READ_LENGTH_SHIFT |
-              vue_offset / 2 << GEN7_SBE_URB_ENTRY_READ_OFFSET_SHIFT;
-
-      if (last_sh)
+      dw[0] = output_count << GEN7_SBE_NUM_OUTPUTS_SHIFT |
+              vue_len << GEN7_SBE_URB_ENTRY_READ_LENGTH_SHIFT |
+              vue_offset << GEN7_SBE_URB_ENTRY_READ_OFFSET_SHIFT;
+      if (routing->swizzle_enable)
          dw[0] |= GEN7_SBE_SWIZZLE_ENABLE;
    }
    else {
-      dw[0] = fs->in.count << GEN6_SF_NUM_OUTPUTS_SHIFT |
-              (vue_len + 1) / 2 << GEN6_SF_URB_ENTRY_READ_LENGTH_SHIFT |
-              vue_offset / 2 << GEN6_SF_URB_ENTRY_READ_OFFSET_SHIFT;
-
-      if (last_sh)
+      dw[0] = output_count << GEN6_SF_NUM_OUTPUTS_SHIFT |
+              vue_len << GEN6_SF_URB_ENTRY_READ_LENGTH_SHIFT |
+              vue_offset << GEN6_SF_URB_ENTRY_READ_OFFSET_SHIFT;
+      if (routing->swizzle_enable)
          dw[0] |= GEN6_SF_SWIZZLE_ENABLE;
    }
 
-   switch (rasterizer->sprite_coord_mode) {
+   switch (rasterizer->state.sprite_coord_mode) {
    case PIPE_SPRITE_COORD_UPPER_LEFT:
       dw[0] |= GEN6_SF_POINT_SPRITE_UPPERLEFT;
       break;
@@ -1797,11 +1872,20 @@ ilo_gpe_gen6_fill_3dstate_sf_sbe(const struct ilo_dev_info *dev,
       break;
    }
 
-   for (i = 0; i < 8; i++)
-      dw[1 + i] = attr_ctrl[2 * i + 1] << 16 | attr_ctrl[2 * i];
+   STATIC_ASSERT(Elements(routing->swizzles) >= 16);
+   memcpy(&dw[1], routing->swizzles, 2 * 16);
 
-   dw[9] = point_sprite_enable;
-   dw[10] = const_interp_enable;
+   /*
+    * From the Ivy Bridge PRM, volume 2 part 1, page 268:
+    *
+    *     "This field (Point Sprite Texture Coordinate Enable) must be
+    *      programmed to 0 when non-point primitives are rendered."
+    *
+    * TODO We do not check that yet.
+    */
+   dw[9] = routing->point_sprite_enable;
+
+   dw[10] = routing->const_interp_enable;
 
    /* WrapShortest enables */
    dw[11] = 0;
@@ -1810,92 +1894,103 @@ ilo_gpe_gen6_fill_3dstate_sf_sbe(const struct ilo_dev_info *dev,
 
 static void
 gen6_emit_3DSTATE_SF(const struct ilo_dev_info *dev,
-                     const struct pipe_rasterizer_state *rasterizer,
-                     const struct ilo_shader *fs,
-                     const struct ilo_shader *last_sh,
+                     const struct ilo_rasterizer_state *rasterizer,
+                     const struct ilo_shader_state *fs,
+                     const struct ilo_shader_state *last_sh,
                      struct ilo_cp *cp)
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x13);
    const uint8_t cmd_len = 20;
-   uint32_t dw_raster[6], dw_sbe[13];
+   uint32_t payload_raster[6], payload_sbe[13];
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
    ilo_gpe_gen6_fill_3dstate_sf_raster(dev, rasterizer,
-         1, PIPE_FORMAT_NONE, false, dw_raster, Elements(dw_raster));
+         1, PIPE_FORMAT_NONE, payload_raster, Elements(payload_raster));
    ilo_gpe_gen6_fill_3dstate_sf_sbe(dev, rasterizer,
-         fs, last_sh, dw_sbe, Elements(dw_sbe));
+         fs, last_sh, payload_sbe, Elements(payload_sbe));
 
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
-   ilo_cp_write(cp, dw_sbe[0]);
-   ilo_cp_write_multi(cp, dw_raster, 6);
-   ilo_cp_write_multi(cp, &dw_sbe[1], 12);
+   ilo_cp_write(cp, payload_sbe[0]);
+   ilo_cp_write_multi(cp, payload_raster, 6);
+   ilo_cp_write_multi(cp, &payload_sbe[1], 12);
    ilo_cp_end(cp);
 }
 
-static void
-gen6_emit_3DSTATE_WM(const struct ilo_dev_info *dev,
-                     const struct ilo_shader *fs,
-                     int num_samplers,
-                     const struct pipe_rasterizer_state *rasterizer,
-                     bool dual_blend, bool cc_may_kill,
-                     struct ilo_cp *cp)
+void
+ilo_gpe_init_rasterizer_wm_gen6(const struct ilo_dev_info *dev,
+                                const struct pipe_rasterizer_state *state,
+                                struct ilo_rasterizer_wm *wm)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x14);
-   const uint8_t cmd_len = 9;
-   const int num_samples = 1;
-   uint32_t dw2, dw4, dw5, dw6;
-   int max_threads;
+   uint32_t dw5, dw6;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
+
+   /* only the FF unit states are set, as in GEN7 */
+
+   dw5 = GEN6_WM_LINE_AA_WIDTH_2_0;
+
+   /* same value as in 3DSTATE_SF */
+   if (state->line_smooth)
+      dw5 |= GEN6_WM_LINE_END_CAP_AA_WIDTH_1_0;
+
+   if (state->poly_stipple_enable)
+      dw5 |= GEN6_WM_POLYGON_STIPPLE_ENABLE;
+   if (state->line_stipple_enable)
+      dw5 |= GEN6_WM_LINE_STIPPLE_ENABLE;
+
+   dw6 = GEN6_WM_POSITION_ZW_PIXEL |
+         GEN6_WM_MSRAST_OFF_PIXEL |
+         GEN6_WM_MSDISPMODE_PERSAMPLE;
+
+   if (state->bottom_edge_rule)
+      dw6 |= GEN6_WM_POINT_RASTRULE_UPPER_RIGHT;
+
+   /*
+    * assertion that makes sure
+    *
+    *   dw6 |= wm->dw_msaa_rast | wm->dw_msaa_disp;
+    *
+    * is valid
+    */
+   STATIC_ASSERT(GEN6_WM_MSRAST_OFF_PIXEL == 0 &&
+                 GEN6_WM_MSDISPMODE_PERSAMPLE == 0);
+
+   wm->dw_msaa_rast =
+      (state->multisample) ? GEN6_WM_MSRAST_ON_PATTERN : 0;
+   wm->dw_msaa_disp = GEN6_WM_MSDISPMODE_PERPIXEL;
+
+   STATIC_ASSERT(Elements(wm->payload) >= 2);
+   wm->payload[0] = dw5;
+   wm->payload[1] = dw6;
+}
+
+void
+ilo_gpe_init_fs_cso_gen6(const struct ilo_dev_info *dev,
+                         const struct ilo_shader_state *fs,
+                         struct ilo_shader_cso *cso)
+{
+   int start_grf, input_count, interps, max_threads;
+   uint32_t dw2, dw4, dw5, dw6;
+
+   ILO_GPE_VALID_GEN(dev, 6, 6);
+
+   start_grf = ilo_shader_get_kernel_param(fs, ILO_KERNEL_URB_DATA_START_REG);
+   input_count = ilo_shader_get_kernel_param(fs, ILO_KERNEL_INPUT_COUNT);
+   interps = ilo_shader_get_kernel_param(fs,
+         ILO_KERNEL_FS_BARYCENTRIC_INTERPOLATIONS);
 
    /* see brwCreateContext() */
    max_threads = (dev->gt == 2) ? 80 : 40;
 
-   if (!fs) {
-      ilo_cp_begin(cp, cmd_len);
-      ilo_cp_write(cp, cmd | (cmd_len - 2));
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      /* honor the valid range even if dispatching is disabled */
-      ilo_cp_write(cp, (max_threads - 1) << GEN6_WM_MAX_THREADS_SHIFT);
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_end(cp);
+   dw2 = (true) ? 0 : GEN6_WM_FLOATING_POINT_MODE_ALT;
 
-      return;
-   }
-
-   dw2 = (num_samplers + 3) / 4 << GEN6_WM_SAMPLER_COUNT_SHIFT;
-   if (false)
-      dw2 |= GEN6_WM_FLOATING_POINT_MODE_ALT;
-
-   dw4 = fs->in.start_grf << GEN6_WM_DISPATCH_START_GRF_SHIFT_0 |
+   dw4 = start_grf << GEN6_WM_DISPATCH_START_GRF_SHIFT_0 |
          0 << GEN6_WM_DISPATCH_START_GRF_SHIFT_1 |
          0 << GEN6_WM_DISPATCH_START_GRF_SHIFT_2;
 
-   if (true) {
-      dw4 |= GEN6_WM_STATISTICS_ENABLE;
-   }
-   else {
-      /*
-       * From the Sandy Bridge PRM, volume 2 part 1, page 248:
-       *
-       *     "This bit (Statistics Enable) must be disabled if either of these
-       *      bits is set: Depth Buffer Clear , Hierarchical Depth Buffer
-       *      Resolve Enable or Depth Buffer Resolve Enable."
-       */
-      dw4 |= GEN6_WM_DEPTH_CLEAR;
-      dw4 |= GEN6_WM_DEPTH_RESOLVE;
-      dw4 |= GEN6_WM_HIERARCHICAL_DEPTH_RESOLVE;
-   }
-
-   dw5 = (max_threads - 1) << GEN6_WM_MAX_THREADS_SHIFT |
-         GEN6_WM_LINE_AA_WIDTH_2_0;
+   dw5 = (max_threads - 1) << GEN6_WM_MAX_THREADS_SHIFT;
 
    /*
     * From the Sandy Bridge PRM, volume 2 part 1, page 275:
@@ -1922,7 +2017,7 @@ gen6_emit_3DSTATE_WM(const struct ilo_dev_info *dev,
     *      therefore not via PS instructions, there should be no need to
     *      ENABLE this bit due to ClipDistance clipping."
     */
-   if (fs->has_kill || cc_may_kill)
+   if (ilo_shader_get_kernel_param(fs, ILO_KERNEL_FS_USE_KILL))
       dw5 |= GEN6_WM_KILL_ENABLE;
 
    /*
@@ -1933,14 +2028,17 @@ gen6_emit_3DSTATE_WM(const struct ilo_dev_info *dev,
     *
     * TODO This is not checked yet.
     */
-   if (fs->out.has_pos)
+   if (ilo_shader_get_kernel_param(fs, ILO_KERNEL_FS_OUTPUT_Z))
       dw5 |= GEN6_WM_COMPUTED_DEPTH;
 
-   if (fs->in.has_pos)
-      dw5 |= GEN6_WM_USES_SOURCE_DEPTH | GEN6_WM_USES_SOURCE_W;
+   if (ilo_shader_get_kernel_param(fs, ILO_KERNEL_FS_INPUT_Z))
+      dw5 |= GEN6_WM_USES_SOURCE_DEPTH;
+
+   if (ilo_shader_get_kernel_param(fs, ILO_KERNEL_FS_INPUT_W))
+      dw5 |= GEN6_WM_USES_SOURCE_W;
 
    /*
-    * Set this bit if
+    * TODO set this bit only when
     *
     *  a) fs writes colors and color is not masked, or
     *  b) fs writes depth, or
@@ -1949,47 +2047,100 @@ gen6_emit_3DSTATE_WM(const struct ilo_dev_info *dev,
    if (true)
       dw5 |= GEN6_WM_DISPATCH_ENABLE;
 
-   /* same value as in 3DSTATE_SF */
-   if (rasterizer->line_smooth)
-      dw5 |= GEN6_WM_LINE_END_CAP_AA_WIDTH_1_0;
+   assert(!ilo_shader_get_kernel_param(fs, ILO_KERNEL_FS_DISPATCH_16_OFFSET));
+   dw5 |= GEN6_WM_8_DISPATCH_ENABLE;
 
-   if (rasterizer->poly_stipple_enable)
-      dw5 |= GEN6_WM_POLYGON_STIPPLE_ENABLE;
-   if (rasterizer->line_stipple_enable)
-      dw5 |= GEN6_WM_LINE_STIPPLE_ENABLE;
+   dw6 = input_count << GEN6_WM_NUM_SF_OUTPUTS_SHIFT |
+         GEN6_WM_POSOFFSET_NONE |
+         interps << GEN6_WM_BARYCENTRIC_INTERPOLATION_MODE_SHIFT;
+
+   STATIC_ASSERT(Elements(cso->payload) >= 4);
+   cso->payload[0] = dw2;
+   cso->payload[1] = dw4;
+   cso->payload[2] = dw5;
+   cso->payload[3] = dw6;
+}
+
+static void
+gen6_emit_3DSTATE_WM(const struct ilo_dev_info *dev,
+                     const struct ilo_shader_state *fs,
+                     int num_samplers,
+                     const struct ilo_rasterizer_state *rasterizer,
+                     bool dual_blend, bool cc_may_kill,
+                     struct ilo_cp *cp)
+{
+   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x14);
+   const uint8_t cmd_len = 9;
+   const int num_samples = 1;
+   const struct ilo_shader_cso *fs_cso;
+   uint32_t dw2, dw4, dw5, dw6;
+
+   ILO_GPE_VALID_GEN(dev, 6, 6);
+
+   if (!fs) {
+      /* see brwCreateContext() */
+      const int max_threads = (dev->gt == 2) ? 80 : 40;
+
+      ilo_cp_begin(cp, cmd_len);
+      ilo_cp_write(cp, cmd | (cmd_len - 2));
+      ilo_cp_write(cp, 0);
+      ilo_cp_write(cp, 0);
+      ilo_cp_write(cp, 0);
+      ilo_cp_write(cp, 0);
+      /* honor the valid range even if dispatching is disabled */
+      ilo_cp_write(cp, (max_threads - 1) << GEN6_WM_MAX_THREADS_SHIFT);
+      ilo_cp_write(cp, 0);
+      ilo_cp_write(cp, 0);
+      ilo_cp_write(cp, 0);
+      ilo_cp_end(cp);
+
+      return;
+   }
+
+   fs_cso = ilo_shader_get_kernel_cso(fs);
+   dw2 = fs_cso->payload[0];
+   dw4 = fs_cso->payload[1];
+   dw5 = fs_cso->payload[2];
+   dw6 = fs_cso->payload[3];
+
+   dw2 |= (num_samplers + 3) / 4 << GEN6_WM_SAMPLER_COUNT_SHIFT;
+
+   if (true) {
+      dw4 |= GEN6_WM_STATISTICS_ENABLE;
+   }
+   else {
+      /*
+       * From the Sandy Bridge PRM, volume 2 part 1, page 248:
+       *
+       *     "This bit (Statistics Enable) must be disabled if either of these
+       *      bits is set: Depth Buffer Clear , Hierarchical Depth Buffer
+       *      Resolve Enable or Depth Buffer Resolve Enable."
+       */
+      dw4 |= GEN6_WM_DEPTH_CLEAR;
+      dw4 |= GEN6_WM_DEPTH_RESOLVE;
+      dw4 |= GEN6_WM_HIERARCHICAL_DEPTH_RESOLVE;
+   }
+
+   if (cc_may_kill) {
+      dw5 |= GEN6_WM_KILL_ENABLE |
+             GEN6_WM_DISPATCH_ENABLE;
+   }
 
    if (dual_blend)
       dw5 |= GEN6_WM_DUAL_SOURCE_BLEND_ENABLE;
 
-   if (fs->dispatch_16)
-      dw5 |= GEN6_WM_16_DISPATCH_ENABLE;
-   else
-      dw5 |= GEN6_WM_8_DISPATCH_ENABLE;
+   dw5 |= rasterizer->wm.payload[0];
 
-   dw6 = fs->in.count << GEN6_WM_NUM_SF_OUTPUTS_SHIFT |
-         GEN6_WM_POSOFFSET_NONE |
-         GEN6_WM_POSITION_ZW_PIXEL |
-         fs->in.barycentric_interpolation_mode <<
-           GEN6_WM_BARYCENTRIC_INTERPOLATION_MODE_SHIFT;
-
-   if (rasterizer->bottom_edge_rule)
-      dw6 |= GEN6_WM_POINT_RASTRULE_UPPER_RIGHT;
+   dw6 |= rasterizer->wm.payload[1];
 
    if (num_samples > 1) {
-      if (rasterizer->multisample)
-         dw6 |= GEN6_WM_MSRAST_ON_PATTERN;
-      else
-         dw6 |= GEN6_WM_MSRAST_OFF_PIXEL;
-      dw6 |= GEN6_WM_MSDISPMODE_PERPIXEL;
-   }
-   else {
-      dw6 |= GEN6_WM_MSRAST_OFF_PIXEL |
-             GEN6_WM_MSDISPMODE_PERSAMPLE;
+      dw6 |= rasterizer->wm.dw_msaa_rast |
+             rasterizer->wm.dw_msaa_disp;
    }
 
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
-   ilo_cp_write(cp, fs->cache_offset);
+   ilo_cp_write(cp, ilo_shader_get_kernel_offset(fs));
    ilo_cp_write(cp, dw2);
    ilo_cp_write(cp, 0); /* scratch */
    ilo_cp_write(cp, dw4);
@@ -2195,20 +2346,86 @@ gen6_emit_3DSTATE_DRAWING_RECTANGLE(const struct ilo_dev_info *dev,
    ilo_cp_end(cp);
 }
 
-static int
-gen6_get_depth_buffer_format(const struct ilo_dev_info *dev,
-                             enum pipe_format format,
-                             bool hiz,
-                             bool separate_stencil,
-                             bool *has_depth,
-                             bool *has_stencil)
+struct ilo_zs_surface_info {
+   int surface_type;
+   int format;
+
+   struct {
+      struct intel_bo *bo;
+      unsigned stride;
+      enum intel_tiling_mode tiling;
+      uint32_t offset;
+   } zs, stencil, hiz;
+
+   unsigned width, height, depth;
+   unsigned lod, first_layer, num_layers;
+   uint32_t x_offset, y_offset;
+};
+
+static void
+zs_init_info_null(const struct ilo_dev_info *dev,
+                  struct ilo_zs_surface_info *info)
 {
-   int depth_format;
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   memset(info, 0, sizeof(*info));
+
+   info->surface_type = BRW_SURFACE_NULL;
+   info->format = BRW_DEPTHFORMAT_D32_FLOAT;
+   info->width = 1;
+   info->height = 1;
+   info->depth = 1;
+   info->num_layers = 1;
+}
+
+static void
+zs_init_info(const struct ilo_dev_info *dev,
+             const struct ilo_texture *tex,
+             enum pipe_format format,
+             unsigned level,
+             unsigned first_layer, unsigned num_layers,
+             struct ilo_zs_surface_info *info)
+{
+   const bool rebase_layer = true;
+   struct intel_bo * const hiz_bo = NULL;
+   bool separate_stencil;
+   uint32_t x_offset[3], y_offset[3];
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
 
-   *has_depth = true;
-   *has_stencil = false;
+   memset(info, 0, sizeof(*info));
+
+   info->surface_type = ilo_gpe_gen6_translate_texture(tex->base.target);
+
+   if (info->surface_type == BRW_SURFACE_CUBE) {
+      /*
+       * From the Sandy Bridge PRM, volume 2 part 1, page 325-326:
+       *
+       *     "For Other Surfaces (Cube Surfaces):
+       *      This field (Minimum Array Element) is ignored."
+       *
+       *     "For Other Surfaces (Cube Surfaces):
+       *      This field (Render Target View Extent) is ignored."
+       *
+       * As such, we cannot set first_layer and num_layers on cube surfaces.
+       * To work around that, treat it as a 2D surface.
+       */
+      info->surface_type = BRW_SURFACE_2D;
+   }
+
+   if (dev->gen >= ILO_GEN(7)) {
+      separate_stencil = true;
+   }
+   else {
+      /*
+       * From the Sandy Bridge PRM, volume 2 part 1, page 317:
+       *
+       *     "This field (Separate Stencil Buffer Enable) must be set to the
+       *      same value (enabled or disabled) as Hierarchical Depth Buffer
+       *      Enable."
+       */
+      separate_stencil = (hiz_bo != NULL);
+   }
 
    /*
     * From the Sandy Bridge PRM, volume 2 part 1, page 317:
@@ -2227,157 +2444,130 @@ gen6_get_depth_buffer_format(const struct ilo_dev_info *dev,
     * is indeed used, the depth values output by the fragment shaders will
     * be different when read back.
     *
-    * As for GEN7+, separate_stencil_buffer is always true.
+    * As for GEN7+, separate_stencil is always true.
     */
    switch (format) {
    case PIPE_FORMAT_Z16_UNORM:
-      depth_format = BRW_DEPTHFORMAT_D16_UNORM;
+      info->format = BRW_DEPTHFORMAT_D16_UNORM;
       break;
    case PIPE_FORMAT_Z32_FLOAT:
-      depth_format = BRW_DEPTHFORMAT_D32_FLOAT;
+      info->format = BRW_DEPTHFORMAT_D32_FLOAT;
       break;
    case PIPE_FORMAT_Z24X8_UNORM:
-      depth_format = (separate_stencil) ?
-         BRW_DEPTHFORMAT_D24_UNORM_X8_UINT :
-         BRW_DEPTHFORMAT_D24_UNORM_S8_UINT;
-      break;
    case PIPE_FORMAT_Z24_UNORM_S8_UINT:
-      depth_format = (separate_stencil) ?
+      info->format = (separate_stencil) ?
          BRW_DEPTHFORMAT_D24_UNORM_X8_UINT :
          BRW_DEPTHFORMAT_D24_UNORM_S8_UINT;
-      *has_stencil = true;
       break;
    case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
-      depth_format = (separate_stencil) ?
+      info->format = (separate_stencil) ?
          BRW_DEPTHFORMAT_D32_FLOAT :
          BRW_DEPTHFORMAT_D32_FLOAT_S8X24_UINT;
-      *has_stencil = true;
       break;
    case PIPE_FORMAT_S8_UINT:
       if (separate_stencil) {
-         depth_format = BRW_DEPTHFORMAT_D32_FLOAT;
-         *has_depth = false;
-         *has_stencil = true;
+         info->format = BRW_DEPTHFORMAT_D32_FLOAT;
          break;
       }
       /* fall through */
    default:
       assert(!"unsupported depth/stencil format");
-      depth_format = BRW_DEPTHFORMAT_D32_FLOAT;
-      *has_depth = false;
-      *has_stencil = false;
+      zs_init_info_null(dev, info);
+      return;
       break;
    }
 
-   return depth_format;
-}
+   if (format != PIPE_FORMAT_S8_UINT) {
+      info->zs.bo = tex->bo;
+      info->zs.stride = tex->bo_stride;
+      info->zs.tiling = tex->tiling;
 
-void
-ilo_gpe_gen6_emit_3DSTATE_DEPTH_BUFFER(const struct ilo_dev_info *dev,
-                                       const struct pipe_surface *surface,
-                                       const struct pipe_depth_stencil_alpha_state *dsa,
-                                       bool hiz,
-                                       struct ilo_cp *cp)
-{
-   const uint32_t cmd = (dev->gen >= ILO_GEN(7)) ?
-      ILO_GPE_CMD(0x3, 0x0, 0x05) : ILO_GPE_CMD(0x3, 0x1, 0x05);
-   const uint8_t cmd_len = 7;
-   const int max_2d_size = (dev->gen >= ILO_GEN(7)) ? 16384 : 8192;
-   const int max_array_size = (dev->gen >= ILO_GEN(7)) ? 2048 : 512;
-   struct ilo_texture *tex;
-   uint32_t dw1, dw3, dw4, dw6;
-   uint32_t slice_offset, x_offset, y_offset;
-   int surface_type, depth_format;
-   unsigned lod, first_layer, num_layers;
-   unsigned width, height, depth;
-   bool separate_stencil, has_depth, has_stencil;
-
-   ILO_GPE_VALID_GEN(dev, 6, 7);
-
-   if (dev->gen >= ILO_GEN(7)) {
-      separate_stencil = true;
-   }
-   else {
-      /*
-       * From the Sandy Bridge PRM, volume 2 part 1, page 317:
-       *
-       *     "This field (Separate Stencil Buffer Enable) must be set to the
-       *      same value (enabled or disabled) as Hierarchical Depth Buffer
-       *      Enable."
-       */
-      separate_stencil = hiz;
-   }
-
-   if (surface) {
-      depth_format = gen6_get_depth_buffer_format(dev,
-            surface->format, hiz, separate_stencil, &has_depth, &has_stencil);
-   }
-   else {
-      has_depth = false;
-      has_stencil = false;
-   }
-
-   if (!has_depth && !has_stencil) {
-      dw1 = BRW_SURFACE_NULL << 29 |
-            BRW_DEPTHFORMAT_D32_FLOAT << 18;
-
-      /* Y-tiled */
-      if (dev->gen == ILO_GEN(6)) {
-         dw1 |= 1 << 27 |
-                1 << 26;
+      if (rebase_layer) {
+         info->zs.offset = ilo_texture_get_slice_offset(tex,
+               level, first_layer, &x_offset[0], &y_offset[0]);
       }
-
-      ilo_cp_begin(cp, cmd_len);
-      ilo_cp_write(cp, cmd | (cmd_len - 2));
-      ilo_cp_write(cp, dw1);
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_end(cp);
-
-      return;
    }
 
-   tex = ilo_texture(surface->texture);
+   if (tex->separate_s8 || format == PIPE_FORMAT_S8_UINT) {
+      const struct ilo_texture *s8_tex =
+         (tex->separate_s8) ? tex->separate_s8 : tex;
 
-   surface_type = ilo_gpe_gen6_translate_texture(tex->base.target);
-   lod = surface->u.tex.level;
-   first_layer = surface->u.tex.first_layer;
-   num_layers = surface->u.tex.last_layer - first_layer + 1;
+      info->stencil.bo = s8_tex->bo;
 
-   width = tex->base.width0;
-   height = tex->base.height0;
-   depth = (tex->base.target == PIPE_TEXTURE_3D) ?
+      /*
+       * From the Sandy Bridge PRM, volume 2 part 1, page 329:
+       *
+       *     "The pitch must be set to 2x the value computed based on width,
+       *       as the stencil buffer is stored with two rows interleaved."
+       *
+       * According to the classic driver, we need to do the same for GEN7+
+       * even though the Ivy Bridge PRM does not say anything about it.
+       */
+      info->stencil.stride = s8_tex->bo_stride * 2;
+
+      info->stencil.tiling = s8_tex->tiling;
+
+      if (rebase_layer) {
+         info->stencil.offset = ilo_texture_get_slice_offset(s8_tex,
+               level, first_layer, &x_offset[1], &y_offset[1]);
+      }
+   }
+
+   if (hiz_bo) {
+      info->hiz.bo = hiz_bo;
+      info->hiz.stride = 0;
+      info->hiz.tiling = 0;
+      info->hiz.offset = 0;
+      x_offset[2] = 0;
+      y_offset[2] = 0;
+   }
+
+   info->width = tex->base.width0;
+   info->height = tex->base.height0;
+   info->depth = (tex->base.target == PIPE_TEXTURE_3D) ?
       tex->base.depth0 : num_layers;
 
-   if (surface_type == BRW_SURFACE_CUBE) {
-      /*
-       * From the Sandy Bridge PRM, volume 2 part 1, page 325-326:
-       *
-       *     "For Other Surfaces (Cube Surfaces):
-       *      This field (Minimum Array Element) is ignored."
-       *
-       *     "For Other Surfaces (Cube Surfaces):
-       *      This field (Render Target View Extent) is ignored."
-       *
-       * As such, we cannot set first_layer and num_layers on cube surfaces.
-       * To work around that, treat it as a 2D surface.
-       */
-      surface_type = BRW_SURFACE_2D;
-   }
+   info->lod = level;
+   info->first_layer = first_layer;
+   info->num_layers = num_layers;
 
-   /*
-    * we always treat the resource as non-mipmapped and set the slice/x/y
-    * offsets manually
-    */
-   if (true) {
+   if (rebase_layer) {
+      /* the size of the layer */
+      info->width = u_minify(info->width, level);
+      info->height = u_minify(info->height, level);
+      if (info->surface_type == BRW_SURFACE_3D)
+         info->depth = u_minify(info->depth, level);
+      else
+         info->depth = 1;
+
       /* no layered rendering */
       assert(num_layers == 1);
 
-      slice_offset = ilo_texture_get_slice_offset(tex,
-            lod, first_layer, &x_offset, &y_offset);
+      info->lod = 0;
+      info->first_layer = 0;
+      info->num_layers = 1;
+
+      /* all three share the same X/Y offsets */
+      if (info->zs.bo) {
+         if (info->stencil.bo) {
+            assert(x_offset[0] == x_offset[1]);
+            assert(y_offset[0] == y_offset[1]);
+         }
+
+         info->x_offset = x_offset[0];
+         info->y_offset = y_offset[0];
+      }
+      else {
+         assert(info->stencil.bo);
+
+         info->x_offset = x_offset[1];
+         info->y_offset = y_offset[1];
+      }
+
+      if (info->hiz.bo) {
+         assert(info->x_offset == x_offset[2]);
+         assert(info->y_offset == y_offset[2]);
+      }
 
       /*
        * From the Sandy Bridge PRM, volume 2 part 1, page 326:
@@ -2389,149 +2579,206 @@ ilo_gpe_gen6_emit_3DSTATE_DEPTH_BUFFER(const struct ilo_dev_info *dev,
        * sure that does not happen eventually.
        */
       if (dev->gen >= ILO_GEN(7)) {
-         assert((x_offset & 7) == 0 && (y_offset & 7) == 0);
-         x_offset &= ~7;
-         y_offset &= ~7;
+         assert((info->x_offset & 7) == 0 && (info->y_offset & 7) == 0);
+         info->x_offset &= ~7;
+         info->y_offset &= ~7;
       }
 
-      /* the size of the layer */
-      width = u_minify(width, lod);
-      height = u_minify(height, lod);
-      if (surface_type == BRW_SURFACE_3D)
-         depth = u_minify(depth, lod);
-      else
-         depth = 1;
-
-      lod = 0;
-      first_layer = 0;
-
-      width += x_offset;
-      height += y_offset;
+      info->width += info->x_offset;
+      info->height += info->y_offset;
 
       /* we have to treat them as 2D surfaces */
-      if (surface_type == BRW_SURFACE_CUBE) {
+      if (info->surface_type == BRW_SURFACE_CUBE) {
          assert(tex->base.width0 == tex->base.height0);
          /* we will set slice_offset to point to the single face */
-         surface_type = BRW_SURFACE_2D;
+         info->surface_type = BRW_SURFACE_2D;
       }
-      else if (surface_type == BRW_SURFACE_1D && height > 1) {
+      else if (info->surface_type == BRW_SURFACE_1D && info->height > 1) {
          assert(tex->base.height0 == 1);
-         surface_type = BRW_SURFACE_2D;
+         info->surface_type = BRW_SURFACE_2D;
       }
    }
-   else {
-      slice_offset = 0;
-      x_offset = 0;
-      y_offset = 0;
-   }
+}
 
-   /* required for GEN6+ */
-   assert(tex->tiling == INTEL_TILING_Y);
-   assert(tex->bo_stride > 0 && tex->bo_stride < 128 * 1024 &&
-         tex->bo_stride % 128 == 0);
-   assert(width <= tex->bo_stride);
+void
+ilo_gpe_init_zs_surface(const struct ilo_dev_info *dev,
+                        const struct ilo_texture *tex,
+                        enum pipe_format format,
+                        unsigned level,
+                        unsigned first_layer, unsigned num_layers,
+                        struct ilo_zs_surface *zs)
+{
+   const int max_2d_size = (dev->gen >= ILO_GEN(7)) ? 16384 : 8192;
+   const int max_array_size = (dev->gen >= ILO_GEN(7)) ? 2048 : 512;
+   struct ilo_zs_surface_info info;
+   uint32_t dw1, dw2, dw3, dw4, dw5, dw6;
 
-   switch (surface_type) {
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   if (tex)
+      zs_init_info(dev, tex, format, level, first_layer, num_layers, &info);
+   else
+      zs_init_info_null(dev, &info);
+
+   switch (info.surface_type) {
+   case BRW_SURFACE_NULL:
+      break;
    case BRW_SURFACE_1D:
-      assert(width <= max_2d_size && height == 1 &&
-             depth <= max_array_size);
-      assert(first_layer < max_array_size - 1 &&
-             num_layers <= max_array_size);
+      assert(info.width <= max_2d_size && info.height == 1 &&
+             info.depth <= max_array_size);
+      assert(info.first_layer < max_array_size - 1 &&
+             info.num_layers <= max_array_size);
       break;
    case BRW_SURFACE_2D:
-      assert(width <= max_2d_size && height <= max_2d_size &&
-             depth <= max_array_size);
-      assert(first_layer < max_array_size - 1 &&
-             num_layers <= max_array_size);
+      assert(info.width <= max_2d_size && info.height <= max_2d_size &&
+             info.depth <= max_array_size);
+      assert(info.first_layer < max_array_size - 1 &&
+             info.num_layers <= max_array_size);
       break;
    case BRW_SURFACE_3D:
-      assert(width <= 2048 && height <= 2048 && depth <= 2048);
-      assert(first_layer < 2048 && num_layers <= max_array_size);
-      assert(x_offset == 0 && y_offset == 0);
+      assert(info.width <= 2048 && info.height <= 2048 && info.depth <= 2048);
+      assert(info.first_layer < 2048 && info.num_layers <= max_array_size);
+      assert(info.x_offset == 0 && info.y_offset == 0);
       break;
    case BRW_SURFACE_CUBE:
-      assert(width <= max_2d_size && height <= max_2d_size && depth == 1);
-      assert(first_layer == 0 && num_layers == 1);
-      assert(width == height);
-      assert(x_offset == 0 && y_offset == 0);
+      assert(info.width <= max_2d_size && info.height <= max_2d_size &&
+             info.depth == 1);
+      assert(info.first_layer == 0 && info.num_layers == 1);
+      assert(info.width == info.height);
+      assert(info.x_offset == 0 && info.y_offset == 0);
       break;
    default:
       assert(!"unexpected depth surface type");
       break;
    }
 
-   dw1 = surface_type << 29 |
-         depth_format << 18 |
-         (tex->bo_stride - 1);
+   dw1 = info.surface_type << 29 |
+         info.format << 18;
 
-   if (dev->gen >= ILO_GEN(7)) {
-      if (has_depth) {
-         if (dsa->depth.writemask)
-            dw1 |= 1 << 28;
-         if (hiz)
-            dw1 |= 1 << 22;
-      }
+   if (info.zs.bo) {
+      /* required for GEN6+ */
+      assert(info.zs.tiling == INTEL_TILING_Y);
+      assert(info.zs.stride > 0 && info.zs.stride < 128 * 1024 &&
+            info.zs.stride % 128 == 0);
+      assert(info.width <= info.zs.stride);
 
-      if (has_stencil &&
-          (dsa->stencil[0].writemask || dsa->stencil[1].writemask))
-         dw1 |= 1 << 27;
-
-      dw3 = (height - 1) << 18 |
-            (width - 1) << 4 |
-            lod;
-
-      dw4 = (depth - 1) << 21 |
-            first_layer << 10;
-
-      dw6 = (num_layers - 1) << 21;
+      dw1 |= (info.zs.stride - 1);
+      dw2 = info.zs.offset;
    }
    else {
-      dw1 |= (tex->tiling != INTEL_TILING_NONE) << 27 |
-             (tex->tiling == INTEL_TILING_Y) << 26;
+      dw2 = 0;
+   }
 
-      if (hiz) {
+   if (dev->gen >= ILO_GEN(7)) {
+      if (info.zs.bo)
+         dw1 |= 1 << 28;
+
+      if (info.stencil.bo)
+         dw1 |= 1 << 27;
+
+      if (info.hiz.bo)
+         dw1 |= 1 << 22;
+
+      dw3 = (info.height - 1) << 18 |
+            (info.width - 1) << 4 |
+            info.lod;
+
+      dw4 = (info.depth - 1) << 21 |
+            info.first_layer << 10;
+
+      dw5 = info.y_offset << 16 | info.x_offset;
+
+      dw6 = (info.num_layers - 1) << 21;
+   }
+   else {
+      /* always Y-tiled */
+      dw1 |= 1 << 27 |
+             1 << 26;
+
+      if (info.hiz.bo) {
          dw1 |= 1 << 22 |
                 1 << 21;
       }
 
-      dw3 = (height - 1) << 19 |
-            (width - 1) << 6 |
-            lod << 2 |
+      dw3 = (info.height - 1) << 19 |
+            (info.width - 1) << 6 |
+            info.lod << 2 |
             BRW_SURFACE_MIPMAPLAYOUT_BELOW << 1;
 
-      dw4 = (depth - 1) << 21 |
-            first_layer << 10 |
-            (num_layers - 1) << 1;
+      dw4 = (info.depth - 1) << 21 |
+            info.first_layer << 10 |
+            (info.num_layers - 1) << 1;
+
+      dw5 = info.y_offset << 16 | info.x_offset;
 
       dw6 = 0;
    }
 
-   ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
-   ilo_cp_write(cp, dw1);
+   STATIC_ASSERT(Elements(zs->payload) >= 10);
 
-   if (has_depth) {
-      ilo_cp_write_bo(cp, slice_offset, tex->bo,
-            INTEL_DOMAIN_RENDER, INTEL_DOMAIN_RENDER);
+   zs->payload[0] = dw1;
+   zs->payload[1] = dw2;
+   zs->payload[2] = dw3;
+   zs->payload[3] = dw4;
+   zs->payload[4] = dw5;
+   zs->payload[5] = dw6;
+
+   /* do not increment reference count */
+   zs->bo = info.zs.bo;
+
+   /* separate stencil */
+   if (info.stencil.bo) {
+      assert(info.stencil.stride > 0 && info.stencil.stride < 128 * 1024 &&
+             info.stencil.stride % 128 == 0);
+
+      zs->payload[6] = info.stencil.stride - 1;
+      zs->payload[7] = info.stencil.offset;
+
+      /* do not increment reference count */
+      zs->separate_s8_bo = info.stencil.bo;
    }
    else {
-      ilo_cp_write(cp, 0);
+      zs->payload[6] = 0;
+      zs->payload[7] = 0;
+      zs->separate_s8_bo = NULL;
    }
 
-   ilo_cp_write(cp, dw3);
-   ilo_cp_write(cp, dw4);
-   ilo_cp_write(cp, y_offset << 16 | x_offset);
-   ilo_cp_write(cp, dw6);
-   ilo_cp_end(cp);
+   /* hiz */
+   if (info.hiz.bo) {
+      zs->payload[8] = info.hiz.stride - 1;
+      zs->payload[9] = info.hiz.offset;
+
+      /* do not increment reference count */
+      zs->hiz_bo = info.hiz.bo;
+   }
+   else {
+      zs->payload[8] = 0;
+      zs->payload[9] = 0;
+      zs->hiz_bo = NULL;
+   }
 }
 
 static void
 gen6_emit_3DSTATE_DEPTH_BUFFER(const struct ilo_dev_info *dev,
-                               const struct pipe_surface *surface,
-                               bool hiz,
+                               const struct ilo_zs_surface *zs,
                                struct ilo_cp *cp)
 {
-   ilo_gpe_gen6_emit_3DSTATE_DEPTH_BUFFER(dev, surface, NULL, hiz, cp);
+   const uint32_t cmd = (dev->gen >= ILO_GEN(7)) ?
+      ILO_GPE_CMD(0x3, 0x0, 0x05) : ILO_GPE_CMD(0x3, 0x1, 0x05);
+   const uint8_t cmd_len = 7;
+
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   ilo_cp_begin(cp, cmd_len);
+   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, zs->payload[0]);
+   ilo_cp_write_bo(cp, zs->payload[1], zs->bo,
+         INTEL_DOMAIN_RENDER, INTEL_DOMAIN_RENDER);
+   ilo_cp_write(cp, zs->payload[2]);
+   ilo_cp_write(cp, zs->payload[3]);
+   ilo_cp_write(cp, zs->payload[4]);
+   ilo_cp_write(cp, zs->payload[5]);
+   ilo_cp_end(cp);
 }
 
 static void
@@ -2697,101 +2944,42 @@ gen6_emit_3DSTATE_MULTISAMPLE(const struct ilo_dev_info *dev,
 
 static void
 gen6_emit_3DSTATE_STENCIL_BUFFER(const struct ilo_dev_info *dev,
-                                 const struct pipe_surface *surface,
+                                 const struct ilo_zs_surface *zs,
                                  struct ilo_cp *cp)
 {
    const uint32_t cmd = (dev->gen >= ILO_GEN(7)) ?
       ILO_GPE_CMD(0x3, 0x0, 0x06) :
       ILO_GPE_CMD(0x3, 0x1, 0x0e);
    const uint8_t cmd_len = 3;
-   struct ilo_texture *tex;
-   uint32_t slice_offset, x_offset, y_offset;
-   int pitch;
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
 
-   tex = (surface) ? ilo_texture(surface->texture) : NULL;
-   if (tex && surface->format != PIPE_FORMAT_S8_UINT)
-      tex = tex->separate_s8;
-
-   if (!tex) {
-      ilo_cp_begin(cp, cmd_len);
-      ilo_cp_write(cp, cmd | (cmd_len - 2));
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_end(cp);
-
-      return;
-   }
-
-   if (true) {
-      slice_offset = ilo_texture_get_slice_offset(tex,
-            surface->u.tex.level, surface->u.tex.first_layer,
-            &x_offset, &y_offset);
-      /* XXX X/Y offsets inherit from 3DSTATE_DEPTH_BUFFER */
-   }
-   else {
-      slice_offset = 0;
-      x_offset = 0;
-      y_offset = 0;
-   }
-
-   /*
-    * From the Sandy Bridge PRM, volume 2 part 1, page 329:
-    *
-    *     "The pitch must be set to 2x the value computed based on width, as
-    *      the stencil buffer is stored with two rows interleaved."
-    *
-    * According to the classic driver, we need to do the same for GEN7+ even
-    * though the Ivy Bridge PRM does not say anything about it.
-    */
-   pitch = 2 * tex->bo_stride;
-   assert(pitch > 0 && pitch < 128 * 1024 && pitch % 128 == 0);
-
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
-   ilo_cp_write(cp, pitch - 1);
-   ilo_cp_write_bo(cp, slice_offset, tex->bo,
+   /* see ilo_gpe_init_zs_surface() */
+   ilo_cp_write(cp, zs->payload[6]);
+   ilo_cp_write_bo(cp, zs->payload[7], zs->separate_s8_bo,
          INTEL_DOMAIN_RENDER, INTEL_DOMAIN_RENDER);
    ilo_cp_end(cp);
 }
 
 static void
 gen6_emit_3DSTATE_HIER_DEPTH_BUFFER(const struct ilo_dev_info *dev,
-                                    const struct pipe_surface *surface,
+                                    const struct ilo_zs_surface *zs,
                                     struct ilo_cp *cp)
 {
    const uint32_t cmd = (dev->gen >= ILO_GEN(7)) ?
       ILO_GPE_CMD(0x3, 0x0, 0x07) :
       ILO_GPE_CMD(0x3, 0x1, 0x0f);
    const uint8_t cmd_len = 3;
-   struct ilo_texture *tex;
-   uint32_t slice_offset;
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
 
-   if (!surface) {
-      ilo_cp_begin(cp, cmd_len);
-      ilo_cp_write(cp, cmd | (cmd_len - 2));
-      ilo_cp_write(cp, 0);
-      ilo_cp_write(cp, 0);
-      ilo_cp_end(cp);
-
-      return;
-   }
-
-   tex = ilo_texture(surface->texture);
-
-   /* TODO */
-   slice_offset = 0;
-
-   assert(tex->bo_stride > 0 && tex->bo_stride < 128 * 1024 &&
-          tex->bo_stride % 128 == 0);
-
    ilo_cp_begin(cp, cmd_len);
    ilo_cp_write(cp, cmd | (cmd_len - 2));
-   ilo_cp_write(cp, tex->bo_stride - 1);
-   ilo_cp_write_bo(cp, slice_offset, tex->bo,
+   /* see ilo_gpe_init_zs_surface() */
+   ilo_cp_write(cp, zs->payload[8]);
+   ilo_cp_write_bo(cp, zs->payload[9], zs->hiz_bo,
          INTEL_DOMAIN_RENDER, INTEL_DOMAIN_RENDER);
    ilo_cp_end(cp);
 }
@@ -2892,6 +3080,7 @@ gen6_emit_PIPE_CONTROL(const struct ilo_dev_info *dev,
 static void
 gen6_emit_3DPRIMITIVE(const struct ilo_dev_info *dev,
                       const struct pipe_draw_info *info,
+                      const struct ilo_ib_state *ib,
                       bool rectlist,
                       struct ilo_cp *cp)
 {
@@ -2902,6 +3091,8 @@ gen6_emit_3DPRIMITIVE(const struct ilo_dev_info *dev,
    const int vb_access = (info->indexed) ?
       GEN4_3DPRIM_VERTEXBUFFER_ACCESS_RANDOM :
       GEN4_3DPRIM_VERTEXBUFFER_ACCESS_SEQUENTIAL;
+   const uint32_t vb_start = info->start +
+      ((info->indexed) ? ib->draw_start_offset : 0);
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
@@ -2910,7 +3101,7 @@ gen6_emit_3DPRIMITIVE(const struct ilo_dev_info *dev,
                     prim << GEN4_3DPRIM_TOPOLOGY_TYPE_SHIFT |
                     vb_access);
    ilo_cp_write(cp, info->count);
-   ilo_cp_write(cp, info->start);
+   ilo_cp_write(cp, vb_start);
    ilo_cp_write(cp, info->instance_count);
    ilo_cp_write(cp, info->start_instance);
    ilo_cp_write(cp, info->index_bias);
@@ -2919,7 +3110,7 @@ gen6_emit_3DPRIMITIVE(const struct ilo_dev_info *dev,
 
 static uint32_t
 gen6_emit_INTERFACE_DESCRIPTOR_DATA(const struct ilo_dev_info *dev,
-                                    const struct ilo_shader **cs,
+                                    const struct ilo_shader_state **cs,
                                     uint32_t *sampler_state,
                                     int *num_samplers,
                                     uint32_t *binding_table_state,
@@ -2951,18 +3142,14 @@ gen6_emit_INTERFACE_DESCRIPTOR_DATA(const struct ilo_dev_info *dev,
          state_len, state_align, &state_offset);
 
    for (i = 0; i < num_ids; i++) {
-      int curbe_read_len;
-
-      curbe_read_len = (cs[i]->pcb.clip_state_size + 31) / 32;
-
-      dw[0] = cs[i]->cache_offset;
+      dw[0] = ilo_shader_get_kernel_offset(cs[i]);
       dw[1] = 1 << 18; /* SPF */
       dw[2] = sampler_state[i] |
               (num_samplers[i] + 3) / 4 << 2;
       dw[3] = binding_table_state[i] |
               num_surfaces[i];
-      dw[4] = curbe_read_len << 16 |  /* CURBE Read Length */
-              0;                      /* CURBE Read Offset */
+      dw[4] = 0 << 16 |  /* CURBE Read Length */
+              0;         /* CURBE Read Offset */
       dw[5] = 0; /* Barrier ID */
       dw[6] = 0;
       dw[7] = 0;
@@ -2973,166 +3160,115 @@ gen6_emit_INTERFACE_DESCRIPTOR_DATA(const struct ilo_dev_info *dev,
    return state_offset;
 }
 
-void
-ilo_gpe_gen6_fill_SF_VIEWPORT(const struct ilo_dev_info *dev,
-                              const struct pipe_viewport_state *viewports,
-                              int num_viewports,
-                              uint32_t *dw, int num_dwords)
-{
-   int i;
-
-   ILO_GPE_VALID_GEN(dev, 6, 7);
-   assert(num_dwords == 8 * num_viewports);
-
-   for (i = 0; i < num_viewports; i++) {
-      const struct pipe_viewport_state *vp = &viewports[i];
-
-      dw[0] = fui(vp->scale[0]);
-      dw[1] = fui(vp->scale[1]);
-      dw[2] = fui(vp->scale[2]);
-      dw[3] = fui(vp->translate[0]);
-      dw[4] = fui(vp->translate[1]);
-      dw[5] = fui(vp->translate[2]);
-
-      /* padding */
-      dw[6] = 0;
-      dw[7] = 0;
-
-      dw += 8;
-   }
-}
-
-void
-ilo_gpe_gen6_fill_CLIP_VIEWPORT(const struct ilo_dev_info *dev,
-                                const struct pipe_viewport_state *viewports,
-                                int num_viewports,
-                                uint32_t *dw, int num_dwords)
-{
-   int i;
-
-   ILO_GPE_VALID_GEN(dev, 6, 7);
-   assert(num_dwords == 4 * num_viewports);
-
-   /*
-    * CLIP_VIEWPORT specifies the guard band.
-    *
-    * Clipping an object that is not entirely inside or outside the viewport
-    * (that is, trivially accepted or rejected) is expensive.  Guard band test
-    * allows clipping to be skipped in this stage and let the renderer dicards
-    * pixels that are outside the viewport.
-    *
-    * The reason that we need CLIP_VIEWPORT is that the renderer has a limit
-    * on the object size.  We have to clip normally when the object exceeds
-    * the limit.
-    */
-
-   for (i = 0; i < num_viewports; i++) {
-      const struct pipe_viewport_state *vp = &viewports[i];
-      /*
-       * From the Sandy Bridge PRM, volume 2 part 1, page 234:
-       *
-       *     "Per-Device Guardband Extents
-       *
-       *      * Supported X,Y ScreenSpace "Guardband" Extent: [-16K,16K-1]
-       *      * Maximum Post-Clamp Delta (X or Y): 16K"
-       *
-       *     "In addition, in order to be correctly rendered, objects must
-       *      have a screenspace bounding box not exceeding 8K in the X or Y
-       *      direction.  This additional restriction must also be
-       *      comprehended by software, i.e., enforced by use of clipping."
-       *
-       * From the Ivy Bridge PRM, volume 2 part 1, page 248:
-       *
-       *     "Per-Device Guardband Extents
-       *
-       *      * Supported X,Y ScreenSpace "Guardband" Extent: [-32K,32K-1]
-       *      * Maximum Post-Clamp Delta (X or Y): N/A"
-       *
-       *     "In addition, in order to be correctly rendered, objects must
-       *      have a screenspace bounding box not exceeding 8K in the X or Y
-       *      direction. This additional restriction must also be comprehended
-       *      by software, i.e., enforced by use of clipping."
-       *
-       * Combined, the bounding box of any object can not exceed 8K in both
-       * width and height.
-       *
-       * Below we set the guardband as a squre of length 8K, centered at where
-       * the viewport is.  This makes sure all objects passing the GB test are
-       * valid to the renderer, and those failing the XY clipping have a
-       * better chance of passing the GB test.
-       */
-      const float xscale = fabs(vp->scale[0]);
-      const float yscale = fabs(vp->scale[1]);
-      const int max_extent = (dev->gen >= ILO_GEN(7)) ? 32768 : 16384;
-      const int half_len = 8192 / 2;
-      int center_x = (int) vp->translate[0];
-      int center_y = (int) vp->translate[1];
-      float xmin, xmax, ymin, ymax;
-
-      /* make sure the guardband is within the valid range */
-      if (center_x - half_len < -max_extent)
-         center_x = -max_extent + half_len;
-      else if (center_x + half_len > max_extent)
-         center_x = max_extent - half_len;
-
-      if (center_y - half_len < -max_extent)
-         center_y = -max_extent + half_len;
-      else if (center_y + half_len > max_extent)
-         center_y = max_extent - half_len;
-
-      xmin = (float) (center_x - half_len);
-      xmax = (float) (center_x + half_len);
-      ymin = (float) (center_y - half_len);
-      ymax = (float) (center_y + half_len);
-
-      /* screen space to NDC space */
-      xmin = (xmin - vp->translate[0]) / xscale;
-      xmax = (xmax - vp->translate[0]) / xscale;
-      ymin = (ymin - vp->translate[1]) / yscale;
-      ymax = (ymax - vp->translate[1]) / yscale;
-
-      dw[0] = fui(xmin);
-      dw[1] = fui(xmax);
-      dw[2] = fui(ymin);
-      dw[3] = fui(ymax);
-
-      dw += 4;
-   }
-}
-
 static void
-gen6_fill_CC_VIEWPORT(const struct ilo_dev_info *dev,
-                      const struct pipe_viewport_state *viewports,
-                      int num_viewports,
-                      uint32_t *dw, int num_dwords)
+viewport_get_guardband(const struct ilo_dev_info *dev,
+                       int center_x, int center_y,
+                       int *min_gbx, int *max_gbx,
+                       int *min_gby, int *max_gby)
 {
-   int i;
+   /*
+    * From the Sandy Bridge PRM, volume 2 part 1, page 234:
+    *
+    *     "Per-Device Guardband Extents
+    *
+    *       - Supported X,Y ScreenSpace "Guardband" Extent: [-16K,16K-1]
+    *       - Maximum Post-Clamp Delta (X or Y): 16K"
+    *
+    *     "In addition, in order to be correctly rendered, objects must have a
+    *      screenspace bounding box not exceeding 8K in the X or Y direction.
+    *      This additional restriction must also be comprehended by software,
+    *      i.e., enforced by use of clipping."
+    *
+    * From the Ivy Bridge PRM, volume 2 part 1, page 248:
+    *
+    *     "Per-Device Guardband Extents
+    *
+    *       - Supported X,Y ScreenSpace "Guardband" Extent: [-32K,32K-1]
+    *       - Maximum Post-Clamp Delta (X or Y): N/A"
+    *
+    *     "In addition, in order to be correctly rendered, objects must have a
+    *      screenspace bounding box not exceeding 8K in the X or Y direction.
+    *      This additional restriction must also be comprehended by software,
+    *      i.e., enforced by use of clipping."
+    *
+    * Combined, the bounding box of any object can not exceed 8K in both
+    * width and height.
+    *
+    * Below we set the guardband as a squre of length 8K, centered at where
+    * the viewport is.  This makes sure all objects passing the GB test are
+    * valid to the renderer, and those failing the XY clipping have a
+    * better chance of passing the GB test.
+    */
+   const int max_extent = (dev->gen >= ILO_GEN(7)) ? 32768 : 16384;
+   const int half_len = 8192 / 2;
+
+   /* make sure the guardband is within the valid range */
+   if (center_x - half_len < -max_extent)
+      center_x = -max_extent + half_len;
+   else if (center_x + half_len > max_extent - 1)
+      center_x = max_extent - half_len;
+
+   if (center_y - half_len < -max_extent)
+      center_y = -max_extent + half_len;
+   else if (center_y + half_len > max_extent - 1)
+      center_y = max_extent - half_len;
+
+   *min_gbx = (float) (center_x - half_len);
+   *max_gbx = (float) (center_x + half_len);
+   *min_gby = (float) (center_y - half_len);
+   *max_gby = (float) (center_y + half_len);
+}
+
+void
+ilo_gpe_set_viewport_cso(const struct ilo_dev_info *dev,
+                         const struct pipe_viewport_state *state,
+                         struct ilo_viewport_cso *vp)
+{
+   const float scale_x = fabs(state->scale[0]);
+   const float scale_y = fabs(state->scale[1]);
+   const float scale_z = fabs(state->scale[2]);
+   int min_gbx, max_gbx, min_gby, max_gby;
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
-   assert(num_dwords == 2 * num_viewports);
 
-   for (i = 0; i < num_viewports; i++) {
-      const struct pipe_viewport_state *vp = &viewports[i];
-      const float scale = fabs(vp->scale[2]);
-      const float min = vp->translate[2] - scale;
-      const float max = vp->translate[2] + scale;
+   viewport_get_guardband(dev,
+         (int) state->translate[0],
+         (int) state->translate[1],
+         &min_gbx, &max_gbx, &min_gby, &max_gby);
 
-      dw[0] = fui(min);
-      dw[1] = fui(max);
+   /* matrix form */
+   vp->m00 = state->scale[0];
+   vp->m11 = state->scale[1];
+   vp->m22 = state->scale[2];
+   vp->m30 = state->translate[0];
+   vp->m31 = state->translate[1];
+   vp->m32 = state->translate[2];
 
-      dw += 2;
-   }
+   /* guardband in NDC space */
+   vp->min_gbx = ((float) min_gbx - state->translate[0]) / scale_x;
+   vp->max_gbx = ((float) max_gbx - state->translate[0]) / scale_x;
+   vp->min_gby = ((float) min_gby - state->translate[1]) / scale_y;
+   vp->max_gby = ((float) max_gby - state->translate[1]) / scale_y;
+
+   /* viewport in screen space */
+   vp->min_x = scale_x * -1.0f + state->translate[0];
+   vp->max_x = scale_x *  1.0f + state->translate[0];
+   vp->min_y = scale_y * -1.0f + state->translate[1];
+   vp->max_y = scale_y *  1.0f + state->translate[1];
+   vp->min_z = scale_z * -1.0f + state->translate[2];
+   vp->max_z = scale_z *  1.0f + state->translate[2];
 }
 
 static uint32_t
 gen6_emit_SF_VIEWPORT(const struct ilo_dev_info *dev,
-                      const struct pipe_viewport_state *viewports,
-                      int num_viewports,
+                      const struct ilo_viewport_cso *viewports,
+                      unsigned num_viewports,
                       struct ilo_cp *cp)
 {
    const int state_align = 32 / 4;
    const int state_len = 8 * num_viewports;
    uint32_t state_offset, *dw;
+   unsigned i;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
@@ -3147,21 +3283,34 @@ gen6_emit_SF_VIEWPORT(const struct ilo_dev_info *dev,
    dw = ilo_cp_steal_ptr(cp, "SF_VIEWPORT",
          state_len, state_align, &state_offset);
 
-   ilo_gpe_gen6_fill_SF_VIEWPORT(dev,
-         viewports, num_viewports, dw, state_len);
+   for (i = 0; i < num_viewports; i++) {
+      const struct ilo_viewport_cso *vp = &viewports[i];
+
+      dw[0] = fui(vp->m00);
+      dw[1] = fui(vp->m11);
+      dw[2] = fui(vp->m22);
+      dw[3] = fui(vp->m30);
+      dw[4] = fui(vp->m31);
+      dw[5] = fui(vp->m32);
+      dw[6] = 0;
+      dw[7] = 0;
+
+      dw += 8;
+   }
 
    return state_offset;
 }
 
 static uint32_t
 gen6_emit_CLIP_VIEWPORT(const struct ilo_dev_info *dev,
-                        const struct pipe_viewport_state *viewports,
-                        int num_viewports,
+                        const struct ilo_viewport_cso *viewports,
+                        unsigned num_viewports,
                         struct ilo_cp *cp)
 {
    const int state_align = 32 / 4;
    const int state_len = 4 * num_viewports;
    uint32_t state_offset, *dw;
+   unsigned i;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
@@ -3176,21 +3325,30 @@ gen6_emit_CLIP_VIEWPORT(const struct ilo_dev_info *dev,
    dw = ilo_cp_steal_ptr(cp, "CLIP_VIEWPORT",
          state_len, state_align, &state_offset);
 
-   ilo_gpe_gen6_fill_CLIP_VIEWPORT(dev,
-         viewports, num_viewports, dw, state_len);
+   for (i = 0; i < num_viewports; i++) {
+      const struct ilo_viewport_cso *vp = &viewports[i];
+
+      dw[0] = fui(vp->min_gbx);
+      dw[1] = fui(vp->max_gbx);
+      dw[2] = fui(vp->min_gby);
+      dw[3] = fui(vp->max_gby);
+
+      dw += 4;
+   }
 
    return state_offset;
 }
 
 static uint32_t
 gen6_emit_CC_VIEWPORT(const struct ilo_dev_info *dev,
-                      const struct pipe_viewport_state *viewports,
-                      int num_viewports,
+                      const struct ilo_viewport_cso *viewports,
+                      unsigned num_viewports,
                       struct ilo_cp *cp)
 {
    const int state_align = 32 / 4;
    const int state_len = 2 * num_viewports;
    uint32_t state_offset, *dw;
+   unsigned i;
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
 
@@ -3204,7 +3362,14 @@ gen6_emit_CC_VIEWPORT(const struct ilo_dev_info *dev,
    dw = ilo_cp_steal_ptr(cp, "CC_VIEWPORT",
          state_len, state_align, &state_offset);
 
-   gen6_fill_CC_VIEWPORT(dev, viewports, num_viewports, dw, state_len);
+   for (i = 0; i < num_viewports; i++) {
+      const struct ilo_viewport_cso *vp = &viewports[i];
+
+      dw[0] = fui(vp->min_z);
+      dw[1] = fui(vp->max_z);
+
+      dw += 2;
+   }
 
    return state_offset;
 }
@@ -3252,16 +3417,148 @@ gen6_blend_factor_dst_alpha_forced_one(int factor)
 }
 
 static uint32_t
+blend_get_rt_blend_enable(const struct ilo_dev_info *dev,
+                          const struct pipe_rt_blend_state *rt,
+                          bool dst_alpha_forced_one)
+{
+   int rgb_src, rgb_dst, a_src, a_dst;
+   uint32_t dw;
+
+   if (!rt->blend_enable)
+      return 0;
+
+   rgb_src = gen6_translate_pipe_blendfactor(rt->rgb_src_factor);
+   rgb_dst = gen6_translate_pipe_blendfactor(rt->rgb_dst_factor);
+   a_src = gen6_translate_pipe_blendfactor(rt->alpha_src_factor);
+   a_dst = gen6_translate_pipe_blendfactor(rt->alpha_dst_factor);
+
+   if (dst_alpha_forced_one) {
+      rgb_src = gen6_blend_factor_dst_alpha_forced_one(rgb_src);
+      rgb_dst = gen6_blend_factor_dst_alpha_forced_one(rgb_dst);
+      a_src = gen6_blend_factor_dst_alpha_forced_one(a_src);
+      a_dst = gen6_blend_factor_dst_alpha_forced_one(a_dst);
+   }
+
+   dw = 1 << 31 |
+        gen6_translate_pipe_blend(rt->alpha_func) << 26 |
+        a_src << 20 |
+        a_dst << 15 |
+        gen6_translate_pipe_blend(rt->rgb_func) << 11 |
+        rgb_src << 5 |
+        rgb_dst;
+
+   if (rt->rgb_func != rt->alpha_func ||
+       rgb_src != a_src || rgb_dst != a_dst)
+      dw |= 1 << 30;
+
+   return dw;
+}
+
+void
+ilo_gpe_init_blend(const struct ilo_dev_info *dev,
+                   const struct pipe_blend_state *state,
+                   struct ilo_blend_state *blend)
+{
+   unsigned num_cso, i;
+
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   if (state->independent_blend_enable) {
+      num_cso = Elements(blend->cso);
+   }
+   else {
+      memset(blend->cso, 0, sizeof(blend->cso));
+      num_cso = 1;
+   }
+
+   blend->independent_blend_enable = state->independent_blend_enable;
+   blend->alpha_to_coverage = state->alpha_to_coverage;
+   blend->dual_blend = false;
+
+   for (i = 0; i < num_cso; i++) {
+      const struct pipe_rt_blend_state *rt = &state->rt[i];
+      struct ilo_blend_cso *cso = &blend->cso[i];
+      bool dual_blend;
+
+      cso->payload[0] = 0;
+      cso->payload[1] = BRW_RENDERTARGET_CLAMPRANGE_FORMAT << 2 |
+                            0x3;
+
+      if (!(rt->colormask & PIPE_MASK_A))
+         cso->payload[1] |= 1 << 27;
+      if (!(rt->colormask & PIPE_MASK_R))
+         cso->payload[1] |= 1 << 26;
+      if (!(rt->colormask & PIPE_MASK_G))
+         cso->payload[1] |= 1 << 25;
+      if (!(rt->colormask & PIPE_MASK_B))
+         cso->payload[1] |= 1 << 24;
+
+      if (state->dither)
+         cso->payload[1] |= 1 << 12;
+
+      /*
+       * From the Sandy Bridge PRM, volume 2 part 1, page 365:
+       *
+       *     "Color Buffer Blending and Logic Ops must not be enabled
+       *      simultaneously, or behavior is UNDEFINED."
+       *
+       * Since state->logicop_enable takes precedence over rt->blend_enable,
+       * no special care is needed.
+       */
+      if (state->logicop_enable) {
+         cso->dw_logicop = 1 << 22 |
+            gen6_translate_pipe_logicop(state->logicop_func) << 18;
+
+         cso->dw_blend = 0;
+         cso->dw_blend_dst_alpha_forced_one = 0;
+
+         dual_blend = false;
+      }
+      else {
+         cso->dw_logicop = 0;
+
+         cso->dw_blend = blend_get_rt_blend_enable(dev, rt, false);
+         cso->dw_blend_dst_alpha_forced_one =
+            blend_get_rt_blend_enable(dev, rt, true);
+
+         dual_blend = (rt->blend_enable &&
+               util_blend_state_is_dual(state, i));
+      }
+
+      cso->dw_alpha_mod = 0;
+
+      if (state->alpha_to_coverage) {
+         cso->dw_alpha_mod |= 1 << 31;
+
+         if (dev->gen >= ILO_GEN(7))
+            cso->dw_alpha_mod |= 1 << 29;
+      }
+
+      /*
+       * From the Sandy Bridge PRM, volume 2 part 1, page 378:
+       *
+       *     "If Dual Source Blending is enabled, this bit (AlphaToOne Enable)
+       *      must be disabled."
+       */
+      if (state->alpha_to_one && !dual_blend)
+         cso->dw_alpha_mod |= 1 << 30;
+
+      if (dual_blend)
+         blend->dual_blend = true;
+   }
+}
+
+static uint32_t
 gen6_emit_BLEND_STATE(const struct ilo_dev_info *dev,
-                      const struct pipe_blend_state *blend,
-                      const struct pipe_framebuffer_state *framebuffer,
+                      const struct ilo_blend_state *blend,
+                      const struct ilo_fb_state *fb,
                       const struct pipe_alpha_state *alpha,
                       struct ilo_cp *cp)
 {
    const int state_align = 64 / 4;
    int state_len;
    uint32_t state_offset, *dw;
-   int num_targets, i;
+   unsigned num_targets, i;
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
 
@@ -3270,7 +3567,7 @@ gen6_emit_BLEND_STATE(const struct ilo_dev_info *dev,
     *
     *     "The blend state is stored as an array of up to 8 elements..."
     */
-   num_targets = framebuffer->nr_cbufs;
+   num_targets = fb->state.nr_cbufs;
    assert(num_targets <= 8);
 
    if (!num_targets) {
@@ -3286,13 +3583,12 @@ gen6_emit_BLEND_STATE(const struct ilo_dev_info *dev,
          state_len, state_align, &state_offset);
 
    for (i = 0; i < num_targets; i++) {
-      const int target = (blend->independent_blend_enable) ? i : 0;
-      const struct pipe_rt_blend_state *rt = &blend->rt[target];
-      const int num_samples = (target < framebuffer->nr_cbufs) ?
-         framebuffer->cbufs[target]->texture->nr_samples : 1;
+      const unsigned idx = (blend->independent_blend_enable) ? i : 0;
+      const struct ilo_blend_cso *cso = &blend->cso[idx];
+      const int num_samples = fb->num_samples;
       const struct util_format_description *format_desc =
-         (target < framebuffer->nr_cbufs) ?
-         util_format_description(framebuffer->cbufs[target]->format) : NULL;
+         (idx < fb->state.nr_cbufs) ?
+         util_format_description(fb->state.cbufs[idx]->format) : NULL;
       bool rt_is_unorm, rt_is_pure_integer, rt_dst_alpha_forced_one;
 
       rt_is_unorm = true;
@@ -3329,56 +3625,27 @@ gen6_emit_BLEND_STATE(const struct ilo_dev_info *dev,
          }
       }
 
-      dw[0] = 0;
-      dw[1] = BRW_RENDERTARGET_CLAMPRANGE_FORMAT << 2 | 0x3;
+      dw[0] = cso->payload[0];
+      dw[1] = cso->payload[1];
+
+      if (!rt_is_pure_integer) {
+         if (rt_dst_alpha_forced_one)
+            dw[0] |= cso->dw_blend_dst_alpha_forced_one;
+         else
+            dw[0] |= cso->dw_blend;
+      }
 
       /*
        * From the Sandy Bridge PRM, volume 2 part 1, page 365:
        *
-       *     "* Color Buffer Blending and Logic Ops must not be enabled
-       *        simultaneously, or behavior is UNDEFINED.
+       *     "Logic Ops are only supported on *_UNORM surfaces (excluding
+       *      _SRGB variants), otherwise Logic Ops must be DISABLED."
        *
-       *      * Logic Ops are only supported on *_UNORM surfaces (excluding
-       *        _SRGB variants), otherwise Logic Ops must be DISABLED."
-       *
-       * Since blend->logicop_enable takes precedence over rt->blend_enable,
-       * and logicop is ignored for non-UNORM color buffers, no special care
+       * Since logicop is ignored for non-UNORM color buffers, no special care
        * is needed.
        */
-      if (blend->logicop_enable) {
-         if (rt_is_unorm) {
-            dw[1] |= 1 << 22 |
-                     gen6_translate_pipe_logicop(blend->logicop_func) << 18;
-         }
-      }
-      else if (rt->blend_enable && !rt_is_pure_integer) {
-         int rgb_src, rgb_dst, a_src, a_dst;
-
-         rgb_src = gen6_translate_pipe_blendfactor(rt->rgb_src_factor);
-         rgb_dst = gen6_translate_pipe_blendfactor(rt->rgb_dst_factor);
-         a_src = gen6_translate_pipe_blendfactor(rt->alpha_src_factor);
-         a_dst = gen6_translate_pipe_blendfactor(rt->alpha_dst_factor);
-
-         if (rt_dst_alpha_forced_one) {
-            rgb_src = gen6_blend_factor_dst_alpha_forced_one(rgb_src);
-            rgb_dst = gen6_blend_factor_dst_alpha_forced_one(rgb_dst);
-            a_src = gen6_blend_factor_dst_alpha_forced_one(a_src);
-            a_dst = gen6_blend_factor_dst_alpha_forced_one(a_dst);
-         }
-
-         dw[0] |= 1 << 31 |
-                  gen6_translate_pipe_blend(rt->alpha_func) << 26 |
-                  a_src << 20 |
-                  a_dst << 15 |
-                  gen6_translate_pipe_blend(rt->rgb_func) << 11 |
-                  rgb_src << 5 |
-                  rgb_dst;
-
-         if (rt->rgb_func != rt->alpha_func ||
-             rgb_src != a_src ||
-             rgb_dst != a_dst)
-            dw[0] |= 1 << 30;
-      }
+      if (rt_is_unorm)
+         dw[1] |= cso->dw_logicop;
 
       /*
        * From the Sandy Bridge PRM, volume 2 part 1, page 356:
@@ -3389,37 +3656,8 @@ gen6_emit_BLEND_STATE(const struct ilo_dev_info *dev,
        * There is no such limitation on GEN7, or for AlphaToOne.  But GL
        * requires that anyway.
        */
-      if (num_samples > 1) {
-         if (blend->alpha_to_coverage)
-            dw[1] |= 1 << 31;
-
-         if (blend->alpha_to_one) {
-            const bool dual_blend =
-               (!blend->logicop_enable && rt->blend_enable &&
-                util_blend_state_is_dual(blend, target));
-
-            /*
-             * From the Sandy Bridge PRM, volume 2 part 1, page 378:
-             *
-             *     "If Dual Source Blending is enabled, this bit (AlphaToOne
-             *      Enable) must be disabled."
-             */
-            if (!dual_blend)
-               dw[1] |= 1 << 30;
-         }
-
-         if (dev->gen >= ILO_GEN(7))
-            dw[1] |= 1 << 29;
-      }
-
-      if (!(rt->colormask & PIPE_MASK_A))
-         dw[1] |= 1 << 27;
-      if (!(rt->colormask & PIPE_MASK_R))
-         dw[1] |= 1 << 26;
-      if (!(rt->colormask & PIPE_MASK_G))
-         dw[1] |= 1 << 25;
-      if (!(rt->colormask & PIPE_MASK_B))
-         dw[1] |= 1 << 24;
+      if (num_samples > 1)
+         dw[1] |= cso->dw_alpha_mod;
 
       /*
        * From the Sandy Bridge PRM, volume 2 part 1, page 382:
@@ -3432,28 +3670,29 @@ gen6_emit_BLEND_STATE(const struct ilo_dev_info *dev,
                   gen6_translate_dsa_func(alpha->func) << 13;
       }
 
-      if (blend->dither)
-         dw[1] |= 1 << 12;
-
       dw += 2;
    }
 
    return state_offset;
 }
 
-static uint32_t
-gen6_emit_DEPTH_STENCIL_STATE(const struct ilo_dev_info *dev,
-                              const struct pipe_depth_stencil_alpha_state *dsa,
-                              struct ilo_cp *cp)
+void
+ilo_gpe_init_dsa(const struct ilo_dev_info *dev,
+                 const struct pipe_depth_stencil_alpha_state *state,
+                 struct ilo_dsa_state *dsa)
 {
-   const int state_align = 64 / 4;
-   const int state_len = 3;
-   uint32_t state_offset, *dw;
+   const struct pipe_depth_state *depth = &state->depth;
+   const struct pipe_stencil_state *stencil0 = &state->stencil[0];
+   const struct pipe_stencil_state *stencil1 = &state->stencil[1];
+   uint32_t *dw;
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
 
-   dw = ilo_cp_steal_ptr(cp, "DEPTH_STENCIL_STATE",
-         state_len, state_align, &state_offset);
+   /* copy alpha state for later use */
+   dsa->alpha = state->alpha;
+
+   STATIC_ASSERT(Elements(dsa->payload) >= 3);
+   dw = dsa->payload;
 
    /*
     * From the Sandy Bridge PRM, volume 2 part 1, page 359:
@@ -3469,33 +3708,29 @@ gen6_emit_DEPTH_STENCIL_STATE(const struct ilo_dev_info *dev,
     *
     * TODO We do not check these yet.
     */
-   if (dsa->stencil[0].enabled) {
-      const struct pipe_stencil_state *stencil = &dsa->stencil[0];
-
+   if (stencil0->enabled) {
       dw[0] = 1 << 31 |
-              gen6_translate_dsa_func(stencil->func) << 28 |
-              gen6_translate_pipe_stencil_op(stencil->fail_op) << 25 |
-              gen6_translate_pipe_stencil_op(stencil->zfail_op) << 22 |
-              gen6_translate_pipe_stencil_op(stencil->zpass_op) << 19;
-      if (stencil->writemask)
+              gen6_translate_dsa_func(stencil0->func) << 28 |
+              gen6_translate_pipe_stencil_op(stencil0->fail_op) << 25 |
+              gen6_translate_pipe_stencil_op(stencil0->zfail_op) << 22 |
+              gen6_translate_pipe_stencil_op(stencil0->zpass_op) << 19;
+      if (stencil0->writemask)
          dw[0] |= 1 << 18;
 
-      dw[1] = stencil->valuemask << 24 |
-              stencil->writemask << 16;
+      dw[1] = stencil0->valuemask << 24 |
+              stencil0->writemask << 16;
 
-      if (dsa->stencil[1].enabled) {
-         stencil = &dsa->stencil[1];
-
+      if (stencil1->enabled) {
          dw[0] |= 1 << 15 |
-                  gen6_translate_dsa_func(stencil->func) << 12 |
-                  gen6_translate_pipe_stencil_op(stencil->fail_op) << 9 |
-                  gen6_translate_pipe_stencil_op(stencil->zfail_op) << 6 |
-                  gen6_translate_pipe_stencil_op(stencil->zpass_op) << 3;
-         if (stencil->writemask)
+                  gen6_translate_dsa_func(stencil1->func) << 12 |
+                  gen6_translate_pipe_stencil_op(stencil1->fail_op) << 9 |
+                  gen6_translate_pipe_stencil_op(stencil1->zfail_op) << 6 |
+                  gen6_translate_pipe_stencil_op(stencil1->zpass_op) << 3;
+         if (stencil1->writemask)
             dw[0] |= 1 << 18;
 
-         dw[1] |= stencil->valuemask << 8 |
-                  stencil->writemask;
+         dw[1] |= stencil1->valuemask << 8 |
+                  stencil1->writemask;
       }
    }
    else {
@@ -3516,26 +3751,93 @@ gen6_emit_DEPTH_STENCIL_STATE(const struct ilo_dev_info *dev,
     *
     * TODO We do not check these yet.
     */
-   dw[2] = dsa->depth.enabled << 31 |
-           dsa->depth.writemask << 26;
-   if (dsa->depth.enabled)
-      dw[2] |= gen6_translate_dsa_func(dsa->depth.func) << 27;
+   dw[2] = depth->enabled << 31 |
+           depth->writemask << 26;
+   if (depth->enabled)
+      dw[2] |= gen6_translate_dsa_func(depth->func) << 27;
    else
       dw[2] |= BRW_COMPAREFUNCTION_ALWAYS << 27;
+}
+
+static uint32_t
+gen6_emit_DEPTH_STENCIL_STATE(const struct ilo_dev_info *dev,
+                              const struct ilo_dsa_state *dsa,
+                              struct ilo_cp *cp)
+{
+   const int state_align = 64 / 4;
+   const int state_len = 3;
+   uint32_t state_offset, *dw;
+
+
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   dw = ilo_cp_steal_ptr(cp, "DEPTH_STENCIL_STATE",
+         state_len, state_align, &state_offset);
+
+   dw[0] = dsa->payload[0];
+   dw[1] = dsa->payload[1];
+   dw[2] = dsa->payload[2];
 
    return state_offset;
 }
 
+void
+ilo_gpe_set_scissor(const struct ilo_dev_info *dev,
+                    unsigned start_slot,
+                    unsigned num_states,
+                    const struct pipe_scissor_state *states,
+                    struct ilo_scissor_state *scissor)
+{
+   unsigned i;
+
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   for (i = 0; i < num_states; i++) {
+      uint16_t min_x, min_y, max_x, max_y;
+
+      /* both max and min are inclusive in SCISSOR_RECT */
+      if (states[i].minx < states[i].maxx &&
+          states[i].miny < states[i].maxy) {
+         min_x = states[i].minx;
+         min_y = states[i].miny;
+         max_x = states[i].maxx - 1;
+         max_y = states[i].maxy - 1;
+      }
+      else {
+         /* we have to make min greater than max */
+         min_x = 1;
+         min_y = 1;
+         max_x = 0;
+         max_y = 0;
+      }
+
+      scissor->payload[start_slot * 2 + 0] = min_y << 16 | min_x;
+      scissor->payload[start_slot * 2 + 1] = max_y << 16 | max_x;
+      start_slot++;
+   }
+}
+
+void
+ilo_gpe_set_scissor_null(const struct ilo_dev_info *dev,
+                         struct ilo_scissor_state *scissor)
+{
+   unsigned i;
+
+   for (i = 0; i < Elements(scissor->payload); i += 2) {
+      scissor->payload[i + 0] = 1 << 16 | 1;
+      scissor->payload[i + 1] = 0;
+   }
+}
+
 static uint32_t
 gen6_emit_SCISSOR_RECT(const struct ilo_dev_info *dev,
-                       const struct pipe_scissor_state *scissors,
-                       int num_scissors,
+                       const struct ilo_scissor_state *scissor,
+                       unsigned num_viewports,
                        struct ilo_cp *cp)
 {
    const int state_align = 32 / 4;
-   const int state_len = 2 * num_scissors;
+   const int state_len = 2 * num_viewports;
    uint32_t state_offset, *dw;
-   int i;
 
    ILO_GPE_VALID_GEN(dev, 6, 7);
 
@@ -3545,25 +3847,12 @@ gen6_emit_SCISSOR_RECT(const struct ilo_dev_info *dev,
     *     "The viewport-specific state used by the SF unit (SCISSOR_RECT) is
     *      stored as an array of up to 16 elements..."
     */
-   assert(num_scissors && num_scissors <= 16);
+   assert(num_viewports && num_viewports <= 16);
 
    dw = ilo_cp_steal_ptr(cp, "SCISSOR_RECT",
          state_len, state_align, &state_offset);
 
-   for (i = 0; i < num_scissors; i++) {
-      if (scissors[i].minx < scissors[i].maxx &&
-          scissors[i].miny < scissors[i].maxy) {
-         dw[0] = scissors[i].miny << 16 | scissors[i].minx;
-         dw[1] = (scissors[i].maxy - 1) << 16 | (scissors[i].maxx - 1);
-      }
-      else {
-         /* we have to make min greater than max as they are both inclusive */
-         dw[0] = 1 << 16 | 1;
-         dw[1] = 0;
-      }
-
-      dw += 2;
-   }
+   memcpy(dw, scissor->payload, state_len * 4);
 
    return state_offset;
 }
@@ -3598,14 +3887,15 @@ gen6_emit_BINDING_TABLE_STATE(const struct ilo_dev_info *dev,
    return state_offset;
 }
 
-static void
-gen6_fill_null_SURFACE_STATE(const struct ilo_dev_info *dev,
-                             unsigned width, unsigned height,
-                             unsigned depth, unsigned lod,
-                             uint32_t *dw, int num_dwords)
+void
+ilo_gpe_init_view_surface_null_gen6(const struct ilo_dev_info *dev,
+                                    unsigned width, unsigned height,
+                                    unsigned depth, unsigned level,
+                                    struct ilo_view_surface *surf)
 {
+   uint32_t *dw;
+
    ILO_GPE_VALID_GEN(dev, 6, 6);
-   assert(num_dwords == 6);
 
    /*
     * From the Sandy Bridge PRM, volume 4 part 1, page 71:
@@ -3630,6 +3920,9 @@ gen6_fill_null_SURFACE_STATE(const struct ilo_dev_info *dev,
     *      true"
     */
 
+   STATIC_ASSERT(Elements(surf->payload) >= 6);
+   dw = surf->payload;
+
    dw[0] = BRW_SURFACE_NULL << BRW_SURFACE_TYPE_SHIFT |
            BRW_SURFACEFORMAT_B8G8R8A8_UNORM << BRW_SURFACE_FORMAT_SHIFT;
 
@@ -3637,30 +3930,32 @@ gen6_fill_null_SURFACE_STATE(const struct ilo_dev_info *dev,
 
    dw[2] = (height - 1) << BRW_SURFACE_HEIGHT_SHIFT |
            (width  - 1) << BRW_SURFACE_WIDTH_SHIFT |
-           lod << BRW_SURFACE_LOD_SHIFT;
+           level << BRW_SURFACE_LOD_SHIFT;
 
    dw[3] = (depth - 1) << BRW_SURFACE_DEPTH_SHIFT |
            BRW_SURFACE_TILED;
 
    dw[4] = 0;
    dw[5] = 0;
+
+   surf->bo = NULL;
 }
 
-static void
-gen6_fill_buffer_SURFACE_STATE(const struct ilo_dev_info *dev,
-                               const struct ilo_buffer *buf,
-                               unsigned offset, unsigned size,
-                               unsigned struct_size,
-                               enum pipe_format elem_format,
-                               bool is_rt, bool render_cache_rw,
-                               uint32_t *dw, int num_dwords)
+void
+ilo_gpe_init_view_surface_for_buffer_gen6(const struct ilo_dev_info *dev,
+                                          const struct ilo_buffer *buf,
+                                          unsigned offset, unsigned size,
+                                          unsigned struct_size,
+                                          enum pipe_format elem_format,
+                                          bool is_rt, bool render_cache_rw,
+                                          struct ilo_view_surface *surf)
 {
    const int elem_size = util_format_get_blocksize(elem_format);
    int width, height, depth, pitch;
    int surface_format, num_entries;
+   uint32_t *dw;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
-   assert(num_dwords == 6);
 
    /*
     * For SURFTYPE_BUFFER, a SURFACE_STATE specifies an element of a
@@ -3717,6 +4012,9 @@ gen6_fill_buffer_SURFACE_STATE(const struct ilo_dev_info *dev,
    /* bits [26:20] */
    depth  = (num_entries & 0x07f00000) >> 20;
 
+   STATIC_ASSERT(Elements(surf->payload) >= 6);
+   dw = surf->payload;
+
    dw[0] = BRW_SURFACE_BUFFER << BRW_SURFACE_TYPE_SHIFT |
            surface_format << BRW_SURFACE_FORMAT_SHIFT;
    if (render_cache_rw)
@@ -3732,23 +4030,28 @@ gen6_fill_buffer_SURFACE_STATE(const struct ilo_dev_info *dev,
 
    dw[4] = 0;
    dw[5] = 0;
+
+   /* do not increment reference count */
+   surf->bo = buf->bo;
 }
 
-static void
-gen6_fill_normal_SURFACE_STATE(const struct ilo_dev_info *dev,
-                               struct ilo_texture *tex,
-                               enum pipe_format format,
-                               unsigned first_level, unsigned num_levels,
-                               unsigned first_layer, unsigned num_layers,
-                               bool is_rt, bool render_cache_rw,
-                               uint32_t *dw, int num_dwords)
+void
+ilo_gpe_init_view_surface_for_texture_gen6(const struct ilo_dev_info *dev,
+                                           const struct ilo_texture *tex,
+                                           enum pipe_format format,
+                                           unsigned first_level,
+                                           unsigned num_levels,
+                                           unsigned first_layer,
+                                           unsigned num_layers,
+                                           bool is_rt, bool render_cache_rw,
+                                           struct ilo_view_surface *surf)
 {
    int surface_type, surface_format;
    int width, height, depth, pitch, lod;
    unsigned layer_offset, x_offset, y_offset;
+   uint32_t *dw;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
-   assert(num_dwords == 6);
 
    surface_type = ilo_gpe_gen6_translate_texture(tex->base.target);
    assert(surface_type != BRW_SURFACE_BUFFER);
@@ -3902,6 +4205,9 @@ gen6_fill_normal_SURFACE_STATE(const struct ilo_dev_info *dev,
       assert(!x_offset);
    }
 
+   STATIC_ASSERT(Elements(surf->payload) >= 6);
+   dw = surf->payload;
+
    dw[0] = surface_type << BRW_SURFACE_TYPE_SHIFT |
            surface_format << BRW_SURFACE_FORMAT_SHIFT |
            BRW_SURFACE_MIPMAPLAYOUT_BELOW << BRW_SURFACE_MIPLAYOUT_SHIFT;
@@ -3934,21 +4240,23 @@ gen6_fill_normal_SURFACE_STATE(const struct ilo_dev_info *dev,
            y_offset << BRW_SURFACE_Y_OFFSET_SHIFT;
    if (tex->valign_4)
       dw[5] |= BRW_SURFACE_VERTICAL_ALIGN_ENABLE;
+
+   /* do not increment reference count */
+   surf->bo = tex->bo;
 }
 
 static uint32_t
 gen6_emit_SURFACE_STATE(const struct ilo_dev_info *dev,
-                        struct intel_bo *bo, bool for_render,
-                        const uint32_t *dw, int num_dwords,
+                        const struct ilo_view_surface *surf,
+                        bool for_render,
                         struct ilo_cp *cp)
 {
    const int state_align = 32 / 4;
-   const int state_len = 6;
+   const int state_len = (dev->gen >= ILO_GEN(7)) ? 8 : 6;
    uint32_t state_offset;
    uint32_t read_domains, write_domain;
 
-   ILO_GPE_VALID_GEN(dev, 6, 6);
-   assert(num_dwords == state_len);
+   ILO_GPE_VALID_GEN(dev, 6, 7);
 
    if (for_render) {
       read_domains = INTEL_DOMAIN_RENDER;
@@ -3960,106 +4268,25 @@ gen6_emit_SURFACE_STATE(const struct ilo_dev_info *dev,
    }
 
    ilo_cp_steal(cp, "SURFACE_STATE", state_len, state_align, &state_offset);
-   ilo_cp_write(cp, dw[0]);
-   ilo_cp_write_bo(cp, dw[1], bo, read_domains, write_domain);
-   ilo_cp_write(cp, dw[2]);
-   ilo_cp_write(cp, dw[3]);
-   ilo_cp_write(cp, dw[4]);
-   ilo_cp_write(cp, dw[5]);
+
+   STATIC_ASSERT(Elements(surf->payload) >= 8);
+
+   ilo_cp_write(cp, surf->payload[0]);
+   ilo_cp_write_bo(cp, surf->payload[1],
+         surf->bo, read_domains, write_domain);
+   ilo_cp_write(cp, surf->payload[2]);
+   ilo_cp_write(cp, surf->payload[3]);
+   ilo_cp_write(cp, surf->payload[4]);
+   ilo_cp_write(cp, surf->payload[5]);
+
+   if (dev->gen >= ILO_GEN(7)) {
+      ilo_cp_write(cp, surf->payload[6]);
+      ilo_cp_write(cp, surf->payload[7]);
+   }
+
    ilo_cp_end(cp);
 
    return state_offset;
-}
-
-static uint32_t
-gen6_emit_surf_SURFACE_STATE(const struct ilo_dev_info *dev,
-                             const struct pipe_surface *surface,
-                             struct ilo_cp *cp)
-{
-   struct intel_bo *bo;
-   uint32_t dw[6];
-
-   ILO_GPE_VALID_GEN(dev, 6, 6);
-
-   if (surface && surface->texture) {
-      struct ilo_texture *tex = ilo_texture(surface->texture);
-
-      bo = tex->bo;
-
-      /*
-       * classic i965 sets render_cache_rw for constant buffers and sol
-       * surfaces but not render buffers.  Why?
-       */
-      gen6_fill_normal_SURFACE_STATE(dev, tex, surface->format,
-            surface->u.tex.level, 1,
-            surface->u.tex.first_layer,
-            surface->u.tex.last_layer - surface->u.tex.first_layer + 1,
-            true, true, dw, Elements(dw));
-   }
-   else {
-      bo = NULL;
-      gen6_fill_null_SURFACE_STATE(dev,
-            surface->width, surface->height, 1, 0, dw, Elements(dw));
-   }
-
-   return gen6_emit_SURFACE_STATE(dev, bo, true, dw, Elements(dw), cp);
-}
-
-static uint32_t
-gen6_emit_view_SURFACE_STATE(const struct ilo_dev_info *dev,
-                             const struct pipe_sampler_view *view,
-                             struct ilo_cp *cp)
-{
-   struct intel_bo *bo;
-   uint32_t dw[6];
-
-   ILO_GPE_VALID_GEN(dev, 6, 6);
-
-   if (view->texture->target == PIPE_BUFFER) {
-      const unsigned elem_size = util_format_get_blocksize(view->format);
-      const unsigned first_elem = view->u.buf.first_element;
-      const unsigned num_elems = view->u.buf.last_element - first_elem + 1;
-      struct ilo_buffer *buf = ilo_buffer(view->texture);
-
-      gen6_fill_buffer_SURFACE_STATE(dev, buf,
-            first_elem * elem_size, num_elems * elem_size,
-            elem_size, view->format, false, false, dw, Elements(dw));
-
-      bo = buf->bo;
-   }
-   else {
-      struct ilo_texture *tex = ilo_texture(view->texture);
-
-      gen6_fill_normal_SURFACE_STATE(dev, tex, view->format,
-            view->u.tex.first_level,
-            view->u.tex.last_level - view->u.tex.first_level + 1,
-            view->u.tex.first_layer,
-            view->u.tex.last_layer - view->u.tex.first_layer + 1,
-            false, false, dw, Elements(dw));
-
-      bo = tex->bo;
-   }
-
-   return gen6_emit_SURFACE_STATE(dev, bo, false, dw, Elements(dw), cp);
-}
-
-static uint32_t
-gen6_emit_cbuf_SURFACE_STATE(const struct ilo_dev_info *dev,
-                             const struct pipe_constant_buffer *cbuf,
-                             struct ilo_cp *cp)
-{
-   const enum pipe_format elem_format = PIPE_FORMAT_R32G32B32A32_FLOAT;
-   struct ilo_buffer *buf = ilo_buffer(cbuf->buffer);
-   uint32_t dw[6];
-
-   ILO_GPE_VALID_GEN(dev, 6, 6);
-
-   gen6_fill_buffer_SURFACE_STATE(dev, buf,
-         cbuf->buffer_offset, cbuf->buffer_size,
-         util_format_get_blocksize(elem_format), elem_format,
-         false, false, dw, Elements(dw));
-
-   return gen6_emit_SURFACE_STATE(dev, buf->bo, false, dw, Elements(dw), cp);
 }
 
 static uint32_t
@@ -4072,7 +4299,7 @@ gen6_emit_so_SURFACE_STATE(const struct ilo_dev_info *dev,
    struct ilo_buffer *buf = ilo_buffer(so->buffer);
    unsigned bo_offset, struct_size;
    enum pipe_format elem_format;
-   uint32_t dw[6];
+   struct ilo_view_surface surf;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
@@ -4098,367 +4325,24 @@ gen6_emit_so_SURFACE_STATE(const struct ilo_dev_info *dev,
       break;
    }
 
-   gen6_fill_buffer_SURFACE_STATE(dev, buf, bo_offset, so->buffer_size,
-         struct_size, elem_format, false, true, dw, Elements(dw));
+   ilo_gpe_init_view_surface_for_buffer_gen6(dev, buf, bo_offset, so->buffer_size,
+         struct_size, elem_format, false, true, &surf);
 
-   return gen6_emit_SURFACE_STATE(dev, buf->bo, false, dw, Elements(dw), cp);
+   return gen6_emit_SURFACE_STATE(dev, &surf, false, cp);
 }
 
-static uint32_t
-gen6_emit_SAMPLER_STATE(const struct ilo_dev_info *dev,
-                        const struct pipe_sampler_state **samplers,
-                        const struct pipe_sampler_view **sampler_views,
-                        const uint32_t *sampler_border_colors,
-                        int num_samplers,
-                        struct ilo_cp *cp)
+static void
+sampler_init_border_color_gen6(const struct ilo_dev_info *dev,
+                               const union pipe_color_union *color,
+                               uint32_t *dw, int num_dwords)
 {
-   const int state_align = 32 / 4;
-   const int state_len = 4 * num_samplers;
-   uint32_t state_offset, *dw;
-   int i;
-
-   ILO_GPE_VALID_GEN(dev, 6, 7);
-
-   /*
-    * From the Sandy Bridge PRM, volume 4 part 1, page 101:
-    *
-    *     "The sampler state is stored as an array of up to 16 elements..."
-    */
-   assert(num_samplers <= 16);
-
-   if (!num_samplers)
-      return 0;
-
-   dw = ilo_cp_steal_ptr(cp, "SAMPLER_STATE",
-         state_len, state_align, &state_offset);
-
-   for (i = 0; i < num_samplers; i++) {
-      const struct pipe_sampler_state *sampler = samplers[i];
-      const struct pipe_sampler_view *view = sampler_views[i];
-      const uint32_t border_color = sampler_border_colors[i];
-      enum pipe_texture_target target;
-      int mip_filter, min_filter, mag_filter, max_aniso;
-      int lod_bias, max_lod, min_lod, base_level;
-      int wrap_s, wrap_t, wrap_r;
-      bool clamp_to_edge;
-
-      /* there may be holes */
-      if (!sampler || !view) {
-         /* disabled sampler */
-         dw[0] = 1 << 31;
-         dw[1] = 0;
-         dw[2] = 0;
-         dw[3] = 0;
-         dw += 4;
-
-         continue;
-      }
-
-      target = view->texture->target;
-
-      /* determine mip/min/mag filters */
-      mip_filter = gen6_translate_tex_mipfilter(sampler->min_mip_filter);
-
-      /*
-       * From the Sandy Bridge PRM, volume 4 part 1, page 103:
-       *
-       *     "Only MAPFILTER_NEAREST and MAPFILTER_LINEAR are supported for
-       *      surfaces of type SURFTYPE_3D."
-       */
-      if (sampler->max_anisotropy && target != PIPE_TEXTURE_3D) {
-         min_filter = BRW_MAPFILTER_ANISOTROPIC;
-         mag_filter = BRW_MAPFILTER_ANISOTROPIC;
-
-         if (sampler->max_anisotropy >= 2 && sampler->max_anisotropy <= 16)
-            max_aniso = sampler->max_anisotropy / 2 - 1;
-         else if (sampler->max_anisotropy > 16)
-            max_aniso = BRW_ANISORATIO_16;
-         else
-            max_aniso = BRW_ANISORATIO_2;
-      }
-      else {
-         min_filter = gen6_translate_tex_filter(sampler->min_img_filter);
-         mag_filter = gen6_translate_tex_filter(sampler->mag_img_filter);
-
-         /* ignored */
-         max_aniso = 0;
-      }
-
-      /*
-       * For nearest filtering, PIPE_TEX_WRAP_CLAMP means
-       * PIPE_TEX_WRAP_CLAMP_TO_EDGE;  for linear filtering,
-       * PIPE_TEX_WRAP_CLAMP means PIPE_TEX_WRAP_CLAMP_TO_BORDER while
-       * additionally clamping the texture coordinates to [0.0, 1.0].
-       *
-       * The clamping is taken care of in the shaders.  There are two filters
-       * here, but let the minification one has a say.
-       */
-      clamp_to_edge = (sampler->min_img_filter == PIPE_TEX_FILTER_NEAREST);
-
-      switch (target) {
-      case PIPE_TEXTURE_CUBE:
-         /*
-          * From the Sandy Bridge PRM, volume 4 part 1, page 107:
-          *
-          *     "When using cube map texture coordinates, only
-          *      TEXCOORDMODE_CLAMP and TEXCOORDMODE_CUBE settings are valid,
-          *      and each TC component must have the same Address Control
-          *      mode."
-          *
-          * From the Ivy Bridge PRM, volume 4 part 1, page 96:
-          *
-          *     "This field (Cube Surface Control Mode) must be set to
-          *      CUBECTRLMODE_PROGRAMMED"
-          *
-          * Therefore, we cannot use "Cube Surface Control Mode" for semless
-          * cube map filtering.
-          */
-         if (sampler->seamless_cube_map &&
-             (sampler->min_img_filter != PIPE_TEX_FILTER_NEAREST ||
-              sampler->mag_img_filter != PIPE_TEX_FILTER_NEAREST)) {
-            wrap_s = BRW_TEXCOORDMODE_CUBE;
-            wrap_t = BRW_TEXCOORDMODE_CUBE;
-            wrap_r = BRW_TEXCOORDMODE_CUBE;
-         }
-         else {
-            wrap_s = BRW_TEXCOORDMODE_CLAMP;
-            wrap_t = BRW_TEXCOORDMODE_CLAMP;
-            wrap_r = BRW_TEXCOORDMODE_CLAMP;
-         }
-         break;
-      case PIPE_TEXTURE_1D:
-         wrap_s = gen6_translate_tex_wrap(sampler->wrap_s, clamp_to_edge);
-         /*
-          * as noted in the classic i965 driver, the HW may look at these
-          * values so we need to set them to a safe mode
-          */
-         wrap_t = BRW_TEXCOORDMODE_WRAP;
-         wrap_r = BRW_TEXCOORDMODE_WRAP;
-         break;
-      default:
-         wrap_s = gen6_translate_tex_wrap(sampler->wrap_s, clamp_to_edge);
-         wrap_t = gen6_translate_tex_wrap(sampler->wrap_t, clamp_to_edge);
-         wrap_r = gen6_translate_tex_wrap(sampler->wrap_r, clamp_to_edge);
-         break;
-      }
-
-      /*
-       * Here is how the hardware calculate per-pixel LOD, from my reading of
-       * the PRMs:
-       *
-       *  1) LOD is set to log2(ratio of texels to pixels) if not specified in
-       *     other ways.  The number of texels is measured using level
-       *     SurfMinLod.
-       *  2) Bias is added to LOD.
-       *  3) LOD is clamped to [MinLod, MaxLod], and the clamped value is
-       *     compared with Base to determine whether magnification or
-       *     minification is needed.
-       *     (if preclamp is disabled, LOD is compared with Base before
-       *      clamping)
-       *  4) If magnification is needed, or no mipmapping is requested, LOD is
-       *     set to floor(MinLod).
-       *  5) LOD is clamped to [0, MIPCnt], and SurfMinLod is added to LOD.
-       *
-       * With Gallium interface, Base is always zero and view->u.tex.first_level
-       * specifies SurfMinLod.
-       *
-       * From the Sandy Bridge PRM, volume 4 part 1, page 21:
-       *
-       *     "[DevSNB] Errata: Incorrect behavior is observed in cases where
-       *      the min and mag mode filters are different and SurfMinLOD is
-       *      nonzero. The determination of MagMode uses the following equation
-       *      instead of the one in the above pseudocode: MagMode = (LOD +
-       *      SurfMinLOD - Base <= 0)"
-       *
-       * As a way to work around that, we set Base to view->u.tex.first_level
-       * on GEN6.
-       */
-      if (dev->gen >= ILO_GEN(7)) {
-         const float scale = 256.0f;
-
-         /* [-16.0, 16.0) in S4.8 */
-         lod_bias = (int)
-            (CLAMP(sampler->lod_bias, -16.0f, 15.9f) * scale);
-         lod_bias &= 0x1fff;
-
-         base_level = 0;
-
-         /* [0.0, 14.0] in U4.8 */
-         max_lod = (int) (CLAMP(sampler->max_lod, 0.0f, 14.0f) * scale);
-         min_lod = (int) (CLAMP(sampler->min_lod, 0.0f, 14.0f) * scale);
-      }
-      else {
-         const float scale = 64.0f;
-
-         /* [-16.0, 16.0) in S4.6 */
-         lod_bias = (int)
-            (CLAMP(sampler->lod_bias, -16.0f, 15.9f) * scale);
-         lod_bias &= 0x7ff;
-
-         base_level = view->u.tex.first_level;
-
-         /* [0.0, 13.0] in U4.6 */
-         max_lod = (int) (CLAMP(sampler->max_lod, 0.0f, 13.0f) * scale);
-         min_lod = (int) (CLAMP(sampler->min_lod, 0.0f, 13.0f) * scale);
-      }
-
-      /*
-       * We want LOD to be clamped to determine magnification/minification,
-       * and get set to zero when it is magnification or when mipmapping is
-       * disabled.  The hardware would set LOD to floor(MinLod) and that is a
-       * problem when MinLod is greater than or equal to 1.0f.
-       *
-       * We know that with Base being zero, it is always minification when
-       * MinLod is non-zero.  To meet our need, we just need to set MinLod to
-       * zero and set MagFilter to MinFilter when mipmapping is disabled.
-       */
-      if (sampler->min_mip_filter == PIPE_TEX_MIPFILTER_NONE && min_lod) {
-         min_lod = 0;
-         mag_filter = min_filter;
-      }
-
-      if (!sampler->normalized_coords) {
-         /* work around a bug in util_blitter */
-         mip_filter = BRW_MIPFILTER_NONE;
-
-         /*
-          * From the Ivy Bridge PRM, volume 4 part 1, page 98:
-          *
-          *     "The following state must be set as indicated if this field
-          *      (Non-normalized Coordinate Enable) is enabled:
-          *
-          *      - TCX/Y/Z Address Control Mode must be TEXCOORDMODE_CLAMP,
-          *        TEXCOORDMODE_HALF_BORDER, or TEXCOORDMODE_CLAMP_BORDER.
-          *      - Surface Type must be SURFTYPE_2D or SURFTYPE_3D.
-          *      - Mag Mode Filter must be MAPFILTER_NEAREST or
-          *        MAPFILTER_LINEAR.
-          *      - Min Mode Filter must be MAPFILTER_NEAREST or
-          *        MAPFILTER_LINEAR.
-          *      - Mip Mode Filter must be MIPFILTER_NONE.
-          *      - Min LOD must be 0.
-          *      - Max LOD must be 0.
-          *      - MIP Count must be 0.
-          *      - Surface Min LOD must be 0.
-          *      - Texture LOD Bias must be 0."
-          */
-         assert(wrap_s == BRW_TEXCOORDMODE_CLAMP ||
-                wrap_s == BRW_TEXCOORDMODE_CLAMP_BORDER);
-         assert(wrap_t == BRW_TEXCOORDMODE_CLAMP ||
-                wrap_t == BRW_TEXCOORDMODE_CLAMP_BORDER);
-         assert(wrap_r == BRW_TEXCOORDMODE_CLAMP ||
-                wrap_r == BRW_TEXCOORDMODE_CLAMP_BORDER);
-
-         assert(target == PIPE_TEXTURE_RECT);
-
-         assert(mag_filter == BRW_MAPFILTER_NEAREST ||
-                mag_filter == BRW_MAPFILTER_LINEAR);
-         assert(min_filter == BRW_MAPFILTER_NEAREST ||
-                min_filter == BRW_MAPFILTER_LINEAR);
-         assert(mip_filter == BRW_MIPFILTER_NONE);
-      }
-
-      if (dev->gen >= ILO_GEN(7)) {
-         dw[0] = 1 << 28 |
-                 base_level << 22 |
-                 mip_filter << 20 |
-                 mag_filter << 17 |
-                 min_filter << 14 |
-                 lod_bias << 1;
-
-         /* enable EWA filtering unconditionally breaks some piglit tests */
-         if (sampler->max_anisotropy)
-            dw[0] |= 1;
-
-         dw[1] = min_lod << 20 |
-                 max_lod << 8;
-
-         if (sampler->compare_mode != PIPE_TEX_COMPARE_NONE)
-            dw[1] |= gen6_translate_shadow_func(sampler->compare_func) << 1;
-
-         assert(!(border_color & 0x1f));
-         dw[2] = border_color;
-
-         dw[3] = max_aniso << 19 |
-                 wrap_s << 6 |
-                 wrap_t << 3 |
-                 wrap_r;
-
-         /* round the coordinates for linear filtering */
-         if (min_filter != BRW_MAPFILTER_NEAREST) {
-            dw[3] |= (BRW_ADDRESS_ROUNDING_ENABLE_U_MIN |
-                      BRW_ADDRESS_ROUNDING_ENABLE_V_MIN |
-                      BRW_ADDRESS_ROUNDING_ENABLE_R_MIN) << 13;
-         }
-         if (mag_filter != BRW_MAPFILTER_NEAREST) {
-            dw[3] |= (BRW_ADDRESS_ROUNDING_ENABLE_U_MAG |
-                      BRW_ADDRESS_ROUNDING_ENABLE_V_MAG |
-                      BRW_ADDRESS_ROUNDING_ENABLE_R_MAG) << 13;
-         }
-
-         if (!sampler->normalized_coords)
-            dw[3] |= 1 << 10;
-      }
-      else {
-         dw[0] = 1 << 28 |
-                 (min_filter != mag_filter) << 27 |
-                 base_level << 22 |
-                 mip_filter << 20 |
-                 mag_filter << 17 |
-                 min_filter << 14 |
-                 lod_bias << 3;
-
-         if (sampler->compare_mode != PIPE_TEX_COMPARE_NONE)
-            dw[0] |= gen6_translate_shadow_func(sampler->compare_func);
-
-         dw[1] = min_lod << 22 |
-                 max_lod << 12 |
-                 wrap_s << 6 |
-                 wrap_t << 3 |
-                 wrap_r;
-
-         assert(!(border_color & 0x1f));
-         dw[2] = border_color;
-
-         dw[3] = max_aniso << 19;
-
-         /* round the coordinates for linear filtering */
-         if (min_filter != BRW_MAPFILTER_NEAREST) {
-            dw[3] |= (BRW_ADDRESS_ROUNDING_ENABLE_U_MIN |
-                      BRW_ADDRESS_ROUNDING_ENABLE_V_MIN |
-                      BRW_ADDRESS_ROUNDING_ENABLE_R_MIN) << 13;
-         }
-         if (mag_filter != BRW_MAPFILTER_NEAREST) {
-            dw[3] |= (BRW_ADDRESS_ROUNDING_ENABLE_U_MAG |
-                      BRW_ADDRESS_ROUNDING_ENABLE_V_MAG |
-                      BRW_ADDRESS_ROUNDING_ENABLE_R_MAG) << 13;
-         }
-
-         if (!sampler->normalized_coords)
-            dw[3] |= 1;
-      }
-
-      dw += 4;
-   }
-
-   return state_offset;
-}
-
-static uint32_t
-gen6_emit_SAMPLER_BORDER_COLOR_STATE(const struct ilo_dev_info *dev,
-                                     const union pipe_color_union *color,
-                                     struct ilo_cp *cp)
-{
-   const int state_align = 32 / 4;
-   const int state_len = 12;
-   uint32_t state_offset, *dw;
    float rgba[4] = {
       color->f[0], color->f[1], color->f[2], color->f[3],
    };
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
-   dw = ilo_cp_steal_ptr(cp, "SAMPLER_BORDER_COLOR_STATE",
-         state_len, state_align, &state_offset);
+   assert(num_dwords >= 12);
 
    /*
     * This state is not documented in the Sandy Bridge PRM, but in the
@@ -4512,6 +4396,425 @@ gen6_emit_SAMPLER_BORDER_COLOR_STATE(const struct ilo_dev_info *dev,
            (uint16_t) util_iround(rgba[1] * 65535.0f) << 16;
    dw[8] = (uint16_t) util_iround(rgba[2] * 65535.0f) |
            (uint16_t) util_iround(rgba[3] * 65535.0f) << 16;
+}
+
+void
+ilo_gpe_init_sampler_cso(const struct ilo_dev_info *dev,
+                         const struct pipe_sampler_state *state,
+                         struct ilo_sampler_cso *sampler)
+{
+   int mip_filter, min_filter, mag_filter, max_aniso;
+   int lod_bias, max_lod, min_lod;
+   int wrap_s, wrap_t, wrap_r, wrap_cube;
+   bool clamp_is_to_edge;
+   uint32_t dw0, dw1, dw3;
+
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   memset(sampler, 0, sizeof(*sampler));
+
+   mip_filter = gen6_translate_tex_mipfilter(state->min_mip_filter);
+   min_filter = gen6_translate_tex_filter(state->min_img_filter);
+   mag_filter = gen6_translate_tex_filter(state->mag_img_filter);
+
+   sampler->anisotropic = state->max_anisotropy;
+
+   if (state->max_anisotropy >= 2 && state->max_anisotropy <= 16)
+      max_aniso = state->max_anisotropy / 2 - 1;
+   else if (state->max_anisotropy > 16)
+      max_aniso = BRW_ANISORATIO_16;
+   else
+      max_aniso = BRW_ANISORATIO_2;
+
+   /*
+    *
+    * Here is how the hardware calculate per-pixel LOD, from my reading of the
+    * PRMs:
+    *
+    *  1) LOD is set to log2(ratio of texels to pixels) if not specified in
+    *     other ways.  The number of texels is measured using level
+    *     SurfMinLod.
+    *  2) Bias is added to LOD.
+    *  3) LOD is clamped to [MinLod, MaxLod], and the clamped value is
+    *     compared with Base to determine whether magnification or
+    *     minification is needed.  (if preclamp is disabled, LOD is compared
+    *     with Base before clamping)
+    *  4) If magnification is needed, or no mipmapping is requested, LOD is
+    *     set to floor(MinLod).
+    *  5) LOD is clamped to [0, MIPCnt], and SurfMinLod is added to LOD.
+    *
+    * With Gallium interface, Base is always zero and
+    * pipe_sampler_view::u.tex.first_level specifies SurfMinLod.
+    */
+   if (dev->gen >= ILO_GEN(7)) {
+      const float scale = 256.0f;
+
+      /* [-16.0, 16.0) in S4.8 */
+      lod_bias = (int)
+         (CLAMP(state->lod_bias, -16.0f, 15.9f) * scale);
+      lod_bias &= 0x1fff;
+
+      /* [0.0, 14.0] in U4.8 */
+      max_lod = (int) (CLAMP(state->max_lod, 0.0f, 14.0f) * scale);
+      min_lod = (int) (CLAMP(state->min_lod, 0.0f, 14.0f) * scale);
+   }
+   else {
+      const float scale = 64.0f;
+
+      /* [-16.0, 16.0) in S4.6 */
+      lod_bias = (int)
+         (CLAMP(state->lod_bias, -16.0f, 15.9f) * scale);
+      lod_bias &= 0x7ff;
+
+      /* [0.0, 13.0] in U4.6 */
+      max_lod = (int) (CLAMP(state->max_lod, 0.0f, 13.0f) * scale);
+      min_lod = (int) (CLAMP(state->min_lod, 0.0f, 13.0f) * scale);
+   }
+
+   /*
+    * We want LOD to be clamped to determine magnification/minification, and
+    * get set to zero when it is magnification or when mipmapping is disabled.
+    * The hardware would set LOD to floor(MinLod) and that is a problem when
+    * MinLod is greater than or equal to 1.0f.
+    *
+    * With Base being zero, it is always minification when MinLod is non-zero.
+    * To achieve our goal, we just need to set MinLod to zero and set
+    * MagFilter to MinFilter when mipmapping is disabled.
+    */
+   if (state->min_mip_filter == PIPE_TEX_MIPFILTER_NONE && min_lod) {
+      min_lod = 0;
+      mag_filter = min_filter;
+   }
+
+   /*
+    * For nearest filtering, PIPE_TEX_WRAP_CLAMP means
+    * PIPE_TEX_WRAP_CLAMP_TO_EDGE;  for linear filtering, PIPE_TEX_WRAP_CLAMP
+    * means PIPE_TEX_WRAP_CLAMP_TO_BORDER while additionally clamping the
+    * texture coordinates to [0.0, 1.0].
+    *
+    * The clamping will be taken care of in the shaders.  There are two
+    * filters here, but let the minification one has a say.
+    */
+   clamp_is_to_edge = (state->min_img_filter == PIPE_TEX_FILTER_NEAREST);
+   if (!clamp_is_to_edge) {
+      sampler->saturate_s = (state->wrap_s == PIPE_TEX_WRAP_CLAMP);
+      sampler->saturate_t = (state->wrap_t == PIPE_TEX_WRAP_CLAMP);
+      sampler->saturate_r = (state->wrap_r == PIPE_TEX_WRAP_CLAMP);
+   }
+
+   /* determine wrap s/t/r */
+   wrap_s = gen6_translate_tex_wrap(state->wrap_s, clamp_is_to_edge);
+   wrap_t = gen6_translate_tex_wrap(state->wrap_t, clamp_is_to_edge);
+   wrap_r = gen6_translate_tex_wrap(state->wrap_r, clamp_is_to_edge);
+
+   /*
+    * From the Sandy Bridge PRM, volume 4 part 1, page 107:
+    *
+    *     "When using cube map texture coordinates, only TEXCOORDMODE_CLAMP
+    *      and TEXCOORDMODE_CUBE settings are valid, and each TC component
+    *      must have the same Address Control mode."
+    *
+    * From the Ivy Bridge PRM, volume 4 part 1, page 96:
+    *
+    *     "This field (Cube Surface Control Mode) must be set to
+    *      CUBECTRLMODE_PROGRAMMED"
+    *
+    * Therefore, we cannot use "Cube Surface Control Mode" for semless cube
+    * map filtering.
+    */
+   if (state->seamless_cube_map &&
+       (state->min_img_filter != PIPE_TEX_FILTER_NEAREST ||
+        state->mag_img_filter != PIPE_TEX_FILTER_NEAREST)) {
+      wrap_cube = BRW_TEXCOORDMODE_CUBE;
+   }
+   else {
+      wrap_cube = BRW_TEXCOORDMODE_CLAMP;
+   }
+
+   if (!state->normalized_coords) {
+      /*
+       * From the Ivy Bridge PRM, volume 4 part 1, page 98:
+       *
+       *     "The following state must be set as indicated if this field
+       *      (Non-normalized Coordinate Enable) is enabled:
+       *
+       *      - TCX/Y/Z Address Control Mode must be TEXCOORDMODE_CLAMP,
+       *        TEXCOORDMODE_HALF_BORDER, or TEXCOORDMODE_CLAMP_BORDER.
+       *      - Surface Type must be SURFTYPE_2D or SURFTYPE_3D.
+       *      - Mag Mode Filter must be MAPFILTER_NEAREST or
+       *        MAPFILTER_LINEAR.
+       *      - Min Mode Filter must be MAPFILTER_NEAREST or
+       *        MAPFILTER_LINEAR.
+       *      - Mip Mode Filter must be MIPFILTER_NONE.
+       *      - Min LOD must be 0.
+       *      - Max LOD must be 0.
+       *      - MIP Count must be 0.
+       *      - Surface Min LOD must be 0.
+       *      - Texture LOD Bias must be 0."
+       */
+      assert(wrap_s == BRW_TEXCOORDMODE_CLAMP ||
+             wrap_s == BRW_TEXCOORDMODE_CLAMP_BORDER);
+      assert(wrap_t == BRW_TEXCOORDMODE_CLAMP ||
+             wrap_t == BRW_TEXCOORDMODE_CLAMP_BORDER);
+      assert(wrap_r == BRW_TEXCOORDMODE_CLAMP ||
+             wrap_r == BRW_TEXCOORDMODE_CLAMP_BORDER);
+
+      assert(mag_filter == BRW_MAPFILTER_NEAREST ||
+             mag_filter == BRW_MAPFILTER_LINEAR);
+      assert(min_filter == BRW_MAPFILTER_NEAREST ||
+             min_filter == BRW_MAPFILTER_LINEAR);
+
+      /* work around a bug in util_blitter */
+      mip_filter = BRW_MIPFILTER_NONE;
+
+      assert(mip_filter == BRW_MIPFILTER_NONE);
+   }
+
+   if (dev->gen >= ILO_GEN(7)) {
+      dw0 = 1 << 28 |
+            mip_filter << 20 |
+            lod_bias << 1;
+
+      sampler->dw_filter = mag_filter << 17 |
+                           min_filter << 14;
+
+      sampler->dw_filter_aniso = BRW_MAPFILTER_ANISOTROPIC << 17 |
+                                 BRW_MAPFILTER_ANISOTROPIC << 14 |
+                                 1;
+
+      dw1 = min_lod << 20 |
+            max_lod << 8;
+
+      if (state->compare_mode != PIPE_TEX_COMPARE_NONE)
+         dw1 |= gen6_translate_shadow_func(state->compare_func) << 1;
+
+      dw3 = max_aniso << 19;
+
+      /* round the coordinates for linear filtering */
+      if (min_filter != BRW_MAPFILTER_NEAREST) {
+         dw3 |= (BRW_ADDRESS_ROUNDING_ENABLE_U_MIN |
+                 BRW_ADDRESS_ROUNDING_ENABLE_V_MIN |
+                 BRW_ADDRESS_ROUNDING_ENABLE_R_MIN) << 13;
+      }
+      if (mag_filter != BRW_MAPFILTER_NEAREST) {
+         dw3 |= (BRW_ADDRESS_ROUNDING_ENABLE_U_MAG |
+                 BRW_ADDRESS_ROUNDING_ENABLE_V_MAG |
+                 BRW_ADDRESS_ROUNDING_ENABLE_R_MAG) << 13;
+      }
+
+      if (!state->normalized_coords)
+         dw3 |= 1 << 10;
+
+      sampler->dw_wrap = wrap_s << 6 |
+                         wrap_t << 3 |
+                         wrap_r;
+
+      /*
+       * As noted in the classic i965 driver, the HW may still reference
+       * wrap_t and wrap_r for 1D textures.  We need to set them to a safe
+       * mode
+       */
+      sampler->dw_wrap_1d = wrap_s << 6 |
+                            BRW_TEXCOORDMODE_WRAP << 3 |
+                            BRW_TEXCOORDMODE_WRAP;
+
+      sampler->dw_wrap_cube = wrap_cube << 6 |
+                              wrap_cube << 3 |
+                              wrap_cube;
+
+      STATIC_ASSERT(Elements(sampler->payload) >= 7);
+
+      sampler->payload[0] = dw0;
+      sampler->payload[1] = dw1;
+      sampler->payload[2] = dw3;
+
+      memcpy(&sampler->payload[3],
+            state->border_color.ui, sizeof(state->border_color.ui));
+   }
+   else {
+      dw0 = 1 << 28 |
+            mip_filter << 20 |
+            lod_bias << 3;
+
+      if (state->compare_mode != PIPE_TEX_COMPARE_NONE)
+         dw0 |= gen6_translate_shadow_func(state->compare_func);
+
+      sampler->dw_filter = (min_filter != mag_filter) << 27 |
+                           mag_filter << 17 |
+                           min_filter << 14;
+
+      sampler->dw_filter_aniso = BRW_MAPFILTER_ANISOTROPIC << 17 |
+                                 BRW_MAPFILTER_ANISOTROPIC << 14;
+
+      dw1 = min_lod << 22 |
+            max_lod << 12;
+
+      sampler->dw_wrap = wrap_s << 6 |
+                         wrap_t << 3 |
+                         wrap_r;
+
+      sampler->dw_wrap_1d = wrap_s << 6 |
+                            BRW_TEXCOORDMODE_WRAP << 3 |
+                            BRW_TEXCOORDMODE_WRAP;
+
+      sampler->dw_wrap_cube = wrap_cube << 6 |
+                              wrap_cube << 3 |
+                              wrap_cube;
+
+      dw3 = max_aniso << 19;
+
+      /* round the coordinates for linear filtering */
+      if (min_filter != BRW_MAPFILTER_NEAREST) {
+         dw3 |= (BRW_ADDRESS_ROUNDING_ENABLE_U_MIN |
+                 BRW_ADDRESS_ROUNDING_ENABLE_V_MIN |
+                 BRW_ADDRESS_ROUNDING_ENABLE_R_MIN) << 13;
+      }
+      if (mag_filter != BRW_MAPFILTER_NEAREST) {
+         dw3 |= (BRW_ADDRESS_ROUNDING_ENABLE_U_MAG |
+                 BRW_ADDRESS_ROUNDING_ENABLE_V_MAG |
+                 BRW_ADDRESS_ROUNDING_ENABLE_R_MAG) << 13;
+      }
+
+      if (!state->normalized_coords)
+         dw3 |= 1;
+
+      STATIC_ASSERT(Elements(sampler->payload) >= 15);
+
+      sampler->payload[0] = dw0;
+      sampler->payload[1] = dw1;
+      sampler->payload[2] = dw3;
+
+      sampler_init_border_color_gen6(dev,
+            &state->border_color, &sampler->payload[3], 12);
+   }
+}
+
+static uint32_t
+gen6_emit_SAMPLER_STATE(const struct ilo_dev_info *dev,
+                        const struct ilo_sampler_cso * const *samplers,
+                        const struct pipe_sampler_view * const *views,
+                        const uint32_t *sampler_border_colors,
+                        int num_samplers,
+                        struct ilo_cp *cp)
+{
+   const int state_align = 32 / 4;
+   const int state_len = 4 * num_samplers;
+   uint32_t state_offset, *dw;
+   int i;
+
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   /*
+    * From the Sandy Bridge PRM, volume 4 part 1, page 101:
+    *
+    *     "The sampler state is stored as an array of up to 16 elements..."
+    */
+   assert(num_samplers <= 16);
+
+   if (!num_samplers)
+      return 0;
+
+   dw = ilo_cp_steal_ptr(cp, "SAMPLER_STATE",
+         state_len, state_align, &state_offset);
+
+   for (i = 0; i < num_samplers; i++) {
+      const struct ilo_sampler_cso *sampler = samplers[i];
+      const struct pipe_sampler_view *view = views[i];
+      const uint32_t border_color = sampler_border_colors[i];
+      uint32_t dw_filter, dw_wrap;
+
+      /* there may be holes */
+      if (!sampler || !view) {
+         /* disabled sampler */
+         dw[0] = 1 << 31;
+         dw[1] = 0;
+         dw[2] = 0;
+         dw[3] = 0;
+         dw += 4;
+
+         continue;
+      }
+
+      /* determine filter and wrap modes */
+      switch (view->texture->target) {
+      case PIPE_TEXTURE_1D:
+         dw_filter = (sampler->anisotropic) ?
+            sampler->dw_filter_aniso : sampler->dw_filter;
+         dw_wrap = sampler->dw_wrap_1d;
+         break;
+      case PIPE_TEXTURE_3D:
+         /*
+          * From the Sandy Bridge PRM, volume 4 part 1, page 103:
+          *
+          *     "Only MAPFILTER_NEAREST and MAPFILTER_LINEAR are supported for
+          *      surfaces of type SURFTYPE_3D."
+          */
+         dw_filter = sampler->dw_filter;
+         dw_wrap = sampler->dw_wrap;
+         break;
+      case PIPE_TEXTURE_CUBE:
+         dw_filter = (sampler->anisotropic) ?
+            sampler->dw_filter_aniso : sampler->dw_filter;
+         dw_wrap = sampler->dw_wrap_cube;
+         break;
+      default:
+         dw_filter = (sampler->anisotropic) ?
+            sampler->dw_filter_aniso : sampler->dw_filter;
+         dw_wrap = sampler->dw_wrap;
+         break;
+      }
+
+      dw[0] = sampler->payload[0];
+      dw[1] = sampler->payload[1];
+      assert(!(border_color & 0x1f));
+      dw[2] = border_color;
+      dw[3] = sampler->payload[2];
+
+      dw[0] |= dw_filter;
+
+      if (dev->gen >= ILO_GEN(7)) {
+         dw[3] |= dw_wrap;
+      }
+      else {
+         /*
+          * From the Sandy Bridge PRM, volume 4 part 1, page 21:
+          *
+          *     "[DevSNB] Errata: Incorrect behavior is observed in cases
+          *      where the min and mag mode filters are different and
+          *      SurfMinLOD is nonzero. The determination of MagMode uses the
+          *      following equation instead of the one in the above
+          *      pseudocode: MagMode = (LOD + SurfMinLOD - Base <= 0)"
+          *
+          * As a way to work around that, we set Base to
+          * view->u.tex.first_level.
+          */
+         dw[0] |= view->u.tex.first_level << 22;
+
+         dw[1] |= dw_wrap;
+      }
+
+      dw += 4;
+   }
+
+   return state_offset;
+}
+
+static uint32_t
+gen6_emit_SAMPLER_BORDER_COLOR_STATE(const struct ilo_dev_info *dev,
+                                     const struct ilo_sampler_cso *sampler,
+                                     struct ilo_cp *cp)
+{
+   const int state_align = 32 / 4;
+   const int state_len = (dev->gen >= ILO_GEN(7)) ? 4 : 12;
+   uint32_t state_offset, *dw;
+
+   ILO_GPE_VALID_GEN(dev, 6, 7);
+
+   dw = ilo_cp_steal_ptr(cp, "SAMPLER_BORDER_COLOR_STATE",
+         state_len, state_align, &state_offset);
+
+   /* see ilo_gpe_init_sampler_cso() */
+   memcpy(dw, &sampler->payload[3], state_len * 4);
 
    return state_offset;
 }
@@ -4712,9 +5015,7 @@ static const struct ilo_gpe_gen6 gen6_gpe = {
    GEN6_SET(DEPTH_STENCIL_STATE),
    GEN6_SET(SCISSOR_RECT),
    GEN6_SET(BINDING_TABLE_STATE),
-   GEN6_SET(surf_SURFACE_STATE),
-   GEN6_SET(view_SURFACE_STATE),
-   GEN6_SET(cbuf_SURFACE_STATE),
+   GEN6_SET(SURFACE_STATE),
    GEN6_SET(so_SURFACE_STATE),
    GEN6_SET(SAMPLER_STATE),
    GEN6_SET(SAMPLER_BORDER_COLOR_STATE),

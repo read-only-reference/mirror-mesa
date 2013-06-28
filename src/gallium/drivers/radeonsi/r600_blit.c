@@ -80,8 +80,9 @@ static void r600_blitter_begin(struct pipe_context *ctx, enum r600_blitter_op op
 
 	if ((op & R600_DISABLE_RENDER_COND) && rctx->current_render_cond) {
 		rctx->saved_render_cond = rctx->current_render_cond;
+		rctx->saved_render_cond_cond = rctx->current_render_cond_cond;
 		rctx->saved_render_cond_mode = rctx->current_render_cond_mode;
-		rctx->context.render_condition(&rctx->context, NULL, 0);
+		rctx->context.render_condition(&rctx->context, NULL, FALSE, 0);
 	}
 
 }
@@ -92,6 +93,7 @@ static void r600_blitter_end(struct pipe_context *ctx)
 	if (rctx->saved_render_cond) {
 		rctx->context.render_condition(&rctx->context,
 					       rctx->saved_render_cond,
+					       rctx->saved_render_cond_cond,
 					       rctx->saved_render_cond_mode);
 		rctx->saved_render_cond = NULL;
 	}
@@ -244,8 +246,7 @@ static void r600_clear(struct pipe_context *ctx, unsigned buffers,
 
 	r600_blitter_begin(ctx, R600_CLEAR);
 	util_blitter_clear(rctx->blitter, fb->width, fb->height,
-			   fb->nr_cbufs, buffers, fb->nr_cbufs ? fb->cbufs[0]->format : PIPE_FORMAT_NONE,
-			   color, depth, stencil);
+			   buffers, color, depth, stencil);
 	r600_blitter_end(ctx);
 }
 

@@ -347,7 +347,7 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return false;
    case PIPE_CAP_TGSI_INSTANCEID:
    case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
-      return false; /* TODO */
+      return true;
    case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
       return false;
    case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
@@ -380,7 +380,7 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_COLOR_CLAMPED:
       return false;
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
-      return 130;
+      return 140;
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
    case PIPE_CAP_USER_VERTEX_BUFFERS:
       return false;
@@ -391,9 +391,8 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_COMPUTE:
       return false; /* TODO */
    case PIPE_CAP_USER_INDEX_BUFFERS:
-      return false;
    case PIPE_CAP_USER_CONSTANT_BUFFERS:
-      return false; /* TODO push constants */
+      return true;
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       /* imposed by OWord (Dual) Block Read */
       return 16;
@@ -403,9 +402,8 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_MULTISAMPLE:
       return false; /* TODO */
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
-      return 0; /* TODO */
+      return 0;
    case PIPE_CAP_CUBE_MAP_ARRAY:
-      return false; /* TODO */
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
       return true;
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
@@ -421,6 +419,8 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
       /* a BRW_SURFACE_BUFFER can have up to 2^27 elements */
       return 1 << 27;
+   case PIPE_CAP_MAX_VIEWPORTS:
+      return ILO_MAX_VIEWPORTS;
 
    default:
       return 0;
@@ -532,7 +532,7 @@ ilo_get_timestamp(struct pipe_screen *screen)
       uint32_t dw[2];
    } timestamp;
 
-   is->winsys->read_reg(is->winsys, TIMESTAMP, &timestamp.val);
+   intel_winsys_read_reg(is->winsys, TIMESTAMP, &timestamp.val);
 
    /*
     * From the Ivy Bridge PRM, volume 1 part 3, page 107:
@@ -571,7 +571,7 @@ ilo_fence_reference(struct pipe_screen *screen,
       struct ilo_fence *old = *ptr;
 
       if (old->bo)
-         old->bo->unreference(old->bo);
+         intel_bo_unreference(old->bo);
       FREE(old);
    }
 
@@ -586,7 +586,7 @@ ilo_fence_signalled(struct pipe_screen *screen,
 
    /* mark signalled if the bo is idle */
    if (fence->bo && !intel_bo_is_busy(fence->bo)) {
-      fence->bo->unreference(fence->bo);
+      intel_bo_unreference(fence->bo);
       fence->bo = NULL;
    }
 
@@ -606,11 +606,11 @@ ilo_fence_finish(struct pipe_screen *screen,
       return true;
 
    /* wait and see if it returns error */
-   if (fence->bo->wait(fence->bo, wait_timeout))
+   if (intel_bo_wait(fence->bo, wait_timeout))
       return false;
 
    /* mark signalled */
-   fence->bo->unreference(fence->bo);
+   intel_bo_unreference(fence->bo);
    fence->bo = NULL;
 
    return true;
@@ -622,7 +622,7 @@ ilo_screen_destroy(struct pipe_screen *screen)
    struct ilo_screen *is = ilo_screen(screen);
 
    /* as it seems, winsys is owned by the screen */
-   is->winsys->destroy(is->winsys);
+   intel_winsys_destroy(is->winsys);
 
    FREE(is);
 }
@@ -713,7 +713,9 @@ ilo_screen_create(struct intel_winsys *ws)
 
    is->winsys = ws;
 
-   info = is->winsys->get_info(is->winsys);
+   intel_winsys_enable_reuse(is->winsys);
+
+   info = intel_winsys_get_info(is->winsys);
    if (!init_dev(&is->dev, info)) {
       FREE(is);
       return NULL;

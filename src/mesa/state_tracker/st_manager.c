@@ -1,6 +1,5 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.9
  *
  * Copyright (C) 2010 LunarG Inc.
  *
@@ -431,8 +430,6 @@ st_framebuffer_create(struct st_framebuffer_iface *stfbi)
 
    stfb->stamp = 0;
    st_framebuffer_update_attachments(stfb);
-
-   stfb->Base.Initialized = GL_TRUE;
 
    return stfb;
 }

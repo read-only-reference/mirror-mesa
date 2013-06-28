@@ -40,6 +40,7 @@
 #include "util/u_memory.h"
 #include "util/u_pack_color.h"
 #include "draw/draw_pipe.h"
+#include "os/os_time.h"
 #include "lp_context.h"
 #include "lp_memory.h"
 #include "lp_scene.h"
@@ -155,6 +156,10 @@ lp_setup_rasterize_scene( struct lp_setup_context *setup )
    struct lp_scene *scene = setup->scene;
    struct llvmpipe_screen *screen = llvmpipe_screen(scene->pipe->screen);
 
+   scene->num_active_queries = setup->active_binned_queries;
+   memcpy(scene->active_queries, setup->active_queries,
+          scene->num_active_queries * sizeof(scene->active_queries[0]));
+
    lp_scene_end_binning(scene);
 
    lp_fence_reference(&setup->last_fence, scene->fence);
@@ -181,7 +186,6 @@ begin_binning( struct lp_setup_context *setup )
    struct lp_scene *scene = setup->scene;
    boolean need_zsload = FALSE;
    boolean ok;
-   unsigned i;
 
    assert(scene);
    assert(scene->fence == NULL);
@@ -230,19 +234,11 @@ begin_binning( struct lp_setup_context *setup )
       }
    }
 
-   for (i = 0; i < PIPE_QUERY_TYPES; ++i) {
-      if (setup->active_query[i]) {
-         ok = lp_scene_bin_everywhere( scene,
-                                       LP_RAST_OP_BEGIN_QUERY,
-                                       lp_rast_arg_query(setup->active_query[i]) );
-         if (!ok)
-            return FALSE;
-      }
-   }
-
    setup->clear.flags = 0;
    setup->clear.zsmask = 0;
    setup->clear.zsvalue = 0;
+
+   scene->had_queries = !!setup->active_binned_queries;
 
    LP_DBG(DEBUG_SETUP, "%s done\n", __FUNCTION__);
    return TRUE;
@@ -1056,6 +1052,7 @@ lp_setup_update_state( struct lp_setup_context *setup,
        */
       setup->psize = lp->psize_slot;
       setup->viewport_index_slot = lp->viewport_index_slot;
+      setup->layer_slot = lp->layer_slot;
 
       assert(lp->dirty == 0);
 
@@ -1210,18 +1207,25 @@ void
 lp_setup_begin_query(struct lp_setup_context *setup,
                      struct llvmpipe_query *pq)
 {
-   /* init the query to its beginning state */
-   assert(setup->active_query[pq->type] == NULL);
 
    set_scene_state(setup, SETUP_ACTIVE, "begin_query");
-   
-   setup->active_query[pq->type] = pq;
 
-   /* XXX: It is possible that a query is created before the scene
-    * has been created. This means that setup->scene == NULL resulting
-    * in the query not being binned and thus is ignored.
-    */
+   if (!(pq->type == PIPE_QUERY_OCCLUSION_COUNTER ||
+         pq->type == PIPE_QUERY_OCCLUSION_PREDICATE ||
+         pq->type == PIPE_QUERY_PIPELINE_STATISTICS))
+      return;
 
+   /* init the query to its beginning state */
+   assert(setup->active_binned_queries < LP_MAX_ACTIVE_BINNED_QUERIES);
+   /* exceeding list size so just ignore the query */
+   if (setup->active_binned_queries >= LP_MAX_ACTIVE_BINNED_QUERIES) {
+      return;
+   }
+   assert(setup->active_queries[setup->active_binned_queries] == NULL);
+   setup->active_queries[setup->active_binned_queries] = pq;
+   setup->active_binned_queries++;
+
+   assert(setup->scene);
    if (setup->scene) {
       if (!lp_scene_bin_everywhere(setup->scene,
                                    LP_RAST_OP_BEGIN_QUERY,
@@ -1236,6 +1240,7 @@ lp_setup_begin_query(struct lp_setup_context *setup,
             return;
          }
       }
+      setup->scene->had_queries |= TRUE;
    }
 }
 
@@ -1248,30 +1253,65 @@ lp_setup_end_query(struct lp_setup_context *setup, struct llvmpipe_query *pq)
 {
    set_scene_state(setup, SETUP_ACTIVE, "end_query");
 
-   if (pq->type != PIPE_QUERY_TIMESTAMP) {
-      assert(setup->active_query[pq->type] == pq);
-      setup->active_query[pq->type] = NULL;
-   }
-
-   /* Setup will automatically re-issue any query which carried over a
-    * scene boundary, and the rasterizer automatically "ends" queries
-    * which are active at the end of a scene, so there is no need to
-    * retry this commands on failure.
-    */
+   assert(setup->scene);
    if (setup->scene) {
       /* pq->fence should be the fence of the *last* scene which
        * contributed to the query result.
        */
       lp_fence_reference(&pq->fence, setup->scene->fence);
 
-      if (!lp_scene_bin_everywhere(setup->scene,
-                                   LP_RAST_OP_END_QUERY,
-                                   lp_rast_arg_query(pq))) {
-         lp_setup_flush(setup, NULL, __FUNCTION__);
+      if (pq->type == PIPE_QUERY_OCCLUSION_COUNTER ||
+          pq->type == PIPE_QUERY_OCCLUSION_PREDICATE ||
+          pq->type == PIPE_QUERY_PIPELINE_STATISTICS ||
+          pq->type == PIPE_QUERY_TIMESTAMP) {
+         if (pq->type == PIPE_QUERY_TIMESTAMP &&
+               !(setup->scene->tiles_x | setup->scene->tiles_y)) {
+            /*
+             * If there's a zero width/height framebuffer, there's no bins and
+             * hence no rast task is ever run. So fill in something here instead.
+             */
+            pq->end[0] = os_time_get_nano();
+         }
+
+         if (!lp_scene_bin_everywhere(setup->scene,
+                                      LP_RAST_OP_END_QUERY,
+                                      lp_rast_arg_query(pq))) {
+            if (!lp_setup_flush_and_restart(setup))
+               goto fail;
+
+            if (!lp_scene_bin_everywhere(setup->scene,
+                                         LP_RAST_OP_END_QUERY,
+                                         lp_rast_arg_query(pq))) {
+               goto fail;
+            }
+         }
+         setup->scene->had_queries |= TRUE;
       }
    }
    else {
       lp_fence_reference(&pq->fence, setup->last_fence);
+   }
+
+fail:
+   /* Need to do this now not earlier since it still needs to be marked as
+    * active when binning it would cause a flush.
+    */
+   if (pq->type == PIPE_QUERY_OCCLUSION_COUNTER ||
+      pq->type == PIPE_QUERY_OCCLUSION_PREDICATE ||
+      pq->type == PIPE_QUERY_PIPELINE_STATISTICS) {
+      unsigned i;
+
+      /* remove from active binned query list */
+      for (i = 0; i < setup->active_binned_queries; i++) {
+         if (setup->active_queries[i] == pq)
+            break;
+      }
+      assert(i < setup->active_binned_queries);
+      if (i == setup->active_binned_queries)
+         return;
+      setup->active_binned_queries--;
+      setup->active_queries[i] = setup->active_queries[setup->active_binned_queries];
+      setup->active_queries[setup->active_binned_queries] = NULL;
    }
 }
 

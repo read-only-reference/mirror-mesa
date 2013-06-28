@@ -330,11 +330,13 @@ scaled to nanoseconds, recorded after all commands issued prior to
 This query does not require a call to ``begin_query``.
 The result is an unsigned 64-bit integer.
 
-``PIPE_QUERY_TIMESTAMP_DISJOINT`` can be used to check whether the
-internal timer resolution is good enough to distinguish between the
-events at ``begin_query`` and ``end_query``.
+``PIPE_QUERY_TIMESTAMP_DISJOINT`` can be used to check the
+internal timer resolution and whether the timestamp counter has become
+unreliable due to things like throttling etc. - only if this is FALSE
+a timestamp query (within the timestamp_disjoint query) should be trusted.
 The result is a 64-bit integer specifying the timer resolution in Hz,
-followed by a boolean value indicating whether the timer has incremented.
+followed by a boolean value indicating whether the timestamp counter
+is discontinuous or disjoint.
 
 ``PIPE_QUERY_PRIMITIVES_GENERATED`` returns a 64-bit integer indicating
 the number of primitives processed by the pipeline (regardless of whether
@@ -382,15 +384,19 @@ Conditional Rendering
 ^^^^^^^^^^^^^^^^^^^^^
 
 A drawing command can be skipped depending on the outcome of a query
-(typically an occlusion query).  The ``render_condition`` function specifies
-the query which should be checked prior to rendering anything.
+(typically an occlusion query, or streamout overflow predicate).
+The ``render_condition`` function specifies the query which should be checked
+prior to rendering anything. Functions honoring render_condition include
+(and are limited to) draw_vbo, clear, clear_render_target, clear_depth_stencil.
 
 If ``render_condition`` is called with ``query`` = NULL, conditional
 rendering is disabled and drawing takes place normally.
 
 If ``render_condition`` is called with a non-null ``query`` subsequent
-drawing commands will be predicated on the outcome of the query.  If
-the query result is zero subsequent drawing commands will be skipped.
+drawing commands will be predicated on the outcome of the query.
+Commands will be skipped if ``condition`` is equal to the predicate result
+(for non-boolean queries such as OCCLUSION_QUERY, zero counts as FALSE,
+non-zero as TRUE).
 
 If ``mode`` is PIPE_RENDER_COND_WAIT the driver will wait for the
 query to complete before deciding whether to render.
@@ -401,7 +407,7 @@ has completed, drawing will be predicated on the outcome of the query.
 
 If ``mode`` is PIPE_RENDER_COND_BY_REGION_WAIT or
 PIPE_RENDER_COND_BY_REGION_NO_WAIT rendering will be predicated as above
-for the non-REGION modes but in the case that an occulusion query returns
+for the non-REGION modes but in the case that an occlusion query returns
 a non-zero result, regions which were occluded may be ommitted by subsequent
 drawing commands.  This can result in better performance with some GPUs.
 Normally, if the occlusion query returned a non-zero result subsequent
@@ -472,15 +478,14 @@ The box parameter to some of these functions defines a 1D, 2D or 3D
 region of pixels.  This is self-explanatory for 1D, 2D and 3D texture
 targets.
 
-For PIPE_TEXTURE_1D_ARRAY, the box::y and box::height fields refer to the
-array dimension of the texture.
-
-For PIPE_TEXTURE_2D_ARRAY, the box::z and box::depth fields refer to the
-array dimension of the texture.
+For PIPE_TEXTURE_1D_ARRAY and PIPE_TEXTURE_2D_ARRAY, the box::z and box::depth
+fields refer to the array dimension of the texture.
 
 For PIPE_TEXTURE_CUBE, the box:z and box::depth fields refer to the
 faces of the cube map (z + depth <= 6).
 
+For PIPE_TEXTURE_CUBE_ARRAY, the box:z and box::depth fields refer to both
+the face and array dimension of the texture (face = z % 6, array = z / 6).
 
 
 .. _transfer_flush_region:

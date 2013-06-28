@@ -38,6 +38,7 @@
 #include "lp_rast.h"
 #include "lp_state_fs.h"
 #include "lp_state_setup.h"
+#include "lp_context.h"
 
 #define NUM_CHANNELS 4
 
@@ -204,7 +205,19 @@ lp_setup_whole_tile(struct lp_setup_context *setup,
 
    /* if variant is opaque and scissor doesn't effect the tile */
    if (inputs->opaque) {
-      if (!scene->fb.zsbuf) {
+      /* Several things prevent this optimization from working:
+       * - For layered rendering we can't determine if this covers the same layer
+       * as previous rendering (or in case of clears those actually always cover
+       * all layers so optimization is impossible). Need to use fb_max_layer and
+       * not setup->layer_slot to determine this since even if there's currently
+       * no slot assigned previous rendering could have used one.
+       * - If there were any Begin/End query commands in the scene then those
+       * would get removed which would be very wrong. Furthermore, if queries
+       * were just active we also can't do the optimization since to get
+       * accurate query results we unfortunately need to execute the rendering
+       * commands.
+       */
+      if (!scene->fb.zsbuf && scene->fb_max_layer == 0 && !scene->had_queries) {
          /*
           * All previous rendering will be overwritten so reset the bin.
           */
@@ -239,6 +252,7 @@ do_triangle_ccw(struct lp_setup_context *setup,
                 const float (*v2)[4],
                 boolean frontfacing )
 {
+   struct llvmpipe_context *lp_context = (struct llvmpipe_context *)setup->pipe;
    struct lp_scene *scene = setup->scene;
    const struct lp_setup_variant_key *key = &setup->setup.variant->key;
    struct lp_rast_triangle *tri;
@@ -247,6 +261,7 @@ do_triangle_ccw(struct lp_setup_context *setup,
    unsigned tri_bytes;
    int nr_planes = 3;
    unsigned scissor_index = 0;
+   unsigned layer = 0;
 
    /* Area should always be positive here */
    assert(position->area > 0);
@@ -263,6 +278,10 @@ do_triangle_ccw(struct lp_setup_context *setup,
    }
    else {
       nr_planes = 3;
+   }
+   if (setup->layer_slot > 0) {
+      layer = *(unsigned*)v1[setup->layer_slot];
+      layer = MIN2(layer, scene->fb_max_layer);
    }
 
    /* Bounding rectangle (in pixels) */
@@ -321,6 +340,10 @@ do_triangle_ccw(struct lp_setup_context *setup,
 
    LP_COUNT(nr_tris);
 
+   if (lp_context->active_statistics_queries) {
+      lp_context->pipeline_statistics.c_primitives++;
+   }
+
    /* Setup parameter interpolants:
     */
    setup->setup.variant->jit_function( v0,
@@ -334,6 +357,7 @@ do_triangle_ccw(struct lp_setup_context *setup,
    tri->inputs.frontfacing = frontfacing;
    tri->inputs.disable = FALSE;
    tri->inputs.opaque = setup->fs.current.variant->opaque;
+   tri->inputs.layer = layer;
 
    if (0)
       lp_dump_setup_coef(&setup->setup.variant->key,
@@ -519,7 +543,7 @@ do_triangle_ccw(struct lp_setup_context *setup,
       plane[6].eo = 0;
    }
 
-   return lp_setup_bin_triangle( setup, tri, &bbox, nr_planes, scissor_index );
+   return lp_setup_bin_triangle(setup, tri, &bbox, nr_planes, scissor_index);
 }
 
 /*
@@ -870,6 +894,8 @@ typedef void (*triangle_func_t)(struct lp_setup_context *setup,
 /**
  * Subdivide this triangle by bisecting edge (v0, v1).
  * \param pv  the provoking vertex (must = v0 or v1 or v2)
+ * TODO: should probably think about non-overflowing arithmetic elsewhere.
+ * This will definitely screw with pipeline counters for instance.
  */
 static void
 subdiv_tri(struct lp_setup_context *setup,

@@ -1100,6 +1100,8 @@ trace_context_create_stream_output_target(struct pipe_context *_pipe,
    result = pipe->create_stream_output_target(pipe,
                                               res, buffer_offset, buffer_size);
 
+   trace_dump_ret(ptr, result);
+
    trace_dump_call_end();
 
    return result;
@@ -1418,7 +1420,7 @@ trace_context_transfer_unmap(struct pipe_context *_context,
 
       trace_dump_arg_begin("data");
       trace_dump_box_bytes(tr_trans->map,
-                           resource->format,
+                           resource,
                            box,
                            stride,
                            layer_stride);
@@ -1464,7 +1466,7 @@ trace_context_transfer_inline_write(struct pipe_context *_context,
 
    trace_dump_arg_begin("data");
    trace_dump_box_bytes(data,
-                        resource->format,
+                        resource,
                         box,
                         stride,
                         layer_stride);
@@ -1482,6 +1484,7 @@ trace_context_transfer_inline_write(struct pipe_context *_context,
 
 static void trace_context_render_condition(struct pipe_context *_context,
                                            struct pipe_query *query,
+                                           boolean condition,
                                            uint mode)
 {
    struct trace_context *tr_context = trace_context(_context);
@@ -1491,11 +1494,12 @@ static void trace_context_render_condition(struct pipe_context *_context,
 
    trace_dump_arg(ptr, context);
    trace_dump_arg(ptr, query);
+   trace_dump_arg(bool, condition);
    trace_dump_arg(uint, mode);
 
    trace_dump_call_end();
 
-   context->render_condition(context, query, mode);
+   context->render_condition(context, query, condition, mode);
 }
 
 

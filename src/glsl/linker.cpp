@@ -66,6 +66,7 @@
 
 #include "main/core.h"
 #include "glsl_symbol_table.h"
+#include "glsl_parser_extras.h"
 #include "ir.h"
 #include "program.h"
 #include "program/hash_table.h"
@@ -1009,8 +1010,7 @@ link_intrastage_shaders(void *mem_ctx,
 
    if (main == NULL) {
       linker_error(prog, "%s shader lacks `main'\n",
-		   (shader_list[0]->Type == GL_VERTEX_SHADER)
-		   ? "vertex" : "fragment");
+		   _mesa_glsl_shader_target_name(shader_list[0]->Type));
       return NULL;
    }
 
@@ -1523,10 +1523,16 @@ check_resources(struct gl_context *ctx, struct gl_shader_program *prog)
       ctx->Const.GeometryProgram.MaxTextureImageUnits
    };
 
-   const unsigned max_uniform_components[MESA_SHADER_TYPES] = {
+   const unsigned max_default_uniform_components[MESA_SHADER_TYPES] = {
       ctx->Const.VertexProgram.MaxUniformComponents,
       ctx->Const.FragmentProgram.MaxUniformComponents,
       ctx->Const.GeometryProgram.MaxUniformComponents
+   };
+
+   const unsigned max_combined_uniform_components[MESA_SHADER_TYPES] = {
+      ctx->Const.VertexProgram.MaxCombinedUniformComponents,
+      ctx->Const.FragmentProgram.MaxCombinedUniformComponents,
+      ctx->Const.GeometryProgram.MaxCombinedUniformComponents
    };
 
    const unsigned max_uniform_blocks[MESA_SHADER_TYPES] = {
@@ -1546,7 +1552,22 @@ check_resources(struct gl_context *ctx, struct gl_shader_program *prog)
 		      shader_names[i]);
       }
 
-      if (sh->num_uniform_components > max_uniform_components[i]) {
+      if (sh->num_uniform_components > max_default_uniform_components[i]) {
+         if (ctx->Const.GLSLSkipStrictMaxUniformLimitCheck) {
+            linker_warning(prog, "Too many %s shader default uniform block "
+                           "components, but the driver will try to optimize "
+                           "them out; this is non-portable out-of-spec "
+			   "behavior\n",
+                           shader_names[i]);
+         } else {
+            linker_error(prog, "Too many %s shader default uniform block "
+			 "components",
+                         shader_names[i]);
+         }
+      }
+
+      if (sh->num_combined_uniform_components >
+	  max_combined_uniform_components[i]) {
          if (ctx->Const.GLSLSkipStrictMaxUniformLimitCheck) {
             linker_warning(prog, "Too many %s shader uniform components, "
                            "but the driver will try to optimize them out; "

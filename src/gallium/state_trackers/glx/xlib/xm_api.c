@@ -1,6 +1,5 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.1
  *
  * Copyright (C) 1999-2007  Brian Paul   All Rights Reserved.
  *
@@ -329,10 +328,10 @@ choose_pixel_format(XMesaVisual v)
        && v->BitsPerPixel == 32) {
       if (native_byte_order) {
          /* no byteswapping needed */
-         return PIPE_FORMAT_R8G8B8A8_UNORM;
+         return PIPE_FORMAT_RGBA8888_UNORM;
       }
       else {
-         return PIPE_FORMAT_A8B8G8R8_UNORM;
+         return PIPE_FORMAT_ABGR8888_UNORM;
       }
    }
    else if (   GET_REDMASK(v)   == 0xff0000
@@ -341,10 +340,10 @@ choose_pixel_format(XMesaVisual v)
             && v->BitsPerPixel == 32) {
       if (native_byte_order) {
          /* no byteswapping needed */
-         return PIPE_FORMAT_B8G8R8A8_UNORM;
+         return PIPE_FORMAT_BGRA8888_UNORM;
       }
       else {
-         return PIPE_FORMAT_A8R8G8B8_UNORM;
+         return PIPE_FORMAT_ARGB8888_UNORM;
       }
    }
    else if (   GET_REDMASK(v)   == 0x0000ff00
@@ -353,10 +352,10 @@ choose_pixel_format(XMesaVisual v)
             && v->BitsPerPixel == 32) {
       if (native_byte_order) {
          /* no byteswapping needed */
-         return PIPE_FORMAT_A8R8G8B8_UNORM;
+         return PIPE_FORMAT_ARGB8888_UNORM;
       }
       else {
-         return PIPE_FORMAT_B8G8R8A8_UNORM;
+         return PIPE_FORMAT_BGRA8888_UNORM;
       }
    }
    else if (   GET_REDMASK(v)   == 0xf800
@@ -1254,9 +1253,13 @@ void XMesaSwapBuffers( XMesaBuffer b )
  */
 void XMesaCopySubBuffer( XMesaBuffer b, int x, int y, int width, int height )
 {
+   XMesaContext xmctx = XMesaGetCurrentContext();
+
+   xmctx->st->flush( xmctx->st, ST_FLUSH_FRONT, NULL);
+
    xmesa_copy_st_framebuffer(b->stfb,
          ST_ATTACHMENT_BACK_LEFT, ST_ATTACHMENT_FRONT_LEFT,
-         x, y, width, height);
+         x, b->height - y - height, width, height);
 }
 
 
@@ -1378,7 +1381,7 @@ XMesaBindTexImage(Display *dpy, XMesaBuffer drawable, int buffer,
       enum pipe_format internal_format = res->format;
       struct pipe_transfer *tex_xfer;
       char *map;
-      int line, ximage_stride;
+      int line, byte_width;
       XImage *img;
 
       internal_format = choose_pixel_format(drawable->xm_visual);
@@ -1404,14 +1407,13 @@ XMesaBindTexImage(Display *dpy, XMesaBuffer drawable, int buffer,
          return;
       }
 
-      /* The pipe transfer has a pitch rounded up to the nearest 64 pixels.
-         We assume 32 bit pixels. */
-      ximage_stride = w * 4;
+      /* The pipe transfer has a pitch rounded up to the nearest 64 pixels. */
+      byte_width = w * ((img->bits_per_pixel + 7) / 8);
 
       for (line = 0; line < h; line++)
          memcpy(&map[line * tex_xfer->stride],
-                &img->data[line * ximage_stride],
-                ximage_stride);
+                &img->data[line * img->bytes_per_line],
+                byte_width);
 
       pipe_transfer_unmap(pipe, tex_xfer);
 

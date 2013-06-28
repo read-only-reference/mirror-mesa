@@ -37,33 +37,59 @@ extern "C" {
 #include "brw_eu.h"
 #include "brw_state.h"
 
-struct brw_blorp_clear_prog_key
+#define FILE_DEBUG_FLAG DEBUG_BLORP
+
+struct brw_blorp_const_color_prog_key
 {
    bool use_simd16_replicated_data;
    bool pad[3];
 };
 
-class brw_blorp_clear_params : public brw_blorp_params
+/**
+ * Parameters for a blorp operation where the fragment shader outputs a
+ * constant color.  This is used for both fast color clears and color
+ * resolves.
+ */
+class brw_blorp_const_color_params : public brw_blorp_params
+{
+public:
+   virtual uint32_t get_wm_prog(struct brw_context *brw,
+                                brw_blorp_prog_data **prog_data) const;
+
+protected:
+   brw_blorp_const_color_prog_key wm_prog_key;
+};
+
+class brw_blorp_clear_params : public brw_blorp_const_color_params
 {
 public:
    brw_blorp_clear_params(struct brw_context *brw,
                           struct gl_framebuffer *fb,
                           struct gl_renderbuffer *rb,
-                          GLubyte *color_mask);
-
-   virtual uint32_t get_wm_prog(struct brw_context *brw,
-                                brw_blorp_prog_data **prog_data) const;
-
-private:
-   brw_blorp_clear_prog_key wm_prog_key;
+                          GLubyte *color_mask,
+                          bool partial_clear);
 };
 
-class brw_blorp_clear_program
+
+/**
+ * Parameters for a blorp operation that performs a "render target resolve".
+ * This is used to resolve pending fast clear pixels before a color buffer is
+ * used for texturing, ReadPixels, or scanout.
+ */
+class brw_blorp_rt_resolve_params : public brw_blorp_const_color_params
 {
 public:
-   brw_blorp_clear_program(struct brw_context *brw,
-                          const brw_blorp_clear_prog_key *key);
-   ~brw_blorp_clear_program();
+   brw_blorp_rt_resolve_params(struct brw_context *brw,
+                               struct intel_mipmap_tree *mt);
+};
+
+
+class brw_blorp_const_color_program
+{
+public:
+   brw_blorp_const_color_program(struct brw_context *brw,
+                                 const brw_blorp_const_color_prog_key *key);
+   ~brw_blorp_const_color_program();
 
    const GLuint *compile(struct brw_context *brw, GLuint *program_size);
 
@@ -74,7 +100,7 @@ private:
 
    void *mem_ctx;
    struct brw_context *brw;
-   const brw_blorp_clear_prog_key *key;
+   const brw_blorp_const_color_prog_key *key;
    struct brw_compile func;
 
    /* Thread dispatch header */
@@ -90,25 +116,72 @@ private:
    GLuint base_mrf;
 };
 
-brw_blorp_clear_program::brw_blorp_clear_program(
+brw_blorp_const_color_program::brw_blorp_const_color_program(
       struct brw_context *brw,
-      const brw_blorp_clear_prog_key *key)
+      const brw_blorp_const_color_prog_key *key)
    : mem_ctx(ralloc_context(NULL)),
      brw(brw),
-     key(key)
+     key(key),
+     R0(),
+     R1(),
+     clear_rgba(),
+     base_mrf(0)
 {
    brw_init_compile(brw, &func, mem_ctx);
 }
 
-brw_blorp_clear_program::~brw_blorp_clear_program()
+brw_blorp_const_color_program::~brw_blorp_const_color_program()
 {
    ralloc_free(mem_ctx);
 }
 
+
+/**
+ * Determine if fast color clear supports the given clear color.
+ *
+ * Fast color clear can only clear to color values of 1.0 or 0.0.  At the
+ * moment we only support floating point, unorm, and snorm buffers.
+ */
+static bool
+is_color_fast_clear_compatible(struct intel_context *intel,
+                               gl_format format,
+                               const union gl_color_union *color)
+{
+   if (_mesa_is_format_integer_color(format))
+      return false;
+
+   for (int i = 0; i < 4; i++) {
+      if (color->f[i] != 0.0 && color->f[i] != 1.0) {
+         perf_debug("Clear color unsupported by fast color clear.  "
+                    "Falling back to slow clear.");
+         return false;
+      }
+   }
+   return true;
+}
+
+
+/**
+ * Convert the given color to a bitfield suitable for ORing into DWORD 7 of
+ * SURFACE_STATE.
+ */
+static uint32_t
+compute_fast_clear_color_bits(const union gl_color_union *color)
+{
+   uint32_t bits = 0;
+   for (int i = 0; i < 4; i++) {
+      if (color->f[i] != 0.0)
+         bits |= 1 << (GEN7_SURFACE_CLEAR_COLOR_SHIFT + (3 - i));
+   }
+   return bits;
+}
+
+
 brw_blorp_clear_params::brw_blorp_clear_params(struct brw_context *brw,
                                                struct gl_framebuffer *fb,
                                                struct gl_renderbuffer *rb,
-                                               GLubyte *color_mask)
+                                               GLubyte *color_mask,
+                                               bool partial_clear)
 {
    struct intel_context *intel = &brw->intel;
    struct gl_context *ctx = &intel->ctx;
@@ -161,20 +234,108 @@ brw_blorp_clear_params::brw_blorp_clear_params(struct brw_context *brw,
          wm_prog_key.use_simd16_replicated_data = false;
       }
    }
+
+   /* If we can do this as a fast color clear, do so. */
+   if (irb->mt->mcs_state != INTEL_MCS_STATE_NONE && !partial_clear &&
+       wm_prog_key.use_simd16_replicated_data &&
+       is_color_fast_clear_compatible(intel, format, &ctx->Color.ClearColor)) {
+      memset(push_consts, 0xff, 4*sizeof(float));
+      fast_clear_op = GEN7_FAST_CLEAR_OP_FAST_CLEAR;
+
+      /* From the Ivy Bridge PRM, Vol2 Part1 11.7 "MCS Buffer for Render
+       * Target(s)", beneath the "Fast Color Clear" bullet (p327):
+       *
+       *     Clear pass must have a clear rectangle that must follow alignment
+       *     rules in terms of pixels and lines as shown in the table
+       *     below. Further, the clear-rectangle height and width must be
+       *     multiple of the following dimensions. If the height and width of
+       *     the render target being cleared do not meet these requirements,
+       *     an MCS buffer can be created such that it follows the requirement
+       *     and covers the RT.
+       *
+       * The alignment size in the table that follows is related to the
+       * alignment size returned by intel_get_non_msrt_mcs_alignment(), but
+       * with X alignment multiplied by 16 and Y alignment multiplied by 32.
+       */
+      unsigned x_align, y_align;
+      intel_get_non_msrt_mcs_alignment(intel, irb->mt, &x_align, &y_align);
+      x_align *= 16;
+      y_align *= 32;
+      x0 = ROUND_DOWN_TO(x0, x_align);
+      y0 = ROUND_DOWN_TO(y0, y_align);
+      x1 = ALIGN(x1, x_align);
+      y1 = ALIGN(y1, y_align);
+
+      /* From the Ivy Bridge PRM, Vol2 Part1 11.7 "MCS Buffer for Render
+       * Target(s)", beneath the "Fast Color Clear" bullet (p327):
+       *
+       *     In order to optimize the performance MCS buffer (when bound to 1X
+       *     RT) clear similarly to MCS buffer clear for MSRT case, clear rect
+       *     is required to be scaled by the following factors in the
+       *     horizontal and vertical directions:
+       *
+       * The X and Y scale down factors in the table that follows are each
+       * equal to half the alignment value computed above.
+       */
+      unsigned x_scaledown = x_align / 2;
+      unsigned y_scaledown = y_align / 2;
+      x0 /= x_scaledown;
+      y0 /= y_scaledown;
+      x1 /= x_scaledown;
+      y1 /= y_scaledown;
+   }
 }
 
+
+brw_blorp_rt_resolve_params::brw_blorp_rt_resolve_params(
+      struct brw_context *brw,
+      struct intel_mipmap_tree *mt)
+{
+   dst.set(brw, mt, 0 /* level */, 0 /* layer */);
+
+   /* From the Ivy Bridge PRM, Vol2 Part1 11.9 "Render Target Resolve":
+    *
+    *     A rectangle primitive must be scaled down by the following factors
+    *     with respect to render target being resolved.
+    *
+    * The scaledown factors in the table that follows are related to the
+    * alignment size returned by intel_get_non_msrt_mcs_alignment(), but with
+    * X and Y alignment each divided by 2.
+    */
+   unsigned x_align, y_align;
+   intel_get_non_msrt_mcs_alignment(&brw->intel, mt, &x_align, &y_align);
+   unsigned x_scaledown = x_align / 2;
+   unsigned y_scaledown = y_align / 2;
+   x0 = y0 = 0;
+   x1 = ALIGN(mt->logical_width0, x_scaledown) / x_scaledown;
+   y1 = ALIGN(mt->logical_height0, y_scaledown) / y_scaledown;
+
+   fast_clear_op = GEN7_FAST_CLEAR_OP_RESOLVE;
+
+   /* Note: there is no need to initialize push constants because it doesn't
+    * matter what data gets dispatched to the render target.  However, we must
+    * ensure that the fragment shader delivers the data using the "replicated
+    * color" message.
+    */
+   use_wm_prog = true;
+   memset(&wm_prog_key, 0, sizeof(wm_prog_key));
+   wm_prog_key.use_simd16_replicated_data = true;
+}
+
+
 uint32_t
-brw_blorp_clear_params::get_wm_prog(struct brw_context *brw,
-                                   brw_blorp_prog_data **prog_data) const
+brw_blorp_const_color_params::get_wm_prog(struct brw_context *brw,
+                                          brw_blorp_prog_data **prog_data)
+   const
 {
    uint32_t prog_offset;
-   if (!brw_search_cache(&brw->cache, BRW_BLORP_CLEAR_PROG,
+   if (!brw_search_cache(&brw->cache, BRW_BLORP_CONST_COLOR_PROG,
                          &this->wm_prog_key, sizeof(this->wm_prog_key),
                          &prog_offset, prog_data)) {
-      brw_blorp_clear_program prog(brw, &this->wm_prog_key);
+      brw_blorp_const_color_program prog(brw, &this->wm_prog_key);
       GLuint program_size;
       const GLuint *program = prog.compile(brw, &program_size);
-      brw_upload_cache(&brw->cache, BRW_BLORP_CLEAR_PROG,
+      brw_upload_cache(&brw->cache, BRW_BLORP_CONST_COLOR_PROG,
                        &this->wm_prog_key, sizeof(this->wm_prog_key),
                        program, program_size,
                        &prog.prog_data, sizeof(prog.prog_data),
@@ -184,7 +345,7 @@ brw_blorp_clear_params::get_wm_prog(struct brw_context *brw,
 }
 
 void
-brw_blorp_clear_program::alloc_regs()
+brw_blorp_const_color_program::alloc_regs()
 {
    int reg = 0;
    this->R0 = retype(brw_vec8_grf(reg++, 0), BRW_REGISTER_TYPE_UW);
@@ -201,8 +362,8 @@ brw_blorp_clear_program::alloc_regs()
 }
 
 const GLuint *
-brw_blorp_clear_program::compile(struct brw_context *brw,
-                                 GLuint *program_size)
+brw_blorp_const_color_program::compile(struct brw_context *brw,
+                                       GLuint *program_size)
 {
    /* Set up prog_data */
    memset(&prog_data, 0, sizeof(prog_data));
@@ -264,7 +425,8 @@ brw_blorp_clear_program::compile(struct brw_context *brw,
 
 extern "C" {
 bool
-brw_blorp_clear_color(struct intel_context *intel, struct gl_framebuffer *fb)
+brw_blorp_clear_color(struct intel_context *intel, struct gl_framebuffer *fb,
+                      bool partial_clear)
 {
    struct gl_context *ctx = &intel->ctx;
    struct brw_context *brw = brw_context(ctx);
@@ -286,6 +448,7 @@ brw_blorp_clear_color(struct intel_context *intel, struct gl_framebuffer *fb)
 
    for (unsigned buf = 0; buf < ctx->DrawBuffer->_NumColorDrawBuffers; buf++) {
       struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[buf];
+      struct intel_renderbuffer *irb = intel_renderbuffer(rb);
 
       /* If this is an ES2 context or GL_ARB_ES2_compatibility is supported,
        * the framebuffer can be complete with some attachments missing.  In
@@ -294,11 +457,71 @@ brw_blorp_clear_color(struct intel_context *intel, struct gl_framebuffer *fb)
       if (rb == NULL)
          continue;
 
-      brw_blorp_clear_params params(brw, fb, rb, ctx->Color.ColorMask[buf]);
+      brw_blorp_clear_params params(brw, fb, rb, ctx->Color.ColorMask[buf],
+                                    partial_clear);
+
+      bool is_fast_clear =
+         (params.fast_clear_op == GEN7_FAST_CLEAR_OP_FAST_CLEAR);
+      if (is_fast_clear) {
+         /* Record the clear color in the miptree so that it will be
+          * programmed in SURFACE_STATE by later rendering and resolve
+          * operations.
+          */
+         uint32_t new_color_value =
+            compute_fast_clear_color_bits(&ctx->Color.ClearColor);
+         if (irb->mt->fast_clear_color_value != new_color_value) {
+            irb->mt->fast_clear_color_value = new_color_value;
+            brw->state.dirty.brw |= BRW_NEW_SURFACES;
+         }
+
+         /* If the buffer is already in INTEL_MCS_STATE_CLEAR, the clear is
+          * redundant and can be skipped.
+          */
+         if (irb->mt->mcs_state == INTEL_MCS_STATE_CLEAR)
+            continue;
+
+         /* If the MCS buffer hasn't been allocated yet, we need to allocate
+          * it now.
+          */
+         if (!irb->mt->mcs_mt) {
+            if (!intel_miptree_alloc_non_msrt_mcs(intel, irb->mt)) {
+               /* MCS allocation failed--probably this will only happen in
+                * out-of-memory conditions.  But in any case, try to recover
+                * by falling back to a non-blorp clear technique.
+                */
+               return false;
+            }
+            brw->state.dirty.brw |= BRW_NEW_SURFACES;
+         }
+      }
+
+      DBG("%s to mt %p level %d layer %d\n", __FUNCTION__,
+          irb->mt, irb->mt_level, irb->mt_layer);
+
       brw_blorp_exec(intel, &params);
+
+      if (is_fast_clear) {
+         /* Now that the fast clear has occurred, put the buffer in
+          * INTEL_MCS_STATE_CLEAR so that we won't waste time doing redundant
+          * clears.
+          */
+         irb->mt->mcs_state = INTEL_MCS_STATE_CLEAR;
+      }
    }
 
    return true;
+}
+
+void
+brw_blorp_resolve_color(struct intel_context *intel, struct intel_mipmap_tree *mt)
+{
+   struct brw_context *brw = brw_context(&intel->ctx);
+
+   DBG("%s to mt %p\n", __FUNCTION__, mt);
+
+   brw_blorp_rt_resolve_params params(brw, mt);
+   brw_blorp_exec(intel, &params);
+   mt->mcs_state = INTEL_MCS_STATE_RESOLVED;
 }
 
 } /* extern "C" */

@@ -272,18 +272,6 @@ static const int extra_flush_current[] = {
    EXTRA_END
 };
 
-static const int extra_EXT_secondary_color_flush_current[] = {
-   EXT(EXT_secondary_color),
-   EXTRA_FLUSH_CURRENT,
-   EXTRA_END
-};
-
-static const int extra_EXT_fog_coord_flush_current[] = {
-   EXT(EXT_fog_coord),
-   EXTRA_FLUSH_CURRENT,
-   EXTRA_END
-};
-
 static const int extra_EXT_texture_integer[] = {
    EXT(EXT_texture_integer),
    EXTRA_END
@@ -295,8 +283,9 @@ static const int extra_EXT_texture_integer_and_new_buffers[] = {
    EXTRA_END
 };
 
-static const int extra_GLSL_130[] = {
+static const int extra_GLSL_130_es3[] = {
    EXTRA_GLSL_130,
+   EXTRA_API_ES3,
    EXTRA_END
 };
 
@@ -336,11 +325,14 @@ static const int extra_EXT_framebuffer_sRGB_and_new_buffers[] = {
    EXTRA_END
 };
 
+static const int extra_MESA_texture_array_es3[] = {
+   EXT(MESA_texture_array),
+   EXTRA_API_ES3,
+   EXTRA_END
+};
+
 EXTRA_EXT(ARB_texture_cube_map);
 EXTRA_EXT(MESA_texture_array);
-EXTRA_EXT2(EXT_secondary_color, ARB_vertex_program);
-EXTRA_EXT(EXT_secondary_color);
-EXTRA_EXT(EXT_fog_coord);
 EXTRA_EXT(NV_fog_distance);
 EXTRA_EXT(EXT_texture_filter_anisotropic);
 EXTRA_EXT(NV_point_sprite);
@@ -350,12 +342,10 @@ EXTRA_EXT(EXT_depth_bounds_test);
 EXTRA_EXT(ARB_depth_clamp);
 EXTRA_EXT(ATI_fragment_shader);
 EXTRA_EXT(EXT_framebuffer_blit);
-EXTRA_EXT(ARB_shader_objects);
 EXTRA_EXT(EXT_provoking_vertex);
 EXTRA_EXT(ARB_fragment_shader);
 EXTRA_EXT(ARB_fragment_program);
 EXTRA_EXT2(ARB_framebuffer_object, EXT_framebuffer_multisample);
-EXTRA_EXT(EXT_framebuffer_object);
 EXTRA_EXT(ARB_seamless_cube_map);
 EXTRA_EXT(ARB_sync);
 EXTRA_EXT(ARB_vertex_shader);
@@ -396,6 +386,12 @@ static const int extra_version_32[] = { EXTRA_VERSION_32, EXTRA_END };
 
 static const int extra_gl30_es3[] = {
     EXTRA_VERSION_30,
+    EXTRA_API_ES3,
+    EXTRA_END,
+};
+
+static const int extra_gl32_es3[] = {
+    EXTRA_VERSION_32,
     EXTRA_API_ES3,
     EXTRA_END,
 };
@@ -717,6 +713,7 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
       break;
 
    case GL_MAX_VARYING_FLOATS_ARB:
+   case GL_MAX_FRAGMENT_INPUT_COMPONENTS:
       v->value_int = ctx->Const.MaxVarying * 4;
       break;
 

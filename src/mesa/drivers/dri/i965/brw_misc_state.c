@@ -598,7 +598,7 @@ brw_emit_depthbuffer(struct brw_context *brw)
       depth_mt = stencil_mt;
    }
 
-   if (depth_irb) {
+   if (depth_irb && depth_mt) {
       /* When 3DSTATE_DEPTH_BUFFER.Separate_Stencil_Enable is set, then
        * 3DSTATE_DEPTH_BUFFER.Surface_Format is not permitted to be a packed
        * depthstencil format.
@@ -978,7 +978,8 @@ const struct brw_tracked_state brw_line_stipple = {
  * Misc invariant state packets
  */
 
-static void upload_invariant_state( struct brw_context *brw )
+void
+brw_upload_invariant_state(struct brw_context *brw)
 {
    struct intel_context *intel = &brw->intel;
 
@@ -1016,7 +1017,7 @@ const struct brw_tracked_state brw_invariant_state = {
       .brw = BRW_NEW_CONTEXT,
       .cache = 0
    },
-   .emit = upload_invariant_state
+   .emit = brw_upload_invariant_state
 };
 
 /**

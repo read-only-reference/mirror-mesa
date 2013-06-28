@@ -62,8 +62,6 @@ nvc0_decoder_setup_ppp(struct nvc0_decoder *dec, struct nvc0_video_buffer *targe
    PUSH_DATA (push, in_addr + y2); // 70c
    PUSH_DATA (push, in_addr + cbcr); // 710
    PUSH_DATA (push, in_addr + cbcr2); // 714
-   assert(target->resources[0]->width0 >= 16 * dec_w);
-   assert(target->resources[0]->height0 >= dec->base.height/2);
 
    for (i = 0; i < 2; ++i) {
       struct nv50_miptree *mt = (struct nv50_miptree *)target->resources[i];
@@ -101,7 +99,7 @@ nvc0_decoder_ppp(struct nvc0_decoder *dec, union pipe_desc desc, struct nvc0_vid
    fence_extra = 4;
 #endif
 
-   PUSH_SPACE(push, 11 + (codec == PIPE_VIDEO_CODEC_VC1 ? 2 : 0) + 3 + fence_extra + 2);
+   nouveau_pushbuf_space(push, 11 + (codec == PIPE_VIDEO_CODEC_VC1 ? 2 : 0) + 3 + fence_extra + 2, 4, 0);
 
    switch (codec) {
    case PIPE_VIDEO_CODEC_MPEG12: {
@@ -134,7 +132,7 @@ nvc0_decoder_ppp(struct nvc0_decoder *dec, union pipe_desc desc, struct nvc0_vid
       do {
          usleep(100);
          if ((spin++ & 0xff) == 0xff)
-            debug_printf("ppp%u: %u\n", dec->fence_seq, dec->fence_map[8]);
+            debug_printf("p%u: %u\n", dec->fence_seq, dec->fence_map[8]);
       } while (dec->fence_seq > dec->fence_map[8]);
    }
 #else

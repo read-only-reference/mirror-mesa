@@ -194,16 +194,18 @@ gen7_blorp_emit_surface_state(struct brw_context *brw,
    surf[3] = pitch_bytes - 1;
 
    surf[4] = gen7_surface_msaa_bits(surface->num_samples, surface->msaa_layout);
-   if (surface->msaa_layout == INTEL_MSAA_LAYOUT_CMS) {
+   if (surface->mt->mcs_mt) {
       gen7_set_surface_mcs_info(brw, surf, wm_surf_offset, surface->mt->mcs_mt,
                                 is_render_target);
    }
 
+   surf[7] = surface->mt->fast_clear_color_value;
+
    if (intel->is_haswell) {
-      surf[7] = SET_FIELD(HSW_SCS_RED,   GEN7_SURFACE_SCS_R) |
-                SET_FIELD(HSW_SCS_GREEN, GEN7_SURFACE_SCS_G) |
-                SET_FIELD(HSW_SCS_BLUE,  GEN7_SURFACE_SCS_B) |
-                SET_FIELD(HSW_SCS_ALPHA, GEN7_SURFACE_SCS_A);
+      surf[7] |= (SET_FIELD(HSW_SCS_RED,   GEN7_SURFACE_SCS_R) |
+                  SET_FIELD(HSW_SCS_GREEN, GEN7_SURFACE_SCS_G) |
+                  SET_FIELD(HSW_SCS_BLUE,  GEN7_SURFACE_SCS_B) |
+                  SET_FIELD(HSW_SCS_ALPHA, GEN7_SURFACE_SCS_A));
    }
 
    /* Emit relocation to surface contents */
@@ -584,6 +586,17 @@ gen7_blorp_emit_ps_config(struct brw_context *brw,
       dw5 |= prog_data->first_curbe_grf << GEN7_PS_DISPATCH_START_GRF_SHIFT_0;
    }
 
+   switch (params->fast_clear_op) {
+   case GEN7_FAST_CLEAR_OP_FAST_CLEAR:
+      dw4 |= GEN7_PS_RENDER_TARGET_FAST_CLEAR_ENABLE;
+      break;
+   case GEN7_FAST_CLEAR_OP_RESOLVE:
+      dw4 |= GEN7_PS_RENDER_TARGET_RESOLVE_ENABLE;
+      break;
+   default:
+      break;
+   }
+
    BEGIN_BATCH(8);
    OUT_BATCH(_3DSTATE_PS << 16 | (8 - 2));
    OUT_BATCH(params->use_wm_prog ? prog_offset : 0);
@@ -844,7 +857,6 @@ gen7_blorp_exec(struct intel_context *intel,
 
    uint32_t prog_offset = params->get_wm_prog(brw, &prog_data);
    gen6_blorp_emit_batch_head(brw, params);
-   gen7_allocate_push_constants(brw);
    gen6_emit_3dstate_multisample(brw, params->num_samples);
    gen6_emit_3dstate_sample_mask(brw, params->num_samples, 1.0, false, ~0u);
    gen6_blorp_emit_state_base_address(brw, params);
@@ -863,6 +875,7 @@ gen7_blorp_exec(struct intel_context *intel,
       uint32_t wm_surf_offset_renderbuffer;
       uint32_t wm_surf_offset_texture = 0;
       wm_push_const_offset = gen6_blorp_emit_wm_constants(brw, params);
+      intel_miptree_used_for_rendering(params->dst.mt);
       wm_surf_offset_renderbuffer =
          gen7_blorp_emit_surface_state(brw, params, &params->dst,
                                        I915_GEM_DOMAIN_RENDER,

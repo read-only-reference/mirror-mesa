@@ -31,6 +31,7 @@ extern "C" {
 #include "glheader.h"
 #include "imports.h"
 #include "mtypes.h"
+#include "main/context.h"
 #include "main/uniforms.h"
 #include "main/macros.h"
 #include "main/samplerobj.h"
@@ -50,7 +51,6 @@ extern "C" {
 #include "../glsl/glsl_symbol_table.h"
 #include "../glsl/glsl_parser_extras.h"
 #include "../glsl/ir_optimization.h"
-#include "../glsl/ir_print_visitor.h"
 #include "../program/ir_to_mesa.h"
 
 using namespace ir_builder;
@@ -1309,7 +1309,7 @@ create_new_program(struct gl_context *ctx, struct state_key *key)
 
    state->language_version = 130;
    state->es_shader = false;
-   if (ctx->Extensions.OES_EGL_image_external)
+   if (_mesa_is_gles(ctx) && ctx->Extensions.OES_EGL_image_external)
       state->OES_EGL_image_external_enable = true;
    _mesa_glsl_initialize_types(state);
    _mesa_glsl_initialize_variables(p.instructions, state);

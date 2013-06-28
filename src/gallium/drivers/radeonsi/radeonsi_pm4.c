@@ -70,6 +70,10 @@ void si_pm4_set_reg(struct si_pm4_state *state, unsigned reg, uint32_t val)
 		opcode = PKT3_SET_CONTEXT_REG;
 		reg -= SI_CONTEXT_REG_OFFSET;
 
+	} else if (reg >= CIK_UCONFIG_REG_OFFSET && reg < CIK_UCONFIG_REG_END) {
+		opcode = PKT3_SET_UCONFIG_REG;
+		reg -= CIK_UCONFIG_REG_OFFSET;
+
 	} else {
 		R600_ERR("Invalid register offset %08x!\n", reg);
 		return;
@@ -167,6 +171,18 @@ void si_pm4_free_state(struct r600_context *rctx,
 		si_resource_reference(&state->bo[i], NULL);
 	}
 	FREE(state);
+}
+
+struct si_pm4_state * si_pm4_alloc_state(struct r600_context *rctx)
+{
+	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
+
+        if (pm4 == NULL)
+                return NULL;
+
+	pm4->chip_class = rctx->chip_class;
+
+	return pm4;
 }
 
 uint32_t si_pm4_sync_flags(struct r600_context *rctx)

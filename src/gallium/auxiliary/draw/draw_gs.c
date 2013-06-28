@@ -791,6 +791,16 @@ draw_create_geometry_shader(struct draw_context *draw,
          gs->position_output = i;
       if (gs->info.output_semantic_name[i] == TGSI_SEMANTIC_VIEWPORT_INDEX)
          gs->viewport_index_output = i;
+      if (gs->info.output_semantic_name[i] == TGSI_SEMANTIC_CLIPDIST) {
+         debug_assert(gs->info.output_semantic_index[i] <
+                      PIPE_MAX_CLIP_OR_CULL_DISTANCE_ELEMENT_COUNT);
+         gs->clipdistance_output[gs->info.output_semantic_index[i]] = i;
+      }
+      if (gs->info.output_semantic_name[i] == TGSI_SEMANTIC_CULLDIST) {
+         debug_assert(gs->info.output_semantic_index[i] <
+                      PIPE_MAX_CLIP_OR_CULL_DISTANCE_ELEMENT_COUNT);
+         gs->culldistance_output[gs->info.output_semantic_index[i]] = i;
+      }
    }
 
    gs->machine = draw->gs.tgsi.machine;

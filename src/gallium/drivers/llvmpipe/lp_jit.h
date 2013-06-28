@@ -164,7 +164,7 @@ enum {
 
 struct lp_jit_thread_data
 {
-   uint32_t vis_counter;
+   uint64_t vis_counter;
 };
 
 
@@ -204,7 +204,7 @@ typedef void
                     const void *dadx,
                     const void *dady,
                     uint8_t **color,
-                    void *depth,
+                    uint8_t *depth,
                     uint32_t mask,
                     struct lp_jit_thread_data *thread_data,
                     unsigned *stride,

@@ -10168,7 +10168,7 @@
         <param name="mode" type="GLenum"/>
         <param name="count" type="const GLsizei *"/>
         <param name="type" type="GLenum"/>
-        <param name="indices" type="const GLvoid **"/>
+        <param name="indices" type="const GLvoid * const *"/>
         <param name="primcount" type="GLsizei"/>
         <glx handcode="true"/>
     </function>
@@ -11032,7 +11032,7 @@
 </category>
 
 <category name="GL_MESA_resize_buffers" number="196">
-    <function name="ResizeBuffersMESA" offset="assign">
+    <function name="ResizeBuffersMESA" offset="assign" exec="skip">
         <glx ignore="true"/>
     </function>
 </category>

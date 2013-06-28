@@ -185,8 +185,6 @@ nvc0_decoder_handle_references(struct nvc0_decoder *dec, struct nvc0_video_buffe
               (!dec->refs[idx].decoded_bottom || !dec->refs[idx].decoded_top)));
       if (target == refs[i])
          empty_spot = 0;
-      assert(!h264 ||
-             dec->refs[idx].last_used == seq - 1);
 
       if (dec->refs[idx].vidbuf != refs[i]) {
          debug_printf("%p is not a real ref\n", refs[i]);
@@ -338,7 +336,6 @@ nvc0_decoder_fill_picparm_h264_vp(struct nvc0_decoder *dec,
    unsigned ring, i, j = 0;
    assert(offsetof(struct h264_picparm_vp, u224) == 0x224);
    *is_ref = d->is_reference;
-   assert(!d->frame_num || dec->last_frame_num + 1 == d->frame_num || dec->last_frame_num == d->frame_num);
    dec->last_frame_num = d->frame_num;
 
    h->width = mb(dec->base.width);
@@ -580,8 +577,8 @@ nvc0_decoder_vp(struct nvc0_decoder *dec, union pipe_desc desc,
    if (!is_ref)
       nvc0_decoder_kick_ref(dec, target);
 
-   PUSH_SPACE(push, 8 + 3 * (codec != PIPE_VIDEO_CODEC_MPEG12) +
-              6 + codec_extra + fence_extra + 2);
+   nouveau_pushbuf_space(push, 8 + 3 * (codec != PIPE_VIDEO_CODEC_MPEG12) +
+              6 + codec_extra + fence_extra + 2, num_refs, 0);
 
    nouveau_pushbuf_refn(push, bo_refs, num_refs);
 
@@ -653,7 +650,7 @@ nvc0_decoder_vp(struct nvc0_decoder *dec, union pipe_desc desc,
       do {
          usleep(100);
          if ((spin++ & 0xff) == 0xff) {
-            debug_printf("vp%u: %u\n", dec->fence_seq, dec->fence_map[4]);
+            debug_printf("v%u: %u\n", dec->fence_seq, dec->fence_map[4]);
             dump_comm_vp(dec, dec->comm, comm_seq, inter_bo, slice_size << 8);
          }
       } while (dec->fence_seq > dec->fence_map[4]);

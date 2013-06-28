@@ -326,6 +326,13 @@ draw_print_arrays(struct draw_context *draw, uint prim, int start, uint count)
                             (void *) u);
             }
             break;
+         case PIPE_FORMAT_A8R8G8B8_UNORM:
+            {
+               ubyte *u = (ubyte *) ptr;
+               debug_printf("ARGB %d %d %d %d  @ %p\n", u[0], u[1], u[2], u[3],
+                            (void *) u);
+            }
+            break;
          default:
             debug_printf("other format %s (fix me)\n",
                      util_format_name(draw->pt.vertex_element[j].src_format));
@@ -412,46 +419,6 @@ draw_pt_arrays_restart(struct draw_context *draw,
    }
 }
 
-
-
-/**
- * Non-instanced drawing.
- * \sa draw_arrays_instanced
- */
-void
-draw_arrays(struct draw_context *draw, unsigned prim,
-            unsigned start, unsigned count)
-{
-   draw_arrays_instanced(draw, prim, start, count, 0, 1);
-}
-
-
-/**
- * Instanced drawing.
- * \sa draw_vbo
- */
-void
-draw_arrays_instanced(struct draw_context *draw,
-                      unsigned mode,
-                      unsigned start,
-                      unsigned count,
-                      unsigned startInstance,
-                      unsigned instanceCount)
-{
-   struct pipe_draw_info info;
-
-   util_draw_init_info(&info);
-
-   info.mode = mode;
-   info.start = start;
-   info.count = count;
-   info.start_instance = startInstance;
-   info.instance_count = instanceCount;
-   info.min_index = start;
-   info.max_index = start + count - 1;
-
-   draw_vbo(draw, &info);
-}
 
 /**
  * Resolve true values within pipe_draw_info.
@@ -541,11 +508,15 @@ draw_vbo(struct draw_context *draw,
                                      draw->pt.vertex_element,
                                      draw->pt.nr_vertex_elements,
                                      info);
-
-   if (index_limit == 0) {
+#if HAVE_LLVM
+   if (!draw->llvm)
+#endif
+   {
+      if (index_limit == 0) {
       /* one of the buffers is too small to do any valid drawing */
-      debug_warning("draw: VBO too small to draw anything\n");
-      return;
+         debug_warning("draw: VBO too small to draw anything\n");
+         return;
+      }
    }
 
    /* If we're collecting stats then make sure we start from scratch */
@@ -562,6 +533,13 @@ draw_vbo(struct draw_context *draw,
 
    for (instance = 0; instance < info->instance_count; instance++) {
       draw->instance_id = instance + info->start_instance;
+      draw->start_instance = info->start_instance;
+      /* check for overflow */
+      if (draw->instance_id < instance ||
+          draw->instance_id < info->start_instance) {
+         /* if we overflown just set the instance id to the max */
+         draw->instance_id = 0xffffffff;
+      }
 
       draw_new_instance(draw);
 

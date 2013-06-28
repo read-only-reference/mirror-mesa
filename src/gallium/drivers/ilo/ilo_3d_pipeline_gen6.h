@@ -34,17 +34,17 @@ struct ilo_3d_pipeline;
 struct ilo_context;
 
 struct gen6_pipeline_session {
-   const struct pipe_draw_info *info;
-
    uint32_t pipe_dirty;
 
    int reduced_prim;
    int init_cp_space;
 
    bool hw_ctx_changed;
+   bool batch_bo_changed;
    bool state_bo_changed;
-   bool instruction_bo_changed;
+   bool kernel_bo_changed;
    bool prim_changed;
+   bool primitive_restart_changed;
 
    void (*emit_draw_states)(struct ilo_3d_pipeline *p,
                             const struct ilo_context *ilo,
@@ -76,7 +76,6 @@ struct gen6_pipeline_session {
 void
 gen6_pipeline_prepare(const struct ilo_3d_pipeline *p,
                       const struct ilo_context *ilo,
-                      const struct pipe_draw_info *info,
                       struct gen6_pipeline_session *session);
 
 void

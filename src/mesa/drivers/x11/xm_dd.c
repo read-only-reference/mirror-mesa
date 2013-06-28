@@ -1,6 +1,5 @@
 /*
  * Mesa 3-D graphics library
- * Version:  6.5.2
  *
  * Copyright (C) 1999-2006  Brian Paul   All Rights Reserved.
  *
@@ -842,7 +841,6 @@ xmesa_init_driver_functions( XMesaVisual xmvisual,
 {
    driver->GetString = get_string;
    driver->UpdateState = xmesa_update_state;
-   driver->GetBufferSize = NULL; /* OBSOLETE */
    driver->Flush = finish_or_flush;
    driver->Finish = finish_or_flush;
    driver->ColorMask = color_mask;

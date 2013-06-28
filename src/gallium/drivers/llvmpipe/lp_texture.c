@@ -83,22 +83,30 @@ llvmpipe_texture_layout(struct llvmpipe_screen *screen,
 
       /* Row stride and image stride */
       {
-         unsigned alignment, nblocksx, nblocksy, block_size;
+         unsigned align_x, align_y, nblocksx, nblocksy, block_size;
 
          /* For non-compressed formats we need 4x4 pixel alignment
-          * (for now). We also want cache line size in x direction,
+          * so we can read/write LP_RASTER_BLOCK_SIZE when rendering to them.
+          * We also want cache line size in x direction,
           * otherwise same cache line could end up in multiple threads.
-          * XXX this blows up 1d/1d array textures by a factor of 4.
+          * For explicit 1d resources however we reduce this to 4x1 and
+          * handle specially in render output code (as we need to do special
+          * handling there for buffers in any case).
           */
          if (util_format_is_compressed(pt->format))
-            alignment = 1;
-         else
-            alignment = LP_RASTER_BLOCK_SIZE;
+            align_x = align_y = 1;
+         else {
+            align_x = LP_RASTER_BLOCK_SIZE;
+            if (llvmpipe_resource_is_1d(&lpr->base))
+               align_y = 1;
+            else
+               align_y = LP_RASTER_BLOCK_SIZE;
+         }
 
          nblocksx = util_format_get_nblocksx(pt->format,
-                                             align(width, alignment));
+                                             align(width, align_x));
          nblocksy = util_format_get_nblocksy(pt->format,
-                                             align(height, alignment));
+                                             align(height, align_y));
          block_size = util_format_get_blocksize(pt->format);
 
          if (util_format_is_compressed(pt->format))
@@ -467,62 +475,6 @@ llvmpipe_resource_get_handle(struct pipe_screen *screen,
       return FALSE;
 
    return winsys->displaytarget_get_handle(winsys, lpr->dt, whandle);
-}
-
-
-static struct pipe_surface *
-llvmpipe_create_surface(struct pipe_context *pipe,
-                        struct pipe_resource *pt,
-                        const struct pipe_surface *surf_tmpl)
-{
-   struct pipe_surface *ps;
-
-   if (!(pt->bind & (PIPE_BIND_DEPTH_STENCIL | PIPE_BIND_RENDER_TARGET)))
-      debug_printf("Illegal surface creation without bind flag\n");
-
-   ps = CALLOC_STRUCT(pipe_surface);
-   if (ps) {
-      pipe_reference_init(&ps->reference, 1);
-      pipe_resource_reference(&ps->texture, pt);
-      ps->context = pipe;
-      ps->format = surf_tmpl->format;
-      if (llvmpipe_resource_is_texture(pt)) {
-         assert(surf_tmpl->u.tex.level <= pt->last_level);
-         ps->width = u_minify(pt->width0, surf_tmpl->u.tex.level);
-         ps->height = u_minify(pt->height0, surf_tmpl->u.tex.level);
-         ps->u.tex.level = surf_tmpl->u.tex.level;
-         ps->u.tex.first_layer = surf_tmpl->u.tex.first_layer;
-         ps->u.tex.last_layer = surf_tmpl->u.tex.last_layer;
-         if (ps->u.tex.first_layer != ps->u.tex.last_layer) {
-            debug_printf("creating surface with multiple layers, rendering to first layer only\n");
-         }
-      }
-      else {
-         /* setting width as number of elements should get us correct renderbuffer width */
-         ps->width = surf_tmpl->u.buf.last_element - surf_tmpl->u.buf.first_element + 1;
-         ps->height = pt->height0;
-         ps->u.buf.first_element = surf_tmpl->u.buf.first_element;
-         ps->u.buf.last_element = surf_tmpl->u.buf.last_element;
-         assert(ps->u.buf.first_element <= ps->u.buf.last_element);
-         assert(util_format_get_blocksize(surf_tmpl->format) *
-                (ps->u.buf.last_element + 1) <= pt->width0);
-      }
-   }
-   return ps;
-}
-
-
-static void 
-llvmpipe_surface_destroy(struct pipe_context *pipe,
-                         struct pipe_surface *surf)
-{
-   /* Effectively do the texture_update work here - if texture images
-    * needed post-processing to put them into hardware layout, this is
-    * where it would happen.  For llvmpipe, nothing to do.
-    */
-   assert(surf->texture);
-   pipe_resource_reference(&surf->texture, NULL);
-   FREE(surf);
 }
 
 
@@ -1007,10 +959,7 @@ llvmpipe_init_context_resource_funcs(struct pipe_context *pipe)
 {
    pipe->transfer_map = llvmpipe_transfer_map;
    pipe->transfer_unmap = llvmpipe_transfer_unmap;
- 
+
    pipe->transfer_flush_region = u_default_transfer_flush_region;
    pipe->transfer_inline_write = u_default_transfer_inline_write;
-
-   pipe->create_surface = llvmpipe_create_surface;
-   pipe->surface_destroy = llvmpipe_surface_destroy;
 }

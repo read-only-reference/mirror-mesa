@@ -129,24 +129,29 @@ struct lp_scene {
    struct pipe_context *pipe;
    struct lp_fence *fence;
 
+   /* The queries still active at end of scene */
+   struct llvmpipe_query *active_queries[LP_MAX_ACTIVE_BINNED_QUERIES];
+   unsigned num_active_queries;
+   /* If queries were either active or there were begin/end query commands */
+   boolean had_queries;
+
    /* Framebuffer mappings - valid only between begin_rasterization()
     * and end_rasterization().
     */
    struct {
       uint8_t *map;
       unsigned stride;
-      unsigned blocksize;
+      unsigned layer_stride;
    } zsbuf, cbufs[PIPE_MAX_COLOR_BUFS];
-   
+
+   /* OpenGL permits different amount of layers per rt, but rendering limited to minimum */
+   unsigned fb_max_layer;
+
    /** the framebuffer to render the scene into */
    struct pipe_framebuffer_state fb;
 
    /** list of resources referenced by the scene commands */
    struct resource_ref *resources;
-
-   /** aligned scene width, height */
-   unsigned width_aligned;
-   unsigned height_aligned;
 
    /** Total memory used by the scene (in bytes).  This sums all the
     * data blocks and counts all bins, state, resource references and

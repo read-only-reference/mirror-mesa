@@ -78,6 +78,7 @@ i965_FILES = \
 	brw_state_cache.c \
 	brw_state_dump.c \
 	brw_state_upload.c \
+	brw_surface_formats.c \
 	brw_tex.c \
 	brw_tex_layout.c \
 	brw_urb.c \
@@ -114,7 +115,6 @@ i965_FILES = \
 	gen6_vs_state.c \
 	gen6_wm_state.c \
 	gen7_blorp.cpp \
-	gen7_cc_state.c \
 	gen7_clip_state.c \
 	gen7_disable.c \
 	gen7_misc_state.c \

@@ -861,13 +861,15 @@ tex_alloc_slices(struct ilo_texture *tex)
    return true;
 }
 
-static struct intel_bo *
-tex_create_bo(const struct ilo_texture *tex,
+static bool
+tex_create_bo(struct ilo_texture *tex,
               const struct winsys_handle *handle)
 {
    struct ilo_screen *is = ilo_screen(tex->base.screen);
    const char *name;
    struct intel_bo *bo;
+   enum intel_tiling_mode tiling;
+   unsigned long pitch;
 
    switch (tex->base.target) {
    case PIPE_TEXTURE_1D:
@@ -900,29 +902,29 @@ tex_create_bo(const struct ilo_texture *tex,
    }
 
    if (handle) {
-      bo = is->winsys->import_handle(is->winsys, name,
-            tex->bo_width, tex->bo_height, tex->bo_cpp, handle);
+      bo = intel_winsys_import_handle(is->winsys, name, handle,
+            tex->bo_width, tex->bo_height, tex->bo_cpp,
+            &tiling, &pitch);
    }
    else {
-      bo = is->winsys->alloc(is->winsys, name,
+      bo = intel_winsys_alloc_texture(is->winsys, name,
             tex->bo_width, tex->bo_height, tex->bo_cpp,
-            tex->tiling, tex->bo_flags);
+            tex->tiling, tex->bo_flags, &pitch);
+
+      tiling = tex->tiling;
    }
 
-   return bo;
-}
+   if (!bo)
+      return false;
 
-static void
-tex_set_bo(struct ilo_texture *tex, struct intel_bo *bo)
-{
    if (tex->bo)
-      tex->bo->unreference(tex->bo);
+      intel_bo_unreference(tex->bo);
 
    tex->bo = bo;
+   tex->tiling = tiling;
+   tex->bo_stride = pitch;
 
-   /* winsys may decide to use a different tiling */
-   tex->tiling = tex->bo->get_tiling(tex->bo);
-   tex->bo_stride = tex->bo->get_pitch(tex->bo);
+   return true;
 }
 
 static void
@@ -931,7 +933,7 @@ tex_destroy(struct ilo_texture *tex)
    if (tex->separate_s8)
       tex_destroy(tex->separate_s8);
 
-   tex->bo->unreference(tex->bo);
+   intel_bo_unreference(tex->bo);
    tex_free_slices(tex);
    FREE(tex);
 }
@@ -943,7 +945,6 @@ tex_create(struct pipe_screen *screen,
 {
    struct tex_layout layout;
    struct ilo_texture *tex;
-   struct intel_bo *bo;
 
    tex = CALLOC_STRUCT(ilo_texture);
    if (!tex)
@@ -1003,14 +1004,11 @@ tex_create(struct pipe_screen *screen,
 
    tex_layout_apply(&layout, tex);
 
-   bo = tex_create_bo(tex, handle);
-   if (!bo) {
+   if (!tex_create_bo(tex, handle)) {
       tex_free_slices(tex);
       FREE(tex);
       return NULL;
    }
-
-   tex_set_bo(tex, bo);
 
    /* allocate separate stencil resource */
    if (layout.separate_stencil) {
@@ -1041,9 +1039,11 @@ tex_create(struct pipe_screen *screen,
 static bool
 tex_get_handle(struct ilo_texture *tex, struct winsys_handle *handle)
 {
+   struct ilo_screen *is = ilo_screen(tex->base.screen);
    int err;
 
-   err = tex->bo->export_handle(tex->bo, handle);
+   err = intel_winsys_export_handle(is->winsys, tex->bo,
+         tex->tiling, tex->bo_stride, handle);
 
    return !err;
 }
@@ -1074,11 +1074,12 @@ tex_estimate_size(struct pipe_screen *screen,
    return tex_layout_estimate_size(&layout);
 }
 
-static struct intel_bo *
-buf_create_bo(const struct ilo_buffer *buf)
+static bool
+buf_create_bo(struct ilo_buffer *buf)
 {
    struct ilo_screen *is = ilo_screen(buf->base.screen);
    const char *name;
+   struct intel_bo *bo;
 
    switch (buf->base.bind) {
    case PIPE_BIND_VERTEX_BUFFER:
@@ -1098,23 +1099,23 @@ buf_create_bo(const struct ilo_buffer *buf)
       break;
    }
 
-   return is->winsys->alloc_buffer(is->winsys,
+   bo = intel_winsys_alloc_buffer(is->winsys,
          name, buf->bo_size, buf->bo_flags);
-}
+   if (!bo)
+      return false;
 
-static void
-buf_set_bo(struct ilo_buffer *buf, struct intel_bo *bo)
-{
    if (buf->bo)
-      buf->bo->unreference(buf->bo);
+      intel_bo_unreference(buf->bo);
 
    buf->bo = bo;
+
+   return true;
 }
 
 static void
 buf_destroy(struct ilo_buffer *buf)
 {
-   buf->bo->unreference(buf->bo);
+   intel_bo_unreference(buf->bo);
    FREE(buf);
 }
 
@@ -1122,7 +1123,6 @@ static struct pipe_resource *
 buf_create(struct pipe_screen *screen, const struct pipe_resource *templ)
 {
    struct ilo_buffer *buf;
-   struct intel_bo *bo;
 
    buf = CALLOC_STRUCT(ilo_buffer);
    if (!buf)
@@ -1135,13 +1135,10 @@ buf_create(struct pipe_screen *screen, const struct pipe_resource *templ)
    buf->bo_size = templ->width0;
    buf->bo_flags = 0;
 
-   bo = buf_create_bo(buf);
-   if (!bo) {
+   if (!buf_create_bo(buf)) {
       FREE(buf);
       return NULL;
    }
-
-   buf_set_bo(buf, bo);
 
    return &buf->base;
 }
@@ -1224,33 +1221,17 @@ ilo_init_resource_functions(struct ilo_screen *is)
 bool
 ilo_buffer_alloc_bo(struct ilo_buffer *buf)
 {
-   struct intel_bo *bo;
-
-   bo = buf_create_bo(buf);
-   if (!bo)
-      return false;
-
-   buf_set_bo(buf, bo);
-
-   return true;
+   return buf_create_bo(buf);
 }
 
 bool
 ilo_texture_alloc_bo(struct ilo_texture *tex)
 {
-   struct intel_bo *bo;
-
    /* a shared bo cannot be reallocated */
    if (tex->imported)
       return false;
 
-   bo = tex_create_bo(tex, NULL);
-   if (!bo)
-      return false;
-
-   tex_set_bo(tex, bo);
-
-   return true;
+   return tex_create_bo(tex, NULL);
 }
 
 /**

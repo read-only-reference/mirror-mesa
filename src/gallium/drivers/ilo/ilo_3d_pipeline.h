@@ -33,7 +33,6 @@
 #include "ilo_gpe_gen6.h"
 #include "ilo_gpe_gen7.h"
 
-struct pipe_draw_info;
 struct intel_bo;
 struct ilo_cp;
 struct ilo_context;
@@ -74,8 +73,7 @@ struct ilo_3d_pipeline {
                         const void *arg);
 
    void (*emit_draw)(struct ilo_3d_pipeline *pipeline,
-                     const struct ilo_context *ilo,
-                     const struct pipe_draw_info *info);
+                     const struct ilo_context *ilo);
 
    void (*emit_flush)(struct ilo_3d_pipeline *pipeline);
 
@@ -133,9 +131,7 @@ struct ilo_3d_pipeline {
    GEN6_EMIT(DEPTH_STENCIL_STATE);
    GEN6_EMIT(SCISSOR_RECT);
    GEN6_EMIT(BINDING_TABLE_STATE);
-   GEN6_EMIT(surf_SURFACE_STATE);
-   GEN6_EMIT(view_SURFACE_STATE);
-   GEN6_EMIT(cbuf_SURFACE_STATE);
+   GEN6_EMIT(SURFACE_STATE);
    GEN6_EMIT(so_SURFACE_STATE);
    GEN6_EMIT(SAMPLER_STATE);
    GEN6_EMIT(SAMPLER_BORDER_COLOR_STATE);
@@ -191,6 +187,7 @@ struct ilo_3d_pipeline {
    struct ilo_3d_pipeline_state {
       bool has_gen6_wa_pipe_control;
 
+      bool primitive_restart;
       int reduced_prim;
       int so_num_vertices, so_max_vertices;
 
@@ -259,7 +256,6 @@ ilo_3d_pipeline_estimate_size(struct ilo_3d_pipeline *pipeline,
 bool
 ilo_3d_pipeline_emit_draw(struct ilo_3d_pipeline *p,
                           const struct ilo_context *ilo,
-                          const struct pipe_draw_info *info,
                           int *prim_generated, int *prim_emitted);
 
 void

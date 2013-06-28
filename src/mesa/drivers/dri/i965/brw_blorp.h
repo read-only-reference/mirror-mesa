@@ -47,7 +47,12 @@ brw_blorp_blit_miptrees(struct intel_context *intel,
                         bool mirror_x, bool mirror_y);
 
 bool
-brw_blorp_clear_color(struct intel_context *intel, struct gl_framebuffer *fb);
+brw_blorp_clear_color(struct intel_context *intel, struct gl_framebuffer *fb,
+                      bool partial_clear);
+
+void
+brw_blorp_resolve_color(struct intel_context *intel,
+                        struct intel_mipmap_tree *mt);
 
 #ifdef __cplusplus
 } /* end extern "C" */
@@ -173,8 +178,15 @@ struct brw_blorp_wm_push_constants
    uint32_t dst_x1;
    uint32_t dst_y0;
    uint32_t dst_y1;
+   /* Top right coordinates of the rectangular sample grid used for
+    * multisample scaled blitting.
+    */
+   float sample_grid_x1;
+   float sample_grid_y1;
    brw_blorp_coord_transform_params x_transform;
    brw_blorp_coord_transform_params y_transform;
+   /* Pad out to an integral number of registers */
+   uint32_t pad[6];
 };
 
 /* Every 32 bytes of push constant data constitutes one GEN register. */
@@ -191,6 +203,14 @@ struct brw_blorp_prog_data
     */
    bool persample_msaa_dispatch;
 };
+
+
+enum gen7_fast_clear_op {
+   GEN7_FAST_CLEAR_OP_NONE,
+   GEN7_FAST_CLEAR_OP_FAST_CLEAR,
+   GEN7_FAST_CLEAR_OP_RESOLVE,
+};
+
 
 class brw_blorp_params
 {
@@ -209,6 +229,7 @@ public:
    brw_blorp_surface_info src;
    brw_blorp_surface_info dst;
    enum gen6_hiz_op hiz_op;
+   enum gen7_fast_clear_op fast_clear_op;
    unsigned num_samples;
    bool use_wm_prog;
    brw_blorp_wm_push_constants wm_push_consts;
@@ -305,6 +326,15 @@ struct brw_blorp_blit_prog_key
     * than one sample per pixel.
     */
    bool persample_msaa_dispatch;
+
+   /* True for scaled blitting. */
+   bool blit_scaled;
+
+   /* Scale factors between the pixel grid and the grid of samples. We're
+    * using grid of samples for bilinear filetring in multisample scaled blits.
+    */
+   float x_scale;
+   float y_scale;
 };
 
 class brw_blorp_blit_params : public brw_blorp_params

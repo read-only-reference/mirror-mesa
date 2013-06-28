@@ -1,6 +1,5 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.1
  *
  * Copyright (C) 1999-2008  Brian Paul   All Rights Reserved.
  *
@@ -41,8 +40,8 @@
 
 #ifndef GL_OES_fixed_point
 typedef int GLfixed;
-typedef int GLclampx;
 #endif
+typedef int GLclampx;
 
 #ifndef GL_OES_EGL_image
 typedef void *GLeglImageOES;

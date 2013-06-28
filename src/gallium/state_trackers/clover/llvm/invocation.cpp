@@ -43,7 +43,9 @@
 #include <llvm/PassManager.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/MemoryBuffer.h>
+#if HAVE_LLVM < 0x0303
 #include <llvm/Support/PathV1.h>
+#endif
 #include <llvm/Transforms/IPO.h>
 #include <llvm/Transforms/IPO/PassManagerBuilder.h>
 
@@ -209,6 +211,13 @@ namespace {
    find_kernels(llvm::Module *mod, std::vector<llvm::Function *> &kernels) {
       const llvm::NamedMDNode *kernel_node =
                                  mod->getNamedMetadata("opencl.kernels");
+      // This means there are no kernels in the program.  The spec does not
+      // require that we return an error here, but there will be an error if
+      // the user tries to pass this program to a clCreateKernel() call.
+      if (!kernel_node) {
+         return;
+      }
+
       for (unsigned i = 0; i < kernel_node->getNumOperands(); ++i) {
          kernels.push_back(llvm::dyn_cast<llvm::Function>(
                                     kernel_node->getOperand(i)->getOperand(0)));
@@ -222,20 +231,18 @@ namespace {
 
       llvm::PassManager PM;
       llvm::PassManagerBuilder Builder;
-      llvm::sys::Path libclc_path =
-                            llvm::sys::Path(LIBCLC_LIBEXECDIR + processor +
-			                    "-" + triple + ".bc");
-
+      std::string libclc_path = LIBCLC_LIBEXECDIR + processor + "-"
+                                                  + triple + ".bc";
       // Link the kernel with libclc
 #if HAVE_LLVM < 0x0303
       bool isNative;
       llvm::Linker linker("clover", mod);
-      linker.LinkInFile(libclc_path, isNative);
+      linker.LinkInFile(llvm::sys::Path(libclc_path), isNative);
       mod = linker.releaseModule();
 #else
       std::string err_str;
       llvm::SMDiagnostic err;
-      llvm::Module *libclc_mod = llvm::ParseIRFile(libclc_path.str(), err,
+      llvm::Module *libclc_mod = llvm::ParseIRFile(libclc_path, err,
                                                    mod->getContext());
       if (llvm::Linker::LinkModules(mod, libclc_mod,
                                     llvm::Linker::DestroySource,

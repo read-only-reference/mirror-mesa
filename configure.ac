@@ -6,7 +6,7 @@ dnl Tell the user about autoconf.html in the --help output
 m4_divert_once([HELP_END], [
 See docs/autoconf.html for more details on the options for Mesa.])
 
-AC_INIT([Mesa], [9.2.0],
+AC_INIT([Mesa], [9.2.0-devel],
     [https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa])
 AC_CONFIG_AUX_DIR([bin])
 AC_CONFIG_MACRO_DIR([m4])
@@ -1490,6 +1490,13 @@ AC_SUBST([EGL_NATIVE_PLATFORM])
 AC_SUBST([EGL_PLATFORMS])
 AC_SUBST([EGL_CFLAGS])
 
+# If we don't have the X11 platform, set this define so we don't try to include
+# the X11 headers.
+if ! echo "$egl_platforms" | grep -q 'x11'; then
+    DEFINES="$DEFINES -DMESA_EGL_NO_X11_HEADERS"
+    GL_PC_CFLAGS="$GL_PC_CFLAGS -DMESA_EGL_NO_X11_HEADERS"
+fi
+
 AC_ARG_WITH([egl-driver-dir],
     [AS_HELP_STRING([--with-egl-driver-dir=DIR],
                     [directory for EGL drivers [[default=${libdir}/egl]]])],
@@ -1812,6 +1819,7 @@ if test "x$with_gallium_drivers" != x; then
 
             if test "x$enable_dri" = xyes; then
                 GALLIUM_TARGET_DIRS="$GALLIUM_TARGET_DIRS dri-swrast"
+                HAVE_COMMON_DRI=yes
             fi
             if test "x$enable_vdpau" = xyes; then
                 GALLIUM_TARGET_DIRS="$GALLIUM_TARGET_DIRS vdpau-softpipe"
@@ -1983,6 +1991,8 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/auxiliary/pipe-loader/Makefile
 		src/gallium/drivers/Makefile
 		src/gallium/drivers/freedreno/Makefile
+		src/gallium/drivers/freedreno/a2xx/Makefile
+		src/gallium/drivers/freedreno/a3xx/Makefile
 		src/gallium/drivers/i915/Makefile
 		src/gallium/drivers/ilo/Makefile
 		src/gallium/drivers/llvmpipe/Makefile

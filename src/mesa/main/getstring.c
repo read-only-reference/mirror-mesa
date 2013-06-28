@@ -1,6 +1,5 @@
 /*
  * Mesa 3-D graphics library
- * Version:  7.1
  *
  * Copyright (C) 1999-2008  Brian Paul   All Rights Reserved.
  *
@@ -42,11 +41,6 @@ shading_language_version(struct gl_context *ctx)
    switch (ctx->API) {
    case API_OPENGL_COMPAT:
    case API_OPENGL_CORE:
-      if (!ctx->Extensions.ARB_shader_objects) {
-         _mesa_error(ctx, GL_INVALID_ENUM, "glGetString");
-         return (const GLubyte *) 0;
-      }
-
       switch (ctx->Const.GLSLVersion) {
       case 110:
          return (const GLubyte *) "1.10";

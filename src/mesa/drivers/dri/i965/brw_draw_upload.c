@@ -263,6 +263,14 @@ get_surface_type(struct intel_context *intel,
          else {
             return ubyte_types_norm[size];
          }
+      case GL_FIXED:
+         if (intel->gen >= 8 || intel->is_haswell)
+            return fixed_point_types[size];
+
+         /* This produces GL_FIXED inputs as values between INT32_MIN and
+          * INT32_MAX, which will be scaled down by 1/65536 by the VS.
+          */
+         return int_types_scale[size];
       /* See GL_ARB_vertex_type_2_10_10_10_rev.
        * W/A: Pre-Haswell, the hardware doesn't really support the formats we'd
        * like to use here, so upload everything as UINT and fix
@@ -498,8 +506,24 @@ static void brw_prepare_vertices(struct brw_context *brw)
 	    ptr = glarray->Ptr;
 	 }
 	 else if (interleaved != glarray->StrideB ||
-		  (uintptr_t)(glarray->Ptr - ptr) > interleaved)
+                  glarray->Ptr < ptr ||
+                  (uintptr_t)(glarray->Ptr - ptr) + glarray->_ElementSize > interleaved)
 	 {
+            /* If our stride is different from the first attribute's stride,
+             * or if the first attribute's stride didn't cover our element,
+             * disable the interleaved upload optimization.  The second case
+             * can most commonly occur in cases where there is a single vertex
+             * and, for example, the data is stored on the application's
+             * stack.
+             *
+             * NOTE: This will also disable the optimization in cases where
+             * the data is in a different order than the array indices.
+             * Something like:
+             *
+             *     float data[...];
+             *     glVertexAttribPointer(0, 4, GL_FLOAT, 32, &data[4]);
+             *     glVertexAttribPointer(1, 4, GL_FLOAT, 32, &data[0]);
+             */
 	    interleaved = 0;
 	 }
 

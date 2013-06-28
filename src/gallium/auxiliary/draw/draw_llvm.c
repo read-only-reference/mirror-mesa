@@ -32,6 +32,7 @@
 #include "draw_gs.h"
 
 #include "gallivm/lp_bld_arit.h"
+#include "gallivm/lp_bld_arit_overflow.h"
 #include "gallivm/lp_bld_logic.h"
 #include "gallivm/lp_bld_const.h"
 #include "gallivm/lp_bld_swizzle.h"
@@ -673,6 +674,7 @@ generate_vs(struct draw_llvm_variant *variant,
 
 static void
 generate_fetch(struct gallivm_state *gallivm,
+               struct draw_context *draw,
                LLVMValueRef vbuffers_ptr,
                LLVMValueRef *res,
                struct pipe_vertex_element *velem,
@@ -695,35 +697,58 @@ generate_fetch(struct gallivm_state *gallivm,
    LLVMValueRef buffer_size = draw_jit_dvbuffer_size(gallivm, vbuffer_ptr);
    LLVMValueRef stride;
    LLVMValueRef buffer_overflowed;
+   LLVMValueRef needed_buffer_size;
    LLVMValueRef temp_ptr =
       lp_build_alloca(gallivm,
                       lp_build_vec_type(gallivm, lp_float32_vec4_type()), "");
+   LLVMValueRef ofbit = NULL;
    struct lp_build_if_state if_ctx;
 
    if (velem->instance_divisor) {
-      /* array index = instance_id / instance_divisor */
-      index = LLVMBuildUDiv(builder, instance_id,
-                            lp_build_const_int32(gallivm, velem->instance_divisor),
-                            "instance_divisor");
+      /* Index is equal to the start instance plus the number of current 
+       * instance divided by the divisor. In this case we compute it as:
+       * index = start_instance + ((instance_id - start_instance) / divisor)
+       */
+      LLVMValueRef current_instance;
+      index = lp_build_const_int32(gallivm, draw->start_instance);
+      current_instance = LLVMBuildSub(builder, instance_id, index, "");
+      current_instance = LLVMBuildUDiv(builder, current_instance,
+                                       lp_build_const_int32(gallivm, velem->instance_divisor),
+                                       "instance_divisor");
+      index = LLVMBuildAdd(builder, index, current_instance, "instance");
    }
 
-   stride = LLVMBuildMul(builder, vb_stride, index, "");
+   stride = lp_build_umul_overflow(gallivm, vb_stride, index, &ofbit);
+   stride = lp_build_uadd_overflow(gallivm, stride, vb_buffer_offset, &ofbit);
+   stride = lp_build_uadd_overflow(
+      gallivm, stride,
+      lp_build_const_int32(gallivm, velem->src_offset), &ofbit);
+   needed_buffer_size = lp_build_uadd_overflow(
+      gallivm, stride,
+      lp_build_const_int32(gallivm,
+                           util_format_get_blocksize(velem->src_format)),
+      &ofbit);
 
-   stride = LLVMBuildAdd(builder, stride,
-                         vb_buffer_offset,
-                         "");
-   stride = LLVMBuildAdd(builder, stride,
-                         lp_build_const_int32(gallivm, velem->src_offset),
-                         "");
-
-   buffer_overflowed = LLVMBuildICmp(builder, LLVMIntUGE,
-                                     stride, buffer_size,
+   buffer_overflowed = LLVMBuildICmp(builder, LLVMIntUGT,
+                                     needed_buffer_size, buffer_size,
                                      "buffer_overflowed");
-   /*
-   lp_build_printf(gallivm, "vbuf index = %d, stride is %d\n", indices, stride);
-   lp_build_print_value(gallivm, "   buffer size = ", buffer_size);
+   buffer_overflowed = LLVMBuildOr(builder, buffer_overflowed, ofbit, "");
+#if 0
+   lp_build_printf(gallivm, "vbuf index = %u, vb_stride is %u\n",
+                   index, vb_stride);
+   lp_build_printf(gallivm, "   vb_buffer_offset = %u, src_offset is %u\n",
+                   vb_buffer_offset,
+                   lp_build_const_int32(gallivm, velem->src_offset));
+   lp_build_print_value(gallivm, "   blocksize = ",
+                        lp_build_const_int32(
+                           gallivm,
+                           util_format_get_blocksize(velem->src_format)));
+   lp_build_printf(gallivm, "   instance_id = %u\n", instance_id);
+   lp_build_printf(gallivm, "   stride = %u\n", stride);
+   lp_build_printf(gallivm, "   buffer size = %u\n", buffer_size);
+   lp_build_printf(gallivm, "   needed_buffer_size = %u\n", needed_buffer_size);
    lp_build_print_value(gallivm, "   buffer overflowed = ", buffer_overflowed);
-   */
+#endif
 
    lp_build_if(&if_ctx, gallivm, buffer_overflowed);
    {
@@ -1145,6 +1170,11 @@ generate_clipmask(struct draw_llvm *llvm,
 
    if (cd[0] != pos || cd[1] != pos)
       have_cd = true;
+
+   if (num_written_clipdistance && !clip_user) {
+      clip_user = true;
+      ucp_enable = (1 << num_written_clipdistance) - 1;
+   }
 
    mask = lp_build_const_int_vec(gallivm, i32_type, 0);
    temp = lp_build_const_int_vec(gallivm, i32_type, 0);
@@ -1590,6 +1620,7 @@ draw_llvm_generate(struct draw_llvm *llvm, struct draw_llvm_variant *variant,
    if (elts) {
       start = zero;
       end = fetch_count;
+      count = fetch_count;
    }
    else {
       end = lp_build_add(&bld, start, count);
@@ -1599,7 +1630,7 @@ draw_llvm_generate(struct draw_llvm *llvm, struct draw_llvm_variant *variant,
 
    fetch_max = LLVMBuildSub(builder, end, one, "fetch_max");
 
-   lp_build_loop_begin(&lp_loop, gallivm, start);
+   lp_build_loop_begin(&lp_loop, gallivm, zero);
    {
       LLVMValueRef inputs[PIPE_MAX_SHADER_INPUTS][TGSI_NUM_CHANNELS];
       LLVMValueRef aos_attribs[PIPE_MAX_SHADER_INPUTS][LP_MAX_VECTOR_WIDTH / 32] = { { 0 } };
@@ -1607,10 +1638,7 @@ draw_llvm_generate(struct draw_llvm *llvm, struct draw_llvm_variant *variant,
       LLVMValueRef clipmask;   /* holds the clipmask value */
       const LLVMValueRef (*ptr_aos)[TGSI_NUM_CHANNELS];
 
-      if (elts)
-         io_itr = lp_loop.counter;
-      else
-         io_itr = LLVMBuildSub(builder, lp_loop.counter, start, "");
+      io_itr = lp_loop.counter;
 
       io = LLVMBuildGEP(builder, io_ptr, &io_itr, 1, "");
 #if DEBUG_STORE
@@ -1623,6 +1651,7 @@ draw_llvm_generate(struct draw_llvm *llvm, struct draw_llvm_variant *variant,
             LLVMBuildAdd(builder,
                          lp_loop.counter,
                          lp_build_const_int32(gallivm, i), "");
+         true_index = LLVMBuildAdd(builder, start, true_index, "");
 
          /* make sure we're not out of bounds which can happen
           * if fetch_count % 4 != 0, because on the last iteration
@@ -1676,7 +1705,7 @@ draw_llvm_generate(struct draw_llvm *llvm, struct draw_llvm_variant *variant,
             LLVMValueRef vb_index =
                lp_build_const_int32(gallivm, velem->vertex_buffer_index);
             LLVMValueRef vb = LLVMBuildGEP(builder, vb_ptr, &vb_index, 1, "");
-            generate_fetch(gallivm, vbuffers_ptr,
+            generate_fetch(gallivm, draw, vbuffers_ptr,
                            &aos_attribs[j][i], velem, vb, true_index,
                            system_values.instance_id);
          }
@@ -1739,8 +1768,7 @@ draw_llvm_generate(struct draw_llvm *llvm, struct draw_llvm_variant *variant,
                      vs_info->num_outputs, vs_type,
                      have_clipdist);
    }
-
-   lp_build_loop_end_cond(&lp_loop, end, step, LLVMIntUGE);
+   lp_build_loop_end_cond(&lp_loop, count, step, LLVMIntUGE);
 
    sampler->destroy(sampler);
 

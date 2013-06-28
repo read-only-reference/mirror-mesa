@@ -38,6 +38,114 @@
 #include "si_state.h"
 #include "sid.h"
 
+static uint32_t cik_num_banks(uint32_t nbanks)
+{
+	switch (nbanks) {
+	case 2:
+		return V_02803C_ADDR_SURF_2_BANK;
+	case 4:
+		return V_02803C_ADDR_SURF_4_BANK;
+	case 8:
+	default:
+		return V_02803C_ADDR_SURF_8_BANK;
+	case 16:
+		return V_02803C_ADDR_SURF_16_BANK;
+	}
+}
+
+
+static unsigned cik_tile_split(unsigned tile_split)
+{
+	switch (tile_split) {
+	case 64:
+		tile_split = V_028040_ADDR_SURF_TILE_SPLIT_64B;
+		break;
+	case 128:
+		tile_split = V_028040_ADDR_SURF_TILE_SPLIT_128B;
+		break;
+	case 256:
+		tile_split = V_028040_ADDR_SURF_TILE_SPLIT_256B;
+		break;
+	case 512:
+		tile_split = V_028040_ADDR_SURF_TILE_SPLIT_512B;
+		break;
+	default:
+	case 1024:
+		tile_split = V_028040_ADDR_SURF_TILE_SPLIT_1KB;
+		break;
+	case 2048:
+		tile_split = V_028040_ADDR_SURF_TILE_SPLIT_2KB;
+		break;
+	case 4096:
+		tile_split = V_028040_ADDR_SURF_TILE_SPLIT_4KB;
+		break;
+	}
+	return tile_split;
+}
+
+static unsigned cik_macro_tile_aspect(unsigned macro_tile_aspect)
+{
+	switch (macro_tile_aspect) {
+	default:
+	case 1:
+		macro_tile_aspect = V_02803C_ADDR_SURF_MACRO_ASPECT_1;
+		break;
+	case 2:
+		macro_tile_aspect = V_02803C_ADDR_SURF_MACRO_ASPECT_2;
+		break;
+	case 4:
+		macro_tile_aspect = V_02803C_ADDR_SURF_MACRO_ASPECT_4;
+		break;
+	case 8:
+		macro_tile_aspect = V_02803C_ADDR_SURF_MACRO_ASPECT_8;
+		break;
+	}
+	return macro_tile_aspect;
+}
+
+static unsigned cik_bank_wh(unsigned bankwh)
+{
+	switch (bankwh) {
+	default:
+	case 1:
+		bankwh = V_02803C_ADDR_SURF_BANK_WIDTH_1;
+		break;
+	case 2:
+		bankwh = V_02803C_ADDR_SURF_BANK_WIDTH_2;
+		break;
+	case 4:
+		bankwh = V_02803C_ADDR_SURF_BANK_WIDTH_4;
+		break;
+	case 8:
+		bankwh = V_02803C_ADDR_SURF_BANK_WIDTH_8;
+		break;
+	}
+	return bankwh;
+}
+
+static unsigned cik_db_pipe_config(unsigned tile_pipes,
+				   unsigned num_rbs)
+{
+	unsigned pipe_config;
+
+	switch (tile_pipes) {
+	case 8:
+		pipe_config = V_02803C_X_ADDR_SURF_P8_32X32_16X16;
+		break;
+	case 4:
+	default:
+		if (num_rbs == 4)
+			pipe_config = V_02803C_X_ADDR_SURF_P4_16X16;
+		else
+			pipe_config = V_02803C_X_ADDR_SURF_P4_8X16;
+		break;
+	case 2:
+			pipe_config = V_02803C_ADDR_SURF_P2;
+		break;
+	}
+	return pipe_config;
+}
+
 /*
  * inferred framebuffer and blender state
  */
@@ -50,7 +158,7 @@ static void si_update_fb_blend_state(struct r600_context *rctx)
 	if (blend == NULL)
 		return;
 
-	pm4 = CALLOC_STRUCT(si_pm4_state);
+	pm4 = si_pm4_alloc_state(rctx);
 	if (pm4 == NULL)
 		return;
 
@@ -213,7 +321,7 @@ static void si_set_blend_color(struct pipe_context *ctx,
 			       const struct pipe_blend_color *state)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
+	struct si_pm4_state *pm4 = si_pm4_alloc_state(rctx);
 
         if (pm4 == NULL)
                 return;
@@ -234,7 +342,7 @@ static void si_set_clip_state(struct pipe_context *ctx,
 			      const struct pipe_clip_state *state)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
+	struct si_pm4_state *pm4 = si_pm4_alloc_state(rctx);
 	struct pipe_constant_buffer cb;
 
 	if (pm4 == NULL)
@@ -267,7 +375,7 @@ static void si_set_scissor_states(struct pipe_context *ctx,
                                   const struct pipe_scissor_state *state)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
+	struct si_pm4_state *pm4 = si_pm4_alloc_state(rctx);
 	uint32_t tl, br;
 
 	if (pm4 == NULL)
@@ -349,7 +457,11 @@ static void si_update_fb_rs_state(struct r600_context *rctx)
 		return;
 	}
 
-	pm4 = CALLOC_STRUCT(si_pm4_state);
+	pm4 = si_pm4_alloc_state(rctx);
+
+	if (pm4 == NULL)
+		return;
+
 	/* FIXME some of those reg can be computed with cso */
 	offset_db_fmt_cntl |= S_028B78_POLY_OFFSET_NEG_NUM_DB_BITS(depth);
 	si_pm4_set_reg(pm4, R_028B80_PA_SU_POLY_OFFSET_FRONT_SCALE,
@@ -511,7 +623,7 @@ static void si_delete_rs_state(struct pipe_context *ctx, void *state)
  */
 static void si_update_dsa_stencil_ref(struct r600_context *rctx)
 {
-	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
+	struct si_pm4_state *pm4 = si_pm4_alloc_state(rctx);
 	struct pipe_stencil_ref *ref = &rctx->stencil_ref;
         struct si_state_dsa *dsa = rctx->queued.named.dsa;
 
@@ -1752,10 +1864,12 @@ static void si_cb(struct r600_context *rctx, struct si_pm4_state *pm4,
 static void si_db(struct r600_context *rctx, struct si_pm4_state *pm4,
 		  const struct pipe_framebuffer_state *state)
 {
+	struct r600_screen *rscreen = rctx->screen;
 	struct r600_resource_texture *rtex;
 	struct r600_surface *surf;
-	unsigned level, pitch, slice, format, tile_mode_index;
-	uint32_t z_info, s_info;
+	unsigned level, pitch, slice, format, tile_mode_index, array_mode;
+	unsigned macro_aspect, tile_split, stile_split, bankh, bankw, nbanks, pipe_config;
+	uint32_t z_info, s_info, db_depth_info;
 	uint64_t z_offs, s_offs;
 
 	if (state->zsbuf == NULL) {
@@ -1788,22 +1902,60 @@ static void si_db(struct r600_context *rctx, struct si_pm4_state *pm4,
 		slice = slice - 1;
 	}
 
+	db_depth_info = S_02803C_ADDR5_SWIZZLE_MASK(1);
+
 	z_info = S_028040_FORMAT(format);
 	if (rtex->surface.flags & RADEON_SURF_SBUFFER)
 		s_info = S_028044_FORMAT(V_028044_STENCIL_8);
 	else
 		s_info = S_028044_FORMAT(V_028044_STENCIL_INVALID);
 
-	tile_mode_index = si_tile_mode_index(rtex, level, false);
-	z_info |= S_028040_TILE_MODE_INDEX(tile_mode_index);
-	tile_mode_index = si_tile_mode_index(rtex, level, true);
-	s_info |= S_028044_TILE_MODE_INDEX(tile_mode_index);
+	if (rctx->chip_class >= CIK) {
+		switch (rtex->surface.level[level].mode) {
+		case RADEON_SURF_MODE_2D:
+			array_mode = V_02803C_ARRAY_2D_TILED_THIN1;
+			break;
+		case RADEON_SURF_MODE_1D:
+		case RADEON_SURF_MODE_LINEAR_ALIGNED:
+		case RADEON_SURF_MODE_LINEAR:
+		default:
+			array_mode = V_02803C_ARRAY_1D_TILED_THIN1;
+			break;
+		}
+		tile_split = rtex->surface.tile_split;
+		stile_split = rtex->surface.stencil_tile_split;
+		macro_aspect = rtex->surface.mtilea;
+		bankw = rtex->surface.bankw;
+		bankh = rtex->surface.bankh;
+		tile_split = cik_tile_split(tile_split);
+		stile_split = cik_tile_split(stile_split);
+		macro_aspect = cik_macro_tile_aspect(macro_aspect);
+		bankw = cik_bank_wh(bankw);
+		bankh = cik_bank_wh(bankh);
+		nbanks = cik_num_banks(rscreen->tiling_info.num_banks);
+		pipe_config = cik_db_pipe_config(rscreen->info.r600_num_tile_pipes,
+						 rscreen->info.r600_num_backends);
+
+		db_depth_info |= S_02803C_ARRAY_MODE(array_mode) |
+			S_02803C_PIPE_CONFIG(pipe_config) |
+			S_02803C_BANK_WIDTH(bankw) |
+			S_02803C_BANK_HEIGHT(bankh) |
+			S_02803C_MACRO_TILE_ASPECT(macro_aspect) |
+			S_02803C_NUM_BANKS(nbanks);
+		z_info |= S_028040_TILE_SPLIT(tile_split);
+		s_info |= S_028044_TILE_SPLIT(stile_split);
+	} else {
+		tile_mode_index = si_tile_mode_index(rtex, level, false);
+		z_info |= S_028040_TILE_MODE_INDEX(tile_mode_index);
+		tile_mode_index = si_tile_mode_index(rtex, level, true);
+		s_info |= S_028044_TILE_MODE_INDEX(tile_mode_index);
+	}
 
 	si_pm4_set_reg(pm4, R_028008_DB_DEPTH_VIEW,
 		       S_028008_SLICE_START(state->zsbuf->u.tex.first_layer) |
 		       S_028008_SLICE_MAX(state->zsbuf->u.tex.last_layer));
 
-	si_pm4_set_reg(pm4, R_02803C_DB_DEPTH_INFO, S_02803C_ADDR5_SWIZZLE_MASK(1));
+	si_pm4_set_reg(pm4, R_02803C_DB_DEPTH_INFO, db_depth_info);
 	si_pm4_set_reg(pm4, R_028040_DB_Z_INFO, z_info);
 	si_pm4_set_reg(pm4, R_028044_DB_STENCIL_INFO, s_info);
 
@@ -1821,7 +1973,7 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 				     const struct pipe_framebuffer_state *state)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
+	struct si_pm4_state *pm4 = si_pm4_alloc_state(rctx);
 	uint32_t tl, br;
 	int tl_x, tl_y, br_x, br_y;
 
@@ -2343,7 +2495,7 @@ static struct si_pm4_state *si_set_sampler_view(struct r600_context *rctx,
 						unsigned user_data_reg)
 {
 	struct si_pipe_sampler_view **resource = (struct si_pipe_sampler_view **)views;
-	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
+	struct si_pm4_state *pm4 = si_pm4_alloc_state(rctx);
 	int i, j;
 
 	if (!count)
@@ -2417,7 +2569,7 @@ static struct si_pm4_state *si_bind_sampler(struct r600_context *rctx, unsigned 
 					    unsigned user_data_reg)
 {
 	struct si_pipe_sampler_state **rstates = (struct si_pipe_sampler_state **)states;
-	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
+	struct si_pm4_state *pm4 = si_pm4_alloc_state(rctx);
 	uint32_t *border_color_table = NULL;
 	int i, j;
 
@@ -2472,6 +2624,8 @@ static struct si_pm4_state *si_bind_sampler(struct r600_context *rctx, unsigned 
 					 (void*)rctx->border_color_table);
 
 		si_pm4_set_reg(pm4, R_028080_TA_BC_BASE_ADDR, va_offset >> 8);
+		if (rctx->chip_class >= CIK)
+			si_pm4_set_reg(pm4, R_028084_TA_BC_BASE_ADDR_HI, va_offset >> 40);
 		rctx->ws->buffer_unmap(rctx->border_color_table->cs_buf);
 		si_pm4_add_bo(pm4, rctx->border_color_table, RADEON_USAGE_READ);
 	}
@@ -2664,7 +2818,10 @@ static void si_set_polygon_stipple(struct pipe_context *ctx,
 static void si_texture_barrier(struct pipe_context *ctx)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
+	struct si_pm4_state *pm4 = si_pm4_alloc_state(rctx);
+
+	if (pm4 == NULL)
+		return;
 
 	si_pm4_inval_texture_cache(pm4);
 	si_pm4_inval_fb_cache(pm4, rctx->framebuffer.nr_cbufs);
@@ -2736,7 +2893,10 @@ void si_init_state_functions(struct r600_context *rctx)
 
 void si_init_config(struct r600_context *rctx)
 {
-	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
+	struct si_pm4_state *pm4 = si_pm4_alloc_state(rctx);
+
+	if (pm4 == NULL)
+		return;
 
 	si_cmd_context_control(pm4);
 
@@ -2765,8 +2925,9 @@ void si_init_config(struct r600_context *rctx)
 		       S_028AA8_PRIMGROUP_SIZE(63));
 	si_pm4_set_reg(pm4, R_028AB4_VGT_REUSE_OFF, 0x00000000);
 	si_pm4_set_reg(pm4, R_028AB8_VGT_VTX_CNT_EN, 0x0);
-	si_pm4_set_reg(pm4, R_008A14_PA_CL_ENHANCE, S_008A14_NUM_CLIP_SEQ(3) |
-		       S_008A14_CLIP_VTX_REORDER_ENA(1));
+	if (rctx->chip_class < CIK)
+		si_pm4_set_reg(pm4, R_008A14_PA_CL_ENHANCE, S_008A14_NUM_CLIP_SEQ(3) |
+			       S_008A14_CLIP_VTX_REORDER_ENA(1));
 
 	si_pm4_set_reg(pm4, R_028B54_VGT_SHADER_STAGES_EN, 0);
 	si_pm4_set_reg(pm4, R_028BD4_PA_SC_CENTROID_PRIORITY_0, 0x76543210);
@@ -2776,23 +2937,40 @@ void si_init_config(struct r600_context *rctx)
 
 	si_pm4_set_reg(pm4, R_02882C_PA_SU_PRIM_FILTER_CNTL, 0);
 
-	switch (rctx->screen->family) {
-	case CHIP_TAHITI:
-	case CHIP_PITCAIRN:
-		si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x2a00126a);
-		break;
-	case CHIP_VERDE:
-		si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x0000124a);
-		break;
-	case CHIP_OLAND:
-		si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x00000082);
-		break;
-	case CHIP_HAINAN:
-		si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x00000000);
-		break;
-	default:
-		si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x00000000);
-		break;
+	if (rctx->chip_class >= CIK) {
+		switch (rctx->screen->family) {
+		case CHIP_BONAIRE:
+			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x16000012);
+			si_pm4_set_reg(pm4, R_028354_PA_SC_RASTER_CONFIG_1, 0x00000000);
+			break;
+		case CHIP_KAVERI:
+			/* XXX todo */
+		case CHIP_KABINI:
+			/* XXX todo */
+		default:
+			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x00000000);
+			si_pm4_set_reg(pm4, R_028354_PA_SC_RASTER_CONFIG_1, 0x00000000);
+			break;
+		}
+	} else {
+		switch (rctx->screen->family) {
+		case CHIP_TAHITI:
+		case CHIP_PITCAIRN:
+			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x2a00126a);
+			break;
+		case CHIP_VERDE:
+			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x0000124a);
+			break;
+		case CHIP_OLAND:
+			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x00000082);
+			break;
+		case CHIP_HAINAN:
+			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x00000000);
+			break;
+		default:
+			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x00000000);
+			break;
+		}
 	}
 
 	si_pm4_set_state(rctx, init, pm4);

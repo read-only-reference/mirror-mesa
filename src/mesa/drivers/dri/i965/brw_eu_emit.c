@@ -811,9 +811,6 @@ static struct brw_instruction *brw_alu3(struct brw_compile *p,
    assert(src0.file == BRW_GENERAL_REGISTER_FILE);
    assert(src0.address_mode == BRW_ADDRESS_DIRECT);
    assert(src0.nr < 128);
-   assert(src0.type == BRW_REGISTER_TYPE_F ||
-          src0.type == BRW_REGISTER_TYPE_D ||
-          src0.type == BRW_REGISTER_TYPE_UD);
    insn->bits2.da3src.src0_swizzle = src0.dw1.bits.swizzle;
    insn->bits2.da3src.src0_subreg_nr = get_3src_subreg_nr(src0);
    insn->bits2.da3src.src0_reg_nr = src0.nr;
@@ -824,9 +821,6 @@ static struct brw_instruction *brw_alu3(struct brw_compile *p,
    assert(src1.file == BRW_GENERAL_REGISTER_FILE);
    assert(src1.address_mode == BRW_ADDRESS_DIRECT);
    assert(src1.nr < 128);
-   assert(src1.type == BRW_REGISTER_TYPE_F ||
-          src0.type == BRW_REGISTER_TYPE_D ||
-          src0.type == BRW_REGISTER_TYPE_UD);
    insn->bits2.da3src.src1_swizzle = src1.dw1.bits.swizzle;
    insn->bits2.da3src.src1_subreg_nr_low = get_3src_subreg_nr(src1) & 0x3;
    insn->bits3.da3src.src1_subreg_nr_high = get_3src_subreg_nr(src1) >> 2;
@@ -838,9 +832,6 @@ static struct brw_instruction *brw_alu3(struct brw_compile *p,
    assert(src2.file == BRW_GENERAL_REGISTER_FILE);
    assert(src2.address_mode == BRW_ADDRESS_DIRECT);
    assert(src2.nr < 128);
-   assert(src2.type == BRW_REGISTER_TYPE_F ||
-          src0.type == BRW_REGISTER_TYPE_D ||
-          src0.type == BRW_REGISTER_TYPE_UD);
    insn->bits3.da3src.src2_swizzle = src2.dw1.bits.swizzle;
    insn->bits3.da3src.src2_subreg_nr = get_3src_subreg_nr(src2);
    insn->bits3.da3src.src2_rep_ctrl = src2.vstride == BRW_VERTICAL_STRIDE_0;
@@ -849,12 +840,12 @@ static struct brw_instruction *brw_alu3(struct brw_compile *p,
    insn->bits1.da3src.src2_negate = src2.negate;
 
    if (intel->gen >= 7) {
-      /* For MAD and LRP, all incoming src types are float, but for BFE and
-       * BFI2, the three source types might not all be the same. src2, the
-       * primary argument, should match the type of the destination.
+      /* Set both the source and destination types based on dest.type,
+       * ignoring the source register types.  The MAD and LRP emitters ensure
+       * that all four types are float.  The BFE and BFI2 emitters, however,
+       * may send us mixed D and UD types and want us to ignore that and use
+       * the destination type.
        */
-      assert(dest.type == src2.type);
-
       switch (dest.type) {
       case BRW_REGISTER_TYPE_F:
          insn->bits1.da3src.src_type = BRW_3SRC_TYPE_F;
@@ -903,6 +894,20 @@ struct brw_instruction *brw_##OP(struct brw_compile *p,	\
 	      struct brw_reg src2)   			\
 {							\
    return brw_alu3(p, BRW_OPCODE_##OP, dest, src0, src1, src2);	\
+}
+
+#define ALU3F(OP)                                               \
+struct brw_instruction *brw_##OP(struct brw_compile *p,         \
+                                 struct brw_reg dest,           \
+                                 struct brw_reg src0,           \
+                                 struct brw_reg src1,           \
+                                 struct brw_reg src2)           \
+{                                                               \
+   assert(dest.type == BRW_REGISTER_TYPE_F);                    \
+   assert(src0.type == BRW_REGISTER_TYPE_F);                    \
+   assert(src1.type == BRW_REGISTER_TYPE_F);                    \
+   assert(src2.type == BRW_REGISTER_TYPE_F);                    \
+   return brw_alu3(p, BRW_OPCODE_##OP, dest, src0, src1, src2); \
 }
 
 /* Rounding operations (other than RNDD) require two instructions - the first
@@ -955,8 +960,8 @@ ALU2(DP3)
 ALU2(DP2)
 ALU2(LINE)
 ALU2(PLN)
-ALU3(MAD)
-ALU3(LRP)
+ALU3F(MAD)
+ALU3F(LRP)
 ALU1(BFREV)
 ALU3(BFE)
 ALU2(BFI1)

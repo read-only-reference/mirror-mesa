@@ -45,11 +45,11 @@ process_query_for_occlusion_counter(struct ilo_3d *hw3d,
    /* in pairs */
    assert(q->reg_read % 2 == 0);
 
-   q->bo->map(q->bo, false);
-   vals = q->bo->get_virtual(q->bo);
+   intel_bo_map(q->bo, false);
+   vals = intel_bo_get_virtual(q->bo);
    for (i = 1; i < q->reg_read; i += 2)
       depth_count += vals[i] - vals[i - 1];
-   q->bo->unmap(q->bo);
+   intel_bo_unmap(q->bo);
 
    /* accumulate so that the query can be resumed if wanted */
    q->data.u64 += depth_count;
@@ -70,10 +70,10 @@ process_query_for_timestamp(struct ilo_3d *hw3d, struct ilo_query *q)
 
    assert(q->reg_read == 1);
 
-   q->bo->map(q->bo, false);
-   vals = q->bo->get_virtual(q->bo);
+   intel_bo_map(q->bo, false);
+   vals = intel_bo_get_virtual(q->bo);
    timestamp = vals[0];
-   q->bo->unmap(q->bo);
+   intel_bo_unmap(q->bo);
 
    q->data.u64 = timestamp_to_ns(timestamp);
    q->reg_read = 0;
@@ -88,13 +88,13 @@ process_query_for_time_elapsed(struct ilo_3d *hw3d, struct ilo_query *q)
    /* in pairs */
    assert(q->reg_read % 2 == 0);
 
-   q->bo->map(q->bo, false);
-   vals = q->bo->get_virtual(q->bo);
+   intel_bo_map(q->bo, false);
+   vals = intel_bo_get_virtual(q->bo);
 
    for (i = 1; i < q->reg_read; i += 2)
       elapsed += vals[i] - vals[i - 1];
 
-   q->bo->unmap(q->bo);
+   intel_bo_unmap(q->bo);
 
    /* accumulate so that the query can be resumed if wanted */
    q->data.u64 += timestamp_to_ns(elapsed);
@@ -363,12 +363,15 @@ void
 ilo_3d_destroy(struct ilo_3d *hw3d)
 {
    ilo_3d_pipeline_destroy(hw3d->pipeline);
+
+   if (hw3d->kernel.bo)
+      intel_bo_unreference(hw3d->kernel.bo);
+
    FREE(hw3d);
 }
 
 static bool
 draw_vbo(struct ilo_3d *hw3d, const struct ilo_context *ilo,
-         const struct pipe_draw_info *info,
          int *prim_generated, int *prim_emitted)
 {
    bool need_flush = false;
@@ -383,10 +386,10 @@ draw_vbo(struct ilo_3d *hw3d, const struct ilo_context *ilo,
        * happens in the middle of a batch buffer, we need to insert manual
        * flushes.
        */
-      need_flush = (ilo->dirty & ILO_DIRTY_FRAMEBUFFER);
+      need_flush = (ilo->dirty & ILO_DIRTY_FB);
 
       /* same to SO target changes */
-      need_flush |= (ilo->dirty & ILO_DIRTY_STREAM_OUTPUT_TARGETS);
+      need_flush |= (ilo->dirty & ILO_DIRTY_SO);
    }
 
    /* make sure there is enough room first */
@@ -406,7 +409,7 @@ draw_vbo(struct ilo_3d *hw3d, const struct ilo_context *ilo,
    if (need_flush)
       ilo_3d_pipeline_emit_flush(hw3d->pipeline);
 
-   return ilo_3d_pipeline_emit_draw(hw3d->pipeline, ilo, info,
+   return ilo_3d_pipeline_emit_draw(hw3d->pipeline, ilo,
          prim_generated, prim_emitted);
 }
 
@@ -422,9 +425,10 @@ update_prim_count(struct ilo_3d *hw3d, int generated, int emitted)
       q->data.u64 += emitted;
 }
 
-static bool
-pass_render_condition(struct ilo_3d *hw3d, struct pipe_context *pipe)
+bool
+ilo_3d_pass_render_condition(struct ilo_context *ilo)
 {
+   struct ilo_3d *hw3d = ilo->hw3d;
    uint64_t result;
    bool wait;
 
@@ -443,13 +447,11 @@ pass_render_condition(struct ilo_3d *hw3d, struct pipe_context *pipe)
       break;
    }
 
-   if (pipe->get_query_result(pipe, hw3d->render_condition.query,
-            wait, (union pipe_query_result *) &result)) {
-      return (result > 0);
-   }
-   else {
+   if (ilo->base.get_query_result(&ilo->base, hw3d->render_condition.query,
+            wait, (union pipe_query_result *) &result))
+      return (!result == hw3d->render_condition.cond);
+   else
       return true;
-   }
 }
 
 #define UPDATE_MIN2(a, b) (a) = MIN2((a), (b))
@@ -524,8 +526,7 @@ ilo_find_sub_primitives(const void *elements, unsigned element_size,
 }
 
 static inline bool
-ilo_check_restart_index(struct ilo_context *ilo,
-                        const struct pipe_draw_info *info)
+ilo_check_restart_index(const struct ilo_context *ilo, unsigned restart_index)
 {
    /*
     * Haswell (GEN(7.5)) supports an arbitrary cut index, check everything
@@ -535,25 +536,24 @@ ilo_check_restart_index(struct ilo_context *ilo,
       return true;
 
    /* Note: indices must be unsigned byte, unsigned short or unsigned int */
-   switch (ilo->index_buffer.index_size) {
+   switch (ilo->ib.state.index_size) {
    case 1:
-      return ((info->restart_index & 0xff) == 0xff);
+      return ((restart_index & 0xff) == 0xff);
       break;
    case 2:
-      return ((info->restart_index & 0xffff) == 0xffff);
+      return ((restart_index & 0xffff) == 0xffff);
       break;
    case 4:
-      return (info->restart_index == 0xffffffff);
+      return (restart_index == 0xffffffff);
       break;
    }
    return false;
 }
 
 static inline bool
-ilo_check_restart_prim_type(struct ilo_context *ilo,
-                            const struct pipe_draw_info *info)
+ilo_check_restart_prim_type(const struct ilo_context *ilo, unsigned prim)
 {
-   switch (info->mode) {
+   switch (prim) {
    case PIPE_PRIM_POINTS:
    case PIPE_PRIM_LINES:
    case PIPE_PRIM_LINE_STRIP:
@@ -605,19 +605,22 @@ ilo_draw_vbo_with_sw_restart(struct pipe_context *pipe,
       return;
    }
 
-   struct pipe_transfer *transfer = NULL;
-   const void *map = NULL;
-   map = pipe_buffer_map(pipe,
-           ilo->index_buffer.buffer,
-           PIPE_TRANSFER_READ,
-           &transfer);
+   if (ilo->ib.state.buffer) {
+      struct pipe_transfer *transfer;
+      const void *map;
 
-   sub_prim_count = ilo_find_sub_primitives(map + ilo->index_buffer.offset,
-           ilo->index_buffer.index_size,
-           info,
-           restart_info);
+      map = pipe_buffer_map(pipe, ilo->ib.state.buffer,
+            PIPE_TRANSFER_READ, &transfer);
 
-   pipe_buffer_unmap(pipe, transfer);
+      sub_prim_count = ilo_find_sub_primitives(map + ilo->ib.state.offset,
+            ilo->ib.state.index_size, info, restart_info);
+
+      pipe_buffer_unmap(pipe, transfer);
+   }
+   else {
+      sub_prim_count = ilo_find_sub_primitives(ilo->ib.state.user_buffer,
+            ilo->ib.state.index_size, info, restart_info);
+   }
 
    info = restart_info;
 
@@ -631,6 +634,66 @@ ilo_draw_vbo_with_sw_restart(struct pipe_context *pipe,
    FREE(restart_info);
 }
 
+static bool
+upload_shaders(struct ilo_3d *hw3d, struct ilo_shader_cache *shc)
+{
+   bool incremental = true;
+   int upload;
+
+   upload = ilo_shader_cache_upload(shc,
+         NULL, hw3d->kernel.used, incremental);
+   if (!upload)
+      return true;
+
+   /*
+    * Allocate a new bo.  When this is a new batch, assume the bo is still in
+    * use by the previous batch and force allocation.
+    *
+    * Does it help to make shader cache upload with unsynchronized mapping,
+    * and remove the check for new batch here?
+    */
+   if (hw3d->kernel.used + upload > hw3d->kernel.size || hw3d->new_batch) {
+      unsigned new_size = (hw3d->kernel.size) ?
+         hw3d->kernel.size : (8 * 1024);
+
+      while (hw3d->kernel.used + upload > new_size)
+         new_size *= 2;
+
+      if (hw3d->kernel.bo)
+         intel_bo_unreference(hw3d->kernel.bo);
+
+      hw3d->kernel.bo = intel_winsys_alloc_buffer(hw3d->cp->winsys,
+            "kernel bo", new_size, 0);
+      if (!hw3d->kernel.bo) {
+         ilo_err("failed to allocate kernel bo\n");
+         return false;
+      }
+
+      hw3d->kernel.used = 0;
+      hw3d->kernel.size = new_size;
+      incremental = false;
+
+      assert(new_size >= ilo_shader_cache_upload(shc,
+            NULL, hw3d->kernel.used, incremental));
+
+      ilo_3d_pipeline_invalidate(hw3d->pipeline,
+            ILO_3D_PIPELINE_INVALIDATE_KERNEL_BO);
+   }
+
+   upload = ilo_shader_cache_upload(shc,
+         hw3d->kernel.bo, hw3d->kernel.used, incremental);
+   if (upload < 0) {
+      ilo_err("failed to upload shaders\n");
+      return false;
+   }
+
+   hw3d->kernel.used += upload;
+
+   assert(hw3d->kernel.used <= hw3d->kernel.size);
+
+   return true;
+}
+
 static void
 ilo_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
 {
@@ -638,7 +701,7 @@ ilo_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
    struct ilo_3d *hw3d = ilo->hw3d;
    int prim_generated, prim_emitted;
 
-   if (!pass_render_condition(hw3d, pipe))
+   if (!ilo_3d_pass_render_condition(ilo))
       return;
 
    if (info->primitive_restart && info->indexed) {
@@ -646,40 +709,28 @@ ilo_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
        * Want to draw an indexed primitive using primitive restart
        * Check that HW can handle the request and fall to SW if not.
        */
-      if (!ilo_check_restart_index(ilo, info) ||
-          !ilo_check_restart_prim_type(ilo, info)) {
+      if (!ilo_check_restart_index(ilo, info->restart_index) ||
+          !ilo_check_restart_prim_type(ilo, info->mode)) {
          ilo_draw_vbo_with_sw_restart(pipe, info);
          return;
       }
    }
 
-   /* assume the cache is still in use by the previous batch */
-   if (hw3d->new_batch)
-      ilo_shader_cache_mark_busy(ilo->shader_cache);
+   ilo_finalize_3d_states(ilo, info);
 
-   ilo_finalize_states(ilo);
-
-   /* the shaders may be uploaded to a new shader cache */
-   if (hw3d->shader_cache_seqno != ilo->shader_cache->seqno) {
-      ilo_3d_pipeline_invalidate(hw3d->pipeline,
-            ILO_3D_PIPELINE_INVALIDATE_KERNEL_BO);
-   }
-
-   /*
-    * The VBs and/or IB may have different BOs due to being mapped with
-    * PIPE_TRANSFER_DISCARD_x.  We should track that instead of setting the
-    * dirty flags for the performance reason.
-    */
-   ilo->dirty |= ILO_DIRTY_VERTEX_BUFFERS | ILO_DIRTY_INDEX_BUFFER;
+   if (!upload_shaders(hw3d, ilo->shader_cache))
+      return;
 
    /* If draw_vbo ever fails, return immediately. */
-   if (!draw_vbo(hw3d, ilo, info, &prim_generated, &prim_emitted))
+   if (!draw_vbo(hw3d, ilo, &prim_generated, &prim_emitted))
       return;
 
    /* clear dirty status */
    ilo->dirty = 0x0;
    hw3d->new_batch = false;
-   hw3d->shader_cache_seqno = ilo->shader_cache->seqno;
+
+   /* avoid dangling pointer reference */
+   ilo->draw = NULL;
 
    update_prim_count(hw3d, prim_generated, prim_emitted);
 
@@ -690,6 +741,7 @@ ilo_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
 static void
 ilo_render_condition(struct pipe_context *pipe,
                      struct pipe_query *query,
+                     boolean condition,
                      uint mode)
 {
    struct ilo_context *ilo = ilo_context(pipe);
@@ -698,6 +750,7 @@ ilo_render_condition(struct pipe_context *pipe,
    /* reference count? */
    hw3d->render_condition.query = query;
    hw3d->render_condition.mode = mode;
+   hw3d->render_condition.cond = condition;
 }
 
 static void

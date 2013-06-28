@@ -33,7 +33,7 @@
 #include "toy_optimize.h"
 #include "toy_helpers.h"
 #include "ilo_context.h"
-#include "ilo_shader.h"
+#include "ilo_shader_internal.h"
 
 struct vs_compile_context {
    struct ilo_shader *shader;
@@ -458,6 +458,8 @@ vs_prepare_tgsi_sampling(struct toy_compiler *tc, const struct toy_inst *inst,
       break;
    default:
       assert(!"unhandled sampling opcode");
+      if (ret_sampler_index)
+         *ret_sampler_index = 0;
       return tsrc_null();
       break;
    }
@@ -1278,7 +1280,7 @@ ilo_shader_compile_vs(const struct ilo_shader_state *state,
 
       if (!ilo_shader_compile_gs_passthrough(state, variant,
                so_mapping, vcc.shader)) {
-         ilo_shader_destroy(vcc.shader);
+         ilo_shader_destroy_kernel(vcc.shader);
          vcc.shader = NULL;
       }
    }

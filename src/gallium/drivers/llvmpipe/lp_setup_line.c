@@ -36,6 +36,7 @@
 #include "lp_rast.h"
 #include "lp_state_fs.h"
 #include "lp_state_setup.h"
+#include "lp_context.h"
 
 #define NUM_CHANNELS 4
 
@@ -277,6 +278,7 @@ try_setup_line( struct lp_setup_context *setup,
                const float (*v1)[4],
                const float (*v2)[4])
 {
+   struct llvmpipe_context *lp_context = (struct llvmpipe_context *)setup->pipe;
    struct lp_scene *scene = setup->scene;
    const struct lp_setup_variant_key *key = &setup->setup.variant->key;
    struct lp_rast_triangle *line;
@@ -290,6 +292,7 @@ try_setup_line( struct lp_setup_context *setup,
    int i;
    int nr_planes = 4;
    unsigned scissor_index = 0;
+   unsigned layer = 0;
    
    /* linewidth should be interpreted as integer */
    int fixed_width = util_iround(width) * FIXED_ONE;
@@ -325,6 +328,10 @@ try_setup_line( struct lp_setup_context *setup,
       nr_planes = 4;
    }
 
+   if (setup->layer_slot > 0) {
+      layer = *(unsigned*)v1[setup->layer_slot];
+      layer = MIN2(layer, scene->fb_max_layer);
+   }
 
    dx = v1[0][0] - v2[0][0];
    dy = v1[0][1] - v2[0][1];
@@ -536,11 +543,6 @@ try_setup_line( struct lp_setup_context *setup,
       y[3] = subpixel_snap(v1[0][1] + y_offset     - setup->pixel_offset);
    }
 
-
-
-   LP_COUNT(nr_tris);
-
- 
    /* Bounding rectangle (in pixels) */
    {
       /* Yes this is necessary to accurately calculate bounding boxes
@@ -593,6 +595,12 @@ try_setup_line( struct lp_setup_context *setup,
    line->v[1][1] = v2[0][1];
 #endif
 
+   LP_COUNT(nr_tris);
+
+   if (lp_context->active_statistics_queries) {
+      lp_context->pipeline_statistics.c_primitives++;
+   }
+
    /* calculate the deltas */
    plane = GET_PLANES(line);
    plane[0].dcdy = x[0] - x[1];
@@ -616,6 +624,7 @@ try_setup_line( struct lp_setup_context *setup,
    line->inputs.frontfacing = TRUE;
    line->inputs.disable = FALSE;
    line->inputs.opaque = FALSE;
+   line->inputs.layer = layer;
 
    for (i = 0; i < 4; i++) {
 
