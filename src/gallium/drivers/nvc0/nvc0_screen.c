@@ -157,7 +157,6 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
    case PIPE_CAP_START_INSTANCE:
       return 1;
-   case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
       return 0; /* state trackers will know better */
    case PIPE_CAP_USER_CONSTANT_BUFFERS:
@@ -180,6 +179,8 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
       return PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50;
+   case PIPE_CAP_ENDIANNESS:
+      return PIPE_ENDIAN_LITTLE;
    default:
       NOUVEAU_ERR("unknown PIPE_CAP %d\n", param);
       return 0;
@@ -511,6 +512,7 @@ nvc0_screen_resize_tls_area(struct nvc0_screen *screen,
    }
 
    size *= (screen->base.device->chipset >= 0xe0) ? 64 : 48; /* max warps */
+   size  = align(size, 0x8000);
    size *= screen->mp_count;
 
    size = align(size, 1 << 17);
@@ -550,6 +552,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    case 0xc0:
    case 0xd0:
    case 0xe0:
+   case 0xf0:
       break;
    default:
       return NULL;
@@ -598,6 +601,9 @@ nvc0_screen_create(struct nouveau_device *dev)
    screen->base.fence.update = nvc0_screen_fence_update;
 
    switch (dev->chipset & 0xf0) {
+   case 0xf0:
+      obj_class = NVF0_P2MF_CLASS;
+      break;
    case 0xe0:
       obj_class = NVE4_P2MF_CLASS;
       break;
@@ -642,6 +648,9 @@ nvc0_screen_create(struct nouveau_device *dev)
    PUSH_DATA (push, screen->fence.bo->offset + 16);
 
    switch (dev->chipset & 0xf0) {
+   case 0xf0:
+      obj_class = NVF0_3D_CLASS;
+      break;
    case 0xe0:
       obj_class = NVE4_3D_CLASS;
       break;

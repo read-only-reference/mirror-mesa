@@ -31,10 +31,10 @@
 #include "main/macros.h"
 #include "main/bufferobj.h"
 
+#include "brw_context.h"
 #include "intel_blit.h"
 #include "intel_buffer_objects.h"
 #include "intel_batchbuffer.h"
-#include "intel_context.h"
 #include "intel_fbo.h"
 #include "intel_mipmap_tree.h"
 #include "intel_regions.h"
@@ -46,12 +46,10 @@ intel_bufferobj_unmap(struct gl_context * ctx, struct gl_buffer_object *obj);
 
 /** Allocates a new drm_intel_bo to store the data for the buffer object. */
 static void
-intel_bufferobj_alloc_buffer(struct intel_context *intel,
+intel_bufferobj_alloc_buffer(struct brw_context *brw,
 			     struct intel_buffer_object *intel_obj)
 {
-   struct brw_context *brw = brw_context(&intel->ctx);
-
-   intel_obj->buffer = drm_intel_bo_alloc(intel->bufmgr, "bufferobj",
+   intel_obj->buffer = drm_intel_bo_alloc(brw->bufmgr, "bufferobj",
 					  intel_obj->Base.Size, 64);
 
    /* the buffer might be bound as a uniform buffer, need to update it
@@ -65,7 +63,6 @@ release_buffer(struct intel_buffer_object *intel_obj)
    drm_intel_bo_unreference(intel_obj->buffer);
    intel_obj->buffer = NULL;
    intel_obj->offset = 0;
-   intel_obj->source = 0;
 }
 
 /**
@@ -124,7 +121,7 @@ intel_bufferobj_data(struct gl_context * ctx,
                      const GLvoid * data,
                      GLenum usage, struct gl_buffer_object *obj)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct intel_buffer_object *intel_obj = intel_buffer_object(obj);
 
    /* Part of the ABI, but this function doesn't use it.
@@ -140,7 +137,7 @@ intel_bufferobj_data(struct gl_context * ctx,
       release_buffer(intel_obj);
 
    if (size != 0) {
-      intel_bufferobj_alloc_buffer(intel, intel_obj);
+      intel_bufferobj_alloc_buffer(brw, intel_obj);
       if (!intel_obj->buffer)
          return false;
 
@@ -164,7 +161,7 @@ intel_bufferobj_subdata(struct gl_context * ctx,
                         GLsizeiptrARB size,
                         const GLvoid * data, struct gl_buffer_object *obj)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct intel_buffer_object *intel_obj = intel_buffer_object(obj);
    bool busy;
 
@@ -175,24 +172,24 @@ intel_bufferobj_subdata(struct gl_context * ctx,
 
    busy =
       drm_intel_bo_busy(intel_obj->buffer) ||
-      drm_intel_bo_references(intel->batch.bo, intel_obj->buffer);
+      drm_intel_bo_references(brw->batch.bo, intel_obj->buffer);
 
    if (busy) {
       if (size == intel_obj->Base.Size) {
 	 /* Replace the current busy bo with fresh data. */
 	 drm_intel_bo_unreference(intel_obj->buffer);
-	 intel_bufferobj_alloc_buffer(intel, intel_obj);
+	 intel_bufferobj_alloc_buffer(brw, intel_obj);
 	 drm_intel_bo_subdata(intel_obj->buffer, 0, size, data);
       } else {
          perf_debug("Using a blit copy to avoid stalling on %ldb "
                     "glBufferSubData() to a busy buffer object.\n",
                     (long)size);
 	 drm_intel_bo *temp_bo =
-	    drm_intel_bo_alloc(intel->bufmgr, "subdata temp", size, 64);
+	    drm_intel_bo_alloc(brw->bufmgr, "subdata temp", size, 64);
 
 	 drm_intel_bo_subdata(temp_bo, 0, size, data);
 
-	 intel_emit_linear_blit(intel,
+	 intel_emit_linear_blit(brw,
 				intel_obj->buffer, offset,
 				temp_bo, 0,
 				size);
@@ -215,11 +212,11 @@ intel_bufferobj_get_subdata(struct gl_context * ctx,
                             GLvoid * data, struct gl_buffer_object *obj)
 {
    struct intel_buffer_object *intel_obj = intel_buffer_object(obj);
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
 
    assert(intel_obj);
-   if (drm_intel_bo_references(intel->batch.bo, intel_obj->buffer)) {
-      intel_batchbuffer_flush(intel);
+   if (drm_intel_bo_references(brw->batch.bo, intel_obj->buffer)) {
+      intel_batchbuffer_flush(brw);
    }
    drm_intel_bo_get_subdata(intel_obj->buffer, offset, size, data);
 }
@@ -247,7 +244,7 @@ intel_bufferobj_map_range(struct gl_context * ctx,
 			  GLintptr offset, GLsizeiptr length,
 			  GLbitfield access, struct gl_buffer_object *obj)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct intel_buffer_object *intel_obj = intel_buffer_object(obj);
 
    assert(intel_obj);
@@ -273,10 +270,10 @@ intel_bufferobj_map_range(struct gl_context * ctx,
     * achieve the required synchronization.
     */
    if (!(access & GL_MAP_UNSYNCHRONIZED_BIT)) {
-      if (drm_intel_bo_references(intel->batch.bo, intel_obj->buffer)) {
+      if (drm_intel_bo_references(brw->batch.bo, intel_obj->buffer)) {
 	 if (access & GL_MAP_INVALIDATE_BUFFER_BIT) {
 	    drm_intel_bo_unreference(intel_obj->buffer);
-	    intel_bufferobj_alloc_buffer(intel, intel_obj);
+	    intel_bufferobj_alloc_buffer(brw, intel_obj);
 	 } else {
             perf_debug("Stalling on the GPU for mapping a busy buffer "
                        "object\n");
@@ -285,7 +282,7 @@ intel_bufferobj_map_range(struct gl_context * ctx,
       } else if (drm_intel_bo_busy(intel_obj->buffer) &&
 		 (access & GL_MAP_INVALIDATE_BUFFER_BIT)) {
 	 drm_intel_bo_unreference(intel_obj->buffer);
-	 intel_bufferobj_alloc_buffer(intel, intel_obj);
+	 intel_bufferobj_alloc_buffer(brw, intel_obj);
       }
    }
 
@@ -300,7 +297,7 @@ intel_bufferobj_map_range(struct gl_context * ctx,
 	 intel_obj->range_map_buffer = malloc(length);
 	 obj->Pointer = intel_obj->range_map_buffer;
       } else {
-	 intel_obj->range_map_bo = drm_intel_bo_alloc(intel->bufmgr,
+	 intel_obj->range_map_bo = drm_intel_bo_alloc(brw->bufmgr,
 						      "range map",
 						      length, 64);
 	 if (!(access & GL_MAP_READ_BIT)) {
@@ -336,7 +333,7 @@ intel_bufferobj_flush_mapped_range(struct gl_context *ctx,
 				   GLintptr offset, GLsizeiptr length,
 				   struct gl_buffer_object *obj)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct intel_buffer_object *intel_obj = intel_buffer_object(obj);
    drm_intel_bo *temp_bo;
 
@@ -349,11 +346,11 @@ intel_bufferobj_flush_mapped_range(struct gl_context *ctx,
    if (length == 0)
       return;
 
-   temp_bo = drm_intel_bo_alloc(intel->bufmgr, "range map flush", length, 64);
+   temp_bo = drm_intel_bo_alloc(brw->bufmgr, "range map flush", length, 64);
 
    drm_intel_bo_subdata(temp_bo, 0, length, intel_obj->range_map_buffer);
 
-   intel_emit_linear_blit(intel,
+   intel_emit_linear_blit(brw,
 			  intel_obj->buffer, obj->Offset + offset,
 			  temp_bo, 0,
 			  length);
@@ -368,7 +365,7 @@ intel_bufferobj_flush_mapped_range(struct gl_context *ctx,
 static GLboolean
 intel_bufferobj_unmap(struct gl_context * ctx, struct gl_buffer_object *obj)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct intel_buffer_object *intel_obj = intel_buffer_object(obj);
 
    assert(intel_obj);
@@ -379,13 +376,13 @@ intel_bufferobj_unmap(struct gl_context * ctx, struct gl_buffer_object *obj)
        * flush.  Once again, we wish for a domain tracker in libdrm to cover
        * usage inside of a batchbuffer.
        */
-      intel_batchbuffer_emit_mi_flush(intel);
+      intel_batchbuffer_emit_mi_flush(brw);
       free(intel_obj->range_map_buffer);
       intel_obj->range_map_buffer = NULL;
    } else if (intel_obj->range_map_bo != NULL) {
       drm_intel_bo_unmap(intel_obj->range_map_bo);
 
-      intel_emit_linear_blit(intel,
+      intel_emit_linear_blit(brw,
 			     intel_obj->buffer, obj->Offset,
 			     intel_obj->range_map_bo, 0,
 			     obj->Length);
@@ -395,7 +392,7 @@ intel_bufferobj_unmap(struct gl_context * ctx, struct gl_buffer_object *obj)
        * flush.  Once again, we wish for a domain tracker in libdrm to cover
        * usage inside of a batchbuffer.
        */
-      intel_batchbuffer_emit_mi_flush(intel);
+      intel_batchbuffer_emit_mi_flush(brw);
 
       drm_intel_bo_unreference(intel_obj->range_map_bo);
       intel_obj->range_map_bo = NULL;
@@ -410,12 +407,12 @@ intel_bufferobj_unmap(struct gl_context * ctx, struct gl_buffer_object *obj)
 }
 
 drm_intel_bo *
-intel_bufferobj_buffer(struct intel_context *intel,
+intel_bufferobj_buffer(struct brw_context *brw,
                        struct intel_buffer_object *intel_obj,
 		       GLuint flag)
 {
-   if (intel_obj->source)
-      release_buffer(intel_obj);
+   if (intel_obj->buffer == NULL)
+      intel_bufferobj_alloc_buffer(brw, intel_obj);
 
    return intel_obj->buffer;
 }
@@ -423,138 +420,138 @@ intel_bufferobj_buffer(struct intel_context *intel,
 #define INTEL_UPLOAD_SIZE (64*1024)
 
 void
-intel_upload_finish(struct intel_context *intel)
+intel_upload_finish(struct brw_context *brw)
 {
-   if (!intel->upload.bo)
+   if (!brw->upload.bo)
 	   return;
 
-   if (intel->upload.buffer_len) {
-	   drm_intel_bo_subdata(intel->upload.bo,
-				intel->upload.buffer_offset,
-				intel->upload.buffer_len,
-				intel->upload.buffer);
-	   intel->upload.buffer_len = 0;
+   if (brw->upload.buffer_len) {
+	   drm_intel_bo_subdata(brw->upload.bo,
+				brw->upload.buffer_offset,
+				brw->upload.buffer_len,
+				brw->upload.buffer);
+	   brw->upload.buffer_len = 0;
    }
 
-   drm_intel_bo_unreference(intel->upload.bo);
-   intel->upload.bo = NULL;
+   drm_intel_bo_unreference(brw->upload.bo);
+   brw->upload.bo = NULL;
 }
 
-static void wrap_buffers(struct intel_context *intel, GLuint size)
+static void wrap_buffers(struct brw_context *brw, GLuint size)
 {
-   intel_upload_finish(intel);
+   intel_upload_finish(brw);
 
    if (size < INTEL_UPLOAD_SIZE)
       size = INTEL_UPLOAD_SIZE;
 
-   intel->upload.bo = drm_intel_bo_alloc(intel->bufmgr, "upload", size, 0);
-   intel->upload.offset = 0;
+   brw->upload.bo = drm_intel_bo_alloc(brw->bufmgr, "upload", size, 0);
+   brw->upload.offset = 0;
 }
 
-void intel_upload_data(struct intel_context *intel,
+void intel_upload_data(struct brw_context *brw,
 		       const void *ptr, GLuint size, GLuint align,
 		       drm_intel_bo **return_bo,
 		       GLuint *return_offset)
 {
    GLuint base, delta;
 
-   base = (intel->upload.offset + align - 1) / align * align;
-   if (intel->upload.bo == NULL || base + size > intel->upload.bo->size) {
-      wrap_buffers(intel, size);
+   base = (brw->upload.offset + align - 1) / align * align;
+   if (brw->upload.bo == NULL || base + size > brw->upload.bo->size) {
+      wrap_buffers(brw, size);
       base = 0;
    }
 
-   drm_intel_bo_reference(intel->upload.bo);
-   *return_bo = intel->upload.bo;
+   drm_intel_bo_reference(brw->upload.bo);
+   *return_bo = brw->upload.bo;
    *return_offset = base;
 
-   delta = base - intel->upload.offset;
-   if (intel->upload.buffer_len &&
-       intel->upload.buffer_len + delta + size > sizeof(intel->upload.buffer))
+   delta = base - brw->upload.offset;
+   if (brw->upload.buffer_len &&
+       brw->upload.buffer_len + delta + size > sizeof(brw->upload.buffer))
    {
-      drm_intel_bo_subdata(intel->upload.bo,
-			   intel->upload.buffer_offset,
-			   intel->upload.buffer_len,
-			   intel->upload.buffer);
-      intel->upload.buffer_len = 0;
+      drm_intel_bo_subdata(brw->upload.bo,
+			   brw->upload.buffer_offset,
+			   brw->upload.buffer_len,
+			   brw->upload.buffer);
+      brw->upload.buffer_len = 0;
    }
 
-   if (size < sizeof(intel->upload.buffer))
+   if (size < sizeof(brw->upload.buffer))
    {
-      if (intel->upload.buffer_len == 0)
-	 intel->upload.buffer_offset = base;
+      if (brw->upload.buffer_len == 0)
+	 brw->upload.buffer_offset = base;
       else
-	 intel->upload.buffer_len += delta;
+	 brw->upload.buffer_len += delta;
 
-      memcpy(intel->upload.buffer + intel->upload.buffer_len, ptr, size);
-      intel->upload.buffer_len += size;
+      memcpy(brw->upload.buffer + brw->upload.buffer_len, ptr, size);
+      brw->upload.buffer_len += size;
    }
    else
    {
-      drm_intel_bo_subdata(intel->upload.bo, base, size, ptr);
+      drm_intel_bo_subdata(brw->upload.bo, base, size, ptr);
    }
 
-   intel->upload.offset = base + size;
+   brw->upload.offset = base + size;
 }
 
-void *intel_upload_map(struct intel_context *intel, GLuint size, GLuint align)
+void *intel_upload_map(struct brw_context *brw, GLuint size, GLuint align)
 {
    GLuint base, delta;
    char *ptr;
 
-   base = (intel->upload.offset + align - 1) / align * align;
-   if (intel->upload.bo == NULL || base + size > intel->upload.bo->size) {
-      wrap_buffers(intel, size);
+   base = (brw->upload.offset + align - 1) / align * align;
+   if (brw->upload.bo == NULL || base + size > brw->upload.bo->size) {
+      wrap_buffers(brw, size);
       base = 0;
    }
 
-   delta = base - intel->upload.offset;
-   if (intel->upload.buffer_len &&
-       intel->upload.buffer_len + delta + size > sizeof(intel->upload.buffer))
+   delta = base - brw->upload.offset;
+   if (brw->upload.buffer_len &&
+       brw->upload.buffer_len + delta + size > sizeof(brw->upload.buffer))
    {
-      drm_intel_bo_subdata(intel->upload.bo,
-			   intel->upload.buffer_offset,
-			   intel->upload.buffer_len,
-			   intel->upload.buffer);
-      intel->upload.buffer_len = 0;
+      drm_intel_bo_subdata(brw->upload.bo,
+			   brw->upload.buffer_offset,
+			   brw->upload.buffer_len,
+			   brw->upload.buffer);
+      brw->upload.buffer_len = 0;
    }
 
-   if (size <= sizeof(intel->upload.buffer)) {
-      if (intel->upload.buffer_len == 0)
-	 intel->upload.buffer_offset = base;
+   if (size <= sizeof(brw->upload.buffer)) {
+      if (brw->upload.buffer_len == 0)
+	 brw->upload.buffer_offset = base;
       else
-	 intel->upload.buffer_len += delta;
+	 brw->upload.buffer_len += delta;
 
-      ptr = intel->upload.buffer + intel->upload.buffer_len;
-      intel->upload.buffer_len += size;
+      ptr = brw->upload.buffer + brw->upload.buffer_len;
+      brw->upload.buffer_len += size;
    } else
       ptr = malloc(size);
 
    return ptr;
 }
 
-void intel_upload_unmap(struct intel_context *intel,
+void intel_upload_unmap(struct brw_context *brw,
 			const void *ptr, GLuint size, GLuint align,
 			drm_intel_bo **return_bo,
 			GLuint *return_offset)
 {
    GLuint base;
 
-   base = (intel->upload.offset + align - 1) / align * align;
-   if (size > sizeof(intel->upload.buffer)) {
-      drm_intel_bo_subdata(intel->upload.bo, base, size, ptr);
+   base = (brw->upload.offset + align - 1) / align * align;
+   if (size > sizeof(brw->upload.buffer)) {
+      drm_intel_bo_subdata(brw->upload.bo, base, size, ptr);
       free((void*)ptr);
    }
 
-   drm_intel_bo_reference(intel->upload.bo);
-   *return_bo = intel->upload.bo;
+   drm_intel_bo_reference(brw->upload.bo);
+   *return_bo = brw->upload.bo;
    *return_offset = base;
 
-   intel->upload.offset = base + size;
+   brw->upload.offset = base + size;
 }
 
 drm_intel_bo *
-intel_bufferobj_source(struct intel_context *intel,
+intel_bufferobj_source(struct brw_context *brw,
                        struct intel_buffer_object *intel_obj,
 		       GLuint align, GLuint *offset)
 {
@@ -569,7 +566,7 @@ intel_bufferobj_copy_subdata(struct gl_context *ctx,
 			     GLintptr read_offset, GLintptr write_offset,
 			     GLsizeiptr size)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct intel_buffer_object *intel_src = intel_buffer_object(src);
    struct intel_buffer_object *intel_dst = intel_buffer_object(dst);
    drm_intel_bo *src_bo, *dst_bo;
@@ -578,10 +575,10 @@ intel_bufferobj_copy_subdata(struct gl_context *ctx,
    if (size == 0)
       return;
 
-   dst_bo = intel_bufferobj_buffer(intel, intel_dst, INTEL_WRITE_PART);
-   src_bo = intel_bufferobj_source(intel, intel_src, 64, &src_offset);
+   dst_bo = intel_bufferobj_buffer(brw, intel_dst, INTEL_WRITE_PART);
+   src_bo = intel_bufferobj_source(brw, intel_src, 64, &src_offset);
 
-   intel_emit_linear_blit(intel,
+   intel_emit_linear_blit(brw,
 			  dst_bo, write_offset,
 			  src_bo, read_offset + src_offset, size);
 
@@ -590,7 +587,7 @@ intel_bufferobj_copy_subdata(struct gl_context *ctx,
     * flush.  Once again, we wish for a domain tracker in libdrm to cover
     * usage inside of a batchbuffer.
     */
-   intel_batchbuffer_emit_mi_flush(intel);
+   intel_batchbuffer_emit_mi_flush(brw);
 }
 
 static GLenum
@@ -618,8 +615,8 @@ intel_buffer_object_purgeable(struct gl_context * ctx,
       return GL_RELEASED_APPLE;
    } else {
       /* XXX Create the buffer and madvise(MADV_DONTNEED)? */
-      struct intel_context *intel = intel_context(ctx);
-      drm_intel_bo *bo = intel_bufferobj_buffer(intel, intel_obj, INTEL_READ);
+      struct brw_context *brw = brw_context(ctx);
+      drm_intel_bo *bo = intel_bufferobj_buffer(brw, intel_obj, INTEL_READ);
 
       return intel_buffer_purgeable(bo);
    }

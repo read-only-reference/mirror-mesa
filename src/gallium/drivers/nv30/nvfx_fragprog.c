@@ -605,10 +605,10 @@ nvfx_fragprog_parse_instruction(struct nv30_context* nvfx, struct nvfx_fpc *fpc,
    case TGSI_OPCODE_FRC:
       nvfx_fp_emit(fpc, arith(sat, FRC, dst, mask, src[0], none, none));
       break;
-   case TGSI_OPCODE_KILP:
+   case TGSI_OPCODE_KILL:
       nvfx_fp_emit(fpc, arith(0, KIL, none.reg, 0, none, none, none));
       break;
-   case TGSI_OPCODE_KIL:
+   case TGSI_OPCODE_KILL_IF:
       insn = arith(0, MOV, none.reg, NVFX_FP_MASK_ALL, src[0], none, none);
       insn.cc_update = 1;
       nvfx_fp_emit(fpc, insn);

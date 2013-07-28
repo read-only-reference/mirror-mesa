@@ -192,7 +192,6 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 16*4;
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
       return 1;
-   case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
       return 0;
    case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
@@ -232,6 +231,8 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 0;
    case PIPE_CAP_MAX_VIEWPORTS:
       return PIPE_MAX_VIEWPORTS;
+   case PIPE_CAP_ENDIANNESS:
+      return PIPE_ENDIAN_NATIVE;
    }
    /* should only get here on unhandled cases */
    debug_printf("Unexpected PIPE_CAP %d query\n", param);
@@ -329,12 +330,17 @@ llvmpipe_is_format_supported( struct pipe_screen *_screen,
       return FALSE;
 
    if (bind & PIPE_BIND_RENDER_TARGET) {
-      if (format_desc->colorspace != UTIL_FORMAT_COLORSPACE_RGB)
+      if (format_desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB) {
+         if (format_desc->nr_channels < 3)
+            return FALSE;
+      }
+      else if (format_desc->colorspace != UTIL_FORMAT_COLORSPACE_RGB)
          return FALSE;
 
       if (format_desc->layout != UTIL_FORMAT_LAYOUT_PLAIN &&
           format != PIPE_FORMAT_R11G11B10_FLOAT)
          return FALSE;
+
       assert(format_desc->block.width == 1);
       assert(format_desc->block.height == 1);
 

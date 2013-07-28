@@ -757,20 +757,143 @@ struct brw_query_object {
 
 
 /**
- * brw_context is derived from intel_context.
+ * brw_context is derived from gl_context.
  */
 struct brw_context 
 {
-   struct intel_context intel;  /**< base class, must be first field */
+   struct gl_context ctx; /**< base class, must be first field */
+
+   struct
+   {
+      void (*destroy) (struct brw_context * brw);
+      void (*finish_batch) (struct brw_context * brw);
+      void (*new_batch) (struct brw_context * brw);
+
+      void (*update_texture_surface)(struct gl_context *ctx,
+                                     unsigned unit,
+                                     uint32_t *binding_table,
+                                     unsigned surf_index);
+      void (*update_renderbuffer_surface)(struct brw_context *brw,
+					  struct gl_renderbuffer *rb,
+					  bool layered,
+					  unsigned unit);
+      void (*update_null_renderbuffer_surface)(struct brw_context *brw,
+					       unsigned unit);
+      void (*create_constant_surface)(struct brw_context *brw,
+				      drm_intel_bo *bo,
+				      uint32_t offset,
+				      uint32_t size,
+				      uint32_t *out_offset,
+                                      bool dword_pitch);
+
+      /**
+       * Send the appropriate state packets to configure depth, stencil, and
+       * HiZ buffers (i965+ only)
+       */
+      void (*emit_depth_stencil_hiz)(struct brw_context *brw,
+                                     struct intel_mipmap_tree *depth_mt,
+                                     uint32_t depth_offset,
+                                     uint32_t depthbuffer_format,
+                                     uint32_t depth_surface_type,
+                                     struct intel_mipmap_tree *stencil_mt,
+                                     bool hiz, bool separate_stencil,
+                                     uint32_t width, uint32_t height,
+                                     uint32_t tile_x, uint32_t tile_y);
+
+   } vtbl;
+
+   dri_bufmgr *bufmgr;
+
+   drm_intel_context *hw_ctx;
+
+   struct intel_batchbuffer batch;
+   bool no_batch_wrap;
+
+   struct {
+      drm_intel_bo *bo;
+      GLuint offset;
+      uint32_t buffer_len;
+      uint32_t buffer_offset;
+      char buffer[4096];
+   } upload;
+
+   /**
+    * Set if rendering has occured to the drawable's front buffer.
+    *
+    * This is used in the DRI2 case to detect that glFlush should also copy
+    * the contents of the fake front buffer to the real front buffer.
+    */
+   bool front_buffer_dirty;
+
+   /**
+    * Track whether front-buffer rendering is currently enabled
+    *
+    * A separate flag is used to track this in order to support MRT more
+    * easily.
+    */
+   bool is_front_buffer_rendering;
+
+   /**
+    * Track whether front-buffer is the current read target.
+    *
+    * This is closely associated with is_front_buffer_rendering, but may
+    * be set separately.  The DRI2 fake front buffer must be referenced
+    * either way.
+    */
+   bool is_front_buffer_reading;
+
+   /** Framerate throttling: @{ */
+   drm_intel_bo *first_post_swapbuffers_batch;
+   bool need_throttle;
+   /** @} */
+
+   GLuint stats_wm;
+
+   /**
+    * drirc options:
+    * @{
+    */
+   bool no_rast;
+   bool always_flush_batch;
+   bool always_flush_cache;
+   bool disable_throttling;
+   bool precompile;
+
+   driOptionCache optionCache;
+   /** @} */
+
    GLuint primitive; /**< Hardware primitive, such as _3DPRIM_TRILIST. */
 
+   GLenum reduced_primitive;
+
+   /**
+    * Set if we're either a debug context or the INTEL_DEBUG=perf environment
+    * variable is set, this is the flag indicating to do expensive work that
+    * might lead to a perf_debug() call.
+    */
+   bool perf_debug;
+
+   uint32_t max_gtt_map_object_size;
+
    bool emit_state_always;
+
+   int gen;
+   int gt;
+
+   bool is_g4x;
+   bool is_baytrail;
+   bool is_haswell;
+
+   bool has_hiz;
+   bool has_separate_stencil;
+   bool must_use_separate_stencil;
+   bool has_llc;
+   bool has_swizzling;
    bool has_surface_tile_offset;
    bool has_compr4;
    bool has_negative_rhw_bug;
    bool has_aa_line_parameters;
    bool has_pln;
-   bool precompile;
 
    /**
     * Some versions of Gen hardware don't do centroid interpolation correctly
@@ -781,6 +904,7 @@ struct brw_context
     */
    bool needs_unlit_centroid_workaround;
 
+   GLuint NewGLState;
    struct {
       struct brw_state_flags dirty;
    } state;
@@ -1112,6 +1236,11 @@ struct brw_context
       int max_entries;
       double report_time;
    } shader_time;
+
+   __DRIcontext *driContext;
+   struct intel_screen *intelScreen;
+   void (*saved_viewport)(struct gl_context *ctx,
+                          GLint x, GLint y, GLsizei width, GLsizei height);
 };
 
 /*======================================================================
@@ -1157,8 +1286,8 @@ void gen6_init_queryobj_functions(struct dd_function_table *functions);
 /*======================================================================
  * brw_state_dump.c
  */
-void brw_debug_batch(struct intel_context *intel);
-void brw_annotate_aub(struct intel_context *intel);
+void brw_debug_batch(struct brw_context *brw);
+void brw_annotate_aub(struct brw_context *brw);
 
 /*======================================================================
  * brw_tex.c
@@ -1172,7 +1301,7 @@ void brw_validate_textures( struct brw_context *brw );
 void brwInitFragProgFuncs( struct dd_function_table *functions );
 
 int brw_get_scratch_size(int size);
-void brw_get_scratch_bo(struct intel_context *intel,
+void brw_get_scratch_bo(struct brw_context *brw,
 			drm_intel_bo **scratch_bo, int size);
 void brw_init_shader_time(struct brw_context *brw);
 int brw_get_shader_time_index(struct brw_context *brw,
@@ -1211,6 +1340,11 @@ void brw_upload_ubo_surfaces(struct brw_context *brw,
 			     struct gl_shader *shader,
 			     uint32_t *surf_offsets);
 
+/* brw_surface_formats.c */
+bool brw_is_hiz_depth_format(struct brw_context *ctx, gl_format format);
+bool brw_render_target_supported(struct brw_context *brw,
+                                 struct gl_renderbuffer *rb);
+
 /* gen6_sol.c */
 void
 brw_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
@@ -1229,13 +1363,13 @@ gen7_end_transform_feedback(struct gl_context *ctx,
 
 /* brw_blorp_blit.cpp */
 GLbitfield
-brw_blorp_framebuffer(struct intel_context *intel,
+brw_blorp_framebuffer(struct brw_context *brw,
                       GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                       GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                       GLbitfield mask, GLenum filter);
 
 bool
-brw_blorp_copytexsubimage(struct intel_context *intel,
+brw_blorp_copytexsubimage(struct brw_context *brw,
                           struct gl_renderbuffer *src_rb,
                           struct gl_texture_image *dst_image,
                           int slice,
@@ -1316,14 +1450,12 @@ static inline uint32_t
 brw_program_reloc(struct brw_context *brw, uint32_t state_offset,
 		  uint32_t prog_offset)
 {
-   struct intel_context *intel = &brw->intel;
-
-   if (intel->gen >= 5) {
+   if (brw->gen >= 5) {
       /* Using state base address. */
       return prog_offset;
    }
 
-   drm_intel_bo_emit_reloc(intel->batch.bo,
+   drm_intel_bo_emit_reloc(brw->batch.bo,
 			   state_offset,
 			   brw->cache.bo,
 			   prog_offset,
@@ -1333,7 +1465,7 @@ brw_program_reloc(struct brw_context *brw, uint32_t state_offset,
 }
 
 bool brw_do_cubemap_normalize(struct exec_list *instructions);
-bool brw_lower_texture_gradients(struct intel_context *intel,
+bool brw_lower_texture_gradients(struct brw_context *brw,
                                  struct exec_list *instructions);
 
 struct opcode_desc {

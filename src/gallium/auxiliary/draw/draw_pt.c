@@ -345,7 +345,8 @@ draw_print_arrays(struct draw_context *draw, uint prim, int start, uint count)
 /** Helper code for below */
 #define PRIM_RESTART_LOOP(elements) \
    do { \
-      for (i = start; i < end; i++) { \
+      for (j = 0; j < count; j++) {               \
+         i = draw_overflow_uadd(start, j, MAX_LOOP_IDX);  \
          if (i < elt_max && elements[i] == info->restart_index) { \
             if (cur_count > 0) { \
                /* draw elts up to prev pos */ \
@@ -377,9 +378,11 @@ draw_pt_arrays_restart(struct draw_context *draw,
    const unsigned prim = info->mode;
    const unsigned start = info->start;
    const unsigned count = info->count;
-   const unsigned end = start + count;
    const unsigned elt_max = draw->pt.user.eltMax;
-   unsigned i, cur_start, cur_count;
+   unsigned i, j, cur_start, cur_count;
+   /* The largest index within a loop using the i variable as the index.
+    * Used for overflow detection */
+   const unsigned MAX_LOOP_IDX = 0xffffffff;
 
    assert(info->primitive_restart);
 
@@ -456,7 +459,13 @@ draw_vbo(struct draw_context *draw,
    unsigned instance;
    unsigned index_limit;
    unsigned count;
+   unsigned fpstate = util_fpstate_get();
    struct pipe_draw_info resolved_info;
+
+   /* Make sure that denorms are treated like zeros. This is 
+    * the behavior required by D3D10. OpenGL doesn't care.
+    */
+   util_fpstate_set_denorms_to_zero(fpstate);
 
    resolve_draw_info(info, &resolved_info);
    info = &resolved_info;
@@ -515,6 +524,7 @@ draw_vbo(struct draw_context *draw,
       if (index_limit == 0) {
       /* one of the buffers is too small to do any valid drawing */
          debug_warning("draw: VBO too small to draw anything\n");
+         util_fpstate_set(fpstate);
          return;
       }
    }
@@ -525,6 +535,7 @@ draw_vbo(struct draw_context *draw,
    }
 
    draw->pt.max_index = index_limit - 1;
+   draw->start_index = info->start;
 
    /*
     * TODO: We could use draw->pt.max_index to further narrow
@@ -532,11 +543,12 @@ draw_vbo(struct draw_context *draw,
     */
 
    for (instance = 0; instance < info->instance_count; instance++) {
-      draw->instance_id = instance + info->start_instance;
+      unsigned instance_idx = instance + info->start_instance;
       draw->start_instance = info->start_instance;
+      draw->instance_id = instance;
       /* check for overflow */
-      if (draw->instance_id < instance ||
-          draw->instance_id < info->start_instance) {
+      if (instance_idx < instance ||
+          instance_idx < draw->start_instance) {
          /* if we overflown just set the instance id to the max */
          draw->instance_id = 0xffffffff;
       }
@@ -555,4 +567,5 @@ draw_vbo(struct draw_context *draw,
    if (draw->collect_statistics) {
       draw->render->pipeline_statistics(draw->render, &draw->statistics);
    }
+   util_fpstate_set(fpstate);
 }

@@ -39,6 +39,7 @@
 #include "lp_bld_gather.h"
 #include "lp_bld_debug.h"
 #include "lp_bld_format.h"
+#include "lp_bld_arit.h"
 
 
 void
@@ -163,11 +164,23 @@ lp_build_unpack_rgba_soa(struct gallivm_state *gallivm,
           */
 
          if (type.floating) {
-            if(format_desc->channel[chan].normalized)
-               input = lp_build_unsigned_norm_to_float(gallivm, width, type, input);
-            else
-               input = LLVMBuildSIToFP(builder, input,
-                                       lp_build_vec_type(gallivm, type), "");
+            if (format_desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB) {
+               assert(width == 8);
+               if (format_desc->swizzle[3] == chan) {
+                  input = lp_build_unsigned_norm_to_float(gallivm, width, type, input);
+               }
+               else {
+                  struct lp_type conv_type = lp_uint_type(type);
+                  input = lp_build_srgb_to_linear(gallivm, conv_type, input);
+               }
+            }
+            else {
+               if(format_desc->channel[chan].normalized)
+                  input = lp_build_unsigned_norm_to_float(gallivm, width, type, input);
+               else
+                  input = LLVMBuildSIToFP(builder, input,
+                                          lp_build_vec_type(gallivm, type), "");
+            }
          }
          else if (format_desc->channel[chan].pure_integer) {
             /* Nothing to do */
@@ -209,6 +222,11 @@ lp_build_unpack_rgba_soa(struct gallivm_state *gallivm,
                double scale = 1.0 / ((1 << (format_desc->channel[chan].size - 1)) - 1);
                LLVMValueRef scale_val = lp_build_const_vec(gallivm, type, scale);
                input = LLVMBuildFMul(builder, input, scale_val, "");
+               /* the formula above will produce value below -1.0 for most negative
+                * value but everything seems happy with that hence disable for now */
+               if (0)
+                  input = lp_build_max(&bld, input,
+                                       lp_build_const_vec(gallivm, type, -1.0f));
             }
          }
          else if (format_desc->channel[chan].pure_integer) {
@@ -344,6 +362,7 @@ lp_build_fetch_rgba_soa(struct gallivm_state *gallivm,
 
    if (format_desc->layout == UTIL_FORMAT_LAYOUT_PLAIN &&
        (format_desc->colorspace == UTIL_FORMAT_COLORSPACE_RGB ||
+        format_desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB ||
         format_desc->colorspace == UTIL_FORMAT_COLORSPACE_ZS) &&
        format_desc->block.width == 1 &&
        format_desc->block.height == 1 &&
@@ -394,7 +413,7 @@ lp_build_fetch_rgba_soa(struct gallivm_state *gallivm,
       packed = lp_build_gather(gallivm, type.length,
                                format_desc->block.bits,
                                type.width, base_ptr, offset,
-			       FALSE);
+                               FALSE);
       if (format_desc->format == PIPE_FORMAT_R11G11B10_FLOAT) {
          lp_build_r11g11b10_to_float(gallivm, packed, rgba_out);
       }

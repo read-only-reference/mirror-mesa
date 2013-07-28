@@ -41,8 +41,7 @@
 
 static void upload_sf_vp(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    const GLfloat depth_scale = 1.0F / ctx->DrawBuffer->_DepthMaxF;
    struct brw_sf_viewport *sfv;
    GLfloat y_scale, y_bias;
@@ -126,12 +125,11 @@ const struct brw_tracked_state brw_sf_vp = {
 
 static void upload_sf_unit( struct brw_context *brw )
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    struct brw_sf_unit_state *sf;
-   drm_intel_bo *bo = intel->batch.bo;
+   drm_intel_bo *bo = brw->batch.bo;
    int chipset_max_threads;
-   bool render_to_fbo = _mesa_is_user_fbo(brw->intel.ctx.DrawBuffer);
+   bool render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
 
    sf = brw_state_batch(brw, AUB_TRACE_SF_STATE,
 			sizeof(*sf), 64, &brw->sf.state_offset);
@@ -162,7 +160,7 @@ static void upload_sf_unit( struct brw_context *brw )
    /* Each SF thread produces 1 PUE, and there can be up to 24 (Pre-Ironlake) or
     * 48 (Ironlake) threads.
     */
-   if (intel->gen == 5)
+   if (brw->gen == 5)
       chipset_max_threads = 48;
    else
       chipset_max_threads = 24;
@@ -175,7 +173,7 @@ static void upload_sf_unit( struct brw_context *brw )
       sf->thread4.stats_enable = 1;
 
    /* CACHE_NEW_SF_VP */
-   sf->sf5.sf_viewport_state_offset = (intel->batch.bo->offset +
+   sf->sf5.sf_viewport_state_offset = (brw->batch.bo->offset +
 				       brw->sf.vp_offset) >> 5; /* reloc */
 
    sf->sf5.viewport_transform = 1;
@@ -290,7 +288,7 @@ static void upload_sf_unit( struct brw_context *brw )
    /* Emit SF viewport relocation */
    drm_intel_bo_emit_reloc(bo, (brw->sf.state_offset +
 				offsetof(struct brw_sf_unit_state, sf5)),
-			   intel->batch.bo, (brw->sf.vp_offset |
+			   brw->batch.bo, (brw->sf.vp_offset |
 					     sf->sf5.front_winding |
 					     (sf->sf5.viewport_transform << 1)),
 			   I915_GEM_DOMAIN_INSTRUCTION, 0);

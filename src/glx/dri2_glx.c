@@ -205,6 +205,10 @@ dri2_create_context(struct glx_screen *base,
    __GLXDRIconfigPrivate *config = (__GLXDRIconfigPrivate *) config_base;
    __DRIcontext *shared = NULL;
 
+   /* Check the renderType value */
+   if (!validate_renderType_against_config(config_base, renderType))
+       return NULL;
+
    if (shareList) {
       /* If the shareList context is not a DRI2 context, we cannot possibly
        * create a DRI2 context that shares it.
@@ -225,6 +229,8 @@ dri2_create_context(struct glx_screen *base,
       free(pcp);
       return NULL;
    }
+
+   pcp->base.renderType = renderType;
 
    pcp->driContext =
       (*psc->dri2->createNewContext) (psc->driScreen,
@@ -256,6 +262,7 @@ dri2_create_context_attribs(struct glx_screen *base,
 
    uint32_t minor_ver = 1;
    uint32_t major_ver = 2;
+   uint32_t renderType = GLX_RGBA_TYPE;
    uint32_t flags = 0;
    unsigned api;
    int reset = __DRI_CTX_RESET_NO_NOTIFICATION;
@@ -270,9 +277,13 @@ dri2_create_context_attribs(struct glx_screen *base,
    /* Remap the GLX tokens to DRI2 tokens.
     */
    if (!dri2_convert_glx_attribs(num_attribs, attribs,
-				 &major_ver, &minor_ver, &flags, &api, &reset,
-                                 error))
+                                 &major_ver, &minor_ver, &renderType, &flags,
+                                 &api, &reset, error))
       goto error_exit;
+
+   /* Check the renderType value */
+   if (!validate_renderType_against_config(config_base, renderType))
+       goto error_exit;
 
    if (shareList) {
       pcp_shared = (struct dri2_context *) shareList;
@@ -310,6 +321,11 @@ dri2_create_context_attribs(struct glx_screen *base,
        */
       ctx_attribs[num_ctx_attribs++] = flags;
    }
+
+   /* The renderType is retrieved from attribs, or set to default
+    *  of GLX_RGBA_TYPE.
+    */
+   pcp->base.renderType = renderType;
 
    pcp->driContext =
       (*psc->dri2->createContextAttribs) (psc->driScreen,

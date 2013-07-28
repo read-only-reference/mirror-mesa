@@ -74,6 +74,7 @@ static const struct debug_named_value debug_options[] = {
 	{ "sbdump", DBG_SB_DUMP, "Print IR dumps after some optimization passes" },
 	{ "sbnofallback", DBG_SB_NO_FALLBACK, "Abort on errors instead of fallback" },
 	{ "sbdisasm", DBG_SB_DISASM, "Use sb disassembler for shader dumps" },
+	{ "sbsafemath", DBG_SB_SAFEMATH, "Disable unsafe math optimizations" },
 
 	DEBUG_NAMED_VALUE_END /* must be last */
 };
@@ -164,6 +165,9 @@ static void r600_flush(struct pipe_context *ctx, unsigned flags)
 	unsigned render_cond_mode = 0;
 	boolean render_cond_cond = FALSE;
 
+	if (rctx->rings.gfx.cs->cdw == rctx->initial_gfx_cs_size)
+		return;
+
 	rctx->rings.gfx.flushing = true;
 	/* Disable render condition. */
 	if (rctx->current_render_cond) {
@@ -181,6 +185,8 @@ static void r600_flush(struct pipe_context *ctx, unsigned flags)
 	if (render_cond) {
 		ctx->render_condition(ctx, render_cond, render_cond_cond, render_cond_mode);
 	}
+
+	rctx->initial_gfx_cs_size = rctx->rings.gfx.cs->cdw;
 }
 
 static void r600_flush_from_st(struct pipe_context *ctx,
@@ -292,10 +298,9 @@ void *r600_buffer_mmap_sync_with_rings(struct r600_context *ctx,
 			ctx->ws->cs_sync_flush(ctx->rings.dma.cs);
 		}
 	}
-	ctx->ws->buffer_wait(resource->buf, rusage);
 
 	/* at this point everything is synchronized */
-	return ctx->ws->buffer_map(resource->cs_buf, NULL, usage | PIPE_TRANSFER_UNSYNCHRONIZED);
+	return ctx->ws->buffer_map(resource->cs_buf, NULL, usage);
 }
 
 static void r600_flush_from_winsys(void *ctx, unsigned flags)
@@ -625,7 +630,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
 	case PIPE_CAP_SCALED_RESOLVE:
-	case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
 	case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
@@ -675,6 +679,8 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
 		return PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600;
+	case PIPE_CAP_ENDIANNESS:
+		return PIPE_ENDIAN_LITTLE;
 	}
 	return 0;
 }

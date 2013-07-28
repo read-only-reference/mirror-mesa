@@ -7,6 +7,14 @@ infrastructure is complete but it may be the case that few (if any) drivers
 implement the features.
 
 
+OpenGL Core and Compatibility context support
+
+OpenGL 3.1 and later versions are only supported with the Core profile.
+There are no plans to support GL_ARB_compatibility. The last supported OpenGL
+version with all deprecated features is 3.0. Some of the later GL features
+are exposed in the 3.0 context as extensions.
+
+
 Feature                                               Status
 ----------------------------------------------------- ------------------------
 
@@ -124,7 +132,7 @@ GL_ARB_transform_feedback_instanced                  DONE
 GL_ARB_base_instance                                 DONE (i965, nv50, nvc0, r600, radeonsi)
 GL_ARB_shader_image_load_store                       not started
 GL_ARB_conservative_depth                            DONE (softpipe)
-GL_ARB_shading_language_420pack                      started (Todd)
+GL_ARB_shading_language_420pack                      DONE (i965, gallium)
 GL_ARB_internalformat_query                          DONE (i965, gallium)
 GL_ARB_map_buffer_alignment                          DONE (r300, r600, radeonsi)
 
@@ -153,7 +161,21 @@ ARB_texture_buffer_range                             DONE (nv50, nvc0)
 ARB_texture_query_levels                             not started
 ARB_texture_storage_multisample                      DONE (i965)
 ARB_texture_view                                     not started
-ARB_vertex_attrib_binding                            not started
+ARB_vertex_attrib_binding                            started (Fredrik)
+
+
+GL 4.4:
+
+GLSL 4.4                                             not started
+MAX_VERTEX_ATTRIB_STRIDE                             not started
+ARB_buffer_storage                                   not started
+ARB_clear_texture                                    not started
+ARB_enhanced_layouts                                 not started
+ARB_multi_bind                                       not started
+ARB_query_buffer_object                              not started
+ARB_texture_mirror_clamp_to_edge                     not started
+ARB_texture_stencil8                                 not started
+ARB_vertex_type_10f_11f_11f_rev                      not started
 
 
 More info about these features and the work involved can be found at

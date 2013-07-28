@@ -4,7 +4,7 @@
 #include "main/teximage.h"
 #include "main/mipmap.h"
 #include "drivers/common/meta.h"
-#include "intel_context.h"
+#include "brw_context.h"
 #include "intel_mipmap_tree.h"
 #include "intel_tex.h"
 #include "intel_fbo.h"
@@ -39,7 +39,7 @@ intelNewTextureObject(struct gl_context * ctx, GLuint name, GLenum target)
    if (obj == NULL)
       return NULL;
 
-   _mesa_initialize_texture_object(&obj->base, name, target);
+   _mesa_initialize_texture_object(ctx, &obj->base, name, target);
 
    obj->needs_validate = true;
 
@@ -60,7 +60,7 @@ static GLboolean
 intel_alloc_texture_image_buffer(struct gl_context *ctx,
 				 struct gl_texture_image *image)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct intel_texture_image *intel_image = intel_texture_image(image);
    struct gl_texture_object *texobj = image->TexObject;
    struct intel_texture_object *intel_texobj = intel_texture_object(texobj);
@@ -69,7 +69,7 @@ intel_alloc_texture_image_buffer(struct gl_context *ctx,
 
    /* Quantize sample count */
    if (image->NumSamples) {
-      image->NumSamples = intel_quantize_num_samples(intel->intelScreen, image->NumSamples);
+      image->NumSamples = intel_quantize_num_samples(brw->intelScreen, image->NumSamples);
       if (!image->NumSamples)
          return false;
    }
@@ -90,7 +90,7 @@ intel_alloc_texture_image_buffer(struct gl_context *ctx,
           __FUNCTION__, texobj, image->Level,
           image->Width, image->Height, image->Depth, intel_texobj->mt);
    } else {
-      intel_image->mt = intel_miptree_create_for_teximage(intel, intel_texobj,
+      intel_image->mt = intel_miptree_create_for_teximage(brw, intel_texobj,
                                                           intel_image,
                                                           false);
 
@@ -140,7 +140,7 @@ intel_map_texture_image(struct gl_context *ctx,
 			GLubyte **map,
 			GLint *stride)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct intel_texture_image *intel_image = intel_texture_image(tex_image);
    struct intel_mipmap_tree *mt = intel_image->mt;
 
@@ -157,7 +157,7 @@ intel_map_texture_image(struct gl_context *ctx,
    if (tex_image->TexObject->Target == GL_TEXTURE_CUBE_MAP)
       slice = tex_image->Face;
 
-   intel_miptree_map(intel, mt, tex_image->Level, slice, x, y, w, h, mode,
+   intel_miptree_map(brw, mt, tex_image->Level, slice, x, y, w, h, mode,
 		     (void **)map, stride);
 }
 
@@ -165,14 +165,14 @@ static void
 intel_unmap_texture_image(struct gl_context *ctx,
 			  struct gl_texture_image *tex_image, GLuint slice)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct intel_texture_image *intel_image = intel_texture_image(tex_image);
    struct intel_mipmap_tree *mt = intel_image->mt;
 
    if (tex_image->TexObject->Target == GL_TEXTURE_CUBE_MAP)
       slice = tex_image->Face;
 
-   intel_miptree_unmap(intel, mt, tex_image->Level, slice);
+   intel_miptree_unmap(brw, mt, tex_image->Level, slice);
 }
 
 void

@@ -66,10 +66,9 @@ dri_bo_release(drm_intel_bo **bo)
 /**
  * called from intelDestroyContext()
  */
-static void brw_destroy_context( struct intel_context *intel )
+static void
+brw_destroy_context(struct brw_context *brw)
 {
-   struct brw_context *brw = brw_context(&intel->ctx);
-
    if (INTEL_DEBUG & DEBUG_SHADER_TIME) {
       /* Force a report. */
       brw->shader_time.report_time = 0;
@@ -88,7 +87,7 @@ static void brw_destroy_context( struct intel_context *intel )
    free(brw->curbe.last_buf);
    free(brw->curbe.next_buf);
 
-   drm_intel_gem_context_destroy(intel->hw_ctx);
+   drm_intel_gem_context_destroy(brw->hw_ctx);
 }
 
 /**
@@ -99,9 +98,9 @@ static void brw_destroy_context( struct intel_context *intel )
  * at the end of a batchbuffer.  If you add more GPU state, increase
  * the BATCH_RESERVED macro.
  */
-static void brw_finish_batch(struct intel_context *intel)
+static void
+brw_finish_batch(struct brw_context *brw)
 {
-   struct brw_context *brw = brw_context(&intel->ctx);
    brw_emit_query_end(brw);
 
    if (brw->curbe.curbe_bo) {
@@ -115,17 +114,16 @@ static void brw_finish_batch(struct intel_context *intel)
 /**
  * called from intelFlushBatchLocked
  */
-static void brw_new_batch( struct intel_context *intel )
+static void
+brw_new_batch(struct brw_context *brw)
 {
-   struct brw_context *brw = brw_context(&intel->ctx);
-
    /* If the kernel supports hardware contexts, then most hardware state is
     * preserved between batches; we only need to re-emit state that is required
     * to be in every batch.  Otherwise we need to re-emit all the state that
     * would otherwise be stored in the context (which for all intents and
     * purposes means everything).
     */
-   if (intel->hw_ctx == NULL)
+   if (brw->hw_ctx == NULL)
       brw->state.dirty.brw |= BRW_NEW_CONTEXT;
 
    brw->state.dirty.brw |= BRW_NEW_BATCH;
@@ -133,7 +131,7 @@ static void brw_new_batch( struct intel_context *intel )
    /* Assume that the last command before the start of our batch was a
     * primitive, for safety.
     */
-   intel->batch.need_workaround_flush = true;
+   brw->batch.need_workaround_flush = true;
 
    brw->state_batch_count = 0;
 
@@ -154,49 +152,18 @@ static void brw_new_batch( struct intel_context *intel )
       brw_collect_and_report_shader_time(brw);
 }
 
-static void brw_invalidate_state( struct intel_context *intel, GLuint new_state )
-{
-   /* nothing */
-}
-
-/**
- * \see intel_context.vtbl.is_hiz_depth_format
- */
-static bool brw_is_hiz_depth_format(struct intel_context *intel,
-                                    gl_format format)
-{
-   if (!intel->has_hiz)
-      return false;
-
-   switch (format) {
-   case MESA_FORMAT_Z32_FLOAT:
-   case MESA_FORMAT_Z32_FLOAT_X24S8:
-   case MESA_FORMAT_X8_Z24:
-   case MESA_FORMAT_S8_Z24:
-   case MESA_FORMAT_Z16:
-      return true;
-   default:
-      return false;
-   }
-}
-
 void brwInitVtbl( struct brw_context *brw )
 {
-   brw->intel.vtbl.invalidate_state = brw_invalidate_state;
-   brw->intel.vtbl.new_batch = brw_new_batch;
-   brw->intel.vtbl.finish_batch = brw_finish_batch;
-   brw->intel.vtbl.destroy = brw_destroy_context;
-   brw->intel.vtbl.debug_batch = brw_debug_batch;
-   brw->intel.vtbl.annotate_aub = brw_annotate_aub;
-   brw->intel.vtbl.render_target_supported = brw_render_target_supported;
-   brw->intel.vtbl.is_hiz_depth_format = brw_is_hiz_depth_format;
+   brw->vtbl.new_batch = brw_new_batch;
+   brw->vtbl.finish_batch = brw_finish_batch;
+   brw->vtbl.destroy = brw_destroy_context;
 
-   assert(brw->intel.gen >= 4);
-   if (brw->intel.gen >= 7) {
+   assert(brw->gen >= 4);
+   if (brw->gen >= 7) {
       gen7_init_vtable_surface_functions(brw);
-      brw->intel.vtbl.emit_depth_stencil_hiz = gen7_emit_depth_stencil_hiz;
-   } else if (brw->intel.gen >= 4) {
+      brw->vtbl.emit_depth_stencil_hiz = gen7_emit_depth_stencil_hiz;
+   } else if (brw->gen >= 4) {
       gen4_init_vtable_surface_functions(brw);
-      brw->intel.vtbl.emit_depth_stencil_hiz = brw_emit_depth_stencil_hiz;
+      brw->vtbl.emit_depth_stencil_hiz = brw_emit_depth_stencil_hiz;
    }
 }

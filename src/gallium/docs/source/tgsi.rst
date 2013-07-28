@@ -94,16 +94,16 @@ This instruction replicates its result.
 
 .. opcode:: RSQ - Reciprocal Square Root
 
-This instruction replicates its result.
+This instruction replicates its result. The results are undefined for src <= 0.
 
 .. math::
 
-  dst = \frac{1}{\sqrt{|src.x|}}
+  dst = \frac{1}{\sqrt{src.x}}
 
 
 .. opcode:: SQRT - Square Root
 
-This instruction replicates its result.
+This instruction replicates its result. The results are undefined for src < 0.
 
 .. math::
 
@@ -471,11 +471,6 @@ This instruction replicates its result.
   dst.w = partialy(src.w)
 
 
-.. opcode:: KILP - Predicated Discard
-
-  Not really predicated, just unconditional discard
-
-
 .. opcode:: PK2H - Pack Two 16-bit Floats
 
   TBD
@@ -746,13 +741,20 @@ This instruction replicates its result.
   dst.w = (src0.w < 0) ? src1.w : src2.w
 
 
-.. opcode:: KIL - Conditional Discard
+.. opcode:: KILL_IF - Conditional Discard
+
+  Conditional discard.  Allowed in fragment shaders only.
 
 .. math::
 
   if (src.x < 0 || src.y < 0 || src.z < 0 || src.w < 0)
     discard
   endif
+
+
+.. opcode:: KILL - Discard
+
+  Unconditional discard.  Allowed in fragment shaders only.
 
 
 .. opcode:: SCS - Sine Cosine
@@ -1728,6 +1730,8 @@ Resource Sampling Opcodes
 
 Those opcodes follow very closely semantics of the respective Direct3D
 instructions. If in doubt double check Direct3D documentation.
+Note that the swizzle on SVIEW (src1) determines texel swizzling
+after lookup.
 
 .. opcode:: SAMPLE - Using provided address, sample data from the
                specified texture using the filtering mode identified

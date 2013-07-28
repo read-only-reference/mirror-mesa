@@ -28,11 +28,49 @@
 #include "postprocess.h"
 
 #include "postprocess/pp_filters.h"
-#include "util/u_blit.h"
 #include "util/u_inlines.h"
 #include "util/u_sampler.h"
 
 #include "tgsi/tgsi_parse.h"
+
+void
+pp_blit(struct pipe_context *pipe,
+        struct pipe_resource *src_tex,
+        int srcX0, int srcY0,
+        int srcX1, int srcY1,
+        int srcZ0,
+        struct pipe_surface *dst,
+        int dstX0, int dstY0,
+        int dstX1, int dstY1)
+{
+   struct pipe_blit_info blit;
+
+   memset(&blit, 0, sizeof(blit));
+
+   blit.src.resource = src_tex;
+   blit.src.level = 0;
+   blit.src.format = src_tex->format;
+   blit.src.box.x = srcX0;
+   blit.src.box.y = srcY0;
+   blit.src.box.z = srcZ0;
+   blit.src.box.width = srcX1 - srcX0;
+   blit.src.box.height = srcY1 - srcY0;
+   blit.src.box.depth = 1;
+
+   blit.dst.resource = dst->texture;
+   blit.dst.level = dst->u.tex.level;
+   blit.dst.format = dst->format;
+   blit.dst.box.x = dstX0;
+   blit.dst.box.y = dstY0;
+   blit.dst.box.z = 0;
+   blit.dst.box.width = dstX1 - dstX0;
+   blit.dst.box.height = dstY1 - dstY0;
+   blit.dst.box.depth = 1;
+
+   blit.mask = PIPE_MASK_RGBA;
+
+   pipe->blit(pipe, &blit);
+}
 
 /**
 *	Main run function of the PP queue. Called on swapbuffers/flush.
@@ -53,8 +91,7 @@ pp_run(struct pp_queue_t *ppq, struct pipe_resource *in,
 
    assert(ppq->pp_queue);
    assert(ppq->tmp[0]);
-   assert(ppq->tmp[1]);
- 
+
    if (in->width0 != ppq->p->framebuffer.width ||
        in->height0 != ppq->p->framebuffer.height) {
       pp_debug("Resizing the temp pp buffers\n");
@@ -67,10 +104,10 @@ pp_run(struct pp_queue_t *ppq, struct pipe_resource *in,
       unsigned int w = ppq->p->framebuffer.width;
       unsigned int h = ppq->p->framebuffer.height;
 
-      util_blit_pixels(ppq->p->blitctx, in, 0, 0, 0,
-                       w, h, 0, ppq->tmps[0],
-                       0, 0, w, h, 0, PIPE_TEX_MIPFILTER_NEAREST,
-                       TGSI_WRITEMASK_XYZW, 0);
+
+      pp_blit(ppq->p->pipe, in, 0, 0,
+              w, h, 0, ppq->tmps[0],
+              0, 0, w, h);
 
       in = ppq->tmp[0];
    }
@@ -120,6 +157,7 @@ pp_run(struct pp_queue_t *ppq, struct pipe_resource *in,
 
       break;
    default:                    /* Two temp bufs */
+      assert(ppq->tmp[1]);
       ppq->pp_queue[0] (ppq, in, ppq->tmp[0], 0);
 
       for (i = 1; i < (ppq->n_filters - 1); i++) {
@@ -218,8 +256,8 @@ pp_tgsi_to_state(struct pipe_context *pipe, const char *text, bool isvs,
       return NULL;
    }
 
-   if (tgsi_text_translate(text, tokens, Elements(tokens)) == FALSE) {
-      pp_debug("Failed to translate %s\n", name);
+   if (tgsi_text_translate(text, tokens, PP_MAX_TOKENS) == FALSE) {
+      _debug_printf("pp: Failed to translate a shader for %s\n", name);
       return NULL;
    }
 

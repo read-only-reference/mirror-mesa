@@ -1048,6 +1048,8 @@ legal_get_tex_level_parameter_target(struct gl_context *ctx, GLenum target)
       return ctx->API == API_OPENGL_CORE && ctx->Version >= 31;
    case GL_TEXTURE_2D_MULTISAMPLE:
    case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
+   case GL_PROXY_TEXTURE_2D_MULTISAMPLE:
+   case GL_PROXY_TEXTURE_2D_MULTISAMPLE_ARRAY:
       return ctx->Extensions.ARB_texture_multisample;
    default:
       return GL_FALSE;
@@ -1547,7 +1549,7 @@ _mesa_GetTexParameterfv( GLenum target, GLenum pname, GLfloat *params )
       case GL_REQUIRED_TEXTURE_IMAGE_UNITS_OES:
          if (!_mesa_is_gles(ctx) || !ctx->Extensions.OES_EGL_image_external)
             goto invalid_pname;
-         *params = obj->RequiredTextureImageUnits;
+         *params = (GLfloat) obj->RequiredTextureImageUnits;
          break;
 
       case GL_TEXTURE_SRGB_DECODE_EXT:

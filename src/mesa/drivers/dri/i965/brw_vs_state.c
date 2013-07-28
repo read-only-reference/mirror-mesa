@@ -39,7 +39,6 @@
 static void
 brw_upload_vs_unit(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
    struct brw_vs_unit_state *vs;
 
    vs = brw_state_batch(brw, AUB_TRACE_VS_STATE,
@@ -56,7 +55,14 @@ brw_upload_vs_unit(struct brw_context *brw)
 			brw->vs.prog_offset +
 			(vs->thread0.grf_reg_count << 1)) >> 6;
 
-   vs->thread1.floating_point_mode = BRW_FLOATING_POINT_NON_IEEE_754;
+   /* Use ALT floating point mode for ARB vertex programs, because they
+    * require 0^0 == 1.
+    */
+   if (brw->ctx.Shader.CurrentVertexProgram == NULL)
+      vs->thread1.floating_point_mode = BRW_FLOATING_POINT_NON_IEEE_754;
+   else
+      vs->thread1.floating_point_mode = BRW_FLOATING_POINT_IEEE_754;
+
    /* Choosing multiple program flow means that we may get 2-vertex threads,
     * which will have the channel mask for dwords 4-7 enabled in the thread,
     * and those dwords will be written to the second URB handle when we
@@ -69,7 +75,7 @@ brw_upload_vs_unit(struct brw_context *brw)
     * The most notable and reliably failing application is the Humus
     * demo "CelShading"
    */
-   vs->thread1.single_program_flow = (intel->gen == 5);
+   vs->thread1.single_program_flow = (brw->gen == 5);
 
    vs->thread1.binding_table_entry_count = 0;
 
@@ -93,7 +99,7 @@ brw_upload_vs_unit(struct brw_context *brw)
    vs->thread3.const_urb_entry_read_offset = brw->curbe.vs_start * 2;
 
    /* BRW_NEW_URB_FENCE */
-   if (intel->gen == 5) {
+   if (brw->gen == 5) {
       switch (brw->urb.nr_vs_entries) {
       case 8:
       case 12:
@@ -119,7 +125,7 @@ brw_upload_vs_unit(struct brw_context *brw)
       case 32:
 	 break;
       case 64:
-	 assert(intel->is_g4x);
+	 assert(brw->is_g4x);
 	 break;
       default:
 	 assert(0);
@@ -132,11 +138,13 @@ brw_upload_vs_unit(struct brw_context *brw)
    vs->thread4.max_threads = CLAMP(brw->urb.nr_vs_entries / 2,
 				   1, brw->max_vs_threads) - 1;
 
-   /* No samplers for ARB_vp programs:
-    */
-   /* It has to be set to 0 for Ironlake
-    */
-   vs->vs5.sampler_count = 0;
+   if (brw->gen == 5)
+      vs->vs5.sampler_count = 0; /* hardware requirement */
+   else {
+      /* CACHE_NEW_SAMPLER */
+      vs->vs5.sampler_count = (brw->sampler.count + 3) / 4;
+   }
+
 
    if (unlikely(INTEL_DEBUG & DEBUG_STATS))
       vs->thread4.stats_enable = 1;
@@ -145,9 +153,22 @@ brw_upload_vs_unit(struct brw_context *brw)
     */
    vs->vs6.vs_enable = 1;
 
+   /* Set the sampler state pointer, and its reloc
+    */
+   if (brw->sampler.count) {
+      vs->vs5.sampler_state_pointer =
+         (brw->batch.bo->offset + brw->sampler.offset) >> 5;
+      drm_intel_bo_emit_reloc(brw->batch.bo,
+                              brw->vs.state_offset +
+                              offsetof(struct brw_vs_unit_state, vs5),
+                              brw->batch.bo,
+                              brw->sampler.offset | vs->vs5.sampler_count,
+                              I915_GEM_DOMAIN_INSTRUCTION, 0);
+   }
+
    /* Emit scratch space relocation */
    if (brw->vs.prog_data->base.total_scratch != 0) {
-      drm_intel_bo_emit_reloc(intel->batch.bo,
+      drm_intel_bo_emit_reloc(brw->batch.bo,
 			      brw->vs.state_offset +
 			      offsetof(struct brw_vs_unit_state, thread2),
 			      brw->vs.scratch_bo,
@@ -166,7 +187,7 @@ const struct brw_tracked_state brw_vs_unit = {
 		BRW_NEW_CURBE_OFFSETS |
 		BRW_NEW_URB_FENCE |
                 BRW_NEW_VERTEX_PROGRAM),
-      .cache = CACHE_NEW_VS_PROG
+      .cache = CACHE_NEW_VS_PROG | CACHE_NEW_SAMPLER
    },
    .emit = brw_upload_vs_unit,
 };

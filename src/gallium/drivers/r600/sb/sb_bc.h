@@ -621,6 +621,7 @@ public:
 
 	static unsigned dry_run;
 	static unsigned no_fallback;
+	static unsigned safe_math;
 
 	static unsigned dskip_start;
 	static unsigned dskip_end;
@@ -681,6 +682,9 @@ public:
 	bool is_kcache_sel(unsigned sel) {
 		return ((sel >= 128 && sel < 192) || (sel >= 256 && sel < 320));
 	}
+
+	const char * get_hw_class_name();
+	const char * get_hw_chip_name();
 
 };
 
@@ -846,7 +850,7 @@ public:
 	unsigned ndw() { return bc.size(); }
 
 	void write_data(uint32_t* dst) {
-		memcpy(dst, bc.data(), 4 * bc.size());
+		std::copy(bc.begin(), bc.end(), dst);
 	}
 
 	void align(unsigned a) {
@@ -870,7 +874,7 @@ public:
 	}
 
 	unsigned get_pos() { return pos; }
-	uint32_t *data() { return bc.data(); }
+	uint32_t *data() { return &bc[0]; }
 
 	bytecode & operator <<(uint32_t v) {
 		if (pos == ndw()) {

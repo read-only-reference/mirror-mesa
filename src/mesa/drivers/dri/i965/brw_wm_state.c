@@ -44,7 +44,7 @@
 bool
 brw_color_buffer_write_enabled(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->intel.ctx;
+   struct gl_context *ctx = &brw->ctx;
    const struct gl_fragment_program *fp = brw->fragment_program;
    int i;
 
@@ -73,8 +73,7 @@ brw_color_buffer_write_enabled(struct brw_context *brw)
 static void
 brw_upload_wm_unit(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    const struct gl_fragment_program *fp = brw->fragment_program;
    struct brw_wm_unit_state *wm;
 
@@ -111,7 +110,15 @@ brw_upload_wm_unit(struct brw_context *brw)
 			(wm->wm9.grf_reg_count_2 << 1)) >> 6;
 
    wm->thread1.depth_coef_urb_read_offset = 1;
-   wm->thread1.floating_point_mode = BRW_FLOATING_POINT_NON_IEEE_754;
+   /* Use ALT floating point mode for ARB fragment programs, because they
+    * require 0^0 == 1.  Even though _CurrentFragmentProgram is used for
+    * rendering, CurrentFragmentProgram is used for this check to
+    * differentiate between the GLSL and non-GLSL cases.
+    */
+   if (ctx->Shader.CurrentFragmentProgram == NULL)
+      wm->thread1.floating_point_mode = BRW_FLOATING_POINT_NON_IEEE_754;
+   else
+      wm->thread1.floating_point_mode = BRW_FLOATING_POINT_IEEE_754;
 
    wm->thread1.binding_table_entry_count = 0;
 
@@ -133,7 +140,7 @@ brw_upload_wm_unit(struct brw_context *brw)
    /* BRW_NEW_CURBE_OFFSETS */
    wm->thread3.const_urb_entry_read_offset = brw->curbe.wm_start * 2;
 
-   if (intel->gen == 5)
+   if (brw->gen == 5)
       wm->wm4.sampler_count = 0; /* hardware requirement */
    else {
       /* CACHE_NEW_SAMPLER */
@@ -142,7 +149,7 @@ brw_upload_wm_unit(struct brw_context *brw)
 
    if (brw->sampler.count) {
       /* reloc */
-      wm->wm4.sampler_state_pointer = (intel->batch.bo->offset +
+      wm->wm4.sampler_state_pointer = (brw->batch.bo->offset +
 				       brw->sampler.offset) >> 5;
    } else {
       wm->wm4.sampler_state_pointer = 0;
@@ -204,12 +211,12 @@ brw_upload_wm_unit(struct brw_context *brw)
    wm->wm5.line_stipple = ctx->Line.StippleFlag;
 
    /* BRW_NEW_STATS_WM */
-   if (unlikely(INTEL_DEBUG & DEBUG_STATS) || intel->stats_wm)
+   if (unlikely(INTEL_DEBUG & DEBUG_STATS) || brw->stats_wm)
       wm->wm4.stats_enable = 1;
 
    /* Emit scratch space relocation */
    if (brw->wm.prog_data->total_scratch != 0) {
-      drm_intel_bo_emit_reloc(intel->batch.bo,
+      drm_intel_bo_emit_reloc(brw->batch.bo,
 			      brw->wm.state_offset +
 			      offsetof(struct brw_wm_unit_state, thread2),
 			      brw->wm.scratch_bo,
@@ -219,10 +226,10 @@ brw_upload_wm_unit(struct brw_context *brw)
 
    /* Emit sampler state relocation */
    if (brw->sampler.count != 0) {
-      drm_intel_bo_emit_reloc(intel->batch.bo,
+      drm_intel_bo_emit_reloc(brw->batch.bo,
 			      brw->wm.state_offset +
 			      offsetof(struct brw_wm_unit_state, wm4),
-			      intel->batch.bo, (brw->sampler.offset |
+			      brw->batch.bo, (brw->sampler.offset |
 						wm->wm4.stats_enable |
 						(wm->wm4.sampler_count << 2)),
 			      I915_GEM_DOMAIN_INSTRUCTION, 0);

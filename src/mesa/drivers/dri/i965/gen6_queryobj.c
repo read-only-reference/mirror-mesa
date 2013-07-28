@@ -43,10 +43,10 @@
  * Emit PIPE_CONTROLs to write the current GPU timestamp into a buffer.
  */
 static void
-write_timestamp(struct intel_context *intel, drm_intel_bo *query_bo, int idx)
+write_timestamp(struct brw_context *brw, drm_intel_bo *query_bo, int idx)
 {
    /* Emit workaround flushes: */
-   if (intel->gen == 6) {
+   if (brw->gen == 6) {
       /* The timestamp write below is a non-zero post-sync op, which on
        * Gen6 necessitates a CS stall.  CS stalls need stall at scoreboard
        * set.  See the comments for intel_emit_post_sync_nonzero_flush().
@@ -75,11 +75,11 @@ write_timestamp(struct intel_context *intel, drm_intel_bo *query_bo, int idx)
  * Emit PIPE_CONTROLs to write the PS_DEPTH_COUNT register into a buffer.
  */
 static void
-write_depth_count(struct intel_context *intel, drm_intel_bo *query_bo, int idx)
+write_depth_count(struct brw_context *brw, drm_intel_bo *query_bo, int idx)
 {
    /* Emit Sandybridge workaround flush: */
-   if (intel->gen == 6)
-      intel_emit_post_sync_nonzero_flush(intel);
+   if (brw->gen == 6)
+      intel_emit_post_sync_nonzero_flush(brw);
 
    BEGIN_BATCH(5);
    OUT_BATCH(_3DSTATE_PIPE_CONTROL | (5 - 2));
@@ -102,12 +102,12 @@ write_depth_count(struct intel_context *intel, drm_intel_bo *query_bo, int idx)
  * function also performs a pipeline flush for proper synchronization.
  */
 static void
-write_reg(struct intel_context *intel,
+write_reg(struct brw_context *brw,
           drm_intel_bo *query_bo, uint32_t reg, int idx)
 {
-   assert(intel->gen >= 6);
+   assert(brw->gen >= 6);
 
-   intel_batchbuffer_emit_mi_flush(intel);
+   intel_batchbuffer_emit_mi_flush(brw);
 
    /* MI_STORE_REGISTER_MEM only stores a single 32-bit value, so to
     * read a full 64-bit register, we need to do two of them.
@@ -128,20 +128,20 @@ write_reg(struct intel_context *intel,
 }
 
 static void
-write_primitives_generated(struct intel_context *intel,
+write_primitives_generated(struct brw_context *brw,
                            drm_intel_bo *query_bo, int idx)
 {
-   write_reg(intel, query_bo, CL_INVOCATION_COUNT, idx);
+   write_reg(brw, query_bo, CL_INVOCATION_COUNT, idx);
 }
 
 static void
-write_xfb_primitives_written(struct intel_context *intel,
+write_xfb_primitives_written(struct brw_context *brw,
                              drm_intel_bo *query_bo, int idx)
 {
-   if (intel->gen >= 7) {
-      write_reg(intel, query_bo, SO_NUM_PRIMS_WRITTEN0_IVB, idx);
+   if (brw->gen >= 7) {
+      write_reg(brw, query_bo, SO_NUM_PRIMS_WRITTEN0_IVB, idx);
    } else {
-      write_reg(intel, query_bo, SO_NUM_PRIMS_WRITTEN, idx);
+      write_reg(brw, query_bo, SO_NUM_PRIMS_WRITTEN, idx);
    }
 }
 
@@ -152,7 +152,7 @@ static void
 gen6_queryobj_get_results(struct gl_context *ctx,
                           struct brw_query_object *query)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
 
    if (query->bo == NULL)
       return;
@@ -161,10 +161,10 @@ gen6_queryobj_get_results(struct gl_context *ctx,
     * still contributing to it, flush it now so the results will be present
     * when mapped.
     */
-   if (drm_intel_bo_references(intel->batch.bo, query->bo))
-      intel_batchbuffer_flush(intel);
+   if (drm_intel_bo_references(brw->batch.bo, query->bo))
+      intel_batchbuffer_flush(brw);
 
-   if (unlikely(intel->perf_debug)) {
+   if (unlikely(brw->perf_debug)) {
       if (drm_intel_bo_busy(query->bo)) {
          perf_debug("Stalling on the GPU waiting for a query object.\n");
       }
@@ -243,12 +243,12 @@ gen6_queryobj_get_results(struct gl_context *ctx,
 static void
 gen6_begin_query(struct gl_context *ctx, struct gl_query_object *q)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct brw_query_object *query = (struct brw_query_object *)q;
 
    /* Since we're starting a new query, we need to throw away old results. */
    drm_intel_bo_unreference(query->bo);
-   query->bo = drm_intel_bo_alloc(intel->bufmgr, "query results", 4096, 4096);
+   query->bo = drm_intel_bo_alloc(brw->bufmgr, "query results", 4096, 4096);
 
    switch (query->Base.Target) {
    case GL_TIME_ELAPSED:
@@ -271,21 +271,21 @@ gen6_begin_query(struct gl_context *ctx, struct gl_query_object *q)
        * obtain the time elapsed.  Notably, this includes time elapsed while
        * the system was doing other work, such as running other applications.
        */
-      write_timestamp(intel, query->bo, 0);
+      write_timestamp(brw, query->bo, 0);
       break;
 
    case GL_ANY_SAMPLES_PASSED:
    case GL_ANY_SAMPLES_PASSED_CONSERVATIVE:
    case GL_SAMPLES_PASSED_ARB:
-      write_depth_count(intel, query->bo, 0);
+      write_depth_count(brw, query->bo, 0);
       break;
 
    case GL_PRIMITIVES_GENERATED:
-      write_primitives_generated(intel, query->bo, 0);
+      write_primitives_generated(brw, query->bo, 0);
       break;
 
    case GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN:
-      write_xfb_primitives_written(intel, query->bo, 0);
+      write_xfb_primitives_written(brw, query->bo, 0);
       break;
 
    default:
@@ -305,26 +305,26 @@ gen6_begin_query(struct gl_context *ctx, struct gl_query_object *q)
 static void
 gen6_end_query(struct gl_context *ctx, struct gl_query_object *q)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct brw_query_object *query = (struct brw_query_object *)q;
 
    switch (query->Base.Target) {
    case GL_TIME_ELAPSED:
-      write_timestamp(intel, query->bo, 1);
+      write_timestamp(brw, query->bo, 1);
       break;
 
    case GL_ANY_SAMPLES_PASSED:
    case GL_ANY_SAMPLES_PASSED_CONSERVATIVE:
    case GL_SAMPLES_PASSED_ARB:
-      write_depth_count(intel, query->bo, 1);
+      write_depth_count(brw, query->bo, 1);
       break;
 
    case GL_PRIMITIVES_GENERATED:
-      write_primitives_generated(intel, query->bo, 1);
+      write_primitives_generated(brw, query->bo, 1);
       break;
 
    case GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN:
-      write_xfb_primitives_written(intel, query->bo, 1);
+      write_xfb_primitives_written(brw, query->bo, 1);
       break;
 
    default:
@@ -355,7 +355,7 @@ static void gen6_wait_query(struct gl_context *ctx, struct gl_query_object *q)
  */
 static void gen6_check_query(struct gl_context *ctx, struct gl_query_object *q)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct brw_query_object *query = (struct brw_query_object *)q;
 
    /* From the GL_ARB_occlusion_query spec:
@@ -365,8 +365,8 @@ static void gen6_check_query(struct gl_context *ctx, struct gl_query_object *q)
     *      not ready yet on the first time it is queried.  This ensures that
     *      the async query will return true in finite time.
     */
-   if (query->bo && drm_intel_bo_references(intel->batch.bo, query->bo))
-      intel_batchbuffer_flush(intel);
+   if (query->bo && drm_intel_bo_references(brw->batch.bo, query->bo))
+      intel_batchbuffer_flush(brw);
 
    if (query->bo == NULL || !drm_intel_bo_busy(query->bo)) {
       gen6_queryobj_get_results(ctx, query);

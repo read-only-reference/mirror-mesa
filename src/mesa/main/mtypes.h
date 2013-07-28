@@ -272,8 +272,6 @@ typedef enum
 /*@}*/
 
 
-/*********************************************/
-
 /**
  * Determine if the given gl_varying_slot appears in the fragment shader.
  */
@@ -673,7 +671,7 @@ struct gl_colorbuffer_attrib
    GLboolean _ClampFragmentColor; /** < with GL_FIXED_ONLY_ARB resolved */
    GLenum ClampReadColor;     /**< GL_TRUE, GL_FALSE or GL_FIXED_ONLY_ARB */
 
-   GLboolean sRGBEnabled;	/**< Framebuffer sRGB blending/updating requested */
+   GLboolean sRGBEnabled;    /**< Framebuffer sRGB blending/updating requested */
 };
 
 
@@ -874,9 +872,8 @@ struct gl_multisample_attrib
 
    /* ARB_texture_multisample / GL3.2 additions */
    GLboolean SampleMask;
-   GLbitfield SampleMaskValue; /* GL spec defines this as an array but >32x MSAA is
-                                * madness
-                                */
+   /** The GL spec defines this as an array but >32x MSAA is madness */
+   GLbitfield SampleMaskValue;
 };
 
 
@@ -1103,8 +1100,8 @@ struct gl_texture_image
    GLuint Face;
 
    /** GL_ARB_texture_multisample */
-   GLuint NumSamples;               /**< Sample count, or 0 for non-multisample */
-   GLboolean FixedSampleLocations;  /**< Same sample locations for all pixels? */
+   GLuint NumSamples;            /**< Sample count, or 0 for non-multisample */
+   GLboolean FixedSampleLocations; /**< Same sample locations for all pixels? */
 };
 
 
@@ -1546,7 +1543,8 @@ struct gl_array_attrib
 
    /**
     * Vertex arrays as consumed by a driver.
-    * The array pointer is set up only by the VBO module. */
+    * The array pointer is set up only by the VBO module.
+    */
    const struct gl_client_array **_DrawArrays; /**< 0..VERT_ATTRIB_MAX-1 */
 };
 
@@ -2102,7 +2100,10 @@ struct gl_sl_pragmas
  */
 struct gl_shader
 {
-   GLenum Type;  /**< GL_FRAGMENT_SHADER || GL_VERTEX_SHADER || GL_GEOMETRY_SHADER_ARB (first field!) */
+   /** GL_FRAGMENT_SHADER || GL_VERTEX_SHADER || GL_GEOMETRY_SHADER_ARB.
+    * Must be the first field.
+    */
+   GLenum Type;
    GLuint Name;  /**< AKA the handle */
    GLint RefCount;  /**< Reference count */
    GLboolean DeletePending;
@@ -2173,15 +2174,19 @@ struct gl_shader
 
 /**
  * Shader stages. Note that these will become 5 with tessellation.
- * These MUST have the same values as gallium's PIPE_SHADER_*
+ *
+ * The order must match how shaders are ordered in the pipeline.
+ * The GLSL linker assumes that if i<j, then the j-th shader is
+ * executed later than the i-th shader.
  */
 typedef enum
 {
    MESA_SHADER_VERTEX = 0,
-   MESA_SHADER_FRAGMENT = 1,
-   MESA_SHADER_GEOMETRY = 2,
+   MESA_SHADER_GEOMETRY = 1,
+   MESA_SHADER_FRAGMENT = 2,
    MESA_SHADER_TYPES = 3
 } gl_shader_type;
+
 
 struct gl_uniform_buffer_variable
 {
@@ -2204,11 +2209,14 @@ struct gl_uniform_buffer_variable
    GLboolean RowMajor;
 };
 
-enum gl_uniform_block_packing {
+
+enum gl_uniform_block_packing
+{
    ubo_packing_std140,
    ubo_packing_shared,
    ubo_packing_packed
 };
+
 
 struct gl_uniform_block
 {
@@ -2240,6 +2248,7 @@ struct gl_uniform_block
     */
    enum gl_uniform_block_packing _Packing;
 };
+
 
 /**
  * A GLSL program object.
@@ -2393,6 +2402,7 @@ struct gl_shader_program
 #define GLSL_NOP_FRAG 0x40  /**< Force no-op fragment shaders */
 #define GLSL_USE_PROG 0x80  /**< Log glUseProgram calls */
 #define GLSL_REPORT_ERRORS 0x100  /**< Print compilation errors */
+#define GLSL_DUMP_ON_ERROR 0x200 /**< Dump shaders to stderr on compile error */
 
 
 /**
@@ -2790,7 +2800,7 @@ struct gl_constants
    GLuint MaxTextureRectSize;    /**< Max rectangle texture size, in pixes */
    GLuint MaxTextureCoordUnits;
    GLuint MaxCombinedTextureImageUnits;
-   GLuint MaxTextureUnits;           /**< = MIN(CoordUnits, FragmentProgram.ImageUnits) */
+   GLuint MaxTextureUnits; /**< = MIN(CoordUnits, FragmentProgram.ImageUnits) */
    GLfloat MaxTextureMaxAnisotropy;  /**< GL_EXT_texture_filter_anisotropic */
    GLfloat MaxTextureLodBias;        /**< GL_EXT_texture_lod_bias */
    GLuint MaxTextureBufferSize;      /**< GL_ARB_texture_buffer_object */
@@ -2864,6 +2874,12 @@ struct gl_constants
    GLboolean ForceGLSLExtensionsWarn;
 
    /**
+    * If non-zero, forces GLSL shaders without the #version directive to behave
+    * as if they began with "#version ForceGLSLVersion".
+    */
+   GLuint ForceGLSLVersion;
+
+   /**
     * Does the driver support real 32-bit integers?  (Otherwise, integers are
     * simulated via floats.)
     */
@@ -2922,12 +2938,11 @@ struct gl_constants
    GLboolean StripTextureBorder;
 
    /**
-    * For drivers which can do a better job at eliminating unused varyings
-    * and uniforms than the GLSL compiler.
+    * For drivers which can do a better job at eliminating unused uniforms
+    * than the GLSL compiler.
     *
     * XXX Remove these as soon as a better solution is available.
     */
-   GLboolean GLSLSkipStrictMaxVaryingLimitCheck;
    GLboolean GLSLSkipStrictMaxUniformLimitCheck;
 
    /**
@@ -3275,7 +3290,7 @@ enum mesa_debug_source {
    MESA_DEBUG_SOURCE_THIRD_PARTY,
    MESA_DEBUG_SOURCE_APPLICATION,
    MESA_DEBUG_SOURCE_OTHER,
-   MESA_DEBUG_SOURCE_COUNT,
+   MESA_DEBUG_SOURCE_COUNT
 };
 
 enum mesa_debug_type {
@@ -3285,14 +3300,14 @@ enum mesa_debug_type {
    MESA_DEBUG_TYPE_PORTABILITY,
    MESA_DEBUG_TYPE_PERFORMANCE,
    MESA_DEBUG_TYPE_OTHER,
-   MESA_DEBUG_TYPE_COUNT,
+   MESA_DEBUG_TYPE_COUNT
 };
 
 enum mesa_debug_severity {
    MESA_DEBUG_SEVERITY_LOW,
    MESA_DEBUG_SEVERITY_MEDIUM,
    MESA_DEBUG_SEVERITY_HIGH,
-   MESA_DEBUG_SEVERITY_COUNT,
+   MESA_DEBUG_SEVERITY_COUNT
 };
 
 /** @} */
@@ -3322,7 +3337,7 @@ struct gl_debug_namespace
 struct gl_debug_state
 {
    GLDEBUGPROCARB Callback;
-   GLvoid *CallbackData;
+   const void *CallbackData;
    GLboolean SyncOutput;
    GLboolean Defaults[MESA_DEBUG_SEVERITY_COUNT][MESA_DEBUG_SOURCE_COUNT][MESA_DEBUG_TYPE_COUNT];
    struct gl_debug_namespace Namespaces[MESA_DEBUG_SOURCE_COUNT][MESA_DEBUG_TYPE_COUNT];
@@ -3345,7 +3360,7 @@ typedef enum
    API_OPENGLES,
    API_OPENGLES2,
    API_OPENGL_CORE,
-   API_OPENGL_LAST = API_OPENGL_CORE,
+   API_OPENGL_LAST = API_OPENGL_CORE
 } gl_api;
 
 /**

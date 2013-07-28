@@ -50,7 +50,6 @@
 static void compile_sf_prog( struct brw_context *brw,
 			     struct brw_sf_prog_key *key )
 {
-   struct intel_context *intel = &brw->intel;
    struct brw_sf_compile c;
    const GLuint *program;
    void *mem_ctx;
@@ -118,7 +117,7 @@ static void compile_sf_prog( struct brw_context *brw,
       printf("sf:\n");
       for (i = 0; i < program_size / sizeof(struct brw_instruction); i++)
 	 brw_disasm(stdout, &((struct brw_instruction *)program)[i],
-		    intel->gen);
+		    brw->gen);
       printf("\n");
    }
 
@@ -135,7 +134,7 @@ static void compile_sf_prog( struct brw_context *brw,
 static void
 brw_upload_sf_prog(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->intel.ctx;
+   struct gl_context *ctx = &brw->ctx;
    struct brw_sf_prog_key key;
    /* _NEW_BUFFERS */
    bool render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
@@ -148,7 +147,7 @@ brw_upload_sf_prog(struct brw_context *brw)
    key.attrs = brw->vue_map_geom_out.slots_valid;
 
    /* BRW_NEW_REDUCED_PRIMITIVE */
-   switch (brw->intel.reduced_primitive) {
+   switch (brw->reduced_primitive) {
    case GL_TRIANGLES: 
       /* NOTE: We just use the edgeflag attribute as an indicator that
        * unfilled triangles are active.  We don't actually do the

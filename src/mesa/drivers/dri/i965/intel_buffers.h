@@ -31,14 +31,11 @@
 
 #include "dri_util.h"
 #include "drm.h"
-#include "intel_context.h"
+#include "brw_context.h"
 
-struct intel_context;
 struct intel_framebuffer;
 
-extern struct intel_region *intel_readbuf_region(struct intel_context *intel);
-
-extern void intel_check_front_buffer_rendering(struct intel_context *intel);
+extern void intel_check_front_buffer_rendering(struct brw_context *brw);
 
 extern void intelInitBufferFuncs(struct dd_function_table *functions);
 

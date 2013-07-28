@@ -41,6 +41,7 @@
 #include "state_tracker/drm_driver.h"
 
 #include "util/u_debug.h"
+#include "util/u_format_s3tc.h"
 
 #define MSAA_VISUAL_MAX_SAMPLES 32
 
@@ -48,14 +49,8 @@
 
 PUBLIC const char __driConfigOptions[] =
    DRI_CONF_BEGIN
-      DRI_CONF_SECTION_PERFORMANCE
-         DRI_CONF_FTHROTTLE_MODE(DRI_CONF_FTHROTTLE_IRQS)
-         DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_DEF_INTERVAL_0)
-      DRI_CONF_SECTION_END
-
       DRI_CONF_SECTION_QUALITY
-/*       DRI_CONF_FORCE_S3TC_ENABLE("false") */
-         DRI_CONF_ALLOW_LARGE_TEXTURES(1)
+         DRI_CONF_FORCE_S3TC_ENABLE("false")
          DRI_CONF_PP_CELSHADE(0)
          DRI_CONF_PP_NORED(0)
          DRI_CONF_PP_NOGREEN(0)
@@ -67,6 +62,9 @@ PUBLIC const char __driConfigOptions[] =
       DRI_CONF_SECTION_DEBUG
          DRI_CONF_FORCE_GLSL_EXTENSIONS_WARN("false")
          DRI_CONF_DISABLE_GLSL_LINE_CONTINUATIONS("false")
+         DRI_CONF_DISABLE_BLEND_FUNC_EXTENDED("false")
+         DRI_CONF_DISABLE_SHADER_BIT_ENCODING("false")
+         DRI_CONF_FORCE_GLSL_VERSION(0)
       DRI_CONF_SECTION_END
 
       DRI_CONF_SECTION_MISCELLANEOUS
@@ -76,7 +74,7 @@ PUBLIC const char __driConfigOptions[] =
 
 #define false 0
 
-static const uint __driNConfigOptions = 12;
+static const uint __driNConfigOptions = 13;
 
 static const __DRIconfig **
 dri_fill_in_modes(struct dri_screen *screen)
@@ -386,6 +384,17 @@ dri_destroy_screen(__DRIscreen * sPriv)
    sPriv->extensions = NULL;
 }
 
+static void
+dri_postprocessing_init(struct dri_screen *screen)
+{
+   unsigned i;
+
+   for (i = 0; i < PP_FILTERS; i++) {
+      screen->pp_enabled[i] = driQueryOptioni(&screen->optionCache,
+                                              pp_filters[i].name);
+   }
+}
+
 const __DRIconfig **
 dri_init_screen_helper(struct dri_screen *screen,
                        struct pipe_screen *pscreen)
@@ -415,6 +424,22 @@ dri_init_screen_helper(struct dri_screen *screen,
 		       &screen->optionCacheDefaults,
                        screen->sPriv->myNum,
                        driver_descriptor.name);
+
+   /* Handle force_s3tc_enable. */
+   if (!util_format_s3tc_enabled &&
+       driQueryOptionb(&screen->optionCache, "force_s3tc_enable")) {
+      /* Ensure libtxc_dxtn has been loaded if available.
+       * Forcing S3TC on before calling this would prevent loading
+       * the library.
+       * This is just a precaution, the driver should have called it
+       * already.
+       */
+      util_format_s3tc_init();
+
+      util_format_s3tc_enabled = TRUE;
+   }
+
+   dri_postprocessing_init(screen);
 
    return dri_fill_in_modes(screen);
 }

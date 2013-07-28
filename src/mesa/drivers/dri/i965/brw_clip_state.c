@@ -36,8 +36,7 @@
 static void
 upload_clip_vp(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    struct brw_clipper_viewport *vp;
 
    vp = brw_state_batch(brw, AUB_TRACE_CLIP_VP_STATE,
@@ -56,8 +55,7 @@ upload_clip_vp(struct brw_context *brw)
 static void
 brw_upload_clip_unit(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    struct brw_clip_unit_state *clip;
 
    /* _NEW_BUFFERS */
@@ -105,7 +103,7 @@ brw_upload_clip_unit(struct brw_context *brw)
       /* Although up to 16 concurrent Clip threads are allowed on Ironlake,
        * only 2 threads can output VUEs at a time.
        */
-      if (intel->gen == 5)
+      if (brw->gen == 5)
          clip->thread4.max_threads = 16 - 1;
       else
          clip->thread4.max_threads = 2 - 1;
@@ -128,13 +126,13 @@ brw_upload_clip_unit(struct brw_context *brw)
    {
       clip->clip5.guard_band_enable = 1;
       clip->clip6.clipper_viewport_state_ptr =
-         (intel->batch.bo->offset + brw->clip.vp_offset) >> 5;
+         (brw->batch.bo->offset + brw->clip.vp_offset) >> 5;
 
       /* emit clip viewport relocation */
-      drm_intel_bo_emit_reloc(brw->intel.batch.bo,
+      drm_intel_bo_emit_reloc(brw->batch.bo,
                               (brw->clip.state_offset +
                                offsetof(struct brw_clip_unit_state, clip6)),
-                              intel->batch.bo, brw->clip.vp_offset,
+                              brw->batch.bo, brw->clip.vp_offset,
                               I915_GEM_DOMAIN_INSTRUCTION, 0);
    }
 
@@ -146,7 +144,7 @@ brw_upload_clip_unit(struct brw_context *brw)
    clip->clip5.api_mode = BRW_CLIP_API_OGL;
    clip->clip5.clip_mode = brw->clip.prog_data->clip_mode;
 
-   if (intel->is_g4x)
+   if (brw->is_g4x)
       clip->clip5.negative_w_clip_test = 1;
 
    clip->viewport_xmin = -1;

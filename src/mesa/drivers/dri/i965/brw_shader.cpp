@@ -89,7 +89,7 @@ brw_lower_packing_builtins(struct brw_context *brw,
            | LOWER_PACK_UNORM_4x8
            | LOWER_UNPACK_UNORM_4x8;
 
-   if (brw->intel.gen >= 7) {
+   if (brw->gen >= 7) {
       /* Gen7 introduced the f32to16 and f16to32 instructions, which can be
        * used to execute packHalf2x16 and unpackHalf2x16. For AOS code, no
        * lowering is needed. For SOA code, the Half2x16 ops must be
@@ -111,23 +111,18 @@ GLboolean
 brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 {
    struct brw_context *brw = brw_context(ctx);
-   struct intel_context *intel = &brw->intel;
    unsigned int stage;
 
    for (stage = 0; stage < ARRAY_SIZE(shProg->_LinkedShaders); stage++) {
       struct brw_shader *shader =
 	 (struct brw_shader *)shProg->_LinkedShaders[stage];
-      static const GLenum targets[] = {
-	 GL_VERTEX_PROGRAM_ARB,
-	 GL_FRAGMENT_PROGRAM_ARB,
-	 GL_GEOMETRY_PROGRAM_NV
-      };
 
       if (!shader)
 	 continue;
 
       struct gl_program *prog =
-	 ctx->Driver.NewProgram(ctx, targets[stage], shader->base.Name);
+	 ctx->Driver.NewProgram(ctx, _mesa_program_index_to_target(stage),
+                                shader->base.Name);
       if (!prog)
 	return false;
       prog->Parameters = _mesa_new_parameter_list();
@@ -150,10 +145,10 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
        */
       brw_lower_packing_builtins(brw, (gl_shader_type) stage, shader->ir);
       do_mat_op_to_vec(shader->ir);
-      const int bitfield_insert = intel->gen >= 7
+      const int bitfield_insert = brw->gen >= 7
                                   ? BITFIELD_INSERT_TO_BFM_BFI
                                   : 0;
-      const int lrp_to_arith = intel->gen < 6 ? LRP_TO_ARITH : 0;
+      const int lrp_to_arith = brw->gen < 6 ? LRP_TO_ARITH : 0;
       lower_instructions(shader->ir,
 			 MOD_TO_FRACT |
 			 DIV_TO_MUL_RCP |
@@ -166,11 +161,11 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       /* Pre-gen6 HW can only nest if-statements 16 deep.  Beyond this,
        * if-statements need to be flattened.
        */
-      if (intel->gen < 6)
+      if (brw->gen < 6)
 	 lower_if_to_cond_assign(shader->ir, 16);
 
       do_lower_texture_projection(shader->ir);
-      brw_lower_texture_gradients(intel, shader->ir);
+      brw_lower_texture_gradients(brw, shader->ir);
       do_vec_index_to_cond_assign(shader->ir);
       lower_vector_insert(shader->ir, true);
       brw_do_cubemap_normalize(shader->ir);
@@ -186,7 +181,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
          lower_variable_index_to_cond_assign(shader->ir,
                                              input, output, temp, uniform);
 
-      if (unlikely((intel->perf_debug) && lowered_variable_indexing)) {
+      if (unlikely(brw->perf_debug && lowered_variable_indexing)) {
          perf_debug("Unsupported form of variable indexing in FS; falling "
                     "back to very inefficient code generation\n");
       }

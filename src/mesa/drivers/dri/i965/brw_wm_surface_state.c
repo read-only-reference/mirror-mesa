@@ -198,7 +198,6 @@ brw_update_buffer_texture_surface(struct gl_context *ctx,
                                   unsigned surf_index)
 {
    struct brw_context *brw = brw_context(ctx);
-   struct intel_context *intel = &brw->intel;
    struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
    uint32_t *surf;
    struct intel_buffer_object *intel_obj =
@@ -219,14 +218,14 @@ brw_update_buffer_texture_surface(struct gl_context *ctx,
    surf[0] = (BRW_SURFACE_BUFFER << BRW_SURFACE_TYPE_SHIFT |
 	      (brw_format_for_mesa_format(format) << BRW_SURFACE_FORMAT_SHIFT));
 
-   if (intel->gen >= 6)
+   if (brw->gen >= 6)
       surf[0] |= BRW_SURFACE_RC_READ_WRITE;
 
    if (bo) {
       surf[1] = bo->offset; /* reloc */
 
       /* Emit relocation to surface contents. */
-      drm_intel_bo_emit_reloc(brw->intel.batch.bo,
+      drm_intel_bo_emit_reloc(brw->batch.bo,
 			      binding_table[surf_index] + 4,
 			      bo, 0, I915_GEM_DOMAIN_SAMPLER, 0);
 
@@ -251,7 +250,6 @@ brw_update_texture_surface(struct gl_context *ctx,
                            uint32_t *binding_table,
                            unsigned surf_index)
 {
-   struct intel_context *intel = intel_context(ctx);
    struct brw_context *brw = brw_context(ctx);
    struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
    struct intel_texture_object *intelObj = intel_texture_object(tObj);
@@ -272,7 +270,7 @@ brw_update_texture_surface(struct gl_context *ctx,
    surf[0] = (translate_tex_target(tObj->Target) << BRW_SURFACE_TYPE_SHIFT |
 	      BRW_SURFACE_MIPMAPLAYOUT_BELOW << BRW_SURFACE_MIPLAYOUT_SHIFT |
 	      BRW_SURFACE_CUBEFACE_ENABLES |
-	      (translate_tex_format(intel,
+	      (translate_tex_format(brw,
                                     mt->format,
 				    tObj->DepthMode,
 				    sampler->sRGBDecode) <<
@@ -304,7 +302,7 @@ brw_update_texture_surface(struct gl_context *ctx,
 	      (mt->align_h == 4 ? BRW_SURFACE_VERTICAL_ALIGN_ENABLE : 0));
 
    /* Emit relocation to surface contents */
-   drm_intel_bo_emit_reloc(brw->intel.batch.bo,
+   drm_intel_bo_emit_reloc(brw->batch.bo,
 			   binding_table[surf_index] + 4,
 			   intelObj->mt->region->bo,
                            surf[1] - intelObj->mt->region->bo->offset,
@@ -323,7 +321,6 @@ brw_create_constant_surface(struct brw_context *brw,
 			    uint32_t *out_offset,
                             bool dword_pitch)
 {
-   struct intel_context *intel = &brw->intel;
    uint32_t stride = dword_pitch ? 4 : 16;
    uint32_t elements = ALIGN(size, stride) / stride;
    const GLint w = elements - 1;
@@ -336,7 +333,7 @@ brw_create_constant_surface(struct brw_context *brw,
 	      BRW_SURFACE_MIPMAPLAYOUT_BELOW << BRW_SURFACE_MIPLAYOUT_SHIFT |
 	      BRW_SURFACEFORMAT_R32G32B32A32_FLOAT << BRW_SURFACE_FORMAT_SHIFT);
 
-   if (intel->gen >= 6)
+   if (brw->gen >= 6)
       surf[0] |= BRW_SURFACE_RC_READ_WRITE;
 
    surf[1] = bo->offset + offset; /* reloc */
@@ -350,11 +347,11 @@ brw_create_constant_surface(struct brw_context *brw,
    surf[4] = 0;
    surf[5] = 0;
 
-   /* Emit relocation to surface contents.  Section 5.1.1 of the gen4
-    * bspec ("Data Cache") says that the data cache does not exist as
-    * a separate cache and is just the sampler cache.
+   /* Emit relocation to surface contents.  The 965 PRM, Volume 4, section
+    * 5.1.2 "Data Cache" says: "the data cache does not exist as a separate
+    * physical cache.  It is mapped in hardware to the sampler cache."
     */
-   drm_intel_bo_emit_reloc(brw->intel.batch.bo,
+   drm_intel_bo_emit_reloc(brw->batch.bo,
 			   *out_offset + 4,
 			   bo, offset,
 			   I915_GEM_DOMAIN_SAMPLER, 0);
@@ -372,10 +369,8 @@ brw_update_sol_surface(struct brw_context *brw,
                        uint32_t *out_offset, unsigned num_vector_components,
                        unsigned stride_dwords, unsigned offset_dwords)
 {
-   struct intel_context *intel = &brw->intel;
    struct intel_buffer_object *intel_bo = intel_buffer_object(buffer_obj);
-   drm_intel_bo *bo =
-      intel_bufferobj_buffer(intel, intel_bo, INTEL_WRITE_PART);
+   drm_intel_bo *bo = intel_bufferobj_buffer(brw, intel_bo, INTEL_WRITE_PART);
    uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE, 6 * 4, 32,
                                     out_offset);
    uint32_t pitch_minus_1 = 4*stride_dwords - 1;
@@ -441,7 +436,7 @@ brw_update_sol_surface(struct brw_context *brw,
    surf[5] = 0;
 
    /* Emit relocation to surface contents. */
-   drm_intel_bo_emit_reloc(brw->intel.batch.bo,
+   drm_intel_bo_emit_reloc(brw->batch.bo,
 			   *out_offset + 4,
 			   bo, offset_bytes,
 			   I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER);
@@ -456,8 +451,7 @@ brw_update_sol_surface(struct brw_context *brw,
 static void
 brw_upload_wm_pull_constants(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->intel.ctx;
-   struct intel_context *intel = &brw->intel;
+   struct gl_context *ctx = &brw->ctx;
    /* BRW_NEW_FRAGMENT_PROGRAM */
    struct brw_fragment_program *fp =
       (struct brw_fragment_program *) brw->fragment_program;
@@ -481,7 +475,7 @@ brw_upload_wm_pull_constants(struct brw_context *brw)
    }
 
    drm_intel_bo_unreference(brw->wm.const_bo);
-   brw->wm.const_bo = drm_intel_bo_alloc(intel->bufmgr, "WM const bo",
+   brw->wm.const_bo = drm_intel_bo_alloc(brw->bufmgr, "WM const bo",
 					 size, 64);
 
    /* _NEW_PROGRAM_CONSTANTS */
@@ -492,9 +486,9 @@ brw_upload_wm_pull_constants(struct brw_context *brw)
    }
    drm_intel_gem_bo_unmap_gtt(brw->wm.const_bo);
 
-   intel->vtbl.create_constant_surface(brw, brw->wm.const_bo, 0, size,
-				       &brw->wm.surf_offset[surf_index],
-                                       true);
+   brw->vtbl.create_constant_surface(brw, brw->wm.const_bo, 0, size,
+                                     &brw->wm.surf_offset[surf_index],
+                                     true);
 
    brw->state.dirty.brw |= BRW_NEW_SURFACES;
 }
@@ -529,8 +523,7 @@ brw_update_null_renderbuffer_surface(struct brw_context *brw, unsigned int unit)
     *
     *     - Surface Format must be R8G8B8A8_UNORM.
     */
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    uint32_t *surf;
    unsigned surface_type = BRW_SURFACE_NULL;
    drm_intel_bo *bo = NULL;
@@ -561,7 +554,7 @@ brw_update_null_renderbuffer_surface(struct brw_context *brw, unsigned int unit)
       unsigned width_in_tiles = ALIGN(fb->Width, 16) / 16;
       unsigned height_in_tiles = ALIGN(fb->Height, 16) / 16;
       unsigned size_needed = (width_in_tiles + height_in_tiles - 1) * 4096;
-      brw_get_scratch_bo(intel, &brw->wm.multisampled_null_render_target_bo,
+      brw_get_scratch_bo(brw, &brw->wm.multisampled_null_render_target_bo,
                          size_needed);
       bo = brw->wm.multisampled_null_render_target_bo;
       surface_type = BRW_SURFACE_2D;
@@ -572,7 +565,7 @@ brw_update_null_renderbuffer_surface(struct brw_context *brw, unsigned int unit)
 
    surf[0] = (surface_type << BRW_SURFACE_TYPE_SHIFT |
 	      BRW_SURFACEFORMAT_B8G8R8A8_UNORM << BRW_SURFACE_FORMAT_SHIFT);
-   if (intel->gen < 6) {
+   if (brw->gen < 6) {
       surf[0] |= (1 << BRW_SURFACE_WRITEDISABLE_R_SHIFT |
 		  1 << BRW_SURFACE_WRITEDISABLE_G_SHIFT |
 		  1 << BRW_SURFACE_WRITEDISABLE_B_SHIFT |
@@ -593,7 +586,7 @@ brw_update_null_renderbuffer_surface(struct brw_context *brw, unsigned int unit)
    surf[5] = 0;
 
    if (bo) {
-      drm_intel_bo_emit_reloc(brw->intel.batch.bo,
+      drm_intel_bo_emit_reloc(brw->batch.bo,
                               brw->wm.surf_offset[unit] + 4,
                               bo, 0,
                               I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER);
@@ -611,8 +604,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
 				bool layered,
 				unsigned int unit)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    struct intel_renderbuffer *irb = intel_renderbuffer(rb);
    struct intel_mipmap_tree *mt = irb->mt;
    struct intel_region *region;
@@ -634,7 +626,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
 	  * select the image.  So, instead, we just make a new single-level
 	  * miptree and render into that.
 	  */
-	 intel_renderbuffer_move_to_temp(intel, irb, false);
+	 intel_renderbuffer_move_to_temp(brw, irb, false);
 	 mt = irb->mt;
       }
    }
@@ -677,7 +669,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
 	      (tile_y / 2) << BRW_SURFACE_Y_OFFSET_SHIFT |
 	      (mt->align_h == 4 ? BRW_SURFACE_VERTICAL_ALIGN_ENABLE : 0));
 
-   if (intel->gen < 6) {
+   if (brw->gen < 6) {
       /* _NEW_COLOR */
       if (!ctx->Color.ColorLogicOpEnabled &&
 	  (ctx->Color.BlendEnabled & (1 << unit)))
@@ -699,7 +691,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
       }
    }
 
-   drm_intel_bo_emit_reloc(brw->intel.batch.bo,
+   drm_intel_bo_emit_reloc(brw->batch.bo,
 			   brw->wm.surf_offset[unit] + 4,
 			   region->bo,
 			   surf[1] - region->bo->offset,
@@ -713,8 +705,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
 static void
 brw_update_renderbuffer_surfaces(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &brw->intel.ctx;
+   struct gl_context *ctx = &brw->ctx;
    GLuint i;
 
    /* _NEW_BUFFERS | _NEW_COLOR */
@@ -722,14 +713,14 @@ brw_update_renderbuffer_surfaces(struct brw_context *brw)
    if (ctx->DrawBuffer->_NumColorDrawBuffers >= 1) {
       for (i = 0; i < ctx->DrawBuffer->_NumColorDrawBuffers; i++) {
 	 if (intel_renderbuffer(ctx->DrawBuffer->_ColorDrawBuffers[i])) {
-	    intel->vtbl.update_renderbuffer_surface(brw, ctx->DrawBuffer->_ColorDrawBuffers[i],
-	                                            ctx->DrawBuffer->Layered, i);
+	    brw->vtbl.update_renderbuffer_surface(brw, ctx->DrawBuffer->_ColorDrawBuffers[i],
+                                                  ctx->DrawBuffer->Layered, i);
 	 } else {
-	    intel->vtbl.update_null_renderbuffer_surface(brw, i);
+	    brw->vtbl.update_null_renderbuffer_surface(brw, i);
 	 }
       }
    } else {
-      intel->vtbl.update_null_renderbuffer_surface(brw, 0);
+      brw->vtbl.update_null_renderbuffer_surface(brw, 0);
    }
    brw->state.dirty.brw |= BRW_NEW_SURFACES;
 }
@@ -759,8 +750,7 @@ const struct brw_tracked_state gen6_renderbuffer_surfaces = {
 static void
 brw_update_texture_surfaces(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
 
    /* BRW_NEW_VERTEX_PROGRAM and BRW_NEW_FRAGMENT_PROGRAM:
     * Unfortunately, we're stuck using the gl_program structs until the
@@ -782,9 +772,9 @@ brw_update_texture_surfaces(struct brw_context *brw)
 
          /* _NEW_TEXTURE */
          if (ctx->Texture.Unit[unit]._ReallyEnabled) {
-            intel->vtbl.update_texture_surface(ctx, unit,
-                                               brw->vs.surf_offset,
-                                               SURF_INDEX_VS_TEXTURE(s));
+            brw->vtbl.update_texture_surface(ctx, unit,
+                                             brw->vs.surf_offset,
+                                             SURF_INDEX_VS_TEXTURE(s));
          }
       }
 
@@ -793,9 +783,9 @@ brw_update_texture_surfaces(struct brw_context *brw)
 
          /* _NEW_TEXTURE */
          if (ctx->Texture.Unit[unit]._ReallyEnabled) {
-            intel->vtbl.update_texture_surface(ctx, unit,
-                                               brw->wm.surf_offset,
-                                               SURF_INDEX_TEXTURE(s));
+            brw->vtbl.update_texture_surface(ctx, unit,
+                                             brw->wm.surf_offset,
+                                             SURF_INDEX_TEXTURE(s));
          }
       }
    }
@@ -819,8 +809,7 @@ brw_upload_ubo_surfaces(struct brw_context *brw,
 			struct gl_shader *shader,
 			uint32_t *surf_offsets)
 {
-   struct gl_context *ctx = &brw->intel.ctx;
-   struct intel_context *intel = &brw->intel;
+   struct gl_context *ctx = &brw->ctx;
 
    if (!shader)
       return;
@@ -831,16 +820,16 @@ brw_upload_ubo_surfaces(struct brw_context *brw,
 
       binding = &ctx->UniformBufferBindings[shader->UniformBlocks[i].Binding];
       intel_bo = intel_buffer_object(binding->BufferObject);
-      drm_intel_bo *bo = intel_bufferobj_buffer(intel, intel_bo, INTEL_READ);
+      drm_intel_bo *bo = intel_bufferobj_buffer(brw, intel_bo, INTEL_READ);
 
       /* Because behavior for referencing outside of the binding's size in the
        * glBindBufferRange case is undefined, we can just bind the whole buffer
        * glBindBufferBase wants and be a correct implementation.
        */
-      intel->vtbl.create_constant_surface(brw, bo, binding->Offset,
-					  bo->size - binding->Offset,
-					  &surf_offsets[i],
-                                          shader->Type == GL_FRAGMENT_SHADER);
+      brw->vtbl.create_constant_surface(brw, bo, binding->Offset,
+                                        bo->size - binding->Offset,
+                                        &surf_offsets[i],
+                                        shader->Type == GL_FRAGMENT_SHADER);
    }
 
    if (shader->NumUniformBlocks)
@@ -850,7 +839,7 @@ brw_upload_ubo_surfaces(struct brw_context *brw,
 static void
 brw_upload_wm_ubo_surfaces(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->intel.ctx;
+   struct gl_context *ctx = &brw->ctx;
    /* _NEW_PROGRAM */
    struct gl_shader_program *prog = ctx->Shader._CurrentFragmentProgram;
 
@@ -912,11 +901,9 @@ const struct brw_tracked_state brw_wm_binding_table = {
 void
 gen4_init_vtable_surface_functions(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-
-   intel->vtbl.update_texture_surface = brw_update_texture_surface;
-   intel->vtbl.update_renderbuffer_surface = brw_update_renderbuffer_surface;
-   intel->vtbl.update_null_renderbuffer_surface =
+   brw->vtbl.update_texture_surface = brw_update_texture_surface;
+   brw->vtbl.update_renderbuffer_surface = brw_update_renderbuffer_surface;
+   brw->vtbl.update_null_renderbuffer_surface =
       brw_update_null_renderbuffer_surface;
-   intel->vtbl.create_constant_surface = brw_create_constant_surface;
+   brw->vtbl.create_constant_surface = brw_create_constant_surface;
 }

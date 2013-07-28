@@ -3,11 +3,10 @@
 #include "main/samplerobj.h"
 #include "main/texobj.h"
 
-#include "intel_context.h"
+#include "brw_context.h"
 #include "intel_mipmap_tree.h"
 #include "intel_blit.h"
 #include "intel_tex.h"
-#include "intel_tex_layout.h"
 
 #define FILE_DEBUG_FLAG DEBUG_TEXTURE
 
@@ -39,10 +38,10 @@ intel_update_max_level(struct intel_texture_object *intelObj,
 /*  
  */
 GLuint
-intel_finalize_mipmap_tree(struct intel_context *intel, GLuint unit)
+intel_finalize_mipmap_tree(struct brw_context *brw, GLuint unit)
 {
-   struct gl_context *ctx = &intel->ctx;
-   struct gl_texture_object *tObj = intel->ctx.Texture.Unit[unit]._Current;
+   struct gl_context *ctx = &brw->ctx;
+   struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
    struct intel_texture_object *intelObj = intel_texture_object(tObj);
    struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit);
    GLuint face, i;
@@ -96,7 +95,7 @@ intel_finalize_mipmap_tree(struct intel_context *intel, GLuint unit)
                  _mesa_get_format_name(firstImage->base.Base.TexFormat),
                  width, height, depth, tObj->BaseLevel, intelObj->_MaxLevel);
 
-      intelObj->mt = intel_miptree_create(intel,
+      intelObj->mt = intel_miptree_create(brw,
                                           intelObj->base.Target,
 					  firstImage->base.Base.TexFormat,
                                           tObj->BaseLevel,
@@ -123,7 +122,7 @@ intel_finalize_mipmap_tree(struct intel_context *intel, GLuint unit)
 		 break;
 
          if (intelObj->mt != intelImage->mt) {
-            intel_miptree_copy_teximage(intel, intelImage, intelObj->mt,
+            intel_miptree_copy_teximage(brw, intelImage, intelObj->mt,
                                         false /* invalidate */);
          }
 

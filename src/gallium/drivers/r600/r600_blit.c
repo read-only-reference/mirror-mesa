@@ -416,17 +416,22 @@ static boolean is_simple_msaa_resolve(const struct pipe_blit_info *info)
 static void r600_clear_buffer(struct pipe_context *ctx, struct pipe_resource *dst,
 			      unsigned offset, unsigned size, unsigned char value);
 
-static void evergreen_set_clear_color(struct pipe_context *ctx,
-				      struct pipe_surface *cbuf,
+static void evergreen_set_clear_color(struct pipe_surface *cbuf,
 				      const union pipe_color_union *color)
 {
-	struct r600_context *rctx = (struct r600_context *)ctx;
-	struct pipe_framebuffer_state *fb = &rctx->framebuffer.state;
 	unsigned *clear_value = ((struct r600_texture *)cbuf->texture)->color_clear_value;
 	union util_color uc;
 
 	memset(&uc, 0, sizeof(uc));
-	util_pack_color(color->f, fb->cbufs[0]->format, &uc);
+
+	if (util_format_is_pure_uint(cbuf->format)) {
+		util_format_write_4ui(cbuf->format, color->ui, 0, &uc, 0, 0, 0, 1, 1);
+	} else if (util_format_is_pure_sint(cbuf->format)) {
+		util_format_write_4i(cbuf->format, color->i, 0, &uc, 0, 0, 0, 1, 1);
+	} else {
+		util_pack_color(color->f, cbuf->format, &uc);
+	}
+
 	memcpy(clear_value, &uc, 2 * sizeof(uint32_t));
 }
 
@@ -442,22 +447,19 @@ static bool can_fast_clear_color(struct pipe_context *ctx)
 
 	for (i = 0; i < fb->nr_cbufs; i++) {
 		struct r600_texture *tex = (struct r600_texture *)fb->cbufs[i]->texture;
-		int target = fb->cbufs[i]->texture->target;
 
 		if (tex->cmask_size == 0) {
 			return false;
 		}
 
-		/* cannot pack color for pure integer formats */
 		/* 128-bit formats are unuspported */
-		if (util_format_is_pure_integer(fb->cbufs[i]->format) ||
-		    util_format_get_blocksizebits(fb->cbufs[i]->format) > 64) {
+		if (util_format_get_blocksizebits(fb->cbufs[i]->format) > 64) {
 			return false;
 		}
 
-		/* textures with multiple images are not supported */
-		if (target != PIPE_TEXTURE_2D && target != PIPE_TEXTURE_RECT &&
-				target != PIPE_TEXTURE_1D) {
+		/* the clear is allowed if all layers are bound */
+		if (fb->cbufs[i]->u.tex.first_layer != 0 ||
+		    fb->cbufs[i]->u.tex.last_layer != util_max_layer(&tex->resource.b.b, 0)) {
 			return false;
 		}
 	}
@@ -479,7 +481,7 @@ static void r600_clear(struct pipe_context *ctx, unsigned buffers,
 		for (i = 0; i < fb->nr_cbufs; i++) {
 			struct r600_texture *tex = (struct r600_texture *)fb->cbufs[i]->texture;
 
-			evergreen_set_clear_color(ctx, fb->cbufs[i], color);
+			evergreen_set_clear_color(fb->cbufs[i], color);
 			r600_clear_buffer(ctx, fb->cbufs[i]->texture,
 					tex->cmask_offset, tex->cmask_size, 0);
 			tex->dirty_level_mask |= 1 << fb->cbufs[i]->u.tex.level;
@@ -567,9 +569,17 @@ void r600_copy_buffer(struct pipe_context *ctx, struct pipe_resource *dst, unsig
 	else if (rctx->screen->has_streamout &&
 		 /* Require 4-byte alignment. */
 		 dstx % 4 == 0 && src_box->x % 4 == 0 && src_box->width % 4 == 0) {
+
+		/* Flush both resources. */
+		r600_flag_resource_cache_flush(rctx, src);
+		r600_flag_resource_cache_flush(rctx, dst);
+
 		r600_blitter_begin(ctx, R600_COPY_BUFFER);
 		util_blitter_copy_buffer(rctx->blitter, dst, dstx, src, src_box->x, src_box->width);
 		r600_blitter_end(ctx);
+
+		/* Flush the dst in case the 3D engine has been prefetching the resource. */
+		r600_flag_resource_cache_flush(rctx, dst);
 	} else {
 		util_resource_copy_region(ctx, dst, 0, dstx, 0, 0, src, 0, src_box);
 	}
@@ -592,10 +602,15 @@ static void r600_clear_buffer(struct pipe_context *ctx, struct pipe_resource *ds
 
 		clear_value.ui[0] = v | (v << 8) | (v << 16) | (v << 24);
 
+		r600_flag_resource_cache_flush(rctx, dst);
+
 		r600_blitter_begin(ctx, R600_DISABLE_RENDER_COND);
 		util_blitter_clear_buffer(rctx->blitter, dst, offset, size,
 					  1, &clear_value);
 		r600_blitter_end(ctx);
+
+		/* Flush again in case the 3D engine has been prefetching the resource. */
+		r600_flag_resource_cache_flush(rctx, dst);
 	} else {
 		char *map = r600_buffer_mmap_sync_with_rings(rctx, r600_resource(dst),
 							     PIPE_TRANSFER_WRITE);
@@ -775,7 +790,7 @@ static enum pipe_format int_to_norm_format(enum pipe_format format)
 	REPLACE_FORMAT_SIGN(B10G10R10A2, U);
 	REPLACE_FORMAT(R8);
 	REPLACE_FORMAT(R8G8);
-	REPLACE_FORMAT(R8G8B8);
+	REPLACE_FORMAT(R8G8B8X8);
 	REPLACE_FORMAT(R8G8B8A8);
 	REPLACE_FORMAT(A8);
 	REPLACE_FORMAT(I8);
@@ -783,7 +798,7 @@ static enum pipe_format int_to_norm_format(enum pipe_format format)
 	REPLACE_FORMAT(L8A8);
 	REPLACE_FORMAT(R16);
 	REPLACE_FORMAT(R16G16);
-	REPLACE_FORMAT(R16G16B16);
+	REPLACE_FORMAT(R16G16B16X16);
 	REPLACE_FORMAT(R16G16B16A16);
 	REPLACE_FORMAT(A16);
 	REPLACE_FORMAT(I16);

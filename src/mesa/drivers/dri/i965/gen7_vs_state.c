@@ -32,12 +32,12 @@
 static void
 upload_vs_state(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
+   struct gl_context *ctx = &brw->ctx;
    uint32_t floating_point_mode = 0;
-   const int max_threads_shift = brw->intel.is_haswell ?
+   const int max_threads_shift = brw->is_haswell ?
       HSW_VS_MAX_THREADS_SHIFT : GEN6_VS_MAX_THREADS_SHIFT;
 
-   gen7_emit_vs_workaround_flush(intel);
+   gen7_emit_vs_workaround_flush(brw);
 
    /* BRW_NEW_VS_BINDING_TABLE */
    BEGIN_BATCH(2);
@@ -63,6 +63,8 @@ upload_vs_state(struct brw_context *brw)
       OUT_BATCH(0);
       ADVANCE_BATCH();
    } else {
+      uint8_t mocs = brw->is_haswell ? GEN7_MOCS_L3 : 0;
+
       BEGIN_BATCH(7);
       OUT_BATCH(_3DSTATE_CONSTANT_VS << 16 | (7 - 2));
       OUT_BATCH(brw->vs.push_const_size);
@@ -70,7 +72,7 @@ upload_vs_state(struct brw_context *brw)
       /* Pointer to the VS constant buffer.  Covered by the set of
        * state flags from gen6_prepare_wm_contants
        */
-      OUT_BATCH(brw->vs.push_const_offset);
+      OUT_BATCH(brw->vs.push_const_offset | mocs);
       OUT_BATCH(0);
       OUT_BATCH(0);
       OUT_BATCH(0);
@@ -80,7 +82,7 @@ upload_vs_state(struct brw_context *brw)
    /* Use ALT floating point mode for ARB vertex programs, because they
     * require 0^0 == 1.
     */
-   if (intel->ctx.Shader.CurrentVertexProgram == NULL)
+   if (ctx->Shader.CurrentVertexProgram == NULL)
       floating_point_mode = GEN6_VS_FLOATING_POINT_MODE_ALT;
 
    BEGIN_BATCH(6);

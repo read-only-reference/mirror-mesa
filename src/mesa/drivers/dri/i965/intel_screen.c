@@ -156,15 +156,15 @@ static void
 intelDRI2Flush(__DRIdrawable *drawable)
 {
    GET_CURRENT_CONTEXT(ctx);
-   struct intel_context *intel = intel_context(ctx);
-   if (intel == NULL)
+   struct brw_context *brw = brw_context(ctx);
+   if (brw == NULL)
       return;
 
-   intel_resolve_for_dri2_flush(intel, drawable);
-   intel->need_throttle = true;
+   intel_resolve_for_dri2_flush(brw, drawable);
+   brw->need_throttle = true;
 
-   if (intel->batch.used)
-      intel_batchbuffer_flush(intel);
+   if (brw->batch.used)
+      intel_batchbuffer_flush(brw);
 
    if (INTEL_DEBUG & DEBUG_AUB) {
       aub_dump_bmp(ctx);
@@ -283,14 +283,14 @@ intel_allocate_image(int dri_format, void *loaderPrivate)
  * Sets up a DRIImage structure to point to our shared image in a region
  */
 static void
-intel_setup_image_from_mipmap_tree(struct intel_context *intel, __DRIimage *image,
+intel_setup_image_from_mipmap_tree(struct brw_context *brw, __DRIimage *image,
                                    struct intel_mipmap_tree *mt, GLuint level,
                                    GLuint zoffset)
 {
    unsigned int draw_x, draw_y;
    uint32_t mask_x, mask_y;
 
-   intel_miptree_make_shareable(intel, mt);
+   intel_miptree_make_shareable(brw, mt);
 
    intel_miptree_check_level_layer(mt, level, zoffset);
 
@@ -376,19 +376,19 @@ intel_create_image_from_renderbuffer(__DRIcontext *context,
 				     int renderbuffer, void *loaderPrivate)
 {
    __DRIimage *image;
-   struct intel_context *intel = context->driverPrivate;
+   struct brw_context *brw = context->driverPrivate;
+   struct gl_context *ctx = &brw->ctx;
    struct gl_renderbuffer *rb;
    struct intel_renderbuffer *irb;
 
-   rb = _mesa_lookup_renderbuffer(&intel->ctx, renderbuffer);
+   rb = _mesa_lookup_renderbuffer(ctx, renderbuffer);
    if (!rb) {
-      _mesa_error(&intel->ctx,
-		  GL_INVALID_OPERATION, "glRenderbufferExternalMESA");
+      _mesa_error(ctx, GL_INVALID_OPERATION, "glRenderbufferExternalMESA");
       return NULL;
    }
 
    irb = intel_renderbuffer(rb);
-   intel_miptree_make_shareable(intel, irb->mt);
+   intel_miptree_make_shareable(brw, irb->mt);
    image = calloc(1, sizeof *image);
    if (image == NULL)
       return NULL;
@@ -414,12 +414,12 @@ intel_create_image_from_texture(__DRIcontext *context, int target,
                                 void *loaderPrivate)
 {
    __DRIimage *image;
-   struct intel_context *intel = context->driverPrivate;
+   struct brw_context *brw = context->driverPrivate;
    struct gl_texture_object *obj;
    struct intel_texture_object *iobj;
    GLuint face = 0;
 
-   obj = _mesa_lookup_texture(&intel->ctx, texture);
+   obj = _mesa_lookup_texture(&brw->ctx, texture);
    if (!obj || obj->Target != target) {
       *error = __DRI_IMAGE_ERROR_BAD_PARAMETER;
       return NULL;
@@ -428,7 +428,7 @@ intel_create_image_from_texture(__DRIcontext *context, int target,
    if (target == GL_TEXTURE_CUBE_MAP)
       face = zoffset;
 
-   _mesa_test_texobj_completeness(&intel->ctx, obj);
+   _mesa_test_texobj_completeness(&brw->ctx, obj);
    iobj = intel_texture_object(obj);
    if (!obj->_BaseComplete || (level > 0 && !obj->_MipmapComplete)) {
       *error = __DRI_IMAGE_ERROR_BAD_PARAMETER;
@@ -453,7 +453,7 @@ intel_create_image_from_texture(__DRIcontext *context, int target,
    image->internal_format = obj->Image[face][level]->InternalFormat;
    image->format = obj->Image[face][level]->TexFormat;
    image->data = loaderPrivate;
-   intel_setup_image_from_mipmap_tree(intel, image, iobj->mt, level, zoffset);
+   intel_setup_image_from_mipmap_tree(brw, image, iobj->mt, level, zoffset);
    image->dri_format = intel_dri_format(image->format);
    image->has_depthstencil = iobj->mt->stencil_mt? true : false;
    if (image->dri_format == MESA_FORMAT_NONE) {
@@ -896,11 +896,6 @@ intelDestroyBuffer(__DRIdrawable * driDrawPriv)
   
     _mesa_reference_framebuffer(&fb, NULL);
 }
-
-/* There are probably better ways to do this, such as an
- * init-designated function to register chipids and createcontext
- * functions.
- */
 
 static GLboolean
 intelCreateContext(gl_api api,

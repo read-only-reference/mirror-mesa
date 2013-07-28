@@ -79,10 +79,10 @@ can_cut_index_handle_prims(struct gl_context *ctx,
                            GLuint nr_prims,
                            const struct _mesa_index_buffer *ib)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
 
    /* Otherwise Haswell can do it all. */
-   if (intel->gen >= 8 || intel->is_haswell)
+   if (brw->gen >= 8 || brw->is_haswell)
       return true;
 
    if (!can_cut_index_handle_restart_index(ctx, ib)) {
@@ -183,11 +183,10 @@ brw_handle_primitive_restart(struct gl_context *ctx,
 static void
 haswell_upload_cut_index(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
 
    /* Don't trigger on Ivybridge */
-   if (!intel->is_haswell)
+   if (!brw->is_haswell)
       return;
 
    const unsigned cut_index_setting =

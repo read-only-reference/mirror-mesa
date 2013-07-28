@@ -30,7 +30,7 @@
 
 #include "main/mtypes.h"
 
-struct intel_context;
+struct brw_context;
 struct gl_buffer_object;
 
 
@@ -46,35 +46,32 @@ struct intel_buffer_object
    drm_intel_bo *range_map_bo;
    void *range_map_buffer;
    unsigned int range_map_offset;
-   GLsizei range_map_size;
-
-   bool source;
 };
 
 
 /* Get the bm buffer associated with a GL bufferobject:
  */
-drm_intel_bo *intel_bufferobj_buffer(struct intel_context *intel,
+drm_intel_bo *intel_bufferobj_buffer(struct brw_context *brw,
 				     struct intel_buffer_object *obj,
 				     GLuint flag);
-drm_intel_bo *intel_bufferobj_source(struct intel_context *intel,
+drm_intel_bo *intel_bufferobj_source(struct brw_context *brw,
 				     struct intel_buffer_object *obj,
 				     GLuint align,
 				     GLuint *offset);
 
-void intel_upload_data(struct intel_context *intel,
+void intel_upload_data(struct brw_context *brw,
 		       const void *ptr, GLuint size, GLuint align,
 		       drm_intel_bo **return_bo,
 		       GLuint *return_offset);
 
-void *intel_upload_map(struct intel_context *intel,
+void *intel_upload_map(struct brw_context *brw,
 		       GLuint size, GLuint align);
-void intel_upload_unmap(struct intel_context *intel,
+void intel_upload_unmap(struct brw_context *brw,
 			const void *ptr, GLuint size, GLuint align,
 			drm_intel_bo **return_bo,
 			GLuint *return_offset);
 
-void intel_upload_finish(struct intel_context *intel);
+void intel_upload_finish(struct brw_context *brw);
 
 /* Hook the bufferobject implementation into mesa:
  */

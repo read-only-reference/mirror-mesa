@@ -44,7 +44,6 @@
 static void
 brw_upload_vs_pull_constants(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
    /* BRW_NEW_VERTEX_PROGRAM */
    struct brw_vertex_program *vp =
       (struct brw_vertex_program *) brw->vertex_program;
@@ -53,7 +52,7 @@ brw_upload_vs_pull_constants(struct brw_context *brw)
    /* Updates the ParamaterValues[i] pointers for all parameters of the
     * basic type of PROGRAM_STATE_VAR.
     */
-   _mesa_load_state_parameters(&brw->intel.ctx, vp->program.Base.Parameters);
+   _mesa_load_state_parameters(&brw->ctx, vp->program.Base.Parameters);
 
    /* CACHE_NEW_VS_PROG */
    if (!brw->vs.prog_data->base.nr_pull_params) {
@@ -69,7 +68,7 @@ brw_upload_vs_pull_constants(struct brw_context *brw)
    /* _NEW_PROGRAM_CONSTANTS */
    drm_intel_bo_unreference(brw->vs.const_bo);
    uint32_t size = brw->vs.prog_data->base.nr_pull_params * 4;
-   brw->vs.const_bo = drm_intel_bo_alloc(intel->bufmgr, "vp_const_buffer",
+   brw->vs.const_bo = drm_intel_bo_alloc(brw->bufmgr, "vp_const_buffer",
 					 size, 64);
 
    drm_intel_gem_bo_map_gtt(brw->vs.const_bo);
@@ -91,8 +90,8 @@ brw_upload_vs_pull_constants(struct brw_context *brw)
    drm_intel_gem_bo_unmap_gtt(brw->vs.const_bo);
 
    const int surf = SURF_INDEX_VERT_CONST_BUFFER;
-   intel->vtbl.create_constant_surface(brw, brw->vs.const_bo, 0, size,
-				       &brw->vs.surf_offset[surf], false);
+   brw->vtbl.create_constant_surface(brw, brw->vs.const_bo, 0, size,
+                                     &brw->vs.surf_offset[surf], false);
 
    brw->state.dirty.brw |= BRW_NEW_VS_CONSTBUF;
 }
@@ -109,7 +108,7 @@ const struct brw_tracked_state brw_vs_pull_constants = {
 static void
 brw_upload_vs_ubo_surfaces(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->intel.ctx;
+   struct gl_context *ctx = &brw->ctx;
    /* _NEW_PROGRAM */
    struct gl_shader_program *prog = ctx->Shader.CurrentVertexProgram;
 

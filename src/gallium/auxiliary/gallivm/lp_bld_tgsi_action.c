@@ -396,7 +396,7 @@ frc_emit(
                                        TGSI_OPCODE_SUB, emit_data->args[0], tmp);
 }
 
-/* TGSI_OPCODE_KIL */
+/* TGSI_OPCODE_KILL_IF */
 
 static void
 kil_fetch_args(
@@ -419,7 +419,7 @@ kil_fetch_args(
    emit_data->dst_type = LLVMVoidTypeInContext(bld_base->base.gallivm->context);
 }
 
-/* TGSI_OPCODE_KILP */
+/* TGSI_OPCODE_KILL */
 
 static void
 kilp_fetch_args(
@@ -633,8 +633,6 @@ rsq_emit(
    struct lp_build_tgsi_context * bld_base,
    struct lp_build_emit_data * emit_data)
 {
-   emit_data->args[0] = lp_build_emit_llvm_unary(bld_base, TGSI_OPCODE_ABS,
-                                               emit_data->args[0]);
    if (bld_base->rsq_action.emit) {
       bld_base->rsq_action.emit(&bld_base->rsq_action, bld_base, emit_data);
    } else {
@@ -871,8 +869,8 @@ lp_set_default_actions(struct lp_build_tgsi_context * bld_base)
    bld_base->op_actions[TGSI_OPCODE_EX2].fetch_args = scalar_unary_fetch_args;
    bld_base->op_actions[TGSI_OPCODE_IF].fetch_args = scalar_unary_fetch_args;
    bld_base->op_actions[TGSI_OPCODE_UIF].fetch_args = scalar_unary_fetch_args;
-   bld_base->op_actions[TGSI_OPCODE_KIL].fetch_args = kil_fetch_args;
-   bld_base->op_actions[TGSI_OPCODE_KILP].fetch_args = kilp_fetch_args;
+   bld_base->op_actions[TGSI_OPCODE_KILL_IF].fetch_args = kil_fetch_args;
+   bld_base->op_actions[TGSI_OPCODE_KILL].fetch_args = kilp_fetch_args;
    bld_base->op_actions[TGSI_OPCODE_RCP].fetch_args = scalar_unary_fetch_args;
    bld_base->op_actions[TGSI_OPCODE_SIN].fetch_args = scalar_unary_fetch_args;
    bld_base->op_actions[TGSI_OPCODE_LG2].fetch_args = scalar_unary_fetch_args;
@@ -1161,14 +1159,9 @@ iset_emit_cpu(
    struct lp_build_emit_data * emit_data,
    unsigned pipe_func)
 {
-   LLVMValueRef nz = lp_build_const_vec(bld_base->base.gallivm,
-					bld_base->int_bld.type, ~0U);
    LLVMValueRef cond = lp_build_cmp(&bld_base->int_bld, pipe_func,
                                     emit_data->args[0], emit_data->args[1]);
-   emit_data->output[emit_data->chan] = lp_build_select(&bld_base->int_bld,
-                                          cond,
-                                          nz,
-                                          bld_base->int_bld.zero);
+   emit_data->output[emit_data->chan] = cond;
 }
 
 /* TGSI_OPCODE_IMAX (CPU Only) */
@@ -1243,8 +1236,8 @@ lg2_emit_cpu(
    struct lp_build_tgsi_context * bld_base,
    struct lp_build_emit_data * emit_data)
 {
-   emit_data->output[emit_data->chan] = lp_build_log2(&bld_base->base,
-                                                        emit_data->args[0]);
+   emit_data->output[emit_data->chan] = lp_build_log2_safe(&bld_base->base,
+                                                           emit_data->args[0]);
 }
 
 /* TGSI_OPCODE_LOG (CPU Only) */
@@ -1260,7 +1253,7 @@ log_emit_cpu(
    LLVMValueRef src0 = emit_data->args[0];
 
    lp_build_log2_approx(&bld_base->base, src0,
-                        &p_exp, &p_floor_log2, &p_log2);
+                        &p_exp, &p_floor_log2, &p_log2, FALSE);
 
    emit_data->output[TGSI_CHAN_X] = p_floor_log2;
 
@@ -1281,8 +1274,10 @@ max_emit_cpu(
    struct lp_build_tgsi_context * bld_base,
    struct lp_build_emit_data * emit_data)
 {
-   emit_data->output[emit_data->chan] = lp_build_max(&bld_base->base,
-                                   emit_data->args[0], emit_data->args[1]);
+   emit_data->output[emit_data->chan] =
+      lp_build_max_ext(&bld_base->base,
+                       emit_data->args[0], emit_data->args[1],
+                       GALLIVM_NAN_RETURN_OTHER);
 }
 
 /* TGSI_OPCODE_MIN (CPU Only) */
@@ -1292,8 +1287,10 @@ min_emit_cpu(
    struct lp_build_tgsi_context * bld_base,
    struct lp_build_emit_data * emit_data)
 {
-   emit_data->output[emit_data->chan] = lp_build_min(&bld_base->base,
-                                   emit_data->args[0], emit_data->args[1]);
+   emit_data->output[emit_data->chan] =
+      lp_build_min_ext(&bld_base->base,
+                       emit_data->args[0], emit_data->args[1],
+                       GALLIVM_NAN_RETURN_OTHER);
 }
 
 /* TGSI_OPCODE_MOD (CPU Only) */
@@ -1354,9 +1351,6 @@ rcp_emit_cpu(
 }
 
 /* Reciprical squareroot (CPU Only) */
-
-/* This is not the same as TGSI_OPCODE_RSQ, which requres the argument to be
- * greater than or equal to 0 */
 static void
 recip_sqrt_emit_cpu(
    const struct lp_build_tgsi_action * action,
@@ -1620,14 +1614,9 @@ uset_emit_cpu(
    struct lp_build_emit_data * emit_data,
    unsigned pipe_func)
 {
-   LLVMValueRef nz = lp_build_const_vec(bld_base->base.gallivm,
-					bld_base->uint_bld.type, ~0U);
    LLVMValueRef cond = lp_build_cmp(&bld_base->uint_bld, pipe_func,
                                     emit_data->args[0], emit_data->args[1]);
-   emit_data->output[emit_data->chan] = lp_build_select(&bld_base->uint_bld,
-                                          cond,
-					  nz,
-                                          bld_base->uint_bld.zero);
+   emit_data->output[emit_data->chan] = cond;
 }
 
 

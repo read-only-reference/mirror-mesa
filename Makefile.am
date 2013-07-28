@@ -26,12 +26,6 @@ ACLOCAL_AMFLAGS = -I m4
 doxygen:
 	cd doxygen && $(MAKE)
 
-check-local:
-	$(MAKE) -C src/mapi/glapi/tests check
-	$(MAKE) -C src/mapi/shared-glapi/tests check
-	$(MAKE) -C src/mesa/main/tests check
-	$(MAKE) -C src/glx/tests check
-
 .PHONY: doxygen
 
 # Rules for making release tarballs
@@ -42,6 +36,7 @@ PACKAGE_NAME = MesaLib-$(PACKAGE_VERSION)
 EXTRA_FILES = \
 	aclocal.m4					\
 	configure					\
+	VERSION					\
 	bin/ar-lib					\
 	bin/compile					\
 	bin/config.sub					\

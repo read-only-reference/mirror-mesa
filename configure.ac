@@ -6,7 +6,8 @@ dnl Tell the user about autoconf.html in the --help output
 m4_divert_once([HELP_END], [
 See docs/autoconf.html for more details on the options for Mesa.])
 
-AC_INIT([Mesa], [9.2.0-devel],
+m4_define(MESA_VERSION, m4_normalize(m4_include(VERSION)))
+AC_INIT([Mesa], [MESA_VERSION],
     [https://bugs.freedesktop.org/enter_bug.cgi?product=Mesa])
 AC_CONFIG_AUX_DIR([bin])
 AC_CONFIG_MACRO_DIR([m4])
@@ -31,7 +32,7 @@ AC_SUBST([OSMESA_VERSION])
 
 dnl Versions for external dependencies
 LIBDRM_REQUIRED=2.4.24
-LIBDRM_RADEON_REQUIRED=2.4.45
+LIBDRM_RADEON_REQUIRED=2.4.46
 LIBDRM_INTEL_REQUIRED=2.4.38
 LIBDRM_NVVIEUX_REQUIRED=2.4.33
 LIBDRM_NOUVEAU_REQUIRED="2.4.33 libdrm >= 2.4.41"
@@ -100,6 +101,7 @@ AC_MSG_RESULT([$acv_mesa_CLANG])
 
 dnl If we're using GCC, make sure that it is at least version 3.3.0.  Older
 dnl versions are explictly not supported.
+GEN_ASM_OFFSETS=no
 if test "x$GCC" = xyes -a "x$acv_mesa_CLANG" = xno; then
     AC_MSG_CHECKING([whether gcc version is sufficient])
     major=0
@@ -117,7 +119,12 @@ if test "x$GCC" = xyes -a "x$acv_mesa_CLANG" = xno; then
     else
         AC_MSG_RESULT([yes])
     fi
+
+    if test "x$cross_compiling" = xyes; then
+        GEN_ASM_OFFSETS=yes
+    fi
 fi
+AM_CONDITIONAL([GEN_ASM_OFFSETS], test "x$GEN_ASM_OFFSETS" = xyes)
 
 dnl Make sure the pkg-config macros are defined
 m4_ifndef([PKG_PROG_PKG_CONFIG],
@@ -438,7 +445,7 @@ test "x$enable_asm" = xno && AC_MSG_RESULT([no])
 # disable if cross compiling on x86/x86_64 since we must run gen_matypes
 if test "x$enable_asm" = xyes && test "x$cross_compiling" = xyes; then
     case "$host_cpu" in
-    i?86 | x86_64)
+    i?86 | x86_64 | amd64)
         enable_asm=no
         AC_MSG_RESULT([no, cross compiling])
         ;;
@@ -449,7 +456,7 @@ if test "x$enable_asm" = xyes; then
     case "$host_cpu" in
     i?86)
         case "$host_os" in
-        linux* | *freebsd* | dragonfly* | *netbsd*)
+        linux* | *freebsd* | dragonfly* | *netbsd* | openbsd*)
             test "x$enable_64bit" = xyes && asm_arch=x86_64 || asm_arch=x86
             ;;
         gnu*)
@@ -457,9 +464,9 @@ if test "x$enable_asm" = xyes; then
             ;;
         esac
         ;;
-    x86_64)
+    x86_64|amd64)
         case "$host_os" in
-        linux* | *freebsd* | dragonfly* | *netbsd*)
+        linux* | *freebsd* | dragonfly* | *netbsd* | openbsd*)
             test "x$enable_32bit" = xyes && asm_arch=x86 || asm_arch=x86_64
             ;;
         esac
@@ -478,7 +485,7 @@ if test "x$enable_asm" = xyes; then
         DEFINES="$DEFINES -DUSE_X86_ASM -DUSE_MMX_ASM -DUSE_3DNOW_ASM -DUSE_SSE_ASM"
         AC_MSG_RESULT([yes, x86])
         ;;
-    x86_64)
+    x86_64|amd64)
         DEFINES="$DEFINES -DUSE_X86_64_ASM"
         AC_MSG_RESULT([yes, x86_64])
         ;;
@@ -612,19 +619,19 @@ AC_ARG_ENABLE([opencl],
           @<:@default=no@:>@])],
    [],
    [enable_opencl=no])
-AC_ARG_ENABLE([xlib_glx],
+AC_ARG_ENABLE([xlib-glx],
     [AS_HELP_STRING([--enable-xlib-glx],
         [make GLX library Xlib-based instead of DRI-based @<:@default=disabled@:>@])],
     [enable_xlib_glx="$enableval"],
     [enable_xlib_glx=no])
-AC_ARG_ENABLE([gallium_egl],
+AC_ARG_ENABLE([gallium-egl],
     [AS_HELP_STRING([--enable-gallium-egl],
         [enable optional EGL state tracker (not required
          for EGL support in Gallium with OpenGL and OpenGL ES)
          @<:@default=disable@:>@])],
     [enable_gallium_egl="$enableval"],
     [enable_gallium_egl=no])
-AC_ARG_ENABLE([gallium_gbm],
+AC_ARG_ENABLE([gallium-gbm],
     [AS_HELP_STRING([--enable-gallium-gbm],
         [enable optional gbm state tracker (not required for
          gbm support in Gallium)
@@ -638,7 +645,7 @@ AC_ARG_ENABLE([r600-llvm-compiler],
     [enable_r600_llvm="$enableval"],
     [enable_r600_llvm=no])
 
-AC_ARG_ENABLE([gallium_tests],
+AC_ARG_ENABLE([gallium-tests],
     [AS_HELP_STRING([--enable-gallium-tests],
         [Enable optional Gallium tests) @<:@default=disable@:>@])],
     [enable_gallium_tests="$enableval"],
@@ -966,7 +973,7 @@ if test "x$enable_dri" = xyes; then
         DEFINES="$DEFINES -DHAVE_ALIAS"
 
         case "$host_cpu" in
-        x86_64)
+        x86_64|amd64)
             if test "x$DRI_DIRS" = "xyes"; then
                 DRI_DIRS="i915 i965 nouveau r200 radeon swrast"
             fi
@@ -985,7 +992,7 @@ if test "x$enable_dri" = xyes; then
             ;;
         esac
         ;;
-    freebsd* | dragonfly* | *netbsd*)
+    freebsd* | dragonfly* | *netbsd* | openbsd*)
         DEFINES="$DEFINES -DHAVE_PTHREAD -DUSE_EXTERNAL_DXTN_LIB=1"
         DEFINES="$DEFINES -DHAVE_ALIAS"
 
@@ -1417,8 +1424,6 @@ AC_ARG_WITH([egl-platforms],
 	with_egl_platforms=""
     fi])
 
-EGL_PLATFORMS=""
-
 if test "x$with_egl_platforms" != "x" -a "x$enable_egl" != xyes; then
     AC_MSG_ERROR([cannot build egl state tracker without EGL library])
 fi
@@ -1472,8 +1477,6 @@ else
     EGL_NATIVE_PLATFORM="_EGL_INVALID_PLATFORM"
 fi
 
-EGL_PLATFORMS="$egl_platforms"
-
 if echo "$egl_platforms" | grep 'x11' >/dev/null 2>&1; then
     NEED_WINSYS_XLIB=yes
 fi
@@ -1487,7 +1490,6 @@ AM_CONDITIONAL(HAVE_EGL_DRIVER_DRI2, test "x$HAVE_EGL_DRIVER_DRI2" != "x")
 AM_CONDITIONAL(HAVE_EGL_DRIVER_GLX, test "x$HAVE_EGL_DRIVER_GLX" != "x")
 
 AC_SUBST([EGL_NATIVE_PLATFORM])
-AC_SUBST([EGL_PLATFORMS])
 AC_SUBST([EGL_CFLAGS])
 
 # If we don't have the X11 platform, set this define so we don't try to include
@@ -1573,7 +1575,7 @@ if test "x$with_gallium_drivers" = x; then
 fi
 if test "x$enable_gallium_llvm" = xauto; then
     case "$host_cpu" in
-    i*86|x86_64) enable_gallium_llvm=yes;;
+    i*86|x86_64|amd64) enable_gallium_llvm=yes;;
     esac
 fi
 if test "x$enable_gallium_llvm" = xyes; then
@@ -1584,42 +1586,53 @@ if test "x$enable_gallium_llvm" = xyes; then
     fi
 
     if test "x$LLVM_CONFIG" != xno; then
-	LLVM_VERSION=`$LLVM_CONFIG --version | sed 's/svn.*//g'`
-	LLVM_VERSION_INT=`echo $LLVM_VERSION | sed -e 's/\([[0-9]]\)\.\([[0-9]]\)/\10\2/g'`
+        LLVM_VERSION=`$LLVM_CONFIG --version | sed 's/svn.*//g'`
+        LLVM_LDFLAGS=`$LLVM_CONFIG --ldflags`
+        LLVM_BINDIR=`$LLVM_CONFIG --bindir`
+        LLVM_CPPFLAGS=`strip_unwanted_llvm_flags "$LLVM_CONFIG --cppflags"`
+        LLVM_CFLAGS=$LLVM_CPPFLAGS   # CPPFLAGS seem to be sufficient
+        LLVM_CXXFLAGS=`strip_unwanted_llvm_flags "$LLVM_CONFIG --cxxflags"`
+        LLVM_INCLUDEDIR=`$LLVM_CONFIG --includedir`
+        LLVM_LIBDIR=`$LLVM_CONFIG --libdir`
+
+        AC_COMPUTE_INT([LLVM_VERSION_MAJOR], [LLVM_VERSION_MAJOR],
+            [#include "${LLVM_INCLUDEDIR}/llvm/Config/llvm-config.h"])
+        AC_COMPUTE_INT([LLVM_VERSION_MINOR], [LLVM_VERSION_MINOR],
+            [#include "${LLVM_INCLUDEDIR}/llvm/Config/llvm-config.h"])
+
+        if test "x${LLVM_VERSION_MAJOR}" != x; then
+            LLVM_VERSION_INT="${LLVM_VERSION_MAJOR}0${LLVM_VERSION_MINOR}"
+        else
+            LLVM_VERSION_INT=`echo $LLVM_VERSION | sed -e 's/\([[0-9]]\)\.\([[0-9]]\)/\10\2/g'`
+        fi
+
         LLVM_COMPONENTS="engine bitwriter"
-        if $LLVM_CONFIG --components | grep -q '\<mcjit\>'; then
+        if $LLVM_CONFIG --components | grep -qw 'mcjit'; then
             LLVM_COMPONENTS="${LLVM_COMPONENTS} mcjit"
         fi
 
         if test "x$enable_opencl" = xyes; then
             LLVM_COMPONENTS="${LLVM_COMPONENTS} ipo linker instrumentation"
             # LLVM 3.3 >= 177971 requires IRReader
-            if $LLVM_CONFIG --components | grep -q '\<irreader\>'; then
+            if $LLVM_CONFIG --components | grep -qw 'irreader'; then
                 LLVM_COMPONENTS="${LLVM_COMPONENTS} irreader"
             fi
         fi
-	LLVM_LDFLAGS=`$LLVM_CONFIG --ldflags`
-	LLVM_BINDIR=`$LLVM_CONFIG --bindir`
-	LLVM_CPPFLAGS=`strip_unwanted_llvm_flags "$LLVM_CONFIG --cppflags"`
-	LLVM_CFLAGS=$LLVM_CPPFLAGS   # CPPFLAGS seem to be sufficient
-	LLVM_CXXFLAGS=`strip_unwanted_llvm_flags "$LLVM_CONFIG --cxxflags"`
-	LLVM_INCLUDEDIR=`$LLVM_CONFIG --includedir`
-	LLVM_LIBDIR=`$LLVM_CONFIG --libdir`
-	DEFINES="${DEFINES} -DHAVE_LLVM=0x0$LLVM_VERSION_INT"
-	MESA_LLVM=1
+        DEFINES="${DEFINES} -DHAVE_LLVM=0x0$LLVM_VERSION_INT"
+        MESA_LLVM=1
 
-	dnl Check for Clang interanl headers
+        dnl Check for Clang internal headers
         if test "x$enable_opencl" = xyes; then
             if test "x$CLANG_LIBDIR" = x; then
                 CLANG_LIBDIR=${LLVM_LIBDIR}
             fi
             CLANG_RESOURCE_DIR=$CLANG_LIBDIR/clang/${LLVM_VERSION}
-            AC_CHECK_FILE("$CLANG_RESOURCE_DIR/include/stddef.h",,
-                AC_MSG_ERROR([Could not find clang internal header stddef.h in $CLANG_RESOURCE_DIR Use --with-clang-libdir to specify the correct path to the clang libraries.]))
+            AS_IF([test ! -f "$CLANG_RESOURCE_DIR/include/stddef.h"],
+                [AC_MSG_ERROR([Could not find clang internal header stddef.h in $CLANG_RESOURCE_DIR Use --with-clang-libdir to specify the correct path to the clang libraries.])])
         fi
     else
-	MESA_LLVM=0
-	LLVM_VERSION_INT=0
+        MESA_LLVM=0
+        LLVM_VERSION_INT=0
     fi
 else
     MESA_LLVM=0
@@ -1694,7 +1707,7 @@ gallium_check_st() {
 gallium_require_llvm() {
     if test "x$MESA_LLVM" = x0; then
         case "$host_cpu" in
-        i*86|x86_64) AC_MSG_ERROR([LLVM is required to build $1 on x86 and x86_64]);;
+        i*86|x86_64|amd64) AC_MSG_ERROR([LLVM is required to build $1 on x86 and x86_64]);;
         esac
     fi
 }
@@ -1716,7 +1729,7 @@ radeon_llvm_check() {
     if test "$LLVM_VERSION_INT" -lt "${LLVM_REQUIRED_VERSION_MAJOR}0${LLVM_REQUIRED_VERSION_MINOR}"; then
         AC_MSG_ERROR([LLVM $LLVM_REQUIRED_VERSION_MAJOR.$LLVM_REQUIRED_VERSION_MINOR or newer is required for r600g and radeonsi.])
     fi
-    if test true && $LLVM_CONFIG --targets-built | grep -qv '\<R600\>' ; then
+    if test true && $LLVM_CONFIG --targets-built | grep -qvw 'R600' ; then
         AC_MSG_ERROR([LLVM R600 Target not enabled.  You can enable it when building the LLVM
                       sources with the --enable-experimental-targets=R600
                       configure flag])
@@ -1853,7 +1866,7 @@ if test "x$MESA_LLVM" != x0; then
     if test "x$with_llvm_shared_libs" = xyes; then
         dnl We can't use $LLVM_VERSION because it has 'svn' stripped out,
         LLVM_SO_NAME=LLVM-`$LLVM_CONFIG --version`
-        AC_CHECK_FILE("$LLVM_LIBDIR/lib$LLVM_SO_NAME.so", llvm_have_one_so=yes,)
+        AS_IF([test -f "$LLVM_LIBDIR/lib$LLVM_SO_NAME.so"], [llvm_have_one_so=yes])
 
         if test "x$llvm_have_one_so" = xyes; then
             dnl LLVM was built using auto*, so there is only one shared object.
@@ -1861,8 +1874,8 @@ if test "x$MESA_LLVM" != x0; then
         else
             dnl If LLVM was built with CMake, there will be one shared object per
             dnl component.
-            AC_CHECK_FILE("$LLVM_LIBDIR/libLLVMTarget.so",,
-                    AC_MSG_ERROR([Could not find llvm shared libraries:
+            AS_IF([test ! -f "$LLVM_LIBDIR/libLLVMTarget.so"],
+                    [AC_MSG_ERROR([Could not find llvm shared libraries:
 	Please make sure you have built llvm with the --enable-shared option
 	and that your llvm libraries are installed in $LLVM_LIBDIR
 	If you have installed your llvm libraries to a different directory you
@@ -1873,7 +1886,7 @@ if test "x$MESA_LLVM" != x0; then
 		--enable-opencl
 	If you do not want to build with llvm shared libraries and instead want to
 	use llvm static libraries then remove these options from your configure
-	invocation and reconfigure.]))
+	invocation and reconfigure.])])
 
            dnl We don't need to update LLVM_LIBS in this case because the LLVM
            dnl install uses a shared object for each compoenent and we have
@@ -1961,7 +1974,7 @@ AC_SUBST([VDPAU_MINOR], 0)
 AC_SUBST([XVMC_MAJOR], 1)
 AC_SUBST([XVMC_MINOR], 0)
 
-AC_SUBST([XA_MAJOR], 1)
+AC_SUBST([XA_MAJOR], 2)
 AC_SUBST([XA_MINOR], 0)
 AC_SUBST([XA_TINY], 0)
 AC_SUBST([XA_VERSION], "$XA_MAJOR.$XA_MINOR.$XA_TINY")
@@ -2167,7 +2180,7 @@ dnl EGL
 echo ""
 echo "        EGL:             $enable_egl"
 if test "$enable_egl" = yes; then
-    echo "        EGL platforms:   $EGL_PLATFORMS"
+    echo "        EGL platforms:   $egl_platforms"
 
     egl_drivers=""
     if test "x$HAVE_EGL_DRIVER_GLX" != "x"; then

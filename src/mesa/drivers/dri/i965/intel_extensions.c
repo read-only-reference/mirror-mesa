@@ -27,9 +27,8 @@
 
 #include "main/version.h"
 
+#include "brw_context.h"
 #include "intel_chipset.h"
-#include "intel_context.h"
-#include "intel_extensions.h"
 #include "intel_reg.h"
 #include "utils.h"
 
@@ -40,9 +39,9 @@
 void
 intelInitExtensions(struct gl_context *ctx)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
 
-   assert(intel->gen >= 4);
+   assert(brw->gen >= 4);
 
    ctx->Extensions.ARB_depth_buffer_float = true;
    ctx->Extensions.ARB_depth_clamp = true;
@@ -124,22 +123,23 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.OES_draw_texture = true;
    ctx->Extensions.OES_standard_derivatives = true;
 
-   if (intel->gen >= 6)
+   if (brw->gen >= 6)
       ctx->Const.GLSLVersion = 140;
    else
       ctx->Const.GLSLVersion = 120;
    _mesa_override_glsl_version(ctx);
 
-   if (intel->gen >= 6) {
+   if (brw->gen >= 6) {
       uint64_t dummy;
 
       ctx->Extensions.EXT_framebuffer_multisample = true;
       ctx->Extensions.EXT_transform_feedback = true;
       ctx->Extensions.EXT_framebuffer_multisample_blit_scaled = true;
-      ctx->Extensions.ARB_blend_func_extended = !driQueryOptionb(&intel->optionCache, "disable_blend_func_extended");
+      ctx->Extensions.ARB_blend_func_extended = !driQueryOptionb(&brw->optionCache, "disable_blend_func_extended");
       ctx->Extensions.ARB_draw_buffers_blend = true;
       ctx->Extensions.ARB_ES3_compatibility = true;
       ctx->Extensions.ARB_uniform_buffer_object = true;
+      ctx->Extensions.ARB_shading_language_420pack = true;
       ctx->Extensions.ARB_texture_buffer_object = true;
       ctx->Extensions.ARB_texture_buffer_object_rgb32 = true;
       ctx->Extensions.ARB_texture_cube_map_array = true;
@@ -148,11 +148,11 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_texture_multisample = true;
 
       /* Test if the kernel has the ioctl. */
-      if (drm_intel_reg_read(intel->bufmgr, TIMESTAMP, &dummy) == 0)
+      if (drm_intel_reg_read(brw->bufmgr, TIMESTAMP, &dummy) == 0)
          ctx->Extensions.ARB_timer_query = true;
    }
 
-   if (intel->gen >= 5) {
+   if (brw->gen >= 5) {
       ctx->Extensions.ARB_texture_query_lod = true;
       ctx->Extensions.EXT_timer_query = true;
    }
@@ -162,8 +162,7 @@ intelInitExtensions(struct gl_context *ctx)
    if (ctx->API != API_OPENGL_CORE)
       ctx->Extensions.ARB_color_buffer_float = true;
 
-   if (intel->ctx.Mesa_DXTn
-       || driQueryOptionb(&intel->optionCache, "force_s3tc_enable"))
+   if (ctx->Mesa_DXTn || driQueryOptionb(&brw->optionCache, "force_s3tc_enable"))
       ctx->Extensions.EXT_texture_compression_s3tc = true;
 
    ctx->Extensions.ANGLE_texture_compression_dxt = true;

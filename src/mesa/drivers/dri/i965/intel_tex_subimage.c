@@ -35,8 +35,8 @@
 #include "main/texcompress.h"
 #include "main/enums.h"
 
+#include "brw_context.h"
 #include "intel_batchbuffer.h"
-#include "intel_context.h"
 #include "intel_tex.h"
 #include "intel_mipmap_tree.h"
 #include "intel_blit.h"
@@ -51,7 +51,7 @@ intel_blit_texsubimage(struct gl_context * ctx,
 		       GLenum format, GLenum type, const void *pixels,
 		       const struct gl_pixelstore_attrib *packing)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct intel_texture_image *intelImage = intel_texture_image(texImage);
 
    /* Try to do a blit upload of the subimage if the texture is
@@ -70,7 +70,7 @@ intel_blit_texsubimage(struct gl_context * ctx,
    /* On gen6, it's probably not worth swapping to the blit ring to do
     * this because of all the overhead involved.
     */
-   if (intel->gen >= 6)
+   if (brw->gen >= 6)
       return false;
 
    if (!drm_intel_bo_busy(intelImage->mt->region->bo))
@@ -88,14 +88,14 @@ intel_blit_texsubimage(struct gl_context * ctx,
       return false;
 
    struct intel_mipmap_tree *temp_mt =
-      intel_miptree_create(intel, GL_TEXTURE_2D, texImage->TexFormat,
+      intel_miptree_create(brw, GL_TEXTURE_2D, texImage->TexFormat,
                            0, 0,
                            width, height, 1,
                            false, 0, INTEL_MIPTREE_TILING_NONE);
    if (!temp_mt)
       goto err;
 
-   GLubyte *dst = intel_miptree_map_raw(intel, temp_mt);
+   GLubyte *dst = intel_miptree_map_raw(brw, temp_mt);
    if (!dst)
       goto err;
 
@@ -108,11 +108,11 @@ intel_blit_texsubimage(struct gl_context * ctx,
       _mesa_error(ctx, GL_OUT_OF_MEMORY, "intelTexSubImage");
    }
 
-   intel_miptree_unmap_raw(intel, temp_mt);
+   intel_miptree_unmap_raw(brw, temp_mt);
 
    bool ret;
 
-   ret = intel_miptree_blit(intel,
+   ret = intel_miptree_blit(brw,
                             temp_mt, 0, 0,
                             0, 0, false,
                             intelImage->mt, texImage->Level, texImage->Face,
@@ -168,7 +168,7 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
                                const struct gl_pixelstore_attrib *packing,
                                bool for_glTexImage)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct intel_texture_image *image = intel_texture_image(texImage);
 
    /* The miptree's buffer. */
@@ -180,7 +180,7 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
     * a 2D BGRA texture. It could be generalized to support more types by
     * varying the arithmetic loop below.
     */
-   if (!intel->has_llc ||
+   if (!brw->has_llc ||
        format != GL_BGRA ||
        type != GL_UNSIGNED_BYTE ||
        texImage->TexFormat != MESA_FORMAT_ARGB8888 ||
@@ -209,16 +209,16 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
    /* Since we are going to write raw data to the miptree, we need to resolve
     * any pending fast color clears before we start.
     */
-   intel_miptree_resolve_color(intel, image->mt);
+   intel_miptree_resolve_color(brw, image->mt);
 
    bo = image->mt->region->bo;
 
-   if (drm_intel_bo_references(intel->batch.bo, bo)) {
+   if (drm_intel_bo_references(brw->batch.bo, bo)) {
       perf_debug("Flushing before mapping a referenced bo.\n");
-      intel_batchbuffer_flush(intel);
+      intel_batchbuffer_flush(brw);
    }
 
-   if (unlikely(intel->perf_debug)) {
+   if (unlikely(brw->perf_debug)) {
       if (drm_intel_bo_busy(bo)) {
          perf_debug("Mapping a busy BO, causing a stall on the GPU.\n");
       }
@@ -266,7 +266,7 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
                                        + (x_pixels % tile_width_pixels) * cpp;
 
          intptr_t offset_bytes = y_offset_bytes + x_offset_bytes;
-         if (intel->has_swizzling) {
+         if (brw->has_swizzling) {
 #if 0
             /* Clear, unoptimized version. */
             bool bit6 = (offset_bytes >> 6) & 1;

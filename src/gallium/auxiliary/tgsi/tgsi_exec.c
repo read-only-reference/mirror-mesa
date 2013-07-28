@@ -339,20 +339,20 @@ micro_rsq(union tgsi_exec_channel *dst,
    assert(src->f[2] != 0.0f);
    assert(src->f[3] != 0.0f);
 #endif
-   dst->f[0] = 1.0f / sqrtf(fabsf(src->f[0]));
-   dst->f[1] = 1.0f / sqrtf(fabsf(src->f[1]));
-   dst->f[2] = 1.0f / sqrtf(fabsf(src->f[2]));
-   dst->f[3] = 1.0f / sqrtf(fabsf(src->f[3]));
+   dst->f[0] = 1.0f / sqrtf(src->f[0]);
+   dst->f[1] = 1.0f / sqrtf(src->f[1]);
+   dst->f[2] = 1.0f / sqrtf(src->f[2]);
+   dst->f[3] = 1.0f / sqrtf(src->f[3]);
 }
 
 static void
 micro_sqrt(union tgsi_exec_channel *dst,
            const union tgsi_exec_channel *src)
 {
-   dst->f[0] = sqrtf(fabsf(src->f[0]));
-   dst->f[1] = sqrtf(fabsf(src->f[1]));
-   dst->f[2] = sqrtf(fabsf(src->f[2]));
-   dst->f[3] = sqrtf(fabsf(src->f[3]));
+   dst->f[0] = sqrtf(src->f[0]);
+   dst->f[1] = sqrtf(src->f[1]);
+   dst->f[2] = sqrtf(src->f[2]);
+   dst->f[3] = sqrtf(src->f[3]);
 }
 
 static void
@@ -1578,8 +1578,8 @@ store_dest(struct tgsi_exec_machine *mach,
  * Kill fragment if any of the four values is less than zero.
  */
 static void
-exec_kil(struct tgsi_exec_machine *mach,
-         const struct tgsi_full_instruction *inst)
+exec_kill_if(struct tgsi_exec_machine *mach,
+             const struct tgsi_full_instruction *inst)
 {
    uint uniquemask;
    uint chan_index;
@@ -1614,16 +1614,15 @@ exec_kil(struct tgsi_exec_machine *mach,
 }
 
 /**
- * Execute NVIDIA-style KIL which is predicated by a condition code.
- * Kill fragment if the condition code is TRUE.
+ * Unconditional fragment kill/discard.
  */
 static void
-exec_kilp(struct tgsi_exec_machine *mach,
+exec_kill(struct tgsi_exec_machine *mach,
           const struct tgsi_full_instruction *inst)
 {
    uint kilmask; /* bit 0 = pixel 0, bit 1 = pixel 1, etc */
 
-   /* "unconditional" kil */
+   /* kill fragment for all fragments currently executing */
    kilmask = mach->ExecMask;
    mach->Temps[TEMP_KILMASK_I].xyzw[TEMP_KILMASK_C].u[0] |= kilmask;
 }
@@ -2042,9 +2041,25 @@ exec_txf(struct tgsi_exec_machine *mach,
       r[3].f[j] = rgba[3][j];
    }
 
-   for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
-      if (inst->Dst[0].Register.WriteMask & (1 << chan)) {
-         store_dest(mach, &r[chan], &inst->Dst[0], inst, chan, TGSI_EXEC_DATA_FLOAT);
+   if (inst->Instruction.Opcode == TGSI_OPCODE_SAMPLE_I) {
+      unsigned char swizzles[4];
+      swizzles[0] = inst->Src[1].Register.SwizzleX;
+      swizzles[1] = inst->Src[1].Register.SwizzleY;
+      swizzles[2] = inst->Src[1].Register.SwizzleZ;
+      swizzles[3] = inst->Src[1].Register.SwizzleW;
+
+      for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
+         if (inst->Dst[0].Register.WriteMask & (1 << chan)) {
+            store_dest(mach, &r[swizzles[chan]],
+                       &inst->Dst[0], inst, chan, TGSI_EXEC_DATA_FLOAT);
+         }
+      }
+   }
+   else {
+      for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
+         if (inst->Dst[0].Register.WriteMask & (1 << chan)) {
+            store_dest(mach, &r[chan], &inst->Dst[0], inst, chan, TGSI_EXEC_DATA_FLOAT);
+         }
       }
    }
 }
@@ -2088,6 +2103,7 @@ exec_sample(struct tgsi_exec_machine *mach,
    const union tgsi_exec_channel *lod = &ZeroVec;
    enum tgsi_sampler_control control = tgsi_sampler_lod_none;
    uint chan;
+   unsigned char swizzles[4];
    int8_t offsets[3];
 
    /* always fetch all 3 offsets, overkill but keeps code simple */
@@ -2194,9 +2210,15 @@ exec_sample(struct tgsi_exec_machine *mach,
       assert(0);
    }
 
+   swizzles[0] = inst->Src[1].Register.SwizzleX;
+   swizzles[1] = inst->Src[1].Register.SwizzleY;
+   swizzles[2] = inst->Src[1].Register.SwizzleZ;
+   swizzles[3] = inst->Src[1].Register.SwizzleW;
+
    for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
       if (inst->Dst[0].Register.WriteMask & (1 << chan)) {
-         store_dest(mach, &r[chan], &inst->Dst[0], inst, chan, TGSI_EXEC_DATA_FLOAT);
+         store_dest(mach, &r[swizzles[chan]],
+                    &inst->Dst[0], inst, chan, TGSI_EXEC_DATA_FLOAT);
       }
    }
 }
@@ -2210,6 +2232,7 @@ exec_sample_d(struct tgsi_exec_machine *mach,
    union tgsi_exec_channel r[4];
    float derivs[3][2][TGSI_QUAD_SIZE];
    uint chan;
+   unsigned char swizzles[4];
    int8_t offsets[3];
 
    /* always fetch all 3 offsets, overkill but keeps code simple */
@@ -2269,9 +2292,15 @@ exec_sample_d(struct tgsi_exec_machine *mach,
       assert(0);
    }
 
+   swizzles[0] = inst->Src[1].Register.SwizzleX;
+   swizzles[1] = inst->Src[1].Register.SwizzleY;
+   swizzles[2] = inst->Src[1].Register.SwizzleZ;
+   swizzles[3] = inst->Src[1].Register.SwizzleW;
+
    for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
       if (inst->Dst[0].Register.WriteMask & (1 << chan)) {
-         store_dest(mach, &r[chan], &inst->Dst[0], inst, chan, TGSI_EXEC_DATA_FLOAT);
+         store_dest(mach, &r[swizzles[chan]],
+                    &inst->Dst[0], inst, chan, TGSI_EXEC_DATA_FLOAT);
       }
    }
 }
@@ -2521,7 +2550,7 @@ exec_scalar_binary(struct tgsi_exec_machine *mach,
    union tgsi_exec_channel dst;
 
    fetch_source(mach, &src[0], &inst->Src[0], TGSI_CHAN_X, src_datatype);
-   fetch_source(mach, &src[1], &inst->Src[1], TGSI_CHAN_Y, src_datatype);
+   fetch_source(mach, &src[1], &inst->Src[1], TGSI_CHAN_X, src_datatype);
    op(&dst, &src[0], &src[1]);
    for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
       if (inst->Dst[0].Register.WriteMask & (1 << chan)) {
@@ -3562,7 +3591,7 @@ exec_instruction(
       break;
 
    case TGSI_OPCODE_SQRT:
-      exec_vector_unary(mach, inst, micro_sqrt, TGSI_EXEC_DATA_FLOAT, TGSI_EXEC_DATA_FLOAT);
+      exec_scalar_unary(mach, inst, micro_sqrt, TGSI_EXEC_DATA_FLOAT, TGSI_EXEC_DATA_FLOAT);
       break;
 
    case TGSI_OPCODE_DP2A:
@@ -3625,12 +3654,12 @@ exec_instruction(
       exec_vector_unary(mach, inst, micro_ddy, TGSI_EXEC_DATA_FLOAT, TGSI_EXEC_DATA_FLOAT);
       break;
 
-   case TGSI_OPCODE_KILP:
-      exec_kilp (mach, inst);
+   case TGSI_OPCODE_KILL:
+      exec_kill (mach, inst);
       break;
 
-   case TGSI_OPCODE_KIL:
-      exec_kil (mach, inst);
+   case TGSI_OPCODE_KILL_IF:
+      exec_kill_if (mach, inst);
       break;
 
    case TGSI_OPCODE_PK2H:

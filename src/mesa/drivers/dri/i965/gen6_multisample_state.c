@@ -105,8 +105,6 @@ void
 gen6_emit_3dstate_multisample(struct brw_context *brw,
                               unsigned num_samples)
 {
-   struct intel_context *intel = &brw->intel;
-
    uint32_t number_of_multisamples = 0;
    uint32_t sample_positions_3210 = 0;
    uint32_t sample_positions_7654 = 0;
@@ -130,12 +128,12 @@ gen6_emit_3dstate_multisample(struct brw_context *brw,
       break;
    }
 
-   int len = intel->gen >= 7 ? 4 : 3;
+   int len = brw->gen >= 7 ? 4 : 3;
    BEGIN_BATCH(len);
    OUT_BATCH(_3DSTATE_MULTISAMPLE << 16 | (len - 2));
    OUT_BATCH(MS_PIXEL_LOCATION_CENTER | number_of_multisamples);
    OUT_BATCH(sample_positions_3210);
-   if (intel->gen >= 7)
+   if (brw->gen >= 7)
       OUT_BATCH(sample_positions_7654);
    ADVANCE_BATCH();
 }
@@ -149,8 +147,6 @@ gen6_emit_3dstate_sample_mask(struct brw_context *brw,
                               unsigned num_samples, float coverage,
                               bool coverage_invert, unsigned sample_mask)
 {
-   struct intel_context *intel = &brw->intel;
-
    BEGIN_BATCH(2);
    OUT_BATCH(_3DSTATE_SAMPLE_MASK << 16 | (2 - 2));
    if (num_samples > 1) {
@@ -168,8 +164,7 @@ gen6_emit_3dstate_sample_mask(struct brw_context *brw,
 
 static void upload_multisample_state(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    float coverage = 1.0;
    float coverage_invert = false;
    unsigned sample_mask = ~0u;
@@ -189,7 +184,7 @@ static void upload_multisample_state(struct brw_context *brw)
    }
 
    /* 3DSTATE_MULTISAMPLE is nonpipelined. */
-   intel_emit_post_sync_nonzero_flush(intel);
+   intel_emit_post_sync_nonzero_flush(brw);
 
    gen6_emit_3dstate_multisample(brw, num_samples);
    gen6_emit_3dstate_sample_mask(brw, num_samples, coverage,

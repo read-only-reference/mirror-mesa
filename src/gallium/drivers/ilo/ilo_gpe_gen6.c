@@ -1033,7 +1033,7 @@ gen6_emit_3DSTATE_INDEX_BUFFER(const struct ilo_dev_info *dev,
 {
    const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x0a);
    const uint8_t cmd_len = 3;
-   const struct ilo_buffer *buf = ilo_buffer(ib->resource);
+   struct ilo_buffer *buf = ilo_buffer(ib->hw_resource);
    uint32_t start_offset, end_offset;
    int format;
 
@@ -1042,7 +1042,7 @@ gen6_emit_3DSTATE_INDEX_BUFFER(const struct ilo_dev_info *dev,
    if (!buf)
       return;
 
-   format = gen6_translate_index_size(ib->state.index_size);
+   format = gen6_translate_index_size(ib->hw_index_size);
 
    /*
     * set start_offset to 0 here and adjust pipe_draw_info::start with
@@ -1052,7 +1052,7 @@ gen6_emit_3DSTATE_INDEX_BUFFER(const struct ilo_dev_info *dev,
    end_offset = buf->bo_size;
 
    /* end_offset must also be aligned and is inclusive */
-   end_offset -= (end_offset % ib->state.index_size);
+   end_offset -= (end_offset % ib->hw_index_size);
    end_offset--;
 
    ilo_cp_begin(cp, cmd_len);
@@ -3811,10 +3811,12 @@ ilo_gpe_set_scissor(const struct ilo_dev_info *dev,
          max_y = 0;
       }
 
-      scissor->payload[start_slot * 2 + 0] = min_y << 16 | min_x;
-      scissor->payload[start_slot * 2 + 1] = max_y << 16 | max_x;
-      start_slot++;
+      scissor->payload[(start_slot + i) * 2 + 0] = min_y << 16 | min_x;
+      scissor->payload[(start_slot + i) * 2 + 1] = max_y << 16 | max_x;
    }
+
+   if (!start_slot && num_states)
+      scissor->scissor0 = states[0];
 }
 
 void

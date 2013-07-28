@@ -1155,6 +1155,13 @@ _mesa_BindRenderbuffer(GLenum target, GLuint renderbuffer)
 }
 
 
+void GLAPIENTRY
+_mesa_BindRenderbufferEXT(GLenum target, GLuint renderbuffer)
+{
+    _mesa_BindRenderbuffer(target, renderbuffer);
+}
+
+
 /**
  * If the given renderbuffer is anywhere attached to the framebuffer, detach
  * the renderbuffer.
@@ -2025,6 +2032,13 @@ _mesa_BindFramebuffer(GLenum target, GLuint framebuffer)
    }
 }
 
+void GLAPIENTRY
+_mesa_BindFramebufferEXT(GLenum target, GLuint framebuffer)
+{
+    _mesa_BindFramebuffer(target, framebuffer);
+}
+
+
 
 void GLAPIENTRY
 _mesa_DeleteFramebuffers(GLsizei n, const GLuint *framebuffers)
@@ -2127,8 +2141,12 @@ _mesa_CheckFramebufferStatus(GLenum target)
    }
 
    if (_mesa_is_winsys_fbo(buffer)) {
-      /* The window system / default framebuffer is always complete */
-      return GL_FRAMEBUFFER_COMPLETE_EXT;
+      /* EGL_KHR_surfaceless_context allows the winsys FBO to be incomplete. */
+      if (buffer != &IncompleteFramebuffer) {
+         return GL_FRAMEBUFFER_COMPLETE_EXT;
+      } else {
+         return GL_FRAMEBUFFER_UNDEFINED;
+      }
    }
 
    /* No need to flush here */

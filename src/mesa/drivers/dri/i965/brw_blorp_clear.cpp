@@ -143,7 +143,7 @@ brw_blorp_const_color_program::~brw_blorp_const_color_program()
  * moment we only support floating point, unorm, and snorm buffers.
  */
 static bool
-is_color_fast_clear_compatible(struct intel_context *intel,
+is_color_fast_clear_compatible(struct brw_context *brw,
                                gl_format format,
                                const union gl_color_union *color)
 {
@@ -153,7 +153,7 @@ is_color_fast_clear_compatible(struct intel_context *intel,
    for (int i = 0; i < 4; i++) {
       if (color->f[i] != 0.0 && color->f[i] != 1.0) {
          perf_debug("Clear color unsupported by fast color clear.  "
-                    "Falling back to slow clear.");
+                    "Falling back to slow clear.\n");
          return false;
       }
    }
@@ -183,8 +183,7 @@ brw_blorp_clear_params::brw_blorp_clear_params(struct brw_context *brw,
                                                GLubyte *color_mask,
                                                bool partial_clear)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    struct intel_renderbuffer *irb = intel_renderbuffer(rb);
 
    dst.set(brw, irb->mt, irb->mt_level, irb->mt_layer);
@@ -238,7 +237,7 @@ brw_blorp_clear_params::brw_blorp_clear_params(struct brw_context *brw,
    /* If we can do this as a fast color clear, do so. */
    if (irb->mt->mcs_state != INTEL_MCS_STATE_NONE && !partial_clear &&
        wm_prog_key.use_simd16_replicated_data &&
-       is_color_fast_clear_compatible(intel, format, &ctx->Color.ClearColor)) {
+       is_color_fast_clear_compatible(brw, format, &ctx->Color.ClearColor)) {
       memset(push_consts, 0xff, 4*sizeof(float));
       fast_clear_op = GEN7_FAST_CLEAR_OP_FAST_CLEAR;
 
@@ -258,13 +257,28 @@ brw_blorp_clear_params::brw_blorp_clear_params(struct brw_context *brw,
        * with X alignment multiplied by 16 and Y alignment multiplied by 32.
        */
       unsigned x_align, y_align;
-      intel_get_non_msrt_mcs_alignment(intel, irb->mt, &x_align, &y_align);
+      intel_get_non_msrt_mcs_alignment(brw, irb->mt, &x_align, &y_align);
       x_align *= 16;
       y_align *= 32;
-      x0 = ROUND_DOWN_TO(x0, x_align);
-      y0 = ROUND_DOWN_TO(y0, y_align);
-      x1 = ALIGN(x1, x_align);
-      y1 = ALIGN(y1, y_align);
+
+      if (brw->is_haswell && brw->gt == 3) {
+         /* From BSpec: 3D-Media-GPGPU Engine > 3D Pipeline > Pixel > Pixel
+          * Backend > MCS Buffer for Render Target(s) [DevIVB+]:
+          * [DevHSW:GT3]: Clear rectangle must be aligned to two times the
+          * number of pixels in the table shown below...
+          * x_align, y_align values computed above are the relevant entries
+          * in the referred table.
+          */
+         x0 = ROUND_DOWN_TO(x0, 2 * x_align);
+         y0 = ROUND_DOWN_TO(y0, 2 * y_align);
+         x1 = ALIGN(x1, 2 * x_align);
+         y1 = ALIGN(y1, 2 * y_align);
+      } else {
+         x0 = ROUND_DOWN_TO(x0,  x_align);
+         y0 = ROUND_DOWN_TO(y0, y_align);
+         x1 = ALIGN(x1, x_align);
+         y1 = ALIGN(y1, y_align);
+      }
 
       /* From the Ivy Bridge PRM, Vol2 Part1 11.7 "MCS Buffer for Render
        * Target(s)", beneath the "Fast Color Clear" bullet (p327):
@@ -303,7 +317,7 @@ brw_blorp_rt_resolve_params::brw_blorp_rt_resolve_params(
     * X and Y alignment each divided by 2.
     */
    unsigned x_align, y_align;
-   intel_get_non_msrt_mcs_alignment(&brw->intel, mt, &x_align, &y_align);
+   intel_get_non_msrt_mcs_alignment(brw, mt, &x_align, &y_align);
    unsigned x_scaledown = x_align / 2;
    unsigned y_scaledown = y_align / 2;
    x0 = y0 = 0;
@@ -328,7 +342,7 @@ brw_blorp_const_color_params::get_wm_prog(struct brw_context *brw,
                                           brw_blorp_prog_data **prog_data)
    const
 {
-   uint32_t prog_offset;
+   uint32_t prog_offset = 0;
    if (!brw_search_cache(&brw->cache, BRW_BLORP_CONST_COLOR_PROG,
                          &this->wm_prog_key, sizeof(this->wm_prog_key),
                          &prog_offset, prog_data)) {
@@ -425,11 +439,10 @@ brw_blorp_const_color_program::compile(struct brw_context *brw,
 
 extern "C" {
 bool
-brw_blorp_clear_color(struct intel_context *intel, struct gl_framebuffer *fb,
+brw_blorp_clear_color(struct brw_context *brw, struct gl_framebuffer *fb,
                       bool partial_clear)
 {
-   struct gl_context *ctx = &intel->ctx;
-   struct brw_context *brw = brw_context(ctx);
+   struct gl_context *ctx = &brw->ctx;
 
    /* The constant color clear code doesn't work for multisampled surfaces, so
     * we need to support falling back to other clear mechanisms.
@@ -484,7 +497,7 @@ brw_blorp_clear_color(struct intel_context *intel, struct gl_framebuffer *fb,
           * it now.
           */
          if (!irb->mt->mcs_mt) {
-            if (!intel_miptree_alloc_non_msrt_mcs(intel, irb->mt)) {
+            if (!intel_miptree_alloc_non_msrt_mcs(brw, irb->mt)) {
                /* MCS allocation failed--probably this will only happen in
                 * out-of-memory conditions.  But in any case, try to recover
                 * by falling back to a non-blorp clear technique.
@@ -498,7 +511,7 @@ brw_blorp_clear_color(struct intel_context *intel, struct gl_framebuffer *fb,
       DBG("%s to mt %p level %d layer %d\n", __FUNCTION__,
           irb->mt, irb->mt_level, irb->mt_layer);
 
-      brw_blorp_exec(intel, &params);
+      brw_blorp_exec(brw, &params);
 
       if (is_fast_clear) {
          /* Now that the fast clear has occurred, put the buffer in
@@ -513,14 +526,12 @@ brw_blorp_clear_color(struct intel_context *intel, struct gl_framebuffer *fb,
 }
 
 void
-brw_blorp_resolve_color(struct intel_context *intel, struct intel_mipmap_tree *mt)
+brw_blorp_resolve_color(struct brw_context *brw, struct intel_mipmap_tree *mt)
 {
-   struct brw_context *brw = brw_context(&intel->ctx);
-
    DBG("%s to mt %p\n", __FUNCTION__, mt);
 
    brw_blorp_rt_resolve_params params(brw, mt);
-   brw_blorp_exec(intel, &params);
+   brw_blorp_exec(brw, &params);
    mt->mcs_state = INTEL_MCS_STATE_RESOLVED;
 }
 

@@ -35,8 +35,8 @@
 #include "main/readpix.h"
 #include "main/state.h"
 
+#include "brw_context.h"
 #include "intel_screen.h"
-#include "intel_context.h"
 #include "intel_blit.h"
 #include "intel_buffers.h"
 #include "intel_fbo.h"
@@ -75,7 +75,7 @@ do_blit_readpixels(struct gl_context * ctx,
                    GLenum format, GLenum type,
                    const struct gl_pixelstore_attrib *pack, GLvoid * pixels)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct intel_buffer_object *dst = intel_buffer_object(pack->BufferObj);
    GLuint dst_offset;
    drm_intel_bo *dst_buffer;
@@ -123,26 +123,26 @@ do_blit_readpixels(struct gl_context * ctx,
       return true;
    }
 
-   dirty = intel->front_buffer_dirty;
-   intel_prepare_render(intel);
-   intel->front_buffer_dirty = dirty;
+   dirty = brw->front_buffer_dirty;
+   intel_prepare_render(brw);
+   brw->front_buffer_dirty = dirty;
 
    all = (width * height * irb->mt->cpp == dst->Base.Size &&
 	  x == 0 && dst_offset == 0);
 
-   dst_buffer = intel_bufferobj_buffer(intel, dst,
+   dst_buffer = intel_bufferobj_buffer(brw, dst,
 				       all ? INTEL_WRITE_FULL :
 				       INTEL_WRITE_PART);
 
    struct intel_mipmap_tree *pbo_mt =
-      intel_miptree_create_for_bo(intel,
+      intel_miptree_create_for_bo(brw,
                                   dst_buffer,
                                   irb->mt->format,
                                   dst_offset,
                                   width, height,
                                   dst_stride, I915_TILING_NONE);
 
-   if (!intel_miptree_blit(intel,
+   if (!intel_miptree_blit(brw,
                            irb->mt, irb->mt_level, irb->mt_layer,
                            x, y, _mesa_is_winsys_fbo(ctx->ReadBuffer),
                            pbo_mt, 0, 0,
@@ -164,7 +164,7 @@ intelReadPixels(struct gl_context * ctx,
                 GLenum format, GLenum type,
                 const struct gl_pixelstore_attrib *pack, GLvoid * pixels)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    bool dirty;
 
    DBG("%s\n", __FUNCTION__);
@@ -181,9 +181,9 @@ intelReadPixels(struct gl_context * ctx,
 
    /* glReadPixels() wont dirty the front buffer, so reset the dirty
     * flag after calling intel_prepare_render(). */
-   dirty = intel->front_buffer_dirty;
-   intel_prepare_render(intel);
-   intel->front_buffer_dirty = dirty;
+   dirty = brw->front_buffer_dirty;
+   intel_prepare_render(brw);
+   brw->front_buffer_dirty = dirty;
 
    /* Update Mesa state before calling _mesa_readpixels().
     * XXX this may not be needed since ReadPixels no longer uses the
@@ -196,5 +196,5 @@ intelReadPixels(struct gl_context * ctx,
    _mesa_readpixels(ctx, x, y, width, height, format, type, pack, pixels);
 
    /* There's an intel_prepare_render() call in intelSpanRenderStart(). */
-   intel->front_buffer_dirty = dirty;
+   brw->front_buffer_dirty = dirty;
 }

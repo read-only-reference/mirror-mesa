@@ -140,7 +140,6 @@ bool do_wm_prog(struct brw_context *brw,
 		struct brw_fragment_program *fp,
 		struct brw_wm_prog_key *key)
 {
-   struct intel_context *intel = &brw->intel;
    struct brw_wm_compile *c;
    const GLuint *program;
    struct gl_shader *fs = NULL;
@@ -184,7 +183,7 @@ bool do_wm_prog(struct brw_context *brw,
 
       c->prog_data.total_scratch = brw_get_scratch_size(c->last_scratch);
 
-      brw_get_scratch_bo(intel, &brw->wm.scratch_bo,
+      brw_get_scratch_bo(brw, &brw->wm.scratch_bo,
 			 c->prog_data.total_scratch * brw->max_wm_threads);
    }
 
@@ -203,7 +202,7 @@ bool do_wm_prog(struct brw_context *brw,
 }
 
 static bool
-key_debug(struct intel_context *intel, const char *name, int a, int b)
+key_debug(struct brw_context *brw, const char *name, int a, int b)
 {
    if (a != b) {
       perf_debug("  %s %d->%d\n", name, a, b);
@@ -214,25 +213,25 @@ key_debug(struct intel_context *intel, const char *name, int a, int b)
 }
 
 bool
-brw_debug_recompile_sampler_key(struct intel_context *intel,
+brw_debug_recompile_sampler_key(struct brw_context *brw,
                                 const struct brw_sampler_prog_key_data *old_key,
                                 const struct brw_sampler_prog_key_data *key)
 {
    bool found = false;
 
    for (unsigned int i = 0; i < MAX_SAMPLERS; i++) {
-      found |= key_debug(intel, "EXT_texture_swizzle or DEPTH_TEXTURE_MODE",
+      found |= key_debug(brw, "EXT_texture_swizzle or DEPTH_TEXTURE_MODE",
                          old_key->swizzles[i], key->swizzles[i]);
    }
-   found |= key_debug(intel, "GL_CLAMP enabled on any texture unit's 1st coordinate",
+   found |= key_debug(brw, "GL_CLAMP enabled on any texture unit's 1st coordinate",
                       old_key->gl_clamp_mask[0], key->gl_clamp_mask[0]);
-   found |= key_debug(intel, "GL_CLAMP enabled on any texture unit's 2nd coordinate",
+   found |= key_debug(brw, "GL_CLAMP enabled on any texture unit's 2nd coordinate",
                       old_key->gl_clamp_mask[1], key->gl_clamp_mask[1]);
-   found |= key_debug(intel, "GL_CLAMP enabled on any texture unit's 3rd coordinate",
+   found |= key_debug(brw, "GL_CLAMP enabled on any texture unit's 3rd coordinate",
                       old_key->gl_clamp_mask[2], key->gl_clamp_mask[2]);
-   found |= key_debug(intel, "GL_MESA_ycbcr texturing\n",
+   found |= key_debug(brw, "GL_MESA_ycbcr texturing\n",
                       old_key->yuvtex_mask, key->yuvtex_mask);
-   found |= key_debug(intel, "GL_MESA_ycbcr UV swapping\n",
+   found |= key_debug(brw, "GL_MESA_ycbcr UV swapping\n",
                       old_key->yuvtex_swap_mask, key->yuvtex_swap_mask);
 
    return found;
@@ -243,7 +242,6 @@ brw_wm_debug_recompile(struct brw_context *brw,
                        struct gl_shader_program *prog,
                        const struct brw_wm_prog_key *key)
 {
-   struct intel_context *intel = &brw->intel;
    struct brw_cache_item *c = NULL;
    const struct brw_wm_prog_key *old_key = NULL;
    bool found = false;
@@ -268,29 +266,29 @@ brw_wm_debug_recompile(struct brw_context *brw,
       return;
    }
 
-   found |= key_debug(intel, "alphatest, computed depth, depth test, or "
+   found |= key_debug(brw, "alphatest, computed depth, depth test, or "
                       "depth write",
                       old_key->iz_lookup, key->iz_lookup);
-   found |= key_debug(intel, "depth statistics",
+   found |= key_debug(brw, "depth statistics",
                       old_key->stats_wm, key->stats_wm);
-   found |= key_debug(intel, "flat shading",
+   found |= key_debug(brw, "flat shading",
                       old_key->flat_shade, key->flat_shade);
-   found |= key_debug(intel, "number of color buffers",
+   found |= key_debug(brw, "number of color buffers",
                       old_key->nr_color_regions, key->nr_color_regions);
-   found |= key_debug(intel, "sample alpha to coverage",
-                      old_key->sample_alpha_to_coverage, key->sample_alpha_to_coverage);
-   found |= key_debug(intel, "rendering to FBO",
+   found |= key_debug(brw, "MRT alpha test or alpha-to-coverage",
+                      old_key->replicate_alpha, key->replicate_alpha);
+   found |= key_debug(brw, "rendering to FBO",
                       old_key->render_to_fbo, key->render_to_fbo);
-   found |= key_debug(intel, "fragment color clamping",
+   found |= key_debug(brw, "fragment color clamping",
                       old_key->clamp_fragment_color, key->clamp_fragment_color);
-   found |= key_debug(intel, "line smoothing",
+   found |= key_debug(brw, "line smoothing",
                       old_key->line_aa, key->line_aa);
-   found |= key_debug(intel, "renderbuffer height",
+   found |= key_debug(brw, "renderbuffer height",
                       old_key->drawable_height, key->drawable_height);
-   found |= key_debug(intel, "input slots valid",
+   found |= key_debug(brw, "input slots valid",
                       old_key->input_slots_valid, key->input_slots_valid);
 
-   found |= brw_debug_recompile_sampler_key(intel, &old_key->tex, &key->tex);
+   found |= brw_debug_recompile_sampler_key(brw, &old_key->tex, &key->tex);
 
    if (!found) {
       perf_debug("  Something else\n");
@@ -302,7 +300,7 @@ brw_populate_sampler_prog_key_data(struct gl_context *ctx,
 				   const struct gl_program *prog,
 				   struct brw_sampler_prog_key_data *key)
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
 
    for (int s = 0; s < MAX_SAMPLERS; s++) {
       key->swizzles[s] = SWIZZLE_NOOP;
@@ -325,7 +323,7 @@ brw_populate_sampler_prog_key_data(struct gl_context *ctx,
          /* Haswell handles texture swizzling as surface format overrides
           * (except for GL_ALPHA); all other platforms need MOVs in the shader.
           */
-         if (!intel->is_haswell || alpha_depth)
+         if (!brw->is_haswell || alpha_depth)
             key->swizzles[s] = brw_get_texture_swizzle(ctx, t);
 
 	 if (img->InternalFormat == GL_YCBCR_MESA) {
@@ -350,8 +348,7 @@ brw_populate_sampler_prog_key_data(struct gl_context *ctx,
 static void brw_wm_populate_key( struct brw_context *brw,
 				 struct brw_wm_prog_key *key )
 {
-   struct gl_context *ctx = &brw->intel.ctx;
-   struct intel_context *intel = &brw->intel;
+   struct gl_context *ctx = &brw->ctx;
    /* BRW_NEW_FRAGMENT_PROGRAM */
    const struct brw_fragment_program *fp = 
       (struct brw_fragment_program *)brw->fragment_program;
@@ -364,7 +361,7 @@ static void brw_wm_populate_key( struct brw_context *brw,
 
    /* Build the index for table lookup
     */
-   if (intel->gen < 6) {
+   if (brw->gen < 6) {
       /* _NEW_COLOR */
       if (fp->program.UsesKill || ctx->Color.AlphaEnabled)
 	 lookup |= IZ_PS_KILL_ALPHATEST_BIT;
@@ -394,10 +391,10 @@ static void brw_wm_populate_key( struct brw_context *brw,
 
    /* _NEW_LINE, _NEW_POLYGON, BRW_NEW_REDUCED_PRIMITIVE */
    if (ctx->Line.SmoothFlag) {
-      if (brw->intel.reduced_primitive == GL_LINES) {
+      if (brw->reduced_primitive == GL_LINES) {
 	 line_aa = AA_ALWAYS;
       }
-      else if (brw->intel.reduced_primitive == GL_TRIANGLES) {
+      else if (brw->reduced_primitive == GL_TRIANGLES) {
 	 if (ctx->Polygon.FrontMode == GL_LINE) {
 	    line_aa = AA_SOMETIMES;
 
@@ -418,8 +415,8 @@ static void brw_wm_populate_key( struct brw_context *brw,
 
    key->line_aa = line_aa;
 
-   if (intel->gen < 6)
-      key->stats_wm = brw->intel.stats_wm;
+   if (brw->gen < 6)
+      key->stats_wm = brw->stats_wm;
 
    /* _NEW_LIGHT */
    key->flat_shade = (ctx->Light.ShadeModel == GL_FLAT);
@@ -461,11 +458,13 @@ static void brw_wm_populate_key( struct brw_context *brw,
 
    /* _NEW_BUFFERS */
    key->nr_color_regions = ctx->DrawBuffer->_NumColorDrawBuffers;
-  /* _NEW_MULTISAMPLE */
-   key->sample_alpha_to_coverage = ctx->Multisample.SampleAlphaToCoverage;
+
+   /* _NEW_MULTISAMPLE, _NEW_COLOR, _NEW_BUFFERS */
+   key->replicate_alpha = ctx->DrawBuffer->_NumColorDrawBuffers > 1 &&
+      (ctx->Multisample.SampleAlphaToCoverage || ctx->Color.AlphaEnabled);
 
    /* BRW_NEW_VUE_MAP_GEOM_OUT */
-   if (intel->gen < 6)
+   if (brw->gen < 6)
       key->input_slots_valid = brw->vue_map_geom_out.slots_valid;
 
    /* The unique fragment program ID */
@@ -476,8 +475,7 @@ static void brw_wm_populate_key( struct brw_context *brw,
 static void
 brw_upload_wm_prog(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    struct brw_wm_prog_key key;
    struct brw_fragment_program *fp = (struct brw_fragment_program *)
       brw->fragment_program;

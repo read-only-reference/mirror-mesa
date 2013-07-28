@@ -28,13 +28,10 @@
 #ifndef INTEL_BLIT_H
 #define INTEL_BLIT_H
 
-#include "intel_context.h"
-
-extern void intelCopyBuffer(const __DRIdrawable * dpriv,
-                            const drm_clip_rect_t * rect);
+#include "brw_context.h"
 
 bool
-intelEmitCopyBlit(struct intel_context *intel,
+intelEmitCopyBlit(struct brw_context *brw,
                               GLuint cpp,
                               GLshort src_pitch,
                               drm_intel_bo *src_buffer,
@@ -49,7 +46,7 @@ intelEmitCopyBlit(struct intel_context *intel,
                               GLshort w, GLshort h,
 			      GLenum logicop );
 
-bool intel_miptree_blit(struct intel_context *intel,
+bool intel_miptree_blit(struct brw_context *brw,
                         struct intel_mipmap_tree *src_mt,
                         int src_level, int src_slice,
                         uint32_t src_x, uint32_t src_y, bool src_flip,
@@ -60,7 +57,7 @@ bool intel_miptree_blit(struct intel_context *intel,
                         GLenum logicop);
 
 bool
-intelEmitImmediateColorExpandBlit(struct intel_context *intel,
+intelEmitImmediateColorExpandBlit(struct brw_context *brw,
 				  GLuint cpp,
 				  GLubyte *src_bits, GLuint src_size,
 				  GLuint fg_color,
@@ -71,7 +68,7 @@ intelEmitImmediateColorExpandBlit(struct intel_context *intel,
 				  GLshort x, GLshort y,
 				  GLshort w, GLshort h,
 				  GLenum logic_op);
-void intel_emit_linear_blit(struct intel_context *intel,
+void intel_emit_linear_blit(struct brw_context *brw,
 			    drm_intel_bo *dst_bo,
 			    unsigned int dst_offset,
 			    drm_intel_bo *src_bo,

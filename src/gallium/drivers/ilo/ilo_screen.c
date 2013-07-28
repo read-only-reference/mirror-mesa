@@ -312,13 +312,14 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
        *
        * For 3D textures, we have to set the maximum number of levels to 9,
        * which has at most 2^24 pixels.  For 2D textures, we set it to 14,
-       * which has at most 2^26 pixels.
+       * which has at most 2^26 pixels.  And for cube textures, we has to set
+       * it to 12.
        */
       return 14;
    case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
       return 9;
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
-      return 14;
+      return 12;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
       return false;
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
@@ -372,7 +373,6 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
          return is->dev.has_gen7_sol_reset;
       else
          return false; /* TODO */
-   case PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS:
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
       return false;
    case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
@@ -421,6 +421,8 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1 << 27;
    case PIPE_CAP_MAX_VIEWPORTS:
       return ILO_MAX_VIEWPORTS;
+   case PIPE_CAP_ENDIANNESS:
+      return PIPE_ENDIAN_LITTLE;
 
    default:
       return 0;

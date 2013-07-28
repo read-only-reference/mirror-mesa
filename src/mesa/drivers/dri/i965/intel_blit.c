@@ -32,9 +32,9 @@
 #include "main/colormac.h"
 #include "main/fbobject.h"
 
+#include "brw_context.h"
 #include "intel_blit.h"
 #include "intel_buffers.h"
-#include "intel_context.h"
 #include "intel_fbo.h"
 #include "intel_reg.h"
 #include "intel_regions.h"
@@ -44,7 +44,7 @@
 #define FILE_DEBUG_FLAG DEBUG_BLIT
 
 static void
-intel_miptree_set_alpha_to_one(struct intel_context *intel,
+intel_miptree_set_alpha_to_one(struct brw_context *brw,
                                struct intel_mipmap_tree *mt,
                                int x, int y, int width, int height);
 
@@ -101,10 +101,10 @@ br13_for_cpp(int cpp)
  * server).
  */
 static void
-set_blitter_tiling(struct intel_context *intel,
+set_blitter_tiling(struct brw_context *brw,
                    bool dst_y_tiled, bool src_y_tiled)
 {
-   assert(intel->gen >= 6);
+   assert(brw->gen >= 6);
 
    /* Idle the blitter before we update how tiling is interpreted. */
    OUT_BATCH(MI_FLUSH_DW);
@@ -122,12 +122,12 @@ set_blitter_tiling(struct intel_context *intel,
 #define BEGIN_BATCH_BLT_TILED(n, dst_y_tiled, src_y_tiled) do {         \
       BEGIN_BATCH_BLT(n + ((dst_y_tiled || src_y_tiled) ? 14 : 0));     \
       if (dst_y_tiled || src_y_tiled)                                   \
-         set_blitter_tiling(intel, dst_y_tiled, src_y_tiled);           \
+         set_blitter_tiling(brw, dst_y_tiled, src_y_tiled);             \
    } while (0)
 
 #define ADVANCE_BATCH_TILED(dst_y_tiled, src_y_tiled) do {              \
       if (dst_y_tiled || src_y_tiled)                                   \
-         set_blitter_tiling(intel, false, false);                       \
+         set_blitter_tiling(brw, false, false);                         \
       ADVANCE_BATCH();                                                  \
    } while (0)
 
@@ -147,7 +147,7 @@ set_blitter_tiling(struct intel_context *intel,
  * renderbuffers/textures.
  */
 bool
-intel_miptree_blit(struct intel_context *intel,
+intel_miptree_blit(struct brw_context *brw,
                    struct intel_mipmap_tree *src_mt,
                    int src_level, int src_slice,
                    uint32_t src_x, uint32_t src_y, bool src_flip,
@@ -208,10 +208,10 @@ intel_miptree_blit(struct intel_context *intel,
    /* The blitter has no idea about HiZ or fast color clears, so we need to
     * resolve the miptrees before we do anything.
     */
-   intel_miptree_slice_resolve_depth(intel, src_mt, src_level, src_slice);
-   intel_miptree_slice_resolve_depth(intel, dst_mt, dst_level, dst_slice);
-   intel_miptree_resolve_color(intel, src_mt);
-   intel_miptree_resolve_color(intel, dst_mt);
+   intel_miptree_slice_resolve_depth(brw, src_mt, src_level, src_slice);
+   intel_miptree_slice_resolve_depth(brw, dst_mt, dst_level, dst_slice);
+   intel_miptree_resolve_color(brw, src_mt);
+   intel_miptree_resolve_color(brw, dst_mt);
 
    if (src_flip)
       src_y = src_mt->level[src_level].height - src_y - height;
@@ -235,7 +235,7 @@ intel_miptree_blit(struct intel_context *intel,
    dst_x += dst_image_x;
    dst_y += dst_image_y;
 
-   if (!intelEmitCopyBlit(intel,
+   if (!intelEmitCopyBlit(brw,
                           src_mt->cpp,
                           src_pitch,
                           src_mt->region->bo, src_mt->offset,
@@ -252,7 +252,7 @@ intel_miptree_blit(struct intel_context *intel,
 
    if (src_mt->format == MESA_FORMAT_XRGB8888 &&
        dst_mt->format == MESA_FORMAT_ARGB8888) {
-      intel_miptree_set_alpha_to_one(intel, dst_mt,
+      intel_miptree_set_alpha_to_one(brw, dst_mt,
                                      dst_x, dst_y,
                                      width, height);
    }
@@ -263,7 +263,7 @@ intel_miptree_blit(struct intel_context *intel,
 /* Copy BitBlt
  */
 bool
-intelEmitCopyBlit(struct intel_context *intel,
+intelEmitCopyBlit(struct brw_context *brw,
 		  GLuint cpp,
 		  GLshort src_pitch,
 		  drm_intel_bo *src_buffer,
@@ -294,17 +294,17 @@ intelEmitCopyBlit(struct intel_context *intel,
       if (src_offset & 4095)
 	 return false;
    }
-   if ((dst_y_tiled || src_y_tiled) && intel->gen < 6)
+   if ((dst_y_tiled || src_y_tiled) && brw->gen < 6)
       return false;
 
    /* do space check before going any further */
    do {
-       aper_array[0] = intel->batch.bo;
+       aper_array[0] = brw->batch.bo;
        aper_array[1] = dst_buffer;
        aper_array[2] = src_buffer;
 
        if (dri_bufmgr_check_aperture_space(aper_array, 3) != 0) {
-           intel_batchbuffer_flush(intel);
+           intel_batchbuffer_flush(brw);
            pass++;
        } else
            break;
@@ -313,7 +313,7 @@ intelEmitCopyBlit(struct intel_context *intel,
    if (pass >= 2)
       return false;
 
-   intel_batchbuffer_require_space(intel, 8 * 4, true);
+   intel_batchbuffer_require_space(brw, 8 * 4, true);
    DBG("%s src:buf(%p)/%d+%d %d,%d dst:buf(%p)/%d+%d %d,%d sz:%dx%d\n",
        __FUNCTION__,
        src_buffer, src_pitch, src_offset, src_x, src_y,
@@ -390,13 +390,13 @@ intelEmitCopyBlit(struct intel_context *intel,
 
    ADVANCE_BATCH_TILED(dst_y_tiled, src_y_tiled);
 
-   intel_batchbuffer_emit_mi_flush(intel);
+   intel_batchbuffer_emit_mi_flush(brw);
 
    return true;
 }
 
 bool
-intelEmitImmediateColorExpandBlit(struct intel_context *intel,
+intelEmitImmediateColorExpandBlit(struct brw_context *brw,
 				  GLuint cpp,
 				  GLubyte *src_bits, GLuint src_size,
 				  GLuint fg_color,
@@ -429,10 +429,7 @@ intelEmitImmediateColorExpandBlit(struct intel_context *intel,
        __FUNCTION__,
        dst_buffer, dst_pitch, dst_offset, x, y, w, h, src_size, dwords);
 
-   intel_batchbuffer_require_space(intel,
-				   (8 * 4) +
-				   (3 * 4) +
-				   dwords * 4, true);
+   intel_batchbuffer_require_space(brw, (8 * 4) + (3 * 4) + dwords * 4, true);
 
    opcode = XY_SETUP_BLT_CMD;
    if (cpp == 4)
@@ -466,9 +463,9 @@ intelEmitImmediateColorExpandBlit(struct intel_context *intel,
    OUT_BATCH(((y + h) << 16) | (x + w));
    ADVANCE_BATCH();
 
-   intel_batchbuffer_data(intel, src_bits, dwords * 4, true);
+   intel_batchbuffer_data(brw, src_bits, dwords * 4, true);
 
-   intel_batchbuffer_emit_mi_flush(intel);
+   intel_batchbuffer_emit_mi_flush(brw);
 
    return true;
 }
@@ -478,14 +475,14 @@ intelEmitImmediateColorExpandBlit(struct intel_context *intel,
  * end to cover the last if we need.
  */
 void
-intel_emit_linear_blit(struct intel_context *intel,
+intel_emit_linear_blit(struct brw_context *brw,
 		       drm_intel_bo *dst_bo,
 		       unsigned int dst_offset,
 		       drm_intel_bo *src_bo,
 		       unsigned int src_offset,
 		       unsigned int size)
 {
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    GLuint pitch, height;
    bool ok;
 
@@ -495,7 +492,7 @@ intel_emit_linear_blit(struct intel_context *intel,
     */
    pitch = ROUND_DOWN_TO(MIN2(size, (1 << 15) - 1), 4);
    height = (pitch == 0) ? 1 : size / pitch;
-   ok = intelEmitCopyBlit(intel, 1,
+   ok = intelEmitCopyBlit(brw, 1,
 			  pitch, src_bo, src_offset, I915_TILING_NONE,
 			  pitch, dst_bo, dst_offset, I915_TILING_NONE,
 			  0, 0, /* src x/y */
@@ -511,7 +508,7 @@ intel_emit_linear_blit(struct intel_context *intel,
    assert (size < (1 << 15));
    pitch = ALIGN(size, 4);
    if (size != 0) {
-      ok = intelEmitCopyBlit(intel, 1,
+      ok = intelEmitCopyBlit(brw, 1,
 			     pitch, src_bo, src_offset, I915_TILING_NONE,
 			     pitch, dst_bo, dst_offset, I915_TILING_NONE,
 			     0, 0, /* src x/y */
@@ -532,7 +529,7 @@ intel_emit_linear_blit(struct intel_context *intel,
  * miptree.
  */
 static void
-intel_miptree_set_alpha_to_one(struct intel_context *intel,
+intel_miptree_set_alpha_to_one(struct brw_context *brw,
                               struct intel_mipmap_tree *mt,
                               int x, int y, int width, int height)
 {
@@ -559,12 +556,12 @@ intel_miptree_set_alpha_to_one(struct intel_context *intel,
    BR13 |= pitch;
 
    /* do space check before going any further */
-   aper_array[0] = intel->batch.bo;
+   aper_array[0] = brw->batch.bo;
    aper_array[1] = region->bo;
 
    if (drm_intel_bufmgr_check_aperture_space(aper_array,
 					     ARRAY_SIZE(aper_array)) != 0) {
-      intel_batchbuffer_flush(intel);
+      intel_batchbuffer_flush(brw);
    }
 
    bool dst_y_tiled = region->tiling == I915_TILING_Y;
@@ -580,5 +577,5 @@ intel_miptree_set_alpha_to_one(struct intel_context *intel,
    OUT_BATCH(0xffffffff); /* white, but only alpha gets written */
    ADVANCE_BATCH_TILED(dst_y_tiled, false);
 
-   intel_batchbuffer_emit_mi_flush(intel);
+   intel_batchbuffer_emit_mi_flush(brw);
 }

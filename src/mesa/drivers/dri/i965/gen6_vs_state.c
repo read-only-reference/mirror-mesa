@@ -36,8 +36,7 @@
 static void
 gen6_upload_vs_push_constants(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    /* _BRW_NEW_VERTEX_PROGRAM */
    const struct brw_vertex_program *vp =
       brw_vertex_program_const(brw->vertex_program);
@@ -99,17 +98,21 @@ const struct brw_tracked_state gen6_vs_push_constants = {
 static void
 upload_vs_state(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
+   struct gl_context *ctx = &brw->ctx;
    uint32_t floating_point_mode = 0;
 
-   /* From the BSpec, Volume 2a, Part 3 "Vertex Shader", Section
+   /* From the BSpec, 3D Pipeline > Geometry > Vertex Shader > State,
     * 3DSTATE_VS, Dword 5.0 "VS Function Enable":
+    *
     *   [DevSNB] A pipeline flush must be programmed prior to a 3DSTATE_VS
     *   command that causes the VS Function Enable to toggle. Pipeline
     *   flush can be executed by sending a PIPE_CONTROL command with CS
     *   stall bit set and a post sync operation.
+    *
+    * Although we don't disable the VS during normal drawing, BLORP sometimes
+    * disables it.  To be safe, do the flush here just in case.
     */
-   intel_emit_post_sync_nonzero_flush(intel);
+   intel_emit_post_sync_nonzero_flush(brw);
 
    if (brw->vs.push_const_size == 0) {
       /* Disable the push constant buffers. */
@@ -139,7 +142,7 @@ upload_vs_state(struct brw_context *brw)
    /* Use ALT floating point mode for ARB vertex programs, because they
     * require 0^0 == 1.
     */
-   if (intel->ctx.Shader.CurrentVertexProgram == NULL)
+   if (ctx->Shader.CurrentVertexProgram == NULL)
       floating_point_mode = GEN6_VS_FLOATING_POINT_MODE_ALT;
 
    BEGIN_BATCH(6);
@@ -182,7 +185,7 @@ upload_vs_state(struct brw_context *brw)
     * bug reports that led to this workaround, and may be more than
     * what is strictly required to avoid the issue.
     */
-   intel_emit_post_sync_nonzero_flush(intel);
+   intel_emit_post_sync_nonzero_flush(brw);
 
    BEGIN_BATCH(4);
    OUT_BATCH(_3DSTATE_PIPE_CONTROL | (4 - 2));

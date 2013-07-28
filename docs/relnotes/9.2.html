@@ -44,6 +44,7 @@ Note: some of the new features are only available with certain drivers.
 </p>
 
 <ul>
+<li>GL_ARB_shading_language_420pack</li>
 <li>GL_ARB_texture_buffer_range</li>
 <li>GL_ARB_texture_multisample</li>
 <li>GL_ARB_texture_storage_multisample</li>
@@ -68,6 +69,9 @@ Note: some of the new features are only available with certain drivers.
 2007.</li>
 <li>Removed GL_MESA_resize_buffers because it was only really implemented by
 the (unsupported) GDI driver.</li>
+<li>GL_EXT_separate_shader_objects has been removed from all Gallium drivers,
+    because it disallows a critical GLSL shader optimization.
+    GL_ARB_separate_shader_objects doesn't have this issue.
 </ul>
 
 </div>

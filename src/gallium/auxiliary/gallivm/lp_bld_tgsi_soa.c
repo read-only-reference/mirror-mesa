@@ -1026,9 +1026,9 @@ emit_fetch_immediate(
    }
 
    if (stype == TGSI_TYPE_UNSIGNED) {
-      res = LLVMConstBitCast(res, bld_base->uint_bld.vec_type);
+      res = LLVMBuildBitCast(builder, res, bld_base->uint_bld.vec_type, "");
    } else if (stype == TGSI_TYPE_SIGNED) {
-      res = LLVMConstBitCast(res, bld_base->int_bld.vec_type);
+      res = LLVMBuildBitCast(builder, res, bld_base->int_bld.vec_type, "");
    }
    return res;
 }
@@ -1396,16 +1396,21 @@ emit_store_chan(
       assert(dtype == TGSI_TYPE_FLOAT ||
              dtype == TGSI_TYPE_UNTYPED);
       value = LLVMBuildBitCast(builder, value, float_bld->vec_type, "");
-      value = lp_build_max(float_bld, value, float_bld->zero);
-      value = lp_build_min(float_bld, value, float_bld->one);
+      value = lp_build_max_ext(float_bld, value, float_bld->zero,
+                               GALLIVM_NAN_RETURN_SECOND);
+      value = lp_build_min_ext(float_bld, value, float_bld->one,
+                               GALLIVM_NAN_BEHAVIOR_UNDEFINED);
       break;
 
    case TGSI_SAT_MINUS_PLUS_ONE:
       assert(dtype == TGSI_TYPE_FLOAT ||
              dtype == TGSI_TYPE_UNTYPED);
       value = LLVMBuildBitCast(builder, value, float_bld->vec_type, "");
-      value = lp_build_max(float_bld, value, lp_build_const_vec(gallivm, float_bld->type, -1.0));
-      value = lp_build_min(float_bld, value, float_bld->one);
+      value = lp_build_max_ext(float_bld, value,
+                               lp_build_const_vec(gallivm, float_bld->type, -1.0),
+                               GALLIVM_NAN_RETURN_SECOND);
+      value = lp_build_min_ext(float_bld, value, float_bld->one,
+                               GALLIVM_NAN_BEHAVIOR_UNDEFINED);
       break;
 
    default:
@@ -1576,6 +1581,7 @@ emit_tex( struct lp_build_tgsi_soa_context *bld,
    LLVMValueRef offsets[3] = { NULL };
    struct lp_derivatives derivs;
    struct lp_derivatives *deriv_ptr = NULL;
+   boolean scalar_lod;
    unsigned num_coords, num_derivs, num_offsets;
    unsigned i;
 
@@ -1693,6 +1699,9 @@ emit_tex( struct lp_build_tgsi_soa_context *bld,
       }
    }
 
+   /* TODO: use scalar lod if explicit_lod, lod_bias or derivs are broadcasted scalars */
+   scalar_lod = bld->bld_base.info->processor == TGSI_PROCESSOR_FRAGMENT;
+
    bld->sampler->emit_fetch_texel(bld->sampler,
                                   bld->bld_base.base.gallivm,
                                   bld->bld_base.base.type,
@@ -1701,7 +1710,7 @@ emit_tex( struct lp_build_tgsi_soa_context *bld,
                                   coords,
                                   offsets,
                                   deriv_ptr,
-                                  lod_bias, explicit_lod,
+                                  lod_bias, explicit_lod, scalar_lod,
                                   texel);
 }
 
@@ -1719,6 +1728,7 @@ emit_sample(struct lp_build_tgsi_soa_context *bld,
    LLVMValueRef offsets[3] = { NULL };
    struct lp_derivatives derivs;
    struct lp_derivatives *deriv_ptr = NULL;
+   boolean scalar_lod;
    unsigned num_coords, num_offsets, num_derivs;
    unsigned i;
 
@@ -1836,6 +1846,9 @@ emit_sample(struct lp_build_tgsi_soa_context *bld,
       }
    }
 
+   /* TODO: use scalar lod if explicit_lod, lod_bias or derivs are broadcasted scalars */
+   scalar_lod = bld->bld_base.info->processor == TGSI_PROCESSOR_FRAGMENT;
+
    bld->sampler->emit_fetch_texel(bld->sampler,
                                   bld->bld_base.base.gallivm,
                                   bld->bld_base.base.type,
@@ -1844,8 +1857,21 @@ emit_sample(struct lp_build_tgsi_soa_context *bld,
                                   coords,
                                   offsets,
                                   deriv_ptr,
-                                  lod_bias, explicit_lod,
+                                  lod_bias, explicit_lod, scalar_lod,
                                   texel);
+
+   if (inst->Src[1].Register.SwizzleX != PIPE_SWIZZLE_RED ||
+       inst->Src[1].Register.SwizzleY != PIPE_SWIZZLE_GREEN ||
+       inst->Src[1].Register.SwizzleZ != PIPE_SWIZZLE_BLUE ||
+       inst->Src[1].Register.SwizzleW != PIPE_SWIZZLE_ALPHA) {
+      unsigned char swizzles[4];
+      swizzles[0] = inst->Src[1].Register.SwizzleX;
+      swizzles[1] = inst->Src[1].Register.SwizzleY;
+      swizzles[2] = inst->Src[1].Register.SwizzleZ;
+      swizzles[3] = inst->Src[1].Register.SwizzleW;
+
+      lp_build_swizzle_soa_inplace(&bld->bld_base.base, texel, swizzles);
+   }
 }
 
 static void
@@ -1859,6 +1885,7 @@ emit_fetch_texels( struct lp_build_tgsi_soa_context *bld,
    LLVMValueRef explicit_lod = NULL;
    LLVMValueRef coords[3];
    LLVMValueRef offsets[3] = { NULL };
+   boolean scalar_lod;
    unsigned num_coords;
    unsigned dims;
    unsigned i;
@@ -1927,6 +1954,9 @@ emit_fetch_texels( struct lp_build_tgsi_soa_context *bld,
       }
    }
 
+   /* TODO: use scalar lod if explicit_lod is broadcasted scalar */
+   scalar_lod = bld->bld_base.info->processor == TGSI_PROCESSOR_FRAGMENT;
+
    bld->sampler->emit_fetch_texel(bld->sampler,
                                   bld->bld_base.base.gallivm,
                                   bld->bld_base.base.type,
@@ -1935,8 +1965,22 @@ emit_fetch_texels( struct lp_build_tgsi_soa_context *bld,
                                   coords,
                                   offsets,
                                   NULL,
-                                  NULL, explicit_lod,
+                                  NULL, explicit_lod, scalar_lod,
                                   texel);
+
+   if (is_samplei &&
+       (inst->Src[1].Register.SwizzleX != PIPE_SWIZZLE_RED ||
+        inst->Src[1].Register.SwizzleY != PIPE_SWIZZLE_GREEN ||
+        inst->Src[1].Register.SwizzleZ != PIPE_SWIZZLE_BLUE ||
+        inst->Src[1].Register.SwizzleW != PIPE_SWIZZLE_ALPHA)) {
+      unsigned char swizzles[4];
+      swizzles[0] = inst->Src[1].Register.SwizzleX;
+      swizzles[1] = inst->Src[1].Register.SwizzleY;
+      swizzles[2] = inst->Src[1].Register.SwizzleZ;
+      swizzles[3] = inst->Src[1].Register.SwizzleW;
+
+      lp_build_swizzle_soa_inplace(&bld->bld_base.base, texel, swizzles);
+   }
 }
 
 static void
@@ -2031,7 +2075,7 @@ near_end_of_shader(struct lp_build_tgsi_soa_context *bld,
  * Kill fragment if any of the src register values are negative.
  */
 static void
-emit_kil(
+emit_kill_if(
    struct lp_build_tgsi_soa_context *bld,
    const struct tgsi_full_instruction *inst,
    int pc)
@@ -2084,13 +2128,12 @@ emit_kil(
 
 
 /**
- * Predicated fragment kill.
- * XXX Actually, we do an unconditional kill (as in tgsi_exec.c).
+ * Unconditional fragment kill.
  * The only predication is the execution mask which will apply if
  * we're inside a loop or conditional.
  */
 static void
-emit_kilp(struct lp_build_tgsi_soa_context *bld,
+emit_kill(struct lp_build_tgsi_soa_context *bld,
           int pc)
 {
    LLVMBuilderRef builder = bld->bld_base.base.gallivm->builder;
@@ -2308,25 +2351,25 @@ ddy_emit(
 }
 
 static void
-kilp_emit(
+kill_emit(
    const struct lp_build_tgsi_action * action,
    struct lp_build_tgsi_context * bld_base,
    struct lp_build_emit_data * emit_data)
 {
    struct lp_build_tgsi_soa_context * bld = lp_soa_context(bld_base);
 
-   emit_kilp(bld, bld_base->pc - 1);
+   emit_kill(bld, bld_base->pc - 1);
 }
 
 static void
-kil_emit(
+kill_if_emit(
    const struct lp_build_tgsi_action * action,
    struct lp_build_tgsi_context * bld_base,
    struct lp_build_emit_data * emit_data)
 {
    struct lp_build_tgsi_soa_context * bld = lp_soa_context(bld_base);
 
-   emit_kil(bld, emit_data->inst, bld_base->pc - 1);
+   emit_kill_if(bld, emit_data->inst, bld_base->pc - 1);
 }
 
 static void
@@ -3157,8 +3200,8 @@ lp_build_tgsi_soa(struct gallivm_state *gallivm,
    bld.bld_base.op_actions[TGSI_OPCODE_ENDSWITCH].emit = endswitch_emit;
    bld.bld_base.op_actions[TGSI_OPCODE_IF].emit = if_emit;
    bld.bld_base.op_actions[TGSI_OPCODE_UIF].emit = uif_emit;
-   bld.bld_base.op_actions[TGSI_OPCODE_KIL].emit = kil_emit;
-   bld.bld_base.op_actions[TGSI_OPCODE_KILP].emit = kilp_emit;
+   bld.bld_base.op_actions[TGSI_OPCODE_KILL_IF].emit = kill_if_emit;
+   bld.bld_base.op_actions[TGSI_OPCODE_KILL].emit = kill_emit;
    bld.bld_base.op_actions[TGSI_OPCODE_NRM].emit = nrm_emit;
    bld.bld_base.op_actions[TGSI_OPCODE_NRM4].emit = nrm_emit;
    bld.bld_base.op_actions[TGSI_OPCODE_RET].emit = ret_emit;

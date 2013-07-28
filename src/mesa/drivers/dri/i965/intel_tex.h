@@ -30,7 +30,7 @@
 
 #include "main/mtypes.h"
 #include "main/formats.h"
-#include "intel_context.h"
+#include "brw_context.h"
 
 struct intel_renderbuffer;
 
@@ -48,25 +48,12 @@ void intelSetTexBuffer2(__DRIcontext *pDRICtx,
 			GLint target, GLint format, __DRIdrawable *pDraw);
 
 struct intel_mipmap_tree *
-intel_miptree_create_for_teximage(struct intel_context *intel,
+intel_miptree_create_for_teximage(struct brw_context *brw,
 				  struct intel_texture_object *intelObj,
 				  struct intel_texture_image *intelImage,
 				  bool expect_accelerated_upload);
 
-GLuint intel_finalize_mipmap_tree(struct intel_context *intel, GLuint unit);
-
-void intel_tex_map_level_images(struct intel_context *intel,
-				struct intel_texture_object *intelObj,
-				int level,
-				GLbitfield mode);
-
-void intel_tex_unmap_level_images(struct intel_context *intel,
-				  struct intel_texture_object *intelObj,
-				  int level);
-
-bool
-intel_tex_image_s8z24_create_renderbuffers(struct intel_context *intel,
-					   struct intel_texture_image *image);
+GLuint intel_finalize_mipmap_tree(struct brw_context *brw, GLuint unit);
 
 bool
 intel_texsubimage_tiled_memcpy(struct gl_context *ctx,

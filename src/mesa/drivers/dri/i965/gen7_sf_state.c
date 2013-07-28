@@ -32,8 +32,7 @@
 static void
 upload_sbe_state(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    /* BRW_NEW_FRAGMENT_PROGRAM */
    uint32_t num_outputs = _mesa_bitcount_64(brw->fragment_program->Base.InputsRead);
    /* _NEW_LIGHT */
@@ -158,12 +157,11 @@ const struct brw_tracked_state gen7_sbe_state = {
 static void
 upload_sf_state(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-   struct gl_context *ctx = &intel->ctx;
+   struct gl_context *ctx = &brw->ctx;
    uint32_t dw1, dw2, dw3;
    float point_size;
    /* _NEW_BUFFERS */
-   bool render_to_fbo = _mesa_is_user_fbo(brw->intel.ctx.DrawBuffer);
+   bool render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
    bool multisampled_fbo = ctx->DrawBuffer->Visual.samples > 1;
 
    dw1 = GEN6_SF_STATISTICS_ENABLE |
@@ -258,7 +256,7 @@ upload_sf_state(struct brw_context *brw)
       dw2 |= GEN6_SF_LINE_AA_ENABLE;
       dw2 |= GEN6_SF_LINE_END_CAP_WIDTH_1_0;
    }
-   if (ctx->Line.StippleFlag && intel->is_haswell) {
+   if (ctx->Line.StippleFlag && brw->is_haswell) {
       dw2 |= HSW_SF_LINE_STIPPLE_ENABLE;
    }
    /* _NEW_MULTISAMPLE */

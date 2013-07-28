@@ -36,7 +36,7 @@
 static void
 gen6_update_sol_surfaces(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->intel.ctx;
+   struct gl_context *ctx = &brw->ctx;
    /* BRW_NEW_TRANSFORM_FEEDBACK */
    struct gl_transform_feedback_object *xfb_obj =
       ctx->TransformFeedback.CurrentObject;
@@ -85,7 +85,7 @@ const struct brw_tracked_state gen6_sol_surface = {
 static void
 brw_gs_upload_binding_table(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->intel.ctx;
+   struct gl_context *ctx = &brw->ctx;
    /* BRW_NEW_VERTEX_PROGRAM */
    const struct gl_shader_program *shaderprog =
       ctx->Shader.CurrentVertexProgram;
@@ -137,7 +137,6 @@ brw_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
 			     struct gl_transform_feedback_object *obj)
 {
    struct brw_context *brw = brw_context(ctx);
-   struct intel_context *intel = &brw->intel;
    const struct gl_shader_program *vs_prog =
       ctx->Shader.CurrentVertexProgram;
    const struct gl_transform_feedback_info *linked_xfb_info =
@@ -145,7 +144,7 @@ brw_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
    struct gl_transform_feedback_object *xfb_obj =
       ctx->TransformFeedback.CurrentObject;
 
-   assert(intel->gen == 6);
+   assert(brw->gen == 6);
 
    /* Compute the maximum number of vertices that we can write without
     * overflowing any of the buffers currently being used for feedback.
@@ -187,6 +186,5 @@ brw_end_transform_feedback(struct gl_context *ctx,
     * simplicity, just do a full flush.
     */
    struct brw_context *brw = brw_context(ctx);
-   struct intel_context *intel = &brw->intel;
-   intel_batchbuffer_emit_mi_flush(intel);
+   intel_batchbuffer_emit_mi_flush(brw);
 }

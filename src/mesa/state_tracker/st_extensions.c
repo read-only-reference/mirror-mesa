@@ -68,7 +68,7 @@ void st_init_limits(struct st_context *st)
 {
    struct pipe_screen *screen = st->pipe->screen;
    struct gl_constants *c = &st->ctx->Const;
-   gl_shader_type sh;
+   unsigned sh;
    boolean can_ubo = TRUE;
 
    c->MaxTextureLevels
@@ -149,23 +149,25 @@ void st_init_limits(struct st_context *st)
       can_ubo = FALSE;
    }
 
-   for (sh = 0; sh < MESA_SHADER_TYPES; ++sh) {
-      struct gl_shader_compiler_options *options =
-         &st->ctx->ShaderCompilerOptions[sh];
+   for (sh = 0; sh < PIPE_SHADER_TYPES; ++sh) {
+      struct gl_shader_compiler_options *options;
       struct gl_program_constants *pc;
 
       switch (sh) {
       case PIPE_SHADER_FRAGMENT:
          pc = &c->FragmentProgram;
+         options = &st->ctx->ShaderCompilerOptions[MESA_SHADER_FRAGMENT];
          break;
       case PIPE_SHADER_VERTEX:
          pc = &c->VertexProgram;
+         options = &st->ctx->ShaderCompilerOptions[MESA_SHADER_VERTEX];
          break;
       case PIPE_SHADER_GEOMETRY:
          pc = &c->GeometryProgram;
+         options = &st->ctx->ShaderCompilerOptions[MESA_SHADER_GEOMETRY];
          break;
       default:
-         assert(0);
+         /* compute shader, etc. */
          continue;
       }
 
@@ -274,9 +276,6 @@ void st_init_limits(struct st_context *st)
    c->GLSLSkipStrictMaxUniformLimitCheck =
       screen->get_param(screen, PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS);
 
-   c->GLSLSkipStrictMaxVaryingLimitCheck =
-      screen->get_param(screen, PIPE_CAP_TGSI_CAN_COMPACT_VARYINGS);
-
    if (can_ubo) {
       st->ctx->Extensions.ARB_uniform_buffer_object = GL_TRUE;
       c->UniformBufferOffsetAlignment =
@@ -289,14 +288,6 @@ void st_init_limits(struct st_context *st)
    }
 }
 
-
-static GLboolean st_get_s3tc_override(void)
-{
-   const char *override = _mesa_getenv("force_s3tc_enable");
-   if (override && !strcmp(override, "true"))
-      return GL_TRUE;
-   return GL_FALSE;
-}
 
 /**
  * Given a member \c x of struct gl_extensions, return offset of
@@ -552,7 +543,14 @@ void st_init_extensions(struct st_context *st)
    ctx->Extensions.EXT_pixel_buffer_object = GL_TRUE;
    ctx->Extensions.EXT_point_parameters = GL_TRUE;
    ctx->Extensions.EXT_provoking_vertex = GL_TRUE;
-   ctx->Extensions.EXT_separate_shader_objects = GL_TRUE;
+
+   /* IMPORTANT:
+    *    Don't enable EXT_separate_shader_objects. It disallows a certain
+    *    optimization in the GLSL compiler and therefore is considered
+    *    harmful.
+    */
+   ctx->Extensions.EXT_separate_shader_objects = GL_FALSE;
+
    ctx->Extensions.EXT_texture_env_dot3 = GL_TRUE;
    ctx->Extensions.EXT_vertex_array_bgra = GL_TRUE;
 
@@ -600,15 +598,24 @@ void st_init_extensions(struct st_context *st)
 
    _mesa_override_glsl_version(st->ctx);
 
+   if (st->options.force_glsl_version > 0 &&
+       st->options.force_glsl_version <= ctx->Const.GLSLVersion) {
+      ctx->Const.ForceGLSLVersion = st->options.force_glsl_version;
+   }
+
    if (ctx->Const.GLSLVersion >= 130) {
       ctx->Const.NativeIntegers = GL_TRUE;
       ctx->Const.MaxClipPlanes = 8;
 
       /* Extensions that either depend on GLSL 1.30 or are a subset thereof. */
       ctx->Extensions.ARB_conservative_depth = GL_TRUE;
-      ctx->Extensions.ARB_shader_bit_encoding = GL_TRUE;
       ctx->Extensions.ARB_shading_language_packing = GL_TRUE;
       ctx->Extensions.OES_depth_texture_cube_map = GL_TRUE;
+      ctx->Extensions.ARB_shading_language_420pack = GL_TRUE;
+
+      if (!st->options.disable_shader_bit_encoding) {
+         ctx->Extensions.ARB_shader_bit_encoding = GL_TRUE;
+      }
    } else {
       /* Optional integer support for GLSL 1.2. */
       if (screen->get_shader_param(screen, PIPE_SHADER_VERTEX,
@@ -621,7 +628,7 @@ void st_init_extensions(struct st_context *st)
 
    /* Below are the cases which cannot be moved into tables easily. */
 
-   if (!ctx->Mesa_DXTn && !st_get_s3tc_override()) {
+   if (!ctx->Mesa_DXTn && !st->options.force_s3tc_enable) {
       ctx->Extensions.EXT_texture_compression_s3tc = GL_FALSE;
       ctx->Extensions.ANGLE_texture_compression_dxt = GL_FALSE;
    }
@@ -703,9 +710,11 @@ void st_init_extensions(struct st_context *st)
    }
    else if (ctx->Const.MaxSamples >= 2) {
       ctx->Extensions.EXT_framebuffer_multisample = GL_TRUE;
+      ctx->Extensions.EXT_framebuffer_multisample_blit_scaled = GL_TRUE;
    }
 
-   if (ctx->Const.MaxDualSourceDrawBuffers > 0)
+   if (ctx->Const.MaxDualSourceDrawBuffers > 0 &&
+       !st->options.disable_blend_func_extended)
       ctx->Extensions.ARB_blend_func_extended = GL_TRUE;
 
    st->has_time_elapsed =

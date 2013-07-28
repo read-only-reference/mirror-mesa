@@ -1832,10 +1832,17 @@ glsl_to_tgsi_visitor::visit(ir_expression *ir)
          emit(ir, TGSI_OPCODE_TRUNC, result_dst, op[0]);
       break;
    case ir_unop_bitcast_f2i:
+      result_src = op[0];
+      result_src.type = GLSL_TYPE_INT;
+      break;
    case ir_unop_bitcast_f2u:
+      result_src = op[0];
+      result_src.type = GLSL_TYPE_UINT;
+      break;
    case ir_unop_bitcast_i2f:
    case ir_unop_bitcast_u2f:
       result_src = op[0];
+      result_src.type = GLSL_TYPE_FLOAT;
       break;
    case ir_unop_f2b:
       emit(ir, TGSI_OPCODE_SNE, result_dst, op[0], st_src_reg_for_float(0.0));
@@ -2976,9 +2983,10 @@ glsl_to_tgsi_visitor::visit(ir_discard *ir)
    if (ir->condition) {
       ir->condition->accept(this);
       this->result.negate = ~this->result.negate;
-      emit(ir, TGSI_OPCODE_KIL, undef_dst, this->result);
+      emit(ir, TGSI_OPCODE_KILL_IF, undef_dst, this->result);
    } else {
-      emit(ir, TGSI_OPCODE_KILP);
+      /* unconditional kil */
+      emit(ir, TGSI_OPCODE_KILL);
    }
 }
 
@@ -4009,7 +4017,7 @@ get_bitmap_visitor(struct st_fragment_program *fp,
    src0.negate = NEGATE_XYZW;
    if (st->bitmap.tex_format == PIPE_FORMAT_L8_UNORM)
       src0.swizzle = SWIZZLE_XXXX;
-   inst = v->emit(NULL, TGSI_OPCODE_KIL, undef_dst, src0);
+   inst = v->emit(NULL, TGSI_OPCODE_KILL_IF, undef_dst, src0);
 
    /* Now copy the instructions from the original glsl_to_tgsi_visitor into the
     * new visitor. */
@@ -5271,15 +5279,11 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       linked_prog = get_mesa_program(ctx, prog, prog->_LinkedShaders[i]);
 
       if (linked_prog) {
-	 static const GLenum targets[] = {
-	    GL_VERTEX_PROGRAM_ARB,
-	    GL_FRAGMENT_PROGRAM_ARB,
-	    GL_GEOMETRY_PROGRAM_NV
-	 };
-
 	 _mesa_reference_program(ctx, &prog->_LinkedShaders[i]->Program,
 				 linked_prog);
-         if (!ctx->Driver.ProgramStringNotify(ctx, targets[i], linked_prog)) {
+         if (!ctx->Driver.ProgramStringNotify(ctx,
+                                              _mesa_program_index_to_target(i),
+                                              linked_prog)) {
 	    _mesa_reference_program(ctx, &prog->_LinkedShaders[i]->Program,
 				    NULL);
             _mesa_reference_program(ctx, &linked_prog, NULL);

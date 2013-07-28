@@ -41,8 +41,8 @@
 #include "swrast/swrast.h"
 #include "drivers/common/meta.h"
 
+#include "brw_context.h"
 #include "intel_screen.h"
-#include "intel_context.h"
 #include "intel_batchbuffer.h"
 #include "intel_blit.h"
 #include "intel_fbo.h"
@@ -176,7 +176,7 @@ do_blit_bitmap( struct gl_context *ctx,
 		const struct gl_pixelstore_attrib *unpack,
 		const GLubyte *bitmap )
 {
-   struct intel_context *intel = intel_context(ctx);
+   struct brw_context *brw = brw_context(ctx);
    struct gl_framebuffer *fb = ctx->DrawBuffer;
    struct intel_renderbuffer *irb;
    GLfloat tmpColor[4];
@@ -200,7 +200,7 @@ do_blit_bitmap( struct gl_context *ctx,
       return false;
    }
 
-   intel_prepare_render(intel);
+   intel_prepare_render(brw);
 
    if (fb->_NumColorDrawBuffers != 1) {
       perf_debug("accelerated glBitmap() only supports rendering to a "
@@ -258,7 +258,7 @@ do_blit_bitmap( struct gl_context *ctx,
    /* The blitter has no idea about fast color clears, so we need to resolve
     * the miptree before we do anything.
     */
-   intel_miptree_resolve_color(intel, irb->mt);
+   intel_miptree_resolve_color(brw, irb->mt);
 
    /* Chop it all into chunks that can be digested by hardware: */
    for (py = 0; py < height; py += DY) {
@@ -289,7 +289,7 @@ do_blit_bitmap( struct gl_context *ctx,
          if (count == 0)
 	    continue;
 
-	 if (!intelEmitImmediateColorExpandBlit(intel,
+	 if (!intelEmitImmediateColorExpandBlit(brw,
 						irb->mt->cpp,
 						(GLubyte *)stipple,
 						sz,
@@ -312,14 +312,14 @@ do_blit_bitmap( struct gl_context *ctx,
 out:
 
    if (unlikely(INTEL_DEBUG & DEBUG_SYNC))
-      intel_batchbuffer_flush(intel);
+      intel_batchbuffer_flush(brw);
 
    if (_mesa_is_bufferobj(unpack->BufferObj)) {
       /* done with PBO so unmap it now */
       ctx->Driver.UnmapBuffer(ctx, unpack->BufferObj);
    }
 
-   intel_check_front_buffer_rendering(intel);
+   intel_check_front_buffer_rendering(brw);
 
    return true;
 }

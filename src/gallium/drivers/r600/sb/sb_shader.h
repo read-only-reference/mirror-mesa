@@ -113,7 +113,7 @@ typedef std::vector<ra_chunk*> chunk_vector;
 
 class ra_constraint {
 public:
-	ra_constraint(constraint_kind kind) : kind(kind) {}
+	ra_constraint(constraint_kind kind) : kind(kind), cost(0) {}
 
 	constraint_kind kind;
 	vvec values;
@@ -293,6 +293,8 @@ public:
 	bool has_alu_predication;
 	bool uses_gradients;
 
+	bool safe_math;
+
 	unsigned ngpr, nstack;
 
 	shader(sb_context &sctx, shader_target t, unsigned id);
@@ -365,8 +367,6 @@ public:
 	alu_node* create_mov(value* dst, value* src);
 	alu_node* create_copy_mov(value *dst, value *src, unsigned affcost = 1);
 
-	const char * get_hw_class_name();
-	const char * get_hw_chip_name();
 	const char * get_shader_target_name();
 
 	std::string get_full_target_name();

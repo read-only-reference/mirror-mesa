@@ -159,7 +159,7 @@ static void evergreen_cs_set_vertex_buffer(
 
 	/* The vertex instructions in the compute shaders use the texture cache,
 	 * so we need to invalidate it. */
-	rctx->flags |= R600_CONTEXT_INVAL_READ_CACHES;
+	rctx->flags |= R600_CONTEXT_INV_VERTEX_CACHE;
 	state->enabled_mask |= 1 << vb_index;
 	state->dirty_mask |= 1 << vb_index;
 	state->atom.dirty = true;
@@ -211,8 +211,7 @@ void *evergreen_create_compute_state(
 #endif
 
 	shader->ctx = (struct r600_context*)ctx;
-	/* XXX: We ignore cso->req_local_mem, because we compute this value
-	 * ourselves on a per-kernel basis. */
+	shader->local_size = cso->req_local_mem;
 	shader->private_size = cso->req_private_mem;
 	shader->input_size = cso->req_input_mem;
 
@@ -334,7 +333,7 @@ static void evergreen_emit_direct_dispatch(
 	unsigned wave_divisor = (16 * num_pipes);
 	int group_size = 1;
 	int grid_size = 1;
-	unsigned lds_size = shader->active_kernel->bc.nlds_dw;
+	unsigned lds_size = shader->local_size / 4 + shader->active_kernel->bc.nlds_dw;
 
 	/* Calculate group_size/grid_size */
 	for (i = 0; i < 3; i++) {
@@ -470,7 +469,9 @@ static void compute_emit_cs(struct r600_context *ctx, const uint *block_layout,
 
 	/* XXX evergreen_flush_emit() hardcodes the CP_COHER_SIZE to 0xffffffff
 	 */
-	ctx->flags |= R600_CONTEXT_INVAL_READ_CACHES;
+	ctx->flags |= R600_CONTEXT_INV_CONST_CACHE |
+		      R600_CONTEXT_INV_VERTEX_CACHE |
+	              R600_CONTEXT_INV_TEX_CACHE;
 	r600_flush_emit(ctx);
 
 #if 0
@@ -519,8 +520,6 @@ void evergreen_emit_cs_shader(
 	r600_write_value(cs, PKT3C(PKT3_NOP, 0, 0));
 	r600_write_value(cs, r600_context_bo_reloc(rctx, &rctx->rings.gfx,
 							kernel->code_bo, RADEON_USAGE_READ));
-
-	rctx->flags |= R600_CONTEXT_INVAL_READ_CACHES;
 }
 
 static void evergreen_launch_grid(

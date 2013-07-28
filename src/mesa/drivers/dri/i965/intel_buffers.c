@@ -25,7 +25,7 @@
  * 
  **************************************************************************/
 
-#include "intel_context.h"
+#include "brw_context.h"
 #include "intel_buffers.h"
 #include "intel_fbo.h"
 #include "intel_mipmap_tree.h"
@@ -35,32 +35,19 @@
 #include "main/renderbuffer.h"
 
 /**
- * Return pointer to current color reading region, or NULL.
- */
-struct intel_region *
-intel_readbuf_region(struct intel_context *intel)
-{
-   struct intel_renderbuffer *irb
-      = intel_renderbuffer(intel->ctx.ReadBuffer->_ColorReadBuffer);
-   if (irb && irb->mt)
-      return irb->mt->region;
-   else
-      return NULL;
-}
-
-/**
  * Check if we're about to draw into the front color buffer.
- * If so, set the intel->front_buffer_dirty field to true.
+ * If so, set the brw->front_buffer_dirty field to true.
  */
 void
-intel_check_front_buffer_rendering(struct intel_context *intel)
+intel_check_front_buffer_rendering(struct brw_context *brw)
 {
-   const struct gl_framebuffer *fb = intel->ctx.DrawBuffer;
+   struct gl_context *ctx = &brw->ctx;
+   const struct gl_framebuffer *fb = ctx->DrawBuffer;
    if (_mesa_is_winsys_fbo(fb)) {
       /* drawing to window system buffer */
       if (fb->_NumColorDrawBuffers > 0) {
          if (fb->_ColorDrawBufferIndexes[0] == BUFFER_FRONT_LEFT) {
-	    intel->front_buffer_dirty = true;
+	    brw->front_buffer_dirty = true;
 	 }
       }
    }
@@ -70,19 +57,18 @@ static void
 intelDrawBuffer(struct gl_context * ctx, GLenum mode)
 {
    if (ctx->DrawBuffer && _mesa_is_winsys_fbo(ctx->DrawBuffer)) {
-      struct intel_context *const intel = intel_context(ctx);
-      const bool was_front_buffer_rendering =
-	intel->is_front_buffer_rendering;
+      struct brw_context *const brw = brw_context(ctx);
+      const bool was_front_buffer_rendering = brw->is_front_buffer_rendering;
 
-      intel->is_front_buffer_rendering = (mode == GL_FRONT_LEFT)
+      brw->is_front_buffer_rendering = (mode == GL_FRONT_LEFT)
 	|| (mode == GL_FRONT) || (mode == GL_FRONT_AND_BACK);
 
       /* If we weren't front-buffer rendering before but we are now,
        * invalidate our DRI drawable so we'll ask for new buffers
        * (including the fake front) before we start rendering again.
        */
-      if (!was_front_buffer_rendering && intel->is_front_buffer_rendering)
-	 dri2InvalidateDrawable(intel->driContext->driDrawablePriv);
+      if (!was_front_buffer_rendering && brw->is_front_buffer_rendering)
+	 dri2InvalidateDrawable(brw->driContext->driDrawablePriv);
    }
 }
 
@@ -91,19 +77,17 @@ static void
 intelReadBuffer(struct gl_context * ctx, GLenum mode)
 {
    if (ctx->DrawBuffer && _mesa_is_winsys_fbo(ctx->DrawBuffer)) {
-      struct intel_context *const intel = intel_context(ctx);
-      const bool was_front_buffer_reading =
-	intel->is_front_buffer_reading;
+      struct brw_context *const brw = brw_context(ctx);
+      const bool was_front_buffer_reading = brw->is_front_buffer_reading;
 
-      intel->is_front_buffer_reading = (mode == GL_FRONT_LEFT)
-	|| (mode == GL_FRONT);
+      brw->is_front_buffer_reading = mode == GL_FRONT_LEFT || mode == GL_FRONT;
 
       /* If we weren't front-buffer reading before but we are now,
        * invalidate our DRI drawable so we'll ask for new buffers
        * (including the fake front) before we start reading again.
        */
-      if (!was_front_buffer_reading && intel->is_front_buffer_reading)
-	 dri2InvalidateDrawable(intel->driContext->driReadablePriv);
+      if (!was_front_buffer_reading && brw->is_front_buffer_reading)
+	 dri2InvalidateDrawable(brw->driContext->driReadablePriv);
    }
 }
 

@@ -237,18 +237,16 @@ static const struct brw_tracked_state *gen7_atoms[] =
 static void
 brw_upload_initial_gpu_state(struct brw_context *brw)
 {
-   struct intel_context *intel = &brw->intel;
-
    /* On platforms with hardware contexts, we can set our initial GPU state
     * right away rather than doing it via state atoms.  This saves a small
     * amount of overhead on every draw call.
     */
-   if (!intel->hw_ctx)
+   if (!brw->hw_ctx)
       return;
 
    brw_upload_invariant_state(brw);
 
-   if (intel->gen >= 7) {
+   if (brw->gen >= 7) {
       gen7_allocate_push_constants(brw);
    }
 }
@@ -260,10 +258,10 @@ void brw_init_state( struct brw_context *brw )
 
    brw_init_caches(brw);
 
-   if (brw->intel.gen >= 7) {
+   if (brw->gen >= 7) {
       atoms = gen7_atoms;
       num_atoms = ARRAY_SIZE(gen7_atoms);
-   } else if (brw->intel.gen == 6) {
+   } else if (brw->gen == 6) {
       atoms = gen6_atoms;
       num_atoms = ARRAY_SIZE(gen6_atoms);
    } else {
@@ -442,14 +440,13 @@ brw_print_dirty_count(struct dirty_bit_map *bit_map)
  */
 void brw_upload_state(struct brw_context *brw)
 {
-   struct gl_context *ctx = &brw->intel.ctx;
-   struct intel_context *intel = &brw->intel;
+   struct gl_context *ctx = &brw->ctx;
    struct brw_state_flags *state = &brw->state.dirty;
    int i;
    static int dirty_count = 0;
 
-   state->mesa |= brw->intel.NewGLState;
-   brw->intel.NewGLState = 0;
+   state->mesa |= brw->NewGLState;
+   brw->NewGLState = 0;
 
    state->brw |= ctx->NewDriverState;
    ctx->NewDriverState = 0;
@@ -478,7 +475,7 @@ void brw_upload_state(struct brw_context *brw)
    if ((state->mesa | state->cache | state->brw) == 0)
       return;
 
-   intel_check_front_buffer_rendering(intel);
+   intel_check_front_buffer_rendering(brw);
 
    if (unlikely(INTEL_DEBUG)) {
       /* Debug version which enforces various sanity checks on the

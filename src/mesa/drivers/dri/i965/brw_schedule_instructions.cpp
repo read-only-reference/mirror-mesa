@@ -59,7 +59,7 @@ static bool debug = false;
 class schedule_node : public exec_node
 {
 public:
-   schedule_node(backend_instruction *inst, const struct intel_context *intel)
+   schedule_node(backend_instruction *inst, const struct brw_context *brw)
    {
       this->inst = inst;
       this->child_array_size = 0;
@@ -72,8 +72,8 @@ public:
       /* We can't measure Gen6 timings directly but expect them to be much
        * closer to Gen7 than Gen4.
        */
-      if (intel->gen >= 6)
-         set_latency_gen7(intel->is_haswell);
+      if (brw->gen >= 6)
+         set_latency_gen7(brw->is_haswell);
       else
          set_latency_gen4();
    }
@@ -428,7 +428,7 @@ vec4_instruction_scheduler::vec4_instruction_scheduler(vec4_visitor *v,
 void
 instruction_scheduler::add_inst(backend_instruction *inst)
 {
-   schedule_node *n = new(mem_ctx) schedule_node(inst, bv->intel);
+   schedule_node *n = new(mem_ctx) schedule_node(inst, bv->brw);
 
    assert(!inst->is_head_sentinel());
    assert(!inst->is_tail_sentinel());

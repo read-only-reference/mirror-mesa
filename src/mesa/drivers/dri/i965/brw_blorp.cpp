@@ -159,7 +159,7 @@ brw_blorp_params::brw_blorp_params()
 
 extern "C" {
 void
-intel_hiz_exec(struct intel_context *intel, struct intel_mipmap_tree *mt,
+intel_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
 	       unsigned int level, unsigned int layer, gen6_hiz_op op)
 {
    const char *opname = NULL;
@@ -183,22 +183,20 @@ intel_hiz_exec(struct intel_context *intel, struct intel_mipmap_tree *mt,
        __FUNCTION__, opname, mt, level, layer);
 
    brw_hiz_op_params params(mt, level, layer, op);
-   brw_blorp_exec(intel, &params);
+   brw_blorp_exec(brw, &params);
 }
 
 } /* extern "C" */
 
 void
-brw_blorp_exec(struct intel_context *intel, const brw_blorp_params *params)
+brw_blorp_exec(struct brw_context *brw, const brw_blorp_params *params)
 {
-   struct brw_context *brw = brw_context(&intel->ctx);
-
-   switch (intel->gen) {
+   switch (brw->gen) {
    case 6:
-      gen6_blorp_exec(intel, params);
+      gen6_blorp_exec(brw, params);
       break;
    case 7:
-      gen7_blorp_exec(intel, params);
+      gen7_blorp_exec(brw, params);
       break;
    default:
       /* BLORP is not supported before Gen6. */
@@ -206,8 +204,8 @@ brw_blorp_exec(struct intel_context *intel, const brw_blorp_params *params)
       break;
    }
 
-   if (unlikely(intel->always_flush_batch))
-      intel_batchbuffer_flush(intel);
+   if (unlikely(brw->always_flush_batch))
+      intel_batchbuffer_flush(brw);
 
    /* We've smashed all state compared to what the normal 3D pipeline
     * rendering tracks for GL.
@@ -215,12 +213,12 @@ brw_blorp_exec(struct intel_context *intel, const brw_blorp_params *params)
    brw->state.dirty.brw = ~0;
    brw->state.dirty.cache = ~0;
    brw->state_batch_count = 0;
-   intel->batch.need_workaround_flush = true;
+   brw->batch.need_workaround_flush = true;
 
    /* Flush the sampler cache so any texturing from the destination is
     * coherent.
     */
-   intel_batchbuffer_emit_mi_flush(intel);
+   intel_batchbuffer_emit_mi_flush(brw);
 }
 
 brw_hiz_op_params::brw_hiz_op_params(struct intel_mipmap_tree *mt,

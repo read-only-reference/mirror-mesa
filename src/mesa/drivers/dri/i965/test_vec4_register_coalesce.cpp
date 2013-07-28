@@ -35,7 +35,6 @@ class register_coalesce_test : public ::testing::Test {
 
 public:
    struct brw_context *brw;
-   struct intel_context *intel;
    struct gl_context *ctx;
    struct gl_shader_program *shader_prog;
    struct brw_vertex_program *vp;
@@ -96,8 +95,7 @@ protected:
 void register_coalesce_test::SetUp()
 {
    brw = (struct brw_context *)calloc(1, sizeof(*brw));
-   intel = &brw->intel;
-   ctx = &intel->ctx;
+   ctx = &brw->ctx;
 
    vp = ralloc(NULL, struct brw_vertex_program);
 
@@ -107,7 +105,7 @@ void register_coalesce_test::SetUp()
 
    _mesa_init_vertex_program(ctx, &vp->program, GL_VERTEX_SHADER, 0);
 
-   intel->gen = 4;
+   brw->gen = 4;
 }
 
 static void
