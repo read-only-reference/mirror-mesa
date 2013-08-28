@@ -44,7 +44,7 @@ brw_blorp_blit_miptrees(struct brw_context *brw,
                         float src_x1, float src_y1,
                         float dst_x0, float dst_y0,
                         float dst_x1, float dst_y1,
-                        bool mirror_x, bool mirror_y);
+                        GLenum filter, bool mirror_x, bool mirror_y);
 
 bool
 brw_blorp_clear_color(struct brw_context *brw, struct gl_framebuffer *fb,
@@ -178,11 +178,9 @@ struct brw_blorp_wm_push_constants
    uint32_t dst_x1;
    uint32_t dst_y0;
    uint32_t dst_y1;
-   /* Top right coordinates of the rectangular sample grid used for
-    * multisample scaled blitting.
-    */
-   float sample_grid_x1;
-   float sample_grid_y1;
+   /* Top right coordinates of the rectangular grid used for scaled blitting */
+   float rect_grid_x1;
+   float rect_grid_y1;
    brw_blorp_coord_transform_params x_transform;
    brw_blorp_coord_transform_params y_transform;
    /* Pad out to an integral number of registers */
@@ -335,6 +333,9 @@ struct brw_blorp_blit_prog_key
     */
    float x_scale;
    float y_scale;
+
+   /* True for blits with filter = GL_LINEAR. */
+   bool bilinear_filter;
 };
 
 class brw_blorp_blit_params : public brw_blorp_params
@@ -349,7 +350,7 @@ public:
                          GLfloat src_x1, GLfloat src_y1,
                          GLfloat dst_x0, GLfloat dst_y0,
                          GLfloat dst_x1, GLfloat dst_y1,
-                         bool mirror_x, bool mirror_y);
+                         GLenum filter, bool mirror_x, bool mirror_y);
 
    virtual uint32_t get_wm_prog(struct brw_context *brw,
                                 brw_blorp_prog_data **prog_data) const;

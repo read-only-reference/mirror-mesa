@@ -41,6 +41,9 @@ static const struct brw_tracked_state *gen4_atoms[] =
 {
    &brw_vs_prog, /* must do before GS prog, state base address. */
    &brw_gs_prog, /* must do before state base address */
+
+   &brw_interpolation_map,
+
    &brw_clip_prog, /* must do before state base address */
    &brw_sf_prog, /* must do before state base address */
    &brw_wm_prog, /* must do before state base address */
@@ -65,7 +68,8 @@ static const struct brw_tracked_state *gen4_atoms[] =
    &brw_vs_binding_table,
    &brw_wm_binding_table,
 
-   &brw_samplers,
+   &brw_fs_samplers,
+   &brw_vs_samplers,
 
    /* These set up state for brw_psp_urb_cbs */
    &brw_wm_unit,
@@ -140,7 +144,8 @@ static const struct brw_tracked_state *gen6_atoms[] =
    &gen6_gs_binding_table,
    &brw_wm_binding_table,
 
-   &brw_samplers,
+   &brw_fs_samplers,
+   &brw_vs_samplers,
    &gen6_sampler_state,
    &gen6_multisample_state,
 
@@ -203,7 +208,8 @@ static const struct brw_tracked_state *gen7_atoms[] =
    &brw_vs_binding_table,
    &brw_wm_binding_table,
 
-   &gen7_samplers,
+   &brw_fs_samplers,
+   &brw_vs_samplers,
    &gen6_multisample_state,
 
    &gen7_disable_stages,
@@ -384,6 +390,7 @@ static struct dirty_bit_map brw_bits[] = {
    DEFINE_BIT(BRW_NEW_RASTERIZER_DISCARD),
    DEFINE_BIT(BRW_NEW_UNIFORM_BUFFER),
    DEFINE_BIT(BRW_NEW_META_IN_PROGRESS),
+   DEFINE_BIT(BRW_NEW_INTERPOLATION_MAP),
    {0, 0, 0}
 };
 
@@ -460,6 +467,11 @@ void brw_upload_state(struct brw_context *brw)
    if (brw->fragment_program != ctx->FragmentProgram._Current) {
       brw->fragment_program = ctx->FragmentProgram._Current;
       brw->state.dirty.brw |= BRW_NEW_FRAGMENT_PROGRAM;
+   }
+
+   if (brw->geometry_program != ctx->GeometryProgram._Current) {
+      brw->geometry_program = ctx->GeometryProgram._Current;
+      brw->state.dirty.brw |= BRW_NEW_GEOMETRY_PROGRAM;
    }
 
    if (brw->vertex_program != ctx->VertexProgram._Current) {

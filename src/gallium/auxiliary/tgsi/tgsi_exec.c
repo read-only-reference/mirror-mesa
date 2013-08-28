@@ -2076,6 +2076,7 @@ exec_txq(struct tgsi_exec_machine *mach,
 
    fetch_source(mach, &src, &inst->Src[0], TGSI_CHAN_X, TGSI_EXEC_DATA_INT);
 
+   /* XXX: This interface can't return per-pixel values */
    mach->Sampler->get_dims(mach->Sampler, unit, src.i[0], result);
 
    for (i = 0; i < TGSI_QUAD_SIZE; i++) {
@@ -3198,10 +3199,15 @@ micro_shl(union tgsi_exec_channel *dst,
           const union tgsi_exec_channel *src0,
           const union tgsi_exec_channel *src1)
 {
-   dst->u[0] = src0->u[0] << src1->u[0];
-   dst->u[1] = src0->u[1] << src1->u[1];
-   dst->u[2] = src0->u[2] << src1->u[2];
-   dst->u[3] = src0->u[3] << src1->u[3];
+   unsigned masked_count;
+   masked_count = src1->u[0] & 0x1f;
+   dst->u[0] = src0->u[0] << masked_count;
+   masked_count = src1->u[1] & 0x1f;
+   dst->u[1] = src0->u[1] << masked_count;
+   masked_count = src1->u[2] & 0x1f;
+   dst->u[2] = src0->u[2] << masked_count;
+   masked_count = src1->u[3] & 0x1f;
+   dst->u[3] = src0->u[3] << masked_count;
 }
 
 static void
@@ -3259,6 +3265,50 @@ micro_f2i(union tgsi_exec_channel *dst,
 }
 
 static void
+micro_fseq(union tgsi_exec_channel *dst,
+           const union tgsi_exec_channel *src0,
+           const union tgsi_exec_channel *src1)
+{
+   dst->u[0] = src0->f[0] == src1->f[0] ? ~0 : 0;
+   dst->u[1] = src0->f[1] == src1->f[1] ? ~0 : 0;
+   dst->u[2] = src0->f[2] == src1->f[2] ? ~0 : 0;
+   dst->u[3] = src0->f[3] == src1->f[3] ? ~0 : 0;
+}
+
+static void
+micro_fsge(union tgsi_exec_channel *dst,
+           const union tgsi_exec_channel *src0,
+           const union tgsi_exec_channel *src1)
+{
+   dst->u[0] = src0->f[0] >= src1->f[0] ? ~0 : 0;
+   dst->u[1] = src0->f[1] >= src1->f[1] ? ~0 : 0;
+   dst->u[2] = src0->f[2] >= src1->f[2] ? ~0 : 0;
+   dst->u[3] = src0->f[3] >= src1->f[3] ? ~0 : 0;
+}
+
+static void
+micro_fslt(union tgsi_exec_channel *dst,
+           const union tgsi_exec_channel *src0,
+           const union tgsi_exec_channel *src1)
+{
+   dst->u[0] = src0->f[0] < src1->f[0] ? ~0 : 0;
+   dst->u[1] = src0->f[1] < src1->f[1] ? ~0 : 0;
+   dst->u[2] = src0->f[2] < src1->f[2] ? ~0 : 0;
+   dst->u[3] = src0->f[3] < src1->f[3] ? ~0 : 0;
+}
+
+static void
+micro_fsne(union tgsi_exec_channel *dst,
+           const union tgsi_exec_channel *src0,
+           const union tgsi_exec_channel *src1)
+{
+   dst->u[0] = src0->f[0] != src1->f[0] ? ~0 : 0;
+   dst->u[1] = src0->f[1] != src1->f[1] ? ~0 : 0;
+   dst->u[2] = src0->f[2] != src1->f[2] ? ~0 : 0;
+   dst->u[3] = src0->f[3] != src1->f[3] ? ~0 : 0;
+}
+
+static void
 micro_idiv(union tgsi_exec_channel *dst,
            const union tgsi_exec_channel *src0,
            const union tgsi_exec_channel *src1)
@@ -3307,10 +3357,15 @@ micro_ishr(union tgsi_exec_channel *dst,
            const union tgsi_exec_channel *src0,
            const union tgsi_exec_channel *src1)
 {
-   dst->i[0] = src0->i[0] >> src1->i[0];
-   dst->i[1] = src0->i[1] >> src1->i[1];
-   dst->i[2] = src0->i[2] >> src1->i[2];
-   dst->i[3] = src0->i[3] >> src1->i[3];
+   unsigned masked_count;
+   masked_count = src1->i[0] & 0x1f;
+   dst->i[0] = src0->i[0] >> masked_count;
+   masked_count = src1->i[1] & 0x1f;
+   dst->i[1] = src0->i[1] >> masked_count;
+   masked_count = src1->i[2] & 0x1f;
+   dst->i[2] = src0->i[2] >> masked_count;
+   masked_count = src1->i[3] & 0x1f;
+   dst->i[3] = src0->i[3] >> masked_count;
 }
 
 static void
@@ -3449,10 +3504,15 @@ micro_ushr(union tgsi_exec_channel *dst,
            const union tgsi_exec_channel *src0,
            const union tgsi_exec_channel *src1)
 {
-   dst->u[0] = src0->u[0] >> src1->u[0];
-   dst->u[1] = src0->u[1] >> src1->u[1];
-   dst->u[2] = src0->u[2] >> src1->u[2];
-   dst->u[3] = src0->u[3] >> src1->u[3];
+   unsigned masked_count;
+   masked_count = src1->u[0] & 0x1f;
+   dst->u[0] = src0->u[0] >> masked_count;
+   masked_count = src1->u[1] & 0x1f;
+   dst->u[1] = src0->u[1] >> masked_count;
+   masked_count = src1->u[2] & 0x1f;
+   dst->u[2] = src0->u[2] >> masked_count;
+   masked_count = src1->u[3] & 0x1f;
+   dst->u[3] = src0->u[3] >> masked_count;
 }
 
 static void
@@ -4135,6 +4195,22 @@ exec_instruction(
 
    case TGSI_OPCODE_F2I:
       exec_vector_unary(mach, inst, micro_f2i, TGSI_EXEC_DATA_INT, TGSI_EXEC_DATA_FLOAT);
+      break;
+
+   case TGSI_OPCODE_FSEQ:
+      exec_vector_binary(mach, inst, micro_fseq, TGSI_EXEC_DATA_UINT, TGSI_EXEC_DATA_FLOAT);
+      break;
+
+   case TGSI_OPCODE_FSGE:
+      exec_vector_binary(mach, inst, micro_fsge, TGSI_EXEC_DATA_UINT, TGSI_EXEC_DATA_FLOAT);
+      break;
+
+   case TGSI_OPCODE_FSLT:
+      exec_vector_binary(mach, inst, micro_fslt, TGSI_EXEC_DATA_UINT, TGSI_EXEC_DATA_FLOAT);
+      break;
+
+   case TGSI_OPCODE_FSNE:
+      exec_vector_binary(mach, inst, micro_fsne, TGSI_EXEC_DATA_UINT, TGSI_EXEC_DATA_FLOAT);
       break;
 
    case TGSI_OPCODE_IDIV:

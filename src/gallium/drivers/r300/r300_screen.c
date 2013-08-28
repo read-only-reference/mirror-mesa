@@ -341,11 +341,12 @@ static float r300_get_paramf(struct pipe_screen* pscreen,
 
 static int r300_get_video_param(struct pipe_screen *screen,
 				enum pipe_video_profile profile,
+				enum pipe_video_entrypoint entrypoint,
 				enum pipe_video_cap param)
 {
    switch (param) {
       case PIPE_VIDEO_CAP_SUPPORTED:
-         return vl_profile_supported(screen, profile);
+         return vl_profile_supported(screen, profile, entrypoint);
       case PIPE_VIDEO_CAP_NPOT_TEXTURES:
          return 0;
       case PIPE_VIDEO_CAP_MAX_WIDTH:
@@ -359,6 +360,8 @@ static int r300_get_video_param(struct pipe_screen *screen,
          return false;
       case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
          return true;
+      case PIPE_VIDEO_CAP_MAX_LEVEL:
+         return vl_level_supported(screen, profile);
       default:
          return 0;
    }
@@ -439,11 +442,6 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
         case 6:
             /* We need DRM 2.8.0. */
             if (!drm_2_8_0) {
-                return FALSE;
-            }
-            /* Only support R500, because I didn't test older chipsets,
-             * but MSAA should work there too. */
-            if (!is_r500 && !debug_get_bool_option("RADEON_MSAA", FALSE)) {
                 return FALSE;
             }
             /* No texturing and scanout. */

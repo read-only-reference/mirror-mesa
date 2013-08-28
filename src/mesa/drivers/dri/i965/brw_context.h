@@ -125,12 +125,14 @@ extern "C" {
 struct brw_context;
 struct brw_instruction;
 struct brw_vs_prog_key;
+struct brw_vec4_prog_key;
 struct brw_wm_prog_key;
 struct brw_wm_prog_data;
 
 enum brw_state_id {
    BRW_STATE_URB_FENCE,
    BRW_STATE_FRAGMENT_PROGRAM,
+   BRW_STATE_GEOMETRY_PROGRAM,
    BRW_STATE_VERTEX_PROGRAM,
    BRW_STATE_CURBE_OFFSETS,
    BRW_STATE_REDUCED_PRIMITIVE,
@@ -148,16 +150,20 @@ enum brw_state_id {
    BRW_STATE_VS_CONSTBUF,
    BRW_STATE_PROGRAM_CACHE,
    BRW_STATE_STATE_BASE_ADDRESS,
+   BRW_STATE_VUE_MAP_VS,
    BRW_STATE_VUE_MAP_GEOM_OUT,
    BRW_STATE_TRANSFORM_FEEDBACK,
    BRW_STATE_RASTERIZER_DISCARD,
    BRW_STATE_STATS_WM,
    BRW_STATE_UNIFORM_BUFFER,
    BRW_STATE_META_IN_PROGRESS,
+   BRW_STATE_INTERPOLATION_MAP,
+   BRW_NUM_STATE_BITS
 };
 
 #define BRW_NEW_URB_FENCE               (1 << BRW_STATE_URB_FENCE)
 #define BRW_NEW_FRAGMENT_PROGRAM        (1 << BRW_STATE_FRAGMENT_PROGRAM)
+#define BRW_NEW_GEOMETRY_PROGRAM        (1 << BRW_STATE_GEOMETRY_PROGRAM)
 #define BRW_NEW_VERTEX_PROGRAM          (1 << BRW_STATE_VERTEX_PROGRAM)
 #define BRW_NEW_CURBE_OFFSETS           (1 << BRW_STATE_CURBE_OFFSETS)
 #define BRW_NEW_REDUCED_PRIMITIVE       (1 << BRW_STATE_REDUCED_PRIMITIVE)
@@ -180,12 +186,14 @@ enum brw_state_id {
 #define BRW_NEW_VS_CONSTBUF            (1 << BRW_STATE_VS_CONSTBUF)
 #define BRW_NEW_PROGRAM_CACHE		(1 << BRW_STATE_PROGRAM_CACHE)
 #define BRW_NEW_STATE_BASE_ADDRESS	(1 << BRW_STATE_STATE_BASE_ADDRESS)
+#define BRW_NEW_VUE_MAP_VS		(1 << BRW_STATE_VUE_MAP_VS)
 #define BRW_NEW_VUE_MAP_GEOM_OUT	(1 << BRW_STATE_VUE_MAP_GEOM_OUT)
 #define BRW_NEW_TRANSFORM_FEEDBACK	(1 << BRW_STATE_TRANSFORM_FEEDBACK)
 #define BRW_NEW_RASTERIZER_DISCARD	(1 << BRW_STATE_RASTERIZER_DISCARD)
 #define BRW_NEW_STATS_WM		(1 << BRW_STATE_STATS_WM)
 #define BRW_NEW_UNIFORM_BUFFER          (1 << BRW_STATE_UNIFORM_BUFFER)
 #define BRW_NEW_META_IN_PROGRESS        (1 << BRW_STATE_META_IN_PROGRESS)
+#define BRW_NEW_INTERPOLATION_MAP       (1 << BRW_STATE_INTERPOLATION_MAP)
 
 struct brw_state_flags {
    /** State update flags signalled by mesa internals */
@@ -270,6 +278,13 @@ struct brw_vertex_program {
 };
 
 
+/** Subclass of Mesa geometry program */
+struct brw_geometry_program {
+   struct gl_geometry_program program;
+   unsigned id;  /**< serial no. to identify geom progs, never re-used */
+};
+
+
 /** Subclass of Mesa fragment program */
 struct brw_fragment_program {
    struct gl_fragment_program program;
@@ -302,6 +317,8 @@ struct brw_wm_prog_data {
    GLuint reg_blocks;
    GLuint reg_blocks_16;
    GLuint total_scratch;
+
+   unsigned binding_table_size;
 
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params;
@@ -411,6 +428,32 @@ void brw_compute_vue_map(struct brw_context *brw, struct brw_vue_map *vue_map,
                          GLbitfield64 slots_valid, bool userclip_active);
 
 
+/*
+ * Mapping of VUE map slots to interpolation modes.
+ */
+struct interpolation_mode_map {
+   unsigned char mode[BRW_VARYING_SLOT_COUNT];
+};
+
+static inline bool brw_any_flat_varyings(struct interpolation_mode_map *map)
+{
+   for (int i = 0; i < BRW_VARYING_SLOT_COUNT; i++)
+      if (map->mode[i] == INTERP_QUALIFIER_FLAT)
+         return true;
+
+   return false;
+}
+
+static inline bool brw_any_noperspective_varyings(struct interpolation_mode_map *map)
+{
+   for (int i = 0; i < BRW_VARYING_SLOT_COUNT; i++)
+      if (map->mode[i] == INTERP_QUALIFIER_NOPERSPECTIVE)
+         return true;
+
+   return false;
+}
+
+
 struct brw_sf_prog_data {
    GLuint urb_read_length;
    GLuint total_grf;
@@ -449,6 +492,12 @@ struct brw_gs_prog_data {
 struct brw_vec4_prog_data {
    struct brw_vue_map vue_map;
 
+   /**
+    * Register where the thread expects to find input data from the URB
+    * (typically uniforms, followed by per-vertex inputs).
+    */
+   unsigned dispatch_grf_start_reg;
+
    GLuint curb_read_length;
    GLuint urb_read_length;
    GLuint total_grf;
@@ -462,7 +511,7 @@ struct brw_vec4_prog_data {
     */
    GLuint urb_entry_size;
 
-   int num_surfaces;
+   unsigned binding_table_size;
 
    /* These pointers must appear last.  See brw_vec4_prog_data_compare(). */
    const float **param;
@@ -479,6 +528,22 @@ struct brw_vs_prog_data {
    GLbitfield64 inputs_read;
 
    bool uses_vertexid;
+};
+
+
+/* Note: brw_vec4_gs_prog_data_compare() must be updated when adding fields to
+ * this struct!
+ */
+struct brw_vec4_gs_prog_data
+{
+   struct brw_vec4_prog_data base;
+
+   /**
+    * Size of an output vertex, measured in HWORDS (32 bytes).
+    */
+   unsigned output_vertex_size_hwords;
+
+   unsigned output_topology;
 };
 
 /** Number of texture sampler units */
@@ -574,10 +639,6 @@ struct brw_vs_prog_data {
  *    |   : |     :                   |
  *    |  63 | SOL Binding 63          |
  *    +-----+-------------------------+
- *
- * Note that nothing actually uses the SURF_INDEX_DRAW macro, so it has to be
- * the identity function or things will break.  We do want to keep draw buffers
- * first so we can use headerless render target writes for RT 0.
  */
 #define SURF_INDEX_DRAW(d)           (d)
 #define SURF_INDEX_FRAG_CONST_BUFFER (BRW_MAX_DRAW_BUFFERS + 1)
@@ -786,6 +847,13 @@ struct brw_context
 				      uint32_t *out_offset,
                                       bool dword_pitch);
 
+      /** Upload a SAMPLER_STATE table. */
+      void (*upload_sampler_state_table)(struct brw_context *brw,
+                                         struct gl_program *prog,
+                                         uint32_t sampler_count,
+                                         uint32_t *sst_offset,
+                                         uint32_t *sdc_offset);
+
       /**
        * Send the appropriate state packets to configure depth, stencil, and
        * HiZ buffers (i965+ only)
@@ -956,6 +1024,7 @@ struct brw_context
    /* Active vertex program: 
     */
    const struct gl_vertex_program *vertex_program;
+   const struct gl_geometry_program *geometry_program;
    const struct gl_fragment_program *fragment_program;
 
    /* hw-dependent 3DSTATE_VF_STATISTICS opcode */
@@ -1035,11 +1104,12 @@ struct brw_context
       GLuint last_bufsz;
    } curbe;
 
-   /** SAMPLER_STATE count and offset */
-   struct {
-      GLuint count;
-      uint32_t offset;
-   } sampler;
+   /**
+    * Layout of vertex data exiting the vertex shader.
+    *
+    * BRW_NEW_VUE_MAP_VS is flagged when this VUE map changes.
+    */
+   struct brw_vue_map vue_map_vs;
 
    /**
     * Layout of vertex data exiting the geometry portion of the pipleine.
@@ -1081,6 +1151,14 @@ struct brw_context
 
       uint32_t bind_bo_offset;
       uint32_t surf_offset[BRW_MAX_VS_SURFACES];
+
+      /** SAMPLER_STATE count and table offset */
+      uint32_t sampler_count;
+      uint32_t sampler_offset;
+
+      /** Offsets in the batch to sampler default colors (texture border color)
+       */
+      uint32_t sdc_offset[BRW_MAX_TEX_UNIT];
    } vs;
 
    struct {
@@ -1123,10 +1201,6 @@ struct brw_context
    struct {
       struct brw_wm_prog_data *prog_data;
 
-      /** offsets in the batch to sampler default colors (texture border color)
-       */
-      uint32_t sdc_offset[BRW_MAX_TEX_UNIT];
-
       GLuint render_surf;
 
       drm_intel_bo *scratch_bo;
@@ -1153,6 +1227,14 @@ struct brw_context
       /** Binding table of pointers to surf_bo entries */
       uint32_t bind_bo_offset;
       uint32_t surf_offset[BRW_MAX_WM_SURFACES];
+
+      /** SAMPLER_STATE count and table offset */
+      uint32_t sampler_count;
+      uint32_t sampler_offset;
+
+      /** Offsets in the batch to sampler default colors (texture border color)
+       */
+      uint32_t sdc_offset[BRW_MAX_TEX_UNIT];
 
       struct {
          struct ra_regs *regs;
@@ -1202,6 +1284,11 @@ struct brw_context
 
    uint32_t render_target_format[MESA_FORMAT_COUNT];
    bool format_supported_as_render_target[MESA_FORMAT_COUNT];
+
+   /* Interpolation modes, one byte per vue slot.
+    * Used Gen4/5 by the clip|sf|wm stages. Ignored on Gen6+.
+    */
+   struct interpolation_mode_map interpolation_mode;
 
    /* PrimitiveRestart */
    struct {
@@ -1272,6 +1359,9 @@ void brw_get_depthstencil_tile_masks(struct intel_mipmap_tree *depth_mt,
 void brw_workaround_depthstencil_alignment(struct brw_context *brw,
                                            GLbitfield clear_mask);
 
+/* brw_object_purgeable.c */
+void brw_init_object_purgeable_functions(struct dd_function_table *functions);
+
 /*======================================================================
  * brw_queryobj.c
  */
@@ -1323,11 +1413,19 @@ void brw_upload_cs_urb_state(struct brw_context *brw);
  */
 void brw_fs_alloc_reg_sets(struct brw_context *brw);
 
+/* brw_vec4_reg_allocate.cpp */
+void brw_vec4_alloc_reg_set(struct brw_context *brw);
+
 /* brw_disasm.c */
 int brw_disasm (FILE *file, struct brw_instruction *inst, int gen);
 
 /* brw_vs.c */
 gl_clip_plane *brw_select_clip_planes(struct gl_context *ctx);
+
+/* brw_draw_upload.c */
+unsigned brw_get_vertex_surface_type(struct brw_context *brw,
+                                     const struct gl_client_array *glarray);
+unsigned brw_get_index_type(GLenum type);
 
 /* brw_wm_surface_state.c */
 void brw_init_surface_formats(struct brw_context *brw);
@@ -1498,6 +1596,13 @@ gen7_emit_depth_stencil_hiz(struct brw_context *brw,
                             bool hiz, bool separate_stencil,
                             uint32_t width, uint32_t height,
                             uint32_t tile_x, uint32_t tile_y);
+
+extern const GLuint prim_to_hw_prim[GL_POLYGON+1];
+
+void
+brw_setup_vec4_key_clip_info(struct brw_context *brw,
+                             struct brw_vec4_prog_key *key,
+                             bool program_uses_clip_distance);
 
 #ifdef __cplusplus
 }

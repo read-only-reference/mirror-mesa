@@ -113,6 +113,7 @@ struct si_shader {
 	bool			vs_out_misc_write;
 	bool			vs_out_point_size;
 	unsigned		nr_cbufs;
+	unsigned		nr_pos_exports;
 	unsigned		clip_dist_write;
 };
 
@@ -123,10 +124,12 @@ union si_shader_key {
 		unsigned	color_two_side:1;
 		unsigned	alpha_func:3;
 		unsigned	flatshade:1;
+		unsigned	alpha_to_one:1;
 		float		alpha_ref;
 	} ps;
 	struct {
 		unsigned	instance_divisors[PIPE_MAX_ATTRIBS];
+		unsigned	ucps_enabled:2;
 	} vs;
 };
 
@@ -135,13 +138,14 @@ struct si_pipe_shader {
 	struct si_pipe_shader		*next_variant;
 	struct si_shader		shader;
 	struct si_pm4_state		*pm4;
-	struct si_resource		*bo;
+	struct r600_resource		*bo;
 	unsigned			num_sgprs;
 	unsigned			num_vgprs;
 	unsigned			lds_size;
 	unsigned			spi_ps_input_ena;
 	unsigned			spi_shader_col_format;
 	unsigned			cb_shader_mask;
+	bool				cb0_is_integer;
 	unsigned			sprite_coord_enable;
 	unsigned			so_strides[4];
 	union si_shader_key		key;

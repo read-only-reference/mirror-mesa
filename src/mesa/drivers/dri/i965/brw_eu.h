@@ -228,16 +228,70 @@ void brw_set_dp_write_message(struct brw_compile *p,
 			      GLuint end_of_thread,
 			      GLuint send_commit_msg);
 
+enum brw_urb_write_flags {
+   BRW_URB_WRITE_NO_FLAGS = 0,
+
+   /**
+    * Causes a new URB entry to be allocated, and its address stored in the
+    * destination register (gen < 7).
+    */
+   BRW_URB_WRITE_ALLOCATE = 0x1,
+
+   /**
+    * Causes the current URB entry to be deallocated (gen < 7).
+    */
+   BRW_URB_WRITE_UNUSED = 0x2,
+
+   /**
+    * Causes the thread to terminate.
+    */
+   BRW_URB_WRITE_EOT = 0x4,
+
+   /**
+    * Indicates that the given URB entry is complete, and may be sent further
+    * down the 3D pipeline (gen < 7).
+    */
+   BRW_URB_WRITE_COMPLETE = 0x8,
+
+   /**
+    * Indicates that an additional offset (which may be different for the two
+    * vec4 slots) is stored in the message header (gen == 7).
+    */
+   BRW_URB_WRITE_PER_SLOT_OFFSET = 0x10,
+
+   /**
+    * Convenient combination of flags: end the thread while simultaneously
+    * marking the given URB entry as complete.
+    */
+   BRW_URB_WRITE_EOT_COMPLETE = BRW_URB_WRITE_EOT | BRW_URB_WRITE_COMPLETE,
+
+   /**
+    * Convenient combination of flags: mark the given URB entry as complete
+    * and simultaneously allocate a new one.
+    */
+   BRW_URB_WRITE_ALLOCATE_COMPLETE =
+      BRW_URB_WRITE_ALLOCATE | BRW_URB_WRITE_COMPLETE,
+};
+
+#ifdef __cplusplus
+/**
+ * Allow brw_urb_write_flags enums to be ORed together.
+ */
+inline brw_urb_write_flags
+operator|(brw_urb_write_flags x, brw_urb_write_flags y)
+{
+   return static_cast<brw_urb_write_flags>(static_cast<int>(x) |
+                                           static_cast<int>(y));
+}
+#endif
+
 void brw_urb_WRITE(struct brw_compile *p,
 		   struct brw_reg dest,
 		   GLuint msg_reg_nr,
 		   struct brw_reg src0,
-		   bool allocate,
-		   bool used,
+                   enum brw_urb_write_flags flags,
 		   GLuint msg_length,
 		   GLuint response_length,
-		   bool eot,
-		   bool writes_complete,
 		   GLuint offset,
 		   GLuint swizzle);
 

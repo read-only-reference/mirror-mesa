@@ -121,7 +121,7 @@ nv84_load_vp_firmware_mpeg(struct nouveau_device *dev, struct nv84_decoder *dec)
 }
 
 static void
-nv84_decoder_decode_bitstream_h264(struct pipe_video_decoder *decoder,
+nv84_decoder_decode_bitstream_h264(struct pipe_video_codec *decoder,
                                    struct pipe_video_buffer *video_target,
                                    struct pipe_picture_desc *picture,
                                    unsigned num_buffers,
@@ -140,26 +140,26 @@ nv84_decoder_decode_bitstream_h264(struct pipe_video_decoder *decoder,
 }
 
 static void
-nv84_decoder_flush(struct pipe_video_decoder *decoder)
+nv84_decoder_flush(struct pipe_video_codec *decoder)
 {
 }
 
 static void
-nv84_decoder_begin_frame_h264(struct pipe_video_decoder *decoder,
+nv84_decoder_begin_frame_h264(struct pipe_video_codec *decoder,
                               struct pipe_video_buffer *target,
                               struct pipe_picture_desc *picture)
 {
 }
 
 static void
-nv84_decoder_end_frame_h264(struct pipe_video_decoder *decoder,
+nv84_decoder_end_frame_h264(struct pipe_video_codec *decoder,
                             struct pipe_video_buffer *target,
                             struct pipe_picture_desc *picture)
 {
 }
 
 static void
-nv84_decoder_decode_bitstream_mpeg12(struct pipe_video_decoder *decoder,
+nv84_decoder_decode_bitstream_mpeg12(struct pipe_video_codec *decoder,
                                      struct pipe_video_buffer *video_target,
                                      struct pipe_picture_desc *picture,
                                      unsigned num_buffers,
@@ -179,7 +179,7 @@ nv84_decoder_decode_bitstream_mpeg12(struct pipe_video_decoder *decoder,
 }
 
 static void
-nv84_decoder_begin_frame_mpeg12(struct pipe_video_decoder *decoder,
+nv84_decoder_begin_frame_mpeg12(struct pipe_video_codec *decoder,
                               struct pipe_video_buffer *target,
                               struct pipe_picture_desc *picture)
 {
@@ -202,7 +202,7 @@ nv84_decoder_begin_frame_mpeg12(struct pipe_video_decoder *decoder,
 }
 
 static void
-nv84_decoder_end_frame_mpeg12(struct pipe_video_decoder *decoder,
+nv84_decoder_end_frame_mpeg12(struct pipe_video_codec *decoder,
                               struct pipe_video_buffer *target,
                               struct pipe_picture_desc *picture)
 {
@@ -213,7 +213,7 @@ nv84_decoder_end_frame_mpeg12(struct pipe_video_decoder *decoder,
 }
 
 static void
-nv84_decoder_decode_macroblock(struct pipe_video_decoder *decoder,
+nv84_decoder_decode_macroblock(struct pipe_video_codec *decoder,
                                struct pipe_video_buffer *target,
                                struct pipe_picture_desc *picture,
                                const struct pipe_macroblock *macroblocks,
@@ -229,7 +229,7 @@ nv84_decoder_decode_macroblock(struct pipe_video_decoder *decoder,
 }
 
 static void
-nv84_decoder_destroy(struct pipe_video_decoder *decoder)
+nv84_decoder_destroy(struct pipe_video_codec *decoder)
 {
    struct nv84_decoder *dec = (struct nv84_decoder *)decoder;
 
@@ -261,14 +261,9 @@ nv84_decoder_destroy(struct pipe_video_decoder *decoder)
    FREE(dec);
 }
 
-struct pipe_video_decoder *
+struct pipe_video_codec *
 nv84_create_decoder(struct pipe_context *context,
-                    enum pipe_video_profile profile,
-                    enum pipe_video_entrypoint entrypoint,
-                    enum pipe_video_chroma_format chroma_format,
-                    unsigned width, unsigned height,
-                    unsigned max_references,
-                    bool chunked_decode)
+                    const struct pipe_video_codec *templ)
 {
    struct nv50_context *nv50 = (struct nv50_context *)context;
    struct nouveau_screen *screen = &nv50->screen->base;
@@ -279,22 +274,20 @@ nv84_create_decoder(struct pipe_context *context,
    union pipe_color_union color;
    struct nv04_fifo nv04_data = { .vram = 0xbeef0201, .gart = 0xbeef0202 };
    int ret, i;
-   int is_h264 = u_reduce_video_profile(profile) == PIPE_VIDEO_CODEC_MPEG4_AVC;
-   int is_mpeg12 = u_reduce_video_profile(profile) == PIPE_VIDEO_CODEC_MPEG12;
+   int is_h264 = u_reduce_video_profile(templ->profile) == PIPE_VIDEO_FORMAT_MPEG4_AVC;
+   int is_mpeg12 = u_reduce_video_profile(templ->profile) == PIPE_VIDEO_FORMAT_MPEG12;
 
    if (getenv("XVMC_VL"))
-      return vl_create_decoder(context, profile, entrypoint,
-                               chroma_format, width, height,
-                               max_references, chunked_decode);
+      return vl_create_decoder(context, templ);
 
-   if ((is_h264 && entrypoint != PIPE_VIDEO_ENTRYPOINT_BITSTREAM) ||
-       (is_mpeg12 && entrypoint > PIPE_VIDEO_ENTRYPOINT_IDCT)) {
-      debug_printf("%x\n", entrypoint);
+   if ((is_h264 && templ->entrypoint != PIPE_VIDEO_ENTRYPOINT_BITSTREAM) ||
+       (is_mpeg12 && templ->entrypoint > PIPE_VIDEO_ENTRYPOINT_IDCT)) {
+      debug_printf("%x\n", templ->entrypoint);
       return NULL;
    }
 
    if (!is_h264 && !is_mpeg12) {
-      debug_printf("invalid profile: %x\n", profile);
+      debug_printf("invalid profile: %x\n", templ->profile);
       return NULL;
    }
 
@@ -302,13 +295,8 @@ nv84_create_decoder(struct pipe_context *context,
    if (!dec)
       return NULL;
 
+   dec->base = *templ;
    dec->base.context = context;
-   dec->base.profile = profile;
-   dec->base.entrypoint = entrypoint;
-   dec->base.chroma_format = chroma_format;
-   dec->base.width = width;
-   dec->base.height = height;
-   dec->base.max_references = max_references;
    dec->base.destroy = nv84_decoder_destroy;
    dec->base.flush = nv84_decoder_flush;
    if (is_h264) {
@@ -326,7 +314,7 @@ nv84_create_decoder(struct pipe_context *context,
       dec->base.begin_frame = nv84_decoder_begin_frame_mpeg12;
       dec->base.end_frame = nv84_decoder_end_frame_mpeg12;
 
-      if (entrypoint == PIPE_VIDEO_ENTRYPOINT_BITSTREAM) {
+      if (templ->entrypoint == PIPE_VIDEO_ENTRYPOINT_BITSTREAM) {
          dec->mpeg12_bs = CALLOC_STRUCT(vl_mpg12_bs);
          if (!dec->mpeg12_bs)
             goto fail;
@@ -409,7 +397,7 @@ nv84_create_decoder(struct pipe_context *context,
          goto fail;
       ret = nouveau_bo_new(screen->device, NOUVEAU_BO_VRAM | NOUVEAU_BO_NOSNOOP,
                            0,
-                           (max_references + 1) * dec->frame_mbs * 0x40 +
+                           (templ->max_references + 1) * dec->frame_mbs * 0x40 +
                            dec->frame_size + 0x2000,
                            NULL, &dec->mbring);
       if (ret)
@@ -433,8 +421,8 @@ nv84_create_decoder(struct pipe_context *context,
    if (is_mpeg12) {
       ret = nouveau_bo_new(screen->device, NOUVEAU_BO_GART,
                            0,
-                           align(0x20 * mb(width) * mb(height), 0x100) +
-                           (6 * 64 * 8) * mb(width) * mb(height) + 0x100,
+                           align(0x20 * mb(templ->width) * mb(templ->height), 0x100) +
+                           (6 * 64 * 8) * mb(templ->width) * mb(templ->height) + 0x100,
                            NULL, &dec->mpeg12_bo);
       if (ret)
          goto fail;
@@ -485,7 +473,7 @@ nv84_create_decoder(struct pipe_context *context,
       color.f[0] = color.f[1] = color.f[2] = color.f[3] = 0;
       surf.offset = dec->frame_size;
       surf.width = 64;
-      surf.height = (max_references + 1) * dec->frame_mbs / 4;
+      surf.height = (templ->max_references + 1) * dec->frame_mbs / 4;
       surf.depth = 1;
       surf.base.format = PIPE_FORMAT_B8G8R8A8_UNORM;
       surf.base.u.tex.level = 0;
@@ -624,15 +612,11 @@ nv84_video_buffer_create(struct pipe_context *pipe,
    union nouveau_bo_config cfg;
    unsigned bo_size;
 
-   if (getenv("XVMC_VL"))
+   if (getenv("XVMC_VL") || template->buffer_format != PIPE_FORMAT_NV12)
       return vl_video_buffer_create(pipe, template);
 
    if (!template->interlaced) {
       debug_printf("Require interlaced video buffers\n");
-      return NULL;
-   }
-   if (template->buffer_format != PIPE_FORMAT_NV12) {
-      debug_printf("Must use NV12 format\n");
       return NULL;
    }
    if (template->chroma_format != PIPE_VIDEO_CHROMA_FORMAT_420) {
@@ -669,7 +653,7 @@ nv84_video_buffer_create(struct pipe_context *pipe,
    templ.format = PIPE_FORMAT_R8_UNORM;
    templ.width0 = align(template->width, 2);
    templ.height0 = align(template->height, 4) / 2;
-   templ.flags = NV50_RESOURCE_FLAG_VIDEO;
+   templ.flags = NV50_RESOURCE_FLAG_VIDEO | NV50_RESOURCE_FLAG_NOALLOC;
    templ.array_size = 2;
 
    cfg.nv50.tile_mode = 0x20;
@@ -760,12 +744,13 @@ error:
 int
 nv84_screen_get_video_param(struct pipe_screen *pscreen,
                             enum pipe_video_profile profile,
+                            enum pipe_video_entrypoint entrypoint,
                             enum pipe_video_cap param)
 {
    switch (param) {
    case PIPE_VIDEO_CAP_SUPPORTED:
-      return u_reduce_video_profile(profile) == PIPE_VIDEO_CODEC_MPEG4_AVC ||
-         u_reduce_video_profile(profile) == PIPE_VIDEO_CODEC_MPEG12;
+      return u_reduce_video_profile(profile) == PIPE_VIDEO_FORMAT_MPEG4_AVC ||
+         u_reduce_video_profile(profile) == PIPE_VIDEO_FORMAT_MPEG12;
    case PIPE_VIDEO_CAP_NPOT_TEXTURES:
       return 1;
    case PIPE_VIDEO_CAP_MAX_WIDTH:
@@ -778,6 +763,21 @@ nv84_screen_get_video_param(struct pipe_screen *pscreen,
       return true;
    case PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE:
       return false;
+   case PIPE_VIDEO_CAP_MAX_LEVEL:
+      switch (profile) {
+      case PIPE_VIDEO_PROFILE_MPEG1:
+         return 0;
+      case PIPE_VIDEO_PROFILE_MPEG2_SIMPLE:
+      case PIPE_VIDEO_PROFILE_MPEG2_MAIN:
+         return 3;
+      case PIPE_VIDEO_PROFILE_MPEG4_AVC_BASELINE:
+      case PIPE_VIDEO_PROFILE_MPEG4_AVC_MAIN:
+      case PIPE_VIDEO_PROFILE_MPEG4_AVC_HIGH:
+         return 41;
+      default:
+         debug_printf("unknown video profile: %d\n", profile);
+         return 0;
+      }
    default:
       debug_printf("unknown video param: %d\n", param);
       return 0;
@@ -787,10 +787,11 @@ nv84_screen_get_video_param(struct pipe_screen *pscreen,
 boolean
 nv84_screen_video_supported(struct pipe_screen *screen,
                             enum pipe_format format,
-                            enum pipe_video_profile profile)
+                            enum pipe_video_profile profile,
+                            enum pipe_video_entrypoint entrypoint)
 {
    if (profile != PIPE_VIDEO_PROFILE_UNKNOWN)
       return format == PIPE_FORMAT_NV12;
 
-   return vl_video_buffer_is_format_supported(screen, format, profile);
+   return vl_video_buffer_is_format_supported(screen, format, profile, entrypoint);
 }

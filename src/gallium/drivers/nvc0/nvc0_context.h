@@ -333,29 +333,23 @@ void nvc0_vertex_arrays_validate(struct nvc0_context *);
 void nvc0_idxbuf_validate(struct nvc0_context *);
 
 /* nvc0_video.c */
-struct pipe_video_decoder *
+struct pipe_video_codec *
 nvc0_create_decoder(struct pipe_context *context,
-                    enum pipe_video_profile profile,
-                    enum pipe_video_entrypoint entrypoint,
-                    enum pipe_video_chroma_format chroma_format,
-                    unsigned width, unsigned height,
-                    unsigned max_references,
-                    bool expect_chunked_decode);
+                    const struct pipe_video_codec *templ);
 
 struct pipe_video_buffer *
 nvc0_video_buffer_create(struct pipe_context *pipe,
                          const struct pipe_video_buffer *templat);
-
-int
-nvc0_screen_get_video_param(struct pipe_screen *pscreen,
-                            enum pipe_video_profile profile,
-                            enum pipe_video_cap param);
 
 /* nvc0_push.c */
 void nvc0_push_vbo(struct nvc0_context *, const struct pipe_draw_info *);
 
 /* nve4_compute.c */
 void nve4_launch_grid(struct pipe_context *,
+                      const uint *, const uint *, uint32_t, const void *);
+
+/* nvc0_compute.c */
+void nvc0_launch_grid(struct pipe_context *,
                       const uint *, const uint *, uint32_t, const void *);
 
 #endif

@@ -97,9 +97,9 @@ upload_3dstate_so_buffers(struct brw_context *brw)
  * stream.  We only have one stream of rendering coming out of the GS unit, so
  * we only emit stream 0 (low 16 bits) SO_DECLs.
  */
-static void
-upload_3dstate_so_decl_list(struct brw_context *brw,
-			    const struct brw_vue_map *vue_map)
+void
+gen7_upload_3dstate_so_decl_list(struct brw_context *brw,
+                                 const struct brw_vue_map *vue_map)
 {
    struct gl_context *ctx = &brw->ctx;
    /* BRW_NEW_VERTEX_PROGRAM */
@@ -227,7 +227,7 @@ upload_sol_state(struct brw_context *brw)
    if (active) {
       upload_3dstate_so_buffers(brw);
       /* BRW_NEW_VUE_MAP_GEOM_OUT */
-      upload_3dstate_so_decl_list(brw, &brw->vue_map_geom_out);
+      gen7_upload_3dstate_so_decl_list(brw, &brw->vue_map_geom_out);
    }
 
    /* Finally, set up the SOL stage.  This command must always follow updates to

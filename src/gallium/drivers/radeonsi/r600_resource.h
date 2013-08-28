@@ -28,6 +28,7 @@
 /* flag to indicate a resource is to be used as a transfer so should not be tiled */
 #define R600_RESOURCE_FLAG_TRANSFER		PIPE_RESOURCE_FLAG_DRV_PRIV
 #define R600_RESOURCE_FLAG_FLUSHED_DEPTH	(PIPE_RESOURCE_FLAG_DRV_PRIV << 1)
+#define R600_RESOURCE_FLAG_FORCE_TILING		(PIPE_RESOURCE_FLAG_DRV_PRIV << 2)
 
 /* Texture transfer. */
 struct r600_transfer {
@@ -36,23 +37,40 @@ struct r600_transfer {
 	/* Buffer transfer. */
 	struct pipe_transfer		*buffer_transfer;
 	unsigned			offset;
-	struct pipe_resource		*staging;
+	struct r600_resource		*staging;
 };
 
-struct r600_resource_texture {
-	struct si_resource		resource;
+struct r600_fmask_info {
+	unsigned offset;
+	unsigned size;
+	unsigned alignment;
+	unsigned pitch;
+	unsigned bank_height;
+	unsigned slice_tile_max;
+	unsigned tile_mode_index;
+};
 
-	/* If this resource is a depth-stencil buffer on evergreen, this contains
-	 * the depth part of the format. There is a separate stencil resource
-	 * for the stencil buffer below. */
-	enum pipe_format		real_format;
+struct r600_cmask_info {
+	unsigned offset;
+	unsigned size;
+	unsigned alignment;
+	unsigned slice_tile_max;
+};
 
+struct r600_texture {
+	struct r600_resource		resource;
+
+	unsigned			size;
 	unsigned			pitch_override;
 	unsigned			is_depth;
-	unsigned			dirty_db_mask; /* each bit says if that miplevel is dirty */
-	struct r600_resource_texture	*flushed_depth_texture;
+	unsigned			dirty_level_mask; /* each bit says if that miplevel is dirty */
+	struct r600_texture		*flushed_depth_texture;
 	boolean				is_flushing_texture;
 	struct radeon_surface		surface;
+
+	/* Colorbuffer compression and fast clear. */
+	struct r600_fmask_info		fmask;
+	struct r600_cmask_info		cmask;
 };
 
 struct r600_surface {
@@ -70,12 +88,12 @@ struct pipe_resource *si_texture_from_handle(struct pipe_screen *screen,
 
 bool r600_init_flushed_depth_texture(struct pipe_context *ctx,
 				     struct pipe_resource *texture,
-				     struct r600_resource_texture **staging);
+				     struct r600_texture **staging);
 
 
 struct r600_context;
 
-void r600_upload_const_buffer(struct r600_context *rctx, struct si_resource **rbuffer,
+void r600_upload_const_buffer(struct r600_context *rctx, struct r600_resource **rbuffer,
 			      const uint8_t *ptr, unsigned size,
 			      uint32_t *const_offset);
 

@@ -107,7 +107,7 @@ struct aaline_stage
    struct aaline_fragment_shader *fs;
    struct {
       void *sampler[PIPE_MAX_SAMPLERS];
-      struct pipe_sampler_view *sampler_views[PIPE_MAX_SAMPLERS];
+      struct pipe_sampler_view *sampler_views[PIPE_MAX_SHADER_SAMPLER_VIEWS];
    } state;
 
    /*
@@ -692,13 +692,7 @@ aaline_first_line(struct draw_stage *stage, struct prim_header *header)
       return;
    }
 
-   /* update vertex attrib info */
-   aaline->pos_slot = draw_current_shader_position_output(draw);;
-
-   /* allocate the extra post-transformed vertex attribute */
-   aaline->tex_slot = draw_alloc_extra_vertex_attrib(draw,
-                                                     TGSI_SEMANTIC_GENERIC,
-                                                     aaline->fs->generic_attrib);
+   draw_aaline_prepare_outputs(draw, draw->pipeline.aaline);
 
    /* how many samplers? */
    /* we'll use sampler/texture[pstip->sampler_unit] for the stipple */
@@ -769,7 +763,7 @@ aaline_destroy(struct draw_stage *stage)
    struct pipe_context *pipe = stage->draw->pipe;
    uint i;
 
-   for (i = 0; i < PIPE_MAX_SAMPLERS; i++) {
+   for (i = 0; i < PIPE_MAX_SHADER_SAMPLER_VIEWS; i++) {
       pipe_sampler_view_reference(&aaline->state.sampler_views[i], NULL);
    }
 
@@ -943,7 +937,7 @@ aaline_set_sampler_views(struct pipe_context *pipe,
    for (i = 0; i < num; i++) {
       pipe_sampler_view_reference(&aaline->state.sampler_views[i], views[i]);
    }
-   for ( ; i < PIPE_MAX_SAMPLERS; i++) {
+   for ( ; i < PIPE_MAX_SHADER_SAMPLER_VIEWS; i++) {
       pipe_sampler_view_reference(&aaline->state.sampler_views[i], NULL);
    }
    aaline->num_sampler_views = num;
@@ -952,6 +946,25 @@ aaline_set_sampler_views(struct pipe_context *pipe,
    aaline->driver_set_sampler_views(pipe, num, views);
 }
 
+
+void
+draw_aaline_prepare_outputs(struct draw_context *draw,
+                            struct draw_stage *stage)
+{
+   struct aaline_stage *aaline = aaline_stage(stage);
+   const struct pipe_rasterizer_state *rast = draw->rasterizer;
+
+   /* update vertex attrib info */
+   aaline->pos_slot = draw_current_shader_position_output(draw);;
+
+   if (!rast->line_smooth)
+      return;
+
+   /* allocate the extra post-transformed vertex attribute */
+   aaline->tex_slot = draw_alloc_extra_vertex_attrib(draw,
+                                                     TGSI_SEMANTIC_GENERIC,
+                                                     aaline->fs->generic_attrib);
+}
 
 /**
  * Called by drivers that want to install this AA line prim stage

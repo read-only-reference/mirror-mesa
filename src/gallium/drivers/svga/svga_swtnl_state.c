@@ -125,7 +125,7 @@ update_swtnl_draw( struct svga_context *svga,
       draw_set_mrd(svga->swtnl.draw, 
                    svga->curr.depthscale);
 
-   return 0;
+   return PIPE_OK;
 }
 
 
@@ -162,6 +162,7 @@ svga_swtnl_update_vdecl( struct svga_context *svga )
    memset(vinfo, 0, sizeof(*vinfo));
    memset(vdecl, 0, sizeof(vdecl));
 
+   draw_prepare_shader_outputs(draw);
    /* always add position */
    src = draw_find_shader_output(draw, TGSI_SEMANTIC_POSITION, 0);
    draw_emit_vertex_attr(vinfo, EMIT_4F, INTERP_LINEAR, src);
@@ -222,12 +223,12 @@ svga_swtnl_update_vdecl( struct svga_context *svga )
       vdecl[i].array.stride = offset;
 
    if (memcmp(svga_render->vdecl, vdecl, sizeof(vdecl)) == 0)
-      return 0;
+      return PIPE_OK;
 
    memcpy(svga_render->vdecl, vdecl, sizeof(vdecl));
    svga->swtnl.new_vdecl = TRUE;
 
-   return 0;
+   return PIPE_OK;
 }
 
 

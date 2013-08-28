@@ -179,6 +179,7 @@ ALU3(BFI2)
 ALU1(FBH)
 ALU1(FBL)
 ALU1(CBIT)
+ALU3(MAD)
 
 /** Gen4 predicated IF. */
 fs_inst *
@@ -689,7 +690,7 @@ fs_visitor::pop_force_sechalf()
 bool
 fs_inst::is_partial_write()
 {
-   return (this->predicate ||
+   return ((this->predicate && this->opcode != BRW_OPCODE_SEL) ||
            this->force_uncompressed ||
            this->force_sechalf);
 }
@@ -1048,7 +1049,7 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
                   inst->predicate = BRW_PREDICATE_NORMAL;
                   inst->predicate_inverse = true;
                }
-               if (brw->gen < 6) {
+               if (brw->gen < 6 && interpolation_mode == INTERP_QUALIFIER_SMOOTH) {
                   emit(BRW_OPCODE_MUL, attr, attr, this->pixel_w);
                }
 	       attr.reg_offset++;
@@ -1358,7 +1359,11 @@ fs_visitor::split_virtual_grfs()
        * the send is reading the whole thing.
        */
       if (inst->is_send_from_grf()) {
-         split_grf[inst->src[0].reg] = false;
+         for (int i = 0; i < 3; i++) {
+            if (inst->src[i].file == GRF) {
+               split_grf[inst->src[i].reg] = false;
+            }
+         }
       }
    }
 
@@ -2118,6 +2123,20 @@ fs_visitor::register_coalesce()
 	    }
 	 }
 
+         if (has_source_modifiers) {
+            for (int i = 0; i < 3; i++) {
+               if (scan_inst->src[i].file == GRF &&
+                   scan_inst->src[i].reg == inst->dst.reg &&
+                   scan_inst->src[i].reg_offset == inst->dst.reg_offset &&
+                   inst->dst.type != scan_inst->src[i].type)
+               {
+                 interfered = true;
+                 break;
+               }
+            }
+         }
+
+
 	 /* The gen6 MATH instruction can't handle source modifiers or
 	  * unusual register regions, so avoid coalescing those for
 	  * now.  We should do something more specific.
@@ -2704,7 +2723,7 @@ fs_visitor::dump_instruction(backend_instruction *be_inst)
           (brw->gen < 5 || (inst->opcode != BRW_OPCODE_SEL &&
                               inst->opcode != BRW_OPCODE_IF &&
                               inst->opcode != BRW_OPCODE_WHILE))) {
-         printf(".f0.%d\n", inst->flag_subreg);
+         printf(".f0.%d", inst->flag_subreg);
       }
    }
    printf(" ");
@@ -2724,6 +2743,12 @@ fs_visitor::dump_instruction(backend_instruction *be_inst)
       break;
    case UNIFORM:
       printf("***u%d***", inst->dst.reg);
+      break;
+   case ARF:
+      if (inst->dst.reg == BRW_ARF_NULL)
+         printf("(null)");
+      else
+         printf("arf%d", inst->dst.reg);
       break;
    default:
       printf("???");
@@ -3058,14 +3083,18 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
 
    exec_list *simd16_instructions = NULL;
    fs_visitor v2(brw, c, prog, fp, 16);
-   bool no16 = INTEL_DEBUG & DEBUG_NO16;
-   if (brw->gen >= 5 && c->prog_data.nr_pull_params == 0 && likely(!no16)) {
-      v2.import_uniforms(&v);
-      if (!v2.run()) {
-         perf_debug("16-wide shader failed to compile, falling back to "
-                    "8-wide at a 10-20%% performance cost: %s", v2.fail_msg);
+   if (brw->gen >= 5 && likely(!(INTEL_DEBUG & DEBUG_NO16))) {
+      if (c->prog_data.nr_pull_params == 0) {
+         /* Try a 16-wide compile */
+         v2.import_uniforms(&v);
+         if (!v2.run()) {
+            perf_debug("16-wide shader failed to compile, falling back to "
+                       "8-wide at a 10-20%% performance cost: %s", v2.fail_msg);
+         } else {
+            simd16_instructions = &v2.instructions;
+         }
       } else {
-         simd16_instructions = &v2.instructions;
+         perf_debug("Skipping 16-wide due to pull parameters.\n");
       }
    }
 
@@ -3133,7 +3162,8 @@ brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
 
    key.clamp_fragment_color = ctx->API == API_OPENGL_COMPAT;
 
-   for (int i = 0; i < MAX_SAMPLERS; i++) {
+   unsigned sampler_count = _mesa_fls(fp->Base.SamplersUsed);
+   for (unsigned i = 0; i < sampler_count; i++) {
       if (fp->Base.ShadowSamplers & (1 << i)) {
          /* Assume DEPTH_TEXTURE_MODE is the default: X, X, X, 1 */
          key.tex.swizzles[i] =

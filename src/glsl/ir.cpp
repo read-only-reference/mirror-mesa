@@ -515,6 +515,7 @@ static const char *const operator_strs[] = {
    "bfm",
    "ubo_load",
    "vector_extract",
+   "fma",
    "lrp",
    "bfi",
    "bitfield_extract",
@@ -1777,4 +1778,25 @@ ir_rvalue::as_rvalue_to_saturate()
    }
 
    return NULL;
+}
+
+
+unsigned
+vertices_per_prim(GLenum prim)
+{
+   switch (prim) {
+   case GL_POINTS:
+      return 1;
+   case GL_LINES:
+      return 2;
+   case GL_TRIANGLES:
+      return 3;
+   case GL_LINES_ADJACENCY:
+      return 4;
+   case GL_TRIANGLES_ADJACENCY:
+      return 6;
+   default:
+      assert(!"Bad primitive");
+      return 3;
+   }
 }

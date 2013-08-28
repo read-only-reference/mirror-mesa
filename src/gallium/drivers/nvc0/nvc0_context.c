@@ -258,8 +258,8 @@ nvc0_create(struct pipe_screen *pscreen, void *priv)
 
    pipe->draw_vbo = nvc0_draw_vbo;
    pipe->clear = nvc0_clear;
-   if (nvc0->screen->base.class_3d >= NVE4_3D_CLASS)
-      pipe->launch_grid = nve4_launch_grid;
+   pipe->launch_grid = (nvc0->screen->base.class_3d >= NVE4_3D_CLASS) ?
+      nve4_launch_grid : nvc0_launch_grid;
 
    pipe->flush = nvc0_flush;
    pipe->texture_barrier = nvc0_texture_barrier;
@@ -286,7 +286,7 @@ nvc0_create(struct pipe_screen *pscreen, void *priv)
    draw_set_rasterize_stage(nvc0->draw, nvc0_draw_render_stage(nvc0));
 #endif
 
-   pipe->create_video_decoder = nvc0_create_decoder;
+   pipe->create_video_codec = nvc0_create_decoder;
    pipe->create_video_buffer = nvc0_video_buffer_create;
 
    /* shader builtin library is per-screen, but we need a context for m2mf */
@@ -394,7 +394,7 @@ nvc0_context_get_sample_position(struct pipe_context *pipe,
    case 8: ptr = ms8; break;
    default:
       assert(0);
-      break;
+      return; /* bad sample count -> undefined locations */
    }
    xy[0] = ptr[sample_index][0] * 0.0625f;
    xy[1] = ptr[sample_index][1] * 0.0625f;

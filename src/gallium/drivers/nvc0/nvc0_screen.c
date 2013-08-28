@@ -27,6 +27,8 @@
 #include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
 
+#include "nouveau/nouveau_vp3_video.h"
+
 #include "nvc0_context.h"
 #include "nvc0_screen.h"
 
@@ -62,18 +64,6 @@ nvc0_screen_is_format_supported(struct pipe_screen *pscreen,
 
    return (nvc0_format_table[format].usage & bindings) == bindings;
 }
-
-static boolean
-nvc0_screen_video_supported(struct pipe_screen *screen,
-                            enum pipe_format format,
-                            enum pipe_video_profile profile)
-{
-   if (profile != PIPE_VIDEO_PROFILE_UNKNOWN)
-      return format == PIPE_FORMAT_NV12;
-
-   return vl_video_buffer_is_format_supported(screen, format, profile);
-}
-
 
 static int
 nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
@@ -489,6 +479,11 @@ nvc0_screen_init_compute(struct nvc0_screen *screen)
    switch (screen->base.device->chipset & 0xf0) {
    case 0xc0:
    case 0xd0:
+      /* Using COMPUTE has weird effects on 3D state, we need to
+       * investigate this further before enabling it by default.
+       */
+      if (debug_get_bool_option("NVC0_COMPUTE", FALSE))
+         return nvc0_screen_compute_setup(screen, screen->base.pushbuf);
       return 0;
    case 0xe0:
    case 0xf0:
@@ -588,8 +583,8 @@ nvc0_screen_create(struct nouveau_device *dev)
 
    nvc0_screen_init_resource_functions(pscreen);
 
-   screen->base.base.get_video_param = nvc0_screen_get_video_param;
-   screen->base.base.is_video_format_supported = nvc0_screen_video_supported;
+   screen->base.base.get_video_param = nouveau_vp3_screen_get_video_param;
+   screen->base.base.is_video_format_supported = nouveau_vp3_screen_video_supported;
 
    ret = nouveau_bo_new(dev, NOUVEAU_BO_GART | NOUVEAU_BO_MAP, 0, 4096, NULL,
                         &screen->fence.bo);

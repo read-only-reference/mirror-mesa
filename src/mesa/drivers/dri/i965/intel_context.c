@@ -144,6 +144,7 @@ intel_flush_front(struct gl_context *ctx)
           * performance.
           */
          intel_resolve_for_dri2_flush(brw, driDrawable);
+         intel_batchbuffer_flush(brw);
 
          screen->dri2.loader->flushFrontBuffer(driDrawable,
                                                driDrawable->loaderPrivate);
@@ -332,6 +333,7 @@ static const struct dri_debug_control debug_control[] = {
    { "shader_time", DEBUG_SHADER_TIME },
    { "no16",  DEBUG_NO16 },
    { "blorp", DEBUG_BLORP },
+   { "vue",   DEBUG_VUE },
    { NULL,    0 }
 };
 
@@ -348,21 +350,12 @@ intelInvalidateState(struct gl_context * ctx, GLuint new_state)
    brw->NewGLState |= new_state;
 }
 
-void
-_intel_flush(struct gl_context *ctx, const char *file, int line)
-{
-   struct brw_context *brw = brw_context(ctx);
-
-   if (brw->batch.used)
-      _intel_batchbuffer_flush(brw, file, line);
-}
-
 static void
 intel_glFlush(struct gl_context *ctx)
 {
    struct brw_context *brw = brw_context(ctx);
 
-   intel_flush(ctx);
+   intel_batchbuffer_flush(brw);
    intel_flush_front(ctx);
    if (brw->is_front_buffer_rendering)
       brw->need_throttle = true;
@@ -373,8 +366,7 @@ intelFinish(struct gl_context * ctx)
 {
    struct brw_context *brw = brw_context(ctx);
 
-   intel_flush(ctx);
-   intel_flush_front(ctx);
+   intel_glFlush(ctx);
 
    if (brw->batch.last_bo)
       drm_intel_bo_wait_rendering(brw->batch.last_bo);
@@ -399,6 +391,7 @@ intelInitDriverFunctions(struct dd_function_table *functions)
    intelInitPixelFuncs(functions);
    intelInitBufferObjectFuncs(functions);
    intel_init_syncobj_functions(functions);
+   brw_init_object_purgeable_functions(functions);
 }
 
 static bool
@@ -481,6 +474,7 @@ intelInitContext(struct brw_context *brw,
    }
 
    brw->intelScreen = intelScreen;
+   brw->bufmgr = intelScreen->bufmgr;
 
    if (!_mesa_initialize_context(&brw->ctx, api, mesaVis, shareCtx,
                                  functions)) {
@@ -539,8 +533,6 @@ intelInitContext(struct brw_context *brw,
     * be more conservative.
     */
    brw->max_gtt_map_object_size = gtt_size / 4;
-
-   brw->bufmgr = intelScreen->bufmgr;
 
    bo_reuse_mode = driQueryOptioni(&brw->optionCache, "bo_reuse");
    switch (bo_reuse_mode) {
@@ -754,11 +746,15 @@ intelMakeCurrent(__DRIcontext * driContextPriv,
 	 driContextPriv->dri2.read_stamp = driReadPriv->dri2.stamp - 1;
       }
 
+      /* The sRGB workaround changes the renderbuffer's format. We must change
+       * the format before the renderbuffer's miptree get's allocated, otherwise
+       * the formats of the renderbuffer and its miptree will differ.
+       */
+      intel_gles3_srgb_workaround(brw, fb);
+      intel_gles3_srgb_workaround(brw, readFb);
+
       intel_prepare_render(brw);
       _mesa_make_current(ctx, fb, readFb);
-
-      intel_gles3_srgb_workaround(brw, ctx->WinSysDrawBuffer);
-      intel_gles3_srgb_workaround(brw, ctx->WinSysReadBuffer);
    }
    else {
       _mesa_make_current(NULL, NULL, NULL);
@@ -811,7 +807,7 @@ intel_query_dri2_buffers(struct brw_context *brw,
        * query, we need to make sure all the pending drawing has landed in the
        * real front buffer.
        */
-      intel_flush(&brw->ctx);
+      intel_batchbuffer_flush(brw);
       intel_flush_front(&brw->ctx);
 
       attachments[i++] = __DRI_BUFFER_FRONT_LEFT;
@@ -823,7 +819,7 @@ intel_query_dri2_buffers(struct brw_context *brw,
        * So before doing the query, make sure all the pending drawing has
        * landed in the real front buffer.
        */
-      intel_flush(&brw->ctx);
+      intel_batchbuffer_flush(brw);
       intel_flush_front(&brw->ctx);
    }
 

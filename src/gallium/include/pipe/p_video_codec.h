@@ -41,9 +41,9 @@ struct pipe_picture_desc;
 struct pipe_fence_handle;
 
 /**
- * Gallium video decoder for a specific codec/profile
+ * Gallium video codec for a specific format/profile
  */
-struct pipe_video_decoder
+struct pipe_video_codec
 {
    struct pipe_context *context;
 
@@ -53,23 +53,24 @@ struct pipe_video_decoder
    unsigned width;
    unsigned height;
    unsigned max_references;
+   bool expect_chunked_decode;
 
    /**
     * destroy this video decoder
     */
-   void (*destroy)(struct pipe_video_decoder *decoder);
+   void (*destroy)(struct pipe_video_codec *codec);
 
    /**
     * start decoding of a new frame
     */
-   void (*begin_frame)(struct pipe_video_decoder *decoder,
+   void (*begin_frame)(struct pipe_video_codec *codec,
                        struct pipe_video_buffer *target,
                        struct pipe_picture_desc *picture);
 
    /**
     * decode a macroblock
     */
-   void (*decode_macroblock)(struct pipe_video_decoder *decoder,
+   void (*decode_macroblock)(struct pipe_video_codec *codec,
                              struct pipe_video_buffer *target,
                              struct pipe_picture_desc *picture,
                              const struct pipe_macroblock *macroblocks,
@@ -78,7 +79,7 @@ struct pipe_video_decoder
    /**
     * decode a bitstream
     */
-   void (*decode_bitstream)(struct pipe_video_decoder *decoder,
+   void (*decode_bitstream)(struct pipe_video_codec *codec,
                             struct pipe_video_buffer *target,
                             struct pipe_picture_desc *picture,
                             unsigned num_buffers,
@@ -88,7 +89,7 @@ struct pipe_video_decoder
    /**
     * end decoding of the current frame
     */
-   void (*end_frame)(struct pipe_video_decoder *decoder,
+   void (*end_frame)(struct pipe_video_codec *codec,
                      struct pipe_video_buffer *target,
                      struct pipe_picture_desc *picture);
 
@@ -96,7 +97,7 @@ struct pipe_video_decoder
     * flush any outstanding command buffers to the hardware
     * should be called before a video_buffer is acessed by the state tracker again
     */
-   void (*flush)(struct pipe_video_decoder *decoder);
+   void (*flush)(struct pipe_video_codec *codec);
 };
 
 /**
@@ -138,9 +139,9 @@ struct pipe_video_buffer
    void *associated_data;
 
    /*
-    * decoder where the associated data came from
+    * codec where the associated data came from
     */
-   struct pipe_video_decoder *decoder;
+   struct pipe_video_codec *codec;
 
    /*
     * destroy the associated data

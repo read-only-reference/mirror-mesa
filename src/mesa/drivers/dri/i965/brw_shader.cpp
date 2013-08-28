@@ -24,11 +24,12 @@
 extern "C" {
 #include "main/macros.h"
 #include "brw_context.h"
-#include "brw_vs.h"
 }
+#include "brw_vs.h"
 #include "brw_fs.h"
 #include "glsl/ir_optimization.h"
 #include "glsl/glsl_parser_extras.h"
+#include "main/shaderapi.h"
 
 struct gl_shader *
 brw_new_shader(struct gl_context *ctx, GLuint name, GLuint type)
@@ -127,10 +128,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 	return false;
       prog->Parameters = _mesa_new_parameter_list();
 
-      if (stage == 0) {
-	 struct gl_vertex_program *vp = (struct gl_vertex_program *) prog;
-	 vp->UsesClipDistance = shProg->Vert.UsesClipDistance;
-      }
+      _mesa_copy_linked_program_data((gl_shader_type) stage, shProg, prog);
 
       void *mem_ctx = ralloc_context(NULL);
       bool progress;
@@ -236,8 +234,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       reparent_ir(shader->ir, shader->ir);
       ralloc_free(mem_ctx);
 
-      do_set_program_inouts(shader->ir, prog,
-			    shader->base.Type == GL_FRAGMENT_SHADER);
+      do_set_program_inouts(shader->ir, prog, shader->base.Type);
 
       prog->SamplersUsed = shader->base.active_samplers;
       _mesa_update_shader_textures_used(shProg, prog);
@@ -488,7 +485,7 @@ brw_instruction_name(enum opcode op)
       return "placeholder_halt";
 
    case VS_OPCODE_URB_WRITE:
-      return "urb_write";
+      return "vs_urb_write";
    case VS_OPCODE_SCRATCH_READ:
       return "scratch_read";
    case VS_OPCODE_SCRATCH_WRITE:
@@ -497,6 +494,19 @@ brw_instruction_name(enum opcode op)
       return "pull_constant_load";
    case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
       return "pull_constant_load_gen7";
+   case VS_OPCODE_UNPACK_FLAGS_SIMD4X2:
+      return "unpack_flags_simd4x2";
+
+   case GS_OPCODE_URB_WRITE:
+      return "gs_urb_write";
+   case GS_OPCODE_THREAD_END:
+      return "gs_thread_end";
+   case GS_OPCODE_SET_WRITE_OFFSET:
+      return "set_write_offset";
+   case GS_OPCODE_SET_VERTEX_COUNT:
+      return "set_vertex_count";
+   case GS_OPCODE_SET_DWORD_2_IMMED:
+      return "set_dword_2_immed";
 
    default:
       /* Yes, this leaks.  It's in debug code, it should never occur, and if

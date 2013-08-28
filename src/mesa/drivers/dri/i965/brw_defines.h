@@ -798,6 +798,58 @@ enum opcode {
    VS_OPCODE_SCRATCH_WRITE,
    VS_OPCODE_PULL_CONSTANT_LOAD,
    VS_OPCODE_PULL_CONSTANT_LOAD_GEN7,
+   VS_OPCODE_UNPACK_FLAGS_SIMD4X2,
+
+   /**
+    * Write geometry shader output data to the URB.
+    *
+    * Unlike VS_OPCODE_URB_WRITE, this opcode doesn't do an implied move from
+    * R0 to the first MRF.  This allows the geometry shader to override the
+    * "Slot {0,1} Offset" fields in the message header.
+    */
+   GS_OPCODE_URB_WRITE,
+
+   /**
+    * Terminate the geometry shader thread by doing an empty URB write.
+    *
+    * This opcode doesn't do an implied move from R0 to the first MRF.  This
+    * allows the geometry shader to override the "GS Number of Output Vertices
+    * for Slot {0,1}" fields in the message header.
+    */
+   GS_OPCODE_THREAD_END,
+
+   /**
+    * Set the "Slot {0,1} Offset" fields of a URB_WRITE message header.
+    *
+    * - dst is the MRF containing the message header.
+    *
+    * - src0.x indicates which portion of the URB should be written to (e.g. a
+    *   vertex number)
+    *
+    * - src1 is an immediate multiplier which will be applied to src0
+    *   (e.g. the size of a single vertex in the URB).
+    *
+    * Note: the hardware will apply this offset *in addition to* the offset in
+    * vec4_instruction::offset.
+    */
+   GS_OPCODE_SET_WRITE_OFFSET,
+
+   /**
+    * Set the "GS Number of Output Vertices for Slot {0,1}" fields of a
+    * URB_WRITE message header.
+    *
+    * - dst is the MRF containing the message header.
+    *
+    * - src0.x is the vertex count.  The upper 16 bits will be ignored.
+    */
+   GS_OPCODE_SET_VERTEX_COUNT,
+
+   /**
+    * Set DWORD 2 of dst to the immediate value in src.  Used by geometry
+    * shaders to initialize DWORD 2 of R0, which needs to be 0 in order for
+    * scratch reads and writes to operate correctly.
+    */
+   GS_OPCODE_SET_DWORD_2_IMMED,
 };
 
 #define BRW_PREDICATE_NONE             0

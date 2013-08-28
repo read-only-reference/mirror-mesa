@@ -41,8 +41,8 @@ struct cached_batch_item {
    uint16_t size;
 };
 
-static void
-clear_cache(struct brw_context *brw)
+void
+intel_batchbuffer_clear_cache(struct brw_context *brw)
 {
    struct cached_batch_item *item = brw->batch.cached_items;
 
@@ -85,7 +85,7 @@ intel_batchbuffer_reset(struct brw_context *brw)
    }
    brw->batch.last_bo = brw->batch.bo;
 
-   clear_cache(brw);
+   intel_batchbuffer_clear_cache(brw);
 
    brw->batch.bo = drm_intel_bo_alloc(brw->bufmgr, "batchbuffer",
 					BATCH_SZ, 4096);
@@ -118,7 +118,7 @@ intel_batchbuffer_reset_to_saved(struct brw_context *brw)
    /* Cached batch state is dead, since we just cleared some unknown part of the
     * batchbuffer.  Assume that the caller resets any other state necessary.
     */
-   clear_cache(brw);
+   intel_batchbuffer_clear_cache(brw);
 }
 
 void
@@ -128,7 +128,7 @@ intel_batchbuffer_free(struct brw_context *brw)
    drm_intel_bo_unreference(brw->batch.last_bo);
    drm_intel_bo_unreference(brw->batch.bo);
    drm_intel_bo_unreference(brw->batch.workaround_bo);
-   clear_cache(brw);
+   intel_batchbuffer_clear_cache(brw);
 }
 
 static void
@@ -241,9 +241,16 @@ _intel_batchbuffer_flush(struct brw_context *brw,
       drm_intel_bo_reference(brw->first_post_swapbuffers_batch);
    }
 
-   if (unlikely(INTEL_DEBUG & DEBUG_BATCH))
-      fprintf(stderr, "%s:%d: Batchbuffer flush with %db used\n", file, line,
-	      4*brw->batch.used);
+   if (unlikely(INTEL_DEBUG & DEBUG_BATCH)) {
+      int bytes_for_commands = 4 * brw->batch.used;
+      int bytes_for_state = brw->batch.bo->size - brw->batch.state_batch_offset;
+      int total_bytes = bytes_for_commands + bytes_for_state;
+      fprintf(stderr, "%s:%d: Batchbuffer flush with %4db (pkt) + "
+              "%4db (state) = %4db (%0.1f%%)\n", file, line,
+              bytes_for_commands, bytes_for_state,
+              total_bytes,
+              100.0f * total_bytes / BATCH_SZ);
+   }
 
    brw->batch.reserved_space = 0;
 

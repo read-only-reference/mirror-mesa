@@ -190,6 +190,7 @@ extern int INTEL_DEBUG;
 #define DEBUG_SHADER_TIME 0x8000000
 #define DEBUG_BLORP     0x10000000
 #define DEBUG_NO16      0x20000000
+#define DEBUG_VUE       0x40000000
 
 #ifdef HAVE_ANDROID_PLATFORM
 #define LOG_TAG "INTEL-MESA"
@@ -249,9 +250,6 @@ extern bool intelInitContext(struct brw_context *brw,
                              unsigned *dri_ctx_error);
 
 extern void intelFinish(struct gl_context * ctx);
-extern void _intel_flush(struct gl_context * ctx, const char *file, int line);
-
-#define intel_flush(ctx) _intel_flush(ctx, __FILE__, __LINE__)
 
 extern void intelInitDriverFunctions(struct dd_function_table *functions);
 

@@ -66,7 +66,7 @@ vec4_instruction::get_dst(void)
 }
 
 struct brw_reg
-vec4_instruction::get_src(int i)
+vec4_instruction::get_src(const struct brw_vec4_prog_data *prog_data, int i)
 {
    struct brw_reg brw_reg;
 
@@ -100,7 +100,8 @@ vec4_instruction::get_src(int i)
       break;
 
    case UNIFORM:
-      brw_reg = stride(brw_vec4_grf(1 + (src[i].reg + src[i].reg_offset) / 2,
+      brw_reg = stride(brw_vec4_grf(prog_data->dispatch_grf_start_reg +
+                                    (src[i].reg + src[i].reg_offset) / 2,
 				    ((src[i].reg + src[i].reg_offset) % 2) * 4),
 		       0, 4, 1);
       brw_reg = retype(brw_reg, src[i].type);
@@ -135,10 +136,11 @@ vec4_instruction::get_src(int i)
 vec4_generator::vec4_generator(struct brw_context *brw,
                                struct gl_shader_program *shader_prog,
                                struct gl_program *prog,
+                               struct brw_vec4_prog_data *prog_data,
                                void *mem_ctx,
                                bool debug_flag)
-   : brw(brw), shader_prog(shader_prog), prog(prog), mem_ctx(mem_ctx),
-     debug_flag(debug_flag)
+   : brw(brw), shader_prog(shader_prog), prog(prog), prog_data(prog_data),
+     mem_ctx(mem_ctx), debug_flag(debug_flag)
 {
    shader = shader_prog ? shader_prog->_LinkedShaders[MESA_SHADER_VERTEX] : NULL;
 
@@ -148,6 +150,15 @@ vec4_generator::vec4_generator(struct brw_context *brw,
 
 vec4_generator::~vec4_generator()
 {
+}
+
+void
+vec4_generator::mark_surface_used(unsigned surf_index)
+{
+   assert(surf_index < BRW_MAX_VS_SURFACES);
+
+   prog_data->binding_table_size = MAX2(prog_data->binding_table_size,
+                                        surf_index + 1);
 }
 
 void
@@ -383,23 +394,125 @@ vec4_generator::generate_tex(vec4_instruction *inst,
 	      inst->header_present,
 	      BRW_SAMPLER_SIMD_MODE_SIMD4X2,
 	      return_format);
+
+   mark_surface_used(SURF_INDEX_VS_TEXTURE(inst->sampler));
 }
 
 void
-vec4_generator::generate_urb_write(vec4_instruction *inst)
+vec4_generator::generate_vs_urb_write(vec4_instruction *inst)
 {
    brw_urb_WRITE(p,
 		 brw_null_reg(), /* dest */
 		 inst->base_mrf, /* starting mrf reg nr */
 		 brw_vec8_grf(0, 0), /* src */
-		 false,		/* allocate */
-		 true,		/* used */
+                 inst->urb_write_flags,
 		 inst->mlen,
 		 0,		/* response len */
-		 inst->eot,	/* eot */
-		 inst->eot,	/* writes complete */
 		 inst->offset,	/* urb destination offset */
 		 BRW_URB_SWIZZLE_INTERLEAVE);
+}
+
+void
+vec4_generator::generate_gs_urb_write(vec4_instruction *inst)
+{
+   struct brw_reg src = brw_message_reg(inst->base_mrf);
+   brw_urb_WRITE(p,
+                 brw_null_reg(), /* dest */
+                 inst->base_mrf, /* starting mrf reg nr */
+                 src,
+                 inst->urb_write_flags,
+                 inst->mlen,
+                 0,             /* response len */
+                 inst->offset,  /* urb destination offset */
+                 BRW_URB_SWIZZLE_INTERLEAVE);
+}
+
+void
+vec4_generator::generate_gs_thread_end(vec4_instruction *inst)
+{
+   struct brw_reg src = brw_message_reg(inst->base_mrf);
+   brw_urb_WRITE(p,
+                 brw_null_reg(), /* dest */
+                 inst->base_mrf, /* starting mrf reg nr */
+                 src,
+                 BRW_URB_WRITE_EOT,
+                 1,              /* message len */
+                 0,              /* response len */
+                 0,              /* urb destination offset */
+                 BRW_URB_SWIZZLE_INTERLEAVE);
+}
+
+void
+vec4_generator::generate_gs_set_write_offset(struct brw_reg dst,
+                                             struct brw_reg src0,
+                                             struct brw_reg src1)
+{
+   /* From p22 of volume 4 part 2 of the Ivy Bridge PRM (2.4.3.1 Message
+    * Header: M0.3):
+    *
+    *     Slot 0 Offset. This field, after adding to the Global Offset field
+    *     in the message descriptor, specifies the offset (in 256-bit units)
+    *     from the start of the URB entry, as referenced by URB Handle 0, at
+    *     which the data will be accessed.
+    *
+    * Similar text describes DWORD M0.4, which is slot 1 offset.
+    *
+    * Therefore, we want to multiply DWORDs 0 and 4 of src0 (the x components
+    * of the register for geometry shader invocations 0 and 1) by the
+    * immediate value in src1, and store the result in DWORDs 3 and 4 of dst.
+    *
+    * We can do this with the following EU instruction:
+    *
+    *     mul(2) dst.3<1>UD src0<8;2,4>UD src1   { Align1 WE_all }
+    */
+   brw_push_insn_state(p);
+   brw_set_access_mode(p, BRW_ALIGN_1);
+   brw_set_mask_control(p, BRW_MASK_DISABLE);
+   brw_MUL(p, suboffset(stride(dst, 2, 2, 1), 3), stride(src0, 8, 2, 4),
+           src1);
+   brw_set_access_mode(p, BRW_ALIGN_16);
+   brw_pop_insn_state(p);
+}
+
+void
+vec4_generator::generate_gs_set_vertex_count(struct brw_reg dst,
+                                             struct brw_reg src)
+{
+   brw_push_insn_state(p);
+   brw_set_access_mode(p, BRW_ALIGN_1);
+   brw_set_mask_control(p, BRW_MASK_DISABLE);
+
+   /* If we think of the src and dst registers as composed of 8 DWORDs each,
+    * we want to pick up the contents of DWORDs 0 and 4 from src, truncate
+    * them to WORDs, and then pack them into DWORD 2 of dst.
+    *
+    * It's easier to get the EU to do this if we think of the src and dst
+    * registers as composed of 16 WORDS each; then, we want to pick up the
+    * contents of WORDs 0 and 8 from src, and pack them into WORDs 4 and 5 of
+    * dst.
+    *
+    * We can do that by the following EU instruction:
+    *
+    *     mov (2) dst.4<1>:uw src<8;1,0>:uw   { Align1, Q1, NoMask }
+    */
+   brw_MOV(p, suboffset(stride(retype(dst, BRW_REGISTER_TYPE_UW), 2, 2, 1), 4),
+           stride(retype(src, BRW_REGISTER_TYPE_UW), 8, 1, 0));
+   brw_set_access_mode(p, BRW_ALIGN_16);
+   brw_pop_insn_state(p);
+}
+
+void
+vec4_generator::generate_gs_set_dword_2_immed(struct brw_reg dst,
+                                              struct brw_reg src)
+{
+   assert(src.file == BRW_IMMEDIATE_VALUE);
+
+   brw_push_insn_state(p);
+   brw_set_access_mode(p, BRW_ALIGN_1);
+   brw_set_mask_control(p, BRW_MASK_DISABLE);
+   brw_MOV(p, suboffset(vec1(dst), 2), src);
+   brw_set_access_mode(p, BRW_ALIGN_16);
+   brw_pop_insn_state(p);
 }
 
 void
@@ -435,6 +548,25 @@ vec4_generator::generate_oword_dual_block_offsets(struct brw_reg m1,
    } else {
       brw_ADD(p, m1_4, index_4, brw_imm_d(second_vertex_offset));
    }
+
+   brw_pop_insn_state(p);
+}
+
+void
+vec4_generator::generate_unpack_flags(vec4_instruction *inst,
+                                      struct brw_reg dst)
+{
+   brw_push_insn_state(p);
+   brw_set_mask_control(p, BRW_MASK_DISABLE);
+   brw_set_access_mode(p, BRW_ALIGN_1);
+
+   struct brw_reg flags = brw_flag_reg(0, 0);
+   struct brw_reg dst_0 = suboffset(vec1(dst), 0);
+   struct brw_reg dst_4 = suboffset(vec1(dst), 4);
+
+   brw_AND(p, dst_0, flags, brw_imm_ud(0x0f));
+   brw_AND(p, dst_4, flags, brw_imm_ud(0xf0));
+   brw_SHR(p, dst_4, dst_4, brw_imm_ud(4));
 
    brw_pop_insn_state(p);
 }
@@ -594,6 +726,8 @@ vec4_generator::generate_pull_constant_load(vec4_instruction *inst,
 			   2, /* mlen */
                            true, /* header_present */
 			   1 /* rlen */);
+
+   mark_surface_used(surf_index);
 }
 
 void
@@ -617,6 +751,8 @@ vec4_generator::generate_pull_constant_load_gen7(vec4_instruction *inst,
                            false, /* no header */
                            BRW_SAMPLER_SIMD_MODE_SIMD4X2,
                            0);
+
+   mark_surface_used(surf_index.dw1.ud);
 }
 
 /**
@@ -828,7 +964,7 @@ vec4_generator::generate_vec4_instruction(vec4_instruction *instruction,
       break;
 
    case VS_OPCODE_URB_WRITE:
-      generate_urb_write(inst);
+      generate_vs_urb_write(inst);
       break;
 
    case VS_OPCODE_SCRATCH_READ:
@@ -847,16 +983,41 @@ vec4_generator::generate_vec4_instruction(vec4_instruction *instruction,
       generate_pull_constant_load_gen7(inst, dst, src[0], src[1]);
       break;
 
+   case GS_OPCODE_URB_WRITE:
+      generate_gs_urb_write(inst);
+      break;
+
+   case GS_OPCODE_THREAD_END:
+      generate_gs_thread_end(inst);
+      break;
+
+   case GS_OPCODE_SET_WRITE_OFFSET:
+      generate_gs_set_write_offset(dst, src[0], src[1]);
+      break;
+
+   case GS_OPCODE_SET_VERTEX_COUNT:
+      generate_gs_set_vertex_count(dst, src[0]);
+      break;
+
+   case GS_OPCODE_SET_DWORD_2_IMMED:
+      generate_gs_set_dword_2_immed(dst, src[0]);
+      break;
+
    case SHADER_OPCODE_SHADER_TIME_ADD:
       brw_shader_time_add(p, src[0], SURF_INDEX_VS_SHADER_TIME);
+      mark_surface_used(SURF_INDEX_VS_SHADER_TIME);
+      break;
+
+   case VS_OPCODE_UNPACK_FLAGS_SIMD4X2:
+      generate_unpack_flags(inst, dst);
       break;
 
    default:
       if (inst->opcode < (int) ARRAY_SIZE(opcode_descs)) {
-         _mesa_problem(ctx, "Unsupported opcode in `%s' in VS\n",
+         _mesa_problem(&brw->ctx, "Unsupported opcode in `%s' in VS\n",
                        opcode_descs[inst->opcode].name);
       } else {
-         _mesa_problem(ctx, "Unsupported opcode %d in VS", inst->opcode);
+         _mesa_problem(&brw->ctx, "Unsupported opcode %d in VS", inst->opcode);
       }
       abort();
    }
@@ -906,7 +1067,7 @@ vec4_generator::generate_code(exec_list *instructions)
       }
 
       for (unsigned int i = 0; i < 3; i++) {
-	 src[i] = inst->get_src(i);
+	 src[i] = inst->get_src(this->prog_data, i);
       }
       dst = inst->get_dst();
 

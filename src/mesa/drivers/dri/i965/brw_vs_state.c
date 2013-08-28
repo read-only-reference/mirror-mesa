@@ -92,7 +92,8 @@ brw_upload_vs_unit(struct brw_context *brw)
    vs->thread3.urb_entry_read_length = brw->vs.prog_data->base.urb_read_length;
    vs->thread3.const_urb_entry_read_length
       = brw->vs.prog_data->base.curb_read_length;
-   vs->thread3.dispatch_grf_start_reg = 1;
+   vs->thread3.dispatch_grf_start_reg =
+      brw->vs.prog_data->base.dispatch_grf_start_reg;
    vs->thread3.urb_entry_read_offset = 0;
 
    /* BRW_NEW_CURBE_OFFSETS, _NEW_TRANSFORM, BRW_NEW_VERTEX_PROGRAM */
@@ -142,7 +143,7 @@ brw_upload_vs_unit(struct brw_context *brw)
       vs->vs5.sampler_count = 0; /* hardware requirement */
    else {
       /* CACHE_NEW_SAMPLER */
-      vs->vs5.sampler_count = (brw->sampler.count + 3) / 4;
+      vs->vs5.sampler_count = (brw->vs.sampler_count + 3) / 4;
    }
 
 
@@ -155,14 +156,14 @@ brw_upload_vs_unit(struct brw_context *brw)
 
    /* Set the sampler state pointer, and its reloc
     */
-   if (brw->sampler.count) {
+   if (brw->vs.sampler_count) {
       vs->vs5.sampler_state_pointer =
-         (brw->batch.bo->offset + brw->sampler.offset) >> 5;
+         (brw->batch.bo->offset + brw->vs.sampler_offset) >> 5;
       drm_intel_bo_emit_reloc(brw->batch.bo,
                               brw->vs.state_offset +
                               offsetof(struct brw_vs_unit_state, vs5),
                               brw->batch.bo,
-                              brw->sampler.offset | vs->vs5.sampler_count,
+                              brw->vs.sampler_offset | vs->vs5.sampler_count,
                               I915_GEM_DOMAIN_INSTRUCTION, 0);
    }
 

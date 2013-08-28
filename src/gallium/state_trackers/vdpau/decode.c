@@ -44,7 +44,7 @@ vlVdpDecoderCreate(VdpDevice device,
                    uint32_t max_references,
                    VdpDecoder *decoder)
 {
-   enum pipe_video_profile p_profile;
+   struct pipe_video_codec templat = {};
    struct pipe_context *pipe;
    struct pipe_screen *screen;
    vlVdpDevice *dev;
@@ -59,8 +59,8 @@ vlVdpDecoderCreate(VdpDevice device,
    if (!(width && height))
       return VDP_STATUS_INVALID_VALUE;
 
-   p_profile = ProfileToPipe(profile);
-   if (p_profile == PIPE_VIDEO_PROFILE_UNKNOWN)
+   templat.profile = ProfileToPipe(profile);
+   if (templat.profile == PIPE_VIDEO_PROFILE_UNKNOWN)
       return VDP_STATUS_INVALID_DECODER_PROFILE;
 
    dev = vlGetDataHTAB(device);
@@ -75,7 +75,8 @@ vlVdpDecoderCreate(VdpDevice device,
    supported = screen->get_video_param
    (
       screen,
-      p_profile,
+      templat.profile,
+      PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
       PIPE_VIDEO_CAP_SUPPORTED
    );
    if (!supported) {
@@ -91,14 +92,13 @@ vlVdpDecoderCreate(VdpDevice device,
 
    vldecoder->device = dev;
 
-   vldecoder->decoder = pipe->create_video_decoder
-   (
-      pipe, p_profile,
-      PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
-      PIPE_VIDEO_CHROMA_FORMAT_420,
-      width, height, max_references,
-      false
-   );
+   templat.entrypoint = PIPE_VIDEO_ENTRYPOINT_BITSTREAM;
+   templat.chroma_format = PIPE_VIDEO_CHROMA_FORMAT_420;
+   templat.width = width;
+   templat.height = height;
+   templat.max_references = max_references;
+
+   vldecoder->decoder = pipe->create_video_codec(pipe, &templat);
 
    if (!vldecoder->decoder) {
       ret = VDP_STATUS_ERROR;
@@ -146,7 +146,7 @@ vlVdpDecoderDestroy(VdpDecoder decoder)
 }
 
 /**
- * Retrieve the parameters used to create a VdpBitmapSurface.
+ * Retrieve the parameters used to create a VdpDecoder.
  */
 VdpStatus
 vlVdpDecoderGetParameters(VdpDecoder decoder,
@@ -427,7 +427,7 @@ vlVdpDecoderRender(VdpDecoder decoder,
    vlVdpSurface *vlsurf;
    VdpStatus ret;
    struct pipe_screen *screen;
-   struct pipe_video_decoder *dec;
+   struct pipe_video_codec *dec;
    bool buffer_support[2];
    unsigned i;
    union {
@@ -460,11 +460,14 @@ vlVdpDecoderRender(VdpDecoder decoder,
 
    pipe_mutex_lock(vlsurf->device->mutex);
 
-   buffer_support[0] = screen->get_video_param(screen, dec->profile, PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE);
-   buffer_support[1] = screen->get_video_param(screen, dec->profile, PIPE_VIDEO_CAP_SUPPORTS_INTERLACED);
+   buffer_support[0] = screen->get_video_param(screen, dec->profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+                                               PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE);
+   buffer_support[1] = screen->get_video_param(screen, dec->profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+                                               PIPE_VIDEO_CAP_SUPPORTS_INTERLACED);
 
    if (vlsurf->video_buffer == NULL ||
-       !screen->is_video_format_supported(screen, vlsurf->video_buffer->buffer_format, dec->profile) ||
+       !screen->is_video_format_supported(screen, vlsurf->video_buffer->buffer_format,
+                                          dec->profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM) ||
        !buffer_support[vlsurf->video_buffer->interlaced]) {
 
       /* destroy the old one */
@@ -472,10 +475,12 @@ vlVdpDecoderRender(VdpDecoder decoder,
          vlsurf->video_buffer->destroy(vlsurf->video_buffer);
 
       /* set the buffer format to the prefered one */
-      vlsurf->templat.buffer_format = screen->get_video_param(screen, dec->profile, PIPE_VIDEO_CAP_PREFERED_FORMAT);
+      vlsurf->templat.buffer_format = screen->get_video_param(screen, dec->profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+                                                              PIPE_VIDEO_CAP_PREFERED_FORMAT);
 
       /* also set interlacing to decoders preferences */
-      vlsurf->templat.interlaced = screen->get_video_param(screen, dec->profile, PIPE_VIDEO_CAP_PREFERS_INTERLACED);
+      vlsurf->templat.interlaced = screen->get_video_param(screen, dec->profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+                                                           PIPE_VIDEO_CAP_PREFERS_INTERLACED);
 
       /* and recreate the video buffer */
       vlsurf->video_buffer = dec->context->create_video_buffer(dec->context, &vlsurf->templat);
@@ -496,18 +501,18 @@ vlVdpDecoderRender(VdpDecoder decoder,
    memset(&desc, 0, sizeof(desc));
    desc.base.profile = dec->profile;
    switch (u_reduce_video_profile(dec->profile)) {
-   case PIPE_VIDEO_CODEC_MPEG12:
+   case PIPE_VIDEO_FORMAT_MPEG12:
       ret = vlVdpDecoderRenderMpeg12(&desc.mpeg12, (VdpPictureInfoMPEG1Or2 *)picture_info);
       break;
-   case PIPE_VIDEO_CODEC_MPEG4:
+   case PIPE_VIDEO_FORMAT_MPEG4:
       ret = vlVdpDecoderRenderMpeg4(&desc.mpeg4, (VdpPictureInfoMPEG4Part2 *)picture_info);
       break;
-   case PIPE_VIDEO_CODEC_VC1:
+   case PIPE_VIDEO_FORMAT_VC1:
       if (dec->profile == PIPE_VIDEO_PROFILE_VC1_ADVANCED)
          vlVdpDecoderFixVC1Startcode(&bitstream_buffer_count, buffers, sizes);
       ret = vlVdpDecoderRenderVC1(&desc.vc1, (VdpPictureInfoVC1 *)picture_info);
       break;
-   case PIPE_VIDEO_CODEC_MPEG4_AVC:
+   case PIPE_VIDEO_FORMAT_MPEG4_AVC:
       ret = vlVdpDecoderRenderH264(&desc.h264, (VdpPictureInfoH264 *)picture_info);
       break;
    default:

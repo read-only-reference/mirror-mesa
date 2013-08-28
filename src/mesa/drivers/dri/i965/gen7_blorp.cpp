@@ -143,7 +143,7 @@ gen7_blorp_emit_surface_state(struct brw_context *brw,
     */
    struct intel_region *region = surface->mt->region;
    uint32_t tile_x, tile_y;
-   uint8_t mocs = brw->is_haswell ? GEN7_MOCS_L3 : 0;
+   const uint8_t mocs = GEN7_MOCS_L3;
 
    uint32_t tiling = surface->map_stencil_as_y_tiled
       ? I915_TILING_Y : region->tiling;
@@ -616,7 +616,7 @@ gen7_blorp_emit_constant_ps(struct brw_context *brw,
                             const brw_blorp_params *params,
                             uint32_t wm_push_const_offset)
 {
-   uint8_t mocs = brw->is_haswell ? GEN7_MOCS_L3 : 0;
+   const uint8_t mocs = GEN7_MOCS_L3;
 
    /* Make sure the push constants fill an exact integer number of
     * registers.
@@ -658,48 +658,52 @@ static void
 gen7_blorp_emit_depth_stencil_config(struct brw_context *brw,
                                      const brw_blorp_params *params)
 {
-   struct gl_context *ctx = &brw->ctx;
-   uint32_t draw_x = params->depth.x_offset;
-   uint32_t draw_y = params->depth.y_offset;
-   uint32_t tile_mask_x, tile_mask_y;
-   uint8_t mocs = brw->is_haswell ? GEN7_MOCS_L3 : 0;
+   const uint8_t mocs = GEN7_MOCS_L3;
+   uint32_t surfwidth, surfheight;
+   uint32_t surftype;
+   unsigned int depth = MAX2(params->depth.mt->logical_depth0, 1);
+   unsigned int min_array_element;
+   GLenum gl_target = params->depth.mt->target;
+   unsigned int lod;
 
-   brw_get_depthstencil_tile_masks(params->depth.mt,
-                                   params->depth.level,
-                                   params->depth.layer,
-                                   NULL,
-                                   &tile_mask_x, &tile_mask_y);
+   switch (gl_target) {
+   case GL_TEXTURE_CUBE_MAP_ARRAY:
+   case GL_TEXTURE_CUBE_MAP:
+      /* The PRM claims that we should use BRW_SURFACE_CUBE for this
+       * situation, but experiments show that gl_Layer doesn't work when we do
+       * this.  So we use BRW_SURFACE_2D, since for rendering purposes this is
+       * equivalent.
+       */
+      surftype = BRW_SURFACE_2D;
+      depth *= 6;
+      break;
+   default:
+      surftype = translate_tex_target(gl_target);
+      break;
+   }
+
+   min_array_element = params->depth.layer;
+   if (params->depth.mt->num_samples > 1) {
+      /* Convert physical layer to logical layer. */
+      min_array_element /= params->depth.mt->num_samples;
+   }
+
+   lod = params->depth.level - params->depth.mt->first_level;
+
+   if (params->hiz_op != GEN6_HIZ_OP_NONE && lod == 0) {
+      /* HIZ ops for lod 0 may set the width & height a little
+       * larger to allow the fast depth clear to fit the hardware
+       * alignment requirements. (8x4)
+       */
+      surfwidth = params->depth.width;
+      surfheight = params->depth.height;
+   } else {
+      surfwidth = params->depth.mt->physical_width0;
+      surfheight = params->depth.mt->physical_height0;
+   }
 
    /* 3DSTATE_DEPTH_BUFFER */
    {
-      uint32_t tile_x = draw_x & tile_mask_x;
-      uint32_t tile_y = draw_y & tile_mask_y;
-      uint32_t offset =
-         intel_region_get_aligned_offset(params->depth.mt->region,
-                                         draw_x & ~tile_mask_x,
-                                         draw_y & ~tile_mask_y, false);
-
-      /* According to the Sandy Bridge PRM, volume 2 part 1, pp326-327
-       * (3DSTATE_DEPTH_BUFFER dw5), in the documentation for "Depth
-       * Coordinate Offset X/Y":
-       *
-       *   "The 3 LSBs of both offsets must be zero to ensure correct
-       *   alignment"
-       *
-       * We have no guarantee that tile_x and tile_y are correctly aligned,
-       * since they are determined by the mipmap layout, which is only aligned
-       * to multiples of 4.
-       *
-       * So, to avoid hanging the GPU, just smash the low order 3 bits of
-       * tile_x and tile_y to 0.  This is a temporary workaround until we come
-       * up with a better solution.
-       */
-      WARN_ONCE((tile_x & 7) || (tile_y & 7),
-                "Depth/stencil buffer needs alignment to 8-pixel boundaries.\n"
-                "Truncating offset, bad rendering may occur.\n");
-      tile_x &= ~7;
-      tile_y &= ~7;
-
       intel_emit_depth_stall_flushes(brw);
 
       BEGIN_BATCH(7);
@@ -708,26 +712,24 @@ gen7_blorp_emit_depth_stencil_config(struct brw_context *brw,
                 params->depth_format << 18 |
                 1 << 22 | /* hiz enable */
                 1 << 28 | /* depth write */
-                BRW_SURFACE_2D << 29);
+                surftype << 29);
       OUT_RELOC(params->depth.mt->region->bo,
                 I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
-                offset);
-      OUT_BATCH((params->depth.width + tile_x - 1) << 4 |
-                (params->depth.height + tile_y - 1) << 18);
-      OUT_BATCH(mocs);
-      OUT_BATCH(tile_x |
-                tile_y << 16);
+                0);
+      OUT_BATCH((surfwidth - 1) << 4 |
+                (surfheight - 1) << 18 |
+                lod);
+      OUT_BATCH(((depth - 1) << 21) |
+                (min_array_element << 10) |
+                mocs);
       OUT_BATCH(0);
+      OUT_BATCH((depth - 1) << 21);
       ADVANCE_BATCH();
    }
 
    /* 3DSTATE_HIER_DEPTH_BUFFER */
    {
       struct intel_region *hiz_region = params->depth.mt->hiz_mt->region;
-      uint32_t hiz_offset =
-         intel_region_get_aligned_offset(hiz_region,
-                                         draw_x & ~tile_mask_x,
-                                         (draw_y & ~tile_mask_y) / 2, false);
 
       BEGIN_BATCH(3);
       OUT_BATCH((GEN7_3DSTATE_HIER_DEPTH_BUFFER << 16) | (3 - 2));
@@ -735,7 +737,7 @@ gen7_blorp_emit_depth_stencil_config(struct brw_context *brw,
                 (hiz_region->pitch - 1));
       OUT_RELOC(hiz_region->bo,
                 I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
-                hiz_offset);
+                0);
       ADVANCE_BATCH();
    }
 
@@ -754,6 +756,8 @@ static void
 gen7_blorp_emit_depth_disable(struct brw_context *brw,
                               const brw_blorp_params *params)
 {
+   intel_emit_depth_stall_flushes(brw);
+
    BEGIN_BATCH(7);
    OUT_BATCH(GEN7_3DSTATE_DEPTH_BUFFER << 16 | (7 - 2));
    OUT_BATCH(BRW_DEPTHFORMAT_D32_FLOAT << 18 | (BRW_SURFACE_NULL << 29));

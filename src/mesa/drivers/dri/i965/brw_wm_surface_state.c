@@ -255,9 +255,9 @@ brw_update_texture_surface(struct gl_context *ctx,
    struct intel_texture_object *intelObj = intel_texture_object(tObj);
    struct intel_mipmap_tree *mt = intelObj->mt;
    struct gl_texture_image *firstImage = tObj->Image[0][tObj->BaseLevel];
+   struct intel_texture_image *intel_image = intel_texture_image(firstImage);
    struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit);
    uint32_t *surf;
-   uint32_t tile_x, tile_y;
 
    if (tObj->Target == GL_TEXTURE_BUFFER) {
       brw_update_buffer_texture_surface(ctx, unit, binding_table, surf_index);
@@ -277,10 +277,8 @@ brw_update_texture_surface(struct gl_context *ctx,
 	       BRW_SURFACE_FORMAT_SHIFT));
 
    surf[1] = intelObj->mt->region->bo->offset + intelObj->mt->offset; /* reloc */
-   surf[1] += intel_miptree_get_tile_offsets(intelObj->mt, firstImage->Level, 0,
-                                             &tile_x, &tile_y);
 
-   surf[2] = ((intelObj->_MaxLevel - tObj->BaseLevel) << BRW_SURFACE_LOD_SHIFT |
+   surf[2] = ((intelObj->_MaxLevel - intel_image->mt->first_level) << BRW_SURFACE_LOD_SHIFT |
 	      (mt->logical_width0 - 1) << BRW_SURFACE_WIDTH_SHIFT |
 	      (mt->logical_height0 - 1) << BRW_SURFACE_HEIGHT_SHIFT);
 
@@ -291,15 +289,7 @@ brw_update_texture_surface(struct gl_context *ctx,
 
    surf[4] = brw_get_surface_num_multisamples(intelObj->mt->num_samples);
 
-   assert(brw->has_surface_tile_offset || (tile_x == 0 && tile_y == 0));
-   /* Note that the low bits of these fields are missing, so
-    * there's the possibility of getting in trouble.
-    */
-   assert(tile_x % 4 == 0);
-   assert(tile_y % 2 == 0);
-   surf[5] = ((tile_x / 4) << BRW_SURFACE_X_OFFSET_SHIFT |
-	      (tile_y / 2) << BRW_SURFACE_Y_OFFSET_SHIFT |
-	      (mt->align_h == 4 ? BRW_SURFACE_VERTICAL_ALIGN_ENABLE : 0));
+   surf[5] = mt->align_h == 4 ? BRW_SURFACE_VERTICAL_ALIGN_ENABLE : 0;
 
    /* Emit relocation to surface contents */
    drm_intel_bo_emit_reloc(brw->batch.bo,
@@ -533,8 +523,8 @@ brw_update_null_renderbuffer_surface(struct brw_context *brw, unsigned int unit)
    /* _NEW_BUFFERS */
    const struct gl_framebuffer *fb = ctx->DrawBuffer;
 
-   surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-			  6 * 4, 32, &brw->wm.surf_offset[unit]);
+   surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE, 6 * 4, 32,
+                          &brw->wm.surf_offset[SURF_INDEX_DRAW(unit)]);
 
    if (fb->Visual.samples > 1) {
       /* On Gen6, null render targets seem to cause GPU hangs when
@@ -587,7 +577,7 @@ brw_update_null_renderbuffer_surface(struct brw_context *brw, unsigned int unit)
 
    if (bo) {
       drm_intel_bo_emit_reloc(brw->batch.bo,
-                              brw->wm.surf_offset[unit] + 4,
+                              brw->wm.surf_offset[SURF_INDEX_DRAW(unit)] + 4,
                               bo, 0,
                               I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER);
    }
@@ -635,8 +625,8 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
 
    region = irb->mt->region;
 
-   surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-			  6 * 4, 32, &brw->wm.surf_offset[unit]);
+   surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE, 6 * 4, 32,
+                          &brw->wm.surf_offset[SURF_INDEX_DRAW(unit)]);
 
    format = brw->render_target_format[rb_format];
    if (unlikely(!brw->format_supported_as_render_target[rb_format])) {
@@ -692,7 +682,7 @@ brw_update_renderbuffer_surface(struct brw_context *brw,
    }
 
    drm_intel_bo_emit_reloc(brw->batch.bo,
-			   brw->wm.surf_offset[unit] + 4,
+			   brw->wm.surf_offset[SURF_INDEX_DRAW(unit)] + 4,
 			   region->bo,
 			   surf[1] - region->bo->offset,
 			   I915_GEM_DOMAIN_RENDER,
@@ -873,15 +863,14 @@ brw_upload_wm_binding_table(struct brw_context *brw)
       gen7_create_shader_time_surface(brw, &brw->wm.surf_offset[SURF_INDEX_WM_SHADER_TIME]);
    }
 
-   /* Might want to calculate nr_surfaces first, to avoid taking up so much
-    * space for the binding table.
-    */
+   /* CACHE_NEW_WM_PROG */
+   unsigned entries = brw->wm.prog_data->binding_table_size;
    bind = brw_state_batch(brw, AUB_TRACE_BINDING_TABLE,
-			  sizeof(uint32_t) * BRW_MAX_WM_SURFACES,
+			  sizeof(uint32_t) * entries,
 			  32, &brw->wm.bind_bo_offset);
 
    /* BRW_NEW_SURFACES */
-   for (i = 0; i < BRW_MAX_WM_SURFACES; i++) {
+   for (i = 0; i < entries; i++) {
       bind[i] = brw->wm.surf_offset[i];
    }
 
@@ -893,7 +882,7 @@ const struct brw_tracked_state brw_wm_binding_table = {
       .mesa = 0,
       .brw = (BRW_NEW_BATCH |
 	      BRW_NEW_SURFACES),
-      .cache = 0
+      .cache = CACHE_NEW_WM_PROG
    },
    .emit = brw_upload_wm_binding_table,
 };

@@ -54,7 +54,7 @@
 
 #define FILE_DEBUG_FLAG DEBUG_PRIMS
 
-static GLuint prim_to_hw_prim[GL_POLYGON+1] = {
+const GLuint prim_to_hw_prim[GL_POLYGON+1] = {
    _3DPRIM_POINTLIST,
    _3DPRIM_LINELIST,
    _3DPRIM_LINELOOP,
@@ -339,6 +339,7 @@ static void brw_postdraw_set_buffers_need_resolve(struct brw_context *brw)
    struct intel_renderbuffer *front_irb = NULL;
    struct intel_renderbuffer *back_irb = intel_get_renderbuffer(fb, BUFFER_BACK_LEFT);
    struct intel_renderbuffer *depth_irb = intel_get_renderbuffer(fb, BUFFER_DEPTH);
+   struct gl_renderbuffer_attachment *depth_att = &fb->Attachment[BUFFER_DEPTH];
 
    if (brw->is_front_buffer_rendering)
       front_irb = intel_get_renderbuffer(fb, BUFFER_FRONT_LEFT);
@@ -348,7 +349,7 @@ static void brw_postdraw_set_buffers_need_resolve(struct brw_context *brw)
    if (back_irb)
       intel_renderbuffer_set_needs_downsample(back_irb);
    if (depth_irb && ctx->Depth.Mask)
-      intel_renderbuffer_set_needs_depth_resolve(depth_irb);
+      intel_renderbuffer_att_set_needs_depth_resolve(depth_att);
 }
 
 /* May fail if out of video memory for texture or vbo upload, or on
@@ -369,6 +370,13 @@ static bool brw_try_draw_prims( struct gl_context *ctx,
 
    if (ctx->NewState)
       _mesa_update_state( ctx );
+
+   /* Find the highest sampler unit used by each shader program.  A bit-count
+    * won't work since ARB programs use the texture unit number as the sampler
+    * index.
+    */
+   brw->wm.sampler_count = _mesa_fls(ctx->FragmentProgram._Current->Base.SamplersUsed);
+   brw->vs.sampler_count = _mesa_fls(ctx->VertexProgram._Current->Base.SamplersUsed);
 
    /* We have to validate the textures *before* checking for fallbacks;
     * otherwise, the software fallback won't be able to rely on the

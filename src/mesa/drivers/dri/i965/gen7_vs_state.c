@@ -48,7 +48,7 @@ upload_vs_state(struct brw_context *brw)
    /* CACHE_NEW_SAMPLER */
    BEGIN_BATCH(2);
    OUT_BATCH(_3DSTATE_SAMPLER_STATE_POINTERS_VS << 16 | (2 - 2));
-   OUT_BATCH(brw->sampler.offset);
+   OUT_BATCH(brw->vs.sampler_offset);
    ADVANCE_BATCH();
 
    if (brw->vs.push_const_size == 0) {
@@ -63,8 +63,6 @@ upload_vs_state(struct brw_context *brw)
       OUT_BATCH(0);
       ADVANCE_BATCH();
    } else {
-      uint8_t mocs = brw->is_haswell ? GEN7_MOCS_L3 : 0;
-
       BEGIN_BATCH(7);
       OUT_BATCH(_3DSTATE_CONSTANT_VS << 16 | (7 - 2));
       OUT_BATCH(brw->vs.push_const_size);
@@ -72,7 +70,7 @@ upload_vs_state(struct brw_context *brw)
       /* Pointer to the VS constant buffer.  Covered by the set of
        * state flags from gen6_prepare_wm_contants
        */
-      OUT_BATCH(brw->vs.push_const_offset | mocs);
+      OUT_BATCH(brw->vs.push_const_offset | GEN7_MOCS_L3);
       OUT_BATCH(0);
       OUT_BATCH(0);
       OUT_BATCH(0);
@@ -89,7 +87,7 @@ upload_vs_state(struct brw_context *brw)
    OUT_BATCH(_3DSTATE_VS << 16 | (6 - 2));
    OUT_BATCH(brw->vs.prog_offset);
    OUT_BATCH(floating_point_mode |
-	     ((ALIGN(brw->sampler.count, 4)/4) << GEN6_VS_SAMPLER_COUNT_SHIFT));
+	     ((ALIGN(brw->vs.sampler_count, 4)/4) << GEN6_VS_SAMPLER_COUNT_SHIFT));
 
    if (brw->vs.prog_data->base.total_scratch) {
       OUT_RELOC(brw->vs.scratch_bo,
@@ -99,7 +97,8 @@ upload_vs_state(struct brw_context *brw)
       OUT_BATCH(0);
    }
 
-   OUT_BATCH((1 << GEN6_VS_DISPATCH_START_GRF_SHIFT) |
+   OUT_BATCH((brw->vs.prog_data->base.dispatch_grf_start_reg <<
+              GEN6_VS_DISPATCH_START_GRF_SHIFT) |
 	     (brw->vs.prog_data->base.urb_read_length << GEN6_VS_URB_READ_LENGTH_SHIFT) |
 	     (0 << GEN6_VS_URB_ENTRY_READ_OFFSET_SHIFT));
 

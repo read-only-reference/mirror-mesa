@@ -28,14 +28,66 @@
 #include "brw_shader.h"
 #include "main/compiler.h"
 #include "program/hash_table.h"
+#include "brw_program.h"
 
+#ifdef __cplusplus
 extern "C" {
-#include "brw_vs.h"
+#endif
+
 #include "brw_context.h"
 #include "brw_eu.h"
-};
+
+#ifdef __cplusplus
+}; /* extern "C" */
+#endif
 
 #include "glsl/ir.h"
+
+struct brw_vs_compile;
+
+
+struct brw_vec4_compile {
+   GLuint last_scratch; /**< measured in 32-byte (register size) units */
+};
+
+
+struct brw_vec4_prog_key {
+   GLuint program_string_id;
+
+   /**
+    * True if at least one clip flag is enabled, regardless of whether the
+    * shader uses clip planes or gl_ClipDistance.
+    */
+   GLuint userclip_active:1;
+
+   /**
+    * How many user clipping planes are being uploaded to the vertex shader as
+    * push constants.
+    */
+   GLuint nr_userclip_plane_consts:4;
+
+   /**
+    * True if the shader uses gl_ClipDistance, regardless of whether any clip
+    * flags are enabled.
+    */
+   GLuint uses_clip_distance:1;
+
+   GLuint clamp_vertex_color:1;
+
+   struct brw_sampler_prog_key_data tex;
+};
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+bool brw_vec4_prog_data_compare(const struct brw_vec4_prog_data *a,
+                                const struct brw_vec4_prog_data *b);
+void brw_vec4_prog_data_free(const struct brw_vec4_prog_data *prog_data);
+
+#ifdef __cplusplus
+} /* extern "C" */
 
 namespace brw {
 
@@ -154,7 +206,7 @@ public:
 		    src_reg src2 = src_reg());
 
    struct brw_reg get_dst(void);
-   struct brw_reg get_src(int i);
+   struct brw_reg get_src(const struct brw_vec4_prog_data *prog_data, int i);
 
    dst_reg dst;
    src_reg src[3];
@@ -170,7 +222,7 @@ public:
    int target; /**< MRT target. */
    bool shadow_compare;
 
-   bool eot;
+   enum brw_urb_write_flags urb_write_flags;
    bool header_present;
    int mlen; /**< SEND message length */
    int base_mrf; /**< First MRF in the SEND message, if mlen is nonzero. */
@@ -185,6 +237,11 @@ public:
    bool is_send_from_grf();
    bool can_reswizzle_dst(int dst_writemask, int swizzle, int swizzle_mask);
    void reswizzle_dst(int dst_writemask, int swizzle);
+
+   bool depends_on_flags()
+   {
+      return predicate || opcode == VS_OPCODE_UNPACK_FLAGS_SIMD4X2;
+   }
 };
 
 /**
@@ -283,6 +340,8 @@ public:
    virtual void visit(ir_discard *);
    virtual void visit(ir_texture *);
    virtual void visit(ir_if *);
+   virtual void visit(ir_emit_vertex *);
+   virtual void visit(ir_end_primitive *);
    /*@}*/
 
    src_reg result;
@@ -308,7 +367,6 @@ public:
    void setup_uniform_values(ir_variable *ir);
    void setup_builtin_uniform_values(ir_variable *ir);
    int setup_uniforms(int payload_reg);
-   void setup_payload();
    bool reg_allocate_trivial();
    bool reg_allocate();
    void evaluate_spill_costs(float *spill_costs, bool *no_spill);
@@ -382,6 +440,7 @@ public:
    vec4_instruction *FBH(dst_reg dst, src_reg value);
    vec4_instruction *FBL(dst_reg dst, src_reg value);
    vec4_instruction *CBIT(dst_reg dst, src_reg value);
+   vec4_instruction *MAD(dst_reg dst, src_reg c, src_reg b, src_reg a);
 
    int implied_mrf_writes(vec4_instruction *inst);
 
@@ -442,7 +501,7 @@ public:
 
    void emit_ndc_computation();
    void emit_psiz_and_flags(struct brw_reg reg);
-   void emit_clip_distances(struct brw_reg reg, int offset);
+   void emit_clip_distances(dst_reg reg, int offset);
    void emit_generic_urb_slot(dst_reg reg, int varying);
    void emit_urb_slot(int mrf, int varying);
 
@@ -479,8 +538,10 @@ public:
 protected:
    void emit_vertex();
    void lower_attributes_to_hw_regs(const int *attribute_map);
+   void setup_payload_interference(struct ra_graph *g, int first_payload_node,
+                                   int reg_node_count);
    virtual dst_reg *make_reg_for_system_value(ir_variable *ir) = 0;
-   virtual int setup_attributes(int payload_reg) = 0;
+   virtual void setup_payload() = 0;
    virtual void emit_prolog() = 0;
    virtual void emit_program_code() = 0;
    virtual void emit_thread_end() = 0;
@@ -503,7 +564,7 @@ public:
 
 protected:
    virtual dst_reg *make_reg_for_system_value(ir_variable *ir);
-   virtual int setup_attributes(int payload_reg);
+   virtual void setup_payload();
    virtual void emit_prolog();
    virtual void emit_program_code();
    virtual void emit_thread_end();
@@ -511,6 +572,7 @@ protected:
    virtual vec4_instruction *emit_urb_write_opcode(bool complete);
 
 private:
+   int setup_attributes(int payload_reg);
    void setup_vp_regs();
    dst_reg get_vp_dst_reg(const prog_dst_register &dst);
    src_reg get_vp_src_reg(const prog_src_register &src);
@@ -532,6 +594,7 @@ public:
    vec4_generator(struct brw_context *brw,
                   struct gl_shader_program *shader_prog,
                   struct gl_program *prog,
+                  struct brw_vec4_prog_data *prog_data,
                   void *mem_ctx,
                   bool debug_flag);
    ~vec4_generator();
@@ -567,7 +630,15 @@ private:
 		     struct brw_reg dst,
 		     struct brw_reg src);
 
-   void generate_urb_write(vec4_instruction *inst);
+   void generate_vs_urb_write(vec4_instruction *inst);
+   void generate_gs_urb_write(vec4_instruction *inst);
+   void generate_gs_thread_end(vec4_instruction *inst);
+   void generate_gs_set_write_offset(struct brw_reg dst,
+                                     struct brw_reg src0,
+                                     struct brw_reg src1);
+   void generate_gs_set_vertex_count(struct brw_reg dst,
+                                     struct brw_reg src);
+   void generate_gs_set_dword_2_immed(struct brw_reg dst, struct brw_reg src);
    void generate_oword_dual_block_offsets(struct brw_reg m1,
 					  struct brw_reg index);
    void generate_scratch_write(vec4_instruction *inst,
@@ -585,9 +656,12 @@ private:
                                          struct brw_reg dst,
                                          struct brw_reg surf_index,
                                          struct brw_reg offset);
+   void generate_unpack_flags(vec4_instruction *inst,
+                              struct brw_reg dst);
+
+   void mark_surface_used(unsigned surf_index);
 
    struct brw_context *brw;
-   struct gl_context *ctx;
 
    struct brw_compile *p;
 
@@ -595,10 +669,13 @@ private:
    struct gl_shader *shader;
    const struct gl_program *prog;
 
+   struct brw_vec4_prog_data *prog_data;
+
    void *mem_ctx;
    const bool debug_flag;
 };
 
 } /* namespace brw */
+#endif /* __cplusplus */
 
 #endif /* BRW_VEC4_H */

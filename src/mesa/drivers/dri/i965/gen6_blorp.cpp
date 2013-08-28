@@ -49,12 +49,10 @@ void
 gen6_blorp_emit_batch_head(struct brw_context *brw,
                            const brw_blorp_params *params)
 {
-   struct gl_context *ctx = &brw->ctx;
-
    /* To ensure that the batch contains only the resolve, flush the batch
     * before beginning and after finishing emitting the resolve packets.
     */
-   intel_flush(ctx);
+   intel_batchbuffer_flush(brw);
 }
 
 
@@ -74,9 +72,14 @@ void
 gen6_blorp_emit_state_base_address(struct brw_context *brw,
                                    const brw_blorp_params *params)
 {
+   uint8_t mocs = brw->gen == 7 ? GEN7_MOCS_L3 : 0;
+
    BEGIN_BATCH(10);
    OUT_BATCH(CMD_STATE_BASE_ADDRESS << 16 | (10 - 2));
-   OUT_BATCH(1); /* GeneralStateBaseAddressModifyEnable */
+   OUT_BATCH(mocs << 8 | /* GeneralStateMemoryObjectControlState */
+             mocs << 4 | /* StatelessDataPortAccessMemoryObjectControlState */
+             1); /* GeneralStateBaseAddressModifyEnable */
+
    /* SurfaceStateBaseAddress */
    OUT_RELOC(brw->batch.bo, I915_GEM_DOMAIN_SAMPLER, 0, 1);
    /* DynamicStateBaseAddress */
@@ -163,7 +166,7 @@ gen6_blorp_emit_vertices(struct brw_context *brw,
       if (brw->gen >= 7)
          dw0 |= GEN7_VB0_ADDRESS_MODIFYENABLE;
 
-      if (brw->is_haswell)
+      if (brw->gen == 7)
          dw0 |= GEN7_MOCS_L3 << 16;
 
       BEGIN_BATCH(batch_length);
@@ -914,6 +917,9 @@ static void
 gen6_blorp_emit_depth_disable(struct brw_context *brw,
                               const brw_blorp_params *params)
 {
+   intel_emit_post_sync_nonzero_flush(brw);
+   intel_emit_depth_stall_flushes(brw);
+
    BEGIN_BATCH(7);
    OUT_BATCH(_3DSTATE_DEPTH_BUFFER << 16 | (7 - 2));
    OUT_BATCH((BRW_DEPTHFORMAT_D32_FLOAT << 18) |

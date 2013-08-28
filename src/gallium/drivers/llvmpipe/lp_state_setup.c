@@ -182,7 +182,18 @@ emit_facing_coef(struct gallivm_state *gallivm,
    LLVMValueRef a0_0 = args->facing;
    LLVMValueRef a0_0f = LLVMBuildSIToFP(builder, a0_0, float_type, "");
    LLVMValueRef zero = lp_build_const_float(gallivm, 0.0);
-   LLVMValueRef a0 = vec4f(gallivm, a0_0f, zero, zero, zero, "facing");
+   /* Our face val is either 1 or 0 so we do
+    * face = (val * 2) - 1
+    * to make it 1 or -1
+    */
+   LLVMValueRef face_val =
+      LLVMBuildFAdd(builder,
+                    LLVMBuildFMul(builder, a0_0f,
+                                  lp_build_const_float(gallivm, 2.0),
+                                  ""),
+                    lp_build_const_float(gallivm, -1.0),
+                    "");
+   LLVMValueRef a0 = vec4f(gallivm, face_val, zero, zero, zero, "facing");
    LLVMValueRef zerovec = vec4f_from_scalar(gallivm, zero, "zero");
 
    store_coef(gallivm, args, slot, a0, zerovec, zerovec);

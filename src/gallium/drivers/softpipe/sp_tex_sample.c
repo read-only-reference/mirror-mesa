@@ -2294,6 +2294,8 @@ sample_compare(struct sp_sampler_view *sp_sview,
    int j, k0, k1, k2, k3;
    float val;
    float pc0, pc1, pc2, pc3;
+   const struct util_format_description *format_desc;
+   unsigned chan_type;
 
    /**
     * Compare texcoord 'p' (aka R) against texture value 'rgba[0]'
@@ -2304,21 +2306,39 @@ sample_compare(struct sp_sampler_view *sp_sview,
 
    if (sp_sview->base.texture->target == PIPE_TEXTURE_2D_ARRAY ||
        sp_sview->base.texture->target == PIPE_TEXTURE_CUBE) {
-      pc0 = CLAMP(c0[0], 0.0F, 1.0F);
-      pc1 = CLAMP(c0[1], 0.0F, 1.0F);
-      pc2 = CLAMP(c0[2], 0.0F, 1.0F);
-      pc3 = CLAMP(c0[3], 0.0F, 1.0F);
+      pc0 = c0[0];
+      pc1 = c0[1];
+      pc2 = c0[2];
+      pc3 = c0[3];
    } else if (sp_sview->base.texture->target == PIPE_TEXTURE_CUBE_ARRAY) {
-      pc0 = CLAMP(c1[0], 0.0F, 1.0F);
-      pc1 = CLAMP(c1[1], 0.0F, 1.0F);
-      pc2 = CLAMP(c1[2], 0.0F, 1.0F);
-      pc3 = CLAMP(c1[3], 0.0F, 1.0F);
+      pc0 = c1[0];
+      pc1 = c1[1];
+      pc2 = c1[2];
+      pc3 = c1[3];
    } else {
-      pc0 = CLAMP(p[0], 0.0F, 1.0F);
-      pc1 = CLAMP(p[1], 0.0F, 1.0F);
-      pc2 = CLAMP(p[2], 0.0F, 1.0F);
-      pc3 = CLAMP(p[3], 0.0F, 1.0F);
+      pc0 = p[0];
+      pc1 = p[1];
+      pc2 = p[2];
+      pc3 = p[3];
    }
+
+   format_desc = util_format_description(sp_sview->base.format);
+   /* not entirely sure we couldn't end up with non-valid swizzle here */
+   chan_type = format_desc->swizzle[0] <= UTIL_FORMAT_SWIZZLE_W ?
+                  format_desc->channel[format_desc->swizzle[0]].type :
+                  UTIL_FORMAT_TYPE_FLOAT;
+   if (chan_type != UTIL_FORMAT_TYPE_FLOAT) {
+      /*
+       * clamping is a result of conversion to texture format, hence
+       * doesn't happen with floats. Technically also should do comparison
+       * in texture format (quantization!).
+       */
+      pc0 = CLAMP(pc0, 0.0F, 1.0F);
+      pc1 = CLAMP(pc1, 0.0F, 1.0F);
+      pc2 = CLAMP(pc2, 0.0F, 1.0F);
+      pc3 = CLAMP(pc3, 0.0F, 1.0F);
+   }
+
    /* compare four texcoords vs. four texture samples */
    switch (sampler->compare_func) {
    case PIPE_FUNC_LESS:
@@ -3092,7 +3112,11 @@ sp_tgsi_get_dims(struct tgsi_sampler *tgsi_sampler,
    struct sp_tgsi_sampler *sp_samp = (struct sp_tgsi_sampler *)tgsi_sampler;
 
    assert(sview_index < PIPE_MAX_SHADER_SAMPLER_VIEWS);
-   /* TODO should have defined behavior if no texture is bound. */
+   /* always have a view here but texture is NULL if no sampler view was set. */
+   if (!sp_samp->sp_sview[sview_index].base.texture) {
+      dims[0] = dims[1] = dims[2] = dims[3] = 0;
+      return;
+   }
    sp_get_dims(&sp_samp->sp_sview[sview_index], level, dims);
 }
 
@@ -3116,8 +3140,16 @@ sp_tgsi_get_samples(struct tgsi_sampler *tgsi_sampler,
    assert(sview_index < PIPE_MAX_SHADER_SAMPLER_VIEWS);
    assert(sampler_index < PIPE_MAX_SAMPLERS);
    assert(sp_samp->sp_sampler[sampler_index]);
-   /* FIXME should have defined behavior if no texture is bound. */
-   assert(sp_samp->sp_sview[sview_index].get_samples);
+   /* always have a view here but texture is NULL if no sampler view was set. */
+   if (!sp_samp->sp_sview[sview_index].base.texture) {
+      int i, j;
+      for (j = 0; j < TGSI_NUM_CHANNELS; j++) {
+         for (i = 0; i < TGSI_QUAD_SIZE; i++) {
+            rgba[j][i] = 0.0f;
+         }
+      }
+      return;
+   }
    sp_samp->sp_sview[sview_index].get_samples(&sp_samp->sp_sview[sview_index],
                                               sp_samp->sp_sampler[sampler_index],
                                               s, t, p, c0, lod, control, rgba);
@@ -3135,8 +3167,16 @@ sp_tgsi_get_texel(struct tgsi_sampler *tgsi_sampler,
    struct sp_tgsi_sampler *sp_samp = (struct sp_tgsi_sampler *)tgsi_sampler;
 
    assert(sview_index < PIPE_MAX_SHADER_SAMPLER_VIEWS);
-   /* FIXME should have defined behavior if no texture is bound. */
-   assert(sp_samp->sp_sview[sview_index].base.texture);
+   /* always have a view here but texture is NULL if no sampler view was set. */
+   if (!sp_samp->sp_sview[sview_index].base.texture) {
+      int i, j;
+      for (j = 0; j < TGSI_NUM_CHANNELS; j++) {
+         for (i = 0; i < TGSI_QUAD_SIZE; i++) {
+            rgba[j][i] = 0.0f;
+         }
+      }
+      return;
+   }
    sp_get_texels(&sp_samp->sp_sview[sview_index], i, j, k, lod, offset, rgba);
 }
 

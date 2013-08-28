@@ -75,6 +75,7 @@ vlVdpVideoSurfaceCreate(VdpDevice device, VdpChromaType chroma_type,
    (
       pipe->screen,
       PIPE_VIDEO_PROFILE_UNKNOWN,
+      PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
       PIPE_VIDEO_CAP_PREFERED_FORMAT
    );
    p_surf->templat.chroma_format = ChromaToPipe(chroma_type);
@@ -84,9 +85,13 @@ vlVdpVideoSurfaceCreate(VdpDevice device, VdpChromaType chroma_type,
    (
       pipe->screen,
       PIPE_VIDEO_PROFILE_UNKNOWN,
+      PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
       PIPE_VIDEO_CAP_PREFERS_INTERLACED
    );
-   p_surf->video_buffer = pipe->create_video_buffer(pipe, &p_surf->templat);
+   if (p_surf->templat.buffer_format != PIPE_FORMAT_NONE)
+      p_surf->video_buffer = pipe->create_video_buffer(pipe, &p_surf->templat);
+
+   /* do not mandate early allocation of a video buffer */
    vlVdpVideoSurfaceClear(p_surf);
    pipe_mutex_unlock(dev->mutex);
 
@@ -172,7 +177,7 @@ vlVdpVideoSurfaceSize(vlVdpSurface *p_surf, int component,
          *width /= 2;
          *height /= 2;
       } else if (p_surf->templat.chroma_format == PIPE_VIDEO_CHROMA_FORMAT_422) {
-         *height /= 2;
+         *width /= 2;
       }
    }
    if (p_surf->templat.interlaced)

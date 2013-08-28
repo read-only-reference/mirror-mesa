@@ -174,24 +174,6 @@ gl_clip_plane *brw_select_clip_planes(struct gl_context *ctx)
 
 
 bool
-brw_vec4_prog_data_compare(const struct brw_vec4_prog_data *a,
-                           const struct brw_vec4_prog_data *b)
-{
-   /* Compare all the struct up to the pointers. */
-   if (memcmp(a, b, offsetof(struct brw_vec4_prog_data, param)))
-      return false;
-
-   if (memcmp(a->param, b->param, a->nr_params * sizeof(void *)))
-      return false;
-
-   if (memcmp(a->pull_param, b->pull_param, a->nr_pull_params * sizeof(void *)))
-      return false;
-
-   return true;
-}
-
-
-bool
 brw_vs_prog_data_compare(const void *in_a, const void *in_b,
                          int aux_size, const void *in_key)
 {
@@ -252,8 +234,10 @@ do_vs_prog(struct brw_context *brw,
    } else {
       param_count = vp->program.Base.Parameters->NumParameters * 4;
    }
-   /* We also upload clip plane data as uniforms */
-   param_count += MAX_CLIP_PLANES * 4;
+   /* vec4_visitor::setup_uniform_clipplane_values() also uploads user clip
+    * planes as uniforms.
+    */
+   param_count += c.key.base.nr_userclip_plane_consts * 4;
 
    prog_data.base.param = rzalloc_array(NULL, const float *, param_count);
    prog_data.base.pull_param = rzalloc_array(NULL, const float *, param_count);
@@ -283,6 +267,11 @@ do_vs_prog(struct brw_context *brw,
          outputs_written |= BITFIELD64_BIT(VARYING_SLOT_COL0);
       if (outputs_written & BITFIELD64_BIT(VARYING_SLOT_BFC1))
          outputs_written |= BITFIELD64_BIT(VARYING_SLOT_COL1);
+
+      if (c.key.base.userclip_active) {
+         outputs_written |= BITFIELD64_BIT(VARYING_SLOT_CLIP_DIST0);
+         outputs_written |= BITFIELD64_BIT(VARYING_SLOT_CLIP_DIST1);
+      }
    }
 
    brw_compute_vue_map(brw, &prog_data.base.vue_map, outputs_written,
@@ -299,16 +288,6 @@ do_vs_prog(struct brw_context *brw,
    if (program == NULL) {
       ralloc_free(mem_ctx);
       return false;
-   }
-
-   if (prog_data.base.nr_pull_params)
-      prog_data.base.num_surfaces = 1;
-   if (c.vp->program.Base.SamplersUsed)
-      prog_data.base.num_surfaces = SURF_INDEX_VS_TEXTURE(BRW_MAX_TEX_UNIT);
-   if (prog &&
-       prog->_LinkedShaders[MESA_SHADER_VERTEX]->NumUniformBlocks) {
-      prog_data.base.num_surfaces =
-	 SURF_INDEX_VS_UBO(prog->_LinkedShaders[MESA_SHADER_VERTEX]->NumUniformBlocks);
    }
 
    /* Scratch space is used for register spilling */
@@ -389,9 +368,6 @@ brw_vs_debug_recompile(struct brw_context *brw,
 
    found |= key_debug(brw, "clip distance enable",
                       old_key->base.uses_clip_distance, key->base.uses_clip_distance);
-   found |= key_debug(brw, "clip plane enable bitfield",
-                      old_key->base.userclip_planes_enabled_gen_4_5,
-                      key->base.userclip_planes_enabled_gen_4_5);
    found |= key_debug(brw, "copy edgeflag",
                       old_key->copy_edgeflag, key->copy_edgeflag);
    found |= key_debug(brw, "PointCoord replace",
@@ -406,6 +382,23 @@ brw_vs_debug_recompile(struct brw_context *brw,
       perf_debug("  Something else\n");
    }
 }
+
+
+void
+brw_setup_vec4_key_clip_info(struct brw_context *brw,
+                             struct brw_vec4_prog_key *key,
+                             bool program_uses_clip_distance)
+{
+   struct gl_context *ctx = &brw->ctx;
+
+   key->userclip_active = (ctx->Transform.ClipPlanesEnabled != 0);
+   key->uses_clip_distance = program_uses_clip_distance;
+   if (key->userclip_active && !key->uses_clip_distance) {
+      key->nr_userclip_plane_consts
+         = _mesa_logbase2(ctx->Transform.ClipPlanesEnabled) + 1;
+   }
+}
+
 
 static void brw_upload_vs_prog(struct brw_context *brw)
 {
@@ -423,19 +416,7 @@ static void brw_upload_vs_prog(struct brw_context *brw)
     * the inputs it asks for, whether they are varying or not.
     */
    key.base.program_string_id = vp->id;
-   key.base.userclip_active = (ctx->Transform.ClipPlanesEnabled != 0);
-   key.base.uses_clip_distance = vp->program.UsesClipDistance;
-   if (key.base.userclip_active && !key.base.uses_clip_distance) {
-      if (brw->gen < 6) {
-         key.base.nr_userclip_plane_consts
-            = _mesa_bitcount_64(ctx->Transform.ClipPlanesEnabled);
-         key.base.userclip_planes_enabled_gen_4_5
-            = ctx->Transform.ClipPlanesEnabled;
-      } else {
-         key.base.nr_userclip_plane_consts
-            = _mesa_logbase2(ctx->Transform.ClipPlanesEnabled) + 1;
-      }
-   }
+   brw_setup_vec4_key_clip_info(brw, &key.base, vp->program.UsesClipDistance);
 
    /* _NEW_POLYGON */
    if (brw->gen < 6) {
@@ -455,7 +436,8 @@ static void brw_upload_vs_prog(struct brw_context *brw)
    }
 
    /* _NEW_TEXTURE */
-   brw_populate_sampler_prog_key_data(ctx, prog, &key.base.tex);
+   brw_populate_sampler_prog_key_data(ctx, prog, brw->vs.sampler_count,
+                                      &key.base.tex);
 
    /* BRW_NEW_VERTICES */
    if (brw->gen < 8 && !brw->is_haswell) {
@@ -499,12 +481,18 @@ static void brw_upload_vs_prog(struct brw_context *brw)
 			 &brw->vs.prog_offset, &brw->vs.prog_data)) {
       bool success = do_vs_prog(brw, ctx->Shader.CurrentVertexProgram,
 				vp, &key);
-
+      (void) success;
       assert(success);
    }
    if (memcmp(&brw->vs.prog_data->base.vue_map, &brw->vue_map_geom_out,
               sizeof(brw->vue_map_geom_out)) != 0) {
-      brw->vue_map_geom_out = brw->vs.prog_data->base.vue_map;
+      brw->vue_map_vs = brw->vs.prog_data->base.vue_map;
+      brw->state.dirty.brw |= BRW_NEW_VUE_MAP_VS;
+
+      /* No geometry shader support yet, so the VS VUE map is the VUE map for
+       * the output of the "geometry" portion of the pipeline.
+       */
+      brw->vue_map_geom_out = brw->vue_map_vs;
       brw->state.dirty.brw |= BRW_NEW_VUE_MAP_GEOM_OUT;
    }
 }
@@ -544,7 +532,8 @@ brw_vs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
    key.base.program_string_id = bvp->id;
    key.base.clamp_vertex_color = ctx->API == API_OPENGL_COMPAT;
 
-   for (int i = 0; i < MAX_SAMPLERS; i++) {
+   unsigned sampler_count = _mesa_fls(vp->Base.SamplersUsed);
+   for (unsigned i = 0; i < sampler_count; i++) {
       if (vp->Base.ShadowSamplers & (1 << i)) {
          /* Assume DEPTH_TEXTURE_MODE is the default: X, X, X, 1 */
          key.base.tex.swizzles[i] =
@@ -561,14 +550,6 @@ brw_vs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
    brw->vs.prog_data = old_prog_data;
 
    return success;
-}
-
-
-void
-brw_vec4_prog_data_free(const struct brw_vec4_prog_data *prog_data)
-{
-   ralloc_free((void *)prog_data->param);
-   ralloc_free((void *)prog_data->pull_param);
 }
 
 

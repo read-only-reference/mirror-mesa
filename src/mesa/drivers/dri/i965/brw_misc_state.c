@@ -341,6 +341,26 @@ brw_workaround_depthstencil_alignment(struct brw_context *brw,
    if (depth_irb)
       depth_mt = depth_irb->mt;
 
+   /* Initialize brw->depthstencil to 'nop' workaround state.
+    */
+   brw->depthstencil.tile_x = 0;
+   brw->depthstencil.tile_y = 0;
+   brw->depthstencil.depth_offset = 0;
+   brw->depthstencil.stencil_offset = 0;
+   brw->depthstencil.hiz_offset = 0;
+   brw->depthstencil.depth_mt = NULL;
+   brw->depthstencil.stencil_mt = NULL;
+   if (depth_irb)
+      brw->depthstencil.depth_mt = depth_mt;
+   if (stencil_irb)
+      brw->depthstencil.stencil_mt = get_stencil_miptree(stencil_irb);
+
+   /* Gen7+ doesn't require the workarounds, since we always program the
+    * surface state at the start of the whole surface.
+    */
+   if (brw->gen >= 7)
+      return;
+
    /* Check if depth buffer is in depth/stencil format.  If so, then it's only
     * safe to invalidate it if we're also clearing stencil, and both depth_irb
     * and stencil_irb point to the same miptree.
@@ -515,11 +535,6 @@ brw_workaround_depthstencil_alignment(struct brw_context *brw,
     */
    brw->depthstencil.tile_x = tile_x;
    brw->depthstencil.tile_y = tile_y;
-   brw->depthstencil.depth_offset = 0;
-   brw->depthstencil.stencil_offset = 0;
-   brw->depthstencil.hiz_offset = 0;
-   brw->depthstencil.depth_mt = NULL;
-   brw->depthstencil.stencil_mt = NULL;
    if (depth_irb) {
       depth_mt = depth_irb->mt;
       brw->depthstencil.depth_mt = depth_mt;
@@ -1023,13 +1038,16 @@ static void upload_state_base_address( struct brw_context *brw )
     */
 
    if (brw->gen >= 6) {
+      uint8_t mocs = brw->gen == 7 ? GEN7_MOCS_L3 : 0;
+
       if (brw->gen == 6)
 	 intel_emit_post_sync_nonzero_flush(brw);
 
        BEGIN_BATCH(10);
        OUT_BATCH(CMD_STATE_BASE_ADDRESS << 16 | (10 - 2));
-       /* General state base address: stateless DP read/write requests */
-       OUT_BATCH(1);
+       OUT_BATCH(mocs << 8 | /* General State Memory Object Control State */
+                 mocs << 4 | /* Stateless Data Port Access Memory Object Control State */
+                 1); /* General State Base Address Modify Enable */
        /* Surface state base address:
 	* BINDING_TABLE_STATE
 	* SURFACE_STATE

@@ -190,7 +190,7 @@ brw_initialize_context_constants(struct brw_context *brw)
    ctx->Const.MaxPointSizeAA = 255.0;
    ctx->Const.PointSizeGranularity = 1.0;
 
-   if (brw->gen >= 6)
+   if (brw->gen >= 5 || brw->is_g4x)
       ctx->Const.MaxClipPlanes = 8;
 
    ctx->Const.VertexProgram.MaxNativeInstructions = 16 * 1024;
@@ -248,7 +248,7 @@ brw_initialize_context_constants(struct brw_context *brw)
       driQueryOptionb(&brw->optionCache, "disable_glsl_line_continuations");
 
    /* We want the GLSL compiler to emit code that uses condition codes */
-   for (int i = 0; i <= MESA_SHADER_FRAGMENT; i++) {
+   for (int i = 0; i < MESA_SHADER_TYPES; i++) {
       ctx->ShaderCompilerOptions[i].MaxIfDepth = brw->gen < 6 ? 16 : UINT_MAX;
       ctx->ShaderCompilerOptions[i].EmitCondCodes = true;
       ctx->ShaderCompilerOptions[i].EmitNoNoise = true;
@@ -359,18 +359,21 @@ brwCreateContext(int api,
       if (brw->gt == 1) {
 	 brw->max_wm_threads = 102;
 	 brw->max_vs_threads = 70;
+	 brw->max_gs_threads = 70;
 	 brw->urb.size = 128;
 	 brw->urb.max_vs_entries = 640;
 	 brw->urb.max_gs_entries = 256;
       } else if (brw->gt == 2) {
 	 brw->max_wm_threads = 204;
 	 brw->max_vs_threads = 280;
+	 brw->max_gs_threads = 256;
 	 brw->urb.size = 256;
 	 brw->urb.max_vs_entries = 1664;
 	 brw->urb.max_gs_entries = 640;
       } else if (brw->gt == 3) {
 	 brw->max_wm_threads = 408;
 	 brw->max_vs_threads = 280;
+	 brw->max_gs_threads = 256;
 	 brw->urb.size = 512;
 	 brw->urb.max_vs_entries = 1664;
 	 brw->urb.max_gs_entries = 640;
@@ -437,11 +440,18 @@ brwCreateContext(int api,
 
    brw_init_state( brw );
 
-   brw->curbe.last_buf = calloc(1, 4096);
-   brw->curbe.next_buf = calloc(1, 4096);
+   if (brw->gen < 6) {
+      brw->curbe.last_buf = calloc(1, 4096);
+      brw->curbe.next_buf = calloc(1, 4096);
+   }
 
    brw->state.dirty.mesa = ~0;
    brw->state.dirty.brw = ~0;
+
+   /* Make sure that brw->state.dirty.brw has enough bits to hold all possible
+    * dirty flags.
+    */
+   STATIC_ASSERT(BRW_NUM_STATE_BITS <= 8 * sizeof(brw->state.dirty.brw));
 
    brw->emit_state_always = 0;
 
@@ -466,6 +476,7 @@ brwCreateContext(int api,
    }
 
    brw_fs_alloc_reg_sets(brw);
+   brw_vec4_alloc_reg_set(brw);
 
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
       brw_init_shader_time(brw);

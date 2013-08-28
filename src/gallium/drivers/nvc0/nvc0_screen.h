@@ -87,7 +87,7 @@ nvc0_screen(struct pipe_screen *screen)
 
 /* Performance counter queries:
  */
-#define NVE4_PM_QUERY_COUNT  39
+#define NVE4_PM_QUERY_COUNT  49
 #define NVE4_PM_QUERY(i)    (PIPE_QUERY_DRIVER_SPECIFIC + (i))
 #define NVE4_PM_QUERY_LAST   NVE4_PM_QUERY(NVE4_PM_QUERY_COUNT - 1)
 #define NVE4_PM_QUERY_PROF_TRIGGER_0            0
@@ -123,12 +123,23 @@ nvc0_screen(struct pipe_screen *screen)
 #define NVE4_PM_QUERY_ACTIVE_WARPS              30
 #define NVE4_PM_QUERY_ACTIVE_CYCLES             31
 #define NVE4_PM_QUERY_INST_ISSUED               32
-#define NVE4_PM_QUERY_METRIC_IPC                33
-#define NVE4_PM_QUERY_METRIC_IPAC               34
-#define NVE4_PM_QUERY_METRIC_IPEC               35
-#define NVE4_PM_QUERY_METRIC_MP_OCCUPANCY       36
-#define NVE4_PM_QUERY_METRIC_MP_EFFICIENCY      37
-#define NVE4_PM_QUERY_METRIC_INST_REPLAY_OHEAD  38
+#define NVE4_PM_QUERY_ATOM_COUNT                33
+#define NVE4_PM_QUERY_GRED_COUNT                34
+#define NVE4_PM_QUERY_LD_SHARED_REPLAY          35
+#define NVE4_PM_QUERY_ST_SHARED_REPLAY          36
+#define NVE4_PM_QUERY_LD_LOCAL_TRANSACTIONS     37
+#define NVE4_PM_QUERY_ST_LOCAL_TRANSACTIONS     38
+#define NVE4_PM_QUERY_L1_LD_SHARED_TRANSACTIONS 39
+#define NVE4_PM_QUERY_L1_ST_SHARED_TRANSACTIONS 40
+#define NVE4_PM_QUERY_GLD_MEM_DIV_REPLAY        41
+#define NVE4_PM_QUERY_GST_MEM_DIV_REPLAY        42
+#define NVE4_PM_QUERY_METRIC_IPC                43
+#define NVE4_PM_QUERY_METRIC_IPAC               44
+#define NVE4_PM_QUERY_METRIC_IPEC               45
+#define NVE4_PM_QUERY_METRIC_MP_OCCUPANCY       46
+#define NVE4_PM_QUERY_METRIC_MP_EFFICIENCY      47
+#define NVE4_PM_QUERY_METRIC_INST_REPLAY_OHEAD  48
+
 /*
 #define NVE4_PM_QUERY_GR_IDLE                   50
 #define NVE4_PM_QUERY_BSP_IDLE                  51
@@ -148,6 +159,41 @@ nvc0_screen(struct pipe_screen *screen)
 #define NVE4_PM_QUERY_TEX0_CACHE_SECTOR_QUERIES 58
 ...
 */
+
+#define NVC0_PM_QUERY_COUNT 31
+#define NVC0_PM_QUERY(i)    (PIPE_QUERY_DRIVER_SPECIFIC + 2048 + (i))
+#define NVC0_PM_QUERY_LAST   NVC0_PM_QUERY(NVC0_PM_QUERY_COUNT - 1)
+#define NVC0_PM_QUERY_INST_EXECUTED             0
+#define NVC0_PM_QUERY_BRANCH                    1
+#define NVC0_PM_QUERY_BRANCH_DIVERGENT          2
+#define NVC0_PM_QUERY_ACTIVE_WARPS              3
+#define NVC0_PM_QUERY_ACTIVE_CYCLES             4
+#define NVC0_PM_QUERY_LAUNCHED_WARPS            5
+#define NVC0_PM_QUERY_LAUNCHED_THREADS          6
+#define NVC0_PM_QUERY_LD_SHARED                 7
+#define NVC0_PM_QUERY_ST_SHARED                 8
+#define NVC0_PM_QUERY_LD_LOCAL                  9
+#define NVC0_PM_QUERY_ST_LOCAL                  10
+#define NVC0_PM_QUERY_GRED_COUNT                11
+#define NVC0_PM_QUERY_ATOM_COUNT                12
+#define NVC0_PM_QUERY_GLD_REQUEST               13
+#define NVC0_PM_QUERY_GST_REQUEST               14
+#define NVC0_PM_QUERY_INST_ISSUED1_0            15
+#define NVC0_PM_QUERY_INST_ISSUED1_1            16
+#define NVC0_PM_QUERY_INST_ISSUED2_0            17
+#define NVC0_PM_QUERY_INST_ISSUED2_1            18
+#define NVC0_PM_QUERY_TH_INST_EXECUTED_0        19
+#define NVC0_PM_QUERY_TH_INST_EXECUTED_1        20
+#define NVC0_PM_QUERY_TH_INST_EXECUTED_2        21
+#define NVC0_PM_QUERY_TH_INST_EXECUTED_3        22
+#define NVC0_PM_QUERY_PROF_TRIGGER_0            23
+#define NVC0_PM_QUERY_PROF_TRIGGER_1            24
+#define NVC0_PM_QUERY_PROF_TRIGGER_2            25
+#define NVC0_PM_QUERY_PROF_TRIGGER_3            26
+#define NVC0_PM_QUERY_PROF_TRIGGER_4            27
+#define NVC0_PM_QUERY_PROF_TRIGGER_5            28
+#define NVC0_PM_QUERY_PROF_TRIGGER_6            29
+#define NVC0_PM_QUERY_PROF_TRIGGER_7            30
 
 /* Driver statistics queries:
  */
@@ -204,6 +250,7 @@ int nvc0_screen_tic_alloc(struct nvc0_screen *, void *);
 int nvc0_screen_tsc_alloc(struct nvc0_screen *, void *);
 
 int nve4_screen_compute_setup(struct nvc0_screen *, struct nouveau_pushbuf *);
+int nvc0_screen_compute_setup(struct nvc0_screen *, struct nouveau_pushbuf *);
 
 boolean nvc0_screen_resize_tls_area(struct nvc0_screen *, uint32_t lpos,
                                     uint32_t lneg, uint32_t cstack);

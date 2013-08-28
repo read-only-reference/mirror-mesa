@@ -580,6 +580,11 @@ AC_ARG_ENABLE([osmesa],
         [enable OSMesa library @<:@default=disabled@:>@])],
     [enable_osmesa="$enableval"],
     [enable_osmesa=no])
+AC_ARG_ENABLE([gallium-osmesa],
+    [AS_HELP_STRING([--enable-gallium-osmesa],
+        [enable Gallium implementation of the OSMesa library @<:@default=disabled@:>@])],
+    [enable_gallium_osmesa="$enableval"],
+    [enable_gallium_osmesa=no])
 AC_ARG_ENABLE([egl],
     [AS_HELP_STRING([--disable-egl],
         [disable EGL library @<:@default=enabled@:>@])],
@@ -770,7 +775,13 @@ if test "x$enable_dri" = xyes; then
     GALLIUM_STATE_TRACKERS_DIRS="dri $GALLIUM_STATE_TRACKERS_DIRS"
 fi
 
-if test "x$enable_osmesa" = xyes; then
+if test "x$enable_gallium_osmesa" = xyes; then
+    if test -z "$with_gallium_drivers"; then
+        AC_MSG_ERROR([Cannot enable gallium_osmesa without Gallium])
+    fi
+    if test "x$enable_osmesa" = xyes; then
+        AC_MSG_ERROR([Cannot enable both classic and Gallium OSMesa implementations])
+    fi
     GALLIUM_STATE_TRACKERS_DIRS="osmesa $GALLIUM_STATE_TRACKERS_DIRS"
     GALLIUM_TARGET_DIRS="$GALLIUM_TARGET_DIRS osmesa"
 fi
@@ -1136,7 +1147,7 @@ x16|x32)
     ;;
 esac
 
-if test "x$enable_osmesa" = xyes; then
+if test "x$enable_osmesa" = xyes -o "x$enable_gallium_osmesa" = xyes; then
     # only link libraries with osmesa if shared
     if test "$enable_static" = no; then
         OSMESA_LIB_DEPS="-lm $PTHREAD_LIBS $SELINUX_LIBS $DLOPEN_LIBS"
@@ -1433,7 +1444,7 @@ egl_platforms=`IFS=', '; echo $with_egl_platforms`
 for plat in $egl_platforms; do
 	case "$plat" in
 	wayland)
-		PKG_CHECK_MODULES([WAYLAND], [wayland-client >= 1.0.2 wayland-server >= 1.0.2])
+		PKG_CHECK_MODULES([WAYLAND], [wayland-client >= 1.2.0 wayland-server >= 1.2.0])
 		GALLIUM_WINSYS_DIRS="$GALLIUM_WINSYS_DIRS sw/wayland"
 
                 WAYLAND_PREFIX=`$PKG_CONFIG --variable=prefix wayland-client`
@@ -1616,6 +1627,10 @@ if test "x$enable_gallium_llvm" = xyes; then
             # LLVM 3.3 >= 177971 requires IRReader
             if $LLVM_CONFIG --components | grep -qw 'irreader'; then
                 LLVM_COMPONENTS="${LLVM_COMPONENTS} irreader"
+            fi
+            # LLVM 3.4 requires Option
+            if $LLVM_CONFIG --components | grep -qw 'option'; then
+                LLVM_COMPONENTS="${LLVM_COMPONENTS} option"
             fi
         fi
         DEFINES="${DEFINES} -DHAVE_LLVM=0x0$LLVM_VERSION_INT"
@@ -1910,8 +1925,8 @@ AM_CONDITIONAL(NEED_GALLIUM_SOFTPIPE_DRIVER, test "x$HAVE_GALLIUM_SVGA" = xyes -
                                                   "x$HAVE_GALLIUM_I915" = xyes -o \
                                                   "x$HAVE_GALLIUM_SOFTPIPE" = xyes)
 AM_CONDITIONAL(NEED_GALLIUM_LLVMPIPE_DRIVER, test "x$HAVE_GALLIUM_I915" = xyes -o \
-                                                  "x$HAVE_GALLIUM_SOFTPIPE" = xyes -a \
-                                                  "x$MESA_LLVM" = x1)
+                                                  "x$HAVE_GALLIUM_SOFTPIPE" = xyes \
+                                                  && test "x$MESA_LLVM" = x1)
 
 if test "x$enable_gallium_loader" = xyes; then
     GALLIUM_WINSYS_DIRS="$GALLIUM_WINSYS_DIRS sw/null"
@@ -1958,9 +1973,11 @@ AC_SUBST([ELF_LIB])
 
 AM_CONDITIONAL(NEED_LIBPROGRAM, test "x$with_gallium_drivers" != x -o \
                                      "x$enable_xlib_glx" = xyes -o \
-                                     "x$enable_osmesa" = xyes)
+                                     "x$enable_osmesa" = xyes -o \
+                                     "x$enable_gallium_osmesa" = xyes)
 AM_CONDITIONAL(HAVE_X11_DRIVER, test "x$enable_xlib_glx" = xyes)
 AM_CONDITIONAL(HAVE_OSMESA, test "x$enable_osmesa" = xyes)
+AM_CONDITIONAL(HAVE_GALLIUM_OSMESA, test "x$enable_gallium_osmesa" = xyes)
 
 AM_CONDITIONAL(HAVE_X86_ASM, echo "$DEFINES" | grep 'X86_ASM' >/dev/null 2>&1)
 AM_CONDITIONAL(HAVE_X86_64_ASM, echo "$DEFINES" | grep 'X86_64_ASM' >/dev/null 2>&1)
@@ -2049,6 +2066,7 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/targets/gbm/Makefile
 		src/gallium/targets/opencl/Makefile
 		src/gallium/targets/osmesa/Makefile
+		src/gallium/targets/osmesa/osmesa.pc
 		src/gallium/targets/pipe-loader/Makefile
 		src/gallium/targets/libgl-xlib/Makefile
 		src/gallium/targets/vdpau-nouveau/Makefile
@@ -2147,11 +2165,17 @@ echo "        OpenVG:          $enable_openvg"
 
 dnl Driver info
 echo ""
-if test "x$enable_osmesa" != xno; then
+case "x$enable_osmesa$enable_gallium_osmesa" in
+xnoyes)
+        echo "        OSMesa:          lib$OSMESA_LIB (Gallium)"
+        ;;
+xyesno)
         echo "        OSMesa:          lib$OSMESA_LIB"
-else
+        ;;
+xnono)
         echo "        OSMesa:          no"
-fi
+        ;;
+esac
 
 if test "x$enable_dri" != xno; then
         # cleanup the drivers var

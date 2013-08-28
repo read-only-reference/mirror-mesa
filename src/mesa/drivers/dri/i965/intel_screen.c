@@ -77,8 +77,6 @@ PUBLIC const char __driConfigOptions[] =
    DRI_CONF_SECTION_END
 DRI_CONF_END;
 
-const GLuint __driNConfigOptions = 12;
-
 #include "intel_batchbuffer.h"
 #include "intel_buffers.h"
 #include "intel_bufmgr.h"
@@ -153,29 +151,55 @@ static const __DRItexBufferExtension intelTexBufferExtension = {
 };
 
 static void
-intelDRI2Flush(__DRIdrawable *drawable)
+intel_dri2_flush_with_flags(__DRIcontext *cPriv,
+                            __DRIdrawable *dPriv,
+                            unsigned flags,
+                            enum __DRI2throttleReason reason)
 {
-   GET_CURRENT_CONTEXT(ctx);
-   struct brw_context *brw = brw_context(ctx);
-   if (brw == NULL)
+   struct brw_context *brw = cPriv->driverPrivate;
+
+   if (!brw)
       return;
 
-   intel_resolve_for_dri2_flush(brw, drawable);
-   brw->need_throttle = true;
+   struct gl_context *ctx = &brw->ctx;
 
-   if (brw->batch.used)
-      intel_batchbuffer_flush(brw);
+   FLUSH_VERTICES(ctx, 0);
+
+   if (flags & __DRI2_FLUSH_DRAWABLE)
+      intel_resolve_for_dri2_flush(brw, dPriv);
+
+   if (reason == __DRI2_THROTTLE_SWAPBUFFER ||
+       reason == __DRI2_THROTTLE_FLUSHFRONT) {
+      brw->need_throttle = true;
+   }
+
+   intel_batchbuffer_flush(brw);
 
    if (INTEL_DEBUG & DEBUG_AUB) {
       aub_dump_bmp(ctx);
    }
 }
 
-static const struct __DRI2flushExtensionRec intelFlushExtension = {
-    .base = { __DRI2_FLUSH, 3 },
+/**
+ * Provides compatibility with loaders that only support the older (version
+ * 1-3) flush interface.
+ *
+ * That includes libGL up to Mesa 9.0, and the X Server at least up to 1.13.
+ */
+static void
+intel_dri2_flush(__DRIdrawable *drawable)
+{
+   intel_dri2_flush_with_flags(drawable->driContextPriv, drawable,
+                               __DRI2_FLUSH_DRAWABLE,
+                               __DRI2_THROTTLE_SWAPBUFFER);
+}
 
-    .flush              = intelDRI2Flush,
+static const struct __DRI2flushExtensionRec intelFlushExtension = {
+    .base = { __DRI2_FLUSH, 4 },
+
+    .flush              = intel_dri2_flush,
     .invalidate         = dri2InvalidateDrawable,
+    .flush_with_flags   = intel_dri2_flush_with_flags,
 };
 
 static struct intel_image_format intel_image_formats[] = {
@@ -230,6 +254,21 @@ static struct intel_image_format intel_image_formats[] = {
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_GR88, 2 },
        { 0, 1, 0, __DRI_IMAGE_FORMAT_ARGB8888, 4 } } }
 };
+
+static struct intel_image_format *
+intel_image_format_lookup(int fourcc)
+{
+   struct intel_image_format *f = NULL;
+
+   for (unsigned i = 0; i < ARRAY_SIZE(intel_image_formats); i++) {
+      if (intel_image_formats[i].fourcc == fourcc) {
+	 f = &intel_image_formats[i];
+	 break;
+      }
+   }
+
+   return f;
+}
 
 static __DRIimage *
 intel_allocate_image(int dri_format, void *loaderPrivate)
@@ -601,12 +640,7 @@ intel_create_image_from_names(__DRIscreen *screen,
     if (screen == NULL || names == NULL || num_names != 1)
         return NULL;
 
-    for (i = 0; i < ARRAY_SIZE(intel_image_formats); i++) {
-        if (intel_image_formats[i].fourcc == fourcc) {
-           f = &intel_image_formats[i];
-        }
-    }
-
+    f = intel_image_format_lookup(fourcc);
     if (f == NULL)
         return NULL;
 
@@ -635,23 +669,22 @@ intel_create_image_from_fds(__DRIscreen *screen,
                             void *loaderPrivate)
 {
    struct intel_screen *intelScreen = screen->driverPrivate;
-   struct intel_image_format *f = NULL;
+   struct intel_image_format *f;
    __DRIimage *image;
    int i, index;
 
    if (fds == NULL || num_fds != 1)
       return NULL;
 
-   for (i = 0; i < ARRAY_SIZE(intel_image_formats); i++) {
-      if (intel_image_formats[i].fourcc == fourcc) {
-         f = &intel_image_formats[i];
-      }
-   }
-
+   f = intel_image_format_lookup(fourcc);
    if (f == NULL)
       return NULL;
 
-   image = intel_allocate_image(__DRI_IMAGE_FORMAT_NONE, loaderPrivate);
+   if (f->nplanes == 1)
+      image = intel_allocate_image(f->planes[0].dri_format, loaderPrivate);
+   else
+      image = intel_allocate_image(__DRI_IMAGE_FORMAT_NONE, loaderPrivate);
+
    if (image == NULL)
       return NULL;
 
@@ -670,9 +703,55 @@ intel_create_image_from_fds(__DRIscreen *screen,
       image->strides[index] = strides[index];
    }
 
+   intel_setup_image_from_dimensions(image);
+
    return image;
 }
 
+static __DRIimage *
+intel_create_image_from_dma_bufs(__DRIscreen *screen,
+                                 int width, int height, int fourcc,
+                                 int *fds, int num_fds,
+                                 int *strides, int *offsets,
+                                 enum __DRIYUVColorSpace yuv_color_space,
+                                 enum __DRISampleRange sample_range,
+                                 enum __DRIChromaSiting horizontal_siting,
+                                 enum __DRIChromaSiting vertical_siting,
+                                 unsigned *error,
+                                 void *loaderPrivate)
+{
+   __DRIimage *image;
+   struct intel_image_format *f = intel_image_format_lookup(fourcc);
+
+   /* For now only packed formats that have native sampling are supported. */
+   if (!f || f->nplanes != 1) {
+      *error = __DRI_IMAGE_ERROR_BAD_MATCH;
+      return NULL;
+   }
+
+   image = intel_create_image_from_fds(screen, width, height, fourcc, fds,
+                                       num_fds, strides, offsets,
+                                       loaderPrivate);
+
+   /*
+    * Invalid parameters and any inconsistencies between are assumed to be
+    * checked by the caller. Therefore besides unsupported formats one can fail
+    * only in allocation.
+    */
+   if (!image) {
+      *error = __DRI_IMAGE_ERROR_BAD_ALLOC;
+      return NULL;
+   }
+
+   image->dma_buf_imported = true;
+   image->yuv_color_space = yuv_color_space;
+   image->sample_range = sample_range;
+   image->horizontal_siting = horizontal_siting;
+   image->vertical_siting = vertical_siting;
+
+   *error = __DRI_IMAGE_ERROR_SUCCESS;
+   return image;
+}
 
 static __DRIimage *
 intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
@@ -733,7 +812,7 @@ intel_from_planar(__DRIimage *parent, int plane, void *loaderPrivate)
 }
 
 static struct __DRIimageExtensionRec intelImageExtension = {
-    .base = { __DRI_IMAGE, 7 },
+    .base = { __DRI_IMAGE, 8 },
 
     .createImageFromName                = intel_create_image_from_name,
     .createImageFromRenderbuffer        = intel_create_image_from_renderbuffer,
@@ -745,7 +824,8 @@ static struct __DRIimageExtensionRec intelImageExtension = {
     .createImageFromNames               = intel_create_image_from_names,
     .fromPlanar                         = intel_from_planar,
     .createImageFromTexture             = intel_create_image_from_texture,
-    .createImageFromFds                 = intel_create_image_from_fds
+    .createImageFromFds                 = intel_create_image_from_fds,
+    .createImageFromDmaBufs             = intel_create_image_from_dma_bufs
 };
 
 static const __DRIextension *intelScreenExtensions[] = {
@@ -1203,8 +1283,7 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
       return false;
    }
    /* parse information in __driConfigOptions */
-   driParseOptionInfo(&intelScreen->optionCache,
-                      __driConfigOptions, __driNConfigOptions);
+   driParseOptionInfo(&intelScreen->optionCache, __driConfigOptions);
 
    intelScreen->driScrnPriv = psp;
    psp->driverPrivate = (void *) intelScreen;

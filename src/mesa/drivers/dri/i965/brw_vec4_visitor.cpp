@@ -22,6 +22,7 @@
  */
 
 #include "brw_vec4.h"
+#include "brw_vs.h"
 #include "glsl/ir_uniform.h"
 extern "C" {
 #include "main/context.h"
@@ -143,6 +144,7 @@ ALU3(BFI2)
 ALU1(FBH)
 ALU1(FBL)
 ALU1(CBIT)
+ALU3(MAD)
 
 /** Gen4 predicated IF. */
 vec4_instruction *
@@ -662,40 +664,14 @@ vec4_visitor::setup_uniform_clipplane_values()
 {
    gl_clip_plane *clip_planes = brw_select_clip_planes(ctx);
 
-   if (brw->gen < 6) {
-      /* Pre-Gen6, we compact clip planes.  For example, if the user
-       * enables just clip planes 0, 1, and 3, we will enable clip planes
-       * 0, 1, and 2 in the hardware, and we'll move clip plane 3 to clip
-       * plane 2.  This simplifies the implementation of the Gen6 clip
-       * thread.
-       */
-      int compacted_clipplane_index = 0;
-      for (int i = 0; i < MAX_CLIP_PLANES; ++i) {
-	 if (!(key->userclip_planes_enabled_gen_4_5 & (1 << i)))
-	    continue;
-
-	 this->uniform_vector_size[this->uniforms] = 4;
-	 this->userplane[compacted_clipplane_index] = dst_reg(UNIFORM, this->uniforms);
-	 this->userplane[compacted_clipplane_index].type = BRW_REGISTER_TYPE_F;
-	 for (int j = 0; j < 4; ++j) {
-	    prog_data->param[this->uniforms * 4 + j] = &clip_planes[i][j];
-	 }
-	 ++compacted_clipplane_index;
-	 ++this->uniforms;
+   for (int i = 0; i < key->nr_userclip_plane_consts; ++i) {
+      this->uniform_vector_size[this->uniforms] = 4;
+      this->userplane[i] = dst_reg(UNIFORM, this->uniforms);
+      this->userplane[i].type = BRW_REGISTER_TYPE_F;
+      for (int j = 0; j < 4; ++j) {
+         prog_data->param[this->uniforms * 4 + j] = &clip_planes[i][j];
       }
-   } else {
-      /* In Gen6 and later, we don't compact clip planes, because this
-       * simplifies the implementation of gl_ClipDistance.
-       */
-      for (int i = 0; i < key->nr_userclip_plane_consts; ++i) {
-	 this->uniform_vector_size[this->uniforms] = 4;
-	 this->userplane[i] = dst_reg(UNIFORM, this->uniforms);
-	 this->userplane[i].type = BRW_REGISTER_TYPE_F;
-	 for (int j = 0; j < 4; ++j) {
-	    prog_data->param[this->uniforms * 4 + j] = &clip_planes[i][j];
-	 }
-	 ++this->uniforms;
-      }
+      ++this->uniforms;
    }
 }
 
@@ -1391,12 +1367,12 @@ vec4_visitor::visit(ir_expression *ir)
       break;
    case ir_unop_neg:
       op[0].negate = !op[0].negate;
-      this->result = op[0];
+      emit(MOV(result_dst, op[0]));
       break;
    case ir_unop_abs:
       op[0].abs = true;
       op[0].negate = false;
-      this->result = op[0];
+      emit(MOV(result_dst, op[0]));
       break;
 
    case ir_unop_sign:
@@ -1734,6 +1710,16 @@ vec4_visitor::visit(ir_expression *ir)
 
    case ir_binop_vector_extract:
       assert(!"should have been lowered by vec_index_to_cond_assign");
+      break;
+
+   case ir_triop_fma:
+      op[0] = fix_3src_operand(op[0]);
+      op[1] = fix_3src_operand(op[1]);
+      op[2] = fix_3src_operand(op[2]);
+      /* Note that the instruction's argument order is reversed from GLSL
+       * and the IR.
+       */
+      emit(MAD(result_dst, op[2], op[1], op[0]));
       break;
 
    case ir_triop_lrp:
@@ -2582,6 +2568,18 @@ vec4_visitor::visit(ir_if *ir)
 }
 
 void
+vec4_visitor::visit(ir_emit_vertex *)
+{
+   assert(!"not reached");
+}
+
+void
+vec4_visitor::visit(ir_end_primitive *)
+{
+   assert(!"not reached");
+}
+
+void
 vec4_visitor::emit_ndc_computation()
 {
    /* Get the position */
@@ -2613,7 +2611,6 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
       dst_reg header1 = dst_reg(this, glsl_type::uvec4_type);
       dst_reg header1_w = header1;
       header1_w.writemask = WRITEMASK_W;
-      GLuint i;
 
       emit(MOV(header1, 0u));
 
@@ -2625,18 +2622,19 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
 	 emit(AND(header1_w, src_reg(header1_w), 0x7ff << 8));
       }
 
-      current_annotation = "Clipping flags";
-      for (i = 0; i < key->nr_userclip_plane_consts; i++) {
-	 vec4_instruction *inst;
-         gl_varying_slot slot = (prog_data->vue_map.slots_valid & VARYING_BIT_CLIP_VERTEX)
-            ? VARYING_SLOT_CLIP_VERTEX : VARYING_SLOT_POS;
+      if (key->userclip_active) {
+         current_annotation = "Clipping flags";
+         dst_reg flags0 = dst_reg(this, glsl_type::uint_type);
+         dst_reg flags1 = dst_reg(this, glsl_type::uint_type);
 
-	 inst = emit(DP4(dst_null_f(), src_reg(output_reg[slot]),
-                         src_reg(this->userplane[i])));
-	 inst->conditional_mod = BRW_CONDITIONAL_L;
+         emit(CMP(dst_null_f(), src_reg(output_reg[VARYING_SLOT_CLIP_DIST0]), src_reg(0.0f), BRW_CONDITIONAL_L));
+         emit(VS_OPCODE_UNPACK_FLAGS_SIMD4X2, flags0, src_reg(0));
+         emit(OR(header1_w, src_reg(header1_w), src_reg(flags0)));
 
-	 inst = emit(OR(header1_w, src_reg(header1_w), 1u << i));
-	 inst->predicate = BRW_PREDICATE_NORMAL;
+         emit(CMP(dst_null_f(), src_reg(output_reg[VARYING_SLOT_CLIP_DIST1]), src_reg(0.0f), BRW_CONDITIONAL_L));
+         emit(VS_OPCODE_UNPACK_FLAGS_SIMD4X2, flags1, src_reg(0));
+         emit(SHL(flags1, src_reg(flags1), src_reg(4)));
+         emit(OR(header1_w, src_reg(header1_w), src_reg(flags1)));
       }
 
       /* i965 clipping workaround:
@@ -2676,16 +2674,8 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
 }
 
 void
-vec4_visitor::emit_clip_distances(struct brw_reg reg, int offset)
+vec4_visitor::emit_clip_distances(dst_reg reg, int offset)
 {
-   if (brw->gen < 6) {
-      /* Clip distance slots are set aside in gen5, but they are not used.  It
-       * is not clear whether we actually need to set aside space for them,
-       * but the performance cost is negligible.
-       */
-      return;
-   }
-
    /* From the GLSL 1.30 spec, section 7.1 (Vertex Shader Special Variables):
     *
     *     "If a linked set of shaders forming the vertex stage contains no
@@ -2705,7 +2695,8 @@ vec4_visitor::emit_clip_distances(struct brw_reg reg, int offset)
 
    for (int i = 0; i + offset < key->nr_userclip_plane_consts && i < 4;
         ++i) {
-      emit(DP4(dst_reg(brw_writemask(reg, 1 << i)),
+      reg.writemask = 1 << i;
+      emit(DP4(reg,
                src_reg(output_reg[clip_vertex]),
                src_reg(this->userplane[i + offset])));
    }
@@ -2749,15 +2740,6 @@ vec4_visitor::emit_urb_slot(int mrf, int varying)
    case VARYING_SLOT_POS:
       current_annotation = "gl_Position";
       emit(MOV(reg, src_reg(output_reg[VARYING_SLOT_POS])));
-      break;
-   case VARYING_SLOT_CLIP_DIST0:
-   case VARYING_SLOT_CLIP_DIST1:
-      if (this->key->uses_clip_distance) {
-         emit_generic_urb_slot(reg, varying);
-      } else {
-         current_annotation = "user clip distances";
-         emit_clip_distances(hw_reg, (varying - VARYING_SLOT_CLIP_DIST0) * 4);
-      }
       break;
    case VARYING_SLOT_EDGE:
       /* This is present when doing unfilled polygons.  We're supposed to copy
@@ -2817,7 +2799,8 @@ vec4_vs_visitor::emit_urb_write_opcode(bool complete)
    }
 
    vec4_instruction *inst = emit(VS_OPCODE_URB_WRITE);
-   inst->eot = complete;
+   inst->urb_write_flags = complete ?
+      BRW_URB_WRITE_EOT_COMPLETE : BRW_URB_WRITE_NO_FLAGS;
 
    return inst;
 }
@@ -2855,6 +2838,17 @@ vec4_visitor::emit_vertex()
 
    if (brw->gen < 6) {
       emit_ndc_computation();
+   }
+
+   /* Lower legacy ff and ClipVertex clipping to clip distances */
+   if (key->userclip_active && !key->uses_clip_distance) {
+      current_annotation = "user clip distances";
+
+      output_reg[VARYING_SLOT_CLIP_DIST0] = dst_reg(this, glsl_type::vec4_type);
+      output_reg[VARYING_SLOT_CLIP_DIST1] = dst_reg(this, glsl_type::vec4_type);
+
+      emit_clip_distances(output_reg[VARYING_SLOT_CLIP_DIST0], 0);
+      emit_clip_distances(output_reg[VARYING_SLOT_CLIP_DIST1], 4);
    }
 
    /* Set up the VUE data for the first URB write */

@@ -72,6 +72,8 @@ _mesa_ast_to_hir(exec_list *instructions, struct _mesa_glsl_parse_state *state)
 
    state->toplevel_ir = instructions;
 
+   state->gs_input_prim_type_specified = false;
+
    /* Section 4.2 of the GLSL 1.20 specification states:
     * "The built-in functions are scoped in a scope outside the global scope
     *  users declare global variables in.  That is, a shader's global scope,
@@ -1771,12 +1773,6 @@ process_array_type(YYLTYPE *loc, const glsl_type *base, ast_node *array_size,
 	    }
 	 }
       }
-   } else if (state->es_shader) {
-      /* Section 10.17 of the GLSL ES 1.00 specification states that unsized
-       * array declarations have been removed from the language.
-       */
-      _mesa_glsl_error(loc, state, "unsized array declarations are not "
-		       "allowed in GLSL ES 1.00");
    }
 
    const glsl_type *array_type = glsl_type::get_array_instance(base, length);
@@ -1801,6 +1797,28 @@ ast_type_specifier::glsl_type(const char **name,
    return type;
 }
 
+const glsl_type *
+ast_fully_specified_type::glsl_type(const char **name,
+                                    struct _mesa_glsl_parse_state *state) const
+{
+   const struct glsl_type *type = this->specifier->glsl_type(name, state);
+
+   if (type == NULL)
+      return NULL;
+
+   if (type->base_type == GLSL_TYPE_FLOAT
+       && state->es_shader
+       && state->target == fragment_shader
+       && this->qualifier.precision == ast_precision_none
+       && state->symbols->get_variable("#default precision") == NULL) {
+      YYLTYPE loc = this->get_location();
+      _mesa_glsl_error(&loc, state,
+                       "no precision specified this scope for type `%s'",
+                       type->name);
+   }
+
+   return type;
+}
 
 /**
  * Determine whether a toplevel variable declaration declares a varying.  This
@@ -1831,13 +1849,28 @@ is_varying_var(ir_variable *var, _mesa_glsl_parser_targets target)
 static void
 validate_matrix_layout_for_type(struct _mesa_glsl_parse_state *state,
 				YYLTYPE *loc,
-				const glsl_type *type)
+                                const glsl_type *type,
+                                ir_variable *var)
 {
-   if (!type->is_matrix() && !type->is_record()) {
+   if (var && !var->is_in_uniform_block()) {
+      /* Layout qualifiers may only apply to interface blocks and fields in
+       * them.
+       */
       _mesa_glsl_error(loc, state,
                        "uniform block layout qualifiers row_major and "
-                       "column_major can only be applied to matrix and "
-                       "structure types");
+                       "column_major may not be applied to variables "
+                       "outside of uniform blocks");
+   } else if (!type->is_matrix()) {
+      /* The OpenGL ES 3.0 conformance tests did not originally allow
+       * matrix layout qualifiers on non-matrices.  However, the OpenGL
+       * 4.4 and OpenGL ES 3.0 (revision TBD) specifications were
+       * amended to specifically allow these layouts on all types.  Emit
+       * a warning so that people know their code may not be portable.
+       */
+      _mesa_glsl_warning(loc, state,
+                         "uniform block layout qualifiers row_major and "
+                         "column_major applied to non-matrix types may "
+                         "be rejected by older compilers");
    } else if (type->is_record()) {
       /* We allow 'layout(row_major)' on structure types because it's the only
        * way to get row-major layouts on matrices contained in structures.
@@ -1845,7 +1878,7 @@ validate_matrix_layout_for_type(struct _mesa_glsl_parse_state *state,
       _mesa_glsl_warning(loc, state,
                          "uniform block layout qualifiers row_major and "
                          "column_major applied to structure types is not "
-                         "strictly conformant and my be rejected by other "
+                         "strictly conformant and may be rejected by other "
                          "compilers");
    }
 }
@@ -1898,7 +1931,7 @@ validate_binding_qualifier(struct _mesa_glsl_parse_state *state,
        *  with an array of size N, all elements of the array from binding
        *  through binding + N - 1 must be within this range."
        */
-      unsigned limit;
+      unsigned limit = 0;
       switch (state->target) {
       case vertex_shader:
          limit = ctx->Const.VertexProgram.MaxTextureImageUnits;
@@ -1933,9 +1966,10 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
 				 ir_variable *var,
 				 struct _mesa_glsl_parse_state *state,
 				 YYLTYPE *loc,
-				 bool ubo_qualifiers_valid,
                                  bool is_parameter)
 {
+   STATIC_ASSERT(sizeof(qual->flags.q) <= sizeof(qual->flags.i));
+
    if (qual->flags.q.invariant) {
       if (var->used) {
 	 _mesa_glsl_error(loc, state,
@@ -1961,6 +1995,21 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
 		       "`attribute' variables may not be declared in the "
 		       "%s shader",
 		       _mesa_glsl_shader_target_name(state->target));
+   }
+
+   /* Section 6.1.1 (Function Calling Conventions) of the GLSL 1.10 spec says:
+    *
+    *     "However, the const qualifier cannot be used with out or inout."
+    *
+    * The same section of the GLSL 4.40 spec further clarifies this saying:
+    *
+    *     "The const qualifier cannot be used with out or inout, or a
+    *     compile-time error results."
+    */
+   if (is_parameter && qual->flags.q.constant && qual->flags.q.out) {
+      _mesa_glsl_error(loc, state,
+                       "`const' may not be applied to `out' or `inout' "
+                       "function parameters");
    }
 
    /* If there is no qualifier that changes the mode of the variable, leave
@@ -2055,13 +2104,24 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
    else
       var->interpolation = INTERP_QUALIFIER_NONE;
 
-   if (var->interpolation != INTERP_QUALIFIER_NONE &&
-       !(state->target == vertex_shader && var->mode == ir_var_shader_out) &&
-       !(state->target == fragment_shader && var->mode == ir_var_shader_in)) {
-      _mesa_glsl_error(loc, state,
-		       "interpolation qualifier `%s' can only be applied to "
-		       "vertex shader outputs and fragment shader inputs",
-		       var->interpolation_string());
+   if (var->interpolation != INTERP_QUALIFIER_NONE) {
+      ir_variable_mode mode = (ir_variable_mode) var->mode;
+
+      if (mode != ir_var_shader_in && mode != ir_var_shader_out) {
+         _mesa_glsl_error(loc, state,
+                          "interpolation qualifier `%s' can only be applied to "
+                          "shader inputs or outputs.",
+                          var->interpolation_string());
+
+      }
+
+      if ((state->target == vertex_shader && mode == ir_var_shader_in) ||
+          (state->target == fragment_shader && mode == ir_var_shader_out)) {
+         _mesa_glsl_error(loc, state,
+                          "interpolation qualifier `%s' cannot be applied to "
+                          "vertex shader inputs or fragment shader outputs",
+                          var->interpolation_string());
+      }
    }
 
    var->pixel_center_integer = qual->flags.q.pixel_center_integer;
@@ -2251,13 +2311,7 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
    }
 
    if (qual->flags.q.row_major || qual->flags.q.column_major) {
-      if (!ubo_qualifiers_valid) {
-	 _mesa_glsl_error(loc, state,
-			  "uniform block layout qualifiers row_major and "
-			  "column_major can only be applied to uniform block "
-			  "members");
-      } else
-	 validate_matrix_layout_for_type(state, loc, var->type);
+      validate_matrix_layout_for_type(state, loc, var->type, var);
    }
 }
 
@@ -2317,7 +2371,8 @@ get_variable_being_redeclared(ir_variable *var, ast_declaration *decl,
       earlier->type = var->type;
       delete var;
       var = NULL;
-   } else if (state->ARB_fragment_coord_conventions_enable
+   } else if ((state->ARB_fragment_coord_conventions_enable ||
+               state->is_version(150, 0))
 	      && strcmp(var->name, "gl_FragCoord") == 0
 	      && earlier->type == var->type
 	      && earlier->mode == var->mode) {
@@ -2519,6 +2574,81 @@ process_initializer(ir_variable *var, ast_declaration *decl,
    return result;
 }
 
+
+/**
+ * Do additional processing necessary for geometry shader input declarations
+ * (this covers both interface blocks arrays and bare input variables).
+ */
+static void
+handle_geometry_shader_input_decl(struct _mesa_glsl_parse_state *state,
+                                  YYLTYPE loc, ir_variable *var)
+{
+   unsigned num_vertices = 0;
+   if (state->gs_input_prim_type_specified) {
+      num_vertices = vertices_per_prim(state->gs_input_prim_type);
+   }
+
+   /* Geometry shader input variables must be arrays.  Caller should have
+    * reported an error for this.
+    */
+   if (!var->type->is_array()) {
+      assert(state->error);
+
+      /* To avoid cascading failures, short circuit the checks below. */
+      return;
+   }
+
+   if (var->type->length == 0) {
+      /* Section 4.3.8.1 (Input Layout Qualifiers) of the GLSL 1.50 spec says:
+       *
+       *   All geometry shader input unsized array declarations will be
+       *   sized by an earlier input layout qualifier, when present, as per
+       *   the following table.
+       *
+       * Followed by a table mapping each allowed input layout qualifier to
+       * the corresponding input length.
+       */
+      if (num_vertices != 0)
+         var->type = glsl_type::get_array_instance(var->type->fields.array,
+                                                   num_vertices);
+   } else {
+      /* Section 4.3.8.1 (Input Layout Qualifiers) of the GLSL 1.50 spec
+       * includes the following examples of compile-time errors:
+       *
+       *   // code sequence within one shader...
+       *   in vec4 Color1[];    // size unknown
+       *   ...Color1.length()...// illegal, length() unknown
+       *   in vec4 Color2[2];   // size is 2
+       *   ...Color1.length()...// illegal, Color1 still has no size
+       *   in vec4 Color3[3];   // illegal, input sizes are inconsistent
+       *   layout(lines) in;    // legal, input size is 2, matching
+       *   in vec4 Color4[3];   // illegal, contradicts layout
+       *   ...
+       *
+       * To detect the case illustrated by Color3, we verify that the size of
+       * an explicitly-sized array matches the size of any previously declared
+       * explicitly-sized array.  To detect the case illustrated by Color4, we
+       * verify that the size of an explicitly-sized array is consistent with
+       * any previously declared input layout.
+       */
+      if (num_vertices != 0 && var->type->length != num_vertices) {
+         _mesa_glsl_error(&loc, state,
+                          "geometry shader input size contradicts previously"
+                          " declared layout (size is %u, but layout requires a"
+                          " size of %u)", var->type->length, num_vertices);
+      } else if (state->gs_input_size != 0 &&
+                 var->type->length != state->gs_input_size) {
+         _mesa_glsl_error(&loc, state,
+                          "geometry shader input sizes are "
+                          "inconsistent (size is %u, but a previous "
+                          "declaration has size %u)",
+                          var->type->length, state->gs_input_size);
+      } else {
+         state->gs_input_size = var->type->length;
+      }
+   }
+}
+
 ir_rvalue *
 ast_declarator_list::hir(exec_list *instructions,
 			 struct _mesa_glsl_parse_state *state)
@@ -2593,7 +2723,7 @@ ast_declarator_list::hir(exec_list *instructions,
     */
    (void) this->type->specifier->hir(instructions, state);
 
-   decl_type = this->type->specifier->glsl_type(& type_name, state);
+   decl_type = this->type->glsl_type(& type_name, state);
    if (this->declarations.is_empty()) {
       /* If there is no structure involved in the program text, there are two
        * possible scenarios:
@@ -2605,6 +2735,11 @@ ast_declarator_list::hir(exec_list *instructions,
        *   name of a known structure type.  This is both invalid and weird.
        *   Emit an error.
        *
+       * - The program text contained something like 'mediump float;'
+       *   when the programmer probably meant 'precision mediump
+       *   float;' Emit a warning with a description of what they
+       *   probably meant to do.
+       *
        * Note that if decl_type is NULL and there is a structure involved,
        * there must have been some sort of error with the structure.  In this
        * case we assume that an error was already generated on this line of
@@ -2613,20 +2748,33 @@ ast_declarator_list::hir(exec_list *instructions,
        */
       assert(this->type->specifier->structure == NULL || decl_type != NULL
 	     || state->error);
-      if (this->type->specifier->structure == NULL) {
-	 if (decl_type != NULL) {
-	    _mesa_glsl_warning(&loc, state, "empty declaration");
-	 } else {
-	    _mesa_glsl_error(&loc, state,
-			     "invalid type `%s' in empty declaration",
-			     type_name);
-	 }
-      }
 
-      if (this->type->qualifier.precision != ast_precision_none &&
-          this->type->specifier->structure != NULL) {
-         _mesa_glsl_error(&loc, state, "precision qualifiers can't be applied "
-                          "to structures");
+      if (decl_type == NULL) {
+         _mesa_glsl_error(&loc, state,
+                          "invalid type `%s' in empty declaration",
+                          type_name);
+      } else if (this->type->qualifier.precision != ast_precision_none) {
+         if (this->type->specifier->structure != NULL) {
+            _mesa_glsl_error(&loc, state,
+                             "precision qualifiers can't be applied "
+                             "to structures");
+         } else {
+            static const char *const precision_names[] = {
+               "highp",
+               "highp",
+               "mediump",
+               "lowp"
+            };
+
+            _mesa_glsl_warning(&loc, state,
+                               "empty declaration with precision qualifier, "
+                               "to set the default precision, use "
+                               "`precision %s %s;'",
+                               precision_names[this->type->qualifier.precision],
+                               type_name);
+         }
+      } else {
+         _mesa_glsl_warning(&loc, state, "empty declaration");
       }
    }
 
@@ -2662,6 +2810,26 @@ ast_declarator_list::hir(exec_list *instructions,
 
       var = new(ctx) ir_variable(var_type, decl->identifier, ir_var_auto);
 
+      /* The 'varying in' and 'varying out' qualifiers can only be used with
+       * ARB_geometry_shader4 and EXT_geometry_shader4, which we don't support
+       * yet.
+       */
+      if (this->type->qualifier.flags.q.varying) {
+         if (this->type->qualifier.flags.q.in) {
+            _mesa_glsl_error(& loc, state,
+                             "`varying in' qualifier in declaration of "
+                             "`%s' only valid for geometry shaders using "
+                             "ARB_geometry_shader4 or EXT_geometry_shader4",
+                             decl->identifier);
+         } else if (this->type->qualifier.flags.q.out) {
+            _mesa_glsl_error(& loc, state,
+                             "`varying out' qualifier in declaration of "
+                             "`%s' only valid for geometry shaders using "
+                             "ARB_geometry_shader4 or EXT_geometry_shader4",
+                             decl->identifier);
+         }
+      }
+
       /* From page 22 (page 28 of the PDF) of the GLSL 1.10 specification;
        *
        *     "Global variables can only use the qualifiers const,
@@ -2692,7 +2860,7 @@ ast_declarator_list::hir(exec_list *instructions,
       }
 
       apply_type_qualifier_to_variable(& this->type->qualifier, var, state,
-				       & loc, this->ubo_qualifiers_valid, false);
+				       & loc, false);
 
       if (this->type->qualifier.flags.q.invariant) {
 	 if ((state->target == vertex_shader) &&
@@ -2796,7 +2964,22 @@ ast_declarator_list::hir(exec_list *instructions,
                                       "cannot have array type")) {
 	       error_emitted = true;
 	    }
-	 }
+	 } else if (state->target == geometry_shader) {
+            /* From section 4.3.4 (Inputs) of the GLSL 1.50 spec:
+             *
+             *     Geometry shader input variables get the per-vertex values
+             *     written out by vertex shader output variables of the same
+             *     names. Since a geometry shader operates on a set of
+             *     vertices, each input varying variable (or input block, see
+             *     interface blocks below) needs to be declared as an array.
+             */
+            if (!var->type->is_array()) {
+               _mesa_glsl_error(&loc, state,
+                                "geometry shader inputs must be arrays");
+            }
+
+            handle_geometry_shader_input_decl(state, loc, var);
+         }
       }
 
       /* Integer fragment inputs must be qualified with 'flat'.  In GLSL ES,
@@ -2906,7 +3089,7 @@ ast_declarator_list::hir(exec_list *instructions,
             }
             break;
          default:
-            assert(0);
+            break;
          }
       }
 
@@ -2949,32 +3132,45 @@ ast_declarator_list::hir(exec_list *instructions,
       }
 
 
-      /* Precision qualifiers only apply to floating point and integer types.
+      /* Precision qualifiers apply to floating point, integer and sampler
+       * types.
        *
-       * From section 4.5.2 of the GLSL 1.30 spec:
+       * Section 4.5.2 (Precision Qualifiers) of the GLSL 1.30 spec says:
        *    "Any floating point or any integer declaration can have the type
        *    preceded by one of these precision qualifiers [...] Literal
        *    constants do not have precision qualifiers. Neither do Boolean
        *    variables.
        *
-       * In GLSL ES, sampler types are also allowed.
+       * Section 4.5 (Precision and Precision Qualifiers) of the GLSL 1.30
+       * spec also says:
        *
-       * From page 87 of the GLSL ES spec:
-       *    "RESOLUTION: Allow sampler types to take a precision qualifier."
+       *     "Precision qualifiers are added for code portability with OpenGL
+       *     ES, not for functionality. They have the same syntax as in OpenGL
+       *     ES."
+       *
+       * Section 8 (Built-In Functions) of the GLSL ES 1.00 spec says:
+       *
+       *     "uniform lowp sampler2D sampler;
+       *     highp vec2 coord;
+       *     ...
+       *     lowp vec4 col = texture2D (sampler, coord);
+       *                                            // texture2D returns lowp"
+       *
+       * From this, we infer that GLSL 1.30 (and later) should allow precision
+       * qualifiers on sampler types just like float and integer types.
        */
       if (this->type->qualifier.precision != ast_precision_none
           && !var->type->is_float()
           && !var->type->is_integer()
           && !var->type->is_record()
-          && !(var->type->is_sampler() && state->es_shader)
+          && !var->type->is_sampler()
           && !(var->type->is_array()
                && (var->type->fields.array->is_float()
                    || var->type->fields.array->is_integer()))) {
 
          _mesa_glsl_error(&loc, state,
                           "precision qualifiers apply only to floating point"
-                          "%s types", state->es_shader ? ", integer, and sampler"
-						       : "and integer");
+                          ", integer and sampler types");
       }
 
       /* From page 17 (page 23 of the PDF) of the GLSL 1.20 spec:
@@ -3013,6 +3209,33 @@ ast_declarator_list::hir(exec_list *instructions,
 	 _mesa_glsl_error(& loc, state,
 			  "const declaration of `%s' must be initialized",
 			  decl->identifier);
+      }
+
+      if (state->es_shader) {
+	 const glsl_type *const t = (earlier == NULL)
+	    ? var->type : earlier->type;
+
+         if (t->is_array() && t->length == 0)
+            /* Section 10.17 of the GLSL ES 1.00 specification states that
+             * unsized array declarations have been removed from the language.
+             * Arrays that are sized using an initializer are still explicitly
+             * sized.  However, GLSL ES 1.00 does not allow array
+             * initializers.  That is only allowed in GLSL ES 3.00.
+             *
+             * Section 4.1.9 (Arrays) of the GLSL ES 3.00 spec says:
+             *
+             *     "An array type can also be formed without specifying a size
+             *     if the definition includes an initializer:
+             *
+             *         float x[] = float[2] (1.0, 2.0);     // declares an array of size 2
+             *         float y[] = float[] (1.0, 2.0, 3.0); // declares an array of size 3
+             *
+             *         float a[5];
+             *         float b[] = a;"
+             */
+            _mesa_glsl_error(& loc, state,
+                             "unsized array declarations are not allowed in "
+                             "GLSL ES");
       }
 
       /* If the declaration is not a redeclaration, there are a few additional
@@ -3097,7 +3320,7 @@ ast_parameter_declarator::hir(exec_list *instructions,
    const char *name = NULL;
    YYLTYPE loc = this->get_location();
 
-   type = this->type->specifier->glsl_type(& name, state);
+   type = this->type->glsl_type(& name, state);
 
    if (type == NULL) {
       if (name != NULL) {
@@ -3160,7 +3383,7 @@ ast_parameter_declarator::hir(exec_list *instructions,
     * for function parameters the default mode is 'in'.
     */
    apply_type_qualifier_to_variable(& this->type->qualifier, var, state, & loc,
-				    false, true);
+				    true);
 
    /* From page 17 (page 23 of the PDF) of the GLSL 1.20 spec:
     *
@@ -3304,7 +3527,7 @@ ast_function::hir(exec_list *instructions,
 
    const char *return_type_name;
    const glsl_type *return_type =
-      this->return_type->specifier->glsl_type(& return_type_name, state);
+      this->return_type->glsl_type(& return_type_name, state);
 
    if (!return_type) {
       YYLTYPE loc = this->get_location();
@@ -3321,6 +3544,18 @@ ast_function::hir(exec_list *instructions,
       YYLTYPE loc = this->get_location();
       _mesa_glsl_error(& loc, state,
 		       "function `%s' return type has qualifiers", name);
+   }
+
+   /* Section 6.1 (Function Definitions) of the GLSL 1.20 spec says:
+    *
+    *     "Arrays are allowed as arguments and as the return type. In both
+    *     cases, the array must be explicitly sized."
+    */
+   if (return_type->is_array() && return_type->length == 0) {
+      YYLTYPE loc = this->get_location();
+      _mesa_glsl_error(& loc, state,
+		       "function `%s' return type array must be explicitly "
+		       "sized", name);
    }
 
    /* From page 17 (page 23 of the PDF) of the GLSL 1.20 spec:
@@ -4033,10 +4268,8 @@ ast_iteration_statement::hir(exec_list *instructions,
  * version.
  */
 static bool
-is_valid_default_precision_type(const struct _mesa_glsl_parse_state *state,
-                                const char *type_name)
+is_valid_default_precision_type(const struct glsl_type *const type)
 {
-   const struct glsl_type *type = state->symbols->get_type(type_name);
    if (type == NULL)
       return false;
 
@@ -4088,11 +4321,52 @@ ast_type_specifier::hir(exec_list *instructions,
                           "arrays");
          return NULL;
       }
-      if (!is_valid_default_precision_type(state, this->type_name)) {
+
+      const struct glsl_type *const type =
+         state->symbols->get_type(this->type_name);
+      if (!is_valid_default_precision_type(type)) {
          _mesa_glsl_error(&loc, state,
-                          "default precision statements apply only to types "
+                          "default precision statements apply only to "
                           "float, int, and sampler types");
          return NULL;
+      }
+
+      if (type->base_type == GLSL_TYPE_FLOAT
+          && state->es_shader
+          && state->target == fragment_shader) {
+         /* Section 4.5.3 (Default Precision Qualifiers) of the GLSL ES 1.00
+          * spec says:
+          *
+          *     "The fragment language has no default precision qualifier for
+          *     floating point types."
+          *
+          * As a result, we have to track whether or not default precision has
+          * been specified for float in GLSL ES fragment shaders.
+          *
+          * Earlier in that same section, the spec says:
+          *
+          *     "Non-precision qualified declarations will use the precision
+          *     qualifier specified in the most recent precision statement
+          *     that is still in scope. The precision statement has the same
+          *     scoping rules as variable declarations. If it is declared
+          *     inside a compound statement, its effect stops at the end of
+          *     the innermost statement it was declared in. Precision
+          *     statements in nested scopes override precision statements in
+          *     outer scopes. Multiple precision statements for the same basic
+          *     type can appear inside the same scope, with later statements
+          *     overriding earlier statements within that scope."
+          *
+          * Default precision specifications follow the same scope rules as
+          * variables.  So, we can track the state of the default float
+          * precision in the symbol table, and the rules will just work.  This
+          * is a slight abuse of the symbol table, but it has the semantics
+          * that we want.
+          */
+         ir_variable *const junk =
+            new(state) ir_variable(type, "#default precision",
+                                   ir_var_temporary);
+
+         state->symbols->add_variable(junk);
       }
 
       /* FINISHME: Translate precision statements into IR. */
@@ -4175,7 +4449,7 @@ ast_process_structure_or_interface_block(exec_list *instructions,
       }
 
       const glsl_type *decl_type =
-	 decl_list->type->specifier->glsl_type(& type_name, state);
+         decl_list->type->glsl_type(& type_name, state);
 
       foreach_list_typed (ast_declaration, decl, link,
 			  &decl_list->declarations) {
@@ -4223,13 +4497,8 @@ ast_process_structure_or_interface_block(exec_list *instructions,
                _mesa_glsl_error(&loc, state,
                                 "row_major and column_major can only be "
                                 "applied to uniform interface blocks");
-            } else if (!field_type->is_matrix() && !field_type->is_record()) {
-               _mesa_glsl_error(&loc, state,
-                                "uniform block layout qualifiers row_major and "
-                                "column_major can only be applied to matrix and "
-                                "structure types");
             } else
-               validate_matrix_layout_for_type(state, &loc, field_type);
+               validate_matrix_layout_for_type(state, &loc, field_type, NULL);
          }
 
          if (qual->flags.q.uniform && qual->has_interpolation()) {
@@ -4263,6 +4532,34 @@ ast_struct_specifier::hir(exec_list *instructions,
 			  struct _mesa_glsl_parse_state *state)
 {
    YYLTYPE loc = this->get_location();
+
+   /* Section 4.1.8 (Structures) of the GLSL 1.10 spec says:
+    *
+    *     "Anonymous structures are not supported; so embedded structures must
+    *     have a declarator. A name given to an embedded struct is scoped at
+    *     the same level as the struct it is embedded in."
+    *
+    * The same section of the  GLSL 1.20 spec says:
+    *
+    *     "Anonymous structures are not supported. Embedded structures are not
+    *     supported.
+    *
+    *         struct S { float f; };
+    *         struct T {
+    *             S;              // Error: anonymous structures disallowed
+    *             struct { ... }; // Error: embedded structures disallowed
+    *             S s;            // Okay: nested structures with name are allowed
+    *         };"
+    *
+    * The GLSL ES 1.00 and 3.00 specs have similar langauge and examples.  So,
+    * we allow embedded structures in 1.10 only.
+    */
+   if (state->language_version != 110 && state->struct_specifier_depth != 0)
+      _mesa_glsl_error(&loc, state,
+		       "embedded structure declartions are not allowed");
+
+   state->struct_specifier_depth++;
+
    glsl_struct_field *fields;
    unsigned decl_count =
       ast_process_structure_or_interface_block(instructions,
@@ -4288,6 +4585,8 @@ ast_struct_specifier::hir(exec_list *instructions,
 	 state->num_user_structures++;
       }
    }
+
+   state->struct_specifier_depth--;
 
    /* Structure type definitions do not have r-values.
     */
@@ -4362,6 +4661,19 @@ ast_interface_block::hir(exec_list *instructions,
     */
    assert(declared_variables.is_empty());
 
+   /* From section 4.3.4 (Inputs) of the GLSL 1.50 spec:
+    *
+    *     Geometry shader input variables get the per-vertex values written
+    *     out by vertex shader output variables of the same names. Since a
+    *     geometry shader operates on a set of vertices, each input varying
+    *     variable (or input block, see interface blocks below) needs to be
+    *     declared as an array.
+    */
+   if (state->target == geometry_shader && !this->is_array &&
+       var_mode == ir_var_shader_in) {
+      _mesa_glsl_error(&loc, state, "geometry shader inputs must be arrays");
+   }
+
    /* Page 39 (page 45 of the PDF) of section 4.3.7 in the GLSL ES 3.00 spec
     * says:
     *
@@ -4372,7 +4684,34 @@ ast_interface_block::hir(exec_list *instructions,
    if (this->instance_name) {
       ir_variable *var;
 
-      if (this->array_size != NULL) {
+      if (this->is_array) {
+         /* Section 4.3.7 (Interface Blocks) of the GLSL 1.50 spec says:
+          *
+          *     For uniform blocks declared an array, each individual array
+          *     element corresponds to a separate buffer object backing one
+          *     instance of the block. As the array size indicates the number
+          *     of buffer objects needed, uniform block array declarations
+          *     must specify an array size.
+          *
+          * And a few paragraphs later:
+          *
+          *     Geometry shader input blocks must be declared as arrays and
+          *     follow the array declaration and linking rules for all
+          *     geometry shader inputs. All other input and output block
+          *     arrays must specify an array size.
+          *
+          * The upshot of this is that the only circumstance where an
+          * interface array size *doesn't* need to be specified is on a
+          * geometry shader input.
+          */
+         if (this->array_size == NULL &&
+             (state->target != geometry_shader || !this->layout.flags.q.in)) {
+            _mesa_glsl_error(&loc, state,
+                             "only geometry shader inputs may be unsized "
+                             "instance block arrays");
+
+         }
+
          const glsl_type *block_array_type =
             process_array_type(&loc, block_type, this->array_size, state);
 
@@ -4386,13 +4725,15 @@ ast_interface_block::hir(exec_list *instructions,
       }
 
       var->interface_type = block_type;
+      if (state->target == geometry_shader && var_mode == ir_var_shader_in)
+         handle_geometry_shader_input_decl(state, loc, var);
       state->symbols->add_variable(var);
       instructions->push_tail(var);
    } else {
       /* In order to have an array size, the block must also be declared with
        * an instane name.
        */
-      assert(this->array_size == NULL);
+      assert(!this->is_array);
 
       for (unsigned i = 0; i < num_variables; i++) {
          ir_variable *var =
@@ -4415,6 +4756,72 @@ ast_interface_block::hir(exec_list *instructions,
 
    return NULL;
 }
+
+
+ir_rvalue *
+ast_gs_input_layout::hir(exec_list *instructions,
+                         struct _mesa_glsl_parse_state *state)
+{
+   YYLTYPE loc = this->get_location();
+
+   /* If any geometry input layout declaration preceded this one, make sure it
+    * was consistent with this one.
+    */
+   if (state->gs_input_prim_type_specified &&
+       state->gs_input_prim_type != this->prim_type) {
+      _mesa_glsl_error(&loc, state,
+                       "geometry shader input layout does not match"
+                       " previous declaration");
+      return NULL;
+   }
+
+   /* If any shader inputs occurred before this declaration and specified an
+    * array size, make sure the size they specified is consistent with the
+    * primitive type.
+    */
+   unsigned num_vertices = vertices_per_prim(this->prim_type);
+   if (state->gs_input_size != 0 && state->gs_input_size != num_vertices) {
+      _mesa_glsl_error(&loc, state,
+                       "this geometry shader input layout implies %u vertices"
+                       " per primitive, but a previous input is declared"
+                       " with size %u", num_vertices, state->gs_input_size);
+      return NULL;
+   }
+
+   state->gs_input_prim_type_specified = true;
+   state->gs_input_prim_type = this->prim_type;
+
+   /* If any shader inputs occurred before this declaration and did not
+    * specify an array size, their size is determined now.
+    */
+   foreach_list (node, instructions) {
+      ir_variable *var = ((ir_instruction *) node)->as_variable();
+      if (var == NULL || var->mode != ir_var_shader_in)
+         continue;
+
+      /* Note: gl_PrimitiveIDIn has mode ir_var_shader_in, but it's not an
+       * array; skip it.
+       */
+      if (!var->type->is_array())
+         continue;
+
+      if (var->type->length == 0) {
+         if (var->max_array_access >= num_vertices) {
+            _mesa_glsl_error(&loc, state,
+                             "this geometry shader input layout implies %u"
+                             " vertices, but an access to element %u of input"
+                             " `%s' already exists", num_vertices,
+                             var->max_array_access, var->name);
+         } else {
+            var->type = glsl_type::get_array_instance(var->type->fields.array,
+                                                      num_vertices);
+         }
+      }
+   }
+
+   return NULL;
+}
+
 
 static void
 detect_conflicting_assignments(struct _mesa_glsl_parse_state *state,

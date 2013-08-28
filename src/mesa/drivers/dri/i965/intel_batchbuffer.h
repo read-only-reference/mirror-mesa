@@ -28,6 +28,7 @@ void intel_batchbuffer_init(struct brw_context *brw);
 void intel_batchbuffer_free(struct brw_context *brw);
 void intel_batchbuffer_save_state(struct brw_context *brw);
 void intel_batchbuffer_reset_to_saved(struct brw_context *brw);
+void intel_batchbuffer_clear_cache(struct brw_context *brw);
 
 int _intel_batchbuffer_flush(struct brw_context *brw,
 			     const char *file, int line);
@@ -143,10 +144,6 @@ intel_batchbuffer_advance(struct brw_context *brw)
 }
 
 void intel_batchbuffer_cached_advance(struct brw_context *brw);
-
-/* Here are the crusty old macros, to be removed:
- */
-#define BATCH_LOCALS
 
 #define BEGIN_BATCH(n) intel_batchbuffer_begin(brw, n, false)
 #define BEGIN_BATCH_BLT(n) intel_batchbuffer_begin(brw, n, true)

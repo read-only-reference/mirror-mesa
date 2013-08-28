@@ -33,6 +33,10 @@
 
 #include "nv50_context.h"
 
+/* These are expected to be on their own pushbufs */
+#define SUBC_BSP(m) 2, (m)
+#define SUBC_VP(m) 2, (m)
+
 union pipe_desc {
    struct pipe_picture_desc *base;
    struct pipe_mpeg12_picture_desc *mpeg12;
@@ -54,7 +58,7 @@ struct nv84_video_buffer {
 };
 
 struct nv84_decoder {
-   struct pipe_video_decoder base;
+   struct pipe_video_codec base;
    struct nouveau_client *client;
    struct nouveau_object *bsp_channel, *vp_channel, *bsp, *vp;
    struct nouveau_pushbuf *bsp_pushbuf, *vp_pushbuf;

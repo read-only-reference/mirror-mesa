@@ -977,6 +977,12 @@ convert_to_aos(struct gallivm_state *gallivm,
                             LLVMConstInt(LLVMInt32TypeInContext(gallivm->context),
                                          chan, 0));
             lp_build_print_value(gallivm, "val = ", out);
+            {
+               LLVMValueRef iv =
+                  LLVMBuildBitCast(builder, out, lp_build_int_vec_type(gallivm, soa_type), "");
+               
+               lp_build_print_value(gallivm, "  ival = ", iv);
+            }
 #endif
             soa[chan] = out;
          }
@@ -1255,6 +1261,7 @@ generate_clipmask(struct draw_llvm *llvm,
    if (clip_user) {
       LLVMValueRef planes_ptr = draw_jit_context_planes(gallivm, context_ptr);
       LLVMValueRef indices[3];
+      LLVMValueRef is_nan_or_inf;
 
       /* userclip planes */
       while (ucp_enable) {
@@ -1274,6 +1281,8 @@ generate_clipmask(struct draw_llvm *llvm,
                clipdist = LLVMBuildLoad(builder, outputs[cd[1]][i-4], "");
             }
             test = lp_build_compare(gallivm, f32_type, PIPE_FUNC_GREATER, zero, clipdist);
+            is_nan_or_inf = lp_build_is_inf_or_nan(gallivm, vs_type, clipdist);
+            test = LLVMBuildOr(builder, test, is_nan_or_inf, "");
             temp = lp_build_const_int_vec(gallivm, i32_type, 1 << plane_idx);
             test = LLVMBuildAnd(builder, test, temp, "");
             mask = LLVMBuildOr(builder, mask, test, "");
@@ -1827,6 +1836,7 @@ draw_llvm_make_variant_key(struct draw_llvm *llvm, char *store)
    key->need_edgeflags = (llvm->draw->vs.edgeflag_output ? TRUE : FALSE);
    key->ucp_enable = llvm->draw->rasterizer->clip_plane_enable;
    key->has_gs = llvm->draw->gs.geometry_shader != NULL;
+   key->num_outputs = draw_total_vs_outputs(llvm->draw);
    key->pad1 = 0;
 
    /* All variants of this shader will have the same value for
@@ -2033,31 +2043,19 @@ generate_mask_value(struct draw_gs_llvm_variant *variant,
 {
    struct gallivm_state *gallivm = variant->gallivm;
    LLVMBuilderRef builder = gallivm->builder;
-   LLVMValueRef bits[16];
-   struct lp_type  mask_type = lp_int_type(gs_type);
-   struct lp_type mask_elem_type = lp_elem_type(mask_type);
-   LLVMValueRef mask_val = lp_build_const_vec(gallivm,
-                                              mask_type,
-                                              0);
+   struct lp_type mask_type = lp_int_type(gs_type);
+   LLVMValueRef num_prims;
+   LLVMValueRef mask_val = lp_build_const_vec(gallivm, mask_type, 0);
    unsigned i;
 
-   assert(gs_type.length <= Elements(bits));
-
-   for (i = gs_type.length; i >= 1; --i) {
-      int idx = i - 1;
-      LLVMValueRef ind = lp_build_const_int32(gallivm, i);
-      bits[idx] = lp_build_compare(gallivm,
-                                   mask_elem_type, PIPE_FUNC_GEQUAL,
-                                   variant->num_prims, ind);
+   num_prims = lp_build_broadcast(gallivm, lp_build_vec_type(gallivm, mask_type),
+                                  variant->num_prims);
+   for (i = 0; i <= gs_type.length; i++) {
+      LLVMValueRef idx = lp_build_const_int32(gallivm, i);
+      mask_val = LLVMBuildInsertElement(builder, mask_val, idx, idx, "");
    }
-   for (i = 0; i < gs_type.length; ++i) {
-      LLVMValueRef ind = lp_build_const_int32(gallivm, i);
-      mask_val = LLVMBuildInsertElement(builder, mask_val, bits[i], ind, "");
-   }
-   mask_val = lp_build_compare(gallivm,
-                               mask_type, PIPE_FUNC_NOTEQUAL,
-                               mask_val,
-                               lp_build_const_int_vec(gallivm, mask_type, 0));
+   mask_val = lp_build_compare(gallivm, mask_type,
+                               PIPE_FUNC_GREATER, num_prims, mask_val);
 
    return mask_val;
 }
@@ -2170,6 +2168,11 @@ draw_gs_llvm_generate(struct draw_llvm *llvm,
       system_values.prim_id = LLVMBuildLoad(builder, prim_id_ptr, "prim_id");;
    }
 
+   if (gallivm_debug & (GALLIVM_DEBUG_TGSI | GALLIVM_DEBUG_IR)) {
+      tgsi_dump(tokens, 0);
+      draw_gs_llvm_dump_variant_key(&variant->key);
+   }
+
    lp_build_tgsi_soa(variant->gallivm,
                      tokens,
                      gs_type,
@@ -2263,6 +2266,8 @@ draw_gs_llvm_make_variant_key(struct draw_llvm *llvm, char *store)
    struct draw_sampler_static_state *draw_sampler;
 
    key = (struct draw_gs_llvm_variant_key *)store;
+
+   key->num_outputs = draw_total_gs_outputs(llvm->draw);
 
    /* All variants of this shader will have the same value for
     * nr_samplers.  Not yet trying to compact away holes in the

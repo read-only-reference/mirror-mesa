@@ -238,6 +238,8 @@ public:
    void visit(ir_call *ir);
    void visit(ir_function *ir);
    void visit(ir_function_signature *ir);
+   void visit(ir_emit_vertex *);
+   void visit(ir_end_primitive *);
 
    void swizzle_result(ir_texture *ir, fs_reg orig_val, int sampler);
 
@@ -283,6 +285,7 @@ public:
    fs_inst *FBH(fs_reg dst, fs_reg value);
    fs_inst *FBL(fs_reg dst, fs_reg value);
    fs_inst *CBIT(fs_reg dst, fs_reg value);
+   fs_inst *MAD(fs_reg dst, fs_reg c, fs_reg b, fs_reg a);
 
    int type_size(const struct glsl_type *type);
    fs_inst *get_instruction_generating_reg(fs_inst *start,
@@ -367,6 +370,7 @@ public:
                     fs_reg src0, fs_reg src1);
    bool try_emit_saturate(ir_expression *ir);
    bool try_emit_mad(ir_expression *ir, int mul_arg);
+   void try_replace_with_sel();
    void emit_bool_to_cond_code(ir_rvalue *condition);
    void emit_if_gen6(ir_if *ir);
    void emit_unspill(fs_inst *inst, fs_reg reg, uint32_t spill_offset);
@@ -565,6 +569,8 @@ private:
                                  struct brw_reg payload,
                                  struct brw_reg offset,
                                  struct brw_reg value);
+
+   void mark_surface_used(unsigned surf_index);
 
    void patch_discard_jumps_to_fb_writes();
 

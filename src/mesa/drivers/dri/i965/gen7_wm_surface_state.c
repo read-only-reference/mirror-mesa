@@ -284,9 +284,8 @@ gen7_update_texture_surface(struct gl_context *ctx,
    struct intel_texture_object *intelObj = intel_texture_object(tObj);
    struct intel_mipmap_tree *mt = intelObj->mt;
    struct gl_texture_image *firstImage = tObj->Image[0][tObj->BaseLevel];
+   struct intel_texture_image *intel_image = intel_texture_image(firstImage);
    struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit);
-   uint32_t tile_x, tile_y;
-   uint8_t mocs = brw->is_haswell ? GEN7_MOCS_L3 : 0;
 
    if (tObj->Target == GL_TEXTURE_BUFFER) {
       gen7_update_buffer_texture_surface(ctx, unit, binding_table, surf_index);
@@ -319,8 +318,6 @@ gen7_update_texture_surface(struct gl_context *ctx,
       surf[0] |= GEN7_SURFACE_ARYSPC_LOD0;
 
    surf[1] = mt->region->bo->offset + mt->offset; /* reloc */
-   surf[1] += intel_miptree_get_tile_offsets(intelObj->mt, firstImage->Level, 0,
-                                             &tile_x, &tile_y);
 
    surf[2] = SET_FIELD(mt->logical_width0 - 1, GEN7_SURFACE_WIDTH) |
              SET_FIELD(mt->logical_height0 - 1, GEN7_SURFACE_HEIGHT);
@@ -329,15 +326,9 @@ gen7_update_texture_surface(struct gl_context *ctx,
 
    surf[4] = gen7_surface_msaa_bits(mt->num_samples, mt->msaa_layout);
 
-   assert(brw->has_surface_tile_offset || (tile_x == 0 && tile_y == 0));
-   /* Note that the low bits of these fields are missing, so
-    * there's the possibility of getting in trouble.
-    */
-   surf[5] = ((tile_x / 4) << BRW_SURFACE_X_OFFSET_SHIFT |
-              (tile_y / 2) << BRW_SURFACE_Y_OFFSET_SHIFT |
-              SET_FIELD(mocs, GEN7_SURFACE_MOCS) |
+   surf[5] = (SET_FIELD(GEN7_MOCS_L3, GEN7_SURFACE_MOCS) |
               /* mip count */
-              (intelObj->_MaxLevel - tObj->BaseLevel));
+              (intelObj->_MaxLevel - intel_image->mt->first_level));
 
    if (brw->is_haswell) {
       /* Handling GL_ALPHA as a surface format override breaks 1.30+ style
@@ -475,8 +466,8 @@ gen7_update_null_renderbuffer_surface(struct brw_context *brw, unsigned unit)
    /* _NEW_BUFFERS */
    const struct gl_framebuffer *fb = ctx->DrawBuffer;
 
-   uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-			            8 * 4, 32, &brw->wm.surf_offset[unit]);
+   uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE, 8 * 4, 32,
+                                    &brw->wm.surf_offset[SURF_INDEX_DRAW(unit)]);
    memset(surf, 0, 8 * 4);
 
    /* From the Ivybridge PRM, Volume 4, Part 1, page 65,
@@ -514,12 +505,14 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
    bool is_array = false;
    int depth = MAX2(rb->Depth, 1);
    int min_array_element;
-   uint8_t mocs = brw->is_haswell ? GEN7_MOCS_L3 : 0;
+   const uint8_t mocs = GEN7_MOCS_L3;
    GLenum gl_target = rb->TexImage ?
                          rb->TexImage->TexObject->Target : GL_TEXTURE_2D;
 
-   uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-                                    8 * 4, 32, &brw->wm.surf_offset[unit]);
+   uint32_t surf_index = SURF_INDEX_DRAW(unit);
+
+   uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE, 8 * 4, 32,
+                                    &brw->wm.surf_offset[surf_index]);
    memset(surf, 0, 8 * 4);
 
    intel_miptree_used_for_rendering(irb->mt);
@@ -588,7 +581,7 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
              (depth - 1) << GEN7_SURFACE_RENDER_TARGET_VIEW_EXTENT_SHIFT;
 
    if (irb->mt->mcs_mt) {
-      gen7_set_surface_mcs_info(brw, surf, brw->wm.surf_offset[unit],
+      gen7_set_surface_mcs_info(brw, surf, brw->wm.surf_offset[surf_index],
                                 irb->mt->mcs_mt, true /* is RT */);
    }
 
@@ -602,7 +595,7 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
    }
 
    drm_intel_bo_emit_reloc(brw->batch.bo,
-			   brw->wm.surf_offset[unit] + 4,
+			   brw->wm.surf_offset[surf_index] + 4,
 			   region->bo,
 			   surf[1] - region->bo->offset,
 			   I915_GEM_DOMAIN_RENDER,

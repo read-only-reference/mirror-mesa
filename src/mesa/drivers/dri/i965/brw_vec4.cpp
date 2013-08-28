@@ -23,6 +23,7 @@
 
 #include "brw_vec4.h"
 #include "brw_cfg.h"
+#include "brw_vs.h"
 
 extern "C" {
 #include "main/macros.h"
@@ -258,6 +259,9 @@ vec4_visitor::implied_mrf_writes(vec4_instruction *inst)
       return 2;
    case VS_OPCODE_SCRATCH_WRITE:
       return 3;
+   case GS_OPCODE_URB_WRITE:
+   case GS_OPCODE_THREAD_END:
+      return 0;
    case SHADER_OPCODE_SHADER_TIME_ADD:
       return 0;
    case SHADER_OPCODE_TEX:
@@ -1030,10 +1034,14 @@ vec4_visitor::split_virtual_grfs()
       vec4_instruction *inst = (vec4_instruction *)node;
 
       /* If there's a SEND message loading from a GRF on gen7+, it needs to be
-       * contiguous.  Assume that the GRF for the SEND is always in src[0].
+       * contiguous.
        */
       if (inst->is_send_from_grf()) {
-         split_grf[inst->src[0].reg] = false;
+         for (int i = 0; i < 3; i++) {
+            if (inst->src[i].file == GRF) {
+               split_grf[inst->src[i].reg] = false;
+            }
+         }
       }
    }
 
@@ -1259,12 +1267,15 @@ vec4_vs_visitor::setup_attributes(int payload_reg)
 int
 vec4_visitor::setup_uniforms(int reg)
 {
+   prog_data->dispatch_grf_start_reg = reg;
+
    /* The pre-gen6 VS requires that some push constants get loaded no
     * matter what, or the GPU would hang.
     */
    if (brw->gen < 6 && this->uniforms == 0) {
       this->uniform_vector_size[this->uniforms] = 1;
 
+      prog_data->param = reralloc(NULL, prog_data->param, const float *, 4);
       for (unsigned int i = 0; i < 4; i++) {
 	 unsigned int slot = this->uniforms * 4 + i;
 	 static float zero = 0.0;
@@ -1279,13 +1290,13 @@ vec4_visitor::setup_uniforms(int reg)
 
    prog_data->nr_params = this->uniforms * 4;
 
-   prog_data->curb_read_length = reg - 1;
+   prog_data->curb_read_length = reg - prog_data->dispatch_grf_start_reg;
 
    return reg;
 }
 
 void
-vec4_visitor::setup_payload(void)
+vec4_vs_visitor::setup_payload(void)
 {
    int reg = 0;
 
@@ -1542,7 +1553,7 @@ brw_vs_emit(struct brw_context *brw,
       return NULL;
    }
 
-   vec4_generator g(brw, prog, &c->vp->program.Base, mem_ctx,
+   vec4_generator g(brw, prog, &c->vp->program.Base, &prog_data->base, mem_ctx,
                     INTEL_DEBUG & DEBUG_VS);
    const unsigned *generated =g.generate_assembly(&v.instructions,
                                                   final_assembly_size);
@@ -1560,5 +1571,32 @@ brw_vs_emit(struct brw_context *brw,
 
    return generated;
 }
+
+
+bool
+brw_vec4_prog_data_compare(const struct brw_vec4_prog_data *a,
+                           const struct brw_vec4_prog_data *b)
+{
+   /* Compare all the struct up to the pointers. */
+   if (memcmp(a, b, offsetof(struct brw_vec4_prog_data, param)))
+      return false;
+
+   if (memcmp(a->param, b->param, a->nr_params * sizeof(void *)))
+      return false;
+
+   if (memcmp(a->pull_param, b->pull_param, a->nr_pull_params * sizeof(void *)))
+      return false;
+
+   return true;
+}
+
+
+void
+brw_vec4_prog_data_free(const struct brw_vec4_prog_data *prog_data)
+{
+   ralloc_free((void *)prog_data->param);
+   ralloc_free((void *)prog_data->pull_param);
+}
+
 
 } /* extern "C" */

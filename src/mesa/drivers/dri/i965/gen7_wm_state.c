@@ -125,7 +125,7 @@ upload_ps_state(struct brw_context *brw)
    /* CACHE_NEW_SAMPLER */
    BEGIN_BATCH(2);
    OUT_BATCH(_3DSTATE_SAMPLER_STATE_POINTERS_PS << 16 | (2 - 2));
-   OUT_BATCH(brw->sampler.offset);
+   OUT_BATCH(brw->wm.sampler_offset);
    ADVANCE_BATCH();
 
    /* CACHE_NEW_WM_PROG */
@@ -141,8 +141,6 @@ upload_ps_state(struct brw_context *brw)
       OUT_BATCH(0);
       ADVANCE_BATCH();
    } else {
-      uint8_t mocs = brw->is_haswell ? GEN7_MOCS_L3 : 0;
-
       BEGIN_BATCH(7);
       OUT_BATCH(_3DSTATE_CONSTANT_PS << 16 | (7 - 2));
 
@@ -152,7 +150,7 @@ upload_ps_state(struct brw_context *brw)
       /* Pointer to the WM constant buffer.  Covered by the set of
        * state flags from gen6_upload_wm_push_constants.
        */
-      OUT_BATCH(brw->wm.push_const_offset | mocs);
+      OUT_BATCH(brw->wm.push_const_offset | GEN7_MOCS_L3);
       OUT_BATCH(0);
       OUT_BATCH(0);
       OUT_BATCH(0);
@@ -162,7 +160,7 @@ upload_ps_state(struct brw_context *brw)
    dw2 = dw4 = dw5 = 0;
 
    /* CACHE_NEW_SAMPLER */
-   dw2 |= (ALIGN(brw->sampler.count, 4) / 4) << GEN7_PS_SAMPLER_COUNT_SHIFT;
+   dw2 |= (ALIGN(brw->wm.sampler_count, 4) / 4) << GEN7_PS_SAMPLER_COUNT_SHIFT;
 
    /* Use ALT floating point mode for ARB fragment programs, because they
     * require 0^0 == 1.  Even though _CurrentFragmentProgram is used for

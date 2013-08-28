@@ -512,13 +512,13 @@ This instruction replicates its result.
 
 .. math::
 
-  dst.x = (src0.x == src1.x) ? 1 : 0
+  dst.x = (src0.x == src1.x) ? 1.0F : 0.0F
 
-  dst.y = (src0.y == src1.y) ? 1 : 0
+  dst.y = (src0.y == src1.y) ? 1.0F : 0.0F
 
-  dst.z = (src0.z == src1.z) ? 1 : 0
+  dst.z = (src0.z == src1.z) ? 1.0F : 0.0F
 
-  dst.w = (src0.w == src1.w) ? 1 : 0
+  dst.w = (src0.w == src1.w) ? 1.0F : 0.0F
 
 
 .. opcode:: SFL - Set On False
@@ -538,13 +538,13 @@ This instruction replicates its result.
 
 .. math::
 
-  dst.x = (src0.x > src1.x) ? 1 : 0
+  dst.x = (src0.x > src1.x) ? 1.0F : 0.0F
 
-  dst.y = (src0.y > src1.y) ? 1 : 0
+  dst.y = (src0.y > src1.y) ? 1.0F : 0.0F
 
-  dst.z = (src0.z > src1.z) ? 1 : 0
+  dst.z = (src0.z > src1.z) ? 1.0F : 0.0F
 
-  dst.w = (src0.w > src1.w) ? 1 : 0
+  dst.w = (src0.w > src1.w) ? 1.0F : 0.0F
 
 
 .. opcode:: SIN - Sine
@@ -560,26 +560,26 @@ This instruction replicates its result.
 
 .. math::
 
-  dst.x = (src0.x <= src1.x) ? 1 : 0
+  dst.x = (src0.x <= src1.x) ? 1.0F : 0.0F
 
-  dst.y = (src0.y <= src1.y) ? 1 : 0
+  dst.y = (src0.y <= src1.y) ? 1.0F : 0.0F
 
-  dst.z = (src0.z <= src1.z) ? 1 : 0
+  dst.z = (src0.z <= src1.z) ? 1.0F : 0.0F
 
-  dst.w = (src0.w <= src1.w) ? 1 : 0
+  dst.w = (src0.w <= src1.w) ? 1.0F : 0.0F
 
 
 .. opcode:: SNE - Set On Not Equal
 
 .. math::
 
-  dst.x = (src0.x != src1.x) ? 1 : 0
+  dst.x = (src0.x != src1.x) ? 1.0F : 0.0F
 
-  dst.y = (src0.y != src1.y) ? 1 : 0
+  dst.y = (src0.y != src1.y) ? 1.0F : 0.0F
 
-  dst.z = (src0.z != src1.z) ? 1 : 0
+  dst.z = (src0.z != src1.z) ? 1.0F : 0.0F
 
-  dst.w = (src0.w != src1.w) ? 1 : 0
+  dst.w = (src0.w != src1.w) ? 1.0F : 0.0F
 
 
 .. opcode:: STR - Set On True
@@ -1254,41 +1254,47 @@ Support for these opcodes indicated by PIPE_SHADER_CAP_INTEGERS (all of them?)
 
 .. opcode:: SHL - Shift Left
 
+   The shift count is masked with 0x1f before the shift is applied.
+
 .. math::
 
-  dst.x = src0.x << src1.x
+  dst.x = src0.x << (0x1f & src1.x)
 
-  dst.y = src0.y << src1.x
+  dst.y = src0.y << (0x1f & src1.y)
 
-  dst.z = src0.z << src1.x
+  dst.z = src0.z << (0x1f & src1.z)
 
-  dst.w = src0.w << src1.x
+  dst.w = src0.w << (0x1f & src1.w)
 
 
 .. opcode:: ISHR - Arithmetic Shift Right (of Signed Integer)
 
+   The shift count is masked with 0x1f before the shift is applied.
+
 .. math::
 
-  dst.x = src0.x >> src1.x
+  dst.x = src0.x >> (0x1f & src1.x)
 
-  dst.y = src0.y >> src1.x
+  dst.y = src0.y >> (0x1f & src1.y)
 
-  dst.z = src0.z >> src1.x
+  dst.z = src0.z >> (0x1f & src1.z)
 
-  dst.w = src0.w >> src1.x
+  dst.w = src0.w >> (0x1f & src1.w)
 
 
 .. opcode:: USHR - Logical Shift Right
 
+   The shift count is masked with 0x1f before the shift is applied.
+
 .. math::
 
-  dst.x = src0.x >> (unsigned) src1.x
+  dst.x = src0.x >> (unsigned) (0x1f & src1.x)
 
-  dst.y = src0.y >> (unsigned) src1.x
+  dst.y = src0.y >> (unsigned) (0x1f & src1.y)
 
-  dst.z = src0.z >> (unsigned) src1.x
+  dst.z = src0.z >> (unsigned) (0x1f & src1.z)
 
-  dst.w = src0.w >> (unsigned) src1.x
+  dst.w = src0.w >> (unsigned) (0x1f & src1.w)
 
 
 .. opcode:: UCMP - Integer Conditional Move
@@ -1319,6 +1325,21 @@ Support for these opcodes indicated by PIPE_SHADER_CAP_INTEGERS (all of them?)
 
 
 
+.. opcode:: FSLT - Float Set On Less Than (ordered)
+
+   Same comparison as SLT but returns integer instead of 1.0/0.0 float
+
+.. math::
+
+  dst.x = (src0.x < src1.x) ? ~0 : 0
+
+  dst.y = (src0.y < src1.y) ? ~0 : 0
+
+  dst.z = (src0.z < src1.z) ? ~0 : 0
+
+  dst.w = (src0.w < src1.w) ? ~0 : 0
+
+
 .. opcode:: ISLT - Signed Integer Set On Less Than
 
 .. math::
@@ -1343,6 +1364,21 @@ Support for these opcodes indicated by PIPE_SHADER_CAP_INTEGERS (all of them?)
   dst.z = (src0.z < src1.z) ? ~0 : 0
 
   dst.w = (src0.w < src1.w) ? ~0 : 0
+
+
+.. opcode:: FSGE - Float Set On Greater Equal Than (ordered)
+
+   Same comparison as SGE but returns integer instead of 1.0/0.0 float
+
+.. math::
+
+  dst.x = (src0.x >= src1.x) ? ~0 : 0
+
+  dst.y = (src0.y >= src1.y) ? ~0 : 0
+
+  dst.z = (src0.z >= src1.z) ? ~0 : 0
+
+  dst.w = (src0.w >= src1.w) ? ~0 : 0
 
 
 .. opcode:: ISGE - Signed Integer Set On Greater Equal Than
@@ -1371,6 +1407,21 @@ Support for these opcodes indicated by PIPE_SHADER_CAP_INTEGERS (all of them?)
   dst.w = (src0.w >= src1.w) ? ~0 : 0
 
 
+.. opcode:: FSEQ - Float Set On Equal (ordered)
+
+   Same comparison as SEQ but returns integer instead of 1.0/0.0 float
+
+.. math::
+
+  dst.x = (src0.x == src1.x) ? ~0 : 0
+
+  dst.y = (src0.y == src1.y) ? ~0 : 0
+
+  dst.z = (src0.z == src1.z) ? ~0 : 0
+
+  dst.w = (src0.w == src1.w) ? ~0 : 0
+
+
 .. opcode:: USEQ - Integer Set On Equal
 
 .. math::
@@ -1382,6 +1433,21 @@ Support for these opcodes indicated by PIPE_SHADER_CAP_INTEGERS (all of them?)
   dst.z = (src0.z == src1.z) ? ~0 : 0
 
   dst.w = (src0.w == src1.w) ? ~0 : 0
+
+
+.. opcode:: FSNE - Float Set On Not Equal (unordered)
+
+   Same comparison as SNE but returns integer instead of 1.0/0.0 float
+
+.. math::
+
+  dst.x = (src0.x != src1.x) ? ~0 : 0
+
+  dst.y = (src0.y != src1.y) ? ~0 : 0
+
+  dst.z = (src0.z != src1.z) ? ~0 : 0
+
+  dst.w = (src0.w != src1.w) ? ~0 : 0
 
 
 .. opcode:: USNE - Integer Set On Not Equal
@@ -1862,7 +1928,15 @@ after lookup.
                the mipmap level selected by the src_mip_level and
                are in the number of texels.
                For 1d texture array width is in dst.x, array size
-               is in dst.y and dst.zw are always 0.
+               is in dst.y and dst.z is 0. The number of mipmaps
+               is still in dst.w.
+               In contrast to d3d10 resinfo, there's no way in the
+               tgsi instruction encoding to specify the return type
+               (float/rcpfloat/uint), hence always using uint. Also,
+               unlike the SAMPLE instructions, the swizzle on src1
+               resinfo allowing swizzling dst values is ignored (due
+               to the interaction with rcpfloat modifier which requires
+               some swizzle handling in the state tracker anyway).
 
 .. opcode:: SAMPLE_POS - query the position of a given sample.
                dst receives float4 (x, y, 0, 0) indicated where the

@@ -468,6 +468,15 @@ intel_miptree_choose_tiling(struct brw_context *brw,
    if (brw->gen < 6)
       return I915_TILING_X;
 
+   /* From the Sandybridge PRM, Volume 1, Part 2, page 32:
+    * "NOTE: 128BPE Format Color Buffer ( render target ) MUST be either TileX
+    *  or Linear."
+    * 128 bits per pixel translates to 16 bytes per pixel.  This is necessary
+    * all the way back to 965, but is explicitly permitted on Gen7.
+    */
+   if (brw->gen != 7 && mt->cpp >= 16)
+      return I915_TILING_X;
+
    return I915_TILING_Y | I915_TILING_X;
 }
 
@@ -1244,29 +1253,15 @@ intel_miptree_slice_enable_hiz(struct brw_context *brw,
    assert(mt->hiz_mt);
 
    if (brw->is_haswell) {
-      /* Disable HiZ for some slices to work around a hardware bug.
-       *
-       * Haswell hardware fails to respect
-       * 3DSTATE_DEPTH_BUFFER.Depth_Coordinate_Offset_X/Y when during HiZ
-       * ambiguate operations.  The failure is inconsistent and affected by
-       * other GPU contexts. Running a heavy GPU workload in a separate
-       * process causes the failure rate to drop to nearly 0.
-       *
-       * To workaround the bug, we enable HiZ only when we can guarantee that
-       * the Depth Coordinate Offset fields will be set to 0. The function
-       * brw_get_depthstencil_tile_masks() is used to calculate the fields,
-       * and the function is sometimes called in such a way that the presence
-       * of an attached stencil buffer changes the fuction's return value.
-       *
-       * The largest tile size considered by brw_get_depthstencil_tile_masks()
-       * is that of the stencil buffer. Therefore, if this hiz slice's
-       * corresponding depth slice has an offset that is aligned to the
-       * stencil buffer tile size, 64x64 pixels, then
-       * 3DSTATE_DEPTH_BUFFER.Depth_Coordinate_Offset_X/Y is set to 0.
+      const struct intel_mipmap_level *l = &mt->level[level];
+
+      /* Disable HiZ for LOD > 0 unless the width is 8 aligned
+       * and the height is 4 aligned. This allows our HiZ support
+       * to fulfill Haswell restrictions for HiZ ops. For LOD == 0,
+       * we can grow the width & height to allow the HiZ op to
+       * force the proper size alignments.
        */
-      uint32_t depth_x_offset = mt->level[level].slice[layer].x_offset;
-      uint32_t depth_y_offset = mt->level[level].slice[layer].y_offset;
-      if ((depth_x_offset & 63) || (depth_y_offset & 63)) {
+      if (level > 0 && ((l->width & 7) || (l->height & 3))) {
          return false;
       }
    }
@@ -1353,6 +1348,18 @@ intel_miptree_slice_set_needs_depth_resolve(struct intel_mipmap_tree *mt,
 
    intel_resolve_map_set(&mt->hiz_map,
 			 level, layer, GEN6_HIZ_OP_DEPTH_RESOLVE);
+}
+
+void
+intel_miptree_set_all_slices_need_depth_resolve(struct intel_mipmap_tree *mt,
+                                                uint32_t level)
+{
+   uint32_t layer;
+   uint32_t end_layer = mt->level[level].depth;
+
+   for (layer = 0; layer < end_layer; layer++) {
+      intel_miptree_slice_set_needs_depth_resolve(mt, level, layer);
+   }
 }
 
 static bool
@@ -1554,7 +1561,7 @@ intel_miptree_updownsample(struct brw_context *brw,
                            width, height,
                            dst_x0, dst_y0,
                            width, height,
-                           false, false /*mirror x, y*/);
+                           GL_NEAREST, false, false /*mirror x, y*/);
 
    if (src->stencil_mt) {
       brw_blorp_blit_miptrees(brw,
@@ -1564,7 +1571,7 @@ intel_miptree_updownsample(struct brw_context *brw,
                               width, height,
                               dst_x0, dst_y0,
                               width, height,
-                              false, false /*mirror x, y*/);
+                              GL_NEAREST, false, false /*mirror x, y*/);
    }
 }
 
@@ -1619,7 +1626,6 @@ intel_miptree_upsample(struct brw_context *brw,
 void *
 intel_miptree_map_raw(struct brw_context *brw, struct intel_mipmap_tree *mt)
 {
-   struct gl_context *ctx = &brw->ctx;
    /* CPU accesses to color buffers don't understand fast color clears, so
     * resolve any pending fast color clears before we map.
     */
@@ -1629,11 +1635,11 @@ intel_miptree_map_raw(struct brw_context *brw, struct intel_mipmap_tree *mt)
 
    if (unlikely(INTEL_DEBUG & DEBUG_PERF)) {
       if (drm_intel_bo_busy(bo)) {
-         perf_debug("Mapping a busy BO, causing a stall on the GPU.\n");
+         perf_debug("Mapping a busy miptree, causing a stall on the GPU.\n");
       }
    }
 
-   intel_flush(ctx);
+   intel_batchbuffer_flush(brw);
 
    if (mt->region->tiling != I915_TILING_NONE)
       drm_intel_gem_bo_map_gtt(bo);
@@ -1729,7 +1735,6 @@ intel_miptree_map_blit(struct brw_context *brw,
       goto fail;
    }
 
-   intel_batchbuffer_flush(brw);
    map->ptr = intel_miptree_map_raw(brw, map->mt);
 
    DBG("%s: %d,%d %dx%d from mt %p (%s) %d,%d = %p/%d\n", __FUNCTION__,

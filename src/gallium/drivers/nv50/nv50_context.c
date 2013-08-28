@@ -258,17 +258,19 @@ nv50_create(struct pipe_screen *pscreen, void *priv)
    draw_set_rasterize_stage(nv50->draw, nv50_draw_render_stage(nv50));
 #endif
 
-   if (screen->base.device->chipset < 0x84) {
+   if (screen->base.device->chipset < 0x84 ||
+       debug_get_bool_option("NOUVEAU_PMPEG", FALSE)) {
       /* PMPEG */
       nouveau_context_init_vdec(&nv50->base);
    } else if (screen->base.device->chipset < 0x98 ||
               screen->base.device->chipset == 0xa0) {
       /* VP2 */
-      pipe->create_video_decoder = nv84_create_decoder;
+      pipe->create_video_codec = nv84_create_decoder;
       pipe->create_video_buffer = nv84_video_buffer_create;
    } else {
-      /* Unsupported, but need to init pointers. */
-      nouveau_context_init_vdec(&nv50->base);
+      /* VP3/4 */
+      pipe->create_video_codec = nv98_create_decoder;
+      pipe->create_video_buffer = nv98_video_buffer_create;
    }
 
    flags = NOUVEAU_BO_VRAM | NOUVEAU_BO_RD;

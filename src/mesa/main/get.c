@@ -709,7 +709,7 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
    case GL_COMPRESSED_TEXTURE_FORMATS_ARB:
       v->value_int_n.n = 
 	 _mesa_get_compressed_formats(ctx, v->value_int_n.ints);
-      ASSERT(v->value_int_n.n <= 100);
+      ASSERT(v->value_int_n.n <= ARRAY_SIZE(v->value_int_n.ints));
       break;
 
    case GL_MAX_VARYING_FLOATS_ARB:
@@ -989,7 +989,7 @@ check_extra(struct gl_context *ctx, const char *func, const struct value_desc *d
       case EXTRA_EXT_UBO_GS4:
          api_check = GL_TRUE;
          api_found = (ctx->Extensions.ARB_uniform_buffer_object &&
-                      ctx->Extensions.ARB_geometry_shader4);
+                      _mesa_has_geometry_shaders(ctx));
          break;
       case EXTRA_END:
 	 break;
