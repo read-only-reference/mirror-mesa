@@ -43,8 +43,6 @@ extern "C" {
 
 #include "glsl/ir.h"
 
-struct brw_vs_compile;
-
 
 struct brw_vec4_compile {
    GLuint last_scratch; /**< measured in 32-byte (register size) units */
@@ -120,17 +118,7 @@ public:
 class src_reg : public reg
 {
 public:
-   /* Callers of this ralloc-based new need not call delete. It's
-    * easier to just ralloc_free 'ctx' (or any of its ancestors). */
-   static void* operator new(size_t size, void *ctx)
-   {
-      void *node;
-
-      node = ralloc_size(ctx, size);
-      assert(node != NULL);
-
-      return node;
-   }
+   DECLARE_RALLOC_CXX_OPERATORS(src_reg)
 
    void init();
 
@@ -158,17 +146,7 @@ public:
 class dst_reg : public reg
 {
 public:
-   /* Callers of this ralloc-based new need not call delete. It's
-    * easier to just ralloc_free 'ctx' (or any of its ancestors). */
-   static void* operator new(size_t size, void *ctx)
-   {
-      void *node;
-
-      node = ralloc_size(ctx, size);
-      assert(node != NULL);
-
-      return node;
-   }
+   DECLARE_RALLOC_CXX_OPERATORS(dst_reg)
 
    void init();
 
@@ -185,19 +163,12 @@ public:
    src_reg *reladdr;
 };
 
+dst_reg
+with_writemask(dst_reg const &r, int mask);
+
 class vec4_instruction : public backend_instruction {
 public:
-   /* Callers of this ralloc-based new need not call delete. It's
-    * easier to just ralloc_free 'ctx' (or any of its ancestors). */
-   static void* operator new(size_t size, void *ctx)
-   {
-      void *node;
-
-      node = rzalloc_size(ctx, size);
-      assert(node != NULL);
-
-      return node;
-   }
+   DECLARE_RZALLOC_CXX_OPERATORS(vec4_instruction)
 
    vec4_instruction(vec4_visitor *v, enum opcode opcode,
 		    dst_reg dst = dst_reg(),
@@ -393,6 +364,8 @@ public:
 
    vec4_instruction *emit(enum opcode opcode);
 
+   vec4_instruction *emit(enum opcode opcode, dst_reg dst);
+
    vec4_instruction *emit(enum opcode opcode, dst_reg dst, src_reg src0);
 
    vec4_instruction *emit(enum opcode opcode, dst_reg dst,
@@ -552,36 +525,6 @@ protected:
    const bool debug_flag;
 };
 
-class vec4_vs_visitor : public vec4_visitor
-{
-public:
-   vec4_vs_visitor(struct brw_context *brw,
-                   struct brw_vs_compile *vs_compile,
-                   struct brw_vs_prog_data *vs_prog_data,
-                   struct gl_shader_program *prog,
-                   struct brw_shader *shader,
-                   void *mem_ctx);
-
-protected:
-   virtual dst_reg *make_reg_for_system_value(ir_variable *ir);
-   virtual void setup_payload();
-   virtual void emit_prolog();
-   virtual void emit_program_code();
-   virtual void emit_thread_end();
-   virtual void emit_urb_write_header(int mrf);
-   virtual vec4_instruction *emit_urb_write_opcode(bool complete);
-
-private:
-   int setup_attributes(int payload_reg);
-   void setup_vp_regs();
-   dst_reg get_vp_dst_reg(const prog_dst_register &dst);
-   src_reg get_vp_src_reg(const prog_src_register &src);
-
-   struct brw_vs_compile * const vs_compile;
-   struct brw_vs_prog_data * const vs_prog_data;
-   src_reg *vp_temp_regs;
-   src_reg vp_addr_reg;
-};
 
 /**
  * The vertex shader code generator.
@@ -639,6 +582,8 @@ private:
    void generate_gs_set_vertex_count(struct brw_reg dst,
                                      struct brw_reg src);
    void generate_gs_set_dword_2_immed(struct brw_reg dst, struct brw_reg src);
+   void generate_gs_prepare_channel_masks(struct brw_reg dst);
+   void generate_gs_set_channel_masks(struct brw_reg dst, struct brw_reg src);
    void generate_oword_dual_block_offsets(struct brw_reg m1,
 					  struct brw_reg index);
    void generate_scratch_write(vec4_instruction *inst,

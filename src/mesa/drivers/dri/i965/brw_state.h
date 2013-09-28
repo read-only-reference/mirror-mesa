@@ -47,12 +47,13 @@ extern const struct brw_tracked_state brw_cc_unit;
 extern const struct brw_tracked_state brw_clip_prog;
 extern const struct brw_tracked_state brw_clip_unit;
 extern const struct brw_tracked_state brw_vs_pull_constants;
+extern const struct brw_tracked_state brw_gs_pull_constants;
 extern const struct brw_tracked_state brw_wm_pull_constants;
 extern const struct brw_tracked_state brw_constant_buffer;
 extern const struct brw_tracked_state brw_curbe_offsets;
 extern const struct brw_tracked_state brw_invariant_state;
 extern const struct brw_tracked_state brw_fs_samplers;
-extern const struct brw_tracked_state brw_gs_prog;
+extern const struct brw_tracked_state brw_ff_gs_prog;
 extern const struct brw_tracked_state brw_gs_unit;
 extern const struct brw_tracked_state brw_line_stipple;
 extern const struct brw_tracked_state brw_aa_line_parameters;
@@ -68,12 +69,16 @@ extern const struct brw_tracked_state brw_state_base_address;
 extern const struct brw_tracked_state brw_urb_fence;
 extern const struct brw_tracked_state brw_vs_prog;
 extern const struct brw_tracked_state brw_vs_samplers;
+extern const struct brw_tracked_state brw_gs_samplers;
 extern const struct brw_tracked_state brw_vs_ubo_surfaces;
+extern const struct brw_tracked_state brw_gs_ubo_surfaces;
 extern const struct brw_tracked_state brw_vs_unit;
+extern const struct brw_tracked_state brw_gs_prog;
 extern const struct brw_tracked_state brw_wm_prog;
 extern const struct brw_tracked_state brw_renderbuffer_surfaces;
 extern const struct brw_tracked_state brw_texture_surfaces;
 extern const struct brw_tracked_state brw_wm_binding_table;
+extern const struct brw_tracked_state brw_gs_binding_table;
 extern const struct brw_tracked_state brw_vs_binding_table;
 extern const struct brw_tracked_state brw_wm_ubo_surfaces;
 extern const struct brw_tracked_state brw_wm_unit;
@@ -111,7 +116,10 @@ extern const struct brw_tracked_state gen7_depthbuffer;
 extern const struct brw_tracked_state gen7_cc_viewport_state_pointer;
 extern const struct brw_tracked_state gen7_clip_state;
 extern const struct brw_tracked_state gen7_disable_stages;
+extern const struct brw_tracked_state gen7_gs_push_constants;
+extern const struct brw_tracked_state gen7_gs_state;
 extern const struct brw_tracked_state gen7_ps_state;
+extern const struct brw_tracked_state gen7_push_constant_space;
 extern const struct brw_tracked_state gen7_sbe_state;
 extern const struct brw_tracked_state gen7_sf_clip_viewport;
 extern const struct brw_tracked_state gen7_sf_state;
@@ -120,6 +128,7 @@ extern const struct brw_tracked_state gen7_urb;
 extern const struct brw_tracked_state gen7_vs_state;
 extern const struct brw_tracked_state gen7_wm_state;
 extern const struct brw_tracked_state haswell_cut_index;
+
 
 /* brw_misc_state.c */
 void brw_upload_invariant_state(struct brw_context *brw);
@@ -216,12 +225,32 @@ void gen4_init_vtable_sampler_functions(struct brw_context *brw);
 void gen7_init_vtable_sampler_functions(struct brw_context *brw);
 
 /* gen6_sf_state.c */
-uint32_t
-get_attr_override(const struct brw_vue_map *vue_map, int urb_entry_read_offset,
-                  int fs_attr, bool two_side_color, uint32_t *max_source_attr);
+void
+calculate_attr_overrides(const struct brw_context *brw,
+                         uint16_t *attr_overrides,
+                         uint32_t *point_sprite_enables,
+                         uint32_t *flat_enables,
+                         uint32_t *urb_entry_read_length);
 
-/* gen7_urb.c */
-void gen7_allocate_push_constants(struct brw_context *brw);
+/* brw_vs_surface_state.c */
+void
+brw_upload_vec4_pull_constants(struct brw_context *brw,
+                               GLbitfield brw_new_constbuf,
+                               const struct gl_program *prog,
+                               struct brw_stage_state *stage_state,
+                               const struct brw_vec4_prog_data *prog_data);
+void
+brw_upload_binding_table(struct brw_context *brw,
+                         GLbitfield brw_new_binding_table,
+                         struct brw_stage_state *stage_state,
+                         unsigned binding_table_entries,
+                         int shader_time_surf_index);
+
+/* gen7_vs_state.c */
+void
+gen7_upload_constant_state(struct brw_context *brw,
+                           const struct brw_stage_state *stage_state,
+                           bool active, unsigned opcode);
 
 #ifdef __cplusplus
 }

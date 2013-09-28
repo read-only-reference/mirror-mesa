@@ -75,7 +75,7 @@ void r600_get_backend_mask(struct r600_context *ctx)
 	va = r600_resource_va(&ctx->screen->b.b, (void*)buffer);
 
 	/* initialize buffer with zeroes */
-	results = r600_buffer_mmap_sync_with_rings(ctx, buffer, PIPE_TRANSFER_WRITE);
+	results = r600_buffer_map_sync_with_rings(&ctx->b, buffer, PIPE_TRANSFER_WRITE);
 	if (results) {
 		memset(results, 0, ctx->max_db * 4 * 4);
 		ctx->b.ws->buffer_unmap(buffer->cs_buf);
@@ -90,7 +90,7 @@ void r600_get_backend_mask(struct r600_context *ctx)
 		cs->buf[cs->cdw++] = r600_context_bo_reloc(&ctx->b, &ctx->b.rings.gfx, buffer, RADEON_USAGE_WRITE);
 
 		/* analyze results */
-		results = r600_buffer_mmap_sync_with_rings(ctx, buffer, PIPE_TRANSFER_READ);
+		results = r600_buffer_map_sync_with_rings(&ctx->b, buffer, PIPE_TRANSFER_READ);
 		if (results) {
 			for(i = 0; i < ctx->max_db; i++) {
 				/* at least highest bit will be set if backend is used */
@@ -236,14 +236,21 @@ void r600_flush_emit(struct r600_context *rctx)
 	}
 
 	if (rctx->b.flags & R600_CONTEXT_INV_CONST_CACHE) {
-		cp_coher_cntl |= S_0085F0_SH_ACTION_ENA(1);
+		/* Direct constant addressing uses the shader cache.
+		 * Indirect contant addressing uses the vertex cache. */
+		cp_coher_cntl |= S_0085F0_SH_ACTION_ENA(1) |
+				 (rctx->has_vertex_cache ? S_0085F0_VC_ACTION_ENA(1)
+							 : S_0085F0_TC_ACTION_ENA(1));
 	}
 	if (rctx->b.flags & R600_CONTEXT_INV_VERTEX_CACHE) {
 		cp_coher_cntl |= rctx->has_vertex_cache ? S_0085F0_VC_ACTION_ENA(1)
 							: S_0085F0_TC_ACTION_ENA(1);
 	}
 	if (rctx->b.flags & R600_CONTEXT_INV_TEX_CACHE) {
-		cp_coher_cntl |= S_0085F0_TC_ACTION_ENA(1);
+		/* Textures use the texture cache.
+		 * Texture buffer objects use the vertex cache. */
+		cp_coher_cntl |= S_0085F0_TC_ACTION_ENA(1) |
+				 (rctx->has_vertex_cache ? S_0085F0_VC_ACTION_ENA(1) : 0);
 	}
 
 	/* Don't use the DB CP COHER logic on r6xx.
@@ -644,19 +651,29 @@ void r600_flag_resource_cache_flush(struct r600_context *rctx,
 
 	/* Check colorbuffers. */
 	for (i = 0; i < rctx->framebuffer.state.nr_cbufs; i++) {
-		if (rctx->framebuffer.state.cbufs[i] &&
-		    rctx->framebuffer.state.cbufs[i]->texture == res) {
-			struct r600_texture *tex =
-				(struct r600_texture*)rctx->framebuffer.state.cbufs[i]->texture;
+		struct r600_texture *tex;
 
+		if (rctx->framebuffer.state.cbufs[i] == NULL) {
+		    continue;
+		}
+
+		tex = (struct r600_texture*)rctx->framebuffer.state.cbufs[i]->texture;
+
+		if (rctx->framebuffer.state.cbufs[i]->texture == res) {
 			rctx->b.flags |= R600_CONTEXT_FLUSH_AND_INV_CB |
 				       R600_CONTEXT_FLUSH_AND_INV |
 				       R600_CONTEXT_WAIT_3D_IDLE;
 
-			if (tex->cmask_size || tex->fmask_size) {
+			if (tex->cmask.size || tex->fmask.size) {
 				rctx->b.flags |= R600_CONTEXT_FLUSH_AND_INV_CB_META;
 			}
 			break;
+		}
+
+		if (tex && tex->cmask_buffer && tex->cmask_buffer != &tex->resource && &tex->cmask_buffer->b.b == res) {
+			rctx->b.flags |= R600_CONTEXT_FLUSH_AND_INV_CB_META |
+				       R600_CONTEXT_FLUSH_AND_INV |
+				       R600_CONTEXT_WAIT_3D_IDLE;
 		}
 	}
 

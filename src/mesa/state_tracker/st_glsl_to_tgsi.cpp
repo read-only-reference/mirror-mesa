@@ -217,17 +217,7 @@ st_dst_reg::st_dst_reg(st_src_reg reg)
 
 class glsl_to_tgsi_instruction : public exec_node {
 public:
-   /* Callers of this ralloc-based new need not call delete. It's
-    * easier to just ralloc_free 'ctx' (or any of its ancestors). */
-   static void* operator new(size_t size, void *ctx)
-   {
-      void *node;
-
-      node = rzalloc_size(ctx, size);
-      assert(node != NULL);
-
-      return node;
-   }
+   DECLARE_RZALLOC_CXX_OPERATORS(glsl_to_tgsi_instruction)
 
    unsigned op;
    st_dst_reg dst;
@@ -1209,7 +1199,7 @@ glsl_to_tgsi_visitor::visit(ir_function *ir)
       const ir_function_signature *sig;
       exec_list empty;
 
-      sig = ir->matching_signature(&empty);
+      sig = ir->matching_signature(NULL, &empty);
 
       assert(sig);
 
@@ -1954,6 +1944,14 @@ glsl_to_tgsi_visitor::visit(ir_expression *ir)
       /* note: we have to reorder the three args here */
       emit(ir, TGSI_OPCODE_LRP, result_dst, op[2], op[1], op[0]);
       break;
+   case ir_triop_csel:
+      if (this->ctx->Const.NativeIntegers)
+         emit(ir, TGSI_OPCODE_UCMP, result_dst, op[0], op[1], op[2]);
+      else {
+         op[0].negate = ~op[0].negate;
+         emit(ir, TGSI_OPCODE_CMP, result_dst, op[0], op[1], op[2]);
+      }
+      break;
    case ir_unop_pack_snorm_2x16:
    case ir_unop_pack_unorm_2x16:
    case ir_unop_pack_half_2x16:
@@ -1979,6 +1977,7 @@ glsl_to_tgsi_visitor::visit(ir_expression *ir)
    case ir_quadop_vector:
    case ir_binop_vector_extract:
    case ir_triop_vector_insert:
+   case ir_binop_ldexp:
       /* This operation is not supported, or should have already been handled.
        */
       assert(!"Invalid ir opcode in glsl_to_tgsi_visitor::visit()");

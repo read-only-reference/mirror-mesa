@@ -126,6 +126,10 @@ brw_set_dest(struct brw_compile *p, struct brw_instruction *insn,
       else {
 	 insn->bits1.da16.dest_subreg_nr = dest.subnr / 16;
 	 insn->bits1.da16.dest_writemask = dest.dw1.bits.writemask;
+         if (dest.file == BRW_GENERAL_REGISTER_FILE ||
+             dest.file == BRW_MESSAGE_REGISTER_FILE) {
+            assert(dest.dw1.bits.writemask != 0);
+         }
 	 /* From the Ivybridge PRM, Vol 4, Part 3, Section 5.2.4.1:
 	  *    Although Dst.HorzStride is a don't care for Align16, HW needs
 	  *    this to be programmed as "01".
@@ -527,7 +531,12 @@ static void brw_set_urb_message( struct brw_compile *p,
 			      msg_length, response_length, true,
                               flags & BRW_URB_WRITE_EOT);
    if (brw->gen == 7) {
-      insn->bits3.urb_gen7.opcode = 0;	/* URB_WRITE_HWORD */
+      if (flags & BRW_URB_WRITE_OWORD) {
+         assert(msg_length == 2); /* header + one OWORD of data */
+         insn->bits3.urb_gen7.opcode = BRW_URB_OPCODE_WRITE_OWORD;
+      } else {
+         insn->bits3.urb_gen7.opcode = BRW_URB_OPCODE_WRITE_HWORD;
+      }
       insn->bits3.urb_gen7.offset = offset;
       assert(swizzle_control != BRW_URB_SWIZZLE_TRANSPOSE);
       insn->bits3.urb_gen7.swizzle_control = swizzle_control;
@@ -936,8 +945,6 @@ ALU2(OR)
 ALU2(XOR)
 ALU2(SHR)
 ALU2(SHL)
-ALU2(RSR)
-ALU2(RSL)
 ALU2(ASR)
 ALU1(F32TO16)
 ALU1(F16TO32)
@@ -2224,7 +2231,7 @@ void brw_urb_WRITE(struct brw_compile *p,
 
    gen6_resolve_implied_move(p, &src0, msg_reg_nr);
 
-   if (brw->gen == 7) {
+   if (brw->gen == 7 && !(flags & BRW_URB_WRITE_USE_CHANNEL_MASKS)) {
       /* Enable Channel Masks in the URB_WRITE_HWORD message header */
       brw_push_insn_state(p);
       brw_set_access_mode(p, BRW_ALIGN_1);

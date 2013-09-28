@@ -224,12 +224,51 @@ gen7_check_surface_setup(uint32_t *surf, bool is_render_target)
    }
 }
 
+static void
+gen7_emit_buffer_surface_state(struct brw_context *brw,
+                               uint32_t *out_offset,
+                               drm_intel_bo *bo,
+                               unsigned buffer_offset,
+                               unsigned surface_format,
+                               unsigned buffer_size,
+                               unsigned pitch,
+                               unsigned mocs)
+{
+   uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
+                                    8 * 4, 32, out_offset);
+   memset(surf, 0, 8 * 4);
+
+   surf[0] = BRW_SURFACE_BUFFER << BRW_SURFACE_TYPE_SHIFT |
+             surface_format << BRW_SURFACE_FORMAT_SHIFT |
+             BRW_SURFACE_RC_READ_WRITE;
+   surf[1] = (bo ? bo->offset : 0) + buffer_offset; /* reloc */
+   surf[2] = SET_FIELD((buffer_size - 1) & 0x7f, GEN7_SURFACE_WIDTH) |
+             SET_FIELD(((buffer_size - 1) >> 7) & 0x3fff, GEN7_SURFACE_HEIGHT);
+   surf[3] = SET_FIELD(((buffer_size - 1) >> 21) & 0x3f, BRW_SURFACE_DEPTH) |
+             (pitch - 1);
+
+   surf[5] = SET_FIELD(mocs, GEN7_SURFACE_MOCS);
+
+   if (brw->is_haswell) {
+      surf[7] |= (SET_FIELD(HSW_SCS_RED,   GEN7_SURFACE_SCS_R) |
+                  SET_FIELD(HSW_SCS_GREEN, GEN7_SURFACE_SCS_G) |
+                  SET_FIELD(HSW_SCS_BLUE,  GEN7_SURFACE_SCS_B) |
+                  SET_FIELD(HSW_SCS_ALPHA, GEN7_SURFACE_SCS_A));
+   }
+
+   /* Emit relocation to surface contents */
+   if (bo) {
+      drm_intel_bo_emit_reloc(brw->batch.bo, *out_offset + 4,
+                              bo, buffer_offset, I915_GEM_DOMAIN_SAMPLER, 0);
+   }
+
+   gen7_check_surface_setup(surf, false /* is_render_target */);
+}
 
 static void
 gen7_update_buffer_texture_surface(struct gl_context *ctx,
                                    unsigned unit,
-                                   uint32_t *binding_table,
-                                   unsigned surf_index)
+                                   uint32_t *surf_offset)
 {
    struct brw_context *brw = brw_context(ctx);
    struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
@@ -238,62 +277,44 @@ gen7_update_buffer_texture_surface(struct gl_context *ctx,
    drm_intel_bo *bo = intel_obj ? intel_obj->buffer : NULL;
    gl_format format = tObj->_BufferObjectFormat;
 
-   uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-                                    8 * 4, 32, &binding_table[surf_index]);
-   memset(surf, 0, 8 * 4);
-
    uint32_t surface_format = brw_format_for_mesa_format(format);
    if (surface_format == 0 && format != MESA_FORMAT_RGBA_FLOAT32) {
       _mesa_problem(NULL, "bad format %s for texture buffer\n",
                     _mesa_get_format_name(format));
    }
 
-   surf[0] = BRW_SURFACE_BUFFER << BRW_SURFACE_TYPE_SHIFT |
-             surface_format << BRW_SURFACE_FORMAT_SHIFT |
-             BRW_SURFACE_RC_READ_WRITE;
+   int texel_size = _mesa_get_format_bytes(format);
+   int w = intel_obj ? intel_obj->Base.Size / texel_size : 0;
 
-   if (bo) {
-      surf[1] = bo->offset; /* reloc */
-
-      drm_intel_bo_emit_reloc(brw->batch.bo,
-			      binding_table[surf_index] + 4,
-			      bo, 0,
-			      I915_GEM_DOMAIN_SAMPLER, 0);
-
-      int texel_size = _mesa_get_format_bytes(format);
-      int w = intel_obj->Base.Size / texel_size;
-
-      /* note that these differ from GEN6 */
-      surf[2] = SET_FIELD(w & 0x7f, GEN7_SURFACE_WIDTH) | /* bits 6:0 of size */
-                SET_FIELD((w >> 7) & 0x3fff, GEN7_SURFACE_HEIGHT); /* 20:7 */
-      surf[3] = SET_FIELD((w >> 21) & 0x3f, BRW_SURFACE_DEPTH) | /* bits 26:21 */
-                (texel_size - 1);
-   }
-
-   gen7_check_surface_setup(surf, false /* is_render_target */);
+   gen7_emit_buffer_surface_state(brw,
+                                  surf_offset,
+                                  bo,
+                                  0,
+                                  surface_format,
+                                  w,
+                                  texel_size,
+                                  0 /* mocs */);
 }
 
 static void
 gen7_update_texture_surface(struct gl_context *ctx,
                             unsigned unit,
-                            uint32_t *binding_table,
-                            unsigned surf_index)
+                            uint32_t *surf_offset)
 {
    struct brw_context *brw = brw_context(ctx);
    struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
    struct intel_texture_object *intelObj = intel_texture_object(tObj);
    struct intel_mipmap_tree *mt = intelObj->mt;
    struct gl_texture_image *firstImage = tObj->Image[0][tObj->BaseLevel];
-   struct intel_texture_image *intel_image = intel_texture_image(firstImage);
    struct gl_sampler_object *sampler = _mesa_get_samplerobj(ctx, unit);
 
    if (tObj->Target == GL_TEXTURE_BUFFER) {
-      gen7_update_buffer_texture_surface(ctx, unit, binding_table, surf_index);
+      gen7_update_buffer_texture_surface(ctx, unit, surf_offset);
       return;
    }
 
    uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-                                    8 * 4, 32, &binding_table[surf_index]);
+                                    8 * 4, 32, surf_offset);
    memset(surf, 0, 8 * 4);
 
    uint32_t tex_format = translate_tex_format(brw,
@@ -327,8 +348,10 @@ gen7_update_texture_surface(struct gl_context *ctx,
    surf[4] = gen7_surface_msaa_bits(mt->num_samples, mt->msaa_layout);
 
    surf[5] = (SET_FIELD(GEN7_MOCS_L3, GEN7_SURFACE_MOCS) |
+              SET_FIELD(tObj->BaseLevel - mt->first_level,
+                        GEN7_SURFACE_MIN_LOD) |
               /* mip count */
-              (intelObj->_MaxLevel - intel_image->mt->first_level));
+              (intelObj->_MaxLevel - tObj->BaseLevel));
 
    if (brw->is_haswell) {
       /* Handling GL_ALPHA as a surface format override breaks 1.30+ style
@@ -351,7 +374,7 @@ gen7_update_texture_surface(struct gl_context *ctx,
 
    /* Emit relocation to surface contents */
    drm_intel_bo_emit_reloc(brw->batch.bo,
-			   binding_table[surf_index] + 4,
+			   *surf_offset + 4,
 			   intelObj->mt->region->bo,
                            surf[1] - intelObj->mt->region->bo->offset,
 			   I915_GEM_DOMAIN_SAMPLER, 0);
@@ -373,38 +396,15 @@ gen7_create_constant_surface(struct brw_context *brw,
 {
    uint32_t stride = dword_pitch ? 4 : 16;
    uint32_t elements = ALIGN(size, stride) / stride;
-   const GLint w = elements - 1;
 
-   uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-                                    8 * 4, 32, out_offset);
-   memset(surf, 0, 8 * 4);
-
-   surf[0] = BRW_SURFACE_BUFFER << BRW_SURFACE_TYPE_SHIFT |
-             BRW_SURFACEFORMAT_R32G32B32A32_FLOAT << BRW_SURFACE_FORMAT_SHIFT |
-             BRW_SURFACE_RC_READ_WRITE;
-
-   assert(bo);
-   surf[1] = bo->offset + offset; /* reloc */
-
-   /* note that these differ from GEN6 */
-   surf[2] = SET_FIELD(w & 0x7f, GEN7_SURFACE_WIDTH) |
-             SET_FIELD((w >> 7) & 0x3fff, GEN7_SURFACE_HEIGHT);
-   surf[3] = SET_FIELD((w >> 21) & 0x3f, BRW_SURFACE_DEPTH) |
-             (stride - 1);
-
-   if (brw->is_haswell) {
-      surf[7] = SET_FIELD(HSW_SCS_RED,   GEN7_SURFACE_SCS_R) |
-                SET_FIELD(HSW_SCS_GREEN, GEN7_SURFACE_SCS_G) |
-                SET_FIELD(HSW_SCS_BLUE,  GEN7_SURFACE_SCS_B) |
-                SET_FIELD(HSW_SCS_ALPHA, GEN7_SURFACE_SCS_A);
-   }
-
-   drm_intel_bo_emit_reloc(brw->batch.bo,
-			   *out_offset + 4,
-			   bo, offset,
-			   I915_GEM_DOMAIN_SAMPLER, 0);
-
-   gen7_check_surface_setup(surf, false /* is_render_target */);
+   gen7_emit_buffer_surface_state(brw,
+                                  out_offset,
+                                  bo,
+                                  offset,
+                                  BRW_SURFACEFORMAT_R32G32B32A32_FLOAT,
+                                  elements,
+                                  stride,
+                                  0 /* mocs */);
 }
 
 /**
@@ -413,34 +413,14 @@ gen7_create_constant_surface(struct brw_context *brw,
 void
 gen7_create_shader_time_surface(struct brw_context *brw, uint32_t *out_offset)
 {
-   const int w = brw->shader_time.bo->size - 1;
-
-   uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
-                                    8 * 4, 32, out_offset);
-   memset(surf, 0, 8 * 4);
-
-   surf[0] = BRW_SURFACE_BUFFER << BRW_SURFACE_TYPE_SHIFT |
-             BRW_SURFACEFORMAT_RAW << BRW_SURFACE_FORMAT_SHIFT |
-             BRW_SURFACE_RC_READ_WRITE;
-
-   surf[1] = brw->shader_time.bo->offset; /* reloc */
-
-   /* note that these differ from GEN6 */
-   surf[2] = SET_FIELD(w & 0x7f, GEN7_SURFACE_WIDTH) |
-             SET_FIELD((w >> 7) & 0x3fff, GEN7_SURFACE_HEIGHT);
-   surf[3] = SET_FIELD((w >> 21) & 0x3f, BRW_SURFACE_DEPTH);
-
-   /* Unlike texture or renderbuffer surfaces, we only do untyped operations
-    * on the shader_time surface, so there's no need to set HSW channel
-    * overrides.
-    */
-
-   drm_intel_bo_emit_reloc(brw->batch.bo,
-                           *out_offset + 4,
-                           brw->shader_time.bo, 0,
-                           I915_GEM_DOMAIN_SAMPLER, 0);
-
-   gen7_check_surface_setup(surf, false /* is_render_target */);
+   gen7_emit_buffer_surface_state(brw,
+                                  out_offset,
+                                  brw->shader_time.bo,
+                                  0,
+                                  BRW_SURFACEFORMAT_RAW,
+                                  brw->shader_time.bo->size,
+                                  1,
+                                  0 /* mocs */);
 }
 
 static void
@@ -467,7 +447,7 @@ gen7_update_null_renderbuffer_surface(struct brw_context *brw, unsigned unit)
    const struct gl_framebuffer *fb = ctx->DrawBuffer;
 
    uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE, 8 * 4, 32,
-                                    &brw->wm.surf_offset[SURF_INDEX_DRAW(unit)]);
+                                    &brw->wm.base.surf_offset[SURF_INDEX_DRAW(unit)]);
    memset(surf, 0, 8 * 4);
 
    /* From the Ivybridge PRM, Volume 4, Part 1, page 65,
@@ -512,7 +492,7 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
    uint32_t surf_index = SURF_INDEX_DRAW(unit);
 
    uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE, 8 * 4, 32,
-                                    &brw->wm.surf_offset[surf_index]);
+                                    &brw->wm.base.surf_offset[surf_index]);
    memset(surf, 0, 8 * 4);
 
    intel_miptree_used_for_rendering(irb->mt);
@@ -581,7 +561,7 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
              (depth - 1) << GEN7_SURFACE_RENDER_TARGET_VIEW_EXTENT_SHIFT;
 
    if (irb->mt->mcs_mt) {
-      gen7_set_surface_mcs_info(brw, surf, brw->wm.surf_offset[surf_index],
+      gen7_set_surface_mcs_info(brw, surf, brw->wm.base.surf_offset[surf_index],
                                 irb->mt->mcs_mt, true /* is RT */);
    }
 
@@ -595,7 +575,7 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
    }
 
    drm_intel_bo_emit_reloc(brw->batch.bo,
-			   brw->wm.surf_offset[surf_index] + 4,
+			   brw->wm.base.surf_offset[surf_index] + 4,
 			   region->bo,
 			   surf[1] - region->bo->offset,
 			   I915_GEM_DOMAIN_RENDER,

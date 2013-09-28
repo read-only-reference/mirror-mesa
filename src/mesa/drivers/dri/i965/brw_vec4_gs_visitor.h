@@ -33,26 +33,43 @@
 #include "brw_vec4.h"
 
 
-struct brw_vec4_gs_prog_key
+struct brw_gs_prog_key
 {
    struct brw_vec4_prog_key base;
 
-   struct brw_vue_map input_vue_map;
+   GLbitfield64 input_varyings;
 };
 
 
 /**
  * Scratch data used when compiling a GLSL geometry shader.
  */
-struct brw_vec4_gs_compile
+struct brw_gs_compile
 {
    struct brw_vec4_compile base;
-   struct brw_vec4_gs_prog_key key;
-   struct brw_vec4_gs_prog_data prog_data;
+   struct brw_gs_prog_key key;
+   struct brw_gs_prog_data prog_data;
+   struct brw_vue_map input_vue_map;
 
    struct brw_geometry_program *gp;
+
+   unsigned control_data_bits_per_vertex;
+   unsigned control_data_header_size_bits;
 };
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+const unsigned *brw_gs_emit(struct brw_context *brw,
+                            struct gl_shader_program *prog,
+                            struct brw_gs_compile *c,
+                            void *mem_ctx,
+                            unsigned *final_assembly_size);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #ifdef __cplusplus
 namespace brw {
@@ -61,7 +78,7 @@ class vec4_gs_visitor : public vec4_visitor
 {
 public:
    vec4_gs_visitor(struct brw_context *brw,
-                   struct brw_vec4_gs_compile *c,
+                   struct brw_gs_compile *c,
                    struct gl_shader_program *prog,
                    struct brw_shader *shader,
                    void *mem_ctx);
@@ -80,9 +97,11 @@ protected:
 
 private:
    int setup_varying_inputs(int payload_reg, int *attribute_map);
+   void emit_control_data_bits();
 
    src_reg vertex_count;
-   const struct brw_vec4_gs_compile * const c;
+   src_reg control_data_bits;
+   const struct brw_gs_compile * const c;
 };
 
 } /* namespace brw */

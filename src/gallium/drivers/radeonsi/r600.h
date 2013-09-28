@@ -32,16 +32,7 @@
 
 #include "radeonsi_resource.h"
 
-#define R600_ERR(fmt, args...) \
-	fprintf(stderr, "EE %s:%d %s - "fmt, __FILE__, __LINE__, __func__, ##args)
-
 struct winsys_handle;
-
-struct r600_tiling_info {
-	unsigned num_channels;
-	unsigned num_banks;
-	unsigned group_bytes;
-};
 
 /* R600/R700 STATES */
 struct r600_query {
@@ -74,6 +65,7 @@ struct r600_screen;
 
 void si_get_backend_mask(struct r600_context *ctx);
 void si_context_flush(struct r600_context *ctx, unsigned flags);
+void si_begin_new_cs(struct r600_context *ctx);
 
 struct r600_query *r600_context_query_create(struct r600_context *ctx, unsigned query_type);
 void r600_context_query_destroy(struct r600_context *ctx, struct r600_query *query);

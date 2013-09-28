@@ -81,8 +81,8 @@ brw_destroy_context(struct brw_context *brw)
    brw_draw_destroy( brw );
 
    dri_bo_release(&brw->curbe.curbe_bo);
-   dri_bo_release(&brw->vs.const_bo);
-   dri_bo_release(&brw->wm.const_bo);
+   dri_bo_release(&brw->vs.base.const_bo);
+   dri_bo_release(&brw->wm.base.const_bo);
 
    free(brw->curbe.last_buf);
    free(brw->curbe.next_buf);

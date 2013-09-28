@@ -51,6 +51,7 @@ vlVdpDecoderCreate(VdpDevice device,
    vlVdpDecoder *vldecoder;
    VdpStatus ret;
    bool supported;
+   uint32_t maxwidth, maxheight;
 
    if (!decoder)
       return VDP_STATUS_INVALID_POINTER;
@@ -84,6 +85,25 @@ vlVdpDecoderCreate(VdpDevice device,
       return VDP_STATUS_INVALID_DECODER_PROFILE;
    }
 
+   maxwidth = screen->get_video_param
+   (
+      screen,
+      templat.profile,
+      PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+      PIPE_VIDEO_CAP_MAX_WIDTH
+   );
+   maxheight = screen->get_video_param
+   (
+      screen,
+      templat.profile,
+      PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+      PIPE_VIDEO_CAP_MAX_HEIGHT
+   );
+   if (width > maxwidth || height > maxheight) {
+      pipe_mutex_unlock(dev->mutex);
+      return VDP_STATUS_INVALID_SIZE;
+   }
+
    vldecoder = CALLOC(1,sizeof(vlVdpDecoder));
    if (!vldecoder) {
       pipe_mutex_unlock(dev->mutex);
@@ -110,6 +130,8 @@ vlVdpDecoderCreate(VdpDevice device,
       ret = VDP_STATUS_ERROR;
       goto error_handle;
    }
+
+   pipe_mutex_init(vldecoder->mutex);
    pipe_mutex_unlock(dev->mutex);
 
    return VDP_STATUS_OK;
@@ -135,9 +157,10 @@ vlVdpDecoderDestroy(VdpDecoder decoder)
    if (!vldecoder)
       return VDP_STATUS_INVALID_HANDLE;
 
-   pipe_mutex_lock(vldecoder->device->mutex);
+   pipe_mutex_lock(vldecoder->mutex);
    vldecoder->decoder->destroy(vldecoder->decoder);
-   pipe_mutex_unlock(vldecoder->device->mutex);
+   pipe_mutex_unlock(vldecoder->mutex);
+   pipe_mutex_destroy(vldecoder->mutex);
 
    vlRemoveDataHTAB(decoder);
    FREE(vldecoder);
@@ -390,14 +413,13 @@ vlVdpDecoderFixVC1Startcode(uint32_t *num_buffers, const void *buffers[], unsign
 
    /* search the first 64 bytes for a startcode */
    vl_vlc_init(&vlc, *num_buffers, buffers, sizes);
-   for (i = 0; i < 64 && vl_vlc_bits_left(&vlc) >= 32; ++i) {
+   while (vl_vlc_search_byte(&vlc, 64*8, 0x00) && vl_vlc_bits_left(&vlc) >= 32) {
       uint32_t value = vl_vlc_peekbits(&vlc, 32);
       if (value == 0x0000010D ||
           value == 0x0000010C ||
           value == 0x0000010B)
          return;
       vl_vlc_eatbits(&vlc, 8);
-      vl_vlc_fillbits(&vlc);
    }
 
    /* none found, ok add one manually */
@@ -458,8 +480,6 @@ vlVdpDecoderRender(VdpDecoder decoder,
       // TODO: Recreate decoder with correct chroma
       return VDP_STATUS_INVALID_CHROMA_TYPE;
 
-   pipe_mutex_lock(vlsurf->device->mutex);
-
    buffer_support[0] = screen->get_video_param(screen, dec->profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
                                                PIPE_VIDEO_CAP_SUPPORTS_PROGRESSIVE);
    buffer_support[1] = screen->get_video_param(screen, dec->profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
@@ -469,6 +489,8 @@ vlVdpDecoderRender(VdpDecoder decoder,
        !screen->is_video_format_supported(screen, vlsurf->video_buffer->buffer_format,
                                           dec->profile, PIPE_VIDEO_ENTRYPOINT_BITSTREAM) ||
        !buffer_support[vlsurf->video_buffer->interlaced]) {
+
+      pipe_mutex_lock(vlsurf->device->mutex);
 
       /* destroy the old one */
       if (vlsurf->video_buffer)
@@ -491,6 +513,7 @@ vlVdpDecoderRender(VdpDecoder decoder,
          return VDP_STATUS_NO_IMPLEMENTATION;
       }
       vlVdpVideoSurfaceClear(vlsurf);
+      pipe_mutex_unlock(vlsurf->device->mutex);
    }
 
    for (i = 0; i < bitstream_buffer_count; ++i) {
@@ -516,18 +539,16 @@ vlVdpDecoderRender(VdpDecoder decoder,
       ret = vlVdpDecoderRenderH264(&desc.h264, (VdpPictureInfoH264 *)picture_info);
       break;
    default:
-      pipe_mutex_unlock(vlsurf->device->mutex);
       return VDP_STATUS_INVALID_DECODER_PROFILE;
    }
 
-   if (ret != VDP_STATUS_OK) {
-      pipe_mutex_unlock(vlsurf->device->mutex);
+   if (ret != VDP_STATUS_OK)
       return ret;
-   }
 
+   pipe_mutex_lock(vldecoder->mutex);
    dec->begin_frame(dec, vlsurf->video_buffer, &desc.base);
    dec->decode_bitstream(dec, vlsurf->video_buffer, &desc.base, bitstream_buffer_count, buffers, sizes);
    dec->end_frame(dec, vlsurf->video_buffer, &desc.base);
-   pipe_mutex_unlock(vlsurf->device->mutex);
+   pipe_mutex_unlock(vldecoder->mutex);
    return ret;
 }

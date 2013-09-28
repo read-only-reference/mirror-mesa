@@ -299,14 +299,6 @@ _mesa_glsl_parse_state::process_version_directive(YYLTYPE *locp, int version,
 	 break;
       }
    }
-
-   if (this->language_version >= 140) {
-      this->ARB_uniform_buffer_object_enable = true;
-   }
-
-   if (this->language_version == 300 && this->es_shader) {
-      this->ARB_explicit_attrib_location_enable = true;
-   }
 }
 
 extern "C" {
@@ -517,6 +509,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(ARB_texture_query_lod,          true,  false,     ARB_texture_query_lod),
    EXT(ARB_gpu_shader5,                true,  false,     ARB_gpu_shader5),
    EXT(AMD_vertex_shader_layer,        true,  false,     AMD_vertex_shader_layer),
+   EXT(EXT_shader_integer_mix,         true,  true,      EXT_shader_integer_mix),
 };
 
 #undef EXT
@@ -1625,7 +1618,7 @@ _mesa_destroy_shader_compiler(void)
 void
 _mesa_destroy_shader_compiler_caches(void)
 {
-   _mesa_glsl_release_functions();
+   _mesa_glsl_release_builtin_functions();
 }
 
 }

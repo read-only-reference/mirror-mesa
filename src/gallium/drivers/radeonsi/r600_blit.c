@@ -64,8 +64,8 @@ static void r600_blitter_begin(struct pipe_context *ctx, enum r600_blitter_op op
 		util_blitter_save_viewport(rctx->blitter, &rctx->queued.named.viewport->viewport);
 	}
 	util_blitter_save_vertex_buffer_slot(rctx->blitter, rctx->vertex_buffer);
-	util_blitter_save_so_targets(rctx->blitter, rctx->num_so_targets,
-				     (struct pipe_stream_output_target**)rctx->so_targets);
+	util_blitter_save_so_targets(rctx->blitter, rctx->b.streamout.num_targets,
+				     (struct pipe_stream_output_target**)rctx->b.streamout.targets);
 
 	if (op & R600_SAVE_FRAMEBUFFER)
 		util_blitter_save_framebuffer(rctx->blitter, &rctx->framebuffer);
@@ -76,7 +76,8 @@ static void r600_blitter_begin(struct pipe_context *ctx, enum r600_blitter_op op
 			(void**)rctx->samplers[PIPE_SHADER_FRAGMENT].samplers);
 
 		util_blitter_save_fragment_sampler_views(rctx->blitter,
-			util_last_bit(rctx->samplers[PIPE_SHADER_FRAGMENT].views.desc.enabled_mask),
+			util_last_bit(rctx->samplers[PIPE_SHADER_FRAGMENT].views.desc.enabled_mask &
+				      ((1 << NUM_TEX_UNITS) - 1)),
 			rctx->samplers[PIPE_SHADER_FRAGMENT].views.views);
 	}
 
@@ -107,12 +108,12 @@ static unsigned u_max_sample(struct pipe_resource *r)
 	return r->nr_samples ? r->nr_samples - 1 : 0;
 }
 
-void r600_blit_decompress_depth(struct pipe_context *ctx,
-		struct r600_texture *texture,
-		struct r600_texture *staging,
-		unsigned first_level, unsigned last_level,
-		unsigned first_layer, unsigned last_layer,
-		unsigned first_sample, unsigned last_sample)
+static void r600_blit_decompress_depth(struct pipe_context *ctx,
+				       struct r600_texture *texture,
+				       struct r600_texture *staging,
+				       unsigned first_level, unsigned last_level,
+				       unsigned first_layer, unsigned last_layer,
+				       unsigned first_sample, unsigned last_sample)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	unsigned layer, level, sample, checked_last_layer, max_layer, max_sample;
@@ -429,6 +430,21 @@ static void r600_compressed_to_blittable(struct pipe_resource *tex,
 	rtex->surface.level[0].npix_y = util_format_get_nblocksy(orig->format, orig->npix0_y);
 	rtex->surface.level[level].npix_x = util_format_get_nblocksx(orig->format, orig->npix_x);
 	rtex->surface.level[level].npix_y = util_format_get_nblocksy(orig->format, orig->npix_y);
+
+	/* By dividing the dimensions by 4, we effectively decrement
+	 * last_level by 2, therefore the last 2 mipmap levels disappear and
+	 * aren't blittable. Note that the last 3 mipmap levels (4x4, 2x2,
+	 * 1x1) have equal slice sizes, which is an important assumption
+	 * for this to work.
+	 *
+	 * In order to make the last 2 mipmap levels blittable, we have to
+	 * add the slice size of the last mipmap level to the texture
+	 * address, so that even though the hw thinks it reads last_level-2,
+	 * it will actually read last_level-1, and if we add the slice size*2,
+	 * it will read last_level. That's how this workaround works.
+	 */
+	if (level > rtex->resource.b.b.last_level-2)
+		rtex->mipmap_shift = level - (rtex->resource.b.b.last_level-2);
 }
 
 static void r600_change_format(struct pipe_resource *tex,
@@ -462,6 +478,7 @@ static void r600_reset_blittable_to_orig(struct pipe_resource *tex,
 	rtex->surface.level[0].npix_y = orig->npix0_y;
 	rtex->surface.level[level].npix_x = orig->npix_x;
 	rtex->surface.level[level].npix_y = orig->npix_y;
+	rtex->mipmap_shift = 0;
 }
 
 static void r600_resource_copy_region(struct pipe_context *ctx,
@@ -719,6 +736,11 @@ static void si_blit(struct pipe_context *ctx,
 	r600_blitter_end(ctx);
 }
 
+static void si_flush_resource(struct pipe_context *ctx,
+			      struct pipe_resource *resource)
+{
+}
+
 void si_init_blit_functions(struct r600_context *rctx)
 {
 	rctx->b.b.clear = r600_clear;
@@ -726,4 +748,6 @@ void si_init_blit_functions(struct r600_context *rctx)
 	rctx->b.b.clear_depth_stencil = r600_clear_depth_stencil;
 	rctx->b.b.resource_copy_region = r600_resource_copy_region;
 	rctx->b.b.blit = si_blit;
+	rctx->b.b.flush_resource = si_flush_resource;
+	rctx->b.blit_decompress_depth = r600_blit_decompress_depth;
 }

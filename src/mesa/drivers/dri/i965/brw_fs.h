@@ -57,17 +57,7 @@ namespace {
 
 class fs_reg {
 public:
-   /* Callers of this ralloc-based new need not call delete. It's
-    * easier to just ralloc_free 'ctx' (or any of its ancestors). */
-   static void* operator new(size_t size, void *ctx)
-   {
-      void *node;
-
-      node = ralloc_size(ctx, size);
-      assert(node != NULL);
-
-      return node;
-   }
+   DECLARE_RALLOC_CXX_OPERATORS(fs_reg)
 
    void init();
 
@@ -122,15 +112,7 @@ static const fs_reg reg_null_d(ARF, BRW_ARF_NULL, BRW_REGISTER_TYPE_D);
 
 class ip_record : public exec_node {
 public:
-   static void* operator new(size_t size, void *ctx)
-   {
-      void *node;
-
-      node = rzalloc_size(ctx, size);
-      assert(node != NULL);
-
-      return node;
-   }
+   DECLARE_RZALLOC_CXX_OPERATORS(ip_record)
 
    ip_record(int ip)
    {
@@ -142,17 +124,7 @@ public:
 
 class fs_inst : public backend_instruction {
 public:
-   /* Callers of this ralloc-based new need not call delete. It's
-    * easier to just ralloc_free 'ctx' (or any of its ancestors). */
-   static void* operator new(size_t size, void *ctx)
-   {
-      void *node;
-
-      node = rzalloc_size(ctx, size);
-      assert(node != NULL);
-
-      return node;
-   }
+   DECLARE_RZALLOC_CXX_OPERATORS(fs_inst)
 
    void init();
 
@@ -454,7 +426,6 @@ public:
    int first_non_payload_grf;
    /** Either BRW_MAX_GRF or GEN7_MRF_HACK_START */
    int max_grf;
-   int urb_setup[VARYING_SLOT_MAX];
 
    fs_reg *fp_temp_regs;
    fs_reg *fp_input_regs;

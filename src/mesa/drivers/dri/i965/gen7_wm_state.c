@@ -119,54 +119,30 @@ upload_ps_state(struct brw_context *brw)
    /* BRW_NEW_PS_BINDING_TABLE */
    BEGIN_BATCH(2);
    OUT_BATCH(_3DSTATE_BINDING_TABLE_POINTERS_PS << 16 | (2 - 2));
-   OUT_BATCH(brw->wm.bind_bo_offset);
+   OUT_BATCH(brw->wm.base.bind_bo_offset);
    ADVANCE_BATCH();
 
    /* CACHE_NEW_SAMPLER */
    BEGIN_BATCH(2);
    OUT_BATCH(_3DSTATE_SAMPLER_STATE_POINTERS_PS << 16 | (2 - 2));
-   OUT_BATCH(brw->wm.sampler_offset);
+   OUT_BATCH(brw->wm.base.sampler_offset);
    ADVANCE_BATCH();
 
    /* CACHE_NEW_WM_PROG */
-   if (brw->wm.prog_data->nr_params == 0) {
-      /* Disable the push constant buffers. */
-      BEGIN_BATCH(7);
-      OUT_BATCH(_3DSTATE_CONSTANT_PS << 16 | (7 - 2));
-      OUT_BATCH(0);
-      OUT_BATCH(0);
-      OUT_BATCH(0);
-      OUT_BATCH(0);
-      OUT_BATCH(0);
-      OUT_BATCH(0);
-      ADVANCE_BATCH();
-   } else {
-      BEGIN_BATCH(7);
-      OUT_BATCH(_3DSTATE_CONSTANT_PS << 16 | (7 - 2));
-
-      OUT_BATCH(ALIGN(brw->wm.prog_data->nr_params,
-		      brw->wm.prog_data->dispatch_width) / 8);
-      OUT_BATCH(0);
-      /* Pointer to the WM constant buffer.  Covered by the set of
-       * state flags from gen6_upload_wm_push_constants.
-       */
-      OUT_BATCH(brw->wm.push_const_offset | GEN7_MOCS_L3);
-      OUT_BATCH(0);
-      OUT_BATCH(0);
-      OUT_BATCH(0);
-      ADVANCE_BATCH();
-   }
+   gen7_upload_constant_state(brw, &brw->wm.base, true, _3DSTATE_CONSTANT_PS);
 
    dw2 = dw4 = dw5 = 0;
 
    /* CACHE_NEW_SAMPLER */
-   dw2 |= (ALIGN(brw->wm.sampler_count, 4) / 4) << GEN7_PS_SAMPLER_COUNT_SHIFT;
+   dw2 |=
+      (ALIGN(brw->wm.base.sampler_count, 4) / 4) << GEN7_PS_SAMPLER_COUNT_SHIFT;
 
    /* Use ALT floating point mode for ARB fragment programs, because they
     * require 0^0 == 1.  Even though _CurrentFragmentProgram is used for
     * rendering, CurrentFragmentProgram is used for this check to
     * differentiate between the GLSL and non-GLSL cases.
     */
+   /* BRW_NEW_FRAGMENT_PROGRAM */
    if (ctx->Shader.CurrentFragmentProgram == NULL)
       dw2 |= GEN7_PS_FLOATING_POINT_MODE_ALT;
 
@@ -190,8 +166,8 @@ upload_ps_state(struct brw_context *brw)
       dw4 |= GEN7_PS_DUAL_SOURCE_BLEND_ENABLE;
    }
 
-   /* BRW_NEW_FRAGMENT_PROGRAM */
-   if (brw->fragment_program->Base.InputsRead != 0)
+   /* CACHE_NEW_WM_PROG */
+   if (brw->wm.prog_data->num_varying_inputs != 0)
       dw4 |= GEN7_PS_ATTRIBUTE_ENABLE;
 
    dw4 |= GEN7_PS_8_DISPATCH_ENABLE;
@@ -205,10 +181,10 @@ upload_ps_state(struct brw_context *brw)
 
    BEGIN_BATCH(8);
    OUT_BATCH(_3DSTATE_PS << 16 | (8 - 2));
-   OUT_BATCH(brw->wm.prog_offset);
+   OUT_BATCH(brw->wm.base.prog_offset);
    OUT_BATCH(dw2);
    if (brw->wm.prog_data->total_scratch) {
-      OUT_RELOC(brw->wm.scratch_bo,
+      OUT_RELOC(brw->wm.base.scratch_bo,
 		I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
 		ffs(brw->wm.prog_data->total_scratch) - 11);
    } else {
@@ -217,7 +193,7 @@ upload_ps_state(struct brw_context *brw)
    OUT_BATCH(dw4);
    OUT_BATCH(dw5);
    OUT_BATCH(0); /* kernel 1 pointer */
-   OUT_BATCH(brw->wm.prog_offset + brw->wm.prog_data->prog_offset_16);
+   OUT_BATCH(brw->wm.base.prog_offset + brw->wm.prog_data->prog_offset_16);
    ADVANCE_BATCH();
 }
 
@@ -227,7 +203,8 @@ const struct brw_tracked_state gen7_ps_state = {
 		_NEW_COLOR),
       .brw   = (BRW_NEW_FRAGMENT_PROGRAM |
 		BRW_NEW_PS_BINDING_TABLE |
-		BRW_NEW_BATCH),
+		BRW_NEW_BATCH |
+                BRW_NEW_PUSH_CONSTANT_ALLOCATION),
       .cache = (CACHE_NEW_SAMPLER |
 		CACHE_NEW_WM_PROG)
    },

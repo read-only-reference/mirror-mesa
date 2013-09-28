@@ -552,6 +552,7 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 		S_028810_PS_UCP_MODE(3) |
 		S_028810_ZCLIP_NEAR_DISABLE(!state->depth_clip) |
 		S_028810_ZCLIP_FAR_DISABLE(!state->depth_clip) |
+		S_028810_DX_RASTERIZATION_KILL(state->rasterizer_discard) |
 		S_028810_DX_LINEAR_ATTR_CLIP_ENA(1);
 
 	clip_rule = state->scissor ? 0xAAAA : 0xFFFF;
@@ -822,366 +823,124 @@ static void *si_create_db_flush_dsa(struct r600_context *rctx, bool copy_depth,
  */
 static uint32_t si_translate_colorformat(enum pipe_format format)
 {
-	switch (format) {
-	/* 8-bit buffers. */
-	case PIPE_FORMAT_A8_UNORM:
-	case PIPE_FORMAT_A8_SNORM:
-	case PIPE_FORMAT_A8_UINT:
-	case PIPE_FORMAT_A8_SINT:
-	case PIPE_FORMAT_I8_UNORM:
-	case PIPE_FORMAT_I8_SNORM:
-	case PIPE_FORMAT_I8_UINT:
-	case PIPE_FORMAT_I8_SINT:
-	case PIPE_FORMAT_L8_UNORM:
-	case PIPE_FORMAT_L8_SNORM:
-	case PIPE_FORMAT_L8_UINT:
-	case PIPE_FORMAT_L8_SINT:
-	case PIPE_FORMAT_L8_SRGB:
-	case PIPE_FORMAT_R8_UNORM:
-	case PIPE_FORMAT_R8_SNORM:
-	case PIPE_FORMAT_R8_UINT:
-	case PIPE_FORMAT_R8_SINT:
-		return V_028C70_COLOR_8;
+	const struct util_format_description *desc = util_format_description(format);
 
-	/* 16-bit buffers. */
-	case PIPE_FORMAT_B5G6R5_UNORM:
-		return V_028C70_COLOR_5_6_5;
+#define HAS_SIZE(x,y,z,w) \
+	(desc->channel[0].size == (x) && desc->channel[1].size == (y) && \
+         desc->channel[2].size == (z) && desc->channel[3].size == (w))
 
-	case PIPE_FORMAT_B5G5R5A1_UNORM:
-	case PIPE_FORMAT_B5G5R5X1_UNORM:
-		return V_028C70_COLOR_1_5_5_5;
-
-	case PIPE_FORMAT_B4G4R4A4_UNORM:
-	case PIPE_FORMAT_B4G4R4X4_UNORM:
-		return V_028C70_COLOR_4_4_4_4;
-
-	case PIPE_FORMAT_L8A8_UNORM:
-	case PIPE_FORMAT_L8A8_SNORM:
-	case PIPE_FORMAT_L8A8_UINT:
-	case PIPE_FORMAT_L8A8_SINT:
-	case PIPE_FORMAT_R8G8_SNORM:
-	case PIPE_FORMAT_R8G8_UNORM:
-	case PIPE_FORMAT_R8G8_UINT:
-	case PIPE_FORMAT_R8G8_SINT:
-		return V_028C70_COLOR_8_8;
-
-	case PIPE_FORMAT_Z16_UNORM:
-	case PIPE_FORMAT_R16_UNORM:
-	case PIPE_FORMAT_R16_SNORM:
-	case PIPE_FORMAT_R16_UINT:
-	case PIPE_FORMAT_R16_SINT:
-	case PIPE_FORMAT_R16_FLOAT:
-	case PIPE_FORMAT_L16_UNORM:
-	case PIPE_FORMAT_L16_SNORM:
-	case PIPE_FORMAT_L16_FLOAT:
-	case PIPE_FORMAT_I16_UNORM:
-	case PIPE_FORMAT_I16_SNORM:
-	case PIPE_FORMAT_I16_FLOAT:
-	case PIPE_FORMAT_A16_UNORM:
-	case PIPE_FORMAT_A16_SNORM:
-	case PIPE_FORMAT_A16_FLOAT:
-		return V_028C70_COLOR_16;
-
-	/* 32-bit buffers. */
-	case PIPE_FORMAT_A8B8G8R8_SRGB:
-	case PIPE_FORMAT_A8B8G8R8_UNORM:
-	case PIPE_FORMAT_A8R8G8B8_UNORM:
-	case PIPE_FORMAT_B8G8R8A8_SRGB:
-	case PIPE_FORMAT_B8G8R8A8_UNORM:
-	case PIPE_FORMAT_B8G8R8X8_UNORM:
-	case PIPE_FORMAT_R8G8B8A8_SNORM:
-	case PIPE_FORMAT_R8G8B8A8_UNORM:
-	case PIPE_FORMAT_R8G8B8X8_UNORM:
-	case PIPE_FORMAT_R8G8B8X8_SNORM:
-	case PIPE_FORMAT_R8G8B8X8_SRGB:
-	case PIPE_FORMAT_R8G8B8X8_UINT:
-	case PIPE_FORMAT_R8G8B8X8_SINT:
-	case PIPE_FORMAT_R8SG8SB8UX8U_NORM:
-	case PIPE_FORMAT_X8B8G8R8_UNORM:
-	case PIPE_FORMAT_X8R8G8B8_UNORM:
-	case PIPE_FORMAT_R8G8B8A8_SSCALED:
-	case PIPE_FORMAT_R8G8B8A8_USCALED:
-	case PIPE_FORMAT_R8G8B8A8_SINT:
-	case PIPE_FORMAT_R8G8B8A8_UINT:
-		return V_028C70_COLOR_8_8_8_8;
-
-	case PIPE_FORMAT_R10G10B10A2_UNORM:
-	case PIPE_FORMAT_R10G10B10X2_SNORM:
-	case PIPE_FORMAT_B10G10R10A2_UNORM:
-	case PIPE_FORMAT_B10G10R10A2_UINT:
-	case PIPE_FORMAT_B10G10R10X2_UNORM:
-	case PIPE_FORMAT_R10SG10SB10SA2U_NORM:
-		return V_028C70_COLOR_2_10_10_10;
-
-	case PIPE_FORMAT_Z24X8_UNORM:
-	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
-		return V_028C70_COLOR_8_24;
-
-	case PIPE_FORMAT_S8X24_UINT:
-	case PIPE_FORMAT_X8Z24_UNORM:
-	case PIPE_FORMAT_S8_UINT_Z24_UNORM:
-		return V_028C70_COLOR_24_8;
-
-	case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
-		return V_028C70_COLOR_X24_8_32_FLOAT;
-
-	case PIPE_FORMAT_I32_FLOAT:
-	case PIPE_FORMAT_L32_FLOAT:
-	case PIPE_FORMAT_R32_FLOAT:
-	case PIPE_FORMAT_A32_FLOAT:
-	case PIPE_FORMAT_Z32_FLOAT:
-		return V_028C70_COLOR_32;
-
-	case PIPE_FORMAT_L16A16_UNORM:
-	case PIPE_FORMAT_L16A16_SNORM:
-	case PIPE_FORMAT_L16A16_FLOAT:
-	case PIPE_FORMAT_R16G16_SSCALED:
-	case PIPE_FORMAT_R16G16_UNORM:
-	case PIPE_FORMAT_R16G16_SNORM:
-	case PIPE_FORMAT_R16G16_UINT:
-	case PIPE_FORMAT_R16G16_SINT:
-	case PIPE_FORMAT_R16G16_FLOAT:
-		return V_028C70_COLOR_16_16;
-
-	case PIPE_FORMAT_R11G11B10_FLOAT:
+	if (format == PIPE_FORMAT_R11G11B10_FLOAT) /* isn't plain */
 		return V_028C70_COLOR_10_11_11;
 
-	/* 64-bit buffers. */
-	case PIPE_FORMAT_R16G16B16A16_UINT:
-	case PIPE_FORMAT_R16G16B16A16_SINT:
-	case PIPE_FORMAT_R16G16B16A16_USCALED:
-	case PIPE_FORMAT_R16G16B16A16_SSCALED:
-	case PIPE_FORMAT_R16G16B16A16_UNORM:
-	case PIPE_FORMAT_R16G16B16A16_SNORM:
-	case PIPE_FORMAT_R16G16B16A16_FLOAT:
-	case PIPE_FORMAT_R16G16B16X16_UNORM:
-	case PIPE_FORMAT_R16G16B16X16_SNORM:
-	case PIPE_FORMAT_R16G16B16X16_FLOAT:
-	case PIPE_FORMAT_R16G16B16X16_UINT:
-	case PIPE_FORMAT_R16G16B16X16_SINT:
-		return V_028C70_COLOR_16_16_16_16;
+	if (desc->layout != UTIL_FORMAT_LAYOUT_PLAIN)
+		return V_028C70_COLOR_INVALID;
 
-	case PIPE_FORMAT_L32A32_FLOAT:
-	case PIPE_FORMAT_L32A32_UINT:
-	case PIPE_FORMAT_L32A32_SINT:
-	case PIPE_FORMAT_R32G32_FLOAT:
-	case PIPE_FORMAT_R32G32_USCALED:
-	case PIPE_FORMAT_R32G32_SSCALED:
-	case PIPE_FORMAT_R32G32_SINT:
-	case PIPE_FORMAT_R32G32_UINT:
-		return V_028C70_COLOR_32_32;
-
-	/* 128-bit buffers. */
-	case PIPE_FORMAT_R32G32B32A32_SNORM:
-	case PIPE_FORMAT_R32G32B32A32_UNORM:
-	case PIPE_FORMAT_R32G32B32A32_SSCALED:
-	case PIPE_FORMAT_R32G32B32A32_USCALED:
-	case PIPE_FORMAT_R32G32B32A32_SINT:
-	case PIPE_FORMAT_R32G32B32A32_UINT:
-	case PIPE_FORMAT_R32G32B32A32_FLOAT:
-	case PIPE_FORMAT_R32G32B32X32_FLOAT:
-	case PIPE_FORMAT_R32G32B32X32_UINT:
-	case PIPE_FORMAT_R32G32B32X32_SINT:
-		return V_028C70_COLOR_32_32_32_32;
-
-	/* YUV buffers. */
-	case PIPE_FORMAT_UYVY:
-	case PIPE_FORMAT_YUYV:
-	/* 96-bit buffers. */
-	case PIPE_FORMAT_R32G32B32_FLOAT:
-	/* 8-bit buffers. */
-	case PIPE_FORMAT_L4A4_UNORM:
-	case PIPE_FORMAT_R4A4_UNORM:
-	case PIPE_FORMAT_A4R4_UNORM:
-	default:
-		return V_028C70_COLOR_INVALID; /* Unsupported. */
+	switch (desc->nr_channels) {
+	case 1:
+		switch (desc->channel[0].size) {
+		case 8:
+			return V_028C70_COLOR_8;
+		case 16:
+			return V_028C70_COLOR_16;
+		case 32:
+			return V_028C70_COLOR_32;
+		}
+		break;
+	case 2:
+		if (desc->channel[0].size == desc->channel[1].size) {
+			switch (desc->channel[0].size) {
+			case 8:
+				return V_028C70_COLOR_8_8;
+			case 16:
+				return V_028C70_COLOR_16_16;
+			case 32:
+				return V_028C70_COLOR_32_32;
+			}
+		} else if (HAS_SIZE(8,24,0,0)) {
+			return V_028C70_COLOR_24_8;
+		} else if (HAS_SIZE(24,8,0,0)) {
+			return V_028C70_COLOR_8_24;
+		}
+		break;
+	case 3:
+		if (HAS_SIZE(5,6,5,0)) {
+			return V_028C70_COLOR_5_6_5;
+		} else if (HAS_SIZE(32,8,24,0)) {
+			return V_028C70_COLOR_X24_8_32_FLOAT;
+		}
+		break;
+	case 4:
+		if (desc->channel[0].size == desc->channel[1].size &&
+		    desc->channel[0].size == desc->channel[2].size &&
+		    desc->channel[0].size == desc->channel[3].size) {
+			switch (desc->channel[0].size) {
+			case 4:
+				return V_028C70_COLOR_4_4_4_4;
+			case 8:
+				return V_028C70_COLOR_8_8_8_8;
+			case 16:
+				return V_028C70_COLOR_16_16_16_16;
+			case 32:
+				return V_028C70_COLOR_32_32_32_32;
+			}
+		} else if (HAS_SIZE(5,5,5,1)) {
+			return V_028C70_COLOR_1_5_5_5;
+		} else if (HAS_SIZE(10,10,10,2)) {
+			return V_028C70_COLOR_2_10_10_10;
+		}
+		break;
 	}
+	return V_028C70_COLOR_INVALID;
 }
 
 static uint32_t si_translate_colorswap(enum pipe_format format)
 {
-	switch (format) {
-	/* 8-bit buffers. */
-	case PIPE_FORMAT_L4A4_UNORM:
-	case PIPE_FORMAT_A4R4_UNORM:
-		return V_028C70_SWAP_ALT;
+	const struct util_format_description *desc = util_format_description(format);
 
-	case PIPE_FORMAT_A8_UNORM:
-	case PIPE_FORMAT_A8_SNORM:
-	case PIPE_FORMAT_A8_UINT:
-	case PIPE_FORMAT_A8_SINT:
-	case PIPE_FORMAT_R4A4_UNORM:
-		return V_028C70_SWAP_ALT_REV;
-	case PIPE_FORMAT_I8_UNORM:
-	case PIPE_FORMAT_I8_SNORM:
-	case PIPE_FORMAT_L8_UNORM:
-	case PIPE_FORMAT_L8_SNORM:
-	case PIPE_FORMAT_I8_UINT:
-	case PIPE_FORMAT_I8_SINT:
-	case PIPE_FORMAT_L8_UINT:
-	case PIPE_FORMAT_L8_SINT:
-	case PIPE_FORMAT_L8_SRGB:
-	case PIPE_FORMAT_R8_UNORM:
-	case PIPE_FORMAT_R8_SNORM:
-	case PIPE_FORMAT_R8_UINT:
-	case PIPE_FORMAT_R8_SINT:
+#define HAS_SWIZZLE(chan,swz) (desc->swizzle[chan] == UTIL_FORMAT_SWIZZLE_##swz)
+
+	if (format == PIPE_FORMAT_R11G11B10_FLOAT) /* isn't plain */
 		return V_028C70_SWAP_STD;
 
-	/* 16-bit buffers. */
-	case PIPE_FORMAT_B5G6R5_UNORM:
-		return V_028C70_SWAP_STD_REV;
+	if (desc->layout != UTIL_FORMAT_LAYOUT_PLAIN)
+		return ~0;
 
-	case PIPE_FORMAT_B5G5R5A1_UNORM:
-	case PIPE_FORMAT_B5G5R5X1_UNORM:
-		return V_028C70_SWAP_ALT;
-
-	case PIPE_FORMAT_B4G4R4A4_UNORM:
-	case PIPE_FORMAT_B4G4R4X4_UNORM:
-		return V_028C70_SWAP_ALT;
-
-	case PIPE_FORMAT_Z16_UNORM:
-		return V_028C70_SWAP_STD;
-
-	case PIPE_FORMAT_L8A8_UNORM:
-	case PIPE_FORMAT_L8A8_SNORM:
-	case PIPE_FORMAT_L8A8_UINT:
-	case PIPE_FORMAT_L8A8_SINT:
-		return V_028C70_SWAP_ALT;
-	case PIPE_FORMAT_R8G8_SNORM:
-	case PIPE_FORMAT_R8G8_UNORM:
-	case PIPE_FORMAT_R8G8_UINT:
-	case PIPE_FORMAT_R8G8_SINT:
-		return V_028C70_SWAP_STD;
-
-	case PIPE_FORMAT_I16_UNORM:
-	case PIPE_FORMAT_I16_SNORM:
-	case PIPE_FORMAT_I16_FLOAT:
-	case PIPE_FORMAT_L16_UNORM:
-	case PIPE_FORMAT_L16_SNORM:
-	case PIPE_FORMAT_L16_FLOAT:
-	case PIPE_FORMAT_R16_UNORM:
-	case PIPE_FORMAT_R16_SNORM:
-	case PIPE_FORMAT_R16_UINT:
-	case PIPE_FORMAT_R16_SINT:
-	case PIPE_FORMAT_R16_FLOAT:
-		return V_028C70_SWAP_STD;
-
-	case PIPE_FORMAT_A16_UNORM:
-	case PIPE_FORMAT_A16_SNORM:
-	case PIPE_FORMAT_A16_FLOAT:
-		return V_028C70_SWAP_ALT_REV;
-
-	/* 32-bit buffers. */
-	case PIPE_FORMAT_A8B8G8R8_SRGB:
-		return V_028C70_SWAP_STD_REV;
-	case PIPE_FORMAT_B8G8R8A8_SRGB:
-		return V_028C70_SWAP_ALT;
-
-	case PIPE_FORMAT_B8G8R8A8_UNORM:
-	case PIPE_FORMAT_B8G8R8X8_UNORM:
-		return V_028C70_SWAP_ALT;
-
-	case PIPE_FORMAT_A8R8G8B8_UNORM:
-	case PIPE_FORMAT_X8R8G8B8_UNORM:
-		return V_028C70_SWAP_ALT_REV;
-	case PIPE_FORMAT_R8G8B8A8_SNORM:
-	case PIPE_FORMAT_R8G8B8A8_UNORM:
-	case PIPE_FORMAT_R8G8B8A8_SSCALED:
-	case PIPE_FORMAT_R8G8B8A8_USCALED:
-	case PIPE_FORMAT_R8G8B8A8_SINT:
-	case PIPE_FORMAT_R8G8B8A8_UINT:
-	case PIPE_FORMAT_R8G8B8X8_UNORM:
-	case PIPE_FORMAT_R8G8B8X8_SNORM:
-	case PIPE_FORMAT_R8G8B8X8_SRGB:
-	case PIPE_FORMAT_R8G8B8X8_UINT:
-	case PIPE_FORMAT_R8G8B8X8_SINT:
-		return V_028C70_SWAP_STD;
-
-	case PIPE_FORMAT_A8B8G8R8_UNORM:
-	case PIPE_FORMAT_X8B8G8R8_UNORM:
-	/* case PIPE_FORMAT_R8SG8SB8UX8U_NORM: */
-		return V_028C70_SWAP_STD_REV;
-
-	case PIPE_FORMAT_Z24X8_UNORM:
-	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
-		return V_028C70_SWAP_STD;
-
-	case PIPE_FORMAT_S8X24_UINT:
-	case PIPE_FORMAT_X8Z24_UNORM:
-	case PIPE_FORMAT_S8_UINT_Z24_UNORM:
-		return V_028C70_SWAP_STD_REV;
-
-	case PIPE_FORMAT_R10G10B10A2_UNORM:
-	case PIPE_FORMAT_R10G10B10X2_SNORM:
-	case PIPE_FORMAT_R10SG10SB10SA2U_NORM:
-		return V_028C70_SWAP_STD;
-
-	case PIPE_FORMAT_B10G10R10A2_UNORM:
-	case PIPE_FORMAT_B10G10R10A2_UINT:
-	case PIPE_FORMAT_B10G10R10X2_UNORM:
-		return V_028C70_SWAP_ALT;
-
-	case PIPE_FORMAT_R11G11B10_FLOAT:
-	case PIPE_FORMAT_I32_FLOAT:
-	case PIPE_FORMAT_L32_FLOAT:
-	case PIPE_FORMAT_R32_FLOAT:
-	case PIPE_FORMAT_R32_UINT:
-	case PIPE_FORMAT_R32_SINT:
-	case PIPE_FORMAT_Z32_FLOAT:
-	case PIPE_FORMAT_R16G16_FLOAT:
-	case PIPE_FORMAT_R16G16_UNORM:
-	case PIPE_FORMAT_R16G16_SNORM:
-	case PIPE_FORMAT_R16G16_UINT:
-	case PIPE_FORMAT_R16G16_SINT:
-		return V_028C70_SWAP_STD;
-
-	case PIPE_FORMAT_L16A16_UNORM:
-	case PIPE_FORMAT_L16A16_SNORM:
-	case PIPE_FORMAT_L16A16_FLOAT:
-		return V_028C70_SWAP_ALT;
-
-	case PIPE_FORMAT_A32_FLOAT:
-		return V_028C70_SWAP_ALT_REV;
-
-	/* 64-bit buffers. */
-	case PIPE_FORMAT_R32G32_FLOAT:
-	case PIPE_FORMAT_R32G32_UINT:
-	case PIPE_FORMAT_R32G32_SINT:
-	case PIPE_FORMAT_R16G16B16A16_UNORM:
-	case PIPE_FORMAT_R16G16B16A16_SNORM:
-	case PIPE_FORMAT_R16G16B16A16_USCALED:
-	case PIPE_FORMAT_R16G16B16A16_SSCALED:
-	case PIPE_FORMAT_R16G16B16A16_UINT:
-	case PIPE_FORMAT_R16G16B16A16_SINT:
-	case PIPE_FORMAT_R16G16B16A16_FLOAT:
-	case PIPE_FORMAT_R16G16B16X16_UNORM:
-	case PIPE_FORMAT_R16G16B16X16_SNORM:
-	case PIPE_FORMAT_R16G16B16X16_FLOAT:
-	case PIPE_FORMAT_R16G16B16X16_UINT:
-	case PIPE_FORMAT_R16G16B16X16_SINT:
-	case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
-		return V_028C70_SWAP_STD;
-
-	case PIPE_FORMAT_L32A32_FLOAT:
-	case PIPE_FORMAT_L32A32_UINT:
-	case PIPE_FORMAT_L32A32_SINT:
-		return V_028C70_SWAP_ALT;
-
-	/* 128-bit buffers. */
-	case PIPE_FORMAT_R32G32B32A32_FLOAT:
-	case PIPE_FORMAT_R32G32B32A32_SNORM:
-	case PIPE_FORMAT_R32G32B32A32_UNORM:
-	case PIPE_FORMAT_R32G32B32A32_SSCALED:
-	case PIPE_FORMAT_R32G32B32A32_USCALED:
-	case PIPE_FORMAT_R32G32B32A32_SINT:
-	case PIPE_FORMAT_R32G32B32A32_UINT:
-	case PIPE_FORMAT_R32G32B32X32_FLOAT:
-	case PIPE_FORMAT_R32G32B32X32_UINT:
-	case PIPE_FORMAT_R32G32B32X32_SINT:
-		return V_028C70_SWAP_STD;
-	default:
-		R600_ERR("unsupported colorswap format %d\n", format);
-		return ~0U;
+	switch (desc->nr_channels) {
+	case 1:
+		if (HAS_SWIZZLE(0,X))
+			return V_028C70_SWAP_STD; /* X___ */
+		else if (HAS_SWIZZLE(3,X))
+			return V_028C70_SWAP_ALT_REV; /* ___X */
+		break;
+	case 2:
+		if ((HAS_SWIZZLE(0,X) && HAS_SWIZZLE(1,Y)) ||
+		    (HAS_SWIZZLE(0,X) && HAS_SWIZZLE(1,NONE)) ||
+		    (HAS_SWIZZLE(0,NONE) && HAS_SWIZZLE(1,Y)))
+			return V_028C70_SWAP_STD; /* XY__ */
+		else if ((HAS_SWIZZLE(0,Y) && HAS_SWIZZLE(1,X)) ||
+			 (HAS_SWIZZLE(0,Y) && HAS_SWIZZLE(1,NONE)) ||
+		         (HAS_SWIZZLE(0,NONE) && HAS_SWIZZLE(1,X)))
+			return V_028C70_SWAP_STD_REV; /* YX__ */
+		else if (HAS_SWIZZLE(0,X) && HAS_SWIZZLE(3,Y))
+			return V_028C70_SWAP_ALT; /* X__Y */
+		break;
+	case 3:
+		if (HAS_SWIZZLE(0,X))
+			return V_028C70_SWAP_STD; /* XYZ */
+		else if (HAS_SWIZZLE(0,Z))
+			return V_028C70_SWAP_STD_REV; /* ZYX */
+		break;
+	case 4:
+		/* check the middle channels, the 1st and 4th channel can be NONE */
+		if (HAS_SWIZZLE(1,Y) && HAS_SWIZZLE(2,Z))
+			return V_028C70_SWAP_STD; /* XYZW */
+		else if (HAS_SWIZZLE(1,Z) && HAS_SWIZZLE(2,Y))
+			return V_028C70_SWAP_STD_REV; /* WZYX */
+		else if (HAS_SWIZZLE(1,Y) && HAS_SWIZZLE(2,X))
+			return V_028C70_SWAP_ALT; /* ZYXW */
+		else if (HAS_SWIZZLE(1,X) && HAS_SWIZZLE(2,Y))
+			return V_028C70_SWAP_ALT_REV; /* WXYZ */
+		break;
 	}
 	return ~0U;
 }
@@ -1630,7 +1389,12 @@ static uint32_t si_translate_vertexformat(struct pipe_screen *screen,
 		}
 		break;
 	case 32:
-		if (type != UTIL_FORMAT_TYPE_FLOAT)
+		/* From the Southern Islands ISA documentation about MTBUF:
+		 * 'Memory reads of data in memory that is 32 or 64 bits do not
+		 * undergo any format conversion.'
+		 */
+		if (type != UTIL_FORMAT_TYPE_FLOAT &&
+		    !desc->channel[first_non_void].pure_integer)
 			return V_008F0C_BUF_DATA_FORMAT_INVALID;
 
 		switch (desc->nr_channels) {
@@ -1998,7 +1762,7 @@ static void si_db(struct r600_context *rctx, struct si_pm4_state *pm4,
 		macro_aspect = cik_macro_tile_aspect(macro_aspect);
 		bankw = cik_bank_wh(bankw);
 		bankh = cik_bank_wh(bankh);
-		nbanks = cik_num_banks(rscreen->tiling_info.num_banks);
+		nbanks = cik_num_banks(rscreen->b.tiling_info.num_banks);
 		pipe_config = cik_db_pipe_config(rscreen->b.info.r600_num_tile_pipes,
 						 rscreen->b.info.r600_num_backends);
 
@@ -2346,7 +2110,16 @@ static INLINE void si_shader_selector_key(struct pipe_context *ctx,
 		}
 		if (rctx->queued.named.dsa) {
 			key->ps.alpha_func = rctx->queued.named.dsa->alpha_func;
-			key->ps.alpha_ref = rctx->queued.named.dsa->alpha_ref;
+
+			/* Alpha-test should be disabled if colorbuffer 0 is integer. */
+			if (rctx->framebuffer.nr_cbufs &&
+			    rctx->framebuffer.cbufs[0] &&
+			    util_format_is_pure_integer(rctx->framebuffer.cbufs[0]->texture->format))
+				key->ps.alpha_func = PIPE_FUNC_ALWAYS;
+
+			if (key->ps.alpha_func != PIPE_FUNC_ALWAYS &&
+			    key->ps.alpha_func != PIPE_FUNC_NEVER)
+				key->ps.alpha_ref = rctx->queued.named.dsa->alpha_ref;
 		} else {
 			key->ps.alpha_func = PIPE_FUNC_ALWAYS;
 		}
@@ -2466,10 +2239,12 @@ static void si_bind_vs_shader(struct pipe_context *ctx, void *state)
 
 	rctx->vs_shader = sel;
 
-	if (sel && sel->current)
+	if (sel && sel->current) {
 		si_pm4_bind_state(rctx, vs, sel->current->pm4);
-	else
+		rctx->b.streamout.stride_in_dw = sel->so.stride;
+	} else {
 		si_pm4_bind_state(rctx, vs, rctx->dummy_pixel_shader->pm4);
+	}
 
 	rctx->b.flags |= R600_CONTEXT_INV_SHADER_CACHE;
 }
@@ -2694,6 +2469,7 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 
 	va = r600_resource_va(ctx->screen, texture);
 	va += surflevel[0].offset;
+	va += tmp->mipmap_shift * surflevel[texture->last_level].slice_size;
 	view->state[0] = va >> 8;
 	view->state[1] = (S_008F14_BASE_ADDRESS_HI(va >> 40) |
 			  S_008F14_DATA_FORMAT(format) |
@@ -2705,10 +2481,10 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 			  S_008F1C_DST_SEL_Z(si_map_swizzle(swizzle[2])) |
 			  S_008F1C_DST_SEL_W(si_map_swizzle(swizzle[3])) |
 			  S_008F1C_BASE_LEVEL(texture->nr_samples > 1 ?
-						      0 : state->u.tex.first_level) |
+						      0 : state->u.tex.first_level - tmp->mipmap_shift) |
 			  S_008F1C_LAST_LEVEL(texture->nr_samples > 1 ?
 						      util_logbase2(texture->nr_samples) :
-						      state->u.tex.last_level) |
+						      state->u.tex.last_level - tmp->mipmap_shift) |
 			  S_008F1C_TILING_INDEX(si_tile_mode_index(tmp, 0, false)) |
 			  S_008F1C_POW2_PAD(texture->last_level > 0) |
 			  S_008F1C_TYPE(si_tex_dim(texture->target, texture->nr_samples)));
@@ -2750,7 +2526,8 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 				       S_008F1C_DST_SEL_W(V_008F1C_SQ_SEL_X) |
 				       S_008F1C_TILING_INDEX(tmp->fmask.tile_mode_index) |
 				       S_008F1C_TYPE(si_tex_dim(texture->target, 0));
-		view->fmask_state[4] = S_008F20_PITCH(tmp->fmask.pitch - 1);
+		view->fmask_state[4] = S_008F20_DEPTH(depth - 1) |
+				       S_008F20_PITCH(tmp->fmask.pitch - 1);
 		view->fmask_state[5] = S_008F24_BASE_ARRAY(state->u.tex.first_layer) |
 				       S_008F24_LAST_ARRAY(state->u.tex.last_layer);
 		view->fmask_state[6] = 0;
@@ -3142,6 +2919,54 @@ static void *si_create_blend_custom(struct r600_context *rctx, unsigned mode)
 	return si_create_blend_state_mode(&rctx->b.b, &blend, mode);
 }
 
+static struct pipe_surface *r600_create_surface(struct pipe_context *pipe,
+						struct pipe_resource *texture,
+						const struct pipe_surface *surf_tmpl)
+{
+	struct r600_texture *rtex = (struct r600_texture*)texture;
+	struct r600_surface *surface = CALLOC_STRUCT(r600_surface);
+	unsigned level = surf_tmpl->u.tex.level;
+
+	if (surface == NULL)
+		return NULL;
+
+	assert(surf_tmpl->u.tex.first_layer <= util_max_layer(texture, surf_tmpl->u.tex.level));
+	assert(surf_tmpl->u.tex.last_layer <= util_max_layer(texture, surf_tmpl->u.tex.level));
+	assert(surf_tmpl->u.tex.first_layer == surf_tmpl->u.tex.last_layer);
+
+	pipe_reference_init(&surface->base.reference, 1);
+	pipe_resource_reference(&surface->base.texture, texture);
+	surface->base.context = pipe;
+	surface->base.format = surf_tmpl->format;
+	surface->base.width = rtex->surface.level[level].npix_x;
+	surface->base.height = rtex->surface.level[level].npix_y;
+	surface->base.texture = texture;
+	surface->base.u.tex.first_layer = surf_tmpl->u.tex.first_layer;
+	surface->base.u.tex.last_layer = surf_tmpl->u.tex.last_layer;
+	surface->base.u.tex.level = level;
+
+	return &surface->base;
+}
+
+static void r600_surface_destroy(struct pipe_context *pipe,
+				 struct pipe_surface *surface)
+{
+	pipe_resource_reference(&surface->texture, NULL);
+	FREE(surface);
+}
+
+static boolean si_dma_copy(struct pipe_context *ctx,
+			   struct pipe_resource *dst,
+			   unsigned dst_level,
+			   unsigned dst_x, unsigned dst_y, unsigned dst_z,
+			   struct pipe_resource *src,
+			   unsigned src_level,
+			   const struct pipe_box *src_box)
+{
+	/* XXX implement this or share evergreen_dma_blit with r600g */
+	return FALSE;
+}
+
 void si_init_state_functions(struct r600_context *rctx)
 {
 	int i;
@@ -3203,6 +3028,9 @@ void si_init_state_functions(struct r600_context *rctx)
 
 	rctx->b.b.texture_barrier = si_texture_barrier;
 	rctx->b.b.set_polygon_stipple = si_set_polygon_stipple;
+	rctx->b.b.create_surface = r600_create_surface;
+	rctx->b.b.surface_destroy = r600_surface_destroy;
+	rctx->b.dma_copy = si_dma_copy;
 
 	rctx->b.b.draw_vbo = si_draw_vbo;
 }
@@ -3233,6 +3061,7 @@ void si_init_config(struct r600_context *rctx)
 	si_pm4_set_reg(pm4, R_028A40_VGT_GS_MODE, 0x0);
 	si_pm4_set_reg(pm4, R_028A84_VGT_PRIMITIVEID_EN, 0x0);
 	si_pm4_set_reg(pm4, R_028A8C_VGT_PRIMITIVEID_RESET, 0x0);
+	si_pm4_set_reg(pm4, R_028B28_VGT_STRMOUT_DRAW_OPAQUE_OFFSET, 0);
 	si_pm4_set_reg(pm4, R_028B94_VGT_STRMOUT_CONFIG, 0x0);
 	si_pm4_set_reg(pm4, R_028B98_VGT_STRMOUT_BUFFER_CONFIG, 0x0);
 	si_pm4_set_reg(pm4, R_028AA8_IA_MULTI_VGT_PARAM,

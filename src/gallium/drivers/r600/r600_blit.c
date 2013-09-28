@@ -24,6 +24,7 @@
 #include "util/u_surface.h"
 #include "util/u_blitter.h"
 #include "util/u_format.h"
+#include "evergreend.h"
 
 enum r600_blitter_op /* bitmask */
 {
@@ -104,12 +105,12 @@ static unsigned u_max_sample(struct pipe_resource *r)
 	return r->nr_samples ? r->nr_samples - 1 : 0;
 }
 
-void r600_blit_decompress_depth(struct pipe_context *ctx,
-		struct r600_texture *texture,
-		struct r600_texture *staging,
-		unsigned first_level, unsigned last_level,
-		unsigned first_layer, unsigned last_layer,
-		unsigned first_sample, unsigned last_sample)
+static void r600_blit_decompress_depth(struct pipe_context *ctx,
+				       struct r600_texture *texture,
+				       struct r600_texture *staging,
+				       unsigned first_level, unsigned last_level,
+				       unsigned first_layer, unsigned last_layer,
+				       unsigned first_sample, unsigned last_sample)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	unsigned layer, level, sample, checked_last_layer, max_layer, max_sample;
@@ -311,7 +312,8 @@ static void r600_blit_decompress_color(struct pipe_context *ctx,
 			cbsurf = ctx->create_surface(ctx, &rtex->resource.b.b, &surf_tmpl);
 
 			r600_blitter_begin(ctx, R600_DECOMPRESS);
-			util_blitter_custom_color(rctx->blitter, cbsurf, rctx->custom_blend_decompress);
+			util_blitter_custom_color(rctx->blitter, cbsurf,
+				rtex->fmask.size ? rctx->custom_blend_decompress : rctx->custom_blend_fastclear);
 			r600_blitter_end(ctx);
 
 			pipe_surface_reference(&cbsurf, NULL);
@@ -341,7 +343,7 @@ void r600_decompress_color_textures(struct r600_context *rctx,
 		assert(view);
 
 		tex = (struct r600_texture *)view->texture;
-		assert(tex->cmask_size && tex->fmask_size);
+		assert(tex->cmask.size);
 
 		r600_blit_decompress_color(&rctx->b.b, tex,
 					   view->u.tex.first_level, view->u.tex.last_level,
@@ -376,7 +378,7 @@ static bool r600_decompress_subresource(struct pipe_context *ctx,
 						   first_layer, last_layer,
 						   0, u_max_sample(tex));
 		}
-	} else if (rtex->fmask_size && rtex->cmask_size) {
+	} else if (rtex->cmask.size) {
 		r600_blit_decompress_color(ctx, rtex, level, level,
 					   first_layer, last_layer);
 	}
@@ -411,7 +413,7 @@ static boolean is_simple_msaa_resolve(const struct pipe_blit_info *info)
 }
 
 static void r600_clear_buffer(struct pipe_context *ctx, struct pipe_resource *dst,
-			      unsigned offset, unsigned size, unsigned char value);
+			      unsigned offset, unsigned size, unsigned value);
 
 static void evergreen_set_clear_color(struct pipe_surface *cbuf,
 				      const union pipe_color_union *color)
@@ -432,6 +434,27 @@ static void evergreen_set_clear_color(struct pipe_surface *cbuf,
 	memcpy(clear_value, &uc, 2 * sizeof(uint32_t));
 }
 
+static void evergreen_check_alloc_cmask(struct pipe_context *ctx,
+                                        struct pipe_surface *cbuf)
+{
+        struct r600_context *rctx = (struct r600_context *)ctx;
+        struct r600_texture *tex = (struct r600_texture *)cbuf->texture;
+        struct r600_surface *surf = (struct r600_surface *)cbuf;
+
+        if (tex->cmask_buffer)
+                return;
+
+        r600_texture_init_cmask(&rctx->screen->b, tex);
+
+        /* update colorbuffer state bits */
+        if (tex->cmask_buffer != NULL) {
+                uint64_t va = r600_resource_va(rctx->b.b.screen, &tex->cmask_buffer->b.b);
+                surf->cb_color_cmask = va >> 8;
+                surf->cb_color_cmask_slice = S_028C80_TILE_MAX(tex->cmask.slice_tile_max);
+                surf->cb_color_info |= S_028C70_FAST_CLEAR(1);
+        }
+}
+
 static bool can_fast_clear_color(struct pipe_context *ctx)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
@@ -445,10 +468,6 @@ static bool can_fast_clear_color(struct pipe_context *ctx)
 	for (i = 0; i < fb->nr_cbufs; i++) {
 		struct r600_texture *tex = (struct r600_texture *)fb->cbufs[i]->texture;
 
-		if (tex->cmask_size == 0) {
-			return false;
-		}
-
 		/* 128-bit formats are unuspported */
 		if (util_format_get_blocksizebits(fb->cbufs[i]->format) > 64) {
 			return false;
@@ -457,6 +476,22 @@ static bool can_fast_clear_color(struct pipe_context *ctx)
 		/* the clear is allowed if all layers are bound */
 		if (fb->cbufs[i]->u.tex.first_layer != 0 ||
 		    fb->cbufs[i]->u.tex.last_layer != util_max_layer(&tex->resource.b.b, 0)) {
+			return false;
+		}
+
+		/* cannot clear mipmapped textures */
+		if (fb->cbufs[i]->texture->last_level != 0) {
+			return false;
+		}
+
+		/* only supported on tiled surfaces */
+		if (tex->surface.level[0].mode < RADEON_SURF_MODE_1D) {
+		    return false;
+		}
+
+		/* ensure CMASK is enabled */
+		evergreen_check_alloc_cmask(ctx, fb->cbufs[i]);
+		if (tex->cmask.size == 0) {
 			return false;
 		}
 	}
@@ -471,7 +506,7 @@ static void r600_clear(struct pipe_context *ctx, unsigned buffers,
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct pipe_framebuffer_state *fb = &rctx->framebuffer.state;
 
-	/* fast color clear on AA framebuffers (EG+) */
+	/* fast clear on colorbuffers (EG+) */
 	if ((buffers & PIPE_CLEAR_COLOR) && can_fast_clear_color(ctx)) {
 		int i;
 
@@ -479,8 +514,8 @@ static void r600_clear(struct pipe_context *ctx, unsigned buffers,
 			struct r600_texture *tex = (struct r600_texture *)fb->cbufs[i]->texture;
 
 			evergreen_set_clear_color(fb->cbufs[i], color);
-			r600_clear_buffer(ctx, fb->cbufs[i]->texture,
-					tex->cmask_offset, tex->cmask_size, 0);
+			r600_clear_buffer(ctx, &tex->cmask_buffer->b.b,
+					tex->cmask.offset, tex->cmask.size, 0);
 			tex->dirty_level_mask |= 1 << fb->cbufs[i]->u.tex.level;
 		}
 
@@ -489,6 +524,15 @@ static void r600_clear(struct pipe_context *ctx, unsigned buffers,
 		buffers &= ~PIPE_CLEAR_COLOR;
 		if (!buffers)
 			return;
+	} else if (buffers & PIPE_CLEAR_COLOR) {
+		int i;
+
+		/* cannot use fast clear, make sure to disable expansion */
+		for (i = 0; i < fb->nr_cbufs; i++) {
+			struct r600_texture *tex = (struct r600_texture *)fb->cbufs[i]->texture;
+			if (tex->fmask.size == 0)
+			    tex->dirty_level_mask &= ~(1 << fb->cbufs[i]->u.tex.level);
+		}
 	}
 
 	/* if hyperz enabled just clear hyperz */
@@ -583,21 +627,17 @@ void r600_copy_buffer(struct pipe_context *ctx, struct pipe_resource *dst, unsig
 }
 
 static void r600_clear_buffer(struct pipe_context *ctx, struct pipe_resource *dst,
-			      unsigned offset, unsigned size, unsigned char value)
+			      unsigned offset, unsigned size, unsigned value)
 {
 	struct r600_context *rctx = (struct r600_context*)ctx;
-	uint32_t v = value;
 
 	if (rctx->screen->has_cp_dma &&
 	    rctx->b.chip_class >= EVERGREEN &&
 	    offset % 4 == 0 && size % 4 == 0) {
-		uint32_t clear_value = v | (v << 8) | (v << 16) | (v << 24);
-
-		evergreen_cp_dma_clear_buffer(rctx, dst, offset, size, clear_value);
+		evergreen_cp_dma_clear_buffer(rctx, dst, offset, size, value);
 	} else if (rctx->screen->has_streamout && offset % 4 == 0 && size % 4 == 0) {
 		union pipe_color_union clear_value;
-
-		clear_value.ui[0] = v | (v << 8) | (v << 16) | (v << 24);
+		clear_value.ui[0] = value;
 
 		r600_flag_resource_cache_flush(rctx, dst);
 
@@ -609,19 +649,12 @@ static void r600_clear_buffer(struct pipe_context *ctx, struct pipe_resource *ds
 		/* Flush again in case the 3D engine has been prefetching the resource. */
 		r600_flag_resource_cache_flush(rctx, dst);
 	} else {
-		char *map = r600_buffer_mmap_sync_with_rings(rctx, r600_resource(dst),
-							     PIPE_TRANSFER_WRITE);
-		memset(map + offset, value, size);
+		uint32_t *map = r600_buffer_map_sync_with_rings(&rctx->b, r600_resource(dst),
+								 PIPE_TRANSFER_WRITE);
+		size /= 4;
+		for (unsigned i = 0; i < size; i++)
+			*map++ = value;
 	}
-}
-
-void r600_screen_clear_buffer(struct r600_screen *rscreen, struct pipe_resource *dst,
-			      unsigned offset, unsigned size, unsigned char value)
-{
-	pipe_mutex_lock(rscreen->aux_context_lock);
-	r600_clear_buffer(rscreen->aux_context, dst, offset, size, value);
-	rscreen->aux_context->flush(rscreen->aux_context, NULL, 0);
-	pipe_mutex_unlock(rscreen->aux_context_lock);
 }
 
 static bool util_format_is_subsampled_2x1_32bpp(enum pipe_format format)
@@ -900,6 +933,19 @@ static void r600_blit(struct pipe_context *ctx,
 	r600_blitter_end(ctx);
 }
 
+static void r600_flush_resource(struct pipe_context *ctx,
+				struct pipe_resource *res)
+{
+	struct r600_texture *rtex = (struct r600_texture*)res;
+
+	assert(res->target != PIPE_BUFFER);
+
+	if (!rtex->is_depth && rtex->cmask.size) {
+		r600_blit_decompress_color(ctx, rtex, 0, res->last_level,
+					   0, res->array_size - 1);
+	}
+}
+
 void r600_init_blit_functions(struct r600_context *rctx)
 {
 	rctx->b.b.clear = r600_clear;
@@ -907,4 +953,7 @@ void r600_init_blit_functions(struct r600_context *rctx)
 	rctx->b.b.clear_depth_stencil = r600_clear_depth_stencil;
 	rctx->b.b.resource_copy_region = r600_resource_copy_region;
 	rctx->b.b.blit = r600_blit;
+	rctx->b.b.flush_resource = r600_flush_resource;
+	rctx->b.clear_buffer = r600_clear_buffer;
+	rctx->b.blit_decompress_depth = r600_blit_decompress_depth;
 }

@@ -65,9 +65,6 @@
 
 #define R600_MAP_BUFFER_ALIGNMENT 64
 
-#define R600_ERR(fmt, args...) \
-	fprintf(stderr, "EE %s:%d %s - "fmt, __FILE__, __LINE__, __func__, ##args)
-
 #define R600_QUERY_DRAW_CALLS		(PIPE_QUERY_DRIVER_SPECIFIC + 0)
 #define R600_QUERY_REQUESTED_VRAM	(PIPE_QUERY_DRIVER_SPECIFIC + 1)
 #define R600_QUERY_REQUESTED_GTT	(PIPE_QUERY_DRIVER_SPECIFIC + 2)
@@ -201,27 +198,8 @@ struct r600_pipe_fences {
 	pipe_mutex			mutex;
 };
 
-typedef boolean (*r600g_dma_blit_t)(struct pipe_context *ctx,
-				struct pipe_resource *dst,
-				unsigned dst_level,
-				unsigned dst_x, unsigned dst_y, unsigned dst_z,
-				struct pipe_resource *src,
-				unsigned src_level,
-				const struct pipe_box *src_box);
-
-/* logging */
-#define DBG_TEX_DEPTH		(1 << 0)
-#define DBG_COMPUTE		(1 << 1)
-#define DBG_VM			(1 << 2)
-#define DBG_TRACE_CS		(1 << 3)
-/* shaders */
-#define DBG_FS			(1 << 8)
-#define DBG_VS			(1 << 9)
-#define DBG_GS			(1 << 10)
-#define DBG_PS			(1 << 11)
-#define DBG_CS			(1 << 12)
+/* This must start from 16. */
 /* features */
-#define DBG_NO_HYPERZ		(1 << 16)
 #define DBG_NO_LLVM		(1 << 17)
 #define DBG_NO_CP_DMA		(1 << 18)
 #define DBG_NO_ASYNC_DMA	(1 << 19)
@@ -236,20 +214,12 @@ typedef boolean (*r600g_dma_blit_t)(struct pipe_context *ctx,
 #define DBG_SB_DISASM	(1 << 27)
 #define DBG_SB_SAFEMATH	(1 << 28)
 
-struct r600_tiling_info {
-	unsigned num_channels;
-	unsigned num_banks;
-	unsigned group_bytes;
-};
-
 struct r600_screen {
 	struct r600_common_screen	b;
-	unsigned			debug_flags;
 	bool				has_streamout;
 	bool				has_msaa;
 	bool				has_cp_dma;
 	bool				has_compressed_msaa_texturing;
-	struct r600_tiling_info		tiling_info;
 	struct r600_pipe_fences		fences;
 
 	/*for compute global memory binding, we allocate stuff here, instead of
@@ -260,12 +230,6 @@ struct r600_screen {
 	struct r600_resource		*trace_bo;
 	uint32_t			*trace_ptr;
 	unsigned			cs_count;
-	r600g_dma_blit_t		dma_blit;
-
-	/* Auxiliary context. Mainly used to initialize resources.
-	 * It must be locked prior to using and flushed before unlocking. */
-	struct pipe_context		*aux_context;
-	pipe_mutex			aux_context_lock;
 };
 
 struct r600_pipe_sampler_view {
@@ -481,6 +445,7 @@ struct r600_context {
 	void				*custom_dsa_flush;
 	void				*custom_blend_resolve;
 	void				*custom_blend_decompress;
+	void                            *custom_blend_fastclear;
 	/* With rasterizer discard, there doesn't have to be a pixel shader.
 	 * In that case, we bind this one: */
 	void				*dummy_pixel_shader;
@@ -631,6 +596,7 @@ void evergreen_update_vs_state(struct pipe_context *ctx, struct r600_pipe_shader
 void *evergreen_create_db_flush_dsa(struct r600_context *rctx);
 void *evergreen_create_resolve_blend(struct r600_context *rctx);
 void *evergreen_create_decompress_blend(struct r600_context *rctx);
+void *evergreen_create_fastclear_blend(struct r600_context *rctx);
 boolean evergreen_is_format_supported(struct pipe_screen *screen,
 				      enum pipe_format format,
 				      enum pipe_texture_target target,
@@ -645,36 +611,18 @@ void evergreen_update_db_shader_control(struct r600_context * rctx);
 /* r600_blit.c */
 void r600_copy_buffer(struct pipe_context *ctx, struct pipe_resource *dst, unsigned dstx,
 		      struct pipe_resource *src, const struct pipe_box *src_box);
-void r600_screen_clear_buffer(struct r600_screen *rscreen, struct pipe_resource *dst,
-			      unsigned offset, unsigned size, unsigned char value);
 void r600_init_blit_functions(struct r600_context *rctx);
-void r600_blit_decompress_depth(struct pipe_context *ctx,
-		struct r600_texture *texture,
-		struct r600_texture *staging,
-		unsigned first_level, unsigned last_level,
-		unsigned first_layer, unsigned last_layer,
-		unsigned first_sample, unsigned last_sample);
 void r600_decompress_depth_textures(struct r600_context *rctx,
 				    struct r600_samplerview_state *textures);
 void r600_decompress_color_textures(struct r600_context *rctx,
 				    struct r600_samplerview_state *textures);
 
 /* r600_buffer.c */
-bool r600_init_resource(struct r600_screen *rscreen,
-			struct r600_resource *res,
-			unsigned size, unsigned alignment,
-			bool use_reusable_pool, unsigned usage);
 struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 					 const struct pipe_resource *templ,
 					 unsigned alignment);
 
 /* r600_pipe.c */
-boolean r600_rings_is_buffer_referenced(struct r600_context *ctx,
-					struct radeon_winsys_cs_handle *buf,
-					enum radeon_bo_usage usage);
-void *r600_buffer_mmap_sync_with_rings(struct r600_context *ctx,
-					struct r600_resource *resource,
-					unsigned usage);
 const char * r600_llvm_gpu_string(enum radeon_family family);
 
 
@@ -715,21 +663,6 @@ boolean r600_is_format_supported(struct pipe_screen *screen,
 				 unsigned usage);
 void r600_update_db_shader_control(struct r600_context * rctx);
 
-/* r600_texture.c */
-void r600_init_screen_texture_functions(struct pipe_screen *screen);
-void r600_init_surface_functions(struct r600_context *r600);
-uint32_t r600_translate_texformat(struct pipe_screen *screen, enum pipe_format format,
-				  const unsigned char *swizzle_view,
-				  uint32_t *word4_p, uint32_t *yuv_format_p);
-struct pipe_surface *r600_create_surface_custom(struct pipe_context *pipe,
-						struct pipe_resource *texture,
-						const struct pipe_surface *templ,
-						unsigned width, unsigned height);
-
-unsigned r600_get_swizzle_combined(const unsigned char *swizzle_format,
-				   const unsigned char *swizzle_view,
-				   boolean vtx);
-
 /* r600_hw_context.c */
 void r600_get_backend_mask(struct r600_context *ctx);
 void r600_context_flush(struct r600_context *ctx, unsigned flags);
@@ -752,13 +685,6 @@ void r600_dma_copy(struct r600_context *rctx,
 		uint64_t dst_offset,
 		uint64_t src_offset,
 		uint64_t size);
-boolean r600_dma_blit(struct pipe_context *ctx,
-			struct pipe_resource *dst,
-			unsigned dst_level,
-			unsigned dst_x, unsigned dst_y, unsigned dst_z,
-			struct pipe_resource *src,
-			unsigned src_level,
-			const struct pipe_box *src_box);
 void r600_flag_resource_cache_flush(struct r600_context *rctx,
 				    struct pipe_resource *res);
 
@@ -771,13 +697,6 @@ void evergreen_dma_copy(struct r600_context *rctx,
 		uint64_t dst_offset,
 		uint64_t src_offset,
 		uint64_t size);
-boolean evergreen_dma_blit(struct pipe_context *ctx,
-			struct pipe_resource *dst,
-			unsigned dst_level,
-			unsigned dst_x, unsigned dst_y, unsigned dst_z,
-			struct pipe_resource *src,
-			unsigned src_level,
-			const struct pipe_box *src_box);
 
 /* r600_state_common.c */
 void r600_init_common_state_functions(struct r600_context *rctx);
@@ -808,6 +727,16 @@ unsigned r600_tex_filter(unsigned filter);
 unsigned r600_tex_mipfilter(unsigned filter);
 unsigned r600_tex_compare(unsigned compare);
 bool sampler_state_needs_border_color(const struct pipe_sampler_state *state);
+struct pipe_surface *r600_create_surface_custom(struct pipe_context *pipe,
+						struct pipe_resource *texture,
+						const struct pipe_surface *templ,
+						unsigned width, unsigned height);
+unsigned r600_get_swizzle_combined(const unsigned char *swizzle_format,
+				   const unsigned char *swizzle_view,
+				   boolean vtx);
+uint32_t r600_translate_texformat(struct pipe_screen *screen, enum pipe_format format,
+				  const unsigned char *swizzle_view,
+				  uint32_t *word4_p, uint32_t *yuv_format_p);
 
 /* r600_uvd.c */
 struct pipe_video_codec *r600_uvd_create_decoder(struct pipe_context *context,
@@ -815,11 +744,6 @@ struct pipe_video_codec *r600_uvd_create_decoder(struct pipe_context *context,
 
 struct pipe_video_buffer *r600_video_buffer_create(struct pipe_context *pipe,
 						   const struct pipe_video_buffer *tmpl);
-
-int r600_uvd_get_video_param(struct pipe_screen *screen,
-			     enum pipe_video_profile profile,
-			     enum pipe_video_entrypoint entrypoint,
-			     enum pipe_video_cap param);
 
 /*
  * Helpers for building command buffers

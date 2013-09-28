@@ -57,10 +57,12 @@ extern "C" {
 #include "program/sampler.h"
 }
 
+static int swizzle_for_size(int size);
+
+namespace {
+
 class src_reg;
 class dst_reg;
-
-static int swizzle_for_size(int size);
 
 /**
  * This struct is a corresponding struct to Mesa prog_src_register, with
@@ -129,6 +131,8 @@ public:
    src_reg *reladdr;
 };
 
+} /* anonymous namespace */
+
 src_reg::src_reg(dst_reg reg)
 {
    this->file = reg.file;
@@ -147,19 +151,11 @@ dst_reg::dst_reg(src_reg reg)
    this->reladdr = reg.reladdr;
 }
 
+namespace {
+
 class ir_to_mesa_instruction : public exec_node {
 public:
-   /* Callers of this ralloc-based new need not call delete. It's
-    * easier to just ralloc_free 'ctx' (or any of its ancestors). */
-   static void* operator new(size_t size, void *ctx)
-   {
-      void *node;
-
-      node = rzalloc_size(ctx, size);
-      assert(node != NULL);
-
-      return node;
-   }
+   DECLARE_RZALLOC_CXX_OPERATORS(ir_to_mesa_instruction)
 
    enum prog_opcode op;
    dst_reg dst;
@@ -325,6 +321,8 @@ public:
 
    void *mem_ctx;
 };
+
+} /* anonymous namespace */
 
 static src_reg undef_src = src_reg(PROGRAM_UNDEFINED, 0, NULL);
 
@@ -837,7 +835,7 @@ ir_to_mesa_visitor::visit(ir_function *ir)
       const ir_function_signature *sig;
       exec_list empty;
 
-      sig = ir->matching_signature(&empty);
+      sig = ir->matching_signature(NULL, &empty);
 
       assert(sig);
 
@@ -1497,6 +1495,8 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
    case ir_triop_bitfield_extract:
    case ir_triop_vector_insert:
    case ir_quadop_bitfield_insert:
+   case ir_binop_ldexp:
+   case ir_triop_csel:
       assert(!"not supported");
       break;
 
@@ -2252,7 +2252,7 @@ ir_to_mesa_visitor::visit(ir_if *ir)
       visit_exec_list(&ir->else_instructions, this);
    }
 
-   if_inst = emit(ir->condition, OPCODE_ENDIF);
+   emit(ir->condition, OPCODE_ENDIF);
 }
 
 void
@@ -2415,6 +2415,8 @@ print_program(struct prog_instruction *mesa_instructions,
    }
 }
 
+namespace {
+
 class add_uniform_to_shader : public program_resource_visitor {
 public:
    add_uniform_to_shader(struct gl_shader_program *shader_program,
@@ -2443,6 +2445,8 @@ private:
    int idx;
    gl_shader_type shader_type;
 };
+
+} /* anonymous namespace */
 
 void
 add_uniform_to_shader::visit_field(const glsl_type *type, const char *name,

@@ -192,6 +192,9 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
             return 4;
 	case PIPE_CAP_ENDIANNESS:
             return PIPE_ENDIAN_LITTLE;
+
+        case PIPE_CAP_MAX_VIEWPORTS:
+            return 1;
     }
     return 0;
 }
@@ -539,6 +542,9 @@ static void r300_destroy_screen(struct pipe_screen* pscreen)
 {
     struct r300_screen* r300screen = r300_screen(pscreen);
     struct radeon_winsys *rws = radeon_winsys(pscreen);
+
+    if (rws && !radeon_winsys_unref(rws))
+      return;
 
     pipe_mutex_destroy(r300screen->cmask_mutex);
 

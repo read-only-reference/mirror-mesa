@@ -66,8 +66,6 @@ struct r600_pipe_fences {
 
 struct r600_screen {
 	struct r600_common_screen	b;
-	struct r600_tiling_info		tiling_info;
-	struct util_slab_mempool	pool_buffers;
 	struct r600_pipe_fences		fences;
 #if R600_TRACE_CS
 	struct r600_resource		*trace_bo;
@@ -134,9 +132,11 @@ struct r600_context {
 			/* The order matters. */
 			struct r600_atom *const_buffers[SI_NUM_SHADERS];
 			struct r600_atom *sampler_views[SI_NUM_SHADERS];
+			struct r600_atom *streamout_buffers;
 			/* Caches must be flushed after resource descriptors are
 			 * updated in memory. */
 			struct r600_atom *cache_flush;
+			struct r600_atom *streamout_begin;
 		};
 		struct r600_atom *array[0];
 	} atoms;
@@ -163,6 +163,7 @@ struct r600_context {
 	unsigned			sprite_coord_enable;
 	unsigned			export_16bpc;
 	struct si_buffer_resources	const_buffers[SI_NUM_SHADERS];
+	struct si_buffer_resources	streamout_buffers;
 	struct r600_textures_info	samplers[SI_NUM_SHADERS];
 	struct r600_resource		*border_color_table;
 	unsigned			border_color_offset;
@@ -179,18 +180,12 @@ struct r600_context {
 	/* The list of active queries. Only one query of each type can be active. */
 	struct list_head	active_nontimer_query_list;
 	unsigned		num_cs_dw_nontimer_queries_suspend;
-	unsigned		num_cs_dw_streamout_end;
+	/* If queries have been suspended. */
+	bool			nontimer_queries_suspended;
 
 	unsigned		backend_mask;
 	unsigned                max_db; /* for OQ */
 	boolean                 predicate_drawing;
-
-	unsigned		num_so_targets;
-	struct r600_so_target	*so_targets[PIPE_MAX_SO_BUFFERS];
-	boolean			streamout_start;
-	unsigned		streamout_append_bitmask;
-	unsigned		*vs_so_stride_in_dw;
-	unsigned		*vs_shader_so_strides;
 
 	/* Vertex and index buffers. */
 	bool			vertex_buffers_dirty;
@@ -210,22 +205,12 @@ struct r600_context {
 
 /* r600_blit.c */
 void si_init_blit_functions(struct r600_context *rctx);
-void r600_blit_decompress_depth(struct pipe_context *ctx,
-		struct r600_texture *texture,
-		struct r600_texture *staging,
-		unsigned first_level, unsigned last_level,
-		unsigned first_layer, unsigned last_layer,
-		unsigned first_sample, unsigned last_sample);
 void si_flush_depth_textures(struct r600_context *rctx,
 			     struct r600_textures_info *textures);
 void r600_decompress_color_textures(struct r600_context *rctx,
 				    struct r600_textures_info *textures);
 
 /* r600_buffer.c */
-bool si_init_resource(struct r600_screen *rscreen,
-		      struct r600_resource *res,
-		      unsigned size, unsigned alignment,
-		      boolean use_reusable_pool, unsigned usage);
 struct pipe_resource *si_buffer_create(struct pipe_screen *screen,
 				       const struct pipe_resource *templ);
 void r600_upload_index_buffer(struct r600_context *rctx,
@@ -242,10 +227,6 @@ void r600_init_query_functions(struct r600_context *rctx);
 
 /* r600_resource.c */
 void r600_init_context_resource_functions(struct r600_context *r600);
-
-/* r600_texture.c */
-void r600_init_screen_texture_functions(struct pipe_screen *screen);
-void si_init_surface_functions(struct r600_context *r600);
 
 /* r600_translate.c */
 void r600_translate_index_buffer(struct r600_context *r600,

@@ -247,6 +247,14 @@ brw_initialize_context_constants(struct brw_context *brw)
    ctx->Const.DisableGLSLLineContinuations =
       driQueryOptionb(&brw->optionCache, "disable_glsl_line_continuations");
 
+   if (brw->gen >= 6) {
+      ctx->Const.MaxVarying = 32;
+      ctx->Const.VertexProgram.MaxOutputComponents = 128;
+      ctx->Const.GeometryProgram.MaxInputComponents = 128;
+      ctx->Const.GeometryProgram.MaxOutputComponents = 128;
+      ctx->Const.FragmentProgram.MaxInputComponents = 128;
+   }
+
    /* We want the GLSL compiler to emit code that uses condition codes */
    for (int i = 0; i < MESA_SHADER_TYPES; i++) {
       ctx->ShaderCompilerOptions[i].MaxIfDepth = brw->gen < 6 ? 16 : UINT_MAX;
@@ -361,6 +369,7 @@ brwCreateContext(int api,
 	 brw->max_vs_threads = 70;
 	 brw->max_gs_threads = 70;
 	 brw->urb.size = 128;
+         brw->urb.min_vs_entries = 32;
 	 brw->urb.max_vs_entries = 640;
 	 brw->urb.max_gs_entries = 256;
       } else if (brw->gt == 2) {
@@ -368,6 +377,7 @@ brwCreateContext(int api,
 	 brw->max_vs_threads = 280;
 	 brw->max_gs_threads = 256;
 	 brw->urb.size = 256;
+         brw->urb.min_vs_entries = 64;
 	 brw->urb.max_vs_entries = 1664;
 	 brw->urb.max_gs_entries = 640;
       } else if (brw->gt == 3) {
@@ -375,6 +385,7 @@ brwCreateContext(int api,
 	 brw->max_vs_threads = 280;
 	 brw->max_gs_threads = 256;
 	 brw->urb.size = 512;
+         brw->urb.min_vs_entries = 64;
 	 brw->urb.max_vs_entries = 1664;
 	 brw->urb.max_gs_entries = 640;
       }
@@ -384,6 +395,7 @@ brwCreateContext(int api,
 	 brw->max_vs_threads = 36;
 	 brw->max_gs_threads = 36;
 	 brw->urb.size = 128;
+         brw->urb.min_vs_entries = 32;
 	 brw->urb.max_vs_entries = 512;
 	 brw->urb.max_gs_entries = 192;
       } else if (brw->gt == 2) {
@@ -391,6 +403,7 @@ brwCreateContext(int api,
 	 brw->max_vs_threads = 128;
 	 brw->max_gs_threads = 128;
 	 brw->urb.size = 256;
+         brw->urb.min_vs_entries = 32;
 	 brw->urb.max_vs_entries = 704;
 	 brw->urb.max_gs_entries = 320;
       } else {
@@ -402,6 +415,7 @@ brwCreateContext(int api,
 	 brw->max_vs_threads = 60;
 	 brw->max_gs_threads = 60;
 	 brw->urb.size = 64;            /* volume 5c.5 section 5.1 */
+         brw->urb.min_vs_entries = 24;
 	 brw->urb.max_vs_entries = 256; /* volume 2a (see 3DSTATE_URB) */
 	 brw->urb.max_gs_entries = 256;
       } else {
@@ -409,6 +423,7 @@ brwCreateContext(int api,
 	 brw->max_vs_threads = 24;
 	 brw->max_gs_threads = 21; /* conservative; 24 if rendering disabled */
 	 brw->urb.size = 32;            /* volume 5c.5 section 5.1 */
+         brw->urb.min_vs_entries = 24;
 	 brw->urb.max_vs_entries = 256; /* volume 2a (see 3DSTATE_URB) */
 	 brw->urb.max_gs_entries = 256;
       }
@@ -468,8 +483,10 @@ brwCreateContext(int api,
    if ((flags & __DRI_CTX_FLAG_FORWARD_COMPATIBLE) != 0)
       ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_FORWARD_COMPATIBLE_BIT;
 
+   ctx->Debug.DebugOutput = GL_FALSE;
    if ((flags & __DRI_CTX_FLAG_DEBUG) != 0) {
       ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_DEBUG_BIT;
+      ctx->Debug.DebugOutput = GL_TRUE;
 
       /* Turn on some extra GL_ARB_debug_output generation. */
       brw->perf_debug = true;
@@ -485,6 +502,10 @@ brwCreateContext(int api,
 
    _mesa_initialize_dispatch_tables(ctx);
    _mesa_initialize_vbo_vtxfmt(ctx);
+
+   if (ctx->Extensions.AMD_performance_monitor) {
+      brw_init_performance_monitors(brw);
+   }
 
    return true;
 }

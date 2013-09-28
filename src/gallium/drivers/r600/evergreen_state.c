@@ -1188,14 +1188,14 @@ evergreen_create_sampler_view_custom(struct pipe_context *ctx,
 	macro_aspect = eg_macro_tile_aspect(macro_aspect);
 	bankw = eg_bank_wh(bankw);
 	bankh = eg_bank_wh(bankh);
-	fmask_bankh = eg_bank_wh(tmp->fmask_bank_height);
+	fmask_bankh = eg_bank_wh(tmp->fmask.bank_height);
 
 	/* 128 bit formats require tile type = 1 */
 	if (rscreen->b.chip_class == CAYMAN) {
 		if (util_format_get_blocksize(pipe_format) >= 16)
 			non_disp_tiling = 1;
 	}
-	nbanks = eg_num_banks(rscreen->tiling_info.num_banks);
+	nbanks = eg_num_banks(rscreen->b.tiling_info.num_banks);
 
 	if (texture->target == PIPE_TEXTURE_1D_ARRAY) {
 	        height = 1;
@@ -1226,7 +1226,7 @@ evergreen_create_sampler_view_custom(struct pipe_context *ctx,
 			view->skip_mip_address_reloc = true;
 		} else {
 			/* FMASK should be in MIP_ADDRESS for multisample textures */
-			view->tex_resource_words[3] = (tmp->fmask_offset + r600_resource_va(ctx->screen, texture)) >> 8;
+			view->tex_resource_words[3] = (tmp->fmask.offset + r600_resource_va(ctx->screen, texture)) >> 8;
 		}
 	} else if (state->u.tex.last_level && texture->nr_samples <= 1) {
 		view->tex_resource_words[3] = (surflevel[1].offset + r600_resource_va(ctx->screen, texture)) >> 8;
@@ -1348,7 +1348,7 @@ void evergreen_init_color_surface_rat(struct r600_context *rctx,
 	unsigned block_size =
 		align(util_format_get_blocksize(pipe_buffer->format), 4);
 	unsigned pitch_alignment =
-		MAX2(64, rctx->screen->tiling_info.group_bytes / block_size);
+		MAX2(64, rctx->screen->b.tiling_info.group_bytes / block_size);
 	unsigned pitch = align(pipe_buffer->width0, pitch_alignment);
 
 	/* XXX: This is copied from evergreen_init_color_surface().  I don't
@@ -1444,7 +1444,7 @@ void evergreen_init_color_surface(struct r600_context *rctx,
 	macro_aspect = rtex->surface.mtilea;
 	bankw = rtex->surface.bankw;
 	bankh = rtex->surface.bankh;
-	fmask_bankh = rtex->fmask_bank_height;
+	fmask_bankh = rtex->fmask.bank_height;
 	tile_split = eg_tile_split(tile_split);
 	macro_aspect = eg_macro_tile_aspect(macro_aspect);
 	bankw = eg_bank_wh(bankw);
@@ -1456,7 +1456,7 @@ void evergreen_init_color_surface(struct r600_context *rctx,
 		if (util_format_get_blocksize(surf->base.format) >= 16)
 			non_disp_tiling = 1;
 	}
-	nbanks = eg_num_banks(rscreen->tiling_info.num_banks);
+	nbanks = eg_num_banks(rscreen->b.tiling_info.num_banks);
 	desc = util_format_description(surf->base.format);
 	for (i = 0; i < 4; i++) {
 		if (desc->channel[i].type != UTIL_FORMAT_TYPE_VOID) {
@@ -1533,12 +1533,6 @@ void evergreen_init_color_surface(struct r600_context *rctx,
 		S_028C70_NUMBER_TYPE(ntype) |
 		S_028C70_ENDIAN(endian);
 
-	if (rtex->is_rat) {
-		color_info |= S_028C70_RAT(1);
-		color_dim = S_028C78_WIDTH_MAX(pipe_tex->width0 & 0xffff)
-			| S_028C78_HEIGHT_MAX((pipe_tex->width0 >> 16) & 0xffff);
-	}
-
 	/* EXPORT_NORM is an optimzation that can be enabled for better
 	 * performance in certain cases.
 	 * EXPORT_NORM can be enabled if:
@@ -1555,8 +1549,11 @@ void evergreen_init_color_surface(struct r600_context *rctx,
 		surf->export_16bpc = true;
 	}
 
-	if (rtex->fmask_size && rtex->cmask_size) {
-		color_info |= S_028C70_COMPRESSION(1) | S_028C70_FAST_CLEAR(1);
+	if (rtex->fmask.size) {
+		color_info |= S_028C70_COMPRESSION(1);
+	}
+	if (rtex->cmask.size) {
+		color_info |= S_028C70_FAST_CLEAR(1);
 	}
 
 	base_offset = r600_resource_va(rctx->b.b.screen, pipe_tex);
@@ -1574,15 +1571,19 @@ void evergreen_init_color_surface(struct r600_context *rctx,
 				      S_028C6C_SLICE_MAX(surf->base.u.tex.last_layer);
 	}
 	surf->cb_color_attrib = color_attrib;
-	if (rtex->fmask_size && rtex->cmask_size) {
-		surf->cb_color_fmask = (base_offset + rtex->fmask_offset) >> 8;
-		surf->cb_color_cmask = (base_offset + rtex->cmask_offset) >> 8;
+	if (rtex->fmask.size) {
+		surf->cb_color_fmask = (base_offset + rtex->fmask.offset) >> 8;
 	} else {
 		surf->cb_color_fmask = surf->cb_color_base;
+	}
+	if (rtex->cmask.size) {
+		uint64_t va = r600_resource_va(rctx->b.b.screen, &rtex->cmask_buffer->b.b);
+		surf->cb_color_cmask = (va + rtex->cmask.offset) >> 8;
+	} else {
 		surf->cb_color_cmask = surf->cb_color_base;
 	}
-	surf->cb_color_fmask_slice = S_028C88_TILE_MAX(rtex->fmask_slice_tile_max);
-	surf->cb_color_cmask_slice = S_028C80_TILE_MAX(rtex->cmask_slice_tile_max);
+	surf->cb_color_fmask_slice = S_028C88_TILE_MAX(rtex->fmask.slice_tile_max);
+	surf->cb_color_cmask_slice = S_028C80_TILE_MAX(rtex->cmask.slice_tile_max);
 
 	surf->color_initialized = true;
 }
@@ -1627,7 +1628,7 @@ static void evergreen_init_depth_surface(struct r600_context *rctx,
 	macro_aspect = eg_macro_tile_aspect(macro_aspect);
 	bankw = eg_bank_wh(bankw);
 	bankh = eg_bank_wh(bankh);
-	nbanks = eg_num_banks(rscreen->tiling_info.num_banks);
+	nbanks = eg_num_banks(rscreen->b.tiling_info.num_banks);
 	offset >>= 8;
 
 	surf->db_depth_info = S_028040_ARRAY_MODE(array_mode) |
@@ -1760,7 +1761,7 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 			rctx->framebuffer.export_16bpc = false;
 		}
 
-		if (rtex->fmask_size && rtex->cmask_size) {
+		if (rtex->fmask.size && rtex->cmask.size) {
 			rctx->framebuffer.compressed_cb_mask |= 1 << i;
 		}
 	}
@@ -2180,6 +2181,13 @@ static void evergreen_emit_framebuffer_state(struct r600_context *rctx, struct r
 						       &rctx->b.rings.gfx,
 						       (struct r600_resource*)cb->base.texture,
 						       RADEON_USAGE_READWRITE);
+		unsigned cmask_reloc = 0;
+		if (tex->cmask_buffer && tex->cmask_buffer != &tex->resource) {
+			cmask_reloc = r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx,
+				tex->cmask_buffer, RADEON_USAGE_READWRITE);
+		} else {
+			cmask_reloc = reloc;
+		}
 
 		r600_write_context_reg_seq(cs, R_028C60_CB_COLOR0_BASE + i * 0x3C, 13);
 		radeon_emit(cs, cb->cb_color_base);	/* R_028C60_CB_COLOR0_BASE */
@@ -2208,13 +2216,13 @@ static void evergreen_emit_framebuffer_state(struct r600_context *rctx, struct r
 		radeon_emit(cs, reloc);
 
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0)); /* R_028C7C_CB_COLOR0_CMASK */
-		radeon_emit(cs, reloc);
+		radeon_emit(cs, cmask_reloc);
 
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0)); /* R_028C84_CB_COLOR0_FMASK */
 		radeon_emit(cs, reloc);
 	}
 	/* set CB_COLOR1_INFO for possible dual-src blending */
-	if (i == 1 && !((struct r600_texture*)state->cbufs[0]->texture)->is_rat) {
+	if (i == 1) {
 		r600_write_context_reg(cs, R_028C70_CB_COLOR0_INFO + 1 * 0x3C,
 				       ((struct r600_surface*)state->cbufs[0])->cb_color_info);
 
@@ -3553,6 +3561,17 @@ void *evergreen_create_decompress_blend(struct r600_context *rctx)
 	return evergreen_create_blend_state_mode(&rctx->b.b, &blend, mode);
 }
 
+void *evergreen_create_fastclear_blend(struct r600_context *rctx)
+{
+	struct pipe_blend_state blend;
+	unsigned mode = V_028808_CB_ELIMINATE_FAST_CLEAR;
+
+	memset(&blend, 0, sizeof(blend));
+	blend.independent_blend_enable = true;
+	blend.rt[0].colormask = 0xf;
+	return evergreen_create_blend_state_mode(&rctx->b.b, &blend, mode);
+}
+
 void *evergreen_create_db_flush_dsa(struct r600_context *rctx)
 {
 	struct pipe_depth_stencil_alpha_state dsa = {{0}};
@@ -3636,7 +3655,7 @@ static void evergreen_dma_copy_tile(struct r600_context *rctx,
 	sub_cmd = 0x8;
 	lbpp = util_logbase2(bpp);
 	pitch_tile_max = ((pitch / bpp) >> 3) - 1;
-	nbanks = eg_num_banks(rctx->screen->tiling_info.num_banks);
+	nbanks = eg_num_banks(rctx->screen->b.tiling_info.num_banks);
 
 	if (dst_mode == RADEON_SURF_MODE_LINEAR) {
 		/* T2L */
@@ -3720,13 +3739,13 @@ static void evergreen_dma_copy_tile(struct r600_context *rctx,
 	}
 }
 
-boolean evergreen_dma_blit(struct pipe_context *ctx,
-			struct pipe_resource *dst,
-			unsigned dst_level,
-			unsigned dst_x, unsigned dst_y, unsigned dst_z,
-			struct pipe_resource *src,
-			unsigned src_level,
-			const struct pipe_box *src_box)
+static boolean evergreen_dma_blit(struct pipe_context *ctx,
+				  struct pipe_resource *dst,
+				  unsigned dst_level,
+				  unsigned dst_x, unsigned dst_y, unsigned dst_z,
+				  struct pipe_resource *src,
+				  unsigned src_level,
+				  const struct pipe_box *src_box)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct r600_texture *rsrc = (struct r600_texture*)src;
@@ -3740,6 +3759,12 @@ boolean evergreen_dma_blit(struct pipe_context *ctx,
 	}
 	if (src->format != dst->format) {
 		return FALSE;
+	}
+	if (rdst->dirty_level_mask != 0) {
+		return FALSE;
+	}
+	if (rsrc->dirty_level_mask) {
+		ctx->flush_resource(ctx, src);
 	}
 
 	src_x = util_format_get_nblocksx(src->format, src_box->x);
@@ -3879,5 +3904,7 @@ void evergreen_init_state_functions(struct r600_context *rctx)
                 rctx->b.b.get_sample_position = evergreen_get_sample_position;
         else
                 rctx->b.b.get_sample_position = cayman_get_sample_position;
+	rctx->b.dma_copy = evergreen_dma_blit;
+
 	evergreen_init_compute_state_functions(rctx);
 }

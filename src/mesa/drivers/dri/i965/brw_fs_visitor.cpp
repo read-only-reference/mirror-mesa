@@ -501,6 +501,10 @@ fs_visitor::visit(ir_expression *ir)
       assert(!"not reached: should be handled by lower_vector_insert()");
       break;
 
+   case ir_binop_ldexp:
+      assert(!"not reached: should be handled by ldexp_to_arith()");
+      break;
+
    case ir_unop_sqrt:
       emit_math(SHADER_OPCODE_SQRT, this->result, op[0]);
       break;
@@ -728,6 +732,12 @@ fs_visitor::visit(ir_expression *ir)
    case ir_triop_lrp:
       emit_lrp(this->result, op[0], op[1], op[2]);
       break;
+
+   case ir_triop_csel:
+      emit(CMP(reg_null_d, op[0], fs_reg(0), BRW_CONDITIONAL_NZ));
+      inst = emit(BRW_OPCODE_SEL, this->result, op[1], op[2]);
+      inst->predicate = BRW_PREDICATE_NORMAL;
+      break;
    }
 }
 
@@ -876,7 +886,13 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
 	 emit(MOV(fs_reg(MRF, base_mrf + mlen + i), coordinate));
 	 coordinate.reg_offset++;
       }
-      /* gen4's SIMD8 sampler always has the slots for u,v,r present. */
+
+      /* gen4's SIMD8 sampler always has the slots for u,v,r present.
+       * the unused slots must be zeroed.
+       */
+      for (int i = ir->coordinate->type->vector_elements; i < 3; i++) {
+         emit(MOV(fs_reg(MRF, base_mrf + mlen + i), fs_reg(0.0f)));
+      }
       mlen += 3;
 
       if (ir->op == ir_tex) {
@@ -1708,7 +1724,10 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
 {
    ir_expression *expr = ir->as_expression();
 
-   if (expr) {
+   if (expr &&
+       expr->operation != ir_binop_logic_and &&
+       expr->operation != ir_binop_logic_or &&
+       expr->operation != ir_binop_logic_xor) {
       fs_reg op[2];
       fs_inst *inst;
 
@@ -1727,11 +1746,6 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
 	 inst = emit(AND(reg_null_d, op[0], fs_reg(1)));
 	 inst->conditional_mod = BRW_CONDITIONAL_Z;
 	 break;
-
-      case ir_binop_logic_xor:
-      case ir_binop_logic_or:
-      case ir_binop_logic_and:
-	 goto out;
 
       case ir_unop_f2b:
 	 if (brw->gen >= 6) {
@@ -1774,7 +1788,6 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
       return;
    }
 
-out:
    ir->accept(this);
 
    fs_inst *inst = emit(AND(reg_null_d, this->result, fs_reg(1)));
@@ -2066,7 +2079,7 @@ fs_visitor::visit(ir_function *ir)
       const ir_function_signature *sig;
       exec_list empty;
 
-      sig = ir->matching_signature(&empty);
+      sig = ir->matching_signature(NULL, &empty);
 
       assert(sig);
 
@@ -2159,10 +2172,10 @@ fs_visitor::emit_dummy_fs()
 struct brw_reg
 fs_visitor::interp_reg(int location, int channel)
 {
-   int regnr = urb_setup[location] * 2 + channel / 2;
+   int regnr = c->prog_data.urb_setup[location] * 2 + channel / 2;
    int stride = (channel & 1) * 4;
 
-   assert(urb_setup[location] != -1);
+   assert(c->prog_data.urb_setup[location] != -1);
 
    return brw_vec1_grf(regnr, stride);
 }

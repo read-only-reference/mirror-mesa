@@ -59,6 +59,8 @@ ir_variable::clone(void *mem_ctx, struct hash_table *ht) const
    var->explicit_binding = this->explicit_binding;
    var->has_initializer = this->has_initializer;
    var->depth_layout = this->depth_layout;
+   var->assigned = this->assigned;
+   var->used = this->used;
 
    var->num_state_slots = this->num_state_slots;
    if (this->state_slots) {
@@ -327,7 +329,7 @@ ir_function_signature::clone_prototype(void *mem_ctx, struct hash_table *ht) con
       new(mem_ctx) ir_function_signature(this->return_type);
 
    copy->is_defined = false;
-   copy->is_builtin = this->is_builtin;
+   copy->builtin_avail = this->builtin_avail;
    copy->origin = this;
 
    /* Clone the parameter list, but NOT the body.

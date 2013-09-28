@@ -46,6 +46,7 @@
 #include "vl/vl_mpeg12_decoder.h"
 
 #include "../../winsys/radeon/drm/radeon_winsys.h"
+#include "r600_pipe_common.h"
 #include "radeon_uvd.h"
 
 #define RUVD_ERR(fmt, args...) \
@@ -103,13 +104,7 @@ static unsigned alloc_stream_handle()
 /* flush IB to the hardware */
 static void flush(struct ruvd_decoder *dec)
 {
-	uint32_t *pm4 =	dec->cs->buf;
-
-	// align IB
-	while(dec->cs->cdw % 16)
-		pm4[dec->cs->cdw++] = RUVD_PKT2();
-
-	dec->ws->cs_flush(dec->cs, 0, 0);
+	dec->ws->cs_flush(dec->cs, RADEON_FLUSH_ASYNC, 0);
 }
 
 /* add a new set register command to the IB */
@@ -153,7 +148,7 @@ static void send_msg(struct ruvd_decoder *dec, struct ruvd_msg *msg)
 
 	/* and send it to the hardware */
 	send_cmd(dec, RUVD_CMD_MSG_BUFFER, buf->cs_handle, 0,
-		 RADEON_USAGE_READ, RADEON_DOMAIN_VRAM);
+		 RADEON_USAGE_READ, RADEON_DOMAIN_GTT);
 }
 
 /* create a buffer in the winsys */
@@ -799,7 +794,7 @@ static void ruvd_end_frame(struct pipe_video_codec *decoder,
 	send_cmd(dec, RUVD_CMD_DECODING_TARGET_BUFFER, dt, 0,
 		 RADEON_USAGE_WRITE, RADEON_DOMAIN_VRAM);
 	send_cmd(dec, RUVD_CMD_FEEDBACK_BUFFER, msg_fb_buf->cs_handle,
-		 0x1000, RADEON_USAGE_WRITE, RADEON_DOMAIN_VRAM);
+		 0x1000, RADEON_USAGE_WRITE, RADEON_DOMAIN_GTT);
 	set_reg(dec, RUVD_ENGINE_CNTL, 1);
 
 	flush(dec);
@@ -818,11 +813,12 @@ static void ruvd_flush(struct pipe_video_codec *decoder)
  */
 struct pipe_video_codec *ruvd_create_decoder(struct pipe_context *context,
 					     const struct pipe_video_codec *templ,
-					     struct radeon_winsys* ws,
 					     ruvd_set_dtb set_dtb)
 {
+	struct radeon_winsys* ws = ((struct r600_common_context *)context)->ws;
 	unsigned dpb_size = calc_dpb_size(templ);
 	unsigned width = templ->width, height = templ->height;
+	unsigned bs_buf_size;
 	struct radeon_info info;
 	struct ruvd_decoder *dec;
 	struct ruvd_msg msg;
@@ -854,6 +850,8 @@ struct pipe_video_codec *ruvd_create_decoder(struct pipe_context *context,
 
 	dec->base = *templ;
 	dec->base.context = context;
+	dec->base.width = width;
+	dec->base.height = height;
 
 	dec->base.destroy = ruvd_destroy;
 	dec->base.begin_frame = ruvd_begin_frame;
@@ -871,6 +869,7 @@ struct pipe_video_codec *ruvd_create_decoder(struct pipe_context *context,
 		goto error;
 	}
 
+	bs_buf_size = width * height * 512 / (16 * 16);
 	for (i = 0; i < NUM_BUFFERS; ++i) {
 		unsigned msg_fb_size = align(sizeof(struct ruvd_msg), 0x1000) + 0x1000;
 		if (!create_buffer(dec, &dec->msg_fb_buffers[i], msg_fb_size)) {
@@ -878,7 +877,7 @@ struct pipe_video_codec *ruvd_create_decoder(struct pipe_context *context,
 			goto error;
 		}
 
-		if (!create_buffer(dec, &dec->bs_buffers[i], 4096)) {
+		if (!create_buffer(dec, &dec->bs_buffers[i], bs_buf_size)) {
 			RUVD_ERR("Can't allocated bitstream buffers.\n");
 			goto error;
 		}
@@ -1078,6 +1077,24 @@ int ruvd_get_video_param(struct pipe_screen *screen,
 			 enum pipe_video_entrypoint entrypoint,
 			 enum pipe_video_cap param)
 {
+	struct r600_common_screen *rscreen = (struct r600_common_screen *)screen;
+
+	/* UVD 2.x limits */
+	if (rscreen->family < CHIP_PALM) {
+		enum pipe_video_format codec = u_reduce_video_profile(profile);
+		switch (param) {
+		case PIPE_VIDEO_CAP_SUPPORTED:
+			/* no support for MPEG4 */
+			return codec != PIPE_VIDEO_FORMAT_MPEG4;
+		case PIPE_VIDEO_CAP_PREFERS_INTERLACED:
+		case PIPE_VIDEO_CAP_SUPPORTS_INTERLACED:
+			/* and MPEG2 only with shaders */
+			return codec != PIPE_VIDEO_FORMAT_MPEG12;
+		default:
+			break;
+		}
+	}
+
 	switch (param) {
 	case PIPE_VIDEO_CAP_SUPPORTED:
 		switch (u_reduce_video_profile(profile)) {

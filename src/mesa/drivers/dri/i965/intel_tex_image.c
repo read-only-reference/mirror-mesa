@@ -35,7 +35,6 @@ intel_miptree_create_for_teximage(struct brw_context *brw,
 				  struct intel_texture_image *intelImage,
 				  bool expect_accelerated_upload)
 {
-   GLuint firstLevel;
    GLuint lastLevel;
    int width, height, depth;
    GLuint i;
@@ -45,56 +44,34 @@ intel_miptree_create_for_teximage(struct brw_context *brw,
 
    DBG("%s\n", __FUNCTION__);
 
-   if (intelImage->base.Base.Level > intelObj->base.BaseLevel &&
-       (width == 1 ||
-        (intelObj->base.Target != GL_TEXTURE_1D && height == 1) ||
-        (intelObj->base.Target == GL_TEXTURE_3D && depth == 1))) {
-      /* For this combination, we're at some lower mipmap level and
-       * some important dimension is 1.  We can't extrapolate up to a
-       * likely base level width/height/depth for a full mipmap stack
-       * from this info, so just allocate this one level.
-       */
-      firstLevel = intelImage->base.Base.Level;
-      lastLevel = intelImage->base.Base.Level;
+   /* Figure out image dimensions at start level. */
+   for (i = intelImage->base.Base.Level; i > 0; i--) {
+      width <<= 1;
+      if (height != 1)
+         height <<= 1;
+      if (depth != 1)
+         depth <<= 1;
+   }
+
+   /* Guess a reasonable value for lastLevel.  This is probably going
+    * to be wrong fairly often and might mean that we have to look at
+    * resizable buffers, or require that buffers implement lazy
+    * pagetable arrangements.
+    */
+   if ((intelObj->base.Sampler.MinFilter == GL_NEAREST ||
+        intelObj->base.Sampler.MinFilter == GL_LINEAR) &&
+       intelImage->base.Base.Level == 0 &&
+       !intelObj->base.GenerateMipmap) {
+      lastLevel = 0;
    } else {
-      /* If this image disrespects BaseLevel, allocate from level zero.
-       * Usually BaseLevel == 0, so it's unlikely to happen.
-       */
-      if (intelImage->base.Base.Level < intelObj->base.BaseLevel)
-	 firstLevel = 0;
-      else
-	 firstLevel = intelObj->base.BaseLevel;
-
-      /* Figure out image dimensions at start level. */
-      for (i = intelImage->base.Base.Level; i > firstLevel; i--) {
-	 width <<= 1;
-	 if (height != 1)
-	    height <<= 1;
-	 if (depth != 1)
-	    depth <<= 1;
-      }
-
-      /* Guess a reasonable value for lastLevel.  This is probably going
-       * to be wrong fairly often and might mean that we have to look at
-       * resizable buffers, or require that buffers implement lazy
-       * pagetable arrangements.
-       */
-      if ((intelObj->base.Sampler.MinFilter == GL_NEAREST ||
-	   intelObj->base.Sampler.MinFilter == GL_LINEAR) &&
-	  intelImage->base.Base.Level == firstLevel &&
-	  firstLevel == 0) {
-	 lastLevel = firstLevel;
-      } else {
-	 lastLevel = (firstLevel +
-                      _mesa_get_tex_max_num_levels(intelObj->base.Target,
-                                                   width, height, depth) - 1);
-      }
+      lastLevel = _mesa_get_tex_max_num_levels(intelObj->base.Target,
+                                               width, height, depth) - 1;
    }
 
    return intel_miptree_create(brw,
 			       intelObj->base.Target,
 			       intelImage->base.Base.TexFormat,
-			       firstLevel,
+			       0,
 			       lastLevel,
 			       width,
 			       height,

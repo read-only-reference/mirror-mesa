@@ -84,33 +84,6 @@ static void r600_add_gpr_array(struct r600_shader *ps, int start_gpr,
 	ps->arrays[n].gpr_count = size;
 }
 
-static unsigned tgsi_get_processor_type(const struct tgsi_token *tokens)
-{
-	struct tgsi_parse_context parse;
-
-	if (tgsi_parse_init( &parse, tokens ) != TGSI_PARSE_OK) {
-		debug_printf("tgsi_parse_init() failed in %s:%i!\n", __func__, __LINE__);
-		return ~0;
-	}
-	return parse.FullHeader.Processor.Processor;
-}
-
-static bool r600_can_dump_shader(struct r600_screen *rscreen, unsigned processor_type)
-{
-	switch (processor_type) {
-	case TGSI_PROCESSOR_VERTEX:
-		return (rscreen->debug_flags & DBG_VS) != 0;
-	case TGSI_PROCESSOR_GEOMETRY:
-		return (rscreen->debug_flags & DBG_GS) != 0;
-	case TGSI_PROCESSOR_FRAGMENT:
-		return (rscreen->debug_flags & DBG_PS) != 0;
-	case TGSI_PROCESSOR_COMPUTE:
-		return (rscreen->debug_flags & DBG_CS) != 0;
-	default:
-		return false;
-	}
-}
-
 static void r600_dump_streamout(struct pipe_stream_output_info *so)
 {
 	unsigned i;
@@ -139,9 +112,9 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 	struct r600_pipe_shader_selector *sel = shader->selector;
 	int r, i;
 	uint32_t *ptr;
-	bool dump = r600_can_dump_shader(rctx->screen, tgsi_get_processor_type(sel->tokens));
-	unsigned use_sb = !(rctx->screen->debug_flags & DBG_NO_SB);
-	unsigned sb_disasm = use_sb || (rctx->screen->debug_flags & DBG_SB_DISASM);
+	bool dump = r600_can_dump_shader(&rctx->screen->b, sel->tokens);
+	unsigned use_sb = !(rctx->screen->b.debug_flags & DBG_NO_SB);
+	unsigned sb_disasm = use_sb || (rctx->screen->b.debug_flags & DBG_SB_DISASM);
 
 	shader->shader.bc.isa = rctx->isa;
 
@@ -191,7 +164,7 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 		if (shader->bo == NULL) {
 			return -ENOMEM;
 		}
-		ptr = r600_buffer_mmap_sync_with_rings(rctx, shader->bo, PIPE_TRANSFER_WRITE);
+		ptr = r600_buffer_map_sync_with_rings(&rctx->b, shader->bo, PIPE_TRANSFER_WRITE);
 		if (R600_BIG_ENDIAN) {
 			for (i = 0; i < shader->shader.bc.ndw; ++i) {
 				ptr[i] = util_bswap32(shader->shader.bc.bytecode[i]);
@@ -924,7 +897,7 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 	bool indirect_gprs;
 
 #ifdef R600_USE_LLVM
-	use_llvm = !(rscreen->debug_flags & DBG_NO_LLVM);
+	use_llvm = !(rscreen->b.debug_flags & DBG_NO_LLVM);
 #endif
 	ctx.bc = &shader->bc;
 	ctx.shader = shader;
@@ -1122,7 +1095,7 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 	if (use_llvm) {
 		struct radeon_llvm_context radeon_llvm_ctx;
 		LLVMModuleRef mod;
-		bool dump = r600_can_dump_shader(rscreen, ctx.type);
+		bool dump = r600_can_dump_shader(&rscreen->b, tokens);
 		boolean use_kill = false;
 
 		memset(&radeon_llvm_ctx, 0, sizeof(radeon_llvm_ctx));

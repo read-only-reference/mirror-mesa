@@ -466,6 +466,42 @@ static void radeon_drm_cs_flush(struct radeon_winsys_cs *rcs, unsigned flags, ui
     struct radeon_drm_cs *cs = radeon_drm_cs(rcs);
     struct radeon_cs_context *tmp;
 
+    switch (cs->base.ring_type) {
+    case RING_DMA:
+	    /* pad DMA ring to 8 DWs */
+	    if (cs->ws->info.chip_class <= SI) {
+		    while (rcs->cdw & 7)
+			    OUT_CS(&cs->base, 0xf0000000); /* NOP packet */
+	    } else {
+		    while (rcs->cdw & 7)
+			    OUT_CS(&cs->base, 0x00000000); /* NOP packet */
+	    }
+	    break;
+    case RING_GFX:
+	    /* pad DMA ring to 8 DWs to meet CP fetch alignment requirements
+	     * r6xx, requires at least 4 dw alignment to avoid a hw bug.
+	     */
+            if (flags & RADEON_FLUSH_COMPUTE) {
+		    if (cs->ws->info.chip_class <= SI) {
+			    while (rcs->cdw & 7)
+				    OUT_CS(&cs->base, 0x80000000); /* type2 nop packet */
+		    } else {
+			    while (rcs->cdw & 7)
+				    OUT_CS(&cs->base, 0xffff1000); /* type3 nop packet */
+		    }
+	    } else {
+		    while (rcs->cdw & 7)
+			    OUT_CS(&cs->base, 0x80000000); /* type2 nop packet */
+	    }
+	    break;
+    case RING_UVD:
+            while (rcs->cdw & 15)
+		OUT_CS(&cs->base, 0x80000000); /* type2 nop packet */
+	    break;
+    default:
+	    break;
+    }
+
     if (rcs->cdw > RADEON_MAX_CMDBUF_DWORDS) {
        fprintf(stderr, "radeon: command stream overflowed\n");
     }
@@ -530,17 +566,12 @@ static void radeon_drm_cs_flush(struct radeon_winsys_cs *rcs, unsigned flags, ui
             break;
         }
 
-        if (cs->ws->thread && (flags & RADEON_FLUSH_ASYNC)) {
+        if (cs->ws->thread) {
             cs->flush_started = 1;
             radeon_drm_ws_queue_cs(cs->ws, cs);
+            if (!(flags & RADEON_FLUSH_ASYNC))
+                radeon_drm_cs_sync_flush(rcs);
         } else {
-            pipe_mutex_lock(cs->ws->cs_stack_lock);
-            if (cs->ws->thread) {
-                while (p_atomic_read(&cs->ws->ncs)) {
-                    pipe_condvar_wait(cs->ws->cs_queue_empty, cs->ws->cs_stack_lock);
-                }
-            }
-            pipe_mutex_unlock(cs->ws->cs_stack_lock);
             radeon_drm_cs_emit_ioctl_oneshot(cs, cs->cst);
         }
     } else {

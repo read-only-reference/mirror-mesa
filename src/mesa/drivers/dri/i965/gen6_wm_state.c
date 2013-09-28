@@ -41,6 +41,8 @@ gen6_upload_wm_push_constants(struct brw_context *brw)
    /* BRW_NEW_FRAGMENT_PROGRAM */
    const struct brw_fragment_program *fp =
       brw_fragment_program_const(brw->fragment_program);
+   /* CACHE_NEW_WM_PROG */
+   const struct brw_wm_prog_data *prog_data = brw->wm.prog_data;
 
    /* Updates the ParameterValues[i] pointers for all parameters of the
     * basic type of PROGRAM_STATE_VAR.
@@ -48,25 +50,25 @@ gen6_upload_wm_push_constants(struct brw_context *brw)
    /* XXX: Should this happen somewhere before to get our state flag set? */
    _mesa_load_state_parameters(ctx, fp->program.Base.Parameters);
 
-   /* CACHE_NEW_WM_PROG */
-   if (brw->wm.prog_data->nr_params != 0) {
+   if (prog_data->nr_params == 0) {
+      brw->wm.base.push_const_size = 0;
+   } else {
       float *constants;
       unsigned int i;
 
       constants = brw_state_batch(brw, AUB_TRACE_WM_CONSTANTS,
-				  brw->wm.prog_data->nr_params *
-				  sizeof(float),
-				  32, &brw->wm.push_const_offset);
+				  prog_data->nr_params * sizeof(float),
+				  32, &brw->wm.base.push_const_offset);
 
-      for (i = 0; i < brw->wm.prog_data->nr_params; i++) {
-	 constants[i] = *brw->wm.prog_data->param[i];
+      for (i = 0; i < prog_data->nr_params; i++) {
+	 constants[i] = *prog_data->param[i];
       }
 
       if (0) {
 	 printf("WM constants:\n");
-	 for (i = 0; i < brw->wm.prog_data->nr_params; i++) {
+	 for (i = 0; i < prog_data->nr_params; i++) {
 	    if ((i & 7) == 0)
-	       printf("g%d: ", brw->wm.prog_data->first_curbe_grf + i / 8);
+	       printf("g%d: ", prog_data->first_curbe_grf + i / 8);
 	    printf("%8f ", constants[i]);
 	    if ((i & 7) == 7)
 	       printf("\n");
@@ -75,6 +77,9 @@ gen6_upload_wm_push_constants(struct brw_context *brw)
 	    printf("\n");
 	 printf("\n");
       }
+
+      brw->wm.base.push_const_size =
+         ALIGN(prog_data->nr_params, prog_data->dispatch_width) / 8;
    }
 }
 
@@ -117,7 +122,7 @@ upload_wm_state(struct brw_context *brw)
       /* Pointer to the WM constant buffer.  Covered by the set of
        * state flags from gen6_upload_wm_push_constants.
        */
-      OUT_BATCH(brw->wm.push_const_offset +
+      OUT_BATCH(brw->wm.base.push_const_offset +
 		ALIGN(brw->wm.prog_data->nr_params,
 		      brw->wm.prog_data->dispatch_width) / 8 - 1);
       OUT_BATCH(0);
@@ -140,7 +145,8 @@ upload_wm_state(struct brw_context *brw)
       dw2 |= GEN6_WM_FLOATING_POINT_MODE_ALT;
 
    /* CACHE_NEW_SAMPLER */
-   dw2 |= (ALIGN(brw->wm.sampler_count, 4) / 4) << GEN6_WM_SAMPLER_COUNT_SHIFT;
+   dw2 |= (ALIGN(brw->wm.base.sampler_count, 4) / 4) <<
+           GEN6_WM_SAMPLER_COUNT_SHIFT;
    dw4 |= (brw->wm.prog_data->first_curbe_grf <<
 	   GEN6_WM_DISPATCH_START_GRF_SHIFT_0);
    dw4 |= (brw->wm.prog_data->first_curbe_grf_16 <<
@@ -187,7 +193,8 @@ upload_wm_state(struct brw_context *brw)
       dw5 |= GEN6_WM_DISPATCH_ENABLE;
    }
 
-   dw6 |= _mesa_bitcount_64(brw->fragment_program->Base.InputsRead) <<
+   /* CACHE_NEW_WM_PROG */
+   dw6 |= brw->wm.prog_data->num_varying_inputs <<
       GEN6_WM_NUM_SF_OUTPUTS_SHIFT;
    if (multisampled_fbo) {
       /* _NEW_MULTISAMPLE */
@@ -203,10 +210,11 @@ upload_wm_state(struct brw_context *brw)
 
    BEGIN_BATCH(9);
    OUT_BATCH(_3DSTATE_WM << 16 | (9 - 2));
-   OUT_BATCH(brw->wm.prog_offset);
+   OUT_BATCH(brw->wm.base.prog_offset);
    OUT_BATCH(dw2);
    if (brw->wm.prog_data->total_scratch) {
-      OUT_RELOC(brw->wm.scratch_bo, I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
+      OUT_RELOC(brw->wm.base.scratch_bo,
+                I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
 		ffs(brw->wm.prog_data->total_scratch) - 11);
    } else {
       OUT_BATCH(0);
@@ -216,7 +224,7 @@ upload_wm_state(struct brw_context *brw)
    OUT_BATCH(dw6);
    OUT_BATCH(0); /* kernel 1 pointer */
    /* kernel 2 pointer */
-   OUT_BATCH(brw->wm.prog_offset + brw->wm.prog_data->prog_offset_16);
+   OUT_BATCH(brw->wm.base.prog_offset + brw->wm.prog_data->prog_offset_16);
    ADVANCE_BATCH();
 }
 
@@ -229,7 +237,8 @@ const struct brw_tracked_state gen6_wm_state = {
 		_NEW_POLYGON |
                 _NEW_MULTISAMPLE),
       .brw   = (BRW_NEW_FRAGMENT_PROGRAM |
-		BRW_NEW_BATCH),
+		BRW_NEW_BATCH |
+                BRW_NEW_PUSH_CONSTANT_ALLOCATION),
       .cache = (CACHE_NEW_SAMPLER |
 		CACHE_NEW_WM_PROG)
    },

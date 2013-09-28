@@ -34,6 +34,8 @@ find_matching_signature(const char *name, const exec_list *actual_parameters,
 			gl_shader **shader_list, unsigned num_shaders,
 			bool use_builtin);
 
+namespace {
+
 class call_link_visitor : public ir_hierarchical_visitor {
 public:
    call_link_visitor(gl_shader_program *prog, gl_shader *linked,
@@ -113,10 +115,10 @@ public:
       }
 
       ir_function_signature *linked_sig =
-	 f->exact_matching_signature(&callee->parameters);
+	 f->exact_matching_signature(NULL, &callee->parameters);
       if ((linked_sig == NULL)
 	  || ((linked_sig != NULL)
-	      && (linked_sig->is_builtin != ir->use_builtin))) {
+	      && (linked_sig->is_builtin() != ir->use_builtin))) {
 	 linked_sig = new(linked) ir_function_signature(callee->return_type);
 	 f->add_signature(linked_sig);
       }
@@ -170,6 +172,38 @@ public:
 
       ir->callee = linked_sig;
 
+      return visit_continue;
+   }
+
+   virtual ir_visitor_status visit_leave(ir_call *ir)
+   {
+      /* Traverse list of function parameters, and for array parameters
+       * propagate max_array_access. Otherwise arrays that are only referenced
+       * from inside functions via function parameters will be incorrectly
+       * optimized. This will lead to incorrect code being generated (or worse).
+       * Do it when leaving the node so the children would propagate their
+       * array accesses first.
+       */
+
+      const exec_node *formal_param_node = ir->callee->parameters.get_head();
+      if (formal_param_node) {
+         const exec_node *actual_param_node = ir->actual_parameters.get_head();
+         while (!actual_param_node->is_tail_sentinel()) {
+            ir_variable *formal_param = (ir_variable *) formal_param_node;
+            ir_rvalue *actual_param = (ir_rvalue *) actual_param_node;
+
+            formal_param_node = formal_param_node->get_next();
+            actual_param_node = actual_param_node->get_next();
+
+            if (formal_param->type->is_array()) {
+               ir_dereference_variable *deref = actual_param->as_dereference_variable();
+               if (deref && deref->var && deref->var->type->is_array()) {
+                  deref->var->max_array_access =
+                     MAX2(formal_param->max_array_access, deref->var->max_array_access);
+               }
+            }
+         }
+      }
       return visit_continue;
    }
 
@@ -241,6 +275,7 @@ private:
    hash_table *locals;
 };
 
+} /* anonymous namespace */
 
 /**
  * Searches a list of shaders for a particular function definition
@@ -256,7 +291,8 @@ find_matching_signature(const char *name, const exec_list *actual_parameters,
       if (f == NULL)
 	 continue;
 
-      ir_function_signature *sig = f->matching_signature(actual_parameters);
+      ir_function_signature *sig =
+         f->matching_signature(NULL, actual_parameters);
 
       if ((sig == NULL) || !sig->is_defined)
 	 continue;
@@ -265,7 +301,7 @@ find_matching_signature(const char *name, const exec_list *actual_parameters,
        * signature that we found isn't a built-in, keep looking.  Also keep
        * looking if we expect a non-built-in but found a built-in.
        */
-      if (use_builtin != sig->is_builtin)
+      if (use_builtin != sig->is_builtin())
 	    continue;
 
       return sig;

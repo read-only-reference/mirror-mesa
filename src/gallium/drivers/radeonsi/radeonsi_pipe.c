@@ -31,7 +31,6 @@
 #include "util/u_blitter.h"
 #include "util/u_double_list.h"
 #include "util/u_format.h"
-#include "util/u_format_s3tc.h"
 #include "util/u_transfer.h"
 #include "util/u_surface.h"
 #include "util/u_pack_color.h"
@@ -228,7 +227,6 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	si_init_blit_functions(rctx);
 	r600_init_query_functions(rctx);
 	r600_init_context_resource_functions(rctx);
-	si_init_surface_functions(rctx);
 	si_init_compute_functions(rctx);
 
 	if (rscreen->b.info.has_uvd) {
@@ -247,6 +245,8 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	/* Initialize cache_flush. */
 	rctx->cache_flush = si_atom_cache_flush;
 	rctx->atoms.cache_flush = &rctx->cache_flush;
+
+	rctx->atoms.streamout_begin = &rctx->b.streamout.begin_atom;
 
 	switch (rctx->b.chip_class) {
 	case SI:
@@ -277,14 +277,15 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	if (rctx->blitter == NULL)
 		goto fail;
 
-	si_get_backend_mask(rctx); /* this emits commands and must be last */
-
 	rctx->dummy_pixel_shader =
 		util_make_fragment_cloneinput_shader(&rctx->b.b, 0,
 						     TGSI_SEMANTIC_GENERIC,
 						     TGSI_INTERPOLATE_CONSTANT);
 	rctx->b.b.bind_fs_state(&rctx->b.b, rctx->dummy_pixel_shader);
 
+	/* these must be last */
+	si_begin_new_cs(rctx);
+	si_get_backend_mask(rctx);
 	return &rctx->b.b;
 fail:
 	r600_destroy_context(&rctx->b.b);
@@ -339,6 +340,7 @@ static const char* r600_get_name(struct pipe_screen* pscreen)
 static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 {
 	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
+	bool has_streamout = HAVE_LLVM >= 0x0304;
 
 	switch (param) {
 	/* Supported features (boolean caps). */
@@ -411,20 +413,13 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 0;
 
 	/* Stream output. */
-#if 0
 	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
-		return debug_get_bool_option("R600_STREAMOUT", FALSE) ? 4 : 0;
+		return has_streamout ? 4 : 0;
 	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
-		return debug_get_bool_option("R600_STREAMOUT", FALSE) ? 1 : 0;
+		return has_streamout ? 1 : 0;
 	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
 	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
-		return 16*4;
-#endif
-	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
-	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
-	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
-	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
-		return 0;
+		return has_streamout ? 32*4 : 0;
 
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
@@ -440,6 +435,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_RENDER_TARGETS:
 		/* FIXME some r6xx are buggy and can only do 4 */
 		return 8;
+
+	case PIPE_CAP_MAX_VIEWPORTS:
+		return 1;
 
 	/* Timer queries, present when the clock frequency is non zero. */
 	case PIPE_CAP_QUERY_TIMESTAMP:
@@ -651,6 +649,11 @@ static void r600_destroy_screen(struct pipe_screen* pscreen)
 	if (rscreen == NULL)
 		return;
 
+	if (!radeon_winsys_unref(rscreen->b.ws))
+		return;
+
+	r600_common_screen_cleanup(&rscreen->b);
+
 	if (rscreen->fences.bo) {
 		struct r600_fence_block *entry, *tmp;
 
@@ -747,65 +750,6 @@ static boolean r600_fence_finish(struct pipe_screen *pscreen,
 	return rscreen->fences.data[rfence->index] != 0;
 }
 
-static int evergreen_interpret_tiling(struct r600_screen *rscreen, uint32_t tiling_config)
-{
-	switch (tiling_config & 0xf) {
-	case 0:
-		rscreen->tiling_info.num_channels = 1;
-		break;
-	case 1:
-		rscreen->tiling_info.num_channels = 2;
-		break;
-	case 2:
-		rscreen->tiling_info.num_channels = 4;
-		break;
-	case 3:
-		rscreen->tiling_info.num_channels = 8;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	switch ((tiling_config & 0xf0) >> 4) {
-	case 0:
-		rscreen->tiling_info.num_banks = 4;
-		break;
-	case 1:
-		rscreen->tiling_info.num_banks = 8;
-		break;
-	case 2:
-		rscreen->tiling_info.num_banks = 16;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	switch ((tiling_config & 0xf00) >> 8) {
-	case 0:
-		rscreen->tiling_info.group_bytes = 256;
-		break;
-	case 1:
-		rscreen->tiling_info.group_bytes = 512;
-		break;
-	default:
-		return -EINVAL;
-	}
-	return 0;
-}
-
-static int r600_init_tiling(struct r600_screen *rscreen)
-{
-	uint32_t tiling_config = rscreen->b.info.r600_tiling_config;
-
-	/* set default group bytes, overridden by tiling info ioctl */
-	rscreen->tiling_info.group_bytes = 512;
-
-	if (!tiling_config)
-		return 0;
-
-	return evergreen_interpret_tiling(rscreen, tiling_config);
-}
-
 static uint64_t r600_get_timestamp(struct pipe_screen *screen)
 {
 	struct r600_screen *rscreen = (struct r600_screen*)screen;
@@ -821,13 +765,10 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 		return NULL;
 	}
 
-	r600_common_screen_init(&rscreen->b, ws);
+	ws->query_info(ws, &rscreen->b.info);
 
-	if (r600_init_tiling(rscreen)) {
-		FREE(rscreen);
-		return NULL;
-	}
-
+	/* Set functions first. */
+	rscreen->b.b.context_create = r600_create_context;
 	rscreen->b.b.destroy = r600_destroy_screen;
 	rscreen->b.b.get_name = r600_get_name;
 	rscreen->b.b.get_vendor = r600_get_vendor;
@@ -837,12 +778,9 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 	rscreen->b.b.get_compute_param = r600_get_compute_param;
 	rscreen->b.b.get_timestamp = r600_get_timestamp;
 	rscreen->b.b.is_format_supported = si_is_format_supported;
-	rscreen->b.b.context_create = r600_create_context;
 	rscreen->b.b.fence_reference = r600_fence_reference;
 	rscreen->b.b.fence_signalled = r600_fence_signalled;
 	rscreen->b.b.fence_finish = r600_fence_finish;
-	r600_init_screen_resource_functions(&rscreen->b.b);
-
 	if (rscreen->b.info.has_uvd) {
 		rscreen->b.b.get_video_param = ruvd_get_video_param;
 		rscreen->b.b.is_video_format_supported = ruvd_is_format_supported;
@@ -850,8 +788,15 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 		rscreen->b.b.get_video_param = r600_get_video_param;
 		rscreen->b.b.is_video_format_supported = vl_video_buffer_is_format_supported;
 	}
+	r600_init_screen_resource_functions(&rscreen->b.b);
 
-	util_format_s3tc_init();
+	if (!r600_common_screen_init(&rscreen->b, ws)) {
+		FREE(rscreen);
+		return NULL;
+	}
+
+	if (debug_get_bool_option("RADEON_DUMP_SHADERS", FALSE))
+		rscreen->b.debug_flags |= DBG_FS | DBG_VS | DBG_GS | DBG_PS | DBG_CS;
 
 	rscreen->fences.bo = NULL;
 	rscreen->fences.data = NULL;

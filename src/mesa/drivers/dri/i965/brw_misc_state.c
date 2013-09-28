@@ -67,72 +67,6 @@ const struct brw_tracked_state brw_drawing_rect = {
 };
 
 /**
- * Upload the binding table pointers, which point each stage's array of surface
- * state pointers.
- *
- * The binding table pointers are relative to the surface state base address,
- * which points at the batchbuffer containing the streamed batch state.
- */
-static void upload_binding_table_pointers(struct brw_context *brw)
-{
-   BEGIN_BATCH(6);
-   OUT_BATCH(_3DSTATE_BINDING_TABLE_POINTERS << 16 | (6 - 2));
-   OUT_BATCH(brw->vs.bind_bo_offset);
-   OUT_BATCH(0); /* gs */
-   OUT_BATCH(0); /* clip */
-   OUT_BATCH(0); /* sf */
-   OUT_BATCH(brw->wm.bind_bo_offset);
-   ADVANCE_BATCH();
-}
-
-const struct brw_tracked_state brw_binding_table_pointers = {
-   .dirty = {
-      .mesa = 0,
-      .brw = (BRW_NEW_BATCH |
-	      BRW_NEW_STATE_BASE_ADDRESS |
-	      BRW_NEW_VS_BINDING_TABLE |
-	      BRW_NEW_GS_BINDING_TABLE |
-	      BRW_NEW_PS_BINDING_TABLE),
-      .cache = 0,
-   },
-   .emit = upload_binding_table_pointers,
-};
-
-/**
- * Upload the binding table pointers, which point each stage's array of surface
- * state pointers.
- *
- * The binding table pointers are relative to the surface state base address,
- * which points at the batchbuffer containing the streamed batch state.
- */
-static void upload_gen6_binding_table_pointers(struct brw_context *brw)
-{
-   BEGIN_BATCH(4);
-   OUT_BATCH(_3DSTATE_BINDING_TABLE_POINTERS << 16 |
-	     GEN6_BINDING_TABLE_MODIFY_VS |
-	     GEN6_BINDING_TABLE_MODIFY_GS |
-	     GEN6_BINDING_TABLE_MODIFY_PS |
-	     (4 - 2));
-   OUT_BATCH(brw->vs.bind_bo_offset); /* vs */
-   OUT_BATCH(brw->gs.bind_bo_offset); /* gs */
-   OUT_BATCH(brw->wm.bind_bo_offset); /* wm/ps */
-   ADVANCE_BATCH();
-}
-
-const struct brw_tracked_state gen6_binding_table_pointers = {
-   .dirty = {
-      .mesa = 0,
-      .brw = (BRW_NEW_BATCH |
-	      BRW_NEW_STATE_BASE_ADDRESS |
-	      BRW_NEW_VS_BINDING_TABLE |
-	      BRW_NEW_GS_BINDING_TABLE |
-	      BRW_NEW_PS_BINDING_TABLE),
-      .cache = 0,
-   },
-   .emit = upload_gen6_binding_table_pointers,
-};
-
-/**
  * Upload pointers to the per-stage state.
  *
  * The state pointers in this packet are all relative to the general state
@@ -150,10 +84,10 @@ static void upload_pipelined_state_pointers(struct brw_context *brw )
    BEGIN_BATCH(7);
    OUT_BATCH(_3DSTATE_PIPELINED_POINTERS << 16 | (7 - 2));
    OUT_RELOC(brw->batch.bo, I915_GEM_DOMAIN_INSTRUCTION, 0,
-	     brw->vs.state_offset);
-   if (brw->gs.prog_active)
+	     brw->vs.base.state_offset);
+   if (brw->ff_gs.prog_active)
       OUT_RELOC(brw->batch.bo, I915_GEM_DOMAIN_INSTRUCTION, 0,
-		brw->gs.state_offset | 1);
+		brw->ff_gs.state_offset | 1);
    else
       OUT_BATCH(0);
    OUT_RELOC(brw->batch.bo, I915_GEM_DOMAIN_INSTRUCTION, 0,
@@ -161,7 +95,7 @@ static void upload_pipelined_state_pointers(struct brw_context *brw )
    OUT_RELOC(brw->batch.bo, I915_GEM_DOMAIN_INSTRUCTION, 0,
 	     brw->sf.state_offset);
    OUT_RELOC(brw->batch.bo, I915_GEM_DOMAIN_INSTRUCTION, 0,
-	     brw->wm.state_offset);
+	     brw->wm.base.state_offset);
    OUT_RELOC(brw->batch.bo, I915_GEM_DOMAIN_INSTRUCTION, 0,
 	     brw->cc.state_offset);
    ADVANCE_BATCH();
@@ -183,8 +117,8 @@ const struct brw_tracked_state brw_psp_urb_cbs = {
 	      BRW_NEW_BATCH |
 	      BRW_NEW_STATE_BASE_ADDRESS),
       .cache = (CACHE_NEW_VS_UNIT | 
-		CACHE_NEW_GS_UNIT | 
-		CACHE_NEW_GS_PROG | 
+		CACHE_NEW_FF_GS_UNIT | 
+		CACHE_NEW_FF_GS_PROG | 
 		CACHE_NEW_CLIP_UNIT | 
 		CACHE_NEW_SF_UNIT | 
 		CACHE_NEW_WM_UNIT | 

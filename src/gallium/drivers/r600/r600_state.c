@@ -1399,14 +1399,14 @@ static void r600_init_color_surface(struct r600_context *rctx,
 	pipe_resource_reference((struct pipe_resource**)&surf->cb_buffer_fmask,
 				&rtex->resource.b.b);
 
-	if (rtex->cmask_size) {
-		surf->cb_color_cmask = rtex->cmask_offset >> 8;
-		surf->cb_color_mask |= S_028100_CMASK_BLOCK_MAX(rtex->cmask_slice_tile_max);
+	if (rtex->cmask.size) {
+		surf->cb_color_cmask = rtex->cmask.offset >> 8;
+		surf->cb_color_mask |= S_028100_CMASK_BLOCK_MAX(rtex->cmask.slice_tile_max);
 
-		if (rtex->fmask_size) {
+		if (rtex->fmask.size) {
 			color_info |= S_0280A0_TILE_MODE(V_0280A0_FRAG_ENABLE);
-			surf->cb_color_fmask = rtex->fmask_offset >> 8;
-			surf->cb_color_mask |= S_028100_FMASK_TILE_MAX(rtex->fmask_slice_tile_max);
+			surf->cb_color_fmask = rtex->fmask.offset >> 8;
+			surf->cb_color_mask |= S_028100_FMASK_TILE_MAX(rtex->fmask.slice_tile_max);
 		} else { /* cmask only */
 			color_info |= S_0280A0_TILE_MODE(V_0280A0_CLEAR_ENABLE);
 		}
@@ -1420,8 +1420,8 @@ static void r600_init_color_surface(struct r600_context *rctx,
 		struct r600_cmask_info cmask;
 		struct r600_fmask_info fmask;
 
-		r600_texture_get_cmask_info(rscreen, rtex, &cmask);
-		r600_texture_get_fmask_info(rscreen, rtex, 8, &fmask);
+		r600_texture_get_cmask_info(&rscreen->b, rtex, &cmask);
+		r600_texture_get_fmask_info(&rscreen->b, rtex, 8, &fmask);
 
 		/* CMASK. */
 		if (!rctx->dummy_cmask ||
@@ -1611,7 +1611,7 @@ static void r600_set_framebuffer_state(struct pipe_context *ctx,
 			rctx->framebuffer.export_16bpc = false;
 		}
 
-		if (rtex->fmask_size && rtex->cmask_size) {
+		if (rtex->fmask.size && rtex->cmask.size) {
 			rctx->framebuffer.compressed_cb_mask |= 1 << i;
 		}
 	}
@@ -3119,13 +3119,13 @@ static boolean r600_dma_copy_tile(struct r600_context *rctx,
 	return TRUE;
 }
 
-boolean r600_dma_blit(struct pipe_context *ctx,
-			struct pipe_resource *dst,
-			unsigned dst_level,
-			unsigned dst_x, unsigned dst_y, unsigned dst_z,
-			struct pipe_resource *src,
-			unsigned src_level,
-			const struct pipe_box *src_box)
+static boolean r600_dma_blit(struct pipe_context *ctx,
+			     struct pipe_resource *dst,
+			     unsigned dst_level,
+			     unsigned dst_x, unsigned dst_y, unsigned dst_z,
+			     struct pipe_resource *src,
+			     unsigned src_level,
+			     const struct pipe_box *src_box)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct r600_texture *rsrc = (struct r600_texture*)src;
@@ -3263,7 +3263,7 @@ void r600_init_state_functions(struct r600_context *rctx)
 	rctx->b.b.set_framebuffer_state = r600_set_framebuffer_state;
 	rctx->b.b.set_polygon_stipple = r600_set_polygon_stipple;
 	rctx->b.b.set_scissor_states = r600_set_scissor_states;
-
 	rctx->b.b.get_sample_position = r600_get_sample_position;
+	rctx->b.dma_copy = r600_dma_blit;
 }
 /* this function must be last */

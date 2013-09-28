@@ -104,7 +104,12 @@ static void si_pipe_shader_vs(struct pipe_context *ctx, struct si_pipe_shader *s
 		       S_00B128_SGPRS((num_sgprs - 1) / 8) |
 		       S_00B128_VGPR_COMP_CNT(vgpr_comp_cnt));
 	si_pm4_set_reg(pm4, R_00B12C_SPI_SHADER_PGM_RSRC2_VS,
-		       S_00B12C_USER_SGPR(num_user_sgprs));
+		       S_00B12C_USER_SGPR(num_user_sgprs) |
+		       S_00B12C_SO_BASE0_EN(!!shader->selector->so.stride[0]) |
+		       S_00B12C_SO_BASE1_EN(!!shader->selector->so.stride[1]) |
+		       S_00B12C_SO_BASE2_EN(!!shader->selector->so.stride[2]) |
+		       S_00B12C_SO_BASE3_EN(!!shader->selector->so.stride[3]) |
+		       S_00B12C_SO_EN(!!shader->selector->so.num_outputs));
 
 	if (rctx->b.chip_class >= CIK) {
 		si_pm4_set_reg(pm4, R_00B118_SPI_SHADER_PGM_RSRC3_VS,
@@ -273,12 +278,36 @@ static unsigned si_conv_pipe_prim(unsigned pprim)
 	return result;
 }
 
+static unsigned r600_conv_prim_to_gs_out(unsigned mode)
+{
+	static const int prim_conv[] = {
+		[PIPE_PRIM_POINTS]			= V_028A6C_OUTPRIM_TYPE_POINTLIST,
+		[PIPE_PRIM_LINES]			= V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		[PIPE_PRIM_LINE_LOOP]			= V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		[PIPE_PRIM_LINE_STRIP]			= V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		[PIPE_PRIM_TRIANGLES]			= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_TRIANGLE_STRIP]		= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_TRIANGLE_FAN]		= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_QUADS]			= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_QUAD_STRIP]			= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_POLYGON]			= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_LINES_ADJACENCY]		= V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		[PIPE_PRIM_LINE_STRIP_ADJACENCY]	= V_028A6C_OUTPRIM_TYPE_LINESTRIP,
+		[PIPE_PRIM_TRIANGLES_ADJACENCY]		= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY]	= V_028A6C_OUTPRIM_TYPE_TRISTRIP
+	};
+	assert(mode < Elements(prim_conv));
+
+	return prim_conv[mode];
+}
+
 static bool si_update_draw_info_state(struct r600_context *rctx,
 			       const struct pipe_draw_info *info)
 {
 	struct si_pm4_state *pm4 = si_pm4_alloc_state(rctx);
 	struct si_shader *vs = &rctx->vs_shader->current->shader;
 	unsigned prim = si_conv_pipe_prim(info->mode);
+	unsigned gs_out_prim = r600_conv_prim_to_gs_out(info->mode);
 	unsigned ls_mask = 0;
 
 	if (pm4 == NULL)
@@ -291,8 +320,10 @@ static bool si_update_draw_info_state(struct r600_context *rctx,
 
 	if (rctx->b.chip_class >= CIK)
 		si_pm4_set_reg(pm4, R_030908_VGT_PRIMITIVE_TYPE, prim);
-	else
+	else {
 		si_pm4_set_reg(pm4, R_008958_VGT_PRIMITIVE_TYPE, prim);
+		si_pm4_set_reg(pm4, R_028A6C_VGT_GS_OUT_PRIM_TYPE, gs_out_prim);
+	}
 	si_pm4_set_reg(pm4, R_028400_VGT_MAX_VTX_INDX, ~0);
 	si_pm4_set_reg(pm4, R_028404_VGT_MIN_VTX_INDX, 0);
 	si_pm4_set_reg(pm4, R_028408_VGT_INDX_OFFSET,
@@ -531,6 +562,29 @@ static void si_state_draw(struct r600_context *rctx,
 			       S_02800C_NOOP_CULL_DISABLE(1));
 	}
 
+	if (info->count_from_stream_output) {
+		struct r600_so_target *t =
+			(struct r600_so_target*)info->count_from_stream_output;
+		uint64_t va = r600_resource_va(&rctx->screen->b.b,
+					       &t->buf_filled_size->b.b);
+		va += t->buf_filled_size_offset;
+
+		si_pm4_set_reg(pm4, R_028B30_VGT_STRMOUT_DRAW_OPAQUE_VERTEX_STRIDE,
+			       t->stride_in_dw);
+
+		si_pm4_cmd_begin(pm4, PKT3_COPY_DATA);
+		si_pm4_cmd_add(pm4,
+			       COPY_DATA_SRC_SEL(COPY_DATA_MEM) |
+			       COPY_DATA_DST_SEL(COPY_DATA_REG) |
+			       COPY_DATA_WR_CONFIRM);
+		si_pm4_cmd_add(pm4, va);     /* src address lo */
+		si_pm4_cmd_add(pm4, va >> 32UL); /* src address hi */
+		si_pm4_cmd_add(pm4, R_028B2C_VGT_STRMOUT_DRAW_OPAQUE_BUFFER_FILLED_SIZE >> 2);
+		si_pm4_cmd_add(pm4, 0); /* unused */
+		si_pm4_add_bo(pm4, t->buf_filled_size, RADEON_USAGE_READ);
+		si_pm4_cmd_end(pm4, true);
+	}
+
 	/* draw packet */
 	si_pm4_cmd_begin(pm4, PKT3_INDEX_TYPE);
 	if (ib->index_size == 4) {
@@ -623,10 +677,19 @@ void si_emit_cache_flush(struct r600_common_context *rctx, struct r600_atom *ato
 		radeon_emit(cs, EVENT_TYPE(V_028A90_FLUSH_AND_INV_CB_META) | EVENT_INDEX(0));
 	}
 
+	if (rctx->flags & R600_CONTEXT_WAIT_3D_IDLE) {
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, EVENT_TYPE(V_028A90_PS_PARTIAL_FLUSH) | EVENT_INDEX(4));
+	} else if (rctx->flags & R600_CONTEXT_STREAMOUT_FLUSH) {
+		/* Needed if streamout buffers are going to be used as a source. */
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, EVENT_TYPE(V_028A90_VS_PARTIAL_FLUSH) | EVENT_INDEX(4));
+	}
+
 	rctx->flags = 0;
 }
 
-const struct r600_atom si_atom_cache_flush = { si_emit_cache_flush, 9 }; /* number of CS dwords */
+const struct r600_atom si_atom_cache_flush = { si_emit_cache_flush, 11 }; /* number of CS dwords */
 
 void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 {
@@ -658,8 +721,6 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		}
 	}
 
-	rctx->vs_shader_so_strides = rctx->vs_shader->current->so_strides;
-
 	if (!si_update_draw_info_state(rctx, info))
 		return;
 
@@ -687,14 +748,6 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 #if R600_TRACE_CS
 	if (rctx->screen->trace_bo) {
 		r600_trace_emit(rctx);
-	}
-#endif
-
-#if 0
-	/* Enable stream out if needed. */
-	if (rctx->streamout_start) {
-		r600_context_streamout_begin(rctx);
-		rctx->streamout_start = FALSE;
 	}
 #endif
 

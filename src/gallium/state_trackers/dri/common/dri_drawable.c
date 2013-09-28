@@ -42,11 +42,13 @@ static void
 swap_fences_unref(struct dri_drawable *draw);
 
 static boolean
-dri_st_framebuffer_validate(struct st_framebuffer_iface *stfbi,
+dri_st_framebuffer_validate(struct st_context_iface *stctx,
+                            struct st_framebuffer_iface *stfbi,
                             const enum st_attachment_type *statts,
                             unsigned count,
                             struct pipe_resource **out)
 {
+   struct dri_context *ctx = (struct dri_context *)stctx->st_manager_private;
    struct dri_drawable *drawable =
       (struct dri_drawable *) stfbi->st_manager_private;
    struct dri_screen *screen = dri_screen(drawable->sPriv);
@@ -78,7 +80,7 @@ dri_st_framebuffer_validate(struct st_framebuffer_iface *stfbi,
          if (new_stamp && drawable->update_drawable_info)
             drawable->update_drawable_info(drawable);
 
-         drawable->allocate_textures(drawable, statts, count);
+         drawable->allocate_textures(ctx, drawable, statts, count);
 
          /* add existing textures */
          for (i = 0; i < ST_ATTACHMENT_COUNT; i++) {
@@ -183,7 +185,8 @@ dri_destroy_buffer(__DRIdrawable * dPriv)
  * exist.  Used by the TFP extension.
  */
 static void
-dri_drawable_validate_att(struct dri_drawable *drawable,
+dri_drawable_validate_att(struct dri_context *ctx,
+                          struct dri_drawable *drawable,
                           enum st_attachment_type statt)
 {
    enum st_attachment_type statts[ST_ATTACHMENT_COUNT];
@@ -203,7 +206,7 @@ dri_drawable_validate_att(struct dri_drawable *drawable,
 
    drawable->texture_stamp = drawable->dPriv->lastStamp - 1;
 
-   drawable->base.validate(&drawable->base, statts, count, NULL);
+   drawable->base.validate(ctx->st, &drawable->base, statts, count, NULL);
 }
 
 /**
@@ -217,7 +220,7 @@ dri_set_tex_buffer2(__DRIcontext *pDRICtx, GLint target,
    struct dri_drawable *drawable = dri_drawable(dPriv);
    struct pipe_resource *pt;
 
-   dri_drawable_validate_att(drawable, ST_ATTACHMENT_FRONT_LEFT);
+   dri_drawable_validate_att(ctx, drawable, ST_ATTACHMENT_FRONT_LEFT);
 
    /* Use the pipe resource associated with the X drawable */
    pt = drawable->textures[ST_ATTACHMENT_FRONT_LEFT];
@@ -435,6 +438,8 @@ dri_flush(__DRIcontext *cPriv,
    /* Flush the drawable. */
    if ((flags & __DRI2_FLUSH_DRAWABLE) &&
        drawable->textures[ST_ATTACHMENT_BACK_LEFT]) {
+      struct pipe_context *pipe = ctx->st->pipe;
+
       if (drawable->stvis.samples > 1 &&
           reason == __DRI2_THROTTLE_SWAPBUFFER) {
          /* Resolve the MSAA back buffer. */
@@ -455,6 +460,8 @@ dri_flush(__DRIcontext *cPriv,
       if (ctx->hud) {
          hud_draw(ctx->hud, drawable->textures[ST_ATTACHMENT_BACK_LEFT]);
       }
+
+      pipe->flush_resource(pipe, drawable->textures[ST_ATTACHMENT_BACK_LEFT]);
    }
 
    flush_flags = 0;

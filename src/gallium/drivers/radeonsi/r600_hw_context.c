@@ -149,7 +149,9 @@ void si_need_cs_space(struct r600_context *ctx, unsigned num_dw,
 	num_dw += ctx->num_cs_dw_nontimer_queries_suspend;
 
 	/* Count in streamout_end at the end of CS. */
-	num_dw += ctx->num_cs_dw_streamout_end;
+	if (ctx->b.streamout.begin_emitted) {
+		num_dw += ctx->b.streamout.num_dw_for_end;
+	}
 
 	/* Count in render_condition(NULL) at the end of CS. */
 	if (ctx->predicate_drawing) {
@@ -177,27 +179,23 @@ void si_need_cs_space(struct r600_context *ctx, unsigned num_dw,
 void si_context_flush(struct r600_context *ctx, unsigned flags)
 {
 	struct radeon_winsys_cs *cs = ctx->b.rings.gfx.cs;
-	bool queries_suspended = false;
-
-#if 0
-	bool streamout_suspended = false;
-#endif
 
 	if (!cs->cdw)
 		return;
 
 	/* suspend queries */
+	ctx->nontimer_queries_suspended = false;
 	if (ctx->num_cs_dw_nontimer_queries_suspend) {
 		r600_context_queries_suspend(ctx);
-		queries_suspended = true;
+		ctx->nontimer_queries_suspended = true;
 	}
 
-#if 0
-	if (ctx->num_cs_dw_streamout_end) {
-		r600_context_streamout_end(ctx);
-		streamout_suspended = true;
+	ctx->b.streamout.suspended = false;
+
+	if (ctx->b.streamout.begin_emitted) {
+		r600_emit_streamout_end(&ctx->b);
+		ctx->b.streamout.suspended = true;
 	}
-#endif
 
 	ctx->b.flags |= R600_CONTEXT_FLUSH_AND_INV_CB |
 			R600_CONTEXT_FLUSH_AND_INV_CB_META |
@@ -247,6 +245,11 @@ void si_context_flush(struct r600_context *ctx, unsigned flags)
 	}
 #endif
 
+	si_begin_new_cs(ctx);
+}
+
+void si_begin_new_cs(struct r600_context *ctx)
+{
 	ctx->pm4_dirty_cdwords = 0;
 
 	/* Flush read caches at the beginning of CS. */
@@ -263,15 +266,13 @@ void si_context_flush(struct r600_context *ctx, unsigned flags)
 	si_pm4_emit(ctx, ctx->queued.named.init);
 	ctx->emitted.named.init = ctx->queued.named.init;
 
-#if 0
-	if (streamout_suspended) {
-		ctx->streamout_start = TRUE;
-		ctx->streamout_append_bitmask = ~0;
+	if (ctx->b.streamout.suspended) {
+		ctx->b.streamout.append_bitmask = ctx->b.streamout.enabled_mask;
+		r600_streamout_buffers_dirty(&ctx->b);
 	}
-#endif
 
 	/* resume queries */
-	if (queries_suspended) {
+	if (ctx->nontimer_queries_suspended) {
 		r600_context_queries_resume(ctx);
 	}
 
@@ -473,8 +474,8 @@ void r600_query_begin(struct r600_context *ctx, struct r600_query *query)
 	case PIPE_QUERY_SO_OVERFLOW_PREDICATE:
 		cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 2, 0);
 		cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_SAMPLE_STREAMOUTSTATS) | EVENT_INDEX(3);
-		cs->buf[cs->cdw++] = query->results_end;
-		cs->buf[cs->cdw++] = 0;
+		cs->buf[cs->cdw++] = va;
+		cs->buf[cs->cdw++] = (va >> 32UL) & 0xFF;
 		break;
 	case PIPE_QUERY_TIME_ELAPSED:
 		cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE_EOP, 4, 0);
@@ -528,10 +529,11 @@ void r600_query_end(struct r600_context *ctx, struct r600_query *query)
 	case PIPE_QUERY_PRIMITIVES_GENERATED:
 	case PIPE_QUERY_SO_STATISTICS:
 	case PIPE_QUERY_SO_OVERFLOW_PREDICATE:
+		va += query->results_end + query->result_size/2;
 		cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 2, 0);
 		cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_SAMPLE_STREAMOUTSTATS) | EVENT_INDEX(3);
-		cs->buf[cs->cdw++] = query->results_end + query->result_size/2;
-		cs->buf[cs->cdw++] = 0;
+		cs->buf[cs->cdw++] = va;
+		cs->buf[cs->cdw++] = (va >> 32UL) & 0xFF;
 		break;
 	case PIPE_QUERY_TIME_ELAPSED:
 		va += query->results_end + query->result_size/2;

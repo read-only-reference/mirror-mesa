@@ -73,22 +73,7 @@ struct _mesa_glsl_parse_state {
    _mesa_glsl_parse_state(struct gl_context *_ctx, GLenum target,
 			  void *mem_ctx);
 
-   /* Callers of this ralloc-based new need not call delete. It's
-    * easier to just ralloc_free 'ctx' (or any of its ancestors). */
-   static void* operator new(size_t size, void *ctx)
-   {
-      void *mem = rzalloc_size(ctx, size);
-      assert(mem != NULL);
-
-      return mem;
-   }
-
-   /* If the user *does* call delete, that's OK, we will just
-    * ralloc_free in that case. */
-   static void operator delete(void *mem)
-   {
-      ralloc_free(mem);
-   }
+   DECLARE_RZALLOC_CXX_OPERATORS(_mesa_glsl_parse_state);
 
    /**
     * Generate a string representing the GLSL version currently being compiled
@@ -113,7 +98,7 @@ struct _mesa_glsl_parse_state {
     * feature.
     */
    bool is_version(unsigned required_glsl_version,
-                   unsigned required_glsl_es_version)
+                   unsigned required_glsl_es_version) const
    {
       unsigned required_version = this->es_shader ?
          required_glsl_es_version : required_glsl_version;
@@ -134,6 +119,16 @@ struct _mesa_glsl_parse_state {
    bool check_bitwise_operations_allowed(YYLTYPE *locp)
    {
       return check_version(130, 300, locp, "bit-wise operations are forbidden");
+   }
+
+   bool has_explicit_attrib_location() const
+   {
+      return ARB_explicit_attrib_location_enable || is_version(330, 300);
+   }
+
+   bool has_uniform_buffer_objects() const
+   {
+      return ARB_uniform_buffer_object_enable || is_version(140, 300);
    }
 
    void process_version_directive(YYLTYPE *locp, int version,
@@ -315,6 +310,8 @@ struct _mesa_glsl_parse_state {
    bool AMD_vertex_shader_layer_warn;
    bool ARB_shading_language_420pack_enable;
    bool ARB_shading_language_420pack_warn;
+   bool EXT_shader_integer_mix_enable;
+   bool EXT_shader_integer_mix_warn;
    /*@}*/
 
    /** Extensions supported by the OpenGL implementation. */

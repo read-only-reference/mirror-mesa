@@ -482,6 +482,9 @@ intel_create_image(__DRIscreen *screen,
       tiling = I915_TILING_NONE;
    }
 
+   if (use & __DRI_IMAGE_USE_LINEAR)
+      tiling = I915_TILING_NONE;
+
    image = intel_allocate_image(format, loaderPrivate);
    if (image == NULL)
       return NULL;
@@ -1086,14 +1089,6 @@ set_max_gl_versions(struct intel_screen *screen)
       screen->max_gl_compat_version = MAX2(screen->max_gl_compat_version,
                                            gl_version_override);
    }
-
-#ifndef FEATURE_ES1
-   screen->max_gl_es1_version = 0;
-#endif
-
-#ifndef FEATURE_ES2
-   screen->max_gl_es2_version = 0;
-#endif
 }
 
 /**

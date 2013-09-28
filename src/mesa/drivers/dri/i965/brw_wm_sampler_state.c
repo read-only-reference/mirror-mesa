@@ -202,8 +202,6 @@ static void brw_update_sampler_state(struct brw_context *brw,
    struct gl_context *ctx = &brw->ctx;
    struct gl_texture_unit *texUnit = &ctx->Texture.Unit[unit];
    struct gl_texture_object *texObj = texUnit->_Current;
-   struct intel_texture_image *intel_image =
-      intel_texture_image(texObj->Image[0][texObj->BaseLevel]);
    struct gl_sampler_object *gl_sampler = _mesa_get_samplerobj(ctx, unit);
    bool using_nearest = false;
 
@@ -282,7 +280,7 @@ static void brw_update_sampler_state(struct brw_context *brw,
     */
    if (texObj->Target == GL_TEXTURE_CUBE_MAP ||
        texObj->Target == GL_TEXTURE_CUBE_MAP_ARRAY) {
-      if (ctx->Texture.CubeMapSeamless &&
+      if ((ctx->Texture.CubeMapSeamless || gl_sampler->CubeMapSeamless) &&
 	  (gl_sampler->MinFilter != GL_NEAREST ||
 	   gl_sampler->MagFilter != GL_NEAREST)) {
 	 sampler->ss1.r_wrap_mode = BRW_TEXCOORDMODE_CUBE;
@@ -322,13 +320,10 @@ static void brw_update_sampler_state(struct brw_context *brw,
    sampler->ss0.lod_preclamp = 1; /* OpenGL mode */
    sampler->ss0.default_color_mode = 0; /* OpenGL/DX10 mode */
 
-   int baselevel = texObj->BaseLevel - intel_image->mt->first_level;
-   sampler->ss0.base_level = U_FIXED(baselevel, 1);
+   sampler->ss0.base_level = U_FIXED(0, 1);
 
-   sampler->ss1.max_lod = U_FIXED(CLAMP(baselevel +
-                                        gl_sampler->MaxLod, 0, 13), 6);
-   sampler->ss1.min_lod = U_FIXED(CLAMP(baselevel +
-                                        gl_sampler->MinLod, 0, 13), 6);
+   sampler->ss1.max_lod = U_FIXED(CLAMP(gl_sampler->MaxLod, 0, 13), 6);
+   sampler->ss1.min_lod = U_FIXED(CLAMP(gl_sampler->MinLod, 0, 13), 6);
 
    /* On Gen6+, the sampler can handle non-normalized texture
     * rectangle coordinates natively
@@ -403,9 +398,9 @@ brw_upload_fs_samplers(struct brw_context *brw)
    /* BRW_NEW_FRAGMENT_PROGRAM */
    struct gl_program *fs = (struct gl_program *) brw->fragment_program;
    brw->vtbl.upload_sampler_state_table(brw, fs,
-                                        brw->wm.sampler_count,
-                                        &brw->wm.sampler_offset,
-                                        brw->wm.sdc_offset);
+                                        brw->wm.base.sampler_count,
+                                        &brw->wm.base.sampler_offset,
+                                        brw->wm.base.sdc_offset);
 }
 
 const struct brw_tracked_state brw_fs_samplers = {
@@ -421,12 +416,14 @@ const struct brw_tracked_state brw_fs_samplers = {
 static void
 brw_upload_vs_samplers(struct brw_context *brw)
 {
+   struct brw_stage_state *stage_state = &brw->vs.base;
+
    /* BRW_NEW_VERTEX_PROGRAM */
    struct gl_program *vs = (struct gl_program *) brw->vertex_program;
    brw->vtbl.upload_sampler_state_table(brw, vs,
-                                        brw->vs.sampler_count,
-                                        &brw->vs.sampler_offset,
-                                        brw->vs.sdc_offset);
+                                        stage_state->sampler_count,
+                                        &stage_state->sampler_offset,
+                                        stage_state->sdc_offset);
 }
 
 
@@ -438,6 +435,34 @@ const struct brw_tracked_state brw_vs_samplers = {
       .cache = 0
    },
    .emit = brw_upload_vs_samplers,
+};
+
+
+static void
+brw_upload_gs_samplers(struct brw_context *brw)
+{
+   struct brw_stage_state *stage_state = &brw->gs.base;
+
+   /* BRW_NEW_GEOMETRY_PROGRAM */
+   struct gl_program *gs = (struct gl_program *) brw->geometry_program;
+   if (!gs)
+      return;
+
+   brw->vtbl.upload_sampler_state_table(brw, gs,
+                                        stage_state->sampler_count,
+                                        &stage_state->sampler_offset,
+                                        stage_state->sdc_offset);
+}
+
+
+const struct brw_tracked_state brw_gs_samplers = {
+   .dirty = {
+      .mesa = _NEW_TEXTURE,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_GEOMETRY_PROGRAM,
+      .cache = 0
+   },
+   .emit = brw_upload_gs_samplers,
 };
 
 

@@ -61,6 +61,8 @@ static const struct debug_named_value debug_options[] = {
 		{"dclear",    FD_DBG_DCLEAR, "Mark all state dirty after clear"},
 		{"dgmem",     FD_DBG_DGMEM,  "Mark all state dirty after GMEM tile pass"},
 		{"dscis",     FD_DBG_DSCIS,  "Disable scissor optimization"},
+		{"direct",    FD_DBG_DIRECT, "Force inline (SS_DIRECT) state loads"},
+		{"dbypass",   FD_DBG_DBYPASS,"Disable GMEM bypass"},
 		DEBUG_NAMED_VALUE_END
 };
 
@@ -206,7 +208,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
 	case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
 	case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
-		return 14;
+		return MAX_MIP_LEVELS;
 	case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
 		return 9192;
 	case PIPE_CAP_MAX_COMBINED_SAMPLERS:

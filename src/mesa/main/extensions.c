@@ -201,6 +201,7 @@ static const struct extension extension_table[] = {
    { "GL_EXT_secondary_color",                     o(dummy_true),                              GLL,            1999 },
    { "GL_EXT_separate_shader_objects",             o(EXT_separate_shader_objects),             GLL,            2008 },
    { "GL_EXT_separate_specular_color",             o(dummy_true),                              GLL,            1997 },
+   { "GL_EXT_shader_integer_mix",                  o(EXT_shader_integer_mix),                  GL       | ES3, 2013 },
    { "GL_EXT_shadow_funcs",                        o(ARB_shadow),                              GLL,            2002 },
    { "GL_EXT_stencil_two_side",                    o(EXT_stencil_two_side),                    GLL,            2001 },
    { "GL_EXT_stencil_wrap",                        o(dummy_true),                              GLL,            2002 },
@@ -262,7 +263,6 @@ static const struct extension extension_table[] = {
    { "GL_OES_framebuffer_object",                  o(dummy_true),                                   ES1,       2005 },
    { "GL_OES_get_program_binary",                  o(dummy_true),                                         ES2, 2008 },
    { "GL_OES_mapbuffer",                           o(dummy_true),                                   ES1 | ES2, 2005 },
-   { "GL_OES_matrix_get",                          o(dummy_true),                                   ES1,       2004 },
    { "GL_OES_packed_depth_stencil",                o(EXT_packed_depth_stencil),                     ES1 | ES2, 2007 },
    { "GL_OES_point_size_array",                    o(dummy_true),                                   ES1,       2004 },
    { "GL_OES_point_sprite",                        o(ARB_point_sprite),                             ES1,       2004 },
@@ -283,10 +283,14 @@ static const struct extension extension_table[] = {
    { "GL_OES_texture_npot",                        o(ARB_texture_non_power_of_two),                 ES1 | ES2, 2005 },
    { "GL_OES_vertex_array_object",                 o(dummy_true),                                   ES1 | ES2, 2010 },
 
+   /* KHR extensions */
+   { "GL_KHR_debug",                               o(dummy_true),                              GL,             2012 },
+
    /* Vendor extensions */
    { "GL_3DFX_texture_compression_FXT1",           o(TDFX_texture_compression_FXT1),           GL,             1999 },
    { "GL_AMD_conservative_depth",                  o(ARB_conservative_depth),                  GL,             2009 },
    { "GL_AMD_draw_buffers_blend",                  o(ARB_draw_buffers_blend),                  GL,             2009 },
+   { "GL_AMD_performance_monitor",                 o(AMD_performance_monitor),                 GL,             2007 },
    { "GL_AMD_seamless_cubemap_per_texture",        o(AMD_seamless_cubemap_per_texture),        GL,             2009 },
    { "GL_AMD_shader_stencil_export",               o(ARB_shader_stencil_export),               GL,             2009 },
    { "GL_AMD_vertex_shader_layer",                 o(AMD_vertex_shader_layer),                 GL,             2012 },

@@ -473,6 +473,7 @@ static void compute_emit_cs(struct r600_context *ctx, const uint *block_layout,
 		      R600_CONTEXT_INV_VERTEX_CACHE |
 	              R600_CONTEXT_INV_TEX_CACHE;
 	r600_flush_emit(ctx);
+	ctx->b.flags = 0;
 
 #if 0
 	COMPUTE_DBG(ctx->screen, "cdw: %i\n", cs->cdw);
@@ -481,16 +482,6 @@ static void compute_emit_cs(struct r600_context *ctx, const uint *block_layout,
 	}
 #endif
 
-	flush_flags = RADEON_FLUSH_ASYNC | RADEON_FLUSH_COMPUTE;
-	if (ctx->keep_tiling_flags) {
-		flush_flags |= RADEON_FLUSH_KEEP_TILING_FLAGS;
-	}
-
-	ctx->b.ws->cs_flush(ctx->b.rings.gfx.cs, flush_flags, ctx->screen->cs_count++);
-
-	ctx->b.flags = 0;
-
-	COMPUTE_DBG(ctx->screen, "shader started\n");
 }
 
 
@@ -541,10 +532,10 @@ static void evergreen_launch_grid(
 		struct r600_bytecode *bc = &kernel->bc;
 		LLVMModuleRef mod = kernel->llvm_module;
 		boolean use_kill = false;
-		bool dump = (ctx->screen->debug_flags & DBG_CS) != 0;
-		unsigned use_sb = ctx->screen->debug_flags & DBG_SB_CS;
+		bool dump = (ctx->screen->b.debug_flags & DBG_CS) != 0;
+		unsigned use_sb = ctx->screen->b.debug_flags & DBG_SB_CS;
 		unsigned sb_disasm = use_sb ||
-			(ctx->screen->debug_flags & DBG_SB_DISASM);
+			(ctx->screen->b.debug_flags & DBG_SB_DISASM);
 
 		r600_bytecode_init(bc, ctx->b.chip_class, ctx->b.family,
 			   ctx->screen->has_compressed_msaa_texturing);
@@ -561,7 +552,7 @@ static void evergreen_launch_grid(
 
 		kernel->code_bo = r600_compute_buffer_alloc_vram(ctx->screen,
 							kernel->bc.ndw * 4);
-		p = r600_buffer_mmap_sync_with_rings(ctx, kernel->code_bo, PIPE_TRANSFER_WRITE);
+		p = r600_buffer_map_sync_with_rings(&ctx->b, kernel->code_bo, PIPE_TRANSFER_WRITE);
 		memcpy(p, kernel->bc.bytecode, kernel->bc.ndw * 4);
 		ctx->b.ws->buffer_unmap(kernel->code_bo->cs_buf);
 	}

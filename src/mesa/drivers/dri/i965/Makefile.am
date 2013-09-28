@@ -38,16 +38,6 @@ AM_CFLAGS = \
 	$(VISIBILITY_CFLAGS) \
 	$(INTEL_CFLAGS)
 
-if HAVE_OPENGL_ES1
-AM_CFLAGS += \
-	-DFEATURE_ES1=1
-endif
-
-if HAVE_OPENGL_ES2
-AM_CFLAGS += \
-	-DFEATURE_ES2=1
-endif
-
 AM_CXXFLAGS = $(AM_CFLAGS)
 
 dridir = $(DRI_DRIVER_INSTALL_DIR)
@@ -72,7 +62,7 @@ TEST_LIBS = \
 i965_dri_la_SOURCES =
 nodist_EXTRA_i965_dri_la_SOURCES = dummy2.cpp
 i965_dri_la_LIBADD = $(COMMON_LIBS)
-i965_dri_la_LDFLAGS = -module -avoid-version -shared
+i965_dri_la_LDFLAGS = $(DRI_DRIVER_LDFLAGS)
 
 TESTS = \
         test_eu_compact \

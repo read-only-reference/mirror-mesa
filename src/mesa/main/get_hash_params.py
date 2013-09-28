@@ -229,11 +229,6 @@ descriptor=[
 
 
 { "apis": ["GLES"], "params": [
-# XXX: OES_matrix_get
-  [ "MODELVIEW_MATRIX_FLOAT_AS_INT_BITS_OES", "" ],
-  [ "PROJECTION_MATRIX_FLOAT_AS_INT_BITS_OES", "" ],
-  [ "TEXTURE_MATRIX_FLOAT_AS_INT_BITS_OES", "" ],
-
 # OES_point_size_array
   [ "POINT_SIZE_ARRAY_OES", "ARRAY_FIELD(VertexAttrib[VERT_ATTRIB_POINT_SIZE].Enabled, TYPE_BOOLEAN)" ],
   [ "POINT_SIZE_ARRAY_TYPE_OES", "ARRAY_FIELD(VertexAttrib[VERT_ATTRIB_POINT_SIZE].Type, TYPE_ENUM)" ],
@@ -329,8 +324,9 @@ descriptor=[
   [ "MAJOR_VERSION", "LOC_CUSTOM, TYPE_INT, 0, extra_gl30_es3" ],
   [ "MINOR_VERSION", "LOC_CUSTOM, TYPE_INT, 0, extra_gl30_es3" ],
 
-  # GL 3.0 / GLES3
-  [ "MAX_FRAGMENT_INPUT_COMPONENTS", "LOC_CUSTOM, TYPE_INT, 0, extra_gl32_es3" ],
+  # GL 3.2 / GLES3
+  [ "MAX_VERTEX_OUTPUT_COMPONENTS", "CONTEXT_INT(Const.VertexProgram.MaxOutputComponents), extra_gl32_es3" ],
+  [ "MAX_FRAGMENT_INPUT_COMPONENTS", "CONTEXT_INT(Const.FragmentProgram.MaxInputComponents), extra_gl32_es3" ],
 
 # GL_ARB_ES3_compatibility
   [ "MAX_ELEMENT_INDEX", "CONTEXT_INT64(Const.MaxElementIndex), extra_ARB_ES3_compatibility_api_es3"],
@@ -646,12 +642,12 @@ descriptor=[
   [ "MAX_VERTEX_STREAMS", "CONTEXT_INT(Const.MaxVertexStreams), extra_ARB_transform_feedback3" ],
 
 # GL_ARB_geometry_shader4
-  [ "MAX_GEOMETRY_TEXTURE_IMAGE_UNITS_ARB", "CONTEXT_INT(Const.GeometryProgram.MaxTextureImageUnits), extra_ARB_geometry_shader4" ],
-  [ "MAX_GEOMETRY_OUTPUT_VERTICES_ARB", "CONTEXT_INT(Const.MaxGeometryOutputVertices), extra_ARB_geometry_shader4" ],
-  [ "MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS_ARB", "CONTEXT_INT(Const.MaxGeometryTotalOutputComponents), extra_ARB_geometry_shader4" ],
-  [ "MAX_GEOMETRY_UNIFORM_COMPONENTS_ARB", "CONTEXT_INT(Const.GeometryProgram.MaxUniformComponents), extra_ARB_geometry_shader4" ],
-  [ "MAX_GEOMETRY_VARYING_COMPONENTS_ARB", "CONTEXT_INT(Const.MaxVaryingComponents), extra_ARB_geometry_shader4" ],
-  [ "MAX_VERTEX_VARYING_COMPONENTS_ARB", "CONTEXT_INT(Const.MaxVaryingComponents), extra_ARB_geometry_shader4" ],
+  [ "MAX_GEOMETRY_TEXTURE_IMAGE_UNITS_ARB", "CONTEXT_INT(Const.GeometryProgram.MaxTextureImageUnits), extra_gl32_ARB_geometry_shader4" ],
+  [ "MAX_GEOMETRY_OUTPUT_VERTICES_ARB", "CONTEXT_INT(Const.MaxGeometryOutputVertices), extra_gl32_ARB_geometry_shader4" ],
+  [ "MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS_ARB", "CONTEXT_INT(Const.MaxGeometryTotalOutputComponents), extra_gl32_ARB_geometry_shader4" ],
+  [ "MAX_GEOMETRY_UNIFORM_COMPONENTS_ARB", "CONTEXT_INT(Const.GeometryProgram.MaxUniformComponents), extra_gl32_ARB_geometry_shader4" ],
+  [ "MAX_GEOMETRY_VARYING_COMPONENTS_ARB", "CONTEXT_INT(Const.GeometryProgram.MaxOutputComponents), extra_ARB_geometry_shader4" ],
+  [ "MAX_VERTEX_VARYING_COMPONENTS_ARB", "CONTEXT_INT(Const.VertexProgram.MaxOutputComponents), extra_ARB_geometry_shader4" ],
 
 # GL_ARB_color_buffer_float
   [ "RGBA_FLOAT_MODE_ARB", "BUFFER_FIELD(Visual.floatMode, TYPE_BOOLEAN), extra_core_ARB_color_buffer_float_and_new_buffers" ],
@@ -691,15 +687,21 @@ descriptor=[
 
 # GL 3.2
   [ "CONTEXT_PROFILE_MASK", "CONTEXT_INT(Const.ProfileMask), extra_version_32" ],
+  [ "MAX_GEOMETRY_INPUT_COMPONENTS", "CONTEXT_INT(Const.GeometryProgram.MaxInputComponents), extra_version_32" ],
+  [ "MAX_GEOMETRY_OUTPUT_COMPONENTS", "CONTEXT_INT(Const.GeometryProgram.MaxOutputComponents), extra_version_32" ],
 
 # GL_ARB_robustness
   [ "RESET_NOTIFICATION_STRATEGY_ARB", "CONTEXT_ENUM(Const.ResetStrategy), NO_EXTRA" ],
 
-# GL_ARB_debug_output
-  [ "DEBUG_LOGGED_MESSAGES_ARB", "CONTEXT_INT(Debug.NumMessages), NO_EXTRA" ],
-  [ "DEBUG_NEXT_LOGGED_MESSAGE_LENGTH_ARB", "CONTEXT_INT(Debug.NextMsgLength), NO_EXTRA" ],
-  [ "MAX_DEBUG_LOGGED_MESSAGES_ARB", "CONST(MAX_DEBUG_LOGGED_MESSAGES), NO_EXTRA" ],
-  [ "MAX_DEBUG_MESSAGE_LENGTH_ARB", "CONST(MAX_DEBUG_MESSAGE_LENGTH), NO_EXTRA" ],
+# GL_KHR_debug (GL 4.3)/ GL_ARB_debug_output
+  [ "DEBUG_LOGGED_MESSAGES", "CONTEXT_INT(Debug.NumMessages), NO_EXTRA" ],
+  [ "DEBUG_NEXT_LOGGED_MESSAGE_LENGTH", "CONTEXT_INT(Debug.NextMsgLength), NO_EXTRA" ],
+  [ "MAX_DEBUG_LOGGED_MESSAGES", "CONST(MAX_DEBUG_LOGGED_MESSAGES), NO_EXTRA" ],
+  [ "MAX_DEBUG_MESSAGE_LENGTH", "CONST(MAX_DEBUG_MESSAGE_LENGTH), NO_EXTRA" ],
+  [ "MAX_LABEL_LENGTH", "CONST(MAX_LABEL_LENGTH), NO_EXTRA" ],
+  [ "MAX_DEBUG_GROUP_STACK_DEPTH", "CONST(MAX_DEBUG_GROUP_STACK_DEPTH), NO_EXTRA" ],
+  [ "DEBUG_GROUP_STACK_DEPTH", "CONTEXT_INT(Debug.GroupStackDepth), NO_EXTRA" ],
+
   [ "MAX_DUAL_SOURCE_DRAW_BUFFERS", "CONTEXT_INT(Const.MaxDualSourceDrawBuffers), extra_ARB_blend_func_extended" ],
 
 # GL_ARB_uniform_buffer_object

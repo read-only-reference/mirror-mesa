@@ -154,7 +154,8 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 			 EXP_TO_EXP2 |
 			 LOG_TO_LOG2 |
                          bitfield_insert |
-                         lrp_to_arith);
+                         lrp_to_arith |
+                         LDEXP_TO_ARITH);
 
       /* Pre-gen6 HW can only nest if-statements 16 deep.  Beyond this,
        * if-statements need to be flattened.
@@ -507,6 +508,10 @@ brw_instruction_name(enum opcode op)
       return "set_vertex_count";
    case GS_OPCODE_SET_DWORD_2_IMMED:
       return "set_dword_2_immed";
+   case GS_OPCODE_PREPARE_CHANNEL_MASKS:
+      return "prepare_channel_masks";
+   case GS_OPCODE_SET_CHANNEL_MASKS:
+      return "set_channel_masks";
 
    default:
       /* Yes, this leaks.  It's in debug code, it should never occur, and if

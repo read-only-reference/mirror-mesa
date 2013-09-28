@@ -34,6 +34,8 @@
 #define MTYPES_H
 
 
+#include <stdint.h>             /* uint32_t */
+
 #include "main/glheader.h"
 #include "main/config.h"
 #include "glapi/glapi.h"
@@ -80,6 +82,7 @@ struct prog_instruction;
 struct gl_program_parameter_list;
 struct set;
 struct set_entry;
+struct vbo_context;
 /*@}*/
 
 
@@ -1128,6 +1131,7 @@ struct gl_sampler_object
 {
    GLuint Name;
    GLint RefCount;
+   GLchar *Label;               /**< GL_KHR_debug */
 
    GLenum WrapS;		/**< S-axis texture image wrap mode */
    GLenum WrapT;		/**< T-axis texture image wrap mode */
@@ -1155,6 +1159,7 @@ struct gl_texture_object
    _glthread_Mutex Mutex;      /**< for thread safety */
    GLint RefCount;             /**< reference count */
    GLuint Name;                /**< the user-visible texture object ID */
+   GLchar *Label;               /**< GL_KHR_debug */
    GLenum Target;              /**< GL_TEXTURE_1D, GL_TEXTURE_2D, etc. */
 
    struct gl_sampler_object Sampler;
@@ -1403,6 +1408,7 @@ struct gl_buffer_object
    _glthread_Mutex Mutex;
    GLint RefCount;
    GLuint Name;
+   GLchar *Label;       /**< GL_KHR_debug */
    GLenum Usage;        /**< GL_STREAM_DRAW_ARB, GL_STREAM_READ_ARB, etc. */
    GLsizeiptrARB Size;  /**< Size of buffer storage in bytes */
    GLubyte *Data;       /**< Location of storage either in RAM or VRAM. */
@@ -1467,6 +1473,7 @@ struct gl_array_object
 {
    /** Name of the array object as received from glGenVertexArrayAPPLE. */
    GLuint Name;
+   GLchar *Label;       /**< GL_KHR_debug */
 
    GLint RefCount;
    _glthread_Mutex Mutex;
@@ -1704,12 +1711,19 @@ struct gl_transform_feedback_info
 struct gl_transform_feedback_object
 {
    GLuint Name;  /**< AKA the object ID */
+   GLchar *Label;     /**< GL_KHR_debug */
    GLint RefCount;
    GLboolean Active;  /**< Is transform feedback enabled? */
    GLboolean Paused;  /**< Is transform feedback paused? */
    GLboolean EndedAnytime; /**< Has EndTransformFeedback been called
                                 at least once? */
    GLboolean EverBound; /**< Has this object been bound? */
+
+   /**
+    * The shader program active when BeginTransformFeedback() was called.
+    * When active and unpaused, this equals ctx->Shader.CurrentVertexProgram.
+    */
+   struct gl_shader_program *shader_program;
 
    /**
     * GLES: if Active is true, remaining number of primitives which can be
@@ -1762,6 +1776,89 @@ struct gl_transform_feedback_state
 
    /** The default xform-fb object (Name==0) */
    struct gl_transform_feedback_object *DefaultObject;
+};
+
+
+/**
+ * A "performance monitor" as described in AMD_performance_monitor.
+ */
+struct gl_perf_monitor_object
+{
+   GLboolean Active;
+
+   /**
+    * A list of groups with currently active counters.
+    *
+    * ActiveGroups[g] == n if there are n counters active from group 'g'.
+    */
+   unsigned *ActiveGroups;
+
+   /**
+    * An array of bitsets, subscripted by group ID, then indexed by counter ID.
+    *
+    * Checking whether counter 'c' in group 'g' is active can be done via:
+    *
+    *    BITSET_TEST(ActiveCounters[g], c)
+    */
+   GLuint **ActiveCounters;
+};
+
+
+union gl_perf_monitor_counter_value
+{
+   float f;
+   uint64_t u64;
+   uint32_t u32;
+};
+
+
+struct gl_perf_monitor_counter
+{
+   /** Human readable name for the counter. */
+   const char *Name;
+
+   /**
+    * Data type of the counter.  Valid values are FLOAT, UNSIGNED_INT,
+    * UNSIGNED_INT64_AMD, and PERCENTAGE_AMD.
+    */
+   GLenum Type;
+
+   /** Minimum counter value. */
+   union gl_perf_monitor_counter_value Minimum;
+
+   /** Maximum counter value. */
+   union gl_perf_monitor_counter_value Maximum;
+};
+
+
+struct gl_perf_monitor_group
+{
+   /** Human readable name for the group. */
+   const char *Name;
+
+   /**
+    * Maximum number of counters in this group which can be active at the
+    * same time.
+    */
+   GLuint MaxActiveCounters;
+
+   /** Array of counters within this group. */
+   const struct gl_perf_monitor_counter *Counters;
+   GLuint NumCounters;
+};
+
+
+/**
+ * Context state for AMD_performance_monitor.
+ */
+struct gl_perf_monitor_state
+{
+   /** Array of performance monitor groups (indexed by group ID) */
+   const struct gl_perf_monitor_group *Groups;
+   GLuint NumGroups;
+
+   /** The table of all performance monitors. */
+   struct _mesa_HashTable *Monitors;
 };
 
 
@@ -1925,6 +2022,7 @@ struct gl_geometry_program
                            GL_TRIANGLES, or GL_TRIANGLES_ADJACENCY_ARB */
    GLenum OutputType; /**< GL_POINTS, GL_LINE_STRIP or GL_TRIANGLE_STRIP */
    GLboolean UsesClipDistance;
+   GLboolean UsesEndPrimitive;
 };
 
 
@@ -2108,6 +2206,7 @@ struct gl_shader
     */
    GLenum Type;
    GLuint Name;  /**< AKA the handle */
+   GLchar *Label;   /**< GL_KHR_debug */
    GLint RefCount;  /**< Reference count */
    GLboolean DeletePending;
    GLboolean CompileStatus;
@@ -2279,6 +2378,7 @@ struct gl_shader_program
 {
    GLenum Type;  /**< Always GL_SHADER_PROGRAM (internal token) */
    GLuint Name;  /**< aka handle or ID */
+   GLchar *Label;   /**< GL_KHR_debug */
    GLint RefCount;  /**< Reference count */
    GLboolean DeletePending;
 
@@ -2356,6 +2456,7 @@ struct gl_shader_program
       GLboolean UsesClipDistance;
       GLuint ClipDistanceArraySize; /**< Size of the gl_ClipDistance array, or
                                          0 if not present. */
+      GLboolean UsesEndPrimitive;
    } Geom;
 
    /** Vertex shader state */
@@ -2515,6 +2616,7 @@ struct gl_query_object
 {
    GLenum Target;      /**< The query target, when active */
    GLuint Id;          /**< hash table ID/name */
+   GLchar *Label;       /**< GL_KHR_debug */
    GLuint64EXT Result; /**< the counter */
    GLboolean Active;   /**< inside Begin/EndQuery */
    GLboolean Ready;    /**< result is ready? */
@@ -2550,6 +2652,7 @@ struct gl_sync_object
 {
    GLenum Type;               /**< GL_SYNC_FENCE */
    GLuint Name;               /**< Fence name */
+   GLchar *Label;             /**< GL_KHR_debug */
    GLint RefCount;            /**< Reference count */
    GLboolean DeletePending;   /**< Object was deleted while there were still
 			       * live references (e.g., sync not yet finished)
@@ -2632,6 +2735,7 @@ struct gl_renderbuffer
    _glthread_Mutex Mutex; /**< for thread safety */
    GLuint ClassID;        /**< Useful for drivers */
    GLuint Name;
+   GLchar *Label;         /**< GL_KHR_debug */
    GLint RefCount;
    GLuint Width, Height;
    GLuint Depth;
@@ -2715,6 +2819,7 @@ struct gl_framebuffer
     * polygon face orientation, and polygon stipple will have to be inverted.
     */
    GLuint Name;
+   GLchar *Label;       /**< GL_KHR_debug */
 
    GLint RefCount;
    GLboolean DeletePending;
@@ -2812,6 +2917,30 @@ struct gl_program_constants
    GLuint MaxNativeParameters;
    /* For shaders */
    GLuint MaxUniformComponents;  /**< Usually == MaxParameters * 4 */
+
+   /**
+    * \name Per-stage input / output limits
+    *
+    * Previous to OpenGL 3.2, the intrastage data limits were advertised with
+    * a single value: GL_MAX_VARYING_COMPONENTS (GL_MAX_VARYING_VECTORS in
+    * ES).  This is stored as \c gl_constants::MaxVarying.
+    *
+    * Starting with OpenGL 3.2, the limits are advertised with per-stage
+    * variables.  Each stage as a certain number of outputs that it can feed
+    * to the next stage and a certain number inputs that it can consume from
+    * the previous stage.
+    *
+    * Vertex shader inputs do not participate this in this accounting.
+    * These are tracked exclusively by \c gl_program_constants::MaxAttribs.
+    *
+    * Fragment shader outputs do not participate this in this accounting.
+    * These are tracked exclusively by \c gl_constants::MaxDrawBuffers.
+    */
+   /*@{*/
+   GLuint MaxInputComponents;
+   GLuint MaxOutputComponents;
+   /*@}*/
+
    /* ES 2.0 and GL_ARB_ES2_compatibility */
    struct gl_precision LowFloat, MediumFloat, HighFloat;
    struct gl_precision LowInt, MediumInt, HighInt;
@@ -2886,7 +3015,6 @@ struct gl_constants
 
    /** Number of varying vectors between any two shader stages. */
    GLuint MaxVarying;
-   GLuint MaxVaryingComponents;
 
    /** @{
     * GL_ARB_uniform_buffer_object
@@ -3113,6 +3241,7 @@ struct gl_extensions
    GLboolean EXT_point_parameters;
    GLboolean EXT_provoking_vertex;
    GLboolean EXT_separate_shader_objects;
+   GLboolean EXT_shader_integer_mix;
    GLboolean EXT_stencil_two_side;
    GLboolean EXT_texture3D;
    GLboolean EXT_texture_array;
@@ -3132,6 +3261,7 @@ struct gl_extensions
    GLboolean EXT_vertex_array_bgra;
    GLboolean OES_standard_derivatives;
    /* vendor extensions */
+   GLboolean AMD_performance_monitor;
    GLboolean AMD_seamless_cubemap_per_texture;
    GLboolean AMD_vertex_shader_layer;
    GLboolean APPLE_object_purgeable;
@@ -3142,8 +3272,8 @@ struct gl_extensions
    GLboolean ATI_fragment_shader;
    GLboolean ATI_separate_stencil;
    GLboolean MESA_pack_invert;
-   GLboolean MESA_ycbcr_texture;
    GLboolean MESA_texture_array;
+   GLboolean MESA_ycbcr_texture;
    GLboolean NV_conditional_render;
    GLboolean NV_fog_distance;
    GLboolean NV_fragment_program_option;
@@ -3280,6 +3410,7 @@ union gl_dlist_node;
 struct gl_display_list
 {
    GLuint Name;
+   GLchar *Label;     /**< GL_KHR_debug */
    GLbitfield Flags;  /**< DLIST_x flags */
    /** The dlist commands are in a linked list of nodes */
    union gl_dlist_node *Head;
@@ -3315,8 +3446,8 @@ struct gl_dlist_state
 
 /** @{
  *
- * These are a mapping of the GL_ARB_debug_output enums to small enums
- * suitable for use as an array index.
+ * These are a mapping of the GL_ARB_debug_output/GL_KHR_debug enums
+ * to small enums suitable for use as an array index.
  */
 
 enum mesa_debug_source {
@@ -3336,6 +3467,9 @@ enum mesa_debug_type {
    MESA_DEBUG_TYPE_PORTABILITY,
    MESA_DEBUG_TYPE_PERFORMANCE,
    MESA_DEBUG_TYPE_OTHER,
+   MESA_DEBUG_TYPE_MARKER,
+   MESA_DEBUG_TYPE_PUSH_GROUP,
+   MESA_DEBUG_TYPE_POP_GROUP,
    MESA_DEBUG_TYPE_COUNT
 };
 
@@ -3343,6 +3477,7 @@ enum mesa_debug_severity {
    MESA_DEBUG_SEVERITY_LOW,
    MESA_DEBUG_SEVERITY_MEDIUM,
    MESA_DEBUG_SEVERITY_HIGH,
+   MESA_DEBUG_SEVERITY_NOTIFICATION,
    MESA_DEBUG_SEVERITY_COUNT
 };
 
@@ -3350,7 +3485,7 @@ enum mesa_debug_severity {
 
 /**
  * An error, warning, or other piece of debug information for an application
- * to consume via GL_ARB_debug_output.
+ * to consume via GL_ARB_debug_output/GL_KHR_debug.
  */
 struct gl_debug_msg
 {
@@ -3372,12 +3507,16 @@ struct gl_debug_namespace
 
 struct gl_debug_state
 {
-   GLDEBUGPROCARB Callback;
+   GLDEBUGPROC Callback;
    const void *CallbackData;
    GLboolean SyncOutput;
-   GLboolean Defaults[MESA_DEBUG_SEVERITY_COUNT][MESA_DEBUG_SOURCE_COUNT][MESA_DEBUG_TYPE_COUNT];
-   struct gl_debug_namespace Namespaces[MESA_DEBUG_SOURCE_COUNT][MESA_DEBUG_TYPE_COUNT];
+   GLboolean DebugOutput;
+   GLboolean ARBCallback; /* Used to track if current callback is of type ARB_debug_output or KHR_debug */
+   GLboolean Defaults[MAX_DEBUG_GROUP_STACK_DEPTH][MESA_DEBUG_SEVERITY_COUNT][MESA_DEBUG_SOURCE_COUNT][MESA_DEBUG_TYPE_COUNT];
+   struct gl_debug_namespace Namespaces[MAX_DEBUG_GROUP_STACK_DEPTH][MESA_DEBUG_SOURCE_COUNT][MESA_DEBUG_TYPE_COUNT];
    struct gl_debug_msg Log[MAX_DEBUG_LOGGED_MESSAGES];
+   struct gl_debug_msg DebugGroupMsgs[MAX_DEBUG_GROUP_STACK_DEPTH];
+   GLint GroupStackDepth;
    GLint NumMessages;
    GLint NextMsg;
    GLint NextMsgLength; /* redundant, but copied here from Log[NextMsg].length
@@ -3445,8 +3584,6 @@ struct gl_uniform_buffer_binding
  * OpenGL state is contained in this structure.
  * Think of this as a base class from which device drivers will derive
  * sub classes.
- *
- * The struct gl_context typedef names this structure.
  */
 struct gl_context
 {
@@ -3588,6 +3725,8 @@ struct gl_context
 
    struct gl_transform_feedback_state TransformFeedback;
 
+   struct gl_perf_monitor_state PerfMonitor;
+
    struct gl_buffer_object *CopyReadBuffer; /**< GL_ARB_copy_buffer */
    struct gl_buffer_object *CopyWriteBuffer; /**< GL_ARB_copy_buffer */
 
@@ -3624,7 +3763,7 @@ struct gl_context
    const char *ErrorDebugFmtString;
    GLuint ErrorDebugCount;
 
-   /* GL_ARB_debug_output */
+   /* GL_ARB_debug_output/GL_KHR_debug */
    struct gl_debug_state Debug;
 
    GLenum RenderMode;        /**< either GL_RENDER, GL_SELECT, GL_FEEDBACK */
@@ -3669,7 +3808,7 @@ struct gl_context
    void *swrast_context;
    void *swsetup_context;
    void *swtnl_context;
-   void *swtnl_im;
+   struct vbo_context *vbo_context;
    struct st_context *st;
    void *aelt_context;
    /*@}*/

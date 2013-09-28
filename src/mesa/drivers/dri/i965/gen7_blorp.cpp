@@ -51,14 +51,22 @@ static void
 gen7_blorp_emit_urb_config(struct brw_context *brw,
                            const brw_blorp_params *params)
 {
-   /* The minimum valid value is 32. See 3DSTATE_URB_VS,
-    * Dword 1.15:0 "VS Number of URB Entries".
-    */
-   int num_vs_entries = 32;
-   int vs_size = 2;
-   int vs_start = 2; /* skip over push constants */
+   unsigned urb_size = (brw->is_haswell && brw->gt == 3) ? 32 : 16;
+   gen7_emit_push_constant_state(brw,
+                                 urb_size / 2 /* vs_size */,
+                                 0 /* gs_size */,
+                                 urb_size / 2 /* fs_size */);
 
-   gen7_emit_urb_state(brw, num_vs_entries, vs_size, vs_start);
+   /* The minimum valid number of VS entries is 32. See 3DSTATE_URB_VS, Dword
+    * 1.15:0 "VS Number of URB Entries".
+    */
+   gen7_emit_urb_state(brw,
+                       32 /* num_vs_entries */,
+                       2 /* vs_size */,
+                       2 /* vs_start */,
+                       0 /* num_gs_entries */,
+                       1 /* gs_size */,
+                       2 /* gs_start */);
 }
 
 

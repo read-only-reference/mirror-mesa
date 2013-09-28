@@ -52,6 +52,7 @@
 #include "glsl_types.h"
 #include "link_varyings.h"
 
+namespace {
 
 /**
  * This obtains detailed information about built-in varyings from shader code.
@@ -391,12 +392,13 @@ public:
 
 private:
    const varying_info_visitor *info;
-   struct ir_variable *new_texcoord[MAX_TEXTURE_COORD_UNITS];
-   struct ir_variable *new_color[2];
-   struct ir_variable *new_backcolor[2];
-   struct ir_variable *new_fog;
+   ir_variable *new_texcoord[MAX_TEXTURE_COORD_UNITS];
+   ir_variable *new_color[2];
+   ir_variable *new_backcolor[2];
+   ir_variable *new_fog;
 };
 
+} /* anonymous namespace */
 
 static void
 lower_texcoord_array(exec_list *ir, const varying_info_visitor *info)

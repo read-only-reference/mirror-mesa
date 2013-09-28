@@ -106,6 +106,7 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.EXT_texture_swizzle = true;
    ctx->Extensions.EXT_stencil_two_side = true;
    ctx->Extensions.EXT_vertex_array_bgra = true;
+   ctx->Extensions.AMD_seamless_cubemap_per_texture = true;
    ctx->Extensions.APPLE_object_purgeable = true;
    ctx->Extensions.ATI_envmap_bumpmap = true;
    ctx->Extensions.ATI_separate_stencil = true;
@@ -156,7 +157,11 @@ intelInitExtensions(struct gl_context *ctx)
    if (brw->gen >= 5) {
       ctx->Extensions.ARB_texture_query_lod = true;
       ctx->Extensions.EXT_timer_query = true;
+      ctx->Extensions.EXT_shader_integer_mix = ctx->Const.GLSLVersion >= 130;
    }
+
+   if (brw->gen == 5)
+      ctx->Extensions.AMD_performance_monitor = true;
 
    if (ctx->API == API_OPENGL_CORE)
       ctx->Extensions.ARB_base_instance = true;

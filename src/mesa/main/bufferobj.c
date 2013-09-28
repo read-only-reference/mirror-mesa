@@ -265,6 +265,7 @@ _mesa_delete_buffer_object(struct gl_context *ctx,
    bufObj->Name = ~0;
 
    _glthread_DESTROY_MUTEX(bufObj->Mutex);
+   free(bufObj->Label);
    free(bufObj);
 }
 
@@ -439,7 +440,6 @@ _mesa_buffer_data( struct gl_context *ctx, GLenum target, GLsizeiptrARB size,
  * Note that all GL error checking will have been done already.
  *
  * \param ctx     GL context.
- * \param target  Buffer object target on which to operate.
  * \param offset  Offset of the first byte to be modified.
  * \param size    Size, in bytes, of the data range.
  * \param data    Pointer to the data to store in the buffer object.

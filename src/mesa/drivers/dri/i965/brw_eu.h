@@ -154,8 +154,6 @@ ALU2(OR)
 ALU2(XOR)
 ALU2(SHR)
 ALU2(SHL)
-ALU2(RSR)
-ALU2(RSL)
 ALU2(ASR)
 ALU1(F32TO16)
 ALU1(F16TO32)
@@ -258,6 +256,20 @@ enum brw_urb_write_flags {
     * vec4 slots) is stored in the message header (gen == 7).
     */
    BRW_URB_WRITE_PER_SLOT_OFFSET = 0x10,
+
+   /**
+    * Indicates that the channel masks in the URB_WRITE message header should
+    * not be overridden to 0xff (gen == 7).
+    */
+   BRW_URB_WRITE_USE_CHANNEL_MASKS = 0x20,
+
+   /**
+    * Indicates that the data should be sent to the URB using the
+    * URB_WRITE_OWORD message rather than URB_WRITE_HWORD (gen == 7).  This
+    * causes offsets to be interpreted as multiples of an OWORD instead of an
+    * HWORD, and only allows one OWORD to be written.
+    */
+   BRW_URB_WRITE_OWORD = 0x40,
 
    /**
     * Convenient combination of flags: end the thread while simultaneously
