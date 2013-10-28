@@ -331,9 +331,7 @@ void r600_context_flush(struct r600_context *ctx, unsigned flags)
 		ctx->b.streamout.suspended = true;
 	}
 
-	/* flush is needed to avoid lockups on some chips with user fences
-	 * this will also flush the framebuffer cache
-	 */
+	/* flush the framebuffer cache */
 	ctx->b.flags |= R600_CONTEXT_FLUSH_AND_INV |
 		      R600_CONTEXT_FLUSH_AND_INV_CB |
 		      R600_CONTEXT_FLUSH_AND_INV_DB |
@@ -434,35 +432,6 @@ void r600_begin_new_cs(struct r600_context *ctx)
 	ctx->initial_gfx_cs_size = ctx->b.rings.gfx.cs->cdw;
 }
 
-void r600_context_emit_fence(struct r600_context *ctx, struct r600_resource *fence_bo, unsigned offset, unsigned value)
-{
-	struct radeon_winsys_cs *cs = ctx->b.rings.gfx.cs;
-	uint64_t va;
-
-	r600_need_cs_space(ctx, 10, FALSE);
-
-	va = r600_resource_va(&ctx->screen->b.b, (void*)fence_bo);
-	va = va + (offset << 2);
-
-	/* Use of WAIT_UNTIL is deprecated on Cayman+ */
-	if (ctx->b.family >= CHIP_CAYMAN) {
-		cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE, 0, 0);
-		cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_PS_PARTIAL_FLUSH) | EVENT_INDEX(4);
-	} else {
-		r600_write_config_reg(cs, R_008040_WAIT_UNTIL, S_008040_WAIT_3D_IDLE(1));
-	}
-
-	cs->buf[cs->cdw++] = PKT3(PKT3_EVENT_WRITE_EOP, 4, 0);
-	cs->buf[cs->cdw++] = EVENT_TYPE(EVENT_TYPE_CACHE_FLUSH_AND_INV_TS_EVENT) | EVENT_INDEX(5);
-	cs->buf[cs->cdw++] = va & 0xFFFFFFFFUL;       /* ADDRESS_LO */
-	/* DATA_SEL | INT_EN | ADDRESS_HI */
-	cs->buf[cs->cdw++] = (1 << 29) | (0 << 24) | ((va >> 32UL) & 0xFF);
-	cs->buf[cs->cdw++] = value;                   /* DATA_LO */
-	cs->buf[cs->cdw++] = 0;                       /* DATA_HI */
-	cs->buf[cs->cdw++] = PKT3(PKT3_NOP, 0, 0);
-	cs->buf[cs->cdw++] = r600_context_bo_reloc(&ctx->b, &ctx->b.rings.gfx, fence_bo, RADEON_USAGE_WRITE);
-}
-
 /* The max number of bytes to copy per packet. */
 #define CP_DMA_MAX_BYTE_COUNT ((1 << 21) - 8)
 
@@ -480,9 +449,16 @@ void r600_cp_dma_copy_buffer(struct r600_context *rctx,
 	src_offset += r600_resource_va(&rctx->screen->b.b, src);
 
 	/* Flush the caches where the resources are bound. */
-	r600_flag_resource_cache_flush(rctx, src);
-	r600_flag_resource_cache_flush(rctx, dst);
-        rctx->b.flags |= R600_CONTEXT_WAIT_3D_IDLE;
+	rctx->b.flags |= R600_CONTEXT_INV_CONST_CACHE |
+			 R600_CONTEXT_INV_VERTEX_CACHE |
+			 R600_CONTEXT_INV_TEX_CACHE |
+			 R600_CONTEXT_FLUSH_AND_INV |
+			 R600_CONTEXT_FLUSH_AND_INV_CB |
+			 R600_CONTEXT_FLUSH_AND_INV_DB |
+			 R600_CONTEXT_FLUSH_AND_INV_CB_META |
+			 R600_CONTEXT_FLUSH_AND_INV_DB_META |
+			 R600_CONTEXT_STREAMOUT_FLUSH |
+			 R600_CONTEXT_WAIT_3D_IDLE;
 
 	/* There are differences between R700 and EG in CP DMA,
 	 * but we only use the common bits here. */
@@ -524,9 +500,10 @@ void r600_cp_dma_copy_buffer(struct r600_context *rctx,
 		dst_offset += byte_count;
 	}
 
-	/* Flush the cache of the dst resource again in case the 3D engine
-	 * has been prefetching it. */
-	r600_flag_resource_cache_flush(rctx, dst);
+	/* Invalidate the read caches. */
+	rctx->b.flags |= R600_CONTEXT_INV_CONST_CACHE |
+			 R600_CONTEXT_INV_VERTEX_CACHE |
+			 R600_CONTEXT_INV_TEX_CACHE;
 
 	util_range_add(&r600_resource(dst)->valid_buffer_range, dst_offset,
 		       dst_offset + size);
@@ -579,118 +556,4 @@ void r600_dma_copy(struct r600_context *rctx,
 
 	util_range_add(&rdst->valid_buffer_range, dst_offset,
 		       dst_offset + size);
-}
-
-/* Flag the cache of the resource for it to be flushed later if the resource
- * is bound. Otherwise do nothing. Used for synchronization between engines.
- */
-void r600_flag_resource_cache_flush(struct r600_context *rctx,
-				    struct pipe_resource *res)
-{
-	/* Check vertex buffers. */
-	uint32_t mask = rctx->vertex_buffer_state.enabled_mask;
-	while (mask) {
-		uint32_t i = u_bit_scan(&mask);
-		if (rctx->vertex_buffer_state.vb[i].buffer == res) {
-			rctx->b.flags |= R600_CONTEXT_INV_VERTEX_CACHE;
-		}
-	}
-
-	/* Check vertex buffers for compute. */
-	mask = rctx->cs_vertex_buffer_state.enabled_mask;
-	while (mask) {
-		uint32_t i = u_bit_scan(&mask);
-		if (rctx->cs_vertex_buffer_state.vb[i].buffer == res) {
-			rctx->b.flags |= R600_CONTEXT_INV_VERTEX_CACHE;
-		}
-	}
-
-	/* Check constant buffers. */
-	unsigned shader;
-	for (shader = 0; shader < PIPE_SHADER_TYPES; shader++) {
-		struct r600_constbuf_state *state = &rctx->constbuf_state[shader];
-		uint32_t mask = state->enabled_mask;
-
-		while (mask) {
-			unsigned i = u_bit_scan(&mask);
-			if (state->cb[i].buffer == res) {
-				rctx->b.flags |= R600_CONTEXT_INV_CONST_CACHE;
-
-				shader = PIPE_SHADER_TYPES; /* break the outer loop */
-				break;
-			}
-		}
-	}
-
-	/* Check textures. */
-	for (shader = 0; shader < PIPE_SHADER_TYPES; shader++) {
-		struct r600_samplerview_state *state = &rctx->samplers[shader].views;
-		uint32_t mask = state->enabled_mask;
-
-		while (mask) {
-			uint32_t i = u_bit_scan(&mask);
-			if (&state->views[i]->tex_resource->b.b == res) {
-				rctx->b.flags |= R600_CONTEXT_INV_TEX_CACHE;
-
-				shader = PIPE_SHADER_TYPES; /* break the outer loop */
-				break;
-			}
-		}
-	}
-
-	/* Check streamout buffers. */
-	int i;
-	for (i = 0; i < rctx->b.streamout.num_targets; i++) {
-		if (rctx->b.streamout.targets[i]->b.buffer == res) {
-			rctx->b.flags |= R600_CONTEXT_STREAMOUT_FLUSH |
-				       R600_CONTEXT_FLUSH_AND_INV |
-				       R600_CONTEXT_WAIT_3D_IDLE;
-			break;
-		}
-	}
-
-	/* Check colorbuffers. */
-	for (i = 0; i < rctx->framebuffer.state.nr_cbufs; i++) {
-		struct r600_texture *tex;
-
-		if (rctx->framebuffer.state.cbufs[i] == NULL) {
-		    continue;
-		}
-
-		tex = (struct r600_texture*)rctx->framebuffer.state.cbufs[i]->texture;
-
-		if (rctx->framebuffer.state.cbufs[i]->texture == res) {
-			rctx->b.flags |= R600_CONTEXT_FLUSH_AND_INV_CB |
-				       R600_CONTEXT_FLUSH_AND_INV |
-				       R600_CONTEXT_WAIT_3D_IDLE;
-
-			if (tex->cmask.size || tex->fmask.size) {
-				rctx->b.flags |= R600_CONTEXT_FLUSH_AND_INV_CB_META;
-			}
-			break;
-		}
-
-		if (tex && tex->cmask_buffer && tex->cmask_buffer != &tex->resource && &tex->cmask_buffer->b.b == res) {
-			rctx->b.flags |= R600_CONTEXT_FLUSH_AND_INV_CB_META |
-				       R600_CONTEXT_FLUSH_AND_INV |
-				       R600_CONTEXT_WAIT_3D_IDLE;
-		}
-	}
-
-	/* Check a depth buffer. */
-	if (rctx->framebuffer.state.zsbuf) {
-		if (rctx->framebuffer.state.zsbuf->texture == res) {
-			rctx->b.flags |= R600_CONTEXT_FLUSH_AND_INV_DB |
-				       R600_CONTEXT_FLUSH_AND_INV |
-				       R600_CONTEXT_WAIT_3D_IDLE;
-		}
-
-		struct r600_texture *tex =
-			(struct r600_texture*)rctx->framebuffer.state.zsbuf->texture;
-		if (tex && tex->htile && &tex->htile->b.b == res) {
-			rctx->b.flags |= R600_CONTEXT_FLUSH_AND_INV_DB_META |
-				       R600_CONTEXT_FLUSH_AND_INV |
-				       R600_CONTEXT_WAIT_3D_IDLE;
-		}
-	}
 }

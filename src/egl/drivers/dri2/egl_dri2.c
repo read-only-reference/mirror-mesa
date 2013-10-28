@@ -116,7 +116,7 @@ dri2_match_config(const _EGLConfig *conf, const _EGLConfig *criteria)
 
 struct dri2_egl_config *
 dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
-		int depth, EGLint surface_type, const EGLint *attr_list,
+		EGLint surface_type, const EGLint *attr_list,
 		const unsigned int *rgba_masks)
 {
    struct dri2_egl_config *conf;
@@ -199,16 +199,6 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
    if (attr_list)
       for (i = 0; attr_list[i] != EGL_NONE; i += 2)
          _eglSetConfigKey(&base, attr_list[i], attr_list[i+1]);
-
-   /* Allow a 24-bit RGB visual to match a 32-bit RGBA EGLConfig.  Otherwise
-    * it will only match a 32-bit RGBA visual.  On a composited window manager
-    * on X11, this will make all of the EGLConfigs with destination alpha get
-    * blended by the compositor.  This is probably not what the application
-    * wants... especially on drivers that only have 32-bit RGBA EGLConfigs!
-    */
-   if (depth > 0 && depth != base.BufferSize
-       && !(depth == 24 && base.BufferSize == 32))
-      return NULL;
 
    if (rgba_masks && memcmp(rgba_masks, dri_masks, sizeof(dri_masks)))
       return NULL;
@@ -377,8 +367,10 @@ static const __DRIextension **
 dri2_open_driver(_EGLDisplay *disp)
 {
    struct dri2_egl_display *dri2_dpy = disp->DriverData;
-   const __DRIextension **extensions;
+   const __DRIextension **extensions = NULL;
    char path[PATH_MAX], *search_paths, *p, *next, *end;
+   char *get_extensions_name;
+   const __DRIextension **(*get_extensions)(void);
 
    search_paths = NULL;
    if (geteuid() == getuid()) {
@@ -419,7 +411,21 @@ dri2_open_driver(_EGLDisplay *disp)
    }
 
    _eglLog(_EGL_DEBUG, "DRI2: dlopen(%s)", path);
-   extensions = dlsym(dri2_dpy->driver, __DRI_DRIVER_EXTENSIONS);
+
+   if (asprintf(&get_extensions_name, "%s_%s",
+                __DRI_DRIVER_GET_EXTENSIONS, dri2_dpy->driver_name) != -1) {
+      get_extensions = dlsym(dri2_dpy->driver, get_extensions_name);
+      if (get_extensions) {
+         extensions = get_extensions();
+      } else {
+         _eglLog(_EGL_DEBUG, "driver does not expose %s(): %s\n",
+                 get_extensions_name, dlerror());
+      }
+      free(get_extensions_name);
+   }
+
+   if (!extensions)
+      extensions = dlsym(dri2_dpy->driver, __DRI_DRIVER_EXTENSIONS);
    if (extensions == NULL) {
       _eglLog(_EGL_WARNING,
 	      "DRI2: driver exports no extensions (%s)", dlerror());
@@ -443,6 +449,7 @@ dri2_load_driver(_EGLDisplay *disp)
       dlclose(dri2_dpy->driver);
       return EGL_FALSE;
    }
+   dri2_dpy->driver_extensions = extensions;
 
    return EGL_TRUE;
 }
@@ -463,6 +470,7 @@ dri2_load_driver_swrast(_EGLDisplay *disp)
       dlclose(dri2_dpy->driver);
       return EGL_FALSE;
    }
+   dri2_dpy->driver_extensions = extensions;
 
    return EGL_TRUE;
 }
@@ -528,14 +536,30 @@ dri2_create_screen(_EGLDisplay *disp)
    dri2_dpy = disp->DriverData;
 
    if (dri2_dpy->dri2) {
-      dri2_dpy->dri_screen =
-         dri2_dpy->dri2->createNewScreen(0, dri2_dpy->fd, dri2_dpy->extensions,
-				         &dri2_dpy->driver_configs, disp);
+      if (dri2_dpy->dri2->base.version >= 4) {
+         dri2_dpy->dri_screen =
+            dri2_dpy->dri2->createNewScreen2(0, dri2_dpy->fd,
+                                             dri2_dpy->extensions,
+                                             dri2_dpy->driver_extensions,
+                                             &dri2_dpy->driver_configs, disp);
+      } else {
+         dri2_dpy->dri_screen =
+            dri2_dpy->dri2->createNewScreen(0, dri2_dpy->fd,
+                                            dri2_dpy->extensions,
+                                            &dri2_dpy->driver_configs, disp);
+      }
    } else {
       assert(dri2_dpy->swrast);
-      dri2_dpy->dri_screen =
-         dri2_dpy->swrast->createNewScreen(0, dri2_dpy->extensions,
-                                           &dri2_dpy->driver_configs, disp);
+      if (dri2_dpy->swrast->base.version >= 4) {
+         dri2_dpy->dri_screen =
+            dri2_dpy->swrast->createNewScreen2(0, dri2_dpy->extensions,
+                                               dri2_dpy->driver_extensions,
+                                               &dri2_dpy->driver_configs, disp);
+      } else {
+         dri2_dpy->dri_screen =
+            dri2_dpy->swrast->createNewScreen(0, dri2_dpy->extensions,
+                                              &dri2_dpy->driver_configs, disp);
+      }
    }
 
    if (dri2_dpy->dri_screen == NULL) {
@@ -1212,7 +1236,8 @@ dri2_create_image_wayland_wl_buffer(_EGLDisplay *disp, _EGLContext *ctx,
    EGLint err;
    int32_t plane;
 
-   buffer = wayland_drm_buffer_get((struct wl_resource *) _buffer);
+   buffer = wayland_drm_buffer_get(dri2_dpy->wl_server_drm,
+                                   (struct wl_resource *) _buffer);
    if (!buffer)
        return NULL;
 
@@ -1852,6 +1877,11 @@ dri2_bind_wayland_display_wl(_EGLDriver *drv, _EGLDisplay *disp,
    if (!dri2_dpy->wl_server_drm)
 	   return EGL_FALSE;
 
+   /* We have to share the wl_drm instance with gbm, so gbm can convert
+    * wl_buffers to gbm bos. */
+   if (dri2_dpy->gbm_dri)
+      dri2_dpy->gbm_dri->wl_drm = dri2_dpy->wl_server_drm;
+
    return EGL_TRUE;
 }
 
@@ -1877,10 +1907,11 @@ dri2_query_wayland_buffer_wl(_EGLDriver *drv, _EGLDisplay *disp,
                              struct wl_resource *buffer_resource,
                              EGLint attribute, EGLint *value)
 {
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    struct wl_drm_buffer *buffer;
    const struct wl_drm_components_descriptor *format;
 
-   buffer = wayland_drm_buffer_get(buffer_resource);
+   buffer = wayland_drm_buffer_get(dri2_dpy->wl_server_drm, buffer_resource);
    if (!buffer)
       return EGL_FALSE;
 

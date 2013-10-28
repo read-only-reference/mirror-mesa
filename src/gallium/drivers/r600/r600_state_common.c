@@ -394,6 +394,11 @@ static void r600_bind_sampler_states(struct pipe_context *pipe,
 
 	assert(start == 0); /* XXX fix below */
 
+	if (shader != PIPE_SHADER_VERTEX &&
+	    shader != PIPE_SHADER_FRAGMENT) {
+		return;
+	}
+
 	for (i = 0; i < count; i++) {
 		struct r600_pipe_sampler_state *rstate = rstates[i];
 
@@ -435,16 +440,6 @@ static void r600_bind_sampler_states(struct pipe_context *pipe,
 		rctx->seamless_cube_map.enabled = seamless_cube_map;
 		rctx->seamless_cube_map.atom.dirty = true;
 	}
-}
-
-static void r600_bind_vs_sampler_states(struct pipe_context *ctx, unsigned count, void **states)
-{
-	r600_bind_sampler_states(ctx, PIPE_SHADER_VERTEX, 0, count, states);
-}
-
-static void r600_bind_ps_sampler_states(struct pipe_context *ctx, unsigned count, void **states)
-{
-	r600_bind_sampler_states(ctx, PIPE_SHADER_FRAGMENT, 0, count, states);
 }
 
 static void r600_delete_sampler_state(struct pipe_context *ctx, void *state)
@@ -583,6 +578,11 @@ static void r600_set_sampler_views(struct pipe_context *pipe, unsigned shader,
 
 	assert(start == 0); /* XXX fix below */
 
+	if (shader == PIPE_SHADER_COMPUTE) {
+		evergreen_set_cs_sampler_view(pipe, start, count, views);
+		return;
+	}
+
 	remaining_mask = dst->views.enabled_mask & disable_mask;
 
 	while (remaining_mask) {
@@ -647,18 +647,6 @@ static void r600_set_sampler_views(struct pipe_context *pipe, unsigned shader,
 		dst->states.dirty_mask |= dirty_sampler_states_mask;
 		r600_sampler_states_dirty(rctx, &dst->states);
 	}
-}
-
-static void r600_set_vs_sampler_views(struct pipe_context *ctx, unsigned count,
-				      struct pipe_sampler_view **views)
-{
-	r600_set_sampler_views(ctx, PIPE_SHADER_VERTEX, 0, count, views);
-}
-
-static void r600_set_ps_sampler_views(struct pipe_context *ctx, unsigned count,
-				      struct pipe_sampler_view **views)
-{
-	r600_set_sampler_views(ctx, PIPE_SHADER_FRAGMENT, 0, count, views);
 }
 
 static void r600_set_viewport_states(struct pipe_context *ctx,
@@ -2085,11 +2073,10 @@ void r600_init_common_state_functions(struct r600_context *rctx)
 	rctx->b.b.create_vertex_elements_state = r600_create_vertex_fetch_shader;
 	rctx->b.b.bind_blend_state = r600_bind_blend_state;
 	rctx->b.b.bind_depth_stencil_alpha_state = r600_bind_dsa_state;
-	rctx->b.b.bind_fragment_sampler_states = r600_bind_ps_sampler_states;
+	rctx->b.b.bind_sampler_states = r600_bind_sampler_states;
 	rctx->b.b.bind_fs_state = r600_bind_ps_state;
 	rctx->b.b.bind_rasterizer_state = r600_bind_rs_state;
 	rctx->b.b.bind_vertex_elements_state = r600_bind_vertex_elements;
-	rctx->b.b.bind_vertex_sampler_states = r600_bind_vs_sampler_states;
 	rctx->b.b.bind_vs_state = r600_bind_vs_state;
 	rctx->b.b.delete_blend_state = r600_delete_blend_state;
 	rctx->b.b.delete_depth_stencil_alpha_state = r600_delete_dsa_state;
@@ -2106,8 +2093,7 @@ void r600_init_common_state_functions(struct r600_context *rctx)
 	rctx->b.b.set_viewport_states = r600_set_viewport_states;
 	rctx->b.b.set_vertex_buffers = r600_set_vertex_buffers;
 	rctx->b.b.set_index_buffer = r600_set_index_buffer;
-	rctx->b.b.set_fragment_sampler_views = r600_set_ps_sampler_views;
-	rctx->b.b.set_vertex_sampler_views = r600_set_vs_sampler_views;
+	rctx->b.b.set_sampler_views = r600_set_sampler_views;
 	rctx->b.b.sampler_view_destroy = r600_sampler_view_destroy;
 	rctx->b.b.texture_barrier = r600_texture_barrier;
 	rctx->b.b.set_stream_output_targets = r600_set_streamout_targets;

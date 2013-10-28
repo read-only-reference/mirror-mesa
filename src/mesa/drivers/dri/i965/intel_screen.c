@@ -40,8 +40,10 @@
 #include "utils.h"
 #include "xmlpool.h"
 
-PUBLIC const char __driConfigOptions[] =
-   DRI_CONF_BEGIN
+static const __DRIconfigOptionsExtension brw_config_options = {
+   .base = { __DRI_CONFIG_OPTIONS, 1 },
+   .xml =
+DRI_CONF_BEGIN
    DRI_CONF_SECTION_PERFORMANCE
       DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_ALWAYS_SYNC)
       /* Options correspond to DRI_CONF_BO_REUSE_DISABLED,
@@ -56,6 +58,10 @@ PUBLIC const char __driConfigOptions[] =
 
       DRI_CONF_OPT_BEGIN_B(hiz, "true")
 	 DRI_CONF_DESC(en, "Enable Hierarchical Z on gen6+")
+      DRI_CONF_OPT_END
+
+      DRI_CONF_OPT_BEGIN_B(disable_derivative_optimization, "false")
+	 DRI_CONF_DESC(en, "Derivatives with finer granularity by default")
       DRI_CONF_OPT_END
 
    DRI_CONF_SECTION_END
@@ -75,7 +81,8 @@ PUBLIC const char __driConfigOptions[] =
 	 DRI_CONF_DESC(en, "Perform code generation at shader link time.")
       DRI_CONF_OPT_END
    DRI_CONF_SECTION_END
-DRI_CONF_END;
+DRI_CONF_END
+};
 
 #include "intel_batchbuffer.h"
 #include "intel_buffers.h"
@@ -209,6 +216,9 @@ static struct intel_image_format intel_image_formats[] = {
    { __DRI_IMAGE_FOURCC_XRGB8888, __DRI_IMAGE_COMPONENTS_RGB, 1,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_XRGB8888, 4 }, } },
 
+   { __DRI_IMAGE_FOURCC_RGB565, __DRI_IMAGE_COMPONENTS_RGB, 1,
+     { { 0, 0, 0, __DRI_IMAGE_FORMAT_RGB565, 2 } } },
+
    { __DRI_IMAGE_FOURCC_YUV410, __DRI_IMAGE_COMPONENTS_Y_U_V, 3,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_R8, 1 },
        { 1, 2, 2, __DRI_IMAGE_FORMAT_R8, 1 },
@@ -288,6 +298,12 @@ intel_allocate_image(int dri_format, void *loaderPrivate)
        break;
     case __DRI_IMAGE_FORMAT_XRGB8888:
        image->format = MESA_FORMAT_XRGB8888;
+       break;
+    case __DRI_IMAGE_FORMAT_ARGB2101010:
+       image->format = MESA_FORMAT_ARGB2101010;
+       break;
+    case __DRI_IMAGE_FORMAT_XRGB2101010:
+       image->format = MESA_FORMAT_XRGB2101010_UNORM;
        break;
     case __DRI_IMAGE_FORMAT_ARGB8888:
        image->format = MESA_FORMAT_ARGB8888;
@@ -375,6 +391,10 @@ intel_dri_format(GLuint format)
       return __DRI_IMAGE_FORMAT_R8;
    case MESA_FORMAT_RG88:
       return __DRI_IMAGE_FORMAT_GR88;
+   case MESA_FORMAT_XRGB2101010_UNORM:
+      return __DRI_IMAGE_FORMAT_XRGB2101010;
+   case MESA_FORMAT_ARGB2101010:
+      return __DRI_IMAGE_FORMAT_ARGB2101010;
    }
 
    return MESA_FORMAT_NONE;
@@ -930,7 +950,7 @@ intelCreateBuffer(__DRIscreen * driScrnPriv,
    if (mesaVis->depthBits == 24) {
       assert(mesaVis->stencilBits == 8);
 
-      if (screen->hw_has_separate_stencil) {
+      if (screen->devinfo->has_hiz_and_separate_stencil) {
          rb = intel_create_private_renderbuffer(MESA_FORMAT_X8_Z24,
                                                 num_samples);
          _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &rb->Base.Base);
@@ -980,32 +1000,6 @@ intelDestroyBuffer(__DRIdrawable * driDrawPriv)
     _mesa_reference_framebuffer(&fb, NULL);
 }
 
-static GLboolean
-intelCreateContext(gl_api api,
-		   const struct gl_config * mesaVis,
-                   __DRIcontext * driContextPriv,
-		   unsigned major_version,
-		   unsigned minor_version,
-		   uint32_t flags,
-		   unsigned *error,
-                   void *sharedContextPrivate)
-{
-   bool success = false;
-
-   success = brwCreateContext(api, mesaVis,
-                              driContextPriv,
-                              major_version, minor_version, flags,
-                              error, sharedContextPrivate);
-
-   if (success)
-      return true;
-
-   if (driContextPriv->driverPrivate != NULL)
-      intelDestroyContext(driContextPriv);
-
-   return false;
-}
-
 static bool
 intel_init_bufmgr(struct intel_screen *intelScreen)
 {
@@ -1028,31 +1022,6 @@ intel_init_bufmgr(struct intel_screen *intelScreen)
    }
 
    return true;
-}
-
-/**
- * Override intel_screen.hw_has_separate_stencil with environment variable
- * INTEL_SEPARATE_STENCIL.
- *
- * Valid values for INTEL_SEPARATE_STENCIL are "0" and "1". If an invalid
- * valid value is encountered, a warning is emitted and INTEL_SEPARATE_STENCIL
- * is ignored.
- */
-static void
-intel_override_separate_stencil(struct intel_screen *screen)
-{
-   const char *s = getenv("INTEL_SEPARATE_STENCIL");
-   if (!s) {
-      return;
-   } else if (!strncmp("0", s, 2)) {
-      screen->hw_has_separate_stencil = false;
-   } else if (!strncmp("1", s, 2)) {
-      screen->hw_has_separate_stencil = true;
-   } else {
-      fprintf(stderr,
-	      "warning: env variable INTEL_SEPARATE_STENCIL=\"%s\" has "
-	      "invalid value and is ignored", s);
-   }
 }
 
 static bool
@@ -1096,6 +1065,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
    static const uint8_t multisample_samples[2]  = {4, 8};
 
    struct intel_screen *screen = dri_screen->driverPrivate;
+   const struct brw_device_info *devinfo = screen->devinfo;
    uint8_t depth_bits[4], stencil_bits[4];
    __DRIconfig **configs = NULL;
 
@@ -1114,7 +1084,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
       if (formats[i] == MESA_FORMAT_RGB565) {
          depth_bits[1] = 16;
          stencil_bits[1] = 0;
-         if (screen->gen >= 6) {
+         if (devinfo->gen >= 6) {
              depth_bits[2] = 24;
              stencil_bits[2] = 8;
              num_depth_stencil_bits = 3;
@@ -1170,7 +1140,7 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
     * them.
     */
    for (int i = 0; i < ARRAY_SIZE(formats); i++) {
-      if (screen->gen < 6)
+      if (devinfo->gen < 6)
          break;
 
       __DRIconfig **new_configs;
@@ -1188,9 +1158,9 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
          stencil_bits[1] = 8;
       }
 
-      if (screen->gen >= 7)
+      if (devinfo->gen >= 7)
          num_msaa_modes = 2;
-      else if (screen->gen == 6)
+      else if (devinfo->gen == 6)
          num_msaa_modes = 1;
 
       new_configs = driCreateConfigs(formats[i],
@@ -1216,39 +1186,31 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
 static void
 set_max_gl_versions(struct intel_screen *screen)
 {
-   int gl_version_override = _mesa_get_gl_version_override();
+   __DRIscreen *psp = screen->driScrnPriv;
 
-   switch (screen->gen) {
+   switch (screen->devinfo->gen) {
    case 7:
-      screen->max_gl_core_version = 31;
-      screen->max_gl_compat_version = 30;
-      screen->max_gl_es1_version = 11;
-      screen->max_gl_es2_version = 30;
+      psp->max_gl_core_version = 33;
+      psp->max_gl_compat_version = 30;
+      psp->max_gl_es1_version = 11;
+      psp->max_gl_es2_version = 30;
       break;
    case 6:
-      screen->max_gl_core_version = 31;
-      screen->max_gl_compat_version = 30;
-      screen->max_gl_es1_version = 11;
-      screen->max_gl_es2_version = 30;
+      psp->max_gl_core_version = 31;
+      psp->max_gl_compat_version = 30;
+      psp->max_gl_es1_version = 11;
+      psp->max_gl_es2_version = 30;
       break;
    case 5:
    case 4:
-      screen->max_gl_core_version = 0;
-      screen->max_gl_compat_version = 21;
-      screen->max_gl_es1_version = 11;
-      screen->max_gl_es2_version = 20;
+      psp->max_gl_core_version = 0;
+      psp->max_gl_compat_version = 21;
+      psp->max_gl_es1_version = 11;
+      psp->max_gl_es2_version = 20;
       break;
    default:
       assert(!"unrecognized intel_screen::gen");
       break;
-   }
-
-   if (gl_version_override >= 31) {
-      screen->max_gl_core_version = MAX2(screen->max_gl_core_version,
-                                         gl_version_override);
-   } else {
-      screen->max_gl_compat_version = MAX2(screen->max_gl_compat_version,
-                                           gl_version_override);
    }
 }
 
@@ -1278,7 +1240,7 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
       return false;
    }
    /* parse information in __driConfigOptions */
-   driParseOptionInfo(&intelScreen->optionCache, __driConfigOptions);
+   driParseOptionInfo(&intelScreen->optionCache, brw_config_options.xml);
 
    intelScreen->driScrnPriv = psp;
    psp->driverPrivate = (void *) intelScreen;
@@ -1287,43 +1249,13 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
        return false;
 
    intelScreen->deviceID = drm_intel_bufmgr_gem_get_devid(intelScreen->bufmgr);
+   intelScreen->devinfo = brw_get_device_info(intelScreen->deviceID);
 
-   if (IS_GEN7(intelScreen->deviceID)) {
-      intelScreen->gen = 7;
-   } else if (IS_GEN6(intelScreen->deviceID)) {
-      intelScreen->gen = 6;
-   } else if (IS_GEN5(intelScreen->deviceID)) {
-      intelScreen->gen = 5;
-   } else {
-      intelScreen->gen = 4;
-   }
-
-   intelScreen->hw_has_separate_stencil = intelScreen->gen >= 6;
-   intelScreen->hw_must_use_separate_stencil = intelScreen->gen >= 7;
-
-   int has_llc = 0;
-   bool success = intel_get_param(intelScreen->driScrnPriv, I915_PARAM_HAS_LLC,
-				  &has_llc);
-   if (success && has_llc)
-      intelScreen->hw_has_llc = true;
-   else if (!success && intelScreen->gen >= 6)
-      intelScreen->hw_has_llc = true;
-
-   intel_override_separate_stencil(intelScreen);
+   intelScreen->hw_must_use_separate_stencil = intelScreen->devinfo->gen >= 7;
 
    intelScreen->hw_has_swizzling = intel_detect_swizzling(intelScreen);
 
    set_max_gl_versions(intelScreen);
-
-   psp->api_mask = (1 << __DRI_API_OPENGL);
-   if (intelScreen->max_gl_core_version > 0)
-      psp->api_mask |= (1 << __DRI_API_OPENGL_CORE);
-   if (intelScreen->max_gl_es1_version > 0)
-      psp->api_mask |= (1 << __DRI_API_GLES);
-   if (intelScreen->max_gl_es2_version > 0)
-      psp->api_mask |= (1 << __DRI_API_GLES2);
-   if (intelScreen->max_gl_es2_version >= 30)
-      psp->api_mask |= (1 << __DRI_API_GLES3);
 
    psp->extensions = intelScreenExtensions;
 
@@ -1382,10 +1314,10 @@ intelReleaseBuffer(__DRIscreen *screen, __DRIbuffer *buffer)
 }
 
 
-const struct __DriverAPIRec driDriverAPI = {
+static const struct __DriverAPIRec brw_driver_api = {
    .InitScreen		 = intelInitScreen2,
    .DestroyScreen	 = intelDestroyScreen,
-   .CreateContext	 = intelCreateContext,
+   .CreateContext	 = brwCreateContext,
    .DestroyContext	 = intelDestroyContext,
    .CreateBuffer	 = intelCreateBuffer,
    .DestroyBuffer	 = intelDestroyBuffer,
@@ -1395,9 +1327,22 @@ const struct __DriverAPIRec driDriverAPI = {
    .ReleaseBuffer        = intelReleaseBuffer
 };
 
-/* This is the table of extensions that the loader will dlsym() for. */
-PUBLIC const __DRIextension *__driDriverExtensions[] = {
+static const struct __DRIDriverVtableExtensionRec brw_vtable = {
+   .base = { __DRI_DRIVER_VTABLE, 1 },
+   .vtable = &brw_driver_api,
+};
+
+static const __DRIextension *brw_driver_extensions[] = {
     &driCoreExtension.base,
     &driDRI2Extension.base,
+    &brw_vtable.base,
+    &brw_config_options.base,
     NULL
 };
+
+PUBLIC const __DRIextension **__driDriverGetExtensions_i965(void)
+{
+   globalDriverAPI = &brw_driver_api;
+
+   return brw_driver_extensions;
+}

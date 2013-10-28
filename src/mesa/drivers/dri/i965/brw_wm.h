@@ -66,6 +66,7 @@ struct brw_wm_prog_key {
    GLuint render_to_fbo:1;
    GLuint clamp_fragment_color:1;
    GLuint line_aa:2;
+   GLuint high_quality_derivatives:1;
 
    GLushort drawable_height;
    GLbitfield64 input_slots_valid;
@@ -113,8 +114,7 @@ bool do_wm_prog(struct brw_context *brw,
 void brw_wm_debug_recompile(struct brw_context *brw,
                             struct gl_shader_program *prog,
                             const struct brw_wm_prog_key *key);
-bool brw_wm_prog_data_compare(const void *a, const void *b,
-                              int aux_size, const void *key);
+bool brw_wm_prog_data_compare(const void *a, const void *b);
 void brw_wm_prog_data_free(const void *in_prog_data);
 
 #endif

@@ -706,8 +706,8 @@ gen7_blorp_emit_depth_stencil_config(struct brw_context *brw,
       surfwidth = params->depth.width;
       surfheight = params->depth.height;
    } else {
-      surfwidth = params->depth.mt->physical_width0;
-      surfheight = params->depth.mt->physical_height0;
+      surfwidth = params->depth.mt->logical_width0;
+      surfheight = params->depth.mt->logical_height0;
    }
 
    /* 3DSTATE_DEPTH_BUFFER */
@@ -772,6 +772,18 @@ gen7_blorp_emit_depth_disable(struct brw_context *brw,
    OUT_BATCH(0);
    OUT_BATCH(0);
    OUT_BATCH(0);
+   OUT_BATCH(0);
+   OUT_BATCH(0);
+   ADVANCE_BATCH();
+
+   BEGIN_BATCH(3);
+   OUT_BATCH(GEN7_3DSTATE_HIER_DEPTH_BUFFER << 16 | (3 - 2));
+   OUT_BATCH(0);
+   OUT_BATCH(0);
+   ADVANCE_BATCH();
+
+   BEGIN_BATCH(3);
+   OUT_BATCH(GEN7_3DSTATE_STENCIL_BUFFER << 16 | (3 - 2));
    OUT_BATCH(0);
    OUT_BATCH(0);
    ADVANCE_BATCH();

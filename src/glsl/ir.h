@@ -312,6 +312,22 @@ struct ir_state_slot {
    int swizzle;
 };
 
+
+/**
+ * Get the string value for an interpolation qualifier
+ *
+ * \return The string that would be used in a shader to specify \c
+ * mode will be returned.
+ *
+ * This function is used to generate error messages of the form "shader
+ * uses %s interpolation qualifier", so in the case where there is no
+ * interpolation qualifier, it returns "no".
+ *
+ * This function should only be used on a shader input or output variable.
+ */
+const char *interpolation_string(unsigned interpolation);
+
+
 class ir_variable : public ir_instruction {
 public:
    ir_variable(const struct glsl_type *, const char *, ir_variable_mode);
@@ -330,20 +346,6 @@ public:
 
    virtual ir_visitor_status accept(ir_hierarchical_visitor *);
 
-
-   /**
-    * Get the string value for the interpolation qualifier
-    *
-    * \return The string that would be used in a shader to specify \c
-    * mode will be returned.
-    *
-    * This function is used to generate error messages of the form "shader
-    * uses %s interpolation qualifier", so in the case where there is no
-    * interpolation qualifier, it returns "no".
-    *
-    * This function should only be used on a shader input or output variable.
-    */
-   const char *interpolation_string() const;
 
    /**
     * Determine how this variable should be interpolated based on its
@@ -392,6 +394,65 @@ public:
     }
 
    /**
+    * Set this->interface_type on a newly created variable.
+    */
+   void init_interface_type(const struct glsl_type *type)
+   {
+      assert(this->interface_type == NULL);
+      this->interface_type = type;
+      if (this->is_interface_instance()) {
+         this->max_ifc_array_access =
+            rzalloc_array(this, unsigned, type->length);
+      }
+   }
+
+   /**
+    * Change this->interface_type on a variable that previously had a
+    * different, but compatible, interface_type.  This is used during linking
+    * to set the size of arrays in interface blocks.
+    */
+   void change_interface_type(const struct glsl_type *type)
+   {
+      if (this->max_ifc_array_access != NULL) {
+         /* max_ifc_array_access has already been allocated, so make sure the
+          * new interface has the same number of fields as the old one.
+          */
+         assert(this->interface_type->length == type->length);
+      }
+      this->interface_type = type;
+   }
+
+   /**
+    * Change this->interface_type on a variable that previously had a
+    * different, and incompatible, interface_type. This is used during
+    * compilation to handle redeclaration of the built-in gl_PerVertex
+    * interface block.
+    */
+   void reinit_interface_type(const struct glsl_type *type)
+   {
+      if (this->max_ifc_array_access != NULL) {
+#ifndef _NDEBUG
+         /* Redeclaring gl_PerVertex is only allowed if none of the built-ins
+          * it defines have been accessed yet; so it's safe to throw away the
+          * old max_ifc_array_access pointer, since all of its values are
+          * zero.
+          */
+         for (unsigned i = 0; i < this->interface_type->length; i++)
+            assert(this->max_ifc_array_access[i] == 0);
+#endif
+         ralloc_free(this->max_ifc_array_access);
+         this->max_ifc_array_access = NULL;
+      }
+      this->interface_type = NULL;
+      init_interface_type(type);
+   }
+
+   const glsl_type *get_interface_type() const
+   {
+      return this->interface_type;
+   }
+
+   /**
     * Declared type of the variable
     */
    const struct glsl_type *type;
@@ -407,6 +468,19 @@ public:
     * Not used for non-array variables.
     */
    unsigned max_array_access;
+
+   /**
+    * For variables which satisfy the is_interface_instance() predicate, this
+    * points to an array of integers such that if the ith member of the
+    * interface block is an array, max_ifc_array_access[i] is the maximum
+    * array element of that member that has been accessed.  If the ith member
+    * of the interface block is not an array, max_ifc_array_access[i] is
+    * unused.
+    *
+    * For variables whose type is not an interface block, this pointer is
+    * NULL.
+    */
+   unsigned *max_ifc_array_access;
 
    /**
     * Is the variable read-only?
@@ -507,6 +581,24 @@ public:
    unsigned location_frac:2;
 
    /**
+    * Non-zero if this variable was created by lowering a named interface
+    * block which was not an array.
+    *
+    * Note that this variable and \c from_named_ifc_block_array will never
+    * both be non-zero.
+    */
+   unsigned from_named_ifc_block_nonarray:1;
+
+   /**
+    * Non-zero if this variable was created by lowering a named interface
+    * block which was an array.
+    *
+    * Note that this variable and \c from_named_ifc_block_nonarray will never
+    * both be non-zero.
+    */
+   unsigned from_named_ifc_block_array:1;
+
+   /**
     * \brief Layout qualifier for gl_FragDepth.
     *
     * This is not equal to \c ir_depth_layout_none if and only if this
@@ -547,6 +639,14 @@ public:
    int binding;
 
    /**
+    * Location an atomic counter is stored at.
+    */
+   struct {
+      unsigned buffer_index;
+      unsigned offset;
+   } atomic;
+
+   /**
     * Built-in state that backs this uniform
     *
     * Once set at variable creation, \c state_slots must remain invariant.
@@ -582,6 +682,7 @@ public:
     */
    ir_constant *constant_initializer;
 
+private:
    /**
     * For variables that are in an interface block or are an instance of an
     * interface block, this is the \c GLSL_TYPE_INTERFACE type for that block.
@@ -685,6 +786,12 @@ public:
 
    /** Whether or not this function signature is a built-in. */
    bool is_builtin() const;
+
+   /**
+    * Whether or not this function is an intrinsic to be implemented
+    * by the driver.
+    */
+   bool is_intrinsic;
 
    /** Whether or not a built-in is available for this shader. */
    bool is_builtin_available(const _mesa_glsl_parse_state *state) const;
@@ -1091,8 +1198,24 @@ enum ir_expression_operation {
 
    ir_binop_add,
    ir_binop_sub,
-   ir_binop_mul,
+   ir_binop_mul,       /**< Floating-point or low 32-bit integer multiply. */
+   ir_binop_imul_high, /**< Calculates the high 32-bits of a 64-bit multiply. */
    ir_binop_div,
+
+   /**
+    * Returns the carry resulting from the addition of the two arguments.
+    */
+   /*@{*/
+   ir_binop_carry,
+   /*@}*/
+
+   /**
+    * Returns the borrow resulting from the subtraction of the second argument
+    * from the first argument.
+    */
+   /*@{*/
+   ir_binop_borrow,
+   /*@}*/
 
    /**
     * Takes one of two combinations of arguments:
@@ -1559,7 +1682,9 @@ enum ir_texture_opcode {
    ir_txf,		/**< Texel fetch with explicit LOD */
    ir_txf_ms,           /**< Multisample texture fetch */
    ir_txs,		/**< Texture size */
-   ir_lod		/**< Texture lod query */
+   ir_lod,		/**< Texture lod query */
+   ir_tg4,		/**< Texture gather */
+   ir_query_levels      /**< Texture levels query */
 };
 
 
@@ -1584,6 +1709,8 @@ enum ir_texture_opcode {
  *      <type> <sampler> <coordinate>         <sample_index>)
  * (txs <type> <sampler> <lod>)
  * (lod <type> <sampler> <coordinate>)
+ * (tg4 <type> <sampler> <coordinate> <offset> <component>)
+ * (query_levels <type> <sampler>)
  */
 class ir_texture : public ir_rvalue {
 public:
@@ -1651,6 +1778,7 @@ public:
       ir_rvalue *lod;		/**< Floating point LOD */
       ir_rvalue *bias;		/**< Floating point LOD bias */
       ir_rvalue *sample_index;  /**< MSAA sample index */
+      ir_rvalue *component;     /**< Gather component selector */
       struct {
 	 ir_rvalue *dPdx;	/**< Partial derivative of coordinate wrt X */
 	 ir_rvalue *dPdy;	/**< Partial derivative of coordinate wrt Y */
@@ -2177,6 +2305,9 @@ do_set_program_inouts(exec_list *instructions, struct gl_program *prog,
 extern char *
 prototype_string(const glsl_type *return_type, const char *name,
 		 exec_list *parameters);
+
+const char *
+mode_string(const ir_variable *var);
 
 extern "C" {
 #endif /* __cplusplus */

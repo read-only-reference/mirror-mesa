@@ -1963,6 +1963,14 @@ struct gl_program
    GLbitfield SamplersUsed;   /**< Bitfield of which samplers are used */
    GLbitfield ShadowSamplers; /**< Texture units used for shadow sampling. */
 
+   GLboolean UsesGather; /**< Does this program use gather4 at all? */
+
+   /**
+    * For vertex and geometry shaders, true if the program uses the
+    * gl_ClipDistance output.  Ignored for fragment shaders.
+    */
+   GLboolean UsesClipDistanceOut;
+
 
    /** Named parameters, constants, etc. from program text */
    struct gl_program_parameter_list *Parameters;
@@ -2007,7 +2015,6 @@ struct gl_vertex_program
 {
    struct gl_program Base;   /**< base class */
    GLboolean IsPositionInvariant;
-   GLboolean UsesClipDistance;
 };
 
 
@@ -2021,7 +2028,6 @@ struct gl_geometry_program
    GLenum InputType;  /**< GL_POINTS, GL_LINES, GL_LINES_ADJACENCY_ARB,
                            GL_TRIANGLES, or GL_TRIANGLES_ADJACENCY_ARB */
    GLenum OutputType; /**< GL_POINTS, GL_LINE_STRIP or GL_TRIANGLE_STRIP */
-   GLboolean UsesClipDistance;
    GLboolean UsesEndPrimitive;
 };
 
@@ -2369,6 +2375,25 @@ struct gl_uniform_block
    enum gl_uniform_block_packing _Packing;
 };
 
+/**
+ * Structure that represents a reference to an atomic buffer from some
+ * shader program.
+ */
+struct gl_active_atomic_buffer
+{
+   /** Uniform indices of the atomic counters declared within it. */
+   GLuint *Uniforms;
+   GLuint NumUniforms;
+
+   /** Binding point index associated with it. */
+   GLuint Binding;
+
+   /** Minimum reasonable size it is expected to have. */
+   GLuint MinimumSize;
+
+   /** Shader stages making use of it. */
+   GLboolean StageReferences[MESA_SHADER_TYPES];
+};
 
 /**
  * A GLSL program object.
@@ -2474,6 +2499,12 @@ struct gl_shader_program
    unsigned NumUserUniformStorage;
    struct gl_uniform_storage *UniformStorage;
 
+   /**
+    * Size of the gl_ClipDistance array that is output from the last pipeline
+    * stage before the fragment shader.
+    */
+   unsigned LastClipDistanceArraySize;
+
    struct gl_uniform_block *UniformBlocks;
    unsigned NumUniformBlocks;
 
@@ -2510,6 +2541,9 @@ struct gl_shader_program
     * enumerated by \c glGetActiveUniform.
     */
    struct string_to_uint_map *UniformHash;
+
+   struct gl_active_atomic_buffer *AtomicBuffers;
+   unsigned NumAtomicBuffers;
 
    GLboolean LinkStatus;   /**< GL_LINK_STATUS */
    GLboolean Validated;
@@ -2948,6 +2982,9 @@ struct gl_program_constants
    GLuint MaxUniformBlocks;
    GLuint MaxCombinedUniformComponents;
    GLuint MaxTextureImageUnits;
+   /* GL_ARB_shader_atomic_counters */
+   GLuint MaxAtomicBuffers;
+   GLuint MaxAtomicCounters;
 };
 
 
@@ -3081,6 +3118,11 @@ struct gl_constants
    /** GL_EXT_gpu_shader4 */
    GLint MinProgramTexelOffset, MaxProgramTexelOffset;
 
+   /** GL_ARB_texture_gather */
+   GLuint MinProgramTextureGatherOffset;
+   GLuint MaxProgramTextureGatherOffset;
+   GLuint MaxProgramTextureGatherComponents;
+
    /* GL_ARB_robustness */
    GLenum ResetStrategy;
 
@@ -3113,6 +3155,12 @@ struct gl_constants
     * Force software support for primitive restart in the VBO module.
     */
    GLboolean PrimitiveRestartInSoftware;
+
+   /**
+    * Always use the GetTransformFeedbackVertexCount() driver hook, rather
+    * than passing the transform feedback object to the drawing function.
+    */
+   GLboolean AlwaysUseGetTransformFeedbackVertexCount;
 
    /** GL_ARB_map_buffer_alignment */
    GLuint MinMapBufferAlignment;
@@ -3149,6 +3197,12 @@ struct gl_constants
    GLint MaxColorTextureSamples;
    GLint MaxDepthTextureSamples;
    GLint MaxIntegerSamples;
+
+   /** GL_ARB_shader_atomic_counters */
+   GLuint MaxAtomicBufferBindings;
+   GLuint MaxAtomicBufferSize;
+   GLuint MaxCombinedAtomicBuffers;
+   GLuint MaxCombinedAtomicCounters;
 };
 
 
@@ -3192,6 +3246,7 @@ struct gl_extensions
    GLboolean ARB_occlusion_query2;
    GLboolean ARB_point_sprite;
    GLboolean ARB_seamless_cube_map;
+   GLboolean ARB_shader_atomic_counters;
    GLboolean ARB_shader_bit_encoding;
    GLboolean ARB_shader_stencil_export;
    GLboolean ARB_shader_texture_lod;
@@ -3210,8 +3265,11 @@ struct gl_extensions
    GLboolean ARB_texture_env_crossbar;
    GLboolean ARB_texture_env_dot3;
    GLboolean ARB_texture_float;
+   GLboolean ARB_texture_gather;
+   GLboolean ARB_texture_mirror_clamp_to_edge;
    GLboolean ARB_texture_multisample;
    GLboolean ARB_texture_non_power_of_two;
+   GLboolean ARB_texture_query_levels;
    GLboolean ARB_texture_query_lod;
    GLboolean ARB_texture_rg;
    GLboolean ARB_texture_rgb10_a2ui;
@@ -3282,6 +3340,7 @@ struct gl_extensions
    GLboolean NV_texture_barrier;
    GLboolean NV_texture_env_combine4;
    GLboolean NV_texture_rectangle;
+   GLboolean NV_vdpau_interop;
    GLboolean TDFX_texture_compression_FXT1;
    GLboolean OES_EGL_image;
    GLboolean OES_draw_texture;
@@ -3561,6 +3620,11 @@ struct gl_driver_flags
     * gl_shader_program::UniformBlocks
     */
    GLbitfield NewUniformBuffer;
+
+   /**
+    * gl_context::AtomicBufferBindings
+    */
+   GLbitfield NewAtomicBuffer;
 };
 
 struct gl_uniform_buffer_binding
@@ -3575,6 +3639,16 @@ struct gl_uniform_buffer_binding
     * limited by the current size of the BufferObject.
     */
    GLboolean AutomaticSize;
+};
+
+/**
+ * Binding point for an atomic counter buffer object.
+ */
+struct gl_atomic_buffer_binding
+{
+   struct gl_buffer_object *BufferObject;
+   GLintptr Offset;
+   GLsizeiptr Size;
 };
 
 /**
@@ -3745,6 +3819,18 @@ struct gl_context
    struct gl_uniform_buffer_binding
       UniformBufferBindings[MAX_COMBINED_UNIFORM_BUFFERS];
 
+   /**
+    * Object currently associated with the GL_ATOMIC_COUNTER_BUFFER
+    * target.
+    */
+   struct gl_buffer_object *AtomicBuffer;
+
+   /**
+    * Array of atomic counter buffer binding points.
+    */
+   struct gl_atomic_buffer_binding
+      AtomicBufferBindings[MAX_COMBINED_ATOMIC_BUFFERS];
+
    /*@}*/
 
    struct gl_meta_state *Meta;  /**< for "meta" operations */
@@ -3811,6 +3897,15 @@ struct gl_context
    struct vbo_context *vbo_context;
    struct st_context *st;
    void *aelt_context;
+   /*@}*/
+
+   /**
+    * \name NV_vdpau_interop
+    */
+   /*@{*/
+   const void *vdpDevice;
+   const void *vdpGetProcAddress;
+   struct set *vdpSurfaces;
    /*@}*/
 };
 

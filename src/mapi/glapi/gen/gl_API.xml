@@ -5495,7 +5495,7 @@
     <function name="GetProgramiv" offset="assign" es2="2.0">
         <param name="program" type="GLuint"/>
         <param name="pname" type="GLenum"/>
-        <param name="params" type="GLint *"/>
+        <param name="params" type="GLint *" output="true"/>
         <glx ignore="true"/>
     </function>
 
@@ -8189,7 +8189,7 @@
 
 <!-- 70. GL_ARB_sample_shading -->
 <xi:include href="ARB_texture_cube_map_array.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
-<!-- 72. GL_ARB_texture_gather -->
+<xi:include href="ARB_texture_gather.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 <!-- 73. GL_ARB_texture_query_lod -->
 
 <!-- ARB extension number 74 is a WGL extension. -->
@@ -8307,6 +8307,8 @@
 <category name="GL_ARB_map_buffer_alignment" number="113">
   <enum name="MIN_MAP_BUFFER_ALIGNMENT" value="0x90BC" />
 </category>
+
+<xi:include href="ARB_shader_atomic_counters.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
 <xi:include href="ARB_texture_storage.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
@@ -13027,38 +13029,6 @@
     <enum name="RGBA8_SNORM"                              value="0x8F97"/>
 </category>
 
-<category name="GL_MESA_shader_debug">
-    <enum name="DEBUG_OBJECT_MESA"                        value="0x8759"/>
-    <enum name="DEBUG_PRINT_MESA"                         value="0x875A"/>
-    <enum name="DEBUG_ASSERT_MESA"                        value="0x875B"/>
-    <function name="CreateDebugObjectMESA" exec="skip">
-        <return type="GLhandleARB"/>
-        <glx ignore="true"/>
-    </function>
-    <function name="ClearDebugLogMESA" exec="skip">
-        <param name="obj" type="GLhandleARB"/>
-        <param name="logType" type="GLenum"/>
-        <param name="shaderType" type="GLenum"/>
-        <glx ignore="true"/>
-    </function>
-    <function name="GetDebugLogMESA" exec="skip">
-        <param name="obj" type="GLhandleARB"/>
-        <param name="logType" type="GLenum"/>
-        <param name="shaderType" type="GLenum"/>
-        <param name="maxLength" type="GLsizei"/>
-        <param name="length" type="GLsizei *" output="true"/>
-        <param name="debugLog" type="GLcharARB *" output="true"/>
-        <glx ignore="true"/>
-    </function>
-    <function name="GetDebugLogLengthMESA" exec="skip">
-        <return type="GLsizei"/>
-        <param name="obj" type="GLhandleARB"/>
-        <param name="logType" type="GLenum"/>
-        <param name="shaderType" type="GLenum"/>
-        <glx ignore="true"/>
-    </function>
-</category>
-
 <category name="GL_SGIS_point_parameters">
     <enum name="POINT_SIZE_MIN_SGIS"           count="1"  value="0x8126">
         <size name="PointParameterfv"/>
@@ -13149,5 +13119,7 @@
 <xi:include href="NV_texture_barrier.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
 <xi:include href="EXT_transform_feedback.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
+
+<xi:include href="NV_vdpau_interop.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
 </OpenGLAPI>

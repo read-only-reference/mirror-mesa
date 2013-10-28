@@ -41,12 +41,15 @@
 
 struct wl_drm {
 	struct wl_display *display;
+	struct wl_global *wl_drm_global;
 
 	void *user_data;
 	char *device_name;
         uint32_t flags;
 
 	struct wayland_drm_callbacks *callbacks;
+
+        struct wl_buffer_interface buffer_interface;
 };
 
 static void
@@ -64,10 +67,6 @@ buffer_destroy(struct wl_client *client, struct wl_resource *resource)
 {
 	wl_resource_destroy(resource);
 }
-
-const static struct wl_buffer_interface drm_buffer_interface = {
-	buffer_destroy
-};
 
 static void
 create_buffer(struct wl_client *client, struct wl_resource *resource,
@@ -115,7 +114,7 @@ create_buffer(struct wl_client *client, struct wl_resource *resource,
 	}
 
 	wl_resource_set_implementation(buffer->resource,
-				       (void (**)(void)) &drm_buffer_interface,
+				       (void (**)(void)) &drm->buffer_interface,
 				       buffer, destroy_buffer);
 }
 
@@ -128,6 +127,7 @@ drm_create_buffer(struct wl_client *client, struct wl_resource *resource,
         case WL_DRM_FORMAT_ARGB8888:
         case WL_DRM_FORMAT_XRGB8888:
         case WL_DRM_FORMAT_YUYV:
+        case WL_DRM_FORMAT_RGB565:
                 break;
         default:
                 wl_resource_post_error(resource,
@@ -225,6 +225,8 @@ bind_drm(struct wl_client *client, void *data, uint32_t version, uint32_t id)
 			       WL_DRM_FORMAT_ARGB8888);
 	wl_resource_post_event(resource, WL_DRM_FORMAT,
 			       WL_DRM_FORMAT_XRGB8888);
+        wl_resource_post_event(resource, WL_DRM_FORMAT,
+                               WL_DRM_FORMAT_RGB565);
         wl_resource_post_event(resource, WL_DRM_FORMAT, WL_DRM_FORMAT_YUV410);
         wl_resource_post_event(resource, WL_DRM_FORMAT, WL_DRM_FORMAT_YUV411);
         wl_resource_post_event(resource, WL_DRM_FORMAT, WL_DRM_FORMAT_YUV420);
@@ -243,15 +245,15 @@ bind_drm(struct wl_client *client, void *data, uint32_t version, uint32_t id)
 }
 
 struct wl_drm_buffer *
-wayland_drm_buffer_get(struct wl_resource *resource)
+wayland_drm_buffer_get(struct wl_drm *drm, struct wl_resource *resource)
 {
 	if (resource == NULL)
 		return NULL;
 
-	if (wl_resource_instance_of(resource, &wl_buffer_interface,
-				    &drm_buffer_interface))
+        if (wl_resource_instance_of(resource, &wl_buffer_interface,
+                                    &drm->buffer_interface))
 		return wl_resource_get_user_data(resource);
-	else
+        else
 		return NULL;
 }
 
@@ -270,7 +272,11 @@ wayland_drm_init(struct wl_display *display, char *device_name,
 	drm->user_data = user_data;
         drm->flags = flags;
 
-	wl_global_create(display, &wl_drm_interface, 2, drm, bind_drm);
+        drm->buffer_interface.destroy = buffer_destroy;
+
+	drm->wl_drm_global =
+		wl_global_create(display, &wl_drm_interface, 2,
+				 drm, bind_drm);
 
 	return drm;
 }
@@ -280,7 +286,7 @@ wayland_drm_uninit(struct wl_drm *drm)
 {
 	free(drm->device_name);
 
-	/* FIXME: need wl_display_del_{object,global} */
+	wl_global_destroy(drm->wl_drm_global);
 
 	free(drm);
 }

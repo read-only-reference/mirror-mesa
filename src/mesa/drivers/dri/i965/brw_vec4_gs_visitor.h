@@ -81,7 +81,8 @@ public:
                    struct brw_gs_compile *c,
                    struct gl_shader_program *prog,
                    struct brw_shader *shader,
-                   void *mem_ctx);
+                   void *mem_ctx,
+                   bool no_spills);
 
 protected:
    virtual dst_reg *make_reg_for_system_value(ir_variable *ir);
@@ -96,7 +97,8 @@ protected:
    virtual void visit(ir_end_primitive *);
 
 private:
-   int setup_varying_inputs(int payload_reg, int *attribute_map);
+   int setup_varying_inputs(int payload_reg, int *attribute_map,
+                            int attributes_per_reg);
    void emit_control_data_bits();
 
    src_reg vertex_count;

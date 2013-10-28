@@ -1183,11 +1183,9 @@ dri2CreateScreen(int screen, struct glx_display * priv)
       goto handle_error;
    }
 
-   extensions = dlsym(psc->driver, __DRI_DRIVER_EXTENSIONS);
-   if (extensions == NULL) {
-      ErrorMessageF("driver exports no extensions (%s)\n", dlerror());
+   extensions = driGetDriverExtensions(psc->driver, driverName);
+   if (extensions == NULL)
       goto handle_error;
-   }
 
    for (i = 0; extensions[i]; i++) {
       if (strcmp(extensions[i]->name, __DRI_CORE) == 0)
@@ -1225,15 +1223,20 @@ dri2CreateScreen(int screen, struct glx_display * priv)
       goto handle_error;
    }
 
-   
-   /* If the server does not support the protocol for
-    * DRI2GetBuffersWithFormat, don't supply that interface to the driver.
-    */
-   psc->driScreen =
-      psc->dri2->createNewScreen(screen, psc->fd,
-				 (const __DRIextension **)
-				 &pdp->loader_extensions[0],
-				 &driver_configs, psc);
+   if (psc->dri2->base.version >= 4) {
+      psc->driScreen =
+         psc->dri2->createNewScreen2(screen, psc->fd,
+                                     (const __DRIextension **)
+                                     &pdp->loader_extensions[0],
+                                     extensions,
+                                     &driver_configs, psc);
+   } else {
+      psc->driScreen =
+         psc->dri2->createNewScreen(screen, psc->fd,
+                                    (const __DRIextension **)
+                                    &pdp->loader_extensions[0],
+                                    &driver_configs, psc);
+   }
 
    if (psc->driScreen == NULL) {
       ErrorMessageF("failed to create dri screen\n");

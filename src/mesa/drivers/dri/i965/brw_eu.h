@@ -181,6 +181,8 @@ ALU3(BFI2)
 ALU1(FBH)
 ALU1(FBL)
 ALU1(CBIT)
+ALU2(ADDC)
+ALU2(SUBB)
 
 ROUND(RNDZ)
 ROUND(RNDE)
@@ -377,6 +379,11 @@ void brw_oword_block_write_scratch(struct brw_compile *p,
 				   int num_regs,
 				   GLuint offset);
 
+void gen7_block_read_scratch(struct brw_compile *p,
+                             struct brw_reg dest,
+                             int num_regs,
+                             GLuint offset);
+
 void brw_shader_time_add(struct brw_compile *p,
                          struct brw_reg payload,
                          uint32_t surf_index);
@@ -421,6 +428,23 @@ void brw_CMP(struct brw_compile *p,
 	     GLuint conditional,
 	     struct brw_reg src0,
 	     struct brw_reg src1);
+
+void
+brw_untyped_atomic(struct brw_compile *p,
+                   struct brw_reg dest,
+                   struct brw_reg mrf,
+                   GLuint atomic_op,
+                   GLuint bind_table_index,
+                   GLuint msg_length,
+                   GLuint response_length);
+
+void
+brw_untyped_surface_read(struct brw_compile *p,
+                         struct brw_reg dest,
+                         struct brw_reg mrf,
+                         GLuint bind_table_index,
+                         GLuint msg_length,
+                         GLuint response_length);
 
 /*********************************************************************** 
  * brw_eu_util.c:

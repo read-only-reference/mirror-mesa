@@ -575,7 +575,8 @@ struct dd_function_table {
                               GLintptr readOffset, GLintptr writeOffset,
                               GLsizeiptr size );
 
-   /* May return NULL if MESA_MAP_NOWAIT_BIT is set in access:
+   /* Returns pointer to the start of the mapped range.
+    * May return NULL if MESA_MAP_NOWAIT_BIT is set in access:
     */
    void * (*MapBufferRange)( struct gl_context *ctx, GLintptr offset,
                              GLsizeiptr length, GLbitfield access,
@@ -842,6 +843,14 @@ struct dd_function_table {
                                    struct gl_transform_feedback_object *obj);
 
    /**
+    * Return the number of vertices written to a stream during the last
+    * Begin/EndTransformFeedback block.
+    */
+   GLsizei (*GetTransformFeedbackVertexCount)(struct gl_context *ctx,
+                                              struct gl_transform_feedback_object *obj,
+                                              GLuint stream);
+
+   /**
     * \name GL_NV_texture_barrier interface
     */
    void (*TextureBarrier)(struct gl_context *ctx);
@@ -867,6 +876,20 @@ struct dd_function_table {
                              struct gl_framebuffer *fb,
                              GLuint index,
                              GLfloat *outValue);
+
+   /**
+    * \name NV_vdpau_interop interface
+    */
+   void (*VDPAUMapSurface)(struct gl_context *ctx, GLenum target,
+                           GLenum access, GLboolean output,
+                           struct gl_texture_object *texObj,
+                           struct gl_texture_image *texImage,
+                           const GLvoid *vdpSurface, GLuint index);
+   void (*VDPAUUnmapSurface)(struct gl_context *ctx, GLenum target,
+                             GLenum access, GLboolean output,
+                             struct gl_texture_object *texObj,
+                             struct gl_texture_image *texImage,
+                             const GLvoid *vdpSurface, GLuint index);
 };
 
 

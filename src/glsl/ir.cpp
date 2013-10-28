@@ -398,6 +398,9 @@ ir_expression::ir_expression(int op, ir_rvalue *op0, ir_rvalue *op1)
       this->type = glsl_type::uint_type;
       break;
 
+   case ir_binop_imul_high:
+   case ir_binop_carry:
+   case ir_binop_borrow:
    case ir_binop_lshift:
    case ir_binop_rshift:
    case ir_binop_bfm:
@@ -527,7 +530,10 @@ static const char *const operator_strs[] = {
    "+",
    "-",
    "*",
+   "imul_high",
    "/",
+   "carry",
+   "borrow",
    "%",
    "<",
    ">",
@@ -1374,7 +1380,7 @@ ir_dereference::is_lvalue() const
 }
 
 
-static const char *tex_opcode_strs[] = { "tex", "txb", "txl", "txd", "txf", "txf_ms", "txs", "lod" };
+static const char *tex_opcode_strs[] = { "tex", "txb", "txl", "txd", "txf", "txf_ms", "txs", "lod", "tg4", "query_levels" };
 
 const char *ir_texture::opcode_string()
 {
@@ -1403,7 +1409,7 @@ ir_texture::set_sampler(ir_dereference *sampler, const glsl_type *type)
    this->sampler = sampler;
    this->type = type;
 
-   if (this->op == ir_txs) {
+   if (this->op == ir_txs || this->op == ir_query_levels) {
       assert(type->base_type == GLSL_TYPE_INT);
    } else if (this->op == ir_lod) {
       assert(type->vector_elements == 2);
@@ -1578,8 +1584,9 @@ ir_swizzle::variable_referenced() const
 
 ir_variable::ir_variable(const struct glsl_type *type, const char *name,
 			 ir_variable_mode mode)
-   : max_array_access(0), read_only(false), centroid(false), invariant(false),
-     mode(mode), interpolation(INTERP_QUALIFIER_NONE)
+   : max_array_access(0), max_ifc_array_access(NULL),
+     read_only(false), centroid(false), invariant(false),
+        mode(mode), interpolation(INTERP_QUALIFIER_NONE), atomic()
 {
    this->ir_type = ir_type_variable;
    this->type = type;
@@ -1596,15 +1603,22 @@ ir_variable::ir_variable(const struct glsl_type *type, const char *name,
    this->depth_layout = ir_depth_layout_none;
    this->used = false;
 
-   if (type && type->base_type == GLSL_TYPE_SAMPLER)
-      this->read_only = true;
+   if (type != NULL) {
+      if (type->base_type == GLSL_TYPE_SAMPLER)
+         this->read_only = true;
+
+      if (type->is_interface())
+         this->init_interface_type(type);
+      else if (type->is_array() && type->fields.array->is_interface())
+         this->init_interface_type(type->fields.array);
+   }
 }
 
 
 const char *
-ir_variable::interpolation_string() const
+interpolation_string(unsigned interpolation)
 {
-   switch (this->interpolation) {
+   switch (interpolation) {
    case INTERP_QUALIFIER_NONE:          return "no";
    case INTERP_QUALIFIER_SMOOTH:        return "smooth";
    case INTERP_QUALIFIER_FLAT:          return "flat";
@@ -1633,8 +1647,8 @@ ir_variable::determine_interpolation_mode(bool flat_shade)
 
 ir_function_signature::ir_function_signature(const glsl_type *return_type,
                                              builtin_available_predicate b)
-   : return_type(return_type), is_defined(false), builtin_avail(b),
-     _function(NULL)
+   : return_type(return_type), is_defined(false), is_intrinsic(false),
+     builtin_avail(b), _function(NULL)
 {
    this->ir_type = ir_type_function_signature;
    this->origin = NULL;
@@ -1876,4 +1890,47 @@ vertices_per_prim(GLenum prim)
       assert(!"Bad primitive");
       return 3;
    }
+}
+
+/**
+ * Generate a string describing the mode of a variable
+ */
+const char *
+mode_string(const ir_variable *var)
+{
+   switch (var->mode) {
+   case ir_var_auto:
+      return (var->read_only) ? "global constant" : "global variable";
+
+   case ir_var_uniform:
+      return "uniform";
+
+   case ir_var_shader_in:
+      return "shader input";
+
+   case ir_var_shader_out:
+      return "shader output";
+
+   case ir_var_function_in:
+   case ir_var_const_in:
+      return "function input";
+
+   case ir_var_function_out:
+      return "function output";
+
+   case ir_var_function_inout:
+      return "function inout";
+
+   case ir_var_system_value:
+      return "shader input";
+
+   case ir_var_temporary:
+      return "compiler temporary";
+
+   case ir_var_mode_count:
+      break;
+   }
+
+   assert(!"Should not get here.");
+   return "invalid variable";
 }

@@ -544,6 +544,17 @@ util_format_is_depth_and_stencil(enum pipe_format format)
           util_format_has_stencil(desc);
 }
 
+
+/**
+ * Calculates the MRD for the depth format. MRD is used in depth bias
+ * for UNORM and unbound depth buffers. When the depth buffer is floating
+ * point, the depth bias calculation does not use the MRD. However, the
+ * default MRD will be 1.0 / ((1 << 24) - 1).
+ */
+double
+util_get_depth_format_mrd(enum pipe_format format);
+
+
 /**
  * Return whether this is an RGBA, Z, S, or combined ZS format.
  * Useful for initializing pipe_blit_info::mask.
@@ -716,10 +727,15 @@ static INLINE uint
 util_format_get_blocksize(enum pipe_format format)
 {
    uint bits = util_format_get_blocksizebits(format);
+   uint bytes = bits / 8;
 
    assert(bits % 8 == 0);
+   assert(bytes > 0);
+   if (bytes == 0) {
+      bytes = 1;
+   }
 
-   return bits / 8;
+   return bytes;
 }
 
 static INLINE uint

@@ -28,7 +28,7 @@
  * dataflow analysis on the copies available at the end of each block to re-do
  * local copy propagation with more copies available.
  *
- * See Muchnik's Advanced Compiler Design and Implementation, section
+ * See Muchnick's Advanced Compiler Design and Implementation, section
  * 12.5 (p356).
  */
 
@@ -279,6 +279,9 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
    if (entry->src.file == IMM)
       return false;
 
+   if (inst->regs_read(this, arg) > 1)
+      return false;
+
    if (inst->src[arg].file != entry->dst.file ||
        inst->src[arg].reg != entry->dst.reg ||
        inst->src[arg].reg_offset != entry->dst.reg_offset) {
@@ -343,6 +346,8 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
 
       case BRW_OPCODE_SHL:
       case BRW_OPCODE_SHR:
+      case BRW_OPCODE_ADDC:
+      case BRW_OPCODE_SUBB:
          if (i == 1) {
             inst->src[i] = entry->src;
             progress = true;
@@ -560,7 +565,7 @@ fs_visitor::opt_copy_propagate()
    ralloc_free(mem_ctx);
 
    if (progress)
-      live_intervals_valid = false;
+      invalidate_live_intervals();
 
    return progress;
 }

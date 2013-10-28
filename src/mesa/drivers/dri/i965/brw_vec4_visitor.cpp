@@ -38,7 +38,22 @@ vec4_instruction::vec4_instruction(vec4_visitor *v,
    this->src[0] = src0;
    this->src[1] = src1;
    this->src[2] = src2;
+   this->saturate = false;
+   this->force_writemask_all = false;
+   this->no_dd_clear = false;
+   this->no_dd_check = false;
+   this->conditional_mod = BRW_CONDITIONAL_NONE;
+   this->sampler = 0;
+   this->texture_offset = 0;
+   this->target = 0;
+   this->shadow_compare = false;
    this->ir = v->base_ir;
+   this->urb_write_flags = BRW_URB_WRITE_NO_FLAGS;
+   this->header_present = false;
+   this->mlen = 0;
+   this->base_mrf = 0;
+   this->offset = 0;
+   this->ir = NULL;
    this->annotation = v->current_annotation;
 }
 
@@ -147,6 +162,8 @@ ALU1(FBH)
 ALU1(FBL)
 ALU1(CBIT)
 ALU3(MAD)
+ALU2(ADDC)
+ALU2(SUBB)
 
 /** Gen4 predicated IF. */
 vec4_instruction *
@@ -212,7 +229,7 @@ vec4_visitor::SCRATCH_READ(dst_reg dst, src_reg index)
 {
    vec4_instruction *inst;
 
-   inst = new(mem_ctx) vec4_instruction(this, VS_OPCODE_SCRATCH_READ,
+   inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_GEN4_SCRATCH_READ,
 					dst, index);
    inst->base_mrf = 14;
    inst->mlen = 2;
@@ -225,7 +242,7 @@ vec4_visitor::SCRATCH_WRITE(dst_reg dst, src_reg src, src_reg index)
 {
    vec4_instruction *inst;
 
-   inst = new(mem_ctx) vec4_instruction(this, VS_OPCODE_SCRATCH_WRITE,
+   inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_GEN4_SCRATCH_WRITE,
 					dst, src, index);
    inst->base_mrf = 13;
    inst->mlen = 3;
@@ -552,6 +569,8 @@ type_size(const struct glsl_type *type)
        * at link time.
        */
       return 1;
+   case GLSL_TYPE_ATOMIC_UINT:
+      return 0;
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
@@ -1341,7 +1360,7 @@ vec4_visitor::visit(ir_expression *ir)
             else
                emit(MUL(result_dst, op[0], op[1]));
          } else {
-            struct brw_reg acc = retype(brw_acc_reg(), BRW_REGISTER_TYPE_D);
+            struct brw_reg acc = retype(brw_acc_reg(), result_dst.type);
 
             emit(MUL(acc, op[0], op[1]));
             emit(MACH(dst_null_d(), op[0], op[1]));
@@ -1351,11 +1370,32 @@ vec4_visitor::visit(ir_expression *ir)
 	 emit(MUL(result_dst, op[0], op[1]));
       }
       break;
+   case ir_binop_imul_high: {
+      struct brw_reg acc = retype(brw_acc_reg(), result_dst.type);
+
+      emit(MUL(acc, op[0], op[1]));
+      emit(MACH(result_dst, op[0], op[1]));
+      break;
+   }
    case ir_binop_div:
       /* Floating point should be lowered by DIV_TO_MUL_RCP in the compiler. */
       assert(ir->type->is_integer());
       emit_math(SHADER_OPCODE_INT_QUOTIENT, result_dst, op[0], op[1]);
       break;
+   case ir_binop_carry: {
+      struct brw_reg acc = retype(brw_acc_reg(), BRW_REGISTER_TYPE_UD);
+
+      emit(ADDC(dst_null_ud(), op[0], op[1]));
+      emit(MOV(result_dst, src_reg(acc)));
+      break;
+   }
+   case ir_binop_borrow: {
+      struct brw_reg acc = retype(brw_acc_reg(), BRW_REGISTER_TYPE_UD);
+
+      emit(SUBB(dst_null_ud(), op[0], op[1]));
+      emit(MOV(result_dst, src_reg(acc)));
+      break;
+   }
    case ir_binop_mod:
       /* Floating point should be lowered by MOD_TO_FRACT in the compiler. */
       assert(ir->type->is_integer());
@@ -1537,7 +1577,7 @@ vec4_visitor::visit(ir_expression *ir)
       src_reg packed_consts = src_reg(this, glsl_type::vec4_type);
       packed_consts.type = result.type;
       src_reg surf_index =
-         src_reg(SURF_INDEX_VEC4_UBO(uniform_block->value.u[0]));
+         src_reg(prog_data->base.binding_table.ubo_start + uniform_block->value.u[0]);
       if (const_offset_ir) {
          offset = src_reg(const_offset / 16);
       } else {
@@ -2131,8 +2171,25 @@ vec4_visitor::visit(ir_texture *ir)
    int sampler =
       _mesa_get_sampler_uniform_value(ir->sampler, shader_prog, prog);
 
+   /* When tg4 is used with the degenerate ZERO/ONE swizzles, don't bother
+    * emitting anything other than setting up the constant result.
+    */
+   if (ir->op == ir_tg4) {
+      ir_constant *chan = ir->lod_info.component->as_constant();
+      int swiz = GET_SWZ(key->tex.swizzles[sampler], chan->value.i[0]);
+      if (swiz == SWIZZLE_ZERO || swiz == SWIZZLE_ONE) {
+         dst_reg result(this, ir->type);
+         this->result = src_reg(result);
+         emit(MOV(result, src_reg(swiz == SWIZZLE_ONE ? 1.0f : 0.0f)));
+         return;
+      }
+   }
+
    /* Should be lowered by do_lower_texture_projection */
    assert(!ir->projector);
+
+   /* Should be lowered */
+   assert(!ir->offset || !ir->offset->type->is_array());
 
    /* Generate code to compute all the subexpression trees.  This has to be
     * done before loading any values into MRFs for the sampler message since
@@ -2150,6 +2207,13 @@ vec4_visitor::visit(ir_texture *ir)
       shadow_comparitor = this->result;
    }
 
+   bool has_nonconstant_offset = ir->offset && !ir->offset->as_constant();
+   src_reg offset_value;
+   if (has_nonconstant_offset) {
+      ir->offset->accept(this);
+      offset_value = src_reg(this->result);
+   }
+
    const glsl_type *lod_type = NULL, *sample_index_type = NULL;
    src_reg lod, dPdx, dPdy, sample_index;
    switch (ir->op) {
@@ -2163,6 +2227,10 @@ vec4_visitor::visit(ir_texture *ir)
       ir->lod_info.lod->accept(this);
       lod = this->result;
       lod_type = ir->lod_info.lod->type;
+      break;
+   case ir_query_levels:
+      lod = src_reg(0);
+      lod_type = glsl_type::int_type;
       break;
    case ir_txf_ms:
       ir->lod_info.sample_index->accept(this);
@@ -2180,6 +2248,7 @@ vec4_visitor::visit(ir_texture *ir)
       break;
    case ir_txb:
    case ir_lod:
+   case ir_tg4:
       break;
    }
 
@@ -2201,18 +2270,29 @@ vec4_visitor::visit(ir_texture *ir)
    case ir_txs:
       inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TXS);
       break;
+   case ir_tg4:
+      if (has_nonconstant_offset)
+         inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TG4_OFFSET);
+      else
+         inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TG4);
+      break;
+   case ir_query_levels:
+      inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TXS);
+      break;
    case ir_txb:
       assert(!"TXB is not valid for vertex shaders.");
       break;
    case ir_lod:
       assert(!"LOD is not valid for vertex shaders.");
       break;
+   default:
+      assert(!"Unrecognized tex op");
    }
 
    bool use_texture_offset = ir->offset != NULL && ir->op != ir_txf;
 
    /* Texel offsets go in the message header; Gen4 also requires headers. */
-   inst->header_present = use_texture_offset || brw->gen < 5;
+   inst->header_present = use_texture_offset || brw->gen < 5 || ir->op == ir_tg4;
    inst->base_mrf = 2;
    inst->mlen = inst->header_present + 1; /* always at least one */
    inst->sampler = sampler;
@@ -2221,12 +2301,16 @@ vec4_visitor::visit(ir_texture *ir)
    inst->shadow_compare = ir->shadow_comparitor != NULL;
 
    if (use_texture_offset)
-      inst->texture_offset = brw_texture_offset(ir->offset->as_constant());
+      inst->texture_offset = brw_texture_offset(ctx, ir->offset->as_constant());
+
+   /* Stuff the channel select bits in the top of the texture offset */
+   if (ir->op == ir_tg4)
+      inst->texture_offset |= gather_channel(ir, sampler)<<16;
 
    /* MRF for the first parameter */
    int param_base = inst->base_mrf + inst->header_present;
 
-   if (ir->op == ir_txs) {
+   if (ir->op == ir_txs || ir->op == ir_query_levels) {
       int writemask = brw->gen == 4 ? WRITEMASK_W : WRITEMASK_X;
       emit(MOV(dst_reg(MRF, param_base, lod_type, writemask), lod));
    } else {
@@ -2235,34 +2319,15 @@ vec4_visitor::visit(ir_texture *ir)
       int coord_mask = (1 << ir->coordinate->type->vector_elements) - 1;
       int zero_mask = 0xf & ~coord_mask;
 
-      if (ir->offset && ir->op == ir_txf) {
-	 /* It appears that the ld instruction used for txf does its
-	  * address bounds check before adding in the offset.  To work
-	  * around this, just add the integer offset to the integer
-	  * texel coordinate, and don't put the offset in the header.
-	  */
-	 ir_constant *offset = ir->offset->as_constant();
-	 assert(offset);
+      emit(MOV(dst_reg(MRF, param_base, ir->coordinate->type, coord_mask),
+               coordinate));
 
-	 for (int j = 0; j < ir->coordinate->type->vector_elements; j++) {
-	    src_reg src = coordinate;
-	    src.swizzle = BRW_SWIZZLE4(BRW_GET_SWZ(src.swizzle, j),
-				       BRW_GET_SWZ(src.swizzle, j),
-				       BRW_GET_SWZ(src.swizzle, j),
-				       BRW_GET_SWZ(src.swizzle, j));
-	    emit(ADD(dst_reg(MRF, param_base, ir->coordinate->type, 1 << j),
-		     src, offset->value.i[j]));
-	 }
-      } else {
-	 emit(MOV(dst_reg(MRF, param_base, ir->coordinate->type, coord_mask),
-		  coordinate));
-      }
       if (zero_mask != 0) {
          emit(MOV(dst_reg(MRF, param_base, ir->coordinate->type, zero_mask),
                   src_reg(0)));
       }
       /* Load the shadow comparitor */
-      if (ir->shadow_comparitor && ir->op != ir_txd) {
+      if (ir->shadow_comparitor && ir->op != ir_txd && (ir->op != ir_tg4 || !has_nonconstant_offset)) {
 	 emit(MOV(dst_reg(MRF, param_base + 1, ir->shadow_comparitor->type,
 			  WRITEMASK_X),
 		  shadow_comparitor));
@@ -2326,6 +2391,15 @@ vec4_visitor::visit(ir_texture *ir)
 	    emit(MOV(dst_reg(MRF, param_base + 2, type, WRITEMASK_XYZ), dPdy));
 	    inst->mlen += 2;
 	 }
+      } else if (ir->op == ir_tg4 && has_nonconstant_offset) {
+         if (ir->shadow_comparitor) {
+            emit(MOV(dst_reg(MRF, param_base, ir->shadow_comparitor->type, WRITEMASK_W),
+                     shadow_comparitor));
+         }
+
+         emit(MOV(dst_reg(MRF, param_base + 1, glsl_type::ivec2_type, WRITEMASK_XY),
+                  offset_value));
+         inst->mlen++;
       }
    }
 
@@ -2347,6 +2421,31 @@ vec4_visitor::visit(ir_texture *ir)
    swizzle_result(ir, src_reg(inst->dst), sampler);
 }
 
+/**
+ * Set up the gather channel based on the swizzle, for gather4.
+ */
+uint32_t
+vec4_visitor::gather_channel(ir_texture *ir, int sampler)
+{
+   ir_constant *chan = ir->lod_info.component->as_constant();
+   int swiz = GET_SWZ(key->tex.swizzles[sampler], chan->value.i[0]);
+   switch (swiz) {
+      case SWIZZLE_X: return 0;
+      case SWIZZLE_Y:
+         /* gather4 sampler is broken for green channel on RG32F --
+          * we must ask for blue instead.
+          */
+         if (key->tex.gather_channel_quirk_mask & (1<<sampler))
+            return 2;
+         return 1;
+      case SWIZZLE_Z: return 2;
+      case SWIZZLE_W: return 3;
+      default:
+         assert(!"Not reached"); /* zero, one swizzles handled already */
+         return 0;
+   }
+}
+
 void
 vec4_visitor::swizzle_result(ir_texture *ir, src_reg orig_val, int sampler)
 {
@@ -2355,11 +2454,19 @@ vec4_visitor::swizzle_result(ir_texture *ir, src_reg orig_val, int sampler)
    this->result = src_reg(this, ir->type);
    dst_reg swizzled_result(this->result);
 
-   if (ir->op == ir_txs || ir->type == glsl_type::float_type
-			|| s == SWIZZLE_NOOP) {
+   if (ir->op == ir_query_levels) {
+      /* # levels is in .w */
+      orig_val.swizzle = BRW_SWIZZLE4(SWIZZLE_W, SWIZZLE_W, SWIZZLE_W, SWIZZLE_W);
       emit(MOV(swizzled_result, orig_val));
       return;
    }
+
+   if (ir->op == ir_txs || ir->type == glsl_type::float_type
+			|| s == SWIZZLE_NOOP || ir->op == ir_tg4) {
+      emit(MOV(swizzled_result, orig_val));
+      return;
+   }
+
 
    int zero_mask = 0, one_mask = 0, copy_mask = 0;
    int swizzle[4] = {0};
@@ -2687,7 +2794,7 @@ vec4_visitor::emit_vertex()
    }
 
    /* Lower legacy ff and ClipVertex clipping to clip distances */
-   if (key->userclip_active && !key->uses_clip_distance) {
+   if (key->userclip_active && !prog->UsesClipDistanceOut) {
       current_annotation = "user clip distances";
 
       output_reg[VARYING_SLOT_CLIP_DIST0] = dst_reg(this, glsl_type::vec4_type);
@@ -2926,7 +3033,7 @@ vec4_visitor::emit_pull_constant_load(vec4_instruction *inst,
 				      int base_offset)
 {
    int reg_offset = base_offset + orig_src.reg_offset;
-   src_reg index = src_reg((unsigned)SURF_INDEX_VEC4_CONST_BUFFER);
+   src_reg index = src_reg(prog_data->base.binding_table.pull_constants_start);
    src_reg offset = get_pull_constant_offset(inst, orig_src.reladdr, reg_offset);
    vec4_instruction *load;
 
@@ -3041,8 +3148,9 @@ vec4_visitor::vec4_visitor(struct brw_context *brw,
 			   struct gl_shader_program *shader_prog,
 			   struct brw_shader *shader,
 			   void *mem_ctx,
-                           bool debug_flag)
-   : debug_flag(debug_flag)
+                           bool debug_flag,
+                           bool no_spills)
+   : debug_flag(debug_flag), no_spills(no_spills)
 {
    this->brw = brw;
    this->ctx = &brw->ctx;
@@ -3060,6 +3168,7 @@ vec4_visitor::vec4_visitor(struct brw_context *brw,
    this->prog = prog;
    this->key = key;
    this->prog_data = prog_data;
+   this->stage_prog_data = &prog_data->base;
 
    this->variable_ht = hash_table_ctor(0,
 				       hash_table_pointer_hash,

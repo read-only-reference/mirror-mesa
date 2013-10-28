@@ -149,7 +149,7 @@ nv30_fragtex_validate(struct nv30_context *nv30)
    nv30->fragprog.dirty_samplers = 0;
 }
 
-static void
+void
 nv30_fragtex_sampler_states_bind(struct pipe_context *pipe,
                                  unsigned nr, void **hwcso)
 {
@@ -171,7 +171,7 @@ nv30_fragtex_sampler_states_bind(struct pipe_context *pipe,
 }
 
 
-static void
+void
 nv30_fragtex_set_sampler_views(struct pipe_context *pipe, unsigned nr,
                                struct pipe_sampler_view **views)
 {
@@ -194,9 +194,28 @@ nv30_fragtex_set_sampler_views(struct pipe_context *pipe, unsigned nr,
    nv30->dirty |= NV30_NEW_FRAGTEX;
 }
 
+
+static void
+nv30_set_sampler_views(struct pipe_context *pipe, unsigned shader,
+                       unsigned start, unsigned nr,
+                       struct pipe_sampler_view **views)
+{
+   assert(start == 0);
+   switch (shader) {
+   case PIPE_SHADER_FRAGMENT:
+      nv30_fragtex_set_sampler_views(pipe, nr, views);
+      break;
+   case PIPE_SHADER_VERTEX:
+      nv40_verttex_set_sampler_views(pipe, nr, views);
+      break;
+   default:
+      ;
+   }
+}
+
+
 void
 nv30_fragtex_init(struct pipe_context *pipe)
 {
-   pipe->bind_fragment_sampler_states = nv30_fragtex_sampler_states_bind;
-   pipe->set_fragment_sampler_views = nv30_fragtex_set_sampler_views;
+   pipe->set_sampler_views = nv30_set_sampler_views;
 }

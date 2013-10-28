@@ -353,9 +353,22 @@ brw_blorp_copytexsubimage(struct brw_context *brw,
    if (brw->gen < 6)
       return false;
 
-   if (!color_formats_match(src_mt->format, dst_mt->format)) {
+   if (_mesa_get_format_base_format(src_mt->format) !=
+       _mesa_get_format_base_format(dst_mt->format)) {
       return false;
    }
+
+   /* We can't handle format conversions between Z24 and other formats since
+    * we have to lie about the surface format.  See the comments in
+    * brw_blorp_surface_info::set().
+    */
+   if ((src_mt->format == MESA_FORMAT_X8_Z24) !=
+       (dst_mt->format == MESA_FORMAT_X8_Z24)) {
+      return false;
+   }
+
+   if (!brw->format_supported_as_render_target[dst_mt->format])
+      return false;
 
    /* Source clipping shouldn't be necessary, since copytexsubimage (in
     * src/mesa/main/teximage.c) calls _mesa_clip_copytexsubimage() which
@@ -899,22 +912,22 @@ void
 brw_blorp_blit_program::alloc_push_const_regs(int base_reg)
 {
 #define CONST_LOC(name) offsetof(brw_blorp_wm_push_constants, name)
-#define ALLOC_REG(name) \
-   this->name = \
-      brw_vec1_reg(BRW_GENERAL_REGISTER_FILE, \
-                   base_reg + CONST_LOC(name) / 32, \
-                   (CONST_LOC(name) % 32) / 4)
+#define ALLOC_REG(name, type)                                   \
+   this->name =                                                 \
+      retype(brw_vec1_reg(BRW_GENERAL_REGISTER_FILE,            \
+                          base_reg + CONST_LOC(name) / 32,      \
+                          (CONST_LOC(name) % 32) / 4), type)
 
-   ALLOC_REG(dst_x0);
-   ALLOC_REG(dst_x1);
-   ALLOC_REG(dst_y0);
-   ALLOC_REG(dst_y1);
-   ALLOC_REG(rect_grid_x1);
-   ALLOC_REG(rect_grid_y1);
-   ALLOC_REG(x_transform.multiplier);
-   ALLOC_REG(x_transform.offset);
-   ALLOC_REG(y_transform.multiplier);
-   ALLOC_REG(y_transform.offset);
+   ALLOC_REG(dst_x0, BRW_REGISTER_TYPE_UD);
+   ALLOC_REG(dst_x1, BRW_REGISTER_TYPE_UD);
+   ALLOC_REG(dst_y0, BRW_REGISTER_TYPE_UD);
+   ALLOC_REG(dst_y1, BRW_REGISTER_TYPE_UD);
+   ALLOC_REG(rect_grid_x1, BRW_REGISTER_TYPE_F);
+   ALLOC_REG(rect_grid_y1, BRW_REGISTER_TYPE_F);
+   ALLOC_REG(x_transform.multiplier, BRW_REGISTER_TYPE_F);
+   ALLOC_REG(x_transform.offset, BRW_REGISTER_TYPE_F);
+   ALLOC_REG(y_transform.multiplier, BRW_REGISTER_TYPE_F);
+   ALLOC_REG(y_transform.offset, BRW_REGISTER_TYPE_F);
 #undef CONST_LOC
 #undef ALLOC_REG
 }
@@ -2063,8 +2076,8 @@ brw_blorp_blit_params::brw_blorp_blit_params(struct brw_context *brw,
    struct gl_context *ctx = &brw->ctx;
    const struct gl_framebuffer *read_fb = ctx->ReadBuffer;
 
-   src.set(brw, src_mt, src_level, src_layer);
-   dst.set(brw, dst_mt, dst_level, dst_layer);
+   src.set(brw, src_mt, src_level, src_layer, false);
+   dst.set(brw, dst_mt, dst_level, dst_layer, true);
 
    /* Even though we do multisample resolves at the time of the blit, OpenGL
     * specification defines them as if they happen at the time of rendering,
@@ -2077,13 +2090,17 @@ brw_blorp_blit_params::brw_blorp_blit_params(struct brw_context *brw,
     * proprietary OpenGL driver also follow this approach. So, we choose to
     * follow it in our driver.
     *
-    * Following if-else block takes care of this exception made for
-    * multisampled resolves.
+    * When multisampling, if the source and destination formats are equal
+    * (aside from the color space), we choose to blit in sRGB space to get
+    * this higher quality image.
     */
-   if (src.num_samples > 1)
+   if (src.num_samples > 1 &&
+       _mesa_get_format_color_encoding(dst_mt->format) == GL_SRGB &&
+       _mesa_get_srgb_format_linear(src_mt->format) ==
+       _mesa_get_srgb_format_linear(dst_mt->format)) {
+      dst.brw_surfaceformat = brw_format_for_mesa_format(dst_mt->format);
       src.brw_surfaceformat = dst.brw_surfaceformat;
-   else
-      dst.brw_surfaceformat = src.brw_surfaceformat;
+   }
 
    use_wm_prog = true;
    memset(&wm_prog_key, 0, sizeof(wm_prog_key));
@@ -2154,7 +2171,7 @@ brw_blorp_blit_params::brw_blorp_blit_params(struct brw_context *brw,
    wm_prog_key.x_scale = 2.0;
    wm_prog_key.y_scale = src_mt->num_samples / 2.0;
 
-   if (filter == GL_LINEAR)
+   if (filter == GL_LINEAR && src.num_samples <= 1 && dst.num_samples <= 1)
       wm_prog_key.bilinear_filter = true;
 
    /* The render path must be configured to use the same number of samples as

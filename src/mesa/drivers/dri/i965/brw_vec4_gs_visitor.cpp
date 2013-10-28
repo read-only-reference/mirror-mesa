@@ -37,10 +37,11 @@ vec4_gs_visitor::vec4_gs_visitor(struct brw_context *brw,
                                  struct brw_gs_compile *c,
                                  struct gl_shader_program *prog,
                                  struct brw_shader *shader,
-                                 void *mem_ctx)
+                                 void *mem_ctx,
+                                 bool no_spills)
    : vec4_visitor(brw, &c->base, &c->gp->program.Base, &c->key.base,
                   &c->prog_data.base, prog, shader, mem_ctx,
-                  INTEL_DEBUG & DEBUG_GS),
+                  INTEL_DEBUG & DEBUG_GS, no_spills),
      c(c)
 {
 }
@@ -56,7 +57,8 @@ vec4_gs_visitor::make_reg_for_system_value(ir_variable *ir)
 
 
 int
-vec4_gs_visitor::setup_varying_inputs(int payload_reg, int *attribute_map)
+vec4_gs_visitor::setup_varying_inputs(int payload_reg, int *attribute_map,
+                                      int attributes_per_reg)
 {
    /* For geometry shaders there are N copies of the input attributes, where N
     * is the number of input vertices.  attribute_map[BRW_VARYING_SLOT_COUNT *
@@ -74,11 +76,14 @@ vec4_gs_visitor::setup_varying_inputs(int payload_reg, int *attribute_map)
       int varying = c->input_vue_map.slot_to_varying[slot];
       for (unsigned vertex = 0; vertex < num_input_vertices; vertex++) {
          attribute_map[BRW_VARYING_SLOT_COUNT * vertex + varying] =
-            payload_reg + input_array_stride * vertex + slot;
+            attributes_per_reg * payload_reg + input_array_stride * vertex +
+            slot;
       }
    }
 
-   return payload_reg + input_array_stride * num_input_vertices;
+   int regs_used = ALIGN(input_array_stride * num_input_vertices,
+                         attributes_per_reg) / attributes_per_reg;
+   return payload_reg + regs_used;
 }
 
 
@@ -86,6 +91,11 @@ void
 vec4_gs_visitor::setup_payload()
 {
    int attribute_map[BRW_VARYING_SLOT_COUNT * MAX_GS_INPUT_VERTICES];
+
+   /* If we are in dual instanced mode, then attributes are going to be
+    * interleaved, so one register contains two attribute slots.
+    */
+   int attributes_per_reg = c->prog_data.dual_instanced_dispatch ? 2 : 1;
 
    /* If a geometry shader tries to read from an input that wasn't written by
     * the vertex shader, that produces undefined results, but it shouldn't
@@ -104,13 +114,14 @@ vec4_gs_visitor::setup_payload()
 
    /* If the shader uses gl_PrimitiveIDIn, that goes in r1. */
    if (c->prog_data.include_primitive_id)
-      attribute_map[VARYING_SLOT_PRIMITIVE_ID] = reg++;
+      attribute_map[VARYING_SLOT_PRIMITIVE_ID] = attributes_per_reg * reg++;
 
    reg = setup_uniforms(reg);
 
-   reg = setup_varying_inputs(reg, attribute_map);
+   reg = setup_varying_inputs(reg, attribute_map, attributes_per_reg);
 
-   lower_attributes_to_hw_regs(attribute_map);
+   lower_attributes_to_hw_regs(attribute_map,
+                               c->prog_data.dual_instanced_dispatch);
 
    this->first_non_payload_grf = reg;
 }
@@ -129,14 +140,15 @@ vec4_gs_visitor::emit_prolog()
     */
    this->current_annotation = "clear r0.2";
    dst_reg r0(retype(brw_vec4_grf(0, 0), BRW_REGISTER_TYPE_UD));
-   emit(GS_OPCODE_SET_DWORD_2_IMMED, r0, 0u);
+   vec4_instruction *inst = emit(GS_OPCODE_SET_DWORD_2_IMMED, r0, 0u);
+   inst->force_writemask_all = true;
 
    /* Create a virtual register to hold the vertex count */
    this->vertex_count = src_reg(this, glsl_type::uint_type);
 
    /* Initialize the vertex_count register to 0 */
    this->current_annotation = "initialize vertex_count";
-   vec4_instruction *inst = emit(MOV(dst_reg(this->vertex_count), 0u));
+   inst = emit(MOV(dst_reg(this->vertex_count), 0u));
    inst->force_writemask_all = true;
 
    if (c->control_data_header_size_bits > 0) {
@@ -152,6 +164,29 @@ vec4_gs_visitor::emit_prolog()
       if (c->control_data_header_size_bits <= 32) {
          this->current_annotation = "initialize control data bits";
          inst = emit(MOV(dst_reg(this->control_data_bits), 0u));
+         inst->force_writemask_all = true;
+      }
+   }
+
+   /* If the geometry shader uses the gl_PointSize input, we need to fix it up
+    * to account for the fact that the vertex shader stored it in the w
+    * component of VARYING_SLOT_PSIZ.
+    */
+   if (c->gp->program.Base.InputsRead & VARYING_BIT_PSIZ) {
+      this->current_annotation = "swizzle gl_PointSize input";
+      for (int vertex = 0; vertex < c->gp->program.VerticesIn; vertex++) {
+         dst_reg dst(ATTR,
+                     BRW_VARYING_SLOT_COUNT * vertex + VARYING_SLOT_PSIZ);
+         dst.type = BRW_REGISTER_TYPE_F;
+         src_reg src(dst);
+         dst.writemask = WRITEMASK_X;
+         src.swizzle = BRW_SWIZZLE_WWWW;
+         inst = emit(MOV(dst, src));
+
+         /* In dual instanced dispatch mode, dst has a width of 4, so we need
+          * to make sure the MOV happens regardless of which channels are
+          * enabled.
+          */
          inst->force_writemask_all = true;
       }
    }
@@ -515,7 +550,36 @@ brw_gs_emit(struct brw_context *brw,
       printf("\n\n");
    }
 
-   vec4_gs_visitor v(brw, c, prog, shader, mem_ctx);
+   /* Compile the geometry shader in DUAL_OBJECT dispatch mode, if we can do
+    * so without spilling.
+    */
+   if (likely(!(INTEL_DEBUG & DEBUG_NO_DUAL_OBJECT_GS))) {
+      c->prog_data.dual_instanced_dispatch = false;
+
+      vec4_gs_visitor v(brw, c, prog, shader, mem_ctx, true /* no_spills */);
+      if (v.run()) {
+         vec4_generator g(brw, prog, &c->gp->program.Base, &c->prog_data.base,
+                          mem_ctx, INTEL_DEBUG & DEBUG_GS);
+         const unsigned *generated =
+            g.generate_assembly(&v.instructions, final_assembly_size);
+
+         return generated;
+      }
+   }
+
+   /* Either we failed to compile in DUAL_OBJECT mode (probably because it
+    * would have required spilling) or DUAL_OBJECT mode is disabled.  So fall
+    * back to DUAL_INSTANCED mode, which consumes fewer registers.
+    *
+    * FIXME: In an ideal world we'd fall back to SINGLE mode, which would
+    * allow us to interleave general purpose registers (resulting in even less
+    * likelihood of spilling).  But at the moment, the vec4 generator and
+    * visitor classes don't have the infrastructure to interleave general
+    * purpose registers, so DUAL_INSTANCED is the best we can do.
+    */
+   c->prog_data.dual_instanced_dispatch = true;
+
+   vec4_gs_visitor v(brw, c, prog, shader, mem_ctx, false /* no_spills */);
    if (!v.run()) {
       prog->LinkStatus = false;
       ralloc_strcat(&prog->InfoLog, v.fail_msg);

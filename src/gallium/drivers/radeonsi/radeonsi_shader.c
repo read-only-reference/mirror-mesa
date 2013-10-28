@@ -114,8 +114,12 @@ static LLVMValueRef build_indexed_load(
 {
 	struct lp_build_context * base = &si_shader_ctx->radeon_bld.soa.bld_base.base;
 
+	LLVMValueRef indices[2] = {
+		LLVMConstInt(LLVMInt64TypeInContext(base->gallivm->context), 0, false),
+		offset
+	};
 	LLVMValueRef computed_ptr = LLVMBuildGEP(
-		base->gallivm->builder, base_ptr, &offset, 1, "");
+		base->gallivm->builder, base_ptr, indices, 2, "");
 
 	LLVMValueRef result = LLVMBuildLoad(base->gallivm->builder, computed_ptr, "");
 	LLVMSetMetadata(result, 1, si_shader_ctx->const_md);
@@ -570,11 +574,14 @@ static void si_alpha_test(struct lp_build_tgsi_context *bld_base,
 
 	if (si_shader_ctx->shader->key.ps.alpha_func != PIPE_FUNC_NEVER) {
 		LLVMValueRef out_ptr = si_shader_ctx->radeon_bld.soa.outputs[index][3];
+		LLVMValueRef alpha_ref = LLVMGetParam(si_shader_ctx->radeon_bld.main_fn,
+				SI_PARAM_ALPHA_REF);
+
 		LLVMValueRef alpha_pass =
 			lp_build_cmp(&bld_base->base,
 				     si_shader_ctx->shader->key.ps.alpha_func,
 				     LLVMBuildLoad(gallivm->builder, out_ptr, ""),
-				     lp_build_const_float(gallivm, si_shader_ctx->shader->key.ps.alpha_ref));
+				     alpha_ref);
 		LLVMValueRef arg =
 			lp_build_select(&bld_base->base,
 					alpha_pass,
@@ -878,7 +885,6 @@ static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 	LLVMValueRef last_args[9] = { 0 };
 	LLVMValueRef pos_args[4][9] = { { 0 } };
 	unsigned semantic_name;
-	unsigned color_count = 0;
 	unsigned param_count = 0;
 	int depth_index = -1, stencil_index = -1;
 	int i;
@@ -953,15 +959,13 @@ handle_semantic:
 					shader->output[i].param_offset = param_count;
 					param_count++;
 				} else {
-					target = V_008DFC_SQ_EXP_MRT + color_count;
+					target = V_008DFC_SQ_EXP_MRT + shader->output[i].sid;
 					if (si_shader_ctx->shader->key.ps.alpha_to_one) {
 						si_alpha_to_one(bld_base, index);
 					}
-					if (color_count == 0 &&
+					if (shader->output[i].sid == 0 &&
 					    si_shader_ctx->shader->key.ps.alpha_func != PIPE_FUNC_ALWAYS)
 						si_alpha_test(bld_base, index);
-
-					color_count++;
 				}
 				break;
 			case TGSI_SEMANTIC_CLIPDIST:
@@ -1071,6 +1075,19 @@ handle_semantic:
 
 	if (si_shader_ctx->type == TGSI_PROCESSOR_VERTEX) {
 		unsigned pos_idx = 0;
+
+		/* We need to add the position output manually if it's missing. */
+		if (!pos_args[0][0]) {
+			pos_args[0][0] = lp_build_const_int32(base->gallivm, 0xf); /* writemask */
+			pos_args[0][1] = uint->zero; /* EXEC mask */
+			pos_args[0][2] = uint->zero; /* last export? */
+			pos_args[0][3] = lp_build_const_int32(base->gallivm, V_008DFC_SQ_EXP_POS);
+			pos_args[0][4] = uint->zero; /* COMPR flag */
+			pos_args[0][5] = base->zero; /* X */
+			pos_args[0][6] = base->zero; /* Y */
+			pos_args[0][7] = base->zero; /* Z */
+			pos_args[0][8] = base->one;  /* W */
+		}
 
 		for (i = 0; i < 4; i++)
 			if (pos_args[i][0])
@@ -1408,7 +1425,7 @@ static void build_tex_intrinsic(const struct lp_build_tgsi_action * action,
 				struct lp_build_emit_data * emit_data)
 {
 	struct lp_build_context * base = &bld_base->base;
-	char intr_name[23];
+	char intr_name[127];
 
 	sprintf(intr_name, "%sv%ui32", action->intr_name,
 		LLVMGetVectorSize(LLVMTypeOf(emit_data->args[0])));
@@ -1569,7 +1586,7 @@ static void create_function(struct si_shader_context *si_shader_ctx)
 {
 	struct lp_build_tgsi_context *bld_base = &si_shader_ctx->radeon_bld.soa.bld_base;
 	struct gallivm_state *gallivm = bld_base->base.gallivm;
-	LLVMTypeRef params[20], f32, i8, i32, v2i32, v3i32;
+	LLVMTypeRef params[21], f32, i8, i32, v2i32, v3i32;
 	unsigned i, last_sgpr, num_params;
 
 	i8 = LLVMInt8TypeInContext(gallivm->context);
@@ -1578,9 +1595,14 @@ static void create_function(struct si_shader_context *si_shader_ctx)
 	v2i32 = LLVMVectorType(i32, 2);
 	v3i32 = LLVMVectorType(i32, 3);
 
-	params[SI_PARAM_CONST] = LLVMPointerType(LLVMVectorType(i8, 16), CONST_ADDR_SPACE);
-	params[SI_PARAM_SAMPLER] = params[SI_PARAM_CONST];
-	params[SI_PARAM_RESOURCE] = LLVMPointerType(LLVMVectorType(i8, 32), CONST_ADDR_SPACE);
+	params[SI_PARAM_CONST] = LLVMPointerType(
+		LLVMArrayType(LLVMVectorType(i8, 16), NUM_CONST_BUFFERS), CONST_ADDR_SPACE);
+	/* We assume at most 16 textures per program at the moment.
+	 * This need probably need to be changed to support bindless textures */
+	params[SI_PARAM_SAMPLER] = LLVMPointerType(
+		LLVMArrayType(LLVMVectorType(i8, 16), NUM_SAMPLER_VIEWS), CONST_ADDR_SPACE);
+	params[SI_PARAM_RESOURCE] = LLVMPointerType(
+		LLVMArrayType(LLVMVectorType(i8, 32), NUM_SAMPLER_STATES), CONST_ADDR_SPACE);
 
 	switch (si_shader_ctx->type) {
 	case TGSI_PROCESSOR_VERTEX:
@@ -1614,6 +1636,7 @@ static void create_function(struct si_shader_context *si_shader_ctx)
 		break;
 
 	case TGSI_PROCESSOR_FRAGMENT:
+		params[SI_PARAM_ALPHA_REF] = f32;
 		params[SI_PARAM_PRIM_MASK] = i32;
 		last_sgpr = SI_PARAM_PRIM_MASK;
 		params[SI_PARAM_PERSP_SAMPLE] = v2i32;
@@ -1646,7 +1669,20 @@ static void create_function(struct si_shader_context *si_shader_ctx)
 
 	for (i = 0; i <= last_sgpr; ++i) {
 		LLVMValueRef P = LLVMGetParam(si_shader_ctx->radeon_bld.main_fn, i);
-		LLVMAddAttribute(P, LLVMInRegAttribute);
+		switch (i) {
+		default:
+			LLVMAddAttribute(P, LLVMInRegAttribute);
+			break;
+#if HAVE_LLVM >= 0x0304
+		/* We tell llvm that array inputs are passed by value to allow Sinking pass
+		 * to move load. Inputs are constant so this is fine. */
+		case SI_PARAM_CONST:
+		case SI_PARAM_SAMPLER:
+		case SI_PARAM_RESOURCE:
+			LLVMAddAttribute(P, LLVMByValAttribute);
+			break;
+#endif
+		}
 	}
 
 #if HAVE_LLVM >= 0x0304
@@ -1759,12 +1795,12 @@ int si_compile_llvm(struct r600_context *rctx, struct si_pipe_shader *shader,
 	unsigned i;
 	uint32_t *ptr;
 	struct radeon_llvm_binary binary;
-	bool dump = r600_can_dump_shader(&rctx->screen->b, shader->selector->tokens);
-
+	bool dump = r600_can_dump_shader(&rctx->screen->b,
+			shader->selector ? shader->selector->tokens : NULL);
 	memset(&binary, 0, sizeof(binary));
 	radeon_llvm_compile(mod, &binary,
 		r600_get_llvm_processor_name(rctx->screen->b.family), dump);
-	if (dump) {
+	if (dump && ! binary.disassembled) {
 		fprintf(stderr, "SI CODE:\n");
 		for (i = 0; i < binary.code_size; i+=4 ) {
 			fprintf(stderr, "%02x%02x%02x%02x\n", binary.code[i + 3],

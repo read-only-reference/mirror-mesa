@@ -26,6 +26,7 @@
 
 #include "brw_blorp.h"
 #include "brw_defines.h"
+#include "brw_state.h"
 #include "gen6_blorp.h"
 #include "gen7_blorp.h"
 
@@ -66,7 +67,8 @@ brw_blorp_mip_info::set(struct intel_mipmap_tree *mt,
 void
 brw_blorp_surface_info::set(struct brw_context *brw,
                             struct intel_mipmap_tree *mt,
-                            unsigned int level, unsigned int layer)
+                            unsigned int level, unsigned int layer,
+                            bool is_render_target)
 {
    brw_blorp_mip_info::set(mt, level, layer);
    this->num_samples = mt->num_samples;
@@ -84,32 +86,34 @@ brw_blorp_surface_info::set(struct brw_context *brw,
       this->brw_surfaceformat = BRW_SURFACEFORMAT_R8_UNORM;
       break;
    case MESA_FORMAT_X8_Z24:
-   case MESA_FORMAT_Z32_FLOAT:
-      /* The miptree consists of 32 bits per pixel, arranged either as 24-bit
-       * depth values interleaved with 8 "don't care" bits, or as 32-bit
-       * floating point depth values.  Since depth values don't require any
-       * blending, it doesn't matter how we interpret the bit pattern as long
-       * as we copy the right amount of data, so just map it as 8-bit BGRA.
+      /* It would make sense to use BRW_SURFACEFORMAT_R24_UNORM_X8_TYPELESS
+       * here, but unfortunately it isn't supported as a render target, which
+       * would prevent us from blitting to 24-bit depth.
+       *
+       * The miptree consists of 32 bits per pixel, arranged as 24-bit depth
+       * values interleaved with 8 "don't care" bits.  Since depth values don't
+       * require any blending, it doesn't matter how we interpret the bit
+       * pattern as long as we copy the right amount of data, so just map it
+       * as 8-bit BGRA.
        */
       this->brw_surfaceformat = BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
       break;
+   case MESA_FORMAT_Z32_FLOAT:
+      this->brw_surfaceformat = BRW_SURFACEFORMAT_R32_FLOAT;
+      break;
    case MESA_FORMAT_Z16:
-      /* The miptree consists of 16 bits per pixel of depth data.  Since depth
-       * values don't require any blending, it doesn't matter how we interpret
-       * the bit pattern as long as we copy the right amount of data, so just
-       * map is as 8-bit RG.
-       */
-      this->brw_surfaceformat = BRW_SURFACEFORMAT_R8G8_UNORM;
+      this->brw_surfaceformat = BRW_SURFACEFORMAT_R16_UNORM;
       break;
-   default:
-      /* Blorp blits don't support any sort of format conversion (except
-       * between sRGB and linear), so we can safely assume that the format is
-       * supported as a render target, even if this is the source image.  So
-       * we can convert to a surface format using brw->render_target_format.
-       */
-      assert(brw->format_supported_as_render_target[mt->format]);
-      this->brw_surfaceformat = brw->render_target_format[mt->format];
+   default: {
+      gl_format linear_format = _mesa_get_srgb_format_linear(mt->format);
+      if (is_render_target) {
+         assert(brw->format_supported_as_render_target[linear_format]);
+         this->brw_surfaceformat = brw->render_target_format[linear_format];
+      } else {
+         this->brw_surfaceformat = brw_format_for_mesa_format(linear_format);
+      }
       break;
+   }
    }
 }
 

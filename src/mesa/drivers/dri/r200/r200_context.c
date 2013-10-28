@@ -212,20 +212,6 @@ GLboolean r200CreateContext( gl_api api,
    int i;
    int tcl_mode;
 
-   switch (api) {
-   case API_OPENGL_COMPAT:
-      if (major_version > 1 || minor_version > 3) {
-         *error = __DRI_CTX_ERROR_BAD_VERSION;
-         return GL_FALSE;
-      }
-      break;
-   case API_OPENGLES:
-      break;
-   default:
-      *error = __DRI_CTX_ERROR_BAD_API;
-      return GL_FALSE;
-   }
-
    /* Flag filtering is handled in dri2CreateContextAttribs.
     */
    (void) flags;
@@ -376,6 +362,7 @@ GLboolean r200CreateContext( gl_api api,
    ctx->Extensions.ARB_texture_env_combine = true;
    ctx->Extensions.ARB_texture_env_dot3 = true;
    ctx->Extensions.ARB_texture_env_crossbar = true;
+   ctx->Extensions.ARB_texture_mirror_clamp_to_edge = true;
    ctx->Extensions.EXT_blend_color = true;
    ctx->Extensions.EXT_blend_minmax = true;
    ctx->Extensions.EXT_packed_depth_stencil = true;

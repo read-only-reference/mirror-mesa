@@ -29,7 +29,6 @@
 
 enum register_file {
    BAD_FILE,
-   ARF,
    GRF,
    MRF,
    IMM,
@@ -45,6 +44,7 @@ public:
    bool is_tex();
    bool is_math();
    bool is_control_flow();
+   bool can_do_source_mods();
 
    enum opcode opcode; /* BRW_OPCODE_* or FS_OPCODE_* */
 
@@ -59,6 +59,8 @@ public:
    struct gl_context *ctx;
    struct brw_shader *shader;
    struct gl_shader_program *shader_prog;
+   struct gl_program *prog;
+   struct brw_stage_prog_data *stage_prog_data;
 
    /** ralloc context for temporary data used during compile */
    void *mem_ctx;
@@ -71,9 +73,11 @@ public:
 
    virtual void dump_instruction(backend_instruction *inst) = 0;
    void dump_instructions();
+
+   void assign_common_binding_table_offsets(uint32_t next_binding_table_offset);
 };
 
-uint32_t brw_texture_offset(ir_constant *offset);
+uint32_t brw_texture_offset(struct gl_context *ctx, ir_constant *offset);
 
 #endif /* __cplusplus */
 

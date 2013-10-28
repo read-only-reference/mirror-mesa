@@ -68,6 +68,7 @@ public:
       this->child_count = 0;
       this->parent_count = 0;
       this->unblocked_time = 0;
+      this->cand_generation = 0;
 
       /* We can't measure Gen6 timings directly but expect them to be much
        * closer to Gen7 than Gen4.
@@ -89,6 +90,18 @@ public:
    int child_array_size;
    int unblocked_time;
    int latency;
+
+   /**
+    * Which iteration of pushing groups of children onto the candidates list
+    * this node was a part of.
+    */
+   unsigned cand_generation;
+
+   /**
+    * This is the sum of the instruction's latency plus the maximum delay of
+    * its children, or just the issue_time if it's a leaf node.
+    */
+   int delay;
 };
 
 void
@@ -329,6 +342,18 @@ schedule_node::set_latency_gen7(bool is_haswell)
       latency = 200;
       break;
 
+   case SHADER_OPCODE_GEN7_SCRATCH_READ:
+      /* Testing a load from offset 0, that had been previously written:
+       *
+       * send(8) g114<1>UW g0<8,8,1>F data (0, 0, 0) mlen 1 rlen 1 { align1 WE_normal 1Q };
+       * mov(8)  null      g114<8,8,1>F { align1 WE_normal 1Q };
+       *
+       * The cycles spent seemed to be grouped around 40-50 (as low as 38),
+       * then around 140.  Presumably this is cache hit vs miss.
+       */
+      latency = 50;
+      break;
+
    default:
       /* 2 cycles:
        * mul(8) g4<1>F g2<0,1,0>F      0.5F            { align1 WE_normal 1Q };
@@ -347,7 +372,7 @@ public:
    instruction_scheduler(backend_visitor *v, int grf_count, bool post_reg_alloc)
    {
       this->bv = v;
-      this->mem_ctx = ralloc_context(v->mem_ctx);
+      this->mem_ctx = ralloc_context(NULL);
       this->grf_count = grf_count;
       this->instructions.make_empty();
       this->instructions_to_schedule = 0;
@@ -365,6 +390,7 @@ public:
 
    void run(exec_list *instructions);
    void add_inst(backend_instruction *inst);
+   void compute_delay(schedule_node *node);
    virtual void calculate_deps() = 0;
    virtual schedule_node *choose_instruction_to_schedule() = 0;
 
@@ -437,6 +463,21 @@ instruction_scheduler::add_inst(backend_instruction *inst)
 
    inst->remove();
    instructions.push_tail(n);
+}
+
+/** Recursive computation of the delay member of a node. */
+void
+instruction_scheduler::compute_delay(schedule_node *n)
+{
+   if (!n->child_count) {
+      n->delay = issue_time(n->inst);
+   } else {
+      for (int i = 0; i < n->child_count; i++) {
+         if (!n->children[i]->delay)
+            compute_delay(n->children[i]);
+         n->delay = MAX2(n->delay, n->latency + n->children[i]->delay);
+      }
+   }
 }
 
 /**
@@ -569,7 +610,7 @@ fs_instruction_scheduler::calculate_deps()
       for (int i = 0; i < 3; i++) {
 	 if (inst->src[i].file == GRF) {
             if (post_reg_alloc) {
-               for (int r = 0; r < reg_width; r++)
+               for (int r = 0; r < reg_width * inst->regs_read(v, i); r++)
                   add_dep(last_grf_write[inst->src[i].reg + r], n);
             } else {
                add_dep(last_grf_write[inst->src[i].reg], n);
@@ -594,15 +635,17 @@ fs_instruction_scheduler::calculate_deps()
 	 }
       }
 
-      for (int i = 0; i < inst->mlen; i++) {
-	 /* It looks like the MRF regs are released in the send
-	  * instruction once it's sent, not when the result comes
-	  * back.
-	  */
-	 add_dep(last_mrf_write[inst->base_mrf + i], n);
+      if (inst->base_mrf != -1) {
+	 for (int i = 0; i < inst->mlen; i++) {
+	    /* It looks like the MRF regs are released in the send
+	     * instruction once it's sent, not when the result comes
+	     * back.
+	     */
+	    add_dep(last_mrf_write[inst->base_mrf + i], n);
+	 }
       }
 
-      if (inst->predicate) {
+      if (inst->reads_flag()) {
 	 add_dep(last_conditional_mod[inst->flag_subreg], n);
       }
 
@@ -642,18 +685,14 @@ fs_instruction_scheduler::calculate_deps()
 	 add_barrier_deps(n);
       }
 
-      if (inst->mlen > 0) {
+      if (inst->mlen > 0 && inst->base_mrf != -1) {
 	 for (int i = 0; i < v->implied_mrf_writes(inst); i++) {
 	    add_dep(last_mrf_write[inst->base_mrf + i], n);
 	    last_mrf_write[inst->base_mrf + i] = n;
 	 }
       }
 
-      /* Treat FS_OPCODE_MOV_DISPATCH_TO_FLAGS as though it had a
-       * conditional_mod, because it sets the flag register.
-       */
-      if (inst->conditional_mod ||
-          inst->opcode == FS_OPCODE_MOV_DISPATCH_TO_FLAGS) {
+      if (inst->writes_flag()) {
 	 add_dep(last_conditional_mod[inst->flag_subreg], n, 0);
 	 last_conditional_mod[inst->flag_subreg] = n;
       }
@@ -677,7 +716,7 @@ fs_instruction_scheduler::calculate_deps()
       for (int i = 0; i < 3; i++) {
 	 if (inst->src[i].file == GRF) {
             if (post_reg_alloc) {
-               for (int r = 0; r < reg_width; r++)
+               for (int r = 0; r < reg_width * inst->regs_read(v, i); r++)
                   add_dep(n, last_grf_write[inst->src[i].reg + r]);
             } else {
                add_dep(n, last_grf_write[inst->src[i].reg]);
@@ -702,15 +741,17 @@ fs_instruction_scheduler::calculate_deps()
 	 }
       }
 
-      for (int i = 0; i < inst->mlen; i++) {
-	 /* It looks like the MRF regs are released in the send
-	  * instruction once it's sent, not when the result comes
-	  * back.
-	  */
-	 add_dep(n, last_mrf_write[inst->base_mrf + i], 2);
+      if (inst->base_mrf != -1) {
+	 for (int i = 0; i < inst->mlen; i++) {
+	    /* It looks like the MRF regs are released in the send
+	     * instruction once it's sent, not when the result comes
+	     * back.
+	     */
+	    add_dep(n, last_mrf_write[inst->base_mrf + i], 2);
+	 }
       }
 
-      if (inst->predicate) {
+      if (inst->reads_flag()) {
 	 add_dep(n, last_conditional_mod[inst->flag_subreg]);
       }
 
@@ -749,17 +790,13 @@ fs_instruction_scheduler::calculate_deps()
 	 add_barrier_deps(n);
       }
 
-      if (inst->mlen > 0) {
+      if (inst->mlen > 0 && inst->base_mrf != -1) {
 	 for (int i = 0; i < v->implied_mrf_writes(inst); i++) {
 	    last_mrf_write[inst->base_mrf + i] = n;
 	 }
       }
 
-      /* Treat FS_OPCODE_MOV_DISPATCH_TO_FLAGS as though it had a
-       * conditional_mod, because it sets the flag register.
-       */
-      if (inst->conditional_mod ||
-          inst->opcode == FS_OPCODE_MOV_DISPATCH_TO_FLAGS) {
+      if (inst->writes_flag()) {
 	 last_conditional_mod[inst->flag_subreg] = n;
       }
    }
@@ -947,28 +984,68 @@ fs_instruction_scheduler::choose_instruction_to_schedule()
        * variables so that we can avoid register spilling, or get 16-wide
        * shaders which naturally do a better job of hiding instruction
        * latency.
-       *
-       * To do so, schedule our instructions in a roughly LIFO/depth-first
-       * order: when new instructions become available as a result of
-       * scheduling something, choose those first so that our result
-       * hopefully is consumed quickly.
-       *
-       * The exception is messages that generate more than one result
-       * register (AKA texturing).  In those cases, the LIFO search would
-       * normally tend to choose them quickly (because scheduling the
-       * previous message not only unblocked the children using its result,
-       * but also the MRF setup for the next sampler message, which in turn
-       * unblocks the next sampler message).
        */
-      for (schedule_node *node = (schedule_node *)instructions.get_tail();
-           node != instructions.get_head()->prev;
-           node = (schedule_node *)node->prev) {
+      foreach_list(node, &instructions) {
          schedule_node *n = (schedule_node *)node;
          fs_inst *inst = (fs_inst *)n->inst;
 
-         chosen = n;
-         if (inst->regs_written <= 1)
-            break;
+         if (!chosen) {
+            chosen = n;
+            continue;
+         }
+
+         /* Prefer instructions that recently became available for scheduling.
+          * These are the things that are most likely to (eventually) make a
+          * variable dead and reduce register pressure.  Typical register
+          * pressure estimates don't work for us because most of our pressure
+          * comes from texturing, where no single instruction to schedule will
+          * make a vec4 value dead.
+          */
+         if (n->cand_generation > chosen->cand_generation) {
+            chosen = n;
+            continue;
+         } else if (n->cand_generation < chosen->cand_generation) {
+            continue;
+         }
+
+         /* On MRF-using chips, prefer non-SEND instructions.  If we don't do
+          * this, then because we prefer instructions that just became
+          * candidates, we'll end up in a pattern of scheduling a SEND, then
+          * the MRFs for the next SEND, then the next SEND, then the MRFs,
+          * etc., without ever consuming the results of a send.
+          */
+         if (v->brw->gen < 7) {
+            fs_inst *chosen_inst = (fs_inst *)chosen->inst;
+
+            /* We use regs_written > 1 as our test for the kind of send
+             * instruction to avoid -- only sends generate many regs, and a
+             * single-result send is probably actually reducing register
+             * pressure.
+             */
+            if (inst->regs_written <= 1 && chosen_inst->regs_written > 1) {
+               chosen = n;
+               continue;
+            } else if (inst->regs_written > chosen_inst->regs_written) {
+               continue;
+            }
+         }
+
+         /* For instructions pushed on the cands list at the same time, prefer
+          * the one with the highest delay to the end of the program.  This is
+          * most likely to have its values able to be consumed first (such as
+          * for a large tree of lowered ubo loads, which appear reversed in
+          * the instruction stream with respect to when they can be consumed).
+          */
+         if (n->delay > chosen->delay) {
+            chosen = n;
+            continue;
+         } else if (n->delay < chosen->delay) {
+            continue;
+         }
+
+         /* If all other metrics are equal, we prefer the first instruction in
+          * the list (program execution).
+          */
       }
    }
 
@@ -1024,6 +1101,7 @@ instruction_scheduler::schedule_instructions(backend_instruction *next_block_hea
 	 n->remove();
    }
 
+   unsigned cand_generation = 1;
    while (!instructions.is_empty()) {
       schedule_node *chosen = choose_instruction_to_schedule();
 
@@ -1055,21 +1133,27 @@ instruction_scheduler::schedule_instructions(backend_instruction *next_block_hea
        * be scheduled.  Update the children's unblocked time for this
        * DAG edge as we do so.
        */
-      for (int i = 0; i < chosen->child_count; i++) {
+      for (int i = chosen->child_count - 1; i >= 0; i--) {
 	 schedule_node *child = chosen->children[i];
 
 	 child->unblocked_time = MAX2(child->unblocked_time,
 				      time + chosen->child_latency[i]);
 
+         if (debug) {
+            printf("\tchild %d, %d parents: ", i, child->parent_count);
+            bv->dump_instruction(child->inst);
+         }
+
+         child->cand_generation = cand_generation;
 	 child->parent_count--;
 	 if (child->parent_count == 0) {
             if (debug) {
-               printf("now available: ");
-               bv->dump_instruction(child->inst);
+               printf("\t\tnow available\n");
             }
-	    instructions.push_tail(child);
+	    instructions.push_head(child);
 	 }
       }
+      cand_generation++;
 
       /* Shared resource: the mathbox.  There's one mathbox per EU on Gen6+
        * but it's more limited pre-gen6, so if we send something off to it then
@@ -1112,6 +1196,12 @@ instruction_scheduler::run(exec_list *all_instructions)
 	    break;
       }
       calculate_deps();
+
+      foreach_list(node, &instructions) {
+         schedule_node *n = (schedule_node *)node;
+         compute_delay(n);
+      }
+
       schedule_instructions(next_block_header);
    }
 
@@ -1138,7 +1228,7 @@ fs_visitor::schedule_instructions(bool post_reg_alloc)
              dispatch_width, sched.time);
    }
 
-   this->live_intervals_valid = false;
+   invalidate_live_intervals();
 }
 
 void

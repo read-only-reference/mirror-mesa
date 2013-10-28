@@ -140,6 +140,7 @@ flatten_named_interface_blocks_declarations::run(exec_list *instructions)
                   new(mem_ctx) ir_variable(iface_t->fields.structure[i].type,
                                            var_name,
                                            (ir_variable_mode) var->mode);
+               new_var->from_named_ifc_block_nonarray = 1;
             } else {
                const glsl_type *new_array_type =
                   glsl_type::get_array_instance(
@@ -149,9 +150,15 @@ flatten_named_interface_blocks_declarations::run(exec_list *instructions)
                   new(mem_ctx) ir_variable(new_array_type,
                                            var_name,
                                            (ir_variable_mode) var->mode);
+               new_var->from_named_ifc_block_array = 1;
             }
+            new_var->location = iface_t->fields.structure[i].location;
+            new_var->explicit_location = (new_var->location >= 0);
+            new_var->interpolation =
+               iface_t->fields.structure[i].interpolation;
+            new_var->centroid = iface_t->fields.structure[i].centroid;
 
-            new_var->interface_type = iface_t;
+            new_var->init_interface_type(iface_t);
             hash_table_insert(interface_namespace, new_var,
                               iface_field_name);
             insert_pos->insert_after(new_var);
@@ -207,9 +214,9 @@ flatten_named_interface_blocks_declarations::handle_rvalue(ir_rvalue **rvalue)
    if (var->mode == ir_var_uniform)
       return;
 
-   if (var->interface_type != NULL) {
+   if (var->get_interface_type() != NULL) {
       char *iface_field_name =
-         ralloc_asprintf(mem_ctx, "%s.%s", var->interface_type->name,
+         ralloc_asprintf(mem_ctx, "%s.%s", var->get_interface_type()->name,
                          ir->field);
       /* Find the variable in the set of flattened interface blocks */
       ir_variable *found_var =

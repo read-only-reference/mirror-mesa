@@ -52,7 +52,7 @@ brw_cubemap_normalize_visitor::visit_leave(ir_texture *ir)
    if (ir->sampler->type->sampler_dimensionality != GLSL_SAMPLER_DIM_CUBE)
       return visit_continue;
 
-   if (ir->op == ir_txs)
+   if (!ir->coordinate)
       return visit_continue;
 
    void *mem_ctx = ralloc_parent(ir);
@@ -92,10 +92,12 @@ brw_cubemap_normalize_visitor::visit_leave(ir_texture *ir)
    /* coordinate.xyz *= expr */
    assign = new(mem_ctx) ir_assignment(
       new(mem_ctx) ir_dereference_variable(var),
-      new(mem_ctx) ir_expression(ir_binop_mul,
-                                 ir->coordinate->type,
-                                 new(mem_ctx) ir_dereference_variable(var),
-                                 expr));
+      new(mem_ctx) ir_swizzle(
+         new(mem_ctx) ir_expression(ir_binop_mul,
+                                    ir->coordinate->type,
+                                    new(mem_ctx) ir_dereference_variable(var),
+                                    expr),
+         0, 1, 2, 0, 3));
    assign->write_mask = WRITEMASK_XYZ;
    base_ir->insert_before(assign);
    ir->coordinate = new(mem_ctx) ir_dereference_variable(var);

@@ -32,6 +32,7 @@
 #include "brw_context.h"
 #include "brw_wm.h"
 #include "brw_state.h"
+#include "main/enums.h"
 #include "main/formats.h"
 #include "main/fbobject.h"
 #include "main/samplerobj.h"
@@ -102,13 +103,12 @@ brw_compute_barycentric_interp_modes(struct brw_context *brw,
 }
 
 bool
-brw_wm_prog_data_compare(const void *in_a, const void *in_b,
-                         int aux_size, const void *in_key)
+brw_wm_prog_data_compare(const void *in_a, const void *in_b)
 {
    const struct brw_wm_prog_data *a = in_a;
    const struct brw_wm_prog_data *b = in_b;
 
-   /* Compare all the struct up to the pointers. */
+   /* Compare all the struct (including the base) up to the pointers. */
    if (memcmp(a, b, offsetof(struct brw_wm_prog_data, param)))
       return false;
 
@@ -233,6 +233,8 @@ brw_debug_recompile_sampler_key(struct brw_context *brw,
                       old_key->yuvtex_mask, key->yuvtex_mask);
    found |= key_debug(brw, "GL_MESA_ycbcr UV swapping\n",
                       old_key->yuvtex_swap_mask, key->yuvtex_swap_mask);
+   found |= key_debug(brw, "gather channel quirk on any texture unit",
+                      old_key->gather_channel_quirk_mask, key->gather_channel_quirk_mask);
 
    return found;
 }
@@ -342,6 +344,13 @@ brw_populate_sampler_prog_key_data(struct gl_context *ctx,
 	    if (sampler->WrapR == GL_CLAMP)
 	       key->gl_clamp_mask[2] |= 1 << s;
 	 }
+
+         /* gather4's channel select for green from RG32F is broken;
+          * requires a shader w/a on IVB; fixable with just SCS on HSW. */
+         if (brw->gen >= 7 && !brw->is_haswell && prog->UsesGather) {
+            if (img->InternalFormat == GL_RG32F)
+               key->gather_channel_quirk_mask |= 1 << s;
+         }
       }
    }
 }
@@ -415,6 +424,15 @@ static void brw_wm_populate_key( struct brw_context *brw,
    }
 
    key->line_aa = line_aa;
+
+   /* _NEW_HINT */
+   if (brw->disable_derivative_optimization) {
+      key->high_quality_derivatives =
+         ctx->Hint.FragmentShaderDerivative != GL_FASTEST;
+   } else {
+      key->high_quality_derivatives =
+         ctx->Hint.FragmentShaderDerivative == GL_NICEST;
+   }
 
    if (brw->gen < 6)
       key->stats_wm = brw->stats_wm;
@@ -493,6 +511,7 @@ brw_upload_wm_prog(struct brw_context *brw)
       (void) success;
       assert(success);
    }
+   brw->wm.base.prog_data = &brw->wm.prog_data->base;
 }
 
 
@@ -503,6 +522,7 @@ const struct brw_tracked_state brw_wm_prog = {
 		_NEW_STENCIL |
 		_NEW_POLYGON |
 		_NEW_LINE |
+		_NEW_HINT |
 		_NEW_LIGHT |
 		_NEW_FRAG_CLAMP |
 		_NEW_BUFFERS |

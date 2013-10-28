@@ -71,7 +71,9 @@ extern const struct brw_tracked_state brw_vs_prog;
 extern const struct brw_tracked_state brw_vs_samplers;
 extern const struct brw_tracked_state brw_gs_samplers;
 extern const struct brw_tracked_state brw_vs_ubo_surfaces;
+extern const struct brw_tracked_state brw_vs_abo_surfaces;
 extern const struct brw_tracked_state brw_gs_ubo_surfaces;
+extern const struct brw_tracked_state brw_gs_abo_surfaces;
 extern const struct brw_tracked_state brw_vs_unit;
 extern const struct brw_tracked_state brw_gs_prog;
 extern const struct brw_tracked_state brw_wm_prog;
@@ -81,6 +83,7 @@ extern const struct brw_tracked_state brw_wm_binding_table;
 extern const struct brw_tracked_state brw_gs_binding_table;
 extern const struct brw_tracked_state brw_vs_binding_table;
 extern const struct brw_tracked_state brw_wm_ubo_surfaces;
+extern const struct brw_tracked_state brw_wm_abo_surfaces;
 extern const struct brw_tracked_state brw_wm_unit;
 extern const struct brw_tracked_state brw_interpolation_map;
 
@@ -206,8 +209,6 @@ void gen7_set_surface_mcs_info(struct brw_context *brw,
                                bool is_render_target);
 void gen7_check_surface_setup(uint32_t *surf, bool is_render_target);
 void gen7_init_vtable_surface_functions(struct brw_context *brw);
-void gen7_create_shader_time_surface(struct brw_context *brw,
-                                     uint32_t *out_offset);
 
 /* gen7_sol_state.c */
 void gen7_upload_3dstate_so_decl_list(struct brw_context *brw,
@@ -239,12 +240,6 @@ brw_upload_vec4_pull_constants(struct brw_context *brw,
                                const struct gl_program *prog,
                                struct brw_stage_state *stage_state,
                                const struct brw_vec4_prog_data *prog_data);
-void
-brw_upload_binding_table(struct brw_context *brw,
-                         GLbitfield brw_new_binding_table,
-                         struct brw_stage_state *stage_state,
-                         unsigned binding_table_entries,
-                         int shader_time_surf_index);
 
 /* gen7_vs_state.c */
 void

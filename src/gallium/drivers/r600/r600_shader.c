@@ -1110,8 +1110,11 @@ static int r600_shader_from_tgsi(struct r600_screen *rscreen,
 		radeon_llvm_ctx.stream_outputs = &so;
 		radeon_llvm_ctx.clip_vertex = ctx.cv_output;
 		radeon_llvm_ctx.alpha_to_one = key.alpha_to_one;
+		radeon_llvm_ctx.has_compressed_msaa_texturing =
+			ctx.bc->has_compressed_msaa_texturing;
 		mod = r600_tgsi_llvm(&radeon_llvm_ctx, tokens);
 		ctx.shader->has_txq_cube_array_z_comp = radeon_llvm_ctx.has_txq_cube_array_z_comp;
+		ctx.shader->uses_tex_buffers = radeon_llvm_ctx.uses_tex_buffers;
 
 		if (r600_llvm_compile(mod, rscreen->b.family, ctx.bc, &use_kill, dump)) {
 			radeon_llvm_dispose(&radeon_llvm_ctx);
@@ -1635,15 +1638,22 @@ static int tgsi_op2_s(struct r600_shader_ctx *ctx, int swap, int trans_only)
 {
 	struct tgsi_full_instruction *inst = &ctx->parse.FullToken.FullInstruction;
 	struct r600_bytecode_alu alu;
-	int i, j, r;
-	int lasti = tgsi_last_instruction(inst->Dst[0].Register.WriteMask);
+	unsigned write_mask = inst->Dst[0].Register.WriteMask;
+	int i, j, r, lasti = tgsi_last_instruction(write_mask);
+	/* use temp register if trans_only and more than one dst component */
+	int use_tmp = trans_only && (write_mask ^ (1 << lasti));
 
-	for (i = 0; i < lasti + 1; i++) {
-		if (!(inst->Dst[0].Register.WriteMask & (1 << i)))
+	for (i = 0; i <= lasti; i++) {
+		if (!(write_mask & (1 << i)))
 			continue;
 
 		memset(&alu, 0, sizeof(struct r600_bytecode_alu));
-		tgsi_dst(ctx, &inst->Dst[0], i, &alu.dst);
+		if (use_tmp) {
+			alu.dst.sel = ctx->temp_reg;
+			alu.dst.chan = i;
+			alu.dst.write = 1;
+		} else
+			tgsi_dst(ctx, &inst->Dst[0], i, &alu.dst);
 
 		alu.op = ctx->inst_info->op;
 		if (!swap) {
@@ -1671,6 +1681,25 @@ static int tgsi_op2_s(struct r600_shader_ctx *ctx, int swap, int trans_only)
 		r = r600_bytecode_add_alu(ctx->bc, &alu);
 		if (r)
 			return r;
+	}
+
+	if (use_tmp) {
+		/* move result from temp to dst */
+		for (i = 0; i <= lasti; i++) {
+			if (!(write_mask & (1 << i)))
+				continue;
+
+			memset(&alu, 0, sizeof(struct r600_bytecode_alu));
+			alu.op = ALU_OP1_MOV;
+			tgsi_dst(ctx, &inst->Dst[0], i, &alu.dst);
+			alu.src[0].sel = ctx->temp_reg;
+			alu.src[0].chan = i;
+			alu.last = (i == lasti);
+
+			r = r600_bytecode_add_alu(ctx->bc, &alu);
+			if (r)
+				return r;
+		}
 	}
 	return 0;
 }
@@ -3779,16 +3808,16 @@ static int tgsi_tex(struct r600_shader_ctx *ctx)
 		}
 	}
 
-	if (inst->Instruction.Opcode == TGSI_OPCODE_TXF) {
-		/* get offset values */
-		if (inst->Texture.NumOffsets) {
-			assert(inst->Texture.NumOffsets == 1);
+	/* get offset values */
+	if (inst->Texture.NumOffsets) {
+		assert(inst->Texture.NumOffsets == 1);
 
-			offset_x = ctx->literals[inst->TexOffsets[0].Index + inst->TexOffsets[0].SwizzleX] << 1;
-			offset_y = ctx->literals[inst->TexOffsets[0].Index + inst->TexOffsets[0].SwizzleY] << 1;
-			offset_z = ctx->literals[inst->TexOffsets[0].Index + inst->TexOffsets[0].SwizzleZ] << 1;
-		}
-	} else if (inst->Instruction.Opcode == TGSI_OPCODE_TXD) {
+		offset_x = ctx->literals[4 * inst->TexOffsets[0].Index + inst->TexOffsets[0].SwizzleX] << 1;
+		offset_y = ctx->literals[4 * inst->TexOffsets[0].Index + inst->TexOffsets[0].SwizzleY] << 1;
+		offset_z = ctx->literals[4 * inst->TexOffsets[0].Index + inst->TexOffsets[0].SwizzleZ] << 1;
+	}
+
+	if (inst->Instruction.Opcode == TGSI_OPCODE_TXD) {
 		/* TGSI moves the sampler to src reg 3 for TXD */
 		sampler_src_reg = 3;
 

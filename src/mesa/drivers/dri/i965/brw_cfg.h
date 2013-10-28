@@ -39,7 +39,7 @@ public:
 
 class bblock_t {
 public:
-   DECLARE_RZALLOC_CXX_OPERATORS(bblock_t)
+   DECLARE_RALLOC_CXX_OPERATORS(bblock_t)
 
    bblock_link *make_list(void *mem_ctx);
 
@@ -60,7 +60,7 @@ public:
 
 class cfg_t {
 public:
-   DECLARE_RZALLOC_CXX_OPERATORS(cfg_t)
+   DECLARE_RALLOC_CXX_OPERATORS(cfg_t)
 
    cfg_t(backend_visitor *v);
    cfg_t(void *mem_ctx, exec_list *instructions);

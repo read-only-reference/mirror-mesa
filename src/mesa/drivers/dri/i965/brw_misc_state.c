@@ -48,6 +48,10 @@ static void upload_drawing_rect(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
 
+   /* 3DSTATE_DRAWING_RECTANGLE is non-pipelined. */
+   if (brw->gen == 6)
+      intel_emit_post_sync_nonzero_flush(brw);
+
    BEGIN_BATCH(4);
    OUT_BATCH(_3DSTATE_DRAWING_RECTANGLE << 16 | (4 - 2));
    OUT_BATCH(0); /* xmin, ymin */
@@ -838,7 +842,11 @@ static void upload_aa_line_parameters(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
 
-   if (!ctx->Line.SmoothFlag || !brw->has_aa_line_parameters)
+   if (!ctx->Line.SmoothFlag)
+      return;
+
+   /* Original Gen4 doesn't have 3DSTATE_AA_LINE_PARAMETERS. */
+   if (brw->gen == 4 && !brw->is_g4x)
       return;
 
    if (brw->gen == 6)

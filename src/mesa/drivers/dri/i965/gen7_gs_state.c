@@ -95,7 +95,7 @@ upload_gs_state(struct brw_context *brw)
          OUT_BATCH(0);
       }
 
-      uint32_t dw5 =
+      uint32_t dw4 =
          ((brw->gs.prog_data->output_vertex_size_hwords * 2 - 1) <<
           GEN7_GS_OUTPUT_VERTEX_SIZE_SHIFT) |
          (brw->gs.prog_data->output_topology <<
@@ -105,15 +105,46 @@ upload_gs_state(struct brw_context *brw)
          (0 << GEN6_GS_URB_ENTRY_READ_OFFSET_SHIFT) |
          (prog_data->dispatch_grf_start_reg <<
           GEN6_GS_DISPATCH_START_GRF_SHIFT);
-      uint32_t dw6 =
+
+      /* Note: the meaning of the GEN7_GS_REORDER_TRAILING bit changes between
+       * Ivy Bridge and Haswell.
+       *
+       * On Ivy Bridge, setting this bit causes the vertices of a triangle
+       * strip to be delivered to the geometry shader in an order that does
+       * not strictly follow the OpenGL spec, but preserves triangle
+       * orientation.  For example, if the vertices are (1, 2, 3, 4, 5), then
+       * the geometry shader sees triangles:
+       *
+       * (1, 2, 3), (2, 4, 3), (3, 4, 5)
+       *
+       * (Clearing the bit is even worse, because it fails to preserve
+       * orientation).
+       *
+       * Triangle strips with adjacency always ordered in a way that preserves
+       * triangle orientation but does not strictly follow the OpenGL spec,
+       * regardless of the setting of this bit.
+       *
+       * On Haswell, both triangle strips and triangle strips with adjacency
+       * are always ordered in a way that preserves triangle orientation.
+       * Setting this bit causes the ordering to strictly follow the OpenGL
+       * spec.
+       *
+       * So in either case we want to set the bit.  Unfortunately on Ivy
+       * Bridge this will get the order close to correct but not perfect.
+       */
+      uint32_t dw5 =
          ((brw->max_gs_threads - 1) << max_threads_shift) |
          (brw->gs.prog_data->control_data_header_size_hwords <<
           GEN7_GS_CONTROL_DATA_HEADER_SIZE_SHIFT) |
-         GEN7_GS_DISPATCH_MODE_DUAL_OBJECT |
+         (brw->gs.prog_data->dual_instanced_dispatch ?
+          GEN7_GS_DISPATCH_MODE_DUAL_INSTANCE :
+          GEN7_GS_DISPATCH_MODE_DUAL_OBJECT) |
          GEN6_GS_STATISTICS_ENABLE |
          (brw->gs.prog_data->include_primitive_id ?
           GEN7_GS_INCLUDE_PRIMITIVE_ID : 0) |
+         GEN7_GS_REORDER_TRAILING |
          GEN7_GS_ENABLE;
+      uint32_t dw6 = 0;
 
       if (brw->is_haswell) {
          dw6 |= brw->gs.prog_data->control_data_format <<
@@ -123,9 +154,9 @@ upload_gs_state(struct brw_context *brw)
             IVB_GS_CONTROL_DATA_FORMAT_SHIFT;
       }
 
+      OUT_BATCH(dw4);
       OUT_BATCH(dw5);
       OUT_BATCH(dw6);
-      OUT_BATCH(0);
       ADVANCE_BATCH();
    } else {
       BEGIN_BATCH(7);

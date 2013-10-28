@@ -155,10 +155,10 @@ vec4_generator::~vec4_generator()
 void
 vec4_generator::mark_surface_used(unsigned surf_index)
 {
-   assert(surf_index < BRW_MAX_VEC4_SURFACES);
+   assert(surf_index < BRW_MAX_SURFACES);
 
-   prog_data->binding_table_size = MAX2(prog_data->binding_table_size,
-                                        surf_index + 1);
+   prog_data->base.binding_table.size_bytes =
+      MAX2(prog_data->base.binding_table.size_bytes, (surf_index + 1) * 4);
 }
 
 void
@@ -308,6 +308,20 @@ vec4_generator::generate_tex(vec4_instruction *inst,
       case SHADER_OPCODE_TXS:
 	 msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_RESINFO;
 	 break;
+      case SHADER_OPCODE_TG4:
+         if (inst->shadow_compare) {
+            msg_type = GEN7_SAMPLER_MESSAGE_SAMPLE_GATHER4_C;
+         } else {
+            msg_type = GEN7_SAMPLER_MESSAGE_SAMPLE_GATHER4;
+         }
+         break;
+      case SHADER_OPCODE_TG4_OFFSET:
+         if (inst->shadow_compare) {
+            msg_type = GEN7_SAMPLER_MESSAGE_SAMPLE_GATHER4_PO_C;
+         } else {
+            msg_type = GEN7_SAMPLER_MESSAGE_SAMPLE_GATHER4_PO;
+         }
+         break;
       default:
 	 assert(!"should not get here: invalid VS texture opcode");
 	 break;
@@ -361,7 +375,7 @@ vec4_generator::generate_tex(vec4_instruction *inst,
       brw_MOV(p,
 	      retype(brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE, inst->base_mrf, 2),
 		     BRW_REGISTER_TYPE_UD),
-	      brw_imm_uw(inst->texture_offset));
+	      brw_imm_ud(inst->texture_offset));
       brw_pop_insn_state(p);
    } else if (inst->header_present) {
       /* Set up an implied move from g0 to the MRF. */
@@ -382,11 +396,16 @@ vec4_generator::generate_tex(vec4_instruction *inst,
       break;
    }
 
+   uint32_t surface_index = ((inst->opcode == SHADER_OPCODE_TG4 ||
+      inst->opcode == SHADER_OPCODE_TG4_OFFSET)
+      ? prog_data->base.binding_table.gather_texture_start
+      : prog_data->base.binding_table.texture_start) + inst->sampler;
+
    brw_SAMPLE(p,
 	      dst,
 	      inst->base_mrf,
 	      src,
-	      SURF_INDEX_VEC4_TEXTURE(inst->sampler),
+              surface_index,
 	      inst->sampler,
 	      msg_type,
 	      1, /* response length */
@@ -395,7 +414,7 @@ vec4_generator::generate_tex(vec4_instruction *inst,
 	      BRW_SAMPLER_SIMD_MODE_SIMD4X2,
 	      return_format);
 
-   mark_surface_used(SURF_INDEX_VEC4_TEXTURE(inst->sampler));
+   mark_surface_used(surface_index);
 }
 
 void
@@ -835,6 +854,39 @@ vec4_generator::generate_pull_constant_load_gen7(vec4_instruction *inst,
    mark_surface_used(surf_index.dw1.ud);
 }
 
+void
+vec4_generator::generate_untyped_atomic(vec4_instruction *inst,
+                                        struct brw_reg dst,
+                                        struct brw_reg atomic_op,
+                                        struct brw_reg surf_index)
+{
+   assert(atomic_op.file == BRW_IMMEDIATE_VALUE &&
+          atomic_op.type == BRW_REGISTER_TYPE_UD &&
+          surf_index.file == BRW_IMMEDIATE_VALUE &&
+	  surf_index.type == BRW_REGISTER_TYPE_UD);
+
+   brw_untyped_atomic(p, dst, brw_message_reg(inst->base_mrf),
+                      atomic_op.dw1.ud, surf_index.dw1.ud,
+                      inst->mlen, 1);
+
+   mark_surface_used(surf_index.dw1.ud);
+}
+
+void
+vec4_generator::generate_untyped_surface_read(vec4_instruction *inst,
+                                              struct brw_reg dst,
+                                              struct brw_reg surf_index)
+{
+   assert(surf_index.file == BRW_IMMEDIATE_VALUE &&
+	  surf_index.type == BRW_REGISTER_TYPE_UD);
+
+   brw_untyped_surface_read(p, dst, brw_message_reg(inst->base_mrf),
+                            surf_index.dw1.ud,
+                            inst->mlen, 1);
+
+   mark_surface_used(surf_index.dw1.ud);
+}
+
 /**
  * Generate assembly for a Vec4 IR instruction.
  *
@@ -848,6 +900,31 @@ vec4_generator::generate_vec4_instruction(vec4_instruction *instruction,
                                           struct brw_reg *src)
 {
    vec4_instruction *inst = (vec4_instruction *) instruction;
+
+   if (dst.width == BRW_WIDTH_4) {
+      /* This happens in attribute fixups for "dual instanced" geometry
+       * shaders, since they use attributes that are vec4's.  Since the exec
+       * width is only 4, it's essential that the caller set
+       * force_writemask_all in order to make sure the instruction is executed
+       * regardless of which channels are enabled.
+       */
+      assert(inst->force_writemask_all);
+
+      /* Fix up any <8;8,1> or <0;4,1> source registers to <4;4,1> to satisfy
+       * the following register region restrictions (from Graphics BSpec:
+       * 3D-Media-GPGPU Engine > EU Overview > Registers and Register Regions
+       * > Register Region Restrictions)
+       *
+       *     1. ExecSize must be greater than or equal to Width.
+       *
+       *     2. If ExecSize = Width and HorzStride != 0, VertStride must be set
+       *        to Width * HorzStride."
+       */
+      for (int i = 0; i < 3; i++) {
+         if (src[i].file == BRW_GENERAL_REGISTER_FILE)
+            src[i] = stride(src[i], 4, 4, 1);
+      }
+   }
 
    switch (inst->opcode) {
    case BRW_OPCODE_MOV:
@@ -866,6 +943,7 @@ vec4_generator::generate_vec4_instruction(vec4_instruction *instruction,
       break;
 
    case BRW_OPCODE_MAD:
+      assert(brw->gen >= 6);
       brw_MAD(p, dst, src[0], src[1], src[2]);
       break;
 
@@ -928,43 +1006,65 @@ vec4_generator::generate_vec4_instruction(vec4_instruction *instruction,
       break;
 
    case BRW_OPCODE_F32TO16:
+      assert(brw->gen >= 7);
       brw_F32TO16(p, dst, src[0]);
       break;
 
    case BRW_OPCODE_F16TO32:
+      assert(brw->gen >= 7);
       brw_F16TO32(p, dst, src[0]);
       break;
 
    case BRW_OPCODE_LRP:
+      assert(brw->gen >= 6);
       brw_LRP(p, dst, src[0], src[1], src[2]);
       break;
 
    case BRW_OPCODE_BFREV:
+      assert(brw->gen >= 7);
       /* BFREV only supports UD type for src and dst. */
       brw_BFREV(p, retype(dst, BRW_REGISTER_TYPE_UD),
                    retype(src[0], BRW_REGISTER_TYPE_UD));
       break;
    case BRW_OPCODE_FBH:
+      assert(brw->gen >= 7);
       /* FBH only supports UD type for dst. */
       brw_FBH(p, retype(dst, BRW_REGISTER_TYPE_UD), src[0]);
       break;
    case BRW_OPCODE_FBL:
+      assert(brw->gen >= 7);
       /* FBL only supports UD type for dst. */
       brw_FBL(p, retype(dst, BRW_REGISTER_TYPE_UD), src[0]);
       break;
    case BRW_OPCODE_CBIT:
+      assert(brw->gen >= 7);
       /* CBIT only supports UD type for dst. */
       brw_CBIT(p, retype(dst, BRW_REGISTER_TYPE_UD), src[0]);
       break;
+   case BRW_OPCODE_ADDC:
+      assert(brw->gen >= 7);
+      brw_set_acc_write_control(p, 1);
+      brw_ADDC(p, dst, src[0], src[1]);
+      brw_set_acc_write_control(p, 0);
+      break;
+   case BRW_OPCODE_SUBB:
+      assert(brw->gen >= 7);
+      brw_set_acc_write_control(p, 1);
+      brw_SUBB(p, dst, src[0], src[1]);
+      brw_set_acc_write_control(p, 0);
+      break;
 
    case BRW_OPCODE_BFE:
+      assert(brw->gen >= 7);
       brw_BFE(p, dst, src[0], src[1], src[2]);
       break;
 
    case BRW_OPCODE_BFI1:
+      assert(brw->gen >= 7);
       brw_BFI1(p, dst, src[0], src[1]);
       break;
    case BRW_OPCODE_BFI2:
+      assert(brw->gen >= 7);
       brw_BFI2(p, dst, src[0], src[1], src[2]);
       break;
 
@@ -1040,6 +1140,8 @@ vec4_generator::generate_vec4_instruction(vec4_instruction *instruction,
    case SHADER_OPCODE_TXF_MS:
    case SHADER_OPCODE_TXL:
    case SHADER_OPCODE_TXS:
+   case SHADER_OPCODE_TG4:
+   case SHADER_OPCODE_TG4_OFFSET:
       generate_tex(inst, dst, src[0]);
       break;
 
@@ -1047,11 +1149,11 @@ vec4_generator::generate_vec4_instruction(vec4_instruction *instruction,
       generate_vs_urb_write(inst);
       break;
 
-   case VS_OPCODE_SCRATCH_READ:
+   case SHADER_OPCODE_GEN4_SCRATCH_READ:
       generate_scratch_read(inst, dst, src[0]);
       break;
 
-   case VS_OPCODE_SCRATCH_WRITE:
+   case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
       generate_scratch_write(inst, dst, src[0], src[1]);
       break;
 
@@ -1092,8 +1194,17 @@ vec4_generator::generate_vec4_instruction(vec4_instruction *instruction,
       break;
 
    case SHADER_OPCODE_SHADER_TIME_ADD:
-      brw_shader_time_add(p, src[0], SURF_INDEX_VEC4_SHADER_TIME);
-      mark_surface_used(SURF_INDEX_VEC4_SHADER_TIME);
+      brw_shader_time_add(p, src[0],
+                          prog_data->base.binding_table.shader_time_start);
+      mark_surface_used(prog_data->base.binding_table.shader_time_start);
+      break;
+
+   case SHADER_OPCODE_UNTYPED_ATOMIC:
+      generate_untyped_atomic(inst, dst, src[0], src[1]);
+      break;
+
+   case SHADER_OPCODE_UNTYPED_SURFACE_READ:
+      generate_untyped_surface_read(inst, dst, src[0]);
       break;
 
    case VS_OPCODE_UNPACK_FLAGS_SIMD4X2:

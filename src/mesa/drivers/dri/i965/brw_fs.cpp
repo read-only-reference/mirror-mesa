@@ -35,7 +35,6 @@ extern "C" {
 #include "main/hash_table.h"
 #include "main/macros.h"
 #include "main/shaderobj.h"
-#include "main/uniforms.h"
 #include "main/fbobject.h"
 #include "program/prog_parameter.h"
 #include "program/prog_print.h"
@@ -47,6 +46,8 @@ extern "C" {
 #include "brw_wm.h"
 }
 #include "brw_fs.h"
+#include "main/uniforms.h"
+#include "brw_fs_live_variables.h"
 #include "glsl/glsl_types.h"
 
 void
@@ -180,6 +181,8 @@ ALU1(FBH)
 ALU1(FBL)
 ALU1(CBIT)
 ALU3(MAD)
+ALU2(ADDC)
+ALU2(SUBB)
 
 /** Gen4 predicated IF. */
 fs_inst *
@@ -352,7 +355,8 @@ fs_inst::is_send_from_grf()
    return (opcode == FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7 ||
            opcode == SHADER_OPCODE_SHADER_TIME_ADD ||
            (opcode == FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD &&
-            src[1].file == GRF));
+            src[1].file == GRF) ||
+           (is_tex() && src[0].file == GRF));
 }
 
 bool
@@ -362,6 +366,9 @@ fs_visitor::can_do_source_mods(fs_inst *inst)
       return false;
 
    if (inst->is_send_from_grf())
+      return false;
+
+   if (!inst->can_do_source_mods())
       return false;
 
    return true;
@@ -433,6 +440,14 @@ fs_reg::equals(const fs_reg &r) const
            imm.u == r.imm.u);
 }
 
+fs_reg
+fs_reg::retype(uint32_t type)
+{
+   fs_reg result = *this;
+   result.type = type;
+   return result;
+}
+
 bool
 fs_reg::is_zero() const
 {
@@ -449,6 +464,14 @@ fs_reg::is_one() const
       return false;
 
    return type == BRW_REGISTER_TYPE_F ? imm.f == 1.0 : imm.i == 1;
+}
+
+bool
+fs_reg::is_null() const
+{
+   return file == HW_REG &&
+          fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE &&
+          fixed_hw_reg.nr == BRW_ARF_NULL;
 }
 
 bool
@@ -480,6 +503,8 @@ fs_visitor::type_size(const struct glsl_type *type)
       /* Samplers take up no register space, since they're baked in at
        * link time.
        */
+      return 0;
+   case GLSL_TYPE_ATOMIC_UINT:
       return 0;
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
@@ -695,6 +720,31 @@ fs_inst::is_partial_write()
            this->force_sechalf);
 }
 
+int
+fs_inst::regs_read(fs_visitor *v, int arg)
+{
+   if (is_tex() && arg == 0 && src[0].file == GRF) {
+      if (v->dispatch_width == 16)
+	 return (mlen + 1) / 2;
+      else
+	 return mlen;
+   }
+   return 1;
+}
+
+bool
+fs_inst::reads_flag()
+{
+   return predicate;
+}
+
+bool
+fs_inst::writes_flag()
+{
+   return (conditional_mod && opcode != BRW_OPCODE_SEL) ||
+          opcode == FS_OPCODE_MOV_DISPATCH_TO_FLAGS;
+}
+
 /**
  * Returns how many MRFs an FS opcode will write over.
  *
@@ -705,6 +755,9 @@ int
 fs_visitor::implied_mrf_writes(fs_inst *inst)
 {
    if (inst->mlen == 0)
+      return 0;
+
+   if (inst->base_mrf == -1)
       return 0;
 
    switch (inst->opcode) {
@@ -725,6 +778,8 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
    case SHADER_OPCODE_TXD:
    case SHADER_OPCODE_TXF:
    case SHADER_OPCODE_TXF_MS:
+   case SHADER_OPCODE_TG4:
+   case SHADER_OPCODE_TG4_OFFSET:
    case SHADER_OPCODE_TXL:
    case SHADER_OPCODE_TXS:
    case SHADER_OPCODE_LOD:
@@ -732,12 +787,15 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
    case FS_OPCODE_FB_WRITE:
       return 2;
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
-   case FS_OPCODE_UNSPILL:
+   case SHADER_OPCODE_GEN4_SCRATCH_READ:
       return 1;
    case FS_OPCODE_VARYING_PULL_CONSTANT_LOAD:
       return inst->mlen;
-   case FS_OPCODE_SPILL:
+   case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
       return 2;
+   case SHADER_OPCODE_UNTYPED_ATOMIC:
+   case SHADER_OPCODE_UNTYPED_SURFACE_READ:
+      return 0;
    default:
       assert(!"not reached");
       return inst->mlen;
@@ -1440,7 +1498,7 @@ fs_visitor::split_virtual_grfs()
 	 }
       }
    }
-   this->live_intervals_valid = false;
+   invalidate_live_intervals();
 }
 
 /**
@@ -1498,10 +1556,7 @@ fs_visitor::compact_virtual_grfs()
       if (remap_table[i] != -1) {
          remap_table[i] = new_index;
          virtual_grf_sizes[new_index] = virtual_grf_sizes[i];
-         if (live_intervals_valid) {
-            virtual_grf_start[new_index] = virtual_grf_start[i];
-            virtual_grf_end[new_index] = virtual_grf_end[i];
-         }
+         invalidate_live_intervals();
          ++new_index;
       }
    }
@@ -1672,7 +1727,7 @@ fs_visitor::move_uniform_array_access_to_pull_constants()
          base_ir = inst->ir;
          current_annotation = inst->annotation;
 
-         fs_reg surf_index = fs_reg((unsigned)SURF_INDEX_FRAG_CONST_BUFFER);
+         fs_reg surf_index = fs_reg(c->prog_data.base.binding_table.pull_constants_start);
          fs_reg temp = fs_reg(this, glsl_type::float_type);
          exec_list list = VARYING_PULL_CONSTANT_LOAD(temp,
                                                      surf_index,
@@ -1756,7 +1811,7 @@ fs_visitor::setup_pull_constants()
          assert(!inst->src[i].reladdr);
 
 	 fs_reg dst = fs_reg(this, glsl_type::float_type);
-	 fs_reg index = fs_reg((unsigned)SURF_INDEX_FRAG_CONST_BUFFER);
+	 fs_reg index = fs_reg(c->prog_data.base.binding_table.pull_constants_start);
 	 fs_reg offset = fs_reg((unsigned)(pull_index * 4) & ~15);
 	 fs_inst *pull =
             new(mem_ctx) fs_inst(FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD,
@@ -1841,10 +1896,33 @@ fs_visitor::dead_code_eliminate()
       fs_inst *inst = (fs_inst *)node;
 
       if (inst->dst.file == GRF) {
-         assert(this->virtual_grf_end[inst->dst.reg] >= pc);
-         if (this->virtual_grf_end[inst->dst.reg] == pc) {
-            inst->remove();
-            progress = true;
+         bool dead = true;
+
+         for (int i = 0; i < inst->regs_written; i++) {
+            int var = live_intervals->var_from_vgrf[inst->dst.reg];
+            assert(live_intervals->end[var + inst->dst.reg_offset + i] >= pc);
+            if (live_intervals->end[var + inst->dst.reg_offset + i] != pc) {
+               dead = false;
+               break;
+            }
+         }
+
+         if (dead) {
+            /* Don't dead code eliminate instructions that write to the
+             * accumulator as a side-effect. Instead just set the destination
+             * to the null register to free it.
+             */
+            switch (inst->opcode) {
+            case BRW_OPCODE_ADDC:
+            case BRW_OPCODE_SUBB:
+            case BRW_OPCODE_MACH:
+               inst->dst = fs_reg(retype(brw_null_reg(), inst->dst.type));
+               break;
+            default:
+               inst->remove();
+               progress = true;
+               break;
+            }
          }
       }
 
@@ -1852,7 +1930,7 @@ fs_visitor::dead_code_eliminate()
    }
 
    if (progress)
-      live_intervals_valid = false;
+      invalidate_live_intervals();
 
    return progress;
 }
@@ -2010,7 +2088,7 @@ fs_visitor::dead_code_eliminate_local()
    _mesa_hash_table_destroy(ht, NULL);
 
    if (progress)
-      live_intervals_valid = false;
+      invalidate_live_intervals();
 
    return progress;
 }
@@ -2039,10 +2117,15 @@ fs_visitor::register_coalesce_2()
 	  inst->src[0].smear != -1 ||
 	  inst->dst.file != GRF ||
 	  inst->dst.type != inst->src[0].type ||
-	  virtual_grf_sizes[inst->src[0].reg] != 1 ||
-	  virtual_grf_interferes(inst->dst.reg, inst->src[0].reg)) {
+	  virtual_grf_sizes[inst->src[0].reg] != 1) {
 	 continue;
       }
+
+      int var_from = live_intervals->var_from_reg(&inst->src[0]);
+      int var_to = live_intervals->var_from_reg(&inst->dst);
+
+      if (live_intervals->vars_interfere(var_from, var_to))
+         continue;
 
       int reg_from = inst->src[0].reg;
       assert(inst->src[0].reg_offset == 0);
@@ -2067,31 +2150,12 @@ fs_visitor::register_coalesce_2()
       }
 
       inst->remove();
-
-      /* We don't need to recalculate live intervals inside the loop despite
-       * flagging live_intervals_valid because we only use live intervals for
-       * the interferes test, and we must have had a situation where the
-       * intervals were:
-       *
-       *  from  to
-       *  ^
-       *  |
-       *  v
-       *        ^
-       *        |
-       *        v
-       *
-       * Some register R that might get coalesced with one of these two could
-       * only be referencing "to", otherwise "from"'s range would have been
-       * longer.  R's range could also only start at the end of "to" or later,
-       * otherwise it will conflict with "to" when we try to coalesce "to"
-       * into Rw anyway.
-       */
-      live_intervals_valid = false;
-
       progress = true;
       continue;
    }
+
+   if (progress)
+      invalidate_live_intervals();
 
    return progress;
 }
@@ -2184,6 +2248,13 @@ fs_visitor::register_coalesce()
 	    break;
 	 }
 
+	 if (scan_inst->mlen > 0 && scan_inst->base_mrf == -1 &&
+	     scan_inst->src[0].file == GRF &&
+	     scan_inst->src[0].reg == inst->dst.reg) {
+	    interfered = true;
+	    break;
+	 }
+
 	 /* The accumulator result appears to get used for the
 	  * conditional modifier generation.  When negating a UD
 	  * value, there is a 33rd bit generated for the sign in the
@@ -2217,6 +2288,7 @@ fs_visitor::register_coalesce()
                   new_src.abs = 1;
                }
 	       new_src.negate ^= scan_inst->src[i].negate;
+	       new_src.sechalf = scan_inst->src[i].sechalf;
 	       scan_inst->src[i] = new_src;
 	    }
 	 }
@@ -2227,7 +2299,7 @@ fs_visitor::register_coalesce()
    }
 
    if (progress)
-      live_intervals_valid = false;
+      invalidate_live_intervals();
 
    return progress;
 }
@@ -2371,7 +2443,7 @@ fs_visitor::compute_to_mrf()
 	    }
 	 }
 
-	 if (scan_inst->mlen > 0) {
+	 if (scan_inst->mlen > 0 && scan_inst->base_mrf != -1) {
 	    /* Found a SEND instruction, which means that there are
 	     * live values in MRFs from base_mrf to base_mrf +
 	     * scan_inst->mlen - 1.  Don't go pushing our MRF write up
@@ -2390,7 +2462,7 @@ fs_visitor::compute_to_mrf()
    }
 
    if (progress)
-      live_intervals_valid = false;
+      invalidate_live_intervals();
 
    return progress;
 }
@@ -2433,7 +2505,7 @@ fs_visitor::remove_duplicate_mrf_writes()
 	 last_mrf_move[inst->dst.reg] = NULL;
       }
 
-      if (inst->mlen > 0) {
+      if (inst->mlen > 0 && inst->base_mrf != -1) {
 	 /* Found a SEND instruction, which will include two or fewer
 	  * implied MRF writes.  We could do better here.
 	  */
@@ -2461,7 +2533,7 @@ fs_visitor::remove_duplicate_mrf_writes()
    }
 
    if (progress)
-      live_intervals_valid = false;
+      invalidate_live_intervals();
 
    return progress;
 }
@@ -2728,7 +2800,7 @@ fs_visitor::lower_uniform_pull_constant_loads()
          inst->opcode = FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7;
          inst->src[1] = payload;
 
-         this->live_intervals_valid = false;
+         invalidate_live_intervals();
       } else {
          /* Before register allocation, we didn't tell the scheduler about the
           * MRF we use.  We know it's safe to use this MRF because nothing
@@ -2782,11 +2854,10 @@ fs_visitor::dump_instruction(backend_instruction *be_inst)
    case UNIFORM:
       printf("***u%d***", inst->dst.reg);
       break;
-   case ARF:
-      if (inst->dst.reg == BRW_ARF_NULL)
-         printf("(null)");
-      else
-         printf("arf%d", inst->dst.reg);
+   case HW_REG:
+      printf("hw_reg%d", inst->dst.fixed_hw_reg.nr);
+      if (inst->dst.fixed_hw_reg.subnr)
+         printf("+%d", inst->dst.fixed_hw_reg.subnr);
       break;
    default:
       printf("???");
@@ -2831,6 +2902,17 @@ fs_visitor::dump_instruction(backend_instruction *be_inst)
             printf("???");
             break;
          }
+         break;
+      case HW_REG:
+         if (inst->src[i].fixed_hw_reg.negate)
+            printf("-");
+         if (inst->src[i].fixed_hw_reg.abs)
+            printf("|");
+         printf("hw_reg%d", inst->src[i].fixed_hw_reg.nr);
+         if (inst->src[i].fixed_hw_reg.subnr)
+            printf("+%d", inst->src[i].fixed_hw_reg.subnr);
+         if (inst->src[i].fixed_hw_reg.abs)
+            printf("|");
          break;
       default:
          printf("???");
@@ -2939,11 +3021,24 @@ fs_visitor::setup_payload_gen6()
    }
 }
 
+void
+fs_visitor::assign_binding_table_offsets()
+{
+   uint32_t next_binding_table_offset = 0;
+
+   c->prog_data.binding_table.render_target_start = next_binding_table_offset;
+   next_binding_table_offset += c->key.nr_color_regions;
+
+   assign_common_binding_table_offsets(next_binding_table_offset);
+}
+
 bool
 fs_visitor::run()
 {
    sanity_param_count = fp->Base.Parameters->NumParameters;
    uint32_t orig_nr_params = c->prog_data.nr_params;
+
+   assign_binding_table_offsets();
 
    if (brw->gen >= 6)
       setup_payload_gen6();
@@ -2957,10 +3052,12 @@ fs_visitor::run()
          emit_shader_time_begin();
 
       calculate_urb_setup();
-      if (brw->gen < 6)
-	 emit_interpolation_setup_gen4();
-      else
-	 emit_interpolation_setup_gen6();
+      if (fp->Base.InputsRead > 0) {
+         if (brw->gen < 6)
+            emit_interpolation_setup_gen4();
+         else
+            emit_interpolation_setup_gen6();
+      }
 
       /* We handle discards by keeping track of the still-live pixels in f0.1.
        * Initialize it with the dispatched pixels.
@@ -2994,6 +3091,7 @@ fs_visitor::run()
       split_virtual_grfs();
 
       move_uniform_array_access_to_pull_constants();
+      remove_dead_constants();
       setup_pull_constants();
 
       bool progress;
@@ -3014,21 +3112,12 @@ fs_visitor::run()
 	 progress = compute_to_mrf() || progress;
       } while (progress);
 
-      remove_dead_constants();
-
       schedule_instructions(false);
 
       lower_uniform_pull_constant_loads();
 
       assign_curb_setup();
       assign_urb_setup();
-
-      if (0) {
-	 /* Debug of register spilling: Go spill everything. */
-	 for (int i = 0; i < virtual_grf_count; i++) {
-	    spill_reg(i);
-	 }
-      }
 
       if (0)
 	 assign_regs_trivial();
@@ -3136,8 +3225,6 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
       }
    }
 
-   c->prog_data.dispatch_width = 8;
-
    fs_generator g(brw, c, prog, fp, v.dual_src_output.file != BAD_FILE);
    const unsigned *generated = g.generate_assembly(&v.instructions,
                                                    simd16_instructions,
@@ -3212,6 +3299,12 @@ brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
    }
 
    key.nr_color_regions = 1;
+
+   /* GL_FRAGMENT_SHADER_DERIVATIVE_HINT is almost always GL_DONT_CARE.  The
+    * quality of the derivatives is likely to be determined by the driconf
+    * option.
+    */
+   key.high_quality_derivatives = brw->disable_derivative_optimization;
 
    key.program_string_id = bfp->id;
 

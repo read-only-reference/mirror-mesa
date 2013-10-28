@@ -139,7 +139,11 @@ static struct pipe_resource *
 wayland_drm_bufmgr_wl_buffer_get_resource(struct native_display *ndpy,
                                           struct wl_resource *buffer_resource)
 {
-   struct wl_drm_buffer *buffer = wayland_drm_buffer_get(buffer_resource);
+   struct wayland_drm_bufmgr *bufmgr;
+   struct wl_drm_buffer *buffer;
+
+   bufmgr = wayland_drm_bufmgr(ndpy->wayland_bufmgr);
+   buffer = wayland_drm_buffer_get(bufmgr->wl_server_drm, buffer_resource);
 
    if (!buffer)
       return NULL;
@@ -147,16 +151,19 @@ wayland_drm_bufmgr_wl_buffer_get_resource(struct native_display *ndpy,
    return wayland_drm_buffer_get_buffer(buffer);
 }
 
-static EGLBoolean
+static boolean
 wayland_drm_bufmgr_query_buffer(struct native_display *ndpy,
                                 struct wl_resource *buffer_resource,
-                                EGLint attribute, EGLint *value)
+                                int attribute, int *value)
 {
-   struct wl_drm_buffer *buffer = wayland_drm_buffer_get(buffer_resource);
+   struct wayland_drm_bufmgr *bufmgr;
+   struct wl_drm_buffer *buffer;
    struct pipe_resource *resource;
 
+   bufmgr = wayland_drm_bufmgr(ndpy->wayland_bufmgr);
+   buffer = wayland_drm_buffer_get(bufmgr->wl_server_drm, buffer_resource);
    if (!buffer)
-      return EGL_FALSE;
+      return FALSE;
 
    resource = buffer->driver_buffer;
 
@@ -165,21 +172,21 @@ wayland_drm_bufmgr_query_buffer(struct native_display *ndpy,
       switch (resource->format) {
       case PIPE_FORMAT_B8G8R8A8_UNORM:
          *value = EGL_TEXTURE_RGBA;
-         return EGL_TRUE;
+         return TRUE;
       case PIPE_FORMAT_B8G8R8X8_UNORM:
          *value = EGL_TEXTURE_RGB;
-         return EGL_TRUE;
+         return TRUE;
       default:
-         return EGL_FALSE;
+         return FALSE;
       }
    case EGL_WIDTH:
       *value = buffer->width;
-      return EGL_TRUE;
+      return TRUE;
    case EGL_HEIGHT:
       *value = buffer->height;
-      return EGL_TRUE;
+      return TRUE;
    default:
-      return EGL_FALSE;
+      return FALSE;
    }
 }
 

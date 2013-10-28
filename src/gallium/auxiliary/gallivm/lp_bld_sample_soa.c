@@ -822,6 +822,12 @@ lp_build_masklerp2d(struct lp_build_context *bld,
    return lp_build_lerp(bld, weight1, val0, val1, 0);
 }
 
+/*
+ * this is a bit excessive code for something OpenGL just recommends
+ * but does not require.
+ */
+#define ACCURATE_CUBE_CORNERS 1
+
 /**
  * Generate code to sample a mipmap level with linear filtering.
  * If sampling a cube texture, r = cube face in [0,5].
@@ -840,6 +846,9 @@ lp_build_sample_image_linear(struct lp_build_sample_context *bld,
                              const LLVMValueRef *offsets,
                              LLVMValueRef colors_out[4])
 {
+   LLVMBuilderRef builder = bld->gallivm->builder;
+   struct lp_build_context *ivec_bld = &bld->int_coord_bld;
+   struct lp_build_context *coord_bld = &bld->coord_bld;
    const unsigned dims = bld->dims;
    LLVMValueRef width_vec;
    LLVMValueRef height_vec;
@@ -848,10 +857,20 @@ lp_build_sample_image_linear(struct lp_build_sample_context *bld,
    LLVMValueRef flt_width_vec;
    LLVMValueRef flt_height_vec;
    LLVMValueRef flt_depth_vec;
-   LLVMValueRef x0, y0 = NULL, z0 = NULL, x1, y1 = NULL, z1 = NULL;
+   LLVMValueRef fall_off[4], have_corners;
+   LLVMValueRef z1 = NULL;
+   LLVMValueRef z00 = NULL, z01 = NULL, z10 = NULL, z11 = NULL;
+   LLVMValueRef x00 = NULL, x01 = NULL, x10 = NULL, x11 = NULL;
+   LLVMValueRef y00 = NULL, y01 = NULL, y10 = NULL, y11 = NULL;
    LLVMValueRef s_fpart, t_fpart = NULL, r_fpart = NULL;
+   LLVMValueRef xs[4], ys[4], zs[4];
    LLVMValueRef neighbors[2][2][4];
-   int chan;
+   int chan, texel_index;
+   boolean seamless_cube_filter, accurate_cube_corners;
+
+   seamless_cube_filter = bld->static_texture_state->target == PIPE_TEXTURE_CUBE &&
+                          bld->static_sampler_state->seamless_cube_map;
+   accurate_cube_corners = ACCURATE_CUBE_CORNERS && seamless_cube_filter;
 
    lp_build_extract_image_sizes(bld,
                                 &bld->int_size_bld,
@@ -870,44 +889,211 @@ lp_build_sample_image_linear(struct lp_build_sample_context *bld,
    /*
     * Compute integer texcoords.
     */
-   lp_build_sample_wrap_linear(bld, coords[0], width_vec,
-                               flt_width_vec, offsets[0],
-                               bld->static_texture_state->pot_width,
-                               bld->static_sampler_state->wrap_s,
-                               &x0, &x1, &s_fpart);
-   lp_build_name(x0, "tex.x0.wrapped");
-   lp_build_name(x1, "tex.x1.wrapped");
 
-   if (dims >= 2) {
-      lp_build_sample_wrap_linear(bld, coords[1], height_vec,
-                                  flt_height_vec, offsets[1],
-                                  bld->static_texture_state->pot_height,
-                                  bld->static_sampler_state->wrap_t,
-                                  &y0, &y1, &t_fpart);
-      lp_build_name(y0, "tex.y0.wrapped");
-      lp_build_name(y1, "tex.y1.wrapped");
+   if (!seamless_cube_filter) {
+      lp_build_sample_wrap_linear(bld, coords[0], width_vec,
+                                  flt_width_vec, offsets[0],
+                                  bld->static_texture_state->pot_width,
+                                  bld->static_sampler_state->wrap_s,
+                                  &x00, &x01, &s_fpart);
+      lp_build_name(x00, "tex.x0.wrapped");
+      lp_build_name(x01, "tex.x1.wrapped");
+      x10 = x00;
+      x11 = x01;
 
-      if (dims == 3) {
-         lp_build_sample_wrap_linear(bld, coords[2], depth_vec,
-                                     flt_depth_vec, offsets[2],
-                                     bld->static_texture_state->pot_depth,
-                                     bld->static_sampler_state->wrap_r,
-                                     &z0, &z1, &r_fpart);
-         lp_build_name(z0, "tex.z0.wrapped");
-         lp_build_name(z1, "tex.z1.wrapped");
+      if (dims >= 2) {
+         lp_build_sample_wrap_linear(bld, coords[1], height_vec,
+                                     flt_height_vec, offsets[1],
+                                     bld->static_texture_state->pot_height,
+                                     bld->static_sampler_state->wrap_t,
+                                     &y00, &y10, &t_fpart);
+         lp_build_name(y00, "tex.y0.wrapped");
+         lp_build_name(y10, "tex.y1.wrapped");
+         y01 = y00;
+         y11 = y10;
+
+         if (dims == 3) {
+            lp_build_sample_wrap_linear(bld, coords[2], depth_vec,
+                                        flt_depth_vec, offsets[2],
+                                        bld->static_texture_state->pot_depth,
+                                        bld->static_sampler_state->wrap_r,
+                                        &z00, &z1, &r_fpart);
+            z01 = z10 = z11 = z00;
+            lp_build_name(z00, "tex.z0.wrapped");
+            lp_build_name(z1, "tex.z1.wrapped");
+         }
+      }
+      if (bld->static_texture_state->target == PIPE_TEXTURE_CUBE ||
+          bld->static_texture_state->target == PIPE_TEXTURE_1D_ARRAY ||
+          bld->static_texture_state->target == PIPE_TEXTURE_2D_ARRAY) {
+         z00 = z01 = z10 = z11 = z1 = coords[2];  /* cube face or layer */
+         lp_build_name(z00, "tex.z0.layer");
+         lp_build_name(z1, "tex.z1.layer");
       }
    }
-   if (bld->static_texture_state->target == PIPE_TEXTURE_CUBE ||
-       bld->static_texture_state->target == PIPE_TEXTURE_1D_ARRAY ||
-       bld->static_texture_state->target == PIPE_TEXTURE_2D_ARRAY) {
-      z0 = z1 = coords[2];  /* cube face or layer */
-      lp_build_name(z0, "tex.z0.layer");
-      lp_build_name(z1, "tex.z1.layer");
+   else {
+      struct lp_build_if_state edge_if;
+      LLVMTypeRef int1t;
+      LLVMValueRef new_faces[4], new_xcoords[4][2], new_ycoords[4][2];
+      LLVMValueRef coord, have_edge, have_corner;
+      LLVMValueRef fall_off_ym_notxm, fall_off_ym_notxp, fall_off_x, fall_off_y;
+      LLVMValueRef fall_off_yp_notxm, fall_off_yp_notxp;
+      LLVMValueRef x0, x1, y0, y1, y0_clamped, y1_clamped;
+      LLVMValueRef face = coords[2];
+      LLVMValueRef half = lp_build_const_vec(bld->gallivm, coord_bld->type, 0.5f);
+      LLVMValueRef length_minus_one = lp_build_sub(ivec_bld, width_vec, ivec_bld->one);
+      /* XXX drop height calcs. Could (should) do this without seamless filtering too */
+      height_vec = width_vec;
+      flt_height_vec = flt_width_vec;
+
+      /* XXX the overflow logic is actually sort of duplicated with trilinear,
+       * since an overflow in one mip should also have a corresponding overflow
+       * in another.
+       */
+      /* should always have normalized coords, and offsets are undefined */
+      assert(bld->static_sampler_state->normalized_coords);
+      coord = lp_build_mul(coord_bld, coords[0], flt_width_vec);
+      /* instead of clamp, build mask if overflowed */
+      coord = lp_build_sub(coord_bld, coord, half);
+      /* convert to int, compute lerp weight */
+      /* not ideal with AVX (and no AVX2) */
+      lp_build_ifloor_fract(coord_bld, coord, &x0, &s_fpart);
+      x1 = lp_build_add(ivec_bld, x0, ivec_bld->one);
+      coord = lp_build_mul(coord_bld, coords[1], flt_height_vec);
+      coord = lp_build_sub(coord_bld, coord, half);
+      lp_build_ifloor_fract(coord_bld, coord, &y0, &t_fpart);
+      y1 = lp_build_add(ivec_bld, y0, ivec_bld->one);
+
+      fall_off[0] = lp_build_cmp(ivec_bld, PIPE_FUNC_LESS, x0, ivec_bld->zero);
+      fall_off[1] = lp_build_cmp(ivec_bld, PIPE_FUNC_GREATER, x1, length_minus_one);
+      fall_off[2] = lp_build_cmp(ivec_bld, PIPE_FUNC_LESS, y0, ivec_bld->zero);
+      fall_off[3] = lp_build_cmp(ivec_bld, PIPE_FUNC_GREATER, y1, length_minus_one);
+
+      fall_off_x = lp_build_or(ivec_bld, fall_off[0], fall_off[1]);
+      fall_off_y = lp_build_or(ivec_bld, fall_off[2], fall_off[3]);
+      have_edge = lp_build_or(ivec_bld, fall_off_x, fall_off_y);
+      have_edge = lp_build_any_true_range(ivec_bld, ivec_bld->type.length, have_edge);
+
+      /* needed for accurate corner filtering branch later, rely on 0 init */
+      int1t = LLVMInt1TypeInContext(bld->gallivm->context);
+      have_corners = lp_build_alloca(bld->gallivm, int1t, "have_corner");
+
+      for (texel_index = 0; texel_index < 4; texel_index++) {
+         xs[texel_index] = lp_build_alloca(bld->gallivm, ivec_bld->vec_type, "xs");
+         ys[texel_index] = lp_build_alloca(bld->gallivm, ivec_bld->vec_type, "ys");
+         zs[texel_index] = lp_build_alloca(bld->gallivm, ivec_bld->vec_type, "zs");
+      }
+
+      lp_build_if(&edge_if, bld->gallivm, have_edge);
+
+      have_corner = lp_build_and(ivec_bld, fall_off_x, fall_off_y);
+      have_corner = lp_build_any_true_range(ivec_bld, ivec_bld->type.length, have_corner);
+      LLVMBuildStore(builder, have_corner, have_corners);
+
+      /*
+       * Need to feed clamped values here for cheap corner handling,
+       * but only for y coord (as when falling off both edges we only
+       * fall off the x one) - this should be sufficient.
+       */
+      y0_clamped = lp_build_max(ivec_bld, y0, ivec_bld->zero);
+      y1_clamped = lp_build_min(ivec_bld, y1, length_minus_one);
+
+      /*
+       * Get all possible new coords.
+       */
+      lp_build_cube_new_coords(ivec_bld, face,
+                               x0, x1, y0_clamped, y1_clamped,
+                               length_minus_one,
+                               new_faces, new_xcoords, new_ycoords);
+
+      /* handle fall off x-, x+ direction */
+      /* determine new coords, face (not both fall_off vars can be true at same time) */
+      x00 = lp_build_select(ivec_bld, fall_off[0], new_xcoords[0][0], x0);
+      y00 = lp_build_select(ivec_bld, fall_off[0], new_ycoords[0][0], y0_clamped);
+      x10 = lp_build_select(ivec_bld, fall_off[0], new_xcoords[0][1], x0);
+      y10 = lp_build_select(ivec_bld, fall_off[0], new_ycoords[0][1], y1_clamped);
+      x01 = lp_build_select(ivec_bld, fall_off[1], new_xcoords[1][0], x1);
+      y01 = lp_build_select(ivec_bld, fall_off[1], new_ycoords[1][0], y0_clamped);
+      x11 = lp_build_select(ivec_bld, fall_off[1], new_xcoords[1][1], x1);
+      y11 = lp_build_select(ivec_bld, fall_off[1], new_ycoords[1][1], y1_clamped);
+
+      z00 = z10 = lp_build_select(ivec_bld, fall_off[0], new_faces[0], face);
+      z01 = z11 = lp_build_select(ivec_bld, fall_off[1], new_faces[1], face);
+
+      /* handle fall off y-, y+ direction */
+      /*
+       * Cheap corner logic: just hack up things so a texel doesn't fall
+       * off both sides (which means filter weights will be wrong but we'll only
+       * use valid texels in the filter).
+       * This means however (y) coords must additionally be clamped (see above).
+       * This corner handling should be fully OpenGL (but not d3d10) compliant.
+       */
+      fall_off_ym_notxm = lp_build_andnot(ivec_bld, fall_off[2], fall_off[0]);
+      fall_off_ym_notxp = lp_build_andnot(ivec_bld, fall_off[2], fall_off[1]);
+      fall_off_yp_notxm = lp_build_andnot(ivec_bld, fall_off[3], fall_off[0]);
+      fall_off_yp_notxp = lp_build_andnot(ivec_bld, fall_off[3], fall_off[1]);
+
+      x00 = lp_build_select(ivec_bld, fall_off_ym_notxm, new_xcoords[2][0], x00);
+      y00 = lp_build_select(ivec_bld, fall_off_ym_notxm, new_ycoords[2][0], y00);
+      x01 = lp_build_select(ivec_bld, fall_off_ym_notxp, new_xcoords[2][1], x01);
+      y01 = lp_build_select(ivec_bld, fall_off_ym_notxp, new_ycoords[2][1], y01);
+      x10 = lp_build_select(ivec_bld, fall_off_yp_notxm, new_xcoords[3][0], x10);
+      y10 = lp_build_select(ivec_bld, fall_off_yp_notxm, new_ycoords[3][0], y10);
+      x11 = lp_build_select(ivec_bld, fall_off_yp_notxp, new_xcoords[3][1], x11);
+      y11 = lp_build_select(ivec_bld, fall_off_yp_notxp, new_ycoords[3][1], y11);
+
+      z00 = lp_build_select(ivec_bld, fall_off_ym_notxm, new_faces[2], z00);
+      z01 = lp_build_select(ivec_bld, fall_off_ym_notxp, new_faces[2], z01);
+      z10 = lp_build_select(ivec_bld, fall_off_yp_notxm, new_faces[3], z10);
+      z11 = lp_build_select(ivec_bld, fall_off_yp_notxp, new_faces[3], z11);
+
+      LLVMBuildStore(builder, x00, xs[0]);
+      LLVMBuildStore(builder, x01, xs[1]);
+      LLVMBuildStore(builder, x10, xs[2]);
+      LLVMBuildStore(builder, x11, xs[3]);
+      LLVMBuildStore(builder, y00, ys[0]);
+      LLVMBuildStore(builder, y01, ys[1]);
+      LLVMBuildStore(builder, y10, ys[2]);
+      LLVMBuildStore(builder, y11, ys[3]);
+      LLVMBuildStore(builder, z00, zs[0]);
+      LLVMBuildStore(builder, z01, zs[1]);
+      LLVMBuildStore(builder, z10, zs[2]);
+      LLVMBuildStore(builder, z11, zs[3]);
+
+      lp_build_else(&edge_if);
+
+      LLVMBuildStore(builder, x0, xs[0]);
+      LLVMBuildStore(builder, x1, xs[1]);
+      LLVMBuildStore(builder, x0, xs[2]);
+      LLVMBuildStore(builder, x1, xs[3]);
+      LLVMBuildStore(builder, y0, ys[0]);
+      LLVMBuildStore(builder, y0, ys[1]);
+      LLVMBuildStore(builder, y1, ys[2]);
+      LLVMBuildStore(builder, y1, ys[3]);
+      LLVMBuildStore(builder, face, zs[0]);
+      LLVMBuildStore(builder, face, zs[1]);
+      LLVMBuildStore(builder, face, zs[2]);
+      LLVMBuildStore(builder, face, zs[3]);
+
+      lp_build_endif(&edge_if);
+
+      x00 = LLVMBuildLoad(builder, xs[0], "");
+      x01 = LLVMBuildLoad(builder, xs[1], "");
+      x10 = LLVMBuildLoad(builder, xs[2], "");
+      x11 = LLVMBuildLoad(builder, xs[3], "");
+      y00 = LLVMBuildLoad(builder, ys[0], "");
+      y01 = LLVMBuildLoad(builder, ys[1], "");
+      y10 = LLVMBuildLoad(builder, ys[2], "");
+      y11 = LLVMBuildLoad(builder, ys[3], "");
+      z00 = LLVMBuildLoad(builder, zs[0], "");
+      z01 = LLVMBuildLoad(builder, zs[1], "");
+      z10 = LLVMBuildLoad(builder, zs[2], "");
+      z11 = LLVMBuildLoad(builder, zs[3], "");
    }
 
    if (linear_mask) {
       /*
-       * Whack filter weights into place. Whatever pixel had more weight is
+       * Whack filter weights into place. Whatever texel had more weight is
        * the one which should have been selected by nearest filtering hence
        * just use 100% weight for it.
        */
@@ -937,12 +1123,12 @@ lp_build_sample_image_linear(struct lp_build_sample_context *bld,
    /* get x0/x1 texels */
    lp_build_sample_texel_soa(bld,
                              width_vec, height_vec, depth_vec,
-                             x0, y0, z0,
+                             x00, y00, z00,
                              row_stride_vec, img_stride_vec,
                              data_ptr, mipoffsets, neighbors[0][0]);
    lp_build_sample_texel_soa(bld,
                              width_vec, height_vec, depth_vec,
-                             x1, y0, z0,
+                             x01, y01, z01,
                              row_stride_vec, img_stride_vec,
                              data_ptr, mipoffsets, neighbors[0][1]);
 
@@ -968,19 +1154,124 @@ lp_build_sample_image_linear(struct lp_build_sample_context *bld,
    }
    else {
       /* 2D/3D texture */
-      LLVMValueRef colors0[4];
+      struct lp_build_if_state corner_if;
+      LLVMValueRef colors0[4], colorss[4];
 
       /* get x0/x1 texels at y1 */
       lp_build_sample_texel_soa(bld,
                                 width_vec, height_vec, depth_vec,
-                                x0, y1, z0,
+                                x10, y10, z10,
                                 row_stride_vec, img_stride_vec,
                                 data_ptr, mipoffsets, neighbors[1][0]);
       lp_build_sample_texel_soa(bld,
                                 width_vec, height_vec, depth_vec,
-                                x1, y1, z0,
+                                x11, y11, z11,
                                 row_stride_vec, img_stride_vec,
                                 data_ptr, mipoffsets, neighbors[1][1]);
+
+      /*
+       * To avoid having to duplicate linear_mask / fetch code use
+       * another branch (with corner condition though edge would work
+       * as well) here.
+       */
+      if (accurate_cube_corners) {
+         LLVMValueRef w00, w01, w10, w11, wx0, wy0;
+         LLVMValueRef c_weight, c00, c01, c10, c11;
+         LLVMValueRef have_corner, one_third, tmp;
+
+         colorss[0] = lp_build_alloca(bld->gallivm, coord_bld->vec_type, "cs");
+         colorss[1] = lp_build_alloca(bld->gallivm, coord_bld->vec_type, "cs");
+         colorss[2] = lp_build_alloca(bld->gallivm, coord_bld->vec_type, "cs");
+         colorss[3] = lp_build_alloca(bld->gallivm, coord_bld->vec_type, "cs");
+
+         have_corner = LLVMBuildLoad(builder, have_corners, "");
+
+         lp_build_if(&corner_if, bld->gallivm, have_corner);
+
+         /*
+          * we can't use standard 2d lerp as we need per-element weight
+          * in case of corners, so just calculate bilinear result as
+          * w00*s00 + w01*s01 + w10*s10 + w11*s11.
+          * (This is actually less work than using 2d lerp, 7 vs. 9 instructions,
+          * however calculating the weights needs another 6, so actually probably
+          * not slower than 2d lerp only for 4 channels as weights only need
+          * to be calculated once - of course fixing the weights has additional cost.)
+          */
+         wx0 = lp_build_sub(coord_bld, coord_bld->one, s_fpart);
+         wy0 = lp_build_sub(coord_bld, coord_bld->one, t_fpart);
+         w00 = lp_build_mul(coord_bld, wx0, wy0);
+         w01 = lp_build_mul(coord_bld, s_fpart, wy0);
+         w10 = lp_build_mul(coord_bld, wx0, t_fpart);
+         w11 = lp_build_mul(coord_bld, s_fpart, t_fpart);
+
+         /* find corner weight */
+         c00 = lp_build_and(ivec_bld, fall_off[0], fall_off[2]);
+         c_weight = lp_build_select(coord_bld, c00, w00, coord_bld->zero);
+         c01 = lp_build_and(ivec_bld, fall_off[1], fall_off[2]);
+         c_weight = lp_build_select(coord_bld, c01, w01, c_weight);
+         c10 = lp_build_and(ivec_bld, fall_off[0], fall_off[3]);
+         c_weight = lp_build_select(coord_bld, c10, w10, c_weight);
+         c11 = lp_build_and(ivec_bld, fall_off[1], fall_off[3]);
+         c_weight = lp_build_select(coord_bld, c11, w11, c_weight);
+
+         /*
+          * add 1/3 of the corner weight to each of the 3 other samples
+          * and null out corner weight
+          */
+         one_third = lp_build_const_vec(bld->gallivm, coord_bld->type, 1.0f/3.0f);
+         c_weight = lp_build_mul(coord_bld, c_weight, one_third);
+         w00 = lp_build_add(coord_bld, w00, c_weight);
+         c00 = LLVMBuildBitCast(builder, c00, coord_bld->vec_type, "");
+         w00 = lp_build_andnot(coord_bld, w00, c00);
+         w01 = lp_build_add(coord_bld, w01, c_weight);
+         c01 = LLVMBuildBitCast(builder, c01, coord_bld->vec_type, "");
+         w01 = lp_build_andnot(coord_bld, w01, c01);
+         w10 = lp_build_add(coord_bld, w10, c_weight);
+         c10 = LLVMBuildBitCast(builder, c10, coord_bld->vec_type, "");
+         w10 = lp_build_andnot(coord_bld, w10, c10);
+         w11 = lp_build_add(coord_bld, w11, c_weight);
+         c11 = LLVMBuildBitCast(builder, c11, coord_bld->vec_type, "");
+         w11 = lp_build_andnot(coord_bld, w11, c11);
+
+         if (bld->static_sampler_state->compare_mode == PIPE_TEX_COMPARE_NONE) {
+            for (chan = 0; chan < 4; chan++) {
+               colors0[chan] = lp_build_mul(coord_bld, w00, neighbors[0][0][chan]);
+               tmp = lp_build_mul(coord_bld, w01, neighbors[0][1][chan]);
+               colors0[chan] = lp_build_add(coord_bld, tmp, colors0[chan]);
+               tmp = lp_build_mul(coord_bld, w10, neighbors[1][0][chan]);
+               colors0[chan] = lp_build_add(coord_bld, tmp, colors0[chan]);
+               tmp = lp_build_mul(coord_bld, w11, neighbors[1][1][chan]);
+               colors0[chan] = lp_build_add(coord_bld, tmp, colors0[chan]);
+            }
+         }
+         else {
+            LLVMValueRef cmpval00, cmpval01, cmpval10, cmpval11;
+            cmpval00 = lp_build_sample_comparefunc(bld, coords[4], neighbors[0][0][0]);
+            cmpval01 = lp_build_sample_comparefunc(bld, coords[4], neighbors[0][1][0]);
+            cmpval10 = lp_build_sample_comparefunc(bld, coords[4], neighbors[1][0][0]);
+            cmpval11 = lp_build_sample_comparefunc(bld, coords[4], neighbors[1][1][0]);
+            /* inputs to interpolation are just masks so just add masked weights together */
+            cmpval00 = LLVMBuildBitCast(builder, cmpval00, coord_bld->vec_type, "");
+            cmpval01 = LLVMBuildBitCast(builder, cmpval01, coord_bld->vec_type, "");
+            cmpval10 = LLVMBuildBitCast(builder, cmpval10, coord_bld->vec_type, "");
+            cmpval11 = LLVMBuildBitCast(builder, cmpval11, coord_bld->vec_type, "");
+            colors0[0] = lp_build_and(coord_bld, w00, cmpval00);
+            tmp = lp_build_and(coord_bld, w01, cmpval01);
+            colors0[0] = lp_build_add(coord_bld, tmp, colors0[0]);
+            tmp = lp_build_and(coord_bld, w10, cmpval10);
+            colors0[0] = lp_build_add(coord_bld, tmp, colors0[0]);
+            tmp = lp_build_and(coord_bld, w11, cmpval11);
+            colors0[0] = lp_build_add(coord_bld, tmp, colors0[0]);
+            colors0[1] = colors0[2] = colors0[3] = colors0[0];
+         }
+
+         LLVMBuildStore(builder, colors0[0], colorss[0]);
+         LLVMBuildStore(builder, colors0[1], colorss[1]);
+         LLVMBuildStore(builder, colors0[2], colorss[2]);
+         LLVMBuildStore(builder, colors0[3], colorss[3]);
+
+         lp_build_else(&corner_if);
+      }
 
       if (bld->static_sampler_state->compare_mode == PIPE_TEX_COMPARE_NONE) {
          /* Bilinear interpolate the four samples from the 2D image / 3D slice */
@@ -1005,6 +1296,20 @@ lp_build_sample_image_linear(struct lp_build_sample_context *bld,
          colors0[1] = colors0[2] = colors0[3] = colors0[0];
       }
 
+      if (accurate_cube_corners) {
+         LLVMBuildStore(builder, colors0[0], colorss[0]);
+         LLVMBuildStore(builder, colors0[1], colorss[1]);
+         LLVMBuildStore(builder, colors0[2], colorss[2]);
+         LLVMBuildStore(builder, colors0[3], colorss[3]);
+
+         lp_build_endif(&corner_if);
+
+         colors0[0] = LLVMBuildLoad(builder, colorss[0], "");
+         colors0[1] = LLVMBuildLoad(builder, colorss[1], "");
+         colors0[2] = LLVMBuildLoad(builder, colorss[2], "");
+         colors0[3] = LLVMBuildLoad(builder, colorss[3], "");
+      }
+
       if (dims == 3) {
          LLVMValueRef neighbors1[2][2][4];
          LLVMValueRef colors1[4];
@@ -1012,22 +1317,22 @@ lp_build_sample_image_linear(struct lp_build_sample_context *bld,
          /* get x0/x1/y0/y1 texels at z1 */
          lp_build_sample_texel_soa(bld,
                                    width_vec, height_vec, depth_vec,
-                                   x0, y0, z1,
+                                   x00, y00, z1,
                                    row_stride_vec, img_stride_vec,
                                    data_ptr, mipoffsets, neighbors1[0][0]);
          lp_build_sample_texel_soa(bld,
                                    width_vec, height_vec, depth_vec,
-                                   x1, y0, z1,
+                                   x01, y01, z1,
                                    row_stride_vec, img_stride_vec,
                                    data_ptr, mipoffsets, neighbors1[0][1]);
          lp_build_sample_texel_soa(bld,
                                    width_vec, height_vec, depth_vec,
-                                   x0, y1, z1,
+                                   x10, y10, z1,
                                    row_stride_vec, img_stride_vec,
                                    data_ptr, mipoffsets, neighbors1[1][0]);
          lp_build_sample_texel_soa(bld,
                                    width_vec, height_vec, depth_vec,
-                                   x1, y1, z1,
+                                   x11, y11, z1,
                                    row_stride_vec, img_stride_vec,
                                    data_ptr, mipoffsets, neighbors1[1][1]);
 
@@ -1387,6 +1692,7 @@ lp_build_sample_common(struct lp_build_sample_context *bld,
    const unsigned target = bld->static_texture_state->target;
    LLVMValueRef first_level, cube_rho = NULL;
    LLVMValueRef lod_ipart = NULL;
+   struct lp_derivatives cube_derivs;
 
    /*
    printf("%s mip %d  min %d  mag %d\n", __FUNCTION__,
@@ -1403,7 +1709,8 @@ lp_build_sample_common(struct lp_build_sample_context *bld,
                       mip_filter != PIPE_TEX_MIPFILTER_NONE) &&
                       !bld->static_sampler_state->min_max_lod_equal &&
                       !explicit_lod);
-      lp_build_cube_lookup(bld, coords, derivs, &cube_rho, need_derivs);
+      lp_build_cube_lookup(bld, coords, derivs, &cube_rho, &cube_derivs, need_derivs);
+      derivs = &cube_derivs;
    }
    else if (target == PIPE_TEXTURE_1D_ARRAY ||
             target == PIPE_TEXTURE_2D_ARRAY) {
@@ -2163,9 +2470,24 @@ lp_build_sample_soa(struct gallivm_state *gallivm,
     * avoided like min and max lod being equal.
     */
    bld.num_mips = bld.num_lods = 1;
-   if (lod_property == LP_SAMPLER_LOD_PER_ELEMENT &&
-       (explicit_lod || lod_bias ||
-        (derivs && static_texture_state->target != PIPE_TEXTURE_CUBE))) {
+
+   if ((gallivm_debug & GALLIVM_DEBUG_NO_QUAD_LOD) &&
+       (gallivm_debug & GALLIVM_DEBUG_NO_RHO_APPROX) &&
+       (static_texture_state->target == PIPE_TEXTURE_CUBE) &&
+       (!is_fetch && mip_filter != PIPE_TEX_MIPFILTER_NONE)) {
+      /*
+       * special case for using per-pixel lod even for implicit lod,
+       * which is generally never required (ok by APIs) except to please
+       * some (somewhat broken imho) tests (because per-pixel face selection
+       * can cause derivatives to be different for pixels outside the primitive
+       * due to the major axis division even if pre-project derivatives are
+       * looking normal).
+       */
+      bld.num_mips = type.length;
+      bld.num_lods = type.length;
+   }
+   else if (lod_property == LP_SAMPLER_LOD_PER_ELEMENT ||
+       (explicit_lod || lod_bias || derivs)) {
       if ((is_fetch && target != PIPE_BUFFER) ||
           (!is_fetch && mip_filter != PIPE_TEX_MIPFILTER_NONE)) {
          bld.num_mips = type.length;
@@ -2289,15 +2611,25 @@ lp_build_sample_soa(struct gallivm_state *gallivm,
             use_aos &= lp_is_simple_wrap_mode(derived_sampler_state.wrap_r);
          }
       }
+      if (static_texture_state->target == PIPE_TEXTURE_CUBE &&
+          derived_sampler_state.seamless_cube_map &&
+          (derived_sampler_state.min_img_filter == PIPE_TEX_FILTER_LINEAR ||
+           derived_sampler_state.mag_img_filter == PIPE_TEX_FILTER_LINEAR)) {
+         /* theoretically possible with AoS filtering but not implemented (complex!) */
+         use_aos = 0;
+      }
 
       if ((gallivm_debug & GALLIVM_DEBUG_PERF) &&
           !use_aos && util_format_fits_8unorm(bld.format_desc)) {
          debug_printf("%s: using floating point linear filtering for %s\n",
                       __FUNCTION__, bld.format_desc->short_name);
-         debug_printf("  min_img %d  mag_img %d  mip %d  wraps %d  wrapt %d  wrapr %d\n",
+         debug_printf("  min_img %d  mag_img %d  mip %d  target %d  seamless %d"
+                      "  wraps %d  wrapt %d  wrapr %d\n",
                       derived_sampler_state.min_img_filter,
                       derived_sampler_state.mag_img_filter,
                       derived_sampler_state.min_mip_filter,
+                      static_texture_state->target,
+                      derived_sampler_state.seamless_cube_map,
                       derived_sampler_state.wrap_s,
                       derived_sampler_state.wrap_t,
                       derived_sampler_state.wrap_r);
@@ -2371,9 +2703,15 @@ lp_build_sample_soa(struct gallivm_state *gallivm,
          bld4.texel_type.length = 4;
 
          bld4.num_mips = bld4.num_lods = 1;
+         if ((gallivm_debug & GALLIVM_DEBUG_NO_QUAD_LOD) &&
+             (gallivm_debug & GALLIVM_DEBUG_NO_RHO_APPROX) &&
+             (static_texture_state->target == PIPE_TEXTURE_CUBE) &&
+             (!is_fetch && mip_filter != PIPE_TEX_MIPFILTER_NONE)) {
+            bld4.num_mips = type4.length;
+            bld4.num_lods = type4.length;
+         }
          if (lod_property == LP_SAMPLER_LOD_PER_ELEMENT &&
-             (explicit_lod || lod_bias ||
-              (derivs && static_texture_state->target != PIPE_TEXTURE_CUBE))) {
+             (explicit_lod || lod_bias || derivs)) {
             if ((is_fetch && target != PIPE_BUFFER) ||
                 (!is_fetch && mip_filter != PIPE_TEX_MIPFILTER_NONE)) {
                bld4.num_mips = type4.length;

@@ -827,7 +827,7 @@ const struct function gl_core_functions_possible[] = {
    { "glDrawTransformFeedbackInstanced", 43, -1 },
    { "glDrawTransformFeedbackStreamInstanced", 43, -1 },
 // { "glGetInternalformativ", 43, -1 },                 // XXX: Add to xml
-// { "glGetActiveAtomicCounterBufferiv", 43, -1 },      // XXX: Add to xml
+   { "glGetActiveAtomicCounterBufferiv", 43, -1 },
 // { "glBindImageTexture", 43, -1 },                    // XXX: Add to xml
 // { "glMemoryBarrier", 43, -1 },                       // XXX: Add to xml
    { "glTexStorage1D", 43, -1 },
@@ -920,6 +920,18 @@ const struct function gl_core_functions_possible[] = {
    { "glBeginPerfMonitorAMD", 11, -1 },
    { "glEndPerfMonitorAMD", 11, -1 },
    { "glGetPerfMonitorCounterDataAMD", 11, -1 },
+
+   /* GL_NV_vdpau_interop */
+   { "glVDPAUInitNV", 11, -1 },
+   { "glVDPAUFiniNV", 11, -1 },
+   { "glVDPAURegisterVideoSurfaceNV", 11, -1 },
+   { "glVDPAURegisterOutputSurfaceNV", 11, -1 },
+   { "glVDPAUIsSurfaceNV", 11, -1 },
+   { "glVDPAUUnregisterSurfaceNV", 11, -1 },
+   { "glVDPAUGetSurfaceivNV", 11, -1 },
+   { "glVDPAUSurfaceAccessNV", 11, -1 },
+   { "glVDPAUMapSurfacesNV", 11, -1 },
+   { "glVDPAUUnmapSurfacesNV", 11, -1 },
 
    { NULL, 0, -1 }
 };

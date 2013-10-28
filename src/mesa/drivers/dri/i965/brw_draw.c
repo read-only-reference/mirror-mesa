@@ -398,10 +398,12 @@ static bool brw_try_draw_prims( struct gl_context *ctx,
       if (brw->num_instances != prims[i].num_instances) {
          brw->num_instances = prims[i].num_instances;
          brw->state.dirty.brw |= BRW_NEW_VERTICES;
+         brw_merge_inputs(brw, arrays);
       }
       if (brw->basevertex != prims[i].basevertex) {
          brw->basevertex = prims[i].basevertex;
          brw->state.dirty.brw |= BRW_NEW_VERTICES;
+         brw_merge_inputs(brw, arrays);
       }
       if (brw->gen < 6)
 	 brw_set_prim(brw, &prims[i]);
@@ -461,10 +463,12 @@ void brw_draw_prims( struct gl_context *ctx,
 		     GLboolean index_bounds_valid,
 		     GLuint min_index,
 		     GLuint max_index,
-		     struct gl_transform_feedback_object *tfb_vertcount )
+		     struct gl_transform_feedback_object *unused_tfb_object)
 {
    struct brw_context *brw = brw_context(ctx);
    const struct gl_client_array **arrays = ctx->Array._DrawArrays;
+
+   assert(unused_tfb_object == NULL);
 
    if (!_mesa_check_conditional_render(ctx))
       return;
@@ -479,8 +483,11 @@ void brw_draw_prims( struct gl_context *ctx,
     * get the minimum and maximum of their index buffer so we know what range
     * to upload.
     */
-   if (!vbo_all_varyings_in_vbos(arrays) && !index_bounds_valid)
+   if (!vbo_all_varyings_in_vbos(arrays) && !index_bounds_valid) {
+      perf_debug("Scanning index buffer to compute index buffer bounds.  "
+                 "Use glDrawRangeElements() to avoid this.\n");
       vbo_get_minmax_indices(ctx, prims, ib, &min_index, &max_index, nr_prims);
+   }
 
    /* Do GL_SELECT and GL_FEEDBACK rendering using swrast, even though it
     * won't support all the extensions we support.

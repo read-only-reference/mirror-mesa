@@ -169,8 +169,9 @@ dri_bind_extensions(struct gbm_dri_device *dri,
 static int
 dri_load_driver(struct gbm_dri_device *dri)
 {
-   const __DRIextension **extensions;
+   const __DRIextension **extensions = NULL;
    char path[PATH_MAX], *search_paths, *p, *next, *end;
+   char *get_extensions_name;
 
    search_paths = NULL;
    if (geteuid() == getuid()) {
@@ -209,13 +210,25 @@ dri_load_driver(struct gbm_dri_device *dri)
       return -1;
    }
 
-   extensions = dlsym(dri->driver, __DRI_DRIVER_EXTENSIONS);
+   if (asprintf(&get_extensions_name, "%s_%s",
+                __DRI_DRIVER_GET_EXTENSIONS, dri->base.driver_name) != -1) {
+      const __DRIextension **(*get_extensions)(void);
+
+      get_extensions = dlsym(dri->driver, get_extensions_name);
+      free(get_extensions_name);
+
+      if (get_extensions)
+         extensions = get_extensions();
+   }
+
+   if (!extensions)
+      extensions = dlsym(dri->driver, __DRI_DRIVER_EXTENSIONS);
    if (extensions == NULL) {
       fprintf(stderr, "gbm: driver exports no extensions (%s)", dlerror());
       dlclose(dri->driver);
       return -1;
    }
-
+   dri->driver_extensions = extensions;
 
    if (dri_bind_extensions(dri, gbm_dri_device_extensions, extensions) < 0) {
       dlclose(dri->driver);
@@ -250,9 +263,16 @@ dri_screen_create(struct gbm_dri_device *dri)
    if (dri->dri2 == NULL)
       return -1;
 
-   dri->screen = dri->dri2->createNewScreen(0, dri->base.base.fd,
-                                            dri->extensions,
-                                            &dri->driver_configs, dri);
+   if (dri->dri2->base.version >= 4) {
+      dri->screen = dri->dri2->createNewScreen2(0, dri->base.base.fd,
+                                                dri->extensions,
+                                                dri->driver_extensions,
+                                                &dri->driver_configs, dri);
+   } else {
+      dri->screen = dri->dri2->createNewScreen(0, dri->base.base.fd,
+                                               dri->extensions,
+                                               &dri->driver_configs, dri);
+   }
    if (dri->screen == NULL)
       return -1;
 
@@ -376,7 +396,10 @@ gbm_dri_bo_import(struct gbm_device *gbm,
    {
       struct wl_drm_buffer *wb;
 
-      wb = wayland_drm_buffer_get((struct wl_resource *) buffer);
+      if (!dri->wl_drm)
+         return NULL;
+
+      wb = wayland_drm_buffer_get(dri->wl_drm, (struct wl_resource *) buffer);
       if (!wb)
          return NULL;
 
@@ -388,6 +411,9 @@ gbm_dri_bo_import(struct gbm_device *gbm,
          break;
       case WL_DRM_FORMAT_ARGB8888:
          gbm_format = GBM_FORMAT_ARGB8888;
+         break;
+      case WL_DRM_FORMAT_RGB565:
+         gbm_format = GBM_FORMAT_RGB565;
          break;
       case WL_DRM_FORMAT_YUYV:
          gbm_format = GBM_FORMAT_YUYV;
@@ -547,6 +573,12 @@ gbm_dri_bo_create(struct gbm_device *gbm,
       break;
    case GBM_FORMAT_ABGR8888:
       dri_format = __DRI_IMAGE_FORMAT_ABGR8888;
+      break;
+   case GBM_FORMAT_ARGB2101010:
+      dri_format = __DRI_IMAGE_FORMAT_ARGB2101010;
+      break;
+   case GBM_FORMAT_XRGB2101010:
+      dri_format = __DRI_IMAGE_FORMAT_XRGB2101010;
       break;
    default:
       return NULL;

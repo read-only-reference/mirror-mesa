@@ -26,6 +26,7 @@ extern "C" {
 #include "brw_context.h"
 }
 #include "brw_vs.h"
+#include "brw_vec4_gs.h"
 #include "brw_fs.h"
 #include "glsl/ir_optimization.h"
 #include "glsl/glsl_parser_extras.h"
@@ -68,6 +69,9 @@ brw_shader_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
    struct brw_context *brw = brw_context(ctx);
 
    if (brw->precompile && !brw_fs_precompile(ctx, prog))
+      return false;
+
+   if (brw->precompile && !brw_gs_precompile(ctx, prog))
       return false;
 
    if (brw->precompile && !brw_vs_precompile(ctx, prog))
@@ -168,6 +172,8 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       do_vec_index_to_cond_assign(shader->ir);
       lower_vector_insert(shader->ir, true);
       brw_do_cubemap_normalize(shader->ir);
+      brw_do_lower_offset_arrays(shader->ir);
+      brw_do_lower_unnormalized_offset(shader->ir);
       lower_noise(shader->ir);
       lower_quadop_vector(shader->ir, false);
 
@@ -298,6 +304,7 @@ brw_type_for_base_type(const struct glsl_type *type)
       return brw_type_for_base_type(type->fields.array);
    case GLSL_TYPE_STRUCT:
    case GLSL_TYPE_SAMPLER:
+   case GLSL_TYPE_ATOMIC_UINT:
       /* These should be overridden with the type of the member when
        * dereferenced into.  BRW_REGISTER_TYPE_UD seems like a likely
        * way to trip up if we don't.
@@ -368,9 +375,14 @@ brw_math_function(enum opcode op)
 }
 
 uint32_t
-brw_texture_offset(ir_constant *offset)
+brw_texture_offset(struct gl_context *ctx, ir_constant *offset)
 {
-   assert(offset != NULL);
+   /* If the driver does not support GL_ARB_gpu_shader5, the offset
+    * must be constant.
+    */
+   assert(offset != NULL || ctx->Extensions.ARB_gpu_shader5);
+
+   if (!offset) return 0;  /* nonconstant offset; caller will handle it. */
 
    signed char offsets[3];
    for (unsigned i = 0; i < offset->type->vector_elements; i++)
@@ -437,6 +449,17 @@ brw_instruction_name(enum opcode op)
       return "txb";
    case SHADER_OPCODE_TXF_MS:
       return "txf_ms";
+   case SHADER_OPCODE_TG4:
+      return "tg4";
+   case SHADER_OPCODE_TG4_OFFSET:
+      return "tg4_offset";
+
+   case SHADER_OPCODE_GEN4_SCRATCH_READ:
+      return "gen4_scratch_read";
+   case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
+      return "gen4_scratch_write";
+   case SHADER_OPCODE_GEN7_SCRATCH_READ:
+      return "gen7_scratch_read";
 
    case FS_OPCODE_DDX:
       return "ddx";
@@ -452,11 +475,6 @@ brw_instruction_name(enum opcode op)
       return "cinterp";
    case FS_OPCODE_LINTERP:
       return "linterp";
-
-   case FS_OPCODE_SPILL:
-      return "spill";
-   case FS_OPCODE_UNSPILL:
-      return "unspill";
 
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
       return "uniform_pull_const";
@@ -487,10 +505,6 @@ brw_instruction_name(enum opcode op)
 
    case VS_OPCODE_URB_WRITE:
       return "vs_urb_write";
-   case VS_OPCODE_SCRATCH_READ:
-      return "scratch_read";
-   case VS_OPCODE_SCRATCH_WRITE:
-      return "scratch_write";
    case VS_OPCODE_PULL_CONSTANT_LOAD:
       return "pull_constant_load";
    case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
@@ -532,7 +546,9 @@ backend_instruction::is_tex()
            opcode == SHADER_OPCODE_TXF_MS ||
            opcode == SHADER_OPCODE_TXL ||
            opcode == SHADER_OPCODE_TXS ||
-           opcode == SHADER_OPCODE_LOD);
+           opcode == SHADER_OPCODE_LOD ||
+           opcode == SHADER_OPCODE_TG4 ||
+           opcode == SHADER_OPCODE_TG4_OFFSET);
 }
 
 bool
@@ -567,6 +583,25 @@ backend_instruction::is_control_flow()
    }
 }
 
+bool
+backend_instruction::can_do_source_mods()
+{
+   switch (opcode) {
+   case BRW_OPCODE_ADDC:
+   case BRW_OPCODE_BFE:
+   case BRW_OPCODE_BFI1:
+   case BRW_OPCODE_BFI2:
+   case BRW_OPCODE_BFREV:
+   case BRW_OPCODE_CBIT:
+   case BRW_OPCODE_FBH:
+   case BRW_OPCODE_FBL:
+   case BRW_OPCODE_SUBB:
+      return false;
+   default:
+      return true;
+   }
+}
+
 void
 backend_visitor::dump_instructions()
 {
@@ -576,4 +611,58 @@ backend_visitor::dump_instructions()
       printf("%d: ", ip++);
       dump_instruction(inst);
    }
+}
+
+
+/**
+ * Sets up the starting offsets for the groups of binding table entries
+ * commong to all pipeline stages.
+ *
+ * Unused groups are initialized to 0xd0d0d0d0 to make it obvious that they're
+ * unused but also make sure that addition of small offsets to them will
+ * trigger some of our asserts that surface indices are < BRW_MAX_SURFACES.
+ */
+void
+backend_visitor::assign_common_binding_table_offsets(uint32_t next_binding_table_offset)
+{
+   int num_textures = _mesa_fls(prog->SamplersUsed);
+
+   stage_prog_data->binding_table.texture_start = next_binding_table_offset;
+   next_binding_table_offset += num_textures;
+
+   if (shader) {
+      stage_prog_data->binding_table.ubo_start = next_binding_table_offset;
+      next_binding_table_offset += shader->base.NumUniformBlocks;
+   } else {
+      stage_prog_data->binding_table.ubo_start = 0xd0d0d0d0;
+   }
+
+   if (INTEL_DEBUG & DEBUG_SHADER_TIME) {
+      stage_prog_data->binding_table.shader_time_start = next_binding_table_offset;
+      next_binding_table_offset++;
+   } else {
+      stage_prog_data->binding_table.shader_time_start = 0xd0d0d0d0;
+   }
+
+   if (prog->UsesGather) {
+      stage_prog_data->binding_table.gather_texture_start = next_binding_table_offset;
+      next_binding_table_offset += num_textures;
+   } else {
+      stage_prog_data->binding_table.gather_texture_start = 0xd0d0d0d0;
+   }
+
+   if (shader_prog && shader_prog->NumAtomicBuffers) {
+      stage_prog_data->binding_table.abo_start = next_binding_table_offset;
+      next_binding_table_offset += shader_prog->NumAtomicBuffers;
+   } else {
+      stage_prog_data->binding_table.abo_start = 0xd0d0d0d0;
+   }
+
+   /* This may or may not be used depending on how the compile goes. */
+   stage_prog_data->binding_table.pull_constants_start = next_binding_table_offset;
+   next_binding_table_offset++;
+
+   assert(next_binding_table_offset <= BRW_MAX_SURFACES);
+
+   /* prog_data->base.binding_table.size will be set by mark_surface_used. */
 }

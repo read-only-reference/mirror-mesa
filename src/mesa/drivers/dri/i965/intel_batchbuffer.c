@@ -70,6 +70,8 @@ intel_batchbuffer_init(struct brw_context *brw)
 						      4096, 4096);
    }
 
+   brw->batch.need_workaround_flush = true;
+
    if (!brw->has_llc) {
       brw->batch.cpu_map = malloc(BATCH_SZ);
       brw->batch.map = brw->batch.cpu_map;
@@ -170,6 +172,68 @@ do_batch_dump(struct brw_context *brw)
    }
 }
 
+/**
+ * Called when starting a new batch buffer.
+ */
+static void
+brw_new_batch(struct brw_context *brw)
+{
+   /* If the kernel supports hardware contexts, then most hardware state is
+    * preserved between batches; we only need to re-emit state that is required
+    * to be in every batch.  Otherwise we need to re-emit all the state that
+    * would otherwise be stored in the context (which for all intents and
+    * purposes means everything).
+    */
+   if (brw->hw_ctx == NULL)
+      brw->state.dirty.brw |= BRW_NEW_CONTEXT;
+
+   brw->state.dirty.brw |= BRW_NEW_BATCH;
+
+   /* Assume that the last command before the start of our batch was a
+    * primitive, for safety.
+    */
+   brw->batch.need_workaround_flush = true;
+
+   brw->state_batch_count = 0;
+
+   brw->ib.type = -1;
+
+   /* Mark that the current program cache BO has been used by the GPU.
+    * It will be reallocated if we need to put new programs in for the
+    * next batch.
+    */
+   brw->cache.bo_used_by_gpu = true;
+
+   /* We need to periodically reap the shader time results, because rollover
+    * happens every few seconds.  We also want to see results every once in a
+    * while, because many programs won't cleanly destroy our context, so the
+    * end-of-run printout may not happen.
+    */
+   if (INTEL_DEBUG & DEBUG_SHADER_TIME)
+      brw_collect_and_report_shader_time(brw);
+}
+
+/**
+ * Called from intel_batchbuffer_flush before emitting MI_BATCHBUFFER_END and
+ * sending it off.
+ *
+ * This function can emit state (say, to preserve registers that aren't saved
+ * between batches).  All of this state MUST fit in the reserved space at the
+ * end of the batchbuffer.  If you add more GPU state, increase the reserved
+ * space by updating the BATCH_RESERVED macro.
+ */
+static void
+brw_finish_batch(struct brw_context *brw)
+{
+   brw_emit_query_end(brw);
+
+   if (brw->curbe.curbe_bo) {
+      drm_intel_gem_bo_unmap_gtt(brw->curbe.curbe_bo);
+      drm_intel_bo_unreference(brw->curbe.curbe_bo);
+      brw->curbe.curbe_bo = NULL;
+   }
+}
+
 /* TODO: Push this whole function into bufmgr.
  */
 static int
@@ -222,7 +286,7 @@ do_flush_locked(struct brw_context *brw)
       fprintf(stderr, "intel_do_flush_locked failed: %s\n", strerror(-ret));
       exit(1);
    }
-   brw->vtbl.new_batch(brw);
+   brw_new_batch(brw);
 
    return ret;
 }
@@ -254,8 +318,7 @@ _intel_batchbuffer_flush(struct brw_context *brw,
 
    brw->batch.reserved_space = 0;
 
-   if (brw->vtbl.finish_batch)
-      brw->vtbl.finish_batch(brw);
+   brw_finish_batch(brw);
 
    /* Mark the end of the buffer. */
    intel_batchbuffer_emit_dword(brw, MI_BATCH_BUFFER_END);

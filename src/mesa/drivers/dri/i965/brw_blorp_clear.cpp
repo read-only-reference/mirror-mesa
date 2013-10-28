@@ -127,6 +127,8 @@ brw_blorp_const_color_program::brw_blorp_const_color_program(
      clear_rgba(),
      base_mrf(0)
 {
+   prog_data.first_curbe_grf = 0;
+   prog_data.persample_msaa_dispatch = false;
    brw_init_compile(brw, &func, mem_ctx);
 }
 
@@ -186,7 +188,7 @@ brw_blorp_clear_params::brw_blorp_clear_params(struct brw_context *brw,
    struct gl_context *ctx = &brw->ctx;
    struct intel_renderbuffer *irb = intel_renderbuffer(rb);
 
-   dst.set(brw, irb->mt, irb->mt_level, irb->mt_layer);
+   dst.set(brw, irb->mt, irb->mt_level, irb->mt_layer, true);
 
    /* Override the surface format according to the context's sRGB rules. */
    gl_format format = _mesa_get_render_format(ctx, irb->mt->format);
@@ -305,7 +307,7 @@ brw_blorp_rt_resolve_params::brw_blorp_rt_resolve_params(
       struct brw_context *brw,
       struct intel_mipmap_tree *mt)
 {
-   dst.set(brw, mt, 0 /* level */, 0 /* layer */);
+   dst.set(brw, mt, 0 /* level */, 0 /* layer */, true);
 
    /* From the Ivy Bridge PRM, Vol2 Part1 11.9 "Render Target Resolve":
     *
@@ -451,16 +453,16 @@ brw_blorp_clear_color(struct brw_context *brw, struct gl_framebuffer *fb,
     * see if any require fallback, and fall back for all if any of them need
     * to.
     */
-   for (unsigned buf = 0; buf < ctx->DrawBuffer->_NumColorDrawBuffers; buf++) {
-      struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[buf];
+   for (unsigned buf = 0; buf < fb->_NumColorDrawBuffers; buf++) {
+      struct gl_renderbuffer *rb = fb->_ColorDrawBuffers[buf];
       struct intel_renderbuffer *irb = intel_renderbuffer(rb);
 
       if (irb && irb->mt->msaa_layout != INTEL_MSAA_LAYOUT_NONE)
          return false;
    }
 
-   for (unsigned buf = 0; buf < ctx->DrawBuffer->_NumColorDrawBuffers; buf++) {
-      struct gl_renderbuffer *rb = ctx->DrawBuffer->_ColorDrawBuffers[buf];
+   for (unsigned buf = 0; buf < fb->_NumColorDrawBuffers; buf++) {
+      struct gl_renderbuffer *rb = fb->_ColorDrawBuffers[buf];
       struct intel_renderbuffer *irb = intel_renderbuffer(rb);
 
       /* If this is an ES2 context or GL_ARB_ES2_compatibility is supported,

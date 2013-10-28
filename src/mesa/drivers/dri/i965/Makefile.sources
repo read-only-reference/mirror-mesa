@@ -7,7 +7,7 @@ i965_FILES = \
 	intel_blit.c \
 	intel_buffer_objects.c \
 	intel_buffers.c \
-	intel_context.c \
+	intel_debug.c \
 	intel_extensions.c \
 	intel_fbo.c \
 	intel_mipmap_tree.c \
@@ -44,6 +44,7 @@ i965_FILES = \
 	brw_context.c \
 	brw_cubemap_normalize.cpp \
 	brw_curbe.c \
+	brw_device_info.c \
 	brw_disasm.c \
 	brw_draw.c \
 	brw_draw_upload.c \
@@ -67,6 +68,8 @@ i965_FILES = \
 	brw_gs_surface_state.c \
 	brw_interpolation_map.c \
 	brw_lower_texture_gradients.cpp \
+	brw_lower_offset_array.cpp \
+	brw_lower_unnormalized_offset.cpp \
 	brw_misc_state.c \
 	brw_object_purgeable.c \
 	brw_performance_monitor.c \
@@ -100,7 +103,6 @@ i965_FILES = \
 	brw_vs.c \
 	brw_vs_state.c \
 	brw_vs_surface_state.c \
-	brw_vtbl.c \
 	brw_wm.c \
 	brw_wm_iz.cpp \
 	brw_wm_sampler_state.c \

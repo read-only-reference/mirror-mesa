@@ -140,6 +140,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	switch (param) {
 	/* Supported features (boolean caps). */
 	case PIPE_CAP_NPOT_TEXTURES:
+	case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
 	case PIPE_CAP_TWO_SIDED_STENCIL:
 	case PIPE_CAP_ANISOTROPIC_FILTER:
 	case PIPE_CAP_POINT_SPRITE:
@@ -267,6 +268,8 @@ static int
 fd_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 		enum pipe_shader_cap param)
 {
+	struct fd_screen *screen = fd_screen(pscreen);
+
 	switch(shader)
 	{
 	case PIPE_SHADER_FRAGMENT:
@@ -293,13 +296,13 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 	case PIPE_SHADER_CAP_MAX_INPUTS:
 		return 32;
 	case PIPE_SHADER_CAP_MAX_TEMPS:
-		return 256; /* Max native temporaries. */
+		return 64; /* Max native temporaries. */
 	case PIPE_SHADER_CAP_MAX_ADDRS:
-		/* XXX Isn't this equal to TEMPS? */
 		return 1; /* Max native address registers */
 	case PIPE_SHADER_CAP_MAX_CONSTS:
+		return (screen->gpu_id >= 300) ? 1024 : 64;
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
-		return 64;
+		return 1;
 	case PIPE_SHADER_CAP_MAX_PREDS:
 		return 0; /* nothing uses this */
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:

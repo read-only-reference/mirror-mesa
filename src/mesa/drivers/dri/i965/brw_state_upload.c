@@ -204,10 +204,13 @@ static const struct brw_tracked_state *gen7_atoms[] =
     */
    &brw_vs_pull_constants,
    &brw_vs_ubo_surfaces,
+   &brw_vs_abo_surfaces,
    &brw_gs_pull_constants,
    &brw_gs_ubo_surfaces,
+   &brw_gs_abo_surfaces,
    &brw_wm_pull_constants,
    &brw_wm_ubo_surfaces,
+   &brw_wm_abo_surfaces,
    &gen6_renderbuffer_surfaces,
    &brw_texture_surfaces,
    &brw_vs_binding_table,
@@ -263,6 +266,7 @@ brw_upload_initial_gpu_state(struct brw_context *brw)
 
 void brw_init_state( struct brw_context *brw )
 {
+   struct gl_context *ctx = &brw->ctx;
    const struct brw_tracked_state **atoms;
    int num_atoms;
 
@@ -291,6 +295,19 @@ void brw_init_state( struct brw_context *brw )
    }
 
    brw_upload_initial_gpu_state(brw);
+
+   brw->state.dirty.mesa = ~0;
+   brw->state.dirty.brw = ~0;
+
+   /* Make sure that brw->state.dirty.brw has enough bits to hold all possible
+    * dirty flags.
+    */
+   STATIC_ASSERT(BRW_NUM_STATE_BITS <= 8 * sizeof(brw->state.dirty.brw));
+
+   ctx->DriverFlags.NewTransformFeedback = BRW_NEW_TRANSFORM_FEEDBACK;
+   ctx->DriverFlags.NewRasterizerDiscard = BRW_NEW_RASTERIZER_DISCARD;
+   ctx->DriverFlags.NewUniformBuffer = BRW_NEW_UNIFORM_BUFFER;
+   ctx->DriverFlags.NewAtomicBuffer = BRW_NEW_ATOMIC_BUFFER;
 }
 
 
@@ -398,6 +415,7 @@ static struct dirty_bit_map brw_bits[] = {
    DEFINE_BIT(BRW_NEW_RASTERIZER_DISCARD),
    DEFINE_BIT(BRW_NEW_STATS_WM),
    DEFINE_BIT(BRW_NEW_UNIFORM_BUFFER),
+   DEFINE_BIT(BRW_NEW_ATOMIC_BUFFER),
    DEFINE_BIT(BRW_NEW_META_IN_PROGRESS),
    DEFINE_BIT(BRW_NEW_INTERPOLATION_MAP),
    DEFINE_BIT(BRW_NEW_PUSH_CONSTANT_ALLOCATION),
@@ -471,7 +489,8 @@ void brw_upload_state(struct brw_context *brw)
    state->brw |= ctx->NewDriverState;
    ctx->NewDriverState = 0;
 
-   if (brw->emit_state_always) {
+   if (0) {
+      /* Always re-emit all state. */
       state->mesa |= ~0;
       state->brw |= ~0;
       state->cache |= ~0;

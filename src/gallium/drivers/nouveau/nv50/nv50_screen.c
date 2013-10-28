@@ -103,6 +103,7 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_SWIZZLE:
    case PIPE_CAP_TEXTURE_SHADOW_MAP:
    case PIPE_CAP_NPOT_TEXTURES:
+   case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
    case PIPE_CAP_ANISOTROPIC_FILTER:
    case PIPE_CAP_SCALED_RESOLVE:
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
@@ -249,7 +250,7 @@ nv50_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
    case PIPE_SHADER_CAP_INTEGERS:
       return 1;
    case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
-      return 32;
+      return MIN2(32, PIPE_MAX_SAMPLERS);
    default:
       NOUVEAU_ERR("unknown PIPE_SHADER_CAP %d\n", param);
       return 0;

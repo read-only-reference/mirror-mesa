@@ -33,14 +33,34 @@
 #ifndef BRWCONTEXT_INC
 #define BRWCONTEXT_INC
 
-#include "intel_context.h"
-#include "brw_structs.h"
+#include <stdbool.h>
+#include <string.h>
 #include "main/imports.h"
 #include "main/macros.h"
+#include "main/mm.h"
+#include "main/mtypes.h"
+#include "brw_structs.h"
+
+#ifdef __cplusplus
+extern "C" {
+	/* Evil hack for using libdrm in a c++ compiler. */
+        #define virtual virt
+#endif
+
+#include <drm.h>
+#include <intel_bufmgr.h>
+#include <i915_drm.h>
+#ifdef __cplusplus
+	#undef virtual
+}
+#endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+#include "intel_debug.h"
+#include "intel_screen.h"
+#include "intel_tex_obj.h"
 
 /* Glossary:
  *
@@ -119,6 +139,9 @@ extern "C" {
  * Handles blending and (presumably) depth and stencil testing.
  */
 
+#define INTEL_WRITE_PART  0x1
+#define INTEL_WRITE_FULL  0x2
+#define INTEL_READ        0x4
 
 #define BRW_MAX_CURBE                    (32*16)
 
@@ -158,6 +181,7 @@ enum brw_state_id {
    BRW_STATE_RASTERIZER_DISCARD,
    BRW_STATE_STATS_WM,
    BRW_STATE_UNIFORM_BUFFER,
+   BRW_STATE_ATOMIC_BUFFER,
    BRW_STATE_META_IN_PROGRESS,
    BRW_STATE_INTERPOLATION_MAP,
    BRW_STATE_PUSH_CONSTANT_ALLOCATION,
@@ -196,6 +220,7 @@ enum brw_state_id {
 #define BRW_NEW_RASTERIZER_DISCARD	(1 << BRW_STATE_RASTERIZER_DISCARD)
 #define BRW_NEW_STATS_WM		(1 << BRW_STATE_STATS_WM)
 #define BRW_NEW_UNIFORM_BUFFER          (1 << BRW_STATE_UNIFORM_BUFFER)
+#define BRW_NEW_ATOMIC_BUFFER           (1 << BRW_STATE_ATOMIC_BUFFER)
 #define BRW_NEW_META_IN_PROGRESS        (1 << BRW_STATE_META_IN_PROGRESS)
 #define BRW_NEW_INTERPOLATION_MAP       (1 << BRW_STATE_INTERPOLATION_MAP)
 #define BRW_NEW_PUSH_CONSTANT_ALLOCATION (1 << BRW_STATE_PUSH_CONSTANT_ALLOCATION)
@@ -305,6 +330,28 @@ struct brw_shader {
    struct exec_list *ir;
 };
 
+/* Note: If adding fields that need anything besides a normal memcmp() for
+ * comparing them, be sure to go fix the the stage-specific
+ * prog_data_compare().
+ */
+struct brw_stage_prog_data {
+   struct {
+      /** size of our binding table. */
+      uint32_t size_bytes;
+
+      /** @{
+       * surface indices for the various groups of surfaces
+       */
+      uint32_t pull_constants_start;
+      uint32_t texture_start;
+      uint32_t gather_texture_start;
+      uint32_t ubo_start;
+      uint32_t abo_start;
+      uint32_t shader_time_start;
+      /** @} */
+   } binding_table;
+};
+
 /* Data about a particular attempt to compile a program.  Note that
  * there can be many of these, each in a different GL state
  * corresponding to a different brw_wm_prog_key struct, with different
@@ -314,6 +361,8 @@ struct brw_shader {
  * struct!
  */
 struct brw_wm_prog_data {
+   struct brw_stage_prog_data base;
+
    GLuint curb_read_length;
    GLuint num_varying_inputs;
 
@@ -323,12 +372,17 @@ struct brw_wm_prog_data {
    GLuint reg_blocks_16;
    GLuint total_scratch;
 
-   unsigned binding_table_size;
+   struct {
+      /** @{
+       * surface indices the WM-specific surfaces
+       */
+      uint32_t render_target_start;
+      /** @} */
+   } binding_table;
 
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params;
    bool dual_src_blend;
-   int dispatch_width;
    uint32_t prog_offset_16;
 
    /**
@@ -521,6 +575,7 @@ struct brw_ff_gs_prog_data {
  * this struct!
  */
 struct brw_vec4_prog_data {
+   struct brw_stage_prog_data base;
    struct brw_vue_map vue_map;
 
    /**
@@ -541,8 +596,6 @@ struct brw_vec4_prog_data {
     * is the size of the URB entry used for output.
     */
    GLuint urb_entry_size;
-
-   unsigned binding_table_size;
 
    /* These pointers must appear last.  See brw_vec4_prog_data_compare(). */
    const float **param;
@@ -591,6 +644,12 @@ struct brw_gs_prog_data
    unsigned control_data_format;
 
    bool include_primitive_id;
+
+   /**
+    * True if the thread should be dispatched in DUAL_INSTANCE mode, false if
+    * it should be dispatched in DUAL_OBJECT mode.
+    */
+   bool dual_instanced_dispatch;
 };
 
 /** Number of texture sampler units */
@@ -598,6 +657,9 @@ struct brw_gs_prog_data
 
 /** Max number of render targets in a shader */
 #define BRW_MAX_DRAW_BUFFERS 8
+
+/** Max number of atomic counter buffer objects in a shader */
+#define BRW_MAX_ABO 4
 
 /**
  * Max number of binding table entries used for stream output.
@@ -627,79 +689,11 @@ struct brw_gs_prog_data
 /** Maximum number of actual buffers used for stream output */
 #define BRW_MAX_SOL_BUFFERS 4
 
-#define BRW_MAX_WM_UBOS              12
-#define BRW_MAX_VS_UBOS              12
-
-/**
- * Helpers to create Surface Binding Table indexes for draw buffers,
- * textures, and constant buffers.
- *
- * Shader threads access surfaces via numeric handles, rather than directly
- * using pointers.  The binding table maps these numeric handles to the
- * address of the actual buffer.
- *
- * For example, a shader might ask to sample from "surface 7."  In this case,
- * bind[7] would contain a pointer to a texture.
- *
- * Currently, our WM binding tables are (arbitrarily) programmed as follows:
- *
- *    +-------------------------------+
- *    |   0 | Draw buffer 0           |
- *    |   . |     .                   |
- *    |   : |     :                   |
- *    |   7 | Draw buffer 7           |
- *    |-----|-------------------------|
- *    |   8 | WM Pull Constant Buffer |
- *    |-----|-------------------------|
- *    |   9 | Texture 0               |
- *    |   . |     .                   |
- *    |   : |     :                   |
- *    |  24 | Texture 15              |
- *    |-----|-------------------------|
- *    |  25 | UBO 0                   |
- *    |   . |     .                   |
- *    |   : |     :                   |
- *    |  36 | UBO 11                  |
- *    +-------------------------------+
- *
- * Our VS (and Gen7 GS) binding tables are programmed as follows:
- *
- *    +-----+-------------------------+
- *    |   0 | Pull Constant Buffer    |
- *    +-----+-------------------------+
- *    |   1 | Texture 0               |
- *    |   . |     .                   |
- *    |   : |     :                   |
- *    |  16 | Texture 15              |
- *    +-----+-------------------------+
- *    |  17 | UBO 0                   |
- *    |   . |     .                   |
- *    |   : |     :                   |
- *    |  28 | UBO 11                  |
- *    +-------------------------------+
- *
- * Our (gen6) GS binding tables are programmed as follows:
- *
- *    +-----+-------------------------+
- *    |   0 | SOL Binding 0           |
- *    |   . |     .                   |
- *    |   : |     :                   |
- *    |  63 | SOL Binding 63          |
- *    +-----+-------------------------+
- */
-#define SURF_INDEX_DRAW(d)           (d)
-#define SURF_INDEX_FRAG_CONST_BUFFER (BRW_MAX_DRAW_BUFFERS + 1)
-#define SURF_INDEX_TEXTURE(t)        (BRW_MAX_DRAW_BUFFERS + 2 + (t))
-#define SURF_INDEX_WM_UBO(u)         (SURF_INDEX_TEXTURE(BRW_MAX_TEX_UNIT) + u)
-#define SURF_INDEX_WM_SHADER_TIME    (SURF_INDEX_WM_UBO(12))
-/** Maximum size of the binding table. */
-#define BRW_MAX_WM_SURFACES          (SURF_INDEX_WM_SHADER_TIME + 1)
-
-#define SURF_INDEX_VEC4_CONST_BUFFER (0)
-#define SURF_INDEX_VEC4_TEXTURE(t)   (SURF_INDEX_VEC4_CONST_BUFFER + 1 + (t))
-#define SURF_INDEX_VEC4_UBO(u)       (SURF_INDEX_VEC4_TEXTURE(BRW_MAX_TEX_UNIT) + u)
-#define SURF_INDEX_VEC4_SHADER_TIME  (SURF_INDEX_VEC4_UBO(12))
-#define BRW_MAX_VEC4_SURFACES        (SURF_INDEX_VEC4_SHADER_TIME + 1)
+#define BRW_MAX_SURFACES   (BRW_MAX_DRAW_BUFFERS +                      \
+                            BRW_MAX_TEX_UNIT * 2 + /* normal, gather */ \
+                            12 + /* ubo */                              \
+                            BRW_MAX_ABO +                               \
+                            2 /* shader time, pull constants */)
 
 #define SURF_INDEX_GEN6_SOL_BINDING(t) (t)
 #define BRW_MAX_GEN6_GS_SURFACES       SURF_INDEX_GEN6_SOL_BINDING(BRW_MAX_SOL_BINDINGS)
@@ -755,8 +749,7 @@ struct brw_cache_item {
 };   
 
 
-typedef bool (*cache_aux_compare_func)(const void *a, const void *b,
-                                       int aux_size, const void *key);
+typedef bool (*cache_aux_compare_func)(const void *a, const void *b);
 typedef void (*cache_aux_free_func)(const void *aux);
 
 struct brw_cache {
@@ -860,12 +853,77 @@ struct brw_query_object {
    int last_index;
 };
 
+struct intel_sync_object {
+   struct gl_sync_object Base;
+
+   /** Batch associated with this sync object */
+   drm_intel_bo *bo;
+};
+
+struct intel_batchbuffer {
+   /** Current batchbuffer being queued up. */
+   drm_intel_bo *bo;
+   /** Last BO submitted to the hardware.  Used for glFinish(). */
+   drm_intel_bo *last_bo;
+   /** BO for post-sync nonzero writes for gen6 workaround. */
+   drm_intel_bo *workaround_bo;
+   bool need_workaround_flush;
+
+   struct cached_batch_item *cached_items;
+
+   uint16_t emit, total;
+   uint16_t used, reserved_space;
+   uint32_t *map;
+   uint32_t *cpu_map;
+#define BATCH_SZ (8192*sizeof(uint32_t))
+
+   uint32_t state_batch_offset;
+   bool is_blit;
+   bool needs_sol_reset;
+
+   struct {
+      uint16_t used;
+      int reloc_count;
+   } saved;
+};
+
+#define BRW_MAX_XFB_STREAMS 4
+
+struct brw_transform_feedback_object {
+   struct gl_transform_feedback_object base;
+
+   /** A buffer to hold SO_WRITE_OFFSET(n) values while paused. */
+   drm_intel_bo *offset_bo;
+
+   /** The most recent primitive mode (GL_TRIANGLES/GL_POINTS/GL_LINES). */
+   GLenum primitive_mode;
+
+   /**
+    * Count of primitives generated during this transform feedback operation.
+    *  @{
+    */
+   uint64_t prims_generated[BRW_MAX_XFB_STREAMS];
+   drm_intel_bo *prim_count_bo;
+   unsigned prim_count_buffer_index; /**< in number of uint64_t units */
+   /** @} */
+
+   /**
+    * Number of vertices written between last Begin/EndTransformFeedback().
+    *
+    * Used to implement DrawTransformFeedback().
+    */
+   uint64_t vertices_written[BRW_MAX_XFB_STREAMS];
+   bool vertices_written_valid;
+};
 
 /**
- * Data shared between brw_context::vs and brw_context::gs
+ * Data shared between each programmable stage in the pipeline (vs, gs, and
+ * wm).
  */
 struct brw_stage_state
 {
+   struct brw_stage_prog_data *prog_data;
+
    /**
     * Optional scratch buffer used to store spilled register values and
     * variably-indexed GRF arrays.
@@ -886,7 +944,7 @@ struct brw_stage_state
 
    /* Binding table: pointers to SURFACE_STATE entries. */
    uint32_t bind_bo_offset;
-   uint32_t surf_offset[BRW_MAX_WM_SURFACES];
+   uint32_t surf_offset[BRW_MAX_SURFACES];
 
    /** SAMPLER_STATE count and table offset */
    uint32_t sampler_count;
@@ -906,13 +964,10 @@ struct brw_context
 
    struct
    {
-      void (*destroy) (struct brw_context * brw);
-      void (*finish_batch) (struct brw_context * brw);
-      void (*new_batch) (struct brw_context * brw);
-
       void (*update_texture_surface)(struct gl_context *ctx,
                                      unsigned unit,
-                                     uint32_t *surf_offset);
+                                     uint32_t *surf_offset,
+                                     bool for_gather);
       void (*update_renderbuffer_surface)(struct brw_context *brw,
 					  struct gl_renderbuffer *rb,
 					  bool layered,
@@ -925,6 +980,13 @@ struct brw_context
 				      uint32_t size,
 				      uint32_t *out_offset,
                                       bool dword_pitch);
+
+      void (*create_raw_surface)(struct brw_context *brw,
+                                 drm_intel_bo *bo,
+                                 uint32_t offset,
+                                 uint32_t size,
+                                 uint32_t *out_offset,
+                                 bool rw);
 
       /** Upload a SAMPLER_STATE table. */
       void (*upload_sampler_state_table)(struct brw_context *brw,
@@ -1005,6 +1067,7 @@ struct brw_context
    bool always_flush_cache;
    bool disable_throttling;
    bool precompile;
+   bool disable_derivative_optimization;
 
    driOptionCache optionCache;
    /** @} */
@@ -1022,8 +1085,6 @@ struct brw_context
 
    uint32_t max_gtt_map_object_size;
 
-   bool emit_state_always;
-
    int gen;
    int gt;
 
@@ -1039,7 +1100,6 @@ struct brw_context
    bool has_surface_tile_offset;
    bool has_compr4;
    bool has_negative_rhw_bug;
-   bool has_aa_line_parameters;
    bool has_pln;
 
    /**
@@ -1282,10 +1342,11 @@ struct brw_context
       struct {
          struct ra_regs *regs;
 
-         /** Array of the ra classes for the unaligned contiguous
-          * register block sizes used.
+         /**
+          * Array of the ra classes for the unaligned contiguous register
+          * block sizes used, indexed by register size.
           */
-         int *classes;
+         int classes[16];
 
          /**
           * Mapping for register-allocated objects in *regs to the first
@@ -1383,15 +1444,38 @@ struct brw_context
                           GLint x, GLint y, GLsizei width, GLsizei height);
 };
 
+static INLINE bool
+is_power_of_two(uint32_t value)
+{
+   return (value & (value - 1)) == 0;
+}
+
 /*======================================================================
  * brw_vtbl.c
  */
 void brwInitVtbl( struct brw_context *brw );
 
+/* brw_clear.c */
+extern void intelInitClearFuncs(struct dd_function_table *functions);
+
 /*======================================================================
  * brw_context.c
  */
-bool brwCreateContext(int api,
+extern void intelFinish(struct gl_context * ctx);
+
+enum {
+   DRI_CONF_BO_REUSE_DISABLED,
+   DRI_CONF_BO_REUSE_ALL
+};
+
+void intel_update_renderbuffers(__DRIcontext *context,
+                                __DRIdrawable *drawable);
+void intel_prepare_render(struct brw_context *brw);
+
+void intel_resolve_for_dri2_flush(struct brw_context *brw,
+                                  __DRIdrawable *drawable);
+
+bool brwCreateContext(gl_api api,
 		      const struct gl_config *mesaVis,
 		      __DRIcontext *driContextPriv,
                       unsigned major_version,
@@ -1425,6 +1509,8 @@ void brw_emit_query_end(struct brw_context *brw);
 
 /** gen6_queryobj.c */
 void gen6_init_queryobj_functions(struct dd_function_table *functions);
+void brw_store_register_mem64(struct brw_context *brw,
+                              drm_intel_bo *bo, uint32_t reg, int idx);
 
 /*======================================================================
  * brw_state_dump.c
@@ -1489,7 +1575,12 @@ brw_update_sol_surface(struct brw_context *brw,
                        unsigned stride_dwords, unsigned offset_dwords);
 void brw_upload_ubo_surfaces(struct brw_context *brw,
 			     struct gl_shader *shader,
-			     uint32_t *surf_offsets);
+                             struct brw_stage_state *stage_state,
+                             struct brw_stage_prog_data *prog_data);
+void brw_upload_abo_surfaces(struct brw_context *brw,
+                             struct gl_shader_program *prog,
+                             struct brw_stage_state *stage_state,
+                             struct brw_stage_prog_data *prog_data);
 
 /* brw_surface_formats.c */
 bool brw_is_hiz_depth_format(struct brw_context *ctx, gl_format format);
@@ -1499,13 +1590,34 @@ bool brw_render_target_supported(struct brw_context *brw,
 /* brw_performance_monitor.c */
 void brw_init_performance_monitors(struct brw_context *brw);
 
+/* intel_extensions.c */
+extern void intelInitExtensions(struct gl_context *ctx);
+
+/* intel_state.c */
+extern int intel_translate_shadow_compare_func(GLenum func);
+extern int intel_translate_compare_func(GLenum func);
+extern int intel_translate_stencil_op(GLenum op);
+extern int intel_translate_logic_op(GLenum opcode);
+
+/* intel_syncobj.c */
+void intel_init_syncobj_functions(struct dd_function_table *functions);
+
 /* gen6_sol.c */
+struct gl_transform_feedback_object *
+brw_new_transform_feedback(struct gl_context *ctx, GLuint name);
+void
+brw_delete_transform_feedback(struct gl_context *ctx,
+                              struct gl_transform_feedback_object *obj);
 void
 brw_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
 			     struct gl_transform_feedback_object *obj);
 void
 brw_end_transform_feedback(struct gl_context *ctx,
                            struct gl_transform_feedback_object *obj);
+GLsizei
+brw_get_transform_feedback_vertex_count(struct gl_context *ctx,
+                                        struct gl_transform_feedback_object *obj,
+                                        GLuint stream);
 
 /* gen7_sol_state.c */
 void
@@ -1514,6 +1626,12 @@ gen7_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
 void
 gen7_end_transform_feedback(struct gl_context *ctx,
 			    struct gl_transform_feedback_object *obj);
+void
+gen7_pause_transform_feedback(struct gl_context *ctx,
+                              struct gl_transform_feedback_object *obj);
+void
+gen7_resume_transform_feedback(struct gl_context *ctx,
+                               struct gl_transform_feedback_object *obj);
 
 /* brw_blorp_blit.cpp */
 GLbitfield
@@ -1580,6 +1698,12 @@ brw_vertex_program_const(const struct gl_vertex_program *p)
    return (const struct brw_vertex_program *) p;
 }
 
+static INLINE struct brw_geometry_program *
+brw_geometry_program(struct gl_geometry_program *p)
+{
+   return (struct brw_geometry_program *) p;
+}
+
 static INLINE struct brw_fragment_program *
 brw_fragment_program(struct gl_fragment_program *p)
 {
@@ -1624,6 +1748,8 @@ brw_program_reloc(struct brw_context *brw, uint32_t state_offset,
 bool brw_do_cubemap_normalize(struct exec_list *instructions);
 bool brw_lower_texture_gradients(struct brw_context *brw,
                                  struct exec_list *instructions);
+bool brw_do_lower_offset_arrays(struct exec_list *instructions);
+bool brw_do_lower_unnormalized_offset(struct exec_list *instructions);
 
 struct opcode_desc {
     char    *name;
@@ -1669,6 +1795,33 @@ gen6_upload_vec4_push_constants(struct brw_context *brw,
                                 const struct brw_vec4_prog_data *prog_data,
                                 struct brw_stage_state *stage_state,
                                 enum state_struct_type type);
+
+/* ================================================================
+ * From linux kernel i386 header files, copes with odd sizes better
+ * than COPY_DWORDS would:
+ * XXX Put this in src/mesa/main/imports.h ???
+ */
+#if defined(i386) || defined(__i386__)
+static INLINE void * __memcpy(void * to, const void * from, size_t n)
+{
+   int d0, d1, d2;
+   __asm__ __volatile__(
+      "rep ; movsl\n\t"
+      "testb $2,%b4\n\t"
+      "je 1f\n\t"
+      "movsw\n"
+      "1:\ttestb $1,%b4\n\t"
+      "je 2f\n\t"
+      "movsb\n"
+      "2:"
+      : "=&c" (d0), "=&D" (d1), "=&S" (d2)
+      :"0" (n/4), "q" (n),"1" ((long) to),"2" ((long) from)
+      : "memory");
+   return (to);
+}
+#else
+#define __memcpy(a,b,c) memcpy(a,b,c)
+#endif
 
 #ifdef __cplusplus
 }

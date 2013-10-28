@@ -25,7 +25,8 @@ include $(top_srcdir)/src/gallium/Automake.inc
 AM_CFLAGS = \
 	$(GALLIUM_CFLAGS) \
 	$(PTHREAD_CFLAGS) \
-	$(LIBDRM_CFLAGS)
+	$(LIBDRM_CFLAGS) \
+	$(VISIBILITY_CFLAGS)
 AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/gallium/drivers \
 	-I$(top_srcdir)/src/gallium/winsys \
@@ -41,14 +42,12 @@ dri_LTLIBRARIES = r300_dri.la
 
 nodist_EXTRA_r300_dri_la_SOURCES = dummy.cpp
 r300_dri_la_SOURCES = \
-	../drm_target.c \
-	$(top_srcdir)/src/mesa/drivers/dri/common/utils.c \
-	$(top_srcdir)/src/mesa/drivers/dri/common/dri_util.c \
-	$(top_srcdir)/src/mesa/drivers/dri/common/xmlconfig.c
+	../drm_target.c
 
-r300_dri_la_LDFLAGS = -module -avoid-version -shared -no-undefined
+r300_dri_la_LDFLAGS = $(DRI_DRIVER_LDFLAGS)
 
 r300_dri_la_LIBADD = \
+	$(top_builddir)/src/mesa/drivers/dri/common/libdricommon.la \
 	$(top_builddir)/src/mesa/libmesagallium.la \
 	$(top_builddir)/src/gallium/auxiliary/libgallium.la \
 	$(top_builddir)/src/gallium/state_trackers/dri/drm/libdridrm.la \

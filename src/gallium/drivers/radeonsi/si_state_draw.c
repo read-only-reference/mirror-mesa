@@ -302,7 +302,8 @@ static unsigned r600_conv_prim_to_gs_out(unsigned mode)
 }
 
 static bool si_update_draw_info_state(struct r600_context *rctx,
-			       const struct pipe_draw_info *info)
+				      const struct pipe_draw_info *info,
+				      const struct pipe_index_buffer *ib)
 {
 	struct si_pm4_state *pm4 = si_pm4_alloc_state(rctx);
 	struct si_shader *vs = &rctx->vs_shader->current->shader;
@@ -318,12 +319,27 @@ static bool si_update_draw_info_state(struct r600_context *rctx,
 		return false;
 	}
 
-	if (rctx->b.chip_class >= CIK)
+	if (rctx->b.chip_class >= CIK) {
+		bool wd_switch_on_eop = prim == V_008958_DI_PT_POLYGON ||
+					prim == V_008958_DI_PT_LINELOOP ||
+					prim == V_008958_DI_PT_TRIFAN ||
+					prim == V_008958_DI_PT_TRISTRIP_ADJ ||
+					info->primitive_restart;
+
+		si_pm4_set_reg(pm4, R_028AA8_IA_MULTI_VGT_PARAM,
+			       S_028AA8_SWITCH_ON_EOP(1) |
+			       S_028AA8_PARTIAL_VS_WAVE_ON(1) |
+			       S_028AA8_PRIMGROUP_SIZE(63) |
+			       S_028AA8_WD_SWITCH_ON_EOP(wd_switch_on_eop));
+		si_pm4_set_reg(pm4, R_028B74_VGT_DISPATCH_DRAW_INDEX,
+			       ib->index_size == 4 ? 0xFC000000 : 0xFC00);
+
 		si_pm4_set_reg(pm4, R_030908_VGT_PRIMITIVE_TYPE, prim);
-	else {
+	} else {
 		si_pm4_set_reg(pm4, R_008958_VGT_PRIMITIVE_TYPE, prim);
-		si_pm4_set_reg(pm4, R_028A6C_VGT_GS_OUT_PRIM_TYPE, gs_out_prim);
 	}
+
+	si_pm4_set_reg(pm4, R_028A6C_VGT_GS_OUT_PRIM_TYPE, gs_out_prim);
 	si_pm4_set_reg(pm4, R_028400_VGT_MAX_VTX_INDX, ~0);
 	si_pm4_set_reg(pm4, R_028404_VGT_MIN_VTX_INDX, 0);
 	si_pm4_set_reg(pm4, R_028408_VGT_INDX_OFFSET,
@@ -554,9 +570,18 @@ static void si_state_draw(struct r600_context *rctx,
 	if (rctx->num_cs_dw_nontimer_queries_suspend) {
 		struct si_state_dsa *dsa = rctx->queued.named.dsa;
 
-		si_pm4_set_reg(pm4, R_028004_DB_COUNT_CONTROL,
-			       S_028004_PERFECT_ZPASS_COUNTS(1) |
-			       S_028004_SAMPLE_RATE(rctx->fb_log_samples));
+		if (rctx->b.chip_class >= CIK) {
+			si_pm4_set_reg(pm4, R_028004_DB_COUNT_CONTROL,
+				       S_028004_PERFECT_ZPASS_COUNTS(1) |
+				       S_028004_SAMPLE_RATE(rctx->fb_log_samples) |
+				       S_028004_ZPASS_ENABLE(1) |
+				       S_028004_SLICE_EVEN_ENABLE(1) |
+				       S_028004_SLICE_ODD_ENABLE(1));
+		} else {
+			si_pm4_set_reg(pm4, R_028004_DB_COUNT_CONTROL,
+				       S_028004_PERFECT_ZPASS_COUNTS(1) |
+				       S_028004_SAMPLE_RATE(rctx->fb_log_samples));
+		}
 		si_pm4_set_reg(pm4, R_02800C_DB_RENDER_OVERRIDE,
 			       dsa->db_render_override |
 			       S_02800C_NOOP_CULL_DISABLE(1));
@@ -721,7 +746,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		}
 	}
 
-	if (!si_update_draw_info_state(rctx, info))
+	if (!si_update_draw_info_state(rctx, info, &ib))
 		return;
 
 	si_state_draw(rctx, info, &ib);

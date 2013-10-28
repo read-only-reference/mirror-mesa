@@ -44,11 +44,11 @@
 
 #include "main/mtypes.h"
 #include "main/shaderobj.h"
+#include "main/uniforms.h"
 #include "program/hash_table.h"
 
 extern "C" {
 #include "main/shaderapi.h"
-#include "main/uniforms.h"
 #include "program/prog_instruction.h"
 #include "program/prog_optimize.h"
 #include "program/prog_print.h"
@@ -155,7 +155,7 @@ namespace {
 
 class ir_to_mesa_instruction : public exec_node {
 public:
-   DECLARE_RZALLOC_CXX_OPERATORS(ir_to_mesa_instruction)
+   DECLARE_RALLOC_CXX_OPERATORS(ir_to_mesa_instruction)
 
    enum prog_opcode op;
    dst_reg dst;
@@ -622,6 +622,7 @@ type_size(const struct glsl_type *type)
        * at link time.
        */
       return 1;
+   case GLSL_TYPE_ATOMIC_UINT:
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
@@ -1497,6 +1498,9 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
    case ir_quadop_bitfield_insert:
    case ir_binop_ldexp:
    case ir_triop_csel:
+   case ir_binop_carry:
+   case ir_binop_borrow:
+   case ir_binop_imul_high:
       assert(!"not supported");
       break;
 
@@ -2066,6 +2070,12 @@ ir_to_mesa_visitor::visit(ir_texture *ir)
    case ir_lod:
       assert(!"Unexpected ir_lod opcode");
       break;
+   case ir_tg4:
+      assert(!"Unexpected ir_tg4 opcode");
+      break;
+   case ir_query_levels:
+      assert(!"Unexpected ir_query_levels opcode");
+      break;
    }
 
    const glsl_type *sampler_type = ir->sampler->type;
@@ -2592,6 +2602,7 @@ _mesa_associate_uniform_storage(struct gl_context *ctx,
 	    format = uniform_native;
 	    columns = 1;
 	    break;
+         case GLSL_TYPE_ATOMIC_UINT:
          case GLSL_TYPE_ARRAY:
          case GLSL_TYPE_VOID:
          case GLSL_TYPE_STRUCT:

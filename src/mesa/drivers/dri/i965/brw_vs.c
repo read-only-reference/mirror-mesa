@@ -176,8 +176,7 @@ gl_clip_plane *brw_select_clip_planes(struct gl_context *ctx)
 
 
 bool
-brw_vs_prog_data_compare(const void *in_a, const void *in_b,
-                         int aux_size, const void *in_key)
+brw_vs_prog_data_compare(const void *in_a, const void *in_b)
 {
    const struct brw_vs_prog_data *a = in_a;
    const struct brw_vs_prog_data *b = in_b;
@@ -371,8 +370,6 @@ brw_vs_debug_recompile(struct brw_context *brw,
                       old_key->base.nr_userclip_plane_consts,
                       key->base.nr_userclip_plane_consts);
 
-   found |= key_debug(brw, "clip distance enable",
-                      old_key->base.uses_clip_distance, key->base.uses_clip_distance);
    found |= key_debug(brw, "copy edgeflag",
                       old_key->copy_edgeflag, key->copy_edgeflag);
    found |= key_debug(brw, "PointCoord replace",
@@ -397,8 +394,7 @@ brw_setup_vec4_key_clip_info(struct brw_context *brw,
    struct gl_context *ctx = &brw->ctx;
 
    key->userclip_active = (ctx->Transform.ClipPlanesEnabled != 0);
-   key->uses_clip_distance = program_uses_clip_distance;
-   if (key->userclip_active && !key->uses_clip_distance) {
+   if (key->userclip_active && !program_uses_clip_distance) {
       key->nr_userclip_plane_consts
          = _mesa_logbase2(ctx->Transform.ClipPlanesEnabled) + 1;
    }
@@ -421,7 +417,8 @@ static void brw_upload_vs_prog(struct brw_context *brw)
     * the inputs it asks for, whether they are varying or not.
     */
    key.base.program_string_id = vp->id;
-   brw_setup_vec4_key_clip_info(brw, &key.base, vp->program.UsesClipDistance);
+   brw_setup_vec4_key_clip_info(brw, &key.base,
+                                vp->program.Base.UsesClipDistanceOut);
 
    /* _NEW_POLYGON */
    if (brw->gen < 6) {
@@ -489,6 +486,8 @@ static void brw_upload_vs_prog(struct brw_context *brw)
       (void) success;
       assert(success);
    }
+   brw->vs.base.prog_data = &brw->vs.prog_data->base.base;
+
    if (memcmp(&brw->vs.prog_data->base.vue_map, &brw->vue_map_geom_out,
               sizeof(brw->vue_map_geom_out)) != 0) {
       brw->vue_map_vs = brw->vs.prog_data->base.vue_map;
@@ -535,20 +534,7 @@ brw_vs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
 
    memset(&key, 0, sizeof(key));
 
-   key.base.program_string_id = bvp->id;
-   key.base.clamp_vertex_color = ctx->API == API_OPENGL_COMPAT;
-
-   unsigned sampler_count = _mesa_fls(vp->Base.SamplersUsed);
-   for (unsigned i = 0; i < sampler_count; i++) {
-      if (vp->Base.ShadowSamplers & (1 << i)) {
-         /* Assume DEPTH_TEXTURE_MODE is the default: X, X, X, 1 */
-         key.base.tex.swizzles[i] =
-            MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_X, SWIZZLE_X, SWIZZLE_ONE);
-      } else {
-         /* Color sampler: assume no swizzling. */
-         key.base.tex.swizzles[i] = SWIZZLE_XYZW;
-      }
-   }
+   brw_vec4_setup_prog_key_for_precompile(ctx, &key.base, bvp->id, &vp->Base);
 
    success = do_vs_prog(brw, prog, bvp, &key);
 

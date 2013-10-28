@@ -64,12 +64,6 @@ struct brw_vec4_prog_key {
     */
    GLuint nr_userclip_plane_consts:4;
 
-   /**
-    * True if the shader uses gl_ClipDistance, regardless of whether any clip
-    * flags are enabled.
-    */
-   GLuint uses_clip_distance:1;
-
    GLuint clamp_vertex_color:1;
 
    struct brw_sampler_prog_key_data tex;
@@ -80,6 +74,10 @@ struct brw_vec4_prog_key {
 extern "C" {
 #endif
 
+void
+brw_vec4_setup_prog_key_for_precompile(struct gl_context *ctx,
+                                       struct brw_vec4_prog_key *key,
+                                       GLuint id, struct gl_program *prog);
 bool brw_vec4_prog_data_compare(const struct brw_vec4_prog_data *a,
                                 const struct brw_vec4_prog_data *b);
 void brw_vec4_prog_data_free(const struct brw_vec4_prog_data *prog_data);
@@ -97,7 +95,7 @@ swizzle_for_size(int size);
 class reg
 {
 public:
-   /** Register file: ARF, GRF, MRF, IMM. */
+   /** Register file: GRF, MRF, IMM. */
    enum register_file file;
    /** virtual register number.  0 = fixed hw reg */
    int reg;
@@ -168,7 +166,7 @@ with_writemask(dst_reg const &r, int mask);
 
 class vec4_instruction : public backend_instruction {
 public:
-   DECLARE_RZALLOC_CXX_OPERATORS(vec4_instruction)
+   DECLARE_RALLOC_CXX_OPERATORS(vec4_instruction)
 
    vec4_instruction(vec4_visitor *v, enum opcode opcode,
 		    dst_reg dst = dst_reg(),
@@ -232,7 +230,8 @@ public:
 		struct gl_shader_program *shader_prog,
 		struct brw_shader *shader,
 		void *mem_ctx,
-                bool debug_flag);
+                bool debug_flag,
+                bool no_spills);
    ~vec4_visitor();
 
    dst_reg dst_null_f()
@@ -245,7 +244,11 @@ public:
       return dst_reg(retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
    }
 
-   struct gl_program *prog;
+   dst_reg dst_null_ud()
+   {
+      return dst_reg(retype(brw_null_reg(), BRW_REGISTER_TYPE_UD));
+   }
+
    struct brw_vec4_compile *c;
    const struct brw_vec4_prog_key *key;
    struct brw_vec4_prog_data *prog_data;
@@ -414,6 +417,8 @@ public:
    vec4_instruction *FBL(dst_reg dst, src_reg value);
    vec4_instruction *CBIT(dst_reg dst, src_reg value);
    vec4_instruction *MAD(dst_reg dst, src_reg c, src_reg b, src_reg a);
+   vec4_instruction *ADDC(dst_reg dst, src_reg src0, src_reg src1);
+   vec4_instruction *SUBB(dst_reg dst, src_reg src0, src_reg src1);
 
    int implied_mrf_writes(vec4_instruction *inst);
 
@@ -470,6 +475,7 @@ public:
    void emit_pack_half_2x16(dst_reg dst, src_reg src0);
    void emit_unpack_half_2x16(dst_reg dst, src_reg src0);
 
+   uint32_t gather_channel(ir_texture *ir, int sampler);
    void swizzle_result(ir_texture *ir, src_reg orig_val, int sampler);
 
    void emit_ndc_computation();
@@ -510,7 +516,8 @@ public:
 
 protected:
    void emit_vertex();
-   void lower_attributes_to_hw_regs(const int *attribute_map);
+   void lower_attributes_to_hw_regs(const int *attribute_map,
+                                    bool interleaved);
    void setup_payload_interference(struct ra_graph *g, int first_payload_node,
                                    int reg_node_count);
    virtual dst_reg *make_reg_for_system_value(ir_variable *ir) = 0;
@@ -523,6 +530,12 @@ protected:
    virtual int compute_array_stride(ir_dereference_array *ir);
 
    const bool debug_flag;
+
+private:
+   /**
+    * If true, then register allocation should fail instead of spilling.
+    */
+   const bool no_spills;
 };
 
 
@@ -603,6 +616,15 @@ private:
                                          struct brw_reg offset);
    void generate_unpack_flags(vec4_instruction *inst,
                               struct brw_reg dst);
+
+   void generate_untyped_atomic(vec4_instruction *inst,
+                                struct brw_reg dst,
+                                struct brw_reg atomic_op,
+                                struct brw_reg surf_index);
+
+   void generate_untyped_surface_read(vec4_instruction *inst,
+                                      struct brw_reg dst,
+                                      struct brw_reg surf_index);
 
    void mark_surface_used(unsigned surf_index);
 

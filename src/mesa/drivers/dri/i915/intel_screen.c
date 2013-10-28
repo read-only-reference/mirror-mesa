@@ -40,8 +40,11 @@
 #include "utils.h"
 #include "xmlpool.h"
 
-PUBLIC const char __driConfigOptions[] =
-   DRI_CONF_BEGIN
+static const __DRIconfigOptionsExtension i915_config_options = {
+   .base = { __DRI_CONFIG_OPTIONS, 1 },
+   .xml =
+
+DRI_CONF_BEGIN
    DRI_CONF_SECTION_PERFORMANCE
       DRI_CONF_VBLANK_MODE(DRI_CONF_VBLANK_ALWAYS_SYNC)
       /* Options correspond to DRI_CONF_BO_REUSE_DISABLED,
@@ -75,7 +78,8 @@ PUBLIC const char __driConfigOptions[] =
 	 DRI_CONF_DESC(en, "Perform code generation at shader link time.")
       DRI_CONF_OPT_END
    DRI_CONF_SECTION_END
-DRI_CONF_END;
+DRI_CONF_END
+};
 
 #include "intel_batchbuffer.h"
 #include "intel_buffers.h"
@@ -1062,32 +1066,24 @@ intel_screen_make_configs(__DRIscreen *dri_screen)
 static void
 set_max_gl_versions(struct intel_screen *screen)
 {
-   int gl_version_override = _mesa_get_gl_version_override();
+   __DRIscreen *psp = screen->driScrnPriv;
 
    switch (screen->gen) {
    case 3:
-      screen->max_gl_core_version = 0;
-      screen->max_gl_es1_version = 11;
-      screen->max_gl_compat_version = 21;
-      screen->max_gl_es2_version = 20;
+      psp->max_gl_core_version = 0;
+      psp->max_gl_es1_version = 11;
+      psp->max_gl_compat_version = 21;
+      psp->max_gl_es2_version = 20;
       break;
    case 2:
-      screen->max_gl_core_version = 0;
-      screen->max_gl_compat_version = 13;
-      screen->max_gl_es1_version = 11;
-      screen->max_gl_es2_version = 0;
+      psp->max_gl_core_version = 0;
+      psp->max_gl_compat_version = 13;
+      psp->max_gl_es1_version = 11;
+      psp->max_gl_es2_version = 0;
       break;
    default:
       assert(!"unrecognized intel_screen::gen");
       break;
-   }
-
-   if (gl_version_override >= 31) {
-      screen->max_gl_core_version = MAX2(screen->max_gl_core_version,
-                                         gl_version_override);
-   } else {
-      screen->max_gl_compat_version = MAX2(screen->max_gl_compat_version,
-                                           gl_version_override);
    }
 }
 
@@ -1117,7 +1113,7 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
       return false;
    }
    /* parse information in __driConfigOptions */
-   driParseOptionInfo(&intelScreen->optionCache, __driConfigOptions);
+   driParseOptionInfo(&intelScreen->optionCache, i915_config_options.xml);
 
    intelScreen->driScrnPriv = psp;
    psp->driverPrivate = (void *) intelScreen;
@@ -1136,16 +1132,6 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
    intelScreen->hw_has_swizzling = intel_detect_swizzling(intelScreen);
 
    set_max_gl_versions(intelScreen);
-
-   psp->api_mask = (1 << __DRI_API_OPENGL);
-   if (intelScreen->max_gl_core_version > 0)
-      psp->api_mask |= (1 << __DRI_API_OPENGL_CORE);
-   if (intelScreen->max_gl_es1_version > 0)
-      psp->api_mask |= (1 << __DRI_API_GLES);
-   if (intelScreen->max_gl_es2_version > 0)
-      psp->api_mask |= (1 << __DRI_API_GLES2);
-   if (intelScreen->max_gl_es2_version >= 30)
-      psp->api_mask |= (1 << __DRI_API_GLES3);
 
    psp->extensions = intelScreenExtensions;
 
@@ -1204,7 +1190,7 @@ intelReleaseBuffer(__DRIscreen *screen, __DRIbuffer *buffer)
 }
 
 
-const struct __DriverAPIRec driDriverAPI = {
+static const struct __DriverAPIRec i915_driver_api = {
    .InitScreen		 = intelInitScreen2,
    .DestroyScreen	 = intelDestroyScreen,
    .CreateContext	 = intelCreateContext,
@@ -1217,9 +1203,23 @@ const struct __DriverAPIRec driDriverAPI = {
    .ReleaseBuffer        = intelReleaseBuffer
 };
 
+static const struct __DRIDriverVtableExtensionRec i915_vtable = {
+   .base = { __DRI_DRIVER_VTABLE, 1 },
+   .vtable = &i915_driver_api,
+};
+
 /* This is the table of extensions that the loader will dlsym() for. */
-PUBLIC const __DRIextension *__driDriverExtensions[] = {
+static const __DRIextension *i915_driver_extensions[] = {
     &driCoreExtension.base,
     &driDRI2Extension.base,
+    &i915_vtable.base,
+    &i915_config_options.base,
     NULL
 };
+
+PUBLIC const __DRIextension **__driDriverGetExtensions_i915(void)
+{
+   globalDriverAPI = &i915_driver_api;
+
+   return i915_driver_extensions;
+}

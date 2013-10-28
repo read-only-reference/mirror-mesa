@@ -120,6 +120,7 @@ static const struct extension extension_table[] = {
    { "GL_ARB_robustness",                          o(dummy_true),                              GL,             2010 },
    { "GL_ARB_sampler_objects",                     o(dummy_true),                              GL,             2009 },
    { "GL_ARB_seamless_cube_map",                   o(ARB_seamless_cube_map),                   GL,             2009 },
+   { "GL_ARB_shader_atomic_counters",              o(ARB_shader_atomic_counters),              GL,             2011 },
    { "GL_ARB_shader_bit_encoding",                 o(ARB_shader_bit_encoding),                 GL,             2010 },
    { "GL_ARB_shader_objects",                      o(dummy_true),                              GL,             2002 },
    { "GL_ARB_shader_stencil_export",               o(ARB_shader_stencil_export),               GL,             2009 },
@@ -142,9 +143,12 @@ static const struct extension extension_table[] = {
    { "GL_ARB_texture_env_crossbar",                o(ARB_texture_env_crossbar),                GLL,            2001 },
    { "GL_ARB_texture_env_dot3",                    o(ARB_texture_env_dot3),                    GLL,            2001 },
    { "GL_ARB_texture_float",                       o(ARB_texture_float),                       GL,             2004 },
+   { "GL_ARB_texture_gather",                      o(ARB_texture_gather),                      GL,             2009 },
    { "GL_ARB_texture_mirrored_repeat",             o(dummy_true),                              GLL,            2001 },
+   { "GL_ARB_texture_mirror_clamp_to_edge",        o(ARB_texture_mirror_clamp_to_edge),        GL,             2013 },
    { "GL_ARB_texture_multisample",                 o(ARB_texture_multisample),                 GL,             2009 },
    { "GL_ARB_texture_non_power_of_two",            o(ARB_texture_non_power_of_two),            GL,             2003 },
+   { "GL_ARB_texture_query_levels",                o(ARB_texture_query_levels),                GL,             2012 },
    { "GL_ARB_texture_query_lod",                   o(ARB_texture_query_lod),                   GL,             2009 },
    { "GL_ARB_texture_rectangle",                   o(NV_texture_rectangle),                    GL,             2004 },
    { "GL_ARB_texture_rgb10_a2ui",                  o(ARB_texture_rgb10_a2ui),                  GL,             2009 },
@@ -332,6 +336,7 @@ static const struct extension extension_table[] = {
    { "GL_NV_texture_barrier",                      o(NV_texture_barrier),                      GL,             2009 },
    { "GL_NV_texture_env_combine4",                 o(NV_texture_env_combine4),                 GLL,            1999 },
    { "GL_NV_texture_rectangle",                    o(NV_texture_rectangle),                    GLL,            2000 },
+   { "GL_NV_vdpau_interop",                        o(NV_vdpau_interop),                        GL,             2010 },
    { "GL_S3_s3tc",                                 o(ANGLE_texture_compression_dxt),           GL,             1999 },
    { "GL_SGIS_generate_mipmap",                    o(dummy_true),                              GLL,            1997 },
    { "GL_SGIS_texture_border_clamp",               o(ARB_texture_border_clamp),                GLL,            1997 },
@@ -405,6 +410,7 @@ _mesa_enable_sw_extensions(struct gl_context *ctx)
 #ifdef TEXTURE_FLOAT_ENABLED
    ctx->Extensions.ARB_texture_float = GL_TRUE;
 #endif
+   ctx->Extensions.ARB_texture_mirror_clamp_to_edge = GL_TRUE;
    ctx->Extensions.ARB_texture_non_power_of_two = GL_TRUE;
    ctx->Extensions.ARB_texture_rg = GL_TRUE;
    ctx->Extensions.ARB_texture_compression_rgtc = GL_TRUE;

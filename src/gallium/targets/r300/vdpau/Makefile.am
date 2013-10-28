@@ -25,13 +25,16 @@ include $(top_srcdir)/src/gallium/Automake.inc
 AM_CFLAGS = \
 	$(GALLIUM_CFLAGS) \
 	$(PTHREAD_CFLAGS) \
-	$(LIBDRM_CFLAGS)
+	$(LIBDRM_CFLAGS) \
+	$(VISIBILITY_CFLAGS)
 AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/gallium/drivers \
 	-I$(top_srcdir)/src/gallium/winsys
 
 vdpaudir = $(VDPAU_LIB_INSTALL_DIR)
 vdpau_LTLIBRARIES = libvdpau_r300.la
+
+EXPORTS = '^(vdp_imp_device_create_x11|radeon_drm_winsys_create)$$'
 
 nodist_EXTRA_libvdpau_r300_la_SOURCES = dummy.cpp
 libvdpau_r300_la_SOURCES = \
@@ -41,6 +44,7 @@ libvdpau_r300_la_SOURCES = \
 libvdpau_r300_la_LDFLAGS = \
 	-module \
 	-version-number $(VDPAU_MAJOR):$(VDPAU_MINOR) \
+	-export-symbols-regex $(EXPORTS) \
 	-shared \
 	-no-undefined
 

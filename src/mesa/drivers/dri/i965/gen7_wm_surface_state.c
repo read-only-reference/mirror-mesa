@@ -42,13 +42,13 @@
  * "Shader Channel Select" enumerations (i.e. HSW_SCS_RED)
  */
 static unsigned
-swizzle_to_scs(GLenum swizzle)
+swizzle_to_scs(GLenum swizzle, bool need_green_to_blue)
 {
    switch (swizzle) {
    case SWIZZLE_X:
       return HSW_SCS_RED;
    case SWIZZLE_Y:
-      return HSW_SCS_GREEN;
+      return need_green_to_blue ? HSW_SCS_BLUE : HSW_SCS_GREEN;
    case SWIZZLE_Z:
       return HSW_SCS_BLUE;
    case SWIZZLE_W:
@@ -232,7 +232,8 @@ gen7_emit_buffer_surface_state(struct brw_context *brw,
                                unsigned surface_format,
                                unsigned buffer_size,
                                unsigned pitch,
-                               unsigned mocs)
+                               unsigned mocs,
+                               bool rw)
 {
    uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
                                     8 * 4, 32, out_offset);
@@ -259,7 +260,8 @@ gen7_emit_buffer_surface_state(struct brw_context *brw,
    /* Emit relocation to surface contents */
    if (bo) {
       drm_intel_bo_emit_reloc(brw->batch.bo, *out_offset + 4,
-                              bo, buffer_offset, I915_GEM_DOMAIN_SAMPLER, 0);
+                              bo, buffer_offset, I915_GEM_DOMAIN_SAMPLER,
+                              (rw ? I915_GEM_DOMAIN_SAMPLER : 0));
    }
 
    gen7_check_surface_setup(surf, false /* is_render_target */);
@@ -274,7 +276,14 @@ gen7_update_buffer_texture_surface(struct gl_context *ctx,
    struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
    struct intel_buffer_object *intel_obj =
       intel_buffer_object(tObj->BufferObject);
-   drm_intel_bo *bo = intel_obj ? intel_obj->buffer : NULL;
+   uint32_t size = tObj->BufferSize;
+   drm_intel_bo *bo = NULL;
+
+   if (intel_obj) {
+      size = MIN2(size, intel_obj->Base.Size);
+      bo = intel_bufferobj_buffer(brw, intel_obj, tObj->BufferOffset, size);
+   }
+
    gl_format format = tObj->_BufferObjectFormat;
 
    uint32_t surface_format = brw_format_for_mesa_format(format);
@@ -284,22 +293,23 @@ gen7_update_buffer_texture_surface(struct gl_context *ctx,
    }
 
    int texel_size = _mesa_get_format_bytes(format);
-   int w = intel_obj ? intel_obj->Base.Size / texel_size : 0;
 
    gen7_emit_buffer_surface_state(brw,
                                   surf_offset,
                                   bo,
-                                  0,
+                                  tObj->BufferOffset,
                                   surface_format,
-                                  w,
+                                  size / texel_size,
                                   texel_size,
-                                  0 /* mocs */);
+                                  0 /* mocs */,
+                                  false /* rw */);
 }
 
 static void
 gen7_update_texture_surface(struct gl_context *ctx,
                             unsigned unit,
-                            uint32_t *surf_offset)
+                            uint32_t *surf_offset,
+                            bool for_gather)
 {
    struct brw_context *brw = brw_context(ctx);
    struct gl_texture_object *tObj = ctx->Texture.Unit[unit]._Current;
@@ -321,6 +331,9 @@ gen7_update_texture_surface(struct gl_context *ctx,
                                               mt->format,
                                               tObj->DepthMode,
                                               sampler->sRGBDecode);
+
+   if (for_gather && tex_format == BRW_SURFACEFORMAT_R32G32_FLOAT)
+      tex_format = BRW_SURFACEFORMAT_R32G32_FLOAT_LD;
 
    surf[0] = translate_tex_target(tObj->Target) << BRW_SURFACE_TYPE_SHIFT |
              tex_format << BRW_SURFACE_FORMAT_SHIFT |
@@ -365,11 +378,13 @@ gen7_update_texture_surface(struct gl_context *ctx,
       const int swizzle = unlikely(alpha_depth)
          ? SWIZZLE_XYZW : brw_get_texture_swizzle(ctx, tObj);
 
+      const bool need_scs_green_to_blue = for_gather && tex_format == BRW_SURFACEFORMAT_R32G32_FLOAT_LD;
+
       surf[7] =
-         SET_FIELD(swizzle_to_scs(GET_SWZ(swizzle, 0)), GEN7_SURFACE_SCS_R) |
-         SET_FIELD(swizzle_to_scs(GET_SWZ(swizzle, 1)), GEN7_SURFACE_SCS_G) |
-         SET_FIELD(swizzle_to_scs(GET_SWZ(swizzle, 2)), GEN7_SURFACE_SCS_B) |
-         SET_FIELD(swizzle_to_scs(GET_SWZ(swizzle, 3)), GEN7_SURFACE_SCS_A);
+         SET_FIELD(swizzle_to_scs(GET_SWZ(swizzle, 0), need_scs_green_to_blue), GEN7_SURFACE_SCS_R) |
+         SET_FIELD(swizzle_to_scs(GET_SWZ(swizzle, 1), need_scs_green_to_blue), GEN7_SURFACE_SCS_G) |
+         SET_FIELD(swizzle_to_scs(GET_SWZ(swizzle, 2), need_scs_green_to_blue), GEN7_SURFACE_SCS_B) |
+         SET_FIELD(swizzle_to_scs(GET_SWZ(swizzle, 3), need_scs_green_to_blue), GEN7_SURFACE_SCS_A);
    }
 
    /* Emit relocation to surface contents */
@@ -404,23 +419,27 @@ gen7_create_constant_surface(struct brw_context *brw,
                                   BRW_SURFACEFORMAT_R32G32B32A32_FLOAT,
                                   elements,
                                   stride,
-                                  0 /* mocs */);
+                                  0 /* mocs */,
+                                  false /* rw */);
 }
 
 /**
- * Create a surface for shader time.
+ * Create a raw surface for untyped R/W access.
  */
-void
-gen7_create_shader_time_surface(struct brw_context *brw, uint32_t *out_offset)
+static void
+gen7_create_raw_surface(struct brw_context *brw, drm_intel_bo *bo,
+                        uint32_t offset, uint32_t size,
+                        uint32_t *out_offset, bool rw)
 {
    gen7_emit_buffer_surface_state(brw,
                                   out_offset,
-                                  brw->shader_time.bo,
-                                  0,
+                                  bo,
+                                  offset,
                                   BRW_SURFACEFORMAT_RAW,
-                                  brw->shader_time.bo->size,
+                                  size,
                                   1,
-                                  0 /* mocs */);
+                                  0 /* mocs */,
+                                  true /* rw */);
 }
 
 static void
@@ -445,9 +464,11 @@ gen7_update_null_renderbuffer_surface(struct brw_context *brw, unsigned unit)
 
    /* _NEW_BUFFERS */
    const struct gl_framebuffer *fb = ctx->DrawBuffer;
+   uint32_t surf_index =
+      brw->wm.prog_data->binding_table.render_target_start + unit;
 
    uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE, 8 * 4, 32,
-                                    &brw->wm.base.surf_offset[SURF_INDEX_DRAW(unit)]);
+                                    &brw->wm.base.surf_offset[surf_index]);
    memset(surf, 0, 8 * 4);
 
    /* From the Ivybridge PRM, Volume 4, Part 1, page 65,
@@ -489,7 +510,8 @@ gen7_update_renderbuffer_surface(struct brw_context *brw,
    GLenum gl_target = rb->TexImage ?
                          rb->TexImage->TexObject->Target : GL_TEXTURE_2D;
 
-   uint32_t surf_index = SURF_INDEX_DRAW(unit);
+   uint32_t surf_index =
+      brw->wm.prog_data->binding_table.render_target_start + unit;
 
    uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE, 8 * 4, 32,
                                     &brw->wm.base.surf_offset[surf_index]);
@@ -592,4 +614,5 @@ gen7_init_vtable_surface_functions(struct brw_context *brw)
    brw->vtbl.update_null_renderbuffer_surface =
       gen7_update_null_renderbuffer_surface;
    brw->vtbl.create_constant_surface = gen7_create_constant_surface;
+   brw->vtbl.create_raw_surface = gen7_create_raw_surface;
 }
