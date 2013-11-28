@@ -44,6 +44,7 @@
 #include "main/glformats.h"
 #include "main/texcompress_etc.h"
 #include "main/teximage.h"
+#include "main/streaming-load-memcpy.h"
 
 #define FILE_DEBUG_FLAG DEBUG_MIPTREE
 
@@ -201,7 +202,7 @@ intel_is_non_msrt_mcs_buffer_supported(struct brw_context *brw,
                                        struct intel_mipmap_tree *mt)
 {
    /* MCS support does not exist prior to Gen7 */
-   if (brw->gen < 7)
+   if (brw->gen < 7 || brw->gen >= 8)
       return false;
 
    /* MCS is only supported for color buffers */
@@ -477,6 +478,23 @@ intel_miptree_choose_tiling(struct brw_context *brw,
    if (brw->gen != 7 && mt->cpp >= 16)
       return I915_TILING_X;
 
+   /* From the Ivy Bridge PRM, Vol4 Part1 2.12.2.1 (SURFACE_STATE for most
+    * messages), on p64, under the heading "Surface Vertical Alignment":
+    *
+    *     This field must be set to VALIGN_4 for all tiled Y Render Target
+    *     surfaces.
+    *
+    * So if the surface is renderable and uses a vertical alignment of 2,
+    * force it to be X tiled.  This is somewhat conservative (it's possible
+    * that the client won't ever render to this surface), but it's difficult
+    * to know that ahead of time.  And besides, since we use a vertical
+    * alignment of 4 as often as we can, this shouldn't happen very often.
+    */
+   if (brw->gen == 7 && mt->align_h == 2 &&
+       brw->format_supported_as_render_target[format]) {
+      return I915_TILING_X;
+   }
+
    return I915_TILING_Y | I915_TILING_X;
 }
 
@@ -635,8 +653,10 @@ intel_miptree_create_for_bo(struct brw_context *brw,
                                     0, 0,
                                     width, height, 1,
                                     true, 0 /* num_samples */);
-   if (!mt)
+   if (!mt) {
+      free(region);
       return mt;
+   }
 
    region->cpp = mt->cpp;
    region->width = width;
@@ -720,6 +740,67 @@ intel_miptree_create_for_dri2_buffer(struct brw_context *brw,
        (dri_attachment == __DRI_BUFFER_FRONT_LEFT ||
         dri_attachment == __DRI_BUFFER_FAKE_FRONT_LEFT)) {
       intel_miptree_upsample(brw, multisample_mt);
+   }
+
+   return multisample_mt;
+}
+
+/**
+ * For a singlesample image buffer, this simply wraps the given region with a miptree.
+ *
+ * For a multisample image buffer, this wraps the given region with
+ * a singlesample miptree, then creates a multisample miptree into which the
+ * singlesample miptree is embedded as a child.
+ */
+struct intel_mipmap_tree*
+intel_miptree_create_for_image_buffer(struct brw_context *intel,
+                                      enum __DRIimageBufferMask buffer_type,
+                                      gl_format format,
+                                      uint32_t num_samples,
+                                      struct intel_region *region)
+{
+   struct intel_mipmap_tree *singlesample_mt = NULL;
+   struct intel_mipmap_tree *multisample_mt = NULL;
+
+   /* Only the front and back buffers, which are color buffers, are allocated
+    * through the image loader.
+    */
+   assert(_mesa_get_format_base_format(format) == GL_RGB ||
+          _mesa_get_format_base_format(format) == GL_RGBA);
+
+   singlesample_mt = intel_miptree_create_for_bo(intel,
+                                                 region->bo,
+                                                 format,
+                                                 0,
+                                                 region->width,
+                                                 region->height,
+                                                 region->pitch,
+                                                 region->tiling);
+   if (!singlesample_mt)
+      return NULL;
+
+   intel_region_reference(&singlesample_mt->region, region);
+
+   if (num_samples == 0)
+      return singlesample_mt;
+
+   multisample_mt = intel_miptree_create_for_renderbuffer(intel,
+                                                          format,
+                                                          region->width,
+                                                          region->height,
+                                                          num_samples);
+   if (!multisample_mt) {
+      intel_miptree_release(&singlesample_mt);
+      return NULL;
+   }
+
+   multisample_mt->singlesample_mt = singlesample_mt;
+   multisample_mt->need_downsample = false;
+
+   intel_region_reference(&multisample_mt->region, region);
+
+   if (intel->is_front_buffer_rendering && buffer_type == __DRI_IMAGE_BUFFER_FRONT) {
+      intel_miptree_upsample(intel, multisample_mt);
    }
 
    return multisample_mt;
@@ -1774,6 +1855,79 @@ intel_miptree_unmap_blit(struct brw_context *brw,
    intel_miptree_release(&map->mt);
 }
 
+#ifdef __SSE4_1__
+/**
+ * "Map" a buffer by copying it to an untiled temporary using MOVNTDQA.
+ */
+static void
+intel_miptree_map_movntdqa(struct brw_context *brw,
+                           struct intel_mipmap_tree *mt,
+                           struct intel_miptree_map *map,
+                           unsigned int level, unsigned int slice)
+{
+   assert(map->mode & GL_MAP_READ_BIT);
+   assert(!(map->mode & GL_MAP_WRITE_BIT));
+
+   DBG("%s: %d,%d %dx%d from mt %p (%s) %d,%d = %p/%d\n", __FUNCTION__,
+       map->x, map->y, map->w, map->h,
+       mt, _mesa_get_format_name(mt->format),
+       level, slice, map->ptr, map->stride);
+
+   /* Map the original image */
+   uint32_t image_x;
+   uint32_t image_y;
+   intel_miptree_get_image_offset(mt, level, slice, &image_x, &image_y);
+   image_x += map->x;
+   image_y += map->y;
+
+   void *src = intel_miptree_map_raw(brw, mt);
+   if (!src)
+      return;
+   src += image_y * mt->region->pitch;
+   src += image_x * mt->region->cpp;
+
+   /* Due to the pixel offsets for the particular image being mapped, our
+    * src pointer may not be 16-byte aligned.  However, if the pitch is
+    * divisible by 16, then the amount by which it's misaligned will remain
+    * consistent from row to row.
+    */
+   assert((mt->region->pitch % 16) == 0);
+   const int misalignment = ((uintptr_t) src) & 15;
+
+   /* Create an untiled temporary buffer for the mapping. */
+   const unsigned width_bytes = _mesa_format_row_stride(mt->format, map->w);
+
+   map->stride = ALIGN(misalignment + width_bytes, 16);
+
+   map->buffer = malloc(map->stride * map->h);
+   /* Offset the destination so it has the same misalignment as src. */
+   map->ptr = map->buffer + misalignment;
+
+   assert((((uintptr_t) map->ptr) & 15) == misalignment);
+
+   for (uint32_t y = 0; y < map->h; y++) {
+      void *dst_ptr = map->ptr + y * map->stride;
+      void *src_ptr = src + y * mt->region->pitch;
+
+      _mesa_streaming_load_memcpy(dst_ptr, src_ptr, width_bytes);
+   }
+
+   intel_miptree_unmap_raw(brw, mt);
+}
+
+static void
+intel_miptree_unmap_movntdqa(struct brw_context *brw,
+                             struct intel_mipmap_tree *mt,
+                             struct intel_miptree_map *map,
+                             unsigned int level,
+                             unsigned int slice)
+{
+   free(map->buffer);
+   map->buffer = NULL;
+   map->ptr = NULL;
+}
+#endif
+
 static void
 intel_miptree_map_s8(struct brw_context *brw,
 		     struct intel_mipmap_tree *mt,
@@ -2137,6 +2291,10 @@ intel_miptree_map_singlesample(struct brw_context *brw,
               mt->region->bo->size >= brw->max_gtt_map_object_size) {
       assert(mt->region->pitch < 32768);
       intel_miptree_map_blit(brw, mt, map, level, slice);
+#ifdef __SSE4_1__
+   } else if (!(mode & GL_MAP_WRITE_BIT) && !mt->compressed) {
+      intel_miptree_map_movntdqa(brw, mt, map, level, slice);
+#endif
    } else {
       intel_miptree_map_gtt(brw, mt, map, level, slice);
    }
@@ -2173,6 +2331,10 @@ intel_miptree_unmap_singlesample(struct brw_context *brw,
       intel_miptree_unmap_depthstencil(brw, mt, map, level, slice);
    } else if (map->mt) {
       intel_miptree_unmap_blit(brw, mt, map, level, slice);
+#ifdef __SSE4_1__
+   } else if (map->buffer) {
+      intel_miptree_unmap_movntdqa(brw, mt, map, level, slice);
+#endif
    } else {
       intel_miptree_unmap_gtt(brw, mt, map, level, slice);
    }

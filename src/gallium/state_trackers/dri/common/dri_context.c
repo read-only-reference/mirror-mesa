@@ -63,6 +63,7 @@ dri_create_context(gl_api api, const struct gl_config * visual,
 		   unsigned major_version,
 		   unsigned minor_version,
 		   uint32_t flags,
+                   bool notify_reset,
 		   unsigned *error,
 		   void *sharedContextPrivate)
 {
@@ -97,6 +98,16 @@ dri_create_context(gl_api api, const struct gl_config * visual,
       break;
    default:
       *error = __DRI_CTX_ERROR_BAD_API;
+      goto fail;
+   }
+
+   if (flags & ~(__DRI_CTX_FLAG_DEBUG | __DRI_CTX_FLAG_FORWARD_COMPATIBLE)) {
+      *error = __DRI_CTX_ERROR_UNKNOWN_FLAG;
+      goto fail;
+   }
+
+   if (notify_reset) {
+      *error = __DRI_CTX_ERROR_UNKNOWN_ATTRIBUTE;
       goto fail;
    }
 

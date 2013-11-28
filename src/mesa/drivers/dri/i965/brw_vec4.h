@@ -352,6 +352,7 @@ public:
    void split_uniform_registers();
    void pack_uniform_registers();
    void calculate_live_intervals();
+   void invalidate_live_intervals();
    void split_virtual_grfs();
    bool dead_code_eliminate();
    bool virtual_grf_interferes(int a, int b);
@@ -489,6 +490,13 @@ public:
    void emit_shader_time_write(enum shader_time_shader_type type,
                                src_reg value);
 
+   void emit_untyped_atomic(unsigned atomic_op, unsigned surf_index,
+                            dst_reg dst, src_reg offset, src_reg src0,
+                            src_reg src1);
+
+   void emit_untyped_surface_read(unsigned surf_index, dst_reg dst,
+                                  src_reg offset);
+
    src_reg get_scratch_offset(vec4_instruction *inst,
 			      src_reg *reladdr, int reg_offset);
    src_reg get_pull_constant_offset(vec4_instruction *inst,
@@ -513,6 +521,8 @@ public:
    bool process_move_condition(ir_rvalue *ir);
 
    void dump_instruction(backend_instruction *inst);
+
+   void visit_atomic_counter_intrinsic(ir_call *ir);
 
 protected:
    void emit_vertex();

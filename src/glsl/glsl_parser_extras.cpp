@@ -191,6 +191,8 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
    this->gs_input_prim_type = GL_POINTS;
    this->gs_input_size = 0;
    this->out_qualifier = new(this) ast_type_qualifier();
+   memset(this->atomic_counter_offsets, 0,
+          sizeof(this->atomic_counter_offsets));
 }
 
 /**
@@ -540,6 +542,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(EXT_shader_integer_mix,         true,  true,      EXT_shader_integer_mix),
    EXT(ARB_texture_gather,             true,  false,     ARB_texture_gather),
    EXT(ARB_shader_atomic_counters,     true,  false,     ARB_shader_atomic_counters),
+   EXT(ARB_sample_shading,             true,  false,     ARB_sample_shading),
 };
 
 #undef EXT
@@ -1528,7 +1531,6 @@ _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader,
    shader->CompileStatus = !state->error;
    shader->InfoLog = state->info_log;
    shader->Version = state->language_version;
-   shader->InfoLog = state->info_log;
    shader->IsES = state->es_shader;
 
    memcpy(shader->builtins_to_link, state->builtins_to_link,
@@ -1604,6 +1606,7 @@ do_common_optimization(exec_list *ir, bool linked,
    else
       progress = do_constant_variable_unlinked(ir) || progress;
    progress = do_constant_folding(ir) || progress;
+   progress = do_cse(ir) || progress;
    progress = do_algebraic(ir) || progress;
    progress = do_lower_jumps(ir) || progress;
    progress = do_vec_index_to_swizzle(ir) || progress;

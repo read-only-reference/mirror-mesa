@@ -53,6 +53,7 @@ nouveau_context_create(gl_api api,
 		       unsigned major_version,
 		       unsigned minor_version,
 		       uint32_t flags,
+		       bool notify_reset,
 		       unsigned *error,
 		       void *share_ctx)
 {
@@ -61,9 +62,15 @@ nouveau_context_create(gl_api api,
 	struct nouveau_context *nctx;
 	struct gl_context *ctx;
 
-	/* API and flag filtering is handled in dri2CreateContextAttribs.
-	 */
-	(void) flags;
+	if (flags & ~__DRI_CTX_FLAG_DEBUG) {
+		*error = __DRI_CTX_ERROR_UNKNOWN_FLAG;
+		return false;
+	}
+
+	if (notify_reset) {
+		*error = __DRI_CTX_ERROR_UNKNOWN_ATTRIBUTE;
+		return false;
+	}
 
 	ctx = screen->driver->context_create(screen, visual, share_ctx);
 	if (!ctx) {

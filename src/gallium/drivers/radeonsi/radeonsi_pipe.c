@@ -101,6 +101,7 @@ static void r600_destroy_context(struct pipe_context *context)
 
 	si_release_all_descriptors(rctx);
 
+	pipe_resource_reference(&rctx->null_const_buf.buffer, NULL);
 	r600_resource_reference(&rctx->border_color_table, NULL);
 
 	if (rctx->dummy_pixel_shader) {
@@ -131,6 +132,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 {
 	struct r600_context *rctx = CALLOC_STRUCT(r600_context);
 	struct r600_screen* rscreen = (struct r600_screen *)screen;
+	int shader, i;
 
 	if (rctx == NULL)
 		return NULL;
@@ -208,6 +210,26 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	/* these must be last */
 	si_begin_new_cs(rctx);
 	si_get_backend_mask(rctx);
+
+	/* CIK cannot unbind a constant buffer (S_BUFFER_LOAD is buggy
+	 * with a NULL buffer). We need to use a dummy buffer instead. */
+	if (rctx->b.chip_class == CIK) {
+		rctx->null_const_buf.buffer = pipe_buffer_create(screen, PIPE_BIND_CONSTANT_BUFFER,
+								 PIPE_USAGE_STATIC, 16);
+		rctx->null_const_buf.buffer_size = rctx->null_const_buf.buffer->width0;
+
+		for (shader = 0; shader < SI_NUM_SHADERS; shader++) {
+			for (i = 0; i < NUM_CONST_BUFFERS; i++) {
+				rctx->b.b.set_constant_buffer(&rctx->b.b, shader, i,
+							      &rctx->null_const_buf);
+			}
+		}
+
+		/* Clear the NULL constant buffer, because loads should return zeros. */
+		rctx->b.clear_buffer(&rctx->b.b, rctx->null_const_buf.buffer, 0,
+				     rctx->null_const_buf.buffer->width0, 0);
+	}
+
 	return &rctx->b.b;
 fail:
 	r600_destroy_context(&rctx->b.b);
@@ -236,6 +258,7 @@ const char *r600_get_llvm_processor_name(enum radeon_family family)
 		case CHIP_BONAIRE: return "bonaire";
 		case CHIP_KABINI: return "kabini";
 		case CHIP_KAVERI: return "kaveri";
+		case CHIP_HAWAII: return "hawaii";
 		default: return "";
 #endif
 	}
@@ -252,6 +275,7 @@ static const char *r600_get_family_name(enum radeon_family family)
 	case CHIP_BONAIRE: return "AMD BONAIRE";
 	case CHIP_KAVERI: return "AMD KAVERI";
 	case CHIP_KABINI: return "AMD KABINI";
+	case CHIP_HAWAII: return "AMD HAWAII";
 	default: return "AMD unknown";
 	}
 }
@@ -305,10 +329,13 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
 	case PIPE_CAP_TGSI_INSTANCEID:
 	case PIPE_CAP_COMPUTE:
+	case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
 		return 1;
 
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
-		return HAVE_LLVM >= 0x0304 && rscreen->b.chip_class == SI;
+		/* 2D tiling on CIK is supported since DRM 2.35.0 */
+		return HAVE_LLVM >= 0x0304 && (rscreen->b.chip_class < CIK ||
+					       rscreen->b.info.drm_minor >= 35);
 
 	case PIPE_CAP_TGSI_TEXCOORD:
 		return 0;
@@ -320,7 +347,12 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 256;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
-		return 130;
+		return 140;
+
+	case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
+		return 1;
+	case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
+		return MIN2(rscreen->b.info.vram_size, 0xFFFFFFFF);
 
 	/* Unsupported features. */
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
@@ -333,11 +365,10 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
 	case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
 	case PIPE_CAP_CUBE_MAP_ARRAY:
-	case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
-	case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
-	case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
-        case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
 		return 0;
+
+	case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
+		return PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600;
 
 	/* Stream output. */
 	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
@@ -444,7 +475,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_MAX_CONSTS:
 		return 4096; /* actually only memory limits this */
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
-		return 1;
+		return NUM_PIPE_CONST_BUFFERS;
 	case PIPE_SHADER_CAP_MAX_PREDS:
 		return 0; /* FIXME */
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
@@ -461,6 +492,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_SUBROUTINES:
 		return 0;
 	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+	case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
 		return 16;
 	case PIPE_SHADER_CAP_PREFERRED_IR:
 		return PIPE_SHADER_IR_TGSI;

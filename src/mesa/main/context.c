@@ -494,7 +494,7 @@ init_program_limits(struct gl_context *ctx, GLenum type,
       prog->MaxParameters = MAX_VERTEX_PROGRAM_PARAMS;
       prog->MaxAttribs = MAX_VERTEX_GENERIC_ATTRIBS;
       prog->MaxAddressRegs = MAX_VERTEX_PROGRAM_ADDRESS_REGS;
-      prog->MaxUniformComponents = MAX_GEOMETRY_UNIFORM_COMPONENTS;
+      prog->MaxUniformComponents = 4 * MAX_UNIFORMS;
       prog->MaxInputComponents = 16 * 4; /* old limit not to break tnl and swrast */
       prog->MaxOutputComponents = 16 * 4; /* old limit not to break tnl and swrast */
       break;
@@ -678,6 +678,10 @@ _mesa_init_constants(struct gl_context *ctx)
    ctx->Const.MaxAtomicBufferSize = MAX_ATOMIC_COUNTERS * ATOMIC_COUNTER_SIZE;
    ctx->Const.MaxCombinedAtomicBuffers = MAX_COMBINED_ATOMIC_BUFFERS;
    ctx->Const.MaxCombinedAtomicCounters = MAX_ATOMIC_COUNTERS;
+
+   /* GL_ARB_vertex_attrib_binding */
+   ctx->Const.MaxVertexAttribRelativeOffset = 2047;
+   ctx->Const.MaxVertexAttribBindings = MAX_VERTEX_GENERIC_ATTRIBS;
 }
 
 
@@ -804,7 +808,7 @@ init_attrib_groups(struct gl_context *ctx)
    ctx->NewState = _NEW_ALL;
    ctx->NewDriverState = ~0;
    ctx->ErrorValue = GL_NO_ERROR;
-   ctx->ResetStatus = GL_NO_ERROR;
+   ctx->ShareGroupReset = false;
    ctx->varying_vp_inputs = VERT_BIT_ALL;
 
    return GL_TRUE;
@@ -1531,7 +1535,7 @@ _mesa_make_current( struct gl_context *newCtx,
           * information.
           */
 	 if (_mesa_getenv("MESA_INFO")) {
-	    _mesa_print_info();
+	    _mesa_print_info(newCtx);
 	 }
 
 	 newCtx->FirstTimeCurrent = GL_FALSE;

@@ -82,6 +82,8 @@ fs_visitor::visit(ir_variable *ir)
 	 }
       } else if (ir->location == FRAG_RESULT_DEPTH) {
 	 this->frag_depth = *reg;
+      } else if (ir->location == FRAG_RESULT_SAMPLE_MASK) {
+         this->sample_mask = *reg;
       } else {
 	 /* gl_FragData or a user-defined FS output */
 	 assert(ir->location >= FRAG_RESULT_DATA0 &&
@@ -105,8 +107,11 @@ fs_visitor::visit(ir_variable *ir)
       /* Thanks to the lower_ubo_reference pass, we will see only
        * ir_binop_ubo_load expressions and not ir_dereference_variable for UBO
        * variables, so no need for them to be in variable_ht.
+       *
+       * Atomic counters take no uniform storage, no need to do
+       * anything here.
        */
-      if (ir->is_in_uniform_block())
+      if (ir->is_in_uniform_block() || ir->type->contains_atomic())
          return;
 
       if (dispatch_width == 16) {
@@ -125,6 +130,13 @@ fs_visitor::visit(ir_variable *ir)
 
       reg = new(this->mem_ctx) fs_reg(UNIFORM, param_index);
       reg->type = brw_type_for_base_type(ir->type);
+
+   } else if (ir->mode == ir_var_system_value) {
+      if (ir->location == SYSTEM_VALUE_SAMPLE_POS) {
+	 reg = emit_samplepos_setup(ir);
+      } else if (ir->location == SYSTEM_VALUE_SAMPLE_ID) {
+	 reg = emit_sampleid_setup(ir);
+      }
    }
 
    if (!reg)
@@ -2187,9 +2199,58 @@ fs_visitor::visit(ir_loop_jump *ir)
 }
 
 void
+fs_visitor::visit_atomic_counter_intrinsic(ir_call *ir)
+{
+   ir_dereference *deref = static_cast<ir_dereference *>(
+      ir->actual_parameters.get_head());
+   ir_variable *location = deref->variable_referenced();
+   unsigned surf_index = (c->prog_data.base.binding_table.abo_start +
+                          location->atomic.buffer_index);
+
+   /* Calculate the surface offset */
+   fs_reg offset(this, glsl_type::uint_type);
+   ir_dereference_array *deref_array = deref->as_dereference_array();
+
+   if (deref_array) {
+      deref_array->array_index->accept(this);
+
+      fs_reg tmp(this, glsl_type::uint_type);
+      emit(MUL(tmp, this->result, ATOMIC_COUNTER_SIZE));
+      emit(ADD(offset, tmp, location->atomic.offset));
+   } else {
+      offset = location->atomic.offset;
+   }
+
+   /* Emit the appropriate machine instruction */
+   const char *callee = ir->callee->function_name();
+   ir->return_deref->accept(this);
+   fs_reg dst = this->result;
+
+   if (!strcmp("__intrinsic_atomic_read", callee)) {
+      emit_untyped_surface_read(surf_index, dst, offset);
+
+   } else if (!strcmp("__intrinsic_atomic_increment", callee)) {
+      emit_untyped_atomic(BRW_AOP_INC, surf_index, dst, offset,
+                          fs_reg(), fs_reg());
+
+   } else if (!strcmp("__intrinsic_atomic_predecrement", callee)) {
+      emit_untyped_atomic(BRW_AOP_PREDEC, surf_index, dst, offset,
+                          fs_reg(), fs_reg());
+   }
+}
+
+void
 fs_visitor::visit(ir_call *ir)
 {
-   assert(!"FINISHME");
+   const char *callee = ir->callee->function_name();
+
+   if (!strcmp("__intrinsic_atomic_read", callee) ||
+       !strcmp("__intrinsic_atomic_increment", callee) ||
+       !strcmp("__intrinsic_atomic_predecrement", callee)) {
+      visit_atomic_counter_intrinsic(ir);
+   } else {
+      assert(!"Unsupported intrinsic.");
+   }
 }
 
 void
@@ -2240,6 +2301,84 @@ fs_visitor::visit(ir_end_primitive *)
    assert(!"not reached");
 }
 
+void
+fs_visitor::emit_untyped_atomic(unsigned atomic_op, unsigned surf_index,
+                                fs_reg dst, fs_reg offset, fs_reg src0,
+                                fs_reg src1)
+{
+   const unsigned operand_len = dispatch_width / 8;
+   unsigned mlen = 0;
+
+   /* Initialize the sample mask in the message header. */
+   emit(MOV(brw_uvec_mrf(8, mlen, 0), brw_imm_ud(0)))
+      ->force_writemask_all = true;
+
+   if (fp->UsesKill) {
+      emit(MOV(brw_uvec_mrf(1, mlen, 7), brw_flag_reg(0, 1)))
+         ->force_writemask_all = true;
+   } else {
+      emit(MOV(brw_uvec_mrf(1, mlen, 7),
+               retype(brw_vec1_grf(1, 7), BRW_REGISTER_TYPE_UD)))
+         ->force_writemask_all = true;
+   }
+
+   mlen++;
+
+   /* Set the atomic operation offset. */
+   emit(MOV(brw_uvec_mrf(dispatch_width, mlen, 0), offset));
+   mlen += operand_len;
+
+   /* Set the atomic operation arguments. */
+   if (src0.file != BAD_FILE) {
+      emit(MOV(brw_uvec_mrf(dispatch_width, mlen, 0), src0));
+      mlen += operand_len;
+   }
+
+   if (src1.file != BAD_FILE) {
+      emit(MOV(brw_uvec_mrf(dispatch_width, mlen, 0), src1));
+      mlen += operand_len;
+   }
+
+   /* Emit the instruction. */
+   fs_inst inst(SHADER_OPCODE_UNTYPED_ATOMIC, dst, atomic_op, surf_index);
+   inst.base_mrf = 0;
+   inst.mlen = mlen;
+   emit(inst);
+}
+
+void
+fs_visitor::emit_untyped_surface_read(unsigned surf_index, fs_reg dst,
+                                      fs_reg offset)
+{
+   const unsigned operand_len = dispatch_width / 8;
+   unsigned mlen = 0;
+
+   /* Initialize the sample mask in the message header. */
+   emit(MOV(brw_uvec_mrf(8, mlen, 0), brw_imm_ud(0)))
+      ->force_writemask_all = true;
+
+   if (fp->UsesKill) {
+      emit(MOV(brw_uvec_mrf(1, mlen, 7), brw_flag_reg(0, 1)))
+         ->force_writemask_all = true;
+   } else {
+      emit(MOV(brw_uvec_mrf(1, mlen, 7),
+               retype(brw_vec1_grf(1, 7), BRW_REGISTER_TYPE_UD)))
+         ->force_writemask_all = true;
+   }
+
+   mlen++;
+
+   /* Set the surface read offset. */
+   emit(MOV(brw_uvec_mrf(dispatch_width, mlen, 0), offset));
+   mlen += operand_len;
+
+   /* Emit the instruction. */
+   fs_inst inst(SHADER_OPCODE_UNTYPED_SURFACE_READ, dst, surf_index);
+   inst.base_mrf = 0;
+   inst.mlen = mlen;
+   emit(inst);
+}
+
 fs_inst *
 fs_visitor::emit(fs_inst inst)
 {
@@ -2254,8 +2393,6 @@ fs_visitor::emit(fs_inst *inst)
 {
    if (force_uncompressed_stack > 0)
       inst->force_uncompressed = true;
-   else if (force_sechalf_stack > 0)
-      inst->force_sechalf = true;
 
    inst->annotation = this->current_annotation;
    inst->ir = this->base_ir;
@@ -2460,15 +2597,68 @@ fs_visitor::emit_color_write(int target, int index, int first_color_mrf)
 	 inst->saturate = c->key.clamp_fragment_color;
 	 pop_force_uncompressed();
 
-	 push_force_sechalf();
 	 color.sechalf = true;
 	 inst = emit(MOV(fs_reg(MRF, first_color_mrf + index + 4, color.type),
                          color));
+	 inst->force_sechalf = true;
 	 inst->saturate = c->key.clamp_fragment_color;
-	 pop_force_sechalf();
 	 color.sechalf = false;
       }
    }
+}
+
+static int
+cond_for_alpha_func(GLenum func)
+{
+   switch(func) {
+      case GL_GREATER:
+         return BRW_CONDITIONAL_G;
+      case GL_GEQUAL:
+         return BRW_CONDITIONAL_GE;
+      case GL_LESS:
+         return BRW_CONDITIONAL_L;
+      case GL_LEQUAL:
+         return BRW_CONDITIONAL_LE;
+      case GL_EQUAL:
+         return BRW_CONDITIONAL_EQ;
+      case GL_NOTEQUAL:
+         return BRW_CONDITIONAL_NEQ;
+      default:
+         assert(!"Not reached");
+         return 0;
+   }
+}
+
+/**
+ * Alpha test support for when we compile it into the shader instead
+ * of using the normal fixed-function alpha test.
+ */
+void
+fs_visitor::emit_alpha_test()
+{
+   this->current_annotation = "Alpha test";
+
+   fs_inst *cmp;
+   if (c->key.alpha_test_func == GL_ALWAYS)
+      return;
+
+   if (c->key.alpha_test_func == GL_NEVER) {
+      /* f0.1 = 0 */
+      fs_reg some_reg = fs_reg(retype(brw_vec8_grf(0, 0),
+                                      BRW_REGISTER_TYPE_UW));
+      cmp = emit(CMP(reg_null_f, some_reg, some_reg,
+                     BRW_CONDITIONAL_NEQ));
+   } else {
+      /* RT0 alpha */
+      fs_reg color = outputs[0];
+      color.reg_offset += 3;
+
+      /* f0.1 &= func(color, ref) */
+      cmp = emit(CMP(reg_null_f, color, fs_reg(c->key.alpha_test_ref),
+                     cond_for_alpha_func(c->key.alpha_test_func)));
+   }
+   cmp->predicate = BRW_PREDICATE_NORMAL;
+   cmp->flag_subreg = 1;
 }
 
 void
@@ -2517,6 +2707,16 @@ fs_visitor::emit_fb_writes()
       emit(MOV(fs_reg(MRF, nr++),
                fs_reg(brw_vec8_grf(c->aa_dest_stencil_reg, 0))));
       pop_force_uncompressed();
+   }
+
+   c->prog_data.uses_omask =
+      fp->Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK);
+   if(c->prog_data.uses_omask) {
+      this->current_annotation = "FB write oMask";
+      assert(this->sample_mask.file != BAD_FILE);
+      /* Hand over gl_SampleMask. Only lower 16 bits are relevant. */
+      emit(FS_OPCODE_SET_OMASK, fs_reg(MRF, nr, BRW_REGISTER_TYPE_UW), this->sample_mask);
+      nr += 1;
    }
 
    /* Reserve space for color. It'll be filled in per MRT below. */
@@ -2720,7 +2920,6 @@ fs_visitor::fs_visitor(struct brw_context *brw,
    this->nr_params_remap = 0;
 
    this->force_uncompressed_stack = 0;
-   this->force_sechalf_stack = 0;
 
    this->spilled_any_registers = false;
 

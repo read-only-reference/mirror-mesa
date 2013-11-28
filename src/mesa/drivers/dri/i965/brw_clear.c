@@ -111,7 +111,7 @@ brw_fast_clear_depth(struct gl_context *ctx)
    struct intel_mipmap_tree *mt = depth_irb->mt;
    struct gl_renderbuffer_attachment *depth_att = &fb->Attachment[BUFFER_DEPTH];
 
-   if (brw->gen < 6)
+   if (brw->gen < 6 || brw->gen >= 8)
       return false;
 
    if (!intel_renderbuffer_has_hiz(depth_irb))
@@ -181,8 +181,16 @@ brw_fast_clear_depth(struct gl_context *ctx)
     */
    intel_batchbuffer_emit_mi_flush(brw);
 
-   intel_hiz_exec(brw, mt, depth_irb->mt_level, depth_irb->mt_layer,
-		  GEN6_HIZ_OP_DEPTH_CLEAR);
+   if (fb->NumLayers > 0) {
+      assert(fb->NumLayers == depth_irb->mt->level[depth_irb->mt_level].depth);
+      for (unsigned layer = 0; layer < fb->NumLayers; layer++) {
+         intel_hiz_exec(brw, mt, depth_irb->mt_level, layer,
+                        GEN6_HIZ_OP_DEPTH_CLEAR);
+      }
+   } else {
+      intel_hiz_exec(brw, mt, depth_irb->mt_level, depth_irb->mt_layer,
+                     GEN6_HIZ_OP_DEPTH_CLEAR);
+   }
 
    if (brw->gen == 6) {
       /* From the Sandy Bridge PRM, volume 2 part 1, page 314:
@@ -230,7 +238,7 @@ brw_clear(struct gl_context *ctx, GLbitfield mask)
    }
 
    /* BLORP is currently only supported on Gen6+. */
-   if (brw->gen >= 6) {
+   if (brw->gen >= 6 && brw->gen < 8) {
       if (mask & BUFFER_BITS_COLOR) {
          if (brw_blorp_clear_color(brw, fb, partial_clear)) {
             debug_mask("blorp color", mask & BUFFER_BITS_COLOR);

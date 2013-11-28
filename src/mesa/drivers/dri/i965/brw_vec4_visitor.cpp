@@ -53,7 +53,6 @@ vec4_instruction::vec4_instruction(vec4_visitor *v,
    this->mlen = 0;
    this->base_mrf = 0;
    this->offset = 0;
-   this->ir = NULL;
    this->annotation = v->current_annotation;
 }
 
@@ -177,11 +176,11 @@ vec4_visitor::IF(uint32_t predicate)
    return inst;
 }
 
-/** Gen6+ IF with embedded comparison. */
+/** Gen6 IF with embedded comparison. */
 vec4_instruction *
 vec4_visitor::IF(src_reg src0, src_reg src1, uint32_t condition)
 {
-   assert(brw->gen >= 6);
+   assert(brw->gen == 6);
 
    vec4_instruction *inst;
 
@@ -974,8 +973,11 @@ vec4_visitor::visit(ir_variable *ir)
       /* Thanks to the lower_ubo_reference pass, we will see only
        * ir_binop_ubo_load expressions and not ir_dereference_variable for UBO
        * variables, so no need for them to be in variable_ht.
+       *
+       * Atomic counters take no uniform storage, no need to do
+       * anything here.
        */
-      if (ir->is_in_uniform_block())
+      if (ir->is_in_uniform_block() || ir->type->contains_atomic())
          return;
 
       /* Track how big the whole uniform variable is, in case we need to put a
@@ -1569,7 +1571,7 @@ vec4_visitor::visit(ir_expression *ir)
       ir_constant *uniform_block = ir->operands[0]->as_constant();
       ir_constant *const_offset_ir = ir->operands[1]->as_constant();
       unsigned const_offset = const_offset_ir ? const_offset_ir->value.u[0] : 0;
-      src_reg offset = op[1];
+      src_reg offset;
 
       /* Now, load the vector from that offset. */
       assert(ir->type->is_vector() || ir->type->is_scalar());
@@ -1581,7 +1583,8 @@ vec4_visitor::visit(ir_expression *ir)
       if (const_offset_ir) {
          offset = src_reg(const_offset / 16);
       } else {
-         emit(SHR(dst_reg(offset), offset, src_reg(4)));
+         offset = src_reg(this, glsl_type::uint_type);
+         emit(SHR(dst_reg(offset), op[1], src_reg(4)));
       }
 
       vec4_instruction *pull =
@@ -2160,9 +2163,56 @@ vec4_visitor::visit(ir_constant *ir)
 }
 
 void
+vec4_visitor::visit_atomic_counter_intrinsic(ir_call *ir)
+{
+   ir_dereference *deref = static_cast<ir_dereference *>(
+      ir->actual_parameters.get_head());
+   ir_variable *location = deref->variable_referenced();
+   unsigned surf_index = (prog_data->base.binding_table.abo_start +
+                          location->atomic.buffer_index);
+
+   /* Calculate the surface offset */
+   src_reg offset(this, glsl_type::uint_type);
+   ir_dereference_array *deref_array = deref->as_dereference_array();
+   if (deref_array) {
+      deref_array->array_index->accept(this);
+
+      src_reg tmp(this, glsl_type::uint_type);
+      emit(MUL(dst_reg(tmp), this->result, ATOMIC_COUNTER_SIZE));
+      emit(ADD(dst_reg(offset), tmp, location->atomic.offset));
+   } else {
+      offset = location->atomic.offset;
+   }
+
+   /* Emit the appropriate machine instruction */
+   const char *callee = ir->callee->function_name();
+   dst_reg dst = get_assignment_lhs(ir->return_deref, this);
+
+   if (!strcmp("__intrinsic_atomic_read", callee)) {
+      emit_untyped_surface_read(surf_index, dst, offset);
+
+   } else if (!strcmp("__intrinsic_atomic_increment", callee)) {
+      emit_untyped_atomic(BRW_AOP_INC, surf_index, dst, offset,
+                          src_reg(), src_reg());
+
+   } else if (!strcmp("__intrinsic_atomic_predecrement", callee)) {
+      emit_untyped_atomic(BRW_AOP_PREDEC, surf_index, dst, offset,
+                          src_reg(), src_reg());
+   }
+}
+
+void
 vec4_visitor::visit(ir_call *ir)
 {
-   assert(!"not reached");
+   const char *callee = ir->callee->function_name();
+
+   if (!strcmp("__intrinsic_atomic_read", callee) ||
+       !strcmp("__intrinsic_atomic_increment", callee) ||
+       !strcmp("__intrinsic_atomic_predecrement", callee)) {
+      visit_atomic_counter_intrinsic(ir);
+   } else {
+      assert(!"Unsupported intrinsic.");
+   }
 }
 
 void
@@ -2554,6 +2604,55 @@ void
 vec4_visitor::visit(ir_end_primitive *)
 {
    assert(!"not reached");
+}
+
+void
+vec4_visitor::emit_untyped_atomic(unsigned atomic_op, unsigned surf_index,
+                                  dst_reg dst, src_reg offset,
+                                  src_reg src0, src_reg src1)
+{
+   unsigned mlen = 0;
+
+   /* Set the atomic operation offset. */
+   emit(MOV(brw_writemask(brw_uvec_mrf(8, mlen, 0), WRITEMASK_X), offset));
+   mlen++;
+
+   /* Set the atomic operation arguments. */
+   if (src0.file != BAD_FILE) {
+      emit(MOV(brw_writemask(brw_uvec_mrf(8, mlen, 0), WRITEMASK_X), src0));
+      mlen++;
+   }
+
+   if (src1.file != BAD_FILE) {
+      emit(MOV(brw_writemask(brw_uvec_mrf(8, mlen, 0), WRITEMASK_X), src1));
+      mlen++;
+   }
+
+   /* Emit the instruction.  Note that this maps to the normal SIMD8
+    * untyped atomic message on Ivy Bridge, but that's OK because
+    * unused channels will be masked out.
+    */
+   vec4_instruction *inst = emit(SHADER_OPCODE_UNTYPED_ATOMIC, dst,
+                                 src_reg(atomic_op), src_reg(surf_index));
+   inst->base_mrf = 0;
+   inst->mlen = mlen;
+}
+
+void
+vec4_visitor::emit_untyped_surface_read(unsigned surf_index, dst_reg dst,
+                                        src_reg offset)
+{
+   /* Set the surface read offset. */
+   emit(MOV(brw_writemask(brw_uvec_mrf(8, 0, 0), WRITEMASK_X), offset));
+
+   /* Emit the instruction.  Note that this maps to the normal SIMD8
+    * untyped surface read message, but that's OK because unused
+    * channels will be masked out.
+    */
+   vec4_instruction *inst = emit(SHADER_OPCODE_UNTYPED_SURFACE_READ,
+                                 dst, src_reg(surf_index));
+   inst->base_mrf = 0;
+   inst->mlen = 1;
 }
 
 void
@@ -3150,7 +3249,12 @@ vec4_visitor::vec4_visitor(struct brw_context *brw,
 			   void *mem_ctx,
                            bool debug_flag,
                            bool no_spills)
-   : debug_flag(debug_flag), no_spills(no_spills)
+   : sanity_param_count(0),
+     fail_msg(NULL),
+     first_non_payload_grf(0),
+     need_all_constants_in_pull_buffer(false),
+     debug_flag(debug_flag),
+     no_spills(no_spills)
 {
    this->brw = brw;
    this->ctx = &brw->ctx;

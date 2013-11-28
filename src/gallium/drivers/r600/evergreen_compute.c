@@ -392,7 +392,6 @@ static void compute_emit_cs(struct r600_context *ctx, const uint *block_layout,
 		const uint *grid_layout)
 {
 	struct radeon_winsys_cs *cs = ctx->b.rings.gfx.cs;
-	unsigned flush_flags = 0;
 	int i;
 
 	/* make sure that the gfx ring is only one active */
@@ -474,6 +473,10 @@ static void compute_emit_cs(struct r600_context *ctx, const uint *block_layout,
 	              R600_CONTEXT_INV_TEX_CACHE;
 	r600_flush_emit(ctx);
 	ctx->b.flags = 0;
+
+	if (ctx->b.chip_class >= CAYMAN) {
+		ctx->skip_surface_sync_on_next_cs_flush = true;
+	}
 
 #if 0
 	COMPUTE_DBG(ctx->screen, "cdw: %i\n", cs->cdw);

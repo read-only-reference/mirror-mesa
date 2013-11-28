@@ -32,11 +32,11 @@ MESA_GLAPI_OUTPUTS = \
 
 MESA_GLAPI_ASM_OUTPUTS =
 if HAVE_X86_ASM
-MESA_GLAPI_ASM_OUTPUTS += $(MESA_GLAPI_DIR)/glapi_x86.S
-endif
-
 if HAVE_X86_64_ASM
 MESA_GLAPI_ASM_OUTPUTS += $(MESA_GLAPI_DIR)/glapi_x86-64.S
+else
+MESA_GLAPI_ASM_OUTPUTS += $(MESA_GLAPI_DIR)/glapi_x86.S
+endif
 endif
 
 if HAVE_SPARC_ASM
@@ -98,6 +98,7 @@ API_XML = \
 	ARB_draw_buffers.xml \
 	ARB_draw_buffers_blend.xml \
 	ARB_draw_elements_base_vertex.xml \
+	ARB_draw_indirect.xml \
 	ARB_draw_instanced.xml \
 	ARB_ES2_compatibility.xml \
 	ARB_ES3_compatibility.xml \
@@ -108,6 +109,7 @@ API_XML = \
 	ARB_invalidate_subdata.xml \
 	ARB_map_buffer_range.xml \
 	ARB_robustness.xml \
+	ARB_sample_shading.xml \
 	ARB_sampler_objects.xml \
 	ARB_seamless_cube_map.xml \
 	ARB_shader_atomic_counters.xml \
@@ -124,6 +126,7 @@ API_XML = \
 	ARB_texture_storage_multisample.xml \
 	ARB_texture_storage.xml \
 	ARB_vertex_array_object.xml \
+	ARB_vertex_attrib_binding.xml \
 	AMD_draw_buffers_blend.xml \
 	AMD_performance_monitor.xml \
 	ARB_vertex_type_2_10_10_10_rev.xml \
@@ -144,7 +147,9 @@ API_XML = \
 	NV_texture_barrier.xml \
 	NV_vdpau_interop.xml \
 	OES_EGL_image.xml \
-	GL3x.xml
+	GL3x.xml \
+	GL4x.xml
+
 
 
 COMMON = $(API_XML) \

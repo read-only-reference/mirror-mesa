@@ -135,6 +135,8 @@ client_state(struct gl_context *ctx, GLenum cap, GLboolean state)
    else
       arrayObj->_Enabled &= ~flag;
 
+   arrayObj->NewArrays |= flag;
+
    if (ctx->Driver.Enable) {
       ctx->Driver.Enable( ctx, cap, state );
    }
@@ -800,6 +802,17 @@ _mesa_set_enable(struct gl_context *ctx, GLenum cap, GLboolean state)
             return;
          FLUSH_VERTICES(ctx, _NEW_MULTISAMPLE);
          ctx->Multisample.SampleCoverageInvert = state;
+         break;
+
+      /* GL_ARB_sample_shading */
+      case GL_SAMPLE_SHADING:
+         if (!_mesa_is_desktop_gl(ctx))
+            goto invalid_enum_error;
+         CHECK_EXTENSION(ARB_sample_shading, cap);
+         if (ctx->Multisample.SampleShading == state)
+            return;
+         FLUSH_VERTICES(ctx, _NEW_MULTISAMPLE);
+         ctx->Multisample.SampleShading = state;
          break;
 
       /* GL_IBM_rasterpos_clip */
@@ -1593,6 +1606,13 @@ _mesa_IsEnabled( GLenum cap )
             goto invalid_enum_error;
          CHECK_EXTENSION(ARB_texture_multisample);
          return ctx->Multisample.SampleMask;
+
+      /* ARB_sample_shading */
+      case GL_SAMPLE_SHADING:
+         if (!_mesa_is_desktop_gl(ctx))
+            goto invalid_enum_error;
+         CHECK_EXTENSION(ARB_sample_shading);
+         return ctx->Multisample.SampleShading;
 
       default:
          goto invalid_enum_error;

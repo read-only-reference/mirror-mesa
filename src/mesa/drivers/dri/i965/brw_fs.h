@@ -291,7 +291,7 @@ public:
    void assign_curb_setup();
    void calculate_urb_setup();
    void assign_urb_setup();
-   bool assign_regs();
+   bool assign_regs(bool allow_spilling);
    void assign_regs_trivial();
    void get_used_mrfs(bool *mrf_used);
    void setup_payload_interference(struct ra_graph *g, int payload_reg_count,
@@ -322,7 +322,7 @@ public:
    bool remove_dead_constants();
    bool remove_duplicate_mrf_writes();
    bool virtual_grf_interferes(int a, int b);
-   void schedule_instructions(bool post_reg_alloc);
+   void schedule_instructions(instruction_scheduler_mode mode);
    void insert_gen4_send_dependency_workarounds();
    void insert_gen4_pre_send_dependency_workarounds(fs_inst *inst);
    void insert_gen4_post_send_dependency_workarounds(fs_inst *inst);
@@ -331,8 +331,6 @@ public:
 
    void push_force_uncompressed();
    void pop_force_uncompressed();
-   void push_force_sechalf();
-   void pop_force_sechalf();
 
    void emit_dummy_fs();
    fs_reg *emit_fragcoord_interpolation(ir_variable *ir);
@@ -340,9 +338,12 @@ public:
                          glsl_interp_qualifier interpolation_mode,
                          bool is_centroid);
    fs_reg *emit_frontfacing_interpolation(ir_variable *ir);
+   fs_reg *emit_samplepos_setup(ir_variable *ir);
+   fs_reg *emit_sampleid_setup(ir_variable *ir);
    fs_reg *emit_general_interpolation(ir_variable *ir);
    void emit_interpolation_setup_gen4();
    void emit_interpolation_setup_gen6();
+   void compute_sample_position(fs_reg dst, fs_reg int_sample_pos);
    fs_reg rescale_texcoord(ir_texture *ir, fs_reg coordinate,
                            bool is_rect, int sampler, int texunit);
    fs_inst *emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
@@ -391,12 +392,20 @@ public:
                     fs_reg dst, fs_reg src0, fs_reg src1, fs_reg one);
 
    void emit_color_write(int target, int index, int first_color_mrf);
+   void emit_alpha_test();
    void emit_fb_writes();
 
    void emit_shader_time_begin();
    void emit_shader_time_end();
    void emit_shader_time_write(enum shader_time_shader_type type,
                                fs_reg value);
+
+   void emit_untyped_atomic(unsigned atomic_op, unsigned surf_index,
+                            fs_reg dst, fs_reg offset, fs_reg src0,
+                            fs_reg src1);
+
+   void emit_untyped_surface_read(unsigned surf_index, fs_reg dst,
+                                  fs_reg offset);
 
    bool try_rewrite_rhs_to_dst(ir_assignment *ir,
 			       fs_reg dst,
@@ -416,6 +425,8 @@ public:
    int implied_mrf_writes(fs_inst *inst);
 
    void dump_instruction(backend_instruction *inst);
+
+   void visit_atomic_counter_intrinsic(ir_call *ir);
 
    struct gl_fragment_program *fp;
    struct brw_wm_compile *c;
@@ -440,6 +451,7 @@ public:
 
    struct hash_table *variable_ht;
    fs_reg frag_depth;
+   fs_reg sample_mask;
    fs_reg outputs[BRW_MAX_DRAW_BUFFERS];
    unsigned output_components[BRW_MAX_DRAW_BUFFERS];
    fs_reg dual_src_output;
@@ -475,7 +487,6 @@ public:
    const unsigned dispatch_width; /**< 8 or 16 */
 
    int force_uncompressed_stack;
-   int force_sechalf_stack;
 };
 
 /**
@@ -545,6 +556,16 @@ private:
                                                  struct brw_reg index,
                                                  struct brw_reg offset);
    void generate_mov_dispatch_to_flags(fs_inst *inst);
+
+   void generate_set_omask(fs_inst *inst,
+                           struct brw_reg dst,
+                           struct brw_reg sample_mask);
+
+   void generate_set_sample_id(fs_inst *inst,
+                               struct brw_reg dst,
+                               struct brw_reg src0,
+                               struct brw_reg src1);
+
    void generate_set_simd4x2_offset(fs_inst *inst,
                                     struct brw_reg dst,
                                     struct brw_reg offset);
@@ -596,3 +617,5 @@ private:
 bool brw_do_channel_expressions(struct exec_list *instructions);
 bool brw_do_vector_splitting(struct exec_list *instructions);
 bool brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog);
+
+struct brw_reg brw_reg_from_fs_reg(fs_reg *reg);

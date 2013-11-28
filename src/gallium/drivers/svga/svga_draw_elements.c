@@ -24,6 +24,7 @@
  **********************************************************/
 
 #include "util/u_inlines.h"
+#include "util/u_prim.h"
 #include "indices/u_indices.h"
 
 #include "svga_cmd.h"
@@ -37,16 +38,24 @@
 
 static enum pipe_error
 translate_indices(struct svga_hwtnl *hwtnl, struct pipe_resource *src,
-                  unsigned offset, unsigned nr, unsigned index_size,
+                  unsigned offset, unsigned prim, unsigned nr,
+                  unsigned index_size,
                   u_translate_func translate, struct pipe_resource **out_buf)
 {
    struct pipe_context *pipe = &hwtnl->svga->pipe;
    struct pipe_transfer *src_transfer = NULL;
    struct pipe_transfer *dst_transfer = NULL;
-   unsigned size = index_size * nr;
+   unsigned size;
    const void *src_map = NULL;
    struct pipe_resource *dst = NULL;
    void *dst_map = NULL;
+
+   /* Need to trim vertex count to make sure we don't write too much data
+    * to the dst buffer in the translate() call.
+    */
+   u_trim_pipe_prim(prim, &nr);
+
+   size = index_size * nr;
 
    dst = pipe_buffer_create(pipe->screen,
                             PIPE_BIND_INDEX_BUFFER, PIPE_USAGE_STATIC, size);
@@ -91,16 +100,14 @@ svga_hwtnl_simple_draw_range_elements(struct svga_hwtnl *hwtnl,
                                       unsigned prim, unsigned start,
                                       unsigned count)
 {
-   struct pipe_resource *upload_buffer = NULL;
    SVGA3dPrimitiveRange range;
    unsigned hw_prim;
    unsigned hw_count;
    unsigned index_offset = start * index_size;
-   enum pipe_error ret = PIPE_OK;
 
    hw_prim = svga_translate_prim(prim, count, &hw_count);
    if (hw_count == 0)
-      goto done;
+      return PIPE_OK; /* nothing to draw */
 
    /* We should never see user-space buffers in the driver.  The vbuf
     * module should have converted them into real buffers.
@@ -115,15 +122,7 @@ svga_hwtnl_simple_draw_range_elements(struct svga_hwtnl *hwtnl,
    range.indexWidth = index_size;
    range.indexBias = index_bias;
 
-   ret = svga_hwtnl_prim(hwtnl, &range, min_index, max_index, index_buffer);
-   if (ret != PIPE_OK)
-      goto done;
-
-done:
-   if (upload_buffer)
-      pipe_resource_reference(&upload_buffer, NULL);
-
-   return ret;
+   return svga_hwtnl_prim(hwtnl, &range, min_index, max_index, index_buffer);
 }
 
 
@@ -180,7 +179,7 @@ svga_hwtnl_draw_range_elements(struct svga_hwtnl *hwtnl,
       ret = translate_indices(hwtnl,
                               index_buffer,
                               start * index_size,
-                              gen_nr, gen_size, gen_func, &gen_buf);
+                              gen_prim, gen_nr, gen_size, gen_func, &gen_buf);
       if (ret != PIPE_OK)
          goto done;
 

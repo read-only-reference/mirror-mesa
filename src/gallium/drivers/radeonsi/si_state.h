@@ -46,6 +46,7 @@ struct si_state_rasterizer {
 	bool			flatshade;
 	bool			two_side;
 	bool			multisample_enable;
+	bool			line_stipple_enable;
 	unsigned		sprite_coord_enable;
 	unsigned		pa_sc_line_stipple;
 	unsigned		pa_su_sc_mode_cntl;
@@ -109,7 +110,8 @@ union si_state {
 #define NUM_SAMPLER_VIEWS	(FMASK_TEX_OFFSET+NUM_TEX_UNITS)
 #define NUM_SAMPLER_STATES	NUM_TEX_UNITS
 
-#define NUM_CONST_BUFFERS 2
+#define NUM_PIPE_CONST_BUFFERS 16
+#define NUM_CONST_BUFFERS 17
 
 /* This represents resource descriptors in memory, such as buffer resources,
  * image resources, and sampler states.

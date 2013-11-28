@@ -100,6 +100,11 @@ intel_batchbuffer_reset(struct brw_context *brw)
    brw->batch.state_batch_offset = brw->batch.bo->size;
    brw->batch.used = 0;
    brw->batch.needs_sol_reset = false;
+
+   /* We don't know what ring the new batch will be sent to until we see the
+    * first BEGIN_BATCH or BEGIN_BATCH_BLT.  Mark it as unknown.
+    */
+   brw->batch.ring = UNKNOWN_RING;
 }
 
 void
@@ -116,6 +121,8 @@ intel_batchbuffer_reset_to_saved(struct brw_context *brw)
    drm_intel_gem_bo_clear_relocs(brw->batch.bo, brw->batch.saved.reloc_count);
 
    brw->batch.used = brw->batch.saved.used;
+   if (brw->batch.used == 0)
+      brw->batch.ring = UNKNOWN_RING;
 
    /* Cached batch state is dead, since we just cleared some unknown part of the
     * batchbuffer.  Assume that the caller resets any other state necessary.
@@ -172,12 +179,28 @@ do_batch_dump(struct brw_context *brw)
    }
 }
 
+void
+intel_batchbuffer_emit_render_ring_prelude(struct brw_context *brw)
+{
+   /* Without hardware contexts, we need to capture the pipeline statistics
+    * registers at the start and end of each render ring batch, so we can see
+    * what that batch contributed.  Emit state packets to write them to a BO.
+    */
+   brw_emit_query_begin(brw);
+
+   /* We may also need to enable and snapshot OA counters. */
+   brw_perf_monitor_new_batch(brw);
+}
+
 /**
  * Called when starting a new batch buffer.
  */
 static void
 brw_new_batch(struct brw_context *brw)
 {
+   /* Create a new batchbuffer and reset the associated state: */
+   intel_batchbuffer_reset(brw);
+
    /* If the kernel supports hardware contexts, then most hardware state is
     * preserved between batches; we only need to re-emit state that is required
     * to be in every batch.  Otherwise we need to re-emit all the state that
@@ -198,12 +221,6 @@ brw_new_batch(struct brw_context *brw)
 
    brw->ib.type = -1;
 
-   /* Mark that the current program cache BO has been used by the GPU.
-    * It will be reallocated if we need to put new programs in for the
-    * next batch.
-    */
-   brw->cache.bo_used_by_gpu = true;
-
    /* We need to periodically reap the shader time results, because rollover
     * happens every few seconds.  We also want to see results every once in a
     * while, because many programs won't cleanly destroy our context, so the
@@ -211,6 +228,9 @@ brw_new_batch(struct brw_context *brw)
     */
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
       brw_collect_and_report_shader_time(brw);
+
+   if (INTEL_DEBUG & DEBUG_PERFMON)
+      brw_dump_perf_monitors(brw);
 }
 
 /**
@@ -225,13 +245,26 @@ brw_new_batch(struct brw_context *brw)
 static void
 brw_finish_batch(struct brw_context *brw)
 {
+   /* Capture the closing pipeline statistics register values necessary to
+    * support query objects (in the non-hardware context world).
+    */
    brw_emit_query_end(brw);
+
+   /* We may also need to snapshot and disable OA counters. */
+   if (brw->batch.ring == RENDER_RING)
+      brw_perf_monitor_finish_batch(brw);
 
    if (brw->curbe.curbe_bo) {
       drm_intel_gem_bo_unmap_gtt(brw->curbe.curbe_bo);
       drm_intel_bo_unreference(brw->curbe.curbe_bo);
       brw->curbe.curbe_bo = NULL;
    }
+
+   /* Mark that the current program cache BO has been used by the GPU.
+    * It will be reallocated if we need to put new programs in for the
+    * next batch.
+    */
+   brw->cache.bo_used_by_gpu = true;
 }
 
 /* TODO: Push this whole function into bufmgr.
@@ -257,19 +290,18 @@ do_flush_locked(struct brw_context *brw)
    if (!brw->intelScreen->no_hw) {
       int flags;
 
-      if (brw->gen < 6 || !batch->is_blit) {
-	 flags = I915_EXEC_RENDER;
+      if (brw->gen >= 6 && batch->ring == BLT_RING) {
+         flags = I915_EXEC_BLT;
       } else {
-	 flags = I915_EXEC_BLT;
+         flags = I915_EXEC_RENDER;
       }
-
       if (batch->needs_sol_reset)
 	 flags |= I915_EXEC_GEN7_SOL_RESET;
 
       if (ret == 0) {
          if (unlikely(INTEL_DEBUG & DEBUG_AUB))
             brw_annotate_aub(brw);
-	 if (brw->hw_ctx == NULL || batch->is_blit) {
+	 if (brw->hw_ctx == NULL || batch->ring != RENDER_RING) {
 	    ret = drm_intel_bo_mrb_exec(batch->bo, 4 * batch->used, NULL, 0, 0,
 					flags);
 	 } else {
@@ -286,7 +318,6 @@ do_flush_locked(struct brw_context *brw)
       fprintf(stderr, "intel_do_flush_locked failed: %s\n", strerror(-ret));
       exit(1);
    }
-   brw_new_batch(brw);
 
    return ret;
 }
@@ -339,9 +370,8 @@ _intel_batchbuffer_flush(struct brw_context *brw,
       drm_intel_bo_wait_rendering(brw->batch.bo);
    }
 
-   /* Reset the buffer:
-    */
-   intel_batchbuffer_reset(brw);
+   /* Start a new batch buffer. */
+   brw_new_batch(brw);
 
    return ret;
 }
@@ -400,10 +430,10 @@ intel_batchbuffer_emit_reloc_fenced(struct brw_context *brw,
 
 void
 intel_batchbuffer_data(struct brw_context *brw,
-                       const void *data, GLuint bytes, bool is_blit)
+                       const void *data, GLuint bytes, enum brw_gpu_ring ring)
 {
    assert((bytes & 3) == 0);
-   intel_batchbuffer_require_space(brw, bytes, is_blit);
+   intel_batchbuffer_require_space(brw, bytes, ring);
    __memcpy(brw->batch.map + brw->batch.used, data, bytes);
    brw->batch.used += bytes >> 2;
 }
@@ -429,6 +459,7 @@ intel_batchbuffer_cached_advance(struct brw_context *brw)
 	       brw->batch.cached_items = item;
 	    }
 	    brw->batch.used = brw->batch.emit;
+            assert(brw->batch.used > 0);
 	    return;
 	 }
 
@@ -510,6 +541,36 @@ gen7_emit_vs_workaround_flush(struct brw_context *brw)
    ADVANCE_BATCH();
 }
 
+
+/**
+ * Emit a PIPE_CONTROL command for gen7 with the CS Stall bit set.
+ */
+void
+gen7_emit_cs_stall_flush(struct brw_context *brw)
+{
+   BEGIN_BATCH(4);
+   OUT_BATCH(_3DSTATE_PIPE_CONTROL | (4 - 2));
+   /* From p61 of the Ivy Bridge PRM (1.10.4 PIPE_CONTROL Command: DW1[20]
+    * CS Stall):
+    *
+    *     One of the following must also be set:
+    *     - Render Target Cache Flush Enable ([12] of DW1)
+    *     - Depth Cache Flush Enable ([0] of DW1)
+    *     - Stall at Pixel Scoreboard ([1] of DW1)
+    *     - Depth Stall ([13] of DW1)
+    *     - Post-Sync Operation ([13] of DW1)
+    *
+    * We choose to do a Post-Sync Operation (Write Immediate Data), since
+    * it seems like it will incur the least additional performance penalty.
+    */
+   OUT_BATCH(PIPE_CONTROL_CS_STALL | PIPE_CONTROL_WRITE_IMMEDIATE);
+   OUT_RELOC(brw->batch.workaround_bo,
+             I915_GEM_DOMAIN_INSTRUCTION, I915_GEM_DOMAIN_INSTRUCTION, 0);
+   OUT_BATCH(0);
+   ADVANCE_BATCH();
+}
+
+
 /**
  * Emits a PIPE_CONTROL with a non-zero post-sync operation, for
  * implementing two workarounds on gen6.  From section 1.4.7.1
@@ -582,7 +643,7 @@ void
 intel_batchbuffer_emit_mi_flush(struct brw_context *brw)
 {
    if (brw->gen >= 6) {
-      if (brw->batch.is_blit) {
+      if (brw->batch.ring == BLT_RING) {
 	 BEGIN_BATCH_BLT(4);
 	 OUT_BATCH(MI_FLUSH_DW);
 	 OUT_BATCH(0);

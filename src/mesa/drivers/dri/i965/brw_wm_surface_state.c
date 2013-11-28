@@ -197,7 +197,9 @@ gen4_emit_buffer_surface_state(struct brw_context *brw,
                                unsigned buffer_offset,
                                unsigned surface_format,
                                unsigned buffer_size,
-                               unsigned pitch)
+                               unsigned pitch,
+                               unsigned mocs,
+                               bool rw)
 {
    uint32_t *surf = brw_state_batch(brw, AUB_TRACE_SURFACE_STATE,
                                     6 * 4, 32, out_offset);
@@ -219,11 +221,12 @@ gen4_emit_buffer_surface_state(struct brw_context *brw,
    if (bo) {
       drm_intel_bo_emit_reloc(brw->batch.bo, *out_offset + 4,
                               bo, buffer_offset,
-                              I915_GEM_DOMAIN_SAMPLER, 0);
+                              I915_GEM_DOMAIN_SAMPLER,
+                              (rw ? I915_GEM_DOMAIN_SAMPLER : 0));
    }
 }
 
-static void
+void
 brw_update_buffer_texture_surface(struct gl_context *ctx,
                                   unsigned unit,
                                   uint32_t *surf_offset)
@@ -248,11 +251,13 @@ brw_update_buffer_texture_surface(struct gl_context *ctx,
 		    _mesa_get_format_name(format));
    }
 
-   gen4_emit_buffer_surface_state(brw, surf_offset, bo,
-                                  tObj->BufferOffset,
-                                  brw_format,
-                                  size / texel_size,
-                                  texel_size);
+   brw->vtbl.emit_buffer_surface_state(brw, surf_offset, bo,
+                                       tObj->BufferOffset,
+                                       brw_format,
+                                       size / texel_size,
+                                       texel_size,
+                                       0, /* mocs */
+                                       false /* rw */);
 }
 
 static void
@@ -316,7 +321,7 @@ brw_update_texture_surface(struct gl_context *ctx,
  * Create the constant buffer surface.  Vertex/fragment shader constants will be
  * read from this buffer with Data Port Read instructions/messages.
  */
-static void
+void
 brw_create_constant_surface(struct brw_context *brw,
 			    drm_intel_bo *bo,
 			    uint32_t offset,
@@ -327,9 +332,9 @@ brw_create_constant_surface(struct brw_context *brw,
    uint32_t stride = dword_pitch ? 4 : 16;
    uint32_t elements = ALIGN(size, stride) / stride;
 
-   gen4_emit_buffer_surface_state(brw, out_offset, bo, offset,
-                                  BRW_SURFACEFORMAT_R32G32B32A32_FLOAT,
-                                  elements, stride);
+   brw->vtbl.emit_buffer_surface_state(brw, out_offset, bo, offset,
+                                       BRW_SURFACEFORMAT_R32G32B32A32_FLOAT,
+                                       elements, stride, 0, false);
 }
 
 /**
@@ -464,9 +469,9 @@ brw_upload_wm_pull_constants(struct brw_context *brw)
    }
    drm_intel_gem_bo_unmap_gtt(brw->wm.base.const_bo);
 
-   brw->vtbl.create_constant_surface(brw, brw->wm.base.const_bo, 0, size,
-                                     &brw->wm.base.surf_offset[surf_index],
-                                     true);
+   brw_create_constant_surface(brw, brw->wm.base.const_bo, 0, size,
+                               &brw->wm.base.surf_offset[surf_index],
+                               true);
 
    brw->state.dirty.brw |= BRW_NEW_SURFACES;
 }
@@ -696,7 +701,7 @@ brw_update_renderbuffer_surfaces(struct brw_context *brw)
       for (i = 0; i < ctx->DrawBuffer->_NumColorDrawBuffers; i++) {
 	 if (intel_renderbuffer(ctx->DrawBuffer->_ColorDrawBuffers[i])) {
 	    brw->vtbl.update_renderbuffer_surface(brw, ctx->DrawBuffer->_ColorDrawBuffers[i],
-                                                  ctx->DrawBuffer->Layered, i);
+                                                  ctx->DrawBuffer->NumLayers > 0, i);
 	 } else {
 	    brw->vtbl.update_null_renderbuffer_surface(brw, i);
 	 }
@@ -835,10 +840,10 @@ brw_upload_ubo_surfaces(struct brw_context *brw,
        * glBindBufferRange case is undefined, we can just bind the whole buffer
        * glBindBufferBase wants and be a correct implementation.
        */
-      brw->vtbl.create_constant_surface(brw, bo, binding->Offset,
-                                        bo->size - binding->Offset,
-                                        &surf_offsets[i],
-                                        shader->Type == GL_FRAGMENT_SHADER);
+      brw_create_constant_surface(brw, bo, binding->Offset,
+                                  bo->size - binding->Offset,
+                                  &surf_offsets[i],
+                                  shader->Type == GL_FRAGMENT_SHADER);
    }
 
    if (shader->NumUniformBlocks)
@@ -885,7 +890,7 @@ brw_upload_abo_surfaces(struct brw_context *brw,
       struct intel_buffer_object *intel_bo =
          intel_buffer_object(binding->BufferObject);
       drm_intel_bo *bo = intel_bufferobj_buffer(
-         brw, intel_bo, binding->Offset, bo->size - binding->Offset);
+         brw, intel_bo, binding->Offset, intel_bo->Base.Size - binding->Offset);
 
       brw->vtbl.create_raw_surface(brw, bo, binding->Offset,
                                    bo->size - binding->Offset,
@@ -926,5 +931,5 @@ gen4_init_vtable_surface_functions(struct brw_context *brw)
    brw->vtbl.update_renderbuffer_surface = brw_update_renderbuffer_surface;
    brw->vtbl.update_null_renderbuffer_surface =
       brw_update_null_renderbuffer_surface;
-   brw->vtbl.create_constant_surface = brw_create_constant_surface;
+   brw->vtbl.emit_buffer_surface_state = gen4_emit_buffer_surface_state;
 }

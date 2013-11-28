@@ -32,6 +32,7 @@
 #include "main/glheader.h"
 #include "main/context.h"
 #include "main/hash.h"
+#include "main/macros.h"
 #include "program.h"
 #include "prog_cache.h"
 #include "prog_parameter.h"
@@ -348,6 +349,7 @@ _mesa_delete_program(struct gl_context *ctx, struct gl_program *prog)
       return;
 
    free(prog->String);
+   free(prog->LocalParams);
 
    if (prog->Instructions) {
       _mesa_free_instructions(prog->Instructions, prog->NumInstructions);
@@ -476,7 +478,16 @@ _mesa_clone_program(struct gl_context *ctx, const struct gl_program *prog)
 
    if (prog->Parameters)
       clone->Parameters = _mesa_clone_parameter_list(prog->Parameters);
-   memcpy(clone->LocalParams, prog->LocalParams, sizeof(clone->LocalParams));
+   if (prog->LocalParams) {
+      clone->LocalParams = malloc(MAX_PROGRAM_LOCAL_PARAMS *
+                                  sizeof(float[4]));
+      if (!clone->LocalParams) {
+         _mesa_reference_program(ctx, &clone, NULL);
+         return NULL;
+      }
+      memcpy(clone->LocalParams, prog->LocalParams,
+             MAX_PROGRAM_LOCAL_PARAMS * sizeof(float[4]));
+   }
    clone->IndirectRegisterFiles = prog->IndirectRegisterFiles;
    clone->NumInstructions = prog->NumInstructions;
    clone->NumTemporaries = prog->NumTemporaries;
@@ -908,12 +919,6 @@ _mesa_valid_register_index(const struct gl_context *ctx,
    case PROGRAM_TEMPORARY:
       return index >= 0 && index < (GLint) c->MaxTemps;
 
-   case PROGRAM_ENV_PARAM:
-      return index >= 0 && index < (GLint) c->MaxEnvParams;
-
-   case PROGRAM_LOCAL_PARAM:
-      return index >= 0 && index < (GLint) c->MaxLocalParams;
-
    case PROGRAM_UNIFORM:
    case PROGRAM_STATE_VAR:
       /* aka constant buffer */
@@ -1023,4 +1028,35 @@ _mesa_postprocess_program(struct gl_context *ctx, struct gl_program *prog)
       }
 
    }
+}
+
+/* Gets the minimum number of shader invocations per fragment.
+ * This function is useful to determine if we need to do per
+ * sample shading or per fragment shading.
+ */
+GLint
+_mesa_get_min_invocations_per_fragment(struct gl_context *ctx,
+                                       const struct gl_fragment_program *prog)
+{
+   /* From ARB_sample_shading specification:
+    * "Using gl_SampleID in a fragment shader causes the entire shader
+    *  to be evaluated per-sample."
+    *
+    * "Using gl_SamplePosition in a fragment shader causes the entire
+    *  shader to be evaluated per-sample."
+    *
+    * "If MULTISAMPLE or SAMPLE_SHADING_ARB is disabled, sample shading
+    *  has no effect."
+    */
+   if (ctx->Multisample.Enabled) {
+      if (prog->Base.SystemValuesRead & (SYSTEM_BIT_SAMPLE_ID |
+                                         SYSTEM_BIT_SAMPLE_POS))
+         return MAX2(ctx->DrawBuffer->Visual.samples, 1);
+      else if (ctx->Multisample.SampleShading)
+         return MAX2(ceil(ctx->Multisample.MinSampleShadingValue *
+                          ctx->DrawBuffer->Visual.samples), 1);
+      else
+         return 1;
+   }
+   return 1;
 }

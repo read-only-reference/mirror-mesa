@@ -197,26 +197,39 @@ osmesa_choose_line_function( struct gl_context *ctx )
    const OSMesaContext osmesa = OSMESA_CONTEXT(ctx);
    const SWcontext *swrast = SWRAST_CONTEXT(ctx);
 
-   if (ctx->RenderMode != GL_RENDER)      return NULL;
-   if (ctx->Line.SmoothFlag)              return NULL;
-   if (ctx->Texture._EnabledUnits)        return NULL;
-   if (ctx->Light.ShadeModel != GL_FLAT)  return NULL;
-   if (ctx->Line.Width != 1.0F)           return NULL;
-   if (ctx->Line.StippleFlag)             return NULL;
-   if (ctx->Line.SmoothFlag)              return NULL;
+   if (ctx->DrawBuffer &&
+       ctx->DrawBuffer->Visual.redBits == 32) {
+      /* the special-case line functions in this file don't work
+       * for float color channels.
+       */
+      return NULL;
+   }
+
+   if (ctx->RenderMode != GL_RENDER ||
+       ctx->Line.SmoothFlag ||
+       ctx->Texture._EnabledUnits ||
+       ctx->Light.ShadeModel != GL_FLAT ||
+       ctx->Line.Width != 1.0F ||
+       ctx->Line.StippleFlag ||
+       ctx->Line.SmoothFlag) {
+      return NULL;
+   }
+
    if (osmesa->format != OSMESA_RGBA &&
        osmesa->format != OSMESA_BGRA &&
-       osmesa->format != OSMESA_ARGB)     return NULL;
+       osmesa->format != OSMESA_ARGB) {
+      return NULL;
+   }
 
-   if (swrast->_RasterMask==DEPTH_BIT
-       && ctx->Depth.Func==GL_LESS
-       && ctx->Depth.Mask==GL_TRUE
+   if (swrast->_RasterMask == DEPTH_BIT
+       && ctx->Depth.Func == GL_LESS
+       && ctx->Depth.Mask == GL_TRUE
        && ctx->Visual.depthBits == DEFAULT_SOFTWARE_DEPTH_BITS) {
-      return (swrast_line_func) flat_rgba_z_line;
+      return flat_rgba_z_line;
    }
 
    if (swrast->_RasterMask == 0) {
-      return (swrast_line_func) flat_rgba_line;
+      return flat_rgba_line;
    }
 
    return (swrast_line_func) NULL;
@@ -298,29 +311,45 @@ osmesa_choose_triangle_function( struct gl_context *ctx )
    const OSMesaContext osmesa = OSMESA_CONTEXT(ctx);
    const SWcontext *swrast = SWRAST_CONTEXT(ctx);
 
-   if (ctx->RenderMode != GL_RENDER)    return (swrast_tri_func) NULL;
-   if (ctx->Polygon.SmoothFlag)         return (swrast_tri_func) NULL;
-   if (ctx->Polygon.StippleFlag)        return (swrast_tri_func) NULL;
-   if (ctx->Texture._EnabledUnits)      return (swrast_tri_func) NULL;
+   if (ctx->DrawBuffer &&
+       ctx->DrawBuffer->Visual.redBits == 32) {
+      /* the special-case triangle functions in this file don't work
+       * for float color channels.
+       */
+      return NULL;
+   }
+
+   if (ctx->RenderMode != GL_RENDER ||
+       ctx->Polygon.SmoothFlag ||
+       ctx->Polygon.StippleFlag ||
+       ctx->Texture._EnabledUnits) {
+      return NULL;
+   }
+
    if (osmesa->format != OSMESA_RGBA &&
        osmesa->format != OSMESA_BGRA &&
-       osmesa->format != OSMESA_ARGB)   return (swrast_tri_func) NULL;
-   if (ctx->Polygon.CullFlag && 
-       ctx->Polygon.CullFaceMode == GL_FRONT_AND_BACK)
-                                        return (swrast_tri_func) NULL;
+       osmesa->format != OSMESA_ARGB) {
+      return NULL;
+   }
+
+   if (ctx->Polygon.CullFlag &&
+       ctx->Polygon.CullFaceMode == GL_FRONT_AND_BACK) {
+      return NULL;
+   }
 
    if (swrast->_RasterMask == DEPTH_BIT &&
        ctx->Depth.Func == GL_LESS &&
        ctx->Depth.Mask == GL_TRUE &&
        ctx->Visual.depthBits == DEFAULT_SOFTWARE_DEPTH_BITS) {
       if (ctx->Light.ShadeModel == GL_SMOOTH) {
-         return (swrast_tri_func) smooth_rgba_z_triangle;
+         return smooth_rgba_z_triangle;
       }
       else {
-         return (swrast_tri_func) flat_rgba_z_triangle;
+         return flat_rgba_z_triangle;
       }
    }
-   return (swrast_tri_func) NULL;
+
+   return NULL;
 }
 
 
@@ -1100,6 +1129,7 @@ static struct name_function functions[] = {
    { "OSMesaGetColorBuffer", (OSMESAproc) OSMesaGetColorBuffer },
    { "OSMesaGetProcAddress", (OSMESAproc) OSMesaGetProcAddress },
    { "OSMesaColorClamp", (OSMESAproc) OSMesaColorClamp },
+   { "OSMesaPostprocess", (OSMESAproc) OSMesaPostprocess },
    { NULL, NULL }
 };
 
@@ -1128,6 +1158,16 @@ OSMesaColorClamp(GLboolean enable)
       osmesa->mesa.Color.ClampFragmentColor = GL_FIXED_ONLY_ARB;
    }
 }
+
+
+GLAPI void GLAPIENTRY
+OSMesaPostprocess(OSMesaContext osmesa, const char *filter,
+                  unsigned enable_value)
+{
+   fprintf(stderr,
+           "OSMesaPostProcess() is only available with gallium drivers\n");
+}
+
 
 
 /**

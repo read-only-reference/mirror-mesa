@@ -23,6 +23,7 @@
  *
  **********************************************************/
 
+#include "util/u_format.h"
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
 #include "util/u_string.h"
@@ -154,11 +155,7 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_TEXCOORD:
       return 0;
    case PIPE_CAP_MAX_RENDER_TARGETS:
-      if(!sws->get_cap(sws, SVGA3D_DEVCAP_MAX_RENDER_TARGETS, &result))
-         return 1;
-      if(!result.u)
-         return 1;
-      return MIN2(result.u, PIPE_MAX_COLOR_BUFS);
+      return svgascreen->max_color_buffers;
    case PIPE_CAP_OCCLUSION_QUERY:
       return 1;
    case PIPE_CAP_QUERY_TIME_ELAPSED:
@@ -232,10 +229,12 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
       return 0;
 
+   case PIPE_CAP_SM3:
+      return 1;
+
    /* Unsupported features */
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
-   case PIPE_CAP_SM3:
    case PIPE_CAP_SHADER_STENCIL_EXPORT:
    case PIPE_CAP_DEPTH_CLIP_DISABLE:
    case PIPE_CAP_SEAMLESS_CUBE_MAP:
@@ -333,6 +332,7 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_INTEGERS:
          return 0;
       case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+      case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
          return 16;
       default:
          debug_printf("Unexpected fragment shader query %u\n", param);
@@ -383,6 +383,7 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_INTEGERS:
          return 0;
       case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+      case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
          return 0;
       default:
          debug_printf("Unexpected vertex shader query %u\n", param);
@@ -463,6 +464,13 @@ svga_is_format_supported( struct pipe_screen *screen,
    }
    if (tex_usage & PIPE_BIND_SAMPLER_VIEW) {
       mask.texture = 1;
+   }
+
+   if (target == PIPE_TEXTURE_CUBE) {
+      mask.cubeTexture = 1;
+   }
+   if (target == PIPE_TEXTURE_3D) {
+      mask.volumeTexture = 1;
    }
 
    return (caps.value & mask.value) == mask.value;
@@ -659,6 +667,11 @@ svga_screen_create(struct svga_winsys_screen *sws)
        */
       svgascreen->maxPointSize = MIN2(result.f, 80.0f);
    }
+
+   /* The SVGA3D device always supports 4 targets at this time, regardless
+    * of what querying SVGA3D_DEVCAP_MAX_RENDER_TARGETS might return.
+    */
+   svgascreen->max_color_buffers = 4;
 
    pipe_mutex_init(svgascreen->tex_mutex);
    pipe_mutex_init(svgascreen->swc_mutex);

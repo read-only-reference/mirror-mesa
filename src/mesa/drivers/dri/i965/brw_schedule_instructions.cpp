@@ -56,29 +56,12 @@ using namespace brw;
 
 static bool debug = false;
 
+class instruction_scheduler;
+
 class schedule_node : public exec_node
 {
 public:
-   schedule_node(backend_instruction *inst, const struct brw_context *brw)
-   {
-      this->inst = inst;
-      this->child_array_size = 0;
-      this->children = NULL;
-      this->child_latency = NULL;
-      this->child_count = 0;
-      this->parent_count = 0;
-      this->unblocked_time = 0;
-      this->cand_generation = 0;
-
-      /* We can't measure Gen6 timings directly but expect them to be much
-       * closer to Gen7 than Gen4.
-       */
-      if (brw->gen >= 6)
-         set_latency_gen7(brw->is_haswell);
-      else
-         set_latency_gen4();
-   }
-
+   schedule_node(backend_instruction *inst, instruction_scheduler *sched);
    void set_latency_gen4();
    void set_latency_gen7(bool is_haswell);
 
@@ -354,6 +337,47 @@ schedule_node::set_latency_gen7(bool is_haswell)
       latency = 50;
       break;
 
+   case SHADER_OPCODE_UNTYPED_ATOMIC:
+      /* Test code:
+       *   mov(8)    g112<1>ud       0x00000000ud       { align1 WE_all 1Q };
+       *   mov(1)    g112.7<1>ud     g1.7<0,1,0>ud      { align1 WE_all };
+       *   mov(8)    g113<1>ud       0x00000000ud       { align1 WE_normal 1Q };
+       *   send(8)   g4<1>ud         g112<8,8,1>ud
+       *             data (38, 5, 6) mlen 2 rlen 1      { align1 WE_normal 1Q };
+       *
+       * Running it 100 times as fragment shader on a 128x128 quad
+       * gives an average latency of 13867 cycles per atomic op,
+       * standard deviation 3%.  Note that this is a rather
+       * pessimistic estimate, the actual latency in cases with few
+       * collisions between threads and favorable pipelining has been
+       * seen to be reduced by a factor of 100.
+       */
+      latency = 14000;
+      break;
+
+   case SHADER_OPCODE_UNTYPED_SURFACE_READ:
+      /* Test code:
+       *   mov(8)    g112<1>UD       0x00000000UD       { align1 WE_all 1Q };
+       *   mov(1)    g112.7<1>UD     g1.7<0,1,0>UD      { align1 WE_all };
+       *   mov(8)    g113<1>UD       0x00000000UD       { align1 WE_normal 1Q };
+       *   send(8)   g4<1>UD         g112<8,8,1>UD
+       *             data (38, 6, 5) mlen 2 rlen 1      { align1 WE_normal 1Q };
+       *   .
+       *   . [repeats 8 times]
+       *   .
+       *   mov(8)    g112<1>UD       0x00000000UD       { align1 WE_all 1Q };
+       *   mov(1)    g112.7<1>UD     g1.7<0,1,0>UD      { align1 WE_all };
+       *   mov(8)    g113<1>UD       0x00000000UD       { align1 WE_normal 1Q };
+       *   send(8)   g4<1>UD         g112<8,8,1>UD
+       *             data (38, 6, 5) mlen 2 rlen 1      { align1 WE_normal 1Q };
+       *
+       * Running it 100 times as fragment shader on a 128x128 quad
+       * gives an average latency of 583 cycles per surface read,
+       * standard deviation 0.9%.
+       */
+      latency = is_haswell ? 300 : 600;
+      break;
+
    default:
       /* 2 cycles:
        * mul(8) g4<1>F g2<0,1,0>F      0.5F            { align1 WE_normal 1Q };
@@ -369,15 +393,24 @@ schedule_node::set_latency_gen7(bool is_haswell)
 
 class instruction_scheduler {
 public:
-   instruction_scheduler(backend_visitor *v, int grf_count, bool post_reg_alloc)
+   instruction_scheduler(backend_visitor *v, int grf_count,
+                         instruction_scheduler_mode mode)
    {
       this->bv = v;
       this->mem_ctx = ralloc_context(NULL);
       this->grf_count = grf_count;
       this->instructions.make_empty();
       this->instructions_to_schedule = 0;
-      this->post_reg_alloc = post_reg_alloc;
+      this->post_reg_alloc = (mode == SCHEDULE_POST);
+      this->mode = mode;
       this->time = 0;
+      if (!post_reg_alloc) {
+         this->remaining_grf_uses = rzalloc_array(mem_ctx, int, grf_count);
+         this->grf_active = rzalloc_array(mem_ctx, bool, grf_count);
+      } else {
+         this->remaining_grf_uses = NULL;
+         this->grf_active = NULL;
+      }
    }
 
    ~instruction_scheduler()
@@ -403,6 +436,10 @@ public:
     */
    virtual int issue_time(backend_instruction *inst) = 0;
 
+   virtual void count_remaining_grf_uses(backend_instruction *inst) = 0;
+   virtual void update_register_pressure(backend_instruction *inst) = 0;
+   virtual int get_register_pressure_benefit(backend_instruction *inst) = 0;
+
    void schedule_instructions(backend_instruction *next_block_header);
 
    void *mem_ctx;
@@ -413,25 +450,114 @@ public:
    int time;
    exec_list instructions;
    backend_visitor *bv;
+
+   instruction_scheduler_mode mode;
+
+   /**
+    * Number of instructions left to schedule that reference each vgrf.
+    *
+    * Used so that we can prefer scheduling instructions that will end the
+    * live intervals of multiple variables, to reduce register pressure.
+    */
+   int *remaining_grf_uses;
+
+   /**
+    * Tracks whether each VGRF has had an instruction scheduled that uses it.
+    *
+    * This is used to estimate whether scheduling a new instruction will
+    * increase register pressure.
+    */
+   bool *grf_active;
 };
 
 class fs_instruction_scheduler : public instruction_scheduler
 {
 public:
-   fs_instruction_scheduler(fs_visitor *v, int grf_count, bool post_reg_alloc);
+   fs_instruction_scheduler(fs_visitor *v, int grf_count,
+                            instruction_scheduler_mode mode);
    void calculate_deps();
    bool is_compressed(fs_inst *inst);
    schedule_node *choose_instruction_to_schedule();
    int issue_time(backend_instruction *inst);
    fs_visitor *v;
+
+   void count_remaining_grf_uses(backend_instruction *inst);
+   void update_register_pressure(backend_instruction *inst);
+   int get_register_pressure_benefit(backend_instruction *inst);
 };
 
 fs_instruction_scheduler::fs_instruction_scheduler(fs_visitor *v,
                                                    int grf_count,
-                                                   bool post_reg_alloc)
-   : instruction_scheduler(v, grf_count, post_reg_alloc),
+                                                   instruction_scheduler_mode mode)
+   : instruction_scheduler(v, grf_count, mode),
      v(v)
 {
+}
+
+void
+fs_instruction_scheduler::count_remaining_grf_uses(backend_instruction *be)
+{
+   fs_inst *inst = (fs_inst *)be;
+
+   if (!remaining_grf_uses)
+      return;
+
+   if (inst->dst.file == GRF)
+      remaining_grf_uses[inst->dst.reg]++;
+
+   for (int i = 0; i < 3; i++) {
+      if (inst->src[i].file != GRF)
+         continue;
+
+      remaining_grf_uses[inst->src[i].reg]++;
+   }
+}
+
+void
+fs_instruction_scheduler::update_register_pressure(backend_instruction *be)
+{
+   fs_inst *inst = (fs_inst *)be;
+
+   if (!remaining_grf_uses)
+      return;
+
+   if (inst->dst.file == GRF) {
+      remaining_grf_uses[inst->dst.reg]--;
+      grf_active[inst->dst.reg] = true;
+   }
+
+   for (int i = 0; i < 3; i++) {
+      if (inst->src[i].file == GRF) {
+         remaining_grf_uses[inst->src[i].reg]--;
+         grf_active[inst->src[i].reg] = true;
+      }
+   }
+}
+
+int
+fs_instruction_scheduler::get_register_pressure_benefit(backend_instruction *be)
+{
+   fs_inst *inst = (fs_inst *)be;
+   int benefit = 0;
+
+   if (inst->dst.file == GRF) {
+      if (remaining_grf_uses[inst->dst.reg] == 1)
+         benefit += v->virtual_grf_sizes[inst->dst.reg];
+      if (!grf_active[inst->dst.reg])
+         benefit -= v->virtual_grf_sizes[inst->dst.reg];
+   }
+
+   for (int i = 0; i < 3; i++) {
+      if (inst->src[i].file != GRF)
+         continue;
+
+      if (remaining_grf_uses[inst->src[i].reg] == 1)
+         benefit += v->virtual_grf_sizes[inst->src[i].reg];
+      if (!grf_active[inst->src[i].reg])
+         benefit -= v->virtual_grf_sizes[inst->src[i].reg];
+   }
+
+   return benefit;
 }
 
 class vec4_instruction_scheduler : public instruction_scheduler
@@ -442,19 +568,65 @@ public:
    schedule_node *choose_instruction_to_schedule();
    int issue_time(backend_instruction *inst);
    vec4_visitor *v;
+
+   void count_remaining_grf_uses(backend_instruction *inst);
+   void update_register_pressure(backend_instruction *inst);
+   int get_register_pressure_benefit(backend_instruction *inst);
 };
 
 vec4_instruction_scheduler::vec4_instruction_scheduler(vec4_visitor *v,
                                                        int grf_count)
-   : instruction_scheduler(v, grf_count, true),
+   : instruction_scheduler(v, grf_count, SCHEDULE_POST),
      v(v)
 {
 }
 
 void
+vec4_instruction_scheduler::count_remaining_grf_uses(backend_instruction *be)
+{
+}
+
+void
+vec4_instruction_scheduler::update_register_pressure(backend_instruction *be)
+{
+}
+
+int
+vec4_instruction_scheduler::get_register_pressure_benefit(backend_instruction *be)
+{
+   return 0;
+}
+
+schedule_node::schedule_node(backend_instruction *inst,
+                             instruction_scheduler *sched)
+{
+   struct brw_context *brw = sched->bv->brw;
+
+   this->inst = inst;
+   this->child_array_size = 0;
+   this->children = NULL;
+   this->child_latency = NULL;
+   this->child_count = 0;
+   this->parent_count = 0;
+   this->unblocked_time = 0;
+   this->cand_generation = 0;
+   this->delay = 0;
+
+   /* We can't measure Gen6 timings directly but expect them to be much
+    * closer to Gen7 than Gen4.
+    */
+   if (!sched->post_reg_alloc)
+      this->latency = 1;
+   else if (brw->gen >= 6)
+      set_latency_gen7(brw->is_haswell);
+   else
+      set_latency_gen4();
+}
+
+void
 instruction_scheduler::add_inst(backend_instruction *inst)
 {
-   schedule_node *n = new(mem_ctx) schedule_node(inst, bv->brw);
+   schedule_node *n = new(mem_ctx) schedule_node(inst, this);
 
    assert(!inst->is_head_sentinel());
    assert(!inst->is_tail_sentinel());
@@ -603,7 +775,8 @@ fs_instruction_scheduler::calculate_deps()
       schedule_node *n = (schedule_node *)node;
       fs_inst *inst = (fs_inst *)n->inst;
 
-      if (inst->opcode == FS_OPCODE_PLACEHOLDER_HALT)
+      if (inst->opcode == FS_OPCODE_PLACEHOLDER_HALT ||
+         inst->has_side_effects())
          add_barrier_deps(n);
 
       /* read-after-write deps. */
@@ -832,6 +1005,9 @@ vec4_instruction_scheduler::calculate_deps()
       schedule_node *n = (schedule_node *)node;
       vec4_instruction *inst = (vec4_instruction *)n->inst;
 
+      if (inst->has_side_effects())
+         add_barrier_deps(n);
+
       /* read-after-write deps. */
       for (int i = 0; i < 3; i++) {
          if (inst->src[i].file == GRF) {
@@ -964,10 +1140,10 @@ fs_instruction_scheduler::choose_instruction_to_schedule()
 {
    schedule_node *chosen = NULL;
 
-   if (post_reg_alloc) {
+   if (mode == SCHEDULE_PRE || mode == SCHEDULE_POST) {
       int chosen_time = 0;
 
-      /* Of the instructions closest ready to execute or the closest to
+      /* Of the instructions ready to execute or the closest to
        * being ready, choose the oldest one.
        */
       foreach_list(node, &instructions) {
@@ -994,39 +1170,58 @@ fs_instruction_scheduler::choose_instruction_to_schedule()
             continue;
          }
 
-         /* Prefer instructions that recently became available for scheduling.
-          * These are the things that are most likely to (eventually) make a
-          * variable dead and reduce register pressure.  Typical register
-          * pressure estimates don't work for us because most of our pressure
-          * comes from texturing, where no single instruction to schedule will
-          * make a vec4 value dead.
+         /* Most important: If we can definitely reduce register pressure, do
+          * so immediately.
           */
-         if (n->cand_generation > chosen->cand_generation) {
+         int register_pressure_benefit = get_register_pressure_benefit(n->inst);
+         int chosen_register_pressure_benefit =
+            get_register_pressure_benefit(chosen->inst);
+
+         if (register_pressure_benefit > 0 &&
+             register_pressure_benefit > chosen_register_pressure_benefit) {
             chosen = n;
             continue;
-         } else if (n->cand_generation < chosen->cand_generation) {
+         } else if (chosen_register_pressure_benefit > 0 &&
+                    (register_pressure_benefit <
+                     chosen_register_pressure_benefit)) {
             continue;
          }
 
-         /* On MRF-using chips, prefer non-SEND instructions.  If we don't do
-          * this, then because we prefer instructions that just became
-          * candidates, we'll end up in a pattern of scheduling a SEND, then
-          * the MRFs for the next SEND, then the next SEND, then the MRFs,
-          * etc., without ever consuming the results of a send.
-          */
-         if (v->brw->gen < 7) {
-            fs_inst *chosen_inst = (fs_inst *)chosen->inst;
-
-            /* We use regs_written > 1 as our test for the kind of send
-             * instruction to avoid -- only sends generate many regs, and a
-             * single-result send is probably actually reducing register
-             * pressure.
+         if (mode == SCHEDULE_PRE_LIFO) {
+            /* Prefer instructions that recently became available for
+             * scheduling.  These are the things that are most likely to
+             * (eventually) make a variable dead and reduce register pressure.
+             * Typical register pressure estimates don't work for us because
+             * most of our pressure comes from texturing, where no single
+             * instruction to schedule will make a vec4 value dead.
              */
-            if (inst->regs_written <= 1 && chosen_inst->regs_written > 1) {
+            if (n->cand_generation > chosen->cand_generation) {
                chosen = n;
                continue;
-            } else if (inst->regs_written > chosen_inst->regs_written) {
+            } else if (n->cand_generation < chosen->cand_generation) {
                continue;
+            }
+
+            /* On MRF-using chips, prefer non-SEND instructions.  If we don't
+             * do this, then because we prefer instructions that just became
+             * candidates, we'll end up in a pattern of scheduling a SEND,
+             * then the MRFs for the next SEND, then the next SEND, then the
+             * MRFs, etc., without ever consuming the results of a send.
+             */
+            if (v->brw->gen < 7) {
+               fs_inst *chosen_inst = (fs_inst *)chosen->inst;
+
+               /* We use regs_written > 1 as our test for the kind of send
+                * instruction to avoid -- only sends generate many regs, and a
+                * single-result send is probably actually reducing register
+                * pressure.
+                */
+               if (inst->regs_written <= 1 && chosen_inst->regs_written > 1) {
+                  chosen = n;
+                  continue;
+               } else if (inst->regs_written > chosen_inst->regs_written) {
+                  continue;
+               }
             }
          }
 
@@ -1110,6 +1305,7 @@ instruction_scheduler::schedule_instructions(backend_instruction *next_block_hea
       chosen->remove();
       next_block_header->insert_before(chosen->inst);
       instructions_to_schedule--;
+      update_register_pressure(chosen->inst);
 
       /* Update the clock for how soon an instruction could start after the
        * chosen one.
@@ -1185,6 +1381,15 @@ instruction_scheduler::run(exec_list *all_instructions)
       bv->dump_instructions();
    }
 
+   /* Populate the remaining GRF uses array to improve the pre-regalloc
+    * scheduling.
+    */
+   if (remaining_grf_uses) {
+      foreach_list(node, all_instructions) {
+         count_remaining_grf_uses((backend_instruction *)node);
+      }
+   }
+
    while (!next_block_header->is_tail_sentinel()) {
       /* Add things to be scheduled until we get to a new BB. */
       while (!next_block_header->is_tail_sentinel()) {
@@ -1212,18 +1417,18 @@ instruction_scheduler::run(exec_list *all_instructions)
 }
 
 void
-fs_visitor::schedule_instructions(bool post_reg_alloc)
+fs_visitor::schedule_instructions(instruction_scheduler_mode mode)
 {
    int grf_count;
-   if (post_reg_alloc)
+   if (mode == SCHEDULE_POST)
       grf_count = grf_used;
    else
       grf_count = virtual_grf_count;
 
-   fs_instruction_scheduler sched(this, grf_count, post_reg_alloc);
+   fs_instruction_scheduler sched(this, grf_count, mode);
    sched.run(&instructions);
 
-   if (unlikely(INTEL_DEBUG & DEBUG_WM) && post_reg_alloc) {
+   if (unlikely(INTEL_DEBUG & DEBUG_WM) && mode == SCHEDULE_POST) {
       printf("fs%d estimated execution time: %d cycles\n",
              dispatch_width, sched.time);
    }
@@ -1241,5 +1446,5 @@ vec4_visitor::opt_schedule_instructions()
       printf("vec4 estimated execution time: %d cycles\n", sched.time);
    }
 
-   this->live_intervals_valid = false;
+   invalidate_live_intervals();
 }

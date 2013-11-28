@@ -350,7 +350,7 @@ brw_blorp_copytexsubimage(struct brw_context *brw,
    struct intel_mipmap_tree *dst_mt = intel_image->mt;
 
    /* BLORP is not supported before Gen6. */
-   if (brw->gen < 6)
+   if (brw->gen < 6 || brw->gen >= 8)
       return false;
 
    if (_mesa_get_format_base_format(src_mt->format) !=
@@ -440,7 +440,7 @@ brw_blorp_framebuffer(struct brw_context *brw,
                       GLbitfield mask, GLenum filter)
 {
    /* BLORP is not supported before Gen6. */
-   if (brw->gen < 6)
+   if (brw->gen < 6 || brw->gen >= 8)
       return mask;
 
    static GLbitfield buffer_bits[] = {
@@ -1403,10 +1403,6 @@ brw_blorp_blit_program::kill_if_outside_dst_rect()
    brw_pop_insn_state(&func);
 }
 
-#define X_f retype(X, BRW_REGISTER_TYPE_F)
-#define Y_f retype(Y, BRW_REGISTER_TYPE_F)
-#define Xp_f retype(Xp, BRW_REGISTER_TYPE_F)
-#define Yp_f retype(Yp, BRW_REGISTER_TYPE_F)
 /**
  * Emit code to translate from destination (X, Y) coordinates to source (X, Y)
  * coordinates.
@@ -1414,6 +1410,11 @@ brw_blorp_blit_program::kill_if_outside_dst_rect()
 void
 brw_blorp_blit_program::translate_dst_to_src()
 {
+   struct brw_reg X_f = retype(X, BRW_REGISTER_TYPE_F);
+   struct brw_reg Y_f = retype(Y, BRW_REGISTER_TYPE_F);
+   struct brw_reg Xp_f = retype(Xp, BRW_REGISTER_TYPE_F);
+   struct brw_reg Yp_f = retype(Yp, BRW_REGISTER_TYPE_F);
+
    brw_set_compression_control(&func, BRW_COMPRESSION_COMPRESSED);
    /* Move the UD coordinates to float registers. */
    brw_MOV(&func, Xp_f, X);
@@ -1489,10 +1490,6 @@ brw_blorp_blit_program::clamp_tex_coords(struct brw_reg regX,
    brw_MOV(&func, regY, clampY1);
    brw_set_predicate_control(&func, BRW_PREDICATE_NONE);
 }
-#undef X_f
-#undef Y_f
-#undef Xp_f
-#undef Yp_f
 
 /**
  * Emit code to transform the X and Y coordinates as needed for blending
@@ -2099,6 +2096,21 @@ brw_blorp_blit_params::brw_blorp_blit_params(struct brw_context *brw,
        _mesa_get_srgb_format_linear(src_mt->format) ==
        _mesa_get_srgb_format_linear(dst_mt->format)) {
       dst.brw_surfaceformat = brw_format_for_mesa_format(dst_mt->format);
+      src.brw_surfaceformat = dst.brw_surfaceformat;
+   }
+
+   /* When doing a multisample resolve of a GL_LUMINANCE32F or GL_INTENSITY32F
+    * texture, the above code configures the source format for L32_FLOAT or
+    * I32_FLOAT, and the destination format for R32_FLOAT.  On Sandy Bridge,
+    * the SAMPLE message appears to handle multisampled L32_FLOAT and
+    * I32_FLOAT textures incorrectly, resulting in blocky artifacts.  So work
+    * around the problem by using a source format of R32_FLOAT.  This
+    * shouldn't affect rendering correctness, since the destination format is
+    * R32_FLOAT, so only the contents of the red channel matters.
+    */
+   if (brw->gen == 6 && src.num_samples > 1 && dst.num_samples <= 1 &&
+       src_mt->format == dst_mt->format &&
+       dst.brw_surfaceformat == BRW_SURFACEFORMAT_R32_FLOAT) {
       src.brw_surfaceformat = dst.brw_surfaceformat;
    }
 

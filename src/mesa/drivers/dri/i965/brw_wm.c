@@ -37,6 +37,7 @@
 #include "main/fbobject.h"
 #include "main/samplerobj.h"
 #include "program/prog_parameter.h"
+#include "program/program.h"
 
 #include "glsl/ralloc.h"
 
@@ -289,6 +290,10 @@ brw_wm_debug_recompile(struct brw_context *brw,
                       old_key->drawable_height, key->drawable_height);
    found |= key_debug(brw, "input slots valid",
                       old_key->input_slots_valid, key->input_slots_valid);
+   found |= key_debug(brw, "mrt alpha test function",
+                      old_key->alpha_test_func, key->alpha_test_func);
+   found |= key_debug(brw, "mrt alpha test reference value",
+                      old_key->alpha_test_ref, key->alpha_test_ref);
 
    found |= brw_debug_recompile_sampler_key(brw, &old_key->tex, &key->tex);
 
@@ -366,6 +371,7 @@ static void brw_wm_populate_key( struct brw_context *brw,
    GLuint lookup = 0;
    GLuint line_aa;
    bool program_uses_dfdy = fp->program.UsesDFdy;
+   bool multisample_fbo = ctx->DrawBuffer->Visual.samples > 1;
 
    memset(key, 0, sizeof(*key));
 
@@ -483,10 +489,32 @@ static void brw_wm_populate_key( struct brw_context *brw,
    key->replicate_alpha = ctx->DrawBuffer->_NumColorDrawBuffers > 1 &&
       (ctx->Multisample.SampleAlphaToCoverage || ctx->Color.AlphaEnabled);
 
+   /* _NEW_BUFFERS _NEW_MULTISAMPLE */
+   key->compute_pos_offset =
+      _mesa_get_min_invocations_per_fragment(ctx, &fp->program) > 1 &&
+      fp->program.Base.SystemValuesRead & SYSTEM_BIT_SAMPLE_POS;
+
+   key->compute_sample_id =
+      multisample_fbo &&
+      ctx->Multisample.Enabled &&
+      (fp->program.Base.SystemValuesRead & SYSTEM_BIT_SAMPLE_ID);
+
    /* BRW_NEW_VUE_MAP_GEOM_OUT */
    if (brw->gen < 6 || _mesa_bitcount_64(fp->program.Base.InputsRead &
                                          BRW_FS_VARYING_INPUT_MASK) > 16)
       key->input_slots_valid = brw->vue_map_geom_out.slots_valid;
+
+
+   /* _NEW_COLOR | _NEW_BUFFERS */
+   /* Pre-gen6, the hardware alpha test always used each render
+    * target's alpha to do alpha test, as opposed to render target 0's alpha
+    * like GL requires.  Fix that by building the alpha test into the
+    * shader, and we'll skip enabling the fixed function alpha test.
+    */
+   if (brw->gen < 6 && ctx->DrawBuffer->_NumColorDrawBuffers > 1 && ctx->Color.AlphaEnabled) {
+      key->alpha_test_func = ctx->Color.AlphaFunc;
+      key->alpha_test_ref = ctx->Color.AlphaRef;
+   }
 
    /* The unique fragment program ID */
    key->program_string_id = fp->id;

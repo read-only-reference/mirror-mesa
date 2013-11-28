@@ -151,7 +151,6 @@ struct brw_vs_prog_key;
 struct brw_vec4_prog_key;
 struct brw_wm_prog_key;
 struct brw_wm_prog_data;
-struct brw_perf_bo_layout;
 
 enum brw_state_id {
    BRW_STATE_URB_FENCE,
@@ -383,6 +382,8 @@ struct brw_wm_prog_data {
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params;
    bool dual_src_blend;
+   bool uses_pos_offset;
+   bool uses_omask;
    uint32_t prog_offset_16;
 
    /**
@@ -659,7 +660,7 @@ struct brw_gs_prog_data
 #define BRW_MAX_DRAW_BUFFERS 8
 
 /** Max number of atomic counter buffer objects in a shader */
-#define BRW_MAX_ABO 4
+#define BRW_MAX_ABO 16
 
 /**
  * Max number of binding table entries used for stream output.
@@ -860,6 +861,12 @@ struct intel_sync_object {
    drm_intel_bo *bo;
 };
 
+enum brw_gpu_ring {
+   UNKNOWN_RING,
+   RENDER_RING,
+   BLT_RING,
+};
+
 struct intel_batchbuffer {
    /** Current batchbuffer being queued up. */
    drm_intel_bo *bo;
@@ -878,7 +885,7 @@ struct intel_batchbuffer {
 #define BATCH_SZ (8192*sizeof(uint32_t))
 
    uint32_t state_batch_offset;
-   bool is_blit;
+   enum brw_gpu_ring ring;
    bool needs_sol_reset;
 
    struct {
@@ -974,12 +981,6 @@ struct brw_context
 					  unsigned unit);
       void (*update_null_renderbuffer_surface)(struct brw_context *brw,
 					       unsigned unit);
-      void (*create_constant_surface)(struct brw_context *brw,
-				      drm_intel_bo *bo,
-				      uint32_t offset,
-				      uint32_t size,
-				      uint32_t *out_offset,
-                                      bool dword_pitch);
 
       void (*create_raw_surface)(struct brw_context *brw,
                                  drm_intel_bo *bo,
@@ -987,6 +988,15 @@ struct brw_context
                                  uint32_t size,
                                  uint32_t *out_offset,
                                  bool rw);
+      void (*emit_buffer_surface_state)(struct brw_context *brw,
+                                        uint32_t *out_offset,
+                                        drm_intel_bo *bo,
+                                        unsigned buffer_offset,
+                                        unsigned surface_format,
+                                        unsigned buffer_size,
+                                        unsigned pitch,
+                                        unsigned mocs,
+                                        bool rw);
 
       /** Upload a SAMPLER_STATE table. */
       void (*upload_sampler_state_table)(struct brw_context *brw,
@@ -1014,6 +1024,14 @@ struct brw_context
    dri_bufmgr *bufmgr;
 
    drm_intel_context *hw_ctx;
+
+   /**
+    * Number of resets observed in the system at context creation.
+    *
+    * This is tracked in the context so that we can determine that another
+    * reset has occured.
+    */
+   uint32_t reset_count;
 
    struct intel_batchbuffer batch;
    bool no_batch_wrap;
@@ -1288,6 +1306,12 @@ struct brw_context
    struct {
       struct brw_stage_state base;
       struct brw_gs_prog_data *prog_data;
+
+      /**
+       * True if the 3DSTATE_GS command most recently emitted to the 3D
+       * pipeline enabled the GS; false otherwise.
+       */
+      bool enabled;
    } gs;
 
    struct {
@@ -1376,13 +1400,40 @@ struct brw_context
    } query;
 
    struct {
-      /* A map describing which counters are stored at a particular 32-bit
-       * offset in the buffer object.
-       */
-      const struct brw_perf_bo_layout *bo_layout;
+      /** A map from pipeline statistics counter IDs to MMIO addresses. */
+      const int *statistics_registers;
 
-      /* Number of 32-bit entries in the buffer object. */
-      int entries_in_bo;
+      /** The number of active monitors using OA counters. */
+      unsigned oa_users;
+
+      /**
+       * A buffer object storing OA counter snapshots taken at the start and
+       * end of each batch (creating "bookends" around the batch).
+       */
+      drm_intel_bo *bookend_bo;
+
+      /** The number of snapshots written to bookend_bo. */
+      int bookend_snapshots;
+
+      /**
+       * An array of monitors whose results haven't yet been assembled based on
+       * the data in buffer objects.
+       *
+       * These may be active, or have already ended.  However, the results
+       * have not been requested.
+       */
+      struct brw_perf_monitor_object **unresolved;
+      int unresolved_elements;
+      int unresolved_array_size;
+
+      /**
+       * Mapping from a uint32_t offset within an OA snapshot to the ID of
+       * the counter which MI_REPORT_PERF_COUNT stores there.
+       */
+      const int *oa_snapshot_layout;
+
+      /** Number of 32-bit entries in a hardware counter snapshot. */
+      int entries_per_oa_snapshot;
    } perfmon;
 
    int num_atoms;
@@ -1440,8 +1491,6 @@ struct brw_context
 
    __DRIcontext *driContext;
    struct intel_screen *intelScreen;
-   void (*saved_viewport)(struct gl_context *ctx,
-                          GLint x, GLint y, GLsizei width, GLsizei height);
 };
 
 static INLINE bool
@@ -1461,6 +1510,10 @@ extern void intelInitClearFuncs(struct dd_function_table *functions);
 /*======================================================================
  * brw_context.c
  */
+extern const char *const brw_vendor_string;
+
+extern const char *brw_get_renderer_string(unsigned deviceID);
+
 extern void intelFinish(struct gl_context * ctx);
 
 enum {
@@ -1475,12 +1528,13 @@ void intel_prepare_render(struct brw_context *brw);
 void intel_resolve_for_dri2_flush(struct brw_context *brw,
                                   __DRIdrawable *drawable);
 
-bool brwCreateContext(gl_api api,
+GLboolean brwCreateContext(gl_api api,
 		      const struct gl_config *mesaVis,
 		      __DRIcontext *driContextPriv,
                       unsigned major_version,
                       unsigned minor_version,
                       uint32_t flags,
+                      bool notify_reset,
                       unsigned *error,
 		      void *sharedContextPrivate);
 
@@ -1568,6 +1622,15 @@ unsigned brw_get_index_type(GLenum type);
 
 /* brw_wm_surface_state.c */
 void brw_init_surface_formats(struct brw_context *brw);
+void brw_create_constant_surface(struct brw_context *brw,
+                                 drm_intel_bo *bo,
+                                 uint32_t offset,
+                                 uint32_t size,
+                                 uint32_t *out_offset,
+                                 bool dword_pitch);
+void brw_update_buffer_texture_surface(struct gl_context *ctx,
+                                       unsigned unit,
+                                       uint32_t *surf_offset);
 void
 brw_update_sol_surface(struct brw_context *brw,
                        struct gl_buffer_object *buffer_obj,
@@ -1589,6 +1652,9 @@ bool brw_render_target_supported(struct brw_context *brw,
 
 /* brw_performance_monitor.c */
 void brw_init_performance_monitors(struct brw_context *brw);
+void brw_dump_perf_monitors(struct brw_context *brw);
+void brw_perf_monitor_new_batch(struct brw_context *brw);
+void brw_perf_monitor_finish_batch(struct brw_context *brw);
 
 /* intel_extensions.c */
 extern void intelInitExtensions(struct gl_context *ctx);
@@ -1675,6 +1741,9 @@ gen7_emit_urb_state(struct brw_context *brw,
                     unsigned gs_size, unsigned gs_start);
 
 
+/* brw_reset.c */
+extern GLenum
+brw_get_graphics_reset_status(struct gl_context *ctx);
 
 /*======================================================================
  * Inline conversion functions.  These are better-typed than the

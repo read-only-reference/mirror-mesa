@@ -63,6 +63,7 @@ static const struct debug_named_value debug_options[] = {
 		{"dscis",     FD_DBG_DSCIS,  "Disable scissor optimization"},
 		{"direct",    FD_DBG_DIRECT, "Force inline (SS_DIRECT) state loads"},
 		{"dbypass",   FD_DBG_DBYPASS,"Disable GMEM bypass"},
+		{"fraghalf",  FD_DBG_FRAGHALF, "Use half-precision in fragment shader"},
 		DEBUG_NAMED_VALUE_END
 };
 
@@ -315,9 +316,14 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 	case PIPE_SHADER_CAP_SUBROUTINES:
 		return 0;
 	case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
+		return 1;
 	case PIPE_SHADER_CAP_INTEGERS:
+		/* we should be able to support this on a3xx, but not
+		 * implemented yet:
+		 */
 		return 0;
 	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
+	case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
 		return 16;
 	case PIPE_SHADER_CAP_PREFERRED_IR:
 		return PIPE_SHADER_IR_TGSI;

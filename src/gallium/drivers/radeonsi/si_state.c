@@ -377,7 +377,7 @@ static void si_set_clip_state(struct pipe_context *ctx,
 	cb.user_buffer = state->ucp;
 	cb.buffer_offset = 0;
 	cb.buffer_size = 4*4*8;
-	ctx->set_constant_buffer(ctx, PIPE_SHADER_VERTEX, 1, &cb);
+	ctx->set_constant_buffer(ctx, PIPE_SHADER_VERTEX, NUM_PIPE_CONST_BUFFERS, &cb);
 	pipe_resource_reference(&cb.buffer, NULL);
 
 	si_pm4_set_state(rctx, clip, pm4);
@@ -525,6 +525,7 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 	rs->two_side = state->light_twoside;
 	rs->multisample_enable = state->multisample;
 	rs->clip_plane_enable = state->clip_plane_enable;
+	rs->line_stipple_enable = state->line_stipple_enable;
 
 	polygon_dual_mode = (state->fill_front != PIPE_POLYGON_MODE_FILL ||
 				state->fill_back != PIPE_POLYGON_MODE_FILL);
@@ -1351,16 +1352,22 @@ static bool si_is_sampler_format_supported(struct pipe_screen *screen, enum pipe
 				      util_format_get_first_non_void_channel(format)) != ~0U;
 }
 
-static uint32_t si_translate_vertexformat(struct pipe_screen *screen,
-					  enum pipe_format format,
-					  const struct util_format_description *desc,
-					  int first_non_void)
+static uint32_t si_translate_buffer_dataformat(struct pipe_screen *screen,
+					       const struct util_format_description *desc,
+					       int first_non_void)
 {
 	unsigned type = desc->channel[first_non_void].type;
 	int i;
 
 	if (type == UTIL_FORMAT_TYPE_FIXED)
 		return V_008F0C_BUF_DATA_FORMAT_INVALID;
+
+	if (desc->nr_channels == 4 &&
+	    desc->channel[0].size == 10 &&
+	    desc->channel[1].size == 10 &&
+	    desc->channel[2].size == 10 &&
+	    desc->channel[3].size == 2)
+		return V_008F0C_BUF_DATA_FORMAT_2_10_10_10;
 
 	/* See whether the components are of the same size. */
 	for (i = 0; i < desc->nr_channels; i++) {
@@ -1416,6 +1423,33 @@ static uint32_t si_translate_vertexformat(struct pipe_screen *screen,
 	return V_008F0C_BUF_DATA_FORMAT_INVALID;
 }
 
+static uint32_t si_translate_buffer_numformat(struct pipe_screen *screen,
+					      const struct util_format_description *desc,
+					      int first_non_void)
+{
+	switch (desc->channel[first_non_void].type) {
+	case UTIL_FORMAT_TYPE_SIGNED:
+		if (desc->channel[first_non_void].normalized)
+			return V_008F0C_BUF_NUM_FORMAT_SNORM;
+		else if (desc->channel[first_non_void].pure_integer)
+			return V_008F0C_BUF_NUM_FORMAT_SINT;
+		else
+			return V_008F0C_BUF_NUM_FORMAT_SSCALED;
+		break;
+	case UTIL_FORMAT_TYPE_UNSIGNED:
+		if (desc->channel[first_non_void].normalized)
+			return V_008F0C_BUF_NUM_FORMAT_UNORM;
+		else if (desc->channel[first_non_void].pure_integer)
+			return V_008F0C_BUF_NUM_FORMAT_UINT;
+		else
+			return V_008F0C_BUF_NUM_FORMAT_USCALED;
+		break;
+	case UTIL_FORMAT_TYPE_FLOAT:
+	default:
+		return V_008F0C_BUF_NUM_FORMAT_FLOAT;
+	}
+}
+
 static bool si_is_vertex_format_supported(struct pipe_screen *screen, enum pipe_format format)
 {
 	const struct util_format_description *desc;
@@ -1424,7 +1458,7 @@ static bool si_is_vertex_format_supported(struct pipe_screen *screen, enum pipe_
 
 	desc = util_format_description(format);
 	first_non_void = util_format_get_first_non_void_channel(format);
-	data_format = si_translate_vertexformat(screen, format, desc, first_non_void);
+	data_format = si_translate_buffer_dataformat(screen, desc, first_non_void);
 	return data_format != V_008F0C_BUF_DATA_FORMAT_INVALID;
 }
 
@@ -1457,7 +1491,11 @@ boolean si_is_format_supported(struct pipe_screen *screen,
 		return FALSE;
 
 	if (sample_count > 1) {
-		if (HAVE_LLVM < 0x0304 || rscreen->b.chip_class != SI)
+		if (HAVE_LLVM < 0x0304)
+			return FALSE;
+
+		/* 2D tiling on CIK is supported since DRM 2.35.0 */
+		if (rscreen->b.chip_class >= CIK && rscreen->b.info.drm_minor < 35)
 			return FALSE;
 
 		switch (sample_count) {
@@ -1470,9 +1508,14 @@ boolean si_is_format_supported(struct pipe_screen *screen,
 		}
 	}
 
-	if ((usage & PIPE_BIND_SAMPLER_VIEW) &&
-	    si_is_sampler_format_supported(screen, format)) {
-		retval |= PIPE_BIND_SAMPLER_VIEW;
+	if (usage & PIPE_BIND_SAMPLER_VIEW) {
+		if (target == PIPE_BUFFER) {
+			if (si_is_vertex_format_supported(screen, format))
+				retval |= PIPE_BIND_SAMPLER_VIEW;
+		} else {
+			if (si_is_sampler_format_supported(screen, format))
+				retval |= PIPE_BIND_SAMPLER_VIEW;
+		}
 	}
 
 	if ((usage & (PIPE_BIND_RENDER_TARGET |
@@ -1528,7 +1571,7 @@ static void si_cb(struct r600_context *rctx, struct si_pm4_state *pm4,
 	struct r600_surface *surf;
 	unsigned level = state->cbufs[cb]->u.tex.level;
 	unsigned pitch, slice;
-	unsigned color_info, color_attrib;
+	unsigned color_info, color_attrib, color_pitch;
 	unsigned tile_mode_index;
 	unsigned format, swap, ntype, endian;
 	uint64_t offset;
@@ -1616,6 +1659,8 @@ static void si_cb(struct r600_context *rctx, struct si_pm4_state *pm4,
 		S_028C70_NUMBER_TYPE(ntype) |
 		S_028C70_ENDIAN(endian);
 
+	color_pitch = S_028C64_TILE_MAX(pitch);
+
 	color_attrib = S_028C74_TILE_MODE_INDEX(tile_mode_index) |
 		S_028C74_FORCE_DST_ALPHA_1(desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_1);
 
@@ -1629,9 +1674,15 @@ static void si_cb(struct r600_context *rctx, struct si_pm4_state *pm4,
 			color_info |= S_028C70_COMPRESSION(1);
 			unsigned fmask_bankh = util_logbase2(rtex->fmask.bank_height);
 
-			/* due to a bug in the hw, FMASK_BANK_HEIGHT must be set on SI too */
-			color_attrib |= S_028C74_FMASK_TILE_MODE_INDEX(rtex->fmask.tile_mode_index) |
-					S_028C74_FMASK_BANK_HEIGHT(fmask_bankh);
+			color_attrib |= S_028C74_FMASK_TILE_MODE_INDEX(rtex->fmask.tile_mode_index);
+
+			if (rctx->b.chip_class == SI) {
+				/* due to a hw bug, FMASK_BANK_HEIGHT must be set on SI too */
+				color_attrib |= S_028C74_FMASK_BANK_HEIGHT(fmask_bankh);
+			}
+			if (rctx->b.chip_class >= CIK) {
+				color_pitch |= S_028C64_FMASK_TILE_MAX(rtex->fmask.pitch / 8 - 1);
+			}
 		}
 	}
 
@@ -1642,10 +1693,9 @@ static void si_cb(struct r600_context *rctx, struct si_pm4_state *pm4,
 	offset += r600_resource_va(rctx->b.b.screen, state->cbufs[cb]->texture);
 	offset >>= 8;
 
-	/* FIXME handle enabling of CB beyond BASE8 which has different offset */
 	si_pm4_add_bo(pm4, &rtex->resource, RADEON_USAGE_READWRITE);
 	si_pm4_set_reg(pm4, R_028C60_CB_COLOR0_BASE + cb * 0x3C, offset);
-	si_pm4_set_reg(pm4, R_028C64_CB_COLOR0_PITCH + cb * 0x3C, S_028C64_TILE_MAX(pitch));
+	si_pm4_set_reg(pm4, R_028C64_CB_COLOR0_PITCH + cb * 0x3C, color_pitch);
 	si_pm4_set_reg(pm4, R_028C68_CB_COLOR0_SLICE + cb * 0x3C, S_028C68_TILE_MAX(slice));
 
 	if (rtex->surface.level[level].mode < RADEON_SURF_MODE_1D) {
@@ -2334,10 +2384,34 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 	/* initialize base object */
 	view->base = *state;
 	view->base.texture = NULL;
-	pipe_reference(NULL, &texture->reference);
-	view->base.texture = texture;
+	pipe_resource_reference(&view->base.texture, texture);
 	view->base.reference.count = 1;
 	view->base.context = ctx;
+	view->resource = &tmp->resource;
+
+	/* Buffer resource. */
+	if (texture->target == PIPE_BUFFER) {
+		unsigned stride;
+
+		desc = util_format_description(state->format);
+		first_non_void = util_format_get_first_non_void_channel(state->format);
+		stride = desc->block.bits / 8;
+		va = r600_resource_va(ctx->screen, texture) + state->u.buf.first_element*stride;
+		format = si_translate_buffer_dataformat(ctx->screen, desc, first_non_void);
+		num_format = si_translate_buffer_numformat(ctx->screen, desc, first_non_void);
+
+		view->state[0] = va;
+		view->state[1] = S_008F04_BASE_ADDRESS_HI(va >> 32) |
+				 S_008F04_STRIDE(stride);
+		view->state[2] = state->u.buf.last_element + 1 - state->u.buf.first_element;
+		view->state[3] = S_008F0C_DST_SEL_X(si_map_swizzle(desc->swizzle[0])) |
+				 S_008F0C_DST_SEL_Y(si_map_swizzle(desc->swizzle[1])) |
+				 S_008F0C_DST_SEL_Z(si_map_swizzle(desc->swizzle[2])) |
+				 S_008F0C_DST_SEL_W(si_map_swizzle(desc->swizzle[3])) |
+				 S_008F0C_NUM_FORMAT(num_format) |
+				 S_008F0C_DATA_FORMAT(format);
+		return &view->base;
+	}
 
 	state_swizzle[0] = state->swizzle_r;
 	state_swizzle[1] = state->swizzle_g;
@@ -2448,8 +2522,6 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 	if (format == ~0) {
 		format = 0;
 	}
-
-	view->resource = &tmp->resource;
 
 	/* not supported any more */
 	//endian = si_colorformat_endian_swap(format);
@@ -2624,7 +2696,18 @@ static void si_set_sampler_views(struct pipe_context *ctx,
 	assert(start == 0);
 
 	for (i = 0; i < count; i++) {
-		if (views[i]) {
+		if (!views[i]) {
+			samplers->depth_texture_mask &= ~(1 << i);
+			samplers->compressed_colortex_mask &= ~(1 << i);
+			si_set_sampler_view(rctx, shader, i, NULL, NULL);
+			si_set_sampler_view(rctx, shader, FMASK_TEX_OFFSET + i,
+					    NULL, NULL);
+			continue;
+		}
+
+		si_set_sampler_view(rctx, shader, i, views[i], rviews[i]->state);
+
+		if (views[i]->texture->target != PIPE_BUFFER) {
 			struct r600_texture *rtex =
 				(struct r600_texture*)views[i]->texture;
 
@@ -2639,8 +2722,6 @@ static void si_set_sampler_views(struct pipe_context *ctx,
 				samplers->compressed_colortex_mask &= ~(1 << i);
 			}
 
-			si_set_sampler_view(rctx, shader, i, views[i], rviews[i]->state);
-
 			if (rtex->fmask.size) {
 				si_set_sampler_view(rctx, shader, FMASK_TEX_OFFSET + i,
 						    views[i], rviews[i]->fmask_state);
@@ -2648,12 +2729,6 @@ static void si_set_sampler_views(struct pipe_context *ctx,
 				si_set_sampler_view(rctx, shader, FMASK_TEX_OFFSET + i,
 						    NULL, NULL);
 			}
-		} else {
-			samplers->depth_texture_mask &= ~(1 << i);
-			samplers->compressed_colortex_mask &= ~(1 << i);
-			si_set_sampler_view(rctx, shader, i, NULL, NULL);
-			si_set_sampler_view(rctx, shader, FMASK_TEX_OFFSET + i,
-					    NULL, NULL);
 		}
 	}
 	for (; i < samplers->n_views; i++) {
@@ -2826,33 +2901,8 @@ static void *si_create_vertex_elements(struct pipe_context *ctx,
 
 		desc = util_format_description(elements[i].src_format);
 		first_non_void = util_format_get_first_non_void_channel(elements[i].src_format);
-		data_format = si_translate_vertexformat(ctx->screen, elements[i].src_format,
-							desc, first_non_void);
-
-		switch (desc->channel[first_non_void].type) {
-		case UTIL_FORMAT_TYPE_FIXED:
-			num_format = V_008F0C_BUF_NUM_FORMAT_USCALED; /* XXX */
-			break;
-		case UTIL_FORMAT_TYPE_SIGNED:
-			if (desc->channel[first_non_void].normalized)
-				num_format = V_008F0C_BUF_NUM_FORMAT_SNORM;
-			else if (desc->channel[first_non_void].pure_integer)
-				num_format = V_008F0C_BUF_NUM_FORMAT_SINT;
-			else
-				num_format = V_008F0C_BUF_NUM_FORMAT_SSCALED;
-			break;
-		case UTIL_FORMAT_TYPE_UNSIGNED:
-			if (desc->channel[first_non_void].normalized)
-				num_format = V_008F0C_BUF_NUM_FORMAT_UNORM;
-			else if (desc->channel[first_non_void].pure_integer)
-				num_format = V_008F0C_BUF_NUM_FORMAT_UINT;
-			else
-				num_format = V_008F0C_BUF_NUM_FORMAT_USCALED;
-			break;
-		case UTIL_FORMAT_TYPE_FLOAT:
-		default:
-			num_format = V_008F14_IMG_NUM_FORMAT_FLOAT;
-		}
+		data_format = si_translate_buffer_dataformat(ctx->screen, desc, first_non_void);
+		num_format = si_translate_buffer_numformat(ctx->screen, desc, first_non_void);
 
 		v->rsrc_word3[i] = S_008F0C_DST_SEL_X(si_map_swizzle(desc->swizzle[0])) |
 				   S_008F0C_DST_SEL_Y(si_map_swizzle(desc->swizzle[1])) |
@@ -3096,6 +3146,10 @@ void si_init_config(struct r600_context *rctx)
 		case CHIP_BONAIRE:
 			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x16000012);
 			si_pm4_set_reg(pm4, R_028354_PA_SC_RASTER_CONFIG_1, 0x00000000);
+			break;
+		case CHIP_HAWAII:
+			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x3a00161a);
+			si_pm4_set_reg(pm4, R_028354_PA_SC_RASTER_CONFIG_1, 0x0000002e);
 			break;
 		case CHIP_KAVERI:
 			/* XXX todo */

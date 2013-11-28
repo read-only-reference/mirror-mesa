@@ -86,7 +86,7 @@ intel_horizontal_texture_alignment_unit(struct brw_context *brw,
 
 static unsigned int
 intel_vertical_texture_alignment_unit(struct brw_context *brw,
-                                     gl_format format)
+                                      gl_format format, bool multisampled)
 {
    /**
     * From the "Alignment Unit Size" section of various specs, namely:
@@ -105,13 +105,11 @@ intel_vertical_texture_alignment_unit(struct brw_context *brw,
     * | Depth Buffer                           |  2  |  2  |  2  |  4  |  4  |
     * | Separate Stencil Buffer                | N/A | N/A | N/A |  4  |  8  |
     * | Multisampled (4x or 8x) render target  | N/A | N/A | N/A |  4  |  4  |
-    * | All Others                             |  2  |  2  |  2  |  2  |  2  |
+    * | All Others                             |  2  |  2  |  2  |  *  |  *  |
     * +----------------------------------------------------------------------+
     *
-    * On SNB+, non-special cases can be overridden by setting the SURFACE_STATE
-    * "Surface Vertical Alignment" field to VALIGN_2 or VALIGN_4.
-    *
-    * We currently don't support multisampling.
+    * Where "*" means either VALIGN_2 or VALIGN_4 depending on the setting of
+    * the SURFACE_STATE "Surface Vertical Alignment" field.
     */
    if (_mesa_is_format_compressed(format))
       return 4;
@@ -119,11 +117,33 @@ intel_vertical_texture_alignment_unit(struct brw_context *brw,
    if (format == MESA_FORMAT_S8)
       return brw->gen >= 7 ? 8 : 4;
 
+   if (multisampled)
+      return 4;
+
    GLenum base_format = _mesa_get_format_base_format(format);
 
    if (brw->gen >= 6 &&
        (base_format == GL_DEPTH_COMPONENT ||
 	base_format == GL_DEPTH_STENCIL)) {
+      return 4;
+   }
+
+   if (brw->gen == 7) {
+      /* On Gen7, we prefer a vertical alignment of 4 when possible, because
+       * that allows Y tiled render targets.
+       *
+       * From the Ivy Bridge PRM, Vol4 Part1 2.12.2.1 (SURFACE_STATE for most
+       * messages), on p64, under the heading "Surface Vertical Alignment":
+       *
+       *     Value of 1 [VALIGN_4] is not supported for format YCRCB_NORMAL
+       *     (0x182), YCRCB_SWAPUVY (0x183), YCRCB_SWAPUV (0x18f), YCRCB_SWAPY
+       *     (0x190)
+       *
+       *     VALIGN_4 is not supported for surface format R32G32B32_FLOAT.
+       */
+      if (base_format == GL_YCBCR_MESA || format == MESA_FORMAT_RGB_FLOAT32)
+         return 2;
+
       return 4;
    }
 
@@ -276,8 +296,10 @@ brw_miptree_layout_texture_3d(struct brw_context *brw,
 void
 brw_miptree_layout(struct brw_context *brw, struct intel_mipmap_tree *mt)
 {
+   bool multisampled = mt->num_samples > 1;
    mt->align_w = intel_horizontal_texture_alignment_unit(brw, mt->format);
-   mt->align_h = intel_vertical_texture_alignment_unit(brw, mt->format);
+   mt->align_h =
+      intel_vertical_texture_alignment_unit(brw, mt->format, multisampled);
 
    switch (mt->target) {
    case GL_TEXTURE_CUBE_MAP:

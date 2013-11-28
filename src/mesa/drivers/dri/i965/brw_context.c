@@ -94,30 +94,39 @@ brw_query_samples_for_format(struct gl_context *ctx, GLenum target,
    }
 }
 
+const char *const brw_vendor_string = "Intel Open Source Technology Center";
+
+const char *
+brw_get_renderer_string(unsigned deviceID)
+{
+   const char *chipset;
+   static char buffer[128];
+
+   switch (deviceID) {
+#undef CHIPSET
+#define CHIPSET(id, symbol, str) case id: chipset = str; break;
+#include "pci_ids/i965_pci_ids.h"
+   default:
+      chipset = "Unknown Intel Chipset";
+      break;
+   }
+
+   (void) driGetRendererString(buffer, chipset, 0);
+   return buffer;
+}
+
 static const GLubyte *
 intelGetString(struct gl_context * ctx, GLenum name)
 {
    const struct brw_context *const brw = brw_context(ctx);
-   const char *chipset;
-   static char buffer[128];
 
    switch (name) {
    case GL_VENDOR:
-      return (GLubyte *) "Intel Open Source Technology Center";
-      break;
+      return (GLubyte *) brw_vendor_string;
 
    case GL_RENDERER:
-      switch (brw->intelScreen->deviceID) {
-#undef CHIPSET
-#define CHIPSET(id, family, str) case id: chipset = str; break;
-#include "pci_ids/i965_pci_ids.h"
-      default:
-         chipset = "Unknown Intel Chipset";
-         break;
-      }
-
-      (void) driGetRendererString(buffer, chipset, 0);
-      return (GLubyte *) buffer;
+      return
+         (GLubyte *) brw_get_renderer_string(brw->intelScreen->deviceID);
 
    default:
       return NULL;
@@ -130,8 +139,10 @@ intel_viewport(struct gl_context *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
    struct brw_context *brw = brw_context(ctx);
    __DRIcontext *driContext = brw->driContext;
 
-   if (brw->saved_viewport)
-      brw->saved_viewport(ctx, x, y, w, h);
+   (void) x;
+   (void) y;
+   (void) w;
+   (void) h;
 
    if (_mesa_is_winsys_fbo(ctx->DrawBuffer)) {
       dri2InvalidateDrawable(driContext->driDrawablePriv);
@@ -151,6 +162,8 @@ intelInvalidateState(struct gl_context * ctx, GLuint new_state)
    brw->NewGLState |= new_state;
 }
 
+#define flushFront(screen)      ((screen)->image.loader ? (screen)->image.loader->flushFrontBuffer : (screen)->dri2.loader->flushFrontBuffer)
+
 static void
 intel_flush_front(struct gl_context *ctx)
 {
@@ -160,8 +173,7 @@ intel_flush_front(struct gl_context *ctx)
    __DRIscreen *const screen = brw->intelScreen->driScrnPriv;
 
    if (brw->front_buffer_dirty && _mesa_is_winsys_fbo(ctx->DrawBuffer)) {
-      if (screen->dri2.loader->flushFrontBuffer != NULL &&
-          driDrawable &&
+      if (flushFront(screen) && driDrawable &&
           driDrawable->loaderPrivate) {
 
          /* Resolve before flushing FAKE_FRONT_LEFT to FRONT_LEFT.
@@ -174,8 +186,7 @@ intel_flush_front(struct gl_context *ctx)
          intel_resolve_for_dri2_flush(brw, driDrawable);
          intel_batchbuffer_flush(brw);
 
-         screen->dri2.loader->flushFrontBuffer(driDrawable,
-                                               driDrawable->loaderPrivate);
+         flushFront(screen)(driDrawable, driDrawable->loaderPrivate);
 
          /* We set the dirty bit in intel_prepare_render() if we're
           * front buffer rendering once we get there.
@@ -220,10 +231,8 @@ brw_init_driver_functions(struct brw_context *brw,
     * So EGL still relies on viewport hacks to handle window resizing.
     * This should go away with DRI3000.
     */
-   if (!brw->driContext->driScreenPriv->dri2.useInvalidate) {
-      brw->saved_viewport = functions->Viewport;
+   if (!brw->driContext->driScreenPriv->dri2.useInvalidate)
       functions->Viewport = intel_viewport;
-   }
 
    functions->Flush = intel_glFlush;
    functions->Finish = intelFinish;
@@ -333,18 +342,33 @@ brw_initialize_context_constants(struct brw_context *brw)
 
    ctx->Const.AlwaysUseGetTransformFeedbackVertexCount = true;
 
-   if (brw->gen == 6) {
-      ctx->Const.MaxSamples = 4;
-      ctx->Const.MaxColorTextureSamples = 4;
-      ctx->Const.MaxDepthTextureSamples = 4;
-      ctx->Const.MaxIntegerSamples = 4;
-   } else if (brw->gen >= 7) {
-      ctx->Const.MaxSamples = 8;
-      ctx->Const.MaxColorTextureSamples = 8;
-      ctx->Const.MaxDepthTextureSamples = 8;
-      ctx->Const.MaxIntegerSamples = 8;
-      ctx->Const.MaxProgramTextureGatherComponents = 4;
+   int max_samples;
+   const int *msaa_modes = intel_supported_msaa_modes(brw->intelScreen);
+   const int clamp_max_samples =
+      driQueryOptioni(&brw->optionCache, "clamp_max_samples");
+
+   if (clamp_max_samples < 0) {
+      max_samples = msaa_modes[0];
+   } else {
+      /* Select the largest supported MSAA mode that does not exceed
+       * clamp_max_samples.
+       */
+      max_samples = 0;
+      for (int i = 0; msaa_modes[i] != 0; ++i) {
+         if (msaa_modes[i] <= clamp_max_samples) {
+            max_samples = msaa_modes[i];
+            break;
+         }
+      }
    }
+
+   ctx->Const.MaxSamples = max_samples;
+   ctx->Const.MaxColorTextureSamples = max_samples;
+   ctx->Const.MaxDepthTextureSamples = max_samples;
+   ctx->Const.MaxIntegerSamples = max_samples;
+
+   if (brw->gen >= 7)
+      ctx->Const.MaxProgramTextureGatherComponents = 4;
 
    ctx->Const.MinLineWidth = 1.0;
    ctx->Const.MinLineWidthAA = 1.0;
@@ -396,6 +420,16 @@ brw_initialize_context_constants(struct brw_context *brw)
    ctx->Const.FragmentProgram.LowInt.Precision = 0;
    ctx->Const.FragmentProgram.HighInt = ctx->Const.FragmentProgram.LowInt;
    ctx->Const.FragmentProgram.MediumInt = ctx->Const.FragmentProgram.LowInt;
+
+   if (brw->gen >= 7) {
+      ctx->Const.FragmentProgram.MaxAtomicCounters = MAX_ATOMIC_COUNTERS;
+      ctx->Const.VertexProgram.MaxAtomicCounters = MAX_ATOMIC_COUNTERS;
+      ctx->Const.GeometryProgram.MaxAtomicCounters = MAX_ATOMIC_COUNTERS;
+      ctx->Const.FragmentProgram.MaxAtomicBuffers = BRW_MAX_ABO;
+      ctx->Const.VertexProgram.MaxAtomicBuffers = BRW_MAX_ABO;
+      ctx->Const.GeometryProgram.MaxAtomicBuffers = BRW_MAX_ABO;
+      ctx->Const.MaxCombinedAtomicBuffers = 3 * BRW_MAX_ABO;
+   }
 
    /* Gen6 converts quads to polygon in beginning of 3D pipeline,
     * but we're not sure how it's actually done for vertex order,
@@ -506,13 +540,14 @@ brw_process_driconf_options(struct brw_context *brw)
       driQueryOptionb(options, "disable_glsl_line_continuations");
 }
 
-bool
+GLboolean
 brwCreateContext(gl_api api,
 	         const struct gl_config *mesaVis,
 		 __DRIcontext *driContextPriv,
                  unsigned major_version,
                  unsigned minor_version,
                  uint32_t flags,
+                 bool notify_reset,
                  unsigned *dri_ctx_error,
 	         void *sharedContextPrivate)
 {
@@ -522,6 +557,20 @@ brwCreateContext(gl_api api,
    const struct brw_device_info *devinfo = screen->devinfo;
    struct dd_function_table functions;
    struct gl_config visual;
+
+   /* Only allow the __DRI_CTX_FLAG_ROBUST_BUFFER_ACCESS flag if the kernel
+    * provides us with context reset notifications.
+    */
+   uint32_t allowed_flags = __DRI_CTX_FLAG_DEBUG
+      | __DRI_CTX_FLAG_FORWARD_COMPATIBLE;
+
+   if (screen->has_context_reset_notification)
+      allowed_flags |= __DRI_CTX_FLAG_ROBUST_BUFFER_ACCESS;
+
+   if (flags & ~allowed_flags) {
+      *dri_ctx_error = __DRI_CTX_ERROR_UNKNOWN_FLAG;
+      return false;
+   }
 
    struct brw_context *brw = rzalloc(NULL, struct brw_context);
    if (!brw) {
@@ -541,7 +590,7 @@ brwCreateContext(gl_api api,
    brw->is_baytrail = devinfo->is_baytrail;
    brw->is_haswell = devinfo->is_haswell;
    brw->has_llc = devinfo->has_llc;
-   brw->has_hiz = devinfo->has_hiz_and_separate_stencil;
+   brw->has_hiz = devinfo->has_hiz_and_separate_stencil && brw->gen < 8;
    brw->has_separate_stencil = devinfo->has_hiz_and_separate_stencil;
    brw->has_pln = devinfo->has_pln;
    brw->has_compr4 = devinfo->has_compr4;
@@ -564,6 +613,9 @@ brwCreateContext(gl_api api,
    }
 
    brw_init_driver_functions(brw, &functions);
+
+   if (notify_reset)
+      functions.GetGraphicsResetStatus = brw_get_graphics_reset_status;
 
    struct gl_context *ctx = &brw->ctx;
 
@@ -605,6 +657,9 @@ brwCreateContext(gl_api api,
    brw_process_driconf_options(brw);
    brw_process_intel_debug_variable(brw);
    brw_initialize_context_constants(brw);
+
+   ctx->Const.ResetStrategy = notify_reset
+      ? GL_LOSE_CONTEXT_ON_RESET_ARB : GL_NO_RESET_NOTIFICATION_ARB;
 
    /* Reinitialize the context point state.  It depends on ctx->Const values. */
    _mesa_init_point(ctx);
@@ -672,6 +727,7 @@ brwCreateContext(gl_api api,
 
    brw->prim_restart.in_progress = false;
    brw->prim_restart.enable_cut_index = false;
+   brw->gs.enabled = false;
 
    if (brw->gen < 6) {
       brw->curbe.last_buf = calloc(1, 4096);
@@ -687,6 +743,9 @@ brwCreateContext(gl_api api,
       /* Turn on some extra GL_ARB_debug_output generation. */
       brw->perf_debug = true;
    }
+
+   if ((flags & __DRI_CTX_FLAG_ROBUST_BUFFER_ACCESS) != 0)
+      ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT_ARB;
 
    brw_fs_alloc_reg_sets(brw);
    brw_vec4_alloc_reg_set(brw);
@@ -929,12 +988,14 @@ intel_process_dri2_buffer(struct brw_context *brw,
                           struct intel_renderbuffer *rb,
                           const char *buffer_name);
 
-void
-intel_update_renderbuffers(__DRIcontext *context, __DRIdrawable *drawable)
+static void
+intel_update_image_buffers(struct brw_context *brw, __DRIdrawable *drawable);
+
+static void
+intel_update_dri2_buffers(struct brw_context *brw, __DRIdrawable *drawable)
 {
    struct gl_framebuffer *fb = drawable->driverPrivate;
    struct intel_renderbuffer *rb;
-   struct brw_context *brw = context->driverPrivate;
    __DRIbuffer *buffers = NULL;
    int i, count;
    const char *region_name;
@@ -983,6 +1044,27 @@ intel_update_renderbuffers(__DRIcontext *context, __DRIdrawable *drawable)
 
        intel_process_dri2_buffer(brw, drawable, &buffers[i], rb, region_name);
    }
+
+}
+
+void
+intel_update_renderbuffers(__DRIcontext *context, __DRIdrawable *drawable)
+{
+   struct brw_context *brw = context->driverPrivate;
+   __DRIscreen *screen = brw->intelScreen->driScrnPriv;
+
+   /* Set this up front, so that in case our buffers get invalidated
+    * while we're getting new buffers, we don't clobber the stamp and
+    * thus ignore the invalidate. */
+   drawable->lastStamp = drawable->dri2.stamp;
+
+   if (unlikely(INTEL_DEBUG & DEBUG_DRI))
+      fprintf(stderr, "enter %s, drawable %p\n", __func__, drawable);
+
+   if (screen->image.loader)
+      intel_update_image_buffers(brw, drawable);
+   else
+      intel_update_dri2_buffers(brw, drawable);
 
    driUpdateFramebufferSize(&brw->ctx, drawable);
 }
@@ -1187,4 +1269,101 @@ intel_process_dri2_buffer(struct brw_context *brw,
                                                  num_samples,
                                                  region);
    intel_region_release(&region);
+}
+
+/**
+ * \brief Query DRI image loader to obtain a DRIdrawable's buffers.
+ *
+ * To determine which DRI buffers to request, examine the renderbuffers
+ * attached to the drawable's framebuffer. Then request the buffers from
+ * the image loader
+ *
+ * This is called from intel_update_renderbuffers().
+ *
+ * \param drawable      Drawable whose buffers are queried.
+ * \param buffers       [out] List of buffers returned by DRI2 query.
+ * \param buffer_count  [out] Number of buffers returned.
+ *
+ * \see intel_update_renderbuffers()
+ */
+
+static void
+intel_update_image_buffer(struct brw_context *intel,
+                          __DRIdrawable *drawable,
+                          struct intel_renderbuffer *rb,
+                          __DRIimage *buffer,
+                          enum __DRIimageBufferMask buffer_type)
+{
+   struct intel_region *region = buffer->region;
+
+   if (!rb || !region)
+      return;
+
+   unsigned num_samples = rb->Base.Base.NumSamples;
+
+   if (rb->mt &&
+       rb->mt->region &&
+       rb->mt->region == region)
+      return;
+
+   intel_miptree_release(&rb->mt);
+   rb->mt = intel_miptree_create_for_image_buffer(intel,
+                                                  buffer_type,
+                                                  intel_rb_format(rb),
+                                                  num_samples,
+                                                  region);
+}
+
+static void
+intel_update_image_buffers(struct brw_context *brw, __DRIdrawable *drawable)
+{
+   struct gl_framebuffer *fb = drawable->driverPrivate;
+   __DRIscreen *screen = brw->intelScreen->driScrnPriv;
+   struct intel_renderbuffer *front_rb;
+   struct intel_renderbuffer *back_rb;
+   struct __DRIimageList images;
+   unsigned int format;
+   uint32_t buffer_mask = 0;
+
+   front_rb = intel_get_renderbuffer(fb, BUFFER_FRONT_LEFT);
+   back_rb = intel_get_renderbuffer(fb, BUFFER_BACK_LEFT);
+
+   if (back_rb)
+      format = intel_rb_format(back_rb);
+   else if (front_rb)
+      format = intel_rb_format(front_rb);
+   else
+      return;
+
+   if ((brw->is_front_buffer_rendering || brw->is_front_buffer_reading || !back_rb) && front_rb)
+      buffer_mask |= __DRI_IMAGE_BUFFER_FRONT;
+
+   if (back_rb)
+      buffer_mask |= __DRI_IMAGE_BUFFER_BACK;
+
+   (*screen->image.loader->getBuffers) (drawable,
+                                        driGLFormatToImageFormat(format),
+                                        &drawable->dri2.stamp,
+                                        drawable->loaderPrivate,
+                                        buffer_mask,
+                                        &images);
+
+   if (images.image_mask & __DRI_IMAGE_BUFFER_FRONT) {
+      drawable->w = images.front->width;
+      drawable->h = images.front->height;
+      intel_update_image_buffer(brw,
+                                drawable,
+                                front_rb,
+                                images.front,
+                                __DRI_IMAGE_BUFFER_FRONT);
+   }
+   if (images.image_mask & __DRI_IMAGE_BUFFER_BACK) {
+      drawable->w = images.back->width;
+      drawable->h = images.back->height;
+      intel_update_image_buffer(brw,
+                                drawable,
+                                back_rb,
+                                images.back,
+                                __DRI_IMAGE_BUFFER_BACK);
+   }
 }

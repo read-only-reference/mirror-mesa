@@ -651,6 +651,14 @@ cross_validate_globals(struct gl_shader_program *prog,
                existing->explicit_binding = true;
             }
 
+            if (var->type->contains_atomic() &&
+                var->atomic.offset != existing->atomic.offset) {
+               linker_error(prog, "offset specifications for %s "
+                            "`%s' have differing values\n",
+                            mode_string(var), var->name);
+               return;
+            }
+
 	    /* Validate layout qualifiers for gl_FragDepth.
 	     *
 	     * From the AMD/ARB_conservative_depth specs:
@@ -1485,8 +1493,12 @@ update_array_sizes(struct gl_shader_program *prog)
 	 /* GL_ARB_uniform_buffer_object says that std140 uniforms
 	  * will not be eliminated.  Since we always do std140, just
 	  * don't resize arrays in UBOs.
+          *
+          * Atomic counters are supposed to get deterministic
+          * locations assigned based on the declaration ordering and
+          * sizes, array compaction would mess that up.
 	  */
-	 if (var->is_in_uniform_block())
+	 if (var->is_in_uniform_block() || var->type->contains_atomic())
 	    continue;
 
 	 unsigned int size = var->max_array_access;
@@ -1991,6 +2003,10 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
       prog->UniformBlockStageIndex[i] = NULL;
    }
 
+   ralloc_free(prog->AtomicBuffers);
+   prog->AtomicBuffers = NULL;
+   prog->NumAtomicBuffers = 0;
+
    /* Separate the shaders into groups based on their type.
     */
    struct gl_shader **vert_shader_list;
@@ -2138,8 +2154,8 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
       if (prog->_LinkedShaders[i] == NULL)
          continue;
 
-      validate_interstage_interface_blocks(prog, prog->_LinkedShaders[prev],
-                                           prog->_LinkedShaders[i]);
+      validate_interstage_inout_blocks(prog, prog->_LinkedShaders[prev],
+                                       prog->_LinkedShaders[i]);
       if (!prog->LinkStatus)
          goto done;
 
@@ -2152,6 +2168,11 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
       prev = i;
    }
 
+   /* Cross-validate uniform blocks between shader stages */
+   validate_interstage_uniform_blocks(prog, prog->_LinkedShaders,
+                                      MESA_SHADER_TYPES);
+   if (!prog->LinkStatus)
+      goto done;
 
    for (unsigned int i = 0; i < MESA_SHADER_TYPES; i++) {
       if (prog->_LinkedShaders[i] != NULL)
@@ -2342,9 +2363,12 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
 
    update_array_sizes(prog);
    link_assign_uniform_locations(prog);
+   link_assign_atomic_counter_resources(ctx, prog);
    store_fragdepth_layout(prog);
 
    check_resources(ctx, prog);
+   link_check_atomic_counter_resources(ctx, prog);
+
    if (!prog->LinkStatus)
       goto done;
 
@@ -2371,6 +2395,11 @@ done:
    for (unsigned i = 0; i < MESA_SHADER_TYPES; i++) {
       if (prog->_LinkedShaders[i] == NULL)
 	 continue;
+
+      /* Do a final validation step to make sure that the IR wasn't
+       * invalidated by any modifications performed after intrastage linking.
+       */
+      validate_ir_tree(prog->_LinkedShaders[i]->ir);
 
       /* Retain any live IR, but trash the rest. */
       reparent_ir(prog->_LinkedShaders[i]->ir, prog->_LinkedShaders[i]->ir);

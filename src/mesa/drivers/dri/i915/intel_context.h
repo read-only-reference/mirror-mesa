@@ -278,8 +278,6 @@ struct intel_context
 
    __DRIcontext *driContext;
    struct intel_screen *intelScreen;
-   void (*saved_viewport)(struct gl_context * ctx,
-			  GLint x, GLint y, GLsizei width, GLsizei height);
 
    /**
     * Configuration cache
@@ -394,6 +392,10 @@ extern int INTEL_DEBUG;
 /* ================================================================
  * intel_context.c:
  */
+
+extern const char *const i915_vendor_string;
+
+extern const char *i915_get_renderer_string(unsigned deviceID);
 
 extern bool intelInitContext(struct intel_context *intel,
                              int api,

@@ -44,6 +44,7 @@ i965_FILES = \
 	brw_context.c \
 	brw_cubemap_normalize.cpp \
 	brw_curbe.c \
+	brw_dead_control_flow.cpp \
 	brw_device_info.c \
 	brw_disasm.c \
 	brw_draw.c \
@@ -76,6 +77,7 @@ i965_FILES = \
 	brw_program.c \
 	brw_primitive_restart.c \
 	brw_queryobj.c \
+	brw_reset.c \
 	brw_schedule_instructions.cpp \
 	brw_sf.c \
 	brw_sf_emit.c \
@@ -124,7 +126,6 @@ i965_FILES = \
 	gen6_vs_state.c \
 	gen6_wm_state.c \
 	gen7_blorp.cpp \
-	gen7_clip_state.c \
 	gen7_disable.c \
         gen7_gs_state.c \
 	gen7_misc_state.c \

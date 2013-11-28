@@ -27,6 +27,7 @@
 
 #include <errno.h>
 #include <time.h>
+#include <unistd.h>
 #include "main/glheader.h"
 #include "main/context.h"
 #include "main/framebuffer.h"
@@ -244,32 +245,9 @@ intel_allocate_image(int dri_format, void *loaderPrivate)
     image->dri_format = dri_format;
     image->offset = 0;
 
-    switch (dri_format) {
-    case __DRI_IMAGE_FORMAT_RGB565:
-       image->format = MESA_FORMAT_RGB565;
-       break;
-    case __DRI_IMAGE_FORMAT_XRGB8888:
-       image->format = MESA_FORMAT_XRGB8888;
-       break;
-    case __DRI_IMAGE_FORMAT_ARGB8888:
-       image->format = MESA_FORMAT_ARGB8888;
-       break;
-    case __DRI_IMAGE_FORMAT_ABGR8888:
-       image->format = MESA_FORMAT_RGBA8888_REV;
-       break;
-    case __DRI_IMAGE_FORMAT_XBGR8888:
-       image->format = MESA_FORMAT_RGBX8888_REV;
-       break;
-    case __DRI_IMAGE_FORMAT_R8:
-       image->format = MESA_FORMAT_R8;
-       break;
-    case __DRI_IMAGE_FORMAT_GR88:
-       image->format = MESA_FORMAT_GR88;
-       break;
-    case __DRI_IMAGE_FORMAT_NONE:
-       image->format = MESA_FORMAT_NONE;
-       break;
-    default:
+    image->format = driImageFormatToGLFormat(dri_format);
+    if (dri_format != __DRI_IMAGE_FORMAT_NONE &&
+        image->format == MESA_FORMAT_NONE) {
        free(image);
        return NULL;
     }
@@ -316,27 +294,6 @@ intel_setup_image_from_dimensions(__DRIimage *image)
    image->height   = image->region->height;
    image->tile_x = 0;
    image->tile_y = 0;
-}
-
-static inline uint32_t
-intel_dri_format(GLuint format)
-{
-   switch (format) {
-   case MESA_FORMAT_RGB565:
-      return __DRI_IMAGE_FORMAT_RGB565;
-   case MESA_FORMAT_XRGB8888:
-      return __DRI_IMAGE_FORMAT_XRGB8888;
-   case MESA_FORMAT_ARGB8888:
-      return __DRI_IMAGE_FORMAT_ARGB8888;
-   case MESA_FORMAT_RGBA8888_REV:
-      return __DRI_IMAGE_FORMAT_ABGR8888;
-   case MESA_FORMAT_R8:
-      return __DRI_IMAGE_FORMAT_R8;
-   case MESA_FORMAT_RG88:
-      return __DRI_IMAGE_FORMAT_GR88;
-   }
-
-   return MESA_FORMAT_NONE;
 }
 
 static __DRIimage *
@@ -396,7 +353,7 @@ intel_create_image_from_renderbuffer(__DRIcontext *context,
    image->data = loaderPrivate;
    intel_region_reference(&image->region, irb->mt->region);
    intel_setup_image_from_dimensions(image);
-   image->dri_format = intel_dri_format(image->format);
+   image->dri_format = driGLFormatToImageFormat(image->format);
 
    rb->NeedsFinishRenderTexture = true;
    return image;
@@ -450,7 +407,7 @@ intel_create_image_from_texture(__DRIcontext *context, int target,
    image->format = obj->Image[face][level]->TexFormat;
    image->data = loaderPrivate;
    intel_setup_image_from_mipmap_tree(intel, image, iobj->mt, level, zoffset);
-   image->dri_format = intel_dri_format(image->format);
+   image->dri_format = driGLFormatToImageFormat(image->format);
    if (image->dri_format == MESA_FORMAT_NONE) {
       *error = __DRI_IMAGE_ERROR_BAD_PARAMETER;
       free(image);
@@ -653,8 +610,8 @@ intel_create_image_from_fds(__DRIscreen *screen,
       return NULL;
 
    image->region = intel_region_alloc_for_fd(intelScreen,
-                                             1, width, height,
-                                             strides[0], fds[0], "image");
+                                             f->planes[0].cpp, width, height, strides[0],
+                                             height * strides[0], fds[0], "image");
    if (image->region == NULL) {
       free(image);
       return NULL;
@@ -745,10 +702,95 @@ static struct __DRIimageExtensionRec intelImageExtension = {
     .createImageFromFds                 = intel_create_image_from_fds
 };
 
+static int
+i915_query_renderer_integer(__DRIscreen *psp, int param, unsigned int *value)
+{
+   const struct intel_screen *const intelScreen =
+      (struct intel_screen *) psp->driverPrivate;
+
+   switch (param) {
+   case __DRI2_RENDERER_VENDOR_ID:
+      value[0] = 0x8086;
+      return 0;
+   case __DRI2_RENDERER_DEVICE_ID:
+      value[0] = intelScreen->deviceID;
+      return 0;
+   case __DRI2_RENDERER_ACCELERATED:
+      value[0] = 1;
+      return 0;
+   case __DRI2_RENDERER_VIDEO_MEMORY: {
+      /* Once a batch uses more than 75% of the maximum mappable size, we
+       * assume that there's some fragmentation, and we start doing extra
+       * flushing, etc.  That's the big cliff apps will care about.
+       */
+      size_t aper_size;
+      size_t mappable_size;
+
+      drm_intel_get_aperture_sizes(psp->fd, &mappable_size, &aper_size);
+
+      const unsigned gpu_mappable_megabytes =
+         (aper_size / (1024 * 1024)) * 3 / 4;
+
+      const long system_memory_pages = sysconf(_SC_PHYS_PAGES);
+      const long system_page_size = sysconf(_SC_PAGE_SIZE);
+
+      if (system_memory_pages <= 0 || system_page_size <= 0)
+         return -1;
+
+      const uint64_t system_memory_bytes = (uint64_t) system_memory_pages
+         * (uint64_t) system_page_size;
+
+      const unsigned system_memory_megabytes =
+         (unsigned) (system_memory_bytes / 1024);
+
+      value[0] = MIN2(system_memory_megabytes, gpu_mappable_megabytes);
+      return 0;
+   }
+   case __DRI2_RENDERER_UNIFIED_MEMORY_ARCHITECTURE:
+      value[0] = 1;
+      return 0;
+   case __DRI2_RENDERER_PREFERRED_PROFILE:
+      value[0] = (1U << __DRI_API_OPENGL);
+      return 0;
+   default:
+      return driQueryRendererIntegerCommon(psp, param, value);
+   }
+
+   return -1;
+}
+
+static int
+i915_query_renderer_string(__DRIscreen *psp, int param, const char **value)
+{
+   const struct intel_screen *intelScreen =
+      (struct intel_screen *) psp->driverPrivate;
+
+   switch (param) {
+   case __DRI2_RENDERER_VENDOR_ID:
+      value[0] = i915_vendor_string;
+      return 0;
+   case __DRI2_RENDERER_DEVICE_ID:
+      value[0] = i915_get_renderer_string(intelScreen->deviceID);
+      return 0;
+   default:
+      break;
+   }
+
+   return -1;
+}
+
+static struct __DRI2rendererQueryExtensionRec intelRendererQueryExtension = {
+   .base = { __DRI2_RENDERER_QUERY, 1 },
+
+   .queryInteger = i915_query_renderer_integer,
+   .queryString = i915_query_renderer_string
+};
+
 static const __DRIextension *intelScreenExtensions[] = {
     &intelTexBufferExtension.base,
     &intelFlushExtension.base,
     &intelImageExtension.base,
+    &intelRendererQueryExtension.base,
     &dri2ConfigQueryExtension.base,
     NULL
 };
@@ -908,6 +950,7 @@ intelCreateContext(gl_api api,
 		   unsigned major_version,
 		   unsigned minor_version,
 		   uint32_t flags,
+                   bool notify_reset,
 		   unsigned *error,
                    void *sharedContextPrivate)
 {
@@ -915,6 +958,16 @@ intelCreateContext(gl_api api,
 
    __DRIscreen *sPriv = driContextPriv->driScreenPriv;
    struct intel_screen *intelScreen = sPriv->driverPrivate;
+
+   if (flags & ~__DRI_CTX_FLAG_DEBUG) {
+      *error = __DRI_CTX_ERROR_UNKNOWN_FLAG;
+      return false;
+   }
+
+   if (notify_reset) {
+      *error = __DRI_CTX_ERROR_UNKNOWN_ATTRIBUTE;
+      return false;
+   }
 
    if (IS_9XX(intelScreen->deviceID)) {
       success = i915CreateContext(api, mesaVis, driContextPriv,
@@ -1211,6 +1264,7 @@ static const struct __DRIDriverVtableExtensionRec i915_vtable = {
 /* This is the table of extensions that the loader will dlsym() for. */
 static const __DRIextension *i915_driver_extensions[] = {
     &driCoreExtension.base,
+    &driImageDriverExtension.base,
     &driDRI2Extension.base,
     &i915_vtable.base,
     &i915_config_options.base,

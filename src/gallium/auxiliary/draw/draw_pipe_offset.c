@@ -32,6 +32,7 @@
  * \author  Brian Paul
  */
 
+#include "util/u_format.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
 #include "draw_pipe.h"
@@ -89,7 +90,27 @@ static void do_offset_tri( struct draw_stage *stage,
    float dzdx = fabsf(a * inv_det);
    float dzdy = fabsf(b * inv_det);
 
-   float zoffset = offset->units + MAX2(dzdx, dzdy) * offset->scale;
+   float zoffset, mult;
+
+   mult = MAX2(dzdx, dzdy) * offset->scale;
+
+   if (stage->draw->floating_point_depth) {
+      float bias;
+      union fi maxz;
+      maxz.f = MAX3(v0[2], v1[2], v2[2]);
+      /* just do the math directly on shifted number */
+      maxz.ui &= 0xff << 23;
+      maxz.i -= 23 << 23;
+      /* Clamping to zero means mrd will be zero for very small numbers,
+       * but specs do not indicate this should be prevented by clamping
+       * mrd to smallest normal number instead. */
+      maxz.i = MAX2(maxz.i, 0);
+
+      bias = offset->units * maxz.f;
+      zoffset = bias + mult;
+   } else {
+      zoffset = offset->units + mult;
+   }
 
    if (offset->clamp)
       zoffset = (offset->clamp < 0.0f) ? MAX2(zoffset, offset->clamp) :
@@ -157,7 +178,17 @@ static void offset_first_tri( struct draw_stage *stage,
    if (do_offset) {
       offset->scale = rast->offset_scale;
       offset->clamp = rast->offset_clamp;
-      offset->units = (float) (rast->offset_units * stage->draw->mrd);
+
+      /*
+       * If depth is floating point, depth bias is calculated with respect
+       * to the primitive's maximum Z value. Retain the original depth bias
+       * value until that stage.
+       */
+      if (stage->draw->floating_point_depth) {
+         offset->units = (float) rast->offset_units;
+      } else {
+         offset->units = (float) (rast->offset_units * stage->draw->mrd);
+      }
    }
    else {
       offset->scale = 0.0f;

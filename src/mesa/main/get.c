@@ -131,6 +131,7 @@ enum value_extra {
    EXTRA_VERSION_30,
    EXTRA_VERSION_31,
    EXTRA_VERSION_32,
+   EXTRA_VERSION_40,
    EXTRA_API_GL,
    EXTRA_API_GL_CORE,
    EXTRA_API_ES2,
@@ -374,6 +375,7 @@ EXTRA_EXT(ARB_texture_buffer_range);
 EXTRA_EXT(ARB_texture_multisample);
 EXTRA_EXT(ARB_texture_gather);
 EXTRA_EXT(ARB_shader_atomic_counters);
+EXTRA_EXT(ARB_draw_indirect);
 
 static const int
 extra_ARB_color_buffer_float_or_glcore[] = {
@@ -391,6 +393,7 @@ extra_NV_primitive_restart[] = {
 static const int extra_version_30[] = { EXTRA_VERSION_30, EXTRA_END };
 static const int extra_version_31[] = { EXTRA_VERSION_31, EXTRA_END };
 static const int extra_version_32[] = { EXTRA_VERSION_32, EXTRA_END };
+static const int extra_version_40[] = { EXTRA_VERSION_40, EXTRA_END };
 
 static const int extra_gl30_es3[] = {
     EXTRA_VERSION_30,
@@ -408,6 +411,12 @@ static const int extra_gl32_ARB_geometry_shader4[] = {
     EXTRA_VERSION_32,
     EXT(ARB_geometry_shader4),
     EXTRA_END
+};
+
+static const int extra_gl40_ARB_sample_shading[] = {
+   EXTRA_VERSION_40,
+   EXT(ARB_sample_shading),
+   EXTRA_END
 };
 
 static const int
@@ -542,7 +551,7 @@ static void
 find_custom_value(struct gl_context *ctx, const struct value_desc *d, union value *v)
 {
    struct gl_buffer_object **buffer_obj;
-   struct gl_client_array *array;
+   struct gl_vertex_attrib_array *array;
    GLuint unit, *p;
 
    switch (d->pname) {
@@ -767,7 +776,7 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
       break;
    case GL_TEXTURE_COORD_ARRAY_BUFFER_BINDING_ARB:
       v->value_int =
-	 ctx->Array.ArrayObj->VertexAttrib[VERT_ATTRIB_TEX(ctx->Array.ActiveTexture)].BufferObj->Name;
+	 ctx->Array.ArrayObj->VertexBinding[VERT_ATTRIB_TEX(ctx->Array.ActiveTexture)].BufferObj->Name;
       break;
    case GL_ELEMENT_ARRAY_BUFFER_BINDING_ARB:
       v->value_int = ctx->Array.ArrayObj->ElementArrayBufferObj->Name;
@@ -811,7 +820,7 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
 	 ctx->CurrentRenderbuffer ? ctx->CurrentRenderbuffer->Name : 0;
       break;
    case GL_POINT_SIZE_ARRAY_BUFFER_BINDING_OES:
-      v->value_int = ctx->Array.ArrayObj->VertexAttrib[VERT_ATTRIB_POINT_SIZE].BufferObj->Name;
+      v->value_int = ctx->Array.ArrayObj->VertexBinding[VERT_ATTRIB_POINT_SIZE].BufferObj->Name;
       break;
 
    case GL_FOG_COLOR:
@@ -904,6 +913,10 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
    /* GL_ARB_shader_atomic_counters */
    case GL_ATOMIC_COUNTER_BUFFER_BINDING:
       v->value_int = ctx->AtomicBuffer->Name;
+      break;
+   /* GL_ARB_draw_indirect */
+   case GL_DRAW_INDIRECT_BUFFER_BINDING:
+      v->value_int = ctx->DrawIndirectBuffer->Name;
       break;
    }
 }
@@ -1732,6 +1745,30 @@ find_value_indexed(const char *func, GLenum pname, GLuint index, union value *v)
          goto invalid_value;
       v->value_int64 = ctx->AtomicBufferBindings[index].Size;
       return TYPE_INT64;
+
+   case GL_VERTEX_BINDING_DIVISOR:
+      if (!_mesa_is_desktop_gl(ctx) || !ctx->Extensions.ARB_instanced_arrays)
+          goto invalid_enum;
+      if (index >= ctx->Const.VertexProgram.MaxAttribs)
+          goto invalid_value;
+      v->value_int = ctx->Array.ArrayObj->VertexBinding[VERT_ATTRIB_GENERIC(index)].InstanceDivisor;
+      return TYPE_INT;
+
+   case GL_VERTEX_BINDING_OFFSET:
+      if (!_mesa_is_desktop_gl(ctx))
+          goto invalid_enum;
+      if (index >= ctx->Const.VertexProgram.MaxAttribs)
+          goto invalid_value;
+      v->value_int = ctx->Array.ArrayObj->VertexBinding[VERT_ATTRIB_GENERIC(index)].Offset;
+      return TYPE_INT;
+
+   case GL_VERTEX_BINDING_STRIDE:
+      if (!_mesa_is_desktop_gl(ctx))
+          goto invalid_enum;
+      if (index >= ctx->Const.VertexProgram.MaxAttribs)
+          goto invalid_value;
+      v->value_int = ctx->Array.ArrayObj->VertexBinding[VERT_ATTRIB_GENERIC(index)].Stride;
+      return TYPE_INT;
    }
 
  invalid_enum:

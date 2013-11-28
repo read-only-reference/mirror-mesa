@@ -45,6 +45,8 @@ typedef struct
    unsigned int flags;
 } DRI2Buffer;
 
+struct glx_screen;
+
 extern Bool
 DRI2QueryExtension(Display * display, int *eventBase, int *errorBase);
 
@@ -84,5 +86,13 @@ extern void
 DRI2CopyRegion(Display * dpy, XID drawable,
                XserverRegion region,
                CARD32 dest, CARD32 src);
+
+_X_HIDDEN int
+dri2_query_renderer_integer(struct glx_screen *base, int attribute,
+                            unsigned int *value);
+
+_X_HIDDEN int
+dri2_query_renderer_string(struct glx_screen *base, int attribute,
+                           const char **value);
 
 #endif

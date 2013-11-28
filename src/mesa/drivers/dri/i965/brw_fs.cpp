@@ -46,6 +46,7 @@ extern "C" {
 #include "brw_wm.h"
 }
 #include "brw_fs.h"
+#include "brw_dead_control_flow.h"
 #include "main/uniforms.h"
 #include "brw_fs_live_variables.h"
 #include "glsl/glsl_types.h"
@@ -193,11 +194,11 @@ fs_visitor::IF(uint32_t predicate)
    return inst;
 }
 
-/** Gen6+ IF with embedded comparison. */
+/** Gen6 IF with embedded comparison. */
 fs_inst *
 fs_visitor::IF(fs_reg src0, fs_reg src1, uint32_t condition)
 {
-   assert(brw->gen >= 6);
+   assert(brw->gen == 6);
    fs_inst *inst = new(mem_ctx) fs_inst(BRW_OPCODE_IF,
                                         reg_null_d, src0, src1);
    inst->conditional_mod = condition;
@@ -415,7 +416,7 @@ fs_reg::fs_reg(uint32_t u)
    this->imm.u = u;
 }
 
-/** Fixed brw_reg Immediate value constructor. */
+/** Fixed brw_reg. */
 fs_reg::fs_reg(struct brw_reg fixed_hw_reg)
 {
    init();
@@ -689,19 +690,6 @@ fs_visitor::pop_force_uncompressed()
 {
    force_uncompressed_stack--;
    assert(force_uncompressed_stack >= 0);
-}
-
-void
-fs_visitor::push_force_sechalf()
-{
-   force_sechalf_stack++;
-}
-
-void
-fs_visitor::pop_force_sechalf()
-{
-   force_sechalf_stack--;
-   assert(force_sechalf_stack >= 0);
 }
 
 /**
@@ -1140,6 +1128,126 @@ fs_visitor::emit_frontfacing_interpolation(ir_variable *ir)
        */
       emit(CMP(*reg, fs_reg(r1_6ud), fs_reg(1u << 31), BRW_CONDITIONAL_L));
       emit(BRW_OPCODE_AND, *reg, *reg, fs_reg(1u));
+   }
+
+   return reg;
+}
+
+void
+fs_visitor::compute_sample_position(fs_reg dst, fs_reg int_sample_pos)
+{
+   assert(dst.type == BRW_REGISTER_TYPE_F);
+
+   if (c->key.compute_pos_offset) {
+      /* Convert int_sample_pos to floating point */
+      emit(MOV(dst, int_sample_pos));
+      /* Scale to the range [0, 1] */
+      emit(MUL(dst, dst, fs_reg(1 / 16.0f)));
+   }
+   else {
+      /* From ARB_sample_shading specification:
+       * "When rendering to a non-multisample buffer, or if multisample
+       *  rasterization is disabled, gl_SamplePosition will always be
+       *  (0.5, 0.5).
+       */
+      emit(MOV(dst, fs_reg(0.5f)));
+   }
+}
+
+fs_reg *
+fs_visitor::emit_samplepos_setup(ir_variable *ir)
+{
+   assert(brw->gen >= 6);
+   assert(ir->type == glsl_type::vec2_type);
+
+   this->current_annotation = "compute sample position";
+   fs_reg *reg = new(this->mem_ctx) fs_reg(this, ir->type);
+   fs_reg pos = *reg;
+   fs_reg int_sample_x = fs_reg(this, glsl_type::int_type);
+   fs_reg int_sample_y = fs_reg(this, glsl_type::int_type);
+
+   /* WM will be run in MSDISPMODE_PERSAMPLE. So, only one of SIMD8 or SIMD16
+    * mode will be enabled.
+    *
+    * From the Ivy Bridge PRM, volume 2 part 1, page 344:
+    * R31.1:0         Position Offset X/Y for Slot[3:0]
+    * R31.3:2         Position Offset X/Y for Slot[7:4]
+    * .....
+    *
+    * The X, Y sample positions come in as bytes in  thread payload. So, read
+    * the positions using vstride=16, width=8, hstride=2.
+    */
+   struct brw_reg sample_pos_reg =
+      stride(retype(brw_vec1_grf(c->sample_pos_reg, 0),
+                    BRW_REGISTER_TYPE_B), 16, 8, 2);
+
+   emit(MOV(int_sample_x, fs_reg(sample_pos_reg)));
+   if (dispatch_width == 16) {
+      int_sample_x.sechalf = true;
+      fs_inst *inst = emit(MOV(int_sample_x,
+                               fs_reg(suboffset(sample_pos_reg, 16))));
+      inst->force_sechalf = true;
+      int_sample_x.sechalf = false;
+   }
+   /* Compute gl_SamplePosition.x */
+   compute_sample_position(pos, int_sample_x);
+   pos.reg_offset++;
+   emit(MOV(int_sample_y, fs_reg(suboffset(sample_pos_reg, 1))));
+   if (dispatch_width == 16) {
+      int_sample_y.sechalf = true;
+      fs_inst *inst = emit(MOV(int_sample_y,
+                               fs_reg(suboffset(sample_pos_reg, 17))));
+      inst->force_sechalf = true;
+      int_sample_y.sechalf = false;
+   }
+   /* Compute gl_SamplePosition.y */
+   compute_sample_position(pos, int_sample_y);
+   return reg;
+}
+
+fs_reg *
+fs_visitor::emit_sampleid_setup(ir_variable *ir)
+{
+   assert(brw->gen >= 6);
+
+   this->current_annotation = "compute sample id";
+   fs_reg *reg = new(this->mem_ctx) fs_reg(this, ir->type);
+
+   if (c->key.compute_sample_id) {
+      fs_reg t1 = fs_reg(this, glsl_type::int_type);
+      fs_reg t2 = fs_reg(this, glsl_type::int_type);
+      t2.type = BRW_REGISTER_TYPE_UW;
+
+      /* The PS will be run in MSDISPMODE_PERSAMPLE. For example with
+       * 8x multisampling, subspan 0 will represent sample N (where N
+       * is 0, 2, 4 or 6), subspan 1 will represent sample 1, 3, 5 or
+       * 7. We can find the value of N by looking at R0.0 bits 7:6
+       * ("Starting Sample Pair Index (SSPI)") and multiplying by two
+       * (since samples are always delivered in pairs). That is, we
+       * compute 2*((R0.0 & 0xc0) >> 6) == (R0.0 & 0xc0) >> 5. Then
+       * we need to add N to the sequence (0, 0, 0, 0, 1, 1, 1, 1) in
+       * case of SIMD8 and sequence (0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2,
+       * 2, 3, 3, 3, 3) in case of SIMD16. We compute this sequence by
+       * populating a temporary variable with the sequence (0, 1, 2, 3),
+       * and then reading from it using vstride=1, width=4, hstride=0.
+       * These computations hold good for 4x multisampling as well.
+       */
+      emit(BRW_OPCODE_AND, t1,
+           fs_reg(retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_D)),
+           fs_reg(brw_imm_d(0xc0)));
+      emit(BRW_OPCODE_SHR, t1, t1, fs_reg(5));
+      /* This works for both SIMD8 and SIMD16 */
+      emit(MOV(t2, brw_imm_v(0x3210)));
+      /* This special instruction takes care of setting vstride=1,
+       * width=4, hstride=0 of t2 during an ADD instruction.
+       */
+      emit(FS_OPCODE_SET_SAMPLE_ID, *reg, t1, t2);
+   } else {
+      /* As per GL_ARB_sample_shading specification:
+       * "When rendering to a non-multisample buffer, or if multisample
+       *  rasterization is disabled, gl_SampleID will always be zero."
+       */
+      emit(BRW_OPCODE_MOV, *reg, fs_reg(0));
    }
 
    return reg;
@@ -1872,6 +1980,50 @@ fs_visitor::opt_algebraic()
             break;
          }
          break;
+      case BRW_OPCODE_OR:
+         if (inst->src[0].equals(inst->src[1])) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->src[1] = reg_undef;
+            progress = true;
+            break;
+         }
+         break;
+      case BRW_OPCODE_SEL:
+         if (inst->saturate && inst->src[1].file == IMM) {
+            switch (inst->conditional_mod) {
+            case BRW_CONDITIONAL_LE:
+            case BRW_CONDITIONAL_L:
+               switch (inst->src[1].type) {
+               case BRW_REGISTER_TYPE_F:
+                  if (inst->src[1].imm.f >= 1.0f) {
+                     inst->opcode = BRW_OPCODE_MOV;
+                     inst->src[1] = reg_undef;
+                     progress = true;
+                  }
+                  break;
+               default:
+                  break;
+               }
+               break;
+            case BRW_CONDITIONAL_GE:
+            case BRW_CONDITIONAL_G:
+               switch (inst->src[1].type) {
+               case BRW_REGISTER_TYPE_F:
+                  if (inst->src[1].imm.f <= 0.0f) {
+                     inst->opcode = BRW_OPCODE_MOV;
+                     inst->src[1] = reg_undef;
+                     inst->conditional_mod = BRW_CONDITIONAL_NONE;
+                     progress = true;
+                  }
+                  break;
+               default:
+                  break;
+               }
+            default:
+               break;
+            }
+         }
+         break;
       default:
 	 break;
       }
@@ -1895,7 +2047,7 @@ fs_visitor::dead_code_eliminate()
    foreach_list_safe(node, &this->instructions) {
       fs_inst *inst = (fs_inst *)node;
 
-      if (inst->dst.file == GRF) {
+      if (inst->dst.file == GRF && !inst->has_side_effects()) {
          bool dead = true;
 
          for (int i = 0; i < inst->regs_written; i++) {
@@ -2056,31 +2208,26 @@ fs_visitor::dead_code_eliminate_local()
                get_dead_code_hash_entry(ht, inst->dst.reg,
                                         inst->dst.reg_offset);
 
-            if (inst->is_partial_write()) {
-               /* For a partial write, we can't remove any previous dead code
-                * candidate, since we're just modifying their result, but we can
-                * be dead code eliminiated ourselves.
-                */
-               if (entry) {
-                  entry->data = inst;
+            if (entry) {
+               if (inst->is_partial_write()) {
+                  /* For a partial write, we can't remove any previous dead code
+                   * candidate, since we're just modifying their result.
+                   */
                } else {
-                  insert_dead_code_hash(ht, inst->dst.reg, inst->dst.reg_offset,
-                                        inst);
-               }
-            } else {
-               if (entry) {
                   /* We're completely updating a channel, and there was a
                    * previous write to the channel that wasn't read.  Kill it!
                    */
                   fs_inst *inst = (fs_inst *)entry->data;
                   inst->remove();
                   progress = true;
-                  _mesa_hash_table_remove(ht, entry);
                }
 
+               _mesa_hash_table_remove(ht, entry);
+            }
+
+            if (!inst->has_side_effects())
                insert_dead_code_hash(ht, inst->dst.reg, inst->dst.reg_offset,
                                      inst);
-            }
          }
       }
    }
@@ -2283,6 +2430,7 @@ fs_visitor::register_coalesce()
 		scan_inst->src[i].reg == inst->dst.reg &&
 		scan_inst->src[i].reg_offset == inst->dst.reg_offset) {
 	       fs_reg new_src = inst->src[0];
+               new_src.type = scan_inst->src[i].type;
                if (scan_inst->src[i].abs) {
                   new_src.negate = 0;
                   new_src.abs = 1;
@@ -3012,7 +3160,14 @@ fs_visitor::setup_payload_gen6()
          c->nr_payload_regs++;
       }
    }
+
+   c->prog_data.uses_pos_offset = c->key.compute_pos_offset;
    /* R31: MSAA position offsets. */
+   if (c->prog_data.uses_pos_offset) {
+      c->sample_pos_reg = c->nr_payload_regs;
+      c->nr_payload_regs++;
+   }
+
    /* R32-: bary for 32-pixel. */
    /* R58-59: interp W for 32-pixel. */
 
@@ -3026,8 +3181,11 @@ fs_visitor::assign_binding_table_offsets()
 {
    uint32_t next_binding_table_offset = 0;
 
+   /* If there are no color regions, we still perform an FB write to a null
+    * renderbuffer, which we place at surface index 0.
+    */
    c->prog_data.binding_table.render_target_start = next_binding_table_offset;
-   next_binding_table_offset += c->key.nr_color_regions;
+   next_binding_table_offset += MAX2(c->key.nr_color_regions, 1);
 
    assign_common_binding_table_offsets(next_binding_table_offset);
 }
@@ -3037,6 +3195,7 @@ fs_visitor::run()
 {
    sanity_param_count = fp->Base.Parameters->NumParameters;
    uint32_t orig_nr_params = c->prog_data.nr_params;
+   bool allocated_without_spills;
 
    assign_binding_table_offsets();
 
@@ -3062,7 +3221,7 @@ fs_visitor::run()
       /* We handle discards by keeping track of the still-live pixels in f0.1.
        * Initialize it with the dispatched pixels.
        */
-      if (fp->UsesKill) {
+      if (fp->UsesKill || c->key.alpha_test_func) {
          fs_inst *discard_init = emit(FS_OPCODE_MOV_DISPATCH_TO_FLAGS);
          discard_init->flag_subreg = 1;
       }
@@ -3086,6 +3245,9 @@ fs_visitor::run()
 
       emit(FS_OPCODE_PLACEHOLDER_HALT);
 
+      if (c->key.alpha_test_func)
+         emit_alpha_test();
+
       emit_fb_writes();
 
       split_virtual_grfs();
@@ -3107,29 +3269,60 @@ fs_visitor::run()
 	 progress = opt_copy_propagate() || progress;
 	 progress = dead_code_eliminate() || progress;
 	 progress = dead_code_eliminate_local() || progress;
+         progress = dead_control_flow_eliminate(this) || progress;
 	 progress = register_coalesce() || progress;
 	 progress = register_coalesce_2() || progress;
 	 progress = compute_to_mrf() || progress;
       } while (progress);
-
-      schedule_instructions(false);
 
       lower_uniform_pull_constant_loads();
 
       assign_curb_setup();
       assign_urb_setup();
 
-      if (0)
-	 assign_regs_trivial();
-      else {
-	 while (!assign_regs()) {
-	    if (failed)
-	       break;
-	 }
+      static enum instruction_scheduler_mode pre_modes[] = {
+         SCHEDULE_PRE,
+         SCHEDULE_PRE_NON_LIFO,
+         SCHEDULE_PRE_LIFO,
+      };
+
+      /* Try each scheduling heuristic to see if it can successfully register
+       * allocate without spilling.  They should be ordered by decreasing
+       * performance but increasing likelihood of allocating.
+       */
+      for (unsigned i = 0; i < ARRAY_SIZE(pre_modes); i++) {
+         schedule_instructions(pre_modes[i]);
+
+         if (0) {
+            assign_regs_trivial();
+            allocated_without_spills = true;
+         } else {
+            allocated_without_spills = assign_regs(false);
+         }
+         if (allocated_without_spills)
+            break;
+      }
+
+      if (!allocated_without_spills) {
+         /* We assume that any spilling is worse than just dropping back to
+          * SIMD8.  There's probably actually some intermediate point where
+          * SIMD16 with a couple of spills is still better.
+          */
+         if (dispatch_width == 16) {
+            fail("Failure to register allocate.  Reduce number of "
+                 "live scalar values to avoid this.");
+         }
+
+         /* Since we're out of heuristics, just go spill registers until we
+          * get an allocation.
+          */
+         while (!assign_regs(true)) {
+            if (failed)
+               break;
+         }
       }
    }
    assert(force_uncompressed_stack == 0);
-   assert(force_sechalf_stack == 0);
 
    /* This must come after all optimization and register allocation, since
     * it inserts dead code that happens to have side effects, and it does
@@ -3140,7 +3333,8 @@ fs_visitor::run()
    if (failed)
       return false;
 
-   schedule_instructions(true);
+   if (!allocated_without_spills)
+      schedule_instructions(SCHEDULE_POST);
 
    if (dispatch_width == 8) {
       c->prog_data.reg_blocks = brw_register_blocks(grf_used);

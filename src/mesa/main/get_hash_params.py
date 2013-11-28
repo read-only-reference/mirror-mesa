@@ -83,6 +83,9 @@ descriptor=[
   [ "SAMPLE_BUFFERS_ARB", "BUFFER_INT(Visual.sampleBuffers), extra_new_buffers" ],
   [ "SAMPLES_ARB", "BUFFER_INT(Visual.samples), extra_new_buffers" ],
 
+# GL_ARB_sample_shading
+  [ "MIN_SAMPLE_SHADING_VALUE_ARB", "CONTEXT_FLOAT(Multisample.MinSampleShadingValue), extra_gl40_ARB_sample_shading" ],
+
 # GL_SGIS_generate_mipmap
   [ "GENERATE_MIPMAP_HINT_SGIS", "CONTEXT_ENUM(Hint.GenerateMipmap), NO_EXTRA" ],
 
@@ -218,9 +221,9 @@ descriptor=[
   [ "SAMPLE_ALPHA_TO_ONE_ARB", "CONTEXT_BOOL(Multisample.SampleAlphaToOne), NO_EXTRA" ],
 
 # GL_ARB_vertex_buffer_object
-  [ "VERTEX_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_POS].BufferObj), NO_EXTRA" ],
-  [ "NORMAL_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_NORMAL].BufferObj), NO_EXTRA" ],
-  [ "COLOR_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_COLOR0].BufferObj), NO_EXTRA" ],
+  [ "VERTEX_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexBinding[VERT_ATTRIB_POS].BufferObj), NO_EXTRA" ],
+  [ "NORMAL_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexBinding[VERT_ATTRIB_NORMAL].BufferObj), NO_EXTRA" ],
+  [ "COLOR_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexBinding[VERT_ATTRIB_COLOR0].BufferObj), NO_EXTRA" ],
   [ "TEXTURE_COORD_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, NO_OFFSET, NO_EXTRA" ],
 
 # GL_OES_point_sprite
@@ -582,10 +585,10 @@ descriptor=[
   [ "PRIMITIVE_RESTART_INDEX_NV", "CONTEXT_INT(Array.RestartIndex), extra_NV_primitive_restart" ],
 
 # GL_ARB_vertex_buffer_object
-  [ "INDEX_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_COLOR_INDEX].BufferObj), NO_EXTRA" ],
-  [ "EDGE_FLAG_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_EDGEFLAG].BufferObj), NO_EXTRA" ],
-  [ "SECONDARY_COLOR_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_COLOR1].BufferObj), NO_EXTRA" ],
-  [ "FOG_COORDINATE_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexAttrib[VERT_ATTRIB_FOG].BufferObj), NO_EXTRA" ],
+  [ "INDEX_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexBinding[VERT_ATTRIB_COLOR_INDEX].BufferObj), NO_EXTRA" ],
+  [ "EDGE_FLAG_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexBinding[VERT_ATTRIB_EDGEFLAG].BufferObj), NO_EXTRA" ],
+  [ "SECONDARY_COLOR_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexBinding[VERT_ATTRIB_COLOR1].BufferObj), NO_EXTRA" ],
+  [ "FOG_COORDINATE_ARRAY_BUFFER_BINDING_ARB", "LOC_CUSTOM, TYPE_INT, offsetof(struct gl_array_object, VertexBinding[VERT_ATTRIB_FOG].BufferObj), NO_EXTRA" ],
 
 # GL_ARB_vertex_program
 # == GL_VERTEX_PROGRAM_NV
@@ -734,12 +737,18 @@ descriptor=[
   [ "MAX_GEOMETRY_ATOMIC_COUNTERS", "CONTEXT_INT(Const.GeometryProgram.MaxAtomicCounters), extra_ARB_shader_atomic_counters_and_geometry_shader" ],
   [ "MAX_COMBINED_ATOMIC_COUNTER_BUFFERS", "CONTEXT_INT(Const.MaxCombinedAtomicBuffers), extra_ARB_shader_atomic_counters" ],
   [ "MAX_COMBINED_ATOMIC_COUNTERS", "CONTEXT_INT(Const.MaxCombinedAtomicCounters), extra_ARB_shader_atomic_counters" ],
+
+# GL_ARB_vertex_attrib_binding
+  [ "MAX_VERTEX_ATTRIB_RELATIVE_OFFSET", "CONTEXT_ENUM(Const.MaxVertexAttribRelativeOffset), NO_EXTRA" ],
+  [ "MAX_VERTEX_ATTRIB_BINDINGS", "CONTEXT_ENUM(Const.MaxVertexAttribBindings), NO_EXTRA" ],
 ]},
 
 # Enums restricted to OpenGL Core profile
 { "apis": ["GL_CORE"], "params": [
 # GL_ARB_texture_buffer_range
   [ "TEXTURE_BUFFER_OFFSET_ALIGNMENT", "CONTEXT_INT(Const.TextureBufferOffsetAlignment), extra_ARB_texture_buffer_range" ],
+# GL_ARB_draw_indirect
+  [ "DRAW_INDIRECT_BUFFER_BINDING", "LOC_CUSTOM, TYPE_INT, 0, extra_ARB_draw_indirect" ],
 ]}
 
 ]

@@ -35,6 +35,7 @@
 
 
 #include <stdint.h>             /* uint32_t */
+#include <stdbool.h>
 
 #include "main/glheader.h"
 #include "main/config.h"
@@ -274,6 +275,11 @@ typedef enum
 #define VARYING_BIT_VAR(V) BITFIELD64_BIT(VARYING_SLOT_VAR0 + (V))
 /*@}*/
 
+/**
+ * Bitflags for system values.
+ */
+#define SYSTEM_BIT_SAMPLE_ID BITFIELD64_BIT(SYSTEM_VALUE_SAMPLE_ID)
+#define SYSTEM_BIT_SAMPLE_POS BITFIELD64_BIT(SYSTEM_VALUE_SAMPLE_POS)
 
 /**
  * Determine if the given gl_varying_slot appears in the fragment shader.
@@ -306,12 +312,13 @@ typedef enum
     * register is written.  No FRAG_RESULT_DATAn will be written.
     */
    FRAG_RESULT_COLOR = 2,
+   FRAG_RESULT_SAMPLE_MASK = 3,
 
    /* FRAG_RESULT_DATAn are the per-render-target (GLSL gl_FragData[n]
     * or ARB_fragment_program fragment.color[n]) color results.  If
     * any are written, FRAG_RESULT_COLOR will not be written.
     */
-   FRAG_RESULT_DATA0 = 3,
+   FRAG_RESULT_DATA0 = 4,
    FRAG_RESULT_MAX = (FRAG_RESULT_DATA0 + MAX_DRAW_BUFFERS)
 } gl_frag_result;
 
@@ -872,6 +879,8 @@ struct gl_multisample_attrib
    GLboolean SampleCoverage;
    GLfloat SampleCoverageValue;
    GLboolean SampleCoverageInvert;
+   GLboolean SampleShading;
+   GLfloat MinSampleShadingValue;
 
    /* ARB_texture_multisample / GL3.2 additions */
    GLboolean SampleMask;
@@ -1466,6 +1475,50 @@ struct gl_client_array
 
 
 /**
+ * Vertex attribute array as seen by the client.
+ *
+ * Contains the size, type, format and normalization flag,
+ * along with the index of a vertex buffer binding point.
+ *
+ * Note that the Stride field corresponds to VERTEX_ATTRIB_ARRAY_STRIDE
+ * and is only present for backwards compatibility reasons.
+ * Rendering always uses VERTEX_BINDING_STRIDE.
+ * The gl*Pointer() functions will set VERTEX_ATTRIB_ARRAY_STRIDE
+ * and VERTEX_BINDING_STRIDE to the same value, while
+ * glBindVertexBuffer() will only set VERTEX_BINDING_STRIDE.
+ */
+struct gl_vertex_attrib_array
+{
+   GLint Size;              /**< Components per element (1,2,3,4) */
+   GLenum Type;             /**< Datatype: GL_FLOAT, GL_INT, etc */
+   GLenum Format;           /**< Default: GL_RGBA, but may be GL_BGRA */
+   GLsizei Stride;          /**< Stride as specified with gl*Pointer() */
+   const GLubyte *Ptr;      /**< Points to client array data. Not used when a VBO is bound */
+   GLintptr RelativeOffset; /**< Offset of the first element relative to the binding offset */
+   GLboolean Enabled;       /**< Whether the array is enabled */
+   GLboolean Normalized;    /**< Fixed-point values are normalized when converted to floats */
+   GLboolean Integer;       /**< Fixed-point values are not converted to floats */
+   GLuint _ElementSize;     /**< Size of each element in bytes */
+   GLuint VertexBinding;    /**< Vertex buffer binding */
+};
+
+
+/**
+ * This describes the buffer object used for a vertex array (or
+ * multiple vertex arrays).  If BufferObj points to the default/null
+ * buffer object, then the vertex array lives in user memory and not a VBO.
+ */
+struct gl_vertex_buffer_binding
+{
+   GLintptr Offset;                    /**< User-specified offset */
+   GLsizei Stride;                     /**< User-specified stride */
+   GLuint InstanceDivisor;             /**< GL_ARB_instanced_arrays */
+   struct gl_buffer_object *BufferObj; /**< GL_ARB_vertex_buffer_object */
+   GLbitfield64 _BoundArrays;          /**< Arrays bound to this binding point */
+};
+
+
+/**
  * Collection of vertex arrays.  Defined by the GL_APPLE_vertex_array_object
  * extension, but a nice encapsulation in any case.
  */
@@ -1499,11 +1552,20 @@ struct gl_array_object
     */
    GLboolean EverBound;
 
+   /** Derived vertex attribute arrays */
+   struct gl_client_array _VertexAttrib[VERT_ATTRIB_MAX];
+
    /** Vertex attribute arrays */
-   struct gl_client_array VertexAttrib[VERT_ATTRIB_MAX];
+   struct gl_vertex_attrib_array VertexAttrib[VERT_ATTRIB_MAX];
+
+   /** Vertex buffer bindings */
+   struct gl_vertex_buffer_binding VertexBinding[VERT_ATTRIB_MAX];
 
    /** Mask of VERT_BIT_* values indicating which arrays are enabled */
    GLbitfield64 _Enabled;
+
+   /** Mask of VERT_BIT_* values indicating changed/dirty arrays */
+   GLbitfield64 NewArrays;
 
    /**
     * Min of all enabled arrays' _MaxElement.  When arrays reside inside VBOs
@@ -1784,7 +1846,17 @@ struct gl_transform_feedback_state
  */
 struct gl_perf_monitor_object
 {
+   GLuint Name;
+
+   /** True if the monitor is currently active (Begin called but not End). */
    GLboolean Active;
+
+   /**
+    * True if the monitor has ended.
+    *
+    * This is distinct from !Active because it may never have began.
+    */
+   GLboolean Ended;
 
    /**
     * A list of groups with currently active counters.
@@ -1868,10 +1940,9 @@ struct gl_perf_monitor_state
  * NOTE: first four tokens must fit into 2 bits (see t_vb_arbprogram.c)
  * All values should fit in a 4-bit field.
  *
- * NOTE: PROGRAM_ENV_PARAM, PROGRAM_STATE_VAR,
- * PROGRAM_CONSTANT, and PROGRAM_UNIFORM can all be considered to
- * be "uniform" variables since they can only be set outside glBegin/End.
- * They're also all stored in the same Parameters array.
+ * NOTE: PROGRAM_STATE_VAR, PROGRAM_CONSTANT, and PROGRAM_UNIFORM can all be
+ * considered to be "uniform" variables since they can only be set outside
+ * glBegin/End.  They're also all stored in the same Parameters array.
  */
 typedef enum
 {
@@ -1879,8 +1950,6 @@ typedef enum
    PROGRAM_ARRAY,       /**< Arrays & Matrixes */
    PROGRAM_INPUT,       /**< machine->Inputs[] */
    PROGRAM_OUTPUT,      /**< machine->Outputs[] */
-   PROGRAM_LOCAL_PARAM, /**< gl_program->LocalParams[] */
-   PROGRAM_ENV_PARAM,   /**< gl_program->Parameters[] */
    PROGRAM_STATE_VAR,   /**< gl_program->Parameters[] */
    PROGRAM_CONSTANT,    /**< gl_program->Parameters[] */
    PROGRAM_UNIFORM,     /**< gl_program->Parameters[] */
@@ -1902,6 +1971,8 @@ typedef enum
    SYSTEM_VALUE_FRONT_FACE,  /**< Fragment shader only (not done yet) */
    SYSTEM_VALUE_VERTEX_ID,   /**< Vertex shader only */
    SYSTEM_VALUE_INSTANCE_ID, /**< Vertex shader only */
+   SYSTEM_VALUE_SAMPLE_ID,   /**< Fragment shader only */
+   SYSTEM_VALUE_SAMPLE_POS,  /**< Fragment shader only */
    SYSTEM_VALUE_MAX          /**< Number of values */
 } gl_system_value;
 
@@ -1974,8 +2045,15 @@ struct gl_program
 
    /** Named parameters, constants, etc. from program text */
    struct gl_program_parameter_list *Parameters;
-   /** Numbered local parameters */
-   GLfloat LocalParams[MAX_PROGRAM_LOCAL_PARAMS][4];
+
+   /**
+    * Local parameters used by the program.
+    *
+    * It's dynamically allocated because it is rarely used (just
+    * assembly-style programs), and MAX_PROGRAM_LOCAL_PARAMS entries once it's
+    * allocated.
+    */
+   GLfloat (*LocalParams)[4];
 
    /** Map from sampler unit to texture unit (set by glUniform1i()) */
    GLubyte SamplerUnits[MAX_SAMPLERS];
@@ -2755,6 +2833,17 @@ struct gl_shared_state
 
    /** GL_ARB_sampler_objects */
    struct _mesa_HashTable *SamplerObjects;
+
+   /**
+    * Some context in this share group was affected by a GPU reset
+    *
+    * On the next call to \c glGetGraphicsResetStatus, contexts that have not
+    * been affected by a GPU reset must also return
+    * \c GL_INNOCENT_CONTEXT_RESET_ARB.
+    *
+    * Once this field becomes true, it is never reset to false.
+    */
+   bool ShareGroupReset;
 };
 
 
@@ -2905,7 +2994,13 @@ struct gl_framebuffer
    struct gl_renderbuffer *_ColorDrawBuffers[MAX_DRAW_BUFFERS];
    struct gl_renderbuffer *_ColorReadBuffer;
 
-   GLboolean Layered;
+   /**
+    * The number of layers in the framebuffer, or 0 if the framebuffer is not
+    * layered.  For cube maps, this value is 6.  For cube map arrays, this
+    * value is the "depth" value passed to TexImage3D (always a multiple of
+    * 6).
+    */
+   GLuint NumLayers;
 
    /** Delete this framebuffer */
    void (*Delete)(struct gl_framebuffer *fb);
@@ -3203,6 +3298,10 @@ struct gl_constants
    GLuint MaxAtomicBufferSize;
    GLuint MaxCombinedAtomicBuffers;
    GLuint MaxCombinedAtomicCounters;
+
+   /** GL_ARB_vertex_attrib_binding */
+   GLint MaxVertexAttribRelativeOffset;
+   GLint MaxVertexAttribBindings;
 };
 
 
@@ -3227,6 +3326,7 @@ struct gl_extensions
    GLboolean ARB_depth_texture;
    GLboolean ARB_draw_buffers_blend;
    GLboolean ARB_draw_elements_base_vertex;
+   GLboolean ARB_draw_indirect;
    GLboolean ARB_draw_instanced;
    GLboolean ARB_fragment_coord_conventions;
    GLboolean ARB_fragment_program;
@@ -3245,6 +3345,7 @@ struct gl_extensions
    GLboolean ARB_occlusion_query;
    GLboolean ARB_occlusion_query2;
    GLboolean ARB_point_sprite;
+   GLboolean ARB_sample_shading;
    GLboolean ARB_seamless_cube_map;
    GLboolean ARB_shader_atomic_counters;
    GLboolean ARB_shader_bit_encoding;
@@ -3280,6 +3381,7 @@ struct gl_extensions
    GLboolean ARB_uniform_buffer_object;
    GLboolean ARB_vertex_program;
    GLboolean ARB_vertex_shader;
+   GLboolean ARB_vertex_type_10f_11f_11f_rev;
    GLboolean ARB_vertex_type_2_10_10_10_rev;
    GLboolean EXT_blend_color;
    GLboolean EXT_blend_equation_separate;
@@ -3801,6 +3903,8 @@ struct gl_context
 
    struct gl_perf_monitor_state PerfMonitor;
 
+   struct gl_buffer_object *DrawIndirectBuffer; /** < GL_ARB_draw_indirect */
+
    struct gl_buffer_object *CopyReadBuffer; /**< GL_ARB_copy_buffer */
    struct gl_buffer_object *CopyWriteBuffer; /**< GL_ARB_copy_buffer */
 
@@ -3839,9 +3943,6 @@ struct gl_context
    struct gl_renderbuffer *CurrentRenderbuffer;
 
    GLenum ErrorValue;        /**< Last error code */
-
-   /* GL_ARB_robustness */
-   GLenum ResetStatus;
 
    /**
     * Recognize and silence repeated error debug messages in buggy apps.
@@ -3907,6 +4008,13 @@ struct gl_context
    const void *vdpGetProcAddress;
    struct set *vdpSurfaces;
    /*@}*/
+
+   /**
+    * Has this context observed a GPU reset in any context in the share group?
+    *
+    * Once this field becomes true, it is never reset to false.
+    */
+   GLboolean ShareGroupReset;
 };
 
 

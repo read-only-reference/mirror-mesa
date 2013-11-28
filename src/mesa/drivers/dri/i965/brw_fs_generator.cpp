@@ -116,7 +116,7 @@ fs_generator::generate_fb_write(fs_inst *inst)
    brw_set_mask_control(p, BRW_MASK_DISABLE);
    brw_set_compression_control(p, BRW_COMPRESSION_NONE);
 
-   if (fp->UsesKill) {
+   if (fp->UsesKill || c->key.alpha_test_func) {
       struct brw_reg pixel_mask;
 
       if (brw->gen >= 6)
@@ -757,7 +757,7 @@ fs_generator::generate_scratch_write(fs_inst *inst, struct brw_reg src)
 	   retype(brw_message_reg(inst->base_mrf + 1), BRW_REGISTER_TYPE_UD),
 	   retype(src, BRW_REGISTER_TYPE_UD));
    brw_oword_block_write_scratch(p, brw_message_reg(inst->base_mrf),
-                                 inst->mlen, inst->offset);
+                                 dispatch_width / 8, inst->offset);
 }
 
 void
@@ -989,7 +989,7 @@ static uint32_t brw_file_from_reg(fs_reg *reg)
    }
 }
 
-static struct brw_reg
+struct brw_reg
 brw_reg_from_fs_reg(fs_reg *reg)
 {
    struct brw_reg brw_reg;
@@ -1065,6 +1065,69 @@ fs_generator::generate_set_simd4x2_offset(fs_inst *inst,
    brw_set_compression_control(p, BRW_COMPRESSION_NONE);
    brw_set_mask_control(p, BRW_MASK_DISABLE);
    brw_MOV(p, retype(brw_vec1_reg(dst.file, dst.nr, 0), value.type), value);
+   brw_pop_insn_state(p);
+}
+
+/* Sets vstride=16, width=8, hstride=2 or vstride=0, width=1, hstride=0
+ * (when mask is passed as a uniform) of register mask before moving it
+ * to register dst.
+ */
+void
+fs_generator::generate_set_omask(fs_inst *inst,
+                                 struct brw_reg dst,
+                                 struct brw_reg mask)
+{
+   bool stride_8_8_1 =
+    (mask.vstride == BRW_VERTICAL_STRIDE_8 &&
+     mask.width == BRW_WIDTH_8 &&
+     mask.hstride == BRW_HORIZONTAL_STRIDE_1);
+
+   bool stride_0_1_0 =
+    (mask.vstride == BRW_VERTICAL_STRIDE_0 &&
+     mask.width == BRW_WIDTH_1 &&
+     mask.hstride == BRW_HORIZONTAL_STRIDE_0);
+
+   assert(stride_8_8_1 || stride_0_1_0);
+   assert(dst.type == BRW_REGISTER_TYPE_UW);
+
+   if (dispatch_width == 16)
+      dst = vec16(dst);
+   brw_push_insn_state(p);
+   brw_set_compression_control(p, BRW_COMPRESSION_NONE);
+   brw_set_mask_control(p, BRW_MASK_DISABLE);
+
+   if (stride_8_8_1) {
+      brw_MOV(p, dst, stride(retype(brw_vec1_reg(mask.file, mask.nr, 0),
+                                    dst.type), 16, 8, 2));
+   } else if (stride_0_1_0) {
+      brw_MOV(p, dst, stride(retype(brw_vec1_reg(mask.file, mask.nr, 0),
+                                    dst.type), 0, 1, 0));
+   }
+   brw_pop_insn_state(p);
+}
+
+/* Sets vstride=1, width=4, hstride=0 of register src1 during
+ * the ADD instruction.
+ */
+void
+fs_generator::generate_set_sample_id(fs_inst *inst,
+                                     struct brw_reg dst,
+                                     struct brw_reg src0,
+                                     struct brw_reg src1)
+{
+   assert(dst.type == BRW_REGISTER_TYPE_D ||
+          dst.type == BRW_REGISTER_TYPE_UD);
+   assert(src0.type == BRW_REGISTER_TYPE_D ||
+          src0.type == BRW_REGISTER_TYPE_UD);
+
+   brw_push_insn_state(p);
+   brw_set_compression_control(p, BRW_COMPRESSION_NONE);
+   brw_set_mask_control(p, BRW_MASK_DISABLE);
+   struct brw_reg reg = stride(retype(brw_vec1_reg(src1.file, src1.nr, 0),
+                                      BRW_REGISTER_TYPE_UW), 1, 4, 0);
+   brw_ADD(p, dst, src0, reg);
+   if (dispatch_width == 16)
+      brw_ADD(p, offset(dst, 1), offset(src0, 1), suboffset(reg, 2));
    brw_pop_insn_state(p);
 }
 
@@ -1341,7 +1404,7 @@ fs_generator::generate_code(exec_list *instructions)
       case BRW_OPCODE_MAD:
          assert(brw->gen >= 6);
 	 brw_set_access_mode(p, BRW_ALIGN_16);
-	 if (dispatch_width == 16) {
+         if (dispatch_width == 16 && !brw->is_haswell) {
 	    brw_set_compression_control(p, BRW_COMPRESSION_NONE);
 	    brw_MAD(p, dst, src[0], src[1], src[2]);
 	    brw_set_compression_control(p, BRW_COMPRESSION_2NDHALF);
@@ -1356,7 +1419,7 @@ fs_generator::generate_code(exec_list *instructions)
       case BRW_OPCODE_LRP:
          assert(brw->gen >= 6);
 	 brw_set_access_mode(p, BRW_ALIGN_16);
-	 if (dispatch_width == 16) {
+         if (dispatch_width == 16 && !brw->is_haswell) {
 	    brw_set_compression_control(p, BRW_COMPRESSION_NONE);
 	    brw_LRP(p, dst, src[0], src[1], src[2]);
 	    brw_set_compression_control(p, BRW_COMPRESSION_2NDHALF);
@@ -1453,7 +1516,7 @@ fs_generator::generate_code(exec_list *instructions)
       case BRW_OPCODE_BFE:
          assert(brw->gen >= 7);
          brw_set_access_mode(p, BRW_ALIGN_16);
-         if (dispatch_width == 16) {
+         if (dispatch_width == 16 && !brw->is_haswell) {
             brw_set_compression_control(p, BRW_COMPRESSION_NONE);
             brw_BFE(p, dst, src[0], src[1], src[2]);
             brw_set_compression_control(p, BRW_COMPRESSION_2NDHALF);
@@ -1467,11 +1530,32 @@ fs_generator::generate_code(exec_list *instructions)
 
       case BRW_OPCODE_BFI1:
          assert(brw->gen >= 7);
-         brw_BFI1(p, dst, src[0], src[1]);
+         /* The Haswell WaForceSIMD8ForBFIInstruction workaround says that we
+          * should
+          *
+          *    "Force BFI instructions to be executed always in SIMD8."
+          */
+         if (dispatch_width == 16 && brw->is_haswell) {
+            brw_set_compression_control(p, BRW_COMPRESSION_NONE);
+            brw_BFI1(p, dst, src[0], src[1]);
+            brw_set_compression_control(p, BRW_COMPRESSION_2NDHALF);
+            brw_BFI1(p, sechalf(dst), sechalf(src[0]), sechalf(src[1]));
+            brw_set_compression_control(p, BRW_COMPRESSION_COMPRESSED);
+         } else {
+            brw_BFI1(p, dst, src[0], src[1]);
+         }
          break;
       case BRW_OPCODE_BFI2:
          assert(brw->gen >= 7);
          brw_set_access_mode(p, BRW_ALIGN_16);
+         /* The Haswell WaForceSIMD8ForBFIInstruction workaround says that we
+          * should
+          *
+          *    "Force BFI instructions to be executed always in SIMD8."
+          *
+          * Otherwise we would be able to emit compressed instructions like we
+          * do for the other three-source instructions.
+          */
          if (dispatch_width == 16) {
             brw_set_compression_control(p, BRW_COMPRESSION_NONE);
             brw_BFI2(p, dst, src[0], src[1], src[2]);
@@ -1639,6 +1723,14 @@ fs_generator::generate_code(exec_list *instructions)
 
       case FS_OPCODE_SET_SIMD4X2_OFFSET:
          generate_set_simd4x2_offset(inst, dst, src[0]);
+         break;
+
+      case FS_OPCODE_SET_OMASK:
+         generate_set_omask(inst, dst, src[0]);
+         break;
+
+      case FS_OPCODE_SET_SAMPLE_ID:
+         generate_set_sample_id(inst, dst, src[0], src[1]);
          break;
 
       case FS_OPCODE_PACK_HALF_2x16_SPLIT:

@@ -542,7 +542,7 @@ const struct function gl_core_functions_possible[] = {
    { "glVertexAttribDivisor", 33, -1 },
 
    /* GL 4.0 */
-// { "glMinSampleShading", 40, -1 },                    // XXX: Add to xml
+   { "glMinSampleShading", 40, -1 },                    // XXX: Add to xml
 // { "glBlendEquationi", 40, -1 },                      // XXX: Add to xml
 // { "glBlendEquationSeparatei", 40, -1 },              // XXX: Add to xml
 // { "glBlendFunci", 40, -1 },                          // XXX: Add to xml
@@ -603,7 +603,7 @@ const struct function gl_core_functions_possible[] = {
    { "glBlendEquationSeparateiARB", 43, -1 },
    { "glBlendFunciARB", 43, -1 },
    { "glBlendFuncSeparateiARB", 43, -1 },
-// { "glMinSampleShadingARB", 43, -1 },                 // XXX: Add to xml
+   { "glMinSampleShadingARB", 43, -1 },                 // XXX: Add to xml
 // { "glNamedStringARB", 43, -1 },                      // XXX: Add to xml
 // { "glDeleteNamedStringARB", 43, -1 },                // XXX: Add to xml
 // { "glCompileShaderIncludeARB", 43, -1 },             // XXX: Add to xml
@@ -667,8 +667,8 @@ const struct function gl_core_functions_possible[] = {
    { "glVertexAttribP3uiv", 43, -1 },
    { "glVertexAttribP4ui", 43, -1 },
    { "glVertexAttribP4uiv", 43, -1 },
-// { "glDrawArraysIndirect", 43, -1 },                  // XXX: Add to xml
-// { "glDrawElementsIndirect", 43, -1 },                // XXX: Add to xml
+   { "glDrawArraysIndirect", 43, -1 },
+   { "glDrawElementsIndirect", 43, -1 },
 // { "glUniform1d", 43, -1 },                           // XXX: Add to xml
 // { "glUniform2d", 43, -1 },                           // XXX: Add to xml
 // { "glUniform3d", 43, -1 },                           // XXX: Add to xml
@@ -854,12 +854,12 @@ const struct function gl_core_functions_possible[] = {
 // { "glDispatchComputeIndirect", 43, -1 },             // XXX: Add to xml
 // { "glCopyImageSubData", 43, -1 },                    // XXX: Add to xml
 // { "glTextureView", 43, -1 },                         // XXX: Add to xml
-// { "glBindVertexBuffer", 43, -1 },                    // XXX: Add to xml
-// { "glVertexAttribFormat", 43, -1 },                  // XXX: Add to xml
-// { "glVertexAttribIFormat", 43, -1 },                 // XXX: Add to xml
-// { "glVertexAttribLFormat", 43, -1 },                 // XXX: Add to xml
-// { "glVertexAttribBinding", 43, -1 },                 // XXX: Add to xml
-// { "glVertexBindingDivisor", 43, -1 },                // XXX: Add to xml
+   { "glBindVertexBuffer", 43, -1 },
+   { "glVertexAttribFormat", 43, -1 },
+   { "glVertexAttribIFormat", 43, -1 },
+   { "glVertexAttribLFormat", 43, -1 },
+   { "glVertexAttribBinding", 43, -1 },
+   { "glVertexBindingDivisor", 43, -1 },
 // { "glVertexArrayBindVertexBufferEXT", 43, -1 },      // XXX: Add to xml
 // { "glVertexArrayVertexAttribFormatEXT", 43, -1 },    // XXX: Add to xml
 // { "glVertexArrayVertexAttribIFormatEXT", 43, -1 },   // XXX: Add to xml
@@ -877,8 +877,8 @@ const struct function gl_core_functions_possible[] = {
    { "glInvalidateBufferData", 43, -1 },
    { "glInvalidateFramebuffer", 43, -1 },
    { "glInvalidateSubFramebuffer", 43, -1 },
-// { "glMultiDrawArraysIndirect", 43, -1 },             // XXX: Add to xml
-// { "glMultiDrawElementsIndirect", 43, -1 },           // XXX: Add to xml
+   { "glMultiDrawArraysIndirect", 43, -1 },
+   { "glMultiDrawElementsIndirect", 43, -1 },
 // { "glGetProgramInterfaceiv", 43, -1 },               // XXX: Add to xml
 // { "glGetProgramResourceIndex", 43, -1 },             // XXX: Add to xml
 // { "glGetProgramResourceName", 43, -1 },              // XXX: Add to xml

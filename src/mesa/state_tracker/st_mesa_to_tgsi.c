@@ -46,9 +46,7 @@
 #include "util/u_memory.h"
 
 
-#define PROGRAM_ANY_CONST ((1 << PROGRAM_LOCAL_PARAM) |  \
-                           (1 << PROGRAM_ENV_PARAM) |    \
-                           (1 << PROGRAM_STATE_VAR) |    \
+#define PROGRAM_ANY_CONST ((1 << PROGRAM_STATE_VAR) |    \
                            (1 << PROGRAM_CONSTANT) |     \
                            (1 << PROGRAM_UNIFORM))
 
@@ -214,8 +212,6 @@ src_register( struct st_translate *t,
          t->temps[index] = ureg_DECL_temporary( t->ureg );
       return ureg_src(t->temps[index]);
 
-   case PROGRAM_ENV_PARAM:
-   case PROGRAM_LOCAL_PARAM:
    case PROGRAM_UNIFORM:
       assert(index >= 0);
       return t->constants[index];
@@ -1125,6 +1121,13 @@ st_translate_mesa_program(
          t->outputs[i] = ureg_DECL_output( ureg,
                                            outputSemanticName[i],
                                            outputSemanticIndex[i] );
+         if (outputSemanticName[i] == TGSI_SEMANTIC_FOG) {
+            /* force register to contain a fog coordinate in the form (F, 0, 0, 1). */
+            ureg_MOV(ureg,
+                     ureg_writemask(t->outputs[i], TGSI_WRITEMASK_YZW),
+                     ureg_imm4f(ureg, 0.0f, 0.0f, 0.0f, 1.0f));
+            t->outputs[i] = ureg_writemask(t->outputs[i], TGSI_WRITEMASK_X);
+	 }
       }
       if (passthrough_edgeflags)
          emit_edgeflags( t, program );
@@ -1195,8 +1198,6 @@ st_translate_mesa_program(
 
       for (i = 0; i < program->Parameters->NumParameters; i++) {
          switch (program->Parameters->Parameters[i].Type) {
-         case PROGRAM_ENV_PARAM:
-         case PROGRAM_LOCAL_PARAM:
          case PROGRAM_STATE_VAR:
          case PROGRAM_UNIFORM:
             t->constants[i] = ureg_DECL_constant( ureg, i );

@@ -50,6 +50,11 @@ struct intel_screen
 
    bool hw_has_swizzling;
 
+   /**
+    * Does the kernel support context reset notifications?
+    */
+   bool has_context_reset_notification;
+
    dri_bufmgr *bufmgr;
 
    /**
@@ -76,5 +81,8 @@ intelMakeCurrent(__DRIcontext * driContextPriv,
 
 double get_time(void);
 void aub_dump_bmp(struct gl_context *ctx);
+
+const int*
+intel_supported_msaa_modes(const struct intel_screen  *screen);
 
 #endif

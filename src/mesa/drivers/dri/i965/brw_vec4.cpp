@@ -24,6 +24,7 @@
 #include "brw_vec4.h"
 #include "brw_cfg.h"
 #include "brw_vs.h"
+#include "brw_dead_control_flow.h"
 
 extern "C" {
 #include "main/macros.h"
@@ -318,7 +319,7 @@ vec4_visitor::dead_code_eliminate()
    foreach_list_safe(node, &this->instructions) {
       vec4_instruction *inst = (vec4_instruction *)node;
 
-      if (inst->dst.file == GRF) {
+      if (inst->dst.file == GRF && !inst->has_side_effects()) {
          assert(this->virtual_grf_end[inst->dst.reg] >= pc);
          if (this->virtual_grf_end[inst->dst.reg] == pc) {
             /* Don't dead code eliminate instructions that write to the
@@ -343,7 +344,7 @@ vec4_visitor::dead_code_eliminate()
    }
 
    if (progress)
-      live_intervals_valid = false;
+      invalidate_live_intervals();
 
    return progress;
 }
@@ -554,7 +555,7 @@ vec4_visitor::opt_algebraic()
    }
 
    if (progress)
-      this->live_intervals_valid = false;
+      invalidate_live_intervals();
 
    return progress;
 }
@@ -1017,7 +1018,7 @@ vec4_visitor::opt_register_coalesce()
    }
 
    if (progress)
-      live_intervals_valid = false;
+      invalidate_live_intervals();
 
    return progress;
 }
@@ -1100,7 +1101,7 @@ vec4_visitor::split_virtual_grfs()
          }
       }
    }
-   this->live_intervals_valid = false;
+   invalidate_live_intervals();
 }
 
 void
@@ -1498,6 +1499,7 @@ vec4_visitor::run()
    do {
       progress = false;
       progress = dead_code_eliminate() || progress;
+      progress = dead_control_flow_eliminate(this) || progress;
       progress = opt_copy_propagation() || progress;
       progress = opt_algebraic() || progress;
       progress = opt_register_coalesce() || progress;

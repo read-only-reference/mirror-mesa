@@ -350,6 +350,8 @@ struct _mesa_glsl_parse_state {
    bool AMD_vertex_shader_layer_warn;
    bool ARB_shading_language_420pack_enable;
    bool ARB_shading_language_420pack_warn;
+   bool ARB_sample_shading_enable;
+   bool ARB_sample_shading_warn;
    bool EXT_shader_integer_mix_enable;
    bool EXT_shader_integer_mix_warn;
    bool ARB_shader_atomic_counters_enable;
@@ -371,6 +373,9 @@ struct _mesa_glsl_parse_state {
     * Unused for other shader types.
     */
    unsigned gs_input_size;
+
+   /** Atomic counter offsets by binding */
+   unsigned atomic_counter_offsets[MAX_COMBINED_ATOMIC_BUFFERS];
 };
 
 # define YYLLOC_DEFAULT(Current, Rhs, N)			\

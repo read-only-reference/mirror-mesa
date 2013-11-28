@@ -28,12 +28,9 @@
 #ifndef TR_DUMP_STATE_H_
 #define TR_DUMP_STATE_H_
 
-#include "pipe/p_format.h"
 #include "pipe/p_state.h"
 #include "pipe/p_shader_tokens.h"
 
-
-void trace_dump_format(enum pipe_format format);
 
 void trace_dump_resource_template(const struct pipe_resource *templat);
 
@@ -85,5 +82,7 @@ void trace_dump_draw_info(const struct pipe_draw_info *state);
 
 void trace_dump_blit_info(const struct pipe_blit_info *);
 
+void trace_dump_query_result(unsigned query_type,
+                             const union pipe_query_result *result);
 
 #endif /* TR_STATE_H */

@@ -507,6 +507,16 @@ struct r600_context {
 
 	void				*sb_context;
 	struct r600_isa		*isa;
+
+	/* Work-around for flushing problems with compute shaders on Cayman:
+	 * Emitting a SURFACE_SYNC packet with any of the CB*_DEST_BASE_ENA
+	 * or DB_DEST_BASE_ENA bits set after dispatching a compute shader
+	 * hangs the GPU.
+	 *
+	 * Setting this to true will prevent r600_flush_emit() from emitting
+	 * a SURFACE_SYNC packet.  This field will be cleared by
+	 * by r600_context_flush() after flushing the command stream. */
+	boolean				skip_surface_sync_on_next_cs_flush;
 };
 
 static INLINE void r600_emit_command_buffer(struct radeon_winsys_cs *cs,
@@ -538,7 +548,7 @@ static INLINE void r600_set_cso_state_with_cb(struct r600_cso_state *state, void
 					      struct r600_command_buffer *cb)
 {
 	state->cb = cb;
-	state->atom.num_dw = cb->num_dw;
+	state->atom.num_dw = cb ? cb->num_dw : 0;
 	r600_set_cso_state(state, cso);
 }
 

@@ -402,6 +402,21 @@ gen7_blorp_emit_gs_disable(struct brw_context *brw,
    OUT_BATCH(0);
    ADVANCE_BATCH();
 
+   /**
+    * From Graphics BSpec: 3D-Media-GPGPU Engine > 3D Pipeline Stages >
+    * Geometry > Geometry Shader > State:
+    *
+    *     "Note: Because of corruption in IVB:GT2, software needs to flush the
+    *     whole fixed function pipeline when the GS enable changes value in
+    *     the 3DSTATE_GS."
+    *
+    * The hardware architects have clarified that in this context "flush the
+    * whole fixed function pipeline" means to emit a PIPE_CONTROL with the "CS
+    * Stall" bit set.
+    */
+   if (!brw->is_haswell && brw->gt == 2 && brw->gs.enabled)
+      gen7_emit_cs_stall_flush(brw);
+
    BEGIN_BATCH(7);
    OUT_BATCH(_3DSTATE_GS << 16 | (7 - 2));
    OUT_BATCH(0);
@@ -411,6 +426,7 @@ gen7_blorp_emit_gs_disable(struct brw_context *brw,
    OUT_BATCH(0);
    OUT_BATCH(0);
    ADVANCE_BATCH();
+   brw->gs.enabled = false;
 }
 
 /* 3DSTATE_STREAMOUT
@@ -835,6 +851,9 @@ void
 gen7_blorp_exec(struct brw_context *brw,
                 const brw_blorp_params *params)
 {
+   if (brw->gen >= 8)
+      return;
+
    brw_blorp_prog_data *prog_data = NULL;
    uint32_t cc_blend_state_offset = 0;
    uint32_t cc_state_offset = 0;
@@ -844,7 +863,6 @@ gen7_blorp_exec(struct brw_context *brw,
    uint32_t sampler_offset = 0;
 
    uint32_t prog_offset = params->get_wm_prog(brw, &prog_data);
-   gen6_blorp_emit_batch_head(brw, params);
    gen6_emit_3dstate_multisample(brw, params->num_samples);
    gen6_emit_3dstate_sample_mask(brw, params->num_samples, 1.0, false, ~0u);
    gen6_blorp_emit_state_base_address(brw, params);

@@ -8187,7 +8187,7 @@
 <xi:include href="ARB_draw_buffers_blend.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 <xi:include href="AMD_draw_buffers_blend.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
-<!-- 70. GL_ARB_sample_shading -->
+<xi:include href="ARB_sample_shading.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 <xi:include href="ARB_texture_cube_map_array.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 <xi:include href="ARB_texture_gather.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 <!-- 73. GL_ARB_texture_query_lod -->
@@ -8240,6 +8240,8 @@
 <xi:include href="ARB_vertex_type_2_10_10_10_rev.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
 <!-- ARB extensions #86...#93 -->
+
+<xi:include href="ARB_draw_indirect.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
 <category name="GL_ARB_transform_feedback3" number="94">
   <enum name="MAX_TRANSFORM_FEEDBACK_BUFFERS" value="0x8E70"/>
@@ -8458,7 +8460,11 @@
 
 </category>
 
-<!-- ARB extensions #120...#126 -->
+<!-- ARB extensions #120...#124 -->
+
+<xi:include href="ARB_vertex_attrib_binding.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
+
+<!-- ARB extension #126 -->
 
 <xi:include href="ARB_ES3_compatibility.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
@@ -8466,7 +8472,7 @@
 
 <xi:include href="ARB_invalidate_subdata.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
-<!-- ARB extensions #133...#138 -->
+<!-- ARB extensions #134...#138 -->
 
 <xi:include href="ARB_texture_buffer_range.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
@@ -13121,5 +13127,7 @@
 <xi:include href="EXT_transform_feedback.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
 <xi:include href="NV_vdpau_interop.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
+
+<xi:include href="GL4x.xml" xmlns:xi="http://www.w3.org/2001/XInclude"/>
 
 </OpenGLAPI>

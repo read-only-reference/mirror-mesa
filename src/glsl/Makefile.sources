@@ -33,6 +33,7 @@ LIBGLSL_FILES = \
 	$(GLSL_SRCDIR)/ir_clone.cpp \
 	$(GLSL_SRCDIR)/ir_constant_expression.cpp \
 	$(GLSL_SRCDIR)/ir.cpp \
+	$(GLSL_SRCDIR)/ir_equals.cpp \
 	$(GLSL_SRCDIR)/ir_expression_flattening.cpp \
 	$(GLSL_SRCDIR)/ir_function_can_inline.cpp \
 	$(GLSL_SRCDIR)/ir_function_detect_recursion.cpp \
@@ -47,6 +48,7 @@ LIBGLSL_FILES = \
 	$(GLSL_SRCDIR)/ir_validate.cpp \
 	$(GLSL_SRCDIR)/ir_variable_refcount.cpp \
 	$(GLSL_SRCDIR)/linker.cpp \
+	$(GLSL_SRCDIR)/link_atomics.cpp \
 	$(GLSL_SRCDIR)/link_functions.cpp \
 	$(GLSL_SRCDIR)/link_interface_blocks.cpp \
 	$(GLSL_SRCDIR)/link_uniforms.cpp \
@@ -83,6 +85,7 @@ LIBGLSL_FILES = \
 	$(GLSL_SRCDIR)/opt_constant_variable.cpp \
 	$(GLSL_SRCDIR)/opt_copy_propagation.cpp \
 	$(GLSL_SRCDIR)/opt_copy_propagation_elements.cpp \
+	$(GLSL_SRCDIR)/opt_cse.cpp \
 	$(GLSL_SRCDIR)/opt_dead_builtin_varyings.cpp \
 	$(GLSL_SRCDIR)/opt_dead_code.cpp \
 	$(GLSL_SRCDIR)/opt_dead_code_local.cpp \

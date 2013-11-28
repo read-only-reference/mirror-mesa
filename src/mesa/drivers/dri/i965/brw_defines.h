@@ -51,6 +51,7 @@
 # define GEN4_3DPRIM_TOPOLOGY_TYPE_SHIFT            10
 # define GEN4_3DPRIM_VERTEXBUFFER_ACCESS_SEQUENTIAL (0 << 15)
 # define GEN4_3DPRIM_VERTEXBUFFER_ACCESS_RANDOM     (1 << 15)
+# define GEN7_3DPRIM_INDIRECT_PARAMETER_ENABLE      (1 << 10)
 /* DW1 */
 # define GEN7_3DPRIM_VERTEXBUFFER_ACCESS_SEQUENTIAL (0 << 8)
 # define GEN7_3DPRIM_VERTEXBUFFER_ACCESS_RANDOM     (1 << 8)
@@ -794,6 +795,8 @@ enum opcode {
    FS_OPCODE_VARYING_PULL_CONSTANT_LOAD_GEN7,
    FS_OPCODE_MOV_DISPATCH_TO_FLAGS,
    FS_OPCODE_DISCARD_JUMP,
+   FS_OPCODE_SET_OMASK,
+   FS_OPCODE_SET_SAMPLE_ID,
    FS_OPCODE_SET_SIMD4X2_OFFSET,
    FS_OPCODE_PACK_HALF_2x16_SPLIT,
    FS_OPCODE_UNPACK_HALF_2x16_SPLIT_X,
@@ -882,6 +885,77 @@ enum opcode {
     */
    GS_OPCODE_SET_CHANNEL_MASKS,
 };
+
+enum brw_urb_write_flags {
+   BRW_URB_WRITE_NO_FLAGS = 0,
+
+   /**
+    * Causes a new URB entry to be allocated, and its address stored in the
+    * destination register (gen < 7).
+    */
+   BRW_URB_WRITE_ALLOCATE = 0x1,
+
+   /**
+    * Causes the current URB entry to be deallocated (gen < 7).
+    */
+   BRW_URB_WRITE_UNUSED = 0x2,
+
+   /**
+    * Causes the thread to terminate.
+    */
+   BRW_URB_WRITE_EOT = 0x4,
+
+   /**
+    * Indicates that the given URB entry is complete, and may be sent further
+    * down the 3D pipeline (gen < 7).
+    */
+   BRW_URB_WRITE_COMPLETE = 0x8,
+
+   /**
+    * Indicates that an additional offset (which may be different for the two
+    * vec4 slots) is stored in the message header (gen == 7).
+    */
+   BRW_URB_WRITE_PER_SLOT_OFFSET = 0x10,
+
+   /**
+    * Indicates that the channel masks in the URB_WRITE message header should
+    * not be overridden to 0xff (gen == 7).
+    */
+   BRW_URB_WRITE_USE_CHANNEL_MASKS = 0x20,
+
+   /**
+    * Indicates that the data should be sent to the URB using the
+    * URB_WRITE_OWORD message rather than URB_WRITE_HWORD (gen == 7).  This
+    * causes offsets to be interpreted as multiples of an OWORD instead of an
+    * HWORD, and only allows one OWORD to be written.
+    */
+   BRW_URB_WRITE_OWORD = 0x40,
+
+   /**
+    * Convenient combination of flags: end the thread while simultaneously
+    * marking the given URB entry as complete.
+    */
+   BRW_URB_WRITE_EOT_COMPLETE = BRW_URB_WRITE_EOT | BRW_URB_WRITE_COMPLETE,
+
+   /**
+    * Convenient combination of flags: mark the given URB entry as complete
+    * and simultaneously allocate a new one.
+    */
+   BRW_URB_WRITE_ALLOCATE_COMPLETE =
+      BRW_URB_WRITE_ALLOCATE | BRW_URB_WRITE_COMPLETE,
+};
+
+#ifdef __cplusplus
+/**
+ * Allow brw_urb_write_flags enums to be ORed together.
+ */
+inline brw_urb_write_flags
+operator|(brw_urb_write_flags x, brw_urb_write_flags y)
+{
+   return static_cast<brw_urb_write_flags>(static_cast<int>(x) |
+                                           static_cast<int>(y));
+}
+#endif
 
 #define BRW_PREDICATE_NONE             0
 #define BRW_PREDICATE_NORMAL           1

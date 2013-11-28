@@ -244,6 +244,8 @@ brw_get_vertex_surface_type(struct brw_context *brw,
       case GL_UNSIGNED_BYTE: return ubyte_types_direct[size];
       default: assert(0); return 0;
       }
+   } else if (glarray->Type == GL_UNSIGNED_INT_10F_11F_11F_REV) {
+      return BRW_SURFACEFORMAT_R11G11B10_FLOAT;
    } else if (glarray->Normalized) {
       switch (glarray->Type) {
       case GL_DOUBLE: return double_types[size];
@@ -607,11 +609,10 @@ static void brw_prepare_vertices(struct brw_context *brw)
 
 static void brw_emit_vertices(struct brw_context *brw)
 {
+   struct gl_context *ctx = &brw->ctx;
    GLuint i, nr_elements;
 
    brw_prepare_vertices(brw);
-
-   brw_emit_query_begin(brw);
 
    nr_elements = brw->vb.nr_enabled + brw->vs.prog_data->uses_vertexid;
 
@@ -678,6 +679,9 @@ static void brw_emit_vertices(struct brw_context *brw)
          if (brw->gen == 7)
 	    dw0 |= GEN7_MOCS_L3 << 16;
 
+         WARN_ONCE(buffer->stride >= (brw->gen >= 5 ? 2048 : 2047),
+                   "VBO stride %d too large, bad rendering may occur\n",
+                   buffer->stride);
 	 OUT_BATCH(dw0 | (buffer->stride << BRW_VB0_PITCH_SHIFT));
 	 OUT_RELOC(buffer->bo, I915_GEM_DOMAIN_VERTEX, 0, buffer->offset);
 	 if (brw->gen >= 5) {

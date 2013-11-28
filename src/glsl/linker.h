@@ -65,9 +65,21 @@ validate_intrastage_interface_blocks(struct gl_shader_program *prog,
                                      unsigned num_shaders);
 
 void
-validate_interstage_interface_blocks(struct gl_shader_program *prog,
-                                     const gl_shader *producer,
-                                     const gl_shader *consumer);
+validate_interstage_inout_blocks(struct gl_shader_program *prog,
+                                 const gl_shader *producer,
+                                 const gl_shader *consumer);
+
+void
+validate_interstage_uniform_blocks(struct gl_shader_program *prog,
+                                   gl_shader **stages, int num_stages);
+
+extern void
+link_assign_atomic_counter_resources(struct gl_context *ctx,
+                                     struct gl_shader_program *prog);
+
+extern void
+link_check_atomic_counter_resources(struct gl_context *ctx,
+                                    struct gl_shader_program *prog);
 
 /**
  * Class for processing all of the leaf fields of a variable that corresponds

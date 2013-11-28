@@ -153,7 +153,7 @@ static unsigned
 compile_init(struct fd3_compile_context *ctx, struct fd3_shader_stateobj *so,
 		const struct tgsi_token *tokens)
 {
-	unsigned ret;
+	unsigned ret, base = 0;
 
 	ctx->tokens = tokens;
 	ctx->ir = so->ir;
@@ -175,11 +175,17 @@ compile_init(struct fd3_compile_context *ctx, struct fd3_shader_stateobj *so,
 	ctx->base_reg[TGSI_FILE_IMMEDIATE] =
 			ctx->info.file_max[TGSI_FILE_CONSTANT] + 1;
 
+	/* if full precision and fragment shader, don't clobber
+	 * r0.x w/ bary fetch:
+	 */
+	if ((so->type == SHADER_FRAGMENT) && !so->half_precision)
+		base = 1;
+
 	/* Temporaries after outputs after inputs: */
-	ctx->base_reg[TGSI_FILE_INPUT]     = 0;
-	ctx->base_reg[TGSI_FILE_OUTPUT]    =
+	ctx->base_reg[TGSI_FILE_INPUT]     = base;
+	ctx->base_reg[TGSI_FILE_OUTPUT]    = base +
 			ctx->info.file_max[TGSI_FILE_INPUT] + 1;
-	ctx->base_reg[TGSI_FILE_TEMPORARY] =
+	ctx->base_reg[TGSI_FILE_TEMPORARY] = base +
 			ctx->info.file_max[TGSI_FILE_INPUT] + 1 +
 			ctx->info.file_max[TGSI_FILE_OUTPUT] + 1;
 
@@ -433,6 +439,18 @@ is_const(struct tgsi_src_register *src)
 			(src->File == TGSI_FILE_IMMEDIATE);
 }
 
+static inline bool
+is_relative(struct tgsi_src_register *src)
+{
+	return src->Indirect;
+}
+
+static inline bool
+is_rel_or_const(struct tgsi_src_register *src)
+{
+	return is_relative(src) || is_const(src);
+}
+
 static type_t
 get_ftype(struct fd3_compile_context *ctx)
 {
@@ -467,7 +485,7 @@ get_unconst(struct fd3_compile_context *ctx, struct tgsi_src_register *src)
 	struct tgsi_dst_register tmp_dst;
 	struct tgsi_src_register *tmp_src;
 
-	compile_assert(ctx, is_const(src));
+	compile_assert(ctx, is_rel_or_const(src));
 
 	tmp_src = get_internal_temp(ctx, &tmp_dst);
 
@@ -845,8 +863,8 @@ trans_dotp(const struct instr_translater *t,
 
 	/* in particular, can't handle const for src1 for cat3/mad:
 	 */
-	if (is_const(src1)) {
-		if (!is_const(src0)) {
+	if (is_rel_or_const(src1)) {
+		if (!is_rel_or_const(src0)) {
 			struct tgsi_src_register *tmp;
 			tmp = src0;
 			src0 = src1;
@@ -1065,7 +1083,8 @@ trans_samp(const struct instr_translater *t,
 	struct tgsi_src_register *samp  = &inst->Src[1].Register;
 	unsigned tex = inst->Texture.Texture;
 	int8_t *order;
-	unsigned i, j, flags = 0;
+	unsigned i, flags = 0;
+	bool needs_mov = false;
 
 	switch (t->arg) {
 	case TGSI_OPCODE_TEX:
@@ -1089,38 +1108,44 @@ trans_samp(const struct instr_translater *t,
 		flags |= IR3_INSTR_3D;
 	}
 
+	/* cat5 instruction cannot seem to handle const or relative: */
+	if (is_rel_or_const(coord))
+		needs_mov = true;
+
 	/* The texture sample instructions need to coord in successive
 	 * registers/components (ie. src.xy but not src.yx).  And TXP
 	 * needs the .w component in .z for 2D..  so in some cases we
 	 * might need to emit some mov instructions to shuffle things
 	 * around:
 	 */
-	for (i = 1; (i < 4) && (order[i] >= 0); i++) {
-		if (src_swiz(coord, i) != (src_swiz(coord, 0) + order[i])) {
-			struct tgsi_dst_register tmp_dst;
-			struct tgsi_src_register *tmp_src;
+	for (i = 1; (i < 4) && (order[i] >= 0) && !needs_mov; i++)
+		if (src_swiz(coord, i) != (src_swiz(coord, 0) + order[i]))
+			needs_mov = true;
 
-			type_t type_mov = get_ftype(ctx);
+	if (needs_mov) {
+		struct tgsi_dst_register tmp_dst;
+		struct tgsi_src_register *tmp_src;
+		unsigned j;
 
-			/* need to move things around: */
-			tmp_src = get_internal_temp(ctx, &tmp_dst);
+		type_t type_mov = get_ftype(ctx);
 
-			for (j = 0; (j < 4) && (order[j] >= 0); j++) {
-				instr = ir3_instr_create(ctx->ir, 1, 0);
-				instr->cat1.src_type = type_mov;
-				instr->cat1.dst_type = type_mov;
-				add_dst_reg(ctx, instr, &tmp_dst, j);
-				add_src_reg(ctx, instr, coord,
-						src_swiz(coord, order[j]));
-			}
+		/* need to move things around: */
+		tmp_src = get_internal_temp(ctx, &tmp_dst);
 
-			coord = tmp_src;
-
-			if (j < 4)
-				ir3_instr_create(ctx->ir, 0, OPC_NOP)->repeat = 4 - j - 1;
-
-			break;
+		for (j = 0; (j < 4) && (order[j] >= 0); j++) {
+			instr = ir3_instr_create(ctx->ir, 1, 0);
+			instr->cat1.src_type = type_mov;
+			instr->cat1.dst_type = type_mov;
+			add_dst_reg(ctx, instr, &tmp_dst, j);
+			add_src_reg(ctx, instr, coord,
+					src_swiz(coord, order[j]));
 		}
+
+		coord = tmp_src;
+
+		if (j < 4)
+			ir3_instr_create(ctx->ir, 0, OPC_NOP)->repeat = 4 - j - 1;
+
 	}
 
 	instr = ir3_instr_create(ctx->ir, 5, t->opc);
@@ -1483,8 +1508,8 @@ instr_cat3(const struct instr_translater *t,
 	/* in particular, can't handle const for src1 for cat3..
 	 * for mad, we can swap first two src's if needed:
 	 */
-	if (is_const(src1)) {
-		if (is_mad(t->opc) && !is_const(src0)) {
+	if (is_rel_or_const(src1)) {
+		if (is_mad(t->opc) && !is_rel_or_const(src0)) {
 			struct tgsi_src_register *tmp;
 			tmp = src0;
 			src0 = src1;
@@ -1568,7 +1593,14 @@ static const struct instr_translater translaters[TGSI_OPCODE_LAST] = {
 	INSTR(ELSE,         trans_else),
 	INSTR(ENDIF,        trans_endif),
 	INSTR(END,          instr_cat0, .opc = OPC_END),
+	INSTR(KILL,         instr_cat0, .opc = OPC_KILL),
 };
+
+static fd3_semantic
+decl_semantic(const struct tgsi_declaration_semantic *sem)
+{
+	return fd3_semantic_name(sem->Name, sem->Index);
+}
 
 static int
 decl_in(struct fd3_compile_context *ctx, struct tgsi_full_declaration *decl)
@@ -1577,6 +1609,13 @@ decl_in(struct fd3_compile_context *ctx, struct tgsi_full_declaration *decl)
 	unsigned base = ctx->base_reg[TGSI_FILE_INPUT];
 	unsigned i, flags = 0;
 	int nop = 0;
+
+	/* I don't think we should get frag shader input without
+	 * semantic info?  Otherwise how do inputs get linked to
+	 * vert outputs?
+	 */
+	compile_assert(ctx, (ctx->type == TGSI_PROCESSOR_VERTEX) ||
+			decl->Declaration.Semantic);
 
 	if (ctx->so->half_precision)
 		flags |= IR3_REG_HALF;
@@ -1591,6 +1630,7 @@ decl_in(struct fd3_compile_context *ctx, struct tgsi_full_declaration *decl)
 
 		DBG("decl in -> r%d", i + base);   // XXX
 
+		so->inputs[n].semantic = decl_semantic(&decl->Semantic);
 		so->inputs[n].compmask = (1 << ncomp) - 1;
 		so->inputs[n].regid = r;
 		so->inputs[n].inloc = ctx->next_inloc;
@@ -1646,8 +1686,6 @@ decl_out(struct fd3_compile_context *ctx, struct tgsi_full_declaration *decl)
 		case TGSI_SEMANTIC_GENERIC:
 		case TGSI_SEMANTIC_FOG:
 		case TGSI_SEMANTIC_TEXCOORD:
-			for (i = decl->Range.First; i <= decl->Range.Last; i++)
-				so->outputs[so->outputs_count++].regid = regid(i + base, 0);
 			break;
 		default:
 			compile_error(ctx, "unknown VS semantic name: %s\n",
@@ -1659,9 +1697,15 @@ decl_out(struct fd3_compile_context *ctx, struct tgsi_full_declaration *decl)
 			so->color_regid = regid(decl->Range.First + base, 0);
 			break;
 		default:
-			compile_error(ctx, "unknown VS semantic name: %s\n",
+			compile_error(ctx, "unknown FS semantic name: %s\n",
 					tgsi_semantic_names[name]);
 		}
+	}
+
+	for (i = decl->Range.First; i <= decl->Range.Last; i++) {
+		unsigned n = so->outputs_count++;
+		so->outputs[n].semantic = decl_semantic(&decl->Semantic);
+		so->outputs[n].regid = regid(i + base, 0);
 	}
 }
 

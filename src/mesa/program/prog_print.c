@@ -50,10 +50,6 @@ _mesa_register_file_name(gl_register_file f)
    switch (f) {
    case PROGRAM_TEMPORARY:
       return "TEMP";
-   case PROGRAM_LOCAL_PARAM:
-      return "LOCAL";
-   case PROGRAM_ENV_PARAM:
-      return "ENV";
    case PROGRAM_STATE_VAR:
       return "STATE";
    case PROGRAM_INPUT:
@@ -311,6 +307,7 @@ arb_output_attrib_string(GLint index, GLenum progType)
       "result.depth", /* FRAG_RESULT_DEPTH */
       "result.(one)", /* FRAG_RESULT_STENCIL */
       "result.color", /* FRAG_RESULT_COLOR */
+      "result.samplemask", /* FRAG_RESULT_SAMPLE_MASK */
       "result.color[0]", /* FRAG_RESULT_DATA0 (named for GLSL's gl_FragData) */
       "result.color[1]",
       "result.color[2]",
@@ -380,12 +377,6 @@ reg_string(gl_register_file f, GLint index, gl_prog_print_mode mode,
          break;
       case PROGRAM_TEMPORARY:
          sprintf(str, "temp%d", index);
-         break;
-      case PROGRAM_ENV_PARAM:
-         sprintf(str, "program.env[%s%d]", addr, index);
-         break;
-      case PROGRAM_LOCAL_PARAM:
-         sprintf(str, "program.local[%s%d]", addr, index);
          break;
       case PROGRAM_CONSTANT: /* extension */
          sprintf(str, "constant[%s%d]", addr, index);

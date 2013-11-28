@@ -160,17 +160,6 @@ src_vector(struct i915_fragment_program *p,
       /* Various paramters and env values.  All emitted to
        * hardware as program constants.
        */
-   case PROGRAM_LOCAL_PARAM:
-      src = i915_emit_param4fv(p, program->Base.LocalParams[source->Index]);
-      break;
-
-   case PROGRAM_ENV_PARAM:
-      src =
-         i915_emit_param4fv(p,
-                            p->ctx->FragmentProgram.Parameters[source->
-                                                               Index]);
-      break;
-
    case PROGRAM_CONSTANT:
    case PROGRAM_STATE_VAR:
    case PROGRAM_UNIFORM:
