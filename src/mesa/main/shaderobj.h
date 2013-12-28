@@ -113,23 +113,8 @@ _mesa_shader_type_to_index(GLenum v)
       return MESA_SHADER_GEOMETRY;
    default:
       ASSERT(0 && "bad value in _mesa_shader_type_to_index()");
-      return MESA_SHADER_TYPES;
+      return MESA_SHADER_VERTEX;
    }
-}
-
-
-static inline GLenum
-_mesa_shader_index_to_type(GLuint i)
-{
-   static const GLenum enums[MESA_SHADER_TYPES] = {
-      GL_VERTEX_SHADER,
-      GL_GEOMETRY_SHADER,
-      GL_FRAGMENT_SHADER
-   };
-   if (i >= MESA_SHADER_TYPES)
-      return 0;
-   else
-      return enums[i];
 }
 
 

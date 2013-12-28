@@ -119,11 +119,6 @@ static void r600_destroy_context(struct pipe_context *context)
 
 	util_blitter_destroy(rctx->blitter);
 
-	if (rctx->uploader) {
-		u_upload_destroy(rctx->uploader);
-	}
-	util_slab_destroy(&rctx->pool_transfers);
-
 	r600_common_context_cleanup(&rctx->b);
 	FREE(rctx);
 }
@@ -186,16 +181,6 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	}
 
 	rctx->b.ws->cs_set_flush_callback(rctx->b.rings.gfx.cs, r600_flush_from_winsys, rctx);
-
-	util_slab_create(&rctx->pool_transfers,
-			 sizeof(struct pipe_transfer), 64,
-			 UTIL_SLAB_SINGLETHREADED);
-
-        rctx->uploader = u_upload_create(&rctx->b.b, 1024 * 1024, 256,
-                                         PIPE_BIND_INDEX_BUFFER |
-                                         PIPE_BIND_CONSTANT_BUFFER);
-        if (!rctx->uploader)
-		goto fail;
 
 	rctx->blitter = util_blitter_create(&rctx->b.b);
 	if (rctx->blitter == NULL)
@@ -290,7 +275,6 @@ static const char* r600_get_name(struct pipe_screen* pscreen)
 static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 {
 	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
-	bool has_streamout = HAVE_LLVM >= 0x0304;
 
 	switch (param) {
 	/* Supported features (boolean caps). */
@@ -330,6 +314,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_INSTANCEID:
 	case PIPE_CAP_COMPUTE:
 	case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
+        case PIPE_CAP_TGSI_VS_LAYER:
 		return 1;
 
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
@@ -372,12 +357,12 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	/* Stream output. */
 	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
-		return has_streamout ? 4 : 0;
+		return rscreen->b.has_streamout ? 4 : 0;
 	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
-		return has_streamout ? 1 : 0;
+		return rscreen->b.has_streamout ? 1 : 0;
 	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
 	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
-		return has_streamout ? 32*4 : 0;
+		return rscreen->b.has_streamout ? 32*4 : 0;
 
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
@@ -391,7 +376,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	/* Render targets. */
 	case PIPE_CAP_MAX_RENDER_TARGETS:
-		/* FIXME some r6xx are buggy and can only do 4 */
 		return 8;
 
 	case PIPE_CAP_MAX_VIEWPORTS:
@@ -665,6 +649,9 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 		FREE(rscreen);
 		return NULL;
 	}
+
+	rscreen->b.has_cp_dma = true;
+	rscreen->b.has_streamout = HAVE_LLVM >= 0x0304;
 
 	if (debug_get_bool_option("RADEON_DUMP_SHADERS", FALSE))
 		rscreen->b.debug_flags |= DBG_FS | DBG_VS | DBG_GS | DBG_PS | DBG_CS;

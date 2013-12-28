@@ -142,9 +142,6 @@ struct r600_context {
 	struct r600_resource		*border_color_table;
 	unsigned			border_color_offset;
 
-	struct u_upload_mgr	        *uploader;
-	struct util_slab_mempool	pool_transfers;
-
 	unsigned default_ps_gprs, default_vs_gprs;
 
 	/* Below are variables from the old r600_context.
@@ -169,7 +166,7 @@ struct r600_context {
 
 	/* With rasterizer discard, there doesn't have to be a pixel shader.
 	 * In that case, we bind this one: */
-	struct si_pipe_shader	*dummy_pixel_shader;
+	void			*dummy_pixel_shader;
 	struct r600_atom	cache_flush;
 	struct pipe_constant_buffer null_const_buf; /* used for set_constant_buffer(NULL) on CIK */
 
@@ -186,8 +183,6 @@ void r600_decompress_color_textures(struct r600_context *rctx,
 				    struct r600_textures_info *textures);
 
 /* r600_buffer.c */
-struct pipe_resource *si_buffer_create(struct pipe_screen *screen,
-				       const struct pipe_resource *templ);
 void r600_upload_index_buffer(struct r600_context *rctx,
 			      struct pipe_index_buffer *ib, unsigned count);
 

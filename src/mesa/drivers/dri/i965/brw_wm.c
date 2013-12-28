@@ -2,7 +2,7 @@
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
  Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
  develop this 3D driver.
- 
+
  Permission is hereby granted, free of charge, to any person obtaining
  a copy of this software and associated documentation files (the
  "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  distribute, sublicense, and/or sell copies of the Software, and to
  permit persons to whom the Software is furnished to do so, subject to
  the following conditions:
- 
+
  The above copyright notice and this permission notice (including the
  next paragraph) shall be included in all copies or substantial
  portions of the Software.
- 
+
  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
@@ -22,13 +22,13 @@
  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- 
+
  **********************************************************************/
  /*
   * Authors:
   *   Keith Whitwell <keith@tungstengraphics.com>
   */
-             
+
 #include "brw_context.h"
 #include "brw_wm.h"
 #include "brw_state.h"
@@ -38,6 +38,7 @@
 #include "main/samplerobj.h"
 #include "program/prog_parameter.h"
 #include "program/program.h"
+#include "intel_mipmap_tree.h"
 
 #include "glsl/ralloc.h"
 
@@ -331,7 +332,7 @@ brw_populate_sampler_prog_key_data(struct gl_context *ctx,
          /* Haswell handles texture swizzling as surface format overrides
           * (except for GL_ALPHA); all other platforms need MOVs in the shader.
           */
-         if (!brw->is_haswell || alpha_depth)
+         if (alpha_depth || (brw->gen < 8 && !brw->is_haswell))
             key->swizzles[s] = brw_get_texture_swizzle(ctx, t);
 
 	 if (img->InternalFormat == GL_YCBCR_MESA) {
@@ -352,9 +353,21 @@ brw_populate_sampler_prog_key_data(struct gl_context *ctx,
 
          /* gather4's channel select for green from RG32F is broken;
           * requires a shader w/a on IVB; fixable with just SCS on HSW. */
-         if (brw->gen >= 7 && !brw->is_haswell && prog->UsesGather) {
+         if (brw->gen == 7 && !brw->is_haswell && prog->UsesGather) {
             if (img->InternalFormat == GL_RG32F)
                key->gather_channel_quirk_mask |= 1 << s;
+         }
+
+         /* If this is a multisample sampler, and uses the CMS MSAA layout,
+          * then we need to emit slightly different code to first sample the
+          * MCS surface.
+          */
+         struct intel_texture_object *intel_tex =
+            intel_texture_object((struct gl_texture_object *)t);
+
+         if (brw->gen >= 7 &&
+             intel_tex->mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS) {
+            key->compressed_multisample_layout_mask |= 1 << s;
          }
       }
    }
@@ -365,7 +378,7 @@ static void brw_wm_populate_key( struct brw_context *brw,
 {
    struct gl_context *ctx = &brw->ctx;
    /* BRW_NEW_FRAGMENT_PROGRAM */
-   const struct brw_fragment_program *fp = 
+   const struct brw_fragment_program *fp =
       (struct brw_fragment_program *)brw->fragment_program;
    const struct gl_program *prog = (struct gl_program *) brw->fragment_program;
    GLuint lookup = 0;

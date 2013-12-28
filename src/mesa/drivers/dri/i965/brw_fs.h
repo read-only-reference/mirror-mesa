@@ -274,6 +274,7 @@ public:
    fs_inst *MAD(fs_reg dst, fs_reg c, fs_reg b, fs_reg a);
    fs_inst *ADDC(fs_reg dst, fs_reg src0, fs_reg src1);
    fs_inst *SUBB(fs_reg dst, fs_reg src0, fs_reg src1);
+   fs_inst *SEL(fs_reg dst, fs_reg src0, fs_reg src1);
 
    int type_size(const struct glsl_type *type);
    fs_inst *get_instruction_generating_reg(fs_inst *start,
@@ -315,7 +316,6 @@ public:
    bool opt_copy_propagate_local(void *mem_ctx, bblock_t *block,
                                  exec_list *acp);
    bool register_coalesce();
-   bool register_coalesce_2();
    bool compute_to_mrf();
    bool dead_code_eliminate();
    bool dead_code_eliminate_local();
@@ -340,6 +340,7 @@ public:
    fs_reg *emit_frontfacing_interpolation(ir_variable *ir);
    fs_reg *emit_samplepos_setup(ir_variable *ir);
    fs_reg *emit_sampleid_setup(ir_variable *ir);
+   fs_reg *emit_samplemaskin_setup(ir_variable *ir);
    fs_reg *emit_general_interpolation(ir_variable *ir);
    void emit_interpolation_setup_gen4();
    void emit_interpolation_setup_gen6();
@@ -353,7 +354,8 @@ public:
                               fs_reg sample_index);
    fs_inst *emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
                               fs_reg shadow_comp, fs_reg lod, fs_reg lod2,
-                              fs_reg sample_index);
+                              fs_reg sample_index, fs_reg mcs);
+   fs_reg emit_mcs_fetch(ir_texture *ir, fs_reg coordinate, int sampler);
    fs_reg fix_math_operand(fs_reg src);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0, fs_reg src1);
@@ -363,6 +365,8 @@ public:
    bool try_emit_saturate(ir_expression *ir);
    bool try_emit_mad(ir_expression *ir, int mul_arg);
    void try_replace_with_sel();
+   bool opt_peephole_sel();
+   bool opt_peephole_predicated_break();
    void emit_bool_to_cond_code(ir_rvalue *condition);
    void emit_if_gen6(ir_if *ir);
    void emit_unspill(fs_inst *inst, fs_reg reg, uint32_t spill_offset,

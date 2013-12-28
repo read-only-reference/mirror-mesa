@@ -28,6 +28,8 @@
 #include "r600_cs.h"
 #include "tgsi/tgsi_parse.h"
 #include "util/u_format_s3tc.h"
+#include "util/u_upload_mgr.h"
+#include <inttypes.h>
 
 static const struct debug_named_value common_debug_options[] = {
 	/* logging */
@@ -43,6 +45,10 @@ static const struct debug_named_value common_debug_options[] = {
 	{ "gs", DBG_GS, "Print geometry shaders" },
 	{ "ps", DBG_PS, "Print pixel shaders" },
 	{ "cs", DBG_CS, "Print compute shaders" },
+
+	{ "nohyperz", DBG_NO_HYPERZ, "Disable Hyper-Z" },
+	/* GL uses the word INVALIDATE, gallium uses the word DISCARD */
+	{ "noinvalrange", DBG_NO_DISCARD_RANGE, "Disable handling of INVALIDATE_RANGE map flags" },
 
 	DEBUG_NAMED_VALUE_END /* must be last */
 };
@@ -218,6 +224,10 @@ void r600_common_screen_cleanup(struct r600_common_screen *rscreen)
 bool r600_common_context_init(struct r600_common_context *rctx,
 			      struct r600_common_screen *rscreen)
 {
+	util_slab_create(&rctx->pool_transfers,
+			 sizeof(struct r600_transfer), 64,
+			 UTIL_SLAB_SINGLETHREADED);
+
 	rctx->ws = rscreen->ws;
 	rctx->family = rscreen->family;
 	rctx->chip_class = rscreen->chip_class;
@@ -229,11 +239,23 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	if (!rctx->allocator_so_filled_size)
 		return false;
 
+	rctx->uploader = u_upload_create(&rctx->b, 1024 * 1024, 256,
+					PIPE_BIND_INDEX_BUFFER |
+					PIPE_BIND_CONSTANT_BUFFER);
+	if (!rctx->uploader)
+		return false;
+
 	return true;
 }
 
 void r600_common_context_cleanup(struct r600_common_context *rctx)
 {
+	if (rctx->uploader) {
+		u_upload_destroy(rctx->uploader);
+	}
+
+	util_slab_destroy(&rctx->pool_transfers);
+
 	if (rctx->allocator_so_filled_size) {
 		u_suballocator_destroy(rctx->allocator_so_filled_size);
 	}
@@ -304,124 +326,4 @@ void r600_screen_clear_buffer(struct r600_common_screen *rscreen, struct pipe_re
 	rctx->clear_buffer(&rctx->b, dst, offset, size, value);
 	rscreen->aux_context->flush(rscreen->aux_context, NULL, 0);
 	pipe_mutex_unlock(rscreen->aux_context_lock);
-}
-
-boolean r600_rings_is_buffer_referenced(struct r600_common_context *ctx,
-					struct radeon_winsys_cs_handle *buf,
-					enum radeon_bo_usage usage)
-{
-	if (ctx->ws->cs_is_buffer_referenced(ctx->rings.gfx.cs, buf, usage)) {
-		return TRUE;
-	}
-	if (ctx->rings.dma.cs &&
-	    ctx->ws->cs_is_buffer_referenced(ctx->rings.dma.cs, buf, usage)) {
-		return TRUE;
-	}
-	return FALSE;
-}
-
-void *r600_buffer_map_sync_with_rings(struct r600_common_context *ctx,
-                                      struct r600_resource *resource,
-                                      unsigned usage)
-{
-	enum radeon_bo_usage rusage = RADEON_USAGE_READWRITE;
-
-	if (usage & PIPE_TRANSFER_UNSYNCHRONIZED) {
-		return ctx->ws->buffer_map(resource->cs_buf, NULL, usage);
-	}
-
-	if (!(usage & PIPE_TRANSFER_WRITE)) {
-		/* have to wait for the last write */
-		rusage = RADEON_USAGE_WRITE;
-	}
-
-	if (ctx->rings.gfx.cs->cdw &&
-	    ctx->ws->cs_is_buffer_referenced(ctx->rings.gfx.cs,
-					     resource->cs_buf, rusage)) {
-		if (usage & PIPE_TRANSFER_DONTBLOCK) {
-			ctx->rings.gfx.flush(ctx, RADEON_FLUSH_ASYNC);
-			return NULL;
-		} else {
-			ctx->rings.gfx.flush(ctx, 0);
-		}
-	}
-	if (ctx->rings.dma.cs &&
-	    ctx->rings.dma.cs->cdw &&
-	    ctx->ws->cs_is_buffer_referenced(ctx->rings.dma.cs,
-					     resource->cs_buf, rusage)) {
-		if (usage & PIPE_TRANSFER_DONTBLOCK) {
-			ctx->rings.dma.flush(ctx, RADEON_FLUSH_ASYNC);
-			return NULL;
-		} else {
-			ctx->rings.dma.flush(ctx, 0);
-		}
-	}
-
-	if (ctx->ws->buffer_is_busy(resource->buf, rusage)) {
-		if (usage & PIPE_TRANSFER_DONTBLOCK) {
-			return NULL;
-		} else {
-			/* We will be wait for the GPU. Wait for any offloaded
-			 * CS flush to complete to avoid busy-waiting in the winsys. */
-			ctx->ws->cs_sync_flush(ctx->rings.gfx.cs);
-			if (ctx->rings.dma.cs)
-				ctx->ws->cs_sync_flush(ctx->rings.dma.cs);
-		}
-	}
-
-	return ctx->ws->buffer_map(resource->cs_buf, NULL, usage);
-}
-
-bool r600_init_resource(struct r600_common_screen *rscreen,
-			struct r600_resource *res,
-			unsigned size, unsigned alignment,
-			bool use_reusable_pool, unsigned usage)
-{
-	uint32_t initial_domain, domains;
-
-	switch(usage) {
-	case PIPE_USAGE_STAGING:
-		/* Staging resources participate in transfers, i.e. are used
-		 * for uploads and downloads from regular resources.
-		 * We generate them internally for some transfers.
-		 */
-		initial_domain = RADEON_DOMAIN_GTT;
-		domains = RADEON_DOMAIN_GTT;
-		break;
-	case PIPE_USAGE_DYNAMIC:
-	case PIPE_USAGE_STREAM:
-		/* Default to GTT, but allow the memory manager to move it to VRAM. */
-		initial_domain = RADEON_DOMAIN_GTT;
-		domains = RADEON_DOMAIN_GTT | RADEON_DOMAIN_VRAM;
-		break;
-	case PIPE_USAGE_DEFAULT:
-	case PIPE_USAGE_STATIC:
-	case PIPE_USAGE_IMMUTABLE:
-	default:
-		/* Don't list GTT here, because the memory manager would put some
-		 * resources to GTT no matter what the initial domain is.
-		 * Not listing GTT in the domains improves performance a lot. */
-		initial_domain = RADEON_DOMAIN_VRAM;
-		domains = RADEON_DOMAIN_VRAM;
-		break;
-	}
-
-	res->buf = rscreen->ws->buffer_create(rscreen->ws, size, alignment,
-                                              use_reusable_pool,
-                                              initial_domain);
-	if (!res->buf) {
-		return false;
-	}
-
-	res->cs_buf = rscreen->ws->buffer_get_cs_handle(res->buf);
-	res->domains = domains;
-	util_range_set_empty(&res->valid_buffer_range);
-
-	if (rscreen->debug_flags & DBG_VM && res->b.b.target == PIPE_BUFFER) {
-		fprintf(stderr, "VM start=0x%llX  end=0x%llX | Buffer %u bytes\n",
-			r600_resource_va(&rscreen->b, &res->b.b),
-			r600_resource_va(&rscreen->b, &res->b.b) + res->buf->size,
-			res->buf->size);
-	}
-	return true;
 }

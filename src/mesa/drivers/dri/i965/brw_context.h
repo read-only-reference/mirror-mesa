@@ -2,7 +2,7 @@
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
  Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
  develop this 3D driver.
- 
+
  Permission is hereby granted, free of charge, to any person obtaining
  a copy of this software and associated documentation files (the
  "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  distribute, sublicense, and/or sell copies of the Software, and to
  permit persons to whom the Software is furnished to do so, subject to
  the following conditions:
- 
+
  The above copyright notice and this permission notice (including the
  next paragraph) shall be included in all copies or substantial
  portions of the Software.
- 
+
  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
@@ -22,7 +22,7 @@
  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- 
+
  **********************************************************************/
  /*
   * Authors:
@@ -74,7 +74,7 @@ extern "C" {
  *
  * VUE - vertex URB entry.  An urb entry holding a vertex and usually
  * a vertex header.  The header contains control information and
- * things like primitive type, Begin/end flags and clip codes.  
+ * things like primitive type, Begin/end flags and clip codes.
  *
  * PUE - primitive URB entry.  An urb entry produced by the setup (SF)
  * unit holding rasterization and interpolation parameters.
@@ -747,7 +747,7 @@ struct brw_cache_item {
    uint32_t size;
 
    struct brw_cache_item *next;
-};   
+};
 
 
 typedef bool (*cache_aux_compare_func)(const void *a, const void *b);
@@ -824,7 +824,7 @@ struct brw_cached_batch_item {
    GLuint sz;
    struct brw_cached_batch_item *next;
 };
-   
+
 struct brw_vertex_buffer {
    /** Buffer object containing the uploaded vertex data */
    drm_intel_bo *bo;
@@ -965,7 +965,7 @@ struct brw_stage_state
 /**
  * brw_context is derived from gl_context.
  */
-struct brw_context 
+struct brw_context
 {
    struct gl_context ctx; /**< base class, must be first field */
 
@@ -1178,7 +1178,7 @@ struct brw_context
       unsigned int start_vertex_offset;
    } ib;
 
-   /* Active vertex program: 
+   /* Active vertex program:
     */
    const struct gl_vertex_program *vertex_program;
    const struct gl_geometry_program *geometry_program;
@@ -1229,8 +1229,8 @@ struct brw_context
       bool gen6_gs_previously_active;
    } urb;
 
-   
-   /* BRW_NEW_CURBE_OFFSETS: 
+
+   /* BRW_NEW_CURBE_OFFSETS:
     */
    struct {
       GLuint wm_start;  /**< pos of first wm const in CURBE buffer */
@@ -1493,7 +1493,7 @@ struct brw_context
    struct intel_screen *intelScreen;
 };
 
-static INLINE bool
+static inline bool
 is_power_of_two(uint32_t value)
 {
    return (value & (value - 1)) == 0;
@@ -1716,13 +1716,14 @@ brw_blorp_copytexsubimage(struct brw_context *brw,
                           int width, int height);
 
 /* gen6_multisample_state.c */
+unsigned
+gen6_determine_sample_mask(struct brw_context *brw);
+
 void
 gen6_emit_3dstate_multisample(struct brw_context *brw,
                               unsigned num_samples);
 void
-gen6_emit_3dstate_sample_mask(struct brw_context *brw,
-                              unsigned num_samples, float coverage,
-                              bool coverage_invert, unsigned sample_mask);
+gen6_emit_3dstate_sample_mask(struct brw_context *brw, unsigned mask);
 void
 gen6_get_sample_position(struct gl_context *ctx,
                          struct gl_framebuffer *fb,
@@ -1749,37 +1750,37 @@ brw_get_graphics_reset_status(struct gl_context *ctx);
  * Inline conversion functions.  These are better-typed than the
  * macros used previously:
  */
-static INLINE struct brw_context *
+static inline struct brw_context *
 brw_context( struct gl_context *ctx )
 {
    return (struct brw_context *)ctx;
 }
 
-static INLINE struct brw_vertex_program *
+static inline struct brw_vertex_program *
 brw_vertex_program(struct gl_vertex_program *p)
 {
    return (struct brw_vertex_program *) p;
 }
 
-static INLINE const struct brw_vertex_program *
+static inline const struct brw_vertex_program *
 brw_vertex_program_const(const struct gl_vertex_program *p)
 {
    return (const struct brw_vertex_program *) p;
 }
 
-static INLINE struct brw_geometry_program *
+static inline struct brw_geometry_program *
 brw_geometry_program(struct gl_geometry_program *p)
 {
    return (struct brw_geometry_program *) p;
 }
 
-static INLINE struct brw_fragment_program *
+static inline struct brw_fragment_program *
 brw_fragment_program(struct gl_fragment_program *p)
 {
    return (struct brw_fragment_program *) p;
 }
 
-static INLINE const struct brw_fragment_program *
+static inline const struct brw_fragment_program *
 brw_fragment_program_const(const struct gl_fragment_program *p)
 {
    return (const struct brw_fragment_program *) p;
@@ -1827,6 +1828,8 @@ struct opcode_desc {
 };
 
 extern const struct opcode_desc opcode_descs[128];
+extern const char * const conditional_modifier[16];
+extern const char * const reg_encoding[8];
 
 void
 brw_emit_depthbuffer(struct brw_context *brw);
@@ -1871,7 +1874,7 @@ gen6_upload_vec4_push_constants(struct brw_context *brw,
  * XXX Put this in src/mesa/main/imports.h ???
  */
 #if defined(i386) || defined(__i386__)
-static INLINE void * __memcpy(void * to, const void * from, size_t n)
+static inline void * __memcpy(void * to, const void * from, size_t n)
 {
    int d0, d1, d2;
    __asm__ __volatile__(

@@ -116,7 +116,7 @@ fs_generator::generate_fb_write(fs_inst *inst)
    brw_set_mask_control(p, BRW_MASK_DISABLE);
    brw_set_compression_control(p, BRW_COMPRESSION_NONE);
 
-   if (fp->UsesKill || c->key.alpha_test_func) {
+   if ((fp && fp->UsesKill) || c->key.alpha_test_func) {
       struct brw_reg pixel_mask;
 
       if (brw->gen >= 6)
@@ -430,6 +430,10 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
             msg_type = GEN7_SAMPLER_MESSAGE_SAMPLE_LD2DMS;
          else
             msg_type = GEN5_SAMPLER_MESSAGE_SAMPLE_LD;
+         break;
+      case SHADER_OPCODE_TXF_MCS:
+         assert(brw->gen >= 7);
+         msg_type = GEN7_SAMPLER_MESSAGE_SAMPLE_LD_MCS;
          break;
       case SHADER_OPCODE_LOD:
          msg_type = GEN5_SAMPLER_MESSAGE_LOD;
@@ -1300,15 +1304,18 @@ fs_generator::generate_code(exec_list *instructions)
       if (shader) {
          printf("Native code for fragment shader %d (%d-wide dispatch):\n",
                 prog->Name, dispatch_width);
-      } else {
+      } else if (fp) {
          printf("Native code for fragment program %d (%d-wide dispatch):\n",
                 fp->Base.Id, dispatch_width);
+      } else {
+         printf("Native code for blorp program (%d-wide dispatch):\n",
+                dispatch_width);
       }
    }
 
    cfg_t *cfg = NULL;
    if (unlikely(INTEL_DEBUG & DEBUG_WM))
-      cfg = new(mem_ctx) cfg_t(mem_ctx, instructions);
+      cfg = new(mem_ctx) cfg_t(instructions);
 
    foreach_list(node, instructions) {
       fs_inst *inst = (fs_inst *)node;
@@ -1340,7 +1347,7 @@ fs_generator::generate_code(exec_list *instructions)
                else {
                   const prog_instruction *fpi;
                   fpi = (const prog_instruction *)inst->ir;
-                  printf("%d: ", (int)(fpi - fp->Base.Instructions));
+                  printf("%d: ", (int)(fpi - (fp ? fp->Base.Instructions : 0)));
                   _mesa_fprint_instruction_opt(stdout,
                                                fpi,
                                                0, PROG_PRINT_DEBUG, NULL);
@@ -1651,6 +1658,7 @@ fs_generator::generate_code(exec_list *instructions)
       case SHADER_OPCODE_TXD:
       case SHADER_OPCODE_TXF:
       case SHADER_OPCODE_TXF_MS:
+      case SHADER_OPCODE_TXF_MCS:
       case SHADER_OPCODE_TXL:
       case SHADER_OPCODE_TXS:
       case SHADER_OPCODE_LOD:
@@ -1804,8 +1812,12 @@ fs_generator::generate_assembly(exec_list *simd8_instructions,
                                 exec_list *simd16_instructions,
                                 unsigned *assembly_size)
 {
-   dispatch_width = 8;
-   generate_code(simd8_instructions);
+   assert(simd8_instructions || simd16_instructions);
+
+   if (simd8_instructions) {
+      dispatch_width = 8;
+      generate_code(simd8_instructions);
+   }
 
    if (simd16_instructions) {
       /* We have to do a compaction pass now, or the one at the end of

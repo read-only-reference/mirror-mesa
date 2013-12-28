@@ -58,9 +58,9 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
    : ctx(_ctx), switch_state()
 {
    switch (target) {
-   case GL_VERTEX_SHADER:   this->target = vertex_shader; break;
-   case GL_FRAGMENT_SHADER: this->target = fragment_shader; break;
-   case GL_GEOMETRY_SHADER: this->target = geometry_shader; break;
+   case GL_VERTEX_SHADER:   this->target = MESA_SHADER_VERTEX; break;
+   case GL_FRAGMENT_SHADER: this->target = MESA_SHADER_FRAGMENT; break;
+   case GL_GEOMETRY_SHADER: this->target = MESA_SHADER_GEOMETRY; break;
    }
 
    this->scanner = NULL;
@@ -76,7 +76,8 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
    this->loop_nesting_ast = NULL;
 
    this->struct_specifier_depth = 0;
-   this->num_builtins_to_link = 0;
+
+   this->uses_builtin_functions = false;
 
    /* Set default language version and extensions */
    this->language_version = ctx->Const.ForceGLSLVersion ?
@@ -333,16 +334,15 @@ _mesa_glsl_parse_state::process_version_directive(YYLTYPE *locp, int version,
 extern "C" {
 
 /**
- * The most common use of _mesa_glsl_shader_target_name(), which is
- * shared with C code in Mesa core to translate a GLenum to a short
- * shader stage name in debug printouts.
+ * Translate a GLenum to a short shader stage name for debug printouts and
+ * error messages.
  *
  * It recognizes the PROGRAM variants of the names so it can be used
  * with a struct gl_program->Target, not just a struct
  * gl_shader->Type.
  */
 const char *
-_mesa_glsl_shader_target_name(GLenum type)
+_mesa_shader_enum_to_string(GLenum type)
 {
    switch (type) {
    case GL_VERTEX_SHADER:
@@ -362,16 +362,16 @@ _mesa_glsl_shader_target_name(GLenum type)
 } /* extern "C" */
 
 /**
- * Overloaded C++ variant usable within the compiler for translating
- * our internal enum into short stage names.
+ * Translate a gl_shader_type to a short shader stage name for debug printouts
+ * and error messages.
  */
 const char *
-_mesa_glsl_shader_target_name(enum _mesa_glsl_parser_targets target)
+_mesa_shader_type_to_string(unsigned target)
 {
    switch (target) {
-   case vertex_shader:   return "vertex";
-   case fragment_shader: return "fragment";
-   case geometry_shader: return "geometry";
+   case MESA_SHADER_VERTEX:   return "vertex";
+   case MESA_SHADER_FRAGMENT: return "fragment";
+   case MESA_SHADER_GEOMETRY: return "geometry";
    }
 
    assert(!"Should not get here.");
@@ -650,11 +650,11 @@ _mesa_glsl_process_extension(const char *name, YYLTYPE *name_locp,
 
          if (behavior == extension_require) {
             _mesa_glsl_error(name_locp, state, fmt,
-                             name, _mesa_glsl_shader_target_name(state->target));
+                             name, _mesa_shader_type_to_string(state->target));
             return false;
          } else {
             _mesa_glsl_warning(name_locp, state, fmt,
-                               name, _mesa_glsl_shader_target_name(state->target));
+                               name, _mesa_shader_type_to_string(state->target));
          }
       }
    }
@@ -877,6 +877,8 @@ _mesa_ast_type_qualifier_print(const struct ast_type_qualifier *q)
 
    if (q->flags.q.centroid)
       printf("centroid ");
+   if (q->flags.q.sample)
+      printf("sample ");
    if (q->flags.q.uniform)
       printf("uniform ");
    if (q->flags.q.smooth)
@@ -1532,10 +1534,7 @@ _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader,
    shader->InfoLog = state->info_log;
    shader->Version = state->language_version;
    shader->IsES = state->es_shader;
-
-   memcpy(shader->builtins_to_link, state->builtins_to_link,
-          sizeof(shader->builtins_to_link[0]) * state->num_builtins_to_link);
-   shader->num_builtins_to_link = state->num_builtins_to_link;
+   shader->uses_builtin_functions = state->uses_builtin_functions;
 
    if (shader->UniformBlocks)
       ralloc_free(shader->UniformBlocks);

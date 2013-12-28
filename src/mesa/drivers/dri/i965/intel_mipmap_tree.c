@@ -1,8 +1,8 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2006 Tungsten Graphics, Inc., Cedar Park, Texas.
  * All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
  * "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  * distribute, sub license, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice (including the
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
@@ -22,7 +22,7 @@
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
 #include <GL/gl.h>
@@ -99,23 +99,7 @@ compute_msaa_layout(struct brw_context *brw, gl_format format, GLenum target)
          assert(brw->gen == 7);
          return INTEL_MSAA_LAYOUT_UMS;
       } else {
-         /* For now, if we're going to be texturing from this surface,
-          * force UMS, so that the shader doesn't have to do different things
-          * based on whether there's a multisample control surface needing sampled first.
-          * We can't just blindly read the MCS surface in all cases because:
-          *
-          * From the Ivy Bridge PRM, Vol4 Part1 p77 ("MCS Enable"):
-          *
-          *    If this field is disabled and the sampling engine <ld_mcs> message
-          *    is issued on this surface, the MCS surface may be accessed. Software
-          *    must ensure that the surface is defined to avoid GTT errors.
-          */
-         if (target == GL_TEXTURE_2D_MULTISAMPLE ||
-             target == GL_TEXTURE_2D_MULTISAMPLE_ARRAY) {
-            return INTEL_MSAA_LAYOUT_UMS;
-         } else {
-            return INTEL_MSAA_LAYOUT_CMS;
-         }
+         return INTEL_MSAA_LAYOUT_CMS;
       }
    }
 }
@@ -266,7 +250,7 @@ intel_miptree_create_layout(struct brw_context *brw,
    mt->logical_width0 = width0;
    mt->logical_height0 = height0;
    mt->logical_depth0 = depth0;
-   mt->mcs_state = INTEL_MCS_STATE_NONE;
+   mt->fast_clear_state = INTEL_FAST_CLEAR_STATE_NO_MCS;
 
    /* The cpp is bytes per (1, blockheight)-sized block for compressed
     * textures.  This is why you'll see divides by blockheight all over
@@ -279,7 +263,7 @@ intel_miptree_create_layout(struct brw_context *brw,
    mt->num_samples = num_samples;
    mt->compressed = _mesa_is_format_compressed(format);
    mt->msaa_layout = INTEL_MSAA_LAYOUT_NONE;
-   mt->refcount = 1; 
+   mt->refcount = 1;
 
    if (num_samples > 1) {
       /* Adjust width/height/depth for MSAA */
@@ -611,13 +595,21 @@ intel_miptree_create(struct brw_context *brw,
        return NULL;
    }
 
+
+   if (mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS) {
+      if (!intel_miptree_alloc_mcs(brw, mt, num_samples)) {
+         intel_miptree_release(&mt);
+         return NULL;
+      }
+   }
+
    /* If this miptree is capable of supporting fast color clears, set
-    * mcs_state appropriately to ensure that fast clears will occur.
+    * fast_clear_state appropriately to ensure that fast clears will occur.
     * Allocation of the MCS miptree will be deferred until the first fast
     * clear actually occurs.
     */
    if (intel_is_non_msrt_mcs_buffer_supported(brw, mt))
-      mt->mcs_state = INTEL_MCS_STATE_RESOLVED;
+      mt->fast_clear_state = INTEL_FAST_CLEAR_STATE_RESOLVED;
 
    return mt;
 }
@@ -713,12 +705,12 @@ intel_miptree_create_for_dri2_buffer(struct brw_context *brw,
    singlesample_mt->region->name = region->name;
 
    /* If this miptree is capable of supporting fast color clears, set
-    * mcs_state appropriately to ensure that fast clears will occur.
+    * fast_clear_state appropriately to ensure that fast clears will occur.
     * Allocation of the MCS miptree will be deferred until the first fast
     * clear actually occurs.
     */
    if (intel_is_non_msrt_mcs_buffer_supported(brw, singlesample_mt))
-      singlesample_mt->mcs_state = INTEL_MCS_STATE_RESOLVED;
+      singlesample_mt->fast_clear_state = INTEL_FAST_CLEAR_STATE_RESOLVED;
 
    if (num_samples == 0)
       return singlesample_mt;
@@ -779,7 +771,13 @@ intel_miptree_create_for_image_buffer(struct brw_context *intel,
    if (!singlesample_mt)
       return NULL;
 
-   intel_region_reference(&singlesample_mt->region, region);
+   /* If this miptree is capable of supporting fast color clears, set
+    * mcs_state appropriately to ensure that fast clears will occur.
+    * Allocation of the MCS miptree will be deferred until the first fast
+    * clear actually occurs.
+    */
+   if (intel_is_non_msrt_mcs_buffer_supported(intel, singlesample_mt))
+      singlesample_mt->fast_clear_state = INTEL_FAST_CLEAR_STATE_RESOLVED;
 
    if (num_samples == 0)
       return singlesample_mt;
@@ -796,8 +794,6 @@ intel_miptree_create_for_image_buffer(struct brw_context *intel,
 
    multisample_mt->singlesample_mt = singlesample_mt;
    multisample_mt->need_downsample = false;
-
-   intel_region_reference(&multisample_mt->region, region);
 
    if (intel->is_front_buffer_rendering && buffer_type == __DRI_IMAGE_BUFFER_FRONT) {
       intel_miptree_upsample(intel, multisample_mt);
@@ -825,12 +821,6 @@ intel_miptree_create_for_renderbuffer(struct brw_context *brw,
 
    if (brw_is_hiz_depth_format(brw, format)) {
       ok = intel_miptree_alloc_hiz(brw, mt);
-      if (!ok)
-         goto fail;
-   }
-
-   if (mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS) {
-      ok = intel_miptree_alloc_mcs(brw, mt, num_samples);
       if (!ok)
          goto fail;
    }
@@ -1247,7 +1237,6 @@ intel_miptree_alloc_mcs(struct brw_context *brw,
     *
     *     "The MCS surface must be stored as Tile Y."
     */
-   mt->mcs_state = INTEL_MCS_STATE_MSAA;
    mt->mcs_mt = intel_miptree_create(brw,
                                      mt->target,
                                      format,
@@ -1273,6 +1262,7 @@ intel_miptree_alloc_mcs(struct brw_context *brw,
    void *data = intel_miptree_map_raw(brw, mt->mcs_mt);
    memset(data, 0xff, mt->mcs_mt->region->bo->size);
    intel_miptree_unmap_raw(brw, mt->mcs_mt);
+   mt->fast_clear_state = INTEL_FAST_CLEAR_STATE_CLEAR;
 
    return mt->mcs_mt;
 }
@@ -1525,15 +1515,16 @@ void
 intel_miptree_resolve_color(struct brw_context *brw,
                             struct intel_mipmap_tree *mt)
 {
-   switch (mt->mcs_state) {
-   case INTEL_MCS_STATE_NONE:
-   case INTEL_MCS_STATE_MSAA:
-   case INTEL_MCS_STATE_RESOLVED:
+   switch (mt->fast_clear_state) {
+   case INTEL_FAST_CLEAR_STATE_NO_MCS:
+   case INTEL_FAST_CLEAR_STATE_RESOLVED:
       /* No resolve needed */
       break;
-   case INTEL_MCS_STATE_UNRESOLVED:
-   case INTEL_MCS_STATE_CLEAR:
-      brw_blorp_resolve_color(brw, mt);
+   case INTEL_FAST_CLEAR_STATE_UNRESOLVED:
+   case INTEL_FAST_CLEAR_STATE_CLEAR:
+      /* Fast color clear resolves only make sense for non-MSAA buffers. */
+      if (mt->msaa_layout == INTEL_MSAA_LAYOUT_NONE)
+         brw_blorp_resolve_color(brw, mt);
       break;
    }
 }
@@ -1544,9 +1535,9 @@ intel_miptree_resolve_color(struct brw_context *brw,
  * process or another miptree.
  *
  * Fast color clears are unsafe with shared buffers, so we need to resolve and
- * then discard the MCS buffer, if present.  We also set the mcs_state to
- * INTEL_MCS_STATE_NONE to ensure that no MCS buffer gets allocated in the
- * future.
+ * then discard the MCS buffer, if present.  We also set the fast_clear_state
+ * to INTEL_FAST_CLEAR_STATE_NO_MCS to ensure that no MCS buffer gets
+ * allocated in the future.
  */
 void
 intel_miptree_make_shareable(struct brw_context *brw,
@@ -1562,7 +1553,7 @@ intel_miptree_make_shareable(struct brw_context *brw,
    if (mt->mcs_mt) {
       intel_miptree_resolve_color(brw, mt);
       intel_miptree_release(&mt->mcs_mt);
-      mt->mcs_state = INTEL_MCS_STATE_NONE;
+      mt->fast_clear_state = INTEL_FAST_CLEAR_STATE_NO_MCS;
    }
 }
 

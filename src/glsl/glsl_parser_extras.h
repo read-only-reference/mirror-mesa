@@ -34,12 +34,6 @@
 #include <stdlib.h>
 #include "glsl_symbol_table.h"
 
-enum _mesa_glsl_parser_targets {
-   vertex_shader,
-   geometry_shader,
-   fragment_shader
-};
-
 struct gl_context;
 
 struct glsl_switch_state {
@@ -171,7 +165,7 @@ struct _mesa_glsl_parse_state {
 
    bool es_shader;
    unsigned language_version;
-   enum _mesa_glsl_parser_targets target;
+   gl_shader_type target;
 
    /**
     * Number of nested struct_specifier levels
@@ -361,9 +355,7 @@ struct _mesa_glsl_parse_state {
    /** Extensions supported by the OpenGL implementation. */
    const struct gl_extensions *extensions;
 
-   /** Shaders containing built-in functions that are used for linking. */
-   struct gl_shader *builtins_to_link[16];
-   unsigned num_builtins_to_link;
+   bool uses_builtin_functions;
 
    /**
     * For geometry shaders, size of the most recently seen input declaration
@@ -430,10 +422,11 @@ extern bool _mesa_glsl_process_extension(const char *name, YYLTYPE *name_locp,
 					 _mesa_glsl_parse_state *state);
 
 /**
- * Get the textual name of the specified shader target
+ * Get the textual name of the specified shader target (which is a
+ * gl_shader_type).
  */
 extern const char *
-_mesa_glsl_shader_target_name(enum _mesa_glsl_parser_targets target);
+_mesa_shader_type_to_string(unsigned target);
 
 
 #endif /* __cplusplus */
@@ -447,7 +440,7 @@ extern "C" {
 #endif
 
 extern const char *
-_mesa_glsl_shader_target_name(GLenum type);
+_mesa_shader_enum_to_string(GLenum type);
 
 extern int glcpp_preprocess(void *ctx, const char **shader, char **info_log,
                       const struct gl_extensions *extensions, struct gl_context *gl_ctx);

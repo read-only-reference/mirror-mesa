@@ -222,6 +222,7 @@ i915_get_param(struct pipe_screen *screen, enum pipe_cap cap)
    case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
+   case PIPE_CAP_TGSI_VS_LAYER:
        return 0;
 
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
@@ -422,7 +423,8 @@ static void
 i915_flush_frontbuffer(struct pipe_screen *screen,
                        struct pipe_resource *resource,
                        unsigned level, unsigned layer,
-                       void *winsys_drawable_handle)
+                       void *winsys_drawable_handle,
+                       struct pipe_box *sub_box)
 {
    /* XXX: Dummy right now. */
    (void)screen;
@@ -430,6 +432,7 @@ i915_flush_frontbuffer(struct pipe_screen *screen,
    (void)level;
    (void)layer;
    (void)winsys_drawable_handle;
+   (void)sub_box;
 }
 
 static void

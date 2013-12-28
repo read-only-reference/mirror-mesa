@@ -29,6 +29,7 @@
 #include "util/u_format.h"
 #include "util/u_memory.h"
 #include <errno.h>
+#include <inttypes.h>
 
 /* Same as resource_copy_region, except that both upsampling and downsampling are allowed. */
 static void r600_copy_region_with_blit(struct pipe_context *pipe,
@@ -253,7 +254,8 @@ static boolean r600_texture_get_handle(struct pipe_screen* screen,
 				       surface->tile_split,
 				       surface->stencil_tile_split,
 				       surface->mtilea,
-				       surface->level[0].pitch_bytes);
+				       surface->level[0].pitch_bytes,
+				       (surface->flags & RADEON_SURF_SCANOUT) != 0);
 
 	return rscreen->ws->buffer_get_handle(resource->buf,
 						surface->level[0].pitch_bytes, whandle);
@@ -268,7 +270,7 @@ static void r600_texture_destroy(struct pipe_screen *screen,
 	if (rtex->flushed_depth_texture)
 		pipe_resource_reference((struct pipe_resource **)&rtex->flushed_depth_texture, NULL);
 
-	pipe_resource_reference((struct pipe_resource**)&rtex->htile, NULL);
+	pipe_resource_reference((struct pipe_resource**)&rtex->htile_buffer, NULL);
 	if (rtex->cmask_buffer != &rtex->resource) {
 	    pipe_resource_reference((struct pipe_resource**)&rtex->cmask_buffer, NULL);
 	}
@@ -457,20 +459,61 @@ void r600_texture_init_cmask(struct r600_common_screen *rscreen,
 	}
 }
 
-static void r600_texture_allocate_htile(struct r600_common_screen *rscreen,
-					struct r600_texture *rtex)
+static unsigned si_texture_htile_alloc_size(struct r600_common_screen *rscreen,
+					    struct r600_texture *rtex)
+{
+	unsigned cl_width, cl_height, width, height;
+	unsigned slice_elements, slice_bytes, pipe_interleave_bytes, base_align;
+	unsigned num_pipes = rscreen->tiling_info.num_channels;
+
+	switch (num_pipes) {
+	case 2:
+		cl_width = 32;
+		cl_height = 32;
+		break;
+	case 4:
+		cl_width = 64;
+		cl_height = 32;
+		break;
+	case 8:
+		cl_width = 64;
+		cl_height = 64;
+		break;
+	case 16:
+		cl_width = 128;
+		cl_height = 64;
+		break;
+	default:
+		assert(0);
+		return 0;
+	}
+
+	width = align(rtex->surface.npix_x, cl_width * 8);
+	height = align(rtex->surface.npix_y, cl_height * 8);
+
+	slice_elements = (width * height) / (8 * 8);
+	slice_bytes = slice_elements * 4;
+
+	pipe_interleave_bytes = rscreen->tiling_info.group_bytes;
+	base_align = num_pipes * pipe_interleave_bytes;
+
+	return rtex->surface.array_size * align(slice_bytes, base_align);
+}
+
+static unsigned r600_texture_htile_alloc_size(struct r600_common_screen *rscreen,
+					      struct r600_texture *rtex)
 {
 	unsigned sw = rtex->surface.level[0].nblk_x * rtex->surface.blk_w;
 	unsigned sh = rtex->surface.level[0].nblk_y * rtex->surface.blk_h;
-	unsigned htile_size;
 	unsigned npipes = rscreen->info.r600_num_tile_pipes;
+	unsigned htile_size;
 
 	/* XXX also use it for other texture targets */
 	if (rscreen->info.drm_minor < 26 ||
 	    rtex->resource.b.b.target != PIPE_TEXTURE_2D ||
 	    rtex->surface.level[0].nblk_x < 32 ||
 	    rtex->surface.level[0].nblk_y < 32) {
-		return;
+		return 0;
 	}
 
 	/* this alignment and htile size only apply to linear htile buffer */
@@ -479,20 +522,36 @@ static void r600_texture_allocate_htile(struct r600_common_screen *rscreen,
 	htile_size = (sw >> 3) * (sh >> 3) * 4;
 	/* must be aligned with 2K * npipes */
 	htile_size = align(htile_size, (2 << 10) * npipes);
+	return htile_size;
+}
+
+static void r600_texture_allocate_htile(struct r600_common_screen *rscreen,
+					struct r600_texture *rtex)
+{
+	unsigned htile_size;
+	if (rscreen->chip_class >= SI) {
+		htile_size = si_texture_htile_alloc_size(rscreen, rtex);
+	} else {
+		htile_size = r600_texture_htile_alloc_size(rscreen, rtex);
+	}
+
+	if (!htile_size)
+		return;
 
 	/* XXX don't allocate it separately */
-	rtex->htile = (struct r600_resource*)pipe_buffer_create(&rscreen->b, PIPE_BIND_CUSTOM,
-								PIPE_USAGE_STATIC, htile_size);
-	if (rtex->htile == NULL) {
+	rtex->htile_buffer = (struct r600_resource*)
+			     pipe_buffer_create(&rscreen->b, PIPE_BIND_CUSTOM,
+						PIPE_USAGE_STATIC, htile_size);
+	if (rtex->htile_buffer == NULL) {
 		/* this is not a fatal error as we can still keep rendering
-		 * without htile buffer
-		 */
-		R600_ERR("r600: failed to create bo for htile buffers\n");
+		 * without htile buffer */
+		R600_ERR("Failed to create buffer object for htile buffer.\n");
 	} else {
-		r600_screen_clear_buffer(rscreen, &rtex->htile->b.b, 0, htile_size, 0);
+		r600_screen_clear_buffer(rscreen, &rtex->htile_buffer->b.b, 0, htile_size, 0);
 	}
 }
 
+/* Common processing for r600_texture_create and r600_texture_from_handle */
 static struct r600_texture *
 r600_texture_create_object(struct pipe_screen *screen,
 			   const struct pipe_resource *base,
@@ -503,7 +562,6 @@ r600_texture_create_object(struct pipe_screen *screen,
 	struct r600_texture *rtex;
 	struct r600_resource *resource;
 	struct r600_common_screen *rscreen = (struct r600_common_screen*)screen;
-	int r;
 
 	rtex = CALLOC_STRUCT(r600_texture);
 	if (rtex == NULL)
@@ -520,8 +578,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 	rtex->is_depth = util_format_has_depth(util_format_description(rtex->resource.b.b.format));
 
 	rtex->surface = *surface;
-	r = r600_setup_surface(screen, rtex, pitch_in_bytes_override);
-	if (r) {
+	if (r600_setup_surface(screen, rtex, pitch_in_bytes_override)) {
 		FREE(rtex);
 		return NULL;
 	}
@@ -531,27 +588,24 @@ r600_texture_create_object(struct pipe_screen *screen,
 	 * Applies to R600-Cayman. */
 	rtex->non_disp_tiling = rtex->is_depth && rtex->surface.level[0].mode >= RADEON_SURF_MODE_1D;
 
-	if (base->nr_samples > 1 && !rtex->is_depth && !buf) {
-		r600_texture_allocate_fmask(rscreen, rtex);
-		r600_texture_allocate_cmask(rscreen, rtex);
-		rtex->cmask_buffer = &rtex->resource;
-	}
+	if (rtex->is_depth) {
+		if (!(base->flags & (R600_RESOURCE_FLAG_TRANSFER |
+				     R600_RESOURCE_FLAG_FLUSHED_DEPTH)) &&
+		    !(rscreen->debug_flags & DBG_NO_HYPERZ)) {
 
-	if (!rtex->is_depth && base->nr_samples > 1 &&
-	    (!rtex->fmask.size || !rtex->cmask.size)) {
-		FREE(rtex);
-		return NULL;
-	}
-
-	if (rtex->is_depth &&
-	    !(base->flags & (R600_RESOURCE_FLAG_TRANSFER |
-			     R600_RESOURCE_FLAG_FLUSHED_DEPTH)) &&
-	    !(rscreen->debug_flags & DBG_NO_HYPERZ)) {
-		if (rscreen->chip_class >= SI) {
-			/* XXX implement Hyper-Z for SI.
-			 * Reuse the CMASK allocator, which is almost the same as HTILE. */
-		} else {
 			r600_texture_allocate_htile(rscreen, rtex);
+		}
+	} else {
+		if (base->nr_samples > 1) {
+			if (!buf) {
+				r600_texture_allocate_fmask(rscreen, rtex);
+				r600_texture_allocate_cmask(rscreen, rtex);
+				rtex->cmask_buffer = &rtex->resource;
+			}
+			if (!rtex->fmask.size || !rtex->cmask.size) {
+				FREE(rtex);
+				return NULL;
+			}
 		}
 	}
 
@@ -578,7 +632,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 	}
 
 	if (rscreen->debug_flags & DBG_VM) {
-		fprintf(stderr, "VM start=0x%llX  end=0x%llX | Texture %ix%ix%i, %i levels, %i samples, %s\n",
+		fprintf(stderr, "VM start=0x%"PRIu64"  end=0x%"PRIu64" | Texture %ix%ix%i, %i levels, %i samples, %s\n",
 			r600_resource_va(screen, &rtex->resource.b.b),
 			r600_resource_va(screen, &rtex->resource.b.b) + rtex->resource.buf->size,
 			base->width0, base->height0, util_max_layer(base, 0)+1, base->last_level+1,
@@ -597,7 +651,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 		       rtex->surface.bpe, rtex->surface.nsamples,
 		       rtex->surface.flags, util_format_short_name(base->format));
 		for (int i = 0; i <= rtex->surface.last_level; i++) {
-			printf("  L %i: offset=%llu, slice_size=%llu, npix_x=%u, "
+			printf("  L %i: offset=%"PRIu64", slice_size=%"PRIu64", npix_x=%u, "
 			       "npix_y=%u, npix_z=%u, nblk_x=%u, nblk_y=%u, "
 			       "nblk_z=%u, pitch_bytes=%u, mode=%u\n",
 			       i, rtex->surface.level[i].offset,
@@ -613,7 +667,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 		}
 		if (rtex->surface.flags & RADEON_SURF_SBUFFER) {
 			for (int i = 0; i <= rtex->surface.last_level; i++) {
-				printf("  S %i: offset=%llu, slice_size=%llu, npix_x=%u, "
+				printf("  S %i: offset=%"PRIu64", slice_size=%"PRIu64", npix_x=%u, "
 				       "npix_y=%u, npix_z=%u, nblk_x=%u, nblk_y=%u, "
 				       "nblk_z=%u, pitch_bytes=%u, mode=%u\n",
 				       i, rtex->surface.stencil_level[i].offset,
@@ -714,6 +768,7 @@ struct pipe_resource *r600_texture_from_handle(struct pipe_screen *screen,
 	unsigned array_mode;
 	enum radeon_bo_layout micro, macro;
 	struct radeon_surface surface;
+	bool scanout;
 	int r;
 
 	/* Support only 2D textures without mipmaps */
@@ -729,7 +784,7 @@ struct pipe_resource *r600_texture_from_handle(struct pipe_screen *screen,
 				       &surface.bankw, &surface.bankh,
 				       &surface.tile_split,
 				       &surface.stencil_tile_split,
-				       &surface.mtilea);
+				       &surface.mtilea, &scanout);
 
 	if (macro == RADEON_LAYOUT_TILED)
 		array_mode = RADEON_SURF_MODE_2D;
@@ -743,8 +798,7 @@ struct pipe_resource *r600_texture_from_handle(struct pipe_screen *screen,
 		return NULL;
 	}
 
-	/* always set the scanout flags on SI */
-	if (rscreen->chip_class >= SI)
+	if (scanout)
 		surface.flags |= RADEON_SURF_SCANOUT;
 
 	return (struct pipe_resource *)r600_texture_create_object(screen, templ,

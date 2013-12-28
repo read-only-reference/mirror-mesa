@@ -56,7 +56,7 @@ fs_visitor::visit(ir_variable *ir)
    if (variable_storage(ir))
       return;
 
-   if (ir->mode == ir_var_shader_in) {
+   if (ir->data.mode == ir_var_shader_in) {
       if (!strcmp(ir->name, "gl_FragCoord")) {
 	 reg = emit_fragcoord_interpolation(ir);
       } else if (!strcmp(ir->name, "gl_FrontFacing")) {
@@ -67,27 +67,27 @@ fs_visitor::visit(ir_variable *ir)
       assert(reg);
       hash_table_insert(this->variable_ht, reg, ir);
       return;
-   } else if (ir->mode == ir_var_shader_out) {
+   } else if (ir->data.mode == ir_var_shader_out) {
       reg = new(this->mem_ctx) fs_reg(this, ir->type);
 
-      if (ir->index > 0) {
-	 assert(ir->location == FRAG_RESULT_DATA0);
-	 assert(ir->index == 1);
+      if (ir->data.index > 0) {
+	 assert(ir->data.location == FRAG_RESULT_DATA0);
+	 assert(ir->data.index == 1);
 	 this->dual_src_output = *reg;
-      } else if (ir->location == FRAG_RESULT_COLOR) {
+      } else if (ir->data.location == FRAG_RESULT_COLOR) {
 	 /* Writing gl_FragColor outputs to all color regions. */
 	 for (unsigned int i = 0; i < MAX2(c->key.nr_color_regions, 1); i++) {
 	    this->outputs[i] = *reg;
 	    this->output_components[i] = 4;
 	 }
-      } else if (ir->location == FRAG_RESULT_DEPTH) {
+      } else if (ir->data.location == FRAG_RESULT_DEPTH) {
 	 this->frag_depth = *reg;
-      } else if (ir->location == FRAG_RESULT_SAMPLE_MASK) {
+      } else if (ir->data.location == FRAG_RESULT_SAMPLE_MASK) {
          this->sample_mask = *reg;
       } else {
 	 /* gl_FragData or a user-defined FS output */
-	 assert(ir->location >= FRAG_RESULT_DATA0 &&
-		ir->location < FRAG_RESULT_DATA0 + BRW_MAX_DRAW_BUFFERS);
+	 assert(ir->data.location >= FRAG_RESULT_DATA0 &&
+		ir->data.location < FRAG_RESULT_DATA0 + BRW_MAX_DRAW_BUFFERS);
 
 	 int vector_elements =
 	    ir->type->is_array() ? ir->type->fields.array->vector_elements
@@ -95,13 +95,13 @@ fs_visitor::visit(ir_variable *ir)
 
 	 /* General color output. */
 	 for (unsigned int i = 0; i < MAX2(1, ir->type->length); i++) {
-	    int output = ir->location - FRAG_RESULT_DATA0 + i;
+	    int output = ir->data.location - FRAG_RESULT_DATA0 + i;
 	    this->outputs[output] = *reg;
 	    this->outputs[output].reg_offset += vector_elements * i;
 	    this->output_components[output] = vector_elements;
 	 }
       }
-   } else if (ir->mode == ir_var_uniform) {
+   } else if (ir->data.mode == ir_var_uniform) {
       int param_index = c->prog_data.nr_params;
 
       /* Thanks to the lower_ubo_reference pass, we will see only
@@ -131,11 +131,13 @@ fs_visitor::visit(ir_variable *ir)
       reg = new(this->mem_ctx) fs_reg(UNIFORM, param_index);
       reg->type = brw_type_for_base_type(ir->type);
 
-   } else if (ir->mode == ir_var_system_value) {
-      if (ir->location == SYSTEM_VALUE_SAMPLE_POS) {
+   } else if (ir->data.mode == ir_var_system_value) {
+      if (ir->data.location == SYSTEM_VALUE_SAMPLE_POS) {
 	 reg = emit_samplepos_setup(ir);
-      } else if (ir->location == SYSTEM_VALUE_SAMPLE_ID) {
+      } else if (ir->data.location == SYSTEM_VALUE_SAMPLE_ID) {
 	 reg = emit_sampleid_setup(ir);
+      } else if (ir->data.location == SYSTEM_VALUE_SAMPLE_MASK_IN) {
+         reg = emit_samplemaskin_setup(ir);
       }
    }
 
@@ -382,18 +384,34 @@ fs_visitor::visit(ir_expression *ir)
       emit(MOV(this->result, op[0]));
       break;
    case ir_unop_sign:
-      temp = fs_reg(this, ir->type);
+      if (ir->type->is_float()) {
+         /* AND(val, 0x80000000) gives the sign bit.
+          *
+          * Predicated OR ORs 1.0 (0x3f800000) with the sign bit if val is not
+          * zero.
+          */
+         emit(CMP(reg_null_f, op[0], fs_reg(0.0f), BRW_CONDITIONAL_NZ));
 
-      emit(MOV(this->result, fs_reg(0.0f)));
+         op[0].type = BRW_REGISTER_TYPE_UD;
+         this->result.type = BRW_REGISTER_TYPE_UD;
+         emit(AND(this->result, op[0], fs_reg(0x80000000u)));
 
-      emit(CMP(reg_null_f, op[0], fs_reg(0.0f), BRW_CONDITIONAL_G));
-      inst = emit(MOV(this->result, fs_reg(1.0f)));
-      inst->predicate = BRW_PREDICATE_NORMAL;
+         inst = emit(OR(this->result, this->result, fs_reg(0x3f800000u)));
+         inst->predicate = BRW_PREDICATE_NORMAL;
 
-      emit(CMP(reg_null_f, op[0], fs_reg(0.0f), BRW_CONDITIONAL_L));
-      inst = emit(MOV(this->result, fs_reg(-1.0f)));
-      inst->predicate = BRW_PREDICATE_NORMAL;
+         this->result.type = BRW_REGISTER_TYPE_F;
+      } else {
+         /*  ASR(val, 31) -> negative val generates 0xffffffff (signed -1).
+          *               -> non-negative val generates 0x00000000.
+          *  Predicated OR sets 1 if val is positive.
+          */
+         emit(CMP(reg_null_d, op[0], fs_reg(0), BRW_CONDITIONAL_G));
 
+         emit(ASR(this->result, op[0], fs_reg(31)));
+
+         inst = emit(OR(this->result, this->result, fs_reg(1)));
+         inst->predicate = BRW_PREDICATE_NORMAL;
+      }
       break;
    case ir_unop_rcp:
       emit_math(SHADER_OPCODE_RCP, this->result, op[0]);
@@ -433,7 +451,7 @@ fs_visitor::visit(ir_expression *ir)
       break;
 
    case ir_binop_mul:
-      if (ir->type->is_integer()) {
+      if (brw->gen < 8 && ir->type->is_integer()) {
 	 /* For integer multiplication, the MUL uses the low 16 bits
 	  * of one of the operands (src0 on gen6, src1 on gen7).  The
 	  * MACH accumulates in the contribution of the upper 16 bits
@@ -1223,7 +1241,7 @@ fs_visitor::emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
 fs_inst *
 fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
                               fs_reg shadow_c, fs_reg lod, fs_reg lod2,
-                              fs_reg sample_index)
+                              fs_reg sample_index, fs_reg mcs)
 {
    int reg_width = dispatch_width / 8;
    bool header_present = false;
@@ -1322,11 +1340,8 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       emit(MOV(next.retype(BRW_REGISTER_TYPE_UD), sample_index));
       next.reg_offset++;
 
-      /* constant zero MCS; we arrange to never actually have a compressed
-       * multisample surface here for now. TODO: issue ld_mcs to get this first,
-       * if we ever support texturing from compressed multisample surfaces
-       */
-      emit(MOV(next.retype(BRW_REGISTER_TYPE_UD), fs_reg(0u)));
+      /* data from the multisample control surface */
+      emit(MOV(next.retype(BRW_REGISTER_TYPE_UD), mcs));
       next.reg_offset++;
 
       /* there is no offsetting for this message; just copy in the integer
@@ -1517,6 +1532,34 @@ fs_visitor::rescale_texcoord(ir_texture *ir, fs_reg coordinate,
    return coordinate;
 }
 
+/* Sample from the MCS surface attached to this multisample texture. */
+fs_reg
+fs_visitor::emit_mcs_fetch(ir_texture *ir, fs_reg coordinate, int sampler)
+{
+   int reg_width = dispatch_width / 8;
+   fs_reg payload = fs_reg(this, glsl_type::float_type);
+   fs_reg dest = fs_reg(this, glsl_type::uvec4_type);
+   fs_reg next = payload;
+
+   /* parameters are: u, v, r, lod; missing parameters are treated as zero */
+   for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
+      emit(MOV(next.retype(BRW_REGISTER_TYPE_D), coordinate));
+      coordinate.reg_offset++;
+      next.reg_offset++;
+   }
+
+   fs_inst *inst = emit(SHADER_OPCODE_TXF_MCS, dest, payload);
+   inst->base_mrf = -1;
+   inst->mlen = next.reg_offset * reg_width;
+   inst->header_present = false;
+   inst->regs_written = 4 * reg_width; /* we only care about one reg of response,
+                                        * but the sampler always writes 4/8
+                                        */
+   inst->sampler = sampler;
+
+   return dest;
+}
+
 void
 fs_visitor::visit(ir_texture *ir)
 {
@@ -1575,7 +1618,7 @@ fs_visitor::visit(ir_texture *ir)
       shadow_comparitor = this->result;
    }
 
-   fs_reg lod, lod2, sample_index;
+   fs_reg lod, lod2, sample_index, mcs;
    switch (ir->op) {
    case ir_tex:
    case ir_lod:
@@ -1602,6 +1645,11 @@ fs_visitor::visit(ir_texture *ir)
    case ir_txf_ms:
       ir->lod_info.sample_index->accept(this);
       sample_index = this->result;
+
+      if (brw->gen >= 7 && c->key.tex.compressed_multisample_layout_mask & (1<<sampler))
+         mcs = emit_mcs_fetch(ir, coordinate, sampler);
+      else
+         mcs = fs_reg(0u);
       break;
    default:
       assert(!"Unrecognized texture opcode");
@@ -1614,7 +1662,7 @@ fs_visitor::visit(ir_texture *ir)
 
    if (brw->gen >= 7) {
       inst = emit_texture_gen7(ir, dst, coordinate, shadow_comparitor,
-                               lod, lod2, sample_index);
+                               lod, lod2, sample_index, mcs);
    } else if (brw->gen >= 5) {
       inst = emit_texture_gen5(ir, dst, coordinate, shadow_comparitor,
                                lod, lod2, sample_index);
@@ -2135,50 +2183,18 @@ fs_visitor::visit(ir_if *ir)
 void
 fs_visitor::visit(ir_loop *ir)
 {
-   fs_reg counter = reg_undef;
-
    if (brw->gen < 6 && dispatch_width == 16) {
       fail("Can't support (non-uniform) control flow on 16-wide\n");
    }
 
-   if (ir->counter) {
-      this->base_ir = ir->counter;
-      ir->counter->accept(this);
-      counter = *(variable_storage(ir->counter));
-
-      if (ir->from) {
-	 this->base_ir = ir->from;
-	 ir->from->accept(this);
-
-	 emit(MOV(counter, this->result));
-      }
-   }
-
    this->base_ir = NULL;
    emit(BRW_OPCODE_DO);
-
-   if (ir->to) {
-      this->base_ir = ir->to;
-      ir->to->accept(this);
-
-      emit(CMP(reg_null_d, counter, this->result,
-               brw_conditional_for_comparison(ir->cmp)));
-
-      fs_inst *inst = emit(BRW_OPCODE_BREAK);
-      inst->predicate = BRW_PREDICATE_NORMAL;
-   }
 
    foreach_list(node, &ir->body_instructions) {
       ir_instruction *ir = (ir_instruction *)node;
 
       this->base_ir = ir;
       ir->accept(this);
-   }
-
-   if (ir->increment) {
-      this->base_ir = ir->increment;
-      ir->increment->accept(this);
-      emit(ADD(counter, counter, this->result));
    }
 
    this->base_ir = NULL;
@@ -2205,7 +2221,7 @@ fs_visitor::visit_atomic_counter_intrinsic(ir_call *ir)
       ir->actual_parameters.get_head());
    ir_variable *location = deref->variable_referenced();
    unsigned surf_index = (c->prog_data.base.binding_table.abo_start +
-                          location->atomic.buffer_index);
+                          location->data.atomic.buffer_index);
 
    /* Calculate the surface offset */
    fs_reg offset(this, glsl_type::uint_type);
@@ -2216,9 +2232,9 @@ fs_visitor::visit_atomic_counter_intrinsic(ir_call *ir)
 
       fs_reg tmp(this, glsl_type::uint_type);
       emit(MUL(tmp, this->result, ATOMIC_COUNTER_SIZE));
-      emit(ADD(offset, tmp, location->atomic.offset));
+      emit(ADD(offset, tmp, location->data.atomic.offset));
    } else {
-      offset = location->atomic.offset;
+      offset = location->data.atomic.offset;
    }
 
    /* Emit the appropriate machine instruction */

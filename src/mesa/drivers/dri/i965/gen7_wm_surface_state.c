@@ -291,7 +291,6 @@ gen7_update_texture_surface(struct gl_context *ctx,
 
    uint32_t tex_format = translate_tex_format(brw,
                                               mt->format,
-                                              tObj->DepthMode,
                                               sampler->sRGBDecode);
 
    if (for_gather && tex_format == BRW_SURFACEFORMAT_R32G32_FLOAT)
@@ -347,6 +346,11 @@ gen7_update_texture_surface(struct gl_context *ctx,
          SET_FIELD(brw_swizzle_to_scs(GET_SWZ(swizzle, 1), need_scs_green_to_blue), GEN7_SURFACE_SCS_G) |
          SET_FIELD(brw_swizzle_to_scs(GET_SWZ(swizzle, 2), need_scs_green_to_blue), GEN7_SURFACE_SCS_B) |
          SET_FIELD(brw_swizzle_to_scs(GET_SWZ(swizzle, 3), need_scs_green_to_blue), GEN7_SURFACE_SCS_A);
+   }
+
+   if (mt->mcs_mt) {
+      gen7_set_surface_mcs_info(brw, surf, *surf_offset,
+                                mt->mcs_mt, false /* is RT */);
    }
 
    /* Emit relocation to surface contents */

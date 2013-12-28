@@ -281,7 +281,6 @@ static void declare_input_fs(
 	attr_number = lp_build_const_int32(gallivm,
 					   shader->input[input_index].param_offset);
 
-	/* XXX: Handle all possible interpolation modes */
 	switch (decl->Interp.Interpolate) {
 	case TGSI_INTERPOLATE_COLOR:
 		if (si_shader_ctx->shader->key.ps.flatshade) {
@@ -875,7 +874,7 @@ static void si_llvm_emit_streamout(struct si_shader_context *shader)
 	lp_build_endif(&if_ctx);
 }
 
-/* XXX: This is partially implemented for VS only at this point.  It is not complete */
+
 static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 {
 	struct si_shader_context * si_shader_ctx = si_shader_context(bld_base);
@@ -889,7 +888,8 @@ static void si_llvm_emit_epilogue(struct lp_build_tgsi_context * bld_base)
 	LLVMValueRef pos_args[4][9] = { { 0 } };
 	unsigned semantic_name;
 	unsigned param_count = 0;
-	int depth_index = -1, stencil_index = -1;
+	int depth_index = -1, stencil_index = -1, psize_index = -1, edgeflag_index = -1;
+	int layer_index = -1;
 	int i;
 
 	if (si_shader_ctx->shader->selector->so.num_outputs) {
@@ -940,10 +940,20 @@ handle_semantic:
 			/* Select the correct target */
 			switch(semantic_name) {
 			case TGSI_SEMANTIC_PSIZE:
-				shader->vs_out_misc_write = 1;
-				shader->vs_out_point_size = 1;
-				target = V_008DFC_SQ_EXP_POS + 1;
-				break;
+				shader->vs_out_misc_write = true;
+				shader->vs_out_point_size = true;
+				psize_index = index;
+				continue;
+			case TGSI_SEMANTIC_EDGEFLAG:
+				shader->vs_out_misc_write = true;
+				shader->vs_out_edgeflag = true;
+				edgeflag_index = index;
+				continue;
+			case TGSI_SEMANTIC_LAYER:
+				shader->vs_out_misc_write = true;
+				shader->vs_out_layer = true;
+				layer_index = index;
+				continue;
 			case TGSI_SEMANTIC_POSITION:
 				if (si_shader_ctx->type == TGSI_PROCESSOR_VERTEX) {
 					target = V_008DFC_SQ_EXP_POS;
@@ -1004,6 +1014,7 @@ handle_semantic:
 				       args, sizeof(args));
 			} else if (si_shader_ctx->type == TGSI_PROCESSOR_FRAGMENT &&
 				   semantic_name == TGSI_SEMANTIC_COLOR) {
+				/* If there is an export instruction waiting to be emitted, do so now. */
 				if (last_args[0]) {
 					lp_build_intrinsic(base->gallivm->builder,
 							   "llvm.SI.export",
@@ -1011,14 +1022,27 @@ handle_semantic:
 							   last_args, 9);
 				}
 
+				/* This instruction will be emitted at the end of the shader. */
 				memcpy(last_args, args, sizeof(args));
+
+				/* Handle FS_COLOR0_WRITES_ALL_CBUFS. */
+				if (shader->fs_write_all && shader->output[i].sid == 0 &&
+				    si_shader_ctx->shader->key.ps.nr_cbufs > 1) {
+					for (int c = 1; c < si_shader_ctx->shader->key.ps.nr_cbufs; c++) {
+						si_llvm_init_export_args(bld_base, d, index,
+									 V_008DFC_SQ_EXP_MRT + c, args);
+						lp_build_intrinsic(base->gallivm->builder,
+								   "llvm.SI.export",
+								   LLVMVoidTypeInContext(base->gallivm->context),
+								   args, 9);
+					}
+				}
 			} else {
 				lp_build_intrinsic(base->gallivm->builder,
 						   "llvm.SI.export",
 						   LLVMVoidTypeInContext(base->gallivm->context),
 						   args, 9);
 			}
-
 		}
 
 		if (semantic_name == TGSI_SEMANTIC_CLIPDIST) {
@@ -1092,6 +1116,48 @@ handle_semantic:
 			pos_args[0][8] = base->one;  /* W */
 		}
 
+		/* Write the misc vector (point size, edgeflag, layer, viewport). */
+		if (shader->vs_out_misc_write) {
+			pos_args[1][0] = lp_build_const_int32(base->gallivm, /* writemask */
+							      shader->vs_out_point_size |
+							      (shader->vs_out_edgeflag << 1) |
+							      (shader->vs_out_layer << 2));
+			pos_args[1][1] = uint->zero; /* EXEC mask */
+			pos_args[1][2] = uint->zero; /* last export? */
+			pos_args[1][3] = lp_build_const_int32(base->gallivm, V_008DFC_SQ_EXP_POS + 1);
+			pos_args[1][4] = uint->zero; /* COMPR flag */
+			pos_args[1][5] = base->zero; /* X */
+			pos_args[1][6] = base->zero; /* Y */
+			pos_args[1][7] = base->zero; /* Z */
+			pos_args[1][8] = base->zero; /* W */
+
+			if (shader->vs_out_point_size) {
+				pos_args[1][5] = LLVMBuildLoad(base->gallivm->builder,
+					si_shader_ctx->radeon_bld.soa.outputs[psize_index][0], "");
+			}
+
+			if (shader->vs_out_edgeflag) {
+				LLVMValueRef output = LLVMBuildLoad(base->gallivm->builder,
+					si_shader_ctx->radeon_bld.soa.outputs[edgeflag_index][0], "");
+
+				/* The output is a float, but the hw expects an integer
+				 * with the first bit containing the edge flag. */
+				output = LLVMBuildFPToUI(base->gallivm->builder, output,
+							 bld_base->uint_bld.elem_type, "");
+
+				output = lp_build_min(&bld_base->int_bld, output, bld_base->int_bld.one);
+
+				/* The LLVM intrinsic expects a float. */
+				pos_args[1][6] = LLVMBuildBitCast(base->gallivm->builder, output,
+								  base->elem_type, "");
+			}
+
+			if (shader->vs_out_layer) {
+				pos_args[1][7] = LLVMBuildLoad(base->gallivm->builder,
+					si_shader_ctx->radeon_bld.soa.outputs[layer_index][0], "");
+			}
+		}
+
 		for (i = 0; i < 4; i++)
 			if (pos_args[i][0])
 				shader->nr_pos_exports++;
@@ -1137,31 +1203,6 @@ handle_semantic:
 		/* Specify whether the EXEC mask represents the valid mask */
 		last_args[1] = uint->one;
 
-		if (shader->fs_write_all && shader->nr_cbufs > 1) {
-			int i;
-
-			/* Specify that this is not yet the last export */
-			last_args[2] = lp_build_const_int32(base->gallivm, 0);
-
-			for (i = 1; i < shader->nr_cbufs; i++) {
-				/* Specify the target we are exporting */
-				last_args[3] = lp_build_const_int32(base->gallivm,
-								    V_008DFC_SQ_EXP_MRT + i);
-
-				lp_build_intrinsic(base->gallivm->builder,
-						   "llvm.SI.export",
-						   LLVMVoidTypeInContext(base->gallivm->context),
-						   last_args, 9);
-
-				si_shader_ctx->shader->spi_shader_col_format |=
-					si_shader_ctx->shader->spi_shader_col_format << 4;
-				si_shader_ctx->shader->cb_shader_mask |=
-					si_shader_ctx->shader->cb_shader_mask << 4;
-			}
-
-			last_args[3] = lp_build_const_int32(base->gallivm, V_008DFC_SQ_EXP_MRT);
-		}
-
 		/* Specify that this is the last export */
 		last_args[2] = lp_build_const_int32(base->gallivm, 1);
 
@@ -1170,8 +1211,6 @@ handle_semantic:
 				   LLVMVoidTypeInContext(base->gallivm->context),
 				   last_args, 9);
 	}
-/* XXX: Look up what this function does */
-/*		ctx->shader->output[i].spi_sid = r600_spi_sid(&ctx->shader->output[i]);*/
 }
 
 static const struct lp_build_tgsi_action txf_action;
@@ -1980,8 +2019,6 @@ int si_pipe_shader_create(
 	preload_constants(&si_shader_ctx);
 	preload_samplers(&si_shader_ctx);
 	preload_streamout_buffers(&si_shader_ctx);
-
-	shader->shader.nr_cbufs = rctx->framebuffer.nr_cbufs;
 
 	/* Dump TGSI code before doing TGSI->LLVM conversion in case the
 	 * conversion fails. */

@@ -112,6 +112,10 @@ upload_wm_state(struct brw_context *brw)
       dw2 |= GEN7_WM_MSDISPMODE_PERSAMPLE;
    }
 
+   if (fp->program.Base.SystemValuesRead & SYSTEM_BIT_SAMPLE_MASK_IN) {
+      dw1 |= GEN7_WM_USES_INPUT_COVERAGE_MASK;
+   }
+
    BEGIN_BATCH(3);
    OUT_BATCH(_3DSTATE_WM << 16 | (3 - 2));
    OUT_BATCH(dw1);
@@ -173,8 +177,11 @@ upload_ps_state(struct brw_context *brw)
    if (ctx->Shader.CurrentFragmentProgram == NULL)
       dw2 |= GEN7_PS_FLOATING_POINT_MODE_ALT;
 
+   /* Haswell requires the sample mask to be set in this packet as well as
+    * in 3DSTATE_SAMPLE_MASK; the values should match. */
+   /* _NEW_BUFFERS, _NEW_MULTISAMPLE */
    if (brw->is_haswell)
-      dw4 |= SET_FIELD(1, HSW_PS_SAMPLE_MASK); /* 1 sample for now */
+      dw4 |= SET_FIELD(gen6_determine_sample_mask(brw), HSW_PS_SAMPLE_MASK);
 
    dw4 |= (brw->max_wm_threads - 1) << max_threads_shift;
 
@@ -274,7 +281,9 @@ upload_ps_state(struct brw_context *brw)
 const struct brw_tracked_state gen7_ps_state = {
    .dirty = {
       .mesa  = (_NEW_PROGRAM_CONSTANTS |
-		_NEW_COLOR),
+		_NEW_COLOR |
+                _NEW_BUFFERS |
+                _NEW_MULTISAMPLE),
       .brw   = (BRW_NEW_FRAGMENT_PROGRAM |
 		BRW_NEW_PS_BINDING_TABLE |
 		BRW_NEW_BATCH |

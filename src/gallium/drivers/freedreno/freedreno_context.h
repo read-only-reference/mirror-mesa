@@ -37,6 +37,8 @@
 #include "util/u_string.h"
 
 #include "freedreno_screen.h"
+#include "freedreno_gmem.h"
+#include "freedreno_util.h"
 
 struct fd_vertex_stateobj;
 
@@ -78,15 +80,6 @@ struct fd_vertexbuf_stateobj {
 struct fd_vertex_stateobj {
 	struct pipe_vertex_element pipe[PIPE_MAX_ATTRIBS];
 	unsigned num_elements;
-};
-
-struct fd_gmem_stateobj {
-	struct pipe_scissor_state scissor;
-	uint cpp;
-	uint16_t minx, miny;
-	uint16_t bin_h, nbins_y;
-	uint16_t bin_w, nbins_x;
-	uint16_t width, height;
 };
 
 struct fd_context {
@@ -158,6 +151,20 @@ struct fd_context {
 	struct fd_ringbuffer *ring;
 	struct fd_ringmarker *draw_start, *draw_end;
 
+	/* Keep track if WAIT_FOR_IDLE is needed for registers we need
+	 * to update via RMW:
+	 */
+	struct {
+		bool need_wfi;
+		/* note: would be nicer to have in fd3_context, fd2_context,
+		 * etc, because the registered modified via RMR differ across
+		 * generation.  But as long as it is a small set of registers
+		 * that might be more hassle than it's worth.
+		 */
+		/* state for RB_RENDER_CONTROL: */
+		uint32_t rbrc_draw;
+	} rmw;
+
 	struct pipe_scissor_state scissor;
 
 	/* we don't have a disable/enable bit for scissor, so instead we keep
@@ -176,6 +183,8 @@ struct fd_context {
 	 * if out of date with current maximal-scissor/cpp:
 	 */
 	struct fd_gmem_stateobj gmem;
+	struct fd_vsc_pipe      pipe[8];
+	struct fd_tile          tile[64];
 
 	/* which state objects need to be re-emit'd: */
 	enum {
@@ -221,14 +230,10 @@ struct fd_context {
 
 	/* GMEM/tile handling fxns: */
 	void (*emit_tile_init)(struct fd_context *ctx);
-	void (*emit_tile_prep)(struct fd_context *ctx, uint32_t xoff, uint32_t yoff,
-			uint32_t bin_w, uint32_t bin_h);
-	void (*emit_tile_mem2gmem)(struct fd_context *ctx, uint32_t xoff, uint32_t yoff,
-			uint32_t bin_w, uint32_t bin_h);
-	void (*emit_tile_renderprep)(struct fd_context *ctx, uint32_t xoff, uint32_t yoff,
-			uint32_t bin_w, uint32_t bin_h);
-	void (*emit_tile_gmem2mem)(struct fd_context *ctx, uint32_t xoff, uint32_t yoff,
-			uint32_t bin_w, uint32_t bin_h);
+	void (*emit_tile_prep)(struct fd_context *ctx, struct fd_tile *tile);
+	void (*emit_tile_mem2gmem)(struct fd_context *ctx, struct fd_tile *tile);
+	void (*emit_tile_renderprep)(struct fd_context *ctx, struct fd_tile *tile);
+	void (*emit_tile_gmem2mem)(struct fd_context *ctx, struct fd_tile *tile);
 
 	/* optional, for GMEM bypass: */
 	void (*emit_sysmem_prep)(struct fd_context *ctx);
@@ -257,6 +262,23 @@ static INLINE bool
 fd_supported_prim(struct fd_context *ctx, unsigned prim)
 {
 	return (1 << prim) & ctx->primtype_mask;
+}
+
+static INLINE void
+fd_reset_rmw_state(struct fd_context *ctx)
+{
+	ctx->rmw.need_wfi = true;
+	ctx->rmw.rbrc_draw = ~0;
+}
+
+/* emit before a RMW a WAIT_FOR_IDLE only if needed: */
+static inline void
+fd_rmw_wfi(struct fd_context *ctx, struct fd_ringbuffer *ring)
+{
+	if (ctx->rmw.need_wfi) {
+		OUT_WFI(ring);
+		ctx->rmw.need_wfi = false;
+	}
 }
 
 struct pipe_context * fd_context_init(struct fd_context *ctx,

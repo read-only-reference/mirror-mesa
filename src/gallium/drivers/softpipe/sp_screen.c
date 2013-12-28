@@ -186,6 +186,8 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_ENDIANNESS:
       return PIPE_ENDIAN_NATIVE;
+   case PIPE_CAP_TGSI_VS_LAYER:
+      return 0;
    }
    /* should only get here on unhandled cases */
    debug_printf("Unexpected PIPE_CAP %d query\n", param);
@@ -367,7 +369,8 @@ static void
 softpipe_flush_frontbuffer(struct pipe_screen *_screen,
                            struct pipe_resource *resource,
                            unsigned level, unsigned layer,
-                           void *context_private)
+                           void *context_private,
+                           struct pipe_box *sub_box)
 {
    struct softpipe_screen *screen = softpipe_screen(_screen);
    struct sw_winsys *winsys = screen->winsys;
@@ -375,7 +378,7 @@ softpipe_flush_frontbuffer(struct pipe_screen *_screen,
 
    assert(texture->dt);
    if (texture->dt)
-      winsys->displaytarget_display(winsys, texture->dt, context_private);
+      winsys->displaytarget_display(winsys, texture->dt, context_private, sub_box);
 }
 
 static uint64_t

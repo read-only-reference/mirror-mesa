@@ -184,6 +184,7 @@ ALU1(CBIT)
 ALU3(MAD)
 ALU2(ADDC)
 ALU2(SUBB)
+ALU2(SEL)
 
 /** Gen4 predicated IF. */
 fs_inst *
@@ -766,6 +767,7 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
    case SHADER_OPCODE_TXD:
    case SHADER_OPCODE_TXF:
    case SHADER_OPCODE_TXF_MS:
+   case SHADER_OPCODE_TXF_MCS:
    case SHADER_OPCODE_TG4:
    case SHADER_OPCODE_TG4_OFFSET:
    case SHADER_OPCODE_TXL:
@@ -950,10 +952,10 @@ fs_visitor::emit_fragcoord_interpolation(ir_variable *ir)
 {
    fs_reg *reg = new(this->mem_ctx) fs_reg(this, ir->type);
    fs_reg wpos = *reg;
-   bool flip = !ir->origin_upper_left ^ c->key.render_to_fbo;
+   bool flip = !ir->data.origin_upper_left ^ c->key.render_to_fbo;
 
    /* gl_FragCoord.x */
-   if (ir->pixel_center_integer) {
+   if (ir->data.pixel_center_integer) {
       emit(MOV(wpos, this->pixel_x));
    } else {
       emit(ADD(wpos, this->pixel_x, fs_reg(0.5f)));
@@ -961,11 +963,11 @@ fs_visitor::emit_fragcoord_interpolation(ir_variable *ir)
    wpos.reg_offset++;
 
    /* gl_FragCoord.y */
-   if (!flip && ir->pixel_center_integer) {
+   if (!flip && ir->data.pixel_center_integer) {
       emit(MOV(wpos, this->pixel_y));
    } else {
       fs_reg pixel_y = this->pixel_y;
-      float offset = (ir->pixel_center_integer ? 0.0 : 0.5);
+      float offset = (ir->data.pixel_center_integer ? 0.0 : 0.5);
 
       if (flip) {
 	 pixel_y.negate = true;
@@ -1047,7 +1049,7 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
    glsl_interp_qualifier interpolation_mode =
       ir->determine_interpolation_mode(c->key.flat_shade);
 
-   int location = ir->location;
+   int location = ir->data.location;
    for (unsigned int i = 0; i < array_elements; i++) {
       for (unsigned int j = 0; j < type->matrix_columns; j++) {
 	 if (c->prog_data.urb_setup[location] == -1) {
@@ -1082,8 +1084,8 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
 		*/
                struct brw_reg interp = interp_reg(location, k);
                emit_linterp(attr, fs_reg(interp), interpolation_mode,
-                            ir->centroid);
-               if (brw->needs_unlit_centroid_workaround && ir->centroid) {
+                            ir->data.centroid);
+               if (brw->needs_unlit_centroid_workaround && ir->data.centroid) {
                   /* Get the pixel/sample mask into f0 so that we know
                    * which pixels are lit.  Then, for each channel that is
                    * unlit, replace the centroid data with non-centroid
@@ -1250,6 +1252,16 @@ fs_visitor::emit_sampleid_setup(ir_variable *ir)
       emit(BRW_OPCODE_MOV, *reg, fs_reg(0));
    }
 
+   return reg;
+}
+
+fs_reg *
+fs_visitor::emit_samplemaskin_setup(ir_variable *ir)
+{
+   assert(brw->gen >= 7);
+   this->current_annotation = "compute gl_SampleMaskIn";
+   fs_reg *reg = new(this->mem_ctx) fs_reg(this, ir->type);
+   emit(MOV(*reg, fs_reg(retype(brw_vec8_grf(c->sample_mask_reg, 0), BRW_REGISTER_TYPE_D))));
    return reg;
 }
 
@@ -2241,12 +2253,12 @@ fs_visitor::dead_code_eliminate_local()
 }
 
 /**
- * Implements a second type of register coalescing: This one checks if
- * the two regs involved in a raw move don't interfere, in which case
- * they can both by stored in the same place and the MOV removed.
+ * Implements register coalescing: Checks if the two registers involved in a
+ * raw move don't interfere, in which case they can both be stored in the same
+ * place and the MOV removed.
  */
 bool
-fs_visitor::register_coalesce_2()
+fs_visitor::register_coalesce()
 {
    bool progress = false;
 
@@ -2271,7 +2283,8 @@ fs_visitor::register_coalesce_2()
       int var_from = live_intervals->var_from_reg(&inst->src[0]);
       int var_to = live_intervals->var_from_reg(&inst->dst);
 
-      if (live_intervals->vars_interfere(var_from, var_to))
+      if (live_intervals->vars_interfere(var_from, var_to) &&
+          !inst->dst.equals(inst->src[0]))
          continue;
 
       int reg_from = inst->src[0].reg;
@@ -2306,152 +2319,6 @@ fs_visitor::register_coalesce_2()
 
    return progress;
 }
-
-bool
-fs_visitor::register_coalesce()
-{
-   bool progress = false;
-   int if_depth = 0;
-   int loop_depth = 0;
-
-   foreach_list_safe(node, &this->instructions) {
-      fs_inst *inst = (fs_inst *)node;
-
-      /* Make sure that we dominate the instructions we're going to
-       * scan for interfering with our coalescing, or we won't have
-       * scanned enough to see if anything interferes with our
-       * coalescing.  We don't dominate the following instructions if
-       * we're in a loop or an if block.
-       */
-      switch (inst->opcode) {
-      case BRW_OPCODE_DO:
-	 loop_depth++;
-	 break;
-      case BRW_OPCODE_WHILE:
-	 loop_depth--;
-	 break;
-      case BRW_OPCODE_IF:
-	 if_depth++;
-	 break;
-      case BRW_OPCODE_ENDIF:
-	 if_depth--;
-	 break;
-      default:
-	 break;
-      }
-      if (loop_depth || if_depth)
-	 continue;
-
-      if (inst->opcode != BRW_OPCODE_MOV ||
-	  inst->is_partial_write() ||
-	  inst->saturate ||
-	  inst->dst.file != GRF || (inst->src[0].file != GRF &&
-				    inst->src[0].file != UNIFORM)||
-	  inst->dst.type != inst->src[0].type)
-	 continue;
-
-      bool has_source_modifiers = (inst->src[0].abs ||
-                                   inst->src[0].negate ||
-                                   inst->src[0].smear != -1 ||
-                                   inst->src[0].file == UNIFORM);
-
-      /* Found a move of a GRF to a GRF.  Let's see if we can coalesce
-       * them: check for no writes to either one until the exit of the
-       * program.
-       */
-      bool interfered = false;
-
-      for (fs_inst *scan_inst = (fs_inst *)inst->next;
-	   !scan_inst->is_tail_sentinel();
-	   scan_inst = (fs_inst *)scan_inst->next) {
-	 if (scan_inst->dst.file == GRF) {
-	    if (scan_inst->overwrites_reg(inst->dst) ||
-                scan_inst->overwrites_reg(inst->src[0])) {
-	       interfered = true;
-	       break;
-	    }
-	 }
-
-         if (has_source_modifiers) {
-            for (int i = 0; i < 3; i++) {
-               if (scan_inst->src[i].file == GRF &&
-                   scan_inst->src[i].reg == inst->dst.reg &&
-                   scan_inst->src[i].reg_offset == inst->dst.reg_offset &&
-                   inst->dst.type != scan_inst->src[i].type)
-               {
-                 interfered = true;
-                 break;
-               }
-            }
-         }
-
-
-	 /* The gen6 MATH instruction can't handle source modifiers or
-	  * unusual register regions, so avoid coalescing those for
-	  * now.  We should do something more specific.
-	  */
-	 if (has_source_modifiers && !can_do_source_mods(scan_inst)) {
-            interfered = true;
-	    break;
-	 }
-
-	 if (scan_inst->mlen > 0 && scan_inst->base_mrf == -1 &&
-	     scan_inst->src[0].file == GRF &&
-	     scan_inst->src[0].reg == inst->dst.reg) {
-	    interfered = true;
-	    break;
-	 }
-
-	 /* The accumulator result appears to get used for the
-	  * conditional modifier generation.  When negating a UD
-	  * value, there is a 33rd bit generated for the sign in the
-	  * accumulator value, so now you can't check, for example,
-	  * equality with a 32-bit value.  See piglit fs-op-neg-uint.
-	  */
-	 if (scan_inst->conditional_mod &&
-	     inst->src[0].negate &&
-	     inst->src[0].type == BRW_REGISTER_TYPE_UD) {
-	    interfered = true;
-	    break;
-	 }
-      }
-      if (interfered) {
-	 continue;
-      }
-
-      /* Rewrite the later usage to point at the source of the move to
-       * be removed.
-       */
-      for (fs_inst *scan_inst = inst;
-	   !scan_inst->is_tail_sentinel();
-	   scan_inst = (fs_inst *)scan_inst->next) {
-	 for (int i = 0; i < 3; i++) {
-	    if (scan_inst->src[i].file == GRF &&
-		scan_inst->src[i].reg == inst->dst.reg &&
-		scan_inst->src[i].reg_offset == inst->dst.reg_offset) {
-	       fs_reg new_src = inst->src[0];
-               new_src.type = scan_inst->src[i].type;
-               if (scan_inst->src[i].abs) {
-                  new_src.negate = 0;
-                  new_src.abs = 1;
-               }
-	       new_src.negate ^= scan_inst->src[i].negate;
-	       new_src.sechalf = scan_inst->src[i].sechalf;
-	       scan_inst->src[i] = new_src;
-	    }
-	 }
-      }
-
-      inst->remove();
-      progress = true;
-   }
-
-   if (progress)
-      invalidate_live_intervals();
-
-   return progress;
-}
-
 
 bool
 fs_visitor::compute_to_mrf()
@@ -2976,7 +2843,7 @@ fs_visitor::dump_instruction(backend_instruction *be_inst)
    if (inst->saturate)
       printf(".sat");
    if (inst->conditional_mod) {
-      printf(".cmod");
+      printf("%s", conditional_modifier[inst->conditional_mod]);
       if (!inst->predicate &&
           (brw->gen < 5 || (inst->opcode != BRW_OPCODE_SEL &&
                               inst->opcode != BRW_OPCODE_IF &&
@@ -3003,7 +2870,29 @@ fs_visitor::dump_instruction(backend_instruction *be_inst)
       printf("***u%d***", inst->dst.reg);
       break;
    case HW_REG:
-      printf("hw_reg%d", inst->dst.fixed_hw_reg.nr);
+      if (inst->dst.fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE) {
+         switch (inst->dst.fixed_hw_reg.nr) {
+         case BRW_ARF_NULL:
+            printf("null");
+            break;
+         case BRW_ARF_ADDRESS:
+            printf("a0.%d", inst->dst.fixed_hw_reg.subnr);
+            break;
+         case BRW_ARF_ACCUMULATOR:
+            printf("acc%d", inst->dst.fixed_hw_reg.subnr);
+            break;
+         case BRW_ARF_FLAG:
+            printf("f%d.%d", inst->dst.fixed_hw_reg.nr & 0xf,
+                             inst->dst.fixed_hw_reg.subnr);
+            break;
+         default:
+            printf("arf%d.%d", inst->dst.fixed_hw_reg.nr & 0xf,
+                               inst->dst.fixed_hw_reg.subnr);
+            break;
+         }
+      } else {
+         printf("hw_reg%d", inst->dst.fixed_hw_reg.nr);
+      }
       if (inst->dst.fixed_hw_reg.subnr)
          printf("+%d", inst->dst.fixed_hw_reg.subnr);
       break;
@@ -3011,9 +2900,9 @@ fs_visitor::dump_instruction(backend_instruction *be_inst)
       printf("???");
       break;
    }
-   printf(", ");
+   printf(":%s, ", reg_encoding[inst->dst.type]);
 
-   for (int i = 0; i < 3; i++) {
+   for (int i = 0; i < 3 && inst->src[i].file != BAD_FILE; i++) {
       if (inst->src[i].negate)
          printf("-");
       if (inst->src[i].abs)
@@ -3056,7 +2945,29 @@ fs_visitor::dump_instruction(backend_instruction *be_inst)
             printf("-");
          if (inst->src[i].fixed_hw_reg.abs)
             printf("|");
-         printf("hw_reg%d", inst->src[i].fixed_hw_reg.nr);
+         if (inst->src[i].fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE) {
+            switch (inst->src[i].fixed_hw_reg.nr) {
+            case BRW_ARF_NULL:
+               printf("null");
+               break;
+            case BRW_ARF_ADDRESS:
+               printf("a0.%d", inst->src[i].fixed_hw_reg.subnr);
+               break;
+            case BRW_ARF_ACCUMULATOR:
+               printf("acc%d", inst->src[i].fixed_hw_reg.subnr);
+               break;
+            case BRW_ARF_FLAG:
+               printf("f%d.%d", inst->src[i].fixed_hw_reg.nr & 0xf,
+                                inst->src[i].fixed_hw_reg.subnr);
+               break;
+            default:
+               printf("arf%d.%d", inst->src[i].fixed_hw_reg.nr & 0xf,
+                                  inst->src[i].fixed_hw_reg.subnr);
+               break;
+            }
+         } else {
+            printf("hw_reg%d", inst->src[i].fixed_hw_reg.nr);
+         }
          if (inst->src[i].fixed_hw_reg.subnr)
             printf("+%d", inst->src[i].fixed_hw_reg.subnr);
          if (inst->src[i].fixed_hw_reg.abs)
@@ -3069,7 +2980,11 @@ fs_visitor::dump_instruction(backend_instruction *be_inst)
       if (inst->src[i].abs)
          printf("|");
 
-      if (i < 3)
+      if (inst->src[i].file != IMM) {
+         printf(":%s", reg_encoding[inst->src[i].type]);
+      }
+
+      if (i < 2 && inst->src[i + 1].file != BAD_FILE)
          printf(", ");
    }
 
@@ -3168,7 +3083,18 @@ fs_visitor::setup_payload_gen6()
       c->nr_payload_regs++;
    }
 
-   /* R32-: bary for 32-pixel. */
+   /* R32: MSAA input coverage mask */
+   if (fp->Base.SystemValuesRead & SYSTEM_BIT_SAMPLE_MASK_IN) {
+      assert(brw->gen >= 7);
+      c->sample_mask_reg = c->nr_payload_regs;
+      c->nr_payload_regs++;
+      if (dispatch_width == 16) {
+         /* R33: input coverage mask if not 8-wide. */
+         c->nr_payload_regs++;
+      }
+   }
+
+   /* R34-: bary for 32-pixel. */
    /* R58-59: interp W for 32-pixel. */
 
    if (fp->Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_DEPTH)) {
@@ -3267,11 +3193,12 @@ fs_visitor::run()
 	 progress = opt_algebraic() || progress;
 	 progress = opt_cse() || progress;
 	 progress = opt_copy_propagate() || progress;
+         progress = opt_peephole_sel() || progress;
+         progress = opt_peephole_predicated_break() || progress;
 	 progress = dead_code_eliminate() || progress;
 	 progress = dead_code_eliminate_local() || progress;
          progress = dead_control_flow_eliminate(this) || progress;
-	 progress = register_coalesce() || progress;
-	 progress = register_coalesce_2() || progress;
+         progress = register_coalesce() || progress;
 	 progress = compute_to_mrf() || progress;
       } while (progress);
 

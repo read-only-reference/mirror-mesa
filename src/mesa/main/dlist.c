@@ -470,6 +470,10 @@ typedef enum
  * Each instruction in the display list is stored as a sequence of
  * contiguous nodes in memory.
  * Each node is the union of a variety of data types.
+ *
+ * Note, all of these members should be 4 bytes in size or less for the
+ * sake of compact display lists.  We store 8-byte pointers in a pair of
+ * these nodes using the save/get_pointer() functions below.
  */
 union gl_dlist_node
 {
@@ -484,12 +488,59 @@ union gl_dlist_node
    GLenum e;
    GLfloat f;
    GLsizei si;
-   GLvoid *data;
-   void *next;                  /* If prev node's opcode==OPCODE_CONTINUE */
 };
 
 
 typedef union gl_dlist_node Node;
+
+
+/** How many 4-byte dwords to store a pointer */
+#define POINTER_DWORDS (sizeof(void *) / 4)
+
+/* We want to keep sizeof(union gl_dlist_node) == 4 to minimize
+ * space for display lists.  The following types and functions are
+ * used to help store 4- and 8-byte pointers in 1 or 2 dlist_nodes.
+ */
+union pointer
+{
+   void *ptr;
+   GLuint dwords[POINTER_DWORDS];
+};
+
+
+/**
+ * Save a 4 or 8-byte pointer at dest (and dest+1).
+ */
+static inline void
+save_pointer(union gl_dlist_node *dest, void *src)
+{
+   union pointer p;
+   unsigned i;
+
+   STATIC_ASSERT(POINTER_DWORDS == 1 || POINTER_DWORDS == 2);
+   STATIC_ASSERT(sizeof(union gl_dlist_node) == 4);
+
+   p.ptr = src;
+
+   for (i = 0; i < POINTER_DWORDS; i++)
+      dest[i].ui = p.dwords[i];
+}
+
+
+/**
+ * Retrieve a 4 or 8-byte pointer from node (node+1).
+ */
+static inline void *
+get_pointer(const union gl_dlist_node *node)
+{
+   union pointer p;
+   unsigned i;
+
+   for (i = 0; i < POINTER_DWORDS; i++)
+      p.dwords[i] = node[i].ui;
+
+   return p.ptr;
+}
 
 
 /**
@@ -504,9 +555,9 @@ union uint64_pair
 
 
 /**
- * How many nodes to allocate at a time.
- *
- * \note Reduced now that we hold vertices etc. elsewhere.
+ * How many nodes to allocate at a time.  Note that bulk vertex data
+ * from glBegin/glVertex/glEnd primitives will typically wind up in
+ * a VBO, and not directly in the display list itself.
  */
 #define BLOCK_SIZE 256
 
@@ -522,14 +573,9 @@ static GLuint InstSize[OPCODE_END_OF_LIST + 1];
 void mesa_print_display_list(GLuint list);
 
 
-/**********************************************************************/
-/*****                           Private                          *****/
-/**********************************************************************/
-
-
 /**
- * Make an empty display list.  This is used by glGenLists() to
- * reserve display list IDs.
+ * Allocate a gl_display_list object with an initial block of storage.
+ * \param count  how many display list nodes/tokes to allocate
  */
 static struct gl_display_list *
 make_list(GLuint name, GLuint count)
@@ -621,75 +667,75 @@ _mesa_delete_list(struct gl_context *ctx, struct gl_display_list *dlist)
          switch (opcode) {
             /* for some commands, we need to free malloc'd memory */
          case OPCODE_MAP1:
-            free(n[6].data);
+            free(get_pointer(&n[6]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_MAP2:
-            free(n[10].data);
+            free(get_pointer(&n[10]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_DRAW_PIXELS:
-            free(n[5].data);
+            free(get_pointer(&n[5]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_BITMAP:
-            free(n[7].data);
+            free(get_pointer(&n[7]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_POLYGON_STIPPLE:
-            free(n[1].data);
+            free(get_pointer(&n[1]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_TEX_IMAGE1D:
-            free(n[8].data);
+            free(get_pointer(&n[8]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_TEX_IMAGE2D:
-            free(n[9].data);
+            free(get_pointer(&n[9]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_TEX_IMAGE3D:
-            free(n[10].data);
+            free(get_pointer(&n[10]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_TEX_SUB_IMAGE1D:
-            free(n[7].data);
+            free(get_pointer(&n[7]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_TEX_SUB_IMAGE2D:
-            free(n[9].data);
+            free(get_pointer(&n[9]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_TEX_SUB_IMAGE3D:
-            free(n[11].data);
+            free(get_pointer(&n[11]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_COMPRESSED_TEX_IMAGE_1D:
-            free(n[7].data);
+            free(get_pointer(&n[7]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_COMPRESSED_TEX_IMAGE_2D:
-            free(n[8].data);
+            free(get_pointer(&n[8]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_COMPRESSED_TEX_IMAGE_3D:
-            free(n[9].data);
+            free(get_pointer(&n[9]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_COMPRESSED_TEX_SUB_IMAGE_1D:
-            free(n[7].data);
+            free(get_pointer(&n[7]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_COMPRESSED_TEX_SUB_IMAGE_2D:
-            free(n[9].data);
+            free(get_pointer(&n[9]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_COMPRESSED_TEX_SUB_IMAGE_3D:
-            free(n[11].data);
+            free(get_pointer(&n[11]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_PROGRAM_STRING_ARB:
-            free(n[4].data);      /* program string */
+            free(get_pointer(&n[4]));      /* program string */
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_UNIFORM_1FV:
@@ -704,7 +750,7 @@ _mesa_delete_list(struct gl_context *ctx, struct gl_display_list *dlist)
          case OPCODE_UNIFORM_2UIV:
          case OPCODE_UNIFORM_3UIV:
          case OPCODE_UNIFORM_4UIV:
-            free(n[3].data);
+            free(get_pointer(&n[3]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_UNIFORM_MATRIX22:
@@ -716,15 +762,15 @@ _mesa_delete_list(struct gl_context *ctx, struct gl_display_list *dlist)
          case OPCODE_UNIFORM_MATRIX32:
          case OPCODE_UNIFORM_MATRIX34:
          case OPCODE_UNIFORM_MATRIX43:
-            free(n[4].data);
+            free(get_pointer(&n[4]));
             n += InstSize[n[0].opcode];
             break;
          case OPCODE_PIXEL_MAP:
-            free(n[3].data);
+            free(get_pointer(&n[3]));
             break;
 
          case OPCODE_CONTINUE:
-            n = (Node *) n[1].next;
+            n = (Node *) get_pointer(&n[1]);
             free(block);
             block = n;
             break;
@@ -823,12 +869,6 @@ translate_id(GLsizei n, GLenum type, const GLvoid * list)
 }
 
 
-
-
-/**********************************************************************/
-/*****                        Public                              *****/
-/**********************************************************************/
-
 /**
  * Wrapper for _mesa_unpack_image/bitmap() that handles pixel buffer objects.
  * If width < 0 or height < 0 or format or type are invalid we'll just
@@ -922,6 +962,7 @@ static Node *
 dlist_alloc(struct gl_context *ctx, OpCode opcode, GLuint bytes)
 {
    const GLuint numNodes = 1 + (bytes + sizeof(Node) - 1) / sizeof(Node);
+   const GLuint contNodes = 1 + POINTER_DWORDS;  /* size of continue info */
    Node *n;
 
    if (opcode < (GLuint) OPCODE_EXT_0) {
@@ -935,7 +976,7 @@ dlist_alloc(struct gl_context *ctx, OpCode opcode, GLuint bytes)
       }
    }
 
-   if (ctx->ListState.CurrentPos + numNodes + 2 > BLOCK_SIZE) {
+   if (ctx->ListState.CurrentPos + numNodes + contNodes > BLOCK_SIZE) {
       /* This block is full.  Allocate a new block and chain to it */
       Node *newblock;
       n = ctx->ListState.CurrentBlock + ctx->ListState.CurrentPos;
@@ -945,7 +986,7 @@ dlist_alloc(struct gl_context *ctx, OpCode opcode, GLuint bytes)
          _mesa_error(ctx, GL_OUT_OF_MEMORY, "Building display list");
          return NULL;
       }
-      n[1].next = (Node *) newblock;
+      save_pointer(&n[1], newblock);
       ctx->ListState.CurrentBlock = newblock;
       ctx->ListState.CurrentPos = 0;
    }
@@ -1026,6 +1067,37 @@ alloc_instruction(struct gl_context *ctx, OpCode opcode, GLuint nparams)
 }
 
 
+/**
+ * Called by EndList to try to reduce memory used for the list.
+ */
+static void
+trim_list(struct gl_context *ctx)
+{
+   /* If the list we're ending only has one allocated block of nodes/tokens
+    * and its size isn't a full block size, realloc the block to use less
+    * memory.  This is important for apps that create many small display
+    * lists and apps that use glXUseXFont (many lists each containing one
+    * glBitmap call).
+    * Note: we currently only trim display lists that allocated one block
+    * of tokens.  That hits the short list case which is what we're mainly
+    * concerned with.  Trimming longer lists would involve traversing the
+    * linked list of blocks.
+    */
+   struct gl_dlist_state *list = &ctx->ListState;
+
+   if ((list->CurrentList->Head == list->CurrentBlock) &&
+       (list->CurrentPos < BLOCK_SIZE)) {
+      /* There's only one block and it's not full, so realloc */
+      GLuint newSize = list->CurrentPos * sizeof(Node);
+      list->CurrentList->Head =
+      list->CurrentBlock = realloc(list->CurrentBlock, newSize);
+      if (!list->CurrentBlock) {
+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "glEndList");
+      }
+   }
+}
+
+
 
 /*
  * Display List compilation functions
@@ -1089,7 +1161,7 @@ save_Bitmap(GLsizei width, GLsizei height,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_BITMAP, 7);
+   n = alloc_instruction(ctx, OPCODE_BITMAP, 6 + POINTER_DWORDS);
    if (n) {
       n[1].i = (GLint) width;
       n[2].i = (GLint) height;
@@ -1097,8 +1169,9 @@ save_Bitmap(GLsizei width, GLsizei height,
       n[4].f = yorig;
       n[5].f = xmove;
       n[6].f = ymove;
-      n[7].data = unpack_image(ctx, 2, width, height, 1, GL_COLOR_INDEX,
-                               GL_BITMAP, pixels, &ctx->Unpack);
+      save_pointer(&n[7],
+                   unpack_image(ctx, 2, width, height, 1, GL_COLOR_INDEX,
+                                GL_BITMAP, pixels, &ctx->Unpack));
    }
    if (ctx->ExecuteFlag) {
       CALL_Bitmap(ctx->Exec, (width, height,
@@ -1990,14 +2063,15 @@ save_DrawPixels(GLsizei width, GLsizei height,
 
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
 
-   n = alloc_instruction(ctx, OPCODE_DRAW_PIXELS, 5);
+   n = alloc_instruction(ctx, OPCODE_DRAW_PIXELS, 4 + POINTER_DWORDS);
    if (n) {
       n[1].i = width;
       n[2].i = height;
       n[3].e = format;
       n[4].e = type;
-      n[5].data = unpack_image(ctx, 2, width, height, 1, format, type,
-                               pixels, &ctx->Unpack);
+      save_pointer(&n[5],
+                   unpack_image(ctx, 2, width, height, 1, format, type,
+                                pixels, &ctx->Unpack));
    }
    if (ctx->ExecuteFlag) {
       CALL_DrawPixels(ctx->Exec, (width, height, format, type, pixels));
@@ -2545,7 +2619,7 @@ save_Map1d(GLenum target, GLdouble u1, GLdouble u2, GLint stride,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_MAP1, 6);
+   n = alloc_instruction(ctx, OPCODE_MAP1, 5 + POINTER_DWORDS);
    if (n) {
       GLfloat *pnts = _mesa_copy_map_points1d(target, stride, order, points);
       n[1].e = target;
@@ -2553,7 +2627,7 @@ save_Map1d(GLenum target, GLdouble u1, GLdouble u2, GLint stride,
       n[3].f = (GLfloat) u2;
       n[4].i = _mesa_evaluator_components(target);      /* stride */
       n[5].i = order;
-      n[6].data = (void *) pnts;
+      save_pointer(&n[6], pnts);
    }
    if (ctx->ExecuteFlag) {
       CALL_Map1d(ctx->Exec, (target, u1, u2, stride, order, points));
@@ -2567,7 +2641,7 @@ save_Map1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_MAP1, 6);
+   n = alloc_instruction(ctx, OPCODE_MAP1, 5 + POINTER_DWORDS);
    if (n) {
       GLfloat *pnts = _mesa_copy_map_points1f(target, stride, order, points);
       n[1].e = target;
@@ -2575,7 +2649,7 @@ save_Map1f(GLenum target, GLfloat u1, GLfloat u2, GLint stride,
       n[3].f = u2;
       n[4].i = _mesa_evaluator_components(target);      /* stride */
       n[5].i = order;
-      n[6].data = (void *) pnts;
+      save_pointer(&n[6], pnts);
    }
    if (ctx->ExecuteFlag) {
       CALL_Map1f(ctx->Exec, (target, u1, u2, stride, order, points));
@@ -2592,7 +2666,7 @@ save_Map2d(GLenum target,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_MAP2, 10);
+   n = alloc_instruction(ctx, OPCODE_MAP2, 9 + POINTER_DWORDS);
    if (n) {
       GLfloat *pnts = _mesa_copy_map_points2d(target, ustride, uorder,
                                               vstride, vorder, points);
@@ -2606,7 +2680,7 @@ save_Map2d(GLenum target,
       n[7].i = _mesa_evaluator_components(target);      /*vstride */
       n[8].i = uorder;
       n[9].i = vorder;
-      n[10].data = (void *) pnts;
+      save_pointer(&n[10], pnts);
    }
    if (ctx->ExecuteFlag) {
       CALL_Map2d(ctx->Exec, (target,
@@ -2625,7 +2699,7 @@ save_Map2f(GLenum target,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_MAP2, 10);
+   n = alloc_instruction(ctx, OPCODE_MAP2, 9 + POINTER_DWORDS);
    if (n) {
       GLfloat *pnts = _mesa_copy_map_points2f(target, ustride, uorder,
                                               vstride, vorder, points);
@@ -2639,7 +2713,7 @@ save_Map2f(GLenum target,
       n[7].i = _mesa_evaluator_components(target);      /*vstride */
       n[8].i = uorder;
       n[9].i = vorder;
-      n[10].data = (void *) pnts;
+      save_pointer(&n[10], pnts);
    }
    if (ctx->ExecuteFlag) {
       CALL_Map2f(ctx->Exec, (target, u1, u2, ustride, uorder,
@@ -2792,11 +2866,11 @@ save_PixelMapfv(GLenum map, GLint mapsize, const GLfloat *values)
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_PIXEL_MAP, 3);
+   n = alloc_instruction(ctx, OPCODE_PIXEL_MAP, 2 + POINTER_DWORDS);
    if (n) {
       n[1].e = map;
       n[2].i = mapsize;
-      n[3].data = memdup(values, mapsize * sizeof(GLfloat));
+      save_pointer(&n[3], memdup(values, mapsize * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_PixelMapfv(ctx->Exec, (map, mapsize, values));
@@ -2971,10 +3045,11 @@ save_PolygonStipple(const GLubyte * pattern)
 
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
 
-   n = alloc_instruction(ctx, OPCODE_POLYGON_STIPPLE, 1);
+   n = alloc_instruction(ctx, OPCODE_POLYGON_STIPPLE, POINTER_DWORDS);
    if (n) {
-      n[1].data = unpack_image(ctx, 2, 32, 32, 1, GL_COLOR_INDEX, GL_BITMAP,
-                               pattern, &ctx->Unpack);
+      save_pointer(&n[1],
+                   unpack_image(ctx, 2, 32, 32, 1, GL_COLOR_INDEX, GL_BITMAP,
+                                pattern, &ctx->Unpack));
    }
    if (ctx->ExecuteFlag) {
       CALL_PolygonStipple(ctx->Exec, ((GLubyte *) pattern));
@@ -3743,7 +3818,7 @@ save_TexImage1D(GLenum target,
    else {
       Node *n;
       ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-      n = alloc_instruction(ctx, OPCODE_TEX_IMAGE1D, 8);
+      n = alloc_instruction(ctx, OPCODE_TEX_IMAGE1D, 7 + POINTER_DWORDS);
       if (n) {
          n[1].e = target;
          n[2].i = level;
@@ -3752,8 +3827,9 @@ save_TexImage1D(GLenum target,
          n[5].i = border;
          n[6].e = format;
          n[7].e = type;
-         n[8].data = unpack_image(ctx, 1, width, 1, 1, format, type,
-                                  pixels, &ctx->Unpack);
+         save_pointer(&n[8],
+                      unpack_image(ctx, 1, width, 1, 1, format, type,
+                                   pixels, &ctx->Unpack));
       }
       if (ctx->ExecuteFlag) {
          CALL_TexImage1D(ctx->Exec, (target, level, components, width,
@@ -3778,7 +3854,7 @@ save_TexImage2D(GLenum target,
    else {
       Node *n;
       ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-      n = alloc_instruction(ctx, OPCODE_TEX_IMAGE2D, 9);
+      n = alloc_instruction(ctx, OPCODE_TEX_IMAGE2D, 8 + POINTER_DWORDS);
       if (n) {
          n[1].e = target;
          n[2].i = level;
@@ -3788,8 +3864,9 @@ save_TexImage2D(GLenum target,
          n[6].i = border;
          n[7].e = format;
          n[8].e = type;
-         n[9].data = unpack_image(ctx, 2, width, height, 1, format, type,
-                                  pixels, &ctx->Unpack);
+         save_pointer(&n[9],
+                      unpack_image(ctx, 2, width, height, 1, format, type,
+                                   pixels, &ctx->Unpack));
       }
       if (ctx->ExecuteFlag) {
          CALL_TexImage2D(ctx->Exec, (target, level, components, width,
@@ -3816,7 +3893,7 @@ save_TexImage3D(GLenum target,
    else {
       Node *n;
       ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-      n = alloc_instruction(ctx, OPCODE_TEX_IMAGE3D, 10);
+      n = alloc_instruction(ctx, OPCODE_TEX_IMAGE3D, 9 + POINTER_DWORDS);
       if (n) {
          n[1].e = target;
          n[2].i = level;
@@ -3827,8 +3904,9 @@ save_TexImage3D(GLenum target,
          n[7].i = border;
          n[8].e = format;
          n[9].e = type;
-         n[10].data = unpack_image(ctx, 3, width, height, depth, format, type,
-                                   pixels, &ctx->Unpack);
+         save_pointer(&n[10],
+                      unpack_image(ctx, 3, width, height, depth, format, type,
+                                   pixels, &ctx->Unpack));
       }
       if (ctx->ExecuteFlag) {
          CALL_TexImage3D(ctx->Exec, (target, level, internalFormat, width,
@@ -3849,7 +3927,7 @@ save_TexSubImage1D(GLenum target, GLint level, GLint xoffset,
 
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
 
-   n = alloc_instruction(ctx, OPCODE_TEX_SUB_IMAGE1D, 7);
+   n = alloc_instruction(ctx, OPCODE_TEX_SUB_IMAGE1D, 6 + POINTER_DWORDS);
    if (n) {
       n[1].e = target;
       n[2].i = level;
@@ -3857,8 +3935,9 @@ save_TexSubImage1D(GLenum target, GLint level, GLint xoffset,
       n[4].i = (GLint) width;
       n[5].e = format;
       n[6].e = type;
-      n[7].data = unpack_image(ctx, 1, width, 1, 1, format, type,
-                               pixels, &ctx->Unpack);
+      save_pointer(&n[7],
+                   unpack_image(ctx, 1, width, 1, 1, format, type,
+                                pixels, &ctx->Unpack));
    }
    if (ctx->ExecuteFlag) {
       CALL_TexSubImage1D(ctx->Exec, (target, level, xoffset, width,
@@ -3878,7 +3957,7 @@ save_TexSubImage2D(GLenum target, GLint level,
 
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
 
-   n = alloc_instruction(ctx, OPCODE_TEX_SUB_IMAGE2D, 9);
+   n = alloc_instruction(ctx, OPCODE_TEX_SUB_IMAGE2D, 8 + POINTER_DWORDS);
    if (n) {
       n[1].e = target;
       n[2].i = level;
@@ -3888,8 +3967,9 @@ save_TexSubImage2D(GLenum target, GLint level,
       n[6].i = (GLint) height;
       n[7].e = format;
       n[8].e = type;
-      n[9].data = unpack_image(ctx, 2, width, height, 1, format, type,
-                               pixels, &ctx->Unpack);
+      save_pointer(&n[9],
+                   unpack_image(ctx, 2, width, height, 1, format, type,
+                                pixels, &ctx->Unpack));
    }
    if (ctx->ExecuteFlag) {
       CALL_TexSubImage2D(ctx->Exec, (target, level, xoffset, yoffset,
@@ -3909,7 +3989,7 @@ save_TexSubImage3D(GLenum target, GLint level,
 
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
 
-   n = alloc_instruction(ctx, OPCODE_TEX_SUB_IMAGE3D, 11);
+   n = alloc_instruction(ctx, OPCODE_TEX_SUB_IMAGE3D, 10 + POINTER_DWORDS);
    if (n) {
       n[1].e = target;
       n[2].i = level;
@@ -3921,8 +4001,9 @@ save_TexSubImage3D(GLenum target, GLint level,
       n[8].i = (GLint) depth;
       n[9].e = format;
       n[10].e = type;
-      n[11].data = unpack_image(ctx, 3, width, height, depth, format, type,
-                                pixels, &ctx->Unpack);
+      save_pointer(&n[11],
+                   unpack_image(ctx, 3, width, height, depth, format, type,
+                                pixels, &ctx->Unpack));
    }
    if (ctx->ExecuteFlag) {
       CALL_TexSubImage3D(ctx->Exec, (target, level,
@@ -4229,7 +4310,8 @@ save_CompressedTexImage1DARB(GLenum target, GLint level,
       Node *n;
       ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
 
-      n = alloc_instruction(ctx, OPCODE_COMPRESSED_TEX_IMAGE_1D, 7);
+      n = alloc_instruction(ctx, OPCODE_COMPRESSED_TEX_IMAGE_1D,
+                            6 + POINTER_DWORDS);
       if (n) {
          n[1].e = target;
          n[2].i = level;
@@ -4237,7 +4319,8 @@ save_CompressedTexImage1DARB(GLenum target, GLint level,
          n[4].i = (GLint) width;
          n[5].i = border;
          n[6].i = imageSize;
-         n[7].data = copy_data(data, imageSize, "glCompressedTexImage1DARB");
+         save_pointer(&n[7],
+                      copy_data(data, imageSize, "glCompressedTexImage1DARB"));
       }
       if (ctx->ExecuteFlag) {
          CALL_CompressedTexImage1D(ctx->Exec,
@@ -4265,7 +4348,8 @@ save_CompressedTexImage2DARB(GLenum target, GLint level,
       Node *n;
       ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
 
-      n = alloc_instruction(ctx, OPCODE_COMPRESSED_TEX_IMAGE_2D, 8);
+      n = alloc_instruction(ctx, OPCODE_COMPRESSED_TEX_IMAGE_2D,
+                            7 + POINTER_DWORDS);
       if (n) {
          n[1].e = target;
          n[2].i = level;
@@ -4274,7 +4358,8 @@ save_CompressedTexImage2DARB(GLenum target, GLint level,
          n[5].i = (GLint) height;
          n[6].i = border;
          n[7].i = imageSize;
-         n[8].data = copy_data(data, imageSize, "glCompressedTexImage2DARB");
+         save_pointer(&n[8],
+                      copy_data(data, imageSize, "glCompressedTexImage2DARB"));
       }
       if (ctx->ExecuteFlag) {
          CALL_CompressedTexImage2D(ctx->Exec,
@@ -4302,7 +4387,8 @@ save_CompressedTexImage3DARB(GLenum target, GLint level,
       Node *n;
       ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
 
-      n = alloc_instruction(ctx, OPCODE_COMPRESSED_TEX_IMAGE_3D, 9);
+      n = alloc_instruction(ctx, OPCODE_COMPRESSED_TEX_IMAGE_3D,
+                            8 + POINTER_DWORDS);
       if (n) {
          n[1].e = target;
          n[2].i = level;
@@ -4312,7 +4398,8 @@ save_CompressedTexImage3DARB(GLenum target, GLint level,
          n[6].i = (GLint) depth;
          n[7].i = border;
          n[8].i = imageSize;
-         n[9].data = copy_data(data, imageSize, "glCompressedTexImage3DARB");
+         save_pointer(&n[9],
+                      copy_data(data, imageSize, "glCompressedTexImage3DARB"));
       }
       if (ctx->ExecuteFlag) {
          CALL_CompressedTexImage3D(ctx->Exec,
@@ -4333,7 +4420,8 @@ save_CompressedTexSubImage1DARB(GLenum target, GLint level, GLint xoffset,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
 
-   n = alloc_instruction(ctx, OPCODE_COMPRESSED_TEX_SUB_IMAGE_1D, 7);
+   n = alloc_instruction(ctx, OPCODE_COMPRESSED_TEX_SUB_IMAGE_1D,
+                         6 + POINTER_DWORDS);
    if (n) {
       n[1].e = target;
       n[2].i = level;
@@ -4341,7 +4429,8 @@ save_CompressedTexSubImage1DARB(GLenum target, GLint level, GLint xoffset,
       n[4].i = (GLint) width;
       n[5].e = format;
       n[6].i = imageSize;
-      n[7].data = copy_data(data, imageSize, "glCompressedTexSubImage1DARB");
+      save_pointer(&n[7],
+                   copy_data(data, imageSize, "glCompressedTexSubImage1DARB"));
    }
    if (ctx->ExecuteFlag) {
       CALL_CompressedTexSubImage1D(ctx->Exec, (target, level, xoffset,
@@ -4361,7 +4450,8 @@ save_CompressedTexSubImage2DARB(GLenum target, GLint level, GLint xoffset,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
 
-   n = alloc_instruction(ctx, OPCODE_COMPRESSED_TEX_SUB_IMAGE_2D, 9);
+   n = alloc_instruction(ctx, OPCODE_COMPRESSED_TEX_SUB_IMAGE_2D,
+                         8 + POINTER_DWORDS);
    if (n) {
       n[1].e = target;
       n[2].i = level;
@@ -4371,7 +4461,8 @@ save_CompressedTexSubImage2DARB(GLenum target, GLint level, GLint xoffset,
       n[6].i = (GLint) height;
       n[7].e = format;
       n[8].i = imageSize;
-      n[9].data = copy_data(data, imageSize, "glCompressedTexSubImage2DARB");
+      save_pointer(&n[9],
+                   copy_data(data, imageSize, "glCompressedTexSubImage2DARB"));
    }
    if (ctx->ExecuteFlag) {
       CALL_CompressedTexSubImage2D(ctx->Exec,
@@ -4391,7 +4482,8 @@ save_CompressedTexSubImage3DARB(GLenum target, GLint level, GLint xoffset,
    GET_CURRENT_CONTEXT(ctx);
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
 
-   n = alloc_instruction(ctx, OPCODE_COMPRESSED_TEX_SUB_IMAGE_3D, 11);
+   n = alloc_instruction(ctx, OPCODE_COMPRESSED_TEX_SUB_IMAGE_3D,
+                         10 + POINTER_DWORDS);
    if (n) {
       n[1].e = target;
       n[2].i = level;
@@ -4403,7 +4495,8 @@ save_CompressedTexSubImage3DARB(GLenum target, GLint level, GLint xoffset,
       n[8].i = (GLint) depth;
       n[9].e = format;
       n[10].i = imageSize;
-      n[11].data = copy_data(data, imageSize, "glCompressedTexSubImage3DARB");
+      save_pointer(&n[11],
+                   copy_data(data, imageSize, "glCompressedTexSubImage3DARB"));
    }
    if (ctx->ExecuteFlag) {
       CALL_CompressedTexSubImage3D(ctx->Exec,
@@ -4701,7 +4794,7 @@ save_ProgramStringARB(GLenum target, GLenum format, GLsizei len,
 
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
 
-   n = alloc_instruction(ctx, OPCODE_PROGRAM_STRING_ARB, 4);
+   n = alloc_instruction(ctx, OPCODE_PROGRAM_STRING_ARB, 3 + POINTER_DWORDS);
    if (n) {
       GLubyte *programCopy = malloc(len);
       if (!programCopy) {
@@ -4712,7 +4805,7 @@ save_ProgramStringARB(GLenum target, GLenum format, GLsizei len,
       n[1].e = target;
       n[2].e = format;
       n[3].i = len;
-      n[4].data = programCopy;
+      save_pointer(&n[4], programCopy);
    }
    if (ctx->ExecuteFlag) {
       CALL_ProgramStringARB(ctx->Exec, (target, format, len, string));
@@ -5893,11 +5986,11 @@ save_Uniform1fvARB(GLint location, GLsizei count, const GLfloat *v)
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_1FV, 3);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_1FV, 2 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
-      n[3].data = memdup(v, count * 1 * sizeof(GLfloat));
+      save_pointer(&n[3], memdup(v, count * 1 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_Uniform1fv(ctx->Exec, (location, count, v));
@@ -5910,11 +6003,11 @@ save_Uniform2fvARB(GLint location, GLsizei count, const GLfloat *v)
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_2FV, 3);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_2FV, 2 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
-      n[3].data = memdup(v, count * 2 * sizeof(GLfloat));
+      save_pointer(&n[3], memdup(v, count * 2 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_Uniform2fv(ctx->Exec, (location, count, v));
@@ -5927,11 +6020,11 @@ save_Uniform3fvARB(GLint location, GLsizei count, const GLfloat *v)
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_3FV, 3);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_3FV, 2 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
-      n[3].data = memdup(v, count * 3 * sizeof(GLfloat));
+      save_pointer(&n[3], memdup(v, count * 3 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_Uniform3fv(ctx->Exec, (location, count, v));
@@ -5944,11 +6037,11 @@ save_Uniform4fvARB(GLint location, GLsizei count, const GLfloat *v)
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_4FV, 3);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_4FV, 2 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
-      n[3].data = memdup(v, count * 4 * sizeof(GLfloat));
+      save_pointer(&n[3], memdup(v, count * 4 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_Uniform4fv(ctx->Exec, (location, count, v));
@@ -6034,11 +6127,11 @@ save_Uniform1ivARB(GLint location, GLsizei count, const GLint *v)
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_1IV, 3);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_1IV, 2 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
-      n[3].data = memdup(v, count * 1 * sizeof(GLint));
+      save_pointer(&n[3], memdup(v, count * 1 * sizeof(GLint)));
    }
    if (ctx->ExecuteFlag) {
       CALL_Uniform1iv(ctx->Exec, (location, count, v));
@@ -6051,11 +6144,11 @@ save_Uniform2ivARB(GLint location, GLsizei count, const GLint *v)
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_2IV, 3);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_2IV, 2 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
-      n[3].data = memdup(v, count * 2 * sizeof(GLint));
+      save_pointer(&n[3], memdup(v, count * 2 * sizeof(GLint)));
    }
    if (ctx->ExecuteFlag) {
       CALL_Uniform2iv(ctx->Exec, (location, count, v));
@@ -6068,11 +6161,11 @@ save_Uniform3ivARB(GLint location, GLsizei count, const GLint *v)
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_3IV, 3);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_3IV, 2 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
-      n[3].data = memdup(v, count * 3 * sizeof(GLint));
+      save_pointer(&n[3], memdup(v, count * 3 * sizeof(GLint)));
    }
    if (ctx->ExecuteFlag) {
       CALL_Uniform3iv(ctx->Exec, (location, count, v));
@@ -6085,11 +6178,11 @@ save_Uniform4ivARB(GLint location, GLsizei count, const GLint *v)
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_4IV, 3);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_4IV, 2 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
-      n[3].data = memdup(v, count * 4 * sizeof(GLfloat));
+      save_pointer(&n[3], memdup(v, count * 4 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_Uniform4iv(ctx->Exec, (location, count, v));
@@ -6176,11 +6269,11 @@ save_Uniform1uiv(GLint location, GLsizei count, const GLuint *v)
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_1UIV, 3);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_1UIV, 2 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
-      n[3].data = memdup(v, count * 1 * sizeof(*v));
+      save_pointer(&n[3], memdup(v, count * 1 * sizeof(*v)));
    }
    if (ctx->ExecuteFlag) {
       /*CALL_Uniform1uiv(ctx->Exec, (location, count, v));*/
@@ -6193,11 +6286,11 @@ save_Uniform2uiv(GLint location, GLsizei count, const GLuint *v)
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_2UIV, 3);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_2UIV, 2 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
-      n[3].data = memdup(v, count * 2 * sizeof(*v));
+      save_pointer(&n[3], memdup(v, count * 2 * sizeof(*v)));
    }
    if (ctx->ExecuteFlag) {
       /*CALL_Uniform2uiv(ctx->Exec, (location, count, v));*/
@@ -6210,11 +6303,11 @@ save_Uniform3uiv(GLint location, GLsizei count, const GLuint *v)
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_3UIV, 3);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_3UIV, 2 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
-      n[3].data = memdup(v, count * 3 * sizeof(*v));
+      save_pointer(&n[3], memdup(v, count * 3 * sizeof(*v)));
    }
    if (ctx->ExecuteFlag) {
       /*CALL_Uniform3uiv(ctx->Exec, (location, count, v));*/
@@ -6227,11 +6320,11 @@ save_Uniform4uiv(GLint location, GLsizei count, const GLuint *v)
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_4UIV, 3);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_4UIV, 2 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
-      n[3].data = memdup(v, count * 4 * sizeof(*v));
+      save_pointer(&n[3], memdup(v, count * 4 * sizeof(*v)));
    }
    if (ctx->ExecuteFlag) {
       /*CALL_Uniform4uiv(ctx->Exec, (location, count, v));*/
@@ -6247,12 +6340,12 @@ save_UniformMatrix2fvARB(GLint location, GLsizei count, GLboolean transpose,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX22, 4);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX22, 3 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
       n[3].b = transpose;
-      n[4].data = memdup(m, count * 2 * 2 * sizeof(GLfloat));
+      save_pointer(&n[4], memdup(m, count * 2 * 2 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_UniformMatrix2fv(ctx->Exec, (location, count, transpose, m));
@@ -6266,12 +6359,12 @@ save_UniformMatrix3fvARB(GLint location, GLsizei count, GLboolean transpose,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX33, 4);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX33, 3 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
       n[3].b = transpose;
-      n[4].data = memdup(m, count * 3 * 3 * sizeof(GLfloat));
+      save_pointer(&n[4], memdup(m, count * 3 * 3 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_UniformMatrix3fv(ctx->Exec, (location, count, transpose, m));
@@ -6285,12 +6378,12 @@ save_UniformMatrix4fvARB(GLint location, GLsizei count, GLboolean transpose,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX44, 4);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX44, 3 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
       n[3].b = transpose;
-      n[4].data = memdup(m, count * 4 * 4 * sizeof(GLfloat));
+      save_pointer(&n[4], memdup(m, count * 4 * 4 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_UniformMatrix4fv(ctx->Exec, (location, count, transpose, m));
@@ -6305,12 +6398,12 @@ save_UniformMatrix2x3fv(GLint location, GLsizei count, GLboolean transpose,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX23, 4);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX23, 3 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
       n[3].b = transpose;
-      n[4].data = memdup(m, count * 2 * 3 * sizeof(GLfloat));
+      save_pointer(&n[4], memdup(m, count * 2 * 3 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_UniformMatrix2x3fv(ctx->Exec, (location, count, transpose, m));
@@ -6324,12 +6417,12 @@ save_UniformMatrix3x2fv(GLint location, GLsizei count, GLboolean transpose,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX32, 4);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX32, 3 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
       n[3].b = transpose;
-      n[4].data = memdup(m, count * 3 * 2 * sizeof(GLfloat));
+      save_pointer(&n[4], memdup(m, count * 3 * 2 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_UniformMatrix3x2fv(ctx->Exec, (location, count, transpose, m));
@@ -6344,12 +6437,12 @@ save_UniformMatrix2x4fv(GLint location, GLsizei count, GLboolean transpose,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX24, 4);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX24, 3 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
       n[3].b = transpose;
-      n[4].data = memdup(m, count * 2 * 4 * sizeof(GLfloat));
+      save_pointer(&n[4], memdup(m, count * 2 * 4 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_UniformMatrix2x4fv(ctx->Exec, (location, count, transpose, m));
@@ -6363,12 +6456,12 @@ save_UniformMatrix4x2fv(GLint location, GLsizei count, GLboolean transpose,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX42, 4);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX42, 3 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
       n[3].b = transpose;
-      n[4].data = memdup(m, count * 4 * 2 * sizeof(GLfloat));
+      save_pointer(&n[4], memdup(m, count * 4 * 2 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_UniformMatrix4x2fv(ctx->Exec, (location, count, transpose, m));
@@ -6383,12 +6476,12 @@ save_UniformMatrix3x4fv(GLint location, GLsizei count, GLboolean transpose,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX34, 4);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX34, 3 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
       n[3].b = transpose;
-      n[4].data = memdup(m, count * 3 * 4 * sizeof(GLfloat));
+      save_pointer(&n[4], memdup(m, count * 3 * 4 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_UniformMatrix3x4fv(ctx->Exec, (location, count, transpose, m));
@@ -6402,12 +6495,12 @@ save_UniformMatrix4x3fv(GLint location, GLsizei count, GLboolean transpose,
    GET_CURRENT_CONTEXT(ctx);
    Node *n;
    ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
-   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX43, 4);
+   n = alloc_instruction(ctx, OPCODE_UNIFORM_MATRIX43, 3 + POINTER_DWORDS);
    if (n) {
       n[1].i = location;
       n[2].i = count;
       n[3].b = transpose;
-      n[4].data = memdup(m, count * 4 * 3 * sizeof(GLfloat));
+      save_pointer(&n[4], memdup(m, count * 4 * 3 * sizeof(GLfloat)));
    }
    if (ctx->ExecuteFlag) {
       CALL_UniformMatrix4x3fv(ctx->Exec, (location, count, transpose, m));
@@ -6777,10 +6870,10 @@ save_WaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout)
    if (n) {
       union uint64_pair p;
       p.uint64 = timeout;
-      n[1].data = sync;
-      n[2].bf = flags;
-      n[3].ui = p.uint32[0];
-      n[4].ui = p.uint32[1];
+      n[1].bf = flags;
+      n[2].ui = p.uint32[0];
+      n[3].ui = p.uint32[1];
+      save_pointer(&n[4], sync);
    }
    if (ctx->ExecuteFlag) {
       CALL_WaitSync(ctx->Exec, (sync, flags, timeout));
@@ -6844,10 +6937,10 @@ static void
 save_error(struct gl_context *ctx, GLenum error, const char *s)
 {
    Node *n;
-   n = alloc_instruction(ctx, OPCODE_ERROR, 2);
+   n = alloc_instruction(ctx, OPCODE_ERROR, 1 + POINTER_DWORDS);
    if (n) {
       n[1].e = error;
-      n[2].data = (void *) s;
+      save_pointer(&n[2], (void *) s);
       /* note: the data/string here doesn't have to be freed in
        * _mesa_delete_list() since the string is never dynamically
        * allocated.
@@ -6932,7 +7025,7 @@ execute_list(struct gl_context *ctx, GLuint list)
       else {
          switch (opcode) {
          case OPCODE_ERROR:
-            _mesa_error(ctx, n[1].e, "%s", (const char *) n[2].data);
+            _mesa_error(ctx, n[1].e, "%s", (const char *) get_pointer(&n[2]));
             break;
          case OPCODE_ACCUM:
             CALL_Accum(ctx->Exec, (n[1].e, n[2].f));
@@ -6949,7 +7042,7 @@ execute_list(struct gl_context *ctx, GLuint list)
                ctx->Unpack = ctx->DefaultPacking;
                CALL_Bitmap(ctx->Exec, ((GLsizei) n[1].i, (GLsizei) n[2].i,
                                        n[3].f, n[4].f, n[5].f, n[6].f,
-                                       (const GLubyte *) n[7].data));
+                                       get_pointer(&n[7])));
                ctx->Unpack = save;      /* restore */
             }
             break;
@@ -7128,7 +7221,7 @@ execute_list(struct gl_context *ctx, GLuint list)
                const struct gl_pixelstore_attrib save = ctx->Unpack;
                ctx->Unpack = ctx->DefaultPacking;
                CALL_DrawPixels(ctx->Exec, (n[1].i, n[2].i, n[3].e, n[4].e,
-                                           n[5].data));
+                                           get_pointer(&n[5])));
                ctx->Unpack = save;      /* restore */
             }
             break;
@@ -7230,7 +7323,7 @@ execute_list(struct gl_context *ctx, GLuint list)
                GLfloat u1 = n[2].f;
                GLfloat u2 = n[3].f;
                CALL_Map1f(ctx->Exec, (target, u1, u2, ustride, uorder,
-                                      (GLfloat *) n[6].data));
+                                      (GLfloat *) get_pointer(&n[6])));
             }
             break;
          case OPCODE_MAP2:
@@ -7246,7 +7339,7 @@ execute_list(struct gl_context *ctx, GLuint list)
                GLint vorder = n[9].i;
                CALL_Map2f(ctx->Exec, (target, u1, u2, ustride, uorder,
                                       v1, v2, vstride, vorder,
-                                      (GLfloat *) n[10].data));
+                                      (GLfloat *) get_pointer(&n[10])));
             }
             break;
          case OPCODE_MAPGRID1:
@@ -7281,7 +7374,7 @@ execute_list(struct gl_context *ctx, GLuint list)
             break;
          case OPCODE_PIXEL_MAP:
             CALL_PixelMapfv(ctx->Exec,
-                            (n[1].e, n[2].i, (GLfloat *) n[3].data));
+                            (n[1].e, n[2].i, get_pointer(&n[3])));
             break;
          case OPCODE_PIXEL_TRANSFER:
             CALL_PixelTransferf(ctx->Exec, (n[1].e, n[2].f));
@@ -7308,7 +7401,7 @@ execute_list(struct gl_context *ctx, GLuint list)
             {
                const struct gl_pixelstore_attrib save = ctx->Unpack;
                ctx->Unpack = ctx->DefaultPacking;
-               CALL_PolygonStipple(ctx->Exec, ((GLubyte *) n[1].data));
+               CALL_PolygonStipple(ctx->Exec, (get_pointer(&n[1])));
                ctx->Unpack = save;      /* restore */
             }
             break;
@@ -7418,7 +7511,7 @@ execute_list(struct gl_context *ctx, GLuint list)
                                            n[5].e,      /* border */
                                            n[6].e,      /* format */
                                            n[7].e,      /* type */
-                                           n[8].data));
+                                           get_pointer(&n[8])));
                ctx->Unpack = save;      /* restore */
             }
             break;
@@ -7434,7 +7527,7 @@ execute_list(struct gl_context *ctx, GLuint list)
                                            n[6].e,      /* border */
                                            n[7].e,      /* format */
                                            n[8].e,      /* type */
-                                           n[9].data));
+                                           get_pointer(&n[9])));
                ctx->Unpack = save;      /* restore */
             }
             break;
@@ -7451,7 +7544,7 @@ execute_list(struct gl_context *ctx, GLuint list)
                                            n[7].e,      /* border */
                                            n[8].e,      /* format */
                                            n[9].e,      /* type */
-                                           n[10].data));
+                                           get_pointer(&n[10])));
                ctx->Unpack = save;      /* restore */
             }
             break;
@@ -7461,7 +7554,7 @@ execute_list(struct gl_context *ctx, GLuint list)
                ctx->Unpack = ctx->DefaultPacking;
                CALL_TexSubImage1D(ctx->Exec, (n[1].e, n[2].i, n[3].i,
                                               n[4].i, n[5].e,
-                                              n[6].e, n[7].data));
+                                              n[6].e, get_pointer(&n[7])));
                ctx->Unpack = save;      /* restore */
             }
             break;
@@ -7472,7 +7565,7 @@ execute_list(struct gl_context *ctx, GLuint list)
                CALL_TexSubImage2D(ctx->Exec, (n[1].e, n[2].i, n[3].i,
                                               n[4].i, n[5].e,
                                               n[6].i, n[7].e, n[8].e,
-                                              n[9].data));
+                                              get_pointer(&n[9])));
                ctx->Unpack = save;      /* restore */
             }
             break;
@@ -7483,7 +7576,7 @@ execute_list(struct gl_context *ctx, GLuint list)
                CALL_TexSubImage3D(ctx->Exec, (n[1].e, n[2].i, n[3].i,
                                               n[4].i, n[5].i, n[6].i, n[7].i,
                                               n[8].i, n[9].e, n[10].e,
-                                              n[11].data));
+                                              get_pointer(&n[11])));
                ctx->Unpack = save;      /* restore */
             }
             break;
@@ -7502,36 +7595,38 @@ execute_list(struct gl_context *ctx, GLuint list)
             break;
          case OPCODE_COMPRESSED_TEX_IMAGE_1D:  /* GL_ARB_texture_compression */
             CALL_CompressedTexImage1D(ctx->Exec, (n[1].e, n[2].i, n[3].e,
-                                                     n[4].i, n[5].i, n[6].i,
-                                                     n[7].data));
+                                                  n[4].i, n[5].i, n[6].i,
+                                                  get_pointer(&n[7])));
             break;
          case OPCODE_COMPRESSED_TEX_IMAGE_2D:  /* GL_ARB_texture_compression */
             CALL_CompressedTexImage2D(ctx->Exec, (n[1].e, n[2].i, n[3].e,
-                                                     n[4].i, n[5].i, n[6].i,
-                                                     n[7].i, n[8].data));
+                                                  n[4].i, n[5].i, n[6].i,
+                                                  n[7].i, get_pointer(&n[8])));
             break;
          case OPCODE_COMPRESSED_TEX_IMAGE_3D:  /* GL_ARB_texture_compression */
             CALL_CompressedTexImage3D(ctx->Exec, (n[1].e, n[2].i, n[3].e,
-                                                     n[4].i, n[5].i, n[6].i,
-                                                     n[7].i, n[8].i,
-                                                     n[9].data));
+                                                  n[4].i, n[5].i, n[6].i,
+                                                  n[7].i, n[8].i,
+                                                  get_pointer(&n[9])));
             break;
          case OPCODE_COMPRESSED_TEX_SUB_IMAGE_1D:      /* GL_ARB_texture_compress */
             CALL_CompressedTexSubImage1D(ctx->Exec,
                                             (n[1].e, n[2].i, n[3].i, n[4].i,
-                                             n[5].e, n[6].i, n[7].data));
+                                             n[5].e, n[6].i,
+                                             get_pointer(&n[7])));
             break;
          case OPCODE_COMPRESSED_TEX_SUB_IMAGE_2D:      /* GL_ARB_texture_compress */
             CALL_CompressedTexSubImage2D(ctx->Exec,
                                             (n[1].e, n[2].i, n[3].i, n[4].i,
                                              n[5].i, n[6].i, n[7].e, n[8].i,
-                                             n[9].data));
+                                             get_pointer(&n[9])));
             break;
          case OPCODE_COMPRESSED_TEX_SUB_IMAGE_3D:      /* GL_ARB_texture_compress */
             CALL_CompressedTexSubImage3D(ctx->Exec,
                                             (n[1].e, n[2].i, n[3].i, n[4].i,
                                              n[5].i, n[6].i, n[7].i, n[8].i,
-                                             n[9].e, n[10].i, n[11].data));
+                                             n[9].e, n[10].i,
+                                             get_pointer(&n[11])));
             break;
          case OPCODE_SAMPLE_COVERAGE:  /* GL_ARB_multisample */
             CALL_SampleCoverage(ctx->Exec, (n[1].f, n[2].b));
@@ -7555,7 +7650,8 @@ execute_list(struct gl_context *ctx, GLuint list)
             break;
          case OPCODE_PROGRAM_STRING_ARB:
             CALL_ProgramStringARB(ctx->Exec,
-                                  (n[1].e, n[2].e, n[3].i, n[4].data));
+                                  (n[1].e, n[2].e, n[3].i,
+                                   get_pointer(&n[4])));
             break;
          case OPCODE_PROGRAM_ENV_PARAMETER_ARB:
             CALL_ProgramEnvParameter4fARB(ctx->Exec, (n[1].e, n[2].ui, n[3].f,
@@ -7614,16 +7710,16 @@ execute_list(struct gl_context *ctx, GLuint list)
                               (n[1].i, n[2].f, n[3].f, n[4].f, n[5].f));
 	    break;
 	 case OPCODE_UNIFORM_1FV:
-	    CALL_Uniform1fv(ctx->Exec, (n[1].i, n[2].i, n[3].data));
+	    CALL_Uniform1fv(ctx->Exec, (n[1].i, n[2].i, get_pointer(&n[3])));
 	    break;
 	 case OPCODE_UNIFORM_2FV:
-	    CALL_Uniform2fv(ctx->Exec, (n[1].i, n[2].i, n[3].data));
+	    CALL_Uniform2fv(ctx->Exec, (n[1].i, n[2].i, get_pointer(&n[3])));
 	    break;
 	 case OPCODE_UNIFORM_3FV:
-	    CALL_Uniform3fv(ctx->Exec, (n[1].i, n[2].i, n[3].data));
+	    CALL_Uniform3fv(ctx->Exec, (n[1].i, n[2].i, get_pointer(&n[3])));
 	    break;
 	 case OPCODE_UNIFORM_4FV:
-	    CALL_Uniform4fv(ctx->Exec, (n[1].i, n[2].i, n[3].data));
+	    CALL_Uniform4fv(ctx->Exec, (n[1].i, n[2].i, get_pointer(&n[3])));
 	    break;
 	 case OPCODE_UNIFORM_1I:
 	    CALL_Uniform1i(ctx->Exec, (n[1].i, n[2].i));
@@ -7639,16 +7735,16 @@ execute_list(struct gl_context *ctx, GLuint list)
                               (n[1].i, n[2].i, n[3].i, n[4].i, n[5].i));
 	    break;
 	 case OPCODE_UNIFORM_1IV:
-	    CALL_Uniform1iv(ctx->Exec, (n[1].i, n[2].i, n[3].data));
+	    CALL_Uniform1iv(ctx->Exec, (n[1].i, n[2].i, get_pointer(&n[3])));
 	    break;
 	 case OPCODE_UNIFORM_2IV:
-	    CALL_Uniform2iv(ctx->Exec, (n[1].i, n[2].i, n[3].data));
+	    CALL_Uniform2iv(ctx->Exec, (n[1].i, n[2].i, get_pointer(&n[3])));
 	    break;
 	 case OPCODE_UNIFORM_3IV:
-	    CALL_Uniform3iv(ctx->Exec, (n[1].i, n[2].i, n[3].data));
+	    CALL_Uniform3iv(ctx->Exec, (n[1].i, n[2].i, get_pointer(&n[3])));
 	    break;
 	 case OPCODE_UNIFORM_4IV:
-	    CALL_Uniform4iv(ctx->Exec, (n[1].i, n[2].i, n[3].data));
+	    CALL_Uniform4iv(ctx->Exec, (n[1].i, n[2].i, get_pointer(&n[3])));
 	    break;
 	 case OPCODE_UNIFORM_1UI:
 	    /*CALL_Uniform1uiARB(ctx->Exec, (n[1].i, n[2].i));*/
@@ -7665,52 +7761,56 @@ execute_list(struct gl_context *ctx, GLuint list)
             */
 	    break;
 	 case OPCODE_UNIFORM_1UIV:
-	    /*CALL_Uniform1uivARB(ctx->Exec, (n[1].i, n[2].i, n[3].data));*/
+	    /*CALL_Uniform1uivARB(ctx->Exec, (n[1].i, n[2].i,
+                                              get_pointer(&n[3])));*/
 	    break;
 	 case OPCODE_UNIFORM_2UIV:
-	    /*CALL_Uniform2uivARB(ctx->Exec, (n[1].i, n[2].i, n[3].data));*/
+	    /*CALL_Uniform2uivARB(ctx->Exec, (n[1].i, n[2].i,
+                                              get_pointer(&n[3])));*/
 	    break;
 	 case OPCODE_UNIFORM_3UIV:
-	    /*CALL_Uniform3uivARB(ctx->Exec, (n[1].i, n[2].i, n[3].data));*/
+	    /*CALL_Uniform3uivARB(ctx->Exec, (n[1].i, n[2].i,
+                                              get_pointer(&n[3])));*/
 	    break;
 	 case OPCODE_UNIFORM_4UIV:
-	    /*CALL_Uniform4uivARB(ctx->Exec, (n[1].i, n[2].i, n[3].data));*/
+	    /*CALL_Uniform4uivARB(ctx->Exec, (n[1].i, n[2].i,
+                                              get_pointer(&n[3])));*/
 	    break;
 	 case OPCODE_UNIFORM_MATRIX22:
 	    CALL_UniformMatrix2fv(ctx->Exec,
-                                     (n[1].i, n[2].i, n[3].b, n[4].data));
+                                  (n[1].i, n[2].i, n[3].b, get_pointer(&n[4])));
 	    break;
 	 case OPCODE_UNIFORM_MATRIX33:
 	    CALL_UniformMatrix3fv(ctx->Exec,
-                                     (n[1].i, n[2].i, n[3].b, n[4].data));
+                                  (n[1].i, n[2].i, n[3].b, get_pointer(&n[4])));
 	    break;
 	 case OPCODE_UNIFORM_MATRIX44:
 	    CALL_UniformMatrix4fv(ctx->Exec,
-                                     (n[1].i, n[2].i, n[3].b, n[4].data));
+                                  (n[1].i, n[2].i, n[3].b, get_pointer(&n[4])));
 	    break;
 	 case OPCODE_UNIFORM_MATRIX23:
 	    CALL_UniformMatrix2x3fv(ctx->Exec,
-                                    (n[1].i, n[2].i, n[3].b, n[4].data));
+                                    (n[1].i, n[2].i, n[3].b, get_pointer(&n[4])));
 	    break;
 	 case OPCODE_UNIFORM_MATRIX32:
 	    CALL_UniformMatrix3x2fv(ctx->Exec,
-                                    (n[1].i, n[2].i, n[3].b, n[4].data));
+                                    (n[1].i, n[2].i, n[3].b, get_pointer(&n[4])));
 	    break;
 	 case OPCODE_UNIFORM_MATRIX24:
 	    CALL_UniformMatrix2x4fv(ctx->Exec,
-                                    (n[1].i, n[2].i, n[3].b, n[4].data));
+                                    (n[1].i, n[2].i, n[3].b, get_pointer(&n[4])));
 	    break;
 	 case OPCODE_UNIFORM_MATRIX42:
 	    CALL_UniformMatrix4x2fv(ctx->Exec,
-                                    (n[1].i, n[2].i, n[3].b, n[4].data));
+                                    (n[1].i, n[2].i, n[3].b, get_pointer(&n[4])));
 	    break;
 	 case OPCODE_UNIFORM_MATRIX34:
 	    CALL_UniformMatrix3x4fv(ctx->Exec,
-                                    (n[1].i, n[2].i, n[3].b, n[4].data));
+                                    (n[1].i, n[2].i, n[3].b, get_pointer(&n[4])));
 	    break;
 	 case OPCODE_UNIFORM_MATRIX43:
 	    CALL_UniformMatrix4x3fv(ctx->Exec,
-                                    (n[1].i, n[2].i, n[3].b, n[4].data));
+                                    (n[1].i, n[2].i, n[3].b, get_pointer(&n[4])));
 	    break;
 
          case OPCODE_CLAMP_COLOR:
@@ -7964,9 +8064,10 @@ execute_list(struct gl_context *ctx, GLuint list)
          case OPCODE_WAIT_SYNC:
             {
                union uint64_pair p;
-               p.uint32[0] = n[3].ui;
-               p.uint32[1] = n[4].ui;
-               CALL_WaitSync(ctx->Exec, (n[1].data, n[2].bf, p.uint64));
+               p.uint32[0] = n[2].ui;
+               p.uint32[1] = n[3].ui;
+               CALL_WaitSync(ctx->Exec,
+                             (get_pointer(&n[4]), n[1].bf, p.uint64));
             }
             break;
 
@@ -7983,7 +8084,7 @@ execute_list(struct gl_context *ctx, GLuint list)
             break;
 
          case OPCODE_CONTINUE:
-            n = (Node *) n[1].next;
+            n = (Node *) get_pointer(&n[1]);
             break;
          case OPCODE_END_OF_LIST:
             done = GL_TRUE;
@@ -8172,6 +8273,8 @@ _mesa_EndList(void)
 
    (void) alloc_instruction(ctx, OPCODE_END_OF_LIST, 0);
 
+   trim_list(ctx);
+
    /* Destroy old list, if any */
    destroy_list(ctx, ctx->ListState.CurrentList->Name);
 
@@ -8185,6 +8288,8 @@ _mesa_EndList(void)
       mesa_print_display_list(ctx->ListState.CurrentList->Name);
 
    ctx->ListState.CurrentList = NULL;
+   ctx->ListState.CurrentBlock = NULL;
+   ctx->ListState.CurrentPos = 0;
    ctx->ExecuteFlag = GL_TRUE;
    ctx->CompileFlag = GL_FALSE;
 
@@ -8798,7 +8903,8 @@ print_list(struct gl_context *ctx, GLuint list)
             break;
          case OPCODE_BITMAP:
             printf("Bitmap %d %d %g %g %g %g %p\n", n[1].i, n[2].i,
-                         n[3].f, n[4].f, n[5].f, n[6].f, (void *) n[7].data);
+                   n[3].f, n[4].f, n[5].f, n[6].f,
+                   get_pointer(&n[7]));
             break;
          case OPCODE_CALL_LIST:
             printf("CallList %d\n", (int) n[1].ui);
@@ -8981,12 +9087,12 @@ print_list(struct gl_context *ctx, GLuint list)
              * meta opcodes/commands
              */
          case OPCODE_ERROR:
-            printf("Error: %s %s\n",
-                         enum_string(n[1].e), (const char *) n[2].data);
+            printf("Error: %s %s\n", enum_string(n[1].e),
+                   (const char *) get_pointer(&n[2]));
             break;
          case OPCODE_CONTINUE:
             printf("DISPLAY-LIST-CONTINUE\n");
-            n = (Node *) n[1].next;
+            n = (Node *) get_pointer(&n[1]);
             break;
          case OPCODE_END_OF_LIST:
             printf("END-LIST %u\n", list);

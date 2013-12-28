@@ -414,7 +414,7 @@ detach_shader(struct gl_context *ctx, GLuint program, GLuint shader)
          err = GL_INVALID_OPERATION;
       else
          err = GL_INVALID_VALUE;
-      _mesa_error(ctx, err, "glDetachProgram(shader)");
+      _mesa_error(ctx, err, "glDetachShader(shader)");
       return;
    }
 }
@@ -791,7 +791,7 @@ compile_shader(struct gl_context *ctx, GLuint shaderObj)
    } else {
       if (ctx->Shader.Flags & GLSL_DUMP) {
          printf("GLSL source for %s shader %d:\n",
-                _mesa_glsl_shader_target_name(sh->Type), sh->Name);
+                _mesa_shader_enum_to_string(sh->Type), sh->Name);
          printf("%s\n", sh->Source);
       }
 
@@ -823,7 +823,7 @@ compile_shader(struct gl_context *ctx, GLuint shaderObj)
    if (!sh->CompileStatus) {
       if (ctx->Shader.Flags & GLSL_DUMP_ON_ERROR) {
          fprintf(stderr, "GLSL source for %s shader %d:\n",
-                 _mesa_glsl_shader_target_name(sh->Type), sh->Name);
+                 _mesa_shader_enum_to_string(sh->Type), sh->Name);
          fprintf(stderr, "%s\n", sh->Source);
          fprintf(stderr, "Info Log:\n%s\n", sh->InfoLog);
          fflush(stderr);
@@ -898,7 +898,7 @@ print_shader_info(const struct gl_shader_program *shProg)
    printf("Mesa: glUseProgram(%u)\n", shProg->Name);
    for (i = 0; i < shProg->NumShaders; i++) {
       printf("  %s shader %u, checksum %u\n",
-             _mesa_glsl_shader_target_name(shProg->Shaders[i]->Type),
+             _mesa_shader_enum_to_string(shProg->Shaders[i]->Type),
 	     shProg->Shaders[i]->Name,
 	     shProg->Shaders[i]->SourceChecksum);
    }

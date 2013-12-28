@@ -85,6 +85,11 @@ public:
    /**
     * The 2D layer within the miplevel. Combined, level and layer define the
     * 2D miptree slice to use.
+    *
+    * Note: if mt is a 2D multisample array texture on Gen7+ using
+    * INTEL_MSAA_LAYOUT_UMS or INTEL_MSAA_LAYOUT_CMS, layer is the physical
+    * layer holding sample 0.  So, for example, if mt->num_samples == 4, then
+    * logical layer n corresponds to layer == 4*n.
     */
    uint32_t layer;
 
@@ -229,7 +234,6 @@ public:
    brw_blorp_surface_info dst;
    enum gen6_hiz_op hiz_op;
    enum gen7_fast_clear_op fast_clear_op;
-   unsigned num_samples;
    bool use_wm_prog;
    brw_blorp_wm_push_constants wm_push_consts;
    bool color_write_disable[4];

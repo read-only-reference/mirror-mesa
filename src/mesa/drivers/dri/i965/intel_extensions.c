@@ -1,8 +1,8 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2003 Tungsten Graphics, Inc., Cedar Park, Texas.
  * All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
  * "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  * distribute, sub license, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice (including the
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
@@ -22,7 +22,7 @@
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
 #include "main/version.h"
@@ -42,6 +42,10 @@
 static bool
 can_do_pipelined_register_writes(struct brw_context *brw)
 {
+   /* Supposedly, Broadwell just works. */
+   if (brw->gen >= 8)
+      return true;
+
    /* We use SO_WRITE_OFFSET0 since you're supposed to write it (unlike the
     * statistics registers), and we already reset it to zero before using it.
     */
@@ -50,7 +54,7 @@ can_do_pipelined_register_writes(struct brw_context *brw)
    const int offset = 100;
 
    /* The register we picked only exists on Gen7+. */
-   assert(brw->gen >= 7);
+   assert(brw->gen == 7);
 
    uint32_t *data;
    /* Set a value in a BO to a known quantity.  The workaround BO already
@@ -205,7 +209,6 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.EXT_framebuffer_blit = true;
    ctx->Extensions.EXT_framebuffer_sRGB = true;
    ctx->Extensions.EXT_gpu_program_parameters = true;
-   ctx->Extensions.EXT_packed_depth_stencil = true;
    ctx->Extensions.EXT_packed_float = true;
    ctx->Extensions.EXT_pixel_buffer_object = true;
    ctx->Extensions.EXT_point_parameters = true;
@@ -228,7 +231,6 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.ATI_separate_stencil = true;
    ctx->Extensions.ATI_texture_env_combine3 = true;
    ctx->Extensions.MESA_pack_invert = true;
-   ctx->Extensions.MESA_texture_array = true;
    ctx->Extensions.MESA_ycbcr_texture = true;
    ctx->Extensions.NV_conditional_render = true;
    ctx->Extensions.NV_primitive_restart = true;

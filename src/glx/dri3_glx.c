@@ -266,13 +266,25 @@ dri3_create_context(struct glx_screen *base,
 }
 
 static void
+dri3_free_render_buffer(struct dri3_drawable *pdraw, struct dri3_buffer *buffer);
+
+static void
 dri3_destroy_drawable(__GLXDRIdrawable *base)
 {
    struct dri3_screen *psc = (struct dri3_screen *) base->psc;
    struct dri3_drawable *pdraw = (struct dri3_drawable *) base;
+   xcb_connection_t     *c = XGetXCBConnection(pdraw->base.psc->dpy);
+   int i;
 
    (*psc->core->destroyDrawable) (pdraw->driDrawable);
 
+   for (i = 0; i < DRI3_NUM_BUFFERS; i++) {
+      if (pdraw->buffers[i])
+         dri3_free_render_buffer(pdraw, pdraw->buffers[i]);
+   }
+
+   if (pdraw->special_event)
+      xcb_unregister_for_special_event(c, pdraw->special_event);
    free(pdraw);
 }
 
@@ -676,7 +688,7 @@ dri3_alloc_render_buffer(struct glx_screen *glx_screen, Drawable draw,
    xcb_connection_t *c = XGetXCBConnection(dpy);
    xcb_pixmap_t pixmap;
    xcb_sync_fence_t sync_fence;
-   int32_t *shm_fence;
+   struct xshmfence *shm_fence;
    int buffer_fd, fence_fd;
    int stride;
 
@@ -736,6 +748,7 @@ dri3_alloc_render_buffer(struct glx_screen *glx_screen, Drawable draw,
                           fence_fd);
 
    buffer->pixmap = pixmap;
+   buffer->own_pixmap = true;
    buffer->sync_fence = sync_fence;
    buffer->shm_fence = shm_fence;
    buffer->width = width;
@@ -769,7 +782,8 @@ dri3_free_render_buffer(struct dri3_drawable *pdraw, struct dri3_buffer *buffer)
    struct dri3_screen   *psc = (struct dri3_screen *) pdraw->base.psc;
    xcb_connection_t     *c = XGetXCBConnection(pdraw->base.psc->dpy);
 
-   xcb_free_pixmap(c, buffer->pixmap);
+   if (buffer->own_pixmap)
+      xcb_free_pixmap(c, buffer->pixmap);
    xcb_sync_destroy_fence(c, buffer->sync_fence);
    xshmfence_unmap_shm(buffer->shm_fence);
    (*psc->image->destroyImage)(buffer->image);
@@ -921,7 +935,7 @@ dri3_get_pixmap_buffer(__DRIdrawable *driDrawable,
    struct dri3_screen                   *psc;
    xcb_connection_t                     *c;
    xcb_sync_fence_t                     sync_fence;
-   int32_t                              *shm_fence;
+   struct xshmfence                     *shm_fence;
    int                                  fence_fd;
    __DRIimage                           *image_planar;
    int                                  stride, offset;
@@ -987,6 +1001,7 @@ dri3_get_pixmap_buffer(__DRIdrawable *driDrawable,
       goto no_image;
 
    buffer->pixmap = pixmap;
+   buffer->own_pixmap = false;
    buffer->width = bp_reply->width;
    buffer->height = bp_reply->height;
    buffer->buffer_type = buffer_type;
@@ -1019,7 +1034,7 @@ dri3_find_back(xcb_connection_t *c, struct dri3_drawable *priv)
 
    for (;;) {
 
-      for (b = 0; b < DRI3_MAX_BACK; b++) {
+      for (b = 0; b < DRI3_NUM_BACK; b++) {
          int                    id = DRI3_BACK_ID(b);
          struct dri3_buffer        *buffer = priv->buffers[id];
 
@@ -1135,7 +1150,7 @@ dri3_free_buffers(__DRIdrawable *driDrawable,
    switch (buffer_type) {
    case dri3_buffer_back:
       first_id = DRI3_BACK_ID(0);
-      n_id = DRI3_MAX_BACK;
+      n_id = DRI3_NUM_BACK;
       break;
    case dri3_buffer_front:
       first_id = DRI3_FRONT_ID;

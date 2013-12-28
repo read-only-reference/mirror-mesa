@@ -33,19 +33,13 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
-#ifdef HAVE_DRM_PLATFORM
+#ifdef HAVE_LIBDRM
 #include <xf86drm.h>
 #endif
 #include <sys/types.h>
 #include <sys/stat.h>
 
 #include "egl_dri2.h"
-
-/* From xmlpool/options.h, user exposed so should be stable */
-#define DRI_CONF_VBLANK_NEVER 0
-#define DRI_CONF_VBLANK_DEF_INTERVAL_0 1
-#define DRI_CONF_VBLANK_DEF_INTERVAL_1 2
-#define DRI_CONF_VBLANK_ALWAYS_SYNC 3
 
 static void
 swrastCreateDrawable(struct dri2_egl_display * dri2_dpy,
@@ -608,7 +602,7 @@ dri2_x11_authenticate(_EGLDisplay *disp, uint32_t id)
 static EGLBoolean
 dri2_authenticate(_EGLDisplay *disp)
 {
-#ifdef HAVE_DRM_PLATFORM
+#ifdef HAVE_LIBDRM
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    drm_magic_t magic;
 
@@ -621,11 +615,8 @@ dri2_authenticate(_EGLDisplay *disp)
       _eglLog(_EGL_WARNING, "DRI2: failed to authenticate");
       return EGL_FALSE;
    }
-
-   return EGL_TRUE;
-#else
-   return EGL_FALSE;
 #endif
+   return EGL_TRUE;
 }
 
 static EGLBoolean

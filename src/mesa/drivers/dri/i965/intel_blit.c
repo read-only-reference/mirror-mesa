@@ -1,8 +1,8 @@
 /**************************************************************************
- * 
+ *
  * Copyright 2003 Tungsten Graphics, Inc., Cedar Park, Texas.
  * All Rights Reserved.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
  * "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  * distribute, sub license, and/or sell copies of the Software, and to
  * permit persons to whom the Software is furnished to do so, subject to
  * the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice (including the
  * next paragraph) shall be included in all copies or substantial portions
  * of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
@@ -22,7 +22,7 @@
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- * 
+ *
  **************************************************************************/
 
 
@@ -378,14 +378,12 @@ intelEmitCopyBlit(struct brw_context *brw,
    OUT_BATCH(BR13 | (uint16_t)dst_pitch);
    OUT_BATCH((dst_y << 16) | dst_x);
    OUT_BATCH((dst_y2 << 16) | dst_x2);
-   OUT_RELOC_FENCED(dst_buffer,
-		    I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
-		    dst_offset);
+   OUT_RELOC(dst_buffer,
+             I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
+             dst_offset);
    OUT_BATCH((src_y << 16) | src_x);
    OUT_BATCH((uint16_t)src_pitch);
-   OUT_RELOC_FENCED(src_buffer,
-		    I915_GEM_DOMAIN_RENDER, 0,
-		    src_offset);
+   OUT_RELOC(src_buffer, I915_GEM_DOMAIN_RENDER, 0, src_offset);
 
    ADVANCE_BATCH_TILED(dst_y_tiled, src_y_tiled);
 
@@ -449,9 +447,9 @@ intelEmitImmediateColorExpandBlit(struct brw_context *brw,
    OUT_BATCH(br13);
    OUT_BATCH((0 << 16) | 0); /* clip x1, y1 */
    OUT_BATCH((100 << 16) | 100); /* clip x2, y2 */
-   OUT_RELOC_FENCED(dst_buffer,
-		    I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
-		    dst_offset);
+   OUT_RELOC(dst_buffer,
+             I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
+             dst_offset);
    OUT_BATCH(0); /* bg */
    OUT_BATCH(fg_color); /* fg */
    OUT_BATCH(0); /* pattern base addr */
@@ -568,9 +566,9 @@ intel_miptree_set_alpha_to_one(struct brw_context *brw,
    OUT_BATCH(BR13);
    OUT_BATCH((y << 16) | x);
    OUT_BATCH(((y + height) << 16) | (x + width));
-   OUT_RELOC_FENCED(region->bo,
-		    I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
-		    0);
+   OUT_RELOC(region->bo,
+             I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
+             0);
    OUT_BATCH(0xffffffff); /* white, but only alpha gets written */
    ADVANCE_BATCH_TILED(dst_y_tiled, false);
 

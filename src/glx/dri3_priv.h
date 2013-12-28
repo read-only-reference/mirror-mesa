@@ -87,8 +87,9 @@ struct dri3_buffer {
     */
 
    uint32_t     sync_fence;     /* XID of X SyncFence object */
-   int32_t      *shm_fence;     /* pointer to xshmfence object */
+   struct xshmfence *shm_fence; /* pointer to xshmfence object */
    GLboolean    busy;           /* Set on swap, cleared on IdleNotify */
+   GLboolean    own_pixmap;     /* We allocated the pixmap ID, free on destroy */
    void         *driverPrivate;
 
    uint32_t     size;
@@ -142,14 +143,14 @@ struct dri3_context
    __DRIcontext *driContext;
 };
 
-#define DRI3_MAX_BACK   2
+#define DRI3_NUM_BACK   2
 #define DRI3_BACK_ID(i) (i)
-#define DRI3_FRONT_ID   (DRI3_MAX_BACK)
+#define DRI3_FRONT_ID   (DRI3_NUM_BACK)
 
 static inline int
 dri3_buf_id_next(int buf_id)
 {
-   if (buf_id == DRI3_MAX_BACK - 1)
+   if (buf_id == DRI3_NUM_BACK - 1)
       return 0;
    return buf_id + 1;
 }
@@ -158,7 +159,7 @@ static inline int
 dri3_buf_id_prev(int buf_id)
 {
    if (buf_id == 0)
-      return DRI3_MAX_BACK - 1;
+      return DRI3_NUM_BACK - 1;
    return buf_id - 1;
 }
 
@@ -171,10 +172,12 @@ dri3_pixmap_buf_id(enum dri3_buffer_type buffer_type)
       return DRI3_FRONT_ID;
 }
 
+#define DRI3_NUM_BUFFERS        (1 + DRI3_NUM_BACK)
+
 struct dri3_drawable {
    __GLXDRIdrawable base;
    __DRIdrawable *driDrawable;
-   int width, height;
+   int width, height, depth;
    int swap_interval;
    uint8_t have_back;
    uint8_t have_fake_front;
@@ -190,13 +193,9 @@ struct dri3_drawable {
    /* For WaitMSC */
    uint32_t present_msc_request_serial;
    uint32_t present_msc_event_serial;
-   
-   uint64_t previous_time;
-   unsigned frames;
 
-   struct dri3_buffer *buffers[1 + DRI3_MAX_BACK];
+   struct dri3_buffer *buffers[DRI3_NUM_BUFFERS];
    int cur_back;
-   int depth;
 
    uint32_t *stamp;
 

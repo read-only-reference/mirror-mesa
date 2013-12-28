@@ -197,6 +197,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_USER_INDEX_BUFFERS:
 	case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
 	case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
+        case PIPE_CAP_TGSI_VS_LAYER:
 		return 0;
 
 	/* Stream output. */
@@ -360,6 +361,11 @@ fd_screen_bo_from_handle(struct pipe_screen *pscreen,
 	struct fd_screen *screen = fd_screen(pscreen);
 	struct fd_bo *bo;
 
+	if (whandle->type != DRM_API_HANDLE_TYPE_SHARED) {
+		DBG("Attempt to import unsupported handle type %d", whandle->type);
+		return NULL;
+	}
+
 	bo = fd_bo_from_name(screen->dev, whandle->handle);
 	if (!bo) {
 		DBG("ref name 0x%08x failed", whandle->handle);
@@ -428,6 +434,7 @@ fd_screen_create(struct fd_device *dev)
 		fd2_screen_init(pscreen);
 		break;
 	case 320:
+	case 330:
 		fd3_screen_init(pscreen);
 		break;
 	default:

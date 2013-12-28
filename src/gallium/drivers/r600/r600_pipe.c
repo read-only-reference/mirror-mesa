@@ -43,14 +43,11 @@
 
 static const struct debug_named_value r600_debug_options[] = {
 	/* features */
-	{ "nohyperz", DBG_NO_HYPERZ, "Disable Hyper-Z" },
 #if defined(R600_USE_LLVM)
 	{ "nollvm", DBG_NO_LLVM, "Disable the LLVM shader compiler" },
 #endif
 	{ "nocpdma", DBG_NO_CP_DMA, "Disable CP DMA" },
 	{ "nodma", DBG_NO_ASYNC_DMA, "Disable asynchronous DMA" },
-	/* GL uses the word INVALIDATE, gallium uses the word DISCARD */
-	{ "noinvalrange", DBG_NO_DISCARD_RANGE, "Disable handling of INVALIDATE_RANGE map flags" },
 
 	/* shader backend */
 	{ "nosb", DBG_NO_SB, "Disable sb backend for graphics shaders" },
@@ -182,13 +179,9 @@ static void r600_destroy_context(struct pipe_context *context)
 	if (rctx->blitter) {
 		util_blitter_destroy(rctx->blitter);
 	}
-	if (rctx->uploader) {
-		u_upload_destroy(rctx->uploader);
-	}
 	if (rctx->allocator_fetch_shader) {
 		u_suballocator_destroy(rctx->allocator_fetch_shader);
 	}
-	util_slab_destroy(&rctx->pool_transfers);
 
 	r600_release_command_buffer(&rctx->start_cs_cmd);
 
@@ -198,6 +191,8 @@ static void r600_destroy_context(struct pipe_context *context)
 	if (rctx->b.rings.dma.cs) {
 		rctx->b.ws->cs_destroy(rctx->b.rings.dma.cs);
 	}
+
+	FREE(rctx->start_compute_cs_cmd.buf);
 
 	r600_common_context_cleanup(&rctx->b);
 	FREE(rctx);
@@ -210,10 +205,6 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 
 	if (rctx == NULL)
 		return NULL;
-
-	util_slab_create(&rctx->pool_transfers,
-			 sizeof(struct r600_transfer), 64,
-			 UTIL_SLAB_SINGLETHREADED);
 
 	rctx->b.b.screen = screen;
 	rctx->b.b.priv = priv;
@@ -297,12 +288,6 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 		rctx->b.ws->cs_set_flush_callback(rctx->b.rings.dma.cs, r600_flush_dma_from_winsys, rctx);
 		rctx->b.rings.dma.flushing = false;
 	}
-
-	rctx->uploader = u_upload_create(&rctx->b.b, 1024 * 1024, 256,
-					PIPE_BIND_INDEX_BUFFER |
-					PIPE_BIND_CONSTANT_BUFFER);
-	if (!rctx->uploader)
-		goto fail;
 
 	rctx->allocator_fetch_shader = u_suballocator_create(&rctx->b.b, 64 * 1024, 256,
 							     0, PIPE_USAGE_STATIC, FALSE);
@@ -464,13 +449,14 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
+	case PIPE_CAP_TGSI_VS_LAYER:
 		return 0;
 
 	/* Stream output. */
 	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
-		return rscreen->has_streamout ? 4 : 0;
+		return rscreen->b.has_streamout ? 4 : 0;
 	case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
-		return rscreen->has_streamout ? 1 : 0;
+		return rscreen->b.has_streamout ? 1 : 0;
 	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
 	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
 		return 32*4;
@@ -913,20 +899,20 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 	switch (rscreen->b.chip_class) {
 	case R600:
 		if (rscreen->b.family < CHIP_RS780) {
-			rscreen->has_streamout = rscreen->b.info.drm_minor >= 14;
+			rscreen->b.has_streamout = rscreen->b.info.drm_minor >= 14;
 		} else {
-			rscreen->has_streamout = rscreen->b.info.drm_minor >= 23;
+			rscreen->b.has_streamout = rscreen->b.info.drm_minor >= 23;
 		}
 		break;
 	case R700:
-		rscreen->has_streamout = rscreen->b.info.drm_minor >= 17;
+		rscreen->b.has_streamout = rscreen->b.info.drm_minor >= 17;
 		break;
 	case EVERGREEN:
 	case CAYMAN:
-		rscreen->has_streamout = rscreen->b.info.drm_minor >= 14;
+		rscreen->b.has_streamout = rscreen->b.info.drm_minor >= 14;
 		break;
 	default:
-		rscreen->has_streamout = FALSE;
+		rscreen->b.has_streamout = FALSE;
 		break;
 	}
 
@@ -950,7 +936,7 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 		rscreen->has_compressed_msaa_texturing = false;
 	}
 
-	rscreen->has_cp_dma = rscreen->b.info.drm_minor >= 27 &&
+	rscreen->b.has_cp_dma = rscreen->b.info.drm_minor >= 27 &&
 			      !(rscreen->b.debug_flags & DBG_NO_CP_DMA);
 
 	rscreen->global_pool = compute_memory_pool_new(rscreen);

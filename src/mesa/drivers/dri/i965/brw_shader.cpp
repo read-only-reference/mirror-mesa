@@ -223,7 +223,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       foreach_list(node, shader->ir) {
 	 ir_variable *var = ((ir_instruction *) node)->as_variable();
 
-	 if ((var == NULL) || (var->mode != ir_var_uniform)
+	 if ((var == NULL) || (var->data.mode != ir_var_uniform)
 	     || (strncmp(var->name, "gl_", 3) != 0))
 	    continue;
 
@@ -261,7 +261,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       if (ctx->Shader.Flags & GLSL_DUMP) {
          printf("\n");
          printf("GLSL IR for linked %s program %d:\n",
-                _mesa_glsl_shader_target_name(shader->base.Type), shProg->Name);
+                _mesa_shader_enum_to_string(shader->base.Type), shProg->Name);
          _mesa_print_ir(shader->base.ir, NULL);
          printf("\n");
       }
@@ -274,7 +274,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
             continue;
 
          printf("GLSL %s shader %d source for linked program %d:\n",
-                _mesa_glsl_shader_target_name(sh->Type),
+                _mesa_shader_enum_to_string(sh->Type),
                 i,
                 shProg->Name);
          printf("%s", sh->Source);
@@ -449,6 +449,8 @@ brw_instruction_name(enum opcode op)
       return "txb";
    case SHADER_OPCODE_TXF_MS:
       return "txf_ms";
+   case SHADER_OPCODE_TXF_MCS:
+      return "txf_mcs";
    case SHADER_OPCODE_TG4:
       return "tg4";
    case SHADER_OPCODE_TG4_OFFSET:
@@ -544,6 +546,7 @@ backend_instruction::is_tex()
            opcode == SHADER_OPCODE_TXD ||
            opcode == SHADER_OPCODE_TXF ||
            opcode == SHADER_OPCODE_TXF_MS ||
+           opcode == SHADER_OPCODE_TXF_MCS ||
            opcode == SHADER_OPCODE_TXL ||
            opcode == SHADER_OPCODE_TXS ||
            opcode == SHADER_OPCODE_LOD ||

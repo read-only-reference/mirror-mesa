@@ -35,6 +35,7 @@
 #include "../../winsys/radeon/drm/radeon_winsys.h"
 
 #include "util/u_range.h"
+#include "util/u_slab.h"
 #include "util/u_suballoc.h"
 #include "util/u_transfer.h"
 
@@ -74,7 +75,10 @@
 #define DBG_CS			(1 << 12)
 /* features */
 #define DBG_NO_HYPERZ		(1 << 13)
+#define DBG_NO_DISCARD_RANGE	(1 << 14)
 /* The maximum allowed bit is 15. */
+
+#define R600_MAP_BUFFER_ALIGNMENT 64
 
 struct r600_common_context;
 
@@ -136,12 +140,12 @@ struct r600_texture {
 	/* Colorbuffer compression and fast clear. */
 	struct r600_fmask_info		fmask;
 	struct r600_cmask_info		cmask;
-
-	struct r600_resource		*htile;
-	float				depth_clear; /* use htile only for first level */
-
 	struct r600_resource		*cmask_buffer;
 	unsigned			color_clear_value[2];
+
+	/* Depth buffer compression and fast clear. */
+	struct r600_resource		*htile_buffer;
+	float				depth_clear_value;
 
 	bool				non_disp_tiling; /* R600-Cayman only */
 	unsigned			mipmap_shift;
@@ -161,6 +165,8 @@ struct r600_common_screen {
 	struct radeon_info		info;
 	struct r600_tiling_info		tiling_info;
 	unsigned			debug_flags;
+	bool				has_cp_dma;
+	bool				has_streamout;
 
 	/* Auxiliary context. Mainly used to initialize resources.
 	 * It must be locked prior to using and flushed before unlocking. */
@@ -222,7 +228,9 @@ struct r600_common_context {
 	enum chip_class			chip_class;
 	struct r600_rings		rings;
 
+	struct u_upload_mgr		*uploader;
 	struct u_suballocator		*allocator_so_filled_size;
+	struct util_slab_mempool	pool_transfers;
 
 	/* Current unaccounted memory usage. */
 	uint64_t			vram;
@@ -253,7 +261,26 @@ struct r600_common_context {
 				      unsigned first_level, unsigned last_level,
 				      unsigned first_layer, unsigned last_layer,
 				      unsigned first_sample, unsigned last_sample);
+
+	/* Reallocate the buffer and update all resource bindings where
+	 * the buffer is bound, including all resource descriptors. */
+	void (*invalidate_buffer)(struct pipe_context *ctx, struct pipe_resource *buf);
 };
+
+/* r600_buffer.c */
+boolean r600_rings_is_buffer_referenced(struct r600_common_context *ctx,
+					struct radeon_winsys_cs_handle *buf,
+					enum radeon_bo_usage usage);
+void *r600_buffer_map_sync_with_rings(struct r600_common_context *ctx,
+                                      struct r600_resource *resource,
+                                      unsigned usage);
+bool r600_init_resource(struct r600_common_screen *rscreen,
+			struct r600_resource *res,
+			unsigned size, unsigned alignment,
+			bool use_reusable_pool, unsigned usage);
+struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
+					 const struct pipe_resource *templ,
+					 unsigned alignment);
 
 /* r600_common_pipe.c */
 bool r600_common_screen_init(struct r600_common_screen *rscreen,
@@ -267,16 +294,6 @@ bool r600_can_dump_shader(struct r600_common_screen *rscreen,
 			  const struct tgsi_token *tokens);
 void r600_screen_clear_buffer(struct r600_common_screen *rscreen, struct pipe_resource *dst,
 			      unsigned offset, unsigned size, unsigned value);
-boolean r600_rings_is_buffer_referenced(struct r600_common_context *ctx,
-					struct radeon_winsys_cs_handle *buf,
-					enum radeon_bo_usage usage);
-void *r600_buffer_map_sync_with_rings(struct r600_common_context *ctx,
-                                      struct r600_resource *resource,
-                                      unsigned usage);
-bool r600_init_resource(struct r600_common_screen *rscreen,
-			struct r600_resource *res,
-			unsigned size, unsigned alignment,
-			bool use_reusable_pool, unsigned usage);
 
 /* r600_streamout.c */
 void r600_streamout_buffers_dirty(struct r600_common_context *rctx);

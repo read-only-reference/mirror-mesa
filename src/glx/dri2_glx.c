@@ -366,6 +366,10 @@ dri2CreateDrawable(struct glx_screen *base, XID xDrawable,
    struct dri2_display *pdp;
    GLint vblank_mode = DRI_CONF_VBLANK_DEF_INTERVAL_1;
 
+   dpyPriv = __glXInitialize(psc->base.dpy);
+   if (dpyPriv == NULL)
+      return NULL;
+
    pdraw = calloc(1, sizeof(*pdraw));
    if (!pdraw)
       return NULL;
@@ -395,8 +399,6 @@ dri2CreateDrawable(struct glx_screen *base, XID xDrawable,
    }
 
    DRI2CreateDrawable(psc->base.dpy, xDrawable);
-
-   dpyPriv = __glXInitialize(psc->base.dpy);
    pdp = (struct dri2_display *)dpyPriv->dri2Display;;
    /* Create a new drawable */
    pdraw->driDrawable =
@@ -676,6 +678,10 @@ dri2FlushFrontBuffer(__DRIdrawable *driDrawable, void *loaderPrivate)
    psc = (struct dri2_screen *) pdraw->base.psc;
 
    priv = __glXInitialize(psc->base.dpy);
+
+   if (priv == NULL)
+       return;
+
    pdp = (struct dri2_display *) priv->dri2Display;
    gc = __glXGetCurrentContext();
 
@@ -985,9 +991,13 @@ dri2_bind_tex_image(Display * dpy,
    __GLXDRIdrawable *base = GetGLXDRIDrawable(dpy, drawable);
    struct glx_display *dpyPriv = __glXInitialize(dpy);
    struct dri2_drawable *pdraw = (struct dri2_drawable *) base;
-   struct dri2_display *pdp =
-      (struct dri2_display *) dpyPriv->dri2Display;
+   struct dri2_display *pdp;
    struct dri2_screen *psc;
+
+   if (dpyPriv == NULL)
+       return;
+
+   pdp = (struct dri2_display *) dpyPriv->dri2Display;
 
    if (pdraw != NULL) {
       psc = (struct dri2_screen *) base->psc;

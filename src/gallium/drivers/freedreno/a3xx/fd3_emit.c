@@ -231,6 +231,7 @@ emit_cache_flush(struct fd_ringbuffer *ring)
 	OUT_PKT3(ring, CP_EVENT_WRITE, 1);
 	OUT_RING(ring, CACHE_FLUSH);
 
+	/* probably only really needed on a320: */
 	OUT_PKT3(ring, CP_DRAW_INDX, 3);
 	OUT_RING(ring, 0x00000000);
 	OUT_RING(ring, DRAW(1, DI_SRC_SEL_AUTO_INDEX,
@@ -242,8 +243,6 @@ emit_cache_flush(struct fd_ringbuffer *ring)
 	OUT_RING(ring, 0x00000000);
 	OUT_RING(ring, 0x00000000);
 	OUT_RING(ring, 0x00000000);
-
-	OUT_WFI (ring);
 }
 
 /* emit texture state for mem->gmem restore operation.. eventually it would
@@ -355,7 +354,7 @@ fd3_emit_state(struct fd_context *ctx, uint32_t dirty)
 		struct fd3_zsa_stateobj *zsa = fd3_zsa_stateobj(ctx->zsa);
 		struct pipe_stencil_ref *sr = &ctx->stencil_ref;
 
-		fd3_emit_rbrc_draw_state(ring, zsa->rb_render_control);
+		fd3_emit_rbrc_draw_state(ctx, ring, zsa->rb_render_control);
 
 		OUT_PKT0(ring, REG_A3XX_RB_ALPHA_REF, 1);
 		OUT_RING(ring, zsa->rb_alpha_ref);
@@ -491,20 +490,22 @@ fd3_emit_restore(struct fd_context *ctx)
 	struct fd_ringbuffer *ring = ctx->ring;
 	int i;
 
-	OUT_PKT3(ring, CP_REG_RMW, 3);
-	OUT_RING(ring, REG_A3XX_RBBM_CLOCK_CTL);
-	OUT_RING(ring, 0xfffcffff);
-	OUT_RING(ring, 0x00000000);
+	if (ctx->screen->gpu_id == 320) {
+		OUT_PKT3(ring, CP_REG_RMW, 3);
+		OUT_RING(ring, REG_A3XX_RBBM_CLOCK_CTL);
+		OUT_RING(ring, 0xfffcffff);
+		OUT_RING(ring, 0x00000000);
+	}
 
 	OUT_PKT3(ring, CP_INVALIDATE_STATE, 1);
 	OUT_RING(ring, 0x00007fff);
 
-	OUT_PKT0(ring, REG_A3XX_SP_VS_PVT_MEM_CTRL_REG, 3);
+	OUT_PKT0(ring, REG_A3XX_SP_VS_PVT_MEM_PARAM_REG, 3);
 	OUT_RING(ring, 0x08000001);                  /* SP_VS_PVT_MEM_CTRL_REG */
 	OUT_RELOC(ring, fd3_ctx->vs_pvt_mem, 0,0,0); /* SP_VS_PVT_MEM_ADDR_REG */
 	OUT_RING(ring, 0x00000000);                  /* SP_VS_PVT_MEM_SIZE_REG */
 
-	OUT_PKT0(ring, REG_A3XX_SP_FS_PVT_MEM_CTRL_REG, 3);
+	OUT_PKT0(ring, REG_A3XX_SP_FS_PVT_MEM_PARAM_REG, 3);
 	OUT_RING(ring, 0x08000001);                  /* SP_FS_PVT_MEM_CTRL_REG */
 	OUT_RELOC(ring, fd3_ctx->fs_pvt_mem, 0,0,0); /* SP_FS_PVT_MEM_ADDR_REG */
 	OUT_RING(ring, 0x00000000);                  /* SP_FS_PVT_MEM_SIZE_REG */
@@ -521,14 +522,14 @@ fd3_emit_restore(struct fd_context *ctx)
 	OUT_RING(ring, A3XX_RB_MSAA_CONTROL_DISABLE |
 			A3XX_RB_MSAA_CONTROL_SAMPLES(MSAA_ONE) |
 			A3XX_RB_MSAA_CONTROL_SAMPLE_MASK(0xffff));
-	OUT_RING(ring, 0x00000000);        /* UNKNOWN_20C3 */
+	OUT_RING(ring, 0x00000000);        /* RB_ALPHA_REF */
 
 	OUT_PKT0(ring, REG_A3XX_GRAS_CL_GB_CLIP_ADJ, 1);
 	OUT_RING(ring, A3XX_GRAS_CL_GB_CLIP_ADJ_HORZ(0) |
 			A3XX_GRAS_CL_GB_CLIP_ADJ_VERT(0));
 
-	OUT_PKT0(ring, REG_A3XX_UNKNOWN_0C81, 1);
-	OUT_RING(ring, 0x00000001);        /* UNKNOWN_0C81 */
+	OUT_PKT0(ring, REG_A3XX_GRAS_TSE_DEBUG_ECO, 1);
+	OUT_RING(ring, 0x00000001);        /* GRAS_TSE_DEBUG_ECO */
 
 	OUT_PKT0(ring, REG_A3XX_TPL1_TP_VS_TEX_OFFSET, 1);
 	OUT_RING(ring, A3XX_TPL1_TP_VS_TEX_OFFSET_SAMPLEROFFSET(VERT_TEX_OFF) |
@@ -581,9 +582,9 @@ fd3_emit_restore(struct fd_context *ctx)
 	OUT_PKT0(ring, REG_A3XX_PC_RESTART_INDEX, 1);
 	OUT_RING(ring, 0xffffffff);        /* PC_RESTART_INDEX */
 
-	OUT_PKT0(ring, REG_A3XX_PA_SC_WINDOW_OFFSET, 1);
-	OUT_RING(ring, A3XX_PA_SC_WINDOW_OFFSET_X(0) |
-			A3XX_PA_SC_WINDOW_OFFSET_Y(0));
+	OUT_PKT0(ring, REG_A3XX_RB_WINDOW_OFFSET, 1);
+	OUT_RING(ring, A3XX_RB_WINDOW_OFFSET_X(0) |
+			A3XX_RB_WINDOW_OFFSET_Y(0));
 
 	OUT_PKT0(ring, REG_A3XX_RB_BLEND_RED, 4);
 	OUT_RING(ring, A3XX_RB_BLEND_RED_UINT(0) |
@@ -604,4 +605,5 @@ fd3_emit_restore(struct fd_context *ctx)
 	}
 
 	emit_cache_flush(ring);
+	fd_rmw_wfi(ctx, ring);
 }

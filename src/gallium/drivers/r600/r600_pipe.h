@@ -34,7 +34,6 @@
 #include "r600_resource.h"
 
 #include "util/u_blitter.h"
-#include "util/u_slab.h"
 #include "util/u_suballoc.h"
 #include "util/u_double_list.h"
 #include "util/u_transfer.h"
@@ -62,8 +61,6 @@
 #else
 #define R600_BIG_ENDIAN 0
 #endif
-
-#define R600_MAP_BUFFER_ALIGNMENT 64
 
 #define R600_QUERY_DRAW_CALLS		(PIPE_QUERY_DRIVER_SPECIFIC + 0)
 #define R600_QUERY_REQUESTED_VRAM	(PIPE_QUERY_DRIVER_SPECIFIC + 1)
@@ -192,7 +189,6 @@ struct r600_viewport_state {
 #define DBG_NO_LLVM		(1 << 17)
 #define DBG_NO_CP_DMA		(1 << 18)
 #define DBG_NO_ASYNC_DMA	(1 << 19)
-#define DBG_NO_DISCARD_RANGE	(1 << 20)
 /* shader backend */
 #define DBG_NO_SB		(1 << 21)
 #define DBG_SB_CS		(1 << 22)
@@ -205,9 +201,7 @@ struct r600_viewport_state {
 
 struct r600_screen {
 	struct r600_common_screen	b;
-	bool				has_streamout;
 	bool				has_msaa;
-	bool				has_cp_dma;
 	bool				has_compressed_msaa_texturing;
 
 	/*for compute global memory binding, we allocate stuff here, instead of
@@ -402,9 +396,7 @@ struct r600_context {
 	struct r600_common_context	b;
 	struct r600_screen		*screen;
 	struct blitter_context		*blitter;
-	struct u_upload_mgr		*uploader;
 	struct u_suballocator		*allocator_fetch_shader;
-	struct util_slab_mempool	pool_transfers;
 	unsigned			initial_gfx_cs_size;
 
 	/* Hardware info. */
@@ -598,18 +590,11 @@ void evergreen_init_color_surface_rat(struct r600_context *rctx,
 void evergreen_update_db_shader_control(struct r600_context * rctx);
 
 /* r600_blit.c */
-void r600_copy_buffer(struct pipe_context *ctx, struct pipe_resource *dst, unsigned dstx,
-		      struct pipe_resource *src, const struct pipe_box *src_box);
 void r600_init_blit_functions(struct r600_context *rctx);
 void r600_decompress_depth_textures(struct r600_context *rctx,
 				    struct r600_samplerview_state *textures);
 void r600_decompress_color_textures(struct r600_context *rctx,
 				    struct r600_samplerview_state *textures);
-
-/* r600_buffer.c */
-struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
-					 const struct pipe_resource *templ,
-					 unsigned alignment);
 
 /* r600_pipe.c */
 const char * r600_llvm_gpu_string(enum radeon_family family);

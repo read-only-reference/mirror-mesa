@@ -953,10 +953,10 @@ static void r600_set_constant_buffer(struct pipe_context *ctx, uint shader, uint
 				tmpPtr[i] = util_bswap32(((uint32_t *)ptr)[i]);
 			}
 
-			u_upload_data(rctx->uploader, 0, size, tmpPtr, &cb->buffer_offset, &cb->buffer);
+			u_upload_data(rctx->b.uploader, 0, size, tmpPtr, &cb->buffer_offset, &cb->buffer);
 			free(tmpPtr);
 		} else {
-			u_upload_data(rctx->uploader, 0, input->buffer_size, ptr, &cb->buffer_offset, &cb->buffer);
+			u_upload_data(rctx->b.uploader, 0, input->buffer_size, ptr, &cb->buffer_offset, &cb->buffer);
 		}
 		/* account it in gtt */
 		rctx->b.gtt += input->buffer_size;
@@ -1257,7 +1257,7 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 			unsigned out_offset;
 			void *ptr;
 
-			u_upload_alloc(rctx->uploader, 0, info.count * 2,
+			u_upload_alloc(rctx->b.uploader, 0, info.count * 2,
 				       &out_offset, &out_buffer, &ptr);
 
 			util_shorten_ubyte_elts_to_userptr(
@@ -1276,7 +1276,7 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 		 * Note: Instanced rendering in combination with immediate indices hangs. */
 		if (ib.user_buffer && (R600_BIG_ENDIAN || info.instance_count > 1 ||
 				       info.count*ib.index_size > 20)) {
-			u_upload_data(rctx->uploader, 0, info.count * ib.index_size,
+			u_upload_data(rctx->b.uploader, 0, info.count * ib.index_size,
 				      ib.user_buffer, &ib.offset, &ib.buffer);
 			ib.user_buffer = NULL;
 		}
@@ -1452,7 +1452,7 @@ void r600_draw_rectangle(struct blitter_context *blitter,
 	/* Upload vertices. The hw rectangle has only 3 vertices,
 	 * I guess the 4th one is derived from the first 3.
 	 * The vertex specification should match u_blitter's vertex element state. */
-	u_upload_alloc(rctx->uploader, 0, sizeof(float) * 24, &offset, &buf, (void**)&vb);
+	u_upload_alloc(rctx->b.uploader, 0, sizeof(float) * 24, &offset, &buf, (void**)&vb);
 	vb[0] = x1;
 	vb[1] = y1;
 	vb[2] = depth;
@@ -2072,6 +2072,61 @@ out_unknown:
 	return ~0;
 }
 
+static void r600_invalidate_buffer(struct pipe_context *ctx, struct pipe_resource *buf)
+{
+	struct r600_context *rctx = (struct r600_context*)ctx;
+	struct r600_resource *rbuffer = r600_resource(buf);
+	unsigned i, shader, mask, alignment = rbuffer->buf->alignment;
+
+	/* Discard the buffer. */
+	pb_reference(&rbuffer->buf, NULL);
+
+	/* Create a new one in the same pipe_resource. */
+	r600_init_resource(&rctx->screen->b, rbuffer, rbuffer->b.b.width0, alignment,
+			   TRUE, rbuffer->b.b.usage);
+
+	/* We changed the buffer, now we need to bind it where the old one was bound. */
+	/* Vertex buffers. */
+	mask = rctx->vertex_buffer_state.enabled_mask;
+	while (mask) {
+		i = u_bit_scan(&mask);
+		if (rctx->vertex_buffer_state.vb[i].buffer == &rbuffer->b.b) {
+			rctx->vertex_buffer_state.dirty_mask |= 1 << i;
+			r600_vertex_buffers_dirty(rctx);
+		}
+	}
+	/* Streamout buffers. */
+	for (i = 0; i < rctx->b.streamout.num_targets; i++) {
+		if (rctx->b.streamout.targets[i]->b.buffer == &rbuffer->b.b) {
+			if (rctx->b.streamout.begin_emitted) {
+				r600_emit_streamout_end(&rctx->b);
+			}
+			rctx->b.streamout.append_bitmask = rctx->b.streamout.enabled_mask;
+			r600_streamout_buffers_dirty(&rctx->b);
+		}
+	}
+
+	/* Constant buffers. */
+	for (shader = 0; shader < PIPE_SHADER_TYPES; shader++) {
+		struct r600_constbuf_state *state = &rctx->constbuf_state[shader];
+		bool found = false;
+		uint32_t mask = state->enabled_mask;
+
+		while (mask) {
+			unsigned i = u_bit_scan(&mask);
+			if (state->cb[i].buffer == &rbuffer->b.b) {
+				found = true;
+				state->dirty_mask |= 1 << i;
+			}
+		}
+		if (found) {
+			r600_constant_buffers_dirty(rctx, state);
+		}
+	}
+
+	/* XXX TODO: texture buffer objects */
+}
+
 /* keep this at the end of this file, please */
 void r600_init_common_state_functions(struct r600_context *rctx)
 {
@@ -2107,6 +2162,7 @@ void r600_init_common_state_functions(struct r600_context *rctx)
 	rctx->b.b.create_surface = r600_create_surface;
 	rctx->b.b.surface_destroy = r600_surface_destroy;
 	rctx->b.b.draw_vbo = r600_draw_vbo;
+	rctx->b.invalidate_buffer = r600_invalidate_buffer;
 }
 
 void r600_trace_emit(struct r600_context *rctx)

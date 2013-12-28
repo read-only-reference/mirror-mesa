@@ -2,7 +2,7 @@
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
  Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
  develop this 3D driver.
- 
+
  Permission is hereby granted, free of charge, to any person obtaining
  a copy of this software and associated documentation files (the
  "Software"), to deal in the Software without restriction, including
@@ -10,11 +10,11 @@
  distribute, sublicense, and/or sell copies of the Software, and to
  permit persons to whom the Software is furnished to do so, subject to
  the following conditions:
- 
+
  The above copyright notice and this permission notice (including the
  next paragraph) shall be included in all copies or substantial
  portions of the Software.
- 
+
  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
@@ -22,7 +22,7 @@
  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- 
+
  **********************************************************************/
  /*
   * Authors:
@@ -770,6 +770,7 @@ enum opcode {
    SHADER_OPCODE_TXS,
    FS_OPCODE_TXB,
    SHADER_OPCODE_TXF_MS,
+   SHADER_OPCODE_TXF_MCS,
    SHADER_OPCODE_LOD,
    SHADER_OPCODE_TG4,
    SHADER_OPCODE_TG4_OFFSET,
@@ -981,16 +982,24 @@ operator|(brw_urb_write_flags x, brw_urb_write_flags y)
 #define BRW_MESSAGE_REGISTER_FILE         2
 #define BRW_IMMEDIATE_VALUE               3
 
-#define BRW_REGISTER_TYPE_UD  0
-#define BRW_REGISTER_TYPE_D   1
-#define BRW_REGISTER_TYPE_UW  2
-#define BRW_REGISTER_TYPE_W   3
-#define BRW_REGISTER_TYPE_UB  4
-#define BRW_REGISTER_TYPE_B   5
-#define BRW_REGISTER_TYPE_VF  5	/* packed float vector, immediates only? */
-#define BRW_REGISTER_TYPE_HF  6
-#define BRW_REGISTER_TYPE_V   6	/* packed int vector, immediates only, uword dest only */
-#define BRW_REGISTER_TYPE_F   7
+#define BRW_HW_REG_TYPE_UD  0
+#define BRW_HW_REG_TYPE_D   1
+#define BRW_HW_REG_TYPE_UW  2
+#define BRW_HW_REG_TYPE_W   3
+#define BRW_HW_REG_TYPE_F   7
+#define GEN8_HW_REG_TYPE_UQ 8
+#define GEN8_HW_REG_TYPE_Q  9
+
+#define BRW_HW_REG_NON_IMM_TYPE_UB  4
+#define BRW_HW_REG_NON_IMM_TYPE_B   5
+#define GEN7_HW_REG_NON_IMM_TYPE_DF 6
+#define GEN8_HW_REG_NON_IMM_TYPE_HF 10
+
+#define BRW_HW_REG_IMM_TYPE_UV  4 /* Gen6+ packed unsigned immediate vector */
+#define BRW_HW_REG_IMM_TYPE_VF  5 /* packed float immediate vector */
+#define BRW_HW_REG_IMM_TYPE_V   6 /* packed int imm. vector; uword dest only */
+#define GEN8_HW_REG_IMM_TYPE_DF 10
+#define GEN8_HW_REG_IMM_TYPE_HF 11
 
 /* SNB adds 3-src instructions (MAD and LRP) that only operate on floats, so
  * the types were implied. IVB adds BFE and BFI2 that operate on doublewords

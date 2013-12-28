@@ -3,7 +3,7 @@
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
  Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
  develop this 3D driver.
- 
+
  Permission is hereby granted, free of charge, to any person obtaining
  a copy of this software and associated documentation files (the
  "Software"), to deal in the Software without restriction, including
@@ -11,11 +11,11 @@
  distribute, sublicense, and/or sell copies of the Software, and to
  permit persons to whom the Software is furnished to do so, subject to
  the following conditions:
- 
+
  The above copyright notice and this permission notice (including the
  next paragraph) shall be included in all copies or substantial
  portions of the Software.
- 
+
  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
@@ -23,7 +23,7 @@
  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- 
+
  **********************************************************************/
  /*
   * Authors:
@@ -315,7 +315,7 @@ brw_initialize_context_constants(struct brw_context *brw)
       ctx->Const.MaxArrayTextureLayers = 512;
 
    ctx->Const.MaxTextureRectSize = 1 << 12;
-   
+
    ctx->Const.MaxTextureMaxAnisotropy = 16.0;
 
    ctx->Const.MaxRenderbufferSize = 8192;
@@ -630,6 +630,8 @@ brwCreateContext(gl_api api,
       intelDestroyContext(driContextPriv);
       return false;
    }
+
+   driContextSetFlags(ctx, flags);
 
    /* Initialize the software rasterizer and helper modules.
     *
@@ -1301,10 +1303,21 @@ intel_update_image_buffer(struct brw_context *intel,
 
    unsigned num_samples = rb->Base.Base.NumSamples;
 
-   if (rb->mt &&
-       rb->mt->region &&
-       rb->mt->region == region)
-      return;
+   /* Check and see if we're already bound to the right
+    * buffer object
+    */
+   if (num_samples == 0) {
+       if (rb->mt &&
+           rb->mt->region &&
+           rb->mt->region->bo == region->bo)
+          return;
+   } else {
+       if (rb->mt &&
+           rb->mt->singlesample_mt &&
+           rb->mt->singlesample_mt->region &&
+           rb->mt->singlesample_mt->region->bo == region->bo)
+          return;
+   }
 
    intel_miptree_release(&rb->mt);
    rb->mt = intel_miptree_create_for_image_buffer(intel,

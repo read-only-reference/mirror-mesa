@@ -61,7 +61,6 @@ struct si_state_dsa {
 	struct si_pm4_state	pm4;
 	float			alpha_ref;
 	unsigned		alpha_func;
-	unsigned		db_render_override;
 	unsigned		db_render_control;
 	uint8_t			valuemask[2];
 	uint8_t			writemask[2];
@@ -197,9 +196,13 @@ void si_set_sampler_view(struct r600_context *rctx, unsigned shader,
 void si_init_all_descriptors(struct r600_context *rctx);
 void si_release_all_descriptors(struct r600_context *rctx);
 void si_all_descriptors_begin_new_cs(struct r600_context *rctx);
+void si_copy_buffer(struct r600_context *rctx,
+		    struct pipe_resource *dst, struct pipe_resource *src,
+		    uint64_t dst_offset, uint64_t src_offset, unsigned size);
 
 /* si_state.c */
 struct si_pipe_shader_selector;
+struct r600_surface;
 
 boolean si_is_format_supported(struct pipe_screen *screen,
                                enum pipe_format format,
