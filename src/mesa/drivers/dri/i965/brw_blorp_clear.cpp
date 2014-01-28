@@ -147,7 +147,7 @@ brw_blorp_const_color_program::~brw_blorp_const_color_program()
  */
 static bool
 is_color_fast_clear_compatible(struct brw_context *brw,
-                               gl_format format,
+                               mesa_format format,
                                const union gl_color_union *color)
 {
    if (_mesa_is_format_integer_color(format))
@@ -193,7 +193,7 @@ brw_blorp_clear_params::brw_blorp_clear_params(struct brw_context *brw,
    dst.set(brw, irb->mt, irb->mt_level, layer, true);
 
    /* Override the surface format according to the context's sRGB rules. */
-   gl_format format = _mesa_get_render_format(ctx, irb->mt->format);
+   mesa_format format = _mesa_get_render_format(ctx, irb->mt->format);
    dst.brw_surfaceformat = brw->render_target_format[format];
 
    x0 = fb->_Xmin;
@@ -573,14 +573,14 @@ brw_blorp_clear_color(struct brw_context *brw, struct gl_framebuffer *fb,
       if (rb == NULL)
          continue;
 
-      if (fb->NumLayers > 0) {
+      if (fb->MaxNumLayers > 0) {
          unsigned layer_multiplier =
             (irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_UMS ||
              irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS) ?
             irb->mt->num_samples : 1;
-         assert(fb->NumLayers * layer_multiplier ==
-                irb->mt->level[irb->mt_level].depth);
-         for (unsigned layer = 0; layer < fb->NumLayers; layer++) {
+         unsigned num_layers =
+            irb->mt->level[irb->mt_level].depth / layer_multiplier;
+         for (unsigned layer = 0; layer < num_layers; layer++) {
             if (!do_single_blorp_clear(brw, fb, rb, buf, partial_clear,
                                        layer * layer_multiplier)) {
                return false;

@@ -1,6 +1,6 @@
 /*
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
- Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
+ Intel funded Tungsten Graphics to
  develop this 3D driver.
 
  Permission is hereby granted, free of charge, to any person obtaining
@@ -26,7 +26,7 @@
  **********************************************************************/
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   */
 
 #include "brw_context.h"
@@ -49,6 +49,7 @@
 static unsigned
 brw_compute_barycentric_interp_modes(struct brw_context *brw,
                                      bool shade_model_flat,
+                                     bool persample_shading,
                                      const struct gl_fragment_program *fprog)
 {
    unsigned barycentric_interp_modes = 0;
@@ -61,7 +62,10 @@ brw_compute_barycentric_interp_modes(struct brw_context *brw,
    for (attr = 0; attr < VARYING_SLOT_MAX; ++attr) {
       enum glsl_interp_qualifier interp_qualifier =
          fprog->InterpQualifier[attr];
-      bool is_centroid = fprog->IsCentroid & BITFIELD64_BIT(attr);
+      bool is_centroid = (fprog->IsCentroid & BITFIELD64_BIT(attr)) &&
+         !persample_shading;
+      bool is_sample = (fprog->IsSample & BITFIELD64_BIT(attr)) ||
+         persample_shading;
       bool is_gl_Color = attr == VARYING_SLOT_COL0 || attr == VARYING_SLOT_COL1;
 
       /* Ignore unused inputs. */
@@ -82,8 +86,12 @@ brw_compute_barycentric_interp_modes(struct brw_context *brw,
          if (is_centroid) {
             barycentric_interp_modes |=
                1 << BRW_WM_NONPERSPECTIVE_CENTROID_BARYCENTRIC;
+         } else if (is_sample) {
+            barycentric_interp_modes |=
+               1 << BRW_WM_NONPERSPECTIVE_SAMPLE_BARYCENTRIC;
          }
-         if (!is_centroid || brw->needs_unlit_centroid_workaround) {
+         if ((!is_centroid && !is_sample) ||
+             brw->needs_unlit_centroid_workaround) {
             barycentric_interp_modes |=
                1 << BRW_WM_NONPERSPECTIVE_PIXEL_BARYCENTRIC;
          }
@@ -93,8 +101,12 @@ brw_compute_barycentric_interp_modes(struct brw_context *brw,
          if (is_centroid) {
             barycentric_interp_modes |=
                1 << BRW_WM_PERSPECTIVE_CENTROID_BARYCENTRIC;
+         } else if (is_sample) {
+            barycentric_interp_modes |=
+               1 << BRW_WM_PERSPECTIVE_SAMPLE_BARYCENTRIC;
          }
-         if (!is_centroid || brw->needs_unlit_centroid_workaround) {
+         if ((!is_centroid && !is_sample) ||
+             brw->needs_unlit_centroid_workaround) {
             barycentric_interp_modes |=
                1 << BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
          }
@@ -142,6 +154,7 @@ bool do_wm_prog(struct brw_context *brw,
 		struct brw_fragment_program *fp,
 		struct brw_wm_prog_key *key)
 {
+   struct gl_context *ctx = &brw->ctx;
    struct brw_wm_compile *c;
    const GLuint *program;
    struct gl_shader *fs = NULL;
@@ -163,7 +176,7 @@ bool do_wm_prog(struct brw_context *brw,
       param_count = fp->program.Base.Parameters->NumParameters * 4;
    }
    /* The backend also sometimes adds params for texture size. */
-   param_count += 2 * BRW_MAX_TEX_UNIT;
+   param_count += 2 * ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxTextureImageUnits;
    c->prog_data.param = rzalloc_array(NULL, const float *, param_count);
    c->prog_data.pull_param = rzalloc_array(NULL, const float *, param_count);
 
@@ -171,6 +184,7 @@ bool do_wm_prog(struct brw_context *brw,
 
    c->prog_data.barycentric_interp_modes =
       brw_compute_barycentric_interp_modes(brw, c->key.flat_shade,
+                                           c->key.persample_shading,
                                            &fp->program);
 
    program = brw_wm_fs_emit(brw, c, &fp->program, prog, &program_size);
@@ -503,8 +517,12 @@ static void brw_wm_populate_key( struct brw_context *brw,
       (ctx->Multisample.SampleAlphaToCoverage || ctx->Color.AlphaEnabled);
 
    /* _NEW_BUFFERS _NEW_MULTISAMPLE */
+   /* Ignore sample qualifier while computing this flag. */
+   key->persample_shading =
+      _mesa_get_min_invocations_per_fragment(ctx, &fp->program, true) > 1;
+
    key->compute_pos_offset =
-      _mesa_get_min_invocations_per_fragment(ctx, &fp->program) > 1 &&
+      _mesa_get_min_invocations_per_fragment(ctx, &fp->program, false) > 1 &&
       fp->program.Base.SystemValuesRead & SYSTEM_BIT_SAMPLE_POS;
 
    key->compute_sample_id =

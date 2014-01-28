@@ -1,6 +1,6 @@
 /**************************************************************************
  * 
- * Copyright 2007 Tungsten Graphics, Inc., Cedar Park, Texas.
+ * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -18,7 +18,7 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL TUNGSTEN GRAPHICS AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -541,8 +541,14 @@ st_validate_attachment(struct gl_context *ctx,
 {
    const struct st_texture_object *stObj = st_texture_object(att->Texture);
    enum pipe_format format;
-   gl_format texFormat;
+   mesa_format texFormat;
    GLboolean valid;
+
+   /* Sanity check: we must be binding the surface as a (color) render target
+    * or depth/stencil target.
+    */
+   assert(bindings == PIPE_BIND_RENDER_TARGET ||
+          bindings == PIPE_BIND_DEPTH_STENCIL);
 
    /* Only validate texture attachments for now, since
     * st_renderbuffer_alloc_storage makes sure that
@@ -562,7 +568,7 @@ st_validate_attachment(struct gl_context *ctx,
     * Later when we create a surface, we change the format to a linear one. */
    if (!ctx->Extensions.EXT_framebuffer_sRGB &&
        _mesa_get_format_color_encoding(texFormat) == GL_SRGB) {
-      const gl_format linearFormat = _mesa_get_srgb_format_linear(texFormat);
+      const mesa_format linearFormat = _mesa_get_srgb_format_linear(texFormat);
       format = st_mesa_format_to_pipe_format(linearFormat);
    }
 
@@ -680,7 +686,10 @@ st_DrawBuffers(struct gl_context *ctx, GLsizei count, const GLenum *buffers)
    /* add the renderbuffers on demand */
    for (i = 0; i < fb->_NumColorDrawBuffers; i++) {
       gl_buffer_index idx = fb->_ColorDrawBufferIndexes[i];
-      st_manager_add_color_renderbuffer(st, fb, idx);
+
+      if (idx >= 0) {
+         st_manager_add_color_renderbuffer(st, fb, idx);
+      }
    }
 }
 
@@ -697,7 +706,8 @@ st_ReadBuffer(struct gl_context *ctx, GLenum buffer)
    (void) buffer;
 
    /* add the renderbuffer on demand */
-   st_manager_add_color_renderbuffer(st, fb, fb->_ColorReadBufferIndex);
+   if (fb->_ColorReadBufferIndex >= 0)
+      st_manager_add_color_renderbuffer(st, fb, fb->_ColorReadBufferIndex);
 }
 
 

@@ -148,7 +148,7 @@ public:
     * in particular.  No support for other instruction types (assignments,
     * jumps, calls, etc.) is planned.
     */
-   virtual bool equals(ir_instruction *ir);
+   virtual bool equals(ir_instruction *ir, enum ir_node_type ignore = ir_type_unset);
 
 protected:
    ir_instruction()
@@ -471,7 +471,7 @@ public:
    void reinit_interface_type(const struct glsl_type *type)
    {
       if (this->max_ifc_array_access != NULL) {
-#ifndef _NDEBUG
+#ifndef NDEBUG
          /* Redeclaring gl_PerVertex is only allowed if none of the built-ins
           * it defines have been accessed yet; so it's safe to throw away the
           * old max_ifc_array_access pointer, since all of its values are
@@ -914,14 +914,6 @@ public:
    }
 
    /**
-    * Get an iterator for the set of function signatures
-    */
-   exec_list_iterator iterator()
-   {
-      return signatures.iterator();
-   }
-
-   /**
     * Find a signature that matches a set of actual parameters, taking implicit
     * conversions into account.  Also flags whether the match was exact.
     */
@@ -1016,14 +1008,6 @@ public:
    virtual ir_loop *as_loop()
    {
       return this;
-   }
-
-   /**
-    * Get an iterator for the instructions of the loop body
-    */
-   exec_list_iterator iterator()
-   {
-      return body_instructions.iterator();
    }
 
    /** List of ir_instruction that make up the body of the loop. */
@@ -1429,7 +1413,7 @@ public:
       return this;
    }
 
-   virtual bool equals(ir_instruction *ir);
+   virtual bool equals(ir_instruction *ir, enum ir_node_type ignore = ir_type_unset);
 
    virtual ir_expression *clone(void *mem_ctx, struct hash_table *ht) const;
 
@@ -1519,14 +1503,6 @@ public:
    }
 
    virtual ir_visitor_status accept(ir_hierarchical_visitor *);
-
-   /**
-    * Get an iterator for the set of acutal parameters
-    */
-   exec_list_iterator iterator()
-   {
-      return actual_parameters.iterator();
-   }
 
    /**
     * Get the name of the function being called.
@@ -1765,7 +1741,7 @@ public:
 
    virtual ir_visitor_status accept(ir_hierarchical_visitor *);
 
-   virtual bool equals(ir_instruction *ir);
+   virtual bool equals(ir_instruction *ir, enum ir_node_type ignore = ir_type_unset);
 
    /**
     * Return a string representing the ir_texture_opcode.
@@ -1871,7 +1847,7 @@ public:
 
    virtual ir_visitor_status accept(ir_hierarchical_visitor *);
 
-   virtual bool equals(ir_instruction *ir);
+   virtual bool equals(ir_instruction *ir, enum ir_node_type ignore = ir_type_unset);
 
    bool is_lvalue() const
    {
@@ -1937,7 +1913,7 @@ public:
       return this;
    }
 
-   virtual bool equals(ir_instruction *ir);
+   virtual bool equals(ir_instruction *ir, enum ir_node_type ignore = ir_type_unset);
 
    /**
     * Get the variable that is ultimately referenced by an r-value
@@ -1997,7 +1973,7 @@ public:
       return this;
    }
 
-   virtual bool equals(ir_instruction *ir);
+   virtual bool equals(ir_instruction *ir, enum ir_node_type ignore = ir_type_unset);
 
    /**
     * Get the variable that is ultimately referenced by an r-value
@@ -2133,7 +2109,7 @@ public:
 
    virtual ir_visitor_status accept(ir_hierarchical_visitor *);
 
-   virtual bool equals(ir_instruction *ir);
+   virtual bool equals(ir_instruction *ir, enum ir_node_type ignore = ir_type_unset);
 
    /**
     * Get a particular component of a constant as a specific type
@@ -2186,6 +2162,12 @@ public:
     */
    bool has_value(const ir_constant *) const;
 
+   /**
+    * Return true if this ir_constant represents the given value.
+    *
+    * For vectors, this checks that each component is the given value.
+    */
+   virtual bool is_value(float f, int i) const;
    virtual bool is_zero() const;
    virtual bool is_one() const;
    virtual bool is_negative_one() const;
@@ -2345,7 +2327,7 @@ ir_has_call(ir_instruction *ir);
 
 extern void
 do_set_program_inouts(exec_list *instructions, struct gl_program *prog,
-                      GLenum shader_type);
+                      gl_shader_stage shader_stage);
 
 extern char *
 prototype_string(const glsl_type *return_type, const char *name,

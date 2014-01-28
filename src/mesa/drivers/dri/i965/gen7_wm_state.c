@@ -103,7 +103,7 @@ upload_wm_state(struct brw_context *brw)
       else
          dw1 |= GEN7_WM_MSRAST_OFF_PIXEL;
 
-      if (_mesa_get_min_invocations_per_fragment(ctx, brw->fragment_program) > 1)
+      if (_mesa_get_min_invocations_per_fragment(ctx, brw->fragment_program, false) > 1)
          dw2 |= GEN7_WM_MSDISPMODE_PERSAMPLE;
       else
          dw2 |= GEN7_WM_MSDISPMODE_PERPIXEL;
@@ -170,11 +170,11 @@ upload_ps_state(struct brw_context *brw)
 
    /* Use ALT floating point mode for ARB fragment programs, because they
     * require 0^0 == 1.  Even though _CurrentFragmentProgram is used for
-    * rendering, CurrentFragmentProgram is used for this check to
-    * differentiate between the GLSL and non-GLSL cases.
+    * rendering, CurrentProgram[MESA_SHADER_FRAGMENT] is used for this check
+    * to differentiate between the GLSL and non-GLSL cases.
     */
    /* BRW_NEW_FRAGMENT_PROGRAM */
-   if (ctx->Shader.CurrentFragmentProgram == NULL)
+   if (ctx->Shader.CurrentProgram[MESA_SHADER_FRAGMENT] == NULL)
       dw2 |= GEN7_PS_FLOATING_POINT_MODE_ALT;
 
    /* Haswell requires the sample mask to be set in this packet as well as
@@ -236,7 +236,7 @@ upload_ps_state(struct brw_context *brw)
     * better performance than 'SIMD8 only' dispatch.
     */
    int min_inv_per_frag =
-      _mesa_get_min_invocations_per_fragment(ctx, brw->fragment_program);
+      _mesa_get_min_invocations_per_fragment(ctx, brw->fragment_program, false);
    assert(min_inv_per_frag >= 1);
 
    if (brw->wm.prog_data->prog_offset_16) {

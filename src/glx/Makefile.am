@@ -35,6 +35,7 @@ endif
 AM_CFLAGS = \
 	-I$(top_srcdir)/include \
 	-I$(top_srcdir)/include/GL/internal \
+	-I$(top_srcdir)/src/loader \
 	-I$(top_srcdir)/src/mapi \
 	-I$(top_srcdir)/src/mapi/glapi \
 	-I$(top_builddir)/src/mapi \
@@ -98,9 +99,10 @@ libglx_la_SOURCES = \
 
 if HAVE_DRI3
 libglx_la_SOURCES += \
-          dri3_glx.c \
-          dri3_common.c
+          dri3_glx.c
 endif
+
+libglx_la_LIBADD = $(top_builddir)/src/loader/libloader.la
 
 GL_LIBS = \
 	libglx.la \
@@ -116,9 +118,4 @@ lib@GL_LIB@_la_SOURCES =
 lib@GL_LIB@_la_LIBADD = $(GL_LIBS)
 lib@GL_LIB@_la_LDFLAGS = $(GL_LDFLAGS)
 
-# Provide compatibility with scripts for the old Mesa build system for
-# a while by putting a link to the driver into /lib of the build tree.
-all-local: lib@GL_LIB@.la
-	$(MKDIR_P) $(top_builddir)/$(LIB_DIR);
-	ln -f .libs/lib@GL_LIB@.so.1.2.0 $(top_builddir)/$(LIB_DIR)/lib@GL_LIB@.so.1
-	ln -sf lib@GL_LIB@.so.1 $(top_builddir)/$(LIB_DIR)/lib@GL_LIB@.so
+include $(top_srcdir)/install-lib-links.mk

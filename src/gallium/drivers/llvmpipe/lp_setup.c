@@ -1,6 +1,6 @@
 /**************************************************************************
  *
- * Copyright 2007 Tungsten Graphics, Inc., Cedar Park, Texas.
+ * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -18,7 +18,7 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL TUNGSTEN GRAPHICS AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -66,9 +66,6 @@ static boolean try_update_scene_state( struct lp_setup_context *setup );
 static void
 lp_setup_get_empty_scene(struct lp_setup_context *setup)
 {
-   struct llvmpipe_context *lp = llvmpipe_context(setup->pipe);
-   boolean discard = lp->rasterizer ? lp->rasterizer->rasterizer_discard : FALSE;
-
    assert(setup->scene == NULL);
 
    setup->scene_idx++;
@@ -84,8 +81,8 @@ lp_setup_get_empty_scene(struct lp_setup_context *setup)
       lp_fence_wait(setup->scene->fence);
    }
 
-   lp_scene_begin_binning(setup->scene, &setup->fb, discard);
-   
+   lp_scene_begin_binning(setup->scene, &setup->fb, setup->rasterizer_discard);
+
 }
 
 
@@ -885,7 +882,7 @@ lp_setup_is_resource_referenced( const struct lp_setup_context *setup,
 
    /* check the render targets */
    for (i = 0; i < setup->fb.nr_cbufs; i++) {
-      if (setup->fb.cbufs[i]->texture == texture)
+      if (setup->fb.cbufs[i] && setup->fb.cbufs[i]->texture == texture)
          return LP_REFERENCED_FOR_READ | LP_REFERENCED_FOR_WRITE;
    }
    if (setup->fb.zsbuf && setup->fb.zsbuf->texture == texture) {
@@ -987,6 +984,7 @@ try_update_scene_state( struct lp_setup_context *setup )
          struct pipe_resource *buffer = setup->constants[i].current.buffer;
          const unsigned current_size = setup->constants[i].current.buffer_size;
          const ubyte *current_data = NULL;
+         int num_constants;
 
          if (buffer) {
             /* resource buffer */
@@ -1027,7 +1025,11 @@ try_update_scene_state( struct lp_setup_context *setup )
             setup->constants[i].stored_data = NULL;
          }
 
-         setup->fs.current.jit_context.constants[i] = setup->constants[i].stored_data;
+         setup->fs.current.jit_context.constants[i] =
+            setup->constants[i].stored_data;
+         num_constants =
+            setup->constants[i].stored_size / (sizeof(float) * 4);
+         setup->fs.current.jit_context.num_constants[i] = num_constants;
          setup->dirty |= LP_SETUP_NEW_FS;
       }
    }

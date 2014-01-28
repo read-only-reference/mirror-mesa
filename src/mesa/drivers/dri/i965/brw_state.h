@@ -1,6 +1,6 @@
 /*
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
- Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
+ Intel funded Tungsten Graphics to
  develop this 3D driver.
 
  Permission is hereby granted, free of charge, to any person obtaining
@@ -26,7 +26,7 @@
  **********************************************************************/
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   */
 
 
@@ -143,6 +143,7 @@ brw_depthbuffer_format(struct brw_context *brw);
  * brw_state.c
  */
 void brw_upload_state(struct brw_context *brw);
+void brw_clear_dirty_bits(struct brw_context *brw);
 void brw_init_state(struct brw_context *brw);
 void brw_destroy_state(struct brw_context *brw);
 
@@ -187,12 +188,12 @@ void gen4_init_vtable_surface_functions(struct brw_context *brw);
 uint32_t brw_get_surface_tiling_bits(uint32_t tiling);
 uint32_t brw_get_surface_num_multisamples(unsigned num_samples);
 
-uint32_t brw_format_for_mesa_format(gl_format mesa_format);
+uint32_t brw_format_for_mesa_format(mesa_format mesa_format);
 
 GLuint translate_tex_target(GLenum target);
 
 GLuint translate_tex_format(struct brw_context *brw,
-                            gl_format mesa_format,
+                            mesa_format mesa_format,
 			    GLenum srgb_decode);
 
 int brw_get_texture_swizzle(const struct gl_context *ctx,

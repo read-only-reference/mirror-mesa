@@ -1,6 +1,6 @@
 /*
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
- Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
+ Intel funded Tungsten Graphics to
  develop this 3D driver.
 
  Permission is hereby granted, free of charge, to any person obtaining
@@ -26,7 +26,7 @@
  **********************************************************************/
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   */
 
 
@@ -46,7 +46,7 @@ static void upload_sf_vp(struct brw_context *brw)
    struct brw_sf_viewport *sfv;
    GLfloat y_scale, y_bias;
    const bool render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer);
-   const GLfloat *v = ctx->Viewport._WindowMap.m;
+   const GLfloat *v = ctx->ViewportArray[0]._WindowMap.m;
 
    sfv = brw_state_batch(brw, AUB_TRACE_SF_VP_STATE,
 			 sizeof(*sfv), 32, &brw->sf.vp_offset);
@@ -173,13 +173,13 @@ static void upload_sf_unit( struct brw_context *brw )
       sf->thread4.stats_enable = 1;
 
    /* CACHE_NEW_SF_VP */
-   sf->sf5.sf_viewport_state_offset = (brw->batch.bo->offset +
+   sf->sf5.sf_viewport_state_offset = (brw->batch.bo->offset64 +
 				       brw->sf.vp_offset) >> 5; /* reloc */
 
    sf->sf5.viewport_transform = 1;
 
    /* _NEW_SCISSOR */
-   if (ctx->Scissor.Enabled)
+   if (ctx->Scissor.EnableFlags)
       sf->sf6.scissor = 1;
 
    /* _NEW_POLYGON */

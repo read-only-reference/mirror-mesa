@@ -144,8 +144,9 @@ arb_input_attrib_string(GLint index, GLenum progType)
       "fragment.(eighteen)", /* VARYING_SLOT_CLIP_DIST1 */
       "fragment.(nineteen)", /* VARYING_SLOT_PRIMITIVE_ID */
       "fragment.(twenty)", /* VARYING_SLOT_LAYER */
-      "fragment.(twenty-one)", /* VARYING_SLOT_FACE */
-      "fragment.(twenty-two)", /* VARYING_SLOT_PNTC */
+      "fragment.(twenty-one)", /* VARYING_SLOT_VIEWPORT */
+      "fragment.(twenty-two)", /* VARYING_SLOT_FACE */
+      "fragment.(twenty-three)", /* VARYING_SLOT_PNTC */
       "fragment.varying[0]",
       "fragment.varying[1]",
       "fragment.varying[2]",
@@ -268,8 +269,9 @@ arb_output_attrib_string(GLint index, GLenum progType)
       "result.(eighteen)", /* VARYING_SLOT_CLIP_DIST1 */
       "result.(nineteen)", /* VARYING_SLOT_PRIMITIVE_ID */
       "result.(twenty)", /* VARYING_SLOT_LAYER */
-      "result.(twenty-one)", /* VARYING_SLOT_FACE */
-      "result.(twenty-two)", /* VARYING_SLOT_PNTC */
+      "result.(twenty-one)", /* VARYING_SLOT_VIEWPORT */
+      "result.(twenty-two)", /* VARYING_SLOT_FACE */
+      "result.(twenty-three)", /* VARYING_SLOT_PNTC */
       "result.varying[0]",
       "result.varying[1]",
       "result.varying[2]",
@@ -1005,16 +1007,21 @@ _mesa_print_parameter_list(const struct gl_program_parameter_list *list)
 void
 _mesa_write_shader_to_file(const struct gl_shader *shader)
 {
-   const char *type;
+   const char *type = "????";
    char filename[100];
    FILE *f;
 
-   if (shader->Type == GL_FRAGMENT_SHADER)
+   switch (shader->Stage) {
+   case MESA_SHADER_FRAGMENT:
       type = "frag";
-   else if (shader->Type == GL_VERTEX_SHADER)
+      break;
+   case MESA_SHADER_VERTEX:
       type = "vert";
-   else
+      break;
+   case MESA_SHADER_GEOMETRY:
       type = "geom";
+      break;
+   }
 
    _mesa_snprintf(filename, sizeof(filename), "shader_%u.%s", shader->Name, type);
    f = fopen(filename, "w");
@@ -1061,7 +1068,7 @@ _mesa_append_uniforms_to_file(const struct gl_shader *shader)
    char filename[100];
    FILE *f;
 
-   if (shader->Type == GL_FRAGMENT_SHADER)
+   if (shader->Stage == MESA_SHADER_FRAGMENT)
       type = "frag";
    else
       type = "vert";

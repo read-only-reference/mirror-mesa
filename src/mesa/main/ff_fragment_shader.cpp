@@ -1,6 +1,6 @@
 /**************************************************************************
  * 
- * Copyright 2007 Tungsten Graphics, Inc., Cedar Park, Texas.
+ * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
  * Copyright 2009 VMware, Inc.  All Rights Reserved.
  * Copyright © 2010-2011 Intel Corporation
@@ -20,7 +20,7 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL TUNGSTEN GRAPHICS AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -317,9 +317,9 @@ static GLbitfield get_fp_input_mask( struct gl_context *ctx )
 {
    /* _NEW_PROGRAM */
    const GLboolean vertexShader =
-      (ctx->Shader.CurrentVertexProgram &&
-       ctx->Shader.CurrentVertexProgram->LinkStatus &&
-       ctx->Shader.CurrentVertexProgram->_LinkedShaders[MESA_SHADER_VERTEX]);
+      (ctx->Shader.CurrentProgram[MESA_SHADER_VERTEX] &&
+       ctx->Shader.CurrentProgram[MESA_SHADER_VERTEX]->LinkStatus &&
+       ctx->Shader.CurrentProgram[MESA_SHADER_VERTEX]->_LinkedShaders[MESA_SHADER_VERTEX]);
    const GLboolean vertexProgram = ctx->VertexProgram._Enabled;
    GLbitfield fp_inputs = 0x0;
 
@@ -383,7 +383,7 @@ static GLbitfield get_fp_input_mask( struct gl_context *ctx )
        * validation (see additional comments in state.c).
        */
       if (vertexShader)
-         vprog = ctx->Shader.CurrentVertexProgram->_LinkedShaders[MESA_SHADER_VERTEX]->Program;
+         vprog = ctx->Shader.CurrentProgram[MESA_SHADER_VERTEX]->_LinkedShaders[MESA_SHADER_VERTEX]->Program;
       else
          vprog = &ctx->VertexProgram.Current->Base;
 
@@ -1296,7 +1296,7 @@ create_new_program(struct gl_context *ctx, struct state_key *key)
    p.mem_ctx = ralloc_context(NULL);
    p.shader = ctx->Driver.NewShader(ctx, 0, GL_FRAGMENT_SHADER);
    p.shader->ir = new(p.shader) exec_list;
-   state = new(p.shader) _mesa_glsl_parse_state(ctx, GL_FRAGMENT_SHADER,
+   state = new(p.shader) _mesa_glsl_parse_state(ctx, MESA_SHADER_FRAGMENT,
 						p.shader);
    p.shader->symbols = state->symbols;
    p.top_instructions = p.shader->ir;

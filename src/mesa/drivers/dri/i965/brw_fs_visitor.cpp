@@ -116,7 +116,7 @@ fs_visitor::visit(ir_variable *ir)
 
       if (dispatch_width == 16) {
 	 if (!variable_storage(ir)) {
-	    fail("Failed to find uniform '%s' in 16-wide\n", ir->name);
+	    fail("Failed to find uniform '%s' in SIMD16\n", ir->name);
 	 }
 	 return;
       }
@@ -461,7 +461,7 @@ fs_visitor::visit(ir_expression *ir)
 	  * enough.
 	  */
 	 if (brw->gen >= 7 && dispatch_width == 16)
-	    fail("16-wide explicit accumulator operands unsupported\n");
+	    fail("SIMD16 explicit accumulator operands unsupported\n");
 
 	 struct brw_reg acc = retype(brw_acc_reg(), this->result.type);
 
@@ -474,7 +474,7 @@ fs_visitor::visit(ir_expression *ir)
       break;
    case ir_binop_imul_high: {
       if (brw->gen >= 7 && dispatch_width == 16)
-         fail("16-wide explicit accumulator operands unsupported\n");
+         fail("SIMD16 explicit accumulator operands unsupported\n");
 
       struct brw_reg acc = retype(brw_acc_reg(), this->result.type);
 
@@ -489,7 +489,7 @@ fs_visitor::visit(ir_expression *ir)
       break;
    case ir_binop_carry: {
       if (brw->gen >= 7 && dispatch_width == 16)
-         fail("16-wide explicit accumulator operands unsupported\n");
+         fail("SIMD16 explicit accumulator operands unsupported\n");
 
       struct brw_reg acc = retype(brw_acc_reg(), BRW_REGISTER_TYPE_UD);
 
@@ -499,7 +499,7 @@ fs_visitor::visit(ir_expression *ir)
    }
    case ir_binop_borrow: {
       if (brw->gen >= 7 && dispatch_width == 16)
-         fail("16-wide explicit accumulator operands unsupported\n");
+         fail("SIMD16 explicit accumulator operands unsupported\n");
 
       struct brw_reg acc = retype(brw_acc_reg(), BRW_REGISTER_TYPE_UD);
 
@@ -1214,7 +1214,7 @@ fs_visitor::emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       /* sample index */
       emit(MOV(fs_reg(MRF, base_mrf + mlen, BRW_REGISTER_TYPE_UD), sample_index));
       mlen += reg_width;
-      inst = emit(SHADER_OPCODE_TXF_MS, dst);
+      inst = emit(SHADER_OPCODE_TXF_CMS, dst);
       break;
    case ir_lod:
       inst = emit(SHADER_OPCODE_LOD, dst);
@@ -1231,8 +1231,9 @@ fs_visitor::emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    inst->header_present = header_present;
    inst->regs_written = 4;
 
-   if (mlen > 11) {
-      fail("Message length >11 disallowed by hardware\n");
+   if (mlen > MAX_SAMPLER_MESSAGE_SIZE) {
+      fail("Message length >" STRINGIFY(MAX_SAMPLER_MESSAGE_SIZE)
+           " disallowed by hardware\n");
    }
 
    return inst;
@@ -1241,7 +1242,7 @@ fs_visitor::emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
 fs_inst *
 fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
                               fs_reg shadow_c, fs_reg lod, fs_reg lod2,
-                              fs_reg sample_index, fs_reg mcs)
+                              fs_reg sample_index, fs_reg mcs, int sampler)
 {
    int reg_width = dispatch_width / 8;
    bool header_present = false;
@@ -1249,13 +1250,16 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    fs_reg payload = fs_reg(this, glsl_type::float_type);
    fs_reg next = payload;
 
-   if (ir->op == ir_tg4 || (ir->offset && ir->op != ir_txf)) {
+   if (ir->op == ir_tg4 || (ir->offset && ir->op != ir_txf) || sampler >= 16) {
       /* For general texture offsets (no txf workaround), we need a header to
-       * put them in.  Note that for 16-wide we're making space for two actual
+       * put them in.  Note that for SIMD16 we're making space for two actual
        * hardware registers here, so the emit will have to fix up for this.
        *
        * * ir4_tg4 needs to place its channel select in the header,
        * for interaction with ARB_texture_swizzle
+       *
+       * The sampler index is only 4-bits, so for larger sampler numbers we
+       * need to offset the Sampler State Pointer in the header.
        */
       header_present = true;
       next.reg_offset++;
@@ -1404,7 +1408,7 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    case ir_txl: inst = emit(SHADER_OPCODE_TXL, dst, payload); break;
    case ir_txd: inst = emit(SHADER_OPCODE_TXD, dst, payload); break;
    case ir_txf: inst = emit(SHADER_OPCODE_TXF, dst, payload); break;
-   case ir_txf_ms: inst = emit(SHADER_OPCODE_TXF_MS, dst, payload); break;
+   case ir_txf_ms: inst = emit(SHADER_OPCODE_TXF_CMS, dst, payload); break;
    case ir_txs: inst = emit(SHADER_OPCODE_TXS, dst, payload); break;
    case ir_query_levels: inst = emit(SHADER_OPCODE_TXS, dst, payload); break;
    case ir_lod: inst = emit(SHADER_OPCODE_LOD, dst, payload); break;
@@ -1424,8 +1428,9 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    inst->regs_written = 4;
 
    virtual_grf_sizes[payload.reg] = next.reg_offset;
-   if (inst->mlen > 11) {
-      fail("Message length >11 disallowed by hardware\n");
+   if (inst->mlen > MAX_SAMPLER_MESSAGE_SIZE) {
+      fail("Message length >" STRINGIFY(MAX_SAMPLER_MESSAGE_SIZE)
+           " disallowed by hardware\n");
    }
 
    return inst;
@@ -1457,7 +1462,7 @@ fs_visitor::rescale_texcoord(ir_texture *ir, fs_reg coordinate,
       };
 
       if (dispatch_width == 16) {
-	 fail("rectangle scale uniform setup not supported on 16-wide\n");
+	 fail("rectangle scale uniform setup not supported on SIMD16\n");
 	 return coordinate;
       }
 
@@ -1549,6 +1554,7 @@ fs_visitor::emit_mcs_fetch(ir_texture *ir, fs_reg coordinate, int sampler)
    }
 
    fs_inst *inst = emit(SHADER_OPCODE_TXF_MCS, dest, payload);
+   virtual_grf_sizes[payload.reg] = next.reg_offset;
    inst->base_mrf = -1;
    inst->mlen = next.reg_offset * reg_width;
    inst->header_present = false;
@@ -1662,7 +1668,7 @@ fs_visitor::visit(ir_texture *ir)
 
    if (brw->gen >= 7) {
       inst = emit_texture_gen7(ir, dst, coordinate, shadow_comparitor,
-                               lod, lod2, sample_index, mcs);
+                               lod, lod2, sample_index, mcs, sampler);
    } else if (brw->gen >= 5) {
       inst = emit_texture_gen5(ir, dst, coordinate, shadow_comparitor,
                                lod, lod2, sample_index);
@@ -2141,7 +2147,7 @@ void
 fs_visitor::visit(ir_if *ir)
 {
    if (brw->gen < 6 && dispatch_width == 16) {
-      fail("Can't support (non-uniform) control flow on 16-wide\n");
+      fail("Can't support (non-uniform) control flow on SIMD16\n");
    }
 
    /* Don't point the annotation at the if statement, because then it plus
@@ -2184,7 +2190,7 @@ void
 fs_visitor::visit(ir_loop *ir)
 {
    if (brw->gen < 6 && dispatch_width == 16) {
-      fail("Can't support (non-uniform) control flow on 16-wide\n");
+      fail("Can't support (non-uniform) control flow on SIMD16\n");
    }
 
    this->base_ir = NULL;
@@ -2692,7 +2698,7 @@ fs_visitor::emit_fb_writes()
    bool src0_alpha_to_render_target = false;
 
    if (dispatch_width == 16 && do_dual_src) {
-      fail("GL_ARB_blend_func_extended not yet supported in 16-wide.");
+      fail("GL_ARB_blend_func_extended not yet supported in SIMD16.");
       do_dual_src = false;
    }
 
@@ -2746,7 +2752,7 @@ fs_visitor::emit_fb_writes()
    if (c->source_depth_to_render_target) {
       if (brw->gen == 6 && dispatch_width == 16) {
 	 /* For outputting oDepth on gen6, SIMD8 writes have to be
-	  * used.  This would require 8-wide moves of each half to
+	  * used.  This would require SIMD8 moves of each half to
 	  * message regs, kind of like pre-gen5 SIMD16 FB writes.
 	  * Just bail on doing so for now.
 	  */
@@ -2931,6 +2937,7 @@ fs_visitor::fs_visitor(struct brw_context *brw,
    this->virtual_grf_start = NULL;
    this->virtual_grf_end = NULL;
    this->live_intervals = NULL;
+   this->regs_live_at_ip = NULL;
 
    this->params_remap = NULL;
    this->nr_params_remap = 0;

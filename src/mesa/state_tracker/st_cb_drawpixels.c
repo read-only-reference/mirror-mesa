@@ -1,6 +1,6 @@
 /**************************************************************************
  * 
- * Copyright 2007 Tungsten Graphics, Inc., Cedar Park, Texas.
+ * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -18,7 +18,7 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL TUNGSTEN GRAPHICS AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -483,7 +483,7 @@ make_texture(struct st_context *st,
 {
    struct gl_context *ctx = st->ctx;
    struct pipe_context *pipe = st->pipe;
-   gl_format mformat;
+   mesa_format mformat;
    struct pipe_resource *pt;
    enum pipe_format pipeFormat;
    GLenum baseInternalFormat;
@@ -542,7 +542,7 @@ make_texture(struct st_context *st,
        */
       success = _mesa_texstore(ctx, 2,           /* dims */
                                baseInternalFormat, /* baseInternalFormat */
-                               mformat,          /* gl_format */
+                               mformat,          /* mesa_format */
                                transfer->stride, /* dstRowStride, bytes */
                                &dest,            /* destSlices */
                                width, height, 1, /* size */
@@ -713,7 +713,7 @@ draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
       rasterizer.half_pixel_center = 1;
       rasterizer.bottom_edge_rule = 1;
       rasterizer.depth_clip = !ctx->Transform.DepthClamp;
-      rasterizer.scissor = ctx->Scissor.Enabled;
+      rasterizer.scissor = ctx->Scissor.EnableFlags;
       cso_set_rasterizer(cso, &rasterizer);
    }
 
@@ -1364,7 +1364,7 @@ blit_copy_pixels(struct gl_context *ctx, GLint srcx, GLint srcy,
        !ctx->Stencil.Enabled &&
        !ctx->FragmentProgram.Enabled &&
        !ctx->VertexProgram.Enabled &&
-       !ctx->Shader.CurrentFragmentProgram &&
+       !ctx->Shader.CurrentProgram[MESA_SHADER_FRAGMENT] &&
        ctx->DrawBuffer->_NumColorDrawBuffers == 1 &&
        !ctx->Query.CondRenderQuery &&
        !ctx->Query.CurrentOcclusionObject) {

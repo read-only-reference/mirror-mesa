@@ -1,7 +1,7 @@
 /*
- Copyright 2003 Tungsten Graphics, Inc., Cedar Park, Texas.
+ Copyright 2003 VMware, Inc.
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
- Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
+ Intel funded Tungsten Graphics to
  develop this 3D driver.
 
  Permission is hereby granted, free of charge, to any person obtaining
@@ -27,7 +27,7 @@
  **********************************************************************/
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   */
 
 
@@ -134,15 +134,10 @@ intelGetString(struct gl_context * ctx, GLenum name)
 }
 
 static void
-intel_viewport(struct gl_context *ctx, GLint x, GLint y, GLsizei w, GLsizei h)
+intel_viewport(struct gl_context *ctx)
 {
    struct brw_context *brw = brw_context(ctx);
    __DRIcontext *driContext = brw->driContext;
-
-   (void) x;
-   (void) y;
-   (void) w;
-   (void) h;
 
    if (_mesa_is_winsys_fbo(ctx->DrawBuffer)) {
       dri2InvalidateDrawable(driContext->driDrawablePriv);
@@ -282,26 +277,29 @@ brw_initialize_context_constants(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
 
+   unsigned max_samplers =
+      brw->gen >= 8 || brw->is_haswell ? BRW_MAX_TEX_UNIT : 16;
+
    ctx->Const.QueryCounterBits.Timestamp = 36;
 
    ctx->Const.StripTextureBorder = true;
 
    ctx->Const.MaxDualSourceDrawBuffers = 1;
    ctx->Const.MaxDrawBuffers = BRW_MAX_DRAW_BUFFERS;
-   ctx->Const.FragmentProgram.MaxTextureImageUnits = BRW_MAX_TEX_UNIT;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxTextureImageUnits = max_samplers;
    ctx->Const.MaxTextureCoordUnits = 8; /* Mesa limit */
    ctx->Const.MaxTextureUnits =
       MIN2(ctx->Const.MaxTextureCoordUnits,
-           ctx->Const.FragmentProgram.MaxTextureImageUnits);
-   ctx->Const.VertexProgram.MaxTextureImageUnits = BRW_MAX_TEX_UNIT;
+           ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxTextureImageUnits);
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxTextureImageUnits = max_samplers;
    if (brw->gen >= 7)
-      ctx->Const.GeometryProgram.MaxTextureImageUnits = BRW_MAX_TEX_UNIT;
+      ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxTextureImageUnits = max_samplers;
    else
-      ctx->Const.GeometryProgram.MaxTextureImageUnits = 0;
+      ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxTextureImageUnits = 0;
    ctx->Const.MaxCombinedTextureImageUnits =
-      ctx->Const.VertexProgram.MaxTextureImageUnits +
-      ctx->Const.FragmentProgram.MaxTextureImageUnits +
-      ctx->Const.GeometryProgram.MaxTextureImageUnits;
+      ctx->Const.Program[MESA_SHADER_VERTEX].MaxTextureImageUnits +
+      ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxTextureImageUnits +
+      ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxTextureImageUnits;
 
    ctx->Const.MaxTextureLevels = 14; /* 8192 */
    if (ctx->Const.MaxTextureLevels > MAX_TEXTURE_LEVELS)
@@ -385,49 +383,49 @@ brw_initialize_context_constants(struct brw_context *brw)
    if (brw->gen >= 5 || brw->is_g4x)
       ctx->Const.MaxClipPlanes = 8;
 
-   ctx->Const.VertexProgram.MaxNativeInstructions = 16 * 1024;
-   ctx->Const.VertexProgram.MaxAluInstructions = 0;
-   ctx->Const.VertexProgram.MaxTexInstructions = 0;
-   ctx->Const.VertexProgram.MaxTexIndirections = 0;
-   ctx->Const.VertexProgram.MaxNativeAluInstructions = 0;
-   ctx->Const.VertexProgram.MaxNativeTexInstructions = 0;
-   ctx->Const.VertexProgram.MaxNativeTexIndirections = 0;
-   ctx->Const.VertexProgram.MaxNativeAttribs = 16;
-   ctx->Const.VertexProgram.MaxNativeTemps = 256;
-   ctx->Const.VertexProgram.MaxNativeAddressRegs = 1;
-   ctx->Const.VertexProgram.MaxNativeParameters = 1024;
-   ctx->Const.VertexProgram.MaxEnvParams =
-      MIN2(ctx->Const.VertexProgram.MaxNativeParameters,
-	   ctx->Const.VertexProgram.MaxEnvParams);
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeInstructions = 16 * 1024;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxAluInstructions = 0;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxTexInstructions = 0;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxTexIndirections = 0;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeAluInstructions = 0;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeTexInstructions = 0;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeTexIndirections = 0;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeAttribs = 16;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeTemps = 256;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeAddressRegs = 1;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeParameters = 1024;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxEnvParams =
+      MIN2(ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeParameters,
+	   ctx->Const.Program[MESA_SHADER_VERTEX].MaxEnvParams);
 
-   ctx->Const.FragmentProgram.MaxNativeInstructions = 1024;
-   ctx->Const.FragmentProgram.MaxNativeAluInstructions = 1024;
-   ctx->Const.FragmentProgram.MaxNativeTexInstructions = 1024;
-   ctx->Const.FragmentProgram.MaxNativeTexIndirections = 1024;
-   ctx->Const.FragmentProgram.MaxNativeAttribs = 12;
-   ctx->Const.FragmentProgram.MaxNativeTemps = 256;
-   ctx->Const.FragmentProgram.MaxNativeAddressRegs = 0;
-   ctx->Const.FragmentProgram.MaxNativeParameters = 1024;
-   ctx->Const.FragmentProgram.MaxEnvParams =
-      MIN2(ctx->Const.FragmentProgram.MaxNativeParameters,
-	   ctx->Const.FragmentProgram.MaxEnvParams);
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxNativeInstructions = 1024;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxNativeAluInstructions = 1024;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxNativeTexInstructions = 1024;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxNativeTexIndirections = 1024;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxNativeAttribs = 12;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxNativeTemps = 256;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxNativeAddressRegs = 0;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxNativeParameters = 1024;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxEnvParams =
+      MIN2(ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxNativeParameters,
+	   ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxEnvParams);
 
    /* Fragment shaders use real, 32-bit twos-complement integers for all
     * integer types.
     */
-   ctx->Const.FragmentProgram.LowInt.RangeMin = 31;
-   ctx->Const.FragmentProgram.LowInt.RangeMax = 30;
-   ctx->Const.FragmentProgram.LowInt.Precision = 0;
-   ctx->Const.FragmentProgram.HighInt = ctx->Const.FragmentProgram.LowInt;
-   ctx->Const.FragmentProgram.MediumInt = ctx->Const.FragmentProgram.LowInt;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].LowInt.RangeMin = 31;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].LowInt.RangeMax = 30;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].LowInt.Precision = 0;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].HighInt = ctx->Const.Program[MESA_SHADER_FRAGMENT].LowInt;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].MediumInt = ctx->Const.Program[MESA_SHADER_FRAGMENT].LowInt;
 
    if (brw->gen >= 7) {
-      ctx->Const.FragmentProgram.MaxAtomicCounters = MAX_ATOMIC_COUNTERS;
-      ctx->Const.VertexProgram.MaxAtomicCounters = MAX_ATOMIC_COUNTERS;
-      ctx->Const.GeometryProgram.MaxAtomicCounters = MAX_ATOMIC_COUNTERS;
-      ctx->Const.FragmentProgram.MaxAtomicBuffers = BRW_MAX_ABO;
-      ctx->Const.VertexProgram.MaxAtomicBuffers = BRW_MAX_ABO;
-      ctx->Const.GeometryProgram.MaxAtomicBuffers = BRW_MAX_ABO;
+      ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxAtomicCounters = MAX_ATOMIC_COUNTERS;
+      ctx->Const.Program[MESA_SHADER_VERTEX].MaxAtomicCounters = MAX_ATOMIC_COUNTERS;
+      ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxAtomicCounters = MAX_ATOMIC_COUNTERS;
+      ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxAtomicBuffers = BRW_MAX_ABO;
+      ctx->Const.Program[MESA_SHADER_VERTEX].MaxAtomicBuffers = BRW_MAX_ABO;
+      ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxAtomicBuffers = BRW_MAX_ABO;
       ctx->Const.MaxCombinedAtomicBuffers = 3 * BRW_MAX_ABO;
    }
 
@@ -456,14 +454,14 @@ brw_initialize_context_constants(struct brw_context *brw)
 
    if (brw->gen >= 6) {
       ctx->Const.MaxVarying = 32;
-      ctx->Const.VertexProgram.MaxOutputComponents = 128;
-      ctx->Const.GeometryProgram.MaxInputComponents = 64;
-      ctx->Const.GeometryProgram.MaxOutputComponents = 128;
-      ctx->Const.FragmentProgram.MaxInputComponents = 128;
+      ctx->Const.Program[MESA_SHADER_VERTEX].MaxOutputComponents = 128;
+      ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxInputComponents = 64;
+      ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxOutputComponents = 128;
+      ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxInputComponents = 128;
    }
 
    /* We want the GLSL compiler to emit code that uses condition codes */
-   for (int i = 0; i < MESA_SHADER_TYPES; i++) {
+   for (int i = 0; i < MESA_SHADER_STAGES; i++) {
       ctx->ShaderCompilerOptions[i].MaxIfDepth = brw->gen < 6 ? 16 : UINT_MAX;
       ctx->ShaderCompilerOptions[i].EmitCondCodes = true;
       ctx->ShaderCompilerOptions[i].EmitNoNoise = true;
@@ -478,7 +476,19 @@ brw_initialize_context_constants(struct brw_context *brw)
       ctx->ShaderCompilerOptions[i].LowerClipDistance = true;
    }
 
-   ctx->ShaderCompilerOptions[MESA_SHADER_VERTEX].PreferDP4 = true;
+   ctx->ShaderCompilerOptions[MESA_SHADER_VERTEX].OptimizeForAOS = true;
+   ctx->ShaderCompilerOptions[MESA_SHADER_GEOMETRY].OptimizeForAOS = true;
+
+   /* ARB_viewport_array */
+   if (brw->gen >= 7 && ctx->API == API_OPENGL_CORE) {
+      ctx->Const.MaxViewports = GEN7_NUM_VIEWPORTS;
+      ctx->Const.ViewportSubpixelBits = 0;
+
+      /* Cast to float before negating becuase MaxViewportWidth is unsigned.
+       */
+      ctx->Const.ViewportBounds.Min = -(float)ctx->Const.MaxViewportWidth;
+      ctx->Const.ViewportBounds.Max = ctx->Const.MaxViewportWidth;
+   }
 }
 
 /**
@@ -881,8 +891,8 @@ intel_gles3_srgb_workaround(struct brw_context *brw,
    fb->Visual.sRGBCapable = false;
    for (int i = 0; i < BUFFER_COUNT; i++) {
       if (fb->Attachment[i].Renderbuffer &&
-          fb->Attachment[i].Renderbuffer->Format == MESA_FORMAT_SARGB8) {
-         fb->Attachment[i].Renderbuffer->Format = MESA_FORMAT_ARGB8888;
+          fb->Attachment[i].Renderbuffer->Format == MESA_FORMAT_B8G8R8A8_SRGB) {
+         fb->Attachment[i].Renderbuffer->Format = MESA_FORMAT_B8G8R8A8_UNORM;
       }
    }
 }
@@ -929,7 +939,12 @@ intelMakeCurrent(__DRIcontext * driContextPriv,
       intel_gles3_srgb_workaround(brw, fb);
       intel_gles3_srgb_workaround(brw, readFb);
 
-      intel_prepare_render(brw);
+      /* If the context viewport hasn't been initialized, force a call out to
+       * the loader to get buffers so we have a drawable size for the initial
+       * viewport. */
+      if (!brw->ctx.ViewportInitialized)
+         intel_prepare_render(brw);
+
       _mesa_make_current(ctx, fb, readFb);
    } else {
       _mesa_make_current(NULL, NULL, NULL);

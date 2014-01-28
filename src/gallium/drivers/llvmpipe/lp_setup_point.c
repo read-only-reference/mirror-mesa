@@ -307,12 +307,13 @@ subpixel_snap(float a)
  */
 static void
 print_point(struct lp_setup_context *setup,
-            const float (*v0)[4])
+            const float (*v0)[4],
+            const float size)
 {
    const struct lp_setup_variant_key *key = &setup->setup.variant->key;
    uint i;
 
-   debug_printf("llvmpipe point\n");
+   debug_printf("llvmpipe point, width %f\n", size);
    for (i = 0; i < 1 + key->num_inputs; i++) {
       debug_printf("  v0[%d]:  %f %f %f %f\n", i,
                    v0[i][0], v0[i][1], v0[i][2], v0[i][3]);
@@ -331,16 +332,14 @@ try_setup_point( struct lp_setup_context *setup,
    const float size
       = (setup->point_size_per_vertex && sizeAttr > 0) ? v0[sizeAttr][0]
       : setup->point_size;
-   
-   /* Point size as fixed point integer, remove rounding errors 
-    * and gives minimum width for very small points
-    */
-   int fixed_width = MAX2(FIXED_ONE,
-                          (subpixel_snap(size) + FIXED_ONE/2 - 1) & ~(FIXED_ONE-1));
 
-   const int x0 = subpixel_snap(v0[0][0] - setup->pixel_offset) - fixed_width/2;
-   const int y0 = subpixel_snap(v0[0][1] - setup->pixel_offset) - fixed_width/2;
-     
+   /* Yes this is necessary to accurately calculate bounding boxes
+    * with the two fill-conventions we support.  GL (normally) ends
+    * up needing a bottom-left fill convention, which requires
+    * slightly different rounding.
+    */
+   int adj = (setup->bottom_edge_rule != 0) ? 1 : 0;
+
    struct lp_scene *scene = setup->scene;
    struct lp_rast_triangle *point;
    unsigned bytes;
@@ -349,6 +348,7 @@ try_setup_point( struct lp_setup_context *setup,
    struct point_info info;
    unsigned viewport_index = 0;
    unsigned layer = 0;
+   int fixed_width;
 
    if (setup->viewport_index_slot > 0) {
       unsigned *udata = (unsigned*)v0[setup->viewport_index_slot];
@@ -360,28 +360,82 @@ try_setup_point( struct lp_setup_context *setup,
    }
 
    if (0)
-      print_point(setup, v0);
+      print_point(setup, v0, size);
 
    /* Bounding rectangle (in pixels) */
-   {
-      /* Yes this is necessary to accurately calculate bounding boxes
-       * with the two fill-conventions we support.  GL (normally) ends
-       * up needing a bottom-left fill convention, which requires
-       * slightly different rounding.
+   if (!lp_context->rasterizer ||
+       lp_context->rasterizer->point_quad_rasterization) {
+      /*
+       * Rasterize points as quads.
        */
-      int adj = (setup->pixel_offset != 0) ? 1 : 0;
+      int x0, y0;
+      /* Point size as fixed point integer, remove rounding errors
+       * and gives minimum width for very small points.
+       */
+      fixed_width = MAX2(FIXED_ONE, subpixel_snap(size));
 
-      bbox.x0 = (x0 + (FIXED_ONE-1) + adj) >> FIXED_ORDER;
-      bbox.x1 = (x0 + fixed_width + (FIXED_ONE-1) + adj) >> FIXED_ORDER;
-      bbox.y0 = (y0 + (FIXED_ONE-1)) >> FIXED_ORDER;
-      bbox.y1 = (y0 + fixed_width + (FIXED_ONE-1)) >> FIXED_ORDER;
+      x0 = subpixel_snap(v0[0][0] - setup->pixel_offset) - fixed_width/2;
+      y0 = subpixel_snap(v0[0][1] - setup->pixel_offset) - fixed_width/2;
+
+      bbox.x0 = (x0 + (FIXED_ONE-1)) >> FIXED_ORDER;
+      bbox.x1 = (x0 + fixed_width + (FIXED_ONE-1)) >> FIXED_ORDER;
+      bbox.y0 = (y0 + (FIXED_ONE-1) + adj) >> FIXED_ORDER;
+      bbox.y1 = (y0 + fixed_width + (FIXED_ONE-1) + adj) >> FIXED_ORDER;
 
       /* Inclusive coordinates:
        */
       bbox.x1--;
       bbox.y1--;
+   } else {
+      /*
+       * OpenGL legacy rasterization rules for non-sprite points.
+       *
+       * Per OpenGL 2.1 spec, section 3.3.1, "Basic Point Rasterization".
+       *
+       * This type of point rasterization is only available in pre 3.0 contexts
+       * (or compatibilility contexts which we don't support) anyway.
+       */
+
+      const int x0 = subpixel_snap(v0[0][0]);
+      const int y0 = subpixel_snap(v0[0][1]) - adj;
+
+      int int_width;
+      /* Point size as fixed point integer. For GL legacy points
+       * the point size is always a whole integer.
+       */
+      fixed_width = MAX2(FIXED_ONE,
+                         (subpixel_snap(size) + FIXED_ONE/2 - 1) & ~(FIXED_ONE-1));
+      int_width = fixed_width >> FIXED_ORDER;
+
+      assert(setup->pixel_offset != 0);
+
+      if (int_width == 1) {
+         bbox.x0 = x0 >> FIXED_ORDER;
+         bbox.y0 = y0 >> FIXED_ORDER;
+         bbox.x1 = bbox.x0;
+         bbox.y1 = bbox.y0;
+      } else {
+         if (int_width & 1) {
+            /* Odd width */
+            bbox.x0 = (x0 >> FIXED_ORDER) - (int_width - 1)/2;
+            bbox.y0 = (y0 >> FIXED_ORDER) - (int_width - 1)/2;
+         } else {
+            /* Even width */
+            bbox.x0 = ((x0 + FIXED_ONE/2) >> FIXED_ORDER) - int_width/2;
+            bbox.y0 = ((y0 + FIXED_ONE/2) >> FIXED_ORDER) - int_width/2;
+         }
+
+         bbox.x1 = bbox.x0 + int_width - 1;
+         bbox.y1 = bbox.y0 + int_width - 1;
+      }
    }
-   
+
+   if (0) {
+      debug_printf("  bbox: (%i, %i) - (%i, %i)\n",
+                   bbox.x0, bbox.y0,
+                   bbox.x1, bbox.y1);
+   }
+
    if (!u_rect_test_intersection(&setup->draw_regions[viewport_index], &bbox)) {
       if (0) debug_printf("offscreen\n");
       LP_COUNT(nr_culled_tris);

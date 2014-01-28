@@ -31,7 +31,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  * Authors:
  *   Kevin E. Martin <martin@valinux.com>
  *   Gareth Hughes <gareth@valinux.com>
- *   Keith Whitwell <keith@tungstengraphics.com>
+ *   Keith Whitwell <keithw@vmware.com>
  */
 
 #include <stdbool.h>
@@ -135,7 +135,7 @@ static void r100_emit_query_finish(radeonContextPtr radeon)
    BATCH_LOCALS(radeon);
    struct radeon_query_object *query = radeon->query.current;
 
-   BEGIN_BATCH_NO_AUTOSTATE(4);
+   BEGIN_BATCH(4);
    OUT_BATCH(CP_PACKET0(RADEON_RB3D_ZPASS_ADDR, 0));
    OUT_BATCH_RELOC(0, query->bo, query->curr_offset, 0, RADEON_GEM_DOMAIN_GTT, 0);
    END_BATCH();
@@ -234,7 +234,7 @@ r100CreateContext( gl_api api,
    radeonInitTextureFuncs( &rmesa->radeon, &functions );
    radeonInitQueryObjFunctions(&functions);
 
-   if (!radeonInitContext(&rmesa->radeon, &functions,
+   if (!radeonInitContext(&rmesa->radeon, api, &functions,
 			  glVisual, driContextPriv,
 			  sharedContextPrivate)) {
      free(rmesa);
@@ -258,7 +258,7 @@ r100CreateContext( gl_api api,
 
    ctx->Const.MaxTextureUnits = driQueryOptioni (&rmesa->radeon.optionCache,
 						 "texture_units");
-   ctx->Const.FragmentProgram.MaxTextureImageUnits = ctx->Const.MaxTextureUnits;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxTextureImageUnits = ctx->Const.MaxTextureUnits;
    ctx->Const.MaxTextureCoordUnits = ctx->Const.MaxTextureUnits;
    ctx->Const.MaxCombinedTextureImageUnits = ctx->Const.MaxTextureUnits;
 
@@ -301,7 +301,7 @@ r100CreateContext( gl_api api,
    ctx->Const.MaxColorAttachments = 1;
    ctx->Const.MaxRenderbufferSize = 2048;
 
-   ctx->ShaderCompilerOptions[MESA_SHADER_VERTEX].PreferDP4 = true;
+   ctx->ShaderCompilerOptions[MESA_SHADER_VERTEX].OptimizeForAOS = true;
 
    /* Install the customized pipeline:
     */

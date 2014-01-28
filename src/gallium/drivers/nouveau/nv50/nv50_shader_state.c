@@ -46,7 +46,9 @@ nv50_constbufs_validate(struct nv50_context *nv50)
          p = NV50_3D_SET_PROGRAM_CB_PROGRAM_VERTEX;
 
       while (nv50->constbuf_dirty[s]) {
-         const int i = ffs(nv50->constbuf_dirty[s]) - 1;
+         const unsigned i = (unsigned)ffs(nv50->constbuf_dirty[s]) - 1;
+
+         assert(i < NV50_MAX_PIPE_CONSTBUFS);
          nv50->constbuf_dirty[s] &= ~(1 << i);
 
          if (nv50->constbuf[s][i].user) {
@@ -193,6 +195,8 @@ nv50_gmtyprog_validate(struct nv50_context *nv50)
    struct nv50_program *gp = nv50->gmtyprog;
 
    if (gp) {
+      if (!nv50_program_validate(nv50, gp))
+         return;
       BEGIN_NV04(push, NV50_3D(GP_REG_ALLOC_TEMP), 1);
       PUSH_DATA (push, gp->max_gpr);
       BEGIN_NV04(push, NV50_3D(GP_REG_ALLOC_RESULT), 1);
@@ -342,6 +346,7 @@ nv50_fp_linkage_validate(struct nv50_context *nv50)
    struct nv50_varying dummy;
    int i, n, c, m;
    uint32_t primid = 0;
+   uint32_t layerid = vp->gp.layerid;
    uint32_t psiz = 0x000;
    uint32_t interp = fp->fp.interp;
    uint32_t colors = fp->fp.colors;
@@ -396,16 +401,17 @@ nv50_fp_linkage_validate(struct nv50_context *nv50)
          if (vp->out[n].sn == fp->in[i].sn &&
              vp->out[n].si == fp->in[i].si)
             break;
+      if (i == fp->gp.primid) {
+         primid = m;
+      }
       m = nv50_vec4_map(map, m, lin,
                         &fp->in[i], (n < vp->out_nr) ? &vp->out[n] : &dummy);
    }
 
-   /* PrimitiveID either is replaced by the system value, or
-    * written by the geometry shader into an output register
-    */
-   if (fp->gp.primid < 0x80) {
-      primid = m;
-      map[m++] = vp->gp.primid;
+   if (vp->gp.has_layer) {
+      // In GL4.x, layer can be an fp input, but not in 3.x. Make sure to add
+      // it to the output map.
+      map[m++] = layerid;
    }
 
    if (nv50->rast->pipe.point_size_per_vertex) {
@@ -450,11 +456,12 @@ nv50_fp_linkage_validate(struct nv50_context *nv50)
       PUSH_DATAp(push, map, n);
    } else {
       BEGIN_NV04(push, NV50_3D(VP_GP_BUILTIN_ATTR_EN), 1);
-      PUSH_DATA (push, vp->vp.attrs[2]);
+      PUSH_DATA (push, vp->vp.attrs[2] | fp->vp.attrs[2]);
 
       BEGIN_NV04(push, NV50_3D(SEMANTIC_PRIM_ID), 1);
       PUSH_DATA (push, primid);
 
+      assert(m > 0);
       BEGIN_NV04(push, NV50_3D(VP_RESULT_MAP_SIZE), 1);
       PUSH_DATA (push, m);
       BEGIN_NV04(push, NV50_3D(VP_RESULT_MAP(0)), n);
@@ -464,8 +471,11 @@ nv50_fp_linkage_validate(struct nv50_context *nv50)
    BEGIN_NV04(push, NV50_3D(SEMANTIC_COLOR), 4);
    PUSH_DATA (push, colors);
    PUSH_DATA (push, (vp->vp.clpd_nr << 8) | 4);
-   PUSH_DATA (push, 0);
+   PUSH_DATA (push, layerid);
    PUSH_DATA (push, psiz);
+
+   BEGIN_NV04(push, NV50_3D(LAYER), 1);
+   PUSH_DATA (push, vp->gp.has_layer << 16);
 
    BEGIN_NV04(push, NV50_3D(FP_INTERPOLANT_CTRL), 1);
    PUSH_DATA (push, interp);
@@ -514,6 +524,8 @@ nv50_vp_gp_mapping(uint8_t *map, int m,
          oid += mv & 1;
       }
    }
+   if (!m)
+      map[m++] = 0;
    return m;
 }
 
@@ -538,6 +550,7 @@ nv50_gp_linkage_validate(struct nv50_context *nv50)
    BEGIN_NV04(push, NV50_3D(VP_GP_BUILTIN_ATTR_EN), 1);
    PUSH_DATA (push, vp->vp.attrs[2] | gp->vp.attrs[2]);
 
+   assert(m > 0);
    BEGIN_NV04(push, NV50_3D(VP_RESULT_MAP_SIZE), 1);
    PUSH_DATA (push, m);
    BEGIN_NV04(push, NV50_3D(VP_RESULT_MAP(0)), n);

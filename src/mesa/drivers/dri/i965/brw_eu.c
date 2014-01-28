@@ -1,6 +1,6 @@
 /*
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
- Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
+ Intel funded Tungsten Graphics to
  develop this 3D driver.
 
  Permission is hereby granted, free of charge, to any person obtaining
@@ -26,7 +26,7 @@
  **********************************************************************/
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   */
 
 
@@ -112,7 +112,7 @@ brw_set_compression_control(struct brw_compile *p,
    p->compressed = (compression_control == BRW_COMPRESSION_COMPRESSED);
 
    if (p->brw->gen >= 6) {
-      /* Since we don't use the 32-wide support in gen6, we translate
+      /* Since we don't use the SIMD32 support in gen6, we translate
        * the pre-gen6 compression control here.
        */
       switch (compression_control) {
@@ -123,12 +123,12 @@ brw_set_compression_control(struct brw_compile *p,
 	 p->current->header.compression_control = GEN6_COMPRESSION_1Q;
 	 break;
       case BRW_COMPRESSION_2NDHALF:
-	 /* For 8-wide, this is "use the second set of 8 bits." */
+	 /* For SIMD8, this is "use the second set of 8 bits." */
 	 p->current->header.compression_control = GEN6_COMPRESSION_2Q;
 	 break;
       case BRW_COMPRESSION_COMPRESSED:
-	 /* For 16-wide instruction compression, use the first set of 16 bits
-	  * since we don't do 32-wide dispatch.
+	 /* For SIMD16 instruction compression, use the first set of 16 bits
+	  * since we don't do SIMD32 dispatch.
 	  */
 	 p->current->header.compression_control = GEN6_COMPRESSION_1H;
 	 break;

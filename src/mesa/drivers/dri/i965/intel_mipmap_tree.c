@@ -1,6 +1,6 @@
 /**************************************************************************
  *
- * Copyright 2006 Tungsten Graphics, Inc., Cedar Park, Texas.
+ * Copyright 2006 VMware, Inc.
  * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -18,7 +18,7 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL TUNGSTEN GRAPHICS AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -70,7 +70,7 @@ target_to_target(GLenum target)
  * created, based on the chip generation and the surface type.
  */
 static enum intel_msaa_layout
-compute_msaa_layout(struct brw_context *brw, gl_format format, GLenum target)
+compute_msaa_layout(struct brw_context *brw, mesa_format format, GLenum target)
 {
    /* Prior to Gen7, all MSAA surfaces used IMS layout. */
    if (brw->gen < 7)
@@ -225,7 +225,7 @@ intel_is_non_msrt_mcs_buffer_supported(struct brw_context *brw,
 struct intel_mipmap_tree *
 intel_miptree_create_layout(struct brw_context *brw,
                             GLenum target,
-                            gl_format format,
+                            mesa_format format,
                             GLuint first_level,
                             GLuint last_level,
                             GLuint width0,
@@ -353,7 +353,7 @@ intel_miptree_create_layout(struct brw_context *brw,
 	(brw->has_separate_stencil && brw_is_hiz_depth_format(brw, format)))) {
       mt->stencil_mt = intel_miptree_create(brw,
                                             mt->target,
-                                            MESA_FORMAT_S8,
+                                            MESA_FORMAT_S_UINT8,
                                             mt->first_level,
                                             mt->last_level,
                                             mt->logical_width0,
@@ -370,10 +370,10 @@ intel_miptree_create_layout(struct brw_context *brw,
       /* Fix up the Z miptree format for how we're splitting out separate
        * stencil.  Gen7 expects there to be no stencil bits in its depth buffer.
        */
-      if (mt->format == MESA_FORMAT_S8_Z24) {
-	 mt->format = MESA_FORMAT_X8_Z24;
-      } else if (mt->format == MESA_FORMAT_Z32_FLOAT_X24S8) {
-	 mt->format = MESA_FORMAT_Z32_FLOAT;
+      if (mt->format == MESA_FORMAT_Z24_UNORM_X8_UINT) {
+	 mt->format = MESA_FORMAT_Z24_UNORM_S8_UINT;
+      } else if (mt->format == MESA_FORMAT_Z32_FLOAT_S8X24_UINT) {
+	 mt->format = MESA_FORMAT_Z_FLOAT32;
 	 mt->cpp = 4;
       } else {
 	 _mesa_problem(NULL, "Unknown format %s in separate stencil mt\n",
@@ -391,13 +391,13 @@ intel_miptree_create_layout(struct brw_context *brw,
  */
 static uint32_t
 intel_miptree_choose_tiling(struct brw_context *brw,
-                            gl_format format,
+                            mesa_format format,
                             uint32_t width0,
                             uint32_t num_samples,
                             enum intel_miptree_tiling_mode requested,
                             struct intel_mipmap_tree *mt)
 {
-   if (format == MESA_FORMAT_S8) {
+   if (format == MESA_FORMAT_S_UINT8) {
       /* The stencil buffer is W tiled. However, we request from the kernel a
        * non-tiled buffer because the GTT is incapable of W fencing.
        */
@@ -443,7 +443,8 @@ intel_miptree_choose_tiling(struct brw_context *brw,
    if (minimum_pitch < 64)
       return I915_TILING_NONE;
 
-   if (ALIGN(minimum_pitch, 512) >= 32768) {
+   if (ALIGN(minimum_pitch, 512) >= 32768 ||
+       mt->total_width >= 32768 || mt->total_height >= 32768) {
       perf_debug("%dx%d miptree too large to blit, falling back to untiled",
                  mt->total_width, mt->total_height);
       return I915_TILING_NONE;
@@ -485,7 +486,7 @@ intel_miptree_choose_tiling(struct brw_context *brw,
 struct intel_mipmap_tree *
 intel_miptree_create(struct brw_context *brw,
 		     GLenum target,
-		     gl_format format,
+		     mesa_format format,
 		     GLuint first_level,
 		     GLuint last_level,
 		     GLuint width0,
@@ -496,38 +497,38 @@ intel_miptree_create(struct brw_context *brw,
                      enum intel_miptree_tiling_mode requested_tiling)
 {
    struct intel_mipmap_tree *mt;
-   gl_format tex_format = format;
-   gl_format etc_format = MESA_FORMAT_NONE;
+   mesa_format tex_format = format;
+   mesa_format etc_format = MESA_FORMAT_NONE;
    GLuint total_width, total_height;
 
-   if (!brw->is_baytrail) {
+   if (brw->gen < 8 && !brw->is_baytrail) {
       switch (format) {
       case MESA_FORMAT_ETC1_RGB8:
-         format = MESA_FORMAT_RGBX8888_REV;
+         format = MESA_FORMAT_R8G8B8X8_UNORM;
          break;
       case MESA_FORMAT_ETC2_RGB8:
-         format = MESA_FORMAT_RGBX8888_REV;
+         format = MESA_FORMAT_R8G8B8X8_UNORM;
          break;
       case MESA_FORMAT_ETC2_SRGB8:
       case MESA_FORMAT_ETC2_SRGB8_ALPHA8_EAC:
       case MESA_FORMAT_ETC2_SRGB8_PUNCHTHROUGH_ALPHA1:
-         format = MESA_FORMAT_SARGB8;
+         format = MESA_FORMAT_B8G8R8A8_SRGB;
          break;
       case MESA_FORMAT_ETC2_RGBA8_EAC:
       case MESA_FORMAT_ETC2_RGB8_PUNCHTHROUGH_ALPHA1:
-         format = MESA_FORMAT_RGBA8888_REV;
+         format = MESA_FORMAT_R8G8B8A8_UNORM;
          break;
       case MESA_FORMAT_ETC2_R11_EAC:
-         format = MESA_FORMAT_R16;
+         format = MESA_FORMAT_R_UNORM16;
          break;
       case MESA_FORMAT_ETC2_SIGNED_R11_EAC:
-         format = MESA_FORMAT_SIGNED_R16;
+         format = MESA_FORMAT_R_SNORM16;
          break;
       case MESA_FORMAT_ETC2_RG11_EAC:
-         format = MESA_FORMAT_GR1616;
+         format = MESA_FORMAT_R16G16_UNORM;
          break;
       case MESA_FORMAT_ETC2_SIGNED_RG11_EAC:
-         format = MESA_FORMAT_SIGNED_GR1616;
+         format = MESA_FORMAT_R16G16_SNORM;
          break;
       default:
          /* Non ETC1 / ETC2 format */
@@ -552,7 +553,7 @@ intel_miptree_create(struct brw_context *brw,
    total_width = mt->total_width;
    total_height = mt->total_height;
 
-   if (format == MESA_FORMAT_S8) {
+   if (format == MESA_FORMAT_S_UINT8) {
       /* Align to size of W tile, 64x64. */
       total_width = ALIGN(total_width, 64);
       total_height = ALIGN(total_height, 64);
@@ -617,7 +618,7 @@ intel_miptree_create(struct brw_context *brw,
 struct intel_mipmap_tree *
 intel_miptree_create_for_bo(struct brw_context *brw,
                             drm_intel_bo *bo,
-                            gl_format format,
+                            mesa_format format,
                             uint32_t offset,
                             uint32_t width,
                             uint32_t height,
@@ -676,7 +677,7 @@ intel_miptree_create_for_bo(struct brw_context *brw,
 struct intel_mipmap_tree*
 intel_miptree_create_for_dri2_buffer(struct brw_context *brw,
                                      unsigned dri_attachment,
-                                     gl_format format,
+                                     mesa_format format,
                                      uint32_t num_samples,
                                      struct intel_region *region)
 {
@@ -747,7 +748,7 @@ intel_miptree_create_for_dri2_buffer(struct brw_context *brw,
 struct intel_mipmap_tree*
 intel_miptree_create_for_image_buffer(struct brw_context *intel,
                                       enum __DRIimageBufferMask buffer_type,
-                                      gl_format format,
+                                      mesa_format format,
                                       uint32_t num_samples,
                                       struct intel_region *region)
 {
@@ -804,7 +805,7 @@ intel_miptree_create_for_image_buffer(struct brw_context *intel,
 
 struct intel_mipmap_tree*
 intel_miptree_create_for_renderbuffer(struct brw_context *brw,
-                                      gl_format format,
+                                      mesa_format format,
                                       uint32_t width,
                                       uint32_t height,
                                       uint32_t num_samples)
@@ -916,11 +917,11 @@ intel_miptree_match_image(struct intel_mipmap_tree *mt,
     */
    assert(target_to_target(image->TexObject->Target) == mt->target);
 
-   gl_format mt_format = mt->format;
-   if (mt->format == MESA_FORMAT_X8_Z24 && mt->stencil_mt)
-      mt_format = MESA_FORMAT_S8_Z24;
-   if (mt->format == MESA_FORMAT_Z32_FLOAT && mt->stencil_mt)
-      mt_format = MESA_FORMAT_Z32_FLOAT_X24S8;
+   mesa_format mt_format = mt->format;
+   if (mt->format == MESA_FORMAT_Z24_UNORM_S8_UINT && mt->stencil_mt)
+      mt_format = MESA_FORMAT_Z24_UNORM_X8_UINT;
+   if (mt->format == MESA_FORMAT_Z_FLOAT32 && mt->stencil_mt)
+      mt_format = MESA_FORMAT_Z32_FLOAT_S8X24_UINT;
    if (mt->etc_format != MESA_FORMAT_NONE)
       mt_format = mt->etc_format;
 
@@ -1117,7 +1118,7 @@ intel_miptree_copy_slice(struct brw_context *brw,
 			 int depth)
 
 {
-   gl_format format = src_mt->format;
+   mesa_format format = src_mt->format;
    uint32_t width = src_mt->level[level].width;
    uint32_t height = src_mt->level[level].height;
    int slice;
@@ -1214,13 +1215,13 @@ intel_miptree_alloc_mcs(struct brw_context *brw,
     * accessing this miptree using MCS-specific hardware mechanisms, which
     * infer the correct format based on num_samples.
     */
-   gl_format format;
+   mesa_format format;
    switch (num_samples) {
    case 4:
       /* 8 bits/pixel are required for MCS data when using 4x MSAA (2 bits for
        * each sample).
        */
-      format = MESA_FORMAT_R8;
+      format = MESA_FORMAT_R_UNORM8;
       break;
    case 8:
       /* 32 bits/pixel are required for MCS data when using 8x MSAA (3 bits
@@ -1283,7 +1284,7 @@ intel_miptree_alloc_non_msrt_mcs(struct brw_context *brw,
     * we'll need to scale the height down by the block height and then a
     * further factor of 8.
     */
-   const gl_format format = MESA_FORMAT_R_UINT32;
+   const mesa_format format = MESA_FORMAT_R_UINT32;
    unsigned block_width_px;
    unsigned block_height;
    intel_get_non_msrt_mcs_alignment(brw, mt, &block_width_px, &block_height);
@@ -2003,7 +2004,7 @@ intel_miptree_map_etc(struct brw_context *brw,
 {
    assert(mt->etc_format != MESA_FORMAT_NONE);
    if (mt->etc_format == MESA_FORMAT_ETC1_RGB8) {
-      assert(mt->format == MESA_FORMAT_RGBX8888_REV);
+      assert(mt->format == MESA_FORMAT_R8G8B8X8_UNORM);
    }
 
    assert(map->mode & GL_MAP_WRITE_BIT);
@@ -2065,7 +2066,7 @@ intel_miptree_map_depthstencil(struct brw_context *brw,
 {
    struct intel_mipmap_tree *z_mt = mt;
    struct intel_mipmap_tree *s_mt = mt->stencil_mt;
-   bool map_z32f_x24s8 = mt->format == MESA_FORMAT_Z32_FLOAT;
+   bool map_z32f_x24s8 = mt->format == MESA_FORMAT_Z_FLOAT32;
    int packed_bpp = map_z32f_x24s8 ? 8 : 4;
 
    map->stride = map->w * packed_bpp;
@@ -2137,7 +2138,7 @@ intel_miptree_unmap_depthstencil(struct brw_context *brw,
 {
    struct intel_mipmap_tree *z_mt = mt;
    struct intel_mipmap_tree *s_mt = mt->stencil_mt;
-   bool map_z32f_x24s8 = mt->format == MESA_FORMAT_Z32_FLOAT;
+   bool map_z32f_x24s8 = mt->format == MESA_FORMAT_Z_FLOAT32;
 
    if (map->mode & GL_MAP_WRITE_BIT) {
       uint32_t *packed_map = map->ptr;
@@ -2233,6 +2234,22 @@ intel_miptree_release_map(struct intel_mipmap_tree *mt,
    *map = NULL;
 }
 
+static bool
+can_blit_slice(struct intel_mipmap_tree *mt,
+               unsigned int level, unsigned int slice)
+{
+   uint32_t image_x;
+   uint32_t image_y;
+   intel_miptree_get_image_offset(mt, level, slice, &image_x, &image_y);
+   if (image_x >= 32768 || image_y >= 32768)
+      return false;
+
+   if (mt->region->pitch >= 32768)
+      return false;
+
+   return true;
+}
+
 static void
 intel_miptree_map_singlesample(struct brw_context *brw,
                                struct intel_mipmap_tree *mt,
@@ -2262,7 +2279,7 @@ intel_miptree_map_singlesample(struct brw_context *brw,
       intel_miptree_slice_set_needs_hiz_resolve(mt, level, slice);
    }
 
-   if (mt->format == MESA_FORMAT_S8) {
+   if (mt->format == MESA_FORMAT_S_UINT8) {
       intel_miptree_map_s8(brw, mt, map, level, slice);
    } else if (mt->etc_format != MESA_FORMAT_NONE &&
               !(mode & BRW_MAP_DIRECT_BIT)) {
@@ -2276,11 +2293,11 @@ intel_miptree_map_singlesample(struct brw_context *brw,
             !mt->compressed &&
             (mt->region->tiling == I915_TILING_X ||
              (brw->gen >= 6 && mt->region->tiling == I915_TILING_Y)) &&
-            mt->region->pitch < 32768) {
+            can_blit_slice(mt, level, slice)) {
       intel_miptree_map_blit(brw, mt, map, level, slice);
    } else if (mt->region->tiling != I915_TILING_NONE &&
               mt->region->bo->size >= brw->max_gtt_map_object_size) {
-      assert(mt->region->pitch < 32768);
+      assert(can_blit_slice(mt, level, slice));
       intel_miptree_map_blit(brw, mt, map, level, slice);
 #ifdef __SSE4_1__
    } else if (!(mode & GL_MAP_WRITE_BIT) && !mt->compressed) {
@@ -2313,7 +2330,7 @@ intel_miptree_unmap_singlesample(struct brw_context *brw,
    DBG("%s: mt %p (%s) level %d slice %d\n", __FUNCTION__,
        mt, _mesa_get_format_name(mt->format), level, slice);
 
-   if (mt->format == MESA_FORMAT_S8) {
+   if (mt->format == MESA_FORMAT_S_UINT8) {
       intel_miptree_unmap_s8(brw, mt, map, level, slice);
    } else if (mt->etc_format != MESA_FORMAT_NONE &&
               !(map->mode & BRW_MAP_DIRECT_BIT)) {

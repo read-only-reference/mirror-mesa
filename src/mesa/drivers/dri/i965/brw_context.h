@@ -1,6 +1,6 @@
 /*
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
- Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
+ Intel funded Tungsten Graphics to
  develop this 3D driver.
 
  Permission is hereby granted, free of charge, to any person obtaining
@@ -26,7 +26,7 @@
  **********************************************************************/
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   */
 
 
@@ -138,10 +138,6 @@ extern "C" {
  * CC - Color Calculator.  No EU threads associated with this unit.
  * Handles blending and (presumably) depth and stencil testing.
  */
-
-#define INTEL_WRITE_PART  0x1
-#define INTEL_WRITE_FULL  0x2
-#define INTEL_READ        0x4
 
 #define BRW_MAX_CURBE                    (32*16)
 
@@ -324,9 +320,6 @@ struct brw_shader {
    struct gl_shader base;
 
    bool compiled_once;
-
-   /** Shader IR transformed for native compile, at link time. */
-   struct exec_list *ir;
 };
 
 /* Note: If adding fields that need anything besides a normal memcmp() for
@@ -654,7 +647,7 @@ struct brw_gs_prog_data
 };
 
 /** Number of texture sampler units */
-#define BRW_MAX_TEX_UNIT 16
+#define BRW_MAX_TEX_UNIT 32
 
 /** Max number of render targets in a shader */
 #define BRW_MAX_DRAW_BUFFERS 8
@@ -790,6 +783,9 @@ enum shader_time_shader_type {
    ST_VS,
    ST_VS_WRITTEN,
    ST_VS_RESET,
+   ST_GS,
+   ST_GS_WRITTEN,
+   ST_GS_RESET,
    ST_FS8,
    ST_FS8_WRITTEN,
    ST_FS8_RESET,
@@ -1563,6 +1559,8 @@ void brw_emit_query_end(struct brw_context *brw);
 
 /** gen6_queryobj.c */
 void gen6_init_queryobj_functions(struct dd_function_table *functions);
+void brw_write_timestamp(struct brw_context *brw, drm_intel_bo *bo, int idx);
+void brw_write_depth_count(struct brw_context *brw, drm_intel_bo *bo, int idx);
 void brw_store_register_mem64(struct brw_context *brw,
                               drm_intel_bo *bo, uint32_t reg, int idx);
 
@@ -1646,7 +1644,7 @@ void brw_upload_abo_surfaces(struct brw_context *brw,
                              struct brw_stage_prog_data *prog_data);
 
 /* brw_surface_formats.c */
-bool brw_is_hiz_depth_format(struct brw_context *ctx, gl_format format);
+bool brw_is_hiz_depth_format(struct brw_context *ctx, mesa_format format);
 bool brw_render_target_supported(struct brw_context *brw,
                                  struct gl_renderbuffer *rb);
 
@@ -1812,7 +1810,7 @@ brw_program_reloc(struct brw_context *brw, uint32_t state_offset,
 			   prog_offset,
 			   I915_GEM_DOMAIN_INSTRUCTION, 0);
 
-   return brw->cache.bo->offset + prog_offset;
+   return brw->cache.bo->offset64 + prog_offset;
 }
 
 bool brw_do_cubemap_normalize(struct exec_list *instructions);

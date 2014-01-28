@@ -120,7 +120,7 @@ initialize_texture_fields(struct gl_context *ctx,
                           struct gl_texture_object *texObj,
                           GLint levels,
                           GLsizei width, GLsizei height, GLsizei depth,
-                          GLenum internalFormat, gl_format texFormat)
+                          GLenum internalFormat, mesa_format texFormat)
 {
    const GLenum target = texObj->Target;
    const GLuint numFaces = _mesa_num_tex_faces(target);
@@ -244,6 +244,10 @@ _mesa_alloc_texture_storage(struct gl_context *ctx,
    int face;
    int level;
 
+   (void) width;
+   (void) height;
+   (void) depth;
+
    for (face = 0; face < numFaces; face++) {
       for (level = 0; level < levels; level++) {
          struct gl_texture_image *const texImage = texObj->Image[face][level];
@@ -328,6 +332,11 @@ tex_storage_error_check(struct gl_context *ctx, GLuint dims, GLenum target,
       return GL_TRUE;
    }
 
+   /* additional checks for depth textures */
+   if (!_mesa_legal_texture_base_format_for_target(ctx, target, internalformat,
+                                                   dims, "glTexStorage"))
+      return GL_TRUE;
+
    return GL_FALSE;
 }
 
@@ -341,7 +350,7 @@ texstorage(GLuint dims, GLenum target, GLsizei levels, GLenum internalformat,
 {
    struct gl_texture_object *texObj;
    GLboolean sizeOK, dimensionsOK;
-   gl_format texFormat;
+   mesa_format texFormat;
 
    GET_CURRENT_CONTEXT(ctx);
 
@@ -460,7 +469,16 @@ _mesa_TextureStorage1DEXT(GLuint texture, GLenum target, GLsizei levels,
                           GLenum internalformat,
                           GLsizei width)
 {
-   /* no-op */
+   GET_CURRENT_CONTEXT(ctx);
+
+   (void) texture;
+   (void) target;
+   (void) levels;
+   (void) internalformat;
+   (void) width;
+
+   _mesa_error(ctx, GL_INVALID_OPERATION,
+               "glTextureStorage1DEXT not supported");
 }
 
 
@@ -469,7 +487,17 @@ _mesa_TextureStorage2DEXT(GLuint texture, GLenum target, GLsizei levels,
                           GLenum internalformat,
                           GLsizei width, GLsizei height)
 {
-   /* no-op */
+   GET_CURRENT_CONTEXT(ctx);
+
+   (void) texture;
+   (void) target;
+   (void) levels;
+   (void) internalformat;
+   (void) width;
+   (void) height;
+
+   _mesa_error(ctx, GL_INVALID_OPERATION,
+               "glTextureStorage2DEXT not supported");
 }
 
 
@@ -479,5 +507,16 @@ _mesa_TextureStorage3DEXT(GLuint texture, GLenum target, GLsizei levels,
                           GLenum internalformat,
                           GLsizei width, GLsizei height, GLsizei depth)
 {
-   /* no-op */
+   GET_CURRENT_CONTEXT(ctx);
+
+   (void) texture;
+   (void) target;
+   (void) levels;
+   (void) internalformat;
+   (void) width;
+   (void) height;
+   (void) depth;
+
+   _mesa_error(ctx, GL_INVALID_OPERATION,
+               "glTextureStorage3DEXT not supported");
 }

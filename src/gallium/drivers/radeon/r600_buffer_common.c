@@ -28,6 +28,7 @@
 #include "util/u_memory.h"
 #include "util/u_upload_mgr.h"
 #include <inttypes.h>
+#include <stdio.h>
 
 boolean r600_rings_is_buffer_referenced(struct r600_common_context *ctx,
 					struct radeon_winsys_cs_handle *buf,
@@ -205,6 +206,12 @@ static void *r600_buffer_transfer_map(struct pipe_context *ctx,
 		usage |= PIPE_TRANSFER_UNSYNCHRONIZED;
 	}
 
+	/* If discarding the entire range, discard the whole resource instead. */
+	if (usage & PIPE_TRANSFER_DISCARD_RANGE &&
+	    box->x == 0 && box->width == resource->width0) {
+		usage |= PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE;
+	}
+
 	if (usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE &&
 	    !(usage & PIPE_TRANSFER_UNSYNCHRONIZED)) {
 		assert(usage & PIPE_TRANSFER_WRITE);
@@ -214,6 +221,8 @@ static void *r600_buffer_transfer_map(struct pipe_context *ctx,
 		    rctx->ws->buffer_is_busy(rbuffer->buf, RADEON_USAGE_READWRITE)) {
 			rctx->invalidate_buffer(&rctx->b, &rbuffer->b.b);
 		}
+		/* At this point, the buffer is always idle. */
+		usage |= PIPE_TRANSFER_UNSYNCHRONIZED;
 	}
 	else if ((usage & PIPE_TRANSFER_DISCARD_RANGE) &&
 		 !(usage & PIPE_TRANSFER_UNSYNCHRONIZED) &&

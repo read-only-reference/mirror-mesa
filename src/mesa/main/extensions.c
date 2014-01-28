@@ -80,6 +80,7 @@ static const struct extension extension_table[] = {
    /* ARB Extensions */
    { "GL_ARB_ES2_compatibility",                   o(ARB_ES2_compatibility),                   GL,             2009 },
    { "GL_ARB_ES3_compatibility",                   o(ARB_ES3_compatibility),                   GL,             2012 },
+   { "GL_ARB_arrays_of_arrays",                    o(ARB_arrays_of_arrays),                    GL,             2012 },
    { "GL_ARB_base_instance",                       o(ARB_base_instance),                       GL,             2011 },
    { "GL_ARB_blend_func_extended",                 o(ARB_blend_func_extended),                 GL,             2009 },
    { "GL_ARB_clear_buffer_object",                 o(dummy_true),                              GL,             2012 },
@@ -109,7 +110,7 @@ static const struct extension extension_table[] = {
    { "GL_ARB_instanced_arrays",                    o(ARB_instanced_arrays),                    GL,             2008 },
    { "GL_ARB_internalformat_query",                o(ARB_internalformat_query),                GL,             2011 },
    { "GL_ARB_invalidate_subdata",                  o(dummy_true),                              GL,             2012 },
-   { "GL_ARB_map_buffer_alignment",                o(ARB_map_buffer_alignment),                GL,             2011 },
+   { "GL_ARB_map_buffer_alignment",                o(dummy_true),                              GL,             2011 },
    { "GL_ARB_map_buffer_range",                    o(ARB_map_buffer_range),                    GL,             2008 },
    { "GL_ARB_multi_draw_indirect",                 o(ARB_draw_indirect),                       GLC,            2012 },
    { "GL_ARB_multisample",                         o(dummy_true),                              GLL,            1994 },
@@ -126,6 +127,7 @@ static const struct extension extension_table[] = {
    { "GL_ARB_seamless_cube_map",                   o(ARB_seamless_cube_map),                   GL,             2009 },
    { "GL_ARB_shader_atomic_counters",              o(ARB_shader_atomic_counters),              GL,             2011 },
    { "GL_ARB_shader_bit_encoding",                 o(ARB_shader_bit_encoding),                 GL,             2010 },
+   { "GL_ARB_shader_image_load_store",             o(ARB_shader_image_load_store),             GL,             2011 },
    { "GL_ARB_shader_objects",                      o(dummy_true),                              GL,             2002 },
    { "GL_ARB_shader_stencil_export",               o(ARB_shader_stencil_export),               GL,             2009 },
    { "GL_ARB_shader_texture_lod",                  o(ARB_shader_texture_lod),                  GL,             2009 },
@@ -175,6 +177,7 @@ static const struct extension extension_table[] = {
    { "GL_ARB_vertex_shader",                       o(ARB_vertex_shader),                       GL,             2002 },
    { "GL_ARB_vertex_type_10f_11f_11f_rev",         o(ARB_vertex_type_10f_11f_11f_rev),         GL,             2013 },
    { "GL_ARB_vertex_type_2_10_10_10_rev",          o(ARB_vertex_type_2_10_10_10_rev),          GL,             2009 },
+   { "GL_ARB_viewport_array",                      o(ARB_viewport_array),                      GLC,            2010 },
    { "GL_ARB_window_pos",                          o(dummy_true),                              GLL,            2001 },
    /* EXT extensions */
    { "GL_EXT_abgr",                                o(dummy_true),                              GL,             1995 },
@@ -192,7 +195,7 @@ static const struct extension extension_table[] = {
    { "GL_EXT_draw_instanced",                      o(ARB_draw_instanced),                      GL,             2006 },
    { "GL_EXT_draw_range_elements",                 o(dummy_true),                              GLL,            1997 },
    { "GL_EXT_fog_coord",                           o(dummy_true),                              GLL,            1999 },
-   { "GL_EXT_framebuffer_blit",                    o(EXT_framebuffer_blit),                    GL,             2005 },
+   { "GL_EXT_framebuffer_blit",                    o(dummy_true),                              GL,             2005 },
    { "GL_EXT_framebuffer_multisample",             o(EXT_framebuffer_multisample),             GL,             2005 },
    { "GL_EXT_framebuffer_multisample_blit_scaled", o(EXT_framebuffer_multisample_blit_scaled), GL,             2011 },
    { "GL_EXT_framebuffer_object",                  o(dummy_true),                              GLL,            2000 },
@@ -304,6 +307,7 @@ static const struct extension extension_table[] = {
    { "GL_AMD_performance_monitor",                 o(AMD_performance_monitor),                 GL,             2007 },
    { "GL_AMD_seamless_cubemap_per_texture",        o(AMD_seamless_cubemap_per_texture),        GL,             2009 },
    { "GL_AMD_shader_stencil_export",               o(ARB_shader_stencil_export),               GL,             2009 },
+   { "GL_AMD_shader_trinary_minmax",               o(dummy_true),                              GL,             2012 },
    { "GL_AMD_vertex_shader_layer",                 o(AMD_vertex_shader_layer),                 GLC,            2012 },
    { "GL_APPLE_object_purgeable",                  o(APPLE_object_purgeable),                  GL,             2006 },
    { "GL_APPLE_packed_pixels",                     o(dummy_true),                              GLL,            2002 },
@@ -396,10 +400,6 @@ _mesa_enable_sw_extensions(struct gl_context *ctx)
    ctx->Extensions.ARB_fragment_program_shadow = GL_TRUE;
    ctx->Extensions.ARB_fragment_shader = GL_TRUE;
    ctx->Extensions.ARB_framebuffer_object = GL_TRUE;
-   /* XXX re-enable when GLSL compiler again supports geometry shaders */
-#if 0
-   ctx->Extensions.ARB_geometry_shader4 = GL_TRUE;
-#endif
    ctx->Extensions.ARB_half_float_pixel = GL_TRUE;
    ctx->Extensions.ARB_half_float_vertex = GL_TRUE;
    ctx->Extensions.ARB_map_buffer_range = GL_TRUE;
@@ -436,7 +436,6 @@ _mesa_enable_sw_extensions(struct gl_context *ctx)
    ctx->Extensions.EXT_blend_minmax = GL_TRUE;
    ctx->Extensions.EXT_depth_bounds_test = GL_TRUE;
    ctx->Extensions.EXT_draw_buffers2 = GL_TRUE;
-   ctx->Extensions.EXT_framebuffer_blit = GL_TRUE;
    ctx->Extensions.EXT_pixel_buffer_object = GL_TRUE;
    ctx->Extensions.EXT_point_parameters = GL_TRUE;
    ctx->Extensions.EXT_provoking_vertex = GL_TRUE;

@@ -1,6 +1,6 @@
 /*
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
- Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
+ Intel funded Tungsten Graphics to
  develop this 3D driver.
 
  Permission is hereby granted, free of charge, to any person obtaining
@@ -26,7 +26,7 @@
  **********************************************************************/
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   */
 
 #include "main/glheader.h"
@@ -187,7 +187,7 @@ static void populate_key(struct brw_context *brw,
       /* BRW_NEW_TRANSFORM_FEEDBACK */
       if (_mesa_is_xfb_active_and_unpaused(ctx)) {
          const struct gl_shader_program *shaderprog =
-            ctx->Shader.CurrentVertexProgram;
+            ctx->Shader.CurrentProgram[MESA_SHADER_VERTEX];
          const struct gl_transform_feedback_info *linked_xfb_info =
             &shaderprog->LinkedTransformFeedback;
          int i;

@@ -449,12 +449,12 @@ osmesa_renderbuffer_storage(struct gl_context *ctx, struct gl_renderbuffer *rb,
    if (osmesa->format == OSMESA_RGBA) {
       if (osmesa->DataType == GL_UNSIGNED_BYTE) {
          if (_mesa_little_endian())
-            rb->Format = MESA_FORMAT_RGBA8888_REV;
+            rb->Format = MESA_FORMAT_R8G8B8A8_UNORM;
          else
-            rb->Format = MESA_FORMAT_RGBA8888;
+            rb->Format = MESA_FORMAT_A8B8G8R8_UNORM;
       }
       else if (osmesa->DataType == GL_UNSIGNED_SHORT) {
-         rb->Format = MESA_FORMAT_RGBA_16;
+         rb->Format = MESA_FORMAT_RGBA_UNORM16;
       }
       else {
          rb->Format = MESA_FORMAT_RGBA_FLOAT32;
@@ -463,13 +463,13 @@ osmesa_renderbuffer_storage(struct gl_context *ctx, struct gl_renderbuffer *rb,
    else if (osmesa->format == OSMESA_BGRA) {
       if (osmesa->DataType == GL_UNSIGNED_BYTE) {
          if (_mesa_little_endian())
-            rb->Format = MESA_FORMAT_ARGB8888;
+            rb->Format = MESA_FORMAT_B8G8R8A8_UNORM;
          else
-            rb->Format = MESA_FORMAT_ARGB8888_REV;
+            rb->Format = MESA_FORMAT_A8R8G8B8_UNORM;
       }
       else if (osmesa->DataType == GL_UNSIGNED_SHORT) {
          _mesa_warning(ctx, "Unsupported OSMesa format BGRA/GLushort");
-         rb->Format = MESA_FORMAT_RGBA_16; /* not exactly right */
+         rb->Format = MESA_FORMAT_RGBA_UNORM16; /* not exactly right */
       }
       else {
          _mesa_warning(ctx, "Unsupported OSMesa format BGRA/GLfloat");
@@ -479,13 +479,13 @@ osmesa_renderbuffer_storage(struct gl_context *ctx, struct gl_renderbuffer *rb,
    else if (osmesa->format == OSMESA_ARGB) {
       if (osmesa->DataType == GL_UNSIGNED_BYTE) {
          if (_mesa_little_endian())
-            rb->Format = MESA_FORMAT_ARGB8888_REV;
+            rb->Format = MESA_FORMAT_A8R8G8B8_UNORM;
          else
-            rb->Format = MESA_FORMAT_ARGB8888;
+            rb->Format = MESA_FORMAT_B8G8R8A8_UNORM;
       }
       else if (osmesa->DataType == GL_UNSIGNED_SHORT) {
          _mesa_warning(ctx, "Unsupported OSMesa format ARGB/GLushort");
-         rb->Format = MESA_FORMAT_RGBA_16; /* not exactly right */
+         rb->Format = MESA_FORMAT_RGBA_UNORM16; /* not exactly right */
       }
       else {
          _mesa_warning(ctx, "Unsupported OSMesa format ARGB/GLfloat");
@@ -494,11 +494,11 @@ osmesa_renderbuffer_storage(struct gl_context *ctx, struct gl_renderbuffer *rb,
    }
    else if (osmesa->format == OSMESA_RGB) {
       if (osmesa->DataType == GL_UNSIGNED_BYTE) {
-         rb->Format = MESA_FORMAT_RGB888;
+         rb->Format = MESA_FORMAT_BGR_UNORM8;
       }
       else if (osmesa->DataType == GL_UNSIGNED_SHORT) {
          _mesa_warning(ctx, "Unsupported OSMesa format RGB/GLushort");
-         rb->Format = MESA_FORMAT_RGBA_16; /* not exactly right */
+         rb->Format = MESA_FORMAT_RGBA_UNORM16; /* not exactly right */
       }
       else {
          _mesa_warning(ctx, "Unsupported OSMesa format RGB/GLfloat");
@@ -507,11 +507,11 @@ osmesa_renderbuffer_storage(struct gl_context *ctx, struct gl_renderbuffer *rb,
    }
    else if (osmesa->format == OSMESA_BGR) {
       if (osmesa->DataType == GL_UNSIGNED_BYTE) {
-         rb->Format = MESA_FORMAT_BGR888;
+         rb->Format = MESA_FORMAT_RGB_UNORM8;
       }
       else if (osmesa->DataType == GL_UNSIGNED_SHORT) {
          _mesa_warning(ctx, "Unsupported OSMesa format BGR/GLushort");
-         rb->Format = MESA_FORMAT_RGBA_16; /* not exactly right */
+         rb->Format = MESA_FORMAT_RGBA_UNORM16; /* not exactly right */
       }
       else {
          _mesa_warning(ctx, "Unsupported OSMesa format BGR/GLfloat");
@@ -520,7 +520,7 @@ osmesa_renderbuffer_storage(struct gl_context *ctx, struct gl_renderbuffer *rb,
    }
    else if (osmesa->format == OSMESA_RGB_565) {
       ASSERT(osmesa->DataType == GL_UNSIGNED_BYTE);
-      rb->Format = MESA_FORMAT_RGB565;
+      rb->Format = MESA_FORMAT_B5G6R5_UNORM;
    }
    else {
       _mesa_problem(ctx, "bad pixel format in osmesa renderbuffer_storage");

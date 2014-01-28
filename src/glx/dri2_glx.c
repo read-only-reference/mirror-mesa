@@ -51,6 +51,7 @@
 #include "dri2.h"
 #include "dri_common.h"
 #include "dri2_priv.h"
+#include "loader.h"
 
 /* From xmlpool/options.h, user exposed so should be stable */
 #define DRI_CONF_VBLANK_NEVER 0
@@ -1156,7 +1157,7 @@ dri2CreateScreen(int screen, struct glx_display * priv)
    struct dri2_screen *psc;
    __GLXDRIscreen *psp;
    struct glx_config *configs = NULL, *visuals = NULL;
-   char *driverName, *deviceName, *tmp;
+   char *driverName = NULL, *loader_driverName, *deviceName, *tmp;
    drm_magic_t magic;
    int i;
 
@@ -1179,6 +1180,29 @@ dri2CreateScreen(int screen, struct glx_display * priv)
       return NULL;
    }
 
+#ifdef O_CLOEXEC
+   psc->fd = open(deviceName, O_RDWR | O_CLOEXEC);
+   if (psc->fd == -1 && errno == EINVAL)
+#endif
+   {
+      psc->fd = open(deviceName, O_RDWR);
+      if (psc->fd != -1)
+         fcntl(psc->fd, F_SETFD, fcntl(psc->fd, F_GETFD) | FD_CLOEXEC);
+   }
+   if (psc->fd < 0) {
+      ErrorMessageF("failed to open drm device: %s\n", strerror(errno));
+      goto handle_error;
+   }
+
+   /* If Mesa knows about the appropriate driver for this fd, then trust it.
+    * Otherwise, default to the server's value.
+    */
+   loader_driverName = loader_get_driver_for_fd(psc->fd, 0);
+   if (loader_driverName) {
+      free(driverName);
+      driverName = loader_driverName;
+   }
+
    psc->driver = driOpenDriver(driverName);
    if (psc->driver == NULL) {
       ErrorMessageF("driver pointer missing\n");
@@ -1198,20 +1222,6 @@ dri2CreateScreen(int screen, struct glx_display * priv)
 
    if (psc->core == NULL || psc->dri2 == NULL) {
       ErrorMessageF("core dri or dri2 extension not found\n");
-      goto handle_error;
-   }
-
-#ifdef O_CLOEXEC
-   psc->fd = open(deviceName, O_RDWR | O_CLOEXEC);
-   if (psc->fd == -1 && errno == EINVAL)
-#endif
-   {
-      psc->fd = open(deviceName, O_RDWR);
-      if (psc->fd != -1)
-         fcntl(psc->fd, F_SETFD, fcntl(psc->fd, F_GETFD) | FD_CLOEXEC);
-   }
-   if (psc->fd < 0) {
-      ErrorMessageF("failed to open drm device: %s\n", strerror(errno));
       goto handle_error;
    }
 

@@ -29,10 +29,10 @@ AC_SUBST([OSMESA_VERSION])
 dnl Versions for external dependencies
 LIBDRM_REQUIRED=2.4.24
 LIBDRM_RADEON_REQUIRED=2.4.50
-LIBDRM_INTEL_REQUIRED=2.4.49
+LIBDRM_INTEL_REQUIRED=2.4.52
 LIBDRM_NVVIEUX_REQUIRED=2.4.33
 LIBDRM_NOUVEAU_REQUIRED="2.4.33 libdrm >= 2.4.41"
-LIBDRM_FREEDRENO_REQUIRED=2.4.39
+LIBDRM_FREEDRENO_REQUIRED=2.4.51
 DRI2PROTO_REQUIRED=2.6
 DRI3PROTO_REQUIRED=1.0
 PRESENTPROTO_REQUIRED=1.0
@@ -583,7 +583,7 @@ AC_ARG_ENABLE([xvmc],
    [AS_HELP_STRING([--enable-xvmc],
          [enable xvmc library @<:@default=auto@:>@])],
    [enable_xvmc="$enableval"],
-   [enable_xvmc=auto])
+   [enable_xvmc=no])
 AC_ARG_ENABLE([vdpau],
    [AS_HELP_STRING([--enable-vdpau],
          [enable vdpau library @<:@default=auto@:>@])],
@@ -858,7 +858,7 @@ xyesno)
 
     if test x"$enable_dri3$have_libudev" = xyesyes; then
         X11_INCLUDES="$X11_INCLUDES $LIBUDEV_CFLAGS"
-        GL_LIB_DEPS="$GL_LIB_DEPS $LIBUDEV_LIBS"
+        GL_LIB_DEPS="$GL_LIB_DEPS"
     fi
 
     # need DRM libs, $PTHREAD_LIBS, etc.
@@ -866,6 +866,10 @@ xyesno)
     GL_PC_LIB_PRIV="-lm $PTHREAD_LIBS $DLOPEN_LIBS"
     ;;
 esac
+
+if test "$have_libudev" = yes; then
+    DEFINES="$DEFINES -DHAVE_LIBUDEV"
+fi
 
 # This is outside the case (above) so that it is invoked even for non-GLX
 # builds.
@@ -1203,9 +1207,6 @@ if test "x$enable_egl" = xyes; then
 
     if test "$enable_static" != yes; then
         # build egl_glx when libGL is built
-        if test "$have_libudev" = yes; then
-            DEFINES="$DEFINES -DHAVE_LIBUDEV"
-        fi
 
         if test "x$enable_dri" = xyes; then
 	    HAVE_EGL_DRIVER_DRI2=1
@@ -1567,9 +1568,9 @@ if test "x$enable_gallium_llvm" = xauto; then
 fi
 if test "x$enable_gallium_llvm" = xyes; then
     if test "x$llvm_prefix" != x; then
-        AC_PATH_PROG([LLVM_CONFIG], [llvm-config], [no], ["$llvm_prefix/bin"])
+        AC_PATH_TOOL([LLVM_CONFIG], [llvm-config], [no], ["$llvm_prefix/bin"])
     else
-        AC_PATH_PROG([LLVM_CONFIG], [llvm-config], [no])
+        AC_PATH_TOOL([LLVM_CONFIG], [llvm-config], [no])
     fi
 
     if test "x$LLVM_CONFIG" != xno; then
@@ -1935,6 +1936,7 @@ AM_CONDITIONAL(HAVE_MESA_LLVM, test x$MESA_LLVM = x1)
 AC_SUBST([ELF_LIB])
 
 AM_CONDITIONAL(DRICOMMON_NEED_LIBDRM, test "x$DRICOMMON_NEED_LIBDRM" = xyes)
+AM_CONDITIONAL(HAVE_LIBDRM, test "x$have_libdrm" = xyes)
 AM_CONDITIONAL(HAVE_X11_DRIVER, test "x$enable_xlib_glx" = xyes)
 AM_CONDITIONAL(HAVE_OSMESA, test "x$enable_osmesa" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_OSMESA, test "x$enable_gallium_osmesa" = xyes)
@@ -2059,6 +2061,7 @@ AC_CONFIG_FILES([Makefile
 		src/glx/Makefile
 		src/glx/tests/Makefile
 		src/gtest/Makefile
+		src/loader/Makefile
 		src/mapi/Makefile
 		src/mapi/es1api/Makefile
 		src/mapi/es1api/glesv1_cm.pc

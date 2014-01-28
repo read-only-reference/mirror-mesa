@@ -29,7 +29,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 /*
  * Authors:
- *   Keith Whitwell <keith@tungstengraphics.com>
+ *   Keith Whitwell <keithw@vmware.com>
  */
 
 #include <stdbool.h>
@@ -80,7 +80,7 @@ static const GLubyte *r200GetString( struct gl_context *ctx, GLenum name )
 
    switch ( name ) {
    case GL_VENDOR:
-      return (GLubyte *)"Tungsten Graphics, Inc.";
+      return (GLubyte *)"Mesa Project";
 
    case GL_RENDERER:
       offset = driGetRendererString( buffer, "R200", agp_mode );
@@ -169,7 +169,7 @@ static void r200_emit_query_finish(radeonContextPtr radeon)
    BATCH_LOCALS(radeon);
    struct radeon_query_object *query = radeon->query.current;
 
-   BEGIN_BATCH_NO_AUTOSTATE(4);
+   BEGIN_BATCH(4);
    OUT_BATCH(CP_PACKET0(RADEON_RB3D_ZPASS_ADDR, 0));
    OUT_BATCH_RELOC(0, query->bo, query->curr_offset, 0, RADEON_GEM_DOMAIN_GTT, 0);
    END_BATCH();
@@ -271,7 +271,7 @@ GLboolean r200CreateContext( gl_api api,
    r200InitShaderFuncs(&functions);
    radeonInitQueryObjFunctions(&functions);
 
-   if (!radeonInitContext(&rmesa->radeon, &functions,
+   if (!radeonInitContext(&rmesa->radeon, api, &functions,
 			  glVisual, driContextPriv,
 			  sharedContextPrivate)) {
      free(rmesa);
@@ -295,7 +295,7 @@ GLboolean r200CreateContext( gl_api api,
 
    ctx->Const.MaxTextureUnits = driQueryOptioni (&rmesa->radeon.optionCache,
 						 "texture_units");
-   ctx->Const.FragmentProgram.MaxTextureImageUnits = ctx->Const.MaxTextureUnits;
+   ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxTextureImageUnits = ctx->Const.MaxTextureUnits;
    ctx->Const.MaxTextureCoordUnits = ctx->Const.MaxTextureUnits;
 
    ctx->Const.MaxCombinedTextureImageUnits = ctx->Const.MaxTextureUnits;
@@ -329,16 +329,16 @@ GLboolean r200CreateContext( gl_api api,
    ctx->Const.MaxLineWidthAA = 10.0;
    ctx->Const.LineWidthGranularity = 0.0625;
 
-   ctx->Const.VertexProgram.MaxNativeInstructions = R200_VSF_MAX_INST;
-   ctx->Const.VertexProgram.MaxNativeAttribs = 12;
-   ctx->Const.VertexProgram.MaxNativeTemps = R200_VSF_MAX_TEMPS;
-   ctx->Const.VertexProgram.MaxNativeParameters = R200_VSF_MAX_PARAM;
-   ctx->Const.VertexProgram.MaxNativeAddressRegs = 1;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeInstructions = R200_VSF_MAX_INST;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeAttribs = 12;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeTemps = R200_VSF_MAX_TEMPS;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeParameters = R200_VSF_MAX_PARAM;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxNativeAddressRegs = 1;
 
    ctx->Const.MaxDrawBuffers = 1;
    ctx->Const.MaxColorAttachments = 1;
 
-   ctx->ShaderCompilerOptions[MESA_SHADER_VERTEX].PreferDP4 = GL_TRUE;
+   ctx->ShaderCompilerOptions[MESA_SHADER_VERTEX].OptimizeForAOS = GL_TRUE;
 
    /* Install the customized pipeline:
     */

@@ -1,6 +1,6 @@
 /**************************************************************************
  *
- * Copyright 2006 Tungsten Graphics, Inc., Cedar Park, Texas.
+ * Copyright 2006 VMware, Inc.
  * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -18,7 +18,7 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL TUNGSTEN GRAPHICS AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -278,17 +278,17 @@ struct intel_mipmap_tree
     * However, for textures and renderbuffers with packed depth/stencil formats
     * on hardware where we want or need to use separate stencil, there will be
     * two miptrees for storing the data.  If the depthstencil texture or rb is
-    * MESA_FORMAT_Z32_FLOAT_X24S8, then mt->format will be
-    * MESA_FORMAT_Z32_FLOAT, otherwise for MESA_FORMAT_S8_Z24 objects it will be
-    * MESA_FORMAT_X8_Z24.
+    * MESA_FORMAT_Z32_FLOAT_S8X24_UINT, then mt->format will be
+    * MESA_FORMAT_Z_FLOAT32, otherwise for MESA_FORMAT_Z24_UNORM_X8_UINT objects it will be
+    * MESA_FORMAT_Z24_UNORM_S8_UINT.
     *
     * For ETC1/ETC2 textures, this is one of the uncompressed mesa texture
     * formats if the hardware lacks support for ETC1/ETC2. See @ref wraps_etc.
     */
-   gl_format format;
+   mesa_format format;
 
    /** This variable stores the value of ETC compressed texture format */
-   gl_format etc_format;
+   mesa_format etc_format;
 
    /**
     * The X offset of each image in the miptree must be aligned to this.
@@ -334,7 +334,10 @@ struct intel_mipmap_tree
    bool array_spacing_lod0;
 
    /**
-    * The distance in rows between array slices.
+    * The distance in rows between array slices in an uncompressed surface.
+    *
+    * For compressed surfaces, slices are stored closer together physically;
+    * the real distance is (qpitch / block height).
     */
    uint32_t qpitch;
 
@@ -494,7 +497,7 @@ intel_miptree_alloc_non_msrt_mcs(struct brw_context *brw,
 
 struct intel_mipmap_tree *intel_miptree_create(struct brw_context *brw,
                                                GLenum target,
-					       gl_format format,
+					       mesa_format format,
                                                GLuint first_level,
                                                GLuint last_level,
                                                GLuint width0,
@@ -507,7 +510,7 @@ struct intel_mipmap_tree *intel_miptree_create(struct brw_context *brw,
 struct intel_mipmap_tree *
 intel_miptree_create_layout(struct brw_context *brw,
                             GLenum target,
-                            gl_format format,
+                            mesa_format format,
                             GLuint first_level,
                             GLuint last_level,
                             GLuint width0,
@@ -519,7 +522,7 @@ intel_miptree_create_layout(struct brw_context *brw,
 struct intel_mipmap_tree *
 intel_miptree_create_for_bo(struct brw_context *brw,
                             drm_intel_bo *bo,
-                            gl_format format,
+                            mesa_format format,
                             uint32_t offset,
                             uint32_t width,
                             uint32_t height,
@@ -529,14 +532,14 @@ intel_miptree_create_for_bo(struct brw_context *brw,
 struct intel_mipmap_tree*
 intel_miptree_create_for_dri2_buffer(struct brw_context *brw,
                                      unsigned dri_attachment,
-                                     gl_format format,
+                                     mesa_format format,
                                      uint32_t num_samples,
                                      struct intel_region *region);
 
 struct intel_mipmap_tree*
 intel_miptree_create_for_image_buffer(struct brw_context *intel,
                                      enum __DRIimageBufferMask buffer_type,
-                                     gl_format format,
+                                     mesa_format format,
                                      uint32_t num_samples,
                                      struct intel_region *region);
 
@@ -549,7 +552,7 @@ intel_miptree_create_for_image_buffer(struct brw_context *intel,
  */
 struct intel_mipmap_tree*
 intel_miptree_create_for_renderbuffer(struct brw_context *brw,
-                                      gl_format format,
+                                      mesa_format format,
                                       uint32_t width,
                                       uint32_t height,
                                       uint32_t num_samples);

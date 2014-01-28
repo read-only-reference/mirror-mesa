@@ -1,6 +1,6 @@
 /*
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
- Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
+ Intel funded Tungsten Graphics to
  develop this 3D driver.
 
  Permission is hereby granted, free of charge, to any person obtaining
@@ -26,7 +26,7 @@
  **********************************************************************/
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   */
 
 
@@ -61,6 +61,7 @@ struct brw_wm_prog_key {
    uint8_t iz_lookup;
    GLuint stats_wm:1;
    GLuint flat_shade:1;
+   GLuint persample_shading:1;
    GLuint nr_color_regions:5;
    GLuint replicate_alpha:1;
    GLuint render_to_fbo:1;

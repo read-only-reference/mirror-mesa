@@ -143,25 +143,9 @@ struct dri3_context
    __DRIcontext *driContext;
 };
 
-#define DRI3_NUM_BACK   2
+#define DRI3_MAX_BACK   3
 #define DRI3_BACK_ID(i) (i)
-#define DRI3_FRONT_ID   (DRI3_NUM_BACK)
-
-static inline int
-dri3_buf_id_next(int buf_id)
-{
-   if (buf_id == DRI3_NUM_BACK - 1)
-      return 0;
-   return buf_id + 1;
-}
-
-static inline int
-dri3_buf_id_prev(int buf_id)
-{
-   if (buf_id == 0)
-      return DRI3_NUM_BACK - 1;
-   return buf_id - 1;
-}
+#define DRI3_FRONT_ID   (DRI3_MAX_BACK)
 
 static inline int
 dri3_pixmap_buf_id(enum dri3_buffer_type buffer_type)
@@ -172,7 +156,7 @@ dri3_pixmap_buf_id(enum dri3_buffer_type buffer_type)
       return DRI3_FRONT_ID;
 }
 
-#define DRI3_NUM_BUFFERS        (1 + DRI3_NUM_BACK)
+#define DRI3_NUM_BUFFERS        (1 + DRI3_MAX_BACK)
 
 struct dri3_drawable {
    __GLXDRIdrawable base;
@@ -182,20 +166,24 @@ struct dri3_drawable {
    uint8_t have_back;
    uint8_t have_fake_front;
    uint8_t is_pixmap;
+   uint8_t flipping;
 
-   uint32_t present_request_serial;
-   uint32_t present_event_serial;
+   /* SBC numbers are tracked by using the serial numbers
+    * in the present request and complete events
+    */
+   uint64_t send_sbc;
+   uint64_t recv_sbc;
 
-   uint64_t sbc;
-
+   /* Last received UST/MSC values */
    uint64_t ust, msc;
 
-   /* For WaitMSC */
-   uint32_t present_msc_request_serial;
-   uint32_t present_msc_event_serial;
+   /* Serial numbers for tracking wait_for_msc events */
+   uint32_t send_msc_serial;
+   uint32_t recv_msc_serial;
 
    struct dri3_buffer *buffers[DRI3_NUM_BUFFERS];
    int cur_back;
+   int num_back;
 
    uint32_t *stamp;
 
@@ -203,6 +191,3 @@ struct dri3_drawable {
    xcb_gcontext_t gc;
    xcb_special_event_t *special_event;
 };
-
-char *
-dri3_get_driver_for_fd(int fd);

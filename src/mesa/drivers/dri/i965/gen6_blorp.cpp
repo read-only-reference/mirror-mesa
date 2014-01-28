@@ -401,7 +401,7 @@ gen6_blorp_emit_surface_state(struct brw_context *brw,
 
    /* reloc */
    surf[1] = (surface->compute_tile_offsets(&tile_x, &tile_y) +
-              region->bo->offset);
+              region->bo->offset64);
 
    surf[2] = (0 << BRW_SURFACE_LOD_SHIFT |
               (width - 1) << BRW_SURFACE_WIDTH_SHIFT |
@@ -433,7 +433,7 @@ gen6_blorp_emit_surface_state(struct brw_context *brw,
    drm_intel_bo_emit_reloc(brw->batch.bo,
                            wm_surf_offset + 4,
                            region->bo,
-                           surf[1] - region->bo->offset,
+                           surf[1] - region->bo->offset64,
                            read_domains, write_domain);
 
    return wm_surf_offset;
@@ -1010,20 +1010,9 @@ gen6_blorp_emit_primitive(struct brw_context *brw,
    OUT_BATCH(0);
    OUT_BATCH(0);
    ADVANCE_BATCH();
-}
 
-static void
-gen6_emit_hiz_workaround(struct brw_context *brw, enum gen6_hiz_op hiz_op)
-{
-   /* This fixes a HiZ hang in WebGL Google Maps. A more minimal fix likely
-    * exists, but this gets the job done.
-    */
-   if (hiz_op == GEN6_HIZ_OP_DEPTH_RESOLVE ||
-       hiz_op == GEN6_HIZ_OP_HIZ_RESOLVE) {
-      brw->batch.need_workaround_flush = true;
-      intel_emit_post_sync_nonzero_flush(brw);
-      intel_emit_depth_stall_flushes(brw);
-   }
+   /* Only used on Sandybridge; harmless to set elsewhere. */
+   brw->batch.need_workaround_flush = true;
 }
 
 /**
@@ -1048,7 +1037,9 @@ gen6_blorp_exec(struct brw_context *brw,
 
    uint32_t prog_offset = params->get_wm_prog(brw, &prog_data);
 
-   gen6_emit_hiz_workaround(brw, params->hiz_op);
+   /* Emit workaround flushes when we switch from drawing to blorping. */
+   brw->batch.need_workaround_flush = true;
+
    gen6_emit_3dstate_multisample(brw, params->dst.num_samples);
    gen6_emit_3dstate_sample_mask(brw,
                                  params->dst.num_samples > 1 ?

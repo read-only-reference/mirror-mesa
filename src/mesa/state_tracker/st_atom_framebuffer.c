@@ -1,6 +1,6 @@
 /**************************************************************************
  * 
- * Copyright 2007 Tungsten Graphics, Inc., Cedar Park, Texas.
+ * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -18,7 +18,7 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL TUNGSTEN GRAPHICS AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -27,7 +27,7 @@
 
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   *   Brian Paul
   */
  
@@ -65,12 +65,14 @@ update_framebuffer_state( struct st_context *st )
    /* Examine Mesa's ctx->DrawBuffer->_ColorDrawBuffers state
     * to determine which surfaces to draw to
     */
-   framebuffer->nr_cbufs = 0;
+   framebuffer->nr_cbufs = fb->_NumColorDrawBuffers;
+
    for (i = 0; i < fb->_NumColorDrawBuffers; i++) {
+      pipe_surface_reference(&framebuffer->cbufs[i], NULL);
+
       strb = st_renderbuffer(fb->_ColorDrawBuffers[i]);
 
       if (strb) {
-         /*printf("--------- framebuffer surface rtt %p\n", strb->rtt);*/
          if (strb->is_rtt ||
              (strb->texture && util_format_is_srgb(strb->texture->format))) {
             /* rendering to a GL texture, may have to update surface */
@@ -78,13 +80,12 @@ update_framebuffer_state( struct st_context *st )
          }
 
          if (strb->surface) {
-            pipe_surface_reference(&framebuffer->cbufs[framebuffer->nr_cbufs],
-                                   strb->surface);
-            framebuffer->nr_cbufs++;
+            pipe_surface_reference(&framebuffer->cbufs[i], strb->surface);
          }
          strb->defined = GL_TRUE; /* we'll be drawing something */
       }
    }
+
    for (i = framebuffer->nr_cbufs; i < PIPE_MAX_COLOR_BUFS; i++) {
       pipe_surface_reference(&framebuffer->cbufs[i], NULL);
    }
@@ -113,7 +114,8 @@ update_framebuffer_state( struct st_context *st )
 #ifdef DEBUG
    /* Make sure the resource binding flags were set properly */
    for (i = 0; i < framebuffer->nr_cbufs; i++) {
-      assert(framebuffer->cbufs[i]->texture->bind & PIPE_BIND_RENDER_TARGET);
+      assert(!framebuffer->cbufs[i] ||
+             framebuffer->cbufs[i]->texture->bind & PIPE_BIND_RENDER_TARGET);
    }
    if (framebuffer->zsbuf) {
       assert(framebuffer->zsbuf->texture->bind & PIPE_BIND_DEPTH_STENCIL);

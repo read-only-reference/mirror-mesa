@@ -87,7 +87,7 @@ brw_blorp_surface_info::set(struct brw_context *brw,
    this->msaa_layout = mt->msaa_layout;
 
    switch (mt->format) {
-   case MESA_FORMAT_S8:
+   case MESA_FORMAT_S_UINT8:
       /* The miptree is a W-tiled stencil buffer.  Surface states can't be set
        * up for W tiling, so we'll need to use Y tiling and have the WM
        * program swizzle the coordinates.
@@ -95,7 +95,7 @@ brw_blorp_surface_info::set(struct brw_context *brw,
       this->map_stencil_as_y_tiled = true;
       this->brw_surfaceformat = BRW_SURFACEFORMAT_R8_UNORM;
       break;
-   case MESA_FORMAT_X8_Z24:
+   case MESA_FORMAT_Z24_UNORM_S8_UINT:
       /* It would make sense to use BRW_SURFACEFORMAT_R24_UNORM_X8_TYPELESS
        * here, but unfortunately it isn't supported as a render target, which
        * would prevent us from blitting to 24-bit depth.
@@ -108,14 +108,14 @@ brw_blorp_surface_info::set(struct brw_context *brw,
        */
       this->brw_surfaceformat = BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
       break;
-   case MESA_FORMAT_Z32_FLOAT:
+   case MESA_FORMAT_Z_FLOAT32:
       this->brw_surfaceformat = BRW_SURFACEFORMAT_R32_FLOAT;
       break;
-   case MESA_FORMAT_Z16:
+   case MESA_FORMAT_Z_UNORM16:
       this->brw_surfaceformat = BRW_SURFACEFORMAT_R16_UNORM;
       break;
    default: {
-      gl_format linear_format = _mesa_get_srgb_format_linear(mt->format);
+      mesa_format linear_format = _mesa_get_srgb_format_linear(mt->format);
       if (is_render_target) {
          assert(brw->format_supported_as_render_target[linear_format]);
          this->brw_surfaceformat = brw->render_target_format[linear_format];
@@ -274,7 +274,6 @@ retry:
     */
    brw->state.dirty.brw = ~0;
    brw->state.dirty.cache = ~0;
-   brw->batch.need_workaround_flush = true;
    brw->ib.type = -1;
    intel_batchbuffer_clear_cache(brw);
 
@@ -327,9 +326,9 @@ brw_hiz_op_params::brw_hiz_op_params(struct intel_mipmap_tree *mt,
    assert(intel_miptree_slice_has_hiz(mt, level, layer));
 
    switch (mt->format) {
-   case MESA_FORMAT_Z16:       depth_format = BRW_DEPTHFORMAT_D16_UNORM; break;
-   case MESA_FORMAT_Z32_FLOAT: depth_format = BRW_DEPTHFORMAT_D32_FLOAT; break;
-   case MESA_FORMAT_X8_Z24:    depth_format = BRW_DEPTHFORMAT_D24_UNORM_X8_UINT; break;
+   case MESA_FORMAT_Z_UNORM16:       depth_format = BRW_DEPTHFORMAT_D16_UNORM; break;
+   case MESA_FORMAT_Z_FLOAT32: depth_format = BRW_DEPTHFORMAT_D32_FLOAT; break;
+   case MESA_FORMAT_Z24_UNORM_S8_UINT:    depth_format = BRW_DEPTHFORMAT_D24_UNORM_X8_UINT; break;
    default:                    assert(0); break;
    }
 }

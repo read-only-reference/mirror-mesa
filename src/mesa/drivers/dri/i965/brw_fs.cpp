@@ -766,7 +766,7 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
    case FS_OPCODE_TXB:
    case SHADER_OPCODE_TXD:
    case SHADER_OPCODE_TXF:
-   case SHADER_OPCODE_TXF_MS:
+   case SHADER_OPCODE_TXF_CMS:
    case SHADER_OPCODE_TXF_MCS:
    case SHADER_OPCODE_TG4:
    case SHADER_OPCODE_TG4_OFFSET:
@@ -856,7 +856,7 @@ import_uniforms_callback(const void *key,
    hash_table_insert(dst_ht, data, key);
 }
 
-/* For 16-wide, we need to follow from the uniform setup of 8-wide dispatch.
+/* For SIMD16, we need to follow from the uniform setup of SIMD8 dispatch.
  * This brings in those uniform definitions
  */
 void
@@ -998,7 +998,7 @@ fs_visitor::emit_fragcoord_interpolation(ir_variable *ir)
 fs_inst *
 fs_visitor::emit_linterp(const fs_reg &attr, const fs_reg &interp,
                          glsl_interp_qualifier interpolation_mode,
-                         bool is_centroid)
+                         bool is_centroid, bool is_sample)
 {
    brw_wm_barycentric_interp_mode barycoord_mode;
    if (brw->gen >= 6) {
@@ -1007,6 +1007,11 @@ fs_visitor::emit_linterp(const fs_reg &attr, const fs_reg &interp,
             barycoord_mode = BRW_WM_PERSPECTIVE_CENTROID_BARYCENTRIC;
          else
             barycoord_mode = BRW_WM_NONPERSPECTIVE_CENTROID_BARYCENTRIC;
+      } else if (is_sample) {
+          if (interpolation_mode == INTERP_QUALIFIER_SMOOTH)
+            barycoord_mode = BRW_WM_PERSPECTIVE_SAMPLE_BARYCENTRIC;
+         else
+            barycoord_mode = BRW_WM_NONPERSPECTIVE_SAMPLE_BARYCENTRIC;
       } else {
          if (interpolation_mode == INTERP_QUALIFIER_SMOOTH)
             barycoord_mode = BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC;
@@ -1084,7 +1089,8 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
 		*/
                struct brw_reg interp = interp_reg(location, k);
                emit_linterp(attr, fs_reg(interp), interpolation_mode,
-                            ir->data.centroid);
+                            ir->data.centroid && !c->key.persample_shading,
+                            ir->data.sample || c->key.persample_shading);
                if (brw->needs_unlit_centroid_workaround && ir->data.centroid) {
                   /* Get the pixel/sample mask into f0 so that we know
                    * which pixels are lit.  Then, for each channel that is
@@ -1093,7 +1099,8 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
                    */
                   emit(FS_OPCODE_MOV_DISPATCH_TO_FLAGS);
                   fs_inst *inst = emit_linterp(attr, fs_reg(interp),
-                                               interpolation_mode, false);
+                                               interpolation_mode,
+                                               false, false);
                   inst->predicate = BRW_PREDICATE_NORMAL;
                   inst->predicate_inverse = true;
                }
@@ -1340,7 +1347,7 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1)
    case SHADER_OPCODE_INT_QUOTIENT:
    case SHADER_OPCODE_INT_REMAINDER:
       if (brw->gen >= 7 && dispatch_width == 16)
-	 fail("16-wide INTDIV unsupported\n");
+	 fail("SIMD16 INTDIV unsupported\n");
       break;
    case SHADER_OPCODE_POW:
       break;
@@ -1764,7 +1771,7 @@ fs_visitor::remove_dead_constants()
 
       c->prog_data.nr_params = new_nr_params;
    } else {
-      /* This should have been generated in the 8-wide pass already. */
+      /* This should have been generated in the SIMD8 pass already. */
       assert(this->params_remap);
    }
 
@@ -1883,7 +1890,7 @@ fs_visitor::setup_pull_constants()
       return;
 
    if (dispatch_width == 16) {
-      fail("Pull constants not supported in 16-wide\n");
+      fail("Pull constants not supported in SIMD16\n");
       return;
    }
 
@@ -1996,6 +2003,16 @@ fs_visitor::opt_algebraic()
          if (inst->src[0].equals(inst->src[1])) {
             inst->opcode = BRW_OPCODE_MOV;
             inst->src[1] = reg_undef;
+            progress = true;
+            break;
+         }
+         break;
+      case BRW_OPCODE_LRP:
+         if (inst->src[1].equals(inst->src[2])) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->src[0] = inst->src[1];
+            inst->src[1] = reg_undef;
+            inst->src[2] = reg_undef;
             progress = true;
             break;
          }
@@ -2256,6 +2273,18 @@ fs_visitor::dead_code_eliminate_local()
  * Implements register coalescing: Checks if the two registers involved in a
  * raw move don't interfere, in which case they can both be stored in the same
  * place and the MOV removed.
+ *
+ * To do this, all uses of the source of the MOV in the shader are replaced
+ * with the destination of the MOV. For example:
+ *
+ * add vgrf3:F, vgrf1:F, vgrf2:F
+ * mov vgrf4:F, vgrf3:F
+ * mul vgrf5:F, vgrf5:F, vgrf4:F
+ *
+ * becomes
+ *
+ * add vgrf4:F, vgrf1:F, vgrf2:F
+ * mul vgrf5:F, vgrf5:F, vgrf4:F
  */
 bool
 fs_visitor::register_coalesce()
@@ -2264,7 +2293,13 @@ fs_visitor::register_coalesce()
 
    calculate_live_intervals();
 
-   foreach_list_safe(node, &this->instructions) {
+   int src_size = 0;
+   int channels_remaining = 0;
+   int reg_from = -1, reg_to = -1;
+   int reg_to_offset[MAX_SAMPLER_MESSAGE_SIZE];
+   fs_inst *mov[MAX_SAMPLER_MESSAGE_SIZE];
+
+   foreach_list(node, &this->instructions) {
       fs_inst *inst = (fs_inst *)node;
 
       if (inst->opcode != BRW_OPCODE_MOV ||
@@ -2275,43 +2310,138 @@ fs_visitor::register_coalesce()
 	  inst->src[0].abs ||
 	  inst->src[0].smear != -1 ||
 	  inst->dst.file != GRF ||
-	  inst->dst.type != inst->src[0].type ||
-	  virtual_grf_sizes[inst->src[0].reg] != 1) {
+	  inst->dst.type != inst->src[0].type) {
 	 continue;
       }
+
+      if (virtual_grf_sizes[inst->src[0].reg] >
+          virtual_grf_sizes[inst->dst.reg])
+         continue;
 
       int var_from = live_intervals->var_from_reg(&inst->src[0]);
       int var_to = live_intervals->var_from_reg(&inst->dst);
 
       if (live_intervals->vars_interfere(var_from, var_to) &&
-          !inst->dst.equals(inst->src[0]))
-         continue;
+          !inst->dst.equals(inst->src[0])) {
 
-      int reg_from = inst->src[0].reg;
-      assert(inst->src[0].reg_offset == 0);
-      int reg_to = inst->dst.reg;
-      int reg_to_offset = inst->dst.reg_offset;
+         /* We know that the live ranges of A (var_from) and B (var_to)
+          * interfere because of the ->vars_interfere() call above. If the end
+          * of B's live range is after the end of A's range, then we know two
+          * things:
+          *  - the start of B's live range must be in A's live range (since we
+          *    already know the two ranges interfere, this is the only remaining
+          *    possibility)
+          *  - the interference isn't of the form we're looking for (where B is
+          *    entirely inside A)
+          */
+         if (live_intervals->end[var_to] > live_intervals->end[var_from])
+            continue;
 
-      foreach_list(node, &this->instructions) {
-	 fs_inst *scan_inst = (fs_inst *)node;
+         bool overwritten = false;
+         int scan_ip = -1;
 
-	 if (scan_inst->dst.file == GRF &&
-	     scan_inst->dst.reg == reg_from) {
-	    scan_inst->dst.reg = reg_to;
-	    scan_inst->dst.reg_offset = reg_to_offset;
-	 }
-	 for (int i = 0; i < 3; i++) {
-	    if (scan_inst->src[i].file == GRF &&
-		scan_inst->src[i].reg == reg_from) {
-	       scan_inst->src[i].reg = reg_to;
-	       scan_inst->src[i].reg_offset = reg_to_offset;
-	    }
-	 }
+         foreach_list(n, &this->instructions) {
+            fs_inst *scan_inst = (fs_inst *)n;
+            scan_ip++;
+
+            if (scan_inst->is_control_flow()) {
+               overwritten = true;
+               break;
+            }
+
+            if (scan_ip <= live_intervals->start[var_to])
+               continue;
+
+            if (scan_ip > live_intervals->end[var_to])
+               break;
+
+            if (scan_inst->dst.equals(inst->dst) ||
+                scan_inst->dst.equals(inst->src[0])) {
+               overwritten = true;
+               break;
+            }
+         }
+
+         if (overwritten)
+            continue;
       }
 
-      inst->remove();
-      progress = true;
-      continue;
+      if (reg_from != inst->src[0].reg) {
+         reg_from = inst->src[0].reg;
+
+         src_size = virtual_grf_sizes[inst->src[0].reg];
+         assert(src_size <= MAX_SAMPLER_MESSAGE_SIZE);
+
+         channels_remaining = src_size;
+         memset(mov, 0, sizeof(mov));
+
+         reg_to = inst->dst.reg;
+      }
+
+      if (reg_to != inst->dst.reg)
+         continue;
+
+      const int offset = inst->src[0].reg_offset;
+      reg_to_offset[offset] = inst->dst.reg_offset;
+      mov[offset] = inst;
+      channels_remaining--;
+
+      if (channels_remaining)
+         continue;
+
+      bool removed = false;
+      for (int i = 0; i < src_size; i++) {
+         if (mov[i]) {
+            removed = true;
+
+            mov[i]->opcode = BRW_OPCODE_NOP;
+            mov[i]->conditional_mod = BRW_CONDITIONAL_NONE;
+            mov[i]->dst = reg_undef;
+            mov[i]->src[0] = reg_undef;
+            mov[i]->src[1] = reg_undef;
+            mov[i]->src[2] = reg_undef;
+         }
+      }
+
+      foreach_list(node, &this->instructions) {
+         fs_inst *scan_inst = (fs_inst *)node;
+
+         for (int i = 0; i < src_size; i++) {
+            if (mov[i]) {
+               if (scan_inst->dst.file == GRF &&
+                   scan_inst->dst.reg == reg_from &&
+                   scan_inst->dst.reg_offset == i) {
+                  scan_inst->dst.reg = reg_to;
+                  scan_inst->dst.reg_offset = reg_to_offset[i];
+               }
+               for (int j = 0; j < 3; j++) {
+                  if (scan_inst->src[j].file == GRF &&
+                      scan_inst->src[j].reg == reg_from &&
+                      scan_inst->src[j].reg_offset == i) {
+                     scan_inst->src[j].reg = reg_to;
+                     scan_inst->src[j].reg_offset = reg_to_offset[i];
+                  }
+               }
+            }
+         }
+      }
+
+      if (removed) {
+         live_intervals->start[var_to] = MIN2(live_intervals->start[var_to],
+                                              live_intervals->start[var_from]);
+         live_intervals->end[var_to] = MAX2(live_intervals->end[var_to],
+                                            live_intervals->end[var_from]);
+         reg_from = -1;
+      }
+   }
+
+   foreach_list_safe(node, &this->instructions) {
+      fs_inst *inst = (fs_inst *)node;
+
+      if (inst->opcode == BRW_OPCODE_NOP) {
+         inst->remove();
+         progress = true;
+      }
    }
 
    if (progress)
@@ -2557,7 +2687,7 @@ static void
 clear_deps_for_inst_src(fs_inst *inst, int dispatch_width, bool *deps,
                         int first_grf, int grf_len)
 {
-   bool inst_16wide = (dispatch_width > 8 &&
+   bool inst_simd16 = (dispatch_width > 8 &&
                        !inst->force_uncompressed &&
                        !inst->force_sechalf);
 
@@ -2576,7 +2706,7 @@ clear_deps_for_inst_src(fs_inst *inst, int dispatch_width, bool *deps,
       if (grf >= first_grf &&
           grf < first_grf + grf_len) {
          deps[grf - first_grf] = false;
-         if (inst_16wide)
+         if (inst_simd16)
             deps[grf - first_grf + 1] = false;
       }
    }
@@ -2634,7 +2764,7 @@ fs_visitor::insert_gen4_pre_send_dependency_workarounds(fs_inst *inst)
          return;
       }
 
-      bool scan_inst_16wide = (dispatch_width > 8 &&
+      bool scan_inst_simd16 = (dispatch_width > 8 &&
                                !scan_inst->force_uncompressed &&
                                !scan_inst->force_sechalf);
 
@@ -2651,7 +2781,7 @@ fs_visitor::insert_gen4_pre_send_dependency_workarounds(fs_inst *inst)
                 needs_dep[reg - first_write_grf]) {
                inst->insert_before(DEP_RESOLVE_MOV(reg));
                needs_dep[reg - first_write_grf] = false;
-               if (scan_inst_16wide)
+               if (scan_inst_simd16)
                   needs_dep[reg - first_write_grf + 1] = false;
             }
          }
@@ -2829,6 +2959,22 @@ fs_visitor::lower_uniform_pull_constant_loads()
 }
 
 void
+fs_visitor::dump_instructions()
+{
+   calculate_register_pressure();
+
+   int ip = 0, max_pressure = 0;
+   foreach_list(node, &this->instructions) {
+      backend_instruction *inst = (backend_instruction *)node;
+      max_pressure = MAX2(max_pressure, regs_live_at_ip[ip]);
+      printf("{%3d} %4d: ", regs_live_at_ip[ip], ip);
+      dump_instruction(inst);
+      ++ip;
+   }
+   printf("Maximum %3d registers live at once.\n", max_pressure);
+}
+
+void
 fs_visitor::dump_instruction(backend_instruction *be_inst)
 {
    fs_inst *inst = (fs_inst *)be_inst;
@@ -2857,7 +3003,7 @@ fs_visitor::dump_instruction(backend_instruction *be_inst)
    switch (inst->dst.file) {
    case GRF:
       printf("vgrf%d", inst->dst.reg);
-      if (inst->dst.reg_offset)
+      if (virtual_grf_sizes[inst->dst.reg] != 1)
          printf("+%d", inst->dst.reg_offset);
       break;
    case MRF:
@@ -2910,7 +3056,7 @@ fs_visitor::dump_instruction(backend_instruction *be_inst)
       switch (inst->src[i].file) {
       case GRF:
          printf("vgrf%d", inst->src[i].reg);
-         if (inst->src[i].reg_offset)
+         if (virtual_grf_sizes[inst->src[i].reg] != 1)
             printf("+%d", inst->src[i].reg_offset);
          break;
       case MRF:
@@ -2918,7 +3064,7 @@ fs_visitor::dump_instruction(backend_instruction *be_inst)
          break;
       case UNIFORM:
          printf("u%d", inst->src[i].reg);
-         if (inst->src[i].reg_offset)
+         if (virtual_grf_sizes[inst->src[i].reg] != 1)
             printf(".%d", inst->src[i].reg_offset);
          break;
       case BAD_FILE:
@@ -3062,7 +3208,7 @@ fs_visitor::setup_payload_gen6()
       c->source_depth_reg = c->nr_payload_regs;
       c->nr_payload_regs++;
       if (dispatch_width == 16) {
-         /* R28: interpolated depth if not 8-wide. */
+         /* R28: interpolated depth if not SIMD8. */
          c->nr_payload_regs++;
       }
    }
@@ -3071,7 +3217,7 @@ fs_visitor::setup_payload_gen6()
       c->source_w_reg = c->nr_payload_regs;
       c->nr_payload_regs++;
       if (dispatch_width == 16) {
-         /* R30: interpolated W if not 8-wide. */
+         /* R30: interpolated W if not SIMD8. */
          c->nr_payload_regs++;
       }
    }
@@ -3089,7 +3235,7 @@ fs_visitor::setup_payload_gen6()
       c->sample_mask_reg = c->nr_payload_regs;
       c->nr_payload_regs++;
       if (dispatch_width == 16) {
-         /* R33: input coverage mask if not 8-wide. */
+         /* R33: input coverage mask if not SIMD8. */
          c->nr_payload_regs++;
       }
    }
@@ -3114,6 +3260,24 @@ fs_visitor::assign_binding_table_offsets()
    next_binding_table_offset += MAX2(c->key.nr_color_regions, 1);
 
    assign_common_binding_table_offsets(next_binding_table_offset);
+}
+
+void
+fs_visitor::calculate_register_pressure()
+{
+   calculate_live_intervals();
+
+   int num_instructions = 0;
+   foreach_list(node, &this->instructions) {
+      ++num_instructions;
+   }
+
+   regs_live_at_ip = rzalloc_array(mem_ctx, int, num_instructions);
+
+   for (int reg = 0; reg < virtual_grf_count; reg++) {
+      for (int ip = virtual_grf_start[reg]; ip <= virtual_grf_end[reg]; ip++)
+         regs_live_at_ip[ip] += virtual_grf_sizes[reg];
+   }
 }
 
 bool
@@ -3156,7 +3320,7 @@ fs_visitor::run()
        * functions called "main").
        */
       if (shader) {
-         foreach_list(node, &*shader->ir) {
+         foreach_list(node, &*shader->base.ir) {
             ir_instruction *ir = (ir_instruction *)node;
             base_ir = ir;
             this->result = reg_undef;
@@ -3193,11 +3357,12 @@ fs_visitor::run()
 	 progress = opt_algebraic() || progress;
 	 progress = opt_cse() || progress;
 	 progress = opt_copy_propagate() || progress;
-         progress = opt_peephole_sel() || progress;
          progress = opt_peephole_predicated_break() || progress;
 	 progress = dead_code_eliminate() || progress;
 	 progress = dead_code_eliminate_local() || progress;
+         progress = opt_peephole_sel() || progress;
          progress = dead_control_flow_eliminate(this) || progress;
+         progress = opt_saturate_propagation() || progress;
          progress = register_coalesce() || progress;
 	 progress = compute_to_mrf() || progress;
       } while (progress);
@@ -3305,7 +3470,7 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
    if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
       if (prog) {
          printf("GLSL IR for native fragment shader %d:\n", prog->Name);
-         _mesa_print_ir(shader->ir, NULL);
+         _mesa_print_ir(shader->base.ir, NULL);
          printf("\n\n");
       } else {
          printf("ARB_fragment_program %d ir for native fragment shader\n",
@@ -3333,23 +3498,29 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
    fs_visitor v2(brw, c, prog, fp, 16);
    if (brw->gen >= 5 && likely(!(INTEL_DEBUG & DEBUG_NO16))) {
       if (c->prog_data.nr_pull_params == 0) {
-         /* Try a 16-wide compile */
+         /* Try a SIMD16 compile */
          v2.import_uniforms(&v);
          if (!v2.run()) {
-            perf_debug("16-wide shader failed to compile, falling back to "
-                       "8-wide at a 10-20%% performance cost: %s", v2.fail_msg);
+            perf_debug("SIMD16 shader failed to compile, falling back to "
+                       "SIMD8 at a 10-20%% performance cost: %s", v2.fail_msg);
          } else {
             simd16_instructions = &v2.instructions;
          }
       } else {
-         perf_debug("Skipping 16-wide due to pull parameters.\n");
+         perf_debug("Skipping SIMD16 due to pull parameters.\n");
       }
    }
 
-   fs_generator g(brw, c, prog, fp, v.dual_src_output.file != BAD_FILE);
-   const unsigned *generated = g.generate_assembly(&v.instructions,
-                                                   simd16_instructions,
-                                                   final_assembly_size);
+   const unsigned *assembly = NULL;
+   if (brw->gen >= 8) {
+      gen8_fs_generator g(brw, c, prog, fp, v.dual_src_output.file != BAD_FILE);
+      assembly = g.generate_assembly(&v.instructions, simd16_instructions,
+                                     final_assembly_size);
+   } else {
+      fs_generator g(brw, c, prog, fp, v.dual_src_output.file != BAD_FILE);
+      assembly = g.generate_assembly(&v.instructions, simd16_instructions,
+                                     final_assembly_size);
+   }
 
    if (unlikely(brw->perf_debug) && shader) {
       if (shader->compiled_once)
@@ -3362,7 +3533,7 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
       }
    }
 
-   return generated;
+   return assembly;
 }
 
 bool

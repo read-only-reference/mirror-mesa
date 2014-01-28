@@ -236,8 +236,8 @@ static int r600_setup_surface(struct pipe_screen *screen,
 }
 
 static boolean r600_texture_get_handle(struct pipe_screen* screen,
-					struct pipe_resource *ptex,
-					struct winsys_handle *whandle)
+				       struct pipe_resource *ptex,
+				       struct winsys_handle *whandle)
 {
 	struct r600_texture *rtex = (struct r600_texture*)ptex;
 	struct r600_resource *resource = &rtex->resource;
@@ -465,6 +465,11 @@ static unsigned si_texture_htile_alloc_size(struct r600_common_screen *rscreen,
 	unsigned cl_width, cl_height, width, height;
 	unsigned slice_elements, slice_bytes, pipe_interleave_bytes, base_align;
 	unsigned num_pipes = rscreen->tiling_info.num_channels;
+
+	/* HTILE doesn't work with 1D tiling (there's massive corruption
+	 * in glxgears). */
+	if (rtex->surface.level[0].mode != RADEON_SURF_MODE_2D)
+		return 0;
 
 	switch (num_pipes) {
 	case 2:
@@ -758,9 +763,9 @@ struct pipe_resource *r600_texture_create(struct pipe_screen *screen,
 								  0, NULL, &surface);
 }
 
-struct pipe_resource *r600_texture_from_handle(struct pipe_screen *screen,
-					       const struct pipe_resource *templ,
-					       struct winsys_handle *whandle)
+static struct pipe_resource *r600_texture_from_handle(struct pipe_screen *screen,
+						      const struct pipe_resource *templ,
+						      struct winsys_handle *whandle)
 {
 	struct r600_common_screen *rscreen = (struct r600_common_screen*)screen;
 	struct pb_buffer *buf = NULL;
@@ -1066,10 +1071,16 @@ static void r600_texture_transfer_unmap(struct pipe_context *ctx,
 
 static const struct u_resource_vtbl r600_texture_vtbl =
 {
-	r600_texture_get_handle,	/* get_handle */
+	NULL,				/* get_handle */
 	r600_texture_destroy,		/* resource_destroy */
 	r600_texture_transfer_map,	/* transfer_map */
 	NULL,				/* transfer_flush_region */
 	r600_texture_transfer_unmap,	/* transfer_unmap */
 	NULL				/* transfer_inline_write */
 };
+
+void r600_init_texture_functions(struct r600_common_screen *rscreen)
+{
+	rscreen->b.resource_from_handle = r600_texture_from_handle;
+	rscreen->b.resource_get_handle = r600_texture_get_handle;
+}

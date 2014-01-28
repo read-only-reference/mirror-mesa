@@ -45,6 +45,7 @@ public:
    bool is_math();
    bool is_control_flow();
    bool can_do_source_mods();
+   bool can_do_saturate();
 
    /**
     * True if the instruction has side effects other than writing to
@@ -86,7 +87,7 @@ public:
    exec_list instructions;
 
    virtual void dump_instruction(backend_instruction *inst) = 0;
-   void dump_instructions();
+   virtual void dump_instructions();
 
    void assign_common_binding_table_offsets(uint32_t next_binding_table_offset);
 

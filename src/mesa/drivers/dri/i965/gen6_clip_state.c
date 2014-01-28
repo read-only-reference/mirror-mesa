@@ -96,11 +96,15 @@ upload_clip_state(struct brw_context *brw)
    dw2 |= (ctx->Transform.ClipPlanesEnabled <<
            GEN6_USER_CLIP_CLIP_DISTANCES_SHIFT);
 
-   if (ctx->Viewport.X == 0 &&
-       ctx->Viewport.Y == 0 &&
-       ctx->Viewport.Width == fb->Width &&
-       ctx->Viewport.Height == fb->Height) {
-      dw2 |= GEN6_CLIP_GB_TEST;
+   dw2 |= GEN6_CLIP_GB_TEST;
+   for (unsigned i = 0; i < ctx->Const.MaxViewports; i++) {
+      if (ctx->ViewportArray[i].X != 0 ||
+          ctx->ViewportArray[i].Y != 0 ||
+          ctx->ViewportArray[i].Width != (float) fb->Width ||
+          ctx->ViewportArray[i].Height != (float) fb->Height) {
+         dw2 &= ~GEN6_CLIP_GB_TEST;
+         break;
+      }
    }
 
    /* BRW_NEW_RASTERIZER_DISCARD */
@@ -121,7 +125,8 @@ upload_clip_state(struct brw_context *brw)
 	     dw2);
    OUT_BATCH(U_FIXED(0.125, 3) << GEN6_CLIP_MIN_POINT_WIDTH_SHIFT |
              U_FIXED(255.875, 3) << GEN6_CLIP_MAX_POINT_WIDTH_SHIFT |
-             (fb->NumLayers > 0 ? 0 : GEN6_CLIP_FORCE_ZERO_RTAINDEX));
+             (fb->MaxNumLayers > 0 ? 0 : GEN6_CLIP_FORCE_ZERO_RTAINDEX) |
+             ((ctx->Const.MaxViewports - 1) & GEN6_CLIP_MAX_VP_INDEX_MASK));
    ADVANCE_BATCH();
 }
 

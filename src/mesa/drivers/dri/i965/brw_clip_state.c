@@ -1,6 +1,6 @@
 /*
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
- Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
+ Intel funded Tungsten Graphics to
  develop this 3D driver.
 
  Permission is hereby granted, free of charge, to any person obtaining
@@ -26,7 +26,7 @@
  **********************************************************************/
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   */
 
 #include "brw_context.h"
@@ -43,8 +43,8 @@ upload_clip_vp(struct brw_context *brw)
                         sizeof(*vp), 32, &brw->clip.vp_offset);
 
    const float maximum_post_clamp_delta = 4096;
-   float gbx = maximum_post_clamp_delta / (float) ctx->Viewport.Width;
-   float gby = maximum_post_clamp_delta / (float) ctx->Viewport.Height;
+   float gbx = maximum_post_clamp_delta / ctx->ViewportArray[0].Width;
+   float gby = maximum_post_clamp_delta / ctx->ViewportArray[0].Height;
 
    vp->xmin = -gbx;
    vp->xmax = gbx;
@@ -125,14 +125,14 @@ brw_upload_clip_unit(struct brw_context *brw)
    clip->clip5.userclip_must_clip = 1;
 
    /* enable guardband clipping if we can */
-   if (ctx->Viewport.X == 0 &&
-       ctx->Viewport.Y == 0 &&
-       ctx->Viewport.Width == fb->Width &&
-       ctx->Viewport.Height == fb->Height)
+   if (ctx->ViewportArray[0].X == 0 &&
+       ctx->ViewportArray[0].Y == 0 &&
+       ctx->ViewportArray[0].Width == (float) fb->Width &&
+       ctx->ViewportArray[0].Height == (float) fb->Height)
    {
       clip->clip5.guard_band_enable = 1;
       clip->clip6.clipper_viewport_state_ptr =
-         (brw->batch.bo->offset + brw->clip.vp_offset) >> 5;
+         (brw->batch.bo->offset64 + brw->clip.vp_offset) >> 5;
 
       /* emit clip viewport relocation */
       drm_intel_bo_emit_reloc(brw->batch.bo,

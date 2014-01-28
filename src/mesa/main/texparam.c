@@ -1081,7 +1081,7 @@ get_tex_level_parameter_image(struct gl_context *ctx,
                               GLenum pname, GLint *params)
 {
    const struct gl_texture_image *img = NULL;
-   gl_format texFormat;
+   mesa_format texFormat;
 
    img = _mesa_select_tex_image(ctx, texObj, target, level);
    if (!img || img->TexFormat == MESA_FORMAT_NONE) {
@@ -1169,7 +1169,7 @@ get_tex_level_parameter_image(struct gl_context *ctx,
          if (ctx->Version < 30 &&
              !ctx->Extensions.EXT_texture_shared_exponent)
             goto invalid_pname;
-         *params = texFormat == MESA_FORMAT_RGB9_E5_FLOAT ? 5 : 0;
+         *params = texFormat == MESA_FORMAT_R9G9B9E5_FLOAT ? 5 : 0;
          break;
 
       /* GL_ARB_texture_compression */
@@ -1237,7 +1237,7 @@ get_tex_level_parameter_buffer(struct gl_context *ctx,
                                GLenum pname, GLint *params)
 {
    const struct gl_buffer_object *bo = texObj->BufferObject;
-   gl_format texFormat = texObj->_BufferObjectFormat;
+   mesa_format texFormat = texObj->_BufferObjectFormat;
    GLenum internalFormat = texObj->BufferObjectFormat;
    GLenum baseFormat = _mesa_get_format_base_format(texFormat);
 
@@ -1806,6 +1806,12 @@ _mesa_GetTexParameteriv( GLenum target, GLenum pname, GLint *params )
          if (!ctx->Extensions.EXT_texture_sRGB_decode)
             goto invalid_pname;
          *params = obj->Sampler.sRGBDecode;
+         break;
+
+      case GL_IMAGE_FORMAT_COMPATIBILITY_TYPE:
+         if (!ctx->Extensions.ARB_shader_image_load_store)
+            goto invalid_pname;
+         *params = obj->ImageFormatCompatibilityType;
          break;
 
       default:

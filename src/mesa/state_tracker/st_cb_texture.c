@@ -1,6 +1,6 @@
 /**************************************************************************
  * 
- * Copyright 2007 Tungsten Graphics, Inc., Cedar Park, Texas.
+ * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -18,7 +18,7 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL TUNGSTEN GRAPHICS AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -519,7 +519,7 @@ prep_teximage(struct gl_context *ctx, struct gl_texture_image *texImage,
    if (stObj->surface_based) {
       const GLenum target = texObj->Target;
       const GLuint level = texImage->Level;
-      gl_format texFormat;
+      mesa_format texFormat;
 
       _mesa_clear_texture_object(ctx, texObj);
       pipe_resource_reference(&stObj->pt, NULL);
@@ -604,7 +604,7 @@ st_TexSubImage(struct gl_context *ctx, GLuint dims,
    struct pipe_transfer *transfer;
    struct pipe_blit_info blit;
    enum pipe_format src_format, dst_format;
-   gl_format mesa_src_format;
+   mesa_format mesa_src_format;
    GLenum gl_target = texImage->TexObject->Target;
    unsigned bind;
    GLubyte *map;
@@ -856,7 +856,7 @@ st_GetTexImage(struct gl_context * ctx,
    struct pipe_resource *dst = NULL;
    struct pipe_resource dst_templ;
    enum pipe_format dst_format, src_format;
-   gl_format mesa_format;
+   mesa_format mesa_format;
    GLenum gl_target = texImage->TexObject->Target;
    enum pipe_texture_target pipe_target;
    struct pipe_blit_info blit;
@@ -1689,7 +1689,7 @@ st_AllocTextureStorage(struct gl_context *ctx,
 
 static GLboolean
 st_TestProxyTexImage(struct gl_context *ctx, GLenum target,
-                     GLint level, gl_format format,
+                     GLint level, mesa_format format,
                      GLint width, GLint height,
                      GLint depth, GLint border)
 {

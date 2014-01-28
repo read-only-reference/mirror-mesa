@@ -1,6 +1,6 @@
 /*
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
- Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
+ Intel funded Tungsten Graphics to
  develop this 3D driver.
 
  Permission is hereby granted, free of charge, to any person obtaining
@@ -26,7 +26,7 @@
  **********************************************************************/
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   */
 
 
@@ -112,10 +112,10 @@ brw_upload_wm_unit(struct brw_context *brw)
    wm->thread1.depth_coef_urb_read_offset = 1;
    /* Use ALT floating point mode for ARB fragment programs, because they
     * require 0^0 == 1.  Even though _CurrentFragmentProgram is used for
-    * rendering, CurrentFragmentProgram is used for this check to
-    * differentiate between the GLSL and non-GLSL cases.
+    * rendering, CurrentProgram[MESA_SHADER_FRAGMENT] is used for this check
+    * to differentiate between the GLSL and non-GLSL cases.
     */
-   if (ctx->Shader.CurrentFragmentProgram == NULL)
+   if (ctx->Shader.CurrentProgram[MESA_SHADER_FRAGMENT] == NULL)
       wm->thread1.floating_point_mode = BRW_FLOATING_POINT_NON_IEEE_754;
    else
       wm->thread1.floating_point_mode = BRW_FLOATING_POINT_IEEE_754;
@@ -125,7 +125,7 @@ brw_upload_wm_unit(struct brw_context *brw)
 
    if (brw->wm.prog_data->total_scratch != 0) {
       wm->thread2.scratch_space_base_pointer =
-	 brw->wm.base.scratch_bo->offset >> 10; /* reloc */
+	 brw->wm.base.scratch_bo->offset64 >> 10; /* reloc */
       wm->thread2.per_thread_scratch_space =
 	 ffs(brw->wm.prog_data->total_scratch) - 11;
    } else {
@@ -151,7 +151,7 @@ brw_upload_wm_unit(struct brw_context *brw)
 
    if (brw->wm.base.sampler_count) {
       /* reloc */
-      wm->wm4.sampler_state_pointer = (brw->batch.bo->offset +
+      wm->wm4.sampler_state_pointer = (brw->batch.bo->offset64 +
 				       brw->wm.base.sampler_offset) >> 5;
    } else {
       wm->wm4.sampler_state_pointer = 0;

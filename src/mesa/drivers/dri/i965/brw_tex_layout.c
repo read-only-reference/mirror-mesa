@@ -1,5 +1,5 @@
 /*
- * Copyright 2006 Tungsten Graphics, Inc., Cedar Park, Texas.
+ * Copyright 2006 VMware, Inc.
  * Copyright © 2006 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining
@@ -28,8 +28,8 @@
  *
  * Code to lay out images in a mipmap tree.
  *
- * \author Keith Whitwell <keith@tungstengraphics.com>
- * \author Michel Dänzer <michel@tungstengraphics.com>
+ * \author Keith Whitwell <keithw@vmware.com>
+ * \author Michel Dänzer <daenzer@vmware.com>
  */
 
 #include "intel_mipmap_tree.h"
@@ -40,7 +40,7 @@
 
 static unsigned int
 intel_horizontal_texture_alignment_unit(struct brw_context *brw,
-                                       gl_format format)
+                                       mesa_format format)
 {
    /**
     * From the "Alignment Unit Size" section of various specs, namely:
@@ -75,10 +75,10 @@ intel_horizontal_texture_alignment_unit(struct brw_context *brw,
       return i;
     }
 
-   if (format == MESA_FORMAT_S8)
+   if (format == MESA_FORMAT_S_UINT8)
       return 8;
 
-   if (brw->gen >= 7 && format == MESA_FORMAT_Z16)
+   if (brw->gen >= 7 && format == MESA_FORMAT_Z_UNORM16)
       return 8;
 
    return 4;
@@ -86,7 +86,7 @@ intel_horizontal_texture_alignment_unit(struct brw_context *brw,
 
 static unsigned int
 intel_vertical_texture_alignment_unit(struct brw_context *brw,
-                                      gl_format format, bool multisampled)
+                                      mesa_format format, bool multisampled)
 {
    /**
     * From the "Alignment Unit Size" section of various specs, namely:
@@ -114,7 +114,7 @@ intel_vertical_texture_alignment_unit(struct brw_context *brw,
    if (_mesa_is_format_compressed(format))
       return 4;
 
-   if (format == MESA_FORMAT_S8)
+   if (format == MESA_FORMAT_S_UINT8)
       return brw->gen >= 7 ? 8 : 4;
 
    /* Broadwell only supports VALIGN of 4, 8, and 16.  The BSpec says 4
@@ -246,17 +246,17 @@ brw_miptree_layout_texture_array(struct brw_context *brw,
       mt->qpitch = h0;
    else
       mt->qpitch = (h0 + h1 + (brw->gen >= 7 ? 12 : 11) * mt->align_h);
-   if (mt->compressed)
-      mt->qpitch /= 4;
+
+   int physical_qpitch = mt->compressed ? mt->qpitch / 4 : mt->qpitch;
 
    brw_miptree_layout_2d(mt);
 
    for (unsigned level = mt->first_level; level <= mt->last_level; level++) {
       for (int q = 0; q < mt->physical_depth0; q++) {
-	 intel_miptree_set_image_offset(mt, level, q, 0, q * mt->qpitch);
+	 intel_miptree_set_image_offset(mt, level, q, 0, q * physical_qpitch);
       }
    }
-   mt->total_height = mt->qpitch * mt->physical_depth0;
+   mt->total_height = physical_qpitch * mt->physical_depth0;
 
    align_cube(mt);
 }

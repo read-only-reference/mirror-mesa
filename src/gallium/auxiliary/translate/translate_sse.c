@@ -1,5 +1,5 @@
 /*
- * Copyright 2003 Tungsten Graphics, inc.
+ * Copyright 2003 VMware, Inc.
  * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -16,13 +16,13 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.  IN NO EVENT SHALL
- * TUNGSTEN GRAPHICS AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
+ * VMWARE AND/OR THEIR SUPPLIERS BE LIABLE FOR ANY CLAIM,
  * DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
  * USE OR OTHER DEALINGS IN THE SOFTWARE.
  *
  * Authors:
- *    Keith Whitwell <keithw@tungstengraphics.com>
+ *    Keith Whitwell <keithw@vmware.com>
  */
 
 
@@ -1121,7 +1121,9 @@ static boolean init_inputs( struct translate_sse *p,
             x86_cmovcc(p->func, tmp_EAX, buf_max_index, cc_AE);
          }
 
-         x86_imul(p->func, tmp_EAX, buf_stride);
+         x86_mov(p->func, p->tmp2_EDX, buf_stride);
+         x64_rexw(p->func);
+         x86_imul(p->func, tmp_EAX, p->tmp2_EDX);
          x64_rexw(p->func);
          x86_add(p->func, tmp_EAX, buf_base_ptr);
 
@@ -1207,7 +1209,9 @@ static struct x86_reg get_buffer_ptr( struct translate_sse *p,
       x86_cmp(p->func, ptr, buf_max_index);
       x86_cmovcc(p->func, ptr, buf_max_index, cc_AE);
 
-      x86_imul(p->func, ptr, buf_stride);
+      x86_mov(p->func, p->tmp2_EDX, buf_stride);
+      x64_rexw(p->func);
+      x86_imul(p->func, ptr, p->tmp2_EDX);
       x64_rexw(p->func);
       x86_add(p->func, ptr, buf_base_ptr);
       return ptr;

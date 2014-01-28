@@ -2339,7 +2339,7 @@ vec4_visitor::visit(ir_texture *ir)
       inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TXF);
       break;
    case ir_txf_ms:
-      inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TXF_MS);
+      inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TXF_CMS);
       break;
    case ir_txs:
       inst = new(mem_ctx) vec4_instruction(this, SHADER_OPCODE_TXS);
@@ -2363,23 +2363,28 @@ vec4_visitor::visit(ir_texture *ir)
       assert(!"Unrecognized tex op");
    }
 
-   bool use_texture_offset = ir->offset != NULL && ir->op != ir_txf;
+   if (ir->offset != NULL && ir->op != ir_txf)
+      inst->texture_offset = brw_texture_offset(ctx, ir->offset->as_constant());
 
-   /* Texel offsets go in the message header; Gen4 also requires headers. */
-   inst->header_present = use_texture_offset || brw->gen < 5 || ir->op == ir_tg4;
+   /* Stuff the channel select bits in the top of the texture offset */
+   if (ir->op == ir_tg4)
+      inst->texture_offset |= gather_channel(ir, sampler) << 16;
+
+   /* The message header is necessary for:
+    * - Gen4 (always)
+    * - Texel offsets
+    * - Gather channel selection
+    * - Sampler indices too large to fit in a 4-bit value.
+    */
+   inst->header_present =
+      brw->gen < 5 || inst->texture_offset != 0 || ir->op == ir_tg4 ||
+      sampler >= 16;
    inst->base_mrf = 2;
    inst->mlen = inst->header_present + 1; /* always at least one */
    inst->sampler = sampler;
    inst->dst = dst_reg(this, ir->type);
    inst->dst.writemask = WRITEMASK_XYZW;
    inst->shadow_compare = ir->shadow_comparitor != NULL;
-
-   if (use_texture_offset)
-      inst->texture_offset = brw_texture_offset(ctx, ir->offset->as_constant());
-
-   /* Stuff the channel select bits in the top of the texture offset */
-   if (ir->op == ir_tg4)
-      inst->texture_offset |= gather_channel(ir, sampler)<<16;
 
    /* MRF for the first parameter */
    int param_base = inst->base_mrf + inst->header_present;
@@ -2771,6 +2776,10 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
       if (prog_data->vue_map.slots_valid & VARYING_BIT_LAYER) {
          emit(MOV(retype(brw_writemask(reg, WRITEMASK_Y), BRW_REGISTER_TYPE_D),
                   src_reg(output_reg[VARYING_SLOT_LAYER])));
+      }
+      if (prog_data->vue_map.slots_valid & VARYING_BIT_VIEWPORT) {
+         emit(MOV(retype(brw_writemask(reg, WRITEMASK_Z), BRW_REGISTER_TYPE_D),
+                  src_reg(output_reg[VARYING_SLOT_VIEWPORT])));
       }
    }
 }
@@ -3279,13 +3288,19 @@ vec4_visitor::vec4_visitor(struct brw_context *brw,
 			   struct brw_shader *shader,
 			   void *mem_ctx,
                            bool debug_flag,
-                           bool no_spills)
+                           bool no_spills,
+                           shader_time_shader_type st_base,
+                           shader_time_shader_type st_written,
+                           shader_time_shader_type st_reset)
    : sanity_param_count(0),
      fail_msg(NULL),
      first_non_payload_grf(0),
      need_all_constants_in_pull_buffer(false),
      debug_flag(debug_flag),
-     no_spills(no_spills)
+     no_spills(no_spills),
+     st_base(st_base),
+     st_written(st_written),
+     st_reset(st_reset)
 {
    this->brw = brw;
    this->ctx = &brw->ctx;
@@ -3343,7 +3358,7 @@ vec4_visitor::fail(const char *format, ...)
    va_start(va, format);
    msg = ralloc_vasprintf(mem_ctx, format, va);
    va_end(va);
-   msg = ralloc_asprintf(mem_ctx, "VS compile failed: %s\n", msg);
+   msg = ralloc_asprintf(mem_ctx, "vec4 compile failed: %s\n", msg);
 
    this->fail_msg = msg;
 

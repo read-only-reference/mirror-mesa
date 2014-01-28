@@ -1,7 +1,7 @@
 /**************************************************************************
  * 
  * Copyright 2009 VMware, Inc.
- * Copyright 2007 Tungsten Graphics, Inc., Cedar Park, Texas.
+ * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -19,7 +19,7 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL TUNGSTEN GRAPHICS AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -262,7 +262,7 @@ generate_fs_loop(struct gallivm_state *gallivm,
    const struct tgsi_token *tokens = shader->base.tokens;
    LLVMTypeRef vec_type;
    LLVMValueRef mask_ptr, mask_val;
-   LLVMValueRef consts_ptr;
+   LLVMValueRef consts_ptr, num_consts_ptr;
    LLVMValueRef z;
    LLVMValueRef z_value, s_value;
    LLVMValueRef z_fb, s_fb;
@@ -296,7 +296,9 @@ generate_fs_loop(struct gallivm_state *gallivm,
       assert(zs_format_desc);
 
       if (!shader->info.base.writes_z) {
-         if (key->alpha.enabled || shader->info.base.uses_kill) {
+         if (key->alpha.enabled ||
+             key->blend.alpha_to_coverage ||
+             shader->info.base.uses_kill) {
             /* With alpha test and kill, can do the depth test early
              * and hopefully eliminate some quads.  But need to do a
              * special deferred depth write once the final mask value
@@ -334,6 +336,7 @@ generate_fs_loop(struct gallivm_state *gallivm,
    vec_type = lp_build_vec_type(gallivm, type);
 
    consts_ptr = lp_jit_context_constants(gallivm, context_ptr);
+   num_consts_ptr = lp_jit_context_num_constants(gallivm, context_ptr);
 
    lp_build_for_loop_begin(&loop_state, gallivm,
                            lp_build_const_int32(gallivm, 0),
@@ -412,7 +415,7 @@ generate_fs_loop(struct gallivm_state *gallivm,
 
    /* Build the actual shader */
    lp_build_tgsi_soa(gallivm, tokens, type, &mask,
-                     consts_ptr, &system_values,
+                     consts_ptr, num_consts_ptr, &system_values,
                      interp->inputs,
                      outputs, sampler, &shader->info.base, NULL);
 
@@ -435,6 +438,21 @@ generate_fs_loop(struct gallivm_state *gallivm,
          lp_build_alpha_test(gallivm, key->alpha.func, type, cbuf_format_desc,
                              &mask, alpha, alpha_ref_value,
                              (depth_mode & LATE_DEPTH_TEST) != 0);
+      }
+   }
+
+   /* Emulate Alpha to Coverage with Alpha test */
+   if (key->blend.alpha_to_coverage) {
+      int color0 = find_output_by_semantic(&shader->info.base,
+                                           TGSI_SEMANTIC_COLOR,
+                                           0);
+
+      if (color0 != -1 && outputs[color0][3]) {
+         LLVMValueRef alpha = LLVMBuildLoad(builder, outputs[color0][3], "alpha");
+
+         lp_build_alpha_to_coverage(gallivm, type,
+                                    &mask, alpha,
+                                    (depth_mode & LATE_DEPTH_TEST) != 0);
       }
    }
 
@@ -1071,6 +1089,19 @@ scale_bits(struct gallivm_state *gallivm,
    return result;
 }
 
+/**
+ * If RT is a smallfloat (needing denorms) format
+ */
+static INLINE int
+have_smallfloat_format(struct lp_type dst_type,
+                       enum pipe_format format)
+{
+   return ((dst_type.floating && dst_type.width != 32) ||
+    /* due to format handling hacks this format doesn't have floating set
+     * here (and actually has width set to 32 too) so special case this. */
+    (format == PIPE_FORMAT_R11G11B10_FLOAT));
+}
+
 
 /**
  * Convert from memory format to blending format
@@ -1575,7 +1606,7 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
     * this, otherwise half-float format conversions won't work
     * (again due to llvm bug #6393).
     */
-   if (dst_type.floating && dst_type.width != 32) {
+   if (have_smallfloat_format(dst_type, out_format)) {
       /* We need to make sure that denorms are ok for half float
          conversions */
       fpstate = lp_build_fpstate_get(gallivm);
@@ -2073,7 +2104,7 @@ generate_unswizzled_blend(struct gallivm_state *gallivm,
                              dst, dst_type, dst_count, dst_alignment);
    }
 
-   if (dst_type.floating && dst_type.width != 32) {
+   if (have_smallfloat_format(dst_type, out_format)) {
       lp_build_fpstate_set(gallivm, fpstate);
    }
 
@@ -2344,28 +2375,33 @@ generate_fragment(struct llvmpipe_context *lp,
    /* Loop over color outputs / color buffers to do blending.
     */
    for(cbuf = 0; cbuf < key->nr_cbufs; cbuf++) {
-      LLVMValueRef color_ptr;
-      LLVMValueRef stride;
-      LLVMValueRef index = lp_build_const_int32(gallivm, cbuf);
+      if (key->cbuf_format[cbuf] != PIPE_FORMAT_NONE) {
+         LLVMValueRef color_ptr;
+         LLVMValueRef stride;
+         LLVMValueRef index = lp_build_const_int32(gallivm, cbuf);
 
-      boolean do_branch = ((key->depth.enabled
-                            || key->stencil[0].enabled
-                            || key->alpha.enabled)
-                           && !shader->info.base.uses_kill);
+         boolean do_branch = ((key->depth.enabled
+                               || key->stencil[0].enabled
+                               || key->alpha.enabled)
+                              && !shader->info.base.uses_kill);
 
-      color_ptr = LLVMBuildLoad(builder,
-                                LLVMBuildGEP(builder, color_ptr_ptr, &index, 1, ""),
+         color_ptr = LLVMBuildLoad(builder,
+                                   LLVMBuildGEP(builder, color_ptr_ptr,
+                                                &index, 1, ""),
+                                   "");
+
+         lp_build_name(color_ptr, "color_ptr%d", cbuf);
+
+         stride = LLVMBuildLoad(builder,
+                                LLVMBuildGEP(builder, stride_ptr, &index, 1, ""),
                                 "");
 
-      lp_build_name(color_ptr, "color_ptr%d", cbuf);
-
-      stride = LLVMBuildLoad(builder,
-                             LLVMBuildGEP(builder, stride_ptr, &index, 1, ""),
-                             "");
-
-      generate_unswizzled_blend(gallivm, cbuf, variant, key->cbuf_format[cbuf],
-                                num_fs, fs_type, fs_mask, fs_out_color,
-                                context_ptr, color_ptr, stride, partial_mask, do_branch);
+         generate_unswizzled_blend(gallivm, cbuf, variant,
+                                   key->cbuf_format[cbuf],
+                                   num_fs, fs_type, fs_mask, fs_out_color,
+                                   context_ptr, color_ptr, stride,
+                                   partial_mask, do_branch);
+      }
    }
 
    LLVMBuildRetVoid(builder);
@@ -2426,6 +2462,9 @@ dump_fs_variant_key(const struct lp_fragment_shader_variant_key *key)
       debug_printf("blend.alpha_dst_factor = %s\n", util_dump_blend_factor(key->blend.rt[0].alpha_dst_factor, TRUE));
    }
    debug_printf("blend.colormask = 0x%x\n", key->blend.rt[0].colormask);
+   if (key->blend.alpha_to_coverage) {
+      debug_printf("blend.alpha_to_coverage is enabled\n");
+   }
    for (i = 0; i < key->nr_samplers; ++i) {
       const struct lp_static_sampler_state *sampler = &key->state[i].sampler_state;
       debug_printf("sampler[%u] = \n", i);
@@ -2521,6 +2560,7 @@ generate_variant(struct llvmpipe_context *lp,
          fullcolormask &&
          !key->stencil[0].enabled &&
          !key->alpha.enabled &&
+         !key->blend.alpha_to_coverage &&
          !key->depth.enabled &&
          !shader->info.base.uses_kill
       ? TRUE : FALSE;
@@ -2879,6 +2919,7 @@ make_variant_key(struct llvmpipe_context *lp,
 
    /* alpha test only applies if render buffer 0 is non-integer (or does not exist) */
    if (!lp->framebuffer.nr_cbufs ||
+       !lp->framebuffer.cbufs[0] ||
        !util_format_is_pure_integer(lp->framebuffer.cbufs[0]->format)) {
       key->alpha.enabled = lp->depth_stencil->alpha.enabled;
    }
@@ -2906,64 +2947,74 @@ make_variant_key(struct llvmpipe_context *lp,
    }
 
    for (i = 0; i < lp->framebuffer.nr_cbufs; i++) {
-      enum pipe_format format = lp->framebuffer.cbufs[i]->format;
       struct pipe_rt_blend_state *blend_rt = &key->blend.rt[i];
-      const struct util_format_description *format_desc;
 
-      key->cbuf_format[i] = format;
+      if (lp->framebuffer.cbufs[i]) {
+         enum pipe_format format = lp->framebuffer.cbufs[i]->format;
+         const struct util_format_description *format_desc;
 
-      /*
-       * Figure out if this is a 1d resource. Note that OpenGL allows crazy
-       * mixing of 2d textures with height 1 and 1d textures, so make sure
-       * we pick 1d if any cbuf or zsbuf is 1d.
-       */
-      if (llvmpipe_resource_is_1d(lp->framebuffer.cbufs[0]->texture)) {
-         key->resource_1d = TRUE;
+         key->cbuf_format[i] = format;
+
+         /*
+          * Figure out if this is a 1d resource. Note that OpenGL allows crazy
+          * mixing of 2d textures with height 1 and 1d textures, so make sure
+          * we pick 1d if any cbuf or zsbuf is 1d.
+          */
+         if (llvmpipe_resource_is_1d(lp->framebuffer.cbufs[i]->texture)) {
+            key->resource_1d = TRUE;
+         }
+
+         format_desc = util_format_description(format);
+         assert(format_desc->colorspace == UTIL_FORMAT_COLORSPACE_RGB ||
+                format_desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB);
+
+         /*
+          * Mask out color channels not present in the color buffer.
+          */
+         blend_rt->colormask &= util_format_colormask(format_desc);
+
+         /*
+          * Disable blend for integer formats.
+          */
+         if (util_format_is_pure_integer(format)) {
+            blend_rt->blend_enable = 0;
+         }
+
+         /*
+          * Our swizzled render tiles always have an alpha channel, but the
+          * linear render target format often does not, so force here the dst
+          * alpha to be one.
+          *
+          * This is not a mere optimization. Wrong results will be produced if
+          * the dst alpha is used, the dst format does not have alpha, and the
+          * previous rendering was not flushed from the swizzled to linear
+          * buffer. For example, NonPowTwo DCT.
+          *
+          * TODO: This should be generalized to all channels for better
+          * performance, but only alpha causes correctness issues.
+          *
+          * Also, force rgb/alpha func/factors match, to make AoS blending
+          * easier.
+          */
+         if (format_desc->swizzle[3] > UTIL_FORMAT_SWIZZLE_W ||
+             format_desc->swizzle[3] == format_desc->swizzle[0]) {
+            /* Doesn't cover mixed snorm/unorm but can't render to them anyway */
+            boolean clamped_zero = !util_format_is_float(format) &&
+                                   !util_format_is_snorm(format);
+            blend_rt->rgb_src_factor =
+               force_dst_alpha_one(blend_rt->rgb_src_factor, clamped_zero);
+            blend_rt->rgb_dst_factor =
+               force_dst_alpha_one(blend_rt->rgb_dst_factor, clamped_zero);
+            blend_rt->alpha_func       = blend_rt->rgb_func;
+            blend_rt->alpha_src_factor = blend_rt->rgb_src_factor;
+            blend_rt->alpha_dst_factor = blend_rt->rgb_dst_factor;
+         }
       }
-
-      format_desc = util_format_description(format);
-      assert(format_desc->colorspace == UTIL_FORMAT_COLORSPACE_RGB ||
-             format_desc->colorspace == UTIL_FORMAT_COLORSPACE_SRGB);
-
-      /*
-       * Mask out color channels not present in the color buffer.
-       */
-      blend_rt->colormask &= util_format_colormask(format_desc);
-
-      /*
-       * Disable blend for integer formats.
-       */
-      if (util_format_is_pure_integer(format)) {
+      else {
+         /* no color buffer for this fragment output */
+         key->cbuf_format[i] = PIPE_FORMAT_NONE;
+         blend_rt->colormask = 0x0;
          blend_rt->blend_enable = 0;
-      }
-
-      /*
-       * Our swizzled render tiles always have an alpha channel, but the linear
-       * render target format often does not, so force here the dst alpha to be
-       * one.
-       *
-       * This is not a mere optimization. Wrong results will be produced if the
-       * dst alpha is used, the dst format does not have alpha, and the previous
-       * rendering was not flushed from the swizzled to linear buffer. For
-       * example, NonPowTwo DCT.
-       *
-       * TODO: This should be generalized to all channels for better
-       * performance, but only alpha causes correctness issues.
-       *
-       * Also, force rgb/alpha func/factors match, to make AoS blending easier.
-       */
-      if (format_desc->swizzle[3] > UTIL_FORMAT_SWIZZLE_W ||
-          format_desc->swizzle[3] == format_desc->swizzle[0]) {
-         /* Doesn't cover mixed snorm/unorm but can't render to them anyway */
-         boolean clamped_zero = !util_format_is_float(format) &&
-                                !util_format_is_snorm(format);
-         blend_rt->rgb_src_factor   = force_dst_alpha_one(blend_rt->rgb_src_factor,
-                                                          clamped_zero);
-         blend_rt->rgb_dst_factor   = force_dst_alpha_one(blend_rt->rgb_dst_factor,
-                                                          clamped_zero);
-         blend_rt->alpha_func       = blend_rt->rgb_func;
-         blend_rt->alpha_src_factor = blend_rt->rgb_src_factor;
-         blend_rt->alpha_dst_factor = blend_rt->rgb_dst_factor;
       }
    }
 

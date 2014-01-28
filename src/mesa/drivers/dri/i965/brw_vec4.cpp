@@ -272,7 +272,7 @@ vec4_visitor::implied_mrf_writes(vec4_instruction *inst)
    case SHADER_OPCODE_TXL:
    case SHADER_OPCODE_TXD:
    case SHADER_OPCODE_TXF:
-   case SHADER_OPCODE_TXF_MS:
+   case SHADER_OPCODE_TXF_CMS:
    case SHADER_OPCODE_TXF_MCS:
    case SHADER_OPCODE_TXS:
    case SHADER_OPCODE_TG4:
@@ -1242,7 +1242,7 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst)
          break;
       }
 
-      if (inst->src[i].reg_offset)
+      if (virtual_grf_sizes[inst->src[i].reg] != 1)
          printf(".%d", inst->src[i].reg_offset);
 
       if (inst->src[i].file != IMM) {
@@ -1494,10 +1494,10 @@ vec4_visitor::emit_shader_time_end()
     */
    emit(ADD(diff, src_reg(diff), src_reg(-2u)));
 
-   emit_shader_time_write(ST_VS, src_reg(diff));
-   emit_shader_time_write(ST_VS_WRITTEN, src_reg(1u));
+   emit_shader_time_write(st_base, src_reg(diff));
+   emit_shader_time_write(st_written, src_reg(1u));
    emit(BRW_OPCODE_ELSE);
-   emit_shader_time_write(ST_VS_RESET, src_reg(1u));
+   emit_shader_time_write(st_reset, src_reg(1u));
    emit(BRW_OPCODE_ENDIF);
 }
 
@@ -1540,7 +1540,7 @@ vec4_visitor::run()
     * functions called "main").
     */
    if (shader) {
-      visit_instructions(shader->ir);
+      visit_instructions(shader->base.ir);
    } else {
       emit_program_code();
    }
@@ -1654,7 +1654,7 @@ brw_vs_emit(struct brw_context *brw,
    if (unlikely(INTEL_DEBUG & DEBUG_VS)) {
       if (prog) {
          printf("GLSL IR for native vertex shader %d:\n", prog->Name);
-         _mesa_print_ir(shader->ir, NULL);
+         _mesa_print_ir(shader->base.ir, NULL);
          printf("\n\n");
       } else {
          printf("ARB_vertex_program %d for native vertex shader\n",
@@ -1676,10 +1676,16 @@ brw_vs_emit(struct brw_context *brw,
       return NULL;
    }
 
-   vec4_generator g(brw, prog, &c->vp->program.Base, &prog_data->base, mem_ctx,
-                    INTEL_DEBUG & DEBUG_VS);
-   const unsigned *generated =g.generate_assembly(&v.instructions,
-                                                  final_assembly_size);
+   const unsigned *assembly = NULL;
+   if (brw->gen >= 8) {
+      gen8_vec4_generator g(brw, prog, &c->vp->program.Base, &prog_data->base,
+                            mem_ctx, INTEL_DEBUG & DEBUG_VS);
+      assembly = g.generate_assembly(&v.instructions, final_assembly_size);
+   } else {
+      vec4_generator g(brw, prog, &c->vp->program.Base, &prog_data->base,
+                       mem_ctx, INTEL_DEBUG & DEBUG_VS);
+      assembly = g.generate_assembly(&v.instructions, final_assembly_size);
+   }
 
    if (unlikely(brw->perf_debug) && shader) {
       if (shader->compiled_once) {
@@ -1692,7 +1698,7 @@ brw_vs_emit(struct brw_context *brw,
       shader->compiled_once = true;
    }
 
-   return generated;
+   return assembly;
 }
 
 

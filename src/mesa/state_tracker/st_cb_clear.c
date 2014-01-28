@@ -1,6 +1,6 @@
 /**************************************************************************
  * 
- * Copyright 2007 Tungsten Graphics, Inc., Cedar Park, Texas.
+ * Copyright 2007 VMware, Inc.
  * All Rights Reserved.
  * Copyright 2009 VMware, Inc.  All Rights Reserved.
  * 
@@ -19,7 +19,7 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL TUNGSTEN GRAPHICS AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -28,7 +28,7 @@
 
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   *   Brian Paul
   *   Michel Dänzer
   */
@@ -364,11 +364,11 @@ clear_with_quad(struct gl_context *ctx, unsigned clear_buffers)
 static INLINE GLboolean
 is_scissor_enabled(struct gl_context *ctx, struct gl_renderbuffer *rb)
 {
-   return ctx->Scissor.Enabled &&
-          (ctx->Scissor.X > 0 ||
-           ctx->Scissor.Y > 0 ||
-           (unsigned) ctx->Scissor.Width < rb->Width ||
-           (unsigned) ctx->Scissor.Height < rb->Height);
+   return (ctx->Scissor.EnableFlags & 1) &&
+          (ctx->Scissor.ScissorArray[0].X > 0 ||
+           ctx->Scissor.ScissorArray[0].Y > 0 ||
+           (unsigned) ctx->Scissor.ScissorArray[0].Width < rb->Width ||
+           (unsigned) ctx->Scissor.ScissorArray[0].Height < rb->Height);
 }
 
 
@@ -395,6 +395,19 @@ is_color_masked(struct gl_context *ctx, int i)
           !ctx->Color.ColorMask[i][1] ||
           !ctx->Color.ColorMask[i][2] ||
           !ctx->Color.ColorMask[i][3];
+}
+
+
+/**
+ * Return if all of the stencil bits are masked.
+ */
+static INLINE GLboolean
+is_stencil_disabled(struct gl_context *ctx, struct gl_renderbuffer *rb)
+{
+   const GLuint stencilMax = 0xff;
+
+   assert(_mesa_get_format_bits(rb->Format, GL_STENCIL_BITS) > 0);
+   return (ctx->Stencil.WriteMask[0] & stencilMax) == 0;
 }
 
 
@@ -431,9 +444,9 @@ st_Clear(struct gl_context *ctx, GLbitfield mask)
 
    if (mask & BUFFER_BITS_COLOR) {
       for (i = 0; i < ctx->DrawBuffer->_NumColorDrawBuffers; i++) {
-         GLuint b = ctx->DrawBuffer->_ColorDrawBufferIndexes[i];
+         GLint b = ctx->DrawBuffer->_ColorDrawBufferIndexes[i];
 
-         if (mask & (1 << b)) {
+         if (b >= 0 && mask & (1 << b)) {
             struct gl_renderbuffer *rb
                = ctx->DrawBuffer->Attachment[b].Renderbuffer;
             struct st_renderbuffer *strb = st_renderbuffer(rb);
@@ -457,7 +470,7 @@ st_Clear(struct gl_context *ctx, GLbitfield mask)
    if (mask & BUFFER_BIT_DEPTH) {
       struct st_renderbuffer *strb = st_renderbuffer(depthRb);
 
-      if (strb->surface) {
+      if (strb->surface && ctx->Depth.Mask) {
          if (is_scissor_enabled(ctx, depthRb))
             quad_buffers |= PIPE_CLEAR_DEPTH;
          else
@@ -467,7 +480,7 @@ st_Clear(struct gl_context *ctx, GLbitfield mask)
    if (mask & BUFFER_BIT_STENCIL) {
       struct st_renderbuffer *strb = st_renderbuffer(stencilRb);
 
-      if (strb->surface) {
+      if (strb->surface && !is_stencil_disabled(ctx, stencilRb)) {
          if (is_scissor_enabled(ctx, stencilRb) ||
              is_stencil_masked(ctx, stencilRb))
             quad_buffers |= PIPE_CLEAR_STENCIL;
@@ -476,14 +489,23 @@ st_Clear(struct gl_context *ctx, GLbitfield mask)
       }
    }
 
-   /*
-    * If we're going to use clear_with_quad() for any reason, use it for
-    * everything possible.
+   /* Always clear depth and stencil together.
+    * This can only happen when the stencil writemask is not a full mask.
+    */
+   if (quad_buffers & PIPE_CLEAR_DEPTHSTENCIL &&
+       clear_buffers & PIPE_CLEAR_DEPTHSTENCIL) {
+      quad_buffers |= clear_buffers & PIPE_CLEAR_DEPTHSTENCIL;
+      clear_buffers &= ~PIPE_CLEAR_DEPTHSTENCIL;
+   }
+
+   /* Only use quad-based clearing for the renderbuffers which cannot
+    * use pipe->clear. We want to always use pipe->clear for the other
+    * renderbuffers, because it's likely to be faster.
     */
    if (quad_buffers) {
-      quad_buffers |= clear_buffers;
       clear_with_quad(ctx, quad_buffers);
-   } else if (clear_buffers) {
+   }
+   if (clear_buffers) {
       /* We can't translate the clear color to the colorbuffer format,
        * because different colorbuffers may have different formats.
        */

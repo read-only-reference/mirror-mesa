@@ -1,7 +1,7 @@
 
 /**************************************************************************
  *
- * Copyright 2003 Tungsten Graphics, Inc., Cedar Park, Texas.
+ * Copyright 2003 VMware, Inc.
  * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -19,7 +19,7 @@
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
  * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
- * IN NO EVENT SHALL TUNGSTEN GRAPHICS AND/OR ITS SUPPLIERS BE LIABLE FOR
+ * IN NO EVENT SHALL VMWARE AND/OR ITS SUPPLIERS BE LIABLE FOR
  * ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
  * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
@@ -572,12 +572,12 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
        packing->Invert)
       return false;
 
-   if ((texImage->TexFormat == MESA_FORMAT_L8 && format == GL_LUMINANCE) ||
-       (texImage->TexFormat == MESA_FORMAT_A8 && format == GL_ALPHA)) {
+   if ((texImage->TexFormat == MESA_FORMAT_L_UNORM8 && format == GL_LUMINANCE) ||
+       (texImage->TexFormat == MESA_FORMAT_A_UNORM8 && format == GL_ALPHA)) {
       cpp = 1;
       mem_copy = memcpy;
-   } else if ((texImage->TexFormat == MESA_FORMAT_ARGB8888) ||
-              (texImage->TexFormat == MESA_FORMAT_XRGB8888)) {
+   } else if ((texImage->TexFormat == MESA_FORMAT_B8G8R8A8_UNORM) ||
+              (texImage->TexFormat == MESA_FORMAT_B8G8R8X8_UNORM)) {
       cpp = 4;
       if (format == GL_BGRA) {
          mem_copy = memcpy;
@@ -628,7 +628,7 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
     * the function.
     */
    DBG("%s: level=%d offset=(%d,%d) (w,h)=(%d,%d) format=0x%x type=0x%x "
-       "gl_format=0x%x tiling=%d "
+       "mesa_format=0x%x tiling=%d "
        "packing=(alignment=%d row_length=%d skip_pixels=%d skip_rows=%d) "
        "for_glTexImage=%d\n",
        __FUNCTION__, texImage->Level, xoffset, yoffset, width, height,

@@ -47,6 +47,7 @@
 #include "freedreno_screen.h"
 #include "freedreno_resource.h"
 #include "freedreno_fence.h"
+#include "freedreno_query.h"
 #include "freedreno_util.h"
 
 #include "fd2_screen.h"
@@ -64,12 +65,15 @@ static const struct debug_named_value debug_options[] = {
 		{"direct",    FD_DBG_DIRECT, "Force inline (SS_DIRECT) state loads"},
 		{"dbypass",   FD_DBG_DBYPASS,"Disable GMEM bypass"},
 		{"fraghalf",  FD_DBG_FRAGHALF, "Use half-precision in fragment shader"},
+		{"binning",   FD_DBG_BINNING,  "Enable hw binning"},
+		{"dbinning",  FD_DBG_DBINNING, "Disable hw binning"},
 		DEBUG_NAMED_VALUE_END
 };
 
 DEBUG_GET_ONCE_FLAGS_OPTION(fd_mesa_debug, "FD_MESA_DEBUG", debug_options, 0)
 
 int fd_mesa_debug = 0;
+bool fd_binning_enabled = false; /* default to off for now */
 
 static const char *
 fd_screen_get_name(struct pipe_screen *pscreen)
@@ -189,7 +193,6 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
-	case PIPE_CAP_SCALED_RESOLVE:
 	case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
@@ -235,6 +238,9 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_ENDIANNESS:
 		return PIPE_ENDIAN_LITTLE;
+
+        case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
+		return 64;
 
 	default:
 		DBG("unknown param %d", param);
@@ -386,6 +392,12 @@ fd_screen_create(struct fd_device *dev)
 
 	fd_mesa_debug = debug_get_option_fd_mesa_debug();
 
+	if (fd_mesa_debug & FD_DBG_BINNING)
+		fd_binning_enabled = true;
+
+	if (fd_mesa_debug & FD_DBG_DBINNING)
+		fd_binning_enabled = false;
+
 	if (!screen)
 		return NULL;
 
@@ -448,6 +460,7 @@ fd_screen_create(struct fd_device *dev)
 	pscreen->get_shader_param = fd_screen_get_shader_param;
 
 	fd_resource_screen_init(pscreen);
+	fd_query_screen_init(pscreen);
 
 	pscreen->get_name = fd_screen_get_name;
 	pscreen->get_vendor = fd_screen_get_vendor;

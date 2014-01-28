@@ -83,10 +83,10 @@ _mesa_init_teximage_fields(struct gl_context *ctx,
                            struct gl_texture_image *img,
                            GLsizei width, GLsizei height, GLsizei depth,
                            GLint border, GLenum internalFormat,
-                           gl_format format);
+                           mesa_format format);
 
 
-extern gl_format
+extern mesa_format
 _mesa_choose_texture_format(struct gl_context *ctx,
                             struct gl_texture_object *texObj,
                             GLenum target, GLint level,
@@ -128,7 +128,7 @@ _mesa_max_texture_levels(struct gl_context *ctx, GLenum target);
 
 extern GLboolean
 _mesa_test_proxy_teximage(struct gl_context *ctx, GLenum target, GLint level,
-                          gl_format format,
+                          mesa_format format,
                           GLint width, GLint height, GLint depth, GLint border);
 
 
@@ -137,6 +137,12 @@ _mesa_tex_target_to_face(GLenum target);
 
 extern GLint
 _mesa_get_texture_dimensions(GLenum target);
+
+extern GLboolean
+_mesa_tex_target_is_layered(GLenum target);
+
+extern GLuint
+_mesa_get_texture_layers(const struct gl_texture_object *texObj, GLint level);
 
 extern GLsizei
 _mesa_get_tex_max_num_levels(GLenum target, GLsizei width, GLsizei height,
@@ -147,9 +153,17 @@ _mesa_legal_texture_dimensions(struct gl_context *ctx, GLenum target,
                                GLint level, GLint width, GLint height,
                                GLint depth, GLint border);
 
-extern gl_format
+extern mesa_format
 _mesa_validate_texbuffer_format(const struct gl_context *ctx,
                                 GLenum internalFormat);
+
+
+bool
+_mesa_legal_texture_base_format_for_target(struct gl_context *ctx,
+                                           GLenum target,
+                                           GLenum internalFormat,
+                                           unsigned dimensions,
+                                           const char *caller);
 
 /**
  * Lock a texture for updating.  See also _mesa_lock_context_textures().

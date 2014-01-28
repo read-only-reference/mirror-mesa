@@ -59,11 +59,15 @@ bool intel_batchbuffer_emit_reloc(struct brw_context *brw,
 				       uint32_t read_domains,
 				       uint32_t write_domain,
 				       uint32_t offset);
-bool intel_batchbuffer_emit_reloc_fenced(struct brw_context *brw,
-					      drm_intel_bo *buffer,
-					      uint32_t read_domains,
-					      uint32_t write_domain,
-					      uint32_t offset);
+bool intel_batchbuffer_emit_reloc64(struct brw_context *brw,
+                                    drm_intel_bo *buffer,
+                                    uint32_t read_domains,
+                                    uint32_t write_domain,
+                                    uint32_t offset);
+void brw_emit_pipe_control_flush(struct brw_context *brw, uint32_t flags);
+void brw_emit_pipe_control_write(struct brw_context *brw, uint32_t flags,
+                                 drm_intel_bo *bo, uint32_t offset,
+                                 uint32_t imm_lower, uint32_t imm_upper);
 void intel_batchbuffer_emit_mi_flush(struct brw_context *brw);
 void intel_emit_post_sync_nonzero_flush(struct brw_context *brw);
 void intel_emit_depth_stall_flushes(struct brw_context *brw);
@@ -163,8 +167,6 @@ intel_batchbuffer_advance(struct brw_context *brw)
 #endif
 }
 
-void intel_batchbuffer_cached_advance(struct brw_context *brw);
-
 #define BEGIN_BATCH(n) intel_batchbuffer_begin(brw, n, RENDER_RING)
 #define BEGIN_BATCH_BLT(n) intel_batchbuffer_begin(brw, n, BLT_RING)
 #define OUT_BATCH(d) intel_batchbuffer_emit_dword(brw, d)
@@ -174,8 +176,12 @@ void intel_batchbuffer_cached_advance(struct brw_context *brw);
 				read_domains, write_domain, delta);	\
 } while (0)
 
+/* Handle 48-bit address relocations for Gen8+ */
+#define OUT_RELOC64(buf, read_domains, write_domain, delta) do { \
+   intel_batchbuffer_emit_reloc64(brw, buf, read_domains, write_domain, delta);	\
+} while (0)
+
 #define ADVANCE_BATCH() intel_batchbuffer_advance(brw);
-#define CACHED_BATCH() intel_batchbuffer_cached_advance(brw);
 
 #ifdef __cplusplus
 }

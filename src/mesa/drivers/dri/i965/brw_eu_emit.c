@@ -1,6 +1,6 @@
 /*
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
- Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
+ Intel funded Tungsten Graphics to
  develop this 3D driver.
 
  Permission is hereby granted, free of charge, to any person obtaining
@@ -26,7 +26,7 @@
  **********************************************************************/
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   */
 
 
@@ -108,8 +108,6 @@ unsigned
 brw_reg_type_to_hw_type(const struct brw_context *brw,
                         enum brw_reg_type type, unsigned file)
 {
-   bool imm = file == BRW_IMMEDIATE_VALUE;
-
    if (file == BRW_IMMEDIATE_VALUE) {
       const static int imm_hw_types[] = {
          [BRW_REGISTER_TYPE_UD] = BRW_HW_REG_TYPE_UD,

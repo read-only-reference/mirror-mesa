@@ -1,6 +1,6 @@
 /*
  Copyright (C) Intel Corp.  2006.  All Rights Reserved.
- Intel funded Tungsten Graphics (http://www.tungstengraphics.com) to
+ Intel funded Tungsten Graphics to
  develop this 3D driver.
 
  Permission is hereby granted, free of charge, to any person obtaining
@@ -26,11 +26,18 @@
  **********************************************************************/
  /*
   * Authors:
-  *   Keith Whitwell <keith@tungstengraphics.com>
+  *   Keith Whitwell <keithw@vmware.com>
   */
 
 #define INTEL_MASK(high, low) (((1<<((high)-(low)+1))-1)<<(low))
-#define SET_FIELD(value, field) (((value) << field ## _SHIFT) & field ## _MASK)
+/* Using the GNU statement expression extension */
+#define SET_FIELD(value, field)                                         \
+   ({                                                                   \
+      uint32_t fieldval = (value) << field ## _SHIFT;                   \
+      assert((fieldval & ~ field ## _MASK) == 0);                       \
+      fieldval & field ## _MASK;                                        \
+   })
+
 #define GET_FIELD(word, field) (((word)  & field ## _MASK) >> field ## _SHIFT)
 
 #ifndef BRW_DEFINES_H
@@ -38,14 +45,6 @@
 
 /* 3D state:
  */
-#define PIPE_CONTROL_NOWRITE          0x00
-#define PIPE_CONTROL_WRITEIMMEDIATE   0x01
-#define PIPE_CONTROL_WRITEDEPTH       0x02
-#define PIPE_CONTROL_WRITETIMESTAMP   0x03
-
-#define PIPE_CONTROL_GTTWRITE_PROCESS_LOCAL 0x00
-#define PIPE_CONTROL_GTTWRITE_GLOBAL        0x01
-
 #define CMD_3D_PRIM                                 0x7b00 /* 3DPRIMITIVE */
 /* DW0 */
 # define GEN4_3DPRIM_TOPOLOGY_TYPE_SHIFT            10
@@ -542,7 +541,9 @@
 #define GEN7_SURFACE_MSFMT_MSS                  (0 << 6)
 #define GEN7_SURFACE_MSFMT_DEPTH_STENCIL        (1 << 6)
 #define GEN7_SURFACE_MIN_ARRAY_ELEMENT_SHIFT	18
+#define GEN7_SURFACE_MIN_ARRAY_ELEMENT_MASK     INTEL_MASK(28, 18)
 #define GEN7_SURFACE_RENDER_TARGET_VIEW_EXTENT_SHIFT	7
+#define GEN7_SURFACE_RENDER_TARGET_VIEW_EXTENT_MASK   INTEL_MASK(17, 7)
 
 /* Surface state DW5 */
 #define BRW_SURFACE_X_OFFSET_SHIFT		25
@@ -752,6 +753,7 @@ enum opcode {
     * instructions.
     */
    FS_OPCODE_FB_WRITE = 128,
+   FS_OPCODE_BLORP_FB_WRITE,
    SHADER_OPCODE_RCP,
    SHADER_OPCODE_RSQ,
    SHADER_OPCODE_SQRT,
@@ -769,7 +771,8 @@ enum opcode {
    SHADER_OPCODE_TXL,
    SHADER_OPCODE_TXS,
    FS_OPCODE_TXB,
-   SHADER_OPCODE_TXF_MS,
+   SHADER_OPCODE_TXF_CMS,
+   SHADER_OPCODE_TXF_UMS,
    SHADER_OPCODE_TXF_MCS,
    SHADER_OPCODE_LOD,
    SHADER_OPCODE_TG4,
@@ -1091,13 +1094,16 @@ enum brw_message_target {
    BRW_SFID_DATAPORT_WRITE           = 5,
    BRW_SFID_URB                      = 6,
    BRW_SFID_THREAD_SPAWNER           = 7,
+   BRW_SFID_VME                      = 8,
 
    GEN6_SFID_DATAPORT_SAMPLER_CACHE  = 4,
    GEN6_SFID_DATAPORT_RENDER_CACHE   = 5,
    GEN6_SFID_DATAPORT_CONSTANT_CACHE = 9,
 
    GEN7_SFID_DATAPORT_DATA_CACHE     = 10,
+   GEN7_SFID_PIXEL_INTERPOLATOR      = 11,
    HSW_SFID_DATAPORT_DATA_CACHE_1    = 12,
+   HSW_SFID_CRE                      = 13,
 };
 
 #define GEN7_MESSAGE_TARGET_DP_DATA_CACHE     10
@@ -1286,6 +1292,8 @@ enum brw_message_target {
 #define BRW_MATH_FUNCTION_INT_DIV_QUOTIENT_AND_REMAINDER   11
 #define BRW_MATH_FUNCTION_INT_DIV_QUOTIENT                 12
 #define BRW_MATH_FUNCTION_INT_DIV_REMAINDER                13
+#define GEN8_MATH_FUNCTION_INVM                            14
+#define GEN8_MATH_FUNCTION_RSQRTM                          15
 
 #define BRW_MATH_INTEGER_UNSIGNED     0
 #define BRW_MATH_INTEGER_SIGNED       1
@@ -1422,6 +1430,7 @@ enum brw_message_target {
 # define GEN6_CC_VIEWPORT_MODIFY			(1 << 12)
 # define GEN6_SF_VIEWPORT_MODIFY			(1 << 11)
 # define GEN6_CLIP_VIEWPORT_MODIFY			(1 << 10)
+# define GEN7_NUM_VIEWPORTS				16
 
 #define _3DSTATE_VIEWPORT_STATE_POINTERS_CC	0x7823 /* GEN7+ */
 #define _3DSTATE_VIEWPORT_STATE_POINTERS_SF_CL	0x7821 /* GEN7+ */
@@ -1538,6 +1547,7 @@ enum brw_message_target {
 # define GEN6_CLIP_MIN_POINT_WIDTH_SHIFT		17
 # define GEN6_CLIP_MAX_POINT_WIDTH_SHIFT		6
 # define GEN6_CLIP_FORCE_ZERO_RTAINDEX			(1 << 5)
+# define GEN6_CLIP_MAX_VP_INDEX_MASK			INTEL_MASK(3, 0)
 
 #define _3DSTATE_SF				0x7813 /* GEN6+ */
 /* DW1 (for gen6) */
@@ -1919,9 +1929,12 @@ enum brw_wm_barycentric_interp_mode {
 /* DW2: start address */
 /* DW3: end address. */
 
-#define CMD_PIPE_CONTROL              0x7a00
-
 #define CMD_MI_FLUSH                  0x0200
+
+# define BLT_X_SHIFT					0
+# define BLT_X_MASK					INTEL_MASK(15, 0)
+# define BLT_Y_SHIFT					16
+# define BLT_Y_MASK					INTEL_MASK(31, 16)
 
 #define GEN5_MI_REPORT_PERF_COUNT ((0x26 << 23) | (3 - 2))
 /* DW0 */

@@ -62,11 +62,6 @@
 #define R600_BIG_ENDIAN 0
 #endif
 
-#define R600_QUERY_DRAW_CALLS		(PIPE_QUERY_DRIVER_SPECIFIC + 0)
-#define R600_QUERY_REQUESTED_VRAM	(PIPE_QUERY_DRIVER_SPECIFIC + 1)
-#define R600_QUERY_REQUESTED_GTT	(PIPE_QUERY_DRIVER_SPECIFIC + 2)
-#define R600_QUERY_BUFFER_WAIT_TIME	(PIPE_QUERY_DRIVER_SPECIFIC + 3)
-
 struct r600_context;
 struct r600_bytecode;
 struct r600_shader_key;
@@ -209,9 +204,6 @@ struct r600_screen {
 	 * XXX: Not sure if this is the best place for global_pool.  Also,
 	 * it's not thread safe, so it won't work with multiple contexts. */
 	struct compute_memory_pool *global_pool;
-	struct r600_resource		*trace_bo;
-	uint32_t			*trace_ptr;
-	unsigned			cs_count;
 };
 
 struct r600_pipe_sampler_view {
@@ -364,34 +356,6 @@ struct r600_shader_state {
 	struct r600_pipe_shader_selector *shader;
 };
 
-struct r600_query_buffer {
-	/* The buffer where query results are stored. */
-	struct r600_resource			*buf;
-	/* Offset of the next free result after current query data */
-	unsigned				results_end;
-	/* If a query buffer is full, a new buffer is created and the old one
-	 * is put in here. When we calculate the result, we sum up the samples
-	 * from all buffers. */
-	struct r600_query_buffer		*previous;
-};
-
-struct r600_query {
-	/* The query buffer and how many results are in it. */
-	struct r600_query_buffer		buffer;
-	/* The type of query */
-	unsigned				type;
-	/* Size of the result in memory for both begin_query and end_query,
-	 * this can be one or two numbers, or it could even be a size of a structure. */
-	unsigned				result_size;
-	/* The number of dwords for begin_query or end_query. */
-	unsigned				num_cs_dw;
-	/* linked list of queries */
-	struct list_head			list;
-	/* for custom non-GPU queries */
-	uint64_t begin_result;
-	uint64_t end_result;
-};
-
 struct r600_context {
 	struct r600_common_context	b;
 	struct r600_screen		*screen;
@@ -404,8 +368,6 @@ struct r600_context {
 	boolean				keep_tiling_flags;
 	unsigned			default_ps_gprs, default_vs_gprs;
 	unsigned			r6xx_num_clause_temp_gprs;
-	unsigned			backend_mask;
-	unsigned			max_db; /* for OQ */
 
 	/* Miscellaneous state objects. */
 	void				*custom_dsa_flush;
@@ -478,37 +440,8 @@ struct r600_context {
 	int				last_primitive_type; /* Last primitive type used in draw_vbo. */
 	int				last_start_instance;
 
-	/* Queries. */
-	/* The list of active queries. Only one query of each type can be active. */
-	int				num_occlusion_queries;
-	int				num_pipelinestat_queries;
-	/* Keep track of non-timer queries, because they should be suspended
-	 * during context flushing.
-	 * The timer queries (TIME_ELAPSED) shouldn't be suspended. */
-	struct list_head		active_nontimer_queries;
-	unsigned			num_cs_dw_nontimer_queries_suspend;
-	/* If queries have been suspended. */
-	bool				nontimer_queries_suspended;
-	unsigned			num_draw_calls;
-
-	/* Render condition. */
-	struct pipe_query		*current_render_cond;
-	unsigned			current_render_cond_mode;
-	boolean				current_render_cond_cond;
-	boolean				predicate_drawing;
-
 	void				*sb_context;
 	struct r600_isa		*isa;
-
-	/* Work-around for flushing problems with compute shaders on Cayman:
-	 * Emitting a SURFACE_SYNC packet with any of the CB*_DEST_BASE_ENA
-	 * or DB_DEST_BASE_ENA bits set after dispatching a compute shader
-	 * hangs the GPU.
-	 *
-	 * Setting this to true will prevent r600_flush_emit() from emitting
-	 * a SURFACE_SYNC packet.  This field will be cleared by
-	 * by r600_context_flush() after flushing the command stream. */
-	boolean				skip_surface_sync_on_next_cs_flush;
 };
 
 static INLINE void r600_emit_command_buffer(struct radeon_winsys_cs *cs,
@@ -525,7 +458,7 @@ static INLINE void r600_emit_atom(struct r600_context *rctx, struct r600_atom *a
 {
 	atom->emit(&rctx->b, atom);
 	atom->dirty = false;
-	if (rctx->screen->trace_bo) {
+	if (rctx->screen->b.trace_bo) {
 		r600_trace_emit(rctx);
 	}
 }
@@ -596,18 +529,6 @@ void r600_decompress_depth_textures(struct r600_context *rctx,
 void r600_decompress_color_textures(struct r600_context *rctx,
 				    struct r600_samplerview_state *textures);
 
-/* r600_pipe.c */
-const char * r600_llvm_gpu_string(enum radeon_family family);
-
-
-/* r600_query.c */
-void r600_init_query_functions(struct r600_context *rctx);
-void r600_suspend_nontimer_queries(struct r600_context *ctx);
-void r600_resume_nontimer_queries(struct r600_context *ctx);
-
-/* r600_resource.c */
-void r600_init_context_resource_functions(struct r600_context *r600);
-
 /* r600_shader.c */
 int r600_pipe_shader_create(struct pipe_context *ctx,
 			    struct r600_pipe_shader *shader,
@@ -638,7 +559,6 @@ boolean r600_is_format_supported(struct pipe_screen *screen,
 void r600_update_db_shader_control(struct r600_context * rctx);
 
 /* r600_hw_context.c */
-void r600_get_backend_mask(struct r600_context *ctx);
 void r600_context_flush(struct r600_context *ctx, unsigned flags);
 void r600_begin_new_cs(struct r600_context *ctx);
 void r600_flush_emit(struct r600_context *ctx);
