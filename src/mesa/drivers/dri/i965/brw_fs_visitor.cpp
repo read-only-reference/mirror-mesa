@@ -102,7 +102,7 @@ fs_visitor::visit(ir_variable *ir)
 	 }
       }
    } else if (ir->data.mode == ir_var_uniform) {
-      int param_index = c->prog_data.nr_params;
+      int param_index = uniforms;
 
       /* Thanks to the lower_ubo_reference pass, we will see only
        * ir_binop_ubo_load expressions and not ir_dereference_variable for UBO
@@ -212,7 +212,8 @@ fs_visitor::visit(ir_dereference_array *ir)
 }
 
 void
-fs_visitor::emit_lrp(fs_reg dst, fs_reg x, fs_reg y, fs_reg a)
+fs_visitor::emit_lrp(const fs_reg &dst, const fs_reg &x, const fs_reg &y,
+                     const fs_reg &a)
 {
    if (brw->gen < 6 ||
        !x.is_valid_3src() ||
@@ -225,8 +226,9 @@ fs_visitor::emit_lrp(fs_reg dst, fs_reg x, fs_reg y, fs_reg a)
 
       emit(MUL(y_times_a, y, a));
 
-      a.negate = !a.negate;
-      emit(ADD(one_minus_a, a, fs_reg(1.0f)));
+      fs_reg negative_a = a;
+      negative_a.negate = !a.negate;
+      emit(ADD(one_minus_a, negative_a, fs_reg(1.0f)));
       emit(MUL(x_times_one_minus_a, x, one_minus_a));
 
       emit(ADD(dst, x_times_one_minus_a, y_times_a));
@@ -239,8 +241,8 @@ fs_visitor::emit_lrp(fs_reg dst, fs_reg x, fs_reg y, fs_reg a)
 }
 
 void
-fs_visitor::emit_minmax(uint32_t conditionalmod, fs_reg dst,
-                        fs_reg src0, fs_reg src1)
+fs_visitor::emit_minmax(uint32_t conditionalmod, const fs_reg &dst,
+                        const fs_reg &src0, const fs_reg &src1)
 {
    fs_inst *inst;
 
@@ -347,8 +349,8 @@ fs_visitor::visit(ir_expression *ir)
       ir->operands[operand]->accept(this);
       if (this->result.file == BAD_FILE) {
 	 fail("Failed to get tree for expression operand:\n");
-	 ir->operands[operand]->print();
-         printf("\n");
+	 ir->operands[operand]->fprint(stderr);
+         fprintf(stderr, "\n");
       }
       assert(this->result.is_valid_3src());
       op[operand] = this->result;
@@ -741,11 +743,17 @@ fs_visitor::visit(ir_expression *ir)
          packed_consts.type = result.type;
 
          fs_reg const_offset_reg = fs_reg(const_offset->value.u[0] & ~15);
-         emit(fs_inst(FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD,
-                      packed_consts, surf_index, const_offset_reg));
+         emit(new(mem_ctx) fs_inst(FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD,
+                                   packed_consts, surf_index, const_offset_reg));
 
-         packed_consts.smear = const_offset->value.u[0] % 16 / 4;
          for (int i = 0; i < ir->type->vector_elements; i++) {
+            packed_consts.set_smear(const_offset->value.u[0] % 16 / 4 + i);
+
+            /* The std140 packing rules don't allow vectors to cross 16-byte
+             * boundaries, and a reg is 32 bytes.
+             */
+            assert(packed_consts.subreg_offset < 32);
+
             /* UBO bools are any nonzero value.  We consider bools to be
              * values with the low bit set to 1.  Convert them using CMP.
              */
@@ -755,13 +763,7 @@ fs_visitor::visit(ir_expression *ir)
                emit(MOV(result, packed_consts));
             }
 
-            packed_consts.smear++;
             result.reg_offset++;
-
-            /* The std140 packing rules don't allow vectors to cross 16-byte
-             * boundaries, and a reg is 32 bytes.
-             */
-            assert(packed_consts.smear < 8);
          }
       } else {
          /* Turn the byte offset into a dword offset. */
@@ -838,6 +840,7 @@ fs_visitor::emit_assignment_writes(fs_reg &l, fs_reg &r,
       break;
 
    case GLSL_TYPE_SAMPLER:
+   case GLSL_TYPE_IMAGE:
    case GLSL_TYPE_ATOMIC_UINT:
       break;
 
@@ -1316,24 +1319,24 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       break;
    }
    case ir_txs:
-      emit(MOV(next.retype(BRW_REGISTER_TYPE_UD), lod));
+      emit(MOV(retype(next, BRW_REGISTER_TYPE_UD), lod));
       next.reg_offset++;
       break;
    case ir_query_levels:
-      emit(MOV(next.retype(BRW_REGISTER_TYPE_UD), fs_reg(0u)));
+      emit(MOV(retype(next, BRW_REGISTER_TYPE_UD), fs_reg(0u)));
       next.reg_offset++;
       break;
    case ir_txf:
       /* Unfortunately, the parameters for LD are intermixed: u, lod, v, r. */
-      emit(MOV(next.retype(BRW_REGISTER_TYPE_D), coordinate));
+      emit(MOV(retype(next, BRW_REGISTER_TYPE_D), coordinate));
       coordinate.reg_offset++;
       next.reg_offset++;
 
-      emit(MOV(next.retype(BRW_REGISTER_TYPE_D), lod));
+      emit(MOV(retype(next, BRW_REGISTER_TYPE_D), lod));
       next.reg_offset++;
 
       for (int i = 1; i < ir->coordinate->type->vector_elements; i++) {
-	 emit(MOV(next.retype(BRW_REGISTER_TYPE_D), coordinate));
+	 emit(MOV(retype(next, BRW_REGISTER_TYPE_D), coordinate));
 	 coordinate.reg_offset++;
 	 next.reg_offset++;
       }
@@ -1341,18 +1344,18 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       coordinate_done = true;
       break;
    case ir_txf_ms:
-      emit(MOV(next.retype(BRW_REGISTER_TYPE_UD), sample_index));
+      emit(MOV(retype(next, BRW_REGISTER_TYPE_UD), sample_index));
       next.reg_offset++;
 
       /* data from the multisample control surface */
-      emit(MOV(next.retype(BRW_REGISTER_TYPE_UD), mcs));
+      emit(MOV(retype(next, BRW_REGISTER_TYPE_UD), mcs));
       next.reg_offset++;
 
       /* there is no offsetting for this message; just copy in the integer
        * texture coordinates
        */
       for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
-         emit(MOV(next.retype(BRW_REGISTER_TYPE_D), coordinate));
+         emit(MOV(retype(next, BRW_REGISTER_TYPE_D), coordinate));
          coordinate.reg_offset++;
          next.reg_offset++;
       }
@@ -1375,7 +1378,7 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
          }
 
          for (int i = 0; i < 2; i++) { /* offu, offv */
-            emit(MOV(next.retype(BRW_REGISTER_TYPE_D), offset_value));
+            emit(MOV(retype(next, BRW_REGISTER_TYPE_D), offset_value));
             offset_value.reg_offset++;
             next.reg_offset++;
          }
@@ -1466,14 +1469,14 @@ fs_visitor::rescale_texcoord(ir_texture *ir, fs_reg coordinate,
 	 return coordinate;
       }
 
-      scale_x = fs_reg(UNIFORM, c->prog_data.nr_params);
-      scale_y = fs_reg(UNIFORM, c->prog_data.nr_params + 1);
+      scale_x = fs_reg(UNIFORM, uniforms);
+      scale_y = fs_reg(UNIFORM, uniforms + 1);
 
       GLuint index = _mesa_add_state_reference(params,
 					       (gl_state_index *)tokens);
-      c->prog_data.param[c->prog_data.nr_params++] =
+      stage_prog_data->param[uniforms++] =
          &prog->Parameters->ParameterValues[index][0].f;
-      c->prog_data.param[c->prog_data.nr_params++] =
+      stage_prog_data->param[uniforms++] =
          &prog->Parameters->ParameterValues[index][1].f;
    }
 
@@ -1548,7 +1551,7 @@ fs_visitor::emit_mcs_fetch(ir_texture *ir, fs_reg coordinate, int sampler)
 
    /* parameters are: u, v, r, lod; missing parameters are treated as zero */
    for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
-      emit(MOV(next.retype(BRW_REGISTER_TYPE_D), coordinate));
+      emit(MOV(retype(next, BRW_REGISTER_TYPE_D), coordinate));
       coordinate.reg_offset++;
       next.reg_offset++;
    }
@@ -1699,7 +1702,41 @@ fs_visitor::visit(ir_texture *ir)
       }
    }
 
+   if (brw->gen == 6 && ir->op == ir_tg4) {
+      emit_gen6_gather_wa(c->key.tex.gen6_gather_wa[sampler], dst);
+   }
+
    swizzle_result(ir, dst, sampler);
+}
+
+/**
+ * Apply workarounds for Gen6 gather with UINT/SINT
+ */
+void
+fs_visitor::emit_gen6_gather_wa(uint8_t wa, fs_reg dst)
+{
+   if (!wa)
+      return;
+
+   int width = (wa & WA_8BIT) ? 8 : 16;
+
+   for (int i = 0; i < 4; i++) {
+      fs_reg dst_f = retype(dst, BRW_REGISTER_TYPE_F);
+      /* Convert from UNORM to UINT */
+      emit(MUL(dst_f, dst_f, fs_reg((float)((1 << width) - 1))));
+      emit(MOV(dst, dst_f));
+
+      if (wa & WA_SIGN) {
+         /* Reinterpret the UINT value as a signed INT value by
+          * shifting the sign bit into place, then shifting back
+          * preserving sign.
+          */
+         emit(SHL(dst, dst, fs_reg(32 - width)));
+         emit(ASR(dst, dst, fs_reg(32 - width)));
+      }
+
+      dst.reg_offset++;
+   }
 }
 
 /**
@@ -2362,9 +2399,10 @@ fs_visitor::emit_untyped_atomic(unsigned atomic_op, unsigned surf_index,
    }
 
    /* Emit the instruction. */
-   fs_inst inst(SHADER_OPCODE_UNTYPED_ATOMIC, dst, atomic_op, surf_index);
-   inst.base_mrf = 0;
-   inst.mlen = mlen;
+   fs_inst *inst = new(mem_ctx) fs_inst(SHADER_OPCODE_UNTYPED_ATOMIC, dst,
+                                        atomic_op, surf_index);
+   inst->base_mrf = 0;
+   inst->mlen = mlen;
    emit(inst);
 }
 
@@ -2395,19 +2433,11 @@ fs_visitor::emit_untyped_surface_read(unsigned surf_index, fs_reg dst,
    mlen += operand_len;
 
    /* Emit the instruction. */
-   fs_inst inst(SHADER_OPCODE_UNTYPED_SURFACE_READ, dst, surf_index);
-   inst.base_mrf = 0;
-   inst.mlen = mlen;
+   fs_inst *inst = new(mem_ctx)
+      fs_inst(SHADER_OPCODE_UNTYPED_SURFACE_READ, dst, surf_index);
+   inst->base_mrf = 0;
+   inst->mlen = mlen;
    emit(inst);
-}
-
-fs_inst *
-fs_visitor::emit(fs_inst inst)
-{
-   fs_inst *list_inst = new(mem_ctx) fs_inst;
-   *list_inst = inst;
-   emit(list_inst);
-   return list_inst;
 }
 
 fs_inst *
@@ -2619,12 +2649,10 @@ fs_visitor::emit_color_write(int target, int index, int first_color_mrf)
 	 inst->saturate = c->key.clamp_fragment_color;
 	 pop_force_uncompressed();
 
-	 color.sechalf = true;
 	 inst = emit(MOV(fs_reg(MRF, first_color_mrf + index + 4, color.type),
-                         color));
+                         half(color, 1)));
 	 inst->force_sechalf = true;
 	 inst->saturate = c->key.clamp_fragment_color;
-	 color.sechalf = false;
       }
    }
 }
@@ -2710,7 +2738,7 @@ fs_visitor::emit_fb_writes()
     *      thread message and on all dual-source messages."
     */
    if (brw->gen >= 6 &&
-       !this->fp->UsesKill &&
+       (brw->is_haswell || brw->gen >= 8 || !this->fp->UsesKill) &&
        !do_dual_src &&
        c->key.nr_color_regions == 1) {
       header_present = false;
@@ -2807,6 +2835,10 @@ fs_visitor::emit_fb_writes()
       inst->mlen = nr - base_mrf;
       inst->eot = true;
       inst->header_present = header_present;
+      if ((brw->gen >= 8 || brw->is_haswell) && fp->UsesKill) {
+         inst->predicate = BRW_PREDICATE_NORMAL;
+         inst->flag_subreg = 1;
+      }
 
       c->prog_data.dual_src_blend = true;
       this->current_annotation = NULL;
@@ -2852,6 +2884,10 @@ fs_visitor::emit_fb_writes()
          inst->mlen = nr - base_mrf;
       inst->eot = eot;
       inst->header_present = header_present;
+      if ((brw->gen >= 8 || brw->is_haswell) && fp->UsesKill) {
+         inst->predicate = BRW_PREDICATE_NORMAL;
+         inst->flag_subreg = 1;
+      }
    }
 
    if (c->key.nr_color_regions == 0) {
@@ -2869,6 +2905,10 @@ fs_visitor::emit_fb_writes()
       inst->mlen = nr - base_mrf;
       inst->eot = true;
       inst->header_present = header_present;
+      if ((brw->gen >= 8 || brw->is_haswell) && fp->UsesKill) {
+         inst->predicate = BRW_PREDICATE_NORMAL;
+         inst->flag_subreg = 1;
+      }
    }
 
    this->current_annotation = NULL;
@@ -2939,6 +2979,7 @@ fs_visitor::fs_visitor(struct brw_context *brw,
    this->live_intervals = NULL;
    this->regs_live_at_ip = NULL;
 
+   this->uniforms = 0;
    this->params_remap = NULL;
    this->nr_params_remap = 0;
 
@@ -2946,7 +2987,7 @@ fs_visitor::fs_visitor(struct brw_context *brw,
 
    this->spilled_any_registers = false;
 
-   memset(&this->param_size, 0, sizeof(this->param_size));
+   this->param_size = rzalloc_array(mem_ctx, int, stage_prog_data->nr_params);
 }
 
 fs_visitor::~fs_visitor()

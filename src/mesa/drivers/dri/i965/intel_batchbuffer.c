@@ -432,6 +432,38 @@ intel_batchbuffer_data(struct brw_context *brw,
 }
 
 /**
+ * According to the latest documentation, any PIPE_CONTROL with the
+ * "Command Streamer Stall" bit set must also have another bit set,
+ * with five different options:
+ *
+ *  - Render Target Cache Flush
+ *  - Depth Cache Flush
+ *  - Stall at Pixel Scoreboard
+ *  - Post-Sync Operation
+ *  - Depth Stall
+ *
+ * I chose "Stall at Pixel Scoreboard" since we've used it effectively
+ * in the past, but the choice is fairly arbitrary.
+ */
+static void
+gen8_add_cs_stall_workaround_bits(uint32_t *flags)
+{
+   uint32_t wa_bits = PIPE_CONTROL_WRITE_FLUSH |
+                      PIPE_CONTROL_DEPTH_CACHE_FLUSH |
+                      PIPE_CONTROL_WRITE_IMMEDIATE |
+                      PIPE_CONTROL_WRITE_DEPTH_COUNT |
+                      PIPE_CONTROL_WRITE_TIMESTAMP |
+                      PIPE_CONTROL_STALL_AT_SCOREBOARD |
+                      PIPE_CONTROL_DEPTH_STALL;
+
+   /* If we're doing a CS stall, and don't already have one of the
+    * workaround bits set, add "Stall at Pixel Scoreboard."
+    */
+   if ((*flags & PIPE_CONTROL_CS_STALL) != 0 && (*flags & wa_bits) == 0)
+      *flags |= PIPE_CONTROL_STALL_AT_SCOREBOARD;
+}
+
+/**
  * Emit a PIPE_CONTROL with various flushing flags.
  *
  * The caller is responsible for deciding what flags are appropriate for the
@@ -441,6 +473,8 @@ void
 brw_emit_pipe_control_flush(struct brw_context *brw, uint32_t flags)
 {
    if (brw->gen >= 8) {
+      gen8_add_cs_stall_workaround_bits(&flags);
+
       BEGIN_BATCH(6);
       OUT_BATCH(_3DSTATE_PIPE_CONTROL | (6 - 2));
       OUT_BATCH(flags);
@@ -481,6 +515,8 @@ brw_emit_pipe_control_write(struct brw_context *brw, uint32_t flags,
                             uint32_t imm_lower, uint32_t imm_upper)
 {
    if (brw->gen >= 8) {
+      gen8_add_cs_stall_workaround_bits(&flags);
+
       BEGIN_BATCH(6);
       OUT_BATCH(_3DSTATE_PIPE_CONTROL | (6 - 2));
       OUT_BATCH(flags);
@@ -529,7 +565,7 @@ brw_emit_pipe_control_write(struct brw_context *brw, uint32_t flags,
 void
 intel_emit_depth_stall_flushes(struct brw_context *brw)
 {
-   assert(brw->gen >= 6 && brw->gen <= 7);
+   assert(brw->gen >= 6 && brw->gen <= 8);
 
    brw_emit_pipe_control_flush(brw, PIPE_CONTROL_DEPTH_STALL);
    brw_emit_pipe_control_flush(brw, PIPE_CONTROL_DEPTH_CACHE_FLUSH);
@@ -659,5 +695,30 @@ intel_batchbuffer_emit_mi_flush(struct brw_context *brw)
          }
       }
       brw_emit_pipe_control_flush(brw, flags);
+   }
+}
+
+void
+brw_load_register_mem(struct brw_context *brw,
+                      uint32_t reg,
+                      drm_intel_bo *bo,
+                      uint32_t read_domains, uint32_t write_domain,
+                      uint32_t offset)
+{
+   /* MI_LOAD_REGISTER_MEM only exists on Gen7+. */
+   assert(brw->gen >= 7);
+
+   if (brw->gen >= 8) {
+      BEGIN_BATCH(4);
+      OUT_BATCH(GEN7_MI_LOAD_REGISTER_MEM | (4 - 2));
+      OUT_BATCH(reg);
+      OUT_RELOC64(bo, read_domains, write_domain, offset);
+      ADVANCE_BATCH();
+   } else {
+      BEGIN_BATCH(3);
+      OUT_BATCH(GEN7_MI_LOAD_REGISTER_MEM | (3 - 2));
+      OUT_BATCH(reg);
+      OUT_RELOC(bo, read_domains, write_domain, offset);
+      ADVANCE_BATCH();
    }
 }

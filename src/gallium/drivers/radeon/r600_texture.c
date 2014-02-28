@@ -453,7 +453,7 @@ void r600_texture_init_cmask(struct r600_common_screen *rscreen,
 
 	rtex->cmask_buffer = (struct r600_resource *)
 		pipe_buffer_create(&rscreen->b, PIPE_BIND_CUSTOM,
-				   PIPE_USAGE_STATIC, rtex->cmask.size);
+				   PIPE_USAGE_DEFAULT, rtex->cmask.size);
 	if (rtex->cmask_buffer == NULL) {
 		rtex->cmask.size = 0;
 	}
@@ -546,7 +546,7 @@ static void r600_texture_allocate_htile(struct r600_common_screen *rscreen,
 	/* XXX don't allocate it separately */
 	rtex->htile_buffer = (struct r600_resource*)
 			     pipe_buffer_create(&rscreen->b, PIPE_BIND_CUSTOM,
-						PIPE_USAGE_STATIC, htile_size);
+						PIPE_USAGE_DEFAULT, htile_size);
 	if (rtex->htile_buffer == NULL) {
 		/* this is not a fatal error as we can still keep rendering
 		 * without htile buffer */
@@ -596,7 +596,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 	if (rtex->is_depth) {
 		if (!(base->flags & (R600_RESOURCE_FLAG_TRANSFER |
 				     R600_RESOURCE_FLAG_FLUSHED_DEPTH)) &&
-		    !(rscreen->debug_flags & DBG_NO_HYPERZ)) {
+		    (rscreen->debug_flags & DBG_HYPERZ)) {
 
 			r600_texture_allocate_htile(rscreen, rtex);
 		}
@@ -616,11 +616,8 @@ r600_texture_create_object(struct pipe_screen *screen,
 
 	/* Now create the backing buffer. */
 	if (!buf) {
-		unsigned base_align = rtex->surface.bo_alignment;
-		unsigned usage = rtex->surface.level[0].mode >= RADEON_SURF_MODE_1D ?
-					 PIPE_USAGE_STATIC : base->usage;
-
-		if (!r600_init_resource(rscreen, resource, rtex->size, base_align, FALSE, usage)) {
+		if (!r600_init_resource(rscreen, resource, rtex->size,
+					rtex->surface.bo_alignment, FALSE)) {
 			FREE(rtex);
 			return NULL;
 		}
@@ -830,7 +827,7 @@ bool r600_init_flushed_depth_texture(struct pipe_context *ctx,
 	resource.array_size = texture->array_size;
 	resource.last_level = texture->last_level;
 	resource.nr_samples = texture->nr_samples;
-	resource.usage = staging ? PIPE_USAGE_STAGING : PIPE_USAGE_STATIC;
+	resource.usage = staging ? PIPE_USAGE_STAGING : PIPE_USAGE_DEFAULT;
 	resource.bind = texture->bind & ~PIPE_BIND_DEPTH_STENCIL;
 	resource.flags = texture->flags | R600_RESOURCE_FLAG_FLUSHED_DEPTH;
 
@@ -864,7 +861,7 @@ static void r600_init_temp_resource_from_box(struct pipe_resource *res,
 	res->height0 = box->height;
 	res->depth0 = 1;
 	res->array_size = 1;
-	res->usage = flags & R600_RESOURCE_FLAG_TRANSFER ? PIPE_USAGE_STAGING : PIPE_USAGE_STATIC;
+	res->usage = flags & R600_RESOURCE_FLAG_TRANSFER ? PIPE_USAGE_STAGING : PIPE_USAGE_DEFAULT;
 	res->flags = flags;
 
 	/* We must set the correct texture target and dimensions for a 3D box. */
@@ -911,8 +908,8 @@ static void *r600_texture_transfer_map(struct pipe_context *ctx,
 	if (rtex->surface.level[level].mode >= RADEON_SURF_MODE_1D)
 		use_staging_texture = TRUE;
 
-	/* Untiled buffers in VRAM, which is slow for CPU reads */
-	if ((usage & PIPE_TRANSFER_READ) && !(usage & PIPE_TRANSFER_MAP_DIRECTLY) &&
+	/* Untiled buffers in VRAM, which is slow for CPU reads and writes */
+	if (!(usage & PIPE_TRANSFER_MAP_DIRECTLY) &&
 	    (rtex->resource.domains == RADEON_DOMAIN_VRAM)) {
 		use_staging_texture = TRUE;
 	}
@@ -1079,8 +1076,58 @@ static const struct u_resource_vtbl r600_texture_vtbl =
 	NULL				/* transfer_inline_write */
 };
 
-void r600_init_texture_functions(struct r600_common_screen *rscreen)
+struct pipe_surface *r600_create_surface_custom(struct pipe_context *pipe,
+						struct pipe_resource *texture,
+						const struct pipe_surface *templ,
+						unsigned width, unsigned height)
+{
+	struct r600_surface *surface = CALLOC_STRUCT(r600_surface);
+
+	if (surface == NULL)
+		return NULL;
+
+	assert(templ->u.tex.first_layer <= util_max_layer(texture, templ->u.tex.level));
+	assert(templ->u.tex.last_layer <= util_max_layer(texture, templ->u.tex.level));
+
+	pipe_reference_init(&surface->base.reference, 1);
+	pipe_resource_reference(&surface->base.texture, texture);
+	surface->base.context = pipe;
+	surface->base.format = templ->format;
+	surface->base.width = width;
+	surface->base.height = height;
+	surface->base.u = templ->u;
+	return &surface->base;
+}
+
+static struct pipe_surface *r600_create_surface(struct pipe_context *pipe,
+						struct pipe_resource *tex,
+						const struct pipe_surface *templ)
+{
+	unsigned level = templ->u.tex.level;
+
+	return r600_create_surface_custom(pipe, tex, templ,
+					  u_minify(tex->width0, level),
+					  u_minify(tex->height0, level));
+}
+
+static void r600_surface_destroy(struct pipe_context *pipe,
+				 struct pipe_surface *surface)
+{
+	struct r600_surface *surf = (struct r600_surface*)surface;
+	pipe_resource_reference((struct pipe_resource**)&surf->cb_buffer_fmask, NULL);
+	pipe_resource_reference((struct pipe_resource**)&surf->cb_buffer_cmask, NULL);
+	pipe_resource_reference(&surface->texture, NULL);
+	FREE(surface);
+}
+
+void r600_init_screen_texture_functions(struct r600_common_screen *rscreen)
 {
 	rscreen->b.resource_from_handle = r600_texture_from_handle;
 	rscreen->b.resource_get_handle = r600_texture_get_handle;
+}
+
+void r600_init_context_texture_functions(struct r600_common_context *rctx)
+{
+	rctx->b.create_surface = r600_create_surface;
+	rctx->b.surface_destroy = r600_surface_destroy;
 }

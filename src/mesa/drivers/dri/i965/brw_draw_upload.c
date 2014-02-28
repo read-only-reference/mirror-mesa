@@ -229,9 +229,9 @@ brw_get_vertex_surface_type(struct brw_context *brw,
    int size = glarray->Size;
 
    if (unlikely(INTEL_DEBUG & DEBUG_VERTS))
-      printf("type %s size %d normalized %d\n",
-             _mesa_lookup_enum_by_nr(glarray->Type),
-             glarray->Size, glarray->Normalized);
+      fprintf(stderr, "type %s size %d normalized %d\n",
+              _mesa_lookup_enum_by_nr(glarray->Type),
+              glarray->Size, glarray->Normalized);
 
    if (glarray->Integer) {
       assert(glarray->Format == GL_RGBA); /* sanity check */
@@ -400,7 +400,8 @@ copy_array_to_vbo_array(struct brw_context *brw,
    buffer->stride = dst_stride;
 }
 
-static void brw_prepare_vertices(struct brw_context *brw)
+void
+brw_prepare_vertices(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
    /* CACHE_NEW_VS_PROG */
@@ -427,7 +428,7 @@ static void brw_prepare_vertices(struct brw_context *brw)
    }
 
    if (0)
-      printf("%s %d..%d\n", __FUNCTION__, min_index, max_index);
+      fprintf(stderr, "%s %d..%d\n", __FUNCTION__, min_index, max_index);
 
    /* Accumulate the list of enabled arrays. */
    brw->vb.nr_enabled = 0;
@@ -860,12 +861,13 @@ static void brw_upload_indices(struct brw_context *brw)
                                                     offset,
                                                     ib_size,
                                                     GL_MAP_READ_BIT,
-                                                    bufferobj);
+                                                    bufferobj,
+                                                    MAP_INTERNAL);
 
           intel_upload_data(brw, map, ib_size, ib_type_size, &bo, &offset);
           brw->ib.start_vertex_offset = offset / ib_type_size;
 
-          ctx->Driver.UnmapBuffer(ctx, bufferobj);
+          ctx->Driver.UnmapBuffer(ctx, bufferobj, MAP_INTERNAL);
        } else {
 	  /* Use CMD_3D_PRIM's start_vertex_offset to avoid re-uploading
 	   * the index buffer state when we're just moving the start index

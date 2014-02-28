@@ -18,11 +18,13 @@ MAIN_FILES = \
 	$(SRCDIR)main/attrib.c \
 	$(SRCDIR)main/arrayobj.c \
 	$(SRCDIR)main/blend.c \
+	$(SRCDIR)main/blit.c \
 	$(SRCDIR)main/bufferobj.c \
 	$(SRCDIR)main/buffers.c \
 	$(SRCDIR)main/clear.c \
 	$(SRCDIR)main/clip.c \
 	$(SRCDIR)main/colortab.c \
+	$(SRCDIR)main/compute.c \
 	$(SRCDIR)main/condrender.c \
 	$(SRCDIR)main/context.c \
 	$(SRCDIR)main/convolve.c \
@@ -48,6 +50,7 @@ MAIN_FILES = \
 	$(SRCDIR)main/format_unpack.c \
 	$(SRCDIR)main/framebuffer.c \
 	$(SRCDIR)main/get.c \
+	$(SRCDIR)main/genmipmap.c \
 	$(SRCDIR)main/getstring.c \
 	$(SRCDIR)main/glformats.c \
 	$(SRCDIR)main/hash.c \
@@ -66,6 +69,7 @@ MAIN_FILES = \
 	$(SRCDIR)main/pack.c \
 	$(SRCDIR)main/pbo.c \
 	$(SRCDIR)main/performance_monitor.c \
+	$(SRCDIR)main/pipelineobj.c \
 	$(SRCDIR)main/pixel.c \
 	$(SRCDIR)main/pixelstore.c \
 	$(SRCDIR)main/pixeltransfer.c \
@@ -316,6 +320,7 @@ SPARC_FILES =			\
 
 COMMON_DRIVER_FILES =			\
 	$(SRCDIR)drivers/common/driverfuncs.c	\
+	$(SRCDIR)drivers/common/meta_blit.c	\
 	$(SRCDIR)drivers/common/meta.c
 
 

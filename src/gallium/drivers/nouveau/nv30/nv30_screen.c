@@ -60,8 +60,6 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 10;
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
       return 13;
-   case PIPE_CAP_MAX_COMBINED_SAMPLERS:
-      return 16;
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
       return 120;
    /* supported capabilities */
@@ -86,6 +84,8 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 0;
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 16;
+   case PIPE_CAP_MAX_VIEWPORTS:
+      return 1;
    /* nv4x capabilities */
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
    case PIPE_CAP_NPOT_TEXTURES:
@@ -108,6 +108,8 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_TEXEL_OFFSET:
    case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
    case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
+   case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
+   case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
    case PIPE_CAP_TEXTURE_BARRIER:
    case PIPE_CAP_SEAMLESS_CUBE_MAP:
@@ -126,6 +128,9 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
    case PIPE_CAP_TGSI_VS_LAYER:
+   case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
+   case PIPE_CAP_TEXTURE_GATHER_SM5:
+   case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
       return 0;
    case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
@@ -219,7 +224,7 @@ nv30_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
       case PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH:
          return 0;
       case PIPE_SHADER_CAP_MAX_INPUTS:
-         return (eng3d->oclass >= NV40_3D_CLASS) ? 12 : 10;
+         return 8; /* should be possible to do 10 with nv4x */
       case PIPE_SHADER_CAP_MAX_CONSTS:
          return (eng3d->oclass >= NV40_3D_CLASS) ? 224 : 32;
       case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
@@ -299,6 +304,9 @@ static void
 nv30_screen_destroy(struct pipe_screen *pscreen)
 {
    struct nv30_screen *screen = nv30_screen(pscreen);
+
+   if (!nouveau_drm_screen_unref(&screen->base))
+      return;
 
    if (screen->base.fence.current &&
        screen->base.fence.current->state >= NOUVEAU_FENCE_STATE_EMITTED) {

@@ -193,7 +193,7 @@ do_blorp_blit(struct brw_context *brw, GLbitfield buffer_bit,
                            dstX0, dstY0, dstX1, dstY1,
                            filter, mirror_x, mirror_y);
 
-   intel_renderbuffer_set_needs_downsample(dst_irb);
+   dst_irb->need_downsample = true;
 }
 
 static bool
@@ -219,7 +219,7 @@ formats_match(GLbitfield buffer_bit, struct intel_renderbuffer *src_irb,
 {
    /* Note: don't just check gl_renderbuffer::Format, because in some cases
     * multiple gl_formats resolve to the same native type in the miptree (for
-    * example MESA_FORMAT_Z24_UNORM_S8_UINT and MESA_FORMAT_Z24_UNORM_X8_UINT), and we can blit
+    * example MESA_FORMAT_Z24_UNORM_X8_UINT and MESA_FORMAT_Z24_UNORM_S8_UINT), and we can blit
     * between those formats.
     */
    mesa_format src_format = find_miptree(buffer_bit, src_irb)->format;
@@ -368,8 +368,8 @@ brw_blorp_copytexsubimage(struct brw_context *brw,
     * we have to lie about the surface format.  See the comments in
     * brw_blorp_surface_info::set().
     */
-   if ((src_mt->format == MESA_FORMAT_Z24_UNORM_S8_UINT) !=
-       (dst_mt->format == MESA_FORMAT_Z24_UNORM_S8_UINT)) {
+   if ((src_mt->format == MESA_FORMAT_Z24_UNORM_X8_UINT) !=
+       (dst_mt->format == MESA_FORMAT_Z24_UNORM_X8_UINT)) {
       return false;
    }
 
@@ -629,7 +629,7 @@ public:
                           const brw_blorp_blit_prog_key *key);
 
    const GLuint *compile(struct brw_context *brw, GLuint *program_size,
-                         FILE *dump_file = stdout);
+                         FILE *dump_file = stderr);
 
    brw_blorp_prog_data prog_data;
 
@@ -1974,7 +1974,6 @@ brw_blorp_blit_params::brw_blorp_blit_params(struct brw_context *brw,
                                              bool mirror_x, bool mirror_y)
 {
    struct gl_context *ctx = &brw->ctx;
-   const struct gl_framebuffer *read_fb = ctx->ReadBuffer;
 
    src.set(brw, src_mt, src_level, src_layer, false);
    dst.set(brw, dst_mt, dst_level, dst_layer, true);
@@ -2127,8 +2126,10 @@ brw_blorp_blit_params::brw_blorp_blit_params(struct brw_context *brw,
    y0 = wm_push_consts.dst_y0 = dst_y0;
    x1 = wm_push_consts.dst_x1 = dst_x1;
    y1 = wm_push_consts.dst_y1 = dst_y1;
-   wm_push_consts.rect_grid_x1 = read_fb->Width * wm_prog_key.x_scale - 1.0;
-   wm_push_consts.rect_grid_y1 = read_fb->Height * wm_prog_key.y_scale - 1.0;
+   wm_push_consts.rect_grid_x1 = (minify(src_mt->logical_width0, src_level) *
+                                  wm_prog_key.x_scale - 1.0);
+   wm_push_consts.rect_grid_y1 = (minify(src_mt->logical_height0, src_level) *
+                                  wm_prog_key.y_scale - 1.0);
 
    wm_push_consts.x_transform.setup(src_x0, src_x1, dst_x0, dst_x1, mirror_x);
    wm_push_consts.y_transform.setup(src_y0, src_y1, dst_y0, dst_y1, mirror_y);
@@ -2254,7 +2255,7 @@ brw_blorp_blit_params::get_wm_prog(struct brw_context *brw,
                          &prog_offset, prog_data)) {
       brw_blorp_blit_program prog(brw, &this->wm_prog_key);
       GLuint program_size;
-      const GLuint *program = prog.compile(brw, &program_size, stdout);
+      const GLuint *program = prog.compile(brw, &program_size, stderr);
       brw_upload_cache(&brw->cache, BRW_BLORP_BLIT_PROG,
                        &this->wm_prog_key, sizeof(this->wm_prog_key),
                        program, program_size,

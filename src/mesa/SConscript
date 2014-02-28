@@ -46,11 +46,13 @@ main_sources = [
     'main/attrib.c',
     'main/arrayobj.c',
     'main/blend.c',
+    'main/blit.c',
     'main/bufferobj.c',
     'main/buffers.c',
     'main/clear.c',
     'main/clip.c',
     'main/colortab.c',
+    'main/compute.c',
     'main/condrender.c',
     'main/context.c',
     'main/convolve.c',
@@ -77,6 +79,7 @@ main_sources = [
     'main/format_pack.c',
     'main/format_unpack.c',
     'main/framebuffer.c',
+    'main/genmipmap.c',
     'main/getstring.c',
     'main/glformats.c',
     'main/hash.c',
@@ -95,6 +98,7 @@ main_sources = [
     'main/pack.c',
     'main/pbo.c',
     'main/performance_monitor.c',
+    'main/pipelineobj.c',
     'main/pixel.c',
     'main/pixelstore.c',
     'main/pixeltransfer.c',
@@ -322,6 +326,7 @@ program_sources = [
 common_driver_sources =	[
     'drivers/common/driverfuncs.c',
     'drivers/common/meta.c',
+    'drivers/common/meta_blit.c'
 ]
 
 mesa_sources = (

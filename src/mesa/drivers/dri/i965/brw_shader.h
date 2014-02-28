@@ -23,11 +23,12 @@
 
 #include <stdint.h>
 #include "brw_defines.h"
+#include "main/compiler.h"
 #include "glsl/ir.h"
 
 #pragma once
 
-enum register_file {
+enum PACKED register_file {
    BAD_FILE,
    GRF,
    MRF,
@@ -56,7 +57,7 @@ public:
 
    enum opcode opcode; /* BRW_OPCODE_* or FS_OPCODE_* */
 
-   uint32_t predicate;
+   uint8_t predicate;
    bool predicate_inverse;
 };
 

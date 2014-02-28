@@ -104,8 +104,12 @@ nv50_vertprog_assign_slots(struct nv50_ir_prog_info *info)
          prog->vp.bfc[info->out[i].si] = i;
          break;
       case TGSI_SEMANTIC_LAYER:
-         prog->gp.has_layer = true;
+         prog->gp.has_layer = TRUE;
          prog->gp.layerid = n;
+         break;
+      case TGSI_SEMANTIC_VIEWPORT_INDEX:
+         prog->gp.has_viewport = true;
+         prog->gp.viewportid = n;
          break;
       default:
          break;
@@ -170,10 +174,8 @@ nv50_fragprog_assign_slots(struct nv50_ir_prog_info *info)
 
          if (info->in[i].sn == TGSI_SEMANTIC_COLOR)
             prog->vp.bfc[info->in[i].si] = j;
-         else if (info->in[i].sn == TGSI_SEMANTIC_PRIMID) {
+         else if (info->in[i].sn == TGSI_SEMANTIC_PRIMID)
             prog->vp.attrs[2] |= NV50_3D_VP_GP_BUILTIN_ATTR_EN_PRIMITIVE_ID;
-            prog->gp.primid = j;
-         }
 
          prog->in[j].id = i;
          prog->in[j].mask = info->in[i].mask;
@@ -345,8 +347,8 @@ nv50_program_translate(struct nv50_program *prog, uint16_t chipset)
    prog->vp.clpd[0] = map_undef;
    prog->vp.clpd[1] = map_undef;
    prog->vp.psiz = map_undef;
-   prog->gp.primid = 0x80;
    prog->gp.has_layer = 0;
+   prog->gp.has_viewport = 0;
 
    info->driverPriv = prog;
 

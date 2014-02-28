@@ -38,6 +38,7 @@
 #include "util/u_math.h"
 #include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
+#include "radeon/radeon_video.h"
 #include "radeon/radeon_uvd.h"
 #include "os/os_time.h"
 
@@ -73,7 +74,7 @@ static void r600_flush(struct pipe_context *ctx, unsigned flags)
 	unsigned render_cond_mode = 0;
 	boolean render_cond_cond = FALSE;
 
-	if (rctx->b.rings.gfx.cs->cdw == rctx->initial_gfx_cs_size)
+	if (rctx->b.rings.gfx.cs->cdw == rctx->b.initial_gfx_cs_size)
 		return;
 
 	rctx->b.rings.gfx.flushing = true;
@@ -94,7 +95,7 @@ static void r600_flush(struct pipe_context *ctx, unsigned flags)
 		ctx->render_condition(ctx, render_cond, render_cond_cond, render_cond_mode);
 	}
 
-	rctx->initial_gfx_cs_size = rctx->b.rings.gfx.cs->cdw;
+	rctx->b.initial_gfx_cs_size = rctx->b.rings.gfx.cs->cdw;
 }
 
 static void r600_flush_from_st(struct pipe_context *ctx,
@@ -277,7 +278,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen, void
 	}
 
 	rctx->allocator_fetch_shader = u_suballocator_create(&rctx->b.b, 64 * 1024, 256,
-							     0, PIPE_USAGE_STATIC, FALSE);
+							     0, PIPE_USAGE_DEFAULT, FALSE);
 	if (!rctx->allocator_fetch_shader)
 		goto fail;
 
@@ -347,14 +348,17 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
 	case PIPE_CAP_USER_INDEX_BUFFERS:
 	case PIPE_CAP_USER_CONSTANT_BUFFERS:
-	case PIPE_CAP_COMPUTE:
 	case PIPE_CAP_START_INSTANCE:
 	case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
 	case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
         case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
 	case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
+        case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
 		return 1;
+
+	case PIPE_CAP_COMPUTE:
+		return rscreen->b.chip_class > R700;
 
 	case PIPE_CAP_TGSI_TEXCOORD:
 		return 0;
@@ -372,6 +376,11 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 1;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
+		if (family >= CHIP_CEDAR)
+		   return 330;
+		/* pre-evergreen geom shaders need newer kernel */
+		if (rscreen->b.info.drm_minor >= 37)
+		   return 330;
 		return 140;
 
 	/* Supported except the original R600. */
@@ -383,6 +392,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	/* Supported on Evergreen. */
 	case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
 	case PIPE_CAP_CUBE_MAP_ARRAY:
+	case PIPE_CAP_TGSI_VS_LAYER:
 		return family >= CHIP_CEDAR ? 1 : 0;
 
 	/* Unsupported features. */
@@ -392,7 +402,8 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
-	case PIPE_CAP_TGSI_VS_LAYER:
+	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
+	case PIPE_CAP_TEXTURE_GATHER_SM5:
 		return 0;
 
 	/* Stream output. */
@@ -403,6 +414,12 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
 	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
 		return 32*4;
+
+	/* Geometry shader output. */
+	case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
+		return 1024;
+	case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
+		return 16384;
 
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
@@ -415,8 +432,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
 		return rscreen->b.info.drm_minor >= 9 ?
 			(family >= CHIP_CEDAR ? 16384 : 8192) : 0;
-	case PIPE_CAP_MAX_COMBINED_SAMPLERS:
-		return 32;
 
 	/* Render targets. */
 	case PIPE_CAP_MAX_RENDER_TARGETS:
@@ -424,7 +439,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 8;
 
 	case PIPE_CAP_MAX_VIEWPORTS:
-		return 1;
+		return 16;
 
 	/* Timer queries, present when the clock frequency is non zero. */
 	case PIPE_CAP_QUERY_TIME_ELAPSED:
@@ -449,14 +464,20 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enum pipe_shader_cap param)
 {
+	struct r600_screen *rscreen = (struct r600_screen *)pscreen;
+
 	switch(shader)
 	{
 	case PIPE_SHADER_FRAGMENT:
 	case PIPE_SHADER_VERTEX:
-        case PIPE_SHADER_COMPUTE:
+	case PIPE_SHADER_COMPUTE:
 		break;
 	case PIPE_SHADER_GEOMETRY:
-		/* XXX: support and enable geometry programs */
+		if (rscreen->b.family >= CHIP_CEDAR)
+			break;
+		/* pre-evergreen geom shaders need newer kernel */
+		if (rscreen->b.info.drm_minor >= 37)
+			break;
 		return 0;
 	default:
 		/* XXX: support tessellation on Evergreen */
@@ -568,8 +589,8 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 		rscreen->b.debug_flags |= DBG_COMPUTE;
 	if (debug_get_bool_option("R600_DUMP_SHADERS", FALSE))
 		rscreen->b.debug_flags |= DBG_FS | DBG_VS | DBG_GS | DBG_PS | DBG_CS;
-	if (!debug_get_bool_option("R600_HYPERZ", TRUE))
-		rscreen->b.debug_flags |= DBG_NO_HYPERZ;
+	if (debug_get_bool_option("R600_HYPERZ", FALSE))
+		rscreen->b.debug_flags |= DBG_HYPERZ;
 	if (!debug_get_bool_option("R600_LLVM", TRUE))
 		rscreen->b.debug_flags |= DBG_NO_LLVM;
 
@@ -637,7 +658,7 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 	templ.array_size = 1;
 	templ.target = PIPE_TEXTURE_2D;
 	templ.format = PIPE_FORMAT_R8G8B8A8_UNORM;
-	templ.usage = PIPE_USAGE_STATIC;
+	templ.usage = PIPE_USAGE_DEFAULT;
 
 	struct r600_resource *res = r600_resource(rscreen->screen.resource_create(&rscreen->screen, &templ));
 	unsigned char *map = ws->buffer_map(res->cs_buf, NULL, PIPE_TRANSFER_WRITE);

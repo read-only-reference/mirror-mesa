@@ -346,7 +346,8 @@ nv50_fp_linkage_validate(struct nv50_context *nv50)
    struct nv50_varying dummy;
    int i, n, c, m;
    uint32_t primid = 0;
-   uint32_t layerid = vp->gp.layerid;
+   uint32_t layerid = 0;
+   uint32_t viewportid = 0;
    uint32_t psiz = 0x000;
    uint32_t interp = fp->fp.interp;
    uint32_t colors = fp->fp.colors;
@@ -401,17 +402,29 @@ nv50_fp_linkage_validate(struct nv50_context *nv50)
          if (vp->out[n].sn == fp->in[i].sn &&
              vp->out[n].si == fp->in[i].si)
             break;
-      if (i == fp->gp.primid) {
+      switch (fp->in[i].sn) {
+      case TGSI_SEMANTIC_PRIMID:
          primid = m;
+         break;
+      case TGSI_SEMANTIC_LAYER:
+         layerid = m;
+         break;
+      case TGSI_SEMANTIC_VIEWPORT_INDEX:
+         viewportid = m;
+         break;
       }
       m = nv50_vec4_map(map, m, lin,
                         &fp->in[i], (n < vp->out_nr) ? &vp->out[n] : &dummy);
    }
 
-   if (vp->gp.has_layer) {
-      // In GL4.x, layer can be an fp input, but not in 3.x. Make sure to add
-      // it to the output map.
-      map[m++] = layerid;
+   if (vp->gp.has_layer && !layerid) {
+      layerid = m;
+      map[m++] = vp->gp.layerid;
+   }
+
+   if (vp->gp.has_viewport && !viewportid) {
+      viewportid = m;
+      map[m++] = vp->gp.viewportid;
    }
 
    if (nv50->rast->pipe.point_size_per_vertex) {
@@ -468,11 +481,15 @@ nv50_fp_linkage_validate(struct nv50_context *nv50)
       PUSH_DATAp(push, map, n);
    }
 
-   BEGIN_NV04(push, NV50_3D(SEMANTIC_COLOR), 4);
+   BEGIN_NV04(push, NV50_3D(GP_VIEWPORT_ID_ENABLE), 5);
+   PUSH_DATA (push, vp->gp.has_viewport);
    PUSH_DATA (push, colors);
    PUSH_DATA (push, (vp->vp.clpd_nr << 8) | 4);
    PUSH_DATA (push, layerid);
    PUSH_DATA (push, psiz);
+
+   BEGIN_NV04(push, NV50_3D(SEMANTIC_VIEWPORT), 1);
+   PUSH_DATA (push, viewportid);
 
    BEGIN_NV04(push, NV50_3D(LAYER), 1);
    PUSH_DATA (push, vp->gp.has_layer << 16);

@@ -65,15 +65,17 @@ static const struct debug_named_value debug_options[] = {
 		{"direct",    FD_DBG_DIRECT, "Force inline (SS_DIRECT) state loads"},
 		{"dbypass",   FD_DBG_DBYPASS,"Disable GMEM bypass"},
 		{"fraghalf",  FD_DBG_FRAGHALF, "Use half-precision in fragment shader"},
-		{"binning",   FD_DBG_BINNING,  "Enable hw binning"},
-		{"dbinning",  FD_DBG_DBINNING, "Disable hw binning"},
+		{"nobin",     FD_DBG_NOBIN,  "Disable hw binning"},
+		{"noopt",     FD_DBG_NOOPT , "Disable optimization passes in compiler"},
+		{"optmsgs",   FD_DBG_OPTMSGS,"Enable optimizater debug messages"},
+		{"optdump",   FD_DBG_OPTDUMP,"Dump shader DAG to .dot files"},
 		DEBUG_NAMED_VALUE_END
 };
 
 DEBUG_GET_ONCE_FLAGS_OPTION(fd_mesa_debug, "FD_MESA_DEBUG", debug_options, 0)
 
 int fd_mesa_debug = 0;
-bool fd_binning_enabled = false; /* default to off for now */
+bool fd_binning_enabled = true;
 
 static const char *
 fd_screen_get_name(struct pipe_screen *pscreen)
@@ -153,7 +155,6 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
 	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
 	case PIPE_CAP_TEXTURE_SWIZZLE:
-	case PIPE_CAP_SHADER_STENCIL_EXPORT:
 	case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
 	case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
@@ -176,6 +177,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_USER_CONSTANT_BUFFERS:
 		return 1;
 
+	case PIPE_CAP_SHADER_STENCIL_EXPORT:
 	case PIPE_CAP_TGSI_TEXCOORD:
 	case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
 		return 0;
@@ -201,6 +203,9 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
 	case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
         case PIPE_CAP_TGSI_VS_LAYER:
+	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
+	case PIPE_CAP_TEXTURE_GATHER_SM5:
+        case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
 		return 0;
 
 	/* Stream output. */
@@ -210,6 +215,11 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
 		return 0;
 
+	/* Geometry shader output, unsupported. */
+	case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
+	case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
+		return 0;
+
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
 	case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
@@ -217,8 +227,6 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return MAX_MIP_LEVELS;
 	case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
 		return 9192;
-	case PIPE_CAP_MAX_COMBINED_SAMPLERS:
-		return 20;
 
 	/* Render targets. */
 	case PIPE_CAP_MAX_RENDER_TARGETS:
@@ -392,10 +400,7 @@ fd_screen_create(struct fd_device *dev)
 
 	fd_mesa_debug = debug_get_option_fd_mesa_debug();
 
-	if (fd_mesa_debug & FD_DBG_BINNING)
-		fd_binning_enabled = true;
-
-	if (fd_mesa_debug & FD_DBG_DBINNING)
+	if (fd_mesa_debug & FD_DBG_NOBIN)
 		fd_binning_enabled = false;
 
 	if (!screen)

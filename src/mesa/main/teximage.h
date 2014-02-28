@@ -66,9 +66,6 @@ _mesa_base_tex_format( struct gl_context *ctx, GLint internalFormat );
 extern GLboolean
 _mesa_is_proxy_texture(GLenum target);
 
-extern GLenum
-_mesa_get_proxy_target(GLenum target);
-
 extern struct gl_texture_image *
 _mesa_new_texture_image( struct gl_context *ctx );
 
@@ -101,11 +98,6 @@ extern void
 _mesa_clear_texture_image(struct gl_context *ctx,
                           struct gl_texture_image *texImage);
 
-
-extern struct gl_texture_object *
-_mesa_select_tex_object(struct gl_context *ctx,
-                        const struct gl_texture_unit *texUnit,
-                        GLenum target);
 
 extern struct gl_texture_object *
 _mesa_get_current_tex_object(struct gl_context *ctx, GLenum target);

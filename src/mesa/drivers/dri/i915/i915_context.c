@@ -114,8 +114,8 @@ intel_init_texture_formats(struct gl_context *ctx)
    ctx->TextureFormatSupported[MESA_FORMAT_L8A8_UNORM] = true;
 
    /* Depth and stencil */
-   ctx->TextureFormatSupported[MESA_FORMAT_Z24_UNORM_X8_UINT] = true;
    ctx->TextureFormatSupported[MESA_FORMAT_Z24_UNORM_S8_UINT] = true;
+   ctx->TextureFormatSupported[MESA_FORMAT_Z24_UNORM_X8_UINT] = true;
 
    /*
     * This was disabled in initial FBO enabling to avoid combinations
@@ -193,6 +193,7 @@ i915CreateContext(int api,
 
    ctx->Const.MaxTextureUnits = I915_TEX_UNITS;
    ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxTextureImageUnits = I915_TEX_UNITS;
+   ctx->Const.Program[MESA_SHADER_VERTEX].MaxTextureImageUnits = I915_TEX_UNITS;
    ctx->Const.MaxTextureCoordUnits = I915_TEX_UNITS;
    ctx->Const.MaxVarying = I915_TEX_UNITS;
    ctx->Const.Program[MESA_SHADER_VERTEX].MaxOutputComponents =

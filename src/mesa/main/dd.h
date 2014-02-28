@@ -182,9 +182,9 @@ struct dd_function_table {
     * GL_TEXTURE_CUBE_MAP_[POSITIVE/NEGATIVE]_[XYZ].
     * Called by glTexImage(), etc.
     */
-   mesa_format (*ChooseTextureFormat)( struct gl_context *ctx,
-                                     GLenum target, GLint internalFormat,
-                                     GLenum srcFormat, GLenum srcType );
+   mesa_format (*ChooseTextureFormat)(struct gl_context *ctx,
+                                      GLenum target, GLint internalFormat,
+                                      GLenum srcFormat, GLenum srcType );
 
    /**
     * Determine sample counts support for a particular target and format
@@ -256,6 +256,10 @@ struct dd_function_table {
 
    /**
     * Called by glGenerateMipmap() or when GL_GENERATE_MIPMAP_SGIS is enabled.
+    * Note that if the texture is a cube map, the <target> parameter will
+    * indicate which cube face to generate (GL_POSITIVE/NEGATIVE_X/Y/Z).
+    * texObj->BaseLevel is the level from which to generate the remaining
+    * mipmap levels.
     */
    void (*GenerateMipmap)(struct gl_context *ctx, GLenum target,
                           struct gl_texture_object *texObj);
@@ -395,6 +399,13 @@ struct dd_function_table {
    void (*UnmapRenderbuffer)(struct gl_context *ctx,
 			     struct gl_renderbuffer *rb);
 
+   /**
+    * Optional driver entrypoint that binds a non-texture renderbuffer's
+    * contents to a texture image.
+    */
+   GLboolean (*BindRenderbufferTexImage)(struct gl_context *ctx,
+                                         struct gl_renderbuffer *rb,
+                                         struct gl_texture_image *texImage);
    /*@}*/
 
 
@@ -403,9 +414,11 @@ struct dd_function_table {
     */
    /*@{*/
    /** Bind a vertex/fragment program */
-   void (*BindProgram)(struct gl_context *ctx, GLenum target, struct gl_program *prog);
+   void (*BindProgram)(struct gl_context *ctx, GLenum target,
+                       struct gl_program *prog);
    /** Allocate a new program */
-   struct gl_program * (*NewProgram)(struct gl_context *ctx, GLenum target, GLuint id);
+   struct gl_program * (*NewProgram)(struct gl_context *ctx, GLenum target,
+                                     GLuint id);
    /** Delete a program */
    void (*DeleteProgram)(struct gl_context *ctx, struct gl_program *prog);   
    /**
@@ -439,7 +452,8 @@ struct dd_function_table {
     * This gives drivers an opportunity to clone the IR and make their
     * own transformations on it for the purposes of code generation.
     */
-   GLboolean (*LinkShader)(struct gl_context *ctx, struct gl_shader_program *shader);
+   GLboolean (*LinkShader)(struct gl_context *ctx,
+                           struct gl_shader_program *shader);
    /*@}*/
 
    /**
@@ -457,7 +471,8 @@ struct dd_function_table {
    /** Set the blend color */
    void (*BlendColor)(struct gl_context *ctx, const GLfloat color[4]);
    /** Set the blend equation */
-   void (*BlendEquationSeparate)(struct gl_context *ctx, GLenum modeRGB, GLenum modeA);
+   void (*BlendEquationSeparate)(struct gl_context *ctx,
+                                 GLenum modeRGB, GLenum modeA);
    void (*BlendEquationSeparatei)(struct gl_context *ctx, GLuint buffer,
                                   GLenum modeRGB, GLenum modeA);
    /** Specify pixel arithmetic */
@@ -468,7 +483,7 @@ struct dd_function_table {
                               GLenum sfactorRGB, GLenum dfactorRGB,
                               GLenum sfactorA, GLenum dfactorA);
    /** Specify a plane against which all geometry is clipped */
-   void (*ClipPlane)(struct gl_context *ctx, GLenum plane, const GLfloat *equation );
+   void (*ClipPlane)(struct gl_context *ctx, GLenum plane, const GLfloat *eq);
    /** Enable and disable writing of frame buffer color components */
    void (*ColorMask)(struct gl_context *ctx, GLboolean rmask, GLboolean gmask,
                      GLboolean bmask, GLboolean amask );
@@ -489,7 +504,7 @@ struct dd_function_table {
    /** Specify the current buffer for writing */
    void (*DrawBuffer)( struct gl_context *ctx, GLenum buffer );
    /** Specify the buffers for writing for fragment programs*/
-   void (*DrawBuffers)( struct gl_context *ctx, GLsizei n, const GLenum *buffers );
+   void (*DrawBuffers)(struct gl_context *ctx, GLsizei n, const GLenum *buffers);
    /** Enable or disable server-side gl capabilities */
    void (*Enable)(struct gl_context *ctx, GLenum cap, GLboolean state);
    /** Specify fog parameters */
@@ -503,7 +518,8 @@ struct dd_function_table {
    void (*Lightfv)(struct gl_context *ctx, GLenum light,
 		   GLenum pname, const GLfloat *params );
    /** Set the lighting model parameters */
-   void (*LightModelfv)(struct gl_context *ctx, GLenum pname, const GLfloat *params);
+   void (*LightModelfv)(struct gl_context *ctx, GLenum pname,
+                        const GLfloat *params);
    /** Specify the line stipple pattern */
    void (*LineStipple)(struct gl_context *ctx, GLint factor, GLushort pattern );
    /** Specify the width of rasterized lines */
@@ -543,7 +559,7 @@ struct dd_function_table {
    void (*TexEnv)(struct gl_context *ctx, GLenum target, GLenum pname,
                   const GLfloat *param);
    /** Set texture parameters */
-   void (*TexParameter)(struct gl_context *ctx, GLenum target,
+   void (*TexParameter)(struct gl_context *ctx,
                         struct gl_texture_object *texObj,
                         GLenum pname, const GLfloat *params);
    /** Set the viewport */
@@ -555,17 +571,14 @@ struct dd_function_table {
     * \name Vertex/pixel buffer object functions
     */
    /*@{*/
-   void (*BindBuffer)( struct gl_context *ctx, GLenum target,
-		       struct gl_buffer_object *obj );
-
-   struct gl_buffer_object * (*NewBufferObject)( struct gl_context *ctx, GLuint buffer,
-						 GLenum target );
+   struct gl_buffer_object * (*NewBufferObject)(struct gl_context *ctx,
+                                                GLuint buffer, GLenum target);
    
    void (*DeleteBuffer)( struct gl_context *ctx, struct gl_buffer_object *obj );
 
-   GLboolean (*BufferData)( struct gl_context *ctx, GLenum target, GLsizeiptrARB size,
-                            const GLvoid *data, GLenum usage,
-                            struct gl_buffer_object *obj );
+   GLboolean (*BufferData)(struct gl_context *ctx, GLenum target,
+                           GLsizeiptrARB size, const GLvoid *data, GLenum usage,
+                           GLenum storageFlags, struct gl_buffer_object *obj);
 
    void (*BufferSubData)( struct gl_context *ctx, GLintptrARB offset,
 			  GLsizeiptrARB size, const GLvoid *data,
@@ -592,14 +605,17 @@ struct dd_function_table {
     */
    void * (*MapBufferRange)( struct gl_context *ctx, GLintptr offset,
                              GLsizeiptr length, GLbitfield access,
-                             struct gl_buffer_object *obj);
+                             struct gl_buffer_object *obj,
+                             gl_map_buffer_index index);
 
    void (*FlushMappedBufferRange)(struct gl_context *ctx,
                                   GLintptr offset, GLsizeiptr length,
-                                  struct gl_buffer_object *obj);
+                                  struct gl_buffer_object *obj,
+                                  gl_map_buffer_index index);
 
    GLboolean (*UnmapBuffer)( struct gl_context *ctx,
-			     struct gl_buffer_object *obj );
+			     struct gl_buffer_object *obj,
+                             gl_map_buffer_index index);
    /*@}*/
 
    /**
@@ -607,22 +623,34 @@ struct dd_function_table {
     */
    /*@{*/
    /* variations on ObjectPurgeable */
-   GLenum (*BufferObjectPurgeable)( struct gl_context *ctx, struct gl_buffer_object *obj, GLenum option );
-   GLenum (*RenderObjectPurgeable)( struct gl_context *ctx, struct gl_renderbuffer *obj, GLenum option );
-   GLenum (*TextureObjectPurgeable)( struct gl_context *ctx, struct gl_texture_object *obj, GLenum option );
+   GLenum (*BufferObjectPurgeable)(struct gl_context *ctx,
+                                   struct gl_buffer_object *obj, GLenum option);
+   GLenum (*RenderObjectPurgeable)(struct gl_context *ctx,
+                                   struct gl_renderbuffer *obj, GLenum option);
+   GLenum (*TextureObjectPurgeable)(struct gl_context *ctx,
+                                    struct gl_texture_object *obj,
+                                    GLenum option);
 
    /* variations on ObjectUnpurgeable */
-   GLenum (*BufferObjectUnpurgeable)( struct gl_context *ctx, struct gl_buffer_object *obj, GLenum option );
-   GLenum (*RenderObjectUnpurgeable)( struct gl_context *ctx, struct gl_renderbuffer *obj, GLenum option );
-   GLenum (*TextureObjectUnpurgeable)( struct gl_context *ctx, struct gl_texture_object *obj, GLenum option );
+   GLenum (*BufferObjectUnpurgeable)(struct gl_context *ctx,
+                                     struct gl_buffer_object *obj,
+                                     GLenum option);
+   GLenum (*RenderObjectUnpurgeable)(struct gl_context *ctx,
+                                     struct gl_renderbuffer *obj,
+                                     GLenum option);
+   GLenum (*TextureObjectUnpurgeable)(struct gl_context *ctx,
+                                      struct gl_texture_object *obj,
+                                      GLenum option);
    /*@}*/
 
    /**
     * \name Functions for GL_EXT_framebuffer_{object,blit,discard}.
     */
    /*@{*/
-   struct gl_framebuffer * (*NewFramebuffer)(struct gl_context *ctx, GLuint name);
-   struct gl_renderbuffer * (*NewRenderbuffer)(struct gl_context *ctx, GLuint name);
+   struct gl_framebuffer * (*NewFramebuffer)(struct gl_context *ctx,
+                                             GLuint name);
+   struct gl_renderbuffer * (*NewRenderbuffer)(struct gl_context *ctx,
+                                               GLuint name);
    void (*BindFramebuffer)(struct gl_context *ctx, GLenum target,
                            struct gl_framebuffer *drawFb,
                            struct gl_framebuffer *readFb);
@@ -643,7 +671,8 @@ struct dd_function_table {
                            GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                            GLbitfield mask, GLenum filter);
    void (*DiscardFramebuffer)(struct gl_context *ctx,
-                              GLenum target, GLsizei numAttachments, const GLenum *attachments);
+                              GLenum target, GLsizei numAttachments,
+                              const GLenum *attachments);
 
    /**
     * \name Query objects
@@ -687,18 +716,20 @@ struct dd_function_table {
     * \name Vertex Array objects
     */
    /*@{*/
-   struct gl_array_object * (*NewArrayObject)(struct gl_context *ctx, GLuint id);
-   void (*DeleteArrayObject)(struct gl_context *ctx, struct gl_array_object *obj);
-   void (*BindArrayObject)(struct gl_context *ctx, struct gl_array_object *obj);
+   struct gl_vertex_array_object * (*NewArrayObject)(struct gl_context *ctx, GLuint id);
+   void (*DeleteArrayObject)(struct gl_context *ctx, struct gl_vertex_array_object *);
+   void (*BindArrayObject)(struct gl_context *ctx, struct gl_vertex_array_object *);
    /*@}*/
 
    /**
     * \name GLSL-related functions (ARB extensions and OpenGL 2.x)
     */
    /*@{*/
-   struct gl_shader *(*NewShader)(struct gl_context *ctx, GLuint name, GLenum type);
+   struct gl_shader *(*NewShader)(struct gl_context *ctx,
+                                  GLuint name, GLenum type);
    void (*DeleteShader)(struct gl_context *ctx, struct gl_shader *shader);
-   struct gl_shader_program *(*NewShaderProgram)(struct gl_context *ctx, GLuint name);
+   struct gl_shader_program *(*NewShaderProgram)(struct gl_context *ctx,
+                                                 GLuint name);
    void (*DeleteShaderProgram)(struct gl_context *ctx,
                                struct gl_shader_program *shProg);
    void (*UseProgram)(struct gl_context *ctx, struct gl_shader_program *shProg);
@@ -805,7 +836,8 @@ struct dd_function_table {
     */
    /*@{*/
    struct gl_sync_object * (*NewSyncObject)(struct gl_context *, GLenum);
-   void (*FenceSync)(struct gl_context *, struct gl_sync_object *, GLenum, GLbitfield);
+   void (*FenceSync)(struct gl_context *, struct gl_sync_object *,
+                     GLenum, GLbitfield);
    void (*DeleteSyncObject)(struct gl_context *, struct gl_sync_object *);
    void (*CheckSync)(struct gl_context *, struct gl_sync_object *);
    void (*ClientWaitSync)(struct gl_context *, struct gl_sync_object *,
@@ -815,9 +847,11 @@ struct dd_function_table {
    /*@}*/
 
    /** GL_NV_conditional_render */
-   void (*BeginConditionalRender)(struct gl_context *ctx, struct gl_query_object *q,
+   void (*BeginConditionalRender)(struct gl_context *ctx,
+                                  struct gl_query_object *q,
                                   GLenum mode);
-   void (*EndConditionalRender)(struct gl_context *ctx, struct gl_query_object *q);
+   void (*EndConditionalRender)(struct gl_context *ctx,
+                                struct gl_query_object *q);
 
    /**
     * \name GL_OES_draw_texture interface
@@ -859,8 +893,8 @@ struct dd_function_table {
     * Begin/EndTransformFeedback block.
     */
    GLsizei (*GetTransformFeedbackVertexCount)(struct gl_context *ctx,
-                                              struct gl_transform_feedback_object *obj,
-                                              GLuint stream);
+                                       struct gl_transform_feedback_object *obj,
+                                       GLuint stream);
 
    /**
     * \name GL_NV_texture_barrier interface

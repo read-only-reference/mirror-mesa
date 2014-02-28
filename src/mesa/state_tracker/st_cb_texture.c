@@ -865,7 +865,9 @@ st_GetTexImage(struct gl_context * ctx,
    ubyte *map = NULL;
    boolean done = FALSE;
 
-   if (!st->prefer_blit_based_texture_transfer) {
+   if (!st->prefer_blit_based_texture_transfer &&
+       !_mesa_is_format_compressed(texImage->TexFormat)) {
+      /* Try to avoid the fallback if we're doing texture decompression here */
       goto fallback;
    }
 
@@ -1482,6 +1484,12 @@ st_finalize_texture(struct gl_context *ctx,
 
    if (tObj->Target == GL_TEXTURE_BUFFER) {
       struct st_buffer_object *st_obj = st_buffer_object(tObj->BufferObject);
+
+      if (!st_obj) {
+         pipe_resource_reference(&stObj->pt, NULL);
+         pipe_sampler_view_reference(&stObj->sampler_view, NULL);
+         return GL_TRUE;
+      }
 
       if (st_obj->buffer != stObj->pt) {
          pipe_resource_reference(&stObj->pt, st_obj->buffer);

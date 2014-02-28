@@ -68,8 +68,8 @@ brw_blorp_mip_info::set(struct intel_mipmap_tree *mt,
    this->mt = mt;
    this->level = level;
    this->layer = layer;
-   this->width = mt->level[level].width;
-   this->height = mt->level[level].height;
+   this->width = minify(mt->physical_width0, level - mt->first_level);
+   this->height = minify(mt->physical_height0, level - mt->first_level);
 
    intel_miptree_get_image_offset(mt, level, layer, &x_offset, &y_offset);
 }
@@ -95,7 +95,7 @@ brw_blorp_surface_info::set(struct brw_context *brw,
       this->map_stencil_as_y_tiled = true;
       this->brw_surfaceformat = BRW_SURFACEFORMAT_R8_UNORM;
       break;
-   case MESA_FORMAT_Z24_UNORM_S8_UINT:
+   case MESA_FORMAT_Z24_UNORM_X8_UINT:
       /* It would make sense to use BRW_SURFACEFORMAT_R24_UNORM_X8_TYPELESS
        * here, but unfortunately it isn't supported as a render target, which
        * would prevent us from blitting to 24-bit depth.
@@ -195,8 +195,12 @@ intel_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
    DBG("%s %s to mt %p level %d layer %d\n",
        __FUNCTION__, opname, mt, level, layer);
 
-   brw_hiz_op_params params(mt, level, layer, op);
-   brw_blorp_exec(brw, &params);
+   if (brw->gen >= 8) {
+      gen8_hiz_exec(brw, mt, level, layer, op);
+   } else {
+      brw_hiz_op_params params(mt, level, layer, op);
+      brw_blorp_exec(brw, &params);
+   }
 }
 
 } /* extern "C" */
@@ -328,7 +332,7 @@ brw_hiz_op_params::brw_hiz_op_params(struct intel_mipmap_tree *mt,
    switch (mt->format) {
    case MESA_FORMAT_Z_UNORM16:       depth_format = BRW_DEPTHFORMAT_D16_UNORM; break;
    case MESA_FORMAT_Z_FLOAT32: depth_format = BRW_DEPTHFORMAT_D32_FLOAT; break;
-   case MESA_FORMAT_Z24_UNORM_S8_UINT:    depth_format = BRW_DEPTHFORMAT_D24_UNORM_X8_UINT; break;
+   case MESA_FORMAT_Z24_UNORM_X8_UINT:    depth_format = BRW_DEPTHFORMAT_D24_UNORM_X8_UINT; break;
    default:                    assert(0); break;
    }
 }

@@ -59,13 +59,14 @@ static void r600_blitter_begin(struct pipe_context *ctx, enum r600_blitter_op op
 	util_blitter_save_vertex_buffer_slot(rctx->blitter, rctx->vertex_buffer_state.vb);
 	util_blitter_save_vertex_elements(rctx->blitter, rctx->vertex_fetch_shader.cso);
 	util_blitter_save_vertex_shader(rctx->blitter, rctx->vs_shader);
+	util_blitter_save_geometry_shader(rctx->blitter, rctx->gs_shader);
 	util_blitter_save_so_targets(rctx->blitter, rctx->b.streamout.num_targets,
 				     (struct pipe_stream_output_target**)rctx->b.streamout.targets);
 	util_blitter_save_rasterizer(rctx->blitter, rctx->rasterizer_state.cso);
 
 	if (op & R600_SAVE_FRAGMENT_STATE) {
-		util_blitter_save_viewport(rctx->blitter, &rctx->viewport.state);
-		util_blitter_save_scissor(rctx->blitter, &rctx->scissor.scissor);
+		util_blitter_save_viewport(rctx->blitter, &rctx->viewport[0].state);
+		util_blitter_save_scissor(rctx->blitter, &rctx->scissor[0].scissor);
 		util_blitter_save_fragment_shader(rctx->blitter, rctx->ps_shader);
 		util_blitter_save_blend(rctx->blitter, rctx->blend_state.cso);
 		util_blitter_save_depth_stencil_alpha(rctx->blitter, rctx->dsa_state.cso);

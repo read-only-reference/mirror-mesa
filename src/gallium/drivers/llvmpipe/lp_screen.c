@@ -106,8 +106,6 @@ static int
 llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
 {
    switch (param) {
-   case PIPE_CAP_MAX_COMBINED_SAMPLERS:
-      return 2 * PIPE_MAX_SAMPLERS;  /* VS + FS samplers */
    case PIPE_CAP_NPOT_TEXTURES:
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
       return 1;
@@ -189,6 +187,9 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MAX_STREAM_OUTPUT_SEPARATE_COMPONENTS:
    case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
       return 16*4;
+   case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
+   case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
+      return 1024;
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
       return 1;
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
@@ -234,6 +235,9 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_ENDIANNESS:
       return PIPE_ENDIAN_NATIVE;
    case PIPE_CAP_TGSI_VS_LAYER:
+   case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
+   case PIPE_CAP_TEXTURE_GATHER_SM5:
+   case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
       return 0;
    }
    /* should only get here on unhandled cases */

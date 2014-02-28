@@ -42,8 +42,6 @@ fd3_context_destroy(struct pipe_context *pctx)
 {
 	struct fd3_context *fd3_ctx = fd3_context(fd_context(pctx));
 
-	fd3_prog_fini(pctx);
-
 	util_dynarray_fini(&fd3_ctx->rbrc_patches);
 
 	fd_bo_del(fd3_ctx->vs_pvt_mem);
@@ -105,6 +103,7 @@ fd3_context_create(struct pipe_screen *pscreen, void *priv)
 
 	pctx = &fd3_ctx->base.base;
 
+	fd3_ctx->base.dev = fd_device_ref(screen->dev);
 	fd3_ctx->base.screen = fd_screen(pscreen);
 
 	pctx->destroy = fd3_context_destroy;

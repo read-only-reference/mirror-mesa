@@ -11,9 +11,9 @@ The rules-ng-ng source files this header was generated from are:
 - /home/robclark/src/freedreno/envytools/rnndb/adreno.xml               (    364 bytes, from 2013-11-30 14:47:15)
 - /home/robclark/src/freedreno/envytools/rnndb/freedreno_copyright.xml  (   1453 bytes, from 2013-03-31 16:51:27)
 - /home/robclark/src/freedreno/envytools/rnndb/adreno/a2xx.xml          (  32840 bytes, from 2014-01-05 14:44:21)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/adreno_common.xml (   8900 bytes, from 2014-01-05 14:44:21)
+- /home/robclark/src/freedreno/envytools/rnndb/adreno/adreno_common.xml (   9009 bytes, from 2014-01-11 16:56:35)
 - /home/robclark/src/freedreno/envytools/rnndb/adreno/adreno_pm4.xml    (  12362 bytes, from 2014-01-07 14:47:36)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/a3xx.xml          (  54368 bytes, from 2014-01-05 14:44:21)
+- /home/robclark/src/freedreno/envytools/rnndb/adreno/a3xx.xml          (  56345 bytes, from 2014-02-23 00:00:17)
 - /home/robclark/src/freedreno/envytools/rnndb/adreno/a4xx.xml          (   8344 bytes, from 2013-11-30 14:49:47)
 
 Copyright (C) 2013-2014 by the following authors:
@@ -169,6 +169,8 @@ enum a3xx_color_fmt {
 	RB_R8G8B8A8_UNORM = 8,
 	RB_Z16_UNORM = 12,
 	RB_A8_UNORM = 20,
+	RB_R16G16B16A16_FLOAT = 27,
+	RB_R32G32B32A32_FLOAT = 51,
 };
 
 enum a3xx_color_swap {
@@ -189,6 +191,25 @@ enum a3xx_sp_perfcounter_select {
 	SP_FS_FULL_ALU_INSTRUCTIONS = 14,
 	SP0_ICL1_MISSES = 26,
 	SP_ALU_ACTIVE_CYCLES = 29,
+};
+
+enum a3xx_rop_code {
+	ROP_CLEAR = 0,
+	ROP_NOR = 1,
+	ROP_AND_INVERTED = 2,
+	ROP_COPY_INVERTED = 3,
+	ROP_AND_REVERSE = 4,
+	ROP_INVERT = 5,
+	ROP_XOR = 6,
+	ROP_NAND = 7,
+	ROP_AND = 8,
+	ROP_EQUIV = 9,
+	ROP_NOOP = 10,
+	ROP_OR_INVERTED = 11,
+	ROP_COPY = 12,
+	ROP_OR_REVERSE = 13,
+	ROP_OR = 14,
+	ROP_SET = 15,
 };
 
 enum adreno_rb_copy_control_mode {
@@ -556,6 +577,9 @@ static inline uint32_t REG_A3XX_CP_PROTECT_REG(uint32_t i0) { return 0x00000460 
 #define A3XX_GRAS_CL_CLIP_CNTL_VP_CLIP_CODE_IGNORE		0x00080000
 #define A3XX_GRAS_CL_CLIP_CNTL_VP_XFORM_DISABLE			0x00100000
 #define A3XX_GRAS_CL_CLIP_CNTL_PERSP_DIVISION_DISABLE		0x00200000
+#define A3XX_GRAS_CL_CLIP_CNTL_ZCOORD				0x00800000
+#define A3XX_GRAS_CL_CLIP_CNTL_WCOORD				0x01000000
+#define A3XX_GRAS_CL_CLIP_CNTL_ZCLIP_DISABLE			0x02000000
 
 #define REG_A3XX_GRAS_CL_GB_CLIP_ADJ				0x00002044
 #define A3XX_GRAS_CL_GB_CLIP_ADJ_HORZ__MASK			0x000003ff
@@ -743,6 +767,7 @@ static inline uint32_t A3XX_RB_MODE_CONTROL_RENDER_MODE(enum a3xx_render_mode va
 #define A3XX_RB_MODE_CONTROL_PACKER_TIMER_ENABLE		0x00010000
 
 #define REG_A3XX_RB_RENDER_CONTROL				0x000020c1
+#define A3XX_RB_RENDER_CONTROL_FACENESS				0x00000008
 #define A3XX_RB_RENDER_CONTROL_BIN_WIDTH__MASK			0x00000ff0
 #define A3XX_RB_RENDER_CONTROL_BIN_WIDTH__SHIFT			4
 static inline uint32_t A3XX_RB_RENDER_CONTROL_BIN_WIDTH(uint32_t val)
@@ -751,6 +776,10 @@ static inline uint32_t A3XX_RB_RENDER_CONTROL_BIN_WIDTH(uint32_t val)
 }
 #define A3XX_RB_RENDER_CONTROL_DISABLE_COLOR_PIPE		0x00001000
 #define A3XX_RB_RENDER_CONTROL_ENABLE_GMEM			0x00002000
+#define A3XX_RB_RENDER_CONTROL_XCOORD				0x00004000
+#define A3XX_RB_RENDER_CONTROL_YCOORD				0x00008000
+#define A3XX_RB_RENDER_CONTROL_ZCOORD				0x00010000
+#define A3XX_RB_RENDER_CONTROL_WCOORD				0x00020000
 #define A3XX_RB_RENDER_CONTROL_ALPHA_TEST			0x00400000
 #define A3XX_RB_RENDER_CONTROL_ALPHA_TEST_FUNC__MASK		0x07000000
 #define A3XX_RB_RENDER_CONTROL_ALPHA_TEST_FUNC__SHIFT		24
@@ -796,7 +825,7 @@ static inline uint32_t REG_A3XX_RB_MRT_CONTROL(uint32_t i0) { return 0x000020c4 
 #define A3XX_RB_MRT_CONTROL_BLEND2				0x00000020
 #define A3XX_RB_MRT_CONTROL_ROP_CODE__MASK			0x00000f00
 #define A3XX_RB_MRT_CONTROL_ROP_CODE__SHIFT			8
-static inline uint32_t A3XX_RB_MRT_CONTROL_ROP_CODE(uint32_t val)
+static inline uint32_t A3XX_RB_MRT_CONTROL_ROP_CODE(enum a3xx_rop_code val)
 {
 	return ((val) << A3XX_RB_MRT_CONTROL_ROP_CODE__SHIFT) & A3XX_RB_MRT_CONTROL_ROP_CODE__MASK;
 }
@@ -1019,6 +1048,7 @@ static inline uint32_t A3XX_RB_COPY_DEST_INFO_ENDIAN(enum adreno_rb_surface_endi
 }
 
 #define REG_A3XX_RB_DEPTH_CONTROL				0x00002100
+#define A3XX_RB_DEPTH_CONTROL_FRAG_WRITES_Z			0x00000001
 #define A3XX_RB_DEPTH_CONTROL_Z_ENABLE				0x00000002
 #define A3XX_RB_DEPTH_CONTROL_Z_WRITE_ENABLE			0x00000004
 #define A3XX_RB_DEPTH_CONTROL_EARLY_Z_DISABLE			0x00000008
@@ -1248,6 +1278,7 @@ static inline uint32_t A3XX_HLSQ_CONTROL_1_REG_VSTHREADSIZE(enum a3xx_threadsize
 }
 #define A3XX_HLSQ_CONTROL_1_REG_VSSUPERTHREADENABLE		0x00000100
 #define A3XX_HLSQ_CONTROL_1_REG_RESERVED1			0x00000200
+#define A3XX_HLSQ_CONTROL_1_REG_ZWCOORD				0x02000000
 
 #define REG_A3XX_HLSQ_CONTROL_2_REG				0x00002202
 #define A3XX_HLSQ_CONTROL_2_REG_PRIMALLOCTHRESHOLD__MASK	0xfc000000
@@ -1258,6 +1289,12 @@ static inline uint32_t A3XX_HLSQ_CONTROL_2_REG_PRIMALLOCTHRESHOLD(uint32_t val)
 }
 
 #define REG_A3XX_HLSQ_CONTROL_3_REG				0x00002203
+#define A3XX_HLSQ_CONTROL_3_REG_REGID__MASK			0x000000ff
+#define A3XX_HLSQ_CONTROL_3_REG_REGID__SHIFT			0
+static inline uint32_t A3XX_HLSQ_CONTROL_3_REG_REGID(uint32_t val)
+{
+	return ((val) << A3XX_HLSQ_CONTROL_3_REG_REGID__SHIFT) & A3XX_HLSQ_CONTROL_3_REG_REGID__MASK;
+}
 
 #define REG_A3XX_HLSQ_VS_CONTROL_REG				0x00002204
 #define A3XX_HLSQ_VS_CONTROL_REG_CONSTLENGTH__MASK		0x00000fff
@@ -1818,6 +1855,13 @@ static inline uint32_t A3XX_SP_FS_OBJ_OFFSET_REG_SHADEROBJOFFSET(uint32_t val)
 #define REG_A3XX_SP_FS_FLAT_SHAD_MODE_REG_1			0x000022e9
 
 #define REG_A3XX_SP_FS_OUTPUT_REG				0x000022ec
+#define A3XX_SP_FS_OUTPUT_REG_DEPTH_ENABLE			0x00000080
+#define A3XX_SP_FS_OUTPUT_REG_DEPTH_REGID__MASK			0x0000ff00
+#define A3XX_SP_FS_OUTPUT_REG_DEPTH_REGID__SHIFT		8
+static inline uint32_t A3XX_SP_FS_OUTPUT_REG_DEPTH_REGID(uint32_t val)
+{
+	return ((val) << A3XX_SP_FS_OUTPUT_REG_DEPTH_REGID__SHIFT) & A3XX_SP_FS_OUTPUT_REG_DEPTH_REGID__MASK;
+}
 
 static inline uint32_t REG_A3XX_SP_FS_MRT(uint32_t i0) { return 0x000022f0 + 0x1*i0; }
 

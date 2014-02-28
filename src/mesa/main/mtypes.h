@@ -406,9 +406,10 @@ typedef enum
    MESA_SHADER_VERTEX = 0,
    MESA_SHADER_GEOMETRY = 1,
    MESA_SHADER_FRAGMENT = 2,
+   MESA_SHADER_COMPUTE = 3,
 } gl_shader_stage;
 
-#define MESA_SHADER_STAGES (MESA_SHADER_FRAGMENT + 1)
+#define MESA_SHADER_STAGES (MESA_SHADER_COMPUTE + 1)
 
 
 /**
@@ -1423,9 +1424,6 @@ struct gl_transform_attrib
    GLboolean RescaleNormals;			/**< GL_EXT_rescale_normal */
    GLboolean RasterPositionUnclipped;           /**< GL_IBM_rasterpos_clip */
    GLboolean DepthClamp;			/**< GL_ARB_depth_clamp */
-
-   GLfloat CullEyePos[4];
-   GLfloat CullObjPos[4];
 };
 
 
@@ -1441,6 +1439,25 @@ struct gl_viewport_attrib
 };
 
 
+typedef enum {
+   MAP_USER,
+   MAP_INTERNAL,
+
+   MAP_COUNT
+} gl_map_buffer_index;
+
+
+/**
+ * Fields describing a mapped buffer range.
+ */
+struct gl_buffer_mapping {
+   GLbitfield AccessFlags; /**< Mask of GL_MAP_x_BIT flags */
+   GLvoid *Pointer;     /**< User-space address of mapping */
+   GLintptr Offset;     /**< Mapped offset */
+   GLsizeiptr Length;   /**< Mapped length */
+};
+
+
 /**
  * GL_ARB_vertex/pixel_buffer_object buffer object
  */
@@ -1451,18 +1468,15 @@ struct gl_buffer_object
    GLuint Name;
    GLchar *Label;       /**< GL_KHR_debug */
    GLenum Usage;        /**< GL_STREAM_DRAW_ARB, GL_STREAM_READ_ARB, etc. */
+   GLbitfield StorageFlags; /**< GL_MAP_PERSISTENT_BIT, etc. */
    GLsizeiptrARB Size;  /**< Size of buffer storage in bytes */
    GLubyte *Data;       /**< Location of storage either in RAM or VRAM. */
-   /** Fields describing a mapped buffer */
-   /*@{*/
-   GLbitfield AccessFlags; /**< Mask of GL_MAP_x_BIT flags */
-   GLvoid *Pointer;     /**< User-space address of mapping */
-   GLintptr Offset;     /**< Mapped offset */
-   GLsizeiptr Length;   /**< Mapped length */
-   /*@}*/
    GLboolean DeletePending;   /**< true if buffer object is removed from the hash */
    GLboolean Written;   /**< Ever written to? (for debugging) */
    GLboolean Purgeable; /**< Is the buffer purgeable under memory pressure? */
+   GLboolean Immutable; /**< GL_ARB_buffer_storage */
+
+   struct gl_buffer_mapping Mappings[MAP_COUNT];
 };
 
 
@@ -1551,12 +1565,13 @@ struct gl_vertex_buffer_binding
 
 
 /**
- * Collection of vertex arrays.  Defined by the GL_APPLE_vertex_array_object
- * extension, but a nice encapsulation in any case.
+ * A representation of "Vertex Array Objects" (VAOs) from OpenGL 3.1+,
+ * GL_ARB_vertex_array_object, or the original GL_APPLE_vertex_array_object
+ * extension.
  */
-struct gl_array_object
+struct gl_vertex_array_object
 {
-   /** Name of the array object as received from glGenVertexArrayAPPLE. */
+   /** Name of the VAO as received from glGenVertexArray. */
    GLuint Name;
    GLchar *Label;       /**< GL_KHR_debug */
 
@@ -1584,7 +1599,12 @@ struct gl_array_object
     */
    GLboolean EverBound;
 
-   /** Derived vertex attribute arrays */
+   /**
+    * Derived vertex attribute arrays
+    *
+    * This is a legacy data structure created from gl_vertex_attrib_array and
+    * gl_vertex_buffer_binding, for compatibility with existing driver code.
+    */
    struct gl_client_array _VertexAttrib[VERT_ATTRIB_MAX];
 
    /** Vertex attribute arrays */
@@ -1605,7 +1625,8 @@ struct gl_array_object
     */
    GLuint _MaxElement;
 
-   struct gl_buffer_object *ElementArrayBufferObj;
+   /** The index buffer (also known as the element array buffer in OpenGL). */
+   struct gl_buffer_object *IndexBufferObj;
 };
 
 
@@ -1615,10 +1636,10 @@ struct gl_array_object
 struct gl_array_attrib
 {
    /** Currently bound array object. See _mesa_BindVertexArrayAPPLE() */
-   struct gl_array_object *ArrayObj;
+   struct gl_vertex_array_object *VAO;
 
    /** The default vertex array object */
-   struct gl_array_object *DefaultArrayObj;
+   struct gl_vertex_array_object *DefaultVAO;
 
    /** Array objects (GL_ARB/APPLE_vertex_array_object) */
    struct _mesa_HashTable *Objects;
@@ -2008,6 +2029,7 @@ typedef enum
    SYSTEM_VALUE_SAMPLE_ID,      /**< Fragment shader only */
    SYSTEM_VALUE_SAMPLE_POS,     /**< Fragment shader only */
    SYSTEM_VALUE_SAMPLE_MASK_IN, /**< Fragment shader only */
+   SYSTEM_VALUE_INVOCATION_ID,  /**< Geometry shader only */
    SYSTEM_VALUE_MAX             /**< Number of values */
 } gl_system_value;
 
@@ -2138,6 +2160,7 @@ struct gl_geometry_program
 
    GLint VerticesIn;
    GLint VerticesOut;
+   GLint Invocations;
    GLenum InputType;  /**< GL_POINTS, GL_LINES, GL_LINES_ADJACENCY_ARB,
                            GL_TRIANGLES, or GL_TRIANGLES_ADJACENCY_ARB */
    GLenum OutputType; /**< GL_POINTS, GL_LINE_STRIP or GL_TRIANGLE_STRIP */
@@ -2173,6 +2196,18 @@ struct gl_fragment_program
     * uses sample interpolation, 0 otherwise.  Unused inputs are 0.
     */
    GLbitfield64 IsSample;
+};
+
+
+/** Compute program object */
+struct gl_compute_program
+{
+   struct gl_program Base;   /**< base class */
+
+   /**
+    * Size specified using local_size_{x,y,z}.
+    */
+   unsigned LocalSize[3];
 };
 
 
@@ -2402,6 +2437,11 @@ struct gl_shader
    struct {
       GLint VerticesOut;
       /**
+       * 0 - Invocations count not declared in shader, or
+       * 1 .. MAX_GEOMETRY_SHADER_INVOCATIONS
+       */
+      GLint Invocations;
+      /**
        * GL_POINTS, GL_LINES, GL_LINES_ADJACENCY, GL_TRIANGLES, or
        * GL_TRIANGLES_ADJACENCY, or PRIM_UNKNOWN if it's not set in this
        * shader.
@@ -2439,6 +2479,17 @@ struct gl_shader
     * ImageAccess arrays above.
     */
    GLuint NumImages;
+
+   /**
+    * Compute shader state from ARB_compute_shader layout qualifiers.
+    */
+   struct {
+      /**
+       * Size specified using local_size_{x,y,z}, or all 0's to indicate that
+       * it's not set in this shader.
+       */
+      unsigned LocalSize[3];
+   } Comp;
 };
 
 
@@ -2551,6 +2602,12 @@ struct gl_shader_program
     */
    GLboolean InternalSeparateShader;
 
+   /**
+    * Indicates whether program can be bound for individual pipeline stages
+    * using UseProgramStages after it is next linked.
+    */
+   GLboolean SeparateShader;
+
    GLuint NumShaders;          /**< number of attached shaders */
    struct gl_shader **Shaders; /**< List of attached the shaders */
 
@@ -2599,6 +2656,10 @@ struct gl_shader_program
    struct {
       GLint VerticesIn;
       GLint VerticesOut;
+      /**
+       * 1 .. MAX_GEOMETRY_SHADER_INVOCATIONS
+       */
+      GLint Invocations;
       GLenum InputType;  /**< GL_POINTS, GL_LINES, GL_LINES_ADJACENCY_ARB,
                               GL_TRIANGLES, or GL_TRIANGLES_ADJACENCY_ARB */
       GLenum OutputType; /**< GL_POINTS, GL_LINE_STRIP or GL_TRIANGLE_STRIP */
@@ -2622,6 +2683,18 @@ struct gl_shader_program
       GLuint ClipDistanceArraySize; /**< Size of the gl_ClipDistance array, or
                                          0 if not present. */
    } Vert;
+
+   /**
+    * Compute shader state - copied into gl_compute_program by
+    * _mesa_copy_linked_program_data().
+    */
+   struct {
+      /**
+       * If this shader contains a compute stage, size specified using
+       * local_size_{x,y,z}.  Otherwise undefined.
+       */
+      unsigned LocalSize[3];
+   } Comp;
 
    /* post-link info: */
    unsigned NumUserUniformStorage;
@@ -2706,9 +2779,19 @@ struct gl_shader_program
 
 /**
  * Context state for GLSL vertex/fragment shaders.
+ * Extended to support pipeline object
  */
-struct gl_shader_state
+struct gl_pipeline_object
 {
+   /** Name of the pipeline object as received from glGenProgramPipelines.
+    * It would be 0 for shaders without separate shader objects.
+    */
+   GLuint Name;
+
+   GLint RefCount;
+
+   _glthread_Mutex Mutex;
+
    /**
     * Programs used for rendering
     *
@@ -2728,8 +2811,21 @@ struct gl_shader_state
    struct gl_shader_program *ActiveProgram;
 
    GLbitfield Flags;                    /**< Mask of GLSL_x flags */
+
+   GLboolean EverBound;                 /**< Has the pipeline object been created */
 };
 
+/**
+ * Context state for GLSL pipeline shaders.
+ */
+struct gl_pipeline_shader_state
+{
+   /** Currently bound pipeline object. See _mesa_BindProgramPipeline() */
+   struct gl_pipeline_object *Current;
+
+   /** Pipeline objects */
+   struct _mesa_HashTable *Objects;
+};
 
 /**
  * Compiler options for a single GLSL shaders type
@@ -3366,6 +3462,15 @@ struct gl_constants
    GLuint MaxCombinedImageUnitsAndFragmentOutputs;
    GLuint MaxImageSamples;
    GLuint MaxCombinedImageUniforms;
+
+   /** GL_ARB_compute_shader */
+   GLuint MaxComputeWorkGroupCount[3]; /* Array of x, y, z dimensions */
+   GLuint MaxComputeWorkGroupSize[3]; /* Array of x, y, z dimensions */
+   GLuint MaxComputeWorkGroupInvocations;
+
+   /** GL_ARB_gpu_shader5 */
+   GLfloat MinFragmentInterpolationOffset;
+   GLfloat MaxFragmentInterpolationOffset;
 };
 
 
@@ -3384,7 +3489,9 @@ struct gl_extensions
    GLboolean ARB_arrays_of_arrays;
    GLboolean ARB_base_instance;
    GLboolean ARB_blend_func_extended;
+   GLboolean ARB_buffer_storage;
    GLboolean ARB_color_buffer_float;
+   GLboolean ARB_compute_shader;
    GLboolean ARB_conservative_depth;
    GLboolean ARB_depth_buffer_float;
    GLboolean ARB_depth_clamp;
@@ -3401,7 +3508,6 @@ struct gl_extensions
    GLboolean ARB_explicit_attrib_location;
    GLboolean ARB_geometry_shader4;
    GLboolean ARB_gpu_shader5;
-   GLboolean ARB_half_float_pixel;
    GLboolean ARB_half_float_vertex;
    GLboolean ARB_instanced_arrays;
    GLboolean ARB_internalformat_query;
@@ -3411,6 +3517,7 @@ struct gl_extensions
    GLboolean ARB_point_sprite;
    GLboolean ARB_sample_shading;
    GLboolean ARB_seamless_cube_map;
+   GLboolean ARB_separate_shader_objects;
    GLboolean ARB_shader_atomic_counters;
    GLboolean ARB_shader_bit_encoding;
    GLboolean ARB_shader_image_load_store;
@@ -4020,7 +4127,8 @@ struct gl_context
    struct gl_geometry_program_state GeometryProgram;
    struct gl_ati_fragment_shader_state ATIFragmentShader;
 
-   struct gl_shader_state Shader; /**< GLSL shader object state */
+   struct gl_pipeline_shader_state Pipeline; /**< GLSL pipeline shader object state */
+   struct gl_pipeline_object Shader; /**< GLSL shader object state */
    struct gl_shader_compiler_options ShaderCompilerOptions[MESA_SHADER_STAGES];
 
    struct gl_query_state Query;  /**< occlusion, timer queries */
@@ -4082,7 +4190,7 @@ struct gl_context
    GLuint ErrorDebugCount;
 
    /* GL_ARB_debug_output/GL_KHR_debug */
-   struct gl_debug_state Debug;
+   struct gl_debug_state *Debug;
 
    GLenum RenderMode;        /**< either GL_RENDER, GL_SELECT, GL_FEEDBACK */
    GLbitfield NewState;      /**< bitwise-or of _NEW_* flags */

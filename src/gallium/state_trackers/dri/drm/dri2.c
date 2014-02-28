@@ -777,6 +777,7 @@ dri2_dup_image(__DRIimage *image, void *loaderPrivate)
    pipe_resource_reference(&img->texture, image->texture);
    img->level = image->level;
    img->layer = image->layer;
+   img->dri_format = image->dri_format;
    /* This should be 0 for sub images, but dup is also used for base images. */
    img->dri_components = image->dri_components;
    img->loader_private = loaderPrivate;
@@ -1052,7 +1053,6 @@ dri2_init_screen(__DRIscreen * sPriv)
       screen->default_throttle_frames = throttle_ret->val.val_int;
    }
 
-#ifdef DRM_CAP_PRIME /* Old libdrm? */
    if (dmabuf_ret && dmabuf_ret->val.val_bool) {
       uint64_t cap;
 
@@ -1063,7 +1063,6 @@ dri2_init_screen(__DRIscreen * sPriv)
          dri2ImageExtension.createImageFromFds = dri2_from_fds;
       }
    }
-#endif /* DRM_CAP_PRIME */
 
    sPriv->extensions = dri_screen_extensions;
 

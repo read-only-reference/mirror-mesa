@@ -61,6 +61,7 @@ extern "C" {
 #include "intel_debug.h"
 #include "intel_screen.h"
 #include "intel_tex_obj.h"
+#include "intel_resolve_map.h"
 
 /* Glossary:
  *
@@ -316,6 +317,14 @@ struct brw_fragment_program {
    GLuint id;  /**< serial no. to identify frag progs, never re-used */
 };
 
+
+/** Subclass of Mesa compute program */
+struct brw_compute_program {
+   struct gl_compute_program program;
+   unsigned id;  /**< serial no. to identify compute progs, never re-used */
+};
+
+
 struct brw_shader {
    struct gl_shader base;
 
@@ -323,8 +332,7 @@ struct brw_shader {
 };
 
 /* Note: If adding fields that need anything besides a normal memcmp() for
- * comparing them, be sure to go fix the the stage-specific
- * prog_data_compare().
+ * comparing them, be sure to go fix brw_stage_prog_data_compare().
  */
 struct brw_stage_prog_data {
    struct {
@@ -342,6 +350,18 @@ struct brw_stage_prog_data {
       uint32_t shader_time_start;
       /** @} */
    } binding_table;
+
+   GLuint nr_params;       /**< number of float params/constants */
+   GLuint nr_pull_params;
+
+   /* Pointers to tracked values (only valid once
+    * _mesa_load_state_parameters has been called at runtime).
+    *
+    * These must be the last fields of the struct (see
+    * brw_stage_prog_data_compare()).
+    */
+   const float **param;
+   const float **pull_param;
 };
 
 /* Data about a particular attempt to compile a program.  Note that
@@ -372,8 +392,6 @@ struct brw_wm_prog_data {
       /** @} */
    } binding_table;
 
-   GLuint nr_params;       /**< number of float params/constants */
-   GLuint nr_pull_params;
    bool dual_src_blend;
    bool uses_pos_offset;
    bool uses_omask;
@@ -391,15 +409,6 @@ struct brw_wm_prog_data {
     * For varying slots that are not used by the FS, the value is -1.
     */
    int urb_setup[VARYING_SLOT_MAX];
-
-   /* Pointers to tracked values (only valid once
-    * _mesa_load_state_parameters has been called at runtime).
-    *
-    * These must be the last fields of the struct (see
-    * brw_wm_prog_data_compare()).
-    */
-   const float **param;
-   const float **pull_param;
 };
 
 /**
@@ -581,8 +590,6 @@ struct brw_vec4_prog_data {
    GLuint curb_read_length;
    GLuint urb_read_length;
    GLuint total_grf;
-   GLuint nr_params;       /**< number of float params/constants */
-   GLuint nr_pull_params; /**< number of dwords referenced by pull_param[] */
    GLuint total_scratch;
 
    /* Used for calculating urb partitions.  In the VS, this is the size of the
@@ -590,10 +597,6 @@ struct brw_vec4_prog_data {
     * is the size of the URB entry used for output.
     */
    GLuint urb_entry_size;
-
-   /* These pointers must appear last.  See brw_vec4_prog_data_compare(). */
-   const float **param;
-   const float **pull_param;
 };
 
 
@@ -638,6 +641,8 @@ struct brw_gs_prog_data
    unsigned control_data_format;
 
    bool include_primitive_id;
+
+   int invocations;
 
    /**
     * True if the thread should be dispatched in DUAL_INSTANCE mode, false if
@@ -897,6 +902,9 @@ struct brw_transform_feedback_object {
 
    /** A buffer to hold SO_WRITE_OFFSET(n) values while paused. */
    drm_intel_bo *offset_bo;
+
+   /** If true, SO_WRITE_OFFSET(n) should be reset to zero at next use. */
+   bool zero_offsets;
 
    /** The most recent primitive mode (GL_TRIANGLES/GL_POINTS/GL_LINES). */
    GLenum primitive_mode;
@@ -1564,6 +1572,13 @@ void brw_write_depth_count(struct brw_context *brw, drm_intel_bo *bo, int idx);
 void brw_store_register_mem64(struct brw_context *brw,
                               drm_intel_bo *bo, uint32_t reg, int idx);
 
+/** intel_batchbuffer.c */
+void brw_load_register_mem(struct brw_context *brw,
+                           uint32_t reg,
+                           drm_intel_bo *bo,
+                           uint32_t read_domains, uint32_t write_domain,
+                           uint32_t offset);
+
 /*======================================================================
  * brw_state_dump.c
  */
@@ -1617,6 +1632,7 @@ gl_clip_plane *brw_select_clip_planes(struct gl_context *ctx);
 unsigned brw_get_vertex_surface_type(struct brw_context *brw,
                                      const struct gl_client_array *glarray);
 unsigned brw_get_index_type(GLenum type);
+void brw_prepare_vertices(struct brw_context *brw);
 
 /* brw_wm_surface_state.c */
 void brw_init_surface_formats(struct brw_context *brw);
@@ -1647,12 +1663,19 @@ void brw_upload_abo_surfaces(struct brw_context *brw,
 bool brw_is_hiz_depth_format(struct brw_context *ctx, mesa_format format);
 bool brw_render_target_supported(struct brw_context *brw,
                                  struct gl_renderbuffer *rb);
+uint32_t brw_depth_format(struct brw_context *brw, mesa_format format);
 
 /* brw_performance_monitor.c */
 void brw_init_performance_monitors(struct brw_context *brw);
 void brw_dump_perf_monitors(struct brw_context *brw);
 void brw_perf_monitor_new_batch(struct brw_context *brw);
 void brw_perf_monitor_finish_batch(struct brw_context *brw);
+
+/* intel_buffer_objects.c */
+int brw_bo_map(struct brw_context *brw, drm_intel_bo *bo, int write_enable,
+               const char *bo_name);
+int brw_bo_map_gtt(struct brw_context *brw, drm_intel_bo *bo,
+                   const char *bo_name);
 
 /* intel_extensions.c */
 extern void intelInitExtensions(struct gl_context *ctx);
@@ -1727,6 +1750,10 @@ gen6_get_sample_position(struct gl_context *ctx,
                          struct gl_framebuffer *fb,
                          GLuint index,
                          GLfloat *result);
+
+/* gen8_multisample_state.c */
+void gen8_emit_3dstate_multisample(struct brw_context *brw, unsigned num_samp);
+void gen8_emit_3dstate_sample_pattern(struct brw_context *brw);
 
 /* gen7_urb.c */
 void
@@ -1816,7 +1843,6 @@ brw_program_reloc(struct brw_context *brw, uint32_t state_offset,
 bool brw_do_cubemap_normalize(struct exec_list *instructions);
 bool brw_lower_texture_gradients(struct brw_context *brw,
                                  struct exec_list *instructions);
-bool brw_do_lower_offset_arrays(struct exec_list *instructions);
 bool brw_do_lower_unnormalized_offset(struct exec_list *instructions);
 
 struct opcode_desc {
@@ -1851,6 +1877,18 @@ gen7_emit_depth_stencil_hiz(struct brw_context *brw,
                             bool hiz, bool separate_stencil,
                             uint32_t width, uint32_t height,
                             uint32_t tile_x, uint32_t tile_y);
+void
+gen8_emit_depth_stencil_hiz(struct brw_context *brw,
+                            struct intel_mipmap_tree *depth_mt,
+                            uint32_t depth_offset, uint32_t depthbuffer_format,
+                            uint32_t depth_surface_type,
+                            struct intel_mipmap_tree *stencil_mt,
+                            bool hiz, bool separate_stencil,
+                            uint32_t width, uint32_t height,
+                            uint32_t tile_x, uint32_t tile_y);
+
+void gen8_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
+                   unsigned int level, unsigned int layer, enum gen6_hiz_op op);
 
 extern const GLuint prim_to_hw_prim[GL_TRIANGLE_STRIP_ADJACENCY+1];
 

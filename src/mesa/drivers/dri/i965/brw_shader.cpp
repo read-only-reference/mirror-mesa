@@ -145,7 +145,6 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       const int bitfield_insert = brw->gen >= 7
                                   ? BITFIELD_INSERT_TO_BFM_BFI
                                   : 0;
-      const int lrp_to_arith = brw->gen < 6 ? LRP_TO_ARITH : 0;
       lower_instructions(shader->base.ir,
 			 MOD_TO_FRACT |
 			 DIV_TO_MUL_RCP |
@@ -153,7 +152,6 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 			 EXP_TO_EXP2 |
 			 LOG_TO_LOG2 |
                          bitfield_insert |
-                         lrp_to_arith |
                          LDEXP_TO_ARITH);
 
       /* Pre-gen6 HW can only nest if-statements 16 deep.  Beyond this,
@@ -167,7 +165,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       do_vec_index_to_cond_assign(shader->base.ir);
       lower_vector_insert(shader->base.ir, true);
       brw_do_cubemap_normalize(shader->base.ir);
-      brw_do_lower_offset_arrays(shader->base.ir);
+      lower_offset_arrays(shader->base.ir);
       brw_do_lower_unnormalized_offset(shader->base.ir);
       lower_noise(shader->base.ir);
       lower_quadop_vector(shader->base.ir, false);
@@ -251,27 +249,26 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       _mesa_reference_program(ctx, &prog, NULL);
 
       if (ctx->Shader.Flags & GLSL_DUMP) {
-         printf("\n");
-         printf("GLSL IR for linked %s program %d:\n",
-                _mesa_shader_stage_to_string(shader->base.Stage),
-                shProg->Name);
-         _mesa_print_ir(shader->base.ir, NULL);
-         printf("\n");
+         fprintf(stderr, "\n");
+         fprintf(stderr, "GLSL IR for linked %s program %d:\n",
+                 _mesa_shader_stage_to_string(shader->base.Stage),
+                 shProg->Name);
+         _mesa_print_ir(stderr, shader->base.ir, NULL);
+         fprintf(stderr, "\n");
       }
    }
 
-   if (ctx->Shader.Flags & GLSL_DUMP) {
+   if ((ctx->Shader.Flags & GLSL_DUMP) && shProg->Name != 0) {
       for (unsigned i = 0; i < shProg->NumShaders; i++) {
          const struct gl_shader *sh = shProg->Shaders[i];
          if (!sh)
             continue;
 
-         printf("GLSL %s shader %d source for linked program %d:\n",
-                _mesa_shader_stage_to_string(sh->Stage),
-                i,
-                shProg->Name);
-         printf("%s", sh->Source);
-         printf("\n");
+         fprintf(stderr, "GLSL %s shader %d source for linked program %d:\n",
+                 _mesa_shader_stage_to_string(sh->Stage),
+                 i, shProg->Name);
+         fprintf(stderr, "%s", sh->Source);
+         fprintf(stderr, "\n");
       }
    }
 
@@ -302,6 +299,8 @@ brw_type_for_base_type(const struct glsl_type *type)
        * dereferenced into.  BRW_REGISTER_TYPE_UD seems like a likely
        * way to trip up if we don't.
        */
+      return BRW_REGISTER_TYPE_UD;
+   case GLSL_TYPE_IMAGE:
       return BRW_REGISTER_TYPE_UD;
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
@@ -525,6 +524,8 @@ brw_instruction_name(enum opcode op)
       return "prepare_channel_masks";
    case GS_OPCODE_SET_CHANNEL_MASKS:
       return "set_channel_masks";
+   case GS_OPCODE_GET_INSTANCE_ID:
+      return "get_instance_id";
 
    default:
       /* Yes, this leaks.  It's in debug code, it should never occur, and if
@@ -664,7 +665,7 @@ backend_visitor::dump_instructions()
    int ip = 0;
    foreach_list(node, &this->instructions) {
       backend_instruction *inst = (backend_instruction *)node;
-      printf("%d: ", ip++);
+      fprintf(stderr, "%d: ", ip++);
       dump_instruction(inst);
    }
 }
@@ -720,5 +721,5 @@ backend_visitor::assign_common_binding_table_offsets(uint32_t next_binding_table
 
    assert(next_binding_table_offset <= BRW_MAX_SURFACES);
 
-   /* prog_data->base.binding_table.size will be set by mark_surface_used. */
+   /* prog_data->base.binding_table.size will be set by brw_mark_surface_used. */
 }

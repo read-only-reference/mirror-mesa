@@ -484,7 +484,6 @@ static void si_update_fb_rs_state(struct si_context *sctx)
 {
 	struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
 	struct si_pm4_state *pm4;
-	unsigned offset_db_fmt_cntl = 0, depth;
 	float offset_units;
 
 	if (!rs || !sctx->framebuffer.zsbuf)
@@ -496,17 +495,13 @@ static void si_update_fb_rs_state(struct si_context *sctx)
 	case PIPE_FORMAT_X8Z24_UNORM:
 	case PIPE_FORMAT_Z24X8_UNORM:
 	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
-		depth = -24;
 		offset_units *= 2.0f;
 		break;
 	case PIPE_FORMAT_Z32_FLOAT:
 	case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
-		depth = -23;
 		offset_units *= 1.0f;
-		offset_db_fmt_cntl |= S_028B78_POLY_OFFSET_DB_IS_FLOAT_FMT(1);
 		break;
 	case PIPE_FORMAT_Z16_UNORM:
-		depth = -16;
 		offset_units *= 4.0f;
 		break;
 	default:
@@ -519,14 +514,12 @@ static void si_update_fb_rs_state(struct si_context *sctx)
 		return;
 
 	/* FIXME some of those reg can be computed with cso */
-	offset_db_fmt_cntl |= S_028B78_POLY_OFFSET_NEG_NUM_DB_BITS(depth);
 	si_pm4_set_reg(pm4, R_028B80_PA_SU_POLY_OFFSET_FRONT_SCALE,
 		       fui(sctx->queued.named.rasterizer->offset_scale));
 	si_pm4_set_reg(pm4, R_028B84_PA_SU_POLY_OFFSET_FRONT_OFFSET, fui(offset_units));
 	si_pm4_set_reg(pm4, R_028B88_PA_SU_POLY_OFFSET_BACK_SCALE,
 		       fui(sctx->queued.named.rasterizer->offset_scale));
 	si_pm4_set_reg(pm4, R_028B8C_PA_SU_POLY_OFFSET_BACK_OFFSET, fui(offset_units));
-	si_pm4_set_reg(pm4, R_028B78_PA_SU_POLY_OFFSET_DB_FMT_CNTL, offset_db_fmt_cntl);
 
 	si_pm4_set_state(sctx, fb_rs, pm4);
 }
@@ -1579,37 +1572,31 @@ static unsigned si_tile_mode_index(struct r600_texture *rtex, unsigned level, bo
  * framebuffer handling
  */
 
-static void si_cb(struct si_context *sctx, struct si_pm4_state *pm4,
-		  const struct pipe_framebuffer_state *state, int cb)
+static void si_initialize_color_surface(struct si_context *sctx,
+					struct r600_surface *surf)
 {
-	struct r600_texture *rtex;
-	struct si_surface *surf;
-	unsigned level = state->cbufs[cb]->u.tex.level;
+	struct r600_texture *rtex = (struct r600_texture*)surf->base.texture;
+	unsigned level = surf->base.u.tex.level;
+	uint64_t offset = rtex->surface.level[level].offset;
 	unsigned pitch, slice;
 	unsigned color_info, color_attrib, color_pitch, color_view;
 	unsigned tile_mode_index;
 	unsigned format, swap, ntype, endian;
-	uint64_t offset;
 	const struct util_format_description *desc;
 	int i;
 	unsigned blend_clamp = 0, blend_bypass = 0;
 	unsigned max_comp_size;
 
-	surf = (struct si_surface *)state->cbufs[cb];
-	rtex = (struct r600_texture*)state->cbufs[cb]->texture;
-
-	offset = rtex->surface.level[level].offset;
-
 	/* Layered rendering doesn't work with LINEAR_GENERAL.
 	 * (LINEAR_ALIGNED and others work) */
 	if (rtex->surface.level[level].mode == RADEON_SURF_MODE_LINEAR) {
-		assert(state->cbufs[cb]->u.tex.first_layer == state->cbufs[cb]->u.tex.last_layer);
+		assert(surf->base.u.tex.first_layer == surf->base.u.tex.last_layer);
 		offset += rtex->surface.level[level].slice_size *
-			  state->cbufs[cb]->u.tex.first_layer;
+			  surf->base.u.tex.first_layer;
 		color_view = 0;
 	} else {
-		color_view = S_028C6C_SLICE_START(state->cbufs[cb]->u.tex.first_layer) |
-			     S_028C6C_SLICE_MAX(state->cbufs[cb]->u.tex.last_layer);
+		color_view = S_028C6C_SLICE_START(surf->base.u.tex.first_layer) |
+			     S_028C6C_SLICE_MAX(surf->base.u.tex.last_layer);
 	}
 
 	pitch = (rtex->surface.level[level].nblk_x) / 8 - 1;
@@ -1714,34 +1701,22 @@ static void si_cb(struct si_context *sctx, struct si_pm4_state *pm4,
 		color_info |= S_028C70_FAST_CLEAR(1);
 	}
 
-	offset += r600_resource_va(sctx->b.b.screen, state->cbufs[cb]->texture);
-	offset >>= 8;
+	offset += r600_resource_va(sctx->b.b.screen, surf->base.texture);
 
-	si_pm4_add_bo(pm4, &rtex->resource, RADEON_USAGE_READWRITE);
-	si_pm4_set_reg(pm4, R_028C60_CB_COLOR0_BASE + cb * 0x3C, offset);
-	si_pm4_set_reg(pm4, R_028C64_CB_COLOR0_PITCH + cb * 0x3C, color_pitch);
-	si_pm4_set_reg(pm4, R_028C68_CB_COLOR0_SLICE + cb * 0x3C, S_028C68_TILE_MAX(slice));
-	si_pm4_set_reg(pm4, R_028C6C_CB_COLOR0_VIEW + cb * 0x3C, color_view);
-	si_pm4_set_reg(pm4, R_028C70_CB_COLOR0_INFO + cb * 0x3C, color_info);
-	si_pm4_set_reg(pm4, R_028C74_CB_COLOR0_ATTRIB + cb * 0x3C, color_attrib);
+	surf->cb_color_base = offset >> 8;
+	surf->cb_color_pitch = color_pitch;
+	surf->cb_color_slice = S_028C68_TILE_MAX(slice);
+	surf->cb_color_view = color_view;
+	surf->cb_color_info = color_info;
+	surf->cb_color_attrib = color_attrib;
 
 	if (rtex->cmask.size) {
-		si_pm4_set_reg(pm4, R_028C7C_CB_COLOR0_CMASK + cb * 0x3C,
-			       offset + (rtex->cmask.offset >> 8));
-		si_pm4_set_reg(pm4, R_028C80_CB_COLOR0_CMASK_SLICE + cb * 0x3C,
-			       S_028C80_TILE_MAX(rtex->cmask.slice_tile_max));
+		surf->cb_color_cmask = (offset + rtex->cmask.offset) >> 8;
+		surf->cb_color_cmask_slice = S_028C80_TILE_MAX(rtex->cmask.slice_tile_max);
 	}
 	if (rtex->fmask.size) {
-		si_pm4_set_reg(pm4, R_028C84_CB_COLOR0_FMASK + cb * 0x3C,
-			       offset + (rtex->fmask.offset >> 8));
-		si_pm4_set_reg(pm4, R_028C88_CB_COLOR0_FMASK_SLICE + cb * 0x3C,
-			       S_028C88_TILE_MAX(rtex->fmask.slice_tile_max));
-	}
-
-	/* set CB_COLOR1_INFO for possible dual-src blending */
-	if (state->nr_cbufs == 1) {
-		assert(cb == 0);
-		si_pm4_set_reg(pm4, R_028C70_CB_COLOR0_INFO + 1 * 0x3C, color_info);
+		surf->cb_color_fmask = (offset + rtex->fmask.offset) >> 8;
+		surf->cb_color_fmask_slice = S_028C88_TILE_MAX(rtex->fmask.slice_tile_max);
 	}
 
 	/* Determine pixel shader export format */
@@ -1750,34 +1725,42 @@ static void si_cb(struct si_context *sctx, struct si_pm4_state *pm4,
 	    ((ntype == V_028C70_NUMBER_UNORM || ntype == V_028C70_NUMBER_SNORM) &&
 	     max_comp_size <= 10) ||
 	    (ntype == V_028C70_NUMBER_FLOAT && max_comp_size <= 16)) {
-		sctx->export_16bpc |= 1 << cb;
-		/* set SPI_SHADER_COL_FORMAT for possible dual-src blending */
-		if (state->nr_cbufs == 1)
-			sctx->export_16bpc |= 1 << 1;
+		surf->export_16bpc = true;
 	}
+
+	surf->color_initialized = true;
 }
 
-static void si_db(struct si_context *sctx, struct si_pm4_state *pm4,
-		  const struct pipe_framebuffer_state *state)
+static void si_init_depth_surface(struct si_context *sctx,
+				  struct r600_surface *surf)
 {
 	struct si_screen *sscreen = sctx->screen;
-	struct r600_texture *rtex;
-	struct si_surface *surf;
-	unsigned level, pitch, slice, format, tile_mode_index, array_mode;
+	struct r600_texture *rtex = (struct r600_texture*)surf->base.texture;
+	unsigned level = surf->base.u.tex.level;
+	unsigned pitch, slice, format, tile_mode_index, array_mode;
 	unsigned macro_aspect, tile_split, stile_split, bankh, bankw, nbanks, pipe_config;
 	uint32_t z_info, s_info, db_depth_info;
 	uint64_t z_offs, s_offs;
-	uint32_t db_htile_data_base, db_htile_surface;
+	uint32_t db_htile_data_base, db_htile_surface, pa_su_poly_offset_db_fmt_cntl;
 
-	if (state->zsbuf == NULL) {
-		si_pm4_set_reg(pm4, R_028040_DB_Z_INFO, S_028040_FORMAT(V_028040_Z_INVALID));
-		si_pm4_set_reg(pm4, R_028044_DB_STENCIL_INFO, S_028044_FORMAT(V_028044_STENCIL_INVALID));
-		return;
+	switch (sctx->framebuffer.zsbuf->texture->format) {
+	case PIPE_FORMAT_S8_UINT_Z24_UNORM:
+	case PIPE_FORMAT_X8Z24_UNORM:
+	case PIPE_FORMAT_Z24X8_UNORM:
+	case PIPE_FORMAT_Z24_UNORM_S8_UINT:
+		pa_su_poly_offset_db_fmt_cntl = S_028B78_POLY_OFFSET_NEG_NUM_DB_BITS(-24);
+		break;
+	case PIPE_FORMAT_Z32_FLOAT:
+	case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
+		pa_su_poly_offset_db_fmt_cntl = S_028B78_POLY_OFFSET_NEG_NUM_DB_BITS(-23) |
+						S_028B78_POLY_OFFSET_DB_IS_FLOAT_FMT(1);
+		break;
+	case PIPE_FORMAT_Z16_UNORM:
+		pa_su_poly_offset_db_fmt_cntl = S_028B78_POLY_OFFSET_NEG_NUM_DB_BITS(-16);
+		break;
+	default:
+		assert(0);
 	}
-
-	surf = (struct si_surface *)state->zsbuf;
-	level = surf->base.u.tex.level;
-	rtex = (struct r600_texture*)surf->base.texture;
 
 	format = si_translate_dbformat(rtex->resource.b.b.format);
 
@@ -1789,9 +1772,6 @@ static void si_db(struct si_context *sctx, struct si_pm4_state *pm4,
 	s_offs = z_offs = r600_resource_va(sctx->b.b.screen, surf->base.texture);
 	z_offs += rtex->surface.level[level].offset;
 	s_offs += rtex->surface.stencil_level[level].offset;
-
-	z_offs >>= 8;
-	s_offs >>= 8;
 
 	pitch = (rtex->surface.level[level].nblk_x / 8) - 1;
 	slice = (rtex->surface.level[level].nblk_x * rtex->surface.level[level].nblk_y) / 64;
@@ -1874,32 +1854,25 @@ static void si_db(struct si_context *sctx, struct si_pm4_state *pm4,
 		uint64_t va = r600_resource_va(&sctx->screen->b.b, &rtex->htile_buffer->b.b);
 		db_htile_data_base = va >> 8;
 		db_htile_surface = S_028ABC_FULL_CACHE(1);
-
-		si_pm4_add_bo(pm4, rtex->htile_buffer, RADEON_USAGE_READWRITE);
 	} else {
 		db_htile_data_base = 0;
 		db_htile_surface = 0;
 	}
 
-	si_pm4_set_reg(pm4, R_028008_DB_DEPTH_VIEW,
-		       S_028008_SLICE_START(state->zsbuf->u.tex.first_layer) |
-		       S_028008_SLICE_MAX(state->zsbuf->u.tex.last_layer));
-	si_pm4_set_reg(pm4, R_028014_DB_HTILE_DATA_BASE, db_htile_data_base);
+	surf->db_depth_view = S_028008_SLICE_START(surf->base.u.tex.first_layer) |
+			      S_028008_SLICE_MAX(surf->base.u.tex.last_layer);
+	surf->db_htile_data_base = db_htile_data_base;
+	surf->db_depth_info = db_depth_info;
+	surf->db_z_info = z_info;
+	surf->db_stencil_info = s_info;
+	surf->db_depth_base = z_offs >> 8;
+	surf->db_stencil_base = s_offs >> 8;
+	surf->db_depth_size = S_028058_PITCH_TILE_MAX(pitch);
+	surf->db_depth_slice = S_02805C_SLICE_TILE_MAX(slice);
+	surf->db_htile_surface = db_htile_surface;
+	surf->pa_su_poly_offset_db_fmt_cntl = pa_su_poly_offset_db_fmt_cntl;
 
-	si_pm4_set_reg(pm4, R_02803C_DB_DEPTH_INFO, db_depth_info);
-	si_pm4_set_reg(pm4, R_028040_DB_Z_INFO, z_info);
-	si_pm4_set_reg(pm4, R_028044_DB_STENCIL_INFO, s_info);
-
-	si_pm4_add_bo(pm4, &rtex->resource, RADEON_USAGE_READWRITE);
-	si_pm4_set_reg(pm4, R_028048_DB_Z_READ_BASE, z_offs);
-	si_pm4_set_reg(pm4, R_02804C_DB_STENCIL_READ_BASE, s_offs);
-	si_pm4_set_reg(pm4, R_028050_DB_Z_WRITE_BASE, z_offs);
-	si_pm4_set_reg(pm4, R_028054_DB_STENCIL_WRITE_BASE, s_offs);
-
-	si_pm4_set_reg(pm4, R_028058_DB_DEPTH_SIZE, S_028058_PITCH_TILE_MAX(pitch));
-	si_pm4_set_reg(pm4, R_02805C_DB_DEPTH_SLICE, S_02805C_SLICE_TILE_MAX(slice));
-
-	si_pm4_set_reg(pm4, R_028ABC_DB_HTILE_SURFACE, db_htile_surface);
+	surf->depth_initialized = true;
 }
 
 #define FILL_SREG(s0x, s0y, s1x, s1y, s2x, s2y, s3x, s3y)  \
@@ -2098,6 +2071,8 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 				     const struct pipe_framebuffer_state *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
+	struct r600_surface *surf = NULL;
+	struct r600_texture *rtex;
 	struct si_pm4_state *pm4 = si_pm4_alloc_state(sctx);
 	int nr_samples, i;
 
@@ -2118,22 +2093,49 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	/* build states */
 	sctx->export_16bpc = 0;
 	sctx->fb_compressed_cb_mask = 0;
-	for (i = 0; i < state->nr_cbufs; i++) {
-		struct r600_texture *rtex;
 
+	for (i = 0; i < state->nr_cbufs; i++) {
 		if (!state->cbufs[i]) {
 			si_pm4_set_reg(pm4, R_028C70_CB_COLOR0_INFO + i * 0x3C,
 				       S_028C70_FORMAT(V_028C70_COLOR_INVALID));
 			continue;
 		}
 
-		rtex = (struct r600_texture*)state->cbufs[i]->texture;
+		surf = (struct r600_surface*)state->cbufs[i];
+		rtex = (struct r600_texture*)surf->base.texture;
 
-		si_cb(sctx, pm4, state, i);
+		if (!surf->color_initialized) {
+			si_initialize_color_surface(sctx, surf);
+		}
+
+		if (surf->export_16bpc) {
+			sctx->export_16bpc |= 1 << i;
+		}
 
 		if (rtex->fmask.size || rtex->cmask.size) {
 			sctx->fb_compressed_cb_mask |= 1 << i;
 		}
+
+		si_pm4_add_bo(pm4, &rtex->resource, RADEON_USAGE_READWRITE);
+		si_pm4_set_reg(pm4, R_028C60_CB_COLOR0_BASE + i * 0x3C, surf->cb_color_base);
+		si_pm4_set_reg(pm4, R_028C64_CB_COLOR0_PITCH + i * 0x3C, surf->cb_color_pitch);
+		si_pm4_set_reg(pm4, R_028C68_CB_COLOR0_SLICE + i * 0x3C, surf->cb_color_slice);
+		si_pm4_set_reg(pm4, R_028C6C_CB_COLOR0_VIEW + i * 0x3C, surf->cb_color_view);
+		si_pm4_set_reg(pm4, R_028C70_CB_COLOR0_INFO + i * 0x3C, surf->cb_color_info);
+		si_pm4_set_reg(pm4, R_028C74_CB_COLOR0_ATTRIB + i * 0x3C, surf->cb_color_attrib);
+		si_pm4_set_reg(pm4, R_028C7C_CB_COLOR0_CMASK + i * 0x3C, surf->cb_color_cmask);
+		si_pm4_set_reg(pm4, R_028C80_CB_COLOR0_CMASK_SLICE + i * 0x3C, surf->cb_color_cmask_slice);
+		si_pm4_set_reg(pm4, R_028C84_CB_COLOR0_FMASK + i * 0x3C, surf->cb_color_fmask);
+		si_pm4_set_reg(pm4, R_028C88_CB_COLOR0_FMASK_SLICE + i * 0x3C, surf->cb_color_fmask_slice);
+	}
+	/* Set CB_COLOR1_INFO for possible dual-src blending. */
+	if (i == 1 && surf) {
+		si_pm4_set_reg(pm4, R_028C70_CB_COLOR0_INFO + 1 * 0x3C, surf->cb_color_info);
+		/* Also set the 16BPC export. */
+		if (surf->export_16bpc) {
+			sctx->export_16bpc |= 1 << 1;
+		}
+		i++;
 	}
 	for (; i < 8; i++) {
 		si_pm4_set_reg(pm4, R_028C70_CB_COLOR0_INFO + i * 0x3C,
@@ -2141,7 +2143,39 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	}
 
 	assert(!(sctx->export_16bpc & ~0xff));
-	si_db(sctx, pm4, state);
+
+	if (state->zsbuf) {
+		surf = (struct r600_surface*)state->zsbuf;
+		rtex = (struct r600_texture*)surf->base.texture;
+
+		if (!surf->depth_initialized) {
+			si_init_depth_surface(sctx, surf);
+		}
+
+		if (surf->db_htile_data_base) {
+			si_pm4_add_bo(pm4, rtex->htile_buffer, RADEON_USAGE_READWRITE);
+		}
+		si_pm4_set_reg(pm4, R_028008_DB_DEPTH_VIEW, surf->db_depth_view);
+		si_pm4_set_reg(pm4, R_028014_DB_HTILE_DATA_BASE, surf->db_htile_data_base);
+
+		si_pm4_set_reg(pm4, R_02803C_DB_DEPTH_INFO, surf->db_depth_info);
+		si_pm4_set_reg(pm4, R_028040_DB_Z_INFO, surf->db_z_info);
+		si_pm4_set_reg(pm4, R_028044_DB_STENCIL_INFO, surf->db_stencil_info);
+		si_pm4_add_bo(pm4, &rtex->resource, RADEON_USAGE_READWRITE);
+		si_pm4_set_reg(pm4, R_028048_DB_Z_READ_BASE, surf->db_depth_base);
+		si_pm4_set_reg(pm4, R_02804C_DB_STENCIL_READ_BASE, surf->db_stencil_base);
+		si_pm4_set_reg(pm4, R_028050_DB_Z_WRITE_BASE, surf->db_depth_base);
+		si_pm4_set_reg(pm4, R_028054_DB_STENCIL_WRITE_BASE, surf->db_stencil_base);
+		si_pm4_set_reg(pm4, R_028058_DB_DEPTH_SIZE, surf->db_depth_size);
+		si_pm4_set_reg(pm4, R_02805C_DB_DEPTH_SLICE, surf->db_depth_slice);
+
+		si_pm4_set_reg(pm4, R_028ABC_DB_HTILE_SURFACE, surf->db_htile_surface);
+		si_pm4_set_reg(pm4, R_028B78_PA_SU_POLY_OFFSET_DB_FMT_CNTL,
+			       surf->pa_su_poly_offset_db_fmt_cntl);
+	} else {
+		si_pm4_set_reg(pm4, R_028040_DB_Z_INFO, S_028040_FORMAT(V_028040_Z_INVALID));
+		si_pm4_set_reg(pm4, R_028044_DB_STENCIL_INFO, S_028044_FORMAT(V_028044_STENCIL_INVALID));
+	}
 
 	/* PA_SC_WINDOW_SCISSOR_TL is set in si_init_config() */
 	si_pm4_set_reg(pm4, R_028208_PA_SC_WINDOW_SCISSOR_BR,
@@ -3066,41 +3100,6 @@ static void *si_create_blend_custom(struct si_context *sctx, unsigned mode)
 	return si_create_blend_state_mode(&sctx->b.b, &blend, mode);
 }
 
-static struct pipe_surface *r600_create_surface(struct pipe_context *pipe,
-						struct pipe_resource *texture,
-						const struct pipe_surface *surf_tmpl)
-{
-	struct r600_texture *rtex = (struct r600_texture*)texture;
-	struct si_surface *surface = CALLOC_STRUCT(si_surface);
-	unsigned level = surf_tmpl->u.tex.level;
-
-	if (surface == NULL)
-		return NULL;
-
-	assert(surf_tmpl->u.tex.first_layer <= util_max_layer(texture, surf_tmpl->u.tex.level));
-	assert(surf_tmpl->u.tex.last_layer <= util_max_layer(texture, surf_tmpl->u.tex.level));
-
-	pipe_reference_init(&surface->base.reference, 1);
-	pipe_resource_reference(&surface->base.texture, texture);
-	surface->base.context = pipe;
-	surface->base.format = surf_tmpl->format;
-	surface->base.width = rtex->surface.level[level].npix_x;
-	surface->base.height = rtex->surface.level[level].npix_y;
-	surface->base.texture = texture;
-	surface->base.u.tex.first_layer = surf_tmpl->u.tex.first_layer;
-	surface->base.u.tex.last_layer = surf_tmpl->u.tex.last_layer;
-	surface->base.u.tex.level = level;
-
-	return &surface->base;
-}
-
-static void r600_surface_destroy(struct pipe_context *pipe,
-				 struct pipe_surface *surface)
-{
-	pipe_resource_reference(&surface->texture, NULL);
-	FREE(surface);
-}
-
 static boolean si_dma_copy(struct pipe_context *ctx,
 			   struct pipe_resource *dst,
 			   unsigned dst_level,
@@ -3190,8 +3189,6 @@ void si_init_state_functions(struct si_context *sctx)
 
 	sctx->b.b.texture_barrier = si_texture_barrier;
 	sctx->b.b.set_polygon_stipple = si_set_polygon_stipple;
-	sctx->b.b.create_surface = r600_create_surface;
-	sctx->b.b.surface_destroy = r600_surface_destroy;
 	sctx->b.dma_copy = si_dma_copy;
 	sctx->b.set_occlusion_query_state = si_set_occlusion_query_state;
 	sctx->b.need_gfx_cs_space = si_need_gfx_cs_space;

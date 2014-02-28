@@ -64,15 +64,6 @@ fd3_emit_constant(struct fd_ringbuffer *ring,
 		src = SS_DIRECT;
 	}
 
-	/* we have this sometimes, not others.. perhaps we could be clever
-	 * and figure out actually when we need to invalidate cache:
-	 */
-	OUT_PKT0(ring, REG_A3XX_UCHE_CACHE_INVALIDATE0_REG, 2);
-	OUT_RING(ring, A3XX_UCHE_CACHE_INVALIDATE0_REG_ADDR(0));
-	OUT_RING(ring, A3XX_UCHE_CACHE_INVALIDATE1_REG_ADDR(0) |
-			A3XX_UCHE_CACHE_INVALIDATE1_REG_OPCODE(INVALIDATE) |
-			A3XX_UCHE_CACHE_INVALIDATE1_REG_ENTIRE_CACHE);
-
 	OUT_PKT3(ring, CP_LOAD_STATE, 2 + sz);
 	OUT_RING(ring, CP_LOAD_STATE_0_DST_OFF(regid/2) |
 			CP_LOAD_STATE_0_STATE_SRC(src) |
@@ -96,7 +87,7 @@ static void
 emit_constants(struct fd_ringbuffer *ring,
 		enum adreno_state_block sb,
 		struct fd_constbuf_stateobj *constbuf,
-		struct fd3_shader_stateobj *shader)
+		struct fd3_shader_variant *shader)
 {
 	uint32_t enabled_mask = constbuf->enabled_mask;
 	uint32_t base = 0;
@@ -115,12 +106,10 @@ emit_constants(struct fd_ringbuffer *ring,
 		// I expect that size should be a multiple of vec4's:
 		assert(size == align(size, 4));
 
-		/* gallium could have const-buffer still bound, even though the
-		 * shader is not using it.  Writing consts above constlen (or
-		 * rather, HLSQ_{VS,FS}_CONTROL_REG.CONSTLENGTH) will cause a
-		 * hang.
+		/* gallium could leave const buffers bound above what the
+		 * current shader uses.. don't let that confuse us.
 		 */
-		if ((base / 4) >= shader->constlen)
+		if (base >= (4 * shader->first_immediate))
 			break;
 
 		if (constbuf->dirty_mask & (1 << index)) {
@@ -137,9 +126,11 @@ emit_constants(struct fd_ringbuffer *ring,
 	/* emit shader immediates: */
 	if (shader) {
 		for (i = 0; i < shader->immediates_count; i++) {
-			fd3_emit_constant(ring, sb,
-					4 * (shader->first_immediate + i),
-					0, 4, shader->immediates[i].val, NULL);
+			base = 4 * (shader->first_immediate + i);
+			if (base >= (4 * shader->constlen))
+				break;
+			fd3_emit_constant(ring, sb, base,
+				0, 4, shader->immediates[i].val, NULL);
 		}
 	}
 }
@@ -302,10 +293,9 @@ fd3_emit_gmem_restore_tex(struct fd_ringbuffer *ring, struct pipe_surface *psurf
 
 void
 fd3_emit_vertex_bufs(struct fd_ringbuffer *ring,
-		struct fd_program_stateobj *prog,
+		struct fd3_shader_variant *vp,
 		struct fd3_vertex_buf *vbufs, uint32_t n)
 {
-	struct fd3_shader_stateobj *vp = prog->vp;
 	uint32_t i;
 
 	n = MIN2(n, vp->inputs_count);
@@ -338,8 +328,15 @@ fd3_emit_vertex_bufs(struct fd_ringbuffer *ring,
 
 void
 fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
-		uint32_t dirty, bool binning)
+		struct fd_program_stateobj *prog, uint32_t dirty,
+		struct fd3_shader_key key)
 {
+	struct fd3_shader_variant *vp;
+	struct fd3_shader_variant *fp;
+
+	fp = fd3_shader_variant(prog->fp, key);
+	vp = fd3_shader_variant(prog->vp, key);
+
 	emit_marker(ring, 5);
 
 	if (dirty & FD_DIRTY_SAMPLE_MASK) {
@@ -353,7 +350,7 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		struct fd3_zsa_stateobj *zsa = fd3_zsa_stateobj(ctx->zsa);
 		struct pipe_stencil_ref *sr = &ctx->stencil_ref;
 
-		if (!binning) {
+		if (!key.binning_pass) {
 			struct fd3_context *fd3_ctx = fd3_context(ctx);
 
 			/* I suppose if we needed to (which I don't *think* we need
@@ -370,9 +367,6 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_PKT0(ring, REG_A3XX_RB_ALPHA_REF, 1);
 		OUT_RING(ring, zsa->rb_alpha_ref);
 
-		OUT_PKT0(ring, REG_A3XX_RB_DEPTH_CONTROL, 1);
-		OUT_RING(ring, zsa->rb_depth_control);
-
 		OUT_PKT0(ring, REG_A3XX_RB_STENCIL_CONTROL, 1);
 		OUT_RING(ring, zsa->rb_stencil_control);
 
@@ -381,6 +375,16 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 				A3XX_RB_STENCILREFMASK_STENCILREF(sr->ref_value[0]));
 		OUT_RING(ring, zsa->rb_stencilrefmask_bf |
 				A3XX_RB_STENCILREFMASK_BF_STENCILREF(sr->ref_value[1]));
+	}
+
+	if (dirty & (FD_DIRTY_ZSA | FD_DIRTY_PROG)) {
+		uint32_t val = fd3_zsa_stateobj(ctx->zsa)->rb_depth_control;
+		if (fp->writes_pos) {
+			val |= A3XX_RB_DEPTH_CONTROL_FRAG_WRITES_Z;
+			val |= A3XX_RB_DEPTH_CONTROL_EARLY_Z_DISABLE;
+		}
+		OUT_PKT0(ring, REG_A3XX_RB_DEPTH_CONTROL, 1);
+		OUT_RING(ring, val);
 	}
 
 	if (dirty & FD_DIRTY_RASTERIZER) {
@@ -397,15 +401,21 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_PKT0(ring, REG_A3XX_GRAS_SU_POLY_OFFSET_SCALE, 2);
 		OUT_RING(ring, rasterizer->gras_su_poly_offset_scale);
 		OUT_RING(ring, rasterizer->gras_su_poly_offset_offset);
+	}
 
+	if (dirty & (FD_DIRTY_RASTERIZER | FD_DIRTY_PROG)) {
+		uint32_t val = fd3_rasterizer_stateobj(ctx->rasterizer)
+				->gras_cl_clip_cntl;
+		if (fp->writes_pos) {
+			val |= A3XX_GRAS_CL_CLIP_CNTL_ZCLIP_DISABLE;
+		}
 		OUT_PKT0(ring, REG_A3XX_GRAS_CL_CLIP_CNTL, 1);
-		OUT_RING(ring, rasterizer->gras_cl_clip_cntl);
+		OUT_RING(ring, val);
 	}
 
 	if (dirty & (FD_DIRTY_RASTERIZER | FD_DIRTY_PROG)) {
 		struct fd3_rasterizer_stateobj *rasterizer =
 				fd3_rasterizer_stateobj(ctx->rasterizer);
-		struct fd3_shader_stateobj *fp = ctx->prog.fp;
 		uint32_t stride_in_vpc;
 
 		stride_in_vpc = align(fp->total_in, 4) / 4;
@@ -442,24 +452,27 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_RING(ring, A3XX_GRAS_CL_VPORT_ZSCALE(ctx->viewport.scale[2]));
 	}
 
-	if (dirty & FD_DIRTY_PROG)
-		fd3_program_emit(ring, &ctx->prog, binning);
+	if (dirty & FD_DIRTY_PROG) {
+		fd_wfi(ctx, ring);
+		fd3_program_emit(ring, prog, key);
+	}
 
 	OUT_PKT3(ring, CP_EVENT_WRITE, 1);
 	OUT_RING(ring, HLSQ_FLUSH);
 
-	if (dirty & (FD_DIRTY_PROG | FD_DIRTY_CONSTBUF)) {
-		struct fd_program_stateobj *prog = &ctx->prog;
-
+	if ((dirty & (FD_DIRTY_PROG | FD_DIRTY_CONSTBUF)) &&
+			/* evil hack to deal sanely with clear path: */
+			(prog == &ctx->prog)) {
+		fd_wfi(ctx, ring);
 		emit_constants(ring,  SB_VERT_SHADER,
 				&ctx->constbuf[PIPE_SHADER_VERTEX],
-				(prog->dirty & FD_SHADER_DIRTY_VP) ? prog->vp : NULL);
+				(prog->dirty & FD_SHADER_DIRTY_VP) ? vp : NULL);
 		emit_constants(ring, SB_FRAG_SHADER,
 				&ctx->constbuf[PIPE_SHADER_FRAGMENT],
-				(prog->dirty & FD_SHADER_DIRTY_FP) ? prog->fp : NULL);
+				(prog->dirty & FD_SHADER_DIRTY_FP) ? fp : NULL);
 	}
 
-	if (dirty & FD_DIRTY_BLEND) {
+	if ((dirty & FD_DIRTY_BLEND) && ctx->blend) {
 		struct fd3_blend_stateobj *blend = fd3_blend_stateobj(ctx->blend);
 		uint32_t i;
 
@@ -484,6 +497,9 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_RING(ring, A3XX_RB_BLEND_ALPHA_UINT(bcolor->color[3] * 255.0) |
 				A3XX_RB_BLEND_ALPHA_FLOAT(bcolor->color[3]));
 	}
+
+	if (dirty & (FD_DIRTY_VERTTEX | FD_DIRTY_FRAGTEX))
+		fd_wfi(ctx, ring);
 
 	if (dirty & FD_DIRTY_VERTTEX)
 		emit_textures(ring, SB_VERT_TEX, &ctx->verttex);
@@ -622,5 +638,5 @@ fd3_emit_restore(struct fd_context *ctx)
 	OUT_RING(ring, 0x00000000);
 
 	emit_cache_flush(ring);
-	fd_rmw_wfi(ctx, ring);
+	fd_wfi(ctx, ring);
 }

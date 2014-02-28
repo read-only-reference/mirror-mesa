@@ -131,7 +131,25 @@ extern const struct brw_tracked_state gen7_urb;
 extern const struct brw_tracked_state gen7_vs_state;
 extern const struct brw_tracked_state gen7_wm_state;
 extern const struct brw_tracked_state haswell_cut_index;
-
+extern const struct brw_tracked_state gen8_blend_state;
+extern const struct brw_tracked_state gen8_disable_stages;
+extern const struct brw_tracked_state gen8_gs_state;
+extern const struct brw_tracked_state gen8_index_buffer;
+extern const struct brw_tracked_state gen8_multisample_state;
+extern const struct brw_tracked_state gen8_ps_blend;
+extern const struct brw_tracked_state gen8_ps_extra;
+extern const struct brw_tracked_state gen8_ps_state;
+extern const struct brw_tracked_state gen8_wm_depth_stencil;
+extern const struct brw_tracked_state gen8_wm_state;
+extern const struct brw_tracked_state gen8_raster_state;
+extern const struct brw_tracked_state gen8_sbe_state;
+extern const struct brw_tracked_state gen8_sf_state;
+extern const struct brw_tracked_state gen8_state_base_address;
+extern const struct brw_tracked_state gen8_sol_state;
+extern const struct brw_tracked_state gen8_sf_clip_viewport;
+extern const struct brw_tracked_state gen8_vertices;
+extern const struct brw_tracked_state gen8_vf_topology;
+extern const struct brw_tracked_state gen8_vs_state;
 
 /* brw_misc_state.c */
 void brw_upload_invariant_state(struct brw_context *brw);
@@ -215,6 +233,9 @@ void gen7_init_vtable_surface_functions(struct brw_context *brw);
 void gen7_upload_3dstate_so_decl_list(struct brw_context *brw,
                                       const struct brw_vue_map *vue_map);
 
+/* gen8_surface_state.c */
+void gen8_init_vtable_surface_functions(struct brw_context *brw);
+
 /* brw_wm_sampler_state.c */
 uint32_t translate_wrap_mode(GLenum wrap, bool using_nearest);
 void upload_default_color(struct brw_context *brw,
@@ -248,6 +269,11 @@ gen7_upload_constant_state(struct brw_context *brw,
                            const struct brw_stage_state *stage_state,
                            bool active, unsigned opcode);
 
+/* gen8_vs_state.c */
+void
+gen8_upload_constant_state(struct brw_context *brw,
+                           const struct brw_stage_state *stage_state,
+                           bool active, unsigned opcode);
 #ifdef __cplusplus
 }
 #endif

@@ -30,6 +30,7 @@
 #include "main/texobj.h"
 #include "main/teximage.h"
 #include "main/texstate.h"
+#include "main/errors.h"
 #include "main/framebuffer.h"
 #include "main/fbobject.h"
 #include "main/renderbuffer.h"
@@ -469,7 +470,6 @@ st_context_teximage(struct st_context_iface *stctxi,
 {
    struct st_context *st = (struct st_context *) stctxi;
    struct gl_context *ctx = st->ctx;
-   struct gl_texture_unit *texUnit = _mesa_get_current_tex_unit(ctx);
    struct gl_texture_object *texObj;
    struct gl_texture_image *texImage;
    struct st_texture_object *stObj;
@@ -495,7 +495,8 @@ st_context_teximage(struct st_context_iface *stctxi,
       return FALSE;
    }
 
-   texObj = _mesa_select_tex_object(ctx, texUnit, target);
+   texObj = _mesa_get_current_tex_object(ctx, target);
+
    _mesa_lock_texture(ctx, texObj);
 
    stObj = st_texture_object(texObj);
@@ -626,10 +627,14 @@ st_api_create_context(struct st_api *stapi, struct st_manager *smapi,
       return NULL;
    }
 
-   st->ctx->Debug.DebugOutput = GL_FALSE;
    if (attribs->flags & ST_CONTEXT_FLAG_DEBUG){
+      struct gl_debug_state *debug = _mesa_get_debug_state(st->ctx);
+      if (!debug) {
+         *error = ST_CONTEXT_ERROR_NO_MEMORY;
+         return NULL;
+      }
       st->ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_DEBUG_BIT;
-      st->ctx->Debug.DebugOutput = GL_TRUE;
+      debug->DebugOutput = GL_TRUE;
    }
 
    if (attribs->flags & ST_CONTEXT_FLAG_FORWARD_COMPATIBLE)

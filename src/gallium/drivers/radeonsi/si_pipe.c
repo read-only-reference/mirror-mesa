@@ -183,7 +183,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, void *
 	 * with a NULL buffer). We need to use a dummy buffer instead. */
 	if (sctx->b.chip_class == CIK) {
 		sctx->null_const_buf.buffer = pipe_buffer_create(screen, PIPE_BIND_CONSTANT_BUFFER,
-								 PIPE_USAGE_STATIC, 16);
+								 PIPE_USAGE_DEFAULT, 16);
 		sctx->null_const_buf.buffer_size = sctx->null_const_buf.buffer->width0;
 
 		for (shader = 0; shader < SI_NUM_SHADERS; shader++) {
@@ -252,6 +252,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
         case PIPE_CAP_TGSI_VS_LAYER:
 	case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
+	case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
 		return 1;
 
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
@@ -285,6 +286,8 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
 	case PIPE_CAP_CUBE_MAP_ARRAY:
+	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
+	case PIPE_CAP_TEXTURE_GATHER_SM5:
 		return 0;
 
 	case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
@@ -299,6 +302,12 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
 		return sscreen->b.has_streamout ? 32*4 : 0;
 
+	/* Geometry shader output. */
+	case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
+		return 1024;
+	case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
+		return 4095;
+
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
 	case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
@@ -306,8 +315,6 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 			return 15;
 	case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
 		return 16384;
-	case PIPE_CAP_MAX_COMBINED_SAMPLERS:
-		return HAVE_LLVM >= 0x0305 ? 48 : 32;
 
 	/* Render targets. */
 	case PIPE_CAP_MAX_RENDER_TARGETS:

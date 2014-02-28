@@ -35,6 +35,7 @@ LDFLAGS += -Wl,--version-script=$(top_srcdir)/src/gallium/targets/egl-static/egl
 AM_CFLAGS = $(PTHREAD_CFLAGS)
 AM_CPPFLAGS = \
 	$(GALLIUM_CFLAGS) \
+	$(VISIBILITY_CFLAGS) \
 	-I$(top_srcdir)/include \
 	-I$(top_srcdir)/src/loader \
 	-I$(top_srcdir)/src/gallium/drivers \
@@ -63,7 +64,6 @@ egl_gallium_la_LIBADD = \
 	$(top_builddir)/src/egl/main/libEGL.la \
 	$(top_builddir)/src/loader/libloader.la \
 	$(CLOCK_LIB) \
-	$(LIBUDEV_LIBS) \
 	$(DLOPEN_LIBS) \
 	$(PTHREAD_LIBS) \
 	-lm

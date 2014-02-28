@@ -42,8 +42,10 @@
 #include "util/u_rect.h"
 #include "os/os_thread.h"
 
+#include "vl/vl_video_buffer.h"
 #include "vl/vl_compositor.h"
 #include "vl/vl_csc.h"
+#include "vl/vl_deint_filter.h"
 #include "vl/vl_matrix_filter.h"
 #include "vl/vl_median_filter.h"
 #include "vl/vl_winsys.h"
@@ -359,6 +361,11 @@ typedef struct
    struct vl_compositor_state cstate;
 
    struct {
+	  bool supported, enabled, spatial;
+	  struct vl_deint_filter *filter;
+   } deint;
+
+   struct {
       bool supported, enabled;
       unsigned level;
       struct vl_median_filter *filter;
@@ -436,7 +443,6 @@ boolean vlGetFuncFTAB(VdpFuncId function_id, void **func);
 
 /* Public functions */
 VdpDeviceCreateX11 vdp_imp_device_create_x11;
-VdpPresentationQueueTargetCreateX11 vlVdpPresentationQueueTargetCreateX11;
 
 void vlVdpDefaultSamplerViewTemplate(struct pipe_sampler_view *templ, struct pipe_resource *res);
 
@@ -507,6 +513,9 @@ VdpVideoMixerGetParameterValues vlVdpVideoMixerGetParameterValues;
 VdpVideoMixerGetAttributeValues vlVdpVideoMixerGetAttributeValues;
 VdpVideoMixerDestroy vlVdpVideoMixerDestroy;
 VdpGenerateCSCMatrix vlVdpGenerateCSCMatrix;
+/* Winsys specific internal function pointers */
+VdpPresentationQueueTargetCreateX11 vlVdpPresentationQueueTargetCreateX11;
+
 
 /* interop to mesa state tracker */
 VdpVideoSurfaceGallium vlVdpVideoSurfaceGallium;

@@ -85,6 +85,7 @@ struct fd_vertex_stateobj {
 struct fd_context {
 	struct pipe_context base;
 
+	struct fd_device *dev;
 	struct fd_screen *screen;
 	struct blitter_context *blitter;
 	struct primconvert_context *primconvert;
@@ -153,7 +154,7 @@ struct fd_context {
 	 * normally have to wait before resetting to the start of the next
 	 * rb.
 	 */
-	struct fd_ringbuffer *rings[4];
+	struct fd_ringbuffer *rings[8];
 	unsigned rings_idx;
 
 	/* normal draw/clear cmds: */
@@ -167,7 +168,7 @@ struct fd_context {
 	/* Keep track if WAIT_FOR_IDLE is needed for registers we need
 	 * to update via RMW:
 	 */
-	bool rmw_needs_wfi;
+	bool needs_wfi;
 
 	/* Keep track of DRAW initiators that need to be patched up depending
 	 * on whether we using binning or not:
@@ -274,18 +275,20 @@ fd_supported_prim(struct fd_context *ctx, unsigned prim)
 }
 
 static INLINE void
-fd_reset_rmw_state(struct fd_context *ctx)
+fd_reset_wfi(struct fd_context *ctx)
 {
-	ctx->rmw_needs_wfi = true;
+	ctx->needs_wfi = true;
 }
 
-/* emit before a RMW a WAIT_FOR_IDLE only if needed: */
+/* emit a WAIT_FOR_IDLE only if needed, ie. if there has not already
+ * been one since last draw:
+ */
 static inline void
-fd_rmw_wfi(struct fd_context *ctx, struct fd_ringbuffer *ring)
+fd_wfi(struct fd_context *ctx, struct fd_ringbuffer *ring)
 {
-	if (ctx->rmw_needs_wfi) {
+	if (ctx->needs_wfi) {
 		OUT_WFI(ring);
-		ctx->rmw_needs_wfi = false;
+		ctx->needs_wfi = false;
 	}
 }
 

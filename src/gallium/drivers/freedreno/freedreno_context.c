@@ -28,6 +28,7 @@
 
 #include "freedreno_context.h"
 #include "freedreno_draw.h"
+#include "freedreno_program.h"
 #include "freedreno_resource.h"
 #include "freedreno_texture.h"
 #include "freedreno_state.h"
@@ -143,6 +144,8 @@ fd_context_destroy(struct pipe_context *pctx)
 
 	DBG("");
 
+	fd_prog_fini(pctx);
+
 	util_slab_destroy(&ctx->transfer_pool);
 
 	util_dynarray_fini(&ctx->draw_patches);
@@ -167,6 +170,8 @@ fd_context_destroy(struct pipe_context *pctx)
 			break;
 		fd_bo_del(pipe->bo);
 	}
+
+	fd_device_del(ctx->dev);
 
 	FREE(ctx);
 }
@@ -198,13 +203,13 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
 	pctx->flush = fd_context_flush;
 
 	for (i = 0; i < ARRAY_SIZE(ctx->rings); i++) {
-		ctx->rings[i] = fd_ringbuffer_new(screen->pipe, 0x400000);
+		ctx->rings[i] = fd_ringbuffer_new(screen->pipe, 0x100000);
 		if (!ctx->rings[i])
 			goto fail;
 	}
 
 	fd_context_next_rb(pctx);
-	fd_reset_rmw_state(ctx);
+	fd_reset_wfi(ctx);
 
 	util_dynarray_init(&ctx->draw_patches);
 

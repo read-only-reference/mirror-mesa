@@ -358,9 +358,9 @@ brw_format_for_mesa_format(mesa_format mesa_format)
       [MESA_FORMAT_G16R16_UNORM] = 0,
       [MESA_FORMAT_B10G10R10A2_UNORM] = BRW_SURFACEFORMAT_B10G10R10A2_UNORM,
       [MESA_FORMAT_S8_UINT_Z24_UNORM] = 0,
-      [MESA_FORMAT_Z24_UNORM_X8_UINT] = 0,
-      [MESA_FORMAT_Z_UNORM16] = 0,
       [MESA_FORMAT_Z24_UNORM_S8_UINT] = 0,
+      [MESA_FORMAT_Z_UNORM16] = 0,
+      [MESA_FORMAT_Z24_UNORM_X8_UINT] = 0,
       [MESA_FORMAT_X8Z24_UNORM] = 0,
       [MESA_FORMAT_Z_UNORM32] = 0,
       [MESA_FORMAT_S_UINT8] = 0,
@@ -600,8 +600,8 @@ brw_init_surface_formats(struct brw_context *brw)
    /* We will check this table for FBO completeness, but the surface format
     * table above only covered color rendering.
     */
-   brw->format_supported_as_render_target[MESA_FORMAT_Z24_UNORM_X8_UINT] = true;
    brw->format_supported_as_render_target[MESA_FORMAT_Z24_UNORM_S8_UINT] = true;
+   brw->format_supported_as_render_target[MESA_FORMAT_Z24_UNORM_X8_UINT] = true;
    brw->format_supported_as_render_target[MESA_FORMAT_S_UINT8] = true;
    brw->format_supported_as_render_target[MESA_FORMAT_Z_UNORM16] = true;
    brw->format_supported_as_render_target[MESA_FORMAT_Z_FLOAT32] = true;
@@ -610,8 +610,8 @@ brw_init_surface_formats(struct brw_context *brw)
    /* We remap depth formats to a supported texturing format in
     * translate_tex_format().
     */
-   ctx->TextureFormatSupported[MESA_FORMAT_Z24_UNORM_X8_UINT] = true;
    ctx->TextureFormatSupported[MESA_FORMAT_Z24_UNORM_S8_UINT] = true;
+   ctx->TextureFormatSupported[MESA_FORMAT_Z24_UNORM_X8_UINT] = true;
    ctx->TextureFormatSupported[MESA_FORMAT_Z_FLOAT32] = true;
    ctx->TextureFormatSupported[MESA_FORMAT_Z32_FLOAT_S8X24_UINT] = true;
 
@@ -697,8 +697,8 @@ translate_tex_format(struct brw_context *brw,
    case MESA_FORMAT_Z_UNORM16:
       return BRW_SURFACEFORMAT_R16_UNORM;
 
-   case MESA_FORMAT_Z24_UNORM_X8_UINT:
    case MESA_FORMAT_Z24_UNORM_S8_UINT:
+   case MESA_FORMAT_Z24_UNORM_X8_UINT:
       return BRW_SURFACEFORMAT_R24_UNORM_X8_TYPELESS;
 
    case MESA_FORMAT_Z_FLOAT32:
@@ -730,6 +730,47 @@ translate_tex_format(struct brw_context *brw,
    }
 }
 
+/**
+ * Convert a MESA_FORMAT to the corresponding BRW_DEPTHFORMAT enum.
+ */
+uint32_t
+brw_depth_format(struct brw_context *brw, mesa_format format)
+{
+   switch (format) {
+   case MESA_FORMAT_Z_UNORM16:
+      return BRW_DEPTHFORMAT_D16_UNORM;
+   case MESA_FORMAT_Z_FLOAT32:
+      return BRW_DEPTHFORMAT_D32_FLOAT;
+   case MESA_FORMAT_Z24_UNORM_X8_UINT:
+      if (brw->gen >= 6) {
+         return BRW_DEPTHFORMAT_D24_UNORM_X8_UINT;
+      } else {
+         /* Use D24_UNORM_S8, not D24_UNORM_X8.
+          *
+          * D24_UNORM_X8 was not introduced until Gen5. (See the Ironlake PRM,
+          * Volume 2, Part 1, Section 8.4.6 "Depth/Stencil Buffer State", Bits
+          * 3DSTATE_DEPTH_BUFFER.Surface_Format).
+          *
+          * However, on Gen5, D24_UNORM_X8 may be used only if separate
+          * stencil is enabled, and we never enable it. From the Ironlake PRM,
+          * same section as above, 3DSTATE_DEPTH_BUFFER's
+          * "Separate Stencil Buffer Enable" bit:
+          *
+          * "If this field is disabled, the Surface Format of the depth
+          *  buffer cannot be D24_UNORM_X8_UINT."
+          */
+         return BRW_DEPTHFORMAT_D24_UNORM_S8_UINT;
+      }
+   case MESA_FORMAT_Z24_UNORM_S8_UINT:
+      return BRW_DEPTHFORMAT_D24_UNORM_S8_UINT;
+   case MESA_FORMAT_Z32_FLOAT_S8X24_UINT:
+      return BRW_DEPTHFORMAT_D32_FLOAT_S8X24_UINT;
+   default:
+      assert(!"Unexpected depth format.");
+      return BRW_DEPTHFORMAT_D32_FLOAT;
+   }
+}
+
 /** Can HiZ be enabled on a depthbuffer of the given format? */
 bool
 brw_is_hiz_depth_format(struct brw_context *brw, mesa_format format)
@@ -740,8 +781,8 @@ brw_is_hiz_depth_format(struct brw_context *brw, mesa_format format)
    switch (format) {
    case MESA_FORMAT_Z_FLOAT32:
    case MESA_FORMAT_Z32_FLOAT_S8X24_UINT:
-   case MESA_FORMAT_Z24_UNORM_S8_UINT:
    case MESA_FORMAT_Z24_UNORM_X8_UINT:
+   case MESA_FORMAT_Z24_UNORM_S8_UINT:
    case MESA_FORMAT_Z_UNORM16:
       return true;
    default:

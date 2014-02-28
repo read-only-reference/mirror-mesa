@@ -24,7 +24,6 @@
  *
  */
 
-#include "radeon/radeon_uvd.h"
 #include "r600_pipe_common.h"
 #include "r600_cs.h"
 #include "tgsi/tgsi_parse.h"
@@ -33,11 +32,16 @@
 #include "util/u_upload_mgr.h"
 #include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
+#include "radeon/radeon_video.h"
 #include <inttypes.h>
 
 /*
  * pipe_context
  */
+
+static void r600_memory_barrier(struct pipe_context *ctx, unsigned flags)
+{
+}
 
 bool r600_common_context_init(struct r600_common_context *rctx,
 			      struct r600_common_screen *rscreen)
@@ -56,12 +60,14 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	rctx->b.transfer_flush_region = u_default_transfer_flush_region;
 	rctx->b.transfer_unmap = u_transfer_unmap_vtbl;
 	rctx->b.transfer_inline_write = u_default_transfer_inline_write;
+        rctx->b.memory_barrier = r600_memory_barrier;
 
+	r600_init_context_texture_functions(rctx);
 	r600_streamout_init(rctx);
 	r600_query_init(rctx);
 
 	rctx->allocator_so_filled_size = u_suballocator_create(&rctx->b, 4096, 4,
-							       0, PIPE_USAGE_STATIC, TRUE);
+							       0, PIPE_USAGE_DEFAULT, TRUE);
 	if (!rctx->allocator_so_filled_size)
 		return false;
 
@@ -137,7 +143,7 @@ static const struct debug_named_value common_debug_options[] = {
 	{ "ps", DBG_PS, "Print pixel shaders" },
 	{ "cs", DBG_CS, "Print compute shaders" },
 
-	{ "nohyperz", DBG_NO_HYPERZ, "Disable Hyper-Z" },
+	{ "hyperz", DBG_HYPERZ, "Enable Hyper-Z" },
 	/* GL uses the word INVALIDATE, gallium uses the word DISCARD */
 	{ "noinvalrange", DBG_NO_DISCARD_RANGE, "Disable handling of INVALIDATE_RANGE map flags" },
 
@@ -601,14 +607,14 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 	rscreen->b.resource_destroy = u_resource_destroy_vtbl;
 
 	if (rscreen->info.has_uvd) {
-		rscreen->b.get_video_param = ruvd_get_video_param;
-		rscreen->b.is_video_format_supported = ruvd_is_format_supported;
+		rscreen->b.get_video_param = rvid_get_video_param;
+		rscreen->b.is_video_format_supported = rvid_is_format_supported;
 	} else {
 		rscreen->b.get_video_param = r600_get_video_param;
 		rscreen->b.is_video_format_supported = vl_video_buffer_is_format_supported;
 	}
 
-	r600_init_texture_functions(rscreen);
+	r600_init_screen_texture_functions(rscreen);
 
 	rscreen->ws = ws;
 	rscreen->family = rscreen->info.family;

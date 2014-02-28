@@ -126,7 +126,7 @@ static void si_init_descriptors(struct si_context *sctx,
 
 	desc->buffer = (struct r600_resource*)
 		pipe_buffer_create(sctx->b.b.screen, PIPE_BIND_CUSTOM,
-				   PIPE_USAGE_STATIC,
+				   PIPE_USAGE_DEFAULT,
 				   SI_NUM_CONTEXTS * desc->context_size);
 
 	r600_context_bo_reloc(&sctx->b, &sctx->b.rings.gfx, desc->buffer, RADEON_USAGE_READWRITE);
@@ -432,7 +432,7 @@ void si_upload_const_buffer(struct si_context *sctx, struct r600_resource **rbuf
 		}
 
 		for (i = 0; i < size / 4; ++i) {
-			tmpPtr[i] = util_bswap32(((uint32_t *)ptr)[i]);
+			tmpPtr[i] = util_cpu_to_le32(((uint32_t *)ptr)[i]);
 		}
 
 		u_upload_data(sctx->b.uploader, 0, size, tmpPtr, const_offset,
@@ -706,8 +706,8 @@ static void si_invalidate_buffer(struct pipe_context *ctx, struct pipe_resource 
 	pb_reference(&rbuffer->buf, NULL);
 
 	/* Create a new one in the same pipe_resource. */
-	r600_init_resource(&sctx->screen->b, rbuffer, rbuffer->b.b.width0, alignment,
-			   TRUE, rbuffer->b.b.usage);
+	r600_init_resource(&sctx->screen->b, rbuffer, rbuffer->b.b.width0,
+			   alignment, TRUE);
 
 	/* We changed the buffer, now we need to bind it where the old one
 	 * was bound. This consists of 2 things:

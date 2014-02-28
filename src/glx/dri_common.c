@@ -192,9 +192,10 @@ __driGetMSCRate(__DRIdrawable *draw,
 }
 
 _X_HIDDEN const __DRIsystemTimeExtension systemTimeExtension = {
-   {__DRI_SYSTEM_TIME, __DRI_SYSTEM_TIME_VERSION},
-   __glXGetUST,
-   __driGetMSCRate
+   .base = {__DRI_SYSTEM_TIME, 1 },
+
+   .getUST              = __glXGetUST,
+   .getMSCRate          = __driGetMSCRate
 };
 
 #define __ATTRIB(attrib, field) \
@@ -390,6 +391,9 @@ driFetchDrawable(struct glx_context *gc, GLXDrawable glxDrawable)
    struct glx_screen *psc;
 
    if (priv == NULL)
+      return NULL;
+
+   if (glxDrawable == None)
       return NULL;
 
    psc = priv->screens[gc->screen];

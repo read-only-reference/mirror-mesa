@@ -105,10 +105,6 @@ DRI_CONF_END
 
 #include "i915_drm.h"
 
-#ifdef USE_NEW_INTERFACE
-static PFNGLXCREATECONTEXTMODES create_context_modes = NULL;
-#endif /*USE_NEW_INTERFACE */
-
 /**
  * For debugging purposes, this returns a time in seconds.
  */
@@ -333,8 +329,8 @@ intel_setup_image_from_mipmap_tree(struct brw_context *brw, __DRIimage *image,
    intel_region_get_tile_masks(mt->region, &mask_x, &mask_y, false);
    intel_miptree_get_image_offset(mt, level, zoffset, &draw_x, &draw_y);
 
-   image->width = mt->level[level].width;
-   image->height = mt->level[level].height;
+   image->width = minify(mt->physical_width0, level - mt->first_level);
+   image->height = minify(mt->physical_height0, level - mt->first_level);
    image->tile_x = draw_x & mask_x;
    image->tile_y = draw_y & mask_y;
 
@@ -1007,7 +1003,7 @@ intelCreateBuffer(__DRIscreen * driScrnPriv,
       assert(mesaVis->stencilBits == 8);
 
       if (screen->devinfo->has_hiz_and_separate_stencil) {
-         rb = intel_create_private_renderbuffer(MESA_FORMAT_Z24_UNORM_S8_UINT,
+         rb = intel_create_private_renderbuffer(MESA_FORMAT_Z24_UNORM_X8_UINT,
                                                 num_samples);
          _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &rb->Base.Base);
          rb = intel_create_private_renderbuffer(MESA_FORMAT_S_UINT8,
@@ -1018,7 +1014,7 @@ intelCreateBuffer(__DRIscreen * driScrnPriv,
           * Use combined depth/stencil. Note that the renderbuffer is
           * attached to two attachment points.
           */
-         rb = intel_create_private_renderbuffer(MESA_FORMAT_Z24_UNORM_X8_UINT,
+         rb = intel_create_private_renderbuffer(MESA_FORMAT_Z24_UNORM_S8_UINT,
                                                 num_samples);
          _mesa_add_renderbuffer(fb, BUFFER_DEPTH, &rb->Base.Base);
          _mesa_add_renderbuffer(fb, BUFFER_STENCIL, &rb->Base.Base);
@@ -1111,11 +1107,14 @@ intel_detect_swizzling(struct intel_screen *screen)
 const int*
 intel_supported_msaa_modes(const struct intel_screen  *screen)
 {
+   static const int gen8_modes[] = {8, 4, 2, 0, -1};
    static const int gen7_modes[] = {8, 4, 0, -1};
    static const int gen6_modes[] = {4, 0, -1};
    static const int gen4_modes[] = {0, -1};
 
-   if (screen->devinfo->gen >= 7) {
+   if (screen->devinfo->gen >= 8) {
+      return gen8_modes;
+   } else if (screen->devinfo->gen >= 7) {
       return gen7_modes;
    } else if (screen->devinfo->gen == 6) {
       return gen6_modes;
@@ -1328,6 +1327,8 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
 
    intelScreen->deviceID = drm_intel_bufmgr_gem_get_devid(intelScreen->bufmgr);
    intelScreen->devinfo = brw_get_device_info(intelScreen->deviceID);
+   if (!intelScreen->devinfo)
+      return false;
 
    intelScreen->hw_must_use_separate_stencil = intelScreen->devinfo->gen >= 7;
 

@@ -251,6 +251,86 @@ static const struct brw_tracked_state *gen7_atoms[] =
    &haswell_cut_index,
 };
 
+static const struct brw_tracked_state *gen8_atoms[] =
+{
+   &brw_vs_prog,
+   &brw_gs_prog,
+   &brw_wm_prog,
+
+   /* Command packets: */
+   &gen8_state_base_address,
+
+   &brw_cc_vp,
+   &gen7_cc_viewport_state_pointer, /* must do after brw_cc_vp */
+   &gen8_sf_clip_viewport,
+
+   &gen7_push_constant_space,
+   &gen7_urb,
+   &gen8_blend_state,
+   &gen6_color_calc_state,
+
+   &gen6_vs_push_constants, /* Before vs_state */
+   &gen7_gs_push_constants, /* Before gs_state */
+   &gen6_wm_push_constants, /* Before wm_surfaces and constant_buffer */
+
+   /* Surface state setup.  Must come before the VS/WM unit.  The binding
+    * table upload must be last.
+    */
+   &brw_vs_pull_constants,
+   &brw_vs_ubo_surfaces,
+   &brw_vs_abo_surfaces,
+   &brw_gs_pull_constants,
+   &brw_gs_ubo_surfaces,
+   &brw_gs_abo_surfaces,
+   &brw_wm_pull_constants,
+   &brw_wm_ubo_surfaces,
+   &brw_wm_abo_surfaces,
+   &gen6_renderbuffer_surfaces,
+   &brw_texture_surfaces,
+   &brw_vs_binding_table,
+   &brw_gs_binding_table,
+   &brw_wm_binding_table,
+
+   &brw_fs_samplers,
+   &brw_vs_samplers,
+   &brw_gs_samplers,
+   &gen8_multisample_state,
+
+   &gen8_disable_stages,
+   &gen8_vs_state,
+   &gen8_gs_state,
+   &gen8_sol_state,
+   &gen6_clip_state,
+   &gen8_raster_state,
+   &gen8_sbe_state,
+   &gen8_sf_state,
+   &gen8_ps_blend,
+   &gen8_ps_extra,
+   &gen8_ps_state,
+   &gen8_wm_depth_stencil,
+   &gen8_wm_state,
+
+   &gen6_scissor_state,
+
+   &gen7_depthbuffer,
+
+   &brw_polygon_stipple,
+   &brw_polygon_stipple_offset,
+
+   &brw_line_stipple,
+   &brw_aa_line_parameters,
+
+   &brw_drawing_rect,
+
+   &gen8_vf_topology,
+
+   &brw_indices,
+   &gen8_index_buffer,
+   &gen8_vertices,
+
+   &haswell_cut_index,
+};
+
 static void
 brw_upload_initial_gpu_state(struct brw_context *brw)
 {
@@ -262,6 +342,10 @@ brw_upload_initial_gpu_state(struct brw_context *brw)
       return;
 
    brw_upload_invariant_state(brw);
+
+   if (brw->gen >= 8) {
+      gen8_emit_3dstate_sample_pattern(brw);
+   }
 }
 
 void brw_init_state( struct brw_context *brw )
@@ -272,7 +356,10 @@ void brw_init_state( struct brw_context *brw )
 
    brw_init_caches(brw);
 
-   if (brw->gen >= 7) {
+   if (brw->gen >= 8) {
+      atoms = gen8_atoms;
+      num_atoms = ARRAY_SIZE(gen8_atoms);
+   } else if (brw->gen == 7) {
       atoms = gen7_atoms;
       num_atoms = ARRAY_SIZE(gen7_atoms);
    } else if (brw->gen == 6) {

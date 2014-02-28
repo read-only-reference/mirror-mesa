@@ -83,7 +83,7 @@
 #define DBG_PS			(1 << 11)
 #define DBG_CS			(1 << 12)
 /* features */
-#define DBG_NO_HYPERZ		(1 << 13)
+#define DBG_HYPERZ		(1 << 13)
 #define DBG_NO_DISCARD_RANGE	(1 << 14)
 /* The maximum allowed bit is 15. */
 
@@ -158,6 +158,49 @@ struct r600_texture {
 
 	bool				non_disp_tiling; /* R600-Cayman only */
 	unsigned			mipmap_shift;
+};
+
+struct r600_surface {
+	struct pipe_surface		base;
+
+	bool color_initialized;
+	bool depth_initialized;
+
+	/* Misc. color flags. */
+	bool alphatest_bypass;
+	bool export_16bpc;
+
+	/* Color registers. */
+	unsigned cb_color_info;
+	unsigned cb_color_base;
+	unsigned cb_color_view;
+	unsigned cb_color_size;		/* R600 only */
+	unsigned cb_color_dim;		/* EG only */
+	unsigned cb_color_pitch;	/* EG and later */
+	unsigned cb_color_slice;	/* EG and later */
+	unsigned cb_color_attrib;	/* EG and later */
+	unsigned cb_color_fmask;	/* CB_COLORn_FMASK (EG and later) or CB_COLORn_FRAG (r600) */
+	unsigned cb_color_fmask_slice;	/* EG and later */
+	unsigned cb_color_cmask;	/* CB_COLORn_CMASK (EG and later) or CB_COLORn_TILE (r600) */
+	unsigned cb_color_cmask_slice;	/* EG and later */
+	unsigned cb_color_mask;		/* R600 only */
+	struct r600_resource *cb_buffer_fmask; /* Used for FMASK relocations. R600 only */
+	struct r600_resource *cb_buffer_cmask; /* Used for CMASK relocations. R600 only */
+
+	/* DB registers. */
+	unsigned db_depth_info;		/* R600 only, then SI and later */
+	unsigned db_z_info;		/* EG and later */
+	unsigned db_depth_base;		/* DB_Z_READ/WRITE_BASE (EG and later) or DB_DEPTH_BASE (r600) */
+	unsigned db_depth_view;
+	unsigned db_depth_size;
+	unsigned db_depth_slice;	/* EG and later */
+	unsigned db_stencil_base;	/* EG and later */
+	unsigned db_stencil_info;	/* EG and later */
+	unsigned db_prefetch_limit;	/* R600 only */
+	unsigned db_htile_surface;
+	unsigned db_htile_data_base;
+	unsigned db_preload_control;	/* EG and later */
+	unsigned pa_su_poly_offset_db_fmt_cntl;
 };
 
 struct r600_tiling_info {
@@ -241,6 +284,7 @@ struct r600_common_context {
 	enum radeon_family		family;
 	enum chip_class			chip_class;
 	struct r600_rings		rings;
+	unsigned			initial_gfx_cs_size;
 
 	struct u_upload_mgr		*uploader;
 	struct u_suballocator		*allocator_so_filled_size;
@@ -321,7 +365,7 @@ void *r600_buffer_map_sync_with_rings(struct r600_common_context *ctx,
 bool r600_init_resource(struct r600_common_screen *rscreen,
 			struct r600_resource *res,
 			unsigned size, unsigned alignment,
-			bool use_reusable_pool, unsigned usage);
+			bool use_reusable_pool);
 struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 					 const struct pipe_resource *templ,
 					 unsigned alignment);
@@ -372,7 +416,12 @@ bool r600_init_flushed_depth_texture(struct pipe_context *ctx,
 				     struct r600_texture **staging);
 struct pipe_resource *r600_texture_create(struct pipe_screen *screen,
 					const struct pipe_resource *templ);
-void r600_init_texture_functions(struct r600_common_screen *rscreen);
+struct pipe_surface *r600_create_surface_custom(struct pipe_context *pipe,
+						struct pipe_resource *texture,
+						const struct pipe_surface *templ,
+						unsigned width, unsigned height);
+void r600_init_screen_texture_functions(struct r600_common_screen *rscreen);
+void r600_init_context_texture_functions(struct r600_common_context *rctx);
 
 
 /* Inline helpers. */

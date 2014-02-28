@@ -128,6 +128,7 @@ vec4_visitor::emit(enum opcode opcode)
    vec4_instruction *							\
    vec4_visitor::op(dst_reg dst, src_reg src0, src_reg src1, src_reg src2)\
    {									\
+      assert(brw->gen >= 6);						\
       return new(mem_ctx) vec4_instruction(this, BRW_OPCODE_##op, dst,	\
 					   src0, src1, src2);		\
    }
@@ -473,14 +474,14 @@ vec4_visitor::emit_pack_half_2x16(dst_reg dst, src_reg src0)
    /* Give the write-channels of dst the form:
     *   0xhhhh0000
     */
-   tmp_src.swizzle = SWIZZLE_Y;
+   tmp_src.swizzle = BRW_SWIZZLE_YYYY;
    emit(SHL(dst, tmp_src, src_reg(16u)));
 
    /* Finally, give the write-channels of dst the form of packHalf2x16's
     * output:
     *   0xhhhhllll
     */
-   tmp_src.swizzle = SWIZZLE_X;
+   tmp_src.swizzle = BRW_SWIZZLE_XXXX;
    emit(OR(dst, src_reg(dst), tmp_src));
 }
 
@@ -570,6 +571,7 @@ type_size(const struct glsl_type *type)
       return 1;
    case GLSL_TYPE_ATOMIC_UINT:
       return 0;
+   case GLSL_TYPE_IMAGE:
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
@@ -662,16 +664,17 @@ vec4_visitor::setup_uniform_values(ir_variable *ir)
                                storage->type->matrix_columns);
 
       for (unsigned s = 0; s < vector_count; s++) {
+         assert(uniforms < uniform_array_size);
          uniform_vector_size[uniforms] = storage->type->vector_elements;
 
          int i;
          for (i = 0; i < uniform_vector_size[uniforms]; i++) {
-            prog_data->param[uniforms * 4 + i] = &components->f;
+            stage_prog_data->param[uniforms * 4 + i] = &components->f;
             components++;
          }
          for (; i < 4; i++) {
             static float zero = 0;
-            prog_data->param[uniforms * 4 + i] = &zero;
+            stage_prog_data->param[uniforms * 4 + i] = &zero;
          }
 
          uniforms++;
@@ -685,11 +688,12 @@ vec4_visitor::setup_uniform_clipplane_values()
    gl_clip_plane *clip_planes = brw_select_clip_planes(ctx);
 
    for (int i = 0; i < key->nr_userclip_plane_consts; ++i) {
+      assert(this->uniforms < uniform_array_size);
       this->uniform_vector_size[this->uniforms] = 4;
       this->userplane[i] = dst_reg(UNIFORM, this->uniforms);
       this->userplane[i].type = BRW_REGISTER_TYPE_F;
       for (int j = 0; j < 4; ++j) {
-         prog_data->param[this->uniforms * 4 + j] = &clip_planes[i][j];
+         stage_prog_data->param[this->uniforms * 4 + j] = &clip_planes[i][j];
       }
       ++this->uniforms;
    }
@@ -715,6 +719,7 @@ vec4_visitor::setup_builtin_uniform_values(ir_variable *ir)
 					    (gl_state_index *)slots[i].tokens);
       float *values = &this->prog->Parameters->ParameterValues[index][0].f;
 
+      assert(this->uniforms < uniform_array_size);
       this->uniform_vector_size[this->uniforms] = 0;
       /* Add each of the unique swizzled channels of the element.
        * This will end up matching the size of the glsl_type of this field.
@@ -724,7 +729,8 @@ vec4_visitor::setup_builtin_uniform_values(ir_variable *ir)
 	 int swiz = GET_SWZ(slots[i].swizzle, j);
 	 last_swiz = swiz;
 
-	 prog_data->param[this->uniforms * 4 + j] = &values[swiz];
+	 stage_prog_data->param[this->uniforms * 4 + j] = &values[swiz];
+	 assert(this->uniforms < uniform_array_size);
 	 if (swiz <= last_swiz)
 	    this->uniform_vector_size[this->uniforms]++;
       }
@@ -928,15 +934,6 @@ vec4_visitor::emit_if_gen6(ir_if *ir)
    emit(IF(this->result, src_reg(0), BRW_CONDITIONAL_NZ));
 }
 
-dst_reg
-with_writemask(dst_reg const & r, int mask)
-{
-   dst_reg result = r;
-   result.writemask = mask;
-   return result;
-}
-
-
 void
 vec4_visitor::visit(ir_variable *ir)
 {
@@ -983,6 +980,7 @@ vec4_visitor::visit(ir_variable *ir)
       /* Track how big the whole uniform variable is, in case we need to put a
        * copy of its data into pull constants for array access.
        */
+      assert(this->uniforms < uniform_array_size);
       this->uniform_size[this->uniforms] = type_size(ir->type);
 
       if (!strncmp(ir->name, "gl_", 3)) {
@@ -1139,6 +1137,40 @@ vec4_visitor::emit_minmax(uint32_t conditionalmod, dst_reg dst,
    }
 }
 
+void
+vec4_visitor::emit_lrp(const dst_reg &dst,
+                       const src_reg &x, const src_reg &y, const src_reg &a)
+{
+   if (brw->gen >= 6) {
+      /* Note that the instruction's argument order is reversed from GLSL
+       * and the IR.
+       */
+      emit(LRP(dst,
+               fix_3src_operand(a), fix_3src_operand(y), fix_3src_operand(x)));
+   } else {
+      /* Earlier generations don't support three source operations, so we
+       * need to emit x*(1-a) + y*a.
+       *
+       * A better way to do this would be:
+       *    ADD one_minus_a, negate(a), 1.0f
+       *    MUL null, y, a
+       *    MAC dst, x, one_minus_a
+       * but we would need to support MAC and implicit accumulator.
+       */
+      dst_reg y_times_a           = dst_reg(this, glsl_type::vec4_type);
+      dst_reg one_minus_a         = dst_reg(this, glsl_type::vec4_type);
+      dst_reg x_times_one_minus_a = dst_reg(this, glsl_type::vec4_type);
+      y_times_a.writemask           = dst.writemask;
+      one_minus_a.writemask         = dst.writemask;
+      x_times_one_minus_a.writemask = dst.writemask;
+
+      emit(MUL(y_times_a, y, a));
+      emit(ADD(one_minus_a, negate(a), src_reg(1.0f)));
+      emit(MUL(x_times_one_minus_a, x, src_reg(one_minus_a)));
+      emit(ADD(dst, src_reg(x_times_one_minus_a), src_reg(y_times_a)));
+   }
+}
+
 static bool
 is_16bit_constant(ir_rvalue *rvalue)
 {
@@ -1174,8 +1206,8 @@ vec4_visitor::visit(ir_expression *ir)
       this->result.file = BAD_FILE;
       ir->operands[operand]->accept(this);
       if (this->result.file == BAD_FILE) {
-	 printf("Failed to get tree for expression operand:\n");
-	 ir->operands[operand]->print();
+	 fprintf(stderr, "Failed to get tree for expression operand:\n");
+	 ir->operands[operand]->fprint(stderr);
 	 exit(1);
       }
       op[operand] = this->result;
@@ -1581,14 +1613,27 @@ vec4_visitor::visit(ir_expression *ir)
          emit(SHR(dst_reg(offset), op[1], src_reg(4)));
       }
 
-      vec4_instruction *pull =
+      if (brw->gen >= 7) {
+         dst_reg grf_offset = dst_reg(this, glsl_type::int_type);
+         grf_offset.type = offset.type;
+
+         emit(MOV(grf_offset, offset));
+
          emit(new(mem_ctx) vec4_instruction(this,
-                                            VS_OPCODE_PULL_CONSTANT_LOAD,
+                                            VS_OPCODE_PULL_CONSTANT_LOAD_GEN7,
                                             dst_reg(packed_consts),
                                             surf_index,
-                                            offset));
-      pull->base_mrf = 14;
-      pull->mlen = 1;
+                                            src_reg(grf_offset)));
+      } else {
+         vec4_instruction *pull =
+            emit(new(mem_ctx) vec4_instruction(this,
+                                               VS_OPCODE_PULL_CONSTANT_LOAD,
+                                               dst_reg(packed_consts),
+                                               surf_index,
+                                               offset));
+         pull->base_mrf = 14;
+         pull->mlen = 1;
+      }
 
       packed_consts.swizzle = swizzle_for_size(ir->type->vector_elements);
       packed_consts.swizzle += BRW_SWIZZLE4(const_offset % 16 / 4,
@@ -1622,13 +1667,7 @@ vec4_visitor::visit(ir_expression *ir)
       break;
 
    case ir_triop_lrp:
-      op[0] = fix_3src_operand(op[0]);
-      op[1] = fix_3src_operand(op[1]);
-      op[2] = fix_3src_operand(op[2]);
-      /* Note that the instruction's argument order is reversed from GLSL
-       * and the IR.
-       */
-      emit(LRP(result_dst, op[2], op[1], op[0]));
+      emit_lrp(result_dst, op[0], op[1], op[2]);
       break;
 
    case ir_triop_csel:
@@ -2494,12 +2533,43 @@ vec4_visitor::visit(ir_texture *ir)
       if (type->sampler_dimensionality == GLSL_SAMPLER_DIM_CUBE &&
           type->sampler_array) {
          emit_math(SHADER_OPCODE_INT_QUOTIENT,
-                   with_writemask(inst->dst, WRITEMASK_Z),
+                   writemask(inst->dst, WRITEMASK_Z),
                    src_reg(inst->dst), src_reg(6));
       }
    }
 
+   if (brw->gen == 6 && ir->op == ir_tg4) {
+      emit_gen6_gather_wa(key->tex.gen6_gather_wa[sampler], inst->dst);
+   }
+
    swizzle_result(ir, src_reg(inst->dst), sampler);
+}
+
+/**
+ * Apply workarounds for Gen6 gather with UINT/SINT
+ */
+void
+vec4_visitor::emit_gen6_gather_wa(uint8_t wa, dst_reg dst)
+{
+   if (!wa)
+      return;
+
+   int width = (wa & WA_8BIT) ? 8 : 16;
+   dst_reg dst_f = dst;
+   dst_f.type = BRW_REGISTER_TYPE_F;
+
+   /* Convert from UNORM to UINT */
+   emit(MUL(dst_f, src_reg(dst_f), src_reg((float)((1 << width) - 1))));
+   emit(MOV(dst, src_reg(dst_f)));
+
+   if (wa & WA_SIGN) {
+      /* Reinterpret the UINT value as a signed INT value by
+       * shifting the sign bit into place, then shifting back
+       * preserving sign.
+       */
+      emit(SHL(dst, src_reg(dst), src_reg(32 - width)));
+      emit(ASR(dst, src_reg(dst), src_reg(32 - width)));
+   }
 }
 
 /**
@@ -3233,12 +3303,13 @@ vec4_visitor::move_uniform_array_access_to_pull_constants()
 	  * add it.
 	  */
 	 if (pull_constant_loc[uniform] == -1) {
-	    const float **values = &prog_data->param[uniform * 4];
+	    const float **values = &stage_prog_data->param[uniform * 4];
 
-	    pull_constant_loc[uniform] = prog_data->nr_pull_params / 4;
+	    pull_constant_loc[uniform] = stage_prog_data->nr_pull_params / 4;
 
+	    assert(uniform < uniform_array_size);
 	    for (int j = 0; j < uniform_size[uniform] * 4; j++) {
-	       prog_data->pull_param[prog_data->nr_pull_params++]
+	       stage_prog_data->pull_param[stage_prog_data->nr_pull_params++]
                   = values[j];
 	    }
 	 }
@@ -3336,6 +3407,17 @@ vec4_visitor::vec4_visitor(struct brw_context *brw,
    this->max_grf = brw->gen >= 7 ? GEN7_MRF_HACK_START : BRW_MAX_GRF;
 
    this->uniforms = 0;
+
+   /* Initialize uniform_array_size to at least 1 because pre-gen6 VS requires
+    * at least one. See setup_uniforms() in brw_vec4.cpp.
+    */
+   this->uniform_array_size = 1;
+   if (prog_data) {
+      this->uniform_array_size = MAX2(stage_prog_data->nr_params, 1);
+   }
+
+   this->uniform_size = rzalloc_array(mem_ctx, int, this->uniform_array_size);
+   this->uniform_vector_size = rzalloc_array(mem_ctx, int, this->uniform_array_size);
 }
 
 vec4_visitor::~vec4_visitor()

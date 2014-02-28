@@ -192,9 +192,10 @@ radeonDRI2Flush(__DRIdrawable *drawable)
 }
 
 static const struct __DRI2flushExtensionRec radeonFlushExtension = {
-    { __DRI2_FLUSH, 3 },
-    radeonDRI2Flush,
-    dri2InvalidateDrawable,
+   .base = { __DRI2_FLUSH, 3 },
+
+   .flush               = radeonDRI2Flush,
+   .invalidate          = dri2InvalidateDrawable,
 };
 
 static __DRIimage *
@@ -632,14 +633,14 @@ radeonCreateBuffer( __DRIscreen *driScrnPriv,
     if (mesaVis->depthBits == 24) {
       if (mesaVis->stencilBits == 8) {
 	struct radeon_renderbuffer *depthStencilRb =
-           radeon_create_renderbuffer(MESA_FORMAT_Z24_UNORM_X8_UINT, driDrawPriv);
+           radeon_create_renderbuffer(MESA_FORMAT_Z24_UNORM_S8_UINT, driDrawPriv);
 	_mesa_add_renderbuffer(&rfb->base, BUFFER_DEPTH, &depthStencilRb->base.Base);
 	_mesa_add_renderbuffer(&rfb->base, BUFFER_STENCIL, &depthStencilRb->base.Base);
 	depthStencilRb->has_surface = screen->depthHasSurface;
       } else {
 	/* depth renderbuffer */
 	struct radeon_renderbuffer *depth =
-           radeon_create_renderbuffer(MESA_FORMAT_Z24_UNORM_S8_UINT, driDrawPriv);
+           radeon_create_renderbuffer(MESA_FORMAT_Z24_UNORM_X8_UINT, driDrawPriv);
 	_mesa_add_renderbuffer(&rfb->base, BUFFER_DEPTH, &depth->base.Base);
 	depth->has_surface = screen->depthHasSurface;
       }

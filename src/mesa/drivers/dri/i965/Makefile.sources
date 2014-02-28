@@ -73,7 +73,6 @@ i965_FILES = \
 	brw_gs_surface_state.c \
 	brw_interpolation_map.c \
 	brw_lower_texture_gradients.cpp \
-	brw_lower_offset_array.cpp \
 	brw_lower_unnormalized_offset.cpp \
 	brw_misc_state.c \
 	brw_object_purgeable.c \
@@ -141,9 +140,23 @@ i965_FILES = \
 	gen7_vs_state.c \
 	gen7_wm_state.c \
 	gen7_wm_surface_state.c \
+	gen8_blend_state.c \
 	gen8_disasm.c \
+	gen8_depth_state.c \
+	gen8_disable.c \
+	gen8_draw_upload.c \
 	gen8_fs_generator.cpp \
 	gen8_generator.cpp \
 	gen8_instruction.c \
+	gen8_gs_state.c \
+	gen8_misc_state.c \
+	gen8_multisample_state.c \
+	gen8_sf_state.c \
+	gen8_sol_state.c \
+	gen8_surface_state.c \
 	gen8_vec4_generator.cpp \
+	gen8_viewport_state.c \
+	gen8_vs_state.c \
+	gen8_wm_depth_stencil.c \
+	gen8_ps_state.c \
         $()
