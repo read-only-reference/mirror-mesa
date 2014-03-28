@@ -342,14 +342,14 @@ st_translate_vertex_program(struct st_context *st,
                                    stvp->glsl_to_tgsi,
                                    &stvp->Base.Base,
                                    /* inputs */
-                                   stvp->num_inputs,
+                                   vpv->num_inputs,
                                    stvp->input_to_index,
                                    NULL, /* input semantic name */
                                    NULL, /* input semantic index */
                                    NULL, /* interp mode */
                                    NULL, /* is centroid */
                                    /* outputs */
-                                   stvp->num_outputs,
+                                   num_outputs,
                                    stvp->result_to_output,
                                    stvp->output_semantic_name,
                                    stvp->output_semantic_index,
@@ -1204,7 +1204,7 @@ st_get_gp_variant(struct st_context *st,
 void
 st_print_shaders(struct gl_context *ctx)
 {
-   struct gl_shader_program **shProg = ctx->Shader.CurrentProgram;
+   struct gl_shader_program **shProg = ctx->_Shader->CurrentProgram;
    unsigned j;
 
    for (j = 0; j < 3; j++) {

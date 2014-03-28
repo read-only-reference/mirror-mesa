@@ -5,7 +5,10 @@ lib_LTLIBRARIES = lib@OPENCL_LIBNAME@.la
 lib@OPENCL_LIBNAME@_la_LDFLAGS = \
 	$(LLVM_LDFLAGS) \
 	-no-undefined \
-	-version-number 1:0
+	-version-number 1:0 \
+	$(GC_SECTIONS) \
+	-Wl,--no-undefined
+
 
 lib@OPENCL_LIBNAME@_la_LIBADD = \
 	$(top_builddir)/src/gallium/auxiliary/pipe-loader/libpipe_loader_client.la \
@@ -41,18 +44,13 @@ lib@OPENCL_LIBNAME@_la_LIBADD += \
 	$(LIBDRM_LIBS)
 endif
 
+nodist_EXTRA_lib@OPENCL_LIBNAME@_la_SOURCES = dummy.cpp
 lib@OPENCL_LIBNAME@_la_SOURCES =
 
-# Force usage of a C++ linker
-nodist_EXTRA_lib@OPENCL_LIBNAME@_la_SOURCES = dummy.cpp
 
 if HAVE_CLOVER_ICD
 icddir = /etc/OpenCL/vendors/
 icd_DATA = mesa.icd
 endif
 
-# Provide compatibility with scripts for the old Mesa build system for
-# a while by putting a link to the driver into /lib of the build tree.
-all-local: lib@OPENCL_LIBNAME@.la
-	$(MKDIR_P) $(top_builddir)/$(LIB_DIR)
-	ln -f .libs/lib@OPENCL_LIBNAME@.so* $(top_builddir)/$(LIB_DIR)/
+include $(top_srcdir)/install-gallium-links.mk

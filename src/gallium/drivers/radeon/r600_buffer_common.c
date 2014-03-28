@@ -106,6 +106,7 @@ bool r600_init_resource(struct r600_common_screen *rscreen,
 			bool use_reusable_pool)
 {
 	struct r600_texture *rtex = (struct r600_texture*)res;
+	struct pb_buffer *old_buf, *new_buf;
 
 	switch (res->b.b.usage) {
 	case PIPE_USAGE_STAGING:
@@ -136,15 +137,23 @@ bool r600_init_resource(struct r600_common_screen *rscreen,
 		res->domains = RADEON_DOMAIN_VRAM;
 	}
 
-	/* Allocate the resource. */
-	res->buf = rscreen->ws->buffer_create(rscreen->ws, size, alignment,
-                                              use_reusable_pool,
-                                              res->domains);
-	if (!res->buf) {
+	/* Allocate a new resource. */
+	new_buf = rscreen->ws->buffer_create(rscreen->ws, size, alignment,
+					     use_reusable_pool,
+					     res->domains);
+	if (!new_buf) {
 		return false;
 	}
 
-	res->cs_buf = rscreen->ws->buffer_get_cs_handle(res->buf);
+	/* Replace the pointer such that if res->buf wasn't NULL, it won't be
+	 * NULL. This should prevent crashes with multiple contexts using
+	 * the same buffer where one of the contexts invalidates it while
+	 * the others are using it. */
+	old_buf = res->buf;
+	res->cs_buf = rscreen->ws->buffer_get_cs_handle(new_buf); /* should be atomic */
+	res->buf = new_buf; /* should be atomic */
+	pb_reference(&old_buf, NULL);
+
 	util_range_set_empty(&res->valid_buffer_range);
 
 	if (rscreen->debug_flags & DBG_VM && res->b.b.target == PIPE_BUFFER) {
@@ -190,6 +199,17 @@ static void *r600_buffer_get_transfer(struct pipe_context *ctx,
 	return data;
 }
 
+static bool r600_can_dma_copy_buffer(struct r600_common_context *rctx,
+				     unsigned dstx, unsigned srcx, unsigned size)
+{
+	bool dword_aligned = !(dstx % 4) && !(srcx % 4) && !(size % 4);
+
+	return rctx->screen->has_cp_dma ||
+	       (dword_aligned && (rctx->rings.dma.cs ||
+				  rctx->screen->has_streamout));
+
+}
+
 static void *r600_buffer_transfer_map(struct pipe_context *ctx,
                                       struct pipe_resource *resource,
                                       unsigned level,
@@ -233,10 +253,7 @@ static void *r600_buffer_transfer_map(struct pipe_context *ctx,
 	else if ((usage & PIPE_TRANSFER_DISCARD_RANGE) &&
 		 !(usage & PIPE_TRANSFER_UNSYNCHRONIZED) &&
 		 !(rscreen->debug_flags & DBG_NO_DISCARD_RANGE) &&
-		 (rscreen->has_cp_dma ||
-		  (rscreen->has_streamout &&
-		   /* The buffer range must be aligned to 4 with streamout. */
-		   box->x % 4 == 0 && box->width % 4 == 0))) {
+		 r600_can_dma_copy_buffer(rctx, box->x, 0, box->width)) {
 		assert(usage & PIPE_TRANSFER_WRITE);
 
 		/* Check if mapping this buffer would cause waiting for the GPU. */
@@ -260,6 +277,33 @@ static void *r600_buffer_transfer_map(struct pipe_context *ctx,
 		/* At this point, the buffer is always idle (we checked it above). */
 		usage |= PIPE_TRANSFER_UNSYNCHRONIZED;
 	}
+	/* Using a staging buffer in GTT for larger reads is much faster. */
+	else if ((usage & PIPE_TRANSFER_READ) &&
+		 !(usage & PIPE_TRANSFER_WRITE) &&
+		 rbuffer->domains == RADEON_DOMAIN_VRAM &&
+		 r600_can_dma_copy_buffer(rctx, 0, box->x, box->width)) {
+		unsigned offset;
+		struct r600_resource *staging = NULL;
+
+		u_upload_alloc(rctx->uploader, 0,
+			       box->width + (box->x % R600_MAP_BUFFER_ALIGNMENT),
+			       &offset, (struct pipe_resource**)&staging, (void**)&data);
+
+		if (staging) {
+			data += box->x % R600_MAP_BUFFER_ALIGNMENT;
+
+			/* Copy the VRAM buffer to the staging buffer. */
+			rctx->dma_copy(ctx, &staging->b.b, 0,
+				       offset + box->x % R600_MAP_BUFFER_ALIGNMENT,
+				       0, 0, resource, level, box);
+
+			/* Just do the synchronization. The buffer is mapped already. */
+			r600_buffer_map_sync_with_rings(rctx, staging, PIPE_TRANSFER_READ);
+
+			return r600_buffer_get_transfer(ctx, resource, level, usage, box,
+							ptransfer, data, staging, offset);
+		}
+	}
 
 	data = r600_buffer_map_sync_with_rings(rctx, rbuffer, usage);
 	if (!data) {
@@ -279,24 +323,21 @@ static void r600_buffer_transfer_unmap(struct pipe_context *ctx,
 	struct r600_resource *rbuffer = r600_resource(transfer->resource);
 
 	if (rtransfer->staging) {
-		struct pipe_resource *dst, *src;
-		unsigned soffset, doffset, size;
-		struct pipe_box box;
+		if (rtransfer->transfer.usage & PIPE_TRANSFER_WRITE) {
+			struct pipe_resource *dst, *src;
+			unsigned soffset, doffset, size;
+			struct pipe_box box;
 
-		dst = transfer->resource;
-		src = &rtransfer->staging->b.b;
-		size = transfer->box.width;
-		doffset = transfer->box.x;
-		soffset = rtransfer->offset + transfer->box.x % R600_MAP_BUFFER_ALIGNMENT;
+			dst = transfer->resource;
+			src = &rtransfer->staging->b.b;
+			size = transfer->box.width;
+			doffset = transfer->box.x;
+			soffset = rtransfer->offset + transfer->box.x % R600_MAP_BUFFER_ALIGNMENT;
 
-		u_box_1d(soffset, size, &box);
+			u_box_1d(soffset, size, &box);
 
-		/* Copy the staging buffer into the original one. */
-		if (!(size % 4) && !(doffset % 4) && !(soffset % 4) &&
-		    rctx->dma_copy(ctx, dst, 0, doffset, 0, 0, src, 0, &box)) {
-			/* DONE. */
-		} else {
-			ctx->resource_copy_region(ctx, dst, 0, doffset, 0, 0, src, 0, &box);
+			/* Copy the staging buffer into the original one. */
+			rctx->dma_copy(ctx, dst, 0, doffset, 0, 0, src, 0, &box);
 		}
 		pipe_resource_reference((struct pipe_resource**)&rtransfer->staging, NULL);
 	}
@@ -331,6 +372,7 @@ struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 	pipe_reference_init(&rbuffer->b.b.reference, 1);
 	rbuffer->b.b.screen = screen;
 	rbuffer->b.vtbl = &r600_buffer_vtbl;
+	rbuffer->buf = NULL;
 	util_range_init(&rbuffer->valid_buffer_range);
 
 	if (!r600_init_resource(rscreen, rbuffer, templ->width0, alignment, TRUE)) {

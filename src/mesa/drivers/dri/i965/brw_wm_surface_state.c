@@ -319,28 +319,28 @@ brw_update_texture_surface(struct gl_context *ctx,
 	      BRW_SURFACE_CUBEFACE_ENABLES |
 	      tex_format << BRW_SURFACE_FORMAT_SHIFT);
 
-   surf[1] = intelObj->mt->region->bo->offset64 + intelObj->mt->offset; /* reloc */
+   surf[1] = mt->region->bo->offset64 + mt->offset; /* reloc */
 
    surf[2] = ((intelObj->_MaxLevel - tObj->BaseLevel) << BRW_SURFACE_LOD_SHIFT |
 	      (mt->logical_width0 - 1) << BRW_SURFACE_WIDTH_SHIFT |
 	      (mt->logical_height0 - 1) << BRW_SURFACE_HEIGHT_SHIFT);
 
-   surf[3] = (brw_get_surface_tiling_bits(intelObj->mt->region->tiling) |
+   surf[3] = (brw_get_surface_tiling_bits(mt->region->tiling) |
 	      (mt->logical_depth0 - 1) << BRW_SURFACE_DEPTH_SHIFT |
-	      (intelObj->mt->region->pitch - 1) <<
+	      (mt->region->pitch - 1) <<
 	      BRW_SURFACE_PITCH_SHIFT);
 
-   surf[4] = (brw_get_surface_num_multisamples(intelObj->mt->num_samples) |
+   surf[4] = (brw_get_surface_num_multisamples(mt->num_samples) |
               SET_FIELD(tObj->BaseLevel - mt->first_level, BRW_SURFACE_MIN_LOD));
 
    surf[5] = mt->align_h == 4 ? BRW_SURFACE_VERTICAL_ALIGN_ENABLE : 0;
 
    /* Emit relocation to surface contents */
    drm_intel_bo_emit_reloc(brw->batch.bo,
-			   *surf_offset + 4,
-			   intelObj->mt->region->bo,
-                           surf[1] - intelObj->mt->region->bo->offset64,
-			   I915_GEM_DOMAIN_SAMPLER, 0);
+                           *surf_offset + 4,
+                           mt->region->bo,
+                           surf[1] - mt->region->bo->offset64,
+                           I915_GEM_DOMAIN_SAMPLER, 0);
 }
 
 /**
@@ -467,37 +467,32 @@ brw_upload_wm_pull_constants(struct brw_context *brw)
    const int size = brw->wm.prog_data->base.nr_pull_params * sizeof(float);
    const int surf_index =
       brw->wm.prog_data->base.binding_table.pull_constants_start;
-   float *constants;
    unsigned int i;
 
    _mesa_load_state_parameters(ctx, params);
 
    /* CACHE_NEW_WM_PROG */
    if (brw->wm.prog_data->base.nr_pull_params == 0) {
-      if (brw->wm.base.const_bo) {
-	 drm_intel_bo_unreference(brw->wm.base.const_bo);
-	 brw->wm.base.const_bo = NULL;
+      if (brw->wm.base.surf_offset[surf_index]) {
 	 brw->wm.base.surf_offset[surf_index] = 0;
 	 brw->state.dirty.brw |= BRW_NEW_SURFACES;
       }
       return;
    }
 
-   drm_intel_bo_unreference(brw->wm.base.const_bo);
-   brw->wm.base.const_bo = drm_intel_bo_alloc(brw->bufmgr, "WM const bo",
-					 size, 64);
-
    /* _NEW_PROGRAM_CONSTANTS */
-   drm_intel_gem_bo_map_gtt(brw->wm.base.const_bo);
-   constants = brw->wm.base.const_bo->virtual;
+   drm_intel_bo *const_bo = NULL;
+   uint32_t const_offset;
+   float *constants = intel_upload_space(brw, size, 64,
+                                         &const_bo, &const_offset);
    for (i = 0; i < brw->wm.prog_data->base.nr_pull_params; i++) {
       constants[i] = *brw->wm.prog_data->base.pull_param[i];
    }
-   drm_intel_gem_bo_unmap_gtt(brw->wm.base.const_bo);
 
-   brw_create_constant_surface(brw, brw->wm.base.const_bo, 0, size,
+   brw_create_constant_surface(brw, const_bo, const_offset, size,
                                &brw->wm.base.surf_offset[surf_index],
                                true);
+   drm_intel_bo_unreference(const_bo);
 
    brw->state.dirty.brw |= BRW_NEW_SURFACES;
 }
@@ -881,7 +876,7 @@ brw_upload_wm_ubo_surfaces(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
    /* _NEW_PROGRAM */
-   struct gl_shader_program *prog = ctx->Shader._CurrentFragmentProgram;
+   struct gl_shader_program *prog = ctx->_Shader->_CurrentFragmentProgram;
 
    if (!prog)
       return;

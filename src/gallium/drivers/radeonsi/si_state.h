@@ -30,6 +30,8 @@
 #include "si_pm4.h"
 #include "../radeon/r600_pipe_common.h"
 
+struct si_screen;
+
 struct si_state_blend {
 	struct si_pm4_state	pm4;
 	uint32_t		cb_target_mask;
@@ -82,7 +84,6 @@ union si_state {
 		struct si_pm4_state		*sample_mask;
 		struct si_pm4_state		*scissor;
 		struct si_state_viewport	*viewport;
-		struct si_pm4_state		*framebuffer;
 		struct si_state_rasterizer	*rasterizer;
 		struct si_state_dsa		*dsa;
 		struct si_pm4_state		*fb_rs;
@@ -162,6 +163,7 @@ struct si_buffer_resources {
 	struct si_descriptors		desc;
 	unsigned			num_buffers;
 	enum radeon_bo_usage		shader_usage; /* READ, WRITE, or READWRITE */
+	enum radeon_bo_priority		priority;
 	struct pipe_resource		**buffers; /* this has num_buffers elements */
 	uint32_t			*desc_storage; /* this has num_buffers*4 elements */
 	uint32_t			**desc_data; /* an array of pointers pointing to desc_storage */
@@ -227,6 +229,11 @@ int si_shader_select(struct pipe_context *ctx,
 		     struct si_pipe_shader_selector *sel);
 void si_init_state_functions(struct si_context *sctx);
 void si_init_config(struct si_context *sctx);
+unsigned cik_bank_wh(unsigned bankwh);
+unsigned cik_db_pipe_config(struct si_screen *sscreen, unsigned tile_mode);
+unsigned cik_macro_tile_aspect(unsigned macro_tile_aspect);
+unsigned cik_tile_split(unsigned tile_split);
+unsigned si_tile_mode_index(struct r600_texture *rtex, unsigned level, bool stencil);
 
 /* si_state_draw.c */
 extern const struct r600_atom si_atom_cache_flush;

@@ -906,6 +906,8 @@ util_format_srgb(enum pipe_format format)
       return PIPE_FORMAT_DXT3_SRGBA;
    case PIPE_FORMAT_DXT5_RGBA:
       return PIPE_FORMAT_DXT5_SRGBA;
+   case PIPE_FORMAT_B5G6R5_UNORM:
+      return PIPE_FORMAT_B5G6R5_SRGB;
    default:
       return PIPE_FORMAT_NONE;
    }
@@ -949,6 +951,8 @@ util_format_linear(enum pipe_format format)
       return PIPE_FORMAT_DXT3_RGBA;
    case PIPE_FORMAT_DXT5_SRGBA:
       return PIPE_FORMAT_DXT5_RGBA;
+   case PIPE_FORMAT_B5G6R5_SRGB:
+      return PIPE_FORMAT_B5G6R5_UNORM;
    default:
       return format;
    }
@@ -1060,8 +1064,7 @@ util_format_luminance_to_red(enum pipe_format format)
       return PIPE_FORMAT_RGTC1_SNORM;
 
    case PIPE_FORMAT_L4A4_UNORM:
-      /* XXX A4R4 is defined as x00y in u_format.csv */
-      return PIPE_FORMAT_A4R4_UNORM;
+      return PIPE_FORMAT_R4A4_UNORM;
 
    case PIPE_FORMAT_L8A8_UNORM:
       return PIPE_FORMAT_R8A8_UNORM;

@@ -56,7 +56,6 @@ public:
    virtual uint32_t get_wm_prog(struct brw_context *brw,
                                 brw_blorp_prog_data **prog_data) const;
 
-protected:
    brw_blorp_const_color_prog_key wm_prog_key;
 };
 
@@ -154,7 +153,8 @@ is_color_fast_clear_compatible(struct brw_context *brw,
       return false;
 
    for (int i = 0; i < 4; i++) {
-      if (color->f[i] != 0.0 && color->f[i] != 1.0) {
+      if (color->f[i] != 0.0 && color->f[i] != 1.0 &&
+          _mesa_format_has_color_component(format, i)) {
          perf_debug("Clear color unsupported by fast color clear.  "
                     "Falling back to slow clear.\n");
          return false;
@@ -232,7 +232,8 @@ brw_blorp_clear_params::brw_blorp_clear_params(struct brw_context *brw,
     * state.  This is not documented.
     */
    for (int i = 0; i < 4; i++) {
-      if (!color_mask[i]) {
+      if (_mesa_format_has_color_component(irb->mt->format, i) &&
+          !color_mask[i]) {
          color_write_disable[i] = true;
          wm_prog_key.use_simd16_replicated_data = false;
       }
@@ -540,7 +541,15 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
       }
    }
 
-   DBG("%s to mt %p level %d layer %d\n", __FUNCTION__,
+   const char *clear_type;
+   if (is_fast_clear)
+      clear_type = "fast";
+   else if (params.wm_prog_key.use_simd16_replicated_data)
+      clear_type = "replicated";
+   else
+      clear_type = "slow";
+
+   DBG("%s (%s) to mt %p level %d layer %d\n", __FUNCTION__, clear_type,
        irb->mt, irb->mt_level, irb->mt_layer);
 
    brw_blorp_exec(brw, &params);

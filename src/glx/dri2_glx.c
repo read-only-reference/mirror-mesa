@@ -37,17 +37,14 @@
 #include <X11/Xlib-xcb.h>
 #include <xcb/xcb.h>
 #include <xcb/dri2.h>
-#include "glapi.h"
 #include "glxclient.h"
 #include <X11/extensions/dri2proto.h>
-#include "xf86dri.h"
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <sys/time.h>
-#include "xf86drm.h"
 #include "dri2.h"
 #include "dri_common.h"
 #include "dri2_priv.h"
@@ -142,6 +139,7 @@ dri2_bind_context(struct glx_context *context, struct glx_context *old,
    struct dri2_screen *psc = (struct dri2_screen *) pcp->base.psc;
    struct dri2_drawable *pdraw, *pread;
    __DRIdrawable *dri_draw = NULL, *dri_read = NULL;
+   struct glx_display *dpyPriv = psc->base.display;
    struct dri2_display *pdp;
 
    pdraw = (struct dri2_drawable *) driFetchDrawable(context, draw);
@@ -165,7 +163,7 @@ dri2_bind_context(struct glx_context *context, struct glx_context *old,
    /* If the server doesn't send invalidate events, we may miss a
     * resize before the rendering starts.  Invalidate the buffers now
     * so the driver will recheck before rendering starts. */
-   pdp = (struct dri2_display *) psc->base.display;
+   pdp = (struct dri2_display *) dpyPriv->dri2Display;
    if (!pdp->invalidateAvailable && pdraw) {
       dri2InvalidateBuffers(psc->base.dpy, pdraw->base.xDrawable);
       if (pread != pdraw && pread)
@@ -1203,6 +1201,16 @@ dri2CreateScreen(int screen, struct glx_display * priv)
       goto handle_error;
    }
 
+   if (drmGetMagic(psc->fd, &magic)) {
+      ErrorMessageF("failed to get magic\n");
+      goto handle_error;
+   }
+
+   if (!DRI2Authenticate(priv->dpy, RootWindow(priv->dpy, screen), magic)) {
+      ErrorMessageF("failed to authenticate magic %d\n", magic);
+      goto handle_error;
+   }
+
    /* If Mesa knows about the appropriate driver for this fd, then trust it.
     * Otherwise, default to the server's value.
     */
@@ -1231,16 +1239,6 @@ dri2CreateScreen(int screen, struct glx_display * priv)
 
    if (psc->core == NULL || psc->dri2 == NULL) {
       ErrorMessageF("core dri or dri2 extension not found\n");
-      goto handle_error;
-   }
-
-   if (drmGetMagic(psc->fd, &magic)) {
-      ErrorMessageF("failed to get magic\n");
-      goto handle_error;
-   }
-
-   if (!DRI2Authenticate(priv->dpy, RootWindow(priv->dpy, screen), magic)) {
-      ErrorMessageF("failed to authenticate magic %d\n", magic);
       goto handle_error;
    }
 
@@ -1290,6 +1288,7 @@ dri2CreateScreen(int screen, struct glx_display * priv)
    psp->waitForSBC = NULL;
    psp->setSwapInterval = NULL;
    psp->getSwapInterval = NULL;
+   psp->getBufferAge = NULL;
 
    if (pdp->driMinor >= 2) {
       psp->getDrawableMSC = dri2DrawableGetMSC;

@@ -210,15 +210,17 @@ static struct radeon_winsys_cs *radeon_drm_cs_create(struct radeon_winsys *rws,
 
 #define OUT_CS(cs, value) (cs)->buf[(cs)->cdw++] = (value)
 
-static INLINE void update_reloc_domains(struct drm_radeon_cs_reloc *reloc,
-                                        enum radeon_bo_domain rd,
-                                        enum radeon_bo_domain wd,
-                                        enum radeon_bo_domain *added_domains)
+static INLINE void update_reloc(struct drm_radeon_cs_reloc *reloc,
+				enum radeon_bo_domain rd,
+				enum radeon_bo_domain wd,
+				unsigned priority,
+				enum radeon_bo_domain *added_domains)
 {
     *added_domains = (rd | wd) & ~(reloc->read_domains | reloc->write_domain);
 
     reloc->read_domains |= rd;
     reloc->write_domain |= wd;
+    reloc->flags = MAX2(reloc->flags, priority);
 }
 
 int radeon_get_reloc(struct radeon_cs_context *csc, struct radeon_bo *bo)
@@ -262,6 +264,7 @@ static unsigned radeon_add_reloc(struct radeon_drm_cs *cs,
                                  struct radeon_bo *bo,
                                  enum radeon_bo_usage usage,
                                  enum radeon_bo_domain domains,
+                                 unsigned priority,
                                  enum radeon_bo_domain *added_domains)
 {
     struct radeon_cs_context *csc = cs->csc;
@@ -272,10 +275,13 @@ static unsigned radeon_add_reloc(struct radeon_drm_cs *cs,
     bool update_hash = TRUE;
     int i;
 
+    priority = MIN2(priority, 15);
     *added_domains = 0;
+
     if (csc->is_handle_added[hash]) {
         i = csc->reloc_indices_hashlist[hash];
         reloc = &csc->relocs[i];
+
         if (reloc->handle != bo->handle) {
             /* Hash collision, look for the BO in the list of relocs linearly. */
             for (i = csc->crelocs - 1; i >= 0; i--) {
@@ -288,21 +294,23 @@ static unsigned radeon_add_reloc(struct radeon_drm_cs *cs,
         }
 
         if (i >= 0) {
-            /* On DMA ring we need to emit as many relocation as there is use of the bo
-             * thus each time this function is call we should grow add again the bo to
-             * the relocation buffer
+            update_reloc(reloc, rd, wd, priority, added_domains);
+
+            /* For async DMA, every add_reloc call must add a buffer to the list
+             * no matter how many duplicates there are. This is due to the fact
+             * the DMA CS checker doesn't use NOP packets for offset patching,
+             * but always uses the i-th buffer from the list to patch the i-th
+             * offset. If there are N offsets in a DMA CS, there must also be N
+             * buffers in the relocation list.
              *
-             * Do not update the hash table if it's dma ring, so that first hash always point
-             * to first bo relocation which will the one used by the kernel. Following relocation
-             * will be ignore by the kernel memory placement (but still use by the kernel to
-             * update the cmd stream with proper buffer offset).
+             * This doesn't have to be done if virtual memory is enabled,
+             * because there is no offset patching with virtual memory.
              */
-            update_hash = FALSE;
-            update_reloc_domains(reloc, rd, wd, added_domains);
-            if (cs->base.ring_type != RING_DMA) {
+            if (cs->base.ring_type != RING_DMA || cs->ws->info.r600_virtual_address) {
                 csc->reloc_indices_hashlist[hash] = i;
                 return i;
             }
+            update_hash = FALSE;
         }
     }
 
@@ -328,7 +336,7 @@ static unsigned radeon_add_reloc(struct radeon_drm_cs *cs,
     reloc->handle = bo->handle;
     reloc->read_domains = rd;
     reloc->write_domain = wd;
-    reloc->flags = 0;
+    reloc->flags = priority;
 
     csc->is_handle_added[hash] = TRUE;
     if (update_hash) {
@@ -344,12 +352,13 @@ static unsigned radeon_add_reloc(struct radeon_drm_cs *cs,
 static unsigned radeon_drm_cs_add_reloc(struct radeon_winsys_cs *rcs,
                                         struct radeon_winsys_cs_handle *buf,
                                         enum radeon_bo_usage usage,
-                                        enum radeon_bo_domain domains)
+                                        enum radeon_bo_domain domains,
+                                        enum radeon_bo_priority priority)
 {
     struct radeon_drm_cs *cs = radeon_drm_cs(rcs);
     struct radeon_bo *bo = (struct radeon_bo*)buf;
     enum radeon_bo_domain added_domains;
-    unsigned index = radeon_add_reloc(cs, bo, usage, domains, &added_domains);
+    unsigned index = radeon_add_reloc(cs, bo, usage, domains, priority, &added_domains);
 
     if (added_domains & RADEON_DOMAIN_GTT)
         cs->csc->used_gart += bo->base.size;
@@ -649,7 +658,8 @@ radeon_cs_create_fence(struct radeon_winsys_cs *rcs)
                                        RADEON_DOMAIN_GTT);
     /* Add the fence as a dummy relocation. */
     cs->ws->base.cs_add_reloc(rcs, cs->ws->base.buffer_get_cs_handle(fence),
-                              RADEON_USAGE_READWRITE, RADEON_DOMAIN_GTT);
+                              RADEON_USAGE_READWRITE, RADEON_DOMAIN_GTT,
+                              RADEON_PRIO_MIN);
     return (struct pipe_fence_handle*)fence;
 }
 

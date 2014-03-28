@@ -29,7 +29,6 @@ AM_CPPFLAGS = \
 
 AM_CFLAGS = \
 	$(GALLIUM_CFLAGS) \
-	$(LIBUDEV_CFLAGS) \
 	$(LIBDRM_CFLAGS)
 
 pkgconfigdir = $(libdir)/pkgconfig
@@ -37,6 +36,7 @@ pkgconfig_DATA = xatracker.pc
 
 lib_LTLIBRARIES = libxatracker.la
 
+nodist_EXTRA_libxatracker_la_SOURCES = dummy.cpp
 libxatracker_la_SOURCES =
 
 libxatracker_la_LIBADD = \
@@ -45,8 +45,12 @@ libxatracker_la_LIBADD = \
 	$(top_builddir)/src/gallium/winsys/sw/null/libws_null.la \
 	$(top_builddir)/src/gallium/state_trackers/xa/libxatracker.la \
 	$(top_builddir)/src/gallium/auxiliary/libgallium.la \
-	$(LIBUDEV_LIBS) \
-	$(LIBDRM_LIBS)
+	$(LIBDRM_LIBS) \
+	-lm \
+	$(CLOCK_LIB) \
+	$(PTHREAD_LIBS) \
+	$(DLOPEN_LIBS)
+
 
 if HAVE_DRI
 libxatracker_la_LIBADD += \
@@ -62,18 +66,13 @@ endif
 
 libxatracker_la_LDFLAGS = \
 	-no-undefined \
-	-version-number $(XA_MAJOR):$(XA_MINOR):$(XA_TINY)
+	-version-number $(XA_MAJOR):$(XA_MINOR):$(XA_TINY) \
+	$(GC_SECTIONS) \
+	-Wl,--no-undefined
 
-# FIXME: this shouldn't be needed
 if HAVE_MESA_LLVM
-# Mention a dummy pure C++ file to trigger generation of the $(LINK) variable
-nodist_EXTRA_libxatracker_la_SOURCES = dummy-cpp.cpp
-
 libxatracker_la_LIBADD += $(LLVM_LIBS)
 libxatracker_la_LDFLAGS += $(LLVM_LDFLAGS)
-else
-# Mention a dummy pure C file to trigger generation of the $(LINK) variable
-nodist_EXTRA_libxatracker_la_SOURCES = dummy-c.c
 endif
 
 include $(top_srcdir)/install-lib-links.mk

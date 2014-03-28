@@ -204,7 +204,7 @@ intel_glFlush(struct gl_context *ctx)
 
    intel_batchbuffer_flush(brw);
    intel_flush_front(ctx);
-   if (brw->is_front_buffer_rendering)
+   if (brw_is_front_buffer_drawing(ctx->DrawBuffer))
       brw->need_throttle = true;
 }
 
@@ -584,7 +584,6 @@ brwCreateContext(gl_api api,
    struct intel_screen *screen = sPriv->driverPrivate;
    const struct brw_device_info *devinfo = screen->devinfo;
    struct dd_function_table functions;
-   struct gl_config visual;
 
    /* Only allow the __DRI_CTX_FLAG_ROBUST_BUFFER_ACCESS flag if the kernel
     * provides us with context reset notifications.
@@ -651,11 +650,6 @@ brwCreateContext(gl_api api,
 
    struct gl_context *ctx = &brw->ctx;
 
-   if (mesaVis == NULL) {
-      memset(&visual, 0, sizeof visual);
-      mesaVis = &visual;
-   }
-
    if (!_mesa_initialize_context(ctx, api, mesaVis, shareCtx, &functions)) {
       *dri_ctx_error = __DRI_CTX_ERROR_NO_MEMORY;
       fprintf(stderr, "%s: failed to init mesa context\n", __FUNCTION__);
@@ -698,6 +692,8 @@ brwCreateContext(gl_api api,
    /* Reinitialize the context point state.  It depends on ctx->Const values. */
    _mesa_init_point(ctx);
 
+   intel_fbo_init(brw);
+
    intel_batchbuffer_init(brw);
 
    if (brw->gen >= 6) {
@@ -720,8 +716,6 @@ brwCreateContext(gl_api api,
    brw_init_state(brw);
 
    intelInitExtensions(ctx);
-
-   intel_fbo_init(brw);
 
    brw_init_surface_formats(brw);
 
@@ -781,9 +775,6 @@ brwCreateContext(gl_api api,
    if ((flags & __DRI_CTX_FLAG_ROBUST_BUFFER_ACCESS) != 0)
       ctx->Const.ContextFlags |= GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT_ARB;
 
-   brw_fs_alloc_reg_sets(brw);
-   brw_vec4_alloc_reg_set(brw);
-
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
       brw_init_shader_time(brw);
 
@@ -830,8 +821,6 @@ intelDestroyContext(__DRIcontext * driContextPriv)
    brw_draw_destroy(brw);
 
    drm_intel_bo_unreference(brw->curbe.curbe_bo);
-   drm_intel_bo_unreference(brw->vs.base.const_bo);
-   drm_intel_bo_unreference(brw->wm.base.const_bo);
 
    free(brw->curbe.last_buf);
    free(brw->curbe.next_buf);
@@ -1115,6 +1104,7 @@ intel_update_renderbuffers(__DRIcontext *context, __DRIdrawable *drawable)
 void
 intel_prepare_render(struct brw_context *brw)
 {
+   struct gl_context *ctx = &brw->ctx;
    __DRIcontext *driContext = brw->driContext;
    __DRIdrawable *drawable;
 
@@ -1136,7 +1126,7 @@ intel_prepare_render(struct brw_context *brw)
     * that will happen next will probably dirty the front buffer.  So
     * mark it as dirty here.
     */
-   if (brw->is_front_buffer_rendering)
+   if (brw_is_front_buffer_drawing(ctx->DrawBuffer))
       brw->front_buffer_dirty = true;
 
    /* Wait for the swapbuffers before the one we just emitted, so we
@@ -1198,8 +1188,8 @@ intel_query_dri2_buffers(struct brw_context *brw,
    back_rb = intel_get_renderbuffer(fb, BUFFER_BACK_LEFT);
 
    memset(attachments, 0, sizeof(attachments));
-   if ((brw->is_front_buffer_rendering ||
-        brw->is_front_buffer_reading ||
+   if ((brw_is_front_buffer_drawing(fb) ||
+        brw_is_front_buffer_reading(fb) ||
         !back_rb) && front_rb) {
       /* If a fake front buffer is in use, then querying for
        * __DRI_BUFFER_FRONT_LEFT will cause the server to copy the image from
@@ -1261,6 +1251,7 @@ intel_process_dri2_buffer(struct brw_context *brw,
                           const char *buffer_name)
 {
    struct intel_region *region = NULL;
+   struct gl_framebuffer *fb = drawable->driverPrivate;
 
    if (!rb)
       return;
@@ -1271,17 +1262,14 @@ intel_process_dri2_buffer(struct brw_context *brw,
     * use of a mapping of the buffer involves a bunch of page faulting which is
     * moderately expensive.
     */
-   if (num_samples == 0) {
-       if (rb->mt &&
-           rb->mt->region &&
-           rb->mt->region->name == buffer->name)
-          return;
-   } else {
-       if (rb->singlesample_mt &&
-           rb->singlesample_mt->region &&
-           rb->singlesample_mt->region->name == buffer->name)
-          return;
-   }
+   struct intel_mipmap_tree *last_mt;
+   if (num_samples == 0)
+      last_mt = rb->mt;
+   else
+      last_mt = rb->singlesample_mt;
+
+   if (last_mt && last_mt->region->name == buffer->name)
+      return;
 
    if (unlikely(INTEL_DEBUG & DEBUG_DRI)) {
       fprintf(stderr,
@@ -1310,7 +1298,7 @@ intel_process_dri2_buffer(struct brw_context *brw,
 
    intel_update_winsys_renderbuffer_miptree(brw, rb, region);
 
-   if (brw->is_front_buffer_rendering &&
+   if (brw_is_front_buffer_drawing(fb) &&
        (buffer->attachment == __DRI_BUFFER_FRONT_LEFT ||
         buffer->attachment == __DRI_BUFFER_FAKE_FRONT_LEFT) &&
        rb->Base.Base.NumSamples > 1) {
@@ -1346,6 +1334,7 @@ intel_update_image_buffer(struct brw_context *intel,
                           enum __DRIimageBufferMask buffer_type)
 {
    struct intel_region *region = buffer->region;
+   struct gl_framebuffer *fb = drawable->driverPrivate;
 
    if (!rb || !region)
       return;
@@ -1355,21 +1344,18 @@ intel_update_image_buffer(struct brw_context *intel,
    /* Check and see if we're already bound to the right
     * buffer object
     */
-   if (num_samples == 0) {
-       if (rb->mt &&
-           rb->mt->region &&
-           rb->mt->region->bo == region->bo)
-          return;
-   } else {
-       if (rb->singlesample_mt &&
-           rb->singlesample_mt->region &&
-           rb->singlesample_mt->region->bo == region->bo)
-          return;
-   }
+   struct intel_mipmap_tree *last_mt;
+   if (num_samples == 0)
+      last_mt = rb->mt;
+   else
+      last_mt = rb->singlesample_mt;
+
+   if (last_mt && last_mt->region->bo == region->bo)
+      return;
 
    intel_update_winsys_renderbuffer_miptree(intel, rb, region);
 
-   if (intel->is_front_buffer_rendering &&
+   if (brw_is_front_buffer_drawing(fb) &&
        buffer_type == __DRI_IMAGE_BUFFER_FRONT &&
        rb->Base.Base.NumSamples > 1) {
       intel_renderbuffer_upsample(intel, rb);
@@ -1397,8 +1383,10 @@ intel_update_image_buffers(struct brw_context *brw, __DRIdrawable *drawable)
    else
       return;
 
-   if ((brw->is_front_buffer_rendering || brw->is_front_buffer_reading || !back_rb) && front_rb)
+   if (front_rb && (brw_is_front_buffer_drawing(fb) ||
+                    brw_is_front_buffer_reading(fb) || !back_rb)) {
       buffer_mask |= __DRI_IMAGE_BUFFER_FRONT;
+   }
 
    if (back_rb)
       buffer_mask |= __DRI_IMAGE_BUFFER_BACK;

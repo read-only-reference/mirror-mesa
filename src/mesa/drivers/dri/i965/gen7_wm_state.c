@@ -143,12 +143,6 @@ upload_ps_state(struct brw_context *brw)
    const int max_threads_shift = brw->is_haswell ?
       HSW_PS_MAX_THREADS_SHIFT : IVB_PS_MAX_THREADS_SHIFT;
 
-   /* BRW_NEW_PS_BINDING_TABLE */
-   BEGIN_BATCH(2);
-   OUT_BATCH(_3DSTATE_BINDING_TABLE_POINTERS_PS << 16 | (2 - 2));
-   OUT_BATCH(brw->wm.base.bind_bo_offset);
-   ADVANCE_BATCH();
-
    /* CACHE_NEW_SAMPLER */
    BEGIN_BATCH(2);
    OUT_BATCH(_3DSTATE_SAMPLER_STATE_POINTERS_PS << 16 | (2 - 2));
@@ -174,7 +168,7 @@ upload_ps_state(struct brw_context *brw)
     * to differentiate between the GLSL and non-GLSL cases.
     */
    /* BRW_NEW_FRAGMENT_PROGRAM */
-   if (ctx->Shader.CurrentProgram[MESA_SHADER_FRAGMENT] == NULL)
+   if (ctx->_Shader->CurrentProgram[MESA_SHADER_FRAGMENT] == NULL)
       dw2 |= GEN7_PS_FLOATING_POINT_MODE_ALT;
 
    /* Haswell requires the sample mask to be set in this packet as well as

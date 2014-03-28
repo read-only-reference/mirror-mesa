@@ -277,6 +277,9 @@ vec4_visitor::fix_3src_operand(src_reg src)
    if (src.file != UNIFORM && src.file != IMM)
       return src;
 
+   if (src.file == UNIFORM && brw_is_single_value_swizzle(src.swizzle))
+      return src;
+
    dst_reg expanded = dst_reg(this, glsl_type::vec4_type);
    expanded.type = src.type;
    emit(MOV(expanded, src));
@@ -3356,14 +3359,18 @@ vec4_visitor::vec4_visitor(struct brw_context *brw,
                            const struct brw_vec4_prog_key *key,
                            struct brw_vec4_prog_data *prog_data,
 			   struct gl_shader_program *shader_prog,
-			   struct brw_shader *shader,
+                           gl_shader_stage stage,
 			   void *mem_ctx,
                            bool debug_flag,
                            bool no_spills,
                            shader_time_shader_type st_base,
                            shader_time_shader_type st_written,
                            shader_time_shader_type st_reset)
-   : sanity_param_count(0),
+   : backend_visitor(brw, shader_prog, prog, &prog_data->base, stage),
+     c(c),
+     key(key),
+     prog_data(prog_data),
+     sanity_param_count(0),
      fail_msg(NULL),
      first_non_payload_grf(0),
      need_all_constants_in_pull_buffer(false),
@@ -3373,23 +3380,12 @@ vec4_visitor::vec4_visitor(struct brw_context *brw,
      st_written(st_written),
      st_reset(st_reset)
 {
-   this->brw = brw;
-   this->ctx = &brw->ctx;
-   this->shader_prog = shader_prog;
-   this->shader = shader;
-
    this->mem_ctx = mem_ctx;
    this->failed = false;
 
    this->base_ir = NULL;
    this->current_annotation = NULL;
    memset(this->output_reg_annotation, 0, sizeof(this->output_reg_annotation));
-
-   this->c = c;
-   this->prog = prog;
-   this->key = key;
-   this->prog_data = prog_data;
-   this->stage_prog_data = &prog_data->base;
 
    this->variable_ht = hash_table_ctor(0,
 				       hash_table_pointer_hash,

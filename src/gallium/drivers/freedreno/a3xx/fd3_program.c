@@ -80,10 +80,16 @@ static void
 fixup_vp_regfootprint(struct fd3_shader_variant *so)
 {
 	unsigned i;
-	for (i = 0; i < so->inputs_count; i++)
-		so->info.max_reg = MAX2(so->info.max_reg, (so->inputs[i].regid + 3) >> 2);
-	for (i = 0; i < so->outputs_count; i++)
-		so->info.max_reg = MAX2(so->info.max_reg, (so->outputs[i].regid + 3) >> 2);
+	for (i = 0; i < so->inputs_count; i++) {
+		if (so->inputs[i].compmask) {
+			uint32_t regid = (so->inputs[i].regid + 3) >> 2;
+			so->info.max_reg = MAX2(so->info.max_reg, regid);
+		}
+	}
+	for (i = 0; i < so->outputs_count; i++) {
+		uint32_t regid = (so->outputs[i].regid + 3) >> 2;
+		so->info.max_reg = MAX2(so->info.max_reg, regid);
+	}
 }
 
 static struct fd3_shader_variant *
@@ -278,10 +284,34 @@ static int
 find_output(const struct fd3_shader_variant *so, fd3_semantic semantic)
 {
 	int j;
+
 	for (j = 0; j < so->outputs_count; j++)
 		if (so->outputs[j].semantic == semantic)
 			return j;
+
+	/* it seems optional to have a OUT.BCOLOR[n] for each OUT.COLOR[n]
+	 * in the vertex shader.. but the fragment shader doesn't know this
+	 * so  it will always have both IN.COLOR[n] and IN.BCOLOR[n].  So
+	 * at link time if there is no matching OUT.BCOLOR[n], we must map
+	 * OUT.COLOR[n] to IN.BCOLOR[n].
+	 */
+	if (sem2name(semantic) == TGSI_SEMANTIC_BCOLOR) {
+		unsigned idx = sem2idx(semantic);
+		return find_output(so, fd3_semantic_name(TGSI_SEMANTIC_COLOR, idx));
+	}
+
+	assert(0);
+
 	return 0;
+}
+
+static int
+next_varying(const struct fd3_shader_variant *so, int i)
+{
+	while (++i < so->inputs_count)
+		if (so->inputs[i].compmask && so->inputs[i].bary)
+			break;
+	return i;
 }
 
 static uint32_t
@@ -301,7 +331,7 @@ fd3_program_emit(struct fd_ringbuffer *ring,
 	const struct fd3_shader_variant *vp, *fp;
 	const struct ir3_shader_info *vsi, *fsi;
 	uint32_t pos_regid, posz_regid, psize_regid, color_regid;
-	int i;
+	int i, j, k;
 
 	vp = fd3_shader_variant(prog->vp, key);
 
@@ -338,9 +368,10 @@ fd3_program_emit(struct fd_ringbuffer *ring,
 			A3XX_HLSQ_CONTROL_0_REG_SPSHADERRESTART |
 			A3XX_HLSQ_CONTROL_0_REG_SPCONSTFULLUPDATE);
 	OUT_RING(ring, A3XX_HLSQ_CONTROL_1_REG_VSTHREADSIZE(TWO_QUADS) |
-			A3XX_HLSQ_CONTROL_1_REG_VSSUPERTHREADENABLE);
+			A3XX_HLSQ_CONTROL_1_REG_VSSUPERTHREADENABLE |
+			COND(fp->frag_coord, A3XX_HLSQ_CONTROL_1_REG_ZWCOORD));
 	OUT_RING(ring, A3XX_HLSQ_CONTROL_2_REG_PRIMALLOCTHRESHOLD(31));
-	OUT_RING(ring, 0x00000000);        /* HLSQ_CONTROL_3_REG */
+	OUT_RING(ring, A3XX_HLSQ_CONTROL_3_REG_REGID(fp->pos_regid));
 	OUT_RING(ring, A3XX_HLSQ_VS_CONTROL_REG_CONSTLENGTH(vp->constlen) |
 			A3XX_HLSQ_VS_CONTROL_REG_CONSTSTARTOFFSET(0) |
 			A3XX_HLSQ_VS_CONTROL_REG_INSTRLENGTH(vp->instrlen));
@@ -373,36 +404,47 @@ fd3_program_emit(struct fd_ringbuffer *ring,
 			A3XX_SP_VS_CTRL_REG1_CONSTFOOTPRINT(MAX2(vsi->max_const, 0)));
 	OUT_RING(ring, A3XX_SP_VS_PARAM_REG_POSREGID(pos_regid) |
 			A3XX_SP_VS_PARAM_REG_PSIZEREGID(psize_regid) |
-			A3XX_SP_VS_PARAM_REG_TOTALVSOUTVAR(fp->inputs_count));
+			A3XX_SP_VS_PARAM_REG_TOTALVSOUTVAR(align(fp->total_in, 4) / 4));
 
-	for (i = 0; i < fp->inputs_count; ) {
+	for (i = 0, j = -1; j < (int)fp->inputs_count; i++) {
 		uint32_t reg = 0;
-		int j;
 
-		OUT_PKT0(ring, REG_A3XX_SP_VS_OUT_REG(i/2), 1);
+		OUT_PKT0(ring, REG_A3XX_SP_VS_OUT_REG(i), 1);
 
-		j = find_output(vp, fp->inputs[i].semantic);
-		reg |= A3XX_SP_VS_OUT_REG_A_REGID(vp->outputs[j].regid);
-		reg |= A3XX_SP_VS_OUT_REG_A_COMPMASK(fp->inputs[i].compmask);
-		i++;
+		j = next_varying(fp, j);
+		if (j < fp->inputs_count) {
+			k = find_output(vp, fp->inputs[j].semantic);
+			reg |= A3XX_SP_VS_OUT_REG_A_REGID(vp->outputs[k].regid);
+			reg |= A3XX_SP_VS_OUT_REG_A_COMPMASK(fp->inputs[j].compmask);
+		}
 
-		j = find_output(vp, fp->inputs[i].semantic);
-		reg |= A3XX_SP_VS_OUT_REG_B_REGID(vp->outputs[j].regid);
-		reg |= A3XX_SP_VS_OUT_REG_B_COMPMASK(fp->inputs[i].compmask);
-		i++;
+		j = next_varying(fp, j);
+		if (j < fp->inputs_count) {
+			k = find_output(vp, fp->inputs[j].semantic);
+			reg |= A3XX_SP_VS_OUT_REG_B_REGID(vp->outputs[k].regid);
+			reg |= A3XX_SP_VS_OUT_REG_B_COMPMASK(fp->inputs[j].compmask);
+		}
 
 		OUT_RING(ring, reg);
 	}
 
-	for (i = 0; i < fp->inputs_count; ) {
+	for (i = 0, j = -1; j < (int)fp->inputs_count; i++) {
 		uint32_t reg = 0;
 
-		OUT_PKT0(ring, REG_A3XX_SP_VS_VPC_DST_REG(i/4), 1);
+		OUT_PKT0(ring, REG_A3XX_SP_VS_VPC_DST_REG(i), 1);
 
-		reg |= A3XX_SP_VS_VPC_DST_REG_OUTLOC0(fp->inputs[i++].inloc);
-		reg |= A3XX_SP_VS_VPC_DST_REG_OUTLOC1(fp->inputs[i++].inloc);
-		reg |= A3XX_SP_VS_VPC_DST_REG_OUTLOC2(fp->inputs[i++].inloc);
-		reg |= A3XX_SP_VS_VPC_DST_REG_OUTLOC3(fp->inputs[i++].inloc);
+		j = next_varying(fp, j);
+		if (j < fp->inputs_count)
+			reg |= A3XX_SP_VS_VPC_DST_REG_OUTLOC0(fp->inputs[j].inloc);
+		j = next_varying(fp, j);
+		if (j < fp->inputs_count)
+			reg |= A3XX_SP_VS_VPC_DST_REG_OUTLOC1(fp->inputs[j].inloc);
+		j = next_varying(fp, j);
+		if (j < fp->inputs_count)
+			reg |= A3XX_SP_VS_VPC_DST_REG_OUTLOC2(fp->inputs[j].inloc);
+		j = next_varying(fp, j);
+		if (j < fp->inputs_count)
+			reg |= A3XX_SP_VS_VPC_DST_REG_OUTLOC3(fp->inputs[j].inloc);
 
 		OUT_RING(ring, reg);
 	}
@@ -467,13 +509,15 @@ fd3_program_emit(struct fd_ringbuffer *ring,
 	if (key.binning_pass) {
 		OUT_PKT0(ring, REG_A3XX_VPC_ATTR, 2);
 		OUT_RING(ring, A3XX_VPC_ATTR_THRDASSIGN(1) |
-				A3XX_VPC_ATTR_LMSIZE(1));
+				A3XX_VPC_ATTR_LMSIZE(1) |
+				COND(vp->writes_psize, A3XX_VPC_ATTR_PSIZE));
 		OUT_RING(ring, 0x00000000);
 	} else {
 		OUT_PKT0(ring, REG_A3XX_VPC_ATTR, 2);
 		OUT_RING(ring, A3XX_VPC_ATTR_TOTALATTR(fp->total_in) |
 				A3XX_VPC_ATTR_THRDASSIGN(1) |
-				A3XX_VPC_ATTR_LMSIZE(1));
+				A3XX_VPC_ATTR_LMSIZE(1) |
+				COND(vp->writes_psize, A3XX_VPC_ATTR_PSIZE));
 		OUT_RING(ring, A3XX_VPC_PACK_NUMFPNONPOSVAR(fp->total_in) |
 				A3XX_VPC_PACK_NUMNONPOSVSVAR(fp->total_in));
 
@@ -505,15 +549,6 @@ fd3_program_emit(struct fd_ringbuffer *ring,
 		OUT_PKT0(ring, REG_A3XX_VFD_PERFCOUNTER0_SELECT, 1);
 		OUT_RING(ring, 0x00000000);        /* VFD_PERFCOUNTER0_SELECT */
 	}
-
-	OUT_PKT0(ring, REG_A3XX_VFD_CONTROL_0, 2);
-	OUT_RING(ring, A3XX_VFD_CONTROL_0_TOTALATTRTOVS(vp->total_in) |
-			A3XX_VFD_CONTROL_0_PACKETSIZE(2) |
-			A3XX_VFD_CONTROL_0_STRMDECINSTRCNT(vp->inputs_count) |
-			A3XX_VFD_CONTROL_0_STRMFETCHINSTRCNT(vp->inputs_count));
-	OUT_RING(ring, A3XX_VFD_CONTROL_1_MAXSTORAGE(1) | // XXX
-			A3XX_VFD_CONTROL_1_REGID4VTX(regid(63,0)) |
-			A3XX_VFD_CONTROL_1_REGID4INST(regid(63,0)));
 }
 
 /* hack.. until we figure out how to deal w/ vpsrepl properly.. */

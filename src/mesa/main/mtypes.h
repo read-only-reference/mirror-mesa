@@ -1190,7 +1190,7 @@ struct gl_sampler_object
  */
 struct gl_texture_object
 {
-   _glthread_Mutex Mutex;      /**< for thread safety */
+   mtx_t Mutex;      /**< for thread safety */
    GLint RefCount;             /**< reference count */
    GLuint Name;                /**< the user-visible texture object ID */
    GLchar *Label;               /**< GL_KHR_debug */
@@ -1199,6 +1199,7 @@ struct gl_texture_object
    struct gl_sampler_object Sampler;
 
    GLenum DepthMode;           /**< GL_ARB_depth_texture */
+   bool StencilSampling;       /**< Should we sample stencil instead of depth? */
 
    GLfloat Priority;           /**< in [0,1] */
    GLint BaseLevel;            /**< min mipmap level, OpenGL 1.2 */
@@ -1463,7 +1464,7 @@ struct gl_buffer_mapping {
  */
 struct gl_buffer_object
 {
-   _glthread_Mutex Mutex;
+   mtx_t Mutex;
    GLint RefCount;
    GLuint Name;
    GLchar *Label;       /**< GL_KHR_debug */
@@ -1576,7 +1577,7 @@ struct gl_vertex_array_object
    GLchar *Label;       /**< GL_KHR_debug */
 
    GLint RefCount;
-   _glthread_Mutex Mutex;
+   mtx_t Mutex;
 
    /**
     * Does the VAO use ARB semantics or Apple semantics?
@@ -2701,6 +2702,14 @@ struct gl_shader_program
    struct gl_uniform_storage *UniformStorage;
 
    /**
+    * Mapping from GL uniform locations returned by \c glUniformLocation to
+    * UniformStorage entries. Arrays will have multiple contiguous slots
+    * in the UniformRemapTable, all pointing to the same UniformStorage entry.
+    */
+   unsigned NumUniformRemapTable;
+   struct gl_uniform_storage **UniformRemapTable;
+
+   /**
     * Size of the gl_ClipDistance array that is output from the last pipeline
     * stage before the fragment shader.
     */
@@ -2708,21 +2717,6 @@ struct gl_shader_program
 
    struct gl_uniform_block *UniformBlocks;
    unsigned NumUniformBlocks;
-
-   /**
-    * Scale factor for the uniform base location
-    *
-    * This is used to generate locations (returned by \c glGetUniformLocation)
-    * of uniforms.  The base location of the uniform is multiplied by this
-    * value, and the array index is added.
-    *
-    * \note
-    * Must be >= 1.
-    *
-    * \sa
-    * _mesa_uniform_merge_location_offset, _mesa_uniform_split_location_offset
-    */
-   unsigned UniformLocationBaseScale;
 
    /**
     * Indices into the _LinkedShaders's UniformBlocks[] array for each stage
@@ -2790,7 +2784,7 @@ struct gl_pipeline_object
 
    GLint RefCount;
 
-   _glthread_Mutex Mutex;
+   mtx_t Mutex;
 
    /**
     * Programs used for rendering
@@ -2813,6 +2807,10 @@ struct gl_pipeline_object
    GLbitfield Flags;                    /**< Mask of GLSL_x flags */
 
    GLboolean EverBound;                 /**< Has the pipeline object been created */
+
+   GLboolean Validated;                 /**< Pipeline Validation status */
+
+   GLchar *InfoLog;
 };
 
 /**
@@ -2822,6 +2820,9 @@ struct gl_pipeline_shader_state
 {
    /** Currently bound pipeline object. See _mesa_BindProgramPipeline() */
    struct gl_pipeline_object *Current;
+
+   /* Default Object to ensure that _Shader is never NULL */
+   struct gl_pipeline_object *Default;
 
    /** Pipeline objects */
    struct _mesa_HashTable *Objects;
@@ -2927,7 +2928,7 @@ struct gl_sync_object
  */
 struct gl_shared_state
 {
-   _glthread_Mutex Mutex;		   /**< for thread safety */
+   mtx_t Mutex;		   /**< for thread safety */
    GLint RefCount;			   /**< Reference count */
    struct _mesa_HashTable *DisplayList;	   /**< Display lists hash table */
    struct _mesa_HashTable *TexObjects;	   /**< Texture objects hash table */
@@ -2945,7 +2946,7 @@ struct gl_shared_state
     * \todo Improve the granularity of locking.
     */
    /*@{*/
-   _glthread_Mutex TexMutex;		/**< texobj thread safety */
+   mtx_t TexMutex;		/**< texobj thread safety */
    GLuint TextureStateStamp;	        /**< state notification for shared tex */
    /*@}*/
 
@@ -3002,7 +3003,7 @@ struct gl_shared_state
  */
 struct gl_renderbuffer
 {
-   _glthread_Mutex Mutex; /**< for thread safety */
+   mtx_t Mutex; /**< for thread safety */
    GLuint ClassID;        /**< Useful for drivers */
    GLuint Name;
    GLchar *Label;         /**< GL_KHR_debug */
@@ -3080,7 +3081,7 @@ struct gl_renderbuffer_attachment
  */
 struct gl_framebuffer
 {
-   _glthread_Mutex Mutex;  /**< for thread safety */
+   mtx_t Mutex;  /**< for thread safety */
    /**
     * If zero, this is a window system framebuffer.  If non-zero, this
     * is a FBO framebuffer; note that for some devices (i.e. those with
@@ -3526,6 +3527,7 @@ struct gl_extensions
    GLboolean ARB_shading_language_packing;
    GLboolean ARB_shading_language_420pack;
    GLboolean ARB_shadow;
+   GLboolean ARB_stencil_texturing;
    GLboolean ARB_sync;
    GLboolean ARB_texture_border_clamp;
    GLboolean ARB_texture_buffer_object;
@@ -3843,7 +3845,6 @@ struct gl_debug_state
    const void *CallbackData;
    GLboolean SyncOutput;
    GLboolean DebugOutput;
-   GLboolean ARBCallback; /* Used to track if current callback is of type ARB_debug_output or KHR_debug */
    GLboolean Defaults[MAX_DEBUG_GROUP_STACK_DEPTH][MESA_DEBUG_SEVERITY_COUNT][MESA_DEBUG_SOURCE_COUNT][MESA_DEBUG_TYPE_COUNT];
    struct gl_debug_namespace Namespaces[MAX_DEBUG_GROUP_STACK_DEPTH][MESA_DEBUG_SOURCE_COUNT][MESA_DEBUG_TYPE_COUNT];
    struct gl_debug_msg Log[MAX_DEBUG_LOGGED_MESSAGES];
@@ -4129,6 +4130,26 @@ struct gl_context
 
    struct gl_pipeline_shader_state Pipeline; /**< GLSL pipeline shader object state */
    struct gl_pipeline_object Shader; /**< GLSL shader object state */
+
+   /**
+    * Current active shader pipeline state
+    *
+    * Almost all internal users want ::_Shader instead of ::Shader.  The
+    * exceptions are bits of legacy GLSL API that do not know about separate
+    * shader objects.
+    *
+    * If a program is active via \c glUseProgram, this will point to
+    * \c ::Shader.
+    *
+    * If a program pipeline is active via \c glBindProgramPipeline, this will
+    * point to \c ::Pipeline.Current.
+    *
+    * If neither a program nor a program pipeline is active, this will point to
+    * \c ::Pipeline.Default.  This ensures that \c ::_Shader will never be
+    * \c NULL.
+    */
+   struct gl_pipeline_object *_Shader;
+
    struct gl_shader_compiler_options ShaderCompilerOptions[MESA_SHADER_STAGES];
 
    struct gl_query_state Query;  /**< occlusion, timer queries */
@@ -4217,6 +4238,12 @@ struct gl_context
    /*@{*/
    GLboolean FirstTimeCurrent;
    /*@}*/
+
+   /**
+    * False if this context was created without a config. This is needed
+    * because the initial state of glDrawBuffers depends on this
+    */
+   GLboolean HasConfig;
 
    /** software compression/decompression supported or not */
    GLboolean Mesa_DXTn;

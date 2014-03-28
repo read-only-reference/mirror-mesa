@@ -194,6 +194,8 @@ public:
 
    explicit dst_reg(src_reg reg);
 
+   bool is_null() const;
+
    int writemask; /**< Bitfield of WRITEMASK_[XYZW] */
 
    src_reg *reladdr;
@@ -261,14 +263,20 @@ public:
     */
    const void *ir;
    const char *annotation;
+   /** @} */
 
    bool is_send_from_grf();
    bool can_reswizzle_dst(int dst_writemask, int swizzle, int swizzle_mask);
    void reswizzle_dst(int dst_writemask, int swizzle);
 
-   bool depends_on_flags()
+   bool reads_flag()
    {
       return predicate || opcode == VS_OPCODE_UNPACK_FLAGS_SIMD4X2;
+   }
+
+   bool writes_flag()
+   {
+      return conditional_mod && opcode != BRW_OPCODE_SEL;
    }
 };
 
@@ -287,7 +295,7 @@ public:
                 const struct brw_vec4_prog_key *key,
                 struct brw_vec4_prog_data *prog_data,
 		struct gl_shader_program *shader_prog,
-		struct brw_shader *shader,
+                gl_shader_stage stage,
 		void *mem_ctx,
                 bool debug_flag,
                 bool no_spills,
@@ -311,9 +319,9 @@ public:
       return dst_reg(retype(brw_null_reg(), BRW_REGISTER_TYPE_UD));
    }
 
-   struct brw_vec4_compile *c;
-   const struct brw_vec4_prog_key *key;
-   struct brw_vec4_prog_data *prog_data;
+   struct brw_vec4_compile * const c;
+   const struct brw_vec4_prog_key * const key;
+   struct brw_vec4_prog_data * const prog_data;
    unsigned int sanity_param_count;
 
    char *fail_msg;

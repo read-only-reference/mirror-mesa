@@ -162,6 +162,7 @@ intelInitExtensions(struct gl_context *ctx)
 
    assert(brw->gen >= 4);
 
+   ctx->Extensions.ARB_buffer_storage = true;
    ctx->Extensions.ARB_depth_buffer_float = true;
    ctx->Extensions.ARB_depth_clamp = true;
    ctx->Extensions.ARB_depth_texture = true;
@@ -200,6 +201,7 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.ARB_vertex_program = true;
    ctx->Extensions.ARB_vertex_shader = true;
    ctx->Extensions.ARB_vertex_type_2_10_10_10_rev = true;
+   ctx->Extensions.ARB_vertex_type_10f_11f_11f_rev = true;
    ctx->Extensions.EXT_blend_color = true;
    ctx->Extensions.EXT_blend_equation_separate = true;
    ctx->Extensions.EXT_blend_func_separate = true;
@@ -268,7 +270,6 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_shading_language_packing = true;
       ctx->Extensions.ARB_texture_multisample = true;
       ctx->Extensions.ARB_sample_shading = true;
-      ctx->Extensions.ARB_vertex_type_10f_11f_11f_rev = true;
       ctx->Extensions.ARB_texture_gather = true;
 
       /* Test if the kernel has the ioctl. */
@@ -301,6 +302,10 @@ intelInitExtensions(struct gl_context *ctx)
 
       if (getenv("INTEL_COMPUTE_SHADER"))
          ctx->Extensions.ARB_compute_shader = true;
+   }
+
+   if (brw->gen >= 8) {
+      ctx->Extensions.ARB_stencil_texturing = true;
    }
 
    if (brw->gen == 5 || can_write_oacontrol(brw))

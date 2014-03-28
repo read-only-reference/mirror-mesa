@@ -820,12 +820,6 @@ enum shader_time_shader_type {
 #define CACHE_NEW_CLIP_UNIT              (1<<BRW_CLIP_UNIT)
 #define CACHE_NEW_CLIP_PROG              (1<<BRW_CLIP_PROG)
 
-struct brw_cached_batch_item {
-   struct header *header;
-   GLuint sz;
-   struct brw_cached_batch_item *next;
-};
-
 struct brw_vertex_buffer {
    /** Buffer object containing the uploaded vertex data */
    drm_intel_bo *bo;
@@ -876,8 +870,6 @@ struct intel_batchbuffer {
    /** BO for post-sync nonzero writes for gen6 workaround. */
    drm_intel_bo *workaround_bo;
    bool need_workaround_flush;
-
-   struct cached_batch_item *cached_items;
 
    uint16_t emit, total;
    uint16_t used, reserved_space;
@@ -940,9 +932,6 @@ struct brw_stage_state
     * variably-indexed GRF arrays.
     */
    drm_intel_bo *scratch_bo;
-
-   /** Pull constant buffer */
-   drm_intel_bo *const_bo;
 
    /** Offset in the program cache to the program */
    uint32_t prog_offset;
@@ -1030,6 +1019,13 @@ struct brw_context
    drm_intel_context *hw_ctx;
 
    /**
+    * Set of drm_intel_bo * that have been rendered to within this batchbuffer
+    * and would need flushing before being used from another cache domain that
+    * isn't coherent with it (i.e. the sampler).
+    */
+   struct set *render_cache;
+
+   /**
     * Number of resets observed in the system at context creation.
     *
     * This is tracked in the context so that we can determine that another
@@ -1042,10 +1038,7 @@ struct brw_context
 
    struct {
       drm_intel_bo *bo;
-      GLuint offset;
-      uint32_t buffer_len;
-      uint32_t buffer_offset;
-      char buffer[4096];
+      uint32_t next_offset;
    } upload;
 
    /**
@@ -1055,23 +1048,6 @@ struct brw_context
     * the contents of the fake front buffer to the real front buffer.
     */
    bool front_buffer_dirty;
-
-   /**
-    * Track whether front-buffer rendering is currently enabled
-    *
-    * A separate flag is used to track this in order to support MRT more
-    * easily.
-    */
-   bool is_front_buffer_rendering;
-
-   /**
-    * Track whether front-buffer is the current read target.
-    *
-    * This is closely associated with is_front_buffer_rendering, but may
-    * be set separately.  The DRI2 fake front buffer must be referenced
-    * either way.
-    */
-   bool is_front_buffer_reading;
 
    /** Framerate throttling: @{ */
    drm_intel_bo *first_post_swapbuffers_batch;
@@ -1139,7 +1115,6 @@ struct brw_context
    } state;
 
    struct brw_cache cache;
-   struct brw_cached_batch_item *cached_batch_items;
 
    /* Whether a meta-operation is in progress. */
    bool meta_in_progress;
@@ -1282,26 +1257,6 @@ struct brw_context
     */
    struct brw_vue_map vue_map_geom_out;
 
-   /**
-    * Data structures used by all vec4 program compiles (not specific to any
-    * particular program).
-    */
-   struct {
-      struct ra_regs *regs;
-
-      /**
-       * Array of the ra classes for the unaligned contiguous register
-       * block sizes used.
-       */
-      int *classes;
-
-      /**
-       * Mapping for register-allocated objects in *regs to the first
-       * GRF for that object.
-      */
-      uint8_t *ra_reg_to_grf;
-   } vec4;
-
    struct {
       struct brw_stage_state base;
       struct brw_vs_prog_data *prog_data;
@@ -1366,28 +1321,6 @@ struct brw_context
        * Gen6.  See brw_update_null_renderbuffer_surface().
        */
       drm_intel_bo *multisampled_null_render_target_bo;
-
-      struct {
-         struct ra_regs *regs;
-
-         /**
-          * Array of the ra classes for the unaligned contiguous register
-          * block sizes used, indexed by register size.
-          */
-         int classes[16];
-
-         /**
-          * Mapping for register-allocated objects in *regs to the first
-          * GRF for that object.
-          */
-         uint8_t *ra_reg_to_grf;
-
-         /**
-          * ra class for the aligned pairs we use for PLN, which doesn't
-          * appear in *classes.
-          */
-         int aligned_pairs_class;
-      } reg_sets[2];
    } wm;
 
 
@@ -1545,6 +1478,12 @@ GLboolean brwCreateContext(gl_api api,
 /*======================================================================
  * brw_misc_state.c
  */
+void brw_meta_updownsample(struct brw_context *brw,
+                           struct intel_mipmap_tree *src,
+                           struct intel_mipmap_tree *dst);
+/*======================================================================
+ * brw_misc_state.c
+ */
 void brw_get_depthstencil_tile_masks(struct intel_mipmap_tree *depth_mt,
                                      uint32_t depth_level,
                                      uint32_t depth_layer,
@@ -1617,10 +1556,10 @@ void brw_upload_cs_urb_state(struct brw_context *brw);
 
 /* brw_fs_reg_allocate.cpp
  */
-void brw_fs_alloc_reg_sets(struct brw_context *brw);
+void brw_fs_alloc_reg_sets(struct intel_screen *screen);
 
 /* brw_vec4_reg_allocate.cpp */
-void brw_vec4_alloc_reg_set(struct brw_context *brw);
+void brw_vec4_alloc_reg_set(struct intel_screen *screen);
 
 /* brw_disasm.c */
 int brw_disasm (FILE *file, struct brw_instruction *inst, int gen);
@@ -1853,7 +1792,6 @@ struct opcode_desc {
 
 extern const struct opcode_desc opcode_descs[128];
 extern const char * const conditional_modifier[16];
-extern const char * const reg_encoding[8];
 
 void
 brw_emit_depthbuffer(struct brw_context *brw);

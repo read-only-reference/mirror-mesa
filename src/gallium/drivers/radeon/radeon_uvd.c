@@ -105,7 +105,8 @@ static void send_cmd(struct ruvd_decoder *dec, unsigned cmd,
 {
 	int reloc_idx;
 
-	reloc_idx = dec->ws->cs_add_reloc(dec->cs, cs_buf, usage, domain);
+	reloc_idx = dec->ws->cs_add_reloc(dec->cs, cs_buf, usage, domain,
+					  RADEON_PRIO_MIN);
 	set_reg(dec, RUVD_GPCOM_VCPU_DATA0, off);
 	set_reg(dec, RUVD_GPCOM_VCPU_DATA1, reloc_idx * 4);
 	set_reg(dec, RUVD_GPCOM_VCPU_CMD, cmd << 1);
@@ -137,7 +138,7 @@ static void send_msg_buf(struct ruvd_decoder *dec)
 	if (!dec->msg || !dec->fb)
 		return;
 
-	/* grap the current message buffer */
+	/* grab the current message buffer */
 	buf = &dec->msg_fb_buffers[dec->cur_buffer];
 
 	/* unmap the buffer */

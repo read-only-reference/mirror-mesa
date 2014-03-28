@@ -1463,7 +1463,9 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 			cs->buf[cs->cdw++] = info.count;
 			cs->buf[cs->cdw++] = V_0287F0_DI_SRC_SEL_DMA;
 			cs->buf[cs->cdw++] = PKT3(PKT3_NOP, 0, rctx->b.predicate_drawing);
-			cs->buf[cs->cdw++] = r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx, (struct r600_resource*)ib.buffer, RADEON_USAGE_READ);
+			cs->buf[cs->cdw++] = r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx,
+								   (struct r600_resource*)ib.buffer,
+								   RADEON_USAGE_READ, RADEON_PRIO_MIN);
 		}
 	} else {
 		if (info.count_from_stream_output) {
@@ -1480,7 +1482,9 @@ static void r600_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info 
 			cs->buf[cs->cdw++] = 0; /* unused */
 
 			cs->buf[cs->cdw++] = PKT3(PKT3_NOP, 0, 0);
-			cs->buf[cs->cdw++] = r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx, t->buf_filled_size, RADEON_USAGE_READ);
+			cs->buf[cs->cdw++] = r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx,
+								   t->buf_filled_size, RADEON_USAGE_READ,
+								   RADEON_PRIO_MIN);
 		}
 
 		cs->buf[cs->cdw++] = PKT3(PKT3_DRAW_INDEX_AUTO, 1, rctx->b.predicate_drawing);
@@ -1724,7 +1728,8 @@ void r600_emit_shader(struct r600_context *rctx, struct r600_atom *a)
 
 	r600_emit_command_buffer(cs, &shader->command_buffer);
 	radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
-	radeon_emit(cs, r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx, shader->bo, RADEON_USAGE_READ));
+	radeon_emit(cs, r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx, shader->bo,
+					      RADEON_USAGE_READ, RADEON_PRIO_SHADER_DATA));
 }
 
 unsigned r600_get_swizzle_combined(const unsigned char *swizzle_format,
@@ -2132,16 +2137,162 @@ out_unknown:
 	return ~0;
 }
 
+uint32_t r600_translate_colorformat(enum chip_class chip, enum pipe_format format)
+{
+	const struct util_format_description *desc = util_format_description(format);
+	int channel = util_format_get_first_non_void_channel(format);
+	bool is_float;
+
+#define HAS_SIZE(x,y,z,w) \
+	(desc->channel[0].size == (x) && desc->channel[1].size == (y) && \
+         desc->channel[2].size == (z) && desc->channel[3].size == (w))
+
+	if (format == PIPE_FORMAT_R11G11B10_FLOAT) /* isn't plain */
+		return V_0280A0_COLOR_10_11_11_FLOAT;
+
+	if (desc->layout != UTIL_FORMAT_LAYOUT_PLAIN ||
+	    channel == -1)
+		return ~0U;
+
+	is_float = desc->channel[channel].type == UTIL_FORMAT_TYPE_FLOAT;
+
+	switch (desc->nr_channels) {
+	case 1:
+		switch (desc->channel[0].size) {
+		case 8:
+			return V_0280A0_COLOR_8;
+		case 16:
+			if (is_float)
+				return V_0280A0_COLOR_16_FLOAT;
+			else
+				return V_0280A0_COLOR_16;
+		case 32:
+			if (is_float)
+				return V_0280A0_COLOR_32_FLOAT;
+			else
+				return V_0280A0_COLOR_32;
+		}
+		break;
+	case 2:
+		if (desc->channel[0].size == desc->channel[1].size) {
+			switch (desc->channel[0].size) {
+			case 4:
+				if (chip <= R700)
+					return V_0280A0_COLOR_4_4;
+				else
+					return ~0U; /* removed on Evergreen */
+			case 8:
+				return V_0280A0_COLOR_8_8;
+			case 16:
+				if (is_float)
+					return V_0280A0_COLOR_16_16_FLOAT;
+				else
+					return V_0280A0_COLOR_16_16;
+			case 32:
+				if (is_float)
+					return V_0280A0_COLOR_32_32_FLOAT;
+				else
+					return V_0280A0_COLOR_32_32;
+			}
+		} else if (HAS_SIZE(8,24,0,0)) {
+			return V_0280A0_COLOR_24_8;
+		} else if (HAS_SIZE(24,8,0,0)) {
+			return V_0280A0_COLOR_8_24;
+		}
+		break;
+	case 3:
+		if (HAS_SIZE(5,6,5,0)) {
+			return V_0280A0_COLOR_5_6_5;
+		} else if (HAS_SIZE(32,8,24,0)) {
+			return V_0280A0_COLOR_X24_8_32_FLOAT;
+		}
+		break;
+	case 4:
+		if (desc->channel[0].size == desc->channel[1].size &&
+		    desc->channel[0].size == desc->channel[2].size &&
+		    desc->channel[0].size == desc->channel[3].size) {
+			switch (desc->channel[0].size) {
+			case 4:
+				return V_0280A0_COLOR_4_4_4_4;
+			case 8:
+				return V_0280A0_COLOR_8_8_8_8;
+			case 16:
+				if (is_float)
+					return V_0280A0_COLOR_16_16_16_16_FLOAT;
+				else
+					return V_0280A0_COLOR_16_16_16_16;
+			case 32:
+				if (is_float)
+					return V_0280A0_COLOR_32_32_32_32_FLOAT;
+				else
+					return V_0280A0_COLOR_32_32_32_32;
+			}
+		} else if (HAS_SIZE(5,5,5,1)) {
+			return V_0280A0_COLOR_1_5_5_5;
+		} else if (HAS_SIZE(10,10,10,2)) {
+			return V_0280A0_COLOR_2_10_10_10;
+		}
+		break;
+	}
+	return ~0U;
+}
+
+uint32_t r600_colorformat_endian_swap(uint32_t colorformat)
+{
+	if (R600_BIG_ENDIAN) {
+		switch(colorformat) {
+		/* 8-bit buffers. */
+		case V_0280A0_COLOR_4_4:
+		case V_0280A0_COLOR_8:
+			return ENDIAN_NONE;
+
+		/* 16-bit buffers. */
+		case V_0280A0_COLOR_5_6_5:
+		case V_0280A0_COLOR_1_5_5_5:
+		case V_0280A0_COLOR_4_4_4_4:
+		case V_0280A0_COLOR_16:
+		case V_0280A0_COLOR_8_8:
+			return ENDIAN_8IN16;
+
+		/* 32-bit buffers. */
+		case V_0280A0_COLOR_8_8_8_8:
+		case V_0280A0_COLOR_2_10_10_10:
+		case V_0280A0_COLOR_8_24:
+		case V_0280A0_COLOR_24_8:
+		case V_0280A0_COLOR_32_FLOAT:
+		case V_0280A0_COLOR_16_16_FLOAT:
+		case V_0280A0_COLOR_16_16:
+			return ENDIAN_8IN32;
+
+		/* 64-bit buffers. */
+		case V_0280A0_COLOR_16_16_16_16:
+		case V_0280A0_COLOR_16_16_16_16_FLOAT:
+			return ENDIAN_8IN16;
+
+		case V_0280A0_COLOR_32_32_FLOAT:
+		case V_0280A0_COLOR_32_32:
+		case V_0280A0_COLOR_X24_8_32_FLOAT:
+			return ENDIAN_8IN32;
+
+		/* 128-bit buffers. */
+		case V_0280A0_COLOR_32_32_32_32_FLOAT:
+		case V_0280A0_COLOR_32_32_32_32:
+			return ENDIAN_8IN32;
+		default:
+			return ENDIAN_NONE; /* Unsupported. */
+		}
+	} else {
+		return ENDIAN_NONE;
+	}
+}
+
 static void r600_invalidate_buffer(struct pipe_context *ctx, struct pipe_resource *buf)
 {
 	struct r600_context *rctx = (struct r600_context*)ctx;
 	struct r600_resource *rbuffer = r600_resource(buf);
 	unsigned i, shader, mask, alignment = rbuffer->buf->alignment;
 
-	/* Discard the buffer. */
-	pb_reference(&rbuffer->buf, NULL);
-
-	/* Create a new one in the same pipe_resource. */
+	/* Reallocate the buffer in the same pipe_resource. */
 	r600_init_resource(&rctx->screen->b, rbuffer, rbuffer->b.b.width0,
 			   alignment, TRUE);
 
@@ -2252,7 +2403,8 @@ void r600_trace_emit(struct r600_context *rctx)
 	uint32_t reloc;
 
 	va = r600_resource_va(&rscreen->b.b, (void*)rscreen->b.trace_bo);
-	reloc = r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx, rscreen->b.trace_bo, RADEON_USAGE_READWRITE);
+	reloc = r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx, rscreen->b.trace_bo,
+				      RADEON_USAGE_READWRITE, RADEON_PRIO_MIN);
 	radeon_emit(cs, PKT3(PKT3_MEM_WRITE, 3, 0));
 	radeon_emit(cs, va & 0xFFFFFFFFUL);
 	radeon_emit(cs, (va >> 32UL) & 0xFFUL);

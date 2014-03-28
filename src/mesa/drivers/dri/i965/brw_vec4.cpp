@@ -213,6 +213,14 @@ dst_reg::dst_reg(src_reg reg)
 }
 
 bool
+dst_reg::is_null() const
+{
+   return file == HW_REG &&
+          fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE &&
+          fixed_hw_reg.nr == BRW_ARF_NULL;
+}
+
+bool
 vec4_instruction::is_send_from_grf()
 {
    switch (opcode) {
@@ -313,8 +321,48 @@ src_reg::equals(src_reg *r)
 	   imm.u == r->imm.u);
 }
 
+static bool
+try_eliminate_instruction(vec4_instruction *inst, int new_writemask)
+{
+   if (new_writemask == 0) {
+      /* Don't dead code eliminate instructions that write to the
+       * accumulator as a side-effect. Instead just set the destination
+       * to the null register to free it.
+       */
+      switch (inst->opcode) {
+      case BRW_OPCODE_ADDC:
+      case BRW_OPCODE_SUBB:
+      case BRW_OPCODE_MACH:
+         inst->dst = dst_reg(retype(brw_null_reg(), inst->dst.type));
+         break;
+      default:
+         if (inst->writes_flag()) {
+            inst->dst = dst_reg(retype(brw_null_reg(), inst->dst.type));
+         } else {
+            inst->remove();
+         }
+      }
+      return true;
+   } else if (inst->dst.writemask != new_writemask) {
+      switch (inst->opcode) {
+      case SHADER_OPCODE_TXF_CMS:
+      case SHADER_OPCODE_GEN4_SCRATCH_READ:
+      case VS_OPCODE_PULL_CONSTANT_LOAD:
+      case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
+         break;
+      default:
+         if (!inst->is_tex()) {
+            inst->dst.writemask = new_writemask;
+            return true;
+         }
+      }
+   }
+
+   return false;
+}
+
 /**
- * Must be called after calculate_live_intervales() to remove unused
+ * Must be called after calculate_live_intervals() to remove unused
  * writes to registers -- register allocation will fail otherwise
  * because something deffed but not used won't be considered to
  * interfere with other regs.
@@ -323,35 +371,106 @@ bool
 vec4_visitor::dead_code_eliminate()
 {
    bool progress = false;
-   int pc = 0;
+   bool seen_control_flow = false;
+   int pc = -1;
 
    calculate_live_intervals();
 
    foreach_list_safe(node, &this->instructions) {
       vec4_instruction *inst = (vec4_instruction *)node;
 
-      if (inst->dst.file == GRF && !inst->has_side_effects()) {
-         assert(this->virtual_grf_end[inst->dst.reg] >= pc);
-         if (this->virtual_grf_end[inst->dst.reg] == pc) {
-            /* Don't dead code eliminate instructions that write to the
-             * accumulator as a side-effect. Instead just set the destination
-             * to the null register to free it.
-             */
-            switch (inst->opcode) {
-            case BRW_OPCODE_ADDC:
-            case BRW_OPCODE_SUBB:
-            case BRW_OPCODE_MACH:
-               inst->dst = dst_reg(retype(brw_null_reg(), inst->dst.type));
-               break;
-            default:
-               inst->remove();
-               break;
-            }
-            progress = true;
+      pc++;
+
+      seen_control_flow = inst->is_control_flow() || seen_control_flow;
+
+      if (inst->has_side_effects())
+         continue;
+
+      bool inst_writes_flag = false;
+      if (inst->dst.file != GRF) {
+         if (inst->dst.is_null() && inst->writes_flag()) {
+            inst_writes_flag = true;
+         } else {
+            continue;
          }
       }
 
-      pc++;
+      if (inst->dst.file == GRF) {
+         int write_mask = inst->dst.writemask;
+
+         for (int c = 0; c < 4; c++) {
+            if (write_mask & (1 << c)) {
+               assert(this->virtual_grf_end[inst->dst.reg * 4 + c] >= pc);
+               if (this->virtual_grf_end[inst->dst.reg * 4 + c] == pc) {
+                  write_mask &= ~(1 << c);
+               }
+            }
+         }
+
+         progress = try_eliminate_instruction(inst, write_mask) || progress;
+      }
+
+      if (seen_control_flow || inst->predicate || inst->prev == NULL)
+         continue;
+
+      int dead_channels;
+      if (inst_writes_flag) {
+/* Arbitrarily chosen, other than not being an xyzw writemask. */
+#define FLAG_WRITEMASK (1 << 5)
+         dead_channels = inst->reads_flag() ? 0 : FLAG_WRITEMASK;
+      } else {
+         dead_channels = inst->dst.writemask;
+
+         for (int i = 0; i < 3; i++) {
+            if (inst->src[i].file != GRF ||
+                inst->src[i].reg != inst->dst.reg)
+                  continue;
+
+            for (int j = 0; j < 4; j++) {
+               int swiz = BRW_GET_SWZ(inst->src[i].swizzle, j);
+               dead_channels &= ~(1 << swiz);
+            }
+         }
+      }
+
+      for (exec_node *node = inst->prev, *prev = node->prev;
+           prev != NULL && dead_channels != 0;
+           node = prev, prev = prev->prev) {
+         vec4_instruction *scan_inst = (vec4_instruction  *)node;
+
+         if (scan_inst->has_side_effects())
+            continue;
+
+         if (inst_writes_flag) {
+            if (scan_inst->dst.is_null() && scan_inst->writes_flag()) {
+               scan_inst->remove();
+               progress = true;
+            } else if (scan_inst->reads_flag()) {
+               dead_channels = 0;
+            }
+            continue;
+         } else if (scan_inst->dst.file != GRF) {
+            continue;
+         }
+
+         if (inst->dst.reg == scan_inst->dst.reg) {
+            int new_writemask = scan_inst->dst.writemask & ~dead_channels;
+
+            progress = try_eliminate_instruction(scan_inst, new_writemask) ||
+                       progress;
+         }
+
+         for (int i = 0; i < 3; i++) {
+            if (scan_inst->src[i].file != GRF ||
+                scan_inst->src[i].reg != inst->dst.reg)
+               continue;
+
+            for (int j = 0; j < 4; j++) {
+               int swiz = BRW_GET_SWZ(scan_inst->src[i].swizzle, j);
+               dead_channels &= ~(1 << swiz);
+            }
+         }
+      }
    }
 
    if (progress)
@@ -875,7 +994,10 @@ vec4_visitor::opt_register_coalesce()
       /* Can't coalesce this GRF if someone else was going to
        * read it later.
        */
-      if (this->virtual_grf_end[inst->src[0].reg] > ip)
+      if (this->virtual_grf_end[inst->src[0].reg * 4 + 0] > ip ||
+          this->virtual_grf_end[inst->src[0].reg * 4 + 1] > ip ||
+          this->virtual_grf_end[inst->src[0].reg * 4 + 2] > ip ||
+          this->virtual_grf_end[inst->src[0].reg * 4 + 3] > ip)
 	 continue;
 
       /* We need to check interference with the final destination between this
@@ -1122,6 +1244,11 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst)
 {
    vec4_instruction *inst = (vec4_instruction *)be_inst;
 
+   if (inst->predicate) {
+      fprintf(stderr, "(%cf0) ",
+             inst->predicate_inverse ? '-' : '+');
+   }
+
    fprintf(stderr, "%s", brw_instruction_name(inst->opcode));
    if (inst->conditional_mod) {
       fprintf(stderr, "%s", conditional_modifier[inst->conditional_mod]);
@@ -1269,7 +1396,7 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst)
          fprintf(stderr, "|");
 
       if (inst->src[i].file != IMM) {
-         fprintf(stderr, ":%s", reg_encoding[inst->src[i].type]);
+         fprintf(stderr, ":%s", brw_reg_type_letters(inst->src[i].type));
       }
 
       if (i < 2 && inst->src[i + 1].file != BAD_FILE)
@@ -1668,7 +1795,7 @@ brw_vs_emit(struct brw_context *brw,
    if (unlikely(INTEL_DEBUG & DEBUG_VS))
       brw_dump_ir(brw, "vertex", prog, &shader->base, &c->vp->program.Base);
 
-   vec4_vs_visitor v(brw, c, prog_data, prog, shader, mem_ctx);
+   vec4_vs_visitor v(brw, c, prog_data, prog, mem_ctx);
    if (!v.run()) {
       if (prog) {
          prog->LinkStatus = false;

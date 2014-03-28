@@ -528,6 +528,14 @@ ir_algebraic_visitor::handle_expression(ir_expression *ir)
       if (is_vec_two(op_const[0]))
          return expr(ir_unop_exp2, ir->operands[1]);
 
+      if (is_vec_two(op_const[1])) {
+         ir_variable *x = new(ir) ir_variable(ir->operands[1]->type, "x",
+                                              ir_var_temporary);
+         base_ir->insert_before(x);
+         base_ir->insert_before(assign(x, ir->operands[0]));
+         return mul(x, x);
+      }
+
       break;
 
    case ir_unop_rcp:
@@ -571,7 +579,9 @@ ir_algebraic_visitor::handle_expression(ir_expression *ir)
       } else if (is_vec_zero(op_const[0])) {
          return mul(ir->operands[1], ir->operands[2]);
       } else if (is_vec_zero(op_const[1])) {
-         return add(ir->operands[0], neg(mul(ir->operands[0], ir->operands[2])));
+         unsigned op2_components = ir->operands[2]->type->vector_elements;
+         ir_constant *one = new(mem_ctx) ir_constant(1.0f, op2_components);
+         return mul(ir->operands[0], add(one, neg(ir->operands[2])));
       }
       break;
 

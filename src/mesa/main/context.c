@@ -364,7 +364,7 @@ dummy_enum_func(void)
  *
  * \sa Used by one_time_init().
  */
-_glthread_DECLARE_STATIC_MUTEX(OneTimeLock);
+mtx_t OneTimeLock = _MTX_INITIALIZER_NP;
 
 
 
@@ -382,7 +382,7 @@ one_time_init( struct gl_context *ctx )
 {
    static GLbitfield api_init_mask = 0x0;
 
-   _glthread_LOCK_MUTEX(OneTimeLock);
+   mtx_lock(&OneTimeLock);
 
    /* truly one-time init */
    if (!api_init_mask) {
@@ -423,7 +423,7 @@ one_time_init( struct gl_context *ctx )
 
    api_init_mask |= 1 << ctx->API;
 
-   _glthread_UNLOCK_MUTEX(OneTimeLock);
+   mtx_unlock(&OneTimeLock);
 
    /* Hopefully atexit() is widely available.  If not, we may need some
     * #ifdef tests here.
@@ -1013,7 +1013,8 @@ _mesa_initialize_dispatch_tables(struct gl_context *ctx)
  *
  * \param ctx the context to initialize
  * \param api the GL API type to create the context for
- * \param visual describes the visual attributes for this context
+ * \param visual describes the visual attributes for this context or NULL to
+ *               create a configless context
  * \param share_list points to context to share textures, display lists,
  *        etc with, or NULL
  * \param driverFunctions table of device driver functions for this context
@@ -1033,11 +1034,19 @@ _mesa_initialize_context(struct gl_context *ctx,
    assert(driverFunctions->FreeTextureImageBuffer);
 
    ctx->API = api;
-   ctx->Visual = *visual;
    ctx->DrawBuffer = NULL;
    ctx->ReadBuffer = NULL;
    ctx->WinSysDrawBuffer = NULL;
    ctx->WinSysReadBuffer = NULL;
+
+   if (visual) {
+      ctx->Visual = *visual;
+      ctx->HasConfig = GL_TRUE;
+   }
+   else {
+      memset(&ctx->Visual, 0, sizeof ctx->Visual);
+      ctx->HasConfig = GL_FALSE;
+   }
 
    if (_mesa_is_desktop_gl(ctx)) {
       _mesa_override_gl_version(ctx);
@@ -1145,7 +1154,8 @@ fail:
  * the rendering context.
  *
  * \param api the GL API type to create the context for
- * \param visual a struct gl_config pointer (we copy the struct contents)
+ * \param visual a struct gl_config pointer (we copy the struct contents) or
+ *               NULL to create a configless context
  * \param share_list another context to share display lists with or NULL
  * \param driverFunctions points to the dd_function_table into which the
  *        driver has plugged in all its special functions.
@@ -1159,8 +1169,6 @@ _mesa_create_context(gl_api api,
                      const struct dd_function_table *driverFunctions)
 {
    struct gl_context *ctx;
-
-   ASSERT(visual);
 
    ctx = calloc(1, sizeof(struct gl_context));
    if (!ctx)
@@ -1475,6 +1483,54 @@ _mesa_check_init_viewport(struct gl_context *ctx, GLuint width, GLuint height)
    }
 }
 
+static void
+handle_first_current(struct gl_context *ctx)
+{
+   GLenum buffer;
+   GLint bufferIndex;
+
+   assert(ctx->Version > 0);
+
+   ctx->Extensions.String = _mesa_make_extension_string(ctx);
+
+   check_context_limits(ctx);
+
+   /* According to GL_MESA_configless_context the default value of
+    * glDrawBuffers depends on the config of the first surface it is bound to.
+    * For GLES it is always GL_BACK which has a magic interpretation */
+   if (!ctx->HasConfig && _mesa_is_desktop_gl(ctx)) {
+      if (ctx->DrawBuffer != _mesa_get_incomplete_framebuffer()) {
+         if (ctx->DrawBuffer->Visual.doubleBufferMode)
+            buffer = GL_BACK;
+         else
+            buffer = GL_FRONT;
+
+         _mesa_drawbuffers(ctx, 1, &buffer, NULL /* destMask */);
+      }
+
+      if (ctx->ReadBuffer != _mesa_get_incomplete_framebuffer()) {
+         if (ctx->ReadBuffer->Visual.doubleBufferMode) {
+            buffer = GL_BACK;
+            bufferIndex = BUFFER_BACK_LEFT;
+         }
+         else {
+            buffer = GL_FRONT;
+            bufferIndex = BUFFER_FRONT_LEFT;
+         }
+
+         _mesa_readbuffer(ctx, buffer, bufferIndex);
+      }
+   }
+
+   /* We can use this to help debug user's problems.  Tell them to set
+    * the MESA_INFO env variable before running their app.  Then the
+    * first time each context is made current we'll print some useful
+    * information.
+    */
+   if (_mesa_getenv("MESA_INFO")) {
+      _mesa_print_info(ctx);
+   }
+}
 
 /**
  * Bind the given context to the given drawBuffer and readBuffer and
@@ -1567,21 +1623,7 @@ _mesa_make_current( struct gl_context *newCtx,
       }
 
       if (newCtx->FirstTimeCurrent) {
-         assert(newCtx->Version > 0);
-
-         newCtx->Extensions.String = _mesa_make_extension_string(newCtx);
-
-         check_context_limits(newCtx);
-
-         /* We can use this to help debug user's problems.  Tell them to set
-          * the MESA_INFO env variable before running their app.  Then the
-          * first time each context is made current we'll print some useful
-          * information.
-          */
-	 if (_mesa_getenv("MESA_INFO")) {
-	    _mesa_print_info(newCtx);
-	 }
-
+         handle_first_current(newCtx);
 	 newCtx->FirstTimeCurrent = GL_FALSE;
       }
    }
@@ -1799,6 +1841,7 @@ shader_linked_or_absent(struct gl_context *ctx,
  * Prior to drawing anything with glBegin, glDrawArrays, etc. this function
  * is called to see if it's valid to render.  This involves checking that
  * the current shader is valid and the framebuffer is complete.
+ * It also check the current pipeline object is valid if any.
  * If an error is detected it'll be recorded here.
  * \return GL_TRUE if OK to render, GL_FALSE if not
  */
@@ -1813,7 +1856,7 @@ _mesa_valid_to_render(struct gl_context *ctx, const char *where)
       _mesa_update_state(ctx);
 
    for (i = 0; i < MESA_SHADER_COMPUTE; i++) {
-      if (!shader_linked_or_absent(ctx, ctx->Shader.CurrentProgram[i],
+      if (!shader_linked_or_absent(ctx, ctx->_Shader->CurrentProgram[i],
                                    &from_glsl_shader[i], where))
          return GL_FALSE;
    }
@@ -1850,6 +1893,15 @@ _mesa_valid_to_render(struct gl_context *ctx, const char *where)
       }
    }
 
+   /* A pipeline object is bound */
+   if (ctx->_Shader->Name && !ctx->_Shader->Validated) {
+      /* Error message will be printed inside _mesa_validate_program_pipeline.
+       */
+      if (!_mesa_validate_program_pipeline(ctx, ctx->_Shader, GL_TRUE)) {
+         return GL_FALSE;
+      }
+   }
+
    if (ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
       _mesa_error(ctx, GL_INVALID_FRAMEBUFFER_OPERATION_EXT,
                   "%s(incomplete framebuffer)", where);
@@ -1861,8 +1913,8 @@ _mesa_valid_to_render(struct gl_context *ctx, const char *where)
    }
 
 #ifdef DEBUG
-   if (ctx->Shader.Flags & GLSL_LOG) {
-      struct gl_shader_program **shProg = ctx->Shader.CurrentProgram;
+   if (ctx->_Shader->Flags & GLSL_LOG) {
+      struct gl_shader_program **shProg = ctx->_Shader->CurrentProgram;
       gl_shader_stage i;
 
       for (i = 0; i < MESA_SHADER_STAGES; i++) {

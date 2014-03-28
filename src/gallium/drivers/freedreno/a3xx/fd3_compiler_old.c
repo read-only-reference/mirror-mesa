@@ -126,6 +126,7 @@ compile_init(struct fd3_compile_context *ctx, struct fd3_shader_variant *so,
 	unsigned ret, base = 0;
 	struct tgsi_shader_info *info = &ctx->info;
 	const struct fd_lowering_config lconfig = {
+			.color_two_side = so->key.color_two_side,
 			.lower_DST  = true,
 			.lower_XPD  = true,
 			.lower_SCS  = true,
@@ -1266,6 +1267,7 @@ static const struct instr_translater translaters[TGSI_OPCODE_LAST] = {
 	INSTR(CLAMP,        trans_clamp),
 	INSTR(FLR,          instr_cat2, .opc = OPC_FLOOR_F),
 	INSTR(ROUND,        instr_cat2, .opc = OPC_RNDNE_F),
+	INSTR(SSG,          instr_cat2, .opc = OPC_SIGN_F),
 	INSTR(ARL,          trans_arl),
 	INSTR(EX2,          instr_cat4, .opc = OPC_EXP2),
 	INSTR(LG2,          instr_cat4, .opc = OPC_LOG2),
@@ -1326,6 +1328,7 @@ decl_in(struct fd3_compile_context *ctx, struct tgsi_full_declaration *decl)
 		so->inputs[n].compmask = (1 << ncomp) - 1;
 		so->inputs[n].regid = r;
 		so->inputs[n].inloc = ctx->next_inloc;
+		so->inputs[n].bary = true;   /* all that is supported */
 		ctx->next_inloc += ncomp;
 
 		so->total_in += ncomp;
@@ -1376,9 +1379,12 @@ decl_out(struct fd3_compile_context *ctx, struct tgsi_full_declaration *decl)
 		switch (name) {
 		case TGSI_SEMANTIC_POSITION:
 			so->writes_pos = true;
-			/* fallthrough */
+			break;
 		case TGSI_SEMANTIC_PSIZE:
+			so->writes_psize = true;
+			break;
 		case TGSI_SEMANTIC_COLOR:
+		case TGSI_SEMANTIC_BCOLOR:
 		case TGSI_SEMANTIC_GENERIC:
 		case TGSI_SEMANTIC_FOG:
 		case TGSI_SEMANTIC_TEXCOORD:
@@ -1392,7 +1398,7 @@ decl_out(struct fd3_compile_context *ctx, struct tgsi_full_declaration *decl)
 		case TGSI_SEMANTIC_POSITION:
 			comp = 2;  /* tgsi will write to .z component */
 			so->writes_pos = true;
-			/* fallthrough */
+			break;
 		case TGSI_SEMANTIC_COLOR:
 			break;
 		default:

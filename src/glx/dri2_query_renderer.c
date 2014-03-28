@@ -20,9 +20,11 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
+
+#if defined(GLX_DIRECT_RENDERING) && !defined(GLX_USE_APPLEGL)
+
 #include "glxclient.h"
 #include "glx_error.h"
-#include "xf86drm.h"
 #include "dri2.h"
 #include "dri_interface.h"
 #include "dri2_priv.h"
@@ -95,3 +97,5 @@ dri2_query_renderer_string(struct glx_screen *base, int attribute,
 
    return psc->rendererQuery->queryString(psc->driScreen, dri_attribute, value);
 }
+
+#endif /* GLX_DIRECT_RENDERING */

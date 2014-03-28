@@ -41,6 +41,7 @@
 #include "brw_context.h"
 
 #include "main/enums.h"
+#include "main/fbobject.h"
 #include "main/formats.h"
 #include "main/glformats.h"
 #include "main/texcompress_etc.h"
@@ -681,8 +682,6 @@ intel_update_winsys_renderbuffer_miptree(struct brw_context *intel,
    mesa_format format = rb->Format;
    int num_samples = rb->NumSamples;
 
-   intel_miptree_release(&irb->mt);
-
    /* Only the front and back buffers, which are color buffers, are allocated
     * through the image loader.
     */
@@ -698,7 +697,8 @@ intel_update_winsys_renderbuffer_miptree(struct brw_context *intel,
                                                  region->pitch,
                                                  region->tiling);
    if (!singlesample_mt)
-      return;
+      goto fail;
+
    singlesample_mt->region->name = region->name;
 
    /* If this miptree is capable of supporting fast color clears, set
@@ -710,23 +710,36 @@ intel_update_winsys_renderbuffer_miptree(struct brw_context *intel,
       singlesample_mt->fast_clear_state = INTEL_FAST_CLEAR_STATE_RESOLVED;
 
    if (num_samples == 0) {
+      intel_miptree_release(&irb->mt);
       irb->mt = singlesample_mt;
-      return;
-   }
 
-   multisample_mt = intel_miptree_create_for_renderbuffer(intel,
-                                                          format,
-                                                          region->width,
-                                                          region->height,
-                                                          num_samples);
-   if (!multisample_mt) {
-      intel_miptree_release(&singlesample_mt);
-      return;
-   }
+      assert(!irb->singlesample_mt);
+   } else {
+      intel_miptree_release(&irb->singlesample_mt);
+      irb->singlesample_mt = singlesample_mt;
 
-   irb->need_downsample = false;
-   irb->mt = multisample_mt;
-   irb->singlesample_mt = singlesample_mt;
+      if (!irb->mt ||
+          irb->mt->logical_width0 != region->width ||
+          irb->mt->logical_height0 != region->height) {
+         multisample_mt = intel_miptree_create_for_renderbuffer(intel,
+                                                                format,
+                                                                region->width,
+                                                                region->height,
+                                                                num_samples);
+         if (!multisample_mt)
+            goto fail;
+
+         irb->need_downsample = false;
+         intel_miptree_release(&irb->mt);
+         irb->mt = multisample_mt;
+      }
+   }
+   return;
+
+fail:
+   intel_miptree_release(&irb->singlesample_mt);
+   intel_miptree_release(&irb->mt);
+   return;
 }
 
 struct intel_mipmap_tree*
@@ -929,7 +942,7 @@ intel_miptree_set_image_offset(struct intel_mipmap_tree *mt,
 }
 
 void
-intel_miptree_get_image_offset(struct intel_mipmap_tree *mt,
+intel_miptree_get_image_offset(const struct intel_mipmap_tree *mt,
 			       GLuint level, GLuint slice,
 			       GLuint *x, GLuint *y)
 {
@@ -950,12 +963,12 @@ intel_miptree_get_image_offset(struct intel_mipmap_tree *mt,
  * from there.
  */
 uint32_t
-intel_miptree_get_tile_offsets(struct intel_mipmap_tree *mt,
+intel_miptree_get_tile_offsets(const struct intel_mipmap_tree *mt,
                                GLuint level, GLuint slice,
                                uint32_t *tile_x,
                                uint32_t *tile_y)
 {
-   struct intel_region *region = mt->region;
+   const struct intel_region *region = mt->region;
    uint32_t x, y;
    uint32_t mask_x, mask_y;
 
@@ -1543,14 +1556,18 @@ intel_miptree_updownsample(struct brw_context *brw,
                            struct intel_mipmap_tree *src,
                            struct intel_mipmap_tree *dst)
 {
-   brw_blorp_blit_miptrees(brw,
-                           src, 0 /* level */, 0 /* layer */,
-                           dst, 0 /* level */, 0 /* layer */,
-                           0, 0,
-                           src->logical_width0, src->logical_height0,
-                           0, 0,
-                           dst->logical_width0, dst->logical_height0,
-                           GL_NEAREST, false, false /*mirror x, y*/);
+   if (brw->gen < 8 || src->format == MESA_FORMAT_S_UINT8) {
+      brw_blorp_blit_miptrees(brw,
+                              src, 0 /* level */, 0 /* layer */,
+                              dst, 0 /* level */, 0 /* layer */,
+                              0, 0,
+                              src->logical_width0, src->logical_height0,
+                              0, 0,
+                              dst->logical_width0, dst->logical_height0,
+                              GL_NEAREST, false, false /*mirror x, y*/);
+   } else {
+      brw_meta_updownsample(brw, src, dst);
+   }
 
    if (src->stencil_mt) {
       brw_blorp_blit_miptrees(brw,

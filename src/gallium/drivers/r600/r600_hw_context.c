@@ -311,7 +311,7 @@ void r600_begin_new_cs(struct r600_context *ctx)
 		ctx->gs_rings.atom.dirty = true;
 	}
 	ctx->vertex_shader.atom.dirty = true;
-
+	ctx->b.streamout.enable_atom.dirty = true;
 
 	if (ctx->blend_state.cso)
 		ctx->blend_state.atom.dirty = true;
@@ -412,8 +412,10 @@ void r600_cp_dma_copy_buffer(struct r600_context *rctx,
 		}
 
 		/* This must be done after r600_need_cs_space. */
-		src_reloc = r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx, (struct r600_resource*)src, RADEON_USAGE_READ);
-		dst_reloc = r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx, (struct r600_resource*)dst, RADEON_USAGE_WRITE);
+		src_reloc = r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx, (struct r600_resource*)src,
+						  RADEON_USAGE_READ, RADEON_PRIO_MIN);
+		dst_reloc = r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx, (struct r600_resource*)dst,
+						  RADEON_USAGE_WRITE, RADEON_PRIO_MIN);
 
 		radeon_emit(cs, PKT3(PKT3_CP_DMA, 4, 0));
 		radeon_emit(cs, src_offset);	/* SRC_ADDR_LO [31:0] */
@@ -438,25 +440,15 @@ void r600_cp_dma_copy_buffer(struct r600_context *rctx,
 			 R600_CONTEXT_INV_TEX_CACHE;
 }
 
-void r600_need_dma_space(struct r600_context *ctx, unsigned num_dw)
-{
-	/* The number of dwords we already used in the DMA so far. */
-	num_dw += ctx->b.rings.dma.cs->cdw;
-	/* Flush if there's not enough space. */
-	if (num_dw > RADEON_MAX_CMDBUF_DWORDS) {
-		ctx->b.rings.dma.flush(ctx, RADEON_FLUSH_ASYNC);
-	}
-}
-
-void r600_dma_copy(struct r600_context *rctx,
-		struct pipe_resource *dst,
-		struct pipe_resource *src,
-		uint64_t dst_offset,
-		uint64_t src_offset,
-		uint64_t size)
+void r600_dma_copy_buffer(struct r600_context *rctx,
+			  struct pipe_resource *dst,
+			  struct pipe_resource *src,
+			  uint64_t dst_offset,
+			  uint64_t src_offset,
+			  uint64_t size)
 {
 	struct radeon_winsys_cs *cs = rctx->b.rings.dma.cs;
-	unsigned i, ncopy, csize, shift;
+	unsigned i, ncopy, csize;
 	struct r600_resource *rdst = (struct r600_resource*)dst;
 	struct r600_resource *rsrc = (struct r600_resource*)src;
 
@@ -466,26 +458,24 @@ void r600_dma_copy(struct r600_context *rctx,
 	util_range_add(&rdst->valid_buffer_range, dst_offset,
 		       dst_offset + size);
 
-	/* make sure that the dma ring is only one active */
-	rctx->b.rings.gfx.flush(rctx, RADEON_FLUSH_ASYNC);
+	size >>= 2; /* convert to dwords */
+	ncopy = (size / R600_DMA_COPY_MAX_SIZE_DW) + !!(size % R600_DMA_COPY_MAX_SIZE_DW);
 
-	size >>= 2;
-	shift = 2;
-	ncopy = (size / 0xffff) + !!(size % 0xffff);
-
-	r600_need_dma_space(rctx, ncopy * 5);
+	r600_need_dma_space(&rctx->b, ncopy * 5);
 	for (i = 0; i < ncopy; i++) {
-		csize = size < 0xffff ? size : 0xffff;
+		csize = size < R600_DMA_COPY_MAX_SIZE_DW ? size : R600_DMA_COPY_MAX_SIZE_DW;
 		/* emit reloc before writting cs so that cs is always in consistent state */
-		r600_context_bo_reloc(&rctx->b, &rctx->b.rings.dma, rsrc, RADEON_USAGE_READ);
-		r600_context_bo_reloc(&rctx->b, &rctx->b.rings.dma, rdst, RADEON_USAGE_WRITE);
+		r600_context_bo_reloc(&rctx->b, &rctx->b.rings.dma, rsrc, RADEON_USAGE_READ,
+				      RADEON_PRIO_MIN);
+		r600_context_bo_reloc(&rctx->b, &rctx->b.rings.dma, rdst, RADEON_USAGE_WRITE,
+				      RADEON_PRIO_MIN);
 		cs->buf[cs->cdw++] = DMA_PACKET(DMA_PACKET_COPY, 0, 0, csize);
 		cs->buf[cs->cdw++] = dst_offset & 0xfffffffc;
 		cs->buf[cs->cdw++] = src_offset & 0xfffffffc;
 		cs->buf[cs->cdw++] = (dst_offset >> 32UL) & 0xff;
 		cs->buf[cs->cdw++] = (src_offset >> 32UL) & 0xff;
-		dst_offset += csize << shift;
-		src_offset += csize << shift;
+		dst_offset += csize << 2;
+		src_offset += csize << 2;
 		size -= csize;
 	}
 }

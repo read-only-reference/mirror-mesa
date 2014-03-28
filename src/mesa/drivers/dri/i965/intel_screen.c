@@ -37,6 +37,7 @@
 #include "main/fbobject.h"
 #include "main/version.h"
 #include "swrast/s_renderbuffer.h"
+#include "glsl/ralloc.h"
 
 #include "utils.h"
 #include "xmlpool.h"
@@ -645,6 +646,7 @@ intel_create_image_from_fds(__DRIscreen *screen,
 {
    struct intel_screen *intelScreen = screen->driverPrivate;
    struct intel_image_format *f;
+   uint32_t mask_x, mask_y;
    __DRIimage *image;
    int i, index;
 
@@ -676,6 +678,14 @@ intel_create_image_from_fds(__DRIscreen *screen,
       index = f->planes[i].buffer_index;
       image->offsets[index] = offsets[index];
       image->strides[index] = strides[index];
+   }
+
+   if (f->nplanes == 1) {
+      image->offset = image->offsets[0];
+      intel_region_get_tile_masks(image->region, &mask_x, &mask_y, false);
+      if (image->offset & mask_x)
+         _mesa_warning(NULL,
+                       "intel_create_image_from_fds: offset not on tile boundary");
    }
 
    intel_setup_image_from_dimensions(image);
@@ -842,7 +852,7 @@ brw_query_renderer_integer(__DRIscreen *psp, int param, unsigned int *value)
          * (uint64_t) system_page_size;
 
       const unsigned system_memory_megabytes =
-         (unsigned) (system_memory_bytes / 1024);
+         (unsigned) (system_memory_bytes / (1024 * 1024));
 
       value[0] = MIN2(system_memory_megabytes, gpu_mappable_megabytes);
       return 0;
@@ -946,7 +956,7 @@ intelDestroyScreen(__DRIscreen * sPriv)
    dri_bufmgr_destroy(intelScreen->bufmgr);
    driDestroyOptionInfo(&intelScreen->optionCache);
 
-   free(intelScreen);
+   ralloc_free(intelScreen);
    sPriv->driverPrivate = NULL;
 }
 
@@ -973,6 +983,11 @@ intelCreateBuffer(__DRIscreen * driScrnPriv,
       return false;
 
    _mesa_initialize_window_framebuffer(fb, mesaVis);
+
+   if (screen->winsys_msaa_samples_override != -1) {
+      num_samples = screen->winsys_msaa_samples_override;
+      fb->Visual.samples = num_samples;
+   }
 
    if (mesaVis->redBits == 5)
       rgbFormat = MESA_FORMAT_B5G6R5_UNORM;
@@ -1311,7 +1326,7 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
    }
 
    /* Allocate the private area */
-   intelScreen = calloc(1, sizeof *intelScreen);
+   intelScreen = rzalloc(NULL, struct intel_screen);
    if (!intelScreen) {
       fprintf(stderr, "\nERROR!  Allocating private area failed\n");
       return false;
@@ -1334,6 +1349,16 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
 
    intelScreen->hw_has_swizzling = intel_detect_swizzling(intelScreen);
 
+   const char *force_msaa = getenv("INTEL_FORCE_MSAA");
+   if (force_msaa) {
+      intelScreen->winsys_msaa_samples_override =
+         intel_quantize_num_samples(intelScreen, atoi(force_msaa));
+      printf("Forcing winsys sample count to %d\n",
+             intelScreen->winsys_msaa_samples_override);
+   } else {
+      intelScreen->winsys_msaa_samples_override = -1;
+   }
+
    set_max_gl_versions(intelScreen);
 
    /* Notification of GPU resets requires hardware contexts and a kernel new
@@ -1352,6 +1377,9 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
 
    psp->extensions = !intelScreen->has_context_reset_notification
       ? intelScreenExtensions : intelRobustScreenExtensions;
+
+   brw_fs_alloc_reg_sets(intelScreen);
+   brw_vec4_alloc_reg_set(intelScreen);
 
    return (const __DRIconfig**) intel_screen_make_configs(psp);
 }
