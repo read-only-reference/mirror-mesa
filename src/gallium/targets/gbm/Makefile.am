@@ -49,17 +49,14 @@ gbm_gallium_drm_la_LIBADD = \
 	$(top_builddir)/src/gallium/state_trackers/gbm/libgbm.la \
 	$(top_builddir)/src/gallium/auxiliary/libgallium.la \
 	$(LIBDRM_LIBS) \
-	-lm \
-	$(CLOCK_LIB) \
-	$(PTHREAD_LIBS) \
-	$(DLOPEN_LIBS)
+	$(GALLIUM_COMMON_LIB_DEPS)
 
 if HAVE_DRI
 gbm_gallium_drm_la_LIBADD += \
 	$(top_builddir)/src/gallium/winsys/sw/dri/libswdri.la
 endif
 
-if NEED_PIPE_LOADER_XLIB
+if NEED_WINSYS_XLIB
 gbm_gallium_drm_la_LIBADD += \
 	$(top_builddir)/src/gallium/winsys/sw/xlib/libws_xlib.la \
 	-lX11 -lXext -lXfixes \
@@ -71,7 +68,7 @@ gbm_gallium_drm_la_LDFLAGS = \
 	-no-undefined \
 	-avoid-version \
 	$(GC_SECTIONS) \
-	-Wl,--no-undefined
+	$(LD_NO_UNDEFINED)
 
 if HAVE_MESA_LLVM
 gbm_gallium_drm_la_LIBADD += $(LLVM_LIBS)

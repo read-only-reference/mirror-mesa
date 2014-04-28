@@ -297,7 +297,7 @@ linker_warning(gl_shader_program *prog, const char *fmt, ...)
 {
    va_list ap;
 
-   ralloc_strcat(&prog->InfoLog, "error: ");
+   ralloc_strcat(&prog->InfoLog, "warning: ");
    va_start(ap, fmt);
    ralloc_vasprintf_append(&prog->InfoLog, fmt, ap);
    va_end(ap);
@@ -2296,9 +2296,9 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
          lower_clip_distance(prog->_LinkedShaders[i]);
       }
 
-      unsigned max_unroll = ctx->ShaderCompilerOptions[i].MaxUnrollIterations;
-
-      while (do_common_optimization(prog->_LinkedShaders[i]->ir, true, false, max_unroll, &ctx->ShaderCompilerOptions[i]))
+      while (do_common_optimization(prog->_LinkedShaders[i]->ir, true, false,
+                                    &ctx->ShaderCompilerOptions[i],
+                                    ctx->Const.NativeIntegers))
 	 ;
    }
 

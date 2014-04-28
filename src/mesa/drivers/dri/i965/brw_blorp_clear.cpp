@@ -155,8 +155,6 @@ is_color_fast_clear_compatible(struct brw_context *brw,
    for (int i = 0; i < 4; i++) {
       if (color->f[i] != 0.0 && color->f[i] != 1.0 &&
           _mesa_format_has_color_component(format, i)) {
-         perf_debug("Clear color unsupported by fast color clear.  "
-                    "Falling back to slow clear.\n");
          return false;
       }
    }
@@ -569,11 +567,15 @@ do_single_blorp_clear(struct brw_context *brw, struct gl_framebuffer *fb,
 extern "C" {
 bool
 brw_blorp_clear_color(struct brw_context *brw, struct gl_framebuffer *fb,
-                      bool partial_clear)
+                      GLbitfield mask, bool partial_clear)
 {
    for (unsigned buf = 0; buf < fb->_NumColorDrawBuffers; buf++) {
       struct gl_renderbuffer *rb = fb->_ColorDrawBuffers[buf];
       struct intel_renderbuffer *irb = intel_renderbuffer(rb);
+
+      /* Only clear the buffers present in the provided mask */
+      if (((1 << fb->_ColorDrawBufferIndexes[buf]) & mask) == 0)
+         continue;
 
       /* If this is an ES2 context or GL_ARB_ES2_compatibility is supported,
        * the framebuffer can be complete with some attachments missing.  In
@@ -587,11 +589,10 @@ brw_blorp_clear_color(struct brw_context *brw, struct gl_framebuffer *fb,
             (irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_UMS ||
              irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_CMS) ?
             irb->mt->num_samples : 1;
-         unsigned num_layers =
-            irb->mt->level[irb->mt_level].depth / layer_multiplier;
+         unsigned num_layers = irb->layer_count;
          for (unsigned layer = 0; layer < num_layers; layer++) {
             if (!do_single_blorp_clear(brw, fb, rb, buf, partial_clear,
-                                       layer * layer_multiplier)) {
+                                       irb->mt_layer + layer * layer_multiplier)) {
                return false;
             }
          }

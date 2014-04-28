@@ -213,6 +213,7 @@ upload_wm_state(struct brw_context *brw)
        brw->wm.prog_data->uses_omask)
       dw5 |= GEN6_WM_KILL_ENABLE;
 
+   /* _NEW_BUFFERS | _NEW_COLOR */
    if (brw_color_buffer_write_enabled(brw) ||
        dw5 & (GEN6_WM_KILL_ENABLE | GEN6_WM_COMPUTED_DEPTH)) {
       dw5 |= GEN6_WM_DISPATCH_ENABLE;
@@ -279,7 +280,6 @@ upload_wm_state(struct brw_context *brw)
       dw6 |= GEN6_WM_MSDISPMODE_PERSAMPLE;
    }
 
-   /* _NEW_BUFFERS, _NEW_MULTISAMPLE */
    /* From the SNB PRM, volume 2 part 1, page 281:
     * "If the PS kernel does not need the Position XY Offsets
     * to compute a Position XY value, then this field should be

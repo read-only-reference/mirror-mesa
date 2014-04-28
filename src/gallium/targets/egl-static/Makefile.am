@@ -49,7 +49,7 @@ AM_LDFLAGS = \
 	-no-undefined \
 	-avoid-version \
 	$(GC_SECTIONS) \
-	-Wl,--no-undefined \
+	$(LD_NO_UNDEFINED) \
 	-Wl,--version-script=$(top_srcdir)/src/gallium/targets/egl-static/egl.link
 
 egldir = $(EGL_DRIVER_INSTALL_DIR)
@@ -69,10 +69,7 @@ egl_gallium_la_LIBADD = \
 	$(top_builddir)/src/gallium/state_trackers/egl/libegl.la \
 	$(top_builddir)/src/egl/main/libEGL.la \
 	$(top_builddir)/src/loader/libloader.la \
-	$(CLOCK_LIB) \
-	$(DLOPEN_LIBS) \
-	$(PTHREAD_LIBS) \
-	-lm
+	$(GALLIUM_COMMON_LIB_DEPS)
 
 if HAVE_MESA_LLVM
 AM_LDFLAGS += $(LLVM_LDFLAGS)
@@ -139,10 +136,7 @@ st_GL_la_LIBADD = \
 	$(top_builddir)/src/mesa/libmesagallium.la \
 	$(top_builddir)/src/gallium/auxiliary/libgallium.la \
 	$(top_builddir)/src/mapi/glapi/libglapi.la \
-	$(CLOCK_LIB) \
-	$(DLOPEN_LIBS) \
-	$(PTHREAD_LIBS) \
-	-lm
+	$(GALLIUM_COMMON_LIB_DEPS)
 endif
 endif
 

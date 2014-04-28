@@ -559,6 +559,13 @@ _mesa_test_texobj_completeness( const struct gl_context *ctx,
                        /* 'q' in the GL spec */
                        maxLevels - 1);
 
+   if (t->Immutable) {
+      /* Adjust max level for views: the data store may have more levels than
+       * the view exposes.
+       */
+      t->_MaxLevel = MIN2(t->_MaxLevel, t->NumLevels - 1);
+   }
+
    /* Compute _MaxLambda = q - p in the spec used during mipmapping */
    t->_MaxLambda = (GLfloat) (t->_MaxLevel - baseLevel);
 
@@ -1087,7 +1094,7 @@ unbind_texobj_from_texunits(struct gl_context *ctx,
 {
    GLuint u, tex;
 
-   for (u = 0; u < Elements(ctx->Texture.Unit); u++) {
+   for (u = 0; u < ctx->Texture.NumCurrentTexUsed; u++) {
       struct gl_texture_unit *unit = &ctx->Texture.Unit[u];
       for (tex = 0; tex < NUM_TEXTURE_TARGETS; tex++) {
          if (texObj == unit->CurrentTex[tex]) {
@@ -1346,6 +1353,8 @@ _mesa_BindTexture( GLenum target, GLuint texName )
     * count hits zero.
     */
    _mesa_reference_texobj(&texUnit->CurrentTex[targetIndex], newTexObj);
+   ctx->Texture.NumCurrentTexUsed = MAX2(ctx->Texture.NumCurrentTexUsed,
+                                         ctx->Texture.CurrentUnit + 1);
    ASSERT(texUnit->CurrentTex[targetIndex]);
 
    /* Pass BindTexture call to device driver */

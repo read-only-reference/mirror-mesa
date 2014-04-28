@@ -93,8 +93,10 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 14;
    case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
       return 512;
+   case PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET:
    case PIPE_CAP_MIN_TEXEL_OFFSET:
       return -8;
+   case PIPE_CAP_MAX_TEXTURE_GATHER_OFFSET:
    case PIPE_CAP_MAX_TEXEL_OFFSET:
       return 7;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
@@ -195,11 +197,15 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_VS_LAYER:
    case PIPE_CAP_TEXTURE_GATHER_SM5:
    case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
+   case PIPE_CAP_FAKE_SW_MSAA:
       return 0;
    case PIPE_CAP_MAX_VIEWPORTS:
       return NV50_MAX_VIEWPORTS;
    case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
       return (class_3d >= NVA3_3D_CLASS) ? 4 : 0;
+   case PIPE_CAP_TEXTURE_QUERY_LOD:
+   case PIPE_CAP_SAMPLE_SHADING:
+      return class_3d >= NVA3_3D_CLASS;
    default:
       NOUVEAU_ERR("unknown PIPE_CAP %d\n", param);
       return 0;

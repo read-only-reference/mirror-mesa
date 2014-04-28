@@ -37,6 +37,7 @@
 #include "main/arbprogram.h"
 #include "main/arrayobj.h"
 #include "main/blend.h"
+#include "main/blit.h"
 #include "main/bufferobj.h"
 #include "main/buffers.h"
 #include "main/colortab.h"
@@ -92,6 +93,45 @@ static void cleanup_temp_texture(struct temp_texture *tex);
 static void meta_glsl_clear_cleanup(struct clear_state *clear);
 static void meta_decompress_cleanup(struct decompress_state *decompress);
 static void meta_drawpix_cleanup(struct drawpix_state *drawpix);
+
+void
+_mesa_meta_bind_fbo_image(GLenum attachment,
+                          struct gl_texture_image *texImage, GLuint layer)
+{
+   struct gl_texture_object *texObj = texImage->TexObject;
+   int level = texImage->Level;
+   GLenum target = texObj->Target;
+
+   switch (target) {
+   case GL_TEXTURE_1D:
+      _mesa_FramebufferTexture1D(GL_FRAMEBUFFER,
+                                 attachment,
+                                 target,
+                                 texObj->Name,
+                                 level);
+      break;
+   case GL_TEXTURE_1D_ARRAY:
+   case GL_TEXTURE_2D_ARRAY:
+   case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
+   case GL_TEXTURE_CUBE_MAP_ARRAY:
+   case GL_TEXTURE_3D:
+      _mesa_FramebufferTextureLayer(GL_FRAMEBUFFER,
+                                    attachment,
+                                    texObj->Name,
+                                    level,
+                                    layer);
+      break;
+   default: /* 2D / cube */
+      if (target == GL_TEXTURE_CUBE_MAP)
+         target = GL_TEXTURE_CUBE_MAP_POSITIVE_X + texImage->Face;
+
+      _mesa_FramebufferTexture2D(GL_FRAMEBUFFER,
+                                 attachment,
+                                 target,
+                                 texObj->Name,
+                                 level);
+   }
+}
 
 GLuint
 _mesa_meta_compile_shader_with_debug(struct gl_context *ctx, GLenum target,
@@ -2288,7 +2328,7 @@ _mesa_meta_Bitmap(struct gl_context *ctx,
    if (ctx->_ImageTransferState ||
        ctx->FragmentProgram._Enabled ||
        ctx->Fog.Enabled ||
-       ctx->Texture._EnabledUnits ||
+       ctx->Texture._MaxEnabledTexImageUnit != -1 ||
        width > tex->MaxSize ||
        height > tex->MaxSize) {
       _swrast_Bitmap(ctx, x, y, width, height, unpack, bitmap1);
@@ -2420,6 +2460,9 @@ _mesa_meta_setup_texture_coords(GLenum faceTarget,
    };
    GLuint i;
    GLfloat r;
+
+   if (faceTarget == GL_TEXTURE_CUBE_MAP_ARRAY)
+      faceTarget = GL_TEXTURE_CUBE_MAP_POSITIVE_X + slice % 6;
 
    /* Currently all texture targets want the W component to be 1.0.
     */
@@ -2689,6 +2732,84 @@ get_temp_image_type(struct gl_context *ctx, mesa_format format)
 }
 
 /**
+ * Attempts to wrap the destination texture in an FBO and use
+ * glBlitFramebuffer() to implement glCopyTexSubImage().
+ */
+static bool
+copytexsubimage_using_blit_framebuffer(struct gl_context *ctx, GLuint dims,
+                                       struct gl_texture_image *texImage,
+                                       GLint xoffset,
+                                       GLint yoffset,
+                                       GLint zoffset,
+                                       struct gl_renderbuffer *rb,
+                                       GLint x, GLint y,
+                                       GLsizei width, GLsizei height)
+{
+   struct gl_texture_object *texObj = texImage->TexObject;
+   GLuint fbo;
+   bool success = false;
+   GLbitfield mask;
+   GLenum status;
+
+   if (!ctx->Extensions.ARB_framebuffer_object)
+      return false;
+
+   _mesa_unlock_texture(ctx, texObj);
+
+   _mesa_meta_begin(ctx, MESA_META_ALL);
+
+   _mesa_GenFramebuffers(1, &fbo);
+   _mesa_BindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+
+   if (rb->_BaseFormat == GL_DEPTH_STENCIL ||
+       rb->_BaseFormat == GL_DEPTH_COMPONENT) {
+      _mesa_meta_bind_fbo_image(GL_DEPTH_ATTACHMENT, texImage, zoffset);
+      mask = GL_DEPTH_BUFFER_BIT;
+
+      if (rb->_BaseFormat == GL_DEPTH_STENCIL &&
+          texImage->_BaseFormat == GL_DEPTH_STENCIL) {
+         _mesa_meta_bind_fbo_image(GL_STENCIL_ATTACHMENT, texImage, zoffset);
+         mask |= GL_STENCIL_BUFFER_BIT;
+      }
+      _mesa_DrawBuffer(GL_NONE);
+   } else {
+      _mesa_meta_bind_fbo_image(GL_COLOR_ATTACHMENT0, texImage, zoffset);
+      mask = GL_COLOR_BUFFER_BIT;
+      _mesa_DrawBuffer(GL_COLOR_ATTACHMENT0);
+   }
+
+   status = _mesa_CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER);
+   if (status != GL_FRAMEBUFFER_COMPLETE)
+      goto out;
+
+   ctx->Meta->Blit.no_ctsi_fallback = true;
+
+   /* Since we've bound a new draw framebuffer, we need to update
+    * its derived state -- _Xmin, etc -- for BlitFramebuffer's clipping to
+    * be correct.
+    */
+   _mesa_update_state(ctx);
+
+   /* We skip the core BlitFramebuffer checks for format consistency, which
+    * are too strict for CopyTexImage.  We know meta will be fine with format
+    * changes.
+    */
+   _mesa_meta_BlitFramebuffer(ctx, x, y,
+                              x + width, y + height,
+                              xoffset, yoffset,
+                              xoffset + width, yoffset + height,
+                              mask, GL_NEAREST);
+   ctx->Meta->Blit.no_ctsi_fallback = false;
+   success = true;
+
+ out:
+   _mesa_lock_texture(ctx, texObj);
+   _mesa_DeleteFramebuffers(1, &fbo);
+   _mesa_meta_end(ctx);
+   return success;
+}
+
+/**
  * Helper for _mesa_meta_CopyTexSubImage1/2/3D() functions.
  * Have to be careful with locking and meta state for pixel transfer.
  */
@@ -2705,11 +2826,14 @@ _mesa_meta_CopyTexSubImage(struct gl_context *ctx, GLuint dims,
    GLint bpp;
    void *buf;
 
-   /* The gl_renderbuffer is part of the interface for
-    * dd_function_table::CopyTexSubImage, but this implementation does not use
-    * it.
-    */
-   (void) rb;
+   if (copytexsubimage_using_blit_framebuffer(ctx, dims,
+                                              texImage,
+                                              xoffset, yoffset, zoffset,
+                                              rb,
+                                              x, y,
+                                              width, height)) {
+      return;
+   }
 
    /* Choose format/type for temporary image buffer */
    format = _mesa_get_format_base_format(texImage->TexFormat);
@@ -3141,7 +3265,7 @@ _mesa_meta_DrawTex(struct gl_context *ctx, GLfloat x, GLfloat y, GLfloat z,
          GLfloat s, t, s1, t1;
          GLuint tw, th;
 
-         if (!ctx->Texture.Unit[i]._ReallyEnabled) {
+         if (!ctx->Texture.Unit[i]._Current) {
             GLuint j;
             for (j = 0; j < 4; j++) {
                verts[j].st[i][0] = 0.0f;

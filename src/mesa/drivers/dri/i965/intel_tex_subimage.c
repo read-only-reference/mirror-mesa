@@ -588,6 +588,10 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
    if (!mem_copy)
       return false;
 
+   /* If this is a nontrivial texture view, let another path handle it instead. */
+   if (texImage->TexObject->MinLayer)
+      return false;
+
    if (for_glTexImage)
       ctx->Driver.AllocTextureImageBuffer(ctx, texImage);
 
@@ -630,9 +634,11 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
        packing->Alignment, packing->RowLength, packing->SkipPixels,
        packing->SkipRows, for_glTexImage);
 
+   int level = texImage->Level + texImage->TexObject->MinLevel;
+
    /* Adjust x and y offset based on miplevel */
-   xoffset += image->mt->level[texImage->Level].level_x;
-   yoffset += image->mt->level[texImage->Level].level_y;
+   xoffset += image->mt->level[level].level_x;
+   yoffset += image->mt->level[level].level_y;
 
    linear_to_tiled(
       xoffset * cpp, (xoffset + width) * cpp,

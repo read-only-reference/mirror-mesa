@@ -38,6 +38,7 @@
 #include "main/image.h"
 #include "main/hash_table.h"
 #include "main/set.h"
+#include "main/condrender.h"
 
 #include "swrast/swrast.h"
 #include "drivers/common/meta.h"
@@ -319,6 +320,8 @@ intel_alloc_renderbuffer_storage(struct gl_context * ctx, struct gl_renderbuffer
    if (!irb->mt)
       return false;
 
+   irb->layer_count = 1;
+
    return true;
 }
 
@@ -383,6 +386,7 @@ intel_image_target_renderbuffer_storage(struct gl_context *ctx,
    rb->Format = image->format;
    rb->_BaseFormat = _mesa_base_fbo_format(ctx, image->internal_format);
    rb->NeedsFinishRenderTexture = true;
+   irb->layer_count = 1;
 }
 
 /**
@@ -435,6 +439,7 @@ intel_create_renderbuffer(mesa_format format, unsigned num_samples)
    }
 
    rb = &irb->Base.Base;
+   irb->layer_count = 1;
 
    _mesa_init_renderbuffer(rb, 0);
    rb->ClassID = INTEL_RB_CLASS;
@@ -501,8 +506,9 @@ intel_new_renderbuffer(struct gl_context * ctx, GLuint name)
 static bool
 intel_renderbuffer_update_wrapper(struct brw_context *brw,
                                   struct intel_renderbuffer *irb,
-				  struct gl_texture_image *image,
-                                  uint32_t layer)
+                                  struct gl_texture_image *image,
+                                  uint32_t layer,
+                                  bool layered)
 {
    struct gl_renderbuffer *rb = &irb->Base.Base;
    struct intel_texture_image *intel_image = intel_texture_image(image);
@@ -511,17 +517,30 @@ intel_renderbuffer_update_wrapper(struct brw_context *brw,
 
    rb->AllocStorage = intel_nop_alloc_storage;
 
+   /* adjust for texture view parameters */
+   layer += image->TexObject->MinLayer;
+   level += image->TexObject->MinLevel;
+
    intel_miptree_check_level_layer(mt, level, layer);
    irb->mt_level = level;
 
+   int layer_multiplier;
    switch (mt->msaa_layout) {
       case INTEL_MSAA_LAYOUT_UMS:
       case INTEL_MSAA_LAYOUT_CMS:
-         irb->mt_layer = layer * mt->num_samples;
+         layer_multiplier = mt->num_samples;
          break;
 
       default:
-         irb->mt_layer = layer;
+         layer_multiplier = 1;
+   }
+
+   irb->mt_layer = layer_multiplier * layer;
+
+   if (layered) {
+      irb->layer_count = image->TexObject->NumLayers ?: mt->level[level].depth / layer_multiplier;
+   } else {
+      irb->layer_count = 1;
    }
 
    intel_miptree_reference(&irb->mt, mt);
@@ -590,7 +609,7 @@ intel_render_texture(struct gl_context * ctx,
 
    intel_miptree_check_level_layer(mt, att->TextureLevel, layer);
 
-   if (!intel_renderbuffer_update_wrapper(brw, irb, image, layer)) {
+   if (!intel_renderbuffer_update_wrapper(brw, irb, image, layer, att->Layered)) {
        _swrast_render_texture(ctx, fb, att);
        return;
    }
@@ -833,6 +852,13 @@ intel_blit_framebuffer(struct gl_context *ctx,
                        GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                        GLbitfield mask, GLenum filter)
 {
+   /* Page 679 of OpenGL 4.4 spec says:
+    *    "Added BlitFramebuffer to commands affected by conditional rendering in
+    *     section 10.10 (Bug 9562)."
+    */
+   if (!_mesa_check_conditional_render(ctx))
+      return;
+
    mask = brw_blorp_framebuffer(brw_context(ctx),
                                 srcX0, srcY0, srcX1, srcY1,
                                 dstX0, dstY0, dstX1, dstY1,

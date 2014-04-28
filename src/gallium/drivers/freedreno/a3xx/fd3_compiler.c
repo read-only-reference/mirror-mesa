@@ -1599,26 +1599,7 @@ instr_cat1(const struct instr_translater *t,
 {
 	struct tgsi_dst_register *dst = get_dst(ctx, inst);
 	struct tgsi_src_register *src = &inst->Src[0].Register;
-
-	/* mov instructions can't handle a negate on src: */
-	if (src->Negate) {
-		struct tgsi_src_register constval;
-		struct ir3_instruction *instr;
-
-		/* since right now, we are using uniformly either TYPE_F16 or
-		 * TYPE_F32, and we don't utilize the conversion possibilities
-		 * of mov instructions, we can get away with substituting an
-		 * add.f which can handle negate.  Might need to revisit this
-		 * in the future if we start supporting widening/narrowing or
-		 * conversion to/from integer..
-		 */
-		instr = instr_create(ctx, 2, OPC_ADD_F);
-		get_immediate(ctx, &constval, fui(0.0));
-		vectorize(ctx, instr, dst, 2, src, 0, &constval, 0);
-	} else {
-		create_mov(ctx, dst, src);
-		/* create_mov() generates vector sequence, so no vectorize() */
-	}
+	create_mov(ctx, dst, src);
 	put_dst(ctx, inst, dst);
 }
 
@@ -1749,6 +1730,7 @@ static const struct instr_translater translaters[TGSI_OPCODE_LAST] = {
 	INSTR(FLR,          instr_cat2, .opc = OPC_FLOOR_F),
 	INSTR(ROUND,        instr_cat2, .opc = OPC_RNDNE_F),
 	INSTR(SSG,          instr_cat2, .opc = OPC_SIGN_F),
+	INSTR(CEIL,         instr_cat2, .opc = OPC_CEIL_F),
 	INSTR(ARL,          trans_arl),
 	INSTR(EX2,          instr_cat4, .opc = OPC_EXP2),
 	INSTR(LG2,          instr_cat4, .opc = OPC_LOG2),
@@ -2054,12 +2036,6 @@ decl_out(struct fd3_compile_context *ctx, struct tgsi_full_declaration *decl)
 	}
 }
 
-static void
-decl_samp(struct fd3_compile_context *ctx, struct tgsi_full_declaration *decl)
-{
-	ctx->so->samplers_count++;
-}
-
 /* from TGSI perspective, we actually have inputs.  But most of the "inputs"
  * for a fragment shader are just bary.f instructions.  The *actual* inputs
  * from the hw perspective are the frag_pos and optionally frag_coord and
@@ -2160,8 +2136,6 @@ compile_instructions(struct fd3_compile_context *ctx)
 				decl_out(ctx, decl);
 			} else if (decl->Declaration.File == TGSI_FILE_INPUT) {
 				decl_in(ctx, decl);
-			} else if (decl->Declaration.File == TGSI_FILE_SAMPLER) {
-				decl_samp(ctx, decl);
 			}
 			break;
 		}
@@ -2320,7 +2294,7 @@ fd3_compile_shader(struct fd3_shader_variant *so,
 	}
 
 	ret = ir3_block_ra(block, so->type, key.half_precision,
-			so->frag_coord, so->frag_face);
+			so->frag_coord, so->frag_face, &so->has_samp);
 	if (ret)
 		goto out;
 
@@ -2343,12 +2317,14 @@ fd3_compile_shader(struct fd3_shader_variant *so,
 	actual_in = 0;
 	for (i = 0; i < so->inputs_count; i++) {
 		unsigned j, regid = ~0, compmask = 0;
+		so->inputs[i].ncomp = 0;
 		for (j = 0; j < 4; j++) {
 			struct ir3_instruction *in = inputs[(i*4) + j];
 			if (in) {
 				compmask |= (1 << j);
 				regid = in->regs[0]->num - j;
 				actual_in++;
+				so->inputs[i].ncomp++;
 			}
 		}
 		so->inputs[i].regid = regid;

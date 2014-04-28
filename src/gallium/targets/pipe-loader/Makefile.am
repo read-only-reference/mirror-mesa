@@ -40,17 +40,14 @@ PIPE_LIBS = \
 	$(top_builddir)/src/gallium/drivers/rbug/librbug.la \
 	$(top_builddir)/src/gallium/drivers/trace/libtrace.la \
 	$(top_builddir)/src/gallium/drivers/galahad/libgalahad.la \
-	-lm \
-	$(CLOCK_LIB) \
-	$(PTHREAD_LIBS) \
-	$(DLOPEN_LIBS)
+	$(GALLIUM_COMMON_LIB_DEPS)
 
 AM_LDFLAGS = \
 	-module \
 	-no-undefined \
 	-avoid-version \
 	$(GC_SECTIONS) \
-	-Wl,--no-undefined \
+	$(LD_NO_UNDEFINED) \
 	-Wl,--version-script=$(top_srcdir)/src/gallium/targets/pipe-loader/pipe.link
 
 if HAVE_MESA_LLVM

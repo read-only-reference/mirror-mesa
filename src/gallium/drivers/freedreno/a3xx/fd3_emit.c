@@ -177,7 +177,7 @@ emit_textures(struct fd_ringbuffer *ring,
 				CP_LOAD_STATE_1_EXT_SRC_ADDR(0));
 		for (i = 0; i < tex->num_samplers; i++) {
 			static const struct fd3_sampler_stateobj dummy_sampler = {};
-			struct fd3_sampler_stateobj *sampler = tex->samplers[i] ?
+			const struct fd3_sampler_stateobj *sampler = tex->samplers[i] ?
 					fd3_sampler_stateobj(tex->samplers[i]) :
 					&dummy_sampler;
 			OUT_RING(ring, sampler->texsamp0);
@@ -311,6 +311,7 @@ fd3_emit_vertex_bufs(struct fd_ringbuffer *ring,
 		struct fd3_vertex_buf *vbufs, uint32_t n)
 {
 	uint32_t i, j, last = 0;
+	uint32_t total_in = 0;
 
 	n = MIN2(n, vp->inputs_count);
 
@@ -343,12 +344,13 @@ fd3_emit_vertex_bufs(struct fd_ringbuffer *ring,
 					A3XX_VFD_DECODE_INSTR_LASTCOMPVALID |
 					COND(switchnext, A3XX_VFD_DECODE_INSTR_SWITCHNEXT));
 
+			total_in += vp->inputs[i].ncomp;
 			j++;
 		}
 	}
 
 	OUT_PKT0(ring, REG_A3XX_VFD_CONTROL_0, 2);
-	OUT_RING(ring, A3XX_VFD_CONTROL_0_TOTALATTRTOVS(vp->total_in) |
+	OUT_RING(ring, A3XX_VFD_CONTROL_0_TOTALATTRTOVS(total_in) |
 			A3XX_VFD_CONTROL_0_PACKETSIZE(2) |
 			A3XX_VFD_CONTROL_0_STRMDECINSTRCNT(j) |
 			A3XX_VFD_CONTROL_0_STRMFETCHINSTRCNT(j));
@@ -542,11 +544,19 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	if (dirty & (FD_DIRTY_VERTTEX | FD_DIRTY_FRAGTEX))
 		fd_wfi(ctx, ring);
 
-	if (dirty & FD_DIRTY_VERTTEX)
-		emit_textures(ring, SB_VERT_TEX, &ctx->verttex);
+	if (dirty & FD_DIRTY_VERTTEX) {
+		if (vp->has_samp)
+			emit_textures(ring, SB_VERT_TEX, &ctx->verttex);
+		else
+			dirty &= ~FD_DIRTY_VERTTEX;
+	}
 
-	if (dirty & FD_DIRTY_FRAGTEX)
-		emit_textures(ring, SB_FRAG_TEX, &ctx->fragtex);
+	if (dirty & FD_DIRTY_FRAGTEX) {
+		if (fp->has_samp)
+			emit_textures(ring, SB_FRAG_TEX, &ctx->fragtex);
+		else
+			dirty &= ~FD_DIRTY_FRAGTEX;
+	}
 
 	ctx->dirty &= ~dirty;
 }

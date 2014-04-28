@@ -19,10 +19,6 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
 
-if HAVE_XF86VIDMODE
-EXTRA_DEFINES_XF86VIDMODE = -DXF86VIDMODE
-endif
-
 AM_CFLAGS = \
 	-I$(top_srcdir)/include \
 	-I$(top_srcdir)/src/gbm/main \
@@ -37,39 +33,42 @@ lib_LTLIBRARIES = libEGL.la
 
 libEGL_la_SOURCES = \
 	eglapi.c \
+	eglapi.h \
 	eglarray.c \
-	eglconfig.c \
-	eglcontext.c \
-	eglcurrent.c \
-	egldisplay.c \
-	egldriver.c \
-	eglfallbacks.c \
-	eglglobals.c \
-	eglimage.c \
-	egllog.c \
-	eglmisc.c \
-	eglmode.c \
-	eglscreen.c \
-	eglstring.c \
-	eglsurface.c \
-	eglsync.c \
+	eglarray.h \
 	eglcompiler.h \
+	eglconfig.c \
 	eglconfig.h \
+	eglcontext.c \
 	eglcontext.h \
+	eglcurrent.c \
 	eglcurrent.h \
 	egldefines.h \
+	egldisplay.c \
 	egldisplay.h \
+	egldriver.c \
 	egldriver.h \
+	eglfallbacks.c \
+	eglglobals.c \
 	eglglobals.h \
+	eglimage.c \
 	eglimage.h \
+	egllog.c \
 	egllog.h \
+	eglmisc.c \
 	eglmisc.h \
+	eglmode.c \
 	eglmode.h \
 	eglmutex.h \
+	eglscreen.c \
 	eglscreen.h \
+	eglstring.c \
 	eglstring.h \
+	eglsurface.c \
 	eglsurface.h \
-	eglsync.h
+	eglsync.c \
+	eglsync.h \
+	egltypedefs.h
 
 libEGL_la_LIBADD = \
 	$(EGL_LIB_DEPS)
@@ -78,7 +77,7 @@ libEGL_la_LDFLAGS = \
 	-version-number 1:0 \
 	-Wl,-Bsymbolic \
 	$(GC_SECTIONS) \
-	-Wl,--no-undefined
+	$(LD_NO_UNDEFINED)
 
 if HAVE_EGL_PLATFORM_X11
 AM_CFLAGS += -DHAVE_X11_PLATFORM

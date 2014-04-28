@@ -211,6 +211,23 @@ intel_is_non_msrt_mcs_buffer_supported(struct brw_context *brw,
 
 
 /**
+ * Determine depth format corresponding to a depth+stencil format,
+ * for separate stencil.
+ */
+mesa_format
+intel_depth_format_for_depthstencil_format(mesa_format format) {
+   switch (format) {
+   case MESA_FORMAT_Z24_UNORM_S8_UINT:
+      return MESA_FORMAT_Z24_UNORM_X8_UINT;
+   case MESA_FORMAT_Z32_FLOAT_S8X24_UINT:
+      return MESA_FORMAT_Z_FLOAT32;
+   default:
+      return format;
+   }
+}
+
+
+/**
  * @param for_bo Indicates that the caller is
  *        intel_miptree_create_for_bo(). If true, then do not create
  *        \c stencil_mt.
@@ -231,10 +248,10 @@ intel_miptree_create_layout(struct brw_context *brw,
    if (!mt)
       return NULL;
 
-   DBG("%s target %s format %s level %d..%d <-- %p\n", __FUNCTION__,
+   DBG("%s target %s format %s level %d..%d slices %d <-- %p\n", __FUNCTION__,
        _mesa_lookup_enum_by_nr(target),
        _mesa_get_format_name(format),
-       first_level, last_level, mt);
+       first_level, last_level, depth0, mt);
 
    mt->target = target;
    mt->format = format;
@@ -368,14 +385,12 @@ intel_miptree_create_layout(struct brw_context *brw,
       /* Fix up the Z miptree format for how we're splitting out separate
        * stencil.  Gen7 expects there to be no stencil bits in its depth buffer.
        */
-      if (mt->format == MESA_FORMAT_Z24_UNORM_S8_UINT) {
-	 mt->format = MESA_FORMAT_Z24_UNORM_X8_UINT;
-      } else if (mt->format == MESA_FORMAT_Z32_FLOAT_S8X24_UINT) {
-	 mt->format = MESA_FORMAT_Z_FLOAT32;
-	 mt->cpp = 4;
-      } else {
-	 _mesa_problem(NULL, "Unknown format %s in separate stencil mt\n",
-		       _mesa_get_format_name(mt->format));
+      mt->format = intel_depth_format_for_depthstencil_format(mt->format);
+      mt->cpp = 4;
+
+      if (format == mt->format) {
+         _mesa_problem(NULL, "Unknown format %s in separate stencil mt\n",
+                       _mesa_get_format_name(mt->format));
       }
    }
 
@@ -481,6 +496,47 @@ intel_miptree_choose_tiling(struct brw_context *brw,
    return I915_TILING_Y | I915_TILING_X;
 }
 
+
+/**
+ * Choose an appropriate uncompressed format for a requested
+ * compressed format, if unsupported.
+ */
+mesa_format
+intel_lower_compressed_format(struct brw_context *brw, mesa_format format)
+{
+   /* No need to lower ETC formats on these platforms,
+    * they are supported natively.
+    */
+   if (brw->gen >= 8 || brw->is_baytrail)
+      return format;
+
+   switch (format) {
+   case MESA_FORMAT_ETC1_RGB8:
+      return MESA_FORMAT_R8G8B8X8_UNORM;
+   case MESA_FORMAT_ETC2_RGB8:
+      return MESA_FORMAT_R8G8B8X8_UNORM;
+   case MESA_FORMAT_ETC2_SRGB8:
+   case MESA_FORMAT_ETC2_SRGB8_ALPHA8_EAC:
+   case MESA_FORMAT_ETC2_SRGB8_PUNCHTHROUGH_ALPHA1:
+      return MESA_FORMAT_B8G8R8A8_SRGB;
+   case MESA_FORMAT_ETC2_RGBA8_EAC:
+   case MESA_FORMAT_ETC2_RGB8_PUNCHTHROUGH_ALPHA1:
+      return MESA_FORMAT_R8G8B8A8_UNORM;
+   case MESA_FORMAT_ETC2_R11_EAC:
+      return MESA_FORMAT_R_UNORM16;
+   case MESA_FORMAT_ETC2_SIGNED_R11_EAC:
+      return MESA_FORMAT_R_SNORM16;
+   case MESA_FORMAT_ETC2_RG11_EAC:
+      return MESA_FORMAT_R16G16_UNORM;
+   case MESA_FORMAT_ETC2_SIGNED_RG11_EAC:
+      return MESA_FORMAT_R16G16_SNORM;
+   default:
+      /* Non ETC1 / ETC2 format */
+      return format;
+   }
+}
+
+
 struct intel_mipmap_tree *
 intel_miptree_create(struct brw_context *brw,
 		     GLenum target,
@@ -499,40 +555,7 @@ intel_miptree_create(struct brw_context *brw,
    mesa_format etc_format = MESA_FORMAT_NONE;
    GLuint total_width, total_height;
 
-   if (brw->gen < 8 && !brw->is_baytrail) {
-      switch (format) {
-      case MESA_FORMAT_ETC1_RGB8:
-         format = MESA_FORMAT_R8G8B8X8_UNORM;
-         break;
-      case MESA_FORMAT_ETC2_RGB8:
-         format = MESA_FORMAT_R8G8B8X8_UNORM;
-         break;
-      case MESA_FORMAT_ETC2_SRGB8:
-      case MESA_FORMAT_ETC2_SRGB8_ALPHA8_EAC:
-      case MESA_FORMAT_ETC2_SRGB8_PUNCHTHROUGH_ALPHA1:
-         format = MESA_FORMAT_B8G8R8A8_SRGB;
-         break;
-      case MESA_FORMAT_ETC2_RGBA8_EAC:
-      case MESA_FORMAT_ETC2_RGB8_PUNCHTHROUGH_ALPHA1:
-         format = MESA_FORMAT_R8G8B8A8_UNORM;
-         break;
-      case MESA_FORMAT_ETC2_R11_EAC:
-         format = MESA_FORMAT_R_UNORM16;
-         break;
-      case MESA_FORMAT_ETC2_SIGNED_R11_EAC:
-         format = MESA_FORMAT_R_SNORM16;
-         break;
-      case MESA_FORMAT_ETC2_RG11_EAC:
-         format = MESA_FORMAT_R16G16_UNORM;
-         break;
-      case MESA_FORMAT_ETC2_SIGNED_RG11_EAC:
-         format = MESA_FORMAT_R16G16_SNORM;
-         break;
-      default:
-         /* Non ETC1 / ETC2 format */
-         break;
-      }
-   }
+   format = intel_lower_compressed_format(brw, format);
 
    etc_format = (format != tex_format) ? tex_format : MESA_FORMAT_NONE;
 
@@ -1196,7 +1219,7 @@ intel_miptree_alloc_mcs(struct brw_context *brw,
     * Note: the clear value for MCS buffers is all 1's, so we memset to 0xff.
     */
    void *data = intel_miptree_map_raw(brw, mt->mcs_mt);
-   memset(data, 0xff, mt->mcs_mt->region->bo->size);
+   memset(data, 0xff, mt->mcs_mt->region->height * mt->mcs_mt->region->pitch);
    intel_miptree_unmap_raw(brw, mt->mcs_mt);
    mt->fast_clear_state = INTEL_FAST_CLEAR_STATE_CLEAR;
 
@@ -1591,7 +1614,8 @@ intel_miptree_map_raw(struct brw_context *brw, struct intel_mipmap_tree *mt)
 
    drm_intel_bo *bo = mt->region->bo;
 
-   intel_batchbuffer_flush(brw);
+   if (drm_intel_bo_references(brw->batch.bo, bo))
+      intel_batchbuffer_flush(brw);
 
    if (mt->region->tiling != I915_TILING_NONE)
       brw_bo_map_gtt(brw, bo, "miptree");

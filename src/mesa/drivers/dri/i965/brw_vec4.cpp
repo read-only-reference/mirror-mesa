@@ -151,6 +151,15 @@ src_reg::src_reg(dst_reg reg)
                                 swizzles[2], swizzles[3]);
 }
 
+bool
+src_reg::is_accumulator() const
+{
+   return file == HW_REG &&
+          fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE &&
+          fixed_hw_reg.nr == BRW_ARF_ACCUMULATOR;
+}
+
+
 void
 dst_reg::init()
 {
@@ -218,6 +227,14 @@ dst_reg::is_null() const
    return file == HW_REG &&
           fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE &&
           fixed_hw_reg.nr == BRW_ARF_NULL;
+}
+
+bool
+dst_reg::is_accumulator() const
+{
+   return file == HW_REG &&
+          fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE &&
+          fixed_hw_reg.nr == BRW_ARF_ACCUMULATOR;
 }
 
 bool
@@ -322,26 +339,23 @@ src_reg::equals(src_reg *r)
 }
 
 static bool
-try_eliminate_instruction(vec4_instruction *inst, int new_writemask)
+try_eliminate_instruction(vec4_instruction *inst, int new_writemask,
+                          const struct brw_context *brw)
 {
+   if (inst->has_side_effects())
+      return false;
+
    if (new_writemask == 0) {
       /* Don't dead code eliminate instructions that write to the
        * accumulator as a side-effect. Instead just set the destination
        * to the null register to free it.
        */
-      switch (inst->opcode) {
-      case BRW_OPCODE_ADDC:
-      case BRW_OPCODE_SUBB:
-      case BRW_OPCODE_MACH:
+      if (inst->writes_accumulator || inst->writes_flag()) {
          inst->dst = dst_reg(retype(brw_null_reg(), inst->dst.type));
-         break;
-      default:
-         if (inst->writes_flag()) {
-            inst->dst = dst_reg(retype(brw_null_reg(), inst->dst.type));
-         } else {
-            inst->remove();
-         }
+      } else {
+         inst->remove();
       }
+
       return true;
    } else if (inst->dst.writemask != new_writemask) {
       switch (inst->opcode) {
@@ -351,7 +365,10 @@ try_eliminate_instruction(vec4_instruction *inst, int new_writemask)
       case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
          break;
       default:
-         if (!inst->is_tex()) {
+         /* Do not set a writemask on Gen6 for math instructions, those are
+          * executed using align1 mode that does not support a destination mask.
+          */
+         if (!(brw->gen == 6 && inst->is_math()) && !inst->is_tex()) {
             inst->dst.writemask = new_writemask;
             return true;
          }
@@ -371,7 +388,6 @@ bool
 vec4_visitor::dead_code_eliminate()
 {
    bool progress = false;
-   bool seen_control_flow = false;
    int pc = -1;
 
    calculate_live_intervals();
@@ -380,11 +396,6 @@ vec4_visitor::dead_code_eliminate()
       vec4_instruction *inst = (vec4_instruction *)node;
 
       pc++;
-
-      seen_control_flow = inst->is_control_flow() || seen_control_flow;
-
-      if (inst->has_side_effects())
-         continue;
 
       bool inst_writes_flag = false;
       if (inst->dst.file != GRF) {
@@ -407,10 +418,11 @@ vec4_visitor::dead_code_eliminate()
             }
          }
 
-         progress = try_eliminate_instruction(inst, write_mask) || progress;
+         progress = try_eliminate_instruction(inst, write_mask, brw) ||
+                    progress;
       }
 
-      if (seen_control_flow || inst->predicate || inst->prev == NULL)
+      if (inst->predicate || inst->prev == NULL)
          continue;
 
       int dead_channels;
@@ -438,30 +450,29 @@ vec4_visitor::dead_code_eliminate()
            node = prev, prev = prev->prev) {
          vec4_instruction *scan_inst = (vec4_instruction  *)node;
 
-         if (scan_inst->has_side_effects())
-            continue;
+         if (scan_inst->is_control_flow())
+            break;
 
          if (inst_writes_flag) {
             if (scan_inst->dst.is_null() && scan_inst->writes_flag()) {
                scan_inst->remove();
                progress = true;
+               continue;
             } else if (scan_inst->reads_flag()) {
-               dead_channels = 0;
+               break;
             }
-            continue;
-         } else if (scan_inst->dst.file != GRF) {
-            continue;
          }
 
-         if (inst->dst.reg == scan_inst->dst.reg) {
+         if (inst->dst.file == scan_inst->dst.file &&
+             inst->dst.reg == scan_inst->dst.reg) {
             int new_writemask = scan_inst->dst.writemask & ~dead_channels;
 
-            progress = try_eliminate_instruction(scan_inst, new_writemask) ||
+            progress = try_eliminate_instruction(scan_inst, new_writemask, brw) ||
                        progress;
          }
 
          for (int i = 0; i < 3; i++) {
-            if (scan_inst->src[i].file != GRF ||
+            if (scan_inst->src[i].file != inst->dst.file ||
                 scan_inst->src[i].reg != inst->dst.reg)
                continue;
 
@@ -843,6 +854,14 @@ vec4_visitor::opt_set_dependency_control()
           * instruction hangs the GPU.
           */
          if (inst->predicate) {
+            memset(last_grf_write, 0, sizeof(last_grf_write));
+            memset(last_mrf_write, 0, sizeof(last_mrf_write));
+            continue;
+         }
+
+         /* Dependency control does not work well over math instructions.
+          */
+         if (inst->is_math()) {
             memset(last_grf_write, 0, sizeof(last_grf_write));
             memset(last_mrf_write, 0, sizeof(last_mrf_write));
             continue;
