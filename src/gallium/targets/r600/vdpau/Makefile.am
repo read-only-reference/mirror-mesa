@@ -20,8 +20,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-# Note: Make sure VDPAU_EXPORTS is defined before including Automake.inc
-VDPAU_EXPORTS = '^(vdp_imp_device_create_x11|radeon_drm_winsys_create)$$'
 include $(top_srcdir)/src/gallium/Automake.inc
 
 AM_CFLAGS = \
@@ -40,6 +38,7 @@ libvdpau_r600_la_LDFLAGS = \
 	-Wl,--dynamic-list=$(srcdir)/../../r300/dri/radeon.dyn
 
 libvdpau_r600_la_LIBADD = \
+	$(top_builddir)/src/gallium/drivers/radeon/libradeon.la \
 	$(top_builddir)/src/gallium/drivers/r600/libr600.la \
 	$(top_builddir)/src/gallium/winsys/radeon/drm/libradeonwinsys.la \
 	$(GALLIUM_VDPAU_LIB_DEPS) \

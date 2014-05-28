@@ -30,10 +30,10 @@
 class brw_blorp_eu_emitter
 {
 protected:
-   explicit brw_blorp_eu_emitter(struct brw_context *brw);
+   explicit brw_blorp_eu_emitter(struct brw_context *brw, bool debug_flag);
    ~brw_blorp_eu_emitter();
 
-   const unsigned *get_program(unsigned *program_size, FILE *dump_file);
+   const unsigned *get_program(unsigned *program_size);
 
    void emit_kill_if_outside_rect(const struct brw_reg &x,
                                   const struct brw_reg &y,
@@ -182,7 +182,6 @@ private:
    fs_inst *emit_cmp(int op, const struct brw_reg &x, const struct brw_reg &y);
 
    void *mem_ctx;
-   struct brw_wm_compile *c;
    exec_list insts;
    fs_generator generator;
 };

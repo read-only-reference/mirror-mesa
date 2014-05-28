@@ -925,6 +925,7 @@ struct brw_transform_feedback_object {
  */
 struct brw_stage_state
 {
+   gl_shader_stage stage;
    struct brw_stage_prog_data *prog_data;
 
    /**
@@ -994,9 +995,7 @@ struct brw_context
       /** Upload a SAMPLER_STATE table. */
       void (*upload_sampler_state_table)(struct brw_context *brw,
                                          struct gl_program *prog,
-                                         uint32_t sampler_count,
-                                         uint32_t *sst_offset,
-                                         uint32_t *sdc_offset);
+                                         struct brw_stage_state *stage_state);
 
       /**
        * Send the appropriate state packets to configure depth, stencil, and
@@ -1171,11 +1170,6 @@ struct brw_context
     * that we don't have to reemit that state every time we change FBOs.
     */
    int num_samples;
-
-   /* hw-dependent 3DSTATE_VF_STATISTICS opcode */
-   uint32_t CMD_VF_STATISTICS;
-   /* hw-dependent 3DSTATE_PIPELINE_SELECT opcode */
-   uint32_t CMD_PIPELINE_SELECT;
 
    /**
     * Platform specific constants containing the maximum number of threads
@@ -1481,9 +1475,23 @@ GLboolean brwCreateContext(gl_api api,
 /*======================================================================
  * brw_misc_state.c
  */
+GLuint brw_get_rb_for_slice(struct brw_context *brw,
+                            struct intel_mipmap_tree *mt,
+                            unsigned level, unsigned layer, bool flat);
+
 void brw_meta_updownsample(struct brw_context *brw,
                            struct intel_mipmap_tree *src,
                            struct intel_mipmap_tree *dst);
+
+void brw_meta_fbo_stencil_blit(struct brw_context *brw,
+                               GLfloat srcX0, GLfloat srcY0,
+                               GLfloat srcX1, GLfloat srcY1,
+                               GLfloat dstX0, GLfloat dstY0,
+                               GLfloat dstX1, GLfloat dstY1);
+
+void brw_meta_stencil_updownsample(struct brw_context *brw,
+                                   struct intel_mipmap_tree *src,
+                                   struct intel_mipmap_tree *dst);
 /*======================================================================
  * brw_misc_state.c
  */
@@ -1565,7 +1573,8 @@ void brw_fs_alloc_reg_sets(struct intel_screen *screen);
 void brw_vec4_alloc_reg_set(struct intel_screen *screen);
 
 /* brw_disasm.c */
-int brw_disasm (FILE *file, struct brw_instruction *inst, int gen);
+int brw_disassemble_inst(FILE *file, struct brw_instruction *inst,
+                         int gen, bool is_compacted);
 
 /* brw_vs.c */
 gl_clip_plane *brw_select_clip_planes(struct gl_context *ctx);

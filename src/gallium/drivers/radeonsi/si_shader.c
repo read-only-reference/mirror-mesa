@@ -529,6 +529,15 @@ static void declare_input_fs(
 	}
 }
 
+static LLVMValueRef load_const(LLVMBuilderRef builder, LLVMValueRef resource,
+			       LLVMValueRef offset, LLVMTypeRef return_type)
+{
+	LLVMValueRef args[2] = {resource, offset};
+
+	return build_intrinsic(builder, "llvm.SI.load.const", return_type, args, 2,
+			       LLVMReadNoneAttribute | LLVMNoUnwindAttribute);
+}
+
 static void declare_system_value(
 	struct radeon_llvm_context * radeon_bld,
 	unsigned index,
@@ -568,7 +577,6 @@ static LLVMValueRef fetch_constant(
 	const struct tgsi_ind_register *ireg = &reg->Indirect;
 	unsigned buf, idx;
 
-	LLVMValueRef args[2];
 	LLVMValueRef addr;
 	LLVMValueRef result;
 
@@ -587,15 +595,14 @@ static LLVMValueRef fetch_constant(
 	if (!reg->Register.Indirect)
 		return bitcast(bld_base, type, si_shader_ctx->constants[buf][idx]);
 
-	args[0] = si_shader_ctx->const_resource[buf];
-	args[1] = lp_build_const_int32(base->gallivm, idx * 4);
 	addr = si_shader_ctx->radeon_bld.soa.addr[ireg->Index][ireg->Swizzle];
 	addr = LLVMBuildLoad(base->gallivm->builder, addr, "load addr reg");
 	addr = lp_build_mul_imm(&bld_base->uint_bld, addr, 16);
-	args[1] = lp_build_add(&bld_base->uint_bld, addr, args[1]);
+	addr = lp_build_add(&bld_base->uint_bld, addr,
+			    lp_build_const_int32(base->gallivm, idx * 4));
 
-	result = build_intrinsic(base->gallivm->builder, "llvm.SI.load.const", base->elem_type,
-                                 args, 2, LLVMReadNoneAttribute | LLVMNoUnwindAttribute);
+	result = load_const(base->gallivm->builder, si_shader_ctx->const_resource[buf],
+			    addr, base->elem_type);
 
 	return bitcast(bld_base, type, result);
 }
@@ -761,15 +768,11 @@ static void si_llvm_emit_clipvertex(struct lp_build_tgsi_context * bld_base,
 		/* Compute dot products of position and user clip plane vectors */
 		for (chan = 0; chan < TGSI_NUM_CHANNELS; chan++) {
 			for (const_chan = 0; const_chan < TGSI_NUM_CHANNELS; const_chan++) {
-				args[0] = const_resource;
 				args[1] = lp_build_const_int32(base->gallivm,
 							       ((reg_index * 4 + chan) * 4 +
 								const_chan) * 4);
-				base_elt = build_intrinsic(base->gallivm->builder,
-							   "llvm.SI.load.const",
-							   base->elem_type,
-							   args, 2,
-							   LLVMReadNoneAttribute | LLVMNoUnwindAttribute);
+				base_elt = load_const(base->gallivm->builder, const_resource,
+						      args[1], base->elem_type);
 				args[5 + chan] =
 					lp_build_add(base, args[5 + chan],
 						     lp_build_mul(base, base_elt,
@@ -1401,31 +1404,33 @@ static void si_llvm_emit_fs_epilogue(struct lp_build_tgsi_context * bld_base)
 		/* Specify the target we are exporting */
 		args[3] = lp_build_const_int32(base->gallivm, V_008DFC_SQ_EXP_MRTZ);
 
+		args[5] = base->zero; /* R, depth */
+		args[6] = base->zero; /* G, stencil test value[0:7], stencil op value[8:15] */
+		args[7] = base->zero; /* B, sample mask */
+		args[8] = base->zero; /* A, alpha to mask */
+
 		if (depth_index >= 0) {
 			out_ptr = si_shader_ctx->radeon_bld.soa.outputs[depth_index][2];
 			args[5] = LLVMBuildLoad(base->gallivm->builder, out_ptr, "");
 			mask |= 0x1;
-
-			if (stencil_index < 0) {
-				args[6] =
-				args[7] =
-				args[8] = args[5];
-			}
+			si_shader_ctx->shader->db_shader_control |= S_02880C_Z_EXPORT_ENABLE(1);
 		}
 
 		if (stencil_index >= 0) {
 			out_ptr = si_shader_ctx->radeon_bld.soa.outputs[stencil_index][1];
-			args[7] =
-			args[8] =
 			args[6] = LLVMBuildLoad(base->gallivm->builder, out_ptr, "");
 			/* Only setting the stencil component bit (0x2) here
 			 * breaks some stencil piglit tests
 			 */
 			mask |= 0x3;
-
-			if (depth_index < 0)
-				args[5] = args[6];
+			si_shader_ctx->shader->db_shader_control |=
+				S_02880C_STENCIL_TEST_VAL_EXPORT_ENABLE(1);
 		}
+
+		if (stencil_index >= 0)
+			si_shader_ctx->shader->spi_shader_z_format = V_028710_SPI_SHADER_32_GR;
+		else
+			si_shader_ctx->shader->spi_shader_z_format = V_028710_SPI_SHADER_32_R;
 
 		/* Specify which components to enable */
 		args[0] = lp_build_const_int32(base->gallivm, mask);
@@ -1539,8 +1544,13 @@ static void tex_fetch_args(
 	/* Pack LOD bias value */
 	if (opcode == TGSI_OPCODE_TXB)
 		address[count++] = coords[3];
+	if (opcode == TGSI_OPCODE_TXB2)
+		address[count++] = lp_build_emit_fetch(bld_base, inst, 1, 0);
 
-	if (target == TGSI_TEXTURE_CUBE || target == TGSI_TEXTURE_SHADOWCUBE)
+	if (target == TGSI_TEXTURE_CUBE ||
+	    target == TGSI_TEXTURE_CUBE_ARRAY ||
+	    target == TGSI_TEXTURE_SHADOWCUBE ||
+	    target == TGSI_TEXTURE_SHADOWCUBE_ARRAY)
 		radeon_llvm_emit_prepare_cube_coords(bld_base, emit_data, coords);
 
 	/* Pack depth comparison value */
@@ -1577,6 +1587,8 @@ static void tex_fetch_args(
 	/* Pack LOD or sample index */
 	if (opcode == TGSI_OPCODE_TXL || opcode == TGSI_OPCODE_TXF)
 		address[count++] = coords[3];
+	if (opcode == TGSI_OPCODE_TXL2)
+		address[count++] = lp_build_emit_fetch(bld_base, inst, 1, 0);
 
 	if (count > 16) {
 		assert(!"Cannot handle more than 16 texture address parameters");
@@ -1732,6 +1744,13 @@ static void tex_fetch_args(
 		emit_data->arg_count = 4;
 	}
 
+	/* The fetch opcode has been converted to a 2D array fetch.
+	 * This simplifies the LLVM backend. */
+	if (target == TGSI_TEXTURE_CUBE_ARRAY)
+		target = TGSI_TEXTURE_2D_ARRAY;
+	else if (target == TGSI_TEXTURE_SHADOWCUBE_ARRAY)
+		target = TGSI_TEXTURE_SHADOW2D_ARRAY;
+
 	/* Dimensions */
 	emit_data->args[emit_data->arg_count - 1] =
 		lp_build_const_int32(bld_base->base.gallivm, target);
@@ -1775,8 +1794,9 @@ static void txq_fetch_args(
 	struct si_shader_context *si_shader_ctx = si_shader_context(bld_base);
 	const struct tgsi_full_instruction *inst = emit_data->inst;
 	struct gallivm_state *gallivm = bld_base->base.gallivm;
+	unsigned target = inst->Texture.Texture;
 
-	if (inst->Texture.Texture == TGSI_TEXTURE_BUFFER) {
+	if (target == TGSI_TEXTURE_BUFFER) {
 		LLVMTypeRef i32 = LLVMInt32TypeInContext(gallivm->context);
 		LLVMTypeRef v8i32 = LLVMVectorType(i32, 8);
 
@@ -1795,7 +1815,11 @@ static void txq_fetch_args(
 	/* Resource */
 	emit_data->args[1] = si_shader_ctx->resources[inst->Src[1].Register.Index];
 
-	/* Dimensions */
+	/* Texture target */
+	if (target == TGSI_TEXTURE_CUBE_ARRAY ||
+	    target == TGSI_TEXTURE_SHADOWCUBE_ARRAY)
+		target = TGSI_TEXTURE_2D_ARRAY;
+
 	emit_data->args[2] = lp_build_const_int32(bld_base->base.gallivm,
 						  inst->Texture.Texture);
 
@@ -1810,13 +1834,30 @@ static void build_txq_intrinsic(const struct lp_build_tgsi_action * action,
 				struct lp_build_tgsi_context * bld_base,
 				struct lp_build_emit_data * emit_data)
 {
-	if (emit_data->inst->Texture.Texture == TGSI_TEXTURE_BUFFER) {
+	unsigned target = emit_data->inst->Texture.Texture;
+
+	if (target == TGSI_TEXTURE_BUFFER) {
 		/* Just return the buffer size. */
 		emit_data->output[emit_data->chan] = emit_data->args[0];
 		return;
 	}
 
 	build_tgsi_intrinsic_nomem(action, bld_base, emit_data);
+
+	/* Divide the number of layers by 6 to get the number of cubes. */
+	if (target == TGSI_TEXTURE_CUBE_ARRAY ||
+	    target == TGSI_TEXTURE_SHADOWCUBE_ARRAY) {
+		LLVMBuilderRef builder = bld_base->base.gallivm->builder;
+		LLVMValueRef two = lp_build_const_int32(bld_base->base.gallivm, 2);
+		LLVMValueRef six = lp_build_const_int32(bld_base->base.gallivm, 6);
+
+		LLVMValueRef v4 = emit_data->output[emit_data->chan];
+		LLVMValueRef z = LLVMBuildExtractElement(builder, v4, two, "");
+		z = LLVMBuildSDiv(builder, z, six, "");
+
+		emit_data->output[emit_data->chan] =
+			LLVMBuildInsertElement(builder, v4, z, two, "");
+	}
 }
 
 #if HAVE_LLVM >= 0x0304
@@ -2213,14 +2254,11 @@ static void preload_constants(struct si_shader_context *si_shader_ctx)
 
 		/* Load the constants, we rely on the code sinking to do the rest */
 		for (i = 0; i < num_const * 4; ++i) {
-			LLVMValueRef args[2] = {
-				si_shader_ctx->const_resource[buf],
-				lp_build_const_int32(gallivm, i * 4)
-			};
 			si_shader_ctx->constants[buf][i] =
-					build_intrinsic(gallivm->builder, "llvm.SI.load.const",
-							bld_base->base.elem_type, args, 2,
-							LLVMReadNoneAttribute | LLVMNoUnwindAttribute);
+				load_const(gallivm->builder,
+					si_shader_ctx->const_resource[buf],
+					lp_build_const_int32(gallivm, i * 4),
+					bld_base->base.elem_type);
 		}
 	}
 }
@@ -2496,12 +2534,15 @@ int si_pipe_shader_create(
 	bld_base->emit_fetch_funcs[TGSI_FILE_CONSTANT] = fetch_constant;
 
 	bld_base->op_actions[TGSI_OPCODE_TEX] = tex_action;
+	bld_base->op_actions[TGSI_OPCODE_TEX2] = tex_action;
 	bld_base->op_actions[TGSI_OPCODE_TXB] = txb_action;
+	bld_base->op_actions[TGSI_OPCODE_TXB2] = txb_action;
 #if HAVE_LLVM >= 0x0304
 	bld_base->op_actions[TGSI_OPCODE_TXD] = txd_action;
 #endif
 	bld_base->op_actions[TGSI_OPCODE_TXF] = txf_action;
 	bld_base->op_actions[TGSI_OPCODE_TXL] = txl_action;
+	bld_base->op_actions[TGSI_OPCODE_TXL2] = txl_action;
 	bld_base->op_actions[TGSI_OPCODE_TXP] = tex_action;
 	bld_base->op_actions[TGSI_OPCODE_TXQ] = txq_action;
 

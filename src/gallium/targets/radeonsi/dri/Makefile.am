@@ -20,7 +20,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-DRI_VERSION_SCRIPT = $(srcdir)/../../r300/dri/radeon.link
 include $(top_srcdir)/src/gallium/Automake.inc
 
 AM_CFLAGS = \
@@ -43,6 +42,7 @@ radeonsi_dri_la_LDFLAGS = \
 
 radeonsi_dri_la_LIBADD = \
 	$(top_builddir)/src/mesa/drivers/dri/common/libdricommon.la \
+	$(top_builddir)/src/gallium/drivers/radeon/libradeon.la \
 	$(top_builddir)/src/gallium/drivers/radeonsi/libradeonsi.la \
 	$(top_builddir)/src/gallium/state_trackers/dri/drm/libdridrm.la \
 	$(top_builddir)/src/gallium/winsys/radeon/drm/libradeonwinsys.la \

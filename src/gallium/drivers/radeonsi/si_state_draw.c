@@ -231,9 +231,9 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct si_pm4_state *pm4;
-	unsigned i, exports_ps, spi_ps_in_control, db_shader_control;
+	unsigned i, spi_ps_in_control, db_shader_control;
 	unsigned num_sgprs, num_user_sgprs;
-	unsigned spi_baryc_cntl = 0, spi_ps_input_ena, spi_shader_z_format;
+	unsigned spi_baryc_cntl = 0, spi_ps_input_ena;
 	uint64_t va;
 
 	si_pm4_delete_state(sctx, ps, shader->pm4);
@@ -264,25 +264,10 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 		}
 	}
 
-	for (i = 0; i < shader->shader.noutput; i++) {
-		if (shader->shader.output[i].name == TGSI_SEMANTIC_POSITION)
-			db_shader_control |= S_02880C_Z_EXPORT_ENABLE(1);
-		if (shader->shader.output[i].name == TGSI_SEMANTIC_STENCIL)
-			db_shader_control |= S_02880C_STENCIL_TEST_VAL_EXPORT_ENABLE(1);
-	}
+	db_shader_control |= shader->db_shader_control;
+
 	if (shader->shader.uses_kill || shader->key.ps.alpha_func != PIPE_FUNC_ALWAYS)
 		db_shader_control |= S_02880C_KILL_ENABLE(1);
-
-	exports_ps = 0;
-	for (i = 0; i < shader->shader.noutput; i++) {
-		if (shader->shader.output[i].name == TGSI_SEMANTIC_POSITION ||
-		    shader->shader.output[i].name == TGSI_SEMANTIC_STENCIL)
-			exports_ps |= 1;
-	}
-	if (!exports_ps) {
-		/* always at least export 1 component per pixel */
-		exports_ps = 2;
-	}
 
 	spi_ps_in_control = S_0286D8_NUM_INTERP(shader->shader.nparam) |
 		S_0286D8_BC_OPTIMIZE_DISABLE(1);
@@ -303,13 +288,7 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 	si_pm4_set_reg(pm4, R_0286D0_SPI_PS_INPUT_ADDR, spi_ps_input_ena);
 	si_pm4_set_reg(pm4, R_0286D8_SPI_PS_IN_CONTROL, spi_ps_in_control);
 
-	if (G_02880C_STENCIL_TEST_VAL_EXPORT_ENABLE(db_shader_control))
-		spi_shader_z_format = V_028710_SPI_SHADER_32_GR;
-	else if (G_02880C_Z_EXPORT_ENABLE(db_shader_control))
-		spi_shader_z_format = V_028710_SPI_SHADER_32_R;
-	else
-		spi_shader_z_format = 0;
-	si_pm4_set_reg(pm4, R_028710_SPI_SHADER_Z_FORMAT, spi_shader_z_format);
+	si_pm4_set_reg(pm4, R_028710_SPI_SHADER_Z_FORMAT, shader->spi_shader_z_format);
 	si_pm4_set_reg(pm4, R_028714_SPI_SHADER_COL_FORMAT,
 		       shader->spi_shader_col_format);
 	si_pm4_set_reg(pm4, R_02823C_CB_SHADER_MASK, shader->cb_shader_mask);
@@ -426,15 +405,18 @@ static bool si_update_draw_info_state(struct si_context *sctx,
 		/* If the WD switch is false, the IA switch must be false too. */
 		bool ia_switch_on_eop = wd_switch_on_eop;
 
-		si_pm4_set_reg(pm4, R_028AA8_IA_MULTI_VGT_PARAM,
+		si_pm4_set_reg(pm4, R_028B74_VGT_DISPATCH_DRAW_INDEX,
+			       ib->index_size == 4 ? 0xFC000000 : 0xFC00);
+
+		si_pm4_cmd_begin(pm4, PKT3_DRAW_PREAMBLE);
+		si_pm4_cmd_add(pm4, prim); /* VGT_PRIMITIVE_TYPE */
+		si_pm4_cmd_add(pm4, /* IA_MULTI_VGT_PARAM */
 			       S_028AA8_SWITCH_ON_EOP(ia_switch_on_eop) |
 			       S_028AA8_PARTIAL_VS_WAVE_ON(1) |
 			       S_028AA8_PRIMGROUP_SIZE(63) |
 			       S_028AA8_WD_SWITCH_ON_EOP(wd_switch_on_eop));
-		si_pm4_set_reg(pm4, R_028B74_VGT_DISPATCH_DRAW_INDEX,
-			       ib->index_size == 4 ? 0xFC000000 : 0xFC00);
-
-		si_pm4_set_reg(pm4, R_030908_VGT_PRIMITIVE_TYPE, prim);
+		si_pm4_cmd_add(pm4, 0); /* VGT_LS_HS_CONFIG */
+		si_pm4_cmd_end(pm4, false);
 	} else {
 		si_pm4_set_reg(pm4, R_008958_VGT_PRIMITIVE_TYPE, prim);
 	}
@@ -964,7 +946,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 
 	/* Check flush flags. */
 	if (sctx->b.flags)
-		sctx->atoms.cache_flush->dirty = true;
+		sctx->atoms.s.cache_flush->dirty = true;
 
 	si_need_cs_space(sctx, 0, TRUE);
 

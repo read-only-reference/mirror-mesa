@@ -9,6 +9,10 @@ lib@OPENCL_LIBNAME@_la_LDFLAGS = \
 	$(GC_SECTIONS) \
 	$(LD_NO_UNDEFINED)
 
+if HAVE_LD_VERSION_SCRIPT
+lib@OPENCL_LIBNAME@_la_LDFLAGS += \
+	-Wl,--version-script=$(top_srcdir)/src/gallium/targets/opencl/opencl.sym
+endif
 
 lib@OPENCL_LIBNAME@_la_LIBADD = \
 	$(top_builddir)/src/gallium/auxiliary/pipe-loader/libpipe_loader_client.la \
@@ -32,7 +36,7 @@ lib@OPENCL_LIBNAME@_la_LIBADD = \
 	-lclangBasic \
 	$(LLVM_LIBS)
 
-if HAVE_DRI
+if HAVE_DRISW
 lib@OPENCL_LIBNAME@_la_LIBADD += \
 	$(top_builddir)/src/gallium/winsys/sw/dri/libswdri.la
 endif

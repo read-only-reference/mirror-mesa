@@ -36,6 +36,7 @@
 #include "freedreno_screen.h"
 #include "freedreno_surface.h"
 #include "freedreno_context.h"
+#include "freedreno_query_hw.h"
 #include "freedreno_util.h"
 
 #include <errno.h>
@@ -46,6 +47,10 @@ realloc_bo(struct fd_resource *rsc, uint32_t size)
 	struct fd_screen *screen = fd_screen(rsc->base.b.screen);
 	uint32_t flags = DRM_FREEDRENO_GEM_CACHE_WCOMBINE |
 			DRM_FREEDRENO_GEM_TYPE_KMEM; /* TODO */
+
+	/* if we start using things other than write-combine,
+	 * be sure to check for PIPE_RESOURCE_FLAG_MAP_COHERENT
+	 */
 
 	if (rsc->bo)
 		fd_bo_del(rsc->bo);
@@ -401,7 +406,9 @@ render_blit(struct pipe_context *pctx, struct pipe_blit_info *info)
 	util_blitter_save_fragment_sampler_views(ctx->blitter,
 			ctx->fragtex.num_textures, ctx->fragtex.textures);
 
+	fd_hw_query_set_stage(ctx, ctx->ring, FD_STAGE_BLIT);
 	util_blitter_blit(ctx->blitter, info);
+	fd_hw_query_set_stage(ctx, ctx->ring, FD_STAGE_NULL);
 
 	return true;
 }

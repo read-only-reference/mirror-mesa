@@ -223,7 +223,7 @@ brw_blorp_clear_params::brw_blorp_clear_params(struct brw_context *brw,
     *      accessing tiled memory.  Using this Message Type to access linear
     *      (untiled) memory is UNDEFINED."
     */
-   if (irb->mt->region->tiling == I915_TILING_NONE)
+   if (irb->mt->tiling == I915_TILING_NONE)
       wm_prog_key.use_simd16_replicated_data = false;
 
    /* Constant color writes ignore everyting in blend and color calculator
@@ -486,9 +486,11 @@ brw_blorp_const_color_program::compile(struct brw_context *brw,
 
    if (unlikely(INTEL_DEBUG & DEBUG_BLORP)) {
       fprintf(stderr, "Native code for BLORP clear:\n");
-      brw_dump_compile(&func, stderr, 0, func.next_insn_offset);
+      brw_disassemble(brw, &func.store, 0, func.next_insn_offset, stderr);
       fprintf(stderr, "\n");
    }
+
+   brw_compact_instructions(&func, 0, 0, NULL);
    return brw_get_program(&func, program_size);
 }
 

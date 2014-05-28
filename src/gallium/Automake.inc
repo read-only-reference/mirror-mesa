@@ -51,22 +51,18 @@ GALLIUM_VIDEO_CFLAGS = \
 	$(VISIBILITY_CFLAGS)
 
 
-DRI_VERSION_SCRIPT ?= $(top_srcdir)/src/gallium/state_trackers/dri/dri.link
-
 GALLIUM_DRI_LINKER_FLAGS = \
 	-shared \
 	-shrext .so \
 	-module \
 	-avoid-version \
-	$(GC_SECTIONS) \
-	-Wl,--version-script=$(DRI_VERSION_SCRIPT)
+	$(GC_SECTIONS)
 
 GALLIUM_VDPAU_LINKER_FLAGS = \
 	-shared \
 	-module \
 	-no-undefined \
 	-version-number $(VDPAU_MAJOR):$(VDPAU_MINOR) \
-	-export-symbols-regex $(VDPAU_EXPORTS) \
 	$(GC_SECTIONS) \
 	$(LD_NO_UNDEFINED)
 
@@ -75,7 +71,6 @@ GALLIUM_XVMC_LINKER_FLAGS = \
 	-module \
 	-no-undefined \
 	-version-number $(XVMC_MAJOR):$(XVMC_MINOR) \
-	-export-symbols-regex '^XvMC' \
 	$(GC_SECTIONS) \
 	$(LD_NO_UNDEFINED)
 
@@ -83,9 +78,24 @@ GALLIUM_OMX_LINKER_FLAGS = \
 	-shared \
 	-module \
 	-no-undefined \
-	-export-symbols-regex $(EXPORTS) \
+	-avoid-version \
 	$(GC_SECTIONS) \
 	$(LD_NO_UNDEFINED)
+
+if HAVE_LD_VERSION_SCRIPT
+GALLIUM_DRI_LINKER_FLAGS += \
+	-Wl,--version-script=$(top_srcdir)/src/gallium/targets/dri.sym
+
+GALLIUM_VDPAU_LINKER_FLAGS += \
+	-Wl,--version-script=$(top_srcdir)/src/gallium/targets/vdpau.sym
+
+GALLIUM_XVMC_LINKER_FLAGS += \
+	-Wl,--version-script=$(top_srcdir)/src/gallium/targets/xvmc.sym
+
+GALLIUM_OMX_LINKER_FLAGS += \
+	-Wl,--version-script=$(top_srcdir)/src/gallium/targets/omx.sym
+endif
+
 
 GALLIUM_COMMON_LIB_DEPS = \
 	-lm \

@@ -22,6 +22,7 @@
  */
 
 #include "brw_vec4.h"
+#include "brw_cfg.h"
 
 extern "C" {
 #include "brw_eu.h"
@@ -46,15 +47,6 @@ gen8_vec4_generator::gen8_vec4_generator(struct brw_context *brw,
 
 gen8_vec4_generator::~gen8_vec4_generator()
 {
-}
-
-void
-gen8_vec4_generator::mark_surface_used(unsigned surf_index)
-{
-   assert(surf_index < BRW_MAX_SURFACES);
-
-   prog_data->base.binding_table.size_bytes =
-      MAX2(prog_data->base.binding_table.size_bytes, (surf_index + 1) * 4);
 }
 
 void
@@ -157,7 +149,7 @@ gen8_vec4_generator::generate_tex(vec4_instruction *ir, struct brw_reg dst)
                             ir->header_present,
                             BRW_SAMPLER_SIMD_MODE_SIMD4X2);
 
-   mark_surface_used(surf_index);
+   brw_mark_surface_used(&prog_data->base, surf_index);
 }
 
 void
@@ -461,8 +453,65 @@ gen8_vec4_generator::generate_pull_constant_load(vec4_instruction *inst,
                        false,  /* no header */
                        false); /* EOT */
 
-   mark_surface_used(surf_index);
+   brw_mark_surface_used(&prog_data->base, surf_index);
 }
+
+void
+gen8_vec4_generator::generate_untyped_atomic(vec4_instruction *ir,
+                                             struct brw_reg dst,
+                                             struct brw_reg atomic_op,
+                                             struct brw_reg surf_index)
+{
+   assert(atomic_op.file == BRW_IMMEDIATE_VALUE &&
+          atomic_op.type == BRW_REGISTER_TYPE_UD &&
+          surf_index.file == BRW_IMMEDIATE_VALUE &&
+          surf_index.type == BRW_REGISTER_TYPE_UD);
+   assert((atomic_op.dw1.ud & ~0xf) == 0);
+
+   unsigned msg_control =
+      atomic_op.dw1.ud | /* Atomic Operation Type: BRW_AOP_* */
+      (1 << 5); /* Return data expected */
+
+   gen8_instruction *inst = next_inst(BRW_OPCODE_SEND);
+   gen8_set_dst(brw, inst, retype(dst, BRW_REGISTER_TYPE_UD));
+   gen8_set_src0(brw, inst, brw_message_reg(ir->base_mrf));
+   gen8_set_dp_message(brw, inst, HSW_SFID_DATAPORT_DATA_CACHE_1,
+                       surf_index.dw1.ud,
+                       HSW_DATAPORT_DC_PORT1_UNTYPED_ATOMIC_OP_SIMD4X2,
+                       msg_control,
+                       ir->mlen,
+                       1,
+                       ir->header_present,
+                       false);
+
+   brw_mark_surface_used(&prog_data->base, surf_index.dw1.ud);
+}
+
+
+
+void
+gen8_vec4_generator::generate_untyped_surface_read(vec4_instruction *ir,
+                                                   struct brw_reg dst,
+                                                   struct brw_reg surf_index)
+{
+   assert(surf_index.file == BRW_IMMEDIATE_VALUE &&
+          surf_index.type == BRW_REGISTER_TYPE_UD);
+
+   gen8_instruction *inst = next_inst(BRW_OPCODE_SEND);
+   gen8_set_dst(brw, inst, retype(dst, BRW_REGISTER_TYPE_UD));
+   gen8_set_src0(brw, inst, brw_message_reg(ir->base_mrf));
+   gen8_set_dp_message(brw, inst, HSW_SFID_DATAPORT_DATA_CACHE_1,
+                       surf_index.dw1.ud,
+                       HSW_DATAPORT_DC_PORT1_UNTYPED_SURFACE_READ,
+                       0xe, /* enable only the R channel */
+                       ir->mlen,
+                       1,
+                       ir->header_present,
+                       false);
+
+   brw_mark_surface_used(&prog_data->base, surf_index.dw1.ud);
+}
+
 
 void
 gen8_vec4_generator::generate_vec4_instruction(vec4_instruction *instruction,
@@ -770,11 +819,11 @@ gen8_vec4_generator::generate_vec4_instruction(vec4_instruction *instruction,
       break;
 
    case SHADER_OPCODE_UNTYPED_ATOMIC:
-      assert(!"XXX: Missing Gen8 vec4 support for UNTYPED_ATOMIC");
+      generate_untyped_atomic(ir, dst, src[0], src[1]);
       break;
 
    case SHADER_OPCODE_UNTYPED_SURFACE_READ:
-      assert(!"XXX: Missing Gen8 vec4 support for UNTYPED_SURFACE_READ");
+      generate_untyped_surface_read(ir, dst, src[0]);
       break;
 
    case VS_OPCODE_UNPACK_FLAGS_SIMD4X2:
@@ -793,12 +842,9 @@ gen8_vec4_generator::generate_vec4_instruction(vec4_instruction *instruction,
 }
 
 void
-gen8_vec4_generator::generate_code(exec_list *instructions)
+gen8_vec4_generator::generate_code(exec_list *instructions,
+                                   struct annotation_info *annotation)
 {
-   int last_native_inst_offset = 0;
-   const char *last_annotation_string = NULL;
-   const void *last_annotation_ir = NULL;
-
    if (unlikely(debug_flag)) {
       if (shader_prog) {
          fprintf(stderr, "Native code for %s vertex shader %d:\n",
@@ -809,33 +855,16 @@ gen8_vec4_generator::generate_code(exec_list *instructions)
       }
    }
 
+   cfg_t *cfg = NULL;
+   if (unlikely(debug_flag))
+      cfg = new(mem_ctx) cfg_t(instructions);
+
    foreach_list(node, instructions) {
       vec4_instruction *ir = (vec4_instruction *) node;
       struct brw_reg src[3], dst;
 
-      if (unlikely(debug_flag)) {
-         if (last_annotation_ir != ir->ir) {
-            last_annotation_ir = ir->ir;
-            if (last_annotation_ir) {
-               fprintf(stderr, "   ");
-               if (shader_prog) {
-                  ((ir_instruction *) last_annotation_ir)->fprint(stderr);
-               } else {
-                  const prog_instruction *vpi;
-                  vpi = (const prog_instruction *) ir->ir;
-                  fprintf(stderr, "%d: ", (int)(vpi - prog->Instructions));
-                  _mesa_fprint_instruction_opt(stderr, vpi, 0,
-                                               PROG_PRINT_DEBUG, NULL);
-               }
-               fprintf(stderr, "\n");
-            }
-         }
-         if (last_annotation_string != ir->annotation) {
-            last_annotation_string = ir->annotation;
-            if (last_annotation_string)
-               fprintf(stderr, "   %s\n", last_annotation_string);
-         }
-      }
+      if (unlikely(debug_flag))
+         annotate(brw, annotation, cfg, ir, next_inst_offset);
 
       for (unsigned int i = 0; i < 3; i++) {
          src[i] = ir->get_src(prog_data, i);
@@ -860,37 +889,29 @@ gen8_vec4_generator::generate_code(exec_list *instructions)
          gen8_set_no_dd_clear(last, ir->no_dd_clear);
          gen8_set_no_dd_check(last, ir->no_dd_check);
       }
-
-      if (unlikely(debug_flag)) {
-         disassemble(stderr, last_native_inst_offset, next_inst_offset);
-      }
-
-      last_native_inst_offset = next_inst_offset;
-   }
-
-   if (unlikely(debug_flag)) {
-      fprintf(stderr, "\n");
    }
 
    patch_jump_targets();
-
-   /* OK, while the INTEL_DEBUG=vs above is very nice for debugging VS
-    * emit issues, it doesn't get the jump distances into the output,
-    * which is often something we want to debug.  So this is here in
-    * case you're doing that.
-    */
-   if (0 && unlikely(debug_flag)) {
-      disassemble(stderr, 0, next_inst_offset);
-   }
+   annotation_finalize(annotation, next_inst_offset);
 }
 
 const unsigned *
 gen8_vec4_generator::generate_assembly(exec_list *instructions,
                                        unsigned *assembly_size)
 {
+   struct annotation_info annotation;
+   memset(&annotation, 0, sizeof(annotation));
+
    default_state.access_mode = BRW_ALIGN_16;
    default_state.exec_size = BRW_EXECUTE_8;
-   generate_code(instructions);
+   generate_code(instructions, &annotation);
+
+   if (unlikely(debug_flag)) {
+      dump_assembly(store, annotation.ann_count, annotation.ann,
+                    brw, prog, gen8_disassemble);
+      ralloc_free(annotation.ann);
+   }
+
    *assembly_size = next_inst_offset;
    return (const unsigned *) store;
 }

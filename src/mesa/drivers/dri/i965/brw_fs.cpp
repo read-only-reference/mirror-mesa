@@ -1031,7 +1031,7 @@ fs_visitor::emit_fragcoord_interpolation(ir_variable *ir)
 {
    fs_reg *reg = new(this->mem_ctx) fs_reg(this, ir->type);
    fs_reg wpos = *reg;
-   bool flip = !ir->data.origin_upper_left ^ c->key.render_to_fbo;
+   bool flip = !ir->data.origin_upper_left ^ key->render_to_fbo;
 
    /* gl_FragCoord.x */
    if (ir->data.pixel_center_integer) {
@@ -1050,7 +1050,7 @@ fs_visitor::emit_fragcoord_interpolation(ir_variable *ir)
 
       if (flip) {
 	 pixel_y.negate = true;
-	 offset += c->key.drawable_height - 1.0;
+	 offset += key->drawable_height - 1.0;
       }
 
       emit(ADD(wpos, pixel_y, fs_reg(offset)));
@@ -1059,7 +1059,7 @@ fs_visitor::emit_fragcoord_interpolation(ir_variable *ir)
 
    /* gl_FragCoord.z */
    if (brw->gen >= 6) {
-      emit(MOV(wpos, fs_reg(brw_vec8_grf(c->source_depth_reg, 0))));
+      emit(MOV(wpos, fs_reg(brw_vec8_grf(payload.source_depth_reg, 0))));
    } else {
       emit(FS_OPCODE_LINTERP, wpos,
            this->delta_x[BRW_WM_PERSPECTIVE_PIXEL_BARYCENTRIC],
@@ -1131,12 +1131,12 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
    }
 
    glsl_interp_qualifier interpolation_mode =
-      ir->determine_interpolation_mode(c->key.flat_shade);
+      ir->determine_interpolation_mode(key->flat_shade);
 
    int location = ir->data.location;
    for (unsigned int i = 0; i < array_elements; i++) {
       for (unsigned int j = 0; j < type->matrix_columns; j++) {
-	 if (c->prog_data.urb_setup[location] == -1) {
+	 if (prog_data->urb_setup[location] == -1) {
 	    /* If there's no incoming setup data for this slot, don't
 	     * emit interpolation for it.
 	     */
@@ -1162,8 +1162,8 @@ fs_visitor::emit_general_interpolation(ir_variable *ir)
 	    for (unsigned int k = 0; k < type->vector_elements; k++) {
                struct brw_reg interp = interp_reg(location, k);
                emit_linterp(attr, fs_reg(interp), interpolation_mode,
-                            ir->data.centroid && !c->key.persample_shading,
-                            ir->data.sample || c->key.persample_shading);
+                            ir->data.centroid && !key->persample_shading,
+                            ir->data.sample || key->persample_shading);
                if (brw->needs_unlit_centroid_workaround && ir->data.centroid) {
                   /* Get the pixel/sample mask into f0 so that we know
                    * which pixels are lit.  Then, for each channel that is
@@ -1220,7 +1220,7 @@ fs_visitor::compute_sample_position(fs_reg dst, fs_reg int_sample_pos)
 {
    assert(dst.type == BRW_REGISTER_TYPE_F);
 
-   if (c->key.compute_pos_offset) {
+   if (key->compute_pos_offset) {
       /* Convert int_sample_pos to floating point */
       emit(MOV(dst, int_sample_pos));
       /* Scale to the range [0, 1] */
@@ -1260,7 +1260,7 @@ fs_visitor::emit_samplepos_setup(ir_variable *ir)
     * the positions using vstride=16, width=8, hstride=2.
     */
    struct brw_reg sample_pos_reg =
-      stride(retype(brw_vec1_grf(c->sample_pos_reg, 0),
+      stride(retype(brw_vec1_grf(payload.sample_pos_reg, 0),
                     BRW_REGISTER_TYPE_B), 16, 8, 2);
 
    emit(MOV(int_sample_x, fs_reg(sample_pos_reg)));
@@ -1291,7 +1291,7 @@ fs_visitor::emit_sampleid_setup(ir_variable *ir)
    this->current_annotation = "compute sample id";
    fs_reg *reg = new(this->mem_ctx) fs_reg(this, ir->type);
 
-   if (c->key.compute_sample_id) {
+   if (key->compute_sample_id) {
       fs_reg t1 = fs_reg(this, glsl_type::int_type);
       fs_reg t2 = fs_reg(this, glsl_type::int_type);
       t2.type = BRW_REGISTER_TYPE_UW;
@@ -1311,8 +1311,8 @@ fs_visitor::emit_sampleid_setup(ir_variable *ir)
        * These computations hold good for 4x multisampling as well.
        */
       emit(BRW_OPCODE_AND, t1,
-           fs_reg(retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_D)),
-           fs_reg(brw_imm_d(0xc0)));
+           fs_reg(retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_UD)),
+           fs_reg(0xc0));
       emit(BRW_OPCODE_SHR, t1, t1, fs_reg(5));
       /* This works for both SIMD8 and SIMD16 */
       emit(MOV(t2, brw_imm_v(0x3210)));
@@ -1328,16 +1328,6 @@ fs_visitor::emit_sampleid_setup(ir_variable *ir)
       emit(BRW_OPCODE_MOV, *reg, fs_reg(0));
    }
 
-   return reg;
-}
-
-fs_reg *
-fs_visitor::emit_samplemaskin_setup(ir_variable *ir)
-{
-   assert(brw->gen >= 7);
-   this->current_annotation = "compute gl_SampleMaskIn";
-   fs_reg *reg = new(this->mem_ctx) fs_reg(this, ir->type);
-   emit(MOV(*reg, fs_reg(retype(brw_vec8_grf(c->sample_mask_reg, 0), BRW_REGISTER_TYPE_D))));
    return reg;
 }
 
@@ -1457,12 +1447,12 @@ void
 fs_visitor::assign_curb_setup()
 {
    if (dispatch_width == 8) {
-      c->prog_data.first_curbe_grf = c->nr_payload_regs;
+      prog_data->first_curbe_grf = payload.num_regs;
    } else {
-      c->prog_data.first_curbe_grf_16 = c->nr_payload_regs;
+      prog_data->first_curbe_grf_16 = payload.num_regs;
    }
 
-   c->prog_data.curb_read_length = ALIGN(stage_prog_data->nr_params, 8) / 8;
+   prog_data->curb_read_length = ALIGN(stage_prog_data->nr_params, 8) / 8;
 
    /* Map the offsets in the UNIFORM file to fixed HW regs. */
    foreach_list(node, &this->instructions) {
@@ -1483,7 +1473,7 @@ fs_visitor::assign_curb_setup()
                constant_nr = 0;
             }
 
-	    struct brw_reg brw_reg = brw_vec1_grf(c->nr_payload_regs +
+	    struct brw_reg brw_reg = brw_vec1_grf(payload.num_regs +
 						  constant_nr / 8,
 						  constant_nr % 8);
 
@@ -1500,7 +1490,7 @@ void
 fs_visitor::calculate_urb_setup()
 {
    for (unsigned int i = 0; i < VARYING_SLOT_MAX; i++) {
-      c->prog_data.urb_setup[i] = -1;
+      prog_data->urb_setup[i] = -1;
    }
 
    int urb_next = 0;
@@ -1520,7 +1510,7 @@ fs_visitor::calculate_urb_setup()
          for (unsigned int i = 0; i < VARYING_SLOT_MAX; i++) {
             if (fp->Base.InputsRead & BRW_FS_VARYING_INPUT_MASK &
                 BITFIELD64_BIT(i)) {
-               c->prog_data.urb_setup[i] = urb_next++;
+               prog_data->urb_setup[i] = urb_next++;
             }
          }
       } else {
@@ -1531,7 +1521,7 @@ fs_visitor::calculate_urb_setup()
           */
          struct brw_vue_map prev_stage_vue_map;
          brw_compute_vue_map(brw, &prev_stage_vue_map,
-                             c->key.input_slots_valid);
+                             key->input_slots_valid);
          int first_slot = 2 * BRW_SF_URB_ENTRY_READ_OFFSET;
          assert(prev_stage_vue_map.num_slots <= first_slot + 32);
          for (int slot = first_slot; slot < prev_stage_vue_map.num_slots;
@@ -1543,7 +1533,7 @@ fs_visitor::calculate_urb_setup()
             if (varying != BRW_VARYING_SLOT_COUNT &&
                 (fp->Base.InputsRead & BRW_FS_VARYING_INPUT_MASK &
                  BITFIELD64_BIT(varying))) {
-               c->prog_data.urb_setup[varying] = slot - first_slot;
+               prog_data->urb_setup[varying] = slot - first_slot;
             }
          }
          urb_next = prev_stage_vue_map.num_slots - first_slot;
@@ -1555,7 +1545,7 @@ fs_visitor::calculate_urb_setup()
          if (i == VARYING_SLOT_PSIZ)
             continue;
 
-	 if (c->key.input_slots_valid & BITFIELD64_BIT(i)) {
+	 if (key->input_slots_valid & BITFIELD64_BIT(i)) {
 	    /* The back color slot is skipped when the front color is
 	     * also written to.  In addition, some slots can be
 	     * written in the vertex shader and not read in the
@@ -1563,7 +1553,7 @@ fs_visitor::calculate_urb_setup()
 	     * incremented, mapped or not.
 	     */
 	    if (_mesa_varying_slot_in_fs((gl_varying_slot) i))
-	       c->prog_data.urb_setup[i] = urb_next;
+	       prog_data->urb_setup[i] = urb_next;
             urb_next++;
 	 }
       }
@@ -1575,16 +1565,16 @@ fs_visitor::calculate_urb_setup()
        * See compile_sf_prog() for more info.
        */
       if (fp->Base.InputsRead & BITFIELD64_BIT(VARYING_SLOT_PNTC))
-         c->prog_data.urb_setup[VARYING_SLOT_PNTC] = urb_next++;
+         prog_data->urb_setup[VARYING_SLOT_PNTC] = urb_next++;
    }
 
-   c->prog_data.num_varying_inputs = urb_next;
+   prog_data->num_varying_inputs = urb_next;
 }
 
 void
 fs_visitor::assign_urb_setup()
 {
-   int urb_start = c->nr_payload_regs + c->prog_data.curb_read_length;
+   int urb_start = payload.num_regs + prog_data->curb_read_length;
 
    /* Offset all the urb_setup[] index by the actual position of the
     * setup regs, now that the location of the constants has been chosen.
@@ -1605,7 +1595,7 @@ fs_visitor::assign_urb_setup()
 
    /* Each attribute is 4 setup channels, each of which is half a reg. */
    this->first_non_payload_grf =
-      urb_start + c->prog_data.num_varying_inputs * 2;
+      urb_start + prog_data->num_varying_inputs * 2;
 }
 
 /**
@@ -1740,34 +1730,6 @@ fs_visitor::compact_virtual_grfs()
       }
    }
 
-   /* In addition to registers used in instructions, fs_visitor keeps
-    * direct references to certain special values which must be patched:
-    */
-   struct {
-      fs_reg *reg;
-      unsigned count;
-   } special[] = {
-      { &frag_depth, 1 },
-      { &pixel_x, 1 },
-      { &pixel_y, 1 },
-      { &pixel_w, 1 },
-      { &wpos_w, 1 },
-      { &dual_src_output, 1 },
-      { outputs, ARRAY_SIZE(outputs) },
-      { delta_x, ARRAY_SIZE(delta_x) },
-      { delta_y, ARRAY_SIZE(delta_y) },
-      { &sample_mask, 1 },
-      { &shader_start_time, 1 },
-   };
-
-   /* Treat all special values as used, to be conservative */
-   for (unsigned i = 0; i < ARRAY_SIZE(special); i++) {
-      for (unsigned j = 0; j < special[i].count; j++) {
-         if (special[i].reg[j].file == GRF)
-            remap_table[special[i].reg[j].reg] = 0;
-      }
-   }
-
    /* Compact the GRF arrays. */
    int new_index = 0;
    for (int i = 0; i < this->virtual_grf_count; i++) {
@@ -1791,15 +1753,6 @@ fs_visitor::compact_virtual_grfs()
       for (int i = 0; i < 3; i++) {
          if (inst->src[i].file == GRF)
             inst->src[i].reg = remap_table[inst->src[i].reg];
-      }
-   }
-
-   /* Patch all the references to special values */
-   for (unsigned i = 0; i < ARRAY_SIZE(special); i++) {
-      for (unsigned j = 0; j < special[i].count; j++) {
-         fs_reg *reg = &special[i].reg[j];
-         if (reg->file == GRF && remap_table[reg->reg] != -1)
-            reg->reg = remap_table[reg->reg];
       }
    }
 }
@@ -2844,12 +2797,12 @@ fs_visitor::setup_payload_gen6()
 {
    bool uses_depth =
       (fp->Base.InputsRead & (1 << VARYING_SLOT_POS)) != 0;
-   unsigned barycentric_interp_modes = c->prog_data.barycentric_interp_modes;
+   unsigned barycentric_interp_modes = prog_data->barycentric_interp_modes;
 
    assert(brw->gen >= 6);
 
    /* R0-1: masks, pixel X/Y coordinates. */
-   c->nr_payload_regs = 2;
+   payload.num_regs = 2;
    /* R2: only for 32-pixel dispatch.*/
 
    /* R3-26: barycentric interpolation coordinates.  These appear in the
@@ -2861,48 +2814,48 @@ fs_visitor::setup_payload_gen6()
     */
    for (int i = 0; i < BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT; ++i) {
       if (barycentric_interp_modes & (1 << i)) {
-         c->barycentric_coord_reg[i] = c->nr_payload_regs;
-         c->nr_payload_regs += 2;
+         payload.barycentric_coord_reg[i] = payload.num_regs;
+         payload.num_regs += 2;
          if (dispatch_width == 16) {
-            c->nr_payload_regs += 2;
+            payload.num_regs += 2;
          }
       }
    }
 
    /* R27: interpolated depth if uses source depth */
    if (uses_depth) {
-      c->source_depth_reg = c->nr_payload_regs;
-      c->nr_payload_regs++;
+      payload.source_depth_reg = payload.num_regs;
+      payload.num_regs++;
       if (dispatch_width == 16) {
          /* R28: interpolated depth if not SIMD8. */
-         c->nr_payload_regs++;
+         payload.num_regs++;
       }
    }
    /* R29: interpolated W set if GEN6_WM_USES_SOURCE_W. */
    if (uses_depth) {
-      c->source_w_reg = c->nr_payload_regs;
-      c->nr_payload_regs++;
+      payload.source_w_reg = payload.num_regs;
+      payload.num_regs++;
       if (dispatch_width == 16) {
          /* R30: interpolated W if not SIMD8. */
-         c->nr_payload_regs++;
+         payload.num_regs++;
       }
    }
 
-   c->prog_data.uses_pos_offset = c->key.compute_pos_offset;
+   prog_data->uses_pos_offset = key->compute_pos_offset;
    /* R31: MSAA position offsets. */
-   if (c->prog_data.uses_pos_offset) {
-      c->sample_pos_reg = c->nr_payload_regs;
-      c->nr_payload_regs++;
+   if (prog_data->uses_pos_offset) {
+      payload.sample_pos_reg = payload.num_regs;
+      payload.num_regs++;
    }
 
    /* R32: MSAA input coverage mask */
    if (fp->Base.SystemValuesRead & SYSTEM_BIT_SAMPLE_MASK_IN) {
       assert(brw->gen >= 7);
-      c->sample_mask_reg = c->nr_payload_regs;
-      c->nr_payload_regs++;
+      payload.sample_mask_in_reg = payload.num_regs;
+      payload.num_regs++;
       if (dispatch_width == 16) {
          /* R33: input coverage mask if not SIMD8. */
-         c->nr_payload_regs++;
+         payload.num_regs++;
       }
    }
 
@@ -2910,7 +2863,7 @@ fs_visitor::setup_payload_gen6()
    /* R58-59: interp W for 32-pixel. */
 
    if (fp->Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_DEPTH)) {
-      c->source_depth_to_render_target = true;
+      source_depth_to_render_target = true;
    }
 }
 
@@ -2922,8 +2875,8 @@ fs_visitor::assign_binding_table_offsets()
    /* If there are no color regions, we still perform an FB write to a null
     * renderbuffer, which we place at surface index 0.
     */
-   c->prog_data.binding_table.render_target_start = next_binding_table_offset;
-   next_binding_table_offset += MAX2(c->key.nr_color_regions, 1);
+   prog_data->binding_table.render_target_start = next_binding_table_offset;
+   next_binding_table_offset += MAX2(key->nr_color_regions, 1);
 
    assign_common_binding_table_offsets(next_binding_table_offset);
 }
@@ -3008,7 +2961,7 @@ fs_visitor::run()
       /* We handle discards by keeping track of the still-live pixels in f0.1.
        * Initialize it with the dispatched pixels.
        */
-      if (fp->UsesKill || c->key.alpha_test_func) {
+      if (fp->UsesKill || key->alpha_test_func) {
          fs_inst *discard_init = emit(FS_OPCODE_MOV_DISPATCH_TO_FLAGS);
          discard_init->flag_subreg = 1;
       }
@@ -3032,7 +2985,7 @@ fs_visitor::run()
 
       emit(FS_OPCODE_PLACEHOLDER_HALT);
 
-      if (c->key.alpha_test_func)
+      if (key->alpha_test_func)
          emit_alpha_test();
 
       emit_fb_writes();
@@ -3101,6 +3054,10 @@ fs_visitor::run()
          if (dispatch_width == 16) {
             fail("Failure to register allocate.  Reduce number of "
                  "live scalar values to avoid this.");
+         } else {
+            perf_debug("Fragment shader triggered register spilling.  "
+                       "Try reducing the number of live scalar values to "
+                       "improve performance.\n");
          }
 
          /* Since we're out of heuristics, just go spill registers until we
@@ -3126,10 +3083,14 @@ fs_visitor::run()
    if (!allocated_without_spills)
       schedule_instructions(SCHEDULE_POST);
 
+   if (last_scratch > 0) {
+      prog_data->total_scratch = brw_get_scratch_size(last_scratch);
+   }
+
    if (dispatch_width == 8)
-      c->prog_data.reg_blocks = brw_register_blocks(grf_used);
+      prog_data->reg_blocks = brw_register_blocks(grf_used);
    else
-      c->prog_data.reg_blocks_16 = brw_register_blocks(grf_used);
+      prog_data->reg_blocks_16 = brw_register_blocks(grf_used);
 
    /* If any state parameters were appended, then ParameterValues could have
     * been realloced, in which case the driver uniform storage set up by
@@ -3142,7 +3103,10 @@ fs_visitor::run()
 }
 
 const unsigned *
-brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
+brw_wm_fs_emit(struct brw_context *brw,
+               void *mem_ctx,
+               const struct brw_wm_prog_key *key,
+               struct brw_wm_prog_data *prog_data,
                struct gl_fragment_program *fp,
                struct gl_shader_program *prog,
                unsigned *final_assembly_size)
@@ -3165,7 +3129,7 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
 
    /* Now the main event: Visit the shader IR and generate our FS IR for it.
     */
-   fs_visitor v(brw, c, prog, fp, 8);
+   fs_visitor v(brw, mem_ctx, key, prog_data, prog, fp, 8);
    if (!v.run()) {
       if (prog) {
          prog->LinkStatus = false;
@@ -3179,7 +3143,7 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
    }
 
    exec_list *simd16_instructions = NULL;
-   fs_visitor v2(brw, c, prog, fp, 16);
+   fs_visitor v2(brw, mem_ctx, key, prog_data, prog, fp, 16);
    if (brw->gen >= 5 && likely(!(INTEL_DEBUG & DEBUG_NO16))) {
       if (!v.simd16_unsupported) {
          /* Try a SIMD16 compile */
@@ -3198,18 +3162,19 @@ brw_wm_fs_emit(struct brw_context *brw, struct brw_wm_compile *c,
 
    const unsigned *assembly = NULL;
    if (brw->gen >= 8) {
-      gen8_fs_generator g(brw, c, prog, fp, v.do_dual_src);
+      gen8_fs_generator g(brw, mem_ctx, key, prog_data, prog, fp, v.do_dual_src);
       assembly = g.generate_assembly(&v.instructions, simd16_instructions,
                                      final_assembly_size);
    } else {
-      fs_generator g(brw, c, prog, fp, v.do_dual_src);
+      fs_generator g(brw, mem_ctx, key, prog_data, prog, fp, v.do_dual_src,
+                     INTEL_DEBUG & DEBUG_WM);
       assembly = g.generate_assembly(&v.instructions, simd16_instructions,
                                      final_assembly_size);
    }
 
    if (unlikely(brw->perf_debug) && shader) {
       if (shader->compiled_once)
-         brw_wm_debug_recompile(brw, prog, &c->key);
+         brw_wm_debug_recompile(brw, prog, key);
       shader->compiled_once = true;
 
       if (start_busy && !drm_intel_bo_busy(brw->batch.last_bo)) {
@@ -3252,8 +3217,6 @@ brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
    if (brw->gen < 6 || _mesa_bitcount_64(fp->Base.InputsRead &
                                          BRW_FS_VARYING_INPUT_MASK) > 16)
       key.input_slots_valid = fp->Base.InputsRead | VARYING_BIT_POS;
-
-   key.clamp_fragment_color = ctx->API == API_OPENGL_COMPAT;
 
    unsigned sampler_count = _mesa_fls(fp->Base.SamplersUsed);
    for (unsigned i = 0; i < sampler_count; i++) {

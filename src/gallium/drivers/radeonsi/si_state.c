@@ -1312,6 +1312,7 @@ static unsigned si_tex_dim(unsigned dim, unsigned nr_samples)
 	case PIPE_TEXTURE_3D:
 		return V_008F1C_SQ_RSRC_IMG_3D;
 	case PIPE_TEXTURE_CUBE:
+	case PIPE_TEXTURE_CUBE_ARRAY:
 		return V_008F1C_SQ_RSRC_IMG_CUBE;
 	}
 }
@@ -2173,7 +2174,7 @@ static void *si_create_fs_state(struct pipe_context *ctx,
 	return si_create_shader_state(ctx, state, PIPE_SHADER_FRAGMENT);
 }
 
-#if HAVE_LLVM >= 0x0305
+#if LLVM_SUPPORTS_GEOM_SHADERS
 
 static void *si_create_gs_state(struct pipe_context *ctx,
 				const struct pipe_shader_state *state)
@@ -2203,7 +2204,7 @@ static void si_bind_vs_shader(struct pipe_context *ctx, void *state)
 	sctx->vs_shader = sel;
 }
 
-#if HAVE_LLVM >= 0x0305
+#if LLVM_SUPPORTS_GEOM_SHADERS
 
 static void si_bind_gs_shader(struct pipe_context *ctx, void *state)
 {
@@ -2271,7 +2272,7 @@ static void si_delete_vs_shader(struct pipe_context *ctx, void *state)
 	si_delete_shader_selector(ctx, sel);
 }
 
-#if HAVE_LLVM >= 0x0305
+#if LLVM_SUPPORTS_GEOM_SHADERS
 
 static void si_delete_gs_shader(struct pipe_context *ctx, void *state)
 {
@@ -2477,7 +2478,8 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 		depth = texture->array_size;
 	} else if (texture->target == PIPE_TEXTURE_2D_ARRAY) {
 		depth = texture->array_size;
-	}
+	} else if (texture->target == PIPE_TEXTURE_CUBE_ARRAY)
+		depth = texture->array_size / 6;
 
 	va = r600_resource_va(ctx->screen, texture);
 	va += surflevel[0].offset;
@@ -2599,16 +2601,15 @@ static void *si_create_sampler_state(struct pipe_context *ctx,
 	rstate->val[0] = (S_008F30_CLAMP_X(si_tex_wrap(state->wrap_s)) |
 			  S_008F30_CLAMP_Y(si_tex_wrap(state->wrap_t)) |
 			  S_008F30_CLAMP_Z(si_tex_wrap(state->wrap_r)) |
-			  (state->max_anisotropy & 0x7) << 9 | /* XXX */
+			  r600_tex_aniso_filter(state->max_anisotropy) << 9 |
 			  S_008F30_DEPTH_COMPARE_FUNC(si_tex_compare(state->compare_func)) |
 			  S_008F30_FORCE_UNNORMALIZED(!state->normalized_coords) |
-			  aniso_flag_offset << 16 | /* XXX */
 			  S_008F30_DISABLE_CUBE_WRAP(!state->seamless_cube_map));
 	rstate->val[1] = (S_008F34_MIN_LOD(S_FIXED(CLAMP(state->min_lod, 0, 15), 8)) |
 			  S_008F34_MAX_LOD(S_FIXED(CLAMP(state->max_lod, 0, 15), 8)));
 	rstate->val[2] = (S_008F38_LOD_BIAS(S_FIXED(CLAMP(state->lod_bias, -16, 16), 8)) |
-			  S_008F38_XY_MAG_FILTER(si_tex_filter(state->mag_img_filter)) |
-			  S_008F38_XY_MIN_FILTER(si_tex_filter(state->min_img_filter)) |
+			  S_008F38_XY_MAG_FILTER(si_tex_filter(state->mag_img_filter) | aniso_flag_offset) |
+			  S_008F38_XY_MIN_FILTER(si_tex_filter(state->min_img_filter) | aniso_flag_offset) |
 			  S_008F38_MIP_FILTER(si_tex_mipfilter(state->min_mip_filter)));
 	rstate->val[3] = S_008F3C_BORDER_COLOR_TYPE(border_color_type);
 
@@ -2767,7 +2768,7 @@ static void si_bind_vs_sampler_states(struct pipe_context *ctx, unsigned count, 
 	si_set_sampler_states(sctx, pm4, count, states,
 			      &sctx->samplers[PIPE_SHADER_VERTEX],
 			      R_00B130_SPI_SHADER_USER_DATA_VS_0);
-#if HAVE_LLVM >= 0x0305
+#if LLVM_SUPPORTS_GEOM_SHADERS
 	si_set_sampler_states(sctx, pm4, count, states,
 			      &sctx->samplers[PIPE_SHADER_VERTEX],
 			      R_00B330_SPI_SHADER_USER_DATA_ES_0);
@@ -2960,7 +2961,7 @@ void si_init_state_functions(struct si_context *sctx)
 {
 	int i;
 
-	si_init_atom(&sctx->framebuffer.atom, &sctx->atoms.framebuffer, si_emit_framebuffer_state, 0);
+	si_init_atom(&sctx->framebuffer.atom, &sctx->atoms.s.framebuffer, si_emit_framebuffer_state, 0);
 
 	sctx->b.b.create_blend_state = si_create_blend_state;
 	sctx->b.b.bind_blend_state = si_bind_blend_state;
@@ -2999,7 +3000,7 @@ void si_init_state_functions(struct si_context *sctx)
 	sctx->b.b.bind_fs_state = si_bind_ps_shader;
 	sctx->b.b.delete_vs_state = si_delete_vs_shader;
 	sctx->b.b.delete_fs_state = si_delete_ps_shader;
-#if HAVE_LLVM >= 0x0305
+#if LLVM_SUPPORTS_GEOM_SHADERS
 	sctx->b.b.create_gs_state = si_create_gs_state;
 	sctx->b.b.bind_gs_state = si_bind_gs_shader;
 	sctx->b.b.delete_gs_state = si_delete_gs_shader;
@@ -3100,6 +3101,8 @@ void si_init_config(struct si_context *sctx)
 		case CHIP_KAVERI:
 			/* XXX todo */
 		case CHIP_KABINI:
+			/* XXX todo */
+		case CHIP_MULLINS:
 			/* XXX todo */
 		default:
 			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x00000000);

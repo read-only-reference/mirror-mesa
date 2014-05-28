@@ -3,6 +3,7 @@ i965_INCLUDES = \
 	$(MESA_TOP)/src/mesa/drivers/dri/intel
 
 i965_FILES = \
+	intel_asm_printer.c \
 	intel_batchbuffer.c \
 	intel_blit.c \
 	intel_buffer_objects.c \
@@ -11,7 +12,6 @@ i965_FILES = \
 	intel_extensions.c \
 	intel_fbo.c \
 	intel_mipmap_tree.c \
-	intel_regions.c \
 	intel_resolve_map.c \
 	intel_screen.c \
 	intel_pixel.c \
@@ -77,6 +77,8 @@ i965_FILES = \
 	brw_lower_texture_gradients.cpp \
 	brw_lower_unnormalized_offset.cpp \
 	brw_meta_updownsample.c \
+	brw_meta_stencil_blit.c \
+	brw_meta_util.c \
 	brw_misc_state.c \
 	brw_object_purgeable.c \
 	brw_performance_monitor.c \

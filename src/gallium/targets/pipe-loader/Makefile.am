@@ -27,7 +27,8 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/include \
 	-I$(top_srcdir)/src/gallium/drivers \
 	-I$(top_srcdir)/src/gallium/winsys \
-	 $(LIBDRM_CFLAGS) \
+	$(LIBDRM_CFLAGS) \
+	$(VISIBILITY_CFLAGS) \
 	-DGALLIUM_RBUG \
 	-DGALLIUM_TRACE \
 	-DGALLIUM_GALAHAD
@@ -47,8 +48,12 @@ AM_LDFLAGS = \
 	-no-undefined \
 	-avoid-version \
 	$(GC_SECTIONS) \
-	$(LD_NO_UNDEFINED) \
-	-Wl,--version-script=$(top_srcdir)/src/gallium/targets/pipe-loader/pipe.link
+	$(LD_NO_UNDEFINED)
+
+if HAVE_LD_VERSION_SCRIPT
+AM_LDFLAGS += \
+	-Wl,--version-script=$(top_srcdir)/src/gallium/targets/pipe-loader/pipe.sym
+endif
 
 if HAVE_MESA_LLVM
 PIPE_LIBS += $(LLVM_LIBS)
@@ -106,6 +111,7 @@ nodist_EXTRA_pipe_r600_la_SOURCES = dummy.cpp
 pipe_r600_la_LIBADD = \
 	$(PIPE_LIBS) \
 	$(top_builddir)/src/gallium/winsys/radeon/drm/libradeonwinsys.la \
+	$(top_builddir)/src/gallium/drivers/radeon/libradeon.la \
 	$(top_builddir)/src/gallium/drivers/r600/libr600.la \
 	$(LIBDRM_LIBS) \
 	$(RADEON_LIBS)
@@ -120,6 +126,7 @@ nodist_EXTRA_pipe_radeonsi_la_SOURCES = dummy.cpp
 pipe_radeonsi_la_LIBADD = \
 	$(PIPE_LIBS) \
 	$(top_builddir)/src/gallium/winsys/radeon/drm/libradeonwinsys.la \
+	$(top_builddir)/src/gallium/drivers/radeon/libradeon.la \
 	$(top_builddir)/src/gallium/drivers/radeonsi/libradeonsi.la \
 	$(LIBDRM_LIBS) \
 	$(RADEON_LIBS)

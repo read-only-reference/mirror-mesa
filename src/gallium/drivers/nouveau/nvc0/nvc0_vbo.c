@@ -240,7 +240,7 @@ nvc0_update_user_vbufs(struct nvc0_context *nvc0)
 
       if (!(nvc0->vbo_user & (1 << b)))
          continue;
-      if (!vb->stride) {
+      if (nvc0->constant_vbos & (1 << b)) {
          nvc0_set_constant_vertex_attrib(nvc0, i);
          continue;
       }
@@ -331,7 +331,7 @@ nvc0_validate_vertex_buffers(struct nvc0_context *nvc0)
       vb = &nvc0->vtxbuf[b];
 
       if (!vb->buffer) {
-         if (vb->stride) {
+         if (!(nvc0->constant_vbos & (1 << b))) {
             if (ve->pipe.instance_divisor) {
                BEGIN_NVC0(push, NVC0_3D(VERTEX_ARRAY_DIVISOR(i)), 1);
                PUSH_DATA (push, ve->pipe.instance_divisor);
@@ -385,7 +385,7 @@ nvc0_validate_vertex_buffers_shared(struct nvc0_context *nvc0)
       uint32_t offset, limit;
 
       if (mask & (1 << b)) {
-         if (vb->stride) {
+         if (!(nvc0->constant_vbos & (1 << b))) {
             BEGIN_NVC0(push, NVC0_3D(VERTEX_ARRAY_FETCH(b)), 1);
             PUSH_DATA (push, NVC0_3D_VERTEX_ARRAY_FETCH_ENABLE | vb->stride);
          }
@@ -423,6 +423,7 @@ nvc0_vertex_arrays_validate(struct nvc0_context *nvc0)
 
    nouveau_bufctx_reset(nvc0->bufctx_3d, NVC0_BIND_VTX);
 
+   assert(vertex);
    if (unlikely(vertex->need_conversion) ||
        unlikely(nvc0->vertprog->vp.edgeflag < PIPE_MAX_ATTRIBS)) {
       vbo_mode = 3;
@@ -771,7 +772,8 @@ nvc0_draw_stream_output(struct nvc0_context *nvc0,
       PUSH_SPACE(push, 2);
       IMMED_NVC0(push, NVC0_3D(SERIALIZE), 0);
       nvc0_query_fifo_wait(push, so->pq);
-      IMMED_NVC0(push, NVC0_3D(VERTEX_ARRAY_FLUSH), 0);
+      if (nvc0->screen->eng3d->oclass < GM107_3D_CLASS)
+         IMMED_NVC0(push, NVC0_3D(VERTEX_ARRAY_FLUSH), 0);
 
       NOUVEAU_DRV_STAT(&nvc0->screen->base, gpu_serialize_count, 1);
    }
@@ -797,6 +799,7 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
 {
    struct nvc0_context *nvc0 = nvc0_context(pipe);
    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
+   int i;
 
    /* NOTE: caller must ensure that (min_index + index_bias) is >= 0 */
    nvc0->vb_elt_first = info->min_index + info->index_bias;
@@ -846,8 +849,20 @@ nvc0_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
       PUSH_DATA (push, info->start_instance);
    }
 
+   for (i = 0; i < nvc0->num_vtxbufs && !nvc0->base.vbo_dirty; ++i) {
+      if (!nvc0->vtxbuf[i].buffer)
+         continue;
+      if (nvc0->vtxbuf[i].buffer->flags & PIPE_RESOURCE_FLAG_MAP_COHERENT)
+         nvc0->base.vbo_dirty = TRUE;
+   }
+
+   if (!nvc0->base.vbo_dirty && nvc0->idxbuf.buffer &&
+       nvc0->idxbuf.buffer->flags & PIPE_RESOURCE_FLAG_MAP_COHERENT)
+      nvc0->base.vbo_dirty = TRUE;
+
    if (nvc0->base.vbo_dirty) {
-      IMMED_NVC0(push, NVC0_3D(VERTEX_ARRAY_FLUSH), 0);
+      if (nvc0->screen->eng3d->oclass < GM107_3D_CLASS)
+         IMMED_NVC0(push, NVC0_3D(VERTEX_ARRAY_FLUSH), 0);
       nvc0->base.vbo_dirty = FALSE;
    }
 

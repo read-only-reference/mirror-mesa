@@ -21,7 +21,9 @@
 
 include $(top_srcdir)/src/gallium/Automake.inc
 
-AM_CFLAGS = $(GALLIUM_CFLAGS)
+AM_CFLAGS = \
+	$(GALLIUM_CFLAGS) \
+	$(VISIBILITY_CFLAGS)
 
 AM_CPPFLAGS = \
 	-I$(top_srcdir)/include \
@@ -46,6 +48,10 @@ lib@OSMESA_LIB@_la_LDFLAGS = \
 	$(GC_SECTIONS) \
 	$(LD_NO_UNDEFINED)
 
+if HAVE_LD_VERSION_SCRIPT
+lib@OSMESA_LIB@_la_LDFLAGS += \
+	-Wl,--version-script=$(top_srcdir)/src/gallium/targets/osmesa/osmesa.sym
+endif
 
 if HAVE_SHARED_GLAPI
 SHARED_GLAPI_LIB = $(top_builddir)/src/mapi/shared-glapi/libglapi.la

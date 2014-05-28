@@ -54,7 +54,6 @@ static void compile_sf_prog( struct brw_context *brw,
    const GLuint *program;
    void *mem_ctx;
    GLuint program_size;
-   GLuint i;
 
    memset(&c, 0, sizeof(c));
 
@@ -110,15 +109,15 @@ static void compile_sf_prog( struct brw_context *brw,
       return;
    }
 
+   brw_compact_instructions(&c.func, 0, 0, NULL);
+
    /* get the program
     */
    program = brw_get_program(&c.func, &program_size);
 
    if (unlikely(INTEL_DEBUG & DEBUG_SF)) {
       fprintf(stderr, "sf:\n");
-      for (i = 0; i < program_size / sizeof(struct brw_instruction); i++)
-	 brw_disasm(stderr, &((struct brw_instruction *)program)[i],
-		    brw->gen);
+      brw_disassemble(brw, c.func.store, 0, program_size, stderr);
       fprintf(stderr, "\n");
    }
 

@@ -137,7 +137,6 @@ static void do_twoside_color( struct brw_sf_compile *c )
     * we run with NoMask, so it's not an option and we can use
     * BRW_EXECUTE_1 for all comparisions.
     */
-   brw_push_insn_state(p);
    brw_CMP(p, vec4(brw_null_reg()), backface_conditional, c->det, brw_imm_f(0));
    brw_IF(p, BRW_EXECUTE_4);
    {
@@ -148,7 +147,6 @@ static void do_twoside_color( struct brw_sf_compile *c )
       }
    }
    brw_ENDIF(p);
-   brw_pop_insn_state(p);
 }
 
 
@@ -209,8 +207,6 @@ static void do_flatshade_triangle( struct brw_sf_compile *c )
 
    nr = count_flatshaded_attributes(c);
 
-   brw_push_insn_state(p);
-
    brw_MUL(p, c->pv, c->pv, brw_imm_d(jmpi*(nr*2+1)));
    brw_JMPI(p, ip, ip, c->pv);
 
@@ -224,8 +220,6 @@ static void do_flatshade_triangle( struct brw_sf_compile *c )
 
    copy_flatshaded_attributes(c, c->vert[0], c->vert[2]);
    copy_flatshaded_attributes(c, c->vert[1], c->vert[2]);
-
-   brw_pop_insn_state(p);
 }
 	
 
@@ -247,16 +241,12 @@ static void do_flatshade_line( struct brw_sf_compile *c )
 
    nr = count_flatshaded_attributes(c);
 
-   brw_push_insn_state(p);
-
    brw_MUL(p, c->pv, c->pv, brw_imm_d(jmpi*(nr+1)));
    brw_JMPI(p, ip, ip, c->pv);
    copy_flatshaded_attributes(c, c->vert[1], c->vert[0]);
 
    brw_JMPI(p, ip, ip, brw_imm_ud(jmpi*nr));
    copy_flatshaded_attributes(c, c->vert[0], c->vert[1]);
-
-   brw_pop_insn_state(p);
 }
 
 	
@@ -322,14 +312,10 @@ static void copy_z_inv_w( struct brw_sf_compile *c )
    struct brw_compile *p = &c->func;
    GLuint i;
 
-   brw_push_insn_state(p);
-	
    /* Copy both scalars with a single MOV:
     */
    for (i = 0; i < c->nr_verts; i++)
       brw_MOV(p, vec2(suboffset(c->vert[i], 2)), vec2(c->z[i]));
-	
-   brw_pop_insn_state(p);
 }
 
 
@@ -415,13 +401,29 @@ calculate_point_sprite_mask(struct brw_sf_compile *c, GLuint reg)
    return pc;
 }
 
+static void
+set_predicate_control_flag_value(struct brw_compile *p,
+                                 struct brw_sf_compile *c,
+                                 unsigned value)
+{
+   p->current->header.predicate_control = BRW_PREDICATE_NONE;
 
+   if (value != 0xff) {
+      if (value != c->flag_value) {
+         brw_MOV(p, brw_flag_reg(0, 0), brw_imm_uw(value));
+         c->flag_value = value;
+      }
+
+      p->current->header.predicate_control = BRW_PREDICATE_NORMAL;
+   }
+}
 
 void brw_emit_tri_setup(struct brw_sf_compile *c, bool allocate)
 {
    struct brw_compile *p = &c->func;
    GLuint i;
 
+   c->flag_value = 0xff;
    c->nr_verts = 3;
 
    if (allocate)
@@ -449,7 +451,7 @@ void brw_emit_tri_setup(struct brw_sf_compile *c, bool allocate)
 
       if (pc_persp)
       {
-	 brw_set_predicate_control_flag_value(p, pc_persp);
+	 set_predicate_control_flag_value(p, c, pc_persp);
 	 brw_MUL(p, a0, a0, c->inv_w[0]);
 	 brw_MUL(p, a1, a1, c->inv_w[1]);
 	 brw_MUL(p, a2, a2, c->inv_w[2]);
@@ -460,7 +462,7 @@ void brw_emit_tri_setup(struct brw_sf_compile *c, bool allocate)
        */
       if (pc_linear)
       {
-	 brw_set_predicate_control_flag_value(p, pc_linear);
+	 set_predicate_control_flag_value(p, c, pc_linear);
 
 	 brw_ADD(p, c->a1_sub_a0, a1, negate(a0));
 	 brw_ADD(p, c->a2_sub_a0, a2, negate(a0));
@@ -479,7 +481,7 @@ void brw_emit_tri_setup(struct brw_sf_compile *c, bool allocate)
       }
 
       {
-	 brw_set_predicate_control_flag_value(p, pc);
+	 set_predicate_control_flag_value(p, c, pc);
 	 /* start point for interpolation
 	  */
 	 brw_MOV(p, c->m3C0, a0);
@@ -499,6 +501,8 @@ void brw_emit_tri_setup(struct brw_sf_compile *c, bool allocate)
 		       BRW_URB_SWIZZLE_TRANSPOSE); /* XXX: Swizzle control "SF to windower" */
       }
    }
+
+   brw_set_predicate_control(p, BRW_PREDICATE_NONE);
 }
 
 
@@ -508,7 +512,7 @@ void brw_emit_line_setup(struct brw_sf_compile *c, bool allocate)
    struct brw_compile *p = &c->func;
    GLuint i;
 
-
+   c->flag_value = 0xff;
    c->nr_verts = 2;
 
    if (allocate)
@@ -531,7 +535,7 @@ void brw_emit_line_setup(struct brw_sf_compile *c, bool allocate)
 
       if (pc_persp)
       {
-	 brw_set_predicate_control_flag_value(p, pc_persp);
+	 set_predicate_control_flag_value(p, c, pc_persp);
 	 brw_MUL(p, a0, a0, c->inv_w[0]);
 	 brw_MUL(p, a1, a1, c->inv_w[1]);
       }
@@ -539,7 +543,7 @@ void brw_emit_line_setup(struct brw_sf_compile *c, bool allocate)
       /* Calculate coefficients for position, color:
        */
       if (pc_linear) {
-	 brw_set_predicate_control_flag_value(p, pc_linear);
+	 set_predicate_control_flag_value(p, c, pc_linear);
 
 	 brw_ADD(p, c->a1_sub_a0, a1, negate(a0));
 
@@ -551,7 +555,7 @@ void brw_emit_line_setup(struct brw_sf_compile *c, bool allocate)
       }
 
       {
-	 brw_set_predicate_control_flag_value(p, pc);
+	 set_predicate_control_flag_value(p, c, pc);
 
 	 /* start point for interpolation
 	  */
@@ -571,6 +575,8 @@ void brw_emit_line_setup(struct brw_sf_compile *c, bool allocate)
 		       BRW_URB_SWIZZLE_TRANSPOSE);
       }
    }
+
+   brw_set_predicate_control(p, BRW_PREDICATE_NONE);
 }
 
 void brw_emit_point_sprite_setup(struct brw_sf_compile *c, bool allocate)
@@ -578,6 +584,7 @@ void brw_emit_point_sprite_setup(struct brw_sf_compile *c, bool allocate)
    struct brw_compile *p = &c->func;
    GLuint i;
 
+   c->flag_value = 0xff;
    c->nr_verts = 1;
 
    if (allocate)
@@ -594,7 +601,7 @@ void brw_emit_point_sprite_setup(struct brw_sf_compile *c, bool allocate)
       pc_persp &= ~pc_coord_replace;
 
       if (pc_persp) {
-	 brw_set_predicate_control_flag_value(p, pc_persp);
+	 set_predicate_control_flag_value(p, c, pc_persp);
 	 brw_MUL(p, a0, a0, c->inv_w[0]);
       }
 
@@ -604,7 +611,7 @@ void brw_emit_point_sprite_setup(struct brw_sf_compile *c, bool allocate)
        * point.
        */
       if (pc_coord_replace) {
-	 brw_set_predicate_control_flag_value(p, pc_coord_replace);
+	 set_predicate_control_flag_value(p, c, pc_coord_replace);
 	 /* Caculate 1.0/PointWidth */
 	 brw_math(&c->func,
 		  c->tmp,
@@ -638,14 +645,14 @@ void brw_emit_point_sprite_setup(struct brw_sf_compile *c, bool allocate)
       }
 
       if (pc & ~pc_coord_replace) {
-	 brw_set_predicate_control_flag_value(p, pc & ~pc_coord_replace);
+	 set_predicate_control_flag_value(p, c, pc & ~pc_coord_replace);
 	 brw_MOV(p, c->m1Cx, brw_imm_ud(0));
 	 brw_MOV(p, c->m2Cy, brw_imm_ud(0));
 	 brw_MOV(p, c->m3C0, a0); /* constant value */
       }
 
 
-      brw_set_predicate_control_flag_value(p, pc);
+      set_predicate_control_flag_value(p, c, pc);
       /* Copy m0..m3 to URB. */
       brw_urb_WRITE(p,
 		    brw_null_reg(),
@@ -658,6 +665,8 @@ void brw_emit_point_sprite_setup(struct brw_sf_compile *c, bool allocate)
 		    i*4,	/* urb destination offset */
 		    BRW_URB_SWIZZLE_TRANSPOSE);
    }
+
+   brw_set_predicate_control(p, BRW_PREDICATE_NONE);
 }
 
 /* Points setup - several simplifications as all attributes are
@@ -668,6 +677,7 @@ void brw_emit_point_setup(struct brw_sf_compile *c, bool allocate)
    struct brw_compile *p = &c->func;
    GLuint i;
 
+   c->flag_value = 0xff;
    c->nr_verts = 1;
 
    if (allocate)
@@ -689,7 +699,7 @@ void brw_emit_point_setup(struct brw_sf_compile *c, bool allocate)
 	 /* This seems odd as the values are all constant, but the
 	  * fragment shader will be expecting it:
 	  */
-	 brw_set_predicate_control_flag_value(p, pc_persp);
+	 set_predicate_control_flag_value(p, c, pc_persp);
 	 brw_MUL(p, a0, a0, c->inv_w[0]);
       }
 
@@ -699,7 +709,7 @@ void brw_emit_point_setup(struct brw_sf_compile *c, bool allocate)
        * code in the fragment shader.
        */
       {
-	 brw_set_predicate_control_flag_value(p, pc);
+	 set_predicate_control_flag_value(p, c, pc);
 
 	 brw_MOV(p, c->m3C0, a0); /* constant value */
 
@@ -717,6 +727,24 @@ void brw_emit_point_setup(struct brw_sf_compile *c, bool allocate)
 		       BRW_URB_SWIZZLE_TRANSPOSE);
       }
    }
+
+   brw_set_predicate_control(p, BRW_PREDICATE_NONE);
+}
+
+static void
+brw_land_fwd_jump(struct brw_compile *p, int jmp_insn_idx)
+{
+   struct brw_context *brw = p->brw;
+   struct brw_instruction *jmp_insn = &p->store[jmp_insn_idx];
+   unsigned jmpi = 1;
+
+   if (brw->gen >= 5)
+      jmpi = 2;
+
+   assert(jmp_insn->header.opcode == BRW_OPCODE_JMPI);
+   assert(jmp_insn->bits1.da1.src1_reg_file == BRW_IMMEDIATE_VALUE);
+
+   jmp_insn->bits3.ud = jmpi * (p->nr_insn - jmp_insn_idx - 1);
 }
 
 void brw_emit_anyprim_setup( struct brw_sf_compile *c )
@@ -728,8 +756,6 @@ void brw_emit_anyprim_setup( struct brw_sf_compile *c )
    struct brw_reg primmask;
    int jmp;
    struct brw_reg v1_null_ud = vec1(retype(brw_null_reg(), BRW_REGISTER_TYPE_UD));
-
-   GLuint saveflag;
 
    c->nr_verts = 3;
    alloc_regs(c);
@@ -748,17 +774,7 @@ void brw_emit_anyprim_setup( struct brw_sf_compile *c )
 					       (1<<_3DPRIM_RECTLIST) |
 					       (1<<_3DPRIM_TRIFAN_NOSTIPPLE)));
    jmp = brw_JMPI(p, ip, ip, brw_imm_d(0)) - p->store;
-   {
-      saveflag = p->flag_value;
-      brw_push_insn_state(p);
-      brw_emit_tri_setup( c, false );
-      brw_pop_insn_state(p);
-      p->flag_value = saveflag;
-      /* note - thread killed in subroutine, so must
-       * restore the flag which is changed when building
-       * the subroutine. fix #13240
-       */
-   }
+   brw_emit_tri_setup(c, false);
    brw_land_fwd_jump(p, jmp);
 
    brw_set_conditionalmod(p, BRW_CONDITIONAL_Z);
@@ -769,26 +785,13 @@ void brw_emit_anyprim_setup( struct brw_sf_compile *c )
 					       (1<<_3DPRIM_LINESTRIP_BF) |
 					       (1<<_3DPRIM_LINESTRIP_CONT_BF)));
    jmp = brw_JMPI(p, ip, ip, brw_imm_d(0)) - p->store;
-   {
-      saveflag = p->flag_value;
-      brw_push_insn_state(p);
-      brw_emit_line_setup( c, false );
-      brw_pop_insn_state(p);
-      p->flag_value = saveflag;
-      /* note - thread killed in subroutine */
-   }
+   brw_emit_line_setup(c, false);
    brw_land_fwd_jump(p, jmp);
 
    brw_set_conditionalmod(p, BRW_CONDITIONAL_Z);
    brw_AND(p, v1_null_ud, payload_attr, brw_imm_ud(1<<BRW_SPRITE_POINT_ENABLE));
    jmp = brw_JMPI(p, ip, ip, brw_imm_d(0)) - p->store;
-   {
-      saveflag = p->flag_value;
-      brw_push_insn_state(p);
-      brw_emit_point_sprite_setup( c, false );
-      brw_pop_insn_state(p);
-      p->flag_value = saveflag;
-   }
+   brw_emit_point_sprite_setup(c, false);
    brw_land_fwd_jump(p, jmp);
 
    brw_emit_point_setup( c, false );

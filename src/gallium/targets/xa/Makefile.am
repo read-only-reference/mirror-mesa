@@ -48,7 +48,7 @@ libxatracker_la_LIBADD = \
 	$(LIBDRM_LIBS) \
 	$(GALLIUM_COMMON_LIB_DEPS)
 
-if HAVE_DRI
+if HAVE_DRISW
 libxatracker_la_LIBADD += \
 	$(top_builddir)/src/gallium/winsys/sw/dri/libswdri.la
 endif
@@ -65,6 +65,11 @@ libxatracker_la_LDFLAGS = \
 	-version-number $(XA_MAJOR):$(XA_MINOR):$(XA_TINY) \
 	$(GC_SECTIONS) \
 	$(LD_NO_UNDEFINED)
+
+if HAVE_LD_VERSION_SCRIPT
+libxatracker_la_LDFLAGS += \
+	-Wl,--version-script=$(top_srcdir)/src/gallium/targets/xa/xa.sym
+endif
 
 if HAVE_MESA_LLVM
 libxatracker_la_LIBADD += $(LLVM_LIBS)

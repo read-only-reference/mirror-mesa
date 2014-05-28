@@ -113,6 +113,7 @@ _mesa_copy_texture_state( const struct gl_context *src, struct gl_context *dst )
                   MAX2(dst->Texture.NumCurrentTexUsed, u + 1);
             }
          }
+         dst->Texture.Unit[u]._BoundTextures = src->Texture.Unit[u]._BoundTextures;
          _mesa_unlock_context_textures(dst);
       }
    }
@@ -526,6 +527,7 @@ update_single_program_texture(struct gl_context *ctx, struct gl_program *prog,
    gl_texture_index target_index;
    struct gl_texture_unit *texUnit;
    struct gl_texture_object *texObj;
+   struct gl_sampler_object *sampler;
    int unit;
 
    if (!(prog->SamplersUsed & (1 << s)))
@@ -547,7 +549,7 @@ update_single_program_texture(struct gl_context *ctx, struct gl_program *prog,
    target_index = ffs(prog->TexturesUsed[unit]) - 1;
    texObj = texUnit->CurrentTex[target_index];
 
-   struct gl_sampler_object *sampler = texUnit->Sampler ?
+   sampler = texUnit->Sampler ?
       texUnit->Sampler : &texObj->Sampler;
 
    if (likely(texObj)) {
@@ -876,6 +878,8 @@ init_texture_unit( struct gl_context *ctx, GLuint unit )
       _mesa_reference_texobj(&texUnit->CurrentTex[tex],
                              ctx->Shared->DefaultTex[tex]);
    }
+
+   texUnit->_BoundTextures = 0;
 }
 
 

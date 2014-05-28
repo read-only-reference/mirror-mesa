@@ -206,6 +206,12 @@ void gen4_init_vtable_surface_functions(struct brw_context *brw);
 uint32_t brw_get_surface_tiling_bits(uint32_t tiling);
 uint32_t brw_get_surface_num_multisamples(unsigned num_samples);
 
+void brw_configure_w_tiled(const struct intel_mipmap_tree *mt,
+                           bool is_render_target,
+                           unsigned *width, unsigned *height,
+                           unsigned *pitch, uint32_t *tiling,
+                           unsigned *format);
+
 uint32_t brw_format_for_mesa_format(mesa_format mesa_format);
 
 GLuint translate_tex_target(GLenum target);
@@ -269,11 +275,6 @@ gen7_upload_constant_state(struct brw_context *brw,
                            const struct brw_stage_state *stage_state,
                            bool active, unsigned opcode);
 
-/* gen8_vs_state.c */
-void
-gen8_upload_constant_state(struct brw_context *brw,
-                           const struct brw_stage_state *stage_state,
-                           bool active, unsigned opcode);
 #ifdef __cplusplus
 }
 #endif

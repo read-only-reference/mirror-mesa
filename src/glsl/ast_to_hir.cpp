@@ -123,6 +123,11 @@ _mesa_ast_to_hir(exec_list *instructions, struct _mesa_glsl_parse_state *state)
       instructions->push_head(var);
    }
 
+   /* Figure out if gl_FragCoord is actually used in fragment shader */
+   ir_variable *const var = state->symbols->get_variable("gl_FragCoord");
+   if (var != NULL)
+      state->fs_uses_gl_fragcoord = var->data.used;
+
    /* From section 7.1 (Built-In Language Variables) of the GLSL 4.10 spec:
     *
     *     If multiple shaders using members of a built-in block belonging to
@@ -794,11 +799,10 @@ do_assignment(exec_list *instructions, struct _mesa_glsl_parse_state *state,
                           "assignment to %s",
                           non_lvalue_description);
          error_emitted = true;
-      } else if (lhs->variable_referenced() != NULL
-                 && lhs->variable_referenced()->data.read_only) {
+      } else if (lhs_var != NULL && lhs_var->data.read_only) {
          _mesa_glsl_error(&lhs_loc, state,
                           "assignment to read-only variable '%s'",
-                          lhs->variable_referenced()->name);
+                          lhs_var->name);
          error_emitted = true;
       } else if (lhs->type->is_array() &&
                  !state->check_version(120, 300, &lhs_loc,
@@ -2341,6 +2345,34 @@ apply_image_qualifier_to_variable(const struct ast_type_qualifier *qual,
    }
 }
 
+static inline const char*
+get_layout_qualifier_string(bool origin_upper_left, bool pixel_center_integer)
+{
+   if (origin_upper_left && pixel_center_integer)
+      return "origin_upper_left, pixel_center_integer";
+   else if (origin_upper_left)
+      return "origin_upper_left";
+   else if (pixel_center_integer)
+      return "pixel_center_integer";
+   else
+      return " ";
+}
+
+static inline bool
+is_conflicting_fragcoord_redeclaration(struct _mesa_glsl_parse_state *state,
+                                       const struct ast_type_qualifier *qual)
+{
+   /* If gl_FragCoord was previously declared, and the qualifiers were
+    * different in any way, return true.
+    */
+   if (state->fs_redeclares_gl_fragcoord) {
+      return (state->fs_pixel_center_integer != qual->flags.q.pixel_center_integer
+         || state->fs_origin_upper_left != qual->flags.q.origin_upper_left);
+   }
+
+   return false;
+}
+
 static void
 apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
                                  ir_variable *var,
@@ -2503,6 +2535,53 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
 		       "layout qualifier `%s' can only be applied to "
 		       "fragment shader input `gl_FragCoord'",
 		       qual_string);
+   }
+
+   if (var->name != NULL && strcmp(var->name, "gl_FragCoord") == 0) {
+
+      /* Section 4.3.8.1, page 39 of GLSL 1.50 spec says:
+       *
+       *    "Within any shader, the first redeclarations of gl_FragCoord
+       *     must appear before any use of gl_FragCoord."
+       *
+       * Generate a compiler error if above condition is not met by the
+       * fragment shader.
+       */
+      ir_variable *earlier = state->symbols->get_variable("gl_FragCoord");
+      if (earlier != NULL &&
+          earlier->data.used &&
+          !state->fs_redeclares_gl_fragcoord) {
+         _mesa_glsl_error(loc, state,
+                          "gl_FragCoord used before its first redeclaration "
+                          "in fragment shader");
+      }
+
+      /* Make sure all gl_FragCoord redeclarations specify the same layout
+       * qualifiers.
+       */
+      if (is_conflicting_fragcoord_redeclaration(state, qual)) {
+         const char *const qual_string =
+            get_layout_qualifier_string(qual->flags.q.origin_upper_left,
+                                        qual->flags.q.pixel_center_integer);
+
+         const char *const state_string =
+            get_layout_qualifier_string(state->fs_origin_upper_left,
+                                        state->fs_pixel_center_integer);
+
+         _mesa_glsl_error(loc, state,
+                          "gl_FragCoord redeclared with different layout "
+                          "qualifiers (%s) and (%s) ",
+                          state_string,
+                          qual_string);
+      }
+      state->fs_origin_upper_left = qual->flags.q.origin_upper_left;
+      state->fs_pixel_center_integer = qual->flags.q.pixel_center_integer;
+      state->fs_redeclares_gl_fragcoord_with_no_layout_qualifiers =
+         !qual->flags.q.origin_upper_left && !qual->flags.q.pixel_center_integer;
+      state->fs_redeclares_gl_fragcoord =
+         state->fs_origin_upper_left ||
+         state->fs_pixel_center_integer ||
+         state->fs_redeclares_gl_fragcoord_with_no_layout_qualifiers;
    }
 
    if (qual->flags.q.explicit_location) {
@@ -2999,7 +3078,7 @@ validate_identifier(const char *identifier, YYLTYPE loc,
     *   OpenGL, and may not be declared in a shader as either a
     *   variable or a function."
     */
-   if (strncmp(identifier, "gl_", 3) == 0) {
+   if (is_gl_identifier(identifier)) {
       _mesa_glsl_error(&loc, state,
                        "identifier `%s' uses reserved `gl_' prefix",
                        identifier);
@@ -3572,11 +3651,15 @@ ast_declarator_list::hir(exec_list *instructions,
        * instruction stream.
        */
       exec_list initializer_instructions;
+
+      /* Examine var name here since var may get deleted in the next call */
+      bool var_is_gl_id = is_gl_identifier(var->name);
+
       ir_variable *earlier =
          get_variable_being_redeclared(var, decl->get_location(), state,
                                        false /* allow_all_redeclarations */);
       if (earlier != NULL) {
-         if (strncmp(var->name, "gl_", 3) == 0 &&
+         if (var_is_gl_id &&
              earlier->data.how_declared == ir_var_declared_in_block) {
             _mesa_glsl_error(&loc, state,
                              "`%s' has already been redeclared using "
@@ -5320,7 +5403,7 @@ ast_interface_block::hir(exec_list *instructions,
             ir_variable *earlier =
                get_variable_being_redeclared(var, loc, state,
                                              true /* allow_all_redeclarations */);
-            if (strncmp(var->name, "gl_", 3) != 0 || earlier == NULL) {
+            if (!is_gl_identifier(var->name) || earlier == NULL) {
                _mesa_glsl_error(&loc, state,
                                 "redeclaration of gl_PerVertex can only "
                                 "include built-in variables");
@@ -5555,7 +5638,7 @@ detect_conflicting_assignments(struct _mesa_glsl_parse_state *state,
          gl_FragColor_assigned = true;
       else if (strcmp(var->name, "gl_FragData") == 0)
          gl_FragData_assigned = true;
-      else if (strncmp(var->name, "gl_", 3) != 0) {
+      else if (!is_gl_identifier(var->name)) {
          if (state->stage == MESA_SHADER_FRAGMENT &&
              var->data.mode == ir_var_shader_out) {
             user_defined_fs_output_assigned = true;

@@ -46,6 +46,7 @@ extern "C" {
 #include "brw_eu.h"
 #include "brw_wm.h"
 #include "brw_shader.h"
+#include "intel_asm_printer.h"
 }
 #include "gen8_generator.h"
 #include "glsl/glsl_types.h"
@@ -209,13 +210,6 @@ public:
    fs_reg dst;
    fs_reg src[3];
 
-   /** @{
-    * Annotation for the generated IR.  One of the two can be set.
-    */
-   const void *ir;
-   const char *annotation;
-   /** @} */
-
    uint32_t texture_offset; /**< Texture offset bitfield */
    uint32_t offset; /* spill/unspill offset */
 
@@ -250,7 +244,9 @@ class fs_visitor : public backend_visitor
 public:
 
    fs_visitor(struct brw_context *brw,
-              struct brw_wm_compile *c,
+              void *mem_ctx,
+              const struct brw_wm_prog_key *key,
+              struct brw_wm_prog_data *prog_data,
               struct gl_shader_program *shader_prog,
               struct gl_fragment_program *fp,
               unsigned dispatch_width);
@@ -397,7 +393,6 @@ public:
    fs_reg *emit_frontfacing_interpolation(ir_variable *ir);
    fs_reg *emit_samplepos_setup(ir_variable *ir);
    fs_reg *emit_sampleid_setup(ir_variable *ir);
-   fs_reg *emit_samplemaskin_setup(ir_variable *ir);
    fs_reg *emit_general_interpolation(ir_variable *ir);
    void emit_interpolation_setup_gen4();
    void emit_interpolation_setup_gen6();
@@ -494,7 +489,8 @@ public:
    void visit_atomic_counter_intrinsic(ir_call *ir);
 
    struct gl_fragment_program *fp;
-   struct brw_wm_compile *c;
+   const struct brw_wm_prog_key *const key;
+   struct brw_wm_prog_data *prog_data;
    unsigned int sanity_param_count;
 
    int *param_size;
@@ -510,6 +506,9 @@ public:
 
    /** Number of uniform variable components visited. */
    unsigned uniforms;
+
+   /** Byte-offset for the next available spot in the scratch space buffer. */
+   unsigned last_scratch;
 
    /**
     * Array mapping UNIFORM register numbers to the pull parameter index,
@@ -550,6 +549,23 @@ public:
    /* Result of last visit() method. */
    fs_reg result;
 
+   /** Register numbers for thread payload fields. */
+   struct {
+      uint8_t source_depth_reg;
+      uint8_t source_w_reg;
+      uint8_t aa_dest_stencil_reg;
+      uint8_t dest_depth_reg;
+      uint8_t sample_pos_reg;
+      uint8_t sample_mask_in_reg;
+      uint8_t barycentric_coord_reg[BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT];
+
+      /** The number of thread payload registers the hardware will supply. */
+      uint8_t num_regs;
+   } payload;
+
+   bool source_depth_to_render_target;
+   bool runtime_check_aads_emit;
+
    fs_reg pixel_x;
    fs_reg pixel_y;
    fs_reg wpos_w;
@@ -575,19 +591,22 @@ class fs_generator
 {
 public:
    fs_generator(struct brw_context *brw,
-                struct brw_wm_compile *c,
+                void *mem_ctx,
+                const struct brw_wm_prog_key *key,
+                struct brw_wm_prog_data *prog_data,
                 struct gl_shader_program *prog,
                 struct gl_fragment_program *fp,
-                bool dual_source_output);
+                bool dual_source_output,
+                bool debug_flag);
    ~fs_generator();
 
    const unsigned *generate_assembly(exec_list *simd8_instructions,
                                      exec_list *simd16_instructions,
-                                     unsigned *assembly_size,
-                                     FILE *dump_file = NULL);
+                                     unsigned *assembly_size);
 
 private:
-   void generate_code(exec_list *instructions, FILE *dump_file);
+   void generate_code(exec_list *instructions,
+                      struct annotation_info *annotation);
    void generate_fb_write(fs_inst *inst);
    void generate_blorp_fb_write(fs_inst *inst);
    void generate_pixel_xy(struct brw_reg dst, bool is_x);
@@ -672,13 +691,14 @@ private:
                                       struct brw_reg dst,
                                       struct brw_reg surf_index);
 
-   void patch_discard_jumps_to_fb_writes();
+   bool patch_discard_jumps_to_fb_writes();
 
    struct brw_context *brw;
    struct gl_context *ctx;
 
    struct brw_compile *p;
-   struct brw_wm_compile *c;
+   const struct brw_wm_prog_key *const key;
+   struct brw_wm_prog_data *prog_data;
 
    struct gl_shader_program *prog;
    const struct gl_fragment_program *fp;
@@ -687,6 +707,7 @@ private:
 
    exec_list discard_halt_patches;
    bool dual_source_output;
+   const bool debug_flag;
    void *mem_ctx;
 };
 
@@ -699,7 +720,9 @@ class gen8_fs_generator : public gen8_generator
 {
 public:
    gen8_fs_generator(struct brw_context *brw,
-                     struct brw_wm_compile *c,
+                     void *mem_ctx,
+                     const struct brw_wm_prog_key *key,
+                     struct brw_wm_prog_data *prog_data,
                      struct gl_shader_program *prog,
                      struct gl_fragment_program *fp,
                      bool dual_source_output);
@@ -710,7 +733,8 @@ public:
                                      unsigned *assembly_size);
 
 private:
-   void generate_code(exec_list *instructions);
+   void generate_code(exec_list *instructions,
+                      struct annotation_info *annotation);
    void generate_fb_write(fs_inst *inst);
    void generate_linterp(fs_inst *inst, struct brw_reg dst,
                          struct brw_reg *src);
@@ -750,13 +774,20 @@ private:
    void generate_unpack_half_2x16_split(fs_inst *inst,
                                         struct brw_reg dst,
                                         struct brw_reg src);
+   void generate_untyped_atomic(fs_inst *inst,
+                                struct brw_reg dst,
+                                struct brw_reg atomic_op,
+                                struct brw_reg surf_index);
+
+   void generate_untyped_surface_read(fs_inst *inst,
+                                      struct brw_reg dst,
+                                      struct brw_reg surf_index);
    void generate_discard_jump(fs_inst *ir);
 
-   void patch_discard_jumps_to_fb_writes();
+   bool patch_discard_jumps_to_fb_writes();
 
-   void mark_surface_used(unsigned surf_index);
-
-   struct brw_wm_compile *c;
+   const struct brw_wm_prog_key *const key;
+   struct brw_wm_prog_data *prog_data;
    const struct gl_fragment_program *fp;
 
    unsigned dispatch_width; /** 8 or 16 */

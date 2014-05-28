@@ -29,7 +29,7 @@ Target *getTargetNV50(unsigned int chipset)
    return new TargetNV50(chipset);
 }
 
-TargetNV50::TargetNV50(unsigned int card) : Target(true, false)
+TargetNV50::TargetNV50(unsigned int card) : Target(true, true, false)
 {
    chipset = card;
 
@@ -275,9 +275,10 @@ TargetNV50::insnCanLoad(const Instruction *i, int s,
       return false;
 
    // NOTE: don't rely on flagsDef
-   for (int d = 0; i->defExists(d); ++d)
-      if (i->def(d).getFile() == FILE_FLAGS)
-         return false;
+   if (sf == FILE_IMMEDIATE)
+      for (int d = 0; i->defExists(d); ++d)
+         if (i->def(d).getFile() == FILE_FLAGS)
+            return false;
 
    unsigned mode = 0;
 
@@ -330,6 +331,8 @@ TargetNV50::insnCanLoad(const Instruction *i, int s,
       if (ld->src(0).isIndirect(0))
          return false;
       if (sf == FILE_IMMEDIATE)
+         return false;
+      if (i->subOp == NV50_IR_SUBOP_MUL_HIGH && sf == FILE_MEMORY_CONST)
          return false;
       ldSize = 2;
    } else {

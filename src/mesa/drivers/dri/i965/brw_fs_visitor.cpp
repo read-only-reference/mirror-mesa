@@ -77,7 +77,7 @@ fs_visitor::visit(ir_variable *ir)
          this->do_dual_src = true;
       } else if (ir->data.location == FRAG_RESULT_COLOR) {
 	 /* Writing gl_FragColor outputs to all color regions. */
-	 for (unsigned int i = 0; i < MAX2(c->key.nr_color_regions, 1); i++) {
+	 for (unsigned int i = 0; i < MAX2(key->nr_color_regions, 1); i++) {
 	    this->outputs[i] = *reg;
 	    this->output_components[i] = 4;
 	 }
@@ -138,7 +138,10 @@ fs_visitor::visit(ir_variable *ir)
       } else if (ir->data.location == SYSTEM_VALUE_SAMPLE_ID) {
 	 reg = emit_sampleid_setup(ir);
       } else if (ir->data.location == SYSTEM_VALUE_SAMPLE_MASK_IN) {
-         reg = emit_samplemaskin_setup(ir);
+         assert(brw->gen >= 7);
+         reg = new(mem_ctx)
+            fs_reg(retype(brw_vec8_grf(payload.sample_mask_in_reg, 0),
+                          BRW_REGISTER_TYPE_D));
       }
    }
 
@@ -221,15 +224,18 @@ fs_visitor::emit_lrp(const fs_reg &dst, const fs_reg &x, const fs_reg &y,
        !y.is_valid_3src() ||
        !a.is_valid_3src()) {
       /* We can't use the LRP instruction.  Emit x*(1-a) + y*a. */
+      fs_reg y_times_a           = fs_reg(this, glsl_type::float_type);
       fs_reg one_minus_a         = fs_reg(this, glsl_type::float_type);
+      fs_reg x_times_one_minus_a = fs_reg(this, glsl_type::float_type);
+
+      emit(MUL(y_times_a, y, a));
 
       fs_reg negative_a = a;
       negative_a.negate = !a.negate;
-
       emit(ADD(one_minus_a, negative_a, fs_reg(1.0f)));
-      fs_inst *mul = emit(MUL(reg_null_f, y, a));
-      mul->writes_accumulator = true;
-      emit(MAC(dst, x, one_minus_a));
+      emit(MUL(x_times_one_minus_a, x, one_minus_a));
+
+      emit(ADD(dst, x_times_one_minus_a, y_times_a));
    } else {
       /* The LRP instruction actually does op1 * op0 + op2 * (1 - op0), so
        * we need to reorder the operands.
@@ -748,7 +754,7 @@ fs_visitor::visit(ir_expression *ir)
        */
       ir_constant *uniform_block = ir->operands[0]->as_constant();
       ir_constant *const_offset = ir->operands[1]->as_constant();
-      fs_reg surf_index = fs_reg(c->prog_data.base.binding_table.ubo_start +
+      fs_reg surf_index = fs_reg(prog_data->base.binding_table.ubo_start +
                                  uniform_block->value.u[0]);
       if (const_offset) {
          fs_reg packed_consts = fs_reg(this, glsl_type::float_type);
@@ -1464,8 +1470,8 @@ fs_visitor::rescale_texcoord(ir_texture *ir, fs_reg coordinate,
     */
    if (is_rect &&
        (brw->gen < 6 ||
-	(brw->gen >= 6 && (c->key.tex.gl_clamp_mask[0] & (1 << sampler) ||
-			     c->key.tex.gl_clamp_mask[1] & (1 << sampler))))) {
+	(brw->gen >= 6 && (key->tex.gl_clamp_mask[0] & (1 << sampler) ||
+			     key->tex.gl_clamp_mask[1] & (1 << sampler))))) {
       struct gl_program_parameter_list *params = prog->Parameters;
       int tokens[STATE_LENGTH] = {
 	 STATE_INTERNAL,
@@ -1480,15 +1486,28 @@ fs_visitor::rescale_texcoord(ir_texture *ir, fs_reg coordinate,
 	 return coordinate;
       }
 
-      scale_x = fs_reg(UNIFORM, uniforms);
-      scale_y = fs_reg(UNIFORM, uniforms + 1);
-
       GLuint index = _mesa_add_state_reference(params,
 					       (gl_state_index *)tokens);
-      stage_prog_data->param[uniforms++] =
-         &prog->Parameters->ParameterValues[index][0].f;
-      stage_prog_data->param[uniforms++] =
-         &prog->Parameters->ParameterValues[index][1].f;
+      /* Try to find existing copies of the texrect scale uniforms. */
+      for (unsigned i = 0; i < uniforms; i++) {
+         if (stage_prog_data->param[i] ==
+             &prog->Parameters->ParameterValues[index][0].f) {
+            scale_x = fs_reg(UNIFORM, i);
+            scale_y = fs_reg(UNIFORM, i + 1);
+            break;
+         }
+      }
+
+      /* If we didn't already set them up, do so now. */
+      if (scale_x.file == BAD_FILE) {
+         scale_x = fs_reg(UNIFORM, uniforms);
+         scale_y = fs_reg(UNIFORM, uniforms + 1);
+
+         stage_prog_data->param[uniforms++] =
+            &prog->Parameters->ParameterValues[index][0].f;
+         stage_prog_data->param[uniforms++] =
+            &prog->Parameters->ParameterValues[index][1].f;
+      }
    }
 
    /* The 965 requires the EU to do the normalization of GL rectangle
@@ -1513,11 +1532,11 @@ fs_visitor::rescale_texcoord(ir_texture *ir, fs_reg coordinate,
       needs_gl_clamp = false;
 
       for (int i = 0; i < 2; i++) {
-	 if (c->key.tex.gl_clamp_mask[i] & (1 << sampler)) {
+	 if (key->tex.gl_clamp_mask[i] & (1 << sampler)) {
 	    fs_reg chan = coordinate;
 	    chan.reg_offset += i;
 
-	    inst = emit(BRW_OPCODE_SEL, chan, chan, brw_imm_f(0.0));
+	    inst = emit(BRW_OPCODE_SEL, chan, chan, fs_reg(0.0f));
 	    inst->conditional_mod = BRW_CONDITIONAL_G;
 
 	    /* Our parameter comes in as 1.0/width or 1.0/height,
@@ -1539,7 +1558,7 @@ fs_visitor::rescale_texcoord(ir_texture *ir, fs_reg coordinate,
    if (ir->coordinate && needs_gl_clamp) {
       for (unsigned int i = 0;
 	   i < MIN2(ir->coordinate->type->vector_elements, 3); i++) {
-	 if (c->key.tex.gl_clamp_mask[i] & (1 << sampler)) {
+	 if (key->tex.gl_clamp_mask[i] & (1 << sampler)) {
 	    fs_reg chan = coordinate;
 	    chan.reg_offset += i;
 
@@ -1572,9 +1591,9 @@ fs_visitor::emit_mcs_fetch(ir_texture *ir, fs_reg coordinate, int sampler)
    inst->base_mrf = -1;
    inst->mlen = next.reg_offset * reg_width;
    inst->header_present = false;
-   inst->regs_written = 4 * reg_width; /* we only care about one reg of response,
-                                        * but the sampler always writes 4/8
-                                        */
+   inst->regs_written = 4; /* we only care about one reg of response,
+                            * but the sampler always writes 4/8
+                            */
    inst->sampler = sampler;
 
    return dest;
@@ -1598,7 +1617,7 @@ fs_visitor::visit(ir_texture *ir)
        * emitting anything other than setting up the constant result.
        */
       ir_constant *chan = ir->lod_info.component->as_constant();
-      int swiz = GET_SWZ(c->key.tex.swizzles[sampler], chan->value.i[0]);
+      int swiz = GET_SWZ(key->tex.swizzles[sampler], chan->value.i[0]);
       if (swiz == SWIZZLE_ZERO || swiz == SWIZZLE_ONE) {
 
          fs_reg res = fs_reg(this, glsl_type::vec4_type);
@@ -1666,7 +1685,7 @@ fs_visitor::visit(ir_texture *ir)
       ir->lod_info.sample_index->accept(this);
       sample_index = this->result;
 
-      if (brw->gen >= 7 && c->key.tex.compressed_multisample_layout_mask & (1<<sampler))
+      if (brw->gen >= 7 && key->tex.compressed_multisample_layout_mask & (1<<sampler))
          mcs = emit_mcs_fetch(ir, coordinate, sampler);
       else
          mcs = fs_reg(0u);
@@ -1714,7 +1733,7 @@ fs_visitor::visit(ir_texture *ir)
    }
 
    if (brw->gen == 6 && ir->op == ir_tg4) {
-      emit_gen6_gather_wa(c->key.tex.gen6_gather_wa[sampler], dst);
+      emit_gen6_gather_wa(key->tex.gen6_gather_wa[sampler], dst);
    }
 
    swizzle_result(ir, dst, sampler);
@@ -1757,14 +1776,14 @@ uint32_t
 fs_visitor::gather_channel(ir_texture *ir, int sampler)
 {
    ir_constant *chan = ir->lod_info.component->as_constant();
-   int swiz = GET_SWZ(c->key.tex.swizzles[sampler], chan->value.i[0]);
+   int swiz = GET_SWZ(key->tex.swizzles[sampler], chan->value.i[0]);
    switch (swiz) {
       case SWIZZLE_X: return 0;
       case SWIZZLE_Y:
          /* gather4 sampler is broken for green channel on RG32F --
           * we must ask for blue instead.
           */
-         if (c->key.tex.gather_channel_quirk_mask & (1<<sampler))
+         if (key->tex.gather_channel_quirk_mask & (1<<sampler))
             return 2;
          return 1;
       case SWIZZLE_Z: return 2;
@@ -1800,11 +1819,11 @@ fs_visitor::swizzle_result(ir_texture *ir, fs_reg orig_val, int sampler)
    if (ir->type == glsl_type::float_type) {
       /* Ignore DEPTH_TEXTURE_MODE swizzling. */
       assert(ir->sampler->type->sampler_shadow);
-   } else if (c->key.tex.swizzles[sampler] != SWIZZLE_NOOP) {
+   } else if (key->tex.swizzles[sampler] != SWIZZLE_NOOP) {
       fs_reg swizzled_result = fs_reg(this, glsl_type::vec4_type);
 
       for (int i = 0; i < 4; i++) {
-	 int swiz = GET_SWZ(c->key.tex.swizzles[sampler], i);
+	 int swiz = GET_SWZ(key->tex.swizzles[sampler], i);
 	 fs_reg l = swizzled_result;
 	 l.reg_offset += i;
 
@@ -1814,7 +1833,7 @@ fs_visitor::swizzle_result(ir_texture *ir, fs_reg orig_val, int sampler)
 	    emit(MOV(l, fs_reg(1.0f)));
 	 } else {
 	    fs_reg r = orig_val;
-	    r.reg_offset += GET_SWZ(c->key.tex.swizzles[sampler], i);
+	    r.reg_offset += GET_SWZ(key->tex.swizzles[sampler], i);
 	    emit(MOV(l, r));
 	 }
       }
@@ -2274,7 +2293,7 @@ fs_visitor::visit_atomic_counter_intrinsic(ir_call *ir)
    ir_dereference *deref = static_cast<ir_dereference *>(
       ir->actual_parameters.get_head());
    ir_variable *location = deref->variable_referenced();
-   unsigned surf_index = (c->prog_data.base.binding_table.abo_start +
+   unsigned surf_index = (prog_data->base.binding_table.abo_start +
                           location->data.atomic.buffer_index);
 
    /* Calculate the surface offset */
@@ -2380,7 +2399,7 @@ fs_visitor::emit_untyped_atomic(unsigned atomic_op, unsigned surf_index,
    unsigned mlen = 0;
 
    /* Initialize the sample mask in the message header. */
-   emit(MOV(brw_uvec_mrf(8, mlen, 0), brw_imm_ud(0)))
+   emit(MOV(brw_uvec_mrf(8, mlen, 0), fs_reg(0u)))
       ->force_writemask_all = true;
 
    if (fp->UsesKill) {
@@ -2414,6 +2433,7 @@ fs_visitor::emit_untyped_atomic(unsigned atomic_op, unsigned surf_index,
                                         atomic_op, surf_index);
    inst->base_mrf = 0;
    inst->mlen = mlen;
+   inst->header_present = true;
    emit(inst);
 }
 
@@ -2425,7 +2445,7 @@ fs_visitor::emit_untyped_surface_read(unsigned surf_index, fs_reg dst,
    unsigned mlen = 0;
 
    /* Initialize the sample mask in the message header. */
-   emit(MOV(brw_uvec_mrf(8, mlen, 0), brw_imm_ud(0)))
+   emit(MOV(brw_uvec_mrf(8, mlen, 0), fs_reg(0u)))
       ->force_writemask_all = true;
 
    if (fp->UsesKill) {
@@ -2448,6 +2468,7 @@ fs_visitor::emit_untyped_surface_read(unsigned surf_index, fs_reg dst,
       fs_inst(SHADER_OPCODE_UNTYPED_SURFACE_READ, dst, surf_index);
    inst->base_mrf = 0;
    inst->mlen = mlen;
+   inst->header_present = true;
    emit(inst);
 }
 
@@ -2501,10 +2522,10 @@ fs_visitor::emit_dummy_fs()
 struct brw_reg
 fs_visitor::interp_reg(int location, int channel)
 {
-   int regnr = c->prog_data.urb_setup[location] * 2 + channel / 2;
+   int regnr = prog_data->urb_setup[location] * 2 + channel / 2;
    int stride = (channel & 1) * 4;
 
-   assert(c->prog_data.urb_setup[location] != -1);
+   assert(prog_data->urb_setup[location] != -1);
 
    return brw_vec1_grf(regnr, stride);
 }
@@ -2584,12 +2605,12 @@ fs_visitor::emit_interpolation_setup_gen6()
    emit(MOV(this->pixel_y, int_pixel_y));
 
    this->current_annotation = "compute pos.w";
-   this->pixel_w = fs_reg(brw_vec8_grf(c->source_w_reg, 0));
+   this->pixel_w = fs_reg(brw_vec8_grf(payload.source_w_reg, 0));
    this->wpos_w = fs_reg(this, glsl_type::float_type);
    emit_math(SHADER_OPCODE_RCP, this->wpos_w, this->pixel_w);
 
    for (int i = 0; i < BRW_WM_BARYCENTRIC_INTERP_MODE_COUNT; ++i) {
-      uint8_t reg = c->barycentric_coord_reg[i];
+      uint8_t reg = payload.barycentric_coord_reg[i];
       this->delta_x[i] = fs_reg(brw_vec8_grf(reg, 0));
       this->delta_y[i] = fs_reg(brw_vec8_grf(reg + 1, 0));
    }
@@ -2631,7 +2652,7 @@ fs_visitor::emit_color_write(int target, int index, int first_color_mrf)
       inst = emit(MOV(fs_reg(MRF, first_color_mrf + index * reg_width,
                              color.type),
                       color));
-      inst->saturate = c->key.clamp_fragment_color;
+      inst->saturate = key->clamp_fragment_color;
    } else {
       /* pre-gen6 SIMD16 single source DP write looks like:
        * m + 0: r0
@@ -2652,18 +2673,18 @@ fs_visitor::emit_color_write(int target, int index, int first_color_mrf)
 	 inst = emit(MOV(fs_reg(MRF, BRW_MRF_COMPR4 + first_color_mrf + index,
                                 color.type),
                          color));
-	 inst->saturate = c->key.clamp_fragment_color;
+	 inst->saturate = key->clamp_fragment_color;
       } else {
 	 push_force_uncompressed();
 	 inst = emit(MOV(fs_reg(MRF, first_color_mrf + index, color.type),
                          color));
-	 inst->saturate = c->key.clamp_fragment_color;
+	 inst->saturate = key->clamp_fragment_color;
 	 pop_force_uncompressed();
 
 	 inst = emit(MOV(fs_reg(MRF, first_color_mrf + index + 4, color.type),
                          half(color, 1)));
 	 inst->force_sechalf = true;
-	 inst->saturate = c->key.clamp_fragment_color;
+	 inst->saturate = key->clamp_fragment_color;
       }
    }
 }
@@ -2700,10 +2721,10 @@ fs_visitor::emit_alpha_test()
    this->current_annotation = "Alpha test";
 
    fs_inst *cmp;
-   if (c->key.alpha_test_func == GL_ALWAYS)
+   if (key->alpha_test_func == GL_ALWAYS)
       return;
 
-   if (c->key.alpha_test_func == GL_NEVER) {
+   if (key->alpha_test_func == GL_NEVER) {
       /* f0.1 = 0 */
       fs_reg some_reg = fs_reg(retype(brw_vec8_grf(0, 0),
                                       BRW_REGISTER_TYPE_UW));
@@ -2715,8 +2736,8 @@ fs_visitor::emit_alpha_test()
       color.reg_offset += 3;
 
       /* f0.1 &= func(color, ref) */
-      cmp = emit(CMP(reg_null_f, color, fs_reg(c->key.alpha_test_ref),
-                     cond_for_alpha_func(c->key.alpha_test_func)));
+      cmp = emit(CMP(reg_null_f, color, fs_reg(key->alpha_test_ref),
+                     cond_for_alpha_func(key->alpha_test_func)));
    }
    cmp->predicate = BRW_PREDICATE_NORMAL;
    cmp->flag_subreg = 1;
@@ -2751,28 +2772,28 @@ fs_visitor::emit_fb_writes()
    if (brw->gen >= 6 &&
        (brw->is_haswell || brw->gen >= 8 || !this->fp->UsesKill) &&
        !do_dual_src &&
-       c->key.nr_color_regions == 1) {
+       key->nr_color_regions == 1) {
       header_present = false;
    }
 
    if (header_present) {
       src0_alpha_to_render_target = brw->gen >= 6 &&
 				    !do_dual_src &&
-                                    c->key.replicate_alpha;
+                                    key->replicate_alpha;
       /* m2, m3 header */
       nr += 2;
    }
 
-   if (c->aa_dest_stencil_reg) {
+   if (payload.aa_dest_stencil_reg) {
       push_force_uncompressed();
       emit(MOV(fs_reg(MRF, nr++),
-               fs_reg(brw_vec8_grf(c->aa_dest_stencil_reg, 0))));
+               fs_reg(brw_vec8_grf(payload.aa_dest_stencil_reg, 0))));
       pop_force_uncompressed();
    }
 
-   c->prog_data.uses_omask =
+   prog_data->uses_omask =
       fp->Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_SAMPLE_MASK);
-   if(c->prog_data.uses_omask) {
+   if (prog_data->uses_omask) {
       this->current_annotation = "FB write oMask";
       assert(this->sample_mask.file != BAD_FILE);
       /* Hand over gl_SampleMask. Only lower 16 bits are relevant. */
@@ -2788,7 +2809,7 @@ fs_visitor::emit_fb_writes()
    if (src0_alpha_to_render_target)
       nr += reg_width;
 
-   if (c->source_depth_to_render_target) {
+   if (source_depth_to_render_target) {
       if (brw->gen == 6) {
 	 /* For outputting oDepth on gen6, SIMD8 writes have to be
 	  * used.  This would require SIMD8 moves of each half to
@@ -2805,14 +2826,14 @@ fs_visitor::emit_fb_writes()
       } else {
 	 /* Pass through the payload depth. */
 	 emit(MOV(fs_reg(MRF, nr),
-                  fs_reg(brw_vec8_grf(c->source_depth_reg, 0))));
+                  fs_reg(brw_vec8_grf(payload.source_depth_reg, 0))));
       }
       nr += reg_width;
    }
 
-   if (c->dest_depth_reg) {
+   if (payload.dest_depth_reg) {
       emit(MOV(fs_reg(MRF, nr),
-               fs_reg(brw_vec8_grf(c->dest_depth_reg, 0))));
+               fs_reg(brw_vec8_grf(payload.dest_depth_reg, 0))));
       nr += reg_width;
    }
 
@@ -2825,7 +2846,7 @@ fs_visitor::emit_fb_writes()
       for (int i = 0; i < 4; i++) {
 	 fs_inst *inst = emit(MOV(fs_reg(MRF, color_mrf + i, src0.type), src0));
 	 src0.reg_offset++;
-	 inst->saturate = c->key.clamp_fragment_color;
+	 inst->saturate = key->clamp_fragment_color;
       }
 
       this->current_annotation = ralloc_asprintf(this->mem_ctx,
@@ -2834,7 +2855,7 @@ fs_visitor::emit_fb_writes()
 	 fs_inst *inst = emit(MOV(fs_reg(MRF, color_mrf + 4 + i, src1.type),
                                   src1));
 	 src1.reg_offset++;
-	 inst->saturate = c->key.clamp_fragment_color;
+	 inst->saturate = key->clamp_fragment_color;
       }
 
       if (INTEL_DEBUG & DEBUG_SHADER_TIME)
@@ -2851,12 +2872,12 @@ fs_visitor::emit_fb_writes()
          inst->flag_subreg = 1;
       }
 
-      c->prog_data.dual_src_blend = true;
+      prog_data->dual_src_blend = true;
       this->current_annotation = NULL;
       return;
    }
 
-   for (int target = 0; target < c->key.nr_color_regions; target++) {
+   for (int target = 0; target < key->nr_color_regions; target++) {
       this->current_annotation = ralloc_asprintf(this->mem_ctx,
 						 "FB write target %d",
 						 target);
@@ -2871,7 +2892,7 @@ fs_visitor::emit_fb_writes()
 
          inst = emit(MOV(fs_reg(MRF, write_color_mrf, color.type),
                          color));
-         inst->saturate = c->key.clamp_fragment_color;
+         inst->saturate = key->clamp_fragment_color;
          write_color_mrf = color_mrf + reg_width;
       }
 
@@ -2879,7 +2900,7 @@ fs_visitor::emit_fb_writes()
          emit_color_write(target, i, write_color_mrf);
 
       bool eot = false;
-      if (target == c->key.nr_color_regions - 1) {
+      if (target == key->nr_color_regions - 1) {
          eot = true;
 
          if (INTEL_DEBUG & DEBUG_SHADER_TIME)
@@ -2901,7 +2922,7 @@ fs_visitor::emit_fb_writes()
       }
    }
 
-   if (c->key.nr_color_regions == 0) {
+   if (key->nr_color_regions == 0) {
       /* Even if there's no color buffers enabled, we still need to send
        * alpha out the pipeline to our null renderbuffer to support
        * alpha-testing, alpha-to-coverage, and so on.
@@ -2949,17 +2970,19 @@ fs_visitor::resolve_bool_comparison(ir_rvalue *rvalue, fs_reg *reg)
 }
 
 fs_visitor::fs_visitor(struct brw_context *brw,
-                       struct brw_wm_compile *c,
+                       void *mem_ctx,
+                       const struct brw_wm_prog_key *key,
+                       struct brw_wm_prog_data *prog_data,
                        struct gl_shader_program *shader_prog,
                        struct gl_fragment_program *fp,
                        unsigned dispatch_width)
-   : backend_visitor(brw, shader_prog, &fp->Base, &c->prog_data.base,
+   : backend_visitor(brw, shader_prog, &fp->Base, &prog_data->base,
                      MESA_SHADER_FRAGMENT),
+     key(key), prog_data(prog_data),
      dispatch_width(dispatch_width)
 {
-   this->c = c;
    this->fp = fp;
-   this->mem_ctx = ralloc_context(NULL);
+   this->mem_ctx = mem_ctx;
    this->failed = false;
    this->simd16_unsupported = false;
    this->no16_msg = NULL;
@@ -2967,8 +2990,11 @@ fs_visitor::fs_visitor(struct brw_context *brw,
                                        hash_table_pointer_hash,
                                        hash_table_pointer_compare);
 
+   memset(&this->payload, 0, sizeof(this->payload));
    memset(this->outputs, 0, sizeof(this->outputs));
    memset(this->output_components, 0, sizeof(this->output_components));
+   this->source_depth_to_render_target = false;
+   this->runtime_check_aads_emit = false;
    this->first_non_payload_grf = 0;
    this->max_grf = brw->gen >= 7 ? GEN7_MRF_HACK_START : BRW_MAX_GRF;
 
@@ -2984,6 +3010,7 @@ fs_visitor::fs_visitor(struct brw_context *brw,
    this->regs_live_at_ip = NULL;
 
    this->uniforms = 0;
+   this->last_scratch = 0;
    this->pull_constant_loc = NULL;
    this->push_constant_loc = NULL;
 
@@ -2998,6 +3025,5 @@ fs_visitor::fs_visitor(struct brw_context *brw,
 
 fs_visitor::~fs_visitor()
 {
-   ralloc_free(this->mem_ctx);
    hash_table_dtor(this->variable_ht);
 }

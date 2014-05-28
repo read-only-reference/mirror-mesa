@@ -106,6 +106,7 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
    case PIPE_CAP_ANISOTROPIC_FILTER:
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
+   case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
       return 1;
    case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
       return 65536;
@@ -196,8 +197,8 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return PIPE_ENDIAN_LITTLE;
    case PIPE_CAP_TGSI_VS_LAYER:
    case PIPE_CAP_TEXTURE_GATHER_SM5:
-   case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
    case PIPE_CAP_FAKE_SW_MSAA:
+   case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
       return 0;
    case PIPE_CAP_MAX_VIEWPORTS:
       return NV50_MAX_VIEWPORTS;
@@ -285,10 +286,16 @@ nv50_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
       return 16.0f;
    case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
       return 4.0f;
-   default:
-      NOUVEAU_ERR("unknown PIPE_CAP %d\n", param);
+   case PIPE_CAPF_GUARD_BAND_LEFT:
+   case PIPE_CAPF_GUARD_BAND_TOP:
       return 0.0f;
+   case PIPE_CAPF_GUARD_BAND_RIGHT:
+   case PIPE_CAPF_GUARD_BAND_BOTTOM:
+      return 0.0f; /* that or infinity */
    }
+
+   NOUVEAU_ERR("unknown PIPE_CAPF %d\n", param);
+   return 0.0f;
 }
 
 static void
@@ -397,6 +404,8 @@ nv50_screen_init_hwctx(struct nv50_screen *screen)
    PUSH_DATA (push, 0);
    BEGIN_NV04(push, SUBC_2D(0x0888), 1);
    PUSH_DATA (push, 1);
+   BEGIN_NV04(push, NV50_2D(COND_MODE), 1);
+   PUSH_DATA (push, NV50_2D_COND_MODE_ALWAYS);
 
    BEGIN_NV04(push, SUBC_3D(NV01_SUBCHAN_OBJECT), 1);
    PUSH_DATA (push, screen->tesla->handle);

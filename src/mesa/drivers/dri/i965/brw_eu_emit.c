@@ -295,6 +295,16 @@ validate_reg(struct brw_instruction *insn, struct brw_reg reg)
    /* 10. Check destination issues. */
 }
 
+static bool
+is_compactable_immediate(unsigned imm)
+{
+   /* We get the low 12 bits as-is. */
+   imm &= ~0xfff;
+
+   /* We get one bit replicated through the top 20 bits. */
+   return imm == 0 || imm == 0xfffff000;
+}
+
 void
 brw_set_src0(struct brw_compile *p, struct brw_instruction *insn,
 	     struct brw_reg reg)
@@ -329,10 +339,61 @@ brw_set_src0(struct brw_compile *p, struct brw_instruction *insn,
    if (reg.file == BRW_IMMEDIATE_VALUE) {
       insn->bits3.ud = reg.dw1.ud;
 
-      /* Required to set some fields in src1 as well:
+      /* The Bspec's section titled "Non-present Operands" claims that if src0
+       * is an immediate that src1's type must be the same as that of src0.
+       *
+       * The SNB+ DataTypeIndex instruction compaction tables contain mappings
+       * that do not follow this rule. E.g., from the IVB/HSW table:
+       *
+       *  DataTypeIndex   18-Bit Mapping       Mapped Meaning
+       *        3         001000001011111101   r:f | i:vf | a:ud | <1> | dir |
+       *
+       * And from the SNB table:
+       *
+       *  DataTypeIndex   18-Bit Mapping       Mapped Meaning
+       *        8         001000000111101100   a:w | i:w | a:ud | <1> | dir |
+       *
+       * Neither of these cause warnings from the simulator when used,
+       * compacted or otherwise. In fact, all compaction mappings that have an
+       * immediate in src0 use a:ud for src1.
+       *
+       * The GM45 instruction compaction tables do not contain mapped meanings
+       * so it's not clear whether it has the restriction. We'll assume it was
+       * lifted on SNB. (FINISHME: decode the GM45 tables and check.)
        */
       insn->bits1.da1.src1_reg_file = 0; /* arf */
-      insn->bits1.da1.src1_reg_type = insn->bits1.da1.src0_reg_type;
+      if (brw->gen < 6) {
+         insn->bits1.da1.src1_reg_type = insn->bits1.da1.src0_reg_type;
+      } else {
+         insn->bits1.da1.src1_reg_type = BRW_HW_REG_TYPE_UD;
+      }
+
+      /* Compacted instructions only have 12-bits (plus 1 for the other 20)
+       * for immediate values. Presumably the hardware engineers realized
+       * that the only useful floating-point value that could be represented
+       * in this format is 0.0, which can also be represented as a VF-typed
+       * immediate, so they gave us the previously mentioned mapping on IVB+.
+       *
+       * Strangely, we do have a mapping for imm:f in src1, so we don't need
+       * to do this there.
+       *
+       * If we see a 0.0:F, change the type to VF so that it can be compacted.
+       */
+      if (insn->bits3.ud == 0x0 &&
+          insn->bits1.da1.src0_reg_type == BRW_HW_REG_TYPE_F) {
+         insn->bits1.da1.src0_reg_type = BRW_HW_REG_IMM_TYPE_VF;
+      }
+
+      /* There are no mappings for dst:d | i:d, so if the immediate is suitable
+       * set the types to :UD so the instruction can be compacted.
+       */
+      if (is_compactable_immediate(insn->bits3.ud) &&
+          insn->header.destreg__conditionalmod == BRW_CONDITIONAL_NONE &&
+          insn->bits1.da1.src0_reg_type == BRW_HW_REG_TYPE_D &&
+          insn->bits1.da1.dest_reg_type == BRW_HW_REG_TYPE_D) {
+         insn->bits1.da1.src0_reg_type = BRW_HW_REG_TYPE_UD;
+         insn->bits1.da1.dest_reg_type = BRW_HW_REG_TYPE_UD;
+      }
    }
    else
    {
@@ -388,9 +449,10 @@ brw_set_src0(struct brw_compile *p, struct brw_instruction *insn,
 }
 
 
-void brw_set_src1(struct brw_compile *p,
-		  struct brw_instruction *insn,
-		  struct brw_reg reg)
+void
+brw_set_src1(struct brw_compile *p,
+             struct brw_instruction *insn,
+             struct brw_reg reg)
 {
    assert(reg.file != BRW_MESSAGE_REGISTER_FILE);
 
@@ -780,15 +842,9 @@ brw_next_insn(struct brw_compile *p, unsigned opcode)
    struct brw_instruction *insn;
 
    if (p->nr_insn + 1 > p->store_size) {
-      if (0) {
-         fprintf(stderr, "incresing the store size to %d\n",
-                 p->store_size << 1);
-      }
       p->store_size <<= 1;
       p->store = reralloc(p->mem_ctx, p->store,
                           struct brw_instruction, p->store_size);
-      if (!p->store)
-         assert(!"realloc eu store memeory failed");
    }
 
    p->next_insn_offset += 16;
@@ -1728,26 +1784,6 @@ struct brw_instruction *brw_WHILE(struct brw_compile *p)
    return insn;
 }
 
-
-/* FORWARD JUMPS:
- */
-void brw_land_fwd_jump(struct brw_compile *p, int jmp_insn_idx)
-{
-   struct brw_context *brw = p->brw;
-   struct brw_instruction *jmp_insn = &p->store[jmp_insn_idx];
-   unsigned jmpi = 1;
-
-   if (brw->gen >= 5)
-      jmpi = 2;
-
-   assert(jmp_insn->header.opcode == BRW_OPCODE_JMPI);
-   assert(jmp_insn->bits1.da1.src1_reg_file == BRW_IMMEDIATE_VALUE);
-
-   jmp_insn->bits3.ud = jmpi * (p->nr_insn - jmp_insn_idx - 1);
-}
-
-
-
 /* To integrate with the above, it makes sense that the comparison
  * instruction should populate the flag register.  It might be simpler
  * just to use the flag reg for most WM tasks?
@@ -1765,19 +1801,6 @@ void brw_CMP(struct brw_compile *p,
    brw_set_dest(p, insn, dest);
    brw_set_src0(p, insn, src0);
    brw_set_src1(p, insn, src1);
-
-/*    guess_execution_size(insn, src0); */
-
-
-   /* Make it so that future instructions will use the computed flag
-    * value until brw_set_predicate_control_flag_value() is called
-    * again.
-    */
-   if (dest.file == BRW_ARCHITECTURE_REGISTER_FILE &&
-       dest.nr == 0) {
-      p->current->header.predicate_control = BRW_PREDICATE_NORMAL;
-      p->flag_value = 0xff;
-   }
 
    /* Item WaCMPInstNullDstForcesThreadSwitch in the Haswell Bspec workarounds
     * page says:
@@ -2382,31 +2405,21 @@ void brw_urb_WRITE(struct brw_compile *p,
 }
 
 static int
-next_ip(struct brw_compile *p, int ip)
+brw_find_next_block_end(struct brw_compile *p, int start_offset)
 {
-   struct brw_instruction *insn = (void *)p->store + ip;
-
-   if (insn->header.cmpt_control)
-      return ip + 8;
-   else
-      return ip + 16;
-}
-
-static int
-brw_find_next_block_end(struct brw_compile *p, int start)
-{
-   int ip;
+   int offset;
    void *store = p->store;
 
-   for (ip = next_ip(p, start); ip < p->next_insn_offset; ip = next_ip(p, ip)) {
-      struct brw_instruction *insn = store + ip;
+   for (offset = next_offset(store, start_offset); offset < p->next_insn_offset;
+        offset = next_offset(store, offset)) {
+      struct brw_instruction *insn = store + offset;
 
       switch (insn->header.opcode) {
       case BRW_OPCODE_ENDIF:
       case BRW_OPCODE_ELSE:
       case BRW_OPCODE_WHILE:
       case BRW_OPCODE_HALT:
-	 return ip;
+	 return offset;
       }
    }
 
@@ -2418,28 +2431,29 @@ brw_find_next_block_end(struct brw_compile *p, int start)
  * instruction.
  */
 static int
-brw_find_loop_end(struct brw_compile *p, int start)
+brw_find_loop_end(struct brw_compile *p, int start_offset)
 {
    struct brw_context *brw = p->brw;
-   int ip;
+   int offset;
    int scale = 8;
    void *store = p->store;
 
    /* Always start after the instruction (such as a WHILE) we're trying to fix
     * up.
     */
-   for (ip = next_ip(p, start); ip < p->next_insn_offset; ip = next_ip(p, ip)) {
-      struct brw_instruction *insn = store + ip;
+   for (offset = next_offset(store, start_offset); offset < p->next_insn_offset;
+        offset = next_offset(store, offset)) {
+      struct brw_instruction *insn = store + offset;
 
       if (insn->header.opcode == BRW_OPCODE_WHILE) {
 	 int jip = brw->gen == 6 ? insn->bits1.branch_gen6.jump_count
 				   : insn->bits3.break_cont.jip;
-	 if (ip + jip * scale <= start)
-	    return ip;
+	 if (offset + jip * scale <= start_offset)
+	    return offset;
       }
    }
    assert(!"not reached");
-   return start;
+   return start_offset;
 }
 
 /* After program generation, go back and update the UIP and JIP of
@@ -2449,15 +2463,16 @@ void
 brw_set_uip_jip(struct brw_compile *p)
 {
    struct brw_context *brw = p->brw;
-   int ip;
+   int offset;
    int scale = 8;
    void *store = p->store;
 
    if (brw->gen < 6)
       return;
 
-   for (ip = 0; ip < p->next_insn_offset; ip = next_ip(p, ip)) {
-      struct brw_instruction *insn = store + ip;
+   for (offset = 0; offset < p->next_insn_offset;
+        offset = next_offset(store, offset)) {
+      struct brw_instruction *insn = store + offset;
 
       if (insn->header.cmpt_control) {
 	 /* Fixups for compacted BREAK/CONTINUE not supported yet. */
@@ -2467,31 +2482,31 @@ brw_set_uip_jip(struct brw_compile *p)
 	 continue;
       }
 
-      int block_end_ip = brw_find_next_block_end(p, ip);
+      int block_end_offset = brw_find_next_block_end(p, offset);
       switch (insn->header.opcode) {
       case BRW_OPCODE_BREAK:
-         assert(block_end_ip != 0);
-	 insn->bits3.break_cont.jip = (block_end_ip - ip) / scale;
+         assert(block_end_offset != 0);
+	 insn->bits3.break_cont.jip = (block_end_offset - offset) / scale;
 	 /* Gen7 UIP points to WHILE; Gen6 points just after it */
 	 insn->bits3.break_cont.uip =
-	    (brw_find_loop_end(p, ip) - ip +
+	    (brw_find_loop_end(p, offset) - offset +
              (brw->gen == 6 ? 16 : 0)) / scale;
 	 break;
       case BRW_OPCODE_CONTINUE:
-         assert(block_end_ip != 0);
-	 insn->bits3.break_cont.jip = (block_end_ip - ip) / scale;
+         assert(block_end_offset != 0);
+	 insn->bits3.break_cont.jip = (block_end_offset - offset) / scale;
 	 insn->bits3.break_cont.uip =
-            (brw_find_loop_end(p, ip) - ip) / scale;
+            (brw_find_loop_end(p, offset) - offset) / scale;
 
 	 assert(insn->bits3.break_cont.uip != 0);
 	 assert(insn->bits3.break_cont.jip != 0);
 	 break;
 
       case BRW_OPCODE_ENDIF:
-         if (block_end_ip == 0)
+         if (block_end_offset == 0)
             insn->bits3.break_cont.jip = 2;
          else
-            insn->bits3.break_cont.jip = (block_end_ip - ip) / scale;
+            insn->bits3.break_cont.jip = (block_end_offset - offset) / scale;
 	 break;
 
       case BRW_OPCODE_HALT:
@@ -2506,10 +2521,10 @@ brw_set_uip_jip(struct brw_compile *p)
 	  * The uip will have already been set by whoever set up the
 	  * instruction.
 	  */
-	 if (block_end_ip == 0) {
+	 if (block_end_offset == 0) {
 	    insn->bits3.break_cont.jip = insn->bits3.break_cont.uip;
 	 } else {
-	    insn->bits3.break_cont.jip = (block_end_ip - ip) / scale;
+	    insn->bits3.break_cont.jip = (block_end_offset - offset) / scale;
 	 }
 	 assert(insn->bits3.break_cont.uip != 0);
 	 assert(insn->bits3.break_cont.jip != 0);

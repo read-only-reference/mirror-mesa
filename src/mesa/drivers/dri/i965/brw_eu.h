@@ -37,6 +37,7 @@
 #include "brw_structs.h"
 #include "brw_defines.h"
 #include "brw_reg.h"
+#include "intel_asm_printer.h"
 #include "program/prog_instruction.h"
 
 #ifdef __cplusplus
@@ -59,7 +60,6 @@ struct brw_compile {
    bool compressed_stack[BRW_EU_MAX_INSN_STACK];
    struct brw_instruction *current;
 
-   unsigned flag_value;
    bool single_program_flow;
    bool compressed;
    struct brw_context *brw;
@@ -90,18 +90,12 @@ struct brw_compile {
    int loop_stack_array_size;
 };
 
-static inline struct brw_instruction *current_insn( struct brw_compile *p)
-{
-   return &p->store[p->nr_insn];
-}
-
 void brw_pop_insn_state( struct brw_compile *p );
 void brw_push_insn_state( struct brw_compile *p );
 void brw_set_mask_control( struct brw_compile *p, unsigned value );
 void brw_set_saturate( struct brw_compile *p, bool enable );
 void brw_set_access_mode( struct brw_compile *p, unsigned access_mode );
 void brw_set_compression_control(struct brw_compile *p, enum brw_compression c);
-void brw_set_predicate_control_flag_value( struct brw_compile *p, unsigned value );
 void brw_set_predicate_control( struct brw_compile *p, unsigned pc );
 void brw_set_predicate_inverse(struct brw_compile *p, bool predicate_inverse);
 void brw_set_conditionalmod( struct brw_compile *p, unsigned conditional );
@@ -110,7 +104,8 @@ void brw_set_acc_write_control(struct brw_compile *p, unsigned value);
 
 void brw_init_compile(struct brw_context *, struct brw_compile *p,
 		      void *mem_ctx);
-void brw_dump_compile(struct brw_compile *p, FILE *out, int start, int end);
+void brw_disassemble(struct brw_context *brw, void *assembly,
+                     int start, int end, FILE *out);
 const unsigned *brw_get_program( struct brw_compile *p, unsigned *sz );
 
 struct brw_instruction *brw_next_insn(struct brw_compile *p, unsigned opcode);
@@ -340,9 +335,6 @@ struct brw_instruction *brw_BREAK(struct brw_compile *p);
 struct brw_instruction *brw_CONT(struct brw_compile *p);
 struct brw_instruction *gen6_CONT(struct brw_compile *p);
 struct brw_instruction *gen6_HALT(struct brw_compile *p);
-/* Forward jumps:
- */
-void brw_land_fwd_jump(struct brw_compile *p, int jmp_insn_idx);
 
 
 
@@ -414,7 +406,8 @@ uint32_t brw_swap_cmod(uint32_t cmod);
 
 /* brw_eu_compact.c */
 void brw_init_compaction_tables(struct brw_context *brw);
-void brw_compact_instructions(struct brw_compile *p);
+void brw_compact_instructions(struct brw_compile *p, int start_offset,
+                              int num_annotations, struct annotation *annotation);
 void brw_uncompact_instruction(struct brw_context *brw,
 			       struct brw_instruction *dst,
 			       struct brw_compact_instruction *src);
@@ -425,6 +418,18 @@ bool brw_try_compact_instruction(struct brw_compile *p,
 void brw_debug_compact_uncompact(struct brw_context *brw,
 				 struct brw_instruction *orig,
 				 struct brw_instruction *uncompacted);
+
+static inline int
+next_offset(void *store, int offset)
+{
+   struct brw_instruction *insn =
+      (struct brw_instruction *)((char *)store + offset);
+
+   if (insn->header.cmpt_control)
+      return offset + 8;
+   else
+      return offset + 16;
+}
 
 #ifdef __cplusplus
 }

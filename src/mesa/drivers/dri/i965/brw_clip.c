@@ -55,7 +55,6 @@ static void compile_clip_prog( struct brw_context *brw,
    const GLuint *program;
    void *mem_ctx;
    GLuint program_size;
-   GLuint i;
 
    memset(&c, 0, sizeof(c));
 
@@ -111,7 +110,7 @@ static void compile_clip_prog( struct brw_context *brw,
       return;
    }
 
-	
+   brw_compact_instructions(&c.func, 0, 0, NULL);
 
    /* get the program
     */
@@ -119,9 +118,7 @@ static void compile_clip_prog( struct brw_context *brw,
 
    if (unlikely(INTEL_DEBUG & DEBUG_CLIP)) {
       fprintf(stderr, "clip:\n");
-      for (i = 0; i < program_size / sizeof(struct brw_instruction); i++)
-	 brw_disasm(stderr, &((struct brw_instruction *)program)[i],
-		    brw->gen);
+      brw_disassemble(brw, c.func.store, 0, program_size, stderr);
       fprintf(stderr, "\n");
    }
 

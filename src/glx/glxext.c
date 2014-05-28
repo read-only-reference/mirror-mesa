@@ -42,8 +42,8 @@
 #include <X11/extensions/Xext.h>
 #include <X11/extensions/extutil.h>
 #ifdef GLX_USE_APPLEGL
-#include "apple_glx.h"
-#include "apple_visual.h"
+#include "apple/apple_glx.h"
+#include "apple/apple_visual.h"
 #endif
 #include "glxextensions.h"
 
@@ -249,6 +249,10 @@ glx_display_free(struct glx_display *priv)
    if (priv->dri2Display)
       (*priv->dri2Display->destroyDisplay) (priv->dri2Display);
    priv->dri2Display = NULL;
+
+   if (priv->dri3Display)
+      (*priv->dri3Display->destroyDisplay) (priv->dri3Display);
+   priv->dri3Display = NULL;
 #endif
 
    free((char *) priv);

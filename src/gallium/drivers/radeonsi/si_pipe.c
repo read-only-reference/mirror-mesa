@@ -105,10 +105,10 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, void *
 
 	/* Initialize cache_flush. */
 	sctx->cache_flush = si_atom_cache_flush;
-	sctx->atoms.cache_flush = &sctx->cache_flush;
+	sctx->atoms.s.cache_flush = &sctx->cache_flush;
 
-	sctx->atoms.streamout_begin = &sctx->b.streamout.begin_atom;
-	sctx->atoms.streamout_enable = &sctx->b.streamout.enable_atom;
+	sctx->atoms.s.streamout_begin = &sctx->b.streamout.begin_atom;
+	sctx->atoms.s.streamout_enable = &sctx->b.streamout.enable_atom;
 
 	switch (sctx->b.chip_class) {
 	case SI:
@@ -209,6 +209,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_TGSI_VS_LAYER:
 	case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
 	case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
+	case PIPE_CAP_CUBE_MAP_ARRAY:
 		return 1;
 
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
@@ -224,7 +225,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 4;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
-		return HAVE_LLVM >= 0x0305 ? 330 : 140;
+		return (LLVM_SUPPORTS_GEOM_SHADERS) ? 330 : 140;
 
 	case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
 		return MIN2(sscreen->b.info.vram_size, 0xFFFFFFFF);
@@ -237,13 +238,13 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
-	case PIPE_CAP_CUBE_MAP_ARRAY:
 	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
 	case PIPE_CAP_TEXTURE_GATHER_SM5:
 	case PIPE_CAP_TGSI_TEXCOORD:
 	case PIPE_CAP_FAKE_SW_MSAA:
 	case PIPE_CAP_TEXTURE_QUERY_LOD:
-        case PIPE_CAP_SAMPLE_SHADING:
+	case PIPE_CAP_SAMPLE_SHADING:
+	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
 		return 0;
 
 	case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
@@ -308,7 +309,7 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 	case PIPE_SHADER_VERTEX:
 		break;
 	case PIPE_SHADER_GEOMETRY:
-#if HAVE_LLVM < 0x0305
+#if !(LLVM_SUPPORTS_GEOM_SHADERS)
 		return 0;
 #endif
 		break;

@@ -45,7 +45,6 @@
 enum adreno_rb_depth_format fd_pipe2depth(enum pipe_format format);
 enum pc_di_index_size fd_pipe2index(enum pipe_format format);
 enum adreno_rb_blend_factor fd_blend_factor(unsigned factor);
-enum adreno_rb_blend_opcode fd_blend_func(unsigned func);
 enum adreno_pa_su_sc_draw fd_polygon_mode(unsigned mode);
 enum adreno_stencil_op fd_stencil_op(unsigned op);
 
@@ -65,6 +64,7 @@ enum adreno_stencil_op fd_stencil_op(unsigned op);
 #define FD_DBG_NOOPT    0x0200
 #define FD_DBG_OPTMSGS  0x0400
 #define FD_DBG_OPTDUMP  0x0800
+#define FD_DBG_GLSL130  0x1000
 
 extern int fd_mesa_debug;
 extern bool fd_binning_enabled;
@@ -223,11 +223,18 @@ OUT_IB(struct fd_ringbuffer *ring, struct fd_ringmarker *start,
 	emit_marker(ring, 6);
 }
 
+/* CP_SCRATCH_REG4 is used to hold base address for query results: */
+#define HW_QUERY_BASE_REG REG_AXXX_CP_SCRATCH_REG4
+
 static inline void
 emit_marker(struct fd_ringbuffer *ring, int scratch_idx)
 {
 	extern unsigned marker_cnt;
-	OUT_PKT0(ring, REG_AXXX_CP_SCRATCH_REG0 + scratch_idx, 1);
+	unsigned reg = REG_AXXX_CP_SCRATCH_REG0 + scratch_idx;
+	assert(reg != HW_QUERY_BASE_REG);
+	if (reg == HW_QUERY_BASE_REG)
+		return;
+	OUT_PKT0(ring, reg, 1);
 	OUT_RING(ring, ++marker_cnt);
 }
 

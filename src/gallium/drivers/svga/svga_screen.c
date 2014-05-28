@@ -274,6 +274,7 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_FAKE_SW_MSAA:
    case PIPE_CAP_TEXTURE_QUERY_LOD:
    case PIPE_CAP_SAMPLE_SHADING:
+   case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
       return 0;
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
       return 64;
@@ -343,11 +344,12 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
       case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
          return 16;
-      default:
-         debug_printf("Unexpected fragment shader query %u\n", param);
-         return 0;
+      case PIPE_SHADER_CAP_PREFERRED_IR:
+         return PIPE_SHADER_IR_TGSI;
       }
-      break;
+      /* If we get here, we failed to handle a cap above */
+      debug_printf("Unexpected fragment shader query %u\n", param);
+      return 0;
    case PIPE_SHADER_VERTEX:
       switch (param)
       {
@@ -394,11 +396,12 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
       case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
          return 0;
-      default:
-         debug_printf("Unexpected vertex shader query %u\n", param);
-         return 0;
+      case PIPE_SHADER_CAP_PREFERRED_IR:
+         return PIPE_SHADER_IR_TGSI;
       }
-      break;
+      /* If we get here, we failed to handle a cap above */
+      debug_printf("Unexpected vertex shader query %u\n", param);
+      return 0;
    case PIPE_SHADER_GEOMETRY:
    case PIPE_SHADER_COMPUTE:
       /* no support for geometry or compute shaders at this time */

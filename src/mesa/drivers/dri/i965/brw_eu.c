@@ -88,26 +88,6 @@ brw_swap_cmod(uint32_t cmod)
    }
 }
 
-
-/* How does predicate control work when execution_size != 8?  Do I
- * need to test/set for 0xffff when execution_size is 16?
- */
-void brw_set_predicate_control_flag_value( struct brw_compile *p, unsigned value )
-{
-   p->current->header.predicate_control = BRW_PREDICATE_NONE;
-
-   if (value != 0xff) {
-      if (value != p->flag_value) {
-	 brw_push_insn_state(p);
-	 brw_MOV(p, brw_flag_reg(0, 0), brw_imm_uw(value));
-	 p->flag_value = value;
-	 brw_pop_insn_state(p);
-      }
-
-      p->current->header.predicate_control = BRW_PREDICATE_NORMAL;
-   }
-}
-
 void brw_set_predicate_control( struct brw_compile *p, unsigned pc )
 {
    p->current->header.predicate_control = pc;
@@ -230,7 +210,6 @@ brw_init_compile(struct brw_context *brw, struct brw_compile *p, void *mem_ctx)
    brw_set_mask_control(p, BRW_MASK_ENABLE); /* what does this do? */
    brw_set_saturate(p, 0);
    brw_set_compression_control(p, BRW_COMPRESSION_NONE);
-   brw_set_predicate_control_flag_value(p, 0xff);
 
    /* Set up control flow stack */
    p->if_stack_depth = 0;
@@ -249,22 +228,20 @@ brw_init_compile(struct brw_context *brw, struct brw_compile *p, void *mem_ctx)
 const unsigned *brw_get_program( struct brw_compile *p,
 			       unsigned *sz )
 {
-   brw_compact_instructions(p);
-
    *sz = p->next_insn_offset;
    return (const unsigned *)p->store;
 }
 
 void
-brw_dump_compile(struct brw_compile *p, FILE *out, int start, int end)
+brw_disassemble(struct brw_context *brw,
+                void *assembly, int start, int end, FILE *out)
 {
-   struct brw_context *brw = p->brw;
-   void *store = p->store;
    bool dump_hex = false;
 
    for (int offset = start; offset < end;) {
-      struct brw_instruction *insn = store + offset;
+      struct brw_instruction *insn = assembly + offset;
       struct brw_instruction uncompacted;
+      bool compacted = insn->header.cmpt_control;
       fprintf(out, "0x%08x: ", offset);
 
       if (insn->header.cmpt_control) {
@@ -289,6 +266,6 @@ brw_dump_compile(struct brw_compile *p, FILE *out, int start, int end)
 	 offset += 16;
       }
 
-      brw_disasm(out, insn, p->brw->gen);
+      brw_disassemble_inst(out, insn, brw->gen, compacted);
    }
 }

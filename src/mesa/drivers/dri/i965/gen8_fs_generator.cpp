@@ -36,26 +36,20 @@ extern "C" {
 #include "glsl/ir_print_visitor.h"
 
 gen8_fs_generator::gen8_fs_generator(struct brw_context *brw,
-                                     struct brw_wm_compile *c,
+                                     void *mem_ctx,
+                                     const struct brw_wm_prog_key *key,
+                                     struct brw_wm_prog_data *prog_data,
                                      struct gl_shader_program *shader_prog,
                                      struct gl_fragment_program *fp,
                                      bool dual_source_output)
-   : gen8_generator(brw, shader_prog, fp ? &fp->Base : NULL, c), c(c), fp(fp),
-     dual_source_output(dual_source_output)
+   : gen8_generator(brw, shader_prog, fp ? &fp->Base : NULL, mem_ctx),
+     key(key), prog_data(prog_data),
+     fp(fp), dual_source_output(dual_source_output)
 {
 }
 
 gen8_fs_generator::~gen8_fs_generator()
 {
-}
-
-void
-gen8_fs_generator::mark_surface_used(unsigned surf_index)
-{
-   assert(surf_index < BRW_MAX_SURFACES);
-
-   c->prog_data.base.binding_table.size_bytes =
-      MAX2(c->prog_data.base.binding_table.size_bytes, (surf_index + 1) * 4);
 }
 
 void
@@ -80,18 +74,19 @@ gen8_fs_generator::generate_fb_write(fs_inst *ir)
          MOV_RAW(brw_message_reg(ir->base_mrf), brw_vec8_grf(0, 0));
       gen8_set_exec_size(mov, BRW_EXECUTE_16);
 
-      if (ir->target > 0 && c->key.replicate_alpha) {
+      if (ir->target > 0 && key->replicate_alpha) {
          /* Set "Source0 Alpha Present to RenderTarget" bit in the header. */
-         OR(vec1(retype(brw_message_reg(ir->base_mrf), BRW_REGISTER_TYPE_UD)),
-            vec1(retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD)),
-            brw_imm_ud(1 << 11));
+         gen8_instruction *inst =
+            OR(get_element_ud(brw_message_reg(ir->base_mrf), 0),
+               vec1(retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD)),
+               brw_imm_ud(1 << 11));
+         gen8_set_mask_control(inst, BRW_MASK_DISABLE);
       }
 
       if (ir->target > 0) {
          /* Set the render target index for choosing BLEND_STATE. */
-         MOV(retype(brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE, ir->base_mrf, 2),
-                    BRW_REGISTER_TYPE_UD),
-             brw_imm_ud(ir->target));
+         MOV_RAW(brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE, ir->base_mrf, 2),
+                 brw_imm_ud(ir->target));
       }
    }
 
@@ -124,11 +119,11 @@ gen8_fs_generator::generate_fb_write(fs_inst *ir)
    /* "Last Render Target Select" must be set on all writes to the last of
     * the render targets (if using MRT), or always for a single RT scenario.
     */
-   if ((ir->target == c->key.nr_color_regions - 1) || !c->key.nr_color_regions)
+   if ((ir->target == key->nr_color_regions - 1) || !key->nr_color_regions)
       msg_control |= (1 << 4); /* Last Render Target Select */
 
    uint32_t surf_index =
-      c->prog_data.binding_table.render_target_start + ir->target;
+      prog_data->binding_table.render_target_start + ir->target;
 
    gen8_set_dp_message(brw, inst,
                        GEN6_SFID_DATAPORT_RENDER_CACHE,
@@ -140,7 +135,7 @@ gen8_fs_generator::generate_fb_write(fs_inst *ir)
                        ir->header_present,
                        ir->eot);
 
-   mark_surface_used(surf_index);
+   brw_mark_surface_used(&prog_data->base, surf_index);
 }
 
 void
@@ -287,7 +282,7 @@ gen8_fs_generator::generate_tex(fs_inst *ir,
    }
 
    uint32_t surf_index =
-      c->prog_data.base.binding_table.texture_start + ir->sampler;
+      prog_data->base.binding_table.texture_start + ir->sampler;
 
    gen8_instruction *inst = next_inst(BRW_OPCODE_SEND);
    gen8_set_dst(brw, inst, dst);
@@ -301,7 +296,7 @@ gen8_fs_generator::generate_tex(fs_inst *ir,
                             ir->header_present,
                             simd_mode);
 
-   mark_surface_used(surf_index);
+   brw_mark_surface_used(&prog_data->base, surf_index);
 }
 
 
@@ -338,7 +333,7 @@ gen8_fs_generator::generate_ddx(fs_inst *inst,
 {
    unsigned vstride, width;
 
-   if (c->key.high_quality_derivatives) {
+   if (key->high_quality_derivatives) {
       /* Produce accurate derivatives. */
       vstride = BRW_VERTICAL_STRIDE_2;
       width = BRW_WIDTH_2;
@@ -378,7 +373,7 @@ gen8_fs_generator::generate_ddy(fs_inst *inst,
    unsigned src1_swizzle;
    unsigned src1_subnr;
 
-   if (c->key.high_quality_derivatives) {
+   if (key->high_quality_derivatives) {
       /* Produce accurate derivatives. */
       hstride = BRW_HORIZONTAL_STRIDE_1;
       src0_swizzle = BRW_SWIZZLE_XYXY;
@@ -573,7 +568,7 @@ gen8_fs_generator::generate_uniform_pull_constant_load(fs_inst *inst,
                             false, /* no header */
                             BRW_SAMPLER_SIMD_MODE_SIMD4X2);
 
-   mark_surface_used(surf_index);
+   brw_mark_surface_used(&prog_data->base, surf_index);
 }
 
 void
@@ -615,7 +610,7 @@ gen8_fs_generator::generate_varying_pull_constant_load(fs_inst *ir,
                             false, /* no header */
                             simd_mode);
 
-   mark_surface_used(surf_index);
+   brw_mark_surface_used(&prog_data->base, surf_index);
 }
 
 /**
@@ -645,11 +640,11 @@ gen8_fs_generator::generate_discard_jump(fs_inst *ir)
    HALT();
 }
 
-void
+bool
 gen8_fs_generator::patch_discard_jumps_to_fb_writes()
 {
    if (discard_halt_patches.is_empty())
-      return;
+      return false;
 
    /* There is a somewhat strange undocumented requirement of using
     * HALT, according to the simulator.  If some channel has HALTed to
@@ -678,6 +673,7 @@ gen8_fs_generator::patch_discard_jumps_to_fb_writes()
    }
 
    this->discard_halt_patches.make_empty();
+   return true;
 }
 
 /**
@@ -830,12 +826,67 @@ gen8_fs_generator::generate_unpack_half_2x16_split(fs_inst *inst,
 }
 
 void
-gen8_fs_generator::generate_code(exec_list *instructions)
+gen8_fs_generator::generate_untyped_atomic(fs_inst *ir,
+                                           struct brw_reg dst,
+                                           struct brw_reg atomic_op,
+                                           struct brw_reg surf_index)
 {
-   int last_native_inst_offset = next_inst_offset;
-   const char *last_annotation_string = NULL;
-   const void *last_annotation_ir = NULL;
+   assert(atomic_op.file == BRW_IMMEDIATE_VALUE &&
+          atomic_op.type == BRW_REGISTER_TYPE_UD &&
+          surf_index.file == BRW_IMMEDIATE_VALUE &&
+          surf_index.type == BRW_REGISTER_TYPE_UD);
+   assert((atomic_op.dw1.ud & ~0xf) == 0);
 
+   unsigned msg_control =
+      atomic_op.dw1.ud | /* Atomic Operation Type: BRW_AOP_* */
+      ((dispatch_width == 16 ? 0 : 1) << 4) | /* SIMD Mode */
+      (1 << 5); /* Return data expected */
+
+   gen8_instruction *inst = next_inst(BRW_OPCODE_SEND);
+   gen8_set_dst(brw, inst, retype(dst, BRW_REGISTER_TYPE_UD));
+   gen8_set_src0(brw, inst, brw_message_reg(ir->base_mrf));
+   gen8_set_dp_message(brw, inst, HSW_SFID_DATAPORT_DATA_CACHE_1,
+                       surf_index.dw1.ud,
+                       HSW_DATAPORT_DC_PORT1_UNTYPED_ATOMIC_OP,
+                       msg_control,
+                       ir->mlen,
+                       dispatch_width / 8,
+                       ir->header_present,
+                       false);
+
+   brw_mark_surface_used(&prog_data->base, surf_index.dw1.ud);
+}
+
+void
+gen8_fs_generator::generate_untyped_surface_read(fs_inst *ir,
+                                                 struct brw_reg dst,
+                                                 struct brw_reg surf_index)
+{
+   assert(surf_index.file == BRW_IMMEDIATE_VALUE &&
+          surf_index.type == BRW_REGISTER_TYPE_UD);
+
+   unsigned msg_control = 0xe | /* Enable only the R channel */
+     ((dispatch_width == 16 ? 1 : 2) << 4); /* SIMD Mode */
+
+   gen8_instruction *inst = next_inst(BRW_OPCODE_SEND);
+   gen8_set_dst(brw, inst, retype(dst, BRW_REGISTER_TYPE_UD));
+   gen8_set_src0(brw, inst, brw_message_reg(ir->base_mrf));
+   gen8_set_dp_message(brw, inst, HSW_SFID_DATAPORT_DATA_CACHE_1,
+                       surf_index.dw1.ud,
+                       HSW_DATAPORT_DC_PORT1_UNTYPED_SURFACE_READ,
+                       msg_control,
+                       ir->mlen,
+                       dispatch_width / 8,
+                       ir->header_present,
+                       false);
+
+   brw_mark_surface_used(&prog_data->base, surf_index.dw1.ud);
+}
+
+void
+gen8_fs_generator::generate_code(exec_list *instructions,
+                                 struct annotation_info *annotation)
+{
    if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
       if (prog) {
          fprintf(stderr,
@@ -860,46 +911,8 @@ gen8_fs_generator::generate_code(exec_list *instructions)
       fs_inst *ir = (fs_inst *) node;
       struct brw_reg src[3], dst;
 
-      if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
-         foreach_list(node, &cfg->block_list) {
-            bblock_link *link = (bblock_link *)node;
-            bblock_t *block = link->block;
-
-            if (block->start == ir) {
-               fprintf(stderr, "   START B%d", block->block_num);
-               foreach_list(predecessor_node, &block->parents) {
-                  bblock_link *predecessor_link =
-                     (bblock_link *)predecessor_node;
-                  bblock_t *predecessor_block = predecessor_link->block;
-                  fprintf(stderr, " <-B%d", predecessor_block->block_num);
-               }
-               fprintf(stderr, "\n");
-            }
-         }
-
-         if (last_annotation_ir != ir->ir) {
-            last_annotation_ir = ir->ir;
-            if (last_annotation_ir) {
-               fprintf(stderr, "   ");
-               if (prog) {
-                  ((ir_instruction *) ir->ir)->fprint(stderr);
-               } else if (prog) {
-                  const prog_instruction *fpi;
-                  fpi = (const prog_instruction *) ir->ir;
-                  fprintf(stderr, "%d: ", (int)(fpi - prog->Instructions));
-                  _mesa_fprint_instruction_opt(stderr,
-                                               fpi,
-                                               0, PROG_PRINT_DEBUG, NULL);
-               }
-               fprintf(stderr, "\n");
-            }
-         }
-         if (last_annotation_string != ir->annotation) {
-            last_annotation_string = ir->annotation;
-            if (last_annotation_string)
-               fprintf(stderr, "   %s\n", last_annotation_string);
-         }
-      }
+      if (unlikely(INTEL_DEBUG & DEBUG_WM))
+         annotate(brw, annotation, cfg, ir, next_inst_offset);
 
       for (unsigned int i = 0; i < 3; i++) {
          src[i] = brw_reg_from_fs_reg(&ir->src[i]);
@@ -920,6 +933,7 @@ gen8_fs_generator::generate_code(exec_list *instructions)
       default_state.predicate = ir->predicate;
       default_state.predicate_inverse = ir->predicate_inverse;
       default_state.saturate = ir->saturate;
+      default_state.mask_control = ir->force_writemask_all;
       default_state.flag_subreg_nr = ir->flag_subreg;
 
       if (dispatch_width == 16 && !ir->force_uncompressed)
@@ -1154,10 +1168,10 @@ gen8_fs_generator::generate_code(exec_list *instructions)
          break;
       case FS_OPCODE_DDY:
          /* Make sure fp->UsesDFdy flag got set (otherwise there's no
-          * guarantee that c->key.render_to_fbo is set).
+          * guarantee that key->render_to_fbo is set).
           */
          assert(fp->UsesDFdy);
-         generate_ddy(ir, dst, src[0], c->key.render_to_fbo);
+         generate_ddy(ir, dst, src[0], key->render_to_fbo);
          break;
 
       case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
@@ -1197,11 +1211,11 @@ gen8_fs_generator::generate_code(exec_list *instructions)
          break;
 
       case SHADER_OPCODE_UNTYPED_ATOMIC:
-         assert(!"XXX: Missing Gen8 scalar support for untyped atomics");
+         generate_untyped_atomic(ir, dst, src[0], src[1]);
          break;
 
       case SHADER_OPCODE_UNTYPED_SURFACE_READ:
-         assert(!"XXX: Missing Gen8 scalar support for untyped surface reads");
+         generate_untyped_surface_read(ir, dst, src[0]);
          break;
 
       case FS_OPCODE_SET_SIMD4X2_OFFSET:
@@ -1229,7 +1243,11 @@ gen8_fs_generator::generate_code(exec_list *instructions)
          /* This is the place where the final HALT needs to be inserted if
           * we've emitted any discards.  If not, this will emit no code.
           */
-         patch_discard_jumps_to_fb_writes();
+         if (!patch_discard_jumps_to_fb_writes()) {
+            if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
+               annotation->ann_count--;
+            }
+         }
          break;
 
       default:
@@ -1241,44 +1259,10 @@ gen8_fs_generator::generate_code(exec_list *instructions)
          }
          abort();
       }
-
-      if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
-         disassemble(stderr, last_native_inst_offset, next_inst_offset);
-
-         foreach_list(node, &cfg->block_list) {
-            bblock_link *link = (bblock_link *)node;
-            bblock_t *block = link->block;
-
-            if (block->end == ir) {
-               fprintf(stderr, "   END B%d", block->block_num);
-               foreach_list(successor_node, &block->children) {
-                  bblock_link *successor_link =
-                     (bblock_link *)successor_node;
-                  bblock_t *successor_block = successor_link->block;
-                  fprintf(stderr, " ->B%d", successor_block->block_num);
-               }
-               fprintf(stderr, "\n");
-            }
-         }
-      }
-
-      last_native_inst_offset = next_inst_offset;
-   }
-
-   if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
-      fprintf(stderr, "\n");
    }
 
    patch_jump_targets();
-
-   /* OK, while the INTEL_DEBUG=fs above is very nice for debugging FS
-    * emit issues, it doesn't get the jump distances into the output,
-    * which is often something we want to debug.  So this is here in
-    * case you're doing that.
-    */
-   if (0 && unlikely(INTEL_DEBUG & DEBUG_WM)) {
-      disassemble(stderr, 0, next_inst_offset);
-   }
+   annotation_finalize(annotation, next_inst_offset);
 }
 
 const unsigned *
@@ -1289,20 +1273,38 @@ gen8_fs_generator::generate_assembly(exec_list *simd8_instructions,
    assert(simd8_instructions || simd16_instructions);
 
    if (simd8_instructions) {
+      struct annotation_info annotation;
+      memset(&annotation, 0, sizeof(annotation));
+
       dispatch_width = 8;
-      generate_code(simd8_instructions);
+      generate_code(simd8_instructions, &annotation);
+
+      if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
+         dump_assembly(store, annotation.ann_count, annotation.ann, brw, prog,
+                       gen8_disassemble);
+         ralloc_free(annotation.ann);
+      }
    }
 
    if (simd16_instructions) {
       /* Align to a 64-byte boundary. */
-      while ((nr_inst * sizeof(gen8_instruction)) % 64)
+      while (next_inst_offset % 64)
          NOP();
 
       /* Save off the start of this SIMD16 program */
-      c->prog_data.prog_offset_16 = nr_inst * sizeof(gen8_instruction);
+      prog_data->prog_offset_16 = next_inst_offset;
+
+      struct annotation_info annotation;
+      memset(&annotation, 0, sizeof(annotation));
 
       dispatch_width = 16;
-      generate_code(simd16_instructions);
+      generate_code(simd16_instructions, &annotation);
+
+      if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
+         dump_assembly(store, annotation.ann_count, annotation.ann,
+                       brw, prog, gen8_disassemble);
+         ralloc_free(annotation.ann);
+      }
    }
 
    *assembly_size = next_inst_offset;

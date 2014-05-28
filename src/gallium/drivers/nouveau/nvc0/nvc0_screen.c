@@ -32,7 +32,7 @@
 #include "nvc0/nvc0_context.h"
 #include "nvc0/nvc0_screen.h"
 
-#include "nvc0/nvc0_graph_macros.h"
+#include "nvc0/mme/com9097.mme.h"
 
 #ifndef NOUVEAU_GETPARAM_GRAPH_UNITS
 # define NOUVEAU_GETPARAM_GRAPH_UNITS 13
@@ -152,6 +152,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_BARRIER:
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
    case PIPE_CAP_START_INSTANCE:
+   case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
       return 1;
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
       return 0; /* state trackers will know better */
@@ -179,13 +180,13 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return PIPE_ENDIAN_LITTLE;
    case PIPE_CAP_TGSI_VS_LAYER:
    case PIPE_CAP_TEXTURE_GATHER_SM5:
-   case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
    case PIPE_CAP_FAKE_SW_MSAA:
       return 0;
    case PIPE_CAP_MAX_VIEWPORTS:
       return 1;
    case PIPE_CAP_TEXTURE_QUERY_LOD:
    case PIPE_CAP_SAMPLE_SHADING:
+   case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
       return 1;
    case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
       return 4;
@@ -293,10 +294,16 @@ nvc0_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
       return 16.0f;
    case PIPE_CAPF_MAX_TEXTURE_LOD_BIAS:
       return 15.0f;
-   default:
-      NOUVEAU_ERR("unknown PIPE_CAP %d\n", param);
+   case PIPE_CAPF_GUARD_BAND_LEFT:
+   case PIPE_CAPF_GUARD_BAND_TOP:
       return 0.0f;
+   case PIPE_CAPF_GUARD_BAND_RIGHT:
+   case PIPE_CAPF_GUARD_BAND_BOTTOM:
+      return 0.0f; /* that or infinity */
    }
+
+   NOUVEAU_ERR("unknown PIPE_CAPF %d\n", param);
+   return 0.0f;
 }
 
 static int
@@ -434,8 +441,10 @@ nvc0_magic_3d_init(struct nouveau_pushbuf *push, uint16_t obj_class)
    BEGIN_NVC0(push, SUBC_3D(0x0de8), 1);
    PUSH_DATA (push, 1);
 
-   BEGIN_NVC0(push, SUBC_3D(0x12ac), 1);
-   PUSH_DATA (push, 0);
+   if (obj_class < GM107_3D_CLASS) {
+      BEGIN_NVC0(push, SUBC_3D(0x12ac), 1);
+      PUSH_DATA (push, 0);
+   }
    BEGIN_NVC0(push, SUBC_3D(0x0218), 1);
    PUSH_DATA (push, 0x10);
    BEGIN_NVC0(push, SUBC_3D(0x10fc), 1);
@@ -463,12 +472,15 @@ nvc0_magic_3d_init(struct nouveau_pushbuf *push, uint16_t obj_class)
    PUSH_DATA (push, 1);
    BEGIN_NVC0(push, SUBC_3D(0x19c0), 1);
    PUSH_DATA (push, 1);
-   BEGIN_NVC0(push, SUBC_3D(0x075c), 1);
-   PUSH_DATA (push, 3);
 
-   if (obj_class >= NVE4_3D_CLASS) {
-      BEGIN_NVC0(push, SUBC_3D(0x07fc), 1);
-      PUSH_DATA (push, 1);
+   if (obj_class < GM107_3D_CLASS) {
+      BEGIN_NVC0(push, SUBC_3D(0x075c), 1);
+      PUSH_DATA (push, 3);
+
+      if (obj_class >= NVE4_3D_CLASS) {
+         BEGIN_NVC0(push, SUBC_3D(0x07fc), 1);
+         PUSH_DATA (push, 1);
+      }
    }
 
    /* TODO: find out what software methods 0x1528, 0x1280 and (on nve4) 0x02dc
@@ -517,6 +529,8 @@ nvc0_screen_init_compute(struct nvc0_screen *screen)
    case 0xf0:
    case 0x100:
       return nve4_screen_compute_setup(screen, screen->base.pushbuf);
+   case 0x110:
+      return 0;
    default:
       return -1;
    }
@@ -578,6 +592,7 @@ nvc0_screen_create(struct nouveau_device *dev)
    case 0xe0:
    case 0xf0:
    case 0x100:
+   case 0x110:
       break;
    default:
       return NULL;
@@ -634,6 +649,7 @@ nvc0_screen_create(struct nouveau_device *dev)
 
 
    switch (dev->chipset & ~0xf) {
+   case 0x110:
    case 0x100:
    case 0xf0:
       obj_class = NVF0_P2MF_CLASS;
@@ -676,18 +692,30 @@ nvc0_screen_create(struct nouveau_device *dev)
    PUSH_DATA (push, 0x3f);
    BEGIN_NVC0(push, SUBC_2D(0x0888), 1);
    PUSH_DATA (push, 1);
+   BEGIN_NVC0(push, NVC0_2D(COND_MODE), 1);
+   PUSH_DATA (push, NVC0_2D_COND_MODE_ALWAYS);
 
    BEGIN_NVC0(push, SUBC_2D(NVC0_GRAPH_NOTIFY_ADDRESS_HIGH), 2);
    PUSH_DATAh(push, screen->fence.bo->offset + 16);
    PUSH_DATA (push, screen->fence.bo->offset + 16);
 
    switch (dev->chipset & ~0xf) {
+   case 0x110:
+      obj_class = GM107_3D_CLASS;
+      break;
    case 0x100:
    case 0xf0:
       obj_class = NVF0_3D_CLASS;
       break;
    case 0xe0:
-      obj_class = NVE4_3D_CLASS;
+      switch (dev->chipset) {
+      case 0xea:
+         obj_class = NVEA_3D_CLASS;
+         break;
+      default:
+         obj_class = NVE4_3D_CLASS;
+         break;
+      }
       break;
    case 0xd0:
       obj_class = NVC8_3D_CLASS;
@@ -852,15 +880,17 @@ nvc0_screen_create(struct nouveau_device *dev)
    BEGIN_NVC0(push, NVC0_3D(LOCAL_BASE), 1);
    PUSH_DATA (push, 0);
 
-   ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 1 << 17, 1 << 20, NULL,
-                        &screen->poly_cache);
-   if (ret)
-      goto fail;
+   if (screen->eng3d->oclass < GM107_3D_CLASS) {
+      ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 1 << 17, 1 << 20, NULL,
+                           &screen->poly_cache);
+      if (ret)
+         goto fail;
 
-   BEGIN_NVC0(push, NVC0_3D(VERTEX_QUARANTINE_ADDRESS_HIGH), 3);
-   PUSH_DATAh(push, screen->poly_cache->offset);
-   PUSH_DATA (push, screen->poly_cache->offset);
-   PUSH_DATA (push, 3);
+      BEGIN_NVC0(push, NVC0_3D(VERTEX_QUARANTINE_ADDRESS_HIGH), 3);
+      PUSH_DATAh(push, screen->poly_cache->offset);
+      PUSH_DATA (push, screen->poly_cache->offset);
+      PUSH_DATA (push, 3);
+   }
 
    ret = nouveau_bo_new(dev, NOUVEAU_BO_VRAM, 1 << 17, 1 << 17, NULL,
                         &screen->txc);
@@ -918,13 +948,13 @@ nvc0_screen_create(struct nouveau_device *dev)
 #define MK_MACRO(m, n) i = nvc0_graph_set_macro(screen, m, i, sizeof(n), n);
 
    i = 0;
-   MK_MACRO(NVC0_3D_MACRO_VERTEX_ARRAY_PER_INSTANCE, nvc0_9097_per_instance_bf);
-   MK_MACRO(NVC0_3D_MACRO_BLEND_ENABLES, nvc0_9097_blend_enables);
-   MK_MACRO(NVC0_3D_MACRO_VERTEX_ARRAY_SELECT, nvc0_9097_vertex_array_select);
-   MK_MACRO(NVC0_3D_MACRO_TEP_SELECT, nvc0_9097_tep_select);
-   MK_MACRO(NVC0_3D_MACRO_GP_SELECT, nvc0_9097_gp_select);
-   MK_MACRO(NVC0_3D_MACRO_POLYGON_MODE_FRONT, nvc0_9097_poly_mode_front);
-   MK_MACRO(NVC0_3D_MACRO_POLYGON_MODE_BACK, nvc0_9097_poly_mode_back);
+   MK_MACRO(NVC0_3D_MACRO_VERTEX_ARRAY_PER_INSTANCE, mme9097_per_instance_bf);
+   MK_MACRO(NVC0_3D_MACRO_BLEND_ENABLES, mme9097_blend_enables);
+   MK_MACRO(NVC0_3D_MACRO_VERTEX_ARRAY_SELECT, mme9097_vertex_array_select);
+   MK_MACRO(NVC0_3D_MACRO_TEP_SELECT, mme9097_tep_select);
+   MK_MACRO(NVC0_3D_MACRO_GP_SELECT, mme9097_gp_select);
+   MK_MACRO(NVC0_3D_MACRO_POLYGON_MODE_FRONT, mme9097_poly_mode_front);
+   MK_MACRO(NVC0_3D_MACRO_POLYGON_MODE_BACK, mme9097_poly_mode_back);
 
    BEGIN_NVC0(push, NVC0_3D(RASTERIZE_ENABLE), 1);
    PUSH_DATA (push, 1);

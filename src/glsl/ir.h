@@ -2342,11 +2342,23 @@ prototype_string(const glsl_type *return_type, const char *name,
 const char *
 mode_string(const ir_variable *var);
 
+/**
+ * Built-in / reserved GL variables names start with "gl_"
+ */
+static inline bool
+is_gl_identifier(const char *s)
+{
+   return s && s[0] == 'g' && s[1] == 'l' && s[2] == '_';
+}
+
 extern "C" {
 #endif /* __cplusplus */
 
 extern void _mesa_print_ir(FILE *f, struct exec_list *instructions,
                            struct _mesa_glsl_parse_state *state);
+
+extern void
+fprint_ir(FILE *f, const void *instruction);
 
 #ifdef __cplusplus
 } /* extern "C" */

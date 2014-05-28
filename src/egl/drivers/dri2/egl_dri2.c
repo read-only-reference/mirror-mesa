@@ -35,7 +35,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
-#ifdef HAVE_DRM_PLATFORM
+#ifdef HAVE_LIBDRM
 #include <xf86drm.h>
 #include <drm_fourcc.h>
 #endif
@@ -811,8 +811,9 @@ dri2_create_context(_EGLDriver *drv, _EGLDisplay *disp, _EGLConfig *conf,
          api = __DRI_API_GLES3;
          break;
       default:
-	 _eglError(EGL_BAD_PARAMETER, "eglCreateContext");
-	 return NULL;
+         _eglError(EGL_BAD_PARAMETER, "eglCreateContext");
+         free(dri2_ctx);
+         return NULL;
       }
       break;
    case EGL_OPENGL_API:
@@ -1387,6 +1388,15 @@ dri2_create_image_wayland_wl_buffer(_EGLDisplay *disp, _EGLContext *ctx,
    return dri2_create_image_from_dri(disp, dri_image);
 }
 #endif
+
+static EGLBoolean
+dri2_get_sync_values_chromium(_EGLDisplay *dpy, _EGLSurface *surf,
+                              EGLuint64KHR *ust, EGLuint64KHR *msc,
+                              EGLuint64KHR *sbc)
+{
+   struct dri2_egl_display *dri2_dpy = dri2_egl_display(dpy);
+   return dri2_dpy->vtbl->get_sync_values(dpy, surf, ust, msc, sbc);
+}
 
 /**
  * Set the error code after a call to
@@ -1991,7 +2001,7 @@ dri2_bind_wayland_display_wl(_EGLDriver *drv, _EGLDisplay *disp,
 			     struct wl_display *wl_dpy)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
-   int ret, flags = 0;
+   int flags = 0;
    uint64_t cap;
 
    (void) drv;
@@ -2002,11 +2012,13 @@ dri2_bind_wayland_display_wl(_EGLDriver *drv, _EGLDisplay *disp,
    wl_drm_callbacks.authenticate =
       (int(*)(void *, uint32_t)) dri2_dpy->vtbl->authenticate;
 
-   ret = drmGetCap(dri2_dpy->fd, DRM_CAP_PRIME, &cap);
-   if (ret == 0 && cap == (DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT) &&
+#ifdef HAVE_LIBDRM
+   if (drmGetCap(dri2_dpy->fd, DRM_CAP_PRIME, &cap) == 0 &&
+       cap == (DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT) &&
        dri2_dpy->image->base.version >= 7 &&
        dri2_dpy->image->createImageFromFds != NULL)
       flags |= WAYLAND_DRM_PRIME;
+#endif
 
    dri2_dpy->wl_server_drm =
 	   wayland_drm_init(wl_dpy, dri2_dpy->device_name,
@@ -2181,6 +2193,7 @@ _eglBuiltInDriverDRI2(const char *args)
    dri2_drv->base.API.UnbindWaylandDisplayWL = dri2_unbind_wayland_display_wl;
    dri2_drv->base.API.QueryWaylandBufferWL = dri2_query_wayland_buffer_wl;
 #endif
+   dri2_drv->base.API.GetSyncValuesCHROMIUM = dri2_get_sync_values_chromium;
 
    dri2_drv->base.Name = "DRI2";
    dri2_drv->base.Unload = dri2_unload;

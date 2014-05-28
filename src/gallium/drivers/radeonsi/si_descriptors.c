@@ -152,7 +152,7 @@ static void si_update_descriptors(struct si_context *sctx,
 			7 + /* copy */
 			(4 + desc->element_dw_size) * util_bitcount(desc->dirty_mask) + /* update */
 			4; /* pointer update */
-#if HAVE_LLVM >= 0x0305
+#if LLVM_SUPPORTS_GEOM_SHADERS
 		if (desc->shader_userdata_reg >= R_00B130_SPI_SHADER_USER_DATA_VS_0 &&
 		    desc->shader_userdata_reg < R_00B230_SPI_SHADER_USER_DATA_GS_0)
 			desc->atom.num_dw += 4; /* second pointer update */
@@ -177,7 +177,7 @@ static void si_emit_shader_pointer(struct si_context *sctx,
 	radeon_emit(cs, va);
 	radeon_emit(cs, va >> 32);
 
-#if HAVE_LLVM >= 0x0305
+#if LLVM_SUPPORTS_GEOM_SHADERS
 	if (desc->shader_userdata_reg >= R_00B130_SPI_SHADER_USER_DATA_VS_0 &&
 	    desc->shader_userdata_reg < R_00B230_SPI_SHADER_USER_DATA_GS_0) {
 		radeon_emit(cs, PKT3(PKT3_SET_SH_REG, 2, 0));
@@ -987,9 +987,9 @@ void si_init_all_descriptors(struct si_context *sctx)
 
 		si_init_sampler_views(sctx, &sctx->samplers[i].views, i);
 
-		sctx->atoms.const_buffers[i] = &sctx->const_buffers[i].desc.atom;
-		sctx->atoms.rw_buffers[i] = &sctx->rw_buffers[i].desc.atom;
-		sctx->atoms.sampler_views[i] = &sctx->samplers[i].views.desc.atom;
+		sctx->atoms.s.const_buffers[i] = &sctx->const_buffers[i].desc.atom;
+		sctx->atoms.s.rw_buffers[i] = &sctx->rw_buffers[i].desc.atom;
+		sctx->atoms.s.sampler_views[i] = &sctx->samplers[i].views.desc.atom;
 	}
 
 

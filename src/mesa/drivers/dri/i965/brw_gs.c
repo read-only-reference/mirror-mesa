@@ -128,17 +128,15 @@ static void compile_ff_gs_prog(struct brw_context *brw,
       }
    }
 
+   brw_compact_instructions(&c.func, 0, 0, NULL);
+
    /* get the program
     */
    program = brw_get_program(&c.func, &program_size);
 
    if (unlikely(INTEL_DEBUG & DEBUG_GS)) {
-      int i;
-
       fprintf(stderr, "gs:\n");
-      for (i = 0; i < program_size / sizeof(struct brw_instruction); i++)
-	 brw_disasm(stderr, &((struct brw_instruction *)program)[i],
-		    brw->gen);
+      brw_disassemble(brw, c.func.store, 0, program_size, stderr);
       fprintf(stderr, "\n");
     }
 

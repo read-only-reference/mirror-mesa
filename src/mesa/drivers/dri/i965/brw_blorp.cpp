@@ -139,18 +139,16 @@ uint32_t
 brw_blorp_surface_info::compute_tile_offsets(uint32_t *tile_x,
                                              uint32_t *tile_y) const
 {
-   struct intel_region *region = mt->region;
    uint32_t mask_x, mask_y;
 
-   intel_region_get_tile_masks(region, &mask_x, &mask_y,
-                               map_stencil_as_y_tiled);
+   intel_miptree_get_tile_masks(mt, &mask_x, &mask_y, map_stencil_as_y_tiled);
 
    *tile_x = x_offset & mask_x;
    *tile_y = y_offset & mask_y;
 
-   return intel_region_get_aligned_offset(region, x_offset & ~mask_x,
-                                          y_offset & ~mask_y,
-                                          map_stencil_as_y_tiled);
+   return intel_miptree_get_aligned_offset(mt, x_offset & ~mask_x,
+                                           y_offset & ~mask_y,
+                                           map_stencil_as_y_tiled);
 }
 
 
@@ -327,7 +325,7 @@ brw_hiz_op_params::brw_hiz_op_params(struct intel_mipmap_tree *mt,
    x1 = depth.width;
    y1 = depth.height;
 
-   assert(intel_miptree_slice_has_hiz(mt, level, layer));
+   assert(intel_miptree_level_has_hiz(mt, level));
 
    switch (mt->format) {
    case MESA_FORMAT_Z_UNORM16:       depth_format = BRW_DEPTHFORMAT_D16_UNORM; break;

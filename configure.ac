@@ -28,7 +28,7 @@ AC_SUBST([OSMESA_VERSION])
 
 dnl Versions for external dependencies
 LIBDRM_REQUIRED=2.4.38
-LIBDRM_RADEON_REQUIRED=2.4.53
+LIBDRM_RADEON_REQUIRED=2.4.54
 LIBDRM_INTEL_REQUIRED=2.4.52
 LIBDRM_NVVIEUX_REQUIRED=2.4.33
 LIBDRM_NOUVEAU_REQUIRED="2.4.33 libdrm >= 2.4.41"
@@ -316,6 +316,22 @@ if test "x$enable_debug" = xyes; then
 fi
 
 dnl
+dnl Check if linker supports -Bsymbolic
+dnl
+save_LDFLAGS=$LDFLAGS
+LDFLAGS="$LDFLAGS -Wl,-Bsymbolic"
+AC_MSG_CHECKING([if ld supports -Bsymbolic])
+AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main() { return 0;}])],
+    [AC_MSG_RESULT([yes])
+        BSYMBOLIC="-Wl,-Bsymbolic";],
+    [AC_MSG_RESULT([no])
+        BSYMBOLIC="";])
+LDFLAGS=$save_LDFLAGS
+
+AC_SUBST([BSYMBOLIC])
+
+dnl
 dnl Check if linker supports garbage collection
 dnl
 save_LDFLAGS=$LDFLAGS
@@ -330,6 +346,41 @@ AC_LINK_IFELSE(
 LDFLAGS=$save_LDFLAGS
 
 AC_SUBST([GC_SECTIONS])
+
+dnl
+dnl OpenBSD does not have DT_NEEDED entries for libc by design
+dnl so when these flags are passed to ld via libtool the checks will fail
+dnl
+case "$host_os" in
+openbsd* | darwin* )
+    LD_NO_UNDEFINED="" ;;
+*)
+    LD_NO_UNDEFINED="-Wl,--no-undefined" ;;
+esac
+
+AC_SUBST([LD_NO_UNDEFINED])
+
+dnl
+dnl Check if linker supports version scripts
+dnl
+AC_MSG_CHECKING([if the linker supports version-scripts])
+save_LDFLAGS=$LDFLAGS
+LDFLAGS="$LDFLAGS -Wl,--version-script=conftest.map"
+cat > conftest.map <<EOF
+VERSION_1 {
+     global:
+         main;
+
+     local:
+         *;
+};
+EOF
+AC_LINK_IFELSE(
+    [AC_LANG_SOURCE([int main() { return 0;}])],
+    [have_ld_version_script=yes;AC_MSG_RESULT(yes)],
+    [have_ld_version_script=no; AC_MSG_RESULT(no)])
+LDFLAGS=$save_LDFLAGS
+AM_CONDITIONAL(HAVE_LD_VERSION_SCRIPT, test "$have_ld_version_script" = "yes")
 
 dnl
 dnl compatibility symlinks
@@ -735,8 +786,22 @@ fi
 
 AM_CONDITIONAL(HAVE_DRI_GLX, test "x$enable_glx" = xyes -a \
                                   "x$enable_dri" = xyes)
-AM_CONDITIONAL(HAVE_DRI, test "x$enable_dri" = xyes)
-AM_CONDITIONAL(HAVE_DRI3, test "x$enable_dri3" = xyes)
+
+# Select which platform-dependent DRI code gets built
+case "$host_os" in
+darwin*)
+    dri_platform='apple' ;;
+gnu*|mingw*|cygwin*)
+    dri_platform='none' ;;
+*)
+    dri_platform='drm' ;;
+esac
+
+AM_CONDITIONAL(HAVE_DRICOMMON, test "x$enable_dri" = xyes )
+AM_CONDITIONAL(HAVE_DRISW, test "x$enable_dri" = xyes )
+AM_CONDITIONAL(HAVE_DRI2, test "x$enable_dri" = xyes && test "x$dri_platform" = xdrm )
+AM_CONDITIONAL(HAVE_DRI3, test "x$enable_dri3" = xyes && test "x$dri_platform" = xdrm )
+AM_CONDITIONAL(HAVE_APPLEDRI, test "x$enable_dri" = xyes && test "x$dri_platform" = xapple )
 
 AC_ARG_ENABLE([shared-glapi],
     [AS_HELP_STRING([--enable-shared-glapi],
@@ -805,13 +870,20 @@ fi
 
 case "$host_os" in
 linux*)
-    need_libudev=yes ;;
+    need_pci_id=yes ;;
 *)
-    need_libudev=no ;;
+    need_pci_id=no ;;
 esac
 
 PKG_CHECK_MODULES([LIBUDEV], [libudev >= $LIBUDEV_REQUIRED],
                   have_libudev=yes, have_libudev=no)
+
+AC_ARG_ENABLE([sysfs],
+    [AS_HELP_STRING([--enable-sysfs],
+        [enable /sys PCI identification @<:@default=disabled@:>@])],
+    [have_sysfs="$enableval"],
+    [have_sysfs=no]
+)
 
 if test "x$enable_dri" = xyes; then
     if test "$enable_static" = yes; then
@@ -861,23 +933,34 @@ xyesyes)
 xyesno)
     # DRI-based GLX
     PKG_CHECK_MODULES([GLPROTO], [glproto >= $GLPROTO_REQUIRED])
-    if test x"$driglx_direct" = xyes; then
-        if test "x$have_libdrm" != xyes; then
-            AC_MSG_ERROR([Direct rendering requires libdrm >= $LIBDRM_REQUIRED])
-        fi
-        PKG_CHECK_MODULES([DRI2PROTO], [dri2proto >= $DRI2PROTO_REQUIRED])
-        GL_PC_REQ_PRIV="$GL_PC_REQ_PRIV libdrm >= $LIBDRM_REQUIRED"
-        if test x"$enable_dri3" = xyes; then
-            PKG_CHECK_MODULES([DRI3PROTO], [dri3proto >= $DRI3PROTO_REQUIRED])
-            PKG_CHECK_MODULES([PRESENTPROTO], [presentproto >= $PRESENTPROTO_REQUIRED])
-        fi
-    fi
 
     # find the DRI deps for libGL
-    dri_modules="x11 xext xdamage xfixes x11-xcb xcb-glx >= $XCBGLX_REQUIRED xcb-dri2 >= $XCBDRI2_REQUIRED"
+    dri_modules="x11 xext xdamage xfixes x11-xcb xcb-glx >= $XCBGLX_REQUIRED"
 
-    if test x"$enable_dri3" = xyes; then
-        dri_modules="$dri_modules xcb-dri3 xcb-present xcb-sync xshmfence >= $XSHMFENCE_REQUIRED"
+    if test x"$driglx_direct" = xyes; then
+        if test x"$dri_platform" = xdrm ; then
+            if test "x$have_libdrm" != xyes; then
+               AC_MSG_ERROR([Direct rendering requires libdrm >= $LIBDRM_REQUIRED])
+            fi
+
+            PKG_CHECK_MODULES([DRI2PROTO], [dri2proto >= $DRI2PROTO_REQUIRED])
+            GL_PC_REQ_PRIV="$GL_PC_REQ_PRIV libdrm >= $LIBDRM_REQUIRED"
+            if test x"$enable_dri3" = xyes; then
+               PKG_CHECK_MODULES([DRI3PROTO], [dri3proto >= $DRI3PROTO_REQUIRED])
+               PKG_CHECK_MODULES([PRESENTPROTO], [presentproto >= $PRESENTPROTO_REQUIRED])
+            fi
+
+            if test x"$enable_dri" = xyes; then
+               dri_modules="$dri_modules xcb-dri2 >= $XCBDRI2_REQUIRED"
+            fi
+
+            if test x"$enable_dri3" = xyes; then
+               dri_modules="$dri_modules xcb-dri3 xcb-present xcb-sync xshmfence >= $XSHMFENCE_REQUIRED"
+            fi
+        fi
+        if test x"$dri_platform" = xapple ; then
+            DEFINES="$DEFINES -DGLX_USE_APPLEGL"
+        fi
     fi
 
     # add xf86vidmode if available
@@ -897,8 +980,15 @@ xyesno)
     ;;
 esac
 
+have_pci_id=no
 if test "$have_libudev" = yes; then
     DEFINES="$DEFINES -DHAVE_LIBUDEV"
+    have_pci_id=yes
+fi
+
+if test "$have_sysfs" = yes; then
+    DEFINES="$DEFINES -DHAVE_SYSFS"
+    have_pci_id=yes
 fi
 
 # This is outside the case (above) so that it is invoked even for non-GLX
@@ -1000,8 +1090,8 @@ if test "x$enable_dri" = xyes; then
             DEFINES="$DEFINES -DHAVE_DRI3"
         fi
 
-        if test "x$have_libudev" != xyes; then
-            AC_MSG_ERROR([libudev-dev required for building DRI])
+        if test "x$have_pci_id" != xyes; then
+            AC_MSG_ERROR([libudev-dev or sysfs required for building DRI])
         fi
 
         case "$host_cpu" in
@@ -1026,6 +1116,12 @@ if test "x$enable_dri" = xyes; then
         ;;
     cygwin*)
         DEFINES="$DEFINES -DUSE_EXTERNAL_DXTN_LIB=1"
+        if test "x$with_dri_drivers" = "xyes"; then
+            with_dri_drivers="swrast"
+        fi
+        ;;
+    darwin*)
+        DEFINES="$DEFINES -DUSE_EXTERNAL_DXTN_LIB=1 -DGLX_ALIAS_UNSUPPORTED"
         if test "x$with_dri_drivers" = "xyes"; then
             with_dri_drivers="swrast"
         fi
@@ -1170,8 +1266,8 @@ if test "x$enable_gbm" = xauto; then
     esac
 fi
 if test "x$enable_gbm" = xyes; then
-    if test "x$need_libudev$have_libudev" = xyesno; then
-        AC_MSG_ERROR([gbm requires udev >= $LIBUDEV_REQUIRED])
+    if test "x$need_pci_id$have_pci_id" = xyesno; then
+        AC_MSG_ERROR([gbm requires udev >= $LIBUDEV_REQUIRED or sysfs])
     fi
 
     if test "x$enable_dri" = xyes; then
@@ -1179,10 +1275,17 @@ if test "x$enable_gbm" = xyes; then
         if test "x$enable_shared_glapi" = xno; then
             AC_MSG_ERROR([gbm_dri requires --enable-shared-glapi])
         fi
+    else
+        # Strictly speaking libgbm does not require --enable-dri, although
+        # both of its backends do. Thus one can build libgbm without any
+        # backends if --disable-dri is set.
+        # To avoid unnecessary complexity of checking if at least one backend
+        # is available when building, just mandate --enable-dri.
+        AC_MSG_ERROR([gbm requires --enable-dri])
     fi
 fi
 AM_CONDITIONAL(HAVE_GBM, test "x$enable_gbm" = xyes)
-if test "x$need_libudev" = xyes; then
+if test "x$need_pci_id$have_libudev" = xyesyes; then
     GBM_PC_REQ_PRIV="libudev >= $LIBUDEV_REQUIRED"
 else
     GBM_PC_REQ_PRIV=""
@@ -1471,9 +1574,9 @@ for plat in $egl_platforms; do
 		;;
 	esac
 
-        case "$plat$need_libudev$have_libudev" in
+        case "$plat$need_pci_id$have_pci_id" in
                 waylandyesno|drmyesno)
-                    AC_MSG_ERROR([cannot build $plat platform without udev >= $LIBUDEV_REQUIRED]) ;;
+                    AC_MSG_ERROR([cannot build $plat platform without udev >= $LIBUDEV_REQUIRED or sysfs]) ;;
         esac
 done
 
@@ -1571,7 +1674,8 @@ strip_unwanted_llvm_flags() {
 	-e 's/-fno-exceptions\>//g' \
 	-e 's/-fomit-frame-pointer\>//g' \
 	-e 's/-fvisibility-inlines-hidden\>//g' \
-	-e 's/-fPIC\>//g'
+	-e 's/-fPIC\>//g' \
+	-e 's/-fstack-protector-strong\>//g'
 }
 
 
@@ -1605,10 +1709,22 @@ if test "x$enable_gallium_llvm" = xyes; then
         AC_COMPUTE_INT([LLVM_VERSION_MINOR], [LLVM_VERSION_MINOR],
             [#include "${LLVM_INCLUDEDIR}/llvm/Config/llvm-config.h"])
 
+        dnl In LLVM 3.4.1 patch level was defined in config.h and not
+        dnl llvm-config.h
+        AC_COMPUTE_INT([LLVM_VERSION_PATCH], [LLVM_VERSION_PATCH],
+            [#include "${LLVM_INCLUDEDIR}/llvm/Config/config.h"],
+            LLVM_VERSION_PATCH=0) dnl Default if LLVM_VERSION_PATCH not found
+
         if test -n "${LLVM_VERSION_MAJOR}"; then
             LLVM_VERSION_INT="${LLVM_VERSION_MAJOR}0${LLVM_VERSION_MINOR}"
         else
             LLVM_VERSION_INT=`echo $LLVM_VERSION | sed -e 's/\([[0-9]]\)\.\([[0-9]]\)/\10\2/g'`
+        fi
+
+        LLVM_REQUIRED_VERSION_MAJOR="3"
+        LLVM_REQUIRED_VERSION_MINOR="1"
+        if test "$LLVM_VERSION_INT" -lt "${LLVM_REQUIRED_VERSION_MAJOR}0${LLVM_REQUIRED_VERSION_MINOR}"; then
+            AC_MSG_ERROR([LLVM $LLVM_REQUIRED_VERSION_MAJOR.$LLVM_REQUIRED_VERSION_MINOR or newer is required])
         fi
 
         LLVM_COMPONENTS="engine bitwriter"
@@ -1626,8 +1742,15 @@ if test "x$enable_gallium_llvm" = xyes; then
             if $LLVM_CONFIG --components | grep -qw 'option'; then
                 LLVM_COMPONENTS="${LLVM_COMPONENTS} option"
             fi
+            # Current OpenCL/Clover and LLVM 3.5 require ObjCARCOpts and ProfileData
+            if $LLVM_CONFIG --components | grep -qw 'objcarcopts'; then
+                LLVM_COMPONENTS="${LLVM_COMPONENTS} objcarcopts"
+            fi
+            if $LLVM_CONFIG --components | grep -qw 'profiledata'; then
+                LLVM_COMPONENTS="${LLVM_COMPONENTS} profiledata"
+            fi
         fi
-        DEFINES="${DEFINES} -DHAVE_LLVM=0x0$LLVM_VERSION_INT"
+        DEFINES="${DEFINES} -DHAVE_LLVM=0x0$LLVM_VERSION_INT -DLLVM_VERSION_PATCH=$LLVM_VERSION_PATCH"
         MESA_LLVM=1
 
         dnl Check for Clang internal headers
@@ -1734,13 +1857,26 @@ gallium_require_llvm() {
 
 gallium_require_drm_loader() {
     if test "x$enable_gallium_loader" = xyes; then
-        if test "x$need_libudev$have_libudev" = xyesno; then
-            AC_MSG_ERROR([Gallium drm loader requires libudev >= $LIBUDEV_REQUIRED])
+        if test "x$need_pci_id$have_pci_id" = xyesno; then
+            AC_MSG_ERROR([Gallium drm loader requires libudev >= $LIBUDEV_REQUIRED or sysfs])
         fi
         if test "x$have_libdrm" != xyes; then
             AC_MSG_ERROR([Gallium drm loader requires libdrm >= $LIBDRM_REQUIRED])
         fi
         enable_gallium_drm_loader=yes
+    fi
+}
+
+require_egl_drm() {
+    case "$with_egl_platforms" in
+        *drm*)
+            ;;
+         *)
+            AC_MSG_ERROR([--with-egl-platforms=drm is required to build the $1 driver.])
+            ;;
+    esac
+    if test "x$enable_gbm" != xyes; then
+            AC_MSG_ERROR([--enable-gbm is required to build the $1 driver.])
     fi
 }
 
@@ -1835,6 +1971,7 @@ if test -n "$with_gallium_drivers"; then
             gallium_require_drm_loader
             GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS radeonsi"
             radeon_llvm_check "radeonsi"
+            require_egl_drm "radeonsi"
             gallium_check_st "radeon/drm" "radeonsi/dri" "" "" "radeonsi/vdpau" "radeonsi/omx"
             DRICOMMON_NEED_LIBDRM=yes
             ;;
@@ -1843,7 +1980,7 @@ if test -n "$with_gallium_drivers"; then
             PKG_CHECK_MODULES([NOUVEAU], [libdrm_nouveau >= $LIBDRM_NOUVEAU_REQUIRED])
             gallium_require_drm_loader
             GALLIUM_DRIVERS_DIRS="$GALLIUM_DRIVERS_DIRS nouveau"
-            gallium_check_st "nouveau/drm" "dri-nouveau" "" "xvmc-nouveau" "vdpau-nouveau"
+            gallium_check_st "nouveau/drm" "dri-nouveau" "" "xvmc-nouveau" "vdpau-nouveau" "omx-nouveau"
             DRICOMMON_NEED_LIBDRM=yes
             ;;
         xfreedreno)
@@ -1921,6 +2058,8 @@ AM_CONDITIONAL(HAVE_GALLIUM_ILO, test "x$HAVE_GALLIUM_ILO" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_R300, test "x$HAVE_GALLIUM_R300" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_R600, test "x$HAVE_GALLIUM_R600" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_RADEONSI, test "x$HAVE_GALLIUM_RADEONSI" = xyes)
+AM_CONDITIONAL(HAVE_GALLIUM_RADEON_COMMON, test "x$HAVE_GALLIUM_R600" = xyes -o \
+                                                "x$HAVE_GALLIUM_RADEONSI" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_NOUVEAU, test "x$HAVE_GALLIUM_NOUVEAU" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_FREEDRENO, test "x$HAVE_GALLIUM_FREEDRENO" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_SOFTPIPE, test "x$HAVE_GALLIUM_SOFTPIPE" = xyes)
@@ -2086,6 +2225,7 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/targets/opencl/Makefile
 		src/gallium/targets/xa/Makefile
 		src/gallium/targets/xa/xatracker.pc
+		src/gallium/targets/omx-nouveau/Makefile
 		src/gallium/targets/osmesa/Makefile
 		src/gallium/targets/osmesa/osmesa.pc
 		src/gallium/targets/pipe-loader/Makefile
@@ -2120,6 +2260,7 @@ AC_CONFIG_FILES([Makefile
 		src/gbm/main/gbm.pc
 		src/glsl/Makefile
 		src/glx/Makefile
+		src/glx/apple/Makefile
 		src/glx/tests/Makefile
 		src/gtest/Makefile
 		src/loader/Makefile
@@ -2189,7 +2330,9 @@ xnono)
         ;;
 esac
 
+echo ""
 if test "x$enable_dri" != xno; then
+        echo "        DRI platform:    $dri_platform"
         if test -z "$DRI_DIRS"; then
             echo "        DRI drivers:     no"
         else

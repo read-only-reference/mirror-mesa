@@ -37,16 +37,19 @@ extern "C" {
 #include "brw_cfg.h"
 
 fs_generator::fs_generator(struct brw_context *brw,
-                           struct brw_wm_compile *c,
+                           void *mem_ctx,
+                           const struct brw_wm_prog_key *key,
+                           struct brw_wm_prog_data *prog_data,
                            struct gl_shader_program *prog,
                            struct gl_fragment_program *fp,
-                           bool dual_source_output)
+                           bool dual_source_output,
+                           bool debug_flag)
 
-   : brw(brw), c(c), prog(prog), fp(fp), dual_source_output(dual_source_output)
+   : brw(brw), key(key), prog_data(prog_data), prog(prog), fp(fp),
+     dual_source_output(dual_source_output), debug_flag(debug_flag),
+     mem_ctx(mem_ctx)
 {
    ctx = &brw->ctx;
-
-   mem_ctx = c;
 
    p = rzalloc(mem_ctx, struct brw_compile);
    brw_init_compile(brw, p, mem_ctx);
@@ -56,11 +59,11 @@ fs_generator::~fs_generator()
 {
 }
 
-void
+bool
 fs_generator::patch_discard_jumps_to_fb_writes()
 {
    if (brw->gen < 6 || this->discard_halt_patches.is_empty())
-      return;
+      return false;
 
    /* There is a somewhat strange undocumented requirement of using
     * HALT, according to the simulator.  If some channel has HALTed to
@@ -89,6 +92,7 @@ fs_generator::patch_discard_jumps_to_fb_writes()
    }
 
    this->discard_halt_patches.make_empty();
+   return true;
 }
 
 void
@@ -110,7 +114,7 @@ fs_generator::generate_fb_write(fs_inst *inst)
       /* On HSW, the GPU will use the predicate on SENDC, unless the header is
        * present.
        */
-      if ((fp && fp->UsesKill) || c->key.alpha_test_func) {
+      if ((fp && fp->UsesKill) || key->alpha_test_func) {
          struct brw_reg pixel_mask;
 
          if (brw->gen >= 6)
@@ -128,7 +132,7 @@ fs_generator::generate_fb_write(fs_inst *inst)
 		 retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD));
 	 brw_set_compression_control(p, BRW_COMPRESSION_NONE);
 
-         if (inst->target > 0 && c->key.replicate_alpha) {
+         if (inst->target > 0 && key->replicate_alpha) {
             /* Set "Source0 Alpha Present to RenderTarget" bit in message
              * header.
              */
@@ -168,7 +172,7 @@ fs_generator::generate_fb_write(fs_inst *inst)
    brw_pop_insn_state(p);
 
    uint32_t surf_index =
-      c->prog_data.binding_table.render_target_start + inst->target;
+      prog_data->binding_table.render_target_start + inst->target;
    brw_fb_WRITE(p,
 		dispatch_width,
 		inst->base_mrf,
@@ -180,7 +184,7 @@ fs_generator::generate_fb_write(fs_inst *inst)
 		eot,
 		inst->header_present);
 
-   brw_mark_surface_used(&c->prog_data.base, surf_index);
+   brw_mark_surface_used(&prog_data->base, surf_index);
 }
 
 void
@@ -594,8 +598,8 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
 
    uint32_t surface_index = ((inst->opcode == SHADER_OPCODE_TG4 ||
       inst->opcode == SHADER_OPCODE_TG4_OFFSET)
-      ? c->prog_data.base.binding_table.gather_texture_start
-      : c->prog_data.base.binding_table.texture_start) + inst->sampler;
+      ? prog_data->base.binding_table.gather_texture_start
+      : prog_data->base.binding_table.texture_start) + inst->sampler;
 
    brw_SAMPLE(p,
 	      retype(dst, BRW_REGISTER_TYPE_UW),
@@ -610,7 +614,7 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
 	      simd_mode,
 	      return_format);
 
-   brw_mark_surface_used(&c->prog_data.base, surface_index);
+   brw_mark_surface_used(&prog_data->base, surface_index);
 }
 
 
@@ -647,7 +651,7 @@ fs_generator::generate_ddx(fs_inst *inst, struct brw_reg dst, struct brw_reg src
 {
    unsigned vstride, width;
 
-   if (c->key.high_quality_derivatives) {
+   if (key->high_quality_derivatives) {
       /* produce accurate derivatives */
       vstride = BRW_VERTICAL_STRIDE_2;
       width = BRW_WIDTH_2;
@@ -681,7 +685,7 @@ void
 fs_generator::generate_ddy(fs_inst *inst, struct brw_reg dst, struct brw_reg src,
                          bool negate_value)
 {
-   if (c->key.high_quality_derivatives) {
+   if (key->high_quality_derivatives) {
       /* From the Ivy Bridge PRM, volume 4 part 3, section 3.3.9 (Register
        * Region Restrictions):
        *
@@ -822,7 +826,7 @@ fs_generator::generate_uniform_pull_constant_load(fs_inst *inst,
    brw_oword_block_read(p, dst, brw_message_reg(inst->base_mrf),
 			read_offset, surf_index);
 
-   brw_mark_surface_used(&c->prog_data.base, surf_index);
+   brw_mark_surface_used(&prog_data->base, surf_index);
 }
 
 void
@@ -864,7 +868,7 @@ fs_generator::generate_uniform_pull_constant_load_gen7(fs_inst *inst,
                            BRW_SAMPLER_SIMD_MODE_SIMD4X2,
                            0);
 
-   brw_mark_surface_used(&c->prog_data.base, surf_index);
+   brw_mark_surface_used(&prog_data->base, surf_index);
 }
 
 void
@@ -931,7 +935,7 @@ fs_generator::generate_varying_pull_constant_load(fs_inst *inst,
                            simd_mode,
                            return_format);
 
-   brw_mark_surface_used(&c->prog_data.base, surf_index);
+   brw_mark_surface_used(&prog_data->base, surf_index);
 }
 
 void
@@ -975,7 +979,7 @@ fs_generator::generate_varying_pull_constant_load_gen7(fs_inst *inst,
                            simd_mode,
                            0);
 
-   brw_mark_surface_used(&c->prog_data.base, surf_index);
+   brw_mark_surface_used(&prog_data->base, surf_index);
 }
 
 /**
@@ -1279,11 +1283,11 @@ fs_generator::generate_shader_time_add(fs_inst *inst,
    brw_MOV(p, payload_offset, offset);
    brw_MOV(p, payload_value, value);
    brw_shader_time_add(p, payload,
-                       c->prog_data.base.binding_table.shader_time_start);
+                       prog_data->base.binding_table.shader_time_start);
    brw_pop_insn_state(p);
 
-   brw_mark_surface_used(&c->prog_data.base,
-                         c->prog_data.base.binding_table.shader_time_start);
+   brw_mark_surface_used(&prog_data->base,
+                         prog_data->base.binding_table.shader_time_start);
 }
 
 void
@@ -1300,7 +1304,7 @@ fs_generator::generate_untyped_atomic(fs_inst *inst, struct brw_reg dst,
                       atomic_op.dw1.ud, surf_index.dw1.ud,
                       inst->mlen, dispatch_width / 8);
 
-   brw_mark_surface_used(&c->prog_data.base, surf_index.dw1.ud);
+   brw_mark_surface_used(&prog_data->base, surf_index.dw1.ud);
 }
 
 void
@@ -1314,17 +1318,14 @@ fs_generator::generate_untyped_surface_read(fs_inst *inst, struct brw_reg dst,
                             surf_index.dw1.ud,
                             inst->mlen, dispatch_width / 8);
 
-   brw_mark_surface_used(&c->prog_data.base, surf_index.dw1.ud);
+   brw_mark_surface_used(&prog_data->base, surf_index.dw1.ud);
 }
 
 void
-fs_generator::generate_code(exec_list *instructions, FILE *dump_file)
+fs_generator::generate_code(exec_list *instructions,
+                            struct annotation_info *annotation)
 {
-   int last_native_insn_offset = p->next_insn_offset;
-   const char *last_annotation_string = NULL;
-   const void *last_annotation_ir = NULL;
-
-   if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
+   if (unlikely(debug_flag)) {
       if (prog) {
          fprintf(stderr,
                  "Native code for %s fragment shader %d (SIMD%d dispatch):\n",
@@ -1341,54 +1342,15 @@ fs_generator::generate_code(exec_list *instructions, FILE *dump_file)
    }
 
    cfg_t *cfg = NULL;
-   if (unlikely(INTEL_DEBUG & DEBUG_WM))
+   if (unlikely(debug_flag))
       cfg = new(mem_ctx) cfg_t(instructions);
 
    foreach_list(node, instructions) {
       fs_inst *inst = (fs_inst *)node;
       struct brw_reg src[3], dst;
 
-      if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
-	 foreach_list(node, &cfg->block_list) {
-	    bblock_link *link = (bblock_link *)node;
-	    bblock_t *block = link->block;
-
-	    if (block->start == inst) {
-	       fprintf(stderr, "   START B%d", block->block_num);
-	       foreach_list(predecessor_node, &block->parents) {
-		  bblock_link *predecessor_link =
-		     (bblock_link *)predecessor_node;
-		  bblock_t *predecessor_block = predecessor_link->block;
-		  fprintf(stderr, " <-B%d", predecessor_block->block_num);
-	       }
-	       fprintf(stderr, "\n");
-	    }
-	 }
-
-	 if (last_annotation_ir != inst->ir) {
-	    last_annotation_ir = inst->ir;
-	    if (last_annotation_ir) {
-	       fprintf(stderr, "   ");
-               if (prog)
-                  ((ir_instruction *)inst->ir)->fprint(stderr);
-               else {
-                  const prog_instruction *fpi;
-                  fpi = (const prog_instruction *)inst->ir;
-                  fprintf(stderr, "%d: ",
-                          (int)(fpi - (fp ? fp->Base.Instructions : 0)));
-                  _mesa_fprint_instruction_opt(stderr,
-                                               fpi,
-                                               0, PROG_PRINT_DEBUG, NULL);
-               }
-	       fprintf(stderr, "\n");
-	    }
-	 }
-	 if (last_annotation_string != inst->annotation) {
-	    last_annotation_string = inst->annotation;
-	    if (last_annotation_string)
-	       fprintf(stderr, "   %s\n", last_annotation_string);
-	 }
-      }
+      if (unlikely(debug_flag))
+         annotate(brw, annotation, cfg, inst, p->next_insn_offset);
 
       for (unsigned int i = 0; i < 3; i++) {
 	 src[i] = brw_reg_from_fs_reg(&inst->src[i]);
@@ -1701,10 +1663,10 @@ fs_generator::generate_code(exec_list *instructions, FILE *dump_file)
 	 break;
       case FS_OPCODE_DDY:
          /* Make sure fp->UsesDFdy flag got set (otherwise there's no
-          * guarantee that c->key.render_to_fbo is set).
+          * guarantee that key->render_to_fbo is set).
           */
          assert(fp->UsesDFdy);
-	 generate_ddy(inst, dst, src[0], c->key.render_to_fbo);
+	 generate_ddy(inst, dst, src[0], key->render_to_fbo);
 	 break;
 
       case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
@@ -1788,7 +1750,11 @@ fs_generator::generate_code(exec_list *instructions, FILE *dump_file)
          /* This is the place where the final HALT needs to be inserted if
           * we've emitted any discards.  If not, this will emit no code.
           */
-         patch_discard_jumps_to_fb_writes();
+         if (!patch_discard_jumps_to_fb_writes()) {
+            if (unlikely(debug_flag)) {
+               annotation->ann_count--;
+            }
+         }
          break;
 
       default:
@@ -1800,79 +1766,60 @@ fs_generator::generate_code(exec_list *instructions, FILE *dump_file)
 	 }
 	 abort();
       }
-
-      if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
-	 brw_dump_compile(p, stderr,
-			  last_native_insn_offset, p->next_insn_offset);
-
-	 foreach_list(node, &cfg->block_list) {
-	    bblock_link *link = (bblock_link *)node;
-	    bblock_t *block = link->block;
-
-	    if (block->end == inst) {
-	       fprintf(stderr, "   END B%d", block->block_num);
-	       foreach_list(successor_node, &block->children) {
-		  bblock_link *successor_link =
-		     (bblock_link *)successor_node;
-		  bblock_t *successor_block = successor_link->block;
-		  fprintf(stderr, " ->B%d", successor_block->block_num);
-	       }
-	       fprintf(stderr, "\n");
-	    }
-	 }
-      }
-
-      last_native_insn_offset = p->next_insn_offset;
-   }
-
-   if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
-      fprintf(stderr, "\n");
    }
 
    brw_set_uip_jip(p);
-
-   /* OK, while the INTEL_DEBUG=wm above is very nice for debugging FS
-    * emit issues, it doesn't get the jump distances into the output,
-    * which is often something we want to debug.  So this is here in
-    * case you're doing that.
-    */
-   if (dump_file) {
-      brw_dump_compile(p, dump_file, 0, p->next_insn_offset);
-   }
+   annotation_finalize(annotation, p->next_insn_offset);
 }
 
 const unsigned *
 fs_generator::generate_assembly(exec_list *simd8_instructions,
                                 exec_list *simd16_instructions,
-                                unsigned *assembly_size,
-                                FILE *dump_file)
+                                unsigned *assembly_size)
 {
    assert(simd8_instructions || simd16_instructions);
 
+   const struct gl_program *prog = fp ? &fp->Base : NULL;
+
    if (simd8_instructions) {
+      struct annotation_info annotation;
+      memset(&annotation, 0, sizeof(annotation));
+
       dispatch_width = 8;
-      generate_code(simd8_instructions, dump_file);
+      generate_code(simd8_instructions, &annotation);
+      brw_compact_instructions(p, 0, annotation.ann_count, annotation.ann);
+
+      if (unlikely(debug_flag)) {
+         dump_assembly(p->store, annotation.ann_count, annotation.ann,
+                       brw, prog, brw_disassemble);
+         ralloc_free(annotation.ann);
+      }
    }
 
    if (simd16_instructions) {
-      /* We have to do a compaction pass now, or the one at the end of
-       * execution will squash down where our prog_offset start needs
-       * to be.
-       */
-      brw_compact_instructions(p);
-
       /* align to 64 byte boundary. */
-      while ((p->nr_insn * sizeof(struct brw_instruction)) % 64) {
+      while (p->next_insn_offset % 64) {
          brw_NOP(p);
       }
 
       /* Save off the start of this SIMD16 program */
-      c->prog_data.prog_offset_16 = p->nr_insn * sizeof(struct brw_instruction);
+      prog_data->prog_offset_16 = p->next_insn_offset;
 
       brw_set_compression_control(p, BRW_COMPRESSION_COMPRESSED);
 
+      struct annotation_info annotation;
+      memset(&annotation, 0, sizeof(annotation));
+
       dispatch_width = 16;
-      generate_code(simd16_instructions, dump_file);
+      generate_code(simd16_instructions, &annotation);
+      brw_compact_instructions(p, prog_data->prog_offset_16,
+                               annotation.ann_count, annotation.ann);
+
+      if (unlikely(debug_flag)) {
+         dump_assembly(p->store, annotation.ann_count, annotation.ann,
+                       brw, prog, brw_disassemble);
+         ralloc_free(annotation.ann);
+      }
    }
 
    return brw_get_program(p, assembly_size);
