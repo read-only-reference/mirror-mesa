@@ -256,6 +256,12 @@ struct glsl_type {
    unsigned component_slots() const;
 
    /**
+    * Calculate the number of unique values from glGetUniformLocation for the
+    * elements of the type.
+    */
+   unsigned uniform_locations() const;
+
+   /**
     * Calculate the number of attribute slots required to hold this type
     *
     * This implements the language rules of GLSL 1.50 for counting the number
@@ -314,7 +320,8 @@ struct glsl_type {
     *     integers.
     * \endverbatim
     */
-   bool can_implicitly_convert_to(const glsl_type *desired) const;
+   bool can_implicitly_convert_to(const glsl_type *desired,
+                                  _mesa_glsl_parse_state *state) const;
 
    /**
     * Query whether or not a type is a scalar (non-vector and non-matrix).
@@ -664,6 +671,12 @@ struct glsl_struct_field {
     * in ir_variable::sample). 0 otherwise.
     */
    unsigned sample:1;
+
+   /**
+    * For interface blocks, it has a value if this variable uses multiple vertex
+    * streams (as in ir_variable::stream). -1 otherwise.
+    */
+   int stream;
 };
 
 static inline unsigned int

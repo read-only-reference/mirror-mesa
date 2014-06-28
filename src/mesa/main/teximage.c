@@ -255,16 +255,6 @@ _mesa_base_tex_format( struct gl_context *ctx, GLint internalFormat )
       }
    }
 
-   if (ctx->Extensions.ATI_envmap_bumpmap) {
-      switch (internalFormat) {
-         case GL_DUDV_ATI:
-         case GL_DU8DV8_ATI:
-            return GL_DUDV_ATI;
-         default:
-            ; /* fallthrough */
-      }
-   }
-
    if (ctx->Extensions.EXT_texture_snorm) {
       switch (internalFormat) {
          case GL_RED_SNORM:
@@ -2157,8 +2147,7 @@ texture_error_check( struct gl_context *ctx,
    colorFormat = _mesa_is_color_format(format);
    if ((_mesa_is_color_format(internalFormat) && !colorFormat && !indexFormat) ||
        (is_internalFormat_depth_or_depthstencil != is_format_depth_or_depthstencil) ||
-       (_mesa_is_ycbcr_format(internalFormat) != _mesa_is_ycbcr_format(format)) ||
-       (_mesa_is_dudv_format(internalFormat) != _mesa_is_dudv_format(format))) {
+       (_mesa_is_ycbcr_format(internalFormat) != _mesa_is_ycbcr_format(format))) {
       _mesa_error(ctx, GL_INVALID_OPERATION,
                   "glTexImage%dD(incompatible internalFormat = %s, format = %s)",
                   dimensions, _mesa_lookup_enum_by_nr(internalFormat),
@@ -2241,6 +2230,36 @@ texture_error_check( struct gl_context *ctx,
    return GL_FALSE;
 }
 
+
+bool
+_mesa_compressed_texture_pixel_storage_error_check(struct gl_context *ctx,
+                                             GLint dimensions,
+                                             struct gl_pixelstore_attrib *packing,
+                                             const char *caller)
+{
+   if (!_mesa_is_desktop_gl(ctx) || !packing->CompressedBlockSize)
+      return true;
+
+   if (packing->CompressedBlockWidth && packing->SkipPixels % packing->CompressedBlockWidth) {
+      _mesa_error(ctx, GL_INVALID_OPERATION,
+                  "%s(skip-pixels %% block-width)", caller);
+      return false;
+   }
+
+   if (dimensions > 1 && packing->CompressedBlockHeight && packing->SkipRows % packing->CompressedBlockHeight) {
+      _mesa_error(ctx, GL_INVALID_OPERATION,
+                  "%s(skip-rows %% block-height)", caller);
+      return false;
+   }
+
+   if (dimensions > 2 && packing->CompressedBlockDepth && packing->SkipImages % packing->CompressedBlockDepth) {
+      _mesa_error(ctx, GL_INVALID_OPERATION,
+                  "%s(skip-images %% block-depth)", caller);
+      return false;
+   }
+
+   return true;
+}
 
 /**
  * Error checking for glCompressedTexImage[123]D().
@@ -2341,6 +2360,13 @@ compressed_texture_error_check(struct gl_context *ctx, GLint dimensions,
       reason = "border != 0";
       error = GL_INVALID_VALUE;
       goto error;
+   }
+
+   /* Check for invalid pixel storage modes */
+   if (!_mesa_compressed_texture_pixel_storage_error_check(ctx, dimensions,
+                                                           &ctx->Unpack,
+                                                           "glCompressedTexImage")) {
+      return GL_FALSE;
    }
 
    /* check image size in bytes */
@@ -3844,7 +3870,7 @@ compressed_subtexture_error_check(struct gl_context *ctx, GLint dims,
    }
 
    if (!targetOK) {
-      _mesa_error(ctx, GL_INVALID_ENUM, "glCompressedTexImage%uD(target)",
+      _mesa_error(ctx, GL_INVALID_ENUM, "glCompressedTexSubImage%uD(target)",
                   dims);
       return GL_TRUE;
    }
@@ -3857,14 +3883,22 @@ compressed_subtexture_error_check(struct gl_context *ctx, GLint dims,
    }
 
    if (level < 0 || level >= _mesa_max_texture_levels(ctx, target)) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glCompressedTexImage%uD(level=%d)",
+      _mesa_error(ctx, GL_INVALID_VALUE, "glCompressedTexSubImage%uD(level=%d)",
                   dims, level);
       return GL_TRUE;
    }
 
+   /* Check for invalid pixel storage modes */
+   if (!_mesa_compressed_texture_pixel_storage_error_check(ctx, dims,
+                                                           &ctx->Unpack,
+                                                           "glCompressedTexSubImage")) {
+      return GL_FALSE;
+   }
+
+
    expectedSize = compressed_tex_size(width, height, depth, format);
    if (expectedSize != imageSize) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glCompressedTexImage%uD(size=%d)",
+      _mesa_error(ctx, GL_INVALID_VALUE, "glCompressedTexSubImage%uD(size=%d)",
                   dims, imageSize);
       return GL_TRUE;
    }

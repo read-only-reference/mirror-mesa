@@ -85,10 +85,10 @@ static void compute_tri_direction( struct brw_clip_compile *c )
 
    /* Take their crossproduct:
     */
-   brw_set_access_mode(p, BRW_ALIGN_16);
+   brw_set_default_access_mode(p, BRW_ALIGN_16);
    brw_MUL(p, vec4(brw_null_reg()), brw_swizzle(e, 1,2,0,3),  brw_swizzle(f,2,0,1,3));
    brw_MAC(p, vec4(e),  negate(brw_swizzle(e, 2,0,1,3)), brw_swizzle(f,1,2,0,3));
-   brw_set_access_mode(p, BRW_ALIGN_1);
+   brw_set_default_access_mode(p, BRW_ALIGN_1);
 
    brw_MUL(p, c->reg.dir, c->reg.dir, vec4(e));
 }
@@ -193,9 +193,9 @@ static void copy_bfc( struct brw_clip_compile *c )
 static void compute_offset( struct brw_clip_compile *c )
 {
    struct brw_compile *p = &c->func;
+   const struct brw_context *brw = p->brw;
    struct brw_reg off = c->reg.offset;
    struct brw_reg dir = c->reg.dir;
-   struct brw_instruction *inst;
 
    brw_math_invert(p, get_element(off, 2), get_element(dir, 2));
    brw_MUL(p, vec2(off), dir, get_element(off, 2));
@@ -206,9 +206,9 @@ static void compute_offset( struct brw_clip_compile *c )
 	   brw_abs(get_element(off, 0)),
 	   brw_abs(get_element(off, 1)));
 
-   inst = brw_SEL(p, vec1(off),
-                  brw_abs(get_element(off, 0)), brw_abs(get_element(off, 1)));
-   inst->header.predicate_control = BRW_PREDICATE_NORMAL;
+   brw_SEL(p, vec1(off),
+           brw_abs(get_element(off, 0)), brw_abs(get_element(off, 1)));
+   brw_inst_set_pred_control(brw, brw_last_inst, BRW_PREDICATE_NORMAL);
 
    brw_MUL(p, vec1(off), off, brw_imm_f(c->key.offset_factor));
    brw_ADD(p, vec1(off), off, brw_imm_f(c->key.offset_units));
@@ -218,6 +218,7 @@ static void compute_offset( struct brw_clip_compile *c )
 static void merge_edgeflags( struct brw_clip_compile *c )
 {
    struct brw_compile *p = &c->func;
+   const struct brw_context *brw = p->brw;
    struct brw_reg tmp0 = get_element_ud(c->reg.tmp0, 0);
 
    brw_AND(p, tmp0, get_element_ud(c->reg.R0, 2), brw_imm_ud(PRIM_MASK));
@@ -232,21 +233,21 @@ static void merge_edgeflags( struct brw_clip_compile *c )
     */
    brw_IF(p, BRW_EXECUTE_1);
    {
-      brw_set_conditionalmod(p, BRW_CONDITIONAL_EQ);
       brw_AND(p, vec1(brw_null_reg()), get_element_ud(c->reg.R0, 2), brw_imm_ud(1<<8));
+      brw_inst_set_cond_modifier(brw, brw_last_inst, BRW_CONDITIONAL_EQ);
       brw_MOV(p, byte_offset(c->reg.vertex[0],
                              brw_varying_to_offset(&c->vue_map,
                                                    VARYING_SLOT_EDGE)),
               brw_imm_f(0));
-      brw_set_predicate_control(p, BRW_PREDICATE_NONE);
+      brw_inst_set_pred_control(brw, brw_last_inst, BRW_PREDICATE_NORMAL);
 
-      brw_set_conditionalmod(p, BRW_CONDITIONAL_EQ);
       brw_AND(p, vec1(brw_null_reg()), get_element_ud(c->reg.R0, 2), brw_imm_ud(1<<9));
+      brw_inst_set_cond_modifier(brw, brw_last_inst, BRW_CONDITIONAL_EQ);
       brw_MOV(p, byte_offset(c->reg.vertex[2],
                              brw_varying_to_offset(&c->vue_map,
                                                    VARYING_SLOT_EDGE)),
               brw_imm_f(0));
-      brw_set_predicate_control(p, BRW_PREDICATE_NONE);
+      brw_inst_set_pred_control(brw, brw_last_inst, BRW_PREDICATE_NORMAL);
    }
    brw_ENDIF(p);
 }
@@ -274,6 +275,7 @@ static void emit_lines(struct brw_clip_compile *c,
 		       bool do_offset)
 {
    struct brw_compile *p = &c->func;
+   const struct brw_context *brw = p->brw;
    struct brw_indirect v0 = brw_indirect(0, 0);
    struct brw_indirect v1 = brw_indirect(1, 0);
    struct brw_indirect v0ptr = brw_indirect(2, 0);
@@ -292,10 +294,11 @@ static void emit_lines(struct brw_clip_compile *c,
 	
 	 apply_one_offset(c, v0);
 	
-	 brw_set_conditionalmod(p, BRW_CONDITIONAL_G);
 	 brw_ADD(p, c->reg.loopcount, c->reg.loopcount, brw_imm_d(-1));
+         brw_inst_set_cond_modifier(brw, brw_last_inst, BRW_CONDITIONAL_G);
       }
       brw_WHILE(p);
+      brw_inst_set_pred_control(brw, brw_last_inst, BRW_PREDICATE_NORMAL);
    }
 
    /* v1ptr = &inlist[nr_verts]
@@ -330,10 +333,11 @@ static void emit_lines(struct brw_clip_compile *c,
       }
       brw_ENDIF(p);
 
-      brw_set_conditionalmod(p, BRW_CONDITIONAL_NZ);
       brw_ADD(p, c->reg.loopcount, c->reg.loopcount, brw_imm_d(-1));
+      brw_inst_set_cond_modifier(brw, brw_last_inst, BRW_CONDITIONAL_NZ);
    }
    brw_WHILE(p);
+   brw_inst_set_pred_control(brw, brw_last_inst, BRW_PREDICATE_NORMAL);
 }
 
 
@@ -342,6 +346,7 @@ static void emit_points(struct brw_clip_compile *c,
 			bool do_offset )
 {
    struct brw_compile *p = &c->func;
+   const struct brw_context *brw = p->brw;
 
    struct brw_indirect v0 = brw_indirect(0, 0);
    struct brw_indirect v0ptr = brw_indirect(2, 0);
@@ -372,10 +377,11 @@ static void emit_points(struct brw_clip_compile *c,
       }
       brw_ENDIF(p);
 
-      brw_set_conditionalmod(p, BRW_CONDITIONAL_NZ);
       brw_ADD(p, c->reg.loopcount, c->reg.loopcount, brw_imm_d(-1));
+      brw_inst_set_cond_modifier(brw, brw_last_inst, BRW_CONDITIONAL_NZ);
    }
    brw_WHILE(p);
+   brw_inst_set_pred_control(brw, brw_last_inst, BRW_PREDICATE_NORMAL);
 }
 
 

@@ -1102,6 +1102,19 @@ static uint32_t si_translate_texformat(struct pipe_screen *screen,
 		}
 	}
 
+	if (desc->layout == UTIL_FORMAT_LAYOUT_SUBSAMPLED) {
+		switch (format) {
+		case PIPE_FORMAT_R8G8_B8G8_UNORM:
+		case PIPE_FORMAT_G8R8_B8R8_UNORM:
+			return V_008F14_IMG_DATA_FORMAT_GB_GR;
+		case PIPE_FORMAT_G8R8_G8B8_UNORM:
+		case PIPE_FORMAT_R8G8_R8B8_UNORM:
+			return V_008F14_IMG_DATA_FORMAT_BG_RG;
+		default:
+			goto out_unknown;
+		}
+	}
+
 	if (desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
 
 		if (!enable_s3tc)
@@ -1859,6 +1872,7 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 				     const struct pipe_framebuffer_state *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
+	struct pipe_constant_buffer constbuf = {0};
 	struct r600_surface *surf = NULL;
 	struct r600_texture *rtex;
 	int i;
@@ -1921,8 +1935,33 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	sctx->framebuffer.atom.num_dw = state->nr_cbufs*15 + (8 - state->nr_cbufs)*3;
 	sctx->framebuffer.atom.num_dw += state->zsbuf ? 23 : 4;
 	sctx->framebuffer.atom.num_dw += 3; /* WINDOW_SCISSOR_BR */
-	sctx->framebuffer.atom.num_dw += 25; /* MSAA */
+	sctx->framebuffer.atom.num_dw += 18; /* MSAA sample locations */
 	sctx->framebuffer.atom.dirty = true;
+	sctx->msaa_config.dirty = true;
+
+	/* Set sample locations as fragment shader constants. */
+	switch (sctx->framebuffer.nr_samples) {
+	case 1:
+		constbuf.user_buffer = sctx->b.sample_locations_1x;
+		break;
+	case 2:
+		constbuf.user_buffer = sctx->b.sample_locations_2x;
+		break;
+	case 4:
+		constbuf.user_buffer = sctx->b.sample_locations_4x;
+		break;
+	case 8:
+		constbuf.user_buffer = sctx->b.sample_locations_8x;
+		break;
+	case 16:
+		constbuf.user_buffer = sctx->b.sample_locations_16x;
+		break;
+	default:
+		assert(0);
+	}
+	constbuf.buffer_size = sctx->framebuffer.nr_samples * 2 * 4;
+	ctx->set_constant_buffer(ctx, PIPE_SHADER_FRAGMENT,
+				 NUM_PIPE_CONST_BUFFERS, &constbuf);
 }
 
 static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom *atom)
@@ -2025,7 +2064,31 @@ static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom 
 	r600_write_context_reg(cs, R_028208_PA_SC_WINDOW_SCISSOR_BR,
 			       S_028208_BR_X(state->width) | S_028208_BR_Y(state->height));
 
-	cayman_emit_msaa_state(cs, sctx->framebuffer.nr_samples);
+	cayman_emit_msaa_sample_locs(cs, sctx->framebuffer.nr_samples);
+}
+
+static void si_emit_msaa_config(struct r600_common_context *rctx, struct r600_atom *atom)
+{
+	struct si_context *sctx = (struct si_context *)rctx;
+	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+
+	cayman_emit_msaa_config(cs, sctx->framebuffer.nr_samples,
+				sctx->ps_iter_samples);
+}
+
+const struct r600_atom si_atom_msaa_config = { si_emit_msaa_config, 10 }; /* number of CS dwords */
+
+static void si_set_min_samples(struct pipe_context *ctx, unsigned min_samples)
+{
+	struct si_context *sctx = (struct si_context *)ctx;
+
+	if (sctx->ps_iter_samples == min_samples)
+		return;
+
+	sctx->ps_iter_samples = min_samples;
+
+	if (sctx->framebuffer.nr_samples > 1)
+		sctx->msaa_config.dirty = true;
 }
 
 /*
@@ -2065,6 +2128,8 @@ static INLINE void si_shader_selector_key(struct pipe_context *ctx,
 		if (sctx->queued.named.rasterizer) {
 			key->ps.color_two_side = sctx->queued.named.rasterizer->two_side;
 			key->ps.flatshade = sctx->queued.named.rasterizer->flatshade;
+			key->ps.interp_at_sample = sctx->framebuffer.nr_samples > 1 &&
+						   sctx->ps_iter_samples == sctx->framebuffer.nr_samples;
 
 			if (sctx->queued.named.blend) {
 				key->ps.alpha_to_one = sctx->queued.named.blend->alpha_to_one &&
@@ -2429,6 +2494,8 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 					num_format = V_008F14_IMG_NUM_FORMAT_UNORM;
 					break;
 				}
+			} else if (desc->layout == UTIL_FORMAT_LAYOUT_SUBSAMPLED) {
+				num_format = V_008F14_IMG_NUM_FORMAT_UNORM;
 			} else {
 				num_format = V_008F14_IMG_NUM_FORMAT_FLOAT;
 			}
@@ -3024,6 +3091,8 @@ void si_init_state_functions(struct si_context *sctx)
 
 	sctx->b.b.texture_barrier = si_texture_barrier;
 	sctx->b.b.set_polygon_stipple = si_set_polygon_stipple;
+	sctx->b.b.set_min_samples = si_set_min_samples;
+
 	sctx->b.dma_copy = si_dma_copy;
 	sctx->b.set_occlusion_query_state = si_set_occlusion_query_state;
 	sctx->b.need_gfx_cs_space = si_need_gfx_cs_space;
@@ -3039,8 +3108,6 @@ void si_init_config(struct si_context *sctx)
 		return;
 
 	si_cmd_context_control(pm4);
-
-	si_pm4_set_reg(pm4, R_028A4C_PA_SC_MODE_CNTL_1, 0x0);
 
 	si_pm4_set_reg(pm4, R_028A10_VGT_OUTPUT_PATH_CNTL, 0x0);
 	si_pm4_set_reg(pm4, R_028A14_VGT_HOS_CNTL, 0x0);

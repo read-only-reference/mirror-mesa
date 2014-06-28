@@ -68,14 +68,6 @@ compute_msaa_layout(struct brw_context *brw, mesa_format format, GLenum target)
    case GL_DEPTH_STENCIL:
       return INTEL_MSAA_LAYOUT_IMS;
    default:
-      /* Disable MCS on Broadwell for now.  We can enable it once things
-       * are working without it.
-       */
-      if (brw->gen >= 8) {
-         perf_debug("Missing CMS support on Broadwell.\n");
-         return INTEL_MSAA_LAYOUT_UMS;
-      }
-
       /* From the Ivy Bridge PRM, Vol4 Part1 p77 ("MCS Enable"):
        *
        *   This field must be set to 0 for all SINT MSRTs when all RT channels
@@ -87,9 +79,7 @@ compute_msaa_layout(struct brw_context *brw, mesa_format format, GLenum target)
        * would require converting between CMS and UMS MSAA layouts on the fly,
        * which is expensive.
        */
-      if (_mesa_get_format_datatype(format) == GL_INT) {
-         /* TODO: is this workaround needed for future chipsets? */
-         assert(brw->gen == 7);
+      if (brw->gen == 7 && _mesa_get_format_datatype(format) == GL_INT) {
          return INTEL_MSAA_LAYOUT_UMS;
       } else {
          return INTEL_MSAA_LAYOUT_CMS;
@@ -261,6 +251,7 @@ intel_miptree_create_layout(struct brw_context *brw,
    mt->logical_height0 = height0;
    mt->logical_depth0 = depth0;
    mt->fast_clear_state = INTEL_FAST_CLEAR_STATE_NO_MCS;
+   exec_list_make_empty(&mt->hiz_map);
 
    /* The cpp is bytes per (1, blockheight)-sized block for compressed
     * textures.  This is why you'll see divides by blockheight all over
@@ -1252,6 +1243,7 @@ intel_miptree_alloc_mcs(struct brw_context *brw,
     */
    mesa_format format;
    switch (num_samples) {
+   case 2:
    case 4:
       /* 8 bits/pixel are required for MCS data when using 4x MSAA (2 bits for
        * each sample).
@@ -1369,10 +1361,12 @@ intel_miptree_level_enable_hiz(struct brw_context *brw,
        * force the proper size alignments.
        */
       if (level > 0 && ((width & 7) || (height & 3))) {
+         DBG("mt %p level %d: HiZ DISABLED\n", mt, level);
          return false;
       }
    }
 
+   DBG("mt %p level %d: HiZ enabled\n", mt, level);
    mt->level[level].has_hiz = true;
    return true;
 }
@@ -1400,20 +1394,18 @@ intel_miptree_alloc_hiz(struct brw_context *brw,
       return false;
 
    /* Mark that all slices need a HiZ resolve. */
-   struct intel_resolve_map *head = &mt->hiz_map;
    for (int level = mt->first_level; level <= mt->last_level; ++level) {
       if (!intel_miptree_level_enable_hiz(brw, mt, level))
          continue;
 
       for (int layer = 0; layer < mt->level[level].depth; ++layer) {
-	 head->next = malloc(sizeof(*head->next));
-	 head->next->prev = head;
-	 head->next->next = NULL;
-	 head = head->next;
+         struct intel_resolve_map *m = malloc(sizeof(struct intel_resolve_map));
+         exec_node_init(&m->link);
+         m->level = level;
+         m->layer = layer;
+         m->need = GEN6_HIZ_OP_HIZ_RESOLVE;
 
-	 head->level = level;
-	 head->layer = layer;
-	 head->need = GEN6_HIZ_OP_HIZ_RESOLVE;
+         exec_list_push_tail(&mt->hiz_map, &m->link);
       }
    }
 
@@ -1513,15 +1505,15 @@ intel_miptree_all_slices_resolve(struct brw_context *brw,
 				 enum gen6_hiz_op need)
 {
    bool did_resolve = false;
-   struct intel_resolve_map *i, *next;
 
-   for (i = mt->hiz_map.next; i; i = next) {
-      next = i->next;
-      if (i->need != need)
+   foreach_list_safe(node, &mt->hiz_map) {
+      struct intel_resolve_map *map = (struct intel_resolve_map *)node;
+
+      if (map->need != need)
 	 continue;
 
-      intel_hiz_exec(brw, mt, i->level, i->layer, need);
-      intel_resolve_map_remove(i);
+      intel_hiz_exec(brw, mt, map->level, map->layer, need);
+      intel_resolve_map_remove(map);
       did_resolve = true;
    }
 
@@ -1874,7 +1866,7 @@ intel_miptree_map_movntdqa(struct brw_context *brw,
 
    map->stride = ALIGN(misalignment + width_bytes, 16);
 
-   map->buffer = malloc(map->stride * map->h);
+   map->buffer = _mesa_align_malloc(map->stride * map->h, 16);
    /* Offset the destination so it has the same misalignment as src. */
    map->ptr = map->buffer + misalignment;
 
@@ -1897,7 +1889,7 @@ intel_miptree_unmap_movntdqa(struct brw_context *brw,
                              unsigned int level,
                              unsigned int slice)
 {
-   free(map->buffer);
+   _mesa_align_free(map->buffer);
    map->buffer = NULL;
    map->ptr = NULL;
 }

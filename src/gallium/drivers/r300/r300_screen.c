@@ -175,6 +175,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_FAKE_SW_MSAA:
         case PIPE_CAP_SAMPLE_SHADING:
         case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
+        case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
             return 0;
 
         /* SWTCL-only features. */
@@ -422,6 +423,7 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
     boolean is_color2101010 = format == PIPE_FORMAT_R10G10B10A2_UNORM ||
                               format == PIPE_FORMAT_R10G10B10X2_SNORM ||
                               format == PIPE_FORMAT_B10G10R10A2_UNORM ||
+                              format == PIPE_FORMAT_B10G10R10X2_UNORM ||
                               format == PIPE_FORMAT_R10SG10SB10SA2U_NORM;
     boolean is_ati1n = format == PIPE_FORMAT_RGTC1_UNORM ||
                        format == PIPE_FORMAT_RGTC1_SNORM ||

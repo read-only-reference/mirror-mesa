@@ -42,6 +42,7 @@ namespace { /* avoid conflict with opt_copy_propagation_elements */
 struct acp_entry : public exec_node {
    fs_reg dst;
    fs_reg src;
+   enum opcode opcode;
 };
 
 struct block_data {
@@ -272,10 +273,23 @@ fs_copy_prop_dataflow::dump_block_data() const
    }
 }
 
+static bool
+is_logic_op(enum opcode opcode)
+{
+   return (opcode == BRW_OPCODE_AND ||
+           opcode == BRW_OPCODE_OR  ||
+           opcode == BRW_OPCODE_XOR ||
+           opcode == BRW_OPCODE_NOT);
+}
+
 bool
 fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
 {
    if (entry->src.file == IMM)
+      return false;
+
+   if (entry->opcode == SHADER_OPCODE_LOAD_PAYLOAD &&
+       inst->opcode == SHADER_OPCODE_LOAD_PAYLOAD)
       return false;
 
    /* Bail if inst is reading more than entry is writing. */
@@ -300,7 +314,7 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
 
    if ((has_source_modifiers || entry->src.file == UNIFORM ||
         !entry->src.is_contiguous()) &&
-       !can_do_source_mods(inst))
+       !inst->can_do_source_mods(brw))
       return false;
 
    /* Bail if the result of composing both strides would exceed the
@@ -330,6 +344,14 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
    if (has_source_modifiers && entry->dst.type != inst->src[arg].type)
       return false;
 
+   if (brw->gen >= 8) {
+      if (entry->src.negate) {
+         if (is_logic_op(inst->opcode)) {
+            return false;
+         }
+      }
+   }
+
    inst->src[arg].file = entry->src.file;
    inst->src[arg].reg = entry->src.reg;
    inst->src[arg].reg_offset = entry->src.reg_offset;
@@ -345,15 +367,16 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
 }
 
 
-bool
-fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
+static bool
+try_constant_propagate(struct brw_context *brw, fs_inst *inst,
+                       acp_entry *entry)
 {
    bool progress = false;
 
    if (entry->src.file != IMM)
       return false;
 
-   for (int i = 2; i >= 0; i--) {
+   for (int i = inst->sources - 1; i >= 0; i--) {
       if (inst->src[i].file != entry->dst.file ||
           inst->src[i].reg != entry->dst.reg ||
           inst->src[i].reg_offset != entry->dst.reg_offset ||
@@ -374,6 +397,12 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
          progress = true;
          break;
 
+      case SHADER_OPCODE_POW:
+      case SHADER_OPCODE_INT_QUOTIENT:
+      case SHADER_OPCODE_INT_REMAINDER:
+         if (brw->gen < 8)
+            break;
+         /* fallthrough */
       case BRW_OPCODE_BFI1:
       case BRW_OPCODE_ASR:
       case BRW_OPCODE_SHL:
@@ -478,6 +507,22 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
 
    return progress;
 }
+
+static bool
+can_propagate_from(fs_inst *inst)
+{
+   return (inst->opcode == BRW_OPCODE_MOV &&
+           inst->dst.file == GRF &&
+           ((inst->src[0].file == GRF &&
+             (inst->src[0].reg != inst->dst.reg ||
+              inst->src[0].reg_offset != inst->dst.reg_offset)) ||
+            inst->src[0].file == UNIFORM ||
+            inst->src[0].file == IMM) &&
+           inst->src[0].type == inst->dst.type &&
+           !inst->saturate &&
+           !inst->is_partial_write());
+}
+
 /* Walks a basic block and does copy propagation on it using the acp
  * list.
  */
@@ -492,14 +537,14 @@ fs_visitor::opt_copy_propagate_local(void *copy_prop_ctx, bblock_t *block,
 	inst = (fs_inst *)inst->next) {
 
       /* Try propagating into this instruction. */
-      for (int i = 0; i < 3; i++) {
+      for (int i = 0; i < inst->sources; i++) {
          if (inst->src[i].file != GRF)
             continue;
 
          foreach_list(entry_node, &acp[inst->src[i].reg % ACP_HASH_SIZE]) {
             acp_entry *entry = (acp_entry *)entry_node;
 
-            if (try_constant_propagate(inst, entry))
+            if (try_constant_propagate(brw, inst, entry))
                progress = true;
 
             if (try_copy_propagate(inst, i, entry))
@@ -532,20 +577,28 @@ fs_visitor::opt_copy_propagate_local(void *copy_prop_ctx, bblock_t *block,
       /* If this instruction's source could potentially be folded into the
        * operand of another instruction, add it to the ACP.
        */
-      if (inst->opcode == BRW_OPCODE_MOV &&
-	  inst->dst.file == GRF &&
-	  ((inst->src[0].file == GRF &&
-	    (inst->src[0].reg != inst->dst.reg ||
-	     inst->src[0].reg_offset != inst->dst.reg_offset)) ||
-           inst->src[0].file == UNIFORM ||
-           inst->src[0].file == IMM) &&
-	  inst->src[0].type == inst->dst.type &&
-	  !inst->saturate &&
-	  !inst->is_partial_write()) {
+      if (can_propagate_from(inst)) {
 	 acp_entry *entry = ralloc(copy_prop_ctx, acp_entry);
 	 entry->dst = inst->dst;
 	 entry->src = inst->src[0];
+         entry->opcode = inst->opcode;
 	 acp[entry->dst.reg % ACP_HASH_SIZE].push_tail(entry);
+      } else if (inst->opcode == SHADER_OPCODE_LOAD_PAYLOAD &&
+                 inst->dst.file == GRF) {
+         for (int i = 0; i < inst->sources; i++) {
+            if (inst->src[i].file == GRF) {
+               acp_entry *entry = ralloc(copy_prop_ctx, acp_entry);
+               entry->dst = inst->dst;
+               entry->dst.reg_offset = i;
+               entry->src = inst->src[i];
+               entry->opcode = inst->opcode;
+               if (!entry->dst.equals(inst->src[i])) {
+                  acp[entry->dst.reg % ACP_HASH_SIZE].push_tail(entry);
+               } else {
+                  ralloc_free(entry);
+               }
+            }
+         }
       }
    }
 

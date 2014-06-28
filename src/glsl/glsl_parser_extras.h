@@ -119,6 +119,19 @@ struct _mesa_glsl_parse_state {
       return check_version(130, 300, locp, "bit-wise operations are forbidden");
    }
 
+   bool check_explicit_attrib_stream_allowed(YYLTYPE *locp)
+   {
+      if (!this->has_explicit_attrib_stream()) {
+         const char *const requirement = "GL_ARB_gpu_shader5 extension or GLSL 400";
+
+         _mesa_glsl_error(locp, this, "explicit stream requires %s",
+                          requirement);
+         return false;
+      }
+
+      return true;
+   }
+
    bool check_explicit_attrib_location_allowed(YYLTYPE *locp,
                                                const ir_variable *var)
    {
@@ -149,6 +162,26 @@ struct _mesa_glsl_parse_state {
       }
 
       return true;
+   }
+
+   bool check_explicit_uniform_location_allowed(YYLTYPE *locp,
+                                                const ir_variable *)
+   {
+      if (!this->has_explicit_attrib_location() ||
+          !this->ARB_explicit_uniform_location_enable) {
+         _mesa_glsl_error(locp, this,
+                          "uniform explicit location requires "
+                          "GL_ARB_explicit_uniform_location and either "
+                          "GL_ARB_explicit_attrib_location or GLSL 330.");
+         return false;
+      }
+
+      return true;
+   }
+
+   bool has_explicit_attrib_stream() const
+   {
+      return ARB_gpu_shader5_enable || is_version(400, 0);
    }
 
    bool has_explicit_attrib_location() const
@@ -188,7 +221,7 @@ struct _mesa_glsl_parse_state {
    /**
     * Number of nested struct_specifier levels
     *
-    * Outside a struct_specifer, this is zero.
+    * Outside a struct_specifier, this is zero.
     */
    unsigned struct_specifier_depth;
 
@@ -363,8 +396,12 @@ struct _mesa_glsl_parse_state {
    bool ARB_draw_instanced_warn;
    bool ARB_explicit_attrib_location_enable;
    bool ARB_explicit_attrib_location_warn;
+   bool ARB_explicit_uniform_location_enable;
+   bool ARB_explicit_uniform_location_warn;
    bool ARB_fragment_coord_conventions_enable;
    bool ARB_fragment_coord_conventions_warn;
+   bool ARB_fragment_layer_viewport_enable;
+   bool ARB_fragment_layer_viewport_warn;
    bool ARB_gpu_shader5_enable;
    bool ARB_gpu_shader5_warn;
    bool ARB_sample_shading_enable;

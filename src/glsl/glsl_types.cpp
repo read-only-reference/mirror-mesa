@@ -22,9 +22,7 @@
  */
 
 #include <stdio.h>
-#include <stdlib.h>
-#include "main/core.h" /* for Elements */
-#include "glsl_symbol_table.h"
+#include "main/core.h" /* for Elements, MAX2 */
 #include "glsl_parser_extras.h"
 #include "glsl_types.h"
 extern "C" {
@@ -677,8 +675,35 @@ glsl_type::component_slots() const
    return 0;
 }
 
+unsigned
+glsl_type::uniform_locations() const
+{
+   if (this->is_matrix())
+      return 1;
+
+   unsigned size = 0;
+
+   switch (this->base_type) {
+   case GLSL_TYPE_STRUCT:
+   case GLSL_TYPE_INTERFACE:
+      for (unsigned i = 0; i < this->length; i++)
+         size += this->fields.structure[i].type->uniform_locations();
+      return size;
+   case GLSL_TYPE_ARRAY:
+      return this->length * this->fields.array->uniform_locations();
+   default:
+      break;
+   }
+
+   /* The location count for many types match with component_slots() result,
+    * all expections should be handled above.
+    */
+   return component_slots();
+}
+
 bool
-glsl_type::can_implicitly_convert_to(const glsl_type *desired) const
+glsl_type::can_implicitly_convert_to(const glsl_type *desired,
+                                     _mesa_glsl_parse_state *state) const
 {
    if (this == desired)
       return true;
@@ -687,10 +712,23 @@ glsl_type::can_implicitly_convert_to(const glsl_type *desired) const
    if (this->matrix_columns > 1 || desired->matrix_columns > 1)
       return false;
 
+   /* Vector size must match. */
+   if (this->vector_elements != desired->vector_elements)
+      return false;
+
    /* int and uint can be converted to float. */
-   return desired->is_float()
-          && this->is_integer()
-          && this->vector_elements == desired->vector_elements;
+   if (desired->is_float() && this->is_integer())
+      return true;
+
+   /* With GLSL 4.0 / ARB_gpu_shader5, int can be converted to uint.
+    * Note that state may be NULL here, when resolving function calls in the
+    * linker. By this time, all the state-dependent checks have already
+    * happened though, so allow anything that's allowed in any shader version. */
+   if ((!state || state->is_version(400, 0) || state->ARB_gpu_shader5_enable) &&
+         desired->base_type == GLSL_TYPE_UINT && this->base_type == GLSL_TYPE_INT)
+      return true;
+
+   return false;
 }
 
 unsigned

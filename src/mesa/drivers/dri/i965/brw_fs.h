@@ -54,7 +54,7 @@ extern "C" {
 
 #define MAX_SAMPLER_MESSAGE_SIZE 11
 
-class bblock_t;
+struct bblock_t;
 namespace {
    struct acp_entry;
 }
@@ -185,34 +185,41 @@ public:
 };
 
 class fs_inst : public backend_instruction {
+   fs_inst &operator=(const fs_inst &);
+
 public:
    DECLARE_RALLOC_CXX_OPERATORS(fs_inst)
 
-   void init();
+   void init(enum opcode opcode, const fs_reg &dst, fs_reg *src, int sources);
 
-   fs_inst();
-   fs_inst(enum opcode opcode);
-   fs_inst(enum opcode opcode, fs_reg dst);
-   fs_inst(enum opcode opcode, fs_reg dst, fs_reg src0);
-   fs_inst(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst(enum opcode opcode, fs_reg dst,
-           fs_reg src0, fs_reg src1,fs_reg src2);
+   fs_inst(enum opcode opcode = BRW_OPCODE_NOP, const fs_reg &dst = reg_undef);
+   fs_inst(enum opcode opcode, const fs_reg &dst, const fs_reg &src0);
+   fs_inst(enum opcode opcode, const fs_reg &dst, const fs_reg &src0,
+           const fs_reg &src1);
+   fs_inst(enum opcode opcode, const fs_reg &dst, const fs_reg &src0,
+           const fs_reg &src1, const fs_reg &src2);
+   fs_inst(enum opcode opcode, const fs_reg &dst, fs_reg src[], int sources);
+   fs_inst(const fs_inst &that);
+
+   void resize_sources(uint8_t num_sources);
 
    bool equals(fs_inst *inst) const;
    bool overwrites_reg(const fs_reg &reg) const;
    bool is_send_from_grf() const;
    bool is_partial_write() const;
    int regs_read(fs_visitor *v, int arg) const;
+   bool can_do_source_mods(struct brw_context *brw);
 
    bool reads_flag() const;
    bool writes_flag() const;
 
    fs_reg dst;
-   fs_reg src[3];
+   fs_reg *src;
 
    uint32_t texture_offset; /**< Texture offset bitfield */
    uint32_t offset; /* spill/unspill offset */
 
+   uint8_t sources; /**< Number of fs_reg sources. */
    uint8_t conditional_mod; /**< BRW_CONDITIONAL_* */
 
    /* Chooses which flag subregister (f0.0 or f0.1) is used for conditional
@@ -279,8 +286,6 @@ public:
    uint32_t gather_channel(ir_texture *ir, int sampler);
    void swizzle_result(ir_texture *ir, fs_reg orig_val, int sampler);
 
-   bool can_do_source_mods(fs_inst *inst);
-
    fs_inst *emit(fs_inst *inst);
    void emit(exec_list list);
 
@@ -290,6 +295,8 @@ public:
    fs_inst *emit(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1);
    fs_inst *emit(enum opcode opcode, fs_reg dst,
                  fs_reg src0, fs_reg src1, fs_reg src2);
+   fs_inst *emit(enum opcode opcode, fs_reg dst,
+                 fs_reg src[], int sources);
 
    fs_inst *MOV(fs_reg dst, fs_reg src);
    fs_inst *NOT(fs_reg dst, fs_reg src);
@@ -330,6 +337,8 @@ public:
 					   fs_inst *end,
 					   const fs_reg &reg);
 
+   fs_inst *LOAD_PAYLOAD(const fs_reg &dst, fs_reg *src, int sources);
+
    exec_list VARYING_PULL_CONSTANT_LOAD(const fs_reg &dst,
                                         const fs_reg &surf_index,
                                         const fs_reg &varying_offset,
@@ -364,7 +373,6 @@ public:
    bool opt_cse_local(bblock_t *block, exec_list *aeb);
    bool opt_copy_propagate();
    bool try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry);
-   bool try_constant_propagate(fs_inst *inst, acp_entry *entry);
    bool opt_copy_propagate_local(void *mem_ctx, bblock_t *block,
                                  exec_list *acp);
    void opt_drop_redundant_mov_to_flags();
@@ -381,6 +389,7 @@ public:
    void fail(const char *msg, ...);
    void no16(const char *msg, ...);
    void lower_uniform_pull_constant_loads();
+   bool lower_load_payload();
 
    void push_force_uncompressed();
    void pop_force_uncompressed();
@@ -484,7 +493,9 @@ public:
    int implied_mrf_writes(fs_inst *inst);
 
    virtual void dump_instructions();
+   virtual void dump_instructions(const char *name);
    void dump_instruction(backend_instruction *inst);
+   void dump_instruction(backend_instruction *inst, FILE *file);
 
    void visit_atomic_counter_intrinsic(ir_call *ir);
 
@@ -597,6 +608,7 @@ public:
                 struct gl_shader_program *prog,
                 struct gl_fragment_program *fp,
                 bool dual_source_output,
+                bool runtime_check_aads_emit,
                 bool debug_flag);
    ~fs_generator();
 
@@ -605,28 +617,21 @@ public:
                                      unsigned *assembly_size);
 
 private:
-   void generate_code(exec_list *instructions,
-                      struct annotation_info *annotation);
+   void generate_code(exec_list *instructions);
+   void fire_fb_write(fs_inst *inst,
+                      GLuint base_reg,
+                      struct brw_reg implied_header,
+                      GLuint nr);
    void generate_fb_write(fs_inst *inst);
    void generate_blorp_fb_write(fs_inst *inst);
    void generate_pixel_xy(struct brw_reg dst, bool is_x);
    void generate_linterp(fs_inst *inst, struct brw_reg dst,
 			 struct brw_reg *src);
    void generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src);
-   void generate_math1_gen7(fs_inst *inst,
-			    struct brw_reg dst,
-			    struct brw_reg src);
-   void generate_math2_gen7(fs_inst *inst,
-			    struct brw_reg dst,
-			    struct brw_reg src0,
-			    struct brw_reg src1);
-   void generate_math1_gen6(fs_inst *inst,
-			    struct brw_reg dst,
-			    struct brw_reg src);
-   void generate_math2_gen6(fs_inst *inst,
-			    struct brw_reg dst,
-			    struct brw_reg src0,
-			    struct brw_reg src1);
+   void generate_math_gen6(fs_inst *inst,
+                           struct brw_reg dst,
+                           struct brw_reg src0,
+                           struct brw_reg src1);
    void generate_math_gen4(fs_inst *inst,
 			   struct brw_reg dst,
 			   struct brw_reg src);
@@ -707,6 +712,7 @@ private:
 
    exec_list discard_halt_patches;
    bool dual_source_output;
+   bool runtime_check_aads_emit;
    const bool debug_flag;
    void *mem_ctx;
 };
@@ -733,8 +739,7 @@ public:
                                      unsigned *assembly_size);
 
 private:
-   void generate_code(exec_list *instructions,
-                      struct annotation_info *annotation);
+   void generate_code(exec_list *instructions);
    void generate_fb_write(fs_inst *inst);
    void generate_linterp(fs_inst *inst, struct brw_reg dst,
                          struct brw_reg *src);

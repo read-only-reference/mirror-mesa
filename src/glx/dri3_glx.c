@@ -1308,9 +1308,14 @@ static const __DRIimageLoaderExtension imageLoaderExtension = {
    .flushFrontBuffer    = dri3_flush_front_buffer,
 };
 
+const __DRIuseInvalidateExtension dri3UseInvalidate = {
+   .base = { __DRI_USE_INVALIDATE, 1 }
+};
+
 static const __DRIextension *loader_extensions[] = {
    &imageLoaderExtension.base,
    &systemTimeExtension.base,
+   &dri3UseInvalidate.base,
    NULL
 };
 
@@ -1383,6 +1388,8 @@ dri3_swap_buffers(__GLXDRIdrawable *pdraw, int64_t target_msc, int64_t divisor,
       if (priv->stamp)
          ++(*priv->stamp);
    }
+
+   (*psc->f->invalidate)(priv->driDrawable);
 
    return ret;
 }
@@ -1594,6 +1601,9 @@ dri3_bind_extensions(struct dri3_screen *psc, struct glx_display * priv,
          /* internal driver extension, no GL extension exposed */
       }
 
+      if (strcmp(extensions[i]->name, __DRI_IMAGE) == 0)
+         psc->image = (__DRIimageExtension *) extensions[i];
+
       if ((strcmp(extensions[i]->name, __DRI2_CONFIG_QUERY) == 0))
          psc->config = (__DRI2configQueryExtension *) extensions[i];
 
@@ -1712,19 +1722,12 @@ dri3_create_screen(int screen, struct glx_display * priv)
       goto handle_error;
    }
 
-   extensions = (*psc->core->getExtensions)(psc->driScreen);
+   dri3_bind_extensions(psc, priv, driverName);
 
-   for (i = 0; extensions[i]; i++) {
-      if (strcmp(extensions[i]->name, __DRI_IMAGE) == 0)
-         psc->image = (__DRIimageExtension *) extensions[i];
-   }
-
-   if (psc->image == NULL) {
-      ErrorMessageF("image extension not found\n");
+   if (!psc->image || psc->image->base.version < 7 || !psc->image->createImageFromFds) {
+      ErrorMessageF("Version 7 or imageFromFds image extension not found\n");
       goto handle_error;
    }
-
-   dri3_bind_extensions(psc, priv, driverName);
 
    if (!psc->f || psc->f->base.version < 4) {
       ErrorMessageF("Version 4 or later of flush extension not found\n");
@@ -1741,8 +1744,10 @@ dri3_create_screen(int screen, struct glx_display * priv)
    configs = driConvertConfigs(psc->core, psc->base.configs, driver_configs);
    visuals = driConvertConfigs(psc->core, psc->base.visuals, driver_configs);
 
-   if (!configs || !visuals)
+   if (!configs || !visuals) {
+       ErrorMessageF("No matching fbConfigs or visuals found\n");
        goto handle_error;
+   }
 
    glx_config_destroy_list(psc->base.configs);
    psc->base.configs = configs;

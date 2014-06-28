@@ -193,7 +193,6 @@ static void do_flatshade_triangle( struct brw_sf_compile *c )
 {
    struct brw_compile *p = &c->func;
    struct brw_context *brw = p->brw;
-   struct brw_reg ip = brw_ip_reg();
    GLuint nr;
    GLuint jmpi = 1;
 
@@ -208,15 +207,15 @@ static void do_flatshade_triangle( struct brw_sf_compile *c )
    nr = count_flatshaded_attributes(c);
 
    brw_MUL(p, c->pv, c->pv, brw_imm_d(jmpi*(nr*2+1)));
-   brw_JMPI(p, ip, ip, c->pv);
+   brw_JMPI(p, c->pv, BRW_PREDICATE_NONE);
 
    copy_flatshaded_attributes(c, c->vert[1], c->vert[0]);
    copy_flatshaded_attributes(c, c->vert[2], c->vert[0]);
-   brw_JMPI(p, ip, ip, brw_imm_d(jmpi*(nr*4+1)));
+   brw_JMPI(p, brw_imm_d(jmpi*(nr*4+1)), BRW_PREDICATE_NONE);
 
    copy_flatshaded_attributes(c, c->vert[0], c->vert[1]);
    copy_flatshaded_attributes(c, c->vert[2], c->vert[1]);
-   brw_JMPI(p, ip, ip, brw_imm_d(jmpi*nr*2));
+   brw_JMPI(p, brw_imm_d(jmpi*nr*2), BRW_PREDICATE_NONE);
 
    copy_flatshaded_attributes(c, c->vert[0], c->vert[2]);
    copy_flatshaded_attributes(c, c->vert[1], c->vert[2]);
@@ -227,7 +226,6 @@ static void do_flatshade_line( struct brw_sf_compile *c )
 {
    struct brw_compile *p = &c->func;
    struct brw_context *brw = p->brw;
-   struct brw_reg ip = brw_ip_reg();
    GLuint nr;
    GLuint jmpi = 1;
 
@@ -242,10 +240,10 @@ static void do_flatshade_line( struct brw_sf_compile *c )
    nr = count_flatshaded_attributes(c);
 
    brw_MUL(p, c->pv, c->pv, brw_imm_d(jmpi*(nr+1)));
-   brw_JMPI(p, ip, ip, c->pv);
+   brw_JMPI(p, c->pv, BRW_PREDICATE_NONE);
    copy_flatshaded_attributes(c, c->vert[1], c->vert[0]);
 
-   brw_JMPI(p, ip, ip, brw_imm_ud(jmpi*nr));
+   brw_JMPI(p, brw_imm_ud(jmpi*nr), BRW_PREDICATE_NONE);
    copy_flatshaded_attributes(c, c->vert[0], c->vert[1]);
 }
 
@@ -324,13 +322,13 @@ static void invert_det( struct brw_sf_compile *c)
    /* Looks like we invert all 8 elements just to get 1/det in
     * position 2 !?!
     */
-   brw_math(&c->func,
-	    c->inv_det,
-	    BRW_MATH_FUNCTION_INV,
-	    0,
-	    c->det,
-	    BRW_MATH_DATA_SCALAR,
-	    BRW_MATH_PRECISION_FULL);
+   gen4_math(&c->func,
+	     c->inv_det,
+	     BRW_MATH_FUNCTION_INV,
+	     0,
+	     c->det,
+	     BRW_MATH_DATA_SCALAR,
+	     BRW_MATH_PRECISION_FULL);
 
 }
 
@@ -406,7 +404,7 @@ set_predicate_control_flag_value(struct brw_compile *p,
                                  struct brw_sf_compile *c,
                                  unsigned value)
 {
-   p->current->header.predicate_control = BRW_PREDICATE_NONE;
+   brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
 
    if (value != 0xff) {
       if (value != c->flag_value) {
@@ -414,7 +412,7 @@ set_predicate_control_flag_value(struct brw_compile *p,
          c->flag_value = value;
       }
 
-      p->current->header.predicate_control = BRW_PREDICATE_NORMAL;
+      brw_set_default_predicate_control(p, BRW_PREDICATE_NORMAL);
    }
 }
 
@@ -502,7 +500,7 @@ void brw_emit_tri_setup(struct brw_sf_compile *c, bool allocate)
       }
    }
 
-   brw_set_predicate_control(p, BRW_PREDICATE_NONE);
+   brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
 }
 
 
@@ -576,7 +574,7 @@ void brw_emit_line_setup(struct brw_sf_compile *c, bool allocate)
       }
    }
 
-   brw_set_predicate_control(p, BRW_PREDICATE_NONE);
+   brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
 }
 
 void brw_emit_point_sprite_setup(struct brw_sf_compile *c, bool allocate)
@@ -613,15 +611,15 @@ void brw_emit_point_sprite_setup(struct brw_sf_compile *c, bool allocate)
       if (pc_coord_replace) {
 	 set_predicate_control_flag_value(p, c, pc_coord_replace);
 	 /* Caculate 1.0/PointWidth */
-	 brw_math(&c->func,
-		  c->tmp,
-		  BRW_MATH_FUNCTION_INV,
-		  0,
-		  c->dx0,
-		  BRW_MATH_DATA_SCALAR,
-		  BRW_MATH_PRECISION_FULL);
+	 gen4_math(&c->func,
+		   c->tmp,
+		   BRW_MATH_FUNCTION_INV,
+		   0,
+		   c->dx0,
+		   BRW_MATH_DATA_SCALAR,
+		   BRW_MATH_PRECISION_FULL);
 
-	 brw_set_access_mode(p, BRW_ALIGN_16);
+	 brw_set_default_access_mode(p, BRW_ALIGN_16);
 
 	 /* dA/dx, dA/dy */
 	 brw_MOV(p, c->m1Cx, brw_imm_f(0.0));
@@ -641,7 +639,7 @@ void brw_emit_point_sprite_setup(struct brw_sf_compile *c, bool allocate)
 	    brw_MOV(p, brw_writemask(c->m3C0, WRITEMASK_W), brw_imm_f(1.0));
 	 }
 
-	 brw_set_access_mode(p, BRW_ALIGN_1);
+	 brw_set_default_access_mode(p, BRW_ALIGN_1);
       }
 
       if (pc & ~pc_coord_replace) {
@@ -666,7 +664,7 @@ void brw_emit_point_sprite_setup(struct brw_sf_compile *c, bool allocate)
 		    BRW_URB_SWIZZLE_TRANSPOSE);
    }
 
-   brw_set_predicate_control(p, BRW_PREDICATE_NONE);
+   brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
 }
 
 /* Points setup - several simplifications as all attributes are
@@ -728,29 +726,13 @@ void brw_emit_point_setup(struct brw_sf_compile *c, bool allocate)
       }
    }
 
-   brw_set_predicate_control(p, BRW_PREDICATE_NONE);
-}
-
-static void
-brw_land_fwd_jump(struct brw_compile *p, int jmp_insn_idx)
-{
-   struct brw_context *brw = p->brw;
-   struct brw_instruction *jmp_insn = &p->store[jmp_insn_idx];
-   unsigned jmpi = 1;
-
-   if (brw->gen >= 5)
-      jmpi = 2;
-
-   assert(jmp_insn->header.opcode == BRW_OPCODE_JMPI);
-   assert(jmp_insn->bits1.da1.src1_reg_file == BRW_IMMEDIATE_VALUE);
-
-   jmp_insn->bits3.ud = jmpi * (p->nr_insn - jmp_insn_idx - 1);
+   brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
 }
 
 void brw_emit_anyprim_setup( struct brw_sf_compile *c )
 {
    struct brw_compile *p = &c->func;
-   struct brw_reg ip = brw_ip_reg();
+   struct brw_context *brw = p->brw;
    struct brw_reg payload_prim = brw_uw1_reg(BRW_GENERAL_REGISTER_FILE, 1, 0);
    struct brw_reg payload_attr = get_element_ud(brw_vec1_reg(BRW_GENERAL_REGISTER_FILE, 1, 0), 0);
    struct brw_reg primmask;
@@ -765,7 +747,6 @@ void brw_emit_anyprim_setup( struct brw_sf_compile *c )
    brw_MOV(p, primmask, brw_imm_ud(1));
    brw_SHL(p, primmask, primmask, payload_prim);
 
-   brw_set_conditionalmod(p, BRW_CONDITIONAL_Z);
    brw_AND(p, v1_null_ud, primmask, brw_imm_ud((1<<_3DPRIM_TRILIST) |
 					       (1<<_3DPRIM_TRISTRIP) |
 					       (1<<_3DPRIM_TRIFAN) |
@@ -773,24 +754,25 @@ void brw_emit_anyprim_setup( struct brw_sf_compile *c )
 					       (1<<_3DPRIM_POLYGON) |
 					       (1<<_3DPRIM_RECTLIST) |
 					       (1<<_3DPRIM_TRIFAN_NOSTIPPLE)));
-   jmp = brw_JMPI(p, ip, ip, brw_imm_d(0)) - p->store;
+   brw_inst_set_cond_modifier(brw, brw_last_inst, BRW_CONDITIONAL_Z);
+   jmp = brw_JMPI(p, brw_imm_d(0), BRW_PREDICATE_NORMAL) - p->store;
    brw_emit_tri_setup(c, false);
    brw_land_fwd_jump(p, jmp);
 
-   brw_set_conditionalmod(p, BRW_CONDITIONAL_Z);
    brw_AND(p, v1_null_ud, primmask, brw_imm_ud((1<<_3DPRIM_LINELIST) |
 					       (1<<_3DPRIM_LINESTRIP) |
 					       (1<<_3DPRIM_LINELOOP) |
 					       (1<<_3DPRIM_LINESTRIP_CONT) |
 					       (1<<_3DPRIM_LINESTRIP_BF) |
 					       (1<<_3DPRIM_LINESTRIP_CONT_BF)));
-   jmp = brw_JMPI(p, ip, ip, brw_imm_d(0)) - p->store;
+   brw_inst_set_cond_modifier(brw, brw_last_inst, BRW_CONDITIONAL_Z);
+   jmp = brw_JMPI(p, brw_imm_d(0), BRW_PREDICATE_NORMAL) - p->store;
    brw_emit_line_setup(c, false);
    brw_land_fwd_jump(p, jmp);
 
-   brw_set_conditionalmod(p, BRW_CONDITIONAL_Z);
    brw_AND(p, v1_null_ud, payload_attr, brw_imm_ud(1<<BRW_SPRITE_POINT_ENABLE));
-   jmp = brw_JMPI(p, ip, ip, brw_imm_d(0)) - p->store;
+   brw_inst_set_cond_modifier(brw, brw_last_inst, BRW_CONDITIONAL_Z);
+   jmp = brw_JMPI(p, brw_imm_d(0), BRW_PREDICATE_NORMAL) - p->store;
    brw_emit_point_sprite_setup(c, false);
    brw_land_fwd_jump(p, jmp);
 

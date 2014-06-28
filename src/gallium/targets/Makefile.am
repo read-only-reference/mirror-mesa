@@ -26,6 +26,10 @@ if HAVE_X11_DRIVER
 SUBDIRS += libgl-xlib
 endif
 
+if HAVE_ST_OMX
+SUBDIRS += omx
+endif
+
 if HAVE_GALLIUM_OSMESA
 SUBDIRS += osmesa
 endif
@@ -34,8 +38,16 @@ if HAVE_GALLIUM_GBM
 SUBDIRS += gbm
 endif
 
+if HAVE_ST_VDPAU
+SUBDIRS += vdpau
+endif
+
 if HAVE_ST_XA
 SUBDIRS += xa
+endif
+
+if HAVE_ST_XVMC
+SUBDIRS += xvmc
 endif
 
 if HAVE_CLOVER
@@ -76,49 +88,17 @@ if HAVE_GALLIUM_R600
 if HAVE_DRI2
 SUBDIRS += r600/dri
 endif
-
-if HAVE_ST_XVMC
-SUBDIRS += r600/xvmc
-endif
-
-if HAVE_ST_VDPAU
-SUBDIRS += r600/vdpau
-endif
-
-if HAVE_ST_OMX
-SUBDIRS += r600/omx
-endif
 endif
 
 if HAVE_GALLIUM_RADEONSI
 if HAVE_DRI2
 SUBDIRS += radeonsi/dri
 endif
-
-if HAVE_ST_VDPAU
-SUBDIRS += radeonsi/vdpau
-endif
-
-if HAVE_ST_OMX
-SUBDIRS += radeonsi/omx
-endif
 endif
 
 if HAVE_GALLIUM_NOUVEAU
 if HAVE_DRI2
 SUBDIRS += dri-nouveau
-endif
-
-if HAVE_ST_XVMC
-SUBDIRS += xvmc-nouveau
-endif
-
-if HAVE_ST_VDPAU
-SUBDIRS += vdpau-nouveau
-endif
-
-if HAVE_ST_OMX
-SUBDIRS += omx-nouveau
 endif
 endif
 

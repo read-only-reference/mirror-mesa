@@ -34,6 +34,7 @@
 #include "main/api_exec.h"
 #include "main/context.h"
 #include "main/fbobject.h"
+#include "main/extensions.h"
 #include "main/imports.h"
 #include "main/macros.h"
 #include "main/points.h"
@@ -302,7 +303,7 @@ brw_initialize_context_constants(struct brw_context *brw)
       ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxTextureImageUnits = max_samplers;
    else
       ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxTextureImageUnits = 0;
-   if (getenv("INTEL_COMPUTE_SHADER")) {
+   if (_mesa_extension_override_enables.ARB_compute_shader) {
       ctx->Const.Program[MESA_SHADER_COMPUTE].MaxTextureImageUnits = BRW_MAX_TEX_UNIT;
       ctx->Const.MaxUniformBufferBindings += 12;
    } else {
@@ -506,6 +507,10 @@ brw_initialize_context_constants(struct brw_context *brw)
       ctx->Const.ViewportBounds.Min = -(float)ctx->Const.MaxViewportWidth;
       ctx->Const.ViewportBounds.Max = ctx->Const.MaxViewportWidth;
    }
+
+   /* ARB_gpu_shader5 */
+   if (brw->gen >= 7)
+      ctx->Const.MaxVertexStreams = MIN2(4, MAX_VERTEX_STREAMS);
 }
 
 /**
@@ -615,6 +620,7 @@ brwCreateContext(gl_api api,
    brw->is_g4x = devinfo->is_g4x;
    brw->is_baytrail = devinfo->is_baytrail;
    brw->is_haswell = devinfo->is_haswell;
+   brw->is_cherryview = devinfo->is_cherryview;
    brw->has_llc = devinfo->has_llc;
    brw->has_hiz = devinfo->has_hiz_and_separate_stencil;
    brw->has_separate_stencil = devinfo->has_hiz_and_separate_stencil;

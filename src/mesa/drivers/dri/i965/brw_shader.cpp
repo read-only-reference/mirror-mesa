@@ -451,6 +451,11 @@ brw_instruction_name(enum opcode op)
       return "tg4";
    case SHADER_OPCODE_TG4_OFFSET:
       return "tg4_offset";
+   case SHADER_OPCODE_SHADER_TIME_ADD:
+      return "shader_time_add";
+
+   case SHADER_OPCODE_LOAD_PAYLOAD:
+      return "load_payload";
 
    case SHADER_OPCODE_GEN4_SCRATCH_READ:
       return "gen4_scratch_read";
@@ -677,10 +682,10 @@ backend_instruction::reads_accumulator_implicitly() const
 }
 
 bool
-backend_instruction::writes_accumulator_implicitly(int gen) const
+backend_instruction::writes_accumulator_implicitly(struct brw_context *brw) const
 {
    return writes_accumulator ||
-          (gen < 6 &&
+          (brw->gen < 6 &&
            ((opcode >= BRW_OPCODE_ADD && opcode < BRW_OPCODE_NOP) ||
             (opcode >= FS_OPCODE_DDX && opcode <= FS_OPCODE_LINTERP &&
              opcode != FS_OPCODE_CINTERP)));
@@ -700,11 +705,29 @@ backend_instruction::has_side_effects() const
 void
 backend_visitor::dump_instructions()
 {
+   dump_instructions(NULL);
+}
+
+void
+backend_visitor::dump_instructions(const char *name)
+{
+   FILE *file = stderr;
+   if (name && geteuid() != 0) {
+      file = fopen(name, "w");
+      if (!file)
+         file = stderr;
+   }
+
    int ip = 0;
    foreach_list(node, &this->instructions) {
       backend_instruction *inst = (backend_instruction *)node;
-      fprintf(stderr, "%d: ", ip++);
-      dump_instruction(inst);
+      if (!name)
+         fprintf(stderr, "%d: ", ip++);
+      dump_instruction(inst, file);
+   }
+
+   if (file != stderr) {
+      fclose(file);
    }
 }
 
@@ -740,8 +763,13 @@ backend_visitor::assign_common_binding_table_offsets(uint32_t next_binding_table
    }
 
    if (prog->UsesGather) {
-      stage_prog_data->binding_table.gather_texture_start = next_binding_table_offset;
-      next_binding_table_offset += num_textures;
+      if (brw->gen >= 8) {
+         stage_prog_data->binding_table.gather_texture_start =
+            stage_prog_data->binding_table.texture_start;
+      } else {
+         stage_prog_data->binding_table.gather_texture_start = next_binding_table_offset;
+         next_binding_table_offset += num_textures;
+      }
    } else {
       stage_prog_data->binding_table.gather_texture_start = 0xd0d0d0d0;
    }
@@ -776,8 +804,10 @@ void annotate(struct brw_context *brw,
 
    struct annotation *ann = &annotation->ann[annotation->ann_count++];
    ann->offset = offset;
-   ann->ir = inst->ir;
-   ann->annotation = inst->annotation;
+   if ((INTEL_DEBUG & DEBUG_NO_ANNOTATION) == 0) {
+      ann->ir = inst->ir;
+      ann->annotation = inst->annotation;
+   }
 
    if (cfg->blocks[annotation->cur_block]->start == inst) {
       ann->block_start = cfg->blocks[annotation->cur_block];

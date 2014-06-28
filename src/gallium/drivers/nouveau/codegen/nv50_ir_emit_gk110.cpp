@@ -287,10 +287,12 @@ CodeEmitterGK110::emitPredicate(const Instruction *i)
 void
 CodeEmitterGK110::setCAddress14(const ValueRef& src)
 {
-   const int32_t addr = src.get()->asSym()->reg.data.offset / 4;
+   const Storage& res = src.get()->asSym()->reg;
+   const int32_t addr = res.data.offset / 4;
 
    code[0] |= (addr & 0x01ff) << 23;
    code[1] |= (addr & 0x3e00) >> 9;
+   code[1] |= res.fileIndex << 5;
 }
 
 void
@@ -413,7 +415,6 @@ CodeEmitterGK110::emitForm_21(const Instruction *i, uint32_t opc2,
       case FILE_MEMORY_CONST:
          code[1] &= (s == 2) ? ~(0x4 << 28) : ~(0x8 << 28);
          setCAddress14(i->src(s));
-         code[1] |= i->getSrc(s)->reg.fileIndex << 5;
          break;
       case FILE_IMMEDIATE:
          setShortImmediate(i, s);
@@ -555,6 +556,7 @@ CodeEmitterGK110::emitFADD(const Instruction *i)
       RND_(2a, F);
       ABS_(31, 0);
       NEG_(33, 0);
+      SAT_(35);
 
       if (code[0] & 0x1) {
          modNegAbsF32_3b(i, 1);
@@ -633,7 +635,7 @@ CodeEmitterGK110::emitISAD(const Instruction *i)
 {
    assert(i->dType == TYPE_S32 || i->dType == TYPE_U32);
 
-   emitForm_21(i, 0x1fc, 0xb74);
+   emitForm_21(i, 0x1f4, 0xb74);
 
    if (i->dType == TYPE_S32)
       code[1] |= 1 << 19;
@@ -711,7 +713,7 @@ CodeEmitterGK110::emitEXTBF(const Instruction *i)
 void
 CodeEmitterGK110::emitBFIND(const Instruction *i)
 {
-   emitForm_21(i, 0x618, 0xc18);
+   emitForm_C(i, 0x218, 0x2);
 
    if (i->dType == TYPE_S32)
       code[1] |= 0x80000;
@@ -952,7 +954,7 @@ CodeEmitterGK110::emitSLCT(const CmpInstruction *i)
       FTZ_(32);
       emitCondCode(cc, 0x33, 0xf);
    } else {
-      emitForm_21(i, 0x1a4, 0xb20);
+      emitForm_21(i, 0x1a0, 0xb20);
       emitCondCode(cc, 0x34, 0x7);
    }
 }
@@ -967,7 +969,7 @@ void CodeEmitterGK110::emitSELP(const Instruction *i)
 
 void CodeEmitterGK110::emitTEXBAR(const Instruction *i)
 {
-   code[0] = 0x00000002 | (i->subOp << 23);
+   code[0] = 0x0000003e | (i->subOp << 23);
    code[1] = 0x77000000;
 
    emitPredicate(i);
@@ -1204,7 +1206,7 @@ CodeEmitterGK110::emitFlow(const Instruction *i)
    case OP_PRECONT:  code[1] = 0x15800000; mask = 2; break;
    case OP_PRERET:   code[1] = 0x13800000; mask = 2; break;
 
-   case OP_QUADON:  code[1] = 0x1b000000; mask = 0; break;
+   case OP_QUADON:  code[1] = 0x1b800000; mask = 0; break;
    case OP_QUADPOP: code[1] = 0x1c000000; mask = 0; break;
    case OP_BRKPT:   code[1] = 0x00000000; mask = 0; break;
    default:
@@ -1326,7 +1328,8 @@ CodeEmitterGK110::emitOUT(const Instruction *i)
 void
 CodeEmitterGK110::emitInterpMode(const Instruction *i)
 {
-   code[1] |= i->ipa << 21; // TODO: INTERP_SAMPLEID
+   code[1] |= (i->ipa & 0x3) << 21; // TODO: INTERP_SAMPLEID
+   code[1] |= (i->ipa & 0xc) << (19 - 2);
 }
 
 void

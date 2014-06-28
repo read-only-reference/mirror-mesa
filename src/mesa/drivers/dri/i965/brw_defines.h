@@ -580,6 +580,16 @@
 #define GEN7_SURFACE_MCS_ENABLE                 (1 << 0)
 #define GEN7_SURFACE_MCS_PITCH_SHIFT            3
 #define GEN7_SURFACE_MCS_PITCH_MASK             INTEL_MASK(11, 3)
+#define GEN8_SURFACE_AUX_QPITCH_SHIFT           16
+#define GEN8_SURFACE_AUX_QPITCH_MASK            INTEL_MASK(30, 16)
+#define GEN8_SURFACE_AUX_PITCH_SHIFT            3
+#define GEN8_SURFACE_AUX_PITCH_MASK             INTEL_MASK(11, 3)
+#define GEN8_SURFACE_AUX_MODE_MASK              INTEL_MASK(2, 0)
+
+#define GEN8_SURFACE_AUX_MODE_NONE              0
+#define GEN8_SURFACE_AUX_MODE_MCS               1
+#define GEN8_SURFACE_AUX_MODE_APPEND            2
+#define GEN8_SURFACE_AUX_MODE_HIZ               3
 
 /* Surface state DW7 */
 #define GEN7_SURFACE_CLEAR_COLOR_SHIFT		28
@@ -606,6 +616,7 @@
 #define BRW_TEXCOORDMODE_CUBE            3
 #define BRW_TEXCOORDMODE_CLAMP_BORDER    4
 #define BRW_TEXCOORDMODE_MIRROR_ONCE     5
+#define GEN8_TEXCOORDMODE_HALF_BORDER    6
 
 #define BRW_THREAD_PRIORITY_NORMAL   0
 #define BRW_THREAD_PRIORITY_HIGH     1
@@ -716,15 +727,16 @@ enum opcode {
    BRW_OPCODE_ASR =	12,
    BRW_OPCODE_CMP =	16,
    BRW_OPCODE_CMPN =	17,
-   BRW_OPCODE_F32TO16 = 19,
-   BRW_OPCODE_F16TO32 = 20,
-   BRW_OPCODE_BFREV =	23,
-   BRW_OPCODE_BFE =	24,
-   BRW_OPCODE_BFI1 =	25,
-   BRW_OPCODE_BFI2 =	26,
+   BRW_OPCODE_CSEL =	18,  /**< Gen8+ */
+   BRW_OPCODE_F32TO16 = 19,  /**< Gen7 only */
+   BRW_OPCODE_F16TO32 = 20,  /**< Gen7 only */
+   BRW_OPCODE_BFREV =	23,  /**< Gen7+ */
+   BRW_OPCODE_BFE =	24,  /**< Gen7+ */
+   BRW_OPCODE_BFI1 =	25,  /**< Gen7+ */
+   BRW_OPCODE_BFI2 =	26,  /**< Gen7+ */
    BRW_OPCODE_JMPI =	32,
    BRW_OPCODE_IF =	34,
-   BRW_OPCODE_IFF =	35,
+   BRW_OPCODE_IFF =	35,  /**< Pre-Gen6 */
    BRW_OPCODE_ELSE =	36,
    BRW_OPCODE_ENDIF =	37,
    BRW_OPCODE_DO =	38,
@@ -732,14 +744,14 @@ enum opcode {
    BRW_OPCODE_BREAK =	40,
    BRW_OPCODE_CONTINUE = 41,
    BRW_OPCODE_HALT =	42,
-   BRW_OPCODE_MSAVE =	44,
-   BRW_OPCODE_MRESTORE = 45,
-   BRW_OPCODE_PUSH =	46,
-   BRW_OPCODE_POP =	47,
+   BRW_OPCODE_MSAVE =	44,  /**< Pre-Gen6 */
+   BRW_OPCODE_MRESTORE = 45, /**< Pre-Gen6 */
+   BRW_OPCODE_PUSH =	46,  /**< Pre-Gen6 */
+   BRW_OPCODE_POP =	47,  /**< Pre-Gen6 */
    BRW_OPCODE_WAIT =	48,
    BRW_OPCODE_SEND =	49,
    BRW_OPCODE_SENDC =	50,
-   BRW_OPCODE_MATH =	56,
+   BRW_OPCODE_MATH =	56,  /**< Gen6+ */
    BRW_OPCODE_ADD =	64,
    BRW_OPCODE_MUL =	65,
    BRW_OPCODE_AVG =	66,
@@ -751,11 +763,11 @@ enum opcode {
    BRW_OPCODE_MAC =	72,
    BRW_OPCODE_MACH =	73,
    BRW_OPCODE_LZD =	74,
-   BRW_OPCODE_FBH =	75,
-   BRW_OPCODE_FBL =	76,
-   BRW_OPCODE_CBIT =	77,
-   BRW_OPCODE_ADDC =	78,
-   BRW_OPCODE_SUBB =	79,
+   BRW_OPCODE_FBH =	75,  /**< Gen7+ */
+   BRW_OPCODE_FBL =	76,  /**< Gen7+ */
+   BRW_OPCODE_CBIT =	77,  /**< Gen7+ */
+   BRW_OPCODE_ADDC =	78,  /**< Gen7+ */
+   BRW_OPCODE_SUBB =	79,  /**< Gen7+ */
    BRW_OPCODE_SAD2 =	80,
    BRW_OPCODE_SADA2 =	81,
    BRW_OPCODE_DP4 =	84,
@@ -763,9 +775,9 @@ enum opcode {
    BRW_OPCODE_DP3 =	86,
    BRW_OPCODE_DP2 =	87,
    BRW_OPCODE_LINE =	89,
-   BRW_OPCODE_PLN =	90,
-   BRW_OPCODE_MAD =	91,
-   BRW_OPCODE_LRP =	92,
+   BRW_OPCODE_PLN =	90,  /**< G45+ */
+   BRW_OPCODE_MAD =	91,  /**< Gen6+ */
+   BRW_OPCODE_LRP =	92,  /**< Gen6+ */
    BRW_OPCODE_NOP =	126,
 
    /* These are compiler backend opcodes that get translated into other
@@ -796,6 +808,20 @@ enum opcode {
    SHADER_OPCODE_LOD,
    SHADER_OPCODE_TG4,
    SHADER_OPCODE_TG4_OFFSET,
+
+   /**
+    * Combines multiple sources of size 1 into a larger virtual GRF.
+    * For example, parameters for a send-from-GRF message.  Or, updating
+    * channels of a size 4 VGRF used to store vec4s such as texturing results.
+    *
+    * This will be lowered into MOVs from each source to consecutive reg_offsets
+    * of the destination VGRF.
+    *
+    * src[0] may be BAD_FILE.  If so, the lowering pass skips emitting the MOV,
+    * but still reserves the first channel of the destination VGRF.  This can be
+    * used to reserve space for, say, a message header set up by the generators.
+    */
+   SHADER_OPCODE_LOAD_PAYLOAD,
 
    SHADER_OPCODE_SHADER_TIME_ADD,
 
@@ -999,6 +1025,8 @@ operator|(brw_urb_write_flags x, brw_urb_write_flags y)
 #define BRW_PREDICATE_ALIGN1_ALL8H            9
 #define BRW_PREDICATE_ALIGN1_ANY16H           10
 #define BRW_PREDICATE_ALIGN1_ALL16H           11
+#define BRW_PREDICATE_ALIGN1_ANY32H           12
+#define BRW_PREDICATE_ALIGN1_ALL32H           13
 #define BRW_PREDICATE_ALIGN16_REPLICATE_X     2
 #define BRW_PREDICATE_ALIGN16_REPLICATE_Y     3
 #define BRW_PREDICATE_ALIGN16_REPLICATE_Z     4

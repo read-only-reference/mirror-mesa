@@ -157,6 +157,11 @@ static bool r600_is_zs_format_supported(enum pipe_format format)
 	return r600_translate_dbformat(format) != ~0U;
 }
 
+static inline bool r600_is_blending_supported(enum pipe_format format)
+{
+	return !(util_format_is_pure_integer(format) || util_format_is_depth_or_stencil(format));
+}
+
 boolean r600_is_format_supported(struct pipe_screen *screen,
 				 enum pipe_format format,
 				 enum pipe_texture_target target,
@@ -234,6 +239,10 @@ boolean r600_is_format_supported(struct pipe_screen *screen,
 		retval |= PIPE_BIND_TRANSFER_READ;
 	if (usage & PIPE_BIND_TRANSFER_WRITE)
 		retval |= PIPE_BIND_TRANSFER_WRITE;
+
+	if ((usage & PIPE_BIND_BLENDABLE) &&
+	    r600_is_blending_supported(format))
+		retval |= PIPE_BIND_BLENDABLE;
 
 	return retval == usage;
 }
@@ -2366,8 +2375,6 @@ void r600_init_atom_start_cs(struct r600_context *rctx)
 		r600_store_value(cb, 0x3F800000); /* R_0282D4_PA_SC_VPORT_ZMAX_0 */
 	}
 
-	r600_store_context_reg(cb, R_028818_PA_CL_VTE_CNTL, 0x43F);
-
 	r600_store_context_reg(cb, R_028200_PA_SC_WINDOW_OFFSET, 0);
 	r600_store_context_reg(cb, R_02820C_PA_SC_CLIPRECT_RULE, 0xFFFF);
 
@@ -2579,6 +2586,17 @@ void r600_update_vs_state(struct pipe_context *ctx, struct r600_pipe_shader *sha
 	r600_store_context_reg(cb, R_028868_SQ_PGM_RESOURCES_VS,
 			       S_028868_NUM_GPRS(rshader->bc.ngpr) |
 			       S_028868_STACK_SIZE(rshader->bc.nstack));
+	if (rshader->vs_position_window_space) {
+		r600_store_context_reg(cb, R_028818_PA_CL_VTE_CNTL,
+			S_028818_VTX_XY_FMT(1) | S_028818_VTX_Z_FMT(1));
+	} else {
+		r600_store_context_reg(cb, R_028818_PA_CL_VTE_CNTL,
+			S_028818_VTX_W0_FMT(1) |
+			S_028818_VPORT_X_SCALE_ENA(1) | S_028818_VPORT_X_OFFSET_ENA(1) |
+			S_028818_VPORT_Y_SCALE_ENA(1) | S_028818_VPORT_Y_OFFSET_ENA(1) |
+			S_028818_VPORT_Z_SCALE_ENA(1) | S_028818_VPORT_Z_OFFSET_ENA(1));
+
+	}
 	r600_store_context_reg(cb, R_028858_SQ_PGM_START_VS, 0);
 	/* After that, the NOP relocation packet must be emitted (shader->bo, RADEON_USAGE_READ). */
 

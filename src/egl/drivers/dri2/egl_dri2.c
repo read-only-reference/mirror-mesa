@@ -304,8 +304,6 @@ const __DRIimageLookupExtension image_lookup_extension = {
    .lookupEGLImage       = dri2_lookup_egl_image
 };
 
-static const char dri_driver_path[] = DEFAULT_DRIVER_DIR;
-
 struct dri2_extension_match {
    const char *name;
    int version;
@@ -469,9 +467,7 @@ dri2_load_driver_swrast(_EGLDisplay *disp)
    struct dri2_egl_display *dri2_dpy = disp->DriverData;
    const __DRIextension **extensions;
 
-   dri2_dpy->driver_name = "swrast";
    extensions = dri2_open_driver(disp);
-
    if (!extensions)
       return EGL_FALSE;
 
@@ -673,6 +669,7 @@ dri2_terminate(_EGLDriver *drv, _EGLDisplay *disp)
    if (dri2_dpy->driver)
       dlclose(dri2_dpy->driver);
    free(dri2_dpy->device_name);
+   free(dri2_dpy->driver_name);
 
    switch (disp->Platform) {
 #ifdef HAVE_X11_PLATFORM

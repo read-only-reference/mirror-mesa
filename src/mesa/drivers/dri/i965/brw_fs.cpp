@@ -52,15 +52,16 @@ extern "C" {
 #include "glsl/glsl_types.h"
 
 void
-fs_inst::init()
+fs_inst::init(enum opcode opcode, const fs_reg &dst, fs_reg *src, int sources)
 {
    memset(this, 0, sizeof(*this));
-   this->conditional_mod = BRW_CONDITIONAL_NONE;
 
-   this->dst = reg_undef;
-   this->src[0] = reg_undef;
-   this->src[1] = reg_undef;
-   this->src[2] = reg_undef;
+   this->opcode = opcode;
+   this->dst = dst;
+   this->src = src;
+   this->sources = sources;
+
+   this->conditional_mod = BRW_CONDITIONAL_NONE;
 
    /* This will be the case for almost all instructions. */
    this->regs_written = 1;
@@ -68,75 +69,60 @@ fs_inst::init()
    this->writes_accumulator = false;
 }
 
-fs_inst::fs_inst()
+fs_inst::fs_inst(enum opcode opcode, const fs_reg &dst)
 {
-   init();
-   this->opcode = BRW_OPCODE_NOP;
+   fs_reg *src = ralloc_array(this, fs_reg, 3);
+   init(opcode, dst, src, 0);
 }
 
-fs_inst::fs_inst(enum opcode opcode)
+fs_inst::fs_inst(enum opcode opcode, const fs_reg &dst, const fs_reg &src0)
 {
-   init();
-   this->opcode = opcode;
+   fs_reg *src = ralloc_array(this, fs_reg, 3);
+   src[0] = src0;
+   init(opcode, dst, src, 1);
 }
 
-fs_inst::fs_inst(enum opcode opcode, fs_reg dst)
+fs_inst::fs_inst(enum opcode opcode, const fs_reg &dst, const fs_reg &src0,
+                 const fs_reg &src1)
 {
-   init();
-   this->opcode = opcode;
-   this->dst = dst;
-
-   if (dst.file == GRF)
-      assert(dst.reg_offset >= 0);
+   fs_reg *src = ralloc_array(this, fs_reg, 3);
+   src[0] = src0;
+   src[1] = src1;
+   init(opcode, dst, src, 2);
 }
 
-fs_inst::fs_inst(enum opcode opcode, fs_reg dst, fs_reg src0)
+fs_inst::fs_inst(enum opcode opcode, const fs_reg &dst, const fs_reg &src0,
+                 const fs_reg &src1, const fs_reg &src2)
 {
-   init();
-   this->opcode = opcode;
-   this->dst = dst;
-   this->src[0] = src0;
-
-   if (dst.file == GRF)
-      assert(dst.reg_offset >= 0);
-   if (src[0].file == GRF)
-      assert(src[0].reg_offset >= 0);
+   fs_reg *src = ralloc_array(this, fs_reg, 3);
+   src[0] = src0;
+   src[1] = src1;
+   src[2] = src2;
+   init(opcode, dst, src, 3);
 }
 
-fs_inst::fs_inst(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1)
+fs_inst::fs_inst(enum opcode opcode, const fs_reg &dst, fs_reg src[], int sources)
 {
-   init();
-   this->opcode = opcode;
-   this->dst = dst;
-   this->src[0] = src0;
-   this->src[1] = src1;
-
-   if (dst.file == GRF)
-      assert(dst.reg_offset >= 0);
-   if (src[0].file == GRF)
-      assert(src[0].reg_offset >= 0);
-   if (src[1].file == GRF)
-      assert(src[1].reg_offset >= 0);
+   init(opcode, dst, src, sources);
 }
 
-fs_inst::fs_inst(enum opcode opcode, fs_reg dst,
-		 fs_reg src0, fs_reg src1, fs_reg src2)
+fs_inst::fs_inst(const fs_inst &that)
 {
-   init();
-   this->opcode = opcode;
-   this->dst = dst;
-   this->src[0] = src0;
-   this->src[1] = src1;
-   this->src[2] = src2;
+   memcpy(this, &that, sizeof(that));
 
-   if (dst.file == GRF)
-      assert(dst.reg_offset >= 0);
-   if (src[0].file == GRF)
-      assert(src[0].reg_offset >= 0);
-   if (src[1].file == GRF)
-      assert(src[1].reg_offset >= 0);
-   if (src[2].file == GRF)
-      assert(src[2].reg_offset >= 0);
+   this->src = ralloc_array(this, fs_reg, that.sources);
+
+   for (int i = 0; i < that.sources; i++)
+      this->src[i] = that.src[i];
+}
+
+void
+fs_inst::resize_sources(uint8_t num_sources)
+{
+   if (this->sources != num_sources) {
+      this->src = reralloc(this, this->src, fs_reg, num_sources);
+      this->sources = num_sources;
+   }
 }
 
 #define ALU1(op)                                                        \
@@ -251,6 +237,16 @@ fs_visitor::CMP(fs_reg dst, fs_reg src0, fs_reg src1, uint32_t condition)
 
    inst = new(mem_ctx) fs_inst(BRW_OPCODE_CMP, dst, src0, src1);
    inst->conditional_mod = condition;
+
+   return inst;
+}
+
+fs_inst *
+fs_visitor::LOAD_PAYLOAD(const fs_reg &dst, fs_reg *src, int sources)
+{
+   fs_inst *inst = new(mem_ctx) fs_inst(SHADER_OPCODE_LOAD_PAYLOAD, dst, src,
+                                        sources);
+   inst->regs_written = sources;
 
    return inst;
 }
@@ -375,15 +371,15 @@ fs_inst::is_send_from_grf() const
 }
 
 bool
-fs_visitor::can_do_source_mods(fs_inst *inst)
+fs_inst::can_do_source_mods(struct brw_context *brw)
 {
-   if (brw->gen == 6 && inst->is_math())
+   if (brw->gen == 6 && is_math())
       return false;
 
-   if (inst->is_send_from_grf())
+   if (is_send_from_grf())
       return false;
 
-   if (!inst->can_do_source_mods())
+   if (!backend_instruction::can_do_source_mods())
       return false;
 
    return true;
@@ -757,6 +753,13 @@ fs_visitor::emit(enum opcode opcode, fs_reg dst,
                  fs_reg src0, fs_reg src1, fs_reg src2)
 {
    return emit(new(mem_ctx) fs_inst(opcode, dst, src0, src1, src2));
+}
+
+fs_inst *
+fs_visitor::emit(enum opcode opcode, fs_reg dst,
+                 fs_reg src[], int sources)
+{
+   return emit(new(mem_ctx) fs_inst(opcode, dst, src, sources));
 }
 
 void
@@ -1383,7 +1386,7 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src)
     * Gen 6 hardware ignores source modifiers (negate and abs) on math
     * instructions, so we also move to a temp to set those up.
     */
-   if (brw->gen >= 6)
+   if (brw->gen == 6 || brw->gen == 7)
       src = fix_math_operand(src);
 
    fs_inst *inst = emit(opcode, dst, src);
@@ -1415,7 +1418,9 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1)
       return NULL;
    }
 
-   if (brw->gen >= 6) {
+   if (brw->gen >= 8) {
+      inst = emit(opcode, dst, src0, src1);
+   } else if (brw->gen >= 6) {
       src0 = fix_math_operand(src0);
       src1 = fix_math_operand(src1);
 
@@ -1458,7 +1463,7 @@ fs_visitor::assign_curb_setup()
    foreach_list(node, &this->instructions) {
       fs_inst *inst = (fs_inst *)node;
 
-      for (unsigned int i = 0; i < 3; i++) {
+      for (unsigned int i = 0; i < inst->sources; i++) {
 	 if (inst->src[i].file == UNIFORM) {
             int uniform_nr = inst->src[i].reg + inst->src[i].reg_offset;
             int constant_nr;
@@ -1656,7 +1661,7 @@ fs_visitor::split_virtual_grfs()
        * the send is reading the whole thing.
        */
       if (inst->is_send_from_grf()) {
-         for (int i = 0; i < 3; i++) {
+         for (int i = 0; i < inst->sources; i++) {
             if (inst->src[i].file == GRF) {
                split_grf[inst->src[i].reg] = false;
             }
@@ -1689,7 +1694,7 @@ fs_visitor::split_virtual_grfs()
 			  inst->dst.reg_offset - 1);
 	 inst->dst.reg_offset = 0;
       }
-      for (int i = 0; i < 3; i++) {
+      for (int i = 0; i < inst->sources; i++) {
 	 if (inst->src[i].file == GRF &&
 	     split_grf[inst->src[i].reg] &&
 	     inst->src[i].reg_offset != 0) {
@@ -1714,6 +1719,9 @@ fs_visitor::split_virtual_grfs()
 void
 fs_visitor::compact_virtual_grfs()
 {
+   if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER))
+      return;
+
    /* Mark which virtual GRFs are used, and count how many. */
    int remap_table[this->virtual_grf_count];
    memset(remap_table, -1, sizeof(remap_table));
@@ -1724,7 +1732,7 @@ fs_visitor::compact_virtual_grfs()
       if (inst->dst.file == GRF)
          remap_table[inst->dst.reg] = 0;
 
-      for (int i = 0; i < 3; i++) {
+      for (int i = 0; i < inst->sources; i++) {
          if (inst->src[i].file == GRF)
             remap_table[inst->src[i].reg] = 0;
       }
@@ -1750,7 +1758,7 @@ fs_visitor::compact_virtual_grfs()
       if (inst->dst.file == GRF)
          inst->dst.reg = remap_table[inst->dst.reg];
 
-      for (int i = 0; i < 3; i++) {
+      for (int i = 0; i < inst->sources; i++) {
          if (inst->src[i].file == GRF)
             inst->src[i].reg = remap_table[inst->src[i].reg];
       }
@@ -1790,7 +1798,7 @@ fs_visitor::move_uniform_array_access_to_pull_constants()
    foreach_list_safe(node, &this->instructions) {
       fs_inst *inst = (fs_inst *)node;
 
-      for (int i = 0 ; i < 3; i++) {
+      for (int i = 0 ; i < inst->sources; i++) {
          if (inst->src[i].file != UNIFORM || !inst->src[i].reladdr)
             continue;
 
@@ -1840,7 +1848,7 @@ fs_visitor::assign_constant_locations()
    foreach_list(node, &this->instructions) {
       fs_inst *inst = (fs_inst *) node;
 
-      for (int i = 0; i < 3; i++) {
+      for (int i = 0; i < inst->sources; i++) {
          if (inst->src[i].file != UNIFORM)
             continue;
 
@@ -1911,7 +1919,7 @@ fs_visitor::demote_pull_constants()
    foreach_list(node, &this->instructions) {
       fs_inst *inst = (fs_inst *)node;
 
-      for (int i = 0; i < 3; i++) {
+      for (int i = 0; i < inst->sources; i++) {
 	 if (inst->src[i].file != UNIFORM)
 	    continue;
 
@@ -2015,7 +2023,13 @@ fs_visitor::opt_algebraic()
          }
          break;
       case BRW_OPCODE_SEL:
-         if (inst->saturate && inst->src[1].file == IMM) {
+         if (inst->src[0].equals(inst->src[1])) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->src[1] = reg_undef;
+            inst->predicate = BRW_PREDICATE_NONE;
+            inst->predicate_inverse = false;
+            progress = true;
+         } else if (inst->saturate && inst->src[1].file == IMM) {
             switch (inst->conditional_mod) {
             case BRW_CONDITIONAL_LE:
             case BRW_CONDITIONAL_L:
@@ -2163,7 +2177,7 @@ fs_visitor::compute_to_mrf()
 	  * MRF's source GRF that we wanted to rewrite, that stops us.
 	  */
 	 bool interfered = false;
-	 for (int i = 0; i < 3; i++) {
+	 for (int i = 0; i < scan_inst->sources; i++) {
 	    if (scan_inst->src[i].file == GRF &&
 		scan_inst->src[i].reg == inst->src[0].reg &&
 		scan_inst->src[i].reg_offset == inst->src[0].reg_offset) {
@@ -2302,7 +2316,7 @@ clear_deps_for_inst_src(fs_inst *inst, int dispatch_width, bool *deps,
                        !inst->force_sechalf);
 
    /* Clear the flag for registers that actually got read (as expected). */
-   for (int i = 0; i < 3; i++) {
+   for (int i = 0; i < inst->sources; i++) {
       int grf;
       if (inst->src[i].file == GRF) {
          grf = inst->src[i].reg;
@@ -2359,7 +2373,7 @@ fs_visitor::insert_gen4_pre_send_dependency_workarounds(fs_inst *inst)
     * program.
     */
    for (fs_inst *scan_inst = (fs_inst *)inst->prev;
-        scan_inst != NULL;
+        !scan_inst->is_head_sentinel();
         scan_inst = (fs_inst *)scan_inst->prev) {
 
       /* If we hit control flow, assume that there *are* outstanding
@@ -2486,6 +2500,8 @@ fs_visitor::insert_gen4_send_dependency_workarounds()
    if (brw->gen != 4 || brw->is_g4x)
       return;
 
+   bool progress = false;
+
    /* Note that we're done with register allocation, so GRF fs_regs always
     * have a .reg_offset of 0.
     */
@@ -2496,8 +2512,12 @@ fs_visitor::insert_gen4_send_dependency_workarounds()
       if (inst->mlen != 0 && inst->dst.file == GRF) {
          insert_gen4_pre_send_dependency_workarounds(inst);
          insert_gen4_post_send_dependency_workarounds(inst);
+         progress = true;
       }
    }
+
+   if (progress)
+      invalidate_live_intervals();
 }
 
 /**
@@ -2568,200 +2588,255 @@ fs_visitor::lower_uniform_pull_constant_loads()
    }
 }
 
+bool
+fs_visitor::lower_load_payload()
+{
+   bool progress = false;
+
+   foreach_list_safe(node, &instructions) {
+      fs_inst *inst = (fs_inst *)node;
+
+      if (inst->opcode == SHADER_OPCODE_LOAD_PAYLOAD) {
+         fs_reg dst = inst->dst;
+
+         /* src[0] represents the (optional) message header. */
+         if (inst->src[0].file != BAD_FILE) {
+            inst->insert_before(MOV(dst, inst->src[0]));
+         }
+         dst.reg_offset++;
+
+         for (int i = 1; i < inst->sources; i++) {
+            inst->insert_before(MOV(dst, inst->src[i]));
+            dst.reg_offset++;
+         }
+
+         inst->remove();
+         progress = true;
+      }
+   }
+
+   if (progress)
+      invalidate_live_intervals();
+
+   return progress;
+}
+
 void
 fs_visitor::dump_instructions()
 {
+   dump_instructions(NULL);
+}
+
+void
+fs_visitor::dump_instructions(const char *name)
+{
    calculate_register_pressure();
+   FILE *file = stderr;
+   if (name && geteuid() != 0) {
+      file = fopen(name, "w");
+      if (!file)
+         file = stderr;
+   }
 
    int ip = 0, max_pressure = 0;
    foreach_list(node, &this->instructions) {
       backend_instruction *inst = (backend_instruction *)node;
       max_pressure = MAX2(max_pressure, regs_live_at_ip[ip]);
-      fprintf(stderr, "{%3d} %4d: ", regs_live_at_ip[ip], ip);
-      dump_instruction(inst);
+      fprintf(file, "{%3d} %4d: ", regs_live_at_ip[ip], ip);
+      dump_instruction(inst, file);
       ++ip;
    }
-   fprintf(stderr, "Maximum %3d registers live at once.\n", max_pressure);
+   fprintf(file, "Maximum %3d registers live at once.\n", max_pressure);
+
+   if (file != stderr) {
+      fclose(file);
+   }
 }
 
 void
 fs_visitor::dump_instruction(backend_instruction *be_inst)
 {
+   dump_instruction(be_inst, stderr);
+}
+
+void
+fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
+{
    fs_inst *inst = (fs_inst *)be_inst;
 
    if (inst->predicate) {
-      fprintf(stderr, "(%cf0.%d) ",
+      fprintf(file, "(%cf0.%d) ",
              inst->predicate_inverse ? '-' : '+',
              inst->flag_subreg);
    }
 
-   fprintf(stderr, "%s", brw_instruction_name(inst->opcode));
+   fprintf(file, "%s", brw_instruction_name(inst->opcode));
    if (inst->saturate)
-      fprintf(stderr, ".sat");
+      fprintf(file, ".sat");
    if (inst->conditional_mod) {
-      fprintf(stderr, "%s", conditional_modifier[inst->conditional_mod]);
+      fprintf(file, "%s", conditional_modifier[inst->conditional_mod]);
       if (!inst->predicate &&
           (brw->gen < 5 || (inst->opcode != BRW_OPCODE_SEL &&
                               inst->opcode != BRW_OPCODE_IF &&
                               inst->opcode != BRW_OPCODE_WHILE))) {
-         fprintf(stderr, ".f0.%d", inst->flag_subreg);
+         fprintf(file, ".f0.%d", inst->flag_subreg);
       }
    }
-   fprintf(stderr, " ");
+   fprintf(file, " ");
 
 
    switch (inst->dst.file) {
    case GRF:
-      fprintf(stderr, "vgrf%d", inst->dst.reg);
+      fprintf(file, "vgrf%d", inst->dst.reg);
       if (virtual_grf_sizes[inst->dst.reg] != 1 ||
           inst->dst.subreg_offset)
-         fprintf(stderr, "+%d.%d",
+         fprintf(file, "+%d.%d",
                  inst->dst.reg_offset, inst->dst.subreg_offset);
       break;
    case MRF:
-      fprintf(stderr, "m%d", inst->dst.reg);
+      fprintf(file, "m%d", inst->dst.reg);
       break;
    case BAD_FILE:
-      fprintf(stderr, "(null)");
+      fprintf(file, "(null)");
       break;
    case UNIFORM:
-      fprintf(stderr, "***u%d***", inst->dst.reg + inst->dst.reg_offset);
+      fprintf(file, "***u%d***", inst->dst.reg + inst->dst.reg_offset);
       break;
    case HW_REG:
       if (inst->dst.fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE) {
          switch (inst->dst.fixed_hw_reg.nr) {
          case BRW_ARF_NULL:
-            fprintf(stderr, "null");
+            fprintf(file, "null");
             break;
          case BRW_ARF_ADDRESS:
-            fprintf(stderr, "a0.%d", inst->dst.fixed_hw_reg.subnr);
+            fprintf(file, "a0.%d", inst->dst.fixed_hw_reg.subnr);
             break;
          case BRW_ARF_ACCUMULATOR:
-            fprintf(stderr, "acc%d", inst->dst.fixed_hw_reg.subnr);
+            fprintf(file, "acc%d", inst->dst.fixed_hw_reg.subnr);
             break;
          case BRW_ARF_FLAG:
-            fprintf(stderr, "f%d.%d", inst->dst.fixed_hw_reg.nr & 0xf,
+            fprintf(file, "f%d.%d", inst->dst.fixed_hw_reg.nr & 0xf,
                              inst->dst.fixed_hw_reg.subnr);
             break;
          default:
-            fprintf(stderr, "arf%d.%d", inst->dst.fixed_hw_reg.nr & 0xf,
+            fprintf(file, "arf%d.%d", inst->dst.fixed_hw_reg.nr & 0xf,
                                inst->dst.fixed_hw_reg.subnr);
             break;
          }
       } else {
-         fprintf(stderr, "hw_reg%d", inst->dst.fixed_hw_reg.nr);
+         fprintf(file, "hw_reg%d", inst->dst.fixed_hw_reg.nr);
       }
       if (inst->dst.fixed_hw_reg.subnr)
-         fprintf(stderr, "+%d", inst->dst.fixed_hw_reg.subnr);
+         fprintf(file, "+%d", inst->dst.fixed_hw_reg.subnr);
       break;
    default:
-      fprintf(stderr, "???");
+      fprintf(file, "???");
       break;
    }
-   fprintf(stderr, ":%s, ", brw_reg_type_letters(inst->dst.type));
+   fprintf(file, ":%s, ", brw_reg_type_letters(inst->dst.type));
 
-   for (int i = 0; i < 3 && inst->src[i].file != BAD_FILE; i++) {
+   for (int i = 0; i < inst->sources && inst->src[i].file != BAD_FILE; i++) {
       if (inst->src[i].negate)
-         fprintf(stderr, "-");
+         fprintf(file, "-");
       if (inst->src[i].abs)
-         fprintf(stderr, "|");
+         fprintf(file, "|");
       switch (inst->src[i].file) {
       case GRF:
-         fprintf(stderr, "vgrf%d", inst->src[i].reg);
+         fprintf(file, "vgrf%d", inst->src[i].reg);
          if (virtual_grf_sizes[inst->src[i].reg] != 1 ||
              inst->src[i].subreg_offset)
-            fprintf(stderr, "+%d.%d", inst->src[i].reg_offset,
+            fprintf(file, "+%d.%d", inst->src[i].reg_offset,
                     inst->src[i].subreg_offset);
          break;
       case MRF:
-         fprintf(stderr, "***m%d***", inst->src[i].reg);
+         fprintf(file, "***m%d***", inst->src[i].reg);
          break;
       case UNIFORM:
-         fprintf(stderr, "u%d", inst->src[i].reg + inst->src[i].reg_offset);
+         fprintf(file, "u%d", inst->src[i].reg + inst->src[i].reg_offset);
          if (inst->src[i].reladdr) {
-            fprintf(stderr, "+reladdr");
+            fprintf(file, "+reladdr");
          } else if (virtual_grf_sizes[inst->src[i].reg] != 1 ||
              inst->src[i].subreg_offset) {
-            fprintf(stderr, "+%d.%d", inst->src[i].reg_offset,
+            fprintf(file, "+%d.%d", inst->src[i].reg_offset,
                     inst->src[i].subreg_offset);
          }
          break;
       case BAD_FILE:
-         fprintf(stderr, "(null)");
+         fprintf(file, "(null)");
          break;
       case IMM:
          switch (inst->src[i].type) {
          case BRW_REGISTER_TYPE_F:
-            fprintf(stderr, "%ff", inst->src[i].imm.f);
+            fprintf(file, "%ff", inst->src[i].imm.f);
             break;
          case BRW_REGISTER_TYPE_D:
-            fprintf(stderr, "%dd", inst->src[i].imm.i);
+            fprintf(file, "%dd", inst->src[i].imm.i);
             break;
          case BRW_REGISTER_TYPE_UD:
-            fprintf(stderr, "%uu", inst->src[i].imm.u);
+            fprintf(file, "%uu", inst->src[i].imm.u);
             break;
          default:
-            fprintf(stderr, "???");
+            fprintf(file, "???");
             break;
          }
          break;
       case HW_REG:
          if (inst->src[i].fixed_hw_reg.negate)
-            fprintf(stderr, "-");
+            fprintf(file, "-");
          if (inst->src[i].fixed_hw_reg.abs)
-            fprintf(stderr, "|");
+            fprintf(file, "|");
          if (inst->src[i].fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE) {
             switch (inst->src[i].fixed_hw_reg.nr) {
             case BRW_ARF_NULL:
-               fprintf(stderr, "null");
+               fprintf(file, "null");
                break;
             case BRW_ARF_ADDRESS:
-               fprintf(stderr, "a0.%d", inst->src[i].fixed_hw_reg.subnr);
+               fprintf(file, "a0.%d", inst->src[i].fixed_hw_reg.subnr);
                break;
             case BRW_ARF_ACCUMULATOR:
-               fprintf(stderr, "acc%d", inst->src[i].fixed_hw_reg.subnr);
+               fprintf(file, "acc%d", inst->src[i].fixed_hw_reg.subnr);
                break;
             case BRW_ARF_FLAG:
-               fprintf(stderr, "f%d.%d", inst->src[i].fixed_hw_reg.nr & 0xf,
+               fprintf(file, "f%d.%d", inst->src[i].fixed_hw_reg.nr & 0xf,
                                 inst->src[i].fixed_hw_reg.subnr);
                break;
             default:
-               fprintf(stderr, "arf%d.%d", inst->src[i].fixed_hw_reg.nr & 0xf,
+               fprintf(file, "arf%d.%d", inst->src[i].fixed_hw_reg.nr & 0xf,
                                   inst->src[i].fixed_hw_reg.subnr);
                break;
             }
          } else {
-            fprintf(stderr, "hw_reg%d", inst->src[i].fixed_hw_reg.nr);
+            fprintf(file, "hw_reg%d", inst->src[i].fixed_hw_reg.nr);
          }
          if (inst->src[i].fixed_hw_reg.subnr)
-            fprintf(stderr, "+%d", inst->src[i].fixed_hw_reg.subnr);
+            fprintf(file, "+%d", inst->src[i].fixed_hw_reg.subnr);
          if (inst->src[i].fixed_hw_reg.abs)
-            fprintf(stderr, "|");
+            fprintf(file, "|");
          break;
       default:
-         fprintf(stderr, "???");
+         fprintf(file, "???");
          break;
       }
       if (inst->src[i].abs)
-         fprintf(stderr, "|");
+         fprintf(file, "|");
 
       if (inst->src[i].file != IMM) {
-         fprintf(stderr, ":%s", brw_reg_type_letters(inst->src[i].type));
+         fprintf(file, ":%s", brw_reg_type_letters(inst->src[i].type));
       }
 
-      if (i < 2 && inst->src[i + 1].file != BAD_FILE)
-         fprintf(stderr, ", ");
+      if (i < inst->sources - 1 && inst->src[i + 1].file != BAD_FILE)
+         fprintf(file, ", ");
    }
 
-   fprintf(stderr, " ");
+   fprintf(file, " ");
 
    if (inst->force_uncompressed)
-      fprintf(stderr, "1sthalf ");
+      fprintf(file, "1sthalf ");
 
    if (inst->force_sechalf)
-      fprintf(stderr, "2ndhalf ");
+      fprintf(file, "2ndhalf ");
 
-   fprintf(stderr, "\n");
+   fprintf(file, "\n");
 }
 
 /**
@@ -2998,25 +3073,56 @@ fs_visitor::run()
 
       opt_drop_redundant_mov_to_flags();
 
+#define OPT(pass, args...) do {                                            \
+      pass_num++;                                                          \
+      bool this_progress = pass(args);                                     \
+                                                                           \
+      if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER) && this_progress) {      \
+         char filename[64];                                                \
+         snprintf(filename, 64, "fs%d-%04d-%02d-%02d-" #pass,              \
+                  dispatch_width, shader_prog->Name, iteration, pass_num); \
+                                                                           \
+         backend_visitor::dump_instructions(filename);                     \
+      }                                                                    \
+                                                                           \
+      progress = progress || this_progress;                                \
+   } while (false)
+
+      if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER)) {
+         char filename[64];
+         snprintf(filename, 64, "fs%d-%04d-00-start",
+                  dispatch_width, shader_prog->Name);
+
+         backend_visitor::dump_instructions(filename);
+      }
+
       bool progress;
+      int iteration = 0;
       do {
 	 progress = false;
+         iteration++;
+         int pass_num = 0;
 
          compact_virtual_grfs();
 
-	 progress = remove_duplicate_mrf_writes() || progress;
+         OPT(remove_duplicate_mrf_writes);
 
-	 progress = opt_algebraic() || progress;
-	 progress = opt_cse() || progress;
-	 progress = opt_copy_propagate() || progress;
-         progress = opt_peephole_predicated_break() || progress;
-         progress = dead_code_eliminate() || progress;
-         progress = opt_peephole_sel() || progress;
-         progress = dead_control_flow_eliminate(this) || progress;
-         progress = opt_saturate_propagation() || progress;
-         progress = register_coalesce() || progress;
-	 progress = compute_to_mrf() || progress;
+         OPT(opt_algebraic);
+         OPT(opt_cse);
+         OPT(opt_copy_propagate);
+         OPT(opt_peephole_predicated_break);
+         OPT(dead_code_eliminate);
+         OPT(opt_peephole_sel);
+         OPT(dead_control_flow_eliminate, this);
+         OPT(opt_saturate_propagation);
+         OPT(register_coalesce);
+         OPT(compute_to_mrf);
       } while (progress);
+
+      if (lower_load_payload()) {
+         register_coalesce();
+         dead_code_eliminate();
+      }
 
       lower_uniform_pull_constant_loads();
 
@@ -3167,7 +3273,7 @@ brw_wm_fs_emit(struct brw_context *brw,
                                      final_assembly_size);
    } else {
       fs_generator g(brw, mem_ctx, key, prog_data, prog, fp, v.do_dual_src,
-                     INTEL_DEBUG & DEBUG_WM);
+                     v.runtime_check_aads_emit, INTEL_DEBUG & DEBUG_WM);
       assembly = g.generate_assembly(&v.instructions, simd16_instructions,
                                      final_assembly_size);
    }

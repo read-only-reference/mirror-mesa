@@ -155,6 +155,12 @@ void
 fs_visitor::visit(ir_dereference_variable *ir)
 {
    fs_reg *reg = variable_storage(ir->var);
+
+   if (!reg) {
+      fail("Failed to find variable storage for %s\n", ir->var->name);
+      this->result = fs_reg(reg_null_d);
+      return;
+   }
    this->result = *reg;
 }
 
@@ -189,7 +195,7 @@ fs_visitor::visit(ir_dereference_array *ir)
    src.type = brw_type_for_base_type(ir->type);
 
    if (constant_index) {
-      assert(src.file == UNIFORM || src.file == GRF);
+      assert(src.file == UNIFORM || src.file == GRF || src.file == HW_REG);
       src.reg_offset += constant_index->value.i[0] * element_size;
    } else {
       /* Variable index array dereference.  We attach the variable index
@@ -1089,22 +1095,22 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    fs_inst *inst = NULL;
    switch (ir->op) {
    case ir_tex:
-      inst = emit(SHADER_OPCODE_TEX, dst);
+      inst = emit(SHADER_OPCODE_TEX, dst, reg_undef);
       break;
    case ir_txb:
-      inst = emit(FS_OPCODE_TXB, dst);
+      inst = emit(FS_OPCODE_TXB, dst, reg_undef);
       break;
    case ir_txl:
-      inst = emit(SHADER_OPCODE_TXL, dst);
+      inst = emit(SHADER_OPCODE_TXL, dst, reg_undef);
       break;
    case ir_txd:
-      inst = emit(SHADER_OPCODE_TXD, dst);
+      inst = emit(SHADER_OPCODE_TXD, dst, reg_undef);
       break;
    case ir_txs:
-      inst = emit(SHADER_OPCODE_TXS, dst);
+      inst = emit(SHADER_OPCODE_TXS, dst, reg_undef);
       break;
    case ir_txf:
-      inst = emit(SHADER_OPCODE_TXF, dst);
+      inst = emit(SHADER_OPCODE_TXF, dst, reg_undef);
       break;
    default:
       fail("unrecognized texture opcode");
@@ -1171,21 +1177,21 @@ fs_visitor::emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    fs_inst *inst = NULL;
    switch (ir->op) {
    case ir_tex:
-      inst = emit(SHADER_OPCODE_TEX, dst);
+      inst = emit(SHADER_OPCODE_TEX, dst, reg_undef);
       break;
    case ir_txb:
       mlen = MAX2(mlen, header_present + 4 * reg_width);
       emit(MOV(fs_reg(MRF, base_mrf + mlen), lod));
       mlen += reg_width;
 
-      inst = emit(FS_OPCODE_TXB, dst);
+      inst = emit(FS_OPCODE_TXB, dst, reg_undef);
       break;
    case ir_txl:
       mlen = MAX2(mlen, header_present + 4 * reg_width);
       emit(MOV(fs_reg(MRF, base_mrf + mlen), lod));
       mlen += reg_width;
 
-      inst = emit(SHADER_OPCODE_TXL, dst);
+      inst = emit(SHADER_OPCODE_TXL, dst, reg_undef);
       break;
    case ir_txd: {
       mlen = MAX2(mlen, header_present + 4 * reg_width); /* skip over 'ai' */
@@ -1215,17 +1221,17 @@ fs_visitor::emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    case ir_txs:
       emit(MOV(fs_reg(MRF, base_mrf + mlen, BRW_REGISTER_TYPE_UD), lod));
       mlen += reg_width;
-      inst = emit(SHADER_OPCODE_TXS, dst);
+      inst = emit(SHADER_OPCODE_TXS, dst, reg_undef);
       break;
    case ir_query_levels:
       emit(MOV(fs_reg(MRF, base_mrf + mlen, BRW_REGISTER_TYPE_UD), fs_reg(0u)));
       mlen += reg_width;
-      inst = emit(SHADER_OPCODE_TXS, dst);
+      inst = emit(SHADER_OPCODE_TXS, dst, reg_undef);
       break;
    case ir_txf:
       mlen = header_present + 4 * reg_width;
       emit(MOV(fs_reg(MRF, base_mrf + mlen - reg_width, BRW_REGISTER_TYPE_UD), lod));
-      inst = emit(SHADER_OPCODE_TXF, dst);
+      inst = emit(SHADER_OPCODE_TXF, dst, reg_undef);
       break;
    case ir_txf_ms:
       mlen = header_present + 4 * reg_width;
@@ -1235,13 +1241,13 @@ fs_visitor::emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       /* sample index */
       emit(MOV(fs_reg(MRF, base_mrf + mlen, BRW_REGISTER_TYPE_UD), sample_index));
       mlen += reg_width;
-      inst = emit(SHADER_OPCODE_TXF_CMS, dst);
+      inst = emit(SHADER_OPCODE_TXF_CMS, dst, reg_undef);
       break;
    case ir_lod:
-      inst = emit(SHADER_OPCODE_LOD, dst);
+      inst = emit(SHADER_OPCODE_LOD, dst, reg_undef);
       break;
    case ir_tg4:
-      inst = emit(SHADER_OPCODE_TG4, dst);
+      inst = emit(SHADER_OPCODE_TG4, dst, reg_undef);
       break;
    default:
       fail("unrecognized texture opcode");
@@ -1268,8 +1274,11 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    int reg_width = dispatch_width / 8;
    bool header_present = false;
 
-   fs_reg payload = fs_reg(this, glsl_type::float_type);
-   fs_reg next = payload;
+   fs_reg *sources = ralloc_array(mem_ctx, fs_reg, MAX_SAMPLER_MESSAGE_SIZE);
+   for (int i = 0; i < MAX_SAMPLER_MESSAGE_SIZE; i++) {
+      sources[i] = fs_reg(this, glsl_type::float_type);
+   }
+   int length = 0;
 
    if (ir->op == ir_tg4 || (ir->offset && ir->op != ir_txf) || sampler >= 16) {
       /* For general texture offsets (no txf workaround), we need a header to
@@ -1283,12 +1292,13 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
        * need to offset the Sampler State Pointer in the header.
        */
       header_present = true;
-      next.reg_offset++;
+      sources[length] = reg_undef;
+      length++;
    }
 
    if (ir->shadow_comparitor) {
-      emit(MOV(next, shadow_c));
-      next.reg_offset++;
+      emit(MOV(sources[length], shadow_c));
+      length++;
    }
 
    bool has_nonconstant_offset = ir->offset && !ir->offset->as_constant();
@@ -1300,12 +1310,12 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    case ir_lod:
       break;
    case ir_txb:
-      emit(MOV(next, lod));
-      next.reg_offset++;
+      emit(MOV(sources[length], lod));
+      length++;
       break;
    case ir_txl:
-      emit(MOV(next, lod));
-      next.reg_offset++;
+      emit(MOV(sources[length], lod));
+      length++;
       break;
    case ir_txd: {
       no16("Gen7 does not support sample_d/sample_d_c in SIMD16 mode.");
@@ -1314,21 +1324,21 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
        * [hdr], [ref], x, dPdx.x, dPdy.x, y, dPdx.y, dPdy.y, z, dPdx.z, dPdy.z
        */
       for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
-	 emit(MOV(next, coordinate));
+	 emit(MOV(sources[length], coordinate));
 	 coordinate.reg_offset++;
-	 next.reg_offset++;
+	 length++;
 
          /* For cube map array, the coordinate is (u,v,r,ai) but there are
           * only derivatives for (u, v, r).
           */
          if (i < ir->lod_info.grad.dPdx->type->vector_elements) {
-            emit(MOV(next, lod));
+            emit(MOV(sources[length], lod));
             lod.reg_offset++;
-            next.reg_offset++;
+            length++;
 
-            emit(MOV(next, lod2));
+            emit(MOV(sources[length], lod2));
             lod2.reg_offset++;
-            next.reg_offset++;
+            length++;
          }
       }
 
@@ -1336,45 +1346,45 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       break;
    }
    case ir_txs:
-      emit(MOV(retype(next, BRW_REGISTER_TYPE_UD), lod));
-      next.reg_offset++;
+      emit(MOV(retype(sources[length], BRW_REGISTER_TYPE_UD), lod));
+      length++;
       break;
    case ir_query_levels:
-      emit(MOV(retype(next, BRW_REGISTER_TYPE_UD), fs_reg(0u)));
-      next.reg_offset++;
+      emit(MOV(retype(sources[length], BRW_REGISTER_TYPE_UD), fs_reg(0u)));
+      length++;
       break;
    case ir_txf:
       /* Unfortunately, the parameters for LD are intermixed: u, lod, v, r. */
-      emit(MOV(retype(next, BRW_REGISTER_TYPE_D), coordinate));
+      emit(MOV(retype(sources[length], BRW_REGISTER_TYPE_D), coordinate));
       coordinate.reg_offset++;
-      next.reg_offset++;
+      length++;
 
-      emit(MOV(retype(next, BRW_REGISTER_TYPE_D), lod));
-      next.reg_offset++;
+      emit(MOV(retype(sources[length], BRW_REGISTER_TYPE_D), lod));
+      length++;
 
       for (int i = 1; i < ir->coordinate->type->vector_elements; i++) {
-	 emit(MOV(retype(next, BRW_REGISTER_TYPE_D), coordinate));
+	 emit(MOV(retype(sources[length], BRW_REGISTER_TYPE_D), coordinate));
 	 coordinate.reg_offset++;
-	 next.reg_offset++;
+	 length++;
       }
 
       coordinate_done = true;
       break;
    case ir_txf_ms:
-      emit(MOV(retype(next, BRW_REGISTER_TYPE_UD), sample_index));
-      next.reg_offset++;
+      emit(MOV(retype(sources[length], BRW_REGISTER_TYPE_UD), sample_index));
+      length++;
 
       /* data from the multisample control surface */
-      emit(MOV(retype(next, BRW_REGISTER_TYPE_UD), mcs));
-      next.reg_offset++;
+      emit(MOV(retype(sources[length], BRW_REGISTER_TYPE_UD), mcs));
+      length++;
 
       /* there is no offsetting for this message; just copy in the integer
        * texture coordinates
        */
       for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
-         emit(MOV(retype(next, BRW_REGISTER_TYPE_D), coordinate));
+         emit(MOV(retype(sources[length], BRW_REGISTER_TYPE_D), coordinate));
          coordinate.reg_offset++;
-         next.reg_offset++;
+         length++;
       }
 
       coordinate_done = true;
@@ -1389,21 +1399,21 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
          fs_reg offset_value = this->result;
 
          for (int i = 0; i < 2; i++) { /* u, v */
-            emit(MOV(next, coordinate));
+            emit(MOV(sources[length], coordinate));
             coordinate.reg_offset++;
-            next.reg_offset++;
+            length++;
          }
 
          for (int i = 0; i < 2; i++) { /* offu, offv */
-            emit(MOV(retype(next, BRW_REGISTER_TYPE_D), offset_value));
+            emit(MOV(retype(sources[length], BRW_REGISTER_TYPE_D), offset_value));
             offset_value.reg_offset++;
-            next.reg_offset++;
+            length++;
          }
 
          if (ir->coordinate->type->vector_elements == 3) { /* r if present */
-            emit(MOV(next, coordinate));
+            emit(MOV(sources[length], coordinate));
             coordinate.reg_offset++;
-            next.reg_offset++;
+            length++;
          }
 
          coordinate_done = true;
@@ -1414,40 +1424,44 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
    /* Set up the coordinate (except for cases where it was done above) */
    if (ir->coordinate && !coordinate_done) {
       for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
-         emit(MOV(next, coordinate));
+         emit(MOV(sources[length], coordinate));
          coordinate.reg_offset++;
-         next.reg_offset++;
+         length++;
       }
    }
 
+   fs_reg src_payload = fs_reg(GRF, virtual_grf_alloc(length),
+                               BRW_REGISTER_TYPE_F);
+   emit(LOAD_PAYLOAD(src_payload, sources, length));
+
    /* Generate the SEND */
-   fs_inst *inst = NULL;
+   enum opcode opcode;
    switch (ir->op) {
-   case ir_tex: inst = emit(SHADER_OPCODE_TEX, dst, payload); break;
-   case ir_txb: inst = emit(FS_OPCODE_TXB, dst, payload); break;
-   case ir_txl: inst = emit(SHADER_OPCODE_TXL, dst, payload); break;
-   case ir_txd: inst = emit(SHADER_OPCODE_TXD, dst, payload); break;
-   case ir_txf: inst = emit(SHADER_OPCODE_TXF, dst, payload); break;
-   case ir_txf_ms: inst = emit(SHADER_OPCODE_TXF_CMS, dst, payload); break;
-   case ir_txs: inst = emit(SHADER_OPCODE_TXS, dst, payload); break;
-   case ir_query_levels: inst = emit(SHADER_OPCODE_TXS, dst, payload); break;
-   case ir_lod: inst = emit(SHADER_OPCODE_LOD, dst, payload); break;
+   case ir_tex: opcode = SHADER_OPCODE_TEX; break;
+   case ir_txb: opcode = FS_OPCODE_TXB; break;
+   case ir_txl: opcode = SHADER_OPCODE_TXL; break;
+   case ir_txd: opcode = SHADER_OPCODE_TXD; break;
+   case ir_txf: opcode = SHADER_OPCODE_TXF; break;
+   case ir_txf_ms: opcode = SHADER_OPCODE_TXF_CMS; break;
+   case ir_txs: opcode = SHADER_OPCODE_TXS; break;
+   case ir_query_levels: opcode = SHADER_OPCODE_TXS; break;
+   case ir_lod: opcode = SHADER_OPCODE_LOD; break;
    case ir_tg4:
       if (has_nonconstant_offset)
-         inst = emit(SHADER_OPCODE_TG4_OFFSET, dst, payload);
+         opcode = SHADER_OPCODE_TG4_OFFSET;
       else
-         inst = emit(SHADER_OPCODE_TG4, dst, payload);
+         opcode = SHADER_OPCODE_TG4;
       break;
    }
+   fs_inst *inst = emit(opcode, dst, src_payload);
    inst->base_mrf = -1;
    if (reg_width == 2)
-      inst->mlen = next.reg_offset * reg_width - header_present;
+      inst->mlen = length * reg_width - header_present;
    else
-      inst->mlen = next.reg_offset * reg_width;
+      inst->mlen = length * reg_width;
    inst->header_present = header_present;
    inst->regs_written = 4;
 
-   virtual_grf_sizes[payload.reg] = next.reg_offset;
    if (inst->mlen > MAX_SAMPLER_MESSAGE_SIZE) {
       fail("Message length >" STRINGIFY(MAX_SAMPLER_MESSAGE_SIZE)
            " disallowed by hardware\n");
@@ -1575,21 +1589,24 @@ fs_reg
 fs_visitor::emit_mcs_fetch(ir_texture *ir, fs_reg coordinate, int sampler)
 {
    int reg_width = dispatch_width / 8;
-   fs_reg payload = fs_reg(this, glsl_type::float_type);
+   int length = ir->coordinate->type->vector_elements;
+   fs_reg payload = fs_reg(GRF, virtual_grf_alloc(length),
+                           BRW_REGISTER_TYPE_F);
    fs_reg dest = fs_reg(this, glsl_type::uvec4_type);
-   fs_reg next = payload;
+   fs_reg *sources = ralloc_array(mem_ctx, fs_reg, length);
 
-   /* parameters are: u, v, r, lod; missing parameters are treated as zero */
-   for (int i = 0; i < ir->coordinate->type->vector_elements; i++) {
-      emit(MOV(retype(next, BRW_REGISTER_TYPE_D), coordinate));
+   /* parameters are: u, v, r; missing parameters are treated as zero */
+   for (int i = 0; i < length; i++) {
+      sources[i] = fs_reg(this, glsl_type::float_type);
+      emit(MOV(retype(sources[i], BRW_REGISTER_TYPE_D), coordinate));
       coordinate.reg_offset++;
-      next.reg_offset++;
    }
 
+   emit(LOAD_PAYLOAD(payload, sources, length));
+
    fs_inst *inst = emit(SHADER_OPCODE_TXF_MCS, dest, payload);
-   virtual_grf_sizes[payload.reg] = next.reg_offset;
    inst->base_mrf = -1;
-   inst->mlen = next.reg_offset * reg_width;
+   inst->mlen = length * reg_width;
    inst->header_present = false;
    inst->regs_written = 4; /* we only care about one reg of response,
                             * but the sampler always writes 4/8
@@ -1728,7 +1745,20 @@ fs_visitor::visit(ir_texture *ir)
           type->sampler_array) {
          fs_reg depth = dst;
          depth.reg_offset = 2;
-         emit_math(SHADER_OPCODE_INT_QUOTIENT, depth, depth, fs_reg(6));
+         fs_reg fixed_depth = fs_reg(this, glsl_type::int_type);
+         emit_math(SHADER_OPCODE_INT_QUOTIENT, fixed_depth, depth, fs_reg(6));
+
+         fs_reg *fixed_payload = ralloc_array(mem_ctx, fs_reg, inst->regs_written);
+         fs_reg d = dst;
+         for (int i = 0; i < inst->regs_written; i++) {
+            if (i == 2) {
+               fixed_payload[i] = fixed_depth;
+            } else {
+               d.reg_offset = i;
+               fixed_payload[i] = d;
+            }
+         }
+         emit(LOAD_PAYLOAD(dst, fixed_payload, inst->regs_written));
       }
    }
 

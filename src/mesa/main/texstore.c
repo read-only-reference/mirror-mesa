@@ -2061,83 +2061,6 @@ _mesa_texstore_ycbcr(TEXSTORE_PARAMS)
    return GL_TRUE;
 }
 
-static GLboolean
-_mesa_texstore_dudv8(TEXSTORE_PARAMS)
-{
-   const GLboolean littleEndian = _mesa_little_endian();
-   const GLuint texelBytes = _mesa_get_format_bytes(dstFormat);
-
-   ASSERT(dstFormat == MESA_FORMAT_DUDV8);
-   ASSERT(texelBytes == 2);
-   ASSERT(ctx->Extensions.ATI_envmap_bumpmap);
-   ASSERT((srcFormat == GL_DU8DV8_ATI) ||
-	  (srcFormat == GL_DUDV_ATI));
-   ASSERT(baseInternalFormat == GL_DUDV_ATI);
-
-   if (srcType == GL_BYTE) {
-      GLubyte dstmap[4];
-
-      /* dstmap - how to swizzle from RGBA to dst format:
-       */
-      if (littleEndian) {
-	 dstmap[0] = 0;
-	 dstmap[1] = 3;
-      }
-      else {
-	 dstmap[0] = 3;
-	 dstmap[1] = 0;
-      }
-      dstmap[2] = ZERO;		/* ? */
-      dstmap[3] = ONE;		/* ? */
-      
-      _mesa_swizzle_ubyte_image(ctx, dims,
-				GL_LUMINANCE_ALPHA, /* hack */
-				GL_UNSIGNED_BYTE, /* hack */
-				GL_LUMINANCE_ALPHA, /* hack */
-				dstmap, 2,
-				dstRowStride, dstSlices,
-				srcWidth, srcHeight, srcDepth, srcAddr,
-				srcPacking);      
-   }   
-   else {
-      /* general path - note this is defined for 2d textures only */
-      const GLint components = _mesa_components_in_format(baseInternalFormat);
-      const GLint srcStride = _mesa_image_row_stride(srcPacking, srcWidth,
-                                                     srcFormat, srcType);
-      GLbyte *tempImage, *dst, *src;
-      GLint row;
-
-      tempImage = malloc(srcWidth * srcHeight * srcDepth
-                                          * components * sizeof(GLbyte));
-      if (!tempImage)
-         return GL_FALSE;
-
-      src = (GLbyte *) _mesa_image_address(dims, srcPacking, srcAddr,
-                                           srcWidth, srcHeight,
-                                           srcFormat, srcType,
-                                           0, 0, 0);
-
-      dst = tempImage;
-      for (row = 0; row < srcHeight; row++) {
-         _mesa_unpack_dudv_span_byte(ctx, srcWidth, baseInternalFormat,
-                                     dst, srcFormat, srcType, src,
-                                     srcPacking, 0);
-         dst += srcWidth * components;
-         src += srcStride;
-      }
- 
-      src = tempImage;
-      dst = (GLbyte *) dstSlices[0];
-      for (row = 0; row < srcHeight; row++) {
-         memcpy(dst, src, srcWidth * texelBytes);
-         dst += dstRowStride;
-         src += srcWidth * texelBytes;
-      }
-      free((void *) tempImage);
-   }
-   return GL_TRUE;
-}
-
 
 /**
  * Store a texture in a signed normalized 8-bit format.
@@ -3723,7 +3646,6 @@ _mesa_get_texstore_func(mesa_format format)
       table[MESA_FORMAT_R_FLOAT16] = _mesa_texstore_rgba_float16;
       table[MESA_FORMAT_RG_FLOAT32] = _mesa_texstore_rgba_float32;
       table[MESA_FORMAT_RG_FLOAT16] = _mesa_texstore_rgba_float16;
-      table[MESA_FORMAT_DUDV8] = _mesa_texstore_dudv8;
       table[MESA_FORMAT_R_SNORM8] = _mesa_texstore_snorm8;
       table[MESA_FORMAT_R8G8_SNORM] = _mesa_texstore_snorm88;
       table[MESA_FORMAT_X8B8G8R8_SNORM] = _mesa_texstore_signed_rgbx8888;
@@ -4195,6 +4117,61 @@ _mesa_store_compressed_teximage(struct gl_context *ctx, GLuint dims,
 }
 
 
+void
+_mesa_compute_compressed_pixelstore(GLuint dims, struct gl_texture_image *texImage,
+                              GLsizei width, GLsizei height, GLsizei depth,
+                              const struct gl_pixelstore_attrib *packing,
+                              struct compressed_pixelstore *store)
+{
+   GLuint bw, bh;
+   const mesa_format texFormat = texImage->TexFormat;
+
+   _mesa_get_format_block_size(texFormat, &bw, &bh);
+
+   store->SkipBytes = 0;
+   store->TotalBytesPerRow = store->CopyBytesPerRow =
+         _mesa_format_row_stride(texFormat, width);
+   store->TotalRowsPerSlice = store->CopyRowsPerSlice =
+         (height + bh - 1) / bh;
+   store->CopySlices = depth;
+
+   if (packing->CompressedBlockWidth &&
+       packing->CompressedBlockSize) {
+
+      bw = packing->CompressedBlockWidth;
+
+      if (packing->RowLength) {
+         store->TotalBytesPerRow = packing->CompressedBlockSize *
+            (packing->RowLength + bw - 1) / bw;
+      }
+
+      store->SkipBytes += packing->SkipPixels * packing->CompressedBlockSize / bw;
+   }
+
+   if (dims > 1 && packing->CompressedBlockHeight &&
+       packing->CompressedBlockSize) {
+
+      bh = packing->CompressedBlockHeight;
+
+      store->SkipBytes += packing->SkipRows * store->TotalBytesPerRow / bh;
+      store->CopyRowsPerSlice = (height + bh - 1) / bh;  /* rows in blocks */
+
+      if (packing->ImageHeight) {
+         store->TotalRowsPerSlice = (packing->ImageHeight + bh - 1) / bh;
+      }
+   }
+
+   if (dims > 2 && packing->CompressedBlockDepth &&
+       packing->CompressedBlockSize) {
+
+      int bd = packing->CompressedBlockDepth;
+
+      store->SkipBytes += packing->SkipImages * store->TotalBytesPerRow *
+            store->TotalRowsPerSlice / bd;
+   }
+}
+
+
 /**
  * Fallback for Driver.CompressedTexSubImage()
  */
@@ -4206,20 +4183,19 @@ _mesa_store_compressed_texsubimage(struct gl_context *ctx, GLuint dims,
                                    GLenum format,
                                    GLsizei imageSize, const GLvoid *data)
 {
-   GLint bytesPerRow, dstRowStride, srcRowStride;
-   GLint i, rows;
+   struct compressed_pixelstore store;
+   GLint dstRowStride;
+   GLint i, slice;
    GLubyte *dstMap;
    const GLubyte *src;
-   const mesa_format texFormat = texImage->TexFormat;
-   GLuint bw, bh;
-   GLint slice;
 
    if (dims == 1) {
       _mesa_problem(ctx, "Unexpected 1D compressed texsubimage call");
       return;
    }
 
-   _mesa_get_format_block_size(texFormat, &bw, &bh);
+   _mesa_compute_compressed_pixelstore(dims, texImage, width, height, depth,
+                                 &ctx->Unpack, &store);
 
    /* get pointer to src pixels (may be in a pbo which we'll map here) */
    data = _mesa_validate_pbo_compressed_teximage(ctx, dims, imageSize, data,
@@ -4228,10 +4204,9 @@ _mesa_store_compressed_texsubimage(struct gl_context *ctx, GLuint dims,
    if (!data)
       return;
 
-   srcRowStride = _mesa_format_row_stride(texFormat, width);
-   src = (const GLubyte *) data;
+   src = (const GLubyte *) data + store.SkipBytes;
 
-   for (slice = 0; slice < depth; slice++) {
+   for (slice = 0; slice < store.CopySlices; slice++) {
       /* Map dest texture buffer */
       ctx->Driver.MapTextureImage(ctx, texImage, slice + zoffset,
                                   xoffset, yoffset, width, height,
@@ -4239,17 +4214,18 @@ _mesa_store_compressed_texsubimage(struct gl_context *ctx, GLuint dims,
                                   &dstMap, &dstRowStride);
 
       if (dstMap) {
-         bytesPerRow = srcRowStride;  /* bytes per row of blocks */
-         rows = (height + bh - 1) / bh;  /* rows in blocks */
 
          /* copy rows of blocks */
-         for (i = 0; i < rows; i++) {
-            memcpy(dstMap, src, bytesPerRow);
+         for (i = 0; i < store.CopyRowsPerSlice; i++) {
+            memcpy(dstMap, src, store.CopyBytesPerRow);
             dstMap += dstRowStride;
-            src += srcRowStride;
+            src += store.TotalBytesPerRow;
          }
 
          ctx->Driver.UnmapTextureImage(ctx, texImage, slice + zoffset);
+
+         /* advance to next slice */
+         src += store.TotalBytesPerRow * (store.TotalRowsPerSlice - store.CopyRowsPerSlice);
       }
       else {
          _mesa_error(ctx, GL_OUT_OF_MEMORY, "glCompressedTexSubImage%uD",

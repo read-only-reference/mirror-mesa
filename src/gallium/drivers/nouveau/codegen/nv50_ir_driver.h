@@ -70,7 +70,6 @@ struct nv50_ir_varying
 #endif
 
 #define NV50_SEMANTIC_CLIPDISTANCE  (TGSI_SEMANTIC_COUNT + 0)
-#define NV50_SEMANTIC_VIEWPORTINDEX (TGSI_SEMANTIC_COUNT + 4)
 #define NV50_SEMANTIC_TESSFACTOR    (TGSI_SEMANTIC_COUNT + 7)
 #define NV50_SEMANTIC_TESSCOORD     (TGSI_SEMANTIC_COUNT + 8)
 #define NV50_SEMANTIC_COUNT         (TGSI_SEMANTIC_COUNT + 10)
@@ -178,6 +177,7 @@ struct nv50_ir_prog_info
       uint8_t vertexId;          /* system value index of VertexID */
       uint8_t edgeFlagIn;
       uint8_t edgeFlagOut;
+      int8_t viewportId;         /* output index of ViewportIndex */
       uint8_t fragDepth;         /* output index of FragDepth */
       uint8_t sampleMask;        /* output index of SampleMask */
       boolean sampleInterp;      /* perform sample interp on all fp inputs */

@@ -515,7 +515,9 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(ARB_draw_buffers,               true,  false,     dummy_true),
    EXT(ARB_draw_instanced,             true,  false,     ARB_draw_instanced),
    EXT(ARB_explicit_attrib_location,   true,  false,     ARB_explicit_attrib_location),
+   EXT(ARB_explicit_uniform_location,  true,  false,     ARB_explicit_uniform_location),
    EXT(ARB_fragment_coord_conventions, true,  false,     ARB_fragment_coord_conventions),
+   EXT(ARB_fragment_layer_viewport,    true,  false,     ARB_fragment_layer_viewport),
    EXT(ARB_gpu_shader5,                true,  false,     ARB_gpu_shader5),
    EXT(ARB_sample_shading,             true,  false,     ARB_sample_shading),
    EXT(ARB_separate_shader_objects,    true,  false,     dummy_true),
@@ -1098,8 +1100,10 @@ ast_declarator_list::print(void) const
 
    if (type)
       type->print();
-   else
+   else if (invariant)
       printf("invariant ");
+   else
+      printf("precise ");
 
    foreach_list_const (ptr, & this->declarations) {
       if (ptr != this->declarations.get_head())
@@ -1117,6 +1121,7 @@ ast_declarator_list::ast_declarator_list(ast_fully_specified_type *type)
 {
    this->type = type;
    this->invariant = false;
+   this->precise = false;
 }
 
 void
@@ -1565,7 +1570,8 @@ do_common_optimization(exec_list *ir, bool linked,
       progress = do_constant_variable_unlinked(ir) || progress;
    progress = do_constant_folding(ir) || progress;
    progress = do_cse(ir) || progress;
-   progress = do_algebraic(ir, native_integers) || progress;
+   progress = do_rebalance_tree(ir) || progress;
+   progress = do_algebraic(ir, native_integers, options) || progress;
    progress = do_lower_jumps(ir) || progress;
    progress = do_vec_index_to_swizzle(ir) || progress;
    progress = lower_vector_insert(ir, false) || progress;

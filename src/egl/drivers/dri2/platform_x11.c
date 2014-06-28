@@ -481,21 +481,6 @@ dri2_x11_flush_front_buffer(__DRIdrawable * driDrawable, void *loaderPrivate)
 #endif
 }
 
-static char *
-dri2_x11_strndup(const char *s, int length)
-{
-   char *d;
-
-   d = malloc(length + 1);
-   if (d == NULL)
-      return NULL;
-
-   memcpy(d, s, length);
-   d[length] = '\0';
-
-   return d;
-}
-
 static EGLBoolean
 dri2_x11_connect(struct dri2_egl_display *dri2_dpy)
 {
@@ -565,14 +550,14 @@ dri2_x11_connect(struct dri2_egl_display *dri2_dpy)
 
    driver_name = xcb_dri2_connect_driver_name (connect);
    dri2_dpy->driver_name =
-      dri2_x11_strndup(driver_name,
-                       xcb_dri2_connect_driver_name_length(connect));
+      strndup(driver_name,
+              xcb_dri2_connect_driver_name_length(connect));
 
    device_name = xcb_dri2_connect_device_name (connect);
 
    dri2_dpy->device_name =
-      dri2_x11_strndup(device_name,
-                       xcb_dri2_connect_device_name_length(connect));
+      strndup(device_name,
+              xcb_dri2_connect_device_name_length(connect));
 
    if (dri2_dpy->device_name == NULL || dri2_dpy->driver_name == NULL) {
       free(dri2_dpy->device_name);
@@ -1091,6 +1076,11 @@ dri2_initialize_x11_swrast(_EGLDriver *drv, _EGLDisplay *disp)
       goto cleanup_dpy;
    }
 
+   /*
+    * Every hardware driver_name is set using strdup. Doing the same in
+    * here will allow is to simply free the memory at dri2_terminate().
+    */
+   dri2_dpy->driver_name = strdup("swrast");
    if (!dri2_load_driver_swrast(disp))
       goto cleanup_conn;
 
@@ -1129,6 +1119,7 @@ dri2_initialize_x11_swrast(_EGLDriver *drv, _EGLDisplay *disp)
  cleanup_driver:
    dlclose(dri2_dpy->driver);
  cleanup_conn:
+   free(dri2_dpy->driver_name);
    if (disp->PlatformDisplay == NULL)
       xcb_disconnect(dri2_dpy->conn);
  cleanup_dpy:

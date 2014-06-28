@@ -88,39 +88,38 @@ brw_swap_cmod(uint32_t cmod)
    }
 }
 
-void brw_set_predicate_control( struct brw_compile *p, unsigned pc )
+void brw_set_default_predicate_control( struct brw_compile *p, unsigned pc )
 {
-   p->current->header.predicate_control = pc;
+   brw_inst_set_pred_control(p->brw, p->current, pc);
 }
 
-void brw_set_predicate_inverse(struct brw_compile *p, bool predicate_inverse)
+void brw_set_default_predicate_inverse(struct brw_compile *p, bool predicate_inverse)
 {
-   p->current->header.predicate_inverse = predicate_inverse;
+   brw_inst_set_pred_inv(p->brw, p->current, predicate_inverse);
 }
 
-void brw_set_conditionalmod( struct brw_compile *p, unsigned conditional )
+void brw_set_default_flag_reg(struct brw_compile *p, int reg, int subreg)
 {
-   p->current->header.destreg__conditionalmod = conditional;
+   if (p->brw->gen >= 7)
+      brw_inst_set_flag_reg_nr(p->brw, p->current, reg);
+
+   brw_inst_set_flag_subreg_nr(p->brw, p->current, subreg);
 }
 
-void brw_set_flag_reg(struct brw_compile *p, int reg, int subreg)
+void brw_set_default_access_mode( struct brw_compile *p, unsigned access_mode )
 {
-   p->current->bits2.da1.flag_reg_nr = reg;
-   p->current->bits2.da1.flag_subreg_nr = subreg;
-}
-
-void brw_set_access_mode( struct brw_compile *p, unsigned access_mode )
-{
-   p->current->header.access_mode = access_mode;
+   brw_inst_set_access_mode(p->brw, p->current, access_mode);
 }
 
 void
-brw_set_compression_control(struct brw_compile *p,
+brw_set_default_compression_control(struct brw_compile *p,
 			    enum brw_compression compression_control)
 {
+   struct brw_context *brw = p->brw;
+
    p->compressed = (compression_control == BRW_COMPRESSION_COMPRESSED);
 
-   if (p->brw->gen >= 6) {
+   if (brw->gen >= 6) {
       /* Since we don't use the SIMD32 support in gen6, we translate
        * the pre-gen6 compression control here.
        */
@@ -129,48 +128,50 @@ brw_set_compression_control(struct brw_compile *p,
 	 /* This is the "use the first set of bits of dmask/vmask/arf
 	  * according to execsize" option.
 	  */
-	 p->current->header.compression_control = GEN6_COMPRESSION_1Q;
+         brw_inst_set_qtr_control(brw, p->current, GEN6_COMPRESSION_1Q);
 	 break;
       case BRW_COMPRESSION_2NDHALF:
 	 /* For SIMD8, this is "use the second set of 8 bits." */
-	 p->current->header.compression_control = GEN6_COMPRESSION_2Q;
+         brw_inst_set_qtr_control(brw, p->current, GEN6_COMPRESSION_2Q);
 	 break;
       case BRW_COMPRESSION_COMPRESSED:
 	 /* For SIMD16 instruction compression, use the first set of 16 bits
 	  * since we don't do SIMD32 dispatch.
 	  */
-	 p->current->header.compression_control = GEN6_COMPRESSION_1H;
+         brw_inst_set_qtr_control(brw, p->current, GEN6_COMPRESSION_1H);
 	 break;
       default:
 	 assert(!"not reached");
-	 p->current->header.compression_control = GEN6_COMPRESSION_1H;
+         brw_inst_set_qtr_control(brw, p->current, GEN6_COMPRESSION_1H);
 	 break;
       }
    } else {
-      p->current->header.compression_control = compression_control;
+      brw_inst_set_qtr_control(brw, p->current, compression_control);
    }
 }
 
-void brw_set_mask_control( struct brw_compile *p, unsigned value )
+void brw_set_default_mask_control( struct brw_compile *p, unsigned value )
 {
-   p->current->header.mask_control = value;
+   brw_inst_set_mask_control(p->brw, p->current, value);
 }
 
-void brw_set_saturate( struct brw_compile *p, bool enable )
+void brw_set_default_saturate( struct brw_compile *p, bool enable )
 {
-   p->current->header.saturate = enable;
+   brw_inst_set_saturate(p->brw, p->current, enable);
 }
 
-void brw_set_acc_write_control(struct brw_compile *p, unsigned value)
+void brw_set_default_acc_write_control(struct brw_compile *p, unsigned value)
 {
-   if (p->brw->gen >= 6)
-      p->current->header.acc_wr_control = value;
+   struct brw_context *brw = p->brw;
+
+   if (brw->gen >= 6)
+      brw_inst_set_acc_wr_control(p->brw, p->current, value);
 }
 
 void brw_push_insn_state( struct brw_compile *p )
 {
    assert(p->current != &p->stack[BRW_EU_MAX_INSN_STACK-1]);
-   memcpy(p->current+1, p->current, sizeof(struct brw_instruction));
+   memcpy(p->current + 1, p->current, sizeof(brw_inst));
    p->compressed_stack[p->current - p->stack] = p->compressed;
    p->current++;
 }
@@ -197,7 +198,7 @@ brw_init_compile(struct brw_context *brw, struct brw_compile *p, void *mem_ctx)
     * until out of memory.
     */
    p->store_size = 1024;
-   p->store = rzalloc_array(mem_ctx, struct brw_instruction, p->store_size);
+   p->store = rzalloc_array(mem_ctx, brw_inst, p->store_size);
    p->nr_insn = 0;
    p->current = p->stack;
    p->compressed = false;
@@ -207,9 +208,9 @@ brw_init_compile(struct brw_context *brw, struct brw_compile *p, void *mem_ctx)
 
    /* Some defaults?
     */
-   brw_set_mask_control(p, BRW_MASK_ENABLE); /* what does this do? */
-   brw_set_saturate(p, 0);
-   brw_set_compression_control(p, BRW_COMPRESSION_NONE);
+   brw_set_default_mask_control(p, BRW_MASK_ENABLE); /* what does this do? */
+   brw_set_default_saturate(p, 0);
+   brw_set_default_compression_control(p, BRW_COMPRESSION_NONE);
 
    /* Set up control flow stack */
    p->if_stack_depth = 0;
@@ -239,13 +240,13 @@ brw_disassemble(struct brw_context *brw,
    bool dump_hex = false;
 
    for (int offset = start; offset < end;) {
-      struct brw_instruction *insn = assembly + offset;
-      struct brw_instruction uncompacted;
-      bool compacted = insn->header.cmpt_control;
+      brw_inst *insn = assembly + offset;
+      brw_inst uncompacted;
+      bool compacted = brw_inst_cmpt_control(brw, insn);
       fprintf(out, "0x%08x: ", offset);
 
-      if (insn->header.cmpt_control) {
-	 struct brw_compact_instruction *compacted = (void *)insn;
+      if (compacted) {
+         brw_compact_inst *compacted = (void *)insn;
 	 if (dump_hex) {
 	    fprintf(out, "0x%08x 0x%08x                       ",
 		    ((uint32_t *)insn)[1],
@@ -266,6 +267,6 @@ brw_disassemble(struct brw_context *brw,
 	 offset += 16;
       }
 
-      brw_disassemble_inst(out, insn, brw->gen, compacted);
+      brw_disassemble_inst(out, brw, insn, compacted);
    }
 }

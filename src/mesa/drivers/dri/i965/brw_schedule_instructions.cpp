@@ -505,7 +505,7 @@ fs_instruction_scheduler::count_remaining_grf_uses(backend_instruction *be)
    if (inst->dst.file == GRF)
       remaining_grf_uses[inst->dst.reg]++;
 
-   for (int i = 0; i < 3; i++) {
+   for (int i = 0; i < inst->sources; i++) {
       if (inst->src[i].file != GRF)
          continue;
 
@@ -526,7 +526,7 @@ fs_instruction_scheduler::update_register_pressure(backend_instruction *be)
       grf_active[inst->dst.reg] = true;
    }
 
-   for (int i = 0; i < 3; i++) {
+   for (int i = 0; i < inst->sources; i++) {
       if (inst->src[i].file == GRF) {
          remaining_grf_uses[inst->src[i].reg]--;
          grf_active[inst->src[i].reg] = true;
@@ -547,7 +547,7 @@ fs_instruction_scheduler::get_register_pressure_benefit(backend_instruction *be)
          benefit -= v->virtual_grf_sizes[inst->dst.reg];
    }
 
-   for (int i = 0; i < 3; i++) {
+   for (int i = 0; i < inst->sources; i++) {
       if (inst->src[i].file != GRF)
          continue;
 
@@ -781,7 +781,7 @@ fs_instruction_scheduler::calculate_deps()
          add_barrier_deps(n);
 
       /* read-after-write deps. */
-      for (int i = 0; i < 3; i++) {
+      for (int i = 0; i < inst->sources; i++) {
 	 if (inst->src[i].file == GRF) {
             if (post_reg_alloc) {
                for (int r = 0; r < reg_width * inst->regs_read(v, i); r++)
@@ -882,7 +882,7 @@ fs_instruction_scheduler::calculate_deps()
 	 last_conditional_mod[inst->flag_subreg] = n;
       }
 
-      if (inst->writes_accumulator_implicitly(v->brw->gen) &&
+      if (inst->writes_accumulator_implicitly(v->brw) &&
           !inst->dst.is_accumulator()) {
          add_dep(last_accumulator_write, n);
          last_accumulator_write = n;
@@ -905,7 +905,7 @@ fs_instruction_scheduler::calculate_deps()
       fs_inst *inst = (fs_inst *)n->inst;
 
       /* write-after-read deps. */
-      for (int i = 0; i < 3; i++) {
+      for (int i = 0; i < inst->sources; i++) {
 	 if (inst->src[i].file == GRF) {
             if (post_reg_alloc) {
                for (int r = 0; r < reg_width * inst->regs_read(v, i); r++)
@@ -1002,7 +1002,7 @@ fs_instruction_scheduler::calculate_deps()
 	 last_conditional_mod[inst->flag_subreg] = n;
       }
 
-      if (inst->writes_accumulator_implicitly(v->brw->gen)) {
+      if (inst->writes_accumulator_implicitly(v->brw)) {
          last_accumulator_write = n;
       }
    }
@@ -1112,7 +1112,7 @@ vec4_instruction_scheduler::calculate_deps()
          last_conditional_mod = n;
       }
 
-      if (inst->writes_accumulator_implicitly(v->brw->gen) &&
+      if (inst->writes_accumulator_implicitly(v->brw) &&
           !inst->dst.is_accumulator()) {
          add_dep(last_accumulator_write, n);
          last_accumulator_write = n;
@@ -1197,7 +1197,7 @@ vec4_instruction_scheduler::calculate_deps()
          last_conditional_mod = n;
       }
 
-      if (inst->writes_accumulator_implicitly(v->brw->gen)) {
+      if (inst->writes_accumulator_implicitly(v->brw)) {
          last_accumulator_write = n;
       }
    }
@@ -1206,6 +1206,7 @@ vec4_instruction_scheduler::calculate_deps()
 schedule_node *
 fs_instruction_scheduler::choose_instruction_to_schedule()
 {
+   struct brw_context *brw = v->brw;
    schedule_node *chosen = NULL;
 
    if (mode == SCHEDULE_PRE || mode == SCHEDULE_POST) {
@@ -1276,7 +1277,7 @@ fs_instruction_scheduler::choose_instruction_to_schedule()
              * then the MRFs for the next SEND, then the next SEND, then the
              * MRFs, etc., without ever consuming the results of a send.
              */
-            if (v->brw->gen < 7) {
+            if (brw->gen < 7) {
                fs_inst *chosen_inst = (fs_inst *)chosen->inst;
 
                /* We use regs_written > 1 as our test for the kind of send

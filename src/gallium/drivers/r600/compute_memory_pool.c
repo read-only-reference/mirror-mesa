@@ -30,6 +30,7 @@
 #include "util/u_transfer.h"
 #include "util/u_surface.h"
 #include "util/u_pack_color.h"
+#include "util/u_math.h"
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
 #include "util/u_framebuffer.h"
@@ -41,6 +42,7 @@
 #include "evergreen_compute_internal.h"
 #include <inttypes.h>
 
+#define ITEM_ALIGNMENT 1024
 /**
  * Creates a new pool
  */
@@ -49,10 +51,18 @@ struct compute_memory_pool* compute_memory_pool_new(
 {
 	struct compute_memory_pool* pool = (struct compute_memory_pool*)
 				CALLOC(sizeof(struct compute_memory_pool), 1);
+	if (pool == NULL)
+		return NULL;
 
 	COMPUTE_DBG(rscreen, "* compute_memory_pool_new()\n");
 
 	pool->screen = rscreen;
+	pool->item_list = (struct list_head *)
+				CALLOC(sizeof(struct list_head), 1);
+	pool->unallocated_list = (struct list_head *)
+				CALLOC(sizeof(struct list_head), 1);
+	list_inithead(pool->item_list);
+	list_inithead(pool->unallocated_list);
 	return pool;
 }
 
@@ -64,7 +74,9 @@ static void compute_memory_pool_init(struct compute_memory_pool * pool,
 		initial_size_in_dw);
 
 	pool->shadow = (uint32_t*)CALLOC(initial_size_in_dw, 4);
-	pool->next_id = 1;
+	if (pool->shadow == NULL)
+		return;
+
 	pool->size_in_dw = initial_size_in_dw;
 	pool->bo = (struct r600_resource*)r600_compute_buffer_alloc_vram(pool->screen,
 							pool->size_in_dw * 4);
@@ -101,15 +113,12 @@ int64_t compute_memory_prealloc_chunk(
 	COMPUTE_DBG(pool->screen, "* compute_memory_prealloc_chunk() size_in_dw = %ld\n",
 		size_in_dw);
 
-	for (item = pool->item_list; item; item = item->next) {
-		if (item->start_in_dw > -1) {
-			if (item->start_in_dw-last_end > size_in_dw) {
-				return last_end;
-			}
-
-			last_end = item->start_in_dw + item->size_in_dw;
-			last_end += (1024 - last_end % 1024);
+	LIST_FOR_EACH_ENTRY(item, pool->item_list, link) {
+		if (last_end + size_in_dw <= item->start_in_dw) {
+			return last_end;
 		}
+
+		last_end = item->start_in_dw + align(item->size_in_dw, ITEM_ALIGNMENT);
 	}
 
 	if (pool->size_in_dw - last_end < size_in_dw) {
@@ -122,31 +131,37 @@ int64_t compute_memory_prealloc_chunk(
 /**
  *  Search for the chunk where we can link our new chunk after it.
  */
-struct compute_memory_item* compute_memory_postalloc_chunk(
+struct list_head *compute_memory_postalloc_chunk(
 	struct compute_memory_pool* pool,
 	int64_t start_in_dw)
 {
-	struct compute_memory_item* item;
+	struct compute_memory_item *item;
+	struct compute_memory_item *next;
+	struct list_head *next_link;
 
 	COMPUTE_DBG(pool->screen, "* compute_memory_postalloc_chunck() start_in_dw = %ld\n",
 		start_in_dw);
 
 	/* Check if we can insert it in the front of the list */
-	if (pool->item_list && pool->item_list->start_in_dw > start_in_dw) {
-		return NULL;
+	item = LIST_ENTRY(struct compute_memory_item, pool->item_list->next, link);
+	if (LIST_IS_EMPTY(pool->item_list) || item->start_in_dw > start_in_dw) {
+		return pool->item_list;
 	}
 
-	for (item = pool->item_list; item; item = item->next) {
-		if (item->next) {
+	LIST_FOR_EACH_ENTRY(item, pool->item_list, link) {
+		next_link = item->link.next;
+
+		if (next_link != pool->item_list) {
+			next = container_of(next_link, item, link);
 			if (item->start_in_dw < start_in_dw
-				&& item->next->start_in_dw > start_in_dw) {
-				return item;
+				&& next->start_in_dw > start_in_dw) {
+				return &item->link;
 			}
 		}
 		else {
 			/* end of chain */
 			assert(item->start_in_dw < start_in_dw);
-			return item;
+			return &item->link;
 		}
 	}
 
@@ -155,9 +170,10 @@ struct compute_memory_item* compute_memory_postalloc_chunk(
 }
 
 /**
- * Reallocates pool, conserves data
+ * Reallocates pool, conserves data.
+ * @returns -1 if it fails, 0 otherwise
  */
-void compute_memory_grow_pool(struct compute_memory_pool* pool,
+int compute_memory_grow_pool(struct compute_memory_pool* pool,
 	struct pipe_context * pipe, int new_size_in_dw)
 {
 	COMPUTE_DBG(pool->screen, "* compute_memory_grow_pool() "
@@ -168,14 +184,19 @@ void compute_memory_grow_pool(struct compute_memory_pool* pool,
 
 	if (!pool->bo) {
 		compute_memory_pool_init(pool, MAX2(new_size_in_dw, 1024 * 16));
+		if (pool->shadow == NULL)
+			return -1;
 	} else {
-		new_size_in_dw += 1024 - (new_size_in_dw % 1024);
+		new_size_in_dw = align(new_size_in_dw, ITEM_ALIGNMENT);
 
 		COMPUTE_DBG(pool->screen, "  Aligned size = %d (%d bytes)\n",
 			new_size_in_dw, new_size_in_dw * 4);
 
 		compute_memory_shadow(pool, pipe, 1);
 		pool->shadow = realloc(pool->shadow, new_size_in_dw*4);
+		if (pool->shadow == NULL)
+			return -1;
+
 		pool->size_in_dw = new_size_in_dw;
 		pool->screen->b.b.resource_destroy(
 			(struct pipe_screen *)pool->screen,
@@ -185,6 +206,8 @@ void compute_memory_grow_pool(struct compute_memory_pool* pool,
 							pool->size_in_dw * 4);
 		compute_memory_shadow(pool, pipe, 0);
 	}
+
+	return 0;
 }
 
 /**
@@ -201,72 +224,42 @@ void compute_memory_shadow(struct compute_memory_pool* pool,
 	chunk.id = 0;
 	chunk.start_in_dw = 0;
 	chunk.size_in_dw = pool->size_in_dw;
-	chunk.prev = chunk.next = NULL;
 	compute_memory_transfer(pool, pipe, device_to_host, &chunk,
 				pool->shadow, 0, pool->size_in_dw*4);
 }
 
 /**
  * Allocates pending allocations in the pool
+ * @returns -1 if it fails, 0 otherwise
  */
-void compute_memory_finalize_pending(struct compute_memory_pool* pool,
+int compute_memory_finalize_pending(struct compute_memory_pool* pool,
 	struct pipe_context * pipe)
 {
-	struct compute_memory_item *pending_list = NULL, *end_p = NULL;
 	struct compute_memory_item *item, *next;
 
 	int64_t allocated = 0;
 	int64_t unallocated = 0;
 
-	int64_t start_in_dw = 0;
+	int err = 0;
 
 	COMPUTE_DBG(pool->screen, "* compute_memory_finalize_pending()\n");
 
-	for (item = pool->item_list; item; item = item->next) {
+	LIST_FOR_EACH_ENTRY(item, pool->item_list, link) {
 		COMPUTE_DBG(pool->screen, "  + list: offset = %i id = %i size = %i "
 			"(%i bytes)\n",item->start_in_dw, item->id,
 			item->size_in_dw, item->size_in_dw * 4);
 	}
 
-	/* Search through the list of memory items in the pool */
-	for (item = pool->item_list; item; item = next) {
-		next = item->next;
+	/* Calculate the total allocated size */
+	LIST_FOR_EACH_ENTRY(item, pool->item_list, link) {
+		allocated += align(item->size_in_dw, ITEM_ALIGNMENT);
+	}
 
-		/* Check if the item is pending. */
-		if (item->start_in_dw == -1) {
-			/* It is pending, so add it to the pending_list... */
-			if (end_p) {
-				end_p->next = item;
-			}
-			else {
-				pending_list = item;
-			}
-
-			/* ... and then remove it from the item list. */
-			if (item->prev) {
-				item->prev->next = next;
-			}
-			else {
-				pool->item_list = next;
-			}
-
-			if (next) {
-				next->prev = item->prev;
-			}
-
-			/* This sequence makes the item be at the end of the list */
-			item->prev = end_p;
-			item->next = NULL;
-			end_p = item;
-
-			/* Update the amount of space we will need to allocate. */
-			unallocated += item->size_in_dw+1024;
-		}
-		else {
-			/* The item is not pendng, so update the amount of space
-			 * that has already been allocated. */
-			allocated += item->size_in_dw;
-		}
+	/* Calculate the total unallocated size of the items that
+	 * will be promoted to the pool */
+	LIST_FOR_EACH_ENTRY(item, pool->unallocated_list, link) {
+		if (item->status & ITEM_FOR_PROMOTING)
+			unallocated += align(item->size_in_dw, ITEM_ALIGNMENT);
 	}
 
 	/* If we require more space than the size of the pool, then grow the
@@ -286,92 +279,169 @@ void compute_memory_finalize_pending(struct compute_memory_pool* pool,
 	 * In this case, there are 300 units of free space in the pool, but
 	 * they aren't contiguous, so it will be impossible to allocate Item D.
 	 */
-	if (pool->size_in_dw < allocated+unallocated) {
-		compute_memory_grow_pool(pool, pipe, allocated+unallocated);
+	if (pool->size_in_dw < allocated + unallocated) {
+		err = compute_memory_grow_pool(pool, pipe, allocated + unallocated);
+		if (err == -1)
+			return -1;
 	}
 
-	/* Loop through all the pending items, allocate space for them and
-	 * add them back to the item_list. */
-	for (item = pending_list; item; item = next) {
-		next = item->next;
+	/* Loop through all the unallocated items, check if they are marked
+	 * for promoting, allocate space for them and add them to the item_list. */
+	LIST_FOR_EACH_ENTRY_SAFE(item, next, pool->unallocated_list, link) {
+		if (item->status & ITEM_FOR_PROMOTING) {
+			err = compute_memory_promote_item(pool, item, pipe, allocated);
+			item->status ^= ITEM_FOR_PROMOTING;
 
-		/* Search for free space in the pool for this item. */
-		while ((start_in_dw=compute_memory_prealloc_chunk(pool,
-						item->size_in_dw)) == -1) {
-			int64_t need = item->size_in_dw+2048 -
-						(pool->size_in_dw - allocated);
+			allocated += align(item->size_in_dw, ITEM_ALIGNMENT);
 
-			need += 1024 - (need % 1024);
-
-			if (need > 0) {
-				compute_memory_grow_pool(pool,
-						pipe,
-						pool->size_in_dw + need);
-			}
-			else {
-				need = pool->size_in_dw / 10;
-				need += 1024 - (need % 1024);
-				compute_memory_grow_pool(pool,
-						pipe,
-						pool->size_in_dw + need);
-			}
+			if (err == -1)
+				return -1;
 		}
-		COMPUTE_DBG(pool->screen, "  + Found space for Item %p id = %u "
+	}
+
+	return 0;
+}
+
+int compute_memory_promote_item(struct compute_memory_pool *pool,
+		struct compute_memory_item *item, struct pipe_context *pipe,
+		int64_t allocated)
+{
+	struct pipe_screen *screen = (struct pipe_screen *)pool->screen;
+	struct r600_context *rctx = (struct r600_context *)pipe;
+	struct pipe_resource *src = (struct pipe_resource *)item->real_buffer;
+	struct pipe_resource *dst = NULL;
+	struct pipe_box box;
+
+	struct list_head *pos;
+	int64_t start_in_dw;
+	int err = 0;
+
+
+	/* Search for free space in the pool for this item. */
+	while ((start_in_dw=compute_memory_prealloc_chunk(pool,
+					item->size_in_dw)) == -1) {
+		int64_t need = item->size_in_dw + 2048 -
+			(pool->size_in_dw - allocated);
+
+		if (need <= 0) {
+			/* There's enough free space, but it's too
+			 * fragmented. Assume half of the item can fit
+			 * int the last chunk */
+			need = (item->size_in_dw / 2) + ITEM_ALIGNMENT;
+		}
+
+		need = align(need, ITEM_ALIGNMENT);
+
+		err = compute_memory_grow_pool(pool,
+				pipe,
+				pool->size_in_dw + need);
+
+		if (err == -1)
+			return -1;
+	}
+	dst = (struct pipe_resource *)pool->bo;
+	COMPUTE_DBG(pool->screen, "  + Found space for Item %p id = %u "
 			"start_in_dw = %u (%u bytes) size_in_dw = %u (%u bytes)\n",
 			item, item->id, start_in_dw, start_in_dw * 4,
 			item->size_in_dw, item->size_in_dw * 4);
 
-		item->start_in_dw = start_in_dw;
-		item->next = NULL;
-		item->prev = NULL;
+	/* Remove the item from the unallocated list */
+	list_del(&item->link);
 
-		if (pool->item_list) {
-			struct compute_memory_item *pos;
+	/* Add it back to the item_list */
+	pos = compute_memory_postalloc_chunk(pool, start_in_dw);
+	list_add(&item->link, pos);
+	item->start_in_dw = start_in_dw;
 
-			pos = compute_memory_postalloc_chunk(pool, start_in_dw);
-			if (pos) {
-				item->prev = pos;
-				item->next = pos->next;
-				pos->next = item;
-				if (item->next) {
-					item->next->prev = item;
-				}
-			} else {
-				/* Add item to the front of the list */
-				item->next = pool->item_list;
-				item->prev = pool->item_list->prev;
-				pool->item_list->prev = item;
-				pool->item_list = item;
-			}
+	if (src != NULL) {
+		u_box_1d(0, item->size_in_dw * 4, &box);
+
+		rctx->b.b.resource_copy_region(pipe,
+				dst, 0, item->start_in_dw * 4, 0 ,0,
+				src, 0, &box);
+
+		/* We check if the item is mapped for reading.
+		 * In this case, we need to keep the temporary buffer 'alive'
+		 * because it is possible to keep a map active for reading
+		 * while a kernel (that reads from it) executes */
+		if (!(item->status & ITEM_MAPPED_FOR_READING)) {
+			pool->screen->b.b.resource_destroy(screen, src);
+			item->real_buffer = NULL;
 		}
-		else {
-			pool->item_list = item;
-		}
-
-		allocated += item->size_in_dw;
 	}
+
+	return 0;
 }
 
+void compute_memory_demote_item(struct compute_memory_pool *pool,
+	struct compute_memory_item *item, struct pipe_context *pipe)
+{
+	struct r600_context *rctx = (struct r600_context *)pipe;
+	struct pipe_resource *src = (struct pipe_resource *)pool->bo;
+	struct pipe_resource *dst;
+	struct pipe_box box;
+
+	/* First, we remove the item from the item_list */
+	list_del(&item->link);
+
+	/* Now we add it to the unallocated list */
+	list_addtail(&item->link, pool->unallocated_list);
+
+	/* We check if the intermediate buffer exists, and if it
+	 * doesn't, we create it again */
+	if (item->real_buffer == NULL) {
+		item->real_buffer = (struct r600_resource*)r600_compute_buffer_alloc_vram(
+				pool->screen, item->size_in_dw * 4);
+	}
+
+	dst = (struct pipe_resource *)item->real_buffer;
+
+	/* We transfer the memory from the item in the pool to the
+	 * temporary buffer */
+	u_box_1d(item->start_in_dw * 4, item->size_in_dw * 4, &box);
+
+	rctx->b.b.resource_copy_region(pipe,
+		dst, 0, 0, 0, 0,
+		src, 0, &box);
+
+	/* Remember to mark the buffer as 'pending' by setting start_in_dw to -1 */
+	item->start_in_dw = -1;
+}
 
 void compute_memory_free(struct compute_memory_pool* pool, int64_t id)
 {
 	struct compute_memory_item *item, *next;
+	struct pipe_screen *screen = (struct pipe_screen *)pool->screen;
+	struct pipe_resource *res;
 
 	COMPUTE_DBG(pool->screen, "* compute_memory_free() id + %ld \n", id);
 
-	for (item = pool->item_list; item; item = next) {
-		next = item->next;
+	LIST_FOR_EACH_ENTRY_SAFE(item, next, pool->item_list, link) {
 
 		if (item->id == id) {
-			if (item->prev) {
-				item->prev->next = item->next;
-			}
-			else {
-				pool->item_list = item->next;
+			list_del(&item->link);
+
+			if (item->real_buffer) {
+				res = (struct pipe_resource *)item->real_buffer;
+				pool->screen->b.b.resource_destroy(
+						screen, res);
 			}
 
-			if (item->next) {
-				item->next->prev = item->prev;
+			free(item);
+
+			return;
+		}
+	}
+
+	LIST_FOR_EACH_ENTRY_SAFE(item, next, pool->unallocated_list, link) {
+
+		if (item->id == id) {
+			list_del(&item->link);
+
+			if (item->real_buffer) {
+				res = (struct pipe_resource *)item->real_buffer;
+				pool->screen->b.b.resource_destroy(
+						screen, res);
 			}
 
 			free(item);
@@ -393,28 +463,23 @@ struct compute_memory_item* compute_memory_alloc(
 	struct compute_memory_pool* pool,
 	int64_t size_in_dw)
 {
-	struct compute_memory_item *new_item = NULL, *last_item = NULL;
+	struct compute_memory_item *new_item = NULL;
 
 	COMPUTE_DBG(pool->screen, "* compute_memory_alloc() size_in_dw = %ld (%ld bytes)\n",
 			size_in_dw, 4 * size_in_dw);
 
 	new_item = (struct compute_memory_item *)
 				CALLOC(sizeof(struct compute_memory_item), 1);
+	if (new_item == NULL)
+		return NULL;
+
 	new_item->size_in_dw = size_in_dw;
 	new_item->start_in_dw = -1; /* mark pending */
 	new_item->id = pool->next_id++;
 	new_item->pool = pool;
+	new_item->real_buffer = NULL;
 
-	if (pool->item_list) {
-		for (last_item = pool->item_list; last_item->next;
-						last_item = last_item->next);
-
-		last_item->next = new_item;
-		new_item->prev = last_item;
-	}
-	else {
-		pool->item_list = new_item;
-	}
+	list_addtail(&new_item->link, pool->unallocated_list);
 
 	COMPUTE_DBG(pool->screen, "  + Adding item %p id = %u size = %u (%u bytes)\n",
 			new_item, new_item->id, new_item->size_in_dw,
@@ -451,7 +516,7 @@ void compute_memory_transfer(
 		map = pipe->transfer_map(pipe, gart, 0, PIPE_TRANSFER_READ,
 			&(struct pipe_box) { .width = aligned_size * 4,
 			.height = 1, .depth = 1 }, &xfer);
-                assert(xfer);
+		assert(xfer);
 		assert(map);
 		memcpy(data, map + internal_offset, size);
 		pipe->transfer_unmap(pipe, xfer);

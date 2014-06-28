@@ -444,14 +444,14 @@ gen8_vec4_generator::generate_pull_constant_load(vec4_instruction *inst,
    gen8_instruction *send = next_inst(BRW_OPCODE_SEND);
    gen8_set_dst(brw, send, dst);
    gen8_set_src0(brw, send, offset);
-   gen8_set_dp_message(brw, send, GEN7_SFID_DATAPORT_DATA_CACHE,
-                       surf_index,
-                       GEN6_DATAPORT_READ_MESSAGE_OWORD_DUAL_BLOCK_READ,
-                       0,      /* message control */
-                       1,      /* mlen */
-                       1,      /* rlen */
-                       false,  /* no header */
-                       false); /* EOT */
+   gen8_set_sampler_message(brw, send,
+                            surf_index,
+                            0, /* The LD message ignores the sampler unit. */
+                            GEN5_SAMPLER_MESSAGE_SAMPLE_LD,
+                            1,      /* rlen */
+                            1,      /* mlen */
+                            false,  /* no header */
+                            BRW_SAMPLER_SIMD_MODE_SIMD4X2);
 
    brw_mark_surface_used(&prog_data->base, surf_index);
 }
@@ -842,18 +842,10 @@ gen8_vec4_generator::generate_vec4_instruction(vec4_instruction *instruction,
 }
 
 void
-gen8_vec4_generator::generate_code(exec_list *instructions,
-                                   struct annotation_info *annotation)
+gen8_vec4_generator::generate_code(exec_list *instructions)
 {
-   if (unlikely(debug_flag)) {
-      if (shader_prog) {
-         fprintf(stderr, "Native code for %s vertex shader %d:\n",
-                 shader_prog->Label ? shader_prog->Label : "unnamed",
-                 shader_prog->Name);
-      } else {
-         fprintf(stderr, "Native code for vertex program %d:\n", prog->Id);
-      }
-   }
+   struct annotation_info annotation;
+   memset(&annotation, 0, sizeof(annotation));
 
    cfg_t *cfg = NULL;
    if (unlikely(debug_flag))
@@ -864,7 +856,7 @@ gen8_vec4_generator::generate_code(exec_list *instructions,
       struct brw_reg src[3], dst;
 
       if (unlikely(debug_flag))
-         annotate(brw, annotation, cfg, ir, next_inst_offset);
+         annotate(brw, &annotation, cfg, ir, next_inst_offset);
 
       for (unsigned int i = 0; i < 3; i++) {
          src[i] = ir->get_src(prog_data, i);
@@ -892,25 +884,32 @@ gen8_vec4_generator::generate_code(exec_list *instructions,
    }
 
    patch_jump_targets();
-   annotation_finalize(annotation, next_inst_offset);
+   annotation_finalize(&annotation, next_inst_offset);
+
+   int before_size = next_inst_offset;
+
+   if (unlikely(debug_flag)) {
+      if (shader_prog) {
+         fprintf(stderr, "Native code for %s vertex shader %d:\n",
+                 shader_prog->Label ? shader_prog->Label : "unnamed",
+                 shader_prog->Name);
+      } else {
+         fprintf(stderr, "Native code for vertex program %d:\n", prog->Id);
+      }
+      fprintf(stderr, "vec4 shader: %d instructions.\n", before_size / 16);
+
+      dump_assembly(store, annotation.ann_count, annotation.ann, brw, prog);
+      ralloc_free(annotation.ann);
+   }
 }
 
 const unsigned *
 gen8_vec4_generator::generate_assembly(exec_list *instructions,
                                        unsigned *assembly_size)
 {
-   struct annotation_info annotation;
-   memset(&annotation, 0, sizeof(annotation));
-
    default_state.access_mode = BRW_ALIGN_16;
    default_state.exec_size = BRW_EXECUTE_8;
-   generate_code(instructions, &annotation);
-
-   if (unlikely(debug_flag)) {
-      dump_assembly(store, annotation.ann_count, annotation.ann,
-                    brw, prog, gen8_disassemble);
-      ralloc_free(annotation.ann);
-   }
+   generate_code(instructions);
 
    *assembly_size = next_inst_offset;
    return (const unsigned *) store;

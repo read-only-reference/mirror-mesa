@@ -154,6 +154,7 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	r600_init_context_texture_functions(rctx);
 	r600_streamout_init(rctx);
 	r600_query_init(rctx);
+	cayman_init_msaa(&rctx->b);
 
 	rctx->allocator_so_filled_size = u_suballocator_create(&rctx->b, 4096, 4,
 							       0, PIPE_USAGE_DEFAULT, TRUE);
@@ -519,10 +520,16 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 		}
 		return sizeof(uint32_t);
 
-	default:
-		fprintf(stderr, "unknown PIPE_COMPUTE_CAP %d\n", param);
-		return 0;
+	case PIPE_COMPUTE_CAP_MAX_COMPUTE_UNITS:
+		if (ret) {
+			uint32_t *max_compute_units = ret;
+			*max_compute_units = MAX2(rscreen->info.max_compute_units, 1);
+		}
+		return sizeof(uint32_t);
 	}
+
+        fprintf(stderr, "unknown PIPE_COMPUTE_CAP %d\n", param);
+        return 0;
 }
 
 static uint64_t r600_get_timestamp(struct pipe_screen *screen)

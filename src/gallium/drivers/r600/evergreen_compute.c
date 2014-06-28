@@ -323,7 +323,7 @@ void evergreen_compute_upload_input(
 	memcpy(kernel_parameters_start, input, shader->input_size);
 
 	for (i = 0; i < (input_size / 4); i++) {
-		COMPUTE_DBG(ctx->screen, "input %i : %i\n", i,
+		COMPUTE_DBG(ctx->screen, "input %i : %u\n", i,
 			((unsigned*)num_work_groups_start)[i]);
 	}
 
@@ -659,7 +659,19 @@ static void evergreen_set_global_binding(
 		return;
 	}
 
-	compute_memory_finalize_pending(pool, ctx_);
+	/* We mark these items for promotion to the pool if they
+	 * aren't already there */
+	for (int i = 0; i < n; i++) {
+		struct compute_memory_item *item = buffers[i]->chunk;
+
+		if (!is_item_in_pool(item))
+			buffers[i]->chunk->status |= ITEM_FOR_PROMOTING;
+	}
+
+	if (compute_memory_finalize_pending(pool, ctx_) == -1) {
+		/* XXX: Unset */
+		return;
+	}
 
 	for (int i = 0; i < n; i++)
 	{
@@ -958,16 +970,33 @@ void *r600_compute_global_transfer_map(
 	struct r600_resource_global* buffer =
 		(struct r600_resource_global*)resource;
 
+	struct compute_memory_item *item = buffer->chunk;
+	struct pipe_resource *dst = NULL;
+	unsigned offset = box->x;
+
+	if (is_item_in_pool(item)) {
+		compute_memory_demote_item(pool, item, ctx_);
+	}
+	else {
+		if (item->real_buffer == NULL) {
+			item->real_buffer = (struct r600_resource*)
+					r600_compute_buffer_alloc_vram(pool->screen, item->size_in_dw * 4);
+		}
+	}
+
+	dst = (struct pipe_resource*)item->real_buffer;
+
+	if (usage & PIPE_TRANSFER_READ)
+		buffer->chunk->status |= ITEM_MAPPED_FOR_READING;
+
 	COMPUTE_DBG(rctx->screen, "* r600_compute_global_transfer_map()\n"
 			"level = %u, usage = %u, box(x = %u, y = %u, z = %u "
 			"width = %u, height = %u, depth = %u)\n", level, usage,
 			box->x, box->y, box->z, box->width, box->height,
 			box->depth);
 	COMPUTE_DBG(rctx->screen, "Buffer id = %u offset = "
-		"%u (box.x)\n", buffer->chunk->id, box->x);
+		"%u (box.x)\n", item->id, box->x);
 
-
-	compute_memory_finalize_pending(pool, ctx_);
 
 	assert(resource->target == PIPE_BUFFER);
 	assert(resource->bind & PIPE_BIND_GLOBAL);
@@ -976,9 +1005,8 @@ void *r600_compute_global_transfer_map(
 	assert(box->z == 0);
 
 	///TODO: do it better, mapping is not possible if the pool is too big
-	return pipe_buffer_map_range(ctx_, (struct pipe_resource*)buffer->chunk->pool->bo,
-			box->x + (buffer->chunk->start_in_dw * 4),
-			box->width, usage, ptransfer);
+	return pipe_buffer_map_range(ctx_, dst,
+			offset, box->width, usage, ptransfer);
 }
 
 void r600_compute_global_transfer_unmap(

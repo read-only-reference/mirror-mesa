@@ -964,7 +964,9 @@ XXX doesn't look like most of the opcodes really belong here.
 
   As per NV_gpu_program4, retrieve the dimensions of the texture depending on
   the target. For 1D (width), 2D/RECT/CUBE (width, height), 3D (width, height,
-  depth), 1D array (width, layers), 2D array (width, height, layers)
+  depth), 1D array (width, layers), 2D array (width, height, layers).
+  Also return the number of accessible levels (last_level - first_level + 1)
+  in W.
 
 .. math::
 
@@ -975,6 +977,8 @@ XXX doesn't look like most of the opcodes really belong here.
   dst.y = texture\_height(unit, lod)
 
   dst.z = texture\_depth(unit, lod)
+
+  dst.w = texture\_levels(unit)
 
 .. opcode:: TG4 - Texture Gather
 
@@ -2848,6 +2852,15 @@ input primitive. Each invocation will have a different
 TGSI_SEMANTIC_INVOCATIONID system value set. If not specified, assumed to
 be 1.
 
+VS_WINDOW_SPACE_POSITION
+""""""""""""""""""""""""""
+If this property is set on the vertex shader, the TGSI_SEMANTIC_POSITION output
+is assumed to contain window space coordinates.
+Division of X,Y,Z by W and the viewport transformation are disabled, and 1/W is
+directly taken from the 4-th component of the shader output.
+Naturally, clipping is not performed on window coordinates either.
+The effect of this property is undefined if a geometry or tessellation shader
+are in use.
 
 Texture Sampling and Texture Formats
 ------------------------------------

@@ -260,7 +260,8 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
 	case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
-        case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
+	case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
+	case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
 		return 1;
 
 	case PIPE_CAP_COMPUTE:
@@ -409,7 +410,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH:
 		return 32;
 	case PIPE_SHADER_CAP_MAX_INPUTS:
-		return 32;
+		return shader == PIPE_SHADER_VERTEX ? 16 : 32;
 	case PIPE_SHADER_CAP_MAX_TEMPS:
 		return 256; /* Max native temporaries. */
 	case PIPE_SHADER_CAP_MAX_ADDRS:

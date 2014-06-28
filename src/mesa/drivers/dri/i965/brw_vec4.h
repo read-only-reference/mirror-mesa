@@ -126,7 +126,7 @@ public:
    src_reg(int32_t i);
    src_reg(struct brw_reg reg);
 
-   bool equals(src_reg *r);
+   bool equals(const src_reg &r) const;
    bool is_zero() const;
    bool is_one() const;
    bool is_accumulator() const;
@@ -265,6 +265,7 @@ public:
    bool is_send_from_grf();
    bool can_reswizzle_dst(int dst_writemask, int swizzle, int swizzle_mask);
    void reswizzle_dst(int dst_writemask, int swizzle);
+   bool can_do_source_mods(struct brw_context *brw);
 
    bool reads_flag()
    {
@@ -430,8 +431,6 @@ public:
    void opt_set_dependency_control();
    void opt_schedule_instructions();
 
-   bool can_do_source_mods(vec4_instruction *inst);
-
    vec4_instruction *emit(vec4_instruction *inst);
 
    vec4_instruction *emit(enum opcode opcode);
@@ -496,9 +495,6 @@ public:
 			       src_reg src,
 			       vec4_instruction *pre_rhs_inst,
 			       vec4_instruction *last_rhs_inst);
-
-   bool try_copy_propagation(vec4_instruction *inst, int arg,
-                             src_reg *values[4]);
 
    /** Walks an exec_list of ir_instruction and sends it through this visitor. */
    void visit_instructions(const exec_list *list);
@@ -587,6 +583,7 @@ public:
 
    bool try_emit_sat(ir_expression *ir);
    bool try_emit_mad(ir_expression *ir);
+   bool try_emit_b2f_of_compare(ir_expression *ir);
    void resolve_ud_negate(src_reg *reg);
 
    src_reg get_timestamp();
@@ -594,6 +591,7 @@ public:
    bool process_move_condition(ir_rvalue *ir);
 
    void dump_instruction(backend_instruction *inst);
+   void dump_instruction(backend_instruction *inst, FILE *file);
 
    void visit_atomic_counter_intrinsic(ir_call *ir);
 
@@ -645,8 +643,7 @@ public:
    const unsigned *generate_assembly(exec_list *insts, unsigned *asm_size);
 
 private:
-   void generate_code(exec_list *instructions,
-                      struct annotation_info *annotation);
+   void generate_code(exec_list *instructions);
    void generate_vec4_instruction(vec4_instruction *inst,
                                   struct brw_reg dst,
                                   struct brw_reg *src);
@@ -654,21 +651,14 @@ private:
    void generate_math1_gen4(vec4_instruction *inst,
 			    struct brw_reg dst,
 			    struct brw_reg src);
-   void generate_math1_gen6(vec4_instruction *inst,
-			    struct brw_reg dst,
-			    struct brw_reg src);
    void generate_math2_gen4(vec4_instruction *inst,
 			    struct brw_reg dst,
 			    struct brw_reg src0,
 			    struct brw_reg src1);
-   void generate_math2_gen6(vec4_instruction *inst,
-			    struct brw_reg dst,
-			    struct brw_reg src0,
-			    struct brw_reg src1);
-   void generate_math2_gen7(vec4_instruction *inst,
-			    struct brw_reg dst,
-			    struct brw_reg src0,
-			    struct brw_reg src1);
+   void generate_math_gen6(vec4_instruction *inst,
+                           struct brw_reg dst,
+                           struct brw_reg src0,
+                           struct brw_reg src1);
 
    void generate_tex(vec4_instruction *inst,
 		     struct brw_reg dst,
@@ -747,8 +737,7 @@ public:
    const unsigned *generate_assembly(exec_list *insts, unsigned *asm_size);
 
 private:
-   void generate_code(exec_list *instructions,
-                      struct annotation_info *annotation);
+   void generate_code(exec_list *instructions);
    void generate_vec4_instruction(vec4_instruction *inst,
                                   struct brw_reg dst,
                                   struct brw_reg *src);

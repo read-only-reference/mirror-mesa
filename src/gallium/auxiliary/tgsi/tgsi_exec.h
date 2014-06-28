@@ -213,7 +213,7 @@ struct tgsi_sampler
  * input register files, this is the stride between two 1D
  * arrays.
  */
-#define TGSI_EXEC_MAX_INPUT_ATTRIBS 17
+#define TGSI_EXEC_MAX_INPUT_ATTRIBS PIPE_MAX_SHADER_INPUTS
 
 /* The maximum number of constant vectors per constant buffer.
  */
@@ -297,6 +297,7 @@ struct tgsi_exec_machine
    unsigned                      *Primitives;
    unsigned                       NumOutputs;
    unsigned                       MaxGeometryShaderOutputs;
+   unsigned                       MaxOutputVertices;
 
    /* FRAGMENT processor only. */
    const struct tgsi_interp_coef *InterpCoefs;

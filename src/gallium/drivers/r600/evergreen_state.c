@@ -227,6 +227,11 @@ static bool r600_is_zs_format_supported(enum pipe_format format)
 	return r600_translate_dbformat(format) != ~0U;
 }
 
+static inline bool r600_is_blending_supported(enum pipe_format format)
+{
+	return !(util_format_is_pure_integer(format) || util_format_is_depth_or_stencil(format));
+}
+
 boolean evergreen_is_format_supported(struct pipe_screen *screen,
 				      enum pipe_format format,
 				      enum pipe_texture_target target,
@@ -294,6 +299,10 @@ boolean evergreen_is_format_supported(struct pipe_screen *screen,
 		retval |= PIPE_BIND_TRANSFER_READ;
 	if (usage & PIPE_BIND_TRANSFER_WRITE)
 		retval |= PIPE_BIND_TRANSFER_WRITE;
+
+	if ((usage & PIPE_BIND_BLENDABLE) &&
+	    r600_is_blending_supported(format))
+		retval |= PIPE_BIND_BLENDABLE;
 
 	return retval == usage;
 }
@@ -1397,7 +1406,7 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 	if (rctx->b.chip_class == EVERGREEN)
 		rctx->framebuffer.atom.num_dw += 14; /* Evergreen */
 	else
-		rctx->framebuffer.atom.num_dw += 25; /* Cayman */
+		rctx->framebuffer.atom.num_dw += 28; /* Cayman */
 
 	/* Colorbuffers. */
 	rctx->framebuffer.atom.num_dw += state->nr_cbufs * 23;
@@ -1669,7 +1678,8 @@ static void evergreen_emit_framebuffer_state(struct r600_context *rctx, struct r
 	if (rctx->b.chip_class == EVERGREEN) {
 		evergreen_emit_msaa_state(rctx, rctx->framebuffer.nr_samples);
 	} else {
-		cayman_emit_msaa_state(cs, rctx->framebuffer.nr_samples);
+		cayman_emit_msaa_sample_locs(cs, rctx->framebuffer.nr_samples);
+		cayman_emit_msaa_config(cs, rctx->framebuffer.nr_samples, 1);
 	}
 }
 
@@ -2171,8 +2181,6 @@ void cayman_init_common_regs(struct r600_command_buffer *cb,
 
 	r600_store_config_reg(cb, R_008D8C_SQ_DYN_GPR_CNTL_PS_FLUSH_REQ, (1 << 8));
 
-	r600_store_context_reg(cb, R_028A4C_PA_SC_MODE_CNTL_1, 0);
-
 	r600_store_context_reg_seq(cb, R_028350_SX_MISC, 2);
 	r600_store_value(cb, 0);
 	r600_store_value(cb, S_028354_SURFACE_SYNC_MASK(0xf));
@@ -2276,7 +2284,6 @@ static void cayman_init_atom_start_cs(struct r600_context *rctx)
 	}
 
 	r600_store_context_reg(cb, R_028230_PA_SC_EDGERULE, 0xAAAAAAAA);
-	r600_store_context_reg(cb, R_028818_PA_CL_VTE_CNTL, 0x0000043F);
 	r600_store_context_reg(cb, R_028820_PA_CL_NANINF_CNTL, 0);
 
 	r600_store_context_reg_seq(cb, CM_R_028BE8_PA_CL_GB_VERT_CLIP_ADJ, 4);
@@ -2729,7 +2736,6 @@ void evergreen_init_atom_start_cs(struct r600_context *rctx)
 	}
 
 	r600_store_context_reg(cb, R_0286DC_SPI_FOG_CNTL, 0);
-	r600_store_context_reg(cb, R_028818_PA_CL_VTE_CNTL, 0x0000043F);
 	r600_store_context_reg(cb, R_028820_PA_CL_NANINF_CNTL, 0);
 
 	r600_store_context_reg_seq(cb, R_028AC0_DB_SRESULTS_COMPARE_STATE0, 3);
@@ -3063,6 +3069,17 @@ void evergreen_update_vs_state(struct pipe_context *ctx, struct r600_pipe_shader
 	r600_store_context_reg(cb, R_028860_SQ_PGM_RESOURCES_VS,
 			       S_028860_NUM_GPRS(rshader->bc.ngpr) |
 			       S_028860_STACK_SIZE(rshader->bc.nstack));
+	if (rshader->vs_position_window_space) {
+		r600_store_context_reg(cb, R_028818_PA_CL_VTE_CNTL,
+			S_028818_VTX_XY_FMT(1) | S_028818_VTX_Z_FMT(1));
+	} else {
+		r600_store_context_reg(cb, R_028818_PA_CL_VTE_CNTL,
+			S_028818_VTX_W0_FMT(1) |
+			S_028818_VPORT_X_SCALE_ENA(1) | S_028818_VPORT_X_OFFSET_ENA(1) |
+			S_028818_VPORT_Y_SCALE_ENA(1) | S_028818_VPORT_Y_OFFSET_ENA(1) |
+			S_028818_VPORT_Z_SCALE_ENA(1) | S_028818_VPORT_Z_OFFSET_ENA(1));
+
+	}
 	r600_store_context_reg(cb, R_02885C_SQ_PGM_START_VS,
 			       r600_resource_va(ctx->screen, (void *)shader->bo) >> 8);
 	/* After that, the NOP relocation packet must be emitted (shader->bo, RADEON_USAGE_READ). */

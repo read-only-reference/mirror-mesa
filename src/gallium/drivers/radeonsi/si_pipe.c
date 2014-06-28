@@ -107,6 +107,9 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, void *
 	sctx->cache_flush = si_atom_cache_flush;
 	sctx->atoms.s.cache_flush = &sctx->cache_flush;
 
+	sctx->msaa_config = si_atom_msaa_config;
+	sctx->atoms.s.msaa_config = &sctx->msaa_config;
+
 	sctx->atoms.s.streamout_begin = &sctx->b.streamout.begin_atom;
 	sctx->atoms.s.streamout_enable = &sctx->b.streamout.enable_atom;
 
@@ -210,6 +213,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
 	case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
 	case PIPE_CAP_CUBE_MAP_ARRAY:
+	case PIPE_CAP_SAMPLE_SHADING:
 		return 1;
 
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
@@ -230,6 +234,12 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
 		return MIN2(sscreen->b.info.vram_size, 0xFFFFFFFF);
 
+	case PIPE_CAP_TEXTURE_QUERY_LOD:
+	case PIPE_CAP_TEXTURE_GATHER_SM5:
+		return HAVE_LLVM >= 0x0305;
+	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
+		return HAVE_LLVM >= 0x0305 ? 4 : 0;
+
 	/* Unsupported features. */
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
@@ -238,13 +248,10 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
-	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
-	case PIPE_CAP_TEXTURE_GATHER_SM5:
 	case PIPE_CAP_TGSI_TEXCOORD:
 	case PIPE_CAP_FAKE_SW_MSAA:
-	case PIPE_CAP_TEXTURE_QUERY_LOD:
-	case PIPE_CAP_SAMPLE_SHADING:
 	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
+	case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
 		return 0;
 
 	case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
@@ -290,11 +297,12 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
  	case PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET:
 	case PIPE_CAP_MIN_TEXEL_OFFSET:
-		return -8;
+		return -32;
 
  	case PIPE_CAP_MAX_TEXTURE_GATHER_OFFSET:
 	case PIPE_CAP_MAX_TEXEL_OFFSET:
-		return 7;
+		return 31;
+
 	case PIPE_CAP_ENDIANNESS:
 		return PIPE_ENDIAN_LITTLE;
 	}

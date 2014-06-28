@@ -99,7 +99,6 @@ private:
    void alloc_regs();
 
    void *mem_ctx;
-   struct brw_context *brw;
    const brw_blorp_const_color_prog_key *key;
    struct brw_compile func;
 
@@ -120,7 +119,6 @@ brw_blorp_const_color_program::brw_blorp_const_color_program(
       struct brw_context *brw,
       const brw_blorp_const_color_prog_key *key)
    : mem_ctx(ralloc_context(NULL)),
-     brw(brw),
      key(key),
      R0(),
      R1(),
@@ -340,6 +338,7 @@ brw_blorp_clear_params::brw_blorp_clear_params(struct brw_context *brw,
             break;
          default:
             assert(!"Unexpected sample count for fast clear");
+            unreachable();
             break;
          }
          y_scaledown = 2;
@@ -440,7 +439,7 @@ brw_blorp_const_color_program::compile(struct brw_context *brw,
 
    alloc_regs();
 
-   brw_set_compression_control(&func, BRW_COMPRESSION_NONE);
+   brw_set_default_compression_control(&func, BRW_COMPRESSION_NONE);
 
    struct brw_reg mrf_rt_write =
       retype(vec16(brw_message_reg(base_mrf)), BRW_REGISTER_TYPE_F);
@@ -450,9 +449,9 @@ brw_blorp_const_color_program::compile(struct brw_context *brw,
       /* The message payload is a single register with the low 4 floats/ints
        * filled with the constant clear color.
        */
-      brw_set_mask_control(&func, BRW_MASK_DISABLE);
+      brw_set_default_mask_control(&func, BRW_MASK_DISABLE);
       brw_MOV(&func, vec4(brw_message_reg(base_mrf)), clear_rgba);
-      brw_set_mask_control(&func, BRW_MASK_ENABLE);
+      brw_set_default_mask_control(&func, BRW_MASK_ENABLE);
 
       msg_type = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD16_SINGLE_SOURCE_REPLICATED;
       mlen = 1;
@@ -461,11 +460,11 @@ brw_blorp_const_color_program::compile(struct brw_context *brw,
          /* The message payload is pairs of registers for 16 pixels each of r,
           * g, b, and a.
           */
-         brw_set_compression_control(&func, BRW_COMPRESSION_COMPRESSED);
+         brw_set_default_compression_control(&func, BRW_COMPRESSION_COMPRESSED);
          brw_MOV(&func,
                  brw_message_reg(base_mrf + i * 2),
                  brw_vec1_grf(clear_rgba.nr, i));
-         brw_set_compression_control(&func, BRW_COMPRESSION_NONE);
+         brw_set_default_compression_control(&func, BRW_COMPRESSION_NONE);
       }
 
       msg_type = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD16_SINGLE_SOURCE;
@@ -486,7 +485,7 @@ brw_blorp_const_color_program::compile(struct brw_context *brw,
 
    if (unlikely(INTEL_DEBUG & DEBUG_BLORP)) {
       fprintf(stderr, "Native code for BLORP clear:\n");
-      brw_disassemble(brw, &func.store, 0, func.next_insn_offset, stderr);
+      brw_disassemble(brw, func.store, 0, func.next_insn_offset, stderr);
       fprintf(stderr, "\n");
    }
 

@@ -199,7 +199,7 @@ descriptor=[
   [ "NORMAL_ARRAY_TYPE", "ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_NORMAL].Type), NO_EXTRA" ],
   [ "NORMAL_ARRAY_STRIDE", "ARRAY_INT(VertexAttrib[VERT_ATTRIB_NORMAL].Stride), NO_EXTRA" ],
   [ "COLOR_ARRAY", "ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_COLOR0].Enabled), NO_EXTRA" ],
-  [ "COLOR_ARRAY_SIZE", "ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR0].Size), NO_EXTRA" ],
+  [ "COLOR_ARRAY_SIZE", "LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA" ],
   [ "COLOR_ARRAY_TYPE", "ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_COLOR0].Type), NO_EXTRA" ],
   [ "COLOR_ARRAY_STRIDE", "ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR0].Stride), NO_EXTRA" ],
   [ "TEXTURE_COORD_ARRAY", "LOC_CUSTOM, TYPE_BOOLEAN, offsetof(struct gl_client_array, Enabled), NO_EXTRA" ],
@@ -480,6 +480,7 @@ descriptor=[
   [ "MAX_LIST_NESTING", "CONST(MAX_LIST_NESTING), NO_EXTRA" ],
   [ "MAX_NAME_STACK_DEPTH", "CONST(MAX_NAME_STACK_DEPTH), NO_EXTRA" ],
   [ "MAX_PIXEL_MAP_TABLE", "CONST(MAX_PIXEL_MAP_TABLE), NO_EXTRA" ],
+  [ "MAX_UNIFORM_LOCATIONS", "CONTEXT_INT(Const.MaxUserAssignableUniformLocations), extra_ARB_explicit_uniform_location" ],
   [ "NAME_STACK_DEPTH", "CONTEXT_INT(Select.NameStackDepth), NO_EXTRA" ],
   [ "PACK_LSB_FIRST", "CONTEXT_BOOL(Pack.LsbFirst), NO_EXTRA" ],
   [ "PACK_SWAP_BYTES", "CONTEXT_BOOL(Pack.SwapBytes), NO_EXTRA" ],
@@ -541,6 +542,16 @@ descriptor=[
   [ "ARRAY_ELEMENT_LOCK_FIRST_EXT", "CONTEXT_INT(Array.LockFirst), NO_EXTRA" ],
   [ "ARRAY_ELEMENT_LOCK_COUNT_EXT", "CONTEXT_INT(Array.LockCount), NO_EXTRA" ],
 
+# GL_ARB_compressed_texture_pixel_storage
+  [ "UNPACK_COMPRESSED_BLOCK_WIDTH", "CONTEXT_INT(Unpack.CompressedBlockWidth), NO_EXTRA" ],
+  [ "UNPACK_COMPRESSED_BLOCK_HEIGHT", "CONTEXT_INT(Unpack.CompressedBlockHeight), NO_EXTRA" ],
+  [ "UNPACK_COMPRESSED_BLOCK_DEPTH", "CONTEXT_INT(Unpack.CompressedBlockDepth), NO_EXTRA" ],
+  [ "UNPACK_COMPRESSED_BLOCK_SIZE", "CONTEXT_INT(Unpack.CompressedBlockSize), NO_EXTRA" ],
+  [ "PACK_COMPRESSED_BLOCK_WIDTH", "CONTEXT_INT(Pack.CompressedBlockWidth), NO_EXTRA" ],
+  [ "PACK_COMPRESSED_BLOCK_HEIGHT", "CONTEXT_INT(Pack.CompressedBlockHeight), NO_EXTRA" ],
+  [ "PACK_COMPRESSED_BLOCK_DEPTH", "CONTEXT_INT(Pack.CompressedBlockDepth), NO_EXTRA" ],
+  [ "PACK_COMPRESSED_BLOCK_SIZE", "CONTEXT_INT(Pack.CompressedBlockSize), NO_EXTRA" ],
+
 # GL_ARB_transpose_matrix
   [ "TRANSPOSE_MODELVIEW_MATRIX_ARB", "CONTEXT_MATRIX_T(ModelviewMatrixStack), NO_EXTRA" ],
   [ "TRANSPOSE_PROJECTION_MATRIX_ARB", "CONTEXT_MATRIX_T(ProjectionMatrixStack.Top), NO_EXTRA" ],
@@ -552,7 +563,7 @@ descriptor=[
   [ "SECONDARY_COLOR_ARRAY", "ARRAY_BOOL(VertexAttrib[VERT_ATTRIB_COLOR1].Enabled), NO_EXTRA" ],
   [ "SECONDARY_COLOR_ARRAY_TYPE", "ARRAY_ENUM(VertexAttrib[VERT_ATTRIB_COLOR1].Type), NO_EXTRA" ],
   [ "SECONDARY_COLOR_ARRAY_STRIDE", "ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR1].Stride), NO_EXTRA" ],
-  [ "SECONDARY_COLOR_ARRAY_SIZE", "ARRAY_INT(VertexAttrib[VERT_ATTRIB_COLOR1].Size), NO_EXTRA" ],
+  [ "SECONDARY_COLOR_ARRAY_SIZE", "LOC_CUSTOM, TYPE_INT, 0, NO_EXTRA" ],
 
 # GL_EXT_fog_coord
   [ "CURRENT_FOG_COORDINATE", "CONTEXT_FLOAT(Current.Attrib[VERT_ATTRIB_FOG][0]), extra_flush_current" ],

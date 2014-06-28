@@ -49,7 +49,6 @@
  * parser (and lexer) sources.
  */
 
-#include "main/core.h" /* for struct gl_extensions */
 #include "glsl_symbol_table.h"
 #include "glsl_parser_extras.h"
 #include "ast.h"
@@ -164,6 +163,31 @@ _mesa_ast_to_hir(exec_list *instructions, struct _mesa_glsl_parse_state *state)
 }
 
 
+static ir_expression_operation
+get_conversion_operation(const glsl_type *to, const glsl_type *from,
+                         struct _mesa_glsl_parse_state *state)
+{
+   switch (to->base_type) {
+   case GLSL_TYPE_FLOAT:
+      switch (from->base_type) {
+      case GLSL_TYPE_INT: return ir_unop_i2f;
+      case GLSL_TYPE_UINT: return ir_unop_u2f;
+      default: return (ir_expression_operation)0;
+      }
+
+   case GLSL_TYPE_UINT:
+      if (!state->is_version(400, 0) && !state->ARB_gpu_shader5_enable)
+         return (ir_expression_operation)0;
+      switch (from->base_type) {
+         case GLSL_TYPE_INT: return ir_unop_i2u;
+         default: return (ir_expression_operation)0;
+      }
+
+   default: return (ir_expression_operation)0;
+   }
+}
+
+
 /**
  * If a conversion is available, convert one operand to a different type
  *
@@ -185,9 +209,7 @@ apply_implicit_conversion(const glsl_type *to, ir_rvalue * &from,
    if (to->base_type == from->type->base_type)
       return true;
 
-   /* This conversion was added in GLSL 1.20.  If the compilation mode is
-    * GLSL 1.10, the conversion is skipped.
-    */
+   /* Prior to GLSL 1.20, there are no implicit conversions */
    if (!state->is_version(120, 0))
       return false;
 
@@ -195,36 +217,25 @@ apply_implicit_conversion(const glsl_type *to, ir_rvalue * &from,
     *
     *    "There are no implicit array or structure conversions. For
     *    example, an array of int cannot be implicitly converted to an
-    *    array of float. There are no implicit conversions between
-    *    signed and unsigned integers."
+    *    array of float.
     */
-   /* FINISHME: The above comment is partially a lie.  There is int/uint
-    * FINISHME: conversion for immediate constants.
-    */
-   if (!to->is_float() || !from->type->is_numeric())
+   if (!to->is_numeric() || !from->type->is_numeric())
       return false;
 
-   /* Convert to a floating point type with the same number of components
-    * as the original type - i.e. int to float, not int to vec4.
+   /* We don't actually want the specific type `to`, we want a type
+    * with the same base type as `to`, but the same vector width as
+    * `from`.
     */
-   to = glsl_type::get_instance(GLSL_TYPE_FLOAT, from->type->vector_elements,
-			        from->type->matrix_columns);
+   to = glsl_type::get_instance(to->base_type, from->type->vector_elements,
+                                from->type->matrix_columns);
 
-   switch (from->type->base_type) {
-   case GLSL_TYPE_INT:
-      from = new(ctx) ir_expression(ir_unop_i2f, to, from, NULL);
-      break;
-   case GLSL_TYPE_UINT:
-      from = new(ctx) ir_expression(ir_unop_u2f, to, from, NULL);
-      break;
-   case GLSL_TYPE_BOOL:
-      from = new(ctx) ir_expression(ir_unop_b2f, to, from, NULL);
-      break;
-   default:
-      assert(0);
+   ir_expression_operation op = get_conversion_operation(to, from->type, state);
+   if (op) {
+      from = new(ctx) ir_expression(op, to, from, NULL);
+      return true;
+   } else {
+      return false;
    }
-
-   return true;
 }
 
 
@@ -2170,6 +2181,41 @@ validate_explicit_location(const struct ast_type_qualifier *qual,
 {
    bool fail = false;
 
+   /* Checks for GL_ARB_explicit_uniform_location. */
+   if (qual->flags.q.uniform) {
+      if (!state->check_explicit_uniform_location_allowed(loc, var))
+         return;
+
+      const struct gl_context *const ctx = state->ctx;
+      unsigned max_loc = qual->location + var->type->uniform_locations() - 1;
+
+      /* ARB_explicit_uniform_location specification states:
+       *
+       *     "The explicitly defined locations and the generated locations
+       *     must be in the range of 0 to MAX_UNIFORM_LOCATIONS minus one."
+       *
+       *     "Valid locations for default-block uniform variable locations
+       *     are in the range of 0 to the implementation-defined maximum
+       *     number of uniform locations."
+       */
+      if (qual->location < 0) {
+         _mesa_glsl_error(loc, state,
+                          "explicit location < 0 for uniform %s", var->name);
+         return;
+      }
+
+      if (max_loc >= ctx->Const.MaxUserAssignableUniformLocations) {
+         _mesa_glsl_error(loc, state, "location(s) consumed by uniform %s "
+                          ">= MAX_UNIFORM_LOCATIONS (%u)", var->name,
+                          ctx->Const.MaxUserAssignableUniformLocations);
+         return;
+      }
+
+      var->data.explicit_location = true;
+      var->data.location = qual->location;
+      return;
+   }
+
    /* Between GL_ARB_explicit_attrib_location an
     * GL_ARB_separate_shader_objects, the inputs and outputs of any shader
     * stage can be assigned explicit locations.  The checking here associates
@@ -2393,6 +2439,17 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
       }
    }
 
+   if (qual->flags.q.precise) {
+      if (var->data.used) {
+         _mesa_glsl_error(loc, state,
+                          "variable `%s' may not be redeclared "
+                          "`precise' after being used",
+                          var->name);
+      } else {
+         var->data.precise = 1;
+      }
+   }
+
    if (qual->flags.q.constant || qual->flags.q.attribute
        || qual->flags.q.uniform
        || (qual->flags.q.varying && (state->stage == MESA_SHADER_FRAGMENT)))
@@ -2404,12 +2461,24 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
    if (qual->flags.q.sample)
       var->data.sample = 1;
 
+   if (state->stage == MESA_SHADER_GEOMETRY &&
+       qual->flags.q.out && qual->flags.q.stream) {
+      var->data.stream = qual->stream;
+   }
+
    if (qual->flags.q.attribute && state->stage != MESA_SHADER_VERTEX) {
       var->type = glsl_type::error_type;
       _mesa_glsl_error(loc, state,
                        "`attribute' variables may not be declared in the "
                        "%s shader",
                        _mesa_shader_stage_to_string(state->stage));
+   }
+
+   /* Disallow layout qualifiers which may only appear on layout declarations. */
+   if (qual->flags.q.prim_type) {
+      _mesa_glsl_error(loc, state,
+                       "Primitive type may only be specified on GS input or output "
+                       "layout declaration, not on variables.");
    }
 
    /* Section 6.1.1 (Function Calling Conventions) of the GLSL 1.10 spec says:
@@ -2625,6 +2694,36 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
     */
    const bool uses_deprecated_qualifier = qual->flags.q.attribute
       || qual->flags.q.varying;
+
+
+   /* Validate auxiliary storage qualifiers */
+
+   /* From section 4.3.4 of the GLSL 1.30 spec:
+    *    "It is an error to use centroid in in a vertex shader."
+    *
+    * From section 4.3.4 of the GLSL ES 3.00 spec:
+    *    "It is an error to use centroid in or interpolation qualifiers in
+    *    a vertex shader input."
+    */
+
+   /* Section 4.3.6 of the GLSL 1.30 specification states:
+    * "It is an error to use centroid out in a fragment shader."
+    *
+    * The GL_ARB_shading_language_420pack extension specification states:
+    * "It is an error to use auxiliary storage qualifiers or interpolation
+    *  qualifiers on an output in a fragment shader."
+    */
+   if (qual->flags.q.sample && (!is_varying_var(var, state->stage) || uses_deprecated_qualifier)) {
+      _mesa_glsl_error(loc, state,
+                       "sample qualifier may only be used on `in` or `out` "
+                       "variables between shader stages");
+   }
+   if (qual->flags.q.centroid && !is_varying_var(var, state->stage)) {
+      _mesa_glsl_error(loc, state,
+                       "centroid qualifier may only be used with `in', "
+                       "`out' or `varying' variables between shader stages");
+   }
+
 
    /* Is the 'layout' keyword used with parameters that allow relaxed checking.
     * Many implementations of GL_ARB_fragment_coord_conventions_enable and some
@@ -3163,8 +3262,45 @@ ast_declarator_list::hir(exec_list *instructions,
       return NULL;
    }
 
+   if (this->precise) {
+      assert(this->type == NULL);
+
+      foreach_list_typed (ast_declaration, decl, link, &this->declarations) {
+         assert(decl->array_specifier == NULL);
+         assert(decl->initializer == NULL);
+
+         ir_variable *const earlier =
+            state->symbols->get_variable(decl->identifier);
+         if (earlier == NULL) {
+            _mesa_glsl_error(& loc, state,
+                             "undeclared variable `%s' cannot be marked "
+                             "precise", decl->identifier);
+         } else if (state->current_function != NULL &&
+                    !state->symbols->name_declared_this_scope(decl->identifier)) {
+            /* Note: we have to check if we're in a function, since
+             * builtins are treated as having come from another scope.
+             */
+            _mesa_glsl_error(& loc, state,
+                             "variable `%s' from an outer scope may not be "
+                             "redeclared `precise' in this scope",
+                             earlier->name);
+         } else if (earlier->data.used) {
+            _mesa_glsl_error(& loc, state,
+                             "variable `%s' may not be redeclared "
+                             "`precise' after being used",
+                             earlier->name);
+         } else {
+            earlier->data.precise = true;
+         }
+      }
+
+      /* Precise redeclarations do not have r-values either. */
+      return NULL;
+   }
+
    assert(this->type != NULL);
    assert(!this->invariant);
+   assert(!this->precise);
 
    /* The type specifier may contain a structure definition.  Process that
     * before any of the variable declarations.
@@ -3545,45 +3681,6 @@ ast_declarator_list::hir(exec_list *instructions,
          }
       }
 
-
-      /* From section 4.3.4 of the GLSL 1.30 spec:
-       *    "It is an error to use centroid in in a vertex shader."
-       *
-       * From section 4.3.4 of the GLSL ES 3.00 spec:
-       *    "It is an error to use centroid in or interpolation qualifiers in
-       *    a vertex shader input."
-       */
-      if (state->is_version(130, 300)
-          && this->type->qualifier.flags.q.centroid
-          && this->type->qualifier.flags.q.in
-          && state->stage == MESA_SHADER_VERTEX) {
-
-         _mesa_glsl_error(&loc, state,
-                          "'centroid in' cannot be used in a vertex shader");
-      }
-
-      if (state->stage == MESA_SHADER_VERTEX
-          && this->type->qualifier.flags.q.sample
-          && this->type->qualifier.flags.q.in) {
-
-         _mesa_glsl_error(&loc, state,
-                        "'sample in' cannot be used in a vertex shader");
-      }
-
-      /* Section 4.3.6 of the GLSL 1.30 specification states:
-       * "It is an error to use centroid out in a fragment shader."
-       *
-       * The GL_ARB_shading_language_420pack extension specification states:
-       * "It is an error to use auxiliary storage qualifiers or interpolation
-       *  qualifiers on an output in a fragment shader."
-       */
-      if (state->stage == MESA_SHADER_FRAGMENT &&
-          this->type->qualifier.flags.q.out &&
-          this->type->qualifier.has_auxiliary_storage()) {
-         _mesa_glsl_error(&loc, state,
-                          "auxiliary storage qualifiers cannot be used on "
-                          "fragment shader outputs");
-      }
 
       /* Precision qualifiers exists only in GLSL versions 1.00 and >= 1.30.
        */
@@ -4572,9 +4669,51 @@ ast_case_label::hir(exec_list *instructions,
       ir_dereference_variable *deref_test_var =
          new(ctx) ir_dereference_variable(state->switch_state.test_var);
 
-      ir_rvalue *const test_cond = new(ctx) ir_expression(ir_binop_all_equal,
-                                                          label_const,
-                                                          deref_test_var);
+      ir_expression *test_cond = new(ctx) ir_expression(ir_binop_all_equal,
+                                                        label_const,
+                                                        deref_test_var);
+
+      /*
+       * From GLSL 4.40 specification section 6.2 ("Selection"):
+       *
+       *     "The type of the init-expression value in a switch statement must
+       *     be a scalar int or uint. The type of the constant-expression value
+       *     in a case label also must be a scalar int or uint. When any pair
+       *     of these values is tested for "equal value" and the types do not
+       *     match, an implicit conversion will be done to convert the int to a
+       *     uint (see section 4.1.10 “Implicit Conversions”) before the compare
+       *     is done."
+       */
+      if (label_const->type != state->switch_state.test_var->type) {
+         YYLTYPE loc = this->test_value->get_location();
+
+         const glsl_type *type_a = label_const->type;
+         const glsl_type *type_b = state->switch_state.test_var->type;
+
+         /* Check if int->uint implicit conversion is supported. */
+         bool integer_conversion_supported =
+            glsl_type::int_type->can_implicitly_convert_to(glsl_type::uint_type,
+                                                           state);
+
+         if ((!type_a->is_integer() || !type_b->is_integer()) ||
+              !integer_conversion_supported) {
+            _mesa_glsl_error(&loc, state, "type mismatch with switch "
+                             "init-expression and case label (%s != %s)",
+                             type_a->name, type_b->name);
+         } else {
+            /* Conversion of the case label. */
+            if (type_a->base_type == GLSL_TYPE_INT) {
+               if (!apply_implicit_conversion(glsl_type::uint_type,
+                                              test_cond->operands[0], state))
+                  _mesa_glsl_error(&loc, state, "implicit type conversion error");
+            } else {
+               /* Conversion of the init-expression value. */
+               if (!apply_implicit_conversion(glsl_type::uint_type,
+                                              test_cond->operands[1], state))
+                  _mesa_glsl_error(&loc, state, "implicit type conversion error");
+            }
+         }
+      }
 
       ir_assignment *set_fallthru_on_test =
          new(ctx) ir_assignment(deref_fallthru_var, true_val, test_cond);
@@ -4966,6 +5105,9 @@ ast_process_structure_or_interface_block(exec_list *instructions,
          fields[i].centroid = qual->flags.q.centroid ? 1 : 0;
          fields[i].sample = qual->flags.q.sample ? 1 : 0;
 
+         /* Only save explicitly defined streams in block's field */
+         fields[i].stream = qual->flags.q.explicit_stream ? qual->stream : -1;
+
          if (qual->flags.q.row_major || qual->flags.q.column_major) {
             if (!qual->flags.q.uniform) {
                _mesa_glsl_error(&loc, state,
@@ -4979,6 +5121,13 @@ ast_process_structure_or_interface_block(exec_list *instructions,
             _mesa_glsl_error(&loc, state,
                              "interpolation qualifiers cannot be used "
                              "with uniform interface blocks");
+         }
+
+         if ((qual->flags.q.uniform || !is_interface) &&
+             qual->has_auxiliary_storage()) {
+            _mesa_glsl_error(&loc, state,
+                             "auxiliary storage qualifiers cannot be used "
+                             "in uniform blocks or structures.");
          }
 
          if (field_type->is_matrix() ||
@@ -5030,7 +5179,7 @@ ast_struct_specifier::hir(exec_list *instructions,
     */
    if (state->language_version != 110 && state->struct_specifier_depth != 0)
       _mesa_glsl_error(&loc, state,
-		       "embedded structure declartions are not allowed");
+		       "embedded structure declarations are not allowed");
 
    state->struct_specifier_depth++;
 
@@ -5146,6 +5295,12 @@ ast_interface_block::hir(exec_list *instructions,
    bool block_row_major = this->layout.flags.q.row_major;
    exec_list declared_variables;
    glsl_struct_field *fields;
+
+   /* Treat an interface block as one level of nesting, so that embedded struct
+    * specifiers will be disallowed.
+    */
+   state->struct_specifier_depth++;
+
    unsigned int num_variables =
       ast_process_structure_or_interface_block(&declared_variables,
                                                state,
@@ -5156,6 +5311,8 @@ ast_interface_block::hir(exec_list *instructions,
                                                block_row_major,
                                                redeclaring_per_vertex,
                                                var_mode);
+
+   state->struct_specifier_depth--;
 
    if (!redeclaring_per_vertex)
       validate_identifier(this->block_name, loc, state);
@@ -5398,6 +5555,17 @@ ast_interface_block::hir(exec_list *instructions,
          var->data.centroid = fields[i].centroid;
          var->data.sample = fields[i].sample;
          var->init_interface_type(block_type);
+
+         if (fields[i].stream != -1 &&
+             ((unsigned)fields[i].stream) != this->layout.stream) {
+            _mesa_glsl_error(&loc, state,
+                             "stream layout qualifier on "
+                             "interface block member `%s' does not match "
+                             "the interface block (%d vs %d)",
+                             var->name, fields[i].stream, this->layout.stream);
+         }
+
+         var->data.stream = this->layout.stream;
 
          if (redeclaring_per_vertex) {
             ir_variable *earlier =

@@ -202,6 +202,9 @@ The integer capabilities:
   implemented.
 * ``PIPE_CAP_TEXTURE_GATHER_OFFSETS``: Whether the ``TG4`` instruction can
   accept 4 offsets.
+* ``PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION``: Whether
+  TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION is supported, which disables clipping
+  and viewport transformation.
 
 
 .. _pipe_capf:
@@ -317,6 +320,8 @@ pipe_screen::get_compute_param.
   allocation in bytes.  Value type: ``uint64_t``.
 * ``PIPE_COMPUTE_CAP_MAX_CLOCK_FREQUENCY``: Maximum frequency of the GPU
   clock in MHz. Value type: ``uint32_t``
+* ``PIPE_COMPUTE_CAP_MAX_COMPUTE_UNITS``: Maximum number of compute units
+  Value type: ``uint32_t``
 
 .. _pipe_bind:
 

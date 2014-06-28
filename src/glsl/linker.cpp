@@ -74,6 +74,7 @@
 #include "link_varyings.h"
 #include "ir_optimization.h"
 #include "ir_rvalue_visitor.h"
+#include "ir_uniform.h"
 
 extern "C" {
 #include "main/shaderobj.h"
@@ -249,31 +250,100 @@ public:
    }
 };
 
-
 /**
- * Visitor that determines whether or not a shader uses ir_end_primitive.
+ * Visitor that determines the highest stream id to which a (geometry) shader
+ * emits vertices. It also checks whether End{Stream}Primitive is ever called.
  */
-class find_end_primitive_visitor : public ir_hierarchical_visitor {
+class find_emit_vertex_visitor : public ir_hierarchical_visitor {
 public:
-   find_end_primitive_visitor()
-      : found(false)
+   find_emit_vertex_visitor(int max_allowed)
+      : max_stream_allowed(max_allowed),
+        invalid_stream_id(0),
+        invalid_stream_id_from_emit_vertex(false),
+        end_primitive_found(false),
+        uses_non_zero_stream(false)
    {
       /* empty */
    }
 
-   virtual ir_visitor_status visit(ir_end_primitive *)
+   virtual ir_visitor_status visit_leave(ir_emit_vertex *ir)
    {
-      found = true;
-      return visit_stop;
+      int stream_id = ir->stream_id();
+
+      if (stream_id < 0) {
+         invalid_stream_id = stream_id;
+         invalid_stream_id_from_emit_vertex = true;
+         return visit_stop;
+      }
+
+      if (stream_id > max_stream_allowed) {
+         invalid_stream_id = stream_id;
+         invalid_stream_id_from_emit_vertex = true;
+         return visit_stop;
+      }
+
+      if (stream_id != 0)
+         uses_non_zero_stream = true;
+
+      return visit_continue;
    }
 
-   bool end_primitive_found()
+   virtual ir_visitor_status visit_leave(ir_end_primitive *ir)
    {
-      return found;
+      end_primitive_found = true;
+
+      int stream_id = ir->stream_id();
+
+      if (stream_id < 0) {
+         invalid_stream_id = stream_id;
+         invalid_stream_id_from_emit_vertex = false;
+         return visit_stop;
+      }
+
+      if (stream_id > max_stream_allowed) {
+         invalid_stream_id = stream_id;
+         invalid_stream_id_from_emit_vertex = false;
+         return visit_stop;
+      }
+
+      if (stream_id != 0)
+         uses_non_zero_stream = true;
+
+      return visit_continue;
+   }
+
+   bool error()
+   {
+      return invalid_stream_id != 0;
+   }
+
+   const char *error_func()
+   {
+      return invalid_stream_id_from_emit_vertex ?
+         "EmitStreamVertex" : "EndStreamPrimitive";
+   }
+
+   int error_stream()
+   {
+      return invalid_stream_id;
+   }
+
+   bool uses_streams()
+   {
+      return uses_non_zero_stream;
+   }
+
+   bool uses_end_primitive()
+   {
+      return end_primitive_found;
    }
 
 private:
-   bool found;
+   int max_stream_allowed;
+   int invalid_stream_id;
+   bool invalid_stream_id_from_emit_vertex;
+   bool end_primitive_found;
+   bool uses_non_zero_stream;
 };
 
 } /* anonymous namespace */
@@ -550,10 +620,58 @@ validate_geometry_shader_executable(struct gl_shader_program *prog,
 
    analyze_clip_usage(prog, shader, &prog->Geom.UsesClipDistance,
                       &prog->Geom.ClipDistanceArraySize);
+}
 
-   find_end_primitive_visitor end_primitive;
-   end_primitive.run(shader->ir);
-   prog->Geom.UsesEndPrimitive = end_primitive.end_primitive_found();
+/**
+ * Check if geometry shaders emit to non-zero streams and do corresponding
+ * validations.
+ */
+static void
+validate_geometry_shader_emissions(struct gl_context *ctx,
+                                   struct gl_shader_program *prog)
+{
+   if (prog->_LinkedShaders[MESA_SHADER_GEOMETRY] != NULL) {
+      find_emit_vertex_visitor emit_vertex(ctx->Const.MaxVertexStreams - 1);
+      emit_vertex.run(prog->_LinkedShaders[MESA_SHADER_GEOMETRY]->ir);
+      if (emit_vertex.error()) {
+         linker_error(prog, "Invalid call %s(%d). Accepted values for the "
+                      "stream parameter are in the range [0, %d].",
+                      emit_vertex.error_func(),
+                      emit_vertex.error_stream(),
+                      ctx->Const.MaxVertexStreams - 1);
+      }
+      prog->Geom.UsesStreams = emit_vertex.uses_streams();
+      prog->Geom.UsesEndPrimitive = emit_vertex.uses_end_primitive();
+
+      /* From the ARB_gpu_shader5 spec:
+       *
+       *   "Multiple vertex streams are supported only if the output primitive
+       *    type is declared to be "points".  A program will fail to link if it
+       *    contains a geometry shader calling EmitStreamVertex() or
+       *    EndStreamPrimitive() if its output primitive type is not "points".
+       *
+       * However, in the same spec:
+       *
+       *   "The function EmitVertex() is equivalent to calling EmitStreamVertex()
+       *    with <stream> set to zero."
+       *
+       * And:
+       *
+       *   "The function EndPrimitive() is equivalent to calling
+       *    EndStreamPrimitive() with <stream> set to zero."
+       *
+       * Since we can call EmitVertex() and EndPrimitive() when we output
+       * primitives other than points, calling EmitStreamVertex(0) or
+       * EmitEndPrimitive(0) should not produce errors. This it also what Nvidia
+       * does. Currently we only set prog->Geom.UsesStreams to TRUE when
+       * EmitStreamVertex() or EmitEndPrimitive() are called with a non-zero
+       * stream.
+       */
+      if (prog->Geom.UsesStreams && prog->Geom.OutputType != GL_POINTS) {
+         linker_error(prog, "EmitStreamVertex(n) and EndStreamPrimitive(n) "
+                      "with n>0 requires point output");
+      }
+   }
 }
 
 
@@ -1478,6 +1596,8 @@ link_intrastage_shaders(void *mem_ctx,
    const unsigned num_uniform_blocks =
       link_uniform_blocks(mem_ctx, prog, shader_list, num_shaders,
                           &uniform_blocks);
+   if (!prog->LinkStatus)
+      return NULL;
 
    /* Check that there is only a single definition of each function signature
     * across all shaders.
@@ -2224,6 +2344,115 @@ check_image_resources(struct gl_context *ctx, struct gl_shader_program *prog)
       linker_error(prog, "Too many combined image uniforms and fragment outputs");
 }
 
+
+/**
+ * Initializes explicit location slots to INACTIVE_UNIFORM_EXPLICIT_LOCATION
+ * for a variable, checks for overlaps between other uniforms using explicit
+ * locations.
+ */
+static bool
+reserve_explicit_locations(struct gl_shader_program *prog,
+                           string_to_uint_map *map, ir_variable *var)
+{
+   unsigned slots = var->type->uniform_locations();
+   unsigned max_loc = var->data.location + slots - 1;
+
+   /* Resize remap table if locations do not fit in the current one. */
+   if (max_loc + 1 > prog->NumUniformRemapTable) {
+      prog->UniformRemapTable =
+         reralloc(prog, prog->UniformRemapTable,
+                  gl_uniform_storage *,
+                  max_loc + 1);
+
+      if (!prog->UniformRemapTable) {
+         linker_error(prog, "Out of memory during linking.");
+         return false;
+      }
+
+      /* Initialize allocated space. */
+      for (unsigned i = prog->NumUniformRemapTable; i < max_loc + 1; i++)
+         prog->UniformRemapTable[i] = NULL;
+
+      prog->NumUniformRemapTable = max_loc + 1;
+   }
+
+   for (unsigned i = 0; i < slots; i++) {
+      unsigned loc = var->data.location + i;
+
+      /* Check if location is already used. */
+      if (prog->UniformRemapTable[loc] == INACTIVE_UNIFORM_EXPLICIT_LOCATION) {
+
+         /* Possibly same uniform from a different stage, this is ok. */
+         unsigned hash_loc;
+         if (map->get(hash_loc, var->name) && hash_loc == loc - i)
+               continue;
+
+         /* ARB_explicit_uniform_location specification states:
+          *
+          *     "No two default-block uniform variables in the program can have
+          *     the same location, even if they are unused, otherwise a compiler
+          *     or linker error will be generated."
+          */
+         linker_error(prog,
+                      "location qualifier for uniform %s overlaps"
+                      "previously used location",
+                      var->name);
+         return false;
+      }
+
+      /* Initialize location as inactive before optimization
+       * rounds and location assignment.
+       */
+      prog->UniformRemapTable[loc] = INACTIVE_UNIFORM_EXPLICIT_LOCATION;
+   }
+
+   /* Note, base location used for arrays. */
+   map->put(var->data.location, var->name);
+
+   return true;
+}
+
+/**
+ * Check and reserve all explicit uniform locations, called before
+ * any optimizations happen to handle also inactive uniforms and
+ * inactive array elements that may get trimmed away.
+ */
+static void
+check_explicit_uniform_locations(struct gl_context *ctx,
+                                 struct gl_shader_program *prog)
+{
+   if (!ctx->Extensions.ARB_explicit_uniform_location)
+      return;
+
+   /* This map is used to detect if overlapping explicit locations
+    * occur with the same uniform (from different stage) or a different one.
+    */
+   string_to_uint_map *uniform_map = new string_to_uint_map;
+
+   if (!uniform_map) {
+      linker_error(prog, "Out of memory during linking.");
+      return;
+   }
+
+   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
+      struct gl_shader *sh = prog->_LinkedShaders[i];
+
+      if (!sh)
+         continue;
+
+      foreach_list(node, sh->ir) {
+         ir_variable *var = ((ir_instruction *)node)->as_variable();
+         if ((var && var->data.mode == ir_var_uniform) &&
+             var->data.explicit_location) {
+            if (!reserve_explicit_locations(prog, uniform_map, var))
+               return;
+         }
+      }
+   }
+
+   delete uniform_map;
+}
+
 void
 link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
 {
@@ -2372,6 +2601,10 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
          break;
    }
 
+   check_explicit_uniform_locations(ctx, prog);
+   if (!prog->LinkStatus)
+      goto done;
+
    /* Validate the inputs of each stage with the output of the preceding
     * stage.
     */
@@ -2441,6 +2674,9 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
                                     ctx->Const.NativeIntegers))
 	 ;
    }
+
+   /* Check and validate stream emissions in geometry shaders */
+   validate_geometry_shader_emissions(ctx, prog);
 
    /* Mark all generic shader inputs and outputs as unpaired. */
    for (unsigned i = MESA_SHADER_VERTEX; i <= MESA_SHADER_FRAGMENT; i++) {

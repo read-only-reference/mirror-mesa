@@ -43,7 +43,7 @@ enum PACKED register_file {
 
 class cfg_t;
 
-class backend_instruction : public exec_node {
+struct backend_instruction : public exec_node {
 public:
    bool is_tex() const;
    bool is_math() const;
@@ -51,7 +51,7 @@ public:
    bool can_do_source_mods() const;
    bool can_do_saturate() const;
    bool reads_accumulator_implicitly() const;
-   bool writes_accumulator_implicitly(int gen) const;
+   bool writes_accumulator_implicitly(struct brw_context *brw) const;
 
    /**
     * True if the instruction has side effects other than writing to
@@ -109,7 +109,9 @@ public:
    exec_list instructions;
 
    virtual void dump_instruction(backend_instruction *inst) = 0;
+   virtual void dump_instruction(backend_instruction *inst, FILE *file) = 0;
    virtual void dump_instructions();
+   virtual void dump_instructions(const char *name);
 
    void assign_common_binding_table_offsets(uint32_t next_binding_table_offset);
 

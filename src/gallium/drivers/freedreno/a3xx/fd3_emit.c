@@ -195,8 +195,10 @@ emit_textures(struct fd_ringbuffer *ring,
 		OUT_RING(ring, CP_LOAD_STATE_1_STATE_TYPE(ST_CONSTANTS) |
 				CP_LOAD_STATE_1_EXT_SRC_ADDR(0));
 		for (i = 0; i < tex->num_textures; i++) {
-			struct fd3_pipe_sampler_view *view =
-					fd3_pipe_sampler_view(tex->textures[i]);
+			static const struct fd3_pipe_sampler_view dummy_view = {};
+			const struct fd3_pipe_sampler_view *view = tex->textures[i] ?
+					fd3_pipe_sampler_view(tex->textures[i]) :
+					&dummy_view;
 			OUT_RING(ring, view->texconst0);
 			OUT_RING(ring, view->texconst1);
 			OUT_RING(ring, view->texconst2 |
@@ -213,8 +215,10 @@ emit_textures(struct fd_ringbuffer *ring,
 		OUT_RING(ring, CP_LOAD_STATE_1_STATE_TYPE(ST_CONSTANTS) |
 				CP_LOAD_STATE_1_EXT_SRC_ADDR(0));
 		for (i = 0; i < tex->num_textures; i++) {
-			struct fd3_pipe_sampler_view *view =
-					fd3_pipe_sampler_view(tex->textures[i]);
+			static const struct fd3_pipe_sampler_view dummy_view = {};
+			const struct fd3_pipe_sampler_view *view = tex->textures[i] ?
+					fd3_pipe_sampler_view(tex->textures[i]) :
+					&dummy_view;
 			struct fd_resource *rsc = view->tex_resource;
 
 			for (j = 0; j < view->mipaddrs; j++) {
@@ -228,26 +232,6 @@ emit_textures(struct fd_ringbuffer *ring,
 			}
 		}
 	}
-}
-
-static void
-emit_cache_flush(struct fd_ringbuffer *ring)
-{
-	OUT_PKT3(ring, CP_EVENT_WRITE, 1);
-	OUT_RING(ring, CACHE_FLUSH);
-
-	/* probably only really needed on a320: */
-	OUT_PKT3(ring, CP_DRAW_INDX, 3);
-	OUT_RING(ring, 0x00000000);
-	OUT_RING(ring, DRAW(1, DI_SRC_SEL_AUTO_INDEX,
-			INDEX_SIZE_IGN, IGNORE_VISIBILITY));
-	OUT_RING(ring, 0);					/* NumIndices */
-
-	OUT_PKT3(ring, CP_NOP, 4);
-	OUT_RING(ring, 0x00000000);
-	OUT_RING(ring, 0x00000000);
-	OUT_RING(ring, 0x00000000);
-	OUT_RING(ring, 0x00000000);
 }
 
 /* emit texture state for mem->gmem restore operation.. eventually it would
@@ -323,9 +307,12 @@ fd3_emit_vertex_bufs(struct fd_ringbuffer *ring,
 		if (vp->inputs[i].compmask) {
 			struct pipe_resource *prsc = vbufs[i].prsc;
 			struct fd_resource *rsc = fd_resource(prsc);
-			enum a3xx_vtx_fmt fmt = fd3_pipe2vtx(vbufs[i].format);
+			enum pipe_format pfmt = vbufs[i].format;
+			enum a3xx_vtx_fmt fmt = fd3_pipe2vtx(pfmt);
 			bool switchnext = (i != last);
-			uint32_t fs = util_format_get_blocksize(vbufs[i].format);
+			uint32_t fs = util_format_get_blocksize(pfmt);
+
+			debug_assert(fmt != ~0);
 
 			OUT_PKT0(ring, REG_A3XX_VFD_FETCH(j), 2);
 			OUT_RING(ring, A3XX_VFD_FETCH_INSTR_0_FETCHSIZE(fs - 1) |
@@ -339,6 +326,7 @@ fd3_emit_vertex_bufs(struct fd_ringbuffer *ring,
 			OUT_RING(ring, A3XX_VFD_DECODE_INSTR_CONSTFILL |
 					A3XX_VFD_DECODE_INSTR_WRITEMASK(vp->inputs[i].compmask) |
 					A3XX_VFD_DECODE_INSTR_FORMAT(fmt) |
+					A3XX_VFD_DECODE_INSTR_SWAP(fd3_pipe2swap(pfmt)) |
 					A3XX_VFD_DECODE_INSTR_REGID(vp->inputs[i].regid) |
 					A3XX_VFD_DECODE_INSTR_SHIFTCNT(fs) |
 					A3XX_VFD_DECODE_INSTR_LASTCOMPVALID |
@@ -484,6 +472,7 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	}
 
 	if (dirty & FD_DIRTY_VIEWPORT) {
+		fd_wfi(ctx, ring);
 		OUT_PKT0(ring, REG_A3XX_GRAS_CL_VPORT_XOFFSET, 6);
 		OUT_RING(ring, A3XX_GRAS_CL_VPORT_XOFFSET(ctx->viewport.translate[0] - 0.5));
 		OUT_RING(ring, A3XX_GRAS_CL_VPORT_XSCALE(ctx->viewport.scale[0]));
@@ -494,17 +483,12 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	}
 
 	if (dirty & FD_DIRTY_PROG) {
-		fd_wfi(ctx, ring);
 		fd3_program_emit(ring, prog, key);
 	}
-
-	OUT_PKT3(ring, CP_EVENT_WRITE, 1);
-	OUT_RING(ring, HLSQ_FLUSH);
 
 	if ((dirty & (FD_DIRTY_PROG | FD_DIRTY_CONSTBUF)) &&
 			/* evil hack to deal sanely with clear path: */
 			(prog == &ctx->prog)) {
-		fd_wfi(ctx, ring);
 		emit_constants(ring,  SB_VERT_SHADER,
 				&ctx->constbuf[PIPE_SHADER_VERTEX],
 				(prog->dirty & FD_SHADER_DIRTY_VP) ? vp : NULL);
@@ -541,8 +525,6 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 				A3XX_RB_BLEND_ALPHA_FLOAT(bcolor->color[3]));
 	}
 
-	if (dirty & (FD_DIRTY_VERTTEX | FD_DIRTY_FRAGTEX))
-		fd_wfi(ctx, ring);
 
 	if (dirty & FD_DIRTY_VERTTEX) {
 		if (vp->has_samp)
@@ -578,6 +560,7 @@ fd3_emit_restore(struct fd_context *ctx)
 		OUT_RING(ring, 0x00000000);
 	}
 
+	fd_wfi(ctx, ring);
 	OUT_PKT3(ring, CP_INVALIDATE_STATE, 1);
 	OUT_RING(ring, 0x00007fff);
 
@@ -688,7 +671,21 @@ fd3_emit_restore(struct fd_context *ctx)
 	OUT_PKT0(ring, REG_A3XX_PC_VSTREAM_CONTROL, 1);
 	OUT_RING(ring, 0x00000000);
 
-	emit_cache_flush(ring);
+	fd_event_write(ctx, ring, CACHE_FLUSH);
+
+	/* probably only really needed on a320: */
+	OUT_PKT3(ring, CP_DRAW_INDX, 3);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, DRAW(1, DI_SRC_SEL_AUTO_INDEX,
+			INDEX_SIZE_IGN, IGNORE_VISIBILITY));
+	OUT_RING(ring, 0);					/* NumIndices */
+
+	OUT_PKT3(ring, CP_NOP, 4);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+	OUT_RING(ring, 0x00000000);
+
 	fd_wfi(ctx, ring);
 
 	ctx->needs_rb_fbd = true;

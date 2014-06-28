@@ -62,6 +62,12 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
       return 13;
    case PIPE_CAP_GLSL_FEATURE_LEVEL:
       return 120;
+   case PIPE_CAP_ENDIANNESS:
+      return PIPE_ENDIAN_LITTLE;
+   case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
+      return 16;
+   case PIPE_CAP_MAX_VIEWPORTS:
+      return 1;
    /* supported capabilities */
    case PIPE_CAP_TWO_SIDED_STENCIL:
    case PIPE_CAP_ANISOTROPIC_FILTER:
@@ -80,12 +86,10 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_USER_CONSTANT_BUFFERS:
    case PIPE_CAP_USER_INDEX_BUFFERS:
    case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
-      return 1;
-   case PIPE_CAP_USER_VERTEX_BUFFERS:
-      return 0;
-   case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
-      return 16;
-   case PIPE_CAP_MAX_VIEWPORTS:
+   case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
+   case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
+   case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
+   case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
       return 1;
    /* nv4x capabilities */
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
@@ -119,6 +123,8 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
    case PIPE_CAP_CUBE_MAP_ARRAY:
    case PIPE_CAP_VERTEX_COLOR_UNCLAMPED:
+   case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
+   case PIPE_CAP_VERTEX_COLOR_CLAMPED:
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
    case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
    case PIPE_CAP_START_INSTANCE:
@@ -137,18 +143,14 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_QUERY_LOD:
    case PIPE_CAP_SAMPLE_SHADING:
    case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
-      return 0;
-   case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
-   case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
-   case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
-   case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
-      return 1;
-   case PIPE_CAP_ENDIANNESS:
-      return PIPE_ENDIAN_LITTLE;
-   default:
-      debug_printf("unknown param %d\n", param);
+   case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
+   case PIPE_CAP_USER_VERTEX_BUFFERS:
+   case PIPE_CAP_COMPUTE:
       return 0;
    }
+
+   debug_printf("unknown param %d\n", param);
+   return 0;
 }
 
 static float
@@ -325,6 +327,12 @@ nv30_screen_destroy(struct pipe_screen *pscreen)
       nouveau_fence_ref(NULL, &current);
       nouveau_fence_ref(NULL, &screen->base.fence.current);
    }
+
+   nouveau_bo_ref(NULL, &screen->notify);
+
+   nouveau_heap_destroy(&screen->query_heap);
+   nouveau_heap_destroy(&screen->vp_exec_heap);
+   nouveau_heap_destroy(&screen->vp_data_heap);
 
    nouveau_object_del(&screen->query);
    nouveau_object_del(&screen->fence);
