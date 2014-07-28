@@ -380,7 +380,8 @@ void r600_texture_get_cmask_info(struct r600_common_screen *rscreen,
 
 	out->slice_tile_max = ((pitch_elements * height) / (128*128)) - 1;
 	out->alignment = MAX2(256, base_align);
-	out->size = rtex->surface.array_size * align(slice_bytes, base_align);
+	out->size = (util_max_layer(&rtex->resource.b.b, 0) + 1) *
+		    align(slice_bytes, base_align);
 }
 
 static void si_texture_get_cmask_info(struct r600_common_screen *rscreen,
@@ -388,7 +389,7 @@ static void si_texture_get_cmask_info(struct r600_common_screen *rscreen,
 				      struct r600_cmask_info *out)
 {
 	unsigned pipe_interleave_bytes = rscreen->tiling_info.group_bytes;
-	unsigned num_pipes = rscreen->tiling_info.num_channels;
+	unsigned num_pipes = rscreen->info.r600_num_tile_pipes;
 	unsigned cl_width, cl_height;
 
 	switch (num_pipes) {
@@ -427,7 +428,8 @@ static void si_texture_get_cmask_info(struct r600_common_screen *rscreen,
 		out->slice_tile_max -= 1;
 
 	out->alignment = MAX2(256, base_align);
-	out->size = rtex->surface.array_size * align(slice_bytes, base_align);
+	out->size = (util_max_layer(&rtex->resource.b.b, 0) + 1) *
+		    align(slice_bytes, base_align);
 }
 
 static void r600_texture_allocate_cmask(struct r600_common_screen *rscreen,
@@ -485,7 +487,7 @@ static unsigned si_texture_htile_alloc_size(struct r600_common_screen *rscreen,
 {
 	unsigned cl_width, cl_height, width, height;
 	unsigned slice_elements, slice_bytes, pipe_interleave_bytes, base_align;
-	unsigned num_pipes = rscreen->tiling_info.num_channels;
+	unsigned num_pipes = rscreen->info.r600_num_tile_pipes;
 
 	/* HTILE is broken with 1D tiling on old kernels and CIK. */
 	if (rtex->surface.level[0].mode == RADEON_SURF_MODE_1D &&
@@ -523,7 +525,8 @@ static unsigned si_texture_htile_alloc_size(struct r600_common_screen *rscreen,
 	pipe_interleave_bytes = rscreen->tiling_info.group_bytes;
 	base_align = num_pipes * pipe_interleave_bytes;
 
-	return rtex->surface.array_size * align(slice_bytes, base_align);
+	return (util_max_layer(&rtex->resource.b.b, 0) + 1) *
+		align(slice_bytes, base_align);
 }
 
 static unsigned r600_texture_htile_alloc_size(struct r600_common_screen *rscreen,
@@ -666,7 +669,7 @@ r600_texture_create_object(struct pipe_screen *screen,
 	rtex->cmask.base_address_reg = (va + rtex->cmask.offset) >> 8;
 
 	if (rscreen->debug_flags & DBG_VM) {
-		fprintf(stderr, "VM start=0x%"PRIu64"  end=0x%"PRIu64" | Texture %ix%ix%i, %i levels, %i samples, %s\n",
+		fprintf(stderr, "VM start=0x%"PRIX64"  end=0x%"PRIX64" | Texture %ix%ix%i, %i levels, %i samples, %s\n",
 			r600_resource_va(screen, &rtex->resource.b.b),
 			r600_resource_va(screen, &rtex->resource.b.b) + rtex->resource.buf->size,
 			base->width0, base->height0, util_max_layer(base, 0)+1, base->last_level+1,
@@ -737,6 +740,13 @@ static unsigned r600_choose_tiling(struct r600_common_screen *rscreen,
 	 * Compressed textures must always be tiled. */
 	if (!(templ->flags & R600_RESOURCE_FLAG_FORCE_TILING) &&
 	    !util_format_is_compressed(templ->format)) {
+		/* Not everything can be linear, so we cannot enforce it
+		 * for all textures. */
+		if ((rscreen->debug_flags & DBG_NO_TILING) &&
+		    (!util_format_is_depth_or_stencil(templ->format) ||
+		     !(templ->flags & R600_RESOURCE_FLAG_FLUSHED_DEPTH)))
+			return RADEON_SURF_MODE_LINEAR_ALIGNED;
+
 		/* Tiling doesn't work with the 422 (SUBSAMPLED) formats on R600+. */
 		if (desc->layout == UTIL_FORMAT_LAYOUT_SUBSAMPLED)
 			return RADEON_SURF_MODE_LINEAR_ALIGNED;
@@ -763,7 +773,8 @@ static unsigned r600_choose_tiling(struct r600_common_screen *rscreen,
 	}
 
 	/* Make small textures 1D tiled. */
-	if (templ->width0 <= 16 || templ->height0 <= 16)
+	if (templ->width0 <= 16 || templ->height0 <= 16 ||
+	    (rscreen->debug_flags & DBG_NO_2D_TILING))
 		return RADEON_SURF_MODE_1D;
 
 	/* The allocator will switch to 1D if needed. */
@@ -1027,6 +1038,8 @@ static void *r600_texture_transfer_map(struct pipe_context *ctx,
 
 		r600_init_temp_resource_from_box(&resource, texture, box, level,
 						 R600_RESOURCE_FLAG_TRANSFER);
+		resource.usage = (usage & PIPE_TRANSFER_READ) ?
+			PIPE_USAGE_STAGING : PIPE_USAGE_STREAM;
 
 		/* Create the temporary texture. */
 		staging = (struct r600_texture*)ctx->screen->resource_create(ctx->screen, &resource);

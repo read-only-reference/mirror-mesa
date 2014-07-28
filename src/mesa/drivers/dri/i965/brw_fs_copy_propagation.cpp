@@ -106,9 +106,7 @@ fs_copy_prop_dataflow::fs_copy_prop_dataflow(void *mem_ctx, cfg_t *cfg,
    num_acp = 0;
    for (int b = 0; b < cfg->num_blocks; b++) {
       for (int i = 0; i < ACP_HASH_SIZE; i++) {
-         foreach_list(entry_node, &out_acp[b][i]) {
-            num_acp++;
-         }
+         num_acp += out_acp[b][i].length();
       }
    }
 
@@ -124,9 +122,7 @@ fs_copy_prop_dataflow::fs_copy_prop_dataflow(void *mem_ctx, cfg_t *cfg,
       bd[b].kill = rzalloc_array(bd, BITSET_WORD, bitset_words);
 
       for (int i = 0; i < ACP_HASH_SIZE; i++) {
-         foreach_list(entry_node, &out_acp[b][i]) {
-            acp_entry *entry = (acp_entry *)entry_node;
-
+         foreach_in_list(acp_entry, entry, &out_acp[b][i]) {
             acp[next_acp] = entry;
 
             /* opt_copy_propagate_local populates out_acp with copies created
@@ -157,9 +153,7 @@ fs_copy_prop_dataflow::setup_initial_values()
    for (int b = 0; b < cfg->num_blocks; b++) {
       bblock_t *block = cfg->blocks[b];
 
-      for (fs_inst *inst = (fs_inst *)block->start;
-           inst != block->end->next;
-           inst = (fs_inst *)inst->next) {
+      foreach_inst_in_block(fs_inst, inst, block) {
          if (inst->dst.file != GRF)
             continue;
 
@@ -344,12 +338,9 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
    if (has_source_modifiers && entry->dst.type != inst->src[arg].type)
       return false;
 
-   if (brw->gen >= 8) {
-      if (entry->src.negate) {
-         if (is_logic_op(inst->opcode)) {
-            return false;
-         }
-      }
+   if (brw->gen >= 8 && (entry->src.negate || entry->src.abs) &&
+       is_logic_op(inst->opcode)) {
+      return false;
    }
 
    inst->src[arg].file = entry->src.file;
@@ -446,7 +437,7 @@ try_constant_propagate(struct brw_context *brw, fs_inst *inst,
             inst->src[i] = entry->src;
             progress = true;
          } else if (i == 0 && inst->src[1].file != IMM) {
-            uint32_t new_cmod;
+            enum brw_conditional_mod new_cmod;
 
             new_cmod = brw_swap_cmod(inst->conditional_mod);
             if (new_cmod != ~0u) {
@@ -487,10 +478,10 @@ try_constant_propagate(struct brw_context *brw, fs_inst *inst,
           * anyway.
           */
          assert(i == 0);
-         if (inst->src[0].imm.f != 0.0f) {
+         if (inst->src[0].fixed_hw_reg.dw1.f != 0.0f) {
             inst->opcode = BRW_OPCODE_MOV;
             inst->src[0] = entry->src;
-            inst->src[0].imm.f = 1.0f / inst->src[0].imm.f;
+            inst->src[0].fixed_hw_reg.dw1.f = 1.0f / inst->src[0].fixed_hw_reg.dw1.f;
             progress = true;
          }
          break;
@@ -532,18 +523,13 @@ fs_visitor::opt_copy_propagate_local(void *copy_prop_ctx, bblock_t *block,
 {
    bool progress = false;
 
-   for (fs_inst *inst = (fs_inst *)block->start;
-	inst != block->end->next;
-	inst = (fs_inst *)inst->next) {
-
+   foreach_inst_in_block(fs_inst, inst, block) {
       /* Try propagating into this instruction. */
       for (int i = 0; i < inst->sources; i++) {
          if (inst->src[i].file != GRF)
             continue;
 
-         foreach_list(entry_node, &acp[inst->src[i].reg % ACP_HASH_SIZE]) {
-            acp_entry *entry = (acp_entry *)entry_node;
-
+         foreach_in_list(acp_entry, entry, &acp[inst->src[i].reg % ACP_HASH_SIZE]) {
             if (try_constant_propagate(brw, inst, entry))
                progress = true;
 
@@ -554,9 +540,7 @@ fs_visitor::opt_copy_propagate_local(void *copy_prop_ctx, bblock_t *block,
 
       /* kill the destination from the ACP */
       if (inst->dst.file == GRF) {
-	 foreach_list_safe(entry_node, &acp[inst->dst.reg % ACP_HASH_SIZE]) {
-	    acp_entry *entry = (acp_entry *)entry_node;
-
+	 foreach_in_list_safe(acp_entry, entry, &acp[inst->dst.reg % ACP_HASH_SIZE]) {
 	    if (inst->overwrites_reg(entry->dst)) {
 	       entry->remove();
 	    }
@@ -566,8 +550,7 @@ fs_visitor::opt_copy_propagate_local(void *copy_prop_ctx, bblock_t *block,
           * the source, so walk across the entire table.
           */
          for (int i = 0; i < ACP_HASH_SIZE; i++) {
-            foreach_list_safe(entry_node, &acp[i]) {
-               acp_entry *entry = (acp_entry *)entry_node;
+            foreach_in_list_safe(acp_entry, entry, &acp[i]) {
                if (inst->overwrites_reg(entry->src))
                   entry->remove();
             }
@@ -608,31 +591,33 @@ fs_visitor::opt_copy_propagate_local(void *copy_prop_ctx, bblock_t *block,
 bool
 fs_visitor::opt_copy_propagate()
 {
+   calculate_cfg();
+
    bool progress = false;
    void *copy_prop_ctx = ralloc_context(NULL);
-   cfg_t cfg(&instructions);
-   exec_list *out_acp[cfg.num_blocks];
-   for (int i = 0; i < cfg.num_blocks; i++)
+   exec_list *out_acp[cfg->num_blocks];
+
+   for (int i = 0; i < cfg->num_blocks; i++)
       out_acp[i] = new exec_list [ACP_HASH_SIZE];
 
    /* First, walk through each block doing local copy propagation and getting
     * the set of copies available at the end of the block.
     */
-   for (int b = 0; b < cfg.num_blocks; b++) {
-      bblock_t *block = cfg.blocks[b];
+   for (int b = 0; b < cfg->num_blocks; b++) {
+      bblock_t *block = cfg->blocks[b];
 
       progress = opt_copy_propagate_local(copy_prop_ctx, block,
                                           out_acp[b]) || progress;
    }
 
    /* Do dataflow analysis for those available copies. */
-   fs_copy_prop_dataflow dataflow(copy_prop_ctx, &cfg, out_acp);
+   fs_copy_prop_dataflow dataflow(copy_prop_ctx, cfg, out_acp);
 
    /* Next, re-run local copy propagation, this time with the set of copies
     * provided by the dataflow analysis available at the start of a block.
     */
-   for (int b = 0; b < cfg.num_blocks; b++) {
-      bblock_t *block = cfg.blocks[b];
+   for (int b = 0; b < cfg->num_blocks; b++) {
+      bblock_t *block = cfg->blocks[b];
       exec_list in_acp[ACP_HASH_SIZE];
 
       for (int i = 0; i < dataflow.num_acp; i++) {
@@ -645,7 +630,7 @@ fs_visitor::opt_copy_propagate()
       progress = opt_copy_propagate_local(copy_prop_ctx, block, in_acp) || progress;
    }
 
-   for (int i = 0; i < cfg.num_blocks; i++)
+   for (int i = 0; i < cfg->num_blocks; i++)
       delete [] out_acp[i];
    ralloc_free(copy_prop_ctx);
 

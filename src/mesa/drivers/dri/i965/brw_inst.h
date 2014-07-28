@@ -56,6 +56,7 @@ brw_inst_set_##name(const struct brw_context *brw,            \
                     brw_inst *inst, uint64_t v)               \
 {                                                             \
    assert(assertions);                                        \
+   (void) brw;                                                \
    brw_inst_set_bits(inst, high, low, v);                     \
 }                                                             \
 static inline uint64_t                                        \
@@ -63,6 +64,7 @@ brw_inst_##name(const struct brw_context *brw,                \
                 brw_inst *inst)                               \
 {                                                             \
    assert(assertions);                                        \
+   (void) brw;                                                \
    return brw_inst_bits(inst, high, low);                     \
 }
 
@@ -304,14 +306,14 @@ static inline void                                                            \
 brw_inst_set_##name(const struct brw_context *brw, brw_inst *inst, int16_t v) \
 {                                                                             \
    assert(assertions);                                                        \
-   assert(v <= (1 << 16) - 1);                                                \
-   assert(v > -(1 << 16));                                                    \
+   (void) brw;                                                                \
    brw_inst_set_bits(inst, high, low, (uint16_t) v);                          \
 }                                                                             \
 static inline int16_t                                                         \
 brw_inst_##name(const struct brw_context *brw, brw_inst *inst)                \
 {                                                                             \
    assert(assertions);                                                        \
+   (void) brw;                                                                \
    return brw_inst_bits(inst, high, low);                                     \
 }
 
@@ -527,18 +529,31 @@ F(ts_opcode,           MD( 0),  MD( 0))
 /** @} */
 
 /**
+ * Pixel Interpolator message function control bits:
+ *  @{
+ */
+F(pi_simd_mode,      MD(16),  MD(16))
+F(pi_nopersp,        MD(14),  MD(14))
+F(pi_message_type,   MD(13),  MD(12))
+F(pi_slot_group,     MD(11),  MD(11))
+F(pi_message_data,   MD(7),   MD(0))
+/** @} */
+
+/**
  * Immediates:
  *  @{
  */
 static inline int
 brw_inst_imm_d(const struct brw_context *brw, brw_inst *insn)
 {
+   (void) brw;
    return brw_inst_bits(insn, 127, 96);
 }
 
 static inline unsigned
 brw_inst_imm_ud(const struct brw_context *brw, brw_inst *insn)
 {
+   (void) brw;
    return brw_inst_bits(insn, 127, 96);
 }
 
@@ -546,6 +561,7 @@ static inline float
 brw_inst_imm_f(const struct brw_context *brw, brw_inst *insn)
 {
    fi_type ft;
+   (void) brw;
    ft.u = brw_inst_bits(insn, 127, 96);
    return ft.f;
 }
@@ -554,6 +570,7 @@ static inline void
 brw_inst_set_imm_d(const struct brw_context *brw,
                    brw_inst *insn, int value)
 {
+   (void) brw;
    return brw_inst_set_bits(insn, 127, 96, value);
 }
 
@@ -561,6 +578,7 @@ static inline void
 brw_inst_set_imm_ud(const struct brw_context *brw,
                     brw_inst *insn, unsigned value)
 {
+   (void) brw;
    return brw_inst_set_bits(insn, 127, 96, value);
 }
 
@@ -569,6 +587,7 @@ brw_inst_set_imm_f(const struct brw_context *brw,
                    brw_inst *insn, float value)
 {
    fi_type ft;
+   (void) brw;
    ft.f = value;
    brw_inst_set_bits(insn, 127, 96, ft.u);
 }

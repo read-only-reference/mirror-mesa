@@ -635,7 +635,6 @@ texture_buffer_sampler_view(struct r600_pipe_sampler_view *view,
 		S_030008_DATA_FORMAT(format) |
 		S_030008_NUM_FORMAT_ALL(num_format) |
 		S_030008_FORMAT_COMP_ALL(format_comp) |
-		S_030008_SRF_MODE_ALL(1) |
 		S_030008_ENDIAN_SWAP(endian);
 	view->tex_resource_words[3] = swizzle_res;
 	/*
@@ -814,7 +813,6 @@ evergreen_create_sampler_view_custom(struct pipe_context *ctx,
 	}
 
 	view->tex_resource_words[4] = (word4 |
-				       S_030010_SRF_MODE_ALL(V_030010_SRF_MODE_ZERO_CLAMP_MINUS_ONE) |
 				       S_030010_ENDIAN_SWAP(endian));
 	view->tex_resource_words[5] = S_030014_BASE_ARRAY(state->u.tex.first_layer) |
 				      S_030014_LAST_ARRAY(state->u.tex.last_layer);
@@ -2843,8 +2841,14 @@ void evergreen_update_ps_state(struct pipe_context *ctx, struct r600_pipe_shader
 		   POSITION goes via GPRs from the SC so isn't counted */
 		if (rshader->input[i].name == TGSI_SEMANTIC_POSITION)
 			pos_index = i;
-		else if (rshader->input[i].name == TGSI_SEMANTIC_FACE)
-			face_index = i;
+		else if (rshader->input[i].name == TGSI_SEMANTIC_FACE) {
+			if (face_index == -1)
+				face_index = i;
+		}
+		else if (rshader->input[i].name == TGSI_SEMANTIC_SAMPLEMASK) {
+			if (face_index == -1)
+				face_index = i; /* lives in same register, same enable bit */
+		}
 		else {
 			ninterp++;
 			if (rshader->input[i].interpolate == TGSI_INTERPOLATE_LINEAR)

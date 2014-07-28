@@ -207,7 +207,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_USER_INDEX_BUFFERS:
 	case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
 	case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
-	case PIPE_CAP_TGSI_VS_LAYER:
+	case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
 	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
 	case PIPE_CAP_TEXTURE_GATHER_SM5:
 	case PIPE_CAP_FAKE_SW_MSAA:
@@ -215,6 +215,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_SAMPLE_SHADING:
 	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
 	case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
+	case PIPE_CAP_DRAW_INDIRECT:
 		return 0;
 
 	/* Stream output. */
@@ -227,6 +228,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	/* Geometry shader output, unsupported. */
 	case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
 	case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
+	case PIPE_CAP_MAX_VERTEX_STREAMS:
 		return 0;
 
 	/* Texturing. */
@@ -327,8 +329,8 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 		return 64; /* Max native temporaries. */
 	case PIPE_SHADER_CAP_MAX_ADDRS:
 		return 1; /* Max native address registers */
-	case PIPE_SHADER_CAP_MAX_CONSTS:
-		return (screen->gpu_id >= 300) ? 1024 : 64;
+	case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+		return ((screen->gpu_id >= 300) ? 1024 : 64) * sizeof(float[4]);
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
 		return 1;
 	case PIPE_SHADER_CAP_MAX_PREDS:
@@ -448,6 +450,23 @@ fd_screen_create(struct fd_device *dev)
 		goto fail;
 	}
 	screen->gpu_id = val;
+
+	if (fd_pipe_get_param(screen->pipe, FD_CHIP_ID, &val)) {
+		DBG("could not get chip-id");
+		/* older kernels may not have this property: */
+		unsigned core  = screen->gpu_id / 100;
+		unsigned major = (screen->gpu_id % 100) / 10;
+		unsigned minor = screen->gpu_id % 10;
+		unsigned patch = 0;  /* assume the worst */
+		val = (patch & 0xff) | ((minor & 0xff) << 8) |
+			((major & 0xff) << 16) | ((core & 0xff) << 24);
+	}
+	screen->chip_id = val;
+
+	DBG("Pipe Info:");
+	DBG(" GPU-id:          %d", screen->gpu_id);
+	DBG(" Chip-id:         0x%08x", screen->chip_id);
+	DBG(" GMEM size:       0x%08x", screen->gmemsize_bytes);
 
 	/* explicitly checking for GPU revisions that are known to work.  This
 	 * may be overly conservative for a3xx, where spoofing the gpu_id with

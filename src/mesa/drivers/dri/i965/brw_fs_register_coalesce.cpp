@@ -118,24 +118,24 @@ can_coalesce_vars(brw::fs_live_variables *live_intervals,
    if (!live_intervals->vars_interfere(var_from, var_to))
       return true;
 
-   /* We know that the live ranges of A (var_from) and B (var_to)
-    * interfere because of the ->vars_interfere() call above. If the end
-    * of B's live range is after the end of A's range, then we know two
-    * things:
-    *  - the start of B's live range must be in A's live range (since we
-    *    already know the two ranges interfere, this is the only remaining
-    *    possibility)
-    *  - the interference isn't of the form we're looking for (where B is
-    *    entirely inside A)
-    */
-   if (live_intervals->end[var_to] > live_intervals->end[var_from])
+   int start_to = live_intervals->start[var_to];
+   int end_to = live_intervals->end[var_to];
+   int start_from = live_intervals->start[var_from];
+   int end_from = live_intervals->end[var_from];
+
+   /* Variables interfere and one line range isn't a subset of the other. */
+   if ((end_to > end_from && start_from < start_to) ||
+       (end_from > end_to && start_to < start_from))
       return false;
 
+   int start_ip = MIN2(start_to, start_from);
    int scan_ip = -1;
 
-   foreach_list(n, instructions) {
-      fs_inst *scan_inst = (fs_inst *)n;
+   foreach_in_list(fs_inst, scan_inst, instructions) {
       scan_ip++;
+
+      if (scan_ip < start_ip)
+         continue;
 
       if (scan_inst->is_control_flow())
          return false;
@@ -169,9 +169,7 @@ fs_visitor::register_coalesce()
    int var_to[MAX_SAMPLER_MESSAGE_SIZE];
    int var_from[MAX_SAMPLER_MESSAGE_SIZE];
 
-   foreach_list(node, &this->instructions) {
-      fs_inst *inst = (fs_inst *)node;
-
+   foreach_in_list(fs_inst, inst, &instructions) {
       if (!is_coalesce_candidate(inst, virtual_grf_sizes))
          continue;
 
@@ -242,9 +240,7 @@ fs_visitor::register_coalesce()
          }
       }
 
-      foreach_list(node, &this->instructions) {
-         fs_inst *scan_inst = (fs_inst *)node;
-
+      foreach_in_list(fs_inst, scan_inst, &instructions) {
          for (int i = 0; i < src_size; i++) {
             if (mov[i] || was_load_payload) {
                if (scan_inst->dst.file == GRF &&
@@ -277,9 +273,7 @@ fs_visitor::register_coalesce()
    }
 
    if (progress) {
-      foreach_list_safe(node, &this->instructions) {
-         fs_inst *inst = (fs_inst *)node;
-
+      foreach_in_list_safe(fs_inst, inst, &instructions) {
          if (inst->opcode == BRW_OPCODE_NOP) {
             inst->remove();
          }

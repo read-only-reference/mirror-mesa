@@ -302,7 +302,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	/* Supported on Evergreen. */
 	case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
 	case PIPE_CAP_CUBE_MAP_ARRAY:
-	case PIPE_CAP_TGSI_VS_LAYER:
+	case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
+	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
+	case PIPE_CAP_TEXTURE_QUERY_LOD:
 		return family >= CHIP_CEDAR ? 1 : 0;
 
 	/* Unsupported features. */
@@ -312,11 +314,10 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
-	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
 	case PIPE_CAP_TEXTURE_GATHER_SM5:
-	case PIPE_CAP_TEXTURE_QUERY_LOD:
 	case PIPE_CAP_SAMPLE_SHADING:
 	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
+	case PIPE_CAP_DRAW_INDIRECT:
 		return 0;
 
 	/* Stream output. */
@@ -333,6 +334,8 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 1024;
 	case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
 		return 16384;
+	case PIPE_CAP_MAX_VERTEX_STREAMS:
+		return 1;
 
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
@@ -416,7 +419,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_MAX_ADDRS:
 		/* XXX Isn't this equal to TEMPS? */
 		return 1; /* Max native address registers */
-	case PIPE_SHADER_CAP_MAX_CONSTS:
+	case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
 		return R600_MAX_CONST_BUFFER_SIZE;
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
 		return R600_MAX_USER_CONST_BUFFERS;
@@ -425,7 +428,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
 		return 1;
 	case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
-		return 0;
+		return 1;
 	case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
 	case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
 	case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
@@ -444,6 +447,8 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		} else {
 			return PIPE_SHADER_IR_TGSI;
 		}
+	case PIPE_SHADER_CAP_DOUBLES:
+		return 0;
 	}
 	return 0;
 }

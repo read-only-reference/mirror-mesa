@@ -136,7 +136,7 @@ device::max_mem_input() const {
 cl_ulong
 device::max_const_buffer_size() const {
    return pipe->get_shader_param(pipe, PIPE_SHADER_COMPUTE,
-                                 PIPE_SHADER_CAP_MAX_CONSTS) * 16;
+                                 PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE);
 }
 
 cl_uint
@@ -167,6 +167,12 @@ cl_uint
 device::max_compute_units() const {
    return get_compute_param<uint32_t>(pipe,
                                       PIPE_COMPUTE_CAP_MAX_COMPUTE_UNITS)[0];
+}
+
+bool
+device::image_support() const {
+   return get_compute_param<uint32_t>(pipe,
+                                      PIPE_COMPUTE_CAP_IMAGES_SUPPORTED)[0];
 }
 
 std::vector<size_t>

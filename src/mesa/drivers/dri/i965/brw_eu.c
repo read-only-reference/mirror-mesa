@@ -68,7 +68,7 @@ brw_reg_type_letters(unsigned type)
 /* Returns the corresponding conditional mod for swapping src0 and
  * src1 in e.g. CMP.
  */
-uint32_t
+enum brw_conditional_mod
 brw_swap_cmod(uint32_t cmod)
 {
    switch (cmod) {
@@ -141,9 +141,7 @@ brw_set_default_compression_control(struct brw_compile *p,
          brw_inst_set_qtr_control(brw, p->current, GEN6_COMPRESSION_1H);
 	 break;
       default:
-	 assert(!"not reached");
-         brw_inst_set_qtr_control(brw, p->current, GEN6_COMPRESSION_1H);
-	 break;
+         unreachable("not reached");
       }
    } else {
       brw_inst_set_qtr_control(brw, p->current, compression_control);
@@ -243,7 +241,8 @@ brw_disassemble(struct brw_context *brw,
       brw_inst *insn = assembly + offset;
       brw_inst uncompacted;
       bool compacted = brw_inst_cmpt_control(brw, insn);
-      fprintf(out, "0x%08x: ", offset);
+      if (0)
+         fprintf(out, "0x%08x: ", offset);
 
       if (compacted) {
          brw_compact_inst *compacted = (void *)insn;

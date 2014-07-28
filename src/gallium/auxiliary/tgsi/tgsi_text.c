@@ -804,6 +804,13 @@ parse_src_operand(
       src->Dimension.Indirect = 0;
       src->Dimension.Dimension = 0;
       src->Dimension.Index = bracket[0].index;
+      if (bracket[0].ind_file != TGSI_FILE_NULL) {
+         src->Dimension.Indirect = 1;
+         src->DimIndirect.File = bracket[0].ind_file;
+         src->DimIndirect.Index = bracket[0].ind_index;
+         src->DimIndirect.Swizzle = bracket[0].ind_comp;
+         src->DimIndirect.ArrayID = bracket[0].ind_array;
+      }
       bracket[0] = bracket[1];
    }
    src->Register.Index = bracket[0].index;
@@ -1365,6 +1372,23 @@ static boolean parse_declaration( struct translate_ctx *ctx )
       if (i == TGSI_INTERPOLATE_COUNT) {
          report_error( ctx, "Expected semantic or interpolate attribute" );
          return FALSE;
+      }
+   }
+
+   cur = ctx->cur;
+   eat_opt_white( &cur );
+   if (*cur == ',' && !is_vs_input) {
+      uint i;
+
+      cur++;
+      eat_opt_white( &cur );
+      for (i = 0; i < TGSI_INTERPOLATE_LOC_COUNT; i++) {
+         if (str_match_nocase_whole( &cur, tgsi_interpolate_locations[i] )) {
+            decl.Interp.Location = i;
+
+            ctx->cur = cur;
+            break;
+         }
       }
    }
 

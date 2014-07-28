@@ -84,6 +84,7 @@ descriptor=[
   [ "SAMPLES_ARB", "BUFFER_INT(Visual.samples), extra_new_buffers" ],
 
 # GL_ARB_sample_shading
+  [ "SAMPLE_SHADING_ARB", "CONTEXT_BOOL(Multisample.SampleShading), extra_gl40_ARB_sample_shading" ],
   [ "MIN_SAMPLE_SHADING_VALUE_ARB", "CONTEXT_FLOAT(Multisample.MinSampleShadingValue), extra_gl40_ARB_sample_shading" ],
 
 # GL_SGIS_generate_mipmap
@@ -774,6 +775,13 @@ descriptor=[
 
 # GL_ARB_compute_shader
   [ "MAX_COMPUTE_WORK_GROUP_INVOCATIONS", "CONTEXT_INT(Const.MaxComputeWorkGroupInvocations), extra_ARB_compute_shader" ],
+  [ "MAX_COMPUTE_UNIFORM_BLOCKS", "CONST(MAX_COMPUTE_UNIFORM_BLOCKS), extra_ARB_compute_shader" ],
+  [ "MAX_COMPUTE_TEXTURE_IMAGE_UNITS", "CONST(MAX_COMPUTE_TEXTURE_IMAGE_UNITS), extra_ARB_compute_shader" ],
+  [ "MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS", "CONST(MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS), extra_ARB_compute_shader" ],
+  [ "MAX_COMPUTE_ATOMIC_COUNTERS", "CONST(MAX_COMPUTE_ATOMIC_COUNTERS), extra_ARB_compute_shader" ],
+  [ "MAX_COMPUTE_SHARED_MEMORY_SIZE", "CONST(MAX_COMPUTE_SHARED_MEMORY_SIZE), extra_ARB_compute_shader" ],
+  [ "MAX_COMPUTE_UNIFORM_COMPONENTS", "CONST(MAX_COMPUTE_UNIFORM_COMPONENTS), extra_ARB_compute_shader" ],
+  [ "MAX_COMPUTE_IMAGE_UNIFORMS", "CONST(MAX_COMPUTE_IMAGE_UNIFORMS), extra_ARB_compute_shader" ],
 
 # GL_ARB_gpu_shader5
   [ "MAX_GEOMETRY_SHADER_INVOCATIONS", "CONST(MAX_GEOMETRY_SHADER_INVOCATIONS), extra_ARB_gpu_shader5" ],

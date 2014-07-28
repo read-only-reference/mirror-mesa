@@ -33,6 +33,7 @@
 #include "util/u_format.h"
 #include "util/u_index_modify.h"
 #include "util/u_memory.h"
+#include "util/u_prim.h"
 #include "util/u_upload_mgr.h"
 
 /*
@@ -408,6 +409,19 @@ static bool si_update_draw_info_state(struct si_context *sctx,
 					(rs ? rs->line_stipple_enable : false);
 		/* If the WD switch is false, the IA switch must be false too. */
 		bool ia_switch_on_eop = wd_switch_on_eop;
+		unsigned primgroup_size = 64;
+
+		/* Hawaii hangs if instancing is enabled and each instance
+		 * is smaller than a prim group and WD_SWITCH_ON_EOP is 0.
+		 * We don't know that for indirect drawing, so treat it as
+		 * always problematic. */
+		if (sctx->b.family == CHIP_HAWAII &&
+		    (info->indirect ||
+		     (info->instance_count > 1 &&
+		      u_prims_for_vertices(info->mode, info->count) < primgroup_size))) {
+			wd_switch_on_eop = true;
+			ia_switch_on_eop = true;
+		}
 
 		si_pm4_set_reg(pm4, R_028B74_VGT_DISPATCH_DRAW_INDEX,
 			       ib->index_size == 4 ? 0xFC000000 : 0xFC00);
@@ -417,7 +431,7 @@ static bool si_update_draw_info_state(struct si_context *sctx,
 		si_pm4_cmd_add(pm4, /* IA_MULTI_VGT_PARAM */
 			       S_028AA8_SWITCH_ON_EOP(ia_switch_on_eop) |
 			       S_028AA8_PARTIAL_VS_WAVE_ON(1) |
-			       S_028AA8_PRIMGROUP_SIZE(63) |
+			       S_028AA8_PRIMGROUP_SIZE(primgroup_size - 1) |
 			       S_028AA8_WD_SWITCH_ON_EOP(wd_switch_on_eop));
 		si_pm4_cmd_add(pm4, 0); /* VGT_LS_HS_CONFIG */
 		si_pm4_cmd_end(pm4, false);
@@ -426,14 +440,8 @@ static bool si_update_draw_info_state(struct si_context *sctx,
 	}
 
 	si_pm4_set_reg(pm4, R_028A6C_VGT_GS_OUT_PRIM_TYPE, gs_out_prim);
-	si_pm4_set_reg(pm4, R_028408_VGT_INDX_OFFSET,
-		       info->indexed ? info->index_bias : info->start);
 	si_pm4_set_reg(pm4, R_02840C_VGT_MULTI_PRIM_IB_RESET_INDX, info->restart_index);
 	si_pm4_set_reg(pm4, R_028A94_VGT_MULTI_PRIM_IB_RESET_EN, info->primitive_restart);
-	si_pm4_set_reg(pm4, SI_SGPR_START_INSTANCE * 4 +
-		       (sctx->gs_shader ? R_00B330_SPI_SHADER_USER_DATA_ES_0 :
-			R_00B130_SPI_SHADER_USER_DATA_VS_0),
-		       info->start_instance);
 
         if (prim == V_008958_DI_PT_LINELIST)
                 ls_mask = 1;
@@ -664,72 +672,12 @@ static void si_update_derived_state(struct si_context *sctx)
 	}
 }
 
-static void si_vertex_buffer_update(struct si_context *sctx)
-{
-	struct pipe_context *ctx = &sctx->b.b;
-	struct si_pm4_state *pm4 = si_pm4_alloc_state(sctx);
-	bool bound[PIPE_MAX_ATTRIBS] = {};
-	unsigned i, count;
-	uint64_t va;
-
-	sctx->b.flags |= R600_CONTEXT_INV_TEX_CACHE;
-
-	count = sctx->vertex_elements->count;
-	assert(count <= 256 / 4);
-
-	si_pm4_sh_data_begin(pm4);
-	for (i = 0 ; i < count; i++) {
-		struct pipe_vertex_element *ve = &sctx->vertex_elements->elements[i];
-		struct pipe_vertex_buffer *vb;
-		struct r600_resource *rbuffer;
-		unsigned offset;
-
-		if (ve->vertex_buffer_index >= sctx->nr_vertex_buffers)
-			continue;
-
-		vb = &sctx->vertex_buffer[ve->vertex_buffer_index];
-		rbuffer = (struct r600_resource*)vb->buffer;
-		if (rbuffer == NULL)
-			continue;
-
-		offset = 0;
-		offset += vb->buffer_offset;
-		offset += ve->src_offset;
-
-		va = r600_resource_va(ctx->screen, (void*)rbuffer);
-		va += offset;
-
-		/* Fill in T# buffer resource description */
-		si_pm4_sh_data_add(pm4, va & 0xFFFFFFFF);
-		si_pm4_sh_data_add(pm4, (S_008F04_BASE_ADDRESS_HI(va >> 32) |
-					 S_008F04_STRIDE(vb->stride)));
-		if (vb->stride)
-			/* Round up by rounding down and adding 1 */
-			si_pm4_sh_data_add(pm4,
-					   (vb->buffer->width0 - offset -
-					    util_format_get_blocksize(ve->src_format)) /
-					   vb->stride + 1);
-		else
-			si_pm4_sh_data_add(pm4, vb->buffer->width0 - offset);
-		si_pm4_sh_data_add(pm4, sctx->vertex_elements->rsrc_word3[i]);
-
-		if (!bound[ve->vertex_buffer_index]) {
-			si_pm4_add_bo(pm4, rbuffer, RADEON_USAGE_READ,
-				      RADEON_PRIO_SHADER_BUFFER_RO);
-			bound[ve->vertex_buffer_index] = true;
-		}
-	}
-	si_pm4_sh_data_end(pm4, sctx->gs_shader ?
-			   R_00B330_SPI_SHADER_USER_DATA_ES_0 :
-			   R_00B130_SPI_SHADER_USER_DATA_VS_0,
-			   SI_SGPR_VERTEX_BUFFER);
-	si_pm4_set_state(sctx, vertex_buffers, pm4);
-}
-
 static void si_state_draw(struct si_context *sctx,
 			  const struct pipe_draw_info *info,
 			  const struct pipe_index_buffer *ib)
 {
+	unsigned sh_base_reg = (sctx->gs_shader ? R_00B330_SPI_SHADER_USER_DATA_ES_0 :
+						  R_00B130_SPI_SHADER_USER_DATA_VS_0);
 	struct si_pm4_state *pm4 = si_pm4_alloc_state(sctx);
 
 	if (pm4 == NULL)
@@ -787,9 +735,19 @@ static void si_state_draw(struct si_context *sctx,
 	}
 	si_pm4_cmd_end(pm4, sctx->b.predicate_drawing);
 
-	si_pm4_cmd_begin(pm4, PKT3_NUM_INSTANCES);
-	si_pm4_cmd_add(pm4, info->instance_count);
-	si_pm4_cmd_end(pm4, sctx->b.predicate_drawing);
+	if (!info->indirect) {
+		si_pm4_cmd_begin(pm4, PKT3_NUM_INSTANCES);
+		si_pm4_cmd_add(pm4, info->instance_count);
+		si_pm4_cmd_end(pm4, sctx->b.predicate_drawing);
+
+		si_pm4_set_reg(pm4, sh_base_reg + SI_SGPR_BASE_VERTEX * 4,
+			       info->indexed ? info->index_bias : info->start);
+		si_pm4_set_reg(pm4, sh_base_reg + SI_SGPR_START_INSTANCE * 4,
+			       info->start_instance);
+	} else {
+		si_pm4_add_bo(pm4, (struct r600_resource *)info->indirect,
+			      RADEON_USAGE_READ, RADEON_PRIO_MIN);
+	}
 
 	if (info->indexed) {
 		uint32_t max_size = (ib->buffer->width0 - ib->offset) /
@@ -800,13 +758,35 @@ static void si_state_draw(struct si_context *sctx,
 
 		si_pm4_add_bo(pm4, (struct r600_resource *)ib->buffer, RADEON_USAGE_READ,
 			      RADEON_PRIO_MIN);
-		si_cmd_draw_index_2(pm4, max_size, va, info->count,
-				    V_0287F0_DI_SRC_SEL_DMA,
-				    sctx->b.predicate_drawing);
+
+		if (info->indirect) {
+			uint64_t indirect_va = r600_resource_va(&sctx->screen->b.b,
+								info->indirect);
+			si_cmd_draw_index_indirect(pm4, indirect_va, va, max_size,
+						   info->indirect_offset,
+						   sh_base_reg + SI_SGPR_BASE_VERTEX * 4,
+						   sh_base_reg + SI_SGPR_START_INSTANCE * 4,
+						   sctx->b.predicate_drawing);
+		} else {
+			va += info->start * ib->index_size;
+			si_cmd_draw_index_2(pm4, max_size, va, info->count,
+					    V_0287F0_DI_SRC_SEL_DMA,
+					    sctx->b.predicate_drawing);
+		}
 	} else {
-		uint32_t initiator = V_0287F0_DI_SRC_SEL_AUTO_INDEX;
-		initiator |= S_0287F0_USE_OPAQUE(!!info->count_from_stream_output);
-		si_cmd_draw_index_auto(pm4, info->count, initiator, sctx->b.predicate_drawing);
+		if (info->indirect) {
+			uint64_t indirect_va = r600_resource_va(&sctx->screen->b.b,
+								info->indirect);
+			si_cmd_draw_indirect(pm4, indirect_va, info->indirect_offset,
+					     sh_base_reg + SI_SGPR_BASE_VERTEX * 4,
+					     sh_base_reg + SI_SGPR_START_INSTANCE * 4,
+					     sctx->b.predicate_drawing);
+		} else {
+			si_cmd_draw_index_auto(pm4, info->count,
+					       V_0287F0_DI_SRC_SEL_AUTO_INDEX |
+					       S_0287F0_USE_OPAQUE(!!info->count_from_stream_output),
+					       sctx->b.predicate_drawing);
+		}
 	}
 
 	si_pm4_set_state(sctx, draw, pm4);
@@ -888,11 +868,33 @@ void si_emit_cache_flush(struct r600_common_context *sctx, struct r600_atom *ato
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_VGT_FLUSH) | EVENT_INDEX(0));
 	}
+	if (sctx->flags & R600_CONTEXT_VGT_STREAMOUT_SYNC) {
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, EVENT_TYPE(V_028A90_VGT_STREAMOUT_SYNC) | EVENT_INDEX(0));
+	}
 
 	sctx->flags = 0;
 }
 
-const struct r600_atom si_atom_cache_flush = { si_emit_cache_flush, 13 }; /* number of CS dwords */
+const struct r600_atom si_atom_cache_flush = { si_emit_cache_flush, 17 }; /* number of CS dwords */
+
+static void si_get_draw_start_count(struct si_context *sctx,
+				    const struct pipe_draw_info *info,
+				    unsigned *start, unsigned *count)
+{
+	if (info->indirect) {
+		struct r600_resource *indirect =
+			(struct r600_resource*)info->indirect;
+		int *data = r600_buffer_map_sync_with_rings(&sctx->b,
+					indirect, PIPE_TRANSFER_READ);
+                data += info->indirect_offset/sizeof(int);
+		*start = data[2];
+		*count = data[0];
+	} else {
+		*start = info->start;
+		*count = info->count;
+	}
+}
 
 void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 {
@@ -900,44 +902,60 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	struct pipe_index_buffer ib = {};
 	uint32_t i;
 
-	if (!info->count && (info->indexed || !info->count_from_stream_output))
+	if (!info->count && !info->indirect &&
+	    (info->indexed || !info->count_from_stream_output))
 		return;
 
 	if (!sctx->ps_shader || !sctx->vs_shader)
 		return;
 
 	si_update_derived_state(sctx);
-	si_vertex_buffer_update(sctx);
+
+	if (sctx->vertex_buffers_dirty) {
+		si_update_vertex_buffers(sctx);
+		sctx->vertex_buffers_dirty = false;
+	}
 
 	if (info->indexed) {
 		/* Initialize the index buffer struct. */
 		pipe_resource_reference(&ib.buffer, sctx->index_buffer.buffer);
 		ib.user_buffer = sctx->index_buffer.user_buffer;
 		ib.index_size = sctx->index_buffer.index_size;
-		ib.offset = sctx->index_buffer.offset + info->start * ib.index_size;
+		ib.offset = sctx->index_buffer.offset;
 
 		/* Translate or upload, if needed. */
 		if (ib.index_size == 1) {
 			struct pipe_resource *out_buffer = NULL;
-			unsigned out_offset;
+			unsigned out_offset, start, count, start_offset;
 			void *ptr;
 
-			u_upload_alloc(sctx->b.uploader, 0, info->count * 2,
+			si_get_draw_start_count(sctx, info, &start, &count);
+			start_offset = start * ib.index_size;
+
+			u_upload_alloc(sctx->b.uploader, start_offset, count * 2,
 				       &out_offset, &out_buffer, &ptr);
 
-			util_shorten_ubyte_elts_to_userptr(
-						&sctx->b.b, &ib, 0, ib.offset, info->count, ptr);
+			util_shorten_ubyte_elts_to_userptr(&sctx->b.b, &ib, 0,
+							   ib.offset + start_offset,
+							   count, ptr);
 
 			pipe_resource_reference(&ib.buffer, NULL);
 			ib.user_buffer = NULL;
 			ib.buffer = out_buffer;
-			ib.offset = out_offset;
+			/* info->start will be added by the drawing code */
+			ib.offset = out_offset - start_offset;
 			ib.index_size = 2;
-		}
+		} else if (ib.user_buffer && !ib.buffer) {
+			unsigned start, count, start_offset;
 
-		if (ib.user_buffer && !ib.buffer) {
-			u_upload_data(sctx->b.uploader, 0, info->count * ib.index_size,
-				      ib.user_buffer, &ib.offset, &ib.buffer);
+			si_get_draw_start_count(sctx, info, &start, &count);
+			start_offset = start * ib.index_size;
+
+			u_upload_data(sctx->b.uploader, start_offset, count * ib.index_size,
+				      (char*)ib.user_buffer + start_offset,
+				      &ib.offset, &ib.buffer);
+			/* info->start will be added by the drawing code */
+			ib.offset -= start_offset;
 		}
 	}
 
@@ -970,6 +988,14 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		si_trace_emit(sctx);
 	}
 #endif
+
+	/* Workaround for a VGT hang when streamout is enabled.
+	 * It must be done after drawing. */
+	if (sctx->b.family == CHIP_HAWAII &&
+	    (sctx->b.streamout.streamout_enabled ||
+	     sctx->b.streamout.prims_gen_query_enabled)) {
+		sctx->b.flags |= R600_CONTEXT_VGT_STREAMOUT_SYNC;
+	}
 
 	/* Set the depth buffer as dirty. */
 	if (sctx->framebuffer.state.zsbuf) {

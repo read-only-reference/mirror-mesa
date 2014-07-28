@@ -446,7 +446,7 @@ static void si_set_clip_state(struct pipe_context *ctx,
 	cb.user_buffer = state->ucp;
 	cb.buffer_offset = 0;
 	cb.buffer_size = 4*4*8;
-	ctx->set_constant_buffer(ctx, PIPE_SHADER_VERTEX, NUM_PIPE_CONST_BUFFERS, &cb);
+	ctx->set_constant_buffer(ctx, PIPE_SHADER_VERTEX, SI_DRIVER_STATE_CONST_BUF, &cb);
 	pipe_resource_reference(&cb.buffer, NULL);
 
 	si_pm4_set_state(sctx, clip, pm4);
@@ -1485,9 +1485,6 @@ boolean si_is_format_supported(struct pipe_screen *screen,
 		return FALSE;
 
 	if (sample_count > 1) {
-		if (HAVE_LLVM < 0x0304)
-			return FALSE;
-
 		/* 2D tiling on CIK is supported since DRM 2.35.0 */
 		if (sscreen->b.chip_class >= CIK && sscreen->b.info.drm_minor < 35)
 			return FALSE;
@@ -1961,7 +1958,7 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	}
 	constbuf.buffer_size = sctx->framebuffer.nr_samples * 2 * 4;
 	ctx->set_constant_buffer(ctx, PIPE_SHADER_FRAGMENT,
-				 NUM_PIPE_CONST_BUFFERS, &constbuf);
+				 SI_DRIVER_STATE_CONST_BUF, &constbuf);
 }
 
 static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom *atom)
@@ -2239,15 +2236,11 @@ static void *si_create_fs_state(struct pipe_context *ctx,
 	return si_create_shader_state(ctx, state, PIPE_SHADER_FRAGMENT);
 }
 
-#if LLVM_SUPPORTS_GEOM_SHADERS
-
 static void *si_create_gs_state(struct pipe_context *ctx,
 				const struct pipe_shader_state *state)
 {
 	return si_create_shader_state(ctx, state, PIPE_SHADER_GEOMETRY);
 }
-
-#endif
 
 static void *si_create_vs_state(struct pipe_context *ctx,
 				const struct pipe_shader_state *state)
@@ -2269,8 +2262,6 @@ static void si_bind_vs_shader(struct pipe_context *ctx, void *state)
 	sctx->vs_shader = sel;
 }
 
-#if LLVM_SUPPORTS_GEOM_SHADERS
-
 static void si_bind_gs_shader(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
@@ -2281,8 +2272,6 @@ static void si_bind_gs_shader(struct pipe_context *ctx, void *state)
 
 	sctx->gs_shader = sel;
 }
-
-#endif
 
 static void si_bind_ps_shader(struct pipe_context *ctx, void *state)
 {
@@ -2337,8 +2326,6 @@ static void si_delete_vs_shader(struct pipe_context *ctx, void *state)
 	si_delete_shader_selector(ctx, sel);
 }
 
-#if LLVM_SUPPORTS_GEOM_SHADERS
-
 static void si_delete_gs_shader(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
@@ -2350,8 +2337,6 @@ static void si_delete_gs_shader(struct pipe_context *ctx, void *state)
 
 	si_delete_shader_selector(ctx, sel);
 }
-
-#endif
 
 static void si_delete_ps_shader(struct pipe_context *ctx, void *state)
 {
@@ -2688,87 +2673,18 @@ static void *si_create_sampler_state(struct pipe_context *ctx,
 	return rstate;
 }
 
-/* XXX consider moving this function to si_descriptors.c for gcc to inline
- *     the si_set_sampler_view calls. LTO might help too. */
-static void si_set_sampler_views(struct pipe_context *ctx,
-				 unsigned shader, unsigned start,
-                                 unsigned count,
-				 struct pipe_sampler_view **views)
-{
-	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_textures_info *samplers = &sctx->samplers[shader];
-	struct si_pipe_sampler_view **rviews = (struct si_pipe_sampler_view **)views;
-	int i;
-
-	if (shader >= SI_NUM_SHADERS)
-		return;
-
-	assert(start == 0);
-
-	for (i = 0; i < count; i++) {
-		if (!views[i]) {
-			samplers->depth_texture_mask &= ~(1 << i);
-			samplers->compressed_colortex_mask &= ~(1 << i);
-			si_set_sampler_view(sctx, shader, i, NULL, NULL);
-			si_set_sampler_view(sctx, shader, FMASK_TEX_OFFSET + i,
-					    NULL, NULL);
-			continue;
-		}
-
-		si_set_sampler_view(sctx, shader, i, views[i], rviews[i]->state);
-
-		if (views[i]->texture->target != PIPE_BUFFER) {
-			struct r600_texture *rtex =
-				(struct r600_texture*)views[i]->texture;
-
-			if (rtex->is_depth && !rtex->is_flushing_texture) {
-				samplers->depth_texture_mask |= 1 << i;
-			} else {
-				samplers->depth_texture_mask &= ~(1 << i);
-			}
-			if (rtex->cmask.size || rtex->fmask.size) {
-				samplers->compressed_colortex_mask |= 1 << i;
-			} else {
-				samplers->compressed_colortex_mask &= ~(1 << i);
-			}
-
-			if (rtex->fmask.size) {
-				si_set_sampler_view(sctx, shader, FMASK_TEX_OFFSET + i,
-						    views[i], rviews[i]->fmask_state);
-			} else {
-				si_set_sampler_view(sctx, shader, FMASK_TEX_OFFSET + i,
-						    NULL, NULL);
-			}
-		}
-	}
-	for (; i < samplers->n_views; i++) {
-		samplers->depth_texture_mask &= ~(1 << i);
-		samplers->compressed_colortex_mask &= ~(1 << i);
-		si_set_sampler_view(sctx, shader, i, NULL, NULL);
-		si_set_sampler_view(sctx, shader, FMASK_TEX_OFFSET + i,
-				    NULL, NULL);
-	}
-
-	samplers->n_views = count;
-	sctx->b.flags |= R600_CONTEXT_INV_TEX_CACHE;
-}
-
-static void si_set_sampler_states(struct si_context *sctx,
-				  struct si_pm4_state *pm4,
-				  unsigned count, void **states,
-				  struct si_textures_info *samplers,
-				  unsigned user_data_reg)
+/* Upload border colors and update the pointers in resource descriptors.
+ * There can only be 4096 border colors per context.
+ *
+ * XXX: This is broken if the buffer gets reallocated.
+ */
+static void si_set_border_colors(struct si_context *sctx, unsigned count,
+				 void **states)
 {
 	struct si_pipe_sampler_state **rstates = (struct si_pipe_sampler_state **)states;
 	uint32_t *border_color_table = NULL;
 	int i, j;
 
-	if (!count)
-		goto out;
-
-	sctx->b.flags |= R600_CONTEXT_INV_TEX_CACHE;
-
-	si_pm4_sh_data_begin(pm4);
 	for (i = 0; i < count; i++) {
 		if (rstates[i] &&
 		    G_008F3C_BORDER_COLOR_TYPE(rstates[i]->val[3]) ==
@@ -2781,7 +2697,7 @@ static void si_set_sampler_states(struct si_context *sctx,
 
 				sctx->border_color_table =
 					si_resource_create_custom(&sctx->screen->b.b,
-								  PIPE_USAGE_STAGING,
+								  PIPE_USAGE_DYNAMIC,
 								  4096 * 4 * 4);
 			}
 
@@ -2801,14 +2717,11 @@ static void si_set_sampler_states(struct si_context *sctx,
 			rstates[i]->val[3] &= C_008F3C_BORDER_COLOR_PTR;
 			rstates[i]->val[3] |= S_008F3C_BORDER_COLOR_PTR(sctx->border_color_offset++);
 		}
-
-		for (j = 0; j < Elements(rstates[i]->val); ++j) {
-			si_pm4_sh_data_add(pm4, rstates[i] ? rstates[i]->val[j] : 0);
-		}
 	}
-	si_pm4_sh_data_end(pm4, user_data_reg, SI_SGPR_SAMPLER);
 
 	if (border_color_table) {
+		struct si_pm4_state *pm4 = si_pm4_alloc_state(sctx);
+
 		uint64_t va_offset =
 			r600_resource_va(&sctx->screen->b.b,
 					 (void*)sctx->border_color_table);
@@ -2816,78 +2729,24 @@ static void si_set_sampler_states(struct si_context *sctx,
 		si_pm4_set_reg(pm4, R_028080_TA_BC_BASE_ADDR, va_offset >> 8);
 		if (sctx->b.chip_class >= CIK)
 			si_pm4_set_reg(pm4, R_028084_TA_BC_BASE_ADDR_HI, va_offset >> 40);
-		sctx->b.ws->buffer_unmap(sctx->border_color_table->cs_buf);
 		si_pm4_add_bo(pm4, sctx->border_color_table, RADEON_USAGE_READ,
 			      RADEON_PRIO_SHADER_DATA);
+		si_pm4_set_state(sctx, ta_bordercolor_base, pm4);
 	}
-
-	memcpy(samplers->samplers, states, sizeof(void*) * count);
-
-out:
-	samplers->n_samplers = count;
 }
-
-static void si_bind_vs_sampler_states(struct pipe_context *ctx, unsigned count, void **states)
-{
-	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_pm4_state *pm4 = si_pm4_alloc_state(sctx);
-
-	si_set_sampler_states(sctx, pm4, count, states,
-			      &sctx->samplers[PIPE_SHADER_VERTEX],
-			      R_00B130_SPI_SHADER_USER_DATA_VS_0);
-#if LLVM_SUPPORTS_GEOM_SHADERS
-	si_set_sampler_states(sctx, pm4, count, states,
-			      &sctx->samplers[PIPE_SHADER_VERTEX],
-			      R_00B330_SPI_SHADER_USER_DATA_ES_0);
-#endif
-	si_pm4_set_state(sctx, vs_sampler, pm4);
-}
-
-static void si_bind_gs_sampler_states(struct pipe_context *ctx, unsigned count, void **states)
-{
-	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_pm4_state *pm4 = si_pm4_alloc_state(sctx);
-
-	si_set_sampler_states(sctx, pm4, count, states,
-			      &sctx->samplers[PIPE_SHADER_GEOMETRY],
-			      R_00B230_SPI_SHADER_USER_DATA_GS_0);
-	si_pm4_set_state(sctx, gs_sampler, pm4);
-}
-
-static void si_bind_ps_sampler_states(struct pipe_context *ctx, unsigned count, void **states)
-{
-	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_pm4_state *pm4 = si_pm4_alloc_state(sctx);
-
-	si_set_sampler_states(sctx, pm4, count, states,
-			      &sctx->samplers[PIPE_SHADER_FRAGMENT],
-			      R_00B030_SPI_SHADER_USER_DATA_PS_0);
-	si_pm4_set_state(sctx, ps_sampler, pm4);
-}
-
 
 static void si_bind_sampler_states(struct pipe_context *ctx, unsigned shader,
                                    unsigned start, unsigned count,
                                    void **states)
 {
-   assert(start == 0);
+	struct si_context *sctx = (struct si_context *)ctx;
 
-   switch (shader) {
-   case PIPE_SHADER_VERTEX:
-      si_bind_vs_sampler_states(ctx, count, states);
-      break;
-   case PIPE_SHADER_GEOMETRY:
-      si_bind_gs_sampler_states(ctx, count, states);
-      break;
-   case PIPE_SHADER_FRAGMENT:
-      si_bind_ps_sampler_states(ctx, count, states);
-      break;
-   default:
-      ;
-   }
+	if (!count || shader >= SI_NUM_SHADERS)
+		return;
+
+	si_set_border_colors(sctx, count, states);
+	si_set_sampler_descriptors(sctx, shader, start, count, states);
 }
-
-
 
 static void si_set_sample_mask(struct pipe_context *ctx, unsigned sample_mask)
 {
@@ -2941,6 +2800,7 @@ static void *si_create_vertex_elements(struct pipe_context *ctx,
 				   S_008F0C_DST_SEL_W(si_map_swizzle(desc->swizzle[3])) |
 				   S_008F0C_NUM_FORMAT(num_format) |
 				   S_008F0C_DATA_FORMAT(data_format);
+		v->format_size[i] = desc->block.bits / 8;
 	}
 	memcpy(v->elements, elements, sizeof(struct pipe_vertex_element) * count);
 
@@ -2953,6 +2813,7 @@ static void si_bind_vertex_elements(struct pipe_context *ctx, void *state)
 	struct si_vertex_element *v = (struct si_vertex_element*)state;
 
 	sctx->vertex_elements = v;
+	sctx->vertex_buffers_dirty = true;
 }
 
 static void si_delete_vertex_element(struct pipe_context *ctx, void *state)
@@ -2964,12 +2825,31 @@ static void si_delete_vertex_element(struct pipe_context *ctx, void *state)
 	FREE(state);
 }
 
-static void si_set_vertex_buffers(struct pipe_context *ctx, unsigned start_slot, unsigned count,
+static void si_set_vertex_buffers(struct pipe_context *ctx,
+				  unsigned start_slot, unsigned count,
 				  const struct pipe_vertex_buffer *buffers)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
+	struct pipe_vertex_buffer *dst = sctx->vertex_buffer + start_slot;
+	int i;
 
-	util_set_vertex_buffers_count(sctx->vertex_buffer, &sctx->nr_vertex_buffers, buffers, start_slot, count);
+	assert(start_slot + count <= Elements(sctx->vertex_buffer));
+
+	if (buffers) {
+		for (i = 0; i < count; i++) {
+			const struct pipe_vertex_buffer *src = buffers + i;
+			struct pipe_vertex_buffer *dsti = dst + i;
+
+			pipe_resource_reference(&dsti->buffer, src->buffer);
+			dsti->buffer_offset = src->buffer_offset;
+			dsti->stride = src->stride;
+		}
+	} else {
+		for (i = 0; i < count; i++) {
+			pipe_resource_reference(&dst[i].buffer, NULL);
+		}
+	}
+	sctx->vertex_buffers_dirty = true;
 }
 
 static void si_set_index_buffer(struct pipe_context *ctx,
@@ -3067,18 +2947,16 @@ void si_init_state_functions(struct si_context *sctx)
 	sctx->b.b.bind_fs_state = si_bind_ps_shader;
 	sctx->b.b.delete_vs_state = si_delete_vs_shader;
 	sctx->b.b.delete_fs_state = si_delete_ps_shader;
-#if LLVM_SUPPORTS_GEOM_SHADERS
+
 	sctx->b.b.create_gs_state = si_create_gs_state;
 	sctx->b.b.bind_gs_state = si_bind_gs_shader;
 	sctx->b.b.delete_gs_state = si_delete_gs_shader;
-#endif
 
 	sctx->b.b.create_sampler_state = si_create_sampler_state;
 	sctx->b.b.bind_sampler_states = si_bind_sampler_states;
 	sctx->b.b.delete_sampler_state = si_delete_sampler_state;
 
 	sctx->b.b.create_sampler_view = si_create_sampler_view;
-	sctx->b.b.set_sampler_views = si_set_sampler_views;
 	sctx->b.b.sampler_view_destroy = si_sampler_view_destroy;
 
 	sctx->b.b.set_sample_mask = si_set_sample_mask;
@@ -3227,6 +3105,7 @@ void si_init_config(struct si_context *sctx)
 		       S_02800C_FORCE_HIS_ENABLE1(V_02800C_FORCE_DISABLE));
 	si_pm4_set_reg(pm4, R_028400_VGT_MAX_VTX_INDX, ~0);
 	si_pm4_set_reg(pm4, R_028404_VGT_MIN_VTX_INDX, 0);
+	si_pm4_set_reg(pm4, R_028408_VGT_INDX_OFFSET, 0);
 
 	if (sctx->b.chip_class >= CIK) {
 		si_pm4_set_reg(pm4, R_00B118_SPI_SHADER_PGM_RSRC3_VS, S_00B118_CU_EN(0xffff));

@@ -808,10 +808,15 @@ nvc0_set_constant_buffer(struct pipe_context *pipe, uint shader, uint index,
    if (nvc0->constbuf[s][i].user) {
       nvc0->constbuf[s][i].u.data = cb->user_buffer;
       nvc0->constbuf[s][i].size = cb->buffer_size;
+      nvc0->constbuf_valid[s] |= 1 << i;
    } else
    if (cb) {
       nvc0->constbuf[s][i].offset = cb->buffer_offset;
       nvc0->constbuf[s][i].size = align(cb->buffer_size, 0x100);
+      nvc0->constbuf_valid[s] |= 1 << i;
+   }
+   else {
+      nvc0->constbuf_valid[s] &= ~(1 << i);
    }
 }
 
@@ -1022,7 +1027,7 @@ nvc0_so_target_create(struct pipe_context *pipe,
    if (!targ)
       return NULL;
 
-   targ->pq = pipe->create_query(pipe, NVC0_QUERY_TFB_BUFFER_OFFSET);
+   targ->pq = pipe->create_query(pipe, NVC0_QUERY_TFB_BUFFER_OFFSET, 0);
    if (!targ->pq) {
       FREE(targ);
       return NULL;

@@ -116,6 +116,8 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
    case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
       return 1024;
+   case PIPE_CAP_MAX_VERTEX_STREAMS:
+      return 1;
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 256;
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
@@ -191,12 +193,13 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_TGSI_TEXCOORD:
    case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
-   case PIPE_CAP_TGSI_VS_LAYER:
+   case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
    case PIPE_CAP_TEXTURE_GATHER_SM5:
    case PIPE_CAP_FAKE_SW_MSAA:
    case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
    case PIPE_CAP_COMPUTE:
+   case PIPE_CAP_DRAW_INDIRECT:
       return 0;
    }
 
@@ -229,8 +232,8 @@ nv50_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
       if (shader == PIPE_SHADER_VERTEX)
          return 32;
       return 15;
-   case PIPE_SHADER_CAP_MAX_CONSTS:
-      return 65536 / 16;
+   case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+      return 65536;
    case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
       return NV50_MAX_PIPE_CONSTBUFS;
    case PIPE_SHADER_CAP_MAX_ADDRS:
@@ -434,6 +437,8 @@ nv50_screen_init_hwctx(struct nv50_screen *screen)
    PUSH_DATA (push, NV50_3D_MULTISAMPLE_MODE_MS1);
    BEGIN_NV04(push, NV50_3D(MULTISAMPLE_CTRL), 1);
    PUSH_DATA (push, 0);
+   BEGIN_NV04(push, NV50_3D(PRIM_RESTART_WITH_DRAW_ARRAYS), 1);
+   PUSH_DATA (push, 1);
    BEGIN_NV04(push, NV50_3D(LINE_LAST_PIXEL), 1);
    PUSH_DATA (push, 0);
    BEGIN_NV04(push, NV50_3D(BLEND_SEPARATE_ALPHA), 1);

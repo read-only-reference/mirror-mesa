@@ -22,10 +22,10 @@
  */
 
 #include <stdint.h>
+#include "brw_reg.h"
 #include "brw_defines.h"
 #include "main/compiler.h"
 #include "glsl/ir.h"
-#include "intel_asm_printer.h"
 
 #pragma once
 
@@ -39,12 +39,48 @@ enum PACKED register_file {
    UNIFORM, /* prog_data->params[reg] */
 };
 
+struct backend_reg
+{
 #ifdef __cplusplus
+   bool is_zero() const;
+   bool is_one() const;
+   bool is_null() const;
+   bool is_accumulator() const;
+#endif
 
-class cfg_t;
+   enum register_file file; /**< Register file: GRF, MRF, IMM. */
+   enum brw_reg_type type;  /**< Register type: BRW_REGISTER_TYPE_* */
 
+   /**
+    * Register number.
+    *
+    * For GRF, it's a virtual register number until register allocation.
+    *
+    * For MRF, it's the hardware register.
+    */
+   uint16_t reg;
+
+   /**
+    * Offset within the virtual register.
+    *
+    * In the scalar backend, this is in units of a float per pixel for pre-
+    * register allocation registers (i.e., one register in SIMD8 mode and two
+    * registers in SIMD16 mode).
+    *
+    * For uniforms, this is in units of 1 float.
+    */
+   int reg_offset;
+
+   struct brw_reg fixed_hw_reg;
+
+   bool negate;
+   bool abs;
+};
+
+struct cfg_t;
+
+#ifdef __cplusplus
 struct backend_instruction : public exec_node {
-public:
    bool is_tex() const;
    bool is_math() const;
    bool is_control_flow() const;
@@ -59,20 +95,36 @@ public:
     * optimize these out unless you know what you are doing.
     */
    bool has_side_effects() const;
-
-   enum opcode opcode; /* BRW_OPCODE_* or FS_OPCODE_* */
-
-   uint8_t predicate;
-   bool predicate_inverse;
-   bool writes_accumulator; /**< instruction implicitly writes accumulator */
-
+#else
+struct backend_instruction {
+   struct exec_node link;
+#endif
    /** @{
     * Annotation for the generated IR.  One of the two can be set.
     */
    const void *ir;
    const char *annotation;
    /** @} */
+
+   uint32_t texture_offset; /**< Texture offset bitfield */
+   uint32_t offset; /**< spill/unspill offset */
+   uint8_t sampler;
+   uint8_t mlen; /**< SEND message length */
+   int8_t base_mrf; /**< First MRF in the SEND message, if mlen is nonzero. */
+   uint8_t target; /**< MRT target. */
+
+   enum opcode opcode; /* BRW_OPCODE_* or FS_OPCODE_* */
+   enum brw_conditional_mod conditional_mod; /**< BRW_CONDITIONAL_* */
+   enum brw_predicate predicate;
+   bool predicate_inverse:1;
+   bool writes_accumulator:1; /**< instruction implicitly writes accumulator */
+   bool force_writemask_all:1;
+   bool no_dd_clear:1;
+   bool no_dd_check:1;
+   bool saturate:1;
 };
+
+#ifdef __cplusplus
 
 enum instruction_scheduler_mode {
    SCHEDULE_PRE,
@@ -108,10 +160,17 @@ public:
     */
    exec_list instructions;
 
+   cfg_t *cfg;
+
+   gl_shader_stage stage;
+
    virtual void dump_instruction(backend_instruction *inst) = 0;
    virtual void dump_instruction(backend_instruction *inst, FILE *file) = 0;
    virtual void dump_instructions();
    virtual void dump_instructions(const char *name);
+
+   void calculate_cfg();
+   void invalidate_cfg();
 
    void assign_common_binding_table_offsets(uint32_t next_binding_table_offset);
 
@@ -120,14 +179,9 @@ public:
 
 uint32_t brw_texture_offset(struct gl_context *ctx, ir_constant *offset);
 
-void annotate(struct brw_context *brw,
-              struct annotation_info *annotation, cfg_t *cfg,
-              backend_instruction *inst, unsigned offset);
-void annotation_finalize(struct annotation_info *annotation, unsigned offset);
-
 #endif /* __cplusplus */
 
-int brw_type_for_base_type(const struct glsl_type *type);
-uint32_t brw_conditional_for_comparison(unsigned int op);
+enum brw_reg_type brw_type_for_base_type(const struct glsl_type *type);
+enum brw_conditional_mod brw_conditional_for_comparison(unsigned int op);
 uint32_t brw_math_function(enum opcode op);
 const char *brw_instruction_name(enum opcode op);

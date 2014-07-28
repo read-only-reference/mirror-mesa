@@ -968,6 +968,10 @@ XXX doesn't look like most of the opcodes really belong here.
   Also return the number of accessible levels (last_level - first_level + 1)
   in W.
 
+  For components which don't return a resource dimension, their value
+  is undefined.
+
+
 .. math::
 
   lod = src0.x
@@ -1646,14 +1650,14 @@ in any other type of shader.
 
 .. opcode:: EMIT - Emit
 
-  Generate a new vertex for the current primitive using the values in the
-  output registers.
+  Generate a new vertex for the current primitive into the specified vertex
+  stream using the values in the output registers.
 
 
 .. opcode:: ENDPRIM - End Primitive
 
-  Complete the current primitive (consisting of the emitted vertices),
-  and start a new one.
+  Complete the current primitive in the specified vertex stream (consisting of
+  the emitted vertices), and start a new one.
 
 
 GLSL ISA
@@ -1806,6 +1810,29 @@ This instruction replicates its result.
 .. math::
 
   dst = \frac{src.x}{src.x \times src.x + src.y \times src.y + src.z \times src.z + src.w \times src.w}
+
+
+Interpolation ISA
+^^^^^^^^^^^^^^^^^
+
+The interpolation instructions allow an input to be interpolated in a
+different way than its declaration. This corresponds to the GLSL 4.00
+interpolateAt* functions. The first argument of each of these must come from
+``TGSI_FILE_INPUT``.
+
+.. opcode:: INTERP_CENTROID - Interpolate at the centroid
+
+   Interpolates the varying specified by src0 at the centroid
+
+.. opcode:: INTERP_SAMPLE - Interpolate at the specified sample
+
+   Interpolates the varying specified by src0 at the sample id specified by
+   src1.x (interpreted as an integer)
+
+.. opcode:: INTERP_OFFSET - Interpolate at the specified offset
+
+   Interpolates the varying specified by src0 at the offset src1.xy from the
+   pixel center (interpreted as floats)
 
 
 .. _doubleopcodes:
@@ -2734,6 +2761,11 @@ This token is only valid for fragment shader INPUT declarations.
 
 The Interpolate field specifes the way input is being interpolated by
 the rasteriser and is one of TGSI_INTERPOLATE_*.
+
+The Location field specifies the location inside the pixel that the
+interpolation should be done at, one of ``TGSI_INTERPOLATE_LOC_*``. Note that
+when per-sample shading is enabled, the implementation may choose to
+interpolate at the sample irrespective of the Location field.
 
 The CylindricalWrap bitfield specifies which register components
 should be subject to cylindrical wrapping when interpolating by the

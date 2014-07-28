@@ -4,6 +4,14 @@
 #include "state_tracker/drm_driver.h"
 #include "target-helpers/inline_debug_helper.h"
 #include "loader.h"
+#if defined(DRI_TARGET)
+#include "dri_screen.h"
+#endif
+
+#if GALLIUM_SOFTPIPE
+#include "target-helpers/inline_sw_helper.h"
+#include "sw/kms-dri/kms_dri_sw_winsys.h"
+#endif
 
 #if GALLIUM_I915
 #include "i915/drm/i915_drm_public.h"
@@ -50,7 +58,45 @@ static char* driver_name = NULL;
 
 /* XXX: We need to teardown the winsys if *screen_create() fails. */
 
+#if defined(GALLIUM_SOFTPIPE)
+#if defined(DRI_TARGET)
+
+const __DRIextension **__driDriverGetExtensions_kms_swrast(void);
+
+PUBLIC const __DRIextension **__driDriverGetExtensions_kms_swrast(void)
+{
+   globalDriverAPI = &dri_kms_driver_api;
+   return galliumdrm_driver_extensions;
+}
+
+struct pipe_screen *
+kms_swrast_create_screen(int fd)
+{
+   struct sw_winsys *sws;
+   struct pipe_screen *screen;
+
+   sws = kms_dri_create_winsys(fd);
+   if (!sws)
+      return NULL;
+
+   screen = sw_screen_create(sws);
+   return screen ? debug_screen_wrap(screen) : NULL;
+}
+#endif
+#endif
+
 #if defined(GALLIUM_I915)
+#if defined(DRI_TARGET)
+
+const __DRIextension **__driDriverGetExtensions_i915(void);
+
+PUBLIC const __DRIextension **__driDriverGetExtensions_i915(void)
+{
+   globalDriverAPI = &galliumdrm_driver_api;
+   return galliumdrm_driver_extensions;
+}
+#endif
+
 static struct pipe_screen *
 pipe_i915_create_screen(int fd)
 {
@@ -67,6 +113,17 @@ pipe_i915_create_screen(int fd)
 #endif
 
 #if defined(GALLIUM_ILO)
+#if defined(DRI_TARGET)
+
+const __DRIextension **__driDriverGetExtensions_i965(void);
+
+PUBLIC const __DRIextension **__driDriverGetExtensions_i965(void)
+{
+   globalDriverAPI = &galliumdrm_driver_api;
+   return galliumdrm_driver_extensions;
+}
+#endif
+
 static struct pipe_screen *
 pipe_ilo_create_screen(int fd)
 {
@@ -83,6 +140,17 @@ pipe_ilo_create_screen(int fd)
 #endif
 
 #if defined(GALLIUM_NOUVEAU)
+#if defined(DRI_TARGET)
+
+const __DRIextension **__driDriverGetExtensions_nouveau(void);
+
+PUBLIC const __DRIextension **__driDriverGetExtensions_nouveau(void)
+{
+   globalDriverAPI = &galliumdrm_driver_api;
+   return galliumdrm_driver_extensions;
+}
+#endif
+
 static struct pipe_screen *
 pipe_nouveau_create_screen(int fd)
 {
@@ -94,6 +162,17 @@ pipe_nouveau_create_screen(int fd)
 #endif
 
 #if defined(GALLIUM_R300)
+#if defined(DRI_TARGET)
+
+const __DRIextension **__driDriverGetExtensions_r300(void);
+
+PUBLIC const __DRIextension **__driDriverGetExtensions_r300(void)
+{
+   globalDriverAPI = &galliumdrm_driver_api;
+   return galliumdrm_driver_extensions;
+}
+#endif
+
 static struct pipe_screen *
 pipe_r300_create_screen(int fd)
 {
@@ -105,6 +184,17 @@ pipe_r300_create_screen(int fd)
 #endif
 
 #if defined(GALLIUM_R600)
+#if defined(DRI_TARGET)
+
+const __DRIextension **__driDriverGetExtensions_r600(void);
+
+PUBLIC const __DRIextension **__driDriverGetExtensions_r600(void)
+{
+   globalDriverAPI = &galliumdrm_driver_api;
+   return galliumdrm_driver_extensions;
+}
+#endif
+
 static struct pipe_screen *
 pipe_r600_create_screen(int fd)
 {
@@ -116,6 +206,17 @@ pipe_r600_create_screen(int fd)
 #endif
 
 #if defined(GALLIUM_RADEONSI)
+#if defined(DRI_TARGET)
+
+const __DRIextension **__driDriverGetExtensions_radeonsi(void);
+
+PUBLIC const __DRIextension **__driDriverGetExtensions_radeonsi(void)
+{
+   globalDriverAPI = &galliumdrm_driver_api;
+   return galliumdrm_driver_extensions;
+}
+#endif
+
 static struct pipe_screen *
 pipe_radeonsi_create_screen(int fd)
 {
@@ -127,6 +228,17 @@ pipe_radeonsi_create_screen(int fd)
 #endif
 
 #if defined(GALLIUM_VMWGFX)
+#if defined(DRI_TARGET)
+
+const __DRIextension **__driDriverGetExtensions_vmwgfx(void);
+
+PUBLIC const __DRIextension **__driDriverGetExtensions_vmwgfx(void)
+{
+   globalDriverAPI = &galliumdrm_driver_api;
+   return galliumdrm_driver_extensions;
+}
+#endif
+
 static struct pipe_screen *
 pipe_vmwgfx_create_screen(int fd)
 {
@@ -143,6 +255,25 @@ pipe_vmwgfx_create_screen(int fd)
 #endif
 
 #if defined(GALLIUM_FREEDRENO)
+#if defined(DRI_TARGET)
+
+const __DRIextension **__driDriverGetExtensions_msm(void);
+
+PUBLIC const __DRIextension **__driDriverGetExtensions_msm(void)
+{
+   globalDriverAPI = &galliumdrm_driver_api;
+   return galliumdrm_driver_extensions;
+}
+
+const __DRIextension **__driDriverGetExtensions_kgsl(void);
+
+PUBLIC const __DRIextension **__driDriverGetExtensions_kgsl(void)
+{
+   globalDriverAPI = &galliumdrm_driver_api;
+   return galliumdrm_driver_extensions;
+}
+#endif
+
 static struct pipe_screen *
 pipe_freedreno_create_screen(int fd)
 {
@@ -210,13 +341,13 @@ dd_driver_name(void)
 }
 
 static const struct drm_conf_ret throttle_ret = {
-   .type = DRM_CONF_INT,
-   .val.val_int = 2,
+   DRM_CONF_INT,
+   {2},
 };
 
 static const struct drm_conf_ret share_fd_ret = {
-   .type = DRM_CONF_BOOL,
-   .val.val_int = true,
+   DRM_CONF_BOOL,
+   {true},
 };
 
 static const struct drm_conf_ret *

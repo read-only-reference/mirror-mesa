@@ -493,6 +493,7 @@ nvc0_program_create_tfb_state(const struct nv50_ir_prog_info *info,
             info->out[pso->output[i].register_index].slot[s + c];
 
       tfb->varying_count[b] = MAX2(tfb->varying_count[b], p);
+      tfb->stream[b] = pso->output[i].stream;
    }
    for (b = 0; b < 4; ++b) // zero unused indices (looks nicer)
       for (c = tfb->varying_count[b]; c & 3; ++c)
@@ -628,7 +629,7 @@ nvc0_program_translate(struct nvc0_program *prog, uint16_t chipset)
    if (info->bin.tlsSpace) {
       assert(info->bin.tlsSpace < (1 << 24));
       prog->hdr[0] |= 1 << 26;
-      prog->hdr[1] |= info->bin.tlsSpace; /* l[] size */
+      prog->hdr[1] |= align(info->bin.tlsSpace, 0x10); /* l[] size */
       prog->need_tls = TRUE;
    }
    /* TODO: factor 2 only needed where joinat/precont is used,
@@ -642,6 +643,8 @@ nvc0_program_translate(struct nvc0_program *prog, uint16_t chipset)
    */
    if (info->io.globalAccess)
       prog->hdr[0] |= 1 << 16;
+   if (info->io.fp64)
+      prog->hdr[0] |= 1 << 27;
 
    if (prog->pipe.stream_output.num_outputs)
       prog->tfb = nvc0_program_create_tfb_state(info,

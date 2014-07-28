@@ -314,7 +314,7 @@ brw_set_src0(struct brw_compile *p, brw_inst *inst, struct brw_reg reg)
 {
    struct brw_context *brw = p->brw;
 
-   if (reg.type != BRW_ARCHITECTURE_REGISTER_FILE)
+   if (reg.file != BRW_ARCHITECTURE_REGISTER_FILE)
       assert(reg.nr < 128);
 
    gen7_convert_mrf_to_grf(p, &reg);
@@ -455,7 +455,7 @@ brw_set_src1(struct brw_compile *p, brw_inst *inst, struct brw_reg reg)
    const struct brw_context *brw = p->brw;
    assert(reg.file != BRW_MESSAGE_REGISTER_FILE);
 
-   if (reg.type != BRW_ARCHITECTURE_REGISTER_FILE)
+   if (reg.file != BRW_ARCHITECTURE_REGISTER_FILE)
       assert(reg.nr < 128);
 
    gen7_convert_mrf_to_grf(p, &reg);
@@ -1070,7 +1070,7 @@ brw_AVG(struct brw_compile *p, struct brw_reg dest,
    case BRW_REGISTER_TYPE_UD:
       break;
    default:
-      assert(!"Bad type for brw_AVG");
+      unreachable("Bad type for brw_AVG");
    }
 
    return brw_alu2(p, BRW_OPCODE_AVG, dest, src0, src1);
@@ -1241,7 +1241,7 @@ brw_IF(struct brw_compile *p, unsigned execute_size)
  * embedded comparison (conditional modifier).  It is not used on gen7.
  */
 brw_inst *
-gen6_IF(struct brw_compile *p, uint32_t conditional,
+gen6_IF(struct brw_compile *p, enum brw_conditional_mod conditional,
 	struct brw_reg src0, struct brw_reg src1)
 {
    const struct brw_context *brw = p->brw;
@@ -2631,6 +2631,34 @@ brw_untyped_surface_read(struct brw_compile *p,
    brw_set_dp_untyped_surface_read_message(
       p, insn, bind_table_index, msg_length, response_length,
       brw_inst_access_mode(brw, insn) == BRW_ALIGN_1);
+}
+
+void
+brw_pixel_interpolator_query(struct brw_compile *p,
+                             struct brw_reg dest,
+                             struct brw_reg mrf,
+                             bool noperspective,
+                             unsigned mode,
+                             unsigned data,
+                             unsigned msg_length,
+                             unsigned response_length)
+{
+   const struct brw_context *brw = p->brw;
+   struct brw_inst *insn = next_insn(p, BRW_OPCODE_SEND);
+
+   brw_set_dest(p, insn, dest);
+   brw_set_src0(p, insn, mrf);
+   brw_set_message_descriptor(p, insn, GEN7_SFID_PIXEL_INTERPOLATOR,
+                              msg_length, response_length,
+                              false /* header is never present for PI */,
+                              false);
+
+   brw_inst_set_pi_simd_mode(
+         brw, insn, brw_inst_exec_size(brw, insn) == BRW_EXECUTE_16);
+   brw_inst_set_pi_slot_group(brw, insn, 0); /* zero unless 32/64px dispatch */
+   brw_inst_set_pi_nopersp(brw, insn, noperspective);
+   brw_inst_set_pi_message_type(brw, insn, mode);
+   brw_inst_set_pi_message_data(brw, insn, data);
 }
 
 /**

@@ -262,6 +262,10 @@ st_prepare_vertex_program(struct gl_context *ctx,
             stvp->output_semantic_name[slot] = TGSI_SEMANTIC_LAYER;
             stvp->output_semantic_index[slot] = 0;
             break;
+         case VARYING_SLOT_VIEWPORT:
+            stvp->output_semantic_name[slot] = TGSI_SEMANTIC_VIEWPORT_INDEX;
+            stvp->output_semantic_index[slot] = 0;
+            break;
 
          case VARYING_SLOT_TEX0:
          case VARYING_SLOT_TEX1:
@@ -347,7 +351,7 @@ st_translate_vertex_program(struct st_context *st,
                                    NULL, /* input semantic name */
                                    NULL, /* input semantic index */
                                    NULL, /* interp mode */
-                                   NULL, /* is centroid */
+                                   NULL, /* interp location */
                                    /* outputs */
                                    num_outputs,
                                    stvp->result_to_output,
@@ -477,6 +481,7 @@ st_translate_fragment_program(struct st_context *st,
    GLuint outputMapping[FRAG_RESULT_MAX];
    GLuint inputMapping[VARYING_SLOT_MAX];
    GLuint interpMode[PIPE_MAX_SHADER_INPUTS];  /* XXX size? */
+   GLuint interpLocation[PIPE_MAX_SHADER_INPUTS];
    GLuint attr;
    GLbitfield64 inputsRead;
    struct ureg_program *ureg;
@@ -485,7 +490,6 @@ st_translate_fragment_program(struct st_context *st,
 
    ubyte input_semantic_name[PIPE_MAX_SHADER_INPUTS];
    ubyte input_semantic_index[PIPE_MAX_SHADER_INPUTS];
-   GLboolean is_centroid[PIPE_MAX_SHADER_INPUTS];
    uint fs_num_inputs = 0;
 
    ubyte fs_output_semantic_name[PIPE_MAX_SHADER_OUTPUTS];
@@ -537,7 +541,15 @@ st_translate_fragment_program(struct st_context *st,
          const GLuint slot = fs_num_inputs++;
 
          inputMapping[attr] = slot;
-         is_centroid[slot] = (stfp->Base.IsCentroid & BITFIELD64_BIT(attr)) != 0;
+         if (stfp->Base.IsCentroid & BITFIELD64_BIT(attr))
+            interpLocation[slot] = TGSI_INTERPOLATE_LOC_CENTROID;
+         else if (stfp->Base.IsSample & BITFIELD64_BIT(attr))
+            interpLocation[slot] = TGSI_INTERPOLATE_LOC_SAMPLE;
+         else
+            interpLocation[slot] = TGSI_INTERPOLATE_LOC_CENTER;
+
+         if (key->persample_shading)
+            interpLocation[slot] = TGSI_INTERPOLATE_LOC_SAMPLE;
 
          switch (attr) {
          case VARYING_SLOT_POS:
@@ -764,7 +776,7 @@ st_translate_fragment_program(struct st_context *st,
                            input_semantic_name,
                            input_semantic_index,
                            interpMode,
-                           is_centroid,
+                           interpLocation,
                            /* outputs */
                            fs_num_outputs,
                            outputMapping,

@@ -87,7 +87,7 @@ static void
 emit_constants(struct fd_ringbuffer *ring,
 		enum adreno_state_block sb,
 		struct fd_constbuf_stateobj *constbuf,
-		struct fd3_shader_variant *shader)
+		struct ir3_shader_variant *shader)
 {
 	uint32_t enabled_mask = constbuf->enabled_mask;
 	uint32_t first_immediate;
@@ -291,7 +291,7 @@ fd3_emit_gmem_restore_tex(struct fd_ringbuffer *ring, struct pipe_surface *psurf
 
 void
 fd3_emit_vertex_bufs(struct fd_ringbuffer *ring,
-		struct fd3_shader_variant *vp,
+		struct ir3_shader_variant *vp,
 		struct fd3_vertex_buf *vbufs, uint32_t n)
 {
 	uint32_t i, j, last = 0;
@@ -350,10 +350,10 @@ fd3_emit_vertex_bufs(struct fd_ringbuffer *ring,
 void
 fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		struct fd_program_stateobj *prog, uint32_t dirty,
-		struct fd3_shader_key key)
+		struct ir3_shader_key key)
 {
-	struct fd3_shader_variant *vp;
-	struct fd3_shader_variant *fp;
+	struct ir3_shader_variant *vp;
+	struct ir3_shader_variant *fp;
 
 	fp = fd3_shader_variant(prog->fp, key);
 	vp = fd3_shader_variant(prog->vp, key);
@@ -486,9 +486,15 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		fd3_program_emit(ring, prog, key);
 	}
 
+	/* TODO we should not need this or fd_wfi() before emit_constants():
+	 */
+	OUT_PKT3(ring, CP_EVENT_WRITE, 1);
+	OUT_RING(ring, HLSQ_FLUSH);
+
 	if ((dirty & (FD_DIRTY_PROG | FD_DIRTY_CONSTBUF)) &&
 			/* evil hack to deal sanely with clear path: */
 			(prog == &ctx->prog)) {
+		fd_wfi(ctx, ring);
 		emit_constants(ring,  SB_VERT_SHADER,
 				&ctx->constbuf[PIPE_SHADER_VERTEX],
 				(prog->dirty & FD_SHADER_DIRTY_VP) ? vp : NULL);
@@ -525,6 +531,8 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 				A3XX_RB_BLEND_ALPHA_FLOAT(bcolor->color[3]));
 	}
 
+	if (dirty & (FD_DIRTY_VERTTEX | FD_DIRTY_FRAGTEX))
+		fd_wfi(ctx, ring);
 
 	if (dirty & FD_DIRTY_VERTTEX) {
 		if (vp->has_samp)
@@ -673,12 +681,13 @@ fd3_emit_restore(struct fd_context *ctx)
 
 	fd_event_write(ctx, ring, CACHE_FLUSH);
 
-	/* probably only really needed on a320: */
-	OUT_PKT3(ring, CP_DRAW_INDX, 3);
-	OUT_RING(ring, 0x00000000);
-	OUT_RING(ring, DRAW(1, DI_SRC_SEL_AUTO_INDEX,
-			INDEX_SIZE_IGN, IGNORE_VISIBILITY));
-	OUT_RING(ring, 0);					/* NumIndices */
+	if (is_a3xx_p0(ctx->screen)) {
+		OUT_PKT3(ring, CP_DRAW_INDX, 3);
+		OUT_RING(ring, 0x00000000);
+		OUT_RING(ring, DRAW(1, DI_SRC_SEL_AUTO_INDEX,
+				INDEX_SIZE_IGN, IGNORE_VISIBILITY));
+		OUT_RING(ring, 0);					/* NumIndices */
+	}
 
 	OUT_PKT3(ring, CP_NOP, 4);
 	OUT_RING(ring, 0x00000000);

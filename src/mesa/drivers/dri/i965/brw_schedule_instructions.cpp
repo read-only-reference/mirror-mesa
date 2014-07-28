@@ -742,12 +742,11 @@ fs_instruction_scheduler::is_compressed(fs_inst *inst)
 void
 fs_instruction_scheduler::calculate_deps()
 {
-   /* Pre-register-allocation, this tracks the last write per VGRF (so
-    * different reg_offsets within it can interfere when they shouldn't).
+   /* Pre-register-allocation, this tracks the last write per VGRF offset.
     * After register allocation, reg_offsets are gone and we track individual
     * GRF registers.
     */
-   schedule_node *last_grf_write[grf_count];
+   schedule_node *last_grf_write[grf_count * 16];
    schedule_node *last_mrf_write[BRW_MAX_MRF];
    schedule_node *last_conditional_mod[2] = { NULL, NULL };
    schedule_node *last_accumulator_write = NULL;
@@ -772,8 +771,7 @@ fs_instruction_scheduler::calculate_deps()
    memset(last_mrf_write, 0, sizeof(last_mrf_write));
 
    /* top-to-bottom dependencies: RAW and WAW. */
-   foreach_list(node, &instructions) {
-      schedule_node *n = (schedule_node *)node;
+   foreach_in_list(schedule_node, n, &instructions) {
       fs_inst *inst = (fs_inst *)n->inst;
 
       if (inst->opcode == FS_OPCODE_PLACEHOLDER_HALT ||
@@ -787,7 +785,9 @@ fs_instruction_scheduler::calculate_deps()
                for (int r = 0; r < reg_width * inst->regs_read(v, i); r++)
                   add_dep(last_grf_write[inst->src[i].reg + r], n);
             } else {
-               add_dep(last_grf_write[inst->src[i].reg], n);
+               for (int r = 0; r < inst->regs_read(v, i); r++) {
+                  add_dep(last_grf_write[inst->src[i].reg * 16 + inst->src[i].reg_offset + r], n);
+               }
             }
 	 } else if (inst->src[i].file == HW_REG &&
 		    (inst->src[i].fixed_hw_reg.file ==
@@ -839,8 +839,10 @@ fs_instruction_scheduler::calculate_deps()
                last_grf_write[inst->dst.reg + r] = n;
             }
          } else {
-            add_dep(last_grf_write[inst->dst.reg], n);
-            last_grf_write[inst->dst.reg] = n;
+            for (int r = 0; r < inst->regs_written; r++) {
+               add_dep(last_grf_write[inst->dst.reg * 16 + inst->dst.reg_offset + r], n);
+               last_grf_write[inst->dst.reg * 16 + inst->dst.reg_offset + r] = n;
+            }
          }
       } else if (inst->dst.file == MRF) {
 	 int reg = inst->dst.reg & ~BRW_MRF_COMPR4;
@@ -911,7 +913,9 @@ fs_instruction_scheduler::calculate_deps()
                for (int r = 0; r < reg_width * inst->regs_read(v, i); r++)
                   add_dep(n, last_grf_write[inst->src[i].reg + r]);
             } else {
-               add_dep(n, last_grf_write[inst->src[i].reg]);
+               for (int r = 0; r < inst->regs_read(v, i); r++) {
+                  add_dep(n, last_grf_write[inst->src[i].reg * 16 + inst->src[i].reg_offset + r]);
+               }
             }
 	 } else if (inst->src[i].file == HW_REG &&
 		    (inst->src[i].fixed_hw_reg.file ==
@@ -963,7 +967,9 @@ fs_instruction_scheduler::calculate_deps()
             for (int r = 0; r < inst->regs_written * reg_width; r++)
                last_grf_write[inst->dst.reg + r] = n;
          } else {
-            last_grf_write[inst->dst.reg] = n;
+            for (int r = 0; r < inst->regs_written; r++) {
+               last_grf_write[inst->dst.reg * 16 + inst->dst.reg_offset + r] = n;
+            }
          }
       } else if (inst->dst.file == MRF) {
 	 int reg = inst->dst.reg & ~BRW_MRF_COMPR4;
@@ -1035,8 +1041,7 @@ vec4_instruction_scheduler::calculate_deps()
    memset(last_mrf_write, 0, sizeof(last_mrf_write));
 
    /* top-to-bottom dependencies: RAW and WAW. */
-   foreach_list(node, &instructions) {
-      schedule_node *n = (schedule_node *)node;
+   foreach_in_list(schedule_node, n, &instructions) {
       vec4_instruction *inst = (vec4_instruction *)n->inst;
 
       if (inst->has_side_effects())
@@ -1215,9 +1220,7 @@ fs_instruction_scheduler::choose_instruction_to_schedule()
       /* Of the instructions ready to execute or the closest to
        * being ready, choose the oldest one.
        */
-      foreach_list(node, &instructions) {
-         schedule_node *n = (schedule_node *)node;
-
+      foreach_in_list(schedule_node, n, &instructions) {
          if (!chosen || n->unblocked_time < chosen_time) {
             chosen = n;
             chosen_time = n->unblocked_time;
@@ -1230,8 +1233,7 @@ fs_instruction_scheduler::choose_instruction_to_schedule()
        * shaders which naturally do a better job of hiding instruction
        * latency.
        */
-      foreach_list(node, &instructions) {
-         schedule_node *n = (schedule_node *)node;
+      foreach_in_list(schedule_node, n, &instructions) {
          fs_inst *inst = (fs_inst *)n->inst;
 
          if (!chosen) {
@@ -1325,9 +1327,7 @@ vec4_instruction_scheduler::choose_instruction_to_schedule()
    /* Of the instructions ready to execute or the closest to being ready,
     * choose the oldest one.
     */
-   foreach_list(node, &instructions) {
-      schedule_node *n = (schedule_node *)node;
-
+   foreach_in_list(schedule_node, n, &instructions) {
       if (!chosen || n->unblocked_time < chosen_time) {
          chosen = n;
          chosen_time = n->unblocked_time;
@@ -1356,11 +1356,11 @@ vec4_instruction_scheduler::issue_time(backend_instruction *inst)
 void
 instruction_scheduler::schedule_instructions(backend_instruction *next_block_header)
 {
+   struct brw_context *brw = bv->brw;
    time = 0;
 
    /* Remove non-DAG heads from the list. */
-   foreach_list_safe(node, &instructions) {
-      schedule_node *n = (schedule_node *)node;
+   foreach_in_list_safe(schedule_node, n, &instructions) {
       if (n->parent_count != 0)
 	 n->remove();
    }
@@ -1425,10 +1425,8 @@ instruction_scheduler::schedule_instructions(backend_instruction *next_block_hea
        * the next math instruction isn't going to make progress until the first
        * is done.
        */
-      if (chosen->inst->is_math()) {
-	 foreach_list(node, &instructions) {
-	    schedule_node *n = (schedule_node *)node;
-
+      if (brw->gen < 6 && chosen->inst->is_math()) {
+         foreach_in_list(schedule_node, n, &instructions) {
 	    if (n->inst->is_math())
 	       n->unblocked_time = MAX2(n->unblocked_time,
 					time + chosen->latency);
@@ -1455,7 +1453,7 @@ instruction_scheduler::run(exec_list *all_instructions)
     * scheduling.
     */
    if (remaining_grf_uses) {
-      foreach_list(node, all_instructions) {
+      foreach_in_list(schedule_node, node, all_instructions) {
          count_remaining_grf_uses((backend_instruction *)node);
       }
    }
@@ -1472,8 +1470,7 @@ instruction_scheduler::run(exec_list *all_instructions)
       }
       calculate_deps();
 
-      foreach_list(node, &instructions) {
-         schedule_node *n = (schedule_node *)node;
+      foreach_in_list(schedule_node, n, &instructions) {
          compute_delay(n);
       }
 

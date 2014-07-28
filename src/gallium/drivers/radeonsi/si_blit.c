@@ -71,12 +71,10 @@ static void si_blitter_begin(struct pipe_context *ctx, enum si_blitter_op op)
 
 	if (op & SI_SAVE_TEXTURES) {
 		util_blitter_save_fragment_sampler_states(
-			sctx->blitter, sctx->samplers[PIPE_SHADER_FRAGMENT].n_samplers,
-			(void**)sctx->samplers[PIPE_SHADER_FRAGMENT].samplers);
+			sctx->blitter, 2,
+			sctx->samplers[PIPE_SHADER_FRAGMENT].states.saved_states);
 
-		util_blitter_save_fragment_sampler_views(sctx->blitter,
-			util_last_bit(sctx->samplers[PIPE_SHADER_FRAGMENT].views.desc.enabled_mask &
-				      ((1 << NUM_TEX_UNITS) - 1)),
+		util_blitter_save_fragment_sampler_views(sctx->blitter, 2,
 			sctx->samplers[PIPE_SHADER_FRAGMENT].views.views);
 	}
 
@@ -227,17 +225,19 @@ void si_flush_depth_textures(struct si_context *sctx,
 			     struct si_textures_info *textures)
 {
 	unsigned i;
+	unsigned mask = textures->depth_texture_mask;
 
-	for (i = 0; i < textures->n_views; ++i) {
+	while (mask) {
 		struct pipe_sampler_view *view;
 		struct r600_texture *tex;
 
+		i = u_bit_scan(&mask);
+
 		view = textures->views.views[i];
-		if (!view) continue;
+		assert(view);
 
 		tex = (struct r600_texture *)view->texture;
-		if (!tex->is_depth || tex->is_flushing_texture)
-			continue;
+		assert(tex->is_depth && !tex->is_flushing_texture);
 
 		si_blit_decompress_depth_in_place(sctx, tex,
 						  view->u.tex.first_level, view->u.tex.last_level,
@@ -753,7 +753,7 @@ static void si_flush_resource(struct pipe_context *ctx,
 
 	if (!rtex->is_depth && rtex->cmask.size) {
 		si_blit_decompress_color(ctx, rtex, 0, res->last_level,
-					 0, res->array_size - 1);
+					 0, util_max_layer(res, 0));
 	}
 }
 

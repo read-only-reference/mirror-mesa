@@ -142,7 +142,13 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	rctx->ws = rscreen->ws;
 	rctx->family = rscreen->family;
 	rctx->chip_class = rscreen->chip_class;
-	rctx->max_db = rscreen->chip_class >= EVERGREEN ? 8 : 4;
+
+	if (rscreen->family == CHIP_HAWAII)
+		rctx->max_db = 16;
+	else if (rscreen->chip_class >= EVERGREEN)
+		rctx->max_db = 8;
+	else
+		rctx->max_db = 4;
 
 	rctx->b.transfer_map = u_transfer_map_vtbl;
 	rctx->b.transfer_flush_region = u_default_transfer_flush_region;
@@ -233,8 +239,6 @@ static const struct debug_named_value common_debug_options[] = {
 	{ "vm", DBG_VM, "Print virtual addresses when creating resources" },
 	{ "trace_cs", DBG_TRACE_CS, "Trace cs and write rlockup_<csid>.c file with faulty cs" },
 
-	/* features */
-	{ "nodma", DBG_NO_ASYNC_DMA, "Disable asynchronous DMA" },
 
 	/* shaders */
 	{ "fs", DBG_FS, "Print fetch shaders" },
@@ -243,9 +247,13 @@ static const struct debug_named_value common_debug_options[] = {
 	{ "ps", DBG_PS, "Print pixel shaders" },
 	{ "cs", DBG_CS, "Print compute shaders" },
 
+	/* features */
+	{ "nodma", DBG_NO_ASYNC_DMA, "Disable asynchronous DMA" },
 	{ "hyperz", DBG_HYPERZ, "Enable Hyper-Z" },
 	/* GL uses the word INVALIDATE, gallium uses the word DISCARD */
 	{ "noinvalrange", DBG_NO_DISCARD_RANGE, "Disable handling of INVALIDATE_RANGE map flags" },
+	{ "no2d", DBG_NO_2D_TILING, "Disable 2D tiling" },
+	{ "notiling", DBG_NO_TILING, "Disable tiling" },
 
 	DEBUG_NAMED_VALUE_END /* must be last */
 };
@@ -401,12 +409,6 @@ const char *r600_get_llvm_processor_name(enum radeon_family family)
 	case CHIP_PITCAIRN: return "pitcairn";
 	case CHIP_VERDE: return "verde";
 	case CHIP_OLAND: return "oland";
-#if HAVE_LLVM <= 0x0303
-	default:
-		fprintf(stderr, "%s: Unknown chipset = %i, defaulting to Southern Islands\n",
-			__func__, family);
-		return "SI";
-#else
 	case CHIP_HAINAN: return "hainan";
 	case CHIP_BONAIRE: return "bonaire";
 	case CHIP_KABINI: return "kabini";
@@ -419,7 +421,6 @@ const char *r600_get_llvm_processor_name(enum radeon_family family)
 		return "kabini";
 #endif
 	default: return "";
-#endif
 	}
 }
 
@@ -524,6 +525,13 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 		if (ret) {
 			uint32_t *max_compute_units = ret;
 			*max_compute_units = MAX2(rscreen->info.max_compute_units, 1);
+		}
+		return sizeof(uint32_t);
+
+	case PIPE_COMPUTE_CAP_IMAGES_SUPPORTED:
+		if (ret) {
+			uint32_t *images_supported = ret;
+			*images_supported = 0;
 		}
 		return sizeof(uint32_t);
 	}

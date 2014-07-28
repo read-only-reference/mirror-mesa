@@ -1640,6 +1640,17 @@ struct gl_vertex_array_object
 };
 
 
+/** Used to signal when transitioning from one kind of drawing method
+ * to another.
+ */
+typedef enum {
+   DRAW_NONE,          /**< Initial value only */
+   DRAW_BEGIN_END,
+   DRAW_DISPLAY_LIST,
+   DRAW_ARRAYS
+} gl_draw_method;
+
+
 /**
  * Vertex array state
  */
@@ -1679,6 +1690,9 @@ struct gl_array_attrib
     * The array pointer is set up only by the VBO module.
     */
    const struct gl_client_array **_DrawArrays; /**< 0..VERT_ATTRIB_MAX-1 */
+
+   /** One of the DRAW_xxx flags, not consumed by drivers */
+   gl_draw_method DrawMethod;
 };
 
 
@@ -2560,7 +2574,7 @@ struct gl_uniform_block
    GLuint Binding;
 
    /**
-    * Minimum size of a buffer object to back this uniform buffer
+    * Minimum size (in bytes) of a buffer object to back this uniform buffer
     * (GL_UNIFORM_BLOCK_DATA_SIZE).
     */
    GLuint UniformBufferSize;
@@ -3349,6 +3363,11 @@ struct gl_constants
    GLuint ForceGLSLVersion;
 
    /**
+    * Allow GLSL #extension directives in the middle of shaders.
+    */
+   GLboolean AllowGLSLExtensionDirectiveMidShader;
+
+   /**
     * Does the driver support real 32-bit integers?  (Otherwise, integers are
     * simulated via floats.)
     */
@@ -3508,6 +3527,7 @@ struct gl_extensions
    GLboolean ARB_base_instance;
    GLboolean ARB_blend_func_extended;
    GLboolean ARB_buffer_storage;
+   GLboolean ARB_clear_texture;
    GLboolean ARB_color_buffer_float;
    GLboolean ARB_compute_shader;
    GLboolean ARB_conservative_depth;
@@ -3616,6 +3636,7 @@ struct gl_extensions
    GLboolean AMD_performance_monitor;
    GLboolean AMD_seamless_cubemap_per_texture;
    GLboolean AMD_vertex_shader_layer;
+   GLboolean AMD_vertex_shader_viewport_index;
    GLboolean APPLE_object_purgeable;
    GLboolean ATI_texture_compression_3dc;
    GLboolean ATI_texture_mirror_once;

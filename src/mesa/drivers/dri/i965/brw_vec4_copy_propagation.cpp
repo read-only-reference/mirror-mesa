@@ -92,18 +92,18 @@ try_constant_propagate(struct brw_context *brw, vec4_instruction *inst,
 
    if (inst->src[arg].abs) {
       if (value.type == BRW_REGISTER_TYPE_F) {
-	 value.imm.f = fabs(value.imm.f);
+	 value.fixed_hw_reg.dw1.f = fabs(value.fixed_hw_reg.dw1.f);
       } else if (value.type == BRW_REGISTER_TYPE_D) {
-	 if (value.imm.i < 0)
-	    value.imm.i = -value.imm.i;
+	 if (value.fixed_hw_reg.dw1.d < 0)
+	    value.fixed_hw_reg.dw1.d = -value.fixed_hw_reg.dw1.d;
       }
    }
 
    if (inst->src[arg].negate) {
       if (value.type == BRW_REGISTER_TYPE_F)
-	 value.imm.f = -value.imm.f;
+	 value.fixed_hw_reg.dw1.f = -value.fixed_hw_reg.dw1.f;
       else
-	 value.imm.u = -value.imm.u;
+	 value.fixed_hw_reg.dw1.ud = -value.fixed_hw_reg.dw1.ud;
    }
 
    switch (inst->opcode) {
@@ -162,7 +162,7 @@ try_constant_propagate(struct brw_context *brw, vec4_instruction *inst,
 	 inst->src[arg] = value;
 	 return true;
       } else if (arg == 0 && inst->src[1].file != IMM) {
-	 uint32_t new_cmod;
+	 enum brw_conditional_mod new_cmod;
 
 	 new_cmod = brw_swap_cmod(inst->conditional_mod);
 	 if (new_cmod != ~0u) {
@@ -249,12 +249,9 @@ try_copy_propagate(struct brw_context *brw, vec4_instruction *inst,
        value.file != ATTR)
       return false;
 
-   if (brw->gen >= 8) {
-      if (value.negate) {
-         if (is_logic_op(inst->opcode)) {
-            return false;
-         }
-      }
+   if (brw->gen >= 8 && (value.negate || value.abs) &&
+       is_logic_op(inst->opcode)) {
+      return false;
    }
 
    if (inst->src[arg].abs) {
@@ -312,9 +309,7 @@ vec4_visitor::opt_copy_propagation()
 
    memset(&cur_value, 0, sizeof(cur_value));
 
-   foreach_list(node, &this->instructions) {
-      vec4_instruction *inst = (vec4_instruction *)node;
-
+   foreach_in_list(vec4_instruction, inst, &instructions) {
       /* This pass only works on basic blocks.  If there's flow
        * control, throw out all our information and start from
        * scratch.

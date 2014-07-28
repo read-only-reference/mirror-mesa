@@ -103,7 +103,7 @@ is_expression(const fs_inst *const inst)
    case SHADER_OPCODE_LOAD_PAYLOAD:
       return !is_copy_payload(inst);
    default:
-      return inst->is_tex();
+      return inst->is_send_from_grf();
    }
 }
 
@@ -166,27 +166,22 @@ instructions_match(fs_inst *a, fs_inst *b)
 }
 
 bool
-fs_visitor::opt_cse_local(bblock_t *block, exec_list *aeb)
+fs_visitor::opt_cse_local(bblock_t *block)
 {
    bool progress = false;
+   exec_list aeb;
 
    void *cse_ctx = ralloc_context(NULL);
 
    int ip = block->start_ip;
-   for (fs_inst *inst = (fs_inst *)block->start;
-        inst != block->end->next;
-        inst = (fs_inst *) inst->next) {
-
+   foreach_inst_in_block(fs_inst, inst, block) {
       /* Skip some cases. */
       if (is_expression(inst) && !inst->is_partial_write() &&
           (inst->dst.file != HW_REG || inst->dst.is_null()))
       {
          bool found = false;
 
-         aeb_entry *entry;
-         foreach_list(entry_node, aeb) {
-            entry = (aeb_entry *) entry_node;
-
+         foreach_in_list_use_after(aeb_entry, entry, &aeb) {
             /* Match current instruction's expression against those in AEB. */
             if (instructions_match(inst, entry->generator)) {
                found = true;
@@ -200,7 +195,7 @@ fs_visitor::opt_cse_local(bblock_t *block, exec_list *aeb)
             aeb_entry *entry = ralloc(cse_ctx, aeb_entry);
             entry->tmp = reg_undef;
             entry->generator = inst;
-            aeb->push_tail(entry);
+            aeb.push_tail(entry);
          } else {
             /* This is at least our second sighting of this expression.
              * If we don't have a temporary already, make one.
@@ -270,9 +265,7 @@ fs_visitor::opt_cse_local(bblock_t *block, exec_list *aeb)
          }
       }
 
-      foreach_list_safe(entry_node, aeb) {
-         aeb_entry *entry = (aeb_entry *)entry_node;
-
+      foreach_in_list_safe(aeb_entry, entry, &aeb) {
          /* Kill all AEB entries that write a different value to or read from
           * the flag register if we just wrote it.
           */
@@ -314,9 +307,6 @@ fs_visitor::opt_cse_local(bblock_t *block, exec_list *aeb)
 
    ralloc_free(cse_ctx);
 
-   if (progress)
-      invalidate_live_intervals();
-
    return progress;
 }
 
@@ -327,14 +317,14 @@ fs_visitor::opt_cse()
 
    calculate_live_intervals();
 
-   cfg_t cfg(&instructions);
+   for (int b = 0; b < cfg->num_blocks; b++) {
+      bblock_t *block = cfg->blocks[b];
 
-   for (int b = 0; b < cfg.num_blocks; b++) {
-      bblock_t *block = cfg.blocks[b];
-      exec_list aeb;
-
-      progress = opt_cse_local(block, &aeb) || progress;
+      progress = opt_cse_local(block) || progress;
    }
+
+   if (progress)
+      invalidate_live_intervals();
 
    return progress;
 }

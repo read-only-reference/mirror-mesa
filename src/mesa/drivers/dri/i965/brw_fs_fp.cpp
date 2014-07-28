@@ -57,7 +57,7 @@ void
 fs_visitor::emit_fp_minmax(const prog_instruction *fpi,
                            fs_reg dst, fs_reg src0, fs_reg src1)
 {
-   uint32_t conditionalmod;
+   enum brw_conditional_mod conditionalmod;
    if (fpi->Opcode == OPCODE_MIN)
       conditionalmod = BRW_CONDITIONAL_L;
    else
@@ -72,7 +72,7 @@ fs_visitor::emit_fp_minmax(const prog_instruction *fpi,
 }
 
 void
-fs_visitor::emit_fp_sop(uint32_t conditional_mod,
+fs_visitor::emit_fp_sop(enum brw_conditional_mod conditional_mod,
                         const struct prog_instruction *fpi,
                         fs_reg dst, fs_reg src0, fs_reg src1,
                         fs_reg one)
@@ -190,7 +190,7 @@ fs_visitor::emit_fragment_program_code()
          case OPCODE_DP3: count = 3; break;
          case OPCODE_DP4: count = 4; break;
          case OPCODE_DPH: count = 3; break;
-         default: assert(!"not reached"); count = 0; break;
+         default: unreachable("not reached");
          }
 
          emit(MUL(acc, offset(src[0], 0), offset(src[1], 0)));
@@ -428,8 +428,7 @@ fs_visitor::emit_fragment_program_code()
             lod = offset(src[0], 3);
             break;
          default:
-            assert(!"not reached");
-            break;
+            unreachable("not reached");
          }
 
          ir->type = glsl_type::vec4_type;
@@ -475,9 +474,7 @@ fs_visitor::emit_fragment_program_code()
          }
 
          default:
-            assert(!"not reached");
-            coordinate_type = glsl_type::vec2_type;
-            break;
+            unreachable("not reached");
          }
 
          ir_constant_data junk_data;

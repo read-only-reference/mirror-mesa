@@ -672,6 +672,12 @@ builtin_variable_generator::generate_constants()
    }
 
    if (state->is_version(430, 0) || state->ARB_compute_shader_enable) {
+      add_const("gl_MaxComputeAtomicCounterBuffers", MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS);
+      add_const("gl_MaxComputeAtomicCounters", MAX_COMPUTE_ATOMIC_COUNTERS);
+      add_const("gl_MaxComputeImageUniforms", MAX_COMPUTE_IMAGE_UNIFORMS);
+      add_const("gl_MaxComputeTextureImageUnits", MAX_COMPUTE_TEXTURE_IMAGE_UNITS);
+      add_const("gl_MaxComputeUniformComponents", MAX_COMPUTE_UNIFORM_COMPONENTS);
+
       add_const_ivec3("gl_MaxComputeWorkGroupCount",
                       state->Const.MaxComputeWorkGroupCount[0],
                       state->Const.MaxComputeWorkGroupCount[1],
@@ -815,6 +821,8 @@ builtin_variable_generator::generate_vs_special_vars()
       add_system_value(SYSTEM_VALUE_INSTANCE_ID, int_t, "gl_InstanceID");
    if (state->AMD_vertex_shader_layer_enable)
       add_output(VARYING_SLOT_LAYER, int_t, "gl_Layer");
+   if (state->AMD_vertex_shader_viewport_index_enable)
+      add_output(VARYING_SLOT_VIEWPORT, int_t, "gl_ViewportIndex");
    if (compatibility) {
       add_input(VERT_ATTRIB_POS, vec4_t, "gl_Vertex");
       add_input(VERT_ATTRIB_NORMAL, vec3_t, "gl_Normal");

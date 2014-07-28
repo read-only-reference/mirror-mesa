@@ -282,11 +282,17 @@ gbm_gallium_drm_device_create(int fd)
    if (gdrm->screen == NULL)
       goto out_no_screen;
 
+#if GALLIUM_STATIC_TARGETS
+   gdrm->base.driver_name = strdup(dd_driver_name());
+#else
+#ifdef HAVE_PIPE_LOADER_DRM
    gdrm->base.driver_name = strdup(gdrm->dev->driver_name);
+#endif /* HAVE_PIPE_LOADER_DRM */
+#endif
    return &gdrm->base.base;
 
 out_no_screen:
-   debug_printf("failed to load driver: %s\n", gdrm->dev->driver_name);
+   debug_printf("failed to load gallium_gbm\n");
 #if !GALLIUM_STATIC_TARGETS
    if (gdrm->dev)
       pipe_loader_release(&gdrm->dev, 1);

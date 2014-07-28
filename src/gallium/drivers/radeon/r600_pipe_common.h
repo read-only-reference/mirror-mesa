@@ -72,6 +72,7 @@
 #define R600_CONTEXT_WAIT_3D_IDLE		(1 << 17)
 #define R600_CONTEXT_WAIT_CP_DMA_IDLE		(1 << 18)
 #define R600_CONTEXT_VGT_FLUSH			(1 << 19)
+#define R600_CONTEXT_VGT_STREAMOUT_SYNC		(1 << 20)
 
 /* Debug flags. */
 /* logging */
@@ -80,17 +81,18 @@
 #define DBG_COMPUTE		(1 << 2)
 #define DBG_VM			(1 << 3)
 #define DBG_TRACE_CS		(1 << 4)
+/* shader logging */
+#define DBG_FS			(1 << 5)
+#define DBG_VS			(1 << 6)
+#define DBG_GS			(1 << 7)
+#define DBG_PS			(1 << 8)
+#define DBG_CS			(1 << 9)
 /* features */
-#define DBG_NO_ASYNC_DMA	(1 << 5)
-/* shaders */
-#define DBG_FS			(1 << 8)
-#define DBG_VS			(1 << 9)
-#define DBG_GS			(1 << 10)
-#define DBG_PS			(1 << 11)
-#define DBG_CS			(1 << 12)
-/* features */
-#define DBG_HYPERZ		(1 << 13)
-#define DBG_NO_DISCARD_RANGE	(1 << 14)
+#define DBG_NO_ASYNC_DMA	(1 << 10)
+#define DBG_HYPERZ		(1 << 11)
+#define DBG_NO_DISCARD_RANGE	(1 << 12)
+#define DBG_NO_2D_TILING	(1 << 13)
+#define DBG_NO_TILING		(1 << 14)
 /* The maximum allowed bit is 15. */
 
 #define R600_MAP_BUFFER_ALIGNMENT 64
@@ -107,6 +109,11 @@ struct radeon_shader_binary {
 	 * register address, the second dword contains the value.*/
 	unsigned char *config;
 	unsigned config_size;
+
+	/** Constant data accessed by the shader.  This will be uploaded
+	 * into a constant buffer. */
+	unsigned char *rodata;
+	unsigned rodata_size;
 
 	/** Set to 1 if the disassembly for this binary has been dumped to
 	 *  stderr. */
@@ -509,6 +516,11 @@ static inline unsigned r600_tex_aniso_filter(unsigned filter)
 	if (filter <= 8)   return 3;
 	 /* else */        return 4;
 }
+
+#define COMPUTE_DBG(rscreen, fmt, args...) \
+	do { \
+		if ((rscreen->b.debug_flags & DBG_COMPUTE)) fprintf(stderr, fmt, ##args); \
+	} while (0);
 
 #define R600_ERR(fmt, args...) \
 	fprintf(stderr, "EE %s:%d %s - "fmt, __FILE__, __LINE__, __func__, ##args)

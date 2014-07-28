@@ -449,8 +449,7 @@ linear_to_tiled(uint32_t xt1, uint32_t xt2,
       span = ytile_span;
       tile_copy = ytile_copy_faster;
    } else {
-      assert(!"unsupported tiling");
-      return;
+      unreachable("unsupported tiling");
    }
 
    /* Round out to tile boundaries. */
@@ -561,7 +560,7 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
     * we need tests.
     */
    if (!brw->has_llc ||
-       type != GL_UNSIGNED_BYTE ||
+       !(type == GL_UNSIGNED_BYTE || type == GL_UNSIGNED_INT_8_8_8_8_REV) ||
        texImage->TexObject->Target != GL_TEXTURE_2D ||
        pixels == NULL ||
        _mesa_is_bufferobj(packing->BufferObj) ||
@@ -574,6 +573,10 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
        packing->Invert)
       return false;
 
+   if (type == GL_UNSIGNED_INT_8_8_8_8_REV &&
+       !(format == GL_RGBA || format == GL_BGRA))
+      return false; /* Invalid type/format combination */
+
    if ((texImage->TexFormat == MESA_FORMAT_L_UNORM8 && format == GL_LUMINANCE) ||
        (texImage->TexFormat == MESA_FORMAT_A_UNORM8 && format == GL_ALPHA)) {
       cpp = 1;
@@ -585,6 +588,17 @@ intel_texsubimage_tiled_memcpy(struct gl_context * ctx,
          mem_copy = memcpy;
       } else if (format == GL_RGBA) {
          mem_copy = rgba8_copy;
+      }
+   } else if ((texImage->TexFormat == MESA_FORMAT_R8G8B8A8_UNORM) ||
+              (texImage->TexFormat == MESA_FORMAT_R8G8B8X8_UNORM)) {
+      cpp = 4;
+      if (format == GL_BGRA) {
+         /* Copying from RGBA to BGRA is the same as BGRA to RGBA so we can
+          * use the same function.
+          */
+         mem_copy = rgba8_copy;
+      } else if (format == GL_RGBA) {
+         mem_copy = memcpy;
       }
    }
    if (!mem_copy)
@@ -667,6 +681,12 @@ intelTexSubImage(struct gl_context * ctx,
                  const struct gl_pixelstore_attrib *packing)
 {
    bool ok;
+
+   DBG("%s mesa_format %s target %s format %s type %s level %d %dx%dx%d\n",
+       __FUNCTION__, _mesa_get_format_name(texImage->TexFormat),
+       _mesa_lookup_enum_by_nr(texImage->TexObject->Target),
+       _mesa_lookup_enum_by_nr(format), _mesa_lookup_enum_by_nr(type),
+       texImage->Level, texImage->Width, texImage->Height, texImage->Depth);
 
    ok = intel_texsubimage_tiled_memcpy(ctx, dims, texImage,
                                        xoffset, yoffset, zoffset,

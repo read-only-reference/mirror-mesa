@@ -59,6 +59,8 @@ static struct llvmpipe_resource resource_list;
 #endif
 static unsigned id_counter = 0;
 
+static void
+alloc_image_data(struct llvmpipe_resource *lpr);
 
 /**
  * Conventional allocation path for non-display textures:
@@ -247,6 +249,11 @@ llvmpipe_resource_create(struct pipe_screen *_screen,
          /* texture map */
          if (!llvmpipe_texture_layout(screen, lpr))
             goto fail;
+
+         alloc_image_data(lpr);
+         if (!lpr->tex_data) {
+            goto fail;
+         }
       }
    }
    else {
@@ -301,9 +308,9 @@ llvmpipe_resource_destroy(struct pipe_screen *pscreen,
    }
    else if (llvmpipe_resource_is_texture(pt)) {
       /* free linear image data */
-      if (lpr->linear_img.data) {
-         align_free(lpr->linear_img.data);
-         lpr->linear_img.data = NULL;
+      if (lpr->tex_data) {
+         align_free(lpr->tex_data);
+         lpr->tex_data = NULL;
       }
    }
    else if (!lpr->userBuffer) {
@@ -359,13 +366,13 @@ llvmpipe_resource_map(struct pipe_resource *resource,
       map = winsys->displaytarget_map(winsys, lpr->dt, dt_usage);
 
       /* install this linear image in texture data structure */
-      lpr->linear_img.data = map;
+      lpr->tex_data = map;
 
       return map;
    }
    else if (llvmpipe_resource_is_texture(resource)) {
 
-      map = llvmpipe_get_texture_image(lpr, layer, level, tex_usage);
+      map = llvmpipe_get_texture_image_address(lpr, layer, level);
       return map;
    }
    else {
@@ -726,16 +733,16 @@ ubyte *
 llvmpipe_get_texture_image_address(struct llvmpipe_resource *lpr,
                                    unsigned face_slice, unsigned level)
 {
-   struct llvmpipe_texture_image *img;
    unsigned offset;
 
-   img = &lpr->linear_img;
-   offset = lpr->linear_mip_offsets[level];
+   assert(llvmpipe_resource_is_texture(&lpr->base));
+
+   offset = lpr->mip_offsets[level];
 
    if (face_slice > 0)
       offset += face_slice * tex_image_face_size(lpr, level);
 
-   return (ubyte *) img->data + offset;
+   return (ubyte *) lpr->tex_data + offset;
 }
 
 
@@ -759,7 +766,7 @@ alloc_image_data(struct llvmpipe_resource *lpr)
 
       assert(lpr->base.last_level == 0);
 
-      lpr->linear_img.data =
+      lpr->tex_data =
          winsys->displaytarget_map(winsys, lpr->dt,
                                    PIPE_TRANSFER_READ_WRITE);
    }
@@ -771,118 +778,14 @@ alloc_image_data(struct llvmpipe_resource *lpr)
        */
       for (level = 0; level <= lpr->base.last_level; level++) {
          uint buffer_size = tex_image_size(lpr, level);
-         lpr->linear_mip_offsets[level] = offset;
+         lpr->mip_offsets[level] = offset;
          offset += align(buffer_size, alignment);
       }
-      lpr->linear_img.data = align_malloc(offset, alignment);
-      if (lpr->linear_img.data) {
-         memset(lpr->linear_img.data, 0, offset);
+      lpr->tex_data = align_malloc(offset, alignment);
+      if (lpr->tex_data) {
+         memset(lpr->tex_data, 0, offset);
       }
    }
-}
-
-
-
-/**
- * Return pointer to texture image data
- * for a particular cube face or 3D texture slice.
- *
- * \param face_slice  the cube face or 3D slice of interest
- * \param usage  one of LP_TEX_USAGE_READ/WRITE_ALL/READ_WRITE
- */
-void *
-llvmpipe_get_texture_image(struct llvmpipe_resource *lpr,
-                           unsigned face_slice, unsigned level,
-                           enum lp_texture_usage usage)
-{
-   struct llvmpipe_texture_image *target_img;
-   void *target_data;
-   unsigned target_offset;
-   unsigned *target_off_ptr;
-
-   assert(usage == LP_TEX_USAGE_READ ||
-          usage == LP_TEX_USAGE_READ_WRITE ||
-          usage == LP_TEX_USAGE_WRITE_ALL);
-
-   if (lpr->dt) {
-      assert(lpr->linear_img.data);
-   }
-
-   target_img = &lpr->linear_img;
-   target_off_ptr = lpr->linear_mip_offsets;
-   target_data = target_img->data;
-
-   if (!target_data) {
-      /* allocate memory for the target image now */
-      alloc_image_data(lpr);
-      target_data = target_img->data;
-   }
-
-   target_offset = target_off_ptr[level];
-
-   if (face_slice > 0) {
-      target_offset += face_slice * tex_image_face_size(lpr, level);
-   }
-
-   if (target_data) {
-      target_data = (uint8_t *) target_data + target_offset;
-   }
-
-   return target_data;
-}
-
-
-/**
- * Return pointer to start of a texture image (1D, 2D, 3D, CUBE).
- * This is typically used when we're about to sample from a texture.
- */
-void *
-llvmpipe_get_texture_image_all(struct llvmpipe_resource *lpr,
-                               unsigned level,
-                               enum lp_texture_usage usage)
-{
-   const int slices = lpr->num_slices_faces[level];
-   int slice;
-   void *map = NULL;
-
-   assert(slices > 0);
-
-   for (slice = slices - 1; slice >= 0; slice--) {
-      map = llvmpipe_get_texture_image(lpr, slice, level, usage);
-   }
-
-   return map;
-}
-
-
-/**
- * Get pointer to a linear image (not the tile!) at tile (x,y).
- * \return pointer to start of image/face (not the tile)
- */
-ubyte *
-llvmpipe_get_texture_tile_linear(struct llvmpipe_resource *lpr,
-                                 unsigned face_slice, unsigned level,
-                                 enum lp_texture_usage usage,
-                                 unsigned x, unsigned y)
-{
-   struct llvmpipe_texture_image *linear_img = &lpr->linear_img;
-   uint8_t *linear_image;
-
-   assert(llvmpipe_resource_is_texture(&lpr->base));
-   assert(x % TILE_SIZE == 0);
-   assert(y % TILE_SIZE == 0);
-
-   if (!linear_img->data) {
-      /* allocate memory for the linear image now */
-      /* XXX should probably not do that here? */
-      alloc_image_data(lpr);
-   }
-   assert(linear_img->data);
-
-   /* compute address of the slice/face of the image that contains the tile */
-   linear_image = llvmpipe_get_texture_image_address(lpr, face_slice, level);
-
-   return linear_image;
 }
 
 
@@ -897,7 +800,7 @@ llvmpipe_resource_size(const struct pipe_resource *resource)
 
    if (llvmpipe_resource_is_texture(resource)) {
       for (lvl = 0; lvl <= lpr->base.last_level; lvl++) {
-         if (lpr->linear_img.data)
+         if (lpr->tex_data)
             size += tex_image_size(lpr, lvl);
       }
    }

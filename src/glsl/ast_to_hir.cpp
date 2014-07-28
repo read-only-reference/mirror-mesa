@@ -112,8 +112,8 @@ _mesa_ast_to_hir(exec_list *instructions, struct _mesa_glsl_parse_state *state)
     * applications depend on this behavior, and it matches what nearly all
     * other drivers do.
     */
-   foreach_list_safe(node, instructions) {
-      ir_variable *const var = ((ir_instruction *) node)->as_variable();
+   foreach_in_list_safe(ir_instruction, node, instructions) {
+      ir_variable *const var = node->as_variable();
 
       if (var == NULL)
          continue;
@@ -4210,10 +4210,8 @@ ast_function_definition::hir(exec_list *instructions,
     * Add these to the symbol table.
     */
    state->symbols->push_scope();
-   foreach_list(n, &signature->parameters) {
-      ir_variable *const var = ((ir_instruction *) n)->as_variable();
-
-      assert(var != NULL);
+   foreach_in_list(ir_variable, var, &signature->parameters) {
+      assert(var->as_variable() != NULL);
 
       /* The only way a parameter would "exist" is if two parameters have
        * the same name.
@@ -4515,6 +4513,12 @@ ast_switch_statement::hir(exec_list *instructions,
    instructions->push_tail(new(ctx) ir_assignment(deref_is_break_var,
                                                   is_break_val));
 
+   state->switch_state.run_default =
+      new(ctx) ir_variable(glsl_type::bool_type,
+                             "run_default_tmp",
+                             ir_var_temporary);
+   instructions->push_tail(state->switch_state.run_default);
+
    /* Cache test expression.
     */
    test_to_hir(instructions, state);
@@ -4569,8 +4573,71 @@ ir_rvalue *
 ast_case_statement_list::hir(exec_list *instructions,
                              struct _mesa_glsl_parse_state *state)
 {
-   foreach_list_typed (ast_case_statement, case_stmt, link, & this->cases)
-      case_stmt->hir(instructions, state);
+   exec_list default_case, after_default, tmp;
+
+   foreach_list_typed (ast_case_statement, case_stmt, link, & this->cases) {
+      case_stmt->hir(&tmp, state);
+
+      /* Default case. */
+      if (state->switch_state.previous_default && default_case.is_empty()) {
+         default_case.append_list(&tmp);
+         continue;
+      }
+
+      /* If default case found, append 'after_default' list. */
+      if (!default_case.is_empty())
+         after_default.append_list(&tmp);
+      else
+         instructions->append_list(&tmp);
+   }
+
+   /* Handle the default case. This is done here because default might not be
+    * the last case. We need to add checks against following cases first to see
+    * if default should be chosen or not.
+    */
+   if (!default_case.is_empty()) {
+
+      /* Default case was the last one, no checks required. */
+      if (after_default.is_empty()) {
+         instructions->append_list(&default_case);
+         return NULL;
+      }
+
+      ir_rvalue *const true_val = new (state) ir_constant(true);
+      ir_dereference_variable *deref_run_default_var =
+         new(state) ir_dereference_variable(state->switch_state.run_default);
+
+      /* Choose to run default case initially, following conditional
+       * assignments might change this.
+       */
+      ir_assignment *const init_var =
+         new(state) ir_assignment(deref_run_default_var, true_val);
+      instructions->push_tail(init_var);
+
+      foreach_in_list(ir_instruction, ir, &after_default) {
+         ir_assignment *assign = ir->as_assignment();
+
+         if (!assign)
+            continue;
+
+         /* Clone the check between case label and init expression. */
+         ir_expression *exp = (ir_expression*) assign->condition;
+         ir_expression *clone = exp->clone(state, NULL);
+
+         ir_dereference_variable *deref_var =
+            new(state) ir_dereference_variable(state->switch_state.run_default);
+         ir_rvalue *const false_val = new (state) ir_constant(false);
+
+         ir_assignment *const set_false =
+            new(state) ir_assignment(deref_var, false_val, clone);
+
+         instructions->push_tail(set_false);
+      }
+
+      /* Append default case and all cases after it. */
+      instructions->append_list(&default_case);
+      instructions->append_list(&after_default);
+   }
 
    /* Case statements do not have r-values. */
    return NULL;
@@ -4730,9 +4797,17 @@ ast_case_label::hir(exec_list *instructions,
       }
       state->switch_state.previous_default = this;
 
+      /* Set fallthru condition on 'run_default' bool. */
+      ir_dereference_variable *deref_run_default =
+         new(ctx) ir_dereference_variable(state->switch_state.run_default);
+      ir_rvalue *const cond_true = new(ctx) ir_constant(true);
+      ir_expression *test_cond = new(ctx) ir_expression(ir_binop_all_equal,
+                                                        cond_true,
+                                                        deref_run_default);
+
       /* Set falltrhu state. */
       ir_assignment *set_fallthru =
-         new(ctx) ir_assignment(deref_fallthru_var, true_val);
+         new(ctx) ir_assignment(deref_fallthru_var, true_val, test_cond);
 
       instructions->push_tail(set_fallthru);
    }
@@ -5009,9 +5084,7 @@ ast_process_structure_or_interface_block(exec_list *instructions,
     * 'declarations' list in each of the elements.
     */
    foreach_list_typed (ast_declarator_list, decl_list, link, declarations) {
-      foreach_list_const (decl_ptr, & decl_list->declarations) {
-         decl_count++;
-      }
+      decl_count += decl_list->declarations.length();
    }
 
    /* Allocate storage for the fields and process the field
@@ -5139,7 +5212,7 @@ ast_process_structure_or_interface_block(exec_list *instructions,
                fields[i].row_major = false;
          }
 
-      i++;
+         i++;
       }
    }
 
@@ -5621,8 +5694,8 @@ ast_interface_block::hir(exec_list *instructions,
           * thinking there are conflicting definitions of gl_PerVertex in the
           * shader.
           */
-         foreach_list_safe(node, instructions) {
-            ir_variable *const var = ((ir_instruction *) node)->as_variable();
+         foreach_in_list_safe(ir_instruction, node, instructions) {
+            ir_variable *const var = node->as_variable();
             if (var != NULL &&
                 var->get_interface_type() == earlier_per_vertex &&
                 var->data.mode == var_mode) {
@@ -5678,8 +5751,8 @@ ast_gs_input_layout::hir(exec_list *instructions,
    /* If any shader inputs occurred before this declaration and did not
     * specify an array size, their size is determined now.
     */
-   foreach_list (node, instructions) {
-      ir_variable *var = ((ir_instruction *) node)->as_variable();
+   foreach_in_list(ir_instruction, node, instructions) {
+      ir_variable *var = node->as_variable();
       if (var == NULL || var->data.mode != ir_var_shader_in)
          continue;
 
@@ -5796,8 +5869,8 @@ detect_conflicting_assignments(struct _mesa_glsl_parse_state *state,
    YYLTYPE loc;
    memset(&loc, 0, sizeof(loc));
 
-   foreach_list(node, instructions) {
-      ir_variable *var = ((ir_instruction *)node)->as_variable();
+   foreach_in_list(ir_instruction, node, instructions) {
+      ir_variable *var = node->as_variable();
 
       if (!var || !var->data.assigned)
          continue;
@@ -5886,8 +5959,8 @@ remove_per_vertex_blocks(exec_list *instructions,
    /* Remove any ir_variable declarations that refer to the interface block
     * we're removing.
     */
-   foreach_list_safe(node, instructions) {
-      ir_variable *const var = ((ir_instruction *) node)->as_variable();
+   foreach_in_list_safe(ir_instruction, node, instructions) {
+      ir_variable *const var = node->as_variable();
       if (var != NULL && var->get_interface_type() == per_vertex &&
           var->data.mode == mode) {
          state->symbols->disable_variable(var->name);

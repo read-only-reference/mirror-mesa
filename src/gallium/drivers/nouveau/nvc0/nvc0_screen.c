@@ -103,6 +103,8 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
    case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
       return 1024;
+   case PIPE_CAP_MAX_VERTEX_STREAMS:
+      return 4;
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 256;
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
@@ -156,6 +158,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
    case PIPE_CAP_START_INSTANCE:
    case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
+   case PIPE_CAP_DRAW_INDIRECT:
    case PIPE_CAP_USER_CONSTANT_BUFFERS:
    case PIPE_CAP_USER_INDEX_BUFFERS:
    case PIPE_CAP_USER_VERTEX_BUFFERS:
@@ -178,7 +181,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_BUFFER_OFFSET_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
-   case PIPE_CAP_TGSI_VS_LAYER:
+   case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
    case PIPE_CAP_FAKE_SW_MSAA:
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
       return 0;
@@ -235,8 +238,8 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
        * and excludes 0x60 per-patch inputs.
        */
       return 0x200 / 16;
-   case PIPE_SHADER_CAP_MAX_CONSTS:
-      return 65536 / 16;
+   case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+      return 65536;
    case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
       if (shader == PIPE_SHADER_COMPUTE && class_3d >= NVE4_3D_CLASS)
          return NVE4_MAX_PIPE_CONSTBUFS_COMPUTE;
@@ -402,6 +405,8 @@ nvc0_graph_set_macro(struct nvc0_screen *screen, uint32_t m, unsigned pos,
 
    size /= 4;
 
+   assert((pos + size) <= 0x800);
+
    BEGIN_NVC0(push, SUBC_3D(NVC0_GRAPH_MACRO_ID), 2);
    PUSH_DATA (push, (m - 0x3800) / 8);
    PUSH_DATA (push, pos);
@@ -430,8 +435,6 @@ nvc0_magic_3d_init(struct nouveau_pushbuf *push, uint16_t obj_class)
    PUSH_DATA (push, (3 << 16) | 3);
    BEGIN_NVC0(push, SUBC_3D(0x1794), 1);
    PUSH_DATA (push, (2 << 16) | 2);
-   BEGIN_NVC0(push, SUBC_3D(0x0de8), 1);
-   PUSH_DATA (push, 1);
 
    if (obj_class < GM107_3D_CLASS) {
       BEGIN_NVC0(push, SUBC_3D(0x12ac), 1);
@@ -606,7 +609,8 @@ nvc0_screen_create(struct nouveau_device *dev)
    push->rsvd_kick = 5;
 
    screen->base.vidmem_bindings |= PIPE_BIND_CONSTANT_BUFFER |
-      PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_INDEX_BUFFER;
+      PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_INDEX_BUFFER |
+      PIPE_BIND_COMMAND_ARGS_BUFFER;
    screen->base.sysmem_bindings |=
       PIPE_BIND_VERTEX_BUFFER | PIPE_BIND_INDEX_BUFFER;
 
@@ -765,6 +769,8 @@ nvc0_screen_create(struct nouveau_device *dev)
    PUSH_DATA (push, 1);
    BEGIN_NVC0(push, NVC0_3D(LINE_LAST_PIXEL), 1);
    PUSH_DATA (push, 0);
+   BEGIN_NVC0(push, NVC0_3D(PRIM_RESTART_WITH_DRAW_ARRAYS), 1);
+   PUSH_DATA (push, 1);
    BEGIN_NVC0(push, NVC0_3D(BLEND_SEPARATE_ALPHA), 1);
    PUSH_DATA (push, 1);
    BEGIN_NVC0(push, NVC0_3D(BLEND_ENABLE_COMMON), 1);
@@ -951,6 +957,8 @@ nvc0_screen_create(struct nouveau_device *dev)
    MK_MACRO(NVC0_3D_MACRO_GP_SELECT, mme9097_gp_select);
    MK_MACRO(NVC0_3D_MACRO_POLYGON_MODE_FRONT, mme9097_poly_mode_front);
    MK_MACRO(NVC0_3D_MACRO_POLYGON_MODE_BACK, mme9097_poly_mode_back);
+   MK_MACRO(NVC0_3D_MACRO_DRAW_ARRAYS_INDIRECT, mme9097_draw_arrays_indirect);
+   MK_MACRO(NVC0_3D_MACRO_DRAW_ELEMENTS_INDIRECT, mme9097_draw_elts_indirect);
 
    BEGIN_NVC0(push, NVC0_3D(RASTERIZE_ENABLE), 1);
    PUSH_DATA (push, 1);

@@ -30,6 +30,10 @@ if HAVE_DRISW
 SUBDIRS += sw/dri
 endif
 
+if HAVE_DRI2
+SUBDIRS += sw/kms-dri
+endif
+
 if HAVE_EGL_PLATFORM_FBDEV
 SUBDIRS += sw/fbdev
 endif

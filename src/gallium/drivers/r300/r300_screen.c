@@ -156,6 +156,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
         case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
         case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
+        case PIPE_CAP_MAX_VERTEX_STREAMS:
         case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
         case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
         case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
@@ -168,7 +169,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
         case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
         case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
-        case PIPE_CAP_TGSI_VS_LAYER:
+        case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
         case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
         case PIPE_CAP_TEXTURE_GATHER_SM5:
         case PIPE_CAP_TEXTURE_QUERY_LOD:
@@ -176,6 +177,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_SAMPLE_SHADING:
         case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
         case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
+        case PIPE_CAP_DRAW_INDIRECT:
             return 0;
 
         /* SWTCL-only features. */
@@ -239,8 +241,8 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
              * additional texcoords but there is no two-sided color
              * selection then. However the facing bit can be used instead. */
             return 10;
-        case PIPE_SHADER_CAP_MAX_CONSTS:
-            return is_r500 ? 256 : 32;
+        case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+            return (is_r500 ? 256 : 32) * sizeof(float[4]);
         case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
             return 1;
         case PIPE_SHADER_CAP_MAX_TEMPS:
@@ -287,8 +289,8 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
             return is_r500 ? 4 : 0; /* For loops; not sure about conditionals. */
         case PIPE_SHADER_CAP_MAX_INPUTS:
             return 16;
-        case PIPE_SHADER_CAP_MAX_CONSTS:
-            return 256;
+        case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+            return 256 * sizeof(float[4]);
         case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
             return 1;
         case PIPE_SHADER_CAP_MAX_TEMPS:

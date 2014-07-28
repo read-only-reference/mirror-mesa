@@ -213,8 +213,8 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
        * too late.  At that point, the values for the built-in uniforms won't
        * get sent to the shader.
        */
-      foreach_list(node, shader->base.ir) {
-	 ir_variable *var = ((ir_instruction *) node)->as_variable();
+      foreach_in_list(ir_instruction, node, shader->base.ir) {
+	 ir_variable *var = node->as_variable();
 
 	 if ((var == NULL) || (var->data.mode != ir_var_uniform)
 	     || (strncmp(var->name, "gl_", 3) != 0))
@@ -279,7 +279,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 }
 
 
-int
+enum brw_reg_type
 brw_type_for_base_type(const struct glsl_type *type)
 {
    switch (type->base_type) {
@@ -305,14 +305,13 @@ brw_type_for_base_type(const struct glsl_type *type)
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
-      assert(!"not reached");
-      break;
+      unreachable("not reached");
    }
 
    return BRW_REGISTER_TYPE_F;
 }
 
-uint32_t
+enum brw_conditional_mod
 brw_conditional_for_comparison(unsigned int op)
 {
    switch (op) {
@@ -331,8 +330,7 @@ brw_conditional_for_comparison(unsigned int op)
    case ir_binop_any_nequal: /* same as nequal for scalars */
       return BRW_CONDITIONAL_NZ;
    default:
-      assert(!"not reached: bad operation for comparison");
-      return BRW_CONDITIONAL_NZ;
+      unreachable("not reached: bad operation for comparison");
    }
 }
 
@@ -361,8 +359,7 @@ brw_math_function(enum opcode op)
    case SHADER_OPCODE_INT_REMAINDER:
       return BRW_MATH_FUNCTION_INT_DIV_REMAINDER;
    default:
-      assert(!"not reached: unknown math function");
-      return 0;
+      unreachable("not reached: unknown math function");
    }
 }
 
@@ -552,8 +549,47 @@ backend_visitor::backend_visitor(struct brw_context *brw,
         (struct brw_shader *)shader_prog->_LinkedShaders[stage] : NULL),
      shader_prog(shader_prog),
      prog(prog),
-     stage_prog_data(stage_prog_data)
+     stage_prog_data(stage_prog_data),
+     cfg(NULL),
+     stage(stage)
 {
+}
+
+bool
+backend_reg::is_zero() const
+{
+   if (file != IMM)
+      return false;
+
+   return fixed_hw_reg.dw1.d == 0;
+}
+
+bool
+backend_reg::is_one() const
+{
+   if (file != IMM)
+      return false;
+
+   return type == BRW_REGISTER_TYPE_F
+          ? fixed_hw_reg.dw1.f == 1.0
+          : fixed_hw_reg.dw1.d == 1;
+}
+
+bool
+backend_reg::is_null() const
+{
+   return file == HW_REG &&
+          fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE &&
+          fixed_hw_reg.nr == BRW_ARF_NULL;
+}
+
+
+bool
+backend_reg::is_accumulator() const
+{
+   return file == HW_REG &&
+          fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE &&
+          fixed_hw_reg.nr == BRW_ARF_ACCUMULATOR;
 }
 
 bool
@@ -719,8 +755,7 @@ backend_visitor::dump_instructions(const char *name)
    }
 
    int ip = 0;
-   foreach_list(node, &this->instructions) {
-      backend_instruction *inst = (backend_instruction *)node;
+   foreach_in_list(backend_instruction, inst, &instructions) {
       if (!name)
          fprintf(stderr, "%d: ", ip++);
       dump_instruction(inst, file);
@@ -731,6 +766,20 @@ backend_visitor::dump_instructions(const char *name)
    }
 }
 
+void
+backend_visitor::calculate_cfg()
+{
+   if (this->cfg)
+      return;
+   cfg = new(mem_ctx) cfg_t(&this->instructions);
+}
+
+void
+backend_visitor::invalidate_cfg()
+{
+   ralloc_free(this->cfg);
+   this->cfg = NULL;
+}
 
 /**
  * Sets up the starting offsets for the groups of binding table entries
@@ -788,59 +837,4 @@ backend_visitor::assign_common_binding_table_offsets(uint32_t next_binding_table
    assert(next_binding_table_offset <= BRW_MAX_SURFACES);
 
    /* prog_data->base.binding_table.size will be set by brw_mark_surface_used. */
-}
-
-void annotate(struct brw_context *brw,
-              struct annotation_info *annotation, cfg_t *cfg,
-              backend_instruction *inst, unsigned offset)
-{
-   if (annotation->ann_size <= annotation->ann_count) {
-      annotation->ann_size = MAX2(1024, annotation->ann_size * 2);
-      annotation->ann = reralloc(annotation->mem_ctx, annotation->ann,
-                                 struct annotation, annotation->ann_size);
-      if (!annotation->ann)
-         return;
-   }
-
-   struct annotation *ann = &annotation->ann[annotation->ann_count++];
-   ann->offset = offset;
-   if ((INTEL_DEBUG & DEBUG_NO_ANNOTATION) == 0) {
-      ann->ir = inst->ir;
-      ann->annotation = inst->annotation;
-   }
-
-   if (cfg->blocks[annotation->cur_block]->start == inst) {
-      ann->block_start = cfg->blocks[annotation->cur_block];
-   }
-
-   /* There is no hardware DO instruction on Gen6+, so since DO always
-    * starts a basic block, we need to set the .block_start of the next
-    * instruction's annotation with a pointer to the bblock started by
-    * the DO.
-    *
-    * There's also only complication from emitting an annotation without
-    * a corresponding hardware instruction to disassemble.
-    */
-   if (brw->gen >= 6 && inst->opcode == BRW_OPCODE_DO) {
-      annotation->ann_count--;
-   }
-
-   if (cfg->blocks[annotation->cur_block]->end == inst) {
-      ann->block_end = cfg->blocks[annotation->cur_block];
-      annotation->cur_block++;
-   }
-}
-
-void
-annotation_finalize(struct annotation_info *annotation,
-                    unsigned next_inst_offset)
-{
-   if (!annotation->ann_count)
-      return;
-
-   if (annotation->ann_count == annotation->ann_size) {
-      annotation->ann = reralloc(annotation->mem_ctx, annotation->ann,
-                                 struct annotation, annotation->ann_size + 1);
-   }
-   annotation->ann[annotation->ann_count].offset = next_inst_offset;
 }

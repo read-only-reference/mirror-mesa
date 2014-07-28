@@ -117,6 +117,7 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
    case PIPE_CAP_MAX_GEOMETRY_OUTPUT_VERTICES:
    case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
+   case PIPE_CAP_MAX_VERTEX_STREAMS:
    case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
    case PIPE_CAP_TEXTURE_BARRIER:
    case PIPE_CAP_SEAMLESS_CUBE_MAP:
@@ -136,7 +137,7 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_BORDER_COLOR_QUIRK:
    case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
    case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
-   case PIPE_CAP_TGSI_VS_LAYER:
+   case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
    case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
    case PIPE_CAP_TEXTURE_GATHER_SM5:
    case PIPE_CAP_FAKE_SW_MSAA:
@@ -146,6 +147,7 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
    case PIPE_CAP_USER_VERTEX_BUFFERS:
    case PIPE_CAP_COMPUTE:
+   case PIPE_CAP_DRAW_INDIRECT:
       return 0;
    }
 
@@ -196,8 +198,8 @@ nv30_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
          return 0;
       case PIPE_SHADER_CAP_MAX_INPUTS:
          return 16;
-      case PIPE_SHADER_CAP_MAX_CONSTS:
-         return (eng3d->oclass >= NV40_3D_CLASS) ? (468 - 6): (256 - 6);
+      case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+         return ((eng3d->oclass >= NV40_3D_CLASS) ? (468 - 6): (256 - 6)) * sizeof(float[4]);
       case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
          return 1;
       case PIPE_SHADER_CAP_MAX_TEMPS:
@@ -233,8 +235,8 @@ nv30_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
          return 0;
       case PIPE_SHADER_CAP_MAX_INPUTS:
          return 8; /* should be possible to do 10 with nv4x */
-      case PIPE_SHADER_CAP_MAX_CONSTS:
-         return (eng3d->oclass >= NV40_3D_CLASS) ? 224 : 32;
+      case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
+         return ((eng3d->oclass >= NV40_3D_CLASS) ? 224 : 32) * sizeof(float[4]);
       case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
          return 1;
       case PIPE_SHADER_CAP_MAX_TEMPS:

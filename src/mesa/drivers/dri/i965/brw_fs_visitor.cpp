@@ -251,7 +251,7 @@ fs_visitor::emit_lrp(const fs_reg &dst, const fs_reg &x, const fs_reg &y,
 }
 
 void
-fs_visitor::emit_minmax(uint32_t conditionalmod, const fs_reg &dst,
+fs_visitor::emit_minmax(enum brw_conditional_mod conditionalmod, const fs_reg &dst,
                         const fs_reg &src0, const fs_reg &src1)
 {
    fs_inst *inst;
@@ -344,6 +344,133 @@ fs_visitor::try_emit_mad(ir_expression *ir)
    return true;
 }
 
+static int
+pack_pixel_offset(float x)
+{
+   /* Clamp upper end of the range to +7/16. See explanation in non-constant
+    * offset case below. */
+   int n = MIN2((int)(x * 16), 7);
+   return n & 0xf;
+}
+
+void
+fs_visitor::emit_interpolate_expression(ir_expression *ir)
+{
+   /* in SIMD16 mode, the pixel interpolator returns coords interleaved
+    * 8 channels at a time, same as the barycentric coords presented in
+    * the FS payload. this requires a bit of extra work to support.
+    */
+   no16("interpolate_at_* not yet supported in SIMD16 mode.");
+
+   ir_dereference * deref = ir->operands[0]->as_dereference();
+   ir_swizzle * swiz = NULL;
+   if (!deref) {
+      /* the api does not allow a swizzle here, but the varying packing code
+       * may have pushed one into here.
+       */
+      swiz = ir->operands[0]->as_swizzle();
+      assert(swiz);
+      deref = swiz->val->as_dereference();
+   }
+   assert(deref);
+   ir_variable * var = deref->variable_referenced();
+   assert(var);
+
+   /* 1. collect interpolation factors */
+
+   fs_reg dst_x = fs_reg(this, glsl_type::get_instance(ir->type->base_type, 2, 1));
+   fs_reg dst_y = dst_x;
+   dst_y.reg_offset++;
+
+   /* for most messages, we need one reg of ignored data; the hardware requires mlen==1
+    * even when there is no payload. in the per-slot offset case, we'll replace this with
+    * the proper source data. */
+   fs_reg src = fs_reg(this, glsl_type::float_type);
+   int mlen = 1;     /* one reg unless overriden */
+   int reg_width = dispatch_width / 8;
+   fs_inst *inst;
+
+   switch (ir->operation) {
+   case ir_unop_interpolate_at_centroid:
+      inst = emit(FS_OPCODE_INTERPOLATE_AT_CENTROID, dst_x, src, fs_reg(0u));
+      break;
+
+   case ir_binop_interpolate_at_sample: {
+      ir_constant *sample_num = ir->operands[1]->as_constant();
+      assert(sample_num || !"nonconstant sample number should have been lowered.");
+
+      unsigned msg_data = sample_num->value.i[0] << 4;
+      inst = emit(FS_OPCODE_INTERPOLATE_AT_SAMPLE, dst_x, src, fs_reg(msg_data));
+      break;
+   }
+
+   case ir_binop_interpolate_at_offset: {
+      ir_constant *const_offset = ir->operands[1]->as_constant();
+      if (const_offset) {
+         unsigned msg_data = pack_pixel_offset(const_offset->value.f[0]) |
+                            (pack_pixel_offset(const_offset->value.f[1]) << 4);
+         inst = emit(FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET, dst_x, src,
+                     fs_reg(msg_data));
+      } else {
+         /* pack the operands: hw wants offsets as 4 bit signed ints */
+         ir->operands[1]->accept(this);
+         src = fs_reg(this, glsl_type::ivec2_type);
+         fs_reg src2 = src;
+         for (int i = 0; i < 2; i++) {
+            fs_reg temp = fs_reg(this, glsl_type::float_type);
+            emit(MUL(temp, this->result, fs_reg(16.0f)));
+            emit(MOV(src2, temp));  /* float to int */
+
+            /* Clamp the upper end of the range to +7/16. ARB_gpu_shader5 requires
+             * that we support a maximum offset of +0.5, which isn't representable
+             * in a S0.4 value -- if we didn't clamp it, we'd end up with -8/16,
+             * which is the opposite of what the shader author wanted.
+             *
+             * This is legal due to ARB_gpu_shader5's quantization rules:
+             *
+             * "Not all values of <offset> may be supported; x and y offsets may
+             * be rounded to fixed-point values with the number of fraction bits
+             * given by the implementation-dependent constant
+             * FRAGMENT_INTERPOLATION_OFFSET_BITS"
+             */
+
+            fs_inst *inst = emit(BRW_OPCODE_SEL, src2, src2, fs_reg(7));
+            inst->conditional_mod = BRW_CONDITIONAL_L; /* min(src2, 7) */
+
+            src2.reg_offset++;
+            this->result.reg_offset++;
+         }
+
+         mlen = 2 * reg_width;
+         inst = emit(FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET, dst_x, src,
+                     fs_reg(0u));
+      }
+      break;
+   }
+
+   default:
+      unreachable("not reached");
+   }
+
+   inst->mlen = mlen;
+   inst->regs_written = 2 * reg_width; /* 2 floats per slot returned */
+   inst->pi_noperspective = var->determine_interpolation_mode(key->flat_shade) ==
+         INTERP_QUALIFIER_NOPERSPECTIVE;
+
+   /* 2. emit linterp */
+
+   fs_reg res(this, ir->type);
+   this->result = res;
+
+   for (int i = 0; i < ir->type->vector_elements; i++) {
+      int ch = swiz ? ((*(int *)&swiz->mask) >> 2*i) & 3 : i;
+      emit(FS_OPCODE_LINTERP, res,
+           dst_x, dst_y,
+           fs_reg(interp_reg(var->data.location, ch)));
+      res.reg_offset++;
+   }
+}
+
 void
 fs_visitor::visit(ir_expression *ir)
 {
@@ -355,9 +482,22 @@ fs_visitor::visit(ir_expression *ir)
 
    if (try_emit_saturate(ir))
       return;
-   if (ir->operation == ir_binop_add) {
+
+   /* Deal with the real oddball stuff first */
+   switch (ir->operation) {
+   case ir_binop_add:
       if (try_emit_mad(ir))
-	 return;
+         return;
+      break;
+
+   case ir_unop_interpolate_at_centroid:
+   case ir_binop_interpolate_at_offset:
+   case ir_binop_interpolate_at_sample:
+      emit_interpolate_expression(ir);
+      return;
+
+   default:
+      break;
    }
 
    for (operand = 0; operand < ir->get_num_operands(); operand++) {
@@ -442,8 +582,7 @@ fs_visitor::visit(ir_expression *ir)
       break;
    case ir_unop_exp:
    case ir_unop_log:
-      assert(!"not reached: should be handled by ir_explog_to_explog2");
-      break;
+      unreachable("not reached: should be handled by ir_explog_to_explog2");
    case ir_unop_sin:
    case ir_unop_sin_reduced:
       emit_math(SHADER_OPCODE_SIN, this->result, op[0]);
@@ -464,8 +603,7 @@ fs_visitor::visit(ir_expression *ir)
       emit(ADD(this->result, op[0], op[1]));
       break;
    case ir_binop_sub:
-      assert(!"not reached: should be handled by ir_sub_to_add_neg");
-      break;
+      unreachable("not reached: should be handled by ir_sub_to_add_neg");
 
    case ir_binop_mul:
       if (brw->gen < 8 && ir->type->is_integer()) {
@@ -568,28 +706,22 @@ fs_visitor::visit(ir_expression *ir)
 
    case ir_binop_dot:
    case ir_unop_any:
-      assert(!"not reached: should be handled by brw_fs_channel_expressions");
-      break;
+      unreachable("not reached: should be handled by brw_fs_channel_expressions");
 
    case ir_unop_noise:
-      assert(!"not reached: should be handled by lower_noise");
-      break;
+      unreachable("not reached: should be handled by lower_noise");
 
    case ir_quadop_vector:
-      assert(!"not reached: should be handled by lower_quadop_vector");
-      break;
+      unreachable("not reached: should be handled by lower_quadop_vector");
 
    case ir_binop_vector_extract:
-      assert(!"not reached: should be handled by lower_vec_index_to_cond_assign()");
-      break;
+      unreachable("not reached: should be handled by lower_vec_index_to_cond_assign()");
 
    case ir_triop_vector_insert:
-      assert(!"not reached: should be handled by lower_vector_insert()");
-      break;
+      unreachable("not reached: should be handled by lower_vector_insert()");
 
    case ir_binop_ldexp:
-      assert(!"not reached: should be handled by ldexp_to_arith()");
-      break;
+      unreachable("not reached: should be handled by ldexp_to_arith()");
 
    case ir_unop_sqrt:
       emit_math(SHADER_OPCODE_SQRT, this->result, op[0]);
@@ -673,8 +805,7 @@ fs_visitor::visit(ir_expression *ir)
    case ir_unop_unpack_unorm_4x8:
    case ir_unop_unpack_half_2x16:
    case ir_unop_pack_half_2x16:
-      assert(!"not reached: should be handled by lower_packing_builtins");
-      break;
+      unreachable("not reached: should be handled by lower_packing_builtins");
    case ir_unop_unpack_half_2x16_split_x:
       emit(FS_OPCODE_UNPACK_HALF_2x16_SPLIT_X, this->result, op[0]);
       break;
@@ -724,9 +855,8 @@ fs_visitor::visit(ir_expression *ir)
       emit(BFI2(this->result, op[0], op[1], op[2]));
       break;
    case ir_quadop_bitfield_insert:
-      assert(!"not reached: should be handled by "
+      unreachable("not reached: should be handled by "
               "lower_instructions::bitfield_insert_to_bfm_bfi");
-      break;
 
    case ir_unop_bit_not:
       emit(NOT(this->result, op[0]));
@@ -825,6 +955,12 @@ fs_visitor::visit(ir_expression *ir)
       inst = emit(BRW_OPCODE_SEL, this->result, op[1], op[2]);
       inst->predicate = BRW_PREDICATE_NORMAL;
       break;
+
+   case ir_unop_interpolate_at_centroid:
+   case ir_binop_interpolate_at_offset:
+   case ir_binop_interpolate_at_sample:
+      unreachable("already handled above");
+      break;
    }
 }
 
@@ -871,8 +1007,7 @@ fs_visitor::emit_assignment_writes(fs_reg &l, fs_reg &r,
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
-      assert(!"not reached");
-      break;
+      unreachable("not reached");
    }
 }
 
@@ -994,7 +1129,7 @@ fs_visitor::emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
 	 emit(MOV(fs_reg(MRF, base_mrf + mlen), lod));
 	 mlen++;
       } else {
-         assert(!"Should not get here.");
+         unreachable("Should not get here.");
       }
 
       emit(MOV(fs_reg(MRF, base_mrf + mlen), shadow_c));
@@ -1452,6 +1587,8 @@ fs_visitor::emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
       else
          opcode = SHADER_OPCODE_TG4;
       break;
+   default:
+      unreachable("not reached");
    }
    fs_inst *inst = emit(opcode, dst, src_payload);
    inst->base_mrf = -1;
@@ -1708,7 +1845,7 @@ fs_visitor::visit(ir_texture *ir)
          mcs = fs_reg(0u);
       break;
    default:
-      assert(!"Unrecognized texture opcode");
+      unreachable("Unrecognized texture opcode");
    };
 
    /* Writemasking doesn't eliminate channels on SIMD8 texture
@@ -1819,8 +1956,7 @@ fs_visitor::gather_channel(ir_texture *ir, int sampler)
       case SWIZZLE_Z: return 2;
       case SWIZZLE_W: return 3;
       default:
-         assert(!"Not reached"); /* zero, one swizzles handled already */
-         return 0;
+         unreachable("Not reached"); /* zero, one swizzles handled already */
    }
 }
 
@@ -1929,15 +2065,14 @@ fs_visitor::visit(ir_discard *ir)
 
    if (brw->gen >= 6) {
       /* For performance, after a discard, jump to the end of the shader.
-       * However, many people will do foliage by discarding based on a
-       * texture's alpha mask, and then continue on to texture with the
-       * remaining pixels.  To avoid trashing the derivatives for those
-       * texture samples, we'll only jump if all of the pixels in the subspan
-       * have been discarded.
+       * Only jump if all relevant channels have been discarded.
        */
       fs_inst *discard_jump = emit(FS_OPCODE_DISCARD_JUMP);
       discard_jump->flag_subreg = 1;
-      discard_jump->predicate = BRW_PREDICATE_ALIGN1_ANY4H;
+
+      discard_jump->predicate = (dispatch_width == 8)
+                                ? BRW_PREDICATE_ALIGN1_ANY8H
+                                : BRW_PREDICATE_ALIGN1_ANY16H;
       discard_jump->predicate_inverse = true;
    }
 }
@@ -1970,8 +2105,7 @@ fs_visitor::visit(ir_constant *ir)
 	 }
       }
    } else if (ir->type->is_record()) {
-      foreach_list(node, &ir->components) {
-	 ir_constant *const field = (ir_constant *) node;
+      foreach_in_list(ir_constant, field, &ir->components) {
 	 const unsigned size = type_size(field->type);
 
 	 field->accept(this);
@@ -2002,7 +2136,7 @@ fs_visitor::visit(ir_constant *ir)
 	    emit(MOV(dst_reg, fs_reg((int)ir->value.b[i])));
 	    break;
 	 default:
-	    assert(!"Non-float/uint/int/bool constant");
+	    unreachable("Non-float/uint/int/bool constant");
 	 }
 	 dst_reg.reg_offset++;
       }
@@ -2073,9 +2207,7 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
 	 break;
 
       default:
-	 assert(!"not reached");
-	 fail("bad cond code\n");
-	 break;
+	 unreachable("not reached");
       }
       return;
    }
@@ -2143,10 +2275,7 @@ fs_visitor::emit_if_gen6(ir_if *ir)
                  brw_conditional_for_comparison(expr->operation)));
 	 return;
       default:
-	 assert(!"not reached");
-	 emit(IF(op[0], fs_reg(0), BRW_CONDITIONAL_NZ));
-	 fail("bad condition\n");
-	 return;
+	 unreachable("not reached");
       }
    }
 
@@ -2260,21 +2389,17 @@ fs_visitor::visit(ir_if *ir)
       emit(IF(BRW_PREDICATE_NORMAL));
    }
 
-   foreach_list(node, &ir->then_instructions) {
-      ir_instruction *ir = (ir_instruction *)node;
-      this->base_ir = ir;
-
-      ir->accept(this);
+   foreach_in_list(ir_instruction, ir_, &ir->then_instructions) {
+      this->base_ir = ir_;
+      ir_->accept(this);
    }
 
    if (!ir->else_instructions.is_empty()) {
       emit(BRW_OPCODE_ELSE);
 
-      foreach_list(node, &ir->else_instructions) {
-	 ir_instruction *ir = (ir_instruction *)node;
-	 this->base_ir = ir;
-
-	 ir->accept(this);
+      foreach_in_list(ir_instruction, ir_, &ir->else_instructions) {
+	 this->base_ir = ir_;
+	 ir_->accept(this);
       }
    }
 
@@ -2293,11 +2418,9 @@ fs_visitor::visit(ir_loop *ir)
    this->base_ir = NULL;
    emit(BRW_OPCODE_DO);
 
-   foreach_list(node, &ir->body_instructions) {
-      ir_instruction *ir = (ir_instruction *)node;
-
-      this->base_ir = ir;
-      ir->accept(this);
+   foreach_in_list(ir_instruction, ir_, &ir->body_instructions) {
+      this->base_ir = ir_;
+      ir_->accept(this);
    }
 
    this->base_ir = NULL;
@@ -2368,14 +2491,14 @@ fs_visitor::visit(ir_call *ir)
        !strcmp("__intrinsic_atomic_predecrement", callee)) {
       visit_atomic_counter_intrinsic(ir);
    } else {
-      assert(!"Unsupported intrinsic.");
+      unreachable("Unsupported intrinsic.");
    }
 }
 
 void
-fs_visitor::visit(ir_return *ir)
+fs_visitor::visit(ir_return *)
 {
-   assert(!"FINISHME");
+   unreachable("FINISHME");
 }
 
 void
@@ -2392,32 +2515,29 @@ fs_visitor::visit(ir_function *ir)
 
       assert(sig);
 
-      foreach_list(node, &sig->body) {
-	 ir_instruction *ir = (ir_instruction *)node;
-	 this->base_ir = ir;
-
-	 ir->accept(this);
+      foreach_in_list(ir_instruction, ir_, &sig->body) {
+	 this->base_ir = ir_;
+	 ir_->accept(this);
       }
    }
 }
 
 void
-fs_visitor::visit(ir_function_signature *ir)
+fs_visitor::visit(ir_function_signature *)
 {
-   assert(!"not reached");
-   (void)ir;
+   unreachable("not reached");
 }
 
 void
 fs_visitor::visit(ir_emit_vertex *)
 {
-   assert(!"not reached");
+   unreachable("not reached");
 }
 
 void
 fs_visitor::visit(ir_end_primitive *)
 {
-   assert(!"not reached");
+   unreachable("not reached");
 }
 
 void
@@ -2519,8 +2639,7 @@ fs_visitor::emit(fs_inst *inst)
 void
 fs_visitor::emit(exec_list list)
 {
-   foreach_list_safe(node, &list) {
-      fs_inst *inst = (fs_inst *)node;
+   foreach_in_list_safe(fs_inst, inst, &list) {
       inst->remove();
       emit(inst);
    }
@@ -2719,7 +2838,7 @@ fs_visitor::emit_color_write(int target, int index, int first_color_mrf)
    }
 }
 
-static int
+static enum brw_conditional_mod
 cond_for_alpha_func(GLenum func)
 {
    switch(func) {
@@ -2736,8 +2855,7 @@ cond_for_alpha_func(GLenum func)
       case GL_NOTEQUAL:
          return BRW_CONDITIONAL_NEQ;
       default:
-         assert(!"Not reached");
-         return 0;
+         unreachable("Not reached");
    }
 }
 

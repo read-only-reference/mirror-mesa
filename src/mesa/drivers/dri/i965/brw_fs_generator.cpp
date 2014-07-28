@@ -84,8 +84,7 @@ fs_generator::patch_discard_jumps_to_fb_writes()
 
    int ip = p->nr_insn;
 
-   foreach_list(node, &this->discard_halt_patches) {
-      ip_record *patch_ip = (ip_record *)node;
+   foreach_in_list(ip_record, patch_ip, &discard_halt_patches) {
       brw_inst *patch = &p->store[patch_ip->ip];
 
       assert(brw_inst_opcode(brw, patch) == BRW_OPCODE_HALT);
@@ -465,8 +464,7 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
          }
          break;
       default:
-	 assert(!"not reached");
-	 break;
+	 unreachable("not reached");
       }
    } else {
       switch (inst->opcode) {
@@ -518,8 +516,7 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
 	 simd_mode = BRW_SAMPLER_SIMD_MODE_SIMD16;
 	 break;
       default:
-	 assert(!"not reached");
-	 break;
+	 unreachable("not reached");
       }
    }
    assert(msg_type != -1);
@@ -998,6 +995,26 @@ fs_generator::generate_mov_dispatch_to_flags(fs_inst *inst)
    brw_pop_insn_state(p);
 }
 
+void
+fs_generator::generate_pixel_interpolator_query(fs_inst *inst,
+                                                struct brw_reg dst,
+                                                struct brw_reg src,
+                                                struct brw_reg msg_data,
+                                                unsigned msg_type)
+{
+   assert(msg_data.file == BRW_IMMEDIATE_VALUE &&
+          msg_data.type == BRW_REGISTER_TYPE_UD);
+
+   brw_pixel_interpolator_query(p,
+         retype(dst, BRW_REGISTER_TYPE_UW),
+         src,
+         inst->pi_noperspective,
+         msg_type,
+         msg_data.dw1.ud,
+         inst->mlen,
+         inst->regs_written);
+}
+
 
 static uint32_t brw_file_from_reg(fs_reg *reg)
 {
@@ -1009,8 +1026,7 @@ static uint32_t brw_file_from_reg(fs_reg *reg)
    case IMM:
       return BRW_IMMEDIATE_VALUE;
    default:
-      assert(!"not reached");
-      return BRW_GENERAL_REGISTER_FILE;
+      unreachable("not reached");
    }
 }
 
@@ -1035,18 +1051,16 @@ brw_reg_from_fs_reg(fs_reg *reg)
    case IMM:
       switch (reg->type) {
       case BRW_REGISTER_TYPE_F:
-	 brw_reg = brw_imm_f(reg->imm.f);
+	 brw_reg = brw_imm_f(reg->fixed_hw_reg.dw1.f);
 	 break;
       case BRW_REGISTER_TYPE_D:
-	 brw_reg = brw_imm_d(reg->imm.i);
+	 brw_reg = brw_imm_d(reg->fixed_hw_reg.dw1.d);
 	 break;
       case BRW_REGISTER_TYPE_UD:
-	 brw_reg = brw_imm_ud(reg->imm.u);
+	 brw_reg = brw_imm_ud(reg->fixed_hw_reg.dw1.ud);
 	 break;
       default:
-	 assert(!"not reached");
-	 brw_reg = brw_null_reg();
-	 break;
+	 unreachable("not reached");
       }
       break;
    case HW_REG:
@@ -1058,13 +1072,9 @@ brw_reg_from_fs_reg(fs_reg *reg)
       brw_reg = brw_null_reg();
       break;
    case UNIFORM:
-      assert(!"not reached");
-      brw_reg = brw_null_reg();
-      break;
+      unreachable("not reached");
    default:
-      assert(!"not reached");
-      brw_reg = brw_null_reg();
-      break;
+      unreachable("not reached");
    }
    if (reg->abs)
       brw_reg = brw_abs(brw_reg);
@@ -1326,8 +1336,7 @@ fs_generator::generate_code(exec_list *instructions)
    if (unlikely(debug_flag))
       cfg = new(mem_ctx) cfg_t(instructions);
 
-   foreach_list(node, instructions) {
-      fs_inst *inst = (fs_inst *)node;
+   foreach_in_list(fs_inst, inst, instructions) {
       struct brw_reg src[3], dst;
       unsigned int last_insn_offset = p->next_insn_offset;
 
@@ -1741,6 +1750,26 @@ fs_generator::generate_code(exec_list *instructions)
          }
          break;
 
+      case FS_OPCODE_INTERPOLATE_AT_CENTROID:
+         generate_pixel_interpolator_query(inst, dst, src[0], src[1],
+                                           GEN7_PIXEL_INTERPOLATOR_LOC_CENTROID);
+         break;
+
+      case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
+         generate_pixel_interpolator_query(inst, dst, src[0], src[1],
+                                           GEN7_PIXEL_INTERPOLATOR_LOC_SAMPLE);
+         break;
+
+      case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
+         generate_pixel_interpolator_query(inst, dst, src[0], src[1],
+                                           GEN7_PIXEL_INTERPOLATOR_LOC_SHARED_OFFSET);
+         break;
+
+      case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
+         generate_pixel_interpolator_query(inst, dst, src[0], src[1],
+                                           GEN7_PIXEL_INTERPOLATOR_LOC_PER_SLOT_OFFSET);
+         break;
+
       default:
 	 if (inst->opcode < (int) ARRAY_SIZE(opcode_descs)) {
 	    _mesa_problem(ctx, "Unsupported opcode `%s' in FS",
@@ -1751,18 +1780,19 @@ fs_generator::generate_code(exec_list *instructions)
 	 abort();
 
       case SHADER_OPCODE_LOAD_PAYLOAD:
-         assert(!"Should be lowered by lower_load_payload()");
-         break;
+         unreachable("Should be lowered by lower_load_payload()");
       }
 
-      if (inst->conditional_mod) {
-         /* Set the conditional modifier on the last instruction we generated.
-          * Also, make sure we only emitted one instruction - anything else
-          * doesn't make sense.
-          */
-         assert(p->next_insn_offset == last_insn_offset + 16);
+      if (inst->no_dd_clear || inst->no_dd_check || inst->conditional_mod) {
+         assert(p->next_insn_offset == last_insn_offset + 16 ||
+                !"conditional_mod, no_dd_check, or no_dd_clear set for IR "
+                 "emitting more than 1 instruction");
+
          brw_inst *last = &p->store[last_insn_offset / 16];
+
          brw_inst_set_cond_modifier(brw, last, inst->conditional_mod);
+         brw_inst_set_no_dd_clear(brw, last, inst->no_dd_clear);
+         brw_inst_set_no_dd_check(brw, last, inst->no_dd_check);
       }
    }
 

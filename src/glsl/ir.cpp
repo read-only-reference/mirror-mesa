@@ -250,6 +250,7 @@ ir_expression::ir_expression(int op, ir_rvalue *op0)
    case ir_unop_dFdx:
    case ir_unop_dFdy:
    case ir_unop_bitfield_reverse:
+   case ir_unop_interpolate_at_centroid:
       this->type = op0->type;
       break;
 
@@ -403,6 +404,8 @@ ir_expression::ir_expression(int op, ir_rvalue *op0, ir_rvalue *op1)
    case ir_binop_rshift:
    case ir_binop_bfm:
    case ir_binop_ldexp:
+   case ir_binop_interpolate_at_offset:
+   case ir_binop_interpolate_at_sample:
       this->type = op0->type;
       break;
 
@@ -524,6 +527,7 @@ static const char *const operator_strs[] = {
    "find_msb",
    "find_lsb",
    "noise",
+   "interpolate_at_centroid",
    "+",
    "-",
    "*",
@@ -557,6 +561,8 @@ static const char *const operator_strs[] = {
    "ubo_load",
    "ldexp",
    "vector_extract",
+   "interpolate_at_offset",
+   "interpolate_at_sample",
    "fma",
    "lrp",
    "csel",
@@ -699,8 +705,7 @@ ir_constant::ir_constant(const struct glsl_type *type, exec_list *value_list)
    if (type->is_array()) {
       this->array_elements = ralloc_array(this, ir_constant *, type->length);
       unsigned i = 0;
-      foreach_list(node, value_list) {
-	 ir_constant *value = (ir_constant *) node;
+      foreach_in_list(ir_constant, value, value_list) {
 	 assert(value->as_constant() != NULL);
 
 	 this->array_elements[i++] = value;
@@ -1001,9 +1006,7 @@ ir_constant::copy_offset(ir_constant *src, int offset)
    case GLSL_TYPE_STRUCT: {
       assert (src->type == this->type);
       this->components.make_empty();
-      foreach_list(node, &src->components) {
-	 ir_constant *const orig = (ir_constant *) node;
-
+      foreach_in_list(ir_constant, orig, &src->components) {
 	 this->components.push_tail(orig->clone(this, NULL));
       }
       break;
@@ -1702,8 +1705,7 @@ ir_function::ir_function(const char *name)
 bool
 ir_function::has_user_signature()
 {
-   foreach_list(n, &this->signatures) {
-      ir_function_signature *const sig = (ir_function_signature *) n;
+   foreach_in_list(ir_function_signature, sig, &this->signatures) {
       if (!sig->is_builtin())
 	 return true;
    }
@@ -1724,8 +1726,8 @@ ir_rvalue::error_value(void *mem_ctx)
 void
 visit_exec_list(exec_list *list, ir_visitor *visitor)
 {
-   foreach_list_safe(n, list) {
-      ((ir_instruction *) n)->accept(visitor);
+   foreach_in_list_safe(ir_instruction, node, list) {
+      node->accept(visitor);
    }
 }
 
@@ -1746,8 +1748,7 @@ steal_memory(ir_instruction *ir, void *new_ctx)
     */
    if (constant != NULL) {
       if (constant->type->is_record()) {
-	 foreach_list(n, &constant->components) {
-	    ir_constant *field = (ir_constant *) n;
+	 foreach_in_list(ir_constant, field, &constant->components) {
 	    steal_memory(field, ir);
 	 }
       } else if (constant->type->is_array()) {
@@ -1764,8 +1765,8 @@ steal_memory(ir_instruction *ir, void *new_ctx)
 void
 reparent_ir(exec_list *list, void *mem_ctx)
 {
-   foreach_list(node, list) {
-      visit_tree((ir_instruction *) node, steal_memory, mem_ctx);
+   foreach_in_list(ir_instruction, node, list) {
+      visit_tree(node, steal_memory, mem_ctx);
    }
 }
 

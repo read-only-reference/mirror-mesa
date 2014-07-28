@@ -325,7 +325,7 @@ struct blitter_context *util_blitter_create(struct pipe_context *pipe)
    }
 
    if (pipe->screen->get_param(pipe->screen, PIPE_CAP_TGSI_INSTANCEID) &&
-       pipe->screen->get_param(pipe->screen, PIPE_CAP_TGSI_VS_LAYER)) {
+       pipe->screen->get_param(pipe->screen, PIPE_CAP_TGSI_VS_LAYER_VIEWPORT)) {
       ctx->vs_layered = util_make_layered_clear_vertex_shader(pipe);
    }
 
@@ -382,6 +382,15 @@ void util_blitter_destroy(struct blitter_context *blitter)
          ctx->delete_fs_state(pipe, ctx->fs_texfetch_depthstencil[i]);
       if (ctx->fs_texfetch_stencil[i])
          ctx->delete_fs_state(pipe, ctx->fs_texfetch_stencil[i]);
+
+      if (ctx->fs_texfetch_col_msaa[i])
+         ctx->delete_fs_state(pipe, ctx->fs_texfetch_col_msaa[i]);
+      if (ctx->fs_texfetch_depth_msaa[i])
+         ctx->delete_fs_state(pipe, ctx->fs_texfetch_depth_msaa[i]);
+      if (ctx->fs_texfetch_depthstencil_msaa[i])
+         ctx->delete_fs_state(pipe, ctx->fs_texfetch_depthstencil_msaa[i]);
+      if (ctx->fs_texfetch_stencil_msaa[i])
+         ctx->delete_fs_state(pipe, ctx->fs_texfetch_stencil_msaa[i]);
 
       for (j = 0; j< Elements(ctx->fs_resolve[i]); j++)
          for (f = 0; f < 2; f++)

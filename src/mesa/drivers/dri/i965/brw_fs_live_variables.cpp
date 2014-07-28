@@ -144,10 +144,7 @@ fs_live_variables::setup_def_use()
       if (b > 0)
 	 assert(cfg->blocks[b - 1]->end_ip == ip - 1);
 
-      for (fs_inst *inst = (fs_inst *)block->start;
-	   inst != block->end->next;
-	   inst = (fs_inst *)inst->next) {
-
+      foreach_inst_in_block(fs_inst, inst, block) {
 	 /* Set use[] for this instruction */
 	 for (unsigned int i = 0; i < inst->sources; i++) {
             fs_reg reg = inst->src[i];
@@ -246,7 +243,7 @@ fs_live_variables::var_from_reg(fs_reg *reg)
    return var_from_vgrf[reg->reg] + reg->reg_offset;
 }
 
-fs_live_variables::fs_live_variables(fs_visitor *v, cfg_t *cfg)
+fs_live_variables::fs_live_variables(fs_visitor *v, const cfg_t *cfg)
    : v(v), cfg(cfg)
 {
    mem_ctx = ralloc_context(NULL);
@@ -298,6 +295,8 @@ fs_visitor::invalidate_live_intervals()
 {
    ralloc_free(live_intervals);
    live_intervals = NULL;
+
+   invalidate_cfg();
 }
 
 /**
@@ -323,8 +322,8 @@ fs_visitor::calculate_live_intervals()
       virtual_grf_end[i] = -1;
    }
 
-   cfg_t cfg(&instructions);
-   this->live_intervals = new(mem_ctx) fs_live_variables(this, &cfg);
+   calculate_cfg();
+   this->live_intervals = new(mem_ctx) fs_live_variables(this, cfg);
 
    /* Merge the per-component live ranges to whole VGRF live ranges. */
    for (int i = 0; i < live_intervals->num_vars; i++) {

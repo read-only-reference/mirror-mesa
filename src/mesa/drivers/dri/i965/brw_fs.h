@@ -46,7 +46,7 @@ extern "C" {
 #include "brw_eu.h"
 #include "brw_wm.h"
 #include "brw_shader.h"
-#include "intel_asm_printer.h"
+#include "intel_asm_annotation.h"
 }
 #include "gen8_generator.h"
 #include "glsl/glsl_types.h"
@@ -63,7 +63,7 @@ namespace brw {
    class fs_live_variables;
 }
 
-class fs_reg {
+class fs_reg : public backend_reg {
 public:
    DECLARE_RALLOC_CXX_OPERATORS(fs_reg)
 
@@ -75,64 +75,31 @@ public:
    fs_reg(uint32_t u);
    fs_reg(struct brw_reg fixed_hw_reg);
    fs_reg(enum register_file file, int reg);
-   fs_reg(enum register_file file, int reg, uint32_t type);
+   fs_reg(enum register_file file, int reg, enum brw_reg_type type);
    fs_reg(class fs_visitor *v, const struct glsl_type *type);
 
    bool equals(const fs_reg &r) const;
-   bool is_zero() const;
-   bool is_one() const;
-   bool is_null() const;
    bool is_valid_3src() const;
    bool is_contiguous() const;
-   bool is_accumulator() const;
 
    fs_reg &apply_stride(unsigned stride);
    /** Smear a channel of the reg to all channels. */
    fs_reg &set_smear(unsigned subreg);
 
-   /** Register file: GRF, MRF, IMM. */
-   enum register_file file;
-   /** Register type.  BRW_REGISTER_TYPE_* */
-   uint8_t type;
-   /**
-    * Register number.  For MRF, it's the hardware register.  For
-    * GRF, it's a virtual register number until register allocation
-    */
-   uint16_t reg;
-   /**
-    * Offset from the start of the contiguous register block.
-    *
-    * For pre-register-allocation GRFs, this is in units of a float per pixel
-    * (1 hardware register for SIMD8 mode, or 2 registers for SIMD16 mode).
-    * For uniforms, this is in units of 1 float.
-    */
-   int reg_offset;
    /**
     * Offset in bytes from the start of the register.  Values up to a
     * backend_reg::reg_offset unit are valid.
     */
    int subreg_offset;
 
-   /** Value for file == IMM */
-   union {
-      int32_t i;
-      uint32_t u;
-      float f;
-   } imm;
-
-   struct brw_reg fixed_hw_reg;
-
    fs_reg *reladdr;
-
-   bool negate;
-   bool abs;
 
    /** Register region horizontal stride */
    uint8_t stride;
 };
 
 static inline fs_reg
-retype(fs_reg reg, unsigned type)
+retype(fs_reg reg, enum brw_reg_type type)
 {
    reg.fixed_hw_reg.type = reg.type = type;
    return reg;
@@ -216,29 +183,20 @@ public:
    fs_reg dst;
    fs_reg *src;
 
-   uint32_t texture_offset; /**< Texture offset bitfield */
-   uint32_t offset; /* spill/unspill offset */
-
    uint8_t sources; /**< Number of fs_reg sources. */
-   uint8_t conditional_mod; /**< BRW_CONDITIONAL_* */
 
    /* Chooses which flag subregister (f0.0 or f0.1) is used for conditional
     * mod and predication.
     */
    uint8_t flag_subreg;
 
-   uint8_t mlen; /**< SEND message length */
    uint8_t regs_written; /**< Number of vgrfs written by a SEND message, or 1 */
-   int8_t base_mrf; /**< First MRF in the SEND message, if mlen is nonzero. */
-   uint8_t sampler;
-   uint8_t target; /**< MRT target. */
-   bool saturate:1;
    bool eot:1;
    bool header_present:1;
    bool shadow_compare:1;
    bool force_uncompressed:1;
    bool force_sechalf:1;
-   bool force_writemask_all:1;
+   bool pi_noperspective:1;   /**< Pixel interpolator noperspective flag */
 };
 
 /**
@@ -290,47 +248,53 @@ public:
    void emit(exec_list list);
 
    fs_inst *emit(enum opcode opcode);
-   fs_inst *emit(enum opcode opcode, fs_reg dst);
-   fs_inst *emit(enum opcode opcode, fs_reg dst, fs_reg src0);
-   fs_inst *emit(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst *emit(enum opcode opcode, fs_reg dst,
-                 fs_reg src0, fs_reg src1, fs_reg src2);
-   fs_inst *emit(enum opcode opcode, fs_reg dst,
+   fs_inst *emit(enum opcode opcode, const fs_reg &dst);
+   fs_inst *emit(enum opcode opcode, const fs_reg &dst, const fs_reg &src0);
+   fs_inst *emit(enum opcode opcode, const fs_reg &dst, const fs_reg &src0,
+                 const fs_reg &src1);
+   fs_inst *emit(enum opcode opcode, const fs_reg &dst,
+                 const fs_reg &src0, const fs_reg &src1, const fs_reg &src2);
+   fs_inst *emit(enum opcode opcode, const fs_reg &dst,
                  fs_reg src[], int sources);
 
-   fs_inst *MOV(fs_reg dst, fs_reg src);
-   fs_inst *NOT(fs_reg dst, fs_reg src);
-   fs_inst *RNDD(fs_reg dst, fs_reg src);
-   fs_inst *RNDE(fs_reg dst, fs_reg src);
-   fs_inst *RNDZ(fs_reg dst, fs_reg src);
-   fs_inst *FRC(fs_reg dst, fs_reg src);
-   fs_inst *ADD(fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst *MUL(fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst *MACH(fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst *MAC(fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst *SHL(fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst *SHR(fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst *ASR(fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst *AND(fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst *OR(fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst *XOR(fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst *IF(uint32_t predicate);
-   fs_inst *IF(fs_reg src0, fs_reg src1, uint32_t condition);
+   fs_inst *MOV(const fs_reg &dst, const fs_reg &src);
+   fs_inst *NOT(const fs_reg &dst, const fs_reg &src);
+   fs_inst *RNDD(const fs_reg &dst, const fs_reg &src);
+   fs_inst *RNDE(const fs_reg &dst, const fs_reg &src);
+   fs_inst *RNDZ(const fs_reg &dst, const fs_reg &src);
+   fs_inst *FRC(const fs_reg &dst, const fs_reg &src);
+   fs_inst *ADD(const fs_reg &dst, const fs_reg &src0, const fs_reg &src1);
+   fs_inst *MUL(const fs_reg &dst, const fs_reg &src0, const fs_reg &src1);
+   fs_inst *MACH(const fs_reg &dst, const fs_reg &src0, const fs_reg &src1);
+   fs_inst *MAC(const fs_reg &dst, const fs_reg &src0, const fs_reg &src1);
+   fs_inst *SHL(const fs_reg &dst, const fs_reg &src0, const fs_reg &src1);
+   fs_inst *SHR(const fs_reg &dst, const fs_reg &src0, const fs_reg &src1);
+   fs_inst *ASR(const fs_reg &dst, const fs_reg &src0, const fs_reg &src1);
+   fs_inst *AND(const fs_reg &dst, const fs_reg &src0, const fs_reg &src1);
+   fs_inst *OR(const fs_reg &dst, const fs_reg &src0, const fs_reg &src1);
+   fs_inst *XOR(const fs_reg &dst, const fs_reg &src0, const fs_reg &src1);
+   fs_inst *IF(enum brw_predicate predicate);
+   fs_inst *IF(const fs_reg &src0, const fs_reg &src1,
+               enum brw_conditional_mod condition);
    fs_inst *CMP(fs_reg dst, fs_reg src0, fs_reg src1,
-                uint32_t condition);
-   fs_inst *LRP(fs_reg dst, fs_reg a, fs_reg y, fs_reg x);
+                enum brw_conditional_mod condition);
+   fs_inst *LRP(const fs_reg &dst, const fs_reg &a, const fs_reg &y,
+                const fs_reg &x);
    fs_inst *DEP_RESOLVE_MOV(int grf);
-   fs_inst *BFREV(fs_reg dst, fs_reg value);
-   fs_inst *BFE(fs_reg dst, fs_reg bits, fs_reg offset, fs_reg value);
-   fs_inst *BFI1(fs_reg dst, fs_reg bits, fs_reg offset);
-   fs_inst *BFI2(fs_reg dst, fs_reg bfi1_dst, fs_reg insert, fs_reg base);
-   fs_inst *FBH(fs_reg dst, fs_reg value);
-   fs_inst *FBL(fs_reg dst, fs_reg value);
-   fs_inst *CBIT(fs_reg dst, fs_reg value);
-   fs_inst *MAD(fs_reg dst, fs_reg c, fs_reg b, fs_reg a);
-   fs_inst *ADDC(fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst *SUBB(fs_reg dst, fs_reg src0, fs_reg src1);
-   fs_inst *SEL(fs_reg dst, fs_reg src0, fs_reg src1);
+   fs_inst *BFREV(const fs_reg &dst, const fs_reg &value);
+   fs_inst *BFE(const fs_reg &dst, const fs_reg &bits, const fs_reg &offset,
+                const fs_reg &value);
+   fs_inst *BFI1(const fs_reg &dst, const fs_reg &bits, const fs_reg &offset);
+   fs_inst *BFI2(const fs_reg &dst, const fs_reg &bfi1_dst,
+                 const fs_reg &insert, const fs_reg &base);
+   fs_inst *FBH(const fs_reg &dst, const fs_reg &value);
+   fs_inst *FBL(const fs_reg &dst, const fs_reg &value);
+   fs_inst *CBIT(const fs_reg &dst, const fs_reg &value);
+   fs_inst *MAD(const fs_reg &dst, const fs_reg &c, const fs_reg &b,
+                const fs_reg &a);
+   fs_inst *ADDC(const fs_reg &dst, const fs_reg &src0, const fs_reg &src1);
+   fs_inst *SUBB(const fs_reg &dst, const fs_reg &src0, const fs_reg &src1);
+   fs_inst *SEL(const fs_reg &dst, const fs_reg &src0, const fs_reg &src1);
 
    int type_size(const struct glsl_type *type);
    fs_inst *get_instruction_generating_reg(fs_inst *start,
@@ -370,7 +334,7 @@ public:
    void calculate_register_pressure();
    bool opt_algebraic();
    bool opt_cse();
-   bool opt_cse_local(bblock_t *block, exec_list *aeb);
+   bool opt_cse_local(bblock_t *block);
    bool opt_copy_propagate();
    bool try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry);
    bool opt_copy_propagate_local(void *mem_ctx, bblock_t *block,
@@ -423,7 +387,7 @@ public:
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0, fs_reg src1);
    void emit_lrp(const fs_reg &dst, const fs_reg &x, const fs_reg &y,
                  const fs_reg &a);
-   void emit_minmax(uint32_t conditionalmod, const fs_reg &dst,
+   void emit_minmax(enum brw_conditional_mod conditionalmod, const fs_reg &dst,
                     const fs_reg &src0, const fs_reg &src1);
    bool try_emit_saturate(ir_expression *ir);
    bool try_emit_mad(ir_expression *ir);
@@ -455,7 +419,7 @@ public:
    void emit_fp_minmax(const struct prog_instruction *fpi,
                        fs_reg dst, fs_reg src0, fs_reg src1);
 
-   void emit_fp_sop(uint32_t conditional_mod,
+   void emit_fp_sop(enum brw_conditional_mod conditional_mod,
                     const struct prog_instruction *fpi,
                     fs_reg dst, fs_reg src0, fs_reg src1, fs_reg one);
 
@@ -474,6 +438,8 @@ public:
 
    void emit_untyped_surface_read(unsigned surf_index, fs_reg dst,
                                   fs_reg offset);
+
+   void emit_interpolate_expression(ir_expression *ir);
 
    bool try_rewrite_rhs_to_dst(ir_assignment *ir,
 			       fs_reg dst,
@@ -659,6 +625,12 @@ private:
                                                  struct brw_reg index,
                                                  struct brw_reg offset);
    void generate_mov_dispatch_to_flags(fs_inst *inst);
+
+   void generate_pixel_interpolator_query(fs_inst *inst,
+                                          struct brw_reg dst,
+                                          struct brw_reg src,
+                                          struct brw_reg msg_data,
+                                          unsigned msg_type);
 
    void generate_set_omask(fs_inst *inst,
                            struct brw_reg dst,

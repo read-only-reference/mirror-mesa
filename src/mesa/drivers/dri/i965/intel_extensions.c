@@ -163,6 +163,7 @@ intelInitExtensions(struct gl_context *ctx)
    assert(brw->gen >= 4);
 
    ctx->Extensions.ARB_buffer_storage = true;
+   ctx->Extensions.ARB_clear_texture = true;
    ctx->Extensions.ARB_depth_buffer_float = true;
    ctx->Extensions.ARB_depth_clamp = true;
    ctx->Extensions.ARB_depth_texture = true;
@@ -297,8 +298,10 @@ intelInitExtensions(struct gl_context *ctx)
       /* Only enable this in core profile because other parts of Mesa behave
        * slightly differently when the extension is enabled.
        */
-      if (ctx->API == API_OPENGL_CORE)
+      if (ctx->API == API_OPENGL_CORE) {
          ctx->Extensions.ARB_viewport_array = true;
+         ctx->Extensions.AMD_vertex_shader_viewport_index = true;
+      }
    }
 
    if (brw->gen >= 8) {

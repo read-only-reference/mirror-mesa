@@ -116,10 +116,8 @@ gen8_fs_generator::generate_fb_write(fs_inst *ir)
 
    uint32_t msg_control = msg_type;
 
-   /* "Last Render Target Select" must be set on all writes to the last of
-    * the render targets (if using MRT), or always for a single RT scenario.
-    */
-   if ((ir->target == key->nr_color_regions - 1) || !key->nr_color_regions)
+   /* Set "Last Render Target Select" on the final FB write. */
+   if (ir->eot)
       msg_control |= (1 << 4); /* Last Render Target Select */
 
    uint32_t surf_index =
@@ -231,8 +229,7 @@ gen8_fs_generator::generate_tex(fs_inst *ir,
       }
       break;
    default:
-      assert(!"not reached");
-      break;
+      unreachable("not reached");
    }
    assert(msg_type != -1);
 
@@ -663,8 +660,7 @@ gen8_fs_generator::patch_discard_jumps_to_fb_writes()
 
    int ip = nr_inst;
 
-   foreach_list(node, &discard_halt_patches) {
-      ip_record *patch_ip = (ip_record *) node;
+   foreach_in_list(ip_record, patch_ip, &discard_halt_patches) {
       gen8_instruction *patch = &store[patch_ip->ip];
       assert(gen8_opcode(patch) == BRW_OPCODE_HALT);
 
@@ -717,13 +713,8 @@ gen8_fs_generator::generate_set_omask(fs_inst *inst,
              mask.hstride == BRW_HORIZONTAL_STRIDE_0);
    }
 
-   unsigned save_exec_size = default_state.exec_size;
-   default_state.exec_size = BRW_EXECUTE_8;
-
    gen8_instruction *mov = MOV(dst, retype(mask, dst.type));
    gen8_set_mask_control(mov, BRW_MASK_DISABLE);
-
-   default_state.exec_size = save_exec_size;
 }
 
 /**
@@ -895,8 +886,7 @@ gen8_fs_generator::generate_code(exec_list *instructions)
    if (unlikely(INTEL_DEBUG & DEBUG_WM))
       cfg = new(mem_ctx) cfg_t(instructions);
 
-   foreach_list(node, instructions) {
-      fs_inst *ir = (fs_inst *) node;
+   foreach_in_list(fs_inst, ir, instructions) {
       struct brw_reg src[3], dst;
 
       if (unlikely(INTEL_DEBUG & DEBUG_WM))
@@ -924,7 +914,7 @@ gen8_fs_generator::generate_code(exec_list *instructions)
       default_state.mask_control = ir->force_writemask_all;
       default_state.flag_subreg_nr = ir->flag_subreg;
 
-      if (dispatch_width == 16 && !ir->force_uncompressed)
+      if (dispatch_width == 16 && !ir->force_uncompressed && !ir->force_sechalf)
          default_state.exec_size = BRW_EXECUTE_16;
       else
          default_state.exec_size = BRW_EXECUTE_8;
@@ -1127,8 +1117,7 @@ gen8_fs_generator::generate_code(exec_list *instructions)
 
       case FS_OPCODE_PIXEL_X:
       case FS_OPCODE_PIXEL_Y:
-         assert(!"FS_OPCODE_PIXEL_X and FS_OPCODE_PIXEL_Y are only for Gen4-5.");
-         break;
+         unreachable("FS_OPCODE_PIXEL_X and FS_OPCODE_PIXEL_Y are only for Gen4-5.");
 
       case FS_OPCODE_CINTERP:
          MOV(dst, src[0]);
@@ -1195,8 +1184,7 @@ gen8_fs_generator::generate_code(exec_list *instructions)
          break;
 
       case SHADER_OPCODE_SHADER_TIME_ADD:
-         assert(!"XXX: Missing Gen8 scalar support for INTEL_DEBUG=shader_time");
-         break;
+         unreachable("XXX: Missing Gen8 scalar support for INTEL_DEBUG=shader_time");
 
       case SHADER_OPCODE_UNTYPED_ATOMIC:
          generate_untyped_atomic(ir, dst, src[0], src[1]);

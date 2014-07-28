@@ -38,7 +38,7 @@
 #include "brw_structs.h"
 #include "brw_defines.h"
 #include "brw_reg.h"
-#include "intel_asm_printer.h"
+#include "intel_asm_annotation.h"
 #include "program/prog_instruction.h"
 
 #ifdef __cplusplus
@@ -320,7 +320,7 @@ void brw_shader_time_add(struct brw_compile *p,
  * channel.
  */
 brw_inst *brw_IF(struct brw_compile *p, unsigned execute_size);
-brw_inst *gen6_IF(struct brw_compile *p, uint32_t conditional,
+brw_inst *gen6_IF(struct brw_compile *p, enum brw_conditional_mod conditional,
                   struct brw_reg src0, struct brw_reg src1);
 
 void brw_ELSE(struct brw_compile *p);
@@ -372,6 +372,16 @@ brw_untyped_surface_read(struct brw_compile *p,
                          unsigned msg_length,
                          unsigned response_length);
 
+void
+brw_pixel_interpolator_query(struct brw_compile *p,
+                             struct brw_reg dest,
+                             struct brw_reg mrf,
+                             bool noperspective,
+                             unsigned mode,
+                             unsigned data,
+                             unsigned msg_length,
+                             unsigned response_length);
+
 /***********************************************************************
  * brw_eu_util.c:
  */
@@ -404,7 +414,7 @@ void brw_set_src1(struct brw_compile *p, brw_inst *insn, struct brw_reg reg);
 
 void brw_set_uip_jip(struct brw_compile *p);
 
-uint32_t brw_swap_cmod(uint32_t cmod);
+enum brw_conditional_mod brw_swap_cmod(uint32_t cmod);
 
 /* brw_eu_compact.c */
 void brw_init_compaction_tables(struct brw_context *brw);

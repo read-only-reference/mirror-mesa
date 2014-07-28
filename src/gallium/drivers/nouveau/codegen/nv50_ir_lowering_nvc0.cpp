@@ -600,13 +600,18 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
    if (i->tex.target.isArray() || i->tex.rIndirectSrc >= 0 || i->tex.sIndirectSrc >= 0) {
       LValue *src = new_LValue(func, FILE_GPR); // 0xttxsaaaa
 
+      Value *ticRel = i->getIndirectR();
+      Value *tscRel = i->getIndirectS();
+
+      if (ticRel)
+         i->setSrc(i->tex.rIndirectSrc, NULL);
+      if (tscRel)
+         i->setSrc(i->tex.sIndirectSrc, NULL);
+
       Value *arrayIndex = i->tex.target.isArray() ? i->getSrc(lyr) : NULL;
       for (int s = dim; s >= 1; --s)
          i->setSrc(s, i->getSrc(s - 1));
       i->setSrc(0, arrayIndex);
-
-      Value *ticRel = i->getIndirectR();
-      Value *tscRel = i->getIndirectS();
 
       if (arrayIndex) {
          int sat = (i->op == OP_TXF) ? 1 : 0;
@@ -616,14 +621,10 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
          bld.loadImm(src, 0);
       }
 
-      if (ticRel) {
-         i->setSrc(i->tex.rIndirectSrc, NULL);
+      if (ticRel)
          bld.mkOp3(OP_INSBF, TYPE_U32, src, ticRel, bld.mkImm(0x0917), src);
-      }
-      if (tscRel) {
-         i->setSrc(i->tex.sIndirectSrc, NULL);
+      if (tscRel)
          bld.mkOp3(OP_INSBF, TYPE_U32, src, tscRel, bld.mkImm(0x0710), src);
-      }
 
       i->setSrc(0, src);
    }
@@ -639,12 +640,14 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
    if (i->tex.useOffsets) {
       int n, c;
       int s = i->srcCount(0xff, true);
-      if (i->tex.target.isShadow())
-         s--;
-      if (i->srcExists(s)) // move potential predicate out of the way
-         i->moveSources(s, 1);
-      if (i->tex.useOffsets == 4 && i->srcExists(s + 1))
-         i->moveSources(s + 1, 1);
+      if (i->op != OP_TXD || chipset < NVISA_GK104_CHIPSET) {
+         if (i->tex.target.isShadow())
+            s--;
+         if (i->srcExists(s)) // move potential predicate out of the way
+            i->moveSources(s, 1);
+         if (i->tex.useOffsets == 4 && i->srcExists(s + 1))
+            i->moveSources(s + 1, 1);
+      }
       if (i->op == OP_TXG) {
          // Either there is 1 offset, which goes into the 2 low bytes of the
          // first source, or there are 4 offsets, which go into 2 sources (8
@@ -673,7 +676,22 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
             assert(i->offset[0][c].getImmediate(val));
             imm |= (val.reg.data.u32 & 0xf) << (c * 4);
          }
-         i->setSrc(s, bld.loadImm(NULL, imm));
+         if (i->op == OP_TXD && chipset >= NVISA_GK104_CHIPSET) {
+            // The offset goes into the upper 16 bits of the array index. So
+            // create it if it's not already there, and INSBF it if it already
+            // is.
+            if (i->tex.target.isArray()) {
+               bld.mkOp3(OP_INSBF, TYPE_U32, i->getSrc(0),
+                         bld.loadImm(NULL, imm), bld.mkImm(0xc10),
+                         i->getSrc(0));
+            } else {
+               for (int s = dim; s >= 1; --s)
+                  i->setSrc(s, i->getSrc(s - 1));
+               i->setSrc(0, bld.loadImm(NULL, imm << 16));
+            }
+         } else {
+            i->setSrc(s, bld.loadImm(NULL, imm));
+         }
       }
    }
 
@@ -712,6 +730,7 @@ NVC0LoweringPass::handleManualTXD(TexInstruction *i)
    Value *zero = bld.loadImm(bld.getSSA(), 0);
    int l, c;
    const int dim = i->tex.target.getDim();
+   const int array = i->tex.target.isArray();
 
    i->op = OP_TEX; // no need to clone dPdx/dPdy later
 
@@ -722,7 +741,7 @@ NVC0LoweringPass::handleManualTXD(TexInstruction *i)
    for (l = 0; l < 4; ++l) {
       // mov coordinates from lane l to all lanes
       for (c = 0; c < dim; ++c)
-         bld.mkQuadop(0x00, crd[c], l, i->getSrc(c), zero);
+         bld.mkQuadop(0x00, crd[c], l, i->getSrc(c + array), zero);
       // add dPdx from lane l to lanes dx
       for (c = 0; c < dim; ++c)
          bld.mkQuadop(qOps[l][0], crd[c], l, i->dPdx[c].get(), crd[c]);
@@ -732,7 +751,7 @@ NVC0LoweringPass::handleManualTXD(TexInstruction *i)
       // texture
       bld.insert(tex = cloneForward(func, i));
       for (c = 0; c < dim; ++c)
-         tex->setSrc(c, crd[c]);
+         tex->setSrc(c + array, crd[c]);
       // save results
       for (c = 0; i->defExists(c); ++c) {
          Instruction *mov;
@@ -758,19 +777,36 @@ bool
 NVC0LoweringPass::handleTXD(TexInstruction *txd)
 {
    int dim = txd->tex.target.getDim();
-   int arg = txd->tex.target.getArgCount();
+   unsigned arg = txd->tex.target.getArgCount();
+   unsigned expected_args = arg;
+   const int chipset = prog->getTarget()->getChipset();
+
+   if (chipset >= NVISA_GK104_CHIPSET) {
+      if (!txd->tex.target.isArray() && txd->tex.useOffsets)
+         expected_args++;
+   } else {
+      if (txd->tex.useOffsets)
+         expected_args++;
+      if (!txd->tex.target.isArray() && (
+                txd->tex.rIndirectSrc >= 0 || txd->tex.sIndirectSrc >= 0))
+         expected_args++;
+   }
+
+   if (expected_args > 4 ||
+       dim > 2 ||
+       txd->tex.target.isShadow() ||
+       txd->tex.target.isCube())
+      txd->op = OP_TEX;
 
    handleTEX(txd);
    while (txd->srcExists(arg))
       ++arg;
 
    txd->tex.derivAll = true;
-   if (dim > 2 ||
-       txd->tex.target.isCube() ||
-       arg > 4 ||
-       txd->tex.target.isShadow())
+   if (txd->op == OP_TEX)
       return handleManualTXD(txd);
 
+   assert(arg == expected_args);
    for (int c = 0; c < dim; ++c) {
       txd->setSrc(arg + c * 2 + 0, txd->dPdx[c]);
       txd->setSrc(arg + c * 2 + 1, txd->dPdy[c]);
@@ -1318,7 +1354,14 @@ NVC0LoweringPass::handleRDSV(Instruction *i)
    switch (sv) {
    case SV_POSITION:
       assert(prog->getType() == Program::TYPE_FRAGMENT);
-      bld.mkInterp(NV50_IR_INTERP_LINEAR, i->getDef(0), addr, NULL);
+      if (i->srcExists(1)) {
+         // Pass offset through to the interpolation logic
+         ld = bld.mkInterp(NV50_IR_INTERP_LINEAR | NV50_IR_INTERP_OFFSET,
+                           i->getDef(0), addr, NULL);
+         ld->setSrc(1, i->getSrc(1));
+      } else {
+         bld.mkInterp(NV50_IR_INTERP_LINEAR, i->getDef(0), addr, NULL);
+      }
       break;
    case SV_FACE:
    {
@@ -1464,14 +1507,21 @@ NVC0LoweringPass::handleEXPORT(Instruction *i)
 bool
 NVC0LoweringPass::handleOUT(Instruction *i)
 {
-   if (i->op == OP_RESTART && i->prev && i->prev->op == OP_EMIT) {
+   Instruction *prev = i->prev;
+   ImmediateValue stream, prevStream;
+
+   // Only merge if the stream ids match. Also, note that the previous
+   // instruction would have already been lowered, so we take arg1 from it.
+   if (i->op == OP_RESTART && prev && prev->op == OP_EMIT &&
+       i->src(0).getImmediate(stream) &&
+       prev->src(1).getImmediate(prevStream) &&
+       stream.reg.data.u32 == prevStream.reg.data.u32) {
       i->prev->subOp = NV50_IR_SUBOP_EMIT_RESTART;
       delete_Instruction(prog, i);
    } else {
       assert(gpEmitAddress);
       i->setDef(0, gpEmitAddress);
-      if (i->srcExists(0))
-         i->setSrc(1, i->getSrc(0));
+      i->setSrc(1, i->getSrc(0));
       i->setSrc(0, gpEmitAddress);
    }
    return true;
@@ -1559,6 +1609,20 @@ NVC0LoweringPass::visit(Instruction *i)
          } else {
             i->op = OP_VFETCH;
             assert(prog->getType() != Program::TYPE_FRAGMENT); // INTERP
+         }
+      } else if (i->src(0).getFile() == FILE_MEMORY_CONST) {
+         if (i->src(0).isIndirect(1)) {
+            Value *ptr;
+            if (i->src(0).isIndirect(0))
+               ptr = bld.mkOp3v(OP_INSBF, TYPE_U32, bld.getSSA(),
+                                i->getIndirect(0, 1), bld.mkImm(0x1010),
+                                i->getIndirect(0, 0));
+            else
+               ptr = bld.mkOp2v(OP_SHL, TYPE_U32, bld.getSSA(),
+                                i->getIndirect(0, 1), bld.mkImm(16));
+            i->setIndirect(0, 1, NULL);
+            i->setIndirect(0, 0, ptr);
+            i->subOp = NV50_IR_SUBOP_LDC_IS;
          }
       }
       break;
