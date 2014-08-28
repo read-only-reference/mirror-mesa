@@ -68,7 +68,8 @@ enum ilo_debug {
 struct ilo_dev_info {
    /* these mirror intel_winsys_info */
    int devid;
-   int max_batch_size;
+   size_t aperture_total;
+   size_t aperture_mappable;
    bool has_llc;
    bool has_address_swizzling;
    bool has_logical_context;

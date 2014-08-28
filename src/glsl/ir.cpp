@@ -248,9 +248,14 @@ ir_expression::ir_expression(int op, ir_rvalue *op0)
    case ir_unop_sin_reduced:
    case ir_unop_cos_reduced:
    case ir_unop_dFdx:
+   case ir_unop_dFdx_coarse:
+   case ir_unop_dFdx_fine:
    case ir_unop_dFdy:
+   case ir_unop_dFdy_coarse:
+   case ir_unop_dFdy_fine:
    case ir_unop_bitfield_reverse:
    case ir_unop_interpolate_at_centroid:
+   case ir_unop_saturate:
       this->type = op0->type;
       break;
 
@@ -509,7 +514,11 @@ static const char *const operator_strs[] = {
    "sin_reduced",
    "cos_reduced",
    "dFdx",
+   "dFdxCoarse",
+   "dFdxFine",
    "dFdy",
+   "dFdyCoarse",
+   "dFdyFine",
    "packSnorm2x16",
    "packSnorm4x8",
    "packUnorm2x16",
@@ -526,6 +535,7 @@ static const char *const operator_strs[] = {
    "bit_count",
    "find_msb",
    "find_lsb",
+   "sat",
    "noise",
    "interpolate_at_centroid",
    "+",
@@ -1543,6 +1553,7 @@ ir_variable::ir_variable(const struct glsl_type *type, const char *name,
    this->data.has_initializer = false;
    this->data.location = -1;
    this->data.location_frac = 0;
+   this->data.binding = 0;
    this->warn_extension = NULL;
    this->constant_value = NULL;
    this->constant_initializer = NULL;
@@ -1558,13 +1569,12 @@ ir_variable::ir_variable(const struct glsl_type *type, const char *name,
    this->data.mode = mode;
    this->data.interpolation = INTERP_QUALIFIER_NONE;
    this->data.max_array_access = 0;
-   this->data.atomic.buffer_index = 0;
    this->data.atomic.offset = 0;
-   this->data.image.read_only = false;
-   this->data.image.write_only = false;
-   this->data.image.coherent = false;
-   this->data.image._volatile = false;
-   this->data.image.restrict_flag = false;
+   this->data.image_read_only = false;
+   this->data.image_write_only = false;
+   this->data.image_coherent = false;
+   this->data.image_volatile = false;
+   this->data.image_restrict = false;
 
    if (type != NULL) {
       if (type->base_type == GLSL_TYPE_SAMPLER)
@@ -1670,11 +1680,11 @@ ir_function_signature::qualifiers_match(exec_list *params)
 	  a->data.interpolation != b->data.interpolation ||
 	  a->data.centroid != b->data.centroid ||
           a->data.sample != b->data.sample ||
-          a->data.image.read_only != b->data.image.read_only ||
-          a->data.image.write_only != b->data.image.write_only ||
-          a->data.image.coherent != b->data.image.coherent ||
-          a->data.image._volatile != b->data.image._volatile ||
-          a->data.image.restrict_flag != b->data.image.restrict_flag) {
+          a->data.image_read_only != b->data.image_read_only ||
+          a->data.image_write_only != b->data.image_write_only ||
+          a->data.image_coherent != b->data.image_coherent ||
+          a->data.image_volatile != b->data.image_volatile ||
+          a->data.image_restrict != b->data.image_restrict) {
 
 	 /* parameter a's qualifiers don't match */
 	 return a->name;

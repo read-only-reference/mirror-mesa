@@ -43,10 +43,10 @@ extern void r200InitTnlFuncs( struct gl_context *ctx );
 
 extern void r200UpdateMaterial( struct gl_context *ctx );
 
-extern void r200UpdateViewportOffset( struct gl_context *ctx );
 extern void r200UpdateWindow( struct gl_context *ctx );
 extern void r200UpdateDrawBuffer(struct gl_context *ctx);
 
+extern GLboolean r200ValidateBuffers(struct gl_context *ctx);
 extern GLboolean r200ValidateState( struct gl_context *ctx );
 
 extern void r200_vtbl_update_scissor( struct gl_context *ctx );

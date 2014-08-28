@@ -49,6 +49,7 @@
 #ifdef HAVE_OPENCL
 #include "radeon_llvm_util.h"
 #endif
+#include <inttypes.h>
 
 /**
 RAT0 is for global binding write
@@ -521,12 +522,9 @@ void evergreen_emit_cs_shader(
 	struct r600_pipe_compute *shader = state->shader;
 	struct r600_kernel *kernel = &shader->kernels[state->kernel_index];
 	struct radeon_winsys_cs *cs = rctx->b.rings.gfx.cs;
-	uint64_t va;
-
-	va = r600_resource_va(&rctx->screen->b.b, &kernel->code_bo->b.b);
 
 	r600_write_compute_context_reg_seq(cs, R_0288D0_SQ_PGM_START_LS, 3);
-	radeon_emit(cs, va >> 8); /* R_0288D0_SQ_PGM_START_LS */
+	radeon_emit(cs, kernel->code_bo->gpu_address >> 8); /* R_0288D0_SQ_PGM_START_LS */
 	radeon_emit(cs,           /* R_0288D4_SQ_PGM_RESOURCES_LS */
 			S_0288D4_NUM_GPRS(kernel->bc.ngpr)
 			| S_0288D4_STACK_SIZE(kernel->bc.nstack));
@@ -650,6 +648,7 @@ static void evergreen_set_global_binding(
 	struct compute_memory_pool *pool = ctx->screen->global_pool;
 	struct r600_resource_global **buffers =
 		(struct r600_resource_global **)resources;
+	unsigned i;
 
 	COMPUTE_DBG(ctx->screen, "*** evergreen_set_global_binding first = %u n = %u\n",
 			first, n);
@@ -661,7 +660,7 @@ static void evergreen_set_global_binding(
 
 	/* We mark these items for promotion to the pool if they
 	 * aren't already there */
-	for (unsigned i = 0; i < n; i++) {
+	for (i = first; i < first + n; i++) {
 		struct compute_memory_item *item = buffers[i]->chunk;
 
 		if (!is_item_in_pool(item))
@@ -673,7 +672,7 @@ static void evergreen_set_global_binding(
 		return;
 	}
 
-	for (unsigned i = 0; i < n; i++)
+	for (i = first; i < first + n; i++)
 	{
 		uint32_t buffer_offset;
 		uint32_t handle;
@@ -893,9 +892,6 @@ void evergreen_init_compute_state_functions(struct r600_context *ctx)
 	ctx->b.b.set_global_binding = evergreen_set_global_binding;
 	ctx->b.b.launch_grid = evergreen_launch_grid;
 
-	/* We always use at least one vertex buffer for parameters (id = 1)*/
-	ctx->cs_vertex_buffer_state.enabled_mask =
-	ctx->cs_vertex_buffer_state.dirty_mask = 0x2;
 }
 
 struct pipe_resource *r600_compute_global_buffer_create(
@@ -994,7 +990,7 @@ void *r600_compute_global_transfer_map(
 			"width = %u, height = %u, depth = %u)\n", level, usage,
 			box->x, box->y, box->z, box->width, box->height,
 			box->depth);
-	COMPUTE_DBG(rctx->screen, "Buffer id = %u offset = "
+	COMPUTE_DBG(rctx->screen, "Buffer id = %"PRIi64" offset = "
 		"%u (box.x)\n", item->id, box->x);
 
 

@@ -108,18 +108,25 @@ _parser_active_list_pop (glcpp_parser_t *parser);
 static int
 _parser_active_list_contains (glcpp_parser_t *parser, const char *identifier);
 
+typedef enum {
+	EXPANSION_MODE_IGNORE_DEFINED,
+	EXPANSION_MODE_EVALUATE_DEFINED
+} expansion_mode_t;
+
 /* Expand list, and begin lexing from the result (after first
  * prefixing a token of type 'head_token_type').
  */
 static void
 _glcpp_parser_expand_and_lex_from (glcpp_parser_t *parser,
 				   int head_token_type,
-				   token_list_t *list);
+				   token_list_t *list,
+				   expansion_mode_t mode);
 
 /* Perform macro expansion in-place on the given list. */
 static void
 _glcpp_parser_expand_token_list (glcpp_parser_t *parser,
-				 token_list_t *list);
+				 token_list_t *list,
+				 expansion_mode_t mode);
 
 static void
 _glcpp_parser_print_expanded_token_list (glcpp_parser_t *parser,
@@ -171,14 +178,14 @@ add_builtin_define(glcpp_parser_t *parser, const char *name, int value);
 	/* We use HASH_TOKEN, DEFINE_TOKEN and VERSION_TOKEN (as opposed to
          * HASH, DEFINE, and VERSION) to avoid conflicts with other symbols,
          * (such as the <HASH> and <DEFINE> start conditions in the lexer). */
-%token COMMA_FINAL DEFINED ELIF_EXPANDED HASH_TOKEN DEFINE_TOKEN FUNC_IDENTIFIER OBJ_IDENTIFIER ELIF ELSE ENDIF ERROR_TOKEN IF IFDEF IFNDEF LINE PRAGMA UNDEF VERSION_TOKEN GARBAGE IDENTIFIER IF_EXPANDED INTEGER INTEGER_STRING LINE_EXPANDED NEWLINE OTHER PLACEHOLDER SPACE PLUS_PLUS MINUS_MINUS
+%token DEFINED ELIF_EXPANDED HASH_TOKEN DEFINE_TOKEN FUNC_IDENTIFIER OBJ_IDENTIFIER ELIF ELSE ENDIF ERROR_TOKEN IF IFDEF IFNDEF LINE PRAGMA UNDEF VERSION_TOKEN GARBAGE IDENTIFIER IF_EXPANDED INTEGER INTEGER_STRING LINE_EXPANDED NEWLINE OTHER PLACEHOLDER SPACE PLUS_PLUS MINUS_MINUS
 %token PASTE
 %type <ival> INTEGER operator SPACE integer_constant
 %type <expression_value> expression
 %type <str> IDENTIFIER FUNC_IDENTIFIER OBJ_IDENTIFIER INTEGER_STRING OTHER ERROR_TOKEN PRAGMA
 %type <string_list> identifier_list
-%type <token> preprocessing_token conditional_token
-%type <token_list> pp_tokens replacement_list text_line conditional_tokens
+%type <token> preprocessing_token
+%type <token_list> pp_tokens replacement_list text_line
 %left OR
 %left AND
 %left '|'
@@ -267,7 +274,8 @@ control_line:
 		    parser->skip_stack->type == SKIP_NO_SKIP)
 		{
 			_glcpp_parser_expand_and_lex_from (parser,
-							   LINE_EXPANDED, $4);
+							   LINE_EXPANDED, $4,
+							   EXPANSION_MODE_IGNORE_DEFINED);
 		}
 	}
 ;
@@ -295,7 +303,7 @@ control_line_success:
 	}
 |	HASH_TOKEN IF {
 		glcpp_parser_resolve_implicit_version(parser);
-	} conditional_tokens NEWLINE {
+	} pp_tokens NEWLINE {
 		/* Be careful to only evaluate the 'if' expression if
 		 * we are not skipping. When we are skipping, we
 		 * simply push a new 0-valued 'if' onto the skip
@@ -307,7 +315,8 @@ control_line_success:
 		    parser->skip_stack->type == SKIP_NO_SKIP)
 		{
 			_glcpp_parser_expand_and_lex_from (parser,
-							   IF_EXPANDED, $4);
+							   IF_EXPANDED, $4,
+							   EXPANSION_MODE_EVALUATE_DEFINED);
 		}	
 		else
 		{
@@ -339,7 +348,7 @@ control_line_success:
 		ralloc_free ($4);
 		_glcpp_parser_skip_stack_push_if (parser, & @3, macro == NULL);
 	}
-|	HASH_TOKEN ELIF conditional_tokens NEWLINE {
+|	HASH_TOKEN ELIF pp_tokens NEWLINE {
 		/* Be careful to only evaluate the 'elif' expression
 		 * if we are not skipping. When we are skipping, we
 		 * simply change to a 0-valued 'elif' on the skip
@@ -351,7 +360,8 @@ control_line_success:
 		    parser->skip_stack->type == SKIP_TO_ELSE)
 		{
 			_glcpp_parser_expand_and_lex_from (parser,
-							   ELIF_EXPANDED, $3);
+							   ELIF_EXPANDED, $3,
+							   EXPANSION_MODE_EVALUATE_DEFINED);
 		}
 		else if (parser->skip_stack &&
 		    parser->skip_stack->has_else)
@@ -423,6 +433,9 @@ control_line_success:
 control_line_error:
 	HASH_TOKEN ERROR_TOKEN NEWLINE {
 		glcpp_error(& @1, parser, "#%s", $2);
+	}
+|	HASH_TOKEN DEFINE_TOKEN NEWLINE {
+		glcpp_error (& @1, parser, "#define without macro name");
 	}
 |	HASH_TOKEN GARBAGE pp_tokens NEWLINE  {
 		glcpp_error (& @1, parser, "Illegal non-directive after #");
@@ -650,31 +663,6 @@ junk:
 	}
 ;
 
-conditional_token:
-	/* Handle "defined" operator */
-	DEFINED IDENTIFIER {
-		int v = hash_table_find (parser->defines, $2) ? 1 : 0;
-		$$ = _token_create_ival (parser, INTEGER, v);
-	}
-|	DEFINED '(' IDENTIFIER ')' {
-		int v = hash_table_find (parser->defines, $3) ? 1 : 0;
-		$$ = _token_create_ival (parser, INTEGER, v);
-	}
-|	preprocessing_token
-;
-
-conditional_tokens:
-	/* Exactly the same as pp_tokens, but using conditional_token */
-	conditional_token {
-		$$ = _token_list_create (parser);
-		_token_list_append ($$, $1);
-	}
-|	conditional_tokens conditional_token {
-		$$ = $1;
-		_token_list_append ($$, $2);
-	}
-;
-
 pp_tokens:
 	preprocessing_token {
 		parser->space_tokens = 1;
@@ -698,6 +686,10 @@ preprocessing_token:
 	}
 |	operator {
 		$$ = _token_create_ival (parser, $1, $1);
+		$$->location = yylloc;
+	}
+|	DEFINED {
+		$$ = _token_create_ival (parser, DEFINED, DEFINED);
 		$$->location = yylloc;
 	}
 |	OTHER {
@@ -1170,14 +1162,15 @@ _token_print (char **out, size_t *len, token_t *token)
         case MINUS_MINUS:
 		ralloc_asprintf_rewrite_tail (out, len, "--");
 		break;
-	case COMMA_FINAL:
-		ralloc_asprintf_rewrite_tail (out, len, ",");
+	case DEFINED:
+		ralloc_asprintf_rewrite_tail (out, len, "defined");
 		break;
 	case PLACEHOLDER:
 		/* Nothing to print. */
 		break;
 	default:
 		assert(!"Error: Don't know how to print token.");
+
 		break;
 	}
 }
@@ -1510,15 +1503,143 @@ _token_list_create_with_one_integer (void *ctx, int ival)
 	return _token_list_create_with_one_ival (ctx, INTEGER, ival);
 }
 
+/* Evaluate a DEFINED token node (based on subsequent tokens in the list).
+ *
+ * Note: This function must only be called when "node" is a DEFINED token,
+ * (and will abort with an assertion failure otherwise).
+ *
+ * If "node" is followed, (ignoring any SPACE tokens), by an IDENTIFIER token
+ * (optionally preceded and followed by '(' and ')' tokens) then the following
+ * occurs:
+ *
+ *	If the identifier is a defined macro, this function returns 1.
+ *
+ *	If the identifier is not a defined macro, this function returns 0.
+ *
+ *	In either case, *last will be updated to the last node in the list
+ *	consumed by the evaluation, (either the token of the identifier or the
+ *	token of the closing parenthesis).
+ *
+ * In all other cases, (such as "node is the final node of the list", or
+ * "missing closing parenthesis", etc.), this function generates a
+ * preprocessor error, returns -1 and *last will not be set.
+ */
+static int
+_glcpp_parser_evaluate_defined (glcpp_parser_t *parser,
+				token_node_t *node,
+				token_node_t **last)
+{
+	token_node_t *argument, *defined = node;
+
+	assert (node->token->type == DEFINED);
+
+	node = node->next;
+
+	/* Ignore whitespace after DEFINED token. */
+	while (node && node->token->type == SPACE)
+		node = node->next;
+
+	if (node == NULL)
+		goto FAIL;
+
+	if (node->token->type == IDENTIFIER || node->token->type == OTHER) {
+		argument = node;
+	} else if (node->token->type == '(') {
+		node = node->next;
+
+		/* Ignore whitespace after '(' token. */
+		while (node && node->token->type == SPACE)
+			node = node->next;
+
+		if (node == NULL || (node->token->type != IDENTIFIER &&
+				     node->token->type != OTHER))
+		{
+			goto FAIL;
+		}
+
+		argument = node;
+
+		node = node->next;
+
+		/* Ignore whitespace after identifier, before ')' token. */
+		while (node && node->token->type == SPACE)
+			node = node->next;
+
+		if (node == NULL || node->token->type != ')')
+			goto FAIL;
+	} else {
+		goto FAIL;
+	}
+
+	*last = node;
+
+	return hash_table_find (parser->defines,
+				argument->token->value.str) ? 1 : 0;
+
+FAIL:
+	glcpp_error (&defined->token->location, parser,
+		     "\"defined\" not followed by an identifier");
+	return -1;
+}
+
+/* Evaluate all DEFINED nodes in a given list, modifying the list in place.
+ */
+static void
+_glcpp_parser_evaluate_defined_in_list (glcpp_parser_t *parser,
+					token_list_t *list)
+{
+	token_node_t *node, *node_prev, *replacement, *last = NULL;
+	int value;
+
+	if (list == NULL)
+		return;
+
+	node_prev = NULL;
+	node = list->head;
+
+	while (node) {
+
+		if (node->token->type != DEFINED)
+			goto NEXT;
+
+		value = _glcpp_parser_evaluate_defined (parser, node, &last);
+		if (value == -1)
+			goto NEXT;
+
+		replacement = ralloc (list, token_node_t);
+		replacement->token = _token_create_ival (list, INTEGER, value);
+
+		/* Splice replacement node into list, replacing from "node"
+		 * through "last". */
+		if (node_prev)
+			node_prev->next = replacement;
+		else
+			list->head = replacement;
+		replacement->next = last->next;
+		if (last == list->tail)
+			list->tail = replacement;
+
+		node = replacement;
+
+	NEXT:
+		node_prev = node;
+		node = node->next;
+	}
+}
+
 /* Perform macro expansion on 'list', placing the resulting tokens
  * into a new list which is initialized with a first token of type
  * 'head_token_type'. Then begin lexing from the resulting list,
  * (return to the current lexing source when this list is exhausted).
+ *
+ * See the documentation of _glcpp_parser_expand_token_list for a description
+ * of the "mode" parameter.
  */
 static void
 _glcpp_parser_expand_and_lex_from (glcpp_parser_t *parser,
 				   int head_token_type,
-				   token_list_t *list)
+				   token_list_t *list,
+				   expansion_mode_t mode)
 {
 	token_list_t *expanded;
 	token_t *token;
@@ -1526,7 +1647,7 @@ _glcpp_parser_expand_and_lex_from (glcpp_parser_t *parser,
 	expanded = _token_list_create (parser);
 	token = _token_create_ival (parser, head_token_type, head_token_type);
 	_token_list_append (expanded, token);
-	_glcpp_parser_expand_token_list (parser, list);
+	_glcpp_parser_expand_token_list (parser, list, mode);
 	_token_list_append_list (expanded, list);
 	glcpp_parser_lex_from (parser, expanded);
 }
@@ -1589,12 +1710,15 @@ _glcpp_parser_apply_pastes (glcpp_parser_t *parser, token_list_t *list)
  * *last to the last node in the list that was consumed by the
  * expansion. Specifically, *last will be set as follows: as the
  * token of the closing right parenthesis.
+ *
+ * See the documentation of _glcpp_parser_expand_token_list for a description
+ * of the "mode" parameter.
  */
 static token_list_t *
 _glcpp_parser_expand_function (glcpp_parser_t *parser,
 			       token_node_t *node,
-			       token_node_t **last)
-			       
+			       token_node_t **last,
+			       expansion_mode_t mode)
 {
 	macro_t *macro;
 	const char *identifier;
@@ -1663,7 +1787,8 @@ _glcpp_parser_expand_function (glcpp_parser_t *parser,
 				expanded_argument = _token_list_copy (parser,
 								      argument);
 				_glcpp_parser_expand_token_list (parser,
-								 expanded_argument);
+								 expanded_argument,
+								 mode);
 				_token_list_append_list (substituted,
 							 expanded_argument);
 			} else {
@@ -1703,11 +1828,15 @@ _glcpp_parser_expand_function (glcpp_parser_t *parser,
  *
  *	As the token of the closing right parenthesis in the case of
  *	function-like macro expansion.
+ *
+ * See the documentation of _glcpp_parser_expand_token_list for a description
+ * of the "mode" parameter.
  */
 static token_list_t *
 _glcpp_parser_expand_node (glcpp_parser_t *parser,
 			   token_node_t *node,
-			   token_node_t **last)
+			   token_node_t **last,
+			   expansion_mode_t mode)
 {
 	token_t *token = node->token;
 	const char *identifier;
@@ -1715,14 +1844,6 @@ _glcpp_parser_expand_node (glcpp_parser_t *parser,
 
 	/* We only expand identifiers */
 	if (token->type != IDENTIFIER) {
-		/* We change any COMMA into a COMMA_FINAL to prevent
-		 * it being mistaken for an argument separator
-		 * later. */
-		if (token->type == ',') {
-			token->type = COMMA_FINAL;
-			token->value.ival = COMMA_FINAL;
-		}
-
 		return NULL;
 	}
 
@@ -1774,7 +1895,7 @@ _glcpp_parser_expand_node (glcpp_parser_t *parser,
 		return replacement;
 	}
 
-	return _glcpp_parser_expand_function (parser, node, last);
+	return _glcpp_parser_expand_function (parser, node, last, mode);
 }
 
 /* Push a new identifier onto the parser's active list.
@@ -1833,11 +1954,28 @@ _parser_active_list_contains (glcpp_parser_t *parser, const char *identifier)
 /* Walk over the token list replacing nodes with their expansion.
  * Whenever nodes are expanded the walking will walk over the new
  * nodes, continuing to expand as necessary. The results are placed in
- * 'list' itself;
+ * 'list' itself.
+ *
+ * The "mode" argument controls the handling of any DEFINED tokens that
+ * result from expansion as follows:
+ *
+ *	EXPANSION_MODE_IGNORE_DEFINED: Any resulting DEFINED tokens will be
+ *		left in the final list, unevaluated. This is the correct mode
+ *		for expanding any list in any context other than a
+ *		preprocessor conditional, (#if or #elif).
+ *
+ *	EXPANSION_MODE_EVALUATE_DEFINED: Any resulting DEFINED tokens will be
+ *		evaluated to 0 or 1 tokens depending on whether the following
+ *		token is the name of a defined macro. If the DEFINED token is
+ *		not followed by an (optionally parenthesized) identifier, then
+ *		an error will be generated. This the correct mode for
+ *		expanding any list in the context of a preprocessor
+ *		conditional, (#if or #elif).
  */
 static void
 _glcpp_parser_expand_token_list (glcpp_parser_t *parser,
-				 token_list_t *list)
+				 token_list_t *list,
+				 expansion_mode_t mode)
 {
 	token_node_t *node_prev;
 	token_node_t *node, *last = NULL;
@@ -1852,14 +1990,22 @@ _glcpp_parser_expand_token_list (glcpp_parser_t *parser,
 	node_prev = NULL;
 	node = list->head;
 
+	if (mode == EXPANSION_MODE_EVALUATE_DEFINED)
+		_glcpp_parser_evaluate_defined_in_list (parser, list);
+
 	while (node) {
 
 		while (parser->active && parser->active->marker == node)
 			_parser_active_list_pop (parser);
 
-		expansion = _glcpp_parser_expand_node (parser, node, &last);
+		expansion = _glcpp_parser_expand_node (parser, node, &last, mode);
 		if (expansion) {
 			token_node_t *n;
+
+			if (mode == EXPANSION_MODE_EVALUATE_DEFINED) {
+				_glcpp_parser_evaluate_defined_in_list (parser,
+									expansion);
+			}
 
 			for (n = node; n != last->next; n = n->next)
 				while (parser->active &&
@@ -1913,7 +2059,7 @@ _glcpp_parser_print_expanded_token_list (glcpp_parser_t *parser,
 	if (list == NULL)
 		return;
 
-	_glcpp_parser_expand_token_list (parser, list);
+	_glcpp_parser_expand_token_list (parser, list, EXPANSION_MODE_IGNORE_DEFINED);
 
 	_token_list_trim_trailing_space (list);
 
@@ -2232,6 +2378,8 @@ _glcpp_parser_handle_version_declaration(glcpp_parser_t *parser, intmax_t versio
 	   if (extensions != NULL) {
 	      if (extensions->OES_EGL_image_external)
 	         add_builtin_define(parser, "GL_OES_EGL_image_external", 1);
+              if (extensions->OES_standard_derivatives)
+                 add_builtin_define(parser, "GL_OES_standard_derivatives", 1);
 	   }
 	} else {
 	   add_builtin_define(parser, "GL_ARB_draw_buffers", 1);
@@ -2321,6 +2469,9 @@ _glcpp_parser_handle_version_declaration(glcpp_parser_t *parser, intmax_t versio
 
 	      if (extensions->ARB_shader_image_load_store)
 	         add_builtin_define(parser, "GL_ARB_shader_image_load_store", 1);
+
+              if (extensions->ARB_derivative_control)
+                 add_builtin_define(parser, "GL_ARB_derivative_control", 1);
 	   }
 	}
 

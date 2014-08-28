@@ -24,12 +24,12 @@
 
 #include "util/u_memory.h"
 
-#include "../radeon/r600_cs.h"
+#include "radeon/r600_cs.h"
 #include "si_pipe.h"
 #include "si_shader.h"
 #include "sid.h"
 
-#include "radeon_llvm_util.h"
+#include "radeon/radeon_llvm_util.h"
 
 #define MAX_GLOBAL_BUFFERS 20
 #if HAVE_LLVM < 0x0305
@@ -48,7 +48,8 @@ struct si_pipe_compute {
 	struct si_pipe_shader *kernels;
 	unsigned num_user_sgprs;
 
-        struct pipe_resource *global_buffers[MAX_GLOBAL_BUFFERS];
+	struct r600_resource *input_buffer;
+	struct pipe_resource *global_buffers[MAX_GLOBAL_BUFFERS];
 
 	LLVMContextRef llvm_ctx;
 };
@@ -85,6 +86,9 @@ static void *si_create_compute_state(
 		LLVMDisposeModule(mod);
 	}
 
+	program->input_buffer =	si_resource_create_custom(sctx->b.b.screen,
+		PIPE_USAGE_IMMUTABLE, program->input_size);
+
 	return program;
 }
 
@@ -105,7 +109,7 @@ static void si_set_global_binding(
 
 	if (!resources) {
 		for (i = first; i < first + n; i++) {
-			program->global_buffers[i] = NULL;
+			pipe_resource_reference(&program->global_buffers[i], NULL);
 		}
 		return;
 	}
@@ -113,8 +117,8 @@ static void si_set_global_binding(
 	for (i = first; i < first + n; i++) {
 		uint64_t va;
 		uint32_t offset;
-		program->global_buffers[i] = resources[i];
-		va = r600_resource_va(ctx->screen, resources[i]);
+		pipe_resource_reference(&program->global_buffers[i], resources[i]);
+		va = r600_resource(resources[i])->gpu_address;
 		offset = util_le32_to_cpu(*handles[i]);
 		va += offset;
 		va = util_cpu_to_le64(va);
@@ -167,7 +171,7 @@ static void si_launch_grid(
 	struct si_context *sctx = (struct si_context*)ctx;
 	struct si_pipe_compute *program = sctx->cs_shader_state.program;
 	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
-	struct r600_resource *kernel_args_buffer = NULL;
+	struct r600_resource *input_buffer = program->input_buffer;
 	unsigned kernel_args_size;
 	unsigned num_work_size_bytes = 36;
 	uint32_t kernel_args_offset = 0;
@@ -199,7 +203,8 @@ static void si_launch_grid(
 	/* The extra num_work_size_bytes are for work group / work item size information */
 	kernel_args_size = program->input_size + num_work_size_bytes + 8 /* For scratch va */;
 
-	kernel_args = MALLOC(kernel_args_size);
+	kernel_args = sctx->b.ws->buffer_map(input_buffer->cs_buf,
+			sctx->b.rings.gfx.cs, PIPE_TRANSFER_WRITE);
 	for (i = 0; i < 3; i++) {
 		kernel_args[i] = grid_layout[i];
 		kernel_args[i + 3] = grid_layout[i] * block_layout[i];
@@ -223,8 +228,7 @@ static void si_launch_grid(
 				si_resource_create_custom(sctx->b.b.screen,
 				PIPE_USAGE_DEFAULT, scratch_bytes);
 		}
-		scratch_buffer_va = r600_resource_va(ctx->screen,
-				(struct pipe_resource*)shader->scratch_bo);
+		scratch_buffer_va = shader->scratch_bo->gpu_address;
 		si_pm4_add_bo(pm4, shader->scratch_bo,
 				RADEON_USAGE_READWRITE,
 				RADEON_PRIO_SHADER_RESOURCE_RW);
@@ -236,13 +240,13 @@ static void si_launch_grid(
 			kernel_args[i]);
 	}
 
-	si_upload_const_buffer(sctx, &kernel_args_buffer, (uint8_t*)kernel_args,
-					kernel_args_size, &kernel_args_offset);
-	kernel_args_va = r600_resource_va(ctx->screen,
-				(struct pipe_resource*)kernel_args_buffer);
+	sctx->b.ws->buffer_unmap(input_buffer->cs_buf);
+
+	kernel_args_va = input_buffer->gpu_address;
 	kernel_args_va += kernel_args_offset;
 
-	si_pm4_add_bo(pm4, kernel_args_buffer, RADEON_USAGE_READ, RADEON_PRIO_SHADER_DATA);
+	si_pm4_add_bo(pm4, input_buffer, RADEON_USAGE_READ,
+		RADEON_PRIO_SHADER_DATA);
 
 	si_pm4_set_reg(pm4, R_00B900_COMPUTE_USER_DATA_0, kernel_args_va);
 	si_pm4_set_reg(pm4, R_00B900_COMPUTE_USER_DATA_0 + 4, S_008F04_BASE_ADDRESS_HI (kernel_args_va >> 32) | S_008F04_STRIDE(0));
@@ -285,7 +289,7 @@ static void si_launch_grid(
 						0x190 /* Default value */);
 	}
 
-	shader_va = r600_resource_va(ctx->screen, (void *)shader->bo);
+	shader_va = shader->bo->gpu_address;
 	si_pm4_add_bo(pm4, shader->bo, RADEON_USAGE_READ, RADEON_PRIO_SHADER_DATA);
 	si_pm4_set_reg(pm4, R_00B830_COMPUTE_PGM_LO, (shader_va >> 8) & 0xffffffff);
 	si_pm4_set_reg(pm4, R_00B834_COMPUTE_PGM_HI, shader_va >> 40);
@@ -374,8 +378,7 @@ static void si_launch_grid(
 	}
 #endif
 
-	FREE(pm4);
-	FREE(kernel_args);
+	si_pm4_free_state(sctx, pm4, ~0);
 }
 
 
@@ -392,13 +395,14 @@ static void si_delete_compute_state(struct pipe_context *ctx, void* state){
 				si_pipe_shader_destroy(ctx, &program->kernels[i]);
 			}
 		}
-		
 		FREE(program->kernels);
 	}
 
 	if (program->llvm_ctx){
 		LLVMContextDispose(program->llvm_ctx);
 	}
+	pipe_resource_reference(
+		(struct pipe_resource **)&program->input_buffer, NULL);
 
 	//And then free the program itself.
 	FREE(program);

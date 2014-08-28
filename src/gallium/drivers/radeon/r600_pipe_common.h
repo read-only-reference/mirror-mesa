@@ -34,8 +34,9 @@
 
 #include <stdio.h>
 
-#include "../../winsys/radeon/drm/radeon_winsys.h"
+#include "radeon/drm/radeon_winsys.h"
 
+#include "util/u_blitter.h"
 #include "util/u_double_list.h"
 #include "util/u_range.h"
 #include "util/u_slab.h"
@@ -74,6 +75,9 @@
 #define R600_CONTEXT_VGT_FLUSH			(1 << 19)
 #define R600_CONTEXT_VGT_STREAMOUT_SYNC		(1 << 20)
 
+/* special primitive types */
+#define R600_PRIM_RECTANGLE_LIST	PIPE_PRIM_MAX
+
 /* Debug flags. */
 /* logging */
 #define DBG_TEX			(1 << 0)
@@ -93,6 +97,7 @@
 #define DBG_NO_DISCARD_RANGE	(1 << 12)
 #define DBG_NO_2D_TILING	(1 << 13)
 #define DBG_NO_TILING		(1 << 14)
+#define DBG_SWITCH_ON_EOP	(1 << 15)
 /* The maximum allowed bit is 15. */
 
 #define R600_MAP_BUFFER_ALIGNMENT 64
@@ -126,6 +131,7 @@ struct r600_resource {
 	/* Winsys objects. */
 	struct pb_buffer		*buf;
 	struct radeon_winsys_cs_handle	*cs_buf;
+	uint64_t			gpu_address;
 
 	/* Resource state. */
 	enum radeon_bo_domain		domains;
@@ -373,6 +379,11 @@ struct r600_common_context {
 	float				sample_locations_8x[8][2];
 	float				sample_locations_16x[16][2];
 
+	/* The list of all texture buffer objects in this context.
+	 * This list is walked when a buffer is invalidated/reallocated and
+	 * the GPU addresses are updated. */
+	struct list_head		texture_buffers;
+
 	/* Copy one resource to another using async DMA. */
 	void (*dma_copy)(struct pipe_context *ctx,
 			 struct pipe_resource *dst,
@@ -420,6 +431,10 @@ struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 					 unsigned alignment);
 
 /* r600_common_pipe.c */
+void r600_draw_rectangle(struct blitter_context *blitter,
+			 int x1, int y1, int x2, int y2, float depth,
+			 enum blitter_attrib_type type,
+			 const union pipe_color_union *attrib);
 bool r600_common_screen_init(struct r600_common_screen *rscreen,
 			     struct radeon_winsys *ws);
 void r600_destroy_common_screen(struct r600_common_screen *rscreen);

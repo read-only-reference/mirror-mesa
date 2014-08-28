@@ -40,7 +40,6 @@ extern "C" {
 
 #ifdef __cplusplus
 }; /* extern "C" */
-#include "gen8_generator.h"
 #endif
 
 #include "glsl/ir.h"
@@ -379,8 +378,9 @@ public:
    void split_uniform_registers();
    void pack_uniform_registers();
    void calculate_live_intervals();
-   void invalidate_live_intervals();
+   void invalidate_live_intervals(bool invalidate_cfg = true);
    void split_virtual_grfs();
+   bool opt_reduce_swizzle();
    bool dead_code_eliminate();
    bool virtual_grf_interferes(int a, int b);
    bool opt_copy_propagation();
@@ -486,7 +486,6 @@ public:
                     src_reg src0, src_reg src1, src_reg one);
 
    void emit_bool_to_cond_code(ir_rvalue *ir, enum brw_predicate *predicate);
-   void emit_bool_comparison(unsigned int op, dst_reg dst, src_reg src0, src_reg src1);
    void emit_if_gen6(ir_if *ir);
 
    void emit_minmax(enum brw_conditional_mod conditionalmod, dst_reg dst,
@@ -527,10 +526,10 @@ public:
    void emit_pack_half_2x16(dst_reg dst, src_reg src0);
    void emit_unpack_half_2x16(dst_reg dst, src_reg src0);
 
-   uint32_t gather_channel(ir_texture *ir, int sampler);
-   src_reg emit_mcs_fetch(ir_texture *ir, src_reg coordinate, int sampler);
+   uint32_t gather_channel(ir_texture *ir, uint32_t sampler);
+   src_reg emit_mcs_fetch(ir_texture *ir, src_reg coordinate, src_reg sampler);
    void emit_gen6_gather_wa(uint8_t wa, dst_reg dst);
-   void swizzle_result(ir_texture *ir, src_reg orig_val, int sampler);
+   void swizzle_result(ir_texture *ir, src_reg orig_val, uint32_t sampler);
 
    void emit_ndc_computation();
    void emit_psiz_and_flags(struct brw_reg reg);
@@ -565,7 +564,6 @@ public:
 				src_reg orig_src,
 				int base_offset);
 
-   bool try_emit_sat(ir_expression *ir);
    bool try_emit_mad(ir_expression *ir);
    bool try_emit_b2f_of_compare(ir_expression *ir);
    void resolve_ud_negate(src_reg *reg);
@@ -624,13 +622,10 @@ public:
                   bool debug_flag);
    ~vec4_generator();
 
-   const unsigned *generate_assembly(exec_list *insts, unsigned *asm_size);
+   const unsigned *generate_assembly(const cfg_t *cfg, unsigned *asm_size);
 
 private:
-   void generate_code(exec_list *instructions);
-   void generate_vec4_instruction(vec4_instruction *inst,
-                                  struct brw_reg dst,
-                                  struct brw_reg *src);
+   void generate_code(const cfg_t *cfg);
 
    void generate_math1_gen4(vec4_instruction *inst,
 			    struct brw_reg dst,
@@ -645,8 +640,9 @@ private:
                            struct brw_reg src1);
 
    void generate_tex(vec4_instruction *inst,
-		     struct brw_reg dst,
-		     struct brw_reg src);
+                     struct brw_reg dst,
+                     struct brw_reg src,
+                     struct brw_reg sampler_index);
 
    void generate_vs_urb_write(vec4_instruction *inst);
    void generate_gs_urb_write(vec4_instruction *inst);
@@ -701,71 +697,6 @@ private:
    void *mem_ctx;
    const bool debug_flag;
 };
-
-/**
- * The vertex shader code generator.
- *
- * Translates VS IR to actual i965 assembly code.
- */
-class gen8_vec4_generator : public gen8_generator
-{
-public:
-   gen8_vec4_generator(struct brw_context *brw,
-                       struct gl_shader_program *shader_prog,
-                       struct gl_program *prog,
-                       struct brw_vec4_prog_data *prog_data,
-                       void *mem_ctx,
-                       bool debug_flag);
-   ~gen8_vec4_generator();
-
-   const unsigned *generate_assembly(exec_list *insts, unsigned *asm_size);
-
-private:
-   void generate_code(exec_list *instructions);
-   void generate_vec4_instruction(vec4_instruction *inst,
-                                  struct brw_reg dst,
-                                  struct brw_reg *src);
-
-   void generate_tex(vec4_instruction *inst,
-                     struct brw_reg dst);
-
-   void generate_urb_write(vec4_instruction *ir, bool copy_g0);
-   void generate_gs_thread_end(vec4_instruction *ir);
-   void generate_gs_set_write_offset(struct brw_reg dst,
-                                     struct brw_reg src0,
-                                     struct brw_reg src1);
-   void generate_gs_set_vertex_count(struct brw_reg dst,
-                                     struct brw_reg src);
-   void generate_gs_set_dword_2_immed(struct brw_reg dst, struct brw_reg src);
-   void generate_gs_prepare_channel_masks(struct brw_reg dst);
-   void generate_gs_set_channel_masks(struct brw_reg dst, struct brw_reg src);
-
-   void generate_oword_dual_block_offsets(struct brw_reg m1,
-                                          struct brw_reg index);
-   void generate_scratch_write(vec4_instruction *inst,
-                               struct brw_reg dst,
-                               struct brw_reg src,
-                               struct brw_reg index);
-   void generate_scratch_read(vec4_instruction *inst,
-                              struct brw_reg dst,
-                              struct brw_reg index);
-   void generate_pull_constant_load(vec4_instruction *inst,
-                                    struct brw_reg dst,
-                                    struct brw_reg index,
-                                    struct brw_reg offset);
-   void generate_untyped_atomic(vec4_instruction *ir,
-                                struct brw_reg dst,
-                                struct brw_reg atomic_op,
-                                struct brw_reg surf_index);
-   void generate_untyped_surface_read(vec4_instruction *ir,
-                                      struct brw_reg dst,
-                                      struct brw_reg surf_index);
-
-   struct brw_vec4_prog_data *prog_data;
-
-   const bool debug_flag;
-};
-
 
 } /* namespace brw */
 #endif /* __cplusplus */

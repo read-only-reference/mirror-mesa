@@ -30,7 +30,6 @@
 
 #include <errno.h>
 #include "pipe/p_shader_tokens.h"
-#include "util/u_blitter.h"
 #include "util/u_debug.h"
 #include "util/u_memory.h"
 #include "util/u_simple_shaders.h"
@@ -303,9 +302,12 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
 	case PIPE_CAP_CUBE_MAP_ARRAY:
 	case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
-	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
+	case PIPE_CAP_TEXTURE_GATHER_SM5:
 	case PIPE_CAP_TEXTURE_QUERY_LOD:
+	case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
 		return family >= CHIP_CEDAR ? 1 : 0;
+	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
+		return family >= CHIP_CEDAR ? 4 : 0;
 
 	/* Unsupported features. */
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
@@ -314,10 +316,10 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
-	case PIPE_CAP_TEXTURE_GATHER_SM5:
 	case PIPE_CAP_SAMPLE_SHADING:
 	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
 	case PIPE_CAP_DRAW_INDIRECT:
+	case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
 		return 0;
 
 	/* Stream output. */
@@ -336,6 +338,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 16384;
 	case PIPE_CAP_MAX_VERTEX_STREAMS:
 		return 1;
+
+	case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
+		return 2047;
 
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
@@ -378,6 +383,17 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600;
 	case PIPE_CAP_ENDIANNESS:
 		return PIPE_ENDIAN_LITTLE;
+
+	case PIPE_CAP_VENDOR_ID:
+		return 0x1002;
+	case PIPE_CAP_DEVICE_ID:
+		return rscreen->b.info.pci_id;
+	case PIPE_CAP_ACCELERATED:
+		return 1;
+	case PIPE_CAP_VIDEO_MEMORY:
+		return rscreen->b.info.vram_size >> 20;
+	case PIPE_CAP_UMA:
+		return 0;
 	}
 	return 0;
 }
@@ -416,11 +432,17 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		return shader == PIPE_SHADER_VERTEX ? 16 : 32;
 	case PIPE_SHADER_CAP_MAX_TEMPS:
 		return 256; /* Max native temporaries. */
-	case PIPE_SHADER_CAP_MAX_ADDRS:
-		/* XXX Isn't this equal to TEMPS? */
-		return 1; /* Max native address registers */
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
-		return R600_MAX_CONST_BUFFER_SIZE;
+		if (shader == PIPE_SHADER_COMPUTE) {
+			uint64_t max_const_buffer_size;
+			pscreen->get_compute_param(pscreen,
+				PIPE_COMPUTE_CAP_MAX_MEM_ALLOC_SIZE,
+				&max_const_buffer_size);
+			return max_const_buffer_size;
+
+		} else {
+			return R600_MAX_CONST_BUFFER_SIZE;
+		}
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
 		return R600_MAX_USER_CONST_BUFFERS;
 	case PIPE_SHADER_CAP_MAX_PREDS:

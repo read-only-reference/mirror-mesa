@@ -55,11 +55,18 @@ struct bblock_t {
 #ifdef __cplusplus
    DECLARE_RALLOC_CXX_OPERATORS(bblock_t)
 
-   bblock_t();
+   explicit bblock_t(cfg_t *cfg);
 
    void add_successor(void *mem_ctx, bblock_t *successor);
+   bool is_predecessor_of(const bblock_t *block) const;
+   bool is_successor_of(const bblock_t *block) const;
+   bool can_combine_with(const bblock_t *that) const;
+   void combine_with(bblock_t *that);
    void dump(backend_visitor *v);
 #endif
+
+   struct exec_node link;
+   struct cfg_t *cfg;
 
    struct backend_instruction *start;
    struct backend_instruction *end;
@@ -69,17 +76,15 @@ struct bblock_t {
 
    struct exec_list parents;
    struct exec_list children;
-   int block_num;
+   int num;
 
-   /* If the current basic block ends in an IF, ELSE, or ENDIF instruction,
-    * these pointers will hold the locations of the other associated control
-    * flow instructions.
+   /* If the current basic block ends in an IF or ELSE instruction, these will
+    * point to the basic blocks containing the other associated instruction.
     *
     * Otherwise they are NULL.
     */
-   struct backend_instruction *if_inst;
-   struct backend_instruction *else_inst;
-   struct backend_instruction *endif_inst;
+   struct bblock_t *if_block;
+   struct bblock_t *else_block;
 };
 
 struct cfg_t {
@@ -88,6 +93,8 @@ struct cfg_t {
 
    cfg_t(exec_list *instructions);
    ~cfg_t();
+
+   void remove_block(bblock_t *block);
 
    bblock_t *new_block();
    void set_next_block(bblock_t **cur, bblock_t *block, int ip);
@@ -107,10 +114,28 @@ struct cfg_t {
    foreach_block (__block, __cfg)                              \
       foreach_inst_in_block (__type, __inst, __block)
 
+#define foreach_block_and_inst_safe(__block, __type, __inst, __cfg) \
+   foreach_block_safe (__block, __cfg)                              \
+      foreach_inst_in_block_safe (__type, __inst, __block)
+
+#define foreach_block(__block, __cfg)                          \
+   foreach_list_typed (bblock_t, __block, link, &(__cfg)->block_list)
+
+#define foreach_block_safe(__block, __cfg)                     \
+   foreach_list_typed_safe (bblock_t, __block, link, &(__cfg)->block_list)
+
 #define foreach_inst_in_block(__type, __inst, __block)         \
    for (__type *__inst = (__type *)__block->start;             \
         __inst != __block->end->next;                          \
         __inst = (__type *)__inst->next)
+
+#define foreach_inst_in_block_safe(__type, __inst, __block)    \
+   for (__type *__inst = (__type *)__block->start,             \
+               *__next = (__type *)__inst->next,               \
+               *__end = (__type *)__block->end->next->next;    \
+        __next != __end;                                       \
+        __inst = __next,                                       \
+        __next = (__type *)__next->next)
 
 #define foreach_inst_in_block_reverse(__type, __inst, __block) \
    for (__type *__inst = (__type *)__block->end;               \

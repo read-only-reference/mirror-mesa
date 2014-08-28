@@ -311,7 +311,6 @@ public:
 			  int mul_operand);
    bool try_emit_mad_for_and_not(ir_expression *ir,
 				 int mul_operand);
-   bool try_emit_sat(ir_expression *ir);
 
    void emit_swz(ir_expression *ir);
 
@@ -793,7 +792,7 @@ ir_to_mesa_visitor::visit(ir_function *ir)
       const ir_function_signature *sig;
       exec_list empty;
 
-      sig = ir->matching_signature(NULL, &empty);
+      sig = ir->matching_signature(NULL, &empty, false);
 
       assert(sig);
 
@@ -862,50 +861,6 @@ ir_to_mesa_visitor::try_emit_mad_for_and_not(ir_expression *ir, int try_operand)
 
    this->result = get_temp(ir->type);
    emit(ir, OPCODE_MAD, dst_reg(this->result), a, b, a);
-
-   return true;
-}
-
-bool
-ir_to_mesa_visitor::try_emit_sat(ir_expression *ir)
-{
-   /* Saturates were only introduced to vertex programs in
-    * NV_vertex_program3, so don't give them to drivers in the VP.
-    */
-   if (this->prog->Target == GL_VERTEX_PROGRAM_ARB)
-      return false;
-
-   ir_rvalue *sat_src = ir->as_rvalue_to_saturate();
-   if (!sat_src)
-      return false;
-
-   sat_src->accept(this);
-   src_reg src = this->result;
-
-   /* If we generated an expression instruction into a temporary in
-    * processing the saturate's operand, apply the saturate to that
-    * instruction.  Otherwise, generate a MOV to do the saturate.
-    *
-    * Note that we have to be careful to only do this optimization if
-    * the instruction in question was what generated src->result.  For
-    * example, ir_dereference_array might generate a MUL instruction
-    * to create the reladdr, and return us a src reg using that
-    * reladdr.  That MUL result is not the value we're trying to
-    * saturate.
-    */
-   ir_expression *sat_src_expr = sat_src->as_expression();
-   ir_to_mesa_instruction *new_inst;
-   new_inst = (ir_to_mesa_instruction *)this->instructions.get_tail();
-   if (sat_src_expr && (sat_src_expr->operation == ir_binop_mul ||
-			sat_src_expr->operation == ir_binop_add ||
-			sat_src_expr->operation == ir_binop_dot)) {
-      new_inst->saturate = true;
-   } else {
-      this->result = get_temp(ir->type);
-      ir_to_mesa_instruction *inst;
-      inst = emit(ir, OPCODE_MOV, dst_reg(this->result), src);
-      inst->saturate = true;
-   }
 
    return true;
 }
@@ -1072,9 +1027,6 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
 	 return;
    }
 
-   if (try_emit_sat(ir))
-      return;
-
    if (ir->operation == ir_quadop_vector) {
       this->emit_swz(ir);
       return;
@@ -1171,6 +1123,12 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
       emit(ir, OPCODE_DDY, result_dst, op[0]);
       break;
 
+   case ir_unop_saturate: {
+      ir_to_mesa_instruction *inst = emit(ir, OPCODE_MOV,
+                                          result_dst, op[0]);
+      inst->saturate = true;
+      break;
+   }
    case ir_unop_noise: {
       const enum prog_opcode opcode =
 	 prog_opcode(OPCODE_NOISE1
@@ -1459,6 +1417,10 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
    case ir_unop_interpolate_at_centroid:
    case ir_binop_interpolate_at_offset:
    case ir_binop_interpolate_at_sample:
+   case ir_unop_dFdx_coarse:
+   case ir_unop_dFdx_fine:
+   case ir_unop_dFdy_coarse:
+   case ir_unop_dFdy_fine:
       assert(!"not supported");
       break;
 
@@ -2428,8 +2390,7 @@ add_uniform_to_shader::visit_field(const glsl_type *type, const char *name,
    }
 
    gl_register_file file;
-   if (type->is_sampler() ||
-       (type->is_array() && type->fields.array->is_sampler())) {
+   if (type->without_array()->is_sampler()) {
       file = PROGRAM_SAMPLER;
    } else {
       file = PROGRAM_UNIFORM;
@@ -2795,7 +2756,7 @@ get_mesa_program(struct gl_context *ctx,
    GLenum target = _mesa_shader_stage_to_program(shader->Stage);
    const char *target_string = _mesa_shader_stage_to_string(shader->Stage);
    struct gl_shader_compiler_options *options =
-         &ctx->ShaderCompilerOptions[shader->Stage];
+         &ctx->Const.ShaderCompilerOptions[shader->Stage];
 
    validate_ir_tree(shader->ir);
 
@@ -2980,16 +2941,19 @@ _mesa_ir_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       bool progress;
       exec_list *ir = prog->_LinkedShaders[i]->ir;
       const struct gl_shader_compiler_options *options =
-            &ctx->ShaderCompilerOptions[prog->_LinkedShaders[i]->Stage];
+            &ctx->Const.ShaderCompilerOptions[prog->_LinkedShaders[i]->Stage];
 
       do {
 	 progress = false;
 
 	 /* Lowering */
 	 do_mat_op_to_vec(ir);
+	 GLenum target = _mesa_shader_stage_to_program(prog->_LinkedShaders[i]->Stage);
 	 lower_instructions(ir, (MOD_TO_FRACT | DIV_TO_MUL_RCP | EXP_TO_EXP2
 				 | LOG_TO_LOG2 | INT_DIV_TO_MUL_RCP
-				 | ((options->EmitNoPow) ? POW_TO_EXP2 : 0)));
+				 | ((options->EmitNoPow) ? POW_TO_EXP2 : 0)
+				 | ((target == GL_VERTEX_PROGRAM_ARB) ? SAT_TO_CLAMP
+                                    : 0)));
 
 	 progress = do_lower_jumps(ir, true, true, options->EmitNoMainReturn, options->EmitNoCont, options->EmitNoLoops) || progress;
 

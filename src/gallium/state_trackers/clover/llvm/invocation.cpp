@@ -211,8 +211,13 @@ namespace {
                                  &c.getDiagnosticOpts()));
 #endif
 
+#if HAVE_LLVM >= 0x0306
+      c.getPreprocessorOpts().addRemappedFile(name,
+                                              llvm::MemoryBuffer::getMemBuffer(source).release());
+#else
       c.getPreprocessorOpts().addRemappedFile(name,
                                       llvm::MemoryBuffer::getMemBuffer(source));
+#endif
 
       // Setting this attribute tells clang to link this file before
       // performing any optimizations.  This is required so that
@@ -234,7 +239,11 @@ namespace {
       memcpy(address_spaces, c.getTarget().getAddressSpaceMap(),
                                                         sizeof(address_spaces));
 
+#if HAVE_LLVM >= 0x0306
+      return act.takeModule().release();
+#else
       return act.takeModule();
+#endif
    }
 
    void
@@ -415,13 +424,21 @@ clover::compile_program_llvm(const compat::string &source,
 
    internalize_functions(mod, kernels);
 
+   module m;
    // Build the clover::module
    switch (ir) {
       case PIPE_SHADER_IR_TGSI:
          //XXX: Handle TGSI
          assert(0);
-         return module();
+         m = module();
+         break;
       default:
-         return build_module_llvm(mod, kernels, address_spaces);
+         m = build_module_llvm(mod, kernels, address_spaces);
+         break;
    }
+#if HAVE_LLVM >= 0x0306
+   // LLVM 3.6 and newer, the user takes ownership of the module.
+   delete mod;
+#endif
+   return m;
 }

@@ -343,13 +343,23 @@ struct gen_mipmap_state
 };
 
 /**
+ * One of the FBO states for decompress_state. There will be one for each
+ * required renderbuffer format.
+ */
+struct decompress_fbo_state
+{
+   GLuint FBO, RBO;
+   GLint Width, Height;
+};
+
+/**
  * State for texture decompression
  */
 struct decompress_state
 {
    GLuint VAO;
-   GLuint VBO, FBO, RBO, Sampler;
-   GLint Width, Height;
+   struct decompress_fbo_state byteFBO, floatFBO;
+   GLuint VBO, Sampler;
 
    struct blit_shader_table shaders;
 };
@@ -440,6 +450,14 @@ _mesa_meta_and_swrast_BlitFramebuffer(struct gl_context *ctx,
                                       GLint dstX1, GLint dstY1,
                                       GLbitfield mask, GLenum filter);
 
+bool
+_mesa_meta_CopyImageSubData_uncompressed(struct gl_context *ctx,
+                                         struct gl_texture_image *src_tex_image,
+                                         int src_x, int src_y, int src_z,
+                                         struct gl_texture_image *dst_tex_image,
+                                         int dst_x, int dst_y, int dst_z,
+                                         int src_width, int src_height);
+
 extern void
 _mesa_meta_Clear(struct gl_context *ctx, GLbitfield buffers);
 
@@ -493,6 +511,9 @@ _mesa_meta_DrawTex(struct gl_context *ctx, GLfloat x, GLfloat y, GLfloat z,
                    GLfloat width, GLfloat height);
 
 /* meta-internal functions */
+void
+_mesa_meta_drawbuffers_from_bitfield(GLbitfield bits);
+
 GLuint
 _mesa_meta_compile_shader_with_debug(struct gl_context *ctx, GLenum target,
                                      const GLcharARB *source);
@@ -570,7 +591,7 @@ void
 _mesa_meta_glsl_generate_mipmap_cleanup(struct gen_mipmap_state *mipmap);
 
 void
-_mesa_meta_bind_fbo_image(GLenum attachment,
+_mesa_meta_bind_fbo_image(GLenum target, GLenum attachment,
                           struct gl_texture_image *texImage, GLuint layer);
 
 #endif /* META_H */

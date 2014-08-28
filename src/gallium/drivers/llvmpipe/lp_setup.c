@@ -844,7 +844,8 @@ lp_setup_set_fragment_sampler_views(struct lp_setup_context *setup,
                   }
 
                   if (res->target == PIPE_TEXTURE_1D_ARRAY ||
-                      res->target == PIPE_TEXTURE_2D_ARRAY) {
+                      res->target == PIPE_TEXTURE_2D_ARRAY ||
+                      res->target == PIPE_TEXTURE_CUBE_ARRAY) {
                      /*
                       * For array textures, we don't have first_layer, instead
                       * adjust last_layer (stored as depth) plus the mip level offsets
@@ -855,6 +856,9 @@ lp_setup_set_fragment_sampler_views(struct lp_setup_context *setup,
                      for (j = first_level; j <= last_level; j++) {
                         jit_tex->mip_offsets[j] += view->u.tex.first_layer *
                                                    lp_tex->img_stride[j];
+                     }
+                     if (res->target == PIPE_TEXTURE_CUBE_ARRAY) {
+                        assert(jit_tex->depth % 6 == 0);
                      }
                      assert(view->u.tex.first_layer <= view->u.tex.last_layer);
                      assert(view->u.tex.last_layer < res->array_size);
@@ -869,7 +873,7 @@ lp_setup_set_fragment_sampler_views(struct lp_setup_context *setup,
                   /* probably don't really need to fill that out */
                   jit_tex->mip_offsets[0] = 0;
                   jit_tex->row_stride[0] = 0;
-                  jit_tex->row_stride[0] = 0;
+                  jit_tex->img_stride[0] = 0;
 
                   /* everything specified in number of elements here. */
                   jit_tex->width = view->u.buf.last_element - view->u.buf.first_element + 1;

@@ -78,6 +78,7 @@ struct backend_reg
 };
 
 struct cfg_t;
+struct bblock_t;
 
 #ifdef __cplusplus
 struct backend_instruction : public exec_node {
@@ -88,6 +89,14 @@ struct backend_instruction : public exec_node {
    bool can_do_saturate() const;
    bool reads_accumulator_implicitly() const;
    bool writes_accumulator_implicitly(struct brw_context *brw) const;
+
+   using exec_node::remove;
+   void remove(bblock_t *block);
+   using exec_node::insert_after;
+   void insert_after(bblock_t *block, backend_instruction *inst);
+   using exec_node::insert_before;
+   void insert_before(bblock_t *block, backend_instruction *inst);
+   void insert_before(bblock_t *block, exec_list *list);
 
    /**
     * True if the instruction has side effects other than writing to
@@ -108,7 +117,6 @@ struct backend_instruction {
 
    uint32_t texture_offset; /**< Texture offset bitfield */
    uint32_t offset; /**< spill/unspill offset */
-   uint8_t sampler;
    uint8_t mlen; /**< SEND message length */
    int8_t base_mrf; /**< First MRF in the SEND message, if mlen is nonzero. */
    uint8_t target; /**< MRT target. */
@@ -174,7 +182,7 @@ public:
 
    void assign_common_binding_table_offsets(uint32_t next_binding_table_offset);
 
-   virtual void invalidate_live_intervals() = 0;
+   virtual void invalidate_live_intervals(bool invalidate_cfg = true) = 0;
 };
 
 uint32_t brw_texture_offset(struct gl_context *ctx, ir_constant *offset);

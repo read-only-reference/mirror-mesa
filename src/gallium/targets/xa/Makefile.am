@@ -36,6 +36,7 @@ libxatracker_la_SOURCES =
 libxatracker_la_LIBADD = \
 	$(top_builddir)/src/gallium/state_trackers/xa/libxatracker.la \
 	$(top_builddir)/src/gallium/auxiliary/libgallium.la \
+	$(top_builddir)/src/util/libmesautil.la \
 	$(LIBDRM_LIBS) \
 	$(GALLIUM_COMMON_LIB_DEPS)
 
@@ -78,38 +79,6 @@ STATIC_TARGET_LIB_DEPS += \
 	$(top_builddir)/src/gallium/winsys/nouveau/drm/libnouveaudrm.la \
 	$(top_builddir)/src/gallium/drivers/nouveau/libnouveau.la \
 	$(NOUVEAU_LIBS)
-endif
-
-if NEED_RADEON_DRM_WINSYS
-STATIC_TARGET_LIB_DEPS += \
-	$(top_builddir)/src/gallium/winsys/radeon/drm/libradeonwinsys.la
-endif
-
-if HAVE_GALLIUM_RADEON_COMMON
-STATIC_TARGET_LIB_DEPS += \
-	$(top_builddir)/src/gallium/drivers/radeon/libradeon.la
-endif
-
-if HAVE_GALLIUM_R300
-STATIC_TARGET_CPPFLAGS += -DGALLIUM_R300
-STATIC_TARGET_LIB_DEPS += \
-	$(top_builddir)/src/gallium/drivers/r300/libr300.la \
-	$(top_builddir)/src/gallium/drivers/r300/libr300-helper.la \
-	$(RADEON_LIBS)
-endif
-
-if HAVE_GALLIUM_R600
-STATIC_TARGET_CPPFLAGS += -DGALLIUM_R600
-STATIC_TARGET_LIB_DEPS += \
-	$(top_builddir)/src/gallium/drivers/r600/libr600.la \
-	$(RADEON_LIBS)
-endif
-
-if HAVE_GALLIUM_RADEONSI
-STATIC_TARGET_CPPFLAGS += -DGALLIUM_RADEONSI
-STATIC_TARGET_LIB_DEPS += \
-	$(top_builddir)/src/gallium/drivers/radeonsi/libradeonsi.la \
-	$(RADEON_LIBS)
 endif
 
 if HAVE_GALLIUM_SVGA

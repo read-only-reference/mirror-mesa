@@ -29,6 +29,7 @@ env.Append(CPPDEFINES = [
     'GALLIUM_VMWGFX',
     'GALLIUM_SOFTPIPE',
     'DRI_TARGET',
+    'HAVE_LIBDRM',
 ])
 
 env.Prepend(LIBS = [
@@ -39,6 +40,7 @@ env.Prepend(LIBS = [
     ws_kms_dri,
     softpipe,
     libloader,
+    mesautil,
     mesa,
     glsl,
     gallium,

@@ -154,6 +154,8 @@ public:
 
       linked_sig->replace_parameters(&formal_parameters);
 
+      linked_sig->is_intrinsic = sig->is_intrinsic;
+
       if (sig->is_defined) {
          foreach_in_list(const ir_instruction, original, &sig->body) {
             ir_instruction *copy = original->clone(linked, ht);
@@ -307,7 +309,7 @@ find_matching_signature(const char *name, const exec_list *actual_parameters,
 	 continue;
 
       ir_function_signature *sig =
-         f->matching_signature(NULL, actual_parameters);
+         f->matching_signature(NULL, actual_parameters, use_builtin);
 
       if ((sig == NULL) ||
           (!sig->is_defined && !sig->is_intrinsic))

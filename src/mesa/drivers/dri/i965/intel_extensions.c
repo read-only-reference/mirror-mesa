@@ -164,6 +164,7 @@ intelInitExtensions(struct gl_context *ctx)
 
    ctx->Extensions.ARB_buffer_storage = true;
    ctx->Extensions.ARB_clear_texture = true;
+   ctx->Extensions.ARB_copy_image = true;
    ctx->Extensions.ARB_depth_buffer_float = true;
    ctx->Extensions.ARB_depth_clamp = true;
    ctx->Extensions.ARB_depth_texture = true;
@@ -248,7 +249,7 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Const.GLSLVersion = 140;
    else
       ctx->Const.GLSLVersion = 120;
-   _mesa_override_glsl_version(ctx);
+   _mesa_override_glsl_version(&ctx->Const);
 
    if (brw->gen >= 6) {
       uint64_t dummy;
@@ -271,6 +272,7 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_texture_multisample = true;
       ctx->Extensions.ARB_sample_shading = true;
       ctx->Extensions.ARB_texture_gather = true;
+      ctx->Extensions.ARB_conditional_render_inverted = true;
 
       /* Test if the kernel has the ioctl. */
       if (drm_intel_reg_read(brw->bufmgr, TIMESTAMP, &dummy) == 0)
@@ -302,6 +304,9 @@ intelInitExtensions(struct gl_context *ctx)
          ctx->Extensions.ARB_viewport_array = true;
          ctx->Extensions.AMD_vertex_shader_viewport_index = true;
       }
+
+      ctx->Extensions.ARB_texture_compression_bptc = true;
+      ctx->Extensions.ARB_derivative_control = true;
    }
 
    if (brw->gen >= 8) {
@@ -325,4 +330,7 @@ intelInitExtensions(struct gl_context *ctx)
 
    if (brw->gen >= 7)
       ctx->Extensions.ARB_shader_atomic_counters = true;
+
+   if (brw->gen == 7)
+      ctx->Extensions.ARB_gpu_shader5 = true;
 }

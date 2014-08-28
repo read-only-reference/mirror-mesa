@@ -25,6 +25,7 @@
  *    Chia-I Wu <olv@lunarg.com>
  */
 
+#include "os/os_misc.h"
 #include "util/u_format_s3tc.h"
 #include "vl/vl_decoder.h"
 #include "vl/vl_video_buffer.h"
@@ -122,8 +123,6 @@ ilo_get_shader_param(struct pipe_screen *screen, unsigned shader,
       return ILO_MAX_CONST_BUFFERS;
    case PIPE_SHADER_CAP_MAX_TEMPS:
       return 256;
-   case PIPE_SHADER_CAP_MAX_ADDRS:
-      return (shader == PIPE_SHADER_FRAGMENT) ? 0 : 1;
    case PIPE_SHADER_CAP_MAX_PREDS:
       return 0;
    case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
@@ -383,6 +382,8 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_VERTEX_BUFFER_STRIDE_4BYTE_ALIGNED_ONLY:
    case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
       return false;
+   case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
+      return 2048;
    case PIPE_CAP_COMPUTE:
       return false; /* TODO */
    case PIPE_CAP_USER_INDEX_BUFFERS:
@@ -435,7 +436,31 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
    case PIPE_CAP_MAX_VERTEX_STREAMS:
    case PIPE_CAP_DRAW_INDIRECT:
+   case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
+   case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
       return 0;
+
+   case PIPE_CAP_VENDOR_ID:
+      return 0x8086;
+   case PIPE_CAP_DEVICE_ID:
+      return is->dev.devid;
+   case PIPE_CAP_ACCELERATED:
+      return true;
+   case PIPE_CAP_VIDEO_MEMORY: {
+      /* Once a batch uses more than 75% of the maximum mappable size, we
+       * assume that there's some fragmentation, and we start doing extra
+       * flushing, etc.  That's the big cliff apps will care about.
+       */
+      const uint64_t gpu_memory = is->dev.aperture_total * 3 / 4;
+      uint64_t system_memory;
+
+      if (!os_get_total_physical_memory(&system_memory))
+         return 0;
+
+      return (int) (MIN2(gpu_memory, system_memory) >> 20);
+   }
+   case PIPE_CAP_UMA:
+      return true;
 
    default:
       return 0;
@@ -615,7 +640,8 @@ static bool
 init_dev(struct ilo_dev_info *dev, const struct intel_winsys_info *info)
 {
    dev->devid = info->devid;
-   dev->max_batch_size = info->max_batch_size;
+   dev->aperture_total = info->aperture_total;
+   dev->aperture_mappable = info->aperture_mappable;
    dev->has_llc = info->has_llc;
    dev->has_address_swizzling = info->has_address_swizzling;
    dev->has_logical_context = info->has_logical_context;

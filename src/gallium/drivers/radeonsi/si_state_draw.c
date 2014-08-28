@@ -26,10 +26,9 @@
 
 #include "si_pipe.h"
 #include "si_shader.h"
-#include "../radeon/r600_cs.h"
+#include "radeon/r600_cs.h"
 #include "sid.h"
 
-#include "util/u_blitter.h"
 #include "util/u_format.h"
 #include "util/u_index_modify.h"
 #include "util/u_memory.h"
@@ -54,7 +53,7 @@ static void si_pipe_shader_es(struct pipe_context *ctx, struct si_pipe_shader *s
 	if (pm4 == NULL)
 		return;
 
-	va = r600_resource_va(ctx->screen, (void *)shader->bo);
+	va = shader->bo->gpu_address;
 	si_pm4_add_bo(pm4, shader->bo, RADEON_USAGE_READ, RADEON_PRIO_SHADER_DATA);
 
 	vgpr_comp_cnt = shader->shader.uses_instanceid ? 3 : 0;
@@ -129,7 +128,7 @@ static void si_pipe_shader_gs(struct pipe_context *ctx, struct si_pipe_shader *s
 
 	si_pm4_set_reg(pm4, R_028B5C_VGT_GS_VERT_ITEMSIZE, gs_vert_itemsize);
 
-	va = r600_resource_va(ctx->screen, (void *)shader->bo);
+	va = shader->bo->gpu_address;
 	si_pm4_add_bo(pm4, shader->bo, RADEON_USAGE_READ, RADEON_PRIO_SHADER_DATA);
 	si_pm4_set_reg(pm4, R_00B220_SPI_SHADER_PGM_LO_GS, va >> 8);
 	si_pm4_set_reg(pm4, R_00B224_SPI_SHADER_PGM_HI_GS, va >> 40);
@@ -166,7 +165,7 @@ static void si_pipe_shader_vs(struct pipe_context *ctx, struct si_pipe_shader *s
 	if (pm4 == NULL)
 		return;
 
-	va = r600_resource_va(ctx->screen, (void *)shader->bo);
+	va = shader->bo->gpu_address;
 	si_pm4_add_bo(pm4, shader->bo, RADEON_USAGE_READ, RADEON_PRIO_SHADER_DATA);
 
 	vgpr_comp_cnt = shader->shader.uses_instanceid ? 3 : 0;
@@ -298,7 +297,7 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 		       shader->spi_shader_col_format);
 	si_pm4_set_reg(pm4, R_02823C_CB_SHADER_MASK, shader->cb_shader_mask);
 
-	va = r600_resource_va(ctx->screen, (void *)shader->bo);
+	va = shader->bo->gpu_address;
 	si_pm4_add_bo(pm4, shader->bo, RADEON_USAGE_READ, RADEON_PRIO_SHADER_DATA);
 	si_pm4_set_reg(pm4, R_00B020_SPI_SHADER_PGM_LO_PS, va >> 8);
 	si_pm4_set_reg(pm4, R_00B024_SPI_SHADER_PGM_HI_PS, va >> 40);
@@ -346,7 +345,8 @@ static unsigned si_conv_pipe_prim(unsigned pprim)
 		[PIPE_PRIM_LINES_ADJACENCY]		= V_008958_DI_PT_LINELIST_ADJ,
 		[PIPE_PRIM_LINE_STRIP_ADJACENCY]	= V_008958_DI_PT_LINESTRIP_ADJ,
 		[PIPE_PRIM_TRIANGLES_ADJACENCY]		= V_008958_DI_PT_TRILIST_ADJ,
-		[PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY]	= V_008958_DI_PT_TRISTRIP_ADJ
+		[PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY]	= V_008958_DI_PT_TRISTRIP_ADJ,
+		[R600_PRIM_RECTANGLE_LIST]		= V_008958_DI_PT_RECTLIST
         };
 	unsigned result = prim_conv[pprim];
         if (result == ~0) {
@@ -371,11 +371,67 @@ static unsigned si_conv_prim_to_gs_out(unsigned mode)
 		[PIPE_PRIM_LINES_ADJACENCY]		= V_028A6C_OUTPRIM_TYPE_LINESTRIP,
 		[PIPE_PRIM_LINE_STRIP_ADJACENCY]	= V_028A6C_OUTPRIM_TYPE_LINESTRIP,
 		[PIPE_PRIM_TRIANGLES_ADJACENCY]		= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
-		[PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY]	= V_028A6C_OUTPRIM_TYPE_TRISTRIP
+		[PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY]	= V_028A6C_OUTPRIM_TYPE_TRISTRIP,
+		[R600_PRIM_RECTANGLE_LIST]		= V_028A6C_OUTPRIM_TYPE_TRISTRIP
 	};
 	assert(mode < Elements(prim_conv));
 
 	return prim_conv[mode];
+}
+
+static unsigned si_get_ia_multi_vgt_param(struct si_context *sctx,
+					  const struct pipe_draw_info *info)
+{
+	struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
+	unsigned prim = info->mode;
+	unsigned primgroup_size = 128; /* recommended without a GS */
+
+	/* SWITCH_ON_EOP(0) is always preferable. */
+	bool wd_switch_on_eop = false;
+	bool ia_switch_on_eop = false;
+	bool partial_vs_wave = false;
+
+	if (sctx->gs_shader)
+		primgroup_size = 64; /* recommended with a GS */
+
+	/* This is a hardware requirement. */
+	if ((rs && rs->line_stipple_enable) ||
+	    (sctx->b.screen->debug_flags & DBG_SWITCH_ON_EOP)) {
+		ia_switch_on_eop = true;
+		wd_switch_on_eop = true;
+	}
+
+	if (sctx->b.streamout.streamout_enabled ||
+	    sctx->b.streamout.prims_gen_query_enabled)
+		partial_vs_wave = true;
+
+	if (sctx->b.chip_class >= CIK) {
+		/* WD_SWITCH_ON_EOP has no effect on GPUs with less than
+		 * 4 shader engines. Set 1 to pass the assertion below.
+		 * The other cases are hardware requirements. */
+		if (sctx->b.screen->info.max_se < 4 ||
+		    prim == PIPE_PRIM_POLYGON ||
+		    prim == PIPE_PRIM_LINE_LOOP ||
+		    prim == PIPE_PRIM_TRIANGLE_FAN ||
+		    prim == PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY ||
+		    info->primitive_restart)
+			wd_switch_on_eop = true;
+
+		/* Hawaii hangs if instancing is enabled and WD_SWITCH_ON_EOP is 0.
+		 * We don't know that for indirect drawing, so treat it as
+		 * always problematic. */
+		if (sctx->b.family == CHIP_HAWAII &&
+		    (info->indirect || info->instance_count > 1))
+			wd_switch_on_eop = true;
+
+		/* If the WD switch is false, the IA switch must be false too. */
+		assert(wd_switch_on_eop || !ia_switch_on_eop);
+	}
+
+	return S_028AA8_SWITCH_ON_EOP(ia_switch_on_eop) |
+		S_028AA8_PARTIAL_VS_WAVE_ON(partial_vs_wave) |
+		S_028AA8_PRIMGROUP_SIZE(primgroup_size - 1) |
+		S_028AA8_WD_SWITCH_ON_EOP(sctx->b.chip_class >= CIK ? wd_switch_on_eop : 0);
 }
 
 static bool si_update_draw_info_state(struct si_context *sctx,
@@ -390,6 +446,7 @@ static bool si_update_draw_info_state(struct si_context *sctx,
 				       sctx->gs_shader->current->shader.gs_output_prim :
 				       info->mode);
 	unsigned ls_mask = 0;
+	unsigned ia_multi_vgt_param = si_get_ia_multi_vgt_param(sctx, info);
 
 	if (pm4 == NULL)
 		return false;
@@ -400,43 +457,17 @@ static bool si_update_draw_info_state(struct si_context *sctx,
 	}
 
 	if (sctx->b.chip_class >= CIK) {
-		struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
-		bool wd_switch_on_eop = prim == V_008958_DI_PT_POLYGON ||
-					prim == V_008958_DI_PT_LINELOOP ||
-					prim == V_008958_DI_PT_TRIFAN ||
-					prim == V_008958_DI_PT_TRISTRIP_ADJ ||
-					info->primitive_restart ||
-					(rs ? rs->line_stipple_enable : false);
-		/* If the WD switch is false, the IA switch must be false too. */
-		bool ia_switch_on_eop = wd_switch_on_eop;
-		unsigned primgroup_size = 64;
-
-		/* Hawaii hangs if instancing is enabled and each instance
-		 * is smaller than a prim group and WD_SWITCH_ON_EOP is 0.
-		 * We don't know that for indirect drawing, so treat it as
-		 * always problematic. */
-		if (sctx->b.family == CHIP_HAWAII &&
-		    (info->indirect ||
-		     (info->instance_count > 1 &&
-		      u_prims_for_vertices(info->mode, info->count) < primgroup_size))) {
-			wd_switch_on_eop = true;
-			ia_switch_on_eop = true;
-		}
-
 		si_pm4_set_reg(pm4, R_028B74_VGT_DISPATCH_DRAW_INDEX,
 			       ib->index_size == 4 ? 0xFC000000 : 0xFC00);
 
 		si_pm4_cmd_begin(pm4, PKT3_DRAW_PREAMBLE);
 		si_pm4_cmd_add(pm4, prim); /* VGT_PRIMITIVE_TYPE */
-		si_pm4_cmd_add(pm4, /* IA_MULTI_VGT_PARAM */
-			       S_028AA8_SWITCH_ON_EOP(ia_switch_on_eop) |
-			       S_028AA8_PARTIAL_VS_WAVE_ON(1) |
-			       S_028AA8_PRIMGROUP_SIZE(primgroup_size - 1) |
-			       S_028AA8_WD_SWITCH_ON_EOP(wd_switch_on_eop));
+		si_pm4_cmd_add(pm4, ia_multi_vgt_param); /* IA_MULTI_VGT_PARAM */
 		si_pm4_cmd_add(pm4, 0); /* VGT_LS_HS_CONFIG */
 		si_pm4_cmd_end(pm4, false);
 	} else {
 		si_pm4_set_reg(pm4, R_008958_VGT_PRIMITIVE_TYPE, prim);
+		si_pm4_set_reg(pm4, R_028AA8_IA_MULTI_VGT_PARAM, ia_multi_vgt_param);
 	}
 
 	si_pm4_set_reg(pm4, R_028A6C_VGT_GS_OUT_PRIM_TYPE, gs_out_prim);
@@ -703,9 +734,8 @@ static void si_state_draw(struct si_context *sctx,
 	if (info->count_from_stream_output) {
 		struct r600_so_target *t =
 			(struct r600_so_target*)info->count_from_stream_output;
-		uint64_t va = r600_resource_va(&sctx->screen->b.b,
-					       &t->buf_filled_size->b.b);
-		va += t->buf_filled_size_offset;
+		uint64_t va = t->buf_filled_size->gpu_address +
+			      t->buf_filled_size_offset;
 
 		si_pm4_set_reg(pm4, R_028B30_VGT_STRMOUT_DRAW_OPAQUE_VERTEX_STRIDE,
 			       t->stride_in_dw);
@@ -752,16 +782,13 @@ static void si_state_draw(struct si_context *sctx,
 	if (info->indexed) {
 		uint32_t max_size = (ib->buffer->width0 - ib->offset) /
 				 sctx->index_buffer.index_size;
-		uint64_t va;
-		va = r600_resource_va(&sctx->screen->b.b, ib->buffer);
-		va += ib->offset;
+		uint64_t va = r600_resource(ib->buffer)->gpu_address + ib->offset;
 
 		si_pm4_add_bo(pm4, (struct r600_resource *)ib->buffer, RADEON_USAGE_READ,
 			      RADEON_PRIO_MIN);
 
 		if (info->indirect) {
-			uint64_t indirect_va = r600_resource_va(&sctx->screen->b.b,
-								info->indirect);
+			uint64_t indirect_va = r600_resource(info->indirect)->gpu_address;
 			si_cmd_draw_index_indirect(pm4, indirect_va, va, max_size,
 						   info->indirect_offset,
 						   sh_base_reg + SI_SGPR_BASE_VERTEX * 4,
@@ -775,8 +802,7 @@ static void si_state_draw(struct si_context *sctx,
 		}
 	} else {
 		if (info->indirect) {
-			uint64_t indirect_va = r600_resource_va(&sctx->screen->b.b,
-								info->indirect);
+			uint64_t indirect_va = r600_resource(info->indirect)->gpu_address;
 			si_cmd_draw_indirect(pm4, indirect_va, info->indirect_offset,
 					     sh_base_reg + SI_SGPR_BASE_VERTEX * 4,
 					     sh_base_reg + SI_SGPR_START_INSTANCE * 4,

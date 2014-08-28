@@ -353,6 +353,170 @@ _mesa_bytes_per_vertex_attrib(GLint comps, GLenum type)
    }
 }
 
+/**
+ * Test if the given format is unsized.
+ */
+GLboolean
+_mesa_is_enum_format_unsized(GLenum format)
+{
+   switch (format) {
+   case GL_RGBA:
+   case GL_BGRA:
+   case GL_ABGR_EXT:
+   case GL_RGB:
+   case GL_BGR:
+   case GL_RG:
+   case GL_RED:
+   case GL_GREEN:
+   case GL_BLUE:
+   case GL_ALPHA:
+   case GL_INTENSITY:
+   case GL_LUMINANCE:
+   case GL_LUMINANCE_ALPHA:
+
+   case GL_SRGB:
+   case GL_SRGB_ALPHA:
+   case GL_SLUMINANCE:
+   case GL_SLUMINANCE_ALPHA:
+
+   case GL_RGBA_SNORM:
+   case GL_RGB_SNORM:
+   case GL_RG_SNORM:
+   case GL_RED_SNORM:
+   case GL_ALPHA_SNORM:
+   case GL_INTENSITY_SNORM:
+   case GL_LUMINANCE_SNORM:
+   case GL_LUMINANCE_ALPHA_SNORM:
+
+   case GL_RED_INTEGER:
+   case GL_GREEN_INTEGER:
+   case GL_BLUE_INTEGER:
+   case GL_ALPHA_INTEGER:
+   case GL_RGB_INTEGER:
+   case GL_RGBA_INTEGER:
+   case GL_BGR_INTEGER:
+   case GL_BGRA_INTEGER:
+   case GL_RG_INTEGER:
+   case GL_LUMINANCE_INTEGER_EXT:
+   case GL_LUMINANCE_ALPHA_INTEGER_EXT:
+
+   case GL_DEPTH_COMPONENT:
+   case GL_DEPTH_STENCIL:
+   case GL_STENCIL_INDEX:
+      return GL_TRUE;
+   default:
+      return GL_FALSE;
+   }
+}
+
+/**
+ * Test if the given format is a UNORM (unsigned-normalized) format.
+ */
+GLboolean
+_mesa_is_enum_format_unorm(GLenum format)
+{
+      switch(format) {
+      case GL_RED:
+      case GL_GREEN:
+      case GL_BLUE:
+      case GL_ALPHA:
+      case GL_ALPHA4:
+      case GL_ALPHA8:
+      case GL_ALPHA12:
+      case GL_ALPHA16:
+      case 1:
+      case GL_LUMINANCE:
+      case GL_SLUMINANCE:
+      case GL_LUMINANCE4:
+      case GL_LUMINANCE8:
+      case GL_LUMINANCE12:
+      case GL_LUMINANCE16:
+      case 2:
+      case GL_LUMINANCE_ALPHA:
+      case GL_SLUMINANCE_ALPHA:
+      case GL_LUMINANCE4_ALPHA4:
+      case GL_LUMINANCE6_ALPHA2:
+      case GL_LUMINANCE8_ALPHA8:
+      case GL_LUMINANCE12_ALPHA4:
+      case GL_LUMINANCE12_ALPHA12:
+      case GL_LUMINANCE16_ALPHA16:
+      case GL_INTENSITY:
+      case GL_INTENSITY4:
+      case GL_INTENSITY8:
+      case GL_INTENSITY12:
+      case GL_INTENSITY16:
+      case GL_R8:
+      case GL_R16:
+      case GL_RG:
+      case GL_RG8:
+      case GL_RG16:
+      case 3:
+      case GL_RGB:
+      case GL_BGR:
+      case GL_SRGB:
+      case GL_R3_G3_B2:
+      case GL_RGB4:
+      case GL_RGB5:
+      case GL_RGB565:
+      case GL_RGB8:
+      case GL_RGB10:
+      case GL_RGB12:
+      case GL_RGB16:
+      case 4:
+      case GL_ABGR_EXT:
+      case GL_RGBA:
+      case GL_BGRA:
+      case GL_SRGB_ALPHA:
+      case GL_RGBA2:
+      case GL_RGBA4:
+      case GL_RGB5_A1:
+      case GL_RGBA8:
+      case GL_RGB10_A2:
+      case GL_RGBA12:
+      case GL_RGBA16:
+         return GL_TRUE;
+      default:
+         return GL_FALSE;
+   }
+}
+
+/**
+ * Test if the given format is a SNORM (signed-normalized) format.
+ */
+GLboolean
+_mesa_is_enum_format_snorm(GLenum format)
+{
+   switch (format) {
+   /* signed, normalized texture formats */
+   case GL_RED_SNORM:
+   case GL_R8_SNORM:
+   case GL_R16_SNORM:
+   case GL_RG_SNORM:
+   case GL_RG8_SNORM:
+   case GL_RG16_SNORM:
+   case GL_RGB_SNORM:
+   case GL_RGB8_SNORM:
+   case GL_RGB16_SNORM:
+   case GL_RGBA_SNORM:
+   case GL_RGBA8_SNORM:
+   case GL_RGBA16_SNORM:
+   case GL_ALPHA_SNORM:
+   case GL_ALPHA8_SNORM:
+   case GL_ALPHA16_SNORM:
+   case GL_LUMINANCE_SNORM:
+   case GL_LUMINANCE8_SNORM:
+   case GL_LUMINANCE16_SNORM:
+   case GL_LUMINANCE_ALPHA_SNORM:
+   case GL_LUMINANCE8_ALPHA8_SNORM:
+   case GL_LUMINANCE16_ALPHA16_SNORM:
+   case GL_INTENSITY_SNORM:
+   case GL_INTENSITY8_SNORM:
+   case GL_INTENSITY16_SNORM:
+      return GL_TRUE;
+   default:
+      return GL_FALSE;
+   }
+}
 
 /**
  * Test if the given format is an integer (non-normalized) format.
@@ -623,6 +787,10 @@ _mesa_is_color_format(GLenum format)
       case GL_COMPRESSED_SIGNED_RG11_EAC:
       case GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2:
       case GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2:
+      case GL_COMPRESSED_RGBA_BPTC_UNORM:
+      case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM:
+      case GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT:
+      case GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT:
       /* generic integer formats */
       case GL_RED_INTEGER_EXT:
       case GL_GREEN_INTEGER_EXT:
@@ -876,6 +1044,12 @@ _mesa_is_compressed_format(struct gl_context *ctx, GLenum format)
    case GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2:
    case GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2:
       return _mesa_is_gles3(ctx) || ctx->Extensions.ARB_ES3_compatibility;
+   case GL_COMPRESSED_RGBA_BPTC_UNORM:
+   case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM:
+   case GL_COMPRESSED_RGB_BPTC_SIGNED_FLOAT:
+   case GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT:
+      return _mesa_is_desktop_gl(ctx) &&
+         ctx->Extensions.ARB_texture_compression_bptc;
    case GL_PALETTE4_RGB8_OES:
    case GL_PALETTE4_RGBA8_OES:
    case GL_PALETTE4_R5_G6_B5_OES:

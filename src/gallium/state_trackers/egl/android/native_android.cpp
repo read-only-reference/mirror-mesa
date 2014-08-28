@@ -65,8 +65,8 @@ extern "C" {
 #include "util/u_box.h"
 #include "common/native.h"
 #include "common/native_helper.h"
-#include "android/android_sw_winsys.h"
 #include "state_tracker/drm_driver.h"
+#include "sw/android/android_sw_winsys.h"
 
 struct android_config;
 
@@ -147,10 +147,6 @@ get_pipe_format(int native)
    case HAL_PIXEL_FORMAT_BGRA_8888:
       fmt = PIPE_FORMAT_B8G8R8A8_UNORM;
       break;
-   case HAL_PIXEL_FORMAT_RGBA_5551:
-      /* fmt = PIPE_FORMAT_A1B5G5R5_UNORM; */
-   case HAL_PIXEL_FORMAT_RGBA_4444:
-      /* fmt = PIPE_FORMAT_A4B4G4R4_UNORM; */
    default:
       ALOGE("unsupported native format 0x%x", native);
       fmt = PIPE_FORMAT_NONE;

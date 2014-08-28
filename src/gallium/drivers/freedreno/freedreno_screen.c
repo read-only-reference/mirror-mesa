@@ -50,8 +50,8 @@
 #include "freedreno_query.h"
 #include "freedreno_util.h"
 
-#include "fd2_screen.h"
-#include "fd3_screen.h"
+#include "a2xx/fd2_screen.h"
+#include "a3xx/fd3_screen.h"
 
 /* XXX this should go away */
 #include "state_tracker/drm_driver.h"
@@ -216,6 +216,8 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
 	case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
 	case PIPE_CAP_DRAW_INDIRECT:
+	case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
+	case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
 		return 0;
 
 	/* Stream output. */
@@ -230,6 +232,9 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_GEOMETRY_TOTAL_OUTPUT_COMPONENTS:
 	case PIPE_CAP_MAX_VERTEX_STREAMS:
 		return 0;
+
+	case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
+		return 2048;
 
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
@@ -263,6 +268,18 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
 		return 64;
+
+	case PIPE_CAP_VENDOR_ID:
+		return 0x5143;
+	case PIPE_CAP_DEVICE_ID:
+		return 0xFFFFFFFF;
+	case PIPE_CAP_ACCELERATED:
+		return 1;
+	case PIPE_CAP_VIDEO_MEMORY:
+		DBG("FINISHME: The value returned is incorrect\n");
+		return 10;
+	case PIPE_CAP_UMA:
+		return 1;
 
 	default:
 		DBG("unknown param %d", param);
@@ -327,8 +344,6 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 		return 16;
 	case PIPE_SHADER_CAP_MAX_TEMPS:
 		return 64; /* Max native temporaries. */
-	case PIPE_SHADER_CAP_MAX_ADDRS:
-		return 1; /* Max native address registers */
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
 		return ((screen->gpu_id >= 300) ? 1024 : 64) * sizeof(float[4]);
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:

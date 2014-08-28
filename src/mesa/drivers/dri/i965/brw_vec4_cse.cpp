@@ -165,7 +165,7 @@ vec4_visitor::opt_cse_local(bblock_t *block)
                entry->tmp.swizzle = BRW_SWIZZLE_XYZW;
 
                vec4_instruction *copy = MOV(entry->generator->dst, entry->tmp);
-               entry->generator->insert_after(copy);
+               entry->generator->insert_after(block, copy);
                entry->generator->dst = dst_reg(entry->tmp);
             }
 
@@ -174,7 +174,7 @@ vec4_visitor::opt_cse_local(bblock_t *block)
                assert(inst->dst.type == entry->tmp.type);
                vec4_instruction *copy = MOV(inst->dst, entry->tmp);
                copy->force_writemask_all = inst->force_writemask_all;
-               inst->insert_before(copy);
+               inst->insert_before(block, copy);
             }
 
             /* Set our iterator so that next time through the loop inst->next
@@ -183,7 +183,7 @@ vec4_visitor::opt_cse_local(bblock_t *block)
              */
             vec4_instruction *prev = (vec4_instruction *)inst->prev;
 
-            inst->remove();
+            inst->remove(block);
 
             /* Appending an instruction may have changed our bblock end. */
             if (inst == block->end) {
@@ -251,14 +251,12 @@ vec4_visitor::opt_cse()
 
    calculate_live_intervals();
 
-   for (int b = 0; b < cfg->num_blocks; b++) {
-      bblock_t *block = cfg->blocks[b];
-
+   foreach_block (block, cfg) {
       progress = opt_cse_local(block) || progress;
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_live_intervals(false);
 
    return progress;
 }

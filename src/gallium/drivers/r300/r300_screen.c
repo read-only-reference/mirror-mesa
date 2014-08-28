@@ -178,6 +178,8 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
         case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
         case PIPE_CAP_DRAW_INDIRECT:
+        case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
+        case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
             return 0;
 
         /* SWTCL-only features. */
@@ -208,6 +210,20 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
         case PIPE_CAP_MAX_VIEWPORTS:
             return 1;
+
+        case PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE:
+            return 2048;
+
+        case PIPE_CAP_VENDOR_ID:
+                return 0x1002;
+        case PIPE_CAP_DEVICE_ID:
+                return r300screen->info.pci_id;
+        case PIPE_CAP_ACCELERATED:
+                return 1;
+        case PIPE_CAP_VIDEO_MEMORY:
+                return r300screen->info.vram_size >> 20;
+        case PIPE_CAP_UMA:
+                return 0;
     }
     return 0;
 }
@@ -252,7 +268,6 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
         case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
         case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
            return r300screen->caps.num_tex_units;
-        case PIPE_SHADER_CAP_MAX_ADDRS:
         case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
         case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
         case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
@@ -261,6 +276,7 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
         case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
         case PIPE_SHADER_CAP_SUBROUTINES:
         case PIPE_SHADER_CAP_INTEGERS:
+        case PIPE_SHADER_CAP_DOUBLES:
             return 0;
         case PIPE_SHADER_CAP_PREFERRED_IR:
             return PIPE_SHADER_IR_TGSI;
@@ -295,8 +311,6 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
             return 1;
         case PIPE_SHADER_CAP_MAX_TEMPS:
             return 32;
-        case PIPE_SHADER_CAP_MAX_ADDRS:
-            return 1; /* XXX guessed */
         case PIPE_SHADER_CAP_MAX_PREDS:
             return is_r500 ? 4 : 0; /* XXX guessed. */
         case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
@@ -312,6 +326,7 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
         case PIPE_SHADER_CAP_INTEGERS:
         case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
         case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
+        case PIPE_SHADER_CAP_DOUBLES:
             return 0;
         case PIPE_SHADER_CAP_PREFERRED_IR:
             return PIPE_SHADER_IR_TGSI;
@@ -410,6 +425,44 @@ util_format_is_rgba1010102_variant(const struct util_format_description *desc)
    }
 
    return TRUE;
+}
+
+static bool r300_is_blending_supported(struct r300_screen *rscreen,
+                                       enum pipe_format format)
+{
+    int c;
+    const struct util_format_description *desc =
+        util_format_description(format);
+
+    if (desc->layout != UTIL_FORMAT_LAYOUT_PLAIN)
+        return false;
+
+    c = util_format_get_first_non_void_channel(format);
+
+    /* RGBA16F */
+    if (rscreen->caps.is_r500 &&
+        desc->nr_channels == 4 &&
+        desc->channel[c].size == 16 &&
+        desc->channel[c].type == UTIL_FORMAT_TYPE_FLOAT)
+        return true;
+
+    if (desc->channel[c].normalized &&
+        desc->channel[c].type == UTIL_FORMAT_TYPE_UNSIGNED &&
+        desc->channel[c].size >= 4 &&
+        desc->channel[c].size <= 10) {
+        /* RGB10_A2, RGBA8, RGB5_A1, RGBA4, RGB565 */
+        if (desc->nr_channels >= 3)
+            return true;
+
+        if (format == PIPE_FORMAT_R8G8_UNORM)
+            return true;
+
+        /* R8, I8, L8, A8 */
+        if (desc->nr_channels == 1)
+            return true;
+    }
+
+    return false;
 }
 
 static boolean r300_is_format_supported(struct pipe_screen* screen,
@@ -513,7 +566,8 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
     if ((usage & (PIPE_BIND_RENDER_TARGET |
                   PIPE_BIND_DISPLAY_TARGET |
                   PIPE_BIND_SCANOUT |
-                  PIPE_BIND_SHARED)) &&
+                  PIPE_BIND_SHARED |
+                  PIPE_BIND_BLENDABLE)) &&
         /* 2101010 cannot be rendered to on non-r5xx. */
         (!is_color2101010 || (is_r500 && drm_2_8_0)) &&
         r300_is_colorbuffer_format_supported(format)) {
@@ -522,6 +576,10 @@ static boolean r300_is_format_supported(struct pipe_screen* screen,
              PIPE_BIND_DISPLAY_TARGET |
              PIPE_BIND_SCANOUT |
              PIPE_BIND_SHARED);
+
+        if (r300_is_blending_supported(r300_screen(screen), format)) {
+            retval |= usage & PIPE_BIND_BLENDABLE;
+        }
     }
 
     /* Check depth-stencil format support. */

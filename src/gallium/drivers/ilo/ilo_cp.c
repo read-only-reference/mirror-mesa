@@ -30,9 +30,6 @@
 
 #include "ilo_cp.h"
 
-#define MI_NOOP             GEN_MI_CMD(MI_NOOP)
-#define MI_BATCH_BUFFER_END GEN_MI_CMD(MI_BATCH_BUFFER_END)
-
 /* the size of the private space */
 static const int ilo_cp_private = 2;
 
@@ -114,7 +111,7 @@ ilo_cp_end_buffer(struct ilo_cp *cp)
 
    assert(cp->used + 2 <= cp->size);
 
-   cp->ptr[cp->used++] = MI_BATCH_BUFFER_END;
+   cp->ptr[cp->used++] = GEN6_MI_CMD(MI_BATCH_BUFFER_END);
 
    /*
     * From the Sandy Bridge PRM, volume 1 part 1, page 107:
@@ -123,7 +120,7 @@ ilo_cp_end_buffer(struct ilo_cp *cp)
     *      length."
     */
    if (cp->used & 1)
-      cp->ptr[cp->used++] = MI_NOOP;
+      cp->ptr[cp->used++] = GEN6_MI_CMD(MI_NOOP);
 }
 
 /**
@@ -163,7 +160,7 @@ ilo_cp_realloc_bo(struct ilo_cp *cp)
     * won't point at the same address, which is needed for jmpbuf
     */
    bo = intel_winsys_alloc_buffer(cp->winsys,
-         "batch buffer", cp->bo_size * 4, INTEL_DOMAIN_CPU);
+         "batch buffer", cp->bo_size * 4, true);
    if (unlikely(!bo)) {
       /* reuse the old one */
       bo = cp->bo;

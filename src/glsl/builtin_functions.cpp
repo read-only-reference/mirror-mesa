@@ -318,6 +318,14 @@ fs_oes_derivatives(const _mesa_glsl_parse_state *state)
 }
 
 static bool
+fs_derivative_control(const _mesa_glsl_parse_state *state)
+{
+   return state->stage == MESA_SHADER_FRAGMENT &&
+          (state->is_version(450, 0) ||
+           state->ARB_derivative_control_enable);
+}
+
+static bool
 tex1d_lod(const _mesa_glsl_parse_state *state)
 {
    return !state->es_shader && lod_exists_in_stage(state);
@@ -618,6 +626,12 @@ private:
    B1(dFdx);
    B1(dFdy);
    B1(fwidth);
+   B1(dFdxCoarse);
+   B1(dFdyCoarse);
+   B1(fwidthCoarse);
+   B1(dFdxFine);
+   B1(dFdyFine);
+   B1(fwidthFine);
    B1(noise1);
    B1(noise2);
    B1(noise3);
@@ -706,7 +720,8 @@ builtin_builder::find(_mesa_glsl_parse_state *state,
    if (f == NULL)
       return NULL;
 
-   ir_function_signature *sig = f->matching_signature(state, actual_parameters);
+   ir_function_signature *sig =
+      f->matching_signature(state, actual_parameters, true);
    if (sig == NULL)
       return NULL;
 
@@ -2147,6 +2162,12 @@ builtin_builder::create_builtins()
    F(dFdx)
    F(dFdy)
    F(fwidth)
+   F(dFdxCoarse)
+   F(dFdyCoarse)
+   F(fwidthCoarse)
+   F(dFdxFine)
+   F(dFdyFine)
+   F(fwidthFine)
    F(noise1)
    F(noise2)
    F(noise3)
@@ -4009,7 +4030,11 @@ builtin_builder::_textureQueryLevels(const glsl_type *sampler_type)
 }
 
 UNOP(dFdx, ir_unop_dFdx, fs_oes_derivatives)
+UNOP(dFdxCoarse, ir_unop_dFdx_coarse, fs_derivative_control)
+UNOP(dFdxFine, ir_unop_dFdx_fine, fs_derivative_control)
 UNOP(dFdy, ir_unop_dFdy, fs_oes_derivatives)
+UNOP(dFdyCoarse, ir_unop_dFdy_coarse, fs_derivative_control)
+UNOP(dFdyFine, ir_unop_dFdy_fine, fs_derivative_control)
 
 ir_function_signature *
 builtin_builder::_fwidth(const glsl_type *type)
@@ -4018,6 +4043,30 @@ builtin_builder::_fwidth(const glsl_type *type)
    MAKE_SIG(type, fs_oes_derivatives, 1, p);
 
    body.emit(ret(add(abs(expr(ir_unop_dFdx, p)), abs(expr(ir_unop_dFdy, p)))));
+
+   return sig;
+}
+
+ir_function_signature *
+builtin_builder::_fwidthCoarse(const glsl_type *type)
+{
+   ir_variable *p = in_var(type, "p");
+   MAKE_SIG(type, fs_derivative_control, 1, p);
+
+   body.emit(ret(add(abs(expr(ir_unop_dFdx_coarse, p)),
+                     abs(expr(ir_unop_dFdy_coarse, p)))));
+
+   return sig;
+}
+
+ir_function_signature *
+builtin_builder::_fwidthFine(const glsl_type *type)
+{
+   ir_variable *p = in_var(type, "p");
+   MAKE_SIG(type, fs_derivative_control, 1, p);
+
+   body.emit(ret(add(abs(expr(ir_unop_dFdx_fine, p)),
+                     abs(expr(ir_unop_dFdy_fine, p)))));
 
    return sig;
 }
@@ -4427,11 +4476,11 @@ builtin_builder::_image_prototype(const glsl_type *image_type,
     * accept everything that needs to be accepted, and reject cases
     * like loads from write-only or stores to read-only images.
     */
-   image->data.image.read_only = flags & IMAGE_FUNCTION_READ_ONLY;
-   image->data.image.write_only = flags & IMAGE_FUNCTION_WRITE_ONLY;
-   image->data.image.coherent = true;
-   image->data.image._volatile = true;
-   image->data.image.restrict_flag = true;
+   image->data.image_read_only = (flags & IMAGE_FUNCTION_READ_ONLY) != 0;
+   image->data.image_write_only = (flags & IMAGE_FUNCTION_WRITE_ONLY) != 0;
+   image->data.image_coherent = true;
+   image->data.image_volatile = true;
+   image->data.image_restrict = true;
 
    return sig;
 }

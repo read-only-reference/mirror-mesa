@@ -31,7 +31,7 @@ extern "C" {
 #include "main/shaderobj.h"
 }
 
-#include "ralloc.h"
+#include "util/ralloc.h"
 #include "ast.h"
 #include "glsl_parser_extras.h"
 #include "glsl_parser.h"
@@ -514,6 +514,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(ARB_arrays_of_arrays,           true,  false,     ARB_arrays_of_arrays),
    EXT(ARB_compute_shader,             true,  false,     ARB_compute_shader),
    EXT(ARB_conservative_depth,         true,  false,     ARB_conservative_depth),
+   EXT(ARB_derivative_control,         true,  false,     ARB_derivative_control),
    EXT(ARB_draw_buffers,               true,  false,     dummy_true),
    EXT(ARB_draw_instanced,             true,  false,     ARB_draw_instanced),
    EXT(ARB_explicit_attrib_location,   true,  false,     ARB_explicit_attrib_location),
@@ -1472,7 +1473,7 @@ _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader,
 
    if (!state->error && !shader->ir->is_empty()) {
       struct gl_shader_compiler_options *options =
-         &ctx->ShaderCompilerOptions[shader->Stage];
+         &ctx->Const.ShaderCompilerOptions[shader->Stage];
 
       /* Do some optimization at compile time to reduce shader IR size
        * and reduce later work if the same shader is linked multiple times
@@ -1487,7 +1488,7 @@ _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader,
    if (shader->InfoLog)
       ralloc_free(shader->InfoLog);
 
-   shader->symbols = state->symbols;
+   shader->symbols = new(shader->ir) glsl_symbol_table;
    shader->CompileStatus = !state->error;
    shader->InfoLog = state->info_log;
    shader->Version = state->language_version;
@@ -1500,6 +1501,30 @@ _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader,
    /* Retain any live IR, but trash the rest. */
    reparent_ir(shader->ir, shader->ir);
 
+   /* Destroy the symbol table.  Create a new symbol table that contains only
+    * the variables and functions that still exist in the IR.  The symbol
+    * table will be used later during linking.
+    *
+    * There must NOT be any freed objects still referenced by the symbol
+    * table.  That could cause the linker to dereference freed memory.
+    *
+    * We don't have to worry about types or interface-types here because those
+    * are fly-weights that are looked up by glsl_type.
+    */
+   foreach_in_list (ir_instruction, ir, shader->ir) {
+      switch (ir->ir_type) {
+      case ir_type_function:
+         shader->symbols->add_function((ir_function *) ir);
+         break;
+      case ir_type_variable:
+         shader->symbols->add_variable((ir_variable *) ir);
+         break;
+      default:
+         break;
+      }
+   }
+
+   delete state->symbols;
    ralloc_free(state);
 }
 

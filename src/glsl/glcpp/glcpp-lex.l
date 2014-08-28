@@ -172,6 +172,7 @@ SPACE		[[:space:]]
 NONSPACE	[^[:space:]]
 HSPACE		[ \t]
 HASH		#
+NEWLINE		(\r\n|\n\r|\r|\n)
 IDENTIFIER	[_a-zA-Z][_a-zA-Z0-9]*
 PP_NUMBER	[.]?[0-9]([._a-zA-Z0-9]|[eEpP][-+])*
 PUNCTUATION	[][(){}.&*~!/%<>^|;,=+-]
@@ -250,15 +251,15 @@ HEXADECIMAL_INTEGER	0[xX][0-9a-fA-F]+[uU]?
 	}
 
 	/* Single-line comments */
-"//"[^\r\n]* {
+<INITIAL,DEFINE,HASH>"//"[^\r\n]* {
 }
 
 	/* Multi-line comments */
 <INITIAL,DEFINE,HASH>"/*"   { yy_push_state(COMMENT, yyscanner); }
 <COMMENT>[^*\r\n]*
-<COMMENT>[^*\r\n]*[\r\n]    { yylineno++; yycolumn = 0; parser->commented_newlines++; }
+<COMMENT>[^*\r\n]*{NEWLINE} { yylineno++; yycolumn = 0; parser->commented_newlines++; }
 <COMMENT>"*"+[^*/\r\n]*
-<COMMENT>"*"+[^*/\r\n]*[\r\n] { yylineno++; yycolumn = 0; parser->commented_newlines++; }
+<COMMENT>"*"+[^*/\r\n]*{NEWLINE} { yylineno++; yycolumn = 0; parser->commented_newlines++; }
 <COMMENT>"*"+"/"        {
 	yy_pop_state(yyscanner);
 	/* In the <HASH> start condition, we don't want any SPACE token. */
@@ -287,12 +288,22 @@ HEXADECIMAL_INTEGER	0[xX][0-9a-fA-F]+[uU]?
 	RETURN_STRING_TOKEN (VERSION_TOKEN);
 }
 
+	/* Swallow empty #pragma directives, (to avoid confusing the
+	 * downstream compiler).
+	 *
+	 * Note: We use a simple regular expression for the lookahead
+	 * here. Specifically, we cannot use the complete {NEWLINE} expression
+	 * since it uses alternation and we've found that there's a flex bug
+	 * where using alternation in the lookahead portion of a pattern
+	 * triggers a buffer overrun. */
+<HASH>pragma{HSPACE}*/[\r\n] {
+	BEGIN INITIAL;
+}
+
 	/* glcpp doesn't handle #extension, #version, or #pragma directives.
 	 * Simply pass them through to the main compiler's lexer/parser. */
 <HASH>(extension|pragma)[^\r\n]* {
 	BEGIN INITIAL;
-	yylineno++;
-	yycolumn = 0;
 	RETURN_STRING_TOKEN (PRAGMA);
 }
 
@@ -301,7 +312,7 @@ HEXADECIMAL_INTEGER	0[xX][0-9a-fA-F]+[uU]?
 	RETURN_TOKEN (LINE);
 }
 
-<HASH>\n {
+<HASH>{NEWLINE} {
 	BEGIN INITIAL;
 	RETURN_TOKEN_NEVER_SKIP (NEWLINE);
 }
@@ -348,7 +359,7 @@ HEXADECIMAL_INTEGER	0[xX][0-9a-fA-F]+[uU]?
 	RETURN_TOKEN_NEVER_SKIP (ENDIF);
 }
 
-<HASH>error.* {
+<HASH>error[^\r\n]* {
 	BEGIN INITIAL;
 	RETURN_STRING_TOKEN (ERROR_TOKEN);
 }
@@ -371,7 +382,7 @@ HEXADECIMAL_INTEGER	0[xX][0-9a-fA-F]+[uU]?
 	 *	* Anything else, (not an identifier, not a comment,
 	 *	  and not whitespace). This will generate an error.
 	 */
-<HASH>define{HSPACE}+ {
+<HASH>define{HSPACE}* {
 	if (! parser->skipping) {
 		BEGIN DEFINE;
 		yyextra->space_tokens = 0;
@@ -517,9 +528,11 @@ HEXADECIMAL_INTEGER	0[xX][0-9a-fA-F]+[uU]?
 
 	/* We preserve all newlines, even between #if 0..#endif, so no
 	skipping.. */
-<*>[\r\n] {
+<*>{NEWLINE} {
 	if (parser->commented_newlines) {
 		BEGIN NEWLINE_CATCHUP;
+	} else {
+		BEGIN INITIAL;
 	}
 	yyextra->space_tokens = 1;
 	yyextra->lexing_directive = 0;
@@ -531,8 +544,6 @@ HEXADECIMAL_INTEGER	0[xX][0-9a-fA-F]+[uU]?
 <INITIAL,COMMENT,DEFINE,HASH><<EOF>> {
 	if (YY_START == COMMENT)
 		glcpp_error(yylloc, yyextra, "Unterminated comment");
-	if (YY_START == DEFINE)
-		glcpp_error(yylloc, yyextra, "#define without macro name");
 	BEGIN DONE; /* Don't keep matching this rule forever. */
 	yyextra->lexing_directive = 0;
 	if (! parser->last_token_was_newline)

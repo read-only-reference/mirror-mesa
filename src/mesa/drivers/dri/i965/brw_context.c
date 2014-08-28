@@ -40,6 +40,7 @@
 #include "main/points.h"
 #include "main/version.h"
 #include "main/vtxfmt.h"
+#include "main/texobj.h"
 
 #include "vbo/vbo_context.h"
 
@@ -65,7 +66,7 @@
 #include "swrast_setup/swrast_setup.h"
 #include "tnl/tnl.h"
 #include "tnl/t_pipeline.h"
-#include "glsl/ralloc.h"
+#include "util/ralloc.h"
 
 /***************************************
  * Mesa's Driver Functions
@@ -123,7 +124,7 @@ brw_get_renderer_string(unsigned deviceID)
 }
 
 static const GLubyte *
-intelGetString(struct gl_context * ctx, GLenum name)
+intel_get_string(struct gl_context * ctx, GLenum name)
 {
    const struct brw_context *const brw = brw_context(ctx);
 
@@ -153,15 +154,39 @@ intel_viewport(struct gl_context *ctx)
 }
 
 static void
-intelInvalidateState(struct gl_context * ctx, GLuint new_state)
+intel_update_state(struct gl_context * ctx, GLuint new_state)
 {
    struct brw_context *brw = brw_context(ctx);
+   struct intel_texture_object *tex_obj;
+   struct intel_renderbuffer *depth_irb;
 
    if (ctx->swrast_context)
       _swrast_InvalidateState(ctx, new_state);
    _vbo_InvalidateState(ctx, new_state);
 
    brw->NewGLState |= new_state;
+
+   _mesa_unlock_context_textures(ctx);
+
+   /* Resolve the depth buffer's HiZ buffer. */
+   depth_irb = intel_get_renderbuffer(ctx->DrawBuffer, BUFFER_DEPTH);
+   if (depth_irb)
+      intel_renderbuffer_resolve_hiz(brw, depth_irb);
+
+   /* Resolve depth buffer and render cache of each enabled texture. */
+   int maxEnabledUnit = ctx->Texture._MaxEnabledTexImageUnit;
+   for (int i = 0; i <= maxEnabledUnit; i++) {
+      if (!ctx->Texture.Unit[i]._Current)
+	 continue;
+      tex_obj = intel_texture_object(ctx->Texture.Unit[i]._Current);
+      if (!tex_obj || !tex_obj->mt)
+	 continue;
+      intel_miptree_all_slices_resolve_depth(brw, tex_obj->mt);
+      intel_miptree_resolve_color(brw, tex_obj->mt);
+      brw_render_cache_set_check_flush(brw, tex_obj->mt->bo);
+   }
+
+   _mesa_lock_context_textures(ctx);
 }
 
 #define flushFront(screen)      ((screen)->image.loader ? (screen)->image.loader->flushFrontBuffer : (screen)->dri2.loader->flushFrontBuffer)
@@ -209,8 +234,8 @@ intel_glFlush(struct gl_context *ctx)
       brw->need_throttle = true;
 }
 
-void
-intelFinish(struct gl_context * ctx)
+static void
+intel_finish(struct gl_context * ctx)
 {
    struct brw_context *brw = brw_context(ctx);
 
@@ -237,14 +262,15 @@ brw_init_driver_functions(struct brw_context *brw,
       functions->Viewport = intel_viewport;
 
    functions->Flush = intel_glFlush;
-   functions->Finish = intelFinish;
-   functions->GetString = intelGetString;
-   functions->UpdateState = intelInvalidateState;
+   functions->Finish = intel_finish;
+   functions->GetString = intel_get_string;
+   functions->UpdateState = intel_update_state;
 
    intelInitTextureFuncs(functions);
    intelInitTextureImageFuncs(functions);
    intelInitTextureSubImageFuncs(functions);
    intelInitTextureCopyImageFuncs(functions);
+   intelInitCopyImageFuncs(functions);
    intelInitClearFuncs(functions);
    intelInitBufferFuncs(functions);
    intelInitPixelFuncs(functions);
@@ -457,7 +483,32 @@ brw_initialize_context_constants(struct brw_context *brw)
       ctx->Const.QuadsFollowProvokingVertexConvention = false;
 
    ctx->Const.NativeIntegers = true;
-   ctx->Const.UniformBooleanTrue = 1;
+
+   /* Regarding the CMP instruction, the Ivybridge PRM says:
+    *
+    *   "For each enabled channel 0b or 1b is assigned to the appropriate flag
+    *    bit and 0/all zeros or all ones (e.g, byte 0xFF, word 0xFFFF, DWord
+    *    0xFFFFFFFF) is assigned to dst."
+    *
+    * but PRMs for earlier generations say
+    *
+    *   "In dword format, one GRF may store up to 8 results. When the register
+    *    is used later as a vector of Booleans, as only LSB at each channel
+    *    contains meaning [sic] data, software should make sure all higher bits
+    *    are masked out (e.g. by 'and-ing' an [sic] 0x01 constant)."
+    *
+    * We select the representation of a true boolean uniform to match what the
+    * CMP instruction returns.
+    *
+    * The Sandybridge BSpec's description of the CMP instruction matches that
+    * of the Ivybridge PRM. (The description in the Sandybridge PRM is seems
+    * to have not been updated from Ironlake). Its CMP instruction behaves like
+    * Ivybridge and newer.
+    */
+   if (brw->gen >= 6)
+      ctx->Const.UniformBooleanTrue = ~0;
+   else
+      ctx->Const.UniformBooleanTrue = 1;
 
    /* From the gen4 PRM, volume 4 page 127:
     *
@@ -481,21 +532,21 @@ brw_initialize_context_constants(struct brw_context *brw)
 
    /* We want the GLSL compiler to emit code that uses condition codes */
    for (int i = 0; i < MESA_SHADER_STAGES; i++) {
-      ctx->ShaderCompilerOptions[i].MaxIfDepth = brw->gen < 6 ? 16 : UINT_MAX;
-      ctx->ShaderCompilerOptions[i].EmitCondCodes = true;
-      ctx->ShaderCompilerOptions[i].EmitNoNoise = true;
-      ctx->ShaderCompilerOptions[i].EmitNoMainReturn = true;
-      ctx->ShaderCompilerOptions[i].EmitNoIndirectInput = true;
-      ctx->ShaderCompilerOptions[i].EmitNoIndirectOutput =
+      ctx->Const.ShaderCompilerOptions[i].MaxIfDepth = brw->gen < 6 ? 16 : UINT_MAX;
+      ctx->Const.ShaderCompilerOptions[i].EmitCondCodes = true;
+      ctx->Const.ShaderCompilerOptions[i].EmitNoNoise = true;
+      ctx->Const.ShaderCompilerOptions[i].EmitNoMainReturn = true;
+      ctx->Const.ShaderCompilerOptions[i].EmitNoIndirectInput = true;
+      ctx->Const.ShaderCompilerOptions[i].EmitNoIndirectOutput =
 	 (i == MESA_SHADER_FRAGMENT);
-      ctx->ShaderCompilerOptions[i].EmitNoIndirectTemp =
+      ctx->Const.ShaderCompilerOptions[i].EmitNoIndirectTemp =
 	 (i == MESA_SHADER_FRAGMENT);
-      ctx->ShaderCompilerOptions[i].EmitNoIndirectUniform = false;
-      ctx->ShaderCompilerOptions[i].LowerClipDistance = true;
+      ctx->Const.ShaderCompilerOptions[i].EmitNoIndirectUniform = false;
+      ctx->Const.ShaderCompilerOptions[i].LowerClipDistance = true;
    }
 
-   ctx->ShaderCompilerOptions[MESA_SHADER_VERTEX].OptimizeForAOS = true;
-   ctx->ShaderCompilerOptions[MESA_SHADER_GEOMETRY].OptimizeForAOS = true;
+   ctx->Const.ShaderCompilerOptions[MESA_SHADER_VERTEX].OptimizeForAOS = true;
+   ctx->Const.ShaderCompilerOptions[MESA_SHADER_GEOMETRY].OptimizeForAOS = true;
 
    /* ARB_viewport_array */
    if (brw->gen >= 7 && ctx->API == API_OPENGL_CORE) {
@@ -570,6 +621,9 @@ brw_process_driconf_options(struct brw_context *brw)
 
    ctx->Const.DisableGLSLLineContinuations =
       driQueryOptionb(options, "disable_glsl_line_continuations");
+
+   ctx->Const.AllowGLSLExtensionDirectiveMidShader =
+      driQueryOptionb(options, "allow_glsl_extension_directive_midshader");
 }
 
 GLboolean
@@ -639,15 +693,15 @@ brwCreateContext(gl_api api,
    brw->wm.base.stage = MESA_SHADER_FRAGMENT;
    if (brw->gen >= 8) {
       gen8_init_vtable_surface_functions(brw);
-      gen7_init_vtable_sampler_functions(brw);
       brw->vtbl.emit_depth_stencil_hiz = gen8_emit_depth_stencil_hiz;
    } else if (brw->gen >= 7) {
       gen7_init_vtable_surface_functions(brw);
-      gen7_init_vtable_sampler_functions(brw);
       brw->vtbl.emit_depth_stencil_hiz = gen7_emit_depth_stencil_hiz;
+   } else if (brw->gen >= 6) {
+      gen6_init_vtable_surface_functions(brw);
+      brw->vtbl.emit_depth_stencil_hiz = gen6_emit_depth_stencil_hiz;
    } else {
       gen4_init_vtable_surface_functions(brw);
-      gen4_init_vtable_sampler_functions(brw);
       brw->vtbl.emit_depth_stencil_hiz = brw_emit_depth_stencil_hiz;
    }
 
@@ -756,6 +810,7 @@ brwCreateContext(gl_api api,
    brw->prim_restart.in_progress = false;
    brw->prim_restart.enable_cut_index = false;
    brw->gs.enabled = false;
+   brw->sf.viewport_transform_enable = true;
 
    ctx->VertexProgram._MaintainTnlProgram = true;
    ctx->FragmentProgram._MaintainTexEnvProgram = true;
@@ -806,6 +861,7 @@ intelDestroyContext(__DRIcontext * driContextPriv)
    }
 
    _mesa_meta_free(&brw->ctx);
+   brw_meta_fast_clear_free(brw);
 
    if (INTEL_DEBUG & DEBUG_SHADER_TIME) {
       /* Force a report. */

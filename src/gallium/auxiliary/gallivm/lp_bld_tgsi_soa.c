@@ -1408,11 +1408,23 @@ emit_fetch_gs_input(
 {
    struct lp_build_tgsi_soa_context * bld = lp_soa_context(bld_base);
    struct gallivm_state *gallivm = bld->bld_base.base.gallivm;
+   const struct tgsi_shader_info *info = bld->bld_base.info;
    LLVMBuilderRef builder = gallivm->builder;
    LLVMValueRef attrib_index = NULL;
    LLVMValueRef vertex_index = NULL;
    LLVMValueRef swizzle_index = lp_build_const_int32(gallivm, swizzle);
    LLVMValueRef res;
+
+   if (info->input_semantic_name[reg->Register.Index] == TGSI_SEMANTIC_PRIMID) {
+      /* This is really a system value not a regular input */
+      assert(!reg->Register.Indirect);
+      assert(!reg->Dimension.Indirect);
+      res = bld->system_values.prim_id;
+      if (stype != TGSI_TYPE_UNSIGNED && stype != TGSI_TYPE_SIGNED) {
+         res = LLVMBuildBitCast(builder, res, bld_base->base.vec_type, "");
+      }
+      return res;
+   }
 
    if (reg->Register.Indirect) {
       attrib_index = get_indirect_index(bld,
@@ -1938,9 +1950,10 @@ static void
 emit_tex( struct lp_build_tgsi_soa_context *bld,
           const struct tgsi_full_instruction *inst,
           enum lp_build_tex_modifier modifier,
-          LLVMValueRef *texel)
+          LLVMValueRef *texel,
+          unsigned sampler_reg)
 {
-   unsigned unit;
+   unsigned unit = inst->Src[sampler_reg].Register.Index;
    LLVMValueRef lod_bias, explicit_lod;
    LLVMValueRef oow = NULL;
    LLVMValueRef coords[5];
@@ -2010,7 +2023,16 @@ emit_tex( struct lp_build_tgsi_soa_context *bld,
       num_derivs = 3;
       break;
    case TGSI_TEXTURE_CUBE_ARRAY:
+      num_offsets = 2;
+      num_derivs = 3;
+      layer_coord = 3;
+      break;
    case TGSI_TEXTURE_SHADOWCUBE_ARRAY:
+      num_offsets = 2;
+      num_derivs = 3;
+      layer_coord = 3;
+      shadow_coord = 4; /* shadow coord special different reg */
+      break;
    case TGSI_TEXTURE_2D_MSAA:
    case TGSI_TEXTURE_2D_ARRAY_MSAA:
    default:
@@ -2021,7 +2043,15 @@ emit_tex( struct lp_build_tgsi_soa_context *bld,
    /* Note lod and especially projected are illegal in a LOT of cases */
    if (modifier == LP_BLD_TEX_MODIFIER_LOD_BIAS ||
        modifier == LP_BLD_TEX_MODIFIER_EXPLICIT_LOD) {
-      LLVMValueRef lod = lp_build_emit_fetch(&bld->bld_base, inst, 0, 3);
+      LLVMValueRef lod;
+      if (inst->Texture.Texture == TGSI_TEXTURE_SHADOWCUBE ||
+          inst->Texture.Texture == TGSI_TEXTURE_CUBE_ARRAY) {
+         /* note that shadow cube array with bias/explicit lod does not exist */
+         lod = lp_build_emit_fetch(&bld->bld_base, inst, 1, 0);
+      }
+      else {
+         lod = lp_build_emit_fetch(&bld->bld_base, inst, 0, 3);
+      }
       if (modifier == LP_BLD_TEX_MODIFIER_LOD_BIAS) {
          lod_bias = lod;
          explicit_lod = NULL;
@@ -2053,13 +2083,23 @@ emit_tex( struct lp_build_tgsi_soa_context *bld,
 
    /* Layer coord always goes into 3rd slot, except for cube map arrays */
    if (layer_coord) {
-      coords[2] = lp_build_emit_fetch(&bld->bld_base, inst, 0, layer_coord);
+      if (layer_coord == 3) {
+         coords[3] = lp_build_emit_fetch(&bld->bld_base, inst, 0, layer_coord);
+      }
+      else {
+         coords[2] = lp_build_emit_fetch(&bld->bld_base, inst, 0, layer_coord);
+      }
       if (modifier == LP_BLD_TEX_MODIFIER_PROJECTED)
          coords[2] = lp_build_mul(&bld->bld_base.base, coords[2], oow);
    }
    /* Shadow coord occupies always 5th slot. */
    if (shadow_coord) {
-      coords[4] = lp_build_emit_fetch(&bld->bld_base, inst, 0, shadow_coord);
+      if (shadow_coord == 4) {
+         coords[4] = lp_build_emit_fetch(&bld->bld_base, inst, 1, 0);
+      }
+      else {
+         coords[4] = lp_build_emit_fetch(&bld->bld_base, inst, 0, shadow_coord);
+      }
       if (modifier == LP_BLD_TEX_MODIFIER_PROJECTED)
          coords[4] = lp_build_mul(&bld->bld_base.base, coords[4], oow);
    }
@@ -2071,7 +2111,6 @@ emit_tex( struct lp_build_tgsi_soa_context *bld,
          derivs.ddy[dim] = lp_build_emit_fetch(&bld->bld_base, inst, 2, dim);
       }
       deriv_ptr = &derivs;
-      unit = inst->Src[3].Register.Index;
       /*
        * could also check all src regs if constant but I doubt such
        * cases exist in practice.
@@ -2087,8 +2126,6 @@ emit_tex( struct lp_build_tgsi_soa_context *bld,
       else {
          lod_property = LP_SAMPLER_LOD_PER_ELEMENT;
       }
-   } else {
-      unit = inst->Src[1].Register.Index;
    }
 
    /* some advanced gather instructions (txgo) would require 4 offsets */
@@ -2296,7 +2333,7 @@ emit_fetch_texels( struct lp_build_tgsi_soa_context *bld,
    unsigned unit, target;
    LLVMValueRef coord_undef = LLVMGetUndef(bld->bld_base.base.int_vec_type);
    LLVMValueRef explicit_lod = NULL;
-   LLVMValueRef coords[3];
+   LLVMValueRef coords[5];
    LLVMValueRef offsets[3] = { NULL };
    enum lp_sampler_lod_property lod_property = LP_SAMPLER_LOD_SCALAR;
    unsigned dims, i;
@@ -2330,9 +2367,11 @@ emit_fetch_texels( struct lp_build_tgsi_soa_context *bld,
       break;
    case TGSI_TEXTURE_2D:
    case TGSI_TEXTURE_RECT:
+   case TGSI_TEXTURE_2D_MSAA:
       dims = 2;
       break;
    case TGSI_TEXTURE_2D_ARRAY:
+   case TGSI_TEXTURE_2D_ARRAY_MSAA:
       layer_coord = 2;
       dims = 2;
       break;
@@ -2344,16 +2383,20 @@ emit_fetch_texels( struct lp_build_tgsi_soa_context *bld,
       return;
    }
 
-   /* always have lod except for buffers ? */
-   if (target != TGSI_TEXTURE_BUFFER) {
+   /* always have lod except for buffers and msaa targets ? */
+   if (target != TGSI_TEXTURE_BUFFER &&
+       target != TGSI_TEXTURE_2D_MSAA &&
+       target != TGSI_TEXTURE_2D_ARRAY_MSAA) {
       explicit_lod = lp_build_emit_fetch(&bld->bld_base, inst, 0, 3);
       lod_property = lp_build_lod_property(&bld->bld_base, inst, 0);
    }
+   /* XXX: for real msaa support, the w component would be the sample index. */
 
    for (i = 0; i < dims; i++) {
       coords[i] = lp_build_emit_fetch(&bld->bld_base, inst, 0, i);
    }
-   for (i = dims; i < 3; i++) {
+   /* never use more than 3 coords here but emit_fetch_texel copies all 5 anyway */
+   for (i = dims; i < 5; i++) {
       coords[i] = coord_undef;
    }
    if (layer_coord)
@@ -2453,7 +2496,7 @@ emit_size_query( struct lp_build_tgsi_soa_context *bld,
 
 static boolean
 near_end_of_shader(struct lp_build_tgsi_soa_context *bld,
-		   int pc)
+                   int pc)
 {
    int i;
 
@@ -2461,27 +2504,38 @@ near_end_of_shader(struct lp_build_tgsi_soa_context *bld,
       unsigned opcode;
 
       if (pc + i >= bld->bld_base.info->num_instructions)
-	 return TRUE;
+         return TRUE;
 
       opcode = bld->bld_base.instructions[pc + i].Instruction.Opcode;
 
       if (opcode == TGSI_OPCODE_END)
-	 return TRUE;
+         return TRUE;
 
       if (opcode == TGSI_OPCODE_TEX ||
-	  opcode == TGSI_OPCODE_TXP ||
-	  opcode == TGSI_OPCODE_TXD ||
-	  opcode == TGSI_OPCODE_TXB ||
-	  opcode == TGSI_OPCODE_TXL ||
-	  opcode == TGSI_OPCODE_TXF ||
-	  opcode == TGSI_OPCODE_TXQ ||
-	  opcode == TGSI_OPCODE_CAL ||
-	  opcode == TGSI_OPCODE_CALLNZ ||
-	  opcode == TGSI_OPCODE_IF ||
-          opcode == TGSI_OPCODE_UIF ||
-	  opcode == TGSI_OPCODE_BGNLOOP ||
-	  opcode == TGSI_OPCODE_SWITCH)
-	 return FALSE;
+         opcode == TGSI_OPCODE_TXP ||
+         opcode == TGSI_OPCODE_TXD ||
+         opcode == TGSI_OPCODE_TXB ||
+         opcode == TGSI_OPCODE_TXL ||
+         opcode == TGSI_OPCODE_TXF ||
+         opcode == TGSI_OPCODE_TXQ ||
+         opcode == TGSI_OPCODE_TEX2 ||
+         opcode == TGSI_OPCODE_TXB2 ||
+         opcode == TGSI_OPCODE_TXL2 ||
+         opcode == TGSI_OPCODE_SAMPLE ||
+         opcode == TGSI_OPCODE_SAMPLE_B ||
+         opcode == TGSI_OPCODE_SAMPLE_C ||
+         opcode == TGSI_OPCODE_SAMPLE_C_LZ ||
+         opcode == TGSI_OPCODE_SAMPLE_D ||
+         opcode == TGSI_OPCODE_SAMPLE_I ||
+         opcode == TGSI_OPCODE_SAMPLE_L ||
+         opcode == TGSI_OPCODE_SVIEWINFO ||
+         opcode == TGSI_OPCODE_CAL ||
+         opcode == TGSI_OPCODE_CALLNZ ||
+         opcode == TGSI_OPCODE_IF ||
+         opcode == TGSI_OPCODE_UIF ||
+         opcode == TGSI_OPCODE_BGNLOOP ||
+         opcode == TGSI_OPCODE_SWITCH)
+         return FALSE;
    }
 
    return TRUE;
@@ -2888,7 +2942,20 @@ tex_emit(
 {
    struct lp_build_tgsi_soa_context * bld = lp_soa_context(bld_base);
 
-   emit_tex(bld, emit_data->inst, LP_BLD_TEX_MODIFIER_NONE, emit_data->output);
+   emit_tex(bld, emit_data->inst, LP_BLD_TEX_MODIFIER_NONE,
+            emit_data->output, 1);
+}
+
+static void
+tex2_emit(
+   const struct lp_build_tgsi_action * action,
+   struct lp_build_tgsi_context * bld_base,
+   struct lp_build_emit_data * emit_data)
+{
+   struct lp_build_tgsi_soa_context * bld = lp_soa_context(bld_base);
+
+   emit_tex(bld, emit_data->inst, LP_BLD_TEX_MODIFIER_NONE,
+            emit_data->output, 2);
 }
 
 static void
@@ -2900,7 +2967,19 @@ txb_emit(
    struct lp_build_tgsi_soa_context * bld = lp_soa_context(bld_base);
 
    emit_tex(bld, emit_data->inst, LP_BLD_TEX_MODIFIER_LOD_BIAS,
-            emit_data->output);
+            emit_data->output, 1);
+}
+
+static void
+txb2_emit(
+   const struct lp_build_tgsi_action * action,
+   struct lp_build_tgsi_context * bld_base,
+   struct lp_build_emit_data * emit_data)
+{
+   struct lp_build_tgsi_soa_context * bld = lp_soa_context(bld_base);
+
+   emit_tex(bld, emit_data->inst, LP_BLD_TEX_MODIFIER_LOD_BIAS,
+            emit_data->output, 2);
 }
 
 static void
@@ -2912,7 +2991,7 @@ txd_emit(
    struct lp_build_tgsi_soa_context * bld = lp_soa_context(bld_base);
 
    emit_tex(bld, emit_data->inst, LP_BLD_TEX_MODIFIER_EXPLICIT_DERIV,
-            emit_data->output);
+            emit_data->output, 3);
 }
 
 static void
@@ -2924,7 +3003,19 @@ txl_emit(
    struct lp_build_tgsi_soa_context * bld = lp_soa_context(bld_base);
 
    emit_tex(bld, emit_data->inst, LP_BLD_TEX_MODIFIER_EXPLICIT_LOD,
-            emit_data->output);
+            emit_data->output, 1);
+}
+
+static void
+txl2_emit(
+   const struct lp_build_tgsi_action * action,
+   struct lp_build_tgsi_context * bld_base,
+   struct lp_build_emit_data * emit_data)
+{
+   struct lp_build_tgsi_soa_context * bld = lp_soa_context(bld_base);
+
+   emit_tex(bld, emit_data->inst, LP_BLD_TEX_MODIFIER_EXPLICIT_LOD,
+            emit_data->output, 2);
 }
 
 static void
@@ -2936,7 +3027,7 @@ txp_emit(
    struct lp_build_tgsi_soa_context * bld = lp_soa_context(bld_base);
 
    emit_tex(bld, emit_data->inst, LP_BLD_TEX_MODIFIER_PROJECTED,
-            emit_data->output);
+            emit_data->output, 1);
 }
 
 static void
@@ -3745,6 +3836,9 @@ lp_build_tgsi_soa(struct gallivm_state *gallivm,
    bld.bld_base.op_actions[TGSI_OPCODE_TXP].emit = txp_emit;
    bld.bld_base.op_actions[TGSI_OPCODE_TXQ].emit = txq_emit;
    bld.bld_base.op_actions[TGSI_OPCODE_TXF].emit = txf_emit;
+   bld.bld_base.op_actions[TGSI_OPCODE_TEX2].emit = tex2_emit;
+   bld.bld_base.op_actions[TGSI_OPCODE_TXB2].emit = txb2_emit;
+   bld.bld_base.op_actions[TGSI_OPCODE_TXL2].emit = txl2_emit;
    /* DX10 sampling ops */
    bld.bld_base.op_actions[TGSI_OPCODE_SAMPLE].emit = sample_emit;
    bld.bld_base.op_actions[TGSI_OPCODE_SAMPLE_B].emit = sample_b_emit;

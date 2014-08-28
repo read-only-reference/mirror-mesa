@@ -95,13 +95,12 @@ fs_visitor::opt_saturate_propagation()
 
    calculate_live_intervals();
 
-   for (int b = 0; b < cfg->num_blocks; b++) {
-      progress = opt_saturate_propagation_local(this, cfg->blocks[b])
-                 || progress;
+   foreach_block (block, cfg) {
+      progress = opt_saturate_propagation_local(this, block) || progress;
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_live_intervals(false);
 
    return progress;
 }

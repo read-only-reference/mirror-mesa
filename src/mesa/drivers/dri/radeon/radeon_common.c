@@ -515,9 +515,6 @@ static INLINE void radeonEmitAtoms(radeonContextPtr radeon, GLboolean emitAll)
 {
 	struct radeon_state_atom *atom;
 
-	if (radeon->vtbl.pre_emit_atoms)
-		radeon->vtbl.pre_emit_atoms(radeon);
-
 	/* Emit actual atoms */
 	if (radeon->hw.all_dirty || emitAll) {
 		foreach(atom, &radeon->hw.atomlist)
@@ -530,17 +527,6 @@ static INLINE void radeonEmitAtoms(radeonContextPtr radeon, GLboolean emitAll)
 	}
 
 	COMMIT_BATCH();
-}
-
-static GLboolean radeon_revalidate_bos(struct gl_context *ctx)
-{
-	radeonContextPtr radeon = RADEON_CONTEXT(ctx);
-	int ret;
-
-	ret = radeon_cs_space_check(radeon->cmdbuf.cs);
-	if (ret == RADEON_CS_SPACE_FLUSH)
-		return GL_FALSE;
-	return GL_TRUE;
 }
 
 void radeonEmitState(radeonContextPtr radeon)
@@ -661,9 +647,8 @@ int rcommonFlushCmdBufLocked(radeonContextPtr rmesa, const char *caller)
 	radeon_cs_erase(rmesa->cmdbuf.cs);
 	rmesa->cmdbuf.flushing = 0;
 
-	if (radeon_revalidate_bos(&rmesa->glCtx) == GL_FALSE) {
+	if (!rmesa->vtbl.revalidate_all_buffers(&rmesa->glCtx))
 		fprintf(stderr,"failed to revalidate buffers\n");
-	}
 
 	return ret;
 }

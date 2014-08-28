@@ -1693,6 +1693,9 @@ struct gl_array_attrib
 
    /** One of the DRAW_xxx flags, not consumed by drivers */
    gl_draw_method DrawMethod;
+
+   /** Legal array datatypes */
+   GLbitfield LegalTypesMask;
 };
 
 
@@ -2048,13 +2051,31 @@ typedef enum
  */
 typedef enum
 {
-   SYSTEM_VALUE_FRONT_FACE,     /**< Fragment shader only (not done yet) */
-   SYSTEM_VALUE_VERTEX_ID,      /**< Vertex shader only */
-   SYSTEM_VALUE_INSTANCE_ID,    /**< Vertex shader only */
-   SYSTEM_VALUE_SAMPLE_ID,      /**< Fragment shader only */
-   SYSTEM_VALUE_SAMPLE_POS,     /**< Fragment shader only */
-   SYSTEM_VALUE_SAMPLE_MASK_IN, /**< Fragment shader only */
-   SYSTEM_VALUE_INVOCATION_ID,  /**< Geometry shader only */
+   /**
+    * \name Vertex shader system values
+    */
+   /*@{*/
+   SYSTEM_VALUE_VERTEX_ID,
+   SYSTEM_VALUE_INSTANCE_ID,
+   /*@}*/
+
+   /**
+    * \name Geometry shader system values
+    */
+   /*@{*/
+   SYSTEM_VALUE_INVOCATION_ID,
+   /*@}*/
+
+   /**
+    * \name Fragment shader system values
+    */
+   /*@{*/
+   SYSTEM_VALUE_FRONT_FACE,     /**< (not done yet) */
+   SYSTEM_VALUE_SAMPLE_ID,
+   SYSTEM_VALUE_SAMPLE_POS,
+   SYSTEM_VALUE_SAMPLE_MASK_IN,
+   /*@}*/
+
    SYSTEM_VALUE_MAX             /**< Number of values */
 } gl_system_value;
 
@@ -2296,9 +2317,6 @@ struct gl_geometry_program_state
    struct gl_geometry_program *_Current;
 
    GLfloat Parameters[MAX_PROGRAM_ENV_PARAMS][4]; /**< Env params */
-
-   /** Cache of fixed-function programs */
-   struct gl_program_cache *Cache;
 };
 
 /**
@@ -3393,6 +3411,9 @@ struct gl_constants
    /** OpenGL version 3.2 */
    GLbitfield ProfileMask;   /**< Mask of CONTEXT_x_PROFILE_BIT */
 
+   /** OpenGL version 4.4 */
+   GLuint MaxVertexAttribStride;
+
    /** GL_EXT_transform_feedback */
    GLuint MaxTransformFeedbackBuffers;
    GLuint MaxTransformFeedbackSeparateComponents;
@@ -3508,6 +3529,8 @@ struct gl_constants
    GLfloat MaxFragmentInterpolationOffset;
 
    GLboolean FakeSWMSAA;
+
+   struct gl_shader_compiler_options ShaderCompilerOptions[MESA_SHADER_STAGES];
 };
 
 
@@ -3530,10 +3553,13 @@ struct gl_extensions
    GLboolean ARB_clear_texture;
    GLboolean ARB_color_buffer_float;
    GLboolean ARB_compute_shader;
+   GLboolean ARB_conditional_render_inverted;
    GLboolean ARB_conservative_depth;
+   GLboolean ARB_copy_image;
    GLboolean ARB_depth_buffer_float;
    GLboolean ARB_depth_clamp;
    GLboolean ARB_depth_texture;
+   GLboolean ARB_derivative_control;
    GLboolean ARB_draw_buffers_blend;
    GLboolean ARB_draw_elements_base_vertex;
    GLboolean ARB_draw_indirect;
@@ -3571,6 +3597,7 @@ struct gl_extensions
    GLboolean ARB_texture_buffer_object;
    GLboolean ARB_texture_buffer_object_rgb32;
    GLboolean ARB_texture_buffer_range;
+   GLboolean ARB_texture_compression_bptc;
    GLboolean ARB_texture_compression_rgtc;
    GLboolean ARB_texture_cube_map;
    GLboolean ARB_texture_cube_map_array;
@@ -4149,8 +4176,6 @@ struct gl_context
     * \c NULL.
     */
    struct gl_pipeline_object *_Shader;
-
-   struct gl_shader_compiler_options ShaderCompilerOptions[MESA_SHADER_STAGES];
 
    struct gl_query_state Query;  /**< occlusion, timer queries */
 

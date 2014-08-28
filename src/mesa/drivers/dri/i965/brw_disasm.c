@@ -74,6 +74,7 @@ const struct opcode_desc opcode_descs[128] = {
    [BRW_OPCODE_ASR]      = { .name = "asr",     .nsrc = 2, .ndst = 1 },
    [BRW_OPCODE_CMP]      = { .name = "cmp",     .nsrc = 2, .ndst = 1 },
    [BRW_OPCODE_CMPN]     = { .name = "cmpn",    .nsrc = 2, .ndst = 1 },
+   [BRW_OPCODE_CSEL]     = { .name = "csel",    .nsrc = 3, .ndst = 1 },
    [BRW_OPCODE_BFE]      = { .name = "bfe",     .nsrc = 3, .ndst = 1 },
    [BRW_OPCODE_BFI1]     = { .name = "bfi1",    .nsrc = 2, .ndst = 1 },
    [BRW_OPCODE_BFI2]     = { .name = "bfi2",    .nsrc = 3, .ndst = 1 },
@@ -109,7 +110,10 @@ has_jip(struct brw_context *brw, enum opcode opcode)
    return opcode == BRW_OPCODE_IF ||
           opcode == BRW_OPCODE_ELSE ||
           opcode == BRW_OPCODE_ENDIF ||
-          opcode == BRW_OPCODE_WHILE;
+          opcode == BRW_OPCODE_WHILE ||
+          opcode == BRW_OPCODE_BREAK ||
+          opcode == BRW_OPCODE_CONTINUE ||
+          opcode == BRW_OPCODE_HALT;
 }
 
 static bool
@@ -136,8 +140,8 @@ is_logic_instruction(unsigned opcode)
 
 const char *const conditional_modifier[16] = {
    [BRW_CONDITIONAL_NONE] = "",
-   [BRW_CONDITIONAL_Z]    = ".e",
-   [BRW_CONDITIONAL_NZ]   = ".ne",
+   [BRW_CONDITIONAL_Z]    = ".z",
+   [BRW_CONDITIONAL_NZ]   = ".nz",
    [BRW_CONDITIONAL_G]    = ".g",
    [BRW_CONDITIONAL_GE]   = ".ge",
    [BRW_CONDITIONAL_L]    = ".l",
@@ -1255,12 +1259,13 @@ brw_disassemble_inst(FILE *file, struct brw_context *brw, brw_inst *inst,
                                opcode == BRW_OPCODE_IFF ||
                                opcode == BRW_OPCODE_HALT)) {
       pad(file, 16);
-      format(file, "Jump: %d", brw_inst_gen4_pop_count(brw, inst));
+      format(file, "Jump: %d", brw_inst_gen4_jump_count(brw, inst));
    } else if (brw->gen < 6 && opcode == BRW_OPCODE_ENDIF) {
       pad(file, 16);
       format(file, "Pop: %d", brw_inst_gen4_pop_count(brw, inst));
    } else if (opcode == BRW_OPCODE_JMPI) {
-      format(file, " %d", brw_inst_imm_d(brw, inst));
+      pad(file, 16);
+      err |= src1(file, brw, inst);
    } else if (opcode_descs[opcode].nsrc == 3) {
       pad(file, 16);
       err |= dest_3src(file, brw, inst);

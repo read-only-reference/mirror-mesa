@@ -41,11 +41,6 @@
 #define ILO_GPE_VALID_GEN(dev, min_gen, max_gen) \
    assert((dev)->gen >= ILO_GEN(min_gen) && (dev)->gen <= ILO_GEN(max_gen))
 
-#define ILO_GPE_MI(op) (0x0 << 29 | (op) << 23)
-
-#define ILO_GPE_CMD(pipeline, op, subop) \
-   (0x3 << 29 | (pipeline) << 27 | (op) << 24 | (subop) << 16)
-
 /**
  * Translate winsys tiling to hardware tiling.
  */
@@ -249,21 +244,24 @@ gen6_emit_MI_STORE_DATA_IMM(const struct ilo_dev_info *dev,
                             uint64_t val, bool store_qword,
                             struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_MI(0x20);
    const uint8_t cmd_len = (store_qword) ? 5 : 4;
-   /* must use GGTT on GEN6 as in PIPE_CONTROL */
-   const uint32_t cmd_flags = (dev->gen == ILO_GEN(6)) ? (1 << 22) : 0;
-   const uint32_t read_domains = INTEL_DOMAIN_INSTRUCTION;
-   const uint32_t write_domain = INTEL_DOMAIN_INSTRUCTION;
+   uint32_t dw0 = GEN6_MI_CMD(MI_STORE_DATA_IMM) | (cmd_len - 2);
+   uint32_t reloc_flags = INTEL_RELOC_WRITE;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
    assert(bo_offset % ((store_qword) ? 8 : 4) == 0);
 
+   /* must use GGTT on GEN6 as in PIPE_CONTROL */
+   if (dev->gen == ILO_GEN(6)) {
+      dw0 |= GEN6_MI_STORE_DATA_IMM_DW0_USE_GGTT;
+      reloc_flags |= INTEL_RELOC_GGTT;
+   }
+
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | cmd_flags | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, 0);
-   ilo_cp_write_bo(cp, bo_offset, bo, read_domains, write_domain);
+   ilo_cp_write_bo(cp, bo_offset, bo, reloc_flags);
    ilo_cp_write(cp, (uint32_t) val);
 
    if (store_qword)
@@ -279,15 +277,15 @@ gen6_emit_MI_LOAD_REGISTER_IMM(const struct ilo_dev_info *dev,
                                uint32_t reg, uint32_t val,
                                struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_MI(0x22);
    const uint8_t cmd_len = 3;
+   const uint32_t dw0 = GEN6_MI_CMD(MI_LOAD_REGISTER_IMM) | (cmd_len - 2);
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
    assert(reg % 4 == 0);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, reg);
    ilo_cp_write(cp, val);
    ilo_cp_end(cp);
@@ -298,21 +296,24 @@ gen6_emit_MI_STORE_REGISTER_MEM(const struct ilo_dev_info *dev,
                                 struct intel_bo *bo, uint32_t bo_offset,
                                 uint32_t reg, struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_MI(0x24);
    const uint8_t cmd_len = 3;
-   /* must use GGTT on GEN6 as in PIPE_CONTROL */
-   const uint32_t cmd_flags = (dev->gen == ILO_GEN(6)) ? (1 << 22) : 0;
-   const uint32_t read_domains = INTEL_DOMAIN_INSTRUCTION;
-   const uint32_t write_domain = INTEL_DOMAIN_INSTRUCTION;
+   uint32_t dw0 = GEN6_MI_CMD(MI_STORE_REGISTER_MEM) | (cmd_len - 2);
+   uint32_t reloc_flags = INTEL_RELOC_WRITE;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
    assert(reg % 4 == 0 && bo_offset % 4 == 0);
 
+   /* must use GGTT on GEN6 as in PIPE_CONTROL */
+   if (dev->gen == ILO_GEN(6)) {
+      dw0 |= GEN6_MI_STORE_REGISTER_MEM_DW0_USE_GGTT;
+      reloc_flags |= INTEL_RELOC_GGTT;
+   }
+
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | cmd_flags | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, reg);
-   ilo_cp_write_bo(cp, bo_offset, bo, read_domains, write_domain);
+   ilo_cp_write_bo(cp, bo_offset, bo, reloc_flags);
    ilo_cp_end(cp);
 }
 
@@ -321,22 +322,23 @@ gen6_emit_MI_REPORT_PERF_COUNT(const struct ilo_dev_info *dev,
                                struct intel_bo *bo, uint32_t bo_offset,
                                uint32_t report_id, struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_MI(0x28);
    const uint8_t cmd_len = 3;
-   const uint32_t read_domains = INTEL_DOMAIN_INSTRUCTION;
-   const uint32_t write_domain = INTEL_DOMAIN_INSTRUCTION;
+   const uint32_t dw0 = GEN6_MI_CMD(MI_REPORT_PERF_COUNT) | (cmd_len - 2);
+   uint32_t reloc_flags = INTEL_RELOC_WRITE;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
    assert(bo_offset % 64 == 0);
 
    /* must use GGTT on GEN6 as in PIPE_CONTROL */
-   if (dev->gen == ILO_GEN(6))
-      bo_offset |= 0x1;
+   if (dev->gen == ILO_GEN(6)) {
+      bo_offset |= GEN6_MI_REPORT_PERF_COUNT_DW1_USE_GGTT;
+      reloc_flags |= INTEL_RELOC_GGTT;
+   }
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
-   ilo_cp_write_bo(cp, bo_offset, bo, read_domains, write_domain);
+   ilo_cp_write(cp, dw0);
+   ilo_cp_write_bo(cp, bo_offset, bo, reloc_flags);
    ilo_cp_write(cp, report_id);
    ilo_cp_end(cp);
 }
@@ -354,8 +356,9 @@ gen6_emit_STATE_BASE_ADDRESS(const struct ilo_dev_info *dev,
                              uint32_t instruction_size,
                              struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x0, 0x1, 0x01);
    const uint8_t cmd_len = 10;
+   const uint32_t dw0 = GEN6_RENDER_CMD(COMMON, STATE_BASE_ADDRESS) |
+                        (cmd_len - 2);
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
@@ -364,28 +367,16 @@ gen6_emit_STATE_BASE_ADDRESS(const struct ilo_dev_info *dev,
             indirect_object_size | instruction_size) & 0xfff) == 0);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
 
-   ilo_cp_write_bo(cp, 1, general_state_bo,
-                       INTEL_DOMAIN_RENDER,
-                       0);
-   ilo_cp_write_bo(cp, 1, surface_state_bo,
-                       INTEL_DOMAIN_SAMPLER,
-                       0);
-   ilo_cp_write_bo(cp, 1, dynamic_state_bo,
-                       INTEL_DOMAIN_RENDER | INTEL_DOMAIN_INSTRUCTION,
-                       0);
-   ilo_cp_write_bo(cp, 1, indirect_object_bo,
-                       0,
-                       0);
-   ilo_cp_write_bo(cp, 1, instruction_bo,
-                       INTEL_DOMAIN_INSTRUCTION,
-                       0);
+   ilo_cp_write_bo(cp, 1, general_state_bo, 0);
+   ilo_cp_write_bo(cp, 1, surface_state_bo, 0);
+   ilo_cp_write_bo(cp, 1, dynamic_state_bo, 0);
+   ilo_cp_write_bo(cp, 1, indirect_object_bo, 0);
+   ilo_cp_write_bo(cp, 1, instruction_bo, 0);
 
    if (general_state_size) {
-      ilo_cp_write_bo(cp, general_state_size | 1, general_state_bo,
-                          INTEL_DOMAIN_RENDER,
-                          0);
+      ilo_cp_write_bo(cp, general_state_size | 1, general_state_bo, 0);
    }
    else {
       /* skip range check */
@@ -393,9 +384,7 @@ gen6_emit_STATE_BASE_ADDRESS(const struct ilo_dev_info *dev,
    }
 
    if (dynamic_state_size) {
-      ilo_cp_write_bo(cp, dynamic_state_size | 1, dynamic_state_bo,
-                          INTEL_DOMAIN_RENDER | INTEL_DOMAIN_INSTRUCTION,
-                          0);
+      ilo_cp_write_bo(cp, dynamic_state_size | 1, dynamic_state_bo, 0);
    }
    else {
       /* skip range check */
@@ -403,9 +392,7 @@ gen6_emit_STATE_BASE_ADDRESS(const struct ilo_dev_info *dev,
    }
 
    if (indirect_object_size) {
-      ilo_cp_write_bo(cp, indirect_object_size | 1, indirect_object_bo,
-                          0,
-                          0);
+      ilo_cp_write_bo(cp, indirect_object_size | 1, indirect_object_bo, 0);
    }
    else {
       /* skip range check */
@@ -413,9 +400,7 @@ gen6_emit_STATE_BASE_ADDRESS(const struct ilo_dev_info *dev,
    }
 
    if (instruction_size) {
-      ilo_cp_write_bo(cp, instruction_size | 1, instruction_bo,
-                          INTEL_DOMAIN_INSTRUCTION,
-                          0);
+      ilo_cp_write_bo(cp, instruction_size | 1, instruction_bo, 0);
    }
    else {
       /* skip range check */
@@ -430,13 +415,13 @@ gen6_emit_STATE_SIP(const struct ilo_dev_info *dev,
                     uint32_t sip,
                     struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x0, 0x1, 0x02);
    const uint8_t cmd_len = 2;
+   const uint32_t dw0 = GEN6_RENDER_CMD(COMMON, STATE_SIP) | (cmd_len - 2);
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, sip);
    ilo_cp_end(cp);
 }
@@ -446,13 +431,14 @@ gen6_emit_3DSTATE_VF_STATISTICS(const struct ilo_dev_info *dev,
                                 bool enable,
                                 struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x1, 0x0, 0x0b);
    const uint8_t cmd_len = 1;
+   const uint32_t dw0 = GEN6_RENDER_CMD(SINGLE_DW, 3DSTATE_VF_STATISTICS) |
+                        enable;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | enable);
+   ilo_cp_write(cp, dw0);
    ilo_cp_end(cp);
 }
 
@@ -461,8 +447,9 @@ gen6_emit_PIPELINE_SELECT(const struct ilo_dev_info *dev,
                           int pipeline,
                           struct ilo_cp *cp)
 {
-   const int cmd = ILO_GPE_CMD(0x1, 0x1, 0x04);
    const uint8_t cmd_len = 1;
+   const uint32_t dw0 = GEN6_RENDER_CMD(SINGLE_DW, PIPELINE_SELECT) |
+                        pipeline;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
@@ -470,7 +457,7 @@ gen6_emit_PIPELINE_SELECT(const struct ilo_dev_info *dev,
    assert(pipeline == 0x0 || pipeline == 0x1);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | pipeline);
+   ilo_cp_write(cp, dw0);
    ilo_cp_end(cp);
 }
 
@@ -480,8 +467,9 @@ gen6_emit_MEDIA_VFE_STATE(const struct ilo_dev_info *dev,
                           int urb_entry_size,
                           struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x2, 0x0, 0x00);
    const uint8_t cmd_len = 8;
+   const uint32_t dw0 = GEN6_RENDER_CMD(MEDIA, MEDIA_VFE_STATE) |
+                        (cmd_len - 2);
    uint32_t dw2, dw4;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
@@ -495,7 +483,7 @@ gen6_emit_MEDIA_VFE_STATE(const struct ilo_dev_info *dev,
          480;                    /* CURBE Allocation Size */
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, 0); /* scratch */
    ilo_cp_write(cp, dw2);
    ilo_cp_write(cp, 0); /* MBZ */
@@ -511,8 +499,9 @@ gen6_emit_MEDIA_CURBE_LOAD(const struct ilo_dev_info *dev,
                           uint32_t buf, int size,
                           struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x2, 0x0, 0x01);
    const uint8_t cmd_len = 4;
+   const uint32_t dw0 = GEN6_RENDER_CMD(MEDIA, MEDIA_CURBE_LOAD) |
+                        (cmd_len - 2);
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
@@ -521,7 +510,7 @@ gen6_emit_MEDIA_CURBE_LOAD(const struct ilo_dev_info *dev,
    size = align(size, 32);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, 0); /* MBZ */
    ilo_cp_write(cp, size);
    ilo_cp_write(cp, buf);
@@ -533,15 +522,16 @@ gen6_emit_MEDIA_INTERFACE_DESCRIPTOR_LOAD(const struct ilo_dev_info *dev,
                                           uint32_t offset, int num_ids,
                                           struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x2, 0x0, 0x02);
    const uint8_t cmd_len = 4;
+   const uint32_t dw0 =
+      GEN6_RENDER_CMD(MEDIA, MEDIA_INTERFACE_DESCRIPTOR_LOAD) | (cmd_len - 2);
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
    assert(offset % 32 == 0);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, 0); /* MBZ */
    /* every ID has 8 DWords */
    ilo_cp_write(cp, num_ids * 8 * 4);
@@ -554,8 +544,9 @@ gen6_emit_MEDIA_GATEWAY_STATE(const struct ilo_dev_info *dev,
                               int id, int byte, int thread_count,
                               struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x2, 0x0, 0x03);
    const uint8_t cmd_len = 2;
+   const uint32_t dw0 = GEN6_RENDER_CMD(MEDIA, MEDIA_GATEWAY_STATE) |
+                        (cmd_len - 2);
    uint32_t dw1;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
@@ -565,7 +556,7 @@ gen6_emit_MEDIA_GATEWAY_STATE(const struct ilo_dev_info *dev,
          thread_count;
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, dw1);
    ilo_cp_end(cp);
 }
@@ -576,8 +567,9 @@ gen6_emit_MEDIA_STATE_FLUSH(const struct ilo_dev_info *dev,
                             int barrier_mask,
                             struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x2, 0x0, 0x04);
    const uint8_t cmd_len = 2;
+   const uint32_t dw0 = GEN6_RENDER_CMD(MEDIA, MEDIA_STATE_FLUSH) |
+                        (cmd_len - 2);
    uint32_t dw1;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
@@ -586,7 +578,7 @@ gen6_emit_MEDIA_STATE_FLUSH(const struct ilo_dev_info *dev,
          barrier_mask;
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, dw1);
    ilo_cp_end(cp);
 }
@@ -605,16 +597,17 @@ gen6_emit_3DSTATE_BINDING_TABLE_POINTERS(const struct ilo_dev_info *dev,
                                          uint32_t ps_binding_table,
                                          struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x01);
    const uint8_t cmd_len = 4;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_BINDING_TABLE_POINTERS) |
+                        GEN6_PTR_BINDING_TABLE_DW0_VS_CHANGED |
+                        GEN6_PTR_BINDING_TABLE_DW0_GS_CHANGED |
+                        GEN6_PTR_BINDING_TABLE_DW0_PS_CHANGED |
+                        (cmd_len - 2);
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2) |
-                    GEN6_PTR_BINDING_TABLE_DW0_VS_CHANGED |
-                    GEN6_PTR_BINDING_TABLE_DW0_GS_CHANGED |
-                    GEN6_PTR_BINDING_TABLE_DW0_PS_CHANGED);
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, vs_binding_table);
    ilo_cp_write(cp, gs_binding_table);
    ilo_cp_write(cp, ps_binding_table);
@@ -628,16 +621,17 @@ gen6_emit_3DSTATE_SAMPLER_STATE_POINTERS(const struct ilo_dev_info *dev,
                                          uint32_t ps_sampler_state,
                                          struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x02);
    const uint8_t cmd_len = 4;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_SAMPLER_STATE_POINTERS) |
+                        GEN6_PTR_SAMPLER_DW0_VS_CHANGED |
+                        GEN6_PTR_SAMPLER_DW0_GS_CHANGED |
+                        GEN6_PTR_SAMPLER_DW0_PS_CHANGED |
+                        (cmd_len - 2);
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2) |
-                    GEN6_PTR_SAMPLER_DW0_VS_CHANGED |
-                    GEN6_PTR_SAMPLER_DW0_GS_CHANGED |
-                    GEN6_PTR_SAMPLER_DW0_PS_CHANGED);
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, vs_sampler_state);
    ilo_cp_write(cp, gs_sampler_state);
    ilo_cp_write(cp, ps_sampler_state);
@@ -650,8 +644,8 @@ gen6_emit_3DSTATE_URB(const struct ilo_dev_info *dev,
                       int vs_entry_size, int gs_entry_size,
                       struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x05);
    const uint8_t cmd_len = 3;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_URB) | (cmd_len - 2);
    const int row_size = 128; /* 1024 bits */
    int vs_alloc_size, gs_alloc_size;
    int vs_num_entries, gs_num_entries;
@@ -681,7 +675,7 @@ gen6_emit_3DSTATE_URB(const struct ilo_dev_info *dev,
       gs_num_entries = 256;
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, (vs_alloc_size - 1) << GEN6_URB_DW1_VS_ENTRY_SIZE__SHIFT |
                     vs_num_entries << GEN6_URB_DW1_VS_ENTRY_COUNT__SHIFT);
    ilo_cp_write(cp, gs_num_entries << GEN6_URB_DW2_GS_ENTRY_COUNT__SHIFT |
@@ -695,8 +689,8 @@ gen6_emit_3DSTATE_VERTEX_BUFFERS(const struct ilo_dev_info *dev,
                                  const struct ilo_vb_state *vb,
                                  struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x08);
    uint8_t cmd_len;
+   uint32_t dw0;
    unsigned hw_idx;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
@@ -712,9 +706,11 @@ gen6_emit_3DSTATE_VERTEX_BUFFERS(const struct ilo_dev_info *dev,
       return;
 
    cmd_len = 1 + 4 * ve->vb_count;
+   dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_VERTEX_BUFFERS) |
+         (cmd_len - 2);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
 
    for (hw_idx = 0; hw_idx < ve->vb_count; hw_idx++) {
       const unsigned instance_divisor = ve->instance_divisors[hw_idx];
@@ -741,8 +737,8 @@ gen6_emit_3DSTATE_VERTEX_BUFFERS(const struct ilo_dev_info *dev,
          dw |= cso->stride << GEN6_VB_STATE_DW0_PITCH__SHIFT;
 
          ilo_cp_write(cp, dw);
-         ilo_cp_write_bo(cp, start_offset, buf->bo, INTEL_DOMAIN_VERTEX, 0);
-         ilo_cp_write_bo(cp, end_offset, buf->bo, INTEL_DOMAIN_VERTEX, 0);
+         ilo_cp_write_bo(cp, start_offset, buf->bo, 0);
+         ilo_cp_write_bo(cp, end_offset, buf->bo, 0);
          ilo_cp_write(cp, instance_divisor);
       }
       else {
@@ -831,8 +827,8 @@ gen6_emit_3DSTATE_VERTEX_ELEMENTS(const struct ilo_dev_info *dev,
                                   bool prepend_generated_ids,
                                   struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x09);
    uint8_t cmd_len;
+   uint32_t dw0;
    unsigned i;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
@@ -855,8 +851,11 @@ gen6_emit_3DSTATE_VERTEX_ELEMENTS(const struct ilo_dev_info *dev,
             &dummy);
 
       cmd_len = 3;
+      dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_VERTEX_ELEMENTS) |
+            (cmd_len - 2);
+
       ilo_cp_begin(cp, cmd_len);
-      ilo_cp_write(cp, cmd | (cmd_len - 2));
+      ilo_cp_write(cp, dw0);
       ilo_cp_write_multi(cp, dummy.payload, 2);
       ilo_cp_end(cp);
 
@@ -864,9 +863,11 @@ gen6_emit_3DSTATE_VERTEX_ELEMENTS(const struct ilo_dev_info *dev,
    }
 
    cmd_len = 2 * (ve->count + prepend_generated_ids) + 1;
+   dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_VERTEX_ELEMENTS) |
+         (cmd_len - 2);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
 
    if (prepend_generated_ids) {
       struct ilo_ve_cso gen_ids;
@@ -905,11 +906,11 @@ gen6_emit_3DSTATE_INDEX_BUFFER(const struct ilo_dev_info *dev,
                                bool enable_cut_index,
                                struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x0a);
    const uint8_t cmd_len = 3;
    struct ilo_buffer *buf = ilo_buffer(ib->hw_resource);
    uint32_t start_offset, end_offset;
    int format;
+   uint32_t dw0;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
@@ -947,12 +948,16 @@ gen6_emit_3DSTATE_INDEX_BUFFER(const struct ilo_dev_info *dev,
    end_offset -= (end_offset % ib->hw_index_size);
    end_offset--;
 
+   dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_INDEX_BUFFER) |
+         format |
+         (cmd_len - 2);
+   if (enable_cut_index)
+      dw0 |= GEN6_IB_DW0_CUT_INDEX_ENABLE;
+
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2) |
-                    ((enable_cut_index) ? GEN6_IB_DW0_CUT_INDEX_ENABLE : 0) |
-                    format);
-   ilo_cp_write_bo(cp, start_offset, buf->bo, INTEL_DOMAIN_VERTEX, 0);
-   ilo_cp_write_bo(cp, end_offset, buf->bo, INTEL_DOMAIN_VERTEX, 0);
+   ilo_cp_write(cp, dw0);
+   ilo_cp_write_bo(cp, start_offset, buf->bo, 0);
+   ilo_cp_write_bo(cp, end_offset, buf->bo, 0);
    ilo_cp_end(cp);
 }
 
@@ -963,16 +968,17 @@ gen6_emit_3DSTATE_VIEWPORT_STATE_POINTERS(const struct ilo_dev_info *dev,
                                           uint32_t cc_viewport,
                                           struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x0d);
    const uint8_t cmd_len = 4;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_VIEWPORT_STATE_POINTERS) |
+                        GEN6_PTR_VP_DW0_CLIP_CHANGED |
+                        GEN6_PTR_VP_DW0_SF_CHANGED |
+                        GEN6_PTR_VP_DW0_CC_CHANGED |
+                        (cmd_len - 2);
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2) |
-                    GEN6_PTR_VP_DW0_CLIP_CHANGED |
-                    GEN6_PTR_VP_DW0_SF_CHANGED |
-                    GEN6_PTR_VP_DW0_CC_CHANGED);
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, clip_viewport);
    ilo_cp_write(cp, sf_viewport);
    ilo_cp_write(cp, cc_viewport);
@@ -986,13 +992,14 @@ gen6_emit_3DSTATE_CC_STATE_POINTERS(const struct ilo_dev_info *dev,
                                     uint32_t color_calc_state,
                                     struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x0e);
    const uint8_t cmd_len = 4;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_CC_STATE_POINTERS) |
+                        (cmd_len - 2);
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, blend_state | 1);
    ilo_cp_write(cp, depth_stencil_state | 1);
    ilo_cp_write(cp, color_calc_state | 1);
@@ -1004,13 +1011,14 @@ gen6_emit_3DSTATE_SCISSOR_STATE_POINTERS(const struct ilo_dev_info *dev,
                                          uint32_t scissor_rect,
                                          struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x0f);
    const uint8_t cmd_len = 2;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_SCISSOR_STATE_POINTERS) |
+                        (cmd_len - 2);
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, scissor_rect);
    ilo_cp_end(cp);
 }
@@ -1021,8 +1029,8 @@ gen6_emit_3DSTATE_VS(const struct ilo_dev_info *dev,
                      int num_samplers,
                      struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x10);
    const uint8_t cmd_len = 6;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_VS) | (cmd_len - 2);
    const struct ilo_shader_cso *cso;
    uint32_t dw2, dw4, dw5;
 
@@ -1030,7 +1038,7 @@ gen6_emit_3DSTATE_VS(const struct ilo_dev_info *dev,
 
    if (!vs) {
       ilo_cp_begin(cp, cmd_len);
-      ilo_cp_write(cp, cmd | (cmd_len - 2));
+      ilo_cp_write(cp, dw0);
       ilo_cp_write(cp, 0);
       ilo_cp_write(cp, 0);
       ilo_cp_write(cp, 0);
@@ -1048,7 +1056,7 @@ gen6_emit_3DSTATE_VS(const struct ilo_dev_info *dev,
    dw2 |= ((num_samplers + 3) / 4) << GEN6_THREADDISP_SAMPLER_COUNT__SHIFT;
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, ilo_shader_get_kernel_offset(vs));
    ilo_cp_write(cp, dw2);
    ilo_cp_write(cp, 0); /* scratch */
@@ -1064,8 +1072,8 @@ gen6_emit_3DSTATE_GS(const struct ilo_dev_info *dev,
                      int verts_per_prim,
                      struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x11);
    const uint8_t cmd_len = 7;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_GS) | (cmd_len - 2);
    uint32_t dw1, dw2, dw4, dw5, dw6;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
@@ -1116,7 +1124,7 @@ gen6_emit_3DSTATE_GS(const struct ilo_dev_info *dev,
    }
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, dw1);
    ilo_cp_write(cp, dw2);
    ilo_cp_write(cp, 0);
@@ -1134,8 +1142,8 @@ gen6_emit_3DSTATE_CLIP(const struct ilo_dev_info *dev,
                        int num_viewports,
                        struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x12);
    const uint8_t cmd_len = 4;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_CLIP) | (cmd_len - 2);
    uint32_t dw1, dw2, dw3;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
@@ -1168,7 +1176,7 @@ gen6_emit_3DSTATE_CLIP(const struct ilo_dev_info *dev,
    }
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, dw1);
    ilo_cp_write(cp, dw2);
    ilo_cp_write(cp, dw3);
@@ -1181,8 +1189,8 @@ gen6_emit_3DSTATE_SF(const struct ilo_dev_info *dev,
                      const struct ilo_shader_state *fs,
                      struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x13);
    const uint8_t cmd_len = 20;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_SF) | (cmd_len - 2);
    uint32_t payload_raster[6], payload_sbe[13];
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
@@ -1193,7 +1201,7 @@ gen6_emit_3DSTATE_SF(const struct ilo_dev_info *dev,
          fs, payload_sbe, Elements(payload_sbe));
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, payload_sbe[0]);
    ilo_cp_write_multi(cp, payload_raster, 6);
    ilo_cp_write_multi(cp, &payload_sbe[1], 12);
@@ -1209,8 +1217,8 @@ gen6_emit_3DSTATE_WM(const struct ilo_dev_info *dev,
                      uint32_t hiz_op,
                      struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x14);
    const uint8_t cmd_len = 9;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_WM) | (cmd_len - 2);
    const int num_samples = 1;
    const struct ilo_shader_cso *fs_cso;
    uint32_t dw2, dw4, dw5, dw6;
@@ -1222,7 +1230,7 @@ gen6_emit_3DSTATE_WM(const struct ilo_dev_info *dev,
       const int max_threads = (dev->gt == 2) ? 80 : 40;
 
       ilo_cp_begin(cp, cmd_len);
-      ilo_cp_write(cp, cmd | (cmd_len - 2));
+      ilo_cp_write(cp, dw0);
       ilo_cp_write(cp, 0);
       ilo_cp_write(cp, 0);
       ilo_cp_write(cp, 0);
@@ -1271,7 +1279,7 @@ gen6_emit_3DSTATE_WM(const struct ilo_dev_info *dev,
    }
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, ilo_shader_get_kernel_offset(fs));
    ilo_cp_write(cp, dw2);
    ilo_cp_write(cp, 0); /* scratch */
@@ -1324,9 +1332,9 @@ gen6_emit_3DSTATE_CONSTANT_VS(const struct ilo_dev_info *dev,
                               int num_bufs,
                               struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x15);
    const uint8_t cmd_len = 5;
    uint32_t buf_dw[4], buf_enabled;
+   uint32_t dw0;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
    assert(num_bufs <= 4);
@@ -1340,8 +1348,12 @@ gen6_emit_3DSTATE_CONSTANT_VS(const struct ilo_dev_info *dev,
    buf_enabled = gen6_fill_3dstate_constant(dev,
          bufs, sizes, num_bufs, 32, buf_dw, Elements(buf_dw));
 
+   dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_CONSTANT_VS) |
+         buf_enabled << 12 |
+         (cmd_len - 2);
+
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2) | buf_enabled << 12);
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, buf_dw[0]);
    ilo_cp_write(cp, buf_dw[1]);
    ilo_cp_write(cp, buf_dw[2]);
@@ -1355,9 +1367,9 @@ gen6_emit_3DSTATE_CONSTANT_GS(const struct ilo_dev_info *dev,
                               int num_bufs,
                               struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x16);
    const uint8_t cmd_len = 5;
    uint32_t buf_dw[4], buf_enabled;
+   uint32_t dw0;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
    assert(num_bufs <= 4);
@@ -1371,8 +1383,12 @@ gen6_emit_3DSTATE_CONSTANT_GS(const struct ilo_dev_info *dev,
    buf_enabled = gen6_fill_3dstate_constant(dev,
          bufs, sizes, num_bufs, 64, buf_dw, Elements(buf_dw));
 
+   dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_CONSTANT_GS) |
+         buf_enabled << 12 |
+         (cmd_len - 2);
+
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2) | buf_enabled << 12);
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, buf_dw[0]);
    ilo_cp_write(cp, buf_dw[1]);
    ilo_cp_write(cp, buf_dw[2]);
@@ -1386,9 +1402,9 @@ gen6_emit_3DSTATE_CONSTANT_PS(const struct ilo_dev_info *dev,
                               int num_bufs,
                               struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x17);
    const uint8_t cmd_len = 5;
    uint32_t buf_dw[4], buf_enabled;
+   uint32_t dw0;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
    assert(num_bufs <= 4);
@@ -1402,8 +1418,12 @@ gen6_emit_3DSTATE_CONSTANT_PS(const struct ilo_dev_info *dev,
    buf_enabled = gen6_fill_3dstate_constant(dev,
          bufs, sizes, num_bufs, 64, buf_dw, Elements(buf_dw));
 
+   dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_CONSTANT_PS) |
+         buf_enabled << 12 |
+         (cmd_len - 2);
+
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2) | buf_enabled << 12);
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, buf_dw[0]);
    ilo_cp_write(cp, buf_dw[1]);
    ilo_cp_write(cp, buf_dw[2]);
@@ -1416,8 +1436,9 @@ gen6_emit_3DSTATE_SAMPLE_MASK(const struct ilo_dev_info *dev,
                               unsigned sample_mask,
                               struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x0, 0x18);
    const uint8_t cmd_len = 2;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_SAMPLE_MASK) |
+                        (cmd_len - 2);
    const unsigned valid_mask = 0xf;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
@@ -1425,7 +1446,7 @@ gen6_emit_3DSTATE_SAMPLE_MASK(const struct ilo_dev_info *dev,
    sample_mask &= valid_mask;
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, sample_mask);
    ilo_cp_end(cp);
 }
@@ -1436,8 +1457,9 @@ gen6_emit_3DSTATE_DRAWING_RECTANGLE(const struct ilo_dev_info *dev,
                                     unsigned width, unsigned height,
                                     struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x1, 0x00);
    const uint8_t cmd_len = 4;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_DRAWING_RECTANGLE) |
+                        (cmd_len - 2);
    unsigned xmax = x + width - 1;
    unsigned ymax = y + height - 1;
    int rect_limit;
@@ -1465,7 +1487,7 @@ gen6_emit_3DSTATE_DRAWING_RECTANGLE(const struct ilo_dev_info *dev,
    if (ymax > rect_limit) ymax = rect_limit;
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, y << 16 | x);
    ilo_cp_write(cp, ymax << 16 | xmax);
 
@@ -1518,17 +1540,20 @@ gen6_emit_3DSTATE_DEPTH_BUFFER(const struct ilo_dev_info *dev,
                                const struct ilo_zs_surface *zs,
                                struct ilo_cp *cp)
 {
-   const uint32_t cmd = (dev->gen >= ILO_GEN(7)) ?
-      ILO_GPE_CMD(0x3, 0x0, 0x05) : ILO_GPE_CMD(0x3, 0x1, 0x05);
    const uint8_t cmd_len = 7;
+   uint32_t dw0;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
+   dw0 = (dev->gen >= ILO_GEN(7)) ?
+      GEN7_RENDER_CMD(3D, 3DSTATE_DEPTH_BUFFER) :
+      GEN6_RENDER_CMD(3D, 3DSTATE_DEPTH_BUFFER);
+   dw0 |= (cmd_len - 2);
+
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, zs->payload[0]);
-   ilo_cp_write_bo(cp, zs->payload[1], zs->bo,
-         INTEL_DOMAIN_RENDER, INTEL_DOMAIN_RENDER);
+   ilo_cp_write_bo(cp, zs->payload[1], zs->bo, INTEL_RELOC_WRITE);
    ilo_cp_write(cp, zs->payload[2]);
    ilo_cp_write(cp, zs->payload[3]);
    ilo_cp_write(cp, zs->payload[4]);
@@ -1541,15 +1566,16 @@ gen6_emit_3DSTATE_POLY_STIPPLE_OFFSET(const struct ilo_dev_info *dev,
                                       int x_offset, int y_offset,
                                       struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x1, 0x06);
    const uint8_t cmd_len = 2;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_POLY_STIPPLE_OFFSET) |
+                        (cmd_len - 2);
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
    assert(x_offset >= 0 && x_offset <= 31);
    assert(y_offset >= 0 && y_offset <= 31);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, x_offset << 8 | y_offset);
    ilo_cp_end(cp);
 }
@@ -1559,15 +1585,16 @@ gen6_emit_3DSTATE_POLY_STIPPLE_PATTERN(const struct ilo_dev_info *dev,
                                        const struct pipe_poly_stipple *pattern,
                                        struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x1, 0x07);
    const uint8_t cmd_len = 33;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_POLY_STIPPLE_PATTERN) |
+                        (cmd_len - 2);
    int i;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
    assert(Elements(pattern->stipple) == 32);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    for (i = 0; i < 32; i++)
       ilo_cp_write(cp, pattern->stipple[i]);
    ilo_cp_end(cp);
@@ -1578,8 +1605,9 @@ gen6_emit_3DSTATE_LINE_STIPPLE(const struct ilo_dev_info *dev,
                                unsigned pattern, unsigned factor,
                                struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x1, 0x08);
    const uint8_t cmd_len = 3;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_LINE_STIPPLE) |
+                        (cmd_len - 2);
    unsigned inverse;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
@@ -1587,7 +1615,7 @@ gen6_emit_3DSTATE_LINE_STIPPLE(const struct ilo_dev_info *dev,
    assert(factor >= 1 && factor <= 256);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, pattern);
 
    if (dev->gen >= ILO_GEN(7)) {
@@ -1608,13 +1636,14 @@ static inline void
 gen6_emit_3DSTATE_AA_LINE_PARAMETERS(const struct ilo_dev_info *dev,
                                      struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x1, 0x0a);
    const uint8_t cmd_len = 3;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_AA_LINE_PARAMETERS) |
+                        (cmd_len - 2);
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, 0 << 16 | 0);
    ilo_cp_write(cp, 0 << 16 | 0);
    ilo_cp_end(cp);
@@ -1627,8 +1656,9 @@ gen6_emit_3DSTATE_GS_SVB_INDEX(const struct ilo_dev_info *dev,
                                bool load_vertex_count,
                                struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x1, 0x0b);
    const uint8_t cmd_len = 4;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_GS_SVB_INDEX) |
+                        (cmd_len - 2);
    uint32_t dw1;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
@@ -1639,7 +1669,7 @@ gen6_emit_3DSTATE_GS_SVB_INDEX(const struct ilo_dev_info *dev,
       dw1 |= GEN6_SVBI_DW1_LOAD_INTERNAL_VERTEX_COUNT;
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, dw1);
    ilo_cp_write(cp, svbi);
    ilo_cp_write(cp, max_svbi);
@@ -1653,8 +1683,9 @@ gen6_emit_3DSTATE_MULTISAMPLE(const struct ilo_dev_info *dev,
                               bool pixel_location_center,
                               struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x1, 0x0d);
    const uint8_t cmd_len = (dev->gen >= ILO_GEN(7)) ? 4 : 3;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_MULTISAMPLE) |
+                        (cmd_len - 2);
    uint32_t dw1, dw2, dw3;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
@@ -1689,7 +1720,7 @@ gen6_emit_3DSTATE_MULTISAMPLE(const struct ilo_dev_info *dev,
    }
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, dw1);
    ilo_cp_write(cp, dw2);
    if (dev->gen >= ILO_GEN(7))
@@ -1702,19 +1733,21 @@ gen6_emit_3DSTATE_STENCIL_BUFFER(const struct ilo_dev_info *dev,
                                  const struct ilo_zs_surface *zs,
                                  struct ilo_cp *cp)
 {
-   const uint32_t cmd = (dev->gen >= ILO_GEN(7)) ?
-      ILO_GPE_CMD(0x3, 0x0, 0x06) :
-      ILO_GPE_CMD(0x3, 0x1, 0x0e);
    const uint8_t cmd_len = 3;
+   uint32_t dw0;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
+   dw0 = (dev->gen >= ILO_GEN(7)) ?
+      GEN7_RENDER_CMD(3D, 3DSTATE_STENCIL_BUFFER) :
+      GEN6_RENDER_CMD(3D, 3DSTATE_STENCIL_BUFFER);
+   dw0 |= (cmd_len - 2);
+
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    /* see ilo_gpe_init_zs_surface() */
    ilo_cp_write(cp, zs->payload[6]);
-   ilo_cp_write_bo(cp, zs->payload[7], zs->separate_s8_bo,
-         INTEL_DOMAIN_RENDER, INTEL_DOMAIN_RENDER);
+   ilo_cp_write_bo(cp, zs->payload[7], zs->separate_s8_bo, INTEL_RELOC_WRITE);
    ilo_cp_end(cp);
 }
 
@@ -1723,19 +1756,21 @@ gen6_emit_3DSTATE_HIER_DEPTH_BUFFER(const struct ilo_dev_info *dev,
                                     const struct ilo_zs_surface *zs,
                                     struct ilo_cp *cp)
 {
-   const uint32_t cmd = (dev->gen >= ILO_GEN(7)) ?
-      ILO_GPE_CMD(0x3, 0x0, 0x07) :
-      ILO_GPE_CMD(0x3, 0x1, 0x0f);
    const uint8_t cmd_len = 3;
+   uint32_t dw0;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
+   dw0 = (dev->gen >= ILO_GEN(7)) ?
+      GEN7_RENDER_CMD(3D, 3DSTATE_HIER_DEPTH_BUFFER) :
+      GEN6_RENDER_CMD(3D, 3DSTATE_HIER_DEPTH_BUFFER);
+   dw0 |= (cmd_len - 2);
+
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    /* see ilo_gpe_init_zs_surface() */
    ilo_cp_write(cp, zs->payload[8]);
-   ilo_cp_write_bo(cp, zs->payload[9], zs->hiz_bo,
-         INTEL_DOMAIN_RENDER, INTEL_DOMAIN_RENDER);
+   ilo_cp_write_bo(cp, zs->payload[9], zs->hiz_bo, INTEL_RELOC_WRITE);
    ilo_cp_end(cp);
 }
 
@@ -1744,14 +1779,15 @@ gen6_emit_3DSTATE_CLEAR_PARAMS(const struct ilo_dev_info *dev,
                                uint32_t clear_val,
                                struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x1, 0x10);
    const uint8_t cmd_len = 2;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_CLEAR_PARAMS) |
+                        GEN6_CLEAR_PARAMS_DW0_VALID |
+                        (cmd_len - 2);
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2) |
-                    GEN6_CLEAR_PARAMS_DW0_VALID);
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, clear_val);
    ilo_cp_end(cp);
 }
@@ -1763,10 +1799,9 @@ gen6_emit_PIPE_CONTROL(const struct ilo_dev_info *dev,
                        bool write_qword,
                        struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x2, 0x00);
    const uint8_t cmd_len = (write_qword) ? 5 : 4;
-   const uint32_t read_domains = INTEL_DOMAIN_INSTRUCTION;
-   const uint32_t write_domain = INTEL_DOMAIN_INSTRUCTION;
+   const uint32_t dw0 = GEN6_RENDER_CMD(3D, PIPE_CONTROL) | (cmd_len - 2);
+   uint32_t reloc_flags = INTEL_RELOC_WRITE;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
 
@@ -1833,13 +1868,15 @@ gen6_emit_PIPE_CONTROL(const struct ilo_dev_info *dev,
     * The kernel will add the mapping automatically (when write domain is
     * INTEL_DOMAIN_INSTRUCTION).
     */
-   if (dev->gen == ILO_GEN(6) && bo)
+   if (dev->gen == ILO_GEN(6) && bo) {
       bo_offset |= GEN6_PIPE_CONTROL_DW2_USE_GGTT;
+      reloc_flags |= INTEL_RELOC_GGTT;
+   }
 
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2));
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, dw1);
-   ilo_cp_write_bo(cp, bo_offset, bo, read_domains, write_domain);
+   ilo_cp_write_bo(cp, bo_offset, bo, reloc_flags);
    ilo_cp_write(cp, 0);
    if (write_qword)
       ilo_cp_write(cp, 0);
@@ -1853,7 +1890,6 @@ gen6_emit_3DPRIMITIVE(const struct ilo_dev_info *dev,
                       bool rectlist,
                       struct ilo_cp *cp)
 {
-   const uint32_t cmd = ILO_GPE_CMD(0x3, 0x3, 0x00);
    const uint8_t cmd_len = 6;
    const int prim = (rectlist) ?
       GEN6_3DPRIM_RECTLIST : ilo_gpe_gen6_translate_pipe_prim(info->mode);
@@ -1861,13 +1897,17 @@ gen6_emit_3DPRIMITIVE(const struct ilo_dev_info *dev,
       GEN6_3DPRIM_DW0_ACCESS_RANDOM : GEN6_3DPRIM_DW0_ACCESS_SEQUENTIAL;
    const uint32_t vb_start = info->start +
       ((info->indexed) ? ib->draw_start_offset : 0);
+   uint32_t dw0;
 
    ILO_GPE_VALID_GEN(dev, 6, 6);
 
+   dw0 = GEN6_RENDER_CMD(3D, 3DPRIMITIVE) |
+         vb_access |
+         prim << GEN6_3DPRIM_DW0_TYPE__SHIFT |
+         (cmd_len - 2);
+
    ilo_cp_begin(cp, cmd_len);
-   ilo_cp_write(cp, cmd | (cmd_len - 2) |
-                    prim << GEN6_3DPRIM_DW0_TYPE__SHIFT |
-                    vb_access);
+   ilo_cp_write(cp, dw0);
    ilo_cp_write(cp, info->count);
    ilo_cp_write(cp, vb_start);
    ilo_cp_write(cp, info->instance_count);
@@ -2286,26 +2326,16 @@ gen6_emit_SURFACE_STATE(const struct ilo_dev_info *dev,
    const int state_align = 32 / 4;
    const int state_len = (dev->gen >= ILO_GEN(7)) ? 8 : 6;
    uint32_t state_offset;
-   uint32_t read_domains, write_domain;
 
    ILO_GPE_VALID_GEN(dev, 6, 7.5);
-
-   if (for_render) {
-      read_domains = INTEL_DOMAIN_RENDER;
-      write_domain = INTEL_DOMAIN_RENDER;
-   }
-   else {
-      read_domains = INTEL_DOMAIN_SAMPLER;
-      write_domain = 0;
-   }
 
    ilo_cp_steal(cp, "SURFACE_STATE", state_len, state_align, &state_offset);
 
    STATIC_ASSERT(Elements(surf->payload) >= 8);
 
    ilo_cp_write(cp, surf->payload[0]);
-   ilo_cp_write_bo(cp, surf->payload[1],
-         surf->bo, read_domains, write_domain);
+   ilo_cp_write_bo(cp, surf->payload[1], surf->bo,
+         (for_render) ? INTEL_RELOC_WRITE : 0);
    ilo_cp_write(cp, surf->payload[2]);
    ilo_cp_write(cp, surf->payload[3]);
    ilo_cp_write(cp, surf->payload[4]);

@@ -486,6 +486,17 @@ struct st_api
    void (*destroy)(struct st_api *stapi);
 
    /**
+    * Query supported OpenGL versions. (if applicable)
+    * The format is (major*10+minor).
+    */
+   void (*query_versions)(struct st_api *stapi, struct st_manager *sm,
+                          struct st_config_options *options,
+                          int *gl_core_version,
+                          int *gl_compat_version,
+                          int *gl_es1_version,
+                          int *gl_es2_version);
+
+   /**
     * Return an API entry point.
     *
     * For GL this is the same as _glapi_get_proc_address.

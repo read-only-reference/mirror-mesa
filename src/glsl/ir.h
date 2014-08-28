@@ -29,7 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "ralloc.h"
+#include "util/ralloc.h"
 #include "glsl_types.h"
 #include "list.h"
 #include "ir_visitor.h"
@@ -660,6 +660,11 @@ public:
       unsigned location_frac:2;
 
       /**
+       * Layout of the matrix.  Uses glsl_matrix_layout values.
+       */
+      unsigned matrix_layout:2;
+
+      /**
        * Non-zero if this variable was created by lowering a named interface
        * block which was not an array.
        *
@@ -682,6 +687,28 @@ public:
        * constraints on function parameters.
        */
       unsigned must_be_shader_input:1;
+
+      /**
+       * Output index for dual source blending.
+       *
+       * \note
+       * The GLSL spec only allows the values 0 or 1 for the index in \b dual
+       * source blending.
+       */
+      unsigned index:1;
+
+
+      /**
+       * ARB_shader_image_load_store qualifiers.
+       */
+      unsigned image_read_only:1; /**< "readonly" qualifier. */
+      unsigned image_write_only:1; /**< "writeonly" qualifier. */
+      unsigned image_coherent:1;
+      unsigned image_volatile:1;
+      unsigned image_restrict:1;
+
+      /** Image internal format if specified explicitly, otherwise GL_NONE. */
+      uint16_t image_format;
 
       /**
        * \brief Layout qualifier for gl_FragDepth.
@@ -717,12 +744,7 @@ public:
       unsigned stream;
 
       /**
-       * output index for dual source blending.
-       */
-      int index;
-
-      /**
-       * Initial binding point for a sampler or UBO.
+       * Initial binding point for a sampler, atomic, or UBO.
        *
        * For array types, this represents the binding point for the first element.
        */
@@ -732,23 +754,8 @@ public:
        * Location an atomic counter is stored at.
        */
       struct {
-         unsigned buffer_index;
          unsigned offset;
       } atomic;
-
-      /**
-       * ARB_shader_image_load_store qualifiers.
-       */
-      struct {
-         bool read_only; /**< "readonly" qualifier. */
-         bool write_only; /**< "writeonly" qualifier. */
-         bool coherent;
-         bool _volatile;
-         bool restrict_flag;
-
-         /** Image internal format if specified explicitly, otherwise GL_NONE. */
-         GLenum format;
-      } image;
 
       /**
        * Highest element accessed with a constant expression array index
@@ -974,6 +981,7 @@ public:
     */
    ir_function_signature *matching_signature(_mesa_glsl_parse_state *state,
                                              const exec_list *actual_param,
+                                             bool allow_builtins,
 					     bool *match_is_exact);
 
    /**
@@ -981,7 +989,8 @@ public:
     * conversions into account.
     */
    ir_function_signature *matching_signature(_mesa_glsl_parse_state *state,
-                                             const exec_list *actual_param);
+                                             const exec_list *actual_param,
+                                             bool allow_builtins);
 
    /**
     * Find a signature that exactly matches a set of actual parameters without
@@ -1198,7 +1207,11 @@ enum ir_expression_operation {
     */
    /*@{*/
    ir_unop_dFdx,
+   ir_unop_dFdx_coarse,
+   ir_unop_dFdx_fine,
    ir_unop_dFdy,
+   ir_unop_dFdy_coarse,
+   ir_unop_dFdy_fine,
    /*@}*/
 
    /**
@@ -1237,6 +1250,7 @@ enum ir_expression_operation {
    ir_unop_find_lsb,
    /*@}*/
 
+   ir_unop_saturate,
    ir_unop_noise,
 
    /**

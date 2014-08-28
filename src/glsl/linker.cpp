@@ -1129,7 +1129,8 @@ get_main_function_signature(gl_shader *sh)
        * We don't have to check for multiple definitions of main (in multiple
        * shaders) because that would have already been caught above.
        */
-      ir_function_signature *sig = f->matching_signature(NULL, &void_parameters);
+      ir_function_signature *sig =
+         f->matching_signature(NULL, &void_parameters, false);
       if ((sig != NULL) && sig->is_defined) {
 	 return sig;
       }
@@ -2659,12 +2660,12 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
       if (!prog->LinkStatus)
 	 goto done;
 
-      if (ctx->ShaderCompilerOptions[i].LowerClipDistance) {
+      if (ctx->Const.ShaderCompilerOptions[i].LowerClipDistance) {
          lower_clip_distance(prog->_LinkedShaders[i]);
       }
 
       while (do_common_optimization(prog->_LinkedShaders[i]->ir, true, false,
-                                    &ctx->ShaderCompilerOptions[i],
+                                    &ctx->Const.ShaderCompilerOptions[i],
                                     ctx->Const.NativeIntegers))
 	 ;
    }
@@ -2820,7 +2821,7 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
       goto done;
 
    update_array_sizes(prog);
-   link_assign_uniform_locations(prog);
+   link_assign_uniform_locations(prog, ctx->Const.UniformBooleanTrue);
    link_assign_atomic_counter_resources(ctx, prog);
    store_fragdepth_layout(prog);
 

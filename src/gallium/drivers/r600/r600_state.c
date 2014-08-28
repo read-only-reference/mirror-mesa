@@ -157,11 +157,6 @@ static bool r600_is_zs_format_supported(enum pipe_format format)
 	return r600_translate_dbformat(format) != ~0U;
 }
 
-static inline bool r600_is_blending_supported(enum pipe_format format)
-{
-	return !(util_format_is_pure_integer(format) || util_format_is_depth_or_stencil(format));
-}
-
 boolean r600_is_format_supported(struct pipe_screen *screen,
 				 enum pipe_format format,
 				 enum pipe_texture_target target,
@@ -216,13 +211,17 @@ boolean r600_is_format_supported(struct pipe_screen *screen,
 	if ((usage & (PIPE_BIND_RENDER_TARGET |
 		      PIPE_BIND_DISPLAY_TARGET |
 		      PIPE_BIND_SCANOUT |
-		      PIPE_BIND_SHARED)) &&
+		      PIPE_BIND_SHARED |
+		      PIPE_BIND_BLENDABLE)) &&
 	    r600_is_colorbuffer_format_supported(rscreen->b.chip_class, format)) {
 		retval |= usage &
 			  (PIPE_BIND_RENDER_TARGET |
 			   PIPE_BIND_DISPLAY_TARGET |
 			   PIPE_BIND_SCANOUT |
 			   PIPE_BIND_SHARED);
+		if (!util_format_is_pure_integer(format) &&
+		    !util_format_is_depth_or_stencil(format))
+			retval |= usage & PIPE_BIND_BLENDABLE;
 	}
 
 	if ((usage & PIPE_BIND_DEPTH_STENCIL) &&
@@ -239,10 +238,6 @@ boolean r600_is_format_supported(struct pipe_screen *screen,
 		retval |= PIPE_BIND_TRANSFER_READ;
 	if (usage & PIPE_BIND_TRANSFER_WRITE)
 		retval |= PIPE_BIND_TRANSFER_WRITE;
-
-	if ((usage & PIPE_BIND_BLENDABLE) &&
-	    r600_is_blending_supported(format))
-		retval |= PIPE_BIND_BLENDABLE;
 
 	return retval == usage;
 }
@@ -595,25 +590,22 @@ texture_buffer_sampler_view(struct r600_pipe_sampler_view *view,
 			    unsigned width0, unsigned height0)
 			    
 {
-	struct pipe_context *ctx = view->base.context;
 	struct r600_texture *tmp = (struct r600_texture*)view->base.texture;
-	uint64_t va;
 	int stride = util_format_get_blocksize(view->base.format);
 	unsigned format, num_format, format_comp, endian;
-	unsigned offset = view->base.u.buf.first_element * stride;
+	uint64_t offset = view->base.u.buf.first_element * stride;
 	unsigned size = (view->base.u.buf.last_element - view->base.u.buf.first_element + 1) * stride;
 
 	r600_vertex_data_type(view->base.format,
 			      &format, &num_format, &format_comp,
 			      &endian);
 
-	va = r600_resource_va(ctx->screen, view->base.texture) + offset;
 	view->tex_resource = &tmp->resource;
-
 	view->skip_mip_address_reloc = true;
-	view->tex_resource_words[0] = va;
+
+	view->tex_resource_words[0] = offset;
 	view->tex_resource_words[1] = size - 1;
-	view->tex_resource_words[2] = S_038008_BASE_ADDRESS_HI(va >> 32UL) |
+	view->tex_resource_words[2] = S_038008_BASE_ADDRESS_HI(offset >> 32UL) |
 		S_038008_STRIDE(stride) |
 		S_038008_DATA_FORMAT(format) |
 		S_038008_NUM_FORMAT_ALL(num_format) |
@@ -1105,8 +1097,7 @@ static void r600_init_depth_surface(struct r600_context *rctx,
 
 	/* use htile only for first level */
 	if (rtex->htile_buffer && !level) {
-		uint64_t va = r600_resource_va(&rctx->screen->b.b, &rtex->htile_buffer->b.b);
-		surf->db_htile_data_base = va >> 8;
+		surf->db_htile_data_base = 0;
 		surf->db_htile_surface = S_028D24_HTILE_WIDTH(1) |
 					S_028D24_HTILE_HEIGHT(1) |
 					S_028D24_FULL_CACHE(1) |
@@ -1944,7 +1935,6 @@ static void r600_emit_shader_stages(struct r600_context *rctx, struct r600_atom 
 
 static void r600_emit_gs_rings(struct r600_context *rctx, struct r600_atom *a)
 {
-	struct pipe_screen *screen = rctx->b.b.screen;
 	struct radeon_winsys_cs *cs = rctx->b.rings.gfx.cs;
 	struct r600_gs_rings_state *state = (struct r600_gs_rings_state*)a;
 	struct r600_resource *rbuffer;
@@ -1955,8 +1945,7 @@ static void r600_emit_gs_rings(struct r600_context *rctx, struct r600_atom *a)
 
 	if (state->enable) {
 		rbuffer =(struct r600_resource*)state->esgs_ring.buffer;
-		r600_write_config_reg(cs, R_008C40_SQ_ESGS_RING_BASE,
-				(r600_resource_va(screen, &rbuffer->b.b)) >> 8);
+		r600_write_config_reg(cs, R_008C40_SQ_ESGS_RING_BASE, 0);
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
 		radeon_emit(cs, r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx, rbuffer,
 						      RADEON_USAGE_READWRITE,
@@ -1965,8 +1954,7 @@ static void r600_emit_gs_rings(struct r600_context *rctx, struct r600_atom *a)
 				state->esgs_ring.buffer_size >> 8);
 
 		rbuffer =(struct r600_resource*)state->gsvs_ring.buffer;
-		r600_write_config_reg(cs, R_008C48_SQ_GSVS_RING_BASE,
-				(r600_resource_va(screen, &rbuffer->b.b)) >> 8);
+		r600_write_config_reg(cs, R_008C48_SQ_GSVS_RING_BASE, 0);
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0));
 		radeon_emit(cs, r600_context_bo_reloc(&rctx->b, &rctx->b.rings.gfx, rbuffer,
 						      RADEON_USAGE_READWRITE,
@@ -2090,7 +2078,7 @@ void r600_init_atom_start_cs(struct r600_context *rctx)
 	int num_es_stack_entries;
 	enum radeon_family family;
 	struct r600_command_buffer *cb = &rctx->start_cs_cmd;
-	uint32_t tmp;
+	uint32_t tmp, i;
 
 	r600_init_command_buffer(cb, 256);
 
@@ -2300,24 +2288,17 @@ void r600_init_atom_start_cs(struct r600_context *rctx)
 	r600_store_value(cb, 0); /* R_0288C8_SQ_GS_VERT_ITEMSIZE */
 
 	/* to avoid GPU doing any preloading of constant from random address */
-	r600_store_context_reg_seq(cb, R_028140_ALU_CONST_BUFFER_SIZE_PS_0, 8);
-	r600_store_value(cb, 0); /* R_028140_ALU_CONST_BUFFER_SIZE_PS_0 */
-	r600_store_value(cb, 0);
-	r600_store_value(cb, 0);
-	r600_store_value(cb, 0);
-	r600_store_value(cb, 0);
-	r600_store_value(cb, 0);
-	r600_store_value(cb, 0);
-	r600_store_value(cb, 0);
-	r600_store_context_reg_seq(cb, R_028180_ALU_CONST_BUFFER_SIZE_VS_0, 8);
-	r600_store_value(cb, 0); /* R_028180_ALU_CONST_BUFFER_SIZE_VS_0 */
-	r600_store_value(cb, 0);
-	r600_store_value(cb, 0);
-	r600_store_value(cb, 0);
-	r600_store_value(cb, 0);
-	r600_store_value(cb, 0);
-	r600_store_value(cb, 0);
-	r600_store_value(cb, 0);
+	r600_store_context_reg_seq(cb, R_028140_ALU_CONST_BUFFER_SIZE_PS_0, 16);
+	for (i = 0; i < 16; i++)
+		r600_store_value(cb, 0);
+
+	r600_store_context_reg_seq(cb, R_028180_ALU_CONST_BUFFER_SIZE_VS_0, 16);
+	for (i = 0; i < 16; i++)
+		r600_store_value(cb, 0);
+
+	r600_store_context_reg_seq(cb, R_0281C0_ALU_CONST_BUFFER_SIZE_GS_0, 16);
+	for (i = 0; i < 16; i++)
+		r600_store_value(cb, 0);
 
 	r600_store_context_reg_seq(cb, R_028A10_VGT_OUTPUT_PATH_CNTL, 13);
 	r600_store_value(cb, 0); /* R_028A10_VGT_OUTPUT_PATH_CNTL */
@@ -2651,8 +2632,7 @@ void r600_update_gs_state(struct pipe_context *ctx, struct r600_pipe_shader *sha
 	r600_store_context_reg(cb, R_02887C_SQ_PGM_RESOURCES_GS,
 			       S_02887C_NUM_GPRS(rshader->bc.ngpr) |
 			       S_02887C_STACK_SIZE(rshader->bc.nstack));
-	r600_store_context_reg(cb, R_02886C_SQ_PGM_START_GS,
-			       r600_resource_va(ctx->screen, (void *)shader->bo) >> 8);
+	r600_store_context_reg(cb, R_02886C_SQ_PGM_START_GS, 0);
 	/* After that, the NOP relocation packet must be emitted (shader->bo, RADEON_USAGE_READ). */
 }
 
@@ -2666,8 +2646,7 @@ void r600_update_es_state(struct pipe_context *ctx, struct r600_pipe_shader *sha
 	r600_store_context_reg(cb, R_028890_SQ_PGM_RESOURCES_ES,
 			       S_028890_NUM_GPRS(rshader->bc.ngpr) |
 			       S_028890_STACK_SIZE(rshader->bc.nstack));
-	r600_store_context_reg(cb, R_028880_SQ_PGM_START_ES,
-			       r600_resource_va(ctx->screen, (void *)shader->bo) >> 8);
+	r600_store_context_reg(cb, R_028880_SQ_PGM_START_ES, 0);
 	/* After that, the NOP relocation packet must be emitted (shader->bo, RADEON_USAGE_READ). */
 }
 

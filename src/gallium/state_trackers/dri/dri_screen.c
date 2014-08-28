@@ -80,6 +80,26 @@ const __DRIconfigOptionsExtension gallium_config_options = {
 
 #define false 0
 
+static void
+dri_fill_st_options(struct st_config_options *options,
+                    const struct driOptionCache * optionCache)
+{
+   options->disable_blend_func_extended =
+      driQueryOptionb(optionCache, "disable_blend_func_extended");
+   options->disable_glsl_line_continuations =
+      driQueryOptionb(optionCache, "disable_glsl_line_continuations");
+   options->disable_shader_bit_encoding =
+      driQueryOptionb(optionCache, "disable_shader_bit_encoding");
+   options->force_glsl_extensions_warn =
+      driQueryOptionb(optionCache, "force_glsl_extensions_warn");
+   options->force_glsl_version =
+      driQueryOptioni(optionCache, "force_glsl_version");
+   options->force_s3tc_enable =
+      driQueryOptionb(optionCache, "force_s3tc_enable");
+   options->allow_glsl_extension_directive_midshader =
+      driQueryOptionb(optionCache, "allow_glsl_extension_directive_midshader");
+}
+
 static const __DRIconfig **
 dri_fill_in_modes(struct dri_screen *screen)
 {
@@ -439,9 +459,10 @@ dri_init_screen_helper(struct dri_screen *screen,
                        screen->sPriv->myNum,
                        driver_name);
 
+   dri_fill_st_options(&screen->options, &screen->optionCache);
+
    /* Handle force_s3tc_enable. */
-   if (!util_format_s3tc_enabled &&
-       driQueryOptionb(&screen->optionCache, "force_s3tc_enable")) {
+   if (!util_format_s3tc_enabled && screen->options.force_s3tc_enable) {
       /* Ensure libtxc_dxtn has been loaded if available.
        * Forcing S3TC on before calling this would prevent loading
        * the library.
@@ -455,18 +476,12 @@ dri_init_screen_helper(struct dri_screen *screen,
 
    dri_postprocessing_init(screen);
 
-   /* gallium drivers don't declare what version of GL they support, so we
-    * check the computed Mesa context version after context creation and fail
-    * out then.
-    */
-   if (screen->st_api->profile_mask & ST_PROFILE_DEFAULT_MASK)
-      screen->sPriv->max_gl_compat_version = 30;
-   if (screen->st_api->profile_mask & ST_PROFILE_OPENGL_CORE_MASK)
-      screen->sPriv->max_gl_core_version = 33;
-   if (screen->st_api->profile_mask & ST_PROFILE_OPENGL_ES1_MASK)
-      screen->sPriv->max_gl_es1_version = 11;
-   if (screen->st_api->profile_mask & ST_PROFILE_OPENGL_ES2_MASK)
-      screen->sPriv->max_gl_es2_version = 30;
+   screen->st_api->query_versions(screen->st_api, &screen->base,
+                                  &screen->options,
+                                  &screen->sPriv->max_gl_core_version,
+                                  &screen->sPriv->max_gl_compat_version,
+                                  &screen->sPriv->max_gl_es1_version,
+                                  &screen->sPriv->max_gl_es2_version);
 
    return dri_fill_in_modes(screen);
 }

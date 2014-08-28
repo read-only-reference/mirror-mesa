@@ -32,7 +32,7 @@ extern "C" {
 
 #include <sys/types.h>
 
-#include "main/hash_table.h"
+#include "util/hash_table.h"
 #include "main/macros.h"
 #include "main/shaderobj.h"
 #include "main/fbobject.h"
@@ -46,6 +46,7 @@ extern "C" {
 #include "brw_wm.h"
 }
 #include "brw_fs.h"
+#include "brw_cfg.h"
 #include "brw_dead_control_flow.h"
 #include "main/uniforms.h"
 #include "brw_fs_live_variables.h"
@@ -348,7 +349,6 @@ fs_inst::equals(fs_inst *inst) const
            conditional_mod == inst->conditional_mod &&
            mlen == inst->mlen &&
            base_mrf == inst->base_mrf &&
-           sampler == inst->sampler &&
            target == inst->target &&
            eot == inst->eot &&
            header_present == inst->header_present &&
@@ -962,7 +962,7 @@ fs_visitor::setup_uniform_values(ir_variable *ir)
          slots *= storage->array_elements;
 
       for (unsigned i = 0; i < slots; i++) {
-         stage_prog_data->param[uniforms++] = &storage->storage[i].f;
+         stage_prog_data->param[uniforms++] = &storage->storage[i];
       }
    }
 
@@ -1001,7 +1001,7 @@ fs_visitor::setup_builtin_uniform_values(ir_variable *ir)
 	 last_swiz = swiz;
 
          stage_prog_data->param[uniforms++] =
-            &fp->Base.Parameters->ParameterValues[index][swiz].f;
+            &fp->Base.Parameters->ParameterValues[index][swiz];
       }
    }
 }
@@ -1189,20 +1189,40 @@ fs_visitor::emit_frontfacing_interpolation(ir_variable *ir)
 {
    fs_reg *reg = new(this->mem_ctx) fs_reg(this, ir->type);
 
-   /* The frontfacing comes in as a bit in the thread payload. */
    if (brw->gen >= 6) {
-      emit(BRW_OPCODE_ASR, *reg,
-	   fs_reg(retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_D)),
-	   fs_reg(15));
-      emit(BRW_OPCODE_NOT, *reg, *reg);
-      emit(BRW_OPCODE_AND, *reg, *reg, fs_reg(1));
-   } else {
-      struct brw_reg r1_6ud = retype(brw_vec1_grf(1, 6), BRW_REGISTER_TYPE_UD);
-      /* bit 31 is "primitive is back face", so checking < (1 << 31) gives
-       * us front face
+      /* Bit 15 of g0.0 is 0 if the polygon is front facing. We want to create
+       * a boolean result from this (~0/true or 0/false).
+       *
+       * We can use the fact that bit 15 is the MSB of g0.0:W to accomplish
+       * this task in only one instruction:
+       *    - a negation source modifier will flip the bit; and
+       *    - a W -> D type conversion will sign extend the bit into the high
+       *      word of the destination.
+       *
+       * An ASR 15 fills the low word of the destination.
        */
-      emit(CMP(*reg, fs_reg(r1_6ud), fs_reg(1u << 31), BRW_CONDITIONAL_L));
-      emit(BRW_OPCODE_AND, *reg, *reg, fs_reg(1u));
+      fs_reg g0 = fs_reg(retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_W));
+      g0.negate = true;
+
+      emit(ASR(*reg, g0, fs_reg(15)));
+   } else {
+      /* Bit 31 of g1.6 is 0 if the polygon is front facing. We want to create
+       * a boolean result from this (1/true or 0/false).
+       *
+       * Like in the above case, since the bit is the MSB of g1.6:UD we can use
+       * the negation source modifier to flip it. Unfortunately the SHR
+       * instruction only operates on UD (or D with an abs source modifier)
+       * sources without negation.
+       *
+       * Instead, use ASR (which will give ~0/true or 0/false) followed by an
+       * AND 1.
+       */
+      fs_reg asr = fs_reg(this, ir->type);
+      fs_reg g1_6 = fs_reg(retype(brw_vec1_grf(1, 6), BRW_REGISTER_TYPE_D));
+      g1_6.negate = true;
+
+      emit(ASR(asr, g1_6, fs_reg(31)));
+      emit(AND(*reg, asr, fs_reg(1)));
    }
 
    return reg;
@@ -1404,18 +1424,6 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1)
 {
    int base_mrf = 2;
    fs_inst *inst;
-
-   switch (opcode) {
-   case SHADER_OPCODE_INT_QUOTIENT:
-   case SHADER_OPCODE_INT_REMAINDER:
-      if (brw->gen >= 7)
-	 no16("SIMD16 INTDIV unsupported\n");
-      break;
-   case SHADER_OPCODE_POW:
-      break;
-   default:
-      unreachable("not reached: unsupported binary math opcode.");
-   }
 
    if (brw->gen >= 8) {
       inst = emit(opcode, dst, src0, src1);
@@ -1695,7 +1703,7 @@ fs_visitor::split_virtual_grfs()
 	 }
       }
    }
-   invalidate_live_intervals();
+   invalidate_live_intervals(false);
 }
 
 /**
@@ -1733,7 +1741,7 @@ fs_visitor::compact_virtual_grfs()
       if (remap_table[i] != -1) {
          remap_table[i] = new_index;
          virtual_grf_sizes[new_index] = virtual_grf_sizes[i];
-         invalidate_live_intervals();
+         invalidate_live_intervals(false);
          ++new_index;
       }
    }
@@ -1748,6 +1756,20 @@ fs_visitor::compact_virtual_grfs()
       for (int i = 0; i < inst->sources; i++) {
          if (inst->src[i].file == GRF)
             inst->src[i].reg = remap_table[inst->src[i].reg];
+      }
+   }
+
+   /* Patch all the references to delta_x/delta_y, since they're used in
+    * register allocation.
+    */
+   for (unsigned i = 0; i < ARRAY_SIZE(delta_x); i++) {
+      if (delta_x[i].file == GRF && remap_table[delta_x[i].reg] != -1) {
+         delta_x[i].reg = remap_table[delta_x[i].reg];
+      }
+   }
+   for (unsigned i = 0; i < ARRAY_SIZE(delta_y); i++) {
+      if (delta_y[i].file == GRF && remap_table[delta_y[i].reg] != -1) {
+         delta_y[i].reg = remap_table[delta_y[i].reg];
       }
    }
 }
@@ -1793,7 +1815,7 @@ fs_visitor::move_uniform_array_access_to_pull_constants()
           * add it.
           */
          if (pull_constant_loc[uniform] == -1) {
-            const float **values = &stage_prog_data->param[uniform];
+            const gl_constant_value **values = &stage_prog_data->param[uniform];
 
             assert(param_size[uniform]);
 
@@ -1902,7 +1924,9 @@ fs_visitor::assign_constant_locations()
 void
 fs_visitor::demote_pull_constants()
 {
-   foreach_in_list(fs_inst, inst, &instructions) {
+   calculate_cfg();
+
+   foreach_block_and_inst (block, fs_inst, inst, cfg) {
       for (int i = 0; i < inst->sources; i++) {
 	 if (inst->src[i].file != UNIFORM)
 	    continue;
@@ -1925,14 +1949,14 @@ fs_visitor::demote_pull_constants()
                                                         surf_index,
                                                         *inst->src[i].reladdr,
                                                         pull_index);
-            inst->insert_before(&list);
+            inst->insert_before(block, &list);
             inst->src[i].reladdr = NULL;
          } else {
             fs_reg offset = fs_reg((unsigned)(pull_index * 4) & ~15);
             fs_inst *pull =
                new(mem_ctx) fs_inst(FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD,
                                     dst, surf_index, offset);
-            inst->insert_before(pull);
+            inst->insert_before(block, pull);
             inst->src[i].set_smear(pull_index & 3);
          }
 
@@ -1942,7 +1966,7 @@ fs_visitor::demote_pull_constants()
          inst->src[i].reg_offset = 0;
       }
    }
-   invalidate_live_intervals();
+   invalidate_live_intervals(false);
 }
 
 bool
@@ -2048,6 +2072,72 @@ fs_visitor::opt_algebraic()
          break;
       default:
 	 break;
+      }
+   }
+
+   return progress;
+}
+
+bool
+fs_visitor::opt_register_renaming()
+{
+   bool progress = false;
+   int depth = 0;
+
+   int remap[virtual_grf_count];
+   memset(remap, -1, sizeof(int) * virtual_grf_count);
+
+   foreach_in_list(fs_inst, inst, &this->instructions) {
+      if (inst->opcode == BRW_OPCODE_IF || inst->opcode == BRW_OPCODE_DO) {
+         depth++;
+      } else if (inst->opcode == BRW_OPCODE_ENDIF ||
+                 inst->opcode == BRW_OPCODE_WHILE) {
+         depth--;
+      }
+
+      /* Rewrite instruction sources. */
+      for (int i = 0; i < inst->sources; i++) {
+         if (inst->src[i].file == GRF &&
+             remap[inst->src[i].reg] != -1 &&
+             remap[inst->src[i].reg] != inst->src[i].reg) {
+            inst->src[i].reg = remap[inst->src[i].reg];
+            progress = true;
+         }
+      }
+
+      const int dst = inst->dst.reg;
+
+      if (depth == 0 &&
+          inst->dst.file == GRF &&
+          virtual_grf_sizes[inst->dst.reg] == 1 &&
+          !inst->is_partial_write()) {
+         if (remap[dst] == -1) {
+            remap[dst] = dst;
+         } else {
+            remap[dst] = virtual_grf_alloc(1);
+            inst->dst.reg = remap[dst];
+            progress = true;
+         }
+      } else if (inst->dst.file == GRF &&
+                 remap[dst] != -1 &&
+                 remap[dst] != dst) {
+         inst->dst.reg = remap[dst];
+         progress = true;
+      }
+   }
+
+   if (progress) {
+      invalidate_live_intervals();
+
+      for (unsigned i = 0; i < ARRAY_SIZE(delta_x); i++) {
+         if (delta_x[i].file == GRF && remap[delta_x[i].reg] != -1) {
+            delta_x[i].reg = remap[delta_x[i].reg];
+         }
+      }
+      for (unsigned i = 0; i < ARRAY_SIZE(delta_y); i++) {
+         if (delta_y[i].file == GRF && remap[delta_y[i].reg] != -1) {
+            delta_y[i].reg = remap[delta_y[i].reg];
+         }
       }
    }
 
@@ -2211,9 +2301,103 @@ fs_visitor::compute_to_mrf()
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_live_intervals(false);
 
    return progress;
+}
+
+/**
+ * Once we've generated code, try to convert normal FS_OPCODE_FB_WRITE
+ * instructions to FS_OPCODE_REP_FB_WRITE.
+ */
+void
+fs_visitor::try_rep_send()
+{
+   int i, count;
+   fs_inst *start = NULL;
+
+   /* From the Ivybridge PRM, Volume 4 Part 1, section 3.9.11.2
+    * ("Message Descriptor - Render Target Write"):
+    *
+    * "SIMD16_REPDATA message must not be used in SIMD8 pixel-shaders."
+    */
+   if (dispatch_width != 16)
+      return;
+
+   /* The constant color write message can't handle anything but the 4 color
+    * values.  We could do MRT, but the loops below would need to understand
+    * handling the header being enabled or disabled on different messages.  It
+    * also requires that the render target be tiled, which might not be the
+    * case for some EGLImage paths or if we some day do rendering to PBOs.
+    */
+   if (fp->Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_DEPTH) ||
+       payload.aa_dest_stencil_reg ||
+       payload.dest_depth_reg ||
+       dual_src_output.file != BAD_FILE)
+      return;
+
+   /* The optimization is implemented as one pass through the instruction
+    * list.  We keep track of the most recent block of MOVs into sequential
+    * MRFs from single, sequential float registers (ie uniforms).  Then when
+    * we find an FB_WRITE opcode, we see if the payload registers match the
+    * destination registers in our block of MOVs.
+    */
+   count = 0;
+   foreach_in_list_safe(fs_inst, inst, &this->instructions) {
+      if (count == 0)
+         start = inst;
+      if (inst->opcode == BRW_OPCODE_MOV &&
+	  inst->dst.file == MRF &&
+          inst->dst.reg == start->dst.reg + 2 * count &&
+          inst->src[0].file == HW_REG &&
+          inst->src[0].reg_offset == start->src[0].reg_offset + count) {
+         if (count == 0)
+            start = inst;
+         count++;
+      }
+
+      if (inst->opcode == FS_OPCODE_FB_WRITE &&
+          count == 4 &&
+          (inst->base_mrf == start->dst.reg ||
+           (inst->base_mrf + 2 == start->dst.reg && inst->header_present))) {
+         fs_inst *mov = MOV(start->dst, start->src[0]);
+
+         /* Make a MOV that moves the four floats into the replicated write
+          * payload.  Since we're running at the very end of code generation
+          * we can use hw registers and generate the stride and offsets we
+          * need for this MOV.  We use the first of the eight registers
+          * allocated for the SIMD16 payload for the four floats.
+          */
+         mov->dst.fixed_hw_reg =
+            brw_vec4_reg(BRW_MESSAGE_REGISTER_FILE,
+                         start->dst.reg, 0);
+         mov->dst.file = HW_REG;
+         mov->dst.type = mov->dst.fixed_hw_reg.type;
+
+         mov->src[0].fixed_hw_reg =
+            brw_vec4_grf(mov->src[0].fixed_hw_reg.nr, 0);
+         mov->src[0].file = HW_REG;
+         mov->src[0].type = mov->src[0].fixed_hw_reg.type;
+         mov->force_writemask_all = true;
+         mov->dst.type = BRW_REGISTER_TYPE_F;
+
+         /* Replace the four MOVs with the new vec4 MOV. */
+         start->insert_before(mov);
+         for (i = 0; i < 4; i++)
+            mov->next->remove();
+
+         /* Finally, adjust the message length and set the opcode to
+          * REP_FB_WRITE for the send, so that the generator will use the
+          * replicated data mesage type.  Then reset count so we'll start
+          * looking for a new block in case we're in a MRT shader.
+          */
+         inst->opcode = FS_OPCODE_REP_FB_WRITE;
+         inst->mlen -= 7;
+         count = 0;
+      }
+   }
+
+   return;
 }
 
 /**
@@ -2232,7 +2416,9 @@ fs_visitor::remove_duplicate_mrf_writes()
 
    memset(last_mrf_move, 0, sizeof(last_mrf_move));
 
-   foreach_in_list_safe(fs_inst, inst, &instructions) {
+   calculate_cfg();
+
+   foreach_block_and_inst_safe (block, fs_inst, inst, cfg) {
       if (inst->is_control_flow()) {
 	 memset(last_mrf_move, 0, sizeof(last_mrf_move));
       }
@@ -2241,7 +2427,7 @@ fs_visitor::remove_duplicate_mrf_writes()
 	  inst->dst.file == MRF) {
 	 fs_inst *prev_inst = last_mrf_move[inst->dst.reg];
 	 if (prev_inst && inst->equals(prev_inst)) {
-	    inst->remove();
+	    inst->remove(block);
 	    progress = true;
 	    continue;
 	 }
@@ -2515,7 +2701,9 @@ fs_visitor::insert_gen4_send_dependency_workarounds()
 void
 fs_visitor::lower_uniform_pull_constant_loads()
 {
-   foreach_in_list(fs_inst, inst, &instructions) {
+   calculate_cfg();
+
+   foreach_block_and_inst (block, fs_inst, inst, cfg) {
       if (inst->opcode != FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD)
          continue;
 
@@ -2540,7 +2728,7 @@ fs_visitor::lower_uniform_pull_constant_loads()
 
          setup->ir = inst->ir;
          setup->annotation = inst->annotation;
-         inst->insert_before(setup);
+         inst->insert_before(block, setup);
 
          /* Similarly, this will only populate the first 4 channels of the
           * result register (since we only use smear values from 0-3), but we
@@ -2549,7 +2737,7 @@ fs_visitor::lower_uniform_pull_constant_loads()
          inst->opcode = FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7;
          inst->src[1] = payload;
 
-         invalidate_live_intervals();
+         invalidate_live_intervals(false);
       } else {
          /* Before register allocation, we didn't tell the scheduler about the
           * MRF we use.  We know it's safe to use this MRF because nothing
@@ -2567,28 +2755,30 @@ fs_visitor::lower_load_payload()
 {
    bool progress = false;
 
-   foreach_in_list_safe(fs_inst, inst, &instructions) {
+   calculate_cfg();
+
+   foreach_block_and_inst_safe (block, fs_inst, inst, cfg) {
       if (inst->opcode == SHADER_OPCODE_LOAD_PAYLOAD) {
          fs_reg dst = inst->dst;
 
          /* src[0] represents the (optional) message header. */
          if (inst->src[0].file != BAD_FILE) {
-            inst->insert_before(MOV(dst, inst->src[0]));
+            inst->insert_before(block, MOV(dst, inst->src[0]));
          }
          dst.reg_offset++;
 
          for (int i = 1; i < inst->sources; i++) {
-            inst->insert_before(MOV(dst, inst->src[i]));
+            inst->insert_before(block, MOV(dst, inst->src[i]));
             dst.reg_offset++;
          }
 
-         inst->remove();
+         inst->remove(block);
          progress = true;
       }
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_live_intervals(false);
 
    return progress;
 }
@@ -2930,7 +3120,7 @@ fs_visitor::assign_binding_table_offsets()
 void
 fs_visitor::calculate_register_pressure()
 {
-   invalidate_live_intervals();
+   invalidate_live_intervals(false);
    calculate_live_intervals();
 
    unsigned num_instructions = instructions.length();
@@ -3079,6 +3269,7 @@ fs_visitor::run()
          OPT(dead_code_eliminate);
          OPT(opt_peephole_sel);
          OPT(dead_control_flow_eliminate, this);
+         OPT(opt_register_renaming);
          OPT(opt_saturate_propagation);
          OPT(register_coalesce);
          OPT(compute_to_mrf);
@@ -3158,6 +3349,9 @@ fs_visitor::run()
       prog_data->total_scratch = brw_get_scratch_size(last_scratch);
    }
 
+   if (brw->use_rep_send)
+      try_rep_send();
+
    if (dispatch_width == 8)
       prog_data->reg_blocks = brw_register_blocks(grf_used);
    else
@@ -3169,6 +3363,8 @@ fs_visitor::run()
     * sure that didn't happen.
     */
    assert(sanity_param_count == fp->Base.Parameters->NumParameters);
+
+   calculate_cfg();
 
    return !failed;
 }
@@ -3213,7 +3409,7 @@ brw_wm_fs_emit(struct brw_context *brw,
       return NULL;
    }
 
-   exec_list *simd16_instructions = NULL;
+   cfg_t *simd16_cfg = NULL;
    fs_visitor v2(brw, mem_ctx, key, prog_data, prog, fp, 16);
    if (brw->gen >= 5 && likely(!(INTEL_DEBUG & DEBUG_NO16))) {
       if (!v.simd16_unsupported) {
@@ -3223,7 +3419,7 @@ brw_wm_fs_emit(struct brw_context *brw,
             perf_debug("SIMD16 shader failed to compile, falling back to "
                        "SIMD8 at a 10-20%% performance cost: %s", v2.fail_msg);
          } else {
-            simd16_instructions = &v2.instructions;
+            simd16_cfg = v2.cfg;
          }
       } else {
          perf_debug("SIMD16 shader unsupported, falling back to "
@@ -3231,17 +3427,21 @@ brw_wm_fs_emit(struct brw_context *brw,
       }
    }
 
-   const unsigned *assembly = NULL;
-   if (brw->gen >= 8) {
-      gen8_fs_generator g(brw, mem_ctx, key, prog_data, prog, fp, v.do_dual_src);
-      assembly = g.generate_assembly(&v.instructions, simd16_instructions,
-                                     final_assembly_size);
+   cfg_t *simd8_cfg;
+   int no_simd8 = (INTEL_DEBUG & DEBUG_NO8) || brw->no_simd8;
+   if (no_simd8 && simd16_cfg) {
+      simd8_cfg = NULL;
+      prog_data->no_8 = true;
    } else {
-      fs_generator g(brw, mem_ctx, key, prog_data, prog, fp, v.do_dual_src,
-                     v.runtime_check_aads_emit, INTEL_DEBUG & DEBUG_WM);
-      assembly = g.generate_assembly(&v.instructions, simd16_instructions,
-                                     final_assembly_size);
+      simd8_cfg = v.cfg;
+      prog_data->no_8 = false;
    }
+
+   const unsigned *assembly = NULL;
+   fs_generator g(brw, mem_ctx, key, prog_data, prog, fp,
+                  v.runtime_check_aads_emit, INTEL_DEBUG & DEBUG_WM);
+   assembly = g.generate_assembly(simd8_cfg, simd16_cfg,
+                                  final_assembly_size);
 
    if (unlikely(brw->perf_debug) && shader) {
       if (shader->compiled_once)

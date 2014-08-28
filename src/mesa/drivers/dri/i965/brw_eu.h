@@ -205,6 +205,11 @@ void brw_set_sampler_message(struct brw_compile *p,
                              unsigned simd_mode,
                              unsigned return_format);
 
+void brw_set_indirect_send_descriptor(struct brw_compile *p,
+                                      brw_inst *insn,
+                                      unsigned sfid,
+                                      struct brw_reg descriptor);
+
 void brw_set_dp_read_message(struct brw_compile *p,
 			     brw_inst *insn,
 			     unsigned binding_table_index,
@@ -276,6 +281,11 @@ void brw_SAMPLE(struct brw_compile *p,
 		unsigned simd_mode,
 		unsigned return_format);
 
+void brw_adjust_sampler_state_pointer(struct brw_compile *p,
+                                      struct brw_reg header,
+                                      struct brw_reg sampler_index,
+                                      struct brw_reg scratch);
+
 void gen4_math(struct brw_compile *p,
 	       struct brw_reg dest,
 	       unsigned function,
@@ -316,6 +326,30 @@ void brw_shader_time_add(struct brw_compile *p,
                          struct brw_reg payload,
                          uint32_t surf_index);
 
+/**
+ * Return the generation-specific jump distance scaling factor.
+ *
+ * Given the number of instructions to jump, we need to scale by
+ * some number to obtain the actual jump distance to program in an
+ * instruction.
+ */
+static inline unsigned
+brw_jump_scale(const struct brw_context *brw)
+{
+   /* Broadwell measures jump targets in bytes. */
+   if (brw->gen >= 8)
+      return 16;
+
+   /* Ironlake and later measure jump targets in 64-bit data chunks (in order
+    * (to support compaction), so each 128-bit instruction requires 2 chunks.
+    */
+   if (brw->gen >= 5)
+      return 2;
+
+   /* Gen4 simply uses the number of 128-bit instructions. */
+   return 1;
+}
+
 /* If/else/endif.  Works by manipulating the execution flags on each
  * channel.
  */
@@ -334,7 +368,6 @@ brw_inst *brw_WHILE(struct brw_compile *p);
 
 brw_inst *brw_BREAK(struct brw_compile *p);
 brw_inst *brw_CONT(struct brw_compile *p);
-brw_inst *gen6_CONT(struct brw_compile *p);
 brw_inst *gen6_HALT(struct brw_compile *p);
 
 /* Forward jumps:

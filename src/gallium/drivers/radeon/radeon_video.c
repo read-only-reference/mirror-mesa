@@ -39,7 +39,7 @@
 #include "vl/vl_defines.h"
 #include "vl/vl_video_buffer.h"
 
-#include "../../winsys/radeon/drm/radeon_winsys.h"
+#include "radeon/drm/radeon_winsys.h"
 #include "r600_pipe_common.h"
 #include "radeon_video.h"
 #include "radeon_vce.h"
@@ -251,8 +251,10 @@ int rvid_get_video_param(struct pipe_screen *screen,
 			       profile != PIPE_VIDEO_PROFILE_VC1_MAIN;
 		case PIPE_VIDEO_CAP_PREFERS_INTERLACED:
 		case PIPE_VIDEO_CAP_SUPPORTS_INTERLACED:
-			/* and MPEG2 only with shaders */
-			return codec != PIPE_VIDEO_FORMAT_MPEG12;
+			/* MPEG2 only with shaders and no support for
+			   interlacing on R6xx style UVD */
+			return codec != PIPE_VIDEO_FORMAT_MPEG12 &&
+			       rscreen->family > CHIP_RV770;
 		default:
 			break;
 		}

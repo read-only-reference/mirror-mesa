@@ -103,7 +103,7 @@ is_expression(const fs_inst *const inst)
    case SHADER_OPCODE_LOAD_PAYLOAD:
       return !is_copy_payload(inst);
    default:
-      return inst->is_send_from_grf();
+      return inst->is_send_from_grf() && !inst->has_side_effects();
    }
 }
 
@@ -157,7 +157,6 @@ instructions_match(fs_inst *a, fs_inst *b)
                           a->mlen == b->mlen &&
                           a->regs_written == b->regs_written &&
                           a->base_mrf == b->base_mrf &&
-                          a->sampler == b->sampler &&
                           a->eot == b->eot &&
                           a->header_present == b->header_present &&
                           a->shadow_compare == b->shadow_compare)
@@ -223,7 +222,7 @@ fs_visitor::opt_cse_local(bblock_t *block)
                   copy->force_writemask_all =
                      entry->generator->force_writemask_all;
                }
-               entry->generator->insert_after(copy);
+               entry->generator->insert_after(block, copy);
             }
 
             /* dest <- temp */
@@ -245,7 +244,7 @@ fs_visitor::opt_cse_local(bblock_t *block)
                   copy = MOV(dst, tmp);
                   copy->force_writemask_all = inst->force_writemask_all;
                }
-               inst->insert_before(copy);
+               inst->insert_before(block, copy);
             }
 
             /* Set our iterator so that next time through the loop inst->next
@@ -254,7 +253,7 @@ fs_visitor::opt_cse_local(bblock_t *block)
              */
             fs_inst *prev = (fs_inst *)inst->prev;
 
-            inst->remove();
+            inst->remove(block);
 
             /* Appending an instruction may have changed our bblock end. */
             if (inst == block->end) {
@@ -317,14 +316,12 @@ fs_visitor::opt_cse()
 
    calculate_live_intervals();
 
-   for (int b = 0; b < cfg->num_blocks; b++) {
-      bblock_t *block = cfg->blocks[b];
-
+   foreach_block (block, cfg) {
       progress = opt_cse_local(block) || progress;
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_live_intervals(false);
 
    return progress;
 }

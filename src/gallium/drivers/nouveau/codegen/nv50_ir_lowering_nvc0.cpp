@@ -567,11 +567,44 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
    const int lyr = arg - (i->tex.target.isMS() ? 2 : 1);
    const int chipset = prog->getTarget()->getChipset();
 
+   // Arguments to the TEX instruction are a little insane. Even though the
+   // encoding is identical between SM20 and SM30, the arguments mean
+   // different things between Fermi and Kepler+. A lot of arguments are
+   // optional based on flags passed to the instruction. This summarizes the
+   // order of things.
+   //
+   // Fermi:
+   //  array/indirect
+   //  coords
+   //  sample
+   //  lod bias
+   //  depth compare
+   //  offsets:
+   //    - tg4: 8 bits each, either 2 (1 offset reg) or 8 (2 offset reg)
+   //    - other: 4 bits each, single reg
+   //
+   // Kepler+:
+   //  indirect handle
+   //  array (+ offsets for txd in upper 16 bits)
+   //  coords
+   //  sample
+   //  lod bias
+   //  depth compare
+   //  offsets (same as fermi, except txd which takes it with array)
+
    if (chipset >= NVISA_GK104_CHIPSET) {
       if (i->tex.rIndirectSrc >= 0 || i->tex.sIndirectSrc >= 0) {
-         WARN("indirect TEX not implemented\n");
-      }
-      if (i->tex.r == i->tex.s) {
+         // XXX this ignores tsc, and assumes a 1:1 mapping
+         assert(i->tex.rIndirectSrc >= 0);
+         Value *hnd = loadTexHandle(
+               bld.mkOp2v(OP_SHL, TYPE_U32, bld.getSSA(),
+                          i->getIndirectR(), bld.mkImm(2)),
+               i->tex.r);
+         i->tex.r = 0xff;
+         i->tex.s = 0x1f;
+         i->setIndirectR(hnd);
+         i->setIndirectS(NULL);
+      } else if (i->tex.r == i->tex.s) {
          i->tex.r += prog->driver->io.texBindBase / 4;
          i->tex.s  = 0; // only a single cX[] value possible here
       } else {
@@ -595,6 +628,16 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
             i->setSrc(s, i->getSrc(s - 1));
          i->setSrc(0, layer);
       }
+      // Move the indirect reference to the first place
+      if (i->tex.rIndirectSrc >= 0) {
+         Value *hnd = i->getIndirectR();
+
+         i->setIndirectR(NULL);
+         i->moveSources(0, 1);
+         i->setSrc(0, hnd);
+         i->tex.rIndirectSrc = 0;
+         i->tex.sIndirectSrc = -1;
+      }
    } else
    // (nvc0) generate and move the tsc/tic/array source to the front
    if (i->tex.target.isArray() || i->tex.rIndirectSrc >= 0 || i->tex.sIndirectSrc >= 0) {
@@ -603,10 +646,18 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
       Value *ticRel = i->getIndirectR();
       Value *tscRel = i->getIndirectS();
 
-      if (ticRel)
+      if (ticRel) {
          i->setSrc(i->tex.rIndirectSrc, NULL);
-      if (tscRel)
+         if (i->tex.r)
+            ticRel = bld.mkOp2v(OP_ADD, TYPE_U32, bld.getScratch(),
+                                ticRel, bld.mkImm(i->tex.r));
+      }
+      if (tscRel) {
          i->setSrc(i->tex.sIndirectSrc, NULL);
+         if (i->tex.s)
+            tscRel = bld.mkOp2v(OP_ADD, TYPE_U32, bld.getScratch(),
+                                tscRel, bld.mkImm(i->tex.s));
+      }
 
       Value *arrayIndex = i->tex.target.isArray() ? i->getSrc(lyr) : NULL;
       for (int s = dim; s >= 1; --s)
@@ -680,14 +731,14 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
             // The offset goes into the upper 16 bits of the array index. So
             // create it if it's not already there, and INSBF it if it already
             // is.
+            s = (i->tex.rIndirectSrc >= 0) ? 1 : 0;
             if (i->tex.target.isArray()) {
                bld.mkOp3(OP_INSBF, TYPE_U32, i->getSrc(0),
                          bld.loadImm(NULL, imm), bld.mkImm(0xc10),
-                         i->getSrc(0));
+                         i->getSrc(s));
             } else {
-               for (int s = dim; s >= 1; --s)
-                  i->setSrc(s, i->getSrc(s - 1));
-               i->setSrc(0, bld.loadImm(NULL, imm << 16));
+               i->moveSources(s, 1);
+               i->setSrc(s, bld.loadImm(NULL, imm << 16));
             }
          } else {
             i->setSrc(s, bld.loadImm(NULL, imm));
@@ -783,6 +834,8 @@ NVC0LoweringPass::handleTXD(TexInstruction *txd)
 
    if (chipset >= NVISA_GK104_CHIPSET) {
       if (!txd->tex.target.isArray() && txd->tex.useOffsets)
+         expected_args++;
+      if (txd->tex.rIndirectSrc >= 0 || txd->tex.sIndirectSrc >= 0)
          expected_args++;
    } else {
       if (txd->tex.useOffsets)

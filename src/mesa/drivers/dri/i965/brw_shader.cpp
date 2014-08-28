@@ -122,7 +122,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 
    for (stage = 0; stage < ARRAY_SIZE(shProg->_LinkedShaders); stage++) {
       const struct gl_shader_compiler_options *options =
-         &ctx->ShaderCompilerOptions[stage];
+         &ctx->Const.ShaderCompilerOptions[stage];
       struct brw_shader *shader =
 	 (struct brw_shader *)shProg->_LinkedShaders[stage];
 
@@ -239,12 +239,6 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       _mesa_reference_program(ctx, &shader->base.Program, prog);
 
       brw_add_texrect_params(prog);
-
-      /* This has to be done last.  Any operation that can cause
-       * prog->ParameterValues to get reallocated (e.g., anything that adds a
-       * program constant) has to happen before creating this linkage.
-       */
-      _mesa_associate_uniform_storage(ctx, shProg, prog->Parameters);
 
       _mesa_reference_program(ctx, &prog, NULL);
 
@@ -736,6 +730,99 @@ backend_instruction::has_side_effects() const
    default:
       return false;
    }
+}
+
+#ifndef NDEBUG
+static bool
+inst_is_in_block(const bblock_t *block, const backend_instruction *inst)
+{
+   bool found = false;
+   foreach_inst_in_block (backend_instruction, i, block) {
+      if (inst == i) {
+         found = true;
+      }
+   }
+   return found;
+}
+#endif
+
+static void
+adjust_later_block_ips(bblock_t *start_block, int ip_adjustment)
+{
+   for (bblock_t *block_iter = (bblock_t *)start_block->link.next;
+        !block_iter->link.is_tail_sentinel();
+        block_iter = (bblock_t *)block_iter->link.next) {
+      block_iter->start_ip += ip_adjustment;
+      block_iter->end_ip += ip_adjustment;
+   }
+}
+
+void
+backend_instruction::insert_after(bblock_t *block, backend_instruction *inst)
+{
+   assert(inst_is_in_block(block, this) || !"Instruction not in block");
+
+   block->end_ip++;
+
+   adjust_later_block_ips(block, 1);
+
+   if (block->end == this)
+      block->end = inst;
+
+   exec_node::insert_after(inst);
+}
+
+void
+backend_instruction::insert_before(bblock_t *block, backend_instruction *inst)
+{
+   assert(inst_is_in_block(block, this) || !"Instruction not in block");
+
+   block->end_ip++;
+
+   adjust_later_block_ips(block, 1);
+
+   if (block->start == this)
+      block->start = inst;
+
+   exec_node::insert_before(inst);
+}
+
+void
+backend_instruction::insert_before(bblock_t *block, exec_list *list)
+{
+   assert(inst_is_in_block(block, this) || !"Instruction not in block");
+
+   unsigned num_inst = list->length();
+
+   block->end_ip += num_inst;
+
+   adjust_later_block_ips(block, num_inst);
+
+   if (block->start == this)
+      block->start = (backend_instruction *)list->get_head();
+
+   exec_node::insert_before(list);
+}
+
+void
+backend_instruction::remove(bblock_t *block)
+{
+   assert(inst_is_in_block(block, this) || !"Instruction not in block");
+
+   adjust_later_block_ips(block, -1);
+
+   if (block->start_ip == block->end_ip) {
+      block->cfg->remove_block(block);
+   } else {
+      block->end_ip--;
+
+      if (block->start == this)
+         block->start = (backend_instruction *)this->next;
+      if (block->end == this)
+         block->end = (backend_instruction *)this->prev;
+   }
+
+   exec_node::remove();
 }
 
 void

@@ -213,6 +213,19 @@ The integer capabilities:
 * ``PIPE_CAP_DRAW_INDIRECT``: Whether the driver supports taking draw arguments
   { count, instance_count, start, index_bias } from a PIPE_BUFFER resource.
   See pipe_draw_info.
+* ``PIPE_CAP_TGSI_FS_FINE_DERIVATIVE``: Whether the fragment shader supports
+  the FINE versions of DDX/DDY.
+* ``PIPE_CAP_VENDOR_ID``: The vendor ID of the underlying hardware. If it's
+  not available one should return 0xFFFFFFFF.
+* ``PIPE_CAP_DEVICE_ID``: The device ID (PCI ID) of the underlying hardware.
+  0xFFFFFFFF if not available.
+* ``PIPE_CAP_ACCELERATED``: Whether the renderer is hardware accelerated.
+* ``PIPE_CAP_VIDEO_MEMORY``: The amount of video memory in megabytes.
+* ``PIPE_CAP_UMA``: If the device has a unified memory architecture or on-card
+  memory and GART.
+* ``PIPE_CAP_CONDITIONAL_RENDER_INVERTED``: Whether the driver supports inverted
+  condition for conditional rendering.
+* ``PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE``: The maximum supported vertex stride.
 
 
 .. _pipe_capf:
@@ -269,7 +282,6 @@ file is still supported. In that case, the constbuf index is assumed
 to be 0.
 
 * ``PIPE_SHADER_CAP_MAX_TEMPS``: The maximum number of temporary registers.
-* ``PIPE_SHADER_CAP_MAX_ADDRS``: The maximum number of address registers.
 * ``PIPE_SHADER_CAP_MAX_PREDS``: The maximum number of predicate registers.
 * ``PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED``: Whether the continue opcode is supported.
 * ``PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR``: Whether indirect addressing

@@ -103,35 +103,35 @@ verify_image_parameter(YYLTYPE *loc, _mesa_glsl_parse_state *state,
     *  qualifiers. [...] It is legal to have additional qualifiers
     *  on a formal parameter, but not to have fewer."
     */
-   if (actual->data.image.coherent && !formal->data.image.coherent) {
+   if (actual->data.image_coherent && !formal->data.image_coherent) {
       _mesa_glsl_error(loc, state,
                        "function call parameter `%s' drops "
                        "`coherent' qualifier", formal->name);
       return false;
    }
 
-   if (actual->data.image._volatile && !formal->data.image._volatile) {
+   if (actual->data.image_volatile && !formal->data.image_volatile) {
       _mesa_glsl_error(loc, state,
                        "function call parameter `%s' drops "
                        "`volatile' qualifier", formal->name);
       return false;
    }
 
-   if (actual->data.image.restrict_flag && !formal->data.image.restrict_flag) {
+   if (actual->data.image_restrict && !formal->data.image_restrict) {
       _mesa_glsl_error(loc, state,
                        "function call parameter `%s' drops "
                        "`restrict' qualifier", formal->name);
       return false;
    }
 
-   if (actual->data.image.read_only && !formal->data.image.read_only) {
+   if (actual->data.image_read_only && !formal->data.image_read_only) {
       _mesa_glsl_error(loc, state,
                        "function call parameter `%s' drops "
                        "`readonly' qualifier", formal->name);
       return false;
    }
 
-   if (actual->data.image.write_only && !formal->data.image.write_only) {
+   if (actual->data.image_write_only && !formal->data.image_write_only) {
       _mesa_glsl_error(loc, state,
                        "function call parameter `%s' drops "
                        "`writeonly' qualifier", formal->name);
@@ -450,20 +450,21 @@ match_function_by_name(const char *name,
       goto done; /* no match */
 
    if (f != NULL) {
+      /* In desktop GL, the presence of a user-defined signature hides any
+       * built-in signatures, so we must ignore them.  In contrast, in ES2
+       * user-defined signatures add new overloads, so we must consider them.
+       */
+      bool allow_builtins = state->es_shader || !f->has_user_signature();
+
       /* Look for a match in the local shader.  If exact, we're done. */
       bool is_exact = false;
       sig = local_sig = f->matching_signature(state, actual_parameters,
-                                              &is_exact);
+                                              allow_builtins, &is_exact);
       if (is_exact)
 	 goto done;
 
-      if (!state->es_shader && f->has_user_signature()) {
-	 /* In desktop GL, the presence of a user-defined signature hides any
-	  * built-in signatures, so we must ignore them.  In contrast, in ES2
-	  * user-defined signatures add new overloads, so we must proceed.
-	  */
+      if (!allow_builtins)
 	 goto done;
-      }
    }
 
    /* Local shader has no exact candidates; check the built-ins. */

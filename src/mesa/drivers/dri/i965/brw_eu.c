@@ -34,7 +34,7 @@
 #include "brw_defines.h"
 #include "brw_eu.h"
 
-#include "glsl/ralloc.h"
+#include "util/ralloc.h"
 
 /**
  * Converts a BRW_REGISTER_TYPE_* enum to a short string (F, UD, and so on).
@@ -84,7 +84,7 @@ brw_swap_cmod(uint32_t cmod)
    case BRW_CONDITIONAL_LE:
       return BRW_CONDITIONAL_GE;
    default:
-      return ~0;
+      return BRW_CONDITIONAL_NONE;
    }
 }
 

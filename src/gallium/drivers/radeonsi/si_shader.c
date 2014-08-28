@@ -32,8 +32,8 @@
 #include "gallivm/lp_bld_logic.h"
 #include "gallivm/lp_bld_arit.h"
 #include "gallivm/lp_bld_flow.h"
-#include "radeon_llvm.h"
-#include "radeon_llvm_emit.h"
+#include "radeon/radeon_llvm.h"
+#include "radeon/radeon_llvm_emit.h"
 #include "util/u_memory.h"
 #include "tgsi/tgsi_parse.h"
 #include "tgsi/tgsi_util.h"
@@ -1514,10 +1514,6 @@ static void si_llvm_emit_fs_epilogue(struct lp_build_tgsi_context * bld_base)
 		last_args[6]= uint->zero;
 		last_args[7]= uint->zero;
 		last_args[8]= uint->zero;
-
-		si_shader_ctx->shader->spi_shader_col_format |=
-			V_028714_SPI_SHADER_32_ABGR;
-		si_shader_ctx->shader->cb_shader_mask |= S_02823C_OUTPUT0_ENABLE(0xf);
 	}
 
 	/* Specify whether the EXEC mask represents the valid mask */

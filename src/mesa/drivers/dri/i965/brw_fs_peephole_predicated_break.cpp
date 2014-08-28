@@ -47,23 +47,26 @@ fs_visitor::opt_peephole_predicated_break()
 
    calculate_cfg();
 
-   for (int b = 0; b < cfg->num_blocks; b++) {
-      bblock_t *block = cfg->blocks[b];
-
+   foreach_block (block, cfg) {
       /* BREAK and CONTINUE instructions, by definition, can only be found at
        * the ends of basic blocks.
        */
-      fs_inst *inst = (fs_inst *) block->end;
-      if (inst->opcode != BRW_OPCODE_BREAK && inst->opcode != BRW_OPCODE_CONTINUE)
+      fs_inst *jump_inst = (fs_inst *)block->end;
+      if (jump_inst->opcode != BRW_OPCODE_BREAK &&
+          jump_inst->opcode != BRW_OPCODE_CONTINUE)
          continue;
 
-      fs_inst *if_inst = (fs_inst *) inst->prev;
+      fs_inst *if_inst = (fs_inst *)jump_inst->prev;
       if (if_inst->opcode != BRW_OPCODE_IF)
          continue;
 
-      fs_inst *endif_inst = (fs_inst *) inst->next;
+      fs_inst *endif_inst = (fs_inst *)jump_inst->next;
       if (endif_inst->opcode != BRW_OPCODE_ENDIF)
          continue;
+
+      bblock_t *jump_block = block;
+      bblock_t *if_block = (bblock_t *)jump_block->link.prev;
+      bblock_t *endif_block = (bblock_t *)jump_block->link.next;
 
       /* For Sandybridge with IF with embedded comparison we need to emit an
        * instruction to set the flag register.
@@ -71,26 +74,38 @@ fs_visitor::opt_peephole_predicated_break()
       if (brw->gen == 6 && if_inst->conditional_mod) {
          fs_inst *cmp_inst = CMP(reg_null_d, if_inst->src[0], if_inst->src[1],
                                  if_inst->conditional_mod);
-         if_inst->insert_before(cmp_inst);
-         inst->predicate = BRW_PREDICATE_NORMAL;
+         if_inst->insert_before(if_block, cmp_inst);
+         jump_inst->predicate = BRW_PREDICATE_NORMAL;
       } else {
-         inst->predicate = if_inst->predicate;
-         inst->predicate_inverse = if_inst->predicate_inverse;
+         jump_inst->predicate = if_inst->predicate;
+         jump_inst->predicate_inverse = if_inst->predicate_inverse;
       }
 
-      if_inst->remove();
-      endif_inst->remove();
+      bblock_t *earlier_block = if_block;
+      if (if_block->start_ip == if_block->end_ip) {
+         earlier_block = (bblock_t *)if_block->link.prev;
+      }
 
-      /* By removing the ENDIF instruction we removed a basic block. Skip over
-       * it for the next iteration.
-       */
-      b++;
+      if_inst->remove(if_block);
+      endif_inst->remove(endif_block);
+
+      if_block->children.make_empty();
+      endif_block->parents.make_empty();
+
+      if_block->add_successor(cfg->mem_ctx, jump_block);
+      jump_block->add_successor(cfg->mem_ctx, endif_block);
+
+      if (earlier_block->can_combine_with(jump_block)) {
+         earlier_block->combine_with(jump_block);
+
+         block = earlier_block;
+      }
 
       progress = true;
    }
 
    if (progress)
-      invalidate_live_intervals();
+      invalidate_live_intervals(false);
 
    return progress;
 }
