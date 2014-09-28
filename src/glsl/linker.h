@@ -26,6 +26,9 @@
 #ifndef GLSL_LINKER_H
 #define GLSL_LINKER_H
 
+ir_function_signature *
+link_get_main_function_signature(gl_shader *sh);
+
 extern bool
 link_function_calls(gl_shader_program *prog, gl_shader *main,
 		    gl_shader **shader_list, unsigned num_shaders);
@@ -46,9 +49,6 @@ link_cross_validate_uniform_block(void *mem_ctx,
 				  struct gl_uniform_block **linked_blocks,
 				  unsigned int *num_linked_blocks,
 				  struct gl_uniform_block *new_block);
-
-void
-link_assign_uniform_block_offsets(struct gl_shader *shader);
 
 extern bool
 link_uniform_blocks_are_compatible(const gl_uniform_block *a,

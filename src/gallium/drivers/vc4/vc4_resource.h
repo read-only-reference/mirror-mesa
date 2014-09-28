@@ -37,7 +37,7 @@ struct vc4_transfer {
 struct vc4_resource_slice {
         uint32_t offset;
         uint32_t stride;
-        uint32_t size0;
+        uint32_t size;
         /** One of VC4_TILING_FORMAT_* */
         uint8_t tiling;
 };
@@ -56,6 +56,7 @@ struct vc4_resource {
         struct u_resource base;
         struct vc4_bo *bo;
         struct vc4_resource_slice slices[VC4_MAX_MIP_LEVELS];
+        uint32_t cube_map_stride;
         int cpp;
         bool tiled;
         /** One of VC4_TEXTURE_TYPE_* */

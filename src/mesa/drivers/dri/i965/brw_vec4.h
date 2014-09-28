@@ -107,6 +107,7 @@ public:
    bool equals(const src_reg &r) const;
 
    src_reg(class vec4_visitor *v, const struct glsl_type *type);
+   src_reg(class vec4_visitor *v, const struct glsl_type *type, int size);
 
    explicit src_reg(dst_reg reg);
 
@@ -219,9 +220,13 @@ public:
    enum brw_urb_write_flags urb_write_flags;
    bool header_present;
 
+   unsigned sol_binding; /**< gen6: SOL binding table index */
+   bool sol_final_write; /**< gen6: send commit message */
+   unsigned sol_vertex; /**< gen6: used for setting dst index in SVB header */
+
    bool is_send_from_grf();
-   bool can_reswizzle_dst(int dst_writemask, int swizzle, int swizzle_mask);
-   void reswizzle_dst(int dst_writemask, int swizzle);
+   bool can_reswizzle(int dst_writemask, int swizzle, int swizzle_mask);
+   void reswizzle(int dst_writemask, int swizzle);
    bool can_do_source_mods(struct brw_context *brw);
 
    bool reads_flag()
@@ -378,7 +383,7 @@ public:
    void split_uniform_registers();
    void pack_uniform_registers();
    void calculate_live_intervals();
-   void invalidate_live_intervals(bool invalidate_cfg = true);
+   void invalidate_live_intervals();
    void split_virtual_grfs();
    bool opt_reduce_swizzle();
    bool dead_code_eliminate();
@@ -405,7 +410,8 @@ public:
    vec4_instruction *emit(enum opcode opcode, dst_reg dst,
 			  src_reg src0, src_reg src1, src_reg src2);
 
-   vec4_instruction *emit_before(vec4_instruction *inst,
+   vec4_instruction *emit_before(bblock_t *block,
+                                 vec4_instruction *inst,
 				 vec4_instruction *new_inst);
 
    vec4_instruction *MOV(const dst_reg &dst, const src_reg &src0);
@@ -532,10 +538,10 @@ public:
    void swizzle_result(ir_texture *ir, src_reg orig_val, uint32_t sampler);
 
    void emit_ndc_computation();
-   void emit_psiz_and_flags(struct brw_reg reg);
+   void emit_psiz_and_flags(dst_reg reg);
    void emit_clip_distances(dst_reg reg, int offset);
    void emit_generic_urb_slot(dst_reg reg, int varying);
-   void emit_urb_slot(int mrf, int varying);
+   void emit_urb_slot(dst_reg reg, int varying);
 
    void emit_shader_time_begin();
    void emit_shader_time_end();
@@ -549,17 +555,17 @@ public:
    void emit_untyped_surface_read(unsigned surf_index, dst_reg dst,
                                   src_reg offset);
 
-   src_reg get_scratch_offset(vec4_instruction *inst,
+   src_reg get_scratch_offset(bblock_t *block, vec4_instruction *inst,
 			      src_reg *reladdr, int reg_offset);
-   src_reg get_pull_constant_offset(vec4_instruction *inst,
+   src_reg get_pull_constant_offset(bblock_t *block, vec4_instruction *inst,
 				    src_reg *reladdr, int reg_offset);
-   void emit_scratch_read(vec4_instruction *inst,
+   void emit_scratch_read(bblock_t *block, vec4_instruction *inst,
 			  dst_reg dst,
 			  src_reg orig_src,
 			  int base_offset);
-   void emit_scratch_write(vec4_instruction *inst,
+   void emit_scratch_write(bblock_t *block, vec4_instruction *inst,
 			   int base_offset);
-   void emit_pull_constant_load(vec4_instruction *inst,
+   void emit_pull_constant_load(bblock_t *block, vec4_instruction *inst,
 				dst_reg dst,
 				src_reg orig_src,
 				int base_offset);
@@ -584,6 +590,7 @@ protected:
    void setup_payload_interference(struct ra_graph *g, int first_payload_node,
                                    int reg_node_count);
    virtual dst_reg *make_reg_for_system_value(ir_variable *ir) = 0;
+   virtual void assign_binding_table_offsets();
    virtual void setup_payload() = 0;
    virtual void emit_prolog() = 0;
    virtual void emit_program_code() = 0;
@@ -646,16 +653,33 @@ private:
 
    void generate_vs_urb_write(vec4_instruction *inst);
    void generate_gs_urb_write(vec4_instruction *inst);
+   void generate_gs_urb_write_allocate(vec4_instruction *inst);
    void generate_gs_thread_end(vec4_instruction *inst);
    void generate_gs_set_write_offset(struct brw_reg dst,
                                      struct brw_reg src0,
                                      struct brw_reg src1);
    void generate_gs_set_vertex_count(struct brw_reg dst,
                                      struct brw_reg src);
-   void generate_gs_set_dword_2_immed(struct brw_reg dst, struct brw_reg src);
+   void generate_gs_svb_write(vec4_instruction *inst,
+                              struct brw_reg dst,
+                              struct brw_reg src0,
+                              struct brw_reg src1);
+   void generate_gs_svb_set_destination_index(vec4_instruction *inst,
+                                              struct brw_reg dst,
+                                              struct brw_reg src);
+   void generate_gs_set_dword_2(struct brw_reg dst, struct brw_reg src);
    void generate_gs_prepare_channel_masks(struct brw_reg dst);
    void generate_gs_set_channel_masks(struct brw_reg dst, struct brw_reg src);
    void generate_gs_get_instance_id(struct brw_reg dst);
+   void generate_gs_ff_sync_set_primitives(struct brw_reg dst,
+                                           struct brw_reg src0,
+                                           struct brw_reg src1,
+                                           struct brw_reg src2);
+   void generate_gs_ff_sync(vec4_instruction *inst,
+                            struct brw_reg dst,
+                            struct brw_reg src0,
+                            struct brw_reg src1);
+   void generate_gs_set_primitive_id(struct brw_reg dst);
    void generate_oword_dual_block_offsets(struct brw_reg m1,
 					  struct brw_reg index);
    void generate_scratch_write(vec4_instruction *inst,

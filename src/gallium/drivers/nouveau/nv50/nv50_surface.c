@@ -114,8 +114,8 @@ nv50_2d_texture_set(struct nouveau_pushbuf *push, int dst,
       PUSH_DATA (push, mt->level[level].pitch);
       PUSH_DATA (push, width);
       PUSH_DATA (push, height);
-      PUSH_DATAh(push, bo->offset + offset);
-      PUSH_DATA (push, bo->offset + offset);
+      PUSH_DATAh(push, mt->base.address + offset);
+      PUSH_DATA (push, mt->base.address + offset);
    } else {
       BEGIN_NV04(push, SUBC_2D(mthd), 5);
       PUSH_DATA (push, format);
@@ -126,8 +126,8 @@ nv50_2d_texture_set(struct nouveau_pushbuf *push, int dst,
       BEGIN_NV04(push, SUBC_2D(mthd + 0x18), 4);
       PUSH_DATA (push, width);
       PUSH_DATA (push, height);
-      PUSH_DATAh(push, bo->offset + offset);
-      PUSH_DATA (push, bo->offset + offset);
+      PUSH_DATAh(push, mt->base.address + offset);
+      PUSH_DATA (push, mt->base.address + offset);
    }
 
 #if 0
@@ -299,8 +299,8 @@ nv50_clear_render_target(struct pipe_context *pipe,
    BEGIN_NV04(push, NV50_3D(RT_CONTROL), 1);
    PUSH_DATA (push, 1);
    BEGIN_NV04(push, NV50_3D(RT_ADDRESS_HIGH(0)), 5);
-   PUSH_DATAh(push, bo->offset + sf->offset);
-   PUSH_DATA (push, bo->offset + sf->offset);
+   PUSH_DATAh(push, mt->base.address + sf->offset);
+   PUSH_DATA (push, mt->base.address + sf->offset);
    PUSH_DATA (push, nv50_format_table[dst->format].rt);
    PUSH_DATA (push, mt->level[sf->base.u.tex.level].tile_mode);
    PUSH_DATA (push, mt->layer_stride >> 2);
@@ -381,8 +381,8 @@ nv50_clear_depth_stencil(struct pipe_context *pipe,
    nv50->scissors_dirty |= 1;
 
    BEGIN_NV04(push, NV50_3D(ZETA_ADDRESS_HIGH), 5);
-   PUSH_DATAh(push, bo->offset + sf->offset);
-   PUSH_DATA (push, bo->offset + sf->offset);
+   PUSH_DATAh(push, mt->base.address + sf->offset);
+   PUSH_DATA (push, mt->base.address + sf->offset);
    PUSH_DATA (push, nv50_format_table[dst->format].rt);
    PUSH_DATA (push, mt->level[sf->base.u.tex.level].tile_mode);
    PUSH_DATA (push, mt->layer_stride >> 2);
@@ -827,6 +827,7 @@ nv50_blit_select_mode(const struct pipe_blit_info *info)
    switch (info->dst.resource->format) {
    case PIPE_FORMAT_Z24_UNORM_S8_UINT:
    case PIPE_FORMAT_Z24X8_UNORM:
+   case PIPE_FORMAT_X24S8_UINT:
       switch (mask & PIPE_MASK_ZS) {
       case PIPE_MASK_ZS: return NV50_BLIT_MODE_Z24S8;
       case PIPE_MASK_Z:  return NV50_BLIT_MODE_Z24X8;
@@ -834,6 +835,8 @@ nv50_blit_select_mode(const struct pipe_blit_info *info)
          return NV50_BLIT_MODE_X24S8;
       }
    case PIPE_FORMAT_S8_UINT_Z24_UNORM:
+   case PIPE_FORMAT_X8Z24_UNORM:
+   case PIPE_FORMAT_S8X24_UINT:
       switch (mask & PIPE_MASK_ZS) {
       case PIPE_MASK_ZS: return NV50_BLIT_MODE_S8Z24;
       case PIPE_MASK_Z:  return NV50_BLIT_MODE_X8Z24;
@@ -842,6 +845,7 @@ nv50_blit_select_mode(const struct pipe_blit_info *info)
       }
    case PIPE_FORMAT_Z32_FLOAT:
    case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
+   case PIPE_FORMAT_X32_S8X24_UINT:
       switch (mask & PIPE_MASK_ZS) {
       case PIPE_MASK_ZS: return NV50_BLIT_MODE_ZS;
       case PIPE_MASK_Z:  return NV50_BLIT_MODE_PASS;

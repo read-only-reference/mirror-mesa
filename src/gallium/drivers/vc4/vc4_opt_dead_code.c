@@ -34,7 +34,7 @@
 #include "vc4_qir.h"
 
 bool
-qir_opt_dead_code(struct qcompile *c)
+qir_opt_dead_code(struct vc4_compile *c)
 {
         bool progress = false;
         bool debug = false;
@@ -51,11 +51,10 @@ qir_opt_dead_code(struct qcompile *c)
                     !qir_has_side_effects(inst)) {
                         if (debug) {
                                 fprintf(stderr, "Removing: ");
-                                qir_dump_inst(inst);
+                                qir_dump_inst(c, inst);
                                 fprintf(stderr, "\n");
                         }
-                        remove_from_list(&inst->link);
-                        free(inst);
+                        qir_remove_instruction(inst);
                         progress = true;
                         continue;
                 }

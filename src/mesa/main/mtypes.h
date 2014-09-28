@@ -1526,7 +1526,6 @@ struct gl_client_array
    GLuint _ElementSize;         /**< size of each element in bytes */
 
    struct gl_buffer_object *BufferObj;/**< GL_ARB_vertex_buffer_object */
-   GLuint _MaxElement;          /**< max element index into array buffer + 1 */
 };
 
 
@@ -1628,12 +1627,6 @@ struct gl_vertex_array_object
 
    /** Mask of VERT_BIT_* values indicating changed/dirty arrays */
    GLbitfield64 NewArrays;
-
-   /**
-    * Min of all enabled arrays' _MaxElement.  When arrays reside inside VBOs
-    * we can determine the max legal (in bounds) glDrawElements array index.
-    */
-   GLuint _MaxElement;
 
    /** The index buffer (also known as the element array buffer in OpenGL). */
    struct gl_buffer_object *IndexBufferObj;
@@ -2055,8 +2048,90 @@ typedef enum
     * \name Vertex shader system values
     */
    /*@{*/
+   /**
+    * OpenGL-style vertex ID.
+    *
+    * Section 2.11.7 (Shader Execution), subsection Shader Inputs, of the
+    * OpenGL 3.3 core profile spec says:
+    *
+    *     "gl_VertexID holds the integer index i implicitly passed by
+    *     DrawArrays or one of the other drawing commands defined in section
+    *     2.8.3."
+    *
+    * Section 2.8.3 (Drawing Commands) of the same spec says:
+    *
+    *     "The commands....are equivalent to the commands with the same base
+    *     name (without the BaseVertex suffix), except that the ith element
+    *     transferred by the corresponding draw call will be taken from
+    *     element indices[i] + basevertex of each enabled array."
+    *
+    * Additionally, the overview in the GL_ARB_shader_draw_parameters spec
+    * says:
+    *
+    *     "In unextended GL, vertex shaders have inputs named gl_VertexID and
+    *     gl_InstanceID, which contain, respectively the index of the vertex
+    *     and instance. The value of gl_VertexID is the implicitly passed
+    *     index of the vertex being processed, which includes the value of
+    *     baseVertex, for those commands that accept it."
+    *
+    * gl_VertexID gets basevertex added in.  This differs from DirectX where
+    * SV_VertexID does \b not get basevertex added in.
+    *
+    * \note
+    * If all system values are available, \c SYSTEM_VALUE_VERTEX_ID will be
+    * equal to \c SYSTEM_VALUE_VERTEX_ID_ZERO_BASE plus
+    * \c SYSTEM_VALUE_BASE_VERTEX.
+    *
+    * \sa SYSTEM_VALUE_VERTEX_ID_ZERO_BASE, SYSTEM_VALUE_BASE_VERTEX
+    */
    SYSTEM_VALUE_VERTEX_ID,
+
+   /**
+    * Instanced ID as supplied to gl_InstanceID
+    *
+    * Values assigned to gl_InstanceID always begin with zero, regardless of
+    * the value of baseinstance.
+    *
+    * Section 11.1.3.9 (Shader Inputs) of the OpenGL 4.4 core profile spec
+    * says:
+    *
+    *     "gl_InstanceID holds the integer instance number of the current
+    *     primitive in an instanced draw call (see section 10.5)."
+    *
+    * Through a big chain of pseudocode, section 10.5 describes that
+    * baseinstance is not counted by gl_InstanceID.  In that section, notice
+    *
+    *     "If an enabled vertex attribute array is instanced (it has a
+    *     non-zero divisor as specified by VertexAttribDivisor), the element
+    *     index that is transferred to the GL, for all vertices, is given by
+    *
+    *         floor(instance/divisor) + baseinstance
+    *
+    *     If an array corresponding to an attribute required by a vertex
+    *     shader is not enabled, then the corresponding element is taken from
+    *     the current attribute state (see section 10.2)."
+    *
+    * Note that baseinstance is \b not included in the value of instance.
+    */
    SYSTEM_VALUE_INSTANCE_ID,
+
+   /**
+    * DirectX-style vertex ID.
+    *
+    * Unlike \c SYSTEM_VALUE_VERTEX_ID, this system value does \b not include
+    * the value of basevertex.
+    *
+    * \sa SYSTEM_VALUE_VERTEX_ID, SYSTEM_VALUE_BASE_VERTEX
+    */
+   SYSTEM_VALUE_VERTEX_ID_ZERO_BASE,
+
+   /**
+    * Value of \c basevertex passed to \c glDrawElementsBaseVertex and similar
+    * functions.
+    *
+    * \sa SYSTEM_VALUE_VERTEX_ID, SYSTEM_VALUE_VERTEX_ID_ZERO_BASE
+    */
+   SYSTEM_VALUE_BASE_VERTEX,
    /*@}*/
 
    /**
@@ -2344,6 +2419,20 @@ struct gl_fragment_program_state
 
    /** Cache of fixed-function programs */
    struct gl_program_cache *Cache;
+};
+
+
+/**
+ * Context state for compute programs.
+ */
+struct gl_compute_program_state
+{
+   struct gl_compute_program *Current;  /**< user-bound compute program */
+
+   /** Currently enabled and valid program (including internal programs
+    * and compiled shader programs).
+    */
+   struct gl_compute_program *_Current;
 };
 
 
@@ -3336,9 +3425,6 @@ struct gl_constants
       GLuint PrimitivesWritten;
    } QueryCounterBits;
 
-   /** vertex array / buffer object bounds checking */
-   GLboolean CheckArrayBounds;
-
    GLuint MaxDrawBuffers;    /**< GL_ARB_draw_buffers */
 
    GLuint MaxColorAttachments;   /**< GL_EXT_framebuffer_object */
@@ -3366,7 +3452,7 @@ struct gl_constants
    GLuint MaxGeometryOutputVertices;
    GLuint MaxGeometryTotalOutputComponents;
 
-   GLuint GLSLVersion;  /**< GLSL version supported (ex: 120 = 1.20) */
+   GLuint GLSLVersion;  /**< Desktop GLSL version supported (ex: 120 = 1.20) */
 
    /**
     * Changes default GLSL extension behavior from "error" to "warn".  It's out
@@ -3390,6 +3476,15 @@ struct gl_constants
     * simulated via floats.)
     */
    GLboolean NativeIntegers;
+
+   /**
+    * Does VertexID count from zero or from base vertex?
+    *
+    * \note
+    * If desktop GLSL 1.30 or GLSL ES 3.00 are not supported, this field is
+    * ignored and need not be set.
+    */
+   bool VertexID_is_zero_based;
 
    /**
     * If the driver supports real 32-bit integers, what integer value should be
@@ -3457,11 +3552,6 @@ struct gl_constants
    GLboolean GLSLSkipStrictMaxUniformLimitCheck;
 
    /**
-    * Force software support for primitive restart in the VBO module.
-    */
-   GLboolean PrimitiveRestartInSoftware;
-
-   /**
     * Always use the GetTransformFeedbackVertexCount() driver hook, rather
     * than passing the transform feedback object to the drawing function.
     */
@@ -3480,6 +3570,19 @@ struct gl_constants
     * Drivers that support transform feedback must set this value to GL_FALSE.
     */
    GLboolean DisableVaryingPacking;
+
+   /**
+    * Should meaningful names be generated for compiler temporary variables?
+    *
+    * Generally, it is not useful to have the compiler generate "meaningful"
+    * names for temporary variables that it creates.  This can, however, be a
+    * useful debugging aid.  In Mesa debug builds or release builds when
+    * MESA_GLSL is set at run-time, meaningful names will be generated.
+    * Drivers can also force names to be generated by setting this field.
+    * For example, the i965 driver may set it when INTEL_DEBUG=vs (to dump
+    * vertex shader assembly) is set at run-time.
+    */
+   bool GenerateTemporaryNames;
 
    /*
     * Maximum value supported for an index in DrawElements and friends.
@@ -3908,32 +4011,32 @@ typedef enum
 struct gl_driver_flags
 {
    /** gl_context::Array::_DrawArrays (vertex array state) */
-   GLbitfield NewArray;
+   uint64_t NewArray;
 
    /** gl_context::TransformFeedback::CurrentObject */
-   GLbitfield NewTransformFeedback;
+   uint64_t NewTransformFeedback;
 
    /** gl_context::TransformFeedback::CurrentObject::shader_program */
-   GLbitfield NewTransformFeedbackProg;
+   uint64_t NewTransformFeedbackProg;
 
    /** gl_context::RasterDiscard */
-   GLbitfield NewRasterizerDiscard;
+   uint64_t NewRasterizerDiscard;
 
    /**
     * gl_context::UniformBufferBindings
     * gl_shader_program::UniformBlocks
     */
-   GLbitfield NewUniformBuffer;
+   uint64_t NewUniformBuffer;
 
    /**
     * gl_context::AtomicBufferBindings
     */
-   GLbitfield NewAtomicBuffer;
+   uint64_t NewAtomicBuffer;
 
    /**
     * gl_context::ImageUnits
     */
-   GLbitfield NewImageUnits;
+   uint64_t NewImageUnits;
 };
 
 struct gl_uniform_buffer_binding
@@ -4153,6 +4256,7 @@ struct gl_context
    struct gl_vertex_program_state VertexProgram;
    struct gl_fragment_program_state FragmentProgram;
    struct gl_geometry_program_state GeometryProgram;
+   struct gl_compute_program_state ComputeProgram;
    struct gl_ati_fragment_shader_state ATIFragmentShader;
 
    struct gl_pipeline_shader_state Pipeline; /**< GLSL pipeline shader object state */
@@ -4240,7 +4344,7 @@ struct gl_context
 
    GLenum RenderMode;        /**< either GL_RENDER, GL_SELECT, GL_FEEDBACK */
    GLbitfield NewState;      /**< bitwise-or of _NEW_* flags */
-   GLbitfield NewDriverState;/**< bitwise-or of flags from DriverFlags */
+   uint64_t NewDriverState;  /**< bitwise-or of flags from DriverFlags */
 
    struct gl_driver_flags DriverFlags;
 

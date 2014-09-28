@@ -352,7 +352,7 @@ dri2_drm_get_buffers(__DRIdrawable * driDrawable,
    const unsigned int format = 32;
    int i;
 
-   attachments_with_format = calloc(count * 2, sizeof(unsigned int));
+   attachments_with_format = calloc(count, 2 * sizeof(unsigned int));
    if (!attachments_with_format) {
       *out_count = 0;
       return NULL;
@@ -681,6 +681,7 @@ dri2_initialize_drm(_EGLDriver *drv, _EGLDisplay *disp)
                       i + 1, EGL_WINDOW_BIT, attr_list, NULL);
    }
 
+   disp->Extensions.KHR_image_pixmap = EGL_TRUE;
    if (dri2_dpy->dri2)
       disp->Extensions.EXT_buffer_age = EGL_TRUE;
 

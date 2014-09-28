@@ -1099,9 +1099,8 @@ static void r600_init_depth_surface(struct r600_context *rctx,
 	if (rtex->htile_buffer && !level) {
 		surf->db_htile_data_base = 0;
 		surf->db_htile_surface = S_028D24_HTILE_WIDTH(1) |
-					S_028D24_HTILE_HEIGHT(1) |
-					S_028D24_FULL_CACHE(1) |
-					S_028D24_LINEAR(1);
+					 S_028D24_HTILE_HEIGHT(1) |
+					 S_028D24_FULL_CACHE(1);
 		/* preload is not working properly on r6xx/r7xx */
 		surf->db_depth_info |= S_028010_TILE_SURFACE_ENABLE(1);
 	}
@@ -1611,6 +1610,13 @@ static void r600_emit_db_misc_state(struct r600_context *rctx, struct r600_atom 
 				     S_028D0C_STENCIL_COPY_ENABLE(a->copy_stencil) |
 				     S_028D0C_COPY_CENTROID(1) |
 				     S_028D0C_COPY_SAMPLE(a->copy_sample);
+
+		if (rctx->b.chip_class == R600)
+			db_render_override |= S_028D10_NOOP_CULL_DISABLE(1);
+
+		if (rctx->b.family == CHIP_RV610 || rctx->b.family == CHIP_RV630 ||
+		    rctx->b.family == CHIP_RV620 || rctx->b.family == CHIP_RV635)
+			db_render_override |= S_028D10_FORCE_HIZ_ENABLE(V_028D10_FORCE_DISABLE);
 	} else if (a->flush_depthstencil_in_place) {
 		db_render_control |= S_028D0C_DEPTH_COMPRESS_DISABLE(1) |
 				     S_028D0C_STENCIL_COMPRESS_DISABLE(1);
@@ -2266,6 +2272,7 @@ void r600_init_atom_start_cs(struct r600_context *rctx)
 	r600_store_config_reg(cb, R_009714_VC_ENHANCE, 0);
 
 	if (rctx->b.chip_class >= R700) {
+		r600_store_context_reg(cb, R_028A50_VGT_ENHANCE, 4);
 		r600_store_config_reg(cb, R_008D8C_SQ_DYN_GPR_CNTL_PS_FLUSH_REQ, 0x00004000);
 		r600_store_config_reg(cb, R_009830_DB_DEBUG, 0);
 		r600_store_config_reg(cb, R_009838_DB_WATERMARKS, 0x00420204);
@@ -2959,7 +2966,7 @@ static void r600_dma_copy(struct pipe_context *ctx,
 	return;
 
 fallback:
-	ctx->resource_copy_region(ctx, dst, dst_level, dstx, dsty, dstz,
+	r600_resource_copy_region(ctx, dst, dst_level, dstx, dsty, dstz,
 				  src, src_level, src_box);
 }
 

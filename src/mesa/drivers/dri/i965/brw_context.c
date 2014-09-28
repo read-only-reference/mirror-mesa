@@ -325,7 +325,7 @@ brw_initialize_context_constants(struct brw_context *brw)
       MIN2(ctx->Const.MaxTextureCoordUnits,
            ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxTextureImageUnits);
    ctx->Const.Program[MESA_SHADER_VERTEX].MaxTextureImageUnits = max_samplers;
-   if (brw->gen >= 7)
+   if (brw->gen >= 6)
       ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxTextureImageUnits = max_samplers;
    else
       ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxTextureImageUnits = 0;
@@ -483,6 +483,7 @@ brw_initialize_context_constants(struct brw_context *brw)
       ctx->Const.QuadsFollowProvokingVertexConvention = false;
 
    ctx->Const.NativeIntegers = true;
+   ctx->Const.VertexID_is_zero_based = true;
 
    /* Regarding the CMP instruction, the Ivybridge PRM says:
     *
@@ -984,13 +985,17 @@ intelMakeCurrent(__DRIcontext * driContextPriv,
       struct gl_context *ctx = &brw->ctx;
       struct gl_framebuffer *fb, *readFb;
 
-      if (driDrawPriv == NULL && driReadPriv == NULL) {
+      if (driDrawPriv == NULL) {
          fb = _mesa_get_incomplete_framebuffer();
-         readFb = _mesa_get_incomplete_framebuffer();
       } else {
          fb = driDrawPriv->driverPrivate;
-         readFb = driReadPriv->driverPrivate;
          driContextPriv->dri2.draw_stamp = driDrawPriv->dri2.stamp - 1;
+      }
+
+      if (driReadPriv == NULL) {
+         readFb = _mesa_get_incomplete_framebuffer();
+      } else {
+         readFb = driReadPriv->driverPrivate;
          driContextPriv->dri2.read_stamp = driReadPriv->dri2.stamp - 1;
       }
 

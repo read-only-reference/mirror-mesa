@@ -32,7 +32,6 @@
 #include "toy_legalize.h"
 #include "toy_optimize.h"
 #include "toy_helpers.h"
-#include "ilo_context.h"
 #include "ilo_shader_internal.h"
 
 struct fs_compile_context {
@@ -494,7 +493,7 @@ fs_lower_opcode_tgsi_direct(struct fs_compile_context *fcc,
       fs_lower_opcode_tgsi_in(fcc, inst->dst, dim, idx);
       break;
    case TOY_OPCODE_TGSI_CONST:
-      if (tc->dev->gen >= ILO_GEN(7))
+      if (ilo_dev_gen(tc->dev) >= ILO_GEN(7))
          fs_lower_opcode_tgsi_const_gen7(fcc, inst->dst, dim, inst->src[1]);
       else
          fs_lower_opcode_tgsi_const_gen6(fcc, inst->dst, dim, inst->src[1]);
@@ -801,7 +800,7 @@ fs_prepare_tgsi_sampling(struct toy_compiler *tc, const struct toy_inst *inst,
          msg_type = GEN7_MSG_SAMPLER_SAMPLE_D_C;
          ref_or_si = coords[ref_pos];
 
-         if (tc->dev->gen < ILO_GEN(7.5))
+         if (ilo_dev_gen(tc->dev) < ILO_GEN(7.5))
             tc_fail(tc, "TXD with shadow sampler not supported");
       }
       else {
@@ -1064,7 +1063,7 @@ fs_prepare_tgsi_sampling(struct toy_compiler *tc, const struct toy_inst *inst,
    }
 
    /* set up sampler parameters */
-   if (tc->dev->gen >= ILO_GEN(7)) {
+   if (ilo_dev_gen(tc->dev) >= ILO_GEN(7)) {
       msg_len = fs_add_sampler_params_gen7(tc, msg_type, base_mrf, param_size,
             coords, num_coords, bias_or_lod, ref_or_si, ddx, ddy, num_derivs);
    }
@@ -1425,7 +1424,7 @@ fs_compile(struct fs_compile_context *fcc)
 
    if (ilo_debug & ILO_DEBUG_FS) {
       ilo_printf("disassembly:\n");
-      toy_compiler_disassemble(tc, sh->kernel, sh->kernel_size);
+      toy_compiler_disassemble(tc->dev, sh->kernel, sh->kernel_size, false);
       ilo_printf("\n");
    }
 
@@ -1849,7 +1848,7 @@ fs_setup(struct fs_compile_context *fcc,
    fcc->num_grf_per_vrf =
       (fcc->dispatch_mode == GEN6_WM_DW5_16_PIXEL_DISPATCH) ? 2 : 1;
 
-   if (fcc->tc.dev->gen >= ILO_GEN(7)) {
+   if (ilo_dev_gen(fcc->tc.dev) >= ILO_GEN(7)) {
       fcc->last_free_grf -= 15;
       fcc->first_free_mrf = fcc->last_free_grf + 1;
       fcc->last_free_mrf = fcc->first_free_mrf + 14;

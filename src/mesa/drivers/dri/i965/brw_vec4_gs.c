@@ -31,6 +31,7 @@
 #include "brw_context.h"
 #include "brw_vec4_gs_visitor.h"
 #include "brw_state.h"
+#include "brw_gs.h"
 
 
 static bool
@@ -74,31 +75,42 @@ do_gs_prog(struct brw_context *brw,
     */
    c.prog_data.base.base.nr_params = ALIGN(param_count, 4) / 4 + gs->num_samplers;
 
-   if (gp->program.OutputType == GL_POINTS) {
-      /* When the output type is points, the geometry shader may output data
-       * to multiple streams, and EndPrimitive() has no effect.  So we
-       * configure the hardware to interpret the control data as stream ID.
-       */
-      c.prog_data.control_data_format = GEN7_GS_CONTROL_DATA_FORMAT_GSCTL_SID;
+   if (brw->gen >= 7) {
+      if (gp->program.OutputType == GL_POINTS) {
+         /* When the output type is points, the geometry shader may output data
+          * to multiple streams, and EndPrimitive() has no effect.  So we
+          * configure the hardware to interpret the control data as stream ID.
+          */
+         c.prog_data.control_data_format = GEN7_GS_CONTROL_DATA_FORMAT_GSCTL_SID;
 
-      /* We only have to emit control bits if we are using streams */
-      if (prog->Geom.UsesStreams)
-         c.control_data_bits_per_vertex = 2;
-      else
-         c.control_data_bits_per_vertex = 0;
+         /* We only have to emit control bits if we are using streams */
+         if (prog->Geom.UsesStreams)
+            c.control_data_bits_per_vertex = 2;
+         else
+            c.control_data_bits_per_vertex = 0;
+      } else {
+         /* When the output type is triangle_strip or line_strip, EndPrimitive()
+          * may be used to terminate the current strip and start a new one
+          * (similar to primitive restart), and outputting data to multiple
+          * streams is not supported.  So we configure the hardware to interpret
+          * the control data as EndPrimitive information (a.k.a. "cut bits").
+          */
+         c.prog_data.control_data_format = GEN7_GS_CONTROL_DATA_FORMAT_GSCTL_CUT;
+
+         /* We only need to output control data if the shader actually calls
+          * EndPrimitive().
+          */
+         c.control_data_bits_per_vertex = gp->program.UsesEndPrimitive ? 1 : 0;
+      }
    } else {
-      /* When the output type is triangle_strip or line_strip, EndPrimitive()
-       * may be used to terminate the current strip and start a new one
-       * (similar to primitive restart), and outputting data to multiple
-       * streams is not supported.  So we configure the hardware to interpret
-       * the control data as EndPrimitive information (a.k.a. "cut bits").
-       */
-      c.prog_data.control_data_format = GEN7_GS_CONTROL_DATA_FORMAT_GSCTL_CUT;
+      /* There are no control data bits in gen6. */
+      c.control_data_bits_per_vertex = 0;
 
-      /* We only need to output control data if the shader actually calls
-       * EndPrimitive().
-       */
-      c.control_data_bits_per_vertex = gp->program.UsesEndPrimitive ? 1 : 0;
+      /* If it is using transform feedback, enable it */
+      if (prog->TransformFeedback.NumVarying)
+         c.prog_data.gen6_xfb_enabled = true;
+      else
+         c.prog_data.gen6_xfb_enabled = false;
    }
    c.control_data_header_size_bits =
       gp->program.VerticesOut * c.control_data_bits_per_vertex;
@@ -169,7 +181,8 @@ do_gs_prog(struct brw_context *brw,
     *
     */
    unsigned output_vertex_size_bytes = c.prog_data.base.vue_map.num_slots * 16;
-   assert(output_vertex_size_bytes <= GEN7_MAX_GS_OUTPUT_VERTEX_SIZE_BYTES);
+   assert(brw->gen == 6 ||
+          output_vertex_size_bytes <= GEN7_MAX_GS_OUTPUT_VERTEX_SIZE_BYTES);
    c.prog_data.output_vertex_size_hwords =
       ALIGN(output_vertex_size_bytes, 32) / 32;
 
@@ -199,10 +212,20 @@ do_gs_prog(struct brw_context *brw,
     * the above figures are all worst-case, and most of them scale with the
     * number of output vertices.  So we'll just calculate the amount of space
     * we need, and if it's too large, fail to compile.
+    *
+    * The above is for gen7+ where we have a single URB entry that will hold
+    * all the output. In gen6, we will have to allocate URB entries for every
+    * vertex we emit, so our URB entries only need to be large enough to hold
+    * a single vertex. Also, gen6 does not have a control data header.
     */
-   unsigned output_size_bytes =
-      c.prog_data.output_vertex_size_hwords * 32 * gp->program.VerticesOut;
-   output_size_bytes += 32 * c.prog_data.control_data_header_size_hwords;
+   unsigned output_size_bytes;
+   if (brw->gen >= 7) {
+      output_size_bytes =
+         c.prog_data.output_vertex_size_hwords * 32 * gp->program.VerticesOut;
+      output_size_bytes += 32 * c.prog_data.control_data_header_size_hwords;
+   } else {
+      output_size_bytes = c.prog_data.output_vertex_size_hwords * 32;
+   }
 
    /* Broadwell stores "Vertex Count" as a full 8 DWord (32 byte) URB output,
     * which comes before the control header.
@@ -211,11 +234,20 @@ do_gs_prog(struct brw_context *brw,
       output_size_bytes += 32;
 
    assert(output_size_bytes >= 1);
-   if (output_size_bytes > GEN7_MAX_GS_URB_ENTRY_SIZE_BYTES)
+   int max_output_size_bytes = GEN7_MAX_GS_URB_ENTRY_SIZE_BYTES;
+   if (brw->gen == 6)
+      max_output_size_bytes = GEN6_MAX_GS_URB_ENTRY_SIZE_BYTES;
+   if (output_size_bytes > max_output_size_bytes)
       return false;
 
-   /* URB entry sizes are stored as a multiple of 64 bytes. */
-   c.prog_data.base.urb_entry_size = ALIGN(output_size_bytes, 64) / 64;
+
+   /* URB entry sizes are stored as a multiple of 64 bytes in gen7+ and
+    * a multiple of 128 bytes in gen6.
+    */
+   if (brw->gen >= 7)
+      c.prog_data.base.urb_entry_size = ALIGN(output_size_bytes, 64) / 64;
+   else
+      c.prog_data.base.urb_entry_size = ALIGN(output_size_bytes, 128) / 128;
 
    c.prog_data.output_topology =
       get_hw_prim_for_gl_prim(gp->program.OutputType);
@@ -242,11 +274,12 @@ do_gs_prog(struct brw_context *brw,
                  "Try reducing the number of live vec4 values to "
                  "improve performance.\n");
 
-      c.prog_data.base.total_scratch
+      c.prog_data.base.base.total_scratch
          = brw_get_scratch_size(c.base.last_scratch*REG_SIZE);
 
       brw_get_scratch_bo(brw, &stage_state->scratch_bo,
-			 c.prog_data.base.total_scratch * brw->max_gs_threads);
+			 c.prog_data.base.base.total_scratch *
+                         brw->max_gs_threads);
    }
 
    brw_upload_cache(&brw->cache, BRW_GS_PROG,
@@ -275,6 +308,12 @@ brw_upload_gs_prog(struct brw_context *brw)
       if (brw->state.dirty.brw & BRW_NEW_VUE_MAP_VS) {
          brw->vue_map_geom_out = brw->vue_map_vs;
          brw->state.dirty.brw |= BRW_NEW_VUE_MAP_GEOM_OUT;
+      }
+
+      if (brw->gen == 6 &&
+          (brw->state.dirty.brw & BRW_NEW_TRANSFORM_FEEDBACK)) {
+         gen6_brw_upload_ff_gs_prog(brw);
+         return;
       }
 
       /* Other state atoms had better not try to access prog_data, since
@@ -326,7 +365,9 @@ brw_upload_gs_prog(struct brw_context *brw)
 const struct brw_tracked_state brw_gs_prog = {
    .dirty = {
       .mesa  = (_NEW_LIGHT | _NEW_BUFFERS | _NEW_TEXTURE),
-      .brw   = BRW_NEW_GEOMETRY_PROGRAM | BRW_NEW_VUE_MAP_VS,
+      .brw   = (BRW_NEW_GEOMETRY_PROGRAM |
+                BRW_NEW_VUE_MAP_VS |
+                BRW_NEW_TRANSFORM_FEEDBACK),
    },
    .emit = brw_upload_gs_prog
 };

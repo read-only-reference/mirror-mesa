@@ -226,6 +226,10 @@ The integer capabilities:
 * ``PIPE_CAP_CONDITIONAL_RENDER_INVERTED``: Whether the driver supports inverted
   condition for conditional rendering.
 * ``PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE``: The maximum supported vertex stride.
+* ``PIPE_CAP_SAMPLER_VIEW_TARGET``: Whether the sampler view's target can be
+  different than the underlying resource's, as permitted by
+  ARB_texture_view. For example a 2d array texture may be reinterpreted as a
+  cube (array) texture and vice-versa.
 
 
 .. _pipe_capf:
@@ -481,6 +485,8 @@ Check if a resource can actually be created (but don't actually allocate any
 memory).  This is used to implement OpenGL's proxy textures.  Typically, a
 driver will simply check if the total size of the given resource is less than
 some limit.
+
+For PIPE_TEXTURE_CUBE, the pipe_resource::array_size field should be 6.
 
 
 .. _resource_create:

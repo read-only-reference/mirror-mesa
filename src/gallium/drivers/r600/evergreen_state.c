@@ -1161,21 +1161,19 @@ static void evergreen_init_depth_surface(struct r600_context *rctx,
 {
 	struct r600_screen *rscreen = rctx->screen;
 	struct r600_texture *rtex = (struct r600_texture*)surf->base.texture;
+	unsigned level = surf->base.u.tex.level;
+	struct radeon_surface_level *levelinfo = &rtex->surface.level[level];
 	uint64_t offset;
-	unsigned level, pitch, slice, format, array_mode;
+	unsigned format, array_mode;
 	unsigned macro_aspect, tile_split, bankh, bankw, nbanks;
 
-	level = surf->base.u.tex.level;
+
 	format = r600_translate_dbformat(surf->base.format);
 	assert(format != ~0);
 
 	offset = rtex->resource.gpu_address;
 	offset += rtex->surface.level[level].offset;
-	pitch = (rtex->surface.level[level].nblk_x / 8) - 1;
-	slice = (rtex->surface.level[level].nblk_x * rtex->surface.level[level].nblk_y) / 64;
-	if (slice) {
-		slice = slice - 1;
-	}
+
 	switch (rtex->surface.level[level].mode) {
 	case RADEON_SURF_MODE_2D:
 		array_mode = V_028C70_ARRAY_2D_TILED_THIN1;
@@ -1208,11 +1206,16 @@ static void evergreen_init_depth_surface(struct r600_context *rctx,
 	if (rscreen->b.chip_class == CAYMAN && rtex->resource.b.b.nr_samples > 1) {
 		surf->db_z_info |= S_028040_NUM_SAMPLES(util_logbase2(rtex->resource.b.b.nr_samples));
 	}
+
+	assert(levelinfo->nblk_x % 8 == 0 && levelinfo->nblk_y % 8 == 0);
+
 	surf->db_depth_base = offset;
 	surf->db_depth_view = S_028008_SLICE_START(surf->base.u.tex.first_layer) |
 			      S_028008_SLICE_MAX(surf->base.u.tex.last_layer);
-	surf->db_depth_size = S_028058_PITCH_TILE_MAX(pitch);
-	surf->db_depth_slice = S_02805C_SLICE_TILE_MAX(slice);
+	surf->db_depth_size = S_028058_PITCH_TILE_MAX(levelinfo->nblk_x / 8 - 1) |
+			      S_028058_HEIGHT_TILE_MAX(levelinfo->nblk_y / 8 - 1);
+	surf->db_depth_slice = S_02805C_SLICE_TILE_MAX(levelinfo->nblk_x *
+						       levelinfo->nblk_y / 64 - 1);
 
 	switch (surf->base.format) {
 	case PIPE_FORMAT_Z24X8_UNORM:
@@ -1261,9 +1264,8 @@ static void evergreen_init_depth_surface(struct r600_context *rctx,
 		uint64_t va = rtex->htile_buffer->gpu_address;
 		surf->db_htile_data_base = va >> 8;
 		surf->db_htile_surface = S_028ABC_HTILE_WIDTH(1) |
-					S_028ABC_HTILE_HEIGHT(1) |
-					S_028ABC_FULL_CACHE(1) |
-					S_028ABC_LINEAR(1);
+					 S_028ABC_HTILE_HEIGHT(1) |
+					 S_028ABC_FULL_CACHE(1);
 		surf->db_z_info |= S_028040_TILE_SURFACE_ENABLE(1);
 		surf->db_preload_control = 0;
 	}
@@ -1750,7 +1752,10 @@ static void evergreen_emit_db_misc_state(struct r600_context *rctx, struct r600_
 	unsigned db_count_control = 0;
 	unsigned db_render_override =
 		S_02800C_FORCE_HIS_ENABLE0(V_02800C_FORCE_DISABLE) |
-		S_02800C_FORCE_HIS_ENABLE1(V_02800C_FORCE_DISABLE);
+		S_02800C_FORCE_HIS_ENABLE1(V_02800C_FORCE_DISABLE) |
+		/* There is a hang with HTILE if stencil is used and
+		 * fast stencil is enabled. */
+		S_02800C_FAST_STENCIL_DISABLE(1);
 
 	if (a->occlusion_query_enabled) {
 		db_count_control |= S_028004_PERFECT_ZPASS_COUNTS(1);
@@ -2963,8 +2968,8 @@ void evergreen_update_gs_state(struct pipe_context *ctx, struct r600_pipe_shader
 
 	if (rctx->screen->b.info.drm_minor >= 35) {
 		r600_store_context_reg(cb, R_028B90_VGT_GS_INSTANCE_CNT,
-				S_028B90_CNT(0) |
-				S_028B90_ENABLE(0));
+				S_028B90_CNT(MIN2(rshader->gs_num_invocations, 127)) |
+				S_028B90_ENABLE(rshader->gs_num_invocations > 0));
 	}
 	r600_store_context_reg_seq(cb, R_02891C_SQ_GS_VERT_ITEMSIZE, 4);
 	r600_store_value(cb, cp_shader->ring_item_size >> 2);
@@ -3360,7 +3365,7 @@ static void evergreen_dma_copy(struct pipe_context *ctx,
 	return;
 
 fallback:
-	ctx->resource_copy_region(ctx, dst, dst_level, dstx, dsty, dstz,
+	r600_resource_copy_region(ctx, dst, dst_level, dstx, dsty, dstz,
 				  src, src_level, src_box);
 }
 

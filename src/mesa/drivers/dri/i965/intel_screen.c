@@ -96,7 +96,6 @@ DRI_CONF_END
 #include "intel_batchbuffer.h"
 #include "intel_buffers.h"
 #include "intel_bufmgr.h"
-#include "intel_chipset.h"
 #include "intel_fbo.h"
 #include "intel_mipmap_tree.h"
 #include "intel_screen.h"
@@ -217,11 +216,17 @@ static struct intel_image_format intel_image_formats[] = {
    { __DRI_IMAGE_FOURCC_ARGB8888, __DRI_IMAGE_COMPONENTS_RGBA, 1,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_ARGB8888, 4 } } },
 
+   { __DRI_IMAGE_FOURCC_ABGR8888, __DRI_IMAGE_COMPONENTS_RGBA, 1,
+     { { 0, 0, 0, __DRI_IMAGE_FORMAT_ABGR8888, 4 } } },
+
    { __DRI_IMAGE_FOURCC_SARGB8888, __DRI_IMAGE_COMPONENTS_RGBA, 1,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_SARGB8, 4 } } },
 
    { __DRI_IMAGE_FOURCC_XRGB8888, __DRI_IMAGE_COMPONENTS_RGB, 1,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_XRGB8888, 4 }, } },
+
+   { __DRI_IMAGE_FOURCC_XBGR8888, __DRI_IMAGE_COMPONENTS_RGB, 1,
+     { { 0, 0, 0, __DRI_IMAGE_FORMAT_XBGR8888, 4 }, } },
 
    { __DRI_IMAGE_FOURCC_RGB565, __DRI_IMAGE_COMPONENTS_RGB, 1,
      { { 0, 0, 0, __DRI_IMAGE_FORMAT_RGB565, 2 } } },
@@ -1263,13 +1268,8 @@ set_max_gl_versions(struct intel_screen *screen)
    switch (screen->devinfo->gen) {
    case 8:
    case 7:
-      psp->max_gl_core_version = 33;
-      psp->max_gl_compat_version = 30;
-      psp->max_gl_es1_version = 11;
-      psp->max_gl_es2_version = 30;
-      break;
    case 6:
-      psp->max_gl_core_version = 31;
+      psp->max_gl_core_version = 33;
       psp->max_gl_compat_version = 30;
       psp->max_gl_es1_version = 11;
       psp->max_gl_es2_version = 30;

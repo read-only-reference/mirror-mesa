@@ -429,7 +429,8 @@ static void r600_clear(struct pipe_context *ctx, unsigned buffers,
 		 */
 		/* Only use htile for first level */
 		if (rtex->htile_buffer && !level &&
-		    util_max_layer(&rtex->resource.b.b, level) == 0) {
+                   fb->zsbuf->u.tex.first_layer == 0 &&
+                   fb->zsbuf->u.tex.last_layer == util_max_layer(&rtex->resource.b.b, level)) {
 			if (rtex->depth_clear_value != depth) {
 				rtex->depth_clear_value = depth;
 				rctx->db_state.atom.dirty = true;
@@ -440,7 +441,8 @@ static void r600_clear(struct pipe_context *ctx, unsigned buffers,
 	}
 
 	r600_blitter_begin(ctx, R600_CLEAR);
-	util_blitter_clear(rctx->blitter, fb->width, fb->height, 1,
+	util_blitter_clear(rctx->blitter, fb->width, fb->height,
+			   util_framebuffer_get_num_layers(fb),
 			   buffers, color, depth, stencil);
 	r600_blitter_end(ctx);
 
@@ -563,13 +565,13 @@ static void r600_clear_buffer(struct pipe_context *ctx, struct pipe_resource *ds
 	}
 }
 
-static void r600_resource_copy_region(struct pipe_context *ctx,
-				      struct pipe_resource *dst,
-				      unsigned dst_level,
-				      unsigned dstx, unsigned dsty, unsigned dstz,
-				      struct pipe_resource *src,
-				      unsigned src_level,
-				      const struct pipe_box *src_box)
+void r600_resource_copy_region(struct pipe_context *ctx,
+			       struct pipe_resource *dst,
+			       unsigned dst_level,
+			       unsigned dstx, unsigned dsty, unsigned dstz,
+			       struct pipe_resource *src,
+			       unsigned src_level,
+			       const struct pipe_box *src_box)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct pipe_surface *dst_view, dst_templ;
@@ -812,6 +814,10 @@ static void r600_blit(struct pipe_context *ctx,
 					 info->src.box.z + info->src.box.depth - 1)) {
 		return; /* error */
 	}
+
+	if (rctx->screen->b.debug_flags & DBG_FORCE_DMA &&
+	    util_try_blit_via_copy_region(ctx, info))
+		return;
 
 	r600_blitter_begin(ctx, R600_BLIT |
 			   (info->render_condition_enable ? 0 : R600_DISABLE_RENDER_COND));

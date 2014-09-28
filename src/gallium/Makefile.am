@@ -68,11 +68,11 @@ SUBDIRS += winsys/radeon/drm
 endif
 
 ## swrast/softpipe
-if NEED_GALLIUM_SOFTPIPE_DRIVER
+if HAVE_GALLIUM_SOFTPIPE
 SUBDIRS += drivers/softpipe
 
 ## swrast/llvmpipe
-if NEED_GALLIUM_LLVMPIPE_DRIVER
+if HAVE_GALLIUM_LLVMPIPE
 SUBDIRS += drivers/llvmpipe
 endif
 endif
@@ -105,9 +105,7 @@ if HAVE_EGL_PLATFORM_WAYLAND
 SUBDIRS += winsys/sw/wayland
 endif
 
-if NEED_WINSYS_WRAPPER
 SUBDIRS += winsys/sw/wrapper
-endif
 
 ##
 ## Don't forget to bundle the remaining (non autotools) winsys'
@@ -123,7 +121,7 @@ EXTRA_DIST = \
 ## Gallium state trackers and their users (targets)
 ##
 
-if NEED_GALLIUM_LOADER
+if HAVE_LOADER_GALLIUM
 SUBDIRS += targets/pipe-loader
 endif
 
@@ -177,7 +175,11 @@ endif
 ##
 
 EXTRA_DIST += \
-	state_trackers/hgl targets/haiku-softpipe
+	state_trackers/README \
+	state_trackers/wgl targets/libgl-gdi \
+	targets/graw-gdi targets/graw-null  targets/graw-xlib \
+	state_trackers/hgl targets/haiku-softpipe \
+	tools
 
 
 ##
@@ -189,3 +191,7 @@ SUBDIRS += \
 	tests/trivial \
 	tests/unit
 endif
+
+EXTRA_DIST += \
+	tests/graw \
+	tests/python

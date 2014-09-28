@@ -34,6 +34,7 @@
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
 #include "pipe/p_screen.h"
+#include "util/u_math.h"
 
 #include "st_context.h"
 #include "st_extensions.h"
@@ -274,8 +275,6 @@ void st_init_limits(struct pipe_screen *screen,
    c->MinProgramTextureGatherOffset = screen->get_param(screen, PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET);
    c->MaxProgramTextureGatherOffset = screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_GATHER_OFFSET);
 
-   c->UniformBooleanTrue = ~0;
-
    c->MaxTransformFeedbackBuffers =
       screen->get_param(screen, PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS);
    c->MaxTransformFeedbackBuffers = MIN2(c->MaxTransformFeedbackBuffers, MAX_FEEDBACK_BUFFERS);
@@ -408,7 +407,6 @@ get_max_samples_for_formats(struct pipe_screen *screen,
  * Some fine tuning may still be needed.
  */
 void st_init_extensions(struct pipe_screen *screen,
-                        gl_api api,
                         struct gl_constants *consts,
                         struct gl_extensions *extensions,
                         struct st_config_options *options,
@@ -464,6 +462,7 @@ void st_init_extensions(struct pipe_screen *screen,
       { o(ARB_draw_indirect),                PIPE_CAP_DRAW_INDIRECT                    },
       { o(ARB_derivative_control),           PIPE_CAP_TGSI_FS_FINE_DERIVATIVE          },
       { o(ARB_conditional_render_inverted),  PIPE_CAP_CONDITIONAL_RENDER_INVERTED      },
+      { o(ARB_texture_view),                 PIPE_CAP_SAMPLER_VIEW_TARGET              },
    };
 
    /* Required: render target and sampler support */
@@ -621,7 +620,6 @@ void st_init_extensions(struct pipe_screen *screen,
    extensions->NV_fog_distance = GL_TRUE;
    extensions->NV_texture_env_combine4 = GL_TRUE;
    extensions->NV_texture_rectangle = GL_TRUE;
-   extensions->NV_vdpau_interop = GL_TRUE;
 
    extensions->OES_EGL_image = GL_TRUE;
    extensions->OES_EGL_image_external = GL_TRUE;
@@ -700,6 +698,8 @@ void st_init_extensions(struct pipe_screen *screen,
       }
    }
 
+   consts->UniformBooleanTrue = consts->NativeIntegers ? ~0 : fui(1.0f);
+
    /* Below are the cases which cannot be moved into tables easily. */
 
    if (!has_lib_dxtc && !options->force_s3tc_enable) {
@@ -714,9 +714,8 @@ void st_init_extensions(struct pipe_screen *screen,
 #endif
    }
 
-   extensions->NV_primitive_restart = GL_TRUE;
-   if (!screen->get_param(screen, PIPE_CAP_PRIMITIVE_RESTART)) {
-      consts->PrimitiveRestartInSoftware = GL_TRUE;
+   if (screen->get_param(screen, PIPE_CAP_PRIMITIVE_RESTART)) {
+      extensions->NV_primitive_restart = GL_TRUE;
    }
 
    /* ARB_color_buffer_float. */
@@ -843,17 +842,16 @@ void st_init_extensions(struct pipe_screen *screen,
          consts->DisableVaryingPacking = GL_TRUE;
    }
 
-   if (api == API_OPENGL_CORE) {
-      consts->MaxViewports = screen->get_param(screen, PIPE_CAP_MAX_VIEWPORTS);
-      if (consts->MaxViewports >= 16) {
-         consts->ViewportBounds.Min = -16384.0;
-         consts->ViewportBounds.Max = 16384.0;
-         extensions->ARB_viewport_array = GL_TRUE;
-         extensions->ARB_fragment_layer_viewport = GL_TRUE;
-         if (extensions->AMD_vertex_shader_layer)
-            extensions->AMD_vertex_shader_viewport_index = GL_TRUE;
-      }
+   consts->MaxViewports = screen->get_param(screen, PIPE_CAP_MAX_VIEWPORTS);
+   if (consts->MaxViewports >= 16) {
+      consts->ViewportBounds.Min = -16384.0;
+      consts->ViewportBounds.Max = 16384.0;
+      extensions->ARB_viewport_array = GL_TRUE;
+      extensions->ARB_fragment_layer_viewport = GL_TRUE;
+      if (extensions->AMD_vertex_shader_layer)
+         extensions->AMD_vertex_shader_viewport_index = GL_TRUE;
    }
+
    if (consts->MaxProgramTextureGatherComponents > 0)
       extensions->ARB_texture_gather = GL_TRUE;
 
@@ -883,5 +881,12 @@ void st_init_extensions(struct pipe_screen *screen,
                                    PIPE_TEXTURE_2D, 0,
                                    PIPE_BIND_SAMPLER_VIEW)) {
       extensions->ARB_ES3_compatibility = GL_TRUE;
+   }
+
+   if (screen->get_video_param &&
+       screen->get_video_param(screen, PIPE_VIDEO_PROFILE_UNKNOWN,
+                               PIPE_VIDEO_ENTRYPOINT_BITSTREAM,
+                               PIPE_VIDEO_CAP_SUPPORTS_INTERLACED)) {
+      extensions->NV_vdpau_interop = GL_TRUE;
    }
 }

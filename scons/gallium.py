@@ -529,6 +529,10 @@ def generate(env):
         else:
             env['_LIBFLAGS'] = '-Wl,--start-group ' + env['_LIBFLAGS'] + ' -Wl,--end-group'
         if env['platform'] == 'windows':
+            linkflags += [
+                '-Wl,--nxcompat', # DEP
+                '-Wl,--dynamicbase', # ASLR
+            ]
             # Avoid depending on gcc runtime DLLs
             linkflags += ['-static-libgcc']
             if 'w64' in env['CC'].split('-'):
@@ -547,6 +551,8 @@ def generate(env):
         linkflags += [
             '/fixed:no',
             '/incremental:no',
+            '/dynamicbase', # ASLR
+            '/nxcompat', # DEP
         ]
     env.Append(LINKFLAGS = linkflags)
     env.Append(SHLINKFLAGS = shlinkflags)
@@ -576,6 +582,30 @@ def generate(env):
         if env['gcc']:
             env.Append(CCFLAGS = ['-fopenmp'])
             env.Append(LIBS = ['gomp'])
+
+    if gcc_compat:
+        ccversion = env['CCVERSION']
+        cppdefines += [
+            'HAVE___BUILTIN_EXPECT',
+            'HAVE___BUILTIN_FFS',
+            'HAVE___BUILTIN_FFSLL',
+            'HAVE_FUNC_ATTRIBUTE_FLATTEN',
+        ]
+        if distutils.version.LooseVersion(ccversion) >= distutils.version.LooseVersion('3'):
+            cppdefines += [
+                'HAVE_FUNC_ATTRIBUTE_FORMAT',
+                'HAVE_FUNC_ATTRIBUTE_PACKED',
+            ]
+        if distutils.version.LooseVersion(ccversion) >= distutils.version.LooseVersion('3.4'):
+            cppdefines += [
+                'HAVE___BUILTIN_CTZ',
+                'HAVE___BUILTIN_POPCOUNT',
+                'HAVE___BUILTIN_POPCOUNTLL',
+                'HAVE___BUILTIN_CLZ',
+                'HAVE___BUILTIN_CLZLL',
+            ]
+        if distutils.version.LooseVersion(ccversion) >= distutils.version.LooseVersion('4.5'):
+            cppdefines += ['HAVE___BUILTIN_UNREACHABLE']
 
     # Load tools
     env.Tool('lex')

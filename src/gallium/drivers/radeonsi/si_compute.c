@@ -38,14 +38,14 @@
 #define NUM_USER_SGPRS 4
 #endif
 
-struct si_pipe_compute {
+struct si_compute {
 	struct si_context *ctx;
 
 	unsigned local_size;
 	unsigned private_size;
 	unsigned input_size;
 	unsigned num_kernels;
-	struct si_pipe_shader *kernels;
+	struct si_shader *kernels;
 	unsigned num_user_sgprs;
 
 	struct r600_resource *input_buffer;
@@ -59,8 +59,7 @@ static void *si_create_compute_state(
 	const struct pipe_compute_state *cso)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_pipe_compute *program =
-					CALLOC_STRUCT(si_pipe_compute);
+	struct si_compute *program = CALLOC_STRUCT(si_compute);
 	const struct pipe_llvm_program_header *header;
 	const unsigned char *code;
 	unsigned i;
@@ -77,12 +76,12 @@ static void *si_create_compute_state(
 
 	program->num_kernels = radeon_llvm_get_num_kernels(program->llvm_ctx, code,
 							header->num_bytes);
-	program->kernels = CALLOC(sizeof(struct si_pipe_shader),
+	program->kernels = CALLOC(sizeof(struct si_shader),
 							program->num_kernels);
 	for (i = 0; i < program->num_kernels; i++) {
 		LLVMModuleRef mod = radeon_llvm_get_kernel_module(program->llvm_ctx, i,
 							code, header->num_bytes);
-		si_compile_llvm(sctx, &program->kernels[i], mod);
+		si_compile_llvm(sctx->screen, &program->kernels[i], mod);
 		LLVMDisposeModule(mod);
 	}
 
@@ -95,7 +94,7 @@ static void *si_create_compute_state(
 static void si_bind_compute_state(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context*)ctx;
-	sctx->cs_shader_state.program = (struct si_pipe_compute*)state;
+	sctx->cs_shader_state.program = (struct si_compute*)state;
 }
 
 static void si_set_global_binding(
@@ -105,7 +104,7 @@ static void si_set_global_binding(
 {
 	unsigned i;
 	struct si_context *sctx = (struct si_context*)ctx;
-	struct si_pipe_compute *program = sctx->cs_shader_state.program;
+	struct si_compute *program = sctx->cs_shader_state.program;
 
 	if (!resources) {
 		for (i = first; i < first + n; i++) {
@@ -169,7 +168,8 @@ static void si_launch_grid(
 		uint32_t pc, const void *input)
 {
 	struct si_context *sctx = (struct si_context*)ctx;
-	struct si_pipe_compute *program = sctx->cs_shader_state.program;
+	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct si_compute *program = sctx->cs_shader_state.program;
 	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
 	struct r600_resource *input_buffer = program->input_buffer;
 	unsigned kernel_args_size;
@@ -181,22 +181,22 @@ static void si_launch_grid(
 	uint64_t shader_va;
 	unsigned arg_user_sgpr_count = NUM_USER_SGPRS;
 	unsigned i;
-	struct si_pipe_shader *shader = &program->kernels[pc];
+	struct si_shader *shader = &program->kernels[pc];
 	unsigned lds_blocks;
 	unsigned num_waves_for_scratch;
 
+	radeon_emit(cs, PKT3(PKT3_CONTEXT_CONTROL, 1, 0) | PKT3_SHADER_TYPE_S(1));
+	radeon_emit(cs, 0x80000000);
+	radeon_emit(cs, 0x80000000);
+
+	sctx->b.flags |= R600_CONTEXT_INV_TEX_CACHE |
+			 R600_CONTEXT_INV_SHADER_CACHE |
+			 R600_CONTEXT_INV_CONST_CACHE |
+			 R600_CONTEXT_FLUSH_WITH_INV_L2 |
+			 R600_CONTEXT_FLAG_COMPUTE;
+	si_emit_cache_flush(&sctx->b, NULL);
+
 	pm4->compute_pkt = true;
-	si_cmd_context_control(pm4);
-
-	si_pm4_cmd_begin(pm4, PKT3_EVENT_WRITE);
-	si_pm4_cmd_add(pm4, EVENT_TYPE(EVENT_TYPE_CACHE_FLUSH) |
-	                    EVENT_INDEX(0x7) |
-			    EVENT_WRITE_INV_L2);
-	si_pm4_cmd_end(pm4, false);
-
-	si_pm4_inval_texture_cache(pm4);
-	si_pm4_inval_shader_cache(pm4);
-	si_cmd_surface_sync(pm4, pm4->cp_coher_cntl);
 
 	/* Upload the kernel arguments */
 
@@ -361,14 +361,6 @@ static void si_launch_grid(
 	si_pm4_cmd_add(pm4, 1); /* DISPATCH_INITIATOR */
         si_pm4_cmd_end(pm4, false);
 
-	si_pm4_cmd_begin(pm4, PKT3_EVENT_WRITE);
-	si_pm4_cmd_add(pm4, EVENT_TYPE(V_028A90_CS_PARTIAL_FLUSH | EVENT_INDEX(0x4)));
-	si_pm4_cmd_end(pm4, false);
-
-	si_pm4_inval_texture_cache(pm4);
-	si_pm4_inval_shader_cache(pm4);
-	si_cmd_surface_sync(pm4, pm4->cp_coher_cntl);
-
 	si_pm4_emit(sctx, pm4);
 
 #if 0
@@ -379,11 +371,18 @@ static void si_launch_grid(
 #endif
 
 	si_pm4_free_state(sctx, pm4, ~0);
+
+	sctx->b.flags |= R600_CONTEXT_CS_PARTIAL_FLUSH |
+			 R600_CONTEXT_INV_TEX_CACHE |
+			 R600_CONTEXT_INV_SHADER_CACHE |
+			 R600_CONTEXT_INV_CONST_CACHE |
+			 R600_CONTEXT_FLAG_COMPUTE;
+	si_emit_cache_flush(&sctx->b, NULL);
 }
 
 
 static void si_delete_compute_state(struct pipe_context *ctx, void* state){
-	struct si_pipe_compute *program = (struct si_pipe_compute *)state;
+	struct si_compute *program = (struct si_compute *)state;
 
 	if (!state) {
 		return;
@@ -392,7 +391,7 @@ static void si_delete_compute_state(struct pipe_context *ctx, void* state){
 	if (program->kernels) {
 		for (int i = 0; i < program->num_kernels; i++){
 			if (program->kernels[i].bo){
-				si_pipe_shader_destroy(ctx, &program->kernels[i]);
+				si_shader_destroy(ctx, &program->kernels[i]);
 			}
 		}
 		FREE(program->kernels);

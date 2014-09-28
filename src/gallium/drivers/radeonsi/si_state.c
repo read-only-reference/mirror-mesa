@@ -36,6 +36,7 @@
 #include "util/u_framebuffer.h"
 #include "util/u_helpers.h"
 #include "util/u_memory.h"
+#include "util/u_simple_shaders.h"
 
 static void si_init_atom(struct r600_atom *atom, struct r600_atom **list_elem,
 			 void (*emit)(struct si_context *ctx, struct r600_atom *state),
@@ -665,6 +666,8 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
+	struct si_state_rasterizer *old_rs =
+		(struct si_state_rasterizer*)sctx->queued.named.rasterizer;
 	struct si_state_rasterizer *rs = (struct si_state_rasterizer *)state;
 
 	if (state == NULL)
@@ -674,6 +677,10 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 	sctx->sprite_coord_enable = rs->sprite_coord_enable;
 	sctx->pa_sc_line_stipple = rs->pa_sc_line_stipple;
 	sctx->pa_su_sc_mode_cntl = rs->pa_su_sc_mode_cntl;
+
+	if (sctx->framebuffer.nr_samples > 1 &&
+	    (!old_rs || old_rs->multisample_enable != rs->multisample_enable))
+		sctx->db_render_state.dirty = true;
 
 	si_pm4_bind_state(sctx, rasterizer, rs);
 	si_update_fb_rs_state(sctx);
@@ -757,7 +764,6 @@ static void *si_create_dsa_state(struct pipe_context *ctx,
 	struct si_state_dsa *dsa = CALLOC_STRUCT(si_state_dsa);
 	struct si_pm4_state *pm4 = &dsa->pm4;
 	unsigned db_depth_control;
-	unsigned db_render_control;
 	uint32_t db_stencil_control = 0;
 
 	if (dsa == NULL) {
@@ -802,9 +808,7 @@ static void *si_create_dsa_state(struct pipe_context *ctx,
 	}
 
 	/* misc */
-	db_render_control = 0;
 	si_pm4_set_reg(pm4, R_028800_DB_DEPTH_CONTROL, db_depth_control);
-	si_pm4_set_reg(pm4, R_028000_DB_RENDER_CONTROL, db_render_control);
 	si_pm4_set_reg(pm4, R_02842C_DB_STENCIL_CONTROL, db_stencil_control);
 
 	return dsa;
@@ -828,28 +832,89 @@ static void si_delete_dsa_state(struct pipe_context *ctx, void *state)
 	si_pm4_delete_state(sctx, dsa, (struct si_state_dsa *)state);
 }
 
-static void *si_create_db_flush_dsa(struct si_context *sctx, bool copy_depth,
-				    bool copy_stencil, int sample)
+static void *si_create_db_flush_dsa(struct si_context *sctx)
 {
-	struct pipe_depth_stencil_alpha_state dsa;
-        struct si_state_dsa *state;
+	struct pipe_depth_stencil_alpha_state dsa = {};
 
-	memset(&dsa, 0, sizeof(dsa));
+	return sctx->b.b.create_depth_stencil_alpha_state(&sctx->b.b, &dsa);
+}
 
-	state = sctx->b.b.create_depth_stencil_alpha_state(&sctx->b.b, &dsa);
-	if (copy_depth || copy_stencil) {
-		si_pm4_set_reg(&state->pm4, R_028000_DB_RENDER_CONTROL,
-			       S_028000_DEPTH_COPY(copy_depth) |
-			       S_028000_STENCIL_COPY(copy_stencil) |
-			       S_028000_COPY_CENTROID(1) |
-			       S_028000_COPY_SAMPLE(sample));
+/* DB RENDER STATE */
+
+static void si_set_occlusion_query_state(struct pipe_context *ctx, bool enable)
+{
+	struct si_context *sctx = (struct si_context*)ctx;
+
+	sctx->db_render_state.dirty = true;
+}
+
+static void si_emit_db_render_state(struct si_context *sctx, struct r600_atom *state)
+{
+	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
+	unsigned db_shader_control;
+
+	r600_write_context_reg_seq(cs, R_028000_DB_RENDER_CONTROL, 2);
+
+	/* DB_RENDER_CONTROL */
+	if (sctx->dbcb_depth_copy_enabled ||
+	    sctx->dbcb_stencil_copy_enabled) {
+		radeon_emit(cs,
+			    S_028000_DEPTH_COPY(sctx->dbcb_depth_copy_enabled) |
+			    S_028000_STENCIL_COPY(sctx->dbcb_stencil_copy_enabled) |
+			    S_028000_COPY_CENTROID(1) |
+			    S_028000_COPY_SAMPLE(sctx->dbcb_copy_sample));
+	} else if (sctx->db_inplace_flush_enabled) {
+		radeon_emit(cs,
+			    S_028000_DEPTH_COMPRESS_DISABLE(1) |
+			    S_028000_STENCIL_COMPRESS_DISABLE(1));
+	} else if (sctx->db_depth_clear) {
+		radeon_emit(cs, S_028000_DEPTH_CLEAR_ENABLE(1));
 	} else {
-		si_pm4_set_reg(&state->pm4, R_028000_DB_RENDER_CONTROL,
-			       S_028000_DEPTH_COMPRESS_DISABLE(1) |
-			       S_028000_STENCIL_COMPRESS_DISABLE(1));
+		radeon_emit(cs, 0);
 	}
 
-        return state;
+	/* DB_COUNT_CONTROL (occlusion queries) */
+	if (sctx->b.num_occlusion_queries > 0) {
+		if (sctx->b.chip_class >= CIK) {
+			radeon_emit(cs,
+				    S_028004_PERFECT_ZPASS_COUNTS(1) |
+				    S_028004_SAMPLE_RATE(sctx->framebuffer.log_samples) |
+				    S_028004_ZPASS_ENABLE(1) |
+				    S_028004_SLICE_EVEN_ENABLE(1) |
+				    S_028004_SLICE_ODD_ENABLE(1));
+		} else {
+			radeon_emit(cs,
+				    S_028004_PERFECT_ZPASS_COUNTS(1) |
+				    S_028004_SAMPLE_RATE(sctx->framebuffer.log_samples));
+		}
+	} else {
+		/* Disable occlusion queries. */
+		if (sctx->b.chip_class >= CIK) {
+			radeon_emit(cs, 0);
+		} else {
+			radeon_emit(cs, S_028004_ZPASS_INCREMENT_DISABLE(1));
+		}
+	}
+
+	/* DB_RENDER_OVERRIDE2 */
+	if (sctx->db_depth_disable_expclear) {
+		r600_write_context_reg(cs, R_028010_DB_RENDER_OVERRIDE2,
+			S_028010_DISABLE_ZMASK_EXPCLEAR_OPTIMIZATION(1));
+	} else {
+		r600_write_context_reg(cs, R_028010_DB_RENDER_OVERRIDE2, 0);
+	}
+
+	db_shader_control = S_02880C_Z_ORDER(V_02880C_EARLY_Z_THEN_LATE_Z) |
+			    S_02880C_ALPHA_TO_MASK_DISABLE(sctx->framebuffer.cb0_is_integer) |
+		            sctx->ps_db_shader_control;
+
+	/* Disable the gl_SampleMask fragment shader output if MSAA is disabled. */
+	if (sctx->framebuffer.nr_samples <= 1 || (rs && !rs->multisample_enable))
+		db_shader_control &= C_02880C_MASK_EXPORT_ENABLE;
+
+	r600_write_context_reg(cs, R_02880C_DB_SHADER_CONTROL,
+			       db_shader_control);
 }
 
 /*
@@ -1750,7 +1815,8 @@ static void si_init_depth_surface(struct si_context *sctx,
 	struct si_screen *sscreen = sctx->screen;
 	struct r600_texture *rtex = (struct r600_texture*)surf->base.texture;
 	unsigned level = surf->base.u.tex.level;
-	unsigned pitch, slice, format, tile_mode_index, array_mode;
+	struct radeon_surface_level *levelinfo = &rtex->surface.level[level];
+	unsigned format, tile_mode_index, array_mode;
 	unsigned macro_aspect, tile_split, stile_split, bankh, bankw, nbanks, pipe_config;
 	uint32_t z_info, s_info, db_depth_info;
 	uint64_t z_offs, s_offs;
@@ -1785,12 +1851,6 @@ static void si_init_depth_surface(struct si_context *sctx,
 	s_offs = z_offs = rtex->resource.gpu_address;
 	z_offs += rtex->surface.level[level].offset;
 	s_offs += rtex->surface.stencil_level[level].offset;
-
-	pitch = (rtex->surface.level[level].nblk_x / 8) - 1;
-	slice = (rtex->surface.level[level].nblk_x * rtex->surface.level[level].nblk_y) / 64;
-	if (slice) {
-		slice = slice - 1;
-	}
 
 	db_depth_info = S_02803C_ADDR5_SWIZZLE_MASK(1);
 
@@ -1848,9 +1908,8 @@ static void si_init_depth_surface(struct si_context *sctx,
 	/* HiZ aka depth buffer htile */
 	/* use htile only for first level */
 	if (rtex->htile_buffer && !level) {
-		const struct util_format_description *fmt_desc;
-
-		z_info |= S_028040_TILE_SURFACE_ENABLE(1);
+		z_info |= S_028040_TILE_SURFACE_ENABLE(1) |
+			  S_028040_ALLOW_EXPCLEAR(1);
 
 		/* This is optimal for the clear value of 1.0 and using
 		 * the LESS and LEQUAL test functions. Set this to 0
@@ -1858,11 +1917,9 @@ static void si_init_depth_surface(struct si_context *sctx,
 		 * clearing. */
 		z_info |= S_028040_ZRANGE_PRECISION(1);
 
-		fmt_desc = util_format_description(rtex->resource.b.b.format);
-		if (!util_format_has_stencil(fmt_desc)) {
-			/* Use all of the htile_buffer for depth */
-			s_info |= S_028044_TILE_STENCIL_DISABLE(1);
-		}
+		/* Use all of the htile_buffer for depth, because we don't
+		 * use HTILE for stencil because of FAST_STENCIL_DISABLE. */
+		s_info |= S_028044_TILE_STENCIL_DISABLE(1);
 
 		uint64_t va = rtex->htile_buffer->gpu_address;
 		db_htile_data_base = va >> 8;
@@ -1872,6 +1929,8 @@ static void si_init_depth_surface(struct si_context *sctx,
 		db_htile_surface = 0;
 	}
 
+	assert(levelinfo->nblk_x % 8 == 0 && levelinfo->nblk_y % 8 == 0);
+
 	surf->db_depth_view = S_028008_SLICE_START(surf->base.u.tex.first_layer) |
 			      S_028008_SLICE_MAX(surf->base.u.tex.last_layer);
 	surf->db_htile_data_base = db_htile_data_base;
@@ -1880,8 +1939,10 @@ static void si_init_depth_surface(struct si_context *sctx,
 	surf->db_stencil_info = s_info;
 	surf->db_depth_base = z_offs >> 8;
 	surf->db_stencil_base = s_offs >> 8;
-	surf->db_depth_size = S_028058_PITCH_TILE_MAX(pitch);
-	surf->db_depth_slice = S_02805C_SLICE_TILE_MAX(slice);
+	surf->db_depth_size = S_028058_PITCH_TILE_MAX((levelinfo->nblk_x / 8) - 1) |
+			      S_028058_HEIGHT_TILE_MAX((levelinfo->nblk_y / 8) - 1);
+	surf->db_depth_slice = S_02805C_SLICE_TILE_MAX((levelinfo->nblk_x *
+							levelinfo->nblk_y) / 64 - 1);
 	surf->db_htile_surface = db_htile_surface;
 	surf->pa_su_poly_offset_db_fmt_cntl = pa_su_poly_offset_db_fmt_cntl;
 
@@ -1895,6 +1956,8 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	struct pipe_constant_buffer constbuf = {0};
 	struct r600_surface *surf = NULL;
 	struct r600_texture *rtex;
+	bool old_cb0_is_integer = sctx->framebuffer.cb0_is_integer;
+	unsigned old_nr_samples = sctx->framebuffer.nr_samples;
 	int i;
 
 	if (sctx->framebuffer.state.nr_cbufs) {
@@ -1914,6 +1977,9 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	sctx->framebuffer.log_samples = util_logbase2(sctx->framebuffer.nr_samples);
 	sctx->framebuffer.cb0_is_integer = state->nr_cbufs && state->cbufs[0] &&
 				  util_format_is_pure_integer(state->cbufs[0]->format);
+
+	if (sctx->framebuffer.cb0_is_integer != old_cb0_is_integer)
+		sctx->db_render_state.dirty = true;
 
 	for (i = 0; i < state->nr_cbufs; i++) {
 		if (!state->cbufs[i])
@@ -1953,35 +2019,39 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	si_update_fb_blend_state(sctx);
 
 	sctx->framebuffer.atom.num_dw = state->nr_cbufs*15 + (8 - state->nr_cbufs)*3;
-	sctx->framebuffer.atom.num_dw += state->zsbuf ? 23 : 4;
+	sctx->framebuffer.atom.num_dw += state->zsbuf ? 26 : 4;
 	sctx->framebuffer.atom.num_dw += 3; /* WINDOW_SCISSOR_BR */
 	sctx->framebuffer.atom.num_dw += 18; /* MSAA sample locations */
 	sctx->framebuffer.atom.dirty = true;
-	sctx->msaa_config.dirty = true;
 
-	/* Set sample locations as fragment shader constants. */
-	switch (sctx->framebuffer.nr_samples) {
-	case 1:
-		constbuf.user_buffer = sctx->b.sample_locations_1x;
-		break;
-	case 2:
-		constbuf.user_buffer = sctx->b.sample_locations_2x;
-		break;
-	case 4:
-		constbuf.user_buffer = sctx->b.sample_locations_4x;
-		break;
-	case 8:
-		constbuf.user_buffer = sctx->b.sample_locations_8x;
-		break;
-	case 16:
-		constbuf.user_buffer = sctx->b.sample_locations_16x;
-		break;
-	default:
-		assert(0);
+	if (sctx->framebuffer.nr_samples != old_nr_samples) {
+		sctx->msaa_config.dirty = true;
+		sctx->db_render_state.dirty = true;
+
+		/* Set sample locations as fragment shader constants. */
+		switch (sctx->framebuffer.nr_samples) {
+		case 1:
+			constbuf.user_buffer = sctx->b.sample_locations_1x;
+			break;
+		case 2:
+			constbuf.user_buffer = sctx->b.sample_locations_2x;
+			break;
+		case 4:
+			constbuf.user_buffer = sctx->b.sample_locations_4x;
+			break;
+		case 8:
+			constbuf.user_buffer = sctx->b.sample_locations_8x;
+			break;
+		case 16:
+			constbuf.user_buffer = sctx->b.sample_locations_16x;
+			break;
+		default:
+			assert(0);
+		}
+		constbuf.buffer_size = sctx->framebuffer.nr_samples * 2 * 4;
+		ctx->set_constant_buffer(ctx, PIPE_SHADER_FRAGMENT,
+					 SI_DRIVER_STATE_CONST_BUF, &constbuf);
 	}
-	constbuf.buffer_size = sctx->framebuffer.nr_samples * 2 * 4;
-	ctx->set_constant_buffer(ctx, PIPE_SHADER_FRAGMENT,
-				 SI_DRIVER_STATE_CONST_BUF, &constbuf);
 }
 
 static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom *atom)
@@ -2071,6 +2141,7 @@ static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom 
 		radeon_emit(cs, zb->db_depth_slice);	/* R_02805C_DB_DEPTH_SLICE */
 
 		r600_write_context_reg(cs, R_028ABC_DB_HTILE_SURFACE, zb->db_htile_surface);
+		r600_write_context_reg(cs, R_02802C_DB_DEPTH_CLEAR, fui(rtex->depth_clear_value));
 		r600_write_context_reg(cs, R_028B78_PA_SU_POLY_OFFSET_DB_FMT_CNTL,
 				       zb->pa_su_poly_offset_db_fmt_cntl);
 	} else {
@@ -2117,7 +2188,7 @@ static void si_set_min_samples(struct pipe_context *ctx, unsigned min_samples)
 
 /* Compute the key for the hw shader variant */
 static INLINE void si_shader_selector_key(struct pipe_context *ctx,
-					  struct si_pipe_shader_selector *sel,
+					  struct si_shader_selector *sel,
 					  union si_shader_key *key)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
@@ -2139,7 +2210,11 @@ static INLINE void si_shader_selector_key(struct pipe_context *ctx,
 		for (i = 0; i < sctx->vertex_elements->count; ++i)
 			key->vs.instance_divisors[i] = sctx->vertex_elements->elements[i].instance_divisor;
 
-		key->vs.as_es = sctx->gs_shader != NULL;
+		if (sctx->gs_shader) {
+			/* At this point, the GS should be selected and compiled. */
+			key->vs.as_es = 1;
+			key->vs.gs_used_inputs = sctx->gs_shader->current->gs_used_inputs;
+		}
 	} else if (sel->type == PIPE_SHADER_FRAGMENT) {
 		if (sel->fs_write_all)
 			key->ps.nr_cbufs = sctx->framebuffer.state.nr_cbufs;
@@ -2171,10 +2246,10 @@ static INLINE void si_shader_selector_key(struct pipe_context *ctx,
 
 /* Select the hw shader variant depending on the current state. */
 int si_shader_select(struct pipe_context *ctx,
-		     struct si_pipe_shader_selector *sel)
+		     struct si_shader_selector *sel)
 {
 	union si_shader_key key;
-	struct si_pipe_shader * shader = NULL;
+	struct si_shader * shader = NULL;
 	int r;
 
 	si_shader_selector_key(ctx, sel, &key);
@@ -2189,7 +2264,7 @@ int si_shader_select(struct pipe_context *ctx,
 
 	/* lookup if we have other variants in the list */
 	if (sel->num_shaders > 1) {
-		struct si_pipe_shader *p = sel->current, *c = p->next_variant;
+		struct si_shader *p = sel->current, *c = p->next_variant;
 
 		while (c && memcmp(&c->key, &key, sizeof(key)) != 0) {
 			p = c;
@@ -2206,13 +2281,13 @@ int si_shader_select(struct pipe_context *ctx,
 		shader->next_variant = sel->current;
 		sel->current = shader;
 	} else {
-		shader = CALLOC(1, sizeof(struct si_pipe_shader));
+		shader = CALLOC(1, sizeof(struct si_shader));
 		shader->selector = sel;
 		shader->key = key;
 
 		shader->next_variant = sel->current;
 		sel->current = shader;
-		r = si_pipe_shader_create(ctx, shader);
+		r = si_shader_create((struct si_screen*)ctx->screen, shader);
 		if (unlikely(r)) {
 			R600_ERR("Failed to build shader variant (type=%u) %d\n",
 				 sel->type, r);
@@ -2230,7 +2305,7 @@ static void *si_create_shader_state(struct pipe_context *ctx,
 				    const struct pipe_shader_state *state,
 				    unsigned pipe_shader_type)
 {
-	struct si_pipe_shader_selector *sel = CALLOC_STRUCT(si_pipe_shader_selector);
+	struct si_shader_selector *sel = CALLOC_STRUCT(si_shader_selector);
 	int r;
 
 	sel->type = pipe_shader_type;
@@ -2274,7 +2349,7 @@ static void *si_create_vs_state(struct pipe_context *ctx,
 static void si_bind_vs_shader(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_pipe_shader_selector *sel = state;
+	struct si_shader_selector *sel = state;
 
 	if (sctx->vs_shader == sel)
 		return;
@@ -2288,7 +2363,7 @@ static void si_bind_vs_shader(struct pipe_context *ctx, void *state)
 static void si_bind_gs_shader(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_pipe_shader_selector *sel = state;
+	struct si_shader_selector *sel = state;
 
 	if (sctx->gs_shader == sel)
 		return;
@@ -2299,48 +2374,57 @@ static void si_bind_gs_shader(struct pipe_context *ctx, void *state)
 static void si_bind_ps_shader(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_pipe_shader_selector *sel = state;
+	struct si_shader_selector *sel = state;
 
 	/* skip if supplied shader is one already in use */
 	if (sctx->ps_shader == sel)
 		return;
 
 	/* use dummy shader if supplied shader is corrupt */
-	if (!sel || !sel->current)
+	if (!sel || !sel->current) {
+		if (!sctx->dummy_pixel_shader) {
+			sctx->dummy_pixel_shader =
+				util_make_fragment_cloneinput_shader(&sctx->b.b, 0,
+								     TGSI_SEMANTIC_GENERIC,
+								     TGSI_INTERPOLATE_CONSTANT);
+		}
+
 		sel = sctx->dummy_pixel_shader;
+	}
 
 	sctx->ps_shader = sel;
 }
 
 static void si_delete_shader_selector(struct pipe_context *ctx,
-				      struct si_pipe_shader_selector *sel)
+				      struct si_shader_selector *sel)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_pipe_shader *p = sel->current, *c;
+	struct si_shader *p = sel->current, *c;
 
 	while (p) {
 		c = p->next_variant;
-		if (sel->type == PIPE_SHADER_GEOMETRY)
+		if (sel->type == PIPE_SHADER_GEOMETRY) {
 			si_pm4_delete_state(sctx, gs, p->pm4);
-		else if (sel->type == PIPE_SHADER_FRAGMENT)
+			si_pm4_delete_state(sctx, vs, p->gs_copy_shader->pm4);
+		} else if (sel->type == PIPE_SHADER_FRAGMENT)
 			si_pm4_delete_state(sctx, ps, p->pm4);
 		else if (p->key.vs.as_es)
 			si_pm4_delete_state(sctx, es, p->pm4);
 		else
 			si_pm4_delete_state(sctx, vs, p->pm4);
-		si_pipe_shader_destroy(ctx, p);
+		si_shader_destroy(ctx, p);
 		free(p);
 		p = c;
 	}
 
 	free(sel->tokens);
 	free(sel);
- }
+}
 
 static void si_delete_vs_shader(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_pipe_shader_selector *sel = (struct si_pipe_shader_selector *)state;
+	struct si_shader_selector *sel = (struct si_shader_selector *)state;
 
 	if (sctx->vs_shader == sel) {
 		sctx->vs_shader = NULL;
@@ -2352,7 +2436,7 @@ static void si_delete_vs_shader(struct pipe_context *ctx, void *state)
 static void si_delete_gs_shader(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_pipe_shader_selector *sel = (struct si_pipe_shader_selector *)state;
+	struct si_shader_selector *sel = (struct si_shader_selector *)state;
 
 	if (sctx->gs_shader == sel) {
 		sctx->gs_shader = NULL;
@@ -2364,7 +2448,7 @@ static void si_delete_gs_shader(struct pipe_context *ctx, void *state)
 static void si_delete_ps_shader(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_pipe_shader_selector *sel = (struct si_pipe_shader_selector *)state;
+	struct si_shader_selector *sel = (struct si_shader_selector *)state;
 
 	if (sctx->ps_shader == sel) {
 		sctx->ps_shader = NULL;
@@ -2382,7 +2466,7 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 							const struct pipe_sampler_view *state)
 {
 	struct si_context *sctx = (struct si_context*)ctx;
-	struct si_pipe_sampler_view *view = CALLOC_STRUCT(si_pipe_sampler_view);
+	struct si_sampler_view *view = CALLOC_STRUCT(si_sampler_view);
 	struct r600_texture *tmp = (struct r600_texture*)texture;
 	const struct util_format_description *desc;
 	unsigned format, num_format;
@@ -2636,7 +2720,7 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 static void si_sampler_view_destroy(struct pipe_context *ctx,
 				    struct pipe_sampler_view *state)
 {
-	struct si_pipe_sampler_view *view = (struct si_pipe_sampler_view *)state;
+	struct si_sampler_view *view = (struct si_sampler_view *)state;
 
 	if (view->resource->b.b.target == PIPE_BUFFER)
 		LIST_DELINIT(&view->list);
@@ -2669,7 +2753,7 @@ static bool sampler_state_needs_border_color(const struct pipe_sampler_state *st
 static void *si_create_sampler_state(struct pipe_context *ctx,
 				     const struct pipe_sampler_state *state)
 {
-	struct si_pipe_sampler_state *rstate = CALLOC_STRUCT(si_pipe_sampler_state);
+	struct si_sampler_state *rstate = CALLOC_STRUCT(si_sampler_state);
 	unsigned aniso_flag_offset = state->max_anisotropy > 1 ? 2 : 0;
 	unsigned border_color_type;
 
@@ -2713,7 +2797,7 @@ static void *si_create_sampler_state(struct pipe_context *ctx,
 static void si_set_border_colors(struct si_context *sctx, unsigned count,
 				 void **states)
 {
-	struct si_pipe_sampler_state **rstates = (struct si_pipe_sampler_state **)states;
+	struct si_sampler_state **rstates = (struct si_sampler_state **)states;
 	uint32_t *border_color_table = NULL;
 	int i, j;
 
@@ -2923,13 +3007,6 @@ static void *si_create_blend_custom(struct si_context *sctx, unsigned mode)
 	return si_create_blend_state_mode(&sctx->b.b, &blend, mode);
 }
 
-static void si_set_occlusion_query_state(struct pipe_context *ctx, bool enable)
-{
-	/* XXX Turn this into a proper state. Right now the queries are
-	 * enabled in draw_vbo, which snoops r600_common_context to see
-	 * if any occlusion queries are active. */
-}
-
 static void si_need_gfx_cs_space(struct pipe_context *ctx, unsigned num_dw,
 				 bool include_draw_vbo)
 {
@@ -2938,9 +3015,8 @@ static void si_need_gfx_cs_space(struct pipe_context *ctx, unsigned num_dw,
 
 void si_init_state_functions(struct si_context *sctx)
 {
-	int i;
-
 	si_init_atom(&sctx->framebuffer.atom, &sctx->atoms.s.framebuffer, si_emit_framebuffer_state, 0);
+	si_init_atom(&sctx->db_render_state, &sctx->atoms.s.db_render_state, si_emit_db_render_state, 10);
 
 	sctx->b.b.create_blend_state = si_create_blend_state;
 	sctx->b.b.bind_blend_state = si_bind_blend_state;
@@ -2955,12 +3031,7 @@ void si_init_state_functions(struct si_context *sctx)
 	sctx->b.b.bind_depth_stencil_alpha_state = si_bind_dsa_state;
 	sctx->b.b.delete_depth_stencil_alpha_state = si_delete_dsa_state;
 
-	for (i = 0; i < 8; i++) {
-		sctx->custom_dsa_flush_depth_stencil[i] = si_create_db_flush_dsa(sctx, true, true, i);
-		sctx->custom_dsa_flush_depth[i] = si_create_db_flush_dsa(sctx, true, false, i);
-		sctx->custom_dsa_flush_stencil[i] = si_create_db_flush_dsa(sctx, false, true, i);
-	}
-	sctx->custom_dsa_flush_inplace = si_create_db_flush_dsa(sctx, false, false, 0);
+	sctx->custom_dsa_flush = si_create_db_flush_dsa(sctx);
 	sctx->custom_blend_resolve = si_create_blend_custom(sctx, V_028808_CB_RESOLVE);
 	sctx->custom_blend_decompress = si_create_blend_custom(sctx, V_028808_CB_FMASK_DECOMPRESS);
 	sctx->custom_blend_fastclear = si_create_blend_custom(sctx, V_028808_CB_ELIMINATE_FAST_CLEAR);
@@ -3122,13 +3193,18 @@ void si_init_config(struct si_context *sctx)
 	si_pm4_set_reg(pm4, R_028020_DB_DEPTH_BOUNDS_MIN, 0x00000000);
 	si_pm4_set_reg(pm4, R_028024_DB_DEPTH_BOUNDS_MAX, 0x00000000);
 	si_pm4_set_reg(pm4, R_028028_DB_STENCIL_CLEAR, 0x00000000);
-	si_pm4_set_reg(pm4, R_02802C_DB_DEPTH_CLEAR, 0x3F800000);
 	si_pm4_set_reg(pm4, R_028AC0_DB_SRESULTS_COMPARE_STATE0, 0x0);
 	si_pm4_set_reg(pm4, R_028AC4_DB_SRESULTS_COMPARE_STATE1, 0x0);
 	si_pm4_set_reg(pm4, R_028AC8_DB_PRELOAD_CONTROL, 0x0);
+
+	/* There is a hang if stencil is used and fast stencil is enabled
+	 * regardless of whether HTILE is depth-only or not.
+	 */
 	si_pm4_set_reg(pm4, R_02800C_DB_RENDER_OVERRIDE,
 		       S_02800C_FORCE_HIS_ENABLE0(V_02800C_FORCE_DISABLE) |
-		       S_02800C_FORCE_HIS_ENABLE1(V_02800C_FORCE_DISABLE));
+		       S_02800C_FORCE_HIS_ENABLE1(V_02800C_FORCE_DISABLE) |
+		       S_02800C_FAST_STENCIL_DISABLE(1));
+
 	si_pm4_set_reg(pm4, R_028400_VGT_MAX_VTX_INDX, ~0);
 	si_pm4_set_reg(pm4, R_028404_VGT_MIN_VTX_INDX, 0);
 	si_pm4_set_reg(pm4, R_028408_VGT_INDX_OFFSET, 0);

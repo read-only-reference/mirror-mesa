@@ -70,11 +70,12 @@ struct ilo_kernel_routing {
 };
 
 struct intel_bo;
-struct ilo_context;
+struct ilo_builder;
 struct ilo_rasterizer_state;
 struct ilo_shader_cache;
 struct ilo_shader_state;
 struct ilo_shader_cso;
+struct ilo_state_vector;
 
 struct ilo_shader_cache *
 ilo_shader_cache_create(void);
@@ -90,30 +91,32 @@ void
 ilo_shader_cache_remove(struct ilo_shader_cache *shc,
                         struct ilo_shader_state *shader);
 
-int
+void
 ilo_shader_cache_upload(struct ilo_shader_cache *shc,
-                        struct intel_bo *bo, unsigned offset,
-                        bool incremental);
+                        struct ilo_builder *builder);
+
+void
+ilo_shader_cache_invalidate(struct ilo_shader_cache *shc);
 
 struct ilo_shader_state *
 ilo_shader_create_vs(const struct ilo_dev_info *dev,
                      const struct pipe_shader_state *state,
-                     const struct ilo_context *precompile);
+                     const struct ilo_state_vector *precompile);
 
 struct ilo_shader_state *
 ilo_shader_create_gs(const struct ilo_dev_info *dev,
                      const struct pipe_shader_state *state,
-                     const struct ilo_context *precompile);
+                     const struct ilo_state_vector *precompile);
 
 struct ilo_shader_state *
 ilo_shader_create_fs(const struct ilo_dev_info *dev,
                      const struct pipe_shader_state *state,
-                     const struct ilo_context *precompile);
+                     const struct ilo_state_vector *precompile);
 
 struct ilo_shader_state *
 ilo_shader_create_cs(const struct ilo_dev_info *dev,
                      const struct pipe_compute_state *state,
-                     const struct ilo_context *precompile);
+                     const struct ilo_state_vector *precompile);
 
 void
 ilo_shader_destroy(struct ilo_shader_state *shader);
@@ -123,7 +126,7 @@ ilo_shader_get_type(const struct ilo_shader_state *shader);
 
 bool
 ilo_shader_select_kernel(struct ilo_shader_state *shader,
-                         const struct ilo_context *ilo,
+                         const struct ilo_state_vector *vec,
                          uint32_t dirty);
 
 bool

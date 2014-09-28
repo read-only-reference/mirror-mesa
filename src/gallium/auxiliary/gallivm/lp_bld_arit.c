@@ -205,17 +205,17 @@ lp_build_min_simple(struct lp_build_context *bld,
           nan_behavior != GALLIVM_NAN_BEHAVIOR_UNDEFINED &&
           nan_behavior != GALLIVM_NAN_RETURN_OTHER_SECOND_NONNAN &&
           nan_behavior != GALLIVM_NAN_RETURN_NAN_FIRST_NONNAN) {
-         LLVMValueRef isnan, max;
-         max = lp_build_intrinsic_binary_anylength(bld->gallivm, intrinsic,
+         LLVMValueRef isnan, min;
+         min = lp_build_intrinsic_binary_anylength(bld->gallivm, intrinsic,
                                                    type,
                                                    intr_size, a, b);
          if (nan_behavior == GALLIVM_NAN_RETURN_OTHER) {
             isnan = lp_build_isnan(bld, b);
-            return lp_build_select(bld, isnan, a, max);
+            return lp_build_select(bld, isnan, a, min);
          } else {
             assert(nan_behavior == GALLIVM_NAN_RETURN_NAN);
             isnan = lp_build_isnan(bld, a);
-            return lp_build_select(bld, isnan, a, max);
+            return lp_build_select(bld, isnan, a, min);
          }
       } else {
          return lp_build_intrinsic_binary_anylength(bld->gallivm, intrinsic,
@@ -381,17 +381,17 @@ lp_build_max_simple(struct lp_build_context *bld,
           nan_behavior != GALLIVM_NAN_BEHAVIOR_UNDEFINED &&
           nan_behavior != GALLIVM_NAN_RETURN_OTHER_SECOND_NONNAN &&
           nan_behavior != GALLIVM_NAN_RETURN_NAN_FIRST_NONNAN) {
-         LLVMValueRef isnan, min;
-         min = lp_build_intrinsic_binary_anylength(bld->gallivm, intrinsic,
+         LLVMValueRef isnan, max;
+         max = lp_build_intrinsic_binary_anylength(bld->gallivm, intrinsic,
                                                    type,
                                                    intr_size, a, b);
          if (nan_behavior == GALLIVM_NAN_RETURN_OTHER) {
             isnan = lp_build_isnan(bld, b);
-            return lp_build_select(bld, isnan, a, min);
+            return lp_build_select(bld, isnan, a, max);
          } else {
             assert(nan_behavior == GALLIVM_NAN_RETURN_NAN);
             isnan = lp_build_isnan(bld, a);
-            return lp_build_select(bld, isnan, a, min);
+            return lp_build_select(bld, isnan, a, max);
          }
       } else {
          return lp_build_intrinsic_binary_anylength(bld->gallivm, intrinsic,
@@ -522,9 +522,20 @@ lp_build_add(struct lp_build_context *bld,
          return lp_build_intrinsic_binary(builder, intrinsic, lp_build_vec_type(bld->gallivm, bld->type), a, b);
    }
 
-   /* TODO: handle signed case */
-   if(type.norm && !type.floating && !type.fixed && !type.sign)
-      a = lp_build_min_simple(bld, a, lp_build_comp(bld, b), GALLIVM_NAN_BEHAVIOR_UNDEFINED);
+   if(type.norm && !type.floating && !type.fixed) {
+      if (type.sign) {
+         uint64_t sign = (uint64_t)1 << (type.width - 1);
+         LLVMValueRef max_val = lp_build_const_int_vec(bld->gallivm, type, sign - 1);
+         LLVMValueRef min_val = lp_build_const_int_vec(bld->gallivm, type, sign);
+         /* a_clamp_max is the maximum a for positive b,
+            a_clamp_min is the minimum a for negative b. */
+         LLVMValueRef a_clamp_max = lp_build_min_simple(bld, a, LLVMBuildSub(builder, max_val, b, ""), GALLIVM_NAN_BEHAVIOR_UNDEFINED);
+         LLVMValueRef a_clamp_min = lp_build_max_simple(bld, a, LLVMBuildSub(builder, min_val, b, ""), GALLIVM_NAN_BEHAVIOR_UNDEFINED);
+         a = lp_build_select(bld, lp_build_cmp(bld, PIPE_FUNC_GREATER, b, bld->zero), a_clamp_max, a_clamp_min);
+      } else {
+         a = lp_build_min_simple(bld, a, lp_build_comp(bld, b), GALLIVM_NAN_BEHAVIOR_UNDEFINED);
+      }
+   }
 
    if(LLVMIsConstant(a) && LLVMIsConstant(b))
       if (type.floating)
@@ -803,9 +814,20 @@ lp_build_sub(struct lp_build_context *bld,
          return lp_build_intrinsic_binary(builder, intrinsic, lp_build_vec_type(bld->gallivm, bld->type), a, b);
    }
 
-   /* TODO: handle signed case */
-   if(type.norm && !type.floating && !type.fixed && !type.sign)
-      a = lp_build_max_simple(bld, a, b, GALLIVM_NAN_BEHAVIOR_UNDEFINED);
+   if(type.norm && !type.floating && !type.fixed) {
+      if (type.sign) {
+         uint64_t sign = (uint64_t)1 << (type.width - 1);
+         LLVMValueRef max_val = lp_build_const_int_vec(bld->gallivm, type, sign - 1);
+         LLVMValueRef min_val = lp_build_const_int_vec(bld->gallivm, type, sign);
+         /* a_clamp_max is the maximum a for negative b,
+            a_clamp_min is the minimum a for positive b. */
+         LLVMValueRef a_clamp_max = lp_build_min_simple(bld, a, LLVMBuildAdd(builder, max_val, b, ""), GALLIVM_NAN_BEHAVIOR_UNDEFINED);
+         LLVMValueRef a_clamp_min = lp_build_max_simple(bld, a, LLVMBuildAdd(builder, min_val, b, ""), GALLIVM_NAN_BEHAVIOR_UNDEFINED);
+         a = lp_build_select(bld, lp_build_cmp(bld, PIPE_FUNC_GREATER, b, bld->zero), a_clamp_min, a_clamp_max);
+      } else {
+         a = lp_build_max_simple(bld, a, b, GALLIVM_NAN_BEHAVIOR_UNDEFINED);
+      }
+   }
 
    if(LLVMIsConstant(a) && LLVMIsConstant(b))
       if (type.floating)
@@ -1073,7 +1095,7 @@ lp_build_div(struct lp_build_context *bld,
 
    if(a == bld->zero)
       return bld->zero;
-   if(a == bld->one)
+   if(a == bld->one && type.floating)
       return lp_build_rcp(bld, b);
    if(b == bld->zero)
       return bld->undef;
@@ -1860,7 +1882,7 @@ lp_build_trunc(struct lp_build_context *bld,
       const struct lp_type type = bld->type;
       struct lp_type inttype;
       struct lp_build_context intbld;
-      LLVMValueRef cmpval = lp_build_const_vec(bld->gallivm, type, 2^24);
+      LLVMValueRef cmpval = lp_build_const_vec(bld->gallivm, type, 1<<24);
       LLVMValueRef trunc, res, anosign, mask;
       LLVMTypeRef int_vec_type = bld->int_vec_type;
       LLVMTypeRef vec_type = bld->vec_type;
@@ -1915,7 +1937,7 @@ lp_build_round(struct lp_build_context *bld,
       const struct lp_type type = bld->type;
       struct lp_type inttype;
       struct lp_build_context intbld;
-      LLVMValueRef cmpval = lp_build_const_vec(bld->gallivm, type, 2^24);
+      LLVMValueRef cmpval = lp_build_const_vec(bld->gallivm, type, 1<<24);
       LLVMValueRef res, anosign, mask;
       LLVMTypeRef int_vec_type = bld->int_vec_type;
       LLVMTypeRef vec_type = bld->vec_type;
@@ -1968,7 +1990,7 @@ lp_build_floor(struct lp_build_context *bld,
       const struct lp_type type = bld->type;
       struct lp_type inttype;
       struct lp_build_context intbld;
-      LLVMValueRef cmpval = lp_build_const_vec(bld->gallivm, type, 2^24);
+      LLVMValueRef cmpval = lp_build_const_vec(bld->gallivm, type, 1<<24);
       LLVMValueRef trunc, res, anosign, mask;
       LLVMTypeRef int_vec_type = bld->int_vec_type;
       LLVMTypeRef vec_type = bld->vec_type;
@@ -2037,7 +2059,7 @@ lp_build_ceil(struct lp_build_context *bld,
       const struct lp_type type = bld->type;
       struct lp_type inttype;
       struct lp_build_context intbld;
-      LLVMValueRef cmpval = lp_build_const_vec(bld->gallivm, type, 2^24);
+      LLVMValueRef cmpval = lp_build_const_vec(bld->gallivm, type, 1<<24);
       LLVMValueRef trunc, res, anosign, mask, tmp;
       LLVMTypeRef int_vec_type = bld->int_vec_type;
       LLVMTypeRef vec_type = bld->vec_type;

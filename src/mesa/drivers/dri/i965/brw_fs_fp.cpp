@@ -480,10 +480,8 @@ fs_visitor::emit_fragment_program_code()
          ir_constant_data junk_data;
          ir->coordinate = new(mem_ctx) ir_constant(coordinate_type, &junk_data);
 
-         if (fpi->TexShadow) {
+         if (fpi->TexShadow)
             shadow_c = offset(coordinate, 2);
-            ir->shadow_comparitor = new(mem_ctx) ir_constant(0.0f);
-         }
 
          coordinate = rescale_texcoord(ir, coordinate,
                                        fpi->TexSrcTarget == TEXTURE_RECT_INDEX,
@@ -491,7 +489,7 @@ fs_visitor::emit_fragment_program_code()
 
          fs_inst *inst;
          if (brw->gen >= 7) {
-            inst = emit_texture_gen7(ir, dst, coordinate, shadow_c, lod, dpdy, sample_index, fs_reg(0u), fpi->TexSrcUnit);
+            inst = emit_texture_gen7(ir, dst, coordinate, shadow_c, lod, dpdy, sample_index, fs_reg(0u), fs_reg(fpi->TexSrcUnit));
          } else if (brw->gen >= 5) {
             inst = emit_texture_gen5(ir, dst, coordinate, shadow_c, lod, dpdy, sample_index, fpi->TexSrcUnit);
          } else {
@@ -604,12 +602,16 @@ fs_visitor::setup_fp_regs()
 
          switch (i) {
          case VARYING_SLOT_POS:
-            ir->data.pixel_center_integer = fp->PixelCenterInteger;
-            ir->data.origin_upper_left = fp->OriginUpperLeft;
+            {
+               assert(stage == MESA_SHADER_FRAGMENT);
+               gl_fragment_program *fp = (gl_fragment_program*) prog;
+               ir->data.pixel_center_integer = fp->PixelCenterInteger;
+               ir->data.origin_upper_left = fp->OriginUpperLeft;
+            }
             fp_input_regs[i] = *emit_fragcoord_interpolation(ir);
             break;
          case VARYING_SLOT_FACE:
-            fp_input_regs[i] = *emit_frontfacing_interpolation(ir);
+            fp_input_regs[i] = *emit_frontfacing_interpolation();
             break;
          default:
             fp_input_regs[i] = *emit_general_interpolation(ir);
@@ -631,6 +633,9 @@ fs_visitor::setup_fp_regs()
 fs_reg
 fs_visitor::get_fp_dst_reg(const prog_dst_register *dst)
 {
+   assert(stage == MESA_SHADER_FRAGMENT);
+   brw_wm_prog_key *key = (brw_wm_prog_key*) this->key;
+
    switch (dst->File) {
    case PROGRAM_TEMPORARY:
       return fp_temp_regs[dst->Index];

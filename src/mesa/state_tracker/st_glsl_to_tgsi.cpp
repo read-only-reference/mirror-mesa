@@ -75,14 +75,6 @@ extern "C" {
                            (1 << PROGRAM_UNIFORM))
 
 /**
- * Maximum number of temporary registers.
- *
- * It is too big for stack allocated arrays -- it will cause stack overflow on
- * Windows and likely Mac OS X.
- */
-#define MAX_TEMPS         4096
-
-/**
  * Maximum number of arrays
  */
 #define MAX_ARRAYS        256
@@ -1080,8 +1072,8 @@ glsl_to_tgsi_visitor::visit(ir_variable *ir)
 
    if (ir->data.mode == ir_var_uniform && strncmp(ir->name, "gl_", 3) == 0) {
       unsigned int i;
-      const ir_state_slot *const slots = ir->state_slots;
-      assert(ir->state_slots != NULL);
+      const ir_state_slot *const slots = ir->get_state_slots();
+      assert(slots != NULL);
 
       /* Check if this statevar's setup in the STATE file exactly
        * matches how we'll want to reference it as a
@@ -1089,7 +1081,7 @@ glsl_to_tgsi_visitor::visit(ir_variable *ir)
        * temporary storage and hope that it'll get copy-propagated
        * out.
        */
-      for (i = 0; i < ir->num_state_slots; i++) {
+      for (i = 0; i < ir->get_num_state_slots(); i++) {
          if (slots[i].swizzle != SWIZZLE_XYZW) {
             break;
          }
@@ -1097,7 +1089,7 @@ glsl_to_tgsi_visitor::visit(ir_variable *ir)
 
       variable_storage *storage;
       st_dst_reg dst;
-      if (i == ir->num_state_slots) {
+      if (i == ir->get_num_state_slots()) {
          /* We'll set the index later. */
          storage = new(mem_ctx) variable_storage(ir, PROGRAM_STATE_VAR, -1);
          this->variables.push_tail(storage);
@@ -1108,7 +1100,7 @@ glsl_to_tgsi_visitor::visit(ir_variable *ir)
           * of the type.  However, this had better match the number of state
           * elements that we're going to copy into the new temporary.
           */
-         assert((int) ir->num_state_slots == type_size(ir->type));
+         assert((int) ir->get_num_state_slots() == type_size(ir->type));
 
          dst = st_dst_reg(get_temp(ir->type));
 
@@ -1118,7 +1110,7 @@ glsl_to_tgsi_visitor::visit(ir_variable *ir)
       }
 
 
-      for (unsigned int i = 0; i < ir->num_state_slots; i++) {
+      for (unsigned int i = 0; i < ir->get_num_state_slots(); i++) {
          int index = _mesa_add_state_reference(this->prog->Parameters,
         				       (gl_state_index *)slots[i].tokens);
 
@@ -1143,7 +1135,7 @@ glsl_to_tgsi_visitor::visit(ir_variable *ir)
       }
 
       if (storage->file == PROGRAM_TEMPORARY &&
-          dst.index != storage->index + (int) ir->num_state_slots) {
+          dst.index != storage->index + (int) ir->get_num_state_slots()) {
          fail_link(this->shader_program,
         	   "failed to load builtin uniform `%s'  (%d/%d regs loaded)\n",
         	   ir->name, dst.index - storage->index,
@@ -2625,10 +2617,7 @@ glsl_to_tgsi_visitor::visit(ir_constant *ir)
    case GLSL_TYPE_BOOL:
       gl_type = native_integers ? GL_BOOL : GL_FLOAT;
       for (i = 0; i < ir->type->vector_elements; i++) {
-         if (native_integers)
-            values[i].u = ir->value.b[i] ? ~0 : 0;
-         else
-            values[i].f = ir->value.b[i];
+         values[i].u = ir->value.b[i] ? ctx->Const.UniformBooleanTrue : 0;
       }
       break;
    default:
@@ -3099,8 +3088,18 @@ glsl_to_tgsi_visitor::visit(ir_discard *ir)
 {
    if (ir->condition) {
       ir->condition->accept(this);
-      this->result.negate = ~this->result.negate;
-      emit(ir, TGSI_OPCODE_KILL_IF, undef_dst, this->result);
+      st_src_reg condition = this->result;
+
+      /* Convert the bool condition to a float so we can negate. */
+      if (native_integers) {
+         st_src_reg temp = get_temp(ir->condition->type);
+         emit(ir, TGSI_OPCODE_AND, st_dst_reg(temp),
+              condition, st_src_reg_for_float(1.0));
+         condition = temp;
+      }
+
+      condition.negate = ~condition.negate;
+      emit(ir, TGSI_OPCODE_KILL_IF, undef_dst, condition);
    } else {
       /* unconditional kil */
       emit(ir, TGSI_OPCODE_KILL);
@@ -3170,6 +3169,7 @@ glsl_to_tgsi_visitor::glsl_to_tgsi_visitor()
    shader_program = NULL;
    shader = NULL;
    options = NULL;
+   have_sqrt = false;
 }
 
 glsl_to_tgsi_visitor::~glsl_to_tgsi_visitor()
@@ -3256,14 +3256,10 @@ get_src_arg_mask(st_dst_reg dst, st_src_reg src)
 void
 glsl_to_tgsi_visitor::simplify_cmp(void)
 {
-   unsigned *tempWrites;
+   int tempWritesSize = 0;
+   unsigned *tempWrites = NULL;
    unsigned outputWrites[MAX_PROGRAM_OUTPUTS];
 
-   tempWrites = new unsigned[MAX_TEMPS];
-   if (!tempWrites) {
-      return;
-   }
-   memset(tempWrites, 0, sizeof(unsigned) * MAX_TEMPS);
    memset(outputWrites, 0, sizeof(outputWrites));
 
    foreach_in_list(glsl_to_tgsi_instruction, inst, &this->instructions) {
@@ -3285,7 +3281,19 @@ glsl_to_tgsi_visitor::simplify_cmp(void)
          prevWriteMask = outputWrites[inst->dst.index];
          outputWrites[inst->dst.index] |= inst->dst.writemask;
       } else if (inst->dst.file == PROGRAM_TEMPORARY) {
-         assert(inst->dst.index < MAX_TEMPS);
+         if (inst->dst.index >= tempWritesSize) {
+            const int inc = 4096;
+
+            tempWrites = (unsigned*)
+                         realloc(tempWrites,
+                                 (tempWritesSize + inc) * sizeof(unsigned));
+            if (!tempWrites)
+               return;
+
+            memset(tempWrites + tempWritesSize, 0, inc * sizeof(unsigned));
+            tempWritesSize += inc;
+         }
+
          prevWriteMask = tempWrites[inst->dst.index];
          tempWrites[inst->dst.index] |= inst->dst.writemask;
       } else
@@ -3304,7 +3312,7 @@ glsl_to_tgsi_visitor::simplify_cmp(void)
       }
    }
 
-   delete [] tempWrites;
+   free(tempWrites);
 }
 
 /* Replaces all references to a temporary register index with another index. */
@@ -4113,7 +4121,9 @@ struct label {
 struct st_translate {
    struct ureg_program *ureg;
 
-   struct ureg_dst temps[MAX_TEMPS];
+   unsigned temps_size;
+   struct ureg_dst *temps;
+
    struct ureg_dst arrays[MAX_ARRAYS];
    struct ureg_src *constants;
    struct ureg_src *immediates;
@@ -4155,6 +4165,8 @@ const unsigned _mesa_sysval_to_semantic[SYSTEM_VALUE_MAX] = {
     */
    TGSI_SEMANTIC_VERTEXID,
    TGSI_SEMANTIC_INSTANCEID,
+   0,
+   0,
 
    /* Geometry shader
     */
@@ -4254,7 +4266,19 @@ dst_register(struct st_translate *t,
       return ureg_dst_undef();
 
    case PROGRAM_TEMPORARY:
-      assert(index < Elements(t->temps));
+      /* Allocate space for temporaries on demand. */
+      if (index >= t->temps_size) {
+         const int inc = 4096;
+
+         t->temps = (struct ureg_dst*)
+                    realloc(t->temps,
+                            (t->temps_size + inc) * sizeof(struct ureg_dst));
+         if (!t->temps)
+            return ureg_dst_undef();
+
+         memset(t->temps + t->temps_size, 0, inc * sizeof(struct ureg_dst));
+         t->temps_size += inc;
+      }
 
       if (ureg_dst_is_undef(t->temps[index]))
          t->temps[index] = ureg_DECL_local_temporary(t->ureg);
@@ -5113,6 +5137,7 @@ st_translate_program(
 
 out:
    if (t) {
+      free(t->temps);
       free(t->insn);
       free(t->labels);
       free(t->constants);

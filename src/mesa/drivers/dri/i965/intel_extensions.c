@@ -243,10 +243,8 @@ intelInitExtensions(struct gl_context *ctx)
    ctx->Extensions.OES_standard_derivatives = true;
    ctx->Extensions.OES_EGL_image_external = true;
 
-   if (brw->gen >= 7)
+   if (brw->gen >= 6)
       ctx->Const.GLSLVersion = 330;
-   else if (brw->gen >= 6)
-      ctx->Const.GLSLVersion = 140;
    else
       ctx->Const.GLSLVersion = 120;
    _mesa_override_glsl_version(&ctx->Const);
@@ -273,6 +271,7 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_sample_shading = true;
       ctx->Extensions.ARB_texture_gather = true;
       ctx->Extensions.ARB_conditional_render_inverted = true;
+      ctx->Extensions.AMD_vertex_shader_layer = true;
 
       /* Test if the kernel has the ioctl. */
       if (drm_intel_reg_read(brw->bufmgr, TIMESTAMP, &dummy) == 0)
@@ -289,7 +288,6 @@ intelInitExtensions(struct gl_context *ctx)
    if (brw->gen >= 7) {
       ctx->Extensions.ARB_conservative_depth = true;
       ctx->Extensions.ARB_texture_view = true;
-      ctx->Extensions.AMD_vertex_shader_layer = true;
       if (can_do_pipelined_register_writes(brw)) {
          ctx->Extensions.ARB_transform_feedback2 = true;
          ctx->Extensions.ARB_transform_feedback3 = true;

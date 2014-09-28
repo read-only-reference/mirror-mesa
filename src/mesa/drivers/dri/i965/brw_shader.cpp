@@ -220,10 +220,10 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 	     || (strncmp(var->name, "gl_", 3) != 0))
 	    continue;
 
-	 const ir_state_slot *const slots = var->state_slots;
-	 assert(var->state_slots != NULL);
+	 const ir_state_slot *const slots = var->get_state_slots();
+	 assert(slots != NULL);
 
-	 for (unsigned int i = 0; i < var->num_state_slots; i++) {
+	 for (unsigned int i = 0; i < var->get_num_state_slots(); i++) {
 	    _mesa_add_state_reference(prog->Parameters,
 				      (gl_state_index *) slots[i].tokens);
 	 }
@@ -508,20 +508,32 @@ brw_instruction_name(enum opcode op)
 
    case GS_OPCODE_URB_WRITE:
       return "gs_urb_write";
+   case GS_OPCODE_URB_WRITE_ALLOCATE:
+      return "gs_urb_write_allocate";
    case GS_OPCODE_THREAD_END:
       return "gs_thread_end";
    case GS_OPCODE_SET_WRITE_OFFSET:
       return "set_write_offset";
    case GS_OPCODE_SET_VERTEX_COUNT:
       return "set_vertex_count";
-   case GS_OPCODE_SET_DWORD_2_IMMED:
-      return "set_dword_2_immed";
+   case GS_OPCODE_SET_DWORD_2:
+      return "set_dword_2";
    case GS_OPCODE_PREPARE_CHANNEL_MASKS:
       return "prepare_channel_masks";
    case GS_OPCODE_SET_CHANNEL_MASKS:
       return "set_channel_masks";
    case GS_OPCODE_GET_INSTANCE_ID:
       return "get_instance_id";
+   case GS_OPCODE_FF_SYNC:
+      return "ff_sync";
+   case GS_OPCODE_SET_PRIMITIVE_ID:
+      return "set_primitive_id";
+   case GS_OPCODE_SVB_WRITE:
+      return "gs_svb_write";
+   case GS_OPCODE_SVB_SET_DST_INDEX:
+      return "gs_svb_set_dst_index";
+   case GS_OPCODE_FF_SYNC_SET_PRIMITIVES:
+      return "gs_ff_sync_set_primitives";
 
    default:
       /* Yes, this leaks.  It's in debug code, it should never occur, and if
@@ -726,6 +738,7 @@ backend_instruction::has_side_effects() const
 {
    switch (opcode) {
    case SHADER_OPCODE_UNTYPED_ATOMIC:
+   case FS_OPCODE_FB_WRITE:
       return true;
    default:
       return false;
@@ -749,9 +762,9 @@ inst_is_in_block(const bblock_t *block, const backend_instruction *inst)
 static void
 adjust_later_block_ips(bblock_t *start_block, int ip_adjustment)
 {
-   for (bblock_t *block_iter = (bblock_t *)start_block->link.next;
+   for (bblock_t *block_iter = start_block->next();
         !block_iter->link.is_tail_sentinel();
-        block_iter = (bblock_t *)block_iter->link.next) {
+        block_iter = block_iter->next()) {
       block_iter->start_ip += ip_adjustment;
       block_iter->end_ip += ip_adjustment;
    }
@@ -766,9 +779,6 @@ backend_instruction::insert_after(bblock_t *block, backend_instruction *inst)
 
    adjust_later_block_ips(block, 1);
 
-   if (block->end == this)
-      block->end = inst;
-
    exec_node::insert_after(inst);
 }
 
@@ -780,9 +790,6 @@ backend_instruction::insert_before(bblock_t *block, backend_instruction *inst)
    block->end_ip++;
 
    adjust_later_block_ips(block, 1);
-
-   if (block->start == this)
-      block->start = inst;
 
    exec_node::insert_before(inst);
 }
@@ -798,9 +805,6 @@ backend_instruction::insert_before(bblock_t *block, exec_list *list)
 
    adjust_later_block_ips(block, num_inst);
 
-   if (block->start == this)
-      block->start = (backend_instruction *)list->get_head();
-
    exec_node::insert_before(list);
 }
 
@@ -815,11 +819,6 @@ backend_instruction::remove(bblock_t *block)
       block->cfg->remove_block(block);
    } else {
       block->end_ip--;
-
-      if (block->start == this)
-         block->start = (backend_instruction *)this->next;
-      if (block->end == this)
-         block->end = (backend_instruction *)this->prev;
    }
 
    exec_node::remove();
@@ -842,7 +841,7 @@ backend_visitor::dump_instructions(const char *name)
    }
 
    int ip = 0;
-   foreach_in_list(backend_instruction, inst, &instructions) {
+   foreach_block_and_inst(block, backend_instruction, inst, cfg) {
       if (!name)
          fprintf(stderr, "%d: ", ip++);
       dump_instruction(inst, file);

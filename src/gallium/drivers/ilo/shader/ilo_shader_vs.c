@@ -32,7 +32,6 @@
 #include "toy_legalize.h"
 #include "toy_optimize.h"
 #include "toy_helpers.h"
-#include "ilo_context.h"
 #include "ilo_shader_internal.h"
 
 struct vs_compile_context {
@@ -244,7 +243,7 @@ vs_lower_opcode_tgsi_direct(struct vs_compile_context *vcc,
       vs_lower_opcode_tgsi_in(vcc, inst->dst, dim, idx);
       break;
    case TOY_OPCODE_TGSI_CONST:
-      if (tc->dev->gen >= ILO_GEN(7))
+      if (ilo_dev_gen(tc->dev) >= ILO_GEN(7))
          vs_lower_opcode_tgsi_const_gen7(vcc, inst->dst, dim, inst->src[1]);
       else
          vs_lower_opcode_tgsi_const_gen6(vcc, inst->dst, dim, inst->src[1]);
@@ -298,7 +297,7 @@ vs_lower_opcode_tgsi_indirect(struct vs_compile_context *vcc,
             indirect_idx = tsrc_from(tmp);
          }
 
-         if (tc->dev->gen >= ILO_GEN(7))
+         if (ilo_dev_gen(tc->dev) >= ILO_GEN(7))
             vs_lower_opcode_tgsi_const_gen7(vcc, inst->dst, dim, indirect_idx);
          else
             vs_lower_opcode_tgsi_const_gen6(vcc, inst->dst, dim, indirect_idx);
@@ -363,7 +362,7 @@ vs_add_sampler_params(struct toy_compiler *tc, int msg_type, int base_mrf,
       assert(num_coords <= 3);
       tc_MOV(tc, tdst_writemask(tdst_d(m[0]), coords_writemask), coords);
       tc_MOV(tc, tdst_writemask(tdst_d(m[0]), TOY_WRITEMASK_W), bias_or_lod);
-      if (tc->dev->gen >= ILO_GEN(7)) {
+      if (ilo_dev_gen(tc->dev) >= ILO_GEN(7)) {
          num_params = 4;
       }
       else {
@@ -417,7 +416,7 @@ vs_prepare_tgsi_sampling(struct toy_compiler *tc, const struct toy_inst *inst,
          msg_type = GEN7_MSG_SAMPLER_SAMPLE_D_C;
          ref_or_si = tsrc_swizzle1(coords, ref_pos);
 
-         if (tc->dev->gen < ILO_GEN(7.5))
+         if (ilo_dev_gen(tc->dev) < ILO_GEN(7.5))
             tc_fail(tc, "TXD with shadow sampler not supported");
       }
       else {
@@ -789,7 +788,7 @@ vs_compile(struct vs_compile_context *vcc)
 
    if (ilo_debug & ILO_DEBUG_VS) {
       ilo_printf("disassembly:\n");
-      toy_compiler_disassemble(tc, sh->kernel, sh->kernel_size);
+      toy_compiler_disassemble(tc->dev, sh->kernel, sh->kernel_size, false);
       ilo_printf("\n");
    }
 
@@ -917,7 +916,7 @@ vs_write_vue(struct vs_compile_context *vcc)
    inst = tc_MOV(tc, header, r0);
    inst->mask_ctrl = GEN6_MASKCTRL_NOMASK;
 
-   if (tc->dev->gen >= ILO_GEN(7)) {
+   if (ilo_dev_gen(tc->dev) >= ILO_GEN(7)) {
       inst = tc_OR(tc, tdst_offset(header, 0, 5),
             tsrc_rect(tsrc_offset(r0, 0, 5), TOY_RECT_010),
             tsrc_rect(tsrc_imm_ud(0xff00), TOY_RECT_010));
@@ -955,7 +954,7 @@ vs_write_vue(struct vs_compile_context *vcc)
          eot = false;
       }
 
-      if (tc->dev->gen >= ILO_GEN(7)) {
+      if (ilo_dev_gen(tc->dev) >= ILO_GEN(7)) {
          /* do not forget about the header */
          msg_len = 1 + num_attrs;
       }
@@ -1273,7 +1272,7 @@ vs_setup(struct vs_compile_context *vcc,
 
    vcc->num_grf_per_vrf = 1;
 
-   if (vcc->tc.dev->gen >= ILO_GEN(7)) {
+   if (ilo_dev_gen(vcc->tc.dev) >= ILO_GEN(7)) {
       vcc->last_free_grf -= 15;
       vcc->first_free_mrf = vcc->last_free_grf + 1;
       vcc->last_free_mrf = vcc->first_free_mrf + 14;
@@ -1299,7 +1298,7 @@ ilo_shader_compile_vs(const struct ilo_shader_state *state,
    if (!vs_setup(&vcc, state, variant))
       return NULL;
 
-   if (vcc.tc.dev->gen >= ILO_GEN(7)) {
+   if (ilo_dev_gen(vcc.tc.dev) >= ILO_GEN(7)) {
       need_gs = false;
    }
    else {

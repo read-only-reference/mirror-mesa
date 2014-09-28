@@ -24,7 +24,6 @@
  * of the Software.
  */
 
-#define _FILE_OFFSET_BITS 64
 #include "radeon_drm_cs.h"
 
 #include "util/u_hash_table.h"
@@ -478,7 +477,15 @@ const struct pb_vtbl radeon_bo_vtbl = {
 };
 
 #ifndef RADEON_GEM_GTT_WC
-#define RADEON_GEM_GTT_WC (1 << 2)
+#define RADEON_GEM_GTT_WC		(1 << 2)
+#endif
+#ifndef RADEON_GEM_CPU_ACCESS
+/* BO is expected to be accessed by the CPU */
+#define RADEON_GEM_CPU_ACCESS		(1 << 3)
+#endif
+#ifndef RADEON_GEM_NO_CPU_ACCESS
+/* CPU access is not expected to work for this BO */
+#define RADEON_GEM_NO_CPU_ACCESS	(1 << 4)
 #endif
 
 static struct pb_buffer *radeon_bomgr_create_bo(struct pb_manager *_mgr,
@@ -505,6 +512,10 @@ static struct pb_buffer *radeon_bomgr_create_bo(struct pb_manager *_mgr,
 
     if (rdesc->flags & RADEON_FLAG_GTT_WC)
         args.flags |= RADEON_GEM_GTT_WC;
+    if (rdesc->flags & RADEON_FLAG_CPU_ACCESS)
+        args.flags |= RADEON_GEM_CPU_ACCESS;
+    if (rdesc->flags & RADEON_FLAG_NO_CPU_ACCESS)
+        args.flags |= RADEON_GEM_NO_CPU_ACCESS;
 
     if (drmCommandWriteRead(rws->fd, DRM_RADEON_GEM_CREATE,
                             &args, sizeof(args))) {

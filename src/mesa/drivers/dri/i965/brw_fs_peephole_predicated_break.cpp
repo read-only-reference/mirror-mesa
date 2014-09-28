@@ -45,28 +45,29 @@ fs_visitor::opt_peephole_predicated_break()
 {
    bool progress = false;
 
-   calculate_cfg();
-
    foreach_block (block, cfg) {
+      if (block->start_ip != block->end_ip)
+         continue;
+
       /* BREAK and CONTINUE instructions, by definition, can only be found at
        * the ends of basic blocks.
        */
-      fs_inst *jump_inst = (fs_inst *)block->end;
+      fs_inst *jump_inst = (fs_inst *)block->end();
       if (jump_inst->opcode != BRW_OPCODE_BREAK &&
           jump_inst->opcode != BRW_OPCODE_CONTINUE)
          continue;
 
-      fs_inst *if_inst = (fs_inst *)jump_inst->prev;
+      fs_inst *if_inst = (fs_inst *)block->prev()->end();
       if (if_inst->opcode != BRW_OPCODE_IF)
          continue;
 
-      fs_inst *endif_inst = (fs_inst *)jump_inst->next;
+      fs_inst *endif_inst = (fs_inst *)block->next()->start();
       if (endif_inst->opcode != BRW_OPCODE_ENDIF)
          continue;
 
       bblock_t *jump_block = block;
-      bblock_t *if_block = (bblock_t *)jump_block->link.prev;
-      bblock_t *endif_block = (bblock_t *)jump_block->link.next;
+      bblock_t *if_block = jump_block->prev();
+      bblock_t *endif_block = jump_block->next();
 
       /* For Sandybridge with IF with embedded comparison we need to emit an
        * instruction to set the flag register.
@@ -83,17 +84,22 @@ fs_visitor::opt_peephole_predicated_break()
 
       bblock_t *earlier_block = if_block;
       if (if_block->start_ip == if_block->end_ip) {
-         earlier_block = (bblock_t *)if_block->link.prev;
+         earlier_block = if_block->prev();
       }
 
       if_inst->remove(if_block);
+
+      bblock_t *later_block = endif_block;
+      if (endif_block->start_ip == endif_block->end_ip) {
+         later_block = endif_block->next();
+      }
       endif_inst->remove(endif_block);
 
-      if_block->children.make_empty();
-      endif_block->parents.make_empty();
+      earlier_block->children.make_empty();
+      later_block->parents.make_empty();
 
-      if_block->add_successor(cfg->mem_ctx, jump_block);
-      jump_block->add_successor(cfg->mem_ctx, endif_block);
+      earlier_block->add_successor(cfg->mem_ctx, jump_block);
+      jump_block->add_successor(cfg->mem_ctx, later_block);
 
       if (earlier_block->can_combine_with(jump_block)) {
          earlier_block->combine_with(jump_block);
@@ -105,7 +111,7 @@ fs_visitor::opt_peephole_predicated_break()
    }
 
    if (progress)
-      invalidate_live_intervals(false);
+      invalidate_live_intervals();
 
    return progress;
 }

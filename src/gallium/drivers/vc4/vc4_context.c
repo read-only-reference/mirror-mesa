@@ -25,6 +25,7 @@
 #include <err.h>
 
 #include "pipe/p_defines.h"
+#include "util/ralloc.h"
 #include "util/u_inlines.h"
 #include "util/u_memory.h"
 #include "util/u_blitter.h"
@@ -39,7 +40,14 @@ static void
 vc4_setup_rcl(struct vc4_context *vc4)
 {
         struct vc4_surface *csurf = vc4_surface(vc4->framebuffer.cbufs[0]);
-        struct vc4_resource *ctex = vc4_resource(csurf->base.texture);
+        struct vc4_resource *ctex = csurf ? vc4_resource(csurf->base.texture) : NULL;
+        struct vc4_surface *zsurf = vc4_surface(vc4->framebuffer.zsbuf);
+        struct vc4_resource *ztex = zsurf ? vc4_resource(zsurf->base.texture) : NULL;
+
+        if (!csurf)
+                vc4->resolve &= ~PIPE_CLEAR_COLOR0;
+        if (!zsurf)
+                vc4->resolve &= ~(PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL);
         uint32_t resolve_uncleared = vc4->resolve & ~vc4->cleared;
         uint32_t width = vc4->framebuffer.width;
         uint32_t height = vc4->framebuffer.height;
@@ -57,16 +65,26 @@ vc4_setup_rcl(struct vc4_context *vc4)
         cl_u32(&vc4->rcl, vc4->clear_color[0]);
         cl_u32(&vc4->rcl, vc4->clear_color[1]);
         cl_u32(&vc4->rcl, vc4->clear_depth);
-        cl_u8(&vc4->rcl, 0);
+        cl_u8(&vc4->rcl, vc4->clear_stencil);
+
+        /* The rendering mode config determines the pointer that's used for
+         * VC4_PACKET_STORE_MS_TILE_BUFFER address computations.  The kernel
+         * could handle a no-relocation rendering mode config and deny those
+         * packets, but instead we just tell the kernel we're doing our color
+         * rendering to the Z buffer, and just don't emit any of those
+         * packets.
+         */
+        struct vc4_surface *render_surf = csurf ? csurf : zsurf;
+        struct vc4_resource *render_tex = vc4_resource(render_surf->base.texture);
 
         cl_start_reloc(&vc4->rcl, 1);
         cl_u8(&vc4->rcl, VC4_PACKET_TILE_RENDERING_MODE_CONFIG);
-        cl_reloc(vc4, &vc4->rcl, ctex->bo, csurf->offset);
+        cl_reloc(vc4, &vc4->rcl, render_tex->bo, render_surf->offset);
         cl_u16(&vc4->rcl, width);
         cl_u16(&vc4->rcl, height);
-        cl_u16(&vc4->rcl, ((csurf->tiling <<
+        cl_u16(&vc4->rcl, ((render_surf->tiling <<
                             VC4_RENDER_CONFIG_MEMORY_FORMAT_SHIFT) |
-                           (vc4_rt_format_is_565(csurf->base.format) ?
+                           (vc4_rt_format_is_565(render_surf->base.format) ?
                             VC4_RENDER_CONFIG_FORMAT_BGR565 :
                             VC4_RENDER_CONFIG_FORMAT_RGBA8888) |
                            VC4_RENDER_CONFIG_EARLY_Z_COVERAGE_DISABLE));
@@ -75,8 +93,13 @@ vc4_setup_rcl(struct vc4_context *vc4)
          * stored.  If the clear values changed between frames, then the tile
          * buffer has stale clear values in it, so we have to do a store in
          * None mode (no writes) so that we trigger the tile buffer clear.
+         *
+         * Excess clearing is only a performance cost, since per-tile contents
+         * will be loaded/stored in the loop below.
          */
-        if (vc4->cleared & PIPE_CLEAR_COLOR0) {
+        if (vc4->cleared & (PIPE_CLEAR_COLOR0 |
+                            PIPE_CLEAR_DEPTH |
+                            PIPE_CLEAR_STENCIL)) {
                 cl_u8(&vc4->rcl, VC4_PACKET_TILE_COORDINATES);
                 cl_u8(&vc4->rcl, 0);
                 cl_u8(&vc4->rcl, 0);
@@ -90,6 +113,7 @@ vc4_setup_rcl(struct vc4_context *vc4)
                 for (int x = 0; x < xtiles; x++) {
                         bool end_of_frame = (x == xtiles - 1 &&
                                              y == ytiles - 1);
+                        bool coords_emitted = false;
 
                         /* Note that the load doesn't actually occur until the
                          * tile coords packet is processed.
@@ -107,16 +131,60 @@ vc4_setup_rcl(struct vc4_context *vc4)
                                       VC4_LOADSTORE_TILE_BUFFER_RGBA8888);
                                 cl_reloc(vc4, &vc4->rcl, ctex->bo,
                                          csurf->offset);
+
+                                cl_u8(&vc4->rcl, VC4_PACKET_TILE_COORDINATES);
+                                cl_u8(&vc4->rcl, x);
+                                cl_u8(&vc4->rcl, y);
+                                coords_emitted = true;
                         }
 
-                        cl_u8(&vc4->rcl, VC4_PACKET_TILE_COORDINATES);
-                        cl_u8(&vc4->rcl, x);
-                        cl_u8(&vc4->rcl, y);
+                        if (resolve_uncleared & (PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL)) {
+                                cl_start_reloc(&vc4->rcl, 1);
+                                cl_u8(&vc4->rcl, VC4_PACKET_LOAD_TILE_BUFFER_GENERAL);
+                                cl_u8(&vc4->rcl,
+                                      VC4_LOADSTORE_TILE_BUFFER_ZS |
+                                      (zsurf->tiling <<
+                                       VC4_LOADSTORE_TILE_BUFFER_FORMAT_SHIFT));
+                                cl_u8(&vc4->rcl, 0);
+                                cl_reloc(vc4, &vc4->rcl, ztex->bo,
+                                         zsurf->offset);
+
+                                cl_u8(&vc4->rcl, VC4_PACKET_TILE_COORDINATES);
+                                cl_u8(&vc4->rcl, x);
+                                cl_u8(&vc4->rcl, y);
+                                coords_emitted = true;
+                        }
+
+                        /* Clipping depends on tile coordinates having been
+                         * emitted, so make sure it's happened even if
+                         * everything was cleared to start.
+                         */
+                        if (!coords_emitted) {
+                                cl_u8(&vc4->rcl, VC4_PACKET_TILE_COORDINATES);
+                                cl_u8(&vc4->rcl, x);
+                                cl_u8(&vc4->rcl, y);
+                        }
 
                         cl_start_reloc(&vc4->rcl, 1);
                         cl_u8(&vc4->rcl, VC4_PACKET_BRANCH_TO_SUB_LIST);
                         cl_reloc(vc4, &vc4->rcl, vc4->tile_alloc,
                                  (y * xtiles + x) * 32);
+
+                        if (vc4->resolve & (PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL)) {
+                                cl_start_reloc(&vc4->rcl, 1);
+                                cl_u8(&vc4->rcl, VC4_PACKET_STORE_TILE_BUFFER_GENERAL);
+                                cl_u8(&vc4->rcl,
+                                      VC4_LOADSTORE_TILE_BUFFER_ZS |
+                                      (zsurf->tiling <<
+                                       VC4_LOADSTORE_TILE_BUFFER_FORMAT_SHIFT));
+                                cl_u8(&vc4->rcl,
+                                      VC4_STORE_TILE_BUFFER_DISABLE_COLOR_CLEAR);
+                                cl_reloc(vc4, &vc4->rcl, ztex->bo,
+                                         zsurf->offset |
+                                         ((end_of_frame &&
+                                           !(vc4->resolve & PIPE_CLEAR_COLOR0)) ?
+                                          VC4_LOADSTORE_TILE_BUFFER_EOF : 0));
+                        }
 
                         if (vc4->resolve & PIPE_CLEAR_COLOR0) {
                                 if (end_of_frame) {
@@ -126,9 +194,14 @@ vc4_setup_rcl(struct vc4_context *vc4)
                                         cl_u8(&vc4->rcl,
                                               VC4_PACKET_STORE_MS_TILE_BUFFER);
                                 }
-                        } else {
-                                assert(!"unfinished: Need to end the frame\n");
                         }
+
+                        /* One of the bits needs to have been set that would
+                         * have triggered an EOFq
+                         */
+                        assert(vc4->resolve & (PIPE_CLEAR_COLOR0 |
+                                               PIPE_CLEAR_DEPTH |
+                                               PIPE_CLEAR_STENCIL));
                 }
         }
 }
@@ -146,6 +219,13 @@ vc4_flush(struct pipe_context *pctx)
         cl_u8(&vc4->bcl, VC4_PACKET_HALT);
 
         vc4_setup_rcl(vc4);
+
+        if (vc4_debug & VC4_DEBUG_CL) {
+                fprintf(stderr, "BCL:\n");
+                vc4_dump_cl(&vc4->bcl, false);
+                fprintf(stderr, "RCL:\n");
+                vc4_dump_cl(&vc4->rcl, true);
+        }
 
         struct drm_vc4_submit_cl submit;
         memset(&submit, 0, sizeof(submit));
@@ -171,8 +251,10 @@ vc4_flush(struct pipe_context *pctx)
 #else
                 ret = vc4_simulator_flush(vc4, &submit);
 #endif
-                if (ret)
-                        errx(1, "VC4 submit failed\n");
+                if (ret) {
+                        fprintf(stderr, "VC4 submit failed\n");
+                        abort();
+                }
         }
 
         vc4_reset_cl(&vc4->bcl);
@@ -261,7 +343,7 @@ vc4_context_destroy(struct pipe_context *pctx)
 
         util_slab_destroy(&vc4->transfer_pool);
 
-        free(vc4);
+        ralloc_free(vc4);
 }
 
 struct pipe_context *
@@ -274,7 +356,7 @@ vc4_context_create(struct pipe_screen *pscreen, void *priv)
         uint32_t saved_shaderdb_flag = vc4_debug & VC4_DEBUG_SHADERDB;
         vc4_debug &= ~VC4_DEBUG_SHADERDB;
 
-        vc4 = CALLOC_STRUCT(vc4_context);
+        vc4 = rzalloc(NULL, struct vc4_context);
         if (vc4 == NULL)
                 return NULL;
         struct pipe_context *pctx = &vc4->base;
@@ -289,6 +371,7 @@ vc4_context_create(struct pipe_screen *pscreen, void *priv)
         vc4_draw_init(pctx);
         vc4_state_init(pctx);
         vc4_program_init(pctx);
+        vc4_query_init(pctx);
         vc4_resource_context_init(pctx);
 
         vc4_init_cl(vc4, &vc4->bcl);

@@ -253,6 +253,7 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
    case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
+   case PIPE_CAP_SAMPLER_VIEW_TARGET:
       return 0;
    case PIPE_CAP_FAKE_SW_MSAA:
       return 1;
@@ -566,6 +567,11 @@ llvmpipe_create_screen(struct sw_winsys *winsys)
    if (!screen)
       return NULL;
 
+   if (!lp_jit_screen_init(screen)) {
+      FREE(screen);
+      return NULL;
+   }
+
    screen->winsys = winsys;
 
    screen->base.destroy = llvmpipe_destroy_screen;
@@ -586,8 +592,6 @@ llvmpipe_create_screen(struct sw_winsys *winsys)
    screen->base.get_timestamp = llvmpipe_get_timestamp;
 
    llvmpipe_init_screen_resource_funcs(&screen->base);
-
-   lp_jit_screen_init(screen);
 
    screen->num_threads = util_cpu_caps.nr_cpus > 1 ? util_cpu_caps.nr_cpus : 0;
 #ifdef PIPE_SUBSYSTEM_EMBEDDED

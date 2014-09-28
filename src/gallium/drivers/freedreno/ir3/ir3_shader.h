@@ -52,14 +52,41 @@ static inline uint16_t sem2idx(ir3_semantic sem)
 /* Configuration key used to identify a shader variant.. different
  * shader variants can be used to implement features not supported
  * in hw (two sided color), binning-pass vertex shader, etc.
+ *
+ * TODO since shader key is starting to get larger (than 32bit)
+ * we probably should pass it around by ptr rather than value more
+ * of the places.. but watch out in ir3_shader_variant() where the
+ * key gets normalized, we need to make a copy there.
  */
 struct ir3_shader_key {
-	/* vertex shader variant parameters: */
+	/* bitmask of sampler which needs coords clamped for vertex
+	 * shader:
+	 */
+	unsigned vsaturate_s, vsaturate_t, vsaturate_r;
+
+	/* bitmask of sampler which needs coords clamped for frag
+	 * shader:
+	 */
+	unsigned fsaturate_s, fsaturate_t, fsaturate_r;
+
+	/*
+	 * Vertex shader variant parameters:
+	 */
 	unsigned binning_pass : 1;
 
-	/* fragment shader variant parameters: */
+	/*
+	 * Fragment shader variant parameters:
+	 */
 	unsigned color_two_side : 1;
 	unsigned half_precision : 1;
+	/* For rendering to alpha, we need a bit of special handling
+	 * since the hw always takes gl_FragColor starting from x
+	 * component, rather than figuring out to take the w component.
+	 * We could be more clever and generate variants for other
+	 * render target formats (ie. luminance formats are xxx1), but
+	 * let's start with this and see how it goes:
+	 */
+	unsigned alpha : 1;
 };
 
 struct ir3_shader_variant {
@@ -110,9 +137,20 @@ struct ir3_shader_variant {
 		uint8_t regid;
 		uint8_t compmask;
 		uint8_t ncomp;
-		/* in theory inloc of fs should match outloc of vs: */
+		/* In theory inloc of fs should match outloc of vs.  Or
+		 * rather the outloc of the vs is 8 plus the offset passed
+		 * to bary.f.  Presumably that +8 is to account for
+		 * gl_Position/gl_PointSize?
+		 *
+		 * NOTE inloc is currently aligned to 4 (we don't try
+		 * to pack varyings).  Changing this would likely break
+		 * assumptions in few places (like setting up of flat
+		 * shading in fd3_program) so be sure to check all the
+		 * spots where inloc is used.
+		 */
 		uint8_t inloc;
 		uint8_t bary;
+		uint8_t interpolate;
 	} inputs[16 + 2];  /* +POSITION +FACE */
 
 	unsigned total_in;       /* sum of inputs (scalar) */
@@ -147,9 +185,9 @@ struct ir3_shader {
 	struct ir3_shader_variant *variants;
 
 	/* so far, only used for blit_prog shader.. values for
-	 * VPC_VARYING_INTERP[i].MODE and VPC_VARYING_PS_REPL[i].MODE
+	 * VPC_VARYING_PS_REPL[i].MODE
 	 */
-	uint32_t vinterp[4], vpsrepl[4];
+	uint32_t vpsrepl[4];
 };
 
 

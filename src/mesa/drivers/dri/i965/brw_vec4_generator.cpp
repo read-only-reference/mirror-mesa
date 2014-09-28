@@ -157,7 +157,6 @@ vec4_generator::generate_math1_gen4(vec4_instruction *inst,
 	     brw_math_function(inst->opcode),
 	     inst->base_mrf,
 	     src,
-	     BRW_MATH_DATA_VECTOR,
 	     BRW_MATH_PRECISION_FULL);
 }
 
@@ -218,7 +217,6 @@ vec4_generator::generate_math2_gen4(vec4_instruction *inst,
 	     brw_math_function(inst->opcode),
 	     inst->base_mrf,
 	     op0,
-	     BRW_MATH_DATA_VECTOR,
 	     BRW_MATH_PRECISION_FULL);
 }
 
@@ -467,6 +465,32 @@ vec4_generator::generate_gs_urb_write(vec4_instruction *inst)
 }
 
 void
+vec4_generator::generate_gs_urb_write_allocate(vec4_instruction *inst)
+{
+   struct brw_reg src = brw_message_reg(inst->base_mrf);
+
+   /* We pass the temporary passed in src0 as the writeback register */
+   brw_urb_WRITE(p,
+                 inst->get_src(this->prog_data, 0), /* dest */
+                 inst->base_mrf, /* starting mrf reg nr */
+                 src,
+                 BRW_URB_WRITE_ALLOCATE_COMPLETE,
+                 inst->mlen,
+                 1, /* response len */
+                 inst->offset,  /* urb destination offset */
+                 BRW_URB_SWIZZLE_INTERLEAVE);
+
+   /* Now put allocated urb handle in dst.0 */
+   brw_push_insn_state(p);
+   brw_set_default_access_mode(p, BRW_ALIGN_1);
+   brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+   brw_MOV(p, get_element_ud(inst->get_dst(), 0),
+           get_element_ud(inst->get_src(this->prog_data, 0), 0));
+   brw_set_default_access_mode(p, BRW_ALIGN_16);
+   brw_pop_insn_state(p);
+}
+
+void
 vec4_generator::generate_gs_thread_end(vec4_instruction *inst)
 {
    struct brw_reg src = brw_message_reg(inst->base_mrf);
@@ -474,7 +498,7 @@ vec4_generator::generate_gs_thread_end(vec4_instruction *inst)
                  brw_null_reg(), /* dest */
                  inst->base_mrf, /* starting mrf reg nr */
                  src,
-                 BRW_URB_WRITE_EOT,
+                 BRW_URB_WRITE_EOT | inst->urb_write_flags,
                  brw->gen >= 8 ? 2 : 1,/* message len */
                  0,              /* response len */
                  0,              /* urb destination offset */
@@ -548,16 +572,64 @@ vec4_generator::generate_gs_set_vertex_count(struct brw_reg dst,
 }
 
 void
-vec4_generator::generate_gs_set_dword_2_immed(struct brw_reg dst,
-                                              struct brw_reg src)
+vec4_generator::generate_gs_svb_write(vec4_instruction *inst,
+                                      struct brw_reg dst,
+                                      struct brw_reg src0,
+                                      struct brw_reg src1)
 {
-   assert(src.file == BRW_IMMEDIATE_VALUE);
+   int binding = inst->sol_binding;
+   bool final_write = inst->sol_final_write;
 
+   brw_push_insn_state(p);
+   /* Copy Vertex data into M0.x */
+   brw_MOV(p, stride(dst, 4, 4, 1),
+           stride(retype(src0, BRW_REGISTER_TYPE_UD), 4, 4, 1));
+
+   /* Send SVB Write */
+   brw_svb_write(p,
+                 final_write ? src1 : brw_null_reg(), /* dest == src1 */
+                 1, /* msg_reg_nr */
+                 dst, /* src0 == previous dst */
+                 SURF_INDEX_GEN6_SOL_BINDING(binding), /* binding_table_index */
+                 final_write); /* send_commit_msg */
+
+   /* Finally, wait for the write commit to occur so that we can proceed to
+    * other things safely.
+    *
+    * From the Sandybridge PRM, Volume 4, Part 1, Section 3.3:
+    *
+    *   The write commit does not modify the destination register, but
+    *   merely clears the dependency associated with the destination
+    *   register. Thus, a simple “mov” instruction using the register as a
+    *   source is sufficient to wait for the write commit to occur.
+    */
+   if (final_write) {
+      brw_MOV(p, src1, src1);
+   }
+   brw_pop_insn_state(p);
+}
+
+void
+vec4_generator::generate_gs_svb_set_destination_index(vec4_instruction *inst,
+                                                      struct brw_reg dst,
+                                                      struct brw_reg src)
+{
+
+   int vertex = inst->sol_vertex;
    brw_push_insn_state(p);
    brw_set_default_access_mode(p, BRW_ALIGN_1);
    brw_set_default_mask_control(p, BRW_MASK_DISABLE);
-   brw_MOV(p, suboffset(vec1(dst), 2), src);
-   brw_set_default_access_mode(p, BRW_ALIGN_16);
+   brw_MOV(p, get_element_ud(dst, 5), get_element_ud(src, vertex));
+   brw_pop_insn_state(p);
+}
+
+void
+vec4_generator::generate_gs_set_dword_2(struct brw_reg dst, struct brw_reg src)
+{
+   brw_push_insn_state(p);
+   brw_set_default_access_mode(p, BRW_ALIGN_1);
+   brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+   brw_MOV(p, suboffset(vec1(dst), 2), suboffset(vec1(src), 0));
    brw_pop_insn_state(p);
 }
 
@@ -655,6 +727,85 @@ vec4_generator::generate_gs_get_instance_id(struct brw_reg dst)
    struct brw_reg r0(retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD));
    brw_SHR(p, dst, stride(r0, 1, 4, 0),
            brw_imm_ud(GEN7_GS_PAYLOAD_INSTANCE_ID_SHIFT));
+   brw_pop_insn_state(p);
+}
+
+void
+vec4_generator::generate_gs_ff_sync_set_primitives(struct brw_reg dst,
+                                                   struct brw_reg src0,
+                                                   struct brw_reg src1,
+                                                   struct brw_reg src2)
+{
+   brw_push_insn_state(p);
+   brw_set_default_access_mode(p, BRW_ALIGN_1);
+   /* Save src0 data in 16:31 bits of dst.0 */
+   brw_AND(p, suboffset(vec1(dst), 0), suboffset(vec1(src0), 0),
+           brw_imm_ud(0xffffu));
+   brw_SHL(p, suboffset(vec1(dst), 0), suboffset(vec1(dst), 0), brw_imm_ud(16));
+   /* Save src1 data in 0:15 bits of dst.0 */
+   brw_AND(p, suboffset(vec1(src2), 0), suboffset(vec1(src1), 0),
+           brw_imm_ud(0xffffu));
+   brw_OR(p, suboffset(vec1(dst), 0),
+          suboffset(vec1(dst), 0),
+          suboffset(vec1(src2), 0));
+   brw_pop_insn_state(p);
+}
+
+void
+vec4_generator::generate_gs_ff_sync(vec4_instruction *inst,
+                                    struct brw_reg dst,
+                                    struct brw_reg src0,
+                                    struct brw_reg src1)
+{
+   /* This opcode uses an implied MRF register for:
+    *  - the header of the ff_sync message. And as such it is expected to be
+    *    initialized to r0 before calling here.
+    *  - the destination where we will write the allocated URB handle.
+    */
+   struct brw_reg header =
+      retype(brw_message_reg(inst->base_mrf), BRW_REGISTER_TYPE_UD);
+
+   /* Overwrite dword 0 of the header (SO vertices to write) and
+    * dword 1 (number of primitives written).
+    */
+   brw_push_insn_state(p);
+   brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+   brw_set_default_access_mode(p, BRW_ALIGN_1);
+   brw_MOV(p, get_element_ud(header, 0), get_element_ud(src1, 0));
+   brw_MOV(p, get_element_ud(header, 1), get_element_ud(src0, 0));
+   brw_pop_insn_state(p);
+
+   /* Allocate URB handle in dst */
+   brw_ff_sync(p,
+               dst,
+               0,
+               header,
+               1, /* allocate */
+               1, /* response length */
+               0 /* eot */);
+
+   /* Now put allocated urb handle in header.0 */
+   brw_push_insn_state(p);
+   brw_set_default_access_mode(p, BRW_ALIGN_1);
+   brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+   brw_MOV(p, get_element_ud(header, 0), get_element_ud(dst, 0));
+
+   /* src1 is not an immediate when we use transform feedback */
+   if (src1.file != BRW_IMMEDIATE_VALUE)
+      brw_MOV(p, brw_vec4_grf(src1.nr, 0), brw_vec4_grf(dst.nr, 1));
+
+   brw_pop_insn_state(p);
+}
+
+void
+vec4_generator::generate_gs_set_primitive_id(struct brw_reg dst)
+{
+   /* In gen6, PrimitiveID is delivered in R0.1 of the payload */
+   struct brw_reg src = brw_vec8_grf(0, 0);
+   brw_push_insn_state(p);
+   brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+   brw_set_default_access_mode(p, BRW_ALIGN_1);
+   brw_MOV(p, get_element_ud(dst, 0), get_element_ud(src, 1));
    brw_pop_insn_state(p);
 }
 
@@ -1268,6 +1419,18 @@ vec4_generator::generate_code(const cfg_t *cfg)
          generate_gs_urb_write(inst);
          break;
 
+      case GS_OPCODE_URB_WRITE_ALLOCATE:
+         generate_gs_urb_write_allocate(inst);
+         break;
+
+      case GS_OPCODE_SVB_WRITE:
+         generate_gs_svb_write(inst, dst, src[0], src[1]);
+         break;
+
+      case GS_OPCODE_SVB_SET_DST_INDEX:
+         generate_gs_svb_set_destination_index(inst, dst, src[0]);
+         break;
+
       case GS_OPCODE_THREAD_END:
          generate_gs_thread_end(inst);
          break;
@@ -1280,8 +1443,20 @@ vec4_generator::generate_code(const cfg_t *cfg)
          generate_gs_set_vertex_count(dst, src[0]);
          break;
 
-      case GS_OPCODE_SET_DWORD_2_IMMED:
-         generate_gs_set_dword_2_immed(dst, src[0]);
+      case GS_OPCODE_FF_SYNC:
+         generate_gs_ff_sync(inst, dst, src[0], src[1]);
+         break;
+
+      case GS_OPCODE_FF_SYNC_SET_PRIMITIVES:
+         generate_gs_ff_sync_set_primitives(dst, src[0], src[1], src[2]);
+         break;
+
+      case GS_OPCODE_SET_PRIMITIVE_ID:
+         generate_gs_set_primitive_id(dst);
+         break;
+
+      case GS_OPCODE_SET_DWORD_2:
+         generate_gs_set_dword_2(dst, src[0]);
          break;
 
       case GS_OPCODE_PREPARE_CHANNEL_MASKS:

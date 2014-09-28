@@ -29,7 +29,6 @@
 #ifndef FREEDRENO_CONTEXT_H_
 #define FREEDRENO_CONTEXT_H_
 
-#include "draw/draw_context.h"
 #include "pipe/p_context.h"
 #include "indices/u_primconvert.h"
 #include "util/u_blitter.h"
@@ -221,6 +220,14 @@ struct fd_context {
 	 */
 	struct fd_ringbuffer *rings[8];
 	unsigned rings_idx;
+
+	/* NOTE: currently using a single ringbuffer for both draw and
+	 * tiling commands, we need to make sure we need to leave enough
+	 * room at the end to append the tiling commands when we flush.
+	 * 0x7000 dwords should be a couple times more than we ever need
+	 * so should be a nice conservative threshold.
+	 */
+#define FD_TILING_COMMANDS_DWORDS 0x7000
 
 	/* normal draw/clear cmds: */
 	struct fd_ringbuffer *ring;

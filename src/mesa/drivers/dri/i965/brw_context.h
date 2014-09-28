@@ -229,7 +229,7 @@ struct brw_state_flags {
    /**
     * State update flags signalled as the result of brw_tracked_state updates
     */
-   GLuint brw;
+   uint64_t brw;
    /**
     * State update flags that used to be signalled by brw_state_cache.c
     * searches.
@@ -298,6 +298,9 @@ struct brw_stage_prog_data {
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params;
 
+   unsigned curb_read_length;
+   unsigned total_scratch;
+
    /**
     * Register where the thread expects to find input data from the URB
     * (typically uniforms, followed by vertex or fragment attributes).
@@ -325,13 +328,11 @@ struct brw_stage_prog_data {
 struct brw_wm_prog_data {
    struct brw_stage_prog_data base;
 
-   GLuint curb_read_length;
    GLuint num_varying_inputs;
 
    GLuint dispatch_grf_start_reg_16;
    GLuint reg_blocks;
    GLuint reg_blocks_16;
-   GLuint total_scratch;
 
    struct {
       /** @{
@@ -345,6 +346,7 @@ struct brw_wm_prog_data {
    bool dual_src_blend;
    bool uses_pos_offset;
    bool uses_omask;
+   bool uses_kill;
    uint32_t prog_offset_16;
 
    /**
@@ -531,10 +533,8 @@ struct brw_vec4_prog_data {
    struct brw_stage_prog_data base;
    struct brw_vue_map vue_map;
 
-   GLuint curb_read_length;
    GLuint urb_read_length;
    GLuint total_grf;
-   GLuint total_scratch;
 
    /* Used for calculating urb partitions.  In the VS, this is the size of the
     * URB entry used for both input and output to the thread.  In the GS, this
@@ -553,46 +553,7 @@ struct brw_vs_prog_data {
    GLbitfield64 inputs_read;
 
    bool uses_vertexid;
-};
-
-
-/* Note: brw_gs_prog_data_compare() must be updated when adding fields to
- * this struct!
- */
-struct brw_gs_prog_data
-{
-   struct brw_vec4_prog_data base;
-
-   /**
-    * Size of an output vertex, measured in HWORDS (32 bytes).
-    */
-   unsigned output_vertex_size_hwords;
-
-   unsigned output_topology;
-
-   /**
-    * Size of the control data (cut bits or StreamID bits), in hwords (32
-    * bytes).  0 if there is no control data.
-    */
-   unsigned control_data_header_size_hwords;
-
-   /**
-    * Format of the control data (either GEN7_GS_CONTROL_DATA_FORMAT_GSCTL_SID
-    * if the control data is StreamID bits, or
-    * GEN7_GS_CONTROL_DATA_FORMAT_GSCTL_CUT if the control data is cut bits).
-    * Ignored if control_data_header_size is 0.
-    */
-   unsigned control_data_format;
-
-   bool include_primitive_id;
-
-   int invocations;
-
-   /**
-    * True if the thread should be dispatched in DUAL_INSTANCE mode, false if
-    * it should be dispatched in DUAL_OBJECT mode.
-    */
-   bool dual_instanced_dispatch;
+   bool uses_instanceid;
 };
 
 /** Number of texture sampler units */
@@ -639,7 +600,77 @@ struct brw_gs_prog_data
                             2 /* shader time, pull constants */)
 
 #define SURF_INDEX_GEN6_SOL_BINDING(t) (t)
-#define BRW_MAX_GEN6_GS_SURFACES       SURF_INDEX_GEN6_SOL_BINDING(BRW_MAX_SOL_BINDINGS)
+
+/* Note: brw_gs_prog_data_compare() must be updated when adding fields to
+ * this struct!
+ */
+struct brw_gs_prog_data
+{
+   struct brw_vec4_prog_data base;
+
+   /**
+    * Size of an output vertex, measured in HWORDS (32 bytes).
+    */
+   unsigned output_vertex_size_hwords;
+
+   unsigned output_topology;
+
+   /**
+    * Size of the control data (cut bits or StreamID bits), in hwords (32
+    * bytes).  0 if there is no control data.
+    */
+   unsigned control_data_header_size_hwords;
+
+   /**
+    * Format of the control data (either GEN7_GS_CONTROL_DATA_FORMAT_GSCTL_SID
+    * if the control data is StreamID bits, or
+    * GEN7_GS_CONTROL_DATA_FORMAT_GSCTL_CUT if the control data is cut bits).
+    * Ignored if control_data_header_size is 0.
+    */
+   unsigned control_data_format;
+
+   bool include_primitive_id;
+
+   int invocations;
+
+   /**
+    * Dispatch mode, can be any of:
+    * GEN7_GS_DISPATCH_MODE_DUAL_OBJECT
+    * GEN7_GS_DISPATCH_MODE_DUAL_INSTANCE
+    * GEN7_GS_DISPATCH_MODE_SINGLE
+    */
+   int dispatch_mode;
+
+   /**
+    * Gen6 transform feedback enabled flag.
+    */
+   bool gen6_xfb_enabled;
+
+   /**
+    * Gen6: Provoking vertex convention for odd-numbered triangles
+    * in tristrips.
+    */
+   GLuint pv_first:1;
+
+   /**
+    * Gen6: Number of varyings that are output to transform feedback.
+    */
+   GLuint num_transform_feedback_bindings:7; /* 0-BRW_MAX_SOL_BINDINGS */
+
+   /**
+    * Gen6: Map from the index of a transform feedback binding table entry to the
+    * gl_varying_slot that should be streamed out through that binding table
+    * entry.
+    */
+   unsigned char transform_feedback_bindings[BRW_MAX_SOL_BINDINGS];
+
+   /**
+    * Gen6: Map from the index of a transform feedback binding table entry to the
+    * swizzles that should be used when streaming out data through that
+    * binding table entry.
+    */
+   unsigned char transform_feedback_swizzles[BRW_MAX_SOL_BINDINGS];
+};
 
 /**
  * Stride in bytes between shader_time entries.
@@ -1062,6 +1093,21 @@ struct brw_context
    bool no_depth_or_stencil;
 
    struct {
+      /** Does the current draw use the index buffer? */
+      bool indexed;
+
+      int start_vertex_location;
+      int base_vertex_location;
+
+      /**
+       * Buffer and offset used for GL_ARB_shader_draw_parameters
+       * (for now, only gl_BaseVertex).
+       */
+      drm_intel_bo *draw_params_bo;
+      uint32_t draw_params_offset;
+   } draw;
+
+   struct {
       struct brw_vertex_element inputs[VERT_ATTRIB_MAX];
       struct brw_vertex_buffer buffers[VERT_ATTRIB_MAX];
 
@@ -1213,7 +1259,12 @@ struct brw_context
       uint32_t state_offset;
 
       uint32_t bind_bo_offset;
-      uint32_t surf_offset[BRW_MAX_GEN6_GS_SURFACES];
+      /**
+       * Surface offsets for the binding table. We only need surfaces to
+       * implement transform feedback so BRW_MAX_SOL_BINDINGS is all that we
+       * need in this case.
+       */
+      uint32_t surf_offset[BRW_MAX_SOL_BINDINGS];
    } ff_gs;
 
    struct {

@@ -47,9 +47,7 @@ struct bblock_link {
    struct bblock_t *block;
 };
 
-#ifndef __cplusplus
 struct backend_instruction;
-#endif
 
 struct bblock_t {
 #ifdef __cplusplus
@@ -62,18 +60,26 @@ struct bblock_t {
    bool is_successor_of(const bblock_t *block) const;
    bool can_combine_with(const bblock_t *that) const;
    void combine_with(bblock_t *that);
-   void dump(backend_visitor *v);
+   void dump(backend_visitor *v) const;
+
+   backend_instruction *start();
+   const backend_instruction *start() const;
+   backend_instruction *end();
+   const backend_instruction *end() const;
+
+   bblock_t *next();
+   const bblock_t *next() const;
+   bblock_t *prev();
+   const bblock_t *prev() const;
 #endif
 
    struct exec_node link;
    struct cfg_t *cfg;
 
-   struct backend_instruction *start;
-   struct backend_instruction *end;
-
    int start_ip;
    int end_ip;
 
+   struct exec_list instructions;
    struct exec_list parents;
    struct exec_list children;
    int num;
@@ -86,6 +92,104 @@ struct bblock_t {
    struct bblock_t *if_block;
    struct bblock_t *else_block;
 };
+
+static inline struct backend_instruction *
+bblock_start(struct bblock_t *block)
+{
+   return (struct backend_instruction *)exec_list_get_head(&block->instructions);
+}
+
+static inline const struct backend_instruction *
+bblock_start_const(const struct bblock_t *block)
+{
+   return (const struct backend_instruction *)exec_list_get_head_const(&block->instructions);
+}
+
+static inline struct backend_instruction *
+bblock_end(struct bblock_t *block)
+{
+   return (struct backend_instruction *)exec_list_get_tail(&block->instructions);
+}
+
+static inline const struct backend_instruction *
+bblock_end_const(const struct bblock_t *block)
+{
+   return (const struct backend_instruction *)exec_list_get_tail_const(&block->instructions);
+}
+
+static inline struct bblock_t *
+bblock_next(struct bblock_t *block)
+{
+   return (struct bblock_t *)block->link.next;
+}
+
+static inline const struct bblock_t *
+bblock_next_const(const struct bblock_t *block)
+{
+   return (const struct bblock_t *)block->link.next;
+}
+
+static inline struct bblock_t *
+bblock_prev(struct bblock_t *block)
+{
+   return (struct bblock_t *)block->link.prev;
+}
+
+static inline const struct bblock_t *
+bblock_prev_const(const struct bblock_t *block)
+{
+   return (const struct bblock_t *)block->link.prev;
+}
+
+#ifdef __cplusplus
+inline backend_instruction *
+bblock_t::start()
+{
+   return bblock_start(this);
+}
+
+inline const backend_instruction *
+bblock_t::start() const
+{
+   return bblock_start_const(this);
+}
+
+inline backend_instruction *
+bblock_t::end()
+{
+   return bblock_end(this);
+}
+
+inline const backend_instruction *
+bblock_t::end() const
+{
+   return bblock_end_const(this);
+}
+
+inline bblock_t *
+bblock_t::next()
+{
+   return bblock_next(this);
+}
+
+inline const bblock_t *
+bblock_t::next() const
+{
+   return bblock_next_const(this);
+}
+
+inline bblock_t *
+bblock_t::prev()
+{
+   return bblock_prev(this);
+}
+
+inline const bblock_t *
+bblock_t::prev() const
+{
+   return bblock_prev_const(this);
+}
+#endif
 
 struct cfg_t {
 #ifdef __cplusplus
@@ -100,7 +204,7 @@ struct cfg_t {
    void set_next_block(bblock_t **cur, bblock_t *block, int ip);
    void make_block_array();
 
-   void dump(backend_visitor *v);
+   void dump(backend_visitor *v) const;
 #endif
    void *mem_ctx;
 
@@ -110,10 +214,16 @@ struct cfg_t {
    int num_blocks;
 };
 
+/* Note that this is implemented with a double for loop -- break will
+ * break from the inner loop only!
+ */
 #define foreach_block_and_inst(__block, __type, __inst, __cfg) \
    foreach_block (__block, __cfg)                              \
       foreach_inst_in_block (__type, __inst, __block)
 
+/* Note that this is implemented with a double for loop -- break will
+ * break from the inner loop only!
+ */
 #define foreach_block_and_inst_safe(__block, __type, __inst, __cfg) \
    foreach_block_safe (__block, __cfg)                              \
       foreach_inst_in_block_safe (__type, __inst, __block)
@@ -125,21 +235,27 @@ struct cfg_t {
    foreach_list_typed_safe (bblock_t, __block, link, &(__cfg)->block_list)
 
 #define foreach_inst_in_block(__type, __inst, __block)         \
-   for (__type *__inst = (__type *)__block->start;             \
-        __inst != __block->end->next;                          \
-        __inst = (__type *)__inst->next)
+   foreach_in_list(__type, __inst, &(__block)->instructions)
 
 #define foreach_inst_in_block_safe(__type, __inst, __block)    \
-   for (__type *__inst = (__type *)__block->start,             \
+   for (__type *__inst = (__type *)__block->instructions.head, \
                *__next = (__type *)__inst->next,               \
-               *__end = (__type *)__block->end->next->next;    \
+               *__end = (__type *)__block->instructions.tail;  \
         __next != __end;                                       \
         __inst = __next,                                       \
         __next = (__type *)__next->next)
 
 #define foreach_inst_in_block_reverse(__type, __inst, __block) \
-   for (__type *__inst = (__type *)__block->end;               \
-        __inst != __block->start->prev;                        \
-        __inst = (__type *)__inst->prev)
+   foreach_in_list_reverse(__type, __inst, &(__block)->instructions)
+
+#define foreach_inst_in_block_starting_from(__type, __scan_inst, __inst, __block) \
+   for (__type *__scan_inst = (__type *)__inst->next;          \
+        !__scan_inst->is_tail_sentinel();                      \
+        __scan_inst = (__type *)__scan_inst->next)
+
+#define foreach_inst_in_block_reverse_starting_from(__type, __scan_inst, __inst, __block) \
+   for (__type *__scan_inst = (__type *)__inst->prev;          \
+        !__scan_inst->is_head_sentinel();                      \
+        __scan_inst = (__type *)__scan_inst->prev)
 
 #endif /* BRW_CFG_H */

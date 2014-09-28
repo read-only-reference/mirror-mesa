@@ -847,6 +847,7 @@ enum opcode {
    BRW_OPCODE_PLN =	90,  /**< G45+ */
    BRW_OPCODE_MAD =	91,  /**< Gen6+ */
    BRW_OPCODE_LRP =	92,  /**< Gen6+ */
+   BRW_OPCODE_NENOP =	125, /**< G45 only */
    BRW_OPCODE_NOP =	126,
 
    /* These are compiler backend opcodes that get translated into other
@@ -941,6 +942,14 @@ enum opcode {
    GS_OPCODE_URB_WRITE,
 
    /**
+    * Write geometry shader output data to the URB and request a new URB
+    * handle (gen6).
+    *
+    * This opcode doesn't do an implied move from R0 to the first MRF.
+    */
+   GS_OPCODE_URB_WRITE_ALLOCATE,
+
+   /**
     * Terminate the geometry shader thread by doing an empty URB write.
     *
     * This opcode doesn't do an implied move from R0 to the first MRF.  This
@@ -976,11 +985,9 @@ enum opcode {
    GS_OPCODE_SET_VERTEX_COUNT,
 
    /**
-    * Set DWORD 2 of dst to the immediate value in src.  Used by geometry
-    * shaders to initialize DWORD 2 of R0, which needs to be 0 in order for
-    * scratch reads and writes to operate correctly.
+    * Set DWORD 2 of dst to the value in src.
     */
-   GS_OPCODE_SET_DWORD_2_IMMED,
+   GS_OPCODE_SET_DWORD_2,
 
    /**
     * Prepare the dst register for storage in the "Channel Mask" fields of a
@@ -1014,6 +1021,69 @@ enum opcode {
     * - dst is the GRF for gl_InvocationID.
     */
    GS_OPCODE_GET_INSTANCE_ID,
+
+   /**
+    * Send a FF_SYNC message to allocate initial URB handles (gen6).
+    *
+    * - dst will be used as the writeback register for the FF_SYNC operation.
+    *
+    * - src0 is the number of primitives written.
+    *
+    * - src1 is the value to hold in M0.0: number of SO vertices to write
+    *   and number of SO primitives needed. Its value will be overwritten
+    *   with the SVBI values if transform feedback is enabled.
+    *
+    * Note: This opcode uses an implicit MRF register for the ff_sync message
+    * header, so the caller is expected to set inst->base_mrf and initialize
+    * that MRF register to r0. This opcode will also write to this MRF register
+    * to include the allocated URB handle so it can then be reused directly as
+    * the header in the URB write operation we are allocating the handle for.
+    */
+   GS_OPCODE_FF_SYNC,
+
+   /**
+    * Move r0.1 (which holds PrimitiveID information in gen6) to a separate
+    * register.
+    *
+    * - dst is the GRF where PrimitiveID information will be moved.
+    */
+   GS_OPCODE_SET_PRIMITIVE_ID,
+
+   /**
+    * Write transform feedback data to the SVB by sending a SVB WRITE message.
+    * Used in gen6.
+    *
+    * - dst is the MRF register containing the message header.
+    *
+    * - src0 is the register where the vertex data is going to be copied from.
+    *
+    * - src1 is the destination register when write commit occurs.
+    */
+   GS_OPCODE_SVB_WRITE,
+
+   /**
+    * Set destination index in the SVB write message payload (M0.5). Used
+    * in gen6 for transform feedback.
+    *
+    * - dst is the header to save the destination indices for SVB WRITE.
+    * - src is the register that holds the destination indices value.
+    */
+   GS_OPCODE_SVB_SET_DST_INDEX,
+
+   /**
+    * Prepare Mx.0 subregister for being used in the FF_SYNC message header.
+    * Used in gen6 for transform feedback.
+    *
+    * - dst will hold the register with the final Mx.0 value.
+    *
+    * - src0 has the number of vertices emitted in SO (NumSOVertsToWrite)
+    *
+    * - src1 has the number of needed primitives for SO (NumSOPrimsNeeded)
+    *
+    * - src2 is the value to hold in M0: number of SO vertices to write
+    *   and number of SO primitives needed.
+    */
+   GS_OPCODE_FF_SYNC_SET_PRIMITIVES,
 };
 
 enum brw_derivative_quality {
@@ -1572,10 +1642,14 @@ enum brw_message_target {
 # define GEN7_URB_ENTRY_SIZE_SHIFT                      16
 # define GEN7_URB_STARTING_ADDRESS_SHIFT                25
 
-/* "GS URB Entry Allocation Size" is a U9-1 field, so the maximum gs_size
+/* Gen7 "GS URB Entry Allocation Size" is a U9-1 field, so the maximum gs_size
  * is 2^9, or 512.  It's counted in multiples of 64 bytes.
  */
-#define GEN7_MAX_GS_URB_ENTRY_SIZE_BYTES		(512*64)
+#define GEN7_MAX_GS_URB_ENTRY_SIZE_BYTES                (512*64)
+/* Gen6 "GS URB Entry Allocation Size" is defined as a number of 1024-bit
+ * (128 bytes) URB rows and the maximum allowed value is 5 rows.
+ */
+#define GEN6_MAX_GS_URB_ENTRY_SIZE_BYTES                (5*128)
 
 #define _3DSTATE_PUSH_CONSTANT_ALLOC_VS         0x7912 /* GEN7+ */
 #define _3DSTATE_PUSH_CONSTANT_ALLOC_GS         0x7915 /* GEN7+ */
@@ -2315,7 +2389,5 @@ enum brw_wm_barycentric_interp_mode {
 /* Broadwell: write-back or write-through; always use all the caches. */
 #define BDW_MOCS_WB 0x78
 #define BDW_MOCS_WT 0x58
-
-#include "intel_chipset.h"
 
 #endif

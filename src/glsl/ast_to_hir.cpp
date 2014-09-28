@@ -912,7 +912,6 @@ get_lvalue_copy(exec_list *instructions, ir_rvalue *lvalue)
    var = new(ctx) ir_variable(lvalue->type, "_post_incdec_tmp",
 			      ir_var_temporary);
    instructions->push_tail(var);
-   var->data.mode = ir_var_auto;
 
    instructions->push_tail(new(ctx) ir_assignment(new(ctx) ir_dereference_variable(var),
 						  lvalue));
@@ -2499,6 +2498,7 @@ apply_type_qualifier_to_variable(const struct ast_type_qualifier *qual,
    /* If there is no qualifier that changes the mode of the variable, leave
     * the setting alone.
     */
+   assert(var->data.mode != ir_var_temporary);
    if (qual->flags.q.in && qual->flags.q.out)
       var->data.mode = ir_var_function_inout;
    else if (qual->flags.q.in)
@@ -3202,6 +3202,41 @@ validate_identifier(const char *identifier, YYLTYPE loc,
    }
 }
 
+static bool
+precision_qualifier_allowed(const glsl_type *type)
+{
+   /* Precision qualifiers apply to floating point, integer and sampler
+    * types.
+    *
+    * Section 4.5.2 (Precision Qualifiers) of the GLSL 1.30 spec says:
+    *    "Any floating point or any integer declaration can have the type
+    *    preceded by one of these precision qualifiers [...] Literal
+    *    constants do not have precision qualifiers. Neither do Boolean
+    *    variables.
+    *
+    * Section 4.5 (Precision and Precision Qualifiers) of the GLSL 1.30
+    * spec also says:
+    *
+    *     "Precision qualifiers are added for code portability with OpenGL
+    *     ES, not for functionality. They have the same syntax as in OpenGL
+    *     ES."
+    *
+    * Section 8 (Built-In Functions) of the GLSL ES 1.00 spec says:
+    *
+    *     "uniform lowp sampler2D sampler;
+    *     highp vec2 coord;
+    *     ...
+    *     lowp vec4 col = texture2D (sampler, coord);
+    *                                            // texture2D returns lowp"
+    *
+    * From this, we infer that GLSL 1.30 (and later) should allow precision
+    * qualifiers on sampler types just like float and integer types.
+    */
+   return type->is_float()
+       || type->is_integer()
+       || type->is_record()
+       || type->is_sampler();
+}
 
 ir_rvalue *
 ast_declarator_list::hir(exec_list *instructions,
@@ -3689,41 +3724,13 @@ ast_declarator_list::hir(exec_list *instructions,
       }
 
 
-      /* Precision qualifiers apply to floating point, integer and sampler
-       * types.
-       *
-       * Section 4.5.2 (Precision Qualifiers) of the GLSL 1.30 spec says:
-       *    "Any floating point or any integer declaration can have the type
-       *    preceded by one of these precision qualifiers [...] Literal
-       *    constants do not have precision qualifiers. Neither do Boolean
-       *    variables.
-       *
-       * Section 4.5 (Precision and Precision Qualifiers) of the GLSL 1.30
-       * spec also says:
-       *
-       *     "Precision qualifiers are added for code portability with OpenGL
-       *     ES, not for functionality. They have the same syntax as in OpenGL
-       *     ES."
-       *
-       * Section 8 (Built-In Functions) of the GLSL ES 1.00 spec says:
-       *
-       *     "uniform lowp sampler2D sampler;
-       *     highp vec2 coord;
-       *     ...
-       *     lowp vec4 col = texture2D (sampler, coord);
-       *                                            // texture2D returns lowp"
-       *
-       * From this, we infer that GLSL 1.30 (and later) should allow precision
-       * qualifiers on sampler types just like float and integer types.
+      /* If a precision qualifier is allowed on a type, it is allowed on
+       * an array of that type.
        */
-      if (this->type->qualifier.precision != ast_precision_none
-          && !var->type->is_float()
-          && !var->type->is_integer()
-          && !var->type->is_record()
-          && !var->type->is_sampler()
-          && !(var->type->is_array()
-               && (var->type->fields.array->is_float()
-                   || var->type->fields.array->is_integer()))) {
+      if (!(this->type->qualifier.precision == ast_precision_none
+          || precision_qualifier_allowed(var->type)
+          || (var->type->is_array()
+	      && precision_qualifier_allowed(var->type->fields.array)))) {
 
          _mesa_glsl_error(&loc, state,
                           "precision qualifiers apply only to floating point"
@@ -5024,7 +5031,7 @@ ast_type_specifier::hir(exec_list *instructions,
           */
          ir_variable *const junk =
             new(state) ir_variable(type, "#default precision",
-                                   ir_var_temporary);
+                                   ir_var_auto);
 
          state->symbols->add_variable(junk);
       }
@@ -5455,7 +5462,7 @@ ast_interface_block::hir(exec_list *instructions,
          }
          if (this->instance_name != NULL) {
             _mesa_glsl_error(&loc, state,
-                             "gl_PerVertex input may not be redeclared with "
+                             "gl_PerVertex output may not be redeclared with "
                              "an instance name");
          }
          break;

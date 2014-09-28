@@ -60,7 +60,7 @@ static const struct debug_named_value debug_options[] = {
 		{"msgs",      FD_DBG_MSGS,   "Print debug messages"},
 		{"disasm",    FD_DBG_DISASM, "Dump TGSI and adreno shader disassembly"},
 		{"dclear",    FD_DBG_DCLEAR, "Mark all state dirty after clear"},
-		{"dgmem",     FD_DBG_DGMEM,  "Mark all state dirty after GMEM tile pass"},
+		{"flush",     FD_DBG_FLUSH,  "Force flush after every draw"},
 		{"dscis",     FD_DBG_DSCIS,  "Disable scissor optimization"},
 		{"direct",    FD_DBG_DIRECT, "Force inline (SS_DIRECT) state loads"},
 		{"dbypass",   FD_DBG_DBYPASS,"Disable GMEM bypass"},
@@ -156,7 +156,6 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_ANISOTROPIC_FILTER:
 	case PIPE_CAP_POINT_SPRITE:
 	case PIPE_CAP_TEXTURE_SHADOW_MAP:
-	case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
 	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
 	case PIPE_CAP_TEXTURE_SWIZZLE:
 	case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
@@ -181,11 +180,18 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_TEXCOORD:
 	case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
 	case PIPE_CAP_CONDITIONAL_RENDER:
-	case PIPE_CAP_PRIMITIVE_RESTART:
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
 	case PIPE_CAP_TEXTURE_BARRIER:
+	case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
 	case PIPE_CAP_SM3:
+	case PIPE_CAP_CUBE_MAP_ARRAY:
+	case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
+	case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
+	case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
 		return 0;
+
+	case PIPE_CAP_PRIMITIVE_RESTART:
+		return (screen->gpu_id >= 300) ? 1 : 0;
 
 	case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
 		return 256;
@@ -218,7 +224,11 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_DRAW_INDIRECT:
 	case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
 	case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
+	case PIPE_CAP_SAMPLER_VIEW_TARGET:
 		return 0;
+
+	case PIPE_CAP_MAX_VIEWPORTS:
+		return 1;
 
 	/* Stream output. */
 	case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
@@ -238,11 +248,13 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 	/* Texturing. */
 	case PIPE_CAP_MAX_TEXTURE_2D_LEVELS:
-	case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
 	case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
 		return MAX_MIP_LEVELS;
+	case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
+		return 11;
+
 	case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
-		return 0;  /* TODO: a3xx+ should support (required in gles3) */
+		return (screen->gpu_id >= 300) ? 256 : 0;
 
 	/* Render targets. */
 	case PIPE_CAP_MAX_RENDER_TARGETS:
@@ -280,11 +292,9 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return 10;
 	case PIPE_CAP_UMA:
 		return 1;
-
-	default:
-		DBG("unknown param %d", param);
-		return 0;
 	}
+	debug_printf("unknown param %d\n", param);
+	return 0;
 }
 
 static float
@@ -305,10 +315,9 @@ fd_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
 	case PIPE_CAPF_GUARD_BAND_RIGHT:
 	case PIPE_CAPF_GUARD_BAND_BOTTOM:
 		return 0.0f;
-	default:
-		DBG("unknown paramf %d", param);
-		return 0;
 	}
+	debug_printf("unknown paramf %d\n", param);
+	return 0;
 }
 
 static int
@@ -358,6 +367,7 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 	case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
 		return 1;
 	case PIPE_SHADER_CAP_SUBROUTINES:
+	case PIPE_SHADER_CAP_DOUBLES:
 		return 0;
 	case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
 		return 1;
@@ -371,10 +381,8 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 		return 16;
 	case PIPE_SHADER_CAP_PREFERRED_IR:
 		return PIPE_SHADER_IR_TGSI;
-	default:
-		DBG("unknown shader param %d", param);
-		return 0;
 	}
+	debug_printf("unknown shader param %d\n", param);
 	return 0;
 }
 
@@ -391,6 +399,9 @@ fd_screen_bo_get_handle(struct pipe_screen *pscreen,
 	} else if (whandle->type == DRM_API_HANDLE_TYPE_KMS) {
 		whandle->handle = fd_bo_handle(bo);
 		return TRUE;
+	} else if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+		whandle->handle = fd_bo_dmabuf(bo);
+		return TRUE;
 	} else {
 		return FALSE;
 	}
@@ -404,12 +415,17 @@ fd_screen_bo_from_handle(struct pipe_screen *pscreen,
 	struct fd_screen *screen = fd_screen(pscreen);
 	struct fd_bo *bo;
 
-	if (whandle->type != DRM_API_HANDLE_TYPE_SHARED) {
+	if (whandle->type == DRM_API_HANDLE_TYPE_SHARED) {
+		bo = fd_bo_from_name(screen->dev, whandle->handle);
+	} else if (whandle->type == DRM_API_HANDLE_TYPE_KMS) {
+		bo = fd_bo_from_handle(screen->dev, whandle->handle, 0);
+	} else if (whandle->type == DRM_API_HANDLE_TYPE_FD) {
+		bo = fd_bo_from_dmabuf(screen->dev, whandle->handle);
+	} else {
 		DBG("Attempt to import unsupported handle type %d", whandle->type);
 		return NULL;
 	}
 
-	bo = fd_bo_from_name(screen->dev, whandle->handle);
 	if (!bo) {
 		DBG("ref name 0x%08x failed", whandle->handle);
 		return NULL;

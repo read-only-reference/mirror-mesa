@@ -152,9 +152,8 @@ emit_constants(struct fd_ringbuffer *ring,
 #define BASETABLE_SZ    A3XX_MAX_MIP_LEVELS
 
 static void
-emit_textures(struct fd_ringbuffer *ring,
-		enum adreno_state_block sb,
-		struct fd_texture_stateobj *tex)
+emit_textures(struct fd_context *ctx, struct fd_ringbuffer *ring,
+		enum adreno_state_block sb, struct fd_texture_stateobj *tex)
 {
 	static const unsigned tex_off[] = {
 			[SB_VERT_TEX] = VERT_TEX_OFF,
@@ -164,7 +163,18 @@ emit_textures(struct fd_ringbuffer *ring,
 			[SB_VERT_TEX] = SB_VERT_MIPADDR,
 			[SB_FRAG_TEX] = SB_FRAG_MIPADDR,
 	};
-	unsigned i, j;
+	static const uint32_t bcolor_reg[] = {
+			[SB_VERT_TEX] = REG_A3XX_TPL1_TP_VS_BORDER_COLOR_BASE_ADDR,
+			[SB_FRAG_TEX] = REG_A3XX_TPL1_TP_FS_BORDER_COLOR_BASE_ADDR,
+	};
+	struct fd3_context *fd3_ctx = fd3_context(ctx);
+	unsigned i, j, off;
+	void *ptr;
+
+	u_upload_alloc(fd3_ctx->border_color_uploader,
+			0, 2 * PIPE_MAX_SAMPLERS * BORDERCOLOR_SIZE, &off,
+			&fd3_ctx->border_color_buf,
+			&ptr);
 
 	if (tex->num_samplers > 0) {
 		/* output sampler state: */
@@ -180,6 +190,15 @@ emit_textures(struct fd_ringbuffer *ring,
 			const struct fd3_sampler_stateobj *sampler = tex->samplers[i] ?
 					fd3_sampler_stateobj(tex->samplers[i]) :
 					&dummy_sampler;
+			uint16_t *bcolor = (uint16_t *)((uint8_t *)ptr +
+					(BORDERCOLOR_SIZE * tex_off[sb]) +
+					(BORDERCOLOR_SIZE * i));
+
+			bcolor[0] = util_float_to_half(sampler->base.border_color.f[2]);
+			bcolor[1] = util_float_to_half(sampler->base.border_color.f[1]);
+			bcolor[2] = util_float_to_half(sampler->base.border_color.f[0]);
+			bcolor[3] = util_float_to_half(sampler->base.border_color.f[3]);
+
 			OUT_RING(ring, sampler->texsamp0);
 			OUT_RING(ring, sampler->texsamp1);
 		}
@@ -237,11 +256,19 @@ emit_textures(struct fd_ringbuffer *ring,
 			}
 		}
 	}
+
+	OUT_PKT0(ring, bcolor_reg[sb], 1);
+	OUT_RELOC(ring, fd_resource(fd3_ctx->border_color_buf)->bo, off, 0, 0);
+
+	u_upload_unmap(fd3_ctx->border_color_uploader);
 }
 
 /* emit texture state for mem->gmem restore operation.. eventually it would
  * be good to get rid of this and use normal CSO/etc state for more of these
  * special cases, but for now the compiler is not sufficient..
+ *
+ * Also, for using normal state, not quite sure how to handle the special
+ * case format (fd3_gmem_restore_format()) stuff for restoring depth/stencil.
  */
 void
 fd3_emit_gmem_restore_tex(struct fd_ringbuffer *ring, struct pipe_surface *psurf)
@@ -272,7 +299,7 @@ fd3_emit_gmem_restore_tex(struct fd_ringbuffer *ring, struct pipe_surface *psurf
 			CP_LOAD_STATE_0_NUM_UNIT(1));
 	OUT_RING(ring, CP_LOAD_STATE_1_STATE_TYPE(ST_CONSTANTS) |
 			CP_LOAD_STATE_1_EXT_SRC_ADDR(0));
-	OUT_RING(ring, A3XX_TEX_CONST_0_FMT(fd3_pipe2tex(psurf->format)) |
+	OUT_RING(ring, A3XX_TEX_CONST_0_FMT(fd3_pipe2tex(format)) |
 			A3XX_TEX_CONST_0_TYPE(A3XX_TEX_2D) |
 			fd3_tex_swiz(format,  PIPE_SWIZZLE_RED, PIPE_SWIZZLE_GREEN,
 					PIPE_SWIZZLE_BLUE, PIPE_SWIZZLE_ALPHA));
@@ -315,6 +342,7 @@ fd3_emit_vertex_bufs(struct fd_ringbuffer *ring,
 			enum pipe_format pfmt = vbufs[i].format;
 			enum a3xx_vtx_fmt fmt = fd3_pipe2vtx(pfmt);
 			bool switchnext = (i != last);
+			bool isint = util_format_is_pure_integer(pfmt);
 			uint32_t fs = util_format_get_blocksize(pfmt);
 
 			debug_assert(fmt != ~0);
@@ -335,6 +363,7 @@ fd3_emit_vertex_bufs(struct fd_ringbuffer *ring,
 					A3XX_VFD_DECODE_INSTR_REGID(vp->inputs[i].regid) |
 					A3XX_VFD_DECODE_INSTR_SHIFTCNT(fs) |
 					A3XX_VFD_DECODE_INSTR_LASTCOMPVALID |
+					COND(isint, A3XX_VFD_DECODE_INSTR_INT) |
 					COND(switchnext, A3XX_VFD_DECODE_INSTR_SWITCHNEXT));
 
 			total_in += vp->inputs[i].ncomp;
@@ -354,8 +383,8 @@ fd3_emit_vertex_bufs(struct fd_ringbuffer *ring,
 
 void
 fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
-		struct fd_program_stateobj *prog, uint32_t dirty,
-		struct ir3_shader_key key)
+		const struct pipe_draw_info *info,  struct fd_program_stateobj *prog,
+		struct ir3_shader_key key, uint32_t dirty)
 {
 	struct ir3_shader_variant *vp;
 	struct ir3_shader_variant *fp;
@@ -444,7 +473,12 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_RING(ring, val);
 	}
 
-	if (dirty & (FD_DIRTY_RASTERIZER | FD_DIRTY_PROG)) {
+	/* NOTE: since primitive_restart is not actually part of any
+	 * state object, we need to make sure that we always emit
+	 * PRIM_VTX_CNTL.. either that or be more clever and detect
+	 * when it changes.
+	 */
+	if (info) {
 		uint32_t val = fd3_rasterizer_stateobj(ctx->rasterizer)
 				->pc_prim_vtx_cntl;
 
@@ -453,6 +487,10 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			if (stride_in_vpc > 0)
 				stride_in_vpc = MAX2(stride_in_vpc, 2);
 			val |= A3XX_PC_PRIM_VTX_CNTL_STRIDE_IN_VPC(stride_in_vpc);
+		}
+
+		if (info && info->indexed && info->primitive_restart) {
+			val |= A3XX_PC_PRIM_VTX_CNTL_PRIMITIVE_RESTART;
 		}
 
 		val |= COND(vp->writes_psize, A3XX_PC_PRIM_VTX_CNTL_PSIZE);
@@ -488,7 +526,8 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 	}
 
 	if (dirty & FD_DIRTY_PROG) {
-		fd3_program_emit(ring, prog, key);
+		bool flat = ctx->rasterizer && ctx->rasterizer->flatshade;
+		fd3_program_emit(ring, prog, key, flat);
 	}
 
 	/* TODO we should not need this or fd_wfi() before emit_constants():
@@ -541,14 +580,14 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 
 	if (dirty & FD_DIRTY_VERTTEX) {
 		if (vp->has_samp)
-			emit_textures(ring, SB_VERT_TEX, &ctx->verttex);
+			emit_textures(ctx, ring, SB_VERT_TEX, &ctx->verttex);
 		else
 			dirty &= ~FD_DIRTY_VERTTEX;
 	}
 
 	if (dirty & FD_DIRTY_FRAGTEX) {
 		if (fp->has_samp)
-			emit_textures(ring, SB_FRAG_TEX, &ctx->fragtex);
+			emit_textures(ctx, ring, SB_FRAG_TEX, &ctx->fragtex);
 		else
 			dirty &= ~FD_DIRTY_FRAGTEX;
 	}

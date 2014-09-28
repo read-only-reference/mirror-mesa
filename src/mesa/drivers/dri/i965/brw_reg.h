@@ -371,6 +371,12 @@ retype(struct brw_reg reg, enum brw_reg_type type)
 }
 
 static inline struct brw_reg
+firsthalf(struct brw_reg reg)
+{
+   return reg;
+}
+
+static inline struct brw_reg
 sechalf(struct brw_reg reg)
 {
    if (reg.vstride)
@@ -603,6 +609,12 @@ brw_null_reg(void)
 }
 
 static inline struct brw_reg
+brw_null_vec(unsigned width)
+{
+   return brw_vecn_reg(width, BRW_ARCHITECTURE_REGISTER_FILE, BRW_ARF_NULL, 0);
+}
+
+static inline struct brw_reg
 brw_address_reg(unsigned subnr)
 {
    return brw_uw1_reg(BRW_ARCHITECTURE_REGISTER_FILE, BRW_ARF_ADDRESS, subnr);
@@ -627,9 +639,10 @@ brw_ip_reg(void)
 }
 
 static inline struct brw_reg
-brw_acc_reg(void)
+brw_acc_reg(unsigned width)
 {
-   return brw_vec8_reg(BRW_ARCHITECTURE_REGISTER_FILE, BRW_ARF_ACCUMULATOR, 0);
+   return brw_vecn_reg(width, BRW_ARCHITECTURE_REGISTER_FILE,
+                       BRW_ARF_ACCUMULATOR, 0);
 }
 
 static inline struct brw_reg

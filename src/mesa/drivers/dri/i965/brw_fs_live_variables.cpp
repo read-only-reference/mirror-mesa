@@ -56,7 +56,7 @@ void
 fs_live_variables::setup_one_read(bblock_t *block, fs_inst *inst,
                                   int ip, fs_reg reg)
 {
-   int var = var_from_vgrf[reg.reg] + reg.reg_offset;
+   int var = var_from_reg(&reg);
    assert(var < num_vars);
 
    /* In most cases, a register can be written over safely by the
@@ -85,11 +85,11 @@ fs_live_variables::setup_one_read(bblock_t *block, fs_inst *inst,
     * would get stomped by the first decode as well.
     */
    int end_ip = ip;
-   if (v->dispatch_width == 16 && (reg.stride == 0 ||
-                                   reg.type == BRW_REGISTER_TYPE_UW ||
-                                   reg.type == BRW_REGISTER_TYPE_W ||
-                                   reg.type == BRW_REGISTER_TYPE_UB ||
-                                   reg.type == BRW_REGISTER_TYPE_B)) {
+   if (inst->exec_size == 16 && (reg.stride == 0 ||
+                                 reg.type == BRW_REGISTER_TYPE_UW ||
+                                 reg.type == BRW_REGISTER_TYPE_W ||
+                                 reg.type == BRW_REGISTER_TYPE_UB ||
+                                 reg.type == BRW_REGISTER_TYPE_B)) {
       end_ip++;
    }
 
@@ -108,7 +108,7 @@ void
 fs_live_variables::setup_one_write(bblock_t *block, fs_inst *inst,
                                    int ip, fs_reg reg)
 {
-   int var = var_from_vgrf[reg.reg] + reg.reg_offset;
+   int var = var_from_reg(&reg);
    assert(var < num_vars);
 
    start[var] = MIN2(start[var], ip);
@@ -290,13 +290,10 @@ fs_live_variables::~fs_live_variables()
 }
 
 void
-fs_visitor::invalidate_live_intervals(bool __invalidate_cfg)
+fs_visitor::invalidate_live_intervals()
 {
    ralloc_free(live_intervals);
    live_intervals = NULL;
-
-   if (__invalidate_cfg)
-      invalidate_cfg();
 }
 
 /**
@@ -322,7 +319,6 @@ fs_visitor::calculate_live_intervals()
       virtual_grf_end[i] = -1;
    }
 
-   calculate_cfg();
    this->live_intervals = new(mem_ctx) fs_live_variables(this, cfg);
 
    /* Merge the per-component live ranges to whole VGRF live ranges. */

@@ -22,6 +22,7 @@
  */
 
 #include "brw_vec4.h"
+#include "brw_cfg.h"
 #include "glsl/ir_uniform.h"
 extern "C" {
 #include "program/sampler.h"
@@ -66,12 +67,13 @@ vec4_visitor::emit(vec4_instruction *inst)
 }
 
 vec4_instruction *
-vec4_visitor::emit_before(vec4_instruction *inst, vec4_instruction *new_inst)
+vec4_visitor::emit_before(bblock_t *block, vec4_instruction *inst,
+                          vec4_instruction *new_inst)
 {
    new_inst->ir = inst->ir;
    new_inst->annotation = inst->annotation;
 
-   inst->insert_before(new_inst);
+   inst->insert_before(block, new_inst);
 
    return inst;
 }
@@ -588,10 +590,10 @@ type_size(const struct glsl_type *type)
       }
       return size;
    case GLSL_TYPE_SAMPLER:
-      /* Samplers take up one slot in UNIFORMS[], but they're baked in
-       * at link time.
+      /* Samplers take up no register space, since they're baked in at
+       * link time.
        */
-      return 1;
+      return 0;
    case GLSL_TYPE_ATOMIC_UINT:
       return 0;
    case GLSL_TYPE_IMAGE:
@@ -635,6 +637,20 @@ src_reg::src_reg(class vec4_visitor *v, const struct glsl_type *type)
    } else {
       this->swizzle = swizzle_for_size(type->vector_elements);
    }
+
+   this->type = brw_type_for_base_type(type);
+}
+
+src_reg::src_reg(class vec4_visitor *v, const struct glsl_type *type, int size)
+{
+   assert(size > 0);
+
+   init();
+
+   this->file = GRF;
+   this->reg = v->virtual_grf_alloc(type_size(type) * size);
+
+   this->swizzle = BRW_SWIZZLE_NOOP;
 
    this->type = brw_type_for_base_type(type);
 }
@@ -729,10 +745,10 @@ vec4_visitor::setup_uniform_clipplane_values()
 void
 vec4_visitor::setup_builtin_uniform_values(ir_variable *ir)
 {
-   const ir_state_slot *const slots = ir->state_slots;
-   assert(ir->state_slots != NULL);
+   const ir_state_slot *const slots = ir->get_state_slots();
+   assert(slots != NULL);
 
-   for (unsigned int i = 0; i < ir->num_state_slots; i++) {
+   for (unsigned int i = 0; i < ir->get_num_state_slots(); i++) {
       /* This state reference has already been setup by ir_to_mesa,
        * but we'll get the same index back here.  We can reference
        * ParameterValues directly, since unlike brw_fs.cpp, we never
@@ -776,11 +792,11 @@ vec4_visitor::emit_bool_to_cond_code(ir_rvalue *ir,
 
    *predicate = BRW_PREDICATE_NORMAL;
 
-   if (expr) {
-      src_reg op[2];
+   if (expr && expr->operation != ir_binop_ubo_load) {
+      src_reg op[3];
       vec4_instruction *inst;
 
-      assert(expr->get_num_operands() <= 2);
+      assert(expr->get_num_operands() <= 3);
       for (unsigned int i = 0; i < expr->get_num_operands(); i++) {
 	 expr->operands[i]->accept(this);
 	 op[i] = this->result;
@@ -852,6 +868,22 @@ vec4_visitor::emit_bool_to_cond_code(ir_rvalue *ir,
 		  brw_conditional_for_comparison(expr->operation)));
 	 break;
 
+      case ir_triop_csel: {
+         /* Expand the boolean condition into the flag register. */
+         inst = emit(MOV(dst_null_d(), op[0]));
+         inst->conditional_mod = BRW_CONDITIONAL_NZ;
+
+         /* Select which boolean to return. */
+         dst_reg temp(this, expr->operands[1]->type);
+         inst = emit(BRW_OPCODE_SEL, temp, op[1], op[2]);
+         inst->predicate = BRW_PREDICATE_NORMAL;
+
+         /* Expand the result to a condition code. */
+         inst = emit(MOV(dst_null_d(), src_reg(temp)));
+         inst->conditional_mod = BRW_CONDITIONAL_NZ;
+         break;
+      }
+
       default:
 	 unreachable("not reached");
       }
@@ -881,11 +913,11 @@ vec4_visitor::emit_if_gen6(ir_if *ir)
 {
    ir_expression *expr = ir->condition->as_expression();
 
-   if (expr) {
-      src_reg op[2];
+   if (expr && expr->operation != ir_binop_ubo_load) {
+      src_reg op[3];
       dst_reg temp;
 
-      assert(expr->get_num_operands() <= 2);
+      assert(expr->get_num_operands() <= 3);
       for (unsigned int i = 0; i < expr->get_num_operands(); i++) {
 	 expr->operands[i]->accept(this);
 	 op[i] = this->result;
@@ -945,6 +977,20 @@ vec4_visitor::emit_if_gen6(ir_if *ir)
 	 emit(IF(BRW_PREDICATE_ALIGN16_ANY4H));
 	 return;
 
+      case ir_triop_csel: {
+         /* Expand the boolean condition into the flag register. */
+         vec4_instruction *inst = emit(MOV(dst_null_d(), op[0]));
+         inst->conditional_mod = BRW_CONDITIONAL_NZ;
+
+         /* Select which boolean to return. */
+         dst_reg temp(this, expr->operands[1]->type);
+         inst = emit(BRW_OPCODE_SEL, temp, op[1], op[2]);
+         inst->predicate = BRW_PREDICATE_NORMAL;
+
+         emit(IF(src_reg(temp), src_reg(0), BRW_CONDITIONAL_NZ));
+         return;
+      }
+
       default:
 	 unreachable("not reached");
       }
@@ -993,10 +1039,10 @@ vec4_visitor::visit(ir_variable *ir)
        * ir_binop_ubo_load expressions and not ir_dereference_variable for UBO
        * variables, so no need for them to be in variable_ht.
        *
-       * Atomic counters take no uniform storage, no need to do
-       * anything here.
+       * Some uniforms, such as samplers and atomic counters, have no actual
+       * storage, so we should ignore them.
        */
-      if (ir->is_in_uniform_block() || ir->type->contains_atomic())
+      if (ir->is_in_uniform_block() || type_size(ir->type) == 0)
          return;
 
       /* Track how big the whole uniform variable is, in case we need to put a
@@ -1409,7 +1455,7 @@ vec4_visitor::visit(ir_expression *ir)
             else
                emit(MUL(result_dst, op[0], op[1]));
          } else {
-            struct brw_reg acc = retype(brw_acc_reg(), result_dst.type);
+            struct brw_reg acc = retype(brw_acc_reg(8), result_dst.type);
 
             emit(MUL(acc, op[0], op[1]));
             emit(MACH(dst_null_d(), op[0], op[1]));
@@ -1420,7 +1466,7 @@ vec4_visitor::visit(ir_expression *ir)
       }
       break;
    case ir_binop_imul_high: {
-      struct brw_reg acc = retype(brw_acc_reg(), result_dst.type);
+      struct brw_reg acc = retype(brw_acc_reg(8), result_dst.type);
 
       emit(MUL(acc, op[0], op[1]));
       emit(MACH(result_dst, op[0], op[1]));
@@ -1432,14 +1478,14 @@ vec4_visitor::visit(ir_expression *ir)
       emit_math(SHADER_OPCODE_INT_QUOTIENT, result_dst, op[0], op[1]);
       break;
    case ir_binop_carry: {
-      struct brw_reg acc = retype(brw_acc_reg(), BRW_REGISTER_TYPE_UD);
+      struct brw_reg acc = retype(brw_acc_reg(8), BRW_REGISTER_TYPE_UD);
 
       emit(ADDC(dst_null_ud(), op[0], op[1]));
       emit(MOV(result_dst, src_reg(acc)));
       break;
    }
    case ir_binop_borrow: {
-      struct brw_reg acc = retype(brw_acc_reg(), BRW_REGISTER_TYPE_UD);
+      struct brw_reg acc = retype(brw_acc_reg(8), BRW_REGISTER_TYPE_UD);
 
       emit(SUBB(dst_null_ud(), op[0], op[1]));
       emit(MOV(result_dst, src_reg(acc)));
@@ -2579,7 +2625,7 @@ vec4_visitor::visit(ir_texture *ir)
       } else if (ir->op == ir_txf_ms) {
          emit(MOV(dst_reg(MRF, param_base + 1, sample_index_type, WRITEMASK_X),
                   sample_index));
-         if (brw->gen >= 7)
+         if (brw->gen >= 7) {
             /* MCS data is in the first channel of `mcs`, but we need to get it into
              * the .y channel of the second vec4 of params, so replicate .x across
              * the whole vec4 and then mask off everything except .y
@@ -2587,6 +2633,7 @@ vec4_visitor::visit(ir_texture *ir)
             mcs.swizzle = BRW_SWIZZLE_XXXX;
             emit(MOV(dst_reg(MRF, param_base + 1, glsl_type::uint_type, WRITEMASK_Y),
                      mcs));
+         }
          inst->mlen++;
       } else if (ir->op == ir_txd) {
 	 const glsl_type *type = lod_type;
@@ -2884,7 +2931,7 @@ vec4_visitor::emit_ndc_computation()
 }
 
 void
-vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
+vec4_visitor::emit_psiz_and_flags(dst_reg reg)
 {
    if (brw->gen < 6 &&
        ((prog_data->vue_map.slots_valid & VARYING_BIT_PSIZ) ||
@@ -2944,16 +2991,21 @@ vec4_visitor::emit_psiz_and_flags(struct brw_reg reg)
    } else {
       emit(MOV(retype(reg, BRW_REGISTER_TYPE_D), src_reg(0)));
       if (prog_data->vue_map.slots_valid & VARYING_BIT_PSIZ) {
-         emit(MOV(brw_writemask(reg, WRITEMASK_W),
-                  src_reg(output_reg[VARYING_SLOT_PSIZ])));
+         dst_reg reg_w = reg;
+         reg_w.writemask = WRITEMASK_W;
+         emit(MOV(reg_w, src_reg(output_reg[VARYING_SLOT_PSIZ])));
       }
       if (prog_data->vue_map.slots_valid & VARYING_BIT_LAYER) {
-         emit(MOV(retype(brw_writemask(reg, WRITEMASK_Y), BRW_REGISTER_TYPE_D),
-                  src_reg(output_reg[VARYING_SLOT_LAYER])));
+         dst_reg reg_y = reg;
+         reg_y.writemask = WRITEMASK_Y;
+         reg_y.type = BRW_REGISTER_TYPE_D;
+         emit(MOV(reg_y, src_reg(output_reg[VARYING_SLOT_LAYER])));
       }
       if (prog_data->vue_map.slots_valid & VARYING_BIT_VIEWPORT) {
-         emit(MOV(retype(brw_writemask(reg, WRITEMASK_Z), BRW_REGISTER_TYPE_D),
-                  src_reg(output_reg[VARYING_SLOT_VIEWPORT])));
+         dst_reg reg_z = reg;
+         reg_z.writemask = WRITEMASK_Z;
+         reg_z.type = BRW_REGISTER_TYPE_D;
+         emit(MOV(reg_z, src_reg(output_reg[VARYING_SLOT_VIEWPORT])));
       }
    }
 }
@@ -3006,18 +3058,18 @@ vec4_visitor::emit_generic_urb_slot(dst_reg reg, int varying)
 }
 
 void
-vec4_visitor::emit_urb_slot(int mrf, int varying)
+vec4_visitor::emit_urb_slot(dst_reg reg, int varying)
 {
-   struct brw_reg hw_reg = brw_message_reg(mrf);
-   dst_reg reg = dst_reg(MRF, mrf);
    reg.type = BRW_REGISTER_TYPE_F;
 
    switch (varying) {
    case VARYING_SLOT_PSIZ:
+   {
       /* PSIZ is always in slot 0, and is coupled with other flags. */
       current_annotation = "indices, point width, clip flags";
-      emit_psiz_and_flags(hw_reg);
+      emit_psiz_and_flags(reg);
       break;
+   }
    case BRW_VARYING_SLOT_NDC:
       current_annotation = "NDC";
       emit(MOV(reg, src_reg(output_reg[BRW_VARYING_SLOT_NDC])));
@@ -3125,7 +3177,8 @@ vec4_visitor::emit_vertex()
 
       mrf = base_mrf + 1;
       for (; slot < prog_data->vue_map.num_slots; ++slot) {
-         emit_urb_slot(mrf++, prog_data->vue_map.slot_to_varying[slot]);
+         emit_urb_slot(dst_reg(MRF, mrf++),
+                       prog_data->vue_map.slot_to_varying[slot]);
 
          /* If this was max_usable_mrf, we can't fit anything more into this
           * URB WRITE.
@@ -3147,7 +3200,7 @@ vec4_visitor::emit_vertex()
 
 
 src_reg
-vec4_visitor::get_scratch_offset(vec4_instruction *inst,
+vec4_visitor::get_scratch_offset(bblock_t *block, vec4_instruction *inst,
 				 src_reg *reladdr, int reg_offset)
 {
    /* Because we store the values to scratch interleaved like our
@@ -3164,9 +3217,10 @@ vec4_visitor::get_scratch_offset(vec4_instruction *inst,
    if (reladdr) {
       src_reg index = src_reg(this, glsl_type::int_type);
 
-      emit_before(inst, ADD(dst_reg(index), *reladdr, src_reg(reg_offset)));
-      emit_before(inst, MUL(dst_reg(index),
-			    index, src_reg(message_header_scale)));
+      emit_before(block, inst, ADD(dst_reg(index), *reladdr,
+                                   src_reg(reg_offset)));
+      emit_before(block, inst, MUL(dst_reg(index), index,
+                                   src_reg(message_header_scale)));
 
       return index;
    } else {
@@ -3175,26 +3229,27 @@ vec4_visitor::get_scratch_offset(vec4_instruction *inst,
 }
 
 src_reg
-vec4_visitor::get_pull_constant_offset(vec4_instruction *inst,
+vec4_visitor::get_pull_constant_offset(bblock_t * block, vec4_instruction *inst,
 				       src_reg *reladdr, int reg_offset)
 {
    if (reladdr) {
       src_reg index = src_reg(this, glsl_type::int_type);
 
-      emit_before(inst, ADD(dst_reg(index), *reladdr, src_reg(reg_offset)));
+      emit_before(block, inst, ADD(dst_reg(index), *reladdr,
+                                   src_reg(reg_offset)));
 
       /* Pre-gen6, the message header uses byte offsets instead of vec4
        * (16-byte) offset units.
        */
       if (brw->gen < 6) {
-	 emit_before(inst, MUL(dst_reg(index), index, src_reg(16)));
+         emit_before(block, inst, MUL(dst_reg(index), index, src_reg(16)));
       }
 
       return index;
    } else if (brw->gen >= 8) {
       /* Store the offset in a GRF so we can send-from-GRF. */
       src_reg offset = src_reg(this, glsl_type::int_type);
-      emit_before(inst, MOV(dst_reg(offset), src_reg(reg_offset)));
+      emit_before(block, inst, MOV(dst_reg(offset), src_reg(reg_offset)));
       return offset;
    } else {
       int message_header_scale = brw->gen < 6 ? 16 : 1;
@@ -3209,14 +3264,15 @@ vec4_visitor::get_pull_constant_offset(vec4_instruction *inst,
  * @base_offset is measured in 32-byte units (the size of a register).
  */
 void
-vec4_visitor::emit_scratch_read(vec4_instruction *inst,
+vec4_visitor::emit_scratch_read(bblock_t *block, vec4_instruction *inst,
 				dst_reg temp, src_reg orig_src,
 				int base_offset)
 {
    int reg_offset = base_offset + orig_src.reg_offset;
-   src_reg index = get_scratch_offset(inst, orig_src.reladdr, reg_offset);
+   src_reg index = get_scratch_offset(block, inst, orig_src.reladdr,
+                                      reg_offset);
 
-   emit_before(inst, SCRATCH_READ(temp, index));
+   emit_before(block, inst, SCRATCH_READ(temp, index));
 }
 
 /**
@@ -3226,10 +3282,12 @@ vec4_visitor::emit_scratch_read(vec4_instruction *inst,
  * @base_offset is measured in 32-byte units (the size of a register).
  */
 void
-vec4_visitor::emit_scratch_write(vec4_instruction *inst, int base_offset)
+vec4_visitor::emit_scratch_write(bblock_t *block, vec4_instruction *inst,
+                                 int base_offset)
 {
    int reg_offset = base_offset + inst->dst.reg_offset;
-   src_reg index = get_scratch_offset(inst, inst->dst.reladdr, reg_offset);
+   src_reg index = get_scratch_offset(block, inst, inst->dst.reladdr,
+                                      reg_offset);
 
    /* Create a temporary register to store *inst's result in.
     *
@@ -3256,7 +3314,7 @@ vec4_visitor::emit_scratch_write(vec4_instruction *inst, int base_offset)
    write->predicate = inst->predicate;
    write->ir = inst->ir;
    write->annotation = inst->annotation;
-   inst->insert_after(write);
+   inst->insert_after(block, write);
 
    inst->dst.file = temp.file;
    inst->dst.reg = temp.reg;
@@ -3274,16 +3332,13 @@ void
 vec4_visitor::move_grf_array_access_to_scratch()
 {
    int scratch_loc[this->virtual_grf_count];
-
-   for (int i = 0; i < this->virtual_grf_count; i++) {
-      scratch_loc[i] = -1;
-   }
+   memset(scratch_loc, -1, sizeof(scratch_loc));
 
    /* First, calculate the set of virtual GRFs that need to be punted
     * to scratch due to having any array access on them, and where in
     * scratch.
     */
-   foreach_in_list(vec4_instruction, inst, &instructions) {
+   foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
       if (inst->dst.file == GRF && inst->dst.reladdr &&
 	  scratch_loc[inst->dst.reg] == -1) {
 	 scratch_loc[inst->dst.reg] = c->last_scratch;
@@ -3306,13 +3361,13 @@ vec4_visitor::move_grf_array_access_to_scratch()
     * we may generate a new scratch_write instruction after the one
     * we're processing.
     */
-   foreach_in_list_safe(vec4_instruction, inst, &instructions) {
+   foreach_block_and_inst_safe(block, vec4_instruction, inst, cfg) {
       /* Set up the annotation tracking for new generated instructions. */
       base_ir = inst->ir;
       current_annotation = inst->annotation;
 
       if (inst->dst.file == GRF && scratch_loc[inst->dst.reg] != -1) {
-	 emit_scratch_write(inst, scratch_loc[inst->dst.reg]);
+	 emit_scratch_write(block, inst, scratch_loc[inst->dst.reg]);
       }
 
       for (int i = 0 ; i < 3; i++) {
@@ -3321,7 +3376,7 @@ vec4_visitor::move_grf_array_access_to_scratch()
 
 	 dst_reg temp = dst_reg(this, glsl_type::vec4_type);
 
-	 emit_scratch_read(inst, temp, inst->src[i],
+	 emit_scratch_read(block, inst, temp, inst->src[i],
 			   scratch_loc[inst->src[i].reg]);
 
 	 inst->src[i].file = temp.file;
@@ -3337,19 +3392,20 @@ vec4_visitor::move_grf_array_access_to_scratch()
  * from the pull constant buffer (surface) at @base_offset to @temp.
  */
 void
-vec4_visitor::emit_pull_constant_load(vec4_instruction *inst,
+vec4_visitor::emit_pull_constant_load(bblock_t *block, vec4_instruction *inst,
 				      dst_reg temp, src_reg orig_src,
 				      int base_offset)
 {
    int reg_offset = base_offset + orig_src.reg_offset;
    src_reg index = src_reg(prog_data->base.binding_table.pull_constants_start);
-   src_reg offset = get_pull_constant_offset(inst, orig_src.reladdr, reg_offset);
+   src_reg offset = get_pull_constant_offset(block, inst, orig_src.reladdr,
+                                             reg_offset);
    vec4_instruction *load;
 
    if (brw->gen >= 7) {
       dst_reg grf_offset = dst_reg(this, glsl_type::int_type);
       grf_offset.type = offset.type;
-      emit_before(inst, MOV(grf_offset, offset));
+      emit_before(block, inst, MOV(grf_offset, offset));
 
       load = new(mem_ctx) vec4_instruction(this,
                                            VS_OPCODE_PULL_CONSTANT_LOAD_GEN7,
@@ -3360,7 +3416,7 @@ vec4_visitor::emit_pull_constant_load(vec4_instruction *inst,
       load->base_mrf = 14;
       load->mlen = 1;
    }
-   emit_before(inst, load);
+   emit_before(block, inst, load);
 }
 
 /**
@@ -3379,10 +3435,7 @@ void
 vec4_visitor::move_uniform_array_access_to_pull_constants()
 {
    int pull_constant_loc[this->uniforms];
-
-   for (int i = 0; i < this->uniforms; i++) {
-      pull_constant_loc[i] = -1;
-   }
+   memset(pull_constant_loc, -1, sizeof(pull_constant_loc));
 
    /* Walk through and find array access of uniforms.  Put a copy of that
     * uniform in the pull constant buffer.
@@ -3390,7 +3443,7 @@ vec4_visitor::move_uniform_array_access_to_pull_constants()
     * Note that we don't move constant-indexed accesses to arrays.  No
     * testing has been done of the performance impact of this choice.
     */
-   foreach_in_list_safe(vec4_instruction, inst, &instructions) {
+   foreach_block_and_inst_safe(block, vec4_instruction, inst, cfg) {
       for (int i = 0 ; i < 3; i++) {
 	 if (inst->src[i].file != UNIFORM || !inst->src[i].reladdr)
 	    continue;
@@ -3419,7 +3472,7 @@ vec4_visitor::move_uniform_array_access_to_pull_constants()
 
 	 dst_reg temp = dst_reg(this, glsl_type::vec4_type);
 
-	 emit_pull_constant_load(inst, temp, inst->src[i],
+	 emit_pull_constant_load(block, inst, temp, inst->src[i],
 				 pull_constant_loc[uniform]);
 
 	 inst->src[i].file = temp.file;

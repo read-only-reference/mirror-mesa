@@ -150,7 +150,7 @@ NVC0LegalizePostRA::findOverwritingDefs(const Instruction *texi,
    while (insn->op == OP_MOV && insn->getDef(0)->equals(insn->getSrc(0)))
       insn = insn->getSrc(0)->getUniqueInsn();
 
-   if (!insn || !insn->bb->reachableBy(texi->bb, term))
+   if (!insn->bb->reachableBy(texi->bb, term))
       return;
 
    switch (insn->op) {
@@ -174,14 +174,28 @@ NVC0LegalizePostRA::findOverwritingDefs(const Instruction *texi,
 }
 
 void
-NVC0LegalizePostRA::findFirstUses(const Instruction *texi,
-                                  const Instruction *insn,
-                                  std::list<TexUse> &uses)
+NVC0LegalizePostRA::findFirstUses(
+      const Instruction *texi,
+      const Instruction *insn,
+      std::list<TexUse> &uses,
+      std::tr1::unordered_set<const Instruction *>& visited)
 {
    for (int d = 0; insn->defExists(d); ++d) {
       Value *v = insn->getDef(d);
       for (Value::UseIterator u = v->uses.begin(); u != v->uses.end(); ++u) {
          Instruction *usei = (*u)->getInsn();
+
+         // NOTE: In case of a loop that overwrites a value but never uses
+         // it, it can happen that we have a cycle of uses that consists only
+         // of phis and no-op moves and will thus cause an infinite loop here
+         // since these are not considered actual uses.
+         // The most obvious (and perhaps the only) way to prevent this is to
+         // remember which instructions we've already visited.
+
+         if (visited.find(usei) != visited.end())
+            continue;
+
+         visited.insert(usei);
 
          if (usei->op == OP_PHI || usei->op == OP_UNION) {
             // need a barrier before WAW cases
@@ -197,11 +211,11 @@ NVC0LegalizePostRA::findFirstUses(const Instruction *texi,
              usei->op == OP_PHI ||
              usei->op == OP_UNION) {
             // these uses don't manifest in the machine code
-            findFirstUses(texi, usei, uses);
+            findFirstUses(texi, usei, uses, visited);
          } else
          if (usei->op == OP_MOV && usei->getDef(0)->equals(usei->getSrc(0)) &&
              usei->subOp != NV50_IR_SUBOP_MOV_FINAL) {
-            findFirstUses(texi, usei, uses);
+            findFirstUses(texi, usei, uses, visited);
          } else {
             addTexUse(uses, usei, insn);
          }
@@ -257,8 +271,10 @@ NVC0LegalizePostRA::insertTextureBarriers(Function *fn)
    uses = new std::list<TexUse>[texes.size()];
    if (!uses)
       return false;
-   for (size_t i = 0; i < texes.size(); ++i)
-      findFirstUses(texes[i], texes[i], uses[i]);
+   for (size_t i = 0; i < texes.size(); ++i) {
+      std::tr1::unordered_set<const Instruction *> visited;
+      findFirstUses(texes[i], texes[i], uses[i], visited);
+   }
 
    // determine the barrier level at each use
    for (size_t i = 0; i < texes.size(); ++i) {
@@ -293,7 +309,6 @@ NVC0LegalizePostRA::insertTextureBarriers(Function *fn)
       }
    }
    delete[] uses;
-   uses = NULL;
 
    // insert the barriers
    for (size_t i = 0; i < useVec.size(); ++i) {
@@ -314,11 +329,8 @@ NVC0LegalizePostRA::insertTextureBarriers(Function *fn)
       }
    }
 
-   if (fn->getProgram()->optLevel < 3) {
-      if (uses)
-         delete[] uses;
+   if (fn->getProgram()->optLevel < 3)
       return true;
-   }
 
    std::vector<Limits> limitT, limitB, limitS; // entry, exit, single
 
@@ -403,8 +415,6 @@ NVC0LegalizePostRA::insertTextureBarriers(Function *fn)
             prev = i;
       }
    }
-   if (uses)
-      delete[] uses;
    return true;
 }
 
@@ -591,6 +601,21 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
    //  lod bias
    //  depth compare
    //  offsets (same as fermi, except txd which takes it with array)
+   //
+   // Maxwell (tex):
+   //  array
+   //  coords
+   //  indirect handle
+   //  sample
+   //  lod bias
+   //  depth compare
+   //  offsets
+   //
+   // Maxwell (txd):
+   //  indirect handle
+   //  coords
+   //  array + offsets
+   //  derivatives
 
    if (chipset >= NVISA_GK104_CHIPSET) {
       if (i->tex.rIndirectSrc >= 0 || i->tex.sIndirectSrc >= 0) {
@@ -624,12 +649,17 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
          const int sat = (i->op == OP_TXF) ? 1 : 0;
          DataType sTy = (i->op == OP_TXF) ? TYPE_U32 : TYPE_F32;
          bld.mkCvt(OP_CVT, TYPE_U16, layer, sTy, src)->saturate = sat;
-         for (int s = dim; s >= 1; --s)
-            i->setSrc(s, i->getSrc(s - 1));
-         i->setSrc(0, layer);
+         if (i->op != OP_TXD || chipset < NVISA_GM107_CHIPSET) {
+            for (int s = dim; s >= 1; --s)
+               i->setSrc(s, i->getSrc(s - 1));
+            i->setSrc(0, layer);
+         } else {
+            i->setSrc(dim, layer);
+         }
       }
       // Move the indirect reference to the first place
-      if (i->tex.rIndirectSrc >= 0) {
+      if (i->tex.rIndirectSrc >= 0 && (
+                i->op == OP_TXD || chipset < NVISA_GM107_CHIPSET)) {
          Value *hnd = i->getIndirectR();
 
          i->setIndirectR(NULL);
@@ -732,8 +762,10 @@ NVC0LoweringPass::handleTEX(TexInstruction *i)
             // create it if it's not already there, and INSBF it if it already
             // is.
             s = (i->tex.rIndirectSrc >= 0) ? 1 : 0;
+            if (chipset >= NVISA_GM107_CHIPSET)
+               s += dim;
             if (i->tex.target.isArray()) {
-               bld.mkOp3(OP_INSBF, TYPE_U32, i->getSrc(0),
+               bld.mkOp3(OP_INSBF, TYPE_U32, i->getSrc(s),
                          bld.loadImm(NULL, imm), bld.mkImm(0xc10),
                          i->getSrc(s));
             } else {

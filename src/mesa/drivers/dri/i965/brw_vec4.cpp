@@ -274,8 +274,11 @@ vec4_visitor::implied_mrf_writes(vec4_instruction *inst)
    case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
       return 3;
    case GS_OPCODE_URB_WRITE:
+   case GS_OPCODE_URB_WRITE_ALLOCATE:
    case GS_OPCODE_THREAD_END:
       return 0;
+   case GS_OPCODE_FF_SYNC:
+      return 1;
    case SHADER_OPCODE_SHADER_TIME_ADD:
       return 0;
    case SHADER_OPCODE_TEX:
@@ -329,7 +332,7 @@ vec4_visitor::opt_reduce_swizzle()
 {
    bool progress = false;
 
-   foreach_in_list_safe(vec4_instruction, inst, &instructions) {
+   foreach_block_and_inst_safe(block, vec4_instruction, inst, cfg) {
       if (inst->dst.file == BAD_FILE || inst->dst.file == HW_REG)
          continue;
 
@@ -403,7 +406,7 @@ vec4_visitor::opt_reduce_swizzle()
    }
 
    if (progress)
-      invalidate_live_intervals(false);
+      invalidate_live_intervals();
 
    return progress;
 }
@@ -423,7 +426,7 @@ try_eliminate_instruction(vec4_instruction *inst, int new_writemask,
       if (inst->writes_accumulator || inst->writes_flag()) {
          inst->dst = dst_reg(retype(brw_null_reg(), inst->dst.type));
       } else {
-         inst->remove();
+         inst->opcode = BRW_OPCODE_NOP;
       }
 
       return true;
@@ -462,7 +465,7 @@ vec4_visitor::dead_code_eliminate()
 
    calculate_live_intervals();
 
-   foreach_in_list_safe(vec4_instruction, inst, &instructions) {
+   foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
       pc++;
 
       bool inst_writes_flag = false;
@@ -513,17 +516,14 @@ vec4_visitor::dead_code_eliminate()
          }
       }
 
-      for (exec_node *node = inst->prev, *prev = node->prev;
-           prev != NULL && dead_channels != 0;
-           node = prev, prev = prev->prev) {
-         vec4_instruction *scan_inst = (vec4_instruction  *)node;
-
-         if (scan_inst->is_control_flow())
+      foreach_inst_in_block_reverse_starting_from(vec4_instruction, scan_inst,
+                                                  inst, block) {
+         if (dead_channels == 0)
             break;
 
          if (inst_writes_flag) {
             if (scan_inst->dst.is_null() && scan_inst->writes_flag()) {
-               scan_inst->remove();
+               scan_inst->opcode = BRW_OPCODE_NOP;
                progress = true;
                continue;
             } else if (scan_inst->reads_flag()) {
@@ -553,8 +553,15 @@ vec4_visitor::dead_code_eliminate()
       }
    }
 
-   if (progress)
+   if (progress) {
+      foreach_block_and_inst_safe (block, backend_instruction, inst, cfg) {
+         if (inst->opcode == BRW_OPCODE_NOP) {
+            inst->remove(block);
+         }
+      }
+
       invalidate_live_intervals();
+   }
 
    return progress;
 }
@@ -569,7 +576,7 @@ vec4_visitor::split_uniform_registers()
     * vector.  The goal is to make elimination of unused uniform
     * components easier later.
     */
-   foreach_in_list(vec4_instruction, inst, &instructions) {
+   foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
       for (int i = 0 ; i < 3; i++) {
 	 if (inst->src[i].file != UNIFORM)
 	    continue;
@@ -602,7 +609,7 @@ vec4_visitor::pack_uniform_registers()
     * expect unused vector elements when we've moved array access out
     * to pull constants, and from some GLSL code generators like wine.
     */
-   foreach_in_list(vec4_instruction, inst, &instructions) {
+   foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
       for (int i = 0 ; i < 3; i++) {
 	 if (inst->src[i].file != UNIFORM)
 	    continue;
@@ -655,7 +662,7 @@ vec4_visitor::pack_uniform_registers()
    this->uniforms = new_uniform_count;
 
    /* Now, update the instructions for our repacked uniforms. */
-   foreach_in_list(vec4_instruction, inst, &instructions) {
+   foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
       for (int i = 0 ; i < 3; i++) {
 	 int src = inst->src[i].reg;
 
@@ -690,7 +697,7 @@ vec4_visitor::opt_algebraic()
 {
    bool progress = false;
 
-   foreach_in_list(vec4_instruction, inst, &instructions) {
+   foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
       switch (inst->opcode) {
       case BRW_OPCODE_ADD:
 	 if (inst->src[1].is_zero()) {
@@ -798,7 +805,7 @@ vec4_visitor::move_push_constants_to_pull_constants()
    /* Now actually rewrite usage of the things we've moved to pull
     * constants.
     */
-   foreach_in_list_safe(vec4_instruction, inst, &instructions) {
+   foreach_block_and_inst_safe(block, vec4_instruction, inst, cfg) {
       for (int i = 0 ; i < 3; i++) {
 	 if (inst->src[i].file != UNIFORM ||
 	     pull_constant_loc[inst->src[i].reg] == -1)
@@ -808,7 +815,7 @@ vec4_visitor::move_push_constants_to_pull_constants()
 
 	 dst_reg temp = dst_reg(this, glsl_type::vec4_type);
 
-	 emit_pull_constant_load(inst, temp, inst->src[i],
+	 emit_pull_constant_load(block, inst, temp, inst->src[i],
 				 pull_constant_loc[uniform]);
 
 	 inst->src[i].file = temp.file;
@@ -844,8 +851,6 @@ vec4_visitor::opt_set_dependency_control()
    uint8_t grf_channels_written[BRW_MAX_GRF];
    vec4_instruction *last_mrf_write[BRW_MAX_GRF];
    uint8_t mrf_channels_written[BRW_MAX_GRF];
-
-   calculate_cfg();
 
    assert(prog_data->total_grf ||
           !"Must be called after register allocation");
@@ -933,9 +938,9 @@ vec4_visitor::opt_set_dependency_control()
 }
 
 bool
-vec4_instruction::can_reswizzle_dst(int dst_writemask,
-                                    int swizzle,
-                                    int swizzle_mask)
+vec4_instruction::can_reswizzle(int dst_writemask,
+                                int swizzle,
+                                int swizzle_mask)
 {
    /* If this instruction sets anything not referenced by swizzle, then we'd
     * totally break it when we reswizzle.
@@ -943,30 +948,10 @@ vec4_instruction::can_reswizzle_dst(int dst_writemask,
    if (dst.writemask & ~swizzle_mask)
       return false;
 
-   switch (opcode) {
-   default:
-      if (!brw_is_single_value_swizzle(swizzle)) {
-         /* Check if there happens to be no reswizzling required. */
-         for (int c = 0; c < 4; c++) {
-            int bit = 1 << BRW_GET_SWZ(swizzle, c);
-            /* Skip components of the swizzle not used by the dst. */
-            if (!(dst_writemask & (1 << c)))
-               continue;
+   if (mlen > 0)
+      return false;
 
-            /* We don't do the reswizzling yet, so just sanity check that we
-             * don't have to.
-             */
-            if (bit != (1 << c))
-               return false;
-         }
-         return true;
-      }
-      /* fallthrough */
-   case BRW_OPCODE_DP4:
-   case BRW_OPCODE_DP3:
-   case BRW_OPCODE_DP2:
-      return true;
-   }
+   return true;
 }
 
 /**
@@ -977,43 +962,39 @@ vec4_instruction::can_reswizzle_dst(int dst_writemask,
  * e.g. for swizzle=yywx, MUL a.xy b c -> MUL a.yy_x b.yy z.yy_x
  */
 void
-vec4_instruction::reswizzle_dst(int dst_writemask, int swizzle)
+vec4_instruction::reswizzle(int dst_writemask, int swizzle)
 {
    int new_writemask = 0;
+   int new_swizzle[4] = { 0 };
 
-   switch (opcode) {
-   default:
-      if (!brw_is_single_value_swizzle(swizzle)) {
-         for (int c = 0; c < 4; c++) {
-            /* Skip components of the swizzle not used by the dst. */
-            if (!(dst_writemask & (1 << c)))
-               continue;
-
-            /* We don't do the reswizzling yet, so just sanity check that we
-             * don't have to.
-             */
-            assert((1 << BRW_GET_SWZ(swizzle, c)) == (1 << c));
-         }
-         break;
-      }
-      /* fallthrough */
-   case BRW_OPCODE_DP4:
-   case BRW_OPCODE_DP3:
-   case BRW_OPCODE_DP2:
-      for (int c = 0; c < 4; c++) {
-         int bit = 1 << BRW_GET_SWZ(swizzle, c);
-         /* Skip components of the swizzle not used by the dst. */
-         if (!(dst_writemask & (1 << c)))
+   /* Dot product instructions write a single result into all channels. */
+   if (opcode != BRW_OPCODE_DP4 && opcode != BRW_OPCODE_DPH &&
+       opcode != BRW_OPCODE_DP3 && opcode != BRW_OPCODE_DP2) {
+      for (int i = 0; i < 3; i++) {
+         if (src[i].file == BAD_FILE || src[i].file == IMM)
             continue;
-         /* If we were populating this component, then populate the
-          * corresponding channel of the new dst.
-          */
-         if (dst.writemask & bit)
-            new_writemask |= (1 << c);
+
+         for (int c = 0; c < 4; c++) {
+            new_swizzle[c] = BRW_GET_SWZ(src[i].swizzle, BRW_GET_SWZ(swizzle, c));
+         }
+
+         src[i].swizzle = BRW_SWIZZLE4(new_swizzle[0], new_swizzle[1],
+                                       new_swizzle[2], new_swizzle[3]);
       }
-      dst.writemask = new_writemask;
-      break;
    }
+
+   for (int c = 0; c < 4; c++) {
+      int bit = 1 << BRW_GET_SWZ(swizzle, c);
+      /* Skip components of the swizzle not used by the dst. */
+      if (!(dst_writemask & (1 << c)))
+         continue;
+      /* If we were populating this component, then populate the
+       * corresponding channel of the new dst.
+       */
+      if (dst.writemask & bit)
+         new_writemask |= (1 << c);
+   }
+   dst.writemask = new_writemask;
 }
 
 /*
@@ -1078,10 +1059,11 @@ vec4_visitor::opt_register_coalesce()
        * everything writing to the temporary to write into the destination
        * instead.
        */
-      vec4_instruction *scan_inst;
-      for (scan_inst = (vec4_instruction *)inst->prev;
-	   scan_inst->prev != NULL;
-	   scan_inst = (vec4_instruction *)scan_inst->prev) {
+      vec4_instruction *_scan_inst = (vec4_instruction *)inst->prev;
+      foreach_inst_in_block_reverse_starting_from(vec4_instruction, scan_inst,
+                                                  inst, block) {
+         _scan_inst = scan_inst;
+
 	 if (scan_inst->dst.file == GRF &&
 	     scan_inst->dst.reg == inst->src[0].reg &&
 	     scan_inst->dst.reg_offset == inst->src[0].reg_offset) {
@@ -1102,9 +1084,9 @@ vec4_visitor::opt_register_coalesce()
             }
 
             /* If we can't handle the swizzle, bail. */
-            if (!scan_inst->can_reswizzle_dst(inst->dst.writemask,
-                                              inst->src[0].swizzle,
-                                              swizzle_mask)) {
+            if (!scan_inst->can_reswizzle(inst->dst.writemask,
+                                          inst->src[0].swizzle,
+                                          swizzle_mask)) {
                break;
             }
 
@@ -1121,16 +1103,6 @@ vec4_visitor::opt_register_coalesce()
 
 	    if (chans_remaining == 0)
 	       break;
-	 }
-
-	 /* We don't handle flow control here.  Most computation of values
-	  * that could be coalesced happens just before their use.
-	  */
-	 if (scan_inst->opcode == BRW_OPCODE_DO ||
-	     scan_inst->opcode == BRW_OPCODE_WHILE ||
-	     scan_inst->opcode == BRW_OPCODE_ELSE ||
-	     scan_inst->opcode == BRW_OPCODE_ENDIF) {
-	    break;
 	 }
 
          /* You can't read from an MRF, so if someone else reads our MRF's
@@ -1185,13 +1157,13 @@ vec4_visitor::opt_register_coalesce()
 	  * computing the value.  Now go rewrite the instruction stream
 	  * between the two.
 	  */
-
+         vec4_instruction *scan_inst = _scan_inst;
 	 while (scan_inst != inst) {
 	    if (scan_inst->dst.file == GRF &&
 		scan_inst->dst.reg == inst->src[0].reg &&
 		scan_inst->dst.reg_offset == inst->src[0].reg_offset) {
-               scan_inst->reswizzle_dst(inst->dst.writemask,
-                                        inst->src[0].swizzle);
+               scan_inst->reswizzle(inst->dst.writemask,
+                                    inst->src[0].swizzle);
 	       scan_inst->dst.file = inst->dst.file;
 	       scan_inst->dst.reg = inst->dst.reg;
 	       scan_inst->dst.reg_offset = inst->dst.reg_offset;
@@ -1205,7 +1177,7 @@ vec4_visitor::opt_register_coalesce()
    }
 
    if (progress)
-      invalidate_live_intervals(false);
+      invalidate_live_intervals();
 
    return progress;
 }
@@ -1239,7 +1211,7 @@ vec4_visitor::split_virtual_grfs()
    /* Check that the instructions are compatible with the registers we're trying
     * to split.
     */
-   foreach_in_list(vec4_instruction, inst, &instructions) {
+   foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
       /* If there's a SEND message loading from a GRF on gen7+, it needs to be
        * contiguous.
        */
@@ -1268,7 +1240,7 @@ vec4_visitor::split_virtual_grfs()
       this->virtual_grf_sizes[i] = 1;
    }
 
-   foreach_in_list(vec4_instruction, inst, &instructions) {
+   foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
       if (inst->dst.file == GRF && split_grf[inst->dst.reg] &&
           inst->dst.reg_offset != 0) {
          inst->dst.reg = (new_virtual_grf[inst->dst.reg] +
@@ -1284,7 +1256,7 @@ vec4_visitor::split_virtual_grfs()
          }
       }
    }
-   invalidate_live_intervals(false);
+   invalidate_live_intervals();
 }
 
 void
@@ -1361,7 +1333,10 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
       if (inst->dst.writemask & 8)
          fprintf(file, "w");
    }
-   fprintf(file, ":%s, ", brw_reg_type_letters(inst->dst.type));
+   fprintf(file, ":%s", brw_reg_type_letters(inst->dst.type));
+
+   if (inst->src[0].file != BAD_FILE)
+      fprintf(file, ", ");
 
    for (int i = 0; i < 3 && inst->src[i].file != BAD_FILE; i++) {
       if (inst->src[i].negate)
@@ -1490,7 +1465,7 @@ void
 vec4_visitor::lower_attributes_to_hw_regs(const int *attribute_map,
                                           bool interleaved)
 {
-   foreach_in_list(vec4_instruction, inst, &instructions) {
+   foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
       /* We have to support ATTR as a destination for GL_FIXED fixup. */
       if (inst->dst.file == ATTR) {
 	 int grf = attribute_map[inst->dst.reg + inst->dst.reg_offset];
@@ -1552,7 +1527,7 @@ vec4_vs_visitor::setup_attributes(int payload_reg)
     * don't represent it with a flag in inputs_read, so we call it
     * VERT_ATTRIB_MAX.
     */
-   if (vs_prog_data->uses_vertexid) {
+   if (vs_prog_data->uses_vertexid || vs_prog_data->uses_instanceid) {
       attribute_map[VERT_ATTRIB_MAX] = payload_reg + nr_attributes;
       nr_attributes++;
    }
@@ -1606,7 +1581,8 @@ vec4_visitor::setup_uniforms(int reg)
 
    stage_prog_data->nr_params = this->uniforms * 4;
 
-   prog_data->curb_read_length = reg - prog_data->base.dispatch_grf_start_reg;
+   prog_data->base.curb_read_length =
+      reg - prog_data->base.dispatch_grf_start_reg;
 
    return reg;
 }
@@ -1627,6 +1603,12 @@ vec4_vs_visitor::setup_payload(void)
    reg = setup_attributes(reg);
 
    this->first_non_payload_grf = reg;
+}
+
+void
+vec4_visitor::assign_binding_table_offsets()
+{
+   assign_common_binding_table_offsets(0);
 }
 
 src_reg
@@ -1728,7 +1710,7 @@ vec4_visitor::run()
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
       emit_shader_time_begin();
 
-   assign_common_binding_table_offsets(0);
+   assign_binding_table_offsets();
 
    emit_prolog();
 
@@ -1746,6 +1728,8 @@ vec4_visitor::run()
       setup_uniform_clipplane_values();
 
    emit_thread_end();
+
+   calculate_cfg();
 
    /* Before any optimization, push array accesses out to scratch
     * space where we need them to be.  This pass may allocate new
@@ -1778,7 +1762,7 @@ vec4_visitor::run()
       if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER) && this_progress) {  \
          char filename[64];                                            \
          snprintf(filename, 64, "%s-%04d-%02d-%02d-" #pass,            \
-                  stage_name, shader_prog->Name, iteration, pass_num); \
+                  stage_name, shader_prog ? shader_prog->Name : 0, iteration, pass_num); \
                                                                        \
          backend_visitor::dump_instructions(filename);                 \
       }                                                                \
@@ -1790,7 +1774,7 @@ vec4_visitor::run()
    if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER)) {
       char filename[64];
       snprintf(filename, 64, "%s-%04d-00-start",
-               stage_name, shader_prog->Name);
+               stage_name, shader_prog ? shader_prog->Name : 0);
 
       backend_visitor::dump_instructions(filename);
    }
@@ -1845,8 +1829,6 @@ vec4_visitor::run()
     * sure that didn't happen.
     */
    assert(sanity_param_count == prog->Parameters->NumParameters);
-
-   calculate_cfg();
 
    return !failed;
 }

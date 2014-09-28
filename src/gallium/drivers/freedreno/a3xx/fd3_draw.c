@@ -30,6 +30,7 @@
 #include "util/u_string.h"
 #include "util/u_memory.h"
 #include "util/u_prim.h"
+#include "util/u_format.h"
 
 #include "freedreno_state.h"
 #include "freedreno_resource.h"
@@ -72,7 +73,7 @@ static void
 draw_impl(struct fd_context *ctx, const struct pipe_draw_info *info,
 		struct fd_ringbuffer *ring, unsigned dirty, struct ir3_shader_key key)
 {
-	fd3_emit_state(ctx, ring, &ctx->prog, dirty, key);
+	fd3_emit_state(ctx, ring, info, &ctx->prog, key, dirty);
 
 	if (dirty & FD_DIRTY_VTXBUF)
 		emit_vertexbufs(ctx, ring, key);
@@ -95,18 +96,67 @@ draw_impl(struct fd_context *ctx, const struct pipe_draw_info *info,
 			info);
 }
 
+/* fixup dirty shader state in case some "unrelated" (from the state-
+ * tracker's perspective) state change causes us to switch to a
+ * different variant.
+ */
+static void
+fixup_shader_state(struct fd_context *ctx, struct ir3_shader_key *key)
+{
+	struct fd3_context *fd3_ctx = fd3_context(ctx);
+	struct ir3_shader_key *last_key = &fd3_ctx->last_key;
+
+	if (memcmp(last_key, key, sizeof(*key))) {
+		ctx->dirty |= FD_DIRTY_PROG;
+
+		if ((last_key->vsaturate_s != key->vsaturate_s) ||
+				(last_key->vsaturate_t != key->vsaturate_t) ||
+				(last_key->vsaturate_r != key->vsaturate_r))
+			ctx->prog.dirty |= FD_SHADER_DIRTY_VP;
+
+		if ((last_key->fsaturate_s != key->fsaturate_s) ||
+				(last_key->fsaturate_t != key->fsaturate_t) ||
+				(last_key->fsaturate_r != key->fsaturate_r))
+			ctx->prog.dirty |= FD_SHADER_DIRTY_FP;
+
+		if (last_key->color_two_side != key->color_two_side)
+			ctx->prog.dirty |= FD_SHADER_DIRTY_FP;
+
+		if (last_key->half_precision != key->half_precision)
+			ctx->prog.dirty |= FD_SHADER_DIRTY_FP;
+
+		if (last_key->alpha != key->alpha)
+			ctx->prog.dirty |= FD_SHADER_DIRTY_FP;
+
+		fd3_ctx->last_key = *key;
+	}
+}
+
 static void
 fd3_draw(struct fd_context *ctx, const struct pipe_draw_info *info)
 {
-	unsigned dirty = ctx->dirty;
+	struct fd3_context *fd3_ctx = fd3_context(ctx);
 	struct ir3_shader_key key = {
 			/* do binning pass first: */
 			.binning_pass = true,
 			.color_two_side = ctx->rasterizer ? ctx->rasterizer->light_twoside : false,
+			.alpha = util_format_is_alpha(pipe_surface_format(ctx->framebuffer.cbufs[0])),
 			// TODO set .half_precision based on render target format,
 			// ie. float16 and smaller use half, float32 use full..
 			.half_precision = !!(fd_mesa_debug & FD_DBG_FRAGHALF),
+			.vsaturate_s = fd3_ctx->vsaturate_s,
+			.vsaturate_t = fd3_ctx->vsaturate_t,
+			.vsaturate_r = fd3_ctx->vsaturate_r,
+			.fsaturate_s = fd3_ctx->fsaturate_s,
+			.fsaturate_t = fd3_ctx->fsaturate_t,
+			.fsaturate_r = fd3_ctx->fsaturate_r,
 	};
+	unsigned dirty;
+
+	fixup_shader_state(ctx, &key);
+
+	dirty = ctx->dirty;
+
 	draw_impl(ctx, info, ctx->binning_ring,
 			dirty & ~(FD_DIRTY_BLEND), key);
 	/* and now regular (non-binning) pass: */
@@ -132,7 +182,7 @@ fd3_clear_binning(struct fd_context *ctx, unsigned dirty)
 			.half_precision = true,
 	};
 
-	fd3_emit_state(ctx, ring, &ctx->solid_prog, dirty, key);
+	fd3_emit_state(ctx, ring, NULL, &ctx->solid_prog, key, dirty);
 
 	fd3_emit_vertex_bufs(ring, fd3_shader_variant(ctx->solid_prog.vp, key),
 			(struct fd3_vertex_buf[]) {{
@@ -178,7 +228,7 @@ fd3_clear(struct fd_context *ctx, unsigned buffers,
 	fd3_clear_binning(ctx, dirty);
 
 	/* emit generic state now: */
-	fd3_emit_state(ctx, ring, &ctx->solid_prog, dirty, key);
+	fd3_emit_state(ctx, ring, NULL, &ctx->solid_prog, key, dirty);
 
 	OUT_PKT0(ring, REG_A3XX_RB_BLEND_ALPHA, 1);
 	OUT_RING(ring, A3XX_RB_BLEND_ALPHA_UINT(0xff) |

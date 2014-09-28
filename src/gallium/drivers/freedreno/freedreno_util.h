@@ -38,6 +38,7 @@
 #include "util/u_math.h"
 #include "util/u_half.h"
 #include "util/u_dynarray.h"
+#include "util/u_pack_color.h"
 
 #include "adreno_common.xml.h"
 #include "adreno_pm4.xml.h"
@@ -55,7 +56,7 @@ enum adreno_stencil_op fd_stencil_op(unsigned op);
 #define FD_DBG_MSGS     0x0001
 #define FD_DBG_DISASM   0x0002
 #define FD_DBG_DCLEAR   0x0004
-#define FD_DBG_DGMEM    0x0008
+#define FD_DBG_FLUSH    0x0008
 #define FD_DBG_DSCIS    0x0010
 #define FD_DBG_DIRECT   0x0020
 #define FD_DBG_DBYPASS  0x0040
@@ -236,6 +237,26 @@ emit_marker(struct fd_ringbuffer *ring, int scratch_idx)
 		return;
 	OUT_PKT0(ring, reg, 1);
 	OUT_RING(ring, ++marker_cnt);
+}
+
+/* helper to get numeric value from environment variable..  mostly
+ * just leaving this here because it is helpful to brute-force figure
+ * out unknown formats, etc, which blob driver does not support:
+ */
+static inline uint32_t env2u(const char *envvar)
+{
+	char *str = getenv(envvar);
+	if (str)
+		return strtol(str, NULL, 0);
+	return 0;
+}
+
+static inline uint32_t
+pack_rgba(enum pipe_format format, const float *rgba)
+{
+	union util_color uc;
+	util_pack_color(rgba, format, &uc);
+	return uc.ui[0];
 }
 
 #endif /* FREEDRENO_UTIL_H_ */

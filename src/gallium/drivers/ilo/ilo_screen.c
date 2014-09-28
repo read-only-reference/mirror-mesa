@@ -25,6 +25,7 @@
  *    Chia-I Wu <olv@lunarg.com>
  */
 
+#include "pipe/p_state.h"
 #include "os/os_misc.h"
 #include "util/u_format_s3tc.h"
 #include "vl/vl_decoder.h"
@@ -39,16 +40,21 @@
 #include "ilo_public.h"
 #include "ilo_screen.h"
 
+struct ilo_fence {
+   struct pipe_reference reference;
+   struct intel_bo *bo;
+};
+
 int ilo_debug;
 
 static const struct debug_named_value ilo_debug_flags[] = {
-   { "3d",        ILO_DEBUG_3D,       "Dump 3D commands and states" },
+   { "batch",     ILO_DEBUG_BATCH,    "Dump batch/state/surface/instruction buffers" },
    { "vs",        ILO_DEBUG_VS,       "Dump vertex shaders" },
    { "gs",        ILO_DEBUG_GS,       "Dump geometry shaders" },
    { "fs",        ILO_DEBUG_FS,       "Dump fragment shaders" },
    { "cs",        ILO_DEBUG_CS,       "Dump compute shaders" },
    { "draw",      ILO_DEBUG_DRAW,     "Show draw information" },
-   { "flush",     ILO_DEBUG_FLUSH,    "Show batch buffer flushes" },
+   { "submit",    ILO_DEBUG_SUBMIT,   "Show batch buffer submissions" },
    { "nohw",      ILO_DEBUG_NOHW,     "Do not send commands to HW" },
    { "nocache",   ILO_DEBUG_NOCACHE,  "Always invalidate HW caches" },
    { "nohiz",     ILO_DEBUG_NOHIZ,    "Disable HiZ" },
@@ -310,18 +316,18 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
        *  GEN6           8192x8192x512            2048x2048x2048
        *  GEN7         16384x16384x2048           2048x2048x2048
        */
-      return (is->dev.gen >= ILO_GEN(7)) ? 15 : 14;
+      return (ilo_dev_gen(&is->dev) >= ILO_GEN(7)) ? 15 : 14;
    case PIPE_CAP_MAX_TEXTURE_3D_LEVELS:
       return 12;
    case PIPE_CAP_MAX_TEXTURE_CUBE_LEVELS:
-      return (is->dev.gen >= ILO_GEN(7)) ? 15 : 14;
+      return (ilo_dev_gen(&is->dev) >= ILO_GEN(7)) ? 15 : 14;
    case PIPE_CAP_TEXTURE_MIRROR_CLAMP:
       return false;
    case PIPE_CAP_BLEND_EQUATION_SEPARATE:
    case PIPE_CAP_SM3:
       return true;
    case PIPE_CAP_MAX_STREAM_OUTPUT_BUFFERS:
-      if (is->dev.gen >= ILO_GEN(7) && !is->dev.has_gen7_sol_reset)
+      if (ilo_dev_gen(&is->dev) >= ILO_GEN(7) && !is->dev.has_gen7_sol_reset)
          return 0;
       return ILO_MAX_SO_BUFFERS;
    case PIPE_CAP_PRIMITIVE_RESTART:
@@ -330,7 +336,7 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_INDEP_BLEND_FUNC:
       return true;
    case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
-      return (is->dev.gen >= ILO_GEN(7)) ? 2048 : 512;
+      return (ilo_dev_gen(&is->dev) >= ILO_GEN(7)) ? 2048 : 512;
    case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
    case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
    case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
@@ -363,7 +369,7 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MAX_STREAM_OUTPUT_INTERLEAVED_COMPONENTS:
       return ILO_MAX_SO_BINDINGS;
    case PIPE_CAP_STREAM_OUTPUT_PAUSE_RESUME:
-      if (is->dev.gen >= ILO_GEN(7))
+      if (ilo_dev_gen(&is->dev) >= ILO_GEN(7))
          return is->dev.has_gen7_sol_reset;
       else
          return false; /* TODO */
@@ -438,6 +444,7 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_DRAW_INDIRECT:
    case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
    case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
+   case PIPE_CAP_SAMPLER_VIEW_TARGET:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -689,18 +696,18 @@ init_dev(struct ilo_dev_info *dev, const struct intel_winsys_info *info)
     */
 
    if (gen_is_hsw(info->devid)) {
-      dev->gen = ILO_GEN(7.5);
+      dev->gen_opaque = ILO_GEN(7.5);
       dev->gt = gen_get_hsw_gt(info->devid);
       dev->urb_size = ((dev->gt == 3) ? 512 :
                        (dev->gt == 2) ? 256 : 128) * 1024;
    }
    else if (gen_is_ivb(info->devid) || gen_is_vlv(info->devid)) {
-      dev->gen = ILO_GEN(7);
+      dev->gen_opaque = ILO_GEN(7);
       dev->gt = (gen_is_ivb(info->devid)) ? gen_get_ivb_gt(info->devid) : 1;
       dev->urb_size = ((dev->gt == 2) ? 256 : 128) * 1024;
    }
    else if (gen_is_snb(info->devid)) {
-      dev->gen = ILO_GEN(6);
+      dev->gen_opaque = ILO_GEN(6);
       dev->gt = gen_get_snb_gt(info->devid);
       dev->urb_size = ((dev->gt == 2) ? 64 : 32) * 1024;
    }

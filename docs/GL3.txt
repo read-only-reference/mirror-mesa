@@ -104,7 +104,7 @@ GL 4.0, GLSL 4.00:
   - Fused multiply-add                                 DONE ()
   - Packing/bitfield/conversion functions              DONE (r600)
   - Enhanced textureGather                             DONE (r600, radeonsi)
-  - Geometry shader instancing                         DONE ()
+  - Geometry shader instancing                         DONE (r600)
   - Geometry shader multiple streams                   DONE ()
   - Enhanced per-sample shading                        DONE (r600)
   - Interpolation functions                            DONE ()
@@ -138,7 +138,7 @@ GL 4.2, GLSL 4.20:
   GL_ARB_shader_atomic_counters                        DONE (i965)
   GL_ARB_texture_storage                               DONE (all drivers)
   GL_ARB_transform_feedback_instanced                  DONE (i965, nv50, nvc0, r600, radeonsi)
-  GL_ARB_base_instance                                 DONE (i965, nv50, nvc0, r600, radeonsi)
+  GL_ARB_base_instance                                 DONE (i965, nv50, nvc0, r600, radeonsi, llvmpipe, softpipe)
   GL_ARB_shader_image_load_store                       in progress (curro)
   GL_ARB_conservative_depth                            DONE (all drivers that support GLSL 1.30)
   GL_ARB_shading_language_420pack                      DONE (all drivers that support GLSL 1.30)
@@ -151,7 +151,7 @@ GL 4.3, GLSL 4.30:
   GL_ARB_arrays_of_arrays                              started (Timothy)
   GL_ARB_ES3_compatibility                             DONE (all drivers that support GLSL 3.30)
   GL_ARB_clear_buffer_object                           DONE (all drivers)
-  GL_ARB_compute_shader                                started (currently stalled)
+  GL_ARB_compute_shader                                in progress (jljusten)
   GL_ARB_copy_image                                    DONE (i965)
   GL_KHR_debug                                         DONE (all drivers)
   GL_ARB_explicit_uniform_location                     DONE (all drivers that support GLSL)
@@ -168,7 +168,7 @@ GL 4.3, GLSL 4.30:
   GL_ARB_texture_buffer_range                          DONE (nv50, nvc0, i965, r600, radeonsi, llvmpipe)
   GL_ARB_texture_query_levels                          DONE (all drivers that support GLSL 1.30)
   GL_ARB_texture_storage_multisample                   DONE (all drivers that support GL_ARB_texture_multisample)
-  GL_ARB_texture_view                                  DONE (i965)
+  GL_ARB_texture_view                                  DONE (i965, nv50, nvc0)
   GL_ARB_vertex_attrib_binding                         DONE (all drivers)
 
 
@@ -202,7 +202,7 @@ GL 4.5, GLSL 4.50:
 These are the extensions cherry-picked to make GLES 3.1
 GLES3.1, GLSL ES 3.1
   GL_ARB_arrays_of_arrays                              started (Timothy)
-  GL_ARB_compute_shader                                started (currently stalled)
+  GL_ARB_compute_shader                                in progress (jljusten)
   GL_ARB_explicit_uniform_location                     DONE (all drivers that support GLSL)
   GL_ARB_framebuffer_no_attachments                    not started
   GL_ARB_program_interface_query                       not started

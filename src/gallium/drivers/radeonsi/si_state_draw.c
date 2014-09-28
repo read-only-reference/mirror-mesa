@@ -39,7 +39,7 @@
  * Shaders
  */
 
-static void si_pipe_shader_es(struct pipe_context *ctx, struct si_pipe_shader *shader)
+static void si_shader_es(struct pipe_context *ctx, struct si_shader *shader)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct si_pm4_state *pm4;
@@ -56,7 +56,7 @@ static void si_pipe_shader_es(struct pipe_context *ctx, struct si_pipe_shader *s
 	va = shader->bo->gpu_address;
 	si_pm4_add_bo(pm4, shader->bo, RADEON_USAGE_READ, RADEON_PRIO_SHADER_DATA);
 
-	vgpr_comp_cnt = shader->shader.uses_instanceid ? 3 : 0;
+	vgpr_comp_cnt = shader->uses_instanceid ? 3 : 0;
 
 	num_user_sgprs = SI_VS_NUM_USER_SGPR;
 	num_sgprs = shader->num_sgprs;
@@ -79,11 +79,11 @@ static void si_pipe_shader_es(struct pipe_context *ctx, struct si_pipe_shader *s
 	sctx->b.flags |= R600_CONTEXT_INV_SHADER_CACHE;
 }
 
-static void si_pipe_shader_gs(struct pipe_context *ctx, struct si_pipe_shader *shader)
+static void si_shader_gs(struct pipe_context *ctx, struct si_shader *shader)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	unsigned gs_vert_itemsize = shader->shader.noutput * (16 >> 2);
-	unsigned gs_max_vert_out = shader->shader.gs_max_out_vertices;
+	unsigned gs_vert_itemsize = shader->noutput * (16 >> 2);
+	unsigned gs_max_vert_out = shader->gs_max_out_vertices;
 	unsigned gsvs_itemsize = gs_vert_itemsize * gs_max_vert_out;
 	unsigned cut_mode;
 	struct si_pm4_state *pm4;
@@ -121,7 +121,7 @@ static void si_pipe_shader_gs(struct pipe_context *ctx, struct si_pipe_shader *s
 	si_pm4_set_reg(pm4, R_028A68_VGT_GSVS_RING_OFFSET_3, gsvs_itemsize);
 
 	si_pm4_set_reg(pm4, R_028AAC_VGT_ESGS_RING_ITEMSIZE,
-		       shader->shader.nparam * (16 >> 2));
+		       shader->nparam * (16 >> 2));
 	si_pm4_set_reg(pm4, R_028AB0_VGT_GSVS_RING_ITEMSIZE, gsvs_itemsize);
 
 	si_pm4_set_reg(pm4, R_028B38_VGT_GS_MAX_VERT_OUT, gs_max_vert_out);
@@ -151,7 +151,7 @@ static void si_pipe_shader_gs(struct pipe_context *ctx, struct si_pipe_shader *s
 	sctx->b.flags |= R600_CONTEXT_INV_SHADER_CACHE;
 }
 
-static void si_pipe_shader_vs(struct pipe_context *ctx, struct si_pipe_shader *shader)
+static void si_shader_vs(struct pipe_context *ctx, struct si_shader *shader)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct si_pm4_state *pm4;
@@ -168,7 +168,7 @@ static void si_pipe_shader_vs(struct pipe_context *ctx, struct si_pipe_shader *s
 	va = shader->bo->gpu_address;
 	si_pm4_add_bo(pm4, shader->bo, RADEON_USAGE_READ, RADEON_PRIO_SHADER_DATA);
 
-	vgpr_comp_cnt = shader->shader.uses_instanceid ? 3 : 0;
+	vgpr_comp_cnt = shader->uses_instanceid ? 3 : 0;
 
 	num_user_sgprs = SI_VS_NUM_USER_SGPR;
 	num_sgprs = shader->num_sgprs;
@@ -182,8 +182,8 @@ static void si_pipe_shader_vs(struct pipe_context *ctx, struct si_pipe_shader *s
 	 * VS is required to export at least one param and r600_shader_from_tgsi()
 	 * takes care of adding a dummy export.
 	 */
-	for (nparams = 0, i = 0 ; i < shader->shader.noutput; i++) {
-		switch (shader->shader.output[i].name) {
+	for (nparams = 0, i = 0 ; i < shader->noutput; i++) {
+		switch (shader->output[i].name) {
 		case TGSI_SEMANTIC_CLIPVERTEX:
 		case TGSI_SEMANTIC_POSITION:
 		case TGSI_SEMANTIC_PSIZE:
@@ -200,13 +200,13 @@ static void si_pipe_shader_vs(struct pipe_context *ctx, struct si_pipe_shader *s
 
 	si_pm4_set_reg(pm4, R_02870C_SPI_SHADER_POS_FORMAT,
 		       S_02870C_POS0_EXPORT_FORMAT(V_02870C_SPI_SHADER_4COMP) |
-		       S_02870C_POS1_EXPORT_FORMAT(shader->shader.nr_pos_exports > 1 ?
+		       S_02870C_POS1_EXPORT_FORMAT(shader->nr_pos_exports > 1 ?
 						   V_02870C_SPI_SHADER_4COMP :
 						   V_02870C_SPI_SHADER_NONE) |
-		       S_02870C_POS2_EXPORT_FORMAT(shader->shader.nr_pos_exports > 2 ?
+		       S_02870C_POS2_EXPORT_FORMAT(shader->nr_pos_exports > 2 ?
 						   V_02870C_SPI_SHADER_4COMP :
 						   V_02870C_SPI_SHADER_NONE) |
-		       S_02870C_POS3_EXPORT_FORMAT(shader->shader.nr_pos_exports > 3 ?
+		       S_02870C_POS3_EXPORT_FORMAT(shader->nr_pos_exports > 3 ?
 						   V_02870C_SPI_SHADER_4COMP :
 						   V_02870C_SPI_SHADER_NONE));
 
@@ -227,11 +227,11 @@ static void si_pipe_shader_vs(struct pipe_context *ctx, struct si_pipe_shader *s
 	sctx->b.flags |= R600_CONTEXT_INV_SHADER_CACHE;
 }
 
-static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *shader)
+static void si_shader_ps(struct pipe_context *ctx, struct si_shader *shader)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct si_pm4_state *pm4;
-	unsigned i, spi_ps_in_control, db_shader_control;
+	unsigned i, spi_ps_in_control;
 	unsigned num_sgprs, num_user_sgprs;
 	unsigned spi_baryc_cntl = 0, spi_ps_input_ena;
 	uint64_t va;
@@ -242,13 +242,10 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 	if (pm4 == NULL)
 		return;
 
-	db_shader_control = S_02880C_Z_ORDER(V_02880C_EARLY_Z_THEN_LATE_Z) |
-			    S_02880C_ALPHA_TO_MASK_DISABLE(sctx->framebuffer.cb0_is_integer);
-
-	for (i = 0; i < shader->shader.ninput; i++) {
-		switch (shader->shader.input[i].name) {
+	for (i = 0; i < shader->ninput; i++) {
+		switch (shader->input[i].name) {
 		case TGSI_SEMANTIC_POSITION:
-			if (shader->shader.input[i].centroid) {
+			if (shader->input[i].centroid) {
 				/* SPI_BARYC_CNTL.POS_FLOAT_LOCATION
 				 * Possible vaules:
 				 * 0 -> Position = pixel center (default)
@@ -264,16 +261,7 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 		}
 	}
 
-	db_shader_control |= shader->db_shader_control;
-
-	if (shader->shader.uses_kill || shader->key.ps.alpha_func != PIPE_FUNC_ALWAYS)
-		db_shader_control |= S_02880C_KILL_ENABLE(1);
-
-	if (sctx->b.chip_class >= CIK)
-		db_shader_control |=
-			S_02880C_CONSERVATIVE_Z_EXPORT(shader->shader.ps_conservative_z);
-
-	spi_ps_in_control = S_0286D8_NUM_INTERP(shader->shader.nparam) |
+	spi_ps_in_control = S_0286D8_NUM_INTERP(shader->nparam) |
 		S_0286D8_BC_OPTIMIZE_DISABLE(1);
 
 	si_pm4_set_reg(pm4, R_0286E0_SPI_BARYC_CNTL, spi_baryc_cntl);
@@ -318,10 +306,6 @@ static void si_pipe_shader_ps(struct pipe_context *ctx, struct si_pipe_shader *s
 		       S_00B02C_EXTRA_LDS_SIZE(shader->lds_size) |
 		       S_00B02C_USER_SGPR(num_user_sgprs));
 
-	si_pm4_set_reg(pm4, R_02880C_DB_SHADER_CONTROL, db_shader_control);
-
-	shader->cb0_is_integer = sctx->framebuffer.cb0_is_integer;
-	shader->sprite_coord_enable = sctx->sprite_coord_enable;
 	sctx->b.flags |= R600_CONTEXT_INV_SHADER_CACHE;
 }
 
@@ -443,7 +427,7 @@ static bool si_update_draw_info_state(struct si_context *sctx,
 	unsigned prim = si_conv_pipe_prim(info->mode);
 	unsigned gs_out_prim =
 		si_conv_prim_to_gs_out(sctx->gs_shader ?
-				       sctx->gs_shader->current->shader.gs_output_prim :
+				       sctx->gs_shader->current->gs_output_prim :
 				       info->mode);
 	unsigned ls_mask = 0;
 	unsigned ia_multi_vgt_param = si_get_ia_multi_vgt_param(sctx, info);
@@ -508,7 +492,7 @@ static bool si_update_draw_info_state(struct si_context *sctx,
 
 static void si_update_spi_map(struct si_context *sctx)
 {
-	struct si_shader *ps = &sctx->ps_shader->current->shader;
+	struct si_shader *ps = sctx->ps_shader->current;
 	struct si_shader *vs = si_get_vs_state(sctx);
 	struct si_pm4_state *pm4 = si_pm4_alloc_state(sctx);
 	unsigned i, j, tmp;
@@ -566,42 +550,38 @@ bcolor:
 /* Initialize state related to ESGS / GSVS ring buffers */
 static void si_init_gs_rings(struct si_context *sctx)
 {
-	unsigned size = 128 * 1024;
+	unsigned esgs_ring_size = 128 * 1024;
+	unsigned gsvs_ring_size = 64 * 1024 * 1024;
 
 	assert(!sctx->gs_rings);
 	sctx->gs_rings = si_pm4_alloc_state(sctx);
 
-	sctx->esgs_ring.buffer =
-		pipe_buffer_create(sctx->b.b.screen, PIPE_BIND_CUSTOM,
-				   PIPE_USAGE_DEFAULT, size);
-	sctx->esgs_ring.buffer_size = size;
+	sctx->esgs_ring = pipe_buffer_create(sctx->b.b.screen, PIPE_BIND_CUSTOM,
+				       PIPE_USAGE_DEFAULT, esgs_ring_size);
 
-	size = 64 * 1024 * 1024;
-	sctx->gsvs_ring.buffer =
-		pipe_buffer_create(sctx->b.b.screen, PIPE_BIND_CUSTOM,
-				   PIPE_USAGE_DEFAULT, size);
-	sctx->gsvs_ring.buffer_size = size;
+	sctx->gsvs_ring = pipe_buffer_create(sctx->b.b.screen, PIPE_BIND_CUSTOM,
+					     PIPE_USAGE_DEFAULT, gsvs_ring_size);
 
 	if (sctx->b.chip_class >= CIK) {
 		si_pm4_set_reg(sctx->gs_rings, R_030900_VGT_ESGS_RING_SIZE,
-			       sctx->esgs_ring.buffer_size / 256);
+			       esgs_ring_size / 256);
 		si_pm4_set_reg(sctx->gs_rings, R_030904_VGT_GSVS_RING_SIZE,
-			       sctx->gsvs_ring.buffer_size / 256);
+			       gsvs_ring_size / 256);
 	} else {
 		si_pm4_set_reg(sctx->gs_rings, R_0088C8_VGT_ESGS_RING_SIZE,
-			       sctx->esgs_ring.buffer_size / 256);
+			       esgs_ring_size / 256);
 		si_pm4_set_reg(sctx->gs_rings, R_0088CC_VGT_GSVS_RING_SIZE,
-			       sctx->gsvs_ring.buffer_size / 256);
+			       gsvs_ring_size / 256);
 	}
 
 	si_set_ring_buffer(&sctx->b.b, PIPE_SHADER_VERTEX, SI_RING_ESGS,
-			   &sctx->esgs_ring, 0, sctx->esgs_ring.buffer_size,
+			   sctx->esgs_ring, 0, esgs_ring_size,
 			   true, true, 4, 64);
 	si_set_ring_buffer(&sctx->b.b, PIPE_SHADER_GEOMETRY, SI_RING_ESGS,
-			   &sctx->esgs_ring, 0, sctx->esgs_ring.buffer_size,
+			   sctx->esgs_ring, 0, esgs_ring_size,
 			   false, false, 0, 0);
 	si_set_ring_buffer(&sctx->b.b, PIPE_SHADER_VERTEX, SI_RING_GSVS,
-			   &sctx->gsvs_ring, 0, sctx->gsvs_ring.buffer_size,
+			   sctx->gsvs_ring, 0, gsvs_ring_size,
 			   false, false, 0, 0);
 }
 
@@ -625,9 +605,8 @@ static void si_update_derived_state(struct si_context *sctx)
 		si_shader_select(ctx, sctx->gs_shader);
 
 		if (!sctx->gs_shader->current->pm4) {
-			si_pipe_shader_gs(ctx, sctx->gs_shader->current);
-			si_pipe_shader_vs(ctx,
-					  sctx->gs_shader->current->gs_copy_shader);
+			si_shader_gs(ctx, sctx->gs_shader->current);
+			si_shader_vs(ctx, sctx->gs_shader->current->gs_copy_shader);
 		}
 
 		si_pm4_bind_state(sctx, gs, sctx->gs_shader->current->pm4);
@@ -638,7 +617,7 @@ static void si_update_derived_state(struct si_context *sctx)
 		si_shader_select(ctx, sctx->vs_shader);
 
 		if (!sctx->vs_shader->current->pm4)
-			si_pipe_shader_es(ctx, sctx->vs_shader->current);
+			si_shader_es(ctx, sctx->vs_shader->current);
 
 		si_pm4_bind_state(sctx, es, sctx->vs_shader->current->pm4);
 
@@ -649,9 +628,9 @@ static void si_update_derived_state(struct si_context *sctx)
 		si_pm4_bind_state(sctx, gs_rings, sctx->gs_rings);
 
 		si_set_ring_buffer(ctx, PIPE_SHADER_GEOMETRY, SI_RING_GSVS,
-				   &sctx->gsvs_ring,
-				   sctx->gs_shader->current->shader.gs_max_out_vertices *
-				   sctx->gs_shader->current->shader.noutput * 16,
+				   sctx->gsvs_ring,
+				   sctx->gs_shader->current->gs_max_out_vertices *
+				   sctx->gs_shader->current->noutput * 16,
 				   64, true, true, 4, 16);
 
 		if (!sctx->gs_on) {
@@ -667,7 +646,7 @@ static void si_update_derived_state(struct si_context *sctx)
 		si_shader_select(ctx, sctx->vs_shader);
 
 		if (!sctx->vs_shader->current->pm4)
-			si_pipe_shader_vs(ctx, sctx->vs_shader->current);
+			si_shader_vs(ctx, sctx->vs_shader->current);
 
 		si_pm4_bind_state(sctx, vs, sctx->vs_shader->current->pm4);
 
@@ -687,9 +666,8 @@ static void si_update_derived_state(struct si_context *sctx)
 
 	si_shader_select(ctx, sctx->ps_shader);
 
-	if (!sctx->ps_shader->current->pm4 ||
-	    sctx->ps_shader->current->cb0_is_integer != sctx->framebuffer.cb0_is_integer)
-		si_pipe_shader_ps(ctx, sctx->ps_shader->current);
+	if (!sctx->ps_shader->current->pm4)
+		si_shader_ps(ctx, sctx->ps_shader->current);
 
 	si_pm4_bind_state(sctx, ps, sctx->ps_shader->current->pm4);
 
@@ -700,6 +678,11 @@ static void si_update_derived_state(struct si_context *sctx)
 		 */
 		sctx->emitted.named.ps = NULL;
 		si_update_spi_map(sctx);
+	}
+
+	if (sctx->ps_db_shader_control != sctx->ps_shader->current->db_shader_control) {
+		sctx->ps_db_shader_control = sctx->ps_shader->current->db_shader_control;
+		sctx->db_render_state.dirty = true;
 	}
 }
 
@@ -713,23 +696,6 @@ static void si_state_draw(struct si_context *sctx,
 
 	if (pm4 == NULL)
 		return;
-
-	/* queries need some special values
-	 * (this is non-zero if any query is active) */
-	if (sctx->b.num_occlusion_queries > 0) {
-		if (sctx->b.chip_class >= CIK) {
-			si_pm4_set_reg(pm4, R_028004_DB_COUNT_CONTROL,
-				       S_028004_PERFECT_ZPASS_COUNTS(1) |
-				       S_028004_SAMPLE_RATE(sctx->framebuffer.log_samples) |
-				       S_028004_ZPASS_ENABLE(1) |
-				       S_028004_SLICE_EVEN_ENABLE(1) |
-				       S_028004_SLICE_ODD_ENABLE(1));
-		} else {
-			si_pm4_set_reg(pm4, R_028004_DB_COUNT_CONTROL,
-				       S_028004_PERFECT_ZPASS_COUNTS(1) |
-				       S_028004_SAMPLE_RATE(sctx->framebuffer.log_samples));
-		}
-	}
 
 	if (info->count_from_stream_output) {
 		struct r600_so_target *t =
@@ -822,6 +788,8 @@ void si_emit_cache_flush(struct r600_common_context *sctx, struct r600_atom *ato
 {
 	struct radeon_winsys_cs *cs = sctx->rings.gfx.cs;
 	uint32_t cp_coher_cntl = 0;
+	uint32_t compute =
+		PKT3_SHADER_TYPE_S(!!(sctx->flags & R600_CONTEXT_FLAG_COMPUTE));
 
 	/* XXX SI flushes both ICACHE and KCACHE if either flag is set.
 	 * XXX CIK shouldn't have this issue. Test CIK before separating the flags
@@ -855,7 +823,7 @@ void si_emit_cache_flush(struct r600_common_context *sctx, struct r600_atom *ato
 
 	if (cp_coher_cntl) {
 		if (sctx->chip_class >= CIK) {
-			radeon_emit(cs, PKT3(PKT3_ACQUIRE_MEM, 5, 0));
+			radeon_emit(cs, PKT3(PKT3_ACQUIRE_MEM, 5, 0) | compute);
 			radeon_emit(cs, cp_coher_cntl);   /* CP_COHER_CNTL */
 			radeon_emit(cs, 0xffffffff);      /* CP_COHER_SIZE */
 			radeon_emit(cs, 0xff);            /* CP_COHER_SIZE_HI */
@@ -863,7 +831,7 @@ void si_emit_cache_flush(struct r600_common_context *sctx, struct r600_atom *ato
 			radeon_emit(cs, 0);               /* CP_COHER_BASE_HI */
 			radeon_emit(cs, 0x0000000A);      /* POLL_INTERVAL */
 		} else {
-			radeon_emit(cs, PKT3(PKT3_SURFACE_SYNC, 3, 0));
+			radeon_emit(cs, PKT3(PKT3_SURFACE_SYNC, 3, 0) | compute);
 			radeon_emit(cs, cp_coher_cntl);   /* CP_COHER_CNTL */
 			radeon_emit(cs, 0xffffffff);      /* CP_COHER_SIZE */
 			radeon_emit(cs, 0);               /* CP_COHER_BASE */
@@ -872,37 +840,47 @@ void si_emit_cache_flush(struct r600_common_context *sctx, struct r600_atom *ato
 	}
 
 	if (sctx->flags & R600_CONTEXT_FLUSH_AND_INV_CB_META) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
 		radeon_emit(cs, EVENT_TYPE(V_028A90_FLUSH_AND_INV_CB_META) | EVENT_INDEX(0));
 	}
 	if (sctx->flags & R600_CONTEXT_FLUSH_AND_INV_DB_META) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
 		radeon_emit(cs, EVENT_TYPE(V_028A90_FLUSH_AND_INV_DB_META) | EVENT_INDEX(0));
 	}
+	if (sctx->flags & R600_CONTEXT_FLUSH_WITH_INV_L2) {
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
+		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_CACHE_FLUSH) | EVENT_INDEX(7) |
+				EVENT_WRITE_INV_L2);
+        }
 
 	if (sctx->flags & (R600_CONTEXT_WAIT_3D_IDLE |
 			   R600_CONTEXT_PS_PARTIAL_FLUSH)) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
 		radeon_emit(cs, EVENT_TYPE(V_028A90_PS_PARTIAL_FLUSH) | EVENT_INDEX(4));
 	} else if (sctx->flags & R600_CONTEXT_STREAMOUT_FLUSH) {
 		/* Needed if streamout buffers are going to be used as a source. */
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
 		radeon_emit(cs, EVENT_TYPE(V_028A90_VS_PARTIAL_FLUSH) | EVENT_INDEX(4));
 	}
 
+	if (sctx->flags & R600_CONTEXT_CS_PARTIAL_FLUSH) {
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
+		radeon_emit(cs, EVENT_TYPE(V_028A90_CS_PARTIAL_FLUSH | EVENT_INDEX(4)));
+	}
+
 	if (sctx->flags & R600_CONTEXT_VGT_FLUSH) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
 		radeon_emit(cs, EVENT_TYPE(V_028A90_VGT_FLUSH) | EVENT_INDEX(0));
 	}
 	if (sctx->flags & R600_CONTEXT_VGT_STREAMOUT_SYNC) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
 		radeon_emit(cs, EVENT_TYPE(V_028A90_VGT_STREAMOUT_SYNC) | EVENT_INDEX(0));
 	}
 
 	sctx->flags = 0;
 }
 
-const struct r600_atom si_atom_cache_flush = { si_emit_cache_flush, 17 }; /* number of CS dwords */
+const struct r600_atom si_atom_cache_flush = { si_emit_cache_flush, 21 }; /* number of CS dwords */
 
 static void si_get_draw_start_count(struct si_context *sctx,
 				    const struct pipe_draw_info *info,
