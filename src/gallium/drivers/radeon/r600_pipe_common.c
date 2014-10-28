@@ -314,7 +314,7 @@ static const struct debug_named_value common_debug_options[] = {
 
 	/* features */
 	{ "nodma", DBG_NO_ASYNC_DMA, "Disable asynchronous DMA" },
-	{ "hyperz", DBG_HYPERZ, "Enable Hyper-Z" },
+	{ "nohyperz", DBG_NO_HYPERZ, "Disable Hyper-Z" },
 	/* GL uses the word INVALIDATE, gallium uses the word DISCARD */
 	{ "noinvalrange", DBG_NO_DISCARD_RANGE, "Disable handling of INVALIDATE_RANGE map flags" },
 	{ "no2d", DBG_NO_2D_TILING, "Disable 2D tiling" },
@@ -590,7 +590,6 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 
 	case PIPE_COMPUTE_CAP_MAX_MEM_ALLOC_SIZE:
 		if (ret) {
-			uint64_t max_global_size;
 			uint64_t *max_mem_alloc_size = ret;
 
 			/* XXX: The limit in older kernels is 256 MB.  We

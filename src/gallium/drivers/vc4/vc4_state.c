@@ -68,7 +68,9 @@ static void
 vc4_set_clip_state(struct pipe_context *pctx,
                    const struct pipe_clip_state *clip)
 {
-        fprintf(stderr, "clip todo\n");
+        struct vc4_context *vc4 = vc4_context(pctx);
+        vc4->clip = *clip;
+        vc4->dirty |= VC4_DIRTY_CLIP;
 }
 
 static void
@@ -201,12 +203,16 @@ vc4_create_depth_stencil_alpha_state(struct pipe_context *pctx,
 
                 uint8_t front_writemask_bits =
                         tlb_stencil_setup_writemask(front->writemask);
-                uint8_t back_writemask_bits =
-                        tlb_stencil_setup_writemask(back->writemask);
+                uint8_t back_writemask = front->writemask;
+                uint8_t back_writemask_bits = front_writemask_bits;
 
                 so->stencil_uniforms[0] =
                         tlb_stencil_setup_bits(front, front_writemask_bits);
                 if (back->enabled) {
+                        back_writemask = back->writemask;
+                        back_writemask_bits =
+                                tlb_stencil_setup_writemask(back->writemask);
+
                         so->stencil_uniforms[0] |= (1 << 30);
                         so->stencil_uniforms[1] =
                                 tlb_stencil_setup_bits(back, back_writemask_bits);
@@ -217,8 +223,8 @@ vc4_create_depth_stencil_alpha_state(struct pipe_context *pctx,
 
                 if (front_writemask_bits == 0xff ||
                     back_writemask_bits == 0xff) {
-                        so->stencil_uniforms[2] = (front_writemask_bits |
-                                                   (back_writemask_bits << 8));
+                        so->stencil_uniforms[2] = (front->writemask |
+                                                   (back_writemask << 8));
                 }
         }
 
@@ -279,10 +285,27 @@ vc4_set_index_buffer(struct pipe_context *pctx,
         struct vc4_context *vc4 = vc4_context(pctx);
 
         if (ib) {
-                pipe_resource_reference(&vc4->indexbuf.buffer, ib->buffer);
-                vc4->indexbuf.index_size = ib->index_size;
-                vc4->indexbuf.offset = ib->offset;
-                vc4->indexbuf.user_buffer = ib->user_buffer;
+                assert(!ib->user_buffer);
+
+                if (ib->index_size == 4) {
+                        struct pipe_resource tmpl = *ib->buffer;
+                        assert(tmpl.format == PIPE_FORMAT_R8_UNORM);
+                        assert(tmpl.height0 == 1);
+                        tmpl.width0 = (tmpl.width0 - ib->offset) / 2;
+                        struct pipe_resource *pshadow =
+                                vc4_resource_create(&vc4->screen->base, &tmpl);
+                        struct vc4_resource *shadow = vc4_resource(pshadow);
+                        pipe_resource_reference(&shadow->shadow_parent, ib->buffer);
+
+                        pipe_resource_reference(&vc4->indexbuf.buffer, NULL);
+                        vc4->indexbuf.buffer = pshadow;
+                        vc4->indexbuf.index_size = 2;
+                        vc4->indexbuf.offset = 0;
+                } else {
+                        pipe_resource_reference(&vc4->indexbuf.buffer, ib->buffer);
+                        vc4->indexbuf.index_size = ib->index_size;
+                        vc4->indexbuf.offset = ib->offset;
+                }
         } else {
                 pipe_resource_reference(&vc4->indexbuf.buffer, NULL);
         }
@@ -389,10 +412,30 @@ vc4_set_framebuffer_state(struct pipe_context *pctx,
 
         cso->nr_cbufs = framebuffer->nr_cbufs;
 
+        pipe_surface_reference(&cso->zsbuf, framebuffer->zsbuf);
+
         cso->width = framebuffer->width;
         cso->height = framebuffer->height;
 
-        pipe_surface_reference(&cso->zsbuf, framebuffer->zsbuf);
+        /* Nonzero texture mipmap levels are laid out as if they were in
+         * power-of-two-sized spaces.  The renderbuffer config infers its
+         * stride from the width parameter, so we need to configure our
+         * framebuffer.  Note that if the z/color buffers were mismatched
+         * sizes, we wouldn't be able to do this.
+         */
+        if (cso->cbufs[0] && cso->cbufs[0]->u.tex.level) {
+                struct vc4_resource *rsc =
+                        vc4_resource(cso->cbufs[0]->texture);
+                cso->width =
+                        (rsc->slices[cso->cbufs[0]->u.tex.level].stride /
+                         rsc->cpp);
+        } else if (cso->zsbuf && cso->zsbuf->u.tex.level){
+                struct vc4_resource *rsc =
+                        vc4_resource(cso->zsbuf->texture);
+                cso->width =
+                        (rsc->slices[cso->zsbuf->u.tex.level].stride /
+                         rsc->cpp);
+        }
 
         vc4->dirty |= VC4_DIRTY_FRAMEBUFFER;
 }
@@ -461,7 +504,28 @@ vc4_create_sampler_view(struct pipe_context *pctx, struct pipe_resource *prsc,
                 return NULL;
 
         *so = *cso;
+
         pipe_reference(NULL, &prsc->reference);
+
+        /* There is no hardware level clamping, and the start address of a
+         * texture may be misaligned, so in that case we have to copy to a
+         * temporary.
+         */
+        if (so->u.tex.first_level) {
+                struct vc4_resource *shadow_parent = vc4_resource(prsc);
+                struct pipe_resource tmpl = shadow_parent->base.b;
+                struct vc4_resource *clone;
+
+                tmpl.width0 = u_minify(tmpl.width0, so->u.tex.first_level);
+                tmpl.height0 = u_minify(tmpl.height0, so->u.tex.first_level);
+                tmpl.last_level = so->u.tex.last_level - so->u.tex.first_level;
+
+                prsc = vc4_resource_create(pctx->screen, &tmpl);
+                clone = vc4_resource(prsc);
+                clone->shadow_parent = &shadow_parent->base.b;
+                /* Flag it as needing update of the contents from the parent. */
+                clone->writes = shadow_parent->writes - 1;
+        }
         so->texture = prsc;
         so->reference.count = 1;
         so->context = pctx;
@@ -492,8 +556,11 @@ vc4_set_sampler_views(struct pipe_context *pctx, unsigned shader,
         vc4->dirty |= VC4_DIRTY_TEXSTATE;
 
         for (i = 0; i < nr; i++) {
-                if (views[i])
+                if (views[i]) {
                         new_nr = i + 1;
+                        if (views[i]->u.tex.first_level != 0)
+                                vc4_update_shadow_baselevel_texture(pctx, views[i]);
+                }
                 pipe_sampler_view_reference(&stage_tex->textures[i], views[i]);
                 stage_tex->dirty_samplers |= (1 << i);
         }

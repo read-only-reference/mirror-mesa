@@ -731,6 +731,17 @@ vec4_visitor::opt_algebraic()
 	    progress = true;
 	 }
 	 break;
+      case SHADER_OPCODE_RCP: {
+         vec4_instruction *prev = (vec4_instruction *)inst->prev;
+         if (prev->opcode == SHADER_OPCODE_SQRT) {
+            if (inst->src[0].equals(src_reg(prev->dst))) {
+               inst->opcode = SHADER_OPCODE_RSQ;
+               inst->src[0] = prev->src[0];
+               progress = true;
+            }
+         }
+         break;
+      }
       default:
 	 break;
       }
@@ -1790,8 +1801,8 @@ vec4_visitor::run()
       OPT(dead_code_eliminate);
       OPT(dead_control_flow_eliminate, this);
       OPT(opt_copy_propagation);
-      OPT(opt_algebraic);
       OPT(opt_cse);
+      OPT(opt_algebraic);
       OPT(opt_register_coalesce);
    } while (progress);
 
@@ -1864,7 +1875,7 @@ brw_vs_emit(struct brw_context *brw,
       shader = (brw_shader *) prog->_LinkedShaders[MESA_SHADER_VERTEX];
 
    if (unlikely(INTEL_DEBUG & DEBUG_VS))
-      brw_dump_ir(brw, "vertex", prog, &shader->base, &c->vp->program.Base);
+      brw_dump_ir("vertex", prog, &shader->base, &c->vp->program.Base);
 
    vec4_vs_visitor v(brw, c, prog_data, prog, mem_ctx);
    if (!v.run()) {

@@ -39,7 +39,7 @@
  * is where GEM relocation processing happens.
  */
 
-#include "vc4_simulator_validate.h"
+#include "vc4_drv.h"
 #include "vc4_packet.h"
 
 #define VALIDATE_ARGS \
@@ -268,7 +268,7 @@ validate_loadstore_tile_buffer_general(VALIDATE_ARGS)
 	uint32_t packet_b1 = *(uint8_t *)(untrusted + 1);
 	struct drm_gem_cma_object *fbo;
 	uint32_t buffer_type = packet_b0 & 0xf;
-	uint32_t offset, cpp;
+	uint32_t untrusted_address, offset, cpp;
 
 	switch (buffer_type) {
 	case VC4_LOADSTORE_TILE_BUFFER_NONE:
@@ -295,7 +295,8 @@ validate_loadstore_tile_buffer_general(VALIDATE_ARGS)
 	if (!vc4_use_handle(exec, 0, VC4_MODE_RENDER, &fbo))
 		return -EINVAL;
 
-	offset = *(uint32_t *)(untrusted + 2) & ~0xf;
+	untrusted_address = *(uint32_t *)(untrusted + 2);
+	offset = untrusted_address & ~0xf;
 
 	if (!check_tex_size(exec, fbo, offset,
 			    ((packet_b0 &
@@ -305,7 +306,8 @@ validate_loadstore_tile_buffer_general(VALIDATE_ARGS)
 		return -EINVAL;
 	}
 
-	*(uint32_t *)(validated + 2) = offset + fbo->paddr;
+	*(uint32_t *)(validated + 2) = (offset + fbo->paddr +
+					(untrusted_address & 0xf));
 
 	return 0;
 }
@@ -476,7 +478,7 @@ validate_tile_binning_config(VALIDATE_ARGS)
 	}
 	tile_allocation_size = *(uint32_t *)(untrusted + 4);
 	if (tile_allocation_size > tile_allocation->base.size) {
-		DRM_ERROR("tile allocation size %d > BO size %d",
+		DRM_ERROR("tile allocation size %d > BO size %d\n",
 			  tile_allocation_size, tile_allocation->base.size);
 		return -EINVAL;
 	}
@@ -765,6 +767,23 @@ reloc_tex(struct exec_info *exec,
 	uint32_t cube_map_stride = 0;
 	enum vc4_texture_data_type type;
 
+	if (!vc4_use_bo(exec, texture_handle_index, VC4_MODE_RENDER, &tex))
+		return false;
+
+	if (sample->is_direct) {
+		uint32_t remaining_size = tex->base.size - p0;
+		if (p0 > tex->base.size - 4) {
+			DRM_ERROR("UBO offset greater than UBO size\n");
+			return false;
+		}
+		if (p1 > remaining_size - 4) {
+			DRM_ERROR("UBO clamp would allow reads outside of UBO\n");
+			return false;
+		}
+		*validated_p0 = tex->paddr + p0;
+		return true;
+	}
+
 	if (width == 0)
 		width = 2048;
 	if (height == 0)
@@ -776,14 +795,14 @@ reloc_tex(struct exec_info *exec,
 		if ((p3 & (3 << 30)) == (1 << 30)) {
 			if (cube_map_stride) {
 				DRM_ERROR("Cube map stride set twice\n");
-				return -EINVAL;
+				return false;
 			}
 
 			cube_map_stride = p3 & 0x3ffff000;
 		}
 		if (!cube_map_stride) {
 			DRM_ERROR("Cube map stride not set\n");
-			return -EINVAL;
+			return false;
 		}
 	}
 
@@ -829,9 +848,6 @@ reloc_tex(struct exec_info *exec,
 		else
 			tiling_format = VC4_TILING_FORMAT_T;
 	}
-
-	if (!vc4_use_bo(exec, texture_handle_index, VC4_MODE_RENDER, &tex))
-		return false;
 
 	if (!check_tex_size(exec, tex, offset + cube_map_stride * 5,
 			    tiling_format, width, height, cpp)) {

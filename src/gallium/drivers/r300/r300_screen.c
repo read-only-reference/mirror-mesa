@@ -107,6 +107,7 @@ static int r300_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
         case PIPE_CAP_USER_CONSTANT_BUFFERS:
         case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
         case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
+        case PIPE_CAP_CLIP_HALFZ:
             return 1;
 
         case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
@@ -258,6 +259,8 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
              * additional texcoords but there is no two-sided color
              * selection then. However the facing bit can be used instead. */
             return 10;
+        case PIPE_SHADER_CAP_MAX_OUTPUTS:
+            return 4;
         case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
             return (is_r500 ? 256 : 32) * sizeof(float[4]);
         case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
@@ -306,6 +309,8 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
             return is_r500 ? 4 : 0; /* For loops; not sure about conditionals. */
         case PIPE_SHADER_CAP_MAX_INPUTS:
             return 16;
+        case PIPE_SHADER_CAP_MAX_OUTPUTS:
+            return 10;
         case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
             return 256 * sizeof(float[4]);
         case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:

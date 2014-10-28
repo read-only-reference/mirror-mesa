@@ -388,7 +388,7 @@ void brw_init_state( struct brw_context *brw )
    brw_upload_initial_gpu_state(brw);
 
    brw->state.dirty.mesa = ~0;
-   brw->state.dirty.brw = ~0;
+   brw->state.dirty.brw = ~0ull;
 
    /* Make sure that brw->state.dirty.brw has enough bits to hold all possible
     * dirty flags.
@@ -399,6 +399,7 @@ void brw_init_state( struct brw_context *brw )
    ctx->DriverFlags.NewTransformFeedbackProg = BRW_NEW_TRANSFORM_FEEDBACK;
    ctx->DriverFlags.NewRasterizerDiscard = BRW_NEW_RASTERIZER_DISCARD;
    ctx->DriverFlags.NewUniformBuffer = BRW_NEW_UNIFORM_BUFFER;
+   ctx->DriverFlags.NewTextureBuffer = BRW_NEW_TEXTURE_BUFFER;
    ctx->DriverFlags.NewAtomicBuffer = BRW_NEW_ATOMIC_BUFFER;
 }
 
@@ -438,7 +439,7 @@ static void xor_states( struct brw_state_flags *result,
 }
 
 struct dirty_bit_map {
-   uint32_t bit;
+   uint64_t bit;
    char *name;
    uint32_t count;
 };
@@ -475,7 +476,8 @@ static struct dirty_bit_map mesa_bits[] = {
    DEFINE_BIT(_NEW_PROGRAM_CONSTANTS),
    DEFINE_BIT(_NEW_BUFFER_OBJECT),
    DEFINE_BIT(_NEW_FRAG_CLAMP),
-   DEFINE_BIT(_NEW_VARYING_VP_INPUTS),
+   /* Avoid sign extension problems. */
+   {(unsigned) _NEW_VARYING_VP_INPUTS, "_NEW_VARYING_VP_INPUTS", 0},
    {0, 0, 0}
 };
 
@@ -512,6 +514,7 @@ static struct dirty_bit_map brw_bits[] = {
    DEFINE_BIT(BRW_NEW_INTERPOLATION_MAP),
    DEFINE_BIT(BRW_NEW_PUSH_CONSTANT_ALLOCATION),
    DEFINE_BIT(BRW_NEW_NUM_SAMPLES),
+   DEFINE_BIT(BRW_NEW_TEXTURE_BUFFER),
    {0, 0, 0}
 };
 
@@ -520,7 +523,6 @@ static struct dirty_bit_map cache_bits[] = {
    DEFINE_BIT(CACHE_NEW_CC_UNIT),
    DEFINE_BIT(CACHE_NEW_WM_PROG),
    DEFINE_BIT(CACHE_NEW_BLORP_BLIT_PROG),
-   DEFINE_BIT(CACHE_NEW_BLORP_CONST_COLOR_PROG),
    DEFINE_BIT(CACHE_NEW_SAMPLER),
    DEFINE_BIT(CACHE_NEW_WM_UNIT),
    DEFINE_BIT(CACHE_NEW_SF_PROG),
@@ -539,14 +541,9 @@ static struct dirty_bit_map cache_bits[] = {
 
 
 static void
-brw_update_dirty_count(struct dirty_bit_map *bit_map, int32_t bits)
+brw_update_dirty_count(struct dirty_bit_map *bit_map, uint64_t bits)
 {
-   int i;
-
-   for (i = 0; i < 32; i++) {
-      if (bit_map[i].bit == 0)
-	 return;
-
+   for (int i = 0; bit_map[i].bit != 0; i++) {
       if (bit_map[i].bit & bits)
 	 bit_map[i].count++;
    }
@@ -555,13 +552,8 @@ brw_update_dirty_count(struct dirty_bit_map *bit_map, int32_t bits)
 static void
 brw_print_dirty_count(struct dirty_bit_map *bit_map)
 {
-   int i;
-
-   for (i = 0; i < 32; i++) {
-      if (bit_map[i].bit == 0)
-	 return;
-
-      fprintf(stderr, "0x%08x: %12d (%s)\n",
+   for (int i = 0; bit_map[i].bit != 0; i++) {
+      fprintf(stderr, "0x%016lx: %12d (%s)\n",
 	      bit_map[i].bit, bit_map[i].count, bit_map[i].name);
    }
 }
@@ -585,7 +577,7 @@ void brw_upload_state(struct brw_context *brw)
    if (0) {
       /* Always re-emit all state. */
       state->mesa |= ~0;
-      state->brw |= ~0;
+      state->brw |= ~0ull;
       state->cache |= ~0;
    }
 

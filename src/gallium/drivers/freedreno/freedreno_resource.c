@@ -104,6 +104,8 @@ fd_resource_transfer_map(struct pipe_context *pctx,
 	char *buf;
 	int ret = 0;
 
+	DBG("prsc=%p, level=%u, usage=%x", prsc, level, usage);
+
 	ptrans = util_slab_alloc(&ctx->transfer_pool);
 	if (!ptrans)
 		return NULL;
@@ -116,7 +118,7 @@ fd_resource_transfer_map(struct pipe_context *pctx,
 	ptrans->usage = usage;
 	ptrans->box = *box;
 	ptrans->stride = slice->pitch * rsc->cpp;
-	ptrans->layer_stride = ptrans->stride;
+	ptrans->layer_stride = slice->size0;
 
 	if (usage & PIPE_TRANSFER_READ)
 		op |= DRM_FREEDRENO_PREP_READ;
@@ -124,18 +126,15 @@ fd_resource_transfer_map(struct pipe_context *pctx,
 	if (usage & PIPE_TRANSFER_WRITE)
 		op |= DRM_FREEDRENO_PREP_WRITE;
 
-	if (usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE)
-		op |= DRM_FREEDRENO_PREP_NOSYNC;
-
 	/* some state trackers (at least XA) don't do this.. */
 	if (!(usage & (PIPE_TRANSFER_FLUSH_EXPLICIT | PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE)))
 		fd_resource_transfer_flush_region(pctx, ptrans, box);
 
-	if (!(usage & PIPE_TRANSFER_UNSYNCHRONIZED)) {
+	if (usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE) {
+		realloc_bo(rsc, fd_bo_size(rsc->bo));
+	} else if (!(usage & PIPE_TRANSFER_UNSYNCHRONIZED)) {
 		ret = fd_bo_cpu_prep(rsc->bo, ctx->screen->pipe, op);
-		if ((ret == -EBUSY) && (usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE))
-			realloc_bo(rsc, fd_bo_size(rsc->bo));
-		else if (ret)
+		if (ret)
 			goto fail;
 	}
 
@@ -199,9 +198,8 @@ setup_slices(struct fd_resource *rsc)
 
 	for (level = 0; level <= prsc->last_level; level++) {
 		struct fd_resource_slice *slice = fd_resource_slice(rsc, level);
-		uint32_t aligned_width = align(width, 32);
 
-		slice->pitch = aligned_width;
+		slice->pitch = align(width, 32);
 		slice->offset = size;
 		slice->size0 = slice->pitch * height * rsc->cpp;
 
@@ -229,9 +227,8 @@ setup_slices_array(struct fd_resource *rsc)
 
 	for (level = 0; level <= prsc->last_level; level++) {
 		struct fd_resource_slice *slice = fd_resource_slice(rsc, level);
-		uint32_t aligned_width = align(width, 32);
 
-		slice->pitch = aligned_width;
+		slice->pitch = align(width, 32);
 		slice->offset = size;
 		slice->size0 = align(slice->pitch * height * rsc->cpp, 4096);
 
@@ -449,8 +446,8 @@ fd_blit(struct pipe_context *pctx, const struct pipe_blit_info *blit_info)
 static void
 fd_blitter_pipe_begin(struct fd_context *ctx)
 {
-	util_blitter_save_vertex_buffer_slot(ctx->blitter, ctx->vertexbuf.vb);
-	util_blitter_save_vertex_elements(ctx->blitter, ctx->vtx);
+	util_blitter_save_vertex_buffer_slot(ctx->blitter, ctx->vtx.vertexbuf.vb);
+	util_blitter_save_vertex_elements(ctx->blitter, ctx->vtx.vtx);
 	util_blitter_save_vertex_shader(ctx->blitter, ctx->prog.vp);
 	util_blitter_save_rasterizer(ctx->blitter, ctx->rasterizer);
 	util_blitter_save_viewport(ctx->blitter, &ctx->viewport);

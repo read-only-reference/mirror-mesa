@@ -99,7 +99,7 @@ is_expression(const fs_inst *const inst)
    case SHADER_OPCODE_INT_REMAINDER:
    case SHADER_OPCODE_SIN:
    case SHADER_OPCODE_COS:
-      return inst->mlen == 0;
+      return inst->mlen < 2;
    case SHADER_OPCODE_LOAD_PAYLOAD:
       return !is_copy_payload(inst);
    default:
@@ -128,7 +128,11 @@ operands_match(fs_inst *a, fs_inst *b)
    fs_reg *xs = a->src;
    fs_reg *ys = b->src;
 
-   if (!is_expression_commutative(a->opcode)) {
+   if (a->opcode == BRW_OPCODE_MAD) {
+      return xs[0].equals(ys[0]) &&
+             ((xs[1].equals(ys[1]) && xs[2].equals(ys[2])) ||
+              (xs[2].equals(ys[1]) && xs[1].equals(ys[2])));
+   } else if (!is_expression_commutative(a->opcode)) {
       bool match = true;
       for (int i = 0; i < a->sources; i++) {
          if (!xs[i].equals(ys[i])) {

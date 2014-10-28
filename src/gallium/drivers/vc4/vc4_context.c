@@ -36,6 +36,49 @@
 #include "vc4_context.h"
 #include "vc4_resource.h"
 
+/**
+ * Emits a no-op STORE_TILE_BUFFER_GENERAL.
+ *
+ * If we emit a PACKET_TILE_COORDINATES, it must be followed by a store of
+ * some sort before another load is triggered.
+ */
+static void
+vc4_store_before_load(struct vc4_context *vc4, bool *coords_emitted)
+{
+        if (!*coords_emitted)
+                return;
+
+        cl_u8(&vc4->rcl, VC4_PACKET_STORE_TILE_BUFFER_GENERAL);
+        cl_u8(&vc4->rcl, VC4_LOADSTORE_TILE_BUFFER_NONE);
+        cl_u8(&vc4->rcl, (VC4_STORE_TILE_BUFFER_DISABLE_COLOR_CLEAR |
+                          VC4_STORE_TILE_BUFFER_DISABLE_ZS_CLEAR |
+                          VC4_STORE_TILE_BUFFER_DISABLE_VG_MASK_CLEAR));
+        cl_u32(&vc4->rcl, 0); /* no address, since we're in None mode */
+
+        *coords_emitted = false;
+}
+
+/**
+ * Emits a PACKET_TILE_COORDINATES if one isn't already pending.
+ *
+ * The tile coordinates packet triggers a pending load if there is one, are
+ * used for clipping during rendering, and determine where loads/stores happen
+ * relative to their base address.
+ */
+static void
+vc4_tile_coordinates(struct vc4_context *vc4, uint32_t x, uint32_t y,
+                       bool *coords_emitted)
+{
+        if (*coords_emitted)
+                return;
+
+        cl_u8(&vc4->rcl, VC4_PACKET_TILE_COORDINATES);
+        cl_u8(&vc4->rcl, x);
+        cl_u8(&vc4->rcl, y);
+
+        *coords_emitted = true;
+}
+
 static void
 vc4_setup_rcl(struct vc4_context *vc4)
 {
@@ -116,9 +159,12 @@ vc4_setup_rcl(struct vc4_context *vc4)
                         bool coords_emitted = false;
 
                         /* Note that the load doesn't actually occur until the
-                         * tile coords packet is processed.
+                         * tile coords packet is processed, and only one load
+                         * may be outstanding at a time.
                          */
                         if (resolve_uncleared & PIPE_CLEAR_COLOR) {
+                                vc4_store_before_load(vc4, &coords_emitted);
+
                                 cl_start_reloc(&vc4->rcl, 1);
                                 cl_u8(&vc4->rcl, VC4_PACKET_LOAD_TILE_BUFFER_GENERAL);
                                 cl_u8(&vc4->rcl,
@@ -132,13 +178,12 @@ vc4_setup_rcl(struct vc4_context *vc4)
                                 cl_reloc(vc4, &vc4->rcl, ctex->bo,
                                          csurf->offset);
 
-                                cl_u8(&vc4->rcl, VC4_PACKET_TILE_COORDINATES);
-                                cl_u8(&vc4->rcl, x);
-                                cl_u8(&vc4->rcl, y);
-                                coords_emitted = true;
+                                vc4_tile_coordinates(vc4, x, y, &coords_emitted);
                         }
 
                         if (resolve_uncleared & (PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL)) {
+                                vc4_store_before_load(vc4, &coords_emitted);
+
                                 cl_start_reloc(&vc4->rcl, 1);
                                 cl_u8(&vc4->rcl, VC4_PACKET_LOAD_TILE_BUFFER_GENERAL);
                                 cl_u8(&vc4->rcl,
@@ -149,21 +194,14 @@ vc4_setup_rcl(struct vc4_context *vc4)
                                 cl_reloc(vc4, &vc4->rcl, ztex->bo,
                                          zsurf->offset);
 
-                                cl_u8(&vc4->rcl, VC4_PACKET_TILE_COORDINATES);
-                                cl_u8(&vc4->rcl, x);
-                                cl_u8(&vc4->rcl, y);
-                                coords_emitted = true;
+                                vc4_tile_coordinates(vc4, x, y, &coords_emitted);
                         }
 
                         /* Clipping depends on tile coordinates having been
                          * emitted, so make sure it's happened even if
                          * everything was cleared to start.
                          */
-                        if (!coords_emitted) {
-                                cl_u8(&vc4->rcl, VC4_PACKET_TILE_COORDINATES);
-                                cl_u8(&vc4->rcl, x);
-                                cl_u8(&vc4->rcl, y);
-                        }
+                        vc4_tile_coordinates(vc4, x, y, &coords_emitted);
 
                         cl_start_reloc(&vc4->rcl, 1);
                         cl_u8(&vc4->rcl, VC4_PACKET_BRANCH_TO_SUB_LIST);
@@ -171,6 +209,8 @@ vc4_setup_rcl(struct vc4_context *vc4)
                                  (y * xtiles + x) * 32);
 
                         if (vc4->resolve & (PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL)) {
+                                vc4_tile_coordinates(vc4, x, y, &coords_emitted);
+
                                 cl_start_reloc(&vc4->rcl, 1);
                                 cl_u8(&vc4->rcl, VC4_PACKET_STORE_TILE_BUFFER_GENERAL);
                                 cl_u8(&vc4->rcl,
@@ -184,9 +224,12 @@ vc4_setup_rcl(struct vc4_context *vc4)
                                          ((end_of_frame &&
                                            !(vc4->resolve & PIPE_CLEAR_COLOR0)) ?
                                           VC4_LOADSTORE_TILE_BUFFER_EOF : 0));
+
+                                coords_emitted = false;
                         }
 
                         if (vc4->resolve & PIPE_CLEAR_COLOR0) {
+                                vc4_tile_coordinates(vc4, x, y, &coords_emitted);
                                 if (end_of_frame) {
                                         cl_u8(&vc4->rcl,
                                               VC4_PACKET_STORE_MS_TILE_BUFFER_AND_EOF);
@@ -194,16 +237,28 @@ vc4_setup_rcl(struct vc4_context *vc4)
                                         cl_u8(&vc4->rcl,
                                               VC4_PACKET_STORE_MS_TILE_BUFFER);
                                 }
+
+                                coords_emitted = false;
                         }
 
                         /* One of the bits needs to have been set that would
-                         * have triggered an EOFq
+                         * have triggered an EOF.
                          */
                         assert(vc4->resolve & (PIPE_CLEAR_COLOR0 |
                                                PIPE_CLEAR_DEPTH |
                                                PIPE_CLEAR_STENCIL));
+                        /* Any coords emitted must also have been consumed by
+                         * a store.
+                         */
+                        assert(!coords_emitted);
                 }
         }
+
+        if (vc4->resolve & PIPE_CLEAR_COLOR0)
+                ctex->writes++;
+
+        if (vc4->resolve & (PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL))
+                ztex->writes++;
 }
 
 void
@@ -214,7 +269,9 @@ vc4_flush(struct pipe_context *pctx)
         if (!vc4->needs_flush)
                 return;
 
-        cl_u8(&vc4->bcl, VC4_PACKET_FLUSH_ALL);
+        /* The FLUSH caps all of our bin lists with a VC4_PACKET_RETURN. */
+        cl_u8(&vc4->bcl, VC4_PACKET_FLUSH);
+
         cl_u8(&vc4->bcl, VC4_PACKET_NOP);
         cl_u8(&vc4->bcl, VC4_PACKET_HALT);
 
@@ -222,9 +279,9 @@ vc4_flush(struct pipe_context *pctx)
 
         if (vc4_debug & VC4_DEBUG_CL) {
                 fprintf(stderr, "BCL:\n");
-                vc4_dump_cl(&vc4->bcl, false);
+                vc4_dump_cl(vc4->bcl.base, vc4->bcl.end - vc4->bcl.base, false);
                 fprintf(stderr, "RCL:\n");
-                vc4_dump_cl(&vc4->rcl, true);
+                vc4_dump_cl(vc4->rcl.base, vc4->rcl.end - vc4->rcl.base, true);
         }
 
         struct drm_vc4_submit_cl submit;
@@ -270,6 +327,12 @@ vc4_flush(struct pipe_context *pctx)
 
         vc4->needs_flush = false;
         vc4->draw_call_queued = false;
+
+        /* We have no hardware context saved between our draw calls, so we
+         * need to flag the next draw as needing all state emitted.  Emitting
+         * all state at the start of our draws is also what ensures that we
+         * return to the state we need after a previous tile has finished.
+         */
         vc4->dirty = ~0;
         vc4->resolve = 0;
         vc4->cleared = 0;
@@ -287,13 +350,13 @@ vc4_pipe_flush(struct pipe_context *pctx, struct pipe_fence_handle **fence,
  *
  * This helps avoid flushing the command buffers when unnecessary.
  */
-void
-vc4_flush_for_bo(struct pipe_context *pctx, struct vc4_bo *bo)
+bool
+vc4_cl_references_bo(struct pipe_context *pctx, struct vc4_bo *bo)
 {
         struct vc4_context *vc4 = vc4_context(pctx);
 
         if (!vc4->needs_flush)
-                return;
+                return false;
 
         /* Walk all the referenced BOs in the drawing command list to see if
          * they match.
@@ -302,8 +365,7 @@ vc4_flush_for_bo(struct pipe_context *pctx, struct vc4_bo *bo)
         for (int i = 0; i < (vc4->bo_handles.next -
                              vc4->bo_handles.base) / 4; i++) {
                 if (referenced_bos[i] == bo) {
-                        vc4_flush(pctx);
-                        return;
+                        return true;
                 }
         }
 
@@ -314,8 +376,7 @@ vc4_flush_for_bo(struct pipe_context *pctx, struct vc4_bo *bo)
         if (csurf) {
                 struct vc4_resource *ctex = vc4_resource(csurf->base.texture);
                 if (ctex->bo == bo) {
-                        vc4_flush(pctx);
-                        return;
+                        return true;
                 }
         }
 
@@ -324,10 +385,11 @@ vc4_flush_for_bo(struct pipe_context *pctx, struct vc4_bo *bo)
                 struct vc4_resource *ztex =
                         vc4_resource(zsurf->base.texture);
                 if (ztex->bo == bo) {
-                        vc4_flush(pctx);
-                        return;
+                        return true;
                 }
         }
+
+        return false;
 }
 
 static void

@@ -188,6 +188,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
    case PIPE_CAP_FAKE_SW_MSAA:
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
+   case PIPE_CAP_CLIP_HALFZ:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -259,6 +260,8 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
        * and excludes 0x60 per-patch inputs.
        */
       return 0x200 / 16;
+   case PIPE_SHADER_CAP_MAX_OUTPUTS:
+      return 32;
    case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
       return 65536;
    case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:

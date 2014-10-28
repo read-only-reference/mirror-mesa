@@ -133,6 +133,7 @@
 #include "program/prog_print.h"
 #include "math/m_matrix.h"
 #include "main/dispatch.h" /* for _gloffset_COUNT */
+#include "uniforms.h"
 
 #ifdef USE_SPARC_ASM
 #include "sparc/sparc.h"
@@ -718,6 +719,9 @@ _mesa_init_constants(struct gl_constants *consts, gl_api api)
    /** GL_ARB_gpu_shader5 */
    consts->MinFragmentInterpolationOffset = MIN_FRAGMENT_INTERPOLATION_OFFSET;
    consts->MaxFragmentInterpolationOffset = MAX_FRAGMENT_INTERPOLATION_OFFSET;
+
+   /** GL_KHR_context_flush_control */
+   consts->ContextReleaseBehavior = GL_CONTEXT_RELEASE_BEHAVIOR_FLUSH;
 }
 
 
@@ -891,10 +895,24 @@ _mesa_generic_nop(void)
 
 
 /**
- * Allocate and initialize a new dispatch table.
+ * Special no-op glFlush, see below.
+ */
+#if defined(_WIN32)
+static void GLAPIENTRY
+nop_glFlush(void)
+{
+   /* don't record an error like we do in _mesa_generic_nop() */
+}
+#endif
+
+
+/**
+ * Allocate and initialize a new dispatch table.  All the dispatch
+ * function pointers will point at the _mesa_generic_nop() function
+ * which raises GL_INVALID_OPERATION.
  */
 struct _glapi_table *
-_mesa_alloc_dispatch_table()
+_mesa_alloc_dispatch_table(void)
 {
    /* Find the larger of Mesa's dispatch table and libGL's dispatch table.
     * In practice, this'll be the same for stand-alone Mesa.  But for DRI
@@ -911,6 +929,26 @@ _mesa_alloc_dispatch_table()
       for (i = 0; i < numEntries; i++) {
          entry[i] = (_glapi_proc) _mesa_generic_nop;
       }
+
+#if defined(_WIN32)
+      /* This is a special case for Windows in the event that
+       * wglGetProcAddress is called between glBegin/End().
+       *
+       * The MS opengl32.dll library apparently calls glFlush from
+       * wglGetProcAddress().  If we're inside glBegin/End(), glFlush
+       * will dispatch to _mesa_generic_nop() and we'll generate a
+       * GL_INVALID_OPERATION error.
+       *
+       * The specific case which hits this is piglit's primitive-restart
+       * test which calls glPrimitiveRestartNV() inside glBegin/End.  The
+       * first time we call glPrimitiveRestartNV() Piglit's API dispatch
+       * code will try to resolve the function by calling wglGetProcAddress.
+       * This raises GL_INVALID_OPERATION and an assert(glGetError()==0)
+       * will fail causing the test to fail.  By suppressing the error, the
+       * assertion passes and the test continues.
+       */
+      SET_Flush(table, nop_glFlush);
+#endif
    }
    return table;
 }
@@ -1587,9 +1625,11 @@ _mesa_make_current( struct gl_context *newCtx,
    }
 
    if (curCtx && 
-      (curCtx->WinSysDrawBuffer || curCtx->WinSysReadBuffer) &&
+       (curCtx->WinSysDrawBuffer || curCtx->WinSysReadBuffer) &&
        /* make sure this context is valid for flushing */
-      curCtx != newCtx)
+       curCtx != newCtx &&
+       curCtx->Const.ContextReleaseBehavior ==
+       GL_CONTEXT_RELEASE_BEHAVIOR_FLUSH)
       _mesa_flush(curCtx);
 
    /* We used to call _glapi_check_multithread() here.  Now do it in drivers */
@@ -1911,6 +1951,17 @@ _mesa_valid_to_render(struct gl_context *ctx, const char *where)
       /* Error message will be printed inside _mesa_validate_program_pipeline.
        */
       if (!_mesa_validate_program_pipeline(ctx, ctx->_Shader, GL_TRUE)) {
+         return GL_FALSE;
+      }
+   }
+
+   /* If a program is active and SSO not in use, check if validation of
+    * samplers succeeded for the active program. */
+   if (ctx->_Shader->ActiveProgram && ctx->_Shader != ctx->Pipeline.Current) {
+      char errMsg[100];
+      if (!_mesa_sampler_uniforms_are_valid(ctx->_Shader->ActiveProgram,
+                                            errMsg, 100)) {
+         _mesa_error(ctx, GL_INVALID_OPERATION, "%s", errMsg);
          return GL_FALSE;
       }
    }

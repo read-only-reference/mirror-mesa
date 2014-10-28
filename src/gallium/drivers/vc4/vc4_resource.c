@@ -34,6 +34,20 @@
 #include "vc4_tiling.h"
 
 static void
+vc4_resource_bo_alloc(struct vc4_resource *rsc)
+{
+        struct pipe_resource *prsc = &rsc->base.b;
+        struct pipe_screen *pscreen = prsc->screen;
+
+        vc4_bo_unreference(&rsc->bo);
+        rsc->bo = vc4_bo_alloc(vc4_screen(pscreen),
+                               rsc->slices[0].offset +
+                               rsc->slices[0].size +
+                               rsc->cube_map_stride * (prsc->array_size - 1),
+                               "resource");
+}
+
+static void
 vc4_resource_transfer_unmap(struct pipe_context *pctx,
                             struct pipe_transfer *ptrans)
 {
@@ -75,13 +89,23 @@ vc4_resource_transfer_map(struct pipe_context *pctx,
         char *buf;
 
         if (usage & PIPE_TRANSFER_DISCARD_WHOLE_RESOURCE) {
-                uint32_t size = rsc->bo->size;
-                vc4_bo_unreference(&rsc->bo);
-                rsc->bo = vc4_bo_alloc(vc4->screen, size, "resource");
+                vc4_resource_bo_alloc(rsc);
+        } else if (!(usage & PIPE_TRANSFER_UNSYNCHRONIZED)) {
+                if (vc4_cl_references_bo(pctx, rsc->bo)) {
+                        if ((usage & PIPE_TRANSFER_DISCARD_RANGE) &&
+                            prsc->last_level == 0 &&
+                            prsc->width0 == box->width &&
+                            prsc->height0 == box->height &&
+                            prsc->depth0 == box->depth) {
+                                vc4_resource_bo_alloc(rsc);
+                        } else {
+                                vc4_flush(pctx);
+                        }
+                }
         }
 
-        if (!(usage & PIPE_TRANSFER_UNSYNCHRONIZED))
-                vc4_flush_for_bo(pctx, rsc->bo);
+        if (usage & PIPE_TRANSFER_WRITE)
+                rsc->writes++;
 
         trans = util_slab_alloc(&vc4->transfer_pool);
         if (!trans)
@@ -168,6 +192,7 @@ vc4_resource_destroy(struct pipe_screen *pscreen,
                      struct pipe_resource *prsc)
 {
         struct vc4_resource *rsc = vc4_resource(prsc);
+        pipe_resource_reference(&rsc->shadow_parent, NULL);
         vc4_bo_unreference(&rsc->bo);
         free(rsc);
 }
@@ -198,14 +223,23 @@ vc4_setup_slices(struct vc4_resource *rsc)
         struct pipe_resource *prsc = &rsc->base.b;
         uint32_t width = prsc->width0;
         uint32_t height = prsc->height0;
+        uint32_t pot_width = util_next_power_of_two(width);
+        uint32_t pot_height = util_next_power_of_two(height);
         uint32_t offset = 0;
         uint32_t utile_w = vc4_utile_width(rsc->cpp);
         uint32_t utile_h = vc4_utile_height(rsc->cpp);
 
         for (int i = prsc->last_level; i >= 0; i--) {
                 struct vc4_resource_slice *slice = &rsc->slices[i];
-                uint32_t level_width = u_minify(width, i);
-                uint32_t level_height = u_minify(height, i);
+
+                uint32_t level_width, level_height;
+                if (i == 0) {
+                        level_width = width;
+                        level_height = height;
+                } else {
+                        level_width = u_minify(pot_width, i);
+                        level_height = u_minify(pot_height, i);
+                }
 
                 if (rsc->tiled == VC4_TILING_FORMAT_LINEAR) {
                         slice->tiling = VC4_TILING_FORMAT_LINEAR;
@@ -288,7 +322,7 @@ get_resource_texture_format(struct pipe_resource *prsc)
         return format;
 }
 
-static struct pipe_resource *
+struct pipe_resource *
 vc4_resource_create(struct pipe_screen *pscreen,
                     const struct pipe_resource *tmpl)
 {
@@ -309,12 +343,7 @@ vc4_resource_create(struct pipe_screen *pscreen,
         }
 
         vc4_setup_slices(rsc);
-
-        rsc->bo = vc4_bo_alloc(vc4_screen(pscreen),
-                               rsc->slices[0].offset +
-                               rsc->slices[0].size +
-                               rsc->cube_map_stride * (prsc->array_size - 1),
-                               "resource");
+        vc4_resource_bo_alloc(rsc);
         if (!rsc->bo)
                 goto fail;
 
@@ -466,6 +495,83 @@ vc4_blit(struct pipe_context *pctx, const struct pipe_blit_info *blit_info)
         }
 
         render_blit(pctx, &info);
+}
+
+void
+vc4_update_shadow_baselevel_texture(struct pipe_context *pctx,
+                                    struct pipe_sampler_view *view)
+{
+        struct vc4_resource *shadow = vc4_resource(view->texture);
+        struct vc4_resource *orig = vc4_resource(shadow->shadow_parent);
+        assert(orig);
+
+        if (shadow->writes == orig->writes)
+                return;
+
+        for (int i = 0; i <= shadow->base.b.last_level; i++) {
+                struct pipe_box box = {
+                        .x = 0,
+                        .y = 0,
+                        .z = 0,
+                        .width = u_minify(shadow->base.b.width0, i),
+                        .height = u_minify(shadow->base.b.height0, i),
+                        .depth = 1,
+                };
+
+                util_resource_copy_region(pctx,
+                                          &shadow->base.b, i, 0, 0, 0,
+                                          &orig->base.b,
+                                          view->u.tex.first_level + i,
+                                          &box);
+        }
+
+        shadow->writes = orig->writes;
+}
+
+/**
+ * Converts a 4-byte index buffer to 2 bytes.
+ *
+ * Since GLES2 only has support for 1 and 2-byte indices, the hardware doesn't
+ * include 4-byte index support, and we have to shrink it down.
+ *
+ * There's no fallback support for when indices end up being larger than 2^16,
+ * though it will at least assertion fail.  Also, if the original index data
+ * was in user memory, it would be nice to not have uploaded it to a VBO
+ * before translating.
+ */
+void
+vc4_update_shadow_index_buffer(struct pipe_context *pctx,
+                               const struct pipe_index_buffer *ib)
+{
+        struct vc4_resource *shadow = vc4_resource(ib->buffer);
+        struct vc4_resource *orig = vc4_resource(shadow->shadow_parent);
+        uint32_t count = shadow->base.b.width0 / 2;
+
+        if (shadow->writes == orig->writes)
+                return;
+
+        struct pipe_transfer *src_transfer;
+        uint32_t *src = pipe_buffer_map_range(pctx, &orig->base.b,
+                                              ib->offset,
+                                              count * 4,
+                                              PIPE_TRANSFER_READ, &src_transfer);
+
+        struct pipe_transfer *dst_transfer;
+        uint16_t *dst = pipe_buffer_map_range(pctx, &shadow->base.b,
+                                              0,
+                                              count * 2,
+                                              PIPE_TRANSFER_WRITE, &dst_transfer);
+
+        for (int i = 0; i < count; i++) {
+                uint32_t src_index = src[i];
+                assert(src_index <= 0xffff);
+                dst[i] = src_index;
+        }
+
+        pctx->transfer_unmap(pctx, dst_transfer);
+        pctx->transfer_unmap(pctx, src_transfer);
+
+        shadow->writes = orig->writes;
 }
 
 void

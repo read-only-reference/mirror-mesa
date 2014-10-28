@@ -1496,7 +1496,7 @@ brw_ELSE(struct brw_compile *p)
    } else if (brw->gen == 7) {
       brw_set_dest(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
       brw_set_src0(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
-      brw_set_src1(p, insn, brw_imm_d(0));
+      brw_set_src1(p, insn, brw_imm_ud(0));
       brw_inst_set_jip(brw, insn, 0);
       brw_inst_set_uip(brw, insn, 0);
    } else {
@@ -1573,7 +1573,7 @@ brw_ENDIF(struct brw_compile *p)
    } else if (brw->gen == 7) {
       brw_set_dest(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
       brw_set_src0(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
-      brw_set_src1(p, insn, brw_imm_d(0));
+      brw_set_src1(p, insn, brw_imm_ud(0));
    } else {
       brw_set_src0(p, insn, brw_imm_d(0));
    }
@@ -2099,7 +2099,18 @@ brw_oword_block_read_scratch(struct brw_compile *p,
    if (brw->gen >= 6)
       offset /= 16;
 
-   mrf = retype(mrf, BRW_REGISTER_TYPE_UD);
+   if (p->brw->gen >= 7) {
+      /* On gen 7 and above, we no longer have message registers and we can
+       * send from any register we want.  By using the destination register
+       * for the message, we guarantee that the implied message write won't
+       * accidentally overwrite anything.  This has been a problem because
+       * the MRF registers and source for the final FB write are both fixed
+       * and may overlap.
+       */
+      mrf = retype(dest, BRW_REGISTER_TYPE_UD);
+   } else {
+      mrf = retype(mrf, BRW_REGISTER_TYPE_UD);
+   }
    dest = retype(dest, BRW_REGISTER_TYPE_UW);
 
    if (num_regs == 1) {
@@ -2118,11 +2129,7 @@ brw_oword_block_read_scratch(struct brw_compile *p,
       brw_MOV(p, mrf, retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD));
 
       /* set message header global offset field (reg 0, element 2) */
-      brw_MOV(p,
-	      retype(brw_vec1_reg(BRW_MESSAGE_REGISTER_FILE,
-				  mrf.nr,
-				  2), BRW_REGISTER_TYPE_UD),
-	      brw_imm_ud(offset));
+      brw_MOV(p, get_element_ud(mrf, 2), brw_imm_ud(offset));
 
       brw_pop_insn_state(p);
    }

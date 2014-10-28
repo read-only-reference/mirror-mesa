@@ -162,7 +162,8 @@ static void schedule(struct ir3_sched_ctx *ctx,
  * Delay-slot calculation.  Follows fanin/fanout.
  */
 
-static unsigned delay_calc2(struct ir3_sched_ctx *ctx,
+/* calculate delay for specified src: */
+static unsigned delay_calc_srcn(struct ir3_sched_ctx *ctx,
 		struct ir3_instruction *assigner,
 		struct ir3_instruction *consumer, unsigned srcn)
 {
@@ -173,7 +174,7 @@ static unsigned delay_calc2(struct ir3_sched_ctx *ctx,
 		for (i = 1; i < assigner->regs_count; i++) {
 			struct ir3_register *reg = assigner->regs[i];
 			if (reg->flags & IR3_REG_SSA) {
-				unsigned d = delay_calc2(ctx, reg->instr,
+				unsigned d = delay_calc_srcn(ctx, reg->instr,
 						consumer, srcn);
 				delay = MAX2(delay, d);
 			}
@@ -186,6 +187,7 @@ static unsigned delay_calc2(struct ir3_sched_ctx *ctx,
 	return delay;
 }
 
+/* calculate delay for instruction (maximum of delay for all srcs): */
 static unsigned delay_calc(struct ir3_sched_ctx *ctx,
 		struct ir3_instruction *instr)
 {
@@ -194,7 +196,7 @@ static unsigned delay_calc(struct ir3_sched_ctx *ctx,
 	for (i = 1; i < instr->regs_count; i++) {
 		struct ir3_register *reg = instr->regs[i];
 		if (reg->flags & IR3_REG_SSA) {
-			unsigned d = delay_calc2(ctx, reg->instr,
+			unsigned d = delay_calc_srcn(ctx, reg->instr,
 					instr, i - 1);
 			delay = MAX2(delay, d);
 		}
@@ -239,6 +241,32 @@ static int trysched(struct ir3_sched_ctx *ctx,
 	delay = delay_calc(ctx, instr);
 	if (delay)
 		return delay;
+
+	/* if the instruction is a kill, we need to ensure *every*
+	 * bary.f is scheduled.  The hw seems unhappy if the thread
+	 * gets killed before the end-input (ei) flag is hit.
+	 *
+	 * We could do this by adding each bary.f instruction as
+	 * virtual ssa src for the kill instruction.  But we have
+	 * fixed length instr->regs[].
+	 *
+	 * TODO this wouldn't be quite right if we had multiple
+	 * basic blocks, if any block was conditional.  We'd need
+	 * to schedule the bary.f's outside of any block which
+	 * was conditional that contained a kill.. I think..
+	 */
+	if (is_kill(instr)) {
+		struct ir3 *ir = instr->block->shader;
+		unsigned i;
+
+		for (i = 0; i < ir->baryfs_count; i++) {
+			if (ir->baryfs[i]->depth == DEPTH_UNUSED)
+				continue;
+			delay = trysched(ctx, ir->baryfs[i]);
+			if (delay)
+				return delay;
+		}
+	}
 
 	/* if this is a write to address/predicate register, and that
 	 * register is currently in use, we need to defer until it is

@@ -121,6 +121,7 @@ ilo_get_shader_param(struct pipe_screen *screen, unsigned shader,
    case PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH:
       return UINT_MAX;
    case PIPE_SHADER_CAP_MAX_INPUTS:
+   case PIPE_SHADER_CAP_MAX_OUTPUTS:
       /* this is limited by how many attributes SF can remap */
       return 16;
    case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
@@ -467,6 +468,8 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return (int) (MIN2(gpu_memory, system_memory) >> 20);
    }
    case PIPE_CAP_UMA:
+      return true;
+   case PIPE_CAP_CLIP_HALFZ:
       return true;
 
    default:

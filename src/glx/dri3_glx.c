@@ -271,8 +271,11 @@ static void
 dri3_update_num_back(struct dri3_drawable *priv)
 {
    priv->num_back = 1;
-   if (priv->flipping)
+   if (priv->flipping) {
+      if (!priv->is_pixmap && !(priv->present_capabilities & XCB_PRESENT_CAPABILITY_ASYNC))
+         priv->num_back++;
       priv->num_back++;
+   }
    if (priv->swap_interval == 0)
       priv->num_back++;
 }
@@ -358,12 +361,34 @@ dri3_create_drawable(struct glx_screen *base, XID xDrawable,
    return &pdraw->base;
 }
 
+static void
+show_fps(struct dri3_drawable *draw, uint64_t current_ust)
+{
+   const uint64_t interval =
+      ((struct dri3_screen *) draw->base.psc)->show_fps_interval;
+
+   draw->frames++;
+
+   /* DRI3+Present together uses microseconds for UST. */
+   if (draw->previous_ust + interval * 1000000 <= current_ust) {
+      if (draw->previous_ust) {
+         fprintf(stderr, "libGL: FPS = %.1f\n",
+                 ((uint64_t) draw->frames * 1000000) /
+                 (double)(current_ust - draw->previous_ust));
+      }
+      draw->frames = 0;
+      draw->previous_ust = current_ust;
+   }
+}
+
 /*
  * Process one Present event
  */
 static void
 dri3_handle_present_event(struct dri3_drawable *priv, xcb_present_generic_event_t *ge)
 {
+   struct dri3_screen *psc = (struct dri3_screen *) priv->base.psc;
+
    switch (ge->evtype) {
    case XCB_PRESENT_CONFIGURE_NOTIFY: {
       xcb_present_configure_notify_event_t *ce = (void *) ge;
@@ -392,6 +417,9 @@ dri3_handle_present_event(struct dri3_drawable *priv, xcb_present_generic_event_
             break;
          }
          dri3_update_num_back(priv);
+
+         if (psc->show_fps_interval)
+            show_fps(priv, ce->ust);
       } else {
          priv->recv_msc_serial = ce->serial;
       }
@@ -813,11 +841,15 @@ dri3_alloc_render_buffer(struct glx_screen *glx_screen, Drawable draw,
     */
 
    fence_fd = xshmfence_alloc_shm();
-   if (fence_fd < 0)
+   if (fence_fd < 0) {
+      ErrorMessageF("DRI3 Fence object allocation failure %s\n", strerror(errno));
       return NULL;
+   }
    shm_fence = xshmfence_map_shm(fence_fd);
-   if (shm_fence == NULL)
+   if (shm_fence == NULL) {
+      ErrorMessageF("DRI3 Fence object map failure %s\n", strerror(errno));
       goto no_shm_fence;
+   }
 
    /* Allocate the image from the driver
     */
@@ -826,8 +858,10 @@ dri3_alloc_render_buffer(struct glx_screen *glx_screen, Drawable draw,
       goto no_buffer;
 
    buffer->cpp = dri3_cpp_for_format(format);
-   if (!buffer->cpp)
+   if (!buffer->cpp) {
+      ErrorMessageF("DRI3 buffer format %d invalid\n", format);
       goto no_image;
+   }
 
    if (!psc->is_different_gpu) {
       buffer->image = (*psc->image->createImage) (psc->driScreen,
@@ -838,8 +872,10 @@ dri3_alloc_render_buffer(struct glx_screen *glx_screen, Drawable draw,
                                                   buffer);
       pixmap_buffer = buffer->image;
 
-      if (!buffer->image)
+      if (!buffer->image) {
+         ErrorMessageF("DRI3 gpu image creation failure\n");
          goto no_image;
+      }
    } else {
       buffer->image = (*psc->image->createImage) (psc->driScreen,
                                                   width, height,
@@ -847,8 +883,10 @@ dri3_alloc_render_buffer(struct glx_screen *glx_screen, Drawable draw,
                                                   0,
                                                   buffer);
 
-      if (!buffer->image)
+      if (!buffer->image) {
+         ErrorMessageF("DRI3 other gpu image creation failure\n");
          goto no_image;
+      }
 
       buffer->linear_buffer = (*psc->image->createImage) (psc->driScreen,
                                                           width, height,
@@ -858,19 +896,25 @@ dri3_alloc_render_buffer(struct glx_screen *glx_screen, Drawable draw,
                                                           buffer);
       pixmap_buffer = buffer->linear_buffer;
 
-      if (!buffer->linear_buffer)
+      if (!buffer->linear_buffer) {
+         ErrorMessageF("DRI3 gpu linear image creation failure\n");
          goto no_linear_buffer;
+      }
    }
 
    /* X wants the stride, so ask the image for it
     */
-   if (!(*psc->image->queryImage)(pixmap_buffer, __DRI_IMAGE_ATTRIB_STRIDE, &stride))
+   if (!(*psc->image->queryImage)(pixmap_buffer, __DRI_IMAGE_ATTRIB_STRIDE, &stride)) {
+      ErrorMessageF("DRI3 get image stride failed\n");
       goto no_buffer_attrib;
+   }
 
    buffer->pitch = stride;
 
-   if (!(*psc->image->queryImage)(pixmap_buffer, __DRI_IMAGE_ATTRIB_FD, &buffer_fd))
+   if (!(*psc->image->queryImage)(pixmap_buffer, __DRI_IMAGE_ATTRIB_FD, &buffer_fd)) {
+      ErrorMessageF("DRI3 get image FD failed\n");
       goto no_buffer_attrib;
+   }
 
    xcb_dri3_pixmap_from_buffer(c,
                                (pixmap = xcb_generate_id(c)),
@@ -910,6 +954,7 @@ no_buffer:
    xshmfence_unmap_shm(shm_fence);
 no_shm_fence:
    close(fence_fd);
+   ErrorMessageF("DRI3 alloc_render_buffer failed\n");
    return NULL;
 }
 
@@ -976,6 +1021,9 @@ dri3_update_drawable(__DRIdrawable *driDrawable, void *loaderPrivate)
       xcb_get_geometry_reply_t                  *geom_reply;
       xcb_void_cookie_t                         cookie;
       xcb_generic_error_t                       *error;
+      xcb_present_query_capabilities_cookie_t   present_capabilities_cookie;
+      xcb_present_query_capabilities_reply_t    *present_capabilities_reply;
+
 
       /* Try to select for input on the window.
        *
@@ -993,6 +1041,8 @@ dri3_update_drawable(__DRIdrawable *driDrawable, void *loaderPrivate)
                                                 XCB_PRESENT_EVENT_MASK_CONFIGURE_NOTIFY|
                                                 XCB_PRESENT_EVENT_MASK_COMPLETE_NOTIFY|
                                                 XCB_PRESENT_EVENT_MASK_IDLE_NOTIFY);
+
+      present_capabilities_cookie = xcb_present_query_capabilities(c, priv->base.xDrawable);
 
       /* Create an XCB event queue to hold present events outside of the usual
        * application event queue
@@ -1022,6 +1072,16 @@ dri3_update_drawable(__DRIdrawable *driDrawable, void *loaderPrivate)
        */
 
       error = xcb_request_check(c, cookie);
+
+      present_capabilities_reply = xcb_present_query_capabilities_reply(c,
+                                                                        present_capabilities_cookie,
+                                                                        NULL);
+
+      if (present_capabilities_reply) {
+         priv->present_capabilities = present_capabilities_reply->capabilities;
+         free(present_capabilities_reply);
+      } else
+         priv->present_capabilities = 0;
 
       if (error) {
          if (error->error_code != BadWindow) {
@@ -1795,7 +1855,7 @@ dri3_create_screen(int screen, struct glx_display * priv)
    struct dri3_screen *psc;
    __GLXDRIscreen *psp;
    struct glx_config *configs = NULL, *visuals = NULL;
-   char *driverName, *deviceName;
+   char *driverName, *deviceName, *tmp;
    int i;
 
    psc = calloc(1, sizeof *psc);
@@ -1933,6 +1993,11 @@ dri3_create_screen(int screen, struct glx_display * priv)
 
    free(driverName);
    free(deviceName);
+
+   tmp = getenv("LIBGL_SHOW_FPS");
+   psc->show_fps_interval = tmp ? atoi(tmp) : 0;
+   if (psc->show_fps_interval < 0)
+      psc->show_fps_interval = 0;
 
    return &psc->base;
 

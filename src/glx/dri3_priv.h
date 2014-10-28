@@ -138,7 +138,7 @@ struct dri3_screen {
    int fd;
    int is_different_gpu;
 
-   Bool show_fps;
+   int show_fps_interval;
 };
 
 struct dri3_context
@@ -147,7 +147,7 @@ struct dri3_context
    __DRIcontext *driContext;
 };
 
-#define DRI3_MAX_BACK   3
+#define DRI3_MAX_BACK   4
 #define DRI3_BACK_ID(i) (i)
 #define DRI3_FRONT_ID   (DRI3_MAX_BACK)
 
@@ -172,6 +172,10 @@ struct dri3_drawable {
    uint8_t is_pixmap;
    uint8_t flipping;
 
+   /* Present extension capabilities
+    */
+   uint32_t present_capabilities;
+
    /* SBC numbers are tracked by using the serial numbers
     * in the present request and complete events
     */
@@ -194,6 +198,10 @@ struct dri3_drawable {
    xcb_present_event_t eid;
    xcb_gcontext_t gc;
    xcb_special_event_t *special_event;
+
+   /* LIBGL_SHOW_FPS support */
+   uint64_t previous_ust;
+   unsigned frames;
 };
 
 

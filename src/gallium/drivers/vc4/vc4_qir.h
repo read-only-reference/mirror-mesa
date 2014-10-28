@@ -107,6 +107,7 @@ enum qop {
         QOP_FRAG_Y,
         QOP_FRAG_Z,
         QOP_FRAG_W,
+        QOP_FRAG_REV_FLAG,
 
         QOP_UNPACK_8A,
         QOP_UNPACK_8B,
@@ -121,6 +122,16 @@ enum qop {
         QOP_TEX_R,
         /** Texture LOD bias parameter write */
         QOP_TEX_B,
+
+        /**
+         * Texture-unit 4-byte read with address provided direct in S
+         * cooordinate.
+         *
+         * The first operand is the offset from the start of the UBO, and the
+         * second is the uniform that has the UBO's base pointer.
+         */
+        QOP_TEX_DIRECT,
+
         /**
          * Signal of texture read being necessary and then reading r4 into
          * the destination
@@ -182,6 +193,8 @@ enum quniform_contents {
         QUNIFORM_VIEWPORT_Z_OFFSET,
         QUNIFORM_VIEWPORT_Z_SCALE,
 
+        QUNIFORM_USER_CLIP_PLANE,
+
         /**
          * A reference to a texture config parameter 0 uniform.
          *
@@ -204,6 +217,8 @@ enum quniform_contents {
         /** A reference to a texture config parameter 2 cubemap stride uniform */
         QUNIFORM_TEXTURE_CONFIG_P2,
 
+        QUNIFORM_UBO_ADDR,
+
         QUNIFORM_TEXRECT_SCALE_X,
         QUNIFORM_TEXRECT_SCALE_Y,
 
@@ -215,20 +230,81 @@ enum quniform_contents {
         QUNIFORM_ALPHA_REF,
 };
 
+struct vc4_varying_semantic {
+        uint8_t semantic;
+        uint8_t index;
+        uint8_t swizzle;
+};
+
+struct vc4_compiler_ubo_range {
+        /**
+         * offset in bytes from the start of the ubo where this range is
+         * uploaded.
+         *
+         * Only set once used is set.
+         */
+        uint32_t dst_offset;
+
+        /**
+         * offset in bytes from the start of the gallium uniforms where the
+         * data comes from.
+         */
+        uint32_t src_offset;
+
+        /** size in bytes of this ubo range */
+        uint32_t size;
+
+        /**
+         * Set if this range is used by the shader for indirect uniforms
+         * access.
+         */
+        bool used;
+};
+
 struct vc4_compile {
+        struct vc4_context *vc4;
         struct tgsi_parse_context parser;
         struct qreg *temps;
+        /**
+         * Inputs to the shader, arranged by TGSI declaration order.
+         *
+         * Not all fragment shader QFILE_VARY reads are present in this array.
+         */
         struct qreg *inputs;
         struct qreg *outputs;
         struct qreg *consts;
+        struct qreg addr[4]; /* TGSI ARL destination. */
         uint32_t temps_array_size;
         uint32_t inputs_array_size;
         uint32_t outputs_array_size;
         uint32_t uniforms_array_size;
         uint32_t consts_array_size;
         uint32_t num_consts;
+
+        struct vc4_compiler_ubo_range *ubo_ranges;
+        uint32_t ubo_ranges_array_size;
+        uint32_t num_ubo_ranges;
+        uint32_t next_ubo_dst_offset;
+
         struct qreg line_x, point_x, point_y;
         struct qreg discard;
+
+        /**
+         * Array of the TGSI semantics of all FS QFILE_VARY reads.
+         *
+         * This includes those that aren't part of the VPM varyings, like
+         * point/line coordinates.
+         */
+        struct vc4_varying_semantic *input_semantics;
+        uint32_t num_input_semantics;
+        uint32_t input_semantics_array_size;
+
+        /**
+         * An entry per outputs[] in the VS indicating what the semantic of
+         * the output is.  Used to emit from the VS in the order that the FS
+         * needs.
+         */
+        struct vc4_varying_semantic *output_semantics;
 
         struct pipe_shader_state *shader_state;
         struct vc4_key *key;
@@ -237,10 +313,12 @@ struct vc4_compile {
 
         uint32_t *uniform_data;
         enum quniform_contents *uniform_contents;
+        uint32_t uniform_array_size;
         uint32_t num_uniforms;
         uint32_t num_outputs;
         uint32_t num_texture_samples;
         uint32_t output_position_index;
+        uint32_t output_clipvertex_index;
         uint32_t output_color_index;
         uint32_t output_point_size_index;
 
@@ -255,7 +333,9 @@ struct vc4_compile {
         uint32_t qpu_inst_count;
         uint32_t qpu_inst_size;
         uint32_t num_inputs;
-        uint32_t color_inputs;
+
+        uint32_t program_id;
+        uint32_t variant_id;
 };
 
 struct vc4_compile *qir_compile_init(void);
@@ -273,7 +353,7 @@ void qir_emit(struct vc4_compile *c, struct qinst *inst);
 struct qreg qir_get_temp(struct vc4_compile *c);
 int qir_get_op_nsrc(enum qop qop);
 bool qir_reg_equals(struct qreg a, struct qreg b);
-bool qir_has_side_effects(struct qinst *inst);
+bool qir_has_side_effects(struct vc4_compile *c, struct qinst *inst);
 bool qir_depends_on_flags(struct qinst *inst);
 bool qir_writes_r4(struct qinst *inst);
 bool qir_reads_r4(struct qinst *inst);
@@ -373,10 +453,12 @@ QIR_NODST_2(TEX_S)
 QIR_NODST_2(TEX_T)
 QIR_NODST_2(TEX_R)
 QIR_NODST_2(TEX_B)
+QIR_NODST_2(TEX_DIRECT)
 QIR_ALU0(FRAG_X)
 QIR_ALU0(FRAG_Y)
 QIR_ALU0(FRAG_Z)
 QIR_ALU0(FRAG_W)
+QIR_ALU0(FRAG_REV_FLAG)
 QIR_ALU0(TEX_RESULT)
 QIR_ALU0(TLB_COLOR_READ)
 QIR_NODST_1(TLB_Z_WRITE)
@@ -405,6 +487,14 @@ qir_UNPACK_8(struct vc4_compile *c, struct qreg src, int i)
         struct qreg t = qir_get_temp(c);
         qir_emit(c, qir_inst(QOP_UNPACK_8A + i, t, src, c->undef));
         return t;
+}
+
+static inline struct qreg
+qir_POW(struct vc4_compile *c, struct qreg x, struct qreg y)
+{
+        return qir_EXP2(c, qir_FMUL(c,
+                                    y,
+                                    qir_LOG2(c, x)));
 }
 
 #endif /* VC4_QIR_H */

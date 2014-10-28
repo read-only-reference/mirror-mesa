@@ -62,6 +62,18 @@ struct fd3_context {
 	 */
 	struct pipe_resource *blit_texcoord_vbuf;
 
+	/* vertex state for solid_vbuf:
+	 *    - solid_vbuf / 12 / R32G32B32_FLOAT
+	 */
+	struct fd_vertex_state solid_vbuf_state;
+
+	/* vertex state for blit_prog:
+	 *    - blit_texcoord_vbuf / 8 / R32G32_FLOAT
+	 *    - solid_vbuf / 12 / R32G32B32_FLOAT
+	 */
+	struct fd_vertex_state blit_vbuf_state;
+
+
 	/*
 	 * Border color layout *appears* to be as arrays of 0x40 byte
 	 * elements, with frag shader elements starting at (16 x 0x40).
@@ -79,6 +91,9 @@ struct fd3_context {
 
 	struct u_upload_mgr *border_color_uploader;
 	struct pipe_resource *border_color_buf;
+
+	/* if *any* of bits are set in {v,f}saturate_{s,t,r} */
+	bool vsaturate, fsaturate;
 
 	/* bitmask of sampler which needs coords clamped for vertex
 	 * shader:

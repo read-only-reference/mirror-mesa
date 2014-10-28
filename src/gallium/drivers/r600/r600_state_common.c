@@ -158,8 +158,10 @@ static void r600_bind_blend_state(struct pipe_context *ctx, void *state)
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct r600_blend_state *blend = (struct r600_blend_state *)state;
 
-	if (blend == NULL)
+	if (blend == NULL) {
+		r600_set_cso_state_with_cb(&rctx->blend_state, NULL, NULL);
 		return;
+	}
 
 	r600_bind_blend_state_internal(rctx, blend, rctx->force_blend_disable);
 }
@@ -447,7 +449,12 @@ static void r600_delete_sampler_state(struct pipe_context *ctx, void *state)
 
 static void r600_delete_blend_state(struct pipe_context *ctx, void *state)
 {
+	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct r600_blend_state *blend = (struct r600_blend_state*)state;
+
+	if (rctx->blend_state.cso == state) {
+		ctx->bind_blend_state(ctx, NULL);
+	}
 
 	r600_release_command_buffer(&blend->buffer);
 	r600_release_command_buffer(&blend->buffer_no_blend);
@@ -1083,6 +1090,29 @@ static void r600_setup_txq_cube_array_constants(struct r600_context *rctx, int s
 	cb.buffer_size = array_size;
 	rctx->b.b.set_constant_buffer(&rctx->b.b, shader_type, R600_TXQ_CONST_BUFFER, &cb);
 	pipe_resource_reference(&cb.buffer, NULL);
+}
+
+/* set sample xy locations as array of fragment shader constants */
+void r600_set_sample_locations_constant_buffer(struct r600_context *rctx)
+{
+	struct pipe_constant_buffer constbuf = {0};
+	float values[4*16] = {0.0f};
+	int i;
+	struct pipe_context *ctx = &rctx->b.b;
+
+	assert(rctx->framebuffer.nr_samples <= Elements(values)/4);
+	for (i = 0; i < rctx->framebuffer.nr_samples; i++) {
+		ctx->get_sample_position(ctx, rctx->framebuffer.nr_samples, i, &values[4*i]);
+		/* Also fill in center-zeroed positions used for interpolateAtSample */
+		values[4*i + 2] = values[4*i + 0] - 0.5f;
+		values[4*i + 3] = values[4*i + 1] - 0.5f;
+	}
+
+	constbuf.user_buffer = values;
+	constbuf.buffer_size = rctx->framebuffer.nr_samples * 4 * 4;
+	ctx->set_constant_buffer(ctx, PIPE_SHADER_FRAGMENT,
+		R600_SAMPLE_POSITIONS_CONST_BUFFER, &constbuf);
+	pipe_resource_reference(&constbuf.buffer, NULL);
 }
 
 static void update_shader_atom(struct pipe_context *ctx,

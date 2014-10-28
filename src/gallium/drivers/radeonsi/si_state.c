@@ -30,7 +30,6 @@
 #include "radeon/r600_cs.h"
 
 #include "tgsi/tgsi_parse.h"
-#include "tgsi/tgsi_scan.h"
 #include "util/u_format.h"
 #include "util/u_format_s3tc.h"
 #include "util/u_framebuffer.h"
@@ -226,7 +225,7 @@ static void si_update_fb_blend_state(struct si_context *sctx)
 	if (blend == NULL)
 		return;
 
-	pm4 = si_pm4_alloc_state(sctx);
+	pm4 = CALLOC_STRUCT(si_pm4_state);
 	if (pm4 == NULL)
 		return;
 
@@ -407,7 +406,7 @@ static void si_set_blend_color(struct pipe_context *ctx,
 			       const struct pipe_blend_color *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_pm4_state *pm4 = si_pm4_alloc_state(sctx);
+	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
 
         if (pm4 == NULL)
                 return;
@@ -428,7 +427,7 @@ static void si_set_clip_state(struct pipe_context *ctx,
 			      const struct pipe_clip_state *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
-	struct si_pm4_state *pm4 = si_pm4_alloc_state(sctx);
+	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
 	struct pipe_constant_buffer cb;
 
 	if (pm4 == NULL)
@@ -531,7 +530,7 @@ static void si_update_fb_rs_state(struct si_context *sctx)
 		return;
 	}
 
-	pm4 = si_pm4_alloc_state(sctx);
+	pm4 = CALLOC_STRUCT(si_pm4_state);
 
 	if (pm4 == NULL)
 		return;
@@ -600,14 +599,15 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 		S_028814_CULL_FRONT(state->rasterizer_discard || (state->cull_face & PIPE_FACE_FRONT) ? 1 : 0) |
 		S_028814_CULL_BACK(state->rasterizer_discard || (state->cull_face & PIPE_FACE_BACK) ? 1 : 0) |
 		S_028814_FACE(!state->front_ccw) |
-		S_028814_POLY_OFFSET_FRONT_ENABLE(state->offset_tri) |
-		S_028814_POLY_OFFSET_BACK_ENABLE(state->offset_tri) |
-		S_028814_POLY_OFFSET_PARA_ENABLE(state->offset_tri) |
+		S_028814_POLY_OFFSET_FRONT_ENABLE(util_get_offset(state, state->fill_front)) |
+		S_028814_POLY_OFFSET_BACK_ENABLE(util_get_offset(state, state->fill_back)) |
+		S_028814_POLY_OFFSET_PARA_ENABLE(state->offset_point || state->offset_line) |
 		S_028814_POLY_MODE(polygon_dual_mode) |
 		S_028814_POLYMODE_FRONT_PTYPE(si_translate_fill(state->fill_front)) |
 		S_028814_POLYMODE_BACK_PTYPE(si_translate_fill(state->fill_back));
 	rs->pa_cl_clip_cntl =
 		S_028810_PS_UCP_MODE(3) |
+		S_028810_DX_CLIP_SPACE_DEF(state->clip_halfz) |
 		S_028810_ZCLIP_NEAR_DISABLE(!state->depth_clip) |
 		S_028810_ZCLIP_FAR_DISABLE(!state->depth_clip) |
 		S_028810_DX_RASTERIZATION_KILL(state->rasterizer_discard) |
@@ -697,7 +697,7 @@ static void si_delete_rs_state(struct pipe_context *ctx, void *state)
  */
 static void si_update_dsa_stencil_ref(struct si_context *sctx)
 {
-	struct si_pm4_state *pm4 = si_pm4_alloc_state(sctx);
+	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
 	struct pipe_stencil_ref *ref = &sctx->stencil_ref;
         struct si_state_dsa *dsa = sctx->queued.named.dsa;
 
@@ -2194,14 +2194,6 @@ static INLINE void si_shader_selector_key(struct pipe_context *ctx,
 	struct si_context *sctx = (struct si_context *)ctx;
 	memset(key, 0, sizeof(*key));
 
-	if ((sel->type == PIPE_SHADER_VERTEX || sel->type == PIPE_SHADER_GEOMETRY) &&
-	    sctx->queued.named.rasterizer) {
-		if (sctx->queued.named.rasterizer->clip_plane_enable & 0xf0)
-			key->vs.ucps_enabled |= 0x2;
-		if (sctx->queued.named.rasterizer->clip_plane_enable & 0xf)
-			key->vs.ucps_enabled |= 0x1;
-	}
-
 	if (sel->type == PIPE_SHADER_VERTEX) {
 		unsigned i;
 		if (!sctx->vertex_elements)
@@ -2211,20 +2203,17 @@ static INLINE void si_shader_selector_key(struct pipe_context *ctx,
 			key->vs.instance_divisors[i] = sctx->vertex_elements->elements[i].instance_divisor;
 
 		if (sctx->gs_shader) {
-			/* At this point, the GS should be selected and compiled. */
 			key->vs.as_es = 1;
-			key->vs.gs_used_inputs = sctx->gs_shader->current->gs_used_inputs;
+			key->vs.gs_used_inputs = sctx->gs_shader->gs_used_inputs;
 		}
 	} else if (sel->type == PIPE_SHADER_FRAGMENT) {
-		if (sel->fs_write_all)
-			key->ps.nr_cbufs = sctx->framebuffer.state.nr_cbufs;
+		if (sel->info.properties[TGSI_PROPERTY_FS_COLOR0_WRITES_ALL_CBUFS])
+			key->ps.last_cbuf = MAX2(sctx->framebuffer.state.nr_cbufs, 1) - 1;
 		key->ps.export_16bpc = sctx->framebuffer.export_16bpc;
 
 		if (sctx->queued.named.rasterizer) {
 			key->ps.color_two_side = sctx->queued.named.rasterizer->two_side;
 			key->ps.flatshade = sctx->queued.named.rasterizer->flatshade;
-			key->ps.interp_at_sample = sctx->framebuffer.nr_samples > 1 &&
-						   sctx->ps_iter_samples == sctx->framebuffer.nr_samples;
 
 			if (sctx->queued.named.blend) {
 				key->ps.alpha_to_one = sctx->queued.named.blend->alpha_to_one &&
@@ -2295,6 +2284,7 @@ int si_shader_select(struct pipe_context *ctx,
 			FREE(shader);
 			return r;
 		}
+		si_shader_init_pm4_state(shader);
 		sel->num_shaders++;
 	}
 
@@ -2306,23 +2296,32 @@ static void *si_create_shader_state(struct pipe_context *ctx,
 				    unsigned pipe_shader_type)
 {
 	struct si_shader_selector *sel = CALLOC_STRUCT(si_shader_selector);
-	int r;
+	int i;
 
 	sel->type = pipe_shader_type;
 	sel->tokens = tgsi_dup_tokens(state->tokens);
 	sel->so = state->stream_output;
+	tgsi_scan_shader(state->tokens, &sel->info);
 
-	if (pipe_shader_type == PIPE_SHADER_FRAGMENT) {
-		struct tgsi_shader_info info;
+	switch (pipe_shader_type) {
+	case PIPE_SHADER_GEOMETRY:
+		sel->gs_output_prim =
+			sel->info.properties[TGSI_PROPERTY_GS_OUTPUT_PRIM];
+		sel->gs_max_out_vertices =
+			sel->info.properties[TGSI_PROPERTY_GS_MAX_OUTPUT_VERTICES];
 
-		tgsi_scan_shader(state->tokens, &info);
-		sel->fs_write_all = info.color0_writes_all_cbufs;
-	}
+		for (i = 0; i < sel->info.num_inputs; i++) {
+			unsigned name = sel->info.input_semantic_name[i];
+			unsigned index = sel->info.input_semantic_index[i];
 
-	r = si_shader_select(ctx, sel);
-	if (r) {
-	    free(sel);
-	    return NULL;
+			switch (name) {
+			case TGSI_SEMANTIC_PRIMID:
+				break;
+			default:
+				sel->gs_used_inputs |=
+					1llu << si_shader_io_get_unique_index(name, index);
+			}
+		}
 	}
 
 	return sel;
@@ -2351,10 +2350,7 @@ static void si_bind_vs_shader(struct pipe_context *ctx, void *state)
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct si_shader_selector *sel = state;
 
-	if (sctx->vs_shader == sel)
-		return;
-
-	if (!sel || !sel->current)
+	if (sctx->vs_shader == sel || !sel)
 		return;
 
 	sctx->vs_shader = sel;
@@ -2371,6 +2367,16 @@ static void si_bind_gs_shader(struct pipe_context *ctx, void *state)
 	sctx->gs_shader = sel;
 }
 
+void si_make_dummy_ps(struct si_context *sctx)
+{
+	if (!sctx->dummy_pixel_shader) {
+		sctx->dummy_pixel_shader =
+			util_make_fragment_cloneinput_shader(&sctx->b.b, 0,
+							     TGSI_SEMANTIC_GENERIC,
+							     TGSI_INTERPOLATE_CONSTANT);
+	}
+}
+
 static void si_bind_ps_shader(struct pipe_context *ctx, void *state)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
@@ -2380,15 +2386,9 @@ static void si_bind_ps_shader(struct pipe_context *ctx, void *state)
 	if (sctx->ps_shader == sel)
 		return;
 
-	/* use dummy shader if supplied shader is corrupt */
-	if (!sel || !sel->current) {
-		if (!sctx->dummy_pixel_shader) {
-			sctx->dummy_pixel_shader =
-				util_make_fragment_cloneinput_shader(&sctx->b.b, 0,
-								     TGSI_SEMANTIC_GENERIC,
-								     TGSI_INTERPOLATE_CONSTANT);
-		}
-
+	/* use a dummy shader if binding a NULL shader */
+	if (!sel) {
+		si_make_dummy_ps(sctx);
 		sel = sctx->dummy_pixel_shader;
 	}
 
@@ -2836,7 +2836,7 @@ static void si_set_border_colors(struct si_context *sctx, unsigned count,
 	}
 
 	if (border_color_table) {
-		struct si_pm4_state *pm4 = si_pm4_alloc_state(sctx);
+		struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
 
 		uint64_t va_offset = sctx->border_color_table->gpu_address;
 
@@ -3083,7 +3083,7 @@ void si_init_state_functions(struct si_context *sctx)
 
 void si_init_config(struct si_context *sctx)
 {
-	struct si_pm4_state *pm4 = si_pm4_alloc_state(sctx);
+	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
 
 	if (pm4 == NULL)
 		return;

@@ -57,15 +57,16 @@ enum adreno_stencil_op fd_stencil_op(unsigned op);
 #define FD_DBG_DISASM   0x0002
 #define FD_DBG_DCLEAR   0x0004
 #define FD_DBG_FLUSH    0x0008
-#define FD_DBG_DSCIS    0x0010
+#define FD_DBG_NOSCIS   0x0010
 #define FD_DBG_DIRECT   0x0020
-#define FD_DBG_DBYPASS  0x0040
+#define FD_DBG_NOBYPASS 0x0040
 #define FD_DBG_FRAGHALF 0x0080
 #define FD_DBG_NOBIN    0x0100
 #define FD_DBG_NOOPT    0x0200
 #define FD_DBG_OPTMSGS  0x0400
 #define FD_DBG_OPTDUMP  0x0800
 #define FD_DBG_GLSL130  0x1000
+#define FD_DBG_NOCP     0x2000
 
 extern int fd_mesa_debug;
 extern bool fd_binning_enabled;
@@ -209,6 +210,10 @@ static inline void
 OUT_IB(struct fd_ringbuffer *ring, struct fd_ringmarker *start,
 		struct fd_ringmarker *end)
 {
+	uint32_t dwords = fd_ringmarker_dwords(start, end);
+
+	assert(dwords > 0);
+
 	/* for debug after a lock up, write a unique counter value
 	 * to scratch6 for each IB, to make it easier to match up
 	 * register dumps to cmdstream.  The combination of IB and
@@ -219,7 +224,7 @@ OUT_IB(struct fd_ringbuffer *ring, struct fd_ringmarker *start,
 
 	OUT_PKT3(ring, CP_INDIRECT_BUFFER_PFD, 2);
 	fd_ringbuffer_emit_reloc_ring(ring, start, end);
-	OUT_RING(ring, fd_ringmarker_dwords(start, end));
+	OUT_RING(ring, dwords);
 
 	emit_marker(ring, 6);
 }

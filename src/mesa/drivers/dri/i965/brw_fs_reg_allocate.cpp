@@ -102,10 +102,10 @@ brw_alloc_reg_set(struct intel_screen *screen, int reg_width)
     * regs).
     */
    int class_count;
-   int class_sizes[BRW_MAX_MRF];
+   int class_sizes[MAX_VGRF_SIZE];
 
    if (devinfo->gen >= 7) {
-      for (class_count = 0; class_count < BRW_MAX_MRF; class_count++)
+      for (class_count = 0; class_count < MAX_VGRF_SIZE; class_count++)
          class_sizes[class_count] = class_count + 1;
    } else {
       for (class_count = 0; class_count < 4; class_count++)
@@ -152,6 +152,13 @@ brw_alloc_reg_set(struct intel_screen *screen, int reg_width)
    int *classes = ralloc_array(screen, int, class_count);
    int aligned_pairs_class = -1;
 
+   /* Allocate space for q values.  We allocate class_count + 1 because we
+    * want to leave room for the aligned pairs class if we have it. */
+   unsigned int **q_values = ralloc_array(screen, unsigned int *,
+                                          class_count + 1);
+   for (int i = 0; i < class_count + 1; ++i)
+      q_values[i] = ralloc_array(q_values, unsigned int, class_count + 1);
+
    /* Now, add the registers to their classes, and add the conflicts
     * between them and the base GRF registers (and also each other).
     */
@@ -162,8 +169,41 @@ brw_alloc_reg_set(struct intel_screen *screen, int reg_width)
       int class_reg_count;
       if (devinfo->gen <= 5 && reg_width == 2) {
          class_reg_count = (base_reg_count - (class_sizes[i] - 1)) / 2;
+
+         /* See comment below.  The only difference here is that we are
+          * dealing with pairs of registers instead of single registers.
+          * Registers of odd sizes simply get rounded up. */
+         for (int j = 0; j < class_count; j++)
+            q_values[i][j] = (class_sizes[i] + 1) / 2 +
+                             (class_sizes[j] + 1) / 2 - 1;
       } else {
          class_reg_count = base_reg_count - (class_sizes[i] - 1);
+
+         /* From register_allocate.c:
+          *
+          * q(B,C) (indexed by C, B is this register class) in
+          * Runeson/Nyström paper.  This is "how many registers of B could
+          * the worst choice register from C conflict with".
+          *
+          * If we just let the register allocation algorithm compute these
+          * values, is extremely expensive.  However, since all of our
+          * registers are laid out, we can very easily compute them
+          * ourselves.  View the register from C as fixed starting at GRF n
+          * somwhere in the middle, and the register from B as sliding back
+          * and forth.  Then the first register to conflict from B is the
+          * one starting at n - class_size[B] + 1 and the last register to
+          * conflict will start at n + class_size[B] - 1.  Therefore, the
+          * number of conflicts from B is class_size[B] + class_size[C] - 1.
+          *
+          *   +-+-+-+-+-+-+     +-+-+-+-+-+-+
+          * B | | | | | |n| --> | | | | | | |
+          *   +-+-+-+-+-+-+     +-+-+-+-+-+-+
+          *             +-+-+-+-+-+
+          * C           |n| | | | |
+          *             +-+-+-+-+-+
+          */
+         for (int j = 0; j < class_count; j++)
+            q_values[i][j] = class_sizes[i] + class_sizes[j] - 1;
       }
       classes[i] = ra_alloc_reg_class(regs);
 
@@ -179,8 +219,8 @@ brw_alloc_reg_set(struct intel_screen *screen, int reg_width)
 
             ra_reg_to_grf[reg] = j * 2;
 
-            for (int base_reg = j * 2;
-                 base_reg < j * 2 + class_sizes[i];
+            for (int base_reg = j;
+                 base_reg < j + (class_sizes[i] + 1) / 2;
                  base_reg++) {
                ra_add_transitive_reg_conflict(regs, base_reg, reg);
             }
@@ -208,7 +248,7 @@ brw_alloc_reg_set(struct intel_screen *screen, int reg_width)
    /* Add a special class for aligned pairs, which we'll put delta_x/y
     * in on gen5 so that we can do PLN.
     */
-   if (devinfo->has_pln && devinfo->gen < 6) {
+   if (devinfo->has_pln && reg_width == 1 && devinfo->gen < 6) {
       aligned_pairs_class = ra_alloc_reg_class(regs);
 
       for (int i = 0; i < pairs_reg_count; i++) {
@@ -216,9 +256,23 @@ brw_alloc_reg_set(struct intel_screen *screen, int reg_width)
 	    ra_class_add_reg(regs, aligned_pairs_class, pairs_base_reg + i);
 	 }
       }
+
+      for (int i = 0; i < class_count; i++) {
+         /* These are a little counter-intuitive because the pair registers
+          * are required to be aligned while the register they are
+          * potentially interferring with are not.  In the case where the
+          * size is even, the worst-case is that the register is
+          * odd-aligned.  In the odd-size case, it doesn't matter.
+          */
+         q_values[class_count][i] = class_sizes[i] / 2 + 1;
+         q_values[i][class_count] = class_sizes[i] + 1;
+      }
+      q_values[class_count][class_count] = 1;
    }
 
-   ra_set_finalize(regs, NULL);
+   ra_set_finalize(regs, q_values);
+
+   ralloc_free(q_values);
 
    screen->wm_reg_sets[index].regs = regs;
    for (unsigned i = 0; i < ARRAY_SIZE(screen->wm_reg_sets[index].classes); i++)
@@ -390,7 +444,16 @@ fs_visitor::setup_payload_interference(struct ra_graph *g,
        * The alternative would be to have per-physical-register classes, which
        * would just be silly.
        */
-      ra_set_node_reg(g, first_payload_node + i, i);
+      if (brw->intelScreen->devinfo->gen <= 5 && dispatch_width == 16) {
+         /* We have to divide by 2 here because we only have even numbered
+          * registers.  Some of the payload registers will be odd, but
+          * that's ok because their physical register numbers have already
+          * been assigned.  The only thing this is used for is interference.
+          */
+         ra_set_node_reg(g, first_payload_node + i, i / 2);
+      } else {
+         ra_set_node_reg(g, first_payload_node + i, i);
+      }
    }
 }
 
@@ -625,8 +688,10 @@ fs_visitor::emit_unspill(bblock_t *block, fs_inst *inst, fs_reg dst,
                          uint32_t spill_offset, int count)
 {
    int reg_size = 1;
-   if (count % 2 == 0)
+   if (dispatch_width == 16 && count % 2 == 0) {
       reg_size = 2;
+      dst.width = 16;
+   }
 
    for (int i = 0; i < count / reg_size; i++) {
       /* The gen7 descriptor-based offset is 12 bits of HWORD units. */
@@ -640,6 +705,7 @@ fs_visitor::emit_unspill(bblock_t *block, fs_inst *inst, fs_reg dst,
       unspill_inst->offset = spill_offset;
       unspill_inst->ir = inst->ir;
       unspill_inst->annotation = inst->annotation;
+      unspill_inst->regs_written = reg_size;
 
       if (!gen7_read) {
          unspill_inst->base_mrf = 14;
@@ -648,7 +714,7 @@ fs_visitor::emit_unspill(bblock_t *block, fs_inst *inst, fs_reg dst,
       inst->insert_before(block, unspill_inst);
 
       dst.reg_offset += reg_size;
-      spill_offset += reg_size * 8 * sizeof(float);
+      spill_offset += reg_size * REG_SIZE;
    }
 }
 
@@ -656,18 +722,19 @@ void
 fs_visitor::emit_spill(bblock_t *block, fs_inst *inst, fs_reg src,
                        uint32_t spill_offset, int count)
 {
-   int spill_base_mrf = dispatch_width > 8 ? 13 : 14;
-
    int reg_size = 1;
-   if (count % 2 == 0)
+   int spill_base_mrf = 14;
+   if (dispatch_width == 16 && count % 2 == 0) {
+      spill_base_mrf = 13;
       reg_size = 2;
+   }
 
    for (int i = 0; i < count / reg_size; i++) {
       fs_inst *spill_inst =
          new(mem_ctx) fs_inst(SHADER_OPCODE_GEN4_SCRATCH_WRITE,
-                              reg_null_f, src);
+                              reg_size * 8, reg_null_f, src);
       src.reg_offset += reg_size;
-      spill_inst->offset = spill_offset + i * reg_size;
+      spill_inst->offset = spill_offset + i * reg_size * REG_SIZE;
       spill_inst->ir = inst->ir;
       spill_inst->annotation = inst->annotation;
       spill_inst->mlen = 1 + reg_size; /* header, value */
@@ -755,7 +822,6 @@ fs_visitor::choose_spill_reg(struct ra_graph *g)
 void
 fs_visitor::spill_reg(int spill_reg)
 {
-   int reg_size = dispatch_width * sizeof(float);
    int size = virtual_grf_sizes[spill_reg];
    unsigned int spill_offset = last_scratch;
    assert(ALIGN(spill_offset, 16) == spill_offset); /* oword read/write req. */
@@ -782,7 +848,7 @@ fs_visitor::spill_reg(int spill_reg)
       spilled_any_registers = true;
    }
 
-   last_scratch += size * reg_size;
+   last_scratch += size * REG_SIZE;
 
    /* Generate spill/unspill instructions for the objects being
     * spilled.  Right now, we spill or unspill the whole thing to a
@@ -795,7 +861,7 @@ fs_visitor::spill_reg(int spill_reg)
 	     inst->src[i].reg == spill_reg) {
             int regs_read = inst->regs_read(this, i);
             int subset_spill_offset = (spill_offset +
-                                       reg_size * inst->src[i].reg_offset);
+                                       REG_SIZE * inst->src[i].reg_offset);
             fs_reg unspill_dst(GRF, virtual_grf_alloc(regs_read));
 
             inst->src[i].reg = unspill_dst.reg;
@@ -809,11 +875,19 @@ fs_visitor::spill_reg(int spill_reg)
       if (inst->dst.file == GRF &&
 	  inst->dst.reg == spill_reg) {
          int subset_spill_offset = (spill_offset +
-                                    reg_size * inst->dst.reg_offset);
+                                    REG_SIZE * inst->dst.reg_offset);
          fs_reg spill_src(GRF, virtual_grf_alloc(inst->regs_written));
 
          inst->dst.reg = spill_src.reg;
          inst->dst.reg_offset = 0;
+
+         /* If we're immediately spilling the register, we should not use
+          * destination dependency hints.  Doing so will cause the GPU do
+          * try to read and write the register at the same time and may
+          * hang the GPU.
+          */
+         inst->no_dd_clear = false;
+         inst->no_dd_check = false;
 
 	 /* If our write is going to affect just part of the
           * inst->regs_written(), then we need to unspill the destination

@@ -277,6 +277,8 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    }
    case PIPE_CAP_UMA:
       return 0;
+   case PIPE_CAP_CLIP_HALFZ:
+      return 1;
    }
    /* should only get here on unhandled cases */
    debug_printf("Unexpected PIPE_CAP %d query\n", param);
@@ -550,12 +552,6 @@ llvmpipe_create_screen(struct sw_winsys *winsys)
    struct llvmpipe_screen *screen;
 
    util_cpu_detect();
-
-#if defined(PIPE_ARCH_X86) && HAVE_LLVM < 0x0302
-   /* require SSE2 due to LLVM PR6960. */
-   if (!util_cpu_caps.has_sse2)
-       return NULL;
-#endif
 
 #ifdef DEBUG
    LP_DEBUG = debug_get_flags_option("LP_DEBUG", lp_debug_flags, 0 );

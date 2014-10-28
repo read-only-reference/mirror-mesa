@@ -265,6 +265,8 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
 	case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
 	case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
+	case PIPE_CAP_SAMPLE_SHADING:
+	case PIPE_CAP_CLIP_HALFZ:
 		return 1;
 
 	case PIPE_CAP_COMPUTE:
@@ -319,7 +321,6 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
-	case PIPE_CAP_SAMPLE_SHADING:
 	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
 	case PIPE_CAP_DRAW_INDIRECT:
 	case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
@@ -434,6 +435,8 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		return 32;
 	case PIPE_SHADER_CAP_MAX_INPUTS:
 		return shader == PIPE_SHADER_VERTEX ? 16 : 32;
+	case PIPE_SHADER_CAP_MAX_OUTPUTS:
+		return shader == PIPE_SHADER_FRAGMENT ? 8 : 32;
 	case PIPE_SHADER_CAP_MAX_TEMPS:
 		return 256; /* Max native temporaries. */
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
@@ -469,7 +472,11 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		return 16;
         case PIPE_SHADER_CAP_PREFERRED_IR:
 		if (shader == PIPE_SHADER_COMPUTE) {
+#if HAVE_LLVM < 0x0306
 			return PIPE_SHADER_IR_LLVM;
+#else
+			return PIPE_SHADER_IR_NATIVE;
+#endif
 		} else {
 			return PIPE_SHADER_IR_TGSI;
 		}
@@ -537,8 +544,8 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 		rscreen->b.debug_flags |= DBG_COMPUTE;
 	if (debug_get_bool_option("R600_DUMP_SHADERS", FALSE))
 		rscreen->b.debug_flags |= DBG_FS | DBG_VS | DBG_GS | DBG_PS | DBG_CS;
-	if (debug_get_bool_option("R600_HYPERZ", FALSE))
-		rscreen->b.debug_flags |= DBG_HYPERZ;
+	if (!debug_get_bool_option("R600_HYPERZ", TRUE))
+		rscreen->b.debug_flags |= DBG_NO_HYPERZ;
 	if (debug_get_bool_option("R600_LLVM", FALSE))
 		rscreen->b.debug_flags |= DBG_LLVM;
 

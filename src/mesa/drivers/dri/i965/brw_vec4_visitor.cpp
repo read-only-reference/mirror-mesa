@@ -1259,8 +1259,6 @@ vec4_visitor::visit(ir_expression *ir)
 {
    unsigned int operand;
    src_reg op[Elements(ir->operands)];
-   src_reg result_src;
-   dst_reg result_dst;
    vec4_instruction *inst;
 
    if (ir->operation == ir_binop_add) {
@@ -1271,6 +1269,26 @@ vec4_visitor::visit(ir_expression *ir)
    if (ir->operation == ir_unop_b2f) {
       if (try_emit_b2f_of_compare(ir))
 	 return;
+   }
+
+   /* Storage for our result.  Ideally for an assignment we'd be using
+    * the actual storage for the result here, instead.
+    */
+   dst_reg result_dst(this, ir->type);
+   src_reg result_src(result_dst);
+
+   if (ir->operation == ir_triop_csel) {
+      ir->operands[1]->accept(this);
+      op[1] = this->result;
+      ir->operands[2]->accept(this);
+      op[2] = this->result;
+
+      enum brw_predicate predicate;
+      emit_bool_to_cond_code(ir->operands[0], &predicate);
+      inst = emit(BRW_OPCODE_SEL, result_dst, op[1], op[2]);
+      inst->predicate = predicate;
+      this->result = result_src;
+      return;
    }
 
    for (operand = 0; operand < ir->get_num_operands(); operand++) {
@@ -1289,34 +1307,15 @@ vec4_visitor::visit(ir_expression *ir)
       assert(!ir->operands[operand]->type->is_matrix());
    }
 
-   int vector_elements = ir->operands[0]->type->vector_elements;
-   if (ir->operands[1]) {
-      vector_elements = MAX2(vector_elements,
-			     ir->operands[1]->type->vector_elements);
-   }
-
-   this->result.file = BAD_FILE;
-
-   /* Storage for our result.  Ideally for an assignment we'd be using
-    * the actual storage for the result here, instead.
-    */
-   result_src = src_reg(this, ir->type);
-   /* convenience for the emit functions below. */
-   result_dst = dst_reg(result_src);
    /* If nothing special happens, this is the result. */
    this->result = result_src;
-   /* Limit writes to the channels that will be used by result_src later.
-    * This does limit this temp's use as a temporary for multi-instruction
-    * sequences.
-    */
-   result_dst.writemask = (1 << ir->type->vector_elements) - 1;
 
    switch (ir->operation) {
    case ir_unop_logic_not:
       if (ctx->Const.UniformBooleanTrue != 1) {
          emit(NOT(result_dst, op[0]));
       } else {
-         emit(XOR(result_dst, op[0], src_reg(1)));
+         emit(XOR(result_dst, op[0], src_reg(1u)));
       }
       break;
    case ir_unop_neg:
@@ -1506,7 +1505,7 @@ vec4_visitor::visit(ir_expression *ir)
       emit(CMP(result_dst, op[0], op[1],
 	       brw_conditional_for_comparison(ir->operation)));
       if (ctx->Const.UniformBooleanTrue == 1) {
-         emit(AND(result_dst, result_src, src_reg(1)));
+         emit(AND(result_dst, result_src, src_reg(1u)));
       }
       break;
    }
@@ -1522,7 +1521,7 @@ vec4_visitor::visit(ir_expression *ir)
       } else {
 	 emit(CMP(result_dst, op[0], op[1], BRW_CONDITIONAL_Z));
          if (ctx->Const.UniformBooleanTrue == 1) {
-            emit(AND(result_dst, result_src, src_reg(1)));
+            emit(AND(result_dst, result_src, src_reg(1u)));
          }
       }
       break;
@@ -1538,7 +1537,7 @@ vec4_visitor::visit(ir_expression *ir)
       } else {
 	 emit(CMP(result_dst, op[0], op[1], BRW_CONDITIONAL_NZ));
          if (ctx->Const.UniformBooleanTrue == 1) {
-            emit(AND(result_dst, result_src, src_reg(1)));
+            emit(AND(result_dst, result_src, src_reg(1u)));
          }
       }
       break;
@@ -1602,7 +1601,7 @@ vec4_visitor::visit(ir_expression *ir)
       break;
    case ir_unop_b2i:
       if (ctx->Const.UniformBooleanTrue != 1) {
-         emit(AND(result_dst, op[0], src_reg(1)));
+         emit(AND(result_dst, op[0], src_reg(1u)));
       } else {
          emit(MOV(result_dst, op[0]));
       }
@@ -1621,7 +1620,7 @@ vec4_visitor::visit(ir_expression *ir)
    case ir_unop_i2b:
       emit(CMP(result_dst, op[0], src_reg(0.0f), BRW_CONDITIONAL_NZ));
       if (ctx->Const.UniformBooleanTrue == 1) {
-         emit(AND(result_dst, result_src, src_reg(1)));
+         emit(AND(result_dst, result_src, src_reg(1u)));
       }
       break;
 
@@ -1769,7 +1768,7 @@ vec4_visitor::visit(ir_expression *ir)
          emit(CMP(result_dst, packed_consts, src_reg(0u),
                   BRW_CONDITIONAL_NZ));
          if (ctx->Const.UniformBooleanTrue == 1) {
-            emit(AND(result_dst, result, src_reg(1)));
+            emit(AND(result_dst, result, src_reg(1u)));
          }
       } else {
          emit(MOV(result_dst, packed_consts));
@@ -1795,9 +1794,7 @@ vec4_visitor::visit(ir_expression *ir)
       break;
 
    case ir_triop_csel:
-      emit(CMP(dst_null_d(), op[0], src_reg(0), BRW_CONDITIONAL_NZ));
-      inst = emit(BRW_OPCODE_SEL, result_dst, op[1], op[2]);
-      inst->predicate = BRW_PREDICATE_NORMAL;
+      unreachable("already handled above");
       break;
 
    case ir_triop_bfi:
@@ -2296,7 +2293,7 @@ vec4_visitor::emit_constant_values(dst_reg *dst, ir_constant *ir)
       case GLSL_TYPE_BOOL:
          emit(MOV(*dst,
                   src_reg(ir->value.b[i] != 0 ? ctx->Const.UniformBooleanTrue
-                                              : 0)));
+                                              : 0u)));
 	 break;
       default:
 	 unreachable("Non-float/uint/int/bool constant");
@@ -2552,8 +2549,11 @@ vec4_visitor::visit(ir_texture *ir)
 
    vec4_instruction *inst = new(mem_ctx) vec4_instruction(this, opcode);
 
-   if (ir->offset != NULL && ir->op != ir_txf)
-      inst->texture_offset = brw_texture_offset(ctx, ir->offset->as_constant());
+   if (ir->offset != NULL && !has_nonconstant_offset) {
+      inst->texture_offset =
+         brw_texture_offset(ctx, ir->offset->as_constant()->value.i,
+                            ir->offset->type->vector_elements);
+   }
 
    /* Stuff the channel select bits in the top of the texture offset */
    if (ir->op == ir_tg4)

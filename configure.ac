@@ -527,6 +527,9 @@ if test "x$enable_asm" = xyes; then
     esac
 fi
 
+AC_CHECK_HEADER([xlocale.h], [DEFINES="$DEFINES -DHAVE_XLOCALE_H"])
+AC_CHECK_FUNC([strtof], [DEFINES="$DEFINES -DHAVE_STRTOF"])
+
 dnl Check to see if dlopen is in default libraries (like Solaris, which
 dnl has it in libc), or if libdl is needed to get it.
 AC_CHECK_FUNC([dlopen], [DEFINES="$DEFINES -DHAVE_DLOPEN"],
@@ -673,6 +676,11 @@ AC_ARG_ENABLE([omx],
          [enable OpenMAX library @<:@default=disabled@:>@])],
    [enable_omx="$enableval"],
    [enable_omx=no])
+AC_ARG_ENABLE([va],
+   [AS_HELP_STRING([--enable-va],
+         [enable va library @<:@default=auto@:>@])],
+   [enable_va="$enableval"],
+   [enable_va=auto])
 AC_ARG_ENABLE([opencl],
    [AS_HELP_STRING([--enable-opencl],
          [enable OpenCL library @<:@default=disabled@:>@])],
@@ -744,6 +752,7 @@ if test "x$enable_opengl" = xno -a \
         "x$enable_xvmc" = xno -a \
         "x$enable_vdpau" = xno -a \
         "x$enable_omx" = xno -a \
+        "x$enable_va" = xno -a \
         "x$enable_opencl" = xno; then
     AC_MSG_ERROR([at least one API should be enabled])
 fi
@@ -1120,14 +1129,13 @@ if test "x$enable_dri" = xyes; then
     fi
 
     # Check for expat
-    PKG_CHECK_EXISTS([expat], [have_expat=yes], [have_expat=no])
-    if test "x$have_expat" = "xyes"; then
-       PKG_CHECK_MODULES([EXPAT], [expat], [],
-                         AC_MSG_ERROR([Expat required for DRI.]))
-    else
-       # expat version 2.0 and earlier do not provide expat.pc
-       EXPAT_LIBS=-lexpat
-    fi
+    PKG_CHECK_MODULES([EXPAT], [expat], [],
+        # expat version 2.0 and earlier do not provide expat.pc
+        [AC_CHECK_HEADER([expat.h],[],
+                         [AC_MSG_ERROR([Expat headers required for DRI not found])])
+         AC_CHECK_LIB([expat],[XML_ParserCreate],[],
+                     [AC_MSG_ERROR([Expat library required for DRI not found])])
+         EXPAT_LIBS="-lexpat"])
 
     DRICOMMON_NEED_LIBDRM=no
     # If we are building any DRI driver other than swrast.
@@ -1404,6 +1412,10 @@ if test -n "$with_gallium_drivers" -a "x$with_gallium_drivers" != xswrast; then
     if test "x$enable_omx" = xauto; then
 	PKG_CHECK_EXISTS([libomxil-bellagio], [enable_omx=yes], [enable_omx=no])
     fi
+
+    if test "x$enable_va" = xauto; then
+        PKG_CHECK_EXISTS([libva], [enable_va=yes], [enable_va=no])
+    fi
 fi
 
 if test "x$enable_xvmc" = xyes; then
@@ -1424,6 +1436,13 @@ if test "x$enable_omx" = xyes; then
     enable_gallium_loader=$enable_shared_pipe_drivers
 fi
 AM_CONDITIONAL(HAVE_ST_OMX, test "x$enable_omx" = xyes)
+
+if test "x$enable_va" = xyes; then
+    PKG_CHECK_MODULES([VA], [libva >= 0.35.0 x11-xcb xcb-dri2 >= $XCBDRI2_REQUIRED],
+                      [VA_LIBS="`$PKG_CONFIG --libs x11-xcb xcb-dri2`"])
+    enable_gallium_loader=$enable_shared_pipe_drivers
+fi
+AM_CONDITIONAL(HAVE_ST_VA, test "x$enable_va" = xyes)
 
 dnl
 dnl OpenCL configuration
@@ -1449,6 +1468,7 @@ AC_ARG_WITH([clang-libdir],
    [CLANG_LIBDIR=''])
 
 PKG_CHECK_EXISTS([libclc], [have_libclc=yes], [have_libclc=no])
+AC_CHECK_LIB([elf], [elf_memory], [have_libelf=yes;ELF_LIB=-lelf])
 
 if test "x$enable_opencl" = xyes; then
     if test -z "$with_gallium_drivers"; then
@@ -1478,6 +1498,10 @@ if test "x$enable_opencl" = xyes; then
         OPENCL_LIBNAME="MesaOpenCL"
     else
         OPENCL_LIBNAME="OpenCL"
+    fi
+
+    if test "x$have_libelf" != xyes; then
+       AC_MSG_ERROR([Clover requires libelf])
     fi
 fi
 AM_CONDITIONAL(HAVE_CLOVER, test "x$enable_opencl" = xyes)
@@ -1698,7 +1722,7 @@ if test "x$enable_gallium_llvm" = xyes; then
         fi
 
         LLVM_REQUIRED_VERSION_MAJOR="3"
-        LLVM_REQUIRED_VERSION_MINOR="1"
+        LLVM_REQUIRED_VERSION_MINOR="3"
         if test "$LLVM_VERSION_INT" -lt "${LLVM_REQUIRED_VERSION_MAJOR}0${LLVM_REQUIRED_VERSION_MINOR}"; then
             AC_MSG_ERROR([LLVM $LLVM_REQUIRED_VERSION_MAJOR.$LLVM_REQUIRED_VERSION_MINOR or newer is required])
         fi
@@ -1768,30 +1792,31 @@ if test "x$enable_gallium_tests" = xyes; then
 fi
 AM_CONDITIONAL(HAVE_GALLIUM_TESTS, test "x$enable_gallium_tests" = xyes)
 
-VDPAU_LIB_INSTALL_DIR_DEFAULT=''
-if test "x$enable_vdpau" = xyes; then
-    VDPAU_LIB_INSTALL_DIR_DEFAULT=`$PKG_CONFIG --variable=moduledir vdpau`
-fi
-
 dnl Directory for VDPAU libs
 AC_ARG_WITH([vdpau-libdir],
     [AS_HELP_STRING([--with-vdpau-libdir=DIR],
-        [directory for the VDPAU libraries @<:@default=`pkg-config --variable=moduledir vdpau`@:>@])],
+        [directory for the VDPAU libraries @<:@default=${libdir}/vdpau@:>@])],
     [VDPAU_LIB_INSTALL_DIR="$withval"],
-    [VDPAU_LIB_INSTALL_DIR="$VDPAU_LIB_INSTALL_DIR_DEFAULT"])
+    [VDPAU_LIB_INSTALL_DIR='${libdir}/vdpau'])
 AC_SUBST([VDPAU_LIB_INSTALL_DIR])
 
-OMX_LIB_INSTALL_DIR_DEFAULT=''
-if test "x$enable_omx" = xyes; then
-    OMX_LIB_INSTALL_DIR_DEFAULT=`$PKG_CONFIG --variable=pluginsdir libomxil-bellagio`
-fi
+dnl Directory for OMX libs
 
 AC_ARG_WITH([omx-libdir],
     [AS_HELP_STRING([--with-omx-libdir=DIR],
-        [directory for the OMX libraries @<:@default=`pkg-config --variable=pluginsdir libomxil-bellagio`@:>@])],
+        [directory for the OMX libraries])],
     [OMX_LIB_INSTALL_DIR="$withval"],
-    [OMX_LIB_INSTALL_DIR="$OMX_LIB_INSTALL_DIR_DEFAULT"])
+    [OMX_LIB_INSTALL_DIR=`$PKG_CONFIG --define-variable=libdir=\$libdir --variable=pluginsdir libomxil-bellagio`])
 AC_SUBST([OMX_LIB_INSTALL_DIR])
+
+dnl Directory for VA libs
+
+AC_ARG_WITH([va-libdir],
+    [AS_HELP_STRING([--with-va-libdir=DIR],
+        [directory for the VA libraries @<:@${libdir}/dri@:>@])],
+    [VA_LIB_INSTALL_DIR="$withval"],
+    [VA_LIB_INSTALL_DIR="${libdir}/dri"])
+AC_SUBST([VA_LIB_INSTALL_DIR])
 
 dnl
 dnl Gallium helper functions
@@ -1817,6 +1842,9 @@ gallium_require_drm_loader() {
             AC_MSG_ERROR([Gallium drm loader requires libudev >= $LIBUDEV_REQUIRED or sysfs])
         fi
         enable_gallium_drm_loader=yes
+    fi
+    if test "x$enable_va" = xyes && test "x$7" != x; then
+         GALLIUM_TARGET_DIRS="$GALLIUM_TARGET_DIRS $7"
     fi
 }
 
@@ -1850,8 +1878,9 @@ radeon_llvm_check() {
     fi
     LLVM_COMPONENTS="${LLVM_COMPONENTS} r600 bitreader ipo"
     NEED_RADEON_LLVM=yes
-    AC_CHECK_LIB([elf], [elf_memory], [ELF_LIB=-lelf],
-                                 [AC_MSG_ERROR([$1 requires libelf when using LLVM])])
+    if test "x$have_libelf" != xyes; then
+       AC_MSG_ERROR([$1 requires libelf when using llvm])
+    fi
 }
 
 dnl Duplicates in GALLIUM_DRIVERS_DIRS are removed by sorting it after this block
@@ -1944,7 +1973,7 @@ if test -n "$with_gallium_drivers"; then
 fi
 
 dnl Set LLVM_LIBS - This is done after the driver configuration so
-dnl that drivers can add additonal components to LLVM_COMPONENTS.
+dnl that drivers can add additional components to LLVM_COMPONENTS.
 dnl Previously, gallium drivers were updating LLVM_LIBS directly
 dnl by calling llvm-config --libs ${DRIVER_LLVM_COMPONENTS}, but
 dnl this was causing the same libraries to be appear multiple times
@@ -1977,11 +2006,16 @@ if test "x$MESA_LLVM" != x0; then
 	invocation and rebuild.])])
 
            dnl We don't need to update LLVM_LIBS in this case because the LLVM
-           dnl install uses a shared object for each compoenent and we have
+           dnl install uses a shared object for each component and we have
            dnl already added all of these objects to LLVM_LIBS.
         fi
     else
-        AC_MSG_WARN([Building mesa with staticly linked LLVM may cause compilation issues])
+        AC_MSG_WARN([Building mesa with statically linked LLVM may cause compilation issues])
+        dnl We need to link to llvm system libs when using static libs
+        dnl However, only llvm 3.5+ provides --system-libs
+        if test $LLVM_VERSION_MAJOR -eq 3 -a $LLVM_VERSION_MINOR -ge 5; then
+            LLVM_LIBS="$LLVM_LIBS `$LLVM_CONFIG --system-libs`"
+        fi
     fi
 fi
 
@@ -2071,6 +2105,11 @@ AM_CONDITIONAL(HAVE_SPARC_ASM, test "x$asm_arch" = xsparc)
 AC_SUBST([VDPAU_MAJOR], 1)
 AC_SUBST([VDPAU_MINOR], 0)
 
+VA_MAJOR=`$PKG_CONFIG --modversion libva | $SED -n 's/\([[^\.]]*\)\..*$/\1/p'`
+VA_MINOR=`$PKG_CONFIG --modversion libva | $SED -n 's/.*\.\(.*\)\..*$/\1/p'`
+AC_SUBST([VA_MAJOR], $VA_MAJOR)
+AC_SUBST([VA_MINOR], $VA_MINOR)
+
 AC_SUBST([XVMC_MAJOR], 1)
 AC_SUBST([XVMC_MINOR], 0)
 
@@ -2128,6 +2167,7 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/drivers/svga/Makefile
 		src/gallium/drivers/trace/Makefile
 		src/gallium/drivers/vc4/Makefile
+		src/gallium/drivers/vc4/kernel/Makefile
 		src/gallium/state_trackers/clover/Makefile
 		src/gallium/state_trackers/dri/Makefile
 		src/gallium/state_trackers/egl/Makefile
@@ -2135,6 +2175,7 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/state_trackers/glx/xlib/Makefile
 		src/gallium/state_trackers/omx/Makefile
 		src/gallium/state_trackers/osmesa/Makefile
+		src/gallium/state_trackers/va/Makefile
 		src/gallium/state_trackers/vdpau/Makefile
 		src/gallium/state_trackers/vega/Makefile
 		src/gallium/state_trackers/xa/Makefile
@@ -2148,6 +2189,7 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/targets/osmesa/Makefile
 		src/gallium/targets/osmesa/osmesa.pc
 		src/gallium/targets/pipe-loader/Makefile
+		src/gallium/targets/va/Makefile
 		src/gallium/targets/vdpau/Makefile
 		src/gallium/targets/xa/Makefile
 		src/gallium/targets/xa/xatracker.pc

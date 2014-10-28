@@ -52,6 +52,7 @@ extern "C" {
 #include "glsl/ir.h"
 
 #define MAX_SAMPLER_MESSAGE_SIZE 11
+#define MAX_VGRF_SIZE 16
 
 struct bblock_t;
 namespace {
@@ -333,8 +334,9 @@ public:
    void visit(ir_emit_vertex *);
    void visit(ir_end_primitive *);
 
-   uint32_t gather_channel(ir_texture *ir, uint32_t sampler);
-   void swizzle_result(ir_texture *ir, fs_reg orig_val, uint32_t sampler);
+   uint32_t gather_channel(int orig_chan, uint32_t sampler);
+   void swizzle_result(ir_texture_opcode op, int dest_components,
+                       fs_reg orig_val, uint32_t sampler);
 
    fs_inst *emit(fs_inst *inst);
    void emit(exec_list list);
@@ -462,23 +464,45 @@ public:
                          bool is_centroid, bool is_sample);
    fs_reg *emit_frontfacing_interpolation();
    fs_reg *emit_samplepos_setup();
-   fs_reg *emit_sampleid_setup(ir_variable *ir);
+   fs_reg *emit_sampleid_setup();
    fs_reg *emit_general_interpolation(ir_variable *ir);
    void emit_interpolation_setup_gen4();
    void emit_interpolation_setup_gen6();
    void compute_sample_position(fs_reg dst, fs_reg int_sample_pos);
-   fs_reg rescale_texcoord(ir_texture *ir, fs_reg coordinate,
+   fs_reg rescale_texcoord(fs_reg coordinate, const glsl_type *coord_type,
                            bool is_rect, uint32_t sampler, int texunit);
-   fs_inst *emit_texture_gen4(ir_texture *ir, fs_reg dst, fs_reg coordinate,
-                              fs_reg shadow_comp, fs_reg lod, fs_reg lod2,
+   fs_inst *emit_texture_gen4(ir_texture_opcode op, fs_reg dst,
+                              fs_reg coordinate, int coord_components,
+                              fs_reg shadow_comp,
+                              fs_reg lod, fs_reg lod2, int grad_components,
                               uint32_t sampler);
-   fs_inst *emit_texture_gen5(ir_texture *ir, fs_reg dst, fs_reg coordinate,
-                              fs_reg shadow_comp, fs_reg lod, fs_reg lod2,
-                              fs_reg sample_index, uint32_t sampler);
-   fs_inst *emit_texture_gen7(ir_texture *ir, fs_reg dst, fs_reg coordinate,
-                              fs_reg shadow_comp, fs_reg lod, fs_reg lod2,
-                              fs_reg sample_index, fs_reg mcs, fs_reg sampler);
-   fs_reg emit_mcs_fetch(ir_texture *ir, fs_reg coordinate, fs_reg sampler);
+   fs_inst *emit_texture_gen5(ir_texture_opcode op, fs_reg dst,
+                              fs_reg coordinate, int coord_components,
+                              fs_reg shadow_comp,
+                              fs_reg lod, fs_reg lod2, int grad_components,
+                              fs_reg sample_index, uint32_t sampler,
+                              bool has_offset);
+   fs_inst *emit_texture_gen7(ir_texture_opcode op, fs_reg dst,
+                              fs_reg coordinate, int coord_components,
+                              fs_reg shadow_comp,
+                              fs_reg lod, fs_reg lod2, int grad_components,
+                              fs_reg sample_index, fs_reg mcs, fs_reg sampler,
+                              fs_reg offset_value);
+   void emit_texture(ir_texture_opcode op,
+                     const glsl_type *dest_type,
+                     fs_reg coordinate, const struct glsl_type *coord_type,
+                     fs_reg shadow_c,
+                     fs_reg lod, fs_reg dpdy, int grad_components,
+                     fs_reg sample_index,
+                     fs_reg offset, unsigned offset_components,
+                     fs_reg mcs,
+                     int gather_component,
+                     bool is_cube_array,
+                     bool is_rect,
+                     uint32_t sampler,
+                     fs_reg sampler_reg,
+                     int texunit);
+   fs_reg emit_mcs_fetch(fs_reg coordinate, int components, fs_reg sampler);
    void emit_gen6_gather_wa(uint8_t wa, fs_reg dst);
    fs_reg fix_math_operand(fs_reg src);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0);
@@ -690,7 +714,6 @@ private:
                       GLuint nr);
    void generate_fb_write(fs_inst *inst, struct brw_reg payload);
    void generate_blorp_fb_write(fs_inst *inst);
-   void generate_rep_fb_write(fs_inst *inst);
    void generate_pixel_xy(struct brw_reg dst, bool is_x);
    void generate_linterp(fs_inst *inst, struct brw_reg dst,
 			 struct brw_reg *src);

@@ -851,10 +851,10 @@ fs_generator::generate_scratch_write(fs_inst *inst, struct brw_reg src)
    assert(inst->mlen != 0);
 
    brw_MOV(p,
-	   retype(brw_message_reg(inst->base_mrf + 1), BRW_REGISTER_TYPE_UD),
+	   brw_uvec_mrf(inst->exec_size, (inst->base_mrf + 1), 0),
 	   retype(src, BRW_REGISTER_TYPE_UD));
    brw_oword_block_write_scratch(p, brw_message_reg(inst->base_mrf),
-                                 dispatch_width / 8, inst->offset);
+                                 inst->exec_size / 8, inst->offset);
 }
 
 void
@@ -863,13 +863,13 @@ fs_generator::generate_scratch_read(fs_inst *inst, struct brw_reg dst)
    assert(inst->mlen != 0);
 
    brw_oword_block_read_scratch(p, dst, brw_message_reg(inst->base_mrf),
-                                dispatch_width / 8, inst->offset);
+                                inst->exec_size / 8, inst->offset);
 }
 
 void
 fs_generator::generate_scratch_read_gen7(fs_inst *inst, struct brw_reg dst)
 {
-   gen7_block_read_scratch(p, dst, dispatch_width / 8, inst->offset);
+   gen7_block_read_scratch(p, dst, inst->exec_size / 8, inst->offset);
 }
 
 void
@@ -1211,7 +1211,20 @@ brw_reg_from_fs_reg(fs_reg *reg)
    case MRF:
       if (reg->stride == 0) {
          brw_reg = brw_vec1_reg(brw_file_from_reg(reg), reg->reg, 0);
+      } else if (reg->width < 8) {
+         brw_reg = brw_vec8_reg(brw_file_from_reg(reg), reg->reg, 0);
+         brw_reg = stride(brw_reg, reg->width * reg->stride,
+                          reg->width, reg->stride);
       } else {
+         /* From the Haswell PRM:
+          *
+          * VertStride must be used to cross GRF register boundaries. This
+          * rule implies that elements within a 'Width' cannot cross GRF
+          * boundaries.
+          *
+          * So, for registers with width > 8, we have to use a width of 8
+          * and trust the compression state to sort out the exec size.
+          */
          brw_reg = brw_vec8_reg(brw_file_from_reg(reg), reg->reg, 0);
          brw_reg = stride(brw_reg, 8 * reg->stride, 8, reg->stride);
       }
@@ -1729,7 +1742,7 @@ fs_generator::generate_code(const cfg_t *cfg)
           * Otherwise we would be able to emit compressed instructions like we
           * do for the other three-source instructions.
           */
-         if (dispatch_width == 16) {
+         if (dispatch_width == 16 && brw->gen < 8) {
             brw_set_default_compression_control(p, BRW_COMPRESSION_NONE);
             brw_BFI2(p, firsthalf(dst), firsthalf(src[0]), firsthalf(src[1]), firsthalf(src[2]));
             brw_set_default_compression_control(p, BRW_COMPRESSION_2NDHALF);

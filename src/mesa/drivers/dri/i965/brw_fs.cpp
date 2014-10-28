@@ -1505,14 +1505,14 @@ fs_visitor::emit_samplepos_setup()
 }
 
 fs_reg *
-fs_visitor::emit_sampleid_setup(ir_variable *ir)
+fs_visitor::emit_sampleid_setup()
 {
    assert(stage == MESA_SHADER_FRAGMENT);
    brw_wm_prog_key *key = (brw_wm_prog_key*) this->key;
    assert(brw->gen >= 6);
 
    this->current_annotation = "compute sample id";
-   fs_reg *reg = new(this->mem_ctx) fs_reg(this, ir->type);
+   fs_reg *reg = new(this->mem_ctx) fs_reg(this, glsl_type::int_type);
 
    if (key->compute_sample_id) {
       fs_reg t1 = fs_reg(this, glsl_type::int_type);
@@ -1924,6 +1924,7 @@ fs_visitor::split_virtual_grfs()
           * new virtual GRF for the previous offset many registers
           */
          if (split_points[reg]) {
+            assert(offset <= MAX_VGRF_SIZE);
             int grf = virtual_grf_alloc(offset);
             for (int k = reg - offset; k < reg; k++)
                new_virtual_grf[k] = grf;
@@ -1935,6 +1936,7 @@ fs_visitor::split_virtual_grfs()
       }
 
       /* The last one gets the original register number */
+      assert(offset <= MAX_VGRF_SIZE);
       virtual_grf_sizes[i] = offset;
       for (int k = reg - offset; k < reg; k++)
          new_virtual_grf[k] = i;
@@ -2334,6 +2336,17 @@ fs_visitor::opt_algebraic()
             }
          }
          break;
+      case SHADER_OPCODE_RCP: {
+         fs_inst *prev = (fs_inst *)inst->prev;
+         if (prev->opcode == SHADER_OPCODE_SQRT) {
+            if (inst->src[0].equals(prev->dst)) {
+               inst->opcode = SHADER_OPCODE_RSQ;
+               inst->src[0] = prev->src[0];
+               progress = true;
+            }
+         }
+         break;
+      }
       default:
 	 break;
       }
@@ -2588,6 +2601,7 @@ fs_visitor::emit_repclear_shader()
       write->header_present = false;
       write->mlen = 1;
    } else {
+      assume(key->nr_color_regions > 0);
       for (int i = 0; i < key->nr_color_regions; ++i) {
          write = emit(FS_OPCODE_REP_FB_WRITE);
          write->saturate = key->clamp_fragment_color;
@@ -2964,10 +2978,11 @@ fs_visitor::lower_load_payload()
 
    foreach_block_and_inst_safe (block, fs_inst, inst, cfg) {
       int dst_reg;
-      if (inst->dst.file == MRF) {
-         dst_reg = inst->dst.reg;
-      } else if (inst->dst.file == GRF) {
+      if (inst->dst.file == GRF) {
          dst_reg = vgrf_to_reg[inst->dst.reg];
+      } else {
+         /* MRF */
+         dst_reg = inst->dst.reg;
       }
 
       if (inst->dst.file == MRF || inst->dst.file == GRF) {
@@ -3682,7 +3697,7 @@ brw_wm_fs_emit(struct brw_context *brw,
       shader = (brw_shader *) prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
 
    if (unlikely(INTEL_DEBUG & DEBUG_WM))
-      brw_dump_ir(brw, "fragment", prog, &shader->base, &fp->Base);
+      brw_dump_ir("fragment", prog, &shader->base, &fp->Base);
 
    /* Now the main event: Visit the shader IR and generate our FS IR for it.
     */

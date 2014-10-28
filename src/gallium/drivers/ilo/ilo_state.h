@@ -43,17 +43,7 @@
 #define ILO_MAX_SO_BUFFERS      4
 #define ILO_MAX_VIEWPORTS       1
 
-#define ILO_MAX_VS_SURFACES        (ILO_MAX_CONST_BUFFERS + ILO_MAX_SAMPLER_VIEWS)
-#define ILO_VS_CONST_SURFACE(i)    (i)
-#define ILO_VS_TEXTURE_SURFACE(i)  (ILO_MAX_CONST_BUFFERS  + i)
-
-#define ILO_MAX_GS_SURFACES        (ILO_MAX_SO_BINDINGS)
-#define ILO_GS_SO_SURFACE(i)       (i)
-
-#define ILO_MAX_WM_SURFACES        (ILO_MAX_DRAW_BUFFERS + ILO_MAX_CONST_BUFFERS + ILO_MAX_SAMPLER_VIEWS)
-#define ILO_WM_DRAW_SURFACE(i)     (i)
-#define ILO_WM_CONST_SURFACE(i)    (ILO_MAX_DRAW_BUFFERS + i)
-#define ILO_WM_TEXTURE_SURFACE(i)  (ILO_MAX_DRAW_BUFFERS + ILO_MAX_CONST_BUFFERS  + i)
+#define ILO_MAX_SURFACES        256
 
 /**
  * States that we track.
@@ -292,7 +282,6 @@ struct ilo_sampler_cso {
 
 struct ilo_sampler_state {
    const struct ilo_sampler_cso *cso[ILO_MAX_SAMPLERS];
-   unsigned count;
 };
 
 struct ilo_view_surface {

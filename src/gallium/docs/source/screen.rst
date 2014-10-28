@@ -230,6 +230,9 @@ The integer capabilities:
   different than the underlying resource's, as permitted by
   ARB_texture_view. For example a 2d array texture may be reinterpreted as a
   cube (array) texture and vice-versa.
+* ``PIPE_CAP_CLIP_HALFZ``: Whether the driver supports the
+  pipe_rasterizer_state::clip_halfz being set to true. This is required
+  for enabling ARB_clip_control.
 
 
 .. _pipe_capf:
@@ -267,6 +270,8 @@ support different features.
 * ``PIPE_SHADER_CAP_MAX_TEX_INDIRECTIONS``: The maximum number of texture indirections.
 * ``PIPE_SHADER_CAP_MAX_CONTROL_FLOW_DEPTH``: The maximum nested control flow depth.
 * ``PIPE_SHADER_CAP_MAX_INPUTS``: The maximum number of input registers.
+* ``PIPE_SHADER_CAP_MAX_OUTPUTS``: The maximum number of output registers.
+  This is valid for all shaders except the fragment shader.
 * ``PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE``: The maximum size per constant buffer in bytes.
 * ``PIPE_SHADER_CAP_MAX_CONST_BUFFERS``: Maximum number of constant buffers that can be bound
   to any shader stage using ``set_constant_buffer``. If 0 or 1, the pipe will
@@ -320,8 +325,8 @@ pipe_screen::get_compute_param.
 
 * ``PIPE_COMPUTE_CAP_IR_TARGET``: A description of the target of the form
   ``processor-arch-manufacturer-os`` that will be passed on to the compiler.
-  This CAP is only relevant for drivers that specify PIPE_SHADER_IR_LLVM for
-  their preferred IR.
+  This CAP is only relevant for drivers that specify PIPE_SHADER_IR_LLVM
+  or PIPE_SHADER_IR_NATIVE for their preferred IR.
   Value type: null-terminated string.
 * ``PIPE_COMPUTE_CAP_GRID_DIMENSION``: Number of supported dimensions
   for grid and block coordinates.  Value type: ``uint64_t``.

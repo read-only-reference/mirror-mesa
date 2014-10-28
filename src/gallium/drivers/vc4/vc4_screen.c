@@ -164,6 +164,7 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
         case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
         case PIPE_CAP_SAMPLER_VIEW_TARGET:
+        case PIPE_CAP_CLIP_HALFZ:
                 return 0;
 
                 /* Stream output. */
@@ -283,6 +284,8 @@ vc4_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
                         return 8;
                 else
                         return 16;
+	case PIPE_SHADER_CAP_MAX_OUTPUTS:
+		return shader == PIPE_SHADER_FRAGMENT ? 1 : 8;
         case PIPE_SHADER_CAP_MAX_TEMPS:
                 return 256; /* GL_MAX_PROGRAM_TEMPORARIES_ARB */
         case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
@@ -296,8 +299,9 @@ vc4_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
         case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
         case PIPE_SHADER_CAP_INDIRECT_OUTPUT_ADDR:
         case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
-        case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
                 return 0;
+        case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
+                return 1;
         case PIPE_SHADER_CAP_SUBROUTINES:
                 return 0;
         case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:

@@ -640,7 +640,7 @@
 
 #define GEN7_SAMPLER_LOD_BIAS_MASK              INTEL_MASK(13, 1)
 #define GEN7_SAMPLER_LOD_BIAS_SHIFT             1
-#define GEN7_SAMPLER_EWA_ANISOTROPIC_ALGORIHTM  (1 << 0)
+#define GEN7_SAMPLER_EWA_ANISOTROPIC_ALGORITHM  (1 << 0)
 
 /* SAMPLER_STATE DW1 */
 #define GEN4_SAMPLER_MIN_LOD_MASK               INTEL_MASK(31, 22)
@@ -2386,8 +2386,12 @@ enum brw_wm_barycentric_interp_mode {
 #define HSW_MOCS_WB_LLC_WB_ELLC         (2 << 1)
 #define HSW_MOCS_UC_LLC_WB_ELLC         (3 << 1)
 
-/* Broadwell: write-back or write-through; always use all the caches. */
-#define BDW_MOCS_WB 0x78
-#define BDW_MOCS_WT 0x58
+/* Broadwell: these defines always use all available caches (L3, LLC, eLLC),
+ * and let you force write-back (WB) or write-through (WT) caching, or leave
+ * it up to the page table entry (PTE) specified by the kernel.
+ */
+#define BDW_MOCS_WB  0x78
+#define BDW_MOCS_WT  0x58
+#define BDW_MOCS_PTE 0x18
 
 #endif
