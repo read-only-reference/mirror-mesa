@@ -46,35 +46,27 @@ gen6_3DSTATE_CLIP(struct ilo_builder *builder,
 {
    const uint8_t cmd_len = 4;
    uint32_t dw1, dw2, dw3, *dw;
+   int interps;
 
    ILO_DEV_ASSERT(builder->dev, 6, 7.5);
 
-   if (rasterizer) {
-      int interps;
+   dw1 = rasterizer->clip.payload[0];
+   dw2 = rasterizer->clip.payload[1];
+   dw3 = rasterizer->clip.payload[2];
 
-      dw1 = rasterizer->clip.payload[0];
-      dw2 = rasterizer->clip.payload[1];
-      dw3 = rasterizer->clip.payload[2];
+   if (enable_guardband && rasterizer->clip.can_enable_guardband)
+      dw2 |= GEN6_CLIP_DW2_GB_TEST_ENABLE;
 
-      if (enable_guardband && rasterizer->clip.can_enable_guardband)
-         dw2 |= GEN6_CLIP_DW2_GB_TEST_ENABLE;
+   interps = (fs) ?  ilo_shader_get_kernel_param(fs,
+         ILO_KERNEL_FS_BARYCENTRIC_INTERPOLATIONS) : 0;
 
-      interps = (fs) ?  ilo_shader_get_kernel_param(fs,
-            ILO_KERNEL_FS_BARYCENTRIC_INTERPOLATIONS) : 0;
+   if (interps & (GEN6_INTERP_NONPERSPECTIVE_PIXEL |
+                  GEN6_INTERP_NONPERSPECTIVE_CENTROID |
+                  GEN6_INTERP_NONPERSPECTIVE_SAMPLE))
+      dw2 |= GEN6_CLIP_DW2_NONPERSPECTIVE_BARYCENTRIC_ENABLE;
 
-      if (interps & (GEN6_INTERP_NONPERSPECTIVE_PIXEL |
-                     GEN6_INTERP_NONPERSPECTIVE_CENTROID |
-                     GEN6_INTERP_NONPERSPECTIVE_SAMPLE))
-         dw2 |= GEN6_CLIP_DW2_NONPERSPECTIVE_BARYCENTRIC_ENABLE;
-
-      dw3 |= GEN6_CLIP_DW3_RTAINDEX_FORCED_ZERO |
-             (num_viewports - 1);
-   }
-   else {
-      dw1 = 0;
-      dw2 = 0;
-      dw3 = 0;
-   }
+   dw3 |= GEN6_CLIP_DW3_RTAINDEX_FORCED_ZERO |
+          (num_viewports - 1);
 
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
@@ -84,83 +76,102 @@ gen6_3DSTATE_CLIP(struct ilo_builder *builder,
    dw[3] = dw3;
 }
 
-/**
- * Fill in DW2 to DW7 of 3DSTATE_SF.
- */
 static inline void
-ilo_gpe_gen6_fill_3dstate_sf_raster(const struct ilo_dev_info *dev,
-                                    const struct ilo_rasterizer_state *rasterizer,
-                                    int num_samples,
-                                    enum pipe_format depth_format,
-                                    uint32_t *payload, unsigned payload_len)
+gen6_disable_3DSTATE_CLIP(struct ilo_builder *builder)
 {
-   assert(payload_len == Elements(rasterizer->sf.payload));
+   const uint8_t cmd_len = 4;
+   uint32_t *dw;
 
-   if (rasterizer) {
-      const struct ilo_rasterizer_sf *sf = &rasterizer->sf;
+   ILO_DEV_ASSERT(builder->dev, 6, 7.5);
 
-      memcpy(payload, sf->payload, sizeof(sf->payload));
+   ilo_builder_batch_pointer(builder, cmd_len, &dw);
+
+   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_CLIP) | (cmd_len - 2);
+   dw[1] = 0;
+   dw[2] = 0;
+   dw[3] = 0;
+}
+
+static inline void
+gen7_internal_3dstate_sf(struct ilo_builder *builder,
+                         uint8_t cmd_len, uint32_t *dw,
+                         const struct ilo_rasterizer_sf *sf,
+                         enum pipe_format zs_format,
+                         int num_samples)
+{
+   ILO_DEV_ASSERT(builder->dev, 6, 7.5);
+
+   assert(cmd_len == 7);
+
+   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_SF) | (cmd_len - 2);
+
+   if (sf) {
+      /* see rasterizer_init_sf() */
+      STATIC_ASSERT(Elements(sf->payload) >= 6);
+      dw[1] = sf->payload[0];
+      dw[2] = sf->payload[1];
+      dw[3] = sf->payload[2];
+      dw[4] = sf->payload[3];
+      dw[5] = sf->payload[4];
+      dw[6] = sf->payload[5];
+
       if (num_samples > 1)
-         payload[1] |= sf->dw_msaa;
-   }
-   else {
-      payload[0] = 0;
-      payload[1] = (num_samples > 1) ? GEN7_SF_DW2_MSRASTMODE_ON_PATTERN : 0;
-      payload[2] = 0;
-      payload[3] = 0;
-      payload[4] = 0;
-      payload[5] = 0;
+         dw[2] |= sf->dw_msaa;
+   } else {
+      dw[1] = 0;
+      dw[2] = (num_samples > 1) ? GEN7_SF_DW2_MSRASTMODE_ON_PATTERN : 0;
+      dw[3] = 0;
+      dw[4] = 0;
+      dw[5] = 0;
+      dw[6] = 0;
    }
 
-   if (ilo_dev_gen(dev) >= ILO_GEN(7)) {
-      int format;
+   if (ilo_dev_gen(builder->dev) >= ILO_GEN(7)) {
+      int hw_format;
 
       /* separate stencil */
-      switch (depth_format) {
+      switch (zs_format) {
       case PIPE_FORMAT_Z16_UNORM:
-         format = GEN6_ZFORMAT_D16_UNORM;
+         hw_format = GEN6_ZFORMAT_D16_UNORM;
          break;
       case PIPE_FORMAT_Z32_FLOAT:
       case PIPE_FORMAT_Z32_FLOAT_S8X24_UINT:
-         format = GEN6_ZFORMAT_D32_FLOAT;
+         hw_format = GEN6_ZFORMAT_D32_FLOAT;
          break;
       case PIPE_FORMAT_Z24X8_UNORM:
       case PIPE_FORMAT_Z24_UNORM_S8_UINT:
-         format = GEN6_ZFORMAT_D24_UNORM_X8_UINT;
+         hw_format = GEN6_ZFORMAT_D24_UNORM_X8_UINT;
          break;
       default:
          /* FLOAT surface is assumed when there is no depth buffer */
-         format = GEN6_ZFORMAT_D32_FLOAT;
+         hw_format = GEN6_ZFORMAT_D32_FLOAT;
          break;
       }
 
-      payload[0] |= format << GEN7_SF_DW1_DEPTH_FORMAT__SHIFT;
+      dw[1] |= hw_format << GEN7_SF_DW1_DEPTH_FORMAT__SHIFT;
    }
 }
 
-/**
- * Fill in DW1 and DW8 to DW19 of 3DSTATE_SF.
- */
 static inline void
-ilo_gpe_gen6_fill_3dstate_sf_sbe(const struct ilo_dev_info *dev,
-                                 const struct ilo_rasterizer_state *rasterizer,
-                                 const struct ilo_shader_state *fs,
-                                 uint32_t *dw, int num_dwords)
+gen7_internal_3dstate_sbe(struct ilo_builder *builder,
+                          uint8_t cmd_len, uint32_t *dw,
+                          const struct ilo_shader_state *fs,
+                          int sprite_coord_mode)
 {
-   int output_count, vue_offset, vue_len;
    const struct ilo_kernel_routing *routing;
+   int vue_offset, vue_len, out_count;
 
-   ILO_DEV_ASSERT(dev, 6, 7.5);
-   assert(num_dwords == 13);
+   ILO_DEV_ASSERT(builder->dev, 6, 7.5);
+
+   assert(cmd_len == 14);
+
+   dw[0] = GEN7_RENDER_CMD(3D, 3DSTATE_SBE) | (cmd_len - 2);
 
    if (!fs) {
-      memset(dw, 0, sizeof(dw[0]) * num_dwords);
-      dw[0] = 1 << GEN7_SBE_DW1_URB_READ_LEN__SHIFT;
+      dw[1] = 1 << GEN7_SBE_DW1_URB_READ_LEN__SHIFT;
+      memset(&dw[2], 0, sizeof(*dw) * (cmd_len - 2));
       return;
    }
-
-   output_count = ilo_shader_get_kernel_param(fs, ILO_KERNEL_INPUT_COUNT);
-   assert(output_count <= 32);
 
    routing = ilo_shader_get_kernel_routing(fs);
 
@@ -172,23 +183,26 @@ ilo_gpe_gen6_fill_3dstate_sf_sbe(const struct ilo_dev_info *dev,
    if (!vue_len)
       vue_len = 1;
 
-   dw[0] = output_count << GEN7_SBE_DW1_ATTR_COUNT__SHIFT |
+   out_count = ilo_shader_get_kernel_param(fs, ILO_KERNEL_INPUT_COUNT);
+   assert(out_count <= 32);
+
+   dw[1] = out_count << GEN7_SBE_DW1_ATTR_COUNT__SHIFT |
            vue_len << GEN7_SBE_DW1_URB_READ_LEN__SHIFT |
            vue_offset << GEN7_SBE_DW1_URB_READ_OFFSET__SHIFT;
    if (routing->swizzle_enable)
-      dw[0] |= GEN7_SBE_DW1_ATTR_SWIZZLE_ENABLE;
+      dw[1] |= GEN7_SBE_DW1_ATTR_SWIZZLE_ENABLE;
 
-   switch (rasterizer->state.sprite_coord_mode) {
+   switch (sprite_coord_mode) {
    case PIPE_SPRITE_COORD_UPPER_LEFT:
-      dw[0] |= GEN7_SBE_DW1_POINT_SPRITE_TEXCOORD_UPPERLEFT;
+      dw[1] |= GEN7_SBE_DW1_POINT_SPRITE_TEXCOORD_UPPERLEFT;
       break;
    case PIPE_SPRITE_COORD_LOWER_LEFT:
-      dw[0] |= GEN7_SBE_DW1_POINT_SPRITE_TEXCOORD_LOWERLEFT;
+      dw[1] |= GEN7_SBE_DW1_POINT_SPRITE_TEXCOORD_LOWERLEFT;
       break;
    }
 
-   STATIC_ASSERT(Elements(routing->swizzles) >= 16);
-   memcpy(&dw[1], routing->swizzles, 2 * 16);
+   STATIC_ASSERT(sizeof(routing->swizzles) >= sizeof(*dw) * 8);
+   memcpy(&dw[2], routing->swizzles, sizeof(*dw) * 8);
 
    /*
     * From the Ivy Bridge PRM, volume 2 part 1, page 268:
@@ -198,117 +212,98 @@ ilo_gpe_gen6_fill_3dstate_sf_sbe(const struct ilo_dev_info *dev,
     *
     * TODO We do not check that yet.
     */
-   dw[9] = routing->point_sprite_enable;
+   dw[10] = routing->point_sprite_enable;
 
-   dw[10] = routing->const_interp_enable;
+   dw[11] = routing->const_interp_enable;
 
    /* WrapShortest enables */
-   dw[11] = 0;
    dw[12] = 0;
+   dw[13] = 0;
 }
 
 static inline void
 gen6_3DSTATE_SF(struct ilo_builder *builder,
                 const struct ilo_rasterizer_state *rasterizer,
-                const struct ilo_shader_state *fs)
+                const struct ilo_shader_state *fs,
+                int sample_count)
 {
    const uint8_t cmd_len = 20;
-   uint32_t payload_raster[6], payload_sbe[13], *dw;
+   uint32_t gen7_3dstate_sf[7], gen7_3dstate_sbe[14];
+   const struct ilo_rasterizer_sf *sf;
+   int sprite_coord_mode;
+   uint32_t *dw;
 
    ILO_DEV_ASSERT(builder->dev, 6, 6);
 
-   ilo_gpe_gen6_fill_3dstate_sf_raster(builder->dev, rasterizer,
-         1, PIPE_FORMAT_NONE, payload_raster, Elements(payload_raster));
-   ilo_gpe_gen6_fill_3dstate_sf_sbe(builder->dev, rasterizer,
-         fs, payload_sbe, Elements(payload_sbe));
+   sf = (rasterizer) ? &rasterizer->sf : NULL;
+   sprite_coord_mode = (rasterizer) ? rasterizer->state.sprite_coord_mode : 0;
+
+   gen7_internal_3dstate_sf(builder,
+         Elements(gen7_3dstate_sf), gen7_3dstate_sf,
+         sf, PIPE_FORMAT_NONE, sample_count);
+
+   gen7_internal_3dstate_sbe(builder,
+         Elements(gen7_3dstate_sbe), gen7_3dstate_sbe,
+         fs, sprite_coord_mode);
 
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
    dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_SF) | (cmd_len - 2);
-   dw[1] = payload_sbe[0];
-   memcpy(&dw[2], payload_raster, sizeof(payload_raster));
-   memcpy(&dw[8], &payload_sbe[1], sizeof(payload_sbe) - 4);
+   dw[1] = gen7_3dstate_sbe[1];
+   memcpy(&dw[2], &gen7_3dstate_sf[1], sizeof(*dw) * 6);
+   memcpy(&dw[8], &gen7_3dstate_sbe[2], sizeof(*dw) * 12);
 }
 
 static inline void
 gen7_3DSTATE_SF(struct ilo_builder *builder,
-                const struct ilo_rasterizer_state *rasterizer,
-                enum pipe_format zs_format)
+                const struct ilo_rasterizer_sf *sf,
+                enum pipe_format zs_format,
+                int sample_count)
 {
    const uint8_t cmd_len = 7;
-   const int num_samples = 1;
-   uint32_t payload[6], *dw;
+   uint32_t *dw;
 
    ILO_DEV_ASSERT(builder->dev, 7, 7.5);
 
-   ilo_gpe_gen6_fill_3dstate_sf_raster(builder->dev,
-         rasterizer, num_samples, zs_format,
-         payload, Elements(payload));
-
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
-   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_SF) | (cmd_len - 2);
-   memcpy(&dw[1], payload, sizeof(payload));
+   gen7_internal_3dstate_sf(builder, cmd_len, dw,
+         sf, zs_format, sample_count);
 }
 
 static inline void
 gen7_3DSTATE_SBE(struct ilo_builder *builder,
-                 const struct ilo_rasterizer_state *rasterizer,
-                 const struct ilo_shader_state *fs)
+                 const struct ilo_shader_state *fs,
+                 int sprite_coord_mode)
 {
    const uint8_t cmd_len = 14;
-   uint32_t payload[13], *dw;
+   uint32_t *dw;
 
    ILO_DEV_ASSERT(builder->dev, 7, 7.5);
 
-   ilo_gpe_gen6_fill_3dstate_sf_sbe(builder->dev,
-         rasterizer, fs, payload, Elements(payload));
-
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
-   dw[0] = GEN7_RENDER_CMD(3D, 3DSTATE_SBE) | (cmd_len - 2);
-   memcpy(&dw[1], payload, sizeof(payload));
+   gen7_internal_3dstate_sbe(builder, cmd_len, dw, fs, sprite_coord_mode);
 }
 
 static inline void
 gen6_3DSTATE_WM(struct ilo_builder *builder,
                 const struct ilo_shader_state *fs,
                 const struct ilo_rasterizer_state *rasterizer,
-                bool dual_blend, bool cc_may_kill,
-                uint32_t hiz_op)
+                bool dual_blend, bool cc_may_kill)
 {
    const uint8_t cmd_len = 9;
-   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_WM) | (cmd_len - 2);
    const int num_samples = 1;
-   const struct ilo_shader_cso *fs_cso;
+   const struct ilo_shader_cso *cso;
    uint32_t dw2, dw4, dw5, dw6, *dw;
 
    ILO_DEV_ASSERT(builder->dev, 6, 6);
 
-   if (!fs) {
-      /* see brwCreateContext() */
-      const int max_threads = (builder->dev->gt == 2) ? 80 : 40;
-
-      ilo_builder_batch_pointer(builder, cmd_len, &dw);
-      dw[0] = dw0;
-      dw[1] = 0;
-      dw[2] = 0;
-      dw[3] = 0;
-      dw[4] = hiz_op;
-      /* honor the valid range even if dispatching is disabled */
-      dw[5] = (max_threads - 1) << GEN6_WM_DW5_MAX_THREADS__SHIFT;
-      dw[6] = 0;
-      dw[7] = 0;
-      dw[8] = 0;
-
-      return;
-   }
-
-   fs_cso = ilo_shader_get_kernel_cso(fs);
-   dw2 = fs_cso->payload[0];
-   dw4 = fs_cso->payload[1];
-   dw5 = fs_cso->payload[2];
-   dw6 = fs_cso->payload[3];
+   cso = ilo_shader_get_kernel_cso(fs);
+   dw2 = cso->payload[0];
+   dw4 = cso->payload[1];
+   dw5 = cso->payload[2];
+   dw6 = cso->payload[3];
 
    /*
     * From the Sandy Bridge PRM, volume 2 part 1, page 248:
@@ -317,7 +312,6 @@ gen6_3DSTATE_WM(struct ilo_builder *builder,
     *      bits is set: Depth Buffer Clear , Hierarchical Depth Buffer Resolve
     *      Enable or Depth Buffer Resolve Enable."
     */
-   assert(!hiz_op);
    dw4 |= GEN6_WM_DW4_STATISTICS;
 
    if (cc_may_kill)
@@ -336,7 +330,8 @@ gen6_3DSTATE_WM(struct ilo_builder *builder,
    }
 
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
-   dw[0] = dw0;
+
+   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_WM) | (cmd_len - 2);
    dw[1] = ilo_shader_get_kernel_offset(fs);
    dw[2] = dw2;
    dw[3] = 0; /* scratch */
@@ -348,36 +343,50 @@ gen6_3DSTATE_WM(struct ilo_builder *builder,
 }
 
 static inline void
+gen6_hiz_3DSTATE_WM(struct ilo_builder *builder, uint32_t hiz_op)
+{
+   const uint8_t cmd_len = 9;
+   const int max_threads = (builder->dev->gt == 2) ? 80 : 40;
+   uint32_t *dw;
+
+   ILO_DEV_ASSERT(builder->dev, 6, 6);
+
+   ilo_builder_batch_pointer(builder, cmd_len, &dw);
+
+   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_WM) | (cmd_len - 2);
+   dw[1] = 0;
+   dw[2] = 0;
+   dw[3] = 0;
+   dw[4] = hiz_op;
+   /* honor the valid range even if dispatching is disabled */
+   dw[5] = (max_threads - 1) << GEN6_WM_DW5_MAX_THREADS__SHIFT;
+   dw[6] = 0;
+   dw[7] = 0;
+   dw[8] = 0;
+}
+
+static inline void
 gen7_3DSTATE_WM(struct ilo_builder *builder,
                 const struct ilo_shader_state *fs,
                 const struct ilo_rasterizer_state *rasterizer,
-                bool cc_may_kill, uint32_t hiz_op)
+                bool cc_may_kill)
 {
    const uint8_t cmd_len = 3;
-   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_WM) | (cmd_len - 2);
    const int num_samples = 1;
+   const struct ilo_shader_cso *cso;
    uint32_t dw1, dw2, *dw;
 
    ILO_DEV_ASSERT(builder->dev, 7, 7.5);
 
-   /* see ilo_gpe_init_rasterizer_wm() */
-   if (rasterizer) {
-      dw1 = rasterizer->wm.payload[0];
-      dw2 = rasterizer->wm.payload[1];
+   /* see rasterizer_init_wm_gen7() */
+   dw1 = rasterizer->wm.payload[0];
+   dw2 = rasterizer->wm.payload[1];
 
-      assert(!hiz_op);
-      dw1 |= GEN7_WM_DW1_STATISTICS;
-   }
-   else {
-      dw1 = hiz_op;
-      dw2 = 0;
-   }
+   /* see fs_init_cso_gen7() */
+   cso = ilo_shader_get_kernel_cso(fs);
+   dw1 |= cso->payload[3];
 
-   if (fs) {
-      const struct ilo_shader_cso *fs_cso = ilo_shader_get_kernel_cso(fs);
-
-      dw1 |= fs_cso->payload[3];
-   }
+   dw1 |= GEN7_WM_DW1_STATISTICS;
 
    if (cc_may_kill)
       dw1 |= GEN7_WM_DW1_PS_ENABLE | GEN7_WM_DW1_PS_KILL;
@@ -388,9 +397,24 @@ gen7_3DSTATE_WM(struct ilo_builder *builder,
    }
 
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
-   dw[0] = dw0;
+
+   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_WM) | (cmd_len - 2);
    dw[1] = dw1;
    dw[2] = dw2;
+}
+
+static inline void
+gen7_hiz_3DSTATE_WM(struct ilo_builder *builder, uint32_t hiz_op)
+{
+   const uint8_t cmd_len = 3;
+   uint32_t *dw;
+
+   ILO_DEV_ASSERT(builder->dev, 7, 7.5);
+
+   ilo_builder_batch_pointer(builder, cmd_len, &dw);
+   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_WM) | (cmd_len - 2);
+   dw[1] = hiz_op;
+   dw[2] = 0;
 }
 
 static inline void
@@ -399,44 +423,10 @@ gen7_3DSTATE_PS(struct ilo_builder *builder,
                 bool dual_blend)
 {
    const uint8_t cmd_len = 8;
-   const uint32_t dw0 = GEN7_RENDER_CMD(3D, 3DSTATE_PS) | (cmd_len - 2);
    const struct ilo_shader_cso *cso;
    uint32_t dw2, dw4, dw5, *dw;
 
    ILO_DEV_ASSERT(builder->dev, 7, 7.5);
-
-   if (!fs) {
-      int max_threads;
-
-      /* GPU hangs if none of the dispatch enable bits is set */
-      dw4 = GEN7_PS_DW4_8_PIXEL_DISPATCH;
-
-      /* see brwCreateContext() */
-      switch (ilo_dev_gen(builder->dev)) {
-      case ILO_GEN(7.5):
-         max_threads = (builder->dev->gt == 3) ? 408 :
-                       (builder->dev->gt == 2) ? 204 : 102;
-         dw4 |= (max_threads - 1) << GEN75_PS_DW4_MAX_THREADS__SHIFT;
-         break;
-      case ILO_GEN(7):
-      default:
-         max_threads = (builder->dev->gt == 2) ? 172 : 48;
-         dw4 |= (max_threads - 1) << GEN7_PS_DW4_MAX_THREADS__SHIFT;
-         break;
-      }
-
-      ilo_builder_batch_pointer(builder, cmd_len, &dw);
-      dw[0] = dw0;
-      dw[1] = 0;
-      dw[2] = 0;
-      dw[3] = 0;
-      dw[4] = dw4;
-      dw[5] = 0;
-      dw[6] = 0;
-      dw[7] = 0;
-
-      return;
-   }
 
    cso = ilo_shader_get_kernel_cso(fs);
    dw2 = cso->payload[0];
@@ -447,7 +437,8 @@ gen7_3DSTATE_PS(struct ilo_builder *builder,
       dw4 |= GEN7_PS_DW4_DUAL_SOURCE_BLEND;
 
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
-   dw[0] = dw0;
+
+   dw[0] = GEN7_RENDER_CMD(3D, 3DSTATE_PS) | (cmd_len - 2);
    dw[1] = ilo_shader_get_kernel_offset(fs);
    dw[2] = dw2;
    dw[3] = 0; /* scratch */
@@ -458,32 +449,50 @@ gen7_3DSTATE_PS(struct ilo_builder *builder,
 }
 
 static inline void
+gen7_disable_3DSTATE_PS(struct ilo_builder *builder)
+{
+   const uint8_t cmd_len = 8;
+   int max_threads;
+   uint32_t dw4, *dw;
+
+   ILO_DEV_ASSERT(builder->dev, 7, 7.5);
+
+   /* GPU hangs if none of the dispatch enable bits is set */
+   dw4 = GEN7_PS_DW4_8_PIXEL_DISPATCH;
+
+   /* see brwCreateContext() */
+   switch (ilo_dev_gen(builder->dev)) {
+   case ILO_GEN(7.5):
+      max_threads = (builder->dev->gt == 3) ? 408 :
+                    (builder->dev->gt == 2) ? 204 : 102;
+      dw4 |= (max_threads - 1) << GEN75_PS_DW4_MAX_THREADS__SHIFT;
+      break;
+   case ILO_GEN(7):
+   default:
+      max_threads = (builder->dev->gt == 2) ? 172 : 48;
+      dw4 |= (max_threads - 1) << GEN7_PS_DW4_MAX_THREADS__SHIFT;
+      break;
+   }
+
+   ilo_builder_batch_pointer(builder, cmd_len, &dw);
+
+   dw[0] = GEN7_RENDER_CMD(3D, 3DSTATE_PS) | (cmd_len - 2);
+   dw[1] = 0;
+   dw[2] = 0;
+   dw[3] = 0;
+   dw[4] = dw4;
+   dw[5] = 0;
+   dw[6] = 0;
+   dw[7] = 0;
+}
+
+static inline void
 gen6_3DSTATE_CONSTANT_PS(struct ilo_builder *builder,
                          const uint32_t *bufs, const int *sizes,
                          int num_bufs)
 {
-   const uint8_t cmd_len = 5;
-   uint32_t buf_dw[4], buf_enabled;
-   uint32_t *dw;
-
-   ILO_DEV_ASSERT(builder->dev, 6, 6);
-   assert(num_bufs <= 4);
-
-   /*
-    * From the Sandy Bridge PRM, volume 2 part 1, page 287:
-    *
-    *     "The sum of all four read length fields (each incremented to
-    *      represent the actual read length) must be less than or equal to 64"
-    */
-   buf_enabled = gen6_fill_3dstate_constant(builder->dev,
-         bufs, sizes, num_bufs, 64, buf_dw, Elements(buf_dw));
-
-   ilo_builder_batch_pointer(builder, cmd_len, &dw);
-
-   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_CONSTANT_PS) |
-           buf_enabled << 12 |
-           (cmd_len - 2);
-   memcpy(&dw[1], buf_dw, sizeof(buf_dw));
+   gen6_3dstate_constant(builder, GEN6_RENDER_OPCODE_3DSTATE_CONSTANT_PS,
+         bufs, sizes, num_bufs);
 }
 
 static inline void
@@ -1224,70 +1233,34 @@ gen6_BLEND_STATE(struct ilo_builder *builder,
          ILO_BUILDER_ITEM_BLEND, state_align, state_len, &dw);
 
    for (i = 0; i < num_targets; i++) {
-      const unsigned idx = (blend->independent_blend_enable) ? i : 0;
-      const struct ilo_blend_cso *cso = &blend->cso[idx];
-      const int num_samples = fb->num_samples;
-      const struct util_format_description *format_desc =
-         (idx < fb->state.nr_cbufs && fb->state.cbufs[idx]) ?
-         util_format_description(fb->state.cbufs[idx]->format) : NULL;
-      bool rt_is_unorm, rt_is_pure_integer, rt_dst_alpha_forced_one;
-
-      rt_is_unorm = true;
-      rt_is_pure_integer = false;
-      rt_dst_alpha_forced_one = false;
-
-      if (format_desc) {
-         int ch;
-
-         switch (format_desc->format) {
-         case PIPE_FORMAT_B8G8R8X8_UNORM:
-            /* force alpha to one when the HW format has alpha */
-            assert(ilo_translate_render_format(builder->dev,
-                     PIPE_FORMAT_B8G8R8X8_UNORM) ==
-                  GEN6_FORMAT_B8G8R8A8_UNORM);
-            rt_dst_alpha_forced_one = true;
-            break;
-         default:
-            break;
-         }
-
-         for (ch = 0; ch < 4; ch++) {
-            if (format_desc->channel[ch].type == UTIL_FORMAT_TYPE_VOID)
-               continue;
-
-            if (format_desc->channel[ch].pure_integer) {
-               rt_is_unorm = false;
-               rt_is_pure_integer = true;
-               break;
-            }
-
-            if (!format_desc->channel[ch].normalized ||
-                format_desc->channel[ch].type != UTIL_FORMAT_TYPE_UNSIGNED)
-               rt_is_unorm = false;
-         }
-      }
+      const struct ilo_blend_cso *cso =
+         &blend->cso[(blend->independent_blend_enable) ? i : 0];
 
       dw[0] = cso->payload[0];
       dw[1] = cso->payload[1];
 
-      if (!rt_is_pure_integer) {
-         if (rt_dst_alpha_forced_one)
-            dw[0] |= cso->dw_blend_dst_alpha_forced_one;
-         else
-            dw[0] |= cso->dw_blend;
-      }
+      if (i < fb->state.nr_cbufs && fb->state.cbufs[i]) {
+         const struct ilo_fb_blend_caps *caps = &fb->blend_caps[i];
 
-      /*
-       * From the Sandy Bridge PRM, volume 2 part 1, page 365:
-       *
-       *     "Logic Ops are only supported on *_UNORM surfaces (excluding
-       *      _SRGB variants), otherwise Logic Ops must be DISABLED."
-       *
-       * Since logicop is ignored for non-UNORM color buffers, no special care
-       * is needed.
-       */
-      if (rt_is_unorm)
-         dw[1] |= cso->dw_logicop;
+         if (caps->can_blend) {
+            if (caps->dst_alpha_forced_one)
+               dw[0] |= cso->dw_blend_dst_alpha_forced_one;
+            else
+               dw[0] |= cso->dw_blend;
+         }
+
+         if (caps->can_logicop)
+            dw[1] |= cso->dw_logicop;
+
+         if (caps->can_alpha_test)
+            dw[1] |= dsa->dw_alpha;
+      } else {
+         dw[1] |= GEN6_BLEND_DW1_WRITE_DISABLE_A |
+                  GEN6_BLEND_DW1_WRITE_DISABLE_R |
+                  GEN6_BLEND_DW1_WRITE_DISABLE_G |
+                  GEN6_BLEND_DW1_WRITE_DISABLE_B |
+                  dsa->dw_alpha;
+      }
 
       /*
        * From the Sandy Bridge PRM, volume 2 part 1, page 356:
@@ -1298,17 +1271,8 @@ gen6_BLEND_STATE(struct ilo_builder *builder,
        * There is no such limitation on GEN7, or for AlphaToOne.  But GL
        * requires that anyway.
        */
-      if (num_samples > 1)
+      if (fb->num_samples > 1)
          dw[1] |= cso->dw_alpha_mod;
-
-      /*
-       * From the Sandy Bridge PRM, volume 2 part 1, page 382:
-       *
-       *     "Alpha Test can only be enabled if Pixel Shader outputs a float
-       *      alpha value."
-       */
-      if (!rt_is_pure_integer)
-         dw[1] |= dsa->dw_alpha;
 
       dw += 2;
    }

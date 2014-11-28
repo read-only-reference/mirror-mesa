@@ -55,17 +55,20 @@ brw_new_shader(struct gl_context *ctx, GLuint name, GLuint type)
  * the eventual NOS used, and thus allows us to produce link failures.
  */
 static bool
-brw_shader_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
+brw_shader_precompile(struct gl_context *ctx,
+                      struct gl_shader_program *sh_prog)
 {
-   struct brw_context *brw = brw_context(ctx);
+   struct gl_shader *vs = sh_prog->_LinkedShaders[MESA_SHADER_VERTEX];
+   struct gl_shader *gs = sh_prog->_LinkedShaders[MESA_SHADER_GEOMETRY];
+   struct gl_shader *fs = sh_prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
 
-   if (brw->precompile && !brw_fs_precompile(ctx, prog))
+   if (fs && !brw_fs_precompile(ctx, sh_prog, fs->Program))
       return false;
 
-   if (brw->precompile && !brw_gs_precompile(ctx, prog))
+   if (gs && !brw_gs_precompile(ctx, sh_prog, gs->Program))
       return false;
 
-   if (brw->precompile && !brw_vs_precompile(ctx, prog))
+   if (vs && !brw_vs_precompile(ctx, sh_prog, vs->Program))
       return false;
 
    return true;
@@ -79,11 +82,14 @@ brw_lower_packing_builtins(struct brw_context *brw,
    int ops = LOWER_PACK_SNORM_2x16
            | LOWER_UNPACK_SNORM_2x16
            | LOWER_PACK_UNORM_2x16
-           | LOWER_UNPACK_UNORM_2x16
-           | LOWER_PACK_SNORM_4x8
+           | LOWER_UNPACK_UNORM_2x16;
+
+   if (shader_type == MESA_SHADER_FRAGMENT) {
+      ops |= LOWER_UNPACK_UNORM_4x8
            | LOWER_UNPACK_SNORM_4x8
            | LOWER_PACK_UNORM_4x8
-           | LOWER_UNPACK_UNORM_4x8;
+           | LOWER_PACK_SNORM_4x8;
+   }
 
    if (brw->gen >= 7) {
       /* Gen7 introduced the f32to16 and f16to32 instructions, which can be
@@ -255,7 +261,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       }
    }
 
-   if (!brw_shader_precompile(ctx, shProg))
+   if (brw->precompile && !brw_shader_precompile(ctx, shProg))
       return false;
 
    return true;
@@ -441,10 +447,17 @@ brw_instruction_name(enum opcode op)
    case SHADER_OPCODE_GEN7_SCRATCH_READ:
       return "gen7_scratch_read";
 
-   case FS_OPCODE_DDX:
-      return "ddx";
-   case FS_OPCODE_DDY:
-      return "ddy";
+   case VEC4_OPCODE_PACK_BYTES:
+      return "pack_bytes";
+
+   case FS_OPCODE_DDX_COARSE:
+      return "ddx_coarse";
+   case FS_OPCODE_DDX_FINE:
+      return "ddx_fine";
+   case FS_OPCODE_DDY_COARSE:
+      return "ddy_coarse";
+   case FS_OPCODE_DDY_FINE:
+      return "ddy_fine";
 
    case FS_OPCODE_PIXEL_X:
       return "pixel_x";
@@ -715,7 +728,7 @@ backend_instruction::writes_accumulator_implicitly(struct brw_context *brw) cons
    return writes_accumulator ||
           (brw->gen < 6 &&
            ((opcode >= BRW_OPCODE_ADD && opcode < BRW_OPCODE_NOP) ||
-            (opcode >= FS_OPCODE_DDX && opcode <= FS_OPCODE_LINTERP &&
+            (opcode >= FS_OPCODE_DDX_COARSE && opcode <= FS_OPCODE_LINTERP &&
              opcode != FS_OPCODE_CINTERP)));
 }
 

@@ -188,12 +188,10 @@ static void init_prog(struct program *p)
 		p->viewport.scale[0] = half_width;
 		p->viewport.scale[1] = half_height * scale;
 		p->viewport.scale[2] = half_depth;
-		p->viewport.scale[3] = 1.0f;
 
 		p->viewport.translate[0] = half_width + x;
 		p->viewport.translate[1] = (half_height + y) * scale + bias;
 		p->viewport.translate[2] = half_depth + z;
-		p->viewport.translate[3] = 0.0f;
 	}
 
 	/* vertex elements state */
@@ -213,7 +211,7 @@ static void init_prog(struct program *p)
 			const uint semantic_names[] = { TGSI_SEMANTIC_POSITION,
 							TGSI_SEMANTIC_COLOR };
 			const uint semantic_indexes[] = { 0, 0 };
-			p->vs = util_make_vertex_passthrough_shader(p->pipe, 2, semantic_names, semantic_indexes);
+			p->vs = util_make_vertex_passthrough_shader(p->pipe, 2, semantic_names, semantic_indexes, FALSE);
 	}
 
 	/* fragment shader */

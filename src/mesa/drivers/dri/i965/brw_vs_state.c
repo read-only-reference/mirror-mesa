@@ -145,7 +145,6 @@ brw_upload_vs_unit(struct brw_context *brw)
    if (brw->gen == 5)
       vs->vs5.sampler_count = 0; /* hardware requirement */
    else {
-      /* CACHE_NEW_SAMPLER */
       vs->vs5.sampler_count = (stage_state->sampler_count + 3) / 4;
    }
 
@@ -160,6 +159,7 @@ brw_upload_vs_unit(struct brw_context *brw)
    /* Set the sampler state pointer, and its reloc
     */
    if (stage_state->sampler_count) {
+      /* BRW_NEW_SAMPLER_STATE_TABLE - reloc */
       vs->vs5.sampler_state_pointer =
          (brw->batch.bo->offset64 + stage_state->sampler_offset) >> 5;
       drm_intel_bo_emit_reloc(brw->batch.bo,
@@ -181,18 +181,19 @@ brw_upload_vs_unit(struct brw_context *brw)
 			      I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER);
    }
 
-   brw->state.dirty.cache |= CACHE_NEW_VS_UNIT;
+   brw->state.dirty.brw |= BRW_NEW_GEN4_UNIT_STATE;
 }
 
 const struct brw_tracked_state brw_vs_unit = {
    .dirty = {
       .mesa  = _NEW_TRANSFORM,
-      .brw   = (BRW_NEW_BATCH |
-		BRW_NEW_PROGRAM_CACHE |
-		BRW_NEW_CURBE_OFFSETS |
-		BRW_NEW_URB_FENCE |
-                BRW_NEW_VERTEX_PROGRAM),
-      .cache = CACHE_NEW_VS_PROG | CACHE_NEW_SAMPLER
+      .brw   = BRW_NEW_BATCH |
+               BRW_NEW_CURBE_OFFSETS |
+               BRW_NEW_PROGRAM_CACHE |
+               BRW_NEW_SAMPLER_STATE_TABLE |
+               BRW_NEW_URB_FENCE |
+               BRW_NEW_VERTEX_PROGRAM,
+      .cache = CACHE_NEW_VS_PROG,
    },
    .emit = brw_upload_vs_unit,
 };

@@ -25,6 +25,7 @@
  *    Chia-I Wu <olv@lunarg.com>
  */
 
+#include "util/u_dynarray.h"
 #include "util/u_helpers.h"
 #include "util/u_upload_mgr.h"
 
@@ -32,7 +33,7 @@
 #include "ilo_resource.h"
 #include "ilo_shader.h"
 #include "ilo_state.h"
-#include "ilo_state_gen.h"
+#include "ilo_state_3d.h"
 
 static void
 finalize_shader_states(struct ilo_state_vector *vec)
@@ -259,6 +260,40 @@ ilo_finalize_3d_states(struct ilo_context *ilo,
    finalize_vertex_elements(ilo);
 
    u_upload_unmap(ilo->uploader);
+}
+
+static void
+finalize_global_binding(struct ilo_state_vector *vec)
+{
+   struct ilo_shader_state *cs = vec->cs;
+   int base, count, shift;
+   int i;
+
+   count = ilo_shader_get_kernel_param(cs,
+         ILO_KERNEL_CS_SURFACE_GLOBAL_COUNT);
+   if (!count)
+      return;
+
+   base = ilo_shader_get_kernel_param(cs, ILO_KERNEL_CS_SURFACE_GLOBAL_BASE);
+   shift = 32 - util_last_bit(base + count - 1);
+
+   if (count > vec->global_binding.count)
+      count = vec->global_binding.count;
+
+   for (i = 0; i < count; i++) {
+      struct ilo_global_binding_cso *cso =
+         util_dynarray_element(&vec->global_binding.bindings,
+               struct ilo_global_binding_cso, i);
+      const uint32_t offset = *cso->handle & ((1 << shift) - 1);
+
+      *cso->handle = ((base + i) << shift) | offset;
+   }
+}
+
+void
+ilo_finalize_compute_states(struct ilo_context *ilo)
+{
+   finalize_global_binding(&ilo->state_vector);
 }
 
 static void *
@@ -1138,30 +1173,52 @@ ilo_set_global_binding(struct pipe_context *pipe,
                        uint32_t **handles)
 {
    struct ilo_state_vector *vec = &ilo_context(pipe)->state_vector;
-   struct ilo_global_binding *dst = &vec->global_binding;
+   struct ilo_global_binding_cso *dst;
    unsigned i;
 
-   assert(start + count <= Elements(dst->resources));
+   /* make room */
+   if (vec->global_binding.count < start + count) {
+      if (resources) {
+         const unsigned old_size = vec->global_binding.bindings.size;
+         const unsigned new_size = sizeof(*dst) * (start + count);
+
+         if (old_size < new_size) {
+            util_dynarray_resize(&vec->global_binding.bindings, new_size);
+            memset(vec->global_binding.bindings.data + old_size, 0,
+                  new_size - old_size);
+         }
+      } else {
+         count = vec->global_binding.count - start;
+      }
+   }
+
+   dst = util_dynarray_element(&vec->global_binding.bindings,
+         struct ilo_global_binding_cso, start);
 
    if (resources) {
-      for (i = 0; i < count; i++)
-         pipe_resource_reference(&dst->resources[start + i], resources[i]);
-   }
-   else {
-      for (i = 0; i < count; i++)
-         pipe_resource_reference(&dst->resources[start + i], NULL);
+      for (i = 0; i < count; i++) {
+         pipe_resource_reference(&dst[i].resource, resources[i]);
+         dst[i].handle = handles[i];
+      }
+   } else {
+      for (i = 0; i < count; i++) {
+         pipe_resource_reference(&dst[i].resource, NULL);
+         dst[i].handle = NULL;
+      }
    }
 
-   if (dst->count <= start + count) {
+   if (vec->global_binding.count <= start + count) {
+      dst = util_dynarray_begin(&vec->global_binding.bindings);
+
       if (resources)
          count += start;
       else
          count = start;
 
-      while (count > 0 && !dst->resources[count - 1])
+      while (count > 0 && !dst[count - 1].resource)
          count--;
 
-      dst->count = count;
+      vec->global_binding.count = count;
    }
 
    vec->dirty |= ILO_DIRTY_GLOBAL_BINDING;
@@ -1240,6 +1297,8 @@ ilo_state_vector_init(const struct ilo_dev_info *dev,
    ilo_gpe_init_zs_surface(dev, NULL, PIPE_FORMAT_NONE,
          0, 0, 1, &vec->fb.null_zs);
 
+   util_dynarray_init(&vec->global_binding.bindings);
+
    vec->dirty = ILO_DIRTY_ALL;
 }
 
@@ -1283,8 +1342,14 @@ ilo_state_vector_cleanup(struct ilo_state_vector *vec)
    for (i = 0; i < vec->cs_resource.count; i++)
       pipe_surface_reference(&vec->cs_resource.states[i], NULL);
 
-   for (i = 0; i < vec->global_binding.count; i++)
-      pipe_resource_reference(&vec->global_binding.resources[i], NULL);
+   for (i = 0; i < vec->global_binding.count; i++) {
+      struct ilo_global_binding_cso *cso =
+         util_dynarray_element(&vec->global_binding.bindings,
+               struct ilo_global_binding_cso, i);
+      pipe_resource_reference(&cso->resource, NULL);
+   }
+
+   util_dynarray_fini(&vec->global_binding.bindings);
 }
 
 /**
@@ -1405,7 +1470,11 @@ ilo_state_vector_resource_renamed(struct ilo_state_vector *vec,
    }
 
    for (i = 0; i < vec->global_binding.count; i++) {
-      if (vec->global_binding.resources[i] == res) {
+      struct ilo_global_binding_cso *cso =
+         util_dynarray_element(&vec->global_binding.bindings,
+               struct ilo_global_binding_cso, i);
+
+      if (cso->resource == res) {
          states |= ILO_DIRTY_GLOBAL_BINDING;
          break;
       }

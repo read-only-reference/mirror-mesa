@@ -53,20 +53,7 @@
 boolean
 draw_get_option_use_llvm(void)
 {
-   static boolean first = TRUE;
-   static boolean value;
-   if (first) {
-      first = FALSE;
-      value = debug_get_bool_option("DRAW_USE_LLVM", TRUE);
-
-#ifdef PIPE_ARCH_X86
-      util_cpu_detect();
-      /* require SSE2 due to LLVM PR6960. XXX Might be fixed by now? */
-      if (!util_cpu_caps.has_sse2)
-         value = FALSE;
-#endif
-   }
-   return value;
+   return debug_get_bool_option("DRAW_USE_LLVM", TRUE);
 }
 #else
 boolean
@@ -373,11 +360,9 @@ void draw_set_viewport_states( struct draw_context *draw,
       (viewport->scale[0] == 1.0f &&
        viewport->scale[1] == 1.0f &&
        viewport->scale[2] == 1.0f &&
-       viewport->scale[3] == 1.0f &&
        viewport->translate[0] == 0.0f &&
        viewport->translate[1] == 0.0f &&
-       viewport->translate[2] == 0.0f &&
-       viewport->translate[3] == 0.0f);
+       viewport->translate[2] == 0.0f);
 }
 
 
@@ -808,7 +793,7 @@ draw_current_shader_viewport_index_output(const struct draw_context *draw)
 {
    if (draw->gs.geometry_shader)
       return draw->gs.geometry_shader->viewport_index_output;
-   return 0;
+   return draw->vs.vertex_shader->viewport_index_output;
 }
 
 /**
@@ -820,7 +805,7 @@ draw_current_shader_uses_viewport_index(const struct draw_context *draw)
 {
    if (draw->gs.geometry_shader)
       return draw->gs.geometry_shader->info.writes_viewport_index;
-   return FALSE;
+   return draw->vs.vertex_shader->info.writes_viewport_index;
 }
 
 

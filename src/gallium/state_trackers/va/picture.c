@@ -80,6 +80,12 @@ handlePictureParameterBuffer(vlVaDriver *drv, vlVaContext *context, vlVaBuffer *
    VAPictureParameterBufferMPEG2 *mpeg2;
    VAPictureParameterBufferH264 *h264;
    VAPictureParameterBufferVC1 * vc1;
+   VAPictureParameterBufferMPEG4 *mpeg4;
+   vlVaSurface *surf_forward;
+   vlVaSurface *surf_backward;
+   unsigned int i;
+   static const uint8_t default_intra_quant_matrix[64] = { 0 };
+   static const uint8_t default_non_intra_quant_matrix[64] = { 0 };
 
    switch (u_reduce_video_profile(context->decoder->profile)) {
    case PIPE_VIDEO_FORMAT_MPEG12:
@@ -214,6 +220,72 @@ handlePictureParameterBuffer(vlVaDriver *drv, vlVaContext *context, vlVaBuffer *
       context->desc.vc1.pquant = vc1->pic_quantizer_fields.bits.pic_quantizer_scale;
       break;
 
+   case PIPE_VIDEO_FORMAT_MPEG4:
+      assert(buf->size >= sizeof(VAPictureParameterBufferMPEG4) && buf->num_elements == 1);
+      mpeg4 = buf->data;
+
+      context->mpeg4.pps = *mpeg4;
+
+      /* vop_width */
+      /* vop_height */
+      /* forward_reference_picture */
+      /* backward_reference_picture */
+      context->desc.mpeg4.short_video_header =
+            mpeg4->vol_fields.bits.short_video_header;
+      /* chroma_format */
+      context->desc.mpeg4.interlaced = mpeg4->vol_fields.bits.interlaced;
+      /* obmc_disable */
+      /* sprite_enable */
+      /* sprite_warping_accuracy */
+      context->desc.mpeg4.quant_type = mpeg4->vol_fields.bits.quant_type;
+      context->desc.mpeg4.quarter_sample = mpeg4->vol_fields.bits.quarter_sample;
+      /* data_partitioned */
+      /* reversible_vlc */
+      context->desc.mpeg4.resync_marker_disable =
+            mpeg4->vol_fields.bits.resync_marker_disable;
+      /* no_of_sprite_warping_points */
+      /* sprite_trajectory_du */
+      /* sprite_trajectory_dv */
+      /* quant_precision */
+      context->desc.mpeg4.vop_coding_type = mpeg4->vop_fields.bits.vop_coding_type;
+      /* backward_reference_vop_coding_type */
+      /* vop_rounding_type */
+      /* intra_dc_vlc_thr */
+      context->desc.mpeg4.top_field_first =
+            mpeg4->vop_fields.bits.top_field_first;
+      context->desc.mpeg4.alternate_vertical_scan_flag =
+            mpeg4->vop_fields.bits.alternate_vertical_scan_flag;
+      context->desc.mpeg4.vop_fcode_forward = mpeg4->vop_fcode_forward;
+      context->desc.mpeg4.vop_fcode_backward = mpeg4->vop_fcode_backward;
+      context->desc.mpeg4.vop_time_increment_resolution =
+            mpeg4->vop_time_increment_resolution;
+      /* num_gobs_in_vop */
+      /* num_macroblocks_in_gob */
+      context->desc.mpeg4.trb[0] = mpeg4->TRB;
+      context->desc.mpeg4.trb[1] = mpeg4->TRB;
+      context->desc.mpeg4.trd[0] = mpeg4->TRD;
+      context->desc.mpeg4.trd[1] = mpeg4->TRD;
+
+      /* default [non-]intra quant matrix because mpv does not set these
+         matrices */
+      if (!context->desc.mpeg4.intra_matrix)
+         context->desc.mpeg4.intra_matrix = default_intra_quant_matrix;
+      if (!context->desc.mpeg4.non_intra_matrix)
+         context->desc.mpeg4.non_intra_matrix = default_non_intra_quant_matrix;
+
+      surf_forward = handle_table_get(drv->htab, mpeg4->forward_reference_picture);
+      if (surf_forward)
+         context->desc.mpeg4.ref[0] = surf_forward->buffer;
+      surf_backward = handle_table_get(drv->htab, mpeg4->backward_reference_picture);
+      if (surf_backward)
+         context->desc.mpeg4.ref[1] = surf_backward->buffer;
+
+      context->mpeg4.vti_bits = 0;
+      for (i = context->desc.mpeg4.vop_time_increment_resolution; i > 0; i /= 2)
+         ++context->mpeg4.vti_bits;
+
+      break;
+
    default:
       break;
    }
@@ -224,6 +296,7 @@ handleIQMatrixBuffer(vlVaContext *context, vlVaBuffer *buf)
 {
    VAIQMatrixBufferMPEG2 *mpeg2;
    VAIQMatrixBufferH264 *h264;
+   VAIQMatrixBufferMPEG4 *mpeg4;
 
    switch (u_reduce_video_profile(context->decoder->profile)) {
    case PIPE_VIDEO_FORMAT_MPEG12:
@@ -247,6 +320,21 @@ handleIQMatrixBuffer(vlVaContext *context, vlVaBuffer *buf)
       memcpy(&context->desc.h264.pps->ScalingList8x8, h264->ScalingList8x8, 2 * 64);
       break;
 
+   case PIPE_VIDEO_FORMAT_MPEG4:
+      assert(buf->size >= sizeof(VAIQMatrixBufferMPEG4) && buf->num_elements == 1);
+      mpeg4 = buf->data;
+
+      if (mpeg4->load_intra_quant_mat)
+         context->desc.mpeg4.intra_matrix = mpeg4->intra_quant_mat;
+      else
+         context->desc.mpeg4.intra_matrix = NULL;
+
+      if (mpeg4->load_non_intra_quant_mat)
+         context->desc.mpeg4.non_intra_matrix = mpeg4->non_intra_quant_mat;
+      else
+         context->desc.mpeg4.non_intra_matrix = NULL;
+      break;
+
    default:
       break;
    }
@@ -256,6 +344,7 @@ static void
 handleSliceParameterBuffer(vlVaContext *context, vlVaBuffer *buf)
 {
    VASliceParameterBufferH264 *h264;
+   VASliceParameterBufferMPEG4 *mpeg4;
 
    switch (u_reduce_video_profile(context->decoder->profile)) {
    case PIPE_VIDEO_FORMAT_MPEG4_AVC:
@@ -266,57 +355,165 @@ handleSliceParameterBuffer(vlVaContext *context, vlVaBuffer *buf)
       context->desc.h264.num_ref_idx_l1_active_minus1 =
          h264->num_ref_idx_l1_active_minus1;
       break;
+   case PIPE_VIDEO_FORMAT_MPEG4:
+      assert(buf->size >= sizeof(VASliceParameterBufferMPEG4) && buf->num_elements == 1);
+      mpeg4 = buf->data;
 
+      context->mpeg4.quant_scale = mpeg4->quant_scale;
+      break;
    default:
       break;
    }
 }
 
+struct bit_stream
+{
+   uint8_t *data;
+   unsigned int length; /* bits */
+   unsigned int pos;    /* bits */
+};
+
+static inline void
+write_bit(struct bit_stream *writer, unsigned int bit)
+{
+   assert(writer->length > (writer)->pos);
+   writer->data[writer->pos>>3] |= ((bit & 1)<<(7 - (writer->pos & 7)));
+   writer->pos++;
+}
+
+static inline void
+write_bits(struct bit_stream *writer, unsigned int bits, unsigned int len)
+{
+   int i;
+   assert(len <= sizeof(bits)*8);
+   for (i = len - 1; i >= 0; i--)
+      write_bit(writer, bits>>i);
+}
+
+static void
+vlVaDecoderFixMPEG4Startcode(vlVaContext *context)
+{
+   uint8_t vop[] = { 0x00, 0x00, 0x01, 0xb6, 0x00, 0x00, 0x00, 0x00, 0x00 };
+   struct bit_stream bs_vop = {vop, sizeof(vop)*8, 32};
+   unsigned int vop_time_inc;
+   int mod_time;
+   unsigned int vop_size;
+   unsigned int vop_coding_type = context->desc.mpeg4.vop_coding_type;
+
+   context->mpeg4.start_code_size = 0;
+   memset(context->mpeg4.start_code, 0, sizeof(context->mpeg4.start_code));
+   if (vop_coding_type+1 == PIPE_MPEG12_PICTURE_CODING_TYPE_I) {
+      unsigned int vop_time = context->mpeg4.frame_num/
+            context->desc.mpeg4.vop_time_increment_resolution;
+      unsigned int vop_hour = vop_time / 3600;
+      unsigned int vop_minute = (vop_time / 60) % 60;
+      unsigned int vop_second = vop_time % 60;
+      uint8_t group_of_vop[] = { 0x00, 0x00, 0x01, 0xb3, 0x00, 0x00, 0x00 };
+      struct bit_stream bs_gvop = {group_of_vop, sizeof(group_of_vop)*8, 32};
+
+      write_bits(&bs_gvop, vop_hour, 5);
+      write_bits(&bs_gvop, vop_minute, 6);
+      write_bit(&bs_gvop, 1); /* marker_bit */
+      write_bits(&bs_gvop, vop_second, 6);
+      write_bit(&bs_gvop, 0); /* closed_gov */ /* TODO replace magic */
+      write_bit(&bs_gvop, 0); /* broken_link */
+      write_bit(&bs_gvop, 0); /* padding */
+      write_bits(&bs_gvop, 7, 3); /* padding */
+
+      memcpy(context->mpeg4.start_code, group_of_vop, sizeof(group_of_vop));
+      context->mpeg4.start_code_size += sizeof(group_of_vop);
+   }
+
+   write_bits(&bs_vop, vop_coding_type, 2);
+   mod_time = context->mpeg4.frame_num %
+         context->desc.mpeg4.vop_time_increment_resolution == 0 &&
+         vop_coding_type+1 != PIPE_MPEG12_PICTURE_CODING_TYPE_I;
+   while (mod_time--)
+      write_bit(&bs_vop, 1); /* modulo_time_base */
+   write_bit(&bs_vop, 0); /* modulo_time_base */
+
+   write_bit(&bs_vop, 1); /* marker_bit */
+   vop_time_inc = context->mpeg4.frame_num %
+         context->desc.mpeg4.vop_time_increment_resolution;
+   write_bits(&bs_vop, vop_time_inc, context->mpeg4.vti_bits);
+   write_bit(&bs_vop, 1); /* marker_bit */
+   write_bit(&bs_vop, 1); /* vop_coded */
+   if (vop_coding_type+1 == PIPE_MPEG12_PICTURE_CODING_TYPE_P)
+      write_bit(&bs_vop, context->mpeg4.pps.vop_fields.bits.vop_rounding_type);
+   write_bits(&bs_vop, context->mpeg4.pps.vop_fields.bits.intra_dc_vlc_thr, 3);
+   if (context->mpeg4.pps.vol_fields.bits.interlaced) {
+      write_bit(&bs_vop, context->mpeg4.pps.vop_fields.bits.top_field_first);
+      write_bit(&bs_vop, context->mpeg4.pps.vop_fields.bits.alternate_vertical_scan_flag);
+   }
+
+   write_bits(&bs_vop, context->mpeg4.quant_scale, context->mpeg4.pps.quant_precision);
+   if (vop_coding_type+1 != PIPE_MPEG12_PICTURE_CODING_TYPE_I)
+      write_bits(&bs_vop, context->desc.mpeg4.vop_fcode_forward, 3);
+   if (vop_coding_type+1 == PIPE_MPEG12_PICTURE_CODING_TYPE_B)
+      write_bits(&bs_vop, context->desc.mpeg4.vop_fcode_backward, 3);
+
+   vop_size = bs_vop.pos/8;
+   memcpy(context->mpeg4.start_code + context->mpeg4.start_code_size, vop, vop_size);
+   context->mpeg4.start_code_size += vop_size;
+}
+
+static unsigned int
+bufHasStartcode(vlVaBuffer *buf, unsigned int code, unsigned int bits)
+{
+   struct vl_vlc vlc = {0};
+   int i;
+
+   /* search the first 64 bytes for a startcode */
+   vl_vlc_init(&vlc, 1, (const void * const*)&buf->data, &buf->size);
+   for (i = 0; i < 64 && vl_vlc_bits_left(&vlc) >= bits; ++i) {
+      if (vl_vlc_peekbits(&vlc, bits) == code)
+         return 1;
+      vl_vlc_eatbits(&vlc, 8);
+      vl_vlc_fillbits(&vlc);
+   }
+
+   return 0;
+}
+
 static void
 handleVASliceDataBufferType(vlVaContext *context, vlVaBuffer *buf)
 {
+   enum pipe_video_format format;
    unsigned num_buffers = 0;
    void * const *buffers[2];
    unsigned sizes[2];
-   enum pipe_video_format format;
+   static const uint8_t start_code_h264[] = { 0x00, 0x00, 0x01 };
+   static const uint8_t start_code_vc1[] = { 0x00, 0x00, 0x01, 0x0d };
 
    format = u_reduce_video_profile(context->decoder->profile);
-   if (format == PIPE_VIDEO_FORMAT_MPEG4_AVC ||
-       format == PIPE_VIDEO_FORMAT_VC1) {
-      struct vl_vlc vlc = {0};
-      bool found = false;
-      int peek_bits, i;
-
-      /* search the first 64 bytes for a startcode */
-      vl_vlc_init(&vlc, 1, (const void * const*)&buf->data, &buf->size);
-      peek_bits = (format == PIPE_VIDEO_FORMAT_MPEG4_AVC) ? 24 : 32;
-      for (i = 0; i < 64 && vl_vlc_bits_left(&vlc) >= peek_bits; ++i) {
-         uint32_t value = vl_vlc_peekbits(&vlc, peek_bits);
-         if ((format == PIPE_VIDEO_FORMAT_MPEG4_AVC && value == 0x000001) ||
-            (format == PIPE_VIDEO_FORMAT_VC1 && (value == 0x0000010d ||
-            value == 0x0000010c || value == 0x0000010b))) {
-            found = true;
+   switch (format) {
+   case PIPE_VIDEO_FORMAT_MPEG4_AVC:
+         if (bufHasStartcode(buf, 0x000001, 24))
             break;
-         }
-         vl_vlc_eatbits(&vlc, 8);
-         vl_vlc_fillbits(&vlc);
-      }
-      /* none found, ok add one manually */
-      if (!found) {
-         static const uint8_t start_code_h264[] = { 0x00, 0x00, 0x01 };
-         static const uint8_t start_code_vc1[] = { 0x00, 0x00, 0x01, 0x0d };
 
-         if (format == PIPE_VIDEO_FORMAT_MPEG4_AVC) {
-            buffers[num_buffers] = (void *const)&start_code_h264;
-            sizes[num_buffers] = sizeof(start_code_h264);
-         }
-         else {
-            buffers[num_buffers] = (void *const)&start_code_vc1;
-            sizes[num_buffers] = sizeof(start_code_vc1);
-         }
-         ++num_buffers;
-      }
+         buffers[num_buffers] = (void *const)&start_code_h264;
+         sizes[num_buffers++] = sizeof(start_code_h264);
+      break;
+   case PIPE_VIDEO_FORMAT_VC1:
+      if (bufHasStartcode(buf, 0x0000010d, 32) ||
+          bufHasStartcode(buf, 0x0000010c, 32) ||
+          bufHasStartcode(buf, 0x0000010b, 32))
+         break;
+
+         buffers[num_buffers] = (void *const)&start_code_vc1;
+         sizes[num_buffers++] = sizeof(start_code_vc1);
+      break;
+   case PIPE_VIDEO_FORMAT_MPEG4:
+      if (bufHasStartcode(buf, 0x000001, 24))
+         break;
+
+      vlVaDecoderFixMPEG4Startcode(context);
+      buffers[num_buffers] = (void *)context->mpeg4.start_code;
+      sizes[num_buffers++] = context->mpeg4.start_code_size;
+   default:
+      break;
    }
+
    buffers[num_buffers] = buf->data;
    sizes[num_buffers] = buf->size;
    ++num_buffers;
@@ -390,6 +587,7 @@ vlVaEndPicture(VADriverContextP ctx, VAContextID context_id)
    if (!context)
       return VA_STATUS_ERROR_INVALID_CONTEXT;
 
+   context->mpeg4.frame_num++;
    context->decoder->end_frame(context->decoder, context->target, &context->desc.base);
 
    return VA_STATUS_SUCCESS;

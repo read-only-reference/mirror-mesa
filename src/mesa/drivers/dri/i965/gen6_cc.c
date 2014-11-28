@@ -241,10 +241,11 @@ gen6_upload_blend_state(struct brw_context *brw)
 
 const struct brw_tracked_state gen6_blend_state = {
    .dirty = {
-      .mesa = (_NEW_COLOR |
-               _NEW_BUFFERS |
-               _NEW_MULTISAMPLE),
-      .brw = BRW_NEW_BATCH | BRW_NEW_STATE_BASE_ADDRESS,
+      .mesa = _NEW_BUFFERS |
+              _NEW_COLOR |
+              _NEW_MULTISAMPLE,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_STATE_BASE_ADDRESS,
       .cache = 0,
    },
    .emit = gen6_upload_blend_state,
@@ -264,9 +265,12 @@ gen6_upload_color_calc_state(struct brw_context *brw)
    cc->cc0.alpha_test_format = BRW_ALPHATEST_FORMAT_UNORM8;
    UNCLAMPED_FLOAT_TO_UBYTE(cc->cc1.alpha_ref_fi.ui, ctx->Color.AlphaRef);
 
-   /* _NEW_STENCIL */
-   cc->cc0.stencil_ref = _mesa_get_stencil_ref(ctx, 0);
-   cc->cc0.bf_stencil_ref = _mesa_get_stencil_ref(ctx, ctx->Stencil._BackFace);
+   if (brw->gen < 9) {
+      /* _NEW_STENCIL */
+      cc->cc0.stencil_ref = _mesa_get_stencil_ref(ctx, 0);
+      cc->cc0.bf_stencil_ref =
+         _mesa_get_stencil_ref(ctx, ctx->Stencil._BackFace);
+   }
 
    /* _NEW_COLOR */
    cc->constant_r = ctx->Color.BlendColorUnclamped[0];
@@ -292,8 +296,10 @@ gen6_upload_color_calc_state(struct brw_context *brw)
 
 const struct brw_tracked_state gen6_color_calc_state = {
    .dirty = {
-      .mesa = _NEW_COLOR | _NEW_STENCIL,
-      .brw = BRW_NEW_BATCH | BRW_NEW_STATE_BASE_ADDRESS,
+      .mesa = _NEW_COLOR |
+              _NEW_STENCIL,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_STATE_BASE_ADDRESS,
       .cache = 0,
    },
    .emit = gen6_upload_color_calc_state,

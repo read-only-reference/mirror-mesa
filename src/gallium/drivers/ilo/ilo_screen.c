@@ -194,6 +194,7 @@ ilo_get_compute_param(struct pipe_screen *screen,
                       enum pipe_compute_cap param,
                       void *ret)
 {
+   struct ilo_screen *is = ilo_screen(screen);
    union {
       const char *ir_target;
       uint64_t grid_dimension;
@@ -205,11 +206,13 @@ ilo_get_compute_param(struct pipe_screen *screen,
       uint64_t max_private_size;
       uint64_t max_input_size;
       uint64_t max_mem_alloc_size;
+      uint32_t max_clock_frequency;
+      uint32_t max_compute_units;
+      uint32_t images_supported;
    } val;
    const void *ptr;
    int size;
 
-   /* XXX some randomly chosen values */
    switch (param) {
    case PIPE_COMPUTE_CAP_IR_TARGET:
       val.ir_target = "ilog";
@@ -224,57 +227,78 @@ ilo_get_compute_param(struct pipe_screen *screen,
       size = sizeof(val.grid_dimension);
       break;
    case PIPE_COMPUTE_CAP_MAX_GRID_SIZE:
-      val.max_grid_size[0] = 65535;
-      val.max_grid_size[1] = 65535;
-      val.max_grid_size[2] = 1;
+      val.max_grid_size[0] = 0xffffffffu;
+      val.max_grid_size[1] = 0xffffffffu;
+      val.max_grid_size[2] = 0xffffffffu;
 
       ptr = &val.max_grid_size;
       size = sizeof(val.max_grid_size);
       break;
    case PIPE_COMPUTE_CAP_MAX_BLOCK_SIZE:
-      val.max_block_size[0] = 512;
-      val.max_block_size[1] = 512;
-      val.max_block_size[2] = 512;
+      val.max_block_size[0] = 1024;
+      val.max_block_size[1] = 1024;
+      val.max_block_size[2] = 1024;
 
       ptr = &val.max_block_size;
       size = sizeof(val.max_block_size);
       break;
 
    case PIPE_COMPUTE_CAP_MAX_THREADS_PER_BLOCK:
-      val.max_threads_per_block = 512;
+      val.max_threads_per_block = 1024;
 
       ptr = &val.max_threads_per_block;
       size = sizeof(val.max_threads_per_block);
       break;
    case PIPE_COMPUTE_CAP_MAX_GLOBAL_SIZE:
-      val.max_global_size = 4;
+      /* \see ilo_max_resource_size */
+      val.max_global_size = 1u << 31;
 
       ptr = &val.max_global_size;
       size = sizeof(val.max_global_size);
       break;
    case PIPE_COMPUTE_CAP_MAX_LOCAL_SIZE:
+      /* Shared Local Memory Size of INTERFACE_DESCRIPTOR_DATA */
       val.max_local_size = 64 * 1024;
 
       ptr = &val.max_local_size;
       size = sizeof(val.max_local_size);
       break;
    case PIPE_COMPUTE_CAP_MAX_PRIVATE_SIZE:
-      val.max_private_size = 32768;
+      /* scratch size */
+      val.max_private_size = 12 * 1024;
 
       ptr = &val.max_private_size;
       size = sizeof(val.max_private_size);
       break;
    case PIPE_COMPUTE_CAP_MAX_INPUT_SIZE:
-      val.max_input_size = 256;
+      val.max_input_size = 1024;
 
       ptr = &val.max_input_size;
       size = sizeof(val.max_input_size);
       break;
    case PIPE_COMPUTE_CAP_MAX_MEM_ALLOC_SIZE:
-      val.max_mem_alloc_size = 128 * 1024 * 1024;
+      val.max_mem_alloc_size = 1u << 31;
 
       ptr = &val.max_mem_alloc_size;
       size = sizeof(val.max_mem_alloc_size);
+      break;
+   case PIPE_COMPUTE_CAP_MAX_CLOCK_FREQUENCY:
+      val.max_clock_frequency = 1000;
+
+      ptr = &val.max_clock_frequency;
+      size = sizeof(val.max_clock_frequency);
+      break;
+   case PIPE_COMPUTE_CAP_MAX_COMPUTE_UNITS:
+      val.max_compute_units = is->dev.eu_count;
+
+      ptr = &val.max_compute_units;
+      size = sizeof(val.max_compute_units);
+      break;
+   case PIPE_COMPUTE_CAP_IMAGES_SUPPORTED:
+      val.images_supported = 1;
+
+      ptr = &val.images_supported;
+      size = sizeof(val.images_supported);
       break;
    default:
       ptr = NULL;
@@ -682,39 +706,85 @@ init_dev(struct ilo_dev_info *dev, const struct intel_winsys_info *info)
       ilo_warn("PPGTT disabled\n");
    }
 
-   /*
-    * From the Sandy Bridge PRM, volume 4 part 2, page 18:
-    *
-    *     "[DevSNB]: The GT1 product's URB provides 32KB of storage, arranged
-    *      as 1024 256-bit rows. The GT2 product's URB provides 64KB of
-    *      storage, arranged as 2048 256-bit rows. A row corresponds in size
-    *      to an EU GRF register. Read/write access to the URB is generally
-    *      supported on a row-granular basis."
-    *
-    * From the Ivy Bridge PRM, volume 4 part 2, page 17:
-    *
-    *     "URB Size    URB Rows    URB Rows when SLM Enabled
-    *      128k        4096        2048
-    *      256k        8096        4096"
-    */
-
    if (gen_is_hsw(info->devid)) {
+      /*
+       * From the Haswell PRM, volume 4, page 8:
+       *
+       *     "Description                    GT3      GT2      GT1.5    GT1
+       *      (...)
+       *      EUs (Total)                    40       20       12       10
+       *      Threads (Total)                280      140      84       70
+       *      (...)
+       *      URB Size (max, within L3$)     512KB    256KB    256KB    128KB
+       */
       dev->gen_opaque = ILO_GEN(7.5);
       dev->gt = gen_get_hsw_gt(info->devid);
-      dev->urb_size = ((dev->gt == 3) ? 512 :
-                       (dev->gt == 2) ? 256 : 128) * 1024;
-   }
-   else if (gen_is_ivb(info->devid) || gen_is_vlv(info->devid)) {
+      if (dev->gt == 3) {
+         dev->eu_count = 40;
+         dev->thread_count = 280;
+         dev->urb_size = 512 * 1024;
+      } else if (dev->gt == 2) {
+         dev->eu_count = 20;
+         dev->thread_count = 140;
+         dev->urb_size = 256 * 1024;
+      } else {
+         dev->eu_count = 10;
+         dev->thread_count = 70;
+         dev->urb_size = 128 * 1024;
+      }
+   } else if (gen_is_ivb(info->devid) || gen_is_vlv(info->devid)) {
+      /*
+       * From the Ivy Bridge PRM, volume 1 part 1, page 18:
+       *
+       *     "Device             # of EUs        #Threads/EU
+       *      Ivy Bridge (GT2)   16              8
+       *      Ivy Bridge (GT1)   6               6"
+       *
+       * From the Ivy Bridge PRM, volume 4 part 2, page 17:
+       *
+       *     "URB Size    URB Rows    URB Rows when SLM Enabled
+       *      128k        4096        2048
+       *      256k        8096        4096"
+       */
       dev->gen_opaque = ILO_GEN(7);
       dev->gt = (gen_is_ivb(info->devid)) ? gen_get_ivb_gt(info->devid) : 1;
-      dev->urb_size = ((dev->gt == 2) ? 256 : 128) * 1024;
-   }
-   else if (gen_is_snb(info->devid)) {
+      if (dev->gt == 2) {
+         dev->eu_count = 16;
+         dev->thread_count = 128;
+         dev->urb_size = 256 * 1024;
+      } else {
+         dev->eu_count = 6;
+         dev->thread_count = 36;
+         dev->urb_size = 128 * 1024;
+      }
+   } else if (gen_is_snb(info->devid)) {
+      /*
+       * From the Sandy Bridge PRM, volume 1 part 1, page 22:
+       *
+       *     "Device             # of EUs        #Threads/EU
+       *      SNB GT2            12              5
+       *      SNB GT1            6               4"
+       *
+       * From the Sandy Bridge PRM, volume 4 part 2, page 18:
+       *
+       *     "[DevSNB]: The GT1 product's URB provides 32KB of storage,
+       *      arranged as 1024 256-bit rows. The GT2 product's URB provides
+       *      64KB of storage, arranged as 2048 256-bit rows. A row
+       *      corresponds in size to an EU GRF register. Read/write access to
+       *      the URB is generally supported on a row-granular basis."
+       */
       dev->gen_opaque = ILO_GEN(6);
       dev->gt = gen_get_snb_gt(info->devid);
-      dev->urb_size = ((dev->gt == 2) ? 64 : 32) * 1024;
-   }
-   else {
+      if (dev->gt == 2) {
+         dev->eu_count = 12;
+         dev->thread_count = 60;
+         dev->urb_size = 64 * 1024;
+      } else {
+         dev->eu_count = 6;
+         dev->thread_count = 24;
+         dev->urb_size = 32 * 1024;
+      }
+   } else {
       ilo_err("unknown GPU generation\n");
       return false;
    }

@@ -171,6 +171,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
    case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
    case PIPE_CAP_SAMPLER_VIEW_TARGET:
+   case PIPE_CAP_CLIP_HALFZ:
       return 1;
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
       return (class_3d >= NVE4_3D_CLASS) ? 1 : 0;
@@ -188,7 +189,6 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
    case PIPE_CAP_FAKE_SW_MSAA:
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
-   case PIPE_CAP_CLIP_HALFZ:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -406,8 +406,6 @@ nvc0_screen_destroy(struct pipe_screen *pscreen)
 
    FREE(screen->tic.entries);
 
-   nouveau_mm_destroy(screen->mm_VRAM_fe0);
-
    nouveau_object_del(&screen->eng3d);
    nouveau_object_del(&screen->eng2d);
    nouveau_object_del(&screen->m2mf);
@@ -601,7 +599,6 @@ nvc0_screen_create(struct nouveau_device *dev)
    uint32_t obj_class;
    int ret;
    unsigned i;
-   union nouveau_bo_config mm_config;
 
    switch (dev->chipset & ~0xf) {
    case 0xc0:
@@ -1013,10 +1010,6 @@ nvc0_screen_create(struct nouveau_device *dev)
 
    screen->tic.entries = CALLOC(4096, sizeof(void *));
    screen->tsc.entries = screen->tic.entries + 2048;
-
-   mm_config.nvc0.tile_mode = 0;
-   mm_config.nvc0.memtype = 0xfe0;
-   screen->mm_VRAM_fe0 = nouveau_mm_create(dev, NOUVEAU_BO_VRAM, &mm_config);
 
    if (!nvc0_blitter_create(screen))
       goto fail;

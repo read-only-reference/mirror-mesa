@@ -43,6 +43,7 @@ gallium_dri_la_LIBADD = \
 	$(top_builddir)/src/mesa/drivers/dri/common/libdricommon.la \
 	$(top_builddir)/src/mesa/drivers/dri/common/libmegadriver_stub.la \
 	$(top_builddir)/src/gallium/state_trackers/dri/libdri.la \
+	$(top_builddir)/src/gallium/auxiliary/libgalliumvl_stub.la \
 	$(top_builddir)/src/gallium/auxiliary/libgallium.la \
 	$(top_builddir)/src/gallium/drivers/galahad/libgalahad.la \
 	$(top_builddir)/src/gallium/drivers/noop/libnoop.la \
@@ -58,6 +59,11 @@ gallium_dri_la_LIBADD = \
 # Remove this hack as we come up with a cleaner solution.
 gallium_dri_la_LDFLAGS += \
 	-Wl,--allow-multiple-definition
+
+EXTRA_gallium_dri_la_DEPENDENCIES = \
+	dri.sym \
+	$(top_srcdir)/src/gallium/targets/dri-vdpau.dyn
+EXTRA_DIST = SConscript
 
 TARGET_DRIVERS =
 TARGET_CPPFLAGS =

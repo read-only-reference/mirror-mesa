@@ -76,6 +76,8 @@ public:
    explicit fs_reg(float f);
    explicit fs_reg(int32_t i);
    explicit fs_reg(uint32_t u);
+   explicit fs_reg(uint8_t vf[4]);
+   explicit fs_reg(uint8_t vf0, uint8_t vf1, uint8_t vf2, uint8_t vf3);
    fs_reg(struct brw_reg fixed_hw_reg);
    fs_reg(enum register_file file, int reg);
    fs_reg(enum register_file file, int reg, enum brw_reg_type type);
@@ -83,10 +85,8 @@ public:
    fs_reg(fs_visitor *v, const struct glsl_type *type);
 
    bool equals(const fs_reg &r) const;
-   bool is_valid_3src() const;
    bool is_contiguous() const;
 
-   fs_reg &apply_stride(unsigned stride);
    /** Smear a channel of the reg to all channels. */
    fs_reg &set_smear(unsigned subreg);
 
@@ -210,18 +210,6 @@ half(fs_reg reg, unsigned idx)
 
 static const fs_reg reg_undef;
 
-class ip_record : public exec_node {
-public:
-   DECLARE_RALLOC_CXX_OPERATORS(ip_record)
-
-   ip_record(int ip)
-   {
-      this->ip = ip;
-   }
-
-   int ip;
-};
-
 class fs_inst : public backend_instruction {
    fs_inst &operator=(const fs_inst &);
 
@@ -281,8 +269,6 @@ public:
 
    uint8_t regs_written; /**< Number of vgrfs written by a SEND message, or 1 */
    bool eot:1;
-   bool header_present:1;
-   bool shadow_compare:1;
    bool force_uncompressed:1;
    bool force_sechalf:1;
    bool pi_noperspective:1;   /**< Pixel interpolator noperspective flag */
@@ -403,6 +389,8 @@ public:
                                         uint32_t const_offset);
 
    bool run();
+   void optimize();
+   void allocate_registers();
    void assign_binding_table_offsets();
    void setup_payload_gen4();
    void setup_payload_gen6();
@@ -452,9 +440,6 @@ public:
    void no16(const char *msg, ...);
    void lower_uniform_pull_constant_loads();
    bool lower_load_payload();
-
-   void push_force_uncompressed();
-   void pop_force_uncompressed();
 
    void emit_dummy_fs();
    void emit_repclear_shader();
@@ -680,8 +665,6 @@ public:
    bool spilled_any_registers;
 
    const unsigned dispatch_width; /**< 8 or 16 */
-
-   int force_uncompressed_stack;
 };
 
 /**
@@ -702,12 +685,10 @@ public:
                 bool debug_flag);
    ~fs_generator();
 
-   const unsigned *generate_assembly(const cfg_t *simd8_cfg,
-                                     const cfg_t *simd16_cfg,
-                                     unsigned *assembly_size);
+   int generate_code(const cfg_t *cfg, int dispatch_width);
+   const unsigned *get_assembly(unsigned int *assembly_size);
 
 private:
-   void generate_code(const cfg_t *cfg);
    void fire_fb_write(fs_inst *inst,
                       struct brw_reg payload,
                       struct brw_reg implied_header,
@@ -729,9 +710,9 @@ private:
    void generate_math_g45(fs_inst *inst,
 			  struct brw_reg dst,
 			  struct brw_reg src);
-   void generate_ddx(fs_inst *inst, struct brw_reg dst, struct brw_reg src, struct brw_reg quality);
-   void generate_ddy(fs_inst *inst, struct brw_reg dst, struct brw_reg src,
-                     struct brw_reg quality, bool negate_value);
+   void generate_ddx(enum opcode op, struct brw_reg dst, struct brw_reg src);
+   void generate_ddy(enum opcode op, struct brw_reg dst, struct brw_reg src,
+                     bool negate_value);
    void generate_scratch_write(fs_inst *inst, struct brw_reg src);
    void generate_scratch_read(fs_inst *inst, struct brw_reg dst);
    void generate_scratch_read_gen7(fs_inst *inst, struct brw_reg dst);
@@ -818,6 +799,5 @@ private:
 
 bool brw_do_channel_expressions(struct exec_list *instructions);
 bool brw_do_vector_splitting(struct exec_list *instructions);
-bool brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog);
 
 struct brw_reg brw_reg_from_fs_reg(fs_reg *reg);

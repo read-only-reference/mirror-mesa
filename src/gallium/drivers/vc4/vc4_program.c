@@ -1247,7 +1247,7 @@ static void
 emit_tgsi_instruction(struct vc4_compile *c,
                       struct tgsi_full_instruction *tgsi_inst)
 {
-        struct {
+        static const struct {
                 enum qop op;
                 struct qreg (*func)(struct vc4_compile *c,
                                     struct tgsi_full_instruction *tgsi_inst,
@@ -1751,7 +1751,7 @@ emit_scaled_viewport_write(struct vc4_compile *c, struct qreg rcp_w)
 
                 xyi[i] = qir_FTOI(c, qir_FMUL(c,
                                               qir_FMUL(c,
-                                                       c->outputs[i],
+                                                       c->outputs[c->output_position_index + i],
                                                        scale),
                                               rcp_w));
         }
@@ -1766,7 +1766,7 @@ emit_zs_write(struct vc4_compile *c, struct qreg rcp_w)
         struct qreg zoffset = add_uniform(c, QUNIFORM_VIEWPORT_Z_OFFSET, 0);
 
         qir_VPM_WRITE(c, qir_FMUL(c, qir_FADD(c, qir_FMUL(c,
-                                                          c->outputs[2],
+                                                          c->outputs[c->output_position_index + 2],
                                                           zscale),
                                               zoffset),
                                   rcp_w));
@@ -1822,12 +1822,11 @@ emit_stub_vpm_read(struct vc4_compile *c)
 static void
 emit_ucp_clipdistance(struct vc4_compile *c)
 {
-        struct qreg *clipvertex;
-
+        unsigned cv;
         if (c->output_clipvertex_index != -1)
-                clipvertex = &c->outputs[c->output_clipvertex_index];
+                cv = c->output_clipvertex_index;
         else if (c->output_position_index != -1)
-                clipvertex = &c->outputs[c->output_position_index];
+                cv = c->output_position_index;
         else
                 return;
 
@@ -1846,12 +1845,14 @@ emit_ucp_clipdistance(struct vc4_compile *c)
                            plane,
                            TGSI_SWIZZLE_X);
 
+
                 struct qreg dist = qir_uniform_f(c, 0.0);
                 for (int i = 0; i < 4; i++) {
+                        struct qreg pos_chan = c->outputs[cv + i];
                         struct qreg ucp =
                                 add_uniform(c, QUNIFORM_USER_CLIP_PLANE,
                                             plane * 4 + i);
-                        dist = qir_FADD(c, dist, qir_FMUL(c, clipvertex[i], ucp));
+                        dist = qir_FADD(c, dist, qir_FMUL(c, pos_chan, ucp));
                 }
 
                 c->outputs[output_index] = dist;
@@ -1863,7 +1864,7 @@ emit_vert_end(struct vc4_compile *c,
               struct vc4_varying_semantic *fs_inputs,
               uint32_t num_fs_inputs)
 {
-        struct qreg rcp_w = qir_RCP(c, c->outputs[3]);
+        struct qreg rcp_w = qir_RCP(c, c->outputs[c->output_position_index + 3]);
 
         emit_stub_vpm_read(c);
         emit_ucp_clipdistance(c);
@@ -1900,12 +1901,12 @@ emit_vert_end(struct vc4_compile *c,
 static void
 emit_coord_end(struct vc4_compile *c)
 {
-        struct qreg rcp_w = qir_RCP(c, c->outputs[3]);
+        struct qreg rcp_w = qir_RCP(c, c->outputs[c->output_position_index + 3]);
 
         emit_stub_vpm_read(c);
 
         for (int i = 0; i < 4; i++)
-                qir_VPM_WRITE(c, c->outputs[i]);
+                qir_VPM_WRITE(c, c->outputs[c->output_position_index + i]);
 
         emit_scaled_viewport_write(c, rcp_w);
         emit_zs_write(c, rcp_w);

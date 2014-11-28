@@ -112,6 +112,18 @@ src_reg::src_reg(int32_t i)
    this->fixed_hw_reg.dw1.d = i;
 }
 
+src_reg::src_reg(uint8_t vf0, uint8_t vf1, uint8_t vf2, uint8_t vf3)
+{
+   init();
+
+   this->file = IMM;
+   this->type = BRW_REGISTER_TYPE_VF;
+   this->fixed_hw_reg.dw1.ud = (vf0 <<  0) |
+                               (vf1 <<  8) |
+                               (vf2 << 16) |
+                               (vf3 << 24);
+}
+
 src_reg::src_reg(struct brw_reg reg)
 {
    init();
@@ -340,6 +352,12 @@ vec4_visitor::opt_reduce_swizzle()
 
       /* Determine which channels of the sources are read. */
       switch (inst->opcode) {
+      case VEC4_OPCODE_PACK_BYTES:
+         swizzle[0] = 0;
+         swizzle[1] = 1;
+         swizzle[2] = 2;
+         swizzle[3] = 3;
+         break;
       case BRW_OPCODE_DP4:
       case BRW_OPCODE_DPH: /* FINISHME: DPH reads only three channels of src0,
                             *           but all four of src1.
@@ -840,6 +858,48 @@ vec4_visitor::move_push_constants_to_pull_constants()
    pack_uniform_registers();
 }
 
+/* Conditions for which we want to avoid setting the dependency control bits */
+bool
+vec4_visitor::is_dep_ctrl_unsafe(const vec4_instruction *inst)
+{
+#define IS_DWORD(reg) \
+   (reg.type == BRW_REGISTER_TYPE_UD || \
+    reg.type == BRW_REGISTER_TYPE_D)
+
+   /* From the destination hazard section of the spec:
+    * > Instructions other than send, may use this control as long as operations
+    * > that have different pipeline latencies are not mixed.
+    */
+   if (brw->gen >= 8) {
+      if (inst->opcode == BRW_OPCODE_MUL &&
+         IS_DWORD(inst->src[0]) &&
+         IS_DWORD(inst->src[1]))
+         return true;
+   }
+#undef IS_DWORD
+
+   /*
+    * mlen:
+    * In the presence of send messages, totally interrupt dependency
+    * control. They're long enough that the chance of dependency
+    * control around them just doesn't matter.
+    *
+    * predicate:
+    * From the Ivy Bridge PRM, volume 4 part 3.7, page 80:
+    * When a sequence of NoDDChk and NoDDClr are used, the last instruction that
+    * completes the scoreboard clear must have a non-zero execution mask. This
+    * means, if any kind of predication can change the execution mask or channel
+    * enable of the last instruction, the optimization must be avoided. This is
+    * to avoid instructions being shot down the pipeline when no writes are
+    * required.
+    *
+    * math:
+    * Dependency control does not work well over math instructions.
+    * NB: Discovered empirically
+    */
+   return (inst->mlen || inst->predicate || inst->is_math());
+}
+
 /**
  * Sets the dependency control fields on instructions after register
  * allocation and before the generator is run.
@@ -885,28 +945,7 @@ vec4_visitor::opt_set_dependency_control()
             assert(inst->src[i].file != MRF);
          }
 
-         /* In the presence of send messages, totally interrupt dependency
-          * control.  They're long enough that the chance of dependency
-          * control around them just doesn't matter.
-          */
-         if (inst->mlen) {
-            memset(last_grf_write, 0, sizeof(last_grf_write));
-            memset(last_mrf_write, 0, sizeof(last_mrf_write));
-            continue;
-         }
-
-         /* It looks like setting dependency control on a predicated
-          * instruction hangs the GPU.
-          */
-         if (inst->predicate) {
-            memset(last_grf_write, 0, sizeof(last_grf_write));
-            memset(last_mrf_write, 0, sizeof(last_mrf_write));
-            continue;
-         }
-
-         /* Dependency control does not work well over math instructions.
-          */
-         if (inst->is_math()) {
+         if (is_dep_ctrl_unsafe(inst)) {
             memset(last_grf_write, 0, sizeof(last_grf_write));
             memset(last_mrf_write, 0, sizeof(last_mrf_write));
             continue;
@@ -983,6 +1022,12 @@ vec4_instruction::reswizzle(int dst_writemask, int swizzle)
        opcode != BRW_OPCODE_DP3 && opcode != BRW_OPCODE_DP2) {
       for (int i = 0; i < 3; i++) {
          if (src[i].file == BAD_FILE || src[i].file == IMM)
+            continue;
+
+         /* Destination write mask doesn't correspond to source swizzle for the
+          * pack_bytes instruction.
+          */
+         if (opcode == VEC4_OPCODE_PACK_BYTES)
             continue;
 
          for (int c = 0; c < 4; c++) {
@@ -1374,6 +1419,13 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
             break;
          case BRW_REGISTER_TYPE_UD:
             fprintf(file, "%uU", inst->src[i].fixed_hw_reg.dw1.ud);
+            break;
+         case BRW_REGISTER_TYPE_VF:
+            fprintf(stderr, "[%-gF, %-gF, %-gF, %-gF]",
+                    brw_vf_to_float((inst->src[i].fixed_hw_reg.dw1.ud >>  0) & 0xff),
+                    brw_vf_to_float((inst->src[i].fixed_hw_reg.dw1.ud >>  8) & 0xff),
+                    brw_vf_to_float((inst->src[i].fixed_hw_reg.dw1.ud >> 16) & 0xff),
+                    brw_vf_to_float((inst->src[i].fixed_hw_reg.dw1.ud >> 24) & 0xff));
             break;
          default:
             fprintf(file, "???");

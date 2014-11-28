@@ -59,11 +59,6 @@ brw_upload_pull_constants(struct brw_context *brw,
    int i;
    uint32_t surf_index = prog_data->binding_table.pull_constants_start;
 
-   /* Updates the ParamaterValues[i] pointers for all parameters of the
-    * basic type of PROGRAM_STATE_VAR.
-    */
-   _mesa_load_state_parameters(&brw->ctx, prog->Parameters);
-
    if (!prog_data->nr_pull_params) {
       if (stage_state->surf_offset[surf_index]) {
 	 stage_state->surf_offset[surf_index] = 0;
@@ -71,6 +66,11 @@ brw_upload_pull_constants(struct brw_context *brw,
       }
       return;
    }
+
+   /* Updates the ParamaterValues[i] pointers for all parameters of the
+    * basic type of PROGRAM_STATE_VAR.
+    */
+   _mesa_load_state_parameters(&brw->ctx, prog->Parameters);
 
    /* CACHE_NEW_*_PROG | _NEW_PROGRAM_CONSTANTS */
    uint32_t size = prog_data->nr_pull_params * 4;
@@ -127,8 +127,9 @@ brw_upload_vs_pull_constants(struct brw_context *brw)
 
 const struct brw_tracked_state brw_vs_pull_constants = {
    .dirty = {
-      .mesa = (_NEW_PROGRAM_CONSTANTS),
-      .brw = (BRW_NEW_BATCH | BRW_NEW_VERTEX_PROGRAM),
+      .mesa = _NEW_PROGRAM_CONSTANTS,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_VERTEX_PROGRAM,
       .cache = CACHE_NEW_VS_PROG,
    },
    .emit = brw_upload_vs_pull_constants,
@@ -153,7 +154,8 @@ brw_upload_vs_ubo_surfaces(struct brw_context *brw)
 const struct brw_tracked_state brw_vs_ubo_surfaces = {
    .dirty = {
       .mesa = _NEW_PROGRAM,
-      .brw = BRW_NEW_BATCH | BRW_NEW_UNIFORM_BUFFER,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_UNIFORM_BUFFER,
       .cache = CACHE_NEW_VS_PROG,
    },
    .emit = brw_upload_vs_ubo_surfaces,
@@ -177,7 +179,8 @@ brw_upload_vs_abo_surfaces(struct brw_context *brw)
 const struct brw_tracked_state brw_vs_abo_surfaces = {
    .dirty = {
       .mesa = _NEW_PROGRAM,
-      .brw = BRW_NEW_BATCH | BRW_NEW_ATOMIC_BUFFER,
+      .brw = BRW_NEW_ATOMIC_BUFFER |
+             BRW_NEW_BATCH,
       .cache = CACHE_NEW_VS_PROG,
    },
    .emit = brw_upload_vs_abo_surfaces,

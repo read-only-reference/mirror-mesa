@@ -105,12 +105,6 @@ is_vec_negative_one(ir_constant *ir)
 }
 
 static inline bool
-is_vec_basis(ir_constant *ir)
-{
-   return (ir == NULL) ? false : ir->is_basis();
-}
-
-static inline bool
 is_valid_vec_const(ir_constant *ir)
 {
    if (ir == NULL)
@@ -537,23 +531,6 @@ ir_algebraic_visitor::handle_expression(ir_expression *ir)
       if (is_vec_zero(op_const[0]) || is_vec_zero(op_const[1]))
 	 return ir_constant::zero(mem_ctx, ir->type);
 
-      if (is_vec_basis(op_const[0])) {
-	 unsigned component = 0;
-	 for (unsigned c = 0; c < op_const[0]->type->vector_elements; c++) {
-	    if (op_const[0]->value.f[c] == 1.0)
-	       component = c;
-	 }
-	 return new(mem_ctx) ir_swizzle(ir->operands[1], component, 0, 0, 0, 1);
-      }
-      if (is_vec_basis(op_const[1])) {
-	 unsigned component = 0;
-	 for (unsigned c = 0; c < op_const[1]->type->vector_elements; c++) {
-	    if (op_const[1]->value.f[c] == 1.0)
-	       component = c;
-	 }
-	 return new(mem_ctx) ir_swizzle(ir->operands[0], component, 0, 0, 0, 1);
-      }
-
       for (int i = 0; i < 2; i++) {
          if (!op_const[i])
             continue;
@@ -572,9 +549,12 @@ ir_algebraic_visitor::handle_expression(ir_expression *ir)
          if (count >= op_const[i]->type->vector_elements)
             break;
 
+         ir_expression_operation op = count == 1 ?
+            ir_binop_mul : ir_binop_dot;
+
          /* Swizzle both operands to remove the channels that were zero. */
          return new(mem_ctx)
-            ir_expression(ir_binop_dot, glsl_type::float_type,
+            ir_expression(op, glsl_type::float_type,
                           new(mem_ctx) ir_swizzle(ir->operands[0],
                                                   components, count),
                           new(mem_ctx) ir_swizzle(ir->operands[1],

@@ -774,6 +774,7 @@ create_dumb(struct gbm_device *gbm,
    if (bo == NULL)
       return NULL;
 
+   memset(&create_arg, 0, sizeof(create_arg));
    create_arg.bpp = 32;
    create_arg.width = width;
    create_arg.height = height;
@@ -914,8 +915,11 @@ static void
 dri_destroy(struct gbm_device *gbm)
 {
    struct gbm_dri_device *dri = gbm_dri_device(gbm);
+   unsigned i;
 
    dri->core->destroyScreen(dri->screen);
+   for (i = 0; dri->driver_configs[i]; i++)
+      free((__DRIconfig *) dri->driver_configs[i]);
    free(dri->driver_configs);
    dlclose(dri->driver);
    free(dri->base.driver_name);

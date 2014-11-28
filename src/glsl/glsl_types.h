@@ -153,16 +153,9 @@ struct glsl_type {
     * these will be 0.
     */
    /*@{*/
-   unsigned vector_elements:3; /**< 1, 2, 3, or 4 vector elements. */
-   unsigned matrix_columns:3;  /**< 1, 2, 3, or 4 matrix columns. */
+   uint8_t vector_elements;    /**< 1, 2, 3, or 4 vector elements. */
+   uint8_t matrix_columns;     /**< 1, 2, 3, or 4 matrix columns. */
    /*@}*/
-
-   /**
-    * Name of the data type
-    *
-    * Will never be \c NULL.
-    */
-   const char *name;
 
    /**
     * For \c GLSL_TYPE_ARRAY, this is the length of the array.  For
@@ -171,6 +164,13 @@ struct glsl_type {
     * \c fields.structure (below).
     */
    unsigned length;
+
+   /**
+    * Name of the data type
+    *
+    * Will never be \c NULL.
+    */
+   const char *name;
 
    /**
     * Subtype of composite data types.

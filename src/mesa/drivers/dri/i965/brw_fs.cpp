@@ -581,6 +581,18 @@ fs_reg::fs_reg(uint32_t u)
    this->width = 1;
 }
 
+/** Vector float immediate value constructor. */
+fs_reg::fs_reg(uint8_t vf0, uint8_t vf1, uint8_t vf2, uint8_t vf3)
+{
+   init();
+   this->file = IMM;
+   this->type = BRW_REGISTER_TYPE_VF;
+   this->fixed_hw_reg.dw1.ud = (vf0 <<  0) |
+                               (vf1 <<  8) |
+                               (vf2 << 16) |
+                               (vf3 << 24);
+}
+
 /** Fixed brw_reg. */
 fs_reg::fs_reg(struct brw_reg fixed_hw_reg)
 {
@@ -608,16 +620,6 @@ fs_reg::equals(const fs_reg &r) const
 }
 
 fs_reg &
-fs_reg::apply_stride(unsigned stride)
-{
-   assert((this->stride * stride) <= 4 &&
-          (is_power_of_two(stride) || stride == 0) &&
-          file != HW_REG && file != IMM);
-   this->stride *= stride;
-   return *this;
-}
-
-fs_reg &
 fs_reg::set_smear(unsigned subreg)
 {
    assert(file != HW_REG && file != IMM);
@@ -630,12 +632,6 @@ bool
 fs_reg::is_contiguous() const
 {
    return stride == 1;
-}
-
-bool
-fs_reg::is_valid_3src() const
-{
-   return file == GRF || file == UNIFORM;
 }
 
 int
@@ -679,19 +675,18 @@ fs_visitor::get_timestamp()
 {
    assert(brw->gen >= 7);
 
-   fs_reg ts = fs_reg(retype(brw_vec1_reg(BRW_ARCHITECTURE_REGISTER_FILE,
+   fs_reg ts = fs_reg(retype(brw_vec4_reg(BRW_ARCHITECTURE_REGISTER_FILE,
                                           BRW_ARF_TIMESTAMP,
                                           0),
                              BRW_REGISTER_TYPE_UD));
 
-   fs_reg dst = fs_reg(this, glsl_type::uint_type);
+   fs_reg dst = fs_reg(GRF, virtual_grf_alloc(1), BRW_REGISTER_TYPE_UD, 4);
 
    fs_inst *mov = emit(MOV(dst, ts));
-   /* We want to read the 3 fields we care about (mostly field 0, but also 2)
-    * even if it's not enabled in the dispatch.
+   /* We want to read the 3 fields we care about even if it's not enabled in
+    * the dispatch.
     */
    mov->force_writemask_all = true;
-   mov->exec_size = 8;
 
    /* The caller wants the low 32 bits of the timestamp.  Since it's running
     * at the GPU clock rate of ~1.2ghz, it will roll over every ~3 seconds,
@@ -743,10 +738,9 @@ fs_visitor::emit_shader_time_end()
    test->conditional_mod = BRW_CONDITIONAL_Z;
    emit(IF(BRW_PREDICATE_NORMAL));
 
-   push_force_uncompressed();
    fs_reg start = shader_start_time;
    start.negate = true;
-   fs_reg diff = fs_reg(this, glsl_type::uint_type);
+   fs_reg diff = fs_reg(GRF, virtual_grf_alloc(1), BRW_REGISTER_TYPE_UD, 1);
    emit(ADD(diff, start, shader_end_time));
 
    /* If there were no instructions between the two timestamp gets, the diff
@@ -760,8 +754,6 @@ fs_visitor::emit_shader_time_end()
    emit(BRW_OPCODE_ELSE);
    emit_shader_time_write(reset_type, fs_reg(1u));
    emit(BRW_OPCODE_ENDIF);
-
-   pop_force_uncompressed();
 }
 
 void
@@ -881,19 +873,6 @@ fs_visitor::emit(enum opcode opcode, const fs_reg &dst,
                  fs_reg src[], int sources)
 {
    return emit(new(mem_ctx) fs_inst(opcode, dst, src, sources));
-}
-
-void
-fs_visitor::push_force_uncompressed()
-{
-   force_uncompressed_stack++;
-}
-
-void
-fs_visitor::pop_force_uncompressed()
-{
-   force_uncompressed_stack--;
-   assert(force_uncompressed_stack >= 0);
 }
 
 /**
@@ -2427,6 +2406,10 @@ fs_visitor::compute_to_mrf()
    bool progress = false;
    int next_ip = 0;
 
+   /* No MRFs on Gen >= 7. */
+   if (brw->gen >= 7)
+      return false;
+
    calculate_live_intervals();
 
    foreach_block_and_inst_safe(block, fs_inst, inst, cfg) {
@@ -3218,6 +3201,13 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
          case BRW_REGISTER_TYPE_UD:
             fprintf(file, "%uu", inst->src[i].fixed_hw_reg.dw1.ud);
             break;
+         case BRW_REGISTER_TYPE_VF:
+            fprintf(stderr, "[%-gF, %-gF, %-gF, %-gF]",
+                    brw_vf_to_float((inst->src[i].fixed_hw_reg.dw1.ud >>  0) & 0xff),
+                    brw_vf_to_float((inst->src[i].fixed_hw_reg.dw1.ud >>  8) & 0xff),
+                    brw_vf_to_float((inst->src[i].fixed_hw_reg.dw1.ud >> 16) & 0xff),
+                    brw_vf_to_float((inst->src[i].fixed_hw_reg.dw1.ud >> 24) & 0xff));
+            break;
          default:
             fprintf(file, "???");
             break;
@@ -3456,11 +3446,147 @@ fs_visitor::opt_drop_redundant_mov_to_flags()
    }
 }
 
+void
+fs_visitor::optimize()
+{
+   calculate_cfg();
+
+   split_virtual_grfs();
+
+   move_uniform_array_access_to_pull_constants();
+   assign_constant_locations();
+   demote_pull_constants();
+
+   opt_drop_redundant_mov_to_flags();
+
+#define OPT(pass, args...) do {                                         \
+      pass_num++;                                                       \
+      bool this_progress = pass(args);                                  \
+                                                                        \
+      if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER) && this_progress) {   \
+         char filename[64];                                             \
+         snprintf(filename, 64, "fs%d-%04d-%02d-%02d-" #pass,           \
+                  dispatch_width, shader_prog ? shader_prog->Name : 0, iteration, pass_num); \
+                                                                        \
+         backend_visitor::dump_instructions(filename);                  \
+      }                                                                 \
+                                                                        \
+      progress = progress || this_progress;                             \
+   } while (false)
+
+   if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER)) {
+      char filename[64];
+      snprintf(filename, 64, "fs%d-%04d-00-start",
+               dispatch_width, shader_prog ? shader_prog->Name : 0);
+
+      backend_visitor::dump_instructions(filename);
+   }
+
+   bool progress;
+   int iteration = 0;
+   do {
+      progress = false;
+      iteration++;
+      int pass_num = 0;
+
+      OPT(remove_duplicate_mrf_writes);
+
+      OPT(opt_algebraic);
+      OPT(opt_cse);
+      OPT(opt_copy_propagate);
+      OPT(opt_peephole_predicated_break);
+      OPT(dead_code_eliminate);
+      OPT(opt_peephole_sel);
+      OPT(dead_control_flow_eliminate, this);
+      OPT(opt_register_renaming);
+      OPT(opt_saturate_propagation);
+      OPT(register_coalesce);
+      OPT(compute_to_mrf);
+
+      OPT(compact_virtual_grfs);
+   } while (progress);
+
+   if (lower_load_payload()) {
+      split_virtual_grfs();
+      register_coalesce();
+      compute_to_mrf();
+      dead_code_eliminate();
+   }
+
+   lower_uniform_pull_constant_loads();
+}
+
+void
+fs_visitor::allocate_registers()
+{
+   bool allocated_without_spills;
+
+   static enum instruction_scheduler_mode pre_modes[] = {
+      SCHEDULE_PRE,
+      SCHEDULE_PRE_NON_LIFO,
+      SCHEDULE_PRE_LIFO,
+   };
+
+   /* Try each scheduling heuristic to see if it can successfully register
+    * allocate without spilling.  They should be ordered by decreasing
+    * performance but increasing likelihood of allocating.
+    */
+   for (unsigned i = 0; i < ARRAY_SIZE(pre_modes); i++) {
+      schedule_instructions(pre_modes[i]);
+
+      if (0) {
+         assign_regs_trivial();
+         allocated_without_spills = true;
+      } else {
+         allocated_without_spills = assign_regs(false);
+      }
+      if (allocated_without_spills)
+         break;
+   }
+
+   if (!allocated_without_spills) {
+      /* We assume that any spilling is worse than just dropping back to
+       * SIMD8.  There's probably actually some intermediate point where
+       * SIMD16 with a couple of spills is still better.
+       */
+      if (dispatch_width == 16) {
+         fail("Failure to register allocate.  Reduce number of "
+              "live scalar values to avoid this.");
+      } else {
+         perf_debug("Fragment shader triggered register spilling.  "
+                    "Try reducing the number of live scalar values to "
+                    "improve performance.\n");
+      }
+
+      /* Since we're out of heuristics, just go spill registers until we
+       * get an allocation.
+       */
+      while (!assign_regs(true)) {
+         if (failed)
+            break;
+      }
+   }
+
+   /* This must come after all optimization and register allocation, since
+    * it inserts dead code that happens to have side effects, and it does
+    * so based on the actual physical registers in use.
+    */
+   insert_gen4_send_dependency_workarounds();
+
+   if (failed)
+      return;
+
+   if (!allocated_without_spills)
+      schedule_instructions(SCHEDULE_POST);
+
+   if (last_scratch > 0)
+      prog_data->total_scratch = brw_get_scratch_size(last_scratch);
+}
+
 bool
 fs_visitor::run()
 {
    sanity_param_count = prog->Parameters->NumParameters;
-   bool allocated_without_spills;
 
    assign_binding_table_offsets();
 
@@ -3473,7 +3599,6 @@ fs_visitor::run()
       emit_dummy_fs();
    } else if (brw->use_rep_send && dispatch_width == 16) {
       emit_repclear_shader();
-      allocated_without_spills = true;
    } else {
       if (INTEL_DEBUG & DEBUG_SHADER_TIME)
          emit_shader_time_begin();
@@ -3495,7 +3620,7 @@ fs_visitor::run()
       bool alpha_test_func =
          (stage == MESA_SHADER_FRAGMENT) &&
          ((brw_wm_prog_key*) this->key)->alpha_test_func;
-      if (uses_kill || alpha_test_func) {
+      if (uses_kill) {
          fs_inst *discard_init = emit(FS_OPCODE_MOV_DISPATCH_TO_FLAGS);
          discard_init->flag_subreg = 1;
       }
@@ -3523,137 +3648,15 @@ fs_visitor::run()
 
       emit_fb_writes();
 
-      calculate_cfg();
-
-      split_virtual_grfs();
-
-      move_uniform_array_access_to_pull_constants();
-      assign_constant_locations();
-      demote_pull_constants();
-
-      opt_drop_redundant_mov_to_flags();
-
-#define OPT(pass, args...) do {                                            \
-      pass_num++;                                                          \
-      bool this_progress = pass(args);                                     \
-                                                                           \
-      if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER) && this_progress) {      \
-         char filename[64];                                                \
-         snprintf(filename, 64, "fs%d-%04d-%02d-%02d-" #pass,              \
-                  dispatch_width, shader_prog ? shader_prog->Name : 0, iteration, pass_num); \
-                                                                           \
-         backend_visitor::dump_instructions(filename);                     \
-      }                                                                    \
-                                                                           \
-      progress = progress || this_progress;                                \
-   } while (false)
-
-      if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER)) {
-         char filename[64];
-         snprintf(filename, 64, "fs%d-%04d-00-start",
-                  dispatch_width, shader_prog ? shader_prog->Name : 0);
-
-         backend_visitor::dump_instructions(filename);
-      }
-
-      bool progress;
-      int iteration = 0;
-      do {
-	 progress = false;
-         iteration++;
-         int pass_num = 0;
-
-         OPT(remove_duplicate_mrf_writes);
-
-         OPT(opt_algebraic);
-         OPT(opt_cse);
-         OPT(opt_copy_propagate);
-         OPT(opt_peephole_predicated_break);
-         OPT(dead_code_eliminate);
-         OPT(opt_peephole_sel);
-         OPT(dead_control_flow_eliminate, this);
-         OPT(opt_register_renaming);
-         OPT(opt_saturate_propagation);
-         OPT(register_coalesce);
-         OPT(compute_to_mrf);
-
-         OPT(compact_virtual_grfs);
-      } while (progress);
-
-      if (lower_load_payload()) {
-         split_virtual_grfs();
-         register_coalesce();
-         compute_to_mrf();
-         dead_code_eliminate();
-      }
-
-      lower_uniform_pull_constant_loads();
+      optimize();
 
       assign_curb_setup();
       assign_urb_setup();
 
-      static enum instruction_scheduler_mode pre_modes[] = {
-         SCHEDULE_PRE,
-         SCHEDULE_PRE_NON_LIFO,
-         SCHEDULE_PRE_LIFO,
-      };
+      allocate_registers();
 
-      /* Try each scheduling heuristic to see if it can successfully register
-       * allocate without spilling.  They should be ordered by decreasing
-       * performance but increasing likelihood of allocating.
-       */
-      for (unsigned i = 0; i < ARRAY_SIZE(pre_modes); i++) {
-         schedule_instructions(pre_modes[i]);
-
-         if (0) {
-            assign_regs_trivial();
-            allocated_without_spills = true;
-         } else {
-            allocated_without_spills = assign_regs(false);
-         }
-         if (allocated_without_spills)
-            break;
-      }
-
-      if (!allocated_without_spills) {
-         /* We assume that any spilling is worse than just dropping back to
-          * SIMD8.  There's probably actually some intermediate point where
-          * SIMD16 with a couple of spills is still better.
-          */
-         if (dispatch_width == 16) {
-            fail("Failure to register allocate.  Reduce number of "
-                 "live scalar values to avoid this.");
-         } else {
-            perf_debug("Fragment shader triggered register spilling.  "
-                       "Try reducing the number of live scalar values to "
-                       "improve performance.\n");
-         }
-
-         /* Since we're out of heuristics, just go spill registers until we
-          * get an allocation.
-          */
-         while (!assign_regs(true)) {
-            if (failed)
-               break;
-         }
-      }
-   }
-   assert(force_uncompressed_stack == 0);
-
-   /* This must come after all optimization and register allocation, since
-    * it inserts dead code that happens to have side effects, and it does
-    * so based on the actual physical registers in use.
-    */
-   insert_gen4_send_dependency_workarounds();
-
-   if (failed)
-      return false;
-
-   if (!allocated_without_spills)
-      schedule_instructions(SCHEDULE_POST);
-
-   if (last_scratch > 0) {
-      prog_data->total_scratch = brw_get_scratch_size(last_scratch);
+      if (failed)
+         return false;
    }
 
    if (stage == MESA_SHADER_FRAGMENT) {
@@ -3743,11 +3746,12 @@ brw_wm_fs_emit(struct brw_context *brw,
       prog_data->no_8 = false;
    }
 
-   const unsigned *assembly = NULL;
    fs_generator g(brw, mem_ctx, key, prog_data, prog, fp,
                   v.runtime_check_aads_emit, INTEL_DEBUG & DEBUG_WM);
-   assembly = g.generate_assembly(simd8_cfg, simd16_cfg,
-                                  final_assembly_size);
+   if (simd8_cfg)
+      g.generate_code(simd8_cfg, 8);
+   if (simd16_cfg)
+      prog_data->prog_offset_16 = g.generate_code(simd16_cfg, 16);
 
    if (unlikely(brw->perf_debug) && shader) {
       if (shader->compiled_once)
@@ -3760,20 +3764,18 @@ brw_wm_fs_emit(struct brw_context *brw,
       }
    }
 
-   return assembly;
+   return g.get_assembly(final_assembly_size);
 }
 
-bool
-brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
+extern "C" bool
+brw_fs_precompile(struct gl_context *ctx,
+                  struct gl_shader_program *shader_prog,
+                  struct gl_program *prog)
 {
    struct brw_context *brw = brw_context(ctx);
    struct brw_wm_prog_key key;
 
-   if (!prog->_LinkedShaders[MESA_SHADER_FRAGMENT])
-      return true;
-
-   struct gl_fragment_program *fp = (struct gl_fragment_program *)
-      prog->_LinkedShaders[MESA_SHADER_FRAGMENT]->Program;
+   struct gl_fragment_program *fp = (struct gl_fragment_program *) prog;
    struct brw_fragment_program *bfp = brw_fragment_program(fp);
    bool program_uses_dfdy = fp->UsesDFdy;
 
@@ -3831,7 +3833,7 @@ brw_fs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
    uint32_t old_prog_offset = brw->wm.base.prog_offset;
    struct brw_wm_prog_data *old_prog_data = brw->wm.prog_data;
 
-   bool success = do_wm_prog(brw, prog, bfp, &key);
+   bool success = do_wm_prog(brw, shader_prog, bfp, &key);
 
    brw->wm.base.prog_offset = old_prog_offset;
    brw->wm.prog_data = old_prog_data;

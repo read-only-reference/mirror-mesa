@@ -190,7 +190,6 @@ static const struct brw_tracked_state *gen7_atoms[] =
    &brw_state_base_address,
 
    &brw_cc_vp,
-   &gen7_cc_viewport_state_pointer, /* must do after brw_cc_vp */
    &gen7_sf_clip_viewport,
 
    &gen7_push_constant_space,
@@ -265,7 +264,6 @@ static const struct brw_tracked_state *gen8_atoms[] =
    &gen8_state_base_address,
 
    &brw_cc_vp,
-   &gen7_cc_viewport_state_pointer, /* must do after brw_cc_vp */
    &gen8_sf_clip_viewport,
 
    &gen7_push_constant_space,
@@ -333,6 +331,7 @@ static const struct brw_tracked_state *gen8_atoms[] =
    &gen8_vertices,
 
    &haswell_cut_index,
+   &gen8_pma_fix,
 };
 
 static void
@@ -389,6 +388,11 @@ void brw_init_state( struct brw_context *brw )
 
    brw->state.dirty.mesa = ~0;
    brw->state.dirty.brw = ~0ull;
+
+   /* ~0 is a nonsensical value which won't match anything we program, so
+    * the programming will take effect on the first time around.
+    */
+   brw->pma_stall_bits = ~0;
 
    /* Make sure that brw->state.dirty.brw has enough bits to hold all possible
     * dirty flags.
@@ -515,26 +519,21 @@ static struct dirty_bit_map brw_bits[] = {
    DEFINE_BIT(BRW_NEW_PUSH_CONSTANT_ALLOCATION),
    DEFINE_BIT(BRW_NEW_NUM_SAMPLES),
    DEFINE_BIT(BRW_NEW_TEXTURE_BUFFER),
+   DEFINE_BIT(BRW_NEW_GEN4_UNIT_STATE),
+   DEFINE_BIT(BRW_NEW_CC_VP),
+   DEFINE_BIT(BRW_NEW_SF_VP),
+   DEFINE_BIT(BRW_NEW_CLIP_VP),
+   DEFINE_BIT(BRW_NEW_SAMPLER_STATE_TABLE),
    {0, 0, 0}
 };
 
 static struct dirty_bit_map cache_bits[] = {
-   DEFINE_BIT(CACHE_NEW_CC_VP),
-   DEFINE_BIT(CACHE_NEW_CC_UNIT),
    DEFINE_BIT(CACHE_NEW_WM_PROG),
    DEFINE_BIT(CACHE_NEW_BLORP_BLIT_PROG),
-   DEFINE_BIT(CACHE_NEW_SAMPLER),
-   DEFINE_BIT(CACHE_NEW_WM_UNIT),
    DEFINE_BIT(CACHE_NEW_SF_PROG),
-   DEFINE_BIT(CACHE_NEW_SF_VP),
-   DEFINE_BIT(CACHE_NEW_SF_UNIT),
-   DEFINE_BIT(CACHE_NEW_VS_UNIT),
    DEFINE_BIT(CACHE_NEW_VS_PROG),
-   DEFINE_BIT(CACHE_NEW_FF_GS_UNIT),
    DEFINE_BIT(CACHE_NEW_FF_GS_PROG),
    DEFINE_BIT(CACHE_NEW_GS_PROG),
-   DEFINE_BIT(CACHE_NEW_CLIP_VP),
-   DEFINE_BIT(CACHE_NEW_CLIP_UNIT),
    DEFINE_BIT(CACHE_NEW_CLIP_PROG),
    {0, 0, 0}
 };

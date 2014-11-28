@@ -312,7 +312,7 @@ do_vs_prog(struct brw_context *brw,
                          brw->max_vs_threads);
    }
 
-   brw_upload_cache(&brw->cache, BRW_VS_PROG,
+   brw_upload_cache(&brw->cache, BRW_CACHE_VS_PROG,
 		    &c.key, sizeof(c.key),
 		    program, program_size,
 		    &prog_data, sizeof(prog_data),
@@ -345,7 +345,7 @@ brw_vs_debug_recompile(struct brw_context *brw,
 
    for (unsigned int i = 0; i < brw->cache.size; i++) {
       for (c = brw->cache.items[i]; c; c = c->next) {
-         if (c->cache_id == BRW_VS_PROG) {
+         if (c->cache_id == BRW_CACHE_VS_PROG) {
             old_key = c->key;
 
             if (old_key->base.program_string_id == key->base.program_string_id)
@@ -483,7 +483,7 @@ static void brw_upload_vs_prog(struct brw_context *brw)
       }
    }
 
-   if (!brw_search_cache(&brw->cache, BRW_VS_PROG,
+   if (!brw_search_cache(&brw->cache, BRW_CACHE_VS_PROG,
 			 &key, sizeof(key),
 			 &brw->vs.base.prog_offset, &brw->vs.prog_data)) {
       bool success =
@@ -512,18 +512,23 @@ static void brw_upload_vs_prog(struct brw_context *brw)
  */
 const struct brw_tracked_state brw_vs_prog = {
    .dirty = {
-      .mesa  = (_NEW_TRANSFORM | _NEW_POLYGON | _NEW_POINT | _NEW_LIGHT |
-		_NEW_TEXTURE |
-		_NEW_BUFFERS),
-      .brw   = (BRW_NEW_VERTEX_PROGRAM |
-		BRW_NEW_VERTICES),
+      .mesa  = _NEW_BUFFERS |
+               _NEW_LIGHT |
+               _NEW_POINT |
+               _NEW_POLYGON |
+               _NEW_TEXTURE |
+               _NEW_TRANSFORM,
+      .brw   = BRW_NEW_VERTEX_PROGRAM |
+               BRW_NEW_VERTICES,
       .cache = 0
    },
    .emit = brw_upload_vs_prog
 };
 
 bool
-brw_vs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
+brw_vs_precompile(struct gl_context *ctx,
+                  struct gl_shader_program *shader_prog,
+                  struct gl_program *prog)
 {
    struct brw_context *brw = brw_context(ctx);
    struct brw_vs_prog_key key;
@@ -531,18 +536,14 @@ brw_vs_precompile(struct gl_context *ctx, struct gl_shader_program *prog)
    struct brw_vs_prog_data *old_prog_data = brw->vs.prog_data;
    bool success;
 
-   if (!prog->_LinkedShaders[MESA_SHADER_VERTEX])
-      return true;
-
-   struct gl_vertex_program *vp = (struct gl_vertex_program *)
-      prog->_LinkedShaders[MESA_SHADER_VERTEX]->Program;
+   struct gl_vertex_program *vp = (struct gl_vertex_program *) prog;
    struct brw_vertex_program *bvp = brw_vertex_program(vp);
 
    memset(&key, 0, sizeof(key));
 
    brw_vec4_setup_prog_key_for_precompile(ctx, &key.base, bvp->id, &vp->Base);
 
-   success = do_vs_prog(brw, prog, bvp, &key);
+   success = do_vs_prog(brw, shader_prog, bvp, &key);
 
    brw->vs.base.prog_offset = old_prog_offset;
    brw->vs.prog_data = old_prog_data;

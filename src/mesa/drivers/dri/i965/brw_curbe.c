@@ -143,7 +143,8 @@ const struct brw_tracked_state brw_curbe_offsets = {
    .dirty = {
       .mesa = _NEW_TRANSFORM,
       .brw  = BRW_NEW_CONTEXT,
-      .cache = CACHE_NEW_VS_PROG | CACHE_NEW_WM_PROG
+      .cache = CACHE_NEW_VS_PROG |
+               CACHE_NEW_WM_PROG
    },
    .emit = calculate_curbe_offsets
 };
@@ -211,6 +212,8 @@ brw_upload_constant_buffer(struct brw_context *brw)
 
    /* fragment shader constants */
    if (brw->curbe.wm_size) {
+      _mesa_load_state_parameters(ctx, brw->fragment_program->Base.Parameters);
+
       /* BRW_NEW_CURBE_OFFSETS */
       GLuint offset = brw->curbe.wm_start * 16;
 
@@ -251,6 +254,8 @@ brw_upload_constant_buffer(struct brw_context *brw)
 
    /* vertex shader constants */
    if (brw->curbe.vs_size) {
+      _mesa_load_state_parameters(ctx, brw->vertex_program->Base.Parameters);
+
       GLuint offset = brw->curbe.vs_start * 16;
 
       /* CACHE_NEW_VS_PROG | _NEW_PROGRAM_CONSTANTS: copy uniform values */
@@ -304,12 +309,12 @@ emit:
 const struct brw_tracked_state brw_constant_buffer = {
    .dirty = {
       .mesa = _NEW_PROGRAM_CONSTANTS,
-      .brw  = (BRW_NEW_URB_FENCE |
-	       BRW_NEW_PSP | /* Implicit - hardware requires this, not used above */
-	       BRW_NEW_CURBE_OFFSETS |
-	       BRW_NEW_BATCH),
-      .cache = (CACHE_NEW_VS_PROG |
-                CACHE_NEW_WM_PROG)
+      .brw  = BRW_NEW_BATCH |
+              BRW_NEW_CURBE_OFFSETS |
+              BRW_NEW_PSP | /* Implicit - hardware requires this, not used above */
+              BRW_NEW_URB_FENCE,
+      .cache = CACHE_NEW_VS_PROG |
+               CACHE_NEW_WM_PROG
    },
    .emit = brw_upload_constant_buffer,
 };

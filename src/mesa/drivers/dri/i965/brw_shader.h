@@ -112,8 +112,7 @@ struct backend_instruction {
    const char *annotation;
    /** @} */
 
-   uint32_t texture_offset; /**< Texture offset bitfield */
-   uint32_t offset; /**< spill/unspill offset */
+   uint32_t offset; /**< spill/unspill offset or texture offset bitfield */
    uint8_t mlen; /**< SEND message length */
    int8_t base_mrf; /**< First MRF in the SEND message, if mlen is nonzero. */
    uint8_t target; /**< MRT target. */
@@ -127,6 +126,8 @@ struct backend_instruction {
    bool no_dd_clear:1;
    bool no_dd_check:1;
    bool saturate:1;
+   bool shadow_compare:1;
+   bool header_present:1;
 };
 
 #ifdef __cplusplus
@@ -191,3 +192,21 @@ enum brw_reg_type brw_type_for_base_type(const struct glsl_type *type);
 enum brw_conditional_mod brw_conditional_for_comparison(unsigned int op);
 uint32_t brw_math_function(enum opcode op);
 const char *brw_instruction_name(enum opcode op);
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+bool brw_vs_precompile(struct gl_context *ctx,
+                       struct gl_shader_program *shader_prog,
+                       struct gl_program *prog);
+bool brw_gs_precompile(struct gl_context *ctx,
+                       struct gl_shader_program *shader_prog,
+                       struct gl_program *prog);
+bool brw_fs_precompile(struct gl_context *ctx,
+                       struct gl_shader_program *shader_prog,
+                       struct gl_program *prog);
+
+#ifdef __cplusplus
+}
+#endif

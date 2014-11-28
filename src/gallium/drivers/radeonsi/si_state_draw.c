@@ -150,6 +150,8 @@ static void si_shader_vs(struct si_shader *shader)
 	unsigned num_sgprs, num_user_sgprs;
 	unsigned nparams, i, vgpr_comp_cnt;
 	uint64_t va;
+	unsigned window_space =
+	   shader->selector->info.properties[TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION];
 
 	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
 
@@ -218,6 +220,15 @@ static void si_shader_vs(struct si_shader *shader)
 		       S_00B12C_SO_BASE2_EN(!!shader->selector->so.stride[2]) |
 		       S_00B12C_SO_BASE3_EN(!!shader->selector->so.stride[3]) |
 		       S_00B12C_SO_EN(!!shader->selector->so.num_outputs));
+	if (window_space)
+		si_pm4_set_reg(pm4, R_028818_PA_CL_VTE_CNTL,
+			       S_028818_VTX_XY_FMT(1) | S_028818_VTX_Z_FMT(1));
+	else
+		si_pm4_set_reg(pm4, R_028818_PA_CL_VTE_CNTL,
+			       S_028818_VTX_W0_FMT(1) |
+			       S_028818_VPORT_X_SCALE_ENA(1) | S_028818_VPORT_X_OFFSET_ENA(1) |
+			       S_028818_VPORT_Y_SCALE_ENA(1) | S_028818_VPORT_Y_OFFSET_ENA(1) |
+			       S_028818_VPORT_Z_SCALE_ENA(1) | S_028818_VPORT_Z_OFFSET_ENA(1));
 }
 
 static void si_shader_ps(struct si_shader *shader)
@@ -237,20 +248,25 @@ static void si_shader_ps(struct si_shader *shader)
 	for (i = 0; i < info->num_inputs; i++) {
 		switch (info->input_semantic_name[i]) {
 		case TGSI_SEMANTIC_POSITION:
-			if (info->input_interpolate_loc[i] ==
-			    TGSI_INTERPOLATE_LOC_CENTROID) {
-				/* SPI_BARYC_CNTL.POS_FLOAT_LOCATION
-				 * Possible vaules:
-				 * 0 -> Position = pixel center (default)
-				 * 1 -> Position = pixel centroid
-				 * 2 -> Position = iterated sample number XXX:
-				 *                        What does this mean?
-			 	 */
+			/* SPI_BARYC_CNTL.POS_FLOAT_LOCATION
+			 * Possible vaules:
+			 * 0 -> Position = pixel center (default)
+			 * 1 -> Position = pixel centroid
+			 * 2 -> Position = at sample position
+			 */
+			switch (info->input_interpolate_loc[i]) {
+			case TGSI_INTERPOLATE_LOC_CENTROID:
 				spi_baryc_cntl |= S_0286E0_POS_FLOAT_LOCATION(1);
+				break;
+			case TGSI_INTERPOLATE_LOC_SAMPLE:
+				spi_baryc_cntl |= S_0286E0_POS_FLOAT_LOCATION(2);
+				break;
 			}
-			/* Fall through */
-		case TGSI_SEMANTIC_FACE:
-			continue;
+
+			if (info->properties[TGSI_PROPERTY_FS_COORD_PIXEL_CENTER] ==
+			    TGSI_FS_COORD_PIXEL_CENTER_INTEGER)
+				spi_baryc_cntl |= S_0286E0_POS_FLOAT_ULC(1);
+			break;
 		}
 	}
 
@@ -436,6 +452,8 @@ static bool si_update_draw_info_state(struct si_context *sctx,
 {
 	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
 	struct si_shader *vs = si_get_vs_state(sctx);
+	unsigned window_space =
+	   vs->selector->info.properties[TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION];
 	unsigned prim = si_conv_pipe_prim(info->mode);
 	unsigned gs_out_prim =
 		si_conv_prim_to_gs_out(sctx->gs_shader ?
@@ -496,7 +514,8 @@ static bool si_update_draw_info_state(struct si_context *sctx,
 	si_pm4_set_reg(pm4, R_028810_PA_CL_CLIP_CNTL,
 		       sctx->queued.named.rasterizer->pa_cl_clip_cntl |
 		       (vs->clip_dist_write ? 0 :
-			sctx->queued.named.rasterizer->clip_plane_enable & 0x3F));
+			sctx->queued.named.rasterizer->clip_plane_enable & 0x3F) |
+		       S_028810_CLIP_DISABLE(window_space));
 
 	si_pm4_set_state(sctx, draw_info, pm4);
 	return true;

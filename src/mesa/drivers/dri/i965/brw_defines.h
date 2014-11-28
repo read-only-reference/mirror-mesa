@@ -744,17 +744,21 @@ enum PACKED brw_conditional_mod {
 #define BRW_DEPENDENCY_NOTCHECKED     2
 #define BRW_DEPENDENCY_DISABLE        3
 
-#define BRW_EXECUTE_1     0
-#define BRW_EXECUTE_2     1
-#define BRW_EXECUTE_4     2
-#define BRW_EXECUTE_8     3
-#define BRW_EXECUTE_16    4
-#define BRW_EXECUTE_32    5
+enum PACKED brw_execution_size {
+   BRW_EXECUTE_1  = 0,
+   BRW_EXECUTE_2  = 1,
+   BRW_EXECUTE_4  = 2,
+   BRW_EXECUTE_8  = 3,
+   BRW_EXECUTE_16 = 4,
+   BRW_EXECUTE_32 = 5,
+};
 
-#define BRW_HORIZONTAL_STRIDE_0   0
-#define BRW_HORIZONTAL_STRIDE_1   1
-#define BRW_HORIZONTAL_STRIDE_2   2
-#define BRW_HORIZONTAL_STRIDE_4   3
+enum PACKED brw_horizontal_stride {
+   BRW_HORIZONTAL_STRIDE_0 = 0,
+   BRW_HORIZONTAL_STRIDE_1 = 1,
+   BRW_HORIZONTAL_STRIDE_2 = 2,
+   BRW_HORIZONTAL_STRIDE_4 = 3,
+};
 
 #define BRW_INSTRUCTION_NORMAL    0
 #define BRW_INSTRUCTION_SATURATE  1
@@ -816,6 +820,7 @@ enum opcode {
    BRW_OPCODE_MSAVE =	44,  /**< Pre-Gen6 */
    BRW_OPCODE_MRESTORE = 45, /**< Pre-Gen6 */
    BRW_OPCODE_PUSH =	46,  /**< Pre-Gen6 */
+   BRW_OPCODE_GOTO =	46,  /**< Gen8+    */
    BRW_OPCODE_POP =	47,  /**< Pre-Gen6 */
    BRW_OPCODE_WAIT =	48,
    BRW_OPCODE_SEND =	49,
@@ -903,8 +908,16 @@ enum opcode {
    SHADER_OPCODE_GEN4_SCRATCH_WRITE,
    SHADER_OPCODE_GEN7_SCRATCH_READ,
 
-   FS_OPCODE_DDX,
-   FS_OPCODE_DDY,
+   VEC4_OPCODE_PACK_BYTES,
+
+   FS_OPCODE_DDX_COARSE,
+   FS_OPCODE_DDX_FINE,
+   /**
+    * Compute dFdy(), dFdyCoarse(), or dFdyFine().
+    * src1 is an immediate storing the key->render_to_fbo boolean.
+    */
+   FS_OPCODE_DDY_COARSE,
+   FS_OPCODE_DDY_FINE,
    FS_OPCODE_PIXEL_X,
    FS_OPCODE_PIXEL_Y,
    FS_OPCODE_CINTERP,
@@ -1086,12 +1099,6 @@ enum opcode {
    GS_OPCODE_FF_SYNC_SET_PRIMITIVES,
 };
 
-enum brw_derivative_quality {
-   BRW_DERIVATIVE_BY_HINT = 0,
-   BRW_DERIVATIVE_FINE = 1,
-   BRW_DERIVATIVE_COARSE = 2,
-};
-
 enum brw_urb_write_flags {
    BRW_URB_WRITE_NO_FLAGS = 0,
 
@@ -1248,23 +1255,24 @@ enum PACKED brw_predicate {
 #define BRW_THREAD_ATOMIC     1
 #define BRW_THREAD_SWITCH     2
 
-#define BRW_VERTICAL_STRIDE_0                 0
-#define BRW_VERTICAL_STRIDE_1                 1
-#define BRW_VERTICAL_STRIDE_2                 2
-#define BRW_VERTICAL_STRIDE_4                 3
-#define BRW_VERTICAL_STRIDE_8                 4
-#define BRW_VERTICAL_STRIDE_16                5
-#define BRW_VERTICAL_STRIDE_32                6
-#define BRW_VERTICAL_STRIDE_64                7
-#define BRW_VERTICAL_STRIDE_128               8
-#define BRW_VERTICAL_STRIDE_256               9
-#define BRW_VERTICAL_STRIDE_ONE_DIMENSIONAL   0xF
+enum PACKED brw_vertical_stride {
+   BRW_VERTICAL_STRIDE_0               = 0,
+   BRW_VERTICAL_STRIDE_1               = 1,
+   BRW_VERTICAL_STRIDE_2               = 2,
+   BRW_VERTICAL_STRIDE_4               = 3,
+   BRW_VERTICAL_STRIDE_8               = 4,
+   BRW_VERTICAL_STRIDE_16              = 5,
+   BRW_VERTICAL_STRIDE_32              = 6,
+   BRW_VERTICAL_STRIDE_ONE_DIMENSIONAL = 0xF,
+};
 
-#define BRW_WIDTH_1       0
-#define BRW_WIDTH_2       1
-#define BRW_WIDTH_4       2
-#define BRW_WIDTH_8       3
-#define BRW_WIDTH_16      4
+enum PACKED brw_width {
+   BRW_WIDTH_1  = 0,
+   BRW_WIDTH_2  = 1,
+   BRW_WIDTH_4  = 2,
+   BRW_WIDTH_8  = 3,
+   BRW_WIDTH_16 = 4,
+};
 
 #define BRW_STATELESS_BUFFER_BOUNDARY_1K      0
 #define BRW_STATELESS_BUFFER_BOUNDARY_2K      1
@@ -1800,6 +1808,7 @@ enum brw_message_target {
 # define GEN6_SF_SWIZZLE_ENABLE				(1 << 21)
 # define GEN6_SF_POINT_SPRITE_UPPERLEFT			(0 << 20)
 # define GEN6_SF_POINT_SPRITE_LOWERLEFT			(1 << 20)
+# define GEN9_SF_LINE_WIDTH_SHIFT			12 /* U11.7 */
 # define GEN6_SF_URB_ENTRY_READ_LENGTH_SHIFT		11
 # define GEN6_SF_URB_ENTRY_READ_OFFSET_SHIFT		4
 /* DW2 */
@@ -1904,10 +1913,17 @@ enum brw_message_target {
 /* DW12: attr 0-7 wrap shortest enables */
 /* DW13: attr 8-16 wrap shortest enables */
 
+/* DW4-5: Attribute active components (gen9) */
+#define GEN9_SBE_ACTIVE_COMPONENT_NONE			0
+#define GEN9_SBE_ACTIVE_COMPONENT_XY			1
+#define GEN9_SBE_ACTIVE_COMPONENT_XYZ			2
+#define GEN9_SBE_ACTIVE_COMPONENT_XYZW			3
+
 #define _3DSTATE_SBE_SWIZ                       0x7851 /* GEN8+ */
 
 #define _3DSTATE_RASTER                         0x7850 /* GEN8+ */
 /* DW1 */
+# define GEN9_RASTER_VIEWPORT_Z_FAR_CLIP_TEST_ENABLE    (1 << 26)
 # define GEN8_RASTER_FRONT_WINDING_CCW                  (1 << 21)
 # define GEN8_RASTER_CULL_BOTH                          (0 << 16)
 # define GEN8_RASTER_CULL_NONE                          (1 << 16)
@@ -1918,6 +1934,7 @@ enum brw_message_target {
 # define GEN8_RASTER_LINE_AA_ENABLE                     (1 << 2)
 # define GEN8_RASTER_SCISSOR_ENABLE                     (1 << 1)
 # define GEN8_RASTER_VIEWPORT_Z_CLIP_TEST_ENABLE        (1 << 0)
+# define GEN9_RASTER_VIEWPORT_Z_NEAR_CLIP_TEST_ENABLE   (1 << 0)
 
 /* Gen8 BLEND_STATE */
 /* DW0 */
@@ -2028,6 +2045,11 @@ enum brw_message_target {
 # define GEN8_WM_DS_BF_STENCIL_TEST_MASK_SHIFT          8
 # define GEN8_WM_DS_BF_STENCIL_WRITE_MASK_MASK          INTEL_MASK(7, 0)
 # define GEN8_WM_DS_BF_STENCIL_WRITE_MASK_SHIFT         0
+/* DW3 */
+# define GEN9_WM_DS_STENCIL_REF_MASK                    INTEL_MASK(15, 8)
+# define GEN9_WM_DS_STENCIL_REF_SHIFT                   8
+# define GEN9_WM_DS_BF_STENCIL_REF_MASK                 INTEL_MASK(7, 0)
+# define GEN9_WM_DS_BF_STENCIL_REF_SHIFT                0
 
 #define _3DSTATE_PS_EXTRA                       0x784F /* GEN8+ */
 /* DW1 */
@@ -2393,5 +2415,12 @@ enum brw_wm_barycentric_interp_mode {
 #define BDW_MOCS_WB  0x78
 #define BDW_MOCS_WT  0x58
 #define BDW_MOCS_PTE 0x18
+
+/* Skylake: MOCS is now an index into an array of 64 different configurable
+ * cache settings.  We still use only either write-back or write-through; and
+ * rely on the documented default values.
+ */
+#define SKL_MOCS_WB 9
+#define SKL_MOCS_WT 5
 
 #endif

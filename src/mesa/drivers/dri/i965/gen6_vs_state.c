@@ -58,15 +58,15 @@ gen6_upload_push_constants(struct brw_context *brw,
 {
    struct gl_context *ctx = &brw->ctx;
 
-   /* Updates the ParamaterValues[i] pointers for all parameters of the
-    * basic type of PROGRAM_STATE_VAR.
-    */
-   /* XXX: Should this happen somewhere before to get our state flag set? */
-   _mesa_load_state_parameters(ctx, prog->Parameters);
-
    if (prog_data->nr_params == 0) {
       stage_state->push_const_size = 0;
    } else {
+      /* Updates the ParamaterValues[i] pointers for all parameters of the
+       * basic type of PROGRAM_STATE_VAR.
+       */
+      /* XXX: Should this happen somewhere before to get our state flag set? */
+      _mesa_load_state_parameters(ctx, prog->Parameters);
+
       gl_constant_value *param;
       int i;
 
@@ -147,10 +147,11 @@ gen6_upload_vs_push_constants(struct brw_context *brw)
 
 const struct brw_tracked_state gen6_vs_push_constants = {
    .dirty = {
-      .mesa  = _NEW_TRANSFORM | _NEW_PROGRAM_CONSTANTS,
-      .brw   = (BRW_NEW_BATCH |
-                BRW_NEW_VERTEX_PROGRAM |
-                BRW_NEW_PUSH_CONSTANT_ALLOCATION),
+      .mesa  = _NEW_PROGRAM_CONSTANTS |
+               _NEW_TRANSFORM,
+      .brw   = BRW_NEW_BATCH |
+               BRW_NEW_PUSH_CONSTANT_ALLOCATION |
+               BRW_NEW_VERTEX_PROGRAM,
       .cache = CACHE_NEW_VS_PROG,
    },
    .emit = gen6_upload_vs_push_constants,
@@ -259,11 +260,12 @@ upload_vs_state(struct brw_context *brw)
 
 const struct brw_tracked_state gen6_vs_state = {
    .dirty = {
-      .mesa  = _NEW_TRANSFORM | _NEW_PROGRAM_CONSTANTS,
-      .brw   = (BRW_NEW_CONTEXT |
-		BRW_NEW_VERTEX_PROGRAM |
-		BRW_NEW_BATCH |
-                BRW_NEW_PUSH_CONSTANT_ALLOCATION),
+      .mesa  = _NEW_PROGRAM_CONSTANTS |
+               _NEW_TRANSFORM,
+      .brw   = BRW_NEW_BATCH |
+               BRW_NEW_CONTEXT |
+               BRW_NEW_PUSH_CONSTANT_ALLOCATION |
+               BRW_NEW_VERTEX_PROGRAM,
       .cache = CACHE_NEW_VS_PROG
    },
    .emit = upload_vs_state,

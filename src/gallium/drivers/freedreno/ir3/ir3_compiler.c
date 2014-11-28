@@ -53,6 +53,7 @@ struct ir3_compile_context {
 	bool free_tokens;
 	struct ir3 *ir;
 	struct ir3_shader_variant *so;
+	uint16_t integer_s;
 
 	struct ir3_block *block;
 	struct ir3_instruction *current_instr;
@@ -159,11 +160,13 @@ compile_init(struct ir3_compile_context *ctx, struct ir3_shader_variant *so,
 		lconfig.saturate_s = so->key.fsaturate_s;
 		lconfig.saturate_t = so->key.fsaturate_t;
 		lconfig.saturate_r = so->key.fsaturate_r;
+		ctx->integer_s = so->key.finteger_s;
 		break;
 	case SHADER_VERTEX:
 		lconfig.saturate_s = so->key.vsaturate_s;
 		lconfig.saturate_t = so->key.vsaturate_t;
 		lconfig.saturate_r = so->key.vsaturate_r;
+		ctx->integer_s = so->key.vinteger_s;
 		break;
 	}
 
@@ -1345,7 +1348,10 @@ trans_samp(const struct instr_translater *t,
 	}
 
 	instr = instr_create(ctx, 5, t->opc);
-	instr->cat5.type = get_ftype(ctx);
+	if (ctx->integer_s & (1 << samp->Index))
+		instr->cat5.type = get_utype(ctx);
+	else
+		instr->cat5.type = get_ftype(ctx);
 	instr->cat5.samp = samp->Index;
 	instr->cat5.tex  = samp->Index;
 	instr->flags |= tinf.flags;
@@ -2112,7 +2118,7 @@ trans_cov(const struct instr_translater *t,
  *  madsh.m16 tmp1, a, b, tmp0 (mul-add shift high mix, i.e. ah * bl << 16)
  *  madsh.m16 dst, b, a, tmp1 (i.e. al * bh << 16)
  *
- * For UMAD, replace first mull.u with mad.u16.
+ * For UMAD, add in the extra argument after mull.u.
  */
 static void
 trans_umul(const struct instr_translater *t,
@@ -2135,16 +2141,16 @@ trans_umul(const struct instr_translater *t,
 	if (is_rel_or_const(b))
 		b = get_unconst(ctx, b);
 
-	if (t->tgsi_opc == TGSI_OPCODE_UMUL) {
-		/* mull.u tmp0, a, b */
-		instr = instr_create(ctx, 2, OPC_MULL_U);
-		vectorize(ctx, instr, &tmp0_dst, 2, a, 0, b, 0);
-	} else {
+	/* mull.u tmp0, a, b */
+	instr = instr_create(ctx, 2, OPC_MULL_U);
+	vectorize(ctx, instr, &tmp0_dst, 2, a, 0, b, 0);
+
+	if (t->tgsi_opc == TGSI_OPCODE_UMAD) {
 		struct tgsi_src_register *c = &inst->Src[2].Register;
 
-		/* mad.u16 tmp0, a, b, c */
-		instr = instr_create(ctx, 3, OPC_MAD_U16);
-		vectorize(ctx, instr, &tmp0_dst, 3, a, 0, b, 0, c, 0);
+		/* add.u tmp0, tmp0, c */
+		instr = instr_create(ctx, 2, OPC_ADD_U);
+		vectorize(ctx, instr, &tmp0_dst, 2, tmp0_src, 0, c, 0);
 	}
 
 	/* madsh.m16 tmp1, a, b, tmp0 */
@@ -2350,6 +2356,9 @@ trans_idiv(const struct instr_translater *t,
 	if (t->tgsi_opc == TGSI_OPCODE_MOD || t->tgsi_opc == TGSI_OPCODE_UMOD) {
 		/* The division result will have ended up in q. */
 
+		if (is_rel_or_const(b))
+			b = get_unconst(ctx, b);
+
 		/* mull.u r, q, b */
 		instr = instr_create(ctx, 2, OPC_MULL_U);
 		vectorize(ctx, instr, &r_dst, 2, q_src, 0, b, 0);
@@ -2554,13 +2563,13 @@ static const struct instr_translater translaters[TGSI_OPCODE_LAST] = {
 	INSTR(ABS,          instr_cat2, .opc = OPC_ABSNEG_F),
 	INSTR(COS,          instr_cat4, .opc = OPC_COS),
 	INSTR(SIN,          instr_cat4, .opc = OPC_SIN),
-	INSTR(TEX,          trans_samp, .opc = OPC_SAM, .arg = TGSI_OPCODE_TEX),
-	INSTR(TXP,          trans_samp, .opc = OPC_SAM, .arg = TGSI_OPCODE_TXP),
-	INSTR(TXB,          trans_samp, .opc = OPC_SAMB, .arg = TGSI_OPCODE_TXB),
-	INSTR(TXB2,         trans_samp, .opc = OPC_SAMB, .arg = TGSI_OPCODE_TXB2),
-	INSTR(TXL,          trans_samp, .opc = OPC_SAML, .arg = TGSI_OPCODE_TXL),
-	INSTR(TXD,          trans_samp, .opc = OPC_SAMGQ, .arg = TGSI_OPCODE_TXD),
-	INSTR(TXF,          trans_samp, .opc = OPC_ISAML, .arg = TGSI_OPCODE_TXF),
+	INSTR(TEX,          trans_samp, .opc = OPC_SAM),
+	INSTR(TXP,          trans_samp, .opc = OPC_SAM),
+	INSTR(TXB,          trans_samp, .opc = OPC_SAMB),
+	INSTR(TXB2,         trans_samp, .opc = OPC_SAMB),
+	INSTR(TXL,          trans_samp, .opc = OPC_SAML),
+	INSTR(TXD,          trans_samp, .opc = OPC_SAMGQ),
+	INSTR(TXF,          trans_samp, .opc = OPC_ISAML),
 	INSTR(TXQ,          trans_txq),
 	INSTR(DDX,          trans_deriv, .opc = OPC_DSX),
 	INSTR(DDY,          trans_deriv, .opc = OPC_DSY),

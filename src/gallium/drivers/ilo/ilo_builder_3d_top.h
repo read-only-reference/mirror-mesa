@@ -35,7 +35,7 @@
 #include "ilo_resource.h"
 #include "ilo_shader.h"
 #include "ilo_state.h"
-#include "ilo_state_gen.h"
+#include "ilo_state_3d.h"
 #include "ilo_builder.h"
 
 static inline void
@@ -311,9 +311,9 @@ gen7_3DSTATE_URB_GS(struct ilo_builder *builder,
 }
 
 static inline void
-gen7_3DSTATE_VF(struct ilo_builder *builder,
-                bool enable_cut_index,
-                uint32_t cut_index)
+gen75_3DSTATE_VF(struct ilo_builder *builder,
+                 bool enable_cut_index,
+                 uint32_t cut_index)
 {
    const uint8_t cmd_len = 2;
    uint32_t *dw;
@@ -550,23 +550,10 @@ gen6_3DSTATE_VS(struct ilo_builder *builder,
                 const struct ilo_shader_state *vs)
 {
    const uint8_t cmd_len = 6;
-   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_VS) | (cmd_len - 2);
    const struct ilo_shader_cso *cso;
    uint32_t dw2, dw4, dw5, *dw;
 
    ILO_DEV_ASSERT(builder->dev, 6, 7.5);
-
-   if (!vs) {
-      ilo_builder_batch_pointer(builder, cmd_len, &dw);
-      dw[0] = dw0;
-      dw[1] = 0;
-      dw[2] = 0;
-      dw[3] = 0;
-      dw[4] = 0;
-      dw[5] = 0;
-
-      return;
-   }
 
    cso = ilo_shader_get_kernel_cso(vs);
    dw2 = cso->payload[0];
@@ -574,7 +561,8 @@ gen6_3DSTATE_VS(struct ilo_builder *builder,
    dw5 = cso->payload[2];
 
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
-   dw[0] = dw0;
+
+   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_VS) | (cmd_len - 2);
    dw[1] = ilo_shader_get_kernel_offset(vs);
    dw[2] = dw2;
    dw[3] = 0; /* scratch */
@@ -583,15 +571,30 @@ gen6_3DSTATE_VS(struct ilo_builder *builder,
 }
 
 static inline void
-gen7_3DSTATE_HS(struct ilo_builder *builder,
-                const struct ilo_shader_state *hs)
+gen6_disable_3DSTATE_VS(struct ilo_builder *builder)
+{
+   const uint8_t cmd_len = 6;
+   uint32_t *dw;
+
+   ILO_DEV_ASSERT(builder->dev, 6, 7.5);
+
+   ilo_builder_batch_pointer(builder, cmd_len, &dw);
+
+   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_VS) | (cmd_len - 2);
+   dw[1] = 0;
+   dw[2] = 0;
+   dw[3] = 0;
+   dw[4] = 0;
+   dw[5] = 0;
+}
+
+static inline void
+gen7_disable_3DSTATE_HS(struct ilo_builder *builder)
 {
    const uint8_t cmd_len = 7;
    uint32_t *dw;
 
    ILO_DEV_ASSERT(builder->dev, 7, 7.5);
-
-   assert(!hs);
 
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
@@ -621,15 +624,12 @@ gen7_3DSTATE_TE(struct ilo_builder *builder)
 }
 
 static inline void
-gen7_3DSTATE_DS(struct ilo_builder *builder,
-                const struct ilo_shader_state *ds)
+gen7_disable_3DSTATE_DS(struct ilo_builder *builder)
 {
    const uint8_t cmd_len = 6;
    uint32_t *dw;
 
    ILO_DEV_ASSERT(builder->dev, 7, 7.5);
-
-   assert(!ds);
 
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
@@ -643,69 +643,94 @@ gen7_3DSTATE_DS(struct ilo_builder *builder,
 
 static inline void
 gen6_3DSTATE_GS(struct ilo_builder *builder,
-                const struct ilo_shader_state *gs,
-                const struct ilo_shader_state *vs,
-                int verts_per_prim)
+                const struct ilo_shader_state *gs)
 {
    const uint8_t cmd_len = 7;
-   uint32_t dw1, dw2, dw4, dw5, dw6, *dw;
+   const struct ilo_shader_cso *cso;
+   uint32_t dw2, dw4, dw5, dw6, *dw;
 
    ILO_DEV_ASSERT(builder->dev, 6, 6);
 
-   if (gs) {
-      const struct ilo_shader_cso *cso;
-
-      dw1 = ilo_shader_get_kernel_offset(gs);
-
-      cso = ilo_shader_get_kernel_cso(gs);
-      dw2 = cso->payload[0];
-      dw4 = cso->payload[1];
-      dw5 = cso->payload[2];
-      dw6 = cso->payload[3];
-   }
-   else if (vs && ilo_shader_get_kernel_param(vs, ILO_KERNEL_VS_GEN6_SO)) {
-      struct ilo_shader_cso cso;
-      enum ilo_kernel_param param;
-
-      switch (verts_per_prim) {
-      case 1:
-         param = ILO_KERNEL_VS_GEN6_SO_POINT_OFFSET;
-         break;
-      case 2:
-         param = ILO_KERNEL_VS_GEN6_SO_LINE_OFFSET;
-         break;
-      default:
-         param = ILO_KERNEL_VS_GEN6_SO_TRI_OFFSET;
-         break;
-      }
-
-      dw1 = ilo_shader_get_kernel_offset(vs) +
-         ilo_shader_get_kernel_param(vs, param);
-
-      /* cannot use VS's CSO */
-      ilo_gpe_init_gs_cso_gen6(builder->dev, vs, &cso);
-      dw2 = cso.payload[0];
-      dw4 = cso.payload[1];
-      dw5 = cso.payload[2];
-      dw6 = cso.payload[3];
-   }
-   else {
-      dw1 = 0;
-      dw2 = 0;
-      dw4 = 1 << GEN6_GS_DW4_URB_READ_LEN__SHIFT;
-      dw5 = GEN6_GS_DW5_STATISTICS;
-      dw6 = 0;
-   }
+   cso = ilo_shader_get_kernel_cso(gs);
+   dw2 = cso->payload[0];
+   dw4 = cso->payload[1];
+   dw5 = cso->payload[2];
+   dw6 = cso->payload[3];
 
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
    dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_GS) | (cmd_len - 2);
-   dw[1] = dw1;
+   dw[1] = ilo_shader_get_kernel_offset(gs);
+   dw[2] = dw2;
+   dw[3] = 0; /* scratch */
+   dw[4] = dw4;
+   dw[5] = dw5;
+   dw[6] = dw6;
+}
+
+static inline void
+gen6_so_3DSTATE_GS(struct ilo_builder *builder,
+                   const struct ilo_shader_state *vs,
+                   int verts_per_prim)
+{
+   const uint8_t cmd_len = 7;
+   struct ilo_shader_cso cso;
+   enum ilo_kernel_param param;
+   uint32_t dw2, dw4, dw5, dw6, *dw;
+
+   ILO_DEV_ASSERT(builder->dev, 6, 6);
+
+   assert(ilo_shader_get_kernel_param(vs, ILO_KERNEL_VS_GEN6_SO));
+
+   switch (verts_per_prim) {
+   case 1:
+      param = ILO_KERNEL_VS_GEN6_SO_POINT_OFFSET;
+      break;
+   case 2:
+      param = ILO_KERNEL_VS_GEN6_SO_LINE_OFFSET;
+      break;
+   default:
+      param = ILO_KERNEL_VS_GEN6_SO_TRI_OFFSET;
+      break;
+   }
+
+   /* cannot use VS's CSO */
+   ilo_gpe_init_gs_cso(builder->dev, vs, &cso);
+   dw2 = cso.payload[0];
+   dw4 = cso.payload[1];
+   dw5 = cso.payload[2];
+   dw6 = cso.payload[3];
+
+   ilo_builder_batch_pointer(builder, cmd_len, &dw);
+
+   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_GS) | (cmd_len - 2);
+   dw[1] = ilo_shader_get_kernel_offset(vs) +
+           ilo_shader_get_kernel_param(vs, param);
    dw[2] = dw2;
    dw[3] = 0;
    dw[4] = dw4;
    dw[5] = dw5;
    dw[6] = dw6;
+}
+
+static inline void
+gen6_disable_3DSTATE_GS(struct ilo_builder *builder)
+{
+   const uint8_t cmd_len = 7;
+   uint32_t *dw;
+
+   ILO_DEV_ASSERT(builder->dev, 6, 6);
+
+   ilo_builder_batch_pointer(builder, cmd_len, &dw);
+
+   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_GS) | (cmd_len - 2);
+   dw[1] = 0;
+   dw[2] = 0;
+   dw[3] = 0;
+   /* honor the valid range of URB read length */
+   dw[4] = 1 << GEN6_GS_DW4_URB_READ_LEN__SHIFT;
+   dw[5] = GEN6_GS_DW5_STATISTICS;
+   dw[6] = 0;
 }
 
 static inline void
@@ -737,23 +762,10 @@ gen7_3DSTATE_GS(struct ilo_builder *builder,
                 const struct ilo_shader_state *gs)
 {
    const uint8_t cmd_len = 7;
-   const uint32_t dw0 = GEN6_RENDER_CMD(3D, 3DSTATE_GS) | (cmd_len - 2);
    const struct ilo_shader_cso *cso;
    uint32_t dw2, dw4, dw5, *dw;
 
    ILO_DEV_ASSERT(builder->dev, 7, 7.5);
-
-   if (!gs) {
-      ilo_builder_batch_pointer(builder, cmd_len, &dw);
-      dw[0] = dw0;
-      dw[1] = 0;
-      dw[2] = 0;
-      dw[3] = 0;
-      dw[4] = 0;
-      dw[5] = GEN7_GS_DW5_STATISTICS;
-      dw[6] = 0;
-      return;
-   }
 
    cso = ilo_shader_get_kernel_cso(gs);
    dw2 = cso->payload[0];
@@ -762,7 +774,7 @@ gen7_3DSTATE_GS(struct ilo_builder *builder,
 
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
-   dw[0] = dw0;
+   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_GS) | (cmd_len - 2);
    dw[1] = ilo_shader_get_kernel_offset(gs);
    dw[2] = dw2;
    dw[3] = 0; /* scratch */
@@ -772,62 +784,70 @@ gen7_3DSTATE_GS(struct ilo_builder *builder,
 }
 
 static inline void
-gen7_3DSTATE_STREAMOUT(struct ilo_builder *builder,
-                       unsigned buffer_mask,
-                       int vertex_attrib_count,
-                       bool rasterizer_discard)
+gen7_disable_3DSTATE_GS(struct ilo_builder *builder)
 {
-   const uint8_t cmd_len = 3;
-   const bool enable = (buffer_mask != 0);
-   const uint32_t dw0 = GEN7_RENDER_CMD(3D, 3DSTATE_STREAMOUT) |
-                        (cmd_len - 2);
-   uint32_t dw1, dw2, *dw;
-   int read_len;
+   const uint8_t cmd_len = 7;
+   uint32_t *dw;
 
    ILO_DEV_ASSERT(builder->dev, 7, 7.5);
 
-   if (!enable) {
-      dw1 = 0 << GEN7_SO_DW1_RENDER_STREAM_SELECT__SHIFT;
-      if (rasterizer_discard)
-         dw1 |= GEN7_SO_DW1_RENDER_DISABLE;
+   ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
-      dw2 = 0;
+   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_GS) | (cmd_len - 2);
+   dw[1] = 0;
+   dw[2] = 0;
+   dw[3] = 0;
+   dw[4] = 0;
+   dw[5] = GEN7_GS_DW5_STATISTICS;
+   dw[6] = 0;
+}
 
-      ilo_builder_batch_pointer(builder, cmd_len, &dw);
-      dw[0] = dw0;
-      dw[1] = dw1;
-      dw[2] = dw2;
-      return;
-   }
+static inline void
+gen7_3DSTATE_STREAMOUT(struct ilo_builder *builder,
+                       int render_stream,
+                       bool render_disable,
+                       unsigned buffer_mask,
+                       int vertex_attrib_count)
+{
+   const uint8_t cmd_len = 3;
+   uint32_t dw1, dw2, *dw;
 
-   read_len = (vertex_attrib_count + 1) / 2;
-   if (!read_len)
-      read_len = 1;
+   ILO_DEV_ASSERT(builder->dev, 7, 7.5);
 
-   dw1 = GEN7_SO_DW1_SO_ENABLE |
-         0 << GEN7_SO_DW1_RENDER_STREAM_SELECT__SHIFT |
-         GEN7_SO_DW1_STATISTICS |
-         buffer_mask << 8;
-
-   if (rasterizer_discard)
+   dw1 = render_stream << GEN7_SO_DW1_RENDER_STREAM_SELECT__SHIFT;
+   if (render_disable)
       dw1 |= GEN7_SO_DW1_RENDER_DISABLE;
 
-   /* API_OPENGL */
-   if (true)
-      dw1 |= GEN7_SO_DW1_REORDER_TRAILING;
+   dw2 = 0;
 
-   dw2 = 0 << GEN7_SO_DW2_STREAM3_READ_OFFSET__SHIFT |
-         0 << GEN7_SO_DW2_STREAM3_READ_LEN__SHIFT |
-         0 << GEN7_SO_DW2_STREAM2_READ_OFFSET__SHIFT |
-         0 << GEN7_SO_DW2_STREAM2_READ_LEN__SHIFT |
-         0 << GEN7_SO_DW2_STREAM1_READ_OFFSET__SHIFT |
-         0 << GEN7_SO_DW2_STREAM1_READ_LEN__SHIFT |
-         0 << GEN7_SO_DW2_STREAM0_READ_OFFSET__SHIFT |
-         (read_len - 1) << GEN7_SO_DW2_STREAM0_READ_LEN__SHIFT;
+   if (buffer_mask) {
+      int read_len;
+
+      read_len = (vertex_attrib_count + 1) / 2;
+      if (!read_len)
+         read_len = 1;
+
+      dw1 |= GEN7_SO_DW1_SO_ENABLE |
+             GEN7_SO_DW1_STATISTICS |
+             buffer_mask << GEN7_SO_DW1_BUFFER_ENABLES__SHIFT;
+
+      /* API_OPENGL */
+      if (true)
+         dw1 |= GEN7_SO_DW1_REORDER_TRAILING;
+
+      dw2 = 0 << GEN7_SO_DW2_STREAM3_READ_OFFSET__SHIFT |
+            (read_len - 1) << GEN7_SO_DW2_STREAM3_READ_LEN__SHIFT |
+            0 << GEN7_SO_DW2_STREAM2_READ_OFFSET__SHIFT |
+            (read_len - 1) << GEN7_SO_DW2_STREAM2_READ_LEN__SHIFT |
+            0 << GEN7_SO_DW2_STREAM1_READ_OFFSET__SHIFT |
+            (read_len - 1) << GEN7_SO_DW2_STREAM1_READ_LEN__SHIFT |
+            0 << GEN7_SO_DW2_STREAM0_READ_OFFSET__SHIFT |
+            (read_len - 1) << GEN7_SO_DW2_STREAM0_READ_LEN__SHIFT;
+   }
 
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
-   dw[0] = dw0;
+   dw[0] = GEN7_RENDER_CMD(3D, 3DSTATE_STREAMOUT) | (cmd_len - 2);
    dw[1] = dw1;
    dw[2] = dw2;
 }
@@ -836,139 +856,148 @@ static inline void
 gen7_3DSTATE_SO_DECL_LIST(struct ilo_builder *builder,
                           const struct pipe_stream_output_info *so_info)
 {
+   /*
+    * Note that "DWord Length" has 9 bits for this command and the type of
+    * cmd_len cannot be uint8_t.
+    */
    uint16_t cmd_len;
-   int buffer_selects, num_entries, i;
-   uint16_t so_decls[128];
+   struct {
+      int buf_selects;
+      int decl_count;
+      uint16_t decls[128];
+   } streams[4];
+   unsigned buf_offsets[PIPE_MAX_SO_BUFFERS];
+   int hw_decl_count, i;
    uint32_t *dw;
 
    ILO_DEV_ASSERT(builder->dev, 7, 7.5);
 
-   buffer_selects = 0;
-   num_entries = 0;
+   memset(streams, 0, sizeof(streams));
+   memset(buf_offsets, 0, sizeof(buf_offsets));
 
-   if (so_info) {
-      int buffer_offsets[PIPE_MAX_SO_BUFFERS];
+   for (i = 0; i < so_info->num_outputs; i++) {
+      unsigned decl, st, buf, reg, mask;
 
-      memset(buffer_offsets, 0, sizeof(buffer_offsets));
+      st = so_info->output[i].stream;
+      buf = so_info->output[i].output_buffer;
 
-      for (i = 0; i < so_info->num_outputs; i++) {
-         unsigned decl, buf, reg, mask;
+      /* pad with holes */
+      while (buf_offsets[buf] < so_info->output[i].dst_offset) {
+         int num_dwords;
 
-         buf = so_info->output[i].output_buffer;
-
-         /* pad with holes */
-         assert(buffer_offsets[buf] <= so_info->output[i].dst_offset);
-         while (buffer_offsets[buf] < so_info->output[i].dst_offset) {
-            int num_dwords;
-
-            num_dwords = so_info->output[i].dst_offset - buffer_offsets[buf];
-            if (num_dwords > 4)
-               num_dwords = 4;
-
-            decl = buf << GEN7_SO_DECL_OUTPUT_SLOT__SHIFT |
-                   GEN7_SO_DECL_HOLE_FLAG |
-                   ((1 << num_dwords) - 1) << GEN7_SO_DECL_COMPONENT_MASK__SHIFT;
-
-            so_decls[num_entries++] = decl;
-            buffer_offsets[buf] += num_dwords;
-         }
-
-         reg = so_info->output[i].register_index;
-         mask = ((1 << so_info->output[i].num_components) - 1) <<
-            so_info->output[i].start_component;
+         num_dwords = so_info->output[i].dst_offset - buf_offsets[buf];
+         if (num_dwords > 4)
+            num_dwords = 4;
 
          decl = buf << GEN7_SO_DECL_OUTPUT_SLOT__SHIFT |
-                reg << GEN7_SO_DECL_REG_INDEX__SHIFT |
-                mask << GEN7_SO_DECL_COMPONENT_MASK__SHIFT;
+                GEN7_SO_DECL_HOLE_FLAG |
+                ((1 << num_dwords) - 1) << GEN7_SO_DECL_COMPONENT_MASK__SHIFT;
 
-         so_decls[num_entries++] = decl;
-         buffer_selects |= 1 << buf;
-         buffer_offsets[buf] += so_info->output[i].num_components;
+         assert(streams[st].decl_count < Elements(streams[st].decls));
+         streams[st].decls[streams[st].decl_count++] = decl;
+         buf_offsets[buf] += num_dwords;
       }
+      assert(buf_offsets[buf] == so_info->output[i].dst_offset);
+
+      reg = so_info->output[i].register_index;
+      mask = ((1 << so_info->output[i].num_components) - 1) <<
+         so_info->output[i].start_component;
+
+      decl = buf << GEN7_SO_DECL_OUTPUT_SLOT__SHIFT |
+             reg << GEN7_SO_DECL_REG_INDEX__SHIFT |
+             mask << GEN7_SO_DECL_COMPONENT_MASK__SHIFT;
+
+      assert(streams[st].decl_count < Elements(streams[st].decls));
+
+      streams[st].buf_selects |= 1 << buf;
+      streams[st].decls[streams[st].decl_count++] = decl;
+      buf_offsets[buf] += so_info->output[i].num_components;
    }
 
-   /*
-    * From the Ivy Bridge PRM, volume 2 part 1, page 201:
-    *
-    *     "Errata: All 128 decls for all four streams must be included
-    *      whenever this command is issued. The "Num Entries [n]" fields still
-    *      contain the actual numbers of valid decls."
-    *
-    * Also note that "DWord Length" has 9 bits for this command, and the type
-    * of cmd_len is thus uint16_t.
-    */
-   cmd_len = 2 * 128 + 3;
+   if (ilo_dev_gen(builder->dev) >= ILO_GEN(7.5)) {
+      hw_decl_count = MAX4(streams[0].decl_count, streams[1].decl_count,
+                           streams[2].decl_count, streams[3].decl_count);
+   } else {
+      /*
+       * From the Ivy Bridge PRM, volume 2 part 1, page 201:
+       *
+       *     "Errata: All 128 decls for all four streams must be included
+       *      whenever this command is issued. The "Num Entries [n]" fields
+       *      still contain the actual numbers of valid decls."
+       */
+      hw_decl_count = 128;
+   }
+
+   cmd_len = 3 + 2 * hw_decl_count;
 
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
    dw[0] = GEN7_RENDER_CMD(3D, 3DSTATE_SO_DECL_LIST) | (cmd_len - 2);
-   dw[1] = 0 << GEN7_SO_DECL_DW1_STREAM3_BUFFER_SELECTS__SHIFT |
-           0 << GEN7_SO_DECL_DW1_STREAM2_BUFFER_SELECTS__SHIFT |
-           0 << GEN7_SO_DECL_DW1_STREAM1_BUFFER_SELECTS__SHIFT |
-           buffer_selects << GEN7_SO_DECL_DW1_STREAM0_BUFFER_SELECTS__SHIFT;
-   dw[2] = 0 << GEN7_SO_DECL_DW2_STREAM3_ENTRY_COUNT__SHIFT |
-           0 << GEN7_SO_DECL_DW2_STREAM2_ENTRY_COUNT__SHIFT |
-           0 << GEN7_SO_DECL_DW2_STREAM1_ENTRY_COUNT__SHIFT |
-           num_entries << GEN7_SO_DECL_DW2_STREAM0_ENTRY_COUNT__SHIFT;
+   dw[1] = streams[3].buf_selects << GEN7_SO_DECL_DW1_STREAM3_BUFFER_SELECTS__SHIFT |
+           streams[2].buf_selects << GEN7_SO_DECL_DW1_STREAM2_BUFFER_SELECTS__SHIFT |
+           streams[1].buf_selects << GEN7_SO_DECL_DW1_STREAM1_BUFFER_SELECTS__SHIFT |
+           streams[0].buf_selects << GEN7_SO_DECL_DW1_STREAM0_BUFFER_SELECTS__SHIFT;
+   dw[2] = streams[3].decl_count << GEN7_SO_DECL_DW2_STREAM3_ENTRY_COUNT__SHIFT |
+           streams[2].decl_count << GEN7_SO_DECL_DW2_STREAM2_ENTRY_COUNT__SHIFT |
+           streams[1].decl_count << GEN7_SO_DECL_DW2_STREAM1_ENTRY_COUNT__SHIFT |
+           streams[0].decl_count << GEN7_SO_DECL_DW2_STREAM0_ENTRY_COUNT__SHIFT;
    dw += 3;
 
-   for (i = 0; i < num_entries; i++) {
-      dw[0] = so_decls[i];
-      dw[1] = 0;
-      dw += 2;
-   }
-   for (; i < 128; i++) {
-      dw[0] = 0;
-      dw[1] = 0;
+   for (i = 0; i < hw_decl_count; i++) {
+      dw[0] = streams[1].decls[i] << 16 | streams[0].decls[i];
+      dw[1] = streams[3].decls[i] << 16 | streams[2].decls[i];
       dw += 2;
    }
 }
 
 static inline void
-gen7_3DSTATE_SO_BUFFER(struct ilo_builder *builder,
-                       int index, int base, int stride,
+gen7_3DSTATE_SO_BUFFER(struct ilo_builder *builder, int index, int stride,
                        const struct pipe_stream_output_target *so_target)
 {
    const uint8_t cmd_len = 4;
-   const uint32_t dw0 = GEN7_RENDER_CMD(3D, 3DSTATE_SO_BUFFER) |
-                        (cmd_len - 2);
    struct ilo_buffer *buf;
-   int end;
+   int start, end;
    uint32_t *dw;
    unsigned pos;
 
    ILO_DEV_ASSERT(builder->dev, 7, 7.5);
 
-   if (!so_target || !so_target->buffer) {
-      ilo_builder_batch_pointer(builder, cmd_len, &dw);
-      dw[0] = dw0;
-      dw[1] = index << GEN7_SO_BUF_DW1_INDEX__SHIFT;
-      dw[2] = 0;
-      dw[3] = 0;
-
-      return;
-   }
-
    buf = ilo_buffer(so_target->buffer);
 
    /* DWord-aligned */
-   assert(stride % 4 == 0 && base % 4 == 0);
+   assert(stride % 4 == 0);
    assert(so_target->buffer_offset % 4 == 0);
 
    stride &= ~3;
-   base = (base + so_target->buffer_offset) & ~3;
-   end = (base + so_target->buffer_size) & ~3;
+   start = so_target->buffer_offset & ~3;
+   end = (start + so_target->buffer_size) & ~3;
 
    pos = ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
-   dw[0] = dw0;
+   dw[0] = GEN7_RENDER_CMD(3D, 3DSTATE_SO_BUFFER) | (cmd_len - 2);
    dw[1] = index << GEN7_SO_BUF_DW1_INDEX__SHIFT |
            stride;
 
    ilo_builder_batch_reloc(builder, pos + 2,
-         buf->bo, base, INTEL_RELOC_WRITE);
+         buf->bo, start, INTEL_RELOC_WRITE);
    ilo_builder_batch_reloc(builder, pos + 3,
          buf->bo, end, INTEL_RELOC_WRITE);
+}
+
+static inline void
+gen7_disable_3DSTATE_SO_BUFFER(struct ilo_builder *builder, int index)
+{
+   const uint8_t cmd_len = 4;
+   uint32_t *dw;
+
+   ILO_DEV_ASSERT(builder->dev, 7, 7.5);
+
+   ilo_builder_batch_pointer(builder, cmd_len, &dw);
+
+   dw[0] = GEN7_RENDER_CMD(3D, 3DSTATE_SO_BUFFER) | (cmd_len - 2);
+   dw[1] = index << GEN7_SO_BUF_DW1_INDEX__SHIFT;
+   dw[2] = 0;
+   dw[3] = 0;
 }
 
 static inline void
@@ -1107,48 +1136,19 @@ gen7_3DSTATE_SAMPLER_STATE_POINTERS_GS(struct ilo_builder *builder,
          sampler_state);
 }
 
-static inline unsigned
-gen6_fill_3dstate_constant(const struct ilo_dev_info *dev,
-                           const uint32_t *bufs, const int *sizes,
-                           int num_bufs, int max_read_length,
-                           uint32_t *dw, int num_dwords)
-{
-   unsigned enabled = 0x0;
-   int total_read_length, i;
-
-   assert(num_dwords == 4);
-
-   total_read_length = 0;
-   for (i = 0; i < 4; i++) {
-      if (i < num_bufs && sizes[i]) {
-         /* in 256-bit units minus one */
-         const int read_len = (sizes[i] + 31) / 32 - 1;
-
-         assert(bufs[i] % 32 == 0);
-         assert(read_len < 32);
-
-         enabled |= 1 << i;
-         dw[i] = bufs[i] | read_len;
-
-         total_read_length += read_len + 1;
-      }
-      else {
-         dw[i] = 0;
-      }
-   }
-
-   assert(total_read_length <= max_read_length);
-
-   return enabled;
-}
-
 static inline void
-gen6_3DSTATE_CONSTANT_VS(struct ilo_builder *builder,
-                         const uint32_t *bufs, const int *sizes,
-                         int num_bufs)
+gen6_3dstate_constant(struct ilo_builder *builder, int subop,
+                      const uint32_t *bufs, const int *sizes,
+                      int num_bufs)
 {
+   const uint32_t cmd = GEN6_RENDER_TYPE_RENDER |
+                        GEN6_RENDER_SUBTYPE_3D |
+                        subop;
    const uint8_t cmd_len = 5;
-   uint32_t buf_dw[4], buf_enabled, *dw;
+   unsigned buf_enabled = 0x0;
+   uint32_t buf_dw[4], *dw;
+   int max_read_length, total_read_length;
+   int i;
 
    ILO_DEV_ASSERT(builder->dev, 6, 6);
 
@@ -1157,18 +1157,70 @@ gen6_3DSTATE_CONSTANT_VS(struct ilo_builder *builder,
    /*
     * From the Sandy Bridge PRM, volume 2 part 1, page 138:
     *
-    *     "The sum of all four read length fields (each incremented to
-    *      represent the actual read length) must be less than or equal to 32"
+    *     "(3DSTATE_CONSTANT_VS) The sum of all four read length fields (each
+    *      incremented to represent the actual read length) must be less than
+    *      or equal to 32"
+    *
+    * From the Sandy Bridge PRM, volume 2 part 1, page 161:
+    *
+    *     "(3DSTATE_CONSTANT_GS) The sum of all four read length fields (each
+    *      incremented to represent the actual read length) must be less than
+    *      or equal to 64"
+    *
+    * From the Sandy Bridge PRM, volume 2 part 1, page 287:
+    *
+    *     "(3DSTATE_CONSTANT_PS) The sum of all four read length fields (each
+    *      incremented to represent the actual read length) must be less than
+    *      or equal to 64"
     */
-   buf_enabled = gen6_fill_3dstate_constant(builder->dev,
-         bufs, sizes, num_bufs, 32, buf_dw, Elements(buf_dw));
+   switch (subop) {
+   case GEN6_RENDER_OPCODE_3DSTATE_CONSTANT_VS:
+      max_read_length = 32;
+      break;
+   case GEN6_RENDER_OPCODE_3DSTATE_CONSTANT_GS:
+   case GEN6_RENDER_OPCODE_3DSTATE_CONSTANT_PS:
+      max_read_length = 64;
+      break;
+   default:
+      assert(!"unknown pcb subop");
+      max_read_length = 0;
+      break;
+   }
+
+   total_read_length = 0;
+   for (i = 0; i < 4; i++) {
+      if (i < num_bufs && sizes[i]) {
+         /* in 256-bit units */
+         const int read_len = (sizes[i] + 31) / 32;
+
+         assert(bufs[i] % 32 == 0);
+         assert(read_len <= 32);
+
+         buf_enabled |= 1 << i;
+         buf_dw[i] = bufs[i] | (read_len - 1);
+
+         total_read_length += read_len;
+      } else {
+         buf_dw[i] = 0;
+      }
+   }
+
+   assert(total_read_length <= max_read_length);
 
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
-   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_CONSTANT_VS) |
-           buf_enabled << 12 |
-           (cmd_len - 2);
+   dw[0] = cmd | (cmd_len - 2) |
+           buf_enabled << 12;
    memcpy(&dw[1], buf_dw, sizeof(buf_dw));
+}
+
+static inline void
+gen6_3DSTATE_CONSTANT_VS(struct ilo_builder *builder,
+                         const uint32_t *bufs, const int *sizes,
+                         int num_bufs)
+{
+   gen6_3dstate_constant(builder, GEN6_RENDER_OPCODE_3DSTATE_CONSTANT_VS,
+         bufs, sizes, num_bufs);
 }
 
 static inline void
@@ -1176,28 +1228,8 @@ gen6_3DSTATE_CONSTANT_GS(struct ilo_builder *builder,
                          const uint32_t *bufs, const int *sizes,
                          int num_bufs)
 {
-   const uint8_t cmd_len = 5;
-   uint32_t buf_dw[4], buf_enabled, *dw;
-
-   ILO_DEV_ASSERT(builder->dev, 6, 6);
-
-   assert(num_bufs <= 4);
-
-   /*
-    * From the Sandy Bridge PRM, volume 2 part 1, page 161:
-    *
-    *     "The sum of all four read length fields (each incremented to
-    *      represent the actual read length) must be less than or equal to 64"
-    */
-   buf_enabled = gen6_fill_3dstate_constant(builder->dev,
-         bufs, sizes, num_bufs, 64, buf_dw, Elements(buf_dw));
-
-   ilo_builder_batch_pointer(builder, cmd_len, &dw);
-
-   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_CONSTANT_GS) |
-           buf_enabled << 12 |
-           (cmd_len - 2);
-   memcpy(&dw[1], buf_dw, sizeof(buf_dw));
+   gen6_3dstate_constant(builder, GEN6_RENDER_OPCODE_3DSTATE_CONSTANT_GS,
+         bufs, sizes, num_bufs);
 }
 
 static inline void
@@ -1388,7 +1420,7 @@ gen6_so_SURFACE_STATE(struct ilo_builder *builder,
       break;
    }
 
-   ilo_gpe_init_view_surface_for_buffer_gen6(builder->dev, buf, bo_offset,
+   ilo_gpe_init_view_surface_for_buffer(builder->dev, buf, bo_offset,
          so->buffer_size, struct_size, elem_format, false, true, &surf);
 
    return gen6_SURFACE_STATE(builder, &surf, false);

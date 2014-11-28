@@ -226,10 +226,7 @@ void
 fs_visitor::emit_lrp(const fs_reg &dst, const fs_reg &x, const fs_reg &y,
                      const fs_reg &a)
 {
-   if (brw->gen < 6 ||
-       !x.is_valid_3src() ||
-       !y.is_valid_3src() ||
-       !a.is_valid_3src()) {
+   if (brw->gen < 6) {
       /* We can't use the LRP instruction.  Emit x*(1-a) + y*a. */
       fs_reg y_times_a           = fs_reg(this, glsl_type::float_type);
       fs_reg one_minus_a         = fs_reg(this, glsl_type::float_type);
@@ -474,6 +471,7 @@ fs_visitor::visit(ir_expression *ir)
    unsigned int operand;
    fs_reg op[3], temp;
    fs_inst *inst;
+   struct brw_wm_prog_key *fs_key = (struct brw_wm_prog_key *) this->key;
 
    assert(ir->get_num_operands() <= 3);
 
@@ -517,7 +515,7 @@ fs_visitor::visit(ir_expression *ir)
 	 ir->operands[operand]->fprint(stderr);
          fprintf(stderr, "\n");
       }
-      assert(this->result.is_valid_3src());
+      assert(this->result.file == GRF || this->result.file == UNIFORM);
       op[operand] = this->result;
 
       /* Matrix expression operands should have been broken down to vector
@@ -604,22 +602,35 @@ fs_visitor::visit(ir_expression *ir)
       break;
 
    case ir_unop_dFdx:
-      emit(FS_OPCODE_DDX, this->result, op[0], fs_reg(BRW_DERIVATIVE_BY_HINT));
+      /* Select one of the two opcodes based on the glHint value. */
+      if (fs_key->high_quality_derivatives)
+         emit(FS_OPCODE_DDX_FINE, this->result, op[0]);
+      else
+         emit(FS_OPCODE_DDX_COARSE, this->result, op[0]);
       break;
+
    case ir_unop_dFdx_coarse:
-      emit(FS_OPCODE_DDX, this->result, op[0], fs_reg(BRW_DERIVATIVE_COARSE));
+      emit(FS_OPCODE_DDX_COARSE, this->result, op[0]);
       break;
+
    case ir_unop_dFdx_fine:
-      emit(FS_OPCODE_DDX, this->result, op[0], fs_reg(BRW_DERIVATIVE_FINE));
+      emit(FS_OPCODE_DDX_FINE, this->result, op[0]);
       break;
+
    case ir_unop_dFdy:
-      emit(FS_OPCODE_DDY, this->result, op[0], fs_reg(BRW_DERIVATIVE_BY_HINT));
+      /* Select one of the two opcodes based on the glHint value. */
+      if (fs_key->high_quality_derivatives)
+         emit(FS_OPCODE_DDY_FINE, result, op[0], fs_reg(fs_key->render_to_fbo));
+      else
+         emit(FS_OPCODE_DDY_COARSE, result, op[0], fs_reg(fs_key->render_to_fbo));
       break;
+
    case ir_unop_dFdy_coarse:
-      emit(FS_OPCODE_DDY, this->result, op[0], fs_reg(BRW_DERIVATIVE_COARSE));
+      emit(FS_OPCODE_DDY_COARSE, result, op[0], fs_reg(fs_key->render_to_fbo));
       break;
+
    case ir_unop_dFdy_fine:
-      emit(FS_OPCODE_DDY, this->result, op[0], fs_reg(BRW_DERIVATIVE_FINE));
+      emit(FS_OPCODE_DDY_FINE, result, op[0], fs_reg(fs_key->render_to_fbo));
       break;
 
    case ir_binop_add:
@@ -1918,10 +1929,10 @@ fs_visitor::emit_texture(ir_texture_opcode op,
       inst->shadow_compare = true;
 
    if (offset_value.file == IMM)
-      inst->texture_offset = offset_value.fixed_hw_reg.dw1.ud;
+      inst->offset = offset_value.fixed_hw_reg.dw1.ud;
 
    if (op == ir_tg4) {
-      inst->texture_offset |=
+      inst->offset |=
          gather_channel(gather_component, sampler) << 16; /* M0.2:16-17 */
 
       if (brw->gen == 6)
@@ -2921,9 +2932,6 @@ fs_visitor::emit_untyped_surface_read(unsigned surf_index, fs_reg dst,
 fs_inst *
 fs_visitor::emit(fs_inst *inst)
 {
-   if (force_uncompressed_stack > 0)
-      inst->exec_size = 8;
-
    if (dispatch_width == 16 && inst->exec_size == 8)
       inst->force_uncompressed = true;
 
@@ -3468,8 +3476,6 @@ fs_visitor::init()
    this->last_scratch = 0;
    this->pull_constant_loc = NULL;
    this->push_constant_loc = NULL;
-
-   this->force_uncompressed_stack = 0;
 
    this->spilled_any_registers = false;
    this->do_dual_src = false;

@@ -272,19 +272,6 @@ This instruction replicates its result.
   dst.w = src0.w \times src1.w + (1 - src0.w) \times src2.w
 
 
-.. opcode:: CND - Condition
-
-.. math::
-
-  dst.x = (src2.x > 0.5) ? src0.x : src1.x
-
-  dst.y = (src2.y > 0.5) ? src0.y : src1.y
-
-  dst.z = (src2.z > 0.5) ? src0.z : src1.z
-
-  dst.w = (src2.w > 0.5) ? src0.w : src1.w
-
-
 .. opcode:: DP2A - 2-component Dot Product And Add
 
 .. math::
@@ -404,17 +391,6 @@ This instruction replicates its result.
   dst.w = |src.w|
 
 
-.. opcode:: RCC - Reciprocal Clamped
-
-This instruction replicates its result.
-
-XXX cleanup on aisle three
-
-.. math::
-
-  dst = (1 / src.x) > 0 ? clamp(1 / src.x, 5.42101e-020, 1.84467e+019) : clamp(1 / src.x, -1.84467e+019, -5.42101e-020)
-
-
 .. opcode:: DPH - Homogeneous Dot Product
 
 This instruction replicates its result.
@@ -487,23 +463,6 @@ while DDY is allowed to be the same for the entire 2x2 quad.
   TBD
 
 
-.. opcode:: RFL - Reflection Vector
-
-.. math::
-
-  dst.x = 2 \times (src0.x \times src1.x + src0.y \times src1.y + src0.z \times src1.z) / (src0.x \times src0.x + src0.y \times src0.y + src0.z \times src0.z) \times src0.x - src1.x
-
-  dst.y = 2 \times (src0.x \times src1.x + src0.y \times src1.y + src0.z \times src1.z) / (src0.x \times src0.x + src0.y \times src0.y + src0.z \times src0.z) \times src0.y - src1.y
-
-  dst.z = 2 \times (src0.x \times src1.x + src0.y \times src1.y + src0.z \times src1.z) / (src0.x \times src0.x + src0.y \times src0.y + src0.z \times src0.z) \times src0.z - src1.z
-
-  dst.w = 1
-
-.. note::
-
-   Considered for removal.
-
-
 .. opcode:: SEQ - Set On Equal
 
 .. math::
@@ -515,19 +474,6 @@ while DDY is allowed to be the same for the entire 2x2 quad.
   dst.z = (src0.z == src1.z) ? 1.0F : 0.0F
 
   dst.w = (src0.w == src1.w) ? 1.0F : 0.0F
-
-
-.. opcode:: SFL - Set On False
-
-This instruction replicates its result.
-
-.. math::
-
-  dst = 0.0F
-
-.. note::
-
-   Considered for removal.
 
 
 .. opcode:: SGT - Set On Greater Than
@@ -695,30 +641,6 @@ This instruction replicates its result.
 
    Considered for removal.
 
-.. opcode:: X2D - 2D Coordinate Transformation
-
-.. math::
-
-  dst.x = src0.x + src1.x \times src2.x + src1.y \times src2.y
-
-  dst.y = src0.y + src1.x \times src2.z + src1.y \times src2.w
-
-  dst.z = src0.x + src1.x \times src2.x + src1.y \times src2.y
-
-  dst.w = src0.y + src1.x \times src2.z + src1.y \times src2.w
-
-.. note::
-
-   Considered for removal.
-
-
-.. opcode:: ARA - Address Register Add
-
-  TBD
-
-.. note::
-
-   Considered for removal.
 
 .. opcode:: ARR - Address Register Load With Round
 
@@ -834,19 +756,6 @@ This instruction replicates its result.
   dst = texture\_sample(unit, coord, bias)
 
 
-.. opcode:: NRM - 3-component Vector Normalise
-
-.. math::
-
-  dst.x = src.x / (src.x \times src.x + src.y \times src.y + src.z \times src.z)
-
-  dst.y = src.y / (src.x \times src.x + src.y \times src.y + src.z \times src.z)
-
-  dst.z = src.z / (src.x \times src.x + src.y \times src.y + src.z \times src.z)
-
-  dst.w = 1
-
-
 .. opcode:: DIV - Divide
 
 .. math::
@@ -940,15 +849,6 @@ This instruction replicates its result.
 .. note::
 
    Considered for cleanup.
-
-.. note::
-
-   Considered for removal.
-
-
-.. opcode:: BRA - Branch
-
-  pc = target
 
 .. note::
 
@@ -1886,15 +1786,6 @@ Some require glsl version 1.30 (UIF/BREAKC/SWITCH/CASE/DEFAULT/ENDSWITCH).
 .. opcode:: ENDSWITCH - End of switch
 
    Ends a switch expression.
-
-
-.. opcode:: NRM4 - 4-component Vector Normalise
-
-This instruction replicates its result.
-
-.. math::
-
-  dst = \frac{src.x}{src.x \times src.x + src.y \times src.y + src.z \times src.z + src.w \times src.w}
 
 
 Interpolation ISA

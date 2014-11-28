@@ -29,6 +29,7 @@
 #define ILO_STATE_H
 
 #include "pipe/p_state.h"
+#include "util/u_dynarray.h"
 
 #include "ilo_common.h"
 
@@ -346,28 +347,37 @@ struct ilo_fb_state {
    struct ilo_view_surface null_rt;
    struct ilo_zs_surface null_zs;
 
+   struct ilo_fb_blend_caps {
+      bool can_logicop;
+      bool can_blend;
+      bool can_alpha_test;
+      bool dst_alpha_forced_one;
+   } blend_caps[PIPE_MAX_COLOR_BUFS];
+
    unsigned num_samples;
 };
 
+struct ilo_global_binding_cso {
+   struct pipe_resource *resource;
+   uint32_t *handle;
+};
+
+/*
+ * In theory, we would like a "virtual" bo that serves as the global memory
+ * region.  The virtual bo would reserve a region in the GTT aperture, but the
+ * pages of it would come from those of the global bindings.
+ *
+ * The virtual bo would be created in launch_grid().  The global bindings
+ * would be added to the virtual bo.  A SURFACE_STATE for the virtual bo would
+ * be created.  The handles returned by set_global_binding() would be offsets
+ * into the virtual bo.
+ *
+ * But for now, we will create a SURFACE_STATE for each of the bindings.  The
+ * handle of a global binding consists of the offset and the binding table
+ * index.
+ */
 struct ilo_global_binding {
-   /*
-    * XXX These should not be treated as real resources (and there could be
-    * thousands of them).  They should be treated as regions in GLOBAL
-    * resource, which is the only real resource.
-    *
-    * That is, a resource here should instead be
-    *
-    *   struct ilo_global_region {
-    *     struct pipe_resource base;
-    *     int offset;
-    *     int size;
-    *   };
-    *
-    * and it describes the region [offset, offset + size) in GLOBAL
-    * resource.
-    */
-   struct pipe_resource *resources[PIPE_MAX_SHADER_RESOURCES];
-   uint32_t *handles[PIPE_MAX_SHADER_RESOURCES];
+   struct util_dynarray bindings;
    unsigned count;
 };
 
@@ -423,6 +433,9 @@ ilo_init_state_functions(struct ilo_context *ilo);
 void
 ilo_finalize_3d_states(struct ilo_context *ilo,
                        const struct pipe_draw_info *draw);
+
+void
+ilo_finalize_compute_states(struct ilo_context *ilo);
 
 void
 ilo_state_vector_init(const struct ilo_dev_info *dev,

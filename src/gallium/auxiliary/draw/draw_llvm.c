@@ -225,7 +225,7 @@ create_jit_context_type(struct gallivm_state *gallivm,
                                  LP_MAX_TGSI_CONST_BUFFERS);
    elem_types[2] = LLVMPointerType(LLVMArrayType(LLVMArrayType(float_type, 4),
                                                  DRAW_TOTAL_CLIP_PLANES), 0);
-   elem_types[3] = LLVMPointerType(float_type, 0); /* viewport */
+   elem_types[3] = LLVMPointerType(float_type, 0); /* viewports */
    elem_types[4] = LLVMArrayType(texture_type,
                                  PIPE_MAX_SHADER_SAMPLER_VIEWS); /* textures */
    elem_types[5] = LLVMArrayType(sampler_type,
@@ -238,7 +238,7 @@ create_jit_context_type(struct gallivm_state *gallivm,
                           target, context_type, DRAW_JIT_CTX_NUM_CONSTANTS);
    LP_CHECK_MEMBER_OFFSET(struct draw_jit_context, planes,
                           target, context_type, DRAW_JIT_CTX_PLANES);
-   LP_CHECK_MEMBER_OFFSET(struct draw_jit_context, viewport,
+   LP_CHECK_MEMBER_OFFSET(struct draw_jit_context, viewports,
                           target, context_type, DRAW_JIT_CTX_VIEWPORT);
    LP_CHECK_MEMBER_OFFSET(struct draw_jit_context, textures,
                           target, context_type,
@@ -274,7 +274,7 @@ create_gs_jit_context_type(struct gallivm_state *gallivm,
                                  LP_MAX_TGSI_CONST_BUFFERS);
    elem_types[2] = LLVMPointerType(LLVMArrayType(LLVMArrayType(float_type, 4),
                                                  DRAW_TOTAL_CLIP_PLANES), 0);
-   elem_types[3] = LLVMPointerType(float_type, 0); /* viewport */
+   elem_types[3] = LLVMPointerType(float_type, 0); /* viewports */
 
    elem_types[4] = LLVMArrayType(texture_type,
                                  PIPE_MAX_SHADER_SAMPLER_VIEWS); /* textures */
@@ -296,7 +296,7 @@ create_gs_jit_context_type(struct gallivm_state *gallivm,
                           target, context_type, DRAW_GS_JIT_CTX_NUM_CONSTANTS);
    LP_CHECK_MEMBER_OFFSET(struct draw_gs_jit_context, planes,
                           target, context_type, DRAW_GS_JIT_CTX_PLANES);
-   LP_CHECK_MEMBER_OFFSET(struct draw_gs_jit_context, viewport,
+   LP_CHECK_MEMBER_OFFSET(struct draw_gs_jit_context, viewports,
                           target, context_type, DRAW_GS_JIT_CTX_VIEWPORT);
    LP_CHECK_MEMBER_OFFSET(struct draw_gs_jit_context, textures,
                           target, context_type,
@@ -742,6 +742,7 @@ generate_fetch(struct gallivm_state *gallivm,
       val = lp_build_fetch_rgba_aos(gallivm,
                                     format_desc,
                                     lp_float32_vec4_type(),
+                                    FALSE,
                                     map_ptr,
                                     zero, zero, zero);
       LLVMBuildStore(builder, val, temp_ptr);
@@ -1080,7 +1081,11 @@ generate_viewport(struct draw_llvm_variant *variant,
    LLVMTypeRef vs_type_llvm = lp_build_vec_type(gallivm, vs_type);
    LLVMValueRef out3 = LLVMBuildLoad(builder, outputs[pos][3], ""); /*w0 w1 .. wn*/
    LLVMValueRef const1 = lp_build_const_vec(gallivm, f32_type, 1.0);       /*1.0 1.0 1.0 1.0*/
-   LLVMValueRef vp_ptr = draw_jit_context_viewport(gallivm, context_ptr);
+   LLVMValueRef vp_ptr = draw_jit_context_viewports(gallivm, context_ptr);
+
+   /* We treat pipe_viewport_state as a float array */
+   const int scale_index_offset = offsetof(struct pipe_viewport_state, scale) / sizeof(float);
+   const int trans_index_offset = offsetof(struct pipe_viewport_state, translate) / sizeof(float);
 
    /* for 1/w convention*/
    out3 = LLVMBuildFDiv(builder, const1, out3, "");
@@ -1095,10 +1100,10 @@ generate_viewport(struct draw_llvm_variant *variant,
       LLVMValueRef trans_i;
       LLVMValueRef index;
 
-      index = lp_build_const_int32(gallivm, i);
+      index = lp_build_const_int32(gallivm, i + scale_index_offset);
       scale_i = LLVMBuildGEP(builder, vp_ptr, &index, 1, "");
 
-      index = lp_build_const_int32(gallivm, i+4);
+      index = lp_build_const_int32(gallivm, i + trans_index_offset);
       trans_i = LLVMBuildGEP(builder, vp_ptr, &index, 1, "");
 
       scale = lp_build_broadcast(gallivm, vs_type_llvm,
@@ -1264,7 +1269,7 @@ generate_clipmask(struct draw_llvm *llvm,
             test = lp_build_compare(gallivm, f32_type, PIPE_FUNC_GREATER, zero, clipdist);
             is_nan_or_inf = lp_build_is_inf_or_nan(gallivm, vs_type, clipdist);
             test = LLVMBuildOr(builder, test, is_nan_or_inf, "");
-            temp = lp_build_const_int_vec(gallivm, i32_type, 1 << plane_idx);
+            temp = lp_build_const_int_vec(gallivm, i32_type, 1LL << plane_idx);
             test = LLVMBuildAnd(builder, test, temp, "");
             mask = LLVMBuildOr(builder, mask, test, "");
          } else {
@@ -1300,7 +1305,7 @@ generate_clipmask(struct draw_llvm *llvm,
             sum = LLVMBuildFAdd(builder, sum, test, "");
 
             test = lp_build_compare(gallivm, f32_type, PIPE_FUNC_GREATER, zero, sum);
-            temp = lp_build_const_int_vec(gallivm, i32_type, 1 << plane_idx);
+            temp = lp_build_const_int_vec(gallivm, i32_type, 1LL << plane_idx);
             test = LLVMBuildAnd(builder, test, temp, "");
             mask = LLVMBuildOr(builder, mask, test, "");
          }
@@ -1517,8 +1522,12 @@ draw_llvm_generate(struct draw_llvm *llvm, struct draw_llvm_variant *variant,
    /* If geometry shader is present we need to skip both the viewport
     * transformation and clipping otherwise the inputs to the geometry
     * shader will be incorrect.
+    * The code can't handle vp transform when vs writes vp index neither
+    * (though this would be fixable here, but couldn't just broadcast
+    * the values).
     */
-   const boolean bypass_viewport = key->has_gs || key->bypass_viewport;
+   const boolean bypass_viewport = key->has_gs || key->bypass_viewport ||
+                                   llvm->draw->vs.vertex_shader->info.writes_viewport_index;
    const boolean enable_cliptest = !key->has_gs && (key->clip_xy ||
                                                     key->clip_z  ||
                                                     key->clip_user);

@@ -116,16 +116,11 @@ static void upload_psp_urb_cbs(struct brw_context *brw )
 const struct brw_tracked_state brw_psp_urb_cbs = {
    .dirty = {
       .mesa = 0,
-      .brw = (BRW_NEW_URB_FENCE |
-	      BRW_NEW_BATCH |
-	      BRW_NEW_STATE_BASE_ADDRESS),
-      .cache = (CACHE_NEW_VS_UNIT |
-		CACHE_NEW_FF_GS_UNIT |
-		CACHE_NEW_FF_GS_PROG |
-		CACHE_NEW_CLIP_UNIT |
-		CACHE_NEW_SF_UNIT |
-		CACHE_NEW_WM_UNIT |
-		CACHE_NEW_CC_UNIT)
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_GEN4_UNIT_STATE |
+             BRW_NEW_STATE_BASE_ADDRESS |
+             BRW_NEW_URB_FENCE,
+      .cache = CACHE_NEW_FF_GS_PROG,
    },
    .emit = upload_psp_urb_cbs,
 };
@@ -753,8 +748,8 @@ static void upload_polygon_stipple(struct brw_context *brw)
 
 const struct brw_tracked_state brw_polygon_stipple = {
    .dirty = {
-      .mesa = (_NEW_POLYGONSTIPPLE |
-	       _NEW_POLYGON),
+      .mesa = _NEW_POLYGON |
+              _NEW_POLYGONSTIPPLE,
       .brw = BRW_NEW_CONTEXT,
       .cache = 0
    },
@@ -797,8 +792,8 @@ static void upload_polygon_stipple_offset(struct brw_context *brw)
 
 const struct brw_tracked_state brw_polygon_stipple_offset = {
    .dirty = {
-      .mesa = (_NEW_BUFFERS |
-	       _NEW_POLYGON),
+      .mesa = _NEW_BUFFERS |
+              _NEW_POLYGON,
       .brw = BRW_NEW_CONTEXT,
       .cache = 0
    },
@@ -902,7 +897,7 @@ brw_upload_invariant_state(struct brw_context *brw)
    const uint32_t _3DSTATE_PIPELINE_SELECT =
       is_965 ? CMD_PIPELINE_SELECT_965 : CMD_PIPELINE_SELECT_GM45;
    BEGIN_BATCH(1);
-   OUT_BATCH(_3DSTATE_PIPELINE_SELECT << 16 | 0);
+   OUT_BATCH(_3DSTATE_PIPELINE_SELECT << 16 | (brw->gen >= 9 ? (3 << 8) : 0));
    ADVANCE_BATCH();
 
    if (brw->gen < 6) {
@@ -929,8 +924,7 @@ brw_upload_invariant_state(struct brw_context *brw)
    const uint32_t _3DSTATE_VF_STATISTICS =
       is_965 ? GEN4_3DSTATE_VF_STATISTICS : GM45_3DSTATE_VF_STATISTICS;
    BEGIN_BATCH(1);
-   OUT_BATCH(_3DSTATE_VF_STATISTICS << 16 |
-	     (unlikely(INTEL_DEBUG & DEBUG_STATS) ? 1 : 0));
+   OUT_BATCH(_3DSTATE_VF_STATISTICS << 16 | 1);
    ADVANCE_BATCH();
 }
 
@@ -1060,8 +1054,8 @@ static void upload_state_base_address( struct brw_context *brw )
 const struct brw_tracked_state brw_state_base_address = {
    .dirty = {
       .mesa = 0,
-      .brw = (BRW_NEW_BATCH |
-	      BRW_NEW_PROGRAM_CACHE),
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_PROGRAM_CACHE,
       .cache = 0,
    },
    .emit = upload_state_base_address
