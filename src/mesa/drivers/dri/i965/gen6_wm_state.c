@@ -42,7 +42,7 @@ gen6_upload_wm_push_constants(struct brw_context *brw)
    /* BRW_NEW_FRAGMENT_PROGRAM */
    const struct brw_fragment_program *fp =
       brw_fragment_program_const(brw->fragment_program);
-   /* CACHE_NEW_WM_PROG */
+   /* BRW_NEW_FS_PROG_DATA */
    const struct brw_wm_prog_data *prog_data = brw->wm.prog_data;
 
    gen6_upload_push_constants(brw, &fp->program.Base, &prog_data->base,
@@ -59,8 +59,8 @@ const struct brw_tracked_state gen6_wm_push_constants = {
       .mesa  = _NEW_PROGRAM_CONSTANTS,
       .brw   = BRW_NEW_BATCH |
                BRW_NEW_FRAGMENT_PROGRAM |
+               BRW_NEW_FS_PROG_DATA |
                BRW_NEW_PUSH_CONSTANT_ALLOCATION,
-      .cache = CACHE_NEW_WM_PROG,
    },
    .emit = gen6_upload_wm_push_constants,
 };
@@ -72,7 +72,7 @@ upload_wm_state(struct brw_context *brw)
    /* BRW_NEW_FRAGMENT_PROGRAM */
    const struct brw_fragment_program *fp =
       brw_fragment_program_const(brw->fragment_program);
-   /* CACHE_NEW_WM_PROG */
+   /* BRW_NEW_FS_PROG_DATA */
    const struct brw_wm_prog_data *prog_data = brw->wm.prog_data;
    uint32_t dw2, dw4, dw5, dw6, ksp0, ksp2;
 
@@ -115,12 +115,7 @@ upload_wm_state(struct brw_context *brw)
    dw5 |= GEN6_WM_LINE_AA_WIDTH_1_0;
    dw5 |= GEN6_WM_LINE_END_CAP_AA_WIDTH_0_5;
 
-   /* Use ALT floating point mode for ARB fragment programs, because they
-    * require 0^0 == 1.  Even though _CurrentFragmentProgram is used for
-    * rendering, CurrentProgram[MESA_SHADER_FRAGMENT] is used for this check
-    * to differentiate between the GLSL and non-GLSL cases.
-    */
-   if (ctx->_Shader->CurrentProgram[MESA_SHADER_FRAGMENT] == NULL)
+   if (prog_data->base.use_alt_mode)
       dw2 |= GEN6_WM_FLOATING_POINT_MODE_ALT;
 
    dw2 |= (ALIGN(brw->wm.base.sampler_count, 4) / 4) <<
@@ -164,7 +159,7 @@ upload_wm_state(struct brw_context *brw)
       ksp0 = brw->wm.base.prog_offset;
    }
 
-   /* CACHE_NEW_WM_PROG | _NEW_COLOR */
+   /* BRW_NEW_FS_PROG_DATA | _NEW_COLOR */
    if (prog_data->dual_src_blend &&
        (ctx->Color.BlendEnabled & 1) &&
        ctx->Color.Blend[0]._UsesDualSrc) {
@@ -305,8 +300,8 @@ const struct brw_tracked_state gen6_wm_state = {
                _NEW_PROGRAM_CONSTANTS,
       .brw   = BRW_NEW_BATCH |
                BRW_NEW_FRAGMENT_PROGRAM |
+               BRW_NEW_FS_PROG_DATA |
                BRW_NEW_PUSH_CONSTANT_ALLOCATION,
-      .cache = CACHE_NEW_WM_PROG
    },
    .emit = upload_wm_state,
 };

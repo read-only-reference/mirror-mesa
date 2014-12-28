@@ -400,7 +400,7 @@ void
 brw_prepare_vertices(struct brw_context *brw)
 {
    struct gl_context *ctx = &brw->ctx;
-   /* CACHE_NEW_VS_PROG */
+   /* BRW_NEW_VS_PROG_DATA */
    GLbitfield64 vs_inputs = brw->vs.prog_data->inputs_read;
    const unsigned char *ptr = NULL;
    GLuint interleaved = 0;
@@ -870,8 +870,8 @@ const struct brw_tracked_state brw_vertices = {
    .dirty = {
       .mesa = _NEW_POLYGON,
       .brw = BRW_NEW_BATCH |
-             BRW_NEW_VERTICES,
-      .cache = CACHE_NEW_VS_PROG,
+             BRW_NEW_VERTICES |
+             BRW_NEW_VS_PROG_DATA,
    },
    .emit = brw_emit_vertices,
 };
@@ -952,7 +952,6 @@ const struct brw_tracked_state brw_indices = {
    .dirty = {
       .mesa = 0,
       .brw = BRW_NEW_INDICES,
-      .cache = 0,
    },
    .emit = brw_upload_indices,
 };
@@ -990,7 +989,6 @@ const struct brw_tracked_state brw_index_buffer = {
       .mesa = 0,
       .brw = BRW_NEW_BATCH |
              BRW_NEW_INDEX_BUFFER,
-      .cache = 0,
    },
    .emit = brw_emit_index_buffer,
 };

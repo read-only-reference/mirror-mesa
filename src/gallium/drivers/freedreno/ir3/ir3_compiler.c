@@ -170,6 +170,18 @@ compile_init(struct ir3_compile_context *ctx, struct ir3_shader_variant *so,
 		break;
 	}
 
+	if (!so->shader) {
+		/* hack for standalone compiler which does not have
+		 * screen/context:
+		 */
+	} else if (ir3_shader_gpuid(so->shader) >= 400) {
+		/* a4xx seems to have *no* sam.p */
+		lconfig.lower_TXP = ~0;  /* lower all txp */
+	} else {
+		/* a3xx just needs to avoid sam.p for 3d tex */
+		lconfig.lower_TXP = (1 << TGSI_TEXTURE_3D);
+	}
+
 	ctx->tokens = tgsi_transform_lowering(&lconfig, tokens, &ctx->info);
 	ctx->free_tokens = !!ctx->tokens;
 	if (!ctx->tokens) {
@@ -1996,18 +2008,13 @@ trans_kill(const struct instr_translater *t,
 	struct ir3_instruction *instr, *immed, *cond = NULL;
 	bool inv = false;
 
-	switch (t->tgsi_opc) {
-	case TGSI_OPCODE_KILL:
-		/* unconditional kill, use enclosing if condition: */
-		if (ctx->branch_count > 0) {
-			unsigned int idx = ctx->branch_count - 1;
-			cond = ctx->branch[idx].cond;
-			inv = ctx->branch[idx].inv;
-		} else {
-			cond = create_immed(ctx, 1.0);
-		}
-
-		break;
+	/* unconditional kill, use enclosing if condition: */
+	if (ctx->branch_count > 0) {
+		unsigned int idx = ctx->branch_count - 1;
+		cond = ctx->branch[idx].cond;
+		inv = ctx->branch[idx].inv;
+	} else {
+		cond = create_immed(ctx, 1.0);
 	}
 
 	compile_assert(ctx, cond);
@@ -3186,11 +3193,13 @@ ir3_compile_shader(struct ir3_shader_variant *so,
 	}
 
 	ret = ir3_block_ra(block, so->type, key.half_precision,
-			so->frag_coord, so->frag_face, &so->has_samp, &max_bary);
+			so->frag_coord, so->frag_face);
 	if (ret) {
 		DBG("RA failed!");
 		goto out;
 	}
+
+	ir3_block_legalize(block, &so->has_samp, &max_bary);
 
 	if (fd_mesa_debug & FD_DBG_OPTMSGS) {
 		printf("AFTER RA:\n");

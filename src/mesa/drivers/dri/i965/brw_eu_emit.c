@@ -226,10 +226,10 @@ extern int reg_type_size[];
 static void
 validate_reg(const struct brw_context *brw, brw_inst *inst, struct brw_reg reg)
 {
-   int hstride_for_reg[] = {0, 1, 2, 4};
-   int vstride_for_reg[] = {0, 1, 2, 4, 8, 16, 32};
-   int width_for_reg[] = {1, 2, 4, 8, 16};
-   int execsize_for_reg[] = {1, 2, 4, 8, 16};
+   const int hstride_for_reg[] = {0, 1, 2, 4};
+   const int vstride_for_reg[] = {0, 1, 2, 4, 8, 16, 32};
+   const int width_for_reg[] = {1, 2, 4, 8, 16};
+   const int execsize_for_reg[] = {1, 2, 4, 8, 16};
    int width, hstride, vstride, execsize;
 
    if (reg.file == BRW_IMMEDIATE_VALUE) {
@@ -1040,7 +1040,6 @@ ALU2(DP4)
 ALU2(DPH)
 ALU2(DP3)
 ALU2(DP2)
-ALU2(LINE)
 ALU2(PLN)
 ALU3F(MAD)
 ALU3F(LRP)
@@ -1133,6 +1132,16 @@ brw_MUL(struct brw_compile *p, struct brw_reg dest,
 	  src1.nr != BRW_ARF_ACCUMULATOR);
 
    return brw_alu2(p, BRW_OPCODE_MUL, dest, src0, src1);
+}
+
+brw_inst *
+brw_LINE(struct brw_compile *p, struct brw_reg dest,
+         struct brw_reg src0, struct brw_reg src1)
+{
+   src0.vstride = BRW_VERTICAL_STRIDE_0;
+   src0.width = BRW_WIDTH_1;
+   src0.hstride = BRW_HORIZONTAL_STRIDE_0;
+   return brw_alu2(p, BRW_OPCODE_LINE, dest, src0, src1);
 }
 
 brw_inst *

@@ -32,6 +32,7 @@ struct qir_op_info {
         const char *name;
         uint8_t ndst, nsrc;
         bool has_side_effects;
+        bool multi_instruction;
 };
 
 static const struct qir_op_info qir_op_info[] = {
@@ -59,28 +60,27 @@ static const struct qir_op_info qir_op_info[] = {
         [QOP_NOT] = { "not", 1, 1 },
 
         [QOP_SF] = { "sf", 0, 1 },
-        [QOP_SEL_X_0_NS] = { "fsel_x_0_ns", 1, 1 },
-        [QOP_SEL_X_0_NC] = { "fsel_x_0_nc", 1, 1 },
-        [QOP_SEL_X_0_ZS] = { "fsel_x_0_zs", 1, 1 },
-        [QOP_SEL_X_0_ZC] = { "fsel_x_0_zc", 1, 1 },
-        [QOP_SEL_X_Y_NS] = { "fsel_x_y_ns", 1, 2 },
-        [QOP_SEL_X_Y_NC] = { "fsel_x_y_nc", 1, 2 },
-        [QOP_SEL_X_Y_ZS] = { "fsel_x_y_zs", 1, 2 },
-        [QOP_SEL_X_Y_ZC] = { "fsel_x_y_zc", 1, 2 },
+        [QOP_SEL_X_0_NS] = { "fsel_x_0_ns", 1, 1, false, true },
+        [QOP_SEL_X_0_NC] = { "fsel_x_0_nc", 1, 1, false, true },
+        [QOP_SEL_X_0_ZS] = { "fsel_x_0_zs", 1, 1, false, true },
+        [QOP_SEL_X_0_ZC] = { "fsel_x_0_zc", 1, 1, false, true },
+        [QOP_SEL_X_Y_NS] = { "fsel_x_y_ns", 1, 2, false, true },
+        [QOP_SEL_X_Y_NC] = { "fsel_x_y_nc", 1, 2, false, true },
+        [QOP_SEL_X_Y_ZS] = { "fsel_x_y_zs", 1, 2, false, true },
+        [QOP_SEL_X_Y_ZC] = { "fsel_x_y_zc", 1, 2, false, true },
 
-        [QOP_RCP] = { "rcp", 1, 1 },
-        [QOP_RSQ] = { "rsq", 1, 1 },
-        [QOP_EXP2] = { "exp2", 1, 2 },
-        [QOP_LOG2] = { "log2", 1, 2 },
-        [QOP_PACK_COLORS] = { "pack_colors", 1, 4 },
-        [QOP_PACK_SCALED] = { "pack_scaled", 1, 2 },
-        [QOP_VPM_WRITE] = { "vpm_write", 0, 1, true },
+        [QOP_RCP] = { "rcp", 1, 1, false, true },
+        [QOP_RSQ] = { "rsq", 1, 1, false, true },
+        [QOP_EXP2] = { "exp2", 1, 2, false, true },
+        [QOP_LOG2] = { "log2", 1, 2, false, true },
+        [QOP_PACK_COLORS] = { "pack_colors", 1, 4, false, true },
+        [QOP_PACK_SCALED] = { "pack_scaled", 1, 2, false, true },
         [QOP_VPM_READ] = { "vpm_read", 0, 1, true },
         [QOP_TLB_DISCARD_SETUP] = { "discard", 0, 1, true },
         [QOP_TLB_STENCIL_SETUP] = { "tlb_stencil_setup", 0, 1, true },
         [QOP_TLB_Z_WRITE] = { "tlb_z", 0, 1, true },
         [QOP_TLB_COLOR_WRITE] = { "tlb_color", 0, 1, true },
-        [QOP_TLB_COLOR_READ] = { "tlb_color_read", 1, 0, true },
+        [QOP_TLB_COLOR_READ] = { "tlb_color_read", 1, 0 },
         [QOP_VARY_ADD_C] = { "vary_add_c", 1, 1 },
 
         [QOP_FRAG_X] = { "frag_x", 1, 0 },
@@ -99,10 +99,18 @@ static const struct qir_op_info qir_op_info[] = {
         [QOP_R4_UNPACK_B] = { "r4_unpack_b", 1, 1 },
         [QOP_R4_UNPACK_C] = { "r4_unpack_c", 1, 1 },
         [QOP_R4_UNPACK_D] = { "r4_unpack_d", 1, 1 },
-        [QOP_UNPACK_8A] = { "unpack_8a", 1, 1 },
-        [QOP_UNPACK_8B] = { "unpack_8b", 1, 1 },
-        [QOP_UNPACK_8C] = { "unpack_8c", 1, 1 },
-        [QOP_UNPACK_8D] = { "unpack_8d", 1, 1 },
+        [QOP_UNPACK_8A_F] = { "unpack_8a_f", 1, 1 },
+        [QOP_UNPACK_8B_F] = { "unpack_8b_f", 1, 1 },
+        [QOP_UNPACK_8C_F] = { "unpack_8c_f", 1, 1 },
+        [QOP_UNPACK_8D_F] = { "unpack_8d_f", 1, 1 },
+        [QOP_UNPACK_16A_F] = { "unpack_16a_f", 1, 1 },
+        [QOP_UNPACK_16B_F] = { "unpack_16b_f", 1, 1 },
+        [QOP_UNPACK_8A_I] = { "unpack_8a_i", 1, 1 },
+        [QOP_UNPACK_8B_I] = { "unpack_8b_i", 1, 1 },
+        [QOP_UNPACK_8C_I] = { "unpack_8c_i", 1, 1 },
+        [QOP_UNPACK_8D_I] = { "unpack_8d_i", 1, 1 },
+        [QOP_UNPACK_16A_I] = { "unpack_16a_i", 1, 1 },
+        [QOP_UNPACK_16B_I] = { "unpack_16b_i", 1, 1 },
 };
 
 static const char *
@@ -142,7 +150,16 @@ qir_has_side_effects(struct vc4_compile *c, struct qinst *inst)
                 }
         }
 
+        if (inst->dst.file == QFILE_VPM)
+                return true;
+
         return qir_op_info[inst->op].has_side_effects;
+}
+
+bool
+qir_is_multi_instruction(struct qinst *inst)
+{
+        return qir_op_info[inst->op].multi_instruction;
 }
 
 bool
@@ -196,16 +213,24 @@ qir_reads_r4(struct qinst *inst)
 static void
 qir_print_reg(struct vc4_compile *c, struct qreg reg)
 {
-        const char *files[] = {
+        static const char *files[] = {
                 [QFILE_TEMP] = "t",
                 [QFILE_VARY] = "v",
                 [QFILE_UNIF] = "u",
         };
 
-        if (reg.file == QFILE_NULL)
+        if (reg.file == QFILE_NULL) {
                 fprintf(stderr, "null");
-        else
+        } else if (reg.file == QFILE_SMALL_IMM) {
+                if ((int)reg.index >= -16 && (int)reg.index <= 15)
+                        fprintf(stderr, "%d", reg.index);
+                else
+                        fprintf(stderr, "%f", uif(reg.index));
+        } else if (reg.file == QFILE_VPM) {
+                fprintf(stderr, "vpm");
+        } else {
                 fprintf(stderr, "%s%d", files[reg.file], reg.index);
+        }
 
         if (reg.file == QFILE_UNIF &&
             c->uniform_contents[reg.index] == QUNIFORM_CONSTANT) {
@@ -319,6 +344,15 @@ qir_remove_instruction(struct qinst *qinst)
         free(qinst);
 }
 
+struct qreg
+qir_follow_movs(struct qinst **defs, struct qreg reg)
+{
+        while (reg.file == QFILE_TEMP && defs[reg.index]->op == QOP_MOV)
+                reg = defs[reg.index]->src[0];
+
+        return reg;
+}
+
 void
 qir_compile_destroy(struct vc4_compile *c)
 {
@@ -369,6 +403,8 @@ qir_optimize(struct vc4_compile *c)
                 OPTPASS(qir_opt_cse);
                 OPTPASS(qir_opt_copy_propagation);
                 OPTPASS(qir_opt_dead_code);
+                OPTPASS(qir_opt_small_immediates);
+                OPTPASS(qir_opt_vpm_writes);
 
                 if (!progress)
                         break;

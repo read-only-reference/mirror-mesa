@@ -22,6 +22,7 @@
  */
 
 #include "brw_vec4.h"
+#include "brw_fs.h"
 #include "brw_cfg.h"
 #include "brw_vs.h"
 #include "brw_dead_control_flow.h"
@@ -110,6 +111,15 @@ src_reg::src_reg(int32_t i)
    this->file = IMM;
    this->type = BRW_REGISTER_TYPE_D;
    this->fixed_hw_reg.dw1.d = i;
+}
+
+src_reg::src_reg(uint8_t vf[4])
+{
+   init();
+
+   this->file = IMM;
+   this->type = BRW_REGISTER_TYPE_VF;
+   memcpy(&this->fixed_hw_reg.dw1.ud, vf, sizeof(unsigned));
 }
 
 src_reg::src_reg(uint8_t vf0, uint8_t vf1, uint8_t vf2, uint8_t vf3)
@@ -326,6 +336,66 @@ src_reg::equals(const src_reg &r) const
 		  sizeof(fixed_hw_reg)) == 0);
 }
 
+bool
+vec4_visitor::opt_vector_float()
+{
+   bool progress = false;
+
+   int last_reg = -1;
+   int remaining_channels;
+   uint8_t imm[4];
+   int inst_count;
+   vec4_instruction *imm_inst[4];
+
+   foreach_block_and_inst_safe(block, vec4_instruction, inst, cfg) {
+      if (last_reg != inst->dst.reg) {
+         last_reg = inst->dst.reg;
+         remaining_channels = WRITEMASK_XYZW;
+
+         inst_count = 0;
+      }
+
+      if (inst->opcode != BRW_OPCODE_MOV ||
+          inst->dst.writemask == WRITEMASK_XYZW ||
+          inst->src[0].file != IMM)
+         continue;
+
+      int vf = brw_float_to_vf(inst->src[0].fixed_hw_reg.dw1.f);
+      if (vf == -1)
+         continue;
+
+      if ((inst->dst.writemask & WRITEMASK_X) != 0)
+         imm[0] = vf;
+      if ((inst->dst.writemask & WRITEMASK_Y) != 0)
+         imm[1] = vf;
+      if ((inst->dst.writemask & WRITEMASK_Z) != 0)
+         imm[2] = vf;
+      if ((inst->dst.writemask & WRITEMASK_W) != 0)
+         imm[3] = vf;
+
+      imm_inst[inst_count++] = inst;
+
+      remaining_channels &= ~inst->dst.writemask;
+      if (remaining_channels == 0) {
+         vec4_instruction *mov = MOV(inst->dst, imm);
+         mov->dst.type = BRW_REGISTER_TYPE_F;
+         mov->dst.writemask = WRITEMASK_XYZW;
+         inst->insert_after(block, mov);
+         last_reg = -1;
+
+         for (int i = 0; i < inst_count; i++) {
+            imm_inst[i]->remove(block);
+         }
+         progress = true;
+      }
+   }
+
+   if (progress)
+      invalidate_live_intervals();
+
+   return progress;
+}
+
 /* Replaces unused channels of a swizzle with channels that are used.
  *
  * For instance, this pass transforms
@@ -425,161 +495,6 @@ vec4_visitor::opt_reduce_swizzle()
 
    if (progress)
       invalidate_live_intervals();
-
-   return progress;
-}
-
-static bool
-try_eliminate_instruction(vec4_instruction *inst, int new_writemask,
-                          const struct brw_context *brw)
-{
-   if (inst->has_side_effects())
-      return false;
-
-   if (new_writemask == 0) {
-      /* Don't dead code eliminate instructions that write to the
-       * accumulator as a side-effect. Instead just set the destination
-       * to the null register to free it.
-       */
-      if (inst->writes_accumulator || inst->writes_flag()) {
-         inst->dst = dst_reg(retype(brw_null_reg(), inst->dst.type));
-      } else {
-         inst->opcode = BRW_OPCODE_NOP;
-      }
-
-      return true;
-   } else if (inst->dst.writemask != new_writemask) {
-      switch (inst->opcode) {
-      case SHADER_OPCODE_TXF_CMS:
-      case SHADER_OPCODE_GEN4_SCRATCH_READ:
-      case VS_OPCODE_PULL_CONSTANT_LOAD:
-      case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
-         break;
-      default:
-         /* Do not set a writemask on Gen6 for math instructions, those are
-          * executed using align1 mode that does not support a destination mask.
-          */
-         if (!(brw->gen == 6 && inst->is_math()) && !inst->is_tex()) {
-            inst->dst.writemask = new_writemask;
-            return true;
-         }
-      }
-   }
-
-   return false;
-}
-
-/**
- * Must be called after calculate_live_intervals() to remove unused
- * writes to registers -- register allocation will fail otherwise
- * because something deffed but not used won't be considered to
- * interfere with other regs.
- */
-bool
-vec4_visitor::dead_code_eliminate()
-{
-   bool progress = false;
-   int pc = -1;
-
-   calculate_live_intervals();
-
-   foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
-      pc++;
-
-      bool inst_writes_flag = false;
-      if (inst->dst.file != GRF) {
-         if (inst->dst.is_null() && inst->writes_flag()) {
-            inst_writes_flag = true;
-         } else {
-            continue;
-         }
-      }
-
-      if (inst->dst.file == GRF) {
-         int write_mask = inst->dst.writemask;
-
-         for (int c = 0; c < 4; c++) {
-            if (write_mask & (1 << c)) {
-               assert(this->virtual_grf_end[inst->dst.reg * 4 + c] >= pc);
-               if (this->virtual_grf_end[inst->dst.reg * 4 + c] == pc) {
-                  write_mask &= ~(1 << c);
-               }
-            }
-         }
-
-         progress = try_eliminate_instruction(inst, write_mask, brw) ||
-                    progress;
-      }
-
-      if (inst->predicate || inst->prev == NULL)
-         continue;
-
-      int dead_channels;
-      if (inst_writes_flag) {
-/* Arbitrarily chosen, other than not being an xyzw writemask. */
-#define FLAG_WRITEMASK (1 << 5)
-         dead_channels = inst->reads_flag() ? 0 : FLAG_WRITEMASK;
-      } else {
-         dead_channels = inst->dst.writemask;
-
-         for (int i = 0; i < 3; i++) {
-            if (inst->src[i].file != GRF ||
-                inst->src[i].reg != inst->dst.reg)
-                  continue;
-
-            for (int j = 0; j < 4; j++) {
-               int swiz = BRW_GET_SWZ(inst->src[i].swizzle, j);
-               dead_channels &= ~(1 << swiz);
-            }
-         }
-      }
-
-      foreach_inst_in_block_reverse_starting_from(vec4_instruction, scan_inst,
-                                                  inst, block) {
-         if (dead_channels == 0)
-            break;
-
-         if (inst_writes_flag) {
-            if (scan_inst->dst.is_null() && scan_inst->writes_flag()) {
-               scan_inst->opcode = BRW_OPCODE_NOP;
-               progress = true;
-               continue;
-            } else if (scan_inst->reads_flag()) {
-               break;
-            }
-         }
-
-         if (inst->dst.file == scan_inst->dst.file &&
-             inst->dst.reg == scan_inst->dst.reg &&
-             inst->dst.reg_offset == scan_inst->dst.reg_offset) {
-            int new_writemask = scan_inst->dst.writemask & ~dead_channels;
-
-            progress = try_eliminate_instruction(scan_inst, new_writemask, brw) ||
-                       progress;
-         }
-
-         for (int i = 0; i < 3; i++) {
-            if (scan_inst->src[i].file != inst->dst.file ||
-                scan_inst->src[i].reg != inst->dst.reg)
-               continue;
-
-            for (int j = 0; j < 4; j++) {
-               int swiz = BRW_GET_SWZ(scan_inst->src[i].swizzle, j);
-               dead_channels &= ~(1 << swiz);
-            }
-         }
-      }
-   }
-
-   if (progress) {
-      foreach_block_and_inst_safe (block, backend_instruction, inst, cfg) {
-         if (inst->opcode == BRW_OPCODE_NOP) {
-            inst->remove(block);
-         }
-      }
-
-      invalidate_live_intervals();
-   }
 
    return progress;
 }
@@ -717,6 +632,29 @@ vec4_visitor::opt_algebraic()
 
    foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
       switch (inst->opcode) {
+      case BRW_OPCODE_MOV:
+         if (inst->src[0].file != IMM)
+            break;
+
+         if (inst->saturate) {
+            if (inst->dst.type != inst->src[0].type)
+               assert(!"unimplemented: saturate mixed types");
+
+            if (brw_saturate_immediate(inst->dst.type,
+                                       &inst->src[0].fixed_hw_reg)) {
+               inst->saturate = false;
+               progress = true;
+            }
+         }
+         break;
+
+      case VEC4_OPCODE_UNPACK_UNIFORM:
+         if (inst->src[0].file != UNIFORM) {
+            inst->opcode = BRW_OPCODE_MOV;
+            progress = true;
+         }
+         break;
+
       case BRW_OPCODE_ADD:
 	 if (inst->src[1].is_zero()) {
 	    inst->opcode = BRW_OPCODE_MOV;
@@ -1682,6 +1620,8 @@ vec4_visitor::get_timestamp()
    src_reg ts = src_reg(brw_reg(BRW_ARCHITECTURE_REGISTER_FILE,
                                 BRW_ARF_TIMESTAMP,
                                 0,
+                                0,
+                                0,
                                 BRW_REGISTER_TYPE_UD,
                                 BRW_VERTICAL_STRIDE_0,
                                 BRW_WIDTH_4,
@@ -1858,6 +1798,12 @@ vec4_visitor::run()
       OPT(opt_register_coalesce);
    } while (progress);
 
+   if (opt_vector_float()) {
+      opt_cse();
+      opt_copy_propagation(false);
+      opt_copy_propagation(true);
+      dead_code_eliminate();
+   }
 
    if (failed)
       return false;
@@ -1915,6 +1861,7 @@ brw_vs_emit(struct brw_context *brw,
 {
    bool start_busy = false;
    double start_time = 0;
+   const unsigned *assembly = NULL;
 
    if (unlikely(brw->perf_debug)) {
       start_busy = (brw->batch.last_bo &&
@@ -1929,23 +1876,54 @@ brw_vs_emit(struct brw_context *brw,
    if (unlikely(INTEL_DEBUG & DEBUG_VS))
       brw_dump_ir("vertex", prog, &shader->base, &c->vp->program.Base);
 
-   vec4_vs_visitor v(brw, c, prog_data, prog, mem_ctx);
-   if (!v.run()) {
-      if (prog) {
-         prog->LinkStatus = false;
-         ralloc_strcat(&prog->InfoLog, v.fail_msg);
+   if (prog && brw->gen >= 8 && brw->scalar_vs) {
+      fs_visitor v(brw, mem_ctx, &c->key, prog_data, prog, &c->vp->program, 8);
+      if (!v.run_vs()) {
+         if (prog) {
+            prog->LinkStatus = false;
+            ralloc_strcat(&prog->InfoLog, v.fail_msg);
+         }
+
+         _mesa_problem(NULL, "Failed to compile vertex shader: %s\n",
+                       v.fail_msg);
+
+         return NULL;
       }
 
-      _mesa_problem(NULL, "Failed to compile vertex shader: %s\n",
-                    v.fail_msg);
+      fs_generator g(brw, mem_ctx, (void *) &c->key, &prog_data->base.base,
+                     &c->vp->program.Base, v.runtime_check_aads_emit);
+      if (INTEL_DEBUG & DEBUG_VS) {
+         char *name = ralloc_asprintf(mem_ctx, "%s vertex shader %d",
+                                      prog->Label ? prog->Label : "unnamed",
+                                      prog->Name);
+         g.enable_debug(name);
+      }
+      g.generate_code(v.cfg, 8);
+      assembly = g.get_assembly(final_assembly_size);
 
-      return NULL;
+      if (assembly)
+         prog_data->base.simd8 = true;
+      c->base.last_scratch = v.last_scratch;
    }
 
-   const unsigned *assembly = NULL;
-   vec4_generator g(brw, prog, &c->vp->program.Base, &prog_data->base,
-                    mem_ctx, INTEL_DEBUG & DEBUG_VS);
-   assembly = g.generate_assembly(v.cfg, final_assembly_size);
+   if (!assembly) {
+      vec4_vs_visitor v(brw, c, prog_data, prog, mem_ctx);
+      if (!v.run()) {
+         if (prog) {
+            prog->LinkStatus = false;
+            ralloc_strcat(&prog->InfoLog, v.fail_msg);
+         }
+
+         _mesa_problem(NULL, "Failed to compile vertex shader: %s\n",
+                       v.fail_msg);
+
+         return NULL;
+      }
+
+      vec4_generator g(brw, prog, &c->vp->program.Base, &prog_data->base,
+                       mem_ctx, INTEL_DEBUG & DEBUG_VS);
+      assembly = g.generate_assembly(v.cfg, final_assembly_size);
+   }
 
    if (unlikely(brw->perf_debug) && shader) {
       if (shader->compiled_once) {
@@ -1963,12 +1941,11 @@ brw_vs_emit(struct brw_context *brw,
 
 
 void
-brw_vec4_setup_prog_key_for_precompile(struct gl_context *ctx,
-                                       struct brw_vec4_prog_key *key,
-                                       GLuint id, struct gl_program *prog)
+brw_vue_setup_prog_key_for_precompile(struct gl_context *ctx,
+                                      struct brw_vue_prog_key *key,
+                                      GLuint id, struct gl_program *prog)
 {
    key->program_string_id = id;
-   key->clamp_vertex_color = ctx->API == API_OPENGL_COMPAT;
 
    unsigned sampler_count = _mesa_fls(prog->SamplersUsed);
    for (unsigned i = 0; i < sampler_count; i++) {

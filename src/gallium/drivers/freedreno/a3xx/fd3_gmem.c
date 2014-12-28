@@ -59,23 +59,26 @@ emit_mrt(struct fd_ringbuffer *ring, unsigned nr_bufs,
 	for (i = 0; i < 4; i++) {
 		enum a3xx_color_fmt format = 0;
 		enum a3xx_color_swap swap = WZYX;
+		bool srgb = false;
 		struct fd_resource *rsc = NULL;
 		struct fd_resource_slice *slice = NULL;
 		uint32_t stride = 0;
 		uint32_t base = 0;
-		uint32_t layer_offset = 0;
+		uint32_t offset = 0;
 
 		if ((i < nr_bufs) && bufs[i]) {
 			struct pipe_surface *psurf = bufs[i];
 
 			rsc = fd_resource(psurf->texture);
-			slice = &rsc->slices[psurf->u.tex.level];
+			slice = fd_resource_slice(rsc, psurf->u.tex.level);
 			format = fd3_pipe2color(psurf->format);
 			swap = fd3_pipe2swap(psurf->format);
+			srgb = util_format_is_srgb(psurf->format);
 
 			debug_assert(psurf->u.tex.first_layer == psurf->u.tex.last_layer);
 
-			layer_offset = slice->size0 * psurf->u.tex.first_layer;
+			offset = fd_resource_offset(rsc, psurf->u.tex.level,
+					psurf->u.tex.first_layer);
 
 			if (bin_w) {
 				stride = bin_w * rsc->cpp;
@@ -92,16 +95,18 @@ emit_mrt(struct fd_ringbuffer *ring, unsigned nr_bufs,
 		OUT_RING(ring, A3XX_RB_MRT_BUF_INFO_COLOR_FORMAT(format) |
 				A3XX_RB_MRT_BUF_INFO_COLOR_TILE_MODE(tile_mode) |
 				A3XX_RB_MRT_BUF_INFO_COLOR_BUF_PITCH(stride) |
-				A3XX_RB_MRT_BUF_INFO_COLOR_SWAP(swap));
+				A3XX_RB_MRT_BUF_INFO_COLOR_SWAP(swap) |
+				COND(srgb, A3XX_RB_MRT_BUF_INFO_COLOR_SRGB));
 		if (bin_w || (i >= nr_bufs)) {
 			OUT_RING(ring, A3XX_RB_MRT_BUF_BASE_COLOR_BUF_BASE(base));
 		} else {
-			OUT_RELOCW(ring, rsc->bo,
-					slice->offset + layer_offset, 0, -1);
+			OUT_RELOCW(ring, rsc->bo, offset, 0, -1);
 		}
 
 		OUT_PKT0(ring, REG_A3XX_SP_FS_IMAGE_OUTPUT_REG(i), 1);
-		OUT_RING(ring, A3XX_SP_FS_IMAGE_OUTPUT_REG_MRTFORMAT(format));
+		OUT_RING(ring, COND((i < nr_bufs) && bufs[i],
+							A3XX_SP_FS_IMAGE_OUTPUT_REG_MRTFORMAT(
+									fd3_fs_output_format(bufs[i]->format))));
 	}
 }
 
@@ -304,8 +309,9 @@ emit_gmem2mem_surf(struct fd_context *ctx,
 {
 	struct fd_ringbuffer *ring = ctx->ring;
 	struct fd_resource *rsc = fd_resource(psurf->texture);
-	struct fd_resource_slice *slice = &rsc->slices[psurf->u.tex.level];
-	uint32_t layer_offset = slice->size0 * psurf->u.tex.first_layer;
+	struct fd_resource_slice *slice = fd_resource_slice(rsc, psurf->u.tex.level);
+	uint32_t offset = fd_resource_offset(rsc, psurf->u.tex.level,
+			psurf->u.tex.first_layer);
 
 	debug_assert(psurf->u.tex.first_layer == psurf->u.tex.last_layer);
 
@@ -314,7 +320,7 @@ emit_gmem2mem_surf(struct fd_context *ctx,
 			A3XX_RB_COPY_CONTROL_MODE(mode) |
 			A3XX_RB_COPY_CONTROL_GMEM_BASE(base));
 
-	OUT_RELOCW(ring, rsc->bo, slice->offset + layer_offset, 0, -1);    /* RB_COPY_DEST_BASE */
+	OUT_RELOCW(ring, rsc->bo, offset, 0, -1);    /* RB_COPY_DEST_BASE */
 	OUT_RING(ring, A3XX_RB_COPY_DEST_PITCH_PITCH(slice->pitch * rsc->cpp));
 	OUT_RING(ring, A3XX_RB_COPY_DEST_INFO_TILE(LINEAR) |
 			A3XX_RB_COPY_DEST_INFO_FORMAT(fd3_pipe2color(psurf->format)) |

@@ -74,12 +74,18 @@ struct tgsi_shader_info
    boolean uses_kill;  /**< KILL or KILL_IF instruction used? */
    boolean uses_instanceid;
    boolean uses_vertexid;
+   boolean uses_vertexid_nobase;
+   boolean uses_basevertex;
    boolean uses_primid;
    boolean uses_frontface;
+   boolean writes_psize;
+   boolean writes_clipvertex;
    boolean writes_viewport_index;
    boolean writes_layer;
    boolean is_msaa_sampler[PIPE_MAX_SAMPLERS];
 
+   unsigned clipdist_writemask;
+   unsigned culldist_writemask;
    unsigned num_written_culldistance;
    unsigned num_written_clipdistance;
    /**

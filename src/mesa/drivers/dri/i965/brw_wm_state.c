@@ -77,7 +77,7 @@ brw_upload_wm_unit(struct brw_context *brw)
    struct gl_context *ctx = &brw->ctx;
    /* BRW_NEW_FRAGMENT_PROGRAM */
    const struct gl_fragment_program *fp = brw->fragment_program;
-   /* CACHE_NEW_WM_PROG */
+   /* BRW_NEW_FS_PROG_DATA */
    const struct brw_wm_prog_data *prog_data = brw->wm.prog_data;
    struct brw_wm_unit_state *wm;
 
@@ -94,7 +94,7 @@ brw_upload_wm_unit(struct brw_context *brw)
 	     prog_data->dispatch_grf_start_reg_16);
    }
 
-   /* BRW_NEW_PROGRAM_CACHE | CACHE_NEW_WM_PROG */
+   /* BRW_NEW_PROGRAM_CACHE | BRW_NEW_FS_PROG_DATA */
    wm->thread0.grf_reg_count = prog_data->reg_blocks;
    wm->wm9.grf_reg_count_2 = prog_data->reg_blocks_16;
 
@@ -114,12 +114,7 @@ brw_upload_wm_unit(struct brw_context *brw)
 			(wm->wm9.grf_reg_count_2 << 1)) >> 6;
 
    wm->thread1.depth_coef_urb_read_offset = 1;
-   /* Use ALT floating point mode for ARB fragment programs, because they
-    * require 0^0 == 1.  Even though _CurrentFragmentProgram is used for
-    * rendering, CurrentProgram[MESA_SHADER_FRAGMENT] is used for this check
-    * to differentiate between the GLSL and non-GLSL cases.
-    */
-   if (ctx->Shader.CurrentProgram[MESA_SHADER_FRAGMENT] == NULL)
+   if (prog_data->base.use_alt_mode)
       wm->thread1.floating_point_mode = BRW_FLOATING_POINT_NON_IEEE_754;
    else
       wm->thread1.floating_point_mode = BRW_FLOATING_POINT_IEEE_754;
@@ -255,10 +250,10 @@ const struct brw_tracked_state brw_wm_unit = {
       .brw = BRW_NEW_BATCH |
              BRW_NEW_CURBE_OFFSETS |
              BRW_NEW_FRAGMENT_PROGRAM |
+             BRW_NEW_FS_PROG_DATA |
              BRW_NEW_PROGRAM_CACHE |
              BRW_NEW_SAMPLER_STATE_TABLE |
              BRW_NEW_STATS_WM,
-      .cache = CACHE_NEW_WM_PROG,
    },
    .emit = brw_upload_wm_unit,
 };

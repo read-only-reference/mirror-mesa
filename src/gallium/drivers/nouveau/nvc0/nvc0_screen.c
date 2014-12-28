@@ -189,6 +189,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
    case PIPE_CAP_FAKE_SW_MSAA:
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
+   case PIPE_CAP_VERTEXID_NOBASE:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -786,8 +787,6 @@ nvc0_screen_create(struct nouveau_device *dev)
    PUSH_DATA (push, 0);
    BEGIN_NVC0(push, NVC0_3D(LINE_WIDTH_SEPARATE), 1);
    PUSH_DATA (push, 1);
-   BEGIN_NVC0(push, NVC0_3D(LINE_LAST_PIXEL), 1);
-   PUSH_DATA (push, 0);
    BEGIN_NVC0(push, NVC0_3D(PRIM_RESTART_WITH_DRAW_ARRAYS), 1);
    PUSH_DATA (push, 1);
    BEGIN_NVC0(push, NVC0_3D(BLEND_SEPARATE_ALPHA), 1);

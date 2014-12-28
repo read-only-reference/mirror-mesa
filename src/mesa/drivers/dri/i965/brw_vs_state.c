@@ -47,7 +47,7 @@ brw_upload_vs_unit(struct brw_context *brw)
 			sizeof(*vs), 32, &stage_state->state_offset);
    memset(vs, 0, sizeof(*vs));
 
-   /* BRW_NEW_PROGRAM_CACHE | CACHE_NEW_VS_PROG */
+   /* BRW_NEW_PROGRAM_CACHE | BRW_NEW_VS_PROG_DATA */
    vs->thread0.grf_reg_count =
       ALIGN(brw->vs.prog_data->base.total_grf, 16) / 16 - 1;
    vs->thread0.kernel_start_pointer =
@@ -57,10 +57,7 @@ brw_upload_vs_unit(struct brw_context *brw)
 			stage_state->prog_offset +
 			(vs->thread0.grf_reg_count << 1)) >> 6;
 
-   /* Use ALT floating point mode for ARB vertex programs, because they
-    * require 0^0 == 1.
-    */
-   if (brw->ctx.Shader.CurrentProgram[MESA_SHADER_VERTEX] == NULL)
+   if (brw->vs.prog_data->base.base.use_alt_mode)
       vs->thread1.floating_point_mode = BRW_FLOATING_POINT_NON_IEEE_754;
    else
       vs->thread1.floating_point_mode = BRW_FLOATING_POINT_IEEE_754;
@@ -99,7 +96,7 @@ brw_upload_vs_unit(struct brw_context *brw)
       brw->vs.prog_data->base.base.dispatch_grf_start_reg;
    vs->thread3.urb_entry_read_offset = 0;
 
-   /* BRW_NEW_CURBE_OFFSETS, _NEW_TRANSFORM, BRW_NEW_VERTEX_PROGRAM */
+   /* BRW_NEW_CURBE_OFFSETS */
    vs->thread3.const_urb_entry_read_offset = brw->curbe.vs_start * 2;
 
    /* BRW_NEW_URB_FENCE */
@@ -186,14 +183,13 @@ brw_upload_vs_unit(struct brw_context *brw)
 
 const struct brw_tracked_state brw_vs_unit = {
    .dirty = {
-      .mesa  = _NEW_TRANSFORM,
+      .mesa  = 0,
       .brw   = BRW_NEW_BATCH |
                BRW_NEW_CURBE_OFFSETS |
                BRW_NEW_PROGRAM_CACHE |
                BRW_NEW_SAMPLER_STATE_TABLE |
                BRW_NEW_URB_FENCE |
-               BRW_NEW_VERTEX_PROGRAM,
-      .cache = CACHE_NEW_VS_PROG,
+               BRW_NEW_VS_PROG_DATA,
    },
    .emit = brw_upload_vs_unit,
 };

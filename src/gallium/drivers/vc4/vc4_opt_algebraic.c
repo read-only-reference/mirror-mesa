@@ -59,33 +59,34 @@ dump_to(struct vc4_compile *c, struct qinst *inst)
         fprintf(stderr, "\n");
 }
 
-static struct qreg
-follow_movs(struct qinst **defs, struct qreg reg)
+static bool
+is_constant_value(struct vc4_compile *c, struct qinst **defs, struct qreg reg,
+                  uint32_t val)
 {
-        while (reg.file == QFILE_TEMP && defs[reg.index]->op == QOP_MOV)
-                reg = defs[reg.index]->src[0];
+        if (reg.file == QFILE_UNIF &&
+            c->uniform_contents[reg.index] == QUNIFORM_CONSTANT &&
+            c->uniform_data[reg.index] == val) {
+                return true;
+        }
 
-        return reg;
+        if (reg.file == QFILE_SMALL_IMM && reg.index == val)
+                return true;
+
+        return false;
 }
 
 static bool
 is_zero(struct vc4_compile *c, struct qinst **defs, struct qreg reg)
 {
-        reg = follow_movs(defs, reg);
-
-        return (reg.file == QFILE_UNIF &&
-                c->uniform_contents[reg.index] == QUNIFORM_CONSTANT &&
-                c->uniform_data[reg.index] == 0);
+        reg = qir_follow_movs(defs, reg);
+        return is_constant_value(c, defs, reg, 0);
 }
 
 static bool
 is_1f(struct vc4_compile *c, struct qinst **defs, struct qreg reg)
 {
-        reg = follow_movs(defs, reg);
-
-        return (reg.file == QFILE_UNIF &&
-                c->uniform_contents[reg.index] == QUNIFORM_CONSTANT &&
-                c->uniform_data[reg.index] == fui(1.0));
+        reg = qir_follow_movs(defs, reg);
+        return is_constant_value(c, defs, reg, fui(1.0));
 }
 
 static void

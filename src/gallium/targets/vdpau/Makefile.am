@@ -40,6 +40,9 @@ libvdpau_gallium_la_LIBADD = \
 EXTRA_libvdpau_gallium_la_DEPENDENCIES = \
 	vdpau.sym \
 	$(top_srcdir)/src/gallium/targets/dri-vdpau.dyn
+EXTRA_DIST = \
+	vdpau.sym \
+	$(top_srcdir)/src/gallium/targets/dri-vdpau.dyn
 
 TARGET_DRIVERS =
 TARGET_CPPFLAGS =
@@ -90,6 +93,12 @@ all-local: $(vdpau_LTLIBRARIES)
 		ln -sf $${l}						\
 		       $${link_dir}/$${k};				\
 	done
+
+clean-local:
+	$(AM_V_GEN)link_dir=$(top_builddir)/$(LIB_DIR)/gallium;		\
+	$(AM_V_GEN)for i in $(TARGET_DRIVERS); do			\
+		$(RM) $${link_dir}/libvdpau_$${i}.so{,.$(VDPAU_MAJOR){,.$(VDPAU_MINOR){,.0}}}; \
+	done;
 endif
 
 # hardlink each megadriver instance, but don't actually have
@@ -109,4 +118,9 @@ install-data-hook:
 		ln -sf $${l}						\
 		       $${dest_dir}/$${k};				\
 	done;								\
-	$(RM) -f $${dest_dir}/libvdpau_gallium.*
+	$(RM) $${dest_dir}/libvdpau_gallium.*
+
+uninstall-hook:
+	for i in $(TARGET_DRIVERS); do					\
+		$(RM) $(DESTDIR)$(vdpaudir)/libvdpau_$${i}.so{,.$(VDPAU_MAJOR){,.$(VDPAU_MINOR){,.0}}}; \
+	done;

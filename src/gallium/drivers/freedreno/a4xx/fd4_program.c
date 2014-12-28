@@ -39,7 +39,7 @@
 #include "fd4_program.h"
 #include "fd4_emit.h"
 #include "fd4_texture.h"
-#include "fd4_util.h"
+#include "fd4_format.h"
 
 static void
 delete_shader_stateobj(struct fd4_shader_stateobj *so)
@@ -200,6 +200,7 @@ fd4_program_emit(struct fd_ringbuffer *ring, struct fd4_emit *emit)
 {
 	struct stage s[MAX_STAGES];
 	uint32_t pos_regid, posz_regid, psize_regid, color_regid;
+	uint32_t face_regid, coord_regid;
 	int constmode;
 	int i, j, k;
 
@@ -216,6 +217,10 @@ fd4_program_emit(struct fd_ringbuffer *ring, struct fd4_emit *emit)
 		ir3_semantic_name(TGSI_SEMANTIC_PSIZE, 0));
 	color_regid = ir3_find_output_regid(s[FS].v,
 		ir3_semantic_name(TGSI_SEMANTIC_COLOR, 0));
+
+	/* TODO get these dynamically: */
+	face_regid = s[FS].v->frag_face ? regid(0,0) : regid(63,0);
+	coord_regid = s[FS].v->frag_coord ? regid(0,0) : regid(63,0);
 
 	/* we could probably divide this up into things that need to be
 	 * emitted if frag-prog is dirty vs if vert-prog is dirty..
@@ -235,11 +240,14 @@ fd4_program_emit(struct fd_ringbuffer *ring, struct fd4_emit *emit)
 			A4XX_HLSQ_CONTROL_0_REG_SPSHADERRESTART |
 			A4XX_HLSQ_CONTROL_0_REG_SPCONSTFULLUPDATE);
 	OUT_RING(ring, A4XX_HLSQ_CONTROL_1_REG_VSTHREADSIZE(TWO_QUADS) |
-			0xfcfc0000 |          /* XXX */
+			0xfc000000 |          /* XXX */
 			A4XX_HLSQ_CONTROL_1_REG_VSSUPERTHREADENABLE |
-			COND(s[FS].v->frag_coord, A4XX_HLSQ_CONTROL_1_REG_ZWCOORD));
-	OUT_RING(ring, A4XX_HLSQ_CONTROL_2_REG_PRIMALLOCTHRESHOLD(31));
-	OUT_RING(ring, A4XX_HLSQ_CONTROL_3_REG_REGID(s[FS].v->pos_regid));
+			A4XX_HLSQ_CONTROL_1_REG_COORDREGID(coord_regid));
+	OUT_RING(ring, A4XX_HLSQ_CONTROL_2_REG_PRIMALLOCTHRESHOLD(63) |
+			0x3f3f000 |           /* XXX */
+			A4XX_HLSQ_CONTROL_2_REG_FACEREGID(face_regid));
+	OUT_RING(ring, A4XX_HLSQ_CONTROL_3_REG_REGID(s[FS].v->pos_regid) |
+			0xfcfcfc00);
 
 	OUT_PKT0(ring, REG_A4XX_HLSQ_VS_CONTROL_REG, 5);
 	OUT_RING(ring, A4XX_HLSQ_VS_CONTROL_REG_CONSTLENGTH(s[VS].constlen) |
@@ -349,7 +357,9 @@ fd4_program_emit(struct fd_ringbuffer *ring, struct fd4_emit *emit)
 			COND(s[FS].v->has_samp, A4XX_SP_FS_CTRL_REG0_PIXLODENABLE));
 	OUT_RING(ring, A4XX_SP_FS_CTRL_REG1_CONSTLENGTH(s[FS].constlen) |
 			0x80000000 |      /* XXX */
-			COND(s[FS].v->total_in > 0, A4XX_SP_FS_CTRL_REG1_VARYING));
+			COND(s[FS].v->frag_face, A4XX_SP_FS_CTRL_REG1_FACENESS) |
+			COND(s[FS].v->total_in > 0, A4XX_SP_FS_CTRL_REG1_VARYING) |
+			COND(s[FS].v->frag_coord, A4XX_SP_FS_CTRL_REG1_FRAGCOORD));
 
 	OUT_PKT0(ring, REG_A4XX_SP_FS_OBJ_OFFSET_REG, 2);
 	OUT_RING(ring, A4XX_SP_FS_OBJ_OFFSET_REG_CONSTOBJECTOFFSET(s[FS].constoff) |
@@ -371,13 +381,21 @@ fd4_program_emit(struct fd_ringbuffer *ring, struct fd4_emit *emit)
 	OUT_RING(ring, A4XX_SP_GS_OBJ_OFFSET_REG_CONSTOBJECTOFFSET(s[GS].constoff) |
 			A4XX_SP_GS_OBJ_OFFSET_REG_SHADEROBJOFFSET(s[GS].instroff));
 
-	OUT_PKT0(ring, REG_A4XX_RB_MSAA_CONTROL2, 1);
-	OUT_RING(ring, A4XX_RB_MSAA_CONTROL2_MSAA_SAMPLES(0) |
-			COND(s[FS].v->total_in > 0, A4XX_RB_MSAA_CONTROL2_VARYING));
+	OUT_PKT0(ring, REG_A4XX_RB_RENDER_CONTROL2, 1);
+	OUT_RING(ring, A4XX_RB_RENDER_CONTROL2_MSAA_SAMPLES(0) |
+			COND(s[FS].v->total_in > 0, A4XX_RB_RENDER_CONTROL2_VARYING) |
+			COND(s[FS].v->frag_face, A4XX_RB_RENDER_CONTROL2_FACENESS) |
+			COND(s[FS].v->frag_coord, A4XX_RB_RENDER_CONTROL2_XCOORD |
+					A4XX_RB_RENDER_CONTROL2_YCOORD));
+
+	OUT_PKT0(ring, REG_A4XX_RB_FS_OUTPUT_REG, 1);
+	OUT_RING(ring, A4XX_RB_FS_OUTPUT_REG_COLOR_PIPE_ENABLE |
+			COND(s[FS].v->writes_pos, A4XX_RB_FS_OUTPUT_REG_FRAG_WRITES_Z));
 
 	OUT_PKT0(ring, REG_A4XX_SP_FS_OUTPUT_REG, 1);
 	if (s[FS].v->writes_pos) {
-		OUT_RING(ring, A4XX_SP_FS_OUTPUT_REG_DEPTH_ENABLE |
+		OUT_RING(ring, 0x00000001 |
+				A4XX_SP_FS_OUTPUT_REG_DEPTH_ENABLE |
 				A4XX_SP_FS_OUTPUT_REG_DEPTH_REGID(posz_regid));
 	} else {
 		OUT_RING(ring, 0x00000001);
@@ -425,6 +443,25 @@ fd4_program_emit(struct fd_ringbuffer *ring, struct fd4_emit *emit)
 				}
 			}
 		}
+
+		/* HACK: looks like we need to do int varyings in the frag
+		 * shader on a4xx (no flatshad reg?):
+		 *
+		 *    (sy)(ss)nop
+		 *    (sy)ldlv.u32 r0.x,l[r0.x], 1
+		 *    ldlv.u32 r0.y,l[r0.x+1], 1
+		 *    (ss)bary.f (ei)r63.x, 0, r0.x
+		 *    (ss)(rpt1)cov.s32f16 hr0.x, (r)r0.x
+		 *    (rpt5)nop
+		 *    sam (f16)(xyzw)hr0.x, hr0.x, s#0, t#0
+		 *
+		 * for now, don't set FLAT on vinterp[], since that
+		 * at least works well enough for pure float impl (ie.
+		 * pre glsl130).. we'll have to do a bit more work to
+		 * handle this properly:
+		 */
+		for (i = 0; i < ARRAY_SIZE(vinterp); i++)
+			vinterp[i] = 0;
 
 		OUT_PKT0(ring, REG_A4XX_VPC_ATTR, 2);
 		OUT_RING(ring, A4XX_VPC_ATTR_TOTALATTR(s[FS].v->total_in) |

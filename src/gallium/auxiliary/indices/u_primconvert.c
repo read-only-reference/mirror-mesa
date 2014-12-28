@@ -74,6 +74,8 @@ util_primconvert_create(struct pipe_context *pipe, uint32_t primtypes_mask)
 void
 util_primconvert_destroy(struct primconvert_context *pc)
 {
+   if (pc->upload)
+      u_upload_destroy(pc->upload);
    util_primconvert_save_index_buffer(pc, NULL);
    FREE(pc);
 }
@@ -124,6 +126,9 @@ util_primconvert_draw_vbo(struct primconvert_context *pc,
    new_info.indexed = true;
    new_info.min_index = info->min_index;
    new_info.max_index = info->max_index;
+   new_info.index_bias = info->index_bias;
+   new_info.start_instance = info->start_instance;
+   new_info.instance_count = info->instance_count;
 
    if (info->indexed) {
       u_index_translator(pc->primtypes_mask,
@@ -136,6 +141,7 @@ util_primconvert_draw_vbo(struct primconvert_context *pc,
          src = pipe_buffer_map(pc->pipe, ib->buffer,
                                PIPE_TRANSFER_READ, &src_transfer);
       }
+      src = (const uint8_t *)src + ib->offset;
    }
    else {
       u_index_generator(pc->primtypes_mask,

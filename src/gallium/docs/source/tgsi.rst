@@ -524,15 +524,6 @@ This instruction replicates its result.
   dst.w = (src0.w != src1.w) ? 1.0F : 0.0F
 
 
-.. opcode:: STR - Set On True
-
-This instruction replicates its result.
-
-.. math::
-
-  dst = 1.0F
-
-
 .. opcode:: TEX - Texture Lookup
 
   for array textures src0.y contains the slice for 1D,
@@ -2521,8 +2512,10 @@ The Y component starts at zero and always increases but Y=0 may either
 indicate the top of the window or the bottom depending on the fragment
 coordinate origin convention (see TGSI_PROPERTY_FS_COORD_ORIGIN).
 The Z coordinate ranges from 0 to 1 to represent depth from the front
-to the back of the Z buffer.  The W component contains the reciprocol
-of the interpolated vertex position W component.
+to the back of the Z buffer.  The W component contains the interpolated
+reciprocal of the vertex position W component (corresponding to gl_Fragcoord,
+but unlike d3d10 which interpolates the same 1/w but then gives back
+the reciprocal of the interpolated value).
 
 Fragment shaders may also declare an output register with
 TGSI_SEMANTIC_POSITION.  Only the Z component is writable.  This allows
@@ -2658,7 +2651,7 @@ TGSI_SEMANTIC_VIEWPORT_INDEX
 
 For geometry shaders, this semantic label indicates that an output
 contains the index of the viewport (and scissor) to use.
-Only the X value is used.
+This is an integer value, and only the X component is used.
 
 
 TGSI_SEMANTIC_LAYER
@@ -2666,7 +2659,8 @@ TGSI_SEMANTIC_LAYER
 
 For geometry shaders, this semantic label indicates that an output
 contains the layer value to use for the color and depth/stencil surfaces.
-Only the X value is used. (Also known as rendertarget array index.)
+This is an integer value, and only the X component is used.
+(Also known as rendertarget array index.)
 
 
 TGSI_SEMANTIC_CULLDIST
@@ -2707,7 +2701,8 @@ TGSI_SEMANTIC_SAMPLEID
 """"""""""""""""""""""
 
 For fragment shaders, this semantic label indicates that a system value
-contains the current sample id (i.e. gl_SampleID). Only the X value is used.
+contains the current sample id (i.e. gl_SampleID).
+This is an integer value, and only the X component is used.
 
 TGSI_SEMANTIC_SAMPLEPOS
 """""""""""""""""""""""
@@ -2727,8 +2722,48 @@ TGSI_SEMANTIC_INVOCATIONID
 """"""""""""""""""""""""""
 
 For geometry shaders, this semantic label indicates that a system value
-contains the current invocation id (i.e. gl_InvocationID). Only the X value is
-used.
+contains the current invocation id (i.e. gl_InvocationID).
+This is an integer value, and only the X component is used.
+
+TGSI_SEMANTIC_INSTANCEID
+""""""""""""""""""""""""
+
+For vertex shaders, this semantic label indicates that a system value contains
+the current instance id (i.e. gl_InstanceID). It does not include the base
+instance. This is an integer value, and only the X component is used.
+
+TGSI_SEMANTIC_VERTEXID
+""""""""""""""""""""""
+
+For vertex shaders, this semantic label indicates that a system value contains
+the current vertex id (i.e. gl_VertexID). It does (unlike in d3d10) include the
+base vertex. This is an integer value, and only the X component is used.
+
+TGSI_SEMANTIC_VERTEXID_NOBASE
+"""""""""""""""""""""""""""""""
+
+For vertex shaders, this semantic label indicates that a system value contains
+the current vertex id without including the base vertex (this corresponds to
+d3d10 vertex id, so TGSI_SEMANTIC_VERTEXID_NOBASE + TGSI_SEMANTIC_BASEVERTEX
+== TGSI_SEMANTIC_VERTEXID). This is an integer value, and only the X component
+is used.
+
+TGSI_SEMANTIC_BASEVERTEX
+""""""""""""""""""""""""
+
+For vertex shaders, this semantic label indicates that a system value contains
+the base vertex (i.e. gl_BaseVertex). Note that for non-indexed draw calls,
+this contains the first (or start) value instead.
+This is an integer value, and only the X component is used.
+
+TGSI_SEMANTIC_PRIMID
+""""""""""""""""""""
+
+For geometry and fragment shaders, this semantic label indicates the value
+contains the primitive id (i.e. gl_PrimitiveID). This is an integer value,
+and only the X component is used.
+FIXME: This right now can be either a ordinary input or a system value...
+
 
 Declaration Interpolate
 ^^^^^^^^^^^^^^^^^^^^^^^

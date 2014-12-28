@@ -116,6 +116,25 @@ brw_compute_barycentric_interp_modes(struct brw_context *brw,
    return barycentric_interp_modes;
 }
 
+static uint8_t
+computed_depth_mode(struct gl_fragment_program *fp)
+{
+   if (fp->Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_DEPTH)) {
+      switch (fp->FragDepthLayout) {
+      case FRAG_DEPTH_LAYOUT_NONE:
+      case FRAG_DEPTH_LAYOUT_ANY:
+         return BRW_PSCDEPTH_ON;
+      case FRAG_DEPTH_LAYOUT_GREATER:
+         return BRW_PSCDEPTH_ON_GE;
+      case FRAG_DEPTH_LAYOUT_LESS:
+         return BRW_PSCDEPTH_ON_LE;
+      case FRAG_DEPTH_LAYOUT_UNCHANGED:
+         return BRW_PSCDEPTH_OFF;
+      }
+   }
+   return BRW_PSCDEPTH_OFF;
+}
+
 bool
 brw_wm_prog_data_compare(const void *in_a, const void *in_b)
 {
@@ -160,6 +179,12 @@ bool do_wm_prog(struct brw_context *brw,
     * so the shader definitely kills pixels.
     */
    prog_data.uses_kill = fp->program.UsesKill || key->alpha_test_func;
+
+   prog_data.computed_depth_mode = computed_depth_mode(&fp->program);
+
+   /* Use ALT floating point mode for ARB programs so that 0^0 == 1. */
+   if (!prog)
+      prog_data.base.use_alt_mode = true;
 
    /* Allocate the references to the uniforms that will end up in the
     * prog_data associated with the compiled program, and which will be freed
@@ -468,13 +493,8 @@ static void brw_wm_populate_key( struct brw_context *brw,
    key->line_aa = line_aa;
 
    /* _NEW_HINT */
-   if (brw->disable_derivative_optimization) {
-      key->high_quality_derivatives =
-         ctx->Hint.FragmentShaderDerivative != GL_FASTEST;
-   } else {
-      key->high_quality_derivatives =
-         ctx->Hint.FragmentShaderDerivative == GL_NICEST;
-   }
+   key->high_quality_derivatives =
+      ctx->Hint.FragmentShaderDerivative == GL_NICEST;
 
    if (brw->gen < 6)
       key->stats_wm = brw->stats_wm;

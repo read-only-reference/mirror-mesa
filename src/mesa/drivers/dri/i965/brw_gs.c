@@ -330,11 +330,8 @@ brw_upload_gs_prog(struct brw_context *brw)
    memset(&key, 0, sizeof(key));
 
    key.base.program_string_id = gp->id;
-   brw_setup_vec4_key_clip_info(brw, &key.base,
-                                gp->program.Base.UsesClipDistanceOut);
-
-   /* _NEW_LIGHT | _NEW_BUFFERS */
-   key.base.clamp_vertex_color = ctx->Light._ClampVertexColor;
+   brw_setup_vue_key_clip_info(brw, &key.base,
+                               gp->program.Base.UsesClipDistanceOut);
 
    /* _NEW_TEXTURE */
    brw_populate_sampler_prog_key_data(ctx, prog, stage_state->sampler_count,
@@ -364,9 +361,7 @@ brw_upload_gs_prog(struct brw_context *brw)
 
 const struct brw_tracked_state brw_gs_prog = {
    .dirty = {
-      .mesa  = _NEW_BUFFERS |
-               _NEW_LIGHT |
-               _NEW_TEXTURE,
+      .mesa  = _NEW_TEXTURE,
       .brw   = BRW_NEW_GEOMETRY_PROGRAM |
                BRW_NEW_TRANSFORM_FEEDBACK |
                BRW_NEW_VUE_MAP_VS,
@@ -391,7 +386,7 @@ brw_gs_precompile(struct gl_context *ctx,
 
    memset(&key, 0, sizeof(key));
 
-   brw_vec4_setup_prog_key_for_precompile(ctx, &key.base, bgp->id, &gp->Base);
+   brw_vue_setup_prog_key_for_precompile(ctx, &key.base, bgp->id, &gp->Base);
 
    /* Assume that the set of varyings coming in from the vertex shader exactly
     * matches what the geometry shader requires.

@@ -34,10 +34,17 @@
 #define SI_BIG_ENDIAN 0
 #endif
 
+/* The base vertex and primitive restart can be any number, but we must pick
+ * one which will mean "unknown" for the purpose of state tracking and
+ * the number shouldn't be a commonly-used one. */
+#define SI_BASE_VERTEX_UNKNOWN INT_MIN
+#define SI_RESTART_INDEX_UNKNOWN INT_MIN
+
 #define SI_TRACE_CS 0
 #define SI_TRACE_CS_DWORDS		6
 
-#define SI_MAX_DRAW_CS_DWORDS 18
+#define SI_MAX_DRAW_CS_DWORDS \
+	(/*derived prim state:*/ 6 + /*draw regs:*/ 16 + /*draw packets:*/ 31)
 
 struct si_compute;
 
@@ -108,6 +115,7 @@ struct si_context {
 			struct r600_atom *framebuffer;
 			struct r600_atom *db_render_state;
 			struct r600_atom *msaa_config;
+			struct r600_atom *clip_regs;
 		} s;
 		struct r600_atom *array[0];
 	} atoms;
@@ -132,14 +140,11 @@ struct si_context {
 	struct r600_resource		*border_color_table;
 	unsigned			border_color_offset;
 
+	struct r600_atom		clip_regs;
 	struct r600_atom		msaa_config;
 	int				ps_iter_samples;
 
 	unsigned default_ps_gprs, default_vs_gprs;
-
-	/* Below are variables from the old r600_context.
-	 */
-	unsigned		pm4_dirty_cdwords;
 
 	/* Vertex and index buffers. */
 	bool			vertex_buffers_dirty;
@@ -170,6 +175,17 @@ struct si_context {
 	bool			db_depth_clear;
 	bool			db_depth_disable_expclear;
 	unsigned		ps_db_shader_control;
+
+	/* Draw state. */
+	int			last_base_vertex;
+	int			last_start_instance;
+	int			last_sh_base_reg;
+	int			last_primitive_restart_en;
+	int			last_restart_index;
+	int			last_gs_out_prim;
+	int			last_prim;
+	int			last_multi_vgt_param;
+	int			last_rast_prim;
 };
 
 /* si_blit.c */
@@ -226,6 +242,14 @@ si_resource_create_custom(struct pipe_screen *screen,
 	assert(size);
 	return r600_resource(pipe_buffer_create(screen,
 		PIPE_BIND_CUSTOM, usage, size));
+}
+
+static INLINE void
+si_invalidate_draw_sh_constants(struct si_context *sctx)
+{
+	sctx->last_base_vertex = SI_BASE_VERTEX_UNKNOWN;
+	sctx->last_start_instance = -1; /* reset to an unknown value */
+	sctx->last_sh_base_reg = -1; /* reset to an unknown value */
 }
 
 #endif

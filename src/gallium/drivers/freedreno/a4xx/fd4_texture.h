@@ -35,7 +35,7 @@
 #include "freedreno_resource.h"
 
 #include "fd4_context.h"
-#include "fd4_util.h"
+#include "fd4_format.h"
 
 struct fd4_sampler_stateobj {
 	struct pipe_sampler_state base;
@@ -51,7 +51,7 @@ fd4_sampler_stateobj(struct pipe_sampler_state *samp)
 struct fd4_pipe_sampler_view {
 	struct pipe_sampler_view base;
 	struct fd_resource *tex_resource;
-	uint32_t texconst0, texconst1, texconst2, texconst3;
+	uint32_t texconst0, texconst1, texconst2, texconst3, textconst4;
 };
 
 static INLINE struct fd4_pipe_sampler_view *

@@ -74,6 +74,19 @@ brw_shader_precompile(struct gl_context *ctx,
    return true;
 }
 
+static inline bool
+is_scalar_shader_stage(struct brw_context *brw, int stage)
+{
+   switch (stage) {
+   case MESA_SHADER_FRAGMENT:
+      return true;
+   case MESA_SHADER_VERTEX:
+      return brw->scalar_vs;
+   default:
+      return false;
+   }
+}
+
 static void
 brw_lower_packing_builtins(struct brw_context *brw,
                            gl_shader_stage shader_type,
@@ -84,7 +97,7 @@ brw_lower_packing_builtins(struct brw_context *brw,
            | LOWER_PACK_UNORM_2x16
            | LOWER_UNPACK_UNORM_2x16;
 
-   if (shader_type == MESA_SHADER_FRAGMENT) {
+   if (is_scalar_shader_stage(brw, shader_type)) {
       ops |= LOWER_UNPACK_UNORM_4x8
            | LOWER_UNPACK_SNORM_4x8
            | LOWER_PACK_UNORM_4x8
@@ -97,7 +110,7 @@ brw_lower_packing_builtins(struct brw_context *brw,
        * lowering is needed. For SOA code, the Half2x16 ops must be
        * scalarized.
        */
-      if (shader_type == MESA_SHADER_FRAGMENT) {
+      if (is_scalar_shader_stage(brw, shader_type)) {
          ops |= LOWER_PACK_HALF_2x16_TO_SPLIT
              |  LOWER_UNPACK_HALF_2x16_TO_SPLIT;
       }
@@ -185,7 +198,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
       do {
 	 progress = false;
 
-	 if (stage == MESA_SHADER_FRAGMENT) {
+	 if (is_scalar_shader_stage(brw, stage)) {
 	    brw_do_channel_expressions(shader->base.ir);
 	    brw_do_vector_splitting(shader->base.ir);
 	 }
@@ -275,8 +288,8 @@ brw_type_for_base_type(const struct glsl_type *type)
    case GLSL_TYPE_FLOAT:
       return BRW_REGISTER_TYPE_F;
    case GLSL_TYPE_INT:
-      return BRW_REGISTER_TYPE_D;
    case GLSL_TYPE_BOOL:
+      return BRW_REGISTER_TYPE_D;
    case GLSL_TYPE_UINT:
       return BRW_REGISTER_TYPE_UD;
    case GLSL_TYPE_ARRAY:
@@ -380,16 +393,16 @@ brw_texture_offset(struct gl_context *ctx, int *offsets,
 const char *
 brw_instruction_name(enum opcode op)
 {
-   char *fallback;
-
-   if (op < ARRAY_SIZE(opcode_descs) && opcode_descs[op].name)
-      return opcode_descs[op].name;
-
    switch (op) {
+   case BRW_OPCODE_MOV ... BRW_OPCODE_NOP:
+      assert(opcode_descs[op].name);
+      return opcode_descs[op].name;
    case FS_OPCODE_FB_WRITE:
       return "fb_write";
    case FS_OPCODE_BLORP_FB_WRITE:
       return "blorp_fb_write";
+   case FS_OPCODE_REP_FB_WRITE:
+      return "rep_fb_write";
 
    case SHADER_OPCODE_RCP:
       return "rcp";
@@ -430,12 +443,19 @@ brw_instruction_name(enum opcode op)
       return "txf_ums";
    case SHADER_OPCODE_TXF_MCS:
       return "txf_mcs";
+   case SHADER_OPCODE_LOD:
+      return "lod";
    case SHADER_OPCODE_TG4:
       return "tg4";
    case SHADER_OPCODE_TG4_OFFSET:
       return "tg4_offset";
    case SHADER_OPCODE_SHADER_TIME_ADD:
       return "shader_time_add";
+
+   case SHADER_OPCODE_UNTYPED_ATOMIC:
+      return "untyped_atomic";
+   case SHADER_OPCODE_UNTYPED_SURFACE_READ:
+      return "untyped_surface_read";
 
    case SHADER_OPCODE_LOAD_PAYLOAD:
       return "load_payload";
@@ -446,9 +466,13 @@ brw_instruction_name(enum opcode op)
       return "gen4_scratch_write";
    case SHADER_OPCODE_GEN7_SCRATCH_READ:
       return "gen7_scratch_read";
+   case SHADER_OPCODE_URB_WRITE_SIMD8:
+      return "gen8_urb_write_simd8";
 
    case VEC4_OPCODE_PACK_BYTES:
       return "pack_bytes";
+   case VEC4_OPCODE_UNPACK_UNIFORM:
+      return "unpack_uniform";
 
    case FS_OPCODE_DDX_COARSE:
       return "ddx_coarse";
@@ -483,6 +507,10 @@ brw_instruction_name(enum opcode op)
    case FS_OPCODE_DISCARD_JUMP:
       return "discard_jump";
 
+   case FS_OPCODE_SET_OMASK:
+      return "set_omask";
+   case FS_OPCODE_SET_SAMPLE_ID:
+      return "set_sample_id";
    case FS_OPCODE_SET_SIMD4X2_OFFSET:
       return "set_simd4x2_offset";
 
@@ -495,6 +523,15 @@ brw_instruction_name(enum opcode op)
 
    case FS_OPCODE_PLACEHOLDER_HALT:
       return "placeholder_halt";
+
+   case FS_OPCODE_INTERPOLATE_AT_CENTROID:
+      return "interp_centroid";
+   case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
+      return "interp_sample";
+   case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
+      return "interp_shared_offset";
+   case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
+      return "interp_per_slot_offset";
 
    case VS_OPCODE_URB_WRITE:
       return "vs_urb_write";
@@ -533,14 +570,56 @@ brw_instruction_name(enum opcode op)
       return "gs_svb_set_dst_index";
    case GS_OPCODE_FF_SYNC_SET_PRIMITIVES:
       return "gs_ff_sync_set_primitives";
-
-   default:
-      /* Yes, this leaks.  It's in debug code, it should never occur, and if
-       * it does, you should just add the case to the list above.
-       */
-      asprintf(&fallback, "op%d", op);
-      return fallback;
    }
+
+   unreachable("not reached");
+}
+
+bool
+brw_saturate_immediate(enum brw_reg_type type, struct brw_reg *reg)
+{
+   union {
+      unsigned ud;
+      int d;
+      float f;
+   } imm = { reg->dw1.ud }, sat_imm;
+
+   switch (type) {
+   case BRW_REGISTER_TYPE_UD:
+   case BRW_REGISTER_TYPE_D:
+   case BRW_REGISTER_TYPE_UQ:
+   case BRW_REGISTER_TYPE_Q:
+      /* Nothing to do. */
+      return false;
+   case BRW_REGISTER_TYPE_UW:
+      sat_imm.ud = CLAMP(imm.ud, 0, USHRT_MAX);
+      break;
+   case BRW_REGISTER_TYPE_W:
+      sat_imm.d = CLAMP(imm.d, SHRT_MIN, SHRT_MAX);
+      break;
+   case BRW_REGISTER_TYPE_F:
+      sat_imm.f = CLAMP(imm.f, 0.0f, 1.0f);
+      break;
+   case BRW_REGISTER_TYPE_UB:
+      sat_imm.ud = CLAMP(imm.ud, 0, UCHAR_MAX);
+      break;
+   case BRW_REGISTER_TYPE_B:
+      sat_imm.d = CLAMP(imm.d, CHAR_MIN, CHAR_MAX);
+      break;
+   case BRW_REGISTER_TYPE_V:
+   case BRW_REGISTER_TYPE_UV:
+   case BRW_REGISTER_TYPE_VF:
+      assert(!"unimplemented: saturate vector immediate");
+   case BRW_REGISTER_TYPE_DF:
+   case BRW_REGISTER_TYPE_HF:
+      assert(!"unimplemented: saturate DF/HF immediate");
+   }
+
+   if (imm.ud != sat_imm.ud) {
+      reg->dw1.ud = sat_imm.ud;
+      return true;
+   }
+   return false;
 }
 
 backend_visitor::backend_visitor(struct brw_context *brw,
@@ -737,6 +816,7 @@ backend_instruction::has_side_effects() const
 {
    switch (opcode) {
    case SHADER_OPCODE_UNTYPED_ATOMIC:
+   case SHADER_OPCODE_URB_WRITE_SIMD8:
    case FS_OPCODE_FB_WRITE:
       return true;
    default:

@@ -33,6 +33,7 @@ libXvMCgallium_la_LIBADD = \
 	$(GALLIUM_COMMON_LIB_DEPS)
 
 EXTRA_libXvMCgallium_la_DEPENDENCIES = xvmc.sym
+EXTRA_DIST = xvmc.sym
 
 TARGET_DRIVERS =
 TARGET_CPPFLAGS =
@@ -80,4 +81,9 @@ install-data-hook:
 		ln -sf $${l}						\
 		       $${dest_dir}/$${k};				\
 	done;								\
-	$(RM) -f $${dest_dir}/libXvMCgallium.*
+	$(RM) $${dest_dir}/libXvMCgallium.*
+
+uninstall-hook:
+	for i in $(TARGET_DRIVERS); do					\
+		$(RM) $(DESTDIR)$(xvmcdir)/libXvMC$${i}.so{,.$(XVMC_MAJOR){,.$(XVMC_MINOR){,.0}}}; \
+	done;

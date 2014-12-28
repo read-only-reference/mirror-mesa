@@ -887,6 +887,8 @@ unsigned r600_llvm_compile(
 
 	FREE(binary.code);
 	FREE(binary.config);
+	FREE(binary.rodata);
+	FREE(binary.global_symbol_offsets);
 
 	return r;
 }

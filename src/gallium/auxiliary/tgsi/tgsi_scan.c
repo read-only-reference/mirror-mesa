@@ -213,6 +213,12 @@ tgsi_scan_shader(const struct tgsi_token *tokens,
                   else if (semName == TGSI_SEMANTIC_VERTEXID) {
                      info->uses_vertexid = TRUE;
                   }
+                  else if (semName == TGSI_SEMANTIC_VERTEXID_NOBASE) {
+                     info->uses_vertexid_nobase = TRUE;
+                  }
+                  else if (semName == TGSI_SEMANTIC_BASEVERTEX) {
+                     info->uses_basevertex = TRUE;
+                  }
                   else if (semName == TGSI_SEMANTIC_PRIMID) {
                      info->uses_primid = TRUE;
                   }
@@ -227,16 +233,26 @@ tgsi_scan_shader(const struct tgsi_token *tokens,
                      if (semName == TGSI_SEMANTIC_CLIPDIST) {
                         info->num_written_clipdistance +=
                            util_bitcount(fulldecl->Declaration.UsageMask);
+                        info->clipdist_writemask |=
+                           fulldecl->Declaration.UsageMask << (semIndex*4);
                      }
                      else if (semName == TGSI_SEMANTIC_CULLDIST) {
                         info->num_written_culldistance +=
                            util_bitcount(fulldecl->Declaration.UsageMask);
+                        info->culldist_writemask |=
+                           fulldecl->Declaration.UsageMask << (semIndex*4);
                      }
                      else if (semName == TGSI_SEMANTIC_VIEWPORT_INDEX) {
                         info->writes_viewport_index = TRUE;
                      }
                      else if (semName == TGSI_SEMANTIC_LAYER) {
                         info->writes_layer = TRUE;
+                     }
+                     else if (semName == TGSI_SEMANTIC_PSIZE) {
+                        info->writes_psize = TRUE;
+                     }
+                     else if (semName == TGSI_SEMANTIC_CLIPVERTEX) {
+                        info->writes_clipvertex = TRUE;
                      }
                   }
 

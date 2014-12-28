@@ -39,7 +39,6 @@ extern "C" {
 #include "program/prog_parameter.h"
 #include "program/prog_print.h"
 #include "util/register_allocate.h"
-#include "program/sampler.h"
 #include "program/hash_table.h"
 #include "brw_context.h"
 #include "brw_eu.h"
@@ -51,6 +50,7 @@ extern "C" {
 #include "main/uniforms.h"
 #include "brw_fs_live_variables.h"
 #include "glsl/glsl_types.h"
+#include "program/sampler.h"
 
 void
 fs_inst::init(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
@@ -76,7 +76,7 @@ fs_inst::init(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
          this->exec_size = dst.width;
       } else {
          for (int i = 0; i < sources; ++i) {
-            if (src[i].file != GRF)
+            if (src[i].file != GRF && src[i].file != ATTR)
                continue;
 
             if (this->exec_size <= 1)
@@ -97,6 +97,7 @@ fs_inst::init(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
          break;
       case GRF:
       case HW_REG:
+      case ATTR:
          assert(this->src[i].width > 0);
          if (this->src[i].width == 1) {
             this->src[i].effective_width = this->exec_size;
@@ -121,6 +122,7 @@ fs_inst::init(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
    case GRF:
    case HW_REG:
    case MRF:
+   case ATTR:
       this->regs_written = (dst.width * dst.stride * type_sz(dst.type) + 31) / 32;
       break;
    case BAD_FILE:
@@ -509,6 +511,7 @@ fs_inst::is_send_from_grf() const
    case FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET:
    case SHADER_OPCODE_UNTYPED_ATOMIC:
    case SHADER_OPCODE_UNTYPED_SURFACE_READ:
+   case SHADER_OPCODE_URB_WRITE_SIMD8:
       return true;
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
       return src[1].file == GRF;
@@ -579,6 +582,15 @@ fs_reg::fs_reg(uint32_t u)
    this->type = BRW_REGISTER_TYPE_UD;
    this->fixed_hw_reg.dw1.ud = u;
    this->width = 1;
+}
+
+/** Vector float immediate value constructor. */
+fs_reg::fs_reg(uint8_t vf[4])
+{
+   init();
+   this->file = IMM;
+   this->type = BRW_REGISTER_TYPE_VF;
+   memcpy(&this->fixed_hw_reg.dw1.ud, vf, sizeof(unsigned));
 }
 
 /** Vector float immediate value constructor. */
@@ -898,9 +910,13 @@ fs_inst::regs_read(fs_visitor *v, int arg) const
       return mlen;
    } else if (opcode == FS_OPCODE_FB_WRITE && arg == 0) {
       return mlen;
+   } else if (opcode == SHADER_OPCODE_URB_WRITE_SIMD8 && arg == 0) {
+      return mlen;
    } else if (opcode == SHADER_OPCODE_UNTYPED_ATOMIC && arg == 0) {
       return mlen;
    } else if (opcode == SHADER_OPCODE_UNTYPED_SURFACE_READ && arg == 0) {
+      return mlen;
+   } else if (opcode == FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET && arg == 0) {
       return mlen;
    }
 
@@ -933,7 +949,9 @@ fs_inst::reads_flag() const
 bool
 fs_inst::writes_flag() const
 {
-   return (conditional_mod && opcode != BRW_OPCODE_SEL) ||
+   return (conditional_mod && (opcode != BRW_OPCODE_SEL &&
+                               opcode != BRW_OPCODE_IF &&
+                               opcode != BRW_OPCODE_WHILE)) ||
           opcode == FS_OPCODE_MOV_DISPATCH_TO_FLAGS;
 }
 
@@ -988,6 +1006,7 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
       return 2;
    case SHADER_OPCODE_UNTYPED_ATOMIC:
    case SHADER_OPCODE_UNTYPED_SURFACE_READ:
+   case SHADER_OPCODE_URB_WRITE_SIMD8:
    case FS_OPCODE_INTERPOLATE_AT_CENTROID:
    case FS_OPCODE_INTERPOLATE_AT_SAMPLE:
    case FS_OPCODE_INTERPOLATE_AT_SHARED_OFFSET:
@@ -1397,15 +1416,12 @@ fs_visitor::emit_frontfacing_interpolation()
        * instruction only operates on UD (or D with an abs source modifier)
        * sources without negation.
        *
-       * Instead, use ASR (which will give ~0/true or 0/false) followed by an
-       * AND 1.
+       * Instead, use ASR (which will give ~0/true or 0/false).
        */
-      fs_reg asr = fs_reg(this, glsl_type::bool_type);
       fs_reg g1_6 = fs_reg(retype(brw_vec1_grf(1, 6), BRW_REGISTER_TYPE_D));
       g1_6.negate = true;
 
-      emit(ASR(asr, g1_6, fs_reg(31)));
-      emit(AND(*reg, asr, fs_reg(1)));
+      emit(ASR(*reg, g1_6, fs_reg(31)));
    }
 
    return reg;
@@ -1799,6 +1815,61 @@ fs_visitor::assign_urb_setup()
    /* Each attribute is 4 setup channels, each of which is half a reg. */
    this->first_non_payload_grf =
       urb_start + prog_data->num_varying_inputs * 2;
+}
+
+void
+fs_visitor::assign_vs_urb_setup()
+{
+   brw_vs_prog_data *vs_prog_data = (brw_vs_prog_data *) prog_data;
+   int grf, count, slot, channel, attr;
+
+   assert(stage == MESA_SHADER_VERTEX);
+   count = _mesa_bitcount_64(vs_prog_data->inputs_read);
+   if (vs_prog_data->uses_vertexid || vs_prog_data->uses_instanceid)
+      count++;
+
+   /* Each attribute is 4 regs. */
+   this->first_non_payload_grf =
+      payload.num_regs + prog_data->curb_read_length + count * 4;
+
+   unsigned vue_entries =
+      MAX2(count, vs_prog_data->base.vue_map.num_slots);
+
+   vs_prog_data->base.urb_entry_size = ALIGN(vue_entries, 4) / 4;
+   vs_prog_data->base.urb_read_length = (count + 1) / 2;
+
+   assert(vs_prog_data->base.urb_read_length <= 15);
+
+   /* Rewrite all ATTR file references to the hw grf that they land in. */
+   foreach_block_and_inst(block, fs_inst, inst, cfg) {
+      for (int i = 0; i < inst->sources; i++) {
+         if (inst->src[i].file == ATTR) {
+
+            if (inst->src[i].reg == VERT_ATTRIB_MAX) {
+               slot = count - 1;
+            } else {
+               /* Attributes come in in a contiguous block, ordered by their
+                * gl_vert_attrib value.  That means we can compute the slot
+                * number for an attribute by masking out the enabled
+                * attributes before it and counting the bits.
+                */
+               attr = inst->src[i].reg + inst->src[i].reg_offset / 4;
+               slot = _mesa_bitcount_64(vs_prog_data->inputs_read &
+                                        BITFIELD64_MASK(attr));
+            }
+
+            channel = inst->src[i].reg_offset & 3;
+
+            grf = payload.num_regs +
+               prog_data->curb_read_length +
+               slot * 4 + channel;
+
+            inst->src[i].file = HW_REG;
+            inst->src[i].fixed_hw_reg =
+               retype(brw_vec8_grf(grf, 0), inst->src[i].type);
+         }
+      }
+   }
 }
 
 /**
@@ -2221,6 +2292,22 @@ fs_visitor::opt_algebraic()
 
    foreach_block_and_inst(block, fs_inst, inst, cfg) {
       switch (inst->opcode) {
+      case BRW_OPCODE_MOV:
+         if (inst->src[0].file != IMM)
+            break;
+
+         if (inst->saturate) {
+            if (inst->dst.type != inst->src[0].type)
+               assert(!"unimplemented: saturate mixed types");
+
+            if (brw_saturate_immediate(inst->dst.type,
+                                       &inst->src[0].fixed_hw_reg)) {
+               inst->saturate = false;
+               progress = true;
+            }
+         }
+         break;
+
       case BRW_OPCODE_MUL:
 	 if (inst->src[1].file != IMM)
 	    continue;
@@ -3127,6 +3214,9 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
    case UNIFORM:
       fprintf(file, "***u%d***", inst->dst.reg + inst->dst.reg_offset);
       break;
+   case ATTR:
+      fprintf(file, "***attr%d***", inst->dst.reg + inst->dst.reg_offset);
+      break;
    case HW_REG:
       if (inst->dst.fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE) {
          switch (inst->dst.fixed_hw_reg.nr) {
@@ -3177,6 +3267,9 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
          break;
       case MRF:
          fprintf(file, "***m%d***", inst->src[i].reg);
+         break;
+      case ATTR:
+         fprintf(file, "attr%d", inst->src[i].reg + inst->src[i].reg_offset);
          break;
       case UNIFORM:
          fprintf(file, "u%d", inst->src[i].reg + inst->src[i].reg_offset);
@@ -3383,6 +3476,13 @@ fs_visitor::setup_payload_gen6()
 }
 
 void
+fs_visitor::setup_vs_payload()
+{
+   /* R0: thread header, R1: urb handles */
+   payload.num_regs = 2;
+}
+
+void
 fs_visitor::assign_binding_table_offsets()
 {
    assert(stage == MESA_SHADER_FRAGMENT);
@@ -3417,38 +3517,11 @@ fs_visitor::calculate_register_pressure()
    }
 }
 
-/**
- * Look for repeated FS_OPCODE_MOV_DISPATCH_TO_FLAGS and drop the later ones.
- *
- * The needs_unlit_centroid_workaround ends up producing one of these per
- * channel of centroid input, so it's good to clean them up.
- *
- * An assumption here is that nothing ever modifies the dispatched pixels
- * value that FS_OPCODE_MOV_DISPATCH_TO_FLAGS reads from, but the hardware
- * dictates that anyway.
- */
-void
-fs_visitor::opt_drop_redundant_mov_to_flags()
-{
-   bool flag_mov_found[2] = {false};
-
-   foreach_block_and_inst_safe(block, fs_inst, inst, cfg) {
-      if (inst->is_control_flow()) {
-         memset(flag_mov_found, 0, sizeof(flag_mov_found));
-      } else if (inst->opcode == FS_OPCODE_MOV_DISPATCH_TO_FLAGS) {
-         if (!flag_mov_found[inst->flag_subreg])
-            flag_mov_found[inst->flag_subreg] = true;
-         else
-            inst->remove(block);
-      } else if (inst->writes_flag()) {
-         flag_mov_found[inst->flag_subreg] = false;
-      }
-   }
-}
-
 void
 fs_visitor::optimize()
 {
+   const char *stage_name = stage == MESA_SHADER_VERTEX ? "vs" : "fs";
+
    calculate_cfg();
 
    split_virtual_grfs();
@@ -3457,16 +3530,14 @@ fs_visitor::optimize()
    assign_constant_locations();
    demote_pull_constants();
 
-   opt_drop_redundant_mov_to_flags();
-
 #define OPT(pass, args...) do {                                         \
       pass_num++;                                                       \
       bool this_progress = pass(args);                                  \
                                                                         \
       if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER) && this_progress) {   \
          char filename[64];                                             \
-         snprintf(filename, 64, "fs%d-%04d-%02d-%02d-" #pass,           \
-                  dispatch_width, shader_prog ? shader_prog->Name : 0, iteration, pass_num); \
+         snprintf(filename, 64, "%s%d-%04d-%02d-%02d-" #pass,              \
+                  stage_name, dispatch_width, shader_prog ? shader_prog->Name : 0, iteration, pass_num); \
                                                                         \
          backend_visitor::dump_instructions(filename);                  \
       }                                                                 \
@@ -3476,8 +3547,8 @@ fs_visitor::optimize()
 
    if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER)) {
       char filename[64];
-      snprintf(filename, 64, "fs%d-%04d-00-start",
-               dispatch_width, shader_prog ? shader_prog->Name : 0);
+      snprintf(filename, 64, "%s%d-%04d-00-start",
+               stage_name, dispatch_width, shader_prog ? shader_prog->Name : 0);
 
       backend_visitor::dump_instructions(filename);
    }
@@ -3521,7 +3592,7 @@ fs_visitor::allocate_registers()
 {
    bool allocated_without_spills;
 
-   static enum instruction_scheduler_mode pre_modes[] = {
+   static const enum instruction_scheduler_mode pre_modes[] = {
       SCHEDULE_PRE,
       SCHEDULE_PRE_NON_LIFO,
       SCHEDULE_PRE_LIFO,
@@ -3545,6 +3616,9 @@ fs_visitor::allocate_registers()
    }
 
    if (!allocated_without_spills) {
+      const char *stage_name = stage == MESA_SHADER_VERTEX ?
+         "Vertex" : "Fragment";
+
       /* We assume that any spilling is worse than just dropping back to
        * SIMD8.  There's probably actually some intermediate point where
        * SIMD16 with a couple of spills is still better.
@@ -3553,9 +3627,9 @@ fs_visitor::allocate_registers()
          fail("Failure to register allocate.  Reduce number of "
               "live scalar values to avoid this.");
       } else {
-         perf_debug("Fragment shader triggered register spilling.  "
+         perf_debug("%s shader triggered register spilling.  "
                     "Try reducing the number of live scalar values to "
-                    "improve performance.\n");
+                    "improve performance.\n", stage_name);
       }
 
       /* Since we're out of heuristics, just go spill registers until we
@@ -3584,8 +3658,45 @@ fs_visitor::allocate_registers()
 }
 
 bool
-fs_visitor::run()
+fs_visitor::run_vs()
 {
+   assert(stage == MESA_SHADER_VERTEX);
+
+   assign_common_binding_table_offsets(0);
+   setup_vs_payload();
+
+   if (INTEL_DEBUG & DEBUG_SHADER_TIME)
+      emit_shader_time_begin();
+
+   foreach_in_list(ir_instruction, ir, shader->base.ir) {
+      base_ir = ir;
+      this->result = reg_undef;
+      ir->accept(this);
+   }
+   base_ir = NULL;
+   if (failed)
+      return false;
+
+   emit_urb_writes();
+
+   optimize();
+
+   assign_curb_setup();
+   assign_vs_urb_setup();
+
+   allocate_registers();
+
+   return !failed;
+}
+
+bool
+fs_visitor::run_fs()
+{
+   brw_wm_prog_data *wm_prog_data = (brw_wm_prog_data *) this->prog_data;
+   brw_wm_prog_key *wm_key = (brw_wm_prog_key *) this->key;
+
+   assert(stage == MESA_SHADER_FRAGMENT);
+
    sanity_param_count = prog->Parameters->NumParameters;
 
    assign_binding_table_offsets();
@@ -3614,13 +3725,7 @@ fs_visitor::run()
       /* We handle discards by keeping track of the still-live pixels in f0.1.
        * Initialize it with the dispatched pixels.
        */
-      bool uses_kill =
-         (stage == MESA_SHADER_FRAGMENT) &&
-         ((brw_wm_prog_data*) this->prog_data)->uses_kill;
-      bool alpha_test_func =
-         (stage == MESA_SHADER_FRAGMENT) &&
-         ((brw_wm_prog_key*) this->key)->alpha_test_func;
-      if (uses_kill) {
+      if (wm_prog_data->uses_kill) {
          fs_inst *discard_init = emit(FS_OPCODE_MOV_DISPATCH_TO_FLAGS);
          discard_init->flag_subreg = 1;
       }
@@ -3643,7 +3748,7 @@ fs_visitor::run()
 
       emit(FS_OPCODE_PLACEHOLDER_HALT);
 
-      if (alpha_test_func)
+      if (wm_key->alpha_test_func)
          emit_alpha_test();
 
       emit_fb_writes();
@@ -3659,13 +3764,10 @@ fs_visitor::run()
          return false;
    }
 
-   if (stage == MESA_SHADER_FRAGMENT) {
-      brw_wm_prog_data *prog_data = (brw_wm_prog_data*) this->prog_data;
-      if (dispatch_width == 8)
-         prog_data->reg_blocks = brw_register_blocks(grf_used);
-      else
-         prog_data->reg_blocks_16 = brw_register_blocks(grf_used);
-   }
+   if (dispatch_width == 8)
+      wm_prog_data->reg_blocks = brw_register_blocks(grf_used);
+   else
+      wm_prog_data->reg_blocks_16 = brw_register_blocks(grf_used);
 
    /* If any state parameters were appended, then ParameterValues could have
     * been realloced, in which case the driver uniform storage set up by
@@ -3705,7 +3807,7 @@ brw_wm_fs_emit(struct brw_context *brw,
    /* Now the main event: Visit the shader IR and generate our FS IR for it.
     */
    fs_visitor v(brw, mem_ctx, key, prog_data, prog, fp, 8);
-   if (!v.run()) {
+   if (!v.run_fs()) {
       if (prog) {
          prog->LinkStatus = false;
          ralloc_strcat(&prog->InfoLog, v.fail_msg);
@@ -3724,7 +3826,7 @@ brw_wm_fs_emit(struct brw_context *brw,
       if (!v.simd16_unsupported) {
          /* Try a SIMD16 compile */
          v2.import_uniforms(&v);
-         if (!v2.run()) {
+         if (!v2.run_fs()) {
             perf_debug("SIMD16 shader failed to compile, falling back to "
                        "SIMD8 at a 10-20%% performance cost: %s", v2.fail_msg);
          } else {
@@ -3746,8 +3848,21 @@ brw_wm_fs_emit(struct brw_context *brw,
       prog_data->no_8 = false;
    }
 
-   fs_generator g(brw, mem_ctx, key, prog_data, prog, fp,
-                  v.runtime_check_aads_emit, INTEL_DEBUG & DEBUG_WM);
+   fs_generator g(brw, mem_ctx, (void *) key, &prog_data->base,
+                  &fp->Base, v.runtime_check_aads_emit);
+
+   if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
+      char *name;
+      if (prog)
+         name = ralloc_asprintf(mem_ctx, "%s fragment shader %d",
+                                prog->Label ? prog->Label : "unnamed",
+                                prog->Name);
+      else
+         name = ralloc_asprintf(mem_ctx, "fragment program %d", fp->Base.Id);
+
+      g.enable_debug(name);
+   }
+
    if (simd8_cfg)
       g.generate_code(simd8_cfg, 8);
    if (simd16_cfg)
@@ -3821,12 +3936,6 @@ brw_fs_precompile(struct gl_context *ctx,
       key.render_to_fbo = _mesa_is_user_fbo(ctx->DrawBuffer) ||
                           key.nr_color_regions > 1;
    }
-
-   /* GL_FRAGMENT_SHADER_DERIVATIVE_HINT is almost always GL_DONT_CARE.  The
-    * quality of the derivatives is likely to be determined by the driconf
-    * option.
-    */
-   key.high_quality_derivatives = brw->disable_derivative_optimization;
 
    key.program_string_id = bfp->id;
 

@@ -28,7 +28,6 @@
 static const struct brw_device_info brw_device_info_i965 = {
    .gen = 4,
    .has_negative_rhw_bug = true,
-   .needs_unlit_centroid_workaround = true,
    .max_vs_threads = 16,
    .max_gs_threads = 2,
    .max_wm_threads = 8 * 4,
@@ -42,7 +41,6 @@ static const struct brw_device_info brw_device_info_g4x = {
    .has_pln = true,
    .has_compr4 = true,
    .has_surface_tile_offset = true,
-   .needs_unlit_centroid_workaround = true,
    .is_g4x = true,
    .max_vs_threads = 32,
    .max_gs_threads = 2,
@@ -57,7 +55,6 @@ static const struct brw_device_info brw_device_info_ilk = {
    .has_pln = true,
    .has_compr4 = true,
    .has_surface_tile_offset = true,
-   .needs_unlit_centroid_workaround = true,
    .max_vs_threads = 72,
    .max_gs_threads = 32,
    .max_wm_threads = 12 * 6,
@@ -249,6 +246,35 @@ static const struct brw_device_info brw_device_info_chv = {
       .max_vs_entries = 640,
       .max_gs_entries = 256,
    }
+};
+
+/* Thread counts and URB limits are placeholders, and may not be accurate. */
+#define GEN9_FEATURES                               \
+   .gen = 9,                                        \
+   .has_hiz_and_separate_stencil = true,            \
+   .must_use_separate_stencil = true,               \
+   .has_llc = true,                                 \
+   .has_pln = true,                                 \
+   .max_vs_threads = 280,                           \
+   .max_gs_threads = 256,                           \
+   .max_wm_threads = 408,                           \
+   .urb = {                                         \
+      .size = 128,                                  \
+      .min_vs_entries = 64,                         \
+      .max_vs_entries = 1664,                       \
+      .max_gs_entries = 640,                        \
+   }
+
+static const struct brw_device_info brw_device_info_skl_gt1 = {
+   GEN9_FEATURES, .gt = 1
+};
+
+static const struct brw_device_info brw_device_info_skl_gt2 = {
+   GEN9_FEATURES, .gt = 2
+};
+
+static const struct brw_device_info brw_device_info_skl_gt3 = {
+   GEN9_FEATURES, .gt = 3
 };
 
 const struct brw_device_info *

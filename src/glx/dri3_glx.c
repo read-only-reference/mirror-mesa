@@ -420,11 +420,14 @@ dri3_handle_present_event(struct dri3_drawable *priv, xcb_present_generic_event_
 
          if (psc->show_fps_interval)
             show_fps(priv, ce->ust);
+
+         priv->ust = ce->ust;
+         priv->msc = ce->msc;
       } else {
          priv->recv_msc_serial = ce->serial;
+         priv->notify_ust = ce->ust;
+         priv->notify_msc = ce->msc;
       }
-      priv->ust = ce->ust;
-      priv->msc = ce->msc;
       break;
    }
    case XCB_PRESENT_EVENT_IDLE_NOTIFY: {
@@ -498,8 +501,8 @@ dri3_wait_for_msc(__GLXDRIdrawable *pdraw, int64_t target_msc, int64_t divisor,
       }
    }
 
-   *ust = priv->ust;
-   *msc = priv->msc;
+   *ust = priv->notify_ust;
+   *msc = priv->notify_msc;
    *sbc = priv->recv_sbc;
 
    return 1;
@@ -528,6 +531,15 @@ dri3_wait_for_sbc(__GLXDRIdrawable *pdraw, int64_t target_sbc, int64_t *ust,
                   int64_t *msc, int64_t *sbc)
 {
    struct dri3_drawable *priv = (struct dri3_drawable *) pdraw;
+
+   /* From the GLX_OML_sync_control spec:
+    *
+    *     "If <target_sbc> = 0, the function will block until all previous
+    *      swaps requested with glXSwapBuffersMscOML for that window have
+    *      completed."
+    */
+   if (!target_sbc)
+      target_sbc = priv->send_sbc;
 
    while (priv->recv_sbc < target_sbc) {
       if (!dri3_wait_for_event(pdraw))
@@ -1514,6 +1526,7 @@ dri3_swap_buffers(__GLXDRIdrawable *pdraw, int64_t target_msc, int64_t divisor,
    xcb_connection_t *c = XGetXCBConnection(dpy);
    struct dri3_buffer *back;
    int64_t ret = 0;
+   uint32_t options = XCB_PRESENT_OPTION_NONE;
 
    unsigned flags = __DRI2_FLUSH_DRAWABLE;
    if (flush)
@@ -1547,11 +1560,35 @@ dri3_swap_buffers(__GLXDRIdrawable *pdraw, int64_t target_msc, int64_t divisor,
       dri3_fence_reset(c, back);
 
       /* Compute when we want the frame shown by taking the last known successful
-       * MSC and adding in a swap interval for each outstanding swap request
+       * MSC and adding in a swap interval for each outstanding swap request.
+       * target_msc=divisor=remainder=0 means "Use glXSwapBuffers() semantic"
        */
       ++priv->send_sbc;
-      if (target_msc == 0)
+      if (target_msc == 0 && divisor == 0 && remainder == 0)
          target_msc = priv->msc + priv->swap_interval * (priv->send_sbc - priv->recv_sbc);
+      else if (divisor == 0 && remainder > 0) {
+         /* From the GLX_OML_sync_control spec:
+          *
+          *     "If <divisor> = 0, the swap will occur when MSC becomes
+          *      greater than or equal to <target_msc>."
+          *
+          * Note that there's no mention of the remainder.  The Present extension
+          * throws BadValue for remainder != 0 with divisor == 0, so just drop
+          * the passed in value.
+          */
+         remainder = 0;
+      }
+
+      /* From the GLX_EXT_swap_control spec:
+       *
+       *     "If <interval> is set to a value of 0, buffer swaps are not
+       *      synchronized to a video frame."
+       *
+       * Implementation note: It is possible to enable triple buffering behaviour
+       * by not using XCB_PRESENT_OPTION_ASYNC, but this should not be the default.
+       */
+      if (priv->swap_interval == 0)
+          options |= XCB_PRESENT_OPTION_ASYNC;
 
       back->busy = 1;
       back->last_swap = priv->send_sbc;
@@ -1566,7 +1603,7 @@ dri3_swap_buffers(__GLXDRIdrawable *pdraw, int64_t target_msc, int64_t divisor,
                          None,                                 /* target_crtc */
                          None,
                          back->sync_fence,
-                         XCB_PRESENT_OPTION_NONE,
+                         options,
                          target_msc,
                          divisor,
                          remainder, 0, NULL);

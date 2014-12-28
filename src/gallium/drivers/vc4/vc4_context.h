@@ -173,6 +173,16 @@ struct vc4_context {
         struct vc4_cl bo_handles;
         struct vc4_cl bo_pointers;
         uint32_t shader_rec_count;
+        /** @{
+         * Bounding box of the scissor across all queued drawing.
+         *
+         * Note that the max values are exclusive.
+         */
+        uint32_t draw_min_x;
+        uint32_t draw_min_y;
+        uint32_t draw_max_x;
+        uint32_t draw_max_y;
+        /** @} */
 
         struct vc4_bo *tile_alloc;
         struct vc4_bo *tile_state;
@@ -209,7 +219,7 @@ struct vc4_context {
 
         struct primconvert_context *primconvert;
 
-        struct util_hash_table *fs_cache, *vs_cache;
+        struct hash_table *fs_cache, *vs_cache;
         uint32_t next_uncompiled_program_id;
         uint64_t next_compiled_program_id;
 
@@ -293,6 +303,7 @@ struct pipe_context *vc4_context_create(struct pipe_screen *pscreen,
 void vc4_draw_init(struct pipe_context *pctx);
 void vc4_state_init(struct pipe_context *pctx);
 void vc4_program_init(struct pipe_context *pctx);
+void vc4_program_fini(struct pipe_context *pctx);
 void vc4_query_init(struct pipe_context *pctx);
 void vc4_simulator_init(struct vc4_screen *screen);
 int vc4_simulator_flush(struct vc4_context *vc4,

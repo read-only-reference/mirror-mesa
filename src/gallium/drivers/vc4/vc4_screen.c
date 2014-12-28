@@ -30,6 +30,7 @@
 #include "util/u_debug.h"
 #include "util/u_memory.h"
 #include "util/u_format.h"
+#include "util/ralloc.h"
 
 #include "vc4_screen.h"
 #include "vc4_context.h"
@@ -52,6 +53,8 @@ static const struct debug_named_value debug_options[] = {
           "Skip actual hardware execution of commands" },
         { "always_flush", VC4_DEBUG_ALWAYS_FLUSH,
           "Flush after each draw call" },
+        { "always_sync", VC4_DEBUG_ALWAYS_SYNC,
+          "Wait for finish after each flush" },
         { NULL }
 };
 
@@ -73,7 +76,8 @@ vc4_screen_get_vendor(struct pipe_screen *pscreen)
 static void
 vc4_screen_destroy(struct pipe_screen *pscreen)
 {
-        free(pscreen);
+        vc4_bufmgr_destroy(pscreen);
+        ralloc_free(pscreen);
 }
 
 static int
@@ -165,6 +169,7 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
         case PIPE_CAP_SAMPLER_VIEW_TARGET:
         case PIPE_CAP_CLIP_HALFZ:
+        case PIPE_CAP_VERTEXID_NOBASE:
                 return 0;
 
                 /* Stream output. */
@@ -343,6 +348,30 @@ vc4_screen_is_format_supported(struct pipe_screen *pscreen,
                 case PIPE_FORMAT_R32G32B32_FLOAT:
                 case PIPE_FORMAT_R32G32_FLOAT:
                 case PIPE_FORMAT_R32_FLOAT:
+                case PIPE_FORMAT_R32G32B32A32_SNORM:
+                case PIPE_FORMAT_R32G32B32_SNORM:
+                case PIPE_FORMAT_R32G32_SNORM:
+                case PIPE_FORMAT_R32_SNORM:
+                case PIPE_FORMAT_R32G32B32A32_SSCALED:
+                case PIPE_FORMAT_R32G32B32_SSCALED:
+                case PIPE_FORMAT_R32G32_SSCALED:
+                case PIPE_FORMAT_R32_SSCALED:
+                case PIPE_FORMAT_R16G16B16A16_UNORM:
+                case PIPE_FORMAT_R16G16B16_UNORM:
+                case PIPE_FORMAT_R16G16_UNORM:
+                case PIPE_FORMAT_R16_UNORM:
+                case PIPE_FORMAT_R16G16B16A16_SNORM:
+                case PIPE_FORMAT_R16G16B16_SNORM:
+                case PIPE_FORMAT_R16G16_SNORM:
+                case PIPE_FORMAT_R16_SNORM:
+                case PIPE_FORMAT_R16G16B16A16_USCALED:
+                case PIPE_FORMAT_R16G16B16_USCALED:
+                case PIPE_FORMAT_R16G16_USCALED:
+                case PIPE_FORMAT_R16_USCALED:
+                case PIPE_FORMAT_R16G16B16A16_SSCALED:
+                case PIPE_FORMAT_R16G16B16_SSCALED:
+                case PIPE_FORMAT_R16G16_SSCALED:
+                case PIPE_FORMAT_R16_SSCALED:
                 case PIPE_FORMAT_R8G8B8A8_UNORM:
                 case PIPE_FORMAT_R8G8B8_UNORM:
                 case PIPE_FORMAT_R8G8_UNORM:
@@ -351,6 +380,14 @@ vc4_screen_is_format_supported(struct pipe_screen *pscreen,
                 case PIPE_FORMAT_R8G8B8_SNORM:
                 case PIPE_FORMAT_R8G8_SNORM:
                 case PIPE_FORMAT_R8_SNORM:
+                case PIPE_FORMAT_R8G8B8A8_USCALED:
+                case PIPE_FORMAT_R8G8B8_USCALED:
+                case PIPE_FORMAT_R8G8_USCALED:
+                case PIPE_FORMAT_R8_USCALED:
+                case PIPE_FORMAT_R8G8B8A8_SSCALED:
+                case PIPE_FORMAT_R8G8B8_SSCALED:
+                case PIPE_FORMAT_R8G8_SSCALED:
+                case PIPE_FORMAT_R8_SSCALED:
                         retval |= PIPE_BIND_VERTEX_BUFFER;
                         break;
                 default:
@@ -400,7 +437,7 @@ vc4_screen_is_format_supported(struct pipe_screen *pscreen,
 struct pipe_screen *
 vc4_screen_create(int fd)
 {
-        struct vc4_screen *screen = CALLOC_STRUCT(vc4_screen);
+        struct vc4_screen *screen = rzalloc(NULL, struct vc4_screen);
         struct pipe_screen *pscreen;
 
         pscreen = &screen->base;
@@ -413,6 +450,7 @@ vc4_screen_create(int fd)
         pscreen->is_format_supported = vc4_screen_is_format_supported;
 
         screen->fd = fd;
+        make_empty_list(&screen->bo_cache.time_list);
 
         vc4_fence_init(screen);
 
@@ -446,6 +484,9 @@ vc4_screen_bo_get_handle(struct pipe_screen *pscreen,
         case DRM_API_HANDLE_TYPE_KMS:
                 whandle->handle = bo->handle;
                 return TRUE;
+        case DRM_API_HANDLE_TYPE_FD:
+                whandle->handle = vc4_bo_get_dmabuf(bo);
+                return whandle->handle != -1;
         }
 
         return FALSE;
@@ -453,26 +494,19 @@ vc4_screen_bo_get_handle(struct pipe_screen *pscreen,
 
 struct vc4_bo *
 vc4_screen_bo_from_handle(struct pipe_screen *pscreen,
-                          struct winsys_handle *whandle,
-                          unsigned *out_stride)
+                          struct winsys_handle *whandle)
 {
         struct vc4_screen *screen = vc4_screen(pscreen);
-        struct vc4_bo *bo;
 
-        if (whandle->type != DRM_API_HANDLE_TYPE_SHARED) {
+        switch (whandle->type) {
+        case DRM_API_HANDLE_TYPE_SHARED:
+                return vc4_bo_open_name(screen, whandle->handle, whandle->stride);
+        case DRM_API_HANDLE_TYPE_FD:
+                return vc4_bo_open_dmabuf(screen, whandle->handle, whandle->stride);
+        default:
                 fprintf(stderr,
                         "Attempt to import unsupported handle type %d\n",
                         whandle->type);
                 return NULL;
         }
-
-        bo = vc4_bo_open_name(screen, whandle->handle, whandle->stride);
-        if (!bo) {
-                fprintf(stderr, "Open name %d failed\n", whandle->handle);
-                return NULL;
-        }
-
-        *out_stride = whandle->stride;
-
-        return bo;
 }

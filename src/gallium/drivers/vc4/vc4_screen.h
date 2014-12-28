@@ -25,7 +25,9 @@
 #define VC4_SCREEN_H
 
 #include "pipe/p_screen.h"
+#include "os/os_thread.h"
 #include "state_tracker/drm_driver.h"
+#include "vc4_qir.h"
 
 struct vc4_bo;
 
@@ -37,6 +39,7 @@ struct vc4_bo;
 #define VC4_DEBUG_PERF      0x0020
 #define VC4_DEBUG_NORAST    0x0040
 #define VC4_DEBUG_ALWAYS_FLUSH 0x0080
+#define VC4_DEBUG_ALWAYS_SYNC  0x0100
 
 #define VC4_MAX_MIP_LEVELS 12
 #define VC4_MAX_TEXTURE_SAMPLERS 16
@@ -54,6 +57,16 @@ struct vc4_screen {
          * if we know the job's already done.
          */
         uint64_t finished_seqno;
+
+        struct vc4_bo_cache {
+                /** List of struct vc4_bo freed, by age. */
+                struct simple_node time_list;
+                /** List of struct vc4_bo freed, per size, by age. */
+                struct simple_node *size_list;
+                uint32_t size_list_size;
+
+                pipe_mutex lock;
+        } bo_cache;
 };
 
 static inline struct vc4_screen *
@@ -69,8 +82,7 @@ boolean vc4_screen_bo_get_handle(struct pipe_screen *pscreen,
                                  struct winsys_handle *whandle);
 struct vc4_bo *
 vc4_screen_bo_from_handle(struct pipe_screen *pscreen,
-                          struct winsys_handle *whandle,
-                          unsigned *out_stride);
+                          struct winsys_handle *whandle);
 
 extern uint32_t vc4_debug;
 

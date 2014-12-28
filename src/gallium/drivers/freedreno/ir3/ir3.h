@@ -27,6 +27,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "util/u_debug.h"
+
 #include "instr-a3xx.h"
 #include "disasm.h"  /* TODO move 'enum shader_t' somewhere else.. */
 
@@ -283,7 +285,7 @@ static inline bool ir3_instr_check_mark(struct ir3_instruction *instr)
 {
 	if (instr->flags & IR3_INSTR_MARK)
 		return true;  /* already visited */
-	instr->flags ^= IR3_INSTR_MARK;
+	instr->flags |= IR3_INSTR_MARK;
 	return false;
 }
 
@@ -405,7 +407,7 @@ static inline bool writes_pred(struct ir3_instruction *instr)
 
 static inline bool reg_gpr(struct ir3_register *r)
 {
-	if (r->flags & (IR3_REG_CONST | IR3_REG_IMMED | IR3_REG_RELATIV | IR3_REG_SSA | IR3_REG_ADDR))
+	if (r->flags & (IR3_REG_CONST | IR3_REG_IMMED | IR3_REG_RELATIV | IR3_REG_ADDR))
 		return false;
 	if ((reg_num(r) == REG_A0) || (reg_num(r) == REG_P0))
 		return false;
@@ -436,7 +438,10 @@ int ir3_block_sched(struct ir3_block *block);
 
 /* register assignment: */
 int ir3_block_ra(struct ir3_block *block, enum shader_t type,
-		bool half_precision, bool frag_coord, bool frag_face,
+		bool half_precision, bool frag_coord, bool frag_face);
+
+/* legalize: */
+void ir3_block_legalize(struct ir3_block *block,
 		bool *has_samp, int *max_bary);
 
 #ifndef ARRAY_SIZE
@@ -455,7 +460,7 @@ typedef uint8_t regmask_t[2 * MAX_REG / 8];
 static inline unsigned regmask_idx(struct ir3_register *reg)
 {
 	unsigned num = reg->num;
-	assert(num < MAX_REG);
+	debug_assert(num < MAX_REG);
 	if (reg->flags & IR3_REG_HALF)
 		num += MAX_REG;
 	return num;

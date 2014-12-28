@@ -45,7 +45,7 @@ brw_upload_gs_unit(struct brw_context *brw)
 
    memset(gs, 0, sizeof(*gs));
 
-   /* BRW_NEW_PROGRAM_CACHE | CACHE_NEW_GS_PROG */
+   /* BRW_NEW_PROGRAM_CACHE | BRW_NEW_GS_PROG_DATA */
    if (brw->ff_gs.prog_active) {
       gs->thread0.grf_reg_count = (ALIGN(brw->ff_gs.prog_data->total_grf, 16) /
 				   16 - 1);
@@ -93,9 +93,9 @@ const struct brw_tracked_state brw_gs_unit = {
       .mesa  = 0,
       .brw   = BRW_NEW_BATCH |
                BRW_NEW_CURBE_OFFSETS |
+               BRW_NEW_FF_GS_PROG_DATA |
                BRW_NEW_PROGRAM_CACHE |
                BRW_NEW_URB_FENCE,
-      .cache = CACHE_NEW_FF_GS_PROG
    },
    .emit = brw_upload_gs_unit,
 };

@@ -34,34 +34,18 @@ upload_ps_extra(struct brw_context *brw)
    /* BRW_NEW_FRAGMENT_PROGRAM */
    const struct brw_fragment_program *fp =
       brw_fragment_program_const(brw->fragment_program);
-   /* CACHE_NEW_WM_PROG */
+   /* BRW_NEW_FS_PROG_DATA */
    const struct brw_wm_prog_data *prog_data = brw->wm.prog_data;
    uint32_t dw1 = 0;
 
    dw1 |= GEN8_PSX_PIXEL_SHADER_VALID;
+   dw1 |= prog_data->computed_depth_mode << GEN8_PSX_COMPUTED_DEPTH_MODE_SHIFT;
 
    if (prog_data->uses_kill)
       dw1 |= GEN8_PSX_KILL_ENABLE;
 
    if (prog_data->num_varying_inputs != 0)
       dw1 |= GEN8_PSX_ATTRIBUTE_ENABLE;
-
-   if (fp->program.Base.OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_DEPTH)) {
-      switch (fp->program.FragDepthLayout) {
-         case FRAG_DEPTH_LAYOUT_NONE:
-         case FRAG_DEPTH_LAYOUT_ANY:
-            dw1 |= GEN8_PSX_PSCDEPTH_ON;
-            break;
-         case FRAG_DEPTH_LAYOUT_GREATER:
-            dw1 |= GEN8_PSX_PSCDEPTH_ON_GE;
-            break;
-         case FRAG_DEPTH_LAYOUT_LESS:
-            dw1 |= GEN8_PSX_PSCDEPTH_ON_LE;
-            break;
-         case FRAG_DEPTH_LAYOUT_UNCHANGED:
-            break;
-      }
-   }
 
    if (fp->program.Base.InputsRead & VARYING_BIT_POS)
       dw1 |= GEN8_PSX_USES_SOURCE_DEPTH | GEN8_PSX_USES_SOURCE_W;
@@ -89,8 +73,8 @@ const struct brw_tracked_state gen8_ps_extra = {
       .mesa  = _NEW_MULTISAMPLE,
       .brw   = BRW_NEW_CONTEXT |
                BRW_NEW_FRAGMENT_PROGRAM |
+               BRW_NEW_FS_PROG_DATA |
                BRW_NEW_NUM_SAMPLES,
-      .cache = CACHE_NEW_WM_PROG,
    },
    .emit = upload_ps_extra,
 };
@@ -114,7 +98,7 @@ upload_wm_state(struct brw_context *brw)
    if (ctx->Polygon.StippleFlag)
       dw1 |= GEN7_WM_POLYGON_STIPPLE_ENABLE;
 
-   /* CACHE_NEW_WM_PROG */
+   /* BRW_NEW_FS_PROG_DATA */
    dw1 |= brw->wm.prog_data->barycentric_interp_modes <<
       GEN7_WM_BARYCENTRIC_INTERPOLATION_MODE_SHIFT;
 
@@ -128,8 +112,8 @@ const struct brw_tracked_state gen8_wm_state = {
    .dirty = {
       .mesa  = _NEW_LINE |
                _NEW_POLYGON,
-      .brw   = BRW_NEW_CONTEXT,
-      .cache = CACHE_NEW_WM_PROG,
+      .brw   = BRW_NEW_CONTEXT |
+               BRW_NEW_FS_PROG_DATA,
    },
    .emit = upload_wm_state,
 };
@@ -140,7 +124,7 @@ upload_ps_state(struct brw_context *brw)
    struct gl_context *ctx = &brw->ctx;
    uint32_t dw3 = 0, dw6 = 0, dw7 = 0, ksp0, ksp2 = 0;
 
-   /* CACHE_NEW_WM_PROG */
+   /* BRW_NEW_FS_PROG_DATA */
    const struct brw_wm_prog_data *prog_data = brw->wm.prog_data;
 
    /* Initialize the execution mask with VMask.  Otherwise, derivatives are
@@ -152,17 +136,12 @@ upload_ps_state(struct brw_context *brw)
    dw3 |=
       (ALIGN(brw->wm.base.sampler_count, 4) / 4) << GEN7_PS_SAMPLER_COUNT_SHIFT;
 
-   /* CACHE_NEW_WM_PROG */
+   /* BRW_NEW_FS_PROG_DATA */
    dw3 |=
       ((prog_data->base.binding_table.size_bytes / 4) <<
        GEN7_PS_BINDING_TABLE_ENTRY_COUNT_SHIFT);
 
-   /* Use ALT floating point mode for ARB fragment programs, because they
-    * require 0^0 == 1.  Even though _CurrentFragmentProgram is used for
-    * rendering, CurrentFragmentProgram is used for this check to
-    * differentiate between the GLSL and non-GLSL cases.
-    */
-   if (ctx->Shader.CurrentProgram[MESA_SHADER_FRAGMENT] == NULL)
+   if (prog_data->base.use_alt_mode)
       dw3 |= GEN7_PS_FLOATING_POINT_MODE_ALT;
 
    /* 3DSTATE_PS expects the number of threads per PSD, which is always 64;
@@ -252,8 +231,8 @@ const struct brw_tracked_state gen8_ps_state = {
    .dirty = {
       .mesa  = _NEW_MULTISAMPLE,
       .brw   = BRW_NEW_BATCH |
-               BRW_NEW_FRAGMENT_PROGRAM,
-      .cache = CACHE_NEW_WM_PROG
+               BRW_NEW_FRAGMENT_PROGRAM |
+               BRW_NEW_FS_PROG_DATA,
    },
    .emit = upload_ps_state,
 };

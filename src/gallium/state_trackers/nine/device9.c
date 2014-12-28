@@ -360,7 +360,6 @@ NineDevice9_dtor( struct NineDevice9 *This )
     /* state stuff */
     if (This->pipe) {
         if (This->cso) {
-            cso_release_all(This->cso);
             cso_destroy_context(This->cso);
         }
         if (This->pipe->destroy) { This->pipe->destroy(This->pipe); }
@@ -1220,7 +1219,7 @@ NineDevice9_StretchRect( struct NineDevice9 *This,
             pSourceRect->left, pSourceRect->top,
             pSourceRect->right, pSourceRect->bottom);
     if (pDestRect)
-        DBG("pSourceRect=(%u,%u)-(%u,%u)\n", pDestRect->left, pDestRect->top,
+        DBG("pDestRect=(%u,%u)-(%u,%u)\n", pDestRect->left, pDestRect->top,
             pDestRect->right, pDestRect->bottom);
 
     user_assert(!zs || !This->in_scene, D3DERR_INVALIDCALL);
@@ -3359,8 +3358,9 @@ NineDevice9_CreateQuery( struct NineDevice9 *This,
 
     DBG("This=%p Type=%d ppQuery=%p\n", This, Type, ppQuery);
 
-    if (!ppQuery)
-        return nine_is_query_supported(Type);
+    hr = nine_is_query_supported(This->screen, Type);
+    if (!ppQuery || hr != D3D_OK)
+        return hr;
 
     hr = NineQuery9_new(This, &query, Type);
     if (FAILED(hr))

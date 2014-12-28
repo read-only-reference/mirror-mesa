@@ -24,9 +24,7 @@
 #include "brw_vec4.h"
 #include "brw_cfg.h"
 #include "glsl/ir_uniform.h"
-extern "C" {
 #include "program/sampler.h"
-}
 
 namespace brw {
 
@@ -302,7 +300,7 @@ vec4_visitor::fix_3src_operand(src_reg src)
 
    dst_reg expanded = dst_reg(this, glsl_type::vec4_type);
    expanded.type = src.type;
-   emit(MOV(expanded, src));
+   emit(VEC4_OPCODE_UNPACK_UNIFORM, expanded, src);
    return src_reg(expanded);
 }
 
@@ -819,18 +817,36 @@ vec4_visitor::emit_bool_to_cond_code(ir_rvalue *ir,
 	 break;
 
       case ir_binop_logic_xor:
-	 inst = emit(XOR(dst_null_d(), op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_NZ;
+         if (brw->gen <= 5) {
+            src_reg temp = src_reg(this, ir->type);
+            emit(XOR(dst_reg(temp), op[0], op[1]));
+            inst = emit(AND(dst_null_d(), temp, src_reg(1)));
+         } else {
+            inst = emit(XOR(dst_null_d(), op[0], op[1]));
+         }
+         inst->conditional_mod = BRW_CONDITIONAL_NZ;
 	 break;
 
       case ir_binop_logic_or:
-	 inst = emit(OR(dst_null_d(), op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_NZ;
+         if (brw->gen <= 5) {
+            src_reg temp = src_reg(this, ir->type);
+            emit(OR(dst_reg(temp), op[0], op[1]));
+            inst = emit(AND(dst_null_d(), temp, src_reg(1)));
+         } else {
+            inst = emit(OR(dst_null_d(), op[0], op[1]));
+         }
+         inst->conditional_mod = BRW_CONDITIONAL_NZ;
 	 break;
 
       case ir_binop_logic_and:
-	 inst = emit(AND(dst_null_d(), op[0], op[1]));
-	 inst->conditional_mod = BRW_CONDITIONAL_NZ;
+         if (brw->gen <= 5) {
+            src_reg temp = src_reg(this, ir->type);
+            emit(AND(dst_reg(temp), op[0], op[1]));
+            inst = emit(AND(dst_null_d(), temp, src_reg(1)));
+         } else {
+            inst = emit(AND(dst_null_d(), op[0], op[1]));
+         }
+         inst->conditional_mod = BRW_CONDITIONAL_NZ;
 	 break;
 
       case ir_unop_f2b:
@@ -852,16 +868,27 @@ vec4_visitor::emit_bool_to_cond_code(ir_rvalue *ir,
 	 break;
 
       case ir_binop_all_equal:
+         if (brw->gen <= 5) {
+            resolve_bool_comparison(expr->operands[0], &op[0]);
+            resolve_bool_comparison(expr->operands[1], &op[1]);
+         }
 	 inst = emit(CMP(dst_null_d(), op[0], op[1], BRW_CONDITIONAL_Z));
 	 *predicate = BRW_PREDICATE_ALIGN16_ALL4H;
 	 break;
 
       case ir_binop_any_nequal:
+         if (brw->gen <= 5) {
+            resolve_bool_comparison(expr->operands[0], &op[0]);
+            resolve_bool_comparison(expr->operands[1], &op[1]);
+         }
 	 inst = emit(CMP(dst_null_d(), op[0], op[1], BRW_CONDITIONAL_NZ));
 	 *predicate = BRW_PREDICATE_ALIGN16_ANY4H;
 	 break;
 
       case ir_unop_any:
+         if (brw->gen <= 5) {
+            resolve_bool_comparison(expr->operands[0], &op[0]);
+         }
 	 inst = emit(CMP(dst_null_d(), op[0], src_reg(0), BRW_CONDITIONAL_NZ));
 	 *predicate = BRW_PREDICATE_ALIGN16_ANY4H;
 	 break;
@@ -872,6 +899,10 @@ vec4_visitor::emit_bool_to_cond_code(ir_rvalue *ir,
       case ir_binop_lequal:
       case ir_binop_equal:
       case ir_binop_nequal:
+         if (brw->gen <= 5) {
+            resolve_bool_comparison(expr->operands[0], &op[0]);
+            resolve_bool_comparison(expr->operands[1], &op[1]);
+         }
 	 emit(CMP(dst_null_d(), op[0], op[1],
 		  brw_conditional_for_comparison(expr->operation)));
 	 break;
@@ -902,14 +933,8 @@ vec4_visitor::emit_bool_to_cond_code(ir_rvalue *ir,
 
    resolve_ud_negate(&this->result);
 
-   if (brw->gen >= 6) {
-      vec4_instruction *inst = emit(AND(dst_null_d(),
-					this->result, src_reg(1)));
-      inst->conditional_mod = BRW_CONDITIONAL_NZ;
-   } else {
-      vec4_instruction *inst = emit(MOV(dst_null_d(), this->result));
-      inst->conditional_mod = BRW_CONDITIONAL_NZ;
-   }
+   vec4_instruction *inst = emit(AND(dst_null_d(), this->result, src_reg(1)));
+   inst->conditional_mod = BRW_CONDITIONAL_NZ;
 }
 
 /**
@@ -1020,10 +1045,12 @@ vec4_visitor::visit(ir_variable *ir)
 
    switch (ir->data.mode) {
    case ir_var_shader_in:
+      assert(ir->data.location != -1);
       reg = new(mem_ctx) dst_reg(ATTR, ir->data.location);
       break;
 
    case ir_var_shader_out:
+      assert(ir->data.location != -1);
       reg = new(mem_ctx) dst_reg(this, ir->type);
 
       for (int i = 0; i < type_size(ir->type); i++) {
@@ -1320,11 +1347,7 @@ vec4_visitor::visit(ir_expression *ir)
 
    switch (ir->operation) {
    case ir_unop_logic_not:
-      if (ctx->Const.UniformBooleanTrue != 1) {
-         emit(NOT(result_dst, op[0]));
-      } else {
-         emit(XOR(result_dst, op[0], src_reg(1u)));
-      }
+      emit(NOT(result_dst, op[0]));
       break;
    case ir_unop_neg:
       op[0].negate = !op[0].negate;
@@ -1510,11 +1533,12 @@ vec4_visitor::visit(ir_expression *ir)
    case ir_binop_gequal:
    case ir_binop_equal:
    case ir_binop_nequal: {
+      if (brw->gen <= 5) {
+         resolve_bool_comparison(ir->operands[0], &op[0]);
+         resolve_bool_comparison(ir->operands[1], &op[1]);
+      }
       emit(CMP(result_dst, op[0], op[1],
 	       brw_conditional_for_comparison(ir->operation)));
-      if (ctx->Const.UniformBooleanTrue == 1) {
-         emit(AND(result_dst, result_src, src_reg(1u)));
-      }
       break;
    }
 
@@ -1524,13 +1548,10 @@ vec4_visitor::visit(ir_expression *ir)
 	  ir->operands[1]->type->is_vector()) {
 	 emit(CMP(dst_null_d(), op[0], op[1], BRW_CONDITIONAL_Z));
 	 emit(MOV(result_dst, src_reg(0)));
-         inst = emit(MOV(result_dst, src_reg(ctx->Const.UniformBooleanTrue)));
+         inst = emit(MOV(result_dst, src_reg((int)ctx->Const.UniformBooleanTrue)));
 	 inst->predicate = BRW_PREDICATE_ALIGN16_ALL4H;
       } else {
 	 emit(CMP(result_dst, op[0], op[1], BRW_CONDITIONAL_Z));
-         if (ctx->Const.UniformBooleanTrue == 1) {
-            emit(AND(result_dst, result_src, src_reg(1u)));
-         }
       }
       break;
    case ir_binop_any_nequal:
@@ -1540,13 +1561,10 @@ vec4_visitor::visit(ir_expression *ir)
 	 emit(CMP(dst_null_d(), op[0], op[1], BRW_CONDITIONAL_NZ));
 
 	 emit(MOV(result_dst, src_reg(0)));
-         inst = emit(MOV(result_dst, src_reg(ctx->Const.UniformBooleanTrue)));
+         inst = emit(MOV(result_dst, src_reg((int)ctx->Const.UniformBooleanTrue)));
 	 inst->predicate = BRW_PREDICATE_ALIGN16_ANY4H;
       } else {
 	 emit(CMP(result_dst, op[0], op[1], BRW_CONDITIONAL_NZ));
-         if (ctx->Const.UniformBooleanTrue == 1) {
-            emit(AND(result_dst, result_src, src_reg(1u)));
-         }
       }
       break;
 
@@ -1554,7 +1572,7 @@ vec4_visitor::visit(ir_expression *ir)
       emit(CMP(dst_null_d(), op[0], src_reg(0), BRW_CONDITIONAL_NZ));
       emit(MOV(result_dst, src_reg(0)));
 
-      inst = emit(MOV(result_dst, src_reg(ctx->Const.UniformBooleanTrue)));
+      inst = emit(MOV(result_dst, src_reg((int)ctx->Const.UniformBooleanTrue)));
       inst->predicate = BRW_PREDICATE_ALIGN16_ANY4H;
       break;
 
@@ -1608,28 +1626,22 @@ vec4_visitor::visit(ir_expression *ir)
       emit(MOV(result_dst, op[0]));
       break;
    case ir_unop_b2i:
-      if (ctx->Const.UniformBooleanTrue != 1) {
-         emit(AND(result_dst, op[0], src_reg(1u)));
-      } else {
-         emit(MOV(result_dst, op[0]));
-      }
+      emit(AND(result_dst, op[0], src_reg(1)));
       break;
    case ir_unop_b2f:
-      if (ctx->Const.UniformBooleanTrue != 1) {
-         op[0].type = BRW_REGISTER_TYPE_UD;
-         result_dst.type = BRW_REGISTER_TYPE_UD;
-         emit(AND(result_dst, op[0], src_reg(0x3f800000u)));
-         result_dst.type = BRW_REGISTER_TYPE_F;
-      } else {
-         emit(MOV(result_dst, op[0]));
+      if (brw->gen <= 5) {
+         resolve_bool_comparison(ir->operands[0], &op[0]);
       }
+      op[0].type = BRW_REGISTER_TYPE_D;
+      result_dst.type = BRW_REGISTER_TYPE_D;
+      emit(AND(result_dst, op[0], src_reg(0x3f800000u)));
+      result_dst.type = BRW_REGISTER_TYPE_F;
       break;
    case ir_unop_f2b:
-   case ir_unop_i2b:
       emit(CMP(result_dst, op[0], src_reg(0.0f), BRW_CONDITIONAL_NZ));
-      if (ctx->Const.UniformBooleanTrue == 1) {
-         emit(AND(result_dst, result_src, src_reg(1u)));
-      }
+      break;
+   case ir_unop_i2b:
+      emit(AND(result_dst, op[0], src_reg(1)));
       break;
 
    case ir_unop_trunc:
@@ -1775,9 +1787,6 @@ vec4_visitor::visit(ir_expression *ir)
       if (ir->type->base_type == GLSL_TYPE_BOOL) {
          emit(CMP(result_dst, packed_consts, src_reg(0u),
                   BRW_CONDITIONAL_NZ));
-         if (ctx->Const.UniformBooleanTrue == 1) {
-            emit(AND(result_dst, result, src_reg(1u)));
-         }
       } else {
          emit(MOV(result_dst, packed_consts));
       }
@@ -2308,8 +2317,8 @@ vec4_visitor::emit_constant_values(dst_reg *dst, ir_constant *ir)
 	 break;
       case GLSL_TYPE_BOOL:
          emit(MOV(*dst,
-                  src_reg(ir->value.b[i] != 0 ? ctx->Const.UniformBooleanTrue
-                                              : 0u)));
+                  src_reg(ir->value.b[i] != 0 ? (int)ctx->Const.UniformBooleanTrue
+                                              : 0)));
 	 break;
       default:
 	 unreachable("Non-float/uint/int/bool constant");
@@ -3055,22 +3064,14 @@ vec4_visitor::emit_clip_distances(dst_reg reg, int offset)
    }
 }
 
-void
+vec4_instruction *
 vec4_visitor::emit_generic_urb_slot(dst_reg reg, int varying)
 {
    assert (varying < VARYING_SLOT_MAX);
    reg.type = output_reg[varying].type;
    current_annotation = output_reg_annotation[varying];
    /* Copy the register, saturating if necessary */
-   vec4_instruction *inst = emit(MOV(reg,
-                                     src_reg(output_reg[varying])));
-   if ((varying == VARYING_SLOT_COL0 ||
-        varying == VARYING_SLOT_COL1 ||
-        varying == VARYING_SLOT_BFC0 ||
-        varying == VARYING_SLOT_BFC1) &&
-       key->clamp_vertex_color) {
-      inst->saturate = true;
-   }
+   return emit(MOV(reg, src_reg(output_reg[varying])));
 }
 
 void
@@ -3108,6 +3109,21 @@ vec4_visitor::emit_urb_slot(dst_reg reg, int varying)
    case BRW_VARYING_SLOT_PAD:
       /* No need to write to this slot */
       break;
+   case VARYING_SLOT_COL0:
+   case VARYING_SLOT_COL1:
+   case VARYING_SLOT_BFC0:
+   case VARYING_SLOT_BFC1: {
+      /* These built-in varyings are only supported in compatibility mode,
+       * and we only support GS in core profile.  So, this must be a vertex
+       * shader.
+       */
+      assert(stage == MESA_SHADER_VERTEX);
+      vec4_instruction *inst = emit_generic_urb_slot(reg, varying);
+      if (((struct brw_vs_prog_key *) key)->clamp_vertex_color)
+         inst->saturate = true;
+      break;
+   }
+
    default:
       emit_generic_urb_slot(reg, varying);
       break;
@@ -3526,11 +3542,32 @@ vec4_visitor::resolve_ud_negate(src_reg *reg)
    *reg = temp;
 }
 
+/**
+ * Resolve the result of a Gen4-5 CMP instruction to a proper boolean.
+ *
+ * CMP on Gen4-5 only sets the LSB of the result; the rest are undefined.
+ * If we need a proper boolean value, we have to fix it up to be 0 or ~0.
+ */
+void
+vec4_visitor::resolve_bool_comparison(ir_rvalue *rvalue, src_reg *reg)
+{
+   assert(brw->gen <= 5);
+
+   if (!rvalue->type->is_boolean())
+      return;
+
+   src_reg and_result = src_reg(this, rvalue->type);
+   src_reg neg_result = src_reg(this, rvalue->type);
+   emit(AND(dst_reg(and_result), *reg, src_reg(1)));
+   emit(MOV(dst_reg(neg_result), negate(and_result)));
+   *reg = neg_result;
+}
+
 vec4_visitor::vec4_visitor(struct brw_context *brw,
                            struct brw_vec4_compile *c,
                            struct gl_program *prog,
-                           const struct brw_vec4_prog_key *key,
-                           struct brw_vec4_prog_data *prog_data,
+                           const struct brw_vue_prog_key *key,
+                           struct brw_vue_prog_data *prog_data,
 			   struct gl_shader_program *shader_prog,
                            gl_shader_stage stage,
 			   void *mem_ctx,
@@ -3571,7 +3608,7 @@ vec4_visitor::vec4_visitor(struct brw_context *brw,
    this->virtual_grf_reg_map = NULL;
    this->virtual_grf_reg_count = 0;
    this->virtual_grf_array_size = 0;
-   this->live_intervals_valid = false;
+   this->live_intervals = NULL;
 
    this->max_grf = brw->gen >= 7 ? GEN7_MRF_HACK_START : BRW_MAX_GRF;
 
