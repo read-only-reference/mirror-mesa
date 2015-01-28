@@ -41,7 +41,7 @@
 #include "main/config.h"
 #include "glapi/glapi.h"
 #include "math/m_matrix.h"	/* GLmatrix */
-#include "main/simple_list.h"	/* struct simple_node */
+#include "util/simple_list.h"	/* struct simple_node */
 #include "main/formats.h"       /* MESA_FORMAT_COUNT */
 
 
@@ -1220,6 +1220,8 @@ struct gl_texture_object
    GLboolean Purgeable;        /**< Is the buffer purgeable under memory
                                     pressure? */
    GLboolean Immutable;        /**< GL_ARB_texture_storage */
+   GLboolean _IsFloat;         /**< GL_OES_float_texture */
+   GLboolean _IsHalfFloat;     /**< GL_OES_half_float_texture */
 
    GLuint MinLevel;            /**< GL_ARB_texture_view */
    GLuint MinLayer;            /**< GL_ARB_texture_view */
@@ -3757,6 +3759,7 @@ struct gl_extensions
    GLboolean ARB_shader_atomic_counters;
    GLboolean ARB_shader_bit_encoding;
    GLboolean ARB_shader_image_load_store;
+   GLboolean ARB_shader_precision;
    GLboolean ARB_shader_stencil_export;
    GLboolean ARB_shader_texture_lod;
    GLboolean ARB_shading_language_packing;
@@ -3858,6 +3861,10 @@ struct gl_extensions
    GLboolean OES_draw_texture;
    GLboolean OES_depth_texture_cube_map;
    GLboolean OES_EGL_image_external;
+   GLboolean OES_texture_float;
+   GLboolean OES_texture_float_linear;
+   GLboolean OES_texture_half_float;
+   GLboolean OES_texture_half_float_linear;
    GLboolean OES_compressed_ETC1_RGB8_texture;
    GLboolean extension_sentinel;
    /** The extension string */

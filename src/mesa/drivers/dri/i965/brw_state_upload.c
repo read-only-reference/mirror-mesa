@@ -357,6 +357,11 @@ void brw_init_state( struct brw_context *brw )
    const struct brw_tracked_state **atoms;
    int num_atoms;
 
+   STATIC_ASSERT(ARRAY_SIZE(gen4_atoms) <= ARRAY_SIZE(brw->atoms));
+   STATIC_ASSERT(ARRAY_SIZE(gen6_atoms) <= ARRAY_SIZE(brw->atoms));
+   STATIC_ASSERT(ARRAY_SIZE(gen7_atoms) <= ARRAY_SIZE(brw->atoms));
+   STATIC_ASSERT(ARRAY_SIZE(gen8_atoms) <= ARRAY_SIZE(brw->atoms));
+
    brw_init_caches(brw);
 
    if (brw->gen >= 8) {
@@ -373,8 +378,16 @@ void brw_init_state( struct brw_context *brw )
       num_atoms = ARRAY_SIZE(gen4_atoms);
    }
 
-   brw->atoms = atoms;
    brw->num_atoms = num_atoms;
+
+   /* This is to work around brw_context::atoms being declared const.  We want
+    * it to be const, but it needs to be initialized somehow!
+    */
+   struct brw_tracked_state *context_atoms =
+      (struct brw_tracked_state *) &brw->atoms[0];
+
+   for (int i = 0; i < num_atoms; i++)
+      context_atoms[i] = *atoms[i];
 
    while (num_atoms--) {
       assert((*atoms)->dirty.mesa | (*atoms)->dirty.brw);
@@ -542,8 +555,10 @@ static void
 brw_print_dirty_count(struct dirty_bit_map *bit_map)
 {
    for (int i = 0; bit_map[i].bit != 0; i++) {
-      fprintf(stderr, "0x%016lx: %12d (%s)\n",
-	      bit_map[i].bit, bit_map[i].count, bit_map[i].name);
+      if (bit_map[i].count > 1) {
+         fprintf(stderr, "0x%016lx: %12d (%s)\n",
+                 bit_map[i].bit, bit_map[i].count, bit_map[i].name);
+      }
    }
 }
 
@@ -607,7 +622,7 @@ void brw_upload_state(struct brw_context *brw)
       prev = *state;
 
       for (i = 0; i < brw->num_atoms; i++) {
-	 const struct brw_tracked_state *atom = brw->atoms[i];
+	 const struct brw_tracked_state *atom = &brw->atoms[i];
 	 struct brw_state_flags generated;
 
 	 if (check_state(state, &atom->dirty)) {
@@ -627,7 +642,7 @@ void brw_upload_state(struct brw_context *brw)
    }
    else {
       for (i = 0; i < brw->num_atoms; i++) {
-	 const struct brw_tracked_state *atom = brw->atoms[i];
+	 const struct brw_tracked_state *atom = &brw->atoms[i];
 
 	 if (check_state(state, &atom->dirty)) {
 	    atom->emit(brw);

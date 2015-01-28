@@ -20,6 +20,7 @@
  * IN THE SOFTWARE.
  */
 
+#include <ctype.h>
 #include "brw_vec4.h"
 #include "brw_cfg.h"
 
@@ -138,9 +139,12 @@ vec4_generator::vec4_generator(struct brw_context *brw,
                                struct gl_program *prog,
                                struct brw_vue_prog_data *prog_data,
                                void *mem_ctx,
-                               bool debug_flag)
+                               bool debug_flag,
+                               const char *stage_name,
+                               const char *stage_abbrev)
    : brw(brw), shader_prog(shader_prog), prog(prog), prog_data(prog_data),
-     mem_ctx(mem_ctx), debug_flag(debug_flag)
+     mem_ctx(mem_ctx), stage_name(stage_name), stage_abbrev(stage_abbrev),
+     debug_flag(debug_flag)
 {
    p = rzalloc(mem_ctx, struct brw_compile);
    brw_init_compile(brw, p, mem_ctx);
@@ -328,6 +332,7 @@ vec4_generator::generate_tex(vec4_instruction *inst,
       } else {
          struct brw_reg header =
             retype(brw_message_reg(inst->base_mrf), BRW_REGISTER_TYPE_UD);
+         uint32_t dw2 = 0;
 
          /* Explicitly set up the message header by copying g0 to the MRF. */
          brw_push_insn_state(p);
@@ -336,13 +341,20 @@ vec4_generator::generate_tex(vec4_instruction *inst,
 
          brw_set_default_access_mode(p, BRW_ALIGN_1);
 
-         if (inst->offset) {
+         if (inst->offset)
             /* Set the texel offset bits in DWord 2. */
-            brw_MOV(p, get_element_ud(header, 2),
-                    brw_imm_ud(inst->offset));
-         }
+            dw2 = inst->offset;
 
-         brw_adjust_sampler_state_pointer(p, header, sampler_index, dst);
+         if (brw->gen >= 9)
+            /* SKL+ overloads BRW_SAMPLER_SIMD_MODE_SIMD4X2 to also do SIMD8D,
+             * based on bit 22 in the header.
+             */
+            dw2 |= GEN9_SAMPLER_SIMD_MODE_EXTENSION_SIMD4X2;
+
+         if (dw2)
+            brw_MOV(p, get_element_ud(header, 2), brw_imm_ud(dw2));
+
+         brw_adjust_sampler_state_pointer(p, header, sampler_index);
          brw_pop_insn_state(p);
       }
    }
@@ -1579,14 +1591,16 @@ vec4_generator::generate_code(const cfg_t *cfg)
 
    if (unlikely(debug_flag)) {
       if (shader_prog) {
-         fprintf(stderr, "Native code for %s vertex shader %d:\n",
+         fprintf(stderr, "Native code for %s %s shader %d:\n",
                  shader_prog->Label ? shader_prog->Label : "unnamed",
-                 shader_prog->Name);
+                 stage_name, shader_prog->Name);
       } else {
-         fprintf(stderr, "Native code for vertex program %d:\n", prog->Id);
+         fprintf(stderr, "Native code for %s program %d:\n", stage_name,
+                 prog->Id);
       }
-      fprintf(stderr, "vec4 shader: %d instructions. %d loops. Compacted %d to %d"
+      fprintf(stderr, "%s vec4 shader: %d instructions. %d loops. Compacted %d to %d"
                       " bytes (%.0f%%)\n",
+              stage_abbrev,
               before_size / 16, loop_count, before_size, after_size,
               100.0f * (before_size - after_size) / before_size);
 
@@ -1599,8 +1613,9 @@ vec4_generator::generate_code(const cfg_t *cfg)
                   MESA_DEBUG_SOURCE_SHADER_COMPILER,
                   MESA_DEBUG_TYPE_OTHER,
                   MESA_DEBUG_SEVERITY_NOTIFICATION,
-                  "VS vec4 shader: %d inst, %d loops, "
+                  "%s vec4 shader: %d inst, %d loops, "
                   "compacted %d to %d bytes.\n",
+                  stage_abbrev,
                   before_size / 16, loop_count,
                   before_size, after_size);
 }

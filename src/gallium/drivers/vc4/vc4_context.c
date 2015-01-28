@@ -151,8 +151,7 @@ vc4_setup_rcl(struct vc4_context *vc4)
                             VC4_RENDER_CONFIG_MEMORY_FORMAT_SHIFT) |
                            (vc4_rt_format_is_565(render_surf->base.format) ?
                             VC4_RENDER_CONFIG_FORMAT_BGR565 :
-                            VC4_RENDER_CONFIG_FORMAT_RGBA8888) |
-                           VC4_RENDER_CONFIG_EARLY_Z_COVERAGE_DISABLE));
+                            VC4_RENDER_CONFIG_FORMAT_RGBA8888)));
 
         /* The tile buffer normally gets cleared when the previous tile is
          * stored.  If the clear values changed between frames, then the tile
@@ -356,9 +355,9 @@ vc4_flush(struct pipe_context *pctx)
 
         if (vc4_debug & VC4_DEBUG_CL) {
                 fprintf(stderr, "BCL:\n");
-                vc4_dump_cl(vc4->bcl.base, vc4->bcl.size, false);
+                vc4_dump_cl(vc4->bcl.base, vc4->bcl.next - vc4->bcl.base, false);
                 fprintf(stderr, "RCL:\n");
-                vc4_dump_cl(vc4->rcl.base, vc4->rcl.size, true);
+                vc4_dump_cl(vc4->rcl.base, vc4->rcl.next - vc4->rcl.base, true);
         }
 
         struct drm_vc4_submit_cl submit;
@@ -467,6 +466,16 @@ vc4_cl_references_bo(struct pipe_context *pctx, struct vc4_bo *bo)
 }
 
 static void
+vc4_invalidate_resource(struct pipe_context *pctx, struct pipe_resource *prsc)
+{
+        struct vc4_context *vc4 = vc4_context(pctx);
+        struct pipe_surface *zsurf = vc4->framebuffer.zsbuf;
+
+        if (zsurf && zsurf->texture == prsc)
+                vc4->resolve &= ~(PIPE_CLEAR_DEPTH | PIPE_CLEAR_STENCIL);
+}
+
+static void
 vc4_context_destroy(struct pipe_context *pctx)
 {
         struct vc4_context *vc4 = vc4_context(pctx);
@@ -510,6 +519,7 @@ vc4_context_create(struct pipe_screen *pscreen, void *priv)
         pctx->priv = priv;
         pctx->destroy = vc4_context_destroy;
         pctx->flush = vc4_pipe_flush;
+        pctx->invalidate_resource = vc4_invalidate_resource;
 
         vc4_draw_init(pctx);
         vc4_state_init(pctx);

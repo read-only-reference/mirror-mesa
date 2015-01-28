@@ -106,7 +106,7 @@ vc4_find_cse(struct vc4_compile *c, struct hash_table *ht,
         if (!alloc_key)
                 return NULL;
         memcpy(alloc_key, &key, sizeof(*alloc_key));
-        _mesa_hash_table_insert_with_hash(ht, hash, alloc_key, inst);
+        _mesa_hash_table_insert_pre_hashed(ht, hash, alloc_key, inst);
 
         if (debug) {
                 fprintf(stderr, "Added to CSE HT: ");
@@ -133,7 +133,8 @@ qir_opt_cse(struct vc4_compile *c)
         foreach_s(node, t, &c->instructions) {
                 struct qinst *inst = (struct qinst *)node;
 
-                if (qir_has_side_effects(c, inst)) {
+                if (qir_has_side_effects(c, inst) ||
+                    qir_has_side_effect_reads(c, inst)) {
                         if (inst->op == QOP_TLB_DISCARD_SETUP)
                                 last_sf = NULL;
                         continue;

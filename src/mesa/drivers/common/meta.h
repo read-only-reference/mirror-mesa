@@ -298,7 +298,8 @@ struct blit_state
 {
    GLuint VAO;
    GLuint VBO;
-   struct blit_shader_table shaders;
+   struct blit_shader_table shaders_with_depth;
+   struct blit_shader_table shaders_without_depth;
    GLuint msaa_shaders[BLIT_MSAA_SHADER_COUNT];
    struct temp_texture depthTex;
    bool no_ctsi_fallback;
@@ -446,8 +447,11 @@ _mesa_meta_begin(struct gl_context *ctx, GLbitfield state);
 extern void
 _mesa_meta_end(struct gl_context *ctx);
 
-extern GLboolean
-_mesa_meta_in_progress(struct gl_context *ctx);
+static inline bool
+_mesa_meta_in_progress(struct gl_context *ctx)
+{
+   return ctx->Meta->SaveStackDepth != 0;
+}
 
 extern void
 _mesa_meta_fb_tex_blit_begin(const struct gl_context *ctx,
@@ -518,6 +522,23 @@ _mesa_meta_Bitmap(struct gl_context *ctx,
 extern void
 _mesa_meta_GenerateMipmap(struct gl_context *ctx, GLenum target,
                           struct gl_texture_object *texObj);
+
+extern bool
+_mesa_meta_pbo_TexSubImage(struct gl_context *ctx, GLuint dims,
+                           struct gl_texture_image *tex_image,
+                           int xoffset, int yoffset, int zoffset,
+                           int width, int height, int depth,
+                           GLenum format, GLenum type, const void *pixels,
+                           bool allocate_storage, bool create_pbo,
+                           const struct gl_pixelstore_attrib *packing);
+
+extern bool
+_mesa_meta_pbo_GetTexSubImage(struct gl_context *ctx, GLuint dims,
+                              struct gl_texture_image *tex_image,
+                              int xoffset, int yoffset, int zoffset,
+                              int width, int height, int depth,
+                              GLenum format, GLenum type, const void *pixels,
+                              const struct gl_pixelstore_attrib *packing);
 
 extern void
 _mesa_meta_CopyTexSubImage(struct gl_context *ctx, GLuint dims,
@@ -612,6 +633,7 @@ _mesa_meta_setup_copypix_texture(struct gl_context *ctx,
 void
 _mesa_meta_setup_blit_shader(struct gl_context *ctx,
                              GLenum target,
+                             bool do_depth,
                              struct blit_shader_table *table);
 
 void

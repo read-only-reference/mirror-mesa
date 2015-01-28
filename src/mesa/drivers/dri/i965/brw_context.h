@@ -868,6 +868,8 @@ struct intel_batchbuffer {
    enum brw_gpu_ring ring;
    bool needs_sol_reset;
 
+   uint8_t pipe_controls_since_last_cs_stall;
+
    struct {
       uint16_t used;
       int reloc_count;
@@ -973,7 +975,6 @@ struct brw_context
                                         unsigned surface_format,
                                         unsigned buffer_size,
                                         unsigned pitch,
-                                        unsigned mocs,
                                         bool rw);
 
       /**
@@ -1110,11 +1111,8 @@ struct brw_context
    uint32_t pma_stall_bits;
 
    struct {
-      /** Does the current draw use the index buffer? */
-      bool indexed;
-
-      int start_vertex_location;
-      int base_vertex_location;
+      /** The value of gl_BaseVertex for the current _mesa_prim. */
+      int gl_basevertex;
 
       /**
        * Buffer and offset used for GL_ARB_shader_draw_parameters
@@ -1384,7 +1382,7 @@ struct brw_context
    } perfmon;
 
    int num_atoms;
-   const struct brw_tracked_state **atoms;
+   const struct brw_tracked_state atoms[57];
 
    /* If (INTEL_DEBUG & DEBUG_BATCH) */
    struct {
@@ -1602,7 +1600,27 @@ gl_clip_plane *brw_select_clip_planes(struct gl_context *ctx);
 /* brw_draw_upload.c */
 unsigned brw_get_vertex_surface_type(struct brw_context *brw,
                                      const struct gl_client_array *glarray);
-unsigned brw_get_index_type(GLenum type);
+
+static inline unsigned
+brw_get_index_type(GLenum type)
+{
+   assert((type == GL_UNSIGNED_BYTE)
+          || (type == GL_UNSIGNED_SHORT)
+          || (type == GL_UNSIGNED_INT));
+
+   /* The possible values for type are GL_UNSIGNED_BYTE (0x1401),
+    * GL_UNSIGNED_SHORT (0x1403), and GL_UNSIGNED_INT (0x1405) which we want
+    * to map to scale factors of 0, 1, and 2, respectively.  These scale
+    * factors are then left-shfited by 8 to be in the correct position in the
+    * CMD_INDEX_BUFFER packet.
+    *
+    * Subtracting 0x1401 gives 0, 2, and 4.  Shifting left by 7 afterwards
+    * gives 0x00000000, 0x00000100, and 0x00000200.  These just happen to be
+    * the values the need to be written in the CMD_INDEX_BUFFER packet.
+    */
+   return (type - 0x1401) << 7;
+}
+
 void brw_prepare_vertices(struct brw_context *brw);
 
 /* brw_wm_surface_state.c */

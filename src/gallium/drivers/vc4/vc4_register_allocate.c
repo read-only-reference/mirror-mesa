@@ -117,10 +117,10 @@ vc4_alloc_reg_set(struct vc4_context *vc4)
 
         vc4->reg_class_any = ra_alloc_reg_class(vc4->regs);
         for (uint32_t i = 0; i < ARRAY_SIZE(vc4_regs); i++) {
-                /* Reserve rb31 for spilling fixup_raddr_conflict() in
+                /* Reserve ra31/rb31 for spilling fixup_raddr_conflict() in
                  * vc4_qpu_emit.c
                  */
-                if (vc4_regs[i].mux == QPU_MUX_B && vc4_regs[i].addr == 31)
+                if (vc4_regs[i].addr == 31)
                         continue;
 
                 /* R4 can't be written as a general purpose register. (it's
@@ -254,25 +254,13 @@ vc4_register_allocate(struct vc4_context *vc4, struct vc4_compile *c)
                                           vc4->reg_class_a);
                         break;
 
-                case QOP_UNPACK_8A_F:
-                case QOP_UNPACK_8B_F:
-                case QOP_UNPACK_8C_F:
-                case QOP_UNPACK_8D_F:
-                case QOP_UNPACK_16A_F:
-                case QOP_UNPACK_16B_F:
-                case QOP_UNPACK_8A_I:
-                case QOP_UNPACK_8B_I:
-                case QOP_UNPACK_8C_I:
-                case QOP_UNPACK_8D_I:
-                case QOP_UNPACK_16A_I:
-                case QOP_UNPACK_16B_I:
-                        /* The unpack flags require an A-file src register. */
-                        ra_set_node_class(g, temp_to_node[inst->src[0].index],
-                                          vc4->reg_class_a);
-                        break;
-
                 default:
                         break;
+                }
+
+                if (qir_src_needs_a_file(inst)) {
+                        ra_set_node_class(g, temp_to_node[inst->src[0].index],
+                                          vc4->reg_class_a);
                 }
         }
 

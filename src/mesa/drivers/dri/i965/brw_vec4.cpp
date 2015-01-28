@@ -341,15 +341,21 @@ vec4_visitor::opt_vector_float()
 {
    bool progress = false;
 
-   int last_reg = -1;
+   int last_reg = -1, last_reg_offset = -1;
+   enum register_file last_reg_file = BAD_FILE;
+
    int remaining_channels;
    uint8_t imm[4];
    int inst_count;
    vec4_instruction *imm_inst[4];
 
    foreach_block_and_inst_safe(block, vec4_instruction, inst, cfg) {
-      if (last_reg != inst->dst.reg) {
+      if (last_reg != inst->dst.reg ||
+          last_reg_offset != inst->dst.reg_offset ||
+          last_reg_file != inst->dst.file) {
          last_reg = inst->dst.reg;
+         last_reg_offset = inst->dst.reg_offset;
+         last_reg_file = inst->dst.file;
          remaining_channels = WRITEMASK_XYZW;
 
          inst_count = 0;
@@ -687,6 +693,18 @@ vec4_visitor::opt_algebraic()
 	    progress = true;
 	 }
 	 break;
+      case BRW_OPCODE_CMP:
+         if (inst->conditional_mod == BRW_CONDITIONAL_GE &&
+             inst->src[0].abs &&
+             inst->src[0].negate &&
+             inst->src[1].is_zero()) {
+            inst->src[0].abs = false;
+            inst->src[0].negate = false;
+            inst->conditional_mod = BRW_CONDITIONAL_Z;
+            progress = true;
+            break;
+         }
+         break;
       case SHADER_OPCODE_RCP: {
          vec4_instruction *prev = (vec4_instruction *)inst->prev;
          if (prev->opcode == SHADER_OPCODE_SQRT) {
@@ -1359,7 +1377,7 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
             fprintf(file, "%uU", inst->src[i].fixed_hw_reg.dw1.ud);
             break;
          case BRW_REGISTER_TYPE_VF:
-            fprintf(stderr, "[%-gF, %-gF, %-gF, %-gF]",
+            fprintf(file, "[%-gF, %-gF, %-gF, %-gF]",
                     brw_vf_to_float((inst->src[i].fixed_hw_reg.dw1.ud >>  0) & 0xff),
                     brw_vf_to_float((inst->src[i].fixed_hw_reg.dw1.ud >>  8) & 0xff),
                     brw_vf_to_float((inst->src[i].fixed_hw_reg.dw1.ud >> 16) & 0xff),
@@ -1758,7 +1776,7 @@ vec4_visitor::run()
 
    const char *stage_name = stage == MESA_SHADER_GEOMETRY ? "gs" : "vs";
 
-#define OPT(pass, args...) do {                                        \
+#define OPT(pass, args...) ({                                          \
       pass_num++;                                                      \
       bool this_progress = pass(args);                                 \
                                                                        \
@@ -1771,7 +1789,8 @@ vec4_visitor::run()
       }                                                                \
                                                                        \
       progress = progress || this_progress;                            \
-   } while (false)
+      this_progress;                                                   \
+   })
 
 
    if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER)) {
@@ -1784,10 +1803,11 @@ vec4_visitor::run()
 
    bool progress;
    int iteration = 0;
+   int pass_num = 0;
    do {
       progress = false;
+      pass_num = 0;
       iteration++;
-      int pass_num = 0;
 
       OPT(opt_reduce_swizzle);
       OPT(dead_code_eliminate);
@@ -1798,11 +1818,13 @@ vec4_visitor::run()
       OPT(opt_register_coalesce);
    } while (progress);
 
-   if (opt_vector_float()) {
-      opt_cse();
-      opt_copy_propagation(false);
-      opt_copy_propagation(true);
-      dead_code_eliminate();
+   pass_num = 0;
+
+   if (OPT(opt_vector_float)) {
+      OPT(opt_cse);
+      OPT(opt_copy_propagation, false);
+      OPT(opt_copy_propagation, true);
+      OPT(dead_code_eliminate);
    }
 
    if (failed)
@@ -1891,7 +1913,7 @@ brw_vs_emit(struct brw_context *brw,
       }
 
       fs_generator g(brw, mem_ctx, (void *) &c->key, &prog_data->base.base,
-                     &c->vp->program.Base, v.runtime_check_aads_emit);
+                     &c->vp->program.Base, v.runtime_check_aads_emit, "VS");
       if (INTEL_DEBUG & DEBUG_VS) {
          char *name = ralloc_asprintf(mem_ctx, "%s vertex shader %d",
                                       prog->Label ? prog->Label : "unnamed",
@@ -1921,7 +1943,7 @@ brw_vs_emit(struct brw_context *brw,
       }
 
       vec4_generator g(brw, prog, &c->vp->program.Base, &prog_data->base,
-                       mem_ctx, INTEL_DEBUG & DEBUG_VS);
+                       mem_ctx, INTEL_DEBUG & DEBUG_VS, "vertex", "VS");
       assembly = g.generate_assembly(v.cfg, final_assembly_size);
    }
 
@@ -1945,11 +1967,13 @@ brw_vue_setup_prog_key_for_precompile(struct gl_context *ctx,
                                       struct brw_vue_prog_key *key,
                                       GLuint id, struct gl_program *prog)
 {
+   struct brw_context *brw = brw_context(ctx);
    key->program_string_id = id;
 
+   const bool has_shader_channel_select = brw->is_haswell || brw->gen >= 8;
    unsigned sampler_count = _mesa_fls(prog->SamplersUsed);
    for (unsigned i = 0; i < sampler_count; i++) {
-      if (prog->ShadowSamplers & (1 << i)) {
+      if (!has_shader_channel_select && (prog->ShadowSamplers & (1 << i))) {
          /* Assume DEPTH_TEXTURE_MODE is the default: X, X, X, 1 */
          key->tex.swizzles[i] =
             MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_X, SWIZZLE_X, SWIZZLE_ONE);

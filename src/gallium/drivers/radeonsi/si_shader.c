@@ -32,6 +32,7 @@
 #include "gallivm/lp_bld_logic.h"
 #include "gallivm/lp_bld_arit.h"
 #include "gallivm/lp_bld_flow.h"
+#include "radeon/r600_cs.h"
 #include "radeon/radeon_llvm.h"
 #include "radeon/radeon_elf_util.h"
 #include "radeon/radeon_llvm_emit.h"
@@ -46,6 +47,12 @@
 
 #include <errno.h>
 
+static const char *scratch_rsrc_dword0_symbol =
+	"SCRATCH_RSRC_DWORD0";
+
+static const char *scratch_rsrc_dword1_symbol =
+	"SCRATCH_RSRC_DWORD1";
+
 struct si_shader_output_values
 {
 	LLVMValueRef values[4];
@@ -59,6 +66,7 @@ struct si_shader_context
 	struct tgsi_parse_context parse;
 	struct tgsi_token * tokens;
 	struct si_shader *shader;
+	struct si_screen *screen;
 	unsigned type; /* TGSI_PROCESSOR_* specifies the type of shader. */
 	int param_streamout_config;
 	int param_streamout_write_index;
@@ -452,11 +460,6 @@ static void declare_input_fs(
 			interp_param = LLVMGetParam(main_fn, SI_PARAM_LINEAR_CENTER);
 		break;
 	case TGSI_INTERPOLATE_COLOR:
-		if (si_shader_ctx->shader->key.ps.flatshade) {
-			interp_param = 0;
-			break;
-		}
-		/* fall through to perspective */
 	case TGSI_INTERPOLATE_PERSPECTIVE:
 		if (decl->Interp.Location == TGSI_INTERPOLATE_LOC_SAMPLE)
 			interp_param = LLVMGetParam(main_fn, SI_PARAM_PERSP_SAMPLE);
@@ -470,9 +473,18 @@ static void declare_input_fs(
 		return;
 	}
 
+	/* fs.constant returns the param from the middle vertex, so it's not
+	 * really useful for flat shading. It's meant to be used for custom
+	 * interpolation (but the intrinsic can't fetch from the other two
+	 * vertices).
+	 *
+	 * Luckily, it doesn't matter, because we rely on the FLAT_SHADE state
+	 * to do the right thing. The only reason we use fs.constant is that
+	 * fs.interp cannot be used on integers, because they can be equal
+	 * to NaN.
+	 */
 	intr_name = interp_param ? "llvm.SI.fs.interp" : "llvm.SI.fs.constant";
 
-	/* XXX: Could there be more than TGSI_NUM_CHANNELS (4) ? */
 	if (decl->Semantic.Name == TGSI_SEMANTIC_COLOR &&
 	    si_shader_ctx->shader->key.ps.color_two_side) {
 		LLVMValueRef args[4];
@@ -484,7 +496,7 @@ static void declare_input_fs(
 		face = LLVMGetParam(main_fn, SI_PARAM_FRONT_FACE);
 
 		is_face_positive = LLVMBuildFCmp(gallivm->builder,
-						 LLVMRealUGT, face,
+						 LLVMRealOGT, face,
 						 lp_build_const_float(gallivm, 0.0f),
 						 "");
 
@@ -590,8 +602,21 @@ static void declare_system_value(
 		break;
 
 	case TGSI_SEMANTIC_VERTEXID:
+		value = LLVMBuildAdd(gallivm->builder,
+				     LLVMGetParam(radeon_bld->main_fn,
+						  si_shader_ctx->param_vertex_id),
+				     LLVMGetParam(radeon_bld->main_fn,
+						  SI_PARAM_BASE_VERTEX), "");
+		break;
+
+	case TGSI_SEMANTIC_VERTEXID_NOBASE:
 		value = LLVMGetParam(radeon_bld->main_fn,
 				     si_shader_ctx->param_vertex_id);
+		break;
+
+	case TGSI_SEMANTIC_BASEVERTEX:
+		value = LLVMGetParam(radeon_bld->main_fn,
+				     SI_PARAM_BASE_VERTEX);
 		break;
 
 	case TGSI_SEMANTIC_SAMPLEID:
@@ -1400,10 +1425,7 @@ static void si_llvm_emit_fs_epilogue(struct lp_build_tgsi_context * bld_base)
 		if (stencil_index >= 0) {
 			out_ptr = si_shader_ctx->radeon_bld.soa.outputs[stencil_index][1];
 			args[6] = LLVMBuildLoad(base->gallivm->builder, out_ptr, "");
-			/* Only setting the stencil component bit (0x2) here
-			 * breaks some stencil piglit tests
-			 */
-			mask |= 0x3;
+			mask |= 0x2;
 			si_shader_ctx->shader->db_shader_control |=
 				S_02880C_STENCIL_TEST_VAL_EXPORT_ENABLE(1);
 		}
@@ -1411,9 +1433,15 @@ static void si_llvm_emit_fs_epilogue(struct lp_build_tgsi_context * bld_base)
 		if (samplemask_index >= 0) {
 			out_ptr = si_shader_ctx->radeon_bld.soa.outputs[samplemask_index][0];
 			args[7] = LLVMBuildLoad(base->gallivm->builder, out_ptr, "");
-			mask |= 0xf; /* Set all components. */
+			mask |= 0x4;
 			si_shader_ctx->shader->db_shader_control |= S_02880C_MASK_EXPORT_ENABLE(1);
 		}
+
+		/* SI (except OLAND) has a bug that it only looks
+		 * at the X writemask component. */
+		if (si_shader_ctx->screen->b.chip_class == SI &&
+		    si_shader_ctx->screen->b.family != CHIP_OLAND)
+			mask |= 0x1;
 
 		if (samplemask_index >= 0)
 			si_shader_ctx->shader->spi_shader_z_format = V_028710_SPI_SHADER_32_ABGR;
@@ -2348,6 +2376,10 @@ static void create_function(struct si_shader_context *si_shader_ctx)
 	radeon_llvm_create_func(&si_shader_ctx->radeon_bld, params, num_params);
 	radeon_llvm_shader_type(si_shader_ctx->radeon_bld.main_fn, si_shader_ctx->type);
 
+	if (shader->dx10_clamp_mode)
+		LLVMAddTargetDependentFunctionAttr(si_shader_ctx->radeon_bld.main_fn,
+						   "enable-no-nans-fp-math", "true");
+
 	for (i = 0; i <= last_sgpr; ++i) {
 		LLVMValueRef P = LLVMGetParam(si_shader_ctx->radeon_bld.main_fn, i);
 
@@ -2492,19 +2524,20 @@ static void preload_ring_buffers(struct si_shader_context *si_shader_ctx)
 	}
 }
 
-void si_shader_binary_read_config(const struct radeon_shader_binary *binary,
+void si_shader_binary_read_config(const struct si_screen *sscreen,
 				struct si_shader *shader,
 				unsigned symbol_offset)
 {
 	unsigned i;
 	const unsigned char *config =
-		radeon_shader_binary_config_start(binary, symbol_offset);
+		radeon_shader_binary_config_start(&shader->binary,
+						symbol_offset);
 
 	/* XXX: We may be able to emit some of these values directly rather than
 	 * extracting fields to be emitted later.
 	 */
 
-	for (i = 0; i < binary->config_size_per_symbol; i+= 8) {
+	for (i = 0; i < shader->binary.config_size_per_symbol; i+= 8) {
 		unsigned reg = util_le32_to_cpu(*(uint32_t*)(config + i));
 		unsigned value = util_le32_to_cpu(*(uint32_t*)(config + i + 4));
 		switch (reg) {
@@ -2524,6 +2557,7 @@ void si_shader_binary_read_config(const struct radeon_shader_binary *binary,
 		case R_0286CC_SPI_PS_INPUT_ENA:
 			shader->spi_ps_input_ena = value;
 			break;
+		case R_0286E8_SPI_TMPRING_SIZE:
 		case R_00B860_COMPUTE_TMPRING_SIZE:
 			/* WAVESIZE is in units of 256 dwords. */
 			shader->scratch_bytes_per_wave =
@@ -2533,6 +2567,29 @@ void si_shader_binary_read_config(const struct radeon_shader_binary *binary,
 			fprintf(stderr, "Warning: Compiler emitted unknown "
 				"config register: 0x%x\n", reg);
 			break;
+		}
+	}
+}
+
+void si_shader_apply_scratch_relocs(struct si_context *sctx,
+			struct si_shader *shader,
+			uint64_t scratch_va)
+{
+	unsigned i;
+	uint32_t scratch_rsrc_dword0 = scratch_va & 0xffffffff;
+	uint32_t scratch_rsrc_dword1 =
+		S_008F04_BASE_ADDRESS_HI(scratch_va >> 32)
+		|  S_008F04_STRIDE(shader->scratch_bytes_per_wave / 64);
+
+	for (i = 0 ; i < shader->binary.reloc_count; i++) {
+		const struct radeon_shader_reloc *reloc =
+					&shader->binary.relocs[i];
+		if (!strcmp(scratch_rsrc_dword0_symbol, reloc->name)) {
+			util_memcpy_cpu_to_le32(shader->binary.code + reloc->offset,
+			&scratch_rsrc_dword0, 4);
+		} else if (!strcmp(scratch_rsrc_dword1_symbol, reloc->name)) {
+			util_memcpy_cpu_to_le32(shader->binary.code + reloc->offset,
+			&scratch_rsrc_dword1, 4);
 		}
 	}
 }
@@ -2557,7 +2614,7 @@ int si_shader_binary_read(struct si_screen *sscreen,
 		}
 	}
 
-	si_shader_binary_read_config(binary, shader, 0);
+	si_shader_binary_read_config(sscreen, shader, 0);
 
 	/* copy new shader */
 	code_size = binary->code_size + binary->rodata_size;
@@ -2585,20 +2642,24 @@ int si_compile_llvm(struct si_screen *sscreen, struct si_shader *shader,
 							LLVMModuleRef mod)
 {
 	int r = 0;
-	struct radeon_shader_binary binary;
 	bool dump = r600_can_dump_shader(&sscreen->b,
 			shader->selector ? shader->selector->tokens : NULL);
-	memset(&binary, 0, sizeof(binary));
-	r = radeon_llvm_compile(mod, &binary,
-		r600_get_llvm_processor_name(sscreen->b.family), dump);
+	r = radeon_llvm_compile(mod, &shader->binary,
+		r600_get_llvm_processor_name(sscreen->b.family), dump, sscreen->tm);
 
 	if (r) {
 		return r;
 	}
-	r = si_shader_binary_read(sscreen, shader, &binary);
-	FREE(binary.code);
-	FREE(binary.config);
-	FREE(binary.rodata);
+	r = si_shader_binary_read(sscreen, shader, &shader->binary);
+
+	FREE(shader->binary.config);
+	FREE(shader->binary.rodata);
+	FREE(shader->binary.global_symbol_offsets);
+	if (shader->scratch_bytes_per_wave == 0) {
+		FREE(shader->binary.code);
+		FREE(shader->binary.relocs);
+		memset(&shader->binary, 0, sizeof(shader->binary));
+	}
 	return r;
 }
 
@@ -2702,6 +2763,9 @@ int si_shader_create(struct si_screen *sscreen, struct si_shader *shader)
 	radeon_llvm_context_init(&si_shader_ctx.radeon_bld);
 	bld_base = &si_shader_ctx.radeon_bld.soa.bld_base;
 
+	if (sel->type != PIPE_SHADER_COMPUTE)
+		shader->dx10_clamp_mode = true;
+
 	if (sel->info.uses_kill)
 		shader->db_shader_control |= S_02880C_KILL_ENABLE(1);
 
@@ -2740,6 +2804,7 @@ int si_shader_create(struct si_screen *sscreen, struct si_shader *shader)
 	tgsi_parse_init(&si_shader_ctx.parse, si_shader_ctx.tokens);
 	si_shader_ctx.shader = shader;
 	si_shader_ctx.type = si_shader_ctx.parse.FullHeader.Processor.Processor;
+	si_shader_ctx.screen = sscreen;
 
 	switch (si_shader_ctx.type) {
 	case TGSI_PROCESSOR_VERTEX:
@@ -2830,6 +2895,11 @@ void si_shader_destroy(struct pipe_context *ctx, struct si_shader *shader)
 	if (shader->gs_copy_shader)
 		si_shader_destroy(ctx, shader->gs_copy_shader);
 
+	if (shader->scratch_bo)
+		r600_resource_reference(&shader->scratch_bo, NULL);
+
 	r600_resource_reference(&shader->bo, NULL);
-	r600_resource_reference(&shader->scratch_bo, NULL);
+
+	FREE(shader->binary.code);
+	FREE(shader->binary.relocs);
 }

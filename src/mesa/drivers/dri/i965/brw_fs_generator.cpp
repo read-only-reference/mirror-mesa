@@ -123,12 +123,13 @@ fs_generator::fs_generator(struct brw_context *brw,
                            const void *key,
                            struct brw_stage_prog_data *prog_data,
                            struct gl_program *prog,
-                           bool runtime_check_aads_emit)
+                           bool runtime_check_aads_emit,
+                           const char *stage_abbrev)
 
    : brw(brw), key(key),
      prog_data(prog_data),
      prog(prog), runtime_check_aads_emit(runtime_check_aads_emit),
-     debug_flag(false), mem_ctx(mem_ctx)
+     debug_flag(false), stage_abbrev(stage_abbrev), mem_ctx(mem_ctx)
 {
    ctx = &brw->ctx;
 
@@ -696,7 +697,7 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
                        brw_imm_ud(inst->offset));
          }
 
-         brw_adjust_sampler_state_pointer(p, header_reg, sampler_index, dst);
+         brw_adjust_sampler_state_pointer(p, header_reg, sampler_index);
          brw_pop_insn_state(p);
       }
    }
@@ -1017,6 +1018,26 @@ fs_generator::generate_uniform_pull_constant_load_gen7(fs_inst *inst,
     */
    dst.width = BRW_WIDTH_4;
 
+   struct brw_reg src = offset;
+   bool header_present = false;
+   int mlen = 1;
+
+   if (brw->gen >= 9) {
+      /* Skylake requires a message header in order to use SIMD4x2 mode. */
+      src = retype(brw_vec8_grf(offset.nr - 1, 0), BRW_REGISTER_TYPE_UD);
+      mlen = 2;
+      header_present = true;
+
+      brw_push_insn_state(p);
+      brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+      brw_MOV(p, src, retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD));
+      brw_set_default_access_mode(p, BRW_ALIGN_1);
+
+      brw_MOV(p, get_element_ud(src, 2),
+              brw_imm_ud(GEN9_SAMPLER_SIMD_MODE_EXTENSION_SIMD4X2));
+      brw_pop_insn_state(p);
+   }
+
    if (index.file == BRW_IMMEDIATE_VALUE) {
 
       uint32_t surf_index = index.dw1.ud;
@@ -1028,14 +1049,14 @@ fs_generator::generate_uniform_pull_constant_load_gen7(fs_inst *inst,
       brw_pop_insn_state(p);
 
       brw_set_dest(p, send, dst);
-      brw_set_src0(p, send, offset);
+      brw_set_src0(p, send, src);
       brw_set_sampler_message(p, send,
                               surf_index,
                               0, /* LD message ignores sampler unit */
                               GEN5_SAMPLER_MESSAGE_SAMPLE_LD,
                               1, /* rlen */
-                              1, /* mlen */
-                              false, /* no header */
+                              mlen,
+                              header_present,
                               BRW_SAMPLER_SIMD_MODE_SIMD4X2,
                               0);
 
@@ -1064,8 +1085,8 @@ fs_generator::generate_uniform_pull_constant_load_gen7(fs_inst *inst,
                               0 /* sampler */,
                               GEN5_SAMPLER_MESSAGE_SAMPLE_LD,
                               1 /* rlen */,
-                              1 /* mlen */,
-                              false /* header */,
+                              mlen,
+                              header_present,
                               BRW_SAMPLER_SIMD_MODE_SIMD4X2,
                               0);
       brw_inst_set_exec_size(p->brw, insn_or, BRW_EXECUTE_1);
@@ -1077,7 +1098,7 @@ fs_generator::generate_uniform_pull_constant_load_gen7(fs_inst *inst,
       /* dst = send(offset, a0.0) */
       brw_inst *insn_send = brw_next_insn(p, BRW_OPCODE_SEND);
       brw_set_dest(p, insn_send, dst);
-      brw_set_src0(p, insn_send, offset);
+      brw_set_src0(p, insn_send, src);
       brw_set_indirect_send_descriptor(p, insn_send, BRW_SFID_SAMPLER, addr);
 
       brw_pop_insn_state(p);
@@ -1326,10 +1347,7 @@ fs_generator::generate_set_omask(fs_inst *inst,
      mask.width == BRW_WIDTH_8 &&
      mask.hstride == BRW_HORIZONTAL_STRIDE_1);
 
-   bool stride_0_1_0 =
-    (mask.vstride == BRW_VERTICAL_STRIDE_0 &&
-     mask.width == BRW_WIDTH_1 &&
-     mask.hstride == BRW_HORIZONTAL_STRIDE_0);
+   bool stride_0_1_0 = has_scalar_region(mask);
 
    assert(stride_8_8_1 || stride_0_1_0);
    assert(dst.type == BRW_REGISTER_TYPE_UW);
@@ -1562,6 +1580,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
    foreach_block_and_inst (block, fs_inst, inst, cfg) {
       struct brw_reg src[3], dst;
       unsigned int last_insn_offset = p->next_insn_offset;
+      bool multiple_instructions_emitted = false;
 
       if (unlikely(debug_flag))
          annotate(brw, &annotation, cfg, inst, p->next_insn_offset);
@@ -1635,10 +1654,16 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 	 brw_set_default_access_mode(p, BRW_ALIGN_16);
          if (dispatch_width == 16 && brw->gen < 8 && !brw->is_haswell) {
 	    brw_set_default_compression_control(p, BRW_COMPRESSION_NONE);
-	    brw_MAD(p, firsthalf(dst), firsthalf(src[0]), firsthalf(src[1]), firsthalf(src[2]));
+            brw_inst *f = brw_MAD(p, firsthalf(dst), firsthalf(src[0]), firsthalf(src[1]), firsthalf(src[2]));
 	    brw_set_default_compression_control(p, BRW_COMPRESSION_2NDHALF);
-	    brw_MAD(p, sechalf(dst), sechalf(src[0]), sechalf(src[1]), sechalf(src[2]));
+            brw_inst *s = brw_MAD(p, sechalf(dst), sechalf(src[0]), sechalf(src[1]), sechalf(src[2]));
 	    brw_set_default_compression_control(p, BRW_COMPRESSION_COMPRESSED);
+
+            if (inst->conditional_mod) {
+               brw_inst_set_cond_modifier(brw, f, inst->conditional_mod);
+               brw_inst_set_cond_modifier(brw, s, inst->conditional_mod);
+               multiple_instructions_emitted = true;
+            }
 	 } else {
 	    brw_MAD(p, dst, src[0], src[1], src[2]);
 	 }
@@ -1650,10 +1675,16 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 	 brw_set_default_access_mode(p, BRW_ALIGN_16);
          if (dispatch_width == 16 && brw->gen < 8 && !brw->is_haswell) {
 	    brw_set_default_compression_control(p, BRW_COMPRESSION_NONE);
-	    brw_LRP(p, firsthalf(dst), firsthalf(src[0]), firsthalf(src[1]), firsthalf(src[2]));
+            brw_inst *f = brw_LRP(p, firsthalf(dst), firsthalf(src[0]), firsthalf(src[1]), firsthalf(src[2]));
 	    brw_set_default_compression_control(p, BRW_COMPRESSION_2NDHALF);
-	    brw_LRP(p, sechalf(dst), sechalf(src[0]), sechalf(src[1]), sechalf(src[2]));
+            brw_inst *s = brw_LRP(p, sechalf(dst), sechalf(src[0]), sechalf(src[1]), sechalf(src[2]));
 	    brw_set_default_compression_control(p, BRW_COMPRESSION_COMPRESSED);
+
+            if (inst->conditional_mod) {
+               brw_inst_set_cond_modifier(brw, f, inst->conditional_mod);
+               brw_inst_set_cond_modifier(brw, s, inst->conditional_mod);
+               multiple_instructions_emitted = true;
+            }
 	 } else {
 	    brw_LRP(p, dst, src[0], src[1], src[2]);
 	 }
@@ -2015,16 +2046,20 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 
       default:
 	 if (inst->opcode < (int) ARRAY_SIZE(opcode_descs)) {
-	    _mesa_problem(ctx, "Unsupported opcode `%s' in FS",
-			  opcode_descs[inst->opcode].name);
+	    _mesa_problem(ctx, "Unsupported opcode `%s' in %s",
+			  opcode_descs[inst->opcode].name, stage_abbrev);
 	 } else {
-	    _mesa_problem(ctx, "Unsupported opcode %d in FS", inst->opcode);
+	    _mesa_problem(ctx, "Unsupported opcode %d in %s", inst->opcode,
+                          stage_abbrev);
 	 }
 	 abort();
 
       case SHADER_OPCODE_LOAD_PAYLOAD:
          unreachable("Should be lowered by lower_load_payload()");
       }
+
+      if (multiple_instructions_emitted)
+         continue;
 
       if (inst->no_dd_clear || inst->no_dd_check || inst->conditional_mod) {
          assert(p->next_insn_offset == last_insn_offset + 16 ||
@@ -2065,9 +2100,9 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
                   MESA_DEBUG_SOURCE_SHADER_COMPILER,
                   MESA_DEBUG_TYPE_OTHER,
                   MESA_DEBUG_SEVERITY_NOTIFICATION,
-                  "FS SIMD%d shader: %d inst, %d loops, "
+                  "%s SIMD%d shader: %d inst, %d loops, "
                   "compacted %d to %d bytes.\n",
-                  dispatch_width, before_size / 16, loop_count,
+                  stage_abbrev, dispatch_width, before_size / 16, loop_count,
                   before_size, after_size);
 
    return start_offset;
