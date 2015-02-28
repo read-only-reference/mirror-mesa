@@ -13,10 +13,10 @@ The rules-ng-ng source files this header was generated from are:
 - /home/robclark/src/freedreno/envytools/rnndb/adreno/a2xx.xml          (  32901 bytes, from 2014-06-02 15:21:30)
 - /home/robclark/src/freedreno/envytools/rnndb/adreno/adreno_common.xml (  10551 bytes, from 2014-11-13 22:44:30)
 - /home/robclark/src/freedreno/envytools/rnndb/adreno/adreno_pm4.xml    (  15085 bytes, from 2014-12-20 21:49:41)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/a3xx.xml          (  64344 bytes, from 2014-12-12 20:22:26)
-- /home/robclark/src/freedreno/envytools/rnndb/adreno/a4xx.xml          (  51270 bytes, from 2015-01-18 23:05:48)
+- /home/robclark/src/freedreno/envytools/rnndb/adreno/a3xx.xml          (  64848 bytes, from 2015-02-20 18:21:24)
+- /home/robclark/src/freedreno/envytools/rnndb/adreno/a4xx.xml          (  51942 bytes, from 2015-02-24 17:14:02)
 
-Copyright (C) 2013-2014 by the following authors:
+Copyright (C) 2013-2015 by the following authors:
 - Rob Clark <robdclark@gmail.com> (robclark)
 
 Permission is hereby granted, free of charge, to any person obtaining
@@ -130,6 +130,10 @@ enum a3xx_tex_fmt {
 	TFMT_I420_Y = 24,
 	TFMT_I420_U = 26,
 	TFMT_I420_V = 27,
+	TFMT_ATC_RGB = 32,
+	TFMT_ATC_RGBA_EXPLICIT = 33,
+	TFMT_ETC1 = 34,
+	TFMT_ATC_RGBA_INTERPOLATED = 35,
 	TFMT_DXT1 = 36,
 	TFMT_DXT3 = 37,
 	TFMT_DXT5 = 38,
@@ -178,10 +182,13 @@ enum a3xx_tex_fmt {
 	TFMT_32_SINT = 92,
 	TFMT_32_32_SINT = 93,
 	TFMT_32_32_32_32_SINT = 95,
-	TFMT_RGTC2_SNORM = 112,
-	TFMT_RGTC2_UNORM = 113,
-	TFMT_RGTC1_SNORM = 114,
-	TFMT_RGTC1_UNORM = 115,
+	TFMT_ETC2_RG11_SNORM = 112,
+	TFMT_ETC2_RG11_UNORM = 113,
+	TFMT_ETC2_R11_SNORM = 114,
+	TFMT_ETC2_R11_UNORM = 115,
+	TFMT_ETC2_RGBA8 = 116,
+	TFMT_ETC2_RGB8A1 = 117,
+	TFMT_ETC2_RGB8 = 118,
 };
 
 enum a3xx_tex_fetchsize {
@@ -853,6 +860,12 @@ static inline uint32_t A3XX_GRAS_SC_WINDOW_SCISSOR_BR_Y(uint32_t val)
 static inline uint32_t A3XX_RB_MODE_CONTROL_RENDER_MODE(enum a3xx_render_mode val)
 {
 	return ((val) << A3XX_RB_MODE_CONTROL_RENDER_MODE__SHIFT) & A3XX_RB_MODE_CONTROL_RENDER_MODE__MASK;
+}
+#define A3XX_RB_MODE_CONTROL_MRT__MASK				0x00003000
+#define A3XX_RB_MODE_CONTROL_MRT__SHIFT				12
+static inline uint32_t A3XX_RB_MODE_CONTROL_MRT(uint32_t val)
+{
+	return ((val) << A3XX_RB_MODE_CONTROL_MRT__SHIFT) & A3XX_RB_MODE_CONTROL_MRT__MASK;
 }
 #define A3XX_RB_MODE_CONTROL_MARB_CACHE_SPLIT_MODE		0x00008000
 #define A3XX_RB_MODE_CONTROL_PACKER_TIMER_ENABLE		0x00010000
@@ -2107,6 +2120,12 @@ static inline uint32_t A3XX_SP_FS_OBJ_OFFSET_REG_SHADEROBJOFFSET(uint32_t val)
 #define REG_A3XX_SP_FS_FLAT_SHAD_MODE_REG_1			0x000022e9
 
 #define REG_A3XX_SP_FS_OUTPUT_REG				0x000022ec
+#define A3XX_SP_FS_OUTPUT_REG_MRT__MASK				0x00000003
+#define A3XX_SP_FS_OUTPUT_REG_MRT__SHIFT			0
+static inline uint32_t A3XX_SP_FS_OUTPUT_REG_MRT(uint32_t val)
+{
+	return ((val) << A3XX_SP_FS_OUTPUT_REG_MRT__SHIFT) & A3XX_SP_FS_OUTPUT_REG_MRT__MASK;
+}
 #define A3XX_SP_FS_OUTPUT_REG_DEPTH_ENABLE			0x00000080
 #define A3XX_SP_FS_OUTPUT_REG_DEPTH_REGID__MASK			0x0000ff00
 #define A3XX_SP_FS_OUTPUT_REG_DEPTH_REGID__SHIFT		8

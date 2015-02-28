@@ -41,7 +41,8 @@ extern "C" {
  * - A negative value always means failure.
  * - The meaning of a positive value is function dependent.
  */
-enum pipe_error {
+enum pipe_error
+{
    PIPE_OK = 0,
    PIPE_ERROR = -1,    /**< Generic error */
    PIPE_ERROR_BAD_INPUT = -2,
@@ -140,8 +141,10 @@ enum pipe_error {
 #define PIPE_STENCIL_OP_INVERT     7
 
 /** Texture types.
- * See the documentation for info on PIPE_TEXTURE_RECT vs PIPE_TEXTURE_2D */
-enum pipe_texture_target {
+ * See the documentation for info on PIPE_TEXTURE_RECT vs PIPE_TEXTURE_2D
+ */
+enum pipe_texture_target
+{
    PIPE_BUFFER           = 0,
    PIPE_TEXTURE_1D       = 1,
    PIPE_TEXTURE_2D       = 2,
@@ -171,14 +174,12 @@ enum pipe_texture_target {
 #define PIPE_TEX_WRAP_MIRROR_CLAMP_TO_EDGE     6
 #define PIPE_TEX_WRAP_MIRROR_CLAMP_TO_BORDER   7
 
-/* Between mipmaps, ie mipfilter
- */
+/** Between mipmaps, ie mipfilter */
 #define PIPE_TEX_MIPFILTER_NEAREST  0
 #define PIPE_TEX_MIPFILTER_LINEAR   1
 #define PIPE_TEX_MIPFILTER_NONE     2
 
-/* Within a mipmap, ie min/mag filter 
- */
+/** Within a mipmap, ie min/mag filter */
 #define PIPE_TEX_FILTER_NEAREST      0
 #define PIPE_TEX_FILTER_LINEAR       1
 
@@ -209,7 +210,8 @@ enum pipe_texture_target {
 /**
  * Transfer object usage flags
  */
-enum pipe_transfer_usage {
+enum pipe_transfer_usage
+{
    /**
     * Resource contents read back (or accessed directly) at transfer
     * create time.
@@ -321,7 +323,8 @@ enum pipe_transfer_usage {
 /**
  * Flags for the flush function.
  */
-enum pipe_flush_flags {
+enum pipe_flush_flags
+{
    PIPE_FLUSH_END_OF_FRAME = (1 << 0)
 };
 
@@ -330,7 +333,7 @@ enum pipe_flush_flags {
  */
 #define PIPE_BARRIER_MAPPED_BUFFER     (1 << 0)
 
-/*
+/**
  * Resource binding flags -- state tracker must specify in advance all
  * the ways a resource might be used.
  */
@@ -341,18 +344,19 @@ enum pipe_flush_flags {
 #define PIPE_BIND_VERTEX_BUFFER        (1 << 4) /* set_vertex_buffers */
 #define PIPE_BIND_INDEX_BUFFER         (1 << 5) /* draw_elements */
 #define PIPE_BIND_CONSTANT_BUFFER      (1 << 6) /* set_constant_buffer */
-#define PIPE_BIND_DISPLAY_TARGET       (1 << 8) /* flush_front_buffer */
-#define PIPE_BIND_TRANSFER_WRITE       (1 << 9) /* transfer_map */
-#define PIPE_BIND_TRANSFER_READ        (1 << 10) /* transfer_map */
-#define PIPE_BIND_STREAM_OUTPUT        (1 << 11) /* set_stream_output_buffers */
-#define PIPE_BIND_CURSOR               (1 << 16) /* mouse cursor */
-#define PIPE_BIND_CUSTOM               (1 << 17) /* state-tracker/winsys usages */
-#define PIPE_BIND_GLOBAL               (1 << 18) /* set_global_binding */
-#define PIPE_BIND_SHADER_RESOURCE      (1 << 19) /* set_shader_resources */
-#define PIPE_BIND_COMPUTE_RESOURCE     (1 << 20) /* set_compute_resources */
-#define PIPE_BIND_COMMAND_ARGS_BUFFER  (1 << 21) /* pipe_draw_info.indirect */
+#define PIPE_BIND_DISPLAY_TARGET       (1 << 7) /* flush_front_buffer */
+#define PIPE_BIND_TRANSFER_WRITE       (1 << 8) /* transfer_map */
+#define PIPE_BIND_TRANSFER_READ        (1 << 9) /* transfer_map */
+#define PIPE_BIND_STREAM_OUTPUT        (1 << 10) /* set_stream_output_buffers */
+#define PIPE_BIND_CURSOR               (1 << 11) /* mouse cursor */
+#define PIPE_BIND_CUSTOM               (1 << 12) /* state-tracker/winsys usages */
+#define PIPE_BIND_GLOBAL               (1 << 13) /* set_global_binding */
+#define PIPE_BIND_SHADER_RESOURCE      (1 << 14) /* set_shader_resources */
+#define PIPE_BIND_COMPUTE_RESOURCE     (1 << 15) /* set_compute_resources */
+#define PIPE_BIND_COMMAND_ARGS_BUFFER  (1 << 16) /* pipe_draw_info.indirect */
 
-/* The first two flags above were previously part of the amorphous
+/**
+ * The first two flags above were previously part of the amorphous
  * TEXTURE_USAGE, most of which are now descriptions of the ways a
  * particular texture can be bound to the gallium pipeline.  The two flags
  * below do not fit within that and probably need to be migrated to some
@@ -370,19 +374,21 @@ enum pipe_flush_flags {
  * The third flag has been added to be able to force textures to be created
  * in linear mode (no tiling).
  */
-#define PIPE_BIND_SCANOUT     (1 << 14) /*  */
-#define PIPE_BIND_SHARED      (1 << 15) /* get_texture_handle ??? */
-#define PIPE_BIND_LINEAR      (1 << 21)
+#define PIPE_BIND_SCANOUT     (1 << 17) /*  */
+#define PIPE_BIND_SHARED      (1 << 18) /* get_texture_handle ??? */
+#define PIPE_BIND_LINEAR      (1 << 19)
 
 
-/* Flags for the driver about resource behaviour:
+/**
+ * Flags for the driver about resource behaviour:
  */
 #define PIPE_RESOURCE_FLAG_MAP_PERSISTENT (1 << 0)
 #define PIPE_RESOURCE_FLAG_MAP_COHERENT   (1 << 1)
 #define PIPE_RESOURCE_FLAG_DRV_PRIV    (1 << 16) /* driver/winsys private */
 #define PIPE_RESOURCE_FLAG_ST_PRIV     (1 << 24) /* state-tracker/winsys private */
 
-/* Hint about the expected lifecycle of a resource.
+/**
+ * Hint about the expected lifecycle of a resource.
  * Sorted according to GPU vs CPU access.
  */
 #define PIPE_USAGE_DEFAULT        0 /* fast GPU access */
@@ -405,18 +411,18 @@ enum pipe_flush_flags {
 /**
  * Primitive types:
  */
-#define PIPE_PRIM_POINTS               0
-#define PIPE_PRIM_LINES                1
-#define PIPE_PRIM_LINE_LOOP            2
-#define PIPE_PRIM_LINE_STRIP           3
-#define PIPE_PRIM_TRIANGLES            4
-#define PIPE_PRIM_TRIANGLE_STRIP       5
-#define PIPE_PRIM_TRIANGLE_FAN         6
-#define PIPE_PRIM_QUADS                7
-#define PIPE_PRIM_QUAD_STRIP           8
-#define PIPE_PRIM_POLYGON              9
+#define PIPE_PRIM_POINTS                    0
+#define PIPE_PRIM_LINES                     1
+#define PIPE_PRIM_LINE_LOOP                 2
+#define PIPE_PRIM_LINE_STRIP                3
+#define PIPE_PRIM_TRIANGLES                 4
+#define PIPE_PRIM_TRIANGLE_STRIP            5
+#define PIPE_PRIM_TRIANGLE_FAN              6
+#define PIPE_PRIM_QUADS                     7
+#define PIPE_PRIM_QUAD_STRIP                8
+#define PIPE_PRIM_POLYGON                   9
 #define PIPE_PRIM_LINES_ADJACENCY          10
-#define PIPE_PRIM_LINE_STRIP_ADJACENCY    11
+#define PIPE_PRIM_LINE_STRIP_ADJACENCY     11
 #define PIPE_PRIM_TRIANGLES_ADJACENCY      12
 #define PIPE_PRIM_TRIANGLE_STRIP_ADJACENCY 13
 #define PIPE_PRIM_MAX                      14
@@ -437,9 +443,7 @@ enum pipe_flush_flags {
 #define PIPE_QUERY_GPU_FINISHED          9
 #define PIPE_QUERY_PIPELINE_STATISTICS  10
 #define PIPE_QUERY_TYPES                11
-
-/* start of driver queries,
- * see pipe_screen::get_driver_query_info */
+/* start of driver queries, see pipe_screen::get_driver_query_info */
 #define PIPE_QUERY_DRIVER_SPECIFIC     256
 
 
@@ -476,7 +480,8 @@ enum pipe_flush_flags {
  * Implementation capabilities/limits which are queried through
  * pipe_screen::get_param()
  */
-enum pipe_cap {
+enum pipe_cap
+{
    PIPE_CAP_NPOT_TEXTURES = 1,
    PIPE_CAP_TWO_SIDED_STENCIL = 2,
    PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS = 4,
@@ -572,13 +577,17 @@ enum pipe_cap {
    PIPE_CAP_MAX_VERTEX_ATTRIB_STRIDE = 109,
    PIPE_CAP_SAMPLER_VIEW_TARGET = 110,
    PIPE_CAP_CLIP_HALFZ = 111,
-   PIPE_CAP_VERTEXID_NOBASE,
+   PIPE_CAP_VERTEXID_NOBASE = 112,
+   PIPE_CAP_POLYGON_OFFSET_CLAMP = 113,
+   PIPE_CAP_MULTISAMPLE_Z_RESOLVE = 114,
+   PIPE_CAP_RESOURCE_FROM_USER_MEMORY = 115,
 };
 
 #define PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50 (1 << 0)
 #define PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_R600 (1 << 1)
 
-enum pipe_endian {
+enum pipe_endian
+{
    PIPE_ENDIAN_LITTLE = 0,
    PIPE_ENDIAN_BIG = 1,
 #if defined(PIPE_ARCH_LITTLE_ENDIAN)
@@ -606,7 +615,7 @@ enum pipe_capf
    PIPE_CAPF_GUARD_BAND_BOTTOM
 };
 
-/* Shader caps not specific to any single stage */
+/** Shader caps not specific to any single stage */
 enum pipe_shader_cap
 {
    PIPE_SHADER_CAP_MAX_INSTRUCTIONS, /* if 0, it means the stage is unsupported */
@@ -632,7 +641,9 @@ enum pipe_shader_cap
    PIPE_SHADER_CAP_PREFERRED_IR,
    PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED,
    PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS,
-   PIPE_SHADER_CAP_DOUBLES
+   PIPE_SHADER_CAP_DOUBLES,
+   PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED, /* all rounding modes */
+   PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED,
 };
 
 /**

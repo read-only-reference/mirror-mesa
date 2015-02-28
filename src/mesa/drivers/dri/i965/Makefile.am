@@ -28,6 +28,8 @@ AM_CFLAGS = \
 	-I$(top_srcdir)/src/ \
 	-I$(top_srcdir)/src/mapi \
 	-I$(top_srcdir)/src/mesa/ \
+	-I$(top_srcdir)/src/gallium/include \
+	-I$(top_srcdir)/src/gallium/auxiliary \
 	-I$(top_srcdir)/src/mesa/drivers/dri/common \
 	-I$(top_srcdir)/src/mesa/drivers/dri/intel/server \
 	-I$(top_srcdir)/src/gtest/include \
@@ -54,6 +56,7 @@ TEST_LIBS = \
 
 TESTS = \
 	test_fs_cmod_propagation \
+	test_fs_saturate_propagation \
         test_eu_compact \
 	test_vf_float_conversions \
         test_vec4_copy_propagation \
@@ -64,26 +67,32 @@ check_PROGRAMS = $(TESTS)
 test_fs_cmod_propagation_SOURCES = \
 	test_fs_cmod_propagation.cpp
 test_fs_cmod_propagation_LDADD = \
-	$(TEST_LIBS) \
-	$(top_builddir)/src/gtest/libgtest.la
+	$(top_builddir)/src/gtest/libgtest.la \
+	$(TEST_LIBS)
+
+test_fs_saturate_propagation_SOURCES = \
+	test_fs_saturate_propagation.cpp
+test_fs_saturate_propagation_LDADD = \
+	$(top_builddir)/src/gtest/libgtest.la \
+	$(TEST_LIBS)
 
 test_vf_float_conversions_SOURCES = \
 	test_vf_float_conversions.cpp
 test_vf_float_conversions_LDADD = \
-	$(TEST_LIBS) \
-	$(top_builddir)/src/gtest/libgtest.la
+	$(top_builddir)/src/gtest/libgtest.la \
+	$(TEST_LIBS)
 
 test_vec4_register_coalesce_SOURCES = \
 	test_vec4_register_coalesce.cpp
 test_vec4_register_coalesce_LDADD = \
-        $(TEST_LIBS) \
-        $(top_builddir)/src/gtest/libgtest.la
+        $(top_builddir)/src/gtest/libgtest.la \
+        $(TEST_LIBS)
 
 test_vec4_copy_propagation_SOURCES = \
 	test_vec4_copy_propagation.cpp
 test_vec4_copy_propagation_LDADD = \
-        $(TEST_LIBS) \
-        $(top_builddir)/src/gtest/libgtest.la
+        $(top_builddir)/src/gtest/libgtest.la \
+        $(TEST_LIBS)
 
 test_eu_compact_SOURCES = \
 	test_eu_compact.c

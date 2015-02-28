@@ -341,7 +341,7 @@ swrast_delete_renderbuffer(struct gl_context *ctx, struct gl_renderbuffer *rb)
 }
 
 /* see bytes_per_line in libGL */
-static INLINE int
+static inline int
 bytes_per_line(unsigned pitch_bits, unsigned mul)
 {
    unsigned mask = mul - 1;
@@ -481,7 +481,7 @@ swrast_map_renderbuffer(struct gl_context *ctx,
       return;
    }
 
-   ASSERT(xrb->Base.Buffer);
+   assert(xrb->Base.Buffer);
 
    if (rb->AllocStorage == swrast_alloc_back_storage) {
       map += (rb->Height - 1) * stride;

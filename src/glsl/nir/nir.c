@@ -29,7 +29,7 @@
 #include <assert.h>
 
 nir_shader *
-nir_shader_create(void *mem_ctx)
+nir_shader_create(void *mem_ctx, const nir_shader_compiler_options *options)
 {
    nir_shader *shader = ralloc(mem_ctx, nir_shader);
 
@@ -39,6 +39,8 @@ nir_shader_create(void *mem_ctx)
                                             _mesa_key_string_equal);
    shader->outputs = _mesa_hash_table_create(shader, _mesa_key_hash_string,
                                              _mesa_key_string_equal);
+
+   shader->options = options;
 
    shader->num_user_structures = 0;
    shader->user_structures = NULL;
@@ -61,6 +63,7 @@ reg_create(void *mem_ctx, struct exec_list *list)
 {
    nir_register *reg = ralloc(mem_ctx, nir_register);
 
+   reg->parent_instr = NULL;
    reg->uses = _mesa_set_create(mem_ctx, _mesa_hash_pointer,
                                 _mesa_key_pointer_equal);
    reg->defs = _mesa_set_create(mem_ctx, _mesa_hash_pointer,
@@ -1148,6 +1151,58 @@ stitch_blocks(nir_block *before, nir_block *after)
    exec_node_remove(&after->cf_node.node);
 }
 
+static void
+remove_defs_uses(nir_instr *instr);
+
+static void
+cleanup_cf_node(nir_cf_node *node)
+{
+   switch (node->type) {
+   case nir_cf_node_block: {
+      nir_block *block = nir_cf_node_as_block(node);
+      /* We need to walk the instructions and clean up defs/uses */
+      nir_foreach_instr(block, instr)
+         remove_defs_uses(instr);
+      break;
+   }
+
+   case nir_cf_node_if: {
+      nir_if *if_stmt = nir_cf_node_as_if(node);
+      foreach_list_typed(nir_cf_node, child, node, &if_stmt->then_list)
+         cleanup_cf_node(child);
+      foreach_list_typed(nir_cf_node, child, node, &if_stmt->else_list)
+         cleanup_cf_node(child);
+
+      struct set *if_uses;
+      if (if_stmt->condition.is_ssa) {
+         if_uses = if_stmt->condition.ssa->if_uses;
+      } else {
+         if_uses = if_stmt->condition.reg.reg->if_uses;
+      }
+
+      struct set_entry *entry = _mesa_set_search(if_uses, if_stmt);
+      assert(entry);
+      _mesa_set_remove(if_uses, entry);
+      break;
+   }
+
+   case nir_cf_node_loop: {
+      nir_loop *loop = nir_cf_node_as_loop(node);
+      foreach_list_typed(nir_cf_node, child, node, &loop->body)
+         cleanup_cf_node(child);
+      break;
+   }
+   case nir_cf_node_function: {
+      nir_function_impl *impl = nir_cf_node_as_function(node);
+      foreach_list_typed(nir_cf_node, child, node, &impl->body)
+         cleanup_cf_node(child);
+      break;
+   }
+   default:
+      unreachable("Invalid CF node type");
+   }
+}
+
 void
 nir_cf_node_remove(nir_cf_node *node)
 {
@@ -1175,12 +1230,14 @@ nir_cf_node_remove(nir_cf_node *node)
       exec_node_remove(&node->node);
       stitch_blocks(before_block, after_block);
    }
+
+   cleanup_cf_node(node);
 }
 
 static bool
 add_use_cb(nir_src *src, void *state)
 {
-   nir_instr *instr = (nir_instr *) state;
+   nir_instr *instr = state;
 
    struct set *uses_set = src->is_ssa ? src->ssa->uses : src->reg.reg->uses;
 
@@ -1192,7 +1249,7 @@ add_use_cb(nir_src *src, void *state)
 static bool
 add_ssa_def_cb(nir_ssa_def *def, void *state)
 {
-   nir_instr *instr = (nir_instr *) state;
+   nir_instr *instr = state;
 
    if (instr->block && def->index == UINT_MAX) {
       nir_function_impl *impl =
@@ -1207,7 +1264,7 @@ add_ssa_def_cb(nir_ssa_def *def, void *state)
 static bool
 add_reg_def_cb(nir_dest *dest, void *state)
 {
-   nir_instr *instr = (nir_instr *) state;
+   nir_instr *instr = state;
 
    if (!dest->is_ssa)
       _mesa_set_add(dest->reg.reg->defs, instr);
@@ -1325,7 +1382,7 @@ nir_instr_insert_after_cf_list(struct exec_list *list, nir_instr *after)
 static bool
 remove_use_cb(nir_src *src, void *state)
 {
-   nir_instr *instr = (nir_instr *) state;
+   nir_instr *instr = state;
 
    struct set *uses_set = src->is_ssa ? src->ssa->uses : src->reg.reg->uses;
 
@@ -1339,7 +1396,7 @@ remove_use_cb(nir_src *src, void *state)
 static bool
 remove_def_cb(nir_dest *dest, void *state)
 {
-   nir_instr *instr = (nir_instr *) state;
+   nir_instr *instr = state;
 
    if (dest->is_ssa)
       return true;
@@ -1984,7 +2041,7 @@ nir_block_get_following_if(nir_block *block)
 static bool
 index_block(nir_block *block, void *state)
 {
-   unsigned *index = (unsigned *) state;
+   unsigned *index = state;
    block->index = (*index)++;
    return true;
 }
@@ -2002,38 +2059,20 @@ nir_index_blocks(nir_function_impl *impl)
    impl->num_blocks = index;
 }
 
-static void
-index_ssa_def(nir_ssa_def *def, unsigned *index)
-{
-   def->index = (*index)++;
-}
-
 static bool
-index_ssa_def_cb(nir_dest *dest, void *state)
+index_ssa_def_cb(nir_ssa_def *def, void *state)
 {
    unsigned *index = (unsigned *) state;
-   if (dest->is_ssa)
-      index_ssa_def(&dest->ssa, index);
-   return true;
-}
+   def->index = (*index)++;
 
-static void
-index_ssa_undef(nir_ssa_undef_instr *instr, unsigned *index)
-{
-   index_ssa_def(&instr->def, index);
+   return true;
 }
 
 static bool
 index_ssa_block(nir_block *block, void *state)
 {
-   unsigned *index = (unsigned *) state;
-
-   nir_foreach_instr(block, instr) {
-      if (instr->type == nir_instr_type_ssa_undef)
-         index_ssa_undef(nir_instr_as_ssa_undef(instr), index);
-      else
-         nir_foreach_dest(instr, index_ssa_def_cb, state);
-   }
+   nir_foreach_instr(block, instr)
+      nir_foreach_ssa_def(instr, index_ssa_def_cb, state);
 
    return true;
 }

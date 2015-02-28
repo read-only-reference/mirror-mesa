@@ -148,6 +148,7 @@ tgsi_parse_token(
 
       switch (imm->Immediate.DataType) {
       case TGSI_IMM_FLOAT32:
+      case TGSI_IMM_FLOAT64:
          for (i = 0; i < imm_count; i++) {
             next_token(ctx, &imm->u[i].Float);
          }
@@ -314,4 +315,16 @@ tgsi_dump_tokens(const struct tgsi_token *tokens)
    for (i = 0; i < nr; i++)
       debug_printf("0x%08x,\n", dwords[i]);
    debug_printf("};\n");
+}
+
+unsigned
+tgsi_get_processor_type(const struct tgsi_token *tokens)
+{
+   struct tgsi_parse_context parse;
+
+   if (tgsi_parse_init( &parse, tokens ) != TGSI_PARSE_OK) {
+      debug_printf("tgsi_parse_init() failed in %s:%i!\n", __func__, __LINE__);
+      return ~0;
+   }
+   return parse.FullHeader.Processor.Processor;
 }

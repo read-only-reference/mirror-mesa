@@ -229,6 +229,11 @@ ureg_DECL_immediate( struct ureg_program *,
                      unsigned nr );
 
 struct ureg_src
+ureg_DECL_immediate_f64( struct ureg_program *,
+                         const double *v,
+                         unsigned nr );
+
+struct ureg_src
 ureg_DECL_immediate_uint( struct ureg_program *,
                           const unsigned *v,
                           unsigned nr );
@@ -1134,6 +1139,31 @@ ureg_dst_array_offset( struct ureg_dst reg, int offset )
    assert(reg.File == TGSI_FILE_TEMPORARY);
    reg.Index += offset;
    return reg;
+}
+
+static INLINE struct ureg_dst
+ureg_dst_register( unsigned file,
+                   unsigned index )
+{
+   struct ureg_dst dst;
+
+   dst.File      = file;
+   dst.WriteMask = TGSI_WRITEMASK_XYZW;
+   dst.Indirect  = 0;
+   dst.IndirectFile = TGSI_FILE_NULL;
+   dst.IndirectIndex = 0;
+   dst.IndirectSwizzle = 0;
+   dst.Saturate  = 0;
+   dst.Predicate = 0;
+   dst.PredNegate = 0;
+   dst.PredSwizzleX = TGSI_SWIZZLE_X;
+   dst.PredSwizzleY = TGSI_SWIZZLE_Y;
+   dst.PredSwizzleZ = TGSI_SWIZZLE_Z;
+   dst.PredSwizzleW = TGSI_SWIZZLE_W;
+   dst.Index     = index;
+   dst.ArrayID = 0;
+
+   return dst;
 }
 
 static INLINE struct ureg_dst

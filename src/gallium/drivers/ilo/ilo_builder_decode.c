@@ -192,6 +192,20 @@ writer_decode_sf_clip_viewport_gen7(const struct ilo_builder *builder,
       dw = writer_dw(builder, which, offset, 11, "SF_CLIP VP%d", i);
       ilo_printf("guardband ymax = %f\n", uif(dw));
 
+      if (ilo_dev_gen(builder->dev) >= ILO_GEN(8)) {
+         dw = writer_dw(builder, which, offset, 12, "SF_CLIP VP%d", i);
+         ilo_printf("extent xmin = %f\n", uif(dw));
+
+         dw = writer_dw(builder, which, offset, 13, "SF_CLIP VP%d", i);
+         ilo_printf("extent xmax = %f\n", uif(dw));
+
+         dw = writer_dw(builder, which, offset, 14, "SF_CLIP VP%d", i);
+         ilo_printf("extent ymin = %f\n", uif(dw));
+
+         dw = writer_dw(builder, which, offset, 15, "SF_CLIP VP%d", i);
+         ilo_printf("extent ymax = %f\n", uif(dw));
+      }
+
       offset += state_size;
    }
 }
@@ -357,6 +371,11 @@ writer_decode_blend(const struct ilo_builder *builder,
    unsigned offset = item->offset;
    unsigned i;
 
+   if (ilo_dev_gen(builder->dev) >= ILO_GEN(8)) {
+      writer_dw(builder, which, offset, 0, "BLEND\n");
+      offset += 4;
+   }
+
    for (i = 0; i < count; i++) {
       writer_dw(builder, which, offset, 0, "BLEND%d\n", i);
       writer_dw(builder, which, offset, 1, "BLEND%d\n", i);
@@ -438,15 +457,27 @@ writer_decode_surface_gen7(const struct ilo_builder *builder,
 {
    uint32_t dw;
 
-   dw = writer_dw(builder, which, item->offset, 0, "SURF");
-   ilo_printf("type 0x%x, format 0x%x, tiling %d, %s array\n",
-         GEN_EXTRACT(dw, GEN7_SURFACE_DW0_TYPE),
-         GEN_EXTRACT(dw, GEN7_SURFACE_DW0_FORMAT),
-         GEN_EXTRACT(dw, GEN7_SURFACE_DW0_TILING),
-         (dw & GEN7_SURFACE_DW0_IS_ARRAY) ? "is" : "not");
+   if (ilo_dev_gen(builder->dev) >= ILO_GEN(8)) {
+      dw = writer_dw(builder, which, item->offset, 0, "SURF");
+      ilo_printf("type 0x%x, format 0x%x, tiling %d, %s array\n",
+            GEN_EXTRACT(dw, GEN7_SURFACE_DW0_TYPE),
+            GEN_EXTRACT(dw, GEN7_SURFACE_DW0_FORMAT),
+            GEN_EXTRACT(dw, GEN8_SURFACE_DW0_TILING),
+            (dw & GEN7_SURFACE_DW0_IS_ARRAY) ? "is" : "not");
 
-   writer_dw(builder, which, item->offset, 1, "SURF");
-   ilo_printf("offset\n");
+      writer_dw(builder, which, item->offset, 1, "SURF");
+      ilo_printf("qpitch\n");
+   } else {
+      dw = writer_dw(builder, which, item->offset, 0, "SURF");
+      ilo_printf("type 0x%x, format 0x%x, tiling %d, %s array\n",
+            GEN_EXTRACT(dw, GEN7_SURFACE_DW0_TYPE),
+            GEN_EXTRACT(dw, GEN7_SURFACE_DW0_FORMAT),
+            GEN_EXTRACT(dw, GEN7_SURFACE_DW0_TILING),
+            (dw & GEN7_SURFACE_DW0_IS_ARRAY) ? "is" : "not");
+
+      writer_dw(builder, which, item->offset, 1, "SURF");
+      ilo_printf("offset\n");
+   }
 
    dw = writer_dw(builder, which, item->offset, 2, "SURF");
    ilo_printf("%dx%d size\n",
@@ -472,6 +503,14 @@ writer_decode_surface_gen7(const struct ilo_builder *builder,
 
    writer_dw(builder, which, item->offset, 6, "SURF\n");
    writer_dw(builder, which, item->offset, 7, "SURF\n");
+
+   if (ilo_dev_gen(builder->dev) >= ILO_GEN(8)) {
+      writer_dw(builder, which, item->offset, 8, "SURF\n");
+      writer_dw(builder, which, item->offset, 9, "SURF\n");
+      writer_dw(builder, which, item->offset, 10, "SURF\n");
+      writer_dw(builder, which, item->offset, 11, "SURF\n");
+      writer_dw(builder, which, item->offset, 12, "SURF\n");
+   }
 }
 
 static void

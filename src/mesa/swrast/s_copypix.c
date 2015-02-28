@@ -158,7 +158,7 @@ copy_rgba_pixels(struct gl_context *ctx, GLint srcx, GLint srcy,
       p = NULL;
    }
 
-   ASSERT(width < SWRAST_MAX_WIDTH);
+   assert(width < SWRAST_MAX_WIDTH);
 
    for (row = 0; row < height; row++, sy += stepy, dy += stepy) {
       GLvoid *rgba = span.array->attribs[VARYING_SLOT_COL0];
@@ -442,11 +442,11 @@ end:
  */
 GLboolean
 swrast_fast_copy_pixels(struct gl_context *ctx,
-			GLint srcX, GLint srcY, GLsizei width, GLsizei height,
-			GLint dstX, GLint dstY, GLenum type)
+                        struct gl_framebuffer *srcFb,
+                        struct gl_framebuffer *dstFb,
+                        GLint srcX, GLint srcY, GLsizei width, GLsizei height,
+                        GLint dstX, GLint dstY, GLenum type)
 {
-   struct gl_framebuffer *srcFb = ctx->ReadBuffer;
-   struct gl_framebuffer *dstFb = ctx->DrawBuffer;
    struct gl_renderbuffer *srcRb, *dstRb;
    GLint row;
    GLuint pixelBytes, widthInBytes;
@@ -468,7 +468,7 @@ swrast_fast_copy_pixels(struct gl_context *ctx,
       dstRb = dstFb->Attachment[BUFFER_DEPTH].Renderbuffer;
    }
    else {
-      ASSERT(type == GL_DEPTH_STENCIL_EXT);
+      assert(type == GL_DEPTH_STENCIL_EXT);
       /* XXX correct? */
       srcRb = srcFb->Attachment[BUFFER_DEPTH].Renderbuffer;
       dstRb = dstFb->Attachment[BUFFER_DEPTH].Renderbuffer;
@@ -620,9 +620,9 @@ map_readbuffer(struct gl_context *ctx, GLenum type)
  * By time we get here, all parameters will have been error-checked.
  */
 void
-_swrast_CopyPixels( struct gl_context *ctx,
-		    GLint srcx, GLint srcy, GLsizei width, GLsizei height,
-		    GLint destx, GLint desty, GLenum type )
+_swrast_CopyPixels(struct gl_context *ctx,
+                   GLint srcx, GLint srcy, GLsizei width, GLsizei height,
+                   GLint destx, GLint desty, GLenum type)
 {
    SWcontext *swrast = SWRAST_CONTEXT(ctx);
    struct gl_renderbuffer *rb;
@@ -634,11 +634,12 @@ _swrast_CopyPixels( struct gl_context *ctx,
       _swrast_validate_derived( ctx );
 
    if (!(SWRAST_CONTEXT(ctx)->_RasterMask != 0x0 ||
-	 ctx->Pixel.ZoomX != 1.0F ||
-	 ctx->Pixel.ZoomY != 1.0F ||
-	 ctx->_ImageTransferState) &&
-       swrast_fast_copy_pixels(ctx, srcx, srcy, width, height, destx, desty,
-			       type)) {
+       ctx->Pixel.ZoomX != 1.0F ||
+       ctx->Pixel.ZoomY != 1.0F ||
+       ctx->_ImageTransferState) &&
+      swrast_fast_copy_pixels(ctx, ctx->ReadBuffer, ctx->DrawBuffer,
+                              srcx, srcy, width, height, destx, desty,
+                              type)) {
       /* all done */
       return;
    }

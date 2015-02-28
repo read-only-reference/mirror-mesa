@@ -448,8 +448,16 @@ static void
 get_attached_shaders(struct gl_context *ctx, GLuint program, GLsizei maxCount,
                      GLsizei *count, GLuint *obj)
 {
-   struct gl_shader_program *shProg =
+   struct gl_shader_program *shProg;
+
+   if (maxCount < 0) {
+      _mesa_error(ctx, GL_INVALID_VALUE, "glGetAttachedShaders(maxCount < 0)");
+      return;
+   }
+
+   shProg =
       _mesa_lookup_shader_program_err(ctx, program, "glGetAttachedShaders");
+
    if (shProg) {
       GLuint i;
       for (i = 0; i < (GLuint) maxCount && i < shProg->NumShaders; i++) {
@@ -515,7 +523,7 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname,
               GLint *params)
 {
    struct gl_shader_program *shProg
-      = _mesa_lookup_shader_program(ctx, program);
+      = _mesa_lookup_shader_program_err(ctx, program, "glGetProgramiv(program)");
 
    /* Is transform feedback available in this context?
     */
@@ -538,7 +546,6 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname,
       || _mesa_is_gles3(ctx);
 
    if (!shProg) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glGetProgramiv(program)");
       return;
    }
 
@@ -756,11 +763,25 @@ static void
 get_program_info_log(struct gl_context *ctx, GLuint program, GLsizei bufSize,
                      GLsizei *length, GLchar *infoLog)
 {
-   struct gl_shader_program *shProg = _mesa_lookup_shader_program(ctx, program);
-   if (!shProg) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glGetProgramInfoLog(program)");
+   struct gl_shader_program *shProg;
+
+   /* Section 2.5 GL Errors (page 18) of the OpenGL ES 3.0.4 spec and
+    * section 2.3.1 (Errors) of the OpenGL 4.5 spec say:
+    *
+    *     "If a negative number is provided where an argument of type sizei or
+    *     sizeiptr is specified, an INVALID_VALUE error is generated."
+    */
+   if (bufSize < 0) {
+      _mesa_error(ctx, GL_INVALID_VALUE, "glGetProgramInfoLog(bufSize < 0)");
       return;
    }
+
+   shProg = _mesa_lookup_shader_program_err(ctx, program,
+                                            "glGetProgramInfoLog(program)");
+   if (!shProg) {
+      return;
+   }
+
    _mesa_copy_string(infoLog, bufSize, length, shProg->InfoLog);
 }
 
@@ -769,11 +790,24 @@ static void
 get_shader_info_log(struct gl_context *ctx, GLuint shader, GLsizei bufSize,
                     GLsizei *length, GLchar *infoLog)
 {
-   struct gl_shader *sh = _mesa_lookup_shader(ctx, shader);
-   if (!sh) {
-      _mesa_error(ctx, GL_INVALID_VALUE, "glGetShaderInfoLog(shader)");
+   struct gl_shader *sh;
+
+   /* Section 2.5 GL Errors (page 18) of the OpenGL ES 3.0.4 spec and
+    * section 2.3.1 (Errors) of the OpenGL 4.5 spec say:
+    *
+    *     "If a negative number is provided where an argument of type sizei or
+    *     sizeiptr is specified, an INVALID_VALUE error is generated."
+    */
+   if (bufSize < 0) {
+      _mesa_error(ctx, GL_INVALID_VALUE, "glGetShaderInfoLog(bufSize < 0)");
       return;
    }
+
+   sh = _mesa_lookup_shader_err(ctx, shader, "glGetShaderInfoLog(shader)");
+   if (!sh) {
+      return;
+   }
+
    _mesa_copy_string(infoLog, bufSize, length, sh->InfoLog);
 }
 
@@ -786,6 +820,12 @@ get_shader_source(struct gl_context *ctx, GLuint shader, GLsizei maxLength,
                   GLsizei *length, GLchar *sourceOut)
 {
    struct gl_shader *sh;
+
+   if (maxLength < 0) {
+      _mesa_error(ctx, GL_INVALID_VALUE, "glGetShaderSource(bufSize < 0)");
+      return;
+   }
+
    sh = _mesa_lookup_shader_err(ctx, shader, "glGetShaderSource");
    if (!sh) {
       return;
@@ -1683,6 +1723,11 @@ _mesa_GetProgramBinary(GLuint program, GLsizei bufSize, GLsizei *length,
    GLsizei length_dummy;
    GET_CURRENT_CONTEXT(ctx);
 
+   if (bufSize < 0){
+      _mesa_error(ctx, GL_INVALID_VALUE, "glGetProgramBinary(bufSize < 0)");
+      return;
+   }
+
    shProg = _mesa_lookup_shader_program_err(ctx, program, "glGetProgramBinary");
    if (!shProg)
       return;
@@ -1709,11 +1754,6 @@ _mesa_GetProgramBinary(GLuint program, GLsizei bufSize, GLsizei *length,
                   "glGetProgramBinary(program %u not linked)",
                   shProg->Name);
       *length = 0;
-      return;
-   }
-
-   if (bufSize < 0){
-      _mesa_error(ctx, GL_INVALID_VALUE, "glGetProgramBinary(bufSize < 0)");
       return;
    }
 

@@ -341,6 +341,7 @@ struct brw_stage_prog_data {
       uint32_t gather_texture_start;
       uint32_t ubo_start;
       uint32_t abo_start;
+      uint32_t image_start;
       uint32_t shader_time_start;
       /** @} */
    } binding_table;
@@ -621,6 +622,9 @@ struct brw_vs_prog_data {
 /** Max number of atomic counter buffer objects in a shader */
 #define BRW_MAX_ABO 16
 
+/** Max number of image uniforms in a shader */
+#define BRW_MAX_IMAGES 32
+
 /**
  * Max number of binding table entries used for stream output.
  *
@@ -653,6 +657,7 @@ struct brw_vs_prog_data {
                             BRW_MAX_TEX_UNIT * 2 + /* normal, gather */ \
                             12 + /* ubo */                              \
                             BRW_MAX_ABO +                               \
+                            BRW_MAX_IMAGES +                            \
                             2 /* shader time, pull constants */)
 
 #define SURF_INDEX_GEN6_SOL_BINDING(t) (t)
@@ -856,7 +861,6 @@ struct intel_batchbuffer {
    drm_intel_bo *last_bo;
    /** BO for post-sync nonzero writes for gen6 workaround. */
    drm_intel_bo *workaround_bo;
-   bool need_workaround_flush;
 
    uint16_t emit, total;
    uint16_t used, reserved_space;
@@ -959,8 +963,6 @@ struct brw_context
 					  struct gl_renderbuffer *rb,
 					  bool layered,
 					  unsigned unit);
-      void (*update_null_renderbuffer_surface)(struct brw_context *brw,
-					       unsigned unit);
 
       void (*create_raw_surface)(struct brw_context *brw,
                                  drm_intel_bo *bo,
@@ -976,6 +978,11 @@ struct brw_context
                                         unsigned buffer_size,
                                         unsigned pitch,
                                         bool rw);
+      void (*emit_null_surface_state)(struct brw_context *brw,
+                                      unsigned width,
+                                      unsigned height,
+                                      unsigned samples,
+                                      uint32_t *out_offset);
 
       /**
        * Send the appropriate state packets to configure depth, stencil, and
@@ -1185,6 +1192,8 @@ struct brw_context
     * for each pipeline stage.
     */
    int max_vs_threads;
+   int max_hs_threads;
+   int max_ds_threads;
    int max_gs_threads;
    int max_wm_threads;
 
@@ -1200,6 +1209,8 @@ struct brw_context
 
       GLuint min_vs_entries;    /* Minimum number of VS entries */
       GLuint max_vs_entries;	/* Maximum number of VS entries */
+      GLuint max_hs_entries;	/* Maximum number of HS entries */
+      GLuint max_ds_entries;	/* Maximum number of DS entries */
       GLuint max_gs_entries;	/* Maximum number of GS entries */
 
       GLuint nr_vs_entries;
@@ -1325,7 +1336,7 @@ struct brw_context
 
       /**
        * Buffer object used in place of multisampled null render targets on
-       * Gen6.  See brw_update_null_renderbuffer_surface().
+       * Gen6.  See brw_emit_null_surface_state().
        */
       drm_intel_bo *multisampled_null_render_target_bo;
       uint32_t fast_clear_op;
@@ -1489,6 +1500,8 @@ void brw_meta_updownsample(struct brw_context *brw,
                            struct intel_mipmap_tree *dst);
 
 void brw_meta_fbo_stencil_blit(struct brw_context *brw,
+                               struct gl_framebuffer *read_fb,
+                               struct gl_framebuffer *draw_fb,
                                GLfloat srcX0, GLfloat srcY0,
                                GLfloat srcX1, GLfloat srcY1,
                                GLfloat dstX0, GLfloat dstY0,
@@ -1713,6 +1726,8 @@ gen7_resume_transform_feedback(struct gl_context *ctx,
 /* brw_blorp_blit.cpp */
 GLbitfield
 brw_blorp_framebuffer(struct brw_context *brw,
+                      struct gl_framebuffer *readFb,
+                      struct gl_framebuffer *drawFb,
                       GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                       GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                       GLbitfield mask, GLenum filter);

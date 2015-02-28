@@ -49,7 +49,7 @@ gen6_pipe_control(struct ilo_render *r, uint32_t dw1)
 
    ILO_DEV_ASSERT(r->dev, 6, 6);
 
-   gen6_PIPE_CONTROL(r->builder, dw1, bo, 0, false);
+   gen6_PIPE_CONTROL(r->builder, dw1, bo, 0, 0);
 
    r->state.current_pipe_control_dw1 |= dw1;
 
@@ -258,7 +258,10 @@ gen6_draw_common_base_address(struct ilo_render *r,
       if (ilo_dev_gen(r->dev) == ILO_GEN(6))
          gen6_wa_pre_non_pipelined(r);
 
-      gen6_state_base_address(r->builder, r->hw_ctx_changed);
+      if (ilo_dev_gen(r->dev) >= ILO_GEN(8))
+         gen8_state_base_address(r->builder, r->hw_ctx_changed);
+      else
+         gen6_state_base_address(r->builder, r->hw_ctx_changed);
 
       /*
        * From the Sandy Bridge PRM, volume 1 part 1, page 28:
@@ -637,16 +640,19 @@ gen6_draw_clip(struct ilo_render *r,
       unsigned i;
 
       /*
-       * We do not do 2D clipping yet.  Guard band test should only be enabled
-       * when the viewport is larger than the framebuffer.
+       * Gen8+ has viewport extent test.  Guard band test can be enabled on
+       * prior Gens only when the viewport is larger than the framebuffer,
+       * unless we emulate viewport extent test on them.
        */
-      for (i = 0; i < vec->viewport.count; i++) {
-         const struct ilo_viewport_cso *vp = &vec->viewport.cso[i];
+      if (ilo_dev_gen(r->dev) < ILO_GEN(8)) {
+         for (i = 0; i < vec->viewport.count; i++) {
+            const struct ilo_viewport_cso *vp = &vec->viewport.cso[i];
 
-         if (vp->min_x > 0.0f || vp->max_x < vec->fb.state.width ||
-             vp->min_y > 0.0f || vp->max_y < vec->fb.state.height) {
-            enable_guardband = false;
-            break;
+            if (vp->min_x > 0.0f || vp->max_x < vec->fb.state.width ||
+                vp->min_y > 0.0f || vp->max_y < vec->fb.state.height) {
+               enable_guardband = false;
+               break;
+            }
          }
       }
 
@@ -699,7 +705,7 @@ gen6_draw_wm(struct ilo_render *r,
    if (DIRTY(FS) || DIRTY(BLEND) || DIRTY(DSA) ||
        DIRTY(RASTERIZER) || r->instruction_bo_changed) {
       const bool dual_blend = vec->blend->dual_blend;
-      const bool cc_may_kill = (vec->dsa->dw_alpha ||
+      const bool cc_may_kill = (vec->dsa->dw_blend_alpha ||
                                 vec->blend->alpha_to_coverage);
 
       if (ilo_dev_gen(r->dev) == ILO_GEN(6) && r->hw_ctx_changed)
@@ -717,10 +723,10 @@ gen6_draw_wm_multisample(struct ilo_render *r,
 {
    /* 3DSTATE_MULTISAMPLE and 3DSTATE_SAMPLE_MASK */
    if (DIRTY(SAMPLE_MASK) || DIRTY(FB)) {
-      const uint32_t *packed_sample_pos;
+      const uint32_t *pattern;
 
-      packed_sample_pos = (vec->fb.num_samples > 1) ?
-         &r->packed_sample_position_4x : &r->packed_sample_position_1x;
+      pattern = (vec->fb.num_samples > 1) ?
+         &r->sample_pattern_4x : &r->sample_pattern_1x;
 
       if (ilo_dev_gen(r->dev) == ILO_GEN(6)) {
          gen6_wa_pre_non_pipelined(r);
@@ -728,7 +734,7 @@ gen6_draw_wm_multisample(struct ilo_render *r,
       }
 
       gen6_3DSTATE_MULTISAMPLE(r->builder,
-            vec->fb.num_samples, packed_sample_pos,
+            vec->fb.num_samples, pattern,
             vec->rasterizer->state.half_pixel_center);
 
       gen6_3DSTATE_SAMPLE_MASK(r->builder,
@@ -920,13 +926,13 @@ static void
 gen6_rectlist_wm_multisample(struct ilo_render *r,
                              const struct ilo_blitter *blitter)
 {
-   const uint32_t *packed_sample_pos = (blitter->fb.num_samples > 1) ?
-      &r->packed_sample_position_4x : &r->packed_sample_position_1x;
+   const uint32_t *pattern = (blitter->fb.num_samples > 1) ?
+      &r->sample_pattern_4x : &r->sample_pattern_1x;
 
    gen6_wa_pre_3dstate_multisample(r);
 
    gen6_3DSTATE_MULTISAMPLE(r->builder, blitter->fb.num_samples,
-         packed_sample_pos, true);
+         pattern, true);
 
    gen6_3DSTATE_SAMPLE_MASK(r->builder,
          (1 << blitter->fb.num_samples) - 1);

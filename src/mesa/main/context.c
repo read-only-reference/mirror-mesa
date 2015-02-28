@@ -134,6 +134,7 @@
 #include "math/m_matrix.h"
 #include "main/dispatch.h" /* for _gloffset_COUNT */
 #include "uniforms.h"
+#include "macros.h"
 
 #ifdef USE_SPARC_ASM
 #include "sparc/sparc.h"
@@ -656,7 +657,7 @@ _mesa_init_constants(struct gl_constants *consts, gl_api api)
    consts->MaxSamples = 0;
 
    /* GLSL default if NativeIntegers == FALSE */
-   consts->UniformBooleanTrue = FLT_AS_UINT(1.0f);
+   consts->UniformBooleanTrue = FLOAT_AS_UNION(1.0f).u;
 
    /* GL_ARB_sync */
    consts->MaxServerWaitTimeout = 0x1fff7fffffffULL;
@@ -1280,7 +1281,6 @@ _mesa_free_context_data( struct gl_context *ctx )
 
    _mesa_free_attrib_data(ctx);
    _mesa_free_buffer_objects(ctx);
-   _mesa_free_lighting_data( ctx );
    _mesa_free_eval_data( ctx );
    _mesa_free_texture_data( ctx );
    _mesa_free_matrix_data( ctx );
@@ -1645,7 +1645,7 @@ _mesa_make_current( struct gl_context *newCtx,
 
    /* We used to call _glapi_check_multithread() here.  Now do it in drivers */
    _glapi_set_context((void *) newCtx);
-   ASSERT(_mesa_get_current_context() == newCtx);
+   assert(_mesa_get_current_context() == newCtx);
 
    if (!newCtx) {
       _glapi_set_dispatch(NULL);  /* none current */
@@ -1654,8 +1654,8 @@ _mesa_make_current( struct gl_context *newCtx,
       _glapi_set_dispatch(newCtx->CurrentDispatch);
 
       if (drawBuffer && readBuffer) {
-         ASSERT(_mesa_is_winsys_fbo(drawBuffer));
-         ASSERT(_mesa_is_winsys_fbo(readBuffer));
+         assert(_mesa_is_winsys_fbo(drawBuffer));
+         assert(_mesa_is_winsys_fbo(readBuffer));
          _mesa_reference_framebuffer(&newCtx->WinSysDrawBuffer, drawBuffer);
          _mesa_reference_framebuffer(&newCtx->WinSysReadBuffer, readBuffer);
 

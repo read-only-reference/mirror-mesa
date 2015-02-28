@@ -172,6 +172,8 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
    case PIPE_CAP_SAMPLER_VIEW_TARGET:
    case PIPE_CAP_CLIP_HALFZ:
+   case PIPE_CAP_POLYGON_OFFSET_CLAMP:
+   case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
       return 1;
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
       return (class_3d >= NVE4_3D_CLASS) ? 1 : 0;
@@ -190,6 +192,7 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_FAKE_SW_MSAA:
    case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
    case PIPE_CAP_VERTEXID_NOBASE:
+   case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -287,6 +290,12 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
       return 1;
    case PIPE_SHADER_CAP_INTEGERS:
       return 1;
+   case PIPE_SHADER_CAP_DOUBLES:
+      return 1;
+   case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
+      return 1;
+   case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+      return 0;
    case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
       return 16; /* would be 32 in linked (OpenGL-style) mode */
    case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:

@@ -71,7 +71,8 @@ optimizations = [
    (('flrp', a, b, 1.0), b),
    (('flrp', a, a, b), a),
    (('flrp', 0.0, a, b), ('fmul', a, b)),
-   (('fadd', ('fmul', a, b), c), ('ffma', a, b, c)),
+   (('ffma', a, b, c), ('fadd', ('fmul', a, b), c), 'options->lower_ffma'),
+   (('fadd', ('fmul', a, b), c), ('ffma', a, b, c), '!options->lower_ffma'),
    # Comparison simplifications
    (('inot', ('flt', a, b)), ('fge', a, b)),
    (('inot', ('fge', a, b)), ('flt', a, b)),
@@ -82,7 +83,23 @@ optimizations = [
    (('feq', ('fadd', a, b), 0.0), ('feq', a, ('fneg', b))),
    (('fne', ('fadd', a, b), 0.0), ('fne', a, ('fneg', b))),
    (('fge', ('fneg', ('fabs', a)), 0.0), ('feq', a, 0.0)),
-   (('fmin', ('fmax', a, 1.0), 0.0), ('fsat', a)),
+   (('bcsel', ('flt', a, b), a, b), ('fmin', a, b)),
+   (('bcsel', ('flt', a, b), b, a), ('fmax', a, b)),
+   (('bcsel', ('inot', 'a@bool'), b, c), ('bcsel', a, c, b)),
+   (('bcsel', a, ('bcsel', a, b, c), d), ('bcsel', a, b, d)),
+   (('fmin', ('fmax', a, 0.0), 1.0), ('fsat', a), '!options->lower_fsat'),
+   (('fsat', a), ('fmin', ('fmax', a, 0.0), 1.0), 'options->lower_fsat'),
+   (('fsat', ('fsat', a)), ('fsat', a)),
+   (('fmin', ('fmax', ('fmin', ('fmax', a, 0.0), 1.0), 0.0), 1.0), ('fmin', ('fmax', a, 0.0), 1.0)),
+   # Comparison with the same args.  Note that these are not done for
+   # the float versions because NaN always returns false on float
+   # inequalities.
+   (('ilt', a, a), False),
+   (('ige', a, a), True),
+   (('ieq', a, a), True),
+   (('ine', a, a), False),
+   (('ult', a, a), False),
+   (('uge', a, a), True),
    # Logical and bit operations
    (('fand', a, 0.0), 0.0),
    (('iand', a, a), a),
@@ -107,8 +124,9 @@ optimizations = [
    (('fexp',  ('flog',  a)), a), # e^ln(a)  = a
    (('flog2', ('fexp2', a)), a), # lg2(2^a) = a
    (('flog',  ('fexp',  a)), a), # ln(e^a)  = a
-   (('fexp2', ('fmul', ('flog2', a), b)), ('fpow', a, b)), # 2^(lg2(a)*b) = a^b
-   (('fexp',  ('fmul', ('flog', a), b)),  ('fpow', a, b)), # e^(ln(a)*b) = a^b
+   (('fpow', a, b), ('fexp2', ('fmul', ('flog2', a), b)), 'options->lower_fpow'), # a^b = 2^(lg2(a)*b)
+   (('fexp2', ('fmul', ('flog2', a), b)), ('fpow', a, b), '!options->lower_fpow'), # 2^(lg2(a)*b) = a^b
+   (('fexp',  ('fmul', ('flog', a), b)),  ('fpow', a, b), '!options->lower_fpow'), # e^(ln(a)*b) = a^b
    (('fpow', a, 1.0), a),
    (('fpow', a, 2.0), ('fmul', a, a)),
    (('fpow', 2.0, a), ('fexp2', a)),
@@ -116,7 +134,8 @@ optimizations = [
    (('fdiv', 1.0, a), ('frcp', a)),
    (('frcp', ('frcp', a)), a),
    (('frcp', ('fsqrt', a)), ('frsq', a)),
-   (('frcp', ('frsq', a)), ('fsqrt', a)),
+   (('fsqrt', a), ('frcp', ('frsq', a)), 'options->lower_fsqrt'),
+   (('frcp', ('frsq', a)), ('fsqrt', a), '!options->lower_fsqrt'),
    # Boolean simplifications
    (('ine', 'a@bool', 0), 'a'),
    (('ieq', 'a@bool', 0), ('inot', 'a')),
@@ -127,6 +146,19 @@ optimizations = [
    # The result of this should be hit by constant propagation and, in the
    # next round of opt_algebraic, get picked up by one of the above two.
    (('bcsel', '#a', b, c), ('bcsel', ('ine', 'a', 0), b, c)),
+
+   (('bcsel', a, b, b), b),
+   (('fcsel', a, b, b), b),
+
+   # Subtracts
+   (('fsub', a, ('fsub', 0.0, b)), ('fadd', a, b)),
+   (('isub', a, ('isub', 0, b)), ('iadd', a, b)),
+   (('fneg', a), ('fsub', 0.0, a), 'options->lower_negate'),
+   (('ineg', a), ('isub', 0, a), 'options->lower_negate'),
+   (('fadd', a, ('fsub', 0.0, b)), ('fsub', a, b)),
+   (('iadd', a, ('isub', 0, b)), ('isub', a, b)),
+   (('fabs', ('fsub', 0.0, a)), ('fabs', a)),
+   (('iabs', ('isub', 0, a)), ('iabs', a)),
 
 # This one may not be exact
    (('feq', ('fadd', a, b), 0.0), ('feq', a, ('fneg', b))),

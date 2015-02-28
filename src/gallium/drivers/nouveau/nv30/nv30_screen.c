@@ -158,6 +158,9 @@ nv30_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_SAMPLER_VIEW_TARGET:
    case PIPE_CAP_CLIP_HALFZ:
    case PIPE_CAP_VERTEXID_NOBASE:
+   case PIPE_CAP_POLYGON_OFFSET_CLAMP:
+   case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
+   case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -244,6 +247,9 @@ nv30_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
       case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
       case PIPE_SHADER_CAP_SUBROUTINES:
       case PIPE_SHADER_CAP_INTEGERS:
+      case PIPE_SHADER_CAP_DOUBLES:
+      case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
+      case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
          return 0;
       default:
          debug_printf("unknown vertex shader param %d\n", param);
@@ -280,6 +286,9 @@ nv30_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
       case PIPE_SHADER_CAP_INDIRECT_TEMP_ADDR:
       case PIPE_SHADER_CAP_INDIRECT_CONST_ADDR:
       case PIPE_SHADER_CAP_SUBROUTINES:
+      case PIPE_SHADER_CAP_DOUBLES:
+      case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
+      case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
          return 0;
       default:
          debug_printf("unknown fragment shader param %d\n", param);

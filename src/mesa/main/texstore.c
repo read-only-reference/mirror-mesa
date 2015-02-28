@@ -73,6 +73,7 @@
 #include "texstore.h"
 #include "enums.h"
 #include "glformats.h"
+#include "pixeltransfer.h"
 #include "../../gallium/auxiliary/util/u_format_rgb9e5.h"
 #include "../../gallium/auxiliary/util/u_format_r11g11b10f.h"
 
@@ -153,9 +154,9 @@ _mesa_texstore_z32(TEXSTORE_PARAMS)
    const GLuint depthScale = 0xffffffff;
    GLenum dstType;
    (void) dims;
-   ASSERT(dstFormat == MESA_FORMAT_Z_UNORM32 ||
+   assert(dstFormat == MESA_FORMAT_Z_UNORM32 ||
           dstFormat == MESA_FORMAT_Z_FLOAT32);
-   ASSERT(_mesa_get_format_bytes(dstFormat) == sizeof(GLuint));
+   assert(_mesa_get_format_bytes(dstFormat) == sizeof(GLuint));
 
    if (dstFormat == MESA_FORMAT_Z_UNORM32)
       dstType = GL_UNSIGNED_INT;
@@ -190,7 +191,7 @@ _mesa_texstore_x8_z24(TEXSTORE_PARAMS)
    const GLuint depthScale = 0xffffff;
 
    (void) dims;
-   ASSERT(dstFormat == MESA_FORMAT_Z24_UNORM_X8_UINT);
+   assert(dstFormat == MESA_FORMAT_Z24_UNORM_X8_UINT);
 
    {
       /* general path */
@@ -220,7 +221,7 @@ _mesa_texstore_z24_x8(TEXSTORE_PARAMS)
    const GLuint depthScale = 0xffffff;
 
    (void) dims;
-   ASSERT(dstFormat == MESA_FORMAT_X8_UINT_Z24_UNORM);
+   assert(dstFormat == MESA_FORMAT_X8_UINT_Z24_UNORM);
 
    {
       /* general path */
@@ -253,8 +254,8 @@ _mesa_texstore_z16(TEXSTORE_PARAMS)
 {
    const GLuint depthScale = 0xffff;
    (void) dims;
-   ASSERT(dstFormat == MESA_FORMAT_Z_UNORM16);
-   ASSERT(_mesa_get_format_bytes(dstFormat) == sizeof(GLushort));
+   assert(dstFormat == MESA_FORMAT_Z_UNORM16);
+   assert(_mesa_get_format_bytes(dstFormat) == sizeof(GLushort));
 
    {
       /* general path */
@@ -286,14 +287,14 @@ _mesa_texstore_ycbcr(TEXSTORE_PARAMS)
 
    (void) ctx; (void) dims; (void) baseInternalFormat;
 
-   ASSERT((dstFormat == MESA_FORMAT_YCBCR) ||
+   assert((dstFormat == MESA_FORMAT_YCBCR) ||
           (dstFormat == MESA_FORMAT_YCBCR_REV));
-   ASSERT(_mesa_get_format_bytes(dstFormat) == 2);
-   ASSERT(ctx->Extensions.MESA_ycbcr_texture);
-   ASSERT(srcFormat == GL_YCBCR_MESA);
-   ASSERT((srcType == GL_UNSIGNED_SHORT_8_8_MESA) ||
+   assert(_mesa_get_format_bytes(dstFormat) == 2);
+   assert(ctx->Extensions.MESA_ycbcr_texture);
+   assert(srcFormat == GL_YCBCR_MESA);
+   assert((srcType == GL_UNSIGNED_SHORT_8_8_MESA) ||
           (srcType == GL_UNSIGNED_SHORT_8_8_REV_MESA));
-   ASSERT(baseInternalFormat == GL_YCBCR_MESA);
+   assert(baseInternalFormat == GL_YCBCR_MESA);
 
    /* always just memcpy since no pixel transfer ops apply */
    memcpy_texture(ctx, dims,
@@ -334,11 +335,11 @@ _mesa_texstore_z24_s8(TEXSTORE_PARAMS)
    GLuint *depth = malloc(srcWidth * sizeof(GLuint));
    GLubyte *stencil = malloc(srcWidth * sizeof(GLubyte));
 
-   ASSERT(dstFormat == MESA_FORMAT_S8_UINT_Z24_UNORM);
-   ASSERT(srcFormat == GL_DEPTH_STENCIL_EXT ||
+   assert(dstFormat == MESA_FORMAT_S8_UINT_Z24_UNORM);
+   assert(srcFormat == GL_DEPTH_STENCIL_EXT ||
           srcFormat == GL_DEPTH_COMPONENT ||
           srcFormat == GL_STENCIL_INDEX);
-   ASSERT(srcFormat != GL_DEPTH_STENCIL_EXT ||
+   assert(srcFormat != GL_DEPTH_STENCIL_EXT ||
           srcType == GL_UNSIGNED_INT_24_8_EXT ||
           srcType == GL_FLOAT_32_UNSIGNED_INT_24_8_REV);
 
@@ -413,11 +414,11 @@ _mesa_texstore_s8_z24(TEXSTORE_PARAMS)
    GLuint *depth;
    GLubyte *stencil;
 
-   ASSERT(dstFormat == MESA_FORMAT_Z24_UNORM_S8_UINT);
-   ASSERT(srcFormat == GL_DEPTH_STENCIL_EXT ||
+   assert(dstFormat == MESA_FORMAT_Z24_UNORM_S8_UINT);
+   assert(srcFormat == GL_DEPTH_STENCIL_EXT ||
           srcFormat == GL_DEPTH_COMPONENT ||
           srcFormat == GL_STENCIL_INDEX);
-   ASSERT(srcFormat != GL_DEPTH_STENCIL_EXT ||
+   assert(srcFormat != GL_DEPTH_STENCIL_EXT ||
           srcType == GL_UNSIGNED_INT_24_8_EXT ||
           srcType == GL_FLOAT_32_UNSIGNED_INT_24_8_REV);
 
@@ -490,8 +491,8 @@ _mesa_texstore_s8_z24(TEXSTORE_PARAMS)
 static GLboolean
 _mesa_texstore_s8(TEXSTORE_PARAMS)
 {
-   ASSERT(dstFormat == MESA_FORMAT_S_UINT8);
-   ASSERT(srcFormat == GL_STENCIL_INDEX);
+   assert(dstFormat == MESA_FORMAT_S_UINT8);
+   assert(srcFormat == GL_STENCIL_INDEX);
 
    {
       const GLint srcRowStride
@@ -542,11 +543,11 @@ _mesa_texstore_z32f_x24s8(TEXSTORE_PARAMS)
       = _mesa_image_row_stride(srcPacking, srcWidth, srcFormat, srcType)
       / sizeof(uint64_t);
 
-   ASSERT(dstFormat == MESA_FORMAT_Z32_FLOAT_S8X24_UINT);
-   ASSERT(srcFormat == GL_DEPTH_STENCIL ||
+   assert(dstFormat == MESA_FORMAT_Z32_FLOAT_S8X24_UINT);
+   assert(srcFormat == GL_DEPTH_STENCIL ||
           srcFormat == GL_DEPTH_COMPONENT ||
           srcFormat == GL_STENCIL_INDEX);
-   ASSERT(srcFormat != GL_DEPTH_STENCIL ||
+   assert(srcFormat != GL_DEPTH_STENCIL ||
           srcType == GL_UNSIGNED_INT_24_8 ||
           srcType == GL_FLOAT_32_UNSIGNED_INT_24_8_REV);
 
@@ -605,7 +606,7 @@ texstore_depth_stencil(TEXSTORE_PARAMS)
       initialized = GL_TRUE;
    }
 
-   ASSERT(table[dstFormat]);
+   assert(table[dstFormat]);
    return table[dstFormat](ctx, dims, baseInternalFormat,
                            dstFormat, dstRowStride, dstSlices,
                            srcWidth, srcHeight, srcDepth,
@@ -665,7 +666,7 @@ texstore_compressed(TEXSTORE_PARAMS)
       initialized = GL_TRUE;
    }
 
-   ASSERT(table[dstFormat]);
+   assert(table[dstFormat]);
    return table[dstFormat](ctx, dims, baseInternalFormat,
                            dstFormat, dstRowStride, dstSlices,
                            srcWidth, srcHeight, srcDepth,
@@ -675,12 +676,13 @@ texstore_compressed(TEXSTORE_PARAMS)
 static GLboolean
 texstore_rgba(TEXSTORE_PARAMS)
 {
-   void *tempImage = NULL;
+   void *tempImage = NULL, *tempRGBA = NULL;
    int srcRowStride, img;
-   GLubyte *src;
+   GLubyte *src, *dst;
    uint32_t srcMesaFormat;
    uint8_t rebaseSwizzle[4];
    bool needRebase;
+   bool transferOpsDone = false;
 
    /* We have to handle MESA_FORMAT_YCBCR manually because it is a special case
     * and _mesa_format_convert does not support it. In this case the we only
@@ -709,6 +711,11 @@ texstore_rgba(TEXSTORE_PARAMS)
       if (!tempImage)
          return GL_FALSE;
 
+      /* _mesa_unpack_color_index_to_rgba_ubyte has handled transferops
+       * if needed.
+       */
+      transferOpsDone = true;
+
       /* Now we only have to adjust our src info for a conversion from
        * the RGBA ubyte and then we continue as usual.
        */
@@ -721,15 +728,19 @@ texstore_rgba(TEXSTORE_PARAMS)
        */
       GLint swapSize = _mesa_sizeof_packed_type(srcType);
       if (swapSize == 2 || swapSize == 4) {
-         int components = _mesa_components_in_format(srcFormat);
-         int elementCount = srcWidth * srcHeight * components;
-         tempImage = malloc(elementCount * swapSize);
+         int bytesPerPixel = _mesa_bytes_per_pixel(srcFormat, srcType);
+         int swapsPerPixel = bytesPerPixel / swapSize;
+         int elementCount = srcWidth * srcHeight * srcDepth;
+         assert(bytesPerPixel % swapSize == 0);
+         tempImage = malloc(elementCount * bytesPerPixel);
          if (!tempImage)
             return GL_FALSE;
          if (swapSize == 2)
-            _mesa_swap2_copy(tempImage, (GLushort *) srcAddr, elementCount);
+            _mesa_swap2_copy(tempImage, (GLushort *) srcAddr,
+                             elementCount * swapsPerPixel);
          else
-            _mesa_swap4_copy(tempImage, (GLuint *) srcAddr, elementCount);
+            _mesa_swap4_copy(tempImage, (GLuint *) srcAddr,
+                             elementCount * swapsPerPixel);
          srcAddr = tempImage;
       }
    }
@@ -737,12 +748,51 @@ texstore_rgba(TEXSTORE_PARAMS)
    srcRowStride =
       _mesa_image_row_stride(srcPacking, srcWidth, srcFormat, srcType);
 
+   srcMesaFormat = _mesa_format_from_format_and_type(srcFormat, srcType);
+   dstFormat = _mesa_get_srgb_format_linear(dstFormat);
+
+   /* If we have transferOps then we need to convert to RGBA float first,
+      then apply transferOps, then do the conversion to dst
+    */
+   if (!transferOpsDone &&
+       _mesa_texstore_needs_transfer_ops(ctx, baseInternalFormat, dstFormat)) {
+      /* Allocate RGBA float image */
+      int elementCount = srcWidth * srcHeight * srcDepth;
+      tempRGBA = malloc(4 * elementCount * sizeof(float));
+      if (!tempRGBA) {
+         free(tempImage);
+         free(tempRGBA);
+         return GL_FALSE;
+      }
+
+      /* Convert from src to RGBA float */
+      src = (GLubyte *) srcAddr;
+      dst = (GLubyte *) tempRGBA;
+      for (img = 0; img < srcDepth; img++) {
+         _mesa_format_convert(dst, RGBA32_FLOAT, 4 * srcWidth * sizeof(float),
+                              src, srcMesaFormat, srcRowStride,
+                              srcWidth, srcHeight, NULL);
+         src += srcHeight * srcRowStride;
+         dst += srcHeight * 4 * srcWidth * sizeof(float);
+      }
+
+      /* Apply transferOps */
+      _mesa_apply_rgba_transfer_ops(ctx, ctx->_ImageTransferState, elementCount,
+                                    (float(*)[4]) tempRGBA);
+
+      /* Now we have to adjust our src info for a conversion from
+       * the RGBA float image and then we continue as usual.
+       */
+      srcAddr = tempRGBA;
+      srcFormat = GL_RGBA;
+      srcType = GL_FLOAT;
+      srcRowStride = srcWidth * 4 * sizeof(float);
+      srcMesaFormat = RGBA32_FLOAT;
+   }
+
    src = (GLubyte *)
       _mesa_image_address(dims, srcPacking, srcAddr, srcWidth, srcHeight,
                           srcFormat, srcType, 0, 0, 0);
-
-   srcMesaFormat = _mesa_format_from_format_and_type(srcFormat, srcType);
-   dstFormat = _mesa_get_srgb_format_linear(dstFormat);
 
    if (_mesa_get_format_base_format(dstFormat) != baseInternalFormat) {
       needRebase =
@@ -761,6 +811,7 @@ texstore_rgba(TEXSTORE_PARAMS)
    }
 
    free(tempImage);
+   free(tempRGBA);
 
    return GL_TRUE;
 }
@@ -1174,10 +1225,10 @@ _mesa_store_compressed_teximage(struct gl_context *ctx, GLuint dims,
     * have to worry about the usual image unpacking or image transfer
     * operations.
     */
-   ASSERT(texImage);
-   ASSERT(texImage->Width > 0);
-   ASSERT(texImage->Height > 0);
-   ASSERT(texImage->Depth > 0);
+   assert(texImage);
+   assert(texImage->Width > 0);
+   assert(texImage->Height > 0);
+   assert(texImage->Depth > 0);
 
    /* allocate storage for texture data */
    if (!ctx->Driver.AllocTextureImageBuffer(ctx, texImage)) {

@@ -92,6 +92,12 @@ brw_reg_from_fs_reg(fs_reg *reg)
       case BRW_REGISTER_TYPE_UD:
 	 brw_reg = brw_imm_ud(reg->fixed_hw_reg.dw1.ud);
 	 break;
+      case BRW_REGISTER_TYPE_W:
+	 brw_reg = brw_imm_w(reg->fixed_hw_reg.dw1.d);
+	 break;
+      case BRW_REGISTER_TYPE_UW:
+	 brw_reg = brw_imm_uw(reg->fixed_hw_reg.dw1.ud);
+	 break;
       case BRW_REGISTER_TYPE_VF:
          brw_reg = brw_imm_vf(reg->fixed_hw_reg.dw1.ud);
          break;
@@ -1024,13 +1030,13 @@ fs_generator::generate_uniform_pull_constant_load_gen7(fs_inst *inst,
 
    if (brw->gen >= 9) {
       /* Skylake requires a message header in order to use SIMD4x2 mode. */
-      src = retype(brw_vec8_grf(offset.nr - 1, 0), BRW_REGISTER_TYPE_UD);
+      src = retype(brw_vec4_grf(offset.nr - 1, 0), BRW_REGISTER_TYPE_UD);
       mlen = 2;
       header_present = true;
 
       brw_push_insn_state(p);
       brw_set_default_mask_control(p, BRW_MASK_DISABLE);
-      brw_MOV(p, src, retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD));
+      brw_MOV(p, src, retype(brw_vec4_grf(0, 0), BRW_REGISTER_TYPE_UD));
       brw_set_default_access_mode(p, BRW_ALIGN_1);
 
       brw_MOV(p, get_element_ud(src, 2),
@@ -1393,27 +1399,6 @@ fs_generator::generate_set_sample_id(fs_inst *inst,
    brw_pop_insn_state(p);
 }
 
-/**
- * Change the register's data type from UD to W, doubling the strides in order
- * to compensate for halving the data type width.
- */
-static struct brw_reg
-ud_reg_to_w(struct brw_reg r)
-{
-   assert(r.type == BRW_REGISTER_TYPE_UD);
-   r.type = BRW_REGISTER_TYPE_W;
-
-   /* The BRW_*_STRIDE enums are defined so that incrementing the field
-    * doubles the real stride.
-    */
-   if (r.hstride != 0)
-      ++r.hstride;
-   if (r.vstride != 0)
-      ++r.vstride;
-
-   return r;
-}
-
 void
 fs_generator::generate_pack_half_2x16_split(fs_inst *inst,
                                             struct brw_reg dst,
@@ -1434,9 +1419,9 @@ fs_generator::generate_pack_half_2x16_split(fs_inst *inst,
     *   (HorzStride) of 2. The 16-bit result is stored in the lower word of
     *   each destination channel and the upper word is not modified.
     */
-   struct brw_reg dst_w = ud_reg_to_w(dst);
+   struct brw_reg dst_w = spread(retype(dst, BRW_REGISTER_TYPE_W), 2);
 
-   /* Give each 32-bit channel of dst the form below , where "." means
+   /* Give each 32-bit channel of dst the form below, where "." means
     * unchanged.
     *   0x....hhhh
     */
@@ -1468,7 +1453,7 @@ fs_generator::generate_unpack_half_2x16_split(fs_inst *inst,
     *   the source data type must be Word (W). The destination type must be
     *   F (Float).
     */
-   struct brw_reg src_w = ud_reg_to_w(src);
+   struct brw_reg src_w = spread(retype(src, BRW_REGISTER_TYPE_W), 2);
 
    /* Each channel of src has the form of unpackHalf2x16's input: 0xhhhhllll.
     * For the Y case, we wish to access only the upper word; therefore
@@ -1734,7 +1719,42 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
          brw_F16TO32(p, dst, src[0]);
          break;
       case BRW_OPCODE_CMP:
-	 brw_CMP(p, dst, inst->conditional_mod, src[0], src[1]);
+         /* The Ivybridge/BayTrail WaCMPInstFlagDepClearedEarly workaround says
+          * that when the destination is a GRF that the dependency-clear bit on
+          * the flag register is cleared early.
+          *
+          * Suggested workarounds are to disable coissuing CMP instructions
+          * or to split CMP(16) instructions into two CMP(8) instructions.
+          *
+          * We choose to split into CMP(8) instructions since disabling
+          * coissuing would affect CMP instructions not otherwise affected by
+          * the errata.
+          */
+         if (dispatch_width == 16 && brw->gen == 7 && !brw->is_haswell) {
+            if (dst.file == BRW_GENERAL_REGISTER_FILE) {
+               brw_set_default_compression_control(p, BRW_COMPRESSION_NONE);
+               brw_CMP(p, firsthalf(dst), inst->conditional_mod,
+                          firsthalf(src[0]), firsthalf(src[1]));
+               brw_set_default_compression_control(p, BRW_COMPRESSION_2NDHALF);
+               brw_CMP(p, sechalf(dst), inst->conditional_mod,
+                          sechalf(src[0]), sechalf(src[1]));
+               brw_set_default_compression_control(p, BRW_COMPRESSION_COMPRESSED);
+
+               multiple_instructions_emitted = true;
+            } else if (dst.file == BRW_ARCHITECTURE_REGISTER_FILE) {
+               /* For unknown reasons, the aforementioned workaround is not
+                * sufficient. Overriding the type when the destination is the
+                * null register is necessary but not sufficient by itself.
+                */
+               assert(dst.nr == BRW_ARF_NULL);
+               dst.type = BRW_REGISTER_TYPE_D;
+               brw_CMP(p, dst, inst->conditional_mod, src[0], src[1]);
+            } else {
+               unreachable("not reached");
+            }
+         } else {
+            brw_CMP(p, dst, inst->conditional_mod, src[0], src[1]);
+         }
 	 break;
       case BRW_OPCODE_SEL:
 	 brw_SEL(p, dst, src[0], src[1]);

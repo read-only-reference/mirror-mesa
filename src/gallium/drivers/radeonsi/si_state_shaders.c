@@ -159,12 +159,14 @@ static void si_shader_vs(struct si_shader *shader)
 	va = shader->bo->gpu_address;
 	si_pm4_add_bo(pm4, shader->bo, RADEON_USAGE_READ, RADEON_PRIO_SHADER_DATA);
 
-	vgpr_comp_cnt = shader->uses_instanceid ? 3 : 0;
-
-	if (shader->is_gs_copy_shader)
+	if (shader->is_gs_copy_shader) {
+		vgpr_comp_cnt = 0; /* only VertexID is needed for GS-COPY. */
 		num_user_sgprs = SI_GSCOPY_NUM_USER_SGPR;
-	else
+	} else if (shader->selector->type == PIPE_SHADER_VERTEX) {
+		vgpr_comp_cnt = shader->uses_instanceid ? 3 : 0;
 		num_user_sgprs = SI_VS_NUM_USER_SGPR;
+	} else
+		assert(0);
 
 	num_sgprs = shader->num_sgprs;
 	if (num_user_sgprs > num_sgprs) {
@@ -376,6 +378,11 @@ static INLINE void si_shader_selector_key(struct pipe_context *ctx,
 						       sctx->queued.named.rasterizer->multisample_enable &&
 						       !sctx->framebuffer.cb0_is_integer;
 			}
+
+			key->ps.poly_stipple = sctx->queued.named.rasterizer->poly_stipple_enable &&
+					       ((sctx->current_rast_prim >= PIPE_PRIM_TRIANGLES &&
+						 sctx->current_rast_prim <= PIPE_PRIM_POLYGON) ||
+						sctx->current_rast_prim >= PIPE_PRIM_TRIANGLES_ADJACENCY);
 		}
 		if (sctx->queued.named.dsa) {
 			key->ps.alpha_func = sctx->queued.named.dsa->alpha_func;
@@ -656,9 +663,11 @@ bcolor:
 			}
 		}
 
-		if (j == vsinfo->num_outputs) {
-			/* No corresponding output found, load defaults into input */
-			tmp |= S_028644_OFFSET(0x20);
+		if (j == vsinfo->num_outputs && !G_028644_PT_SPRITE_TEX(tmp)) {
+			/* No corresponding output found, load defaults into input.
+			 * Don't set any other bits.
+			 * (FLAT_SHADE=1 completely changes behavior) */
+			tmp = S_028644_OFFSET(0x20);
 		}
 
 		si_pm4_set_reg(pm4,

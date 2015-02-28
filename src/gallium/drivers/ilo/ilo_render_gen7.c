@@ -38,7 +38,7 @@
 /**
  * A wrapper for gen6_PIPE_CONTROL().
  */
-static inline void
+static void
 gen7_pipe_control(struct ilo_render *r, uint32_t dw1)
 {
    struct intel_bo *bo = (dw1 & GEN6_PIPE_CONTROL_WRITE__MASK) ?
@@ -57,7 +57,7 @@ gen7_pipe_control(struct ilo_render *r, uint32_t dw1)
          dw1 |= GEN6_PIPE_CONTROL_PIXEL_SCOREBOARD_STALL;
    }
 
-   gen6_PIPE_CONTROL(r->builder, dw1, bo, 0, false);
+   gen6_PIPE_CONTROL(r->builder, dw1, bo, 0, 0);
 
 
    r->state.current_pipe_control_dw1 |= dw1;
@@ -222,7 +222,7 @@ gen7_wa_post_ps_and_later(struct ilo_render *r)
 
 #define DIRTY(state) (session->pipe_dirty & ILO_DIRTY_ ## state)
 
-static void
+void
 gen7_draw_common_urb(struct ilo_render *r,
                      const struct ilo_state_vector *vec,
                      struct ilo_render_draw_session *session)
@@ -230,8 +230,10 @@ gen7_draw_common_urb(struct ilo_render *r,
    /* 3DSTATE_URB_{VS,GS,HS,DS} */
    if (DIRTY(VE) || DIRTY(VS)) {
       /* the first 16KB are reserved for VS and PS PCBs */
-      const int offset = (ilo_dev_gen(r->dev) == ILO_GEN(7.5) &&
-            r->dev->gt == 3) ? 32768 : 16384;
+      const int offset =
+         (ilo_dev_gen(r->dev) >= ILO_GEN(8)) ||
+          (ilo_dev_gen(r->dev) == ILO_GEN(7.5) && r->dev->gt == 3) ?
+          32768 : 16384;
       int vs_entry_size, vs_total_size;
 
       vs_entry_size = (vec->vs) ?
@@ -251,7 +253,8 @@ gen7_draw_common_urb(struct ilo_render *r,
       vs_entry_size *= sizeof(float) * 4;
       vs_total_size = r->dev->urb_size - offset;
 
-      gen7_wa_pre_vs(r);
+      if (ilo_dev_gen(r->dev) < ILO_GEN(8))
+         gen7_wa_pre_vs(r);
 
       gen7_3DSTATE_URB_VS(r->builder,
             offset, vs_total_size, vs_entry_size);
@@ -262,7 +265,7 @@ gen7_draw_common_urb(struct ilo_render *r,
    }
 }
 
-static void
+void
 gen7_draw_common_pcb_alloc(struct ilo_render *r,
                            const struct ilo_state_vector *vec,
                            struct ilo_render_draw_session *session)
@@ -273,8 +276,10 @@ gen7_draw_common_pcb_alloc(struct ilo_render *r,
        * Push constant buffers are only allowed to take up at most the first
        * 16KB of the URB.  Split the space evenly for VS and FS.
        */
-      const int max_size = (ilo_dev_gen(r->dev) == ILO_GEN(7.5) &&
-            r->dev->gt == 3) ? 32768 : 16384;
+      const int max_size =
+         (ilo_dev_gen(r->dev) >= ILO_GEN(8)) ||
+          (ilo_dev_gen(r->dev) == ILO_GEN(7.5) && r->dev->gt == 3) ?
+          32768 : 16384;
       const int size = max_size / 2;
       int offset = 0;
 
@@ -288,7 +293,7 @@ gen7_draw_common_pcb_alloc(struct ilo_render *r,
    }
 }
 
-static void
+void
 gen7_draw_common_pointers_1(struct ilo_render *r,
                             const struct ilo_state_vector *vec,
                             struct ilo_render_draw_session *session)
@@ -303,7 +308,7 @@ gen7_draw_common_pointers_1(struct ilo_render *r,
    }
 }
 
-static void
+void
 gen7_draw_common_pointers_2(struct ilo_render *r,
                             const struct ilo_state_vector *vec,
                             struct ilo_render_draw_session *session)
@@ -321,29 +326,29 @@ gen7_draw_common_pointers_2(struct ilo_render *r,
    }
 
    /* 3DSTATE_DEPTH_STENCIL_STATE_POINTERS */
-   if (session->dsa_changed) {
+   if (ilo_dev_gen(r->dev) < ILO_GEN(8) && session->dsa_changed) {
       gen7_3DSTATE_DEPTH_STENCIL_STATE_POINTERS(r->builder,
             r->state.DEPTH_STENCIL_STATE);
    }
 }
 
-static void
+void
 gen7_draw_vs(struct ilo_render *r,
              const struct ilo_state_vector *vec,
              struct ilo_render_draw_session *session)
 {
-   const bool emit_3dstate_binding_table =
-      session->binding_table_vs_changed;
-   const bool emit_3dstate_sampler_state =
-      session->sampler_vs_changed;
+   const bool emit_3dstate_binding_table = session->binding_table_vs_changed;
+   const bool emit_3dstate_sampler_state = session->sampler_vs_changed;
    /* see gen6_draw_vs() */
    const bool emit_3dstate_constant_vs = session->pcb_vs_changed;
    const bool emit_3dstate_vs = (DIRTY(VS) || r->instruction_bo_changed);
 
    /* emit depth stall before any of the VS commands */
-   if (emit_3dstate_binding_table || emit_3dstate_sampler_state ||
-           emit_3dstate_constant_vs || emit_3dstate_vs)
-      gen7_wa_pre_vs(r);
+   if (ilo_dev_gen(r->dev) < ILO_GEN(8)) {
+      if (emit_3dstate_binding_table || emit_3dstate_sampler_state ||
+          emit_3dstate_constant_vs || emit_3dstate_vs)
+         gen7_wa_pre_vs(r);
+   }
 
    /* 3DSTATE_BINDING_TABLE_POINTERS_VS */
    if (emit_3dstate_binding_table) {
@@ -366,11 +371,18 @@ gen7_draw_vs(struct ilo_render *r,
    }
 
    /* 3DSTATE_VS */
-   if (emit_3dstate_vs)
-      gen6_3DSTATE_VS(r->builder, vec->vs);
+   if (ilo_dev_gen(r->dev) >= ILO_GEN(8)) {
+      if (emit_3dstate_vs || DIRTY(RASTERIZER)) {
+         gen8_3DSTATE_VS(r->builder, vec->vs,
+               vec->rasterizer->state.clip_plane_enable);
+      }
+   } else {
+      if (emit_3dstate_vs)
+         gen6_3DSTATE_VS(r->builder, vec->vs);
+   }
 }
 
-static void
+void
 gen7_draw_hs(struct ilo_render *r,
              const struct ilo_state_vector *vec,
              struct ilo_render_draw_session *session)
@@ -386,7 +398,7 @@ gen7_draw_hs(struct ilo_render *r,
       gen7_3DSTATE_BINDING_TABLE_POINTERS_HS(r->builder, 0);
 }
 
-static void
+void
 gen7_draw_te(struct ilo_render *r,
              const struct ilo_state_vector *vec,
              struct ilo_render_draw_session *session)
@@ -396,7 +408,7 @@ gen7_draw_te(struct ilo_render *r,
       gen7_3DSTATE_TE(r->builder);
 }
 
-static void
+void
 gen7_draw_ds(struct ilo_render *r,
              const struct ilo_state_vector *vec,
              struct ilo_render_draw_session *session)
@@ -413,7 +425,7 @@ gen7_draw_ds(struct ilo_render *r,
 
 }
 
-static void
+void
 gen7_draw_gs(struct ilo_render *r,
              const struct ilo_state_vector *vec,
              struct ilo_render_draw_session *session)
@@ -431,7 +443,7 @@ gen7_draw_gs(struct ilo_render *r,
    }
 }
 
-static void
+void
 gen7_draw_sol(struct ilo_render *r,
               const struct ilo_state_vector *vec,
               struct ilo_render_draw_session *session)
@@ -472,13 +484,17 @@ gen7_draw_sol(struct ilo_render *r,
 
    /* 3DSTATE_STREAMOUT */
    if (DIRTY(SO) || DIRTY(RASTERIZER) || dirty_sh) {
-      const unsigned buffer_mask = (1 << vec->so.count) - 1;
       const int output_count = ilo_shader_get_kernel_param(shader,
             ILO_KERNEL_OUTPUT_COUNT);
+      int buf_strides[4] = { 0, 0, 0, 0 };
+      int i;
+
+      for (i = 0; i < vec->so.count; i++)
+         buf_strides[i] = so_info->stride[i] * 4;
 
       gen7_3DSTATE_STREAMOUT(r->builder, 0,
             vec->rasterizer->state.rasterizer_discard,
-            buffer_mask, output_count);
+            output_count, buf_strides);
    }
 }
 
@@ -512,7 +528,7 @@ gen7_draw_wm(struct ilo_render *r,
 {
    /* 3DSTATE_WM */
    if (DIRTY(FS) || DIRTY(BLEND) || DIRTY(DSA) || DIRTY(RASTERIZER)) {
-      const bool cc_may_kill = (vec->dsa->dw_alpha ||
+      const bool cc_may_kill = (vec->dsa->dw_blend_alpha ||
                                 vec->blend->alpha_to_coverage);
 
       gen7_3DSTATE_WM(r->builder, vec->fs, vec->rasterizer, cc_may_kill);
@@ -611,17 +627,16 @@ gen7_draw_wm_multisample(struct ilo_render *r,
 {
    /* 3DSTATE_MULTISAMPLE and 3DSTATE_SAMPLE_MASK */
    if (DIRTY(SAMPLE_MASK) || DIRTY(FB)) {
-      const uint32_t *packed_sample_pos;
+      const uint32_t *pattern;
 
       gen7_wa_pre_3dstate_multisample(r);
 
-      packed_sample_pos =
-         (vec->fb.num_samples > 4) ? r->packed_sample_position_8x :
-         (vec->fb.num_samples > 1) ? &r->packed_sample_position_4x :
-         &r->packed_sample_position_1x;
+      pattern = (vec->fb.num_samples > 4) ? r->sample_pattern_8x :
+                (vec->fb.num_samples > 1) ? &r->sample_pattern_4x :
+                &r->sample_pattern_1x;
 
       gen6_3DSTATE_MULTISAMPLE(r->builder,
-            vec->fb.num_samples, packed_sample_pos,
+            vec->fb.num_samples, pattern,
             vec->rasterizer->state.half_pixel_center);
 
       gen7_3DSTATE_SAMPLE_MASK(r->builder,
@@ -630,7 +645,7 @@ gen7_draw_wm_multisample(struct ilo_render *r,
    }
 }
 
-static void
+void
 gen7_draw_vf_draw(struct ilo_render *r,
                   const struct ilo_state_vector *vec,
                   struct ilo_render_draw_session *session)
@@ -690,7 +705,9 @@ gen7_rectlist_pcb_alloc(struct ilo_render *r,
     * 16KB of the URB.  Split the space evenly for VS and FS.
     */
    const int max_size =
-      (ilo_dev_gen(r->dev) == ILO_GEN(7.5) && r->dev->gt == 3) ? 32768 : 16384;
+      (ilo_dev_gen(r->dev) >= ILO_GEN(8)) ||
+       (ilo_dev_gen(r->dev) == ILO_GEN(7.5) && r->dev->gt == 3) ?
+       32768 : 16384;
    const int size = max_size / 2;
    int offset = 0;
 
@@ -708,7 +725,9 @@ gen7_rectlist_urb(struct ilo_render *r,
 {
    /* the first 16KB are reserved for VS and PS PCBs */
    const int offset =
-      (ilo_dev_gen(r->dev) == ILO_GEN(7.5) && r->dev->gt == 3) ? 32768 : 16384;
+      (ilo_dev_gen(r->dev) >= ILO_GEN(8)) ||
+       (ilo_dev_gen(r->dev) == ILO_GEN(7.5) && r->dev->gt == 3) ?
+       32768 : 16384;
 
    gen7_3DSTATE_URB_VS(r->builder, offset, r->dev->urb_size - offset,
          (blitter->ve.count + blitter->ve.prepend_nosrc_cso) *
@@ -807,15 +826,15 @@ static void
 gen7_rectlist_wm_multisample(struct ilo_render *r,
                              const struct ilo_blitter *blitter)
 {
-   const uint32_t *packed_sample_pos =
-      (blitter->fb.num_samples > 4) ? r->packed_sample_position_8x :
-      (blitter->fb.num_samples > 1) ? &r->packed_sample_position_4x :
-      &r->packed_sample_position_1x;
+   const uint32_t *pattern =
+      (blitter->fb.num_samples > 4) ? r->sample_pattern_8x :
+      (blitter->fb.num_samples > 1) ? &r->sample_pattern_4x :
+      &r->sample_pattern_1x;
 
    gen7_wa_pre_3dstate_multisample(r);
 
    gen6_3DSTATE_MULTISAMPLE(r->builder, blitter->fb.num_samples,
-         packed_sample_pos, true);
+         pattern, true);
 
    gen7_3DSTATE_SAMPLE_MASK(r->builder,
          (1 << blitter->fb.num_samples) - 1, blitter->fb.num_samples);

@@ -47,9 +47,11 @@ struct ilo_render {
 
    struct intel_bo *workaround_bo;
 
-   uint32_t packed_sample_position_1x;
-   uint32_t packed_sample_position_4x;
-   uint32_t packed_sample_position_8x[2];
+   uint32_t sample_pattern_1x;
+   uint32_t sample_pattern_2x;
+   uint32_t sample_pattern_4x;
+   uint32_t sample_pattern_8x[2];
+   uint32_t sample_pattern_16x[4];
 
    bool hw_ctx_changed;
 
@@ -185,11 +187,17 @@ int
 ilo_render_get_draw_commands_len_gen7(const struct ilo_render *render,
                                       const struct ilo_state_vector *vec);
 
+int
+ilo_render_get_draw_commands_len_gen8(const struct ilo_render *render,
+                                      const struct ilo_state_vector *vec);
+
 static inline int
 ilo_render_get_draw_commands_len(const struct ilo_render *render,
                                  const struct ilo_state_vector *vec)
 {
-   if (ilo_dev_gen(render->dev) >= ILO_GEN(7))
+   if (ilo_dev_gen(render->dev) >= ILO_GEN(8))
+      return ilo_render_get_draw_commands_len_gen8(render, vec);
+   else if (ilo_dev_gen(render->dev) >= ILO_GEN(7))
       return ilo_render_get_draw_commands_len_gen7(render, vec);
    else
       return ilo_render_get_draw_commands_len_gen6(render, vec);
@@ -205,6 +213,11 @@ ilo_render_emit_draw_commands_gen7(struct ilo_render *render,
                                    const struct ilo_state_vector *vec,
                                    struct ilo_render_draw_session *session);
 
+void
+ilo_render_emit_draw_commands_gen8(struct ilo_render *render,
+                                   const struct ilo_state_vector *vec,
+                                   struct ilo_render_draw_session *session);
+
 static inline void
 ilo_render_emit_draw_commands(struct ilo_render *render,
                               const struct ilo_state_vector *vec,
@@ -212,7 +225,9 @@ ilo_render_emit_draw_commands(struct ilo_render *render,
 {
    const unsigned batch_used = ilo_builder_batch_used(render->builder);
 
-   if (ilo_dev_gen(render->dev) >= ILO_GEN(7))
+   if (ilo_dev_gen(render->dev) >= ILO_GEN(8))
+      ilo_render_emit_draw_commands_gen8(render, vec, session);
+   else if (ilo_dev_gen(render->dev) >= ILO_GEN(7))
       ilo_render_emit_draw_commands_gen7(render, vec, session);
    else
       ilo_render_emit_draw_commands_gen6(render, vec, session);
@@ -225,11 +240,18 @@ int
 ilo_render_get_rectlist_commands_len_gen6(const struct ilo_render *render,
                                           const struct ilo_blitter *blitter);
 
+int
+ilo_render_get_rectlist_commands_len_gen8(const struct ilo_render *render,
+                                          const struct ilo_blitter *blitter);
+
 static inline int
 ilo_render_get_rectlist_commands_len(const struct ilo_render *render,
                                      const struct ilo_blitter *blitter)
 {
-   return ilo_render_get_rectlist_commands_len_gen6(render, blitter);
+   if (ilo_dev_gen(render->dev) >= ILO_GEN(8))
+      return ilo_render_get_rectlist_commands_len_gen8(render, blitter);
+   else
+      return ilo_render_get_rectlist_commands_len_gen6(render, blitter);
 }
 
 void
@@ -242,6 +264,11 @@ ilo_render_emit_rectlist_commands_gen7(struct ilo_render *r,
                                        const struct ilo_blitter *blitter,
                                        const struct ilo_render_rectlist_session *session);
 
+void
+ilo_render_emit_rectlist_commands_gen8(struct ilo_render *r,
+                                       const struct ilo_blitter *blitter,
+                                       const struct ilo_render_rectlist_session *session);
+
 static inline void
 ilo_render_emit_rectlist_commands(struct ilo_render *render,
                                   const struct ilo_blitter *blitter,
@@ -249,7 +276,9 @@ ilo_render_emit_rectlist_commands(struct ilo_render *render,
 {
    const unsigned batch_used = ilo_builder_batch_used(render->builder);
 
-   if (ilo_dev_gen(render->dev) >= ILO_GEN(7))
+   if (ilo_dev_gen(render->dev) >= ILO_GEN(8))
+      ilo_render_emit_rectlist_commands_gen8(render, blitter, session);
+   else if (ilo_dev_gen(render->dev) >= ILO_GEN(7))
       ilo_render_emit_rectlist_commands_gen7(render, blitter, session);
    else
       ilo_render_emit_rectlist_commands_gen6(render, blitter, session);
@@ -359,5 +388,60 @@ void
 gen6_draw_wm_raster(struct ilo_render *r,
                     const struct ilo_state_vector *ilo,
                     struct ilo_render_draw_session *session);
+
+void
+gen7_draw_common_pcb_alloc(struct ilo_render *r,
+                           const struct ilo_state_vector *vec,
+                           struct ilo_render_draw_session *session);
+
+void
+gen7_draw_common_pointers_1(struct ilo_render *r,
+                            const struct ilo_state_vector *vec,
+                            struct ilo_render_draw_session *session);
+
+void
+gen7_draw_common_urb(struct ilo_render *r,
+                     const struct ilo_state_vector *vec,
+                     struct ilo_render_draw_session *session);
+
+void
+gen7_draw_common_pointers_2(struct ilo_render *r,
+                            const struct ilo_state_vector *vec,
+                            struct ilo_render_draw_session *session);
+
+void
+gen7_draw_vs(struct ilo_render *r,
+             const struct ilo_state_vector *vec,
+             struct ilo_render_draw_session *session);
+
+void
+gen7_draw_ds(struct ilo_render *r,
+             const struct ilo_state_vector *vec,
+             struct ilo_render_draw_session *session);
+
+void
+gen7_draw_te(struct ilo_render *r,
+             const struct ilo_state_vector *vec,
+             struct ilo_render_draw_session *session);
+
+void
+gen7_draw_hs(struct ilo_render *r,
+             const struct ilo_state_vector *vec,
+             struct ilo_render_draw_session *session);
+
+void
+gen7_draw_gs(struct ilo_render *r,
+             const struct ilo_state_vector *vec,
+             struct ilo_render_draw_session *session);
+
+void
+gen7_draw_sol(struct ilo_render *r,
+              const struct ilo_state_vector *vec,
+              struct ilo_render_draw_session *session);
+
+void
+gen7_draw_vf_draw(struct ilo_render *r,
+                  const struct ilo_state_vector *vec,
+                  struct ilo_render_draw_session *session);
 
 #endif /* ILO_RENDER_GEN_H */

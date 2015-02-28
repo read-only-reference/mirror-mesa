@@ -392,6 +392,7 @@ EXTRA_EXT2(ARB_transform_feedback3, ARB_gpu_shader5);
 EXTRA_EXT(INTEL_performance_query);
 EXTRA_EXT(ARB_explicit_uniform_location);
 EXTRA_EXT(ARB_clip_control);
+EXTRA_EXT(EXT_polygon_offset_clamp);
 
 static const int
 extra_ARB_color_buffer_float_or_glcore[] = {
@@ -757,7 +758,7 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
    case GL_COMPRESSED_TEXTURE_FORMATS_ARB:
       v->value_int_n.n = 
 	 _mesa_get_compressed_formats(ctx, v->value_int_n.ints);
-      ASSERT(v->value_int_n.n <= (int) ARRAY_SIZE(v->value_int_n.ints));
+      assert(v->value_int_n.n <= (int) ARRAY_SIZE(v->value_int_n.ints));
       break;
 
    case GL_MAX_VARYING_FLOATS_ARB:

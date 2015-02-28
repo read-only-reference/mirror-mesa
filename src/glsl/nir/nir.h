@@ -32,8 +32,7 @@
 #include "GL/gl.h" /* GLenum */
 #include "util/ralloc.h"
 #include "util/set.h"
-#include "main/mtypes.h"
-#include "main/bitset.h"
+#include "util/bitset.h"
 #include "nir_types.h"
 #include <stdio.h>
 
@@ -42,6 +41,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+struct gl_program;
+struct gl_shader_program;
 
 #define NIR_FALSE 0u
 #define NIR_TRUE (~0u)
@@ -64,6 +66,7 @@ name(const in_type *parent)                              \
 struct nir_function_overload;
 struct nir_function;
 struct nir_shader;
+struct nir_instr;
 
 
 /**
@@ -384,6 +387,14 @@ typedef struct {
     */
    bool is_packed;
 
+   /**
+    * If this pointer is non-NULL then this register has exactly one
+    * definition and that definition dominates all of its uses.  This is
+    * set by the out-of-SSA pass so that backends can get SSA-like
+    * information even once they have gone out of SSA.
+    */
+   struct nir_instr *parent_instr;
+
    /** set of nir_instr's where this register is used (read from) */
    struct set *uses;
 
@@ -406,25 +417,35 @@ typedef enum {
    nir_instr_type_parallel_copy,
 } nir_instr_type;
 
-typedef struct {
+typedef struct nir_instr {
    struct exec_node node;
    nir_instr_type type;
    struct nir_block *block;
 
-   /* flag for dead code elimination (see nir_opt_dce.c) */
-   bool live;
+   /* A temporary for optimization and analysis passes to use for storing
+    * flags.  For instance, DCE uses this to store the "dead/live" info.
+    */
+   uint8_t pass_flags;
 } nir_instr;
 
 static inline nir_instr *
-nir_instr_next(const nir_instr *instr)
+nir_instr_next(nir_instr *instr)
 {
-   return exec_node_data(nir_instr, (instr)->node.next, node);
+   struct exec_node *next = exec_node_get_next(&instr->node);
+   if (exec_node_is_tail_sentinel(next))
+      return NULL;
+   else
+      return exec_node_data(nir_instr, next, node);
 }
 
 static inline nir_instr *
-nir_instr_prev(const nir_instr *instr)
+nir_instr_prev(nir_instr *instr)
 {
-   return exec_node_data(nir_instr, (instr)->node.prev, node);
+   struct exec_node *prev = exec_node_get_prev(&instr->node);
+   if (exec_node_is_head_sentinel(prev))
+      return NULL;
+   else
+      return exec_node_data(nir_instr, prev, node);
 }
 
 typedef struct {
@@ -1135,6 +1156,14 @@ typedef struct nir_block {
    /* Set of nir_block's on the dominance frontier of this block */
    struct set *dom_frontier;
 
+   /*
+    * These two indices have the property that dom_{pre,post}_index for each
+    * child of this block in the dominance tree will always be between
+    * dom_pre_index and dom_post_index for this block, which makes testing if
+    * a given block is dominated by another block an O(1) operation.
+    */
+   unsigned dom_pre_index, dom_post_index;
+
    /* live in and out for this block; used for liveness analysis */
    BITSET_WORD *live_in;
    BITSET_WORD *live_out;
@@ -1264,13 +1293,21 @@ typedef struct {
 static inline nir_cf_node *
 nir_cf_node_next(nir_cf_node *node)
 {
-   return exec_node_data(nir_cf_node, exec_node_get_next(&node->node), node);
+   struct exec_node *next = exec_node_get_next(&node->node);
+   if (exec_node_is_tail_sentinel(next))
+      return NULL;
+   else
+      return exec_node_data(nir_cf_node, next, node);
 }
 
 static inline nir_cf_node *
 nir_cf_node_prev(nir_cf_node *node)
 {
-   return exec_node_data(nir_cf_node, exec_node_get_prev(&node->node), node);
+   struct exec_node *prev = exec_node_get_prev(&node->node);
+   if (exec_node_is_head_sentinel(prev))
+      return NULL;
+   else
+      return exec_node_data(nir_cf_node, prev, node);
 }
 
 static inline bool
@@ -1326,6 +1363,15 @@ typedef struct nir_function {
    exec_node_data(nir_function_overload, \
                   exec_list_get_head(&(func)->overload_list), node)
 
+typedef struct nir_shader_compiler_options {
+   bool lower_ffma;
+   bool lower_fpow;
+   bool lower_fsat;
+   bool lower_fsqrt;
+   /** lowers fneg and ineg to fsub and isub. */
+   bool lower_negate;
+} nir_shader_compiler_options;
+
 typedef struct nir_shader {
    /** hash table of name -> uniform nir_variable */
    struct hash_table *uniforms;
@@ -1335,6 +1381,13 @@ typedef struct nir_shader {
 
    /** hash table of name -> output nir_variable */
    struct hash_table *outputs;
+
+   /** Set of driver-specific options for the shader.
+    *
+    * The memory for the options is expected to be kept in a single static
+    * copy by the driver.
+    */
+   const struct nir_shader_compiler_options *options;
 
    /** list of global variables in the shader */
    struct exec_list globals;
@@ -1361,12 +1414,13 @@ typedef struct nir_shader {
    unsigned num_inputs, num_uniforms, num_outputs;
 } nir_shader;
 
-#define nir_foreach_overload(shader, overload) \
+#define nir_foreach_overload(shader, overload)                        \
    foreach_list_typed(nir_function, func, node, &(shader)->functions) \
       foreach_list_typed(nir_function_overload, overload, node, \
                          &(func)->overload_list)
 
-nir_shader *nir_shader_create(void *mem_ctx);
+nir_shader *nir_shader_create(void *mem_ctx,
+                              const nir_shader_compiler_options *options);
 
 /** creates a register, including assigning it an index and adding it to the list */
 nir_register *nir_global_reg_create(nir_shader *shader);
@@ -1489,7 +1543,7 @@ void nir_index_ssa_defs(nir_function_impl *impl);
 void nir_index_blocks(nir_function_impl *impl);
 
 void nir_print_shader(nir_shader *shader, FILE *fp);
-void nir_print_instr(nir_instr *instr, FILE *fp);
+void nir_print_instr(const nir_instr *instr, FILE *fp);
 
 #ifdef DEBUG
 void nir_validate_shader(nir_shader *shader);
@@ -1499,6 +1553,9 @@ static inline void nir_validate_shader(nir_shader *shader) { }
 
 void nir_calc_dominance_impl(nir_function_impl *impl);
 void nir_calc_dominance(nir_shader *shader);
+
+nir_block *nir_dominance_lca(nir_block *b1, nir_block *b2);
+bool nir_block_dominates(nir_block *parent, nir_block *child);
 
 void nir_dump_dom_tree_impl(nir_function_impl *impl, FILE *fp);
 void nir_dump_dom_tree(nir_shader *shader, FILE *fp);
@@ -1526,6 +1583,8 @@ void nir_remove_dead_variables(nir_shader *shader);
 
 void nir_lower_vec_to_movs(nir_shader *shader);
 void nir_lower_alu_to_scalar(nir_shader *shader);
+
+void nir_lower_phis_to_scalar(nir_shader *shader);
 
 void nir_lower_samplers(nir_shader *shader,
                         struct gl_shader_program *shader_program,
@@ -1556,8 +1615,12 @@ bool nir_opt_cse(nir_shader *shader);
 bool nir_opt_dce_impl(nir_function_impl *impl);
 bool nir_opt_dce(nir_shader *shader);
 
+void nir_opt_gcm(nir_shader *shader);
+
 bool nir_opt_peephole_select(nir_shader *shader);
 bool nir_opt_peephole_ffma(nir_shader *shader);
+
+bool nir_opt_remove_phis(nir_shader *shader);
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -104,29 +104,6 @@ fd_screen_get_timestamp(struct pipe_screen *pscreen)
 }
 
 static void
-fd_screen_fence_ref(struct pipe_screen *pscreen,
-		struct pipe_fence_handle **ptr,
-		struct pipe_fence_handle *pfence)
-{
-	fd_fence_ref(fd_fence(pfence), (struct fd_fence **)ptr);
-}
-
-static boolean
-fd_screen_fence_signalled(struct pipe_screen *screen,
-		struct pipe_fence_handle *pfence)
-{
-	return fd_fence_signalled(fd_fence(pfence));
-}
-
-static boolean
-fd_screen_fence_finish(struct pipe_screen *screen,
-		struct pipe_fence_handle *pfence,
-		uint64_t timeout)
-{
-	return fd_fence_wait(fd_fence(pfence));
-}
-
-static void
 fd_screen_destroy(struct pipe_screen *pscreen)
 {
 	struct fd_screen *screen = fd_screen(pscreen);
@@ -160,7 +137,6 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TEXTURE_SHADOW_MAP:
 	case PIPE_CAP_BLEND_EQUATION_SEPARATE:
 	case PIPE_CAP_TEXTURE_SWIZZLE:
-	case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
 	case PIPE_CAP_MIXED_COLORBUFFER_FORMATS:
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_UPPER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
@@ -172,6 +148,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEX_ELEMENT_SRC_OFFSET_4BYTE_ALIGNED_ONLY:
 	case PIPE_CAP_USER_CONSTANT_BUFFERS:
 	case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
+	case PIPE_CAP_VERTEXID_NOBASE:
 		return 1;
 
 	case PIPE_CAP_SHADER_STENCIL_EXPORT:
@@ -186,13 +163,14 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
 	case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
 	case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
-	case PIPE_CAP_TGSI_INSTANCEID:
 	case PIPE_CAP_START_INSTANCE:
 	case PIPE_CAP_COMPUTE:
 		return 0;
 
 	case PIPE_CAP_SM3:
 	case PIPE_CAP_PRIMITIVE_RESTART:
+	case PIPE_CAP_TGSI_INSTANCEID:
+	case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
 		return is_a3xx(screen) || is_a4xx(screen);
 
 	case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
@@ -228,7 +206,9 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
 	case PIPE_CAP_SAMPLER_VIEW_TARGET:
 	case PIPE_CAP_CLIP_HALFZ:
-	case PIPE_CAP_VERTEXID_NOBASE:
+	case PIPE_CAP_POLYGON_OFFSET_CLAMP:
+	case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
+	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
 		return 0;
 
 	case PIPE_CAP_MAX_VIEWPORTS:
@@ -380,6 +360,8 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 		return 1;
 	case PIPE_SHADER_CAP_SUBROUTINES:
 	case PIPE_SHADER_CAP_DOUBLES:
+	case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
+	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
 		return 0;
 	case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
 		return 1;

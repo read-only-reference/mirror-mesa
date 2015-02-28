@@ -294,6 +294,7 @@ struct r600_so_target {
 	/* The buffer where BUFFER_FILLED_SIZE is stored. */
 	struct r600_resource	*buf_filled_size;
 	unsigned		buf_filled_size_offset;
+	bool			buf_filled_size_valid;
 
 	unsigned		stride_in_dw;
 };
@@ -360,7 +361,6 @@ struct r600_common_context {
 	/* Queries. */
 	/* The list of active queries. Only one query of each type can be active. */
 	int				num_occlusion_queries;
-	int				num_pipelinestat_queries;
 	/* Keep track of non-timer queries, because they should be suspended
 	 * during context flushing.
 	 * The timer queries (TIME_ELAPSED) shouldn't be suspended. */
@@ -444,6 +444,10 @@ bool r600_init_resource(struct r600_common_screen *rscreen,
 struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 					 const struct pipe_resource *templ,
 					 unsigned alignment);
+struct pipe_resource *
+r600_buffer_from_user_memory(struct pipe_screen *screen,
+			     const struct pipe_resource *templ,
+			     void *user_memory);
 
 /* r600_common_pipe.c */
 void r600_draw_rectangle(struct blitter_context *blitter,

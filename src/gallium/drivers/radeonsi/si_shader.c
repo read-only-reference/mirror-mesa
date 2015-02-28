@@ -37,6 +37,7 @@
 #include "radeon/radeon_elf_util.h"
 #include "radeon/radeon_llvm_emit.h"
 #include "util/u_memory.h"
+#include "util/u_pstipple.h"
 #include "tgsi/tgsi_parse.h"
 #include "tgsi/tgsi_util.h"
 #include "tgsi/tgsi_dump.h"
@@ -63,8 +64,6 @@ struct si_shader_output_values
 struct si_shader_context
 {
 	struct radeon_llvm_context radeon_bld;
-	struct tgsi_parse_context parse;
-	struct tgsi_token * tokens;
 	struct si_shader *shader;
 	struct si_screen *screen;
 	unsigned type; /* TGSI_PROCESSOR_* specifies the type of shader. */
@@ -236,14 +235,14 @@ static LLVMValueRef get_instance_index_for_fetch(
 
 	LLVMValueRef result = LLVMGetParam(radeon_bld->main_fn,
 					   si_shader_ctx->param_instance_id);
-	result = LLVMBuildAdd(gallivm->builder, result, LLVMGetParam(
-			radeon_bld->main_fn, SI_PARAM_START_INSTANCE), "");
 
+	/* The division must be done before START_INSTANCE is added. */
 	if (divisor > 1)
 		result = LLVMBuildUDiv(gallivm->builder, result,
 				lp_build_const_int32(gallivm, divisor), "");
 
-	return result;
+	return LLVMBuildAdd(gallivm->builder, result, LLVMGetParam(
+			radeon_bld->main_fn, SI_PARAM_START_INSTANCE), "");
 }
 
 static void declare_input_vs(
@@ -1540,7 +1539,7 @@ static void tex_fetch_args(
 		/* Bitcast and truncate v8i32 to v16i8. */
 		LLVMValueRef res = si_shader_ctx->resources[sampler_index];
 		res = LLVMBuildBitCast(gallivm->builder, res, v2i128, "");
-		res = LLVMBuildExtractElement(gallivm->builder, res, bld_base->uint_bld.zero, "");
+		res = LLVMBuildExtractElement(gallivm->builder, res, bld_base->uint_bld.one, "");
 		res = LLVMBuildBitCast(gallivm->builder, res, v16i8, "");
 
 		emit_data->dst_type = LLVMVectorType(bld_base->base.elem_type, 4);
@@ -2018,7 +2017,7 @@ static void txq_fetch_args(
 		LLVMValueRef size = si_shader_ctx->resources[inst->Src[1].Register.Index];
 		size = LLVMBuildBitCast(gallivm->builder, size, v8i32, "");
 		size = LLVMBuildExtractElement(gallivm->builder, size,
-					      lp_build_const_int32(gallivm, 2), "");
+					      lp_build_const_int32(gallivm, 6), "");
 		emit_data->args[0] = size;
 		return;
 	}
@@ -2741,19 +2740,67 @@ static int si_generate_gs_copy_shader(struct si_screen *sscreen,
 	return r;
 }
 
+static void si_dump_key(unsigned shader, union si_shader_key *key)
+{
+	int i;
+
+	fprintf(stderr, "SHADER KEY\n");
+
+	switch (shader) {
+	case PIPE_SHADER_VERTEX:
+		fprintf(stderr, "  instance_divisors = {");
+		for (i = 0; i < Elements(key->vs.instance_divisors); i++)
+			fprintf(stderr, !i ? "%u" : ", %u",
+				key->vs.instance_divisors[i]);
+		fprintf(stderr, "}\n");
+
+		if (key->vs.as_es)
+			fprintf(stderr, "  gs_used_inputs = 0x%"PRIx64"\n",
+				key->vs.gs_used_inputs);
+		fprintf(stderr, "  as_es = %u\n", key->vs.as_es);
+		break;
+
+	case PIPE_SHADER_GEOMETRY:
+		break;
+
+	case PIPE_SHADER_FRAGMENT:
+		fprintf(stderr, "  export_16bpc = 0x%X\n", key->ps.export_16bpc);
+		fprintf(stderr, "  last_cbuf = %u\n", key->ps.last_cbuf);
+		fprintf(stderr, "  color_two_side = %u\n", key->ps.color_two_side);
+		fprintf(stderr, "  alpha_func = %u\n", key->ps.alpha_func);
+		fprintf(stderr, "  alpha_to_one = %u\n", key->ps.alpha_to_one);
+		fprintf(stderr, "  poly_stipple = %u\n", key->ps.poly_stipple);
+		break;
+
+	default:
+		assert(0);
+	}
+}
+
 int si_shader_create(struct si_screen *sscreen, struct si_shader *shader)
 {
 	struct si_shader_selector *sel = shader->selector;
+	struct tgsi_token *tokens = sel->tokens;
 	struct si_shader_context si_shader_ctx;
 	struct lp_build_tgsi_context * bld_base;
+	struct tgsi_shader_info stipple_shader_info;
 	LLVMModuleRef mod;
 	int r = 0;
+	bool poly_stipple = sel->type == PIPE_SHADER_FRAGMENT &&
+			    shader->key.ps.poly_stipple;
 	bool dump = r600_can_dump_shader(&sscreen->b, sel->tokens);
+
+	if (poly_stipple) {
+		tokens = util_pstipple_create_fragment_shader(tokens, NULL,
+						SI_POLY_STIPPLE_SAMPLER);
+		tgsi_scan_shader(tokens, &stipple_shader_info);
+	}
 
 	/* Dump TGSI code before doing TGSI->LLVM conversion in case the
 	 * conversion fails. */
 	if (dump) {
-		tgsi_dump(sel->tokens, 0);
+		si_dump_key(sel->type, &shader->key);
+		tgsi_dump(tokens, 0);
 		si_dump_streamout(&sel->so);
 	}
 
@@ -2770,7 +2817,7 @@ int si_shader_create(struct si_screen *sscreen, struct si_shader *shader)
 		shader->db_shader_control |= S_02880C_KILL_ENABLE(1);
 
 	shader->uses_instanceid = sel->info.uses_instanceid;
-	bld_base->info = &sel->info;
+	bld_base->info = poly_stipple ? &stipple_shader_info : &sel->info;
 	bld_base->emit_fetch_funcs[TGSI_FILE_CONSTANT] = fetch_constant;
 
 	bld_base->op_actions[TGSI_OPCODE_TEX] = tex_action;
@@ -2800,10 +2847,8 @@ int si_shader_create(struct si_screen *sscreen, struct si_shader *shader)
 	}
 
 	si_shader_ctx.radeon_bld.load_system_value = declare_system_value;
-	si_shader_ctx.tokens = sel->tokens;
-	tgsi_parse_init(&si_shader_ctx.parse, si_shader_ctx.tokens);
 	si_shader_ctx.shader = shader;
-	si_shader_ctx.type = si_shader_ctx.parse.FullHeader.Processor.Processor;
+	si_shader_ctx.type = tgsi_get_processor_type(tokens);
 	si_shader_ctx.screen = sscreen;
 
 	switch (si_shader_ctx.type) {
@@ -2852,7 +2897,7 @@ int si_shader_create(struct si_screen *sscreen, struct si_shader *shader)
 					bld_base->uint_bld.elem_type, "");
 	}
 
-	if (!lp_build_tgsi_llvm(bld_base, sel->tokens)) {
+	if (!lp_build_tgsi_llvm(bld_base, tokens)) {
 		fprintf(stderr, "Failed to translate shader from TGSI to LLVM\n");
 		goto out;
 	}
@@ -2881,12 +2926,11 @@ int si_shader_create(struct si_screen *sscreen, struct si_shader *shader)
 		}
 	}
 
-	tgsi_parse_free(&si_shader_ctx.parse);
-
 out:
 	for (int i = 0; i < SI_NUM_CONST_BUFFERS; i++)
 		FREE(si_shader_ctx.constants[i]);
-
+	if (poly_stipple)
+		tgsi_free_tokens(tokens);
 	return r;
 }
 

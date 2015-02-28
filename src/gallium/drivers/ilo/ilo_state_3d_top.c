@@ -52,7 +52,7 @@ ve_init_cso(const struct ilo_dev_info *dev,
    };
    int format;
 
-   ILO_DEV_ASSERT(dev, 6, 7.5);
+   ILO_DEV_ASSERT(dev, 6, 8);
 
    switch (util_format_get_nr_components(state->src_format)) {
    case 1: comp[1] = GEN6_VFCOMP_STORE_0;
@@ -66,16 +66,16 @@ ve_init_cso(const struct ilo_dev_info *dev,
 
    STATIC_ASSERT(Elements(cso->payload) >= 2);
    cso->payload[0] =
-      vb_index << GEN6_VE_STATE_DW0_VB_INDEX__SHIFT |
-      GEN6_VE_STATE_DW0_VALID |
-      format << GEN6_VE_STATE_DW0_FORMAT__SHIFT |
-      state->src_offset << GEN6_VE_STATE_DW0_VB_OFFSET__SHIFT;
+      vb_index << GEN6_VE_DW0_VB_INDEX__SHIFT |
+      GEN6_VE_DW0_VALID |
+      format << GEN6_VE_DW0_FORMAT__SHIFT |
+      state->src_offset << GEN6_VE_DW0_VB_OFFSET__SHIFT;
 
    cso->payload[1] =
-         comp[0] << GEN6_VE_STATE_DW1_COMP0__SHIFT |
-         comp[1] << GEN6_VE_STATE_DW1_COMP1__SHIFT |
-         comp[2] << GEN6_VE_STATE_DW1_COMP2__SHIFT |
-         comp[3] << GEN6_VE_STATE_DW1_COMP3__SHIFT;
+         comp[0] << GEN6_VE_DW1_COMP0__SHIFT |
+         comp[1] << GEN6_VE_DW1_COMP1__SHIFT |
+         comp[2] << GEN6_VE_DW1_COMP2__SHIFT |
+         comp[3] << GEN6_VE_DW1_COMP3__SHIFT;
 }
 
 void
@@ -86,7 +86,7 @@ ilo_gpe_init_ve(const struct ilo_dev_info *dev,
 {
    unsigned i;
 
-   ILO_DEV_ASSERT(dev, 6, 7.5);
+   ILO_DEV_ASSERT(dev, 6, 8);
 
    ve->count = num_states;
    ve->vb_count = 0;
@@ -124,7 +124,7 @@ ilo_gpe_set_ve_edgeflag(const struct ilo_dev_info *dev,
 {
    int format;
 
-   ILO_DEV_ASSERT(dev, 6, 7.5);
+   ILO_DEV_ASSERT(dev, 6, 8);
 
    /*
     * From the Sandy Bridge PRM, volume 2 part 1, page 94:
@@ -142,7 +142,7 @@ ilo_gpe_set_ve_edgeflag(const struct ilo_dev_info *dev,
     *        to some set of corresponding edge-flag-supported primitive
     *        types (e.g., POLYGONs) prior to submission to the 3D pipeline."
     */
-   cso->payload[0] |= GEN6_VE_STATE_DW0_EDGE_FLAG_ENABLE;
+   cso->payload[0] |= GEN6_VE_DW0_EDGE_FLAG_ENABLE;
 
    /*
     * Edge flags have format GEN6_FORMAT_R8_USCALED when defined via
@@ -152,8 +152,8 @@ ilo_gpe_set_ve_edgeflag(const struct ilo_dev_info *dev,
     * Since all the hardware cares about is whether the flags are zero or not,
     * we can treat them as the corresponding _UINT formats.
     */
-   format = GEN_EXTRACT(cso->payload[0], GEN6_VE_STATE_DW0_FORMAT);
-   cso->payload[0] &= ~GEN6_VE_STATE_DW0_FORMAT__MASK;
+   format = GEN_EXTRACT(cso->payload[0], GEN6_VE_DW0_FORMAT);
+   cso->payload[0] &= ~GEN6_VE_DW0_FORMAT__MASK;
 
    switch (format) {
    case GEN6_FORMAT_R32_FLOAT:
@@ -166,13 +166,13 @@ ilo_gpe_set_ve_edgeflag(const struct ilo_dev_info *dev,
       break;
    }
 
-   cso->payload[0] |= GEN_SHIFT32(format, GEN6_VE_STATE_DW0_FORMAT);
+   cso->payload[0] |= GEN_SHIFT32(format, GEN6_VE_DW0_FORMAT);
 
    cso->payload[1] =
-         GEN6_VFCOMP_STORE_SRC << GEN6_VE_STATE_DW1_COMP0__SHIFT |
-         GEN6_VFCOMP_NOSTORE << GEN6_VE_STATE_DW1_COMP1__SHIFT |
-         GEN6_VFCOMP_NOSTORE << GEN6_VE_STATE_DW1_COMP2__SHIFT |
-         GEN6_VFCOMP_NOSTORE << GEN6_VE_STATE_DW1_COMP3__SHIFT;
+         GEN6_VFCOMP_STORE_SRC << GEN6_VE_DW1_COMP0__SHIFT |
+         GEN6_VFCOMP_NOSTORE << GEN6_VE_DW1_COMP1__SHIFT |
+         GEN6_VFCOMP_NOSTORE << GEN6_VE_DW1_COMP2__SHIFT |
+         GEN6_VFCOMP_NOSTORE << GEN6_VE_DW1_COMP3__SHIFT;
 }
 
 void
@@ -180,7 +180,7 @@ ilo_gpe_init_ve_nosrc(const struct ilo_dev_info *dev,
                           int comp0, int comp1, int comp2, int comp3,
                           struct ilo_ve_cso *cso)
 {
-   ILO_DEV_ASSERT(dev, 6, 7.5);
+   ILO_DEV_ASSERT(dev, 6, 8);
 
    STATIC_ASSERT(Elements(cso->payload) >= 2);
 
@@ -189,12 +189,12 @@ ilo_gpe_init_ve_nosrc(const struct ilo_dev_info *dev,
           comp2 != GEN6_VFCOMP_STORE_SRC &&
           comp3 != GEN6_VFCOMP_STORE_SRC);
 
-   cso->payload[0] = GEN6_VE_STATE_DW0_VALID;
+   cso->payload[0] = GEN6_VE_DW0_VALID;
    cso->payload[1] =
-         comp0 << GEN6_VE_STATE_DW1_COMP0__SHIFT |
-         comp1 << GEN6_VE_STATE_DW1_COMP1__SHIFT |
-         comp2 << GEN6_VE_STATE_DW1_COMP2__SHIFT |
-         comp3 << GEN6_VE_STATE_DW1_COMP3__SHIFT;
+         comp0 << GEN6_VE_DW1_COMP0__SHIFT |
+         comp1 << GEN6_VE_DW1_COMP1__SHIFT |
+         comp2 << GEN6_VE_DW1_COMP2__SHIFT |
+         comp3 << GEN6_VE_DW1_COMP3__SHIFT;
 }
 
 void
@@ -205,7 +205,7 @@ ilo_gpe_init_vs_cso(const struct ilo_dev_info *dev,
    int start_grf, vue_read_len, sampler_count, max_threads;
    uint32_t dw2, dw4, dw5;
 
-   ILO_DEV_ASSERT(dev, 6, 7.5);
+   ILO_DEV_ASSERT(dev, 6, 8);
 
    start_grf = ilo_shader_get_kernel_param(vs, ILO_KERNEL_URB_DATA_START_REG);
    vue_read_len = ilo_shader_get_kernel_param(vs, ILO_KERNEL_INPUT_COUNT);
@@ -734,7 +734,7 @@ view_init_null_gen7(const struct ilo_dev_info *dev,
 {
    uint32_t *dw;
 
-   ILO_DEV_ASSERT(dev, 7, 7.5);
+   ILO_DEV_ASSERT(dev, 7, 8);
 
    assert(width >= 1 && height >= 1 && depth >= 1);
 
@@ -769,12 +769,16 @@ view_init_null_gen7(const struct ilo_dev_info *dev,
     *      true"
     */
 
-   STATIC_ASSERT(Elements(surf->payload) >= 8);
+   STATIC_ASSERT(Elements(surf->payload) >= 13);
    dw = surf->payload;
 
    dw[0] = GEN6_SURFTYPE_NULL << GEN7_SURFACE_DW0_TYPE__SHIFT |
-           GEN6_FORMAT_B8G8R8A8_UNORM << GEN7_SURFACE_DW0_FORMAT__SHIFT |
-           GEN6_TILING_X << 13;
+           GEN6_FORMAT_B8G8R8A8_UNORM << GEN7_SURFACE_DW0_FORMAT__SHIFT;
+
+   if (ilo_dev_gen(dev) >= ILO_GEN(8))
+      dw[0] |= GEN6_TILING_X << GEN8_SURFACE_DW0_TILING__SHIFT;
+   else
+      dw[0] |= GEN6_TILING_X << GEN7_SURFACE_DW0_TILING__SHIFT;
 
    dw[1] = 0;
 
@@ -788,6 +792,9 @@ view_init_null_gen7(const struct ilo_dev_info *dev,
 
    dw[6] = 0;
    dw[7] = 0;
+
+   if (ilo_dev_gen(dev) >= ILO_GEN(8))
+      memset(&dw[8], 0, sizeof(*dw) * (13 - 8));
 
    surf->bo = NULL;
 }
@@ -809,7 +816,7 @@ view_init_for_buffer_gen7(const struct ilo_dev_info *dev,
    int surface_type, surface_format, num_entries;
    uint32_t *dw;
 
-   ILO_DEV_ASSERT(dev, 7, 7.5);
+   ILO_DEV_ASSERT(dev, 7, 8);
 
    surface_type = (structured) ? GEN7_SURFTYPE_STRBUF : GEN6_SURFTYPE_BUFFER;
 
@@ -884,7 +891,7 @@ view_init_for_buffer_gen7(const struct ilo_dev_info *dev,
    if (typed || structured)
       depth &= 0x3f;
 
-   STATIC_ASSERT(Elements(surf->payload) >= 8);
+   STATIC_ASSERT(Elements(surf->payload) >= 13);
    dw = surf->payload;
 
    dw[0] = surface_type << GEN7_SURFACE_DW0_TYPE__SHIFT |
@@ -892,7 +899,12 @@ view_init_for_buffer_gen7(const struct ilo_dev_info *dev,
    if (render_cache_rw)
       dw[0] |= GEN7_SURFACE_DW0_RENDER_CACHE_RW;
 
-   dw[1] = offset;
+   if (ilo_dev_gen(dev) >= ILO_GEN(8)) {
+      dw[8] = offset;
+      memset(&dw[9], 0, sizeof(*dw) * (13 - 9));
+   } else {
+      dw[1] = offset;
+   }
 
    dw[2] = GEN_SHIFT32(height, GEN7_SURFACE_DW2_HEIGHT) |
            GEN_SHIFT32(width, GEN7_SURFACE_DW2_WIDTH);
@@ -932,7 +944,7 @@ view_init_for_texture_gen7(const struct ilo_dev_info *dev,
    int width, height, depth, pitch, lod;
    uint32_t *dw;
 
-   ILO_DEV_ASSERT(dev, 7, 7.5);
+   ILO_DEV_ASSERT(dev, 7, 8);
 
    surface_type = ilo_gpe_gen6_translate_texture(tex->base.target);
    assert(surface_type != GEN6_SURFTYPE_BUFFER);
@@ -1037,12 +1049,11 @@ view_init_for_texture_gen7(const struct ilo_dev_info *dev,
       }
    }
 
-   STATIC_ASSERT(Elements(surf->payload) >= 8);
+   STATIC_ASSERT(Elements(surf->payload) >= 13);
    dw = surf->payload;
 
    dw[0] = surface_type << GEN7_SURFACE_DW0_TYPE__SHIFT |
-           surface_format << GEN7_SURFACE_DW0_FORMAT__SHIFT |
-           ilo_gpe_gen6_translate_winsys_tiling(tex->layout.tiling) << 13;
+           surface_format << GEN7_SURFACE_DW0_FORMAT__SHIFT;
 
    /*
     * From the Ivy Bridge PRM, volume 4 part 1, page 63:
@@ -1062,19 +1073,57 @@ view_init_for_texture_gen7(const struct ilo_dev_info *dev,
          assert(depth == 1);
    }
 
-   assert(tex->layout.align_i == 4 || tex->layout.align_i == 8);
-   assert(tex->layout.align_j == 2 || tex->layout.align_j == 4);
+   if (ilo_dev_gen(dev) >= ILO_GEN(8)) {
+      switch (tex->layout.align_j) {
+      case 4:
+         dw[0] |= GEN7_SURFACE_DW0_VALIGN_4;
+         break;
+      case 8:
+         dw[0] |= GEN8_SURFACE_DW0_VALIGN_8;
+         break;
+      case 16:
+         dw[0] |= GEN8_SURFACE_DW0_VALIGN_16;
+         break;
+      default:
+         assert(!"unsupported valign");
+         break;
+      }
 
-   if (tex->layout.align_j == 4)
-      dw[0] |= GEN7_SURFACE_DW0_VALIGN_4;
+      switch (tex->layout.align_i) {
+      case 4:
+         dw[0] |= GEN8_SURFACE_DW0_HALIGN_4;
+         break;
+      case 8:
+         dw[0] |= GEN8_SURFACE_DW0_HALIGN_8;
+         break;
+      case 16:
+         dw[0] |= GEN8_SURFACE_DW0_HALIGN_16;
+         break;
+      default:
+         assert(!"unsupported halign");
+         break;
+      }
 
-   if (tex->layout.align_i == 8)
-      dw[0] |= GEN7_SURFACE_DW0_HALIGN_8;
+      dw[0] |= ilo_gpe_gen6_translate_winsys_tiling(tex->layout.tiling) <<
+         GEN8_SURFACE_DW0_TILING__SHIFT;
+   } else {
+      assert(tex->layout.align_i == 4 || tex->layout.align_i == 8);
+      assert(tex->layout.align_j == 2 || tex->layout.align_j == 4);
 
-   if (tex->layout.walk == ILO_LAYOUT_WALK_LOD)
-      dw[0] |= GEN7_SURFACE_DW0_ARYSPC_LOD0;
-   else
-      dw[0] |= GEN7_SURFACE_DW0_ARYSPC_FULL;
+      if (tex->layout.align_j == 4)
+         dw[0] |= GEN7_SURFACE_DW0_VALIGN_4;
+
+      if (tex->layout.align_i == 8)
+         dw[0] |= GEN7_SURFACE_DW0_HALIGN_8;
+
+      dw[0] |= ilo_gpe_gen6_translate_winsys_tiling(tex->layout.tiling) <<
+         GEN7_SURFACE_DW0_TILING__SHIFT;
+
+      if (tex->layout.walk == ILO_LAYOUT_WALK_LOD)
+         dw[0] |= GEN7_SURFACE_DW0_ARYSPC_LOD0;
+      else
+         dw[0] |= GEN7_SURFACE_DW0_ARYSPC_FULL;
+   }
 
    if (is_rt)
       dw[0] |= GEN7_SURFACE_DW0_RENDER_CACHE_RW;
@@ -1082,7 +1131,12 @@ view_init_for_texture_gen7(const struct ilo_dev_info *dev,
    if (surface_type == GEN6_SURFTYPE_CUBE && !is_rt)
       dw[0] |= GEN7_SURFACE_DW0_CUBE_FACE_ENABLES__MASK;
 
-   dw[1] = 0;
+   if (ilo_dev_gen(dev) >= ILO_GEN(8)) {
+      assert(tex->layout.layer_height % 4 == 0);
+      dw[1] = tex->layout.layer_height / 4;
+   } else {
+      dw[1] = 0;
+   }
 
    dw[2] = GEN_SHIFT32(height - 1, GEN7_SURFACE_DW2_HEIGHT) |
            GEN_SHIFT32(width - 1, GEN7_SURFACE_DW2_WIDTH);
@@ -1106,12 +1160,25 @@ view_init_for_texture_gen7(const struct ilo_dev_info *dev,
       dw[4] |= GEN7_SURFACE_DW4_MSFMT_MSS;
    }
 
-   if (tex->base.nr_samples > 4)
-      dw[4] |= GEN7_SURFACE_DW4_MULTISAMPLECOUNT_8;
-   else if (tex->base.nr_samples > 2)
-      dw[4] |= GEN7_SURFACE_DW4_MULTISAMPLECOUNT_4;
-   else
+   switch (tex->base.nr_samples) {
+   case 0:
+   case 1:
+   default:
       dw[4] |= GEN7_SURFACE_DW4_MULTISAMPLECOUNT_1;
+      break;
+   case 2:
+      dw[4] |= GEN8_SURFACE_DW4_MULTISAMPLECOUNT_2;
+      break;
+   case 4:
+      dw[4] |= GEN7_SURFACE_DW4_MULTISAMPLECOUNT_4;
+      break;
+   case 8:
+      dw[4] |= GEN7_SURFACE_DW4_MULTISAMPLECOUNT_8;
+      break;
+   case 16:
+      dw[4] |= GEN8_SURFACE_DW4_MULTISAMPLECOUNT_16;
+      break;
+   }
 
    dw[5] = GEN_SHIFT32(first_level, GEN7_SURFACE_DW5_MIN_LOD) |
            lod;
@@ -1125,6 +1192,9 @@ view_init_for_texture_gen7(const struct ilo_dev_info *dev,
                GEN_SHIFT32(GEN75_SCS_BLUE,  GEN75_SURFACE_DW7_SCS_B) |
                GEN_SHIFT32(GEN75_SCS_ALPHA, GEN75_SURFACE_DW7_SCS_A);
    }
+
+   if (ilo_dev_gen(dev) >= ILO_GEN(8))
+      memset(&dw[8], 0, sizeof(*dw) * (13 - 8));
 
    /* do not increment reference count */
    surf->bo = tex->bo;
@@ -1288,20 +1358,14 @@ gen6_translate_tex_filter(unsigned filter)
  * wrapping mode.
  */
 static int
-gen6_translate_tex_wrap(unsigned wrap, bool clamp_to_edge)
+gen6_translate_tex_wrap(unsigned wrap)
 {
-   /* clamp to edge or border? */
-   if (wrap == PIPE_TEX_WRAP_CLAMP) {
-      wrap = (clamp_to_edge) ?
-         PIPE_TEX_WRAP_CLAMP_TO_EDGE : PIPE_TEX_WRAP_CLAMP_TO_BORDER;
-   }
-
    switch (wrap) {
+   case PIPE_TEX_WRAP_CLAMP:              return GEN8_TEXCOORDMODE_HALF_BORDER;
    case PIPE_TEX_WRAP_REPEAT:             return GEN6_TEXCOORDMODE_WRAP;
    case PIPE_TEX_WRAP_CLAMP_TO_EDGE:      return GEN6_TEXCOORDMODE_CLAMP;
    case PIPE_TEX_WRAP_CLAMP_TO_BORDER:    return GEN6_TEXCOORDMODE_CLAMP_BORDER;
    case PIPE_TEX_WRAP_MIRROR_REPEAT:      return GEN6_TEXCOORDMODE_MIRROR;
-   case PIPE_TEX_WRAP_CLAMP:
    case PIPE_TEX_WRAP_MIRROR_CLAMP:
    case PIPE_TEX_WRAP_MIRROR_CLAMP_TO_EDGE:
    case PIPE_TEX_WRAP_MIRROR_CLAMP_TO_BORDER:
@@ -1348,10 +1412,9 @@ ilo_gpe_init_sampler_cso(const struct ilo_dev_info *dev,
    int mip_filter, min_filter, mag_filter, max_aniso;
    int lod_bias, max_lod, min_lod;
    int wrap_s, wrap_t, wrap_r, wrap_cube;
-   bool clamp_is_to_edge;
    uint32_t dw0, dw1, dw3;
 
-   ILO_DEV_ASSERT(dev, 6, 7.5);
+   ILO_DEV_ASSERT(dev, 6, 8);
 
    memset(sampler, 0, sizeof(*sampler));
 
@@ -1428,26 +1491,46 @@ ilo_gpe_init_sampler_cso(const struct ilo_dev_info *dev,
       mag_filter = min_filter;
    }
 
-   /*
-    * For nearest filtering, PIPE_TEX_WRAP_CLAMP means
-    * PIPE_TEX_WRAP_CLAMP_TO_EDGE;  for linear filtering, PIPE_TEX_WRAP_CLAMP
-    * means PIPE_TEX_WRAP_CLAMP_TO_BORDER while additionally clamping the
-    * texture coordinates to [0.0, 1.0].
-    *
-    * The clamping will be taken care of in the shaders.  There are two
-    * filters here, but let the minification one has a say.
-    */
-   clamp_is_to_edge = (state->min_img_filter == PIPE_TEX_FILTER_NEAREST);
-   if (!clamp_is_to_edge) {
-      sampler->saturate_s = (state->wrap_s == PIPE_TEX_WRAP_CLAMP);
-      sampler->saturate_t = (state->wrap_t == PIPE_TEX_WRAP_CLAMP);
-      sampler->saturate_r = (state->wrap_r == PIPE_TEX_WRAP_CLAMP);
-   }
-
    /* determine wrap s/t/r */
-   wrap_s = gen6_translate_tex_wrap(state->wrap_s, clamp_is_to_edge);
-   wrap_t = gen6_translate_tex_wrap(state->wrap_t, clamp_is_to_edge);
-   wrap_r = gen6_translate_tex_wrap(state->wrap_r, clamp_is_to_edge);
+   wrap_s = gen6_translate_tex_wrap(state->wrap_s);
+   wrap_t = gen6_translate_tex_wrap(state->wrap_t);
+   wrap_r = gen6_translate_tex_wrap(state->wrap_r);
+   if (ilo_dev_gen(dev) < ILO_GEN(8)) {
+      /*
+       * For nearest filtering, PIPE_TEX_WRAP_CLAMP means
+       * PIPE_TEX_WRAP_CLAMP_TO_EDGE;  for linear filtering,
+       * PIPE_TEX_WRAP_CLAMP means PIPE_TEX_WRAP_CLAMP_TO_BORDER while
+       * additionally clamping the texture coordinates to [0.0, 1.0].
+       *
+       * PIPE_TEX_WRAP_CLAMP is not supported natively until Gen8.  The
+       * clamping has to be taken care of in the shaders.  There are two
+       * filters here, but let the minification one has a say.
+       */
+      const bool clamp_is_to_edge =
+         (state->min_img_filter == PIPE_TEX_FILTER_NEAREST);
+
+      if (clamp_is_to_edge) {
+         if (wrap_s == GEN8_TEXCOORDMODE_HALF_BORDER)
+            wrap_s = GEN6_TEXCOORDMODE_CLAMP;
+         if (wrap_t == GEN8_TEXCOORDMODE_HALF_BORDER)
+            wrap_t = GEN6_TEXCOORDMODE_CLAMP;
+         if (wrap_r == GEN8_TEXCOORDMODE_HALF_BORDER)
+            wrap_r = GEN6_TEXCOORDMODE_CLAMP;
+      } else {
+         if (wrap_s == GEN8_TEXCOORDMODE_HALF_BORDER) {
+            wrap_s = GEN6_TEXCOORDMODE_CLAMP_BORDER;
+            sampler->saturate_s = true;
+         }
+         if (wrap_t == GEN8_TEXCOORDMODE_HALF_BORDER) {
+            wrap_t = GEN6_TEXCOORDMODE_CLAMP_BORDER;
+            sampler->saturate_t = true;
+         }
+         if (wrap_r == GEN8_TEXCOORDMODE_HALF_BORDER) {
+            wrap_r = GEN6_TEXCOORDMODE_CLAMP_BORDER;
+            sampler->saturate_r = true;
+         }
+      }
+   }
 
    /*
     * From the Sandy Bridge PRM, volume 4 part 1, page 107:

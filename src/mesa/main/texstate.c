@@ -40,7 +40,7 @@
 #include "teximage.h"
 #include "texstate.h"
 #include "mtypes.h"
-#include "bitset.h"
+#include "util/bitset.h"
 
 
 /**
@@ -68,8 +68,8 @@ _mesa_copy_texture_state( const struct gl_context *src, struct gl_context *dst )
 {
    GLuint u, tex;
 
-   ASSERT(src);
-   ASSERT(dst);
+   assert(src);
+   assert(dst);
 
    dst->Texture.CurrentUnit = src->Texture.CurrentUnit;
    dst->Texture._GenFlags = src->Texture._GenFlags;
@@ -292,7 +292,7 @@ _mesa_ActiveTexture(GLenum texture)
 
    k = _mesa_max_tex_unit(ctx);
 
-   ASSERT(k <= Elements(ctx->Texture.Unit));
+   assert(k <= Elements(ctx->Texture.Unit));
 
    if (MESA_VERBOSE & (VERBOSE_API|VERBOSE_TEXTURE))
       _mesa_debug(ctx, "glActiveTexture %s\n",
@@ -363,7 +363,7 @@ update_texture_matrices( struct gl_context *ctx )
    ctx->Texture._TexMatEnabled = 0x0;
 
    for (u = 0; u < ctx->Const.MaxTextureCoordUnits; u++) {
-      ASSERT(u < Elements(ctx->TextureMatrixStack));
+      assert(u < Elements(ctx->TextureMatrixStack));
       if (_math_matrix_is_dirty(ctx->TextureMatrixStack[u].Top)) {
 	 _math_matrix_analyse( ctx->TextureMatrixStack[u].Top );
 
@@ -501,7 +501,7 @@ update_texgen(struct gl_context *ctx)
 	 ctx->Texture._GenFlags |= texUnit->_GenFlags;
       }
 
-      ASSERT(unit < Elements(ctx->TextureMatrixStack));
+      assert(unit < Elements(ctx->TextureMatrixStack));
       if (ctx->TextureMatrixStack[unit].Top->type != MATRIX_IDENTITY)
 	 ctx->Texture._TexMatEnabled |= ENABLE_TEXMAT(unit);
    }
@@ -882,8 +882,17 @@ _mesa_init_texture(struct gl_context *ctx)
     *     "OpenGL ES 3.0 requires that all cube map filtering be
     *     seamless. OpenGL ES 2.0 specified that a single cube map face be
     *     selected and used for filtering."
+    *
+    * Unfortunatley, a call to _mesa_is_gles3 below will only work if
+    * the driver has already computed and set ctx->Version, however drivers
+    * seem to call _mesa_initialize_context (which calls this) early
+    * in the CreateContext hook and _mesa_compute_version much later (since
+    * it needs information about available extensions). So, we will
+    * enable seamless cubemaps by default since GLES2. This should work
+    * for most implementations and drivers that don't support seamless
+    * cubemaps for GLES2 can still disable it.
     */
-   ctx->Texture.CubeMapSeamless = _mesa_is_gles3(ctx);
+   ctx->Texture.CubeMapSeamless = ctx->API == API_OPENGLES2;
 
    for (u = 0; u < Elements(ctx->Texture.Unit); u++)
       init_texture_unit(ctx, u);

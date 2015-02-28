@@ -27,7 +27,14 @@
 #include "main/compiler.h"
 #include "glsl/ir.h"
 
+#ifdef __cplusplus
+#include "brw_ir_allocator.h"
+#endif
+
 #pragma once
+
+#define MAX_SAMPLER_MESSAGE_SIZE 11
+#define MAX_VGRF_SIZE 16
 
 enum PACKED register_file {
    BAD_FILE,
@@ -44,6 +51,7 @@ struct backend_reg
 #ifdef __cplusplus
    bool is_zero() const;
    bool is_one() const;
+   bool is_negative_one() const;
    bool is_null() const;
    bool is_accumulator() const;
 #endif
@@ -118,6 +126,7 @@ struct backend_instruction {
    uint8_t mlen; /**< SEND message length */
    int8_t base_mrf; /**< First MRF in the SEND message, if mlen is nonzero. */
    uint8_t target; /**< MRT target. */
+   uint8_t regs_written; /**< Number of registers written by the instruction. */
 
    enum opcode opcode; /* BRW_OPCODE_* or FS_OPCODE_* */
    enum brw_conditional_mod conditional_mod; /**< BRW_CONDITIONAL_* */
@@ -130,6 +139,11 @@ struct backend_instruction {
    bool saturate:1;
    bool shadow_compare:1;
    bool header_present:1;
+
+   /* Chooses which flag subregister (f0.0 or f0.1) is used for conditional
+    * mod and predication.
+    */
+   unsigned flag_subreg:1;
 };
 
 #ifdef __cplusplus
@@ -171,6 +185,11 @@ public:
    cfg_t *cfg;
 
    gl_shader_stage stage;
+   bool debug_enabled;
+   const char *stage_name;
+   const char *stage_abbrev;
+
+   brw::simple_allocator alloc;
 
    virtual void dump_instruction(backend_instruction *inst) = 0;
    virtual void dump_instruction(backend_instruction *inst, FILE *file) = 0;
@@ -195,6 +214,8 @@ enum brw_conditional_mod brw_conditional_for_comparison(unsigned int op);
 uint32_t brw_math_function(enum opcode op);
 const char *brw_instruction_name(enum opcode op);
 bool brw_saturate_immediate(enum brw_reg_type type, struct brw_reg *reg);
+bool brw_negate_immediate(enum brw_reg_type type, struct brw_reg *reg);
+bool brw_abs_immediate(enum brw_reg_type type, struct brw_reg *reg);
 
 #ifdef __cplusplus
 extern "C" {

@@ -219,8 +219,16 @@ struct ilo_rasterizer_clip {
 
 struct ilo_rasterizer_sf {
    /* 3DSTATE_SF */
-   uint32_t payload[6];
+   uint32_t payload[3];
    uint32_t dw_msaa;
+
+   /* Global Depth Offset Constant/Scale/Clamp */
+   uint32_t dw_depth_offset_const;
+   uint32_t dw_depth_offset_scale;
+   uint32_t dw_depth_offset_clamp;
+
+   /* Gen8+ 3DSTATE_RASTER */
+   uint32_t dw_raster;
 };
 
 struct ilo_rasterizer_wm {
@@ -239,10 +247,11 @@ struct ilo_rasterizer_state {
 };
 
 struct ilo_dsa_state {
-   /* DEPTH_STENCIL_STATE */
+   /* DEPTH_STENCIL_STATE or Gen8+ 3DSTATE_WM_DEPTH_STENCIL */
    uint32_t payload[3];
 
-   uint32_t dw_alpha;
+   uint32_t dw_blend_alpha;
+   uint32_t dw_ps_blend_alpha;
    ubyte alpha_ref;
 };
 
@@ -252,17 +261,21 @@ struct ilo_blend_cso {
 
    uint32_t dw_blend;
    uint32_t dw_blend_dst_alpha_forced_one;
-
-   uint32_t dw_logicop;
-   uint32_t dw_alpha_mod;
 };
 
 struct ilo_blend_state {
    struct ilo_blend_cso cso[ILO_MAX_DRAW_BUFFERS];
 
-   bool independent_blend_enable;
    bool dual_blend;
    bool alpha_to_coverage;
+
+   uint32_t dw_shared;
+   uint32_t dw_alpha_mod;
+   uint32_t dw_logicop;
+
+   /* a part of 3DSTATE_PS_BLEND */
+   uint32_t dw_ps_blend;
+   uint32_t dw_ps_blend_dst_alpha_forced_one;
 };
 
 struct ilo_sampler_cso {
@@ -287,7 +300,7 @@ struct ilo_sampler_state {
 
 struct ilo_view_surface {
    /* SURFACE_STATE */
-   uint32_t payload[8];
+   uint32_t payload[13];
    struct intel_bo *bo;
 };
 
@@ -331,7 +344,7 @@ struct ilo_surface_cso {
    union {
       struct ilo_view_surface rt;
       struct ilo_zs_surface {
-         uint32_t payload[10];
+         uint32_t payload[12];
          uint32_t dw_aligned_8x4;
 
          struct intel_bo *bo;

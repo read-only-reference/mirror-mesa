@@ -290,7 +290,28 @@ intel_miptree_create_layout(struct brw_context *brw,
       /* Adjust width/height/depth for MSAA */
       mt->msaa_layout = compute_msaa_layout(brw, format, mt->target);
       if (mt->msaa_layout == INTEL_MSAA_LAYOUT_IMS) {
-         /* In the Sandy Bridge PRM, volume 4, part 1, page 31, it says:
+         /* From the Ivybridge PRM, Volume 1, Part 1, page 108:
+          * "If the surface is multisampled and it is a depth or stencil
+          *  surface or Multisampled Surface StorageFormat in SURFACE_STATE is
+          *  MSFMT_DEPTH_STENCIL, WL and HL must be adjusted as follows before
+          *  proceeding:
+          *
+          *  +----------------------------------------------------------------+
+          *  | Num Multisamples |        W_l =         |        H_l =         |
+          *  +----------------------------------------------------------------+
+          *  |         2        | ceiling(W_l / 2) * 4 | H_l (no adjustment)  |
+          *  |         4        | ceiling(W_l / 2) * 4 | ceiling(H_l / 2) * 4 |
+          *  |         8        | ceiling(W_l / 2) * 8 | ceiling(H_l / 2) * 4 |
+          *  |        16        | ceiling(W_l / 2) * 8 | ceiling(H_l / 2) * 8 |
+          *  +----------------------------------------------------------------+
+          * "
+          *
+          * Note that MSFMT_DEPTH_STENCIL just means the IMS (interleaved)
+          * format rather than UMS/CMS (array slices).  The Sandybridge PRM,
+          * Volume 1, Part 1, Page 111 has the same formula for 4x MSAA.
+          *
+          * Another more complicated explanation for these adjustments comes
+          * from the Sandybridge PRM, volume 4, part 1, page 31:
           *
           *     "Any of the other messages (sample*, LOD, load4) used with a
           *      (4x) multisampled surface will in-effect sample a surface with
@@ -467,6 +488,13 @@ intel_miptree_choose_tiling(struct brw_context *brw,
        base_format == GL_DEPTH_STENCIL_EXT)
       return I915_TILING_Y;
 
+   /* 1D textures (and 1D array textures) don't get any benefit from tiling,
+    * in fact it leads to a less efficient use of memory space and bandwidth
+    * due to tile alignment.
+    */
+   if (mt->logical_height0 == 1)
+      return I915_TILING_NONE;
+
    int minimum_pitch = mt->total_width * mt->cpp;
 
    /* If the width is much smaller than a tile, don't bother tiling. */
@@ -487,10 +515,10 @@ intel_miptree_choose_tiling(struct brw_context *brw,
    /* From the Sandybridge PRM, Volume 1, Part 2, page 32:
     * "NOTE: 128BPE Format Color Buffer ( render target ) MUST be either TileX
     *  or Linear."
-    * 128 bits per pixel translates to 16 bytes per pixel.  This is necessary
-    * all the way back to 965, but is explicitly permitted on Gen7.
+    * 128 bits per pixel translates to 16 bytes per pixel. This is necessary
+    * all the way back to 965, but is permitted on Gen7+.
     */
-   if (brw->gen != 7 && mt->cpp >= 16)
+   if (brw->gen < 7 && mt->cpp >= 16)
       return I915_TILING_X;
 
    /* From the Ivy Bridge PRM, Vol4 Part1 2.12.2.1 (SURFACE_STATE for most
@@ -621,10 +649,10 @@ intel_miptree_create(struct brw_context *brw,
    mt->pitch = pitch;
 
    /* If the BO is too large to fit in the aperture, we need to use the
-    * BLT engine to support it.  The BLT paths can't currently handle Y-tiling,
-    * so we need to fall back to X.
+    * BLT engine to support it.  Prior to Sandybridge, the BLT paths can't
+    * handle Y-tiling, so we need to fall back to X.
     */
-   if (y_or_x && mt->bo->size >= brw->max_gtt_map_object_size) {
+   if (brw->gen < 6 && y_or_x && mt->bo->size >= brw->max_gtt_map_object_size) {
       perf_debug("%dx%d miptree larger than aperture; falling back to X-tiled\n",
                  mt->total_width, mt->total_height);
 
@@ -1249,7 +1277,12 @@ intel_miptree_copy_teximage(struct brw_context *brw,
       intel_texture_object(intelImage->base.Base.TexObject);
    int level = intelImage->base.Base.Level;
    int face = intelImage->base.Base.Face;
-   GLuint depth = intelImage->base.Base.Depth;
+
+   GLuint depth;
+   if (intel_obj->base.Target == GL_TEXTURE_1D_ARRAY)
+      depth = intelImage->base.Base.Height;
+   else
+      depth = intelImage->base.Base.Depth;
 
    if (!invalidate) {
       for (int slice = 0; slice < depth; slice++) {
@@ -2265,10 +2298,39 @@ can_blit_slice(struct intel_mipmap_tree *mt,
    if (image_x >= 32768 || image_y >= 32768)
       return false;
 
+   /* See intel_miptree_blit() for details on the 32k pitch limit. */
    if (mt->pitch >= 32768)
       return false;
 
    return true;
+}
+
+static bool
+use_intel_mipree_map_blit(struct brw_context *brw,
+                          struct intel_mipmap_tree *mt,
+                          GLbitfield mode,
+                          unsigned int level,
+                          unsigned int slice)
+{
+   if (brw->has_llc &&
+      /* It's probably not worth swapping to the blit ring because of
+       * all the overhead involved.
+       */
+       !(mode & GL_MAP_WRITE_BIT) &&
+       !mt->compressed &&
+       (mt->tiling == I915_TILING_X ||
+        /* Prior to Sandybridge, the blitter can't handle Y tiling */
+        (brw->gen >= 6 && mt->tiling == I915_TILING_Y)) &&
+       can_blit_slice(mt, level, slice))
+      return true;
+
+   if (mt->tiling != I915_TILING_NONE &&
+       mt->bo->size >= brw->max_gtt_map_object_size) {
+      assert(can_blit_slice(mt, level, slice));
+      return true;
+   }
+
+   return false;
 }
 
 /**
@@ -2318,18 +2380,7 @@ intel_miptree_map(struct brw_context *brw,
       intel_miptree_map_etc(brw, mt, map, level, slice);
    } else if (mt->stencil_mt && !(mode & BRW_MAP_DIRECT_BIT)) {
       intel_miptree_map_depthstencil(brw, mt, map, level, slice);
-   }
-   /* See intel_miptree_blit() for details on the 32k pitch limit. */
-   else if (brw->has_llc &&
-            !(mode & GL_MAP_WRITE_BIT) &&
-            !mt->compressed &&
-            (mt->tiling == I915_TILING_X ||
-             (brw->gen >= 6 && mt->tiling == I915_TILING_Y)) &&
-            can_blit_slice(mt, level, slice)) {
-      intel_miptree_map_blit(brw, mt, map, level, slice);
-   } else if (mt->tiling != I915_TILING_NONE &&
-              mt->bo->size >= brw->max_gtt_map_object_size) {
-      assert(can_blit_slice(mt, level, slice));
+   } else if (use_intel_mipree_map_blit(brw, mt, mode, level, slice)) {
       intel_miptree_map_blit(brw, mt, map, level, slice);
 #if defined(USE_SSE41)
    } else if (!(mode & GL_MAP_WRITE_BIT) && !mt->compressed && cpu_has_sse4_1) {

@@ -520,7 +520,7 @@ static void radeonColorMask( struct gl_context *ctx,
  */
 
 static void radeonPolygonOffset( struct gl_context *ctx,
-				 GLfloat factor, GLfloat units )
+				 GLfloat factor, GLfloat units, GLfloat clamp )
 {
    r100ContextPtr rmesa = R100_CONTEXT(ctx);
    const GLfloat depthScale = 1.0F / ctx->DrawBuffer->_DepthMaxF;
@@ -1434,7 +1434,7 @@ static void radeonLogicOpCode( struct gl_context *ctx, GLenum opcode )
    r100ContextPtr rmesa = R100_CONTEXT(ctx);
    GLuint rop = (GLuint)opcode - GL_CLEAR;
 
-   ASSERT( rop < 16 );
+   assert( rop < 16 );
 
    RADEON_STATECHANGE( rmesa, msk );
    rmesa->hw.msk.cmd[MSK_RB3D_ROPCNTL] = radeon_rop_tab[rop];

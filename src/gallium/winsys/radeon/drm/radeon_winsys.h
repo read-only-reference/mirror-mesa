@@ -214,6 +214,7 @@ struct radeon_info {
 
     boolean                     has_uvd;
     uint32_t                    vce_fw_version;
+    boolean                     has_userptr;
 
     uint32_t                    r300_num_gb_pipes;
     uint32_t                    r300_num_z_pipes;
@@ -392,6 +393,17 @@ struct radeon_winsys {
     struct pb_buffer *(*buffer_from_handle)(struct radeon_winsys *ws,
                                             struct winsys_handle *whandle,
                                             unsigned *stride);
+
+    /**
+     * Get a winsys buffer from a user pointer. The resulting buffer can't
+     * be exported. Both pointer and size must be page aligned.
+     *
+     * \param ws        The winsys this function is called from.
+     * \param pointer   User pointer to turn into a buffer object.
+     * \param Size      Size in bytes for the new buffer.
+     */
+    struct pb_buffer *(*buffer_from_ptr)(struct radeon_winsys *ws,
+                                         void *pointer, unsigned size);
 
     /**
      * Get a winsys handle from a winsys buffer. The internal structure

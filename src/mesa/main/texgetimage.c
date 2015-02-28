@@ -375,7 +375,7 @@ get_tex_rgba_uncompressed(struct gl_context *ctx, GLuint dimensions,
    GLuint height = texImage->Height;
    GLuint depth = texImage->Depth;
    GLuint img;
-   GLboolean dst_is_integer = _mesa_is_enum_format_integer(format);
+   GLboolean dst_is_integer;
    uint32_t dst_format;
    int dst_stride;
    uint8_t rebaseSwizzle[4];
@@ -423,6 +423,7 @@ get_tex_rgba_uncompressed(struct gl_context *ctx, GLuint dimensions,
     * integer then transferOps do not apply.
     */
    assert(!transferOps || (transferOps && !dst_is_integer));
+   (void) dst_is_integer; /* silence unused var warning */
 
    for (img = 0; img < depth; img++) {
       GLubyte *srcMap;
@@ -450,7 +451,7 @@ get_tex_rgba_uncompressed(struct gl_context *ctx, GLuint dimensions,
       if (transferOps) {
          uint32_t rgba_format;
          int rgba_stride;
-         bool need_convert;
+         bool need_convert = false;
 
          /* We will convert to RGBA float */
          rgba_format = RGBA32_FLOAT;
@@ -462,7 +463,6 @@ get_tex_rgba_uncompressed(struct gl_context *ctx, GLuint dimensions,
           * buffer.
           */
          if (format == rgba_format) {
-            need_convert = false;
             rgba = dest;
          } else if (rgba == NULL) { /* Allocate the RGBA buffer only once */
             need_convert = true;
@@ -511,12 +511,15 @@ get_tex_rgba_uncompressed(struct gl_context *ctx, GLuint dimensions,
    do_swap:
       /* Handle byte swapping if required */
       if (ctx->Pack.SwapBytes) {
-         int components = _mesa_components_in_format(format);
          GLint swapSize = _mesa_sizeof_packed_type(type);
-         if (swapSize == 2)
-            _mesa_swap2((GLushort *) dest, width * height * components);
-         else if (swapSize == 4)
-            _mesa_swap4((GLuint *) dest, width * height * components);
+         if (swapSize == 2 || swapSize == 4) {
+            int swapsPerPixel = _mesa_bytes_per_pixel(format, type) / swapSize;
+            assert(_mesa_bytes_per_pixel(format, type) % swapSize == 0);
+            if (swapSize == 2)
+               _mesa_swap2((GLushort *) dest, width * height * swapsPerPixel);
+            else if (swapSize == 4)
+               _mesa_swap4((GLuint *) dest, width * height * swapsPerPixel);
+         }
       }
 
       /* Unmap the src texture buffer */
@@ -740,7 +743,7 @@ _mesa_GetCompressedTexImage_sw(struct gl_context *ctx,
       GLubyte *src;
 
       /* map src texture buffer */
-      ctx->Driver.MapTextureImage(ctx, texImage, 0,
+      ctx->Driver.MapTextureImage(ctx, texImage, slice,
                                   0, 0, texImage->Width, texImage->Height,
                                   GL_MAP_READ_BIT, &src, &srcRowStride);
 
@@ -752,7 +755,7 @@ _mesa_GetCompressedTexImage_sw(struct gl_context *ctx,
             src += srcRowStride;
          }
 
-         ctx->Driver.UnmapTextureImage(ctx, texImage, 0);
+         ctx->Driver.UnmapTextureImage(ctx, texImage, slice);
 
          /* Advance to next slice */
          dest += store.TotalBytesPerRow * (store.TotalRowsPerSlice - store.CopyRowsPerSlice);

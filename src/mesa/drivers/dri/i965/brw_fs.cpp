@@ -54,13 +54,16 @@ extern "C" {
 
 void
 fs_inst::init(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
-              fs_reg *src, int sources)
+              const fs_reg *src, unsigned sources)
 {
    memset(this, 0, sizeof(*this));
 
+   this->src = new fs_reg[MAX2(sources, 3)];
+   for (unsigned i = 0; i < sources; i++)
+      this->src[i] = src[i];
+
    this->opcode = opcode;
    this->dst = dst;
-   this->src = src;
    this->sources = sources;
    this->exec_size = exec_size;
 
@@ -75,7 +78,7 @@ fs_inst::init(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
       if (dst.file == GRF) {
          this->exec_size = dst.width;
       } else {
-         for (int i = 0; i < sources; ++i) {
+         for (unsigned i = 0; i < sources; ++i) {
             if (src[i].file != GRF && src[i].file != ATTR)
                continue;
 
@@ -90,7 +93,7 @@ fs_inst::init(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
    }
    assert(this->exec_size != 0);
 
-   for (int i = 0; i < sources; ++i) {
+   for (unsigned i = 0; i < sources; ++i) {
       switch (this->src[i].file) {
       case BAD_FILE:
          this->src[i].effective_width = 8;
@@ -123,7 +126,8 @@ fs_inst::init(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
    case HW_REG:
    case MRF:
    case ATTR:
-      this->regs_written = (dst.width * dst.stride * type_sz(dst.type) + 31) / 32;
+      this->regs_written =
+         DIV_ROUND_UP(MAX2(dst.width * dst.stride, 1) * type_sz(dst.type), 32);
       break;
    case BAD_FILE:
       this->regs_written = 0;
@@ -140,82 +144,68 @@ fs_inst::init(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
 
 fs_inst::fs_inst()
 {
-   fs_reg *src = ralloc_array(this, fs_reg, 3);
-   init(BRW_OPCODE_NOP, 8, dst, src, 0);
+   init(BRW_OPCODE_NOP, 8, dst, NULL, 0);
 }
 
 fs_inst::fs_inst(enum opcode opcode, uint8_t exec_size)
 {
-   fs_reg *src = ralloc_array(this, fs_reg, 3);
-   init(opcode, exec_size, reg_undef, src, 0);
+   init(opcode, exec_size, reg_undef, NULL, 0);
 }
 
 fs_inst::fs_inst(enum opcode opcode, const fs_reg &dst)
 {
-   fs_reg *src = ralloc_array(this, fs_reg, 3);
-   init(opcode, 0, dst, src, 0);
+   init(opcode, 0, dst, NULL, 0);
 }
 
 fs_inst::fs_inst(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
                  const fs_reg &src0)
 {
-   fs_reg *src = ralloc_array(this, fs_reg, 3);
-   src[0] = src0;
+   const fs_reg src[1] = { src0 };
    init(opcode, exec_size, dst, src, 1);
 }
 
 fs_inst::fs_inst(enum opcode opcode, const fs_reg &dst, const fs_reg &src0)
 {
-   fs_reg *src = ralloc_array(this, fs_reg, 3);
-   src[0] = src0;
+   const fs_reg src[1] = { src0 };
    init(opcode, 0, dst, src, 1);
 }
 
 fs_inst::fs_inst(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
                  const fs_reg &src0, const fs_reg &src1)
 {
-   fs_reg *src = ralloc_array(this, fs_reg, 3);
-   src[0] = src0;
-   src[1] = src1;
+   const fs_reg src[2] = { src0, src1 };
    init(opcode, exec_size, dst, src, 2);
 }
 
 fs_inst::fs_inst(enum opcode opcode, const fs_reg &dst, const fs_reg &src0,
                  const fs_reg &src1)
 {
-   fs_reg *src = ralloc_array(this, fs_reg, 3);
-   src[0] = src0;
-   src[1] = src1;
+   const fs_reg src[2] = { src0, src1 };
    init(opcode, 0, dst, src, 2);
 }
 
 fs_inst::fs_inst(enum opcode opcode, uint8_t exec_size, const fs_reg &dst,
                  const fs_reg &src0, const fs_reg &src1, const fs_reg &src2)
 {
-   fs_reg *src = ralloc_array(this, fs_reg, 3);
-   src[0] = src0;
-   src[1] = src1;
-   src[2] = src2;
+   const fs_reg src[3] = { src0, src1, src2 };
    init(opcode, exec_size, dst, src, 3);
 }
 
 fs_inst::fs_inst(enum opcode opcode, const fs_reg &dst, const fs_reg &src0,
                  const fs_reg &src1, const fs_reg &src2)
 {
-   fs_reg *src = ralloc_array(this, fs_reg, 3);
-   src[0] = src0;
-   src[1] = src1;
-   src[2] = src2;
+   const fs_reg src[3] = { src0, src1, src2 };
    init(opcode, 0, dst, src, 3);
 }
 
-fs_inst::fs_inst(enum opcode opcode, const fs_reg &dst, fs_reg src[], int sources)
+fs_inst::fs_inst(enum opcode opcode, const fs_reg &dst,
+                 const fs_reg src[], unsigned sources)
 {
    init(opcode, 0, dst, src, sources);
 }
 
 fs_inst::fs_inst(enum opcode opcode, uint8_t exec_width, const fs_reg &dst,
-                 fs_reg src[], int sources)
+                 const fs_reg src[], unsigned sources)
 {
    init(opcode, exec_width, dst, src, sources);
 }
@@ -224,17 +214,28 @@ fs_inst::fs_inst(const fs_inst &that)
 {
    memcpy(this, &that, sizeof(that));
 
-   this->src = ralloc_array(this, fs_reg, that.sources);
+   this->src = new fs_reg[MAX2(that.sources, 3)];
 
-   for (int i = 0; i < that.sources; i++)
+   for (unsigned i = 0; i < that.sources; i++)
       this->src[i] = that.src[i];
+}
+
+fs_inst::~fs_inst()
+{
+   delete[] this->src;
 }
 
 void
 fs_inst::resize_sources(uint8_t num_sources)
 {
    if (this->sources != num_sources) {
-      this->src = reralloc(this, this->src, fs_reg, num_sources);
+      fs_reg *src = new fs_reg[MAX2(num_sources, 3)];
+
+      for (unsigned i = 0; i < MIN2(this->sources, num_sources); ++i)
+         src[i] = this->src[i];
+
+      delete[] this->src;
+      this->src = src;
       this->sources = num_sources;
    }
 }
@@ -339,17 +340,13 @@ fs_visitor::CMP(fs_reg dst, fs_reg src0, fs_reg src1,
     *
     * Original gen4 does type conversion to the destination type before
     * comparison, producing garbage results for floating point comparisons.
-    * gen5 does the comparison on the execution type (resolved source types),
-    * so dst type doesn't matter.  gen6 does comparison and then uses the
-    * result as if it was the dst type with no conversion, which happens to
-    * mostly work out for float-interpreted-as-int since our comparisons are
-    * for >0, =0, <0.
+    *
+    * The destination type doesn't matter on newer generations, so we set the
+    * type to match src0 so we can compact the instruction.
     */
-   if (brw->gen == 4) {
-      dst.type = src0.type;
-      if (dst.file == HW_REG)
-	 dst.fixed_hw_reg.type = dst.type;
-   }
+   dst.type = src0.type;
+   if (dst.file == HW_REG)
+      dst.fixed_hw_reg.type = dst.type;
 
    resolve_ud_negate(&src0);
    resolve_ud_negate(&src1);
@@ -378,7 +375,7 @@ fs_visitor::LOAD_PAYLOAD(const fs_reg &dst, fs_reg *src, int sources)
        * dealing with whole registers.  If this ever changes, we can deal
        * with it later.
        */
-      int size = src[i].effective_width * type_sz(src[i].type);
+      int size = inst->src[i].effective_width * type_sz(src[i].type);
       assert(size % 32 == 0);
       inst->regs_written += (size + 31) / 32;
    }
@@ -428,7 +425,7 @@ fs_visitor::VARYING_PULL_CONSTANT_LOAD(const fs_reg &dst,
 
    assert(dst.width % 8 == 0);
    int regs_written = 4 * (dst.width / 8) * scale;
-   fs_reg vec4_result = fs_reg(GRF, virtual_grf_alloc(regs_written),
+   fs_reg vec4_result = fs_reg(GRF, alloc.allocate(regs_written),
                                dst.type, dst.width);
    inst = new(mem_ctx) fs_inst(op, vec4_result, surf_index, vec4_offset);
    inst->regs_written = regs_written;
@@ -676,6 +673,7 @@ fs_visitor::type_size(const struct glsl_type *type)
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
+   case GLSL_TYPE_DOUBLE:
       unreachable("not reached");
    }
 
@@ -692,7 +690,7 @@ fs_visitor::get_timestamp()
                                           0),
                              BRW_REGISTER_TYPE_UD));
 
-   fs_reg dst = fs_reg(GRF, virtual_grf_alloc(1), BRW_REGISTER_TYPE_UD, 4);
+   fs_reg dst = fs_reg(GRF, alloc.allocate(1), BRW_REGISTER_TYPE_UD, 4);
 
    fs_inst *mov = emit(MOV(dst, ts));
    /* We want to read the 3 fields we care about even if it's not enabled in
@@ -728,15 +726,31 @@ fs_visitor::emit_shader_time_end()
    current_annotation = "shader time end";
 
    enum shader_time_shader_type type, written_type, reset_type;
-   if (dispatch_width == 8) {
-      type = ST_FS8;
-      written_type = ST_FS8_WRITTEN;
-      reset_type = ST_FS8_RESET;
-   } else {
-      assert(dispatch_width == 16);
-      type = ST_FS16;
-      written_type = ST_FS16_WRITTEN;
-      reset_type = ST_FS16_RESET;
+   switch (stage) {
+   case MESA_SHADER_VERTEX:
+      type = ST_VS;
+      written_type = ST_VS_WRITTEN;
+      reset_type = ST_VS_RESET;
+      break;
+   case MESA_SHADER_GEOMETRY:
+      type = ST_GS;
+      written_type = ST_GS_WRITTEN;
+      reset_type = ST_GS_RESET;
+      break;
+   case MESA_SHADER_FRAGMENT:
+      if (dispatch_width == 8) {
+         type = ST_FS8;
+         written_type = ST_FS8_WRITTEN;
+         reset_type = ST_FS8_RESET;
+      } else {
+         assert(dispatch_width == 16);
+         type = ST_FS16;
+         written_type = ST_FS16_WRITTEN;
+         reset_type = ST_FS16_RESET;
+      }
+      break;
+   default:
+      unreachable("fs_visitor::emit_shader_time_end missing code");
    }
 
    fs_reg shader_end_time = get_timestamp();
@@ -752,7 +766,7 @@ fs_visitor::emit_shader_time_end()
 
    fs_reg start = shader_start_time;
    start.negate = true;
-   fs_reg diff = fs_reg(GRF, virtual_grf_alloc(1), BRW_REGISTER_TYPE_UD, 1);
+   fs_reg diff = fs_reg(GRF, alloc.allocate(1), BRW_REGISTER_TYPE_UD, 1);
    emit(ADD(diff, start, shader_end_time));
 
    /* If there were no instructions between the two timestamp gets, the diff
@@ -797,11 +811,11 @@ fs_visitor::vfail(const char *format, va_list va)
    failed = true;
 
    msg = ralloc_vasprintf(mem_ctx, format, va);
-   msg = ralloc_asprintf(mem_ctx, "FS compile failed: %s\n", msg);
+   msg = ralloc_asprintf(mem_ctx, "%s compile failed: %s\n", stage_abbrev, msg);
 
    this->fail_msg = msg;
 
-   if (INTEL_DEBUG & DEBUG_WM) {
+   if (debug_enabled) {
       fprintf(stderr, "%s",  msg);
    }
 }
@@ -904,7 +918,7 @@ fs_inst::is_partial_write() const
 }
 
 int
-fs_inst::regs_read(fs_visitor *v, int arg) const
+fs_inst::regs_read(int arg) const
 {
    if (is_tex() && arg == 0 && src[0].file == GRF) {
       return mlen;
@@ -1017,26 +1031,11 @@ fs_visitor::implied_mrf_writes(fs_inst *inst)
    }
 }
 
-int
-fs_visitor::virtual_grf_alloc(int size)
-{
-   if (virtual_grf_array_size <= virtual_grf_count) {
-      if (virtual_grf_array_size == 0)
-	 virtual_grf_array_size = 16;
-      else
-	 virtual_grf_array_size *= 2;
-      virtual_grf_sizes = reralloc(mem_ctx, virtual_grf_sizes, int,
-				   virtual_grf_array_size);
-   }
-   virtual_grf_sizes[virtual_grf_count] = size;
-   return virtual_grf_count++;
-}
-
 fs_reg
 fs_visitor::vgrf(const glsl_type *const type)
 {
    int reg_width = dispatch_width / 8;
-   return fs_reg(GRF, virtual_grf_alloc(type_size(type) * reg_width),
+   return fs_reg(GRF, alloc.allocate(type_size(type) * reg_width),
                  brw_type_for_base_type(type), dispatch_width);
 }
 
@@ -1044,7 +1043,7 @@ fs_reg
 fs_visitor::vgrf(int num_components)
 {
    int reg_width = dispatch_width / 8;
-   return fs_reg(GRF, virtual_grf_alloc(num_components * reg_width),
+   return fs_reg(GRF, alloc.allocate(num_components * reg_width),
                  BRW_REGISTER_TYPE_F, dispatch_width);
 }
 
@@ -1900,14 +1899,14 @@ fs_visitor::assign_vs_urb_setup()
 void
 fs_visitor::split_virtual_grfs()
 {
-   int num_vars = this->virtual_grf_count;
+   int num_vars = this->alloc.count;
 
    /* Count the total number of registers */
    int reg_count = 0;
    int vgrf_to_reg[num_vars];
    for (int i = 0; i < num_vars; i++) {
       vgrf_to_reg[i] = reg_count;
-      reg_count += virtual_grf_sizes[i];
+      reg_count += alloc.sizes[i];
    }
 
    /* An array of "split points".  For each register slot, this indicates
@@ -1923,14 +1922,14 @@ fs_visitor::split_virtual_grfs()
    foreach_block_and_inst(block, fs_inst, inst, cfg) {
       if (inst->dst.file == GRF) {
          int reg = vgrf_to_reg[inst->dst.reg];
-         for (int j = 1; j < this->virtual_grf_sizes[inst->dst.reg]; j++)
+         for (unsigned j = 1; j < this->alloc.sizes[inst->dst.reg]; j++)
             split_points[reg + j] = true;
       }
 
       for (int i = 0; i < inst->sources; i++) {
          if (inst->src[i].file == GRF) {
             int reg = vgrf_to_reg[inst->src[i].reg];
-            for (int j = 1; j < this->virtual_grf_sizes[inst->src[i].reg]; j++)
+            for (unsigned j = 1; j < this->alloc.sizes[inst->src[i].reg]; j++)
                split_points[reg + j] = true;
          }
       }
@@ -1956,7 +1955,7 @@ fs_visitor::split_virtual_grfs()
       for (int i = 0; i < inst->sources; i++) {
          if (inst->src[i].file == GRF) {
             int reg = vgrf_to_reg[inst->src[i].reg] + inst->src[i].reg_offset;
-            for (int j = 1; j < inst->regs_read(this, i); j++)
+            for (int j = 1; j < inst->regs_read(i); j++)
                split_points[reg + j] = false;
          }
       }
@@ -1976,13 +1975,13 @@ fs_visitor::split_virtual_grfs()
       int offset = 1;
 
       /* j > 0 case */
-      for (int j = 1; j < virtual_grf_sizes[i]; j++) {
+      for (unsigned j = 1; j < alloc.sizes[i]; j++) {
          /* If this is a split point, reset the offset to 0 and allocate a
           * new virtual GRF for the previous offset many registers
           */
          if (split_points[reg]) {
             assert(offset <= MAX_VGRF_SIZE);
-            int grf = virtual_grf_alloc(offset);
+            int grf = alloc.allocate(offset);
             for (int k = reg - offset; k < reg; k++)
                new_virtual_grf[k] = grf;
             offset = 0;
@@ -1994,7 +1993,7 @@ fs_visitor::split_virtual_grfs()
 
       /* The last one gets the original register number */
       assert(offset <= MAX_VGRF_SIZE);
-      virtual_grf_sizes[i] = offset;
+      alloc.sizes[i] = offset;
       for (int k = reg - offset; k < reg; k++)
          new_virtual_grf[k] = i;
    }
@@ -2005,14 +2004,14 @@ fs_visitor::split_virtual_grfs()
          reg = vgrf_to_reg[inst->dst.reg] + inst->dst.reg_offset;
          inst->dst.reg = new_virtual_grf[reg];
          inst->dst.reg_offset = new_reg_offset[reg];
-         assert(new_reg_offset[reg] < virtual_grf_sizes[new_virtual_grf[reg]]);
+         assert((unsigned)new_reg_offset[reg] < alloc.sizes[new_virtual_grf[reg]]);
       }
       for (int i = 0; i < inst->sources; i++) {
 	 if (inst->src[i].file == GRF) {
             reg = vgrf_to_reg[inst->src[i].reg] + inst->src[i].reg_offset;
             inst->src[i].reg = new_virtual_grf[reg];
             inst->src[i].reg_offset = new_reg_offset[reg];
-            assert(new_reg_offset[reg] < virtual_grf_sizes[new_virtual_grf[reg]]);
+            assert((unsigned)new_reg_offset[reg] < alloc.sizes[new_virtual_grf[reg]]);
          }
       }
    }
@@ -2032,7 +2031,7 @@ bool
 fs_visitor::compact_virtual_grfs()
 {
    bool progress = false;
-   int remap_table[this->virtual_grf_count];
+   int remap_table[this->alloc.count];
    memset(remap_table, -1, sizeof(remap_table));
 
    /* Mark which virtual GRFs are used. */
@@ -2048,7 +2047,7 @@ fs_visitor::compact_virtual_grfs()
 
    /* Compact the GRF arrays. */
    int new_index = 0;
-   for (int i = 0; i < this->virtual_grf_count; i++) {
+   for (unsigned i = 0; i < this->alloc.count; i++) {
       if (remap_table[i] == -1) {
          /* We just found an unused register.  This means that we are
           * actually going to compact something.
@@ -2056,13 +2055,13 @@ fs_visitor::compact_virtual_grfs()
          progress = true;
       } else {
          remap_table[i] = new_index;
-         virtual_grf_sizes[new_index] = virtual_grf_sizes[i];
+         alloc.sizes[new_index] = alloc.sizes[i];
          invalidate_live_intervals();
          ++new_index;
       }
    }
 
-   this->virtual_grf_count = new_index;
+   this->alloc.count = new_index;
 
    /* Patch all the instructions to use the newly renumbered registers */
    foreach_block_and_inst(block, fs_inst, inst, cfg) {
@@ -2327,6 +2326,15 @@ fs_visitor::opt_algebraic()
 	    break;
 	 }
 
+         /* a * -1.0 = -a */
+         if (inst->src[1].is_negative_one()) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->src[0].negate = !inst->src[0].negate;
+            inst->src[1] = reg_undef;
+            progress = true;
+            break;
+         }
+
          /* a * 0.0 = 0.0 */
          if (inst->src[1].is_zero()) {
             inst->opcode = BRW_OPCODE_MOV;
@@ -2336,6 +2344,14 @@ fs_visitor::opt_algebraic()
             break;
          }
 
+         if (inst->src[0].file == IMM) {
+            assert(inst->src[0].type == BRW_REGISTER_TYPE_F);
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->src[0].fixed_hw_reg.dw1.f *= inst->src[1].fixed_hw_reg.dw1.f;
+            inst->src[1] = reg_undef;
+            progress = true;
+            break;
+         }
 	 break;
       case BRW_OPCODE_ADD:
          if (inst->src[1].file != IMM)
@@ -2344,6 +2360,15 @@ fs_visitor::opt_algebraic()
          /* a + 0.0 = a */
          if (inst->src[1].is_zero()) {
             inst->opcode = BRW_OPCODE_MOV;
+            inst->src[1] = reg_undef;
+            progress = true;
+            break;
+         }
+
+         if (inst->src[0].file == IMM) {
+            assert(inst->src[0].type == BRW_REGISTER_TYPE_F);
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->src[0].fixed_hw_reg.dw1.f += inst->src[1].fixed_hw_reg.dw1.f;
             inst->src[1] = reg_undef;
             progress = true;
             break;
@@ -2395,6 +2420,7 @@ fs_visitor::opt_algebraic()
                   if (inst->src[1].fixed_hw_reg.dw1.f >= 1.0f) {
                      inst->opcode = BRW_OPCODE_MOV;
                      inst->src[1] = reg_undef;
+                     inst->conditional_mod = BRW_CONDITIONAL_NONE;
                      progress = true;
                   }
                   break;
@@ -2419,6 +2445,32 @@ fs_visitor::opt_algebraic()
             default:
                break;
             }
+         }
+         break;
+      case BRW_OPCODE_MAD:
+         if (inst->src[1].is_zero() || inst->src[2].is_zero()) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->src[1] = reg_undef;
+            inst->src[2] = reg_undef;
+            progress = true;
+         } else if (inst->src[0].is_zero()) {
+            inst->opcode = BRW_OPCODE_MUL;
+            inst->src[0] = inst->src[2];
+            inst->src[2] = reg_undef;
+         } else if (inst->src[1].is_one()) {
+            inst->opcode = BRW_OPCODE_ADD;
+            inst->src[1] = inst->src[2];
+            inst->src[2] = reg_undef;
+            progress = true;
+         } else if (inst->src[2].is_one()) {
+            inst->opcode = BRW_OPCODE_ADD;
+            inst->src[2] = reg_undef;
+            progress = true;
+         } else if (inst->src[1].file == IMM && inst->src[2].file == IMM) {
+            inst->opcode = BRW_OPCODE_ADD;
+            inst->src[1].fixed_hw_reg.dw1.f *= inst->src[2].fixed_hw_reg.dw1.f;
+            inst->src[2] = reg_undef;
+            progress = true;
          }
          break;
       case SHADER_OPCODE_RCP: {
@@ -2446,8 +2498,8 @@ fs_visitor::opt_register_renaming()
    bool progress = false;
    int depth = 0;
 
-   int remap[virtual_grf_count];
-   memset(remap, -1, sizeof(int) * virtual_grf_count);
+   int remap[alloc.count];
+   memset(remap, -1, sizeof(int) * alloc.count);
 
    foreach_block_and_inst(block, fs_inst, inst, cfg) {
       if (inst->opcode == BRW_OPCODE_IF || inst->opcode == BRW_OPCODE_DO) {
@@ -2471,12 +2523,12 @@ fs_visitor::opt_register_renaming()
 
       if (depth == 0 &&
           inst->dst.file == GRF &&
-          virtual_grf_sizes[inst->dst.reg] == inst->dst.width / 8 &&
+          alloc.sizes[inst->dst.reg] == inst->dst.width / 8 &&
           !inst->is_partial_write()) {
          if (remap[dst] == -1) {
             remap[dst] = dst;
          } else {
-            remap[dst] = virtual_grf_alloc(inst->dst.width / 8);
+            remap[dst] = alloc.allocate(inst->dst.width / 8);
             inst->dst.reg = remap[dst];
             progress = true;
          }
@@ -2502,6 +2554,47 @@ fs_visitor::opt_register_renaming()
          }
       }
    }
+
+   return progress;
+}
+
+/**
+ * Remove redundant or useless discard jumps.
+ *
+ * For example, we can eliminate jumps in the following sequence:
+ *
+ * discard-jump       (redundant with the next jump)
+ * discard-jump       (useless; jumps to the next instruction)
+ * placeholder-halt
+ */
+bool
+fs_visitor::opt_redundant_discard_jumps()
+{
+   bool progress = false;
+
+   bblock_t *last_bblock = cfg->blocks[cfg->num_blocks - 1];
+
+   fs_inst *placeholder_halt = NULL;
+   foreach_inst_in_block_reverse(fs_inst, inst, last_bblock) {
+      if (inst->opcode == FS_OPCODE_PLACEHOLDER_HALT) {
+         placeholder_halt = inst;
+         break;
+      }
+   }
+
+   if (!placeholder_halt)
+      return false;
+
+   /* Delete any HALTs immediately before the placeholder halt. */
+   for (fs_inst *prev = (fs_inst *) placeholder_halt->prev;
+        !prev->is_head_sentinel() && prev->opcode == FS_OPCODE_DISCARD_JUMP;
+        prev = (fs_inst *) placeholder_halt->prev) {
+      prev->remove(last_bblock);
+      progress = true;
+   }
+
+   if (progress)
+      invalidate_live_intervals();
 
    return progress;
 }
@@ -3011,14 +3104,14 @@ fs_visitor::lower_uniform_pull_constant_loads()
          assert(const_offset_reg.file == IMM &&
                 const_offset_reg.type == BRW_REGISTER_TYPE_UD);
          const_offset_reg.fixed_hw_reg.dw1.ud /= 4;
-         fs_reg payload = vgrf(glsl_type::uint_type);
+         fs_reg payload = fs_reg(GRF, alloc.allocate(1));
 
          /* We have to use a message header on Skylake to get SIMD4x2 mode.
           * Reserve space for the register.
           */
          if (brw->gen >= 9) {
             payload.reg_offset++;
-            virtual_grf_sizes[payload.reg] = 2;
+            alloc.sizes[payload.reg] = 2;
          }
 
          /* This is actually going to be a MOV, but since only the first dword
@@ -3059,11 +3152,11 @@ fs_visitor::lower_load_payload()
 {
    bool progress = false;
 
-   int vgrf_to_reg[virtual_grf_count];
-   int reg_count = 16; /* Leave room for MRF */
-   for (int i = 0; i < virtual_grf_count; ++i) {
+   int vgrf_to_reg[alloc.count];
+   int reg_count = 0;
+   for (unsigned i = 0; i < alloc.count; ++i) {
       vgrf_to_reg[i] = reg_count;
-      reg_count += virtual_grf_sizes[i];
+      reg_count += alloc.sizes[i];
    }
 
    struct {
@@ -3074,18 +3167,13 @@ fs_visitor::lower_load_payload()
    memset(metadata, 0, sizeof(metadata));
 
    foreach_block_and_inst_safe (block, fs_inst, inst, cfg) {
-      int dst_reg;
       if (inst->dst.file == GRF) {
-         dst_reg = vgrf_to_reg[inst->dst.reg];
-      } else {
-         /* MRF */
-         dst_reg = inst->dst.reg;
-      }
-
-      if (inst->dst.file == MRF || inst->dst.file == GRF) {
-         bool force_sechalf = inst->force_sechalf;
+         const int dst_reg = vgrf_to_reg[inst->dst.reg] + inst->dst.reg_offset;
+         bool force_sechalf = inst->force_sechalf &&
+                              !inst->force_writemask_all;
          bool toggle_sechalf = inst->dst.width == 16 &&
-                               type_sz(inst->dst.type) == 4;
+                               type_sz(inst->dst.type) == 4 &&
+                               !inst->force_writemask_all;
          for (int i = 0; i < inst->regs_written; ++i) {
             metadata[dst_reg + i].written = true;
             metadata[dst_reg + i].force_sechalf = force_sechalf;
@@ -3126,22 +3214,28 @@ fs_visitor::lower_load_payload()
                                 inst->src[i].reg_offset;
                   mov->force_sechalf = metadata[src_reg].force_sechalf;
                   mov->force_writemask_all = metadata[src_reg].force_writemask_all;
-                  metadata[dst_reg] = metadata[src_reg];
-                  if (dst.width * type_sz(dst.type) > 32) {
-                     assert((!metadata[src_reg].written ||
-                             !metadata[src_reg].force_sechalf) &&
-                            (!metadata[src_reg + 1].written ||
-                             metadata[src_reg + 1].force_sechalf));
-                     metadata[dst_reg + 1] = metadata[src_reg + 1];
-                  }
                } else {
-                  metadata[dst_reg].force_writemask_all = false;
-                  metadata[dst_reg].force_sechalf = false;
-                  if (dst.width == 16) {
-                     metadata[dst_reg + 1].force_writemask_all = false;
-                     metadata[dst_reg + 1].force_sechalf = true;
+                  /* We don't have any useful metadata for immediates or
+                   * uniforms.  Assume that any of the channels of the
+                   * destination may be used.
+                   */
+                  assert(inst->src[i].file == IMM ||
+                         inst->src[i].file == UNIFORM);
+                  mov->force_writemask_all = true;
+               }
+
+               if (dst.file == GRF) {
+                  const int dst_reg = vgrf_to_reg[dst.reg] + dst.reg_offset;
+                  const bool force_writemask = mov->force_writemask_all;
+                  metadata[dst_reg].force_writemask_all = force_writemask;
+                  metadata[dst_reg].force_sechalf = mov->force_sechalf;
+                  if (dst.width * type_sz(dst.type) > 32) {
+                     assert(!mov->force_sechalf);
+                     metadata[dst_reg + 1].force_writemask_all = force_writemask;
+                     metadata[dst_reg + 1].force_sechalf = !force_writemask;
                   }
                }
+
                inst->insert_before(block, mov);
             }
 
@@ -3168,7 +3262,6 @@ fs_visitor::dump_instructions()
 void
 fs_visitor::dump_instructions(const char *name)
 {
-   calculate_register_pressure();
    FILE *file = stderr;
    if (name && geteuid() != 0) {
       file = fopen(name, "w");
@@ -3176,14 +3269,23 @@ fs_visitor::dump_instructions(const char *name)
          file = stderr;
    }
 
-   int ip = 0, max_pressure = 0;
-   foreach_block_and_inst(block, backend_instruction, inst, cfg) {
-      max_pressure = MAX2(max_pressure, regs_live_at_ip[ip]);
-      fprintf(file, "{%3d} %4d: ", regs_live_at_ip[ip], ip);
-      dump_instruction(inst, file);
-      ++ip;
+   if (cfg) {
+      calculate_register_pressure();
+      int ip = 0, max_pressure = 0;
+      foreach_block_and_inst(block, backend_instruction, inst, cfg) {
+         max_pressure = MAX2(max_pressure, regs_live_at_ip[ip]);
+         fprintf(file, "{%3d} %4d: ", regs_live_at_ip[ip], ip);
+         dump_instruction(inst, file);
+         ip++;
+      }
+      fprintf(file, "Maximum %3d registers live at once.\n", max_pressure);
+   } else {
+      int ip = 0;
+      foreach_in_list(backend_instruction, inst, &instructions) {
+         fprintf(file, "%4d: ", ip++);
+         dump_instruction(inst, file);
+      }
    }
-   fprintf(file, "Maximum %3d registers live at once.\n", max_pressure);
 
    if (file != stderr) {
       fclose(file);
@@ -3227,7 +3329,7 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
       fprintf(file, "vgrf%d", inst->dst.reg);
       if (inst->dst.width != dispatch_width)
          fprintf(file, "@%d", inst->dst.width);
-      if (virtual_grf_sizes[inst->dst.reg] != inst->dst.width / 8 ||
+      if (alloc.sizes[inst->dst.reg] != inst->dst.width / 8 ||
           inst->dst.subreg_offset)
          fprintf(file, "+%d.%d",
                  inst->dst.reg_offset, inst->dst.subreg_offset);
@@ -3287,7 +3389,7 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
          fprintf(file, "vgrf%d", inst->src[i].reg);
          if (inst->src[i].width != dispatch_width)
             fprintf(file, "@%d", inst->src[i].width);
-         if (virtual_grf_sizes[inst->src[i].reg] != inst->src[i].width / 8 ||
+         if (alloc.sizes[inst->src[i].reg] != inst->src[i].width / 8 ||
              inst->src[i].subreg_offset)
             fprintf(file, "+%d.%d", inst->src[i].reg_offset,
                     inst->src[i].subreg_offset);
@@ -3315,9 +3417,11 @@ fs_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
          case BRW_REGISTER_TYPE_F:
             fprintf(file, "%ff", inst->src[i].fixed_hw_reg.dw1.f);
             break;
+         case BRW_REGISTER_TYPE_W:
          case BRW_REGISTER_TYPE_D:
             fprintf(file, "%dd", inst->src[i].fixed_hw_reg.dw1.d);
             break;
+         case BRW_REGISTER_TYPE_UW:
          case BRW_REGISTER_TYPE_UD:
             fprintf(file, "%uu", inst->src[i].fixed_hw_reg.dw1.ud);
             break;
@@ -3538,9 +3642,9 @@ fs_visitor::calculate_register_pressure()
 
    regs_live_at_ip = rzalloc_array(mem_ctx, int, num_instructions);
 
-   for (int reg = 0; reg < virtual_grf_count; reg++) {
+   for (unsigned reg = 0; reg < alloc.count; reg++) {
       for (int ip = virtual_grf_start[reg]; ip <= virtual_grf_end[reg]; ip++)
-         regs_live_at_ip[ip] += virtual_grf_sizes[reg];
+         regs_live_at_ip[ip] += alloc.sizes[reg];
    }
 }
 
@@ -3548,8 +3652,6 @@ void
 fs_visitor::optimize()
 {
    const char *stage_name = stage == MESA_SHADER_VERTEX ? "vs" : "fs";
-
-   calculate_cfg();
 
    split_virtual_grfs();
 
@@ -3600,6 +3702,7 @@ fs_visitor::optimize()
       OPT(opt_peephole_sel);
       OPT(dead_control_flow_eliminate, this);
       OPT(opt_register_renaming);
+      OPT(opt_redundant_discard_jumps);
       OPT(opt_saturate_propagation);
       OPT(register_coalesce);
       OPT(compute_to_mrf);
@@ -3616,6 +3719,8 @@ fs_visitor::optimize()
       OPT(dead_code_eliminate);
    }
 
+   OPT(opt_combine_constants);
+
    lower_uniform_pull_constant_loads();
 }
 
@@ -3628,7 +3733,7 @@ fs_visitor::fixup_3src_null_dest()
 {
    foreach_block_and_inst_safe (block, fs_inst, inst, cfg) {
       if (inst->is_3src() && inst->dst.is_null()) {
-         inst->dst = fs_reg(GRF, virtual_grf_alloc(dispatch_width / 8),
+         inst->dst = fs_reg(GRF, alloc.allocate(dispatch_width / 8),
                             inst->dst.type);
       }
    }
@@ -3726,6 +3831,8 @@ fs_visitor::run_vs()
 
    emit_urb_writes();
 
+   calculate_cfg();
+
    optimize();
 
    assign_curb_setup();
@@ -3804,6 +3911,8 @@ fs_visitor::run_fs()
          emit_alpha_test();
 
       emit_fb_writes();
+
+      calculate_cfg();
 
       optimize();
 

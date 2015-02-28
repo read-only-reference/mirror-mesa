@@ -278,21 +278,32 @@ fd4_emit_gmem_restore_tex(struct fd_ringbuffer *ring, struct pipe_surface *psurf
 void
 fd4_emit_vertex_bufs(struct fd_ringbuffer *ring, struct fd4_emit *emit)
 {
-	uint32_t i, j, last = 0;
+	int32_t i, j, last = -1;
 	uint32_t total_in = 0;
 	const struct fd_vertex_state *vtx = emit->vtx;
 	struct ir3_shader_variant *vp = fd4_emit_get_vp(emit);
-	unsigned n = MIN2(vtx->vtx->num_elements, vp->inputs_count);
+	unsigned vertex_regid = regid(63, 0), instance_regid = regid(63, 0);
+
+	for (i = 0; i < vp->inputs_count; i++) {
+		uint8_t semantic = sem2name(vp->inputs[i].semantic);
+		if (semantic == TGSI_SEMANTIC_VERTEXID)
+			vertex_regid = vp->inputs[i].regid;
+		else if (semantic == TGSI_SEMANTIC_INSTANCEID)
+			instance_regid = vp->inputs[i].regid;
+		else if ((i < vtx->vtx->num_elements) && vp->inputs[i].compmask)
+			last = i;
+	}
 
 	/* hw doesn't like to be configured for zero vbo's, it seems: */
-	if (vtx->vtx->num_elements == 0)
+	if ((vtx->vtx->num_elements == 0) &&
+			(vertex_regid == regid(63, 0)) &&
+			(instance_regid == regid(63, 0)))
 		return;
 
-	for (i = 0; i < n; i++)
-		if (vp->inputs[i].compmask)
-			last = i;
-
 	for (i = 0, j = 0; i <= last; i++) {
+		uint8_t semantic = sem2name(vp->inputs[i].semantic);
+		assert(semantic != TGSI_SEMANTIC_VERTEXID);
+		assert(semantic != TGSI_SEMANTIC_INSTANCEID);
 		if (vp->inputs[i].compmask) {
 			struct pipe_vertex_element *elem = &vtx->vtx->pipe[i];
 			const struct pipe_vertex_buffer *vb =
@@ -300,7 +311,9 @@ fd4_emit_vertex_bufs(struct fd_ringbuffer *ring, struct fd4_emit *emit)
 			struct fd_resource *rsc = fd_resource(vb->buffer);
 			enum pipe_format pfmt = elem->src_format;
 			enum a4xx_vtx_fmt fmt = fd4_pipe2vtx(pfmt);
-			bool switchnext = (i != last);
+			bool switchnext = (i != last) ||
+					(vertex_regid != regid(63, 0)) ||
+					(instance_regid != regid(63, 0));
 			uint32_t fs = util_format_get_blocksize(pfmt);
 			uint32_t off = vb->buffer_offset + elem->src_offset;
 			uint32_t size = fd_bo_size(rsc->bo) - off;
@@ -309,10 +322,11 @@ fd4_emit_vertex_bufs(struct fd_ringbuffer *ring, struct fd4_emit *emit)
 			OUT_PKT0(ring, REG_A4XX_VFD_FETCH(j), 4);
 			OUT_RING(ring, A4XX_VFD_FETCH_INSTR_0_FETCHSIZE(fs - 1) |
 					A4XX_VFD_FETCH_INSTR_0_BUFSTRIDE(vb->stride) |
+					COND(elem->instance_divisor, A4XX_VFD_FETCH_INSTR_0_INSTANCED) |
 					COND(switchnext, A4XX_VFD_FETCH_INSTR_0_SWITCHNEXT));
 			OUT_RELOC(ring, rsc->bo, off, 0, 0);
 			OUT_RING(ring, A4XX_VFD_FETCH_INSTR_2_SIZE(size));
-			OUT_RING(ring, 0x00000001);
+			OUT_RING(ring, A4XX_VFD_FETCH_INSTR_3_STEPRATE(MAX2(1, elem->instance_divisor)));
 
 			OUT_PKT0(ring, REG_A4XX_VFD_DECODE_INSTR(j), 1);
 			OUT_RING(ring, A4XX_VFD_DECODE_INSTR_CONSTFILL |
@@ -335,10 +349,10 @@ fd4_emit_vertex_bufs(struct fd_ringbuffer *ring, struct fd4_emit *emit)
 			A4XX_VFD_CONTROL_0_STRMDECINSTRCNT(j) |
 			A4XX_VFD_CONTROL_0_STRMFETCHINSTRCNT(j));
 	OUT_RING(ring, A4XX_VFD_CONTROL_1_MAXSTORAGE(129) | // XXX
-			A4XX_VFD_CONTROL_1_REGID4VTX(regid(63,0)) |
-			A4XX_VFD_CONTROL_1_REGID4INST(regid(63,0)));
+			A4XX_VFD_CONTROL_1_REGID4VTX(vertex_regid) |
+			A4XX_VFD_CONTROL_1_REGID4INST(instance_regid));
 	OUT_RING(ring, 0x00000000);   /* XXX VFD_CONTROL_2 */
-	OUT_RING(ring, 0x0000fc00);   /* XXX VFD_CONTROL_3 */
+	OUT_RING(ring, A4XX_VFD_CONTROL_3_REGID_VTXCNT(regid(63, 0)));
 	OUT_RING(ring, 0x00000000);   /* XXX VFD_CONTROL_4 */
 
 	/* cache invalidate, otherwise vertex fetch could see
@@ -425,13 +439,9 @@ fd4_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		OUT_PKT0(ring, REG_A4XX_GRAS_SU_POLY_OFFSET_SCALE, 2);
 		OUT_RING(ring, rasterizer->gras_su_poly_offset_scale);
 		OUT_RING(ring, rasterizer->gras_su_poly_offset_offset);
-	}
 
-	if (dirty & (FD_DIRTY_RASTERIZER | FD_DIRTY_PROG)) {
-		uint32_t val = fd4_rasterizer_stateobj(ctx->rasterizer)
-				->gras_cl_clip_cntl;
 		OUT_PKT0(ring, REG_A4XX_GRAS_CL_CLIP_CNTL, 1);
-		OUT_RING(ring, val);
+		OUT_RING(ring, rasterizer->gras_cl_clip_cntl);
 	}
 
 	/* NOTE: since primitive_restart is not actually part of any
@@ -444,7 +454,12 @@ fd4_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 				->pc_prim_vtx_cntl;
 
 		val |= COND(vp->writes_psize, A4XX_PC_PRIM_VTX_CNTL_PSIZE);
-		val |= COND(fp->total_in > 0, A4XX_PC_PRIM_VTX_CNTL_VAROUT);
+		if (fp->total_in > 0) {
+			uint32_t varout = align(fp->total_in, 16) / 16;
+			if (varout > 1)
+				varout = align(varout, 2);
+			val |= A4XX_PC_PRIM_VTX_CNTL_VAROUT(varout);
+		}
 
 		OUT_PKT0(ring, REG_A4XX_PC_PRIM_VTX_CNTL, 2);
 		OUT_RING(ring, val);

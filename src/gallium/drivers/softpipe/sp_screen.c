@@ -233,6 +233,11 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_VERTEXID_NOBASE:
       return 0;
+   case PIPE_CAP_POLYGON_OFFSET_CLAMP:
+      return 0;
+   case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
+   case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
+      return 0;
    }
    /* should only get here on unhandled cases */
    debug_printf("Unexpected PIPE_CAP %d query\n", param);
@@ -347,6 +352,10 @@ softpipe_is_format_supported( struct pipe_screen *screen,
       /* Software decoding is not hooked up. */
       return FALSE;
    }
+
+   if (format_desc->layout == UTIL_FORMAT_LAYOUT_ETC &&
+       format != PIPE_FORMAT_ETC1_RGB8)
+      return FALSE;
 
    /*
     * All other operations (sampling, transfer, etc).

@@ -28,6 +28,7 @@
  */
 
 
+#include <stdarg.h>
 #include "errors.h"
 #include "enums.h"
 #include "imports.h"
@@ -1465,7 +1466,7 @@ _mesa_error( struct gl_context *ctx, GLenum error, const char *fmtString, ... )
          /* Too long error message. Whoever calls _mesa_error should use
           * shorter strings.
           */
-         ASSERT(0);
+         assert(0);
          return;
       }
 
@@ -1473,7 +1474,7 @@ _mesa_error( struct gl_context *ctx, GLenum error, const char *fmtString, ... )
                            _mesa_lookup_enum_by_nr(error), s);
       if (len >= MAX_DEBUG_MESSAGE_LENGTH) {
          /* Same as above. */
-         ASSERT(0);
+         assert(0);
          return;
       }
 

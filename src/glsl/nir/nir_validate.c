@@ -46,9 +46,18 @@ typedef struct {
     * equivalent to the uses and defs in nir_register, but built up by the
     * validator. At the end, we verify that the sets have the same entries.
     */
-   struct set *uses, *defs;
+   struct set *uses, *if_uses, *defs;
    nir_function_impl *where_defined; /* NULL for global registers */
 } reg_validate_state;
+
+typedef struct {
+   /*
+    * equivalent to the uses in nir_ssa_def, but built up by the validator.
+    * At the end, we verify that the sets have the same entries.
+    */
+   struct set *uses, *if_uses;
+   nir_function_impl *where_defined;
+} ssa_def_validate_state;
 
 typedef struct {
    /* map of register -> validation state (struct above) */
@@ -92,16 +101,22 @@ validate_reg_src(nir_reg_src *src, validate_state *state)
 {
    assert(src->reg != NULL);
 
-   struct set_entry *entry = _mesa_set_search(src->reg->uses, state->instr);
-   assert(entry && "use not in nir_register.uses");
+   struct hash_entry *entry;
+   entry = _mesa_hash_table_search(state->regs, src->reg);
+   assert(entry);
 
-   struct hash_entry *entry2;
-   entry2 = _mesa_hash_table_search(state->regs, src->reg);
+   reg_validate_state *reg_state = (reg_validate_state *) entry->data;
 
-   assert(entry2);
+   if (state->instr) {
+      _mesa_set_add(reg_state->uses, state->instr);
 
-   reg_validate_state *reg_state = (reg_validate_state *) entry2->data;
-   _mesa_set_add(reg_state->uses, state->instr);
+      assert(_mesa_set_search(src->reg->uses, state->instr));
+   } else {
+      assert(state->if_stmt);
+      _mesa_set_add(reg_state->if_uses, state->if_stmt);
+
+      assert(_mesa_set_search(src->reg->if_uses, state->if_stmt));
+   }
 
    if (!src->reg->is_global) {
       assert(reg_state->where_defined == state->impl &&
@@ -129,14 +144,21 @@ validate_ssa_src(nir_ssa_def *def, validate_state *state)
 
    assert(entry);
 
-   assert((nir_function_impl *) entry->data == state->impl &&
+   ssa_def_validate_state *def_state = (ssa_def_validate_state *)entry->data;
+
+   assert(def_state->where_defined == state->impl &&
           "using an SSA value defined in a different function");
 
-   struct set_entry *entry2;
+   if (state->instr) {
+      _mesa_set_add(def_state->uses, state->instr);
 
-   entry2 = _mesa_set_search(def->uses, state->instr);
+      assert(_mesa_set_search(def->uses, state->instr));
+   } else {
+      assert(state->if_stmt);
+      _mesa_set_add(def_state->if_uses, state->if_stmt);
 
-   assert(entry2 && "SSA use missing");
+      assert(_mesa_set_search(def->if_uses, state->if_stmt));
+   }
 
    /* TODO validate that the use is dominated by the definition */
 }
@@ -215,7 +237,15 @@ validate_ssa_def(nir_ssa_def *def, validate_state *state)
    BITSET_SET(state->ssa_defs_found, def->index);
 
    assert(def->num_components <= 4);
-   _mesa_hash_table_insert(state->ssa_defs, def, state->impl);
+
+   ssa_def_validate_state *def_state = ralloc(state->ssa_defs,
+                                              ssa_def_validate_state);
+   def_state->where_defined = state->impl;
+   def_state->uses = _mesa_set_create(def_state, _mesa_hash_pointer,
+                                      _mesa_key_pointer_equal);
+   def_state->if_uses = _mesa_set_create(def_state, _mesa_hash_pointer,
+                                         _mesa_key_pointer_equal);
+   _mesa_hash_table_insert(state->ssa_defs, def, def_state);
 }
 
 static void
@@ -239,6 +269,14 @@ validate_alu_dest(nir_alu_dest *dest, validate_state *state)
     * register/SSA value
     */
    assert(is_packed || !(dest->write_mask & ~((1 << dest_size) - 1)));
+
+   /* validate that saturate is only ever used on instructions with
+    * destinations of type float
+    */
+   nir_alu_instr *alu = nir_instr_as_alu(state->instr);
+   assert(nir_op_infos[alu->op].output_type == nir_type_float ||
+          !dest->saturate);
+
    validate_dest(&dest->dest, state);
 }
 
@@ -476,6 +514,8 @@ validate_instr(nir_instr *instr, validate_state *state)
       assert(!"Invalid ALU instruction type");
       break;
    }
+
+   state->instr = NULL;
 }
 
 static void
@@ -488,18 +528,12 @@ validate_phi_src(nir_phi_instr *instr, nir_block *pred, validate_state *state)
    exec_list_validate(&instr->srcs);
    nir_foreach_phi_src(instr, src) {
       if (src->pred == pred) {
-         unsigned num_components;
-         if (src->src.is_ssa)
-            num_components = src->src.ssa->num_components;
-         else {
-            if (src->src.reg.reg->is_packed)
-               num_components = 4; /* can't check anything */
-            else
-               num_components = src->src.reg.reg->num_components;
-         }
-         assert(num_components == instr->dest.ssa.num_components);
+         assert(src->src.is_ssa);
+         assert(src->src.ssa->num_components ==
+                instr->dest.ssa.num_components);
 
          validate_src(&src->src, state);
+         state->instr = NULL;
          return;
       }
    }
@@ -561,6 +595,8 @@ validate_block(nir_block *block, validate_state *state)
 static void
 validate_if(nir_if *if_stmt, validate_state *state)
 {
+   state->if_stmt = if_stmt;
+
    assert(!exec_node_is_head_sentinel(if_stmt->cf_node.node.prev));
    nir_cf_node *prev_node = nir_cf_node_prev(&if_stmt->cf_node);
    assert(prev_node->type == nir_cf_node_block);
@@ -575,15 +611,7 @@ validate_if(nir_if *if_stmt, validate_state *state)
    nir_cf_node *next_node = nir_cf_node_next(&if_stmt->cf_node);
    assert(next_node->type == nir_cf_node_block);
 
-   if (!if_stmt->condition.is_ssa) {
-      nir_register *reg = if_stmt->condition.reg.reg;
-      struct set_entry *entry =  _mesa_set_search(reg->if_uses, if_stmt);
-      assert(entry);
-   } else {
-      nir_ssa_def *def = if_stmt->condition.ssa;
-      struct set_entry *entry = _mesa_set_search(def->if_uses, if_stmt);
-      assert(entry);
-   }
+   validate_src(&if_stmt->condition, state);
 
    assert(!exec_list_is_empty(&if_stmt->then_list));
    assert(!exec_list_is_empty(&if_stmt->else_list));
@@ -602,6 +630,7 @@ validate_if(nir_if *if_stmt, validate_state *state)
    }
 
    state->parent_node = old_parent;
+   state->if_stmt = NULL;
 }
 
 static void
@@ -671,6 +700,8 @@ prevalidate_reg_decl(nir_register *reg, bool is_global, validate_state *state)
    reg_validate_state *reg_state = ralloc(state->regs, reg_validate_state);
    reg_state->uses = _mesa_set_create(reg_state, _mesa_hash_pointer,
                                       _mesa_key_pointer_equal);
+   reg_state->if_uses = _mesa_set_create(reg_state, _mesa_hash_pointer,
+                                         _mesa_key_pointer_equal);
    reg_state->defs = _mesa_set_create(reg_state, _mesa_hash_pointer,
                                       _mesa_key_pointer_equal);
 
@@ -692,6 +723,21 @@ postvalidate_reg_decl(nir_register *reg, validate_state *state)
       set_foreach(reg->uses, entry) {
          struct set_entry *entry2 =
             _mesa_set_search(reg_state->uses, entry->key);
+
+         if (entry2 == NULL) {
+            printf("%p\n", entry->key);
+         }
+      }
+
+      abort();
+   }
+
+   if (reg_state->if_uses->entries != reg->if_uses->entries) {
+      printf("extra entries in register if_uses:\n");
+      struct set_entry *entry;
+      set_foreach(reg->if_uses, entry) {
+         struct set_entry *entry2 =
+            _mesa_set_search(reg_state->if_uses, entry->key);
 
          if (entry2 == NULL) {
             printf("%p\n", entry->key);
@@ -730,6 +776,56 @@ validate_var_decl(nir_variable *var, bool is_global, validate_state *state)
    if (!is_global) {
       _mesa_hash_table_insert(state->var_defs, var, state->impl);
    }
+}
+
+static bool
+postvalidate_ssa_def(nir_ssa_def *def, void *void_state)
+{
+   validate_state *state = void_state;
+
+   struct hash_entry *entry = _mesa_hash_table_search(state->ssa_defs, def);
+   ssa_def_validate_state *def_state = (ssa_def_validate_state *)entry->data;
+
+   if (def_state->uses->entries != def->uses->entries) {
+      printf("extra entries in SSA def uses:\n");
+      struct set_entry *entry;
+      set_foreach(def->uses, entry) {
+         struct set_entry *entry2 =
+            _mesa_set_search(def_state->uses, entry->key);
+
+         if (entry2 == NULL) {
+            printf("%p\n", entry->key);
+         }
+      }
+
+      abort();
+   }
+
+   if (def_state->if_uses->entries != def->if_uses->entries) {
+      printf("extra entries in SSA def uses:\n");
+      struct set_entry *entry;
+      set_foreach(def->if_uses, entry) {
+         struct set_entry *entry2 =
+            _mesa_set_search(def_state->if_uses, entry->key);
+
+         if (entry2 == NULL) {
+            printf("%p\n", entry->key);
+         }
+      }
+
+      abort();
+   }
+
+   return true;
+}
+
+static bool
+postvalidate_ssa_defs_block(nir_block *block, void *state)
+{
+   nir_foreach_instr(block, instr)
+      nir_foreach_ssa_def(instr, postvalidate_ssa_def, state);
+
+   return true;
 }
 
 static void
@@ -782,6 +878,8 @@ validate_function_impl(nir_function_impl *impl, validate_state *state)
    foreach_list_typed(nir_register, reg, node, &impl->registers) {
       postvalidate_reg_decl(reg, state);
    }
+
+   nir_foreach_block(impl, postvalidate_ssa_defs_block, state);
 }
 
 static void

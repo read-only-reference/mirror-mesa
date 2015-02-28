@@ -132,12 +132,14 @@ API_XML = \
 	ARB_framebuffer_object.xml \
 	ARB_geometry_shader4.xml \
 	ARB_get_program_binary.xml \
+	ARB_gpu_shader_fp64.xml \
 	ARB_gpu_shader5.xml \
 	ARB_instanced_arrays.xml \
 	ARB_internalformat_query.xml \
 	ARB_invalidate_subdata.xml \
 	ARB_map_buffer_range.xml \
 	ARB_multi_bind.xml \
+	ARB_pipeline_statistics_query.xml \
 	ARB_robustness.xml \
 	ARB_sample_shading.xml \
 	ARB_sampler_objects.xml \

@@ -228,6 +228,7 @@ struct tgsi_declaration_array {
 #define TGSI_IMM_FLOAT32   0
 #define TGSI_IMM_UINT32    1
 #define TGSI_IMM_INT32     2
+#define TGSI_IMM_FLOAT64   3
 
 struct tgsi_immediate
 {
@@ -494,7 +495,36 @@ struct tgsi_property_data {
 #define TGSI_OPCODE_INTERP_SAMPLE       193
 #define TGSI_OPCODE_INTERP_OFFSET       194
 
-#define TGSI_OPCODE_LAST                195
+/* sm5 marked opcodes are supported in D3D11 optionally - also DMOV, DMOVC */
+#define TGSI_OPCODE_F2D                 195 /* SM5 */
+#define TGSI_OPCODE_D2F                 196
+#define TGSI_OPCODE_DABS                197
+#define TGSI_OPCODE_DNEG                198 /* SM5 */
+#define TGSI_OPCODE_DADD                199 /* SM5 */
+#define TGSI_OPCODE_DMUL                200 /* SM5 */
+#define TGSI_OPCODE_DMAX                201 /* SM5 */
+#define TGSI_OPCODE_DMIN                202 /* SM5 */
+#define TGSI_OPCODE_DSLT                203 /* SM5 */
+#define TGSI_OPCODE_DSGE                204 /* SM5 */
+#define TGSI_OPCODE_DSEQ                205 /* SM5 */
+#define TGSI_OPCODE_DSNE                206 /* SM5 */
+#define TGSI_OPCODE_DRCP                207 /* eg, cayman */
+#define TGSI_OPCODE_DSQRT               208 /* eg, cayman also has DRSQ */
+#define TGSI_OPCODE_DMAD                209 /* DFMA? */
+#define TGSI_OPCODE_DFRAC               210 /* eg, cayman */
+#define TGSI_OPCODE_DLDEXP              211 /* eg, cayman */
+#define TGSI_OPCODE_DFRACEXP            212 /* eg, cayman */
+#define TGSI_OPCODE_D2I                 213
+#define TGSI_OPCODE_I2D                 214
+#define TGSI_OPCODE_D2U                 215
+#define TGSI_OPCODE_U2D                 216
+#define TGSI_OPCODE_DRSQ                217 /* eg, cayman also has DRSQ */
+#define TGSI_OPCODE_DTRUNC              218 /* nvc0 */
+#define TGSI_OPCODE_DCEIL               219 /* nvc0 */
+#define TGSI_OPCODE_DFLR                220 /* nvc0 */
+#define TGSI_OPCODE_DROUND              221 /* nvc0 */
+#define TGSI_OPCODE_DSSG                222
+#define TGSI_OPCODE_LAST                223
 
 #define TGSI_SAT_NONE            0  /* do not saturate */
 #define TGSI_SAT_ZERO_ONE        1  /* clamp to [0,1] */

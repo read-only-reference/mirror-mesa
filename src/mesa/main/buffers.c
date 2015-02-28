@@ -336,6 +336,20 @@ _mesa_DrawBuffers(GLsizei n, const GLenum *buffers)
 
    /* complicated error checking... */
    for (output = 0; output < n; output++) {
+      /* Section 4.2 (Whole Framebuffer Operations) of the OpenGL 3.0
+       * specification says:
+       *
+       *     "Each buffer listed in bufs must be BACK, NONE, or one of the values
+       *      from table 4.3 (NONE, COLOR_ATTACHMENTi)"
+       */
+      if (_mesa_is_gles3(ctx) && buffers[output] != GL_NONE &&
+          buffers[output] != GL_BACK &&
+          (buffers[output] < GL_COLOR_ATTACHMENT0 ||
+           buffers[output] >= GL_COLOR_ATTACHMENT0 + ctx->Const.MaxColorAttachments)) {
+         _mesa_error(ctx, GL_INVALID_ENUM, "glDrawBuffers(buffer)");
+         return;
+      }
+
       if (buffers[output] == GL_NONE) {
          destMask[output] = 0x0;
       }
@@ -488,7 +502,7 @@ _mesa_drawbuffers(struct gl_context *ctx, GLuint n, const GLenum *buffers,
       GLuint output;
       for (output = 0; output < n; output++) {
          mask[output] = draw_buffer_enum_to_bitmask(ctx, buffers[output]);
-         ASSERT(mask[output] != BAD_MASK);
+         assert(mask[output] != BAD_MASK);
          mask[output] &= supportedMask;
       }
       destMask = mask;
@@ -519,7 +533,7 @@ _mesa_drawbuffers(struct gl_context *ctx, GLuint n, const GLenum *buffers,
          if (destMask[buf]) {
             GLint bufIndex = ffs(destMask[buf]) - 1;
             /* only one bit should be set in the destMask[buf] field */
-            ASSERT(_mesa_bitcount(destMask[buf]) == 1);
+            assert(_mesa_bitcount(destMask[buf]) == 1);
             if (fb->_ColorDrawBufferIndexes[buf] != bufIndex) {
 	       updated_drawbuffers(ctx);
                fb->_ColorDrawBufferIndexes[buf] = bufIndex;

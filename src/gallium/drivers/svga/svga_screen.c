@@ -283,6 +283,8 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_SAMPLER_VIEW_TARGET:
    case PIPE_CAP_CLIP_HALFZ:
    case PIPE_CAP_VERTEXID_NOBASE:
+   case PIPE_CAP_POLYGON_OFFSET_CLAMP:
+   case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
       return 0;
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
       return 64;
@@ -305,6 +307,7 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
       /* XXX: Query the host ? */
       return 1;
    case PIPE_CAP_UMA:
+   case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
       return 0;
    }
 
@@ -370,6 +373,8 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_PREFERRED_IR:
          return PIPE_SHADER_IR_TGSI;
       case PIPE_SHADER_CAP_DOUBLES:
+      case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
+      case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
          return 0;
       }
       /* If we get here, we failed to handle a cap above */
@@ -424,6 +429,8 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_PREFERRED_IR:
          return PIPE_SHADER_IR_TGSI;
       case PIPE_SHADER_CAP_DOUBLES:
+      case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
+      case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
          return 0;
       }
       /* If we get here, we failed to handle a cap above */

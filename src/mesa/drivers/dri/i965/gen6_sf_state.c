@@ -361,8 +361,12 @@ upload_sf_state(struct brw_context *brw)
 
    /* _NEW_LINE */
    {
-      uint32_t line_width_u3_7 =
-         U_FIXED(CLAMP(ctx->Line.Width, 0.0, ctx->Const.MaxLineWidth), 7);
+      /* OpenGL dictates that line width should be rounded to the nearest
+       * integer
+       */
+      float line_width =
+         roundf(CLAMP(ctx->Line.Width, 0.0, ctx->Const.MaxLineWidth));
+      uint32_t line_width_u3_7 = U_FIXED(line_width, 7);
       /* TODO: line width of 0 is not allowed when MSAA enabled */
       if (line_width_u3_7 == 0)
          line_width_u3_7 = 1;
@@ -427,7 +431,7 @@ upload_sf_state(struct brw_context *brw)
    OUT_BATCH(dw4);
    OUT_BATCH_F(ctx->Polygon.OffsetUnits * 2); /* constant.  copied from gen4 */
    OUT_BATCH_F(ctx->Polygon.OffsetFactor); /* scale */
-   OUT_BATCH_F(0.0); /* XXX: global depth offset clamp */
+   OUT_BATCH_F(ctx->Polygon.OffsetClamp); /* global depth offset clamp */
    for (i = 0; i < 8; i++) {
       OUT_BATCH(attr_overrides[i * 2] | attr_overrides[i * 2 + 1] << 16);
    }

@@ -149,40 +149,35 @@ static unsigned si_get_ia_multi_vgt_param(struct si_context *sctx,
 		S_028AA8_WD_SWITCH_ON_EOP(sctx->b.chip_class >= CIK ? wd_switch_on_eop : 0);
 }
 
-static void si_emit_rasterizer_prim_state(struct si_context *sctx, unsigned mode)
+/* rast_prim is the primitive type after GS. */
+static void si_emit_rasterizer_prim_state(struct si_context *sctx)
 {
 	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	unsigned rast_prim = sctx->current_rast_prim;
 
-	if (sctx->gs_shader)
-		mode = sctx->gs_shader->gs_output_prim;
-
-	if (mode == sctx->last_rast_prim)
+	if (rast_prim == sctx->last_rast_prim)
 		return;
 
 	r600_write_context_reg(cs, R_028A0C_PA_SC_LINE_STIPPLE,
 		sctx->pa_sc_line_stipple |
-		S_028A0C_AUTO_RESET_CNTL(mode == PIPE_PRIM_LINES ? 1 :
-					 mode == PIPE_PRIM_LINE_STRIP ? 2 : 0));
+		S_028A0C_AUTO_RESET_CNTL(rast_prim == PIPE_PRIM_LINES ? 1 :
+					 rast_prim == PIPE_PRIM_LINE_STRIP ? 2 : 0));
 
 	r600_write_context_reg(cs, R_028814_PA_SU_SC_MODE_CNTL,
 		sctx->pa_su_sc_mode_cntl |
-		S_028814_PROVOKING_VTX_LAST(mode == PIPE_PRIM_QUADS ||
-					    mode == PIPE_PRIM_QUAD_STRIP ||
-					    mode == PIPE_PRIM_POLYGON));
+		S_028814_PROVOKING_VTX_LAST(rast_prim == PIPE_PRIM_QUADS ||
+					    rast_prim == PIPE_PRIM_QUAD_STRIP ||
+					    rast_prim == PIPE_PRIM_POLYGON));
 
-	sctx->last_rast_prim = mode;
+	sctx->last_rast_prim = rast_prim;
 }
 
 static void si_emit_draw_registers(struct si_context *sctx,
-				   const struct pipe_draw_info *info,
-				   const struct pipe_index_buffer *ib)
+				   const struct pipe_draw_info *info)
 {
 	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
 	unsigned prim = si_conv_pipe_prim(info->mode);
-	unsigned gs_out_prim =
-		si_conv_prim_to_gs_out(sctx->gs_shader ?
-				       sctx->gs_shader->gs_output_prim :
-				       info->mode);
+	unsigned gs_out_prim = si_conv_prim_to_gs_out(sctx->current_rast_prim);
 	unsigned ia_multi_vgt_param = si_get_ia_multi_vgt_param(sctx, info);
 
 	/* Draw state. */
@@ -369,24 +364,21 @@ void si_emit_cache_flush(struct r600_common_context *sctx, struct r600_atom *ato
 {
 	struct radeon_winsys_cs *cs = sctx->rings.gfx.cs;
 	uint32_t cp_coher_cntl = 0;
-	uint32_t sqc_caches = 0;
 	uint32_t compute =
 		PKT3_SHADER_TYPE_S(!!(sctx->flags & SI_CONTEXT_FLAG_COMPUTE));
 
 	/* SI has a bug that it always flushes ICACHE and KCACHE if either
-	 * bit is set. An alternative way is to write SQC_CACHES. */
-	if (sctx->chip_class == SI &&
-	    sctx->flags & BOTH_ICACHE_KCACHE &&
-	    (sctx->flags & BOTH_ICACHE_KCACHE) != BOTH_ICACHE_KCACHE) {
-		sqc_caches =
-			S_008C08_INST_INVALIDATE(!!(sctx->flags & SI_CONTEXT_INV_ICACHE)) |
-			S_008C08_DATA_INVALIDATE(!!(sctx->flags & SI_CONTEXT_INV_KCACHE));
-	} else {
-		if (sctx->flags & SI_CONTEXT_INV_ICACHE)
-			cp_coher_cntl |= S_0085F0_SH_ICACHE_ACTION_ENA(1);
-		if (sctx->flags & SI_CONTEXT_INV_KCACHE)
-			cp_coher_cntl |= S_0085F0_SH_KCACHE_ACTION_ENA(1);
-	}
+	 * bit is set. An alternative way is to write SQC_CACHES, but that
+	 * doesn't seem to work reliably. Since the bug doesn't affect
+	 * correctness (it only does more work than necessary) and
+	 * the performance impact is likely negligible, there is no plan
+	 * to fix it.
+	 */
+
+	if (sctx->flags & SI_CONTEXT_INV_ICACHE)
+		cp_coher_cntl |= S_0085F0_SH_ICACHE_ACTION_ENA(1);
+	if (sctx->flags & SI_CONTEXT_INV_KCACHE)
+		cp_coher_cntl |= S_0085F0_SH_KCACHE_ACTION_ENA(1);
 
 	if (sctx->flags & SI_CONTEXT_INV_TC_L1)
 		cp_coher_cntl |= S_0085F0_TCL1_ACTION_ENA(1);
@@ -453,10 +445,6 @@ void si_emit_cache_flush(struct r600_common_context *sctx, struct r600_atom *ato
 	 * It looks like SURFACE_SYNC flushes caches immediately and doesn't
 	 * wait for any engines. This should be last.
 	 */
-	if (sqc_caches) {
-		r600_write_config_reg(cs, R_008C08_SQC_CACHES, sqc_caches);
-		cs->buf[cs->cdw-3] |= compute; /* set the compute bit in the header */
-	}
 	if (cp_coher_cntl) {
 		if (sctx->chip_class >= CIK) {
 			radeon_emit(cs, PKT3(PKT3_ACQUIRE_MEM, 5, 0) | compute);
@@ -502,7 +490,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 	struct pipe_index_buffer ib = {};
-	uint32_t i;
+	unsigned i;
 
 	if (!info->count && !info->indirect &&
 	    (info->indexed || !info->count_from_stream_output))
@@ -512,6 +500,17 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		return;
 
 	si_decompress_textures(sctx);
+
+	/* Set the rasterization primitive type.
+	 *
+	 * This must be done after si_decompress_textures, which can call
+	 * draw_vbo recursively, and before si_update_shaders, which uses
+	 * current_rast_prim for this draw_vbo call. */
+	if (sctx->gs_shader)
+		sctx->current_rast_prim = sctx->gs_shader->gs_output_prim;
+	else
+		sctx->current_rast_prim = info->mode;
+
 	si_update_shaders(sctx);
 
 	if (sctx->vertex_buffers_dirty) {
@@ -596,8 +595,8 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	}
 
 	si_pm4_emit_dirty(sctx);
-	si_emit_rasterizer_prim_state(sctx, info->mode);
-	si_emit_draw_registers(sctx, info, &ib);
+	si_emit_rasterizer_prim_state(sctx);
+	si_emit_draw_registers(sctx, info);
 	si_emit_draw_packets(sctx, info, &ib);
 
 #if SI_TRACE_CS

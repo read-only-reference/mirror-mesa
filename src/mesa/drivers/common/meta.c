@@ -393,7 +393,7 @@ _mesa_meta_setup_vertex_objects(GLuint *VAO, GLuint *VBO,
 void
 _mesa_meta_init(struct gl_context *ctx)
 {
-   ASSERT(!ctx->Meta);
+   assert(!ctx->Meta);
 
    ctx->Meta = CALLOC_STRUCT(gl_meta_state);
 }
@@ -823,19 +823,24 @@ _mesa_meta_begin(struct gl_context *ctx, GLbitfield state)
 void
 _mesa_meta_end(struct gl_context *ctx)
 {
+   assert(ctx->Meta->SaveStackDepth > 0);
+
    struct save_state *save = &ctx->Meta->Save[ctx->Meta->SaveStackDepth - 1];
    const GLbitfield state = save->SavedState;
    int i;
 
-   /* After starting a new occlusion query, initialize the results to the
-    * values saved previously. The driver will then continue to increment
-    * these values.
-    */
+   /* Grab the result of the old occlusion query before starting it again. The
+    * old result is added to the result of the new query so the driver will
+    * continue adding where it left off. */
    if (state & MESA_META_OCCLUSION_QUERY) {
       if (save->CurrentOcclusionObject) {
-         _mesa_BeginQuery(save->CurrentOcclusionObject->Target,
-                          save->CurrentOcclusionObject->Id);
-         ctx->Query.CurrentOcclusionObject->Result = save->CurrentOcclusionObject->Result;
+         struct gl_query_object *q = save->CurrentOcclusionObject;
+         GLuint64EXT result;
+         if (!q->Ready)
+            ctx->Driver.WaitQuery(ctx, q);
+         result = q->Result;
+         _mesa_BeginQuery(q->Target, q->Id);
+         ctx->Query.CurrentOcclusionObject->Result += result;
       }
    }
 
@@ -1042,7 +1047,7 @@ _mesa_meta_end(struct gl_context *ctx)
    if (state & MESA_META_TEXTURE) {
       GLuint u, tgt;
 
-      ASSERT(ctx->Texture.CurrentUnit == 0);
+      assert(ctx->Texture.CurrentUnit == 0);
 
       /* restore texenv for unit[0] */
       _mesa_TexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, save->EnvMode);
@@ -1329,8 +1334,8 @@ _mesa_meta_alloc_texture(struct temp_texture *tex,
 {
    GLboolean newTex = GL_FALSE;
 
-   ASSERT(width <= tex->MaxSize);
-   ASSERT(height <= tex->MaxSize);
+   assert(width <= tex->MaxSize);
+   assert(height <= tex->MaxSize);
 
    if (width > tex->Width ||
        height > tex->Height ||
@@ -1744,7 +1749,7 @@ meta_clear(struct gl_context *ctx, GLbitfield buffers, bool glsl)
          _mesa_ClampColor(GL_CLAMP_FRAGMENT_COLOR, GL_FALSE);
    }
    else {
-      ASSERT(metaSave & MESA_META_COLOR_MASK);
+      assert(metaSave & MESA_META_COLOR_MASK);
       _mesa_ColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
    }
 
@@ -2793,7 +2798,8 @@ copytexsubimage_using_blit_framebuffer(struct gl_context *ctx, GLuint dims,
     * are too strict for CopyTexImage.  We know meta will be fine with format
     * changes.
     */
-   mask = _mesa_meta_BlitFramebuffer(ctx, x, y,
+   mask = _mesa_meta_BlitFramebuffer(ctx, ctx->ReadBuffer, ctx->DrawBuffer,
+                                     x, y,
                                      x + width, y + height,
                                      xoffset, yoffset,
                                      xoffset + width, yoffset + height,

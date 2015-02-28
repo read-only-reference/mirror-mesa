@@ -59,7 +59,7 @@ struct st_transform_feedback_object {
    struct pipe_stream_output_target *draw_count;
 };
 
-static INLINE struct st_transform_feedback_object *
+static inline struct st_transform_feedback_object *
 st_transform_feedback_object(struct gl_transform_feedback_object *obj)
 {
    return (struct st_transform_feedback_object *) obj;
@@ -122,7 +122,7 @@ st_begin_transform_feedback(struct gl_context *ctx, GLenum mode,
    for (i = 0; i < max_num_targets; i++) {
       struct st_buffer_object *bo = st_buffer_object(sobj->base.Buffers[i]);
 
-      if (bo) {
+      if (bo && bo->buffer) {
          /* Check whether we need to recreate the target. */
          if (!sobj->targets[i] ||
              sobj->targets[i] == sobj->draw_count ||

@@ -29,6 +29,7 @@
  * Display lists management functions.
  */
 
+#include "c99_math.h"
 #include "glheader.h"
 #include "imports.h"
 #include "api_arrayelt.h"
@@ -484,6 +485,9 @@ typedef enum
    /* ARB_uniform_buffer_object */
    OPCODE_UNIFORM_BLOCK_BINDING,
 
+   /* EXT_polygon_offset_clamp */
+   OPCODE_POLYGON_OFFSET_CLAMP,
+
    /* The following three are meta instructions */
    OPCODE_ERROR,                /* raise compiled-in error */
    OPCODE_CONTINUE,
@@ -909,7 +913,7 @@ translate_id(GLsizei n, GLenum type, const GLvoid * list)
       return (GLint) uiptr[n];
    case GL_FLOAT:
       fptr = (GLfloat *) list;
-      return (GLint) FLOORF(fptr[n]);
+      return (GLint) floorf(fptr[n]);
    case GL_2_BYTES:
       ubptr = ((GLubyte *) list) + 2 * n;
       return (GLint) ubptr[0] * 256
@@ -1032,7 +1036,7 @@ dlist_alloc(struct gl_context *ctx, OpCode opcode, GLuint bytes, bool align8)
       }
       else {
          /* make sure instruction size agrees */
-         ASSERT(numNodes == InstSize[opcode]);
+         assert(numNodes == InstSize[opcode]);
       }
    }
 
@@ -3191,6 +3195,22 @@ save_PolygonOffsetEXT(GLfloat factor, GLfloat bias)
    save_PolygonOffset(factor, ctx->DrawBuffer->_DepthMaxF * bias);
 }
 
+static void GLAPIENTRY
+save_PolygonOffsetClampEXT(GLfloat factor, GLfloat units, GLfloat clamp)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   Node *n;
+   ASSERT_OUTSIDE_SAVE_BEGIN_END_AND_FLUSH(ctx);
+   n = alloc_instruction(ctx, OPCODE_POLYGON_OFFSET_CLAMP, 3);
+   if (n) {
+      n[1].f = factor;
+      n[2].f = units;
+      n[3].f = clamp;
+   }
+   if (ctx->ExecuteFlag) {
+      CALL_PolygonOffsetClampEXT(ctx->Exec, (factor, units, clamp));
+   }
+}
 
 static void GLAPIENTRY
 save_PopAttrib(void)
@@ -5070,7 +5090,7 @@ save_Attr1fNV(GLenum attr, GLfloat x)
       n[2].f = x;
    }
 
-   ASSERT(attr < MAX_VERTEX_GENERIC_ATTRIBS);
+   assert(attr < MAX_VERTEX_GENERIC_ATTRIBS);
    ctx->ListState.ActiveAttribSize[attr] = 1;
    ASSIGN_4V(ctx->ListState.CurrentAttrib[attr], x, 0, 0, 1);
 
@@ -5092,7 +5112,7 @@ save_Attr2fNV(GLenum attr, GLfloat x, GLfloat y)
       n[3].f = y;
    }
 
-   ASSERT(attr < MAX_VERTEX_GENERIC_ATTRIBS);
+   assert(attr < MAX_VERTEX_GENERIC_ATTRIBS);
    ctx->ListState.ActiveAttribSize[attr] = 2;
    ASSIGN_4V(ctx->ListState.CurrentAttrib[attr], x, y, 0, 1);
 
@@ -5115,7 +5135,7 @@ save_Attr3fNV(GLenum attr, GLfloat x, GLfloat y, GLfloat z)
       n[4].f = z;
    }
 
-   ASSERT(attr < MAX_VERTEX_GENERIC_ATTRIBS);
+   assert(attr < MAX_VERTEX_GENERIC_ATTRIBS);
    ctx->ListState.ActiveAttribSize[attr] = 3;
    ASSIGN_4V(ctx->ListState.CurrentAttrib[attr], x, y, z, 1);
 
@@ -5139,7 +5159,7 @@ save_Attr4fNV(GLenum attr, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
       n[5].f = w;
    }
 
-   ASSERT(attr < MAX_VERTEX_GENERIC_ATTRIBS);
+   assert(attr < MAX_VERTEX_GENERIC_ATTRIBS);
    ctx->ListState.ActiveAttribSize[attr] = 4;
    ASSIGN_4V(ctx->ListState.CurrentAttrib[attr], x, y, z, w);
 
@@ -5161,7 +5181,7 @@ save_Attr1fARB(GLenum attr, GLfloat x)
       n[2].f = x;
    }
 
-   ASSERT(attr < MAX_VERTEX_GENERIC_ATTRIBS);
+   assert(attr < MAX_VERTEX_GENERIC_ATTRIBS);
    ctx->ListState.ActiveAttribSize[attr] = 1;
    ASSIGN_4V(ctx->ListState.CurrentAttrib[attr], x, 0, 0, 1);
 
@@ -5183,7 +5203,7 @@ save_Attr2fARB(GLenum attr, GLfloat x, GLfloat y)
       n[3].f = y;
    }
 
-   ASSERT(attr < MAX_VERTEX_GENERIC_ATTRIBS);
+   assert(attr < MAX_VERTEX_GENERIC_ATTRIBS);
    ctx->ListState.ActiveAttribSize[attr] = 2;
    ASSIGN_4V(ctx->ListState.CurrentAttrib[attr], x, y, 0, 1);
 
@@ -5206,7 +5226,7 @@ save_Attr3fARB(GLenum attr, GLfloat x, GLfloat y, GLfloat z)
       n[4].f = z;
    }
 
-   ASSERT(attr < MAX_VERTEX_GENERIC_ATTRIBS);
+   assert(attr < MAX_VERTEX_GENERIC_ATTRIBS);
    ctx->ListState.ActiveAttribSize[attr] = 3;
    ASSIGN_4V(ctx->ListState.CurrentAttrib[attr], x, y, z, 1);
 
@@ -5230,7 +5250,7 @@ save_Attr4fARB(GLenum attr, GLfloat x, GLfloat y, GLfloat z, GLfloat w)
       n[5].f = w;
    }
 
-   ASSERT(attr < MAX_VERTEX_GENERIC_ATTRIBS);
+   assert(attr < MAX_VERTEX_GENERIC_ATTRIBS);
    ctx->ListState.ActiveAttribSize[attr] = 4;
    ASSIGN_4V(ctx->ListState.CurrentAttrib[attr], x, y, z, w);
 
@@ -8124,6 +8144,9 @@ execute_list(struct gl_context *ctx, GLuint list)
          case OPCODE_POLYGON_OFFSET:
             CALL_PolygonOffset(ctx->Exec, (n[1].f, n[2].f));
             break;
+         case OPCODE_POLYGON_OFFSET_CLAMP:
+            CALL_PolygonOffsetClampEXT(ctx->Exec, (n[1].f, n[2].f, n[3].f));
+            break;
          case OPCODE_POP_ATTRIB:
             CALL_PopAttrib(ctx->Exec, ());
             break;
@@ -9683,6 +9706,9 @@ _mesa_initialize_save_table(const struct gl_context *ctx)
    SET_ProgramUniformMatrix4x2fv(table, save_ProgramUniformMatrix4x2fv);
    SET_ProgramUniformMatrix3x4fv(table, save_ProgramUniformMatrix3x4fv);
    SET_ProgramUniformMatrix4x3fv(table, save_ProgramUniformMatrix4x3fv);
+
+   /* GL_EXT_polygon_offset_clamp */
+   SET_PolygonOffsetClampEXT(table, save_PolygonOffsetClampEXT);
 }
 
 

@@ -235,6 +235,22 @@ dst_reg::dst_reg(src_reg reg)
 }
 
 bool
+dst_reg::equals(const dst_reg &r) const
+{
+   return (file == r.file &&
+           reg == r.reg &&
+           reg_offset == r.reg_offset &&
+           type == r.type &&
+           negate == r.negate &&
+           abs == r.abs &&
+           writemask == r.writemask &&
+           (reladdr == r.reladdr ||
+            (reladdr && r.reladdr && reladdr->equals(*r.reladdr))) &&
+           memcmp(&fixed_hw_reg, &r.fixed_hw_reg,
+                  sizeof(fixed_hw_reg)) == 0);
+}
+
+bool
 vec4_instruction::is_send_from_grf()
 {
    switch (opcode) {
@@ -243,6 +259,24 @@ vec4_instruction::is_send_from_grf()
       return true;
    default:
       return false;
+   }
+}
+
+unsigned
+vec4_instruction::regs_read(unsigned arg) const
+{
+   if (src[arg].file == BAD_FILE)
+      return 0;
+
+   switch (opcode) {
+   case SHADER_OPCODE_SHADER_TIME_ADD:
+      return arg == 0 ? mlen : 1;
+
+   case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
+      return arg == 1 ? mlen : 1;
+
+   default:
+      return 1;
    }
 }
 
@@ -271,7 +305,7 @@ vec4_instruction::can_do_source_mods(struct brw_context *brw)
 int
 vec4_visitor::implied_mrf_writes(vec4_instruction *inst)
 {
-   if (inst->mlen == 0)
+   if (inst->mlen == 0 || inst->is_send_from_grf())
       return 0;
 
    switch (inst->opcode) {
@@ -344,9 +378,9 @@ vec4_visitor::opt_vector_float()
    int last_reg = -1, last_reg_offset = -1;
    enum register_file last_reg_file = BAD_FILE;
 
-   int remaining_channels;
+   int remaining_channels = 0;
    uint8_t imm[4];
-   int inst_count;
+   int inst_count = 0;
    vec4_instruction *imm_inst[4];
 
    foreach_block_and_inst_safe(block, vec4_instruction, inst, cfg) {
@@ -421,7 +455,8 @@ vec4_visitor::opt_reduce_swizzle()
    bool progress = false;
 
    foreach_block_and_inst_safe(block, vec4_instruction, inst, cfg) {
-      if (inst->dst.file == BAD_FILE || inst->dst.file == HW_REG)
+      if (inst->dst.file == BAD_FILE || inst->dst.file == HW_REG ||
+          inst->is_send_from_grf())
          continue;
 
       int swizzle[4];
@@ -691,6 +726,11 @@ vec4_visitor::opt_algebraic()
 	    inst->opcode = BRW_OPCODE_MOV;
 	    inst->src[1] = src_reg();
 	    progress = true;
+         } else if (inst->src[1].is_negative_one()) {
+            inst->opcode = BRW_OPCODE_MOV;
+            inst->src[0].negate = !inst->src[0].negate;
+            inst->src[1] = src_reg();
+            progress = true;
 	 }
 	 break;
       case BRW_OPCODE_CMP:
@@ -822,17 +862,22 @@ vec4_visitor::is_dep_ctrl_unsafe(const vec4_instruction *inst)
    (reg.type == BRW_REGISTER_TYPE_UD || \
     reg.type == BRW_REGISTER_TYPE_D)
 
-   /* From the destination hazard section of the spec:
-    * > Instructions other than send, may use this control as long as operations
-    * > that have different pipeline latencies are not mixed.
+   /* "When source or destination datatype is 64b or operation is integer DWord
+    * multiply, DepCtrl must not be used."
+    * May apply to future SoCs as well.
     */
-   if (brw->gen >= 8) {
+   if (brw->is_cherryview) {
       if (inst->opcode == BRW_OPCODE_MUL &&
          IS_DWORD(inst->src[0]) &&
          IS_DWORD(inst->src[1]))
          return true;
    }
 #undef IS_DWORD
+
+   if (brw->gen >= 8) {
+      if (inst->opcode == BRW_OPCODE_F32TO16)
+         return true;
+   }
 
    /*
     * mlen:
@@ -1209,7 +1254,7 @@ vec4_visitor::opt_register_coalesce()
 void
 vec4_visitor::split_virtual_grfs()
 {
-   int num_vars = this->virtual_grf_count;
+   int num_vars = this->alloc.count;
    int new_virtual_grf[num_vars];
    bool split_grf[num_vars];
 
@@ -1217,7 +1262,7 @@ vec4_visitor::split_virtual_grfs()
 
    /* Try to split anything > 0 sized. */
    for (int i = 0; i < num_vars; i++) {
-      split_grf[i] = this->virtual_grf_sizes[i] != 1;
+      split_grf[i] = this->alloc.sizes[i] != 1;
    }
 
    /* Check that the instructions are compatible with the registers we're trying
@@ -1243,13 +1288,13 @@ vec4_visitor::split_virtual_grfs()
       if (!split_grf[i])
          continue;
 
-      new_virtual_grf[i] = virtual_grf_alloc(1);
-      for (int j = 2; j < this->virtual_grf_sizes[i]; j++) {
-         int reg = virtual_grf_alloc(1);
+      new_virtual_grf[i] = alloc.allocate(1);
+      for (unsigned j = 2; j < this->alloc.sizes[i]; j++) {
+         unsigned reg = alloc.allocate(1);
          assert(reg == new_virtual_grf[i] + j - 1);
          (void) reg;
       }
-      this->virtual_grf_sizes[i] = 1;
+      this->alloc.sizes[i] = 1;
    }
 
    foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
@@ -1283,13 +1328,20 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
    vec4_instruction *inst = (vec4_instruction *)be_inst;
 
    if (inst->predicate) {
-      fprintf(file, "(%cf0) ",
-             inst->predicate_inverse ? '-' : '+');
+      fprintf(file, "(%cf0.%d) ",
+              inst->predicate_inverse ? '-' : '+',
+              inst->flag_subreg);
    }
 
    fprintf(file, "%s", brw_instruction_name(inst->opcode));
    if (inst->conditional_mod) {
       fprintf(file, "%s", conditional_modifier[inst->conditional_mod]);
+      if (!inst->predicate &&
+          (brw->gen < 5 || (inst->opcode != BRW_OPCODE_SEL &&
+                            inst->opcode != BRW_OPCODE_IF &&
+                            inst->opcode != BRW_OPCODE_WHILE))) {
+         fprintf(file, ".f0.%d", inst->flag_subreg);
+      }
    }
    fprintf(file, " ");
 
@@ -1432,7 +1484,7 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
       /* Don't print .0; and only VGRFs have reg_offsets and sizes */
       if (inst->src[i].reg_offset != 0 &&
           inst->src[i].file == GRF &&
-          virtual_grf_sizes[inst->src[i].reg] != 1)
+          alloc.sizes[inst->src[i].reg] != 1)
          fprintf(file, ".%d", inst->src[i].reg_offset);
 
       if (inst->src[i].file != IMM) {
@@ -1720,7 +1772,9 @@ vec4_visitor::emit_shader_time_write(enum shader_time_shader_type type,
    time.type = BRW_REGISTER_TYPE_UD;
    emit(MOV(time, src_reg(value)));
 
-   emit(SHADER_OPCODE_SHADER_TIME_ADD, dst_reg(), src_reg(dst));
+   vec4_instruction *inst =
+      emit(SHADER_OPCODE_SHADER_TIME_ADD, dst_reg(), src_reg(dst));
+   inst->mlen = 2;
 }
 
 bool
@@ -1834,9 +1888,9 @@ vec4_visitor::run()
 
    if (false) {
       /* Debug of register spilling: Go spill everything. */
-      const int grf_count = virtual_grf_count;
-      float spill_costs[virtual_grf_count];
-      bool no_spill[virtual_grf_count];
+      const int grf_count = alloc.count;
+      float spill_costs[alloc.count];
+      bool no_spill[alloc.count];
       evaluate_spill_costs(spill_costs, no_spill);
       for (int i = 0; i < grf_count; i++) {
          if (no_spill[i])

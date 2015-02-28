@@ -32,6 +32,7 @@
 #include "util/u_format.h"
 #include "util/u_format_s3tc.h"
 #include "util/u_memory.h"
+#include "util/u_pstipple.h"
 
 static void si_init_atom(struct r600_atom *atom, struct r600_atom **list_elem,
 			 void (*emit)(struct si_context *ctx, struct r600_atom *state),
@@ -464,9 +465,8 @@ static void si_emit_clip_regs(struct si_context *sctx, struct r600_atom *atom)
 {
 	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
 	struct tgsi_shader_info *info = si_get_vs_info(sctx);
-	struct si_shader *vs = si_get_vs_state(sctx);
 	unsigned window_space =
-	   vs->selector->info.properties[TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION];
+	   info->properties[TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION];
 	unsigned clipdist_mask =
 		info->writes_clipvertex ? SIX_BITS : info->clipdist_writemask;
 
@@ -616,6 +616,7 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 	rs->multisample_enable = state->multisample;
 	rs->clip_plane_enable = state->clip_plane_enable;
 	rs->line_stipple_enable = state->line_stipple_enable;
+	rs->poly_stipple_enable = state->poly_stipple_enable;
 
 	polygon_dual_mode = (state->fill_front != PIPE_POLYGON_MODE_FILL ||
 				state->fill_back != PIPE_POLYGON_MODE_FILL);
@@ -733,12 +734,16 @@ static void si_delete_rs_state(struct pipe_context *ctx, void *state)
  */
 static void si_update_dsa_stencil_ref(struct si_context *sctx)
 {
-	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
+	struct si_pm4_state *pm4;
 	struct pipe_stencil_ref *ref = &sctx->stencil_ref;
-        struct si_state_dsa *dsa = sctx->queued.named.dsa;
+	struct si_state_dsa *dsa = sctx->queued.named.dsa;
 
-        if (pm4 == NULL)
-                return;
+	if (!dsa)
+		return;
+
+	pm4 = CALLOC_STRUCT(si_pm4_state);
+	if (pm4 == NULL)
+		return;
 
 	si_pm4_set_reg(pm4, R_028430_DB_STENCILREFMASK,
 		       S_028430_STENCILTESTVAL(ref->ref_value[0]) |
@@ -2246,9 +2251,20 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 	/* initialize base object */
 	view->base = *state;
 	view->base.texture = NULL;
-	pipe_resource_reference(&view->base.texture, texture);
 	view->base.reference.count = 1;
 	view->base.context = ctx;
+
+	/* NULL resource, obey swizzle (only ZERO and ONE make sense). */
+	if (!texture) {
+		view->state[3] = S_008F1C_DST_SEL_X(si_map_swizzle(state->swizzle_r)) |
+				 S_008F1C_DST_SEL_Y(si_map_swizzle(state->swizzle_g)) |
+				 S_008F1C_DST_SEL_Z(si_map_swizzle(state->swizzle_b)) |
+				 S_008F1C_DST_SEL_W(si_map_swizzle(state->swizzle_a)) |
+				 S_008F1C_TYPE(V_008F1C_SQ_RSRC_IMG_1D);
+		return &view->base;
+	}
+
+	pipe_resource_reference(&view->base.texture, texture);
 	view->resource = &tmp->resource;
 
 	/* Buffer resource. */
@@ -2262,11 +2278,11 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 		format = si_translate_buffer_dataformat(ctx->screen, desc, first_non_void);
 		num_format = si_translate_buffer_numformat(ctx->screen, desc, first_non_void);
 
-		view->state[0] = va;
-		view->state[1] = S_008F04_BASE_ADDRESS_HI(va >> 32) |
+		view->state[4] = va;
+		view->state[5] = S_008F04_BASE_ADDRESS_HI(va >> 32) |
 				 S_008F04_STRIDE(stride);
-		view->state[2] = state->u.buf.last_element + 1 - state->u.buf.first_element;
-		view->state[3] = S_008F0C_DST_SEL_X(si_map_swizzle(desc->swizzle[0])) |
+		view->state[6] = state->u.buf.last_element + 1 - state->u.buf.first_element;
+		view->state[7] = S_008F0C_DST_SEL_X(si_map_swizzle(desc->swizzle[0])) |
 				 S_008F0C_DST_SEL_Y(si_map_swizzle(desc->swizzle[1])) |
 				 S_008F0C_DST_SEL_Z(si_map_swizzle(desc->swizzle[2])) |
 				 S_008F0C_DST_SEL_W(si_map_swizzle(desc->swizzle[3])) |
@@ -2484,7 +2500,7 @@ static void si_sampler_view_destroy(struct pipe_context *ctx,
 {
 	struct si_sampler_view *view = (struct si_sampler_view *)state;
 
-	if (view->resource->b.b.target == PIPE_BUFFER)
+	if (view->resource && view->resource->b.b.target == PIPE_BUFFER)
 		LIST_DELINIT(&view->list);
 
 	pipe_resource_reference(&state->texture, NULL);
@@ -2749,6 +2765,56 @@ static void si_set_index_buffer(struct pipe_context *ctx,
 static void si_set_polygon_stipple(struct pipe_context *ctx,
 				   const struct pipe_poly_stipple *state)
 {
+	struct si_context *sctx = (struct si_context *)ctx;
+	struct pipe_resource *tex;
+	struct pipe_sampler_view *view;
+	bool is_zero = true;
+	bool is_one = true;
+	int i;
+
+	/* The hardware obeys 0 and 1 swizzles in the descriptor even if
+	 * the resource is NULL/invalid. Take advantage of this fact and skip
+	 * texture allocation if the stipple pattern is constant.
+	 *
+	 * This is an optimization for the common case when stippling isn't
+	 * used but set_polygon_stipple is still called by st/mesa.
+	 */
+	for (i = 0; i < Elements(state->stipple); i++) {
+		is_zero = is_zero && state->stipple[i] == 0;
+		is_one = is_one && state->stipple[i] == 0xffffffff;
+	}
+
+	if (is_zero || is_one) {
+		struct pipe_sampler_view templ = {{0}};
+
+		templ.swizzle_r = PIPE_SWIZZLE_ZERO;
+		templ.swizzle_g = PIPE_SWIZZLE_ZERO;
+		templ.swizzle_b = PIPE_SWIZZLE_ZERO;
+		/* The pattern should be inverted in the texture. */
+		templ.swizzle_a = is_zero ? PIPE_SWIZZLE_ONE : PIPE_SWIZZLE_ZERO;
+
+		view = ctx->create_sampler_view(ctx, NULL, &templ);
+	} else {
+		/* Create a new texture. */
+		tex = util_pstipple_create_stipple_texture(ctx, state->stipple);
+		if (!tex)
+			return;
+
+		view = util_pstipple_create_sampler_view(ctx, tex);
+		pipe_resource_reference(&tex, NULL);
+	}
+
+	ctx->set_sampler_views(ctx, PIPE_SHADER_FRAGMENT,
+			       SI_POLY_STIPPLE_SAMPLER, 1, &view);
+	pipe_sampler_view_reference(&view, NULL);
+
+	/* Bind the sampler state if needed. */
+	if (!sctx->pstipple_sampler_state) {
+		sctx->pstipple_sampler_state = util_pstipple_create_sampler(ctx);
+		ctx->bind_sampler_states(ctx, PIPE_SHADER_FRAGMENT,
+					 SI_POLY_STIPPLE_SAMPLER, 1,
+					 &sctx->pstipple_sampler_state);
+	}
 }
 
 static void si_texture_barrier(struct pipe_context *ctx)
@@ -2976,7 +3042,7 @@ void si_init_config(struct si_context *sctx)
 	si_pm4_set_reg(pm4, R_028B90_VGT_GS_INSTANCE_CNT, 0);
 
 	si_pm4_set_reg(pm4, R_028B98_VGT_STRMOUT_BUFFER_CONFIG, 0x0);
-	si_pm4_set_reg(pm4, R_028AB4_VGT_REUSE_OFF, 0x00000000);
+	si_pm4_set_reg(pm4, R_028AB4_VGT_REUSE_OFF, 0);
 	si_pm4_set_reg(pm4, R_028AB8_VGT_VTX_CNT_EN, 0x0);
 	if (sctx->b.chip_class < CIK)
 		si_pm4_set_reg(pm4, R_008A14_PA_CL_ENHANCE, S_008A14_NUM_CLIP_SEQ(3) |
@@ -2991,7 +3057,7 @@ void si_init_config(struct si_context *sctx)
 		switch (sctx->screen->b.family) {
 		case CHIP_BONAIRE:
 			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x16000012);
-			si_pm4_set_reg(pm4, R_028354_PA_SC_RASTER_CONFIG_1, 0x00000000);
+			si_pm4_set_reg(pm4, R_028354_PA_SC_RASTER_CONFIG_1, 0);
 			break;
 		case CHIP_HAWAII:
 			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x3a00161a);
@@ -3004,8 +3070,8 @@ void si_init_config(struct si_context *sctx)
 		case CHIP_MULLINS:
 			/* XXX todo */
 		default:
-			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0x00000000);
-			si_pm4_set_reg(pm4, R_028354_PA_SC_RASTER_CONFIG_1, 0x00000000);
+			si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, 0);
+			si_pm4_set_reg(pm4, R_028354_PA_SC_RASTER_CONFIG_1, 0);
 			break;
 		}
 	} else {
@@ -3025,12 +3091,12 @@ void si_init_config(struct si_context *sctx)
 			raster_config = 0x00000082;
 			break;
 		case CHIP_HAINAN:
-			raster_config = 0x00000000;
+			raster_config = 0;
 			break;
 		default:
 			fprintf(stderr,
 				"radeonsi: Unknown GPU, using 0 for raster_config\n");
-			raster_config = 0x00000000;
+			raster_config = 0;
 			break;
 		}
 
@@ -3055,16 +3121,18 @@ void si_init_config(struct si_context *sctx)
 
 	si_pm4_set_reg(pm4, R_02820C_PA_SC_CLIPRECT_RULE, 0xFFFF);
 	si_pm4_set_reg(pm4, R_028230_PA_SC_EDGERULE, 0xAAAAAAAA);
-	si_pm4_set_reg(pm4, R_0282D0_PA_SC_VPORT_ZMIN_0, 0x00000000);
-	si_pm4_set_reg(pm4, R_0282D4_PA_SC_VPORT_ZMAX_0, 0x3F800000);
-	si_pm4_set_reg(pm4, R_028820_PA_CL_NANINF_CNTL, 0x00000000);
-	si_pm4_set_reg(pm4, R_028BE8_PA_CL_GB_VERT_CLIP_ADJ, 0x3F800000);
-	si_pm4_set_reg(pm4, R_028BEC_PA_CL_GB_VERT_DISC_ADJ, 0x3F800000);
-	si_pm4_set_reg(pm4, R_028BF0_PA_CL_GB_HORZ_CLIP_ADJ, 0x3F800000);
-	si_pm4_set_reg(pm4, R_028BF4_PA_CL_GB_HORZ_DISC_ADJ, 0x3F800000);
-	si_pm4_set_reg(pm4, R_028020_DB_DEPTH_BOUNDS_MIN, 0x00000000);
-	si_pm4_set_reg(pm4, R_028024_DB_DEPTH_BOUNDS_MAX, 0x00000000);
-	si_pm4_set_reg(pm4, R_028028_DB_STENCIL_CLEAR, 0x00000000);
+	/* PA_SU_HARDWARE_SCREEN_OFFSET must be 0 due to hw bug on SI */
+	si_pm4_set_reg(pm4, R_028234_PA_SU_HARDWARE_SCREEN_OFFSET, 0);
+	si_pm4_set_reg(pm4, R_0282D0_PA_SC_VPORT_ZMIN_0, 0);
+	si_pm4_set_reg(pm4, R_0282D4_PA_SC_VPORT_ZMAX_0, fui(1.0));
+	si_pm4_set_reg(pm4, R_028820_PA_CL_NANINF_CNTL, 0);
+	si_pm4_set_reg(pm4, R_028BE8_PA_CL_GB_VERT_CLIP_ADJ, fui(1.0));
+	si_pm4_set_reg(pm4, R_028BEC_PA_CL_GB_VERT_DISC_ADJ, fui(1.0));
+	si_pm4_set_reg(pm4, R_028BF0_PA_CL_GB_HORZ_CLIP_ADJ, fui(1.0));
+	si_pm4_set_reg(pm4, R_028BF4_PA_CL_GB_HORZ_DISC_ADJ, fui(1.0));
+	si_pm4_set_reg(pm4, R_028020_DB_DEPTH_BOUNDS_MIN, 0);
+	si_pm4_set_reg(pm4, R_028024_DB_DEPTH_BOUNDS_MAX, 0);
+	si_pm4_set_reg(pm4, R_028028_DB_STENCIL_CLEAR, 0);
 	si_pm4_set_reg(pm4, R_028AC0_DB_SRESULTS_COMPARE_STATE0, 0x0);
 	si_pm4_set_reg(pm4, R_028AC4_DB_SRESULTS_COMPARE_STATE1, 0x0);
 	si_pm4_set_reg(pm4, R_028AC8_DB_PRELOAD_CONTROL, 0x0);

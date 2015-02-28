@@ -246,9 +246,10 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return PIPE_ENDIAN_NATIVE;
    case PIPE_CAP_TGSI_VS_LAYER_VIEWPORT:
       return 1;
+   case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
+      return 1;
    case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
    case PIPE_CAP_TEXTURE_GATHER_SM5:
-   case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
    case PIPE_CAP_TEXTURE_QUERY_LOD:
    case PIPE_CAP_SAMPLE_SHADING:
    case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
@@ -283,6 +284,11 @@ llvmpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_CLIP_HALFZ:
       return 1;
    case PIPE_CAP_VERTEXID_NOBASE:
+      return 0;
+   case PIPE_CAP_POLYGON_OFFSET_CLAMP:
+      return 1;
+   case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
+   case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
       return 0;
    }
    /* should only get here on unhandled cases */
@@ -446,6 +452,10 @@ llvmpipe_is_format_supported( struct pipe_screen *_screen,
       /* Software decoding is not hooked up. */
       return FALSE;
    }
+
+   if (format_desc->layout == UTIL_FORMAT_LAYOUT_ETC &&
+       format != PIPE_FORMAT_ETC1_RGB8)
+      return FALSE;
 
    if (format_desc->layout == UTIL_FORMAT_LAYOUT_S3TC) {
       return util_format_s3tc_enabled;

@@ -118,6 +118,7 @@ struct ilo_layout {
    /* bitmask of levels that can use aux */
    unsigned aux_enables;
    unsigned aux_offsets[PIPE_MAX_TEXTURE_LEVELS];
+   unsigned aux_layer_height;
    unsigned aux_stride;
    unsigned aux_height;
 };
@@ -281,6 +282,8 @@ ilo_layout_get_slice_pos(const struct ilo_layout *layout,
       }
    default:
       assert(!"unknown layout walk type");
+      *x = 0;
+      *y = 0;
       break;
    }
 

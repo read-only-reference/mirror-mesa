@@ -544,9 +544,9 @@ fs_instruction_scheduler::get_register_pressure_benefit(backend_instruction *be)
 
    if (inst->dst.file == GRF) {
       if (remaining_grf_uses[inst->dst.reg] == 1)
-         benefit += v->virtual_grf_sizes[inst->dst.reg];
+         benefit += v->alloc.sizes[inst->dst.reg];
       if (!grf_active[inst->dst.reg])
-         benefit -= v->virtual_grf_sizes[inst->dst.reg];
+         benefit -= v->alloc.sizes[inst->dst.reg];
    }
 
    for (int i = 0; i < inst->sources; i++) {
@@ -554,9 +554,9 @@ fs_instruction_scheduler::get_register_pressure_benefit(backend_instruction *be)
          continue;
 
       if (remaining_grf_uses[inst->src[i].reg] == 1)
-         benefit += v->virtual_grf_sizes[inst->src[i].reg];
+         benefit += v->alloc.sizes[inst->src[i].reg];
       if (!grf_active[inst->src[i].reg])
-         benefit -= v->virtual_grf_sizes[inst->src[i].reg];
+         benefit -= v->alloc.sizes[inst->src[i].reg];
    }
 
    return benefit;
@@ -793,10 +793,10 @@ fs_instruction_scheduler::calculate_deps()
       for (int i = 0; i < inst->sources; i++) {
          if (inst->src[i].file == GRF) {
             if (post_reg_alloc) {
-               for (int r = 0; r < inst->regs_read(v, i); r++)
+               for (int r = 0; r < inst->regs_read(i); r++)
                   add_dep(last_grf_write[inst->src[i].reg + r], n);
             } else {
-               for (int r = 0; r < inst->regs_read(v, i); r++) {
+               for (int r = 0; r < inst->regs_read(i); r++) {
                   add_dep(last_grf_write[inst->src[i].reg * 16 + inst->src[i].reg_offset + r], n);
                }
             }
@@ -922,10 +922,10 @@ fs_instruction_scheduler::calculate_deps()
       for (int i = 0; i < inst->sources; i++) {
          if (inst->src[i].file == GRF) {
             if (post_reg_alloc) {
-               for (int r = 0; r < inst->regs_read(v, i); r++)
+               for (int r = 0; r < inst->regs_read(i); r++)
                   add_dep(n, last_grf_write[inst->src[i].reg + r]);
             } else {
-               for (int r = 0; r < inst->regs_read(v, i); r++) {
+               for (int r = 0; r < inst->regs_read(i); r++) {
                   add_dep(n, last_grf_write[inst->src[i].reg * 16 + inst->src[i].reg_offset + r]);
                }
             }
@@ -1063,7 +1063,8 @@ vec4_instruction_scheduler::calculate_deps()
       /* read-after-write deps. */
       for (int i = 0; i < 3; i++) {
          if (inst->src[i].file == GRF) {
-            add_dep(last_grf_write[inst->src[i].reg], n);
+            for (unsigned j = 0; j < inst->regs_read(i); ++j)
+               add_dep(last_grf_write[inst->src[i].reg + j], n);
          } else if (inst->src[i].file == HW_REG &&
                     (inst->src[i].fixed_hw_reg.file ==
                      BRW_GENERAL_REGISTER_FILE)) {
@@ -1083,12 +1084,14 @@ vec4_instruction_scheduler::calculate_deps()
          }
       }
 
-      for (int i = 0; i < inst->mlen; i++) {
-         /* It looks like the MRF regs are released in the send
-          * instruction once it's sent, not when the result comes
-          * back.
-          */
-         add_dep(last_mrf_write[inst->base_mrf + i], n);
+      if (!inst->is_send_from_grf()) {
+         for (int i = 0; i < inst->mlen; i++) {
+            /* It looks like the MRF regs are released in the send
+             * instruction once it's sent, not when the result comes
+             * back.
+             */
+            add_dep(last_mrf_write[inst->base_mrf + i], n);
+         }
       }
 
       if (inst->reads_flag()) {
@@ -1103,8 +1106,10 @@ vec4_instruction_scheduler::calculate_deps()
 
       /* write-after-write deps. */
       if (inst->dst.file == GRF) {
-         add_dep(last_grf_write[inst->dst.reg], n);
-         last_grf_write[inst->dst.reg] = n;
+         for (unsigned j = 0; j < inst->regs_written; ++j) {
+            add_dep(last_grf_write[inst->dst.reg + j], n);
+            last_grf_write[inst->dst.reg + j] = n;
+         }
       } else if (inst->dst.file == MRF) {
          add_dep(last_mrf_write[inst->dst.reg], n);
          last_mrf_write[inst->dst.reg] = n;
@@ -1119,7 +1124,7 @@ vec4_instruction_scheduler::calculate_deps()
          add_barrier_deps(n);
       }
 
-      if (inst->mlen > 0) {
+      if (inst->mlen > 0 && !inst->is_send_from_grf()) {
          for (int i = 0; i < v->implied_mrf_writes(inst); i++) {
             add_dep(last_mrf_write[inst->base_mrf + i], n);
             last_mrf_write[inst->base_mrf + i] = n;
@@ -1156,7 +1161,8 @@ vec4_instruction_scheduler::calculate_deps()
       /* write-after-read deps. */
       for (int i = 0; i < 3; i++) {
          if (inst->src[i].file == GRF) {
-            add_dep(n, last_grf_write[inst->src[i].reg]);
+            for (unsigned j = 0; j < inst->regs_read(i); ++j)
+               add_dep(n, last_grf_write[inst->src[i].reg + j]);
          } else if (inst->src[i].file == HW_REG &&
                     (inst->src[i].fixed_hw_reg.file ==
                      BRW_GENERAL_REGISTER_FILE)) {
@@ -1174,12 +1180,14 @@ vec4_instruction_scheduler::calculate_deps()
          }
       }
 
-      for (int i = 0; i < inst->mlen; i++) {
-         /* It looks like the MRF regs are released in the send
-          * instruction once it's sent, not when the result comes
-          * back.
-          */
-         add_dep(n, last_mrf_write[inst->base_mrf + i], 2);
+      if (!inst->is_send_from_grf()) {
+         for (int i = 0; i < inst->mlen; i++) {
+            /* It looks like the MRF regs are released in the send
+             * instruction once it's sent, not when the result comes
+             * back.
+             */
+            add_dep(n, last_mrf_write[inst->base_mrf + i], 2);
+         }
       }
 
       if (inst->reads_flag()) {
@@ -1194,7 +1202,8 @@ vec4_instruction_scheduler::calculate_deps()
        * can mark this as WAR dependency.
        */
       if (inst->dst.file == GRF) {
-         last_grf_write[inst->dst.reg] = n;
+         for (unsigned j = 0; j < inst->regs_written; ++j)
+            last_grf_write[inst->dst.reg + j] = n;
       } else if (inst->dst.file == MRF) {
          last_mrf_write[inst->dst.reg] = n;
       } else if (inst->dst.file == HW_REG &&
@@ -1207,7 +1216,7 @@ vec4_instruction_scheduler::calculate_deps()
          add_barrier_deps(n);
       }
 
-      if (inst->mlen > 0) {
+      if (inst->mlen > 0 && !inst->is_send_from_grf()) {
          for (int i = 0; i < v->implied_mrf_writes(inst); i++) {
             last_mrf_write[inst->base_mrf + i] = n;
          }
@@ -1503,14 +1512,14 @@ fs_visitor::schedule_instructions(instruction_scheduler_mode mode)
    if (mode == SCHEDULE_POST)
       grf_count = grf_used;
    else
-      grf_count = virtual_grf_count;
+      grf_count = alloc.count;
 
    fs_instruction_scheduler sched(this, grf_count, mode);
    sched.run(cfg);
 
-   if (unlikely(INTEL_DEBUG & DEBUG_WM) && mode == SCHEDULE_POST) {
-      fprintf(stderr, "fs%d estimated execution time: %d cycles\n",
-             dispatch_width, sched.time);
+   if (unlikely(debug_enabled) && mode == SCHEDULE_POST) {
+      fprintf(stderr, "%s%d estimated execution time: %d cycles\n",
+              stage_abbrev, dispatch_width, sched.time);
    }
 
    invalidate_live_intervals();
@@ -1522,8 +1531,9 @@ vec4_visitor::opt_schedule_instructions()
    vec4_instruction_scheduler sched(this, prog_data->total_grf);
    sched.run(cfg);
 
-   if (unlikely(debug_flag)) {
-      fprintf(stderr, "vec4 estimated execution time: %d cycles\n", sched.time);
+   if (unlikely(debug_enabled)) {
+      fprintf(stderr, "%s estimated execution time: %d cycles\n",
+              stage_abbrev, sched.time);
    }
 
    invalidate_live_intervals();

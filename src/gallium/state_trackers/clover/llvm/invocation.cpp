@@ -44,7 +44,11 @@
 #if HAVE_LLVM < 0x0305
 #include <llvm/ADT/OwningPtr.h>
 #endif
+#if HAVE_LLVM >= 0x0307
+#include <llvm/IR/LegacyPassManager.h>
+#else
 #include <llvm/PassManager.h>
+#endif
 #include <llvm/Support/CodeGen.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/MemoryBuffer.h>
@@ -199,7 +203,6 @@ namespace {
 
       // clc.h requires that this macro be defined:
       c.getPreprocessorOpts().addMacroDef("cl_clang_storage_class_specifiers");
-      c.getPreprocessorOpts().addMacroDef("cl_khr_fp64");
 
       c.getLangOpts().NoBuiltin = true;
       c.getTargetOpts().Triple = triple;
@@ -298,7 +301,12 @@ namespace {
    optimize(llvm::Module *mod, unsigned optimization_level,
             const std::vector<llvm::Function *> &kernels) {
 
+#if HAVE_LLVM >= 0x0307
+      llvm::legacy::PassManager PM;
+#else
       llvm::PassManager PM;
+#endif
+
       // Add a function internalizer pass.
       //
       // By default, the function internalizer pass will look for a function

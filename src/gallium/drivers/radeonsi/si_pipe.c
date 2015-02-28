@@ -53,6 +53,8 @@ static void si_destroy_context(struct pipe_context *context)
 	si_pm4_delete_state(sctx, gs_onoff, sctx->gs_on);
 	si_pm4_delete_state(sctx, gs_onoff, sctx->gs_off);
 
+	if (sctx->pstipple_sampler_state)
+		sctx->b.b.delete_sampler_state(&sctx->b.b, sctx->pstipple_sampler_state);
 	if (sctx->dummy_pixel_shader) {
 		sctx->b.b.delete_fs_state(&sctx->b.b, sctx->dummy_pixel_shader);
 	}
@@ -226,7 +228,12 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_DRAW_INDIRECT:
 	case PIPE_CAP_CLIP_HALFZ:
 	case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
+	case PIPE_CAP_POLYGON_OFFSET_CLAMP:
+	case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
 		return 1;
+
+	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
+		return !SI_BIG_ENDIAN && sscreen->b.info.has_userptr;
 
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
 		/* 2D tiling on CIK is supported since DRM 2.35.0 */
@@ -356,8 +363,8 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 			return PIPE_SHADER_IR_NATIVE;
 #endif
 		case PIPE_SHADER_CAP_DOUBLES:
-			return 0; /* XXX: Enable doubles once the compiler can
-			             handle them. */
+			return HAVE_LLVM >= 0x0307;
+
 		case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE: {
 			uint64_t max_const_buffer_size;
 			pscreen->get_compute_param(pscreen,
@@ -416,6 +423,8 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 	case PIPE_SHADER_CAP_PREFERRED_IR:
 		return PIPE_SHADER_IR_TGSI;
 	case PIPE_SHADER_CAP_DOUBLES:
+	case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
+	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
 		return 0;
 	}
 	return 0;

@@ -96,6 +96,15 @@ swizzle_vf_imm(unsigned vf4, unsigned swizzle)
 }
 
 static bool
+is_logic_op(enum opcode opcode)
+{
+   return (opcode == BRW_OPCODE_AND ||
+           opcode == BRW_OPCODE_OR  ||
+           opcode == BRW_OPCODE_XOR ||
+           opcode == BRW_OPCODE_NOT);
+}
+
+static bool
 try_constant_propagate(struct brw_context *brw, vec4_instruction *inst,
                        int arg, struct copy_entry *entry)
 {
@@ -113,24 +122,28 @@ try_constant_propagate(struct brw_context *brw, vec4_instruction *inst,
    if (value.file != IMM)
       return false;
 
+   if (value.type == BRW_REGISTER_TYPE_VF) {
+      /* The result of bit-casting the component values of a vector float
+       * cannot in general be represented as an immediate.
+       */
+      if (inst->src[arg].type != BRW_REGISTER_TYPE_F)
+         return false;
+   } else {
+      value.type = inst->src[arg].type;
+   }
+
    if (inst->src[arg].abs) {
-      if (value.type == BRW_REGISTER_TYPE_F) {
-	 value.fixed_hw_reg.dw1.f = fabs(value.fixed_hw_reg.dw1.f);
-      } else if (value.type == BRW_REGISTER_TYPE_VF) {
-         value.fixed_hw_reg.dw1.ud &= ~0x80808080;
-      } else if (value.type == BRW_REGISTER_TYPE_D) {
-	 if (value.fixed_hw_reg.dw1.d < 0)
-	    value.fixed_hw_reg.dw1.d = -value.fixed_hw_reg.dw1.d;
+      if ((brw->gen >= 8 && is_logic_op(inst->opcode)) ||
+          !brw_abs_immediate(value.type, &value.fixed_hw_reg)) {
+         return false;
       }
    }
 
    if (inst->src[arg].negate) {
-      if (value.type == BRW_REGISTER_TYPE_F)
-	 value.fixed_hw_reg.dw1.f = -value.fixed_hw_reg.dw1.f;
-      else if (value.type == BRW_REGISTER_TYPE_VF)
-         value.fixed_hw_reg.dw1.ud ^= 0x80808080;
-      else
-	 value.fixed_hw_reg.dw1.ud = -value.fixed_hw_reg.dw1.ud;
+      if ((brw->gen >= 8 && is_logic_op(inst->opcode)) ||
+          !brw_negate_immediate(value.type, &value.fixed_hw_reg)) {
+         return false;
+      }
    }
 
    if (value.type == BRW_REGISTER_TYPE_VF)
@@ -234,17 +247,8 @@ try_constant_propagate(struct brw_context *brw, vec4_instruction *inst,
 }
 
 static bool
-is_logic_op(enum opcode opcode)
-{
-   return (opcode == BRW_OPCODE_AND ||
-           opcode == BRW_OPCODE_OR  ||
-           opcode == BRW_OPCODE_XOR ||
-           opcode == BRW_OPCODE_NOT);
-}
-
-static bool
 try_copy_propagate(struct brw_context *brw, vec4_instruction *inst,
-                   int arg, struct copy_entry *entry, int reg)
+                   int arg, struct copy_entry *entry)
 {
    /* For constant propagation, we only handle the same constant
     * across all 4 channels.  Some day, we should handle the 8-bit
@@ -314,12 +318,11 @@ try_copy_propagate(struct brw_context *brw, vec4_instruction *inst,
    if (inst->is_send_from_grf())
       return false;
 
-   /* We can't copy-propagate a UD negation into a condmod
-    * instruction, because the condmod ends up looking at the 33-bit
-    * signed accumulator value instead of the 32-bit value we wanted
+   /* we can't generally copy-propagate UD negations becuse we
+    * end up accessing the resulting values as signed integers
+    * instead. See also resolve_ud_negate().
     */
-   if (inst->conditional_mod &&
-       value.negate &&
+   if (value.negate &&
        value.type == BRW_REGISTER_TYPE_UD)
       return false;
 
@@ -355,7 +358,7 @@ bool
 vec4_visitor::opt_copy_propagation(bool do_constant_prop)
 {
    bool progress = false;
-   struct copy_entry entries[virtual_grf_reg_count];
+   struct copy_entry entries[alloc.total_size];
 
    memset(&entries, 0, sizeof(entries));
 
@@ -384,7 +387,7 @@ vec4_visitor::opt_copy_propagation(bool do_constant_prop)
 	     inst->src[i].reladdr)
 	    continue;
 
-	 int reg = (virtual_grf_reg_map[inst->src[i].reg] +
+	 int reg = (alloc.offsets[inst->src[i].reg] +
 		    inst->src[i].reg_offset);
 
 	 /* Find the regs that each swizzle component came from.
@@ -420,14 +423,14 @@ vec4_visitor::opt_copy_propagation(bool do_constant_prop)
          if (do_constant_prop && try_constant_propagate(brw, inst, i, &entry))
             progress = true;
 
-	 if (try_copy_propagate(brw, inst, i, &entry, reg))
+	 if (try_copy_propagate(brw, inst, i, &entry))
 	    progress = true;
       }
 
       /* Track available source registers. */
       if (inst->dst.file == GRF) {
 	 const int reg =
-	    virtual_grf_reg_map[inst->dst.reg] + inst->dst.reg_offset;
+	    alloc.offsets[inst->dst.reg] + inst->dst.reg_offset;
 
 	 /* Update our destination's current channel values.  For a direct copy,
 	  * the value is the newly propagated source.  Otherwise, we don't know
@@ -448,7 +451,7 @@ vec4_visitor::opt_copy_propagation(bool do_constant_prop)
 	 if (inst->dst.reladdr)
 	    memset(&entries, 0, sizeof(entries));
 	 else {
-	    for (int i = 0; i < virtual_grf_reg_count; i++) {
+	    for (unsigned i = 0; i < alloc.total_size; i++) {
 	       for (int j = 0; j < 4; j++) {
 		  if (is_channel_updated(inst, entries[i].value, j)){
 		     entries[i].value[j] = NULL;

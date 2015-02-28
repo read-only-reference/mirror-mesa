@@ -370,10 +370,27 @@ _mesa_shader_stage_to_string(unsigned stage)
    case MESA_SHADER_VERTEX:   return "vertex";
    case MESA_SHADER_FRAGMENT: return "fragment";
    case MESA_SHADER_GEOMETRY: return "geometry";
+   case MESA_SHADER_COMPUTE:  return "compute";
    }
 
-   assert(!"Should not get here.");
-   return "unknown";
+   unreachable("Unknown shader stage.");
+}
+
+/**
+ * Translate a gl_shader_stage to a shader stage abbreviation (VS, GS, FS)
+ * for debug printouts and error messages.
+ */
+const char *
+_mesa_shader_stage_to_abbrev(unsigned stage)
+{
+   switch (stage) {
+   case MESA_SHADER_VERTEX:   return "VS";
+   case MESA_SHADER_FRAGMENT: return "FS";
+   case MESA_SHADER_GEOMETRY: return "GS";
+   case MESA_SHADER_COMPUTE:  return "CS";
+   }
+
+   unreachable("Unknown shader stage.");
 }
 
 /* This helper function will append the given message to the shader's
@@ -527,6 +544,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(ARB_fragment_coord_conventions, true,  false,     ARB_fragment_coord_conventions),
    EXT(ARB_fragment_layer_viewport,    true,  false,     ARB_fragment_layer_viewport),
    EXT(ARB_gpu_shader5,                true,  false,     ARB_gpu_shader5),
+   EXT(ARB_gpu_shader_fp64,            true,  false,     ARB_gpu_shader_fp64),
    EXT(ARB_sample_shading,             true,  false,     ARB_sample_shading),
    EXT(ARB_separate_shader_objects,    true,  false,     dummy_true),
    EXT(ARB_shader_atomic_counters,     true,  false,     ARB_shader_atomic_counters),
@@ -959,6 +977,10 @@ ast_expression::print(void) const
 
    case ast_float_constant:
       printf("%f ", primary_expression.float_constant);
+      break;
+
+   case ast_double_constant:
+      printf("%f ", primary_expression.double_constant);
       break;
 
    case ast_bool_constant:
@@ -1605,6 +1627,7 @@ do_common_optimization(exec_list *ir, bool linked,
    }
    progress = do_if_simplification(ir) || progress;
    progress = opt_flatten_nested_if_blocks(ir) || progress;
+   progress = opt_conditional_discard(ir) || progress;
    progress = do_copy_propagation(ir) || progress;
    progress = do_copy_propagation_elements(ir) || progress;
 

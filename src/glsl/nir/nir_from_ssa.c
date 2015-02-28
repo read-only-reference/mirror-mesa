@@ -26,6 +26,7 @@
  */
 
 #include "nir.h"
+#include "c99_alloca.h"
 
 /*
  * This file implements an out-of-SSA pass as described in "Revisiting
@@ -54,13 +55,8 @@ ssa_def_dominates(nir_ssa_def *a, nir_ssa_def *b)
    } else if (a->parent_instr->block == b->parent_instr->block) {
       return a->live_index <= b->live_index;
    } else {
-      nir_block *block = b->parent_instr->block;
-      while (block->imm_dom != NULL) {
-         if (block->imm_dom == a->parent_instr->block)
-            return true;
-         block = block->imm_dom;
-      }
-      return false;
+      return nir_block_dominates(a->parent_instr->block,
+                                 b->parent_instr->block);
    }
 }
 
@@ -186,7 +182,7 @@ merge_merge_sets(merge_set *a, merge_set *b)
 static bool
 merge_sets_interfere(merge_set *a, merge_set *b)
 {
-   merge_node *dom[a->size + b->size];
+   merge_node **dom = alloca((a->size + b->size) * sizeof *dom);
    int dom_idx = -1;
 
    struct exec_node *an = exec_list_get_head(&a->nodes);
@@ -277,7 +273,7 @@ get_parallel_copy_at_end_of_block(nir_block *block)
    if (last_instr->type == nir_instr_type_jump)
       last_instr = nir_instr_prev(last_instr);
 
-   if (last_instr->type == nir_instr_type_parallel_copy)
+   if (last_instr && last_instr->type == nir_instr_type_parallel_copy)
       return nir_instr_as_parallel_copy(last_instr);
    else
       return NULL;
@@ -513,6 +509,13 @@ get_register_for_ssa_def(nir_ssa_def *def, struct from_ssa_state *state)
       reg->num_components = def->num_components;
       reg->num_array_elems = 0;
 
+      /* This register comes from an SSA definition that was not part of a
+       * phi-web.  Therefore, we know it has a single unique definition
+       * that dominates all of its uses.  Therefore, we can copy the
+       * parent_instr from the SSA def safely.
+       */
+      reg->parent_instr = def->parent_instr;
+
       _mesa_hash_table_insert(state->ssa_table, def, reg);
       return reg;
    }
@@ -671,21 +674,21 @@ resolve_parallel_copy(nir_parallel_copy_instr *pcopy,
    }
 
    /* The register/source corresponding to the given index */
-   nir_src values[num_copies * 2];
-   memset(values, 0, sizeof values);
+   nir_src *values = alloca(num_copies * 2 * sizeof *values);
+   memset(values, 0, num_copies * 2 * sizeof *values);
 
    /* The current location of a given piece of data */
-   int loc[num_copies * 2];
+   int *loc = alloca(num_copies * 2 * sizeof *loc);
 
    /* The piece of data that the given piece of data is to be copied from */
-   int pred[num_copies * 2];
+   int *pred = alloca(num_copies * 2 * sizeof *pred);
 
    /* Initialize loc and pred.  We will use -1 for "null" */
-   memset(loc, -1, sizeof loc);
-   memset(pred, -1, sizeof pred);
+   memset(loc, -1, num_copies * 2 * sizeof *loc);
+   memset(pred, -1, num_copies * 2 * sizeof *pred);
 
    /* The destinations we have yet to properly fill */
-   int to_do[num_copies * 2];
+   int *to_do = alloca(num_copies * 2 * sizeof *to_do);
    int to_do_idx = -1;
 
    /* Now we set everything up:
@@ -735,7 +738,7 @@ resolve_parallel_copy(nir_parallel_copy_instr *pcopy,
    }
 
    /* Currently empty destinations we can go ahead and fill */
-   int ready[num_copies * 2];
+   int *ready = alloca(num_copies * 2 * sizeof *ready);
    int ready_idx = -1;
 
    /* Mark the ones that are ready for copying.  We know an index is a

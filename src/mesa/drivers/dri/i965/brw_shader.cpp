@@ -157,7 +157,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
                                   ? BITFIELD_INSERT_TO_BFM_BFI
                                   : 0;
       lower_instructions(shader->base.ir,
-			 MOD_TO_FRACT |
+			 MOD_TO_FLOOR |
 			 DIV_TO_MUL_RCP |
 			 SUB_TO_ADD_NEG |
 			 EXP_TO_EXP2 |
@@ -308,6 +308,7 @@ brw_type_for_base_type(const struct glsl_type *type)
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
+   case GLSL_TYPE_DOUBLE:
       unreachable("not reached");
    }
 
@@ -470,6 +471,8 @@ brw_instruction_name(enum opcode op)
    case SHADER_OPCODE_URB_WRITE_SIMD8:
       return "gen8_urb_write_simd8";
 
+   case VEC4_OPCODE_MOV_BYTES:
+      return "mov_bytes";
    case VEC4_OPCODE_PACK_BYTES:
       return "pack_bytes";
    case VEC4_OPCODE_UNPACK_UNIFORM:
@@ -602,24 +605,95 @@ brw_saturate_immediate(enum brw_reg_type type, struct brw_reg *reg)
       sat_imm.f = CLAMP(imm.f, 0.0f, 1.0f);
       break;
    case BRW_REGISTER_TYPE_UB:
-      sat_imm.ud = CLAMP(imm.ud, 0, UCHAR_MAX);
-      break;
    case BRW_REGISTER_TYPE_B:
-      sat_imm.d = CLAMP(imm.d, CHAR_MIN, CHAR_MAX);
-      break;
+      unreachable("no UB/B immediates");
    case BRW_REGISTER_TYPE_V:
    case BRW_REGISTER_TYPE_UV:
    case BRW_REGISTER_TYPE_VF:
-      assert(!"unimplemented: saturate vector immediate");
+      unreachable("unimplemented: saturate vector immediate");
    case BRW_REGISTER_TYPE_DF:
    case BRW_REGISTER_TYPE_HF:
-      assert(!"unimplemented: saturate DF/HF immediate");
+      unreachable("unimplemented: saturate DF/HF immediate");
    }
 
    if (imm.ud != sat_imm.ud) {
       reg->dw1.ud = sat_imm.ud;
       return true;
    }
+   return false;
+}
+
+bool
+brw_negate_immediate(enum brw_reg_type type, struct brw_reg *reg)
+{
+   switch (type) {
+   case BRW_REGISTER_TYPE_D:
+   case BRW_REGISTER_TYPE_UD:
+      reg->dw1.d = -reg->dw1.d;
+      return true;
+   case BRW_REGISTER_TYPE_W:
+   case BRW_REGISTER_TYPE_UW:
+      reg->dw1.d = -(int16_t)reg->dw1.ud;
+      return true;
+   case BRW_REGISTER_TYPE_F:
+      reg->dw1.f = -reg->dw1.f;
+      return true;
+   case BRW_REGISTER_TYPE_VF:
+      reg->dw1.ud ^= 0x80808080;
+      return true;
+   case BRW_REGISTER_TYPE_UB:
+   case BRW_REGISTER_TYPE_B:
+      unreachable("no UB/B immediates");
+   case BRW_REGISTER_TYPE_UV:
+   case BRW_REGISTER_TYPE_V:
+      assert(!"unimplemented: negate UV/V immediate");
+   case BRW_REGISTER_TYPE_UQ:
+   case BRW_REGISTER_TYPE_Q:
+      assert(!"unimplemented: negate UQ/Q immediate");
+   case BRW_REGISTER_TYPE_DF:
+   case BRW_REGISTER_TYPE_HF:
+      assert(!"unimplemented: negate DF/HF immediate");
+   }
+
+   return false;
+}
+
+bool
+brw_abs_immediate(enum brw_reg_type type, struct brw_reg *reg)
+{
+   switch (type) {
+   case BRW_REGISTER_TYPE_D:
+      reg->dw1.d = abs(reg->dw1.d);
+      return true;
+   case BRW_REGISTER_TYPE_W:
+      reg->dw1.d = abs((int16_t)reg->dw1.ud);
+      return true;
+   case BRW_REGISTER_TYPE_F:
+      reg->dw1.f = fabsf(reg->dw1.f);
+      return true;
+   case BRW_REGISTER_TYPE_VF:
+      reg->dw1.ud &= ~0x80808080;
+      return true;
+   case BRW_REGISTER_TYPE_UB:
+   case BRW_REGISTER_TYPE_B:
+      unreachable("no UB/B immediates");
+   case BRW_REGISTER_TYPE_UQ:
+   case BRW_REGISTER_TYPE_UD:
+   case BRW_REGISTER_TYPE_UW:
+   case BRW_REGISTER_TYPE_UV:
+      /* Presumably the absolute value modifier on an unsigned source is a
+       * nop, but it would be nice to confirm.
+       */
+      assert(!"unimplemented: abs unsigned immediate");
+   case BRW_REGISTER_TYPE_V:
+      assert(!"unimplemented: abs V immediate");
+   case BRW_REGISTER_TYPE_Q:
+      assert(!"unimplemented: abs Q immediate");
+   case BRW_REGISTER_TYPE_DF:
+   case BRW_REGISTER_TYPE_HF:
+      assert(!"unimplemented: abs DF/HF immediate");
+   }
+
    return false;
 }
 
@@ -638,6 +712,9 @@ backend_visitor::backend_visitor(struct brw_context *brw,
      cfg(NULL),
      stage(stage)
 {
+   debug_enabled = INTEL_DEBUG & intel_debug_flag_for_shader_stage(stage);
+   stage_name = _mesa_shader_stage_to_string(stage);
+   stage_abbrev = _mesa_shader_stage_to_abbrev(stage);
 }
 
 bool
@@ -658,6 +735,22 @@ backend_reg::is_one() const
    return type == BRW_REGISTER_TYPE_F
           ? fixed_hw_reg.dw1.f == 1.0
           : fixed_hw_reg.dw1.d == 1;
+}
+
+bool
+backend_reg::is_negative_one() const
+{
+   if (file != IMM)
+      return false;
+
+   switch (type) {
+   case BRW_REGISTER_TYPE_F:
+      return fixed_hw_reg.dw1.f == -1.0;
+   case BRW_REGISTER_TYPE_D:
+      return fixed_hw_reg.dw1.d == -1;
+   default:
+      return false;
+   }
 }
 
 bool
@@ -834,6 +927,8 @@ backend_instruction::can_do_cmod() const
    case BRW_OPCODE_SHR:
    case BRW_OPCODE_SUBB:
    case BRW_OPCODE_XOR:
+   case FS_OPCODE_CINTERP:
+   case FS_OPCODE_LINTERP:
       return true;
    default:
       return false;
@@ -904,7 +999,8 @@ adjust_later_block_ips(bblock_t *start_block, int ip_adjustment)
 void
 backend_instruction::insert_after(bblock_t *block, backend_instruction *inst)
 {
-   assert(inst_is_in_block(block, this) || !"Instruction not in block");
+   if (!this->is_head_sentinel())
+      assert(inst_is_in_block(block, this) || !"Instruction not in block");
 
    block->end_ip++;
 
@@ -916,7 +1012,8 @@ backend_instruction::insert_after(bblock_t *block, backend_instruction *inst)
 void
 backend_instruction::insert_before(bblock_t *block, backend_instruction *inst)
 {
-   assert(inst_is_in_block(block, this) || !"Instruction not in block");
+   if (!this->is_tail_sentinel())
+      assert(inst_is_in_block(block, this) || !"Instruction not in block");
 
    block->end_ip++;
 
@@ -971,11 +1068,18 @@ backend_visitor::dump_instructions(const char *name)
          file = stderr;
    }
 
-   int ip = 0;
-   foreach_block_and_inst(block, backend_instruction, inst, cfg) {
-      if (!name)
-         fprintf(stderr, "%d: ", ip++);
-      dump_instruction(inst, file);
+   if (cfg) {
+      int ip = 0;
+      foreach_block_and_inst(block, backend_instruction, inst, cfg) {
+         fprintf(file, "%4d: ", ip++);
+         dump_instruction(inst, file);
+      }
+   } else {
+      int ip = 0;
+      foreach_in_list(backend_instruction, inst, &instructions) {
+         fprintf(file, "%4d: ", ip++);
+         dump_instruction(inst, file);
+      }
    }
 
    if (file != stderr) {
@@ -1045,6 +1149,13 @@ backend_visitor::assign_common_binding_table_offsets(uint32_t next_binding_table
       next_binding_table_offset += shader_prog->NumAtomicBuffers;
    } else {
       stage_prog_data->binding_table.abo_start = 0xd0d0d0d0;
+   }
+
+   if (shader && shader->base.NumImages) {
+      stage_prog_data->binding_table.image_start = next_binding_table_offset;
+      next_binding_table_offset += shader->base.NumImages;
+   } else {
+      stage_prog_data->binding_table.image_start = 0xd0d0d0d0;
    }
 
    /* This may or may not be used depending on how the compile goes. */

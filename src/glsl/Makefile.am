@@ -26,6 +26,8 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src \
 	-I$(top_srcdir)/src/mapi \
 	-I$(top_srcdir)/src/mesa/ \
+	-I$(top_srcdir)/src/gallium/include \
+	-I$(top_srcdir)/src/gallium/auxiliary \
 	-I$(top_srcdir)/src/glsl/glcpp \
 	-I$(top_srcdir)/src/glsl/nir \
 	-I$(top_srcdir)/src/gtest/include \
@@ -216,6 +218,7 @@ BUILT_SOURCES =						\
 	glsl_lexer.cpp					\
 	glcpp/glcpp-parse.c				\
 	glcpp/glcpp-lex.c				\
+	nir/nir_builder_opcodes.h				\
 	nir/nir_constant_expressions.c			\
 	nir/nir_opcodes.c				\
 	nir/nir_opcodes.h				\
@@ -232,6 +235,10 @@ dist-hook:
 	$(RM) glcpp/tests/*.out
 	$(RM) glcpp/tests/subtest*/*.out
 
+nir/nir_builder_opcodes.h: nir/nir_opcodes.py nir/nir_builder_opcodes_h.py
+	$(MKDIR_P) nir;							\
+	$(PYTHON2) $(PYTHON_FLAGS) $(srcdir)/nir/nir_builder_opcodes_h.py > $@
+
 nir/nir_constant_expressions.c: nir/nir_opcodes.py nir/nir_constant_expressions.py nir/nir_constant_expressions.h
 	$(MKDIR_P) nir;							\
 	$(PYTHON2) $(PYTHON_FLAGS) $(srcdir)/nir/nir_constant_expressions.py > $@
@@ -240,7 +247,7 @@ nir/nir_opcodes.h: nir/nir_opcodes.py nir/nir_opcodes_h.py
 	$(MKDIR_P) nir;							\
 	$(PYTHON2) $(PYTHON_FLAGS) $(srcdir)/nir/nir_opcodes_h.py > $@
 
-nir/nir.h: $(top_builddir)/src/glsl/nir/nir_opcodes.h
+nir/nir.h: nir/nir_opcodes.h
 
 nir/nir_opcodes.c: nir/nir_opcodes.py nir/nir_opcodes_c.py
 	$(MKDIR_P) nir;							\

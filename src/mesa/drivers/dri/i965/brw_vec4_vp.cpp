@@ -43,8 +43,7 @@ vec4_visitor::emit_vp_sop(enum brw_conditional_mod conditional_mod,
 {
    vec4_instruction *inst;
 
-   inst = emit(BRW_OPCODE_CMP, dst_null_d(), src0, src1);
-   inst->conditional_mod = conditional_mod;
+   inst = emit(CMP(dst_null_f(), src0, src1, conditional_mod));
 
    inst = emit(BRW_OPCODE_SEL, dst, one, src_reg(0.0f));
    inst->predicate = BRW_PREDICATE_NORMAL;
@@ -227,7 +226,7 @@ vec4_vs_visitor::emit_program_code()
                /* if (tmp.y < 0) tmp.y = 0; */
                src_reg tmp_y = swizzle(src[0], BRW_SWIZZLE_YYYY);
                result.writemask = WRITEMASK_Z;
-               emit_minmax(BRW_CONDITIONAL_G, result, tmp_y, src_reg(0.0f));
+               emit_minmax(BRW_CONDITIONAL_GE, result, tmp_y, src_reg(0.0f));
 
                src_reg clamped_y(result);
                clamped_y.swizzle = BRW_SWIZZLE_ZZZZ;
@@ -314,7 +313,7 @@ vec4_vs_visitor::emit_program_code()
       }
 
       case OPCODE_MAX:
-         emit_minmax(BRW_CONDITIONAL_G, dst, src[0], src[1]);
+         emit_minmax(BRW_CONDITIONAL_GE, dst, src[0], src[1]);
          break;
 
       case OPCODE_MIN:
@@ -387,7 +386,7 @@ vec4_vs_visitor::emit_program_code()
       }
 
       /* Copy the temporary back into the actual destination register. */
-      if (vpi->Opcode != OPCODE_END) {
+      if (_mesa_num_inst_dst_regs(vpi->Opcode) != 0) {
          emit(MOV(get_vp_dst_reg(vpi->DstReg), src_reg(dst)));
       }
    }
@@ -548,11 +547,12 @@ vec4_vs_visitor::get_vp_src_reg(const prog_src_register &src)
          vec4_instruction *load;
          if (brw->gen >= 7) {
             load = new(mem_ctx)
-               vec4_instruction(this, VS_OPCODE_PULL_CONSTANT_LOAD_GEN7,
+               vec4_instruction(VS_OPCODE_PULL_CONSTANT_LOAD_GEN7,
                                 dst_reg(result), surf_index, reladdr);
+            load->mlen = 1;
          } else {
             load = new(mem_ctx)
-               vec4_instruction(this, VS_OPCODE_PULL_CONSTANT_LOAD,
+               vec4_instruction(VS_OPCODE_PULL_CONSTANT_LOAD,
                                 dst_reg(result), surf_index, reladdr);
             load->base_mrf = 14;
             load->mlen = 1;

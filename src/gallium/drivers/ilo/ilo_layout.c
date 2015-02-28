@@ -423,13 +423,16 @@ layout_init_alignments(struct ilo_layout *layout,
          }
       }
    } else {
-      const bool valign_4 = (templ->nr_samples > 1) ||
+      const bool valign_4 =
+         (templ->nr_samples > 1) ||
+         (ilo_dev_gen(params->dev) >= ILO_GEN(8)) ||
          (ilo_dev_gen(params->dev) >= ILO_GEN(7) &&
           layout->tiling == INTEL_TILING_Y &&
           (templ->bind & PIPE_BIND_RENDER_TARGET));
 
-      if (valign_4)
-         assert(layout->block_size != 12);
+      if (ilo_dev_gen(params->dev) >= ILO_GEN(7) &&
+          ilo_dev_gen(params->dev) <= ILO_GEN(7.5) && valign_4)
+         assert(layout->format != PIPE_FORMAT_R32G32B32_FLOAT);
 
       layout->align_i = 4;
       layout->align_j = (valign_4) ? 4 : 2;
@@ -506,8 +509,13 @@ layout_get_valid_tilings(const struct ilo_layout *layout,
        *
        *     "NOTE: 128BPE Format Color buffer ( render target ) MUST be
        *      either TileX or Linear."
+       *
+       * From the Haswell PRM, volume 5, page 32:
+       *
+       *     "NOTE: 128 BPP format color buffer (render target) supports
+       *      Linear, TiledX and TiledY."
        */
-      if (layout->block_size == 16)
+      if (ilo_dev_gen(params->dev) < ILO_GEN(7.5) && layout->block_size == 16)
          valid_tilings &= ~LAYOUT_TILING_Y;
 
       /*
@@ -518,7 +526,9 @@ layout_get_valid_tilings(const struct ilo_layout *layout,
        *
        *     "VALIGN_4 is not supported for surface format R32G32B32_FLOAT."
        */
-      if (ilo_dev_gen(params->dev) >= ILO_GEN(7) && layout->block_size == 12)
+      if (ilo_dev_gen(params->dev) >= ILO_GEN(7) &&
+          ilo_dev_gen(params->dev) <= ILO_GEN(7.5) &&
+          layout->format == PIPE_FORMAT_R32G32B32_FLOAT)
          valid_tilings &= ~LAYOUT_TILING_Y;
    }
 
@@ -654,7 +664,7 @@ layout_init_size_and_format(struct ilo_layout *layout,
 {
    const struct pipe_resource *templ = params->templ;
    enum pipe_format format = templ->format;
-   bool require_separate_stencil;
+   bool require_separate_stencil = false;
 
    layout->width0 = templ->width0;
    layout->height0 = templ->height0;
@@ -1084,6 +1094,8 @@ layout_calculate_hiz_size(struct ilo_layout *layout,
          hz_height = hz_qpitch * templ->array_size / 2;
          if (ilo_dev_gen(params->dev) >= ILO_GEN(7))
             hz_height = align(hz_height, 8);
+
+         layout->aux_layer_height = hz_qpitch;
       }
       break;
    case ILO_LAYOUT_WALK_3D:
@@ -1096,6 +1108,11 @@ layout_calculate_hiz_size(struct ilo_layout *layout,
          hz_height += h * u_minify(templ->depth0, lv);
       }
       hz_height /= 2;
+      break;
+   default:
+      assert(!"unknown HiZ walk");
+      hz_width = 0;
+      hz_height = 0;
       break;
    }
 

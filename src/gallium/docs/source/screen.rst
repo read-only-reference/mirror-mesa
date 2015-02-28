@@ -241,6 +241,17 @@ The integer capabilities:
   semantics. Only relevant if geometry shaders are supported.
   (Currently not possible to query availability of these two semantics outside
   this, at least BASEVERTEX should be exposed separately too).
+* ``PIPE_CAP_POLYGON_OFFSET_CLAMP``: If true, the driver implements support
+  for ``pipe_rasterizer_state::offset_clamp``.
+* ``PIPE_CAP_MULTISAMPLE_Z_RESOLVE``: Whether the driver supports blitting
+  a multisampled depth buffer into a single-sampled texture (or depth buffer).
+  Only the first sampled should be copied.
+* ``PIPE_CAP_RESOURCE_FROM_USER_MEMORY``: Whether the driver can create
+  a pipe_resource where an already-existing piece of (malloc'd) user memory
+  is used as its backing storage. In other words, whether the driver can map
+  existing user memory into the device address space for direct device access.
+  The create function is pipe_screen::resource_from_user_memory. The address
+  and size must be page-aligned.
 
 
 .. _pipe_capf:
@@ -321,6 +332,10 @@ to be 0.
   sampler views. Must not be lower than PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS.
 * ``PIPE_SHADER_CAP_DOUBLES``: Whether double precision floating-point
   operations are supported.
+* ``PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED``: Whether double precision rounding
+  is supported. If it is, DTRUNC/DCEIL/DFLR/DROUND opcodes may be used.
+* ``PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED``: Whether DFRACEXP and
+  DLDEXP are supported.
 
 
 .. _pipe_compute_cap:

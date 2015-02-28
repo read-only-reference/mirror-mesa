@@ -833,6 +833,7 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 	rscreen->b.fence_reference = r600_fence_reference;
 	rscreen->b.fence_signalled = r600_fence_signalled;
 	rscreen->b.resource_destroy = u_resource_destroy_vtbl;
+	rscreen->b.resource_from_user_memory = r600_buffer_from_user_memory;
 
 	if (rscreen->info.has_uvd) {
 		rscreen->b.get_video_param = rvid_get_video_param;
@@ -881,17 +882,6 @@ void r600_destroy_common_screen(struct r600_common_screen *rscreen)
 
 	rscreen->ws->destroy(rscreen->ws);
 	FREE(rscreen);
-}
-
-static unsigned tgsi_get_processor_type(const struct tgsi_token *tokens)
-{
-	struct tgsi_parse_context parse;
-
-	if (tgsi_parse_init( &parse, tokens ) != TGSI_PARSE_OK) {
-		debug_printf("tgsi_parse_init() failed in %s:%i!\n", __func__, __LINE__);
-		return ~0;
-	}
-	return parse.FullHeader.Processor.Processor;
 }
 
 bool r600_can_dump_shader(struct r600_common_screen *rscreen,

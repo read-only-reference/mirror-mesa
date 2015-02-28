@@ -110,60 +110,6 @@ resize_qreg_array(struct vc4_compile *c,
 }
 
 static struct qreg
-add_uniform(struct vc4_compile *c,
-            enum quniform_contents contents,
-            uint32_t data)
-{
-        for (int i = 0; i < c->num_uniforms; i++) {
-                if (c->uniform_contents[i] == contents &&
-                    c->uniform_data[i] == data) {
-                        return (struct qreg) { QFILE_UNIF, i };
-                }
-        }
-
-        uint32_t uniform = c->num_uniforms++;
-        struct qreg u = { QFILE_UNIF, uniform };
-
-        if (uniform >= c->uniform_array_size) {
-                c->uniform_array_size = MAX2(MAX2(16, uniform + 1),
-                                             c->uniform_array_size * 2);
-
-                c->uniform_data = reralloc(c, c->uniform_data,
-                                           uint32_t,
-                                           c->uniform_array_size);
-                c->uniform_contents = reralloc(c, c->uniform_contents,
-                                               enum quniform_contents,
-                                               c->uniform_array_size);
-        }
-
-        c->uniform_contents[uniform] = contents;
-        c->uniform_data[uniform] = data;
-
-        return u;
-}
-
-static struct qreg
-get_temp_for_uniform(struct vc4_compile *c, enum quniform_contents contents,
-                     uint32_t data)
-{
-        struct qreg u = add_uniform(c, contents, data);
-        struct qreg t = qir_MOV(c, u);
-        return t;
-}
-
-static struct qreg
-qir_uniform_ui(struct vc4_compile *c, uint32_t ui)
-{
-        return get_temp_for_uniform(c, QUNIFORM_CONSTANT, ui);
-}
-
-static struct qreg
-qir_uniform_f(struct vc4_compile *c, float f)
-{
-        return qir_uniform_ui(c, fui(f));
-}
-
-static struct qreg
 indirect_uniform_load(struct vc4_compile *c,
                       struct tgsi_full_src_register *src, int swiz)
 {
@@ -188,7 +134,7 @@ indirect_uniform_load(struct vc4_compile *c,
         indirect_offset = qir_MIN(c, indirect_offset, qir_uniform_ui(c, (range->dst_offset +
                                                                          range->size - 4)));
 
-        qir_TEX_DIRECT(c, indirect_offset, add_uniform(c, QUNIFORM_UBO_ADDR, 0));
+        qir_TEX_DIRECT(c, indirect_offset, qir_uniform(c, QUNIFORM_UBO_ADDR, 0));
         struct qreg r4 = qir_TEX_RESULT(c);
         c->num_texture_samples++;
         return qir_MOV(c, r4);
@@ -232,8 +178,7 @@ get_src(struct vc4_compile *c, unsigned tgsi_op,
                 if (src->Indirect) {
                         r = indirect_uniform_load(c, full_src, s);
                 } else {
-                        r = get_temp_for_uniform(c, QUNIFORM_UNIFORM,
-                                                 src->Index * 4 + s);
+                        r = qir_uniform(c, QUNIFORM_UNIFORM, src->Index * 4 + s);
                 }
                 break;
         case TGSI_FILE_INPUT:
@@ -646,10 +591,10 @@ tgsi_to_qir_tex(struct vc4_compile *c,
         }
 
         struct qreg texture_u[] = {
-                add_uniform(c, QUNIFORM_TEXTURE_CONFIG_P0, unit),
-                add_uniform(c, QUNIFORM_TEXTURE_CONFIG_P1, unit),
-                add_uniform(c, QUNIFORM_CONSTANT, 0),
-                add_uniform(c, QUNIFORM_CONSTANT, 0),
+                qir_uniform(c, QUNIFORM_TEXTURE_CONFIG_P0, unit),
+                qir_uniform(c, QUNIFORM_TEXTURE_CONFIG_P1, unit),
+                qir_uniform(c, QUNIFORM_CONSTANT, 0),
+                qir_uniform(c, QUNIFORM_CONSTANT, 0),
         };
         uint32_t next_texture_u = 0;
 
@@ -660,19 +605,15 @@ tgsi_to_qir_tex(struct vc4_compile *c,
         if (tgsi_inst->Texture.Texture == TGSI_TEXTURE_RECT ||
             tgsi_inst->Texture.Texture == TGSI_TEXTURE_SHADOWRECT) {
                 s = qir_FMUL(c, s,
-                             get_temp_for_uniform(c,
-                                                  QUNIFORM_TEXRECT_SCALE_X,
-                                                  unit));
+                             qir_uniform(c, QUNIFORM_TEXRECT_SCALE_X, unit));
                 t = qir_FMUL(c, t,
-                             get_temp_for_uniform(c,
-                                                  QUNIFORM_TEXRECT_SCALE_Y,
-                                                  unit));
+                             qir_uniform(c, QUNIFORM_TEXRECT_SCALE_Y, unit));
         }
 
         if (tgsi_inst->Texture.Texture == TGSI_TEXTURE_CUBE ||
             tgsi_inst->Texture.Texture == TGSI_TEXTURE_SHADOWCUBE ||
             is_txl) {
-                texture_u[2] = add_uniform(c, QUNIFORM_TEXTURE_CONFIG_P2,
+                texture_u[2] = qir_uniform(c, QUNIFORM_TEXTURE_CONFIG_P2,
                                            unit | (is_txl << 16));
         }
 
@@ -689,7 +630,7 @@ tgsi_to_qir_tex(struct vc4_compile *c,
                    c->key->tex[unit].wrap_s == PIPE_TEX_WRAP_CLAMP ||
                    c->key->tex[unit].wrap_t == PIPE_TEX_WRAP_CLAMP_TO_BORDER ||
                    c->key->tex[unit].wrap_t == PIPE_TEX_WRAP_CLAMP) {
-                qir_TEX_R(c, get_temp_for_uniform(c, QUNIFORM_TEXTURE_BORDER_COLOR, unit),
+                qir_TEX_R(c, qir_uniform(c, QUNIFORM_TEXTURE_BORDER_COLOR, unit),
                           texture_u[next_texture_u++]);
         }
 
@@ -1504,14 +1445,11 @@ vc4_blend_channel(struct vc4_compile *c,
                 }
         case PIPE_BLENDFACTOR_CONST_COLOR:
                 return qir_FMUL(c, val,
-                                get_temp_for_uniform(c,
-                                                     QUNIFORM_BLEND_CONST_COLOR,
-                                                     channel));
+                                qir_uniform(c, QUNIFORM_BLEND_CONST_COLOR,
+                                            channel));
         case PIPE_BLENDFACTOR_CONST_ALPHA:
                 return qir_FMUL(c, val,
-                                get_temp_for_uniform(c,
-                                                     QUNIFORM_BLEND_CONST_COLOR,
-                                                     3));
+                                qir_uniform(c, QUNIFORM_BLEND_CONST_COLOR, 3));
         case PIPE_BLENDFACTOR_ZERO:
                 return qir_uniform_f(c, 0.0);
         case PIPE_BLENDFACTOR_INV_SRC_COLOR:
@@ -1529,15 +1467,15 @@ vc4_blend_channel(struct vc4_compile *c,
         case PIPE_BLENDFACTOR_INV_CONST_COLOR:
                 return qir_FMUL(c, val,
                                 qir_FSUB(c, qir_uniform_f(c, 1.0),
-                                         get_temp_for_uniform(c,
-                                                              QUNIFORM_BLEND_CONST_COLOR,
-                                                              channel)));
+                                         qir_uniform(c,
+                                                     QUNIFORM_BLEND_CONST_COLOR,
+                                                     channel)));
         case PIPE_BLENDFACTOR_INV_CONST_ALPHA:
                 return qir_FMUL(c, val,
                                 qir_FSUB(c, qir_uniform_f(c, 1.0),
-                                         get_temp_for_uniform(c,
-                                                              QUNIFORM_BLEND_CONST_COLOR,
-                                                              3)));
+                                         qir_uniform(c,
+                                                     QUNIFORM_BLEND_CONST_COLOR,
+                                                     3)));
 
         default:
         case PIPE_BLENDFACTOR_SRC1_COLOR:
@@ -1661,7 +1599,7 @@ static void
 alpha_test_discard(struct vc4_compile *c)
 {
         struct qreg src_alpha;
-        struct qreg alpha_ref = get_temp_for_uniform(c, QUNIFORM_ALPHA_REF, 0);
+        struct qreg alpha_ref = qir_uniform(c, QUNIFORM_ALPHA_REF, 0);
 
         if (!c->fs_key->alpha_test)
                 return;
@@ -1825,12 +1763,12 @@ emit_frag_end(struct vc4_compile *c)
                 qir_TLB_DISCARD_SETUP(c, c->discard);
 
         if (c->fs_key->stencil_enabled) {
-                qir_TLB_STENCIL_SETUP(c, add_uniform(c, QUNIFORM_STENCIL, 0));
+                qir_TLB_STENCIL_SETUP(c, qir_uniform(c, QUNIFORM_STENCIL, 0));
                 if (c->fs_key->stencil_twoside) {
-                        qir_TLB_STENCIL_SETUP(c, add_uniform(c, QUNIFORM_STENCIL, 1));
+                        qir_TLB_STENCIL_SETUP(c, qir_uniform(c, QUNIFORM_STENCIL, 1));
                 }
                 if (c->fs_key->stencil_full_writemasks) {
-                        qir_TLB_STENCIL_SETUP(c, add_uniform(c, QUNIFORM_STENCIL, 2));
+                        qir_TLB_STENCIL_SETUP(c, qir_uniform(c, QUNIFORM_STENCIL, 2));
                 }
         }
 
@@ -1895,7 +1833,7 @@ emit_scaled_viewport_write(struct vc4_compile *c, struct qreg rcp_w)
 
         for (int i = 0; i < 2; i++) {
                 struct qreg scale =
-                        add_uniform(c, QUNIFORM_VIEWPORT_X_SCALE + i, 0);
+                        qir_uniform(c, QUNIFORM_VIEWPORT_X_SCALE + i, 0);
 
                 xyi[i] = qir_FTOI(c, qir_FMUL(c,
                                               qir_FMUL(c,
@@ -1910,8 +1848,8 @@ emit_scaled_viewport_write(struct vc4_compile *c, struct qreg rcp_w)
 static void
 emit_zs_write(struct vc4_compile *c, struct qreg rcp_w)
 {
-        struct qreg zscale = add_uniform(c, QUNIFORM_VIEWPORT_Z_SCALE, 0);
-        struct qreg zoffset = add_uniform(c, QUNIFORM_VIEWPORT_Z_OFFSET, 0);
+        struct qreg zscale = qir_uniform(c, QUNIFORM_VIEWPORT_Z_SCALE, 0);
+        struct qreg zoffset = qir_uniform(c, QUNIFORM_VIEWPORT_Z_OFFSET, 0);
 
         qir_VPM_WRITE(c, qir_FADD(c, qir_FMUL(c, qir_FMUL(c,
                                                           c->outputs[c->output_position_index + 2],
@@ -1995,7 +1933,7 @@ emit_ucp_clipdistance(struct vc4_compile *c)
                 for (int i = 0; i < 4; i++) {
                         struct qreg pos_chan = c->outputs[cv + i];
                         struct qreg ucp =
-                                add_uniform(c, QUNIFORM_USER_CLIP_PLANE,
+                                qir_uniform(c, QUNIFORM_USER_CLIP_PLANE,
                                             plane * 4 + i);
                         dist = qir_FADD(c, dist, qir_FMUL(c, pos_chan, ucp));
                 }
@@ -2163,8 +2101,15 @@ vc4_shader_tgsi_to_qir(struct vc4_context *vc4, enum qstage stage,
         }
 
         tgsi_parse_free(&c->parser);
+        if (vc4_debug & VC4_DEBUG_QIR) {
+                fprintf(stderr, "%s prog %d/%d pre-opt QIR:\n",
+                        qir_get_stage_name(c->stage),
+                        c->program_id, c->variant_id);
+                qir_dump(c);
+        }
 
         qir_optimize(c);
+        qir_lower_uniforms(c);
 
         if (vc4_debug & VC4_DEBUG_QIR) {
                 fprintf(stderr, "%s prog %d/%d QIR:\n",

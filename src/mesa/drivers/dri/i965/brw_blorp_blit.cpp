@@ -125,6 +125,8 @@ do_blorp_blit(struct brw_context *brw, GLbitfield buffer_bit,
 
 static bool
 try_blorp_blit(struct brw_context *brw,
+               const struct gl_framebuffer *read_fb,
+               const struct gl_framebuffer *draw_fb,
                GLfloat srcX0, GLfloat srcY0, GLfloat srcX1, GLfloat srcY1,
                GLfloat dstX0, GLfloat dstY0, GLfloat dstX1, GLfloat dstY1,
                GLenum filter, GLbitfield buffer_bit)
@@ -136,11 +138,8 @@ try_blorp_blit(struct brw_context *brw,
     */
    intel_prepare_render(brw);
 
-   const struct gl_framebuffer *read_fb = ctx->ReadBuffer;
-   const struct gl_framebuffer *draw_fb = ctx->DrawBuffer;
-
    bool mirror_x, mirror_y;
-   if (brw_meta_mirror_clip_and_scissor(ctx,
+   if (brw_meta_mirror_clip_and_scissor(ctx, read_fb, draw_fb,
                                         &srcX0, &srcY0, &srcX1, &srcY1,
                                         &dstX0, &dstY0, &dstX1, &dstY1,
                                         &mirror_x, &mirror_y))
@@ -154,8 +153,8 @@ try_blorp_blit(struct brw_context *brw,
    switch (buffer_bit) {
    case GL_COLOR_BUFFER_BIT:
       src_irb = intel_renderbuffer(read_fb->_ColorReadBuffer);
-      for (unsigned i = 0; i < ctx->DrawBuffer->_NumColorDrawBuffers; ++i) {
-         dst_irb = intel_renderbuffer(ctx->DrawBuffer->_ColorDrawBuffers[i]);
+      for (unsigned i = 0; i < draw_fb->_NumColorDrawBuffers; ++i) {
+         dst_irb = intel_renderbuffer(draw_fb->_ColorDrawBuffers[i]);
 	 if (dst_irb)
             do_blorp_blit(brw, buffer_bit,
                           src_irb, src_irb->Base.Base.Format,
@@ -317,6 +316,8 @@ brw_blorp_copytexsubimage(struct brw_context *brw,
 
 GLbitfield
 brw_blorp_framebuffer(struct brw_context *brw,
+                      struct gl_framebuffer *readFb,
+                      struct gl_framebuffer *drawFb,
                       GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                       GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
                       GLbitfield mask, GLenum filter)
@@ -333,7 +334,7 @@ brw_blorp_framebuffer(struct brw_context *brw,
 
    for (unsigned int i = 0; i < ARRAY_SIZE(buffer_bits); ++i) {
       if ((mask & buffer_bits[i]) &&
-       try_blorp_blit(brw,
+       try_blorp_blit(brw, readFb, drawFb,
                       srcX0, srcY0, srcX1, srcY1,
                       dstX0, dstY0, dstX1, dstY1,
                       filter, buffer_bits[i])) {
@@ -1254,10 +1255,8 @@ brw_blorp_blit_program::translate_dst_to_src()
    emit_mov(Xp_f, X);
    emit_mov(Yp_f, Y);
    /* Scale and offset */
-   emit_mul(X_f, Xp_f, x_transform.multiplier);
-   emit_mul(Y_f, Yp_f, y_transform.multiplier);
-   emit_add(X_f, X_f, x_transform.offset);
-   emit_add(Y_f, Y_f, y_transform.offset);
+   emit_mad(X_f, x_transform.offset, Xp_f, x_transform.multiplier);
+   emit_mad(Y_f, y_transform.offset, Yp_f, y_transform.multiplier);
    if (key->blit_scaled && key->blend) {
       /* Translate coordinates to lay out the samples in a rectangular  grid
        * roughly corresponding to sample locations.
@@ -1307,10 +1306,10 @@ brw_blorp_blit_program::clamp_tex_coords(struct brw_reg regX,
                                          struct brw_reg clampX1,
                                          struct brw_reg clampY1)
 {
-   emit_cond_mov(regX, clampX0, BRW_CONDITIONAL_L, regX, clampX0);
-   emit_cond_mov(regX, clampX1, BRW_CONDITIONAL_G, regX, clampX1);
-   emit_cond_mov(regY, clampY0, BRW_CONDITIONAL_L, regY, clampY0);
-   emit_cond_mov(regY, clampY1, BRW_CONDITIONAL_G, regY, clampY1);
+   emit_max(regX, regX, clampX0);
+   emit_max(regY, regY, clampY0);
+   emit_min(regX, regX, clampX1);
+   emit_min(regY, regY, clampY1);
 }
 
 /**
@@ -1993,10 +1992,13 @@ brw_blorp_blit_params::brw_blorp_blit_params(struct brw_context *brw,
 
    wm_prog_key.src_tiled_w = src.map_stencil_as_y_tiled;
    wm_prog_key.dst_tiled_w = dst.map_stencil_as_y_tiled;
-   x0 = wm_push_consts.dst_x0 = dst_x0;
-   y0 = wm_push_consts.dst_y0 = dst_y0;
-   x1 = wm_push_consts.dst_x1 = dst_x1;
-   y1 = wm_push_consts.dst_y1 = dst_y1;
+   /* Round floating point values to nearest integer to avoid "off by one texel"
+    * kind of errors when blitting.
+    */
+   x0 = wm_push_consts.dst_x0 = roundf(dst_x0);
+   y0 = wm_push_consts.dst_y0 = roundf(dst_y0);
+   x1 = wm_push_consts.dst_x1 = roundf(dst_x1);
+   y1 = wm_push_consts.dst_y1 = roundf(dst_y1);
    wm_push_consts.rect_grid_x1 = (minify(src_mt->logical_width0, src_level) *
                                   wm_prog_key.x_scale - 1.0);
    wm_push_consts.rect_grid_y1 = (minify(src_mt->logical_height0, src_level) *

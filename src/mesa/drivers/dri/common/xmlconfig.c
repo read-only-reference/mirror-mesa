@@ -27,10 +27,12 @@
  * \author Felix Kuehling
  */
 
+#include <stdarg.h>
 #include <string.h>
 #include <assert.h>
 #include <expat.h>
 #include <fcntl.h>
+#include <math.h>
 #include <unistd.h>
 #include <errno.h>
 #include "main/imports.h"

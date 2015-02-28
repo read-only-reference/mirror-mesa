@@ -1004,6 +1004,7 @@ struct gl_polygon_attrib
    GLenum CullFaceMode;		/**< Culling mode GL_FRONT or GL_BACK */
    GLfloat OffsetFactor;	/**< Polygon offset factor, from user */
    GLfloat OffsetUnits;		/**< Polygon offset units, from user */
+   GLfloat OffsetClamp;		/**< Polygon offset clamp, from user */
    GLboolean OffsetPoint;	/**< Offset in GL_POINT mode */
    GLboolean OffsetLine;	/**< Offset in GL_LINE mode */
    GLboolean OffsetFill;	/**< Offset in GL_FILL mode */
@@ -3033,6 +3034,8 @@ struct gl_shader_compiler_options
    GLboolean OptimizeForAOS;
 
    struct gl_sl_pragmas DefaultPragmas; /**< Default #pragma settings */
+
+   struct nir_shader_compiler_options *NirOptions;
 };
 
 
@@ -3070,6 +3073,9 @@ struct gl_query_state
 
    /** GL_ARB_timer_query */
    struct gl_query_object *TimeElapsed;
+
+   /** GL_ARB_pipeline_statistics_query */
+   struct gl_query_object *pipeline_stats[MAX_PIPELINE_STATISTICS];
 
    GLenum CondRenderMode;
 };
@@ -3457,6 +3463,17 @@ struct gl_constants
       GLuint Timestamp;
       GLuint PrimitivesGenerated;
       GLuint PrimitivesWritten;
+      GLuint VerticesSubmitted;
+      GLuint PrimitivesSubmitted;
+      GLuint VsInvocations;
+      GLuint TessPatches;
+      GLuint TessInvocations;
+      GLuint GsInvocations;
+      GLuint GsPrimitives;
+      GLuint FsInvocations;
+      GLuint ComputeInvocations;
+      GLuint ClInPrimitives;
+      GLuint ClOutPrimitives;
    } QueryCounterBits;
 
    GLuint MaxDrawBuffers;    /**< GL_ARB_draw_buffers */
@@ -3747,12 +3764,14 @@ struct gl_extensions
    GLboolean ARB_explicit_uniform_location;
    GLboolean ARB_geometry_shader4;
    GLboolean ARB_gpu_shader5;
+   GLboolean ARB_gpu_shader_fp64;
    GLboolean ARB_half_float_vertex;
    GLboolean ARB_instanced_arrays;
    GLboolean ARB_internalformat_query;
    GLboolean ARB_map_buffer_range;
    GLboolean ARB_occlusion_query;
    GLboolean ARB_occlusion_query2;
+   GLboolean ARB_pipeline_statistics_query;
    GLboolean ARB_point_sprite;
    GLboolean ARB_sample_shading;
    GLboolean ARB_seamless_cube_map;
@@ -3767,6 +3786,7 @@ struct gl_extensions
    GLboolean ARB_shadow;
    GLboolean ARB_stencil_texturing;
    GLboolean ARB_sync;
+   GLboolean ARB_tessellation_shader;
    GLboolean ARB_texture_border_clamp;
    GLboolean ARB_texture_buffer_object;
    GLboolean ARB_texture_buffer_object_rgb32;
@@ -3813,6 +3833,7 @@ struct gl_extensions
    GLboolean EXT_packed_float;
    GLboolean EXT_pixel_buffer_object;
    GLboolean EXT_point_parameters;
+   GLboolean EXT_polygon_offset_clamp;
    GLboolean EXT_provoking_vertex;
    GLboolean EXT_shader_integer_mix;
    GLboolean EXT_stencil_two_side;
@@ -3835,6 +3856,7 @@ struct gl_extensions
    GLboolean OES_standard_derivatives;
    /* vendor extensions */
    GLboolean AMD_performance_monitor;
+   GLboolean AMD_pinned_memory;
    GLboolean AMD_seamless_cubemap_per_texture;
    GLboolean AMD_vertex_shader_layer;
    GLboolean AMD_vertex_shader_viewport_index;
@@ -4376,6 +4398,12 @@ struct gl_context
    struct gl_buffer_object *AtomicBuffer;
 
    /**
+    * Object currently associated w/ the GL_EXTERNAL_VIRTUAL_MEMORY_BUFFER_AMD
+    * target.
+    */
+   struct gl_buffer_object *ExternalVirtualMemoryBuffer;
+
+   /**
     * Array of atomic counter buffer binding points.
     */
    struct gl_atomic_buffer_binding
@@ -4484,9 +4512,6 @@ extern int MESA_DEBUG_FLAGS;
 # define MESA_VERBOSE 0
 # define MESA_DEBUG_FLAGS 0
 # define MESA_FUNCTION "a function"
-# ifndef NDEBUG
-#  define NDEBUG
-# endif
 #endif
 
 

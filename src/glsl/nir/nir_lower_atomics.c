@@ -26,6 +26,7 @@
  */
 
 #include "nir.h"
+#include "main/config.h"
 #include <assert.h>
 
 /*
@@ -128,8 +129,7 @@ lower_block(nir_block *block, void *state)
 {
    nir_foreach_instr_safe(block, instr) {
       if (instr->type == nir_instr_type_intrinsic)
-         lower_instr(nir_instr_as_intrinsic(instr),
-                     (nir_function_impl *) state);
+         lower_instr(nir_instr_as_intrinsic(instr), state);
    }
 
    return true;

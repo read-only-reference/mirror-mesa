@@ -54,7 +54,7 @@ draw_impl(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		fd4_emit_vertex_bufs(ring, emit);
 
 	OUT_PKT0(ring, REG_A4XX_VFD_INDEX_OFFSET, 2);
-	OUT_RING(ring, info->start);            /* VFD_INDEX_OFFSET */
+	OUT_RING(ring, info->indexed ? info->index_bias : info->start); /* VFD_INDEX_OFFSET */
 	OUT_RING(ring, info->start_instance);   /* ??? UNKNOWN_2209 */
 
 	OUT_PKT0(ring, REG_A4XX_PC_RESTART_INDEX, 1);
@@ -305,7 +305,7 @@ fd4_clear(struct fd_context *ctx, unsigned buffers,
 	OUT_RING(ring, 0x00000001);
 
 	fd4_draw(ctx, ring, DI_PT_RECTLIST, USE_VISIBILITY,
-			DI_SRC_SEL_AUTO_INDEX, 2, INDEX_SIZE_IGN, 0, 0, NULL);
+			DI_SRC_SEL_AUTO_INDEX, 2, 1, INDEX_SIZE_IGN, 0, 0, NULL);
 
 	OUT_PKT3(ring, CP_UNKNOWN_1A, 1);
 	OUT_RING(ring, 0x00000000);

@@ -154,8 +154,12 @@ upload_sf(struct brw_context *brw)
        dw1 |= GEN6_SF_VIEWPORT_TRANSFORM_ENABLE;
 
    /* _NEW_LINE */
-   uint32_t line_width_u3_7 =
-      U_FIXED(CLAMP(ctx->Line.Width, 0.0, ctx->Const.MaxLineWidth), 7);
+   /* OpenGL dictates that line width should be rounded to the nearest
+    * integer
+    */
+   float line_width =
+      roundf(CLAMP(ctx->Line.Width, 0.0, ctx->Const.MaxLineWidth));
+   uint32_t line_width_u3_7 = U_FIXED(line_width, 7);
    if (line_width_u3_7 == 0)
       line_width_u3_7 = 1;
    if (brw->gen >= 9 || brw->is_cherryview) {
@@ -314,7 +318,7 @@ upload_raster(struct brw_context *brw)
    OUT_BATCH(dw1);
    OUT_BATCH_F(ctx->Polygon.OffsetUnits * 2); /* constant.  copied from gen4 */
    OUT_BATCH_F(ctx->Polygon.OffsetFactor); /* scale */
-   OUT_BATCH_F(0.0);
+   OUT_BATCH_F(ctx->Polygon.OffsetClamp); /* global depth offset clamp */
    ADVANCE_BATCH();
 }
 

@@ -34,7 +34,7 @@
 
 #define ACP_HASH_SIZE 16
 
-#include "main/bitset.h"
+#include "util/bitset.h"
 #include "brw_fs.h"
 #include "brw_cfg.h"
 
@@ -298,13 +298,16 @@ fs_visitor::try_copy_propagate(fs_inst *inst, int arg, acp_entry *entry)
     */
    if (inst->src[arg].reg_offset < entry->dst.reg_offset ||
        (inst->src[arg].reg_offset * 32 + inst->src[arg].subreg_offset +
-        inst->regs_read(this, arg) * inst->src[arg].stride * 32) >
+        inst->regs_read(arg) * inst->src[arg].stride * 32) >
        (entry->dst.reg_offset + entry->regs_written) * 32)
       return false;
 
-   /* See resolve_ud_negate() and comment in brw_fs_emit.cpp. */
-   if (inst->conditional_mod &&
-       inst->src[arg].type == BRW_REGISTER_TYPE_UD &&
+   /* we can't generally copy-propagate UD negations because we
+    * can end up accessing the resulting values as signed integers
+    * instead. See also resolve_ud_negate() and comment in
+    * fs_generator::generate_code.
+    */
+   if (inst->src[arg].type == BRW_REGISTER_TYPE_UD &&
        entry->src.negate)
       return false;
 
@@ -441,19 +444,27 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
        */
       if (inst->src[i].reg_offset < entry->dst.reg_offset ||
           (inst->src[i].reg_offset * 32 + inst->src[i].subreg_offset +
-           inst->regs_read(this, i) * inst->src[i].stride * 32) >
+           inst->regs_read(i) * inst->src[i].stride * 32) >
           (entry->dst.reg_offset + entry->regs_written) * 32)
-         continue;
-
-      /* Don't bother with cases that should have been taken care of by the
-       * GLSL compiler's constant folding pass.
-       */
-      if (inst->src[i].negate || inst->src[i].abs)
          continue;
 
       fs_reg val = entry->src;
       val.effective_width = inst->src[i].effective_width;
       val.type = inst->src[i].type;
+
+      if (inst->src[i].abs) {
+         if ((brw->gen >= 8 && is_logic_op(inst->opcode)) ||
+             !brw_abs_immediate(val.type, &val.fixed_hw_reg)) {
+            continue;
+         }
+      }
+
+      if (inst->src[i].negate) {
+         if ((brw->gen >= 8 && is_logic_op(inst->opcode)) ||
+             !brw_negate_immediate(val.type, &val.fixed_hw_reg)) {
+            continue;
+         }
+      }
 
       switch (inst->opcode) {
       case BRW_OPCODE_MOV:
@@ -561,6 +572,12 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
          break;
 
       case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
+         inst->src[i] = val;
+         progress = true;
+         break;
+
+      case BRW_OPCODE_MAD:
+      case BRW_OPCODE_LRP:
          inst->src[i] = val;
          progress = true;
          break;

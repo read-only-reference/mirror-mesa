@@ -124,11 +124,35 @@ private:
 
 }; /* end of anonymous namespace */
 
+static const nir_shader_compiler_options default_options = {
+};
+
 nir_shader *
 glsl_to_nir(exec_list *ir, _mesa_glsl_parse_state *state,
             bool native_integers)
 {
-   nir_shader *shader = nir_shader_create(NULL);
+   const nir_shader_compiler_options *options;
+
+   if (state) {
+      struct gl_context *ctx = state->ctx;
+      struct gl_shader_compiler_options *gl_options =
+         &ctx->Const.ShaderCompilerOptions[state->stage];
+
+      if (!gl_options->NirOptions) {
+         nir_shader_compiler_options *new_options =
+            rzalloc(ctx, nir_shader_compiler_options);
+         options = gl_options->NirOptions = new_options;
+
+         if (gl_options->EmitNoPow)
+            new_options->lower_fpow = true;
+      } else {
+         options = gl_options->NirOptions;
+      }
+   } else {
+      options = &default_options;
+   }
+
+   nir_shader *shader = nir_shader_create(NULL, options);
 
    if (state) {
       shader->num_user_structures = state->num_user_structures;
@@ -242,6 +266,7 @@ nir_visitor::visit(ir_variable *ir)
    var->data.centroid = ir->data.centroid;
    var->data.sample = ir->data.sample;
    var->data.invariant = ir->data.invariant;
+   var->data.location = ir->data.location;
 
    switch(ir->data.mode) {
    case ir_var_auto:
@@ -260,7 +285,13 @@ nir_visitor::visit(ir_variable *ir)
       break;
 
    case ir_var_shader_in:
-      var->data.mode = nir_var_shader_in;
+      if (ir->data.location == VARYING_SLOT_FACE) {
+         /* For whatever reason, GLSL IR makes gl_FrontFacing an input */
+         var->data.location = SYSTEM_VALUE_FRONT_FACE;
+         var->data.mode = nir_var_system_value;
+      } else {
+         var->data.mode = nir_var_shader_in;
+      }
       break;
 
    case ir_var_shader_out:
@@ -312,7 +343,6 @@ nir_visitor::visit(ir_variable *ir)
       unreachable("not reached");
    }
 
-   var->data.location = ir->data.location;
    var->data.index = ir->data.index;
    var->data.binding = ir->data.binding;
    /* XXX Get rid of buffer_index */
@@ -533,8 +563,14 @@ nir_visitor::visit(ir_discard *ir)
     * discards will be immediately followed by a return.
     */
 
-   nir_intrinsic_instr *discard =
-      nir_intrinsic_instr_create(this->shader, nir_intrinsic_discard);
+   nir_intrinsic_instr *discard;
+   if (ir->condition) {
+      discard = nir_intrinsic_instr_create(this->shader,
+                                           nir_intrinsic_discard_if);
+      discard->src[0] = evaluate_rvalue(ir->condition);
+   } else {
+      discard = nir_intrinsic_instr_create(this->shader, nir_intrinsic_discard);
+   }
    nir_instr_insert_after_cf_list(this->cf_node_list, &discard->instr);
 }
 
@@ -604,7 +640,7 @@ nir_visitor::visit(ir_call *ir)
       } else if (strcmp(ir->callee_name(), "__intrinsic_atomic_predecrement") == 0) {
          op = nir_intrinsic_atomic_counter_dec_var;
       } else {
-         assert(0);
+         unreachable("not reached");
       }
 
       nir_intrinsic_instr *instr = nir_intrinsic_instr_create(shader, op);
@@ -1162,7 +1198,7 @@ nir_visitor::visit(ir_expression *ir)
             case 2: emit(nir_op_fnoise1_2, dest_size, srcs); break;
             case 3: emit(nir_op_fnoise1_3, dest_size, srcs); break;
             case 4: emit(nir_op_fnoise1_4, dest_size, srcs); break;
-            default: assert(0); break;
+            default: unreachable("not reached");
          }
          break;
       case 2:
@@ -1171,7 +1207,7 @@ nir_visitor::visit(ir_expression *ir)
             case 2: emit(nir_op_fnoise2_2, dest_size, srcs); break;
             case 3: emit(nir_op_fnoise2_3, dest_size, srcs); break;
             case 4: emit(nir_op_fnoise2_4, dest_size, srcs); break;
-            default: assert(0); break;
+            default: unreachable("not reached");
          }
          break;
       case 3:
@@ -1180,7 +1216,7 @@ nir_visitor::visit(ir_expression *ir)
             case 2: emit(nir_op_fnoise3_2, dest_size, srcs); break;
             case 3: emit(nir_op_fnoise3_3, dest_size, srcs); break;
             case 4: emit(nir_op_fnoise3_4, dest_size, srcs); break;
-            default: assert(0); break;
+            default: unreachable("not reached");
          }
          break;
       case 4:
@@ -1189,7 +1225,7 @@ nir_visitor::visit(ir_expression *ir)
             case 2: emit(nir_op_fnoise4_2, dest_size, srcs); break;
             case 3: emit(nir_op_fnoise4_3, dest_size, srcs); break;
             case 4: emit(nir_op_fnoise4_4, dest_size, srcs); break;
-            default: assert(0); break;
+            default: unreachable("not reached");
          }
          break;
       default:
@@ -1517,7 +1553,7 @@ nir_visitor::visit(ir_expression *ir)
          case 2: emit(nir_op_vec2, dest_size, srcs); break;
          case 3: emit(nir_op_vec3, dest_size, srcs); break;
          case 4: emit(nir_op_vec4, dest_size, srcs); break;
-         default: assert(0); break;
+         default: unreachable("not reached");
       }
       break;
 
@@ -1627,7 +1663,7 @@ nir_visitor::visit(ir_texture *ir)
       instr->dest_type = nir_type_unsigned;
       break;
    default:
-      assert(0);
+      unreachable("not reached");
    }
 
    ir->sampler->accept(this);

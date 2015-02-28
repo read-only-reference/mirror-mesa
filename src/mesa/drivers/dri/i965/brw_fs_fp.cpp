@@ -316,9 +316,14 @@ fs_visitor::emit_fragment_program_code()
       case OPCODE_MAD:
          for (int i = 0; i < 4; i++) {
             if (fpi->DstReg.WriteMask & (1 << i)) {
-               fs_reg temp = vgrf(glsl_type::float_type);
-               emit(MUL(temp, offset(src[0], i), offset(src[1], i)));
-               emit(ADD(offset(dst, i), temp, offset(src[2], i)));
+               if (brw->gen >= 6) {
+                  emit(MAD(offset(dst, i), offset(src[2], i),
+                           offset(src[1], i), offset(src[0], i)));
+               } else {
+                  fs_reg temp = vgrf(glsl_type::float_type);
+                  emit(MUL(temp, offset(src[0], i), offset(src[1], i)));
+                  emit(ADD(offset(dst, i), temp, offset(src[2], i)));
+               }
             }
          }
          break;
@@ -517,7 +522,7 @@ fs_visitor::emit_fragment_program_code()
       /* To handle saturates, we emit a MOV with a saturate bit, which
        * optimization should fold into the preceding instructions when safe.
        */
-      if (fpi->Opcode != OPCODE_END) {
+      if (_mesa_num_inst_dst_regs(fpi->Opcode) != 0) {
          fs_reg real_dst = get_fp_dst_reg(&fpi->DstReg);
 
          for (int i = 0; i < 4; i++) {

@@ -51,10 +51,10 @@ extern "C" {
 
 
 fs_reg *
-fs_visitor::emit_vs_system_value(enum brw_reg_type type, int location)
+fs_visitor::emit_vs_system_value(int location)
 {
    fs_reg *reg = new(this->mem_ctx)
-      fs_reg(ATTR, VERT_ATTRIB_MAX, type);
+      fs_reg(ATTR, VERT_ATTRIB_MAX, BRW_REGISTER_TYPE_D);
    brw_vs_prog_data *vs_prog_data = (brw_vs_prog_data *) prog_data;
 
    switch (location) {
@@ -92,10 +92,10 @@ fs_visitor::visit(ir_variable *ir)
          reg = new(this->mem_ctx)
             fs_reg(ATTR, ir->data.location,
                    brw_type_for_base_type(ir->type->get_scalar_type()));
-      } else if (!strcmp(ir->name, "gl_FragCoord")) {
+      } else if (ir->data.location == VARYING_SLOT_POS) {
          reg = emit_fragcoord_interpolation(ir->data.pixel_center_integer,
                                             ir->data.origin_upper_left);
-      } else if (!strcmp(ir->name, "gl_FrontFacing")) {
+      } else if (ir->data.location == VARYING_SLOT_FACE) {
 	 reg = emit_frontfacing_interpolation();
       } else {
          reg = new(this->mem_ctx) fs_reg(vgrf(ir->type));
@@ -191,8 +191,7 @@ fs_visitor::visit(ir_variable *ir)
       case SYSTEM_VALUE_VERTEX_ID:
       case SYSTEM_VALUE_VERTEX_ID_ZERO_BASE:
       case SYSTEM_VALUE_INSTANCE_ID:
-         reg = emit_vs_system_value(brw_type_for_base_type(ir->type),
-                                    ir->data.location);
+         reg = emit_vs_system_value(ir->data.location);
          break;
       case SYSTEM_VALUE_SAMPLE_POS:
 	 reg = emit_samplepos_setup();
@@ -322,6 +321,9 @@ void
 fs_visitor::emit_minmax(enum brw_conditional_mod conditionalmod, const fs_reg &dst,
                         const fs_reg &src0, const fs_reg &src1)
 {
+   assert(conditionalmod == BRW_CONDITIONAL_GE ||
+          conditionalmod == BRW_CONDITIONAL_L);
+
    fs_inst *inst;
 
    if (brw->gen >= 6) {
@@ -428,21 +430,16 @@ fs_visitor::try_emit_mad(ir_expression *ir)
    if (ir->type != glsl_type::float_type)
       return false;
 
-   ir_rvalue *nonmul = ir->operands[1];
-   ir_expression *mul = ir->operands[0]->as_expression();
+   ir_rvalue *nonmul;
+   ir_expression *mul;
+   bool mul_negate, mul_abs;
 
-   bool mul_negate = false, mul_abs = false;
-   if (mul && mul->operation == ir_unop_abs) {
-      mul = mul->operands[0]->as_expression();
-      mul_abs = true;
-   } else if (mul && mul->operation == ir_unop_neg) {
-      mul = mul->operands[0]->as_expression();
-      mul_negate = true;
-   }
+   for (int i = 0; i < 2; i++) {
+      mul_negate = false;
+      mul_abs = false;
 
-   if (!mul || mul->operation != ir_binop_mul) {
-      nonmul = ir->operands[0];
-      mul = ir->operands[1]->as_expression();
+      mul = ir->operands[i]->as_expression();
+      nonmul = ir->operands[1 - i];
 
       if (mul && mul->operation == ir_unop_abs) {
          mul = mul->operands[0]->as_expression();
@@ -452,13 +449,11 @@ fs_visitor::try_emit_mad(ir_expression *ir)
          mul_negate = true;
       }
 
-      if (!mul || mul->operation != ir_binop_mul)
-         return false;
+      if (mul && mul->operation == ir_binop_mul)
+         break;
    }
 
-   if (nonmul->as_constant() ||
-       mul->operands[0]->as_constant() ||
-       mul->operands[1]->as_constant())
+   if (!mul || mul->operation != ir_binop_mul)
       return false;
 
    nonmul->accept(this);
@@ -877,7 +872,7 @@ fs_visitor::visit(ir_expression *ir)
       break;
    }
    case ir_binop_mod:
-      /* Floating point should be lowered by MOD_TO_FRACT in the compiler. */
+      /* Floating point should be lowered by MOD_TO_FLOOR in the compiler. */
       assert(ir->type->is_integer());
       emit_math(SHADER_OPCODE_INT_REMAINDER, this->result, op[0], op[1]);
       break;
@@ -1198,6 +1193,20 @@ fs_visitor::visit(ir_expression *ir)
    case ir_binop_interpolate_at_sample:
       unreachable("already handled above");
       break;
+
+   case ir_unop_d2f:
+   case ir_unop_f2d:
+   case ir_unop_d2i:
+   case ir_unop_i2d:
+   case ir_unop_d2u:
+   case ir_unop_u2d:
+   case ir_unop_d2b:
+   case ir_unop_pack_double_2x32:
+   case ir_unop_unpack_double_2x32:
+   case ir_unop_frexp_sig:
+   case ir_unop_frexp_exp:
+      unreachable("fp64 todo");
+      break;
    }
 }
 
@@ -1241,6 +1250,7 @@ fs_visitor::emit_assignment_writes(fs_reg &l, fs_reg &r,
    case GLSL_TYPE_ATOMIC_UINT:
       break;
 
+   case GLSL_TYPE_DOUBLE:
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
@@ -1278,7 +1288,7 @@ fs_visitor::try_rewrite_rhs_to_dst(ir_assignment *ir,
    /* If last_rhs_inst wrote a different number of components than our LHS,
     * we can't safely rewrite it.
     */
-   if (virtual_grf_sizes[dst.reg] != modify->regs_written)
+   if (alloc.sizes[dst.reg] != modify->regs_written)
       return false;
 
    /* Success!  Rewrite the instruction. */
@@ -1461,7 +1471,7 @@ fs_visitor::emit_texture_gen4(ir_texture_opcode op, fs_reg dst,
        * this weirdness around to the expected layout.
        */
       orig_dst = dst;
-      dst = fs_reg(GRF, virtual_grf_alloc(8), orig_dst.type);
+      dst = fs_reg(GRF, alloc.allocate(8), orig_dst.type);
    }
 
    enum opcode opcode;
@@ -1672,7 +1682,7 @@ fs_visitor::emit_texture_gen7(ir_texture_opcode op, fs_reg dst,
        * need to offset the Sampler State Pointer in the header.
        */
       header_present = true;
-      sources[0] = fs_reg(GRF, virtual_grf_alloc(1), BRW_REGISTER_TYPE_UD);
+      sources[0] = fs_reg(GRF, alloc.allocate(1), BRW_REGISTER_TYPE_UD);
       length++;
    }
 
@@ -1814,7 +1824,7 @@ fs_visitor::emit_texture_gen7(ir_texture_opcode op, fs_reg dst,
    else
       mlen = length * reg_width;
 
-   fs_reg src_payload = fs_reg(GRF, virtual_grf_alloc(mlen),
+   fs_reg src_payload = fs_reg(GRF, alloc.allocate(mlen),
                                BRW_REGISTER_TYPE_F);
    emit(LOAD_PAYLOAD(src_payload, sources, length));
 
@@ -1926,7 +1936,7 @@ fs_visitor::rescale_texcoord(fs_reg coordinate, int coord_components,
     * tracking to get the scaling factor.
     */
    if (brw->gen < 6 && is_rect) {
-      fs_reg dst = fs_reg(GRF, virtual_grf_alloc(coord_components));
+      fs_reg dst = fs_reg(GRF, alloc.allocate(coord_components));
       fs_reg src = coordinate;
       coordinate = dst;
 
@@ -1948,7 +1958,7 @@ fs_visitor::rescale_texcoord(fs_reg coordinate, int coord_components,
 	    chan = offset(chan, i);
 
 	    inst = emit(BRW_OPCODE_SEL, chan, chan, fs_reg(0.0f));
-	    inst->conditional_mod = BRW_CONDITIONAL_G;
+	    inst->conditional_mod = BRW_CONDITIONAL_GE;
 
 	    /* Our parameter comes in as 1.0/width or 1.0/height,
 	     * because that's what people normally want for doing
@@ -1985,7 +1995,7 @@ fs_reg
 fs_visitor::emit_mcs_fetch(fs_reg coordinate, int components, fs_reg sampler)
 {
    int reg_width = dispatch_width / 8;
-   fs_reg payload = fs_reg(GRF, virtual_grf_alloc(components * reg_width),
+   fs_reg payload = fs_reg(GRF, alloc.allocate(components * reg_width),
                            BRW_REGISTER_TYPE_F);
    fs_reg dest = vgrf(glsl_type::uvec4_type);
    fs_reg *sources = ralloc_array(mem_ctx, fs_reg, components);
@@ -2404,17 +2414,21 @@ fs_visitor::visit(ir_swizzle *ir)
 void
 fs_visitor::visit(ir_discard *ir)
 {
-   assert(ir->condition == NULL); /* FINISHME */
-
    /* We track our discarded pixels in f0.1.  By predicating on it, we can
-    * update just the flag bits that aren't yet discarded.  By emitting a
-    * CMP of g0 != g0, all our currently executing channels will get turned
-    * off.
+    * update just the flag bits that aren't yet discarded.  If there's no
+    * condition, we emit a CMP of g0 != g0, so all currently executing
+    * channels will get turned off.
     */
-   fs_reg some_reg = fs_reg(retype(brw_vec8_grf(0, 0),
-                                   BRW_REGISTER_TYPE_UW));
-   fs_inst *cmp = emit(CMP(reg_null_f, some_reg, some_reg,
-                           BRW_CONDITIONAL_NZ));
+   fs_inst *cmp;
+   if (ir->condition) {
+      emit_bool_to_cond_code(ir->condition);
+      cmp = (fs_inst *) this->instructions.get_tail();
+      cmp->conditional_mod = brw_negate_cmod(cmp->conditional_mod);
+   } else {
+      fs_reg some_reg = fs_reg(retype(brw_vec8_grf(0, 0),
+                                      BRW_REGISTER_TYPE_UW));
+      cmp = emit(CMP(reg_null_f, some_reg, some_reg, BRW_CONDITIONAL_NZ));
+   }
    cmp->predicate = BRW_PREDICATE_NORMAL;
    cmp->flag_subreg = 1;
 
@@ -2715,6 +2729,97 @@ fs_visitor::emit_if_gen6(ir_if *ir)
    emit(IF(this->result, fs_reg(0), BRW_CONDITIONAL_NZ));
 }
 
+bool
+fs_visitor::try_opt_frontfacing_ternary(ir_if *ir)
+{
+   ir_dereference_variable *deref = ir->condition->as_dereference_variable();
+   if (!deref || strcmp(deref->var->name, "gl_FrontFacing") != 0)
+      return false;
+
+   if (ir->then_instructions.length() != 1 ||
+       ir->else_instructions.length() != 1)
+      return false;
+
+   ir_assignment *then_assign =
+         ((ir_instruction *)ir->then_instructions.head)->as_assignment();
+   ir_assignment *else_assign =
+         ((ir_instruction *)ir->else_instructions.head)->as_assignment();
+
+   if (!then_assign || then_assign->condition ||
+       !else_assign || else_assign->condition ||
+       then_assign->write_mask != else_assign->write_mask ||
+       !then_assign->lhs->equals(else_assign->lhs))
+      return false;
+
+   ir_constant *then_rhs = then_assign->rhs->as_constant();
+   ir_constant *else_rhs = else_assign->rhs->as_constant();
+
+   if (!then_rhs || !else_rhs)
+      return false;
+
+   if ((then_rhs->is_one() || then_rhs->is_negative_one()) &&
+       (else_rhs->is_one() || else_rhs->is_negative_one())) {
+      assert(then_rhs->is_one() == else_rhs->is_negative_one());
+      assert(else_rhs->is_one() == then_rhs->is_negative_one());
+
+      then_assign->lhs->accept(this);
+      fs_reg dst = this->result;
+      dst.type = BRW_REGISTER_TYPE_D;
+      fs_reg tmp = vgrf(glsl_type::int_type);
+
+      if (brw->gen >= 6) {
+         /* Bit 15 of g0.0 is 0 if the polygon is front facing. */
+         fs_reg g0 = fs_reg(retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_W));
+
+         /* For (gl_FrontFacing ? 1.0 : -1.0), emit:
+          *
+          *    or(8)  tmp.1<2>W  g0.0<0,1,0>W  0x00003f80W
+          *    and(8) dst<1>D    tmp<8,8,1>D   0xbf800000D
+          *
+          * and negate g0.0<0,1,0>W for (gl_FrontFacing ? -1.0 : 1.0).
+          */
+
+         if (then_rhs->is_negative_one()) {
+            assert(else_rhs->is_one());
+            g0.negate = true;
+         }
+
+         tmp.type = BRW_REGISTER_TYPE_W;
+         tmp.subreg_offset = 2;
+         tmp.stride = 2;
+
+         fs_inst *or_inst = emit(OR(tmp, g0, fs_reg(0x3f80)));
+         or_inst->src[1].type = BRW_REGISTER_TYPE_UW;
+
+         tmp.type = BRW_REGISTER_TYPE_D;
+         tmp.subreg_offset = 0;
+         tmp.stride = 1;
+      } else {
+         /* Bit 31 of g1.6 is 0 if the polygon is front facing. */
+         fs_reg g1_6 = fs_reg(retype(brw_vec1_grf(1, 6), BRW_REGISTER_TYPE_D));
+
+         /* For (gl_FrontFacing ? 1.0 : -1.0), emit:
+          *
+          *    or(8)  tmp<1>D  g1.6<0,1,0>D  0x3f800000D
+          *    and(8) dst<1>D  tmp<8,8,1>D   0xbf800000D
+          *
+          * and negate g1.6<0,1,0>D for (gl_FrontFacing ? -1.0 : 1.0).
+          */
+
+         if (then_rhs->is_negative_one()) {
+            assert(else_rhs->is_one());
+            g1_6.negate = true;
+         }
+
+         emit(OR(tmp, g1_6, fs_reg(0x3f800000)));
+      }
+      emit(AND(dst, tmp, fs_reg(0xbf800000)));
+      return true;
+   }
+
+   return false;
+}
+
 /**
  * Try to replace IF/MOV/ELSE/MOV/ENDIF with SEL.
  *
@@ -2807,6 +2912,9 @@ fs_visitor::try_replace_with_sel()
 void
 fs_visitor::visit(ir_if *ir)
 {
+   if (try_opt_frontfacing_ternary(ir))
+      return;
+
    /* Don't point the annotation at the if statement, because then it plus
     * the then and else blocks get printed.
     */
@@ -2978,26 +3086,34 @@ fs_visitor::emit_untyped_atomic(unsigned atomic_op, unsigned surf_index,
                                 fs_reg dst, fs_reg offset, fs_reg src0,
                                 fs_reg src1)
 {
-   bool uses_kill =
-      (stage == MESA_SHADER_FRAGMENT) &&
-      ((brw_wm_prog_data*) this->prog_data)->uses_kill;
    int reg_width = dispatch_width / 8;
    int length = 0;
 
    fs_reg *sources = ralloc_array(mem_ctx, fs_reg, 4);
 
-   sources[0] = fs_reg(GRF, virtual_grf_alloc(1), BRW_REGISTER_TYPE_UD);
+   sources[0] = fs_reg(GRF, alloc.allocate(1), BRW_REGISTER_TYPE_UD);
    /* Initialize the sample mask in the message header. */
    emit(MOV(sources[0], fs_reg(0u)))
       ->force_writemask_all = true;
 
-   if (uses_kill) {
-      emit(MOV(component(sources[0], 7), brw_flag_reg(0, 1)))
-         ->force_writemask_all = true;
+   if (stage == MESA_SHADER_FRAGMENT) {
+      if (((brw_wm_prog_data*)this->prog_data)->uses_kill) {
+         emit(MOV(component(sources[0], 7), brw_flag_reg(0, 1)))
+            ->force_writemask_all = true;
+      } else {
+         emit(MOV(component(sources[0], 7),
+                  retype(brw_vec1_grf(1, 7), BRW_REGISTER_TYPE_UD)))
+            ->force_writemask_all = true;
+      }
    } else {
+      /* The execution mask is part of the side-band information sent together with
+       * the message payload to the data port. It's implicitly ANDed with the sample
+       * mask sent in the header to compute the actual set of channels that execute
+       * the atomic operation.
+       */
+      assert(stage == MESA_SHADER_VERTEX || stage == MESA_SHADER_COMPUTE);
       emit(MOV(component(sources[0], 7),
-               retype(brw_vec1_grf(1, 7), BRW_REGISTER_TYPE_UD)))
-         ->force_writemask_all = true;
+               fs_reg(0xffff)))->force_writemask_all = true;
    }
    length++;
 
@@ -3020,7 +3136,7 @@ fs_visitor::emit_untyped_atomic(unsigned atomic_op, unsigned surf_index,
    }
 
    int mlen = 1 + (length - 1) * reg_width;
-   fs_reg src_payload = fs_reg(GRF, virtual_grf_alloc(mlen),
+   fs_reg src_payload = fs_reg(GRF, alloc.allocate(mlen),
                                BRW_REGISTER_TYPE_UD);
    emit(LOAD_PAYLOAD(src_payload, sources, length));
 
@@ -3034,25 +3150,33 @@ void
 fs_visitor::emit_untyped_surface_read(unsigned surf_index, fs_reg dst,
                                       fs_reg offset)
 {
-   bool uses_kill =
-      (stage == MESA_SHADER_FRAGMENT) &&
-      ((brw_wm_prog_data*) this->prog_data)->uses_kill;
    int reg_width = dispatch_width / 8;
 
    fs_reg *sources = ralloc_array(mem_ctx, fs_reg, 2);
 
-   sources[0] = fs_reg(GRF, virtual_grf_alloc(1), BRW_REGISTER_TYPE_UD);
+   sources[0] = fs_reg(GRF, alloc.allocate(1), BRW_REGISTER_TYPE_UD);
    /* Initialize the sample mask in the message header. */
    emit(MOV(sources[0], fs_reg(0u)))
       ->force_writemask_all = true;
 
-   if (uses_kill) {
-      emit(MOV(component(sources[0], 7), brw_flag_reg(0, 1)))
-         ->force_writemask_all = true;
+   if (stage == MESA_SHADER_FRAGMENT) {
+      if (((brw_wm_prog_data*)this->prog_data)->uses_kill) {
+         emit(MOV(component(sources[0], 7), brw_flag_reg(0, 1)))
+            ->force_writemask_all = true;
+      } else {
+         emit(MOV(component(sources[0], 7),
+                  retype(brw_vec1_grf(1, 7), BRW_REGISTER_TYPE_UD)))
+            ->force_writemask_all = true;
+      }
    } else {
+      /* The execution mask is part of the side-band information sent together with
+       * the message payload to the data port. It's implicitly ANDed with the sample
+       * mask sent in the header to compute the actual set of channels that execute
+       * the atomic operation.
+       */
+      assert(stage == MESA_SHADER_VERTEX || stage == MESA_SHADER_COMPUTE);
       emit(MOV(component(sources[0], 7),
-               retype(brw_vec1_grf(1, 7), BRW_REGISTER_TYPE_UD)))
-         ->force_writemask_all = true;
+               fs_reg(0xffff)))->force_writemask_all = true;
    }
 
    /* Set the surface read offset. */
@@ -3060,7 +3184,7 @@ fs_visitor::emit_untyped_surface_read(unsigned surf_index, fs_reg dst,
    emit(MOV(sources[1], offset));
 
    int mlen = 1 + reg_width;
-   fs_reg src_payload = fs_reg(GRF, virtual_grf_alloc(mlen),
+   fs_reg src_payload = fs_reg(GRF, alloc.allocate(mlen),
                                BRW_REGISTER_TYPE_UD);
    fs_inst *inst = emit(LOAD_PAYLOAD(src_payload, sources, 2));
 
@@ -3280,7 +3404,7 @@ fs_visitor::setup_color_payload(fs_reg *dst, fs_reg color, unsigned components)
       int len = 0;
       for (unsigned i = 0; i < 4; ++i) {
          if (colors_enabled & (1 << i)) {
-            dst[len] = fs_reg(GRF, virtual_grf_alloc(color.width / 8),
+            dst[len] = fs_reg(GRF, alloc.allocate(color.width / 8),
                               color.type, color.width);
             inst = emit(MOV(dst[len], offset(color, i)));
             inst->saturate = key->clamp_fragment_color;
@@ -3304,11 +3428,11 @@ fs_visitor::setup_color_payload(fs_reg *dst, fs_reg color, unsigned components)
        */
       for (unsigned i = 0; i < 4; ++i) {
          if (colors_enabled & (1 << i)) {
-            dst[i] = fs_reg(GRF, virtual_grf_alloc(1), color.type);
+            dst[i] = fs_reg(GRF, alloc.allocate(1), color.type);
             inst = emit(MOV(dst[i], half(offset(color, i), 0)));
             inst->saturate = key->clamp_fragment_color;
 
-            dst[i + 4] = fs_reg(GRF, virtual_grf_alloc(1), color.type);
+            dst[i + 4] = fs_reg(GRF, alloc.allocate(1), color.type);
             inst = emit(MOV(dst[i + 4], half(offset(color, i), 1)));
             inst->saturate = key->clamp_fragment_color;
             inst->force_sechalf = true;
@@ -3409,7 +3533,7 @@ fs_visitor::emit_single_fb_write(fs_reg color0, fs_reg color1,
       length += 2;
 
    if (payload.aa_dest_stencil_reg) {
-      sources[length] = fs_reg(GRF, virtual_grf_alloc(1));
+      sources[length] = fs_reg(GRF, alloc.allocate(1));
       emit(MOV(sources[length],
                fs_reg(brw_vec8_grf(payload.aa_dest_stencil_reg, 0))));
       length++;
@@ -3423,7 +3547,7 @@ fs_visitor::emit_single_fb_write(fs_reg color0, fs_reg color1,
       /* Hand over gl_SampleMask. Only lower 16 bits are relevant.  Since
        * it's unsinged single words, one vgrf is always 16-wide.
        */
-      sources[length] = fs_reg(GRF, virtual_grf_alloc(1),
+      sources[length] = fs_reg(GRF, alloc.allocate(1),
                                BRW_REGISTER_TYPE_UW, 16);
       emit(FS_OPCODE_SET_OMASK, sources[length], this->sample_mask);
       length++;
@@ -3437,7 +3561,7 @@ fs_visitor::emit_single_fb_write(fs_reg color0, fs_reg color1,
       length += setup_color_payload(sources + length, this->outputs[0], 0);
    } else if (color1.file == BAD_FILE) {
       if (src0_alpha.file != BAD_FILE) {
-         sources[length] = fs_reg(GRF, virtual_grf_alloc(reg_size),
+         sources[length] = fs_reg(GRF, alloc.allocate(reg_size),
                                   src0_alpha.type, src0_alpha.width);
          fs_inst *inst = emit(MOV(sources[length], src0_alpha));
          inst->saturate = key->clamp_fragment_color;
@@ -3486,7 +3610,7 @@ fs_visitor::emit_single_fb_write(fs_reg color0, fs_reg color1,
       /* Send from the GRF */
       fs_reg payload = fs_reg(GRF, -1, BRW_REGISTER_TYPE_F);
       load = emit(LOAD_PAYLOAD(payload, sources, length));
-      payload.reg = virtual_grf_alloc(load->regs_written);
+      payload.reg = alloc.allocate(load->regs_written);
       payload.width = dispatch_width;
       load->dst = payload;
       write = emit(FS_OPCODE_FB_WRITE, reg_undef, payload);
@@ -3655,7 +3779,7 @@ fs_visitor::emit_urb_writes()
     * send to terminate the shader. */
    if (vue_map->slots_valid == 0) {
 
-      fs_reg payload = fs_reg(GRF, virtual_grf_alloc(1), BRW_REGISTER_TYPE_UD);
+      fs_reg payload = fs_reg(GRF, alloc.allocate(1), BRW_REGISTER_TYPE_UD);
       fs_inst *inst = emit(MOV(payload, fs_reg(retype(brw_vec8_grf(1, 0),
                                                       BRW_REGISTER_TYPE_UD))));
       inst->force_writemask_all = true;
@@ -3688,7 +3812,7 @@ fs_visitor::emit_urb_writes()
             break;
          }
 
-         zero = fs_reg(GRF, virtual_grf_alloc(1), BRW_REGISTER_TYPE_UD);
+         zero = fs_reg(GRF, alloc.allocate(1), BRW_REGISTER_TYPE_UD);
          emit(MOV(zero, fs_reg(0u)));
 
          sources[length++] = zero;
@@ -3742,7 +3866,7 @@ fs_visitor::emit_urb_writes()
              * temp register and use that for the payload.
              */
             for (int i = 0; i < 4; i++) {
-               reg = fs_reg(GRF, virtual_grf_alloc(1), outputs[varying].type);
+               reg = fs_reg(GRF, alloc.allocate(1), outputs[varying].type);
                src = offset(this->outputs[varying], i);
                fs_inst *inst = emit(MOV(reg, src));
                inst->saturate = true;
@@ -3769,14 +3893,14 @@ fs_visitor::emit_urb_writes()
             emit_shader_time_end();
 
          fs_reg *payload_sources = ralloc_array(mem_ctx, fs_reg, length + 1);
-         fs_reg payload = fs_reg(GRF, virtual_grf_alloc(length + 1),
+         fs_reg payload = fs_reg(GRF, alloc.allocate(length + 1),
                                  BRW_REGISTER_TYPE_F);
 
          /* We need WE_all on the MOV for the message header (the URB handles)
           * so do a MOV to a dummy register and set force_writemask_all on the
           * MOV.  LOAD_PAYLOAD will preserve that.
           */
-         fs_reg dummy = fs_reg(GRF, virtual_grf_alloc(1),
+         fs_reg dummy = fs_reg(GRF, alloc.allocate(1),
                                BRW_REGISTER_TYPE_UD);
          fs_inst *inst = emit(MOV(dummy, fs_reg(retype(brw_vec8_grf(1, 0),
                                                        BRW_REGISTER_TYPE_UD))));
@@ -3892,9 +4016,6 @@ fs_visitor::init()
    this->current_annotation = NULL;
    this->base_ir = NULL;
 
-   this->virtual_grf_sizes = NULL;
-   this->virtual_grf_count = 0;
-   this->virtual_grf_array_size = 0;
    this->virtual_grf_start = NULL;
    this->virtual_grf_end = NULL;
    this->live_intervals = NULL;
