@@ -99,10 +99,8 @@ ilo_builder_writer_reset(struct ilo_builder *builder,
       writer->ptr = NULL;
    }
 
-   if (writer->bo) {
-      intel_bo_unreference(writer->bo);
-      writer->bo = NULL;
-   }
+   intel_bo_unref(writer->bo);
+   writer->bo = NULL;
 
    writer->used = 0;
    writer->stolen = 0;
@@ -139,7 +137,7 @@ alloc_writer_bo(struct intel_winsys *winsys,
       [ILO_BUILDER_WRITER_INSTRUCTION] = "instruction",
    };
 
-   return intel_winsys_alloc_buffer(winsys, writer_names[which], size, true);
+   return intel_winsys_alloc_bo(winsys, writer_names[which], size, true);
 }
 
 static void *
@@ -168,8 +166,7 @@ ilo_builder_writer_alloc_and_map(struct ilo_builder *builder,
 
       bo = alloc_writer_bo(builder->winsys, which, writer->size);
       if (bo) {
-         if (writer->bo)
-            intel_bo_unreference(writer->bo);
+         intel_bo_unref(writer->bo);
          writer->bo = bo;
       } else if (writer->bo) {
          /* reuse the old bo */
@@ -273,7 +270,7 @@ ilo_builder_writer_grow(struct ilo_builder *builder,
    }
 
    if (!new_ptr) {
-      intel_bo_unreference(new_bo);
+      intel_bo_unref(new_bo);
       return false;
    }
 
@@ -282,7 +279,7 @@ ilo_builder_writer_grow(struct ilo_builder *builder,
    else if (!preserve)
       FREE(writer->ptr);
 
-   intel_bo_unreference(writer->bo);
+   intel_bo_unref(writer->bo);
 
    writer->size = new_size;
    writer->bo = new_bo;
@@ -340,6 +337,20 @@ ilo_builder_init(struct ilo_builder *builder,
 
    builder->dev = dev;
    builder->winsys = winsys;
+
+   /* gen6_SURFACE_STATE() may override this */
+   switch (ilo_dev_gen(dev)) {
+   case ILO_GEN(8):
+      builder->mocs = GEN8_MOCS_MT_WB | GEN8_MOCS_CT_L3;
+      break;
+   case ILO_GEN(7.5):
+   case ILO_GEN(7):
+      builder->mocs = GEN7_MOCS_L3_WB;
+      break;
+   default:
+      builder->mocs = 0;
+      break;
+   }
 
    for (i = 0; i < ILO_BUILDER_WRITER_COUNT; i++)
       ilo_builder_writer_init(builder, i);

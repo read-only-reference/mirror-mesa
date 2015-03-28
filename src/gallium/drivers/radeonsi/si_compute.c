@@ -130,7 +130,8 @@ static void *si_create_compute_state(
 	        for (i = 0; i < program->num_kernels; i++) {
 		        LLVMModuleRef mod = radeon_llvm_get_kernel_module(program->llvm_ctx, i,
                                                         code, header->num_bytes);
-			si_compile_llvm(sctx->screen, &program->kernels[i], mod);
+			si_compile_llvm(sctx->screen, &program->kernels[i], sctx->tm,
+					mod);
 			LLVMDisposeModule(mod);
 		}
 	}
@@ -377,7 +378,8 @@ static void si_launch_grid(
 		 * XXX: The compiler should account for this.
 		 */
 		|  S_00B848_SGPRS(((MAX2(4 + arg_user_sgpr_count,
-		                        shader->num_sgprs)) - 1) / 8))
+		                        shader->num_sgprs)) - 1) / 8)
+		|  S_00B028_FLOAT_MODE(shader->float_mode))
 		;
 
 	lds_blocks = shader->lds_size;

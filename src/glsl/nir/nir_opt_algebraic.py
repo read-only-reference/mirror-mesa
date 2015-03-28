@@ -56,6 +56,10 @@ optimizations = [
    (('iabs', ('ineg', a)), ('iabs', a)),
    (('fadd', a, 0.0), a),
    (('iadd', a, 0), a),
+   (('fadd', ('fmul', a, b), ('fmul', a, c)), ('fmul', a, ('fadd', b, c))),
+   (('iadd', ('imul', a, b), ('imul', a, c)), ('imul', a, ('iadd', b, c))),
+   (('fadd', ('fneg', a), a), 0.0),
+   (('iadd', ('ineg', a), a), 0),
    (('fmul', a, 0.0), 0.0),
    (('imul', a, 0), 0),
    (('fmul', a, 1.0), a),
@@ -71,6 +75,7 @@ optimizations = [
    (('flrp', a, b, 1.0), b),
    (('flrp', a, a, b), a),
    (('flrp', 0.0, a, b), ('fmul', a, b)),
+   (('flrp', a, b, c), ('fadd', ('fmul', c, ('fsub', b, a)), a), 'options->lower_flrp'),
    (('ffma', a, b, c), ('fadd', ('fmul', a, b), c), 'options->lower_ffma'),
    (('fadd', ('fmul', a, b), c), ('ffma', a, b, c), '!options->lower_ffma'),
    # Comparison simplifications
@@ -91,6 +96,9 @@ optimizations = [
    (('fsat', a), ('fmin', ('fmax', a, 0.0), 1.0), 'options->lower_fsat'),
    (('fsat', ('fsat', a)), ('fsat', a)),
    (('fmin', ('fmax', ('fmin', ('fmax', a, 0.0), 1.0), 0.0), 1.0), ('fmin', ('fmax', a, 0.0), 1.0)),
+   # Emulating booleans
+   (('fmul', ('b2f', a), ('b2f', b)), ('b2f', ('iand', a, b))),
+   (('fsat', ('fadd', ('b2f', a), ('b2f', b))), ('b2f', ('ior', a, b))),
    # Comparison with the same args.  Note that these are not done for
    # the float versions because NaN always returns false on float
    # inequalities.
@@ -153,6 +161,8 @@ optimizations = [
    # Subtracts
    (('fsub', a, ('fsub', 0.0, b)), ('fadd', a, b)),
    (('isub', a, ('isub', 0, b)), ('iadd', a, b)),
+   (('fsub', a, b), ('fadd', a, ('fneg', b)), '!options->lower_negate'),
+   (('isub', a, b), ('iadd', a, ('ineg', b)), '!options->lower_negate'),
    (('fneg', a), ('fsub', 0.0, a), 'options->lower_negate'),
    (('ineg', a), ('isub', 0, a), 'options->lower_negate'),
    (('fadd', a, ('fsub', 0.0, b)), ('fsub', a, b)),

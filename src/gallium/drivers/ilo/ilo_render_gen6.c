@@ -39,24 +39,6 @@
 #include "ilo_render_gen.h"
 
 /**
- * A wrapper for gen6_PIPE_CONTROL().
- */
-static inline void
-gen6_pipe_control(struct ilo_render *r, uint32_t dw1)
-{
-   struct intel_bo *bo = (dw1 & GEN6_PIPE_CONTROL_WRITE__MASK) ?
-      r->workaround_bo : NULL;
-
-   ILO_DEV_ASSERT(r->dev, 6, 6);
-
-   gen6_PIPE_CONTROL(r->builder, dw1, bo, 0, 0);
-
-   r->state.current_pipe_control_dw1 |= dw1;
-
-   assert(!r->state.deferred_pipe_control_dw1);
-}
-
-/**
  * This should be called before PIPE_CONTROL.
  */
 void
@@ -106,14 +88,14 @@ gen6_wa_pre_pipe_control(struct ilo_render *r, uint32_t dw1)
       const uint32_t direct_wa = GEN6_PIPE_CONTROL_CS_STALL |
                                  GEN6_PIPE_CONTROL_PIXEL_SCOREBOARD_STALL;
 
-      gen6_pipe_control(r, direct_wa);
+      ilo_render_pipe_control(r, direct_wa);
    }
 
    if (indirect_wa_cond &&
        !(r->state.current_pipe_control_dw1 & GEN6_PIPE_CONTROL_WRITE__MASK)) {
       const uint32_t indirect_wa = GEN6_PIPE_CONTROL_WRITE_IMM;
 
-      gen6_pipe_control(r, indirect_wa);
+      ilo_render_pipe_control(r, indirect_wa);
    }
 }
 
@@ -130,6 +112,26 @@ gen6_wa_pre_non_pipelined(struct ilo_render *r)
 }
 
 static void
+gen6_wa_post_3dstate_urb_no_gs(struct ilo_render *r)
+{
+   /*
+    * From the Sandy Bridge PRM, volume 2 part 1, page 27:
+    *
+    *     "Because of a urb corruption caused by allocating a previous
+    *      gsunit's urb entry to vsunit software is required to send a
+    *      "GS NULL Fence" (Send URB fence with VS URB size == 1 and GS URB
+    *      size == 0) plus a dummy DRAW call before any case where VS will
+    *      be taking over GS URB space."
+    */
+   const uint32_t dw1 = GEN6_PIPE_CONTROL_CS_STALL;
+
+   if ((r->state.current_pipe_control_dw1 & dw1) != dw1)
+      gen6_wa_pre_pipe_control(r, dw1);
+   if ((r->state.current_pipe_control_dw1 & dw1) != dw1)
+      ilo_render_pipe_control(r, dw1);
+}
+
+static void
 gen6_wa_post_3dstate_constant_vs(struct ilo_render *r)
 {
    /*
@@ -141,10 +143,33 @@ gen6_wa_post_3dstate_constant_vs(struct ilo_render *r)
                         GEN6_PIPE_CONTROL_INSTRUCTION_CACHE_INVALIDATE |
                         GEN6_PIPE_CONTROL_STATE_CACHE_INVALIDATE;
 
-   gen6_wa_pre_pipe_control(r, dw1);
+   if ((r->state.current_pipe_control_dw1 & dw1) != dw1)
+      gen6_wa_pre_pipe_control(r, dw1);
+   if ((r->state.current_pipe_control_dw1 & dw1) != dw1)
+      ilo_render_pipe_control(r, dw1);
+}
+
+static void
+gen6_wa_pre_3dstate_vs_toggle(struct ilo_render *r)
+{
+   /*
+    * The classic driver has this undocumented WA:
+    *
+    * From the BSpec, 3D Pipeline > Geometry > Vertex Shader > State,
+    * 3DSTATE_VS, Dword 5.0 "VS Function Enable":
+    *
+    *   [DevSNB] A pipeline flush must be programmed prior to a 3DSTATE_VS
+    *   command that causes the VS Function Enable to toggle. Pipeline
+    *   flush can be executed by sending a PIPE_CONTROL command with CS
+    *   stall bit set and a post sync operation.
+    */
+   const uint32_t dw1 = GEN6_PIPE_CONTROL_WRITE_IMM |
+                        GEN6_PIPE_CONTROL_CS_STALL;
 
    if ((r->state.current_pipe_control_dw1 & dw1) != dw1)
-      gen6_pipe_control(r, dw1);
+      gen6_wa_pre_pipe_control(r, dw1);
+   if ((r->state.current_pipe_control_dw1 & dw1) != dw1)
+      ilo_render_pipe_control(r, dw1);
 }
 
 static void
@@ -161,10 +186,10 @@ gen6_wa_pre_3dstate_wm_max_threads(struct ilo_render *r)
 
    ILO_DEV_ASSERT(r->dev, 6, 6);
 
-   gen6_wa_pre_pipe_control(r, dw1);
-
    if ((r->state.current_pipe_control_dw1 & dw1) != dw1)
-      gen6_pipe_control(r, dw1);
+      gen6_wa_pre_pipe_control(r, dw1);
+   if ((r->state.current_pipe_control_dw1 & dw1) != dw1)
+      ilo_render_pipe_control(r, dw1);
 }
 
 static void
@@ -183,10 +208,10 @@ gen6_wa_pre_3dstate_multisample(struct ilo_render *r)
 
    ILO_DEV_ASSERT(r->dev, 6, 6);
 
-   gen6_wa_pre_pipe_control(r, dw1);
-
    if ((r->state.current_pipe_control_dw1 & dw1) != dw1)
-      gen6_pipe_control(r, dw1);
+      gen6_wa_pre_pipe_control(r, dw1);
+   if ((r->state.current_pipe_control_dw1 & dw1) != dw1)
+      ilo_render_pipe_control(r, dw1);
 }
 
 static void
@@ -212,9 +237,9 @@ gen6_wa_pre_depth(struct ilo_render *r)
    gen6_wa_pre_pipe_control(r, GEN6_PIPE_CONTROL_DEPTH_STALL |
                                GEN6_PIPE_CONTROL_DEPTH_CACHE_FLUSH);
 
-   gen6_pipe_control(r, GEN6_PIPE_CONTROL_DEPTH_STALL);
-   gen6_pipe_control(r, GEN6_PIPE_CONTROL_DEPTH_CACHE_FLUSH);
-   gen6_pipe_control(r, GEN6_PIPE_CONTROL_DEPTH_STALL);
+   ilo_render_pipe_control(r, GEN6_PIPE_CONTROL_DEPTH_STALL);
+   ilo_render_pipe_control(r, GEN6_PIPE_CONTROL_DEPTH_CACHE_FLUSH);
+   ilo_render_pipe_control(r, GEN6_PIPE_CONTROL_DEPTH_STALL);
 }
 
 #define DIRTY(state) (session->pipe_dirty & ILO_DIRTY_ ## state)
@@ -358,17 +383,8 @@ gen6_draw_common_urb(struct ilo_render *r,
       gen6_3DSTATE_URB(r->builder, vs_total_size, gs_total_size,
             vs_entry_size, gs_entry_size);
 
-      /*
-       * From the Sandy Bridge PRM, volume 2 part 1, page 27:
-       *
-       *     "Because of a urb corruption caused by allocating a previous
-       *      gsunit's urb entry to vsunit software is required to send a
-       *      "GS NULL Fence" (Send URB fence with VS URB size == 1 and GS URB
-       *      size == 0) plus a dummy DRAW call before any case where VS will
-       *      be taking over GS URB space."
-       */
       if (r->state.gs.active && !gs_active)
-         ilo_render_emit_flush(r);
+         gen6_wa_post_3dstate_urb_no_gs(r);
 
       r->state.gs.active = gs_active;
    }
@@ -482,47 +498,29 @@ gen6_draw_vf_statistics(struct ilo_render *r,
       gen6_3DSTATE_VF_STATISTICS(r->builder, false);
 }
 
-static void
-gen6_draw_vf_draw(struct ilo_render *r,
-                  const struct ilo_state_vector *vec,
-                  struct ilo_render_draw_session *session)
-{
-   /* 3DPRIMITIVE */
-   gen6_3DPRIMITIVE(r->builder, vec->draw, &vec->ib);
-
-   r->state.current_pipe_control_dw1 = 0;
-   assert(!r->state.deferred_pipe_control_dw1);
-}
-
 void
 gen6_draw_vs(struct ilo_render *r,
              const struct ilo_state_vector *vec,
              struct ilo_render_draw_session *session)
 {
-   const bool emit_3dstate_vs = (DIRTY(VS) || r->instruction_bo_changed);
-   const bool emit_3dstate_constant_vs = session->pcb_vs_changed;
-
-   /*
-    * the classic i965 does this in upload_vs_state(), citing a spec that I
-    * cannot find
-    */
-   if (emit_3dstate_vs && ilo_dev_gen(r->dev) == ILO_GEN(6))
-      gen6_wa_pre_non_pipelined(r);
-
    /* 3DSTATE_CONSTANT_VS */
-   if (emit_3dstate_constant_vs) {
+   if (session->pcb_vs_changed) {
       gen6_3DSTATE_CONSTANT_VS(r->builder,
             &r->state.vs.PUSH_CONSTANT_BUFFER,
             &r->state.vs.PUSH_CONSTANT_BUFFER_size,
             1);
+
+      if (ilo_dev_gen(r->dev) == ILO_GEN(6))
+         gen6_wa_post_3dstate_constant_vs(r);
    }
 
    /* 3DSTATE_VS */
-   if (emit_3dstate_vs)
-      gen6_3DSTATE_VS(r->builder, vec->vs);
+   if (DIRTY(VS) || r->instruction_bo_changed) {
+      if (ilo_dev_gen(r->dev) == ILO_GEN(6))
+         gen6_wa_pre_3dstate_vs_toggle(r);
 
-   if (emit_3dstate_constant_vs && ilo_dev_gen(r->dev) == ILO_GEN(6))
-      gen6_wa_post_3dstate_constant_vs(r);
+      gen6_3DSTATE_VS(r->builder, vec->vs);
+   }
 }
 
 static void
@@ -850,7 +848,8 @@ ilo_render_emit_draw_commands_gen6(struct ilo_render *render,
    gen6_draw_wm_raster(render, vec, session);
    gen6_draw_sf_rect(render, vec, session);
    gen6_draw_vf(render, vec, session);
-   gen6_draw_vf_draw(render, vec, session);
+
+   ilo_render_3dprimitive(render, vec->draw, &vec->ib);
 }
 
 static void
@@ -858,9 +857,10 @@ gen6_rectlist_vs_to_sf(struct ilo_render *r,
                        const struct ilo_blitter *blitter)
 {
    gen6_3DSTATE_CONSTANT_VS(r->builder, NULL, NULL, 0);
-   gen6_disable_3DSTATE_VS(r->builder);
-
    gen6_wa_post_3dstate_constant_vs(r);
+
+   gen6_wa_pre_3dstate_vs_toggle(r);
+   gen6_disable_3DSTATE_VS(r->builder);
 
    gen6_3DSTATE_CONSTANT_GS(r->builder, NULL, NULL, 0);
    gen6_disable_3DSTATE_GS(r->builder);
@@ -970,9 +970,8 @@ ilo_render_emit_rectlist_commands_gen6(struct ilo_render *r,
          (blitter->ve.count + blitter->ve.prepend_nosrc_cso) * 4 * sizeof(float),
          0);
 
-   /* 3DSTATE_URB workaround */
    if (r->state.gs.active) {
-      ilo_render_emit_flush(r);
+      gen6_wa_post_3dstate_urb_no_gs(r);
       r->state.gs.active = false;
    }
 
@@ -995,7 +994,7 @@ ilo_render_emit_rectlist_commands_gen6(struct ilo_render *r,
    gen6_3DSTATE_DRAWING_RECTANGLE(r->builder, 0, 0,
          blitter->fb.width, blitter->fb.height);
 
-   gen6_3DPRIMITIVE(r->builder, &blitter->draw, NULL);
+   ilo_render_3dprimitive(r, &blitter->draw, NULL);
 }
 
 int

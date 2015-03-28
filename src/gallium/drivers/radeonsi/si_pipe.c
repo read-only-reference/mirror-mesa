@@ -69,6 +69,11 @@ static void si_destroy_context(struct pipe_context *context)
 	si_pm4_cleanup(sctx);
 
 	r600_common_context_cleanup(&sctx->b);
+
+#if HAVE_LLVM >= 0x0306
+	LLVMDisposeTargetMachine(sctx->tm);
+#endif
+
 	FREE(sctx);
 }
 
@@ -77,6 +82,12 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, void *
 	struct si_context *sctx = CALLOC_STRUCT(si_context);
 	struct si_screen* sscreen = (struct si_screen *)screen;
 	struct radeon_winsys *ws = sscreen->b.ws;
+	LLVMTargetRef r600_target;
+#if HAVE_LLVM >= 0x0306
+	const char *triple = "amdgcn--";
+#else
+	const char *triple = "r600--";
+#endif
 	int shader, i;
 
 	if (sctx == NULL)
@@ -111,6 +122,9 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, void *
 	/* Initialize cache_flush. */
 	sctx->cache_flush = si_atom_cache_flush;
 	sctx->atoms.s.cache_flush = &sctx->cache_flush;
+
+	sctx->msaa_sample_locs = si_atom_msaa_sample_locs;
+	sctx->atoms.s.msaa_sample_locs = &sctx->msaa_sample_locs;
 
 	sctx->msaa_config = si_atom_msaa_config;
 	sctx->atoms.s.msaa_config = &sctx->msaa_config;
@@ -166,6 +180,17 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, void *
 	 * GPU lockups, but the maximum value seems to always work.
 	 */
 	sctx->scratch_waves = 32 * sscreen->b.info.max_compute_units;
+
+#if HAVE_LLVM >= 0x0306
+	/* Initialize LLVM TargetMachine */
+	r600_target = radeon_llvm_get_r600_target(triple);
+	sctx->tm = LLVMCreateTargetMachine(r600_target, triple,
+					   r600_get_llvm_processor_name(sscreen->b.family),
+					   "+DumpCode,+vgpr-spilling",
+					   LLVMCodeGenLevelDefault,
+					   LLVMRelocDefault,
+					   LLVMCodeModelDefault);
+#endif
 
 	return &sctx->b.b;
 fail:
@@ -230,6 +255,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_VS_WINDOW_SPACE_POSITION:
 	case PIPE_CAP_POLYGON_OFFSET_CLAMP:
 	case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
+	case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
 		return 1;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
@@ -264,7 +290,6 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
 	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
-	case PIPE_CAP_QUADS_FOLLOW_PROVOKING_VERTEX_CONVENTION:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
 	case PIPE_CAP_TGSI_TEXCOORD:
 	case PIPE_CAP_FAKE_SW_MSAA:
@@ -373,8 +398,12 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 			return max_const_buffer_size;
 		}
 		default:
-			return 0;
+			/* If compute shaders don't require a special value
+			 * for this cap, we can return the same value we
+			 * do for other shader types. */
+			break;
 		}
+		break;
 	default:
 		/* TODO: support tessellation */
 		return 0;
@@ -403,7 +432,7 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
 		return 1;
 	case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
-		return 0;
+		return 1;
 	case PIPE_SHADER_CAP_INDIRECT_INPUT_ADDR:
 		/* Indirection of geometry shader input dimension is not
 		 * handled yet
@@ -426,6 +455,8 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 	case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
 		return 0;
+	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
+		return 1;
 	}
 	return 0;
 }
@@ -439,12 +470,6 @@ static void si_destroy_screen(struct pipe_screen* pscreen)
 
 	if (!sscreen->b.ws->unref(sscreen->b.ws))
 		return;
-
-#if HAVE_LLVM >= 0x0306
-	// r600_destroy_common_screen() frees sscreen, so we need to make
-	// sure to dispose the TargetMachine before we call it.
-	LLVMDisposeTargetMachine(sscreen->tm);
-#endif
 
 	r600_destroy_common_screen(&sscreen->b);
 }
@@ -503,12 +528,7 @@ static bool si_initialize_pipe_config(struct si_screen *sscreen)
 struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 {
 	struct si_screen *sscreen = CALLOC_STRUCT(si_screen);
-	LLVMTargetRef r600_target;
-#if HAVE_LLVM >= 0x0306
-	const char *triple = "amdgcn--";
-#else
-	const char *triple = "r600--";
-#endif
+
 	if (sscreen == NULL) {
 		return NULL;
 	}
@@ -536,13 +556,5 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 	/* Create the auxiliary context. This must be done last. */
 	sscreen->b.aux_context = sscreen->b.b.context_create(&sscreen->b.b, NULL);
 
-#if HAVE_LLVM >= 0x0306
-	/* Initialize LLVM TargetMachine */
-	r600_target = radeon_llvm_get_r600_target(triple);
-	sscreen->tm = LLVMCreateTargetMachine(r600_target, triple,
-				r600_get_llvm_processor_name(sscreen->b.family),
-				"+DumpCode,+vgpr-spilling", LLVMCodeGenLevelDefault, LLVMRelocDefault,
-				LLVMCodeModelDefault);
-#endif
 	return &sscreen->b.b;
 }

@@ -60,7 +60,7 @@
 #include "ir_builder.h"
 #include "glsl_parser_extras.h"
 #include "program/prog_instruction.h"
-#include <limits>
+#include <math.h>
 
 #define M_PIf   ((float) M_PI)
 #define M_PI_2f ((float) M_PI_2)
@@ -201,7 +201,7 @@ static bool
 shader_packing_or_es3(const _mesa_glsl_parse_state *state)
 {
    return state->ARB_shading_language_packing_enable ||
-          state->is_version(400, 300);
+          state->is_version(420, 300);
 }
 
 static bool
@@ -2549,7 +2549,7 @@ builtin_builder::add_image_function(const char *name,
    };
    ir_function *f = new(mem_ctx) ir_function(name);
 
-   for (unsigned i = 0; i < Elements(types); ++i) {
+   for (unsigned i = 0; i < ARRAY_SIZE(types); ++i) {
       if (types[i]->sampler_type != GLSL_TYPE_FLOAT ||
           (flags & IMAGE_FUNCTION_SUPPORTS_FLOAT_DATA_TYPE))
          f->add_signature(_image(types[i], intrinsic_name,
@@ -3215,7 +3215,7 @@ builtin_builder::_isinf(builtin_available_predicate avail, const glsl_type *type
 
    ir_constant_data infinities;
    for (int i = 0; i < type->vector_elements; i++) {
-      infinities.f[i] = std::numeric_limits<float>::infinity();
+      infinities.f[i] = INFINITY;
    }
 
    body.emit(ret(equal(abs(x), imm(type, infinities))));

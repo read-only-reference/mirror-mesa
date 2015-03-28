@@ -54,6 +54,7 @@ struct backend_reg
    bool is_negative_one() const;
    bool is_null() const;
    bool is_accumulator() const;
+   bool in_range(const backend_reg &r, unsigned n) const;
 #endif
 
    enum register_file file; /**< Register file: GRF, MRF, IMM. */
@@ -77,7 +78,7 @@ struct backend_reg
     *
     * For uniforms, this is in units of 1 float.
     */
-   int reg_offset;
+   uint16_t reg_offset;
 
    struct brw_reg fixed_hw_reg;
 
@@ -94,6 +95,7 @@ struct backend_instruction : public exec_node {
    bool is_tex() const;
    bool is_math() const;
    bool is_control_flow() const;
+   bool is_commutative() const;
    bool can_do_source_mods() const;
    bool can_do_saturate() const;
    bool can_do_cmod() const;

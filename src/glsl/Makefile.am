@@ -33,8 +33,12 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/src/gtest/include \
 	-I$(top_builddir)/src/glsl/nir \
 	$(DEFINES)
-AM_CFLAGS = $(VISIBILITY_CFLAGS)
-AM_CXXFLAGS = $(VISIBILITY_CXXFLAGS)
+AM_CFLAGS = \
+	$(VISIBILITY_CFLAGS) \
+	$(MSVC2013_COMPAT_CFLAGS)
+AM_CXXFLAGS = \
+	$(VISIBILITY_CXXFLAGS) \
+	$(MSVC2013_COMPAT_CXXFLAGS)
 
 EXTRA_DIST = tests glcpp/tests README TODO glcpp/README	\
 	glsl_lexer.ll					\
@@ -42,6 +46,7 @@ EXTRA_DIST = tests glcpp/tests README TODO glcpp/README	\
 	glcpp/glcpp-lex.l				\
 	glcpp/glcpp-parse.y				\
 	nir/nir_algebraic.py				\
+	nir/nir_builder_opcodes_h.py			\
 	nir/nir_constant_expressions.py			\
 	nir/nir_opcodes.py				\
 	nir/nir_opcodes_c.py				\
@@ -246,8 +251,6 @@ nir/nir_constant_expressions.c: nir/nir_opcodes.py nir/nir_constant_expressions.
 nir/nir_opcodes.h: nir/nir_opcodes.py nir/nir_opcodes_h.py
 	$(MKDIR_P) nir;							\
 	$(PYTHON2) $(PYTHON_FLAGS) $(srcdir)/nir/nir_opcodes_h.py > $@
-
-nir/nir.h: nir/nir_opcodes.h
 
 nir/nir_opcodes.c: nir/nir_opcodes.py nir/nir_opcodes_c.py
 	$(MKDIR_P) nir;							\

@@ -27,12 +27,9 @@
  * native instructions.
  */
 
-extern "C" {
 #include "main/macros.h"
 #include "brw_context.h"
 #include "brw_eu.h"
-} /* extern "C" */
-
 #include "brw_fs.h"
 #include "brw_cfg.h"
 
@@ -129,13 +126,15 @@ fs_generator::fs_generator(struct brw_context *brw,
                            const void *key,
                            struct brw_stage_prog_data *prog_data,
                            struct gl_program *prog,
+                           unsigned promoted_constants,
                            bool runtime_check_aads_emit,
                            const char *stage_abbrev)
 
    : brw(brw), key(key),
      prog_data(prog_data),
-     prog(prog), runtime_check_aads_emit(runtime_check_aads_emit),
-     debug_flag(false), stage_abbrev(stage_abbrev), mem_ctx(mem_ctx)
+     prog(prog), promoted_constants(promoted_constants),
+     runtime_check_aads_emit(runtime_check_aads_emit), debug_flag(false),
+     stage_abbrev(stage_abbrev), mem_ctx(mem_ctx)
 {
    ctx = &brw->ctx;
 
@@ -217,15 +216,22 @@ fs_generator::fire_fb_write(fs_inst *inst,
 
    if (inst->opcode == FS_OPCODE_REP_FB_WRITE)
       msg_control = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD16_SINGLE_SOURCE_REPLICATED;
-   else if (prog_data->dual_src_blend)
-      msg_control = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD8_DUAL_SOURCE_SUBSPAN01;
-   else if (dispatch_width == 16)
+   else if (prog_data->dual_src_blend) {
+      if (dispatch_width == 8 || !inst->eot)
+         msg_control = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD8_DUAL_SOURCE_SUBSPAN01;
+      else
+         msg_control = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD8_DUAL_SOURCE_SUBSPAN23;
+   } else if (dispatch_width == 16)
       msg_control = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD16_SINGLE_SOURCE;
    else
       msg_control = BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD8_SINGLE_SOURCE_SUBSPAN01;
 
    uint32_t surf_index =
       prog_data->binding_table.render_target_start + inst->target;
+
+   bool last_render_target = inst->eot ||
+                             (prog_data->dual_src_blend && dispatch_width == 16);
+
 
    brw_fb_WRITE(p,
                 dispatch_width,
@@ -236,6 +242,7 @@ fs_generator::fire_fb_write(fs_inst *inst,
                 nr,
                 0,
                 inst->eot,
+                last_render_target,
                 inst->header_present);
 
    brw_mark_surface_used(&prog_data->base, surf_index);
@@ -372,6 +379,7 @@ fs_generator::generate_blorp_fb_write(fs_inst *inst)
                 inst->target,
                 inst->mlen,
                 0,
+                true,
                 true,
                 inst->header_present);
 }
@@ -754,9 +762,12 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
       brw_AND(p, addr, addr, brw_imm_ud(0x0ff));
       brw_OR(p, addr, addr, temp);
 
-      /* a0.0 |= <descriptor> */
-      brw_inst *insn_or = brw_next_insn(p, BRW_OPCODE_OR);
-      brw_set_sampler_message(p, insn_or,
+      brw_pop_insn_state(p);
+
+      /* dst = send(offset, a0.0 | <descriptor>) */
+      brw_inst *insn = brw_send_indirect_message(
+         p, BRW_SFID_SAMPLER, dst, src, addr);
+      brw_set_sampler_message(p, insn,
                               0 /* surface */,
                               0 /* sampler */,
                               msg_type,
@@ -765,19 +776,6 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
                               inst->header_present /* header */,
                               simd_mode,
                               return_format);
-      brw_inst_set_exec_size(p->brw, insn_or, BRW_EXECUTE_1);
-      brw_inst_set_src1_reg_type(p->brw, insn_or, BRW_REGISTER_TYPE_UD);
-      brw_set_src0(p, insn_or, addr);
-      brw_set_dest(p, insn_or, addr);
-
-
-      /* dst = send(offset, a0.0) */
-      brw_inst *insn_send = brw_next_insn(p, BRW_OPCODE_SEND);
-      brw_set_dest(p, insn_send, dst);
-      brw_set_src0(p, insn_send, src);
-      brw_set_indirect_send_descriptor(p, insn_send, BRW_SFID_SAMPLER, addr);
-
-      brw_pop_insn_state(p);
 
       /* visitor knows more than we do about the surface limit required,
        * so has already done marking.
@@ -1083,29 +1081,18 @@ fs_generator::generate_uniform_pull_constant_load_gen7(fs_inst *inst,
       brw_set_src0(p, insn_and, vec1(retype(index, BRW_REGISTER_TYPE_UD)));
       brw_set_src1(p, insn_and, brw_imm_ud(0x0ff));
 
-
-      /* a0.0 |= <descriptor> */
-      brw_inst *insn_or = brw_next_insn(p, BRW_OPCODE_OR);
-      brw_set_sampler_message(p, insn_or,
-                              0 /* surface */,
-                              0 /* sampler */,
+      /* dst = send(payload, a0.0 | <descriptor>) */
+      brw_inst *insn = brw_send_indirect_message(
+         p, BRW_SFID_SAMPLER, dst, src, addr);
+      brw_set_sampler_message(p, insn,
+                              0,
+                              0, /* LD message ignores sampler unit */
                               GEN5_SAMPLER_MESSAGE_SAMPLE_LD,
-                              1 /* rlen */,
+                              1, /* rlen */
                               mlen,
                               header_present,
                               BRW_SAMPLER_SIMD_MODE_SIMD4X2,
                               0);
-      brw_inst_set_exec_size(p->brw, insn_or, BRW_EXECUTE_1);
-      brw_inst_set_src1_reg_type(p->brw, insn_or, BRW_REGISTER_TYPE_UD);
-      brw_set_src0(p, insn_or, addr);
-      brw_set_dest(p, insn_or, addr);
-
-
-      /* dst = send(offset, a0.0) */
-      brw_inst *insn_send = brw_next_insn(p, BRW_OPCODE_SEND);
-      brw_set_dest(p, insn_send, dst);
-      brw_set_src0(p, insn_send, src);
-      brw_set_indirect_send_descriptor(p, insn_send, BRW_SFID_SAMPLER, addr);
 
       brw_pop_insn_state(p);
 
@@ -1242,10 +1229,13 @@ fs_generator::generate_varying_pull_constant_load_gen7(fs_inst *inst,
       brw_set_src0(p, insn_and, vec1(retype(index, BRW_REGISTER_TYPE_UD)));
       brw_set_src1(p, insn_and, brw_imm_ud(0x0ff));
 
+      brw_pop_insn_state(p);
 
-      /* a0.0 |= <descriptor> */
-      brw_inst *insn_or = brw_next_insn(p, BRW_OPCODE_OR);
-      brw_set_sampler_message(p, insn_or,
+      /* dst = send(offset, a0.0 | <descriptor>) */
+      brw_inst *insn = brw_send_indirect_message(
+         p, BRW_SFID_SAMPLER, retype(dst, BRW_REGISTER_TYPE_UW),
+         offset, addr);
+      brw_set_sampler_message(p, insn,
                               0 /* surface */,
                               0 /* sampler */,
                               GEN5_SAMPLER_MESSAGE_SAMPLE_LD,
@@ -1254,19 +1244,6 @@ fs_generator::generate_varying_pull_constant_load_gen7(fs_inst *inst,
                               false /* header */,
                               simd_mode,
                               0);
-      brw_inst_set_exec_size(p->brw, insn_or, BRW_EXECUTE_1);
-      brw_inst_set_src1_reg_type(p->brw, insn_or, BRW_REGISTER_TYPE_UD);
-      brw_set_src0(p, insn_or, addr);
-      brw_set_dest(p, insn_or, addr);
-
-
-      /* dst = send(offset, a0.0) */
-      brw_inst *insn_send = brw_next_insn(p, BRW_OPCODE_SEND);
-      brw_set_dest(p, insn_send, retype(dst, BRW_REGISTER_TYPE_UW));
-      brw_set_src0(p, insn_send, offset);
-      brw_set_indirect_send_descriptor(p, insn_send, BRW_SFID_SAMPLER, addr);
-
-      brw_pop_insn_state(p);
 
       /* visitor knows more than we do about the surface limit required,
        * so has already done marking.
@@ -1517,8 +1494,9 @@ fs_generator::generate_untyped_atomic(fs_inst *inst, struct brw_reg dst,
           surf_index.file == BRW_IMMEDIATE_VALUE &&
 	  surf_index.type == BRW_REGISTER_TYPE_UD);
 
-   brw_untyped_atomic(p, dst, payload, atomic_op.dw1.ud, surf_index.dw1.ud,
-                      inst->mlen, inst->exec_size / 8);
+   brw_untyped_atomic(p, dst, payload,
+                      atomic_op.dw1.ud, surf_index.dw1.ud,
+                      inst->mlen, true);
 
    brw_mark_surface_used(prog_data, surf_index.dw1.ud);
 }
@@ -1531,9 +1509,7 @@ fs_generator::generate_untyped_surface_read(fs_inst *inst, struct brw_reg dst,
    assert(surf_index.file == BRW_IMMEDIATE_VALUE &&
 	  surf_index.type == BRW_REGISTER_TYPE_UD);
 
-   brw_untyped_surface_read(p, dst, payload,
-                            surf_index.dw1.ud,
-                            inst->mlen, inst->exec_size / 8);
+   brw_untyped_surface_read(p, dst, payload, surf_index.dw1.ud, inst->mlen, 1);
 
    brw_mark_surface_used(prog_data, surf_index.dw1.ud);
 }
@@ -1543,6 +1519,21 @@ fs_generator::enable_debug(const char *shader_name)
 {
    debug_flag = true;
    this->shader_name = shader_name;
+}
+
+/**
+ * Some hardware doesn't support SIMD16 instructions with 3 sources.
+ */
+static bool
+brw_supports_simd16_3src(const struct brw_context *brw)
+{
+   /* WaDisableSIMD16On3SrcInstr: 3-source instructions don't work in SIMD16
+    * on a few steppings of Skylake.
+    */
+   if (brw->gen == 9)
+      return brw->revision != 2 && brw->revision != 3 && brw->revision != -1;
+
+   return brw->is_haswell || brw->gen >= 8;
 }
 
 int
@@ -1557,6 +1548,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
       brw_set_default_compression_control(p, BRW_COMPRESSION_COMPRESSED);
 
    int start_offset = p->next_insn_offset;
+   int spill_count = 0, fill_count = 0;
    int loop_count = 0;
 
    struct annotation_info annotation;
@@ -1637,7 +1629,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
       case BRW_OPCODE_MAD:
          assert(brw->gen >= 6);
 	 brw_set_default_access_mode(p, BRW_ALIGN_16);
-         if (dispatch_width == 16 && brw->gen < 8 && !brw->is_haswell) {
+         if (dispatch_width == 16 && !brw_supports_simd16_3src(brw)) {
 	    brw_set_default_compression_control(p, BRW_COMPRESSION_NONE);
             brw_inst *f = brw_MAD(p, firsthalf(dst), firsthalf(src[0]), firsthalf(src[1]), firsthalf(src[2]));
 	    brw_set_default_compression_control(p, BRW_COMPRESSION_2NDHALF);
@@ -1658,7 +1650,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
       case BRW_OPCODE_LRP:
          assert(brw->gen >= 6);
 	 brw_set_default_access_mode(p, BRW_ALIGN_16);
-         if (dispatch_width == 16 && brw->gen < 8 && !brw->is_haswell) {
+         if (dispatch_width == 16 && !brw_supports_simd16_3src(brw)) {
 	    brw_set_default_compression_control(p, BRW_COMPRESSION_NONE);
             brw_inst *f = brw_LRP(p, firsthalf(dst), firsthalf(src[0]), firsthalf(src[1]), firsthalf(src[2]));
 	    brw_set_default_compression_control(p, BRW_COMPRESSION_2NDHALF);
@@ -1795,7 +1787,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
       case BRW_OPCODE_BFE:
          assert(brw->gen >= 7);
          brw_set_default_access_mode(p, BRW_ALIGN_16);
-         if (dispatch_width == 16 && brw->gen < 8 && !brw->is_haswell) {
+         if (dispatch_width == 16 && !brw_supports_simd16_3src(brw)) {
             brw_set_default_compression_control(p, BRW_COMPRESSION_NONE);
             brw_BFE(p, firsthalf(dst), firsthalf(src[0]), firsthalf(src[1]), firsthalf(src[2]));
             brw_set_default_compression_control(p, BRW_COMPRESSION_2NDHALF);
@@ -1835,7 +1827,8 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
           * Otherwise we would be able to emit compressed instructions like we
           * do for the other three-source instructions.
           */
-         if (dispatch_width == 16 && brw->gen < 8) {
+         if (dispatch_width == 16 &&
+             (brw->is_haswell || !brw_supports_simd16_3src(brw))) {
             brw_set_default_compression_control(p, BRW_COMPRESSION_NONE);
             brw_BFI2(p, firsthalf(dst), firsthalf(src[0]), firsthalf(src[1]), firsthalf(src[2]));
             brw_set_default_compression_control(p, BRW_COMPRESSION_2NDHALF);
@@ -1953,14 +1946,17 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 
       case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
 	 generate_scratch_write(inst, src[0]);
+         spill_count++;
 	 break;
 
       case SHADER_OPCODE_GEN4_SCRATCH_READ:
 	 generate_scratch_read(inst, dst);
+         fill_count++;
 	 break;
 
       case SHADER_OPCODE_GEN7_SCRATCH_READ:
 	 generate_scratch_read_gen7(inst, dst);
+         fill_count++;
 	 break;
 
       case SHADER_OPCODE_URB_WRITE_SIMD8:
@@ -2105,10 +2101,10 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 
    if (unlikely(debug_flag)) {
       fprintf(stderr, "Native code for %s\n"
-              "SIMD%d shader: %d instructions. %d loops. Compacted %d to %d"
+              "SIMD%d shader: %d instructions. %d loops. %d:%d spills:fills. Promoted %u constants. Compacted %d to %d"
               " bytes (%.0f%%)\n",
-              shader_name,
-              dispatch_width, before_size / 16, loop_count, before_size, after_size,
+              shader_name, dispatch_width, before_size / 16, loop_count,
+              spill_count, fill_count, promoted_constants, before_size, after_size,
               100.0f * (before_size - after_size) / before_size);
 
       dump_assembly(p->store, annotation.ann_count, annotation.ann, brw, prog);
@@ -2120,10 +2116,10 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
                   MESA_DEBUG_SOURCE_SHADER_COMPILER,
                   MESA_DEBUG_TYPE_OTHER,
                   MESA_DEBUG_SEVERITY_NOTIFICATION,
-                  "%s SIMD%d shader: %d inst, %d loops, "
-                  "compacted %d to %d bytes.\n",
+                  "%s SIMD%d shader: %d inst, %d loops, %d:%d spills:fills, "
+                  "Promoted %u constants, compacted %d to %d bytes.\n",
                   stage_abbrev, dispatch_width, before_size / 16, loop_count,
-                  before_size, after_size);
+                  spill_count, fill_count, promoted_constants, before_size, after_size);
 
    return start_offset;
 }

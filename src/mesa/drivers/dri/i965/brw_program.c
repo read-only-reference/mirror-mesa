@@ -136,7 +136,7 @@ brwProgramStringNotify(struct gl_context *ctx,
          brw_fragment_program_const(brw->fragment_program);
 
       if (newFP == curFP)
-	 brw->state.dirty.brw |= BRW_NEW_FRAGMENT_PROGRAM;
+	 brw->ctx.NewDriverState |= BRW_NEW_FRAGMENT_PROGRAM;
       newFP->id = get_new_program_id(brw->intelScreen);
 
       brw_add_texrect_params(prog);
@@ -151,7 +151,7 @@ brwProgramStringNotify(struct gl_context *ctx,
          brw_vertex_program_const(brw->vertex_program);
 
       if (newVP == curVP)
-	 brw->state.dirty.brw |= BRW_NEW_VERTEX_PROGRAM;
+	 brw->ctx.NewDriverState |= BRW_NEW_VERTEX_PROGRAM;
       if (newVP->program.IsPositionInvariant) {
 	 _mesa_insert_mvp_code(ctx, &newVP->program);
       }
@@ -195,24 +195,24 @@ brw_memory_barrier(struct gl_context *ctx, GLbitfield barriers)
       bits |= PIPE_CONTROL_VF_CACHE_INVALIDATE;
 
    if (barriers & GL_UNIFORM_BARRIER_BIT)
-      bits |= (PIPE_CONTROL_TC_FLUSH |
+      bits |= (PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE |
                PIPE_CONTROL_CONST_CACHE_INVALIDATE);
 
    if (barriers & GL_TEXTURE_FETCH_BARRIER_BIT)
-      bits |= PIPE_CONTROL_TC_FLUSH;
+      bits |= PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE;
 
    if (barriers & GL_TEXTURE_UPDATE_BARRIER_BIT)
-      bits |= PIPE_CONTROL_WRITE_FLUSH;
+      bits |= PIPE_CONTROL_RENDER_TARGET_FLUSH;
 
    if (barriers & GL_FRAMEBUFFER_BARRIER_BIT)
       bits |= (PIPE_CONTROL_DEPTH_CACHE_FLUSH |
-               PIPE_CONTROL_WRITE_FLUSH);
+               PIPE_CONTROL_RENDER_TARGET_FLUSH);
 
    /* Typed surface messages are handled by the render cache on IVB, so we
     * need to flush it too.
     */
    if (brw->gen == 7 && !brw->is_haswell)
-      bits |= PIPE_CONTROL_WRITE_FLUSH;
+      bits |= PIPE_CONTROL_RENDER_TARGET_FLUSH;
 
    brw_emit_pipe_control_flush(brw, bits);
 }

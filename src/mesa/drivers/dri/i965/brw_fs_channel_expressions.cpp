@@ -41,10 +41,8 @@
  * we do retain the vector types in that case.
  */
 
-extern "C" {
 #include "main/core.h"
 #include "brw_wm.h"
-}
 #include "glsl/ir.h"
 #include "glsl/ir_expression_flattening.h"
 #include "glsl/glsl_types.h"
@@ -273,6 +271,9 @@ ir_channel_expressions_visitor::visit_leave(ir_assignment *ir)
    case ir_binop_bit_and:
    case ir_binop_bit_xor:
    case ir_binop_bit_or:
+   case ir_binop_logic_and:
+   case ir_binop_logic_xor:
+   case ir_binop_logic_or:
    case ir_binop_less:
    case ir_binop_greater:
    case ir_binop_lequal:
@@ -331,12 +332,6 @@ ir_channel_expressions_visitor::visit_leave(ir_assignment *ir)
       break;
    }
 
-   case ir_binop_logic_and:
-   case ir_binop_logic_xor:
-   case ir_binop_logic_or:
-      ir->fprint(stderr);
-      fprintf(stderr, "\n");
-      unreachable("not reached: expression operates on scalars only");
    case ir_binop_all_equal:
    case ir_binop_any_nequal: {
       ir_expression *last = NULL;

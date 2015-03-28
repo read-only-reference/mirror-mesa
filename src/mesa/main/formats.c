@@ -75,7 +75,7 @@ struct gl_format_info
    mesa_array_format ArrayFormat;
 };
 
-#include "format_info.c"
+#include "format_info.h"
 
 static const struct gl_format_info *
 _mesa_get_format_info(mesa_format format)
@@ -388,7 +388,7 @@ array_formats_equal(const void *a, const void *b)
 }
 
 static void
-format_array_format_table_init()
+format_array_format_table_init(void)
 {
    const struct gl_format_info *info;
    mesa_array_format array_format;
@@ -887,7 +887,7 @@ _mesa_test_formats(void)
 {
    GLuint i;
 
-   STATIC_ASSERT(Elements(format_info) == MESA_FORMAT_COUNT);
+   STATIC_ASSERT(ARRAY_SIZE(format_info) == MESA_FORMAT_COUNT);
 
    for (i = 0; i < MESA_FORMAT_COUNT; i++) {
       const struct gl_format_info *info = _mesa_get_format_info(i);

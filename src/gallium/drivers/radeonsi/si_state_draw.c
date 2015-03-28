@@ -149,27 +149,51 @@ static unsigned si_get_ia_multi_vgt_param(struct si_context *sctx,
 		S_028AA8_WD_SWITCH_ON_EOP(sctx->b.chip_class >= CIK ? wd_switch_on_eop : 0);
 }
 
+static void si_emit_scratch_reloc(struct si_context *sctx)
+{
+	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+
+	if (!sctx->emit_scratch_reloc)
+		return;
+
+	r600_write_context_reg(cs, R_0286E8_SPI_TMPRING_SIZE,
+			       sctx->spi_tmpring_size);
+
+	if (sctx->scratch_buffer) {
+		r600_context_bo_reloc(&sctx->b, &sctx->b.rings.gfx,
+				      sctx->scratch_buffer, RADEON_USAGE_READWRITE,
+				      RADEON_PRIO_SHADER_RESOURCE_RW);
+
+	}
+	sctx->emit_scratch_reloc = false;
+}
+
 /* rast_prim is the primitive type after GS. */
 static void si_emit_rasterizer_prim_state(struct si_context *sctx)
 {
 	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
 	unsigned rast_prim = sctx->current_rast_prim;
+	struct si_state_rasterizer *rs = sctx->emitted.named.rasterizer;
 
-	if (rast_prim == sctx->last_rast_prim)
+	/* Skip this if not rendering lines. */
+	if (rast_prim != PIPE_PRIM_LINES &&
+	    rast_prim != PIPE_PRIM_LINE_LOOP &&
+	    rast_prim != PIPE_PRIM_LINE_STRIP &&
+	    rast_prim != PIPE_PRIM_LINES_ADJACENCY &&
+	    rast_prim != PIPE_PRIM_LINE_STRIP_ADJACENCY)
+		return;
+
+	if (rast_prim == sctx->last_rast_prim &&
+	    rs->pa_sc_line_stipple == sctx->last_sc_line_stipple)
 		return;
 
 	r600_write_context_reg(cs, R_028A0C_PA_SC_LINE_STIPPLE,
-		sctx->pa_sc_line_stipple |
+		rs->pa_sc_line_stipple |
 		S_028A0C_AUTO_RESET_CNTL(rast_prim == PIPE_PRIM_LINES ? 1 :
 					 rast_prim == PIPE_PRIM_LINE_STRIP ? 2 : 0));
 
-	r600_write_context_reg(cs, R_028814_PA_SU_SC_MODE_CNTL,
-		sctx->pa_su_sc_mode_cntl |
-		S_028814_PROVOKING_VTX_LAST(rast_prim == PIPE_PRIM_QUADS ||
-					    rast_prim == PIPE_PRIM_QUAD_STRIP ||
-					    rast_prim == PIPE_PRIM_POLYGON));
-
 	sctx->last_rast_prim = rast_prim;
+	sctx->last_sc_line_stipple = rs->pa_sc_line_stipple;
 }
 
 static void si_emit_draw_registers(struct si_context *sctx,
@@ -570,20 +594,6 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	if (sctx->b.flags)
 		sctx->atoms.s.cache_flush->dirty = true;
 
-	if (sctx->emit_scratch_reloc) {
-		struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
-		r600_write_context_reg(cs, R_0286E8_SPI_TMPRING_SIZE,
-				sctx->spi_tmpring_size);
-
-		if (sctx->scratch_buffer) {
-			 r600_context_bo_reloc(&sctx->b, &sctx->b.rings.gfx,
-				sctx->scratch_buffer, RADEON_USAGE_READWRITE,
-				RADEON_PRIO_SHADER_RESOURCE_RW);
-
-		}
-		sctx->emit_scratch_reloc = false;
-	}
-
 	si_need_cs_space(sctx, 0, TRUE);
 
 	/* Emit states. */
@@ -595,6 +605,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	}
 
 	si_pm4_emit_dirty(sctx);
+	si_emit_scratch_reloc(sctx);
 	si_emit_rasterizer_prim_state(sctx);
 	si_emit_draw_registers(sctx, info);
 	si_emit_draw_packets(sctx, info, &ib);

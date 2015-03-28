@@ -126,6 +126,7 @@ union si_shader_key {
 		unsigned	alpha_func:3;
 		unsigned	alpha_to_one:1;
 		unsigned	poly_stipple:1;
+		unsigned	poly_line_smoothing:1;
 	} ps;
 	struct {
 		unsigned	instance_divisors[SI_NUM_VERTEX_BUFFERS];
@@ -149,6 +150,7 @@ struct si_shader {
 	unsigned			num_vgprs;
 	unsigned			lds_size;
 	unsigned			spi_ps_input_ena;
+	unsigned			float_mode;
 	unsigned			scratch_bytes_per_wave;
 	unsigned			spi_shader_col_format;
 	unsigned			spi_shader_z_format;
@@ -181,9 +183,10 @@ static inline struct si_shader* si_get_vs_state(struct si_context *sctx)
 }
 
 /* radeonsi_shader.c */
-int si_shader_create(struct si_screen *sscreen, struct si_shader *shader);
+int si_shader_create(struct si_screen *sscreen, LLVMTargetMachineRef tm,
+		     struct si_shader *shader);
 int si_compile_llvm(struct si_screen *sscreen, struct si_shader *shader,
-		    LLVMModuleRef mod);
+		    LLVMTargetMachineRef tm, LLVMModuleRef mod);
 void si_shader_destroy(struct pipe_context *ctx, struct si_shader *shader);
 unsigned si_shader_io_get_unique_index(unsigned semantic_name, unsigned index);
 int si_shader_binary_read(struct si_screen *sscreen, struct si_shader *shader,

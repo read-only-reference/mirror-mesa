@@ -49,7 +49,7 @@ static bool is_eligible_mov(struct ir3_instruction *instr)
 		struct ir3_register *dst = instr->regs[0];
 		struct ir3_register *src = instr->regs[1];
 		struct ir3_instruction *src_instr = ssa(src);
-		if (dst->flags & IR3_REG_ADDR)
+		if (dst->flags & (IR3_REG_ADDR | IR3_REG_RELATIV))
 			return false;
 		/* TODO: propagate abs/neg modifiers if possible */
 		if (src->flags & (IR3_REG_ABS | IR3_REG_NEGATE | IR3_REG_RELATIV))
@@ -62,18 +62,6 @@ static bool is_eligible_mov(struct ir3_instruction *instr)
 		return true;
 	}
 	return false;
-}
-
-static void walk_children(struct ir3_instruction *instr)
-{
-	unsigned i;
-
-	/* walk down the graph from each src: */
-	for (i = 1; i < instr->regs_count; i++) {
-		struct ir3_register *src = instr->regs[i];
-		if (src->flags & IR3_REG_SSA)
-			src->instr = instr_cp(src->instr);
-	}
 }
 
 
@@ -100,8 +88,17 @@ instr_cp(struct ir3_instruction *instr)
 	 * up as a src, we only need to recursively walk the children
 	 * once.)
 	 */
-	if (!ir3_instr_check_mark(instr))
-		walk_children(instr);
+	if (!ir3_instr_check_mark(instr)) {
+		struct ir3_register *reg;
+
+		/* walk down the graph from each src: */
+		foreach_src(reg, instr)
+			if (reg->flags & IR3_REG_SSA)
+				reg->instr = instr_cp(reg->instr);
+
+		if (instr->address)
+			instr->address = instr_cp(instr->address);
+	}
 
 	return instr;
 }

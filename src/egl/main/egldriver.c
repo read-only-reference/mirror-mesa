@@ -37,13 +37,13 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "c11/threads.h"
 
 #include "eglstring.h"
 #include "egldefines.h"
 #include "egldisplay.h"
 #include "egldriver.h"
 #include "egllog.h"
-#include "eglmutex.h"
 
 #if defined(_EGL_OS_UNIX)
 #include <dlfcn.h>
@@ -63,16 +63,13 @@ typedef struct _egl_module {
    _EGLDriver *Driver;
 } _EGLModule;
 
-static _EGLMutex _eglModuleMutex = _EGL_MUTEX_INITIALIZER;
+static mtx_t _eglModuleMutex = _MTX_INITIALIZER_NP;
 static _EGLArray *_eglModules;
 
 const struct {
    const char *name;
    _EGLMain_t main;
 } _eglBuiltInDrivers[] = {
-#ifdef _EGL_BUILT_IN_DRIVER_GALLIUM
-   { "egl_gallium", _eglBuiltInDriverGALLIUM },
-#endif
 #ifdef _EGL_BUILT_IN_DRIVER_DRI2
    { "egl_dri2", _eglBuiltInDriverDRI2 },
 #endif
@@ -619,7 +616,7 @@ _eglMatchDriver(_EGLDisplay *dpy, EGLBoolean test_only)
 
    assert(!dpy->Initialized);
 
-   _eglLockMutex(&_eglModuleMutex);
+   mtx_lock(&_eglModuleMutex);
 
    /* set options */
    dpy->Options.TestOnly = test_only;
@@ -631,7 +628,7 @@ _eglMatchDriver(_EGLDisplay *dpy, EGLBoolean test_only)
       best_drv = _eglMatchAndInitialize(dpy);
    }
 
-   _eglUnlockMutex(&_eglModuleMutex);
+   mtx_unlock(&_eglModuleMutex);
 
    if (best_drv) {
       _eglLog(_EGL_DEBUG, "the best driver is %s%s",

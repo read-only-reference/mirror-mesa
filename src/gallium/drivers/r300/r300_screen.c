@@ -47,6 +47,11 @@ static const char* r300_get_vendor(struct pipe_screen* pscreen)
     return "X.Org R300 Project";
 }
 
+static const char* r300_get_device_vendor(struct pipe_screen* pscreen)
+{
+    return "ATI";
+}
+
 static const char* chip_families[] = {
     "unknown",
     "ATI R300",
@@ -287,6 +292,7 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
         case PIPE_SHADER_CAP_DOUBLES:
         case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
         case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+        case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
             return 0;
         case PIPE_SHADER_CAP_PREFERRED_IR:
             return PIPE_SHADER_IR_TGSI;
@@ -341,6 +347,7 @@ static int r300_get_shader_param(struct pipe_screen *pscreen, unsigned shader, e
         case PIPE_SHADER_CAP_DOUBLES:
         case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
         case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+        case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
             return 0;
         case PIPE_SHADER_CAP_PREFERRED_IR:
             return PIPE_SHADER_IR_TGSI;
@@ -693,6 +700,7 @@ struct pipe_screen* r300_screen_create(struct radeon_winsys *rws)
     r300screen->screen.destroy = r300_destroy_screen;
     r300screen->screen.get_name = r300_get_name;
     r300screen->screen.get_vendor = r300_get_vendor;
+    r300screen->screen.get_device_vendor = r300_get_device_vendor;
     r300screen->screen.get_param = r300_get_param;
     r300screen->screen.get_shader_param = r300_get_shader_param;
     r300screen->screen.get_paramf = r300_get_paramf;

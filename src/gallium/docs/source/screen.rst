@@ -336,6 +336,8 @@ to be 0.
   is supported. If it is, DTRUNC/DCEIL/DFLR/DROUND opcodes may be used.
 * ``PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED``: Whether DFRACEXP and
   DLDEXP are supported.
+* ``PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED``: Whether FMA and DFMA (doubles only)
+  are supported.
 
 
 .. _pipe_compute_cap:
@@ -459,6 +461,12 @@ get_vendor
 ^^^^^^^^^^
 
 Returns the screen vendor.
+
+get_device_vendor
+^^^^^^^^^^^^^^^^^
+
+Returns the actual vendor of the device driving the screen
+(as opposed to the driver vendor).
 
 .. _get_param:
 

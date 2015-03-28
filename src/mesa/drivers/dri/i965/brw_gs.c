@@ -69,11 +69,7 @@ do_gs_prog(struct brw_context *brw,
       rzalloc_array(NULL, const gl_constant_value *, param_count);
    c.prog_data.base.base.pull_param =
       rzalloc_array(NULL, const gl_constant_value *, param_count);
-   /* Setting nr_params here NOT to the size of the param and pull_param
-    * arrays, but to the number of uniform components vec4_visitor
-    * needs. vec4_visitor::setup_uniforms() will set it back to a proper value.
-    */
-   c.prog_data.base.base.nr_params = ALIGN(param_count, 4) / 4 + gs->num_samplers;
+   c.prog_data.base.base.nr_params = param_count;
 
    if (brw->gen >= 7) {
       if (gp->program.OutputType == GL_POINTS) {
@@ -311,13 +307,13 @@ brw_upload_gs_prog(struct brw_context *brw)
 
    if (gp == NULL) {
       /* No geometry shader.  Vertex data just passes straight through. */
-      if (brw->state.dirty.brw & BRW_NEW_VUE_MAP_VS) {
+      if (brw->ctx.NewDriverState & BRW_NEW_VUE_MAP_VS) {
          brw->vue_map_geom_out = brw->vue_map_vs;
-         brw->state.dirty.brw |= BRW_NEW_VUE_MAP_GEOM_OUT;
+         brw->ctx.NewDriverState |= BRW_NEW_VUE_MAP_GEOM_OUT;
       }
 
       if (brw->gen == 6 &&
-          (brw->state.dirty.brw & BRW_NEW_TRANSFORM_FEEDBACK)) {
+          (brw->ctx.NewDriverState & BRW_NEW_TRANSFORM_FEEDBACK)) {
          gen6_brw_upload_ff_gs_prog(brw);
          return;
       }
@@ -360,7 +356,7 @@ brw_upload_gs_prog(struct brw_context *brw)
    if (memcmp(&brw->gs.prog_data->base.vue_map, &brw->vue_map_geom_out,
               sizeof(brw->vue_map_geom_out)) != 0) {
       brw->vue_map_geom_out = brw->gs.prog_data->base.vue_map;
-      brw->state.dirty.brw |= BRW_NEW_VUE_MAP_GEOM_OUT;
+      brw->ctx.NewDriverState |= BRW_NEW_VUE_MAP_GEOM_OUT;
    }
 }
 

@@ -250,6 +250,9 @@ fs_visitor::emit_fragment_program_code()
                                     fs_reg(0.0f), BRW_CONDITIONAL_GE));
             cmp->predicate = BRW_PREDICATE_NORMAL;
             cmp->flag_subreg = 1;
+
+            if (brw->gen >= 6)
+               emit_discard_jump();
          }
          break;
       }
@@ -475,7 +478,7 @@ fs_visitor::emit_fragment_program_code()
 
          emit_texture(op, glsl_type::vec4_type, coordinate, coord_components,
                       shadow_c, lod, dpdy, 0, sample_index,
-                      reg_undef, 0, /* offset, components */
+                      reg_undef, /* offset */
                       reg_undef, /* mcs */
                       0, /* gather component */
                       false, /* is cube array */

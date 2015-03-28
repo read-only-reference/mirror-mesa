@@ -30,6 +30,8 @@
 
 #include "ilo_common.h"
 #include "ilo_builder.h"
+#include "ilo_builder_3d.h"
+#include "ilo_builder_render.h"
 #include "ilo_state.h"
 #include "ilo_render.h"
 
@@ -341,6 +343,61 @@ ilo_render_emit_launch_grid_surface_states(struct ilo_render *render,
                                            const struct ilo_state_vector *vec,
                                            struct ilo_render_launch_grid_session *session);
 
+/**
+ * A convenient wrapper for gen6_PIPE_CONTROL().  This should be enough for
+ * our needs everywhere except for queries.
+ */
+static inline void
+ilo_render_pipe_control(struct ilo_render *r, uint32_t dw1)
+{
+   const uint32_t write_mask = (dw1 & GEN6_PIPE_CONTROL_WRITE__MASK);
+   struct intel_bo *bo = (write_mask) ? r->workaround_bo : NULL;
+
+   ILO_DEV_ASSERT(r->dev, 6, 8);
+
+   if (write_mask)
+      assert(write_mask == GEN6_PIPE_CONTROL_WRITE_IMM);
+
+   if (dw1 & GEN6_PIPE_CONTROL_CS_STALL) {
+      /* CS stall cannot be set alone */
+      const uint32_t mask = GEN6_PIPE_CONTROL_RENDER_CACHE_FLUSH |
+                            GEN6_PIPE_CONTROL_DEPTH_CACHE_FLUSH |
+                            GEN6_PIPE_CONTROL_PIXEL_SCOREBOARD_STALL |
+                            GEN6_PIPE_CONTROL_DEPTH_STALL |
+                            GEN6_PIPE_CONTROL_WRITE__MASK;
+      if (!(dw1 & mask))
+         dw1 |= GEN6_PIPE_CONTROL_PIXEL_SCOREBOARD_STALL;
+   }
+
+   gen6_PIPE_CONTROL(r->builder, dw1, bo, 0, 0);
+
+   r->state.current_pipe_control_dw1 |= dw1;
+   r->state.deferred_pipe_control_dw1 &= ~dw1;
+}
+
+/**
+ * A convenient wrapper for gen{6,7}_3DPRIMITIVE().
+ */
+static inline void
+ilo_render_3dprimitive(struct ilo_render *r,
+                       const struct pipe_draw_info *info,
+                       const struct ilo_ib_state *ib)
+{
+   ILO_DEV_ASSERT(r->dev, 6, 8);
+
+   if (r->state.deferred_pipe_control_dw1)
+      ilo_render_pipe_control(r, r->state.deferred_pipe_control_dw1);
+
+   /* 3DPRIMITIVE */
+   if (ilo_dev_gen(r->dev) >= ILO_GEN(7))
+      gen7_3DPRIMITIVE(r->builder, info, ib);
+   else
+      gen6_3DPRIMITIVE(r->builder, info, ib);
+
+   r->state.current_pipe_control_dw1 = 0;
+   assert(!r->state.deferred_pipe_control_dw1);
+}
+
 void
 gen6_wa_pre_pipe_control(struct ilo_render *r, uint32_t dw1);
 
@@ -438,10 +495,5 @@ void
 gen7_draw_sol(struct ilo_render *r,
               const struct ilo_state_vector *vec,
               struct ilo_render_draw_session *session);
-
-void
-gen7_draw_vf_draw(struct ilo_render *r,
-                  const struct ilo_state_vector *vec,
-                  struct ilo_render_draw_session *session);
 
 #endif /* ILO_RENDER_GEN_H */

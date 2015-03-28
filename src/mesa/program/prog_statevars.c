@@ -29,6 +29,7 @@
  */
 
 
+#include <stdio.h>
 #include "main/glheader.h"
 #include "main/context.h"
 #include "main/blend.h"
@@ -310,11 +311,11 @@ _mesa_fetch_state(struct gl_context *ctx, const gl_state_index state[],
             matrix = &ctx->_ModelProjectMatrix;
          }
          else if (mat == STATE_TEXTURE_MATRIX) {
-            assert(index < Elements(ctx->TextureMatrixStack));
+            assert(index < ARRAY_SIZE(ctx->TextureMatrixStack));
             matrix = ctx->TextureMatrixStack[index].Top;
          }
          else if (mat == STATE_PROGRAM_MATRIX) {
-            assert(index < Elements(ctx->ProgramMatrixStack));
+            assert(index < ARRAY_SIZE(ctx->ProgramMatrixStack));
             matrix = ctx->ProgramMatrixStack[index].Top;
          }
          else {
@@ -1044,7 +1045,7 @@ _mesa_program_state_string(const gl_state_index state[STATE_LENGTH])
       break;
    }
 
-   return _mesa_strdup(str);
+   return strdup(str);
 }
 
 

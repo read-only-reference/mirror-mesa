@@ -35,53 +35,10 @@
 #include "ilo_state.h"
 #include "ilo_render_gen.h"
 
-/**
- * A wrapper for gen6_PIPE_CONTROL().
- */
-static void
-gen8_pipe_control(struct ilo_render *r, uint32_t dw1)
-{
-   struct intel_bo *bo = (dw1 & GEN6_PIPE_CONTROL_WRITE__MASK) ?
-      r->workaround_bo : NULL;
-
-   ILO_DEV_ASSERT(r->dev, 8, 8);
-
-   if (dw1 & GEN6_PIPE_CONTROL_CS_STALL) {
-      /* CS stall cannot be set alone */
-      const uint32_t mask = GEN6_PIPE_CONTROL_RENDER_CACHE_FLUSH |
-                            GEN6_PIPE_CONTROL_DEPTH_CACHE_FLUSH |
-                            GEN6_PIPE_CONTROL_PIXEL_SCOREBOARD_STALL |
-                            GEN6_PIPE_CONTROL_DEPTH_STALL |
-                            GEN6_PIPE_CONTROL_WRITE__MASK;
-      if (!(dw1 & mask))
-         dw1 |= GEN6_PIPE_CONTROL_PIXEL_SCOREBOARD_STALL;
-   }
-
-   gen6_PIPE_CONTROL(r->builder, dw1, bo, 0, 0);
-
-
-   r->state.current_pipe_control_dw1 |= dw1;
-   r->state.deferred_pipe_control_dw1 &= ~dw1;
-}
-
 static void
 gen8_wa_pre_depth(struct ilo_render *r)
 {
-   /*
-    * From the Ivy Bridge PRM, volume 2 part 1, page 315:
-    *
-    *     "Driver must send a least one PIPE_CONTROL command with CS Stall and
-    *      a post sync operation prior to the group of depth
-    *      commands(3DSTATE_DEPTH_BUFFER, 3DSTATE_CLEAR_PARAMS,
-    *      3DSTATE_STENCIL_BUFFER, and 3DSTATE_HIER_DEPTH_BUFFER)."
-    */
-   const uint32_t dw1 = GEN6_PIPE_CONTROL_CS_STALL |
-                        GEN6_PIPE_CONTROL_WRITE_IMM;
-
    ILO_DEV_ASSERT(r->dev, 8, 8);
-
-   if ((r->state.current_pipe_control_dw1 & dw1) != dw1)
-      gen8_pipe_control(r, dw1);
 
    /*
     * From the Ivy Bridge PRM, volume 2 part 1, page 315:
@@ -96,9 +53,9 @@ gen8_wa_pre_depth(struct ilo_render *r)
     *      guarantee that the pipeline from WM onwards is already flushed
     *      (e.g., via a preceding MI_FLUSH)."
     */
-   gen8_pipe_control(r, GEN6_PIPE_CONTROL_DEPTH_STALL);
-   gen8_pipe_control(r, GEN6_PIPE_CONTROL_DEPTH_CACHE_FLUSH);
-   gen8_pipe_control(r, GEN6_PIPE_CONTROL_DEPTH_STALL);
+   ilo_render_pipe_control(r, GEN6_PIPE_CONTROL_DEPTH_STALL);
+   ilo_render_pipe_control(r, GEN6_PIPE_CONTROL_DEPTH_CACHE_FLUSH);
+   ilo_render_pipe_control(r, GEN6_PIPE_CONTROL_DEPTH_STALL);
 }
 
 #define DIRTY(state) (session->pipe_dirty & ILO_DIRTY_ ## state)
@@ -323,7 +280,8 @@ ilo_render_emit_draw_commands_gen8(struct ilo_render *render,
    gen6_draw_wm_raster(render, vec, session);
    gen6_draw_sf_rect(render, vec, session);
    gen8_draw_vf(render, vec, session);
-   gen7_draw_vf_draw(render, vec, session);
+
+   ilo_render_3dprimitive(render, vec->draw, &vec->ib);
 }
 
 int
@@ -457,7 +415,7 @@ ilo_render_emit_rectlist_commands_gen8(struct ilo_render *r,
    gen8_3DSTATE_WM_HZ_OP(r->builder, op, blitter->fb.width,
          blitter->fb.height, blitter->fb.num_samples);
 
-   gen8_pipe_control(r, GEN6_PIPE_CONTROL_WRITE_IMM);
+   ilo_render_pipe_control(r, GEN6_PIPE_CONTROL_WRITE_IMM);
 
    gen8_disable_3DSTATE_WM_HZ_OP(r->builder);
 }

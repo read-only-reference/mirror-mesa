@@ -73,8 +73,8 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
    this->uses_builtin_functions = false;
 
    /* Set default language version and extensions */
-   this->language_version = ctx->Const.ForceGLSLVersion ?
-                            ctx->Const.ForceGLSLVersion : 110;
+   this->language_version = 110;
+   this->forced_language_version = ctx->Const.ForceGLSLVersion;
    this->es_shader = false;
    this->ARB_texture_rectangle_enable = true;
 
@@ -119,9 +119,9 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
    this->Const.MaxAtomicBufferBindings = ctx->Const.MaxAtomicBufferBindings;
 
    /* Compute shader constants */
-   for (unsigned i = 0; i < Elements(this->Const.MaxComputeWorkGroupCount); i++)
+   for (unsigned i = 0; i < ARRAY_SIZE(this->Const.MaxComputeWorkGroupCount); i++)
       this->Const.MaxComputeWorkGroupCount[i] = ctx->Const.MaxComputeWorkGroupCount[i];
-   for (unsigned i = 0; i < Elements(this->Const.MaxComputeWorkGroupSize); i++)
+   for (unsigned i = 0; i < ARRAY_SIZE(this->Const.MaxComputeWorkGroupSize); i++)
       this->Const.MaxComputeWorkGroupSize[i] = ctx->Const.MaxComputeWorkGroupSize[i];
 
    this->Const.MaxImageUnits = ctx->Const.MaxImageUnits;
@@ -320,11 +320,14 @@ _mesa_glsl_parse_state::process_version_directive(YYLTYPE *locp, int version,
       this->ARB_texture_rectangle_enable = false;
    }
 
-   this->language_version = version;
+   if (this->forced_language_version)
+      this->language_version = this->forced_language_version;
+   else
+      this->language_version = version;
 
    bool supported = false;
    for (unsigned i = 0; i < this->num_supported_versions; i++) {
-      if (this->supported_versions[i].ver == (unsigned) version
+      if (this->supported_versions[i].ver == this->language_version
           && this->supported_versions[i].es == this->es_shader) {
          supported = true;
          break;
@@ -636,7 +639,7 @@ void _mesa_glsl_extension::set_flags(_mesa_glsl_parse_state *state,
  */
 static const _mesa_glsl_extension *find_extension(const char *name)
 {
-   for (unsigned i = 0; i < Elements(_mesa_glsl_supported_extensions); ++i) {
+   for (unsigned i = 0; i < ARRAY_SIZE(_mesa_glsl_supported_extensions); ++i) {
       if (strcmp(name, _mesa_glsl_supported_extensions[i].name) == 0) {
          return &_mesa_glsl_supported_extensions[i];
       }
@@ -674,7 +677,7 @@ _mesa_glsl_process_extension(const char *name, YYLTYPE *name_locp,
 	 return false;
       } else {
          for (unsigned i = 0;
-              i < Elements(_mesa_glsl_supported_extensions); ++i) {
+              i < ARRAY_SIZE(_mesa_glsl_supported_extensions); ++i) {
             const _mesa_glsl_extension *extension
                = &_mesa_glsl_supported_extensions[i];
             if (extension->compatible_with_state(state)) {

@@ -31,6 +31,7 @@
 #ifndef EGLSCREEN_INCLUDED
 #define EGLSCREEN_INCLUDED
 
+#include "c99_compat.h"
 
 #include "egltypedefs.h"
 
@@ -67,11 +68,11 @@ struct _egl_screen
 };
 
 
-PUBLIC void
+extern void
 _eglInitScreen(_EGLScreen *screen, _EGLDisplay *dpy, EGLint num_modes);
 
 
-PUBLIC EGLScreenMESA
+extern EGLScreenMESA
 _eglLinkScreen(_EGLScreen *screen);
 
 
@@ -82,7 +83,7 @@ _eglLookupScreen(EGLScreenMESA screen, _EGLDisplay *dpy);
 /**
  * Return the handle of a linked screen.
  */
-static INLINE EGLScreenMESA
+static inline EGLScreenMESA
 _eglGetScreenHandle(_EGLScreen *screen)
 {
    return (screen) ? screen->Handle : (EGLScreenMESA) 0;

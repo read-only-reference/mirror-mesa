@@ -605,7 +605,6 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 	struct si_state_rasterizer *rs = CALLOC_STRUCT(si_state_rasterizer);
 	struct si_pm4_state *pm4 = &rs->pm4;
 	unsigned tmp;
-	unsigned prov_vtx = 1, polygon_dual_mode;
 	float psize_min, psize_max;
 
 	if (rs == NULL) {
@@ -617,29 +616,14 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 	rs->clip_plane_enable = state->clip_plane_enable;
 	rs->line_stipple_enable = state->line_stipple_enable;
 	rs->poly_stipple_enable = state->poly_stipple_enable;
-
-	polygon_dual_mode = (state->fill_front != PIPE_POLYGON_MODE_FILL ||
-				state->fill_back != PIPE_POLYGON_MODE_FILL);
-
-	if (state->flatshade_first)
-		prov_vtx = 0;
+	rs->line_smooth = state->line_smooth;
+	rs->poly_smooth = state->poly_smooth;
 
 	rs->flatshade = state->flatshade;
 	rs->sprite_coord_enable = state->sprite_coord_enable;
 	rs->pa_sc_line_stipple = state->line_stipple_enable ?
 				S_028A0C_LINE_PATTERN(state->line_stipple_pattern) |
 				S_028A0C_REPEAT_COUNT(state->line_stipple_factor) : 0;
-	rs->pa_su_sc_mode_cntl =
-		S_028814_PROVOKING_VTX_LAST(prov_vtx) |
-		S_028814_CULL_FRONT(state->rasterizer_discard || (state->cull_face & PIPE_FACE_FRONT) ? 1 : 0) |
-		S_028814_CULL_BACK(state->rasterizer_discard || (state->cull_face & PIPE_FACE_BACK) ? 1 : 0) |
-		S_028814_FACE(!state->front_ccw) |
-		S_028814_POLY_OFFSET_FRONT_ENABLE(util_get_offset(state, state->fill_front)) |
-		S_028814_POLY_OFFSET_BACK_ENABLE(util_get_offset(state, state->fill_back)) |
-		S_028814_POLY_OFFSET_PARA_ENABLE(state->offset_point || state->offset_line) |
-		S_028814_POLY_MODE(polygon_dual_mode) |
-		S_028814_POLYMODE_FRONT_PTYPE(si_translate_fill(state->fill_front)) |
-		S_028814_POLYMODE_BACK_PTYPE(si_translate_fill(state->fill_back));
 	rs->pa_cl_clip_cntl =
 		S_028810_PS_UCP_MODE(3) |
 		S_028810_DX_CLIP_SPACE_DEF(state->clip_halfz) |
@@ -686,7 +670,9 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 	si_pm4_set_reg(pm4, R_028A08_PA_SU_LINE_CNTL, S_028A08_WIDTH(tmp));
 	si_pm4_set_reg(pm4, R_028A48_PA_SC_MODE_CNTL_0,
 		       S_028A48_LINE_STIPPLE_ENABLE(state->line_stipple_enable) |
-		       S_028A48_MSAA_ENABLE(state->multisample) |
+		       S_028A48_MSAA_ENABLE(state->multisample ||
+					    state->poly_smooth ||
+					    state->line_smooth) |
 		       S_028A48_VPORT_SCISSOR_ENABLE(state->scissor));
 
 	si_pm4_set_reg(pm4, R_028BE4_PA_SU_VTX_CNTL,
@@ -694,7 +680,18 @@ static void *si_create_rs_state(struct pipe_context *ctx,
 		       S_028BE4_QUANT_MODE(V_028BE4_X_16_8_FIXED_POINT_1_256TH));
 
 	si_pm4_set_reg(pm4, R_028B7C_PA_SU_POLY_OFFSET_CLAMP, fui(state->offset_clamp));
-
+	si_pm4_set_reg(pm4, R_028814_PA_SU_SC_MODE_CNTL,
+		S_028814_PROVOKING_VTX_LAST(!state->flatshade_first) |
+		S_028814_CULL_FRONT((state->cull_face & PIPE_FACE_FRONT) ? 1 : 0) |
+		S_028814_CULL_BACK((state->cull_face & PIPE_FACE_BACK) ? 1 : 0) |
+		S_028814_FACE(!state->front_ccw) |
+		S_028814_POLY_OFFSET_FRONT_ENABLE(util_get_offset(state, state->fill_front)) |
+		S_028814_POLY_OFFSET_BACK_ENABLE(util_get_offset(state, state->fill_back)) |
+		S_028814_POLY_OFFSET_PARA_ENABLE(state->offset_point || state->offset_line) |
+		S_028814_POLY_MODE(state->fill_front != PIPE_POLYGON_MODE_FILL ||
+				   state->fill_back != PIPE_POLYGON_MODE_FILL) |
+		S_028814_POLYMODE_FRONT_PTYPE(si_translate_fill(state->fill_front)) |
+		S_028814_POLYMODE_BACK_PTYPE(si_translate_fill(state->fill_back)));
 	return rs;
 }
 
@@ -708,10 +705,6 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 	if (state == NULL)
 		return;
 
-	// TODO
-	sctx->pa_sc_line_stipple = rs->pa_sc_line_stipple;
-	sctx->pa_su_sc_mode_cntl = rs->pa_su_sc_mode_cntl;
-
 	if (sctx->framebuffer.nr_samples > 1 &&
 	    (!old_rs || old_rs->multisample_enable != rs->multisample_enable))
 		sctx->db_render_state.dirty = true;
@@ -720,7 +713,6 @@ static void si_bind_rs_state(struct pipe_context *ctx, void *state)
 	si_update_fb_rs_state(sctx);
 
 	sctx->clip_regs.dirty = true;
-	sctx->last_rast_prim = -1; /* reset this so that it gets updated */
 }
 
 static void si_delete_rs_state(struct pipe_context *ctx, void *state)
@@ -945,9 +937,14 @@ static void si_emit_db_render_state(struct si_context *sctx, struct r600_atom *s
 		r600_write_context_reg(cs, R_028010_DB_RENDER_OVERRIDE2, 0);
 	}
 
-	db_shader_control = S_02880C_Z_ORDER(V_02880C_EARLY_Z_THEN_LATE_Z) |
-			    S_02880C_ALPHA_TO_MASK_DISABLE(sctx->framebuffer.cb0_is_integer) |
+	db_shader_control = S_02880C_ALPHA_TO_MASK_DISABLE(sctx->framebuffer.cb0_is_integer) |
 		            sctx->ps_db_shader_control;
+
+	/* Bug workaround for smoothing (overrasterization) on SI. */
+	if (sctx->b.chip_class == SI && sctx->smoothing_enabled)
+		db_shader_control |= S_02880C_Z_ORDER(V_02880C_LATE_Z);
+	else
+		db_shader_control |= S_02880C_Z_ORDER(V_02880C_EARLY_Z_THEN_LATE_Z);
 
 	/* Disable the gl_SampleMask fragment shader output if MSAA is disabled. */
 	if (sctx->framebuffer.nr_samples <= 1 || (rs && !rs->multisample_enable))
@@ -2093,6 +2090,19 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 		constbuf.buffer_size = sctx->framebuffer.nr_samples * 2 * 4;
 		ctx->set_constant_buffer(ctx, PIPE_SHADER_FRAGMENT,
 					 SI_DRIVER_STATE_CONST_BUF, &constbuf);
+
+		/* Smoothing (only possible with nr_samples == 1) uses the same
+		 * sample locations as the MSAA it simulates.
+		 *
+		 * Therefore, don't update the sample locations when
+		 * transitioning from no AA to smoothing-equivalent AA, and
+		 * vice versa.
+		 */
+		if ((sctx->framebuffer.nr_samples != 1 ||
+		     old_nr_samples != SI_NUM_SMOOTH_AA_SAMPLES) &&
+		    (sctx->framebuffer.nr_samples != SI_NUM_SMOOTH_AA_SAMPLES ||
+		     old_nr_samples != 1))
+			sctx->msaa_sample_locs.dirty = true;
 	}
 }
 
@@ -2196,9 +2206,20 @@ static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom 
         /* PA_SC_WINDOW_SCISSOR_TL is set in si_init_config() */
 	r600_write_context_reg(cs, R_028208_PA_SC_WINDOW_SCISSOR_BR,
 			       S_028208_BR_X(state->width) | S_028208_BR_Y(state->height));
-
-	cayman_emit_msaa_sample_locs(cs, sctx->framebuffer.nr_samples);
 }
+
+static void si_emit_msaa_sample_locs(struct r600_common_context *rctx,
+				     struct r600_atom *atom)
+{
+	struct si_context *sctx = (struct si_context *)rctx;
+	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	unsigned nr_samples = sctx->framebuffer.nr_samples;
+
+	cayman_emit_msaa_sample_locs(cs, nr_samples > 1 ? nr_samples :
+						SI_NUM_SMOOTH_AA_SAMPLES);
+}
+
+const struct r600_atom si_atom_msaa_sample_locs = { si_emit_msaa_sample_locs, 18 }; /* number of CS dwords */
 
 static void si_emit_msaa_config(struct r600_common_context *rctx, struct r600_atom *atom)
 {
@@ -2206,7 +2227,8 @@ static void si_emit_msaa_config(struct r600_common_context *rctx, struct r600_at
 	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
 
 	cayman_emit_msaa_config(cs, sctx->framebuffer.nr_samples,
-				sctx->ps_iter_samples);
+				sctx->ps_iter_samples,
+				sctx->smoothing_enabled ? SI_NUM_SMOOTH_AA_SAMPLES : 0);
 }
 
 const struct r600_atom si_atom_msaa_config = { si_emit_msaa_config, 10 }; /* number of CS dwords */

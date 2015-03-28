@@ -241,15 +241,7 @@ do_vs_prog(struct brw_context *brw,
       rzalloc_array(NULL, const gl_constant_value *, param_count);
    stage_prog_data->pull_param =
       rzalloc_array(NULL, const gl_constant_value *, param_count);
-
-   /* Setting nr_params here NOT to the size of the param and pull_param
-    * arrays, but to the number of uniform components vec4_visitor
-    * needs. vec4_visitor::setup_uniforms() will set it back to a proper value.
-    */
-   stage_prog_data->nr_params = ALIGN(param_count, 4) / 4;
-   if (vs) {
-      stage_prog_data->nr_params += vs->num_samplers;
-   }
+   stage_prog_data->nr_params = param_count;
 
    GLbitfield64 outputs_written = vp->program.Base.OutputsWritten;
    prog_data.inputs_read = vp->program.Base.InputsRead;
@@ -482,13 +474,13 @@ brw_upload_vs_prog(struct brw_context *brw)
    if (memcmp(&brw->vs.prog_data->base.vue_map, &brw->vue_map_geom_out,
               sizeof(brw->vue_map_geom_out)) != 0) {
       brw->vue_map_vs = brw->vs.prog_data->base.vue_map;
-      brw->state.dirty.brw |= BRW_NEW_VUE_MAP_VS;
+      brw->ctx.NewDriverState |= BRW_NEW_VUE_MAP_VS;
       if (brw->gen < 6) {
          /* No geometry shader support, so the VS VUE map is the VUE map for
           * the output of the "geometry" portion of the pipeline.
           */
          brw->vue_map_geom_out = brw->vue_map_vs;
-         brw->state.dirty.brw |= BRW_NEW_VUE_MAP_GEOM_OUT;
+         brw->ctx.NewDriverState |= BRW_NEW_VUE_MAP_GEOM_OUT;
       }
    }
 }

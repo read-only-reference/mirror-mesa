@@ -31,10 +31,11 @@
 #ifndef EGLDISPLAY_INCLUDED
 #define EGLDISPLAY_INCLUDED
 
+#include "c99_compat.h"
+#include "c11/threads.h"
 
 #include "egltypedefs.h"
 #include "egldefines.h"
-#include "eglmutex.h"
 #include "eglarray.h"
 
 
@@ -43,7 +44,6 @@ enum _egl_platform_type {
    _EGL_PLATFORM_X11,
    _EGL_PLATFORM_WAYLAND,
    _EGL_PLATFORM_DRM,
-   _EGL_PLATFORM_FBDEV,
    _EGL_PLATFORM_NULL,
    _EGL_PLATFORM_ANDROID,
    _EGL_PLATFORM_HAIKU,
@@ -131,7 +131,7 @@ struct _egl_display
    /* used to link displays */
    _EGLDisplay *Next;
 
-   _EGLMutex Mutex;
+   mtx_t Mutex;
 
    _EGLPlatformType Platform; /**< The type of the platform display */
    void *PlatformDisplay;     /**< A pointer to the platform display */
@@ -153,8 +153,8 @@ struct _egl_display
    _EGLExtensions Extensions; /**< Extensions supported */
 
    /* these fields are derived from above */
-   char VersionString[1000];                       /**< EGL_VERSION */
-   char ClientAPIsString[1000];                    /**< EGL_CLIENT_APIS */
+   char VersionString[100];                        /**< EGL_VERSION */
+   char ClientAPIsString[100];                     /**< EGL_CLIENT_APIS */
    char ExtensionsString[_EGL_MAX_EXTENSIONS_LEN]; /**< EGL_EXTENSIONS */
 
    _EGLArray *Screens;
@@ -177,11 +177,11 @@ extern _EGLDisplay *
 _eglFindDisplay(_EGLPlatformType plat, void *plat_dpy);
 
 
-PUBLIC void
+extern void
 _eglReleaseDisplayResources(_EGLDriver *drv, _EGLDisplay *dpy);
 
 
-PUBLIC void
+extern void
 _eglCleanupDisplay(_EGLDisplay *disp);
 
 
@@ -189,7 +189,7 @@ extern EGLBoolean
 _eglCheckDisplayHandle(EGLDisplay dpy);
 
 
-PUBLIC EGLBoolean
+extern EGLBoolean
 _eglCheckResource(void *res, _EGLResourceType type, _EGLDisplay *dpy);
 
 
@@ -197,7 +197,7 @@ _eglCheckResource(void *res, _EGLResourceType type, _EGLDisplay *dpy);
  * Lookup a handle to find the linked display.
  * Return NULL if the handle has no corresponding linked display.
  */
-static INLINE _EGLDisplay *
+static inline _EGLDisplay *
 _eglLookupDisplay(EGLDisplay display)
 {
    _EGLDisplay *dpy = (_EGLDisplay *) display;
@@ -210,7 +210,7 @@ _eglLookupDisplay(EGLDisplay display)
 /**
  * Return the handle of a linked display, or EGL_NO_DISPLAY.
  */
-static INLINE EGLDisplay
+static inline EGLDisplay
 _eglGetDisplayHandle(_EGLDisplay *dpy)
 {
    return (EGLDisplay) ((dpy) ? dpy : EGL_NO_DISPLAY);
@@ -221,11 +221,11 @@ extern void
 _eglInitResource(_EGLResource *res, EGLint size, _EGLDisplay *dpy);
 
 
-PUBLIC void
+extern void
 _eglGetResource(_EGLResource *res);
 
 
-PUBLIC EGLBoolean
+extern EGLBoolean
 _eglPutResource(_EGLResource *res);
 
 
@@ -240,7 +240,7 @@ _eglUnlinkResource(_EGLResource *res, _EGLResourceType type);
 /**
  * Return true if the resource is linked.
  */
-static INLINE EGLBoolean
+static inline EGLBoolean
 _eglIsResourceLinked(_EGLResource *res)
 {
    return res->IsLinked;

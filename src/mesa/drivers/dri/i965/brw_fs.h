@@ -289,7 +289,7 @@ public:
                      fs_reg shadow_c,
                      fs_reg lod, fs_reg dpdy, int grad_components,
                      fs_reg sample_index,
-                     fs_reg offset, unsigned offset_components,
+                     fs_reg offset,
                      fs_reg mcs,
                      int gather_component,
                      bool is_cube_array,
@@ -299,13 +299,16 @@ public:
                      int texunit);
    fs_reg emit_mcs_fetch(fs_reg coordinate, int components, fs_reg sampler);
    void emit_gen6_gather_wa(uint8_t wa, fs_reg dst);
+   void resolve_source_modifiers(fs_reg *src);
    fs_reg fix_math_operand(fs_reg src);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0);
    fs_inst *emit_math(enum opcode op, fs_reg dst, fs_reg src0, fs_reg src1);
-   void emit_lrp(const fs_reg &dst, const fs_reg &x, const fs_reg &y,
-                 const fs_reg &a);
+   fs_inst *emit_lrp(const fs_reg &dst, const fs_reg &x, const fs_reg &y,
+                     const fs_reg &a);
    void emit_minmax(enum brw_conditional_mod conditionalmod, const fs_reg &dst,
                     const fs_reg &src0, const fs_reg &src1);
+   void emit_discard_jump();
+   bool try_emit_b2f_of_comparison(ir_expression *ir);
    bool try_emit_saturate(ir_expression *ir);
    bool try_emit_line(ir_expression *ir);
    bool try_emit_mad(ir_expression *ir);
@@ -316,6 +319,7 @@ public:
    bool opt_saturate_propagation();
    bool opt_cmod_propagation();
    void emit_bool_to_cond_code(ir_rvalue *condition);
+   void emit_bool_to_cond_code_of_reg(ir_expression *expr, fs_reg op[3]);
    void emit_if_gen6(ir_if *ir);
    void emit_unspill(bblock_t *block, fs_inst *inst, fs_reg reg,
                      uint32_t spill_offset, int count);
@@ -369,17 +373,18 @@ public:
    bool optimize_frontfacing_ternary(nir_alu_instr *instr,
                                      const fs_reg &result);
 
-   int setup_color_payload(fs_reg *dst, fs_reg color, unsigned components);
+   int setup_color_payload(fs_reg *dst, fs_reg color, unsigned components,
+                           bool use_2nd_half);
    void emit_alpha_test();
    fs_inst *emit_single_fb_write(fs_reg color1, fs_reg color2,
-                                 fs_reg src0_alpha, unsigned components);
+                                 fs_reg src0_alpha, unsigned components,
+                                 bool use_2nd_half = false);
    void emit_fb_writes();
    void emit_urb_writes();
 
    void emit_shader_time_begin();
    void emit_shader_time_end();
-   void emit_shader_time_write(enum shader_time_shader_type type,
-                               fs_reg value);
+   fs_inst *SHADER_TIME_ADD(enum shader_time_shader_type type, fs_reg value);
 
    void emit_untyped_atomic(unsigned atomic_op, unsigned surf_index,
                             fs_reg dst, fs_reg offset, fs_reg src0,
@@ -400,7 +405,7 @@ public:
    void resolve_ud_negate(fs_reg *reg);
    void resolve_bool_comparison(ir_rvalue *rvalue, fs_reg *reg);
 
-   fs_reg get_timestamp();
+   fs_reg get_timestamp(fs_inst **out_mov);
 
    struct brw_reg interp_reg(int location, int channel);
    void setup_uniform_values(ir_variable *ir);
@@ -415,6 +420,8 @@ public:
    void visit_atomic_counter_intrinsic(ir_call *ir);
 
    const void *const key;
+   const struct brw_sampler_prog_key_data *key_tex;
+
    struct brw_stage_prog_data *prog_data;
    unsigned int sanity_param_count;
 
@@ -428,6 +435,9 @@ public:
 
    /** Number of uniform variable components visited. */
    unsigned uniforms;
+
+   /** Total number of direct uniforms we can get from NIR */
+   unsigned num_direct_uniforms;
 
    /** Byte-offset for the next available spot in the scratch space buffer. */
    unsigned last_scratch;
@@ -462,7 +472,6 @@ public:
    fs_reg *nir_globals;
    fs_reg nir_inputs;
    fs_reg nir_outputs;
-   fs_reg nir_uniforms;
    fs_reg *nir_system_values;
 
    /** @{ debug annotation info */
@@ -508,6 +517,8 @@ public:
    bool spilled_any_registers;
 
    const unsigned dispatch_width; /**< 8 or 16 */
+
+   unsigned promoted_constants;
 };
 
 /**
@@ -523,6 +534,7 @@ public:
                 const void *key,
                 struct brw_stage_prog_data *prog_data,
                 struct gl_program *fp,
+                unsigned promoted_constants,
                 bool runtime_check_aads_emit,
                 const char *stage_abbrev);
    ~fs_generator();
@@ -634,6 +646,7 @@ private:
    unsigned dispatch_width; /**< 8 or 16 */
 
    exec_list discard_halt_patches;
+   unsigned promoted_constants;
    bool runtime_check_aads_emit;
    bool debug_flag;
    const char *shader_name;

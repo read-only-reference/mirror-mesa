@@ -33,6 +33,9 @@
 #include "intel_fbo.h"
 #include "brw_context.h"
 
+#include <xf86drm.h>
+#include <i915_drm.h>
+
 static void
 intel_batchbuffer_reset(struct brw_context *brw);
 
@@ -168,6 +171,7 @@ static void
 brw_new_batch(struct brw_context *brw)
 {
    /* Create a new batchbuffer and reset the associated state: */
+   drm_intel_gem_bo_clear_relocs(brw->batch.bo, 0);
    intel_batchbuffer_reset(brw);
 
    /* If the kernel supports hardware contexts, then most hardware state is
@@ -177,9 +181,9 @@ brw_new_batch(struct brw_context *brw)
     * purposes means everything).
     */
    if (brw->hw_ctx == NULL)
-      brw->state.dirty.brw |= BRW_NEW_CONTEXT;
+      brw->ctx.NewDriverState |= BRW_NEW_CONTEXT;
 
-   brw->state.dirty.brw |= BRW_NEW_BATCH;
+   brw->ctx.NewDriverState |= BRW_NEW_BATCH;
 
    brw->state_batch_count = 0;
 
@@ -225,6 +229,44 @@ brw_finish_batch(struct brw_context *brw)
    brw->cache.bo_used_by_gpu = true;
 }
 
+static void
+throttle(struct brw_context *brw)
+{
+   /* Wait for the swapbuffers before the one we just emitted, so we
+    * don't get too many swaps outstanding for apps that are GPU-heavy
+    * but not CPU-heavy.
+    *
+    * We're using intelDRI2Flush (called from the loader before
+    * swapbuffer) and glFlush (for front buffer rendering) as the
+    * indicator that a frame is done and then throttle when we get
+    * here as we prepare to render the next frame.  At this point for
+    * round trips for swap/copy and getting new buffers are done and
+    * we'll spend less time waiting on the GPU.
+    *
+    * Unfortunately, we don't have a handle to the batch containing
+    * the swap, and getting our hands on that doesn't seem worth it,
+    * so we just use the first batch we emitted after the last swap.
+    */
+   if (brw->need_swap_throttle && brw->throttle_batch[0]) {
+      if (brw->throttle_batch[1]) {
+         if (!brw->disable_throttling)
+            drm_intel_bo_wait_rendering(brw->throttle_batch[1]);
+         drm_intel_bo_unreference(brw->throttle_batch[1]);
+      }
+      brw->throttle_batch[1] = brw->throttle_batch[0];
+      brw->throttle_batch[0] = NULL;
+      brw->need_swap_throttle = false;
+      /* Throttling here is more precise than the throttle ioctl, so skip it */
+      brw->need_flush_throttle = false;
+   }
+
+   if (brw->need_flush_throttle) {
+      __DRIscreen *psp = brw->intelScreen->driScrnPriv;
+      drmCommandNone(psp->fd, DRM_I915_GEM_THROTTLE);
+      brw->need_flush_throttle = false;
+   }
+}
+
 /* TODO: Push this whole function into bufmgr.
  */
 static int
@@ -259,6 +301,7 @@ do_flush_locked(struct brw_context *brw)
       if (ret == 0) {
          if (unlikely(INTEL_DEBUG & DEBUG_AUB))
             brw_annotate_aub(brw);
+
 	 if (brw->hw_ctx == NULL || batch->ring != RENDER_RING) {
 	    ret = drm_intel_bo_mrb_exec(batch->bo, 4 * batch->used, NULL, 0, 0,
 					flags);
@@ -267,6 +310,8 @@ do_flush_locked(struct brw_context *brw)
 						4 * batch->used, flags);
 	 }
       }
+
+      throttle(brw);
    }
 
    if (unlikely(INTEL_DEBUG & DEBUG_BATCH))
@@ -289,9 +334,9 @@ _intel_batchbuffer_flush(struct brw_context *brw,
    if (brw->batch.used == 0)
       return 0;
 
-   if (brw->first_post_swapbuffers_batch == NULL) {
-      brw->first_post_swapbuffers_batch = brw->batch.bo;
-      drm_intel_bo_reference(brw->first_post_swapbuffers_batch);
+   if (brw->throttle_batch[0] == NULL) {
+      brw->throttle_batch[0] = brw->batch.bo;
+      drm_intel_bo_reference(brw->throttle_batch[0]);
    }
 
    if (unlikely(INTEL_DEBUG & DEBUG_BATCH)) {
@@ -390,7 +435,7 @@ intel_batchbuffer_data(struct brw_context *brw,
 {
    assert((bytes & 3) == 0);
    intel_batchbuffer_require_space(brw, bytes, ring);
-   __memcpy(brw->batch.map + brw->batch.used, data, bytes);
+   memcpy(brw->batch.map + brw->batch.used, data, bytes);
    brw->batch.used += bytes >> 2;
 }
 
@@ -411,7 +456,7 @@ intel_batchbuffer_data(struct brw_context *brw,
 static void
 gen8_add_cs_stall_workaround_bits(uint32_t *flags)
 {
-   uint32_t wa_bits = PIPE_CONTROL_WRITE_FLUSH |
+   uint32_t wa_bits = PIPE_CONTROL_RENDER_TARGET_FLUSH |
                       PIPE_CONTROL_DEPTH_CACHE_FLUSH |
                       PIPE_CONTROL_WRITE_IMMEDIATE |
                       PIPE_CONTROL_WRITE_DEPTH_COUNT |
@@ -665,7 +710,7 @@ intel_batchbuffer_emit_mi_flush(struct brw_context *brw)
       OUT_BATCH(0);
       ADVANCE_BATCH();
    } else {
-      int flags = PIPE_CONTROL_NO_WRITE | PIPE_CONTROL_WRITE_FLUSH;
+      int flags = PIPE_CONTROL_NO_WRITE | PIPE_CONTROL_RENDER_TARGET_FLUSH;
       if (brw->gen >= 6) {
          if (brw->gen == 9) {
             /* Hardware workaround: SKL
@@ -676,10 +721,10 @@ intel_batchbuffer_emit_mi_flush(struct brw_context *brw)
             brw_emit_pipe_control_flush(brw, 0);
          }
 
-         flags |= PIPE_CONTROL_INSTRUCTION_FLUSH |
+         flags |= PIPE_CONTROL_INSTRUCTION_INVALIDATE |
                   PIPE_CONTROL_DEPTH_CACHE_FLUSH |
                   PIPE_CONTROL_VF_CACHE_INVALIDATE |
-                  PIPE_CONTROL_TC_FLUSH |
+                  PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE |
                   PIPE_CONTROL_CS_STALL;
 
          if (brw->gen == 6) {

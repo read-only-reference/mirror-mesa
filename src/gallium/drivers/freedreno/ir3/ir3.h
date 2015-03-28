@@ -38,8 +38,6 @@ struct ir3;
 struct ir3_instruction;
 struct ir3_block;
 
-struct ir3 * fd_asm_parse(const char *src);
-
 struct ir3_info {
 	uint16_t sizedwords;
 	uint16_t instrs_count;   /* expanded to account for rpt's */
@@ -79,17 +77,18 @@ struct ir3_register {
 		 * the component is in the low two bits of the reg #, so
 		 * rN.x becomes: (N << 2) | x
 		 */
-		int num;
+		int   num;
 		/* immediate: */
-		int     iim_val;
-		float   fim_val;
+		int   iim_val;
+		float fim_val;
 		/* relative: */
-		int offset;
-		/* for IR3_REG_SSA, src registers contain ptr back to
-		 * assigning instruction.
-		 */
-		struct ir3_instruction *instr;
+		int   offset;
 	};
+
+	/* for IR3_REG_SSA, src registers contain ptr back to
+	 * assigning instruction.
+	 */
+	struct ir3_instruction *instr;
 
 	union {
 		/* used for cat5 instructions, but also for internal/IR level
@@ -204,14 +203,14 @@ struct ir3_instruction {
 			int off;              /* component/offset */
 		} fo;
 		struct {
+			int aid;
+		} fi;
+		struct {
 			struct ir3_block *if_block, *else_block;
 		} flow;
 		struct {
 			struct ir3_block *block;
 		} inout;
-		struct {
-			int off;              /* offset relative to addr reg */
-		} deref;
 
 		/* XXX keep this as big as all other union members! */
 		uint32_t info[3];
@@ -260,6 +259,25 @@ struct ir3_instruction {
 		struct ir3_instruction *left, *right;
 		uint16_t left_cnt, right_cnt;
 	} cp;
+
+	/* an instruction can reference at most one address register amongst
+	 * it's src/dst registers.  Beyond that, you need to insert mov's.
+	 */
+	struct ir3_instruction *address;
+
+	/* in case of a instruction with relative dst instruction, we need to
+	 * capture the dependency on the fanin for the previous values of
+	 * the array elements.  Since we don't know at compile time actually
+	 * which array elements are written, this serves to preserve the
+	 * unconditional write to array elements prior to the conditional
+	 * write.
+	 *
+	 * TODO only cat1 can do indirect write.. we could maybe move this
+	 * into instr->cat1.fanin (but would require the frontend to insert
+	 * the extra mov)
+	 */
+	struct ir3_instruction *fanin;
+
 	struct ir3_instruction *next;
 #ifdef DEBUG
 	uint32_t serialno;
@@ -293,8 +311,29 @@ struct ir3_heap_chunk;
 struct ir3 {
 	unsigned instrs_count, instrs_sz;
 	struct ir3_instruction **instrs;
+
+	/* Track bary.f (and ldlv) instructions.. this is needed in
+	 * scheduling to ensure that all varying fetches happen before
+	 * any potential kill instructions.  The hw gets grumpy if all
+	 * threads in a group are killed before the last bary.f gets
+	 * a chance to signal end of input (ei).
+	 */
 	unsigned baryfs_count, baryfs_sz;
 	struct ir3_instruction **baryfs;
+
+	/* Track all indirect instructions (read and write).  To avoid
+	 * deadlock scenario where an address register gets scheduled,
+	 * but other dependent src instructions cannot be scheduled due
+	 * to dependency on a *different* address register value, the
+	 * scheduler needs to ensure that all dependencies other than
+	 * the instruction other than the address register are scheduled
+	 * before the one that writes the address register.  Having a
+	 * convenient list of instructions that reference some address
+	 * register simplifies this.
+	 */
+	unsigned indirects_count, indirects_sz;
+	struct ir3_instruction **indirects;
+
 	struct ir3_block *block;
 	unsigned heap_idx;
 	struct ir3_heap_chunk *chunk;
@@ -369,6 +408,8 @@ static inline int ir3_instr_regno(struct ir3_instruction *instr,
 }
 
 
+#define MAX_ARRAYS 16
+
 /* comp:
  *   0 - x
  *   1 - y
@@ -420,8 +461,19 @@ static inline bool is_tex(struct ir3_instruction *instr)
 	return (instr->category == 5);
 }
 
+static inline bool is_mem(struct ir3_instruction *instr)
+{
+	return (instr->category == 6);
+}
+
 static inline bool is_input(struct ir3_instruction *instr)
 {
+	/* in some cases, ldlv is used to fetch varying without
+	 * interpolation.. fortunately inloc is the first src
+	 * register in either case
+	 */
+	if (is_mem(instr) && (instr->opc == OPC_LDLV))
+		return true;
 	return (instr->category == 2) && (instr->opc == OPC_BARY_F);
 }
 
@@ -432,11 +484,6 @@ static inline bool is_meta(struct ir3_instruction *instr)
 	 * result?
 	 */
 	return (instr->category == -1);
-}
-
-static inline bool is_addr(struct ir3_instruction *instr)
-{
-	return is_meta(instr) && (instr->opc == OPC_META_DEREF);
 }
 
 static inline bool writes_addr(struct ir3_instruction *instr)
@@ -475,6 +522,55 @@ static inline bool reg_gpr(struct ir3_register *r)
 	return true;
 }
 
+#define array_insert(arr, val) do { \
+		if (arr ## _count == arr ## _sz) { \
+			arr ## _sz = MAX2(2 * arr ## _sz, 16); \
+			arr = realloc(arr, arr ## _sz * sizeof(arr[0])); \
+		} \
+		arr[arr ##_count++] = val; \
+	} while (0)
+
+/* iterator for an instructions's sources (reg), also returns src #: */
+#define foreach_src_n(__srcreg, __n, __instr) \
+	if ((__instr)->regs_count) \
+		for (unsigned __cnt = (__instr)->regs_count - 1, __n = 0; __n < __cnt; __n++) \
+			if ((__srcreg = (__instr)->regs[__n + 1]))
+
+/* iterator for an instructions's sources (reg): */
+#define foreach_src(__srcreg, __instr) \
+	foreach_src_n(__srcreg, __i, __instr)
+
+static inline unsigned __ssa_src_cnt(struct ir3_instruction *instr)
+{
+	if (instr->fanin)
+		return instr->regs_count + 2;
+	if (instr->address)
+		return instr->regs_count + 1;
+	return instr->regs_count;
+}
+
+static inline struct ir3_instruction * __ssa_src_n(struct ir3_instruction *instr, unsigned n)
+{
+	if (n == (instr->regs_count + 1))
+		return instr->fanin;
+	if (n == (instr->regs_count + 0))
+		return instr->address;
+	return ssa(instr->regs[n]);
+}
+
+#define __src_cnt(__instr) ((__instr)->address ? (__instr)->regs_count : (__instr)->regs_count - 1)
+
+/* iterator for an instruction's SSA sources (instr), also returns src #: */
+#define foreach_ssa_src_n(__srcinst, __n, __instr) \
+	if ((__instr)->regs_count) \
+		for (unsigned __cnt = __ssa_src_cnt(__instr) - 1, __n = 0; __n < __cnt; __n++) \
+			if ((__srcinst = __ssa_src_n(__instr, __n + 1)))
+
+/* iterator for an instruction's SSA sources (instr): */
+#define foreach_ssa_src(__srcinst, __instr) \
+	foreach_ssa_src_n(__srcinst, __i, __instr)
+
+
 /* dump: */
 #include <stdio.h>
 void ir3_dump(struct ir3 *shader, const char *name,
@@ -508,9 +604,6 @@ int ir3_block_ra(struct ir3_block *block, enum shader_t type,
 void ir3_block_legalize(struct ir3_block *block,
 		bool *has_samp, int *max_bary);
 
-#ifndef ARRAY_SIZE
-#  define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
-#endif
 
 /* ************************************************************************* */
 /* split this out or find some helper to use.. like main/bitset.h.. */

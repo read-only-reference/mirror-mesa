@@ -100,6 +100,7 @@ struct ilo_builder_snapshot {
 struct ilo_builder {
    const struct ilo_dev_info *dev;
    struct intel_winsys *winsys;
+   uint32_t mocs;
 
    struct ilo_builder_writer writers[ILO_BUILDER_WRITER_COUNT];
    bool unrecoverable_error;
@@ -171,7 +172,7 @@ ilo_builder_writer_checked_record(struct ilo_builder *builder,
                                   enum ilo_builder_item_type item,
                                   unsigned offset, unsigned size)
 {
-   if (unlikely(ilo_debug & ILO_DEBUG_BATCH)) {
+   if (unlikely(ilo_debug & (ILO_DEBUG_BATCH | ILO_DEBUG_HANG))) {
       if (!ilo_builder_writer_record(builder, which, item, offset, size)) {
          builder->unrecoverable_error = true;
          builder->writers[which].item_used = 0;
@@ -350,21 +351,22 @@ ilo_builder_dynamic_used(const struct ilo_builder *builder)
 }
 
 /**
- * Write a surface state to the surface buffer.  The offset, in bytes, of the
- * state is returned.
+ * Reserve a region from the surface buffer.  Both the offset, in bytes, and
+ * the pointer to the reserved region are returned.  The pointer is only valid
+ * until the next reserve call.
  *
  * Note that \p alignment is in bytes and \p len is in DWords.
  */
 static inline uint32_t
-ilo_builder_surface_write(struct ilo_builder *builder,
-                          enum ilo_builder_item_type item,
-                          unsigned alignment, unsigned len,
-                          const uint32_t *dw)
+ilo_builder_surface_pointer(struct ilo_builder *builder,
+                            enum ilo_builder_item_type item,
+                            unsigned alignment, unsigned len,
+                            uint32_t **dw)
 {
    assert(item == ILO_BUILDER_ITEM_SURFACE ||
           item == ILO_BUILDER_ITEM_BINDING_TABLE);
 
-   return ilo_builder_dynamic_write(builder, item, alignment, len, dw);
+   return ilo_builder_dynamic_pointer(builder, item, alignment, len, dw);
 }
 
 /**

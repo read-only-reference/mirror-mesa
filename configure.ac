@@ -46,6 +46,13 @@ AC_CONFIG_MACRO_DIR([m4])
 AC_CANONICAL_SYSTEM
 AM_INIT_AUTOMAKE([foreign tar-ustar dist-xz])
 
+dnl We only support native Windows builds (MinGW/MSVC) through SCons.
+case "$host_os" in
+mingw*)
+    AC_MSG_ERROR([MinGW build not supported through autoconf/automake, use SCons instead])
+    ;;
+esac
+
 # Support silent build rules, requires at least automake-1.11. Disable
 # by either passing --disable-silent-rules to configure or passing V=1
 # to make
@@ -61,7 +68,7 @@ AC_SUBST([OSMESA_VERSION])
 dnl Versions for external dependencies
 LIBDRM_REQUIRED=2.4.38
 LIBDRM_RADEON_REQUIRED=2.4.56
-LIBDRM_INTEL_REQUIRED=2.4.52
+LIBDRM_INTEL_REQUIRED=2.4.60
 LIBDRM_NVVIEUX_REQUIRED=2.4.33
 LIBDRM_NOUVEAU_REQUIRED="2.4.33 libdrm >= 2.4.41"
 LIBDRM_FREEDRENO_REQUIRED=2.4.57
@@ -79,6 +86,7 @@ XCBDRI2_REQUIRED=1.8
 XCBGLX_REQUIRED=1.8.1
 XSHMFENCE_REQUIRED=1.1
 XVMC_REQUIRED=1.0.6
+PYTHON_MAKO_REQUIRED=0.3.4
 
 dnl Check for progs
 AC_PROG_CPP
@@ -114,7 +122,10 @@ if test "x$INDENT" != "xcat"; then
     fi
 fi
 
-AX_CHECK_PYTHON_MAKO_MODULE(0.3.4)
+AX_CHECK_PYTHON_MAKO_MODULE($PYTHON_MAKO_REQUIRED)
+if test -n "$PYTHON2" -a "x$acv_mako_found" != "xyes"; then
+    AC_MSG_ERROR([Python mako module v$PYTHON_MAKO_REQUIRED or higher not found])
+fi
 
 AC_PROG_INSTALL
 
@@ -189,6 +200,7 @@ AX_GCC_FUNC_ATTRIBUTE([flatten])
 AX_GCC_FUNC_ATTRIBUTE([format])
 AX_GCC_FUNC_ATTRIBUTE([malloc])
 AX_GCC_FUNC_ATTRIBUTE([packed])
+AX_GCC_FUNC_ATTRIBUTE([unused])
 
 AM_CONDITIONAL([GEN_ASM_OFFSETS], test "x$GEN_ASM_OFFSETS" = xyes)
 
@@ -263,6 +275,30 @@ if test "x$GCC" = xyes; then
     # gcc's builtin memcmp is slower than glibc's
     # http://gcc.gnu.org/bugzilla/show_bug.cgi?id=43052
     CFLAGS="$CFLAGS -fno-builtin-memcmp"
+
+    # Flags to help ensure that certain portions of the code -- and only those
+    # portions -- can be built with MSVC:
+    # - src/util, src/gallium/auxiliary, and src/gallium/drivers/llvmpipe needs
+    #   to build with Windows SDK 7.0.7600, which bundles MSVC 2008
+    # - non-Linux/Posix OpenGL portions needs to build on MSVC 2013 (which
+    #   supports most of C99)
+    # - the rest has no compiler compiler restrictions
+    MSVC2013_COMPAT_CFLAGS="-Werror=pointer-arith"
+    MSVC2013_COMPAT_CXXFLAGS="-Werror=pointer-arith"
+
+    # Enable -Werror=vla if compiler supports it
+    save_CFLAGS="$CFLAGS"
+    AC_MSG_CHECKING([whether $CC supports -Werror=vla])
+    CFLAGS="$CFLAGS -Werror=vla"
+    AC_LINK_IFELSE([AC_LANG_PROGRAM()],
+		   [MSVC2013_COMPAT_CFLAGS="$MSVC2013_COMPAT_CFLAGS -Werror=vla";
+		    MSVC2013_COMPAT_CXXFLAGS="$MSVC2013_COMPAT_CXXFLAGS -Werror=vla";
+		    AC_MSG_RESULT([yes])],
+		    AC_MSG_RESULT([no]));
+    CFLAGS="$save_CFLAGS"
+
+    MSVC2008_COMPAT_CFLAGS="$MSVC2013_COMPAT_CFLAGS -Werror=declaration-after-statement"
+    MSVC2008_COMPAT_CXXFLAGS="$MSVC2013_COMPAT_CXXFLAGS"
 fi
 if test "x$GXX" = xyes; then
     CXXFLAGS="$CXXFLAGS -Wall"
@@ -287,6 +323,11 @@ if test "x$GXX" = xyes; then
     # http://gcc.gnu.org/bugzilla/show_bug.cgi?id=43052
     CXXFLAGS="$CXXFLAGS -fno-builtin-memcmp"
 fi
+
+AC_SUBST([MSVC2013_COMPAT_CFLAGS])
+AC_SUBST([MSVC2013_COMPAT_CXXFLAGS])
+AC_SUBST([MSVC2008_COMPAT_CFLAGS])
+AC_SUBST([MSVC2008_COMPAT_CXXFLAGS])
 
 dnl even if the compiler appears to support it, using visibility attributes isn't
 dnl going to do anything useful currently on cygwin apart from emit lots of warnings
@@ -615,7 +656,7 @@ AC_CHECK_FUNCS([dladdr])
 LIBS="$save_LIBS"
 
 case "$host_os" in
-darwin*|mingw*)
+darwin*)
     ;;
 *)
     AC_CHECK_FUNCS([clock_gettime], [CLOCK_LIB=],
@@ -629,13 +670,10 @@ dnl See if posix_memalign is available
 AC_CHECK_FUNC([posix_memalign], [DEFINES="$DEFINES -DHAVE_POSIX_MEMALIGN"])
 
 dnl Check for pthreads
-case "$host_os" in
-mingw*)
-    ;;
-*)
-    AX_PTHREAD
-    ;;
-esac
+AX_PTHREAD
+if test "x$ax_pthread_ok" = xno; then
+    AC_MSG_ERROR([Building mesa on this platform requires pthreads])
+fi
 dnl AX_PTHREADS leaves PTHREAD_LIBS empty for gcc and sets PTHREAD_CFLAGS
 dnl to -pthread, which causes problems if we need -lpthread to appear in
 dnl pkgconfig files.
@@ -675,11 +713,6 @@ AC_ARG_ENABLE([gles2],
         [enable support for OpenGL ES 2.x API @<:@default=disabled@:>@])],
     [enable_gles2="$enableval"],
     [enable_gles2=no])
-AC_ARG_ENABLE([openvg],
-    [AS_HELP_STRING([--enable-openvg],
-        [enable support for OpenVG API @<:@default=disabled@:>@])],
-    [enable_openvg="$enableval"],
-    [enable_openvg=no])
 
 AC_ARG_ENABLE([dri],
     [AS_HELP_STRING([--enable-dri],
@@ -810,7 +843,6 @@ if test "x$enable_opengl" = xno -a \
         "x$enable_gles1" = xno -a \
         "x$enable_gles2" = xno -a \
         "x$enable_nine" = xno -a \
-        "x$enable_openvg" = xno -a \
         "x$enable_xa" = xno -a \
         "x$enable_xvmc" = xno -a \
         "x$enable_vdpau" = xno -a \
@@ -872,7 +904,7 @@ AM_CONDITIONAL(HAVE_DRI_GLX, test "x$enable_glx" = xyes -a \
 case "$host_os" in
 darwin*)
     dri_platform='apple' ;;
-gnu*|mingw*|cygwin*)
+gnu*|cygwin*)
     dri_platform='none' ;;
 *)
     dri_platform='drm' ;;
@@ -1531,29 +1563,6 @@ fi
 AM_CONDITIONAL(HAVE_ST_XA, test "x$enable_xa" = xyes)
 
 dnl
-dnl OpenVG configuration
-dnl
-VG_LIB_DEPS=""
-
-if test "x$enable_openvg" = xyes; then
-    if test "x$enable_egl" = xno; then
-        AC_MSG_ERROR([cannot enable OpenVG without EGL])
-    fi
-    if test -z "$with_gallium_drivers"; then
-        AC_MSG_ERROR([cannot enable OpenVG without Gallium])
-    fi
-
-    AC_MSG_ERROR([Cannot enable OpenVG, because egl_gallium has been removed and
-                  OpenVG has not been integrated into standard libEGL yet])
-
-    EGL_CLIENT_APIS="$EGL_CLIENT_APIS "'$(VG_LIB)'
-    VG_LIB_DEPS="$VG_LIB_DEPS $SELINUX_LIBS $PTHREAD_LIBS"
-    VG_PC_LIB_PRIV="-lm $CLOCK_LIB $PTHREAD_LIBS $DLOPEN_LIBS"
-    AC_SUBST([VG_PC_LIB_PRIV])
-fi
-AM_CONDITIONAL(HAVE_OPENVG, test "x$enable_openvg" = xyes)
-
-dnl
 dnl Gallium G3DVL configuration
 dnl
 if test -n "$with_gallium_drivers" -a "x$with_gallium_drivers" != xswrast; then
@@ -1771,7 +1780,7 @@ for plat in $egl_platforms; do
 			AC_MSG_ERROR([EGL platform drm requires libdrm >= $LIBDRM_REQUIRED])
 		;;
 
-	android|fbdev|gdi|null)
+	android|gdi|null)
 		;;
 
 	*)
@@ -1800,7 +1809,6 @@ fi
 AM_CONDITIONAL(HAVE_EGL_PLATFORM_X11, echo "$egl_platforms" | grep -q 'x11')
 AM_CONDITIONAL(HAVE_EGL_PLATFORM_WAYLAND, echo "$egl_platforms" | grep -q 'wayland')
 AM_CONDITIONAL(HAVE_EGL_PLATFORM_DRM, echo "$egl_platforms" | grep -q 'drm')
-AM_CONDITIONAL(HAVE_EGL_PLATFORM_FBDEV, echo "$egl_platforms" | grep -q 'fbdev')
 AM_CONDITIONAL(HAVE_EGL_PLATFORM_NULL, echo "$egl_platforms" | grep -q 'null')
 
 AM_CONDITIONAL(HAVE_EGL_DRIVER_DRI2, test "x$HAVE_EGL_DRIVER_DRI2" != "x")
@@ -2359,9 +2367,7 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/auxiliary/Makefile
 		src/gallium/auxiliary/pipe-loader/Makefile
 		src/gallium/drivers/freedreno/Makefile
-		src/gallium/drivers/galahad/Makefile
 		src/gallium/drivers/i915/Makefile
-		src/gallium/drivers/identity/Makefile
 		src/gallium/drivers/ilo/Makefile
 		src/gallium/drivers/llvmpipe/Makefile
 		src/gallium/drivers/noop/Makefile
@@ -2384,7 +2390,6 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/state_trackers/osmesa/Makefile
 		src/gallium/state_trackers/va/Makefile
 		src/gallium/state_trackers/vdpau/Makefile
-		src/gallium/state_trackers/vega/Makefile
 		src/gallium/state_trackers/xa/Makefile
 		src/gallium/state_trackers/xvmc/Makefile
 		src/gallium/targets/d3dadapter9/Makefile
@@ -2410,10 +2415,8 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/winsys/radeon/drm/Makefile
 		src/gallium/winsys/svga/drm/Makefile
 		src/gallium/winsys/sw/dri/Makefile
-		src/gallium/winsys/sw/fbdev/Makefile
 		src/gallium/winsys/sw/kms-dri/Makefile
 		src/gallium/winsys/sw/null/Makefile
-		src/gallium/winsys/sw/wayland/Makefile
 		src/gallium/winsys/sw/wrapper/Makefile
 		src/gallium/winsys/sw/xlib/Makefile
 		src/gallium/winsys/vc4/drm/Makefile
@@ -2462,7 +2465,6 @@ echo "        includedir:      $includedir"
 dnl API info
 echo ""
 echo "        OpenGL:          $enable_opengl (ES1: $enable_gles1 ES2: $enable_gles2)"
-echo "        OpenVG:          $enable_openvg"
 
 dnl Driver info
 echo ""

@@ -84,6 +84,38 @@ resource_get_cpu_init(const struct pipe_resource *templ)
                           PIPE_BIND_STREAM_OUTPUT)) ? false : true;
 }
 
+static enum gen_surface_tiling
+winsys_to_surface_tiling(enum intel_tiling_mode tiling)
+{
+   switch (tiling) {
+   case INTEL_TILING_NONE:
+      return GEN6_TILING_NONE;
+   case INTEL_TILING_X:
+      return GEN6_TILING_X;
+   case INTEL_TILING_Y:
+      return GEN6_TILING_Y;
+   default:
+      assert(!"unknown tiling");
+      return GEN6_TILING_NONE;
+   }
+}
+
+static inline enum intel_tiling_mode
+surface_to_winsys_tiling(enum gen_surface_tiling tiling)
+{
+   switch (tiling) {
+   case GEN6_TILING_NONE:
+      return INTEL_TILING_NONE;
+   case GEN6_TILING_X:
+      return INTEL_TILING_X;
+   case GEN6_TILING_Y:
+      return INTEL_TILING_Y;
+   default:
+      assert(!"unknown tiling");
+      return GEN6_TILING_NONE;
+   }
+}
+
 static void
 tex_free_slices(struct ilo_texture *tex)
 {
@@ -136,9 +168,10 @@ tex_import_handle(struct ilo_texture *tex,
    if (!tex->bo)
       return false;
 
-   if (!ilo_layout_update_for_imported_bo(&tex->layout, tiling, pitch)) {
+   if (!ilo_layout_update_for_imported_bo(&tex->layout,
+            winsys_to_surface_tiling(tiling), pitch)) {
       ilo_err("imported handle has incompatible tiling/pitch\n");
-      intel_bo_unreference(tex->bo);
+      intel_bo_unref(tex->bo);
       tex->bo = NULL;
       return false;
    }
@@ -152,9 +185,24 @@ tex_create_bo(struct ilo_texture *tex)
    struct ilo_screen *is = ilo_screen(tex->base.screen);
    const char *name = resource_get_bo_name(&tex->base);
    const bool cpu_init = resource_get_cpu_init(&tex->base);
+   struct intel_bo *bo;
 
-   tex->bo = intel_winsys_alloc_bo(is->winsys, name, tex->layout.tiling,
-         tex->layout.bo_stride, tex->layout.bo_height, cpu_init);
+   bo = intel_winsys_alloc_bo(is->winsys, name,
+         tex->layout.bo_stride * tex->layout.bo_height, cpu_init);
+
+   /* set the tiling for transfer and export */
+   if (bo && (tex->layout.tiling == GEN6_TILING_X ||
+              tex->layout.tiling == GEN6_TILING_Y)) {
+      const enum intel_tiling_mode tiling =
+         surface_to_winsys_tiling(tex->layout.tiling);
+
+      if (intel_bo_set_tiling(bo, tiling, tex->layout.bo_stride)) {
+         intel_bo_unref(bo);
+         bo = NULL;
+      }
+   }
+
+   tex->bo = bo;
 
    return (tex->bo != NULL);
 }
@@ -171,6 +219,9 @@ tex_create_separate_stencil(struct ilo_texture *tex)
     * stencil buffer, and our transfer code can handle all tilings.
     */
    templ.format = PIPE_FORMAT_S8_UINT;
+
+   /* no stencil texturing */
+   templ.bind &= ~PIPE_BIND_SAMPLER_VIEW;
 
    s8 = tex->base.screen->resource_create(tex->base.screen, &templ);
    if (!s8)
@@ -191,8 +242,7 @@ tex_create_hiz(struct ilo_texture *tex)
    unsigned lv;
 
    tex->aux_bo = intel_winsys_alloc_bo(is->winsys, "hiz texture",
-         INTEL_TILING_Y, tex->layout.aux_stride, tex->layout.aux_height,
-         false);
+         tex->layout.aux_stride * tex->layout.aux_height, false);
    if (!tex->aux_bo)
       return false;
 
@@ -221,8 +271,7 @@ tex_create_mcs(struct ilo_texture *tex)
    assert(tex->layout.aux_enables == (1 << (tex->base.last_level + 1)) - 1);
 
    tex->aux_bo = intel_winsys_alloc_bo(is->winsys, "mcs texture",
-         INTEL_TILING_Y, tex->layout.aux_stride, tex->layout.aux_height,
-         false);
+         tex->layout.aux_stride * tex->layout.aux_height, false);
    if (!tex->aux_bo)
       return false;
 
@@ -232,14 +281,11 @@ tex_create_mcs(struct ilo_texture *tex)
 static void
 tex_destroy(struct ilo_texture *tex)
 {
-   if (tex->aux_bo)
-      intel_bo_unreference(tex->aux_bo);
-
    if (tex->separate_s8)
       tex_destroy(tex->separate_s8);
 
-   if (tex->bo)
-      intel_bo_unreference(tex->bo);
+   intel_bo_unref(tex->aux_bo);
+   intel_bo_unref(tex->bo);
 
    tex_free_slices(tex);
    FREE(tex);
@@ -297,8 +343,7 @@ tex_init_layout(struct ilo_texture *tex)
 
    if (templ->flags & PIPE_RESOURCE_FLAG_MAP_PERSISTENT) {
       /* require on-the-fly tiling/untiling or format conversion */
-      if (layout->separate_stencil ||
-          layout->format == PIPE_FORMAT_S8_UINT ||
+      if (layout->tiling == GEN8_TILING_W || layout->separate_stencil ||
           layout->format != templ->format)
          return false;
    }
@@ -343,9 +388,16 @@ static bool
 tex_get_handle(struct ilo_texture *tex, struct winsys_handle *handle)
 {
    struct ilo_screen *is = ilo_screen(tex->base.screen);
+   enum intel_tiling_mode tiling;
    int err;
 
-   err = intel_winsys_export_handle(is->winsys, tex->bo, tex->layout.tiling,
+   /* must match what tex_create_bo() sets */
+   if (tex->layout.tiling == GEN8_TILING_W)
+      tiling = INTEL_TILING_NONE;
+   else
+      tiling = surface_to_winsys_tiling(tex->layout.tiling);
+
+   err = intel_winsys_export_handle(is->winsys, tex->bo, tiling,
          tex->layout.bo_stride, tex->layout.bo_height, handle);
 
    return !err;
@@ -358,8 +410,7 @@ buf_create_bo(struct ilo_buffer *buf)
    const char *name = resource_get_bo_name(&buf->base);
    const bool cpu_init = resource_get_cpu_init(&buf->base);
 
-   buf->bo = intel_winsys_alloc_buffer(is->winsys, name,
-         buf->bo_size, cpu_init);
+   buf->bo = intel_winsys_alloc_bo(is->winsys, name, buf->bo_size, cpu_init);
 
    return (buf->bo != NULL);
 }
@@ -367,7 +418,7 @@ buf_create_bo(struct ilo_buffer *buf)
 static void
 buf_destroy(struct ilo_buffer *buf)
 {
-   intel_bo_unreference(buf->bo);
+   intel_bo_unref(buf->bo);
    FREE(buf);
 }
 
@@ -503,7 +554,7 @@ ilo_buffer_rename_bo(struct ilo_buffer *buf)
    struct intel_bo *old_bo = buf->bo;
 
    if (buf_create_bo(buf)) {
-      intel_bo_unreference(old_bo);
+      intel_bo_unref(old_bo);
       return true;
    }
    else {
@@ -522,7 +573,7 @@ ilo_texture_rename_bo(struct ilo_texture *tex)
       return false;
 
    if (tex_create_bo(tex)) {
-      intel_bo_unreference(old_bo);
+      intel_bo_unref(old_bo);
       return true;
    }
    else {

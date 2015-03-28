@@ -55,6 +55,12 @@ i915_get_vendor(struct pipe_screen *screen)
 }
 
 static const char *
+i915_get_device_vendor(struct pipe_screen *screen)
+{
+   return "Intel";
+}
+
+static const char *
 i915_get_name(struct pipe_screen *screen)
 {
    static char buffer[128];
@@ -158,6 +164,7 @@ i915_get_shader_param(struct pipe_screen *screen, unsigned shader, enum pipe_sha
       case PIPE_SHADER_CAP_DOUBLES:
       case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
       case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+      case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
          return 0;
       default:
          debug_printf("%s: Unknown cap %u.\n", __FUNCTION__, cap);
@@ -547,6 +554,7 @@ i915_screen_create(struct i915_winsys *iws)
 
    is->base.get_name = i915_get_name;
    is->base.get_vendor = i915_get_vendor;
+   is->base.get_device_vendor = i915_get_device_vendor;
    is->base.get_param = i915_get_param;
    is->base.get_shader_param = i915_get_shader_param;
    is->base.get_paramf = i915_get_paramf;

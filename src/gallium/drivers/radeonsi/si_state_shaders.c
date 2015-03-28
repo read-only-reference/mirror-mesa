@@ -366,33 +366,38 @@ static INLINE void si_shader_selector_key(struct pipe_context *ctx,
 			key->vs.gs_used_inputs = sctx->gs_shader->gs_used_inputs;
 		}
 	} else if (sel->type == PIPE_SHADER_FRAGMENT) {
+		struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
+
 		if (sel->info.properties[TGSI_PROPERTY_FS_COLOR0_WRITES_ALL_CBUFS])
 			key->ps.last_cbuf = MAX2(sctx->framebuffer.state.nr_cbufs, 1) - 1;
 		key->ps.export_16bpc = sctx->framebuffer.export_16bpc;
 
-		if (sctx->queued.named.rasterizer) {
-			key->ps.color_two_side = sctx->queued.named.rasterizer->two_side;
+		if (rs) {
+			bool is_poly = (sctx->current_rast_prim >= PIPE_PRIM_TRIANGLES &&
+					sctx->current_rast_prim <= PIPE_PRIM_POLYGON) ||
+				       sctx->current_rast_prim >= PIPE_PRIM_TRIANGLES_ADJACENCY;
+			bool is_line = !is_poly && sctx->current_rast_prim != PIPE_PRIM_POINTS;
+
+			key->ps.color_two_side = rs->two_side;
 
 			if (sctx->queued.named.blend) {
 				key->ps.alpha_to_one = sctx->queued.named.blend->alpha_to_one &&
-						       sctx->queued.named.rasterizer->multisample_enable &&
+						       rs->multisample_enable &&
 						       !sctx->framebuffer.cb0_is_integer;
 			}
 
-			key->ps.poly_stipple = sctx->queued.named.rasterizer->poly_stipple_enable &&
-					       ((sctx->current_rast_prim >= PIPE_PRIM_TRIANGLES &&
-						 sctx->current_rast_prim <= PIPE_PRIM_POLYGON) ||
-						sctx->current_rast_prim >= PIPE_PRIM_TRIANGLES_ADJACENCY);
+			key->ps.poly_stipple = rs->poly_stipple_enable && is_poly;
+			key->ps.poly_line_smoothing = ((is_poly && rs->poly_smooth) ||
+						       (is_line && rs->line_smooth)) &&
+						      sctx->framebuffer.nr_samples <= 1;
 		}
-		if (sctx->queued.named.dsa) {
-			key->ps.alpha_func = sctx->queued.named.dsa->alpha_func;
 
-			/* Alpha-test should be disabled if colorbuffer 0 is integer. */
-			if (sctx->framebuffer.cb0_is_integer)
-				key->ps.alpha_func = PIPE_FUNC_ALWAYS;
-		} else {
-			key->ps.alpha_func = PIPE_FUNC_ALWAYS;
-		}
+		key->ps.alpha_func = PIPE_FUNC_ALWAYS;
+
+		/* Alpha-test should be disabled if colorbuffer 0 is integer. */
+		if (sctx->queued.named.dsa &&
+		    !sctx->framebuffer.cb0_is_integer)
+			key->ps.alpha_func = sctx->queued.named.dsa->alpha_func;
 	}
 }
 
@@ -400,6 +405,7 @@ static INLINE void si_shader_selector_key(struct pipe_context *ctx,
 static int si_shader_select(struct pipe_context *ctx,
 			    struct si_shader_selector *sel)
 {
+	struct si_context *sctx = (struct si_context *)ctx;
 	union si_shader_key key;
 	struct si_shader * shader = NULL;
 	int r;
@@ -439,7 +445,8 @@ static int si_shader_select(struct pipe_context *ctx,
 
 		shader->next_variant = sel->current;
 		sel->current = shader;
-		r = si_shader_create((struct si_screen*)ctx->screen, shader);
+		r = si_shader_create((struct si_screen*)ctx->screen, sctx->tm,
+				     shader);
 		if (unlikely(r)) {
 			R600_ERR("Failed to build shader variant (type=%u) %d\n",
 				 sel->type, r);
@@ -920,6 +927,14 @@ void si_update_shaders(struct si_context *sctx)
 	if (sctx->ps_db_shader_control != sctx->ps_shader->current->db_shader_control) {
 		sctx->ps_db_shader_control = sctx->ps_shader->current->db_shader_control;
 		sctx->db_render_state.dirty = true;
+	}
+
+	if (sctx->smoothing_enabled != sctx->ps_shader->current->key.ps.poly_line_smoothing) {
+		sctx->smoothing_enabled = sctx->ps_shader->current->key.ps.poly_line_smoothing;
+		sctx->msaa_config.dirty = true;
+
+		if (sctx->b.chip_class == SI)
+			sctx->db_render_state.dirty = true;
 	}
 }
 

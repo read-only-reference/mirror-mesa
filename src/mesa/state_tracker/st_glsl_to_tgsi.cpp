@@ -332,6 +332,7 @@ public:
    int glsl_version;
    bool native_integers;
    bool have_sqrt;
+   bool have_fma;
 
    variable_storage *find_variable_storage(ir_variable *var);
 
@@ -836,6 +837,7 @@ glsl_to_tgsi_visitor::get_opcode(ir_instruction *ir, unsigned op,
       case3fid(ADD, UADD, DADD);
       case3fid(MUL, UMUL, DMUL);
       case3fid(MAD, UMAD, DMAD);
+      case3fid(FMA, UMAD, DFMA);
       case3(DIV, IDIV, UDIV);
       case4d(MAX, IMAX, UMAX, DMAX);
       case4d(MIN, IMIN, UMIN, DMIN);
@@ -1497,7 +1499,7 @@ void
 glsl_to_tgsi_visitor::visit(ir_expression *ir)
 {
    unsigned int operand;
-   st_src_reg op[Elements(ir->operands)];
+   st_src_reg op[ARRAY_SIZE(ir->operands)];
    st_src_reg result_src;
    st_dst_reg result_dst;
 
@@ -2222,10 +2224,11 @@ glsl_to_tgsi_visitor::visit(ir_expression *ir)
       emit(ir, TGSI_OPCODE_IMUL_HI, result_dst, op[0], op[1]);
       break;
    case ir_triop_fma:
-      /* NOTE: Perhaps there should be a special opcode that enforces fused
-       * mul-add. Just use MAD for now.
-       */
-      emit(ir, TGSI_OPCODE_MAD, result_dst, op[0], op[1], op[2]);
+      /* In theory, MAD is incorrect here. */
+      if (have_fma)
+         emit(ir, TGSI_OPCODE_FMA, result_dst, op[0], op[1], op[2]);
+      else
+         emit(ir, TGSI_OPCODE_MAD, result_dst, op[0], op[1], op[2]);
       break;
    case ir_unop_interpolate_at_centroid:
       emit(ir, TGSI_OPCODE_INTERP_CENTROID, result_dst, op[0]);
@@ -3462,6 +3465,7 @@ glsl_to_tgsi_visitor::glsl_to_tgsi_visitor()
    shader = NULL;
    options = NULL;
    have_sqrt = false;
+   have_fma = false;
 }
 
 glsl_to_tgsi_visitor::~glsl_to_tgsi_visitor()
@@ -3934,6 +3938,7 @@ glsl_to_tgsi_visitor::copy_propagate(void)
              inst->dst[0].index == inst->src[0].index) &&
           !inst->dst[0].reladdr &&
           !inst->saturate &&
+          inst->src[0].file != PROGRAM_ARRAY &&
           !inst->src[0].reladdr &&
           !inst->src[0].reladdr2 &&
           !inst->src[0].negate) {
@@ -4022,7 +4027,7 @@ glsl_to_tgsi_visitor::eliminate_dead_code(void)
          /* Continuing the block, clear any channels from the write array that
           * are read by this instruction.
           */
-         for (unsigned i = 0; i < Elements(inst->src); i++) {
+         for (unsigned i = 0; i < ARRAY_SIZE(inst->src); i++) {
             if (inst->src[i].file == PROGRAM_TEMPORARY && inst->src[i].reladdr){
                /* Any temporary might be read, so no dead code elimination
                 * across this instruction.
@@ -4067,7 +4072,7 @@ glsl_to_tgsi_visitor::eliminate_dead_code(void)
        * If there is already an instruction in the write array for one or more
        * of the channels, flag that channel write as dead.
        */
-      for (unsigned i = 0; i < Elements(inst->dst); i++) {
+      for (unsigned i = 0; i < ARRAY_SIZE(inst->dst); i++) {
          if (inst->dst[i].file == PROGRAM_TEMPORARY &&
              !inst->dst[i].reladdr &&
              !inst->saturate) {
@@ -4625,7 +4630,7 @@ dst_register(struct st_translate *t,
    case PROGRAM_ARRAY:
       array = index >> 16;
 
-      assert(array < Elements(t->arrays));
+      assert(array < ARRAY_SIZE(t->arrays));
 
       if (ureg_dst_is_undef(t->arrays[array]))
          t->arrays[array] = ureg_DECL_array_temporary(
@@ -4642,7 +4647,7 @@ dst_register(struct st_translate *t,
       else
          assert(index < VARYING_SLOT_MAX);
 
-      assert(t->outputMapping[index] < Elements(t->outputs));
+      assert(t->outputMapping[index] < ARRAY_SIZE(t->outputs));
 
       return t->outputs[t->outputMapping[index]];
 
@@ -4685,18 +4690,18 @@ src_register(struct st_translate *t, const st_src_reg *reg)
       return t->immediates[reg->index];
 
    case PROGRAM_INPUT:
-      assert(t->inputMapping[reg->index] < Elements(t->inputs));
+      assert(t->inputMapping[reg->index] < ARRAY_SIZE(t->inputs));
       return t->inputs[t->inputMapping[reg->index]];
 
    case PROGRAM_OUTPUT:
-      assert(t->outputMapping[reg->index] < Elements(t->outputs));
+      assert(t->outputMapping[reg->index] < ARRAY_SIZE(t->outputs));
       return ureg_src(t->outputs[t->outputMapping[reg->index]]); /* not needed? */
 
    case PROGRAM_ADDRESS:
       return ureg_src(t->address[reg->index]);
 
    case PROGRAM_SYSTEM_VALUE:
-      assert(reg->index < (int) Elements(t->systemValues));
+      assert(reg->index < (int) ARRAY_SIZE(t->systemValues));
       return t->systemValues[reg->index];
 
    default:
@@ -4824,7 +4829,7 @@ translate_tex_offset(struct st_translate *t,
       array = in_offset->index >> 16;
 
       assert(array >= 0);
-      assert(array < (int) Elements(t->arrays));
+      assert(array < (int) ARRAY_SIZE(t->arrays));
 
       dst = t->arrays[array];
       offset.File = dst.File;
@@ -5200,8 +5205,8 @@ st_translate_program(
    unsigned i;
    enum pipe_error ret = PIPE_OK;
 
-   assert(numInputs <= Elements(t->inputs));
-   assert(numOutputs <= Elements(t->outputs));
+   assert(numInputs <= ARRAY_SIZE(t->inputs));
+   assert(numOutputs <= ARRAY_SIZE(t->outputs));
 
    assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_FRONT_FACE] ==
           TGSI_SEMANTIC_FACE);
@@ -5564,6 +5569,8 @@ get_mesa_program(struct gl_context *ctx,
 
    v->have_sqrt = pscreen->get_shader_param(pscreen, ptarget,
                                             PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED);
+   v->have_fma = pscreen->get_shader_param(pscreen, ptarget,
+                                           PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED);
 
    _mesa_copy_linked_program_data(shader->Stage, shader_program, prog);
    _mesa_generate_parameters_list_for_uniforms(shader_program, shader,

@@ -28,6 +28,7 @@
  */
 
 #include <stdbool.h>
+#include <stdio.h>
 
 #include "context.h"
 #include "enums.h"
@@ -48,7 +49,7 @@ find_attachment(const struct gl_framebuffer *fb,
                 const struct gl_renderbuffer *rb)
 {
    GLuint i;
-   for (i = 0; i < Elements(fb->Attachment); i++) {
+   for (i = 0; i < ARRAY_SIZE(fb->Attachment); i++) {
       if (fb->Attachment[i].Renderbuffer == rb)
          return &fb->Attachment[i];
    }

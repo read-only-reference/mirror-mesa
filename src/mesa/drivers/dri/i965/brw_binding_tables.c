@@ -68,9 +68,11 @@ brw_upload_binding_table(struct brw_context *brw,
    } else {
       /* Upload a new binding table. */
       if (INTEL_DEBUG & DEBUG_SHADER_TIME) {
-         brw->vtbl.create_raw_surface(
-            brw, brw->shader_time.bo, 0, brw->shader_time.bo->size,
-            &stage_state->surf_offset[prog_data->binding_table.shader_time_start], true);
+         brw->vtbl.emit_buffer_surface_state(
+            brw, &stage_state->surf_offset[
+                    prog_data->binding_table.shader_time_start],
+            brw->shader_time.bo, 0, BRW_SURFACEFORMAT_RAW,
+            brw->shader_time.bo->size, 1, true);
       }
 
       uint32_t *bind = brw_state_batch(brw, AUB_TRACE_BINDING_TABLE,
@@ -82,7 +84,7 @@ brw_upload_binding_table(struct brw_context *brw,
              prog_data->binding_table.size_bytes);
    }
 
-   brw->state.dirty.brw |= brw_new_binding_table;
+   brw->ctx.NewDriverState |= brw_new_binding_table;
 
    if (brw->gen >= 7) {
       BEGIN_BATCH(2);

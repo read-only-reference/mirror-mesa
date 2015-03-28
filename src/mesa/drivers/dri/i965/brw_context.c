@@ -68,6 +68,8 @@
 #include "tnl/t_pipeline.h"
 #include "util/ralloc.h"
 
+#include "glsl/nir/nir.h"
+
 /***************************************
  * Mesa's Driver Functions
  ***************************************/
@@ -232,8 +234,8 @@ intel_glFlush(struct gl_context *ctx)
 
    intel_batchbuffer_flush(brw);
    intel_flush_front(ctx);
-   if (brw_is_front_buffer_drawing(ctx->DrawBuffer))
-      brw->need_throttle = true;
+
+   brw->need_flush_throttle = true;
 }
 
 static void
@@ -549,6 +551,15 @@ brw_initialize_context_constants(struct brw_context *brw)
       ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxInputComponents = 128;
    }
 
+   static const nir_shader_compiler_options gen4_nir_options = {
+      .native_integers = true,
+      .lower_ffma = true,
+   };
+
+   static const nir_shader_compiler_options gen6_nir_options = {
+      .native_integers = true,
+   };
+
    /* We want the GLSL compiler to emit code that uses condition codes */
    for (int i = 0; i < MESA_SHADER_STAGES; i++) {
       ctx->Const.ShaderCompilerOptions[i].MaxIfDepth = brw->gen < 6 ? 16 : UINT_MAX;
@@ -562,6 +573,10 @@ brw_initialize_context_constants(struct brw_context *brw)
 	 (i == MESA_SHADER_FRAGMENT);
       ctx->Const.ShaderCompilerOptions[i].EmitNoIndirectUniform = false;
       ctx->Const.ShaderCompilerOptions[i].LowerClipDistance = true;
+      if (brw->gen >= 6)
+         ctx->Const.ShaderCompilerOptions[i].NirOptions = &gen6_nir_options;
+      else
+         ctx->Const.ShaderCompilerOptions[i].NirOptions = &gen4_nir_options;
    }
 
    ctx->Const.ShaderCompilerOptions[MESA_SHADER_VERTEX].OptimizeForAOS = true;
@@ -651,6 +666,29 @@ brw_process_driconf_options(struct brw_context *brw)
       driQueryOptionb(options, "allow_glsl_extension_directive_midshader");
 }
 
+/* drop when libdrm 2.4.61 is released */
+#ifndef I915_PARAM_REVISION
+#define I915_PARAM_REVISION 32
+#endif
+
+static int
+brw_get_revision(int fd)
+{
+   struct drm_i915_getparam gp;
+   int revision;
+   int ret;
+
+   memset(&gp, 0, sizeof(gp));
+   gp.param = I915_PARAM_REVISION;
+   gp.value = &revision;
+
+   ret = drmCommandWriteRead(fd, DRM_I915_GETPARAM, &gp, sizeof(gp));
+   if (ret)
+      revision = -1;
+
+   return revision;
+}
+
 GLboolean
 brwCreateContext(gl_api api,
 	         const struct gl_config *mesaVis,
@@ -709,6 +747,7 @@ brwCreateContext(gl_api api,
    brw->has_negative_rhw_bug = devinfo->has_negative_rhw_bug;
    brw->needs_unlit_centroid_workaround =
       devinfo->needs_unlit_centroid_workaround;
+   brw->revision = brw_get_revision(sPriv->fd);
 
    brw->must_use_separate_stencil = screen->hw_must_use_separate_stencil;
    brw->has_swizzling = screen->hw_has_swizzling;
@@ -908,6 +947,12 @@ intelDestroyContext(__DRIcontext * driContextPriv)
    brw_draw_destroy(brw);
 
    drm_intel_bo_unreference(brw->curbe.curbe_bo);
+   if (brw->vs.base.scratch_bo)
+      drm_intel_bo_unreference(brw->vs.base.scratch_bo);
+   if (brw->gs.base.scratch_bo)
+      drm_intel_bo_unreference(brw->gs.base.scratch_bo);
+   if (brw->wm.base.scratch_bo)
+      drm_intel_bo_unreference(brw->wm.base.scratch_bo);
 
    drm_intel_gem_context_destroy(brw->hw_ctx);
 
@@ -922,8 +967,10 @@ intelDestroyContext(__DRIcontext * driContextPriv)
 
    intel_batchbuffer_free(brw);
 
-   drm_intel_bo_unreference(brw->first_post_swapbuffers_batch);
-   brw->first_post_swapbuffers_batch = NULL;
+   drm_intel_bo_unreference(brw->throttle_batch[1]);
+   drm_intel_bo_unreference(brw->throttle_batch[0]);
+   brw->throttle_batch[1] = NULL;
+   brw->throttle_batch[0] = NULL;
 
    driDestroyOptionCache(&brw->optionCache);
 
@@ -1216,29 +1263,6 @@ intel_prepare_render(struct brw_context *brw)
     */
    if (brw_is_front_buffer_drawing(ctx->DrawBuffer))
       brw->front_buffer_dirty = true;
-
-   /* Wait for the swapbuffers before the one we just emitted, so we
-    * don't get too many swaps outstanding for apps that are GPU-heavy
-    * but not CPU-heavy.
-    *
-    * We're using intelDRI2Flush (called from the loader before
-    * swapbuffer) and glFlush (for front buffer rendering) as the
-    * indicator that a frame is done and then throttle when we get
-    * here as we prepare to render the next frame.  At this point for
-    * round trips for swap/copy and getting new buffers are done and
-    * we'll spend less time waiting on the GPU.
-    *
-    * Unfortunately, we don't have a handle to the batch containing
-    * the swap, and getting our hands on that doesn't seem worth it,
-    * so we just us the first batch we emitted after the last swap.
-    */
-   if (brw->need_throttle && brw->first_post_swapbuffers_batch) {
-      if (!brw->disable_throttling)
-         drm_intel_bo_wait_rendering(brw->first_post_swapbuffers_batch);
-      drm_intel_bo_unreference(brw->first_post_swapbuffers_batch);
-      brw->first_post_swapbuffers_batch = NULL;
-      brw->need_throttle = false;
-   }
 }
 
 /**

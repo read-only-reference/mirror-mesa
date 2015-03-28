@@ -34,6 +34,10 @@
 #include "glsl_types.h"
 #include "main/context.h"
 
+#ifdef _MSC_VER
+#pragma warning( disable : 4065 ) // switch statement contains 'default' but no 'case' labels
+#endif
+
 #undef yyerror
 
 static void yyerror(YYLTYPE *loc, _mesa_glsl_parse_state *st, const char *msg)
@@ -1280,7 +1284,7 @@ layout_qualifier_id:
                  { "triangles_adjacency", GL_TRIANGLES_ADJACENCY },
                  { "triangle_strip", GL_TRIANGLE_STRIP },
          };
-         for (unsigned i = 0; i < Elements(map); i++) {
+         for (unsigned i = 0; i < ARRAY_SIZE(map); i++) {
             if (match_layout_qualifier($1, map[i].s, state) == 0) {
                $$.flags.q.prim_type = 1;
                $$.prim_type = map[i].e;
@@ -1344,7 +1348,7 @@ layout_qualifier_id:
                { "r8_snorm", GL_R8_SNORM, GLSL_TYPE_FLOAT }
             };
 
-            for (unsigned i = 0; i < Elements(map); i++) {
+            for (unsigned i = 0; i < ARRAY_SIZE(map); i++) {
                if (match_layout_qualifier($1, map[i].name, state) == 0) {
                   $$.flags.q.explicit_image_format = 1;
                   $$.image_format = map[i].format;

@@ -86,6 +86,7 @@ MAIN_FILES = \
 	main/ffvertex_prog.h \
 	main/fog.c \
 	main/fog.h \
+	main/format_info.h \
 	main/format_pack.h \
 	main/format_pack.c \
 	main/format_unpack.h \
@@ -100,6 +101,7 @@ MAIN_FILES = \
 	main/framebuffer.h \
 	main/get.c \
 	main/get.h \
+	main/get_hash.h \
 	main/genmipmap.c \
 	main/genmipmap.h \
 	main/getstring.c \
@@ -518,6 +520,10 @@ PROGRAM_FILES = \
 	program/symbol_table.c \
 	program/symbol_table.h
 
+PROGRAM_NIR_FILES = \
+	program/prog_to_nir.c \
+	program/prog_to_nir.h
+
 ASM_C_FILES =	\
 	x86/common_x86.c \
 	x86/x86_xform.c \
@@ -606,6 +612,7 @@ INCLUDE_DIRS = \
 	-I$(top_srcdir)/src \
 	-I$(top_srcdir)/src/glsl \
 	-I$(top_builddir)/src/glsl \
+	-I$(top_builddir)/src/glsl/nir \
 	-I$(top_srcdir)/src/glsl/glcpp \
 	-I$(top_srcdir)/src/mesa \
 	-I$(top_builddir)/src/mesa \

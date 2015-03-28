@@ -249,21 +249,21 @@ validate_reg(const struct brw_context *brw, brw_inst *inst, struct brw_reg reg)
        reg.file == BRW_ARF_NULL)
       return;
 
-   assert(reg.hstride >= 0 && reg.hstride < Elements(hstride_for_reg));
+   assert(reg.hstride >= 0 && reg.hstride < ARRAY_SIZE(hstride_for_reg));
    hstride = hstride_for_reg[reg.hstride];
 
    if (reg.vstride == 0xf) {
       vstride = -1;
    } else {
-      assert(reg.vstride >= 0 && reg.vstride < Elements(vstride_for_reg));
+      assert(reg.vstride >= 0 && reg.vstride < ARRAY_SIZE(vstride_for_reg));
       vstride = vstride_for_reg[reg.vstride];
    }
 
-   assert(reg.width >= 0 && reg.width < Elements(width_for_reg));
+   assert(reg.width >= 0 && reg.width < ARRAY_SIZE(width_for_reg));
    width = width_for_reg[reg.width];
 
    assert(brw_inst_exec_size(brw, inst) >= 0 &&
-          brw_inst_exec_size(brw, inst) < Elements(execsize_for_reg));
+          brw_inst_exec_size(brw, inst) < ARRAY_SIZE(execsize_for_reg));
    execsize = execsize_for_reg[brw_inst_exec_size(brw, inst)];
 
    /* Restrictions from 3.3.10: Register Region Restrictions. */
@@ -770,21 +770,6 @@ brw_set_sampler_message(struct brw_compile *p,
    } else if (brw->gen == 4 && !brw->is_g4x) {
       brw_inst_set_sampler_return_format(brw, inst, return_format);
    }
-}
-
-void brw_set_indirect_send_descriptor(struct brw_compile *p,
-                                      brw_inst *insn,
-                                      unsigned sfid,
-                                      struct brw_reg descriptor)
-{
-   /* Only a0.0 may be used as SEND's descriptor operand. */
-   assert(descriptor.file == BRW_ARCHITECTURE_REGISTER_FILE);
-   assert(descriptor.type == BRW_REGISTER_TYPE_UD);
-   assert(descriptor.nr == BRW_ARF_ADDRESS);
-   assert(descriptor.subnr == 0);
-
-   brw_set_message_descriptor(p, insn, sfid, 0, 0, false, false);
-   brw_set_src1(p, insn, descriptor);
 }
 
 static void
@@ -1332,7 +1317,7 @@ brw_IF(struct brw_compile *p, unsigned execute_size)
    } else if (brw->gen == 7) {
       brw_set_dest(p, insn, vec1(retype(brw_null_reg(), BRW_REGISTER_TYPE_D)));
       brw_set_src0(p, insn, vec1(retype(brw_null_reg(), BRW_REGISTER_TYPE_D)));
-      brw_set_src1(p, insn, brw_imm_ud(0));
+      brw_set_src1(p, insn, brw_imm_w(0));
       brw_inst_set_jip(brw, insn, 0);
       brw_inst_set_uip(brw, insn, 0);
    } else {
@@ -1533,7 +1518,7 @@ brw_ELSE(struct brw_compile *p)
    } else if (brw->gen == 7) {
       brw_set_dest(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
       brw_set_src0(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
-      brw_set_src1(p, insn, brw_imm_ud(0));
+      brw_set_src1(p, insn, brw_imm_w(0));
       brw_inst_set_jip(brw, insn, 0);
       brw_inst_set_uip(brw, insn, 0);
    } else {
@@ -1610,7 +1595,7 @@ brw_ENDIF(struct brw_compile *p)
    } else if (brw->gen == 7) {
       brw_set_dest(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
       brw_set_src0(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
-      brw_set_src1(p, insn, brw_imm_ud(0));
+      brw_set_src1(p, insn, brw_imm_w(0));
    } else {
       brw_set_src0(p, insn, brw_imm_d(0));
    }
@@ -1802,7 +1787,7 @@ brw_WHILE(struct brw_compile *p)
       } else if (brw->gen == 7) {
          brw_set_dest(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
          brw_set_src0(p, insn, retype(brw_null_reg(), BRW_REGISTER_TYPE_D));
-         brw_set_src1(p, insn, brw_imm_ud(0));
+         brw_set_src1(p, insn, brw_imm_w(0));
          brw_inst_set_jip(brw, insn, br * (do_insn - insn));
       } else {
          brw_set_dest(p, insn, brw_imm_w(0));
@@ -2292,6 +2277,7 @@ void brw_fb_WRITE(struct brw_compile *p,
                   unsigned msg_length,
                   unsigned response_length,
                   bool eot,
+                  bool last_render_target,
                   bool header_present)
 {
    struct brw_context *brw = p->brw;
@@ -2333,7 +2319,7 @@ void brw_fb_WRITE(struct brw_compile *p,
 			    msg_type,
 			    msg_length,
 			    header_present,
-			    eot, /* last render target write */
+			    last_render_target,
 			    response_length,
 			    eot,
 			    0 /* send_commit_msg */);
@@ -2493,6 +2479,49 @@ void brw_urb_WRITE(struct brw_compile *p,
 		       response_length,
 		       offset,
 		       swizzle);
+}
+
+struct brw_inst *
+brw_send_indirect_message(struct brw_compile *p,
+                          unsigned sfid,
+                          struct brw_reg dst,
+                          struct brw_reg payload,
+                          struct brw_reg desc)
+{
+   const struct brw_context *brw = p->brw;
+   struct brw_inst *send, *setup;
+
+   assert(desc.type == BRW_REGISTER_TYPE_UD);
+
+   if (desc.file == BRW_IMMEDIATE_VALUE) {
+      setup = send = next_insn(p, BRW_OPCODE_SEND);
+      brw_set_src1(p, send, desc);
+
+   } else {
+      struct brw_reg addr = retype(brw_address_reg(0), BRW_REGISTER_TYPE_UD);
+
+      brw_push_insn_state(p);
+      brw_set_default_access_mode(p, BRW_ALIGN_1);
+      brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+      brw_set_default_predicate_control(p, BRW_PREDICATE_NONE);
+
+      /* Load the indirect descriptor to an address register using OR so the
+       * caller can specify additional descriptor bits with the usual
+       * brw_set_*_message() helper functions.
+       */
+      setup = brw_OR(p, addr, desc, brw_imm_ud(0));
+
+      brw_pop_insn_state(p);
+
+      send = next_insn(p, BRW_OPCODE_SEND);
+      brw_set_src1(p, send, addr);
+   }
+
+   brw_set_dest(p, send, dst);
+   brw_set_src0(p, send, retype(payload, BRW_REGISTER_TYPE_UD));
+   brw_inst_set_sfid(brw, send, sfid);
+
+   return setup;
 }
 
 static int
@@ -2700,6 +2729,20 @@ brw_svb_write(struct brw_compile *p,
                             send_commit_msg); /* send_commit_msg */
 }
 
+static unsigned
+brw_surface_payload_size(struct brw_compile *p,
+                         unsigned num_channels,
+                         bool has_simd4x2,
+                         bool has_simd16)
+{
+   if (has_simd4x2 && brw_inst_access_mode(p->brw, p->current) == BRW_ALIGN_16)
+      return 1;
+   else if (has_simd16 && p->compressed)
+      return 2 * num_channels;
+   else
+      return num_channels;
+}
+
 static void
 brw_set_dp_untyped_atomic_message(struct brw_compile *p,
                                   brw_inst *insn,
@@ -2753,16 +2796,28 @@ brw_untyped_atomic(struct brw_compile *p,
                    unsigned atomic_op,
                    unsigned bind_table_index,
                    unsigned msg_length,
-                   unsigned response_length) {
+                   bool response_expected)
+{
    const struct brw_context *brw = p->brw;
+   const bool align1 = brw_inst_access_mode(brw, p->current) == BRW_ALIGN_1;
+   /* Mask out unused components -- This is especially important in Align16
+    * mode on generations that don't have native support for SIMD4x2 atomics,
+    * because unused but enabled components will cause the dataport to perform
+    * additional atomic operations on the addresses that happen to be in the
+    * uninitialized Y, Z and W coordinates of the payload.
+    */
+   const unsigned mask = align1 ? WRITEMASK_XYZW : WRITEMASK_X;
    brw_inst *insn = brw_next_insn(p, BRW_OPCODE_SEND);
 
-   brw_set_dest(p, insn, retype(dest, BRW_REGISTER_TYPE_UD));
+   brw_set_dest(p, insn, retype(brw_writemask(dest, mask),
+                                BRW_REGISTER_TYPE_UD));
    brw_set_src0(p, insn, retype(payload, BRW_REGISTER_TYPE_UD));
    brw_set_src1(p, insn, brw_imm_d(0));
    brw_set_dp_untyped_atomic_message(
-      p, insn, atomic_op, bind_table_index, msg_length, response_length,
-      brw_inst_access_mode(brw, insn) == BRW_ALIGN_1);
+      p, insn, atomic_op, bind_table_index, msg_length,
+      brw_surface_payload_size(p, response_expected,
+                               brw->gen >= 8 || brw->is_haswell, true),
+      align1);
 }
 
 static void
@@ -2771,12 +2826,12 @@ brw_set_dp_untyped_surface_read_message(struct brw_compile *p,
                                         unsigned bind_table_index,
                                         unsigned msg_length,
                                         unsigned response_length,
+                                        unsigned num_channels,
                                         bool header_present)
 {
    const struct brw_context *brw = p->brw;
    const unsigned dispatch_width =
       (brw_inst_exec_size(brw, insn) == BRW_EXECUTE_16 ? 16 : 8);
-   const unsigned num_channels = response_length / (dispatch_width / 8);
 
    if (brw->gen >= 8 || brw->is_haswell) {
       brw_set_message_descriptor(p, insn, HSW_SFID_DATAPORT_DATA_CACHE_1,
@@ -2814,7 +2869,7 @@ brw_untyped_surface_read(struct brw_compile *p,
                          struct brw_reg mrf,
                          unsigned bind_table_index,
                          unsigned msg_length,
-                         unsigned response_length)
+                         unsigned num_channels)
 {
    const struct brw_context *brw = p->brw;
    brw_inst *insn = next_insn(p, BRW_OPCODE_SEND);
@@ -2822,8 +2877,9 @@ brw_untyped_surface_read(struct brw_compile *p,
    brw_set_dest(p, insn, retype(dest, BRW_REGISTER_TYPE_UD));
    brw_set_src0(p, insn, retype(mrf, BRW_REGISTER_TYPE_UD));
    brw_set_dp_untyped_surface_read_message(
-      p, insn, bind_table_index, msg_length, response_length,
-      brw_inst_access_mode(brw, insn) == BRW_ALIGN_1);
+      p, insn, bind_table_index, msg_length,
+      brw_surface_payload_size(p, num_channels, true, true),
+      num_channels, brw_inst_access_mode(brw, insn) == BRW_ALIGN_1);
 }
 
 void

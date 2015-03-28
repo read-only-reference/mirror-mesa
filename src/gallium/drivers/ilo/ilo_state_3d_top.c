@@ -462,8 +462,6 @@ view_init_null_gen6(const struct ilo_dev_info *dev,
 
    dw[4] = 0;
    dw[5] = 0;
-
-   surf->bo = NULL;
 }
 
 static void
@@ -555,9 +553,6 @@ view_init_for_buffer_gen6(const struct ilo_dev_info *dev,
 
    dw[4] = 0;
    dw[5] = 0;
-
-   /* do not increment reference count */
-   surf->bo = buf->bo;
 }
 
 static void
@@ -678,7 +673,7 @@ view_init_for_texture_gen6(const struct ilo_dev_info *dev,
     *
     *     "For linear surfaces, this field (X Offset) must be zero"
     */
-   if (tex->layout.tiling == INTEL_TILING_NONE) {
+   if (tex->layout.tiling == GEN6_TILING_NONE) {
       if (is_rt) {
          const int elem_size = util_format_get_blocksize(format);
          assert(pitch % elem_size == 0);
@@ -706,9 +701,10 @@ view_init_for_texture_gen6(const struct ilo_dev_info *dev,
            (width - 1) << GEN6_SURFACE_DW2_WIDTH__SHIFT |
            lod << GEN6_SURFACE_DW2_MIP_COUNT_LOD__SHIFT;
 
+   assert(tex->layout.tiling != GEN8_TILING_W);
    dw[3] = (depth - 1) << GEN6_SURFACE_DW3_DEPTH__SHIFT |
            (pitch - 1) << GEN6_SURFACE_DW3_PITCH__SHIFT |
-           ilo_gpe_gen6_translate_winsys_tiling(tex->layout.tiling);
+           tex->layout.tiling;
 
    dw[4] = first_level << GEN6_SURFACE_DW4_MIN_LOD__SHIFT |
            first_layer << 17 |
@@ -721,9 +717,6 @@ view_init_for_texture_gen6(const struct ilo_dev_info *dev,
    assert(tex->layout.align_j == 2 || tex->layout.align_j == 4);
    if (tex->layout.align_j == 4)
       dw[5] |= GEN6_SURFACE_DW5_VALIGN_4;
-
-   /* do not increment reference count */
-   surf->bo = tex->bo;
 }
 
 static void
@@ -795,8 +788,6 @@ view_init_null_gen7(const struct ilo_dev_info *dev,
 
    if (ilo_dev_gen(dev) >= ILO_GEN(8))
       memset(&dw[8], 0, sizeof(*dw) * (13 - 8));
-
-   surf->bo = NULL;
 }
 
 static void
@@ -924,9 +915,6 @@ view_init_for_buffer_gen7(const struct ilo_dev_info *dev,
                GEN_SHIFT32(GEN75_SCS_BLUE,  GEN75_SURFACE_DW7_SCS_B) |
                GEN_SHIFT32(GEN75_SCS_ALPHA, GEN75_SURFACE_DW7_SCS_A);
    }
-
-   /* do not increment reference count */
-   surf->bo = buf->bo;
 }
 
 static void
@@ -1042,7 +1030,7 @@ view_init_for_texture_gen7(const struct ilo_dev_info *dev,
     *
     *     "For linear surfaces, this field (X Offset) must be zero."
     */
-   if (tex->layout.tiling == INTEL_TILING_NONE) {
+   if (tex->layout.tiling == GEN6_TILING_NONE) {
       if (is_rt) {
          const int elem_size = util_format_get_blocksize(format);
          assert(pitch % elem_size == 0);
@@ -1104,8 +1092,7 @@ view_init_for_texture_gen7(const struct ilo_dev_info *dev,
          break;
       }
 
-      dw[0] |= ilo_gpe_gen6_translate_winsys_tiling(tex->layout.tiling) <<
-         GEN8_SURFACE_DW0_TILING__SHIFT;
+      dw[0] |= tex->layout.tiling << GEN8_SURFACE_DW0_TILING__SHIFT;
    } else {
       assert(tex->layout.align_i == 4 || tex->layout.align_i == 8);
       assert(tex->layout.align_j == 2 || tex->layout.align_j == 4);
@@ -1116,8 +1103,8 @@ view_init_for_texture_gen7(const struct ilo_dev_info *dev,
       if (tex->layout.align_i == 8)
          dw[0] |= GEN7_SURFACE_DW0_HALIGN_8;
 
-      dw[0] |= ilo_gpe_gen6_translate_winsys_tiling(tex->layout.tiling) <<
-         GEN7_SURFACE_DW0_TILING__SHIFT;
+      assert(tex->layout.tiling != GEN8_TILING_W);
+      dw[0] |= tex->layout.tiling << GEN7_SURFACE_DW0_TILING__SHIFT;
 
       if (tex->layout.walk == ILO_LAYOUT_WALK_LOD)
          dw[0] |= GEN7_SURFACE_DW0_ARYSPC_LOD0;
@@ -1195,9 +1182,6 @@ view_init_for_texture_gen7(const struct ilo_dev_info *dev,
 
    if (ilo_dev_gen(dev) >= ILO_GEN(8))
       memset(&dw[8], 0, sizeof(*dw) * (13 - 8));
-
-   /* do not increment reference count */
-   surf->bo = tex->bo;
 }
 
 void
@@ -1213,6 +1197,9 @@ ilo_gpe_init_view_surface_null(const struct ilo_dev_info *dev,
       view_init_null_gen6(dev,
             width, height, depth, level, surf);
    }
+
+   surf->bo = NULL;
+   surf->scanout = false;
 }
 
 void
@@ -1231,6 +1218,10 @@ ilo_gpe_init_view_surface_for_buffer(const struct ilo_dev_info *dev,
       view_init_for_buffer_gen6(dev, buf, offset, size,
             struct_size, elem_format, is_rt, render_cache_rw, surf);
    }
+
+   /* do not increment reference count */
+   surf->bo = buf->bo;
+   surf->scanout = false;
 }
 
 void
@@ -1253,6 +1244,13 @@ ilo_gpe_init_view_surface_for_texture(const struct ilo_dev_info *dev,
             first_level, num_levels, first_layer, num_layers,
             is_rt, surf);
    }
+
+   /* do not increment reference count */
+   surf->bo = tex->bo;
+
+   /* assume imported RTs are scanouts */
+   surf->scanout = ((tex->base.bind & PIPE_BIND_SCANOUT) ||
+         (tex->imported && (tex->base.bind &  PIPE_BIND_RENDER_TARGET)));
 }
 
 static void

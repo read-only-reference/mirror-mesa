@@ -375,6 +375,7 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_DOUBLES:
       case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
       case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+      case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
          return 0;
       }
       /* If we get here, we failed to handle a cap above */
@@ -431,6 +432,7 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_DOUBLES:
       case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
       case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+      case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
          return 0;
       }
       /* If we get here, we failed to handle a cap above */
@@ -633,6 +635,7 @@ svga_screen_create(struct svga_winsys_screen *sws)
    screen->destroy = svga_destroy_screen;
    screen->get_name = svga_get_name;
    screen->get_vendor = svga_get_vendor;
+   screen->get_device_vendor = svga_get_vendor; // TODO actual device vendor
    screen->get_param = svga_get_param;
    screen->get_shader_param = svga_get_shader_param;
    screen->get_paramf = svga_get_paramf;

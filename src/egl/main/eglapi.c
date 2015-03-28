@@ -86,6 +86,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "c99_compat.h"
+#include "c11/threads.h"
+#include "eglcompiler.h"
 
 #include "eglglobals.h"
 #include "eglcontext.h"
@@ -99,6 +102,7 @@
 #include "eglmode.h"
 #include "eglimage.h"
 #include "eglsync.h"
+#include "eglstring.h"
 
 
 /**
@@ -112,7 +116,7 @@
          _eglUnlockDisplay(disp);               \
       /* EGL error codes are non-zero */        \
       if (err)                                  \
-         _eglError(err, __FUNCTION__);          \
+         _eglError(err, __func__);              \
       return ret;                               \
    } while (0)
 
@@ -130,14 +134,14 @@
 
 #define _EGL_CHECK_DISPLAY(disp, ret, drv)         \
    do {                                            \
-      drv = _eglCheckDisplay(disp, __FUNCTION__);  \
+      drv = _eglCheckDisplay(disp, __func__);      \
       if (!drv)                                    \
          RETURN_EGL_ERROR(disp, 0, ret);           \
    } while (0)
 
 #define _EGL_CHECK_OBJECT(disp, type, obj, ret, drv)      \
    do {                                                   \
-      drv = _eglCheck ## type(disp, obj, __FUNCTION__);   \
+      drv = _eglCheck ## type(disp, obj, __func__);       \
       if (!drv)                                           \
          RETURN_EGL_ERROR(disp, 0, ret);                  \
    } while (0)
@@ -161,7 +165,7 @@
    _EGL_CHECK_OBJECT(disp, Sync, s, ret, drv)
 
 
-static INLINE _EGLDriver *
+static inline _EGLDriver *
 _eglCheckDisplay(_EGLDisplay *disp, const char *msg)
 {
    if (!disp) {
@@ -176,7 +180,7 @@ _eglCheckDisplay(_EGLDisplay *disp, const char *msg)
 }
 
 
-static INLINE _EGLDriver *
+static inline _EGLDriver *
 _eglCheckSurface(_EGLDisplay *disp, _EGLSurface *surf, const char *msg)
 {
    _EGLDriver *drv = _eglCheckDisplay(disp, msg);
@@ -190,7 +194,7 @@ _eglCheckSurface(_EGLDisplay *disp, _EGLSurface *surf, const char *msg)
 }
 
 
-static INLINE _EGLDriver *
+static inline _EGLDriver *
 _eglCheckContext(_EGLDisplay *disp, _EGLContext *context, const char *msg)
 {
    _EGLDriver *drv = _eglCheckDisplay(disp, msg);
@@ -204,7 +208,7 @@ _eglCheckContext(_EGLDisplay *disp, _EGLContext *context, const char *msg)
 }
 
 
-static INLINE _EGLDriver *
+static inline _EGLDriver *
 _eglCheckConfig(_EGLDisplay *disp, _EGLConfig *conf, const char *msg)
 {
    _EGLDriver *drv = _eglCheckDisplay(disp, msg);
@@ -218,7 +222,7 @@ _eglCheckConfig(_EGLDisplay *disp, _EGLConfig *conf, const char *msg)
 }
 
 
-static INLINE _EGLDriver *
+static inline _EGLDriver *
 _eglCheckSync(_EGLDisplay *disp, _EGLSync *s, const char *msg)
 {
    _EGLDriver *drv = _eglCheckDisplay(disp, msg);
@@ -235,7 +239,7 @@ _eglCheckSync(_EGLDisplay *disp, _EGLSync *s, const char *msg)
 #ifdef EGL_MESA_screen_surface
 
 
-static INLINE _EGLDriver *
+static inline _EGLDriver *
 _eglCheckScreen(_EGLDisplay *disp, _EGLScreen *scrn, const char *msg)
 {
    _EGLDriver *drv = _eglCheckDisplay(disp, msg);
@@ -249,7 +253,7 @@ _eglCheckScreen(_EGLDisplay *disp, _EGLScreen *scrn, const char *msg)
 }
 
 
-static INLINE _EGLDriver *
+static inline _EGLDriver *
 _eglCheckMode(_EGLDisplay *disp, _EGLMode *m, const char *msg)
 {
    _EGLDriver *drv = _eglCheckDisplay(disp, msg);
@@ -269,12 +273,12 @@ _eglCheckMode(_EGLDisplay *disp, _EGLMode *m, const char *msg)
 /**
  * Lookup and lock a display.
  */
-static INLINE _EGLDisplay *
+static inline _EGLDisplay *
 _eglLockDisplay(EGLDisplay display)
 {
    _EGLDisplay *dpy = _eglLookupDisplay(display);
    if (dpy)
-      _eglLockMutex(&dpy->Mutex);
+      mtx_lock(&dpy->Mutex);
    return dpy;
 }
 
@@ -282,10 +286,10 @@ _eglLockDisplay(EGLDisplay display)
 /**
  * Unlock a display.
  */
-static INLINE void
+static inline void
 _eglUnlockDisplay(_EGLDisplay *dpy)
 {
-   _eglUnlockMutex(&dpy->Mutex);
+   mtx_unlock(&dpy->Mutex);
 }
 
 
@@ -340,6 +344,111 @@ eglGetPlatformDisplayEXT(EGLenum platform, void *native_display,
 }
 
 /**
+ * Copy the extension into the string and update the string pointer.
+ */
+static EGLint
+_eglAppendExtension(char **str, const char *ext)
+{
+   char *s = *str;
+   size_t len = strlen(ext);
+
+   if (s) {
+      memcpy(s, ext, len);
+      s[len++] = ' ';
+      s[len] = '\0';
+
+      *str += len;
+   }
+   else {
+      len++;
+   }
+
+   return (EGLint) len;
+}
+
+/**
+ * Examine the individual extension enable/disable flags and recompute
+ * the driver's Extensions string.
+ */
+static void
+_eglCreateExtensionsString(_EGLDisplay *dpy)
+{
+#define _EGL_CHECK_EXTENSION(ext)                                          \
+   do {                                                                    \
+      if (dpy->Extensions.ext) {                                           \
+         _eglAppendExtension(&exts, "EGL_" #ext);                          \
+         assert(exts <= dpy->ExtensionsString + _EGL_MAX_EXTENSIONS_LEN);  \
+      }                                                                    \
+   } while (0)
+
+   char *exts = dpy->ExtensionsString;
+
+   _EGL_CHECK_EXTENSION(MESA_screen_surface);
+   _EGL_CHECK_EXTENSION(MESA_copy_context);
+   _EGL_CHECK_EXTENSION(MESA_drm_display);
+   _EGL_CHECK_EXTENSION(MESA_drm_image);
+   _EGL_CHECK_EXTENSION(MESA_configless_context);
+
+   _EGL_CHECK_EXTENSION(WL_bind_wayland_display);
+   _EGL_CHECK_EXTENSION(WL_create_wayland_buffer_from_image);
+
+   _EGL_CHECK_EXTENSION(KHR_image_base);
+   _EGL_CHECK_EXTENSION(KHR_image_pixmap);
+   if (dpy->Extensions.KHR_image_base && dpy->Extensions.KHR_image_pixmap)
+      _eglAppendExtension(&exts, "EGL_KHR_image");
+
+   _EGL_CHECK_EXTENSION(KHR_vg_parent_image);
+   _EGL_CHECK_EXTENSION(KHR_get_all_proc_addresses);
+   _EGL_CHECK_EXTENSION(KHR_gl_texture_2D_image);
+   _EGL_CHECK_EXTENSION(KHR_gl_texture_cubemap_image);
+   _EGL_CHECK_EXTENSION(KHR_gl_texture_3D_image);
+   _EGL_CHECK_EXTENSION(KHR_gl_renderbuffer_image);
+
+   _EGL_CHECK_EXTENSION(KHR_reusable_sync);
+   _EGL_CHECK_EXTENSION(KHR_fence_sync);
+
+   _EGL_CHECK_EXTENSION(KHR_surfaceless_context);
+   _EGL_CHECK_EXTENSION(KHR_create_context);
+
+   _EGL_CHECK_EXTENSION(NOK_swap_region);
+   _EGL_CHECK_EXTENSION(NOK_texture_from_pixmap);
+
+   _EGL_CHECK_EXTENSION(ANDROID_image_native_buffer);
+
+   _EGL_CHECK_EXTENSION(CHROMIUM_sync_control);
+
+   _EGL_CHECK_EXTENSION(EXT_create_context_robustness);
+   _EGL_CHECK_EXTENSION(EXT_buffer_age);
+   _EGL_CHECK_EXTENSION(EXT_swap_buffers_with_damage);
+   _EGL_CHECK_EXTENSION(EXT_image_dma_buf_import);
+
+   _EGL_CHECK_EXTENSION(NV_post_sub_buffer);
+#undef _EGL_CHECK_EXTENSION
+}
+
+static void
+_eglCreateAPIsString(_EGLDisplay *dpy)
+{
+   if (dpy->ClientAPIs & EGL_OPENGL_BIT)
+      strcat(dpy->ClientAPIsString, "OpenGL ");
+
+   if (dpy->ClientAPIs & EGL_OPENGL_ES_BIT)
+      strcat(dpy->ClientAPIsString, "OpenGL_ES ");
+
+   if (dpy->ClientAPIs & EGL_OPENGL_ES2_BIT)
+      strcat(dpy->ClientAPIsString, "OpenGL_ES2 ");
+
+   if (dpy->ClientAPIs & EGL_OPENGL_ES3_BIT_KHR)
+      strcat(dpy->ClientAPIsString, "OpenGL_ES3 ");
+
+   if (dpy->ClientAPIs & EGL_OPENVG_BIT)
+      strcat(dpy->ClientAPIsString, "OpenVG ");
+
+   assert(strlen(dpy->ClientAPIsString) < sizeof(dpy->ClientAPIsString));
+}
+
+
+/**
  * This is typically the second EGL function that an application calls.
  * Here we load/initialize the actual hardware driver.
  */
@@ -374,6 +483,12 @@ eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor)
        * EGL_KHR_get_all_proc_addresses also.
        */
       disp->Extensions.KHR_get_all_proc_addresses = EGL_TRUE;
+
+      _eglCreateExtensionsString(disp);
+      _eglCreateAPIsString(disp);
+      _eglsnprintf(disp->VersionString, sizeof(disp->VersionString),
+              "%d.%d (%s)", disp->VersionMajor, disp->VersionMinor,
+              disp->Driver->Name);
    }
 
    /* Update applications version of major and minor if not NULL */
@@ -399,6 +514,7 @@ eglTerminate(EGLDisplay dpy)
 
       drv->API.Terminate(drv, disp);
       /* do not reset disp->Driver */
+      disp->ClientAPIsString[0] = 0;
       disp->Initialized = EGL_FALSE;
    }
 
@@ -411,7 +527,6 @@ eglQueryString(EGLDisplay dpy, EGLint name)
 {
    _EGLDisplay *disp;
    _EGLDriver *drv;
-   const char *ret;
 
    if (dpy == EGL_NO_DISPLAY && name == EGL_EXTENSIONS) {
       RETURN_EGL_SUCCESS(NULL, _eglGlobal.ClientExtensionString);
@@ -419,9 +534,19 @@ eglQueryString(EGLDisplay dpy, EGLint name)
 
    disp = _eglLockDisplay(dpy);
    _EGL_CHECK_DISPLAY(disp, NULL, drv);
-   ret = drv->API.QueryString(drv, disp, name);
 
-   RETURN_EGL_EVAL(disp, ret);
+   switch (name) {
+   case EGL_VENDOR:
+      RETURN_EGL_SUCCESS(disp, _EGL_VENDOR_STRING);
+   case EGL_VERSION:
+      RETURN_EGL_SUCCESS(disp, disp->VersionString);
+   case EGL_EXTENSIONS:
+      RETURN_EGL_SUCCESS(disp, disp->ExtensionsString);
+   case EGL_CLIENT_APIS:
+      RETURN_EGL_SUCCESS(disp, disp->ClientAPIsString);
+   default:
+      RETURN_EGL_ERROR(disp, EGL_BAD_PARAMETER, NULL);
+   }
 }
 
 
@@ -895,7 +1020,7 @@ eglWaitClient(void)
       RETURN_EGL_SUCCESS(NULL, EGL_TRUE);
 
    disp = ctx->Resource.Display;
-   _eglLockMutex(&disp->Mutex);
+   mtx_lock(&disp->Mutex);
 
    /* let bad current context imply bad current surface */
    if (_eglGetContextHandle(ctx) == EGL_NO_CONTEXT ||
@@ -941,7 +1066,7 @@ eglWaitNative(EGLint engine)
       RETURN_EGL_SUCCESS(NULL, EGL_TRUE);
 
    disp = ctx->Resource.Display;
-   _eglLockMutex(&disp->Mutex);
+   mtx_lock(&disp->Mutex);
 
    /* let bad current context imply bad current surface */
    if (_eglGetContextHandle(ctx) == EGL_NO_CONTEXT ||
@@ -1456,10 +1581,10 @@ eglReleaseThread(void)
 
             t->CurrentAPIIndex = i;
 
-            _eglLockMutex(&disp->Mutex);
+            mtx_lock(&disp->Mutex);
             drv = disp->Driver;
             (void) drv->API.MakeCurrent(drv, disp, NULL, NULL, NULL);
-            _eglUnlockMutex(&disp->Mutex);
+            mtx_unlock(&disp->Mutex);
          }
       }
 

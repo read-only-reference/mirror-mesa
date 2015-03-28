@@ -105,14 +105,23 @@ static uint32_t reg(struct ir3_register *reg, struct ir3_info *info,
 	if (reg->flags & IR3_REG_IMMED) {
 		val.iim_val = reg->iim_val;
 	} else {
-		int8_t components = util_last_bit(reg->wrmask);
-		int16_t max = (reg->num + repeat + components - 1) >> 2;
+		unsigned components;
 
-		val.comp = reg->num & 0x3;
-		val.num  = reg->num >> 2;
+		if (reg->flags & IR3_REG_RELATIV) {
+			components = reg->size;
+			val.dummy10 = reg->offset;
+		} else {
+			components = util_last_bit(reg->wrmask);
+			val.comp = reg->num & 0x3;
+			val.num  = reg->num >> 2;
+		}
+
+		int16_t max = (reg->num + repeat + components - 1) >> 2;
 
 		if (reg->flags & IR3_REG_CONST) {
 			info->max_const = MAX2(info->max_const, max);
+		} else if (val.num == 63) {
+			/* ignore writes to dummy register r63.x */
 		} else if ((max != REG_A0) && (max != REG_P0)) {
 			if (reg->flags & IR3_REG_HALF) {
 				info->max_half_reg = MAX2(info->max_half_reg, max);
@@ -164,13 +173,13 @@ static int emit_cat1(struct ir3_instruction *instr, void *ptr,
 		cat1->iim_val = src->iim_val;
 		cat1->src_im  = 1;
 	} else if (src->flags & IR3_REG_RELATIV) {
-		cat1->off       = src->offset;
+		cat1->off       = reg(src, info, instr->repeat,
+				IR3_REG_R | IR3_REG_CONST | IR3_REG_HALF | IR3_REG_RELATIV);
 		cat1->src_rel   = 1;
 		cat1->src_rel_c = !!(src->flags & IR3_REG_CONST);
 	} else {
 		cat1->src  = reg(src, info, instr->repeat,
-				IR3_REG_IMMED | IR3_REG_R |
-				IR3_REG_CONST | IR3_REG_HALF);
+				IR3_REG_R | IR3_REG_CONST | IR3_REG_HALF);
 		cat1->src_c     = !!(src->flags & IR3_REG_CONST);
 	}
 
@@ -474,58 +483,40 @@ static int emit_cat5(struct ir3_instruction *instr, void *ptr,
 static int emit_cat6(struct ir3_instruction *instr, void *ptr,
 		struct ir3_info *info)
 {
-	struct ir3_register *dst = instr->regs[0];
-	struct ir3_register *src = instr->regs[1];
+	struct ir3_register *dst  = instr->regs[0];
+	struct ir3_register *src1 = instr->regs[1];
+	struct ir3_register *src2 = (instr->regs_count >= 3) ? instr->regs[2] : NULL;
 	instr_cat6_t *cat6 = ptr;
 
-	iassert(instr->regs_count == 2);
+	iassert(instr->regs_count >= 2);
 
-	switch (instr->opc) {
-	/* load instructions: */
-	case OPC_LDG:
-	case OPC_LDP:
-	case OPC_LDL:
-	case OPC_LDLW:
-	case OPC_LDLV:
-	case OPC_PREFETCH: {
+	if (instr->cat6.offset) {
 		instr_cat6a_t *cat6a = ptr;
 
-		iassert(!((dst->flags ^ type_flags(instr->cat6.type)) & IR3_REG_HALF));
+		cat6->has_off = true;
 
-		cat6a->must_be_one1  = 1;
-		cat6a->must_be_one2  = 1;
-		cat6a->off = instr->cat6.offset;
-		cat6a->src = reg(src, info, instr->repeat, 0);
 		cat6a->dst = reg(dst, info, instr->repeat, IR3_REG_R | IR3_REG_HALF);
-		break;
-	}
-	/* store instructions: */
-	case OPC_STG:
-	case OPC_STP:
-	case OPC_STL:
-	case OPC_STLW:
-	case OPC_STI: {
+		cat6a->src1 = reg(src1, info, instr->repeat, IR3_REG_IMMED);
+		cat6a->src1_im = !!(src1->flags & IR3_REG_IMMED);
+		if (src2) {
+			cat6a->src2 = reg(src2, info, instr->repeat, IR3_REG_IMMED);
+			cat6a->src2_im = !!(src2->flags & IR3_REG_IMMED);
+		}
+		cat6a->off = instr->cat6.offset;
+	} else {
 		instr_cat6b_t *cat6b = ptr;
-		uint32_t src_flags = type_flags(instr->cat6.type);
-		uint32_t dst_flags = (instr->opc == OPC_STI) ? IR3_REG_HALF : 0;
 
-		iassert(!((src->flags ^ src_flags) & IR3_REG_HALF));
+		cat6->has_off = false;
 
-		cat6b->must_be_one1  = 1;
-		cat6b->must_be_one2  = 1;
-		cat6b->src    = reg(src, info, instr->repeat, src_flags);
-		cat6b->off_hi = instr->cat6.offset >> 8;
-		cat6b->off    = instr->cat6.offset;
-		cat6b->dst    = reg(dst, info, instr->repeat, IR3_REG_R | dst_flags);
-
-		break;
-	}
-	default:
-		// TODO
-		break;
+		cat6b->dst = reg(dst, info, instr->repeat, IR3_REG_R | IR3_REG_HALF);
+		cat6b->src1 = reg(src1, info, instr->repeat, IR3_REG_IMMED);
+		cat6b->src1_im = !!(src1->flags & IR3_REG_IMMED);
+		if (src2) {
+			cat6b->src2 = reg(src2, info, instr->repeat, IR3_REG_IMMED);
+			cat6b->src2_im = !!(src2->flags & IR3_REG_IMMED);
+		}
 	}
 
-	cat6->iim_val  = instr->cat6.iim_val;
 	cat6->type     = instr->cat6.type;
 	cat6->opc      = instr->opc;
 	cat6->jmp_tgt  = !!(instr->flags & IR3_INSTR_JP);
@@ -597,21 +588,10 @@ static void insert_instr(struct ir3 *shader,
 	static uint32_t serialno = 0;
 	instr->serialno = ++serialno;
 #endif
-	if (shader->instrs_count == shader->instrs_sz) {
-		shader->instrs_sz = MAX2(2 * shader->instrs_sz, 16);
-		shader->instrs = realloc(shader->instrs,
-				shader->instrs_sz * sizeof(shader->instrs[0]));
-	}
-	shader->instrs[shader->instrs_count++] = instr;
+	array_insert(shader->instrs, instr);
 
-	if (is_input(instr)) {
-		if (shader->baryfs_count == shader->baryfs_sz) {
-			shader->baryfs_sz = MAX2(2 * shader->baryfs_sz, 16);
-			shader->baryfs = realloc(shader->baryfs,
-					shader->baryfs_sz * sizeof(shader->baryfs[0]));
-		}
-		shader->baryfs[shader->baryfs_count++] = instr;
-	}
+	if (is_input(instr))
+		array_insert(shader->baryfs, instr);
 }
 
 struct ir3_block * ir3_block_create(struct ir3 *shader,

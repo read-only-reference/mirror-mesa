@@ -27,8 +27,6 @@
  * makes it easier to do backend-specific optimizations than doing so
  * in the GLSL IR or in the native code.
  */
-extern "C" {
-
 #include <sys/types.h>
 
 #include "main/macros.h"
@@ -41,7 +39,6 @@ extern "C" {
 #include "brw_context.h"
 #include "brw_eu.h"
 #include "brw_wm.h"
-}
 #include "brw_vec4.h"
 #include "brw_fs.h"
 #include "main/uniforms.h"
@@ -291,7 +288,7 @@ fs_visitor::visit(ir_dereference_array *ir)
    this->result = src;
 }
 
-void
+fs_inst *
 fs_visitor::emit_lrp(const fs_reg &dst, const fs_reg &x, const fs_reg &y,
                      const fs_reg &a)
 {
@@ -308,12 +305,12 @@ fs_visitor::emit_lrp(const fs_reg &dst, const fs_reg &x, const fs_reg &y,
       emit(ADD(one_minus_a, negative_a, fs_reg(1.0f)));
       emit(MUL(x_times_one_minus_a, x, one_minus_a));
 
-      emit(ADD(dst, x_times_one_minus_a, y_times_a));
+      return emit(ADD(dst, x_times_one_minus_a, y_times_a));
    } else {
       /* The LRP instruction actually does op1 * op0 + op2 * (1 - op0), so
        * we need to reorder the operands.
        */
-      emit(LRP(dst, a, y, x));
+      return emit(LRP(dst, a, y, x));
    }
 }
 
@@ -474,6 +471,87 @@ fs_visitor::try_emit_mad(ir_expression *ir)
 
    this->result = vgrf(ir->type);
    emit(BRW_OPCODE_MAD, this->result, src0, src1, src2);
+
+   return true;
+}
+
+bool
+fs_visitor::try_emit_b2f_of_comparison(ir_expression *ir)
+{
+   /* On platforms that do not natively generate 0u and ~0u for Boolean
+    * results, b2f expressions that look like
+    *
+    *     f = b2f(expr cmp 0)
+    *
+    * will generate better code by pretending the expression is
+    *
+    *     f = ir_triop_csel(0.0, 1.0, expr cmp 0)
+    *
+    * This is because the last instruction of "expr" can generate the
+    * condition code for the "cmp 0".  This avoids having to do the "-(b & 1)"
+    * trick to generate 0u or ~0u for the Boolean result.  This means code like
+    *
+    *     mov(16)         g16<1>F         1F
+    *     mul.ge.f0(16)   null            g6<8,8,1>F      g14<8,8,1>F
+    *     (+f0) sel(16)   m6<1>F          g16<8,8,1>F     0F
+    *
+    * will be generated instead of
+    *
+    *     mul(16)         g2<1>F          g12<8,8,1>F     g4<8,8,1>F
+    *     cmp.ge.f0(16)   g2<1>D          g4<8,8,1>F      0F
+    *     and(16)         g4<1>D          g2<8,8,1>D      1D
+    *     and(16)         m6<1>D          -g4<8,8,1>D     0x3f800000UD
+    *
+    * When the comparison is either == 0.0 or != 0.0 using the knowledge that
+    * the true (or false) case already results in zero would allow better code
+    * generation by possibly avoiding a load-immediate instruction.
+    */
+   ir_expression *cmp = ir->operands[0]->as_expression();
+   if (cmp == NULL)
+      return false;
+
+   if (cmp->operation == ir_binop_equal || cmp->operation == ir_binop_nequal) {
+      for (unsigned i = 0; i < 2; i++) {
+         ir_constant *c = cmp->operands[i]->as_constant();
+         if (c == NULL || !c->is_zero())
+            continue;
+
+         ir_expression *expr = cmp->operands[i ^ 1]->as_expression();
+         if (expr != NULL) {
+            fs_reg op[2];
+
+            for (unsigned j = 0; j < 2; j++) {
+               cmp->operands[j]->accept(this);
+               op[j] = this->result;
+
+               resolve_ud_negate(&op[j]);
+            }
+
+            emit_bool_to_cond_code_of_reg(cmp, op);
+
+            /* In this case we know when the condition is true, op[i ^ 1]
+             * contains zero.  Invert the predicate, use op[i ^ 1] as src0,
+             * and immediate 1.0f as src1.
+             */
+            this->result = vgrf(ir->type);
+            op[i ^ 1].type = BRW_REGISTER_TYPE_F;
+
+            fs_inst *inst = emit(SEL(this->result, op[i ^ 1], fs_reg(1.0f)));
+            inst->predicate = BRW_PREDICATE_NORMAL;
+            inst->predicate_inverse = cmp->operation == ir_binop_equal;
+            return true;
+         }
+      }
+   }
+
+   emit_bool_to_cond_code(cmp);
+
+   fs_reg temp = vgrf(ir->type);
+   emit(MOV(temp, fs_reg(1.0f)));
+
+   this->result = vgrf(ir->type);
+   fs_inst *inst = emit(SEL(this->result, temp, fs_reg(0.0f)));
+   inst->predicate = BRW_PREDICATE_NORMAL;
 
    return true;
 }
@@ -641,6 +719,11 @@ fs_visitor::visit(ir_expression *ir)
       inst = emit(SEL(this->result, op[1], op[2]));
       inst->predicate = BRW_PREDICATE_NORMAL;
       return;
+
+   case ir_unop_b2f:
+      if (brw->gen <= 5 && try_emit_b2f_of_comparison(ir))
+         return;
+      break;
 
    case ir_unop_interpolate_at_centroid:
    case ir_binop_interpolate_at_offset:
@@ -1863,19 +1946,6 @@ fs_visitor::emit_texture_gen7(ir_texture_opcode op, fs_reg dst,
    return inst;
 }
 
-static struct brw_sampler_prog_key_data *
-get_tex(gl_shader_stage stage, const void *key)
-{
-   switch (stage) {
-   case MESA_SHADER_FRAGMENT:
-      return &((brw_wm_prog_key*) key)->tex;
-   case MESA_SHADER_VERTEX:
-      return &((brw_vue_prog_key*) key)->tex;
-   default:
-      unreachable("unhandled shader stage");
-   }
-}
-
 fs_reg
 fs_visitor::rescale_texcoord(fs_reg coordinate, int coord_components,
                              bool is_rect, uint32_t sampler, int texunit)
@@ -1883,7 +1953,6 @@ fs_visitor::rescale_texcoord(fs_reg coordinate, int coord_components,
    fs_inst *inst = NULL;
    bool needs_gl_clamp = true;
    fs_reg scale_x, scale_y;
-   struct brw_sampler_prog_key_data *tex = get_tex(stage, this->key);
 
    /* The 965 requires the EU to do the normalization of GL rectangle
     * texture coordinates.  We use the program parameter state
@@ -1891,8 +1960,8 @@ fs_visitor::rescale_texcoord(fs_reg coordinate, int coord_components,
     */
    if (is_rect &&
        (brw->gen < 6 ||
-        (brw->gen >= 6 && (tex->gl_clamp_mask[0] & (1 << sampler) ||
-                           tex->gl_clamp_mask[1] & (1 << sampler))))) {
+        (brw->gen >= 6 && (key_tex->gl_clamp_mask[0] & (1 << sampler) ||
+                           key_tex->gl_clamp_mask[1] & (1 << sampler))))) {
       struct gl_program_parameter_list *params = prog->Parameters;
       int tokens[STATE_LENGTH] = {
 	 STATE_INTERNAL,
@@ -1953,7 +2022,7 @@ fs_visitor::rescale_texcoord(fs_reg coordinate, int coord_components,
       needs_gl_clamp = false;
 
       for (int i = 0; i < 2; i++) {
-	 if (tex->gl_clamp_mask[i] & (1 << sampler)) {
+	 if (key_tex->gl_clamp_mask[i] & (1 << sampler)) {
 	    fs_reg chan = coordinate;
 	    chan = offset(chan, i);
 
@@ -1978,7 +2047,7 @@ fs_visitor::rescale_texcoord(fs_reg coordinate, int coord_components,
 
    if (coord_components > 0 && needs_gl_clamp) {
       for (int i = 0; i < MIN2(coord_components, 3); i++) {
-	 if (tex->gl_clamp_mask[i] & (1 << sampler)) {
+	 if (key_tex->gl_clamp_mask[i] & (1 << sampler)) {
 	    fs_reg chan = coordinate;
 	    chan = offset(chan, i);
 
@@ -2028,7 +2097,7 @@ fs_visitor::emit_texture(ir_texture_opcode op,
                          fs_reg shadow_c,
                          fs_reg lod, fs_reg lod2, int grad_components,
                          fs_reg sample_index,
-                         fs_reg offset_value, unsigned offset_components,
+                         fs_reg offset_value,
                          fs_reg mcs,
                          int gather_component,
                          bool is_cube_array,
@@ -2036,14 +2105,13 @@ fs_visitor::emit_texture(ir_texture_opcode op,
                          uint32_t sampler,
                          fs_reg sampler_reg, int texunit)
 {
-   struct brw_sampler_prog_key_data *tex = get_tex(stage, this->key);
    fs_inst *inst = NULL;
 
    if (op == ir_tg4) {
       /* When tg4 is used with the degenerate ZERO/ONE swizzles, don't bother
        * emitting anything other than setting up the constant result.
        */
-      int swiz = GET_SWZ(tex->swizzles[sampler], gather_component);
+      int swiz = GET_SWZ(key_tex->swizzles[sampler], gather_component);
       if (swiz == SWIZZLE_ZERO || swiz == SWIZZLE_ONE) {
 
          fs_reg res = vgrf(glsl_type::vec4_type);
@@ -2097,7 +2165,7 @@ fs_visitor::emit_texture(ir_texture_opcode op,
          gather_channel(gather_component, sampler) << 16; /* M0.2:16-17 */
 
       if (brw->gen == 6)
-         emit_gen6_gather_wa(tex->gen6_gather_wa[sampler], dst);
+         emit_gen6_gather_wa(key_tex->gen6_gather_wa[sampler], dst);
    }
 
    /* fixup #layers for cube map arrays */
@@ -2124,7 +2192,6 @@ fs_visitor::emit_texture(ir_texture_opcode op,
 void
 fs_visitor::visit(ir_texture *ir)
 {
-   const struct brw_sampler_prog_key_data *tex = get_tex(stage, this->key);
    uint32_t sampler =
       _mesa_get_sampler_uniform_value(ir->sampler, shader_prog, prog);
 
@@ -2194,7 +2261,6 @@ fs_visitor::visit(ir_texture *ir)
    }
 
    fs_reg offset_value;
-   int offset_components = 0;
    if (ir->offset) {
       ir_constant *const_offset = ir->offset->as_constant();
       if (const_offset) {
@@ -2209,7 +2275,6 @@ fs_visitor::visit(ir_texture *ir)
          ir->offset->accept(this);
          offset_value = this->result;
       }
-      offset_components = ir->offset->type->vector_elements;
    }
 
    fs_reg lod, lod2, sample_index, mcs;
@@ -2243,11 +2308,13 @@ fs_visitor::visit(ir_texture *ir)
       ir->lod_info.sample_index->accept(this);
       sample_index = this->result;
 
-      if (brw->gen >= 7 && tex->compressed_multisample_layout_mask & (1<<sampler))
+      if (brw->gen >= 7 &&
+          key_tex->compressed_multisample_layout_mask & (1 << sampler)) {
          mcs = emit_mcs_fetch(coordinate, ir->coordinate->type->vector_elements,
                               sampler_reg);
-      else
+      } else {
          mcs = fs_reg(0u);
+      }
       break;
    default:
       unreachable("Unrecognized texture opcode");
@@ -2266,7 +2333,7 @@ fs_visitor::visit(ir_texture *ir)
 
    emit_texture(ir->op, ir->type, coordinate, coord_components,
                 shadow_comparitor, lod, lod2, grad_components,
-                sample_index, offset_value, offset_components, mcs,
+                sample_index, offset_value, mcs,
                 gather_component, is_cube_array, is_rect, sampler,
                 sampler_reg, texunit);
 }
@@ -2307,15 +2374,14 @@ fs_visitor::emit_gen6_gather_wa(uint8_t wa, fs_reg dst)
 uint32_t
 fs_visitor::gather_channel(int orig_chan, uint32_t sampler)
 {
-   struct brw_sampler_prog_key_data *tex = get_tex(stage, this->key);
-   int swiz = GET_SWZ(tex->swizzles[sampler], orig_chan);
+   int swiz = GET_SWZ(key_tex->swizzles[sampler], orig_chan);
    switch (swiz) {
       case SWIZZLE_X: return 0;
       case SWIZZLE_Y:
          /* gather4 sampler is broken for green channel on RG32F --
           * we must ask for blue instead.
           */
-         if (tex->gather_channel_quirk_mask & (1<<sampler))
+         if (key_tex->gather_channel_quirk_mask & (1 << sampler))
             return 2;
          return 1;
       case SWIZZLE_Z: return 2;
@@ -2347,16 +2413,14 @@ fs_visitor::swizzle_result(ir_texture_opcode op, int dest_components,
    if (op == ir_txs || op == ir_lod || op == ir_tg4)
       return;
 
-   struct brw_sampler_prog_key_data *tex = get_tex(stage, this->key);
-
    if (dest_components == 1) {
       /* Ignore DEPTH_TEXTURE_MODE swizzling. */
-   } else if (tex->swizzles[sampler] != SWIZZLE_NOOP) {
+   } else if (key_tex->swizzles[sampler] != SWIZZLE_NOOP) {
       fs_reg swizzled_result = vgrf(glsl_type::vec4_type);
       swizzled_result.type = orig_val.type;
 
       for (int i = 0; i < 4; i++) {
-	 int swiz = GET_SWZ(tex->swizzles[sampler], i);
+	 int swiz = GET_SWZ(key_tex->swizzles[sampler], i);
 	 fs_reg l = swizzled_result;
 	 l = offset(l, i);
 
@@ -2366,7 +2430,7 @@ fs_visitor::swizzle_result(ir_texture_opcode op, int dest_components,
 	    emit(MOV(l, fs_reg(1.0f)));
 	 } else {
             emit(MOV(l, offset(orig_val,
-                               GET_SWZ(tex->swizzles[sampler], i))));
+                               GET_SWZ(key_tex->swizzles[sampler], i))));
 	 }
       }
       this->result = swizzled_result;
@@ -2433,16 +2497,7 @@ fs_visitor::visit(ir_discard *ir)
    cmp->flag_subreg = 1;
 
    if (brw->gen >= 6) {
-      /* For performance, after a discard, jump to the end of the shader.
-       * Only jump if all relevant channels have been discarded.
-       */
-      fs_inst *discard_jump = emit(FS_OPCODE_DISCARD_JUMP);
-      discard_jump->flag_subreg = 1;
-
-      discard_jump->predicate = (dispatch_width == 8)
-                                ? BRW_PREDICATE_ALIGN1_ANY8H
-                                : BRW_PREDICATE_ALIGN1_ANY16H;
-      discard_jump->predicate_inverse = true;
+      emit_discard_jump();
    }
 }
 
@@ -2530,7 +2585,6 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
    }
 
    fs_reg op[3];
-   fs_inst *inst;
 
    assert(expr->get_num_operands() <= 3);
    for (unsigned int i = 0; i < expr->get_num_operands(); i++) {
@@ -2542,6 +2596,14 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
       resolve_ud_negate(&op[i]);
    }
 
+   emit_bool_to_cond_code_of_reg(expr, op);
+}
+
+void
+fs_visitor::emit_bool_to_cond_code_of_reg(ir_expression *expr, fs_reg op[3])
+{
+   fs_inst *inst;
+
    switch (expr->operation) {
    case ir_unop_logic_not:
       inst = emit(AND(reg_null_d, op[0], fs_reg(1)));
@@ -2550,7 +2612,7 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
 
    case ir_binop_logic_xor:
       if (brw->gen <= 5) {
-         fs_reg temp = vgrf(ir->type);
+         fs_reg temp = vgrf(expr->type);
          emit(XOR(temp, op[0], op[1]));
          inst = emit(AND(reg_null_d, temp, fs_reg(1)));
       } else {
@@ -2561,7 +2623,7 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
 
    case ir_binop_logic_or:
       if (brw->gen <= 5) {
-         fs_reg temp = vgrf(ir->type);
+         fs_reg temp = vgrf(expr->type);
          emit(OR(temp, op[0], op[1]));
          inst = emit(AND(reg_null_d, temp, fs_reg(1)));
       } else {
@@ -2572,7 +2634,7 @@ fs_visitor::emit_bool_to_cond_code(ir_rvalue *ir)
 
    case ir_binop_logic_and:
       if (brw->gen <= 5) {
-         fs_reg temp = vgrf(ir->type);
+         fs_reg temp = vgrf(expr->type);
          emit(AND(temp, op[0], op[1]));
          inst = emit(AND(reg_null_d, temp, fs_reg(1)));
       } else {
@@ -2757,11 +2819,11 @@ fs_visitor::try_opt_frontfacing_ternary(ir_if *ir)
    if (!then_rhs || !else_rhs)
       return false;
 
-   if ((then_rhs->is_one() || then_rhs->is_negative_one()) &&
-       (else_rhs->is_one() || else_rhs->is_negative_one())) {
-      assert(then_rhs->is_one() == else_rhs->is_negative_one());
-      assert(else_rhs->is_one() == then_rhs->is_negative_one());
+   if (then_rhs->type->base_type != GLSL_TYPE_FLOAT)
+      return false;
 
+   if ((then_rhs->is_one() && else_rhs->is_negative_one()) ||
+       (else_rhs->is_one() && then_rhs->is_negative_one())) {
       then_assign->lhs->accept(this);
       fs_reg dst = this->result;
       dst.type = BRW_REGISTER_TYPE_D;
@@ -3113,7 +3175,7 @@ fs_visitor::emit_untyped_atomic(unsigned atomic_op, unsigned surf_index,
        */
       assert(stage == MESA_SHADER_VERTEX || stage == MESA_SHADER_COMPUTE);
       emit(MOV(component(sources[0], 7),
-               fs_reg(0xffff)))->force_writemask_all = true;
+               fs_reg(0xffffu)))->force_writemask_all = true;
    }
    length++;
 
@@ -3176,7 +3238,7 @@ fs_visitor::emit_untyped_surface_read(unsigned surf_index, fs_reg dst,
        */
       assert(stage == MESA_SHADER_VERTEX || stage == MESA_SHADER_COMPUTE);
       emit(MOV(component(sources[0], 7),
-               fs_reg(0xffff)))->force_writemask_all = true;
+               fs_reg(0xffffu)))->force_writemask_all = true;
    }
 
    /* Set the surface read offset. */
@@ -3366,7 +3428,8 @@ fs_visitor::emit_interpolation_setup_gen6()
 }
 
 int
-fs_visitor::setup_color_payload(fs_reg *dst, fs_reg color, unsigned components)
+fs_visitor::setup_color_payload(fs_reg *dst, fs_reg color, unsigned components,
+                                bool use_2nd_half)
 {
    brw_wm_prog_key *key = (brw_wm_prog_key*) this->key;
    fs_inst *inst;
@@ -3384,7 +3447,7 @@ fs_visitor::setup_color_payload(fs_reg *dst, fs_reg color, unsigned components)
       colors_enabled = (1 << components) - 1;
    }
 
-   if (dispatch_width == 8 || brw->gen >= 6) {
+   if (dispatch_width == 8 || (brw->gen >= 6 && !do_dual_src)) {
       /* SIMD8 write looks like:
        * m + 0: r0
        * m + 1: r1
@@ -3415,6 +3478,33 @@ fs_visitor::setup_color_payload(fs_reg *dst, fs_reg color, unsigned components)
          len++;
       }
       return len;
+   } else if (brw->gen >= 6 && do_dual_src) {
+      /* SIMD16 dual source blending for gen6+.
+       *
+       * From the SNB PRM, volume 4, part 1, page 193:
+       *
+       * "The dual source render target messages only have SIMD8 forms due to
+       *  maximum message length limitations. SIMD16 pixel shaders must send two
+       *  of these messages to cover all of the pixels. Each message contains
+       *  two colors (4 channels each) for each pixel in the message payload."
+       *
+       * So in SIMD16 dual source blending we will send 2 SIMD8 messages,
+       * each one will call this function twice (one for each color involved),
+       * so in each pass we only write 4 registers. Notice that the second
+       * SIMD8 message needs to read color data from the 2nd half of the color
+       * registers, so it needs to call this with use_2nd_half = true.
+       */
+      for (unsigned i = 0; i < 4; ++i) {
+         if (colors_enabled & (1 << i)) {
+            dst[i] = fs_reg(GRF, alloc.allocate(1), color.type);
+            inst = emit(MOV(dst[i], half(offset(color, i),
+                                         use_2nd_half ? 1 : 0)));
+            inst->saturate = key->clamp_fragment_color;
+            if (use_2nd_half)
+               inst->force_sechalf = true;
+         }
+      }
+      return 4;
    } else {
       /* pre-gen6 SIMD16 single source DP write looks like:
        * m + 0: r0
@@ -3498,7 +3588,8 @@ fs_visitor::emit_alpha_test()
 
 fs_inst *
 fs_visitor::emit_single_fb_write(fs_reg color0, fs_reg color1,
-                                 fs_reg src0_alpha, unsigned components)
+                                 fs_reg src0_alpha, unsigned components,
+                                 bool use_2nd_half)
 {
    assert(stage == MESA_SHADER_FRAGMENT);
    brw_wm_prog_data *prog_data = (brw_wm_prog_data*) this->prog_data;
@@ -3558,7 +3649,8 @@ fs_visitor::emit_single_fb_write(fs_reg color0, fs_reg color1,
        * alpha out the pipeline to our null renderbuffer to support
        * alpha-testing, alpha-to-coverage, and so on.
        */
-      length += setup_color_payload(sources + length, this->outputs[0], 0);
+      length += setup_color_payload(sources + length, this->outputs[0], 0,
+                                    false);
    } else if (color1.file == BAD_FILE) {
       if (src0_alpha.file != BAD_FILE) {
          sources[length] = fs_reg(GRF, alloc.allocate(reg_size),
@@ -3568,10 +3660,13 @@ fs_visitor::emit_single_fb_write(fs_reg color0, fs_reg color1,
          length++;
       }
 
-      length += setup_color_payload(sources + length, color0, components);
+      length += setup_color_payload(sources + length, color0, components,
+                                    false);
    } else {
-      length += setup_color_payload(sources + length, color0, components);
-      length += setup_color_payload(sources + length, color1, components);
+      length += setup_color_payload(sources + length, color0, components,
+                                    use_2nd_half);
+      length += setup_color_payload(sources + length, color1, components,
+                                    use_2nd_half);
    }
 
    if (source_depth_to_render_target) {
@@ -3640,25 +3735,44 @@ fs_visitor::emit_fb_writes()
    brw_wm_prog_data *prog_data = (brw_wm_prog_data*) this->prog_data;
    brw_wm_prog_key *key = (brw_wm_prog_key*) this->key;
 
+   fs_inst *inst = NULL;
    if (do_dual_src) {
-      no16("GL_ARB_blend_func_extended not yet supported in SIMD16.");
-      if (dispatch_width == 16)
-         do_dual_src = false;
-   }
-
-   fs_inst *inst;
-   if (do_dual_src) {
-      if (INTEL_DEBUG & DEBUG_SHADER_TIME)
-         emit_shader_time_end();
-
       this->current_annotation = ralloc_asprintf(this->mem_ctx,
 						 "FB dual-source write");
       inst = emit_single_fb_write(this->outputs[0], this->dual_src_output,
                                   reg_undef, 4);
       inst->target = 0;
+
+      /* SIMD16 dual source blending requires to send two SIMD8 dual source
+       * messages, where each message contains color data for 8 pixels. Color
+       * data for the first group of pixels is stored in the "lower" half of
+       * the color registers, so in SIMD16, the previous message did:
+       * m + 0: r0
+       * m + 1: g0
+       * m + 2: b0
+       * m + 3: a0
+       *
+       * Here goes the second message, which packs color data for the
+       * remaining 8 pixels. Color data for these pixels is stored in the
+       * "upper" half of the color registers, so we need to do:
+       * m + 0: r1
+       * m + 1: g1
+       * m + 2: b1
+       * m + 3: a1
+       */
+      if (dispatch_width == 16) {
+         inst = emit_single_fb_write(this->outputs[0], this->dual_src_output,
+                                     reg_undef, 4, true);
+         inst->target = 0;
+      }
+
       prog_data->dual_src_blend = true;
-   } else if (key->nr_color_regions > 0) {
+   } else {
       for (int target = 0; target < key->nr_color_regions; target++) {
+         /* Skip over outputs that weren't written. */
+         if (this->outputs[target].file == BAD_FILE)
+            continue;
+
          this->current_annotation = ralloc_asprintf(this->mem_ctx,
                                                     "FB write target %d",
                                                     target);
@@ -3666,19 +3780,14 @@ fs_visitor::emit_fb_writes()
          if (brw->gen >= 6 && key->replicate_alpha && target != 0)
             src0_alpha = offset(outputs[0], 3);
 
-         if (target == key->nr_color_regions - 1 &&
-             (INTEL_DEBUG & DEBUG_SHADER_TIME))
-            emit_shader_time_end();
-
          inst = emit_single_fb_write(this->outputs[target], reg_undef,
                                      src0_alpha,
                                      this->output_components[target]);
          inst->target = target;
       }
-   } else {
-      if (INTEL_DEBUG & DEBUG_SHADER_TIME)
-         emit_shader_time_end();
+   }
 
+   if (inst == NULL) {
       /* Even if there's no color buffers enabled, we still need to send
        * alpha out the pipeline to our null renderbuffer to support
        * alpha-testing, alpha-to-coverage, and so on.
@@ -3889,9 +3998,6 @@ fs_visitor::emit_urb_writes()
       if (length == 8 || last)
          flush = true;
       if (flush) {
-         if (last && (INTEL_DEBUG & DEBUG_SHADER_TIME))
-            emit_shader_time_end();
-
          fs_reg *payload_sources = ralloc_array(mem_ctx, fs_reg, length + 1);
          fs_reg payload = fs_reg(GRF, alloc.allocate(length + 1),
                                  BRW_REGISTER_TYPE_F);
@@ -3967,7 +4073,7 @@ fs_visitor::fs_visitor(struct brw_context *brw,
      reg_null_d(retype(brw_null_vec(dispatch_width), BRW_REGISTER_TYPE_D)),
      reg_null_ud(retype(brw_null_vec(dispatch_width), BRW_REGISTER_TYPE_UD)),
      key(key), prog_data(&prog_data->base),
-     dispatch_width(dispatch_width)
+     dispatch_width(dispatch_width), promoted_constants(0)
 {
    this->mem_ctx = mem_ctx;
    init();
@@ -3986,7 +4092,7 @@ fs_visitor::fs_visitor(struct brw_context *brw,
      reg_null_d(retype(brw_null_vec(dispatch_width), BRW_REGISTER_TYPE_D)),
      reg_null_ud(retype(brw_null_vec(dispatch_width), BRW_REGISTER_TYPE_UD)),
      key(key), prog_data(&prog_data->base.base),
-     dispatch_width(dispatch_width)
+     dispatch_width(dispatch_width), promoted_constants(0)
 {
    this->mem_ctx = mem_ctx;
    init();
@@ -3995,6 +4101,18 @@ fs_visitor::fs_visitor(struct brw_context *brw,
 void
 fs_visitor::init()
 {
+   switch (stage) {
+   case MESA_SHADER_FRAGMENT:
+      key_tex = &((const brw_wm_prog_key *) key)->tex;
+      break;
+   case MESA_SHADER_VERTEX:
+   case MESA_SHADER_GEOMETRY:
+      key_tex = &((const brw_vue_prog_key *) key)->tex;
+      break;
+   default:
+      unreachable("unhandled shader stage");
+   }
+
    this->failed = false;
    this->simd16_unsupported = false;
    this->no16_msg = NULL;

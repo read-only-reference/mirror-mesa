@@ -21,10 +21,8 @@
  * IN THE SOFTWARE.
  */
 
-extern "C" {
 #include "main/macros.h"
 #include "brw_context.h"
-}
 #include "brw_vs.h"
 #include "brw_gs.h"
 #include "brw_fs.h"
@@ -586,7 +584,7 @@ brw_saturate_immediate(enum brw_reg_type type, struct brw_reg *reg)
       unsigned ud;
       int d;
       float f;
-   } imm = { reg->dw1.ud }, sat_imm;
+   } imm = { reg->dw1.ud }, sat_imm = { 0 };
 
    switch (type) {
    case BRW_REGISTER_TYPE_UD:
@@ -768,6 +766,37 @@ backend_reg::is_accumulator() const
    return file == HW_REG &&
           fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE &&
           fixed_hw_reg.nr == BRW_ARF_ACCUMULATOR;
+}
+
+bool
+backend_reg::in_range(const backend_reg &r, unsigned n) const
+{
+   return (file == r.file &&
+           reg == r.reg &&
+           reg_offset >= r.reg_offset &&
+           reg_offset < r.reg_offset + n);
+}
+
+bool
+backend_instruction::is_commutative() const
+{
+   switch (opcode) {
+   case BRW_OPCODE_AND:
+   case BRW_OPCODE_OR:
+   case BRW_OPCODE_XOR:
+   case BRW_OPCODE_ADD:
+   case BRW_OPCODE_MUL:
+      return true;
+   case BRW_OPCODE_SEL:
+      /* MIN and MAX are commutative. */
+      if (conditional_mod == BRW_CONDITIONAL_GE ||
+          conditional_mod == BRW_CONDITIONAL_L) {
+         return true;
+      }
+      /* fallthrough */
+   default:
+      return false;
+   }
 }
 
 bool
@@ -963,6 +992,7 @@ backend_instruction::has_side_effects() const
 {
    switch (opcode) {
    case SHADER_OPCODE_UNTYPED_ATOMIC:
+   case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
    case SHADER_OPCODE_URB_WRITE_SIMD8:
    case FS_OPCODE_FB_WRITE:
       return true;

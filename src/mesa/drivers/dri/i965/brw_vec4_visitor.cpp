@@ -631,7 +631,7 @@ src_reg::src_reg(class vec4_visitor *v, const struct glsl_type *type)
    if (type->is_array() || type->is_record()) {
       this->swizzle = BRW_SWIZZLE_NOOP;
    } else {
-      this->swizzle = swizzle_for_size(type->vector_elements);
+      this->swizzle = brw_swizzle_for_size(type->vector_elements);
    }
 
    this->type = brw_type_for_base_type(type);
@@ -756,20 +756,15 @@ vec4_visitor::setup_builtin_uniform_values(ir_variable *ir)
          &this->prog->Parameters->ParameterValues[index][0];
 
       assert(this->uniforms < uniform_array_size);
-      this->uniform_vector_size[this->uniforms] = 0;
-      /* Add each of the unique swizzled channels of the element.
-       * This will end up matching the size of the glsl_type of this field.
-       */
-      int last_swiz = -1;
-      for (unsigned int j = 0; j < 4; j++) {
-	 int swiz = GET_SWZ(slots[i].swizzle, j);
-	 last_swiz = swiz;
 
-	 stage_prog_data->param[this->uniforms * 4 + j] = &values[swiz];
-	 assert(this->uniforms < uniform_array_size);
-	 if (swiz <= last_swiz)
-	    this->uniform_vector_size[this->uniforms]++;
-      }
+      for (unsigned j = 0; j < 4; j++)
+	 stage_prog_data->param[this->uniforms * 4 + j] =
+            &values[GET_SWZ(slots[i].swizzle, j)];
+
+      this->uniform_vector_size[this->uniforms] =
+         (ir->type->is_scalar() || ir->type->is_vector() ||
+          ir->type->is_matrix() ? ir->type->vector_elements : 4);
+
       this->uniforms++;
    }
 }
@@ -1305,7 +1300,7 @@ void
 vec4_visitor::visit(ir_expression *ir)
 {
    unsigned int operand;
-   src_reg op[Elements(ir->operands)];
+   src_reg op[ARRAY_SIZE(ir->operands)];
    vec4_instruction *inst;
 
    if (ir->operation == ir_binop_add) {
@@ -1555,6 +1550,11 @@ vec4_visitor::visit(ir_expression *ir)
    }
 
    case ir_binop_all_equal:
+      if (brw->gen <= 5) {
+         resolve_bool_comparison(ir->operands[0], &op[0]);
+         resolve_bool_comparison(ir->operands[1], &op[1]);
+      }
+
       /* "==" operator producing a scalar boolean. */
       if (ir->operands[0]->type->is_vector() ||
 	  ir->operands[1]->type->is_vector()) {
@@ -1567,6 +1567,11 @@ vec4_visitor::visit(ir_expression *ir)
       }
       break;
    case ir_binop_any_nequal:
+      if (brw->gen <= 5) {
+         resolve_bool_comparison(ir->operands[0], &op[0]);
+         resolve_bool_comparison(ir->operands[1], &op[1]);
+      }
+
       /* "!=" operator producing a scalar boolean. */
       if (ir->operands[0]->type->is_vector() ||
 	  ir->operands[1]->type->is_vector()) {
@@ -1581,6 +1586,9 @@ vec4_visitor::visit(ir_expression *ir)
       break;
 
    case ir_unop_any:
+      if (brw->gen <= 5) {
+         resolve_bool_comparison(ir->operands[0], &op[0]);
+      }
       emit(CMP(dst_null_d(), op[0], src_reg(0), BRW_CONDITIONAL_NZ));
       emit(MOV(result_dst, src_reg(0)));
 
@@ -1770,6 +1778,15 @@ vec4_visitor::visit(ir_expression *ir)
 
       if (brw->gen >= 7) {
          dst_reg grf_offset = dst_reg(this, glsl_type::int_type);
+
+         /* We have to use a message header on Skylake to get SIMD4x2 mode.
+          * Reserve space for the register.
+          */
+         if (brw->gen >= 9) {
+            grf_offset.reg_offset++;
+            alloc.sizes[grf_offset.reg] = 2;
+         }
+
          grf_offset.type = offset.type;
 
          emit(MOV(grf_offset, offset));
@@ -1790,7 +1807,7 @@ vec4_visitor::visit(ir_expression *ir)
          pull->mlen = 1;
       }
 
-      packed_consts.swizzle = swizzle_for_size(ir->type->vector_elements);
+      packed_consts.swizzle = brw_swizzle_for_size(ir->type->vector_elements);
       packed_consts.swizzle += BRW_SWIZZLE4(const_offset % 16 / 4,
                                             const_offset % 16 / 4,
                                             const_offset % 16 / 4,
@@ -1907,43 +1924,16 @@ vec4_visitor::visit(ir_expression *ir)
 void
 vec4_visitor::visit(ir_swizzle *ir)
 {
-   src_reg src;
-   int i = 0;
-   int swizzle[4];
-
    /* Note that this is only swizzles in expressions, not those on the left
     * hand side of an assignment, which do write masking.  See ir_assignment
     * for that.
     */
+   const unsigned swz = brw_compose_swizzle(
+      brw_swizzle_for_size(ir->type->vector_elements),
+      BRW_SWIZZLE4(ir->mask.x, ir->mask.y, ir->mask.z, ir->mask.w));
 
    ir->val->accept(this);
-   src = this->result;
-   assert(src.file != BAD_FILE);
-
-   for (i = 0; i < ir->type->vector_elements; i++) {
-      switch (i) {
-      case 0:
-	 swizzle[i] = BRW_GET_SWZ(src.swizzle, ir->mask.x);
-	 break;
-      case 1:
-	 swizzle[i] = BRW_GET_SWZ(src.swizzle, ir->mask.y);
-	 break;
-      case 2:
-	 swizzle[i] = BRW_GET_SWZ(src.swizzle, ir->mask.z);
-	 break;
-      case 3:
-	 swizzle[i] = BRW_GET_SWZ(src.swizzle, ir->mask.w);
-	    break;
-      }
-   }
-   for (; i < 4; i++) {
-      /* Replicate the last channel out. */
-      swizzle[i] = swizzle[ir->type->vector_elements - 1];
-   }
-
-   src.swizzle = BRW_SWIZZLE4(swizzle[0], swizzle[1], swizzle[2], swizzle[3]);
-
-   this->result = src;
+   this->result = swizzle(this->result, swz);
 }
 
 void
@@ -1965,7 +1955,7 @@ vec4_visitor::visit(ir_dereference_variable *ir)
       return;
 
    if (type->is_scalar() || type->is_vector() || type->is_matrix())
-      this->result.swizzle = swizzle_for_size(type->vector_elements);
+      this->result.swizzle = brw_swizzle_for_size(type->vector_elements);
 }
 
 
@@ -2024,7 +2014,7 @@ vec4_visitor::visit(ir_dereference_array *ir)
 
    /* If the type is smaller than a vec4, replicate the last channel out. */
    if (ir->type->is_scalar() || ir->type->is_vector() || ir->type->is_matrix())
-      src.swizzle = swizzle_for_size(ir->type->vector_elements);
+      src.swizzle = brw_swizzle_for_size(ir->type->vector_elements);
    else
       src.swizzle = BRW_SWIZZLE_NOOP;
    src.type = brw_type_for_base_type(ir->type);
@@ -2049,7 +2039,7 @@ vec4_visitor::visit(ir_dereference_record *ir)
 
    /* If the type is smaller than a vec4, replicate the last channel out. */
    if (ir->type->is_scalar() || ir->type->is_vector() || ir->type->is_matrix())
-      this->result.swizzle = swizzle_for_size(ir->type->vector_elements);
+      this->result.swizzle = brw_swizzle_for_size(ir->type->vector_elements);
    else
       this->result.swizzle = BRW_SWIZZLE_NOOP;
    this->result.type = brw_type_for_base_type(ir->type);
@@ -2120,7 +2110,7 @@ vec4_visitor::emit_block_move(dst_reg *dst, src_reg *src,
 
    dst->writemask = (1 << type->vector_elements) - 1;
 
-   src->swizzle = swizzle_for_size(type->vector_elements);
+   src->swizzle = brw_swizzle_for_size(type->vector_elements);
 
    vec4_instruction *inst = emit(MOV(*dst, *src));
    inst->predicate = predicate;
@@ -2208,7 +2198,7 @@ vec4_visitor::visit(ir_assignment *ir)
        */
       assert(src.swizzle ==
              (ir->rhs->type->is_matrix()
-              ? swizzle_for_size(ir->rhs->type->vector_elements)
+              ? brw_swizzle_for_size(ir->rhs->type->vector_elements)
               : BRW_SWIZZLE_NOOP));
 
       emit_block_move(&dst, &src, ir->rhs->type, predicate);
@@ -2225,22 +2215,12 @@ vec4_visitor::visit(ir_assignment *ir)
 
    last_rhs_inst = (vec4_instruction *)this->instructions.get_tail();
 
-   src_reg src = this->result;
-
    int swizzles[4];
-   int first_enabled_chan = 0;
    int src_chan = 0;
 
    assert(ir->lhs->type->is_vector() ||
 	  ir->lhs->type->is_scalar());
    dst.writemask = ir->write_mask;
-
-   for (int i = 0; i < 4; i++) {
-      if (dst.writemask & (1 << i)) {
-	 first_enabled_chan = BRW_GET_SWZ(src.swizzle, i);
-	 break;
-      }
-   }
 
    /* Swizzle a small RHS vector into the channels being written.
     *
@@ -2248,14 +2228,12 @@ vec4_visitor::visit(ir_assignment *ir)
     * present on the RHS while in our instructions we need to make
     * those channels appear in the slots of the vec4 they're written to.
     */
-   for (int i = 0; i < 4; i++) {
-      if (dst.writemask & (1 << i))
-	 swizzles[i] = BRW_GET_SWZ(src.swizzle, src_chan++);
-      else
-	 swizzles[i] = first_enabled_chan;
-   }
-   src.swizzle = BRW_SWIZZLE4(swizzles[0], swizzles[1],
-			      swizzles[2], swizzles[3]);
+   for (int i = 0; i < 4; i++)
+      swizzles[i] = (ir->write_mask & (1 << i) ? src_chan++ : 0);
+
+   src_reg src = swizzle(this->result,
+                         BRW_SWIZZLE4(swizzles[0], swizzles[1],
+                                      swizzles[2], swizzles[3]));
 
    if (try_rewrite_rhs_to_dst(ir, dst, src, pre_rhs_inst, last_rhs_inst)) {
       return;
@@ -3356,18 +3334,9 @@ vec4_visitor::emit_scratch_write(bblock_t *block, vec4_instruction *inst,
     * weren't initialized, it will confuse live interval analysis, which will
     * make spilling fail to make progress.
     */
-   src_reg temp = src_reg(this, glsl_type::vec4_type);
-   temp.type = inst->dst.type;
-   int first_writemask_chan = ffs(inst->dst.writemask) - 1;
-   int swizzles[4];
-   for (int i = 0; i < 4; i++)
-      if (inst->dst.writemask & (1 << i))
-         swizzles[i] = i;
-      else
-         swizzles[i] = first_writemask_chan;
-   temp.swizzle = BRW_SWIZZLE4(swizzles[0], swizzles[1],
-                               swizzles[2], swizzles[3]);
-
+   const src_reg temp = swizzle(retype(src_reg(this, glsl_type::vec4_type),
+                                       inst->dst.type),
+                                brw_swizzle_for_mask(inst->dst.writemask));
    dst_reg dst = dst_reg(brw_writemask(brw_vec8_grf(0, 0),
 				       inst->dst.writemask));
    vec4_instruction *write = SCRATCH_WRITE(dst, temp, index);
@@ -3464,6 +3433,15 @@ vec4_visitor::emit_pull_constant_load(bblock_t *block, vec4_instruction *inst,
 
    if (brw->gen >= 7) {
       dst_reg grf_offset = dst_reg(this, glsl_type::int_type);
+
+      /* We have to use a message header on Skylake to get SIMD4x2 mode.
+       * Reserve space for the register.
+       */
+      if (brw->gen >= 9) {
+         grf_offset.reg_offset++;
+         alloc.sizes[grf_offset.reg] = 2;
+      }
+
       grf_offset.type = offset.type;
       emit_before(block, inst, MOV(grf_offset, offset));
 
@@ -3640,7 +3618,8 @@ vec4_visitor::vec4_visitor(struct brw_context *brw,
     */
    this->uniform_array_size = 1;
    if (prog_data) {
-      this->uniform_array_size = MAX2(stage_prog_data->nr_params, 1);
+      this->uniform_array_size =
+         MAX2(DIV_ROUND_UP(stage_prog_data->nr_params, 4), 1);
    }
 
    this->uniform_size = rzalloc_array(mem_ctx, int, this->uniform_array_size);

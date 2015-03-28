@@ -123,7 +123,7 @@ calculate_iterations(ir_rvalue *from, ir_rvalue *to, ir_rvalue *increment,
    const int bias[] = { -1, 0, 1 };
    bool valid_loop = false;
 
-   for (unsigned i = 0; i < Elements(bias); i++) {
+   for (unsigned i = 0; i < ARRAY_SIZE(bias); i++) {
       /* Increment may be of type int, uint or float. */
       switch (increment->type->base_type) {
       case GLSL_TYPE_INT:
@@ -139,7 +139,7 @@ calculate_iterations(ir_rvalue *from, ir_rvalue *to, ir_rvalue *increment,
          iter = new(mem_ctx) ir_constant(double(iter_value + bias[i]));
          break;
       default:
-          unreachable(!"Unsupported type for loop iterator.");
+          unreachable("Unsupported type for loop iterator.");
       }
 
       ir_expression *const mul =

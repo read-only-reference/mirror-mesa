@@ -380,10 +380,12 @@ ir_expression::ir_expression(int op, ir_rvalue *op0, ir_rvalue *op1)
       } else if (op1->type->is_scalar()) {
 	 this->type = op0->type;
       } else {
-	 /* FINISHME: matrix types */
-	 assert(!op0->type->is_matrix() && !op1->type->is_matrix());
-	 assert(op0->type == op1->type);
-	 this->type = op0->type;
+         if (this->operation == ir_binop_mul) {
+            this->type = glsl_type::get_mul_type(op0->type, op1->type);
+         } else {
+            assert(op0->type == op1->type);
+            this->type = op0->type;
+         }
       }
       break;
 
@@ -618,8 +620,8 @@ static const char *const operator_strs[] = {
 
 const char *ir_expression::operator_string(ir_expression_operation op)
 {
-   assert((unsigned int) op < Elements(operator_strs));
-   assert(Elements(operator_strs) == (ir_quadop_vector + 1));
+   assert((unsigned int) op < ARRAY_SIZE(operator_strs));
+   assert(ARRAY_SIZE(operator_strs) == (ir_quadop_vector + 1));
    return operator_strs[op];
 }
 
@@ -1707,7 +1709,7 @@ const char *const ir_variable::warn_extension_table[] = {
 void
 ir_variable::enable_extension_warning(const char *extension)
 {
-   for (unsigned i = 0; i < Elements(warn_extension_table); i++) {
+   for (unsigned i = 0; i < ARRAY_SIZE(warn_extension_table); i++) {
       if (strcmp(warn_extension_table[i], extension) == 0) {
          this->data.warn_extension_index = i;
          return;

@@ -213,9 +213,22 @@ setup_slices(struct fd_resource *rsc, uint32_t alignment)
 	for (level = 0; level <= prsc->last_level; level++) {
 		struct fd_resource_slice *slice = fd_resource_slice(rsc, level);
 
-		slice->pitch = align(width, 32);
+		slice->pitch = width = align(width, 32);
 		slice->offset = size;
-		slice->size0 = align(slice->pitch * height * rsc->cpp, alignment);
+		/* 1d array and 2d array textures must all have the same layer size
+		 * for each miplevel on a3xx. 3d textures can have different layer
+		 * sizes for high levels, but the hw auto-sizer is buggy (or at least
+		 * different than what this code does), so as soon as the layer size
+		 * range gets into range, we stop reducing it.
+		 */
+		if (prsc->target == PIPE_TEXTURE_3D && (
+					level == 1 ||
+					(level > 1 && rsc->slices[level - 1].size0 > 0xf000)))
+			slice->size0 = align(slice->pitch * height * rsc->cpp, alignment);
+		else if (level == 0 || rsc->layer_first || alignment == 1)
+			slice->size0 = align(slice->pitch * height * rsc->cpp, alignment);
+		else
+			slice->size0 = rsc->slices[level - 1].size0;
 
 		size += slice->size0 * depth * layers_in_level;
 

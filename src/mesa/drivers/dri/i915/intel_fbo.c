@@ -287,8 +287,7 @@ intel_image_target_renderbuffer_storage(struct gl_context *ctx,
    rb->Width = image->region->width;
    rb->Height = image->region->height;
    rb->Format = image->format;
-   rb->_BaseFormat = _mesa_base_fbo_format(&intel->ctx,
-					   image->internal_format);
+   rb->_BaseFormat = _mesa_get_format_base_format(image->format);
    rb->NeedsFinishRenderTexture = true;
 }
 
@@ -599,7 +598,7 @@ intel_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
       }
    }
 
-   for (i = 0; i < Elements(fb->Attachment); i++) {
+   for (i = 0; i < ARRAY_SIZE(fb->Attachment); i++) {
       struct gl_renderbuffer *rb;
       struct intel_renderbuffer *irb;
 

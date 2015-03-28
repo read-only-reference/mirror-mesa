@@ -48,13 +48,14 @@ struct ilo_fence {
 int ilo_debug;
 
 static const struct debug_named_value ilo_debug_flags[] = {
-   { "batch",     ILO_DEBUG_BATCH,    "Dump batch/state/surface/instruction buffers" },
+   { "batch",     ILO_DEBUG_BATCH,    "Dump batch/dynamic/surface/instruction buffers" },
    { "vs",        ILO_DEBUG_VS,       "Dump vertex shaders" },
    { "gs",        ILO_DEBUG_GS,       "Dump geometry shaders" },
    { "fs",        ILO_DEBUG_FS,       "Dump fragment shaders" },
    { "cs",        ILO_DEBUG_CS,       "Dump compute shaders" },
    { "draw",      ILO_DEBUG_DRAW,     "Show draw information" },
    { "submit",    ILO_DEBUG_SUBMIT,   "Show batch buffer submissions" },
+   { "hang",      ILO_DEBUG_HANG,     "Detect GPU hangs" },
    { "nohw",      ILO_DEBUG_NOHW,     "Do not send commands to HW" },
    { "nocache",   ILO_DEBUG_NOCACHE,  "Always invalidate HW caches" },
    { "nohiz",     ILO_DEBUG_NOHIZ,    "Disable HiZ" },
@@ -514,6 +515,12 @@ ilo_get_vendor(struct pipe_screen *screen)
 }
 
 static const char *
+ilo_get_device_vendor(struct pipe_screen *screen)
+{
+   return "Intel";
+}
+
+static const char *
 ilo_get_name(struct pipe_screen *screen)
 {
    struct ilo_screen *is = ilo_screen(screen);
@@ -599,15 +606,13 @@ ilo_fence_reference(struct pipe_screen *screen,
    if (likely(p)) {
       old = ilo_fence(*p);
       *p = f;
-   }
-   else {
+   } else {
       old = NULL;
    }
 
    STATIC_ASSERT(&((struct ilo_fence *) NULL)->reference == NULL);
    if (pipe_reference(&old->reference, &fence->reference)) {
-      if (old->bo)
-         intel_bo_unreference(old->bo);
+      intel_bo_unref(old->bo);
       FREE(old);
    }
 }
@@ -620,7 +625,7 @@ ilo_fence_signalled(struct pipe_screen *screen,
 
    /* mark signalled if the bo is idle */
    if (fence->bo && !intel_bo_is_busy(fence->bo)) {
-      intel_bo_unreference(fence->bo);
+      intel_bo_unref(fence->bo);
       fence->bo = NULL;
    }
 
@@ -644,7 +649,7 @@ ilo_fence_finish(struct pipe_screen *screen,
       return false;
 
    /* mark signalled */
-   intel_bo_unreference(fence->bo);
+   intel_bo_unref(fence->bo);
    fence->bo = NULL;
 
    return true;
@@ -665,9 +670,7 @@ ilo_fence_create(struct pipe_screen *screen, struct intel_bo *bo)
 
    pipe_reference_init(&fence->reference, 1);
 
-   if (bo)
-      intel_bo_reference(bo);
-   fence->bo = bo;
+   fence->bo = intel_bo_ref(bo);
 
    return fence;
 }
@@ -847,6 +850,7 @@ ilo_screen_create(struct intel_winsys *ws)
    is->base.destroy = ilo_screen_destroy;
    is->base.get_name = ilo_get_name;
    is->base.get_vendor = ilo_get_vendor;
+   is->base.get_device_vendor = ilo_get_device_vendor;
    is->base.get_param = ilo_get_param;
    is->base.get_paramf = ilo_get_paramf;
    is->base.get_shader_param = ilo_get_shader_param;

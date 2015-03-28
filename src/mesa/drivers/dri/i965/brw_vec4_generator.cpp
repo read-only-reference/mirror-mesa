@@ -419,9 +419,12 @@ vec4_generator::generate_tex(vec4_instruction *inst,
       brw_AND(p, addr, addr, brw_imm_ud(0x0ff));
       brw_OR(p, addr, addr, temp);
 
-      /* a0.0 |= <descriptor> */
-      brw_inst *insn_or = brw_next_insn(p, BRW_OPCODE_OR);
-      brw_set_sampler_message(p, insn_or,
+      brw_pop_insn_state(p);
+
+      /* dst = send(offset, a0.0 | <descriptor>) */
+      brw_inst *insn = brw_send_indirect_message(
+         p, BRW_SFID_SAMPLER, dst, src, addr);
+      brw_set_sampler_message(p, insn,
                               0 /* surface */,
                               0 /* sampler */,
                               msg_type,
@@ -430,19 +433,6 @@ vec4_generator::generate_tex(vec4_instruction *inst,
                               inst->header_present /* header */,
                               BRW_SAMPLER_SIMD_MODE_SIMD4X2,
                               return_format);
-      brw_inst_set_exec_size(p->brw, insn_or, BRW_EXECUTE_1);
-      brw_inst_set_src1_reg_type(p->brw, insn_or, BRW_REGISTER_TYPE_UD);
-      brw_set_src0(p, insn_or, addr);
-      brw_set_dest(p, insn_or, addr);
-
-
-      /* dst = send(offset, a0.0) */
-      brw_inst *insn_send = brw_next_insn(p, BRW_OPCODE_SEND);
-      brw_set_dest(p, insn_send, dst);
-      brw_set_src0(p, insn_send, src);
-      brw_set_indirect_send_descriptor(p, insn_send, BRW_SFID_SAMPLER, addr);
-
-      brw_pop_insn_state(p);
 
       /* visitor knows more than we do about the surface limit required,
        * so has already done marking.
@@ -948,7 +938,7 @@ vec4_generator::generate_scratch_write(vec4_instruction *inst,
    uint32_t msg_type;
 
    if (brw->gen >= 7)
-      msg_type = GEN7_DATAPORT_WRITE_MESSAGE_OWORD_DUAL_BLOCK_WRITE;
+      msg_type = GEN7_DATAPORT_DC_OWORD_DUAL_BLOCK_WRITE;
    else if (brw->gen == 6)
       msg_type = GEN6_DATAPORT_WRITE_MESSAGE_OWORD_DUAL_BLOCK_WRITE;
    else
@@ -1049,18 +1039,38 @@ vec4_generator::generate_pull_constant_load_gen7(vec4_instruction *inst,
 {
    assert(surf_index.type == BRW_REGISTER_TYPE_UD);
 
+   struct brw_reg src = offset;
+   bool header_present = false;
+   int mlen = 1;
+
+   if (brw->gen >= 9) {
+      /* Skylake requires a message header in order to use SIMD4x2 mode. */
+      src = retype(brw_vec4_grf(offset.nr - 1, 0), BRW_REGISTER_TYPE_UD);
+      mlen = 2;
+      header_present = true;
+
+      brw_push_insn_state(p);
+      brw_set_default_mask_control(p, BRW_MASK_DISABLE);
+      brw_MOV(p, src, retype(brw_vec4_grf(0, 0), BRW_REGISTER_TYPE_UD));
+      brw_set_default_access_mode(p, BRW_ALIGN_1);
+
+      brw_MOV(p, get_element_ud(src, 2),
+              brw_imm_ud(GEN9_SAMPLER_SIMD_MODE_EXTENSION_SIMD4X2));
+      brw_pop_insn_state(p);
+   }
+
    if (surf_index.file == BRW_IMMEDIATE_VALUE) {
 
       brw_inst *insn = brw_next_insn(p, BRW_OPCODE_SEND);
       brw_set_dest(p, insn, dst);
-      brw_set_src0(p, insn, offset);
+      brw_set_src0(p, insn, src);
       brw_set_sampler_message(p, insn,
                               surf_index.dw1.ud,
                               0, /* LD message ignores sampler unit */
                               GEN5_SAMPLER_MESSAGE_SAMPLE_LD,
                               1, /* rlen */
-                              1, /* mlen */
-                              false, /* no header */
+                              mlen,
+                              header_present,
                               BRW_SAMPLER_SIMD_MODE_SIMD4X2,
                               0);
 
@@ -1081,31 +1091,20 @@ vec4_generator::generate_pull_constant_load_gen7(vec4_instruction *inst,
       brw_set_src0(p, insn_and, vec1(retype(surf_index, BRW_REGISTER_TYPE_UD)));
       brw_set_src1(p, insn_and, brw_imm_ud(0x0ff));
 
+      brw_pop_insn_state(p);
 
-      /* a0.0 |= <descriptor> */
-      brw_inst *insn_or = brw_next_insn(p, BRW_OPCODE_OR);
-      brw_set_sampler_message(p, insn_or,
+      /* dst = send(offset, a0.0 | <descriptor>) */
+      brw_inst *insn = brw_send_indirect_message(
+         p, BRW_SFID_SAMPLER, dst, src, addr);
+      brw_set_sampler_message(p, insn,
                               0 /* surface */,
                               0 /* sampler */,
                               GEN5_SAMPLER_MESSAGE_SAMPLE_LD,
                               1 /* rlen */,
-                              1 /* mlen */,
-                              false /* header */,
+                              mlen /* mlen */,
+                              header_present /* header */,
                               BRW_SAMPLER_SIMD_MODE_SIMD4X2,
                               0);
-      brw_inst_set_exec_size(p->brw, insn_or, BRW_EXECUTE_1);
-      brw_inst_set_src1_reg_type(p->brw, insn_or, BRW_REGISTER_TYPE_UD);
-      brw_set_src0(p, insn_or, addr);
-      brw_set_dest(p, insn_or, addr);
-
-
-      /* dst = send(offset, a0.0) */
-      brw_inst *insn_send = brw_next_insn(p, BRW_OPCODE_SEND);
-      brw_set_dest(p, insn_send, dst);
-      brw_set_src0(p, insn_send, offset);
-      brw_set_indirect_send_descriptor(p, insn_send, BRW_SFID_SAMPLER, addr);
-
-      brw_pop_insn_state(p);
 
       /* visitor knows more than we do about the surface limit required,
        * so has already done marking.
@@ -1126,7 +1125,7 @@ vec4_generator::generate_untyped_atomic(vec4_instruction *inst,
 
    brw_untyped_atomic(p, dst, brw_message_reg(inst->base_mrf),
                       atomic_op.dw1.ud, surf_index.dw1.ud,
-                      inst->mlen, 1);
+                      inst->mlen, true);
 
    brw_mark_surface_used(&prog_data->base, surf_index.dw1.ud);
 }
@@ -1140,8 +1139,7 @@ vec4_generator::generate_untyped_surface_read(vec4_instruction *inst,
 	  surf_index.type == BRW_REGISTER_TYPE_UD);
 
    brw_untyped_surface_read(p, dst, brw_message_reg(inst->base_mrf),
-                            surf_index.dw1.ud,
-                            inst->mlen, 1);
+                            surf_index.dw1.ud, inst->mlen, 1);
 
    brw_mark_surface_used(&prog_data->base, surf_index.dw1.ud);
 }

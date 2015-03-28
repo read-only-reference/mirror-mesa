@@ -56,7 +56,7 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
    { 1, 3, 0, 0, 0, 0, COMP, "MAD", TGSI_OPCODE_MAD },
    { 1, 2, 0, 0, 0, 0, COMP, "SUB", TGSI_OPCODE_SUB },
    { 1, 3, 0, 0, 0, 0, COMP, "LRP", TGSI_OPCODE_LRP },
-   { 0, 0, 0, 0, 0, 0, NONE, "", 19 },      /* removed */
+   { 1, 3, 0, 0, 0, 0, COMP, "FMA", TGSI_OPCODE_FMA },
    { 1, 1, 0, 0, 0, 0, REPL, "SQRT", TGSI_OPCODE_SQRT },
    { 1, 3, 0, 0, 0, 0, REPL, "DP2A", TGSI_OPCODE_DP2A },
    { 0, 0, 0, 0, 0, 0, NONE, "", 22 },      /* removed */
@@ -155,7 +155,7 @@ static const struct tgsi_opcode_info opcode_info[TGSI_OPCODE_LAST] =
    { 0, 1, 0, 0, 0, 0, NONE, "BREAKC", TGSI_OPCODE_BREAKC },
    { 0, 1, 0, 0, 0, 0, NONE, "KILL_IF", TGSI_OPCODE_KILL_IF },
    { 0, 0, 0, 0, 0, 0, NONE, "END", TGSI_OPCODE_END },
-   { 0, 0, 0, 0, 0, 0, NONE, "", 118 },     /* removed */
+   { 1, 3, 0, 0, 0, 0, COMP, "DFMA", TGSI_OPCODE_DFMA },
    { 1, 1, 0, 0, 0, 0, COMP, "F2I", TGSI_OPCODE_F2I },
    { 1, 2, 0, 0, 0, 0, COMP, "IDIV", TGSI_OPCODE_IDIV },
    { 1, 2, 0, 0, 0, 0, COMP, "IMAX", TGSI_OPCODE_IMAX },
@@ -341,6 +341,12 @@ tgsi_opcode_infer_type( uint opcode )
    case TGSI_OPCODE_USNE:
    case TGSI_OPCODE_SVIEWINFO:
    case TGSI_OPCODE_UMUL_HI:
+   case TGSI_OPCODE_UBFE:
+   case TGSI_OPCODE_BFI:
+   case TGSI_OPCODE_BREV:
+   case TGSI_OPCODE_POPC:
+   case TGSI_OPCODE_LSB:
+   case TGSI_OPCODE_UMSB:
       return TGSI_TYPE_UNSIGNED;
    case TGSI_OPCODE_ARL:
    case TGSI_OPCODE_ARR:
@@ -362,6 +368,8 @@ tgsi_opcode_infer_type( uint opcode )
    case TGSI_OPCODE_IABS:
    case TGSI_OPCODE_ISSG:
    case TGSI_OPCODE_IMUL_HI:
+   case TGSI_OPCODE_IBFE:
+   case TGSI_OPCODE_IMSB:
       return TGSI_TYPE_SIGNED;
    default:
       return TGSI_TYPE_FLOAT;

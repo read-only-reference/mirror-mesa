@@ -479,6 +479,11 @@ gen6_3DSTATE_VERTEX_BUFFERS(struct ilo_builder *builder,
 
       dw[0] = hw_idx << GEN6_VB_DW0_INDEX__SHIFT;
 
+      if (ilo_dev_gen(builder->dev) >= ILO_GEN(8))
+         dw[0] |= builder->mocs << GEN8_VB_DW0_MOCS__SHIFT;
+      else
+         dw[0] |= builder->mocs << GEN6_VB_DW0_MOCS__SHIFT;
+
       if (ilo_dev_gen(builder->dev) >= ILO_GEN(7))
          dw[0] |= GEN7_VB_DW0_ADDR_MODIFIED;
 
@@ -650,9 +655,9 @@ gen6_3DSTATE_INDEX_BUFFER(struct ilo_builder *builder,
 
    pos = ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
-   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_INDEX_BUFFER) |
-           format |
-           (cmd_len - 2);
+   dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_INDEX_BUFFER) | (cmd_len - 2) |
+           builder->mocs << GEN6_IB_DW0_MOCS__SHIFT |
+           format;
    if (enable_cut_index)
       dw[0] |= GEN6_IB_DW0_CUT_INDEX_ENABLE;
 
@@ -694,7 +699,8 @@ gen8_3DSTATE_INDEX_BUFFER(struct ilo_builder *builder,
    pos = ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
    dw[0] = GEN6_RENDER_CMD(3D, 3DSTATE_INDEX_BUFFER) | (cmd_len - 2);
-   dw[1] = format;
+   dw[1] = format |
+           builder->mocs << GEN8_IB_DW1_MOCS__SHIFT;
    dw[4] = buf->bo_size;
 
    /* ignore ib->offset here in favor of adjusting 3DPRIMITIVE */
@@ -1193,6 +1199,8 @@ gen7_3DSTATE_SO_BUFFER(struct ilo_builder *builder, int index, int stride,
            stride;
 
    if (ilo_dev_gen(builder->dev) >= ILO_GEN(8)) {
+      dw[1] |= builder->mocs << GEN8_SO_BUF_DW1_MOCS__SHIFT;
+
       dw[4] = end - start;
       dw[5] = 0;
       dw[6] = 0;
@@ -1201,6 +1209,8 @@ gen7_3DSTATE_SO_BUFFER(struct ilo_builder *builder, int index, int stride,
       ilo_builder_batch_reloc64(builder, pos + 2,
             buf->bo, start, INTEL_RELOC_WRITE);
    } else {
+      dw[1] |= builder->mocs << GEN7_SO_BUF_DW1_MOCS__SHIFT;
+
       ilo_builder_batch_reloc(builder, pos + 2,
             buf->bo, start, INTEL_RELOC_WRITE);
       ilo_builder_batch_reloc(builder, pos + 3,
@@ -1441,7 +1451,9 @@ gen6_3dstate_constant(struct ilo_builder *builder, int subop,
    ilo_builder_batch_pointer(builder, cmd_len, &dw);
 
    dw[0] = cmd | (cmd_len - 2) |
-           buf_enabled << 12;
+           buf_enabled << GEN6_CONSTANT_DW0_BUFFER_ENABLES__SHIFT |
+           builder->mocs << GEN6_CONSTANT_DW0_MOCS__SHIFT;
+
    memcpy(&dw[1], buf_dw, sizeof(buf_dw));
 }
 
@@ -1543,6 +1555,8 @@ gen7_3dstate_constant(struct ilo_builder *builder,
       dw[9] = payload[5];
       dw[10] = 0;
    } else {
+      payload[2] |= builder->mocs << GEN7_CONSTANT_DW_ADDR_MOCS__SHIFT;
+
       memcpy(&dw[1], payload, sizeof(payload));
    }
 }
@@ -1585,11 +1599,12 @@ gen7_3DSTATE_CONSTANT_GS(struct ilo_builder *builder,
 
 static inline uint32_t
 gen6_BINDING_TABLE_STATE(struct ilo_builder *builder,
-                         uint32_t *surface_states,
+                         const uint32_t *surface_states,
                          int num_surface_states)
 {
    const int state_align = 32;
    const int state_len = num_surface_states;
+   uint32_t state_offset, *dw;
 
    ILO_DEV_ASSERT(builder->dev, 6, 8);
 
@@ -1603,8 +1618,11 @@ gen6_BINDING_TABLE_STATE(struct ilo_builder *builder,
    if (!num_surface_states)
       return 0;
 
-   return ilo_builder_surface_write(builder, ILO_BUILDER_ITEM_BINDING_TABLE,
-         state_align, state_len, surface_states);
+   state_offset = ilo_builder_surface_pointer(builder,
+         ILO_BUILDER_ITEM_BINDING_TABLE, state_align, state_len, &dw);
+   memcpy(dw, surface_states, state_len << 2);
+
+   return state_offset;
 }
 
 static inline uint32_t
@@ -1612,23 +1630,43 @@ gen6_SURFACE_STATE(struct ilo_builder *builder,
                    const struct ilo_view_surface *surf,
                    bool for_render)
 {
-   const int state_align =
-      (ilo_dev_gen(builder->dev) >= ILO_GEN(8)) ? 64 : 32;
-   const int state_len =
-      (ilo_dev_gen(builder->dev) >= ILO_GEN(8)) ? 13 :
-      (ilo_dev_gen(builder->dev) >= ILO_GEN(7)) ? 8 : 6;
-   uint32_t state_offset;
+   int state_align, state_len;
+   uint32_t state_offset, *dw;
 
    ILO_DEV_ASSERT(builder->dev, 6, 8);
 
-   state_offset = ilo_builder_surface_write(builder, ILO_BUILDER_ITEM_SURFACE,
-         state_align, state_len, surf->payload);
+   if (ilo_dev_gen(builder->dev) >= ILO_GEN(8)) {
+      state_align = 64;
+      state_len = 13;
 
-   if (surf->bo) {
-      if (ilo_dev_gen(builder->dev) >= ILO_GEN(8)) {
+      state_offset = ilo_builder_surface_pointer(builder,
+            ILO_BUILDER_ITEM_SURFACE, state_align, state_len, &dw);
+      memcpy(dw, surf->payload, state_len << 2);
+
+      if (surf->bo) {
+         const uint32_t mocs = (surf->scanout) ?
+            (GEN8_MOCS_MT_PTE | GEN8_MOCS_CT_L3) : builder->mocs;
+
+         dw[1] |= mocs << GEN8_SURFACE_DW1_MOCS__SHIFT;
+
          ilo_builder_surface_reloc64(builder, state_offset, 8, surf->bo,
                surf->payload[8], (for_render) ? INTEL_RELOC_WRITE : 0);
-      } else {
+      }
+   } else {
+      state_align = 32;
+      state_len = (ilo_dev_gen(builder->dev) >= ILO_GEN(7)) ? 8 : 6;
+
+      state_offset = ilo_builder_surface_pointer(builder,
+            ILO_BUILDER_ITEM_SURFACE, state_align, state_len, &dw);
+      memcpy(dw, surf->payload, state_len << 2);
+
+      if (surf->bo) {
+         /*
+          * For scanouts, we should not enable caching in LLC.  Since we only
+          * enable that on Gen8+, we are fine here.
+          */
+         dw[5] |= builder->mocs << GEN6_SURFACE_DW5_MOCS__SHIFT;
+
          ilo_builder_surface_reloc(builder, state_offset, 1, surf->bo,
                surf->payload[1], (for_render) ? INTEL_RELOC_WRITE : 0);
       }

@@ -374,7 +374,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 8;
 
 	case PIPE_CAP_MAX_VIEWPORTS:
-		return 16;
+		return R600_MAX_VIEWPORTS;
 
 	/* Timer queries, present when the clock frequency is non zero. */
 	case PIPE_CAP_QUERY_TIME_ELAPSED:
@@ -493,6 +493,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		return 0;
 	case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
+	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
 		return 0;
 	}
 	return 0;

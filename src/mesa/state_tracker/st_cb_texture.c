@@ -25,6 +25,7 @@
  * 
  **************************************************************************/
 
+#include <stdio.h>
 #include "main/bufferobj.h"
 #include "main/enums.h"
 #include "main/fbobject.h"
@@ -176,9 +177,6 @@ st_FreeTextureImageBuffer(struct gl_context *ctx,
    if (stImage->pt) {
       pipe_resource_reference(&stImage->pt, NULL);
    }
-
-   _mesa_align_free(stImage->TexData);
-   stImage->TexData = NULL;
 
    free(stImage->transfer);
    stImage->transfer = NULL;
@@ -500,7 +498,6 @@ st_AllocTextureImageBuffer(struct gl_context *ctx,
 
    DBG("%s\n", __FUNCTION__);
 
-   assert(!stImage->TexData);
    assert(!stImage->pt); /* xxx this might be wrong */
 
    /* Look if the parent texture object has space for this image */
@@ -1520,23 +1517,6 @@ copy_image_data_to_texture(struct st_context *st,
 
       pipe_resource_reference(&stImage->pt, NULL);
    }
-   else if (stImage->TexData) {
-      /* Copy from malloc'd memory */
-      /* XXX this should be re-examined/tested with a compressed format */
-      GLuint blockSize = util_format_get_blocksize(stObj->pt->format);
-      GLuint srcRowStride = stImage->base.Width * blockSize;
-      GLuint srcSliceStride = stImage->base.Height * srcRowStride;
-      st_texture_image_data(st,
-                            stObj->pt,
-                            stImage->base.Face,
-                            dstLevel,
-                            stImage->TexData,
-                            srcRowStride,
-                            srcSliceStride);
-      _mesa_align_free(stImage->TexData);
-      stImage->TexData = NULL;
-   }
-
    pipe_resource_reference(&stImage->pt, stObj->pt);
 }
 

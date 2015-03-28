@@ -201,6 +201,8 @@ public:
    bool opt_vector_float();
    bool opt_reduce_swizzle();
    bool dead_code_eliminate();
+   int var_range_start(unsigned v, unsigned n) const;
+   int var_range_end(unsigned v, unsigned n) const;
    bool virtual_grf_interferes(int a, int b);
    bool opt_copy_propagation(bool do_constant_prop = true);
    bool opt_cse_local(bblock_t *block);
@@ -256,7 +258,6 @@ public:
    vec4_instruction *IF(src_reg src0, src_reg src1,
                         enum brw_conditional_mod condition);
    vec4_instruction *IF(enum brw_predicate predicate);
-   EMIT1(PULL_CONSTANT_LOAD)
    EMIT1(SCRATCH_READ)
    EMIT2(SCRATCH_WRITE)
    EMIT3(LRP)

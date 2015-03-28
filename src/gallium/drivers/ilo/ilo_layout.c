@@ -28,10 +28,10 @@
 #include "ilo_layout.h"
 
 enum {
-   LAYOUT_TILING_NONE = 1 << INTEL_TILING_NONE,
-   LAYOUT_TILING_X = 1 << INTEL_TILING_X,
-   LAYOUT_TILING_Y = 1 << INTEL_TILING_Y,
-   LAYOUT_TILING_W = 1 << (INTEL_TILING_Y + 1),
+   LAYOUT_TILING_NONE = 1 << GEN6_TILING_NONE,
+   LAYOUT_TILING_X = 1 << GEN6_TILING_X,
+   LAYOUT_TILING_Y = 1 << GEN6_TILING_Y,
+   LAYOUT_TILING_W = 1 << GEN8_TILING_W,
 
    LAYOUT_TILING_ALL = (LAYOUT_TILING_NONE |
                         LAYOUT_TILING_X |
@@ -427,7 +427,7 @@ layout_init_alignments(struct ilo_layout *layout,
          (templ->nr_samples > 1) ||
          (ilo_dev_gen(params->dev) >= ILO_GEN(8)) ||
          (ilo_dev_gen(params->dev) >= ILO_GEN(7) &&
-          layout->tiling == INTEL_TILING_Y &&
+          layout->tiling == GEN6_TILING_Y &&
           (templ->bind & PIPE_BIND_RENDER_TARGET));
 
       if (ilo_dev_gen(params->dev) >= ILO_GEN(7) &&
@@ -530,6 +530,13 @@ layout_get_valid_tilings(const struct ilo_layout *layout,
           ilo_dev_gen(params->dev) <= ILO_GEN(7.5) &&
           layout->format == PIPE_FORMAT_R32G32B32_FLOAT)
          valid_tilings &= ~LAYOUT_TILING_Y;
+
+      valid_tilings &= ~LAYOUT_TILING_W;
+   }
+
+   if (templ->bind & PIPE_BIND_SAMPLER_VIEW) {
+      if (ilo_dev_gen(params->dev) < ILO_GEN(8))
+         valid_tilings &= ~LAYOUT_TILING_W;
    }
 
    /* no conflicting binding flags */
@@ -543,38 +550,42 @@ layout_init_tiling(struct ilo_layout *layout,
                    struct ilo_layout_params *params)
 {
    const struct pipe_resource *templ = params->templ;
-   unsigned valid_tilings = layout_get_valid_tilings(layout, params);
+   unsigned preferred_tilings;
 
-   /* no hardware support for W-tile */
-   if (valid_tilings & LAYOUT_TILING_W)
-      valid_tilings = (valid_tilings & ~LAYOUT_TILING_W) | LAYOUT_TILING_NONE;
+   layout->valid_tilings = layout_get_valid_tilings(layout, params);
 
-   layout->valid_tilings = valid_tilings;
+   preferred_tilings = layout->valid_tilings;
+
+   /* no fencing nor BLT support */
+   if (preferred_tilings & ~LAYOUT_TILING_W)
+      preferred_tilings &= ~LAYOUT_TILING_W;
 
    if (templ->bind & (PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW)) {
       /*
        * heuristically set a minimum width/height for enabling tiling
        */
-      if (layout->width0 < 64 && (valid_tilings & ~LAYOUT_TILING_X))
-         valid_tilings &= ~LAYOUT_TILING_X;
+      if (layout->width0 < 64 && (preferred_tilings & ~LAYOUT_TILING_X))
+         preferred_tilings &= ~LAYOUT_TILING_X;
 
       if ((layout->width0 < 32 || layout->height0 < 16) &&
           (layout->width0 < 16 || layout->height0 < 32) &&
-          (valid_tilings & ~LAYOUT_TILING_Y))
-         valid_tilings &= ~LAYOUT_TILING_Y;
+          (preferred_tilings & ~LAYOUT_TILING_Y))
+         preferred_tilings &= ~LAYOUT_TILING_Y;
    } else {
       /* force linear if we are not sure where the texture is bound to */
-      if (valid_tilings & LAYOUT_TILING_NONE)
-         valid_tilings &= LAYOUT_TILING_NONE;
+      if (preferred_tilings & LAYOUT_TILING_NONE)
+         preferred_tilings &= LAYOUT_TILING_NONE;
    }
 
    /* prefer tiled over linear */
-   if (valid_tilings & LAYOUT_TILING_Y)
-      layout->tiling = INTEL_TILING_Y;
-   else if (valid_tilings & LAYOUT_TILING_X)
-      layout->tiling = INTEL_TILING_X;
+   if (preferred_tilings & LAYOUT_TILING_Y)
+      layout->tiling = GEN6_TILING_Y;
+   else if (preferred_tilings & LAYOUT_TILING_X)
+      layout->tiling = GEN6_TILING_X;
+   else if (preferred_tilings & LAYOUT_TILING_W)
+      layout->tiling = GEN8_TILING_W;
    else
-      layout->tiling = INTEL_TILING_NONE;
+      layout->tiling = GEN6_TILING_NONE;
 }
 
 static void
@@ -737,8 +748,7 @@ layout_want_mcs(struct ilo_layout *layout,
     *     "This field must be set to 0 for all SINT MSRTs when all RT channels
     *      are not written"
     */
-   if (templ->nr_samples > 1 && !layout->interleaved_samples &&
-       !util_format_is_pure_sint(templ->format)) {
+   if (templ->nr_samples > 1 && !util_format_is_pure_sint(templ->format)) {
       want_mcs = true;
    } else if (templ->nr_samples <= 1) {
       /*
@@ -755,7 +765,7 @@ layout_want_mcs(struct ilo_layout *layout,
        *        32bpp, 64bpp and 128bpp.
        *      ..."
        */
-      if (layout->tiling != INTEL_TILING_NONE &&
+      if (layout->tiling != GEN6_TILING_NONE &&
           templ->last_level == 0 && templ->array_size == 1) {
          switch (layout->block_size) {
          case 4:
@@ -909,10 +919,8 @@ layout_calculate_bo_size(struct ilo_layout *layout,
        */
       if (ilo_dev_gen(params->dev) >= ILO_GEN(7.5) &&
           (params->templ->bind & PIPE_BIND_SAMPLER_VIEW) &&
-          layout->tiling == INTEL_TILING_NONE) {
-         layout->bo_height +=
-            (64 + layout->bo_stride - 1) / layout->bo_stride;
-      }
+          layout->tiling == GEN6_TILING_NONE)
+         h += (64 + layout->bo_stride - 1) / layout->bo_stride;
 
       /*
        * From the Sandy Bridge PRM, volume 4 part 1, page 81:
@@ -931,33 +939,30 @@ layout_calculate_bo_size(struct ilo_layout *layout,
        * need to check layout->templ->bind.
        */
       switch (layout->tiling) {
-      case INTEL_TILING_X:
+      case GEN6_TILING_X:
          align_w = 512;
          align_h = 8;
          break;
-      case INTEL_TILING_Y:
+      case GEN6_TILING_Y:
          align_w = 128;
          align_h = 32;
          break;
+      case GEN8_TILING_W:
+         /*
+          * From the Sandy Bridge PRM, volume 1 part 2, page 22:
+          *
+          *     "A 4KB tile is subdivided into 8-high by 8-wide array of
+          *      Blocks for W-Major Tiles (W Tiles). Each Block is 8 rows by 8
+          *      bytes."
+          */
+         align_w = 64;
+         align_h = 64;
+         break;
       default:
-         if (layout->format == PIPE_FORMAT_S8_UINT) {
-            /*
-             * From the Sandy Bridge PRM, volume 1 part 2, page 22:
-             *
-             *     "A 4KB tile is subdivided into 8-high by 8-wide array of
-             *      Blocks for W-Major Tiles (W Tiles). Each Block is 8 rows by 8
-             *      bytes."
-             *
-             * Since we asked for INTEL_TILING_NONE instead of the non-existent
-             * INTEL_TILING_W, we want to align to W tiles here.
-             */
-            align_w = 64;
-            align_h = 64;
-         } else {
-            /* some good enough values */
-            align_w = 64;
-            align_h = 2;
-         }
+         assert(layout->tiling == GEN6_TILING_NONE);
+         /* some good enough values */
+         align_w = 64;
+         align_h = 2;
          break;
       }
 
@@ -965,7 +970,7 @@ layout_calculate_bo_size(struct ilo_layout *layout,
       h = align(h, align_h);
 
       /* make sure the bo is mappable */
-      if (layout->tiling != INTEL_TILING_NONE) {
+      if (layout->tiling != GEN6_TILING_NONE) {
          /*
           * Usually only the first 256MB of the GTT is mappable.
           *
@@ -979,7 +984,7 @@ layout_calculate_bo_size(struct ilo_layout *layout,
           */
          if (mappable_gtt_size / w / 4 < h) {
             if (layout->valid_tilings & LAYOUT_TILING_NONE) {
-               layout->tiling = INTEL_TILING_NONE;
+               layout->tiling = GEN6_TILING_NONE;
                /* MCS support for non-MSRTs is limited to tiled RTs */
                if (layout->aux == ILO_LAYOUT_AUX_MCS &&
                    params->templ->nr_samples <= 1)
@@ -1251,11 +1256,11 @@ layout_calculate_mcs_size(struct ilo_layout *layout,
        * hit out-of-bound access.
        */
       switch (layout->tiling) {
-      case INTEL_TILING_X:
+      case GEN6_TILING_X:
          downscale_x = 64 / layout->block_size;
          downscale_y = 2;
          break;
-      case INTEL_TILING_Y:
+      case GEN6_TILING_Y:
          downscale_x = 32 / layout->block_size;
          downscale_y = 4;
          break;
@@ -1315,7 +1320,7 @@ layout_init_for_transfer(struct ilo_layout *layout,
    layout->walk = ILO_LAYOUT_WALK_LOD;
 
    layout->valid_tilings = LAYOUT_TILING_NONE;
-   layout->tiling = INTEL_TILING_NONE;
+   layout->tiling = GEN6_TILING_NONE;
 
    layout->align_i = layout->block_width;
    layout->align_j = layout->block_height;
@@ -1387,14 +1392,15 @@ void ilo_layout_init(struct ilo_layout *layout,
  */
 bool
 ilo_layout_update_for_imported_bo(struct ilo_layout *layout,
-                                  enum intel_tiling_mode tiling,
+                                  enum gen_surface_tiling tiling,
                                   unsigned bo_stride)
 {
    if (!(layout->valid_tilings & (1 << tiling)))
       return false;
 
-   if ((tiling == INTEL_TILING_X && bo_stride % 512) ||
-       (tiling == INTEL_TILING_Y && bo_stride % 128))
+   if ((tiling == GEN6_TILING_X && bo_stride % 512) ||
+       (tiling == GEN6_TILING_Y && bo_stride % 128) ||
+       (tiling == GEN8_TILING_W && bo_stride % 64))
       return false;
 
    layout->tiling = tiling;

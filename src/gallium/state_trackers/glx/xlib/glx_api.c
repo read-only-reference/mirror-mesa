@@ -33,6 +33,8 @@
 #define GLX_GLXEXT_PROTOTYPES
 #include "GL/glx.h"
 
+#include <stdio.h>
+#include <string.h>
 #include <X11/Xmd.h>
 #include <GL/glxproto.h>
 
@@ -643,7 +645,7 @@ register_with_display(Display *dpy)
       ext = dpy->ext_procs;  /* new extension is at head of list */
       assert(c->extension == ext->codes.extension);
       (void) c;
-      ext->name = _mesa_strdup(extName);
+      ext->name = strdup(extName);
       ext->close_display = close_display_callback;
    }
 }

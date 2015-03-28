@@ -28,8 +28,6 @@
  * from the LIR.
  */
 
-extern "C" {
-
 #include <sys/types.h>
 
 #include "util/hash_table.h"
@@ -43,7 +41,6 @@ extern "C" {
 #include "brw_context.h"
 #include "brw_eu.h"
 #include "brw_wm.h"
-}
 #include "brw_fs.h"
 #include "brw_cfg.h"
 #include "brw_dead_control_flow.h"
@@ -490,10 +487,7 @@ fs_inst::equals(fs_inst *inst) const
 bool
 fs_inst::overwrites_reg(const fs_reg &reg) const
 {
-   return (reg.file == dst.file &&
-           reg.reg == dst.reg &&
-           reg.reg_offset >= dst.reg_offset  &&
-           reg.reg_offset < dst.reg_offset + regs_written);
+   return reg.in_range(dst, regs_written);
 }
 
 bool
@@ -680,8 +674,14 @@ fs_visitor::type_size(const struct glsl_type *type)
    return 0;
 }
 
+/**
+ * Create a MOV to read the timestamp register.
+ *
+ * The caller is responsible for emitting the MOV.  The return value is
+ * the destination of the MOV, with extra parameters set.
+ */
 fs_reg
-fs_visitor::get_timestamp()
+fs_visitor::get_timestamp(fs_inst **out_mov)
 {
    assert(brw->gen >= 7);
 
@@ -692,7 +692,7 @@ fs_visitor::get_timestamp()
 
    fs_reg dst = fs_reg(GRF, alloc.allocate(1), BRW_REGISTER_TYPE_UD, 4);
 
-   fs_inst *mov = emit(MOV(dst, ts));
+   fs_inst *mov = MOV(dst, ts);
    /* We want to read the 3 fields we care about even if it's not enabled in
     * the dispatch.
     */
@@ -710,6 +710,7 @@ fs_visitor::get_timestamp()
     */
    dst.set_smear(0);
 
+   *out_mov = mov;
    return dst;
 }
 
@@ -717,7 +718,9 @@ void
 fs_visitor::emit_shader_time_begin()
 {
    current_annotation = "shader time start";
-   shader_start_time = get_timestamp();
+   fs_inst *mov;
+   shader_start_time = get_timestamp(&mov);
+   emit(mov);
 }
 
 void
@@ -753,38 +756,50 @@ fs_visitor::emit_shader_time_end()
       unreachable("fs_visitor::emit_shader_time_end missing code");
    }
 
-   fs_reg shader_end_time = get_timestamp();
+   /* Insert our code just before the final SEND with EOT. */
+   exec_node *end = this->instructions.get_tail();
+   assert(end && ((fs_inst *) end)->eot);
+
+   fs_inst *tm_read;
+   fs_reg shader_end_time = get_timestamp(&tm_read);
+   end->insert_before(tm_read);
 
    /* Check that there weren't any timestamp reset events (assuming these
     * were the only two timestamp reads that happened).
     */
    fs_reg reset = shader_end_time;
    reset.set_smear(2);
-   fs_inst *test = emit(AND(reg_null_d, reset, fs_reg(1u)));
+   fs_inst *test = AND(reg_null_d, reset, fs_reg(1u));
    test->conditional_mod = BRW_CONDITIONAL_Z;
-   emit(IF(BRW_PREDICATE_NORMAL));
+   test->force_writemask_all = true;
+   end->insert_before(test);
+   end->insert_before(IF(BRW_PREDICATE_NORMAL));
 
    fs_reg start = shader_start_time;
    start.negate = true;
    fs_reg diff = fs_reg(GRF, alloc.allocate(1), BRW_REGISTER_TYPE_UD, 1);
-   emit(ADD(diff, start, shader_end_time));
+   diff.set_smear(0);
+   fs_inst *add = ADD(diff, start, shader_end_time);
+   add->force_writemask_all = true;
+   end->insert_before(add);
 
    /* If there were no instructions between the two timestamp gets, the diff
     * is 2 cycles.  Remove that overhead, so I can forget about that when
     * trying to determine the time taken for single instructions.
     */
-   emit(ADD(diff, diff, fs_reg(-2u)));
+   add = ADD(diff, diff, fs_reg(-2u));
+   add->force_writemask_all = true;
+   end->insert_before(add);
 
-   emit_shader_time_write(type, diff);
-   emit_shader_time_write(written_type, fs_reg(1u));
-   emit(BRW_OPCODE_ELSE);
-   emit_shader_time_write(reset_type, fs_reg(1u));
-   emit(BRW_OPCODE_ENDIF);
+   end->insert_before(SHADER_TIME_ADD(type, diff));
+   end->insert_before(SHADER_TIME_ADD(written_type, fs_reg(1u)));
+   end->insert_before(new(mem_ctx) fs_inst(BRW_OPCODE_ELSE, dispatch_width));
+   end->insert_before(SHADER_TIME_ADD(reset_type, fs_reg(1u)));
+   end->insert_before(new(mem_ctx) fs_inst(BRW_OPCODE_ENDIF, dispatch_width));
 }
 
-void
-fs_visitor::emit_shader_time_write(enum shader_time_shader_type type,
-                                   fs_reg value)
+fs_inst *
+fs_visitor::SHADER_TIME_ADD(enum shader_time_shader_type type, fs_reg value)
 {
    int shader_time_index =
       brw_get_shader_time_index(brw, shader_prog, prog, type);
@@ -796,8 +811,8 @@ fs_visitor::emit_shader_time_write(enum shader_time_shader_type type,
    else
       payload = vgrf(glsl_type::uint_type);
 
-   emit(new(mem_ctx) fs_inst(SHADER_OPCODE_SHADER_TIME_ADD,
-                             fs_reg(), payload, offset, value));
+   return new(mem_ctx) fs_inst(SHADER_OPCODE_SHADER_TIME_ADD,
+                               fs_reg(), payload, offset, value);
 }
 
 void
@@ -1564,6 +1579,17 @@ fs_visitor::emit_sampleid_setup()
    return reg;
 }
 
+void
+fs_visitor::resolve_source_modifiers(fs_reg *src)
+{
+   if (!src->abs && !src->negate)
+      return;
+
+   fs_reg temp = retype(vgrf(1), src->type);
+   emit(MOV(temp, *src));
+   *src = temp;
+}
+
 fs_reg
 fs_visitor::fix_math_operand(fs_reg src)
 {
@@ -1662,6 +1688,21 @@ fs_visitor::emit_math(enum opcode opcode, fs_reg dst, fs_reg src0, fs_reg src1)
       inst->mlen = 2 * dispatch_width / 8;
    }
    return inst;
+}
+
+void
+fs_visitor::emit_discard_jump()
+{
+   /* For performance, after a discard, jump to the end of the
+    * shader if all relevant channels have been discarded.
+    */
+   fs_inst *discard_jump = emit(FS_OPCODE_DISCARD_JUMP);
+   discard_jump->flag_subreg = 1;
+
+   discard_jump->predicate = (dispatch_width == 8)
+                             ? BRW_PREDICATE_ALIGN1_ANY8H
+                             : BRW_PREDICATE_ALIGN1_ANY16H;
+   discard_jump->predicate_inverse = true;
 }
 
 void
@@ -2252,8 +2293,13 @@ fs_visitor::demote_pull_constants()
 	 if (inst->src[i].file != UNIFORM)
 	    continue;
 
-         int pull_index = pull_constant_loc[inst->src[i].reg +
-                                            inst->src[i].reg_offset];
+         int pull_index;
+         unsigned location = inst->src[i].reg + inst->src[i].reg_offset;
+         if (location >= uniforms) /* Out of bounds access */
+            pull_index = -1;
+         else
+            pull_index = pull_constant_loc[location];
+
          if (pull_index == -1)
 	    continue;
 
@@ -2457,6 +2503,7 @@ fs_visitor::opt_algebraic()
             inst->opcode = BRW_OPCODE_MUL;
             inst->src[0] = inst->src[2];
             inst->src[2] = reg_undef;
+            progress = true;
          } else if (inst->src[1].is_one()) {
             inst->opcode = BRW_OPCODE_ADD;
             inst->src[1] = inst->src[2];
@@ -2487,8 +2534,16 @@ fs_visitor::opt_algebraic()
       default:
 	 break;
       }
-   }
 
+      /* Swap if src[0] is immediate. */
+      if (progress && inst->is_commutative()) {
+         if (inst->src[0].file == IMM) {
+            fs_reg tmp = inst->src[1];
+            inst->src[1] = inst->src[0];
+            inst->src[0] = tmp;
+         }
+      }
+   }
    return progress;
 }
 
@@ -2852,7 +2907,7 @@ fs_visitor::remove_duplicate_mrf_writes()
 
       /* Clear out any MRF move records whose sources got overwritten. */
       if (inst->dst.file == GRF) {
-	 for (unsigned int i = 0; i < Elements(last_mrf_move); i++) {
+	 for (unsigned int i = 0; i < ARRAY_SIZE(last_mrf_move); i++) {
 	    if (last_mrf_move[i] &&
 		last_mrf_move[i]->src[0].reg == inst->dst.reg) {
 	       last_mrf_move[i] = NULL;
@@ -2875,8 +2930,7 @@ fs_visitor::remove_duplicate_mrf_writes()
 }
 
 static void
-clear_deps_for_inst_src(fs_inst *inst, int dispatch_width, bool *deps,
-                        int first_grf, int grf_len)
+clear_deps_for_inst_src(fs_inst *inst, bool *deps, int first_grf, int grf_len)
 {
    /* Clear the flag for registers that actually got read (as expected). */
    for (int i = 0; i < inst->sources; i++) {
@@ -2927,8 +2981,7 @@ fs_visitor::insert_gen4_pre_send_dependency_workarounds(bblock_t *block,
    memset(needs_dep, false, sizeof(needs_dep));
    memset(needs_dep, true, write_len);
 
-   clear_deps_for_inst_src(inst, dispatch_width,
-                           needs_dep, first_write_grf, write_len);
+   clear_deps_for_inst_src(inst, needs_dep, first_write_grf, write_len);
 
    /* Walk backwards looking for writes to registers we're writing which
     * aren't read since being written.  If we hit the start of the program,
@@ -2968,8 +3021,7 @@ fs_visitor::insert_gen4_pre_send_dependency_workarounds(bblock_t *block,
       }
 
       /* Clear the flag for registers that actually got read (as expected). */
-      clear_deps_for_inst_src(scan_inst, dispatch_width,
-                              needs_dep, first_write_grf, write_len);
+      clear_deps_for_inst_src(scan_inst, needs_dep, first_write_grf, write_len);
 
       /* Continue the loop only if we haven't resolved all the dependencies */
       int i;
@@ -3014,8 +3066,7 @@ fs_visitor::insert_gen4_post_send_dependency_workarounds(bblock_t *block, fs_ins
       }
 
       /* Clear the flag for registers that actually got read (as expected). */
-      clear_deps_for_inst_src(scan_inst, dispatch_width,
-                              needs_dep, first_write_grf, write_len);
+      clear_deps_for_inst_src(scan_inst, needs_dep, first_write_grf, write_len);
 
       /* We insert our reads as late as possible since they're reading the
        * result of a SEND, which has massive latency.
@@ -3036,16 +3087,6 @@ fs_visitor::insert_gen4_post_send_dependency_workarounds(bblock_t *block, fs_ins
       }
       if (i == write_len)
          return;
-   }
-
-   /* If we hit the end of the program, resolve all remaining dependencies out
-    * of paranoia.
-    */
-   fs_inst *last_inst = (fs_inst *)this->instructions.get_tail();
-   assert(last_inst->eot);
-   for (int i = 0; i < write_len; i++) {
-      if (needs_dep[i])
-         last_inst->insert_before(block, DEP_RESOLVE_MOV(first_write_grf + i));
    }
 }
 
@@ -3820,12 +3861,17 @@ fs_visitor::run_vs()
    if (INTEL_DEBUG & DEBUG_SHADER_TIME)
       emit_shader_time_begin();
 
-   foreach_in_list(ir_instruction, ir, shader->base.ir) {
-      base_ir = ir;
-      this->result = reg_undef;
-      ir->accept(this);
+   if (brw_env_var_as_boolean("INTEL_USE_NIR", false)) {
+      emit_nir_code();
+   } else {
+      foreach_in_list(ir_instruction, ir, shader->base.ir) {
+         base_ir = ir;
+         this->result = reg_undef;
+         ir->accept(this);
+      }
+      base_ir = NULL;
    }
-   base_ir = NULL;
+
    if (failed)
       return false;
 
@@ -3888,15 +3934,13 @@ fs_visitor::run_fs()
       /* Generate FS IR for main().  (the visitor only descends into
        * functions called "main").
        */
-      if (shader) {
-         if (getenv("INTEL_USE_NIR") != NULL) {
-            emit_nir_code();
-         } else {
-            foreach_in_list(ir_instruction, ir, shader->base.ir) {
-               base_ir = ir;
-               this->result = reg_undef;
-               ir->accept(this);
-            }
+      if (brw_env_var_as_boolean("INTEL_USE_NIR", false)) {
+         emit_nir_code();
+      } else if (shader) {
+         foreach_in_list(ir_instruction, ir, shader->base.ir) {
+            base_ir = ir;
+            this->result = reg_undef;
+            ir->accept(this);
          }
       } else {
          emit_fragment_program_code();
@@ -3911,6 +3955,9 @@ fs_visitor::run_fs()
          emit_alpha_test();
 
       emit_fb_writes();
+
+      if (INTEL_DEBUG & DEBUG_SHADER_TIME)
+         emit_shader_time_end();
 
       calculate_cfg();
 
@@ -4011,7 +4058,7 @@ brw_wm_fs_emit(struct brw_context *brw,
    }
 
    fs_generator g(brw, mem_ctx, (void *) key, &prog_data->base,
-                  &fp->Base, v.runtime_check_aads_emit, "FS");
+                  &fp->Base, v.promoted_constants, v.runtime_check_aads_emit, "FS");
 
    if (unlikely(INTEL_DEBUG & DEBUG_WM)) {
       char *name;

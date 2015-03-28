@@ -49,7 +49,7 @@
  */
 
 static bool
-opt_cmod_propagation_local(fs_visitor *v, bblock_t *block)
+opt_cmod_propagation_local(bblock_t *block)
 {
    bool progress = false;
    int ip = block->end_ip + 1;
@@ -57,12 +57,26 @@ opt_cmod_propagation_local(fs_visitor *v, bblock_t *block)
    foreach_inst_in_block_reverse_safe(fs_inst, inst, block) {
       ip--;
 
-      if ((inst->opcode != BRW_OPCODE_CMP &&
+      if ((inst->opcode != BRW_OPCODE_AND &&
+           inst->opcode != BRW_OPCODE_CMP &&
            inst->opcode != BRW_OPCODE_MOV) ||
           inst->predicate != BRW_PREDICATE_NONE ||
           !inst->dst.is_null() ||
           inst->src[0].file != GRF ||
           inst->src[0].abs)
+         continue;
+
+      /* Only an AND.NZ can be propagated.  Many AND.Z instructions are
+       * generated (for ir_unop_not in fs_visitor::emit_bool_to_cond_code).
+       * Propagating those would require inverting the condition on the CMP.
+       * This changes both the flag value and the register destination of the
+       * CMP.  That result may be used elsewhere, so we can't change its value
+       * on a whim.
+       */
+      if (inst->opcode == BRW_OPCODE_AND &&
+          !(inst->src[1].is_one() &&
+            inst->conditional_mod == BRW_CONDITIONAL_NZ &&
+            !inst->src[0].negate))
          continue;
 
       if (inst->opcode == BRW_OPCODE_CMP && !inst->src[1].is_zero())
@@ -78,6 +92,26 @@ opt_cmod_propagation_local(fs_visitor *v, bblock_t *block)
          if (scan_inst->overwrites_reg(inst->src[0])) {
             if (scan_inst->is_partial_write() ||
                 scan_inst->dst.reg_offset != inst->src[0].reg_offset)
+               break;
+
+            /* CMP's result is the same regardless of dest type. */
+            if (inst->conditional_mod == BRW_CONDITIONAL_NZ &&
+                scan_inst->opcode == BRW_OPCODE_CMP &&
+                (inst->dst.type == BRW_REGISTER_TYPE_D ||
+                 inst->dst.type == BRW_REGISTER_TYPE_UD)) {
+               inst->remove(block);
+               progress = true;
+               break;
+            }
+
+            /* If the AND wasn't handled by the previous case, it isn't safe
+             * to remove it.
+             */
+            if (inst->opcode == BRW_OPCODE_AND)
+               break;
+
+            /* Comparisons operate differently for ints and floats */
+            if (scan_inst->dst.type != inst->dst.type)
                break;
 
             /* If the instruction generating inst's source also wrote the
@@ -124,7 +158,7 @@ fs_visitor::opt_cmod_propagation()
    bool progress = false;
 
    foreach_block_reverse(block, cfg) {
-      progress = opt_cmod_propagation_local(this, block) || progress;
+      progress = opt_cmod_propagation_local(block) || progress;
    }
 
    if (progress)

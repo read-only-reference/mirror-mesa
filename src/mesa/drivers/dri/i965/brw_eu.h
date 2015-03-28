@@ -205,11 +205,6 @@ void brw_set_sampler_message(struct brw_compile *p,
                              unsigned simd_mode,
                              unsigned return_format);
 
-void brw_set_indirect_send_descriptor(struct brw_compile *p,
-                                      brw_inst *insn,
-                                      unsigned sfid,
-                                      struct brw_reg descriptor);
-
 void brw_set_dp_read_message(struct brw_compile *p,
 			     brw_inst *insn,
 			     unsigned binding_table_index,
@@ -242,6 +237,22 @@ void brw_urb_WRITE(struct brw_compile *p,
 		   unsigned offset,
 		   unsigned swizzle);
 
+/**
+ * Send message to shared unit \p sfid with a possibly indirect descriptor \p
+ * desc.  If \p desc is not an immediate it will be transparently loaded to an
+ * address register using an OR instruction.  The returned instruction can be
+ * passed as argument to the usual brw_set_*_message() functions in order to
+ * specify any additional descriptor bits -- If \p desc is an immediate this
+ * will be the SEND instruction itself, otherwise it will be the OR
+ * instruction.
+ */
+struct brw_inst *
+brw_send_indirect_message(struct brw_compile *p,
+                          unsigned sfid,
+                          struct brw_reg dst,
+                          struct brw_reg payload,
+                          struct brw_reg desc);
+
 void brw_ff_sync(struct brw_compile *p,
 		   struct brw_reg dest,
 		   unsigned msg_reg_nr,
@@ -266,6 +277,7 @@ void brw_fb_WRITE(struct brw_compile *p,
 		   unsigned msg_length,
 		   unsigned response_length,
 		   bool eot,
+		   bool last_render_target,
 		   bool header_present);
 
 void brw_SAMPLE(struct brw_compile *p,
@@ -393,7 +405,7 @@ brw_untyped_atomic(struct brw_compile *p,
                    unsigned atomic_op,
                    unsigned bind_table_index,
                    unsigned msg_length,
-                   unsigned response_length);
+                   bool response_expected);
 
 void
 brw_untyped_surface_read(struct brw_compile *p,
@@ -401,7 +413,7 @@ brw_untyped_surface_read(struct brw_compile *p,
                          struct brw_reg mrf,
                          unsigned bind_table_index,
                          unsigned msg_length,
-                         unsigned response_length);
+                         unsigned num_channels);
 
 void
 brw_pixel_interpolator_query(struct brw_compile *p,

@@ -170,14 +170,10 @@ static unsigned delay_calc_srcn(struct ir3_sched_ctx *ctx,
 	unsigned delay = 0;
 
 	if (is_meta(assigner)) {
-		unsigned i;
-		for (i = 1; i < assigner->regs_count; i++) {
-			struct ir3_register *reg = assigner->regs[i];
-			if (reg->flags & IR3_REG_SSA) {
-				unsigned d = delay_calc_srcn(ctx, reg->instr,
-						consumer, srcn);
-				delay = MAX2(delay, d);
-			}
+		struct ir3_instruction *src;
+		foreach_ssa_src(src, assigner) {
+			unsigned d = delay_calc_srcn(ctx, src, consumer, srcn);
+			delay = MAX2(delay, d);
 		}
 	} else {
 		delay = ir3_delayslots(assigner, consumer, srcn);
@@ -191,41 +187,36 @@ static unsigned delay_calc_srcn(struct ir3_sched_ctx *ctx,
 static unsigned delay_calc(struct ir3_sched_ctx *ctx,
 		struct ir3_instruction *instr)
 {
-	unsigned i, delay = 0;
+	unsigned delay = 0;
+	struct ir3_instruction *src;
 
-	for (i = 1; i < instr->regs_count; i++) {
-		struct ir3_register *reg = instr->regs[i];
-		if (reg->flags & IR3_REG_SSA) {
-			unsigned d = delay_calc_srcn(ctx, reg->instr,
-					instr, i - 1);
-			delay = MAX2(delay, d);
-		}
+	foreach_ssa_src_n(src, i, instr) {
+		unsigned d = delay_calc_srcn(ctx, src, instr, i);
+		delay = MAX2(delay, d);
 	}
 
 	return delay;
 }
 
 /* A negative return value signals that an instruction has been newly
- * scheduled, return back up to the top of the stack (to block_sched())
+ * SCHEDULED (or DELAYED due to address or predicate register already
+ * in use), return back up to the top of the stack (to block_sched())
  */
 static int trysched(struct ir3_sched_ctx *ctx,
 		struct ir3_instruction *instr)
 {
 	struct ir3_instruction *srcs[64];
 	struct ir3_instruction *src;
-	unsigned i, delay, nsrcs = 0;
+	unsigned delay, nsrcs = 0;
 
 	/* if already scheduled: */
 	if (instr->flags & IR3_INSTR_MARK)
 		return 0;
 
-	debug_assert(instr->regs_count < ARRAY_SIZE(srcs));
-
-	/* figure out our src's: */
-	for (i = 1; i < instr->regs_count; i++) {
-		struct ir3_register *reg = instr->regs[i];
-		if (reg->flags & IR3_REG_SSA)
-			srcs[nsrcs++] = reg->instr;
+	/* figure out our src's, copy 'em out into an array for sorting: */
+	foreach_ssa_src(src, instr) {
+		debug_assert(nsrcs < ARRAY_SIZE(srcs));
+		srcs[nsrcs++] = src;
 	}
 
 	/* for each src register in sorted order:
@@ -262,11 +253,42 @@ static int trysched(struct ir3_sched_ctx *ctx,
 		unsigned i;
 
 		for (i = 0; i < ir->baryfs_count; i++) {
-			if (ir->baryfs[i]->depth == DEPTH_UNUSED)
+			struct ir3_instruction *baryf = ir->baryfs[i];
+			if (baryf->depth == DEPTH_UNUSED)
 				continue;
-			delay = trysched(ctx, ir->baryfs[i]);
+			delay = trysched(ctx, baryf);
 			if (delay)
 				return delay;
+		}
+	}
+
+	/* if instruction writes address register, we need to ensure
+	 * that the instructions which use the address register value
+	 * have all their other dependencies scheduled.
+	 * TODO we may possibly need to do the same thing with predicate
+	 * register usage, but for now we get by without since the
+	 * predicate usage patterns are more simple
+	 */
+	if (writes_addr(instr)) {
+		struct ir3 *ir = instr->block->shader;
+		unsigned i;
+
+		for (i = 0; i < ir->indirects_count; i++) {
+			struct ir3_instruction *indirect = ir->indirects[i];
+			if (indirect->depth == DEPTH_UNUSED)
+				continue;
+			if (indirect->address != instr)
+				continue;
+			/* NOTE: avoid recursively scheduling the dependency
+			 * on ourself (ie. avoid infinite recursion):
+			 */
+			foreach_ssa_src(src, indirect) {
+				if ((src == instr) || (src->address == instr))
+					continue;
+				delay = trysched(ctx, src);
+				if (delay)
+					return delay;
+			}
 		}
 	}
 
@@ -302,30 +324,16 @@ static struct ir3_instruction * reverse(struct ir3_instruction *instr)
 static bool uses_current_addr(struct ir3_sched_ctx *ctx,
 		struct ir3_instruction *instr)
 {
-	unsigned i;
-	for (i = 1; i < instr->regs_count; i++) {
-		struct ir3_register *reg = instr->regs[i];
-		if (reg->flags & IR3_REG_SSA) {
-			if (is_addr(reg->instr)) {
-				struct ir3_instruction *addr;
-				addr = reg->instr->regs[1]->instr; /* the mova */
-				if (ctx->addr == addr)
-					return true;
-			}
-		}
-	}
-	return false;
+	return instr->address && (ctx->addr == instr->address);
 }
 
 static bool uses_current_pred(struct ir3_sched_ctx *ctx,
 		struct ir3_instruction *instr)
 {
-	unsigned i;
-	for (i = 1; i < instr->regs_count; i++) {
-		struct ir3_register *reg = instr->regs[i];
-		if ((reg->flags & IR3_REG_SSA) && (ctx->pred == reg->instr))
-				return true;
-	}
+	struct ir3_instruction *src;
+	foreach_ssa_src(src, instr)
+		if (ctx->pred == src)
+			return true;
 	return false;
 }
 

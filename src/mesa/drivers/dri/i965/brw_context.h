@@ -149,6 +149,13 @@ struct brw_vue_prog_key;
 struct brw_wm_prog_key;
 struct brw_wm_prog_data;
 
+enum brw_pipeline {
+   BRW_RENDER_PIPELINE,
+   BRW_COMPUTE_PIPELINE,
+
+   BRW_NUM_PIPELINES
+};
+
 enum brw_cache_id {
    BRW_CACHE_FS_PROG,
    BRW_CACHE_BLORP_BLIT_PROG,
@@ -964,12 +971,6 @@ struct brw_context
 					  bool layered,
 					  unsigned unit);
 
-      void (*create_raw_surface)(struct brw_context *brw,
-                                 drm_intel_bo *bo,
-                                 uint32_t offset,
-                                 uint32_t size,
-                                 uint32_t *out_offset,
-                                 bool rw);
       void (*emit_buffer_surface_state)(struct brw_context *brw,
                                         uint32_t *out_offset,
                                         drm_intel_bo *bo,
@@ -1036,8 +1037,20 @@ struct brw_context
    bool front_buffer_dirty;
 
    /** Framerate throttling: @{ */
-   drm_intel_bo *first_post_swapbuffers_batch;
-   bool need_throttle;
+   drm_intel_bo *throttle_batch[2];
+
+   /* Limit the number of outstanding SwapBuffers by waiting for an earlier
+    * frame of rendering to complete. This gives a very precise cap to the
+    * latency between input and output such that rendering never gets more
+    * than a frame behind the user. (With the caveat that we technically are
+    * not using the SwapBuffers itself as a barrier but the first batch
+    * submitted afterwards, which may be immediately prior to the next
+    * SwapBuffers.)
+    */
+   bool need_swap_throttle;
+
+   /** General throttling, not caught by throttling between SwapBuffers */
+   bool need_flush_throttle;
    /** @} */
 
    GLuint stats_wm;
@@ -1070,6 +1083,10 @@ struct brw_context
 
    int gen;
    int gt;
+   /* GT revision. This will be -1 if the revision couldn't be determined (eg,
+    * if the kernel doesn't support the query).
+    */
+   int revision;
 
    bool is_g4x;
    bool is_baytrail;
@@ -1100,7 +1117,7 @@ struct brw_context
 
    GLuint NewGLState;
    struct {
-      struct brw_state_flags dirty;
+      struct brw_state_flags pipelines[BRW_NUM_PIPELINES];
    } state;
 
    struct brw_cache cache;
@@ -1392,8 +1409,9 @@ struct brw_context
       int entries_per_oa_snapshot;
    } perfmon;
 
-   int num_atoms;
-   const struct brw_tracked_state atoms[57];
+   int num_atoms[BRW_NUM_PIPELINES];
+   const struct brw_tracked_state render_atoms[57];
+   const struct brw_tracked_state compute_atoms[1];
 
    /* If (INTEL_DEBUG & DEBUG_BATCH) */
    struct {
@@ -1919,33 +1937,6 @@ gen6_upload_push_constants(struct brw_context *brw,
                            const struct brw_stage_prog_data *prog_data,
                            struct brw_stage_state *stage_state,
                            enum aub_state_struct_type type);
-
-/* ================================================================
- * From linux kernel i386 header files, copes with odd sizes better
- * than COPY_DWORDS would:
- * XXX Put this in src/mesa/main/imports.h ???
- */
-#if defined(i386) || defined(__i386__)
-static inline void * __memcpy(void * to, const void * from, size_t n)
-{
-   int d0, d1, d2;
-   __asm__ __volatile__(
-      "rep ; movsl\n\t"
-      "testb $2,%b4\n\t"
-      "je 1f\n\t"
-      "movsw\n"
-      "1:\ttestb $1,%b4\n\t"
-      "je 2f\n\t"
-      "movsb\n"
-      "2:"
-      : "=&c" (d0), "=&D" (d1), "=&S" (d2)
-      :"0" (n/4), "q" (n),"1" ((long) to),"2" ((long) from)
-      : "memory");
-   return (to);
-}
-#else
-#define __memcpy(a,b,c) memcpy(a,b,c)
-#endif
 
 #ifdef __cplusplus
 }

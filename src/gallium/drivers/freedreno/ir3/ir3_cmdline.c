@@ -210,7 +210,7 @@ read_file(const char *filename, void **ptr, size_t *size)
 
 static void reset_variant(struct ir3_shader_variant *v, const char *msg)
 {
-	debug_error(msg);
+	printf("; %s\n", msg);
 	v->inputs_count = 0;
 	v->outputs_count = 0;
 	v->total_in = 0;
@@ -336,6 +336,9 @@ int main(int argc, char **argv)
 		return ret;
 	}
 
+	if (fd_mesa_debug & FD_DBG_OPTMSGS)
+		debug_printf("%s\n", (char *)ptr);
+
 	if (!tgsi_text_translate(ptr, toks, Elements(toks)))
 		errx(1, "could not parse `%s'", filename);
 
@@ -352,27 +355,17 @@ int main(int argc, char **argv)
 		break;
 	}
 
-	if (!(fd_mesa_debug & FD_DBG_NOOPT)) {
-		/* with new compiler: */
-		info = "new compiler";
-		ret = ir3_compile_shader(&v, toks, key, true);
+	info = "compiler";
+	ret = ir3_compile_shader(&v, toks, key, true);
 
-		if (ret) {
-			reset_variant(&v, "new compiler failed, trying without copy propagation!");
-			info = "new compiler (no copy propagation)";
-			ret = ir3_compile_shader(&v, toks, key, false);
-			if (ret)
-				reset_variant(&v, "new compiler failed, trying fallback!\n");
-		}
+	if (ret) {
+		reset_variant(&v, "compiler failed, trying without copy propagation!");
+		info = "compiler (no copy propagation)";
+		ret = ir3_compile_shader(&v, toks, key, false);
 	}
 
 	if (ret) {
-		info = "old compiler";
-		ret = ir3_compile_shader_old(&v, toks, key);
-	}
-
-	if (ret) {
-		fprintf(stderr, "old compiler failed!\n");
+		fprintf(stderr, "compiler failed!\n");
 		return ret;
 	}
 	dump_info(&v, info);
