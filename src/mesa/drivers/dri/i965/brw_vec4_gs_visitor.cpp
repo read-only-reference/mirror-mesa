@@ -281,7 +281,7 @@ vec4_gs_visitor::emit_urb_write_opcode(bool complete)
    /* We need to increment Global Offset by 1 to make room for Broadwell's
     * extra "Vertex Count" payload at the beginning of the URB entry.
     */
-   if (brw->gen >= 8)
+   if (devinfo->gen >= 8)
       inst->offset++;
 
    inst->urb_write_flags = BRW_URB_WRITE_PER_SLOT_OFFSET;
@@ -424,7 +424,7 @@ vec4_gs_visitor::emit_control_data_bits()
        * URB entry.  Since this is an OWord message, Global Offset is counted
        * in 128-bit units, so we must set it to 2.
        */
-      if (brw->gen >= 8)
+      if (devinfo->gen >= 8)
          inst->offset = 2;
       inst->base_mrf = base_mrf;
       inst->mlen = 2;
@@ -475,6 +475,19 @@ void
 vec4_gs_visitor::visit(ir_emit_vertex *ir)
 {
    this->current_annotation = "emit vertex: safety check";
+
+   /* Haswell and later hardware ignores the "Render Stream Select" bits
+    * from the 3DSTATE_STREAMOUT packet when the SOL stage is disabled,
+    * and instead sends all primitives down the pipeline for rasterization.
+    * If the SOL stage is enabled, "Render Stream Select" is honored and
+    * primitives bound to non-zero streams are discarded after stream output.
+    *
+    * Since the only purpose of primives sent to non-zero streams is to
+    * be recorded by transform feedback, we can simply discard all geometry
+    * bound to these streams when transform feedback is disabled.
+    */
+   if (ir->stream_id() > 0 && shader_prog->TransformFeedback.NumVarying == 0)
+      return;
 
    /* To ensure that we don't output more vertices than the shader specified
     * using max_vertices, do the logic inside a conditional of the form "if

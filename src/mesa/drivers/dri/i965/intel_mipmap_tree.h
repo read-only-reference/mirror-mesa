@@ -403,10 +403,14 @@ struct intel_mipmap_tree
    enum miptree_array_layout array_layout;
 
    /**
-    * The distance in rows between array slices in an uncompressed surface.
+    * The distance in between array slices.
     *
-    * For compressed surfaces, slices are stored closer together physically;
-    * the real distance is (qpitch / block height).
+    * The value is the one that is sent in the surface state. The actual
+    * meaning depends on certain criteria. Usually it is simply the number of
+    * uncompressed rows between each slice. However on Gen9+ for compressed
+    * surfaces it is the number of blocks. For 1D array surfaces that have the
+    * mipmap tree stored horizontally it is the number of pixels between each
+    * slice.
     */
    uint32_t qpitch;
 
@@ -492,6 +496,13 @@ struct intel_mipmap_tree
     */
    uint32_t fast_clear_color_value;
 
+   /**
+    * Disable allocation of auxiliary buffers, such as the HiZ buffer and MCS
+    * buffer. This is useful for sharing the miptree bo with an external client
+    * that doesn't understand auxiliary buffers.
+    */
+   bool disable_aux_buffers;
+
    /* These are also refcounted:
     */
    GLuint refcount;
@@ -530,19 +541,6 @@ struct intel_mipmap_tree *intel_miptree_create(struct brw_context *brw,
                                                bool force_all_slices_at_each_lod);
 
 struct intel_mipmap_tree *
-intel_miptree_create_layout(struct brw_context *brw,
-                            GLenum target,
-                            mesa_format format,
-                            GLuint first_level,
-                            GLuint last_level,
-                            GLuint width0,
-                            GLuint height0,
-                            GLuint depth0,
-                            bool for_bo,
-                            GLuint num_samples,
-                            bool force_all_slices_at_each_lod);
-
-struct intel_mipmap_tree *
 intel_miptree_create_for_bo(struct brw_context *brw,
                             drm_intel_bo *bo,
                             mesa_format format,
@@ -550,7 +548,8 @@ intel_miptree_create_for_bo(struct brw_context *brw,
                             uint32_t width,
                             uint32_t height,
                             uint32_t depth,
-                            int pitch);
+                            int pitch,
+                            bool disable_aux_buffers);
 
 void
 intel_update_winsys_renderbuffer_miptree(struct brw_context *intel,
@@ -637,11 +636,6 @@ intel_miptree_copy_teximage(struct brw_context *brw,
                             struct intel_texture_image *intelImage,
                             struct intel_mipmap_tree *dst_mt, bool invalidate);
 
-bool
-intel_miptree_alloc_mcs(struct brw_context *brw,
-                        struct intel_mipmap_tree *mt,
-                        GLuint num_samples);
-
 /**
  * \name Miptree HiZ functions
  * \{
@@ -650,12 +644,15 @@ intel_miptree_alloc_mcs(struct brw_context *brw,
  * functions on a miptree without HiZ. In that case, each function is a no-op.
  */
 
+bool
+intel_miptree_wants_hiz_buffer(struct brw_context *brw,
+			       struct intel_mipmap_tree *mt);
+
 /**
  * \brief Allocate the miptree's embedded HiZ miptree.
  * \see intel_mipmap_tree:hiz_mt
  * \return false if allocation failed
  */
-
 bool
 intel_miptree_alloc_hiz(struct brw_context *brw,
 			struct intel_mipmap_tree *mt);
@@ -737,6 +734,24 @@ void
 intel_miptree_updownsample(struct brw_context *brw,
                            struct intel_mipmap_tree *src,
                            struct intel_mipmap_tree *dst);
+
+/**
+ * Horizontal distance from one slice to the next in the two-dimensional
+ * miptree layout.
+ */
+unsigned
+brw_miptree_get_horizontal_slice_pitch(const struct brw_context *brw,
+                                       const struct intel_mipmap_tree *mt,
+                                       unsigned level);
+
+/**
+ * Vertical distance from one slice to the next in the two-dimensional miptree
+ * layout.
+ */
+unsigned
+brw_miptree_get_vertical_slice_pitch(const struct brw_context *brw,
+                                     const struct intel_mipmap_tree *mt,
+                                     unsigned level);
 
 void brw_miptree_layout(struct brw_context *brw, struct intel_mipmap_tree *mt);
 

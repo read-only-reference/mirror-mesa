@@ -439,7 +439,7 @@ do {									\
 } while (0)
 
 
-#define ERROR(err) _mesa_error( ctx, err, __FUNCTION__ )
+#define ERROR(err) _mesa_error( ctx, err, __func__ )
 #define TAG(x) vbo_##x
 
 #include "vbo_attrib_tmp.h"
@@ -685,7 +685,7 @@ static void GLAPIENTRY vbo_exec_Begin( GLenum mode )
       return;
    }
 
-   /* Heuristic: attempt to isolate attributes occuring outside
+   /* Heuristic: attempt to isolate attributes occurring outside
     * begin/end pairs.
     */
    if (exec->vtx.vertex_size && !exec->vtx.attrsz[0])

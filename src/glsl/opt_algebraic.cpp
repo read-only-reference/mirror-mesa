@@ -99,6 +99,12 @@ is_vec_two(ir_constant *ir)
 }
 
 static inline bool
+is_vec_four(ir_constant *ir)
+{
+   return (ir == NULL) ? false : ir->is_value(4.0, 4);
+}
+
+static inline bool
 is_vec_negative_one(ir_constant *ir)
 {
    return (ir == NULL) ? false : ir->is_negative_one();
@@ -574,6 +580,8 @@ ir_algebraic_visitor::handle_expression(ir_expression *ir)
             continue;
 
          ir_expression *add_expr = floor_expr->operands[0]->as_expression();
+         if (!add_expr)
+            continue;
 
          for (int j = 0; j < 2; j++) {
             ir_expression *abs_expr = add_expr->operands[j]->as_expression();
@@ -770,6 +778,20 @@ ir_algebraic_visitor::handle_expression(ir_expression *ir)
          base_ir->insert_before(x);
          base_ir->insert_before(assign(x, ir->operands[0]));
          return mul(x, x);
+      }
+
+      if (is_vec_four(op_const[1])) {
+         ir_variable *x = new(ir) ir_variable(ir->operands[1]->type, "x",
+                                              ir_var_temporary);
+         base_ir->insert_before(x);
+         base_ir->insert_before(assign(x, ir->operands[0]));
+
+         ir_variable *squared = new(ir) ir_variable(ir->operands[1]->type,
+                                                    "squared",
+                                                    ir_var_temporary);
+         base_ir->insert_before(squared);
+         base_ir->insert_before(assign(squared, mul(x, x)));
+         return mul(squared, squared);
       }
 
       break;

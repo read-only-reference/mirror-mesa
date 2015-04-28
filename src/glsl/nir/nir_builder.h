@@ -28,6 +28,9 @@ struct exec_list;
 
 typedef struct nir_builder {
    struct exec_list *cf_node_list;
+   nir_instr *before_instr;
+   nir_instr *after_instr;
+
    nir_shader *shader;
    nir_function_impl *impl;
 } nir_builder;
@@ -45,6 +48,38 @@ nir_builder_insert_after_cf_list(nir_builder *build,
                                  struct exec_list *cf_node_list)
 {
    build->cf_node_list = cf_node_list;
+   build->before_instr = NULL;
+   build->after_instr = NULL;
+}
+
+static inline void
+nir_builder_insert_before_instr(nir_builder *build, nir_instr *before_instr)
+{
+   build->cf_node_list = NULL;
+   build->before_instr = before_instr;
+   build->after_instr = NULL;
+}
+
+static inline void
+nir_builder_insert_after_instr(nir_builder *build, nir_instr *after_instr)
+{
+   build->cf_node_list = NULL;
+   build->before_instr = NULL;
+   build->after_instr = after_instr;
+}
+
+static inline void
+nir_builder_instr_insert(nir_builder *build, nir_instr *instr)
+{
+   if (build->cf_node_list) {
+      nir_instr_insert_after_cf_list(build->cf_node_list, instr);
+   } else if (build->before_instr) {
+      nir_instr_insert_before(build->before_instr, instr);
+   } else {
+      assert(build->after_instr);
+      nir_instr_insert_after(build->after_instr, instr);
+      build->after_instr = instr;
+   }
 }
 
 static inline nir_ssa_def *
@@ -57,7 +92,7 @@ nir_build_imm(nir_builder *build, unsigned num_components, nir_const_value value
 
    load_const->value = value;
 
-   nir_instr_insert_after_cf_list(build->cf_node_list, &load_const->instr);
+   nir_builder_instr_insert(build, &load_const->instr);
 
    return &load_const->def;
 }
@@ -125,7 +160,7 @@ nir_build_alu(nir_builder *build, nir_op op, nir_ssa_def *src0,
    nir_ssa_dest_init(&instr->instr, &instr->dest.dest, num_components, NULL);
    instr->dest.write_mask = (1 << num_components) - 1;
 
-   nir_instr_insert_after_cf_list(build->cf_node_list, &instr->instr);
+   nir_builder_instr_insert(build, &instr->instr);
 
    return &instr->dest.dest.ssa;
 }
@@ -172,7 +207,7 @@ nir_fmov_alu(nir_builder *build, nir_alu_src src, unsigned num_components)
    nir_ssa_dest_init(&mov->instr, &mov->dest.dest, num_components, NULL);
    mov->dest.write_mask = (1 << num_components) - 1;
    mov->src[0] = src;
-   nir_instr_insert_after_cf_list(build->cf_node_list, &mov->instr);
+   nir_builder_instr_insert(build, &mov->instr);
 
    return &mov->dest.dest.ssa;
 }
@@ -184,7 +219,7 @@ nir_imov_alu(nir_builder *build, nir_alu_src src, unsigned num_components)
    nir_ssa_dest_init(&mov->instr, &mov->dest.dest, num_components, NULL);
    mov->dest.write_mask = (1 << num_components) - 1;
    mov->src[0] = src;
-   nir_instr_insert_after_cf_list(build->cf_node_list, &mov->instr);
+   nir_builder_instr_insert(build, &mov->instr);
 
    return &mov->dest.dest.ssa;
 }
@@ -204,6 +239,25 @@ nir_swizzle(nir_builder *build, nir_ssa_def *src, unsigned swiz[4],
 
    return use_fmov ? nir_fmov_alu(build, alu_src, num_components) :
                      nir_imov_alu(build, alu_src, num_components);
+}
+
+/**
+ * Turns a nir_src into a nir_ssa_def * so it can be passed to
+ * nir_build_alu()-based builder calls.
+ */
+static inline nir_ssa_def *
+nir_ssa_for_src(nir_builder *build, nir_src src, int num_components)
+{
+   if (src.is_ssa && src.ssa->num_components == num_components)
+      return src.ssa;
+
+   nir_alu_src alu;
+   memset(&alu, 0, sizeof(alu));
+   alu.src = src;
+   for (int j = 0; j < 4; j++)
+      alu.swizzle[j] = j;
+
+   return nir_imov_alu(build, alu, num_components);
 }
 
 #endif /* NIR_BUILDER_H */

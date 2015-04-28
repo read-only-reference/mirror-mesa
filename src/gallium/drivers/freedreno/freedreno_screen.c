@@ -71,6 +71,7 @@ static const struct debug_named_value debug_options[] = {
 		{"optdump",   FD_DBG_OPTDUMP,"Dump shader DAG to .dot files"},
 		{"glsl120",   FD_DBG_GLSL120,"Temporary flag to force GLSL 120 (rather than 130) on a3xx+"},
 		{"nocp",      FD_DBG_NOCP,   "Disable copy-propagation"},
+		{"nir",       FD_DBG_NIR,    "Enable experimental NIR compiler"},
 		DEBUG_NAMED_VALUE_END
 };
 
@@ -179,6 +180,11 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEX_ELEMENT_INSTANCE_DIVISOR:
 		return is_a3xx(screen) || is_a4xx(screen);
 
+	case PIPE_CAP_INDEP_BLEND_ENABLE:
+	case PIPE_CAP_INDEP_BLEND_FUNC:
+	case PIPE_CAP_DEPTH_CLIP_DISABLE:
+		return is_a3xx(screen);
+
 	case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
 		return 256;
 
@@ -188,9 +194,6 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 		return (is_a3xx(screen) || is_a4xx(screen)) ? 130 : 120;
 
 	/* Unsupported features. */
-	case PIPE_CAP_INDEP_BLEND_ENABLE:
-	case PIPE_CAP_INDEP_BLEND_FUNC:
-	case PIPE_CAP_DEPTH_CLIP_DISABLE:
 	case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
@@ -250,7 +253,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 
 	/* Render targets. */
 	case PIPE_CAP_MAX_RENDER_TARGETS:
-		return 1;
+		return screen->max_rts;
 
 	/* Queries. */
 	case PIPE_CAP_QUERY_TIME_ELAPSED:
@@ -354,9 +357,9 @@ fd_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
 		 * split between VS and FS.  Use lower limit of 256 to
 		 * avoid getting into impossible situations:
 		 */
-		return ((is_a3xx(screen) || is_a4xx(screen)) ? 256 : 64) * sizeof(float[4]);
+		return ((is_a3xx(screen) || is_a4xx(screen)) ? 4096 : 64) * sizeof(float[4]);
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
-		return 1;
+		return (is_a3xx(screen) || is_a4xx(screen)) ? 16 : 1;
 	case PIPE_SHADER_CAP_MAX_PREDS:
 		return 0; /* nothing uses this */
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:

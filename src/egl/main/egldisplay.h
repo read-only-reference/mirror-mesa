@@ -106,6 +106,8 @@ struct _egl_extensions
 
    EGLBoolean KHR_reusable_sync;
    EGLBoolean KHR_fence_sync;
+   EGLBoolean KHR_wait_sync;
+   EGLBoolean KHR_cl_event2;
 
    EGLBoolean KHR_surfaceless_context;
    EGLBoolean KHR_create_context;
@@ -123,6 +125,8 @@ struct _egl_extensions
    EGLBoolean EXT_buffer_age;
    EGLBoolean EXT_swap_buffers_with_damage;
    EGLBoolean EXT_image_dma_buf_import;
+
+   EGLBoolean MESA_image_dma_buf_export;
 };
 
 

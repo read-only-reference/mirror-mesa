@@ -43,7 +43,7 @@
  */
 
 struct ptn_compile {
-   struct gl_program *prog;
+   const struct gl_program *prog;
    nir_builder build;
    bool error;
 
@@ -153,8 +153,7 @@ ptn_get_src(struct ptn_compile *c, const struct prog_src_register *prog_src)
       nir_intrinsic_instr *load =
          nir_intrinsic_instr_create(b->shader, nir_intrinsic_load_var);
       load->num_components = 4;
-      load->variables[0] =
-         nir_deref_var_create(b->shader, c->input_vars[prog_src->Index]);
+      load->variables[0] = nir_deref_var_create(load, c->input_vars[prog_src->Index]);
 
       nir_ssa_dest_init(&load->instr, &load->dest, 4, NULL);
       nir_instr_insert_after_cf_list(b->cf_node_list, &load->instr);
@@ -223,12 +222,23 @@ ptn_get_src(struct ptn_compile *c, const struct prog_src_register *prog_src)
    }
 
    nir_ssa_def *def;
-   if (!HAS_EXTENDED_SWIZZLE(prog_src->Swizzle)) {
+   if (!HAS_EXTENDED_SWIZZLE(prog_src->Swizzle) &&
+       (prog_src->Negate == NEGATE_NONE || prog_src->Negate == NEGATE_XYZW)) {
+      /* The simple non-SWZ case. */
       for (int i = 0; i < 4; i++)
          src.swizzle[i] = GET_SWZ(prog_src->Swizzle, i);
 
       def = nir_fmov_alu(b, src, 4);
+
+      if (prog_src->Abs)
+         def = nir_fabs(b, def);
+
+      if (prog_src->Negate)
+         def = nir_fneg(b, def);
    } else {
+      /* The SWZ instruction allows per-component zero/one swizzles, and also
+       * per-component negation.
+       */
       nir_ssa_def *chans[4];
       for (int i = 0; i < 4; i++) {
          int swizzle = GET_SWZ(prog_src->Swizzle, i);
@@ -247,15 +257,15 @@ ptn_get_src(struct ptn_compile *c, const struct prog_src_register *prog_src)
 
             chans[i] = &mov->dest.dest.ssa;
          }
+
+         if (prog_src->Abs)
+            chans[i] = nir_fabs(b, chans[i]);
+
+         if (prog_src->Negate & (1 << i))
+            chans[i] = nir_fneg(b, chans[i]);
       }
       def = nir_vec4(b, chans[0], chans[1], chans[2], chans[3]);
    }
-
-   if (prog_src->Abs)
-      def = nir_fabs(b, def);
-
-   if (prog_src->Negate)
-      def = nir_fneg(b, def);
 
    return def;
 }
@@ -499,25 +509,25 @@ ptn_xpd(nir_builder *b, nir_alu_dest dest, nir_ssa_def **src)
 static void
 ptn_dp2(nir_builder *b, nir_alu_dest dest, nir_ssa_def **src)
 {
-   ptn_move_dest(b, dest, ptn_channel(b, nir_fdot2(b, src[0], src[1]), X));
+   ptn_move_dest(b, dest, nir_fdot2(b, src[0], src[1]));
 }
 
 static void
 ptn_dp3(nir_builder *b, nir_alu_dest dest, nir_ssa_def **src)
 {
-   ptn_move_dest(b, dest, ptn_channel(b, nir_fdot3(b, src[0], src[1]), X));
+   ptn_move_dest(b, dest, nir_fdot3(b, src[0], src[1]));
 }
 
 static void
 ptn_dp4(nir_builder *b, nir_alu_dest dest, nir_ssa_def **src)
 {
-   ptn_move_dest(b, dest, ptn_channel(b, nir_fdot4(b, src[0], src[1]), X));
+   ptn_move_dest(b, dest, nir_fdot4(b, src[0], src[1]));
 }
 
 static void
 ptn_dph(nir_builder *b, nir_alu_dest dest, nir_ssa_def **src)
 {
-   nir_ssa_def *dp3 = ptn_channel(b, nir_fdot3(b, src[0], src[1]), X);
+   nir_ssa_def *dp3 = nir_fdot3(b, src[0], src[1]);
    ptn_move_dest(b, dest, nir_fadd(b, dp3, ptn_channel(b, src[1], W)));
 }
 
@@ -918,7 +928,7 @@ ptn_add_output_stores(struct ptn_compile *c)
          nir_intrinsic_instr_create(b->shader, nir_intrinsic_store_var);
       store->num_components = 4;
       store->variables[0] =
-         nir_deref_var_create(b->shader, c->output_vars[var->data.location]);
+         nir_deref_var_create(store, c->output_vars[var->data.location]);
       store->src[0].reg.reg = c->output_regs[var->data.location];
       nir_instr_insert_after_cf_list(c->build.cf_node_list, &store->instr);
    }
@@ -931,8 +941,8 @@ setup_registers_and_variables(struct ptn_compile *c)
    struct nir_shader *shader = b->shader;
 
    /* Create input variables. */
-   const int last_input = _mesa_fls(c->prog->InputsRead);
-   for (int i = 0; i <= last_input; i++) {
+   const int num_inputs = _mesa_flsll(c->prog->InputsRead);
+   for (int i = 0; i < num_inputs; i++) {
       if (!(c->prog->InputsRead & BITFIELD64_BIT(i)))
          continue;
       nir_variable *var = rzalloc(shader, nir_variable);
@@ -962,7 +972,7 @@ setup_registers_and_variables(struct ptn_compile *c)
             nir_intrinsic_instr *load_x =
                nir_intrinsic_instr_create(shader, nir_intrinsic_load_var);
             load_x->num_components = 1;
-            load_x->variables[0] = nir_deref_var_create(shader, var);
+            load_x->variables[0] = nir_deref_var_create(load_x, var);
             nir_ssa_dest_init(&load_x->instr, &load_x->dest, 1, NULL);
             nir_instr_insert_after_cf_list(b->cf_node_list, &load_x->instr);
 
@@ -978,7 +988,7 @@ setup_registers_and_variables(struct ptn_compile *c)
             nir_intrinsic_instr *store =
                nir_intrinsic_instr_create(shader, nir_intrinsic_store_var);
             store->num_components = 4;
-            store->variables[0] = nir_deref_var_create(shader, fullvar);
+            store->variables[0] = nir_deref_var_create(store, fullvar);
             store->src[0] = nir_src_for_ssa(f001);
             nir_instr_insert_after_cf_list(b->cf_node_list, &store->instr);
 
@@ -1053,7 +1063,7 @@ setup_registers_and_variables(struct ptn_compile *c)
 }
 
 struct nir_shader *
-prog_to_nir(struct gl_program *prog, const nir_shader_compiler_options *options)
+prog_to_nir(const struct gl_program *prog, const nir_shader_compiler_options *options)
 {
    struct ptn_compile *c;
    struct nir_shader *s;

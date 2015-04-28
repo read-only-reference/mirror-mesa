@@ -121,9 +121,6 @@ fixup_shader_state(struct fd_context *ctx, struct ir3_shader_key *key)
 		if (last_key->half_precision != key->half_precision)
 			ctx->prog.dirty |= FD_SHADER_DIRTY_FP;
 
-		if (last_key->alpha != key->alpha)
-			ctx->prog.dirty |= FD_SHADER_DIRTY_FP;
-
 		fd3_ctx->last_key = *key;
 	}
 }
@@ -132,7 +129,6 @@ static void
 fd3_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info)
 {
 	struct fd3_context *fd3_ctx = fd3_context(ctx);
-	struct pipe_framebuffer_state *pfb = &ctx->framebuffer;
 	struct fd3_emit emit = {
 		.vtx  = &ctx->vtx,
 		.prog = &ctx->prog,
@@ -141,7 +137,6 @@ fd3_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info)
 			/* do binning pass first: */
 			.binning_pass = true,
 			.color_two_side = ctx->rasterizer ? ctx->rasterizer->light_twoside : false,
-			.alpha = util_format_is_alpha(pipe_surface_format(pfb->cbufs[0])),
 			// TODO set .half_precision based on render target format,
 			// ie. float16 and smaller use half, float32 use full..
 			.half_precision = !!(fd_mesa_debug & FD_DBG_FRAGHALF),
@@ -156,9 +151,9 @@ fd3_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info)
 			.vinteger_s = fd3_ctx->vinteger_s,
 			.finteger_s = fd3_ctx->finteger_s,
 		},
-		.format = pipe_surface_format(pfb->cbufs[0]),
 		.rasterflat = ctx->rasterizer && ctx->rasterizer->flatshade,
 		.sprite_coord_enable = ctx->rasterizer ? ctx->rasterizer->sprite_coord_enable : 0,
+		.sprite_coord_mode = ctx->rasterizer ? ctx->rasterizer->sprite_coord_mode : false,
 	};
 	unsigned dirty;
 
@@ -243,17 +238,18 @@ fd3_clear(struct fd_context *ctx, unsigned buffers,
 {
 	struct fd3_context *fd3_ctx = fd3_context(ctx);
 	struct pipe_framebuffer_state *pfb = &ctx->framebuffer;
-	enum pipe_format format = pipe_surface_format(pfb->cbufs[0]);
 	struct fd_ringbuffer *ring = ctx->ring;
 	unsigned dirty = ctx->dirty;
-	unsigned ce, i;
+	unsigned i;
 	struct fd3_emit emit = {
 		.vtx  = &fd3_ctx->solid_vbuf_state,
 		.prog = &ctx->solid_prog,
 		.key = {
-			.half_precision = fd3_half_precision(format),
+			.half_precision = (fd3_half_precision(pfb->cbufs[0]) &&
+							   fd3_half_precision(pfb->cbufs[1]) &&
+							   fd3_half_precision(pfb->cbufs[2]) &&
+							   fd3_half_precision(pfb->cbufs[3])),
 		},
-		.format = format,
 	};
 
 	dirty &= FD_DIRTY_FRAMEBUFFER | FD_DIRTY_SCISSOR;
@@ -330,17 +326,12 @@ fd3_clear(struct fd_context *ctx, unsigned buffers,
 				A3XX_RB_STENCIL_CONTROL_ZFAIL_BF(STENCIL_KEEP));
 	}
 
-	if (buffers & PIPE_CLEAR_COLOR) {
-		ce = 0xf;
-	} else {
-		ce = 0x0;
-	}
-
 	for (i = 0; i < 4; i++) {
 		OUT_PKT0(ring, REG_A3XX_RB_MRT_CONTROL(i), 1);
 		OUT_RING(ring, A3XX_RB_MRT_CONTROL_ROP_CODE(ROP_COPY) |
 				A3XX_RB_MRT_CONTROL_DITHER_MODE(DITHER_ALWAYS) |
-				A3XX_RB_MRT_CONTROL_COMPONENT_ENABLE(ce));
+				COND(buffers & (PIPE_CLEAR_COLOR0 << i),
+					 A3XX_RB_MRT_CONTROL_COMPONENT_ENABLE(0xf)));
 
 		OUT_PKT0(ring, REG_A3XX_RB_MRT_BLEND_CONTROL(i), 1);
 		OUT_RING(ring, A3XX_RB_MRT_BLEND_CONTROL_RGB_SRC_FACTOR(FACTOR_ONE) |

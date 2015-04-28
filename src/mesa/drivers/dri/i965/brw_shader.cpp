@@ -27,9 +27,23 @@
 #include "brw_gs.h"
 #include "brw_fs.h"
 #include "brw_cfg.h"
+#include "brw_nir.h"
 #include "glsl/ir_optimization.h"
 #include "glsl/glsl_parser_extras.h"
 #include "main/shaderapi.h"
+
+struct brw_compiler *
+brw_compiler_create(void *mem_ctx, const struct brw_device_info *devinfo)
+{
+   struct brw_compiler *compiler = rzalloc(mem_ctx, struct brw_compiler);
+
+   compiler->devinfo = devinfo;
+
+   brw_fs_alloc_reg_sets(compiler);
+   brw_vec4_alloc_reg_set(compiler);
+
+   return compiler;
+}
 
 struct gl_shader *
 brw_new_shader(struct gl_context *ctx, GLuint name, GLuint type)
@@ -120,6 +134,107 @@ brw_lower_packing_builtins(struct brw_context *brw,
    lower_packing_builtins(ir, ops);
 }
 
+static void
+process_glsl_ir(struct brw_context *brw,
+                struct gl_shader_program *shader_prog,
+                struct gl_shader *shader)
+{
+   struct gl_context *ctx = &brw->ctx;
+   const struct gl_shader_compiler_options *options =
+      &ctx->Const.ShaderCompilerOptions[shader->Stage];
+
+   /* Temporary memory context for any new IR. */
+   void *mem_ctx = ralloc_context(NULL);
+
+   ralloc_adopt(mem_ctx, shader->ir);
+
+   /* lower_packing_builtins() inserts arithmetic instructions, so it
+    * must precede lower_instructions().
+    */
+   brw_lower_packing_builtins(brw, shader->Stage, shader->ir);
+   do_mat_op_to_vec(shader->ir);
+   const int bitfield_insert = brw->gen >= 7 ? BITFIELD_INSERT_TO_BFM_BFI : 0;
+   lower_instructions(shader->ir,
+                      MOD_TO_FLOOR |
+                      DIV_TO_MUL_RCP |
+                      SUB_TO_ADD_NEG |
+                      EXP_TO_EXP2 |
+                      LOG_TO_LOG2 |
+                      bitfield_insert |
+                      LDEXP_TO_ARITH);
+
+   /* Pre-gen6 HW can only nest if-statements 16 deep.  Beyond this,
+    * if-statements need to be flattened.
+    */
+   if (brw->gen < 6)
+      lower_if_to_cond_assign(shader->ir, 16);
+
+   do_lower_texture_projection(shader->ir);
+   brw_lower_texture_gradients(brw, shader->ir);
+   do_vec_index_to_cond_assign(shader->ir);
+   lower_vector_insert(shader->ir, true);
+   if (options->NirOptions == NULL)
+      brw_do_cubemap_normalize(shader->ir);
+   lower_offset_arrays(shader->ir);
+   brw_do_lower_unnormalized_offset(shader->ir);
+   lower_noise(shader->ir);
+   lower_quadop_vector(shader->ir, false);
+
+   bool lowered_variable_indexing =
+      lower_variable_index_to_cond_assign(shader->ir,
+                                          options->EmitNoIndirectInput,
+                                          options->EmitNoIndirectOutput,
+                                          options->EmitNoIndirectTemp,
+                                          options->EmitNoIndirectUniform);
+
+   if (unlikely(brw->perf_debug && lowered_variable_indexing)) {
+      perf_debug("Unsupported form of variable indexing in FS; falling "
+                 "back to very inefficient code generation\n");
+   }
+
+   lower_ubo_reference(shader, shader->ir);
+
+   bool progress;
+   do {
+      progress = false;
+
+      if (is_scalar_shader_stage(brw, shader->Stage)) {
+         brw_do_channel_expressions(shader->ir);
+         brw_do_vector_splitting(shader->ir);
+      }
+
+      progress = do_lower_jumps(shader->ir, true, true,
+                                true, /* main return */
+                                false, /* continue */
+                                false /* loops */
+                                ) || progress;
+
+      progress = do_common_optimization(shader->ir, true, true,
+                                        options, ctx->Const.NativeIntegers) || progress;
+   } while (progress);
+
+   if (options->NirOptions != NULL)
+      lower_output_reads(shader->ir);
+
+   validate_ir_tree(shader->ir);
+
+   /* Now that we've finished altering the linked IR, reparent any live IR back
+    * to the permanent memory context, and free the temporary one (discarding any
+    * junk we optimized away).
+    */
+   reparent_ir(shader->ir, shader->ir);
+   ralloc_free(mem_ctx);
+
+   if (ctx->_Shader->Flags & GLSL_DUMP) {
+      fprintf(stderr, "\n");
+      fprintf(stderr, "GLSL IR for linked %s program %d:\n",
+              _mesa_shader_stage_to_string(shader->Stage),
+              shader_prog->Name);
+      _mesa_print_ir(stderr, shader->ir, NULL);
+      fprintf(stderr, "\n");
+   }
+}
+
 GLboolean
 brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 {
@@ -127,90 +242,23 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
    unsigned int stage;
 
    for (stage = 0; stage < ARRAY_SIZE(shProg->_LinkedShaders); stage++) {
+      struct gl_shader *shader = shProg->_LinkedShaders[stage];
       const struct gl_shader_compiler_options *options =
          &ctx->Const.ShaderCompilerOptions[stage];
-      struct brw_shader *shader =
-	 (struct brw_shader *)shProg->_LinkedShaders[stage];
 
       if (!shader)
 	 continue;
 
       struct gl_program *prog =
 	 ctx->Driver.NewProgram(ctx, _mesa_shader_stage_to_program(stage),
-                                shader->base.Name);
+                                shader->Name);
       if (!prog)
 	return false;
       prog->Parameters = _mesa_new_parameter_list();
 
       _mesa_copy_linked_program_data((gl_shader_stage) stage, shProg, prog);
 
-      bool progress;
-
-      /* lower_packing_builtins() inserts arithmetic instructions, so it
-       * must precede lower_instructions().
-       */
-      brw_lower_packing_builtins(brw, (gl_shader_stage) stage, shader->base.ir);
-      do_mat_op_to_vec(shader->base.ir);
-      const int bitfield_insert = brw->gen >= 7
-                                  ? BITFIELD_INSERT_TO_BFM_BFI
-                                  : 0;
-      lower_instructions(shader->base.ir,
-			 MOD_TO_FLOOR |
-			 DIV_TO_MUL_RCP |
-			 SUB_TO_ADD_NEG |
-			 EXP_TO_EXP2 |
-			 LOG_TO_LOG2 |
-                         bitfield_insert |
-                         LDEXP_TO_ARITH);
-
-      /* Pre-gen6 HW can only nest if-statements 16 deep.  Beyond this,
-       * if-statements need to be flattened.
-       */
-      if (brw->gen < 6)
-	 lower_if_to_cond_assign(shader->base.ir, 16);
-
-      do_lower_texture_projection(shader->base.ir);
-      brw_lower_texture_gradients(brw, shader->base.ir);
-      do_vec_index_to_cond_assign(shader->base.ir);
-      lower_vector_insert(shader->base.ir, true);
-      brw_do_cubemap_normalize(shader->base.ir);
-      lower_offset_arrays(shader->base.ir);
-      brw_do_lower_unnormalized_offset(shader->base.ir);
-      lower_noise(shader->base.ir);
-      lower_quadop_vector(shader->base.ir, false);
-
-      bool lowered_variable_indexing =
-         lower_variable_index_to_cond_assign(shader->base.ir,
-                                             options->EmitNoIndirectInput,
-                                             options->EmitNoIndirectOutput,
-                                             options->EmitNoIndirectTemp,
-                                             options->EmitNoIndirectUniform);
-
-      if (unlikely(brw->perf_debug && lowered_variable_indexing)) {
-         perf_debug("Unsupported form of variable indexing in FS; falling "
-                    "back to very inefficient code generation\n");
-      }
-
-      lower_ubo_reference(&shader->base, shader->base.ir);
-
-      do {
-	 progress = false;
-
-	 if (is_scalar_shader_stage(brw, stage)) {
-	    brw_do_channel_expressions(shader->base.ir);
-	    brw_do_vector_splitting(shader->base.ir);
-	 }
-
-	 progress = do_lower_jumps(shader->base.ir, true, true,
-				   true, /* main return */
-				   false, /* continue */
-				   false /* loops */
-				   ) || progress;
-
-	 progress = do_common_optimization(shader->base.ir, true, true,
-                                           options, ctx->Const.NativeIntegers)
-	   || progress;
-      } while (progress);
+      process_glsl_ir(brw, shProg, shader);
 
       /* Make a pass over the IR to add state references for any built-in
        * uniforms that are used.  This has to be done now (during linking).
@@ -219,7 +267,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
        * too late.  At that point, the values for the built-in uniforms won't
        * get sent to the shader.
        */
-      foreach_in_list(ir_instruction, node, shader->base.ir) {
+      foreach_in_list(ir_instruction, node, shader->ir) {
 	 ir_variable *var = node->as_variable();
 
 	 if ((var == NULL) || (var->data.mode != ir_var_uniform)
@@ -235,28 +283,20 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 	 }
       }
 
-      validate_ir_tree(shader->base.ir);
+      do_set_program_inouts(shader->ir, prog, shader->Stage);
 
-      do_set_program_inouts(shader->base.ir, prog, shader->base.Stage);
-
-      prog->SamplersUsed = shader->base.active_samplers;
-      prog->ShadowSamplers = shader->base.shadow_samplers;
+      prog->SamplersUsed = shader->active_samplers;
+      prog->ShadowSamplers = shader->shadow_samplers;
       _mesa_update_shader_textures_used(shProg, prog);
 
-      _mesa_reference_program(ctx, &shader->base.Program, prog);
+      _mesa_reference_program(ctx, &shader->Program, prog);
 
       brw_add_texrect_params(prog);
 
-      _mesa_reference_program(ctx, &prog, NULL);
+      if (options->NirOptions)
+         prog->nir = brw_create_nir(brw, shProg, prog, (gl_shader_stage) stage);
 
-      if (ctx->_Shader->Flags & GLSL_DUMP) {
-         fprintf(stderr, "\n");
-         fprintf(stderr, "GLSL IR for linked %s program %d:\n",
-                 _mesa_shader_stage_to_string(shader->base.Stage),
-                 shProg->Name);
-         _mesa_print_ir(stderr, shader->base.ir, NULL);
-         fprintf(stderr, "\n");
-      }
+      _mesa_reference_program(ctx, &prog, NULL);
    }
 
    if ((ctx->_Shader->Flags & GLSL_DUMP) && shProg->Name != 0) {
@@ -366,14 +406,8 @@ brw_math_function(enum opcode op)
 }
 
 uint32_t
-brw_texture_offset(struct gl_context *ctx, int *offsets,
-                   unsigned num_components)
+brw_texture_offset(int *offsets, unsigned num_components)
 {
-   /* If the driver does not support GL_ARB_gpu_shader5, the offset
-    * must be constant.
-    */
-   assert(offsets != NULL || ctx->Extensions.ARB_gpu_shader5);
-
    if (!offsets) return 0;  /* nonconstant offset; caller will handle it. */
 
    /* Combine all three offsets into a single unsigned dword:
@@ -485,15 +519,15 @@ brw_instruction_name(enum opcode op)
    case FS_OPCODE_DDY_FINE:
       return "ddy_fine";
 
-   case FS_OPCODE_PIXEL_X:
-      return "pixel_x";
-   case FS_OPCODE_PIXEL_Y:
-      return "pixel_y";
-
    case FS_OPCODE_CINTERP:
       return "cinterp";
    case FS_OPCODE_LINTERP:
       return "linterp";
+
+   case FS_OPCODE_PIXEL_X:
+      return "pixel_x";
+   case FS_OPCODE_PIXEL_Y:
+      return "pixel_y";
 
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
       return "uniform_pull_const";
@@ -541,6 +575,10 @@ brw_instruction_name(enum opcode op)
       return "pull_constant_load";
    case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
       return "pull_constant_load_gen7";
+
+   case VS_OPCODE_SET_SIMD4X2_HEADER_GEN9:
+      return "set_simd4x2_header_gen9";
+
    case VS_OPCODE_UNPACK_FLAGS_SIMD4X2:
       return "unpack_flags_simd4x2";
 
@@ -701,6 +739,7 @@ backend_visitor::backend_visitor(struct brw_context *brw,
                                  struct brw_stage_prog_data *stage_prog_data,
                                  gl_shader_stage stage)
    : brw(brw),
+     devinfo(brw->intelScreen->devinfo),
      ctx(&brw->ctx),
      shader(shader_prog ?
         (struct brw_shader *)shader_prog->_LinkedShaders[stage] : NULL),
@@ -978,10 +1017,10 @@ backend_instruction::reads_accumulator_implicitly() const
 }
 
 bool
-backend_instruction::writes_accumulator_implicitly(struct brw_context *brw) const
+backend_instruction::writes_accumulator_implicitly(const struct brw_device_info *devinfo) const
 {
    return writes_accumulator ||
-          (brw->gen < 6 &&
+          (devinfo->gen < 6 &&
            ((opcode >= BRW_OPCODE_ADD && opcode < BRW_OPCODE_NOP) ||
             (opcode >= FS_OPCODE_DDX_COARSE && opcode <= FS_OPCODE_LINTERP &&
              opcode != FS_OPCODE_CINTERP)));
@@ -1163,7 +1202,7 @@ backend_visitor::assign_common_binding_table_offsets(uint32_t next_binding_table
    }
 
    if (prog->UsesGather) {
-      if (brw->gen >= 8) {
+      if (devinfo->gen >= 8) {
          stage_prog_data->binding_table.gather_texture_start =
             stage_prog_data->binding_table.texture_start;
       } else {

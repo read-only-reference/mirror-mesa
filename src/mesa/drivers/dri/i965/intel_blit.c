@@ -178,7 +178,7 @@ intel_miptree_blit(struct brw_context *brw,
        (dst_format != MESA_FORMAT_B8G8R8A8_UNORM &&
         dst_format != MESA_FORMAT_B8G8R8X8_UNORM))) {
       perf_debug("%s: Can't use hardware blitter from %s to %s, "
-                 "falling back.\n", __FUNCTION__,
+                 "falling back.\n", __func__,
                  _mesa_get_format_name(src_format),
                  _mesa_get_format_name(dst_format));
       return false;
@@ -271,6 +271,20 @@ intel_miptree_blit(struct brw_context *brw,
    return true;
 }
 
+static bool
+alignment_valid(struct brw_context *brw, unsigned offset, uint32_t tiling)
+{
+   /* Tiled buffers must be page-aligned (4K). */
+   if (tiling != I915_TILING_NONE)
+      return (offset & 4095) == 0;
+
+   /* On Gen8+, linear buffers must be cacheline-aligned. */
+   if (brw->gen >= 8)
+      return (offset & 63) == 0;
+
+   return true;
+}
+
 /* Copy BitBlt
  */
 bool
@@ -296,14 +310,11 @@ intelEmitCopyBlit(struct brw_context *brw,
    bool dst_y_tiled = dst_tiling == I915_TILING_Y;
    bool src_y_tiled = src_tiling == I915_TILING_Y;
 
-   if (dst_tiling != I915_TILING_NONE) {
-      if (dst_offset & 4095)
-	 return false;
-   }
-   if (src_tiling != I915_TILING_NONE) {
-      if (src_offset & 4095)
-	 return false;
-   }
+   if (!alignment_valid(brw, dst_offset, dst_tiling))
+      return false;
+   if (!alignment_valid(brw, src_offset, src_tiling))
+      return false;
+
    if ((dst_y_tiled || src_y_tiled) && brw->gen < 6)
       return false;
 
@@ -330,7 +341,7 @@ intelEmitCopyBlit(struct brw_context *brw,
 
    intel_batchbuffer_require_space(brw, length * 4, BLT_RING);
    DBG("%s src:buf(%p)/%d+%d %d,%d dst:buf(%p)/%d+%d %d,%d sz:%dx%d\n",
-       __FUNCTION__,
+       __func__,
        src_buffer, src_pitch, src_offset, src_x, src_y,
        dst_buffer, dst_pitch, dst_offset, dst_x, dst_y, w, h);
 
@@ -456,7 +467,7 @@ intelEmitImmediateColorExpandBlit(struct brw_context *brw,
       return true;
 
    DBG("%s dst:buf(%p)/%d+%d %d,%d sz:%dx%d, %d bytes %d dwords\n",
-       __FUNCTION__,
+       __func__,
        dst_buffer, dst_pitch, dst_offset, x, y, w, h, src_size, dwords);
 
    unsigned xy_setup_blt_length = brw->gen >= 8 ? 10 : 8;
@@ -524,6 +535,7 @@ intel_emit_linear_blit(struct brw_context *brw,
 {
    struct gl_context *ctx = &brw->ctx;
    GLuint pitch, height;
+   int16_t src_x, dst_x;
    bool ok;
 
    /* The pitch given to the GPU must be DWORD aligned, and
@@ -532,11 +544,13 @@ intel_emit_linear_blit(struct brw_context *brw,
     */
    pitch = ROUND_DOWN_TO(MIN2(size, (1 << 15) - 1), 4);
    height = (pitch == 0) ? 1 : size / pitch;
+   src_x = src_offset % 64;
+   dst_x = dst_offset % 64;
    ok = intelEmitCopyBlit(brw, 1,
-			  pitch, src_bo, src_offset, I915_TILING_NONE,
-			  pitch, dst_bo, dst_offset, I915_TILING_NONE,
-			  0, 0, /* src x/y */
-			  0, 0, /* dst x/y */
+			  pitch, src_bo, src_offset - src_x, I915_TILING_NONE,
+			  pitch, dst_bo, dst_offset - dst_x, I915_TILING_NONE,
+			  src_x, 0, /* src x/y */
+			  dst_x, 0, /* dst x/y */
 			  pitch, height, /* w, h */
 			  GL_COPY);
    if (!ok)
@@ -544,15 +558,18 @@ intel_emit_linear_blit(struct brw_context *brw,
 
    src_offset += pitch * height;
    dst_offset += pitch * height;
+   src_x = src_offset % 64;
+   dst_x = dst_offset % 64;
    size -= pitch * height;
    assert (size < (1 << 15));
    pitch = ALIGN(size, 4);
+
    if (size != 0) {
       ok = intelEmitCopyBlit(brw, 1,
-			     pitch, src_bo, src_offset, I915_TILING_NONE,
-			     pitch, dst_bo, dst_offset, I915_TILING_NONE,
-			     0, 0, /* src x/y */
-			     0, 0, /* dst x/y */
+			     pitch, src_bo, src_offset - src_x, I915_TILING_NONE,
+			     pitch, dst_bo, dst_offset - dst_x, I915_TILING_NONE,
+			     src_x, 0, /* src x/y */
+			     dst_x, 0, /* dst x/y */
 			     size, 1, /* w, h */
 			     GL_COPY);
       if (!ok)
@@ -581,7 +598,7 @@ intel_miptree_set_alpha_to_one(struct brw_context *brw,
    cpp = mt->cpp;
 
    DBG("%s dst:buf(%p)/%d %d,%d sz:%dx%d\n",
-       __FUNCTION__, mt->bo, pitch, x, y, width, height);
+       __func__, mt->bo, pitch, x, y, width, height);
 
    BR13 = br13_for_cpp(cpp) | 0xf0 << 16;
    CMD = XY_COLOR_BLT_CMD;

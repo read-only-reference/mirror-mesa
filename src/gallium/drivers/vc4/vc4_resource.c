@@ -26,7 +26,6 @@
 #include "util/u_format.h"
 #include "util/u_inlines.h"
 #include "util/u_surface.h"
-#include "util/u_blitter.h"
 
 #include "vc4_screen.h"
 #include "vc4_context.h"
@@ -576,69 +575,6 @@ vc4_flush_resource(struct pipe_context *pctx, struct pipe_resource *resource)
          */
 }
 
-static bool
-render_blit(struct pipe_context *ctx, struct pipe_blit_info *info)
-{
-        struct vc4_context *vc4 = vc4_context(ctx);
-
-        if (!util_blitter_is_blit_supported(vc4->blitter, info)) {
-                fprintf(stderr, "blit unsupported %s -> %s",
-                    util_format_short_name(info->src.resource->format),
-                    util_format_short_name(info->dst.resource->format));
-                return false;
-        }
-
-        util_blitter_save_vertex_buffer_slot(vc4->blitter, vc4->vertexbuf.vb);
-        util_blitter_save_vertex_elements(vc4->blitter, vc4->vtx);
-        util_blitter_save_vertex_shader(vc4->blitter, vc4->prog.bind_vs);
-        util_blitter_save_rasterizer(vc4->blitter, vc4->rasterizer);
-        util_blitter_save_viewport(vc4->blitter, &vc4->viewport);
-        util_blitter_save_scissor(vc4->blitter, &vc4->scissor);
-        util_blitter_save_fragment_shader(vc4->blitter, vc4->prog.bind_fs);
-        util_blitter_save_blend(vc4->blitter, vc4->blend);
-        util_blitter_save_depth_stencil_alpha(vc4->blitter, vc4->zsa);
-        util_blitter_save_stencil_ref(vc4->blitter, &vc4->stencil_ref);
-        util_blitter_save_sample_mask(vc4->blitter, vc4->sample_mask);
-        util_blitter_save_framebuffer(vc4->blitter, &vc4->framebuffer);
-        util_blitter_save_fragment_sampler_states(vc4->blitter,
-                        vc4->fragtex.num_samplers,
-                        (void **)vc4->fragtex.samplers);
-        util_blitter_save_fragment_sampler_views(vc4->blitter,
-                        vc4->fragtex.num_textures, vc4->fragtex.textures);
-
-        util_blitter_blit(vc4->blitter, info);
-
-        return true;
-}
-
-/* Optimal hardware path for blitting pixels.
- * Scaling, format conversion, up- and downsampling (resolve) are allowed.
- */
-static void
-vc4_blit(struct pipe_context *pctx, const struct pipe_blit_info *blit_info)
-{
-        struct pipe_blit_info info = *blit_info;
-
-        if (info.src.resource->nr_samples > 1 &&
-            info.dst.resource->nr_samples <= 1 &&
-            !util_format_is_depth_or_stencil(info.src.resource->format) &&
-            !util_format_is_pure_integer(info.src.resource->format)) {
-                fprintf(stderr, "color resolve unimplemented");
-                return;
-        }
-
-        if (util_try_blit_via_copy_region(pctx, &info)) {
-                return; /* done */
-        }
-
-        if (info.mask & PIPE_MASK_S) {
-                fprintf(stderr, "cannot blit stencil, skipping");
-                info.mask &= ~PIPE_MASK_S;
-        }
-
-        render_blit(pctx, &info);
-}
-
 void
 vc4_update_shadow_baselevel_texture(struct pipe_context *pctx,
                                     struct pipe_sampler_view *view)
@@ -647,24 +583,45 @@ vc4_update_shadow_baselevel_texture(struct pipe_context *pctx,
         struct vc4_resource *orig = vc4_resource(shadow->shadow_parent);
         assert(orig);
 
-        if (shadow->writes == orig->writes)
+        if (shadow->writes == orig->writes && orig->bo->private)
                 return;
 
-        for (int i = 0; i <= shadow->base.b.last_level; i++) {
-                struct pipe_box box = {
-                        .x = 0,
-                        .y = 0,
-                        .z = 0,
-                        .width = u_minify(shadow->base.b.width0, i),
-                        .height = u_minify(shadow->base.b.height0, i),
-                        .depth = 1,
-                };
+        perf_debug("Updating shadow texture due to %s\n",
+                   view->u.tex.first_level ? "base level" : "raster layout");
 
-                util_resource_copy_region(pctx,
-                                          &shadow->base.b, i, 0, 0, 0,
-                                          &orig->base.b,
-                                          view->u.tex.first_level + i,
-                                          &box);
+        for (int i = 0; i <= shadow->base.b.last_level; i++) {
+                unsigned width = u_minify(shadow->base.b.width0, i);
+                unsigned height = u_minify(shadow->base.b.height0, i);
+                struct pipe_blit_info info = {
+                        .dst = {
+                                .resource = &shadow->base.b,
+                                .level = i,
+                                .box = {
+                                        .x = 0,
+                                        .y = 0,
+                                        .z = 0,
+                                        .width = width,
+                                        .height = height,
+                                        .depth = 1,
+                                },
+                                .format = shadow->base.b.format,
+                        },
+                        .src = {
+                                .resource = &orig->base.b,
+                                .level = view->u.tex.first_level + i,
+                                .box = {
+                                        .x = 0,
+                                        .y = 0,
+                                        .z = 0,
+                                        .width = width,
+                                        .height = height,
+                                        .depth = 1,
+                                },
+                                .format = orig->base.b.format,
+                        },
+                        .mask = ~0,
+                };
+                pctx->blit(pctx, &info);
         }
 
         shadow->writes = orig->writes;
@@ -691,6 +648,8 @@ vc4_update_shadow_index_buffer(struct pipe_context *pctx,
 
         if (shadow->writes == orig->writes)
                 return;
+
+        perf_debug("Fallback conversion for %d uint indices\n", count);
 
         struct pipe_transfer *src_transfer;
         uint32_t *src = pipe_buffer_map_range(pctx, &orig->base.b,

@@ -813,8 +813,10 @@ test_attachment_completeness(const struct gl_context *ctx, GLenum format,
          if (ctx->Extensions.ARB_depth_texture &&
              baseFormat == GL_DEPTH_STENCIL) {
             /* OK */
-         }
-         else {
+         } else if (ctx->Extensions.ARB_texture_stencil8 &&
+                    baseFormat == GL_STENCIL_INDEX) {
+            /* OK */
+         } else {
             /* no such thing as stencil-only textures */
             att_incomplete("illegal stencil texture");
             att->Complete = GL_FALSE;
@@ -978,7 +980,8 @@ _mesa_test_framebuffer_completeness(struct gl_context *ctx,
 
          if (!is_format_color_renderable(ctx, attFormat,
                                          texImg->InternalFormat) &&
-             !is_legal_depth_format(ctx, f)) {
+             !is_legal_depth_format(ctx, f) &&
+             f != GL_STENCIL_INDEX) {
             fb->_Status = GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT;
             fbo_incomplete(ctx, "texture attachment incomplete", -1);
             return;
@@ -1218,8 +1221,10 @@ allocate_renderbuffer(struct gl_context *ctx, GLuint renderbuffer,
       return NULL;
    }
    assert(newRb->AllocStorage);
+   mtx_lock(&ctx->Shared->Mutex);
    _mesa_HashInsert(ctx->Shared->RenderBuffers, renderbuffer, newRb);
    newRb->RefCount = 1; /* referenced by hash table */
+   mtx_unlock(&ctx->Shared->Mutex);
 
    return newRb;
 }
@@ -1400,7 +1405,6 @@ create_render_buffers(struct gl_context *ctx, GLsizei n, GLuint *renderbuffers,
                       bool dsa)
 {
    const char *func = dsa ? "glCreateRenderbuffers" : "glGenRenderbuffers";
-   struct gl_renderbuffer *obj;
    GLuint first;
    GLint i;
 
@@ -1419,13 +1423,11 @@ create_render_buffers(struct gl_context *ctx, GLsizei n, GLuint *renderbuffers,
       renderbuffers[i] = name;
 
       if (dsa) {
-         obj = allocate_renderbuffer(ctx, name, func);
+         allocate_renderbuffer(ctx, name, func);
       } else {
-         obj = &DummyRenderbuffer;
-
-         /* insert the object into the hash table */
+         /* insert a dummy renderbuffer into the hash table */
          mtx_lock(&ctx->Shared->Mutex);
-         _mesa_HashInsert(ctx->Shared->RenderBuffers, name, obj);
+         _mesa_HashInsert(ctx->Shared->RenderBuffers, name, &DummyRenderbuffer);
          mtx_unlock(&ctx->Shared->Mutex);
       }
    }

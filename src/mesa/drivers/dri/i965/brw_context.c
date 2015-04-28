@@ -551,13 +551,14 @@ brw_initialize_context_constants(struct brw_context *brw)
       ctx->Const.Program[MESA_SHADER_FRAGMENT].MaxInputComponents = 128;
    }
 
-   static const nir_shader_compiler_options gen4_nir_options = {
+   static const nir_shader_compiler_options nir_options = {
       .native_integers = true,
+      /* In order to help allow for better CSE at the NIR level we tell NIR
+       * to split all ffma instructions during opt_algebraic and we then
+       * re-combine them as a later step.
+       */
       .lower_ffma = true,
-   };
-
-   static const nir_shader_compiler_options gen6_nir_options = {
-      .native_integers = true,
+      .lower_sub = true,
    };
 
    /* We want the GLSL compiler to emit code that uses condition codes */
@@ -573,10 +574,6 @@ brw_initialize_context_constants(struct brw_context *brw)
 	 (i == MESA_SHADER_FRAGMENT);
       ctx->Const.ShaderCompilerOptions[i].EmitNoIndirectUniform = false;
       ctx->Const.ShaderCompilerOptions[i].LowerClipDistance = true;
-      if (brw->gen >= 6)
-         ctx->Const.ShaderCompilerOptions[i].NirOptions = &gen6_nir_options;
-      else
-         ctx->Const.ShaderCompilerOptions[i].NirOptions = &gen4_nir_options;
    }
 
    ctx->Const.ShaderCompilerOptions[MESA_SHADER_VERTEX].OptimizeForAOS = true;
@@ -589,14 +586,20 @@ brw_initialize_context_constants(struct brw_context *brw)
       ctx->Const.ShaderCompilerOptions[MESA_SHADER_VERTEX].EmitNoIndirectOutput = true;
       ctx->Const.ShaderCompilerOptions[MESA_SHADER_VERTEX].EmitNoIndirectTemp = true;
       ctx->Const.ShaderCompilerOptions[MESA_SHADER_VERTEX].OptimizeForAOS = false;
+
+      if (brw_env_var_as_boolean("INTEL_USE_NIR", false))
+         ctx->Const.ShaderCompilerOptions[MESA_SHADER_VERTEX].NirOptions = &nir_options;
    }
+
+   if (brw_env_var_as_boolean("INTEL_USE_NIR", true))
+      ctx->Const.ShaderCompilerOptions[MESA_SHADER_FRAGMENT].NirOptions = &nir_options;
 
    /* ARB_viewport_array */
    if (brw->gen >= 7 && ctx->API == API_OPENGL_CORE) {
       ctx->Const.MaxViewports = GEN7_NUM_VIEWPORTS;
       ctx->Const.ViewportSubpixelBits = 0;
 
-      /* Cast to float before negating becuase MaxViewportWidth is unsigned.
+      /* Cast to float before negating because MaxViewportWidth is unsigned.
        */
       ctx->Const.ViewportBounds.Min = -(float)ctx->Const.MaxViewportWidth;
       ctx->Const.ViewportBounds.Max = ctx->Const.MaxViewportWidth;
@@ -666,29 +669,6 @@ brw_process_driconf_options(struct brw_context *brw)
       driQueryOptionb(options, "allow_glsl_extension_directive_midshader");
 }
 
-/* drop when libdrm 2.4.61 is released */
-#ifndef I915_PARAM_REVISION
-#define I915_PARAM_REVISION 32
-#endif
-
-static int
-brw_get_revision(int fd)
-{
-   struct drm_i915_getparam gp;
-   int revision;
-   int ret;
-
-   memset(&gp, 0, sizeof(gp));
-   gp.param = I915_PARAM_REVISION;
-   gp.value = &revision;
-
-   ret = drmCommandWriteRead(fd, DRM_I915_GETPARAM, &gp, sizeof(gp));
-   if (ret)
-      revision = -1;
-
-   return revision;
-}
-
 GLboolean
 brwCreateContext(gl_api api,
 	         const struct gl_config *mesaVis,
@@ -722,7 +702,7 @@ brwCreateContext(gl_api api,
 
    struct brw_context *brw = rzalloc(NULL, struct brw_context);
    if (!brw) {
-      fprintf(stderr, "%s: failed to alloc context\n", __FUNCTION__);
+      fprintf(stderr, "%s: failed to alloc context\n", __func__);
       *dri_ctx_error = __DRI_CTX_ERROR_NO_MEMORY;
       return false;
    }
@@ -747,7 +727,6 @@ brwCreateContext(gl_api api,
    brw->has_negative_rhw_bug = devinfo->has_negative_rhw_bug;
    brw->needs_unlit_centroid_workaround =
       devinfo->needs_unlit_centroid_workaround;
-   brw->revision = brw_get_revision(sPriv->fd);
 
    brw->must_use_separate_stencil = screen->hw_must_use_separate_stencil;
    brw->has_swizzling = screen->hw_has_swizzling;
@@ -778,7 +757,7 @@ brwCreateContext(gl_api api,
 
    if (!_mesa_initialize_context(ctx, api, mesaVis, shareCtx, &functions)) {
       *dri_ctx_error = __DRI_CTX_ERROR_NO_MEMORY;
-      fprintf(stderr, "%s: failed to init mesa context\n", __FUNCTION__);
+      fprintf(stderr, "%s: failed to init mesa context\n", __func__);
       intelDestroyContext(driContextPriv);
       return false;
    }
@@ -922,10 +901,6 @@ intelDestroyContext(__DRIcontext * driContextPriv)
       (struct brw_context *) driContextPriv->driverPrivate;
    struct gl_context *ctx = &brw->ctx;
 
-   assert(brw); /* should never be null */
-   if (!brw)
-      return;
-
    /* Dump a final BMP in case the application doesn't call SwapBuffers */
    if (INTEL_DEBUG & DEBUG_AUB) {
       intel_batchbuffer_flush(brw);
@@ -999,7 +974,7 @@ intelUnbindContext(__DRIcontext * driContextPriv)
  * sRGB encode if the renderbuffer can handle it.  You can ask specifically
  * for a visual where you're guaranteed to be capable, but it turns out that
  * everyone just makes all their ARGB8888 visuals capable and doesn't offer
- * incapable ones, becuase there's no difference between the two in resources
+ * incapable ones, because there's no difference between the two in resources
  * used.  Applications thus get built that accidentally rely on the default
  * visual choice being sRGB, so we make ours sRGB capable.  Everything sounds
  * great...

@@ -95,6 +95,8 @@ fd_context_render(struct pipe_context *pctx)
 {
 	struct fd_context *ctx = fd_context(pctx);
 	struct pipe_framebuffer_state *pfb = &ctx->framebuffer;
+	struct fd_resource *rsc, *rsc_tmp;
+	int i;
 
 	DBG("needs_flush: %d", ctx->needs_flush);
 
@@ -116,10 +118,24 @@ fd_context_render(struct pipe_context *pctx)
 	ctx->gmem_reason = 0;
 	ctx->num_draws = 0;
 
-	if (pfb->cbufs[0])
-		fd_resource(pfb->cbufs[0]->texture)->dirty = false;
-	if (pfb->zsbuf)
-		fd_resource(pfb->zsbuf->texture)->dirty = false;
+	for (i = 0; i < pfb->nr_cbufs; i++)
+		if (pfb->cbufs[i])
+			fd_resource(pfb->cbufs[i]->texture)->dirty = false;
+	if (pfb->zsbuf) {
+		rsc = fd_resource(pfb->zsbuf->texture);
+		rsc->dirty = false;
+		if (rsc->stencil)
+			rsc->stencil->dirty = false;
+	}
+
+	/* go through all the used resources and clear their reading flag */
+	LIST_FOR_EACH_ENTRY_SAFE(rsc, rsc_tmp, &ctx->used_resources, list) {
+		assert(rsc->reading);
+		rsc->reading = false;
+		list_delinit(&rsc->list);
+	}
+
+	assert(LIST_IS_EMPTY(&ctx->used_resources));
 }
 
 static void
@@ -210,7 +226,7 @@ fd_context_init(struct fd_context *ctx, struct pipe_screen *pscreen,
 
 	util_dynarray_init(&ctx->draw_patches);
 
-	util_slab_create(&ctx->transfer_pool, sizeof(struct pipe_transfer),
+	util_slab_create(&ctx->transfer_pool, sizeof(struct fd_transfer),
 			16, UTIL_SLAB_SINGLETHREADED);
 
 	fd_draw_init(pctx);

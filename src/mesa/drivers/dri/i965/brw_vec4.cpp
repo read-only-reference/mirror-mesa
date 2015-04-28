@@ -25,6 +25,7 @@
 #include "brw_fs.h"
 #include "brw_cfg.h"
 #include "brw_vs.h"
+#include "brw_nir.h"
 #include "brw_vec4_live_variables.h"
 #include "brw_dead_control_flow.h"
 
@@ -238,9 +239,9 @@ vec4_instruction::regs_read(unsigned arg) const
 }
 
 bool
-vec4_instruction::can_do_source_mods(struct brw_context *brw)
+vec4_instruction::can_do_source_mods(const struct brw_device_info *devinfo)
 {
-   if (brw->gen == 6 && is_math())
+   if (devinfo->gen == 6 && is_math())
       return false;
 
    if (is_send_from_grf())
@@ -782,7 +783,7 @@ vec4_visitor::is_dep_ctrl_unsafe(const vec4_instruction *inst)
     * multiply, DepCtrl must not be used."
     * May apply to future SoCs as well.
     */
-   if (brw->is_cherryview) {
+   if (devinfo->is_cherryview) {
       if (inst->opcode == BRW_OPCODE_MUL &&
          IS_DWORD(inst->src[0]) &&
          IS_DWORD(inst->src[1]))
@@ -790,7 +791,7 @@ vec4_visitor::is_dep_ctrl_unsafe(const vec4_instruction *inst)
    }
 #undef IS_DWORD
 
-   if (brw->gen >= 8) {
+   if (devinfo->gen >= 8) {
       if (inst->opcode == BRW_OPCODE_F32TO16)
          return true;
    }
@@ -1011,7 +1012,7 @@ vec4_visitor::opt_register_coalesce()
                if (scan_inst->mlen)
                   break;
 
-               if (brw->gen == 6) {
+               if (devinfo->gen == 6) {
                   /* gen6 math instructions must have the destination be
                    * GRF, so no compute-to-MRF for them.
                    */
@@ -1208,9 +1209,9 @@ vec4_visitor::dump_instruction(backend_instruction *be_inst, FILE *file)
    if (inst->conditional_mod) {
       fprintf(file, "%s", conditional_modifier[inst->conditional_mod]);
       if (!inst->predicate &&
-          (brw->gen < 5 || (inst->opcode != BRW_OPCODE_SEL &&
-                            inst->opcode != BRW_OPCODE_IF &&
-                            inst->opcode != BRW_OPCODE_WHILE))) {
+          (devinfo->gen < 5 || (inst->opcode != BRW_OPCODE_SEL &&
+                                inst->opcode != BRW_OPCODE_IF &&
+                                inst->opcode != BRW_OPCODE_WHILE))) {
          fprintf(file, ".f0.%d", inst->flag_subreg);
       }
    }
@@ -1487,7 +1488,7 @@ vec4_vs_visitor::setup_attributes(int payload_reg)
    unsigned vue_entries =
       MAX2(nr_attributes, prog_data->vue_map.num_slots);
 
-   if (brw->gen == 6)
+   if (devinfo->gen == 6)
       prog_data->urb_entry_size = ALIGN(vue_entries, 8) / 8;
    else
       prog_data->urb_entry_size = ALIGN(vue_entries, 4) / 4;
@@ -1503,7 +1504,7 @@ vec4_visitor::setup_uniforms(int reg)
    /* The pre-gen6 VS requires that some push constants get loaded no
     * matter what, or the GPU would hang.
     */
-   if (brw->gen < 6 && this->uniforms == 0) {
+   if (devinfo->gen < 6 && this->uniforms == 0) {
       assert(this->uniforms < this->uniform_array_size);
       this->uniform_vector_size[this->uniforms] = 1;
 
@@ -1556,7 +1557,7 @@ vec4_visitor::assign_binding_table_offsets()
 src_reg
 vec4_visitor::get_timestamp()
 {
-   assert(brw->gen >= 7);
+   assert(devinfo->gen >= 7);
 
    src_reg ts = src_reg(brw_reg(BRW_ARCHITECTURE_REGISTER_FILE,
                                 BRW_ARF_TIMESTAMP,
@@ -1699,8 +1700,6 @@ vec4_visitor::run()
    move_push_constants_to_pull_constants();
    split_virtual_grfs();
 
-   const char *stage_name = stage == MESA_SHADER_GEOMETRY ? "gs" : "vs";
-
 #define OPT(pass, args...) ({                                          \
       pass_num++;                                                      \
       bool this_progress = pass(args);                                 \
@@ -1708,7 +1707,7 @@ vec4_visitor::run()
       if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER) && this_progress) {  \
          char filename[64];                                            \
          snprintf(filename, 64, "%s-%04d-%02d-%02d-" #pass,            \
-                  stage_name, shader_prog ? shader_prog->Name : 0, iteration, pass_num); \
+                  stage_abbrev, shader_prog ? shader_prog->Name : 0, iteration, pass_num); \
                                                                        \
          backend_visitor::dump_instructions(filename);                 \
       }                                                                \
@@ -1721,7 +1720,7 @@ vec4_visitor::run()
    if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER)) {
       char filename[64];
       snprintf(filename, 64, "%s-%04d-00-start",
-               stage_name, shader_prog ? shader_prog->Name : 0);
+               stage_abbrev, shader_prog ? shader_prog->Name : 0);
 
       backend_visitor::dump_instructions(filename);
    }
@@ -1809,6 +1808,8 @@ brw_vs_emit(struct brw_context *brw,
    bool start_busy = false;
    double start_time = 0;
    const unsigned *assembly = NULL;
+   bool use_nir =
+      brw->ctx.Const.ShaderCompilerOptions[MESA_SHADER_VERTEX].NirOptions != NULL;
 
    if (unlikely(brw->perf_debug)) {
       start_busy = (brw->batch.last_bo &&
@@ -1823,7 +1824,17 @@ brw_vs_emit(struct brw_context *brw,
    if (unlikely(INTEL_DEBUG & DEBUG_VS))
       brw_dump_ir("vertex", prog, &shader->base, &c->vp->program.Base);
 
-   if (brw->scalar_vs && (prog || brw_env_var_as_boolean("INTEL_USE_NIR", false))) {
+   if (use_nir && !c->vp->program.Base.nir) {
+      /* Normally we generate NIR in LinkShader() or ProgramStringNotify(), but
+       * Mesa's fixed-function vertex program handling doesn't notify the driver
+       * at all.  Just do it here, at the last minute, even though it's lame.
+       */
+      assert(c->vp->program.Base.Id == 0 && prog == NULL);
+      c->vp->program.Base.nir =
+         brw_create_nir(brw, NULL, &c->vp->program.Base, MESA_SHADER_VERTEX);
+   }
+
+   if (brw->scalar_vs && (prog || use_nir)) {
       fs_visitor v(brw, mem_ctx, &c->key, prog_data, prog, &c->vp->program, 8);
       if (!v.run_vs()) {
          if (prog) {
@@ -1855,8 +1866,7 @@ brw_vs_emit(struct brw_context *brw,
       g.generate_code(v.cfg, 8);
       assembly = g.get_assembly(final_assembly_size);
 
-      if (assembly)
-         prog_data->base.simd8 = true;
+      prog_data->base.simd8 = true;
       c->base.last_scratch = v.last_scratch;
    }
 

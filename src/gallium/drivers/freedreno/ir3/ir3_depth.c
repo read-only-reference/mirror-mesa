@@ -71,10 +71,12 @@ int ir3_delayslots(struct ir3_instruction *assigner,
 		return 0;
 
 	/* assigner must be alu: */
-	if (is_flow(consumer) || is_sfu(consumer) || is_tex(consumer)) {
+	if (is_flow(consumer) || is_sfu(consumer) || is_tex(consumer) ||
+			is_mem(consumer)) {
 		return 6;
 	} else if ((consumer->category == 3) &&
-			is_mad(consumer->opc) && (n == 2)) {
+			(is_mad(consumer->opc) || is_madsh(consumer->opc)) &&
+			(n == 2)) {
 		/* special case, 3rd src to cat3 not required on first cycle */
 		return 1;
 	} else {

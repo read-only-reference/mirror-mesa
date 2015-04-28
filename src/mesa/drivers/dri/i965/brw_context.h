@@ -507,7 +507,8 @@ static inline GLuint brw_varying_to_offset(struct brw_vue_map *vue_map,
    return brw_vue_slot_to_offset(vue_map->varying_to_slot[varying]);
 }
 
-void brw_compute_vue_map(struct brw_context *brw, struct brw_vue_map *vue_map,
+void brw_compute_vue_map(const struct brw_device_info *devinfo,
+                         struct brw_vue_map *vue_map,
                          GLbitfield64 slots_valid);
 
 
@@ -966,11 +967,22 @@ struct brw_context
                                      unsigned unit,
                                      uint32_t *surf_offset,
                                      bool for_gather);
-      void (*update_renderbuffer_surface)(struct brw_context *brw,
-					  struct gl_renderbuffer *rb,
-					  bool layered,
-					  unsigned unit);
+      uint32_t (*update_renderbuffer_surface)(struct brw_context *brw,
+                                              struct gl_renderbuffer *rb,
+                                              bool layered, unsigned unit,
+                                              uint32_t surf_index);
 
+      void (*emit_texture_surface_state)(struct brw_context *brw,
+                                         struct intel_mipmap_tree *mt,
+                                         GLenum target,
+                                         unsigned min_layer,
+                                         unsigned max_layer,
+                                         unsigned min_level,
+                                         unsigned max_level,
+                                         unsigned format,
+                                         unsigned swizzle,
+                                         uint32_t *surf_offset,
+                                         bool rw, bool for_gather);
       void (*emit_buffer_surface_state)(struct brw_context *brw,
                                         uint32_t *out_offset,
                                         drm_intel_bo *bo,
@@ -1016,7 +1028,7 @@ struct brw_context
     * Number of resets observed in the system at context creation.
     *
     * This is tracked in the context so that we can determine that another
-    * reset has occured.
+    * reset has occurred.
     */
    uint32_t reset_count;
 
@@ -1029,7 +1041,7 @@ struct brw_context
    } upload;
 
    /**
-    * Set if rendering has occured to the drawable's front buffer.
+    * Set if rendering has occurred to the drawable's front buffer.
     *
     * This is used in the DRI2 case to detect that glFlush should also copy
     * the contents of the fake front buffer to the real front buffer.
@@ -1083,10 +1095,6 @@ struct brw_context
 
    int gen;
    int gt;
-   /* GT revision. This will be -1 if the revision couldn't be determined (eg,
-    * if the kernel doesn't support the query).
-    */
-   int revision;
 
    bool is_g4x;
    bool is_baytrail;
@@ -1454,8 +1462,8 @@ struct brw_context
 
    struct {
       drm_intel_bo *bo;
-      struct gl_shader_program **shader_programs;
-      struct gl_program **programs;
+      const char **names;
+      int *ids;
       enum shader_time_shader_type *types;
       uint64_t *cumulative;
       int num_entries;
@@ -1616,13 +1624,13 @@ void brw_upload_cs_urb_state(struct brw_context *brw);
 
 /* brw_fs_reg_allocate.cpp
  */
-void brw_fs_alloc_reg_sets(struct intel_screen *screen);
+void brw_fs_alloc_reg_sets(struct brw_compiler *compiler);
 
 /* brw_vec4_reg_allocate.cpp */
-void brw_vec4_alloc_reg_set(struct intel_screen *screen);
+void brw_vec4_alloc_reg_set(struct brw_compiler *compiler);
 
 /* brw_disasm.c */
-int brw_disassemble_inst(FILE *file, struct brw_context *brw,
+int brw_disassemble_inst(FILE *file, const struct brw_device_info *devinfo,
                          struct brw_inst *inst, bool is_compacted);
 
 /* brw_vs.c */
@@ -1681,7 +1689,6 @@ void brw_upload_abo_surfaces(struct brw_context *brw,
                              struct brw_stage_prog_data *prog_data);
 
 /* brw_surface_formats.c */
-bool brw_is_hiz_depth_format(struct brw_context *ctx, mesa_format format);
 bool brw_render_target_supported(struct brw_context *brw,
                                  struct gl_renderbuffer *rb);
 uint32_t brw_depth_format(struct brw_context *brw, mesa_format format);
