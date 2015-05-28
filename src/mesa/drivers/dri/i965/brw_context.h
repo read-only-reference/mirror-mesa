@@ -148,6 +148,8 @@ struct brw_vs_prog_key;
 struct brw_vue_prog_key;
 struct brw_wm_prog_key;
 struct brw_wm_prog_data;
+struct brw_cs_prog_key;
+struct brw_cs_prog_data;
 
 enum brw_pipeline {
    BRW_RENDER_PIPELINE,
@@ -164,6 +166,7 @@ enum brw_cache_id {
    BRW_CACHE_FF_GS_PROG,
    BRW_CACHE_GS_PROG,
    BRW_CACHE_CLIP_PROG,
+   BRW_CACHE_CS_PROG,
 
    BRW_MAX_CACHE
 };
@@ -209,6 +212,7 @@ enum brw_state_id {
    BRW_STATE_CLIP_VP,
    BRW_STATE_SAMPLER_STATE_TABLE,
    BRW_STATE_VS_ATTRIB_WORKAROUNDS,
+   BRW_STATE_COMPUTE_PROGRAM,
    BRW_NUM_STATE_BITS
 };
 
@@ -244,6 +248,7 @@ enum brw_state_id {
 #define BRW_NEW_FF_GS_PROG_DATA         (1ull << BRW_CACHE_FF_GS_PROG)
 #define BRW_NEW_GS_PROG_DATA            (1ull << BRW_CACHE_GS_PROG)
 #define BRW_NEW_CLIP_PROG_DATA          (1ull << BRW_CACHE_CLIP_PROG)
+#define BRW_NEW_CS_PROG_DATA            (1ull << BRW_CACHE_CS_PROG)
 #define BRW_NEW_URB_FENCE               (1ull << BRW_STATE_URB_FENCE)
 #define BRW_NEW_FRAGMENT_PROGRAM        (1ull << BRW_STATE_FRAGMENT_PROGRAM)
 #define BRW_NEW_GEOMETRY_PROGRAM        (1ull << BRW_STATE_GEOMETRY_PROGRAM)
@@ -288,6 +293,7 @@ enum brw_state_id {
 #define BRW_NEW_CLIP_VP                 (1ull << BRW_STATE_CLIP_VP)
 #define BRW_NEW_SAMPLER_STATE_TABLE     (1ull << BRW_STATE_SAMPLER_STATE_TABLE)
 #define BRW_NEW_VS_ATTRIB_WORKAROUNDS   (1ull << BRW_STATE_VS_ATTRIB_WORKAROUNDS)
+#define BRW_NEW_COMPUTE_PROGRAM         (1ull << BRW_STATE_COMPUTE_PROGRAM)
 
 struct brw_state_flags {
    /** State update flags signalled by mesa internals */
@@ -352,6 +358,9 @@ struct brw_stage_prog_data {
       uint32_t shader_time_start;
       /** @} */
    } binding_table;
+
+   uint32_t *map_entries;
+   uint32_t *bind_map[8]; /* MAX_SETS from vulkan/private.h */
 
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params;
@@ -423,6 +432,17 @@ struct brw_wm_prog_data {
     * For varying slots that are not used by the FS, the value is -1.
     */
    int urb_setup[VARYING_SLOT_MAX];
+};
+
+/* Note: brw_cs_prog_data_compare() must be updated when adding fields to this
+ * struct!
+ */
+struct brw_cs_prog_data {
+   struct brw_stage_prog_data base;
+
+   GLuint dispatch_grf_start_reg_16;
+   unsigned local_size[3];
+   unsigned simd_size;
 };
 
 /**
@@ -817,6 +837,9 @@ enum shader_time_shader_type {
    ST_FS16,
    ST_FS16_WRITTEN,
    ST_FS16_RESET,
+   ST_CS,
+   ST_CS_WRITTEN,
+   ST_CS_RESET,
 };
 
 struct brw_vertex_buffer {
@@ -847,13 +870,6 @@ struct brw_query_object {
 
    /** True if we know the batch has been flushed since we ended the query. */
    bool flushed;
-};
-
-struct intel_sync_object {
-   struct gl_sync_object Base;
-
-   /** Batch associated with this sync object */
-   drm_intel_bo *bo;
 };
 
 enum brw_gpu_ring {
@@ -1128,6 +1144,8 @@ struct brw_context
       struct brw_state_flags pipelines[BRW_NUM_PIPELINES];
    } state;
 
+   enum brw_pipeline last_pipeline;
+
    struct brw_cache cache;
 
    /** IDs for meta stencil blit shader programs. */
@@ -1205,6 +1223,7 @@ struct brw_context
    const struct gl_vertex_program *vertex_program;
    const struct gl_geometry_program *geometry_program;
    const struct gl_fragment_program *fragment_program;
+   const struct gl_compute_program *compute_program;
 
    /**
     * Number of samples in ctx->DrawBuffer, updated by BRW_NEW_NUM_SAMPLES so
@@ -1221,6 +1240,7 @@ struct brw_context
    int max_ds_threads;
    int max_gs_threads;
    int max_wm_threads;
+   int max_cs_threads;
 
    /* BRW_NEW_URB_ALLOCATIONS:
     */
@@ -1367,6 +1387,10 @@ struct brw_context
       uint32_t fast_clear_op;
    } wm;
 
+   struct {
+      struct brw_stage_state base;
+      struct brw_cs_prog_data *prog_data;
+   } cs;
 
    struct {
       uint32_t state_offset;
@@ -1419,7 +1443,7 @@ struct brw_context
 
    int num_atoms[BRW_NUM_PIPELINES];
    const struct brw_tracked_state render_atoms[57];
-   const struct brw_tracked_state compute_atoms[1];
+   const struct brw_tracked_state compute_atoms[3];
 
    /* If (INTEL_DEBUG & DEBUG_BATCH) */
    struct {
@@ -1803,6 +1827,10 @@ gen7_emit_urb_state(struct brw_context *brw,
 extern GLenum
 brw_get_graphics_reset_status(struct gl_context *ctx);
 
+/* brw_compute.c */
+extern void
+brw_init_compute_functions(struct dd_function_table *functions);
+
 /*======================================================================
  * Inline conversion functions.  These are better-typed than the
  * macros used previously:
@@ -1841,6 +1869,12 @@ static inline const struct brw_fragment_program *
 brw_fragment_program_const(const struct gl_fragment_program *p)
 {
    return (const struct brw_fragment_program *) p;
+}
+
+static inline struct brw_compute_program *
+brw_compute_program(struct gl_compute_program *p)
+{
+   return (struct brw_compute_program *) p;
 }
 
 /**
@@ -1944,6 +1978,12 @@ gen6_upload_push_constants(struct brw_context *brw,
                            const struct brw_stage_prog_data *prog_data,
                            struct brw_stage_state *stage_state,
                            enum aub_state_struct_type type);
+
+struct intel_screen *intel_screen_create(int fd);
+void intel_screen_destroy(struct intel_screen *screen);
+
+struct brw_context *intel_context_create(struct intel_screen *screen);
+void intel_context_destroy(struct brw_context *brw);
 
 #ifdef __cplusplus
 }

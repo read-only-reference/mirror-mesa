@@ -84,6 +84,7 @@ extern const struct brw_tracked_state brw_gs_binding_table;
 extern const struct brw_tracked_state brw_vs_binding_table;
 extern const struct brw_tracked_state brw_wm_ubo_surfaces;
 extern const struct brw_tracked_state brw_wm_abo_surfaces;
+extern const struct brw_tracked_state brw_cs_abo_surfaces;
 extern const struct brw_tracked_state brw_wm_unit;
 extern const struct brw_tracked_state brw_interpolation_map;
 
@@ -93,6 +94,7 @@ extern const struct brw_tracked_state brw_drawing_rect;
 extern const struct brw_tracked_state brw_indices;
 extern const struct brw_tracked_state brw_vertices;
 extern const struct brw_tracked_state brw_index_buffer;
+extern const struct brw_tracked_state brw_cs_state;
 extern const struct brw_tracked_state gen6_binding_table_pointers;
 extern const struct brw_tracked_state gen6_blend_state;
 extern const struct brw_tracked_state gen6_cc_state_pointers;
@@ -184,6 +186,18 @@ void brw_upload_compute_state(struct brw_context *brw);
 void brw_compute_state_finished(struct brw_context *brw);
 void brw_init_state(struct brw_context *brw);
 void brw_destroy_state(struct brw_context *brw);
+void brw_emit_select_pipeline(struct brw_context *brw,
+                              enum brw_pipeline pipeline);
+
+static inline void
+brw_select_pipeline(struct brw_context *brw, enum brw_pipeline pipeline)
+{
+   if (unlikely(brw->last_pipeline != pipeline)) {
+      assert(pipeline < BRW_NUM_PIPELINES);
+      brw_emit_select_pipeline(brw, pipeline);
+      brw->last_pipeline = pipeline;
+   }
+}
 
 /***********************************************************************
  * brw_state_cache.c
@@ -315,6 +329,18 @@ void brw_update_sampler_state(struct brw_context *brw,
                               const struct gl_sampler_object *sampler,
                               uint32_t *sampler_state,
                               uint32_t batch_offset_for_sampler_state);
+
+/* gen6_wm_state.c */
+void
+gen6_upload_wm_state(struct brw_context *brw,
+                     const struct brw_fragment_program *fp,
+                     const struct brw_wm_prog_data *prog_data,
+                     const struct brw_stage_state *stage_state,
+                     bool multisampled_fbo, int min_inv_per_frag,
+                     bool dual_source_blend_enable, bool kill_enable,
+                     bool color_buffer_write_enable, bool msaa_enabled,
+                     bool line_stipple_enable, bool polygon_stipple_enable,
+                     bool statistic_enable);
 
 /* gen6_sf_state.c */
 void

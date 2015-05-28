@@ -71,6 +71,7 @@ struct brw_device_info
    unsigned max_ds_threads;
    unsigned max_gs_threads;
    unsigned max_wm_threads;
+   unsigned max_cs_threads;
 
    struct {
       unsigned size;
@@ -84,3 +85,4 @@ struct brw_device_info
 };
 
 const struct brw_device_info *brw_get_device_info(int devid, int revision);
+const char *brw_get_device_name(int devid);

@@ -1996,7 +1996,7 @@ static EGLBoolean
 dri2_export_dma_buf_image_query_mesa(_EGLDriver *drv, _EGLDisplay *disp,
                                      _EGLImage *img,
                                      EGLint *fourcc, EGLint *nplanes,
-                                     EGLuint64MESA *modifiers)
+                                     EGLuint64KHR *modifiers)
 {
    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
    struct dri2_egl_image *dri2_img = dri2_egl_image(img);
@@ -2232,6 +2232,14 @@ dri2_create_sync(_EGLDriver *drv, _EGLDisplay *dpy,
    switch (type) {
    case EGL_SYNC_FENCE_KHR:
       dri2_sync->fence = dri2_dpy->fence->create_fence(dri2_ctx->dri_context);
+      if (!dri2_sync->fence) {
+         /* Why did it fail? DRI doesn't return an error code, so we emit
+          * a generic EGL error that doesn't communicate user error.
+          */
+         _eglError(EGL_BAD_ALLOC, "eglCreateSyncKHR");
+         free(dri2_sync);
+         return NULL;
+      }
       break;
 
    case EGL_SYNC_CL_EVENT_KHR:
