@@ -67,7 +67,6 @@ type_size(const struct glsl_type *type)
       return 0;
    case GLSL_TYPE_IMAGE:
       return 0;
-   case GLSL_TYPE_FUNCTION:
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_DOUBLE:
@@ -289,7 +288,6 @@ nir_lower_io_block(nir_block *block, void *void_state)
          offset += intrin->variables[0]->var->data.driver_location;
 
          load->const_index[0] = offset;
-         load->const_index[1] = 1;
 
          if (has_indirect)
             load->src[0] = indirect;
@@ -332,7 +330,6 @@ nir_lower_io_block(nir_block *block, void *void_state)
          offset += intrin->variables[0]->var->data.driver_location;
 
          store->const_index[0] = offset;
-         store->const_index[1] = 1;
 
          nir_src_copy(&store->src[0], &intrin->src[0], state->mem_ctx);
 

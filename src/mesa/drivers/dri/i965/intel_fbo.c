@@ -390,7 +390,7 @@ intel_image_target_renderbuffer_storage(struct gl_context *ctx,
                                          image->height,
                                          1,
                                          image->pitch,
-                                         true /*disable_aux_buffers*/);
+                                         MIPTREE_LAYOUT_DISABLE_AUX);
    if (!irb->mt)
       return;
 
@@ -551,10 +551,12 @@ intel_renderbuffer_update_wrapper(struct brw_context *brw,
 
    irb->mt_layer = layer_multiplier * layer;
 
-   if (layered) {
-      irb->layer_count = image->TexObject->NumLayers ?: mt->level[level].depth / layer_multiplier;
-   } else {
+   if (!layered) {
       irb->layer_count = 1;
+   } else if (image->TexObject->NumLayers > 0) {
+      irb->layer_count = image->TexObject->NumLayers;
+   } else {
+      irb->layer_count = mt->level[level].depth / layer_multiplier;
    }
 
    intel_miptree_reference(&irb->mt, mt);
@@ -1027,10 +1029,9 @@ intel_renderbuffer_move_to_temp(struct brw_context *brw,
                                  intel_image->base.Base.Level,
                                  intel_image->base.Base.Level,
                                  width, height, depth,
-                                 true,
                                  irb->mt->num_samples,
                                  INTEL_MIPTREE_TILING_ANY,
-                                 false);
+                                 MIPTREE_LAYOUT_ACCELERATED_UPLOAD);
 
    if (intel_miptree_wants_hiz_buffer(brw, new_mt)) {
       intel_miptree_alloc_hiz(brw, new_mt);
@@ -1077,7 +1078,7 @@ brw_render_cache_set_check_flush(struct brw_context *brw, drm_intel_bo *bo)
    if (!_mesa_set_search(brw->render_cache, bo))
       return;
 
-   intel_batchbuffer_emit_mi_flush(brw);
+   brw_emit_mi_flush(brw);
 }
 
 /**

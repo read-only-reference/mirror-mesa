@@ -39,6 +39,7 @@
 #include "swrast/s_renderbuffer.h"
 #include "util/ralloc.h"
 #include "brw_shader.h"
+#include "glsl/nir/nir.h"
 
 #include "utils.h"
 #include "xmlpool.h"
@@ -1372,6 +1373,8 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
    if (!intelScreen->devinfo)
       return false;
 
+   brw_process_intel_debug_variable(intelScreen);
+
    intelScreen->hw_must_use_separate_stencil = intelScreen->devinfo->gen >= 7;
 
    intelScreen->hw_has_swizzling = intel_detect_swizzling(intelScreen);
@@ -1407,6 +1410,13 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
          (ret != -1 || errno != EINVAL);
    }
 
+   struct drm_i915_getparam getparam;
+   getparam.param = I915_PARAM_CMD_PARSER_VERSION;
+   getparam.value = &intelScreen->cmd_parser_version;
+   const int ret = drmIoctl(psp->fd, DRM_IOCTL_I915_GETPARAM, &getparam);
+   if (ret == -1)
+      intelScreen->cmd_parser_version = 0;
+
    psp->extensions = !intelScreen->has_context_reset_notification
       ? intelScreenExtensions : intelRobustScreenExtensions;
 
@@ -1414,78 +1424,6 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
                                                intelScreen->devinfo);
 
    return (const __DRIconfig**) intel_screen_make_configs(psp);
-}
-
-struct intel_screen *
-intel_screen_create(int fd)
-{
-   __DRIscreen *psp;
-   __DRIconfig **configs;
-   int i;
-
-   psp = malloc(sizeof(*psp));
-   if (psp == NULL)
-      return NULL;
-
-   psp->image.loader = (void *) 1; /* Don't complain about this being NULL */
-   psp->fd = fd;
-   psp->dri2.useInvalidate = (void *) 1;
-
-   configs = (__DRIconfig **) intelInitScreen2(psp);
-   for (i = 0; configs[i]; i++)
-      free(configs[i]);
-   free(configs);
-
-   return psp->driverPrivate;
-}
-
-void
-intel_screen_destroy(struct intel_screen *screen)
-{
-   __DRIscreen *psp;
-
-   psp = screen->driScrnPriv;
-   intelDestroyScreen(screen->driScrnPriv);
-   free(psp);
-}
-
-
-struct brw_context *
-intel_context_create(struct intel_screen *screen)
-{
-   __DRIcontext *driContextPriv;
-   struct brw_context *brw;
-   unsigned error;
-
-   driContextPriv = malloc(sizeof(*driContextPriv));
-   if (driContextPriv == NULL)
-      return NULL;
-
-   driContextPriv->driScreenPriv = screen->driScrnPriv;
-
-   brwCreateContext(API_OPENGL_CORE,
-                    NULL, /* visual */
-                    driContextPriv,
-                    3, 0,
-                    0, /* flags */
-                    false, /* notify_reset */
-                    &error,
-                    NULL);
-
-   brw = driContextPriv->driverPrivate;
-   brw->ctx.FirstTimeCurrent = false;
-
-   return driContextPriv->driverPrivate;
-}
-
-void
-intel_context_destroy(struct brw_context *brw)
-{
-   __DRIcontext *driContextPriv;
-
-   driContextPriv = brw->driContext;
-   intelDestroyContext(driContextPriv);
-   free(driContextPriv);
 }
 
 struct intel_buffer {

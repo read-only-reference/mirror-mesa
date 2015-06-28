@@ -1,5 +1,3 @@
-AUTOMAKE_OPTIONS = subdir-objects
-
 pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = main/gbm.pc
 
@@ -52,7 +50,8 @@ libgbm_dri_la_CFLAGS = \
 	$(LIBDRM_CFLAGS)
 
 libgbm_la_LIBADD += \
-	libgbm_dri.la $(top_builddir)/src/mapi/shared-glapi/libglapi.la $(LIBDRM_LIBS)
+	libgbm_dri.la \
+	$(LIBDRM_LIBS)
 endif
 
 TESTS = gbm-symbols-check

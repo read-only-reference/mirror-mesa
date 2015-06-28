@@ -19,8 +19,6 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
 
-AUTOMAKE_OPTIONS = subdir-objects
-
 SUBDIRS = . gtest util mapi/glapi/gen mapi
 
 if NEED_OPENGL_COMMON
@@ -61,10 +59,6 @@ EXTRA_DIST = \
 AM_CFLAGS = $(VISIBILITY_CFLAGS)
 AM_CXXFLAGS = $(VISIBILITY_CXXFLAGS)
 
-if HAVE_VULKAN
-SUBDIRS += vulkan
-endif
-
 AM_CPPFLAGS = \
 	-I$(top_srcdir)/include/ \
 	-I$(top_srcdir)/src/mapi/ \
@@ -76,4 +70,5 @@ noinst_LTLIBRARIES = libglsl_util.la
 libglsl_util_la_SOURCES = \
 	mesa/main/imports.c \
 	mesa/program/prog_hash_table.c \
-	mesa/program/symbol_table.c
+	mesa/program/symbol_table.c \
+	mesa/program/dummy_errors.c

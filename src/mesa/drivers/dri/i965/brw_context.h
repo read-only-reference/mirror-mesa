@@ -359,9 +359,6 @@ struct brw_stage_prog_data {
       /** @} */
    } binding_table;
 
-   uint32_t *map_entries;
-   uint32_t *bind_map[8]; /* MAX_SETS from vulkan/private.h */
-
    GLuint nr_params;       /**< number of float params/constants */
    GLuint nr_pull_params;
 
@@ -608,6 +605,12 @@ struct brw_ff_gs_prog_data {
    unsigned svbi_postincrement_value;
 };
 
+enum shader_dispatch_mode {
+   DISPATCH_MODE_4X1_SINGLE = 0,
+   DISPATCH_MODE_4X2_DUAL_INSTANCE = 1,
+   DISPATCH_MODE_4X2_DUAL_OBJECT = 2,
+   DISPATCH_MODE_SIMD8 = 3,
+};
 
 /* Note: brw_vue_prog_data_compare() must be updated when adding fields to
  * this struct!
@@ -625,7 +628,7 @@ struct brw_vue_prog_data {
     */
    GLuint urb_entry_size;
 
-   bool simd8;
+   enum shader_dispatch_mode dispatch_mode;
 };
 
 
@@ -723,14 +726,6 @@ struct brw_gs_prog_data
    int invocations;
 
    /**
-    * Dispatch mode, can be any of:
-    * GEN7_GS_DISPATCH_MODE_DUAL_OBJECT
-    * GEN7_GS_DISPATCH_MODE_DUAL_INSTANCE
-    * GEN7_GS_DISPATCH_MODE_SINGLE
-    */
-   int dispatch_mode;
-
-   /**
     * Gen6 transform feedback enabled flag.
     */
    bool gen6_xfb_enabled;
@@ -826,20 +821,10 @@ struct brw_tracked_state {
 enum shader_time_shader_type {
    ST_NONE,
    ST_VS,
-   ST_VS_WRITTEN,
-   ST_VS_RESET,
    ST_GS,
-   ST_GS_WRITTEN,
-   ST_GS_RESET,
    ST_FS8,
-   ST_FS8_WRITTEN,
-   ST_FS8_RESET,
    ST_FS16,
-   ST_FS16_WRITTEN,
-   ST_FS16_RESET,
    ST_CS,
-   ST_CS_WRITTEN,
-   ST_CS_RESET,
 };
 
 struct brw_vertex_buffer {
@@ -969,6 +954,22 @@ struct brw_stage_state
    uint32_t sampler_offset;
 };
 
+enum brw_predicate_state {
+   /* The first two states are used if we can determine whether to draw
+    * without having to look at the values in the query object buffer. This
+    * will happen if there is no conditional render in progress, if the query
+    * object is already completed or if something else has already added
+    * samples to the preliminary result such as via a BLT command.
+    */
+   BRW_PREDICATE_STATE_RENDER,
+   BRW_PREDICATE_STATE_DONT_RENDER,
+   /* In this case whether to draw or not depends on the result of an
+    * MI_PREDICATE command so the predicate enable bit needs to be checked.
+    */
+   BRW_PREDICATE_STATE_USE_BIT
+};
+
+struct shader_times;
 
 /**
  * brw_context is derived from gl_context.
@@ -1116,6 +1117,7 @@ struct brw_context
    bool is_baytrail;
    bool is_haswell;
    bool is_cherryview;
+   bool is_broxton;
 
    bool has_hiz;
    bool has_separate_stencil;
@@ -1128,7 +1130,6 @@ struct brw_context
    bool has_pln;
    bool no_simd8;
    bool use_rep_send;
-   bool scalar_vs;
 
    /**
     * Some versions of Gen hardware don't do centroid interpolation correctly
@@ -1405,6 +1406,11 @@ struct brw_context
    } query;
 
    struct {
+      enum brw_predicate_state state;
+      bool supported;
+   } predicate;
+
+   struct {
       /** A map from pipeline statistics counter IDs to MMIO addresses. */
       const int *statistics_registers;
 
@@ -1450,6 +1456,7 @@ struct brw_context
       uint32_t offset;
       uint32_t size;
       enum aub_state_struct_type type;
+      int index;
    } *state_batch_list;
    int state_batch_count;
 
@@ -1489,7 +1496,7 @@ struct brw_context
       const char **names;
       int *ids;
       enum shader_time_shader_type *types;
-      uint64_t *cumulative;
+      struct shader_times *cumulative;
       int num_entries;
       int max_entries;
       double report_time;
@@ -1603,12 +1610,21 @@ void brw_write_depth_count(struct brw_context *brw, drm_intel_bo *bo, int idx);
 void brw_store_register_mem64(struct brw_context *brw,
                               drm_intel_bo *bo, uint32_t reg, int idx);
 
+/** brw_conditional_render.c */
+void brw_init_conditional_render_functions(struct dd_function_table *functions);
+bool brw_check_conditional_render(struct brw_context *brw);
+
 /** intel_batchbuffer.c */
 void brw_load_register_mem(struct brw_context *brw,
                            uint32_t reg,
                            drm_intel_bo *bo,
                            uint32_t read_domains, uint32_t write_domain,
                            uint32_t offset);
+void brw_load_register_mem64(struct brw_context *brw,
+                             uint32_t reg,
+                             drm_intel_bo *bo,
+                             uint32_t read_domains, uint32_t write_domain,
+                             uint32_t offset);
 
 /*======================================================================
  * brw_state_dump.c
@@ -1979,11 +1995,20 @@ gen6_upload_push_constants(struct brw_context *brw,
                            struct brw_stage_state *stage_state,
                            enum aub_state_struct_type type);
 
-struct intel_screen *intel_screen_create(int fd);
-void intel_screen_destroy(struct intel_screen *screen);
+bool
+gen9_use_linear_1d_layout(const struct brw_context *brw,
+                          const struct intel_mipmap_tree *mt);
 
-struct brw_context *intel_context_create(struct intel_screen *screen);
-void intel_context_destroy(struct brw_context *brw);
+/* brw_pipe_control.c */
+void brw_emit_pipe_control_flush(struct brw_context *brw, uint32_t flags);
+void brw_emit_pipe_control_write(struct brw_context *brw, uint32_t flags,
+                                 drm_intel_bo *bo, uint32_t offset,
+                                 uint32_t imm_lower, uint32_t imm_upper);
+void brw_emit_mi_flush(struct brw_context *brw);
+void brw_emit_post_sync_nonzero_flush(struct brw_context *brw);
+void brw_emit_depth_stall_flushes(struct brw_context *brw);
+void gen7_emit_vs_workaround_flush(struct brw_context *brw);
+void gen7_emit_cs_stall_flush(struct brw_context *brw);
 
 #ifdef __cplusplus
 }

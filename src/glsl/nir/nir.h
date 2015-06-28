@@ -389,14 +389,6 @@ typedef struct {
     */
    bool is_packed;
 
-   /**
-    * If this pointer is non-NULL then this register has exactly one
-    * definition and that definition dominates all of its uses.  This is
-    * set by the out-of-SSA pass so that backends can get SSA-like
-    * information even once they have gone out of SSA.
-    */
-   struct nir_instr *parent_instr;
-
    /** set of nir_instr's where this register is used (read from) */
    struct list_head uses;
 
@@ -563,16 +555,6 @@ nir_src_for_reg(nir_register *reg)
    src.reg.base_offset = 0;
 
    return src;
-}
-
-static inline nir_instr *
-nir_src_get_parent_instr(const nir_src *src)
-{
-   if (src->is_ssa) {
-      return src->ssa->parent_instr;
-   } else {
-      return src->reg.reg->parent_instr;
-   }
 }
 
 static inline nir_dest
@@ -781,15 +763,6 @@ typedef struct {
 NIR_DEFINE_CAST(nir_deref_as_var, nir_deref, nir_deref_var, deref)
 NIR_DEFINE_CAST(nir_deref_as_array, nir_deref, nir_deref_array, deref)
 NIR_DEFINE_CAST(nir_deref_as_struct, nir_deref, nir_deref_struct, deref)
-
-/** Returns the tail of a deref chain */
-static inline nir_deref *
-nir_deref_tail(nir_deref *deref)
-{
-   while (deref->child)
-      deref = deref->child;
-   return deref;
-}
 
 typedef struct {
    nir_instr instr;
@@ -1685,7 +1658,12 @@ bool nir_ssa_defs_interfere(nir_ssa_def *a, nir_ssa_def *b);
 
 void nir_convert_to_ssa_impl(nir_function_impl *impl);
 void nir_convert_to_ssa(nir_shader *shader);
-void nir_convert_from_ssa(nir_shader *shader);
+
+/* If convert_everything is true, convert all values (even those not involved
+ * in a phi node) to registers. If false, only convert SSA values involved in
+ * phi nodes to registers.
+ */
+void nir_convert_from_ssa(nir_shader *shader, bool phi_webs_only);
 
 bool nir_opt_algebraic(nir_shader *shader);
 bool nir_opt_algebraic_late(nir_shader *shader);

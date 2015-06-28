@@ -511,8 +511,6 @@ st_render_texture(struct gl_context *ctx,
    strb->rtt_layered = att->Layered;
    pipe_resource_reference(&strb->texture, pt);
 
-   pipe_surface_release(pipe, &strb->surface);
-
    st_update_renderbuffer_surface(st, strb);
 
    strb->Base.Format = st_pipe_format_to_mesa_format(pt->format);
@@ -842,7 +840,7 @@ void st_init_fbo_functions(struct dd_function_table *functions)
    functions->NewFramebuffer = st_new_framebuffer;
    functions->NewRenderbuffer = st_new_renderbuffer;
    functions->BindFramebuffer = st_bind_framebuffer;
-   functions->FramebufferRenderbuffer = _mesa_framebuffer_renderbuffer;
+   functions->FramebufferRenderbuffer = _mesa_FramebufferRenderbuffer_sw;
    functions->RenderTexture = st_render_texture;
    functions->FinishRenderTexture = st_finish_render_texture;
    functions->ValidateFramebuffer = st_validate_framebuffer;

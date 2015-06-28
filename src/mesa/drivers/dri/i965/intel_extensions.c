@@ -76,7 +76,7 @@ can_do_pipelined_register_writes(struct brw_context *brw)
    OUT_BATCH(expected_value);
    ADVANCE_BATCH();
 
-   intel_batchbuffer_emit_mi_flush(brw);
+   brw_emit_mi_flush(brw);
 
    /* Save the register's value back to the buffer. */
    BEGIN_BATCH(3);
@@ -132,7 +132,7 @@ can_write_oacontrol(struct brw_context *brw)
    OUT_BATCH(expected_value);
    ADVANCE_BATCH();
 
-   intel_batchbuffer_emit_mi_flush(brw);
+   brw_emit_mi_flush(brw);
 
    /* Save the register's value back to the buffer. */
    BEGIN_BATCH(3);
@@ -143,7 +143,7 @@ can_write_oacontrol(struct brw_context *brw)
              offset * sizeof(uint32_t));
    ADVANCE_BATCH();
 
-   intel_batchbuffer_emit_mi_flush(brw);
+   brw_emit_mi_flush(brw);
 
    /* Set OACONTROL back to zero (everything off). */
    BEGIN_BATCH(3);
@@ -320,9 +320,12 @@ intelInitExtensions(struct gl_context *ctx)
       }
    }
 
+   brw->predicate.supported = false;
+
    if (brw->gen >= 7) {
       ctx->Extensions.ARB_conservative_depth = true;
       ctx->Extensions.ARB_derivative_control = true;
+      ctx->Extensions.ARB_framebuffer_no_attachments = true;
       ctx->Extensions.ARB_gpu_shader5 = true;
       ctx->Extensions.ARB_shader_atomic_counters = true;
       ctx->Extensions.ARB_texture_compression_bptc = true;
@@ -333,6 +336,9 @@ intelInitExtensions(struct gl_context *ctx)
          ctx->Extensions.ARB_transform_feedback2 = true;
          ctx->Extensions.ARB_transform_feedback3 = true;
          ctx->Extensions.ARB_transform_feedback_instanced = true;
+
+         if (brw->intelScreen->cmd_parser_version >= 2)
+            brw->predicate.supported = true;
       }
 
       /* Only enable this in core profile because other parts of Mesa behave

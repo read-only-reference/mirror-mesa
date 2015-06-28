@@ -88,7 +88,6 @@ copy_constant_to_storage(union gl_constant_value *storage,
       case GLSL_TYPE_IMAGE:
       case GLSL_TYPE_ATOMIC_UINT:
       case GLSL_TYPE_INTERFACE:
-      case GLSL_TYPE_FUNCTION:
       case GLSL_TYPE_VOID:
       case GLSL_TYPE_ERROR:
 	 /* All other types should have already been filtered by other
@@ -104,7 +103,7 @@ void
 set_sampler_binding(gl_shader_program *prog, const char *name, int binding)
 {
    struct gl_uniform_storage *const storage =
-      get_storage(prog->UniformStorage, prog->NumUserUniformStorage, name);
+      get_storage(prog->UniformStorage, prog->NumUniformStorage, name);
 
    if (storage == NULL) {
       assert(storage != NULL);
@@ -194,7 +193,7 @@ set_uniform_initializer(void *mem_ctx, gl_shader_program *prog,
 
    struct gl_uniform_storage *const storage =
       get_storage(prog->UniformStorage,
-		  prog->NumUserUniformStorage,
+                  prog->NumUniformStorage,
 		  name);
    if (storage == NULL) {
       assert(storage != NULL);

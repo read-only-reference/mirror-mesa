@@ -56,7 +56,6 @@ enum glsl_base_type {
    GLSL_TYPE_IMAGE,
    GLSL_TYPE_ATOMIC_UINT,
    GLSL_TYPE_STRUCT,
-   GLSL_TYPE_FUNCTION,
    GLSL_TYPE_INTERFACE,
    GLSL_TYPE_ARRAY,
    GLSL_TYPE_VOID,
@@ -179,7 +178,7 @@ struct glsl_type {
     */
    union {
       const struct glsl_type *array;            /**< Type of array elements. */
-      struct glsl_function_param *parameters;   /**< Parameters to function. */
+      const struct glsl_type *parameters;       /**< Parameters to function. */
       struct glsl_struct_field *structure;      /**< List of struct fields. */
    } fields;
 
@@ -229,18 +228,6 @@ struct glsl_type {
    const glsl_type *get_scalar_type() const;
 
    /**
-    * Query the type of elements in an array
-    *
-    * \return
-    * Pointer to the type of elements in the array for array types, or \c NULL
-    * for non-array types.
-    */
-   const glsl_type *element_type() const
-   {
-      return is_array() ? fields.array : NULL;
-   }
-
-   /**
     * Get the instance of a built-in scalar, vector, or matrix type
     */
    static const glsl_type *get_instance(unsigned base_type, unsigned rows,
@@ -275,13 +262,6 @@ struct glsl_type {
 						  unsigned num_fields,
 						  enum glsl_interface_packing packing,
 						  const char *block_name);
-
-   /**
-    * Get the instance of a function type
-    */
-   static const glsl_type *get_function_instance(const struct glsl_type *return_type,
-                                                 const glsl_function_param *parameters,
-                                                 unsigned num_params);
 
    /**
     * Get the type resulting from a multiplication of \p type_a * \p type_b
@@ -564,7 +544,7 @@ struct glsl_type {
       if (base_type == GLSL_TYPE_ATOMIC_UINT)
          return ATOMIC_COUNTER_SIZE;
       else if (is_array())
-         return length * element_type()->atomic_size();
+         return length * fields.array->atomic_size();
       else
          return 0;
    }
@@ -696,10 +676,6 @@ private:
    glsl_type(const glsl_struct_field *fields, unsigned num_fields,
 	     enum glsl_interface_packing packing, const char *name);
 
-   /** Constructor for interface types */
-   glsl_type(const glsl_type *return_type,
-             const glsl_function_param *params, unsigned num_params);
-
    /** Constructor for array types */
    glsl_type(const glsl_type *array, unsigned length);
 
@@ -711,9 +687,6 @@ private:
 
    /** Hash table containing the known interface types. */
    static struct hash_table *interface_types;
-
-   /** Hash table containing the known function types. */
-   static struct hash_table *function_types;
 
    static int record_key_compare(const void *a, const void *b);
    static unsigned record_key_hash(const void *key);
@@ -741,10 +714,6 @@ private:
    friend void _mesa_glsl_release_types(void);
    /*@}*/
 };
-
-#undef DECL_TYPE
-#undef STRUCT_TYPE
-#endif /* __cplusplus */
 
 struct glsl_struct_field {
    const struct glsl_type *type;
@@ -789,17 +758,14 @@ struct glsl_struct_field {
    int stream;
 };
 
-struct glsl_function_param {
-   const struct glsl_type *type;
-
-   bool in;
-   bool out;
-};
-
 static inline unsigned int
 glsl_align(unsigned int a, unsigned int align)
 {
    return (a + align - 1) / align * align;
 }
+
+#undef DECL_TYPE
+#undef STRUCT_TYPE
+#endif /* __cplusplus */
 
 #endif /* GLSL_TYPES_H */

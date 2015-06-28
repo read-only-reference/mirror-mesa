@@ -48,6 +48,20 @@
 #define GEN7_MI_LOAD_REGISTER_MEM	(CMD_MI | (0x29 << 23))
 # define MI_LOAD_REGISTER_MEM_USE_GGTT		(1 << 22)
 
+/* Manipulate the predicate bit based on some register values. Only on Gen7+ */
+#define GEN7_MI_PREDICATE		(CMD_MI | (0xC << 23))
+# define MI_PREDICATE_LOADOP_KEEP		(0 << 6)
+# define MI_PREDICATE_LOADOP_LOAD		(2 << 6)
+# define MI_PREDICATE_LOADOP_LOADINV		(3 << 6)
+# define MI_PREDICATE_COMBINEOP_SET		(0 << 3)
+# define MI_PREDICATE_COMBINEOP_AND		(1 << 3)
+# define MI_PREDICATE_COMBINEOP_OR		(2 << 3)
+# define MI_PREDICATE_COMBINEOP_XOR		(3 << 3)
+# define MI_PREDICATE_COMPAREOP_TRUE		(0 << 0)
+# define MI_PREDICATE_COMPAREOP_FALSE		(1 << 0)
+# define MI_PREDICATE_COMPAREOP_SRCS_EQUAL	(2 << 0)
+# define MI_PREDICATE_COMPAREOP_DELTAS_EQUAL	(3 << 0)
+
 /** @{
  *
  * PIPE_CONTROL operation, a combination MI_FLUSH and register write with
@@ -69,6 +83,7 @@
 #define PIPE_CONTROL_TEXTURE_CACHE_INVALIDATE	(1 << 10) /* GM45+ only */
 #define PIPE_CONTROL_ISP_DIS		(1 << 9)
 #define PIPE_CONTROL_INTERRUPT_ENABLE	(1 << 8)
+#define PIPE_CONTROL_FLUSH_ENABLE	(1 << 7) /* Gen7+ only */
 /* GT */
 #define PIPE_CONTROL_DATA_CACHE_INVALIDATE	(1 << 5)
 #define PIPE_CONTROL_VF_CACHE_INVALIDATE	(1 << 4)
@@ -87,6 +102,8 @@
 
 #define XY_SRC_COPY_BLT_CMD             (CMD_2D | (0x53 << 22))
 
+#define XY_FAST_COPY_BLT_CMD             (CMD_2D | (0x42 << 22))
+
 #define XY_TEXT_IMMEDIATE_BLIT_CMD	(CMD_2D | (0x31 << 22))
 # define XY_TEXT_BYTE_PACKED		(1 << 16)
 
@@ -96,10 +113,24 @@
 #define XY_SRC_TILED		(1 << 15)
 #define XY_DST_TILED		(1 << 11)
 
+/* BR00 */
+#define XY_FAST_SRC_TILED_64K        (3 << 20)
+#define XY_FAST_SRC_TILED_Y          (2 << 20)
+#define XY_FAST_SRC_TILED_X          (1 << 20)
+
+#define XY_FAST_DST_TILED_64K        (3 << 13)
+#define XY_FAST_DST_TILED_Y          (2 << 13)
+#define XY_FAST_DST_TILED_X          (1 << 13)
+
 /* BR13 */
 #define BR13_8			(0x0 << 24)
 #define BR13_565		(0x1 << 24)
 #define BR13_8888		(0x3 << 24)
+#define BR13_16161616		(0x4 << 24)
+#define BR13_32323232		(0x5 << 24)
+
+#define XY_FAST_SRC_TRMODE_YF        (1 << 31)
+#define XY_FAST_DST_TRMODE_YF        (1 << 30)
 
 /* Pipeline Statistics Counter Registers */
 #define IA_VERTICES_COUNT               0x2310
@@ -147,3 +178,11 @@
 # define GEN9_PARTIAL_RESOLVE_DISABLE_IN_VC (1 << 1)
 # define GEN8_HIZ_PMA_MASK_BITS \
    ((GEN8_HIZ_NP_PMA_FIX_ENABLE | GEN8_HIZ_NP_EARLY_Z_FAILS_DISABLE) << 16)
+
+/* Predicate registers */
+#define MI_PREDICATE_SRC0               0x2400
+#define MI_PREDICATE_SRC1               0x2408
+#define MI_PREDICATE_DATA               0x2410
+#define MI_PREDICATE_RESULT             0x2418
+#define MI_PREDICATE_RESULT_1           0x241C
+#define MI_PREDICATE_RESULT_2           0x2214

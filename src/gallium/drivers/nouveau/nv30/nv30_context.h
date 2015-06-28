@@ -51,6 +51,7 @@ struct nv30_context {
       unsigned rt_enable;
       unsigned scissor_off;
       unsigned num_vtxelts;
+      int index_bias;
       boolean  prim_restart;
       struct nv30_fragprog *fragprog;
    } state;
@@ -204,7 +205,7 @@ void
 nv30_render_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info);
 
 boolean
-nv30_state_validate(struct nv30_context *nv30, boolean hwtnl);
+nv30_state_validate(struct nv30_context *nv30, uint32_t mask, boolean hwtnl);
 
 void
 nv30_state_release(struct nv30_context *nv30);

@@ -38,6 +38,7 @@
 #include "program/hash_table.h"
 #include "loop_analysis.h"
 #include "standalone_scaffolding.h"
+#include "util/strtod.h"
 
 static int glsl_version = 330;
 
@@ -45,6 +46,8 @@ static void
 initialize_context(struct gl_context *ctx, gl_api api)
 {
    initialize_context_to_defaults(ctx, api);
+
+   _mesa_locale_init();
 
    /* The standalone compiler needs to claim support for almost
     * everything in order to compile the built-in functions.
@@ -276,7 +279,7 @@ usage_fail(const char *name)
       "usage: %s [options] <file.vert | file.geom | file.frag>\n"
       "\n"
       "Possible options are:\n";
-   printf(header, name, name);
+   printf(header, name);
    for (const struct option *o = compiler_opts; o->name != 0; ++o) {
       printf("    --%s\n", o->name);
    }

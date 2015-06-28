@@ -224,7 +224,7 @@ public:
          return visit_continue;
       }
 
-      var->type = glsl_type::get_array_instance(var->type->element_type(),
+      var->type = glsl_type::get_array_instance(var->type->fields.array,
                                                 this->num_vertices);
       var->data.max_array_access = this->num_vertices - 1;
 
@@ -245,7 +245,7 @@ public:
    {
       const glsl_type *const vt = ir->array->type;
       if (vt->is_array())
-         ir->type = vt->element_type();
+         ir->type = vt->fields.array;
       return visit_continue;
    }
 };
@@ -344,6 +344,39 @@ private:
    bool invalid_stream_id_from_emit_vertex;
    bool end_primitive_found;
    bool uses_non_zero_stream;
+};
+
+/* Class that finds array derefs and check if indexes are dynamic. */
+class dynamic_sampler_array_indexing_visitor : public ir_hierarchical_visitor
+{
+public:
+   dynamic_sampler_array_indexing_visitor() :
+      dynamic_sampler_array_indexing(false)
+   {
+   }
+
+   ir_visitor_status visit_enter(ir_dereference_array *ir)
+   {
+      if (!ir->variable_referenced())
+         return visit_continue;
+
+      if (!ir->variable_referenced()->type->contains_sampler())
+         return visit_continue;
+
+      if (!ir->array_index->constant_expression_value()) {
+         dynamic_sampler_array_indexing = true;
+         return visit_stop;
+      }
+      return visit_continue;
+   }
+
+   bool uses_dynamic_sampler_array_indexing()
+   {
+      return dynamic_sampler_array_indexing;
+   }
+
+private:
+   bool dynamic_sampler_array_indexing;
 };
 
 } /* anonymous namespace */
@@ -1400,8 +1433,8 @@ link_fs_input_layout_qualifiers(struct gl_shader_program *prog,
                       "layout qualifiers for gl_FragCoord\n");
       }
 
-      /* Update the linked shader state.  Note that uses_gl_fragcoord should
-       * accumulate the results.  The other values should replace.  If there
+      /* Update the linked shader state.  Note that uses_gl_fragcoord should
+       * accumulate the results.  The other values should replace.  If there
        * are multiple redeclarations, all the fields except uses_gl_fragcoord
        * are already known to be the same.
        */
@@ -2355,6 +2388,13 @@ check_resources(struct gl_context *ctx, struct gl_shader_program *prog)
    unsigned total_uniform_blocks = 0;
 
    for (unsigned i = 0; i < prog->NumUniformBlocks; i++) {
+      if (prog->UniformBlocks[i].UniformBufferSize > ctx->Const.MaxUniformBlockSize) {
+         linker_error(prog, "Uniform block %s too big (%d/%d)\n",
+                      prog->UniformBlocks[i].Name,
+                      prog->UniformBlocks[i].UniformBufferSize,
+                      ctx->Const.MaxUniformBlockSize);
+      }
+
       for (unsigned j = 0; j < MESA_SHADER_STAGES; j++) {
 	 if (prog->UniformBlockStageIndex[j][i] != -1) {
 	    blocks[j]++;
@@ -2693,13 +2733,23 @@ build_program_resource_list(struct gl_context *ctx,
    }
 
    /* Add uniforms from uniform storage. */
-   for (unsigned i = 0; i < shProg->NumUserUniformStorage; i++) {
+   for (unsigned i = 0; i < shProg->NumUniformStorage; i++) {
       /* Do not add uniforms internally used by Mesa. */
       if (shProg->UniformStorage[i].hidden)
          continue;
 
       uint8_t stageref =
          build_stageref(shProg, shProg->UniformStorage[i].name);
+
+      /* Add stagereferences for uniforms in a uniform block. */
+      int block_index = shProg->UniformStorage[i].block_index;
+      if (block_index != -1) {
+         for (unsigned j = 0; j < MESA_SHADER_STAGES; j++) {
+             if (shProg->UniformBlockStageIndex[j][block_index] != -1)
+                stageref |= (1 << j);
+         }
+      }
+
       if (!add_program_resource(shProg, GL_UNIFORM,
                                 &shProg->UniformStorage[i], stageref))
          return;
@@ -2724,6 +2774,40 @@ build_program_resource_list(struct gl_context *ctx,
     *    GL_ARB_shader_storage_buffer_object
     *    GL_ARB_shader_subroutine
     */
+}
+
+/**
+ * This check is done to make sure we allow only constant expression
+ * indexing and "constant-index-expression" (indexing with an expression
+ * that includes loop induction variable).
+ */
+static bool
+validate_sampler_array_indexing(struct gl_context *ctx,
+                                struct gl_shader_program *prog)
+{
+   dynamic_sampler_array_indexing_visitor v;
+   for (unsigned i = 0; i < MESA_SHADER_STAGES; i++) {
+      if (prog->_LinkedShaders[i] == NULL)
+	 continue;
+
+      bool no_dynamic_indexing =
+         ctx->Const.ShaderCompilerOptions[i].EmitNoIndirectSampler;
+
+      /* Search for array derefs in shader. */
+      v.run(prog->_LinkedShaders[i]->ir);
+      if (v.uses_dynamic_sampler_array_indexing()) {
+         const char *msg = "sampler arrays indexed with non-constant "
+                           "expressions is forbidden in GLSL %s %u";
+         /* Backend has indicated that it has no dynamic indexing support. */
+         if (no_dynamic_indexing) {
+            linker_error(prog, msg, prog->IsES ? "ES" : "", prog->Version);
+            return false;
+         } else {
+            linker_warning(prog, msg, prog->IsES ? "ES" : "", prog->Version);
+         }
+      }
+   }
+   return true;
 }
 
 
@@ -2819,8 +2903,11 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
             link_intrastage_shaders(mem_ctx, ctx, prog, shader_list[stage],
                                     num_shaders[stage]);
 
-         if (!prog->LinkStatus)
+         if (!prog->LinkStatus) {
+            if (sh)
+               ctx->Driver.DeleteShader(ctx, sh);
             goto done;
+         }
 
          switch (stage) {
          case MESA_SHADER_VERTEX:
@@ -2833,8 +2920,11 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
             validate_fragment_shader_executable(prog, sh);
             break;
          }
-         if (!prog->LinkStatus)
+         if (!prog->LinkStatus) {
+            if (sh)
+               ctx->Driver.DeleteShader(ctx, sh);
             goto done;
+         }
 
          _mesa_reference_shader(ctx, &prog->_LinkedShaders[stage], sh);
       }
@@ -2936,6 +3026,16 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
 	 ;
 
       lower_const_arrays_to_uniforms(prog->_LinkedShaders[i]->ir);
+   }
+
+   /* Validation for special cases where we allow sampler array indexing
+    * with loop induction variable. This check emits a warning or error
+    * depending if backend can handle dynamic indexing.
+    */
+   if ((!prog->IsES && prog->Version < 130) ||
+       (prog->IsES && prog->Version < 300)) {
+      if (!validate_sampler_array_indexing(ctx, prog))
+         goto done;
    }
 
    /* Check and validate stream emissions in geometry shaders */

@@ -308,6 +308,7 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
       return 1;
    case PIPE_CAP_UMA:
    case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
+   case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
       return 0;
    }
 
@@ -376,6 +377,7 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
       case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
       case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
+      case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
          return 0;
       }
       /* If we get here, we failed to handle a cap above */
@@ -433,6 +435,7 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
       case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
       case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
+      case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
          return 0;
       }
       /* If we get here, we failed to handle a cap above */
@@ -440,7 +443,9 @@ static int svga_get_shader_param(struct pipe_screen *screen, unsigned shader, en
       return 0;
    case PIPE_SHADER_GEOMETRY:
    case PIPE_SHADER_COMPUTE:
-      /* no support for geometry or compute shaders at this time */
+   case PIPE_SHADER_TESS_CTRL:
+   case PIPE_SHADER_TESS_EVAL:
+      /* no support for geometry, tess or compute shaders at this time */
       return 0;
    default:
       debug_printf("Unexpected shader type (%u) query\n", shader);

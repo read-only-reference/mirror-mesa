@@ -287,6 +287,11 @@ st_create_context_priv( struct gl_context *ctx, struct pipe_context *pipe,
    /* For vertex shaders, make sure not to emit saturate when SM 3.0 is not supported */
    ctx->Const.ShaderCompilerOptions[MESA_SHADER_VERTEX].EmitNoSat = !st->has_shader_model3;
 
+   if (!ctx->Extensions.ARB_gpu_shader5) {
+      for (i = 0; i < MESA_SHADER_STAGES; i++)
+         ctx->Const.ShaderCompilerOptions[i].EmitNoIndirectSampler = true;
+   }
+
    _mesa_compute_version(ctx);
 
    if (ctx->Version == 0) {
@@ -321,7 +326,7 @@ struct st_context *st_create_context(gl_api api, struct pipe_context *pipe,
    struct st_context *st;
 
    memset(&funcs, 0, sizeof(funcs));
-   st_init_driver_functions(&funcs);
+   st_init_driver_functions(pipe->screen, &funcs);
 
    ctx = _mesa_create_context(api, visual, shareCtx, &funcs);
    if (!ctx) {
@@ -376,12 +381,6 @@ void st_destroy_context( struct st_context *st )
    }
    pipe_surface_reference(&st->state.framebuffer.zsbuf, NULL);
 
-   pipe->set_index_buffer(pipe, NULL);
-
-   for (i = 0; i < PIPE_SHADER_TYPES; i++) {
-      pipe->set_constant_buffer(pipe, i, 0, NULL);
-   }
-
    _mesa_delete_program_cache(st->ctx, st->pixel_xfer.cache);
 
    _vbo_DestroyContext(st->ctx);
@@ -401,7 +400,8 @@ void st_destroy_context( struct st_context *st )
 }
 
 
-void st_init_driver_functions(struct dd_function_table *functions)
+void st_init_driver_functions(struct pipe_screen *screen,
+                              struct dd_function_table *functions)
 {
    _mesa_init_shader_object_functions(functions);
    _mesa_init_sampler_object_functions(functions);
@@ -429,7 +429,7 @@ void st_init_driver_functions(struct dd_function_table *functions)
    st_init_readpixels_functions(functions);
    st_init_texture_functions(functions);
    st_init_texture_barrier_functions(functions);
-   st_init_flush_functions(functions);
+   st_init_flush_functions(screen, functions);
    st_init_string_functions(functions);
    st_init_viewport_functions(functions);
 

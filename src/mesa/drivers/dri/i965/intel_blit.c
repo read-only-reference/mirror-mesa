@@ -27,6 +27,7 @@
 
 
 #include "main/mtypes.h"
+#include "main/blit.h"
 #include "main/context.h"
 #include "main/enums.h"
 #include "main/colormac.h"
@@ -42,6 +43,23 @@
 #include "intel_mipmap_tree.h"
 
 #define FILE_DEBUG_FLAG DEBUG_BLIT
+
+#define SET_TILING_XY_FAST_COPY_BLT(tiling, tr_mode, type)           \
+({                                                                   \
+   switch (tiling) {                                                 \
+   case I915_TILING_X:                                               \
+      CMD |= type ## _TILED_X;                                       \
+      break;                                                         \
+   case I915_TILING_Y:                                               \
+      if (tr_mode == INTEL_MIPTREE_TRMODE_YS)                        \
+         CMD |= type ## _TILED_64K;                                  \
+      else                                                           \
+         CMD |= type ## _TILED_Y;                                    \
+      break;                                                         \
+   default:                                                          \
+      unreachable("not reached");                                    \
+   }                                                                 \
+})
 
 static void
 intel_miptree_set_alpha_to_one(struct brw_context *brw,
@@ -75,18 +93,77 @@ static uint32_t
 br13_for_cpp(int cpp)
 {
    switch (cpp) {
+   case 16:
+      return BR13_32323232;
+   case 8:
+      return BR13_16161616;
    case 4:
       return BR13_8888;
-      break;
    case 2:
       return BR13_565;
-      break;
    case 1:
       return BR13_8;
-      break;
    default:
       unreachable("not reached");
    }
+}
+
+static uint32_t
+get_tr_horizontal_align(uint32_t tr_mode, uint32_t cpp, bool is_src) {
+   /* Alignment tables for YF/YS tiled surfaces. */
+   const uint32_t align_2d_yf[] = {64, 64, 32, 32, 16};
+   const uint32_t bpp = cpp * 8;
+   const uint32_t shift = is_src ? 17 : 10;
+   uint32_t align;
+   int i = 0;
+
+   if (tr_mode == INTEL_MIPTREE_TRMODE_NONE)
+      return 0;
+
+   /* Compute array index. */
+   assert (bpp >= 8 && bpp <= 128 && is_power_of_two(bpp));
+   i = ffs(bpp / 8) - 1;
+
+   align = tr_mode == INTEL_MIPTREE_TRMODE_YF ?
+           align_2d_yf[i] :
+           4 * align_2d_yf[i];
+
+   assert(is_power_of_two(align));
+
+   /* XY_FAST_COPY_BLT doesn't support horizontal alignment of 16. */
+   if (align == 16)
+      align = 32;
+
+   return (ffs(align) - 6) << shift;
+}
+
+static uint32_t
+get_tr_vertical_align(uint32_t tr_mode, uint32_t cpp, bool is_src) {
+   /* Vertical alignment tables for YF/YS tiled surfaces. */
+   const unsigned align_2d_yf[] = {64, 32, 32, 16, 16};
+   const uint32_t bpp = cpp * 8;
+   const uint32_t shift = is_src ? 15 : 8;
+   uint32_t align;
+   int i = 0;
+
+   if (tr_mode == INTEL_MIPTREE_TRMODE_NONE)
+      return 0;
+
+   /* Compute array index. */
+   assert (bpp >= 8 && bpp <= 128 && is_power_of_two(bpp));
+   i = ffs(bpp / 8) - 1;
+
+   align = tr_mode == INTEL_MIPTREE_TRMODE_YF ?
+           align_2d_yf[i] :
+           4 * align_2d_yf[i];
+
+   assert(is_power_of_two(align));
+
+   /* XY_FAST_COPY_BLT doesn't support vertical alignments of 16 and 32. */
+   if (align == 16 || align == 32)
+      align = 64;
+
+   return (ffs(align) - 7) << shift;
 }
 
 /**
@@ -130,6 +207,40 @@ set_blitter_tiling(struct brw_context *brw,
       ADVANCE_BATCH();                                                  \
    } while (0)
 
+static int
+blt_pitch(struct intel_mipmap_tree *mt)
+{
+   int pitch = mt->pitch;
+   if (mt->tiling)
+      pitch /= 4;
+   return pitch;
+}
+
+bool
+intel_miptree_blit_compatible_formats(mesa_format src, mesa_format dst)
+{
+   /* The BLT doesn't handle sRGB conversion */
+   assert(src == _mesa_get_srgb_format_linear(src));
+   assert(dst == _mesa_get_srgb_format_linear(dst));
+
+   /* No swizzle or format conversions possible, except... */
+   if (src == dst)
+      return true;
+
+   /* ...we can either discard the alpha channel when going from A->X,
+    * or we can fill the alpha channel with 0xff when going from X->A
+    */
+   if (src == MESA_FORMAT_B8G8R8A8_UNORM || src == MESA_FORMAT_B8G8R8X8_UNORM)
+      return (dst == MESA_FORMAT_B8G8R8A8_UNORM ||
+              dst == MESA_FORMAT_B8G8R8X8_UNORM);
+
+   if (src == MESA_FORMAT_R8G8B8A8_UNORM || src == MESA_FORMAT_R8G8B8X8_UNORM)
+      return (dst == MESA_FORMAT_R8G8B8A8_UNORM ||
+              dst == MESA_FORMAT_R8G8B8X8_UNORM);
+
+   return false;
+}
+
 /**
  * Implements a rectangular block transfer (blit) of pixels between two
  * miptrees.
@@ -172,11 +283,7 @@ intel_miptree_blit(struct brw_context *brw,
     * the X channel don't matter), and XRGB8888 to ARGB8888 by setting the A
     * channel to 1.0 at the end.
     */
-   if (src_format != dst_format &&
-      ((src_format != MESA_FORMAT_B8G8R8A8_UNORM &&
-        src_format != MESA_FORMAT_B8G8R8X8_UNORM) ||
-       (dst_format != MESA_FORMAT_B8G8R8A8_UNORM &&
-        dst_format != MESA_FORMAT_B8G8R8X8_UNORM))) {
+   if (!intel_miptree_blit_compatible_formats(src_format, dst_format)) {
       perf_debug("%s: Can't use hardware blitter from %s to %s, "
                  "falling back.\n", __func__,
                  _mesa_get_format_name(src_format),
@@ -197,14 +304,14 @@ intel_miptree_blit(struct brw_context *brw,
     *
     * Furthermore, intelEmitCopyBlit (which is called below) uses a signed
     * 16-bit integer to represent buffer pitch, so it can only handle buffer
-    * pitches < 32k.
+    * pitches < 32k. However, the pitch is measured in bytes for linear buffers
+    * and dwords for tiled buffers.
     *
     * As a result of these two limitations, we can only use the blitter to do
-    * this copy when the miptree's pitch is less than 32k.
+    * this copy when the miptree's pitch is less than 32k linear or 128k tiled.
     */
-   if (src_mt->pitch >= 32768 ||
-       dst_mt->pitch >= 32768) {
-      perf_debug("Falling back due to >=32k pitch\n");
+   if (blt_pitch(src_mt) >= 32768 || blt_pitch(dst_mt) >= 32768) {
+      perf_debug("Falling back due to >= 32k/128k pitch\n");
       return false;
    }
 
@@ -251,9 +358,11 @@ intel_miptree_blit(struct brw_context *brw,
                           src_pitch,
                           src_mt->bo, src_mt->offset,
                           src_mt->tiling,
+                          src_mt->tr_mode,
                           dst_mt->pitch,
                           dst_mt->bo, dst_mt->offset,
                           dst_mt->tiling,
+                          dst_mt->tr_mode,
                           src_x, src_y,
                           dst_x, dst_y,
                           width, height,
@@ -261,8 +370,9 @@ intel_miptree_blit(struct brw_context *brw,
       return false;
    }
 
-   if (src_mt->format == MESA_FORMAT_B8G8R8X8_UNORM &&
-       dst_mt->format == MESA_FORMAT_B8G8R8A8_UNORM) {
+   /* XXX This could be done in a single pass using XY_FULL_MONO_PATTERN_BLT */
+   if (_mesa_get_format_bits(src_format, GL_ALPHA_BITS) == 0 &&
+       _mesa_get_format_bits(dst_format, GL_ALPHA_BITS) > 0) {
       intel_miptree_set_alpha_to_one(brw, dst_mt,
                                      dst_x, dst_y,
                                      width, height);
@@ -285,6 +395,112 @@ alignment_valid(struct brw_context *brw, unsigned offset, uint32_t tiling)
    return true;
 }
 
+static bool
+can_fast_copy_blit(struct brw_context *brw,
+		   drm_intel_bo *src_buffer,
+                   int16_t src_x, int16_t src_y,
+                   uintptr_t src_offset, uint32_t src_pitch,
+                   uint32_t src_tiling, uint32_t src_tr_mode,
+		   drm_intel_bo *dst_buffer,
+                   int16_t dst_x, int16_t dst_y,
+                   uintptr_t dst_offset, uint32_t dst_pitch,
+                   uint32_t dst_tiling, uint32_t dst_tr_mode,
+                   int16_t w, int16_t h, uint32_t cpp)
+{
+   const bool dst_tiling_none = dst_tiling == I915_TILING_NONE;
+   const bool src_tiling_none = src_tiling == I915_TILING_NONE;
+
+   if (brw->gen < 9)
+      return false;
+
+   if (src_buffer->handle == dst_buffer->handle &&
+       _mesa_regions_overlap(src_x, src_y, src_x + w, src_y + h,
+                             dst_x, dst_y, dst_x + w, dst_y + h))
+      return false;
+
+   /* Enable fast copy blit only if the surfaces are Yf/Ys tiled.
+    * FIXME: Based on performance data, remove this condition later to
+    * enable for all types of surfaces.
+    */
+   if (src_tr_mode == INTEL_MIPTREE_TRMODE_NONE &&
+       dst_tr_mode == INTEL_MIPTREE_TRMODE_NONE)
+      return false;
+
+   /* For all surface types buffers must be cacheline-aligned. */
+   if ((dst_offset | src_offset) & 63)
+      return false;
+
+   /* Color depth greater than 128 bits not supported. */
+   if (cpp > 16)
+      return false;
+
+   /* For Fast Copy Blits the pitch cannot be a negative number. So, bit 15
+    * of the destination pitch must be zero.
+    */
+   if ((src_pitch >> 15 & 1) != 0 || (dst_pitch >> 15 & 1) != 0)
+      return false;
+
+   /* For Linear surfaces, the pitch has to be an OWord (16byte) multiple. */
+   if ((src_tiling_none && src_pitch % 16 != 0) ||
+       (dst_tiling_none && dst_pitch % 16 != 0))
+      return false;
+
+   /* For Tiled surfaces, the pitch has to be a multiple of the Tile width
+    * (X direction width of the Tile). This means the pitch value will
+    * always be Cache Line aligned (64byte multiple).
+    */
+   if ((!dst_tiling_none && dst_pitch % 64 != 0) ||
+       (!src_tiling_none && src_pitch % 64 != 0))
+      return false;
+
+   return true;
+}
+
+static uint32_t
+xy_blit_cmd(uint32_t src_tiling, uint32_t src_tr_mode,
+            uint32_t dst_tiling, uint32_t dst_tr_mode,
+            uint32_t cpp, bool use_fast_copy_blit)
+{
+   uint32_t CMD = 0;
+
+   if (use_fast_copy_blit) {
+      CMD = XY_FAST_COPY_BLT_CMD;
+
+      if (dst_tiling != I915_TILING_NONE)
+         SET_TILING_XY_FAST_COPY_BLT(dst_tiling, dst_tr_mode, XY_FAST_DST);
+
+      if (src_tiling != I915_TILING_NONE)
+         SET_TILING_XY_FAST_COPY_BLT(src_tiling, src_tr_mode, XY_FAST_SRC);
+
+      CMD |= get_tr_horizontal_align(src_tr_mode, cpp, true /* is_src */);
+      CMD |= get_tr_vertical_align(src_tr_mode, cpp, true /* is_src */);
+
+      CMD |= get_tr_horizontal_align(dst_tr_mode, cpp, false /* is_src */);
+      CMD |= get_tr_vertical_align(dst_tr_mode, cpp, false /* is_src */);
+
+   } else {
+      assert(cpp <= 4);
+      switch (cpp) {
+      case 1:
+      case 2:
+         CMD = XY_SRC_COPY_BLT_CMD;
+         break;
+      case 4:
+         CMD = XY_SRC_COPY_BLT_CMD | XY_BLT_WRITE_ALPHA | XY_BLT_WRITE_RGB;
+         break;
+      default:
+         unreachable("not reached");
+      }
+
+      if (dst_tiling != I915_TILING_NONE)
+         CMD |= XY_DST_TILED;
+
+      if (src_tiling != I915_TILING_NONE)
+         CMD |= XY_SRC_TILED;
+   }
+   return CMD;
+}
+
 /* Copy BitBlt
  */
 bool
@@ -294,10 +510,12 @@ intelEmitCopyBlit(struct brw_context *brw,
 		  drm_intel_bo *src_buffer,
 		  GLuint src_offset,
 		  uint32_t src_tiling,
+		  uint32_t src_tr_mode,
 		  GLshort dst_pitch,
 		  drm_intel_bo *dst_buffer,
 		  GLuint dst_offset,
 		  uint32_t dst_tiling,
+		  uint32_t dst_tr_mode,
 		  GLshort src_x, GLshort src_y,
 		  GLshort dst_x, GLshort dst_y,
 		  GLshort w, GLshort h,
@@ -309,17 +527,10 @@ intelEmitCopyBlit(struct brw_context *brw,
    drm_intel_bo *aper_array[3];
    bool dst_y_tiled = dst_tiling == I915_TILING_Y;
    bool src_y_tiled = src_tiling == I915_TILING_Y;
-
-   if (!alignment_valid(brw, dst_offset, dst_tiling))
-      return false;
-   if (!alignment_valid(brw, src_offset, src_tiling))
-      return false;
+   bool use_fast_copy_blit = false;
 
    if ((dst_y_tiled || src_y_tiled) && brw->gen < 6)
       return false;
-
-   assert(!dst_y_tiled || (dst_pitch % 128) == 0);
-   assert(!src_y_tiled || (src_pitch % 128) == 0);
 
    /* do space check before going any further */
    do {
@@ -345,52 +556,98 @@ intelEmitCopyBlit(struct brw_context *brw,
        src_buffer, src_pitch, src_offset, src_x, src_y,
        dst_buffer, dst_pitch, dst_offset, dst_x, dst_y, w, h);
 
-   /* Blit pitch must be dword-aligned.  Otherwise, the hardware appears to drop
-    * the low bits.  Offsets must be naturally aligned.
-    */
-   if (src_pitch % 4 != 0 || src_offset % cpp != 0 ||
-       dst_pitch % 4 != 0 || dst_offset % cpp != 0)
-      return false;
+   use_fast_copy_blit = can_fast_copy_blit(brw,
+                                           src_buffer,
+                                           src_x, src_y,
+                                           src_offset, src_pitch,
+                                           src_tiling, src_tr_mode,
+                                           dst_buffer,
+                                           dst_x, dst_y,
+                                           dst_offset, dst_pitch,
+                                           dst_tiling, dst_tr_mode,
+                                           w, h, cpp);
+   assert(use_fast_copy_blit ||
+          (src_tr_mode == INTEL_MIPTREE_TRMODE_NONE &&
+           dst_tr_mode == INTEL_MIPTREE_TRMODE_NONE));
 
-   /* For big formats (such as floating point), do the copy using 16 or 32bpp
-    * and multiply the coordinates.
-    */
-   if (cpp > 4) {
-      if (cpp % 4 == 2) {
-         dst_x *= cpp / 2;
-         dst_x2 *= cpp / 2;
-         src_x *= cpp / 2;
-         cpp = 2;
-      } else {
-         assert(cpp % 4 == 0);
-         dst_x *= cpp / 4;
-         dst_x2 *= cpp / 4;
-         src_x *= cpp / 4;
-         cpp = 4;
+   if (use_fast_copy_blit) {
+      /* When two sequential fast copy blits have different source surfaces,
+       * but their destinations refer to the same destination surfaces and
+       * therefore destinations overlap it is imperative that a flush be
+       * inserted between the two blits.
+       *
+       * FIXME: Figure out a way to avoid flushing when not required.
+       */
+      brw_emit_mi_flush(brw);
+
+      assert(cpp <= 16);
+      BR13 = br13_for_cpp(cpp);
+
+      if (src_tr_mode == INTEL_MIPTREE_TRMODE_YF)
+         BR13 |= XY_FAST_SRC_TRMODE_YF;
+
+      if (dst_tr_mode == INTEL_MIPTREE_TRMODE_YF)
+         BR13 |= XY_FAST_DST_TRMODE_YF;
+
+      CMD = xy_blit_cmd(src_tiling, src_tr_mode,
+                        dst_tiling, dst_tr_mode,
+                        cpp, use_fast_copy_blit);
+
+      /* For tiled source and destination, pitch value should be specified
+       * as a number of Dwords.
+       */
+      if (dst_tiling != I915_TILING_NONE)
+         dst_pitch /= 4;
+
+      if (src_tiling != I915_TILING_NONE)
+         src_pitch /= 4;
+
+   } else {
+      assert(!dst_y_tiled || (dst_pitch % 128) == 0);
+      assert(!src_y_tiled || (src_pitch % 128) == 0);
+
+      /* For big formats (such as floating point), do the copy using 16 or
+       * 32bpp and multiply the coordinates.
+       */
+      if (cpp > 4) {
+         if (cpp % 4 == 2) {
+            dst_x *= cpp / 2;
+            dst_x2 *= cpp / 2;
+            src_x *= cpp / 2;
+            cpp = 2;
+         } else {
+            assert(cpp % 4 == 0);
+            dst_x *= cpp / 4;
+            dst_x2 *= cpp / 4;
+            src_x *= cpp / 4;
+            cpp = 4;
+         }
       }
-   }
 
-   BR13 = br13_for_cpp(cpp) | translate_raster_op(logic_op) << 16;
+      if (!alignment_valid(brw, dst_offset, dst_tiling))
+         return false;
+      if (!alignment_valid(brw, src_offset, src_tiling))
+         return false;
 
-   switch (cpp) {
-   case 1:
-   case 2:
-      CMD = XY_SRC_COPY_BLT_CMD;
-      break;
-   case 4:
-      CMD = XY_SRC_COPY_BLT_CMD | XY_BLT_WRITE_ALPHA | XY_BLT_WRITE_RGB;
-      break;
-   default:
-      return false;
-   }
+      /* Blit pitch must be dword-aligned.  Otherwise, the hardware appears to drop
+       * the low bits.  Offsets must be naturally aligned.
+       */
+      if (src_pitch % 4 != 0 || src_offset % cpp != 0 ||
+          dst_pitch % 4 != 0 || dst_offset % cpp != 0)
+         return false;
 
-   if (dst_tiling != I915_TILING_NONE) {
-      CMD |= XY_DST_TILED;
-      dst_pitch /= 4;
-   }
-   if (src_tiling != I915_TILING_NONE) {
-      CMD |= XY_SRC_TILED;
-      src_pitch /= 4;
+      assert(cpp <= 4);
+      BR13 = br13_for_cpp(cpp) | translate_raster_op(logic_op) << 16;
+
+      CMD = xy_blit_cmd(src_tiling, src_tr_mode,
+                        dst_tiling, dst_tr_mode,
+                        cpp, use_fast_copy_blit);
+
+      if (dst_tiling != I915_TILING_NONE)
+         dst_pitch /= 4;
+
+      if (src_tiling != I915_TILING_NONE)
+         src_pitch /= 4;
    }
 
    if (dst_y2 <= dst_y || dst_x2 <= dst_x) {
@@ -432,7 +689,7 @@ intelEmitCopyBlit(struct brw_context *brw,
 
    ADVANCE_BATCH_TILED(dst_y_tiled, src_y_tiled);
 
-   intel_batchbuffer_emit_mi_flush(brw);
+   brw_emit_mi_flush(brw);
 
    return true;
 }
@@ -516,7 +773,7 @@ intelEmitImmediateColorExpandBlit(struct brw_context *brw,
 
    intel_batchbuffer_data(brw, src_bits, dwords * 4, BLT_RING);
 
-   intel_batchbuffer_emit_mi_flush(brw);
+   brw_emit_mi_flush(brw);
 
    return true;
 }
@@ -548,7 +805,9 @@ intel_emit_linear_blit(struct brw_context *brw,
    dst_x = dst_offset % 64;
    ok = intelEmitCopyBlit(brw, 1,
 			  pitch, src_bo, src_offset - src_x, I915_TILING_NONE,
+                          INTEL_MIPTREE_TRMODE_NONE,
 			  pitch, dst_bo, dst_offset - dst_x, I915_TILING_NONE,
+                          INTEL_MIPTREE_TRMODE_NONE,
 			  src_x, 0, /* src x/y */
 			  dst_x, 0, /* dst x/y */
 			  pitch, height, /* w, h */
@@ -567,7 +826,9 @@ intel_emit_linear_blit(struct brw_context *brw,
    if (size != 0) {
       ok = intelEmitCopyBlit(brw, 1,
 			     pitch, src_bo, src_offset - src_x, I915_TILING_NONE,
+                             INTEL_MIPTREE_TRMODE_NONE,
 			     pitch, dst_bo, dst_offset - dst_x, I915_TILING_NONE,
+                             INTEL_MIPTREE_TRMODE_NONE,
 			     src_x, 0, /* src x/y */
 			     dst_x, 0, /* dst x/y */
 			     size, 1, /* w, h */
@@ -639,5 +900,5 @@ intel_miptree_set_alpha_to_one(struct brw_context *brw,
    OUT_BATCH(0xffffffff); /* white, but only alpha gets written */
    ADVANCE_BATCH_TILED(dst_y_tiled, false);
 
-   intel_batchbuffer_emit_mi_flush(brw);
+   brw_emit_mi_flush(brw);
 }

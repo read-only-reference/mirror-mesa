@@ -728,7 +728,7 @@ _mesa_meta_begin(struct gl_context *ctx, GLbitfield state)
       save->DepthNear = ctx->ViewportArray[0].Near;
       save->DepthFar = ctx->ViewportArray[0].Far;
       /* set depth range to default */
-      _mesa_DepthRange(0.0, 1.0);
+      _mesa_set_depth_range(ctx, 0, 0.0, 1.0);
    }
 
    if (state & MESA_META_CLAMP_FRAGMENT_COLOR) {
@@ -1129,7 +1129,7 @@ _mesa_meta_end(struct gl_context *ctx)
          _mesa_set_viewport(ctx, 0, save->ViewportX, save->ViewportY,
                             save->ViewportW, save->ViewportH);
       }
-      _mesa_DepthRange(save->DepthNear, save->DepthFar);
+      _mesa_set_depth_range(ctx, 0, save->DepthNear, save->DepthFar);
    }
 
    if (state & MESA_META_CLAMP_FRAGMENT_COLOR &&
@@ -1211,7 +1211,8 @@ _mesa_meta_end(struct gl_context *ctx)
       _mesa_BindRenderbuffer(GL_RENDERBUFFER, save->RenderbufferName);
 
    if (state & MESA_META_DRAW_BUFFERS) {
-      _mesa_drawbuffers(ctx, ctx->Const.MaxDrawBuffers, save->ColorDrawBuffers, NULL);
+      _mesa_drawbuffers(ctx, ctx->DrawBuffer, ctx->Const.MaxDrawBuffers,
+                        save->ColorDrawBuffers, NULL);
    }
 
    ctx->Meta->SaveStackDepth--;

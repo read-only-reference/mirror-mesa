@@ -147,6 +147,9 @@ indirect_uniform_load(struct vc4_compile *c,
         indirect_offset = qir_ADD(c, indirect_offset,
                                   qir_uniform_ui(c, (range->dst_offset +
                                                      offset)));
+
+        /* Clamp to [0, array size).  Note that MIN/MAX are signed. */
+        indirect_offset = qir_MAX(c, indirect_offset, qir_uniform_ui(c, 0));
         indirect_offset = qir_MIN(c, indirect_offset,
                                   qir_uniform_ui(c, (range->dst_offset +
                                                      range->size - 4)));
@@ -322,7 +325,9 @@ ntq_emit_tex(struct vc4_compile *c, nir_tex_instr *instr)
                 switch (instr->src[i].src_type) {
                 case nir_tex_src_coord:
                         s = ntq_get_src(c, instr->src[i].src, 0);
-                        if (instr->sampler_dim != GLSL_SAMPLER_DIM_1D)
+                        if (instr->sampler_dim == GLSL_SAMPLER_DIM_1D)
+                                t = qir_uniform_f(c, 0.5);
+                        else
                                 t = ntq_get_src(c, instr->src[i].src, 1);
                         if (instr->sampler_dim == GLSL_SAMPLER_DIM_CUBE)
                                 r = ntq_get_src(c, instr->src[i].src, 2);
@@ -1366,12 +1371,13 @@ vc4_logicop(struct vc4_compile *c, struct qreg src, struct qreg dst)
         }
 }
 
-static void
-emit_frag_end(struct vc4_compile *c)
+/**
+ * Applies the GL blending pipeline and returns the packed (8888) output
+ * color.
+ */
+static struct qreg
+blend_pipeline(struct vc4_compile *c)
 {
-        clip_distance_discard(c);
-        alpha_test_discard(c);
-
         enum pipe_format color_format = c->fs_key->color_format;
         const uint8_t *format_swiz = vc4_get_format_swizzle(color_format);
         struct qreg tlb_read_color[4] = { c->undef, c->undef, c->undef, c->undef };
@@ -1403,14 +1409,16 @@ emit_frag_end(struct vc4_compile *c)
                 packed_dst_color = qir_MOV(c, r4);
         }
 
+        struct qreg undef_array[4] = { c->undef, c->undef, c->undef, c->undef };
+        const struct qreg *output_colors = (c->output_color_index != -1 ?
+                                            c->outputs + c->output_color_index :
+                                            undef_array);
+        struct qreg blend_src_color[4];
+        for (int i = 0; i < 4; i++)
+                blend_src_color[i] = output_colors[i];
+
         struct qreg blend_color[4];
-        struct qreg undef_array[4] = {
-                c->undef, c->undef, c->undef, c->undef
-        };
-        vc4_blend(c, blend_color, linear_dst_color,
-                  (c->output_color_index != -1 ?
-                   c->outputs + c->output_color_index :
-                   undef_array));
+        vc4_blend(c, blend_color, linear_dst_color, blend_src_color);
 
         if (util_format_is_srgb(color_format)) {
                 for (int i = 0; i < 3; i++)
@@ -1432,30 +1440,6 @@ emit_frag_end(struct vc4_compile *c)
         for (int i = 0; i < 4; i++) {
                 swizzled_outputs[i] = get_swizzled_channel(c, blend_color,
                                                            format_swiz[i]);
-        }
-
-        if (c->discard.file != QFILE_NULL)
-                qir_TLB_DISCARD_SETUP(c, c->discard);
-
-        if (c->fs_key->stencil_enabled) {
-                qir_TLB_STENCIL_SETUP(c, qir_uniform(c, QUNIFORM_STENCIL, 0));
-                if (c->fs_key->stencil_twoside) {
-                        qir_TLB_STENCIL_SETUP(c, qir_uniform(c, QUNIFORM_STENCIL, 1));
-                }
-                if (c->fs_key->stencil_full_writemasks) {
-                        qir_TLB_STENCIL_SETUP(c, qir_uniform(c, QUNIFORM_STENCIL, 2));
-                }
-        }
-
-        if (c->fs_key->depth_enabled) {
-                struct qreg z;
-                if (c->output_position_index != -1) {
-                        z = qir_FTOI(c, qir_FMUL(c, c->outputs[c->output_position_index + 2],
-                                                 qir_uniform_f(c, 0xffffff)));
-                } else {
-                        z = qir_FRAG_Z(c);
-                }
-                qir_TLB_Z_WRITE(c, z);
         }
 
         struct qreg packed_color = c->undef;
@@ -1497,8 +1481,41 @@ emit_frag_end(struct vc4_compile *c)
                                               qir_uniform_ui(c, ~colormask)));
         }
 
-        qir_emit(c, qir_inst(QOP_TLB_COLOR_WRITE, c->undef,
-                             packed_color, c->undef));
+        return packed_color;
+}
+
+static void
+emit_frag_end(struct vc4_compile *c)
+{
+        clip_distance_discard(c);
+        alpha_test_discard(c);
+        struct qreg color = blend_pipeline(c);
+
+        if (c->discard.file != QFILE_NULL)
+                qir_TLB_DISCARD_SETUP(c, c->discard);
+
+        if (c->fs_key->stencil_enabled) {
+                qir_TLB_STENCIL_SETUP(c, qir_uniform(c, QUNIFORM_STENCIL, 0));
+                if (c->fs_key->stencil_twoside) {
+                        qir_TLB_STENCIL_SETUP(c, qir_uniform(c, QUNIFORM_STENCIL, 1));
+                }
+                if (c->fs_key->stencil_full_writemasks) {
+                        qir_TLB_STENCIL_SETUP(c, qir_uniform(c, QUNIFORM_STENCIL, 2));
+                }
+        }
+
+        if (c->fs_key->depth_enabled) {
+                struct qreg z;
+                if (c->output_position_index != -1) {
+                        z = qir_FTOI(c, qir_FMUL(c, c->outputs[c->output_position_index + 2],
+                                                 qir_uniform_f(c, 0xffffff)));
+                } else {
+                        z = qir_FRAG_Z(c);
+                }
+                qir_TLB_Z_WRITE(c, z);
+        }
+
+        qir_TLB_COLOR_WRITE(c, color);
 }
 
 static void
@@ -1849,8 +1866,6 @@ ntq_emit_intrinsic(struct vc4_compile *c, nir_intrinsic_instr *instr)
 
         switch (instr->intrinsic) {
         case nir_intrinsic_load_uniform:
-                assert(instr->const_index[1] == 1);
-
                 for (int i = 0; i < instr->num_components; i++) {
                         dest[i] = qir_uniform(c, QUNIFORM_UNIFORM,
                                               instr->const_index[0] * 4 + i);
@@ -1858,8 +1873,6 @@ ntq_emit_intrinsic(struct vc4_compile *c, nir_intrinsic_instr *instr)
                 break;
 
         case nir_intrinsic_load_uniform_indirect:
-                assert(instr->const_index[1] == 1);
-
                 for (int i = 0; i < instr->num_components; i++) {
                         dest[i] = indirect_uniform_load(c,
                                                         ntq_get_src(c, instr->src[0], 0),
@@ -1870,8 +1883,6 @@ ntq_emit_intrinsic(struct vc4_compile *c, nir_intrinsic_instr *instr)
                 break;
 
         case nir_intrinsic_load_input:
-                assert(instr->const_index[1] == 1);
-
                 for (int i = 0; i < instr->num_components; i++)
                         dest[i] = c->inputs[instr->const_index[0] * 4 + i];
 
@@ -2091,7 +2102,7 @@ vc4_shader_ntq(struct vc4_context *vc4, enum qstage stage,
 
         nir_remove_dead_variables(c->s);
 
-        nir_convert_from_ssa(c->s);
+        nir_convert_from_ssa(c->s, false);
 
         if (vc4_debug & VC4_DEBUG_SHADERDB) {
                 fprintf(stderr, "SHADER-DB: %s prog %d/%d: %d NIR instructions\n",
@@ -2215,11 +2226,9 @@ vc4_get_compiled_shader(struct vc4_context *vc4, enum qstage stage,
         shader->program_id = vc4->next_compiled_program_id++;
         if (stage == QSTAGE_FRAG) {
                 bool input_live[c->num_input_semantics];
-                struct simple_node *node;
 
                 memset(input_live, 0, sizeof(input_live));
-                foreach(node, &c->instructions) {
-                        struct qinst *inst = (struct qinst *)node;
+                list_for_each_entry(struct qinst, inst, &c->instructions, link) {
                         for (int i = 0; i < qir_get_op_nsrc(inst->op); i++) {
                                 if (inst->src[i].file == QFILE_VARY)
                                         input_live[inst->src[i].index] = true;

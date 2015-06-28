@@ -120,6 +120,7 @@
 #include "shaderobj.h"
 #include "shaderimage.h"
 #include "util/simple_list.h"
+#include "util/strtod.h"
 #include "state.h"
 #include "stencil.h"
 #include "texcompress_s3tc.h"
@@ -338,31 +339,6 @@ _mesa_destroy_visual( struct gl_config *vis )
 
 
 /**
- * This is lame.  gdb only seems to recognize enum types that are
- * actually used somewhere.  We want to be able to print/use enum
- * values such as TEXTURE_2D_INDEX in gdb.  But we don't actually use
- * the gl_texture_index type anywhere.  Thus, this lame function.
- */
-static void
-dummy_enum_func(void)
-{
-   gl_buffer_index bi = BUFFER_FRONT_LEFT;
-   gl_face_index fi = FACE_POS_X;
-   gl_frag_result fr = FRAG_RESULT_DEPTH;
-   gl_texture_index ti = TEXTURE_2D_ARRAY_INDEX;
-   gl_vert_attrib va = VERT_ATTRIB_POS;
-   gl_varying_slot vs = VARYING_SLOT_POS;
-
-   (void) bi;
-   (void) fi;
-   (void) fr;
-   (void) ti;
-   (void) va;
-   (void) vs;
-}
-
-
-/**
  * One-time initialization mutex lock.
  *
  * \sa Used by one_time_init().
@@ -370,6 +346,16 @@ dummy_enum_func(void)
 mtx_t OneTimeLock = _MTX_INITIALIZER_NP;
 
 
+/**
+ * Calls all the various one-time-fini functions in Mesa
+ */
+
+static void
+one_time_fini(void)
+{
+   _mesa_destroy_shader_compiler();
+   _mesa_locale_fini();
+}
 
 /**
  * Calls all the various one-time-init functions in Mesa.
@@ -399,6 +385,8 @@ one_time_init( struct gl_context *ctx )
       assert( sizeof(GLint) == 4 );
       assert( sizeof(GLuint) == 4 );
 
+      _mesa_locale_init();
+
       _mesa_one_time_init_extension_overrides();
 
       _mesa_get_cpu_features();
@@ -406,6 +394,8 @@ one_time_init( struct gl_context *ctx )
       for (i = 0; i < 256; i++) {
          _mesa_ubyte_to_float_color_tab[i] = (float) i / 255.0F;
       }
+
+      atexit(one_time_fini);
 
 #if defined(DEBUG) && defined(__DATE__) && defined(__TIME__)
       if (MESA_VERBOSE != 0) {
@@ -429,13 +419,6 @@ one_time_init( struct gl_context *ctx )
    api_init_mask |= 1 << ctx->API;
 
    mtx_unlock(&OneTimeLock);
-
-   /* Hopefully atexit() is widely available.  If not, we may need some
-    * #ifdef tests here.
-    */
-   atexit(_mesa_destroy_shader_compiler);
-
-   dummy_enum_func();
 }
 
 
@@ -489,8 +472,8 @@ init_program_limits(struct gl_constants *consts, gl_shader_stage stage,
       prog->MaxOutputComponents = 16 * 4; /* old limit not to break tnl and swrast */
       break;
    case MESA_SHADER_FRAGMENT:
-      prog->MaxParameters = MAX_NV_FRAGMENT_PROGRAM_PARAMS;
-      prog->MaxAttribs = MAX_NV_FRAGMENT_PROGRAM_INPUTS;
+      prog->MaxParameters = MAX_FRAGMENT_PROGRAM_PARAMS;
+      prog->MaxAttribs = MAX_FRAGMENT_PROGRAM_INPUTS;
       prog->MaxAddressRegs = MAX_FRAGMENT_PROGRAM_ADDRESS_REGS;
       prog->MaxUniformComponents = 4 * MAX_UNIFORMS;
       prog->MaxInputComponents = 16 * 4; /* old limit not to break tnl and swrast */
@@ -883,6 +866,19 @@ update_default_objects(struct gl_context *ctx)
 }
 
 
+/* XXX this is temporary and should be removed at some point in the
+ * future when there's a reasonable expectation that the libGL library
+ * contains the _glapi_new_nop_table() and _glapi_set_nop_handler()
+ * functions which were added in Mesa 10.6.
+ */
+#if !defined(_WIN32)
+/* Avoid libGL / driver ABI break */
+#define USE_GLAPI_NOP_FEATURES 0
+#else
+#define USE_GLAPI_NOP_FEATURES 1
+#endif
+
+
 /**
  * This function is called by the glapi no-op functions.  For each OpenGL
  * function/entrypoint there's a simple no-op function.  These "no-op"
@@ -898,6 +894,7 @@ update_default_objects(struct gl_context *ctx)
  *
  * \param name  the name of the OpenGL function
  */
+#if USE_GLAPI_NOP_FEATURES
 static void
 nop_handler(const char *name)
 {
@@ -914,6 +911,7 @@ nop_handler(const char *name)
    }
 #endif
 }
+#endif
 
 
 /**
@@ -923,9 +921,49 @@ nop_handler(const char *name)
 static void GLAPIENTRY
 nop_glFlush(void)
 {
-   /* don't record an error like we do in _mesa_generic_nop() */
+   /* don't record an error like we do in nop_handler() */
 }
 #endif
+
+
+#if !USE_GLAPI_NOP_FEATURES
+static int
+generic_nop(void)
+{
+   GET_CURRENT_CONTEXT(ctx);
+   _mesa_error(ctx, GL_INVALID_OPERATION,
+               "unsupported function called "
+               "(unsupported extension or deprecated function?)");
+   return 0;
+}
+#endif
+
+
+/**
+ * Create a new API dispatch table in which all entries point to the
+ * generic_nop() function.  This will not work on Windows because of
+ * the __stdcall convention which requires the callee to clean up the
+ * call stack.  That's impossible with one generic no-op function.
+ */
+struct _glapi_table *
+_mesa_new_nop_table(unsigned numEntries)
+{
+   struct _glapi_table *table;
+
+#if !USE_GLAPI_NOP_FEATURES
+   table = malloc(numEntries * sizeof(_glapi_proc));
+   if (table) {
+      _glapi_proc *entry = (_glapi_proc *) table;
+      unsigned i;
+      for (i = 0; i < numEntries; i++) {
+         entry[i] = (_glapi_proc) generic_nop;
+      }
+   }
+#else
+   table = _glapi_new_nop_table(numEntries);
+#endif
+   return table;
+}
 
 
 /**
@@ -941,8 +979,9 @@ alloc_dispatch_table(void)
     * Mesa we do this to accommodate different versions of libGL and various
     * DRI drivers.
     */
-   GLint numEntries = MAX2(_glapi_get_dispatch_table_size(), _gloffset_COUNT);
-   struct _glapi_table *table = _glapi_new_nop_table(numEntries);
+   int numEntries = MAX2(_glapi_get_dispatch_table_size(), _gloffset_COUNT);
+
+   struct _glapi_table *table = _mesa_new_nop_table(numEntries);
 
 #if defined(_WIN32)
    if (table) {
@@ -966,7 +1005,9 @@ alloc_dispatch_table(void)
    }
 #endif
 
+#if USE_GLAPI_NOP_FEATURES
    _glapi_set_nop_handler(nop_handler);
+#endif
 
    return table;
 }
@@ -1111,9 +1152,7 @@ _mesa_initialize_context(struct gl_context *ctx,
       ctx->HasConfig = GL_FALSE;
    }
 
-   if (_mesa_is_desktop_gl(ctx)) {
-      _mesa_override_gl_version(ctx);
-   }
+   _mesa_override_gl_version(ctx);
 
    /* misc one-time initializations */
    one_time_init(ctx);
@@ -1275,7 +1314,6 @@ _mesa_free_context_data( struct gl_context *ctx )
    _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current, NULL);
    _mesa_reference_vertprog(ctx, &ctx->VertexProgram._TnlProgram, NULL);
 
-   _mesa_reference_geomprog(ctx, &ctx->GeometryProgram.Current, NULL);
    _mesa_reference_geomprog(ctx, &ctx->GeometryProgram._Current, NULL);
 
    _mesa_reference_fragprog(ctx, &ctx->FragmentProgram.Current, NULL);
@@ -1565,7 +1603,8 @@ handle_first_current(struct gl_context *ctx)
          else
             buffer = GL_FRONT;
 
-         _mesa_drawbuffers(ctx, 1, &buffer, NULL /* destMask */);
+         _mesa_drawbuffers(ctx, ctx->DrawBuffer, 1, &buffer,
+                           NULL /* destMask */);
       }
 
       if (ctx->ReadBuffer != _mesa_get_incomplete_framebuffer()) {
@@ -1578,7 +1617,7 @@ handle_first_current(struct gl_context *ctx)
             bufferIndex = BUFFER_FRONT_LEFT;
          }
 
-         _mesa_readbuffer(ctx, buffer, bufferIndex);
+         _mesa_readbuffer(ctx, ctx->ReadBuffer, buffer, bufferIndex);
       }
    }
 

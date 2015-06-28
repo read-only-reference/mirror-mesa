@@ -202,6 +202,9 @@ nv30_vbo_validate(struct nv30_context *nv30)
       return;
 
    redefine = MAX2(vertex->num_elements, nv30->state.num_vtxelts);
+   if (redefine == 0)
+      return;
+
    BEGIN_NV04(push, NV30_3D(VTXFMT(0)), redefine);
 
    for (i = 0; i < vertex->num_elements; i++) {
@@ -253,8 +256,6 @@ nv30_vertex_state_create(struct pipe_context *pipe, unsigned num_elements,
     struct nv30_vertex_stateobj *so;
     struct translate_key transkey;
     unsigned i;
-
-    assert(num_elements);
 
     so = MALLOC(sizeof(*so) + sizeof(*so->element) * num_elements);
     if (!so)
@@ -461,13 +462,11 @@ nv30_draw_elements(struct nv30_context *nv30, boolean shorten,
    struct nouveau_object *eng3d = nv30->screen->eng3d;
    unsigned prim = nv30_prim_gl(mode);
 
-#if 0 /*XXX*/
-   if (index_bias != nv30->state.index_bias) {
-      BEGIN_NV04(push, NV30_3D(VB_ELEMENT_BASE), 1);
+   if (eng3d->oclass >= NV40_3D_CLASS && index_bias != nv30->state.index_bias) {
+      BEGIN_NV04(push, NV40_3D(VB_ELEMENT_BASE), 1);
       PUSH_DATA (push, index_bias);
       nv30->state.index_bias = index_bias;
    }
-#endif
 
    if (eng3d->oclass == NV40_3D_CLASS && index_size > 1 &&
        nv30->idxbuf.buffer) {
@@ -564,7 +563,7 @@ nv30_draw_vbo(struct pipe_context *pipe, const struct pipe_draw_info *info)
    if (nv30->vbo_user && !(nv30->dirty & (NV30_NEW_VERTEX | NV30_NEW_ARRAYS)))
       nv30_update_user_vbufs(nv30);
 
-   nv30_state_validate(nv30, TRUE);
+   nv30_state_validate(nv30, ~0, TRUE);
    if (nv30->draw_flags) {
       nv30_render_vbo(pipe, info);
       return;

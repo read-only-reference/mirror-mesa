@@ -41,7 +41,6 @@ emit_depth_packets(struct brw_context *brw,
                    bool depth_writable,
                    struct intel_mipmap_tree *stencil_mt,
                    bool stencil_writable,
-                   uint32_t stencil_offset,
                    bool hiz,
                    uint32_t width,
                    uint32_t height,
@@ -57,7 +56,7 @@ emit_depth_packets(struct brw_context *brw,
       return;
    }
 
-   intel_emit_depth_stall_flushes(brw);
+   brw_emit_depth_stall_flushes(brw);
 
    /* _NEW_BUFFERS, _NEW_DEPTH, _NEW_STENCIL */
    BEGIN_BATCH(8);
@@ -100,7 +99,7 @@ emit_depth_packets(struct brw_context *brw,
    }
 
    if (stencil_mt == NULL) {
-     BEGIN_BATCH(5);
+      BEGIN_BATCH(5);
       OUT_BATCH(GEN7_3DSTATE_STENCIL_BUFFER << 16 | (5 - 2));
       OUT_BATCH(0);
       OUT_BATCH(0);
@@ -127,8 +126,7 @@ emit_depth_packets(struct brw_context *brw,
       OUT_BATCH(HSW_STENCIL_ENABLED | mocs_wb << 22 |
                 (2 * stencil_mt->pitch - 1));
       OUT_RELOC64(stencil_mt->bo,
-                  I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER,
-                  stencil_offset);
+                  I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
       OUT_BATCH(stencil_mt ? stencil_mt->qpitch >> 2 : 0);
       ADVANCE_BATCH();
    }
@@ -220,7 +218,6 @@ gen8_emit_depth_stencil_hiz(struct brw_context *brw,
    emit_depth_packets(brw, depth_mt, brw_depthbuffer_format(brw), surftype,
                       ctx->Depth.Mask != 0,
                       stencil_mt, ctx->Stencil._WriteEnabled,
-                      brw->depthstencil.stencil_offset,
                       hiz, width, height, depth, lod, min_array_element);
 }
 
@@ -417,6 +414,16 @@ gen8_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
    uint32_t surface_width  = ALIGN(mt->logical_width0,  level == 0 ? 8 : 1);
    uint32_t surface_height = ALIGN(mt->logical_height0, level == 0 ? 4 : 1);
 
+   /* From the documentation for 3DSTATE_WM_HZ_OP: "3DSTATE_MULTISAMPLE packet
+    * must be used prior to this packet to change the Number of Multisamples.
+    * This packet must not be used to change Number of Multisamples in a
+    * rendering sequence."
+    */
+   if (brw->num_samples != mt->num_samples) {
+      gen8_emit_3dstate_multisample(brw, mt->num_samples);
+      brw->NewGLState |= _NEW_MULTISAMPLE;
+   }
+
    /* The basic algorithm is:
     * - If needed, emit 3DSTATE_{DEPTH,HIER_DEPTH,STENCIL}_BUFFER and
     *   3DSTATE_CLEAR_PARAMS packets to set up the relevant buffers.
@@ -429,7 +436,7 @@ gen8_hiz_exec(struct brw_context *brw, struct intel_mipmap_tree *mt,
                       brw_depth_format(brw, mt->format),
                       BRW_SURFACE_2D,
                       true, /* depth writes */
-                      NULL, false, 0, /* no stencil for now */
+                      NULL, false, /* no stencil for now */
                       true, /* hiz */
                       surface_width,
                       surface_height,

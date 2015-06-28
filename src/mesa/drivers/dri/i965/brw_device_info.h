@@ -35,6 +35,7 @@ struct brw_device_info
    bool is_baytrail;
    bool is_haswell;
    bool is_cherryview;
+   bool is_broxton;
 
    bool has_hiz_and_separate_stencil;
    bool must_use_separate_stencil;
@@ -85,4 +86,3 @@ struct brw_device_info
 };
 
 const struct brw_device_info *brw_get_device_info(int devid, int revision);
-const char *brw_get_device_name(int devid);

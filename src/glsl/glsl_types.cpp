@@ -32,7 +32,6 @@ mtx_t glsl_type::mutex = _MTX_INITIALIZER_NP;
 hash_table *glsl_type::array_types = NULL;
 hash_table *glsl_type::record_types = NULL;
 hash_table *glsl_type::interface_types = NULL;
-hash_table *glsl_type::function_types = NULL;
 void *glsl_type::mem_ctx = NULL;
 
 void
@@ -160,39 +159,6 @@ glsl_type::glsl_type(const glsl_struct_field *fields, unsigned num_fields,
    mtx_unlock(&glsl_type::mutex);
 }
 
-glsl_type::glsl_type(const glsl_type *return_type,
-                     const glsl_function_param *params, unsigned num_params) :
-   gl_type(0),
-   base_type(GLSL_TYPE_FUNCTION),
-   sampler_dimensionality(0), sampler_shadow(0), sampler_array(0),
-   sampler_type(0), interface_packing(0),
-   vector_elements(0), matrix_columns(0),
-   length(num_params)
-{
-   unsigned int i;
-
-   mtx_lock(&glsl_type::mutex);
-
-   init_ralloc_type_ctx();
-
-   this->fields.parameters = rzalloc_array(this->mem_ctx,
-                                           glsl_function_param, num_params + 1);
-
-   /* We store the return type as the first parameter */
-   this->fields.parameters[0].type = return_type;
-   this->fields.parameters[0].in = false;
-   this->fields.parameters[0].out = true;
-
-   /* We store the i'th parameter in slot i+1 */
-   for (i = 0; i < length; i++) {
-      this->fields.parameters[i + 1].type = params[i].type;
-      this->fields.parameters[i + 1].in = params[i].in;
-      this->fields.parameters[i + 1].out = params[i].out;
-   }
-
-   mtx_unlock(&glsl_type::mutex);
-}
-
 
 bool
 glsl_type::contains_sampler() const
@@ -251,7 +217,7 @@ glsl_type::contains_opaque() const {
    case GLSL_TYPE_ATOMIC_UINT:
       return true;
    case GLSL_TYPE_ARRAY:
-      return element_type()->contains_opaque();
+      return fields.array->contains_opaque();
    case GLSL_TYPE_STRUCT:
       for (unsigned int i = 0; i < length; i++) {
          if (fields.structure[i].type->contains_opaque())
@@ -358,8 +324,10 @@ const glsl_type *glsl_type::get_scalar_type() const
 void
 _mesa_glsl_release_types(void)
 {
-   mtx_lock(&glsl_type::mutex);
-
+   /* Should only be called during atexit (either when unloading shared
+    * object, or if process terminates), so no mutex-locking should be
+    * necessary.
+    */
    if (glsl_type::array_types != NULL) {
       hash_table_dtor(glsl_type::array_types);
       glsl_type::array_types = NULL;
@@ -369,8 +337,6 @@ _mesa_glsl_release_types(void)
       hash_table_dtor(glsl_type::record_types);
       glsl_type::record_types = NULL;
    }
-
-   mtx_unlock(&glsl_type::mutex);
 }
 
 
@@ -861,72 +827,6 @@ glsl_type::get_interface_instance(const glsl_struct_field *fields,
 }
 
 
-static int
-function_key_compare(const void *a, const void *b)
-{
-   const glsl_type *const key1 = (glsl_type *) a;
-   const glsl_type *const key2 = (glsl_type *) b;
-
-   if (key1->length != key2->length)
-      return 1;
-
-   return memcmp(key1->fields.parameters, key2->fields.parameters,
-                 (key1->length + 1) * sizeof(*key1->fields.parameters));
-}
-
-
-static unsigned
-function_key_hash(const void *a)
-{
-   const glsl_type *const key = (glsl_type *) a;
-   char hash_key[128];
-   unsigned size = 0;
-
-   size = snprintf(hash_key, sizeof(hash_key), "%08x", key->length);
-
-   for (unsigned i = 0; i < key->length; i++) {
-      if (size >= sizeof(hash_key))
-	 break;
-
-      size += snprintf(& hash_key[size], sizeof(hash_key) - size,
-		       "%p", (void *) key->fields.structure[i].type);
-   }
-
-   return hash_table_string_hash(& hash_key);
-}
-
-const glsl_type *
-glsl_type::get_function_instance(const glsl_type *return_type,
-                                 const glsl_function_param *params,
-                                 unsigned num_params)
-{
-   const glsl_type key(return_type, params, num_params);
-
-   mtx_lock(&glsl_type::mutex);
-
-   if (function_types == NULL) {
-      function_types = hash_table_ctor(64, function_key_hash,
-                                       function_key_compare);
-   }
-
-   const glsl_type *t = (glsl_type *) hash_table_find(function_types, &key);
-   if (t == NULL) {
-      mtx_unlock(&glsl_type::mutex);
-      t = new glsl_type(return_type, params, num_params);
-      mtx_lock(&glsl_type::mutex);
-
-      hash_table_insert(function_types, (void *) t, t);
-   }
-
-   assert(t->base_type == GLSL_TYPE_FUNCTION);
-   assert(t->length == num_params);
-
-   mtx_unlock(&glsl_type::mutex);
-
-   return t;
-}
-
-
 const glsl_type *
 glsl_type::get_mul_type(const glsl_type *type_a, const glsl_type *type_b)
 {
@@ -1055,7 +955,6 @@ glsl_type::component_slots() const
    case GLSL_TYPE_IMAGE:
       return 1;
 
-   case GLSL_TYPE_FUNCTION:
    case GLSL_TYPE_SAMPLER:
    case GLSL_TYPE_ATOMIC_UINT:
    case GLSL_TYPE_VOID:
@@ -1427,7 +1326,6 @@ glsl_type::count_attribute_slots() const
    case GLSL_TYPE_ARRAY:
       return this->length * this->fields.array->count_attribute_slots();
 
-   case GLSL_TYPE_FUNCTION:
    case GLSL_TYPE_SAMPLER:
    case GLSL_TYPE_IMAGE:
    case GLSL_TYPE_ATOMIC_UINT:

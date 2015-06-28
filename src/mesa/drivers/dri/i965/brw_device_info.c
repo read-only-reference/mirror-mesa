@@ -334,6 +334,22 @@ static const struct brw_device_info brw_device_info_skl_gt3 = {
    .supports_simd16_3src = true,
 };
 
+static const struct brw_device_info brw_device_info_bxt = {
+   GEN9_FEATURES,
+   .is_broxton = 1,
+   .gt = 1,
+   .has_llc = false,
+   .max_vs_threads = 112,
+   .max_gs_threads = 112,
+   .max_wm_threads = 32,
+   .urb = {
+      .size = 64,
+      .min_vs_entries = 34,
+      .max_vs_entries = 640,
+      .max_gs_entries = 256,
+   }
+};
+
 const struct brw_device_info *
 brw_get_device_info(int devid, int revision)
 {
@@ -352,16 +368,4 @@ brw_get_device_info(int devid, int revision)
       return &brw_device_info_skl_early;
 
    return devinfo;
-}
-
-const char *
-brw_get_device_name(int devid)
-{
-   switch (devid) {
-#undef CHIPSET
-#define CHIPSET(id, family, name) case id: return name;
-#include "pci_ids/i965_pci_ids.h"
-   default:
-      return NULL;
-   }
 }
