@@ -54,6 +54,8 @@ struct r600_query {
 	uint64_t end_result;
 	/* Fence for GPU_FINISHED. */
 	struct pipe_fence_handle *fence;
+	/* For transform feedback: which stream the query is for */
+	unsigned stream;
 };
 
 
@@ -118,7 +120,6 @@ static struct r600_resource *r600_new_query_buffer(struct r600_common_context *c
 			}
 			results += 4 * ctx->max_db;
 		}
-		ctx->ws->buffer_unmap(buf->cs_buf);
 		break;
 	case PIPE_QUERY_TIME_ELAPSED:
 	case PIPE_QUERY_TIMESTAMP:
@@ -130,7 +131,6 @@ static struct r600_resource *r600_new_query_buffer(struct r600_common_context *c
 	case PIPE_QUERY_PIPELINE_STATISTICS:
 		results = r600_buffer_map_sync_with_rings(ctx, buf, PIPE_TRANSFER_WRITE);
 		memset(results, 0, buf_size);
-		ctx->ws->buffer_unmap(buf->cs_buf);
 		break;
 	default:
 		assert(0);
@@ -154,6 +154,17 @@ static void r600_update_occlusion_query_state(struct r600_common_context *rctx,
 		if (enable != old_enable) {
 			rctx->set_occlusion_query_state(&rctx->b, enable);
 		}
+	}
+}
+
+static unsigned event_type_for_stream(struct r600_query *query)
+{
+	switch (query->stream) {
+	default:
+	case 0: return EVENT_TYPE_SAMPLE_STREAMOUTSTATS;
+	case 1: return EVENT_TYPE_SAMPLE_STREAMOUTSTATS1;
+	case 2: return EVENT_TYPE_SAMPLE_STREAMOUTSTATS2;
+	case 3: return EVENT_TYPE_SAMPLE_STREAMOUTSTATS3;
 	}
 }
 
@@ -191,7 +202,7 @@ static void r600_emit_query_begin(struct r600_common_context *ctx, struct r600_q
 	case PIPE_QUERY_SO_STATISTICS:
 	case PIPE_QUERY_SO_OVERFLOW_PREDICATE:
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
-		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_SAMPLE_STREAMOUTSTATS) | EVENT_INDEX(3));
+		radeon_emit(cs, EVENT_TYPE(event_type_for_stream(query)) | EVENT_INDEX(3));
 		radeon_emit(cs, va);
 		radeon_emit(cs, (va >> 32UL) & 0xFF);
 		break;
@@ -248,7 +259,7 @@ static void r600_emit_query_end(struct r600_common_context *ctx, struct r600_que
 	case PIPE_QUERY_SO_OVERFLOW_PREDICATE:
 		va += query->buffer.results_end + query->result_size/2;
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
-		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_SAMPLE_STREAMOUTSTATS) | EVENT_INDEX(3));
+		radeon_emit(cs, EVENT_TYPE(event_type_for_stream(query)) | EVENT_INDEX(3));
 		radeon_emit(cs, va);
 		radeon_emit(cs, (va >> 32UL) & 0xFF);
 		break;
@@ -292,6 +303,13 @@ static void r600_emit_query_predication(struct r600_common_context *ctx, struct 
 					int operation, bool flag_wait)
 {
 	struct radeon_winsys_cs *cs = ctx->rings.gfx.cs;
+	uint32_t op = PRED_OP(operation);
+
+	/* if true then invert, see GL_ARB_conditional_render_inverted */
+	if (ctx->current_render_cond_cond)
+		op |= PREDICATION_DRAW_NOT_VISIBLE; /* Draw if not visable/overflow */
+	else
+		op |= PREDICATION_DRAW_VISIBLE; /* Draw if visable/overflow */
 
 	if (operation == PREDICATION_OP_CLEAR) {
 		ctx->need_gfx_cs_space(&ctx->b, 3, FALSE);
@@ -302,24 +320,21 @@ static void r600_emit_query_predication(struct r600_common_context *ctx, struct 
 	} else {
 		struct r600_query_buffer *qbuf;
 		unsigned count;
-		uint32_t op;
-
 		/* Find how many results there are. */
 		count = 0;
 		for (qbuf = &query->buffer; qbuf; qbuf = qbuf->previous) {
 			count += qbuf->results_end / query->result_size;
 		}
-
+	
 		ctx->need_gfx_cs_space(&ctx->b, 5 * count, TRUE);
-
-		op = PRED_OP(operation) | PREDICATION_DRAW_VISIBLE |
-				(flag_wait ? PREDICATION_HINT_WAIT : PREDICATION_HINT_NOWAIT_DRAW);
-
+	
+		op |= flag_wait ? PREDICATION_HINT_WAIT : PREDICATION_HINT_NOWAIT_DRAW;
+	
 		/* emit predicate packets for all data blocks */
 		for (qbuf = &query->buffer; qbuf; qbuf = qbuf->previous) {
 			unsigned results_base = 0;
 			uint64_t va = qbuf->buf->gpu_address;
-
+	
 			while (results_base < qbuf->results_end) {
 				radeon_emit(cs, PKT3(PKT3_SET_PREDICATION, 1, 0));
 				radeon_emit(cs, (va + results_base) & 0xFFFFFFFFUL);
@@ -327,7 +342,7 @@ static void r600_emit_query_predication(struct r600_common_context *ctx, struct 
 				r600_emit_reloc(ctx, &ctx->rings.gfx, qbuf->buf, RADEON_USAGE_READ,
 						RADEON_PRIO_MIN);
 				results_base += query->result_size;
-
+	
 				/* set CONTINUE bit for all packets except the first */
 				op |= PREDICATION_CONTINUE;
 			}
@@ -369,6 +384,7 @@ static struct pipe_query *r600_create_query(struct pipe_context *ctx, unsigned q
 		/* NumPrimitivesWritten, PrimitiveStorageNeeded. */
 		query->result_size = 32;
 		query->num_cs_dw = 6;
+		query->stream = index;
 		break;
 	case PIPE_QUERY_PIPELINE_STATISTICS:
 		/* 11 values on EG, 8 on R600. */
@@ -751,7 +767,6 @@ static boolean r600_get_query_buffer_result(struct r600_common_context *ctx,
 		assert(0);
 	}
 
-	ctx->ws->buffer_unmap(qbuf->buf->cs_buf);
 	return TRUE;
 }
 
@@ -919,7 +934,6 @@ void r600_query_init_backend_mask(struct r600_common_context *ctx)
 	results = r600_buffer_map_sync_with_rings(ctx, buffer, PIPE_TRANSFER_WRITE);
 	if (results) {
 		memset(results, 0, ctx->max_db * 4 * 4);
-		ctx->ws->buffer_unmap(buffer->cs_buf);
 
 		/* emit EVENT_WRITE for ZPASS_DONE */
 		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 2, 0));
@@ -937,7 +951,6 @@ void r600_query_init_backend_mask(struct r600_common_context *ctx)
 				if (results[i*4 + 1])
 					mask |= (1<<i);
 			}
-			ctx->ws->buffer_unmap(buffer->cs_buf);
 		}
 	}
 

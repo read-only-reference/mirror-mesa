@@ -90,7 +90,7 @@ struct vbo_context;
 
 
 /** Extra draw modes beyond GL_POINTS, GL_TRIANGLE_FAN, etc */
-#define PRIM_MAX                 GL_TRIANGLE_STRIP_ADJACENCY
+#define PRIM_MAX                 GL_PATCHES
 #define PRIM_OUTSIDE_BEGIN_END   (PRIM_MAX + 1)
 #define PRIM_UNKNOWN             (PRIM_MAX + 2)
 
@@ -240,8 +240,12 @@ typedef enum
    VARYING_SLOT_VIEWPORT, /* Appears as VS or GS output */
    VARYING_SLOT_FACE, /* FS only */
    VARYING_SLOT_PNTC, /* FS only */
+   VARYING_SLOT_TESS_LEVEL_OUTER, /* Only appears as TCS output. */
+   VARYING_SLOT_TESS_LEVEL_INNER, /* Only appears as TCS output. */
    VARYING_SLOT_VAR0, /* First generic varying slot */
-   VARYING_SLOT_MAX = VARYING_SLOT_VAR0 + MAX_VARYING
+   VARYING_SLOT_MAX = VARYING_SLOT_VAR0 + MAX_VARYING,
+   VARYING_SLOT_PATCH0 = VARYING_SLOT_MAX,
+   VARYING_SLOT_TESS_MAX = VARYING_SLOT_PATCH0 + MAX_VARYING
 } gl_varying_slot;
 
 
@@ -276,6 +280,8 @@ typedef enum
 #define VARYING_BIT_VIEWPORT BITFIELD64_BIT(VARYING_SLOT_VIEWPORT)
 #define VARYING_BIT_FACE BITFIELD64_BIT(VARYING_SLOT_FACE)
 #define VARYING_BIT_PNTC BITFIELD64_BIT(VARYING_SLOT_PNTC)
+#define VARYING_BIT_TESS_LEVEL_OUTER BITFIELD64_BIT(VARYING_SLOT_TESS_LEVEL_OUTER)
+#define VARYING_BIT_TESS_LEVEL_INNER BITFIELD64_BIT(VARYING_SLOT_TESS_LEVEL_INNER)
 #define VARYING_BIT_VAR(V) BITFIELD64_BIT(VARYING_SLOT_VAR0 + (V))
 /*@}*/
 
@@ -292,6 +298,8 @@ _mesa_varying_slot_in_fs(gl_varying_slot slot)
    case VARYING_SLOT_EDGE:
    case VARYING_SLOT_CLIP_VERTEX:
    case VARYING_SLOT_LAYER:
+   case VARYING_SLOT_TESS_LEVEL_OUTER:
+   case VARYING_SLOT_TESS_LEVEL_INNER:
       return GL_FALSE;
    default:
       return GL_TRUE;
@@ -1459,6 +1467,7 @@ typedef enum {
    USAGE_UNIFORM_BUFFER = 0x1,
    USAGE_TEXTURE_BUFFER = 0x2,
    USAGE_ATOMIC_COUNTER_BUFFER = 0x4,
+   USAGE_SHADER_STORAGE_BUFFER = 0x8,
 } gl_buffer_usage;
 
 
@@ -2096,6 +2105,8 @@ struct gl_program
    GLbitfield64 InputsRead;     /**< Bitmask of which input regs are read */
    GLbitfield64 DoubleInputsRead;     /**< Bitmask of which input regs are read  and are doubles */
    GLbitfield64 OutputsWritten; /**< Bitmask of which output regs are written */
+   GLbitfield PatchInputsRead;  /**< VAR[0..31] usage for patch inputs (user-defined only) */
+   GLbitfield PatchOutputsWritten; /**< VAR[0..31] usage for patch outputs (user-defined only) */
    GLbitfield SystemValuesRead;   /**< Bitmask of SYSTEM_VALUE_x inputs used */
    GLbitfield TexturesUsed[MAX_COMBINED_TEXTURE_IMAGE_UNITS];  /**< TEXTURE_x_BIT bitmask */
    GLbitfield SamplersUsed;   /**< Bitfield of which samplers are used */
@@ -2160,6 +2171,29 @@ struct gl_vertex_program
 {
    struct gl_program Base;   /**< base class */
    GLboolean IsPositionInvariant;
+};
+
+
+/** Tessellation control program object */
+struct gl_tess_ctrl_program
+{
+   struct gl_program Base;   /**< base class */
+
+   /* output layout */
+   GLint VerticesOut;
+};
+
+
+/** Tessellation evaluation program object */
+struct gl_tess_eval_program
+{
+   struct gl_program Base;   /**< base class */
+
+   /* input layout */
+   GLenum PrimitiveMode; /* GL_TRIANGLES, GL_QUADS or GL_ISOLINES */
+   GLenum Spacing;       /* GL_EQUAL, GL_FRACTIONAL_EVEN, GL_FRACTIONAL_ODD */
+   GLenum VertexOrder;   /* GL_CW or GL_CCW */
+   bool PointMode;
 };
 
 
@@ -2265,6 +2299,27 @@ struct gl_vertex_program_state
    GLboolean _Overriden;
 };
 
+/**
+ * Context state for tessellation control programs.
+ */
+struct gl_tess_ctrl_program_state
+{
+   /** Currently bound and valid shader. */
+   struct gl_tess_ctrl_program *_Current;
+
+   GLint patch_vertices;
+   GLfloat patch_default_outer_level[4];
+   GLfloat patch_default_inner_level[2];
+};
+
+/**
+ * Context state for tessellation evaluation programs.
+ */
+struct gl_tess_eval_program_state
+{
+   /** Currently bound and valid shader. */
+   struct gl_tess_eval_program *_Current;
+};
 
 /**
  * Context state for geometry programs.
@@ -2359,13 +2414,23 @@ struct gl_ati_fragment_shader_state
    struct ati_fragment_shader *Current;
 };
 
+/**
+ *  Shader subroutine function definition
+ */
+struct gl_subroutine_function
+{
+   char *name;
+   int num_compat_types;
+   const struct glsl_type **types;
+};
 
 /**
  * A GLSL vertex or fragment shader object.
  */
 struct gl_shader
 {
-   /** GL_FRAGMENT_SHADER || GL_VERTEX_SHADER || GL_GEOMETRY_SHADER_ARB.
+   /** GL_FRAGMENT_SHADER || GL_VERTEX_SHADER || GL_GEOMETRY_SHADER_ARB ||
+    *  GL_TESS_CONTROL_SHADER || GL_TESS_EVALUATION_SHADER.
     * Must be the first field.
     */
    GLenum Type;
@@ -2445,6 +2510,41 @@ struct gl_shader
    bool pixel_center_integer;
 
    /**
+    * Tessellation Control shader state from layout qualifiers.
+    */
+   struct {
+      /**
+       * 0 - vertices not declared in shader, or
+       * 1 .. GL_MAX_PATCH_VERTICES
+       */
+      GLint VerticesOut;
+   } TessCtrl;
+
+   /**
+    * Tessellation Evaluation shader state from layout qualifiers.
+    */
+   struct {
+      /**
+       * GL_TRIANGLES, GL_QUADS, GL_ISOLINES or PRIM_UNKNOWN if it's not set
+       * in this shader.
+       */
+      GLenum PrimitiveMode;
+      /**
+       * GL_EQUAL, GL_FRACTIONAL_ODD, GL_FRACTIONAL_EVEN, or 0 if it's not set
+       * in this shader.
+       */
+      GLenum Spacing;
+      /**
+       * GL_CW, GL_CCW, or 0 if it's not set in this shader.
+       */
+      GLenum VertexOrder;
+      /**
+       * 1, 0, or -1 if it's not set in this shader.
+       */
+      int PointMode;
+   } TessEval;
+
+   /**
     * Geometry shader state from GLSL 1.50 layout qualifiers.
     */
    struct {
@@ -2509,6 +2609,25 @@ struct gl_shader
        */
       unsigned LocalSize[3];
    } Comp;
+
+   /**
+     * Number of types for subroutine uniforms.
+     */
+   GLuint NumSubroutineUniformTypes;
+
+   /**
+     * Subroutine uniform remap table
+     * based on the program level uniform remap table.
+     */
+   GLuint NumSubroutineUniformRemapTable;
+   struct gl_uniform_storage **SubroutineUniformRemapTable;
+
+   /**
+    * Num of subroutine functions for this stage
+    * and storage for them.
+    */
+   GLuint NumSubroutineFunctions;
+   struct gl_subroutine_function *SubroutineFunctions;
 };
 
 
@@ -2563,6 +2682,11 @@ struct gl_uniform_block
     * (GL_UNIFORM_BLOCK_DATA_SIZE).
     */
    GLuint UniformBufferSize;
+
+   /**
+    * Is this actually an interface block for a shader storage buffer?
+    */
+   bool IsShaderStorage;
 
    /**
     * Layout specified in the shader
@@ -2666,6 +2790,37 @@ struct gl_shader_program
 
    /** Post-link gl_FragDepth layout for ARB_conservative_depth. */
    enum gl_frag_depth_layout FragDepthLayout;
+
+   /**
+    * Tessellation Control shader state from layout qualifiers.
+    */
+   struct {
+      /**
+       * 0 - vertices not declared in shader, or
+       * 1 .. GL_MAX_PATCH_VERTICES
+       */
+      GLint VerticesOut;
+   } TessCtrl;
+
+   /**
+    * Tessellation Evaluation shader state from layout qualifiers.
+    */
+   struct {
+      /** GL_TRIANGLES, GL_QUADS or GL_ISOLINES */
+      GLenum PrimitiveMode;
+      /** GL_EQUAL, GL_FRACTIONAL_ODD or GL_FRACTIONAL_EVEN */
+      GLenum Spacing;
+      /** GL_CW or GL_CCW */
+      GLenum VertexOrder;
+      bool PointMode;
+      /**
+       * True if gl_ClipDistance is written to.  Copied into
+       * gl_tess_eval_program by _mesa_copy_linked_program_data().
+       */
+      GLboolean UsesClipDistance;
+      GLuint ClipDistanceArraySize; /**< Size of the gl_ClipDistance array, or
+                                         0 if not present. */
+   } TessEval;
 
    /**
     * Geometry shader state - copied into gl_geometry_program by
@@ -3301,6 +3456,9 @@ struct gl_program_constants
 
    /* GL_ARB_shader_image_load_store */
    GLuint MaxImageUniforms;
+
+   /* GL_ARB_shader_storage_buffer_object */
+   GLuint MaxShaderStorageBlocks;
 };
 
 
@@ -3396,6 +3554,15 @@ struct gl_constants
    GLuint MaxUniformBufferBindings;
    GLuint MaxUniformBlockSize;
    GLuint UniformBufferOffsetAlignment;
+   /** @} */
+
+   /** @{
+    * GL_ARB_shader_storage_buffer_object
+    */
+   GLuint MaxCombinedShaderStorageBlocks;
+   GLuint MaxShaderStorageBufferBindings;
+   GLuint MaxShaderStorageBlockSize;
+   GLuint ShaderStorageBufferOffsetAlignment;
    /** @} */
 
    /**
@@ -3624,6 +3791,13 @@ struct gl_constants
    GLenum ContextReleaseBehavior;
 
    struct gl_shader_compiler_options ShaderCompilerOptions[MESA_SHADER_STAGES];
+
+   /** GL_ARB_tessellation_shader */
+   GLuint MaxPatchVertices;
+   GLuint MaxTessGenLevel;
+   GLuint MaxTessPatchComponents;
+   GLuint MaxTessControlTotalOutputComponents;
+   bool LowerTessLevel; /**< Lower gl_TessLevel* from float[n] to vecn? */
 };
 
 
@@ -3685,6 +3859,8 @@ struct gl_extensions
    GLboolean ARB_shader_image_load_store;
    GLboolean ARB_shader_precision;
    GLboolean ARB_shader_stencil_export;
+   GLboolean ARB_shader_storage_buffer_object;
+   GLboolean ARB_shader_subroutine;
    GLboolean ARB_shader_texture_lod;
    GLboolean ARB_shading_language_packing;
    GLboolean ARB_shading_language_420pack;
@@ -4016,6 +4192,12 @@ struct gl_driver_flags
     */
    uint64_t NewUniformBuffer;
 
+   /**
+    * gl_context::ShaderStorageBufferBindings
+    * gl_shader_program::ShaderStorageBlocks
+    */
+   uint64_t NewShaderStorageBuffer;
+
    uint64_t NewTextureBuffer;
 
    /**
@@ -4027,12 +4209,31 @@ struct gl_driver_flags
     * gl_context::ImageUnits
     */
    uint64_t NewImageUnits;
+
+   /**
+    * gl_context::TessCtrlProgram::patch_default_*
+    */
+   uint64_t NewDefaultTessLevels;
 };
 
 struct gl_uniform_buffer_binding
 {
    struct gl_buffer_object *BufferObject;
    /** Start of uniform block data in the buffer */
+   GLintptr Offset;
+   /** Size of data allowed to be referenced from the buffer (in bytes) */
+   GLsizeiptr Size;
+   /**
+    * glBindBufferBase() indicates that the Size should be ignored and only
+    * limited by the current size of the BufferObject.
+    */
+   GLboolean AutomaticSize;
+};
+
+struct gl_shader_storage_buffer_binding
+{
+   struct gl_buffer_object *BufferObject;
+   /** Start of shader storage block data in the buffer */
    GLintptr Offset;
    /** Size of data allowed to be referenced from the buffer (in bytes) */
    GLsizeiptr Size;
@@ -4248,6 +4449,8 @@ struct gl_context
    struct gl_fragment_program_state FragmentProgram;
    struct gl_geometry_program_state GeometryProgram;
    struct gl_compute_program_state ComputeProgram;
+   struct gl_tess_ctrl_program_state TessCtrlProgram;
+   struct gl_tess_eval_program_state TessEvalProgram;
    struct gl_ati_fragment_shader_state ATIFragmentShader;
 
    struct gl_pipeline_shader_state Pipeline; /**< GLSL pipeline shader object state */
@@ -4290,6 +4493,12 @@ struct gl_context
    struct gl_buffer_object *UniformBuffer;
 
    /**
+    * Current GL_ARB_shader_storage_buffer_object binding referenced by
+    * GL_SHADER_STORAGE_BUFFER target for glBufferData, glMapBuffer, etc.
+    */
+   struct gl_buffer_object *ShaderStorageBuffer;
+
+   /**
     * Array of uniform buffers for GL_ARB_uniform_buffer_object and GL 3.1.
     * This is set up using glBindBufferRange() or glBindBufferBase().  They are
     * associated with uniform blocks by glUniformBlockBinding()'s state in the
@@ -4297,6 +4506,15 @@ struct gl_context
     */
    struct gl_uniform_buffer_binding
       UniformBufferBindings[MAX_COMBINED_UNIFORM_BUFFERS];
+
+   /**
+    * Array of shader storage buffers for ARB_shader_storage_buffer_object
+    * and GL 4.3. This is set up using glBindBufferRange() or
+    * glBindBufferBase().  They are associated with shader storage blocks by
+    * glShaderStorageBlockBinding()'s state in the shader program.
+    */
+   struct gl_shader_storage_buffer_binding
+      ShaderStorageBufferBindings[MAX_COMBINED_SHADER_STORAGE_BUFFERS];
 
    /**
     * Object currently associated with the GL_ATOMIC_COUNTER_BUFFER

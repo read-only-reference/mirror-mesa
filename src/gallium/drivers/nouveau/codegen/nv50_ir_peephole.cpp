@@ -2085,6 +2085,8 @@ MemoryOpt::runOpt(BasicBlock *bb)
       }
       if (ldst->getPredicate()) // TODO: handle predicated ld/st
          continue;
+      if (ldst->perPatch) // TODO: create separate per-patch lists
+         continue;
 
       if (isLoad) {
          DataFile file = ldst->src(0).getFile();
@@ -2518,6 +2520,8 @@ Instruction::isResultEqual(const Instruction *that) const
       case FILE_MEMORY_CONST:
       case FILE_SHADER_INPUT:
          return true;
+      case FILE_SHADER_OUTPUT:
+         return bb->getProgram()->getType() == Program::TYPE_TESSELLATION_EVAL;
       default:
          return false;
       }

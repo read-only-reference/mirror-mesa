@@ -2272,15 +2272,28 @@ static void si_set_min_samples(struct pipe_context *ctx, unsigned min_samples)
  * Samplers
  */
 
-static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx,
-							struct pipe_resource *texture,
-							const struct pipe_sampler_view *state)
+/**
+ * Create a sampler view.
+ *
+ * @param ctx		context
+ * @param texture	texture
+ * @param state		sampler view template
+ * @param width0	width0 override (for compressed textures as int)
+ * @param height0	height0 override (for compressed textures as int)
+ * @param force_level   set the base address to the level (for compressed textures)
+ */
+struct pipe_sampler_view *
+si_create_sampler_view_custom(struct pipe_context *ctx,
+			      struct pipe_resource *texture,
+			      const struct pipe_sampler_view *state,
+			      unsigned width0, unsigned height0,
+			      unsigned force_level)
 {
 	struct si_context *sctx = (struct si_context*)ctx;
 	struct si_sampler_view *view = CALLOC_STRUCT(si_sampler_view);
 	struct r600_texture *tmp = (struct r600_texture*)texture;
 	const struct util_format_description *desc;
-	unsigned format, num_format;
+	unsigned format, num_format, base_level, first_level, last_level;
 	uint32_t pitch = 0;
 	unsigned char state_swizzle[4], swizzle[4];
 	unsigned height, depth, width;
@@ -2453,13 +2466,25 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 		format = 0;
 	}
 
-	/* not supported any more */
-	//endian = si_colorformat_endian_swap(format);
+	base_level = 0;
+	first_level = state->u.tex.first_level;
+	last_level = state->u.tex.last_level;
+	width = width0;
+	height = height0;
+	depth = texture->depth0;
 
-	width = surflevel[0].npix_x;
-	height = surflevel[0].npix_y;
-	depth = surflevel[0].npix_z;
-	pitch = surflevel[0].nblk_x * util_format_get_blockwidth(pipe_format);
+	if (force_level) {
+		assert(force_level == first_level &&
+		       force_level == last_level);
+		base_level = force_level;
+		first_level = 0;
+		last_level = 0;
+		width = u_minify(width, force_level);
+		height = u_minify(height, force_level);
+		depth = u_minify(depth, force_level);
+	}
+
+	pitch = surflevel[base_level].nblk_x * util_format_get_blockwidth(pipe_format);
 
 	if (texture->target == PIPE_TEXTURE_1D_ARRAY) {
 	        height = 1;
@@ -2469,8 +2494,7 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 	} else if (texture->target == PIPE_TEXTURE_CUBE_ARRAY)
 		depth = texture->array_size / 6;
 
-	va = tmp->resource.gpu_address + surflevel[0].offset;
-	va += tmp->mipmap_shift * surflevel[texture->last_level].slice_size * tmp->surface.array_size;
+	va = tmp->resource.gpu_address + surflevel[base_level].offset;
 
 	view->state[0] = va >> 8;
 	view->state[1] = (S_008F14_BASE_ADDRESS_HI(va >> 40) |
@@ -2483,11 +2507,11 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 			  S_008F1C_DST_SEL_Z(si_map_swizzle(swizzle[2])) |
 			  S_008F1C_DST_SEL_W(si_map_swizzle(swizzle[3])) |
 			  S_008F1C_BASE_LEVEL(texture->nr_samples > 1 ?
-						      0 : state->u.tex.first_level - tmp->mipmap_shift) |
+						      0 : first_level) |
 			  S_008F1C_LAST_LEVEL(texture->nr_samples > 1 ?
 						      util_logbase2(texture->nr_samples) :
-						      state->u.tex.last_level - tmp->mipmap_shift) |
-			  S_008F1C_TILING_INDEX(si_tile_mode_index(tmp, 0, false)) |
+						      last_level) |
+			  S_008F1C_TILING_INDEX(si_tile_mode_index(tmp, base_level, false)) |
 			  S_008F1C_POW2_PAD(texture->last_level > 0) |
 			  S_008F1C_TYPE(si_tex_dim(texture->target, texture->nr_samples)));
 	view->state[4] = (S_008F20_DEPTH(depth - 1) | S_008F20_PITCH(pitch - 1));
@@ -2537,6 +2561,16 @@ static struct pipe_sampler_view *si_create_sampler_view(struct pipe_context *ctx
 	}
 
 	return &view->base;
+}
+
+static struct pipe_sampler_view *
+si_create_sampler_view(struct pipe_context *ctx,
+		       struct pipe_resource *texture,
+		       const struct pipe_sampler_view *state)
+{
+	return si_create_sampler_view_custom(ctx, texture, state,
+					     texture ? texture->width0 : 0,
+					     texture ? texture->height0 : 0, 0);
 }
 
 static void si_sampler_view_destroy(struct pipe_context *ctx,
@@ -2861,6 +2895,30 @@ static void si_set_polygon_stipple(struct pipe_context *ctx,
 	}
 }
 
+static void si_set_tess_state(struct pipe_context *ctx,
+			      const float default_outer_level[4],
+			      const float default_inner_level[2])
+{
+	struct si_context *sctx = (struct si_context *)ctx;
+	struct pipe_constant_buffer cb;
+	float array[8];
+
+	memcpy(array, default_outer_level, sizeof(float) * 4);
+	memcpy(array+4, default_inner_level, sizeof(float) * 2);
+
+	cb.buffer = NULL;
+	cb.user_buffer = NULL;
+	cb.buffer_size = sizeof(array);
+
+	si_upload_const_buffer(sctx, (struct r600_resource**)&cb.buffer,
+			       (void*)array, sizeof(array),
+			       &cb.buffer_offset);
+
+	ctx->set_constant_buffer(ctx, PIPE_SHADER_TESS_CTRL,
+				 SI_DRIVER_STATE_CONST_BUF, &cb);
+	pipe_resource_reference(&cb.buffer, NULL);
+}
+
 static void si_texture_barrier(struct pipe_context *ctx)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
@@ -2885,6 +2943,8 @@ static void si_need_gfx_cs_space(struct pipe_context *ctx, unsigned num_dw,
 {
 	si_need_cs_space((struct si_context*)ctx, num_dw, include_draw_vbo);
 }
+
+static void si_init_config(struct si_context *sctx);
 
 void si_init_state_functions(struct si_context *sctx)
 {
@@ -2936,6 +2996,7 @@ void si_init_state_functions(struct si_context *sctx)
 	sctx->b.b.texture_barrier = si_texture_barrier;
 	sctx->b.b.set_polygon_stipple = si_set_polygon_stipple;
 	sctx->b.b.set_min_samples = si_set_min_samples;
+	sctx->b.b.set_tess_state = si_set_tess_state;
 
 	sctx->b.set_occlusion_query_state = si_set_occlusion_query_state;
 	sctx->b.need_gfx_cs_space = si_need_gfx_cs_space;
@@ -2947,6 +3008,8 @@ void si_init_state_functions(struct si_context *sctx)
 	} else {
 		sctx->b.dma_copy = si_dma_copy;
 	}
+
+	si_init_config(sctx);
 }
 
 static void
@@ -3053,7 +3116,7 @@ si_write_harvested_raster_configs(struct si_context *sctx,
 		       INSTANCE_BROADCAST_WRITES);
 }
 
-void si_init_config(struct si_context *sctx)
+static void si_init_config(struct si_context *sctx)
 {
 	struct si_pm4_state *pm4 = CALLOC_STRUCT(si_pm4_state);
 
@@ -3062,8 +3125,8 @@ void si_init_config(struct si_context *sctx)
 
 	si_cmd_context_control(pm4);
 
-	si_pm4_set_reg(pm4, R_028A18_VGT_HOS_MAX_TESS_LEVEL, 0x0);
-	si_pm4_set_reg(pm4, R_028A1C_VGT_HOS_MIN_TESS_LEVEL, 0x0);
+	si_pm4_set_reg(pm4, R_028A18_VGT_HOS_MAX_TESS_LEVEL, fui(64));
+	si_pm4_set_reg(pm4, R_028A1C_VGT_HOS_MIN_TESS_LEVEL, fui(0));
 
 	/* FIXME calculate these values somehow ??? */
 	si_pm4_set_reg(pm4, R_028A54_VGT_GS_PER_ES, 0x80);
@@ -3074,10 +3137,6 @@ void si_init_config(struct si_context *sctx)
 	si_pm4_set_reg(pm4, R_028A8C_VGT_PRIMITIVEID_RESET, 0x0);
 	si_pm4_set_reg(pm4, R_028AB8_VGT_VTX_CNT_EN, 0);
 	si_pm4_set_reg(pm4, R_028B28_VGT_STRMOUT_DRAW_OPAQUE_OFFSET, 0);
-
-	si_pm4_set_reg(pm4, R_028B60_VGT_GS_VERT_ITEMSIZE_1, 0);
-	si_pm4_set_reg(pm4, R_028B64_VGT_GS_VERT_ITEMSIZE_2, 0);
-	si_pm4_set_reg(pm4, R_028B68_VGT_GS_VERT_ITEMSIZE_3, 0);
 
 	si_pm4_set_reg(pm4, R_028B98_VGT_STRMOUT_BUFFER_CONFIG, 0x0);
 	si_pm4_set_reg(pm4, R_028AB4_VGT_REUSE_OFF, 0);
@@ -3188,6 +3247,10 @@ void si_init_config(struct si_context *sctx)
 	si_pm4_set_reg(pm4, R_028408_VGT_INDX_OFFSET, 0);
 
 	if (sctx->b.chip_class >= CIK) {
+		si_pm4_set_reg(pm4, R_00B51C_SPI_SHADER_PGM_RSRC3_LS, S_00B51C_CU_EN(0xfffc));
+		si_pm4_set_reg(pm4, R_00B41C_SPI_SHADER_PGM_RSRC3_HS, 0);
+		si_pm4_set_reg(pm4, R_00B31C_SPI_SHADER_PGM_RSRC3_ES, S_00B31C_CU_EN(0xfffe));
+		si_pm4_set_reg(pm4, R_00B21C_SPI_SHADER_PGM_RSRC3_GS, S_00B21C_CU_EN(0xffff));
 		si_pm4_set_reg(pm4, R_00B118_SPI_SHADER_PGM_RSRC3_VS, S_00B118_CU_EN(0xffff));
 		si_pm4_set_reg(pm4, R_00B11C_SPI_SHADER_LATE_ALLOC_VS, S_00B11C_LIMIT(0));
 		si_pm4_set_reg(pm4, R_00B01C_SPI_SHADER_PGM_RSRC3_PS, S_00B01C_CU_EN(0xffff));

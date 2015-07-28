@@ -377,13 +377,12 @@ one_time_init( struct gl_context *ctx )
    if (!api_init_mask) {
       GLuint i;
 
-      /* do some implementation tests */
-      assert( sizeof(GLbyte) == 1 );
-      assert( sizeof(GLubyte) == 1 );
-      assert( sizeof(GLshort) == 2 );
-      assert( sizeof(GLushort) == 2 );
-      assert( sizeof(GLint) == 4 );
-      assert( sizeof(GLuint) == 4 );
+      STATIC_ASSERT(sizeof(GLbyte) == 1);
+      STATIC_ASSERT(sizeof(GLubyte) == 1);
+      STATIC_ASSERT(sizeof(GLshort) == 2);
+      STATIC_ASSERT(sizeof(GLushort) == 2);
+      STATIC_ASSERT(sizeof(GLint) == 4);
+      STATIC_ASSERT(sizeof(GLuint) == 4);
 
       _mesa_locale_init();
 
@@ -479,6 +478,8 @@ init_program_limits(struct gl_constants *consts, gl_shader_stage stage,
       prog->MaxInputComponents = 16 * 4; /* old limit not to break tnl and swrast */
       prog->MaxOutputComponents = 0; /* value not used */
       break;
+   case MESA_SHADER_TESS_CTRL:
+   case MESA_SHADER_TESS_EVAL:
    case MESA_SHADER_GEOMETRY:
       prog->MaxParameters = MAX_VERTEX_PROGRAM_PARAMS;
       prog->MaxAttribs = MAX_VERTEX_GENERIC_ATTRIBS;
@@ -537,6 +538,8 @@ init_program_limits(struct gl_constants *consts, gl_shader_stage stage,
 
    prog->MaxAtomicBuffers = 0;
    prog->MaxAtomicCounters = 0;
+
+   prog->MaxShaderStorageBlocks = 8;
 }
 
 
@@ -597,6 +600,12 @@ _mesa_init_constants(struct gl_constants *consts, gl_api api)
    consts->MaxUniformBufferBindings = 36;
    consts->MaxUniformBlockSize = 16384;
    consts->UniformBufferOffsetAlignment = 1;
+
+   /** GL_ARB_shader_storage_buffer_object */
+   consts->MaxCombinedShaderStorageBlocks = 8;
+   consts->MaxShaderStorageBufferBindings = 8;
+   consts->MaxShaderStorageBlockSize = 16 * 1024 * 1024;
+   consts->ShaderStorageBufferOffsetAlignment = 256;
 
    /* GL_ARB_explicit_uniform_location, GL_MAX_UNIFORM_LOCATIONS */
    consts->MaxUserAssignableUniformLocations =
@@ -707,6 +716,14 @@ _mesa_init_constants(struct gl_constants *consts, gl_api api)
 
    /** GL_KHR_context_flush_control */
    consts->ContextReleaseBehavior = GL_CONTEXT_RELEASE_BEHAVIOR_FLUSH;
+
+   /** GL_ARB_tessellation_shader */
+   consts->MaxTessGenLevel = MAX_TESS_GEN_LEVEL;
+   consts->MaxPatchVertices = MAX_PATCH_VERTICES;
+   consts->Program[MESA_SHADER_TESS_CTRL].MaxTextureImageUnits = MAX_TEXTURE_IMAGE_UNITS;
+   consts->Program[MESA_SHADER_TESS_EVAL].MaxTextureImageUnits = MAX_TEXTURE_IMAGE_UNITS;
+   consts->MaxTessPatchComponents = MAX_TESS_PATCH_COMPONENTS;
+   consts->MaxTessControlTotalOutputComponents = MAX_TESS_CONTROL_TOTAL_OUTPUT_COMPONENTS;
 }
 
 
@@ -1314,6 +1331,8 @@ _mesa_free_context_data( struct gl_context *ctx )
    _mesa_reference_vertprog(ctx, &ctx->VertexProgram._Current, NULL);
    _mesa_reference_vertprog(ctx, &ctx->VertexProgram._TnlProgram, NULL);
 
+   _mesa_reference_tesscprog(ctx, &ctx->TessCtrlProgram._Current, NULL);
+   _mesa_reference_tesseprog(ctx, &ctx->TessEvalProgram._Current, NULL);
    _mesa_reference_geomprog(ctx, &ctx->GeometryProgram._Current, NULL);
 
    _mesa_reference_fragprog(ctx, &ctx->FragmentProgram.Current, NULL);

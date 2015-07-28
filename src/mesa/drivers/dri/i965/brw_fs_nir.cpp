@@ -26,6 +26,7 @@
 #include "glsl/nir/glsl_to_nir.h"
 #include "program/prog_to_nir.h"
 #include "brw_fs.h"
+#include "brw_fs_surface_builder.h"
 #include "brw_nir.h"
 
 using namespace brw;
@@ -38,30 +39,10 @@ fs_visitor::emit_nir_code()
    /* emit the arrays used for inputs and outputs - load/store intrinsics will
     * be converted to reads/writes of these arrays
     */
-
-   if (nir->num_inputs > 0) {
-      nir_inputs = bld.vgrf(BRW_REGISTER_TYPE_F, nir->num_inputs);
-      nir_setup_inputs(nir);
-   }
-
-   if (nir->num_outputs > 0) {
-      nir_outputs = bld.vgrf(BRW_REGISTER_TYPE_F, nir->num_outputs);
-      nir_setup_outputs(nir);
-   }
-
-   if (nir->num_uniforms > 0) {
-      nir_setup_uniforms(nir);
-   }
-
+   nir_setup_inputs(nir);
+   nir_setup_outputs(nir);
+   nir_setup_uniforms(nir);
    nir_emit_system_values(nir);
-
-   nir_globals = ralloc_array(mem_ctx, fs_reg, nir->reg_alloc);
-   foreach_list_typed(nir_register, reg, node, &nir->registers) {
-      unsigned array_elems =
-         reg->num_array_elems == 0 ? 1 : reg->num_array_elems;
-      unsigned size = array_elems * reg->num_components;
-      nir_globals[reg->index] = bld.vgrf(BRW_REGISTER_TYPE_F, size);
-   }
 
    /* get the main function and emit it */
    nir_foreach_overload(nir, overload) {
@@ -74,6 +55,8 @@ fs_visitor::emit_nir_code()
 void
 fs_visitor::nir_setup_inputs(nir_shader *shader)
 {
+   nir_inputs = bld.vgrf(BRW_REGISTER_TYPE_F, shader->num_inputs);
+
    foreach_list_typed(nir_variable, var, node, &shader->inputs) {
       enum brw_reg_type type = brw_type_for_base_type(var->type);
       fs_reg input = offset(nir_inputs, bld, var->data.driver_location);
@@ -91,18 +74,27 @@ fs_visitor::nir_setup_inputs(nir_shader *shader)
           * So, we need to copy from fs_reg(ATTR, var->location) to
           * offset(nir_inputs, var->data.driver_location).
           */
-         unsigned components = var->type->without_array()->components();
+         const glsl_type *const t = var->type->without_array();
+         const unsigned components = t->components();
+         const unsigned cols = t->matrix_columns;
+         const unsigned elts = t->vector_elements;
          unsigned array_length = var->type->is_array() ? var->type->length : 1;
          for (unsigned i = 0; i < array_length; i++) {
-            for (unsigned j = 0; j < components; j++) {
-               bld.MOV(retype(offset(input, bld, components * i + j), type),
-                       offset(fs_reg(ATTR, var->data.location + i, type), bld, j));
+            for (unsigned j = 0; j < cols; j++) {
+               for (unsigned k = 0; k < elts; k++) {
+                  bld.MOV(offset(retype(input, type), bld,
+                                 components * i + elts * j + k),
+                          offset(fs_reg(ATTR, var->data.location + i, type),
+                                 bld, 4 * j + k));
+               }
             }
          }
          break;
       }
       case MESA_SHADER_GEOMETRY:
       case MESA_SHADER_COMPUTE:
+      case MESA_SHADER_TESS_CTRL:
+      case MESA_SHADER_TESS_EVAL:
          unreachable("fs_visitor not used for these stages yet.");
          break;
       case MESA_SHADER_FRAGMENT:
@@ -127,6 +119,8 @@ fs_visitor::nir_setup_outputs(nir_shader *shader)
 {
    brw_wm_prog_key *key = (brw_wm_prog_key*) this->key;
 
+   nir_outputs = bld.vgrf(BRW_REGISTER_TYPE_F, shader->num_outputs);
+
    foreach_list_typed(nir_variable, var, node, &shader->outputs) {
       fs_reg reg = offset(nir_outputs, bld, var->data.driver_location);
 
@@ -134,38 +128,45 @@ fs_visitor::nir_setup_outputs(nir_shader *shader)
          var->type->is_array() ? var->type->fields.array->vector_elements
                                : var->type->vector_elements;
 
-      if (stage == MESA_SHADER_VERTEX) {
+      switch (stage) {
+      case MESA_SHADER_VERTEX:
          for (int i = 0; i < ALIGN(type_size(var->type), 4) / 4; i++) {
             int output = var->data.location + i;
             this->outputs[output] = offset(reg, bld, 4 * i);
             this->output_components[output] = vector_elements;
          }
-      } else if (var->data.index > 0) {
-         assert(var->data.location == FRAG_RESULT_DATA0);
-         assert(var->data.index == 1);
-         this->dual_src_output = reg;
-         this->do_dual_src = true;
-      } else if (var->data.location == FRAG_RESULT_COLOR) {
-         /* Writing gl_FragColor outputs to all color regions. */
-         for (unsigned int i = 0; i < MAX2(key->nr_color_regions, 1); i++) {
-            this->outputs[i] = reg;
-            this->output_components[i] = 4;
-         }
-      } else if (var->data.location == FRAG_RESULT_DEPTH) {
-         this->frag_depth = reg;
-      } else if (var->data.location == FRAG_RESULT_SAMPLE_MASK) {
-         this->sample_mask = reg;
-      } else {
-         /* gl_FragData or a user-defined FS output */
-         assert(var->data.location >= FRAG_RESULT_DATA0 &&
-                var->data.location < FRAG_RESULT_DATA0 + BRW_MAX_DRAW_BUFFERS);
+         break;
+      case MESA_SHADER_FRAGMENT:
+         if (var->data.index > 0) {
+            assert(var->data.location == FRAG_RESULT_DATA0);
+            assert(var->data.index == 1);
+            this->dual_src_output = reg;
+            this->do_dual_src = true;
+         } else if (var->data.location == FRAG_RESULT_COLOR) {
+            /* Writing gl_FragColor outputs to all color regions. */
+            for (unsigned int i = 0; i < MAX2(key->nr_color_regions, 1); i++) {
+               this->outputs[i] = reg;
+               this->output_components[i] = 4;
+            }
+         } else if (var->data.location == FRAG_RESULT_DEPTH) {
+            this->frag_depth = reg;
+         } else if (var->data.location == FRAG_RESULT_SAMPLE_MASK) {
+            this->sample_mask = reg;
+         } else {
+            /* gl_FragData or a user-defined FS output */
+            assert(var->data.location >= FRAG_RESULT_DATA0 &&
+                   var->data.location < FRAG_RESULT_DATA0+BRW_MAX_DRAW_BUFFERS);
 
-         /* General color output. */
-         for (unsigned int i = 0; i < MAX2(1, var->type->length); i++) {
-            int output = var->data.location - FRAG_RESULT_DATA0 + i;
-            this->outputs[output] = offset(reg, bld, vector_elements * i);
-            this->output_components[output] = vector_elements;
+            /* General color output. */
+            for (unsigned int i = 0; i < MAX2(1, var->type->length); i++) {
+               int output = var->data.location - FRAG_RESULT_DATA0 + i;
+               this->outputs[output] = offset(reg, bld, vector_elements * i);
+               this->output_components[output] = vector_elements;
+            }
          }
+         break;
+      default:
+         unreachable("unhandled shader stage");
       }
    }
 }
@@ -173,18 +174,20 @@ fs_visitor::nir_setup_outputs(nir_shader *shader)
 void
 fs_visitor::nir_setup_uniforms(nir_shader *shader)
 {
-   uniforms = shader->num_uniforms;
    num_direct_uniforms = shader->num_direct_uniforms;
+
+   if (dispatch_width != 8)
+      return;
 
    /* We split the uniform register file in half.  The first half is
     * entirely direct uniforms.  The second half is indirect.
     */
-   param_size[0] = num_direct_uniforms;
+   if (num_direct_uniforms > 0)
+      param_size[0] = num_direct_uniforms;
    if (shader->num_uniforms > num_direct_uniforms)
       param_size[num_direct_uniforms] = shader->num_uniforms - num_direct_uniforms;
 
-   if (dispatch_width != 8)
-      return;
+   uniforms = shader->num_uniforms;
 
    if (shader_prog) {
       foreach_list_typed(nir_variable, var, node, &shader->uniforms) {
@@ -417,18 +420,12 @@ fs_visitor::nir_emit_if(nir_if *if_stmt)
 
    bld.emit(BRW_OPCODE_ENDIF);
 
-   if (!try_replace_with_sel() && devinfo->gen < 6) {
-      no16("Can't support (non-uniform) control flow on SIMD16\n");
-   }
+   try_replace_with_sel();
 }
 
 void
 fs_visitor::nir_emit_loop(nir_loop *loop)
 {
-   if (devinfo->gen < 6) {
-      no16("Can't support (non-uniform) control flow on SIMD16\n");
-   }
-
    bld.emit(BRW_OPCODE_DO);
 
    nir_emit_cf_list(&loop->body);
@@ -827,29 +824,11 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       bld.emit(SHADER_OPCODE_INT_QUOTIENT, result, op[0], op[1]);
       break;
 
-   case nir_op_uadd_carry: {
-      if (devinfo->gen >= 7)
-         no16("SIMD16 explicit accumulator operands unsupported\n");
+   case nir_op_uadd_carry:
+      unreachable("Should have been lowered by carry_to_arith().");
 
-      struct brw_reg acc = retype(brw_acc_reg(dispatch_width),
-                                  BRW_REGISTER_TYPE_UD);
-
-      bld.ADDC(bld.null_reg_ud(), op[0], op[1]);
-      bld.MOV(result, fs_reg(acc));
-      break;
-   }
-
-   case nir_op_usub_borrow: {
-      if (devinfo->gen >= 7)
-         no16("SIMD16 explicit accumulator operands unsupported\n");
-
-      struct brw_reg acc = retype(brw_acc_reg(dispatch_width),
-                                  BRW_REGISTER_TYPE_UD);
-
-      bld.SUBB(bld.null_reg_ud(), op[0], op[1]);
-      bld.MOV(result, fs_reg(acc));
-      break;
-   }
+   case nir_op_usub_borrow:
+      unreachable("Should have been lowered by borrow_to_arith().");
 
    case nir_op_umod:
       bld.emit(SHADER_OPCODE_INT_REMAINDER, result, op[0], op[1]);
@@ -960,10 +939,8 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       break;
 
    case nir_op_b2i:
-      bld.AND(result, op[0], fs_reg(1));
-      break;
    case nir_op_b2f:
-      bld.AND(retype(result, BRW_REGISTER_TYPE_UD), op[0], fs_reg(0x3f800000u));
+      bld.MOV(result, negate(op[0]));
       break;
 
    case nir_op_f2b:
@@ -1171,10 +1148,10 @@ fs_reg_for_nir_reg(fs_visitor *v, nir_register *nir_reg,
                    unsigned base_offset, nir_src *indirect)
 {
    fs_reg reg;
-   if (nir_reg->is_global)
-      reg = v->nir_globals[nir_reg->index];
-   else
-      reg = v->nir_locals[nir_reg->index];
+
+   assert(!nir_reg->is_global);
+
+   reg = v->nir_locals[nir_reg->index];
 
    reg = offset(reg, v->bld, base_offset * nir_reg->num_components);
    if (indirect) {
@@ -1275,25 +1252,46 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
    case nir_intrinsic_atomic_counter_inc:
    case nir_intrinsic_atomic_counter_dec:
    case nir_intrinsic_atomic_counter_read: {
-      unsigned surf_index = prog_data->binding_table.abo_start +
-                            (unsigned) instr->const_index[0];
-      fs_reg offset = fs_reg(get_nir_src(instr->src[0]));
+      using namespace surface_access;
 
+      /* Get the arguments of the atomic intrinsic. */
+      const fs_reg offset = get_nir_src(instr->src[0]);
+      const unsigned surface = (stage_prog_data->binding_table.abo_start +
+                                instr->const_index[0]);
+      fs_reg tmp;
+
+      /* Emit a surface read or atomic op. */
       switch (instr->intrinsic) {
-         case nir_intrinsic_atomic_counter_inc:
-            emit_untyped_atomic(BRW_AOP_INC, surf_index, dest, offset,
-                                fs_reg(), fs_reg());
-            break;
-         case nir_intrinsic_atomic_counter_dec:
-            emit_untyped_atomic(BRW_AOP_PREDEC, surf_index, dest, offset,
-                                fs_reg(), fs_reg());
-            break;
-         case nir_intrinsic_atomic_counter_read:
-            emit_untyped_surface_read(surf_index, dest, offset);
-            break;
-         default:
-            unreachable("Unreachable");
+      case nir_intrinsic_atomic_counter_read:
+         tmp = emit_untyped_read(bld, fs_reg(surface), offset, 1, 1);
+         break;
+
+      case nir_intrinsic_atomic_counter_inc:
+         tmp = emit_untyped_atomic(bld, fs_reg(surface), offset, fs_reg(),
+                                   fs_reg(), 1, 1, BRW_AOP_INC);
+         break;
+
+      case nir_intrinsic_atomic_counter_dec:
+         tmp = emit_untyped_atomic(bld, fs_reg(surface), offset, fs_reg(),
+                                   fs_reg(), 1, 1, BRW_AOP_PREDEC);
+         break;
+
+      default:
+         unreachable("Unreachable");
       }
+
+      /* Assign the result. */
+      bld.MOV(retype(dest, BRW_REGISTER_TYPE_UD), tmp);
+
+      /* Mark the surface as used. */
+      brw_mark_surface_used(stage_prog_data, surface);
+      break;
+   }
+
+   case nir_intrinsic_memory_barrier: {
+      const fs_reg tmp = bld.vgrf(BRW_REGISTER_TYPE_UD, 16 / dispatch_width);
+      bld.emit(SHADER_OPCODE_MEMORY_FENCE, tmp)
+         ->regs_written = 2;
       break;
    }
 
@@ -1398,7 +1396,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
          surf_index = vgrf(glsl_type::uint_type);
          bld.ADD(surf_index, get_nir_src(instr->src[0]),
                  fs_reg(stage_prog_data->binding_table.ubo_start));
-         bld.emit_uniformize(surf_index, surf_index);
+         surf_index = bld.emit_uniformize(surf_index);
 
          /* Assume this may touch any UBO. It would be nice to provide
           * a tighter bound, but the array information is already lowered away.
@@ -1481,11 +1479,9 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
    case nir_intrinsic_interp_var_at_centroid:
    case nir_intrinsic_interp_var_at_sample:
    case nir_intrinsic_interp_var_at_offset: {
-      /* in SIMD16 mode, the pixel interpolator returns coords interleaved
-       * 8 channels at a time, same as the barycentric coords presented in
-       * the FS payload. this requires a bit of extra work to support.
-       */
-      no16("interpolate_at_* not yet supported in SIMD16 mode.");
+      assert(stage == MESA_SHADER_FRAGMENT);
+
+      ((struct brw_wm_prog_data *) prog_data)->pulls_bary = true;
 
       fs_reg dst_xy = bld.vgrf(BRW_REGISTER_TYPE_F, 2);
 
@@ -1551,7 +1547,7 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
                            bld.SEL(offset(src, bld, i), itemp, fs_reg(7)));
             }
 
-            mlen = 2;
+            mlen = 2 * dispatch_width / 8;
             inst = bld.emit(FS_OPCODE_INTERPOLATE_AT_PER_SLOT_OFFSET, dst_xy, src,
                             fs_reg(0u));
          }
@@ -1563,7 +1559,8 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
       }
 
       inst->mlen = mlen;
-      inst->regs_written = 2; /* 2 floats per slot returned */
+      /* 2 floats per slot returned */
+      inst->regs_written = 2 * dispatch_width / 8;
       inst->pi_noperspective = instr->variables[0]->var->data.interpolation ==
                                INTERP_QUALIFIER_NOPERSPECTIVE;
 
@@ -1694,7 +1691,7 @@ fs_visitor::nir_emit_texture(const fs_builder &bld, nir_tex_instr *instr)
          /* Emit code to evaluate the actual indexing expression */
          sampler_reg = vgrf(glsl_type::uint_type);
          bld.ADD(sampler_reg, src, fs_reg(sampler));
-         bld.emit_uniformize(sampler_reg, sampler_reg);
+         sampler_reg = bld.emit_uniformize(sampler_reg);
          break;
       }
 

@@ -88,8 +88,7 @@ void r600_streamout_buffers_dirty(struct r600_common_context *rctx)
 		12 + /* flush_vgt_streamout */
 		num_bufs * 11; /* STRMOUT_BUFFER_UPDATE, BUFFER_SIZE */
 
-	begin->num_dw = 12 + /* flush_vgt_streamout */
-			3; /* VGT_STRMOUT_BUFFER_CONFIG */
+	begin->num_dw = 12; /* flush_vgt_streamout */
 
 	if (rctx->chip_class >= SI) {
 		begin->num_dw += num_bufs * 4; /* SET_CONTEXT_REG */
@@ -191,11 +190,6 @@ static void r600_emit_streamout_begin(struct r600_common_context *rctx, struct r
 	unsigned i, update_flags = 0;
 
 	r600_flush_vgt_streamout(rctx);
-
-	r600_write_context_reg(cs, rctx->chip_class >= EVERGREEN ?
-				       R_028B98_VGT_STRMOUT_BUFFER_CONFIG :
-				       R_028B20_VGT_STRMOUT_BUFFER_EN,
-			       rctx->streamout.enabled_mask);
 
 	for (i = 0; i < rctx->streamout.num_targets; i++) {
 		if (!t[i])
@@ -326,19 +320,40 @@ static bool r600_get_strmout_en(struct r600_common_context *rctx)
 static void r600_emit_streamout_enable(struct r600_common_context *rctx,
 				       struct r600_atom *atom)
 {
-	r600_write_context_reg(rctx->rings.gfx.cs,
-			       rctx->chip_class >= EVERGREEN ?
-				       R_028B94_VGT_STRMOUT_CONFIG :
-				       R_028AB0_VGT_STRMOUT_EN,
-			       S_028B94_STREAMOUT_0_EN(r600_get_strmout_en(rctx)));
+	unsigned strmout_config_reg = R_028AB0_VGT_STRMOUT_EN;
+	unsigned strmout_config_val = S_028B94_STREAMOUT_0_EN(r600_get_strmout_en(rctx));
+	unsigned strmout_buffer_reg = R_028B20_VGT_STRMOUT_BUFFER_EN;
+	unsigned strmout_buffer_val = rctx->streamout.hw_enabled_mask &
+				      rctx->streamout.enabled_stream_buffers_mask;
+
+	if (rctx->chip_class >= EVERGREEN) {
+		strmout_buffer_reg = R_028B98_VGT_STRMOUT_BUFFER_CONFIG;
+
+		strmout_config_reg = R_028B94_VGT_STRMOUT_CONFIG;
+		strmout_config_val |=
+			S_028B94_RAST_STREAM(0) |
+			S_028B94_STREAMOUT_1_EN(r600_get_strmout_en(rctx)) |
+			S_028B94_STREAMOUT_2_EN(r600_get_strmout_en(rctx)) |
+			S_028B94_STREAMOUT_3_EN(r600_get_strmout_en(rctx));
+	}
+	r600_write_context_reg(rctx->rings.gfx.cs, strmout_buffer_reg, strmout_buffer_val);
+	r600_write_context_reg(rctx->rings.gfx.cs, strmout_config_reg, strmout_config_val);
 }
 
 static void r600_set_streamout_enable(struct r600_common_context *rctx, bool enable)
 {
 	bool old_strmout_en = r600_get_strmout_en(rctx);
+	unsigned old_hw_enabled_mask = rctx->streamout.hw_enabled_mask;
 
 	rctx->streamout.streamout_enabled = enable;
-	if (old_strmout_en != r600_get_strmout_en(rctx))
+
+	rctx->streamout.hw_enabled_mask = rctx->streamout.enabled_mask |
+					  (rctx->streamout.enabled_mask << 4) |
+					  (rctx->streamout.enabled_mask << 8) |
+					  (rctx->streamout.enabled_mask << 12);
+
+	if ((old_strmout_en != r600_get_strmout_en(rctx)) ||
+            (old_hw_enabled_mask != rctx->streamout.hw_enabled_mask))
 		rctx->streamout.enable_atom.dirty = true;
 }
 
@@ -365,5 +380,5 @@ void r600_streamout_init(struct r600_common_context *rctx)
 	rctx->b.stream_output_target_destroy = r600_so_target_destroy;
 	rctx->streamout.begin_atom.emit = r600_emit_streamout_begin;
 	rctx->streamout.enable_atom.emit = r600_emit_streamout_enable;
-	rctx->streamout.enable_atom.num_dw = 3;
+	rctx->streamout.enable_atom.num_dw = 6;
 }

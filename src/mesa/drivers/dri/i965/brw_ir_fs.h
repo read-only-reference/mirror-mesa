@@ -48,6 +48,12 @@ public:
    bool equals(const fs_reg &r) const;
    bool is_contiguous() const;
 
+   /**
+    * Return the size in bytes of a single logical component of the
+    * register assuming the given execution width.
+    */
+   unsigned component_size(unsigned width) const;
+
    /** Smear a channel of the reg to all channels. */
    fs_reg &set_smear(unsigned subreg);
 
@@ -195,6 +201,7 @@ public:
    bool is_send_from_grf() const;
    bool is_partial_write() const;
    bool is_copy_payload(const brw::simple_allocator &grf_alloc) const;
+   unsigned components_read(unsigned i) const;
    int regs_read(int arg) const;
    bool can_do_source_mods(const struct brw_device_info *devinfo);
    bool has_side_effects() const;

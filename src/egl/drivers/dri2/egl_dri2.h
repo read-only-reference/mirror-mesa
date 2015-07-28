@@ -166,6 +166,7 @@ struct dri2_egl_display
    const __DRIrobustnessExtension *robustness;
    const __DRI2configQueryExtension *config;
    const __DRI2fenceExtension *fence;
+   const __DRI2rendererQueryExtension *rendererQuery;
    int                       fd;
 
    int                       own_device;
@@ -285,6 +286,8 @@ struct dri2_egl_config
    _EGLConfig         base;
    const __DRIconfig *dri_single_config;
    const __DRIconfig *dri_double_config;
+   const __DRIconfig *dri_srgb_single_config;
+   const __DRIconfig *dri_srgb_double_config;
 };
 
 struct dri2_egl_image
@@ -356,5 +359,9 @@ dri2_initialize_surfaceless(_EGLDriver *drv, _EGLDisplay *disp);
 
 void
 dri2_flush_drawable_for_swapbuffers(_EGLDisplay *disp, _EGLSurface *draw);
+
+const __DRIconfig *
+dri2_get_dri_config(struct dri2_egl_config *conf, EGLint surface_type,
+                    EGLenum colorspace);
 
 #endif /* EGL_DRI2_INCLUDED */

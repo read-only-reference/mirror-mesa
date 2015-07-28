@@ -79,17 +79,22 @@
 #define DBG_GS			(1 << 7)
 #define DBG_PS			(1 << 8)
 #define DBG_CS			(1 << 9)
+#define DBG_TCS			(1 << 10)
+#define DBG_TES			(1 << 11)
+#define DBG_NO_IR		(1 << 12)
+#define DBG_NO_TGSI		(1 << 13)
+#define DBG_NO_ASM		(1 << 14)
+/* Bits 21-31 are reserved for the r600g driver. */
 /* features */
-#define DBG_NO_ASYNC_DMA	(1 << 10)
-#define DBG_NO_HYPERZ		(1 << 11)
-#define DBG_NO_DISCARD_RANGE	(1 << 12)
-#define DBG_NO_2D_TILING	(1 << 13)
-#define DBG_NO_TILING		(1 << 14)
-#define DBG_SWITCH_ON_EOP	(1 << 15)
-#define DBG_FORCE_DMA		(1 << 16)
-#define DBG_PRECOMPILE		(1 << 17)
-#define DBG_INFO		(1 << 18)
-/* The maximum allowed bit is 20. */
+#define DBG_NO_ASYNC_DMA	(1llu << 32)
+#define DBG_NO_HYPERZ		(1llu << 33)
+#define DBG_NO_DISCARD_RANGE	(1llu << 34)
+#define DBG_NO_2D_TILING	(1llu << 35)
+#define DBG_NO_TILING		(1llu << 36)
+#define DBG_SWITCH_ON_EOP	(1llu << 37)
+#define DBG_FORCE_DMA		(1llu << 38)
+#define DBG_PRECOMPILE		(1llu << 39)
+#define DBG_INFO		(1llu << 40)
 
 #define R600_MAP_BUFFER_ALIGNMENT 64
 
@@ -127,9 +132,8 @@ struct radeon_shader_binary {
 	struct radeon_shader_reloc *relocs;
 	unsigned reloc_count;
 
-	/** Set to 1 if the disassembly for this binary has been dumped to
-	 *  stderr. */
-	int disassembled;
+	/** Disassembled shader in a string. */
+	char *disasm_string;
 };
 
 struct r600_resource {
@@ -214,7 +218,6 @@ struct r600_texture {
 	float				depth_clear_value;
 
 	bool				non_disp_tiling; /* R600-Cayman only */
-	unsigned			mipmap_shift;
 };
 
 struct r600_surface {
@@ -272,7 +275,7 @@ struct r600_common_screen {
 	enum chip_class			chip_class;
 	struct radeon_info		info;
 	struct r600_tiling_info		tiling_info;
-	unsigned			debug_flags;
+	uint64_t			debug_flags;
 	bool				has_cp_dma;
 	bool				has_streamout;
 
@@ -290,7 +293,7 @@ struct r600_common_screen {
 	pipe_thread			gpu_load_thread;
 	unsigned			gpu_load_counter_busy;
 	unsigned			gpu_load_counter_idle;
-	unsigned			gpu_load_stop_thread; /* bool */
+	volatile unsigned		gpu_load_stop_thread; /* bool */
 };
 
 /* This encapsulates a state or an operation which can emitted into the GPU
@@ -327,6 +330,10 @@ struct r600_streamout {
 	/* External state which comes from the vertex shader,
 	 * it must be set explicitly when binding a shader. */
 	unsigned			*stride_in_dw;
+	unsigned			enabled_stream_buffers_mask; /* stream0 buffers0-3 in 4 LSB */
+
+	/* The state of VGT_STRMOUT_BUFFER_(CONFIG|EN). */
+	unsigned			hw_enabled_mask;
 
 	/* The state of VGT_STRMOUT_(CONFIG|EN). */
 	struct r600_atom		enable_atom;
@@ -356,6 +363,7 @@ struct r600_common_context {
 	enum chip_class			chip_class;
 	struct r600_rings		rings;
 	unsigned			initial_gfx_cs_size;
+	unsigned			gpu_reset_counter;
 
 	struct u_upload_mgr		*uploader;
 	struct u_suballocator		*allocator_so_filled_size;
@@ -549,12 +557,12 @@ void cayman_emit_msaa_config(struct radeon_winsys_cs *cs, int nr_samples,
 
 /* Inline helpers. */
 
-static INLINE struct r600_resource *r600_resource(struct pipe_resource *r)
+static inline struct r600_resource *r600_resource(struct pipe_resource *r)
 {
 	return (struct r600_resource*)r;
 }
 
-static INLINE void
+static inline void
 r600_resource_reference(struct r600_resource **ptr, struct r600_resource *res)
 {
 	pipe_resource_reference((struct pipe_resource **)ptr,

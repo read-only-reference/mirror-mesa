@@ -415,6 +415,7 @@ struct brw_wm_prog_data {
    bool uses_pos_offset;
    bool uses_omask;
    bool uses_kill;
+   bool pulls_bary;
    uint32_t prog_offset_16;
 
    /**
@@ -868,11 +869,12 @@ struct intel_batchbuffer {
    drm_intel_bo *bo;
    /** Last BO submitted to the hardware.  Used for glFinish(). */
    drm_intel_bo *last_bo;
-   /** BO for post-sync nonzero writes for gen6 workaround. */
-   drm_intel_bo *workaround_bo;
 
+#ifdef DEBUG
    uint16_t emit, total;
-   uint16_t used, reserved_space;
+#endif
+   uint16_t reserved_space;
+   uint32_t *map_next;
    uint32_t *map;
    uint32_t *cpu_map;
 #define BATCH_SZ (8192*sizeof(uint32_t))
@@ -881,10 +883,8 @@ struct intel_batchbuffer {
    enum brw_gpu_ring ring;
    bool needs_sol_reset;
 
-   uint8_t pipe_controls_since_last_cs_stall;
-
    struct {
-      uint16_t used;
+      uint32_t *map_next;
       int reloc_count;
    } saved;
 };
@@ -1034,6 +1034,10 @@ struct brw_context
 
    drm_intel_context *hw_ctx;
 
+   /** BO for post-sync nonzero writes for gen6 workaround. */
+   drm_intel_bo *workaround_bo;
+   uint8_t pipe_controls_since_last_cs_stall;
+
    /**
     * Set of drm_intel_bo * that have been rendered to within this batchbuffer
     * and would need flushing before being used from another cache domain that
@@ -1130,6 +1134,7 @@ struct brw_context
    bool has_pln;
    bool no_simd8;
    bool use_rep_send;
+   bool use_resource_streamer;
 
    /**
     * Some versions of Gen hardware don't do centroid interpolation correctly
@@ -1236,12 +1241,12 @@ struct brw_context
     * Platform specific constants containing the maximum number of threads
     * for each pipeline stage.
     */
-   int max_vs_threads;
-   int max_hs_threads;
-   int max_ds_threads;
-   int max_gs_threads;
-   int max_wm_threads;
-   int max_cs_threads;
+   unsigned max_vs_threads;
+   unsigned max_hs_threads;
+   unsigned max_ds_threads;
+   unsigned max_gs_threads;
+   unsigned max_wm_threads;
+   unsigned max_cs_threads;
 
    /* BRW_NEW_URB_ALLOCATIONS:
     */
@@ -1392,6 +1397,12 @@ struct brw_context
       struct brw_stage_state base;
       struct brw_cs_prog_data *prog_data;
    } cs;
+
+   /* RS hardware binding table */
+   struct {
+      drm_intel_bo *bo;
+      uint32_t next_offset;
+   } hw_bt_pool;
 
    struct {
       uint32_t state_offset;
@@ -2000,6 +2011,10 @@ gen9_use_linear_1d_layout(const struct brw_context *brw,
                           const struct intel_mipmap_tree *mt);
 
 /* brw_pipe_control.c */
+int brw_init_pipe_control(struct brw_context *brw,
+			  const struct brw_device_info *info);
+void brw_fini_pipe_control(struct brw_context *brw);
+
 void brw_emit_pipe_control_flush(struct brw_context *brw, uint32_t flags);
 void brw_emit_pipe_control_write(struct brw_context *brw, uint32_t flags,
                                  drm_intel_bo *bo, uint32_t offset,

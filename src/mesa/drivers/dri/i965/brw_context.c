@@ -819,6 +819,12 @@ brwCreateContext(gl_api api,
       }
    }
 
+   if (brw_init_pipe_control(brw, devinfo)) {
+      *dri_ctx_error = __DRI_CTX_ERROR_NO_MEMORY;
+      intelDestroyContext(driContextPriv);
+      return false;
+   }
+
    brw_init_state(brw);
 
    intelInitExtensions(ctx);
@@ -864,6 +870,10 @@ brwCreateContext(gl_api api,
    brw->sf.viewport_transform_enable = true;
 
    brw->predicate.state = BRW_PREDICATE_STATE_RENDER;
+
+   brw->use_resource_streamer = screen->has_resource_streamer &&
+      (brw_env_var_as_boolean("INTEL_USE_HW_BT", false) ||
+       brw_env_var_as_boolean("INTEL_USE_GATHER", false));
 
    ctx->VertexProgram._MaintainTnlProgram = true;
    ctx->FragmentProgram._MaintainTexEnvProgram = true;
@@ -931,6 +941,10 @@ intelDestroyContext(__DRIcontext * driContextPriv)
    if (brw->wm.base.scratch_bo)
       drm_intel_bo_unreference(brw->wm.base.scratch_bo);
 
+   gen7_reset_hw_bt_pool_offsets(brw);
+   drm_intel_bo_unreference(brw->hw_bt_pool.bo);
+   brw->hw_bt_pool.bo = NULL;
+
    drm_intel_gem_context_destroy(brw->hw_ctx);
 
    if (ctx->swrast_context) {
@@ -942,6 +956,7 @@ intelDestroyContext(__DRIcontext * driContextPriv)
    if (ctx->swrast_context)
       _swrast_DestroyContext(&brw->ctx);
 
+   brw_fini_pipe_control(brw);
    intel_batchbuffer_free(brw);
 
    drm_intel_bo_unreference(brw->throttle_batch[1]);

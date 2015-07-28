@@ -121,14 +121,14 @@ get_tr_horizontal_align(uint32_t tr_mode, uint32_t cpp, bool is_src) {
       return 0;
 
    /* Compute array index. */
-   assert (bpp >= 8 && bpp <= 128 && is_power_of_two(bpp));
+   assert (bpp >= 8 && bpp <= 128 && _mesa_is_pow_two(bpp));
    i = ffs(bpp / 8) - 1;
 
    align = tr_mode == INTEL_MIPTREE_TRMODE_YF ?
            align_2d_yf[i] :
            4 * align_2d_yf[i];
 
-   assert(is_power_of_two(align));
+   assert(_mesa_is_pow_two(align));
 
    /* XY_FAST_COPY_BLT doesn't support horizontal alignment of 16. */
    if (align == 16)
@@ -150,14 +150,14 @@ get_tr_vertical_align(uint32_t tr_mode, uint32_t cpp, bool is_src) {
       return 0;
 
    /* Compute array index. */
-   assert (bpp >= 8 && bpp <= 128 && is_power_of_two(bpp));
+   assert (bpp >= 8 && bpp <= 128 && _mesa_is_pow_two(bpp));
    i = ffs(bpp / 8) - 1;
 
    align = tr_mode == INTEL_MIPTREE_TRMODE_YF ?
            align_2d_yf[i] :
            4 * align_2d_yf[i];
 
-   assert(is_power_of_two(align));
+   assert(_mesa_is_pow_two(align));
 
    /* XY_FAST_COPY_BLT doesn't support vertical alignments of 16 and 32. */
    if (align == 16 || align == 32)
@@ -176,9 +176,10 @@ get_tr_vertical_align(uint32_t tr_mode, uint32_t cpp, bool is_src) {
  * tiling state would leak into other unsuspecting applications (like the X
  * server).
  */
-static void
+static uint32_t *
 set_blitter_tiling(struct brw_context *brw,
-                   bool dst_y_tiled, bool src_y_tiled)
+                   bool dst_y_tiled, bool src_y_tiled,
+                   uint32_t *__map)
 {
    assert(brw->gen >= 6);
 
@@ -193,19 +194,19 @@ set_blitter_tiling(struct brw_context *brw,
    OUT_BATCH((BCS_SWCTRL_DST_Y | BCS_SWCTRL_SRC_Y) << 16 |
              (dst_y_tiled ? BCS_SWCTRL_DST_Y : 0) |
              (src_y_tiled ? BCS_SWCTRL_SRC_Y : 0));
+   return __map;
 }
+#define SET_BLITTER_TILING(...) __map = set_blitter_tiling(__VA_ARGS__, __map)
 
-#define BEGIN_BATCH_BLT_TILED(n, dst_y_tiled, src_y_tiled) do {         \
+#define BEGIN_BATCH_BLT_TILED(n, dst_y_tiled, src_y_tiled)              \
       BEGIN_BATCH_BLT(n + ((dst_y_tiled || src_y_tiled) ? 14 : 0));     \
       if (dst_y_tiled || src_y_tiled)                                   \
-         set_blitter_tiling(brw, dst_y_tiled, src_y_tiled);             \
-   } while (0)
+         SET_BLITTER_TILING(brw, dst_y_tiled, src_y_tiled)
 
-#define ADVANCE_BATCH_TILED(dst_y_tiled, src_y_tiled) do {              \
+#define ADVANCE_BATCH_TILED(dst_y_tiled, src_y_tiled)                   \
       if (dst_y_tiled || src_y_tiled)                                   \
-         set_blitter_tiling(brw, false, false);                         \
-      ADVANCE_BATCH();                                                  \
-   } while (0)
+         SET_BLITTER_TILING(brw, false, false);                         \
+      ADVANCE_BATCH()
 
 static int
 blt_pitch(struct intel_mipmap_tree *mt)

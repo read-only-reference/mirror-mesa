@@ -268,7 +268,11 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_SAMPLE_SHADING:
 	case PIPE_CAP_CLIP_HALFZ:
 	case PIPE_CAP_POLYGON_OFFSET_CLAMP:
+	case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
 		return 1;
+
+	case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
+		return rscreen->b.info.drm_major == 2 && rscreen->b.info.drm_minor >= 43;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
 		return !R600_BIG_ENDIAN && rscreen->b.info.has_userptr;
@@ -329,10 +333,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
 	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
-	case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
 	case PIPE_CAP_SAMPLER_VIEW_TARGET:
 	case PIPE_CAP_VERTEXID_NOBASE:
-	case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
+	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
 		return 0;
 
 	/* Stream output. */

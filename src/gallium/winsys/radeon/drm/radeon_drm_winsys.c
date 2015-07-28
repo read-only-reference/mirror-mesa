@@ -59,6 +59,10 @@
 
 #define RADEON_INFO_VA_UNMAP_WORKING	0x25
 
+#ifndef RADEON_INFO_GPU_RESET_COUNTER
+#define RADEON_INFO_GPU_RESET_COUNTER   0x26
+#endif
+
 static struct util_hash_table *fd_tab = NULL;
 pipe_static_mutex(fd_tab_mutex);
 
@@ -488,6 +492,10 @@ static void radeon_winsys_destroy(struct radeon_winsys *rws)
     if (ws->gen >= DRV_R600) {
         radeon_surface_manager_free(ws->surf_man);
     }
+
+    if (ws->fd)
+        close(ws->fd);
+
     FREE(rws);
 }
 
@@ -566,6 +574,10 @@ static uint64_t radeon_query_value(struct radeon_winsys *rws,
     case RADEON_CURRENT_MCLK:
         radeon_get_drm_value(ws->fd, RADEON_INFO_CURRENT_GPU_MCLK,
                              "current-gpu-mclk", (uint32_t*)&retval);
+        return retval;
+    case RADEON_GPU_RESET_COUNTER:
+        radeon_get_drm_value(ws->fd, RADEON_INFO_GPU_RESET_COUNTER,
+                             "gpu-reset-counter", (uint32_t*)&retval);
         return retval;
     }
     return 0;
@@ -700,7 +712,7 @@ radeon_drm_winsys_create(int fd, radeon_screen_create_t screen_create)
         return NULL;
     }
 
-    ws->fd = fd;
+    ws->fd = dup(fd);
 
     if (!do_winsys_init(ws))
         goto fail;
@@ -716,7 +728,7 @@ radeon_drm_winsys_create(int fd, radeon_screen_create_t screen_create)
         goto fail;
 
     if (ws->gen >= DRV_R600) {
-        ws->surf_man = radeon_surface_manager_new(fd);
+        ws->surf_man = radeon_surface_manager_new(ws->fd);
         if (!ws->surf_man)
             goto fail;
     }
@@ -757,7 +769,7 @@ radeon_drm_winsys_create(int fd, radeon_screen_create_t screen_create)
         return NULL;
     }
 
-    util_hash_table_set(fd_tab, intptr_to_pointer(fd), ws);
+    util_hash_table_set(fd_tab, intptr_to_pointer(ws->fd), ws);
 
     /* We must unlock the mutex once the winsys is fully initialized, so that
      * other threads attempting to create the winsys from the same fd will
@@ -774,6 +786,9 @@ fail:
         ws->kman->destroy(ws->kman);
     if (ws->surf_man)
         radeon_surface_manager_free(ws->surf_man);
+    if (ws->fd)
+        close(ws->fd);
+
     FREE(ws);
     return NULL;
 }

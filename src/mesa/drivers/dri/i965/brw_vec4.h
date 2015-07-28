@@ -47,10 +47,6 @@ extern "C" {
 #include "glsl/ir.h"
 
 
-struct brw_vec4_compile {
-   GLuint last_scratch; /**< measured in 32-byte (register size) units */
-};
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -77,7 +73,7 @@ class vec4_visitor : public backend_shader, public ir_visitor
 {
 public:
    vec4_visitor(const struct brw_compiler *compiler,
-                struct brw_vec4_compile *c,
+                void *log_data,
                 struct gl_program *prog,
                 const struct brw_vue_prog_key *key,
                 struct brw_vue_prog_data *prog_data,
@@ -103,7 +99,6 @@ public:
       return dst_reg(retype(brw_null_reg(), BRW_REGISTER_TYPE_UD));
    }
 
-   struct brw_vec4_compile * const c;
    const struct brw_vue_prog_key * const key;
    struct brw_vue_prog_data * const prog_data;
    unsigned int sanity_param_count;
@@ -181,9 +176,12 @@ public:
    void fail(const char *msg, ...);
 
    void setup_uniform_clipplane_values(gl_clip_plane *clip_planes);
+   virtual void setup_vector_uniform_values(const gl_constant_value *values,
+                                            unsigned n);
    void setup_uniform_values(ir_variable *ir);
    void setup_builtin_uniform_values(ir_variable *ir);
    int setup_uniforms(int payload_reg);
+
    bool reg_allocate_trivial();
    bool reg_allocate();
    void evaluate_spill_costs(float *spill_costs, bool *no_spill);
@@ -298,8 +296,11 @@ public:
    void emit_lrp(const dst_reg &dst,
                  const src_reg &x, const src_reg &y, const src_reg &a);
 
-   /** Copy any live channel from \p src to the first channel of \p dst. */
-   void emit_uniformize(const dst_reg &dst, const src_reg &src);
+   /**
+    * Copy any live channel from \p src to the first channel of the
+    * result.
+    */
+   src_reg emit_uniformize(const src_reg &src);
 
    void emit_block_move(dst_reg *dst, src_reg *src,
                         const struct glsl_type *type, brw_predicate predicate);
@@ -411,6 +412,8 @@ private:
    const bool no_spills;
 
    int shader_time_index;
+
+   unsigned last_scratch; /**< measured in 32-byte (register size) units */
 };
 
 

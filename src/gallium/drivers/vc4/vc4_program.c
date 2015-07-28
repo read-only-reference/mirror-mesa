@@ -23,13 +23,10 @@
  */
 
 #include <inttypes.h>
-#include "pipe/p_state.h"
 #include "util/u_format.h"
 #include "util/u_hash.h"
 #include "util/u_math.h"
 #include "util/u_memory.h"
-#include "util/u_pack_color.h"
-#include "util/format_srgb.h"
 #include "util/ralloc.h"
 #include "util/hash_table.h"
 #include "tgsi/tgsi_dump.h"
@@ -45,51 +42,8 @@
 #include "simpenrose/simpenrose.h"
 #endif
 
-struct vc4_key {
-        struct vc4_uncompiled_shader *shader_state;
-        struct {
-                enum pipe_format format;
-                unsigned compare_mode:1;
-                unsigned compare_func:3;
-                unsigned wrap_s:3;
-                unsigned wrap_t:3;
-                uint8_t swizzle[4];
-        } tex[VC4_MAX_TEXTURE_SAMPLERS];
-        uint8_t ucp_enables;
-};
-
-struct vc4_fs_key {
-        struct vc4_key base;
-        enum pipe_format color_format;
-        bool depth_enabled;
-        bool stencil_enabled;
-        bool stencil_twoside;
-        bool stencil_full_writemasks;
-        bool is_points;
-        bool is_lines;
-        bool alpha_test;
-        bool point_coord_upper_left;
-        bool light_twoside;
-        uint8_t alpha_test_func;
-        uint8_t logicop_func;
-        uint32_t point_sprite_mask;
-
-        struct pipe_rt_blend_state blend;
-};
-
-struct vc4_vs_key {
-        struct vc4_key base;
-
-        /**
-         * This is a proxy for the array of FS input semantics, which is
-         * larger than we would want to put in the key.
-         */
-        uint64_t compiled_fs_id;
-
-        enum pipe_format attr_formats[8];
-        bool is_coord;
-        bool per_vertex_point_size;
-};
+static struct qreg
+ntq_get_src(struct vc4_compile *c, nir_src src, int i);
 
 static void
 resize_qreg_array(struct vc4_compile *c,
@@ -113,10 +67,10 @@ resize_qreg_array(struct vc4_compile *c,
 }
 
 static struct qreg
-indirect_uniform_load(struct vc4_compile *c,
-                      struct qreg indirect_offset,
-                      unsigned offset)
+indirect_uniform_load(struct vc4_compile *c, nir_intrinsic_instr *intr)
 {
+        struct qreg indirect_offset = ntq_get_src(c, intr->src[0], 0);
+        uint32_t offset = intr->const_index[0];
         struct vc4_compiler_ubo_range *range = NULL;
         unsigned i;
         for (i = 0; i < c->num_uniform_ranges; i++) {
@@ -138,10 +92,6 @@ indirect_uniform_load(struct vc4_compile *c,
         };
 
         offset -= range->src_offset;
-        /* Translate the user's TGSI register index from the TGSI register
-         * base to a byte offset.
-         */
-        indirect_offset = qir_SHL(c, indirect_offset, qir_uniform_ui(c, 4));
 
         /* Adjust for where we stored the TGSI register base. */
         indirect_offset = qir_ADD(c, indirect_offset,
@@ -558,7 +508,7 @@ ntq_fsin(struct vc4_compile *c, struct qreg src)
         struct qreg scaled_x =
                 qir_FMUL(c,
                          src,
-                         qir_uniform_f(c, 1.0f / (M_PI * 2.0f)));
+                         qir_uniform_f(c, 1.0 / (M_PI * 2.0)));
 
         struct qreg x = qir_FADD(c,
                                  ntq_ffract(c, scaled_x),
@@ -756,26 +706,6 @@ emit_fragcoord_input(struct vc4_compile *c, int attr)
         c->inputs[attr * 4 + 3] = qir_RCP(c, qir_FRAG_W(c));
 }
 
-static void
-emit_point_coord_input(struct vc4_compile *c, int attr)
-{
-        if (c->point_x.file == QFILE_NULL) {
-                c->point_x = qir_uniform_f(c, 0.0);
-                c->point_y = qir_uniform_f(c, 0.0);
-        }
-
-        c->inputs[attr * 4 + 0] = c->point_x;
-        if (c->fs_key->point_coord_upper_left) {
-                c->inputs[attr * 4 + 1] = qir_FSUB(c,
-                                                   qir_uniform_f(c, 1.0),
-                                                   c->point_y);
-        } else {
-                c->inputs[attr * 4 + 1] = c->point_y;
-        }
-        c->inputs[attr * 4 + 2] = qir_uniform_f(c, 0.0);
-        c->inputs[attr * 4 + 3] = qir_uniform_f(c, 1.0);
-}
-
 static struct qreg
 emit_fragment_varying(struct vc4_compile *c, uint8_t semantic,
                       uint8_t index, uint8_t swizzle)
@@ -814,19 +744,6 @@ emit_fragment_input(struct vc4_compile *c, int attr,
                                               i);
                 c->num_inputs++;
         }
-}
-
-static void
-emit_face_input(struct vc4_compile *c, int attr)
-{
-        c->inputs[attr * 4 + 0] = qir_FSUB(c,
-                                           qir_uniform_f(c, 1.0),
-                                           qir_FMUL(c,
-                                                    qir_ITOF(c, qir_FRAG_REV_FLAG(c)),
-                                                    qir_uniform_f(c, 2.0)));
-        c->inputs[attr * 4 + 1] = qir_uniform_f(c, 0.0);
-        c->inputs[attr * 4 + 2] = qir_uniform_f(c, 0.0);
-        c->inputs[attr * 4 + 3] = qir_uniform_f(c, 1.0);
 }
 
 static void
@@ -1748,6 +1665,7 @@ ntq_setup_inputs(struct vc4_compile *c)
                 unsigned loc = var->data.driver_location;
 
                 assert(array_len == 1);
+                (void)array_len;
                 resize_qreg_array(c, &c->inputs, &c->inputs_array_size,
                                   (loc + 1) * 4);
 
@@ -1755,11 +1673,12 @@ ntq_setup_inputs(struct vc4_compile *c)
                         if (semantic_name == TGSI_SEMANTIC_POSITION) {
                                 emit_fragcoord_input(c, loc);
                         } else if (semantic_name == TGSI_SEMANTIC_FACE) {
-                                emit_face_input(c, loc);
+                                c->inputs[loc * 4 + 0] = qir_FRAG_REV_FLAG(c);
                         } else if (semantic_name == TGSI_SEMANTIC_GENERIC &&
                                    (c->fs_key->point_sprite_mask &
                                     (1 << semantic_index))) {
-                                emit_point_coord_input(c, loc);
+                                c->inputs[loc * 4 + 0] = c->point_x;
+                                c->inputs[loc * 4 + 1] = c->point_y;
                         } else {
                                 emit_fragment_input(c, loc,
                                                     semantic_name,
@@ -1782,6 +1701,13 @@ ntq_setup_outputs(struct vc4_compile *c)
                 unsigned loc = var->data.driver_location * 4;
 
                 assert(array_len == 1);
+                (void)array_len;
+
+                /* NIR hack to pass through
+                 * TGSI_PROPERTY_FS_COLOR0_WRITES_ALL_CBUFS */
+                if (semantic_name == TGSI_SEMANTIC_COLOR &&
+                    semantic_index == -1)
+                        semantic_index = 0;
 
                 for (int i = 0; i < 4; i++) {
                         add_output(c,
@@ -1866,36 +1792,26 @@ ntq_emit_intrinsic(struct vc4_compile *c, nir_intrinsic_instr *instr)
 
         switch (instr->intrinsic) {
         case nir_intrinsic_load_uniform:
-                for (int i = 0; i < instr->num_components; i++) {
-                        dest[i] = qir_uniform(c, QUNIFORM_UNIFORM,
-                                              instr->const_index[0] * 4 + i);
-                }
+                assert(instr->num_components == 1);
+                *dest = qir_uniform(c, QUNIFORM_UNIFORM, instr->const_index[0]);
                 break;
 
         case nir_intrinsic_load_uniform_indirect:
-                for (int i = 0; i < instr->num_components; i++) {
-                        dest[i] = indirect_uniform_load(c,
-                                                        ntq_get_src(c, instr->src[0], 0),
-                                                        (instr->const_index[0] *
-                                                         4 + i) * sizeof(float));
-                }
+                *dest = indirect_uniform_load(c, instr);
 
                 break;
 
         case nir_intrinsic_load_input:
-                for (int i = 0; i < instr->num_components; i++)
-                        dest[i] = c->inputs[instr->const_index[0] * 4 + i];
+                assert(instr->num_components == 1);
+                *dest = c->inputs[instr->const_index[0]];
 
                 break;
 
         case nir_intrinsic_store_output:
-                for (int i = 0; i < instr->num_components; i++) {
-                        c->outputs[instr->const_index[0] * 4 + i] =
-                                qir_MOV(c, ntq_get_src(c, instr->src[0], i));
-                }
-                c->num_outputs = MAX2(c->num_outputs,
-                                      instr->const_index[0] * 4 +
-                                      instr->num_components + 1);
+                assert(instr->num_components == 1);
+                c->outputs[instr->const_index[0]] =
+                        qir_MOV(c, ntq_get_src(c, instr->src[0], 0));
+                c->num_outputs = MAX2(c->num_outputs, instr->const_index[0] + 1);
                 break;
 
         case nir_intrinsic_discard:
@@ -2096,6 +2012,7 @@ vc4_shader_ntq(struct vc4_context *vc4, enum qstage stage,
         c->s = tgsi_to_nir(tokens, &nir_options);
         nir_opt_global_to_local(c->s);
         nir_convert_to_ssa(c->s);
+        vc4_nir_lower_io(c);
         nir_lower_idiv(c->s);
 
         vc4_optimize_nir(c->s);
@@ -2199,6 +2116,8 @@ copy_uniform_state_to_shader(struct vc4_compiled_shader *shader,
         memcpy(uinfo->contents, c->uniform_contents,
                count * sizeof(*uinfo->contents));
         uinfo->num_texture_samples = c->num_texture_samples;
+
+        vc4_set_shader_uniform_dirty_flags(shader);
 }
 
 static struct vc4_compiled_shader *
@@ -2271,9 +2190,8 @@ vc4_get_compiled_shader(struct vc4_context *vc4, enum qstage stage,
         }
 
         copy_uniform_state_to_shader(shader, c);
-        shader->bo = vc4_bo_alloc_mem(vc4->screen, c->qpu_insts,
-                                      c->qpu_inst_count * sizeof(uint64_t),
-                                      "code");
+        shader->bo = vc4_bo_alloc_shader(vc4->screen, c->qpu_insts,
+                                         c->qpu_inst_count * sizeof(uint64_t));
 
         /* Copy the compiler UBO range state to the compiled shader, dropping
          * out arrays that were never referenced by an indirect load.
@@ -2300,10 +2218,12 @@ vc4_get_compiled_shader(struct vc4_context *vc4, enum qstage stage,
                 }
         }
         if (shader->ubo_size) {
-                fprintf(stderr, "SHADER-DB: %s prog %d/%d: %d UBO uniforms\n",
-                        qir_get_stage_name(c->stage),
-                        c->program_id, c->variant_id,
-                        shader->ubo_size / 4);
+                if (vc4_debug & VC4_DEBUG_SHADERDB) {
+                        fprintf(stderr, "SHADER-DB: %s prog %d/%d: %d UBO uniforms\n",
+                                qir_get_stage_name(c->stage),
+                                c->program_id, c->variant_id,
+                                shader->ubo_size / 4);
+                }
         }
 
         qir_compile_destroy(c);
@@ -2433,9 +2353,20 @@ vc4_update_compiled_vs(struct vc4_context *vc4, uint8_t prim_mode)
                 (prim_mode == PIPE_PRIM_POINTS &&
                  vc4->rasterizer->base.point_size_per_vertex);
 
-        vc4->prog.vs = vc4_get_compiled_shader(vc4, QSTAGE_VERT, &key->base);
+        struct vc4_compiled_shader *vs =
+                vc4_get_compiled_shader(vc4, QSTAGE_VERT, &key->base);
+        if (vs != vc4->prog.vs) {
+                vc4->prog.vs = vs;
+                vc4->dirty |= VC4_DIRTY_COMPILED_VS;
+        }
+
         key->is_coord = true;
-        vc4->prog.cs = vc4_get_compiled_shader(vc4, QSTAGE_COORD, &key->base);
+        struct vc4_compiled_shader *cs =
+                vc4_get_compiled_shader(vc4, QSTAGE_COORD, &key->base);
+        if (cs != vc4->prog.cs) {
+                vc4->prog.cs = cs;
+                vc4->dirty |= VC4_DIRTY_COMPILED_CS;
+        }
 }
 
 void
@@ -2500,305 +2431,6 @@ vc4_shader_state_delete(struct pipe_context *pctx, void *hwcso)
                 free((void *)so->twoside_tokens);
         free((void *)so->base.tokens);
         free(so);
-}
-
-static uint32_t translate_wrap(uint32_t p_wrap, bool using_nearest)
-{
-        switch (p_wrap) {
-        case PIPE_TEX_WRAP_REPEAT:
-                return 0;
-        case PIPE_TEX_WRAP_CLAMP_TO_EDGE:
-                return 1;
-        case PIPE_TEX_WRAP_MIRROR_REPEAT:
-                return 2;
-        case PIPE_TEX_WRAP_CLAMP_TO_BORDER:
-                return 3;
-        case PIPE_TEX_WRAP_CLAMP:
-                return (using_nearest ? 1 : 3);
-        default:
-                fprintf(stderr, "Unknown wrap mode %d\n", p_wrap);
-                assert(!"not reached");
-                return 0;
-        }
-}
-
-static void
-write_texture_p0(struct vc4_context *vc4,
-                 struct vc4_texture_stateobj *texstate,
-                 uint32_t unit)
-{
-        struct pipe_sampler_view *texture = texstate->textures[unit];
-        struct vc4_resource *rsc = vc4_resource(texture->texture);
-
-        cl_reloc(vc4, &vc4->uniforms, rsc->bo,
-                 VC4_SET_FIELD(rsc->slices[0].offset >> 12, VC4_TEX_P0_OFFSET) |
-                 VC4_SET_FIELD(texture->u.tex.last_level -
-                               texture->u.tex.first_level, VC4_TEX_P0_MIPLVLS) |
-                 VC4_SET_FIELD(texture->target == PIPE_TEXTURE_CUBE,
-                               VC4_TEX_P0_CMMODE) |
-                 VC4_SET_FIELD(rsc->vc4_format & 15, VC4_TEX_P0_TYPE));
-}
-
-static void
-write_texture_p1(struct vc4_context *vc4,
-                 struct vc4_texture_stateobj *texstate,
-                 uint32_t unit)
-{
-        struct pipe_sampler_view *texture = texstate->textures[unit];
-        struct vc4_resource *rsc = vc4_resource(texture->texture);
-        struct pipe_sampler_state *sampler = texstate->samplers[unit];
-        static const uint8_t minfilter_map[6] = {
-                VC4_TEX_P1_MINFILT_NEAR_MIP_NEAR,
-                VC4_TEX_P1_MINFILT_LIN_MIP_NEAR,
-                VC4_TEX_P1_MINFILT_NEAR_MIP_LIN,
-                VC4_TEX_P1_MINFILT_LIN_MIP_LIN,
-                VC4_TEX_P1_MINFILT_NEAREST,
-                VC4_TEX_P1_MINFILT_LINEAR,
-        };
-        static const uint32_t magfilter_map[] = {
-                [PIPE_TEX_FILTER_NEAREST] = VC4_TEX_P1_MAGFILT_NEAREST,
-                [PIPE_TEX_FILTER_LINEAR] = VC4_TEX_P1_MAGFILT_LINEAR,
-        };
-
-        bool either_nearest =
-                (sampler->mag_img_filter == PIPE_TEX_MIPFILTER_NEAREST ||
-                 sampler->min_img_filter == PIPE_TEX_MIPFILTER_NEAREST);
-
-        cl_aligned_u32(&vc4->uniforms,
-               VC4_SET_FIELD(rsc->vc4_format >> 4, VC4_TEX_P1_TYPE4) |
-               VC4_SET_FIELD(texture->texture->height0 & 2047,
-                             VC4_TEX_P1_HEIGHT) |
-               VC4_SET_FIELD(texture->texture->width0 & 2047,
-                             VC4_TEX_P1_WIDTH) |
-               VC4_SET_FIELD(magfilter_map[sampler->mag_img_filter],
-                             VC4_TEX_P1_MAGFILT) |
-               VC4_SET_FIELD(minfilter_map[sampler->min_mip_filter * 2 +
-                                           sampler->min_img_filter],
-                             VC4_TEX_P1_MINFILT) |
-               VC4_SET_FIELD(translate_wrap(sampler->wrap_s, either_nearest),
-                             VC4_TEX_P1_WRAP_S) |
-               VC4_SET_FIELD(translate_wrap(sampler->wrap_t, either_nearest),
-                             VC4_TEX_P1_WRAP_T));
-}
-
-static void
-write_texture_p2(struct vc4_context *vc4,
-                 struct vc4_texture_stateobj *texstate,
-                 uint32_t data)
-{
-        uint32_t unit = data & 0xffff;
-        struct pipe_sampler_view *texture = texstate->textures[unit];
-        struct vc4_resource *rsc = vc4_resource(texture->texture);
-
-        cl_aligned_u32(&vc4->uniforms,
-               VC4_SET_FIELD(VC4_TEX_P2_PTYPE_CUBE_MAP_STRIDE,
-                             VC4_TEX_P2_PTYPE) |
-               VC4_SET_FIELD(rsc->cube_map_stride >> 12, VC4_TEX_P2_CMST) |
-               VC4_SET_FIELD((data >> 16) & 1, VC4_TEX_P2_BSLOD));
-}
-
-
-#define SWIZ(x,y,z,w) {          \
-        UTIL_FORMAT_SWIZZLE_##x, \
-        UTIL_FORMAT_SWIZZLE_##y, \
-        UTIL_FORMAT_SWIZZLE_##z, \
-        UTIL_FORMAT_SWIZZLE_##w  \
-}
-
-static void
-write_texture_border_color(struct vc4_context *vc4,
-                           struct vc4_texture_stateobj *texstate,
-                           uint32_t unit)
-{
-        struct pipe_sampler_state *sampler = texstate->samplers[unit];
-        struct pipe_sampler_view *texture = texstate->textures[unit];
-        struct vc4_resource *rsc = vc4_resource(texture->texture);
-        union util_color uc;
-
-        const struct util_format_description *tex_format_desc =
-                util_format_description(texture->format);
-
-        float border_color[4];
-        for (int i = 0; i < 4; i++)
-                border_color[i] = sampler->border_color.f[i];
-        if (util_format_is_srgb(texture->format)) {
-                for (int i = 0; i < 3; i++)
-                        border_color[i] =
-                                util_format_linear_to_srgb_float(border_color[i]);
-        }
-
-        /* Turn the border color into the layout of channels that it would
-         * have when stored as texture contents.
-         */
-        float storage_color[4];
-        util_format_unswizzle_4f(storage_color,
-                                 border_color,
-                                 tex_format_desc->swizzle);
-
-        /* Now, pack so that when the vc4_format-sampled texture contents are
-         * replaced with our border color, the vc4_get_format_swizzle()
-         * swizzling will get the right channels.
-         */
-        if (util_format_is_depth_or_stencil(texture->format)) {
-                uc.ui[0] = util_pack_z(PIPE_FORMAT_Z24X8_UNORM,
-                                       sampler->border_color.f[0]) << 8;
-        } else {
-                switch (rsc->vc4_format) {
-                default:
-                case VC4_TEXTURE_TYPE_RGBA8888:
-                        util_pack_color(storage_color,
-                                        PIPE_FORMAT_R8G8B8A8_UNORM, &uc);
-                        break;
-                case VC4_TEXTURE_TYPE_RGBA4444:
-                        util_pack_color(storage_color,
-                                        PIPE_FORMAT_A8B8G8R8_UNORM, &uc);
-                        break;
-                case VC4_TEXTURE_TYPE_RGB565:
-                        util_pack_color(storage_color,
-                                        PIPE_FORMAT_B8G8R8A8_UNORM, &uc);
-                        break;
-                case VC4_TEXTURE_TYPE_ALPHA:
-                        uc.ui[0] = float_to_ubyte(storage_color[0]) << 24;
-                        break;
-                case VC4_TEXTURE_TYPE_LUMALPHA:
-                        uc.ui[0] = ((float_to_ubyte(storage_color[1]) << 24) |
-                                    (float_to_ubyte(storage_color[0]) << 0));
-                        break;
-                }
-        }
-
-        cl_aligned_u32(&vc4->uniforms, uc.ui[0]);
-}
-
-static uint32_t
-get_texrect_scale(struct vc4_texture_stateobj *texstate,
-                  enum quniform_contents contents,
-                  uint32_t data)
-{
-        struct pipe_sampler_view *texture = texstate->textures[data];
-        uint32_t dim;
-
-        if (contents == QUNIFORM_TEXRECT_SCALE_X)
-                dim = texture->texture->width0;
-        else
-                dim = texture->texture->height0;
-
-        return fui(1.0f / dim);
-}
-
-static struct vc4_bo *
-vc4_upload_ubo(struct vc4_context *vc4, struct vc4_compiled_shader *shader,
-               const uint32_t *gallium_uniforms)
-{
-        if (!shader->ubo_size)
-                return NULL;
-
-        struct vc4_bo *ubo = vc4_bo_alloc(vc4->screen, shader->ubo_size, "ubo");
-        uint32_t *data = vc4_bo_map(ubo);
-        for (uint32_t i = 0; i < shader->num_ubo_ranges; i++) {
-                memcpy(data + shader->ubo_ranges[i].dst_offset,
-                       gallium_uniforms + shader->ubo_ranges[i].src_offset,
-                       shader->ubo_ranges[i].size);
-        }
-
-        return ubo;
-}
-
-void
-vc4_write_uniforms(struct vc4_context *vc4, struct vc4_compiled_shader *shader,
-                   struct vc4_constbuf_stateobj *cb,
-                   struct vc4_texture_stateobj *texstate)
-{
-        struct vc4_shader_uniform_info *uinfo = &shader->uniforms;
-        const uint32_t *gallium_uniforms = cb->cb[0].user_buffer;
-        struct vc4_bo *ubo = vc4_upload_ubo(vc4, shader, gallium_uniforms);
-
-        cl_ensure_space(&vc4->uniforms, (uinfo->count +
-                                         uinfo->num_texture_samples) * 4);
-
-        cl_start_shader_reloc(&vc4->uniforms, uinfo->num_texture_samples);
-
-        for (int i = 0; i < uinfo->count; i++) {
-
-                switch (uinfo->contents[i]) {
-                case QUNIFORM_CONSTANT:
-                        cl_aligned_u32(&vc4->uniforms, uinfo->data[i]);
-                        break;
-                case QUNIFORM_UNIFORM:
-                        cl_aligned_u32(&vc4->uniforms,
-                                       gallium_uniforms[uinfo->data[i]]);
-                        break;
-                case QUNIFORM_VIEWPORT_X_SCALE:
-                        cl_aligned_f(&vc4->uniforms, vc4->viewport.scale[0] * 16.0f);
-                        break;
-                case QUNIFORM_VIEWPORT_Y_SCALE:
-                        cl_aligned_f(&vc4->uniforms, vc4->viewport.scale[1] * 16.0f);
-                        break;
-
-                case QUNIFORM_VIEWPORT_Z_OFFSET:
-                        cl_aligned_f(&vc4->uniforms, vc4->viewport.translate[2]);
-                        break;
-                case QUNIFORM_VIEWPORT_Z_SCALE:
-                        cl_aligned_f(&vc4->uniforms, vc4->viewport.scale[2]);
-                        break;
-
-                case QUNIFORM_USER_CLIP_PLANE:
-                        cl_aligned_f(&vc4->uniforms,
-                                     vc4->clip.ucp[uinfo->data[i] / 4][uinfo->data[i] % 4]);
-                        break;
-
-                case QUNIFORM_TEXTURE_CONFIG_P0:
-                        write_texture_p0(vc4, texstate, uinfo->data[i]);
-                        break;
-
-                case QUNIFORM_TEXTURE_CONFIG_P1:
-                        write_texture_p1(vc4, texstate, uinfo->data[i]);
-                        break;
-
-                case QUNIFORM_TEXTURE_CONFIG_P2:
-                        write_texture_p2(vc4, texstate, uinfo->data[i]);
-                        break;
-
-                case QUNIFORM_UBO_ADDR:
-                        cl_aligned_reloc(vc4, &vc4->uniforms, ubo, 0);
-                        break;
-
-                case QUNIFORM_TEXTURE_BORDER_COLOR:
-                        write_texture_border_color(vc4, texstate, uinfo->data[i]);
-                        break;
-
-                case QUNIFORM_TEXRECT_SCALE_X:
-                case QUNIFORM_TEXRECT_SCALE_Y:
-                        cl_aligned_u32(&vc4->uniforms,
-                                       get_texrect_scale(texstate,
-                                                         uinfo->contents[i],
-                                                         uinfo->data[i]));
-                        break;
-
-                case QUNIFORM_BLEND_CONST_COLOR:
-                        cl_aligned_f(&vc4->uniforms,
-                                     CLAMP(vc4->blend_color.color[uinfo->data[i]], 0, 1));
-                        break;
-
-                case QUNIFORM_STENCIL:
-                        cl_aligned_u32(&vc4->uniforms,
-                                       vc4->zsa->stencil_uniforms[uinfo->data[i]] |
-                                       (uinfo->data[i] <= 1 ?
-                                        (vc4->stencil_ref.ref_value[uinfo->data[i]] << 8) :
-                                        0));
-                        break;
-
-                case QUNIFORM_ALPHA_REF:
-                        cl_aligned_f(&vc4->uniforms,
-                                     vc4->zsa->base.alpha.ref_value);
-                        break;
-                }
-#if 0
-                uint32_t written_val = *(uint32_t *)(vc4->uniforms.next - 4);
-                fprintf(stderr, "%p: %d / 0x%08x (%f)\n",
-                        shader, i, written_val, uif(written_val));
-#endif
-        }
 }
 
 static void

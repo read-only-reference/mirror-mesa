@@ -465,6 +465,7 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
    case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
    case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
+   case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -673,13 +674,6 @@ ilo_screen_fence_finish(struct pipe_screen *screen,
    return signaled;
 }
 
-static boolean
-ilo_screen_fence_signalled(struct pipe_screen *screen,
-                           struct pipe_fence_handle *fence)
-{
-   return ilo_screen_fence_finish(screen, fence, 0);
-}
-
 /**
  * Create a fence for \p bo.  When \p bo is not NULL, it must be submitted
  * before waited on or checked.
@@ -746,7 +740,6 @@ ilo_screen_create(struct intel_winsys *ws)
    is->base.flush_frontbuffer = NULL;
 
    is->base.fence_reference = ilo_screen_fence_reference;
-   is->base.fence_signalled = ilo_screen_fence_signalled;
    is->base.fence_finish = ilo_screen_fence_finish;
 
    is->base.get_driver_query_info = NULL;

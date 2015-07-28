@@ -64,6 +64,22 @@ namespace brw {
       }
 
       /**
+       * Construct an fs_builder that inserts instructions into \p shader
+       * before instruction \p inst in basic block \p block.  The default
+       * execution controls and debug annotation are initialized from the
+       * instruction passed as argument.
+       */
+      fs_builder(backend_shader *shader, bblock_t *block, fs_inst *inst) :
+         shader(shader), block(block), cursor(inst),
+         _dispatch_width(inst->exec_size),
+         _group(inst->force_sechalf ? 8 : 0),
+         force_writemask_all(inst->force_writemask_all)
+      {
+         annotation.str = inst->annotation;
+         annotation.ir = inst->ir;
+      }
+
+      /**
        * Construct an fs_builder that inserts instructions before \p cursor in
        * basic block \p block, inheriting other code generation parameters
        * from this.
@@ -99,8 +115,8 @@ namespace brw {
       fs_builder
       group(unsigned n, unsigned i) const
       {
-         assert(n <= dispatch_width() &&
-                i < dispatch_width() / n);
+         assert(force_writemask_all ||
+                (n <= dispatch_width() && i < dispatch_width() / n));
          fs_builder bld = *this;
          bld._dispatch_width = n;
          bld._group += i * n;
@@ -160,10 +176,15 @@ namespace brw {
       dst_reg
       vgrf(enum brw_reg_type type, unsigned n = 1) const
       {
-         return dst_reg(GRF, shader->alloc.allocate(
-                           DIV_ROUND_UP(n * type_sz(type) * dispatch_width(),
-                                        REG_SIZE)),
-                        type);
+         assert(dispatch_width() <= 32);
+
+         if (n > 0)
+            return dst_reg(GRF, shader->alloc.allocate(
+                              DIV_ROUND_UP(n * type_sz(type) * dispatch_width(),
+                                           REG_SIZE)),
+                           type);
+         else
+            return retype(null_reg_ud(), type);
       }
 
       /**
@@ -307,11 +328,23 @@ namespace brw {
       }
 
       /**
+       * Create and insert an instruction with a variable number of sources
+       * into the program.
+       */
+      instruction *
+      emit(enum opcode opcode, const dst_reg &dst, const src_reg srcs[],
+           unsigned n) const
+      {
+         return emit(instruction(opcode, dispatch_width(), dst, srcs, n));
+      }
+
+      /**
        * Insert a preallocated instruction into the program.
        */
       instruction *
       emit(instruction *inst) const
       {
+         assert(inst->exec_size <= 32);
          assert(inst->exec_size == dispatch_width() ||
                 force_writemask_all);
          assert(_group == 0 || _group == 8);
@@ -350,17 +383,19 @@ namespace brw {
       }
 
       /**
-       * Copy any live channel from \p src to the first channel of \p dst.
+       * Copy any live channel from \p src to the first channel of the result.
        */
-      void
-      emit_uniformize(const dst_reg &dst, const src_reg &src) const
+      src_reg
+      emit_uniformize(const src_reg &src) const
       {
          const fs_builder ubld = exec_all();
-         const dst_reg chan_index = vgrf(BRW_REGISTER_TYPE_UD);
+         const dst_reg chan_index = component(vgrf(BRW_REGISTER_TYPE_UD), 0);
+         const dst_reg dst = component(vgrf(src.type), 0);
 
-         ubld.emit(SHADER_OPCODE_FIND_LIVE_CHANNEL, component(chan_index, 0));
-         ubld.emit(SHADER_OPCODE_BROADCAST, component(dst, 0),
-                   src, component(chan_index, 0));
+         ubld.emit(SHADER_OPCODE_FIND_LIVE_CHANNEL, chan_index);
+         ubld.emit(SHADER_OPCODE_BROADCAST, dst, src, chan_index);
+
+         return src_reg(dst);
       }
 
       /**
@@ -516,9 +551,7 @@ namespace brw {
       LOAD_PAYLOAD(const dst_reg &dst, const src_reg *src,
                    unsigned sources, unsigned header_size) const
       {
-         instruction *inst = emit(instruction(SHADER_OPCODE_LOAD_PAYLOAD,
-                                              dispatch_width(), dst,
-                                              src, sources));
+         instruction *inst = emit(SHADER_OPCODE_LOAD_PAYLOAD, dst, src, sources);
          inst->header_size = header_size;
          inst->regs_written = header_size +
                               (sources - header_size) * (dispatch_width() / 8);

@@ -46,7 +46,7 @@
 static void dump_info(struct ir3_shader_variant *so, const char *str)
 {
 	uint32_t *bin;
-	const char *type = (so->type == SHADER_VERTEX) ? "VERT" : "FRAG";
+	const char *type = ir3_shader_stage(so->shader);
 	// TODO make gpu_id configurable on cmdline
 	bin = ir3_shader_assemble(so, 320);
 	debug_printf("; %s: %s\n", type, str);
@@ -93,8 +93,7 @@ static void print_usage(void)
 	printf("    --saturate-s MASK - bitmask of samplers to saturate S coord\n");
 	printf("    --saturate-t MASK - bitmask of samplers to saturate T coord\n");
 	printf("    --saturate-r MASK - bitmask of samplers to saturate R coord\n");
-	printf("    --nocp            - disable copy propagation\n");
-	printf("    --nir             - use NIR compiler\n");
+	printf("    --stream-out      - enable stream-out (aka transform feedback)\n");
 	printf("    --help            - show this message\n");
 }
 
@@ -106,12 +105,16 @@ int main(int argc, char **argv)
 	struct tgsi_parse_context parse;
 	struct ir3_compiler *compiler;
 	struct ir3_shader_variant v;
+	struct ir3_shader s;
 	struct ir3_shader_key key = {};
 	const char *info;
 	void *ptr;
 	size_t size;
 
 	fd_mesa_debug |= FD_DBG_DISASM;
+
+	memset(&s, 0, sizeof(s));
+	memset(&v, 0, sizeof(v));
 
 	/* cmdline args which impact shader variant get spit out in a
 	 * comment on the first line..  a quick/dirty way to preserve
@@ -169,6 +172,24 @@ int main(int argc, char **argv)
 			continue;
 		}
 
+		if (!strcmp(argv[n], "--stream-out")) {
+			struct pipe_stream_output_info *so = &s.stream_output;
+			debug_printf(" %s", argv[n]);
+			/* TODO more dynamic config based on number of outputs, etc
+			 * rather than just hard-code for first output:
+			 */
+			so->num_outputs = 1;
+			so->stride[0] = 4;
+			so->output[0].register_index = 0;
+			so->output[0].start_component = 0;
+			so->output[0].num_components = 4;
+			so->output[0].output_buffer = 0;
+			so->output[0].dst_offset = 2;
+			so->output[0].stream = 0;
+			n++;
+			continue;
+		}
+
 		if (!strcmp(argv[n], "--help")) {
 			print_usage();
 			return 0;
@@ -179,9 +200,6 @@ int main(int argc, char **argv)
 	debug_printf("\n");
 
 	filename = argv[n];
-
-	memset(&v, 0, sizeof(v));
-	v.key = key;
 
 	ret = read_file(filename, &ptr, &size);
 	if (ret) {
@@ -195,16 +213,21 @@ int main(int argc, char **argv)
 	if (!tgsi_text_translate(ptr, toks, Elements(toks)))
 		errx(1, "could not parse `%s'", filename);
 
+	s.tokens = toks;
+
+	v.key = key;
+	v.shader = &s;
+
 	tgsi_parse_init(&parse, toks);
 	switch (parse.FullHeader.Processor.Processor) {
 	case TGSI_PROCESSOR_FRAGMENT:
-		v.type = SHADER_FRAGMENT;
+		s.type = v.type = SHADER_FRAGMENT;
 		break;
 	case TGSI_PROCESSOR_VERTEX:
-		v.type = SHADER_VERTEX;
+		s.type = v.type = SHADER_VERTEX;
 		break;
 	case TGSI_PROCESSOR_COMPUTE:
-		v.type = SHADER_COMPUTE;
+		s.type = v.type = SHADER_COMPUTE;
 		break;
 	}
 
@@ -212,7 +235,7 @@ int main(int argc, char **argv)
 	compiler = ir3_compiler_create(320);
 
 	info = "NIR compiler";
-	ret = ir3_compile_shader_nir(compiler, &v, toks, key);
+	ret = ir3_compile_shader_nir(compiler, &v);
 	if (ret) {
 		fprintf(stderr, "compiler failed!\n");
 		return ret;

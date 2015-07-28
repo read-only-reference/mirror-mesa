@@ -603,6 +603,9 @@ type_size(const struct glsl_type *type)
 	 size += type_size(type->fields.structure[i].type);
       }
       return size;
+   case GLSL_TYPE_SUBROUTINE:
+      return 1;
+
    case GLSL_TYPE_SAMPLER:
       /* Samplers take up no register space, since they're baked in at
        * link time.
@@ -667,6 +670,21 @@ dst_reg::dst_reg(class vec4_visitor *v, const struct glsl_type *type)
    this->type = brw_type_for_base_type(type);
 }
 
+void
+vec4_visitor::setup_vector_uniform_values(const gl_constant_value *values,
+                                          unsigned n)
+{
+   static const gl_constant_value zero = { 0 };
+
+   for (unsigned i = 0; i < n; ++i)
+      stage_prog_data->param[4 * uniforms + i] = &values[i];
+
+   for (unsigned i = n; i < 4; ++i)
+      stage_prog_data->param[4 * uniforms + i] = &zero;
+
+   uniform_vector_size[uniforms++] = n;
+}
+
 /* Our support for uniforms is piggy-backed on the struct
  * gl_fragment_program, because that's where the values actually
  * get stored, rather than in some global gl_shader_program uniform
@@ -696,26 +714,13 @@ vec4_visitor::setup_uniform_values(ir_variable *ir)
          continue;
       }
 
-      gl_constant_value *components = storage->storage;
-      unsigned vector_count = (MAX2(storage->array_elements, 1) *
-                               storage->type->matrix_columns);
+      const unsigned vector_count = (MAX2(storage->array_elements, 1) *
+                                     storage->type->matrix_columns);
+      const unsigned vector_size = storage->type->vector_elements;
 
-      for (unsigned s = 0; s < vector_count; s++) {
-         assert(uniforms < uniform_array_size);
-         uniform_vector_size[uniforms] = storage->type->vector_elements;
-
-         int i;
-         for (i = 0; i < uniform_vector_size[uniforms]; i++) {
-            stage_prog_data->param[uniforms * 4 + i] = components;
-            components++;
-         }
-         for (; i < 4; i++) {
-            static gl_constant_value zero = { 0.0 };
-            stage_prog_data->param[uniforms * 4 + i] = &zero;
-         }
-
-         uniforms++;
-      }
+      for (unsigned s = 0; s < vector_count; s++)
+         setup_vector_uniform_values(&storage->storage[s * vector_size],
+                                     vector_size);
    }
 }
 
@@ -1063,7 +1068,7 @@ vec4_visitor::visit(ir_variable *ir)
        * Some uniforms, such as samplers and atomic counters, have no actual
        * storage, so we should ignore them.
        */
-      if (ir->is_in_uniform_block() || type_size(ir->type) == 0)
+      if (ir->is_in_buffer_block() || type_size(ir->type) == 0)
          return;
 
       /* Track how big the whole uniform variable is, in case we need to put a
@@ -1374,15 +1379,19 @@ vec4_visitor::emit_pull_constant_load_reg(dst_reg dst,
       emit(pull);
 }
 
-void
-vec4_visitor::emit_uniformize(const dst_reg &dst, const src_reg &src)
+src_reg
+vec4_visitor::emit_uniformize(const src_reg &src)
 {
    const src_reg chan_index(this, glsl_type::uint_type);
+   const dst_reg dst = retype(dst_reg(this, glsl_type::uint_type),
+                              src.type);
 
    emit(SHADER_OPCODE_FIND_LIVE_CHANNEL, dst_reg(chan_index))
       ->force_writemask_all = true;
    emit(SHADER_OPCODE_BROADCAST, dst, src, chan_index)
       ->force_writemask_all = true;
+
+   return src_reg(dst);
 }
 
 void
@@ -1554,6 +1563,10 @@ vec4_visitor::visit(ir_expression *ir)
    case ir_unop_noise:
       unreachable("not reached: should be handled by lower_noise");
 
+   case ir_unop_subroutine_to_int:
+      emit(MOV(result_dst, op[0]));
+      break;
+
    case ir_binop_add:
       emit(ADD(result_dst, op[0], op[1]));
       break;
@@ -1601,20 +1614,13 @@ vec4_visitor::visit(ir_expression *ir)
       assert(ir->type->is_integer());
       emit_math(SHADER_OPCODE_INT_QUOTIENT, result_dst, op[0], op[1]);
       break;
-   case ir_binop_carry: {
-      struct brw_reg acc = retype(brw_acc_reg(8), BRW_REGISTER_TYPE_UD);
 
-      emit(ADDC(dst_null_ud(), op[0], op[1]));
-      emit(MOV(result_dst, src_reg(acc)));
-      break;
-   }
-   case ir_binop_borrow: {
-      struct brw_reg acc = retype(brw_acc_reg(8), BRW_REGISTER_TYPE_UD);
+   case ir_binop_carry:
+      unreachable("Should have been lowered by carry_to_arith().");
 
-      emit(SUBB(dst_null_ud(), op[0], op[1]));
-      emit(MOV(result_dst, src_reg(acc)));
-      break;
-   }
+   case ir_binop_borrow:
+      unreachable("Should have been lowered by borrow_to_arith().");
+
    case ir_binop_mod:
       /* Floating point should be lowered by MOD_TO_FLOOR in the compiler. */
       assert(ir->type->is_integer());
@@ -1733,16 +1739,11 @@ vec4_visitor::visit(ir_expression *ir)
       emit(MOV(result_dst, op[0]));
       break;
    case ir_unop_b2i:
-      emit(AND(result_dst, op[0], src_reg(1)));
-      break;
    case ir_unop_b2f:
       if (devinfo->gen <= 5) {
          resolve_bool_comparison(ir->operands[0], &op[0]);
       }
-      op[0].type = BRW_REGISTER_TYPE_D;
-      result_dst.type = BRW_REGISTER_TYPE_D;
-      emit(AND(result_dst, op[0], src_reg(0x3f800000u)));
-      result_dst.type = BRW_REGISTER_TYPE_F;
+      emit(MOV(result_dst, negate(op[0])));
       break;
    case ir_unop_f2b:
       emit(CMP(result_dst, op[0], src_reg(0.0f), BRW_CONDITIONAL_NZ));
@@ -1838,7 +1839,7 @@ vec4_visitor::visit(ir_expression *ir)
          surf_index = src_reg(this, glsl_type::uint_type);
          emit(ADD(dst_reg(surf_index), op[0],
                   src_reg(prog_data->base.binding_table.ubo_start)));
-         emit_uniformize(dst_reg(surf_index), surf_index);
+         surf_index = emit_uniformize(surf_index);
 
          /* Assume this may touch any UBO. It would be nice to provide
           * a tighter bound, but the array information is already lowered away.
@@ -2438,6 +2439,8 @@ vec4_visitor::visit_atomic_counter_intrinsic(ir_call *ir)
       emit_untyped_atomic(BRW_AOP_PREDEC, surf_index, dst, offset,
                           src_reg(), src_reg());
    }
+
+   brw_mark_surface_used(stage_prog_data, surf_index);
 }
 
 void
@@ -2534,11 +2537,9 @@ vec4_visitor::visit(ir_texture *ir)
 
       /* Emit code to evaluate the actual indexing expression */
       nonconst_sampler_index->accept(this);
-      dst_reg temp(this, glsl_type::uint_type);
-      emit(ADD(temp, this->result, src_reg(sampler)));
-      emit_uniformize(temp, src_reg(temp));
-
-      sampler_reg = src_reg(temp);
+      src_reg temp(this, glsl_type::uint_type);
+      emit(ADD(dst_reg(temp), this->result, src_reg(sampler)));
+      sampler_reg = emit_uniformize(temp);
    } else {
       /* Single sampler, or constant array index; the indexing expression
        * is just an immediate.
@@ -3484,16 +3485,16 @@ vec4_visitor::move_grf_array_access_to_scratch()
    foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
       if (inst->dst.file == GRF && inst->dst.reladdr) {
          if (scratch_loc[inst->dst.reg] == -1) {
-            scratch_loc[inst->dst.reg] = c->last_scratch;
-            c->last_scratch += this->alloc.sizes[inst->dst.reg];
+            scratch_loc[inst->dst.reg] = last_scratch;
+            last_scratch += this->alloc.sizes[inst->dst.reg];
          }
 
          for (src_reg *iter = inst->dst.reladdr;
               iter->reladdr;
               iter = iter->reladdr) {
             if (iter->file == GRF && scratch_loc[iter->reg] == -1) {
-               scratch_loc[iter->reg] = c->last_scratch;
-               c->last_scratch += this->alloc.sizes[iter->reg];
+               scratch_loc[iter->reg] = last_scratch;
+               last_scratch += this->alloc.sizes[iter->reg];
             }
          }
       }
@@ -3503,8 +3504,8 @@ vec4_visitor::move_grf_array_access_to_scratch()
               iter->reladdr;
               iter = iter->reladdr) {
             if (iter->file == GRF && scratch_loc[iter->reg] == -1) {
-               scratch_loc[iter->reg] = c->last_scratch;
-               c->last_scratch += this->alloc.sizes[iter->reg];
+               scratch_loc[iter->reg] = last_scratch;
+               last_scratch += this->alloc.sizes[iter->reg];
             }
          }
       }
@@ -3678,7 +3679,7 @@ vec4_visitor::resolve_bool_comparison(ir_rvalue *rvalue, src_reg *reg)
 }
 
 vec4_visitor::vec4_visitor(const struct brw_compiler *compiler,
-                           struct brw_vec4_compile *c,
+                           void *log_data,
                            struct gl_program *prog,
                            const struct brw_vue_prog_key *key,
                            struct brw_vue_prog_data *prog_data,
@@ -3687,9 +3688,8 @@ vec4_visitor::vec4_visitor(const struct brw_compiler *compiler,
 			   void *mem_ctx,
                            bool no_spills,
                            int shader_time_index)
-   : backend_shader(compiler, NULL, mem_ctx,
+   : backend_shader(compiler, log_data, mem_ctx,
                     shader_prog, prog, &prog_data->base, stage),
-     c(c),
      key(key),
      prog_data(prog_data),
      sanity_param_count(0),
@@ -3697,7 +3697,8 @@ vec4_visitor::vec4_visitor(const struct brw_compiler *compiler,
      first_non_payload_grf(0),
      need_all_constants_in_pull_buffer(false),
      no_spills(no_spills),
-     shader_time_index(shader_time_index)
+     shader_time_index(shader_time_index),
+     last_scratch(0)
 {
    this->failed = false;
 

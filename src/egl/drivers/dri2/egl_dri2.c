@@ -28,6 +28,7 @@
 #define WL_HIDE_DEPRECATED
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -52,6 +53,22 @@
 
 #include "egl_dri2.h"
 #include "../util/u_atomic.h"
+
+/* The kernel header drm_fourcc.h defines the DRM formats below.  We duplicate
+ * some of the definitions here so that building Mesa won't bleeding-edge
+ * kernel headers.
+ */
+#ifndef DRM_FORMAT_R8
+#define DRM_FORMAT_R8            fourcc_code('R', '8', ' ', ' ') /* [7:0] R */
+#endif
+
+#ifndef DRM_FORMAT_RG88
+#define DRM_FORMAT_RG88          fourcc_code('R', 'G', '8', '8') /* [15:0] R:G 8:8 little endian */
+#endif
+
+#ifndef DRM_FORMAT_GR88
+#define DRM_FORMAT_GR88          fourcc_code('G', 'R', '8', '8') /* [15:0] G:R 8:8 little endian */
+#endif
 
 const __DRIuseInvalidateExtension use_invalidate = {
    .base = { __DRI_USE_INVALIDATE, 1 }
@@ -109,6 +126,18 @@ EGLint dri2_to_egl_attribute_map[] = {
    0,				/* __DRI_ATTRIB_FRAMEBUFFER_SRGB_CAPABLE */
 };
 
+const __DRIconfig *
+dri2_get_dri_config(struct dri2_egl_config *conf, EGLint surface_type,
+                    EGLenum colorspace)
+{
+   if (colorspace == EGL_GL_COLORSPACE_SRGB_KHR)
+      return surface_type == EGL_WINDOW_BIT ? conf->dri_srgb_double_config :
+                                              conf->dri_srgb_single_config;
+   else
+      return surface_type == EGL_WINDOW_BIT ? conf->dri_double_config :
+                                              conf->dri_single_config;
+}
+
 static EGLBoolean
 dri2_match_config(const _EGLConfig *conf, const _EGLConfig *criteria)
 {
@@ -130,6 +159,7 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
    struct dri2_egl_display *dri2_dpy;
    _EGLConfig base;
    unsigned int attrib, value, double_buffer;
+   bool srgb = false;
    EGLint key, bind_to_texture_rgb, bind_to_texture_rgba;
    unsigned int dri_masks[4] = { 0, 0, 0, 0 };
    _EGLConfig *matching_config;
@@ -204,6 +234,10 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
             return NULL;
          break;
 
+      case __DRI_ATTRIB_FRAMEBUFFER_SRGB_CAPABLE:
+         srgb = value != 0;
+         break;
+
       default:
 	 key = dri2_to_egl_attribute_map[attrib];
 	 if (key != 0)
@@ -249,28 +283,35 @@ dri2_add_config(_EGLDisplay *disp, const __DRIconfig *dri_config, int id,
    if (num_configs == 1) {
       conf = (struct dri2_egl_config *) matching_config;
 
-      if (double_buffer && !conf->dri_double_config)
+      if (double_buffer && srgb && !conf->dri_srgb_double_config)
+         conf->dri_srgb_double_config = dri_config;
+      else if (double_buffer && !srgb && !conf->dri_double_config)
          conf->dri_double_config = dri_config;
-      else if (!double_buffer && !conf->dri_single_config)
+      else if (!double_buffer && srgb && !conf->dri_srgb_single_config)
+         conf->dri_srgb_single_config = dri_config;
+      else if (!double_buffer && !srgb && !conf->dri_single_config)
          conf->dri_single_config = dri_config;
       else
          /* a similar config type is already added (unlikely) => discard */
          return NULL;
    }
    else if (num_configs == 0) {
-      conf = malloc(sizeof *conf);
+      conf = calloc(1, sizeof *conf);
       if (conf == NULL)
          return NULL;
 
       memcpy(&conf->base, &base, sizeof base);
       if (double_buffer) {
-         conf->dri_double_config = dri_config;
-         conf->dri_single_config = NULL;
+         if (srgb)
+            conf->dri_srgb_double_config = dri_config;
+         else
+            conf->dri_double_config = dri_config;
       } else {
-         conf->dri_single_config = dri_config;
-         conf->dri_double_config = NULL;
+         if (srgb)
+            conf->dri_srgb_single_config = dri_config;
+         else
+            conf->dri_single_config = dri_config;
       }
-      conf->base.SurfaceType = 0;
       conf->base.ConfigID = config_id;
 
       _eglLinkConfig(&conf->base);
@@ -500,6 +541,19 @@ dri2_load_driver_swrast(_EGLDisplay *disp)
    return EGL_TRUE;
 }
 
+static unsigned
+dri2_renderer_query_integer(struct dri2_egl_display *dri2_dpy, int param)
+{
+   const __DRI2rendererQueryExtension *rendererQuery = dri2_dpy->rendererQuery;
+   unsigned int value = 0;
+
+   if (!rendererQuery ||
+       rendererQuery->queryInteger(dri2_dpy->dri_screen, param, &value) == -1)
+      return 0;
+
+   return value;
+}
+
 void
 dri2_setup_screen(_EGLDisplay *disp)
 {
@@ -529,6 +583,10 @@ dri2_setup_screen(_EGLDisplay *disp)
    assert(dri2_dpy->dri2 || dri2_dpy->swrast);
    disp->Extensions.KHR_surfaceless_context = EGL_TRUE;
    disp->Extensions.MESA_configless_context = EGL_TRUE;
+
+   if (dri2_renderer_query_integer(dri2_dpy,
+                                   __DRI2_RENDERER_HAS_FRAMEBUFFER_SRGB))
+      disp->Extensions.KHR_gl_colorspace = EGL_TRUE;
 
    if (dri2_dpy->dri2 && dri2_dpy->dri2->base.version >= 3) {
       disp->Extensions.KHR_create_context = EGL_TRUE;
@@ -567,6 +625,9 @@ dri2_setup_screen(_EGLDisplay *disp)
          disp->Extensions.KHR_gl_texture_2D_image = EGL_TRUE;
          disp->Extensions.KHR_gl_texture_cubemap_image = EGL_TRUE;
       }
+      if (dri2_renderer_query_integer(dri2_dpy,
+                                      __DRI2_RENDERER_HAS_TEXTURE_3D))
+         disp->Extensions.KHR_gl_texture_3D_image = EGL_TRUE;
 #ifdef HAVE_LIBDRM
       if (dri2_dpy->image->base.version >= 8 &&
           dri2_dpy->image->createImageFromDmaBufs) {
@@ -643,6 +704,9 @@ dri2_create_screen(_EGLDisplay *disp)
       }
       if (strcmp(extensions[i]->name, __DRI2_FENCE) == 0) {
          dri2_dpy->fence = (__DRI2fenceExtension *) extensions[i];
+      }
+      if (strcmp(extensions[i]->name, __DRI2_RENDERER_QUERY) == 0) {
+         dri2_dpy->rendererQuery = (__DRI2rendererQueryExtension *) extensions[i];
       }
    }
 
@@ -1566,9 +1630,15 @@ dri2_create_image_khr_texture(_EGLDisplay *disp, _EGLContext *ctx,
       gl_target = GL_TEXTURE_2D;
       break;
    case EGL_GL_TEXTURE_3D_KHR:
-      depth = attrs.GLTextureZOffset;
-      gl_target = GL_TEXTURE_3D;
-      break;
+      if (disp->Extensions.KHR_gl_texture_3D_image) {
+         depth = attrs.GLTextureZOffset;
+         gl_target = GL_TEXTURE_3D;
+         break;
+      }
+      else {
+         _eglError(EGL_BAD_PARAMETER, "dri2_create_image_khr");
+         return EGL_NO_IMAGE_KHR;
+      }
    case EGL_GL_TEXTURE_CUBE_MAP_POSITIVE_X_KHR:
    case EGL_GL_TEXTURE_CUBE_MAP_NEGATIVE_X_KHR:
    case EGL_GL_TEXTURE_CUBE_MAP_POSITIVE_Y_KHR:
@@ -1673,6 +1743,9 @@ dri2_check_dma_buf_format(const _EGLImageAttribs *attrs)
    unsigned i, plane_n;
 
    switch (attrs->DMABufFourCC.Value) {
+   case DRM_FORMAT_R8:
+   case DRM_FORMAT_RG88:
+   case DRM_FORMAT_GR88:
    case DRM_FORMAT_RGB332:
    case DRM_FORMAT_BGR233:
    case DRM_FORMAT_XRGB4444:
@@ -1868,6 +1941,14 @@ dri2_create_image_khr(_EGLDriver *drv, _EGLDisplay *disp,
    case EGL_GL_TEXTURE_CUBE_MAP_POSITIVE_Z_KHR:
    case EGL_GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_KHR:
       return dri2_create_image_khr_texture(disp, ctx, target, buffer, attr_list);
+   case EGL_GL_TEXTURE_3D_KHR:
+      if (disp->Extensions.KHR_gl_texture_3D_image) {
+         return dri2_create_image_khr_texture(disp, ctx, target, buffer, attr_list);
+      }
+      else {
+         _eglError(EGL_BAD_PARAMETER, "dri2_create_image_khr");
+         return EGL_NO_IMAGE_KHR;
+      }
    case EGL_GL_RENDERBUFFER_KHR:
       return dri2_create_image_khr_renderbuffer(disp, ctx, buffer, attr_list);
 #ifdef HAVE_LIBDRM
@@ -2351,18 +2432,12 @@ static EGLBoolean
 dri2_load(_EGLDriver *drv)
 {
    struct dri2_egl_driver *dri2_drv = dri2_egl_driver(drv);
-#ifdef HAVE_SHARED_GLAPI
 #ifdef HAVE_ANDROID_PLATFORM
    const char *libname = "libglapi.so";
+#elif defined(__APPLE__)
+   const char *libname = "libglapi.0.dylib";
 #else
    const char *libname = "libglapi.so.0";
-#endif
-#else
-   /*
-    * Both libGL.so and libglapi.so are glapi providers.  There is no way to
-    * tell which one to load.
-    */
-   const char *libname = NULL;
 #endif
    void *handle;
 

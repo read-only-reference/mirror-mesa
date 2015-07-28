@@ -310,7 +310,7 @@ intel_alloc_private_renderbuffer_storage(struct gl_context * ctx, struct gl_rend
    intel_miptree_release(&irb->mt);
 
    DBG("%s: %s: %s (%dx%d)\n", __func__,
-       _mesa_lookup_enum_by_nr(internalFormat),
+       _mesa_enum_to_string(internalFormat),
        _mesa_get_format_name(rb->Format), width, height);
 
    if (width == 0 || height == 0)
@@ -1022,6 +1022,9 @@ intel_renderbuffer_move_to_temp(struct brw_context *brw,
    struct intel_mipmap_tree *new_mt;
    int width, height, depth;
 
+   uint32_t layout_flags = MIPTREE_LAYOUT_ACCELERATED_UPLOAD |
+                           MIPTREE_LAYOUT_ALLOC_ANY_TILED;
+
    intel_miptree_get_dimensions_for_image(rb->TexImage, &width, &height, &depth);
 
    new_mt = intel_miptree_create(brw, rb->TexImage->TexObject->Target,
@@ -1030,8 +1033,7 @@ intel_renderbuffer_move_to_temp(struct brw_context *brw,
                                  intel_image->base.Base.Level,
                                  width, height, depth,
                                  irb->mt->num_samples,
-                                 INTEL_MIPTREE_TILING_ANY,
-                                 MIPTREE_LAYOUT_ACCELERATED_UPLOAD);
+                                 layout_flags);
 
    if (intel_miptree_wants_hiz_buffer(brw, new_mt)) {
       intel_miptree_alloc_hiz(brw, new_mt);

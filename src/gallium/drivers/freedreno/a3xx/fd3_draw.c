@@ -82,8 +82,8 @@ draw_impl(struct fd_context *ctx, struct fd_ringbuffer *ring,
 			info->restart_index : 0xffffffff);
 
 	if (ctx->rasterizer && ctx->rasterizer->point_size_per_vertex &&
-		info->mode == PIPE_PRIM_POINTS)
-		primtype = DI_PT_POINTLIST_A2XX;
+			(info->mode == PIPE_PRIM_POINTS))
+		primtype = DI_PT_POINTLIST_PSIZE;
 
 	fd_draw_emit(ctx, ring,
 			primtype,
@@ -345,7 +345,7 @@ fd3_clear(struct fd_context *ctx, unsigned buffers,
 
 	fd3_emit_vertex_bufs(ring, &emit);
 
-	fd3_emit_constant(ring, SB_FRAG_SHADER, 0, 0, 4, color->ui, NULL);
+	fd3_emit_const(ring, SHADER_FRAGMENT, 0, 0, 4, color->ui, NULL);
 
 	OUT_PKT0(ring, REG_A3XX_PC_PRIM_VTX_CNTL, 1);
 	OUT_RING(ring, A3XX_PC_PRIM_VTX_CNTL_STRIDE_IN_VPC(0) |
