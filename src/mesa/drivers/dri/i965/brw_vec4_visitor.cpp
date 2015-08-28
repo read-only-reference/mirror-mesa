@@ -287,7 +287,7 @@ vec4_visitor::emit_dp(dst_reg dst, src_reg src0, src_reg src1, unsigned elements
 }
 
 src_reg
-vec4_visitor::fix_3src_operand(src_reg src)
+vec4_visitor::fix_3src_operand(const src_reg &src)
 {
    /* Using vec4 uniforms in SIMD4x2 programs is difficult. You'd like to be
     * able to use vertical stride of zero to replicate the vec4 uniform, like
@@ -313,7 +313,20 @@ vec4_visitor::fix_3src_operand(src_reg src)
 }
 
 src_reg
-vec4_visitor::fix_math_operand(src_reg src)
+vec4_visitor::resolve_source_modifiers(const src_reg &src)
+{
+   if (!src.abs && !src.negate)
+      return src;
+
+   dst_reg resolved = dst_reg(this, glsl_type::ivec4_type);
+   resolved.type = src.type;
+   emit(MOV(resolved, src));
+
+   return src_reg(resolved);
+}
+
+src_reg
+vec4_visitor::fix_math_operand(const src_reg &src)
 {
    if (devinfo->gen < 6 || devinfo->gen >= 8 || src.file == BAD_FILE)
       return src;
@@ -338,7 +351,7 @@ vec4_visitor::fix_math_operand(src_reg src)
    return src_reg(expanded);
 }
 
-void
+vec4_instruction *
 vec4_visitor::emit_math(enum opcode opcode,
                         const dst_reg &dst,
                         const src_reg &src0, const src_reg &src1)
@@ -350,11 +363,13 @@ vec4_visitor::emit_math(enum opcode opcode,
       /* MATH on Gen6 must be align1, so we can't do writemasks. */
       math->dst = dst_reg(this, glsl_type::vec4_type);
       math->dst.type = dst.type;
-      emit(MOV(dst, src_reg(math->dst)));
+      math = emit(MOV(dst, src_reg(math->dst)));
    } else if (devinfo->gen < 6) {
       math->base_mrf = 1;
       math->mlen = src1.file == BAD_FILE ? 1 : 2;
    }
+
+   return math;
 }
 
 void
@@ -572,9 +587,18 @@ vec4_visitor::visit_instructions(const exec_list *list)
    }
 }
 
-
-static int
-type_size(const struct glsl_type *type)
+/**
+ * Returns the minimum number of vec4 elements needed to pack a type.
+ *
+ * For simple types, it will return 1 (a single vec4); for matrices, the
+ * number of columns; for array and struct, the sum of the vec4_size of
+ * each of its elements; and for sampler and atomic, zero.
+ *
+ * This method is useful to calculate how much register space is needed to
+ * store a particular type.
+ */
+extern "C" int
+type_size_vec4(const struct glsl_type *type)
 {
    unsigned int i;
    int size;
@@ -596,11 +620,11 @@ type_size(const struct glsl_type *type)
       }
    case GLSL_TYPE_ARRAY:
       assert(type->length > 0);
-      return type_size(type->fields.array) * type->length;
+      return type_size_vec4(type->fields.array) * type->length;
    case GLSL_TYPE_STRUCT:
       size = 0;
       for (i = 0; i < type->length; i++) {
-	 size += type_size(type->fields.structure[i].type);
+	 size += type_size_vec4(type->fields.structure[i].type);
       }
       return size;
    case GLSL_TYPE_SUBROUTINE:
@@ -614,10 +638,12 @@ type_size(const struct glsl_type *type)
    case GLSL_TYPE_ATOMIC_UINT:
       return 0;
    case GLSL_TYPE_IMAGE:
+      return DIV_ROUND_UP(BRW_IMAGE_PARAM_SIZE, 4);
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_DOUBLE:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
+   case GLSL_TYPE_FUNCTION:
       unreachable("not reached");
    }
 
@@ -629,7 +655,7 @@ src_reg::src_reg(class vec4_visitor *v, const struct glsl_type *type)
    init();
 
    this->file = GRF;
-   this->reg = v->alloc.allocate(type_size(type));
+   this->reg = v->alloc.allocate(type_size_vec4(type));
 
    if (type->is_array() || type->is_record()) {
       this->swizzle = BRW_SWIZZLE_NOOP;
@@ -647,7 +673,7 @@ src_reg::src_reg(class vec4_visitor *v, const struct glsl_type *type, int size)
    init();
 
    this->file = GRF;
-   this->reg = v->alloc.allocate(type_size(type) * size);
+   this->reg = v->alloc.allocate(type_size_vec4(type) * size);
 
    this->swizzle = BRW_SWIZZLE_NOOP;
 
@@ -659,7 +685,7 @@ dst_reg::dst_reg(class vec4_visitor *v, const struct glsl_type *type)
    init();
 
    this->file = GRF;
-   this->reg = v->alloc.allocate(type_size(type));
+   this->reg = v->alloc.allocate(type_size_vec4(type));
 
    if (type->is_array() || type->is_record()) {
       this->writemask = WRITEMASK_XYZW;
@@ -671,18 +697,21 @@ dst_reg::dst_reg(class vec4_visitor *v, const struct glsl_type *type)
 }
 
 void
-vec4_visitor::setup_vector_uniform_values(const gl_constant_value *values,
-                                          unsigned n)
+vec4_visitor::setup_vec4_uniform_value(unsigned param_offset,
+                                       const gl_constant_value *values,
+                                       unsigned n)
 {
    static const gl_constant_value zero = { 0 };
 
+   assert(param_offset % 4 == 0);
+
    for (unsigned i = 0; i < n; ++i)
-      stage_prog_data->param[4 * uniforms + i] = &values[i];
+      stage_prog_data->param[param_offset + i] = &values[i];
 
    for (unsigned i = n; i < 4; ++i)
-      stage_prog_data->param[4 * uniforms + i] = &zero;
+      stage_prog_data->param[param_offset + i] = &zero;
 
-   uniform_vector_size[uniforms++] = n;
+   uniform_vector_size[param_offset / 4] = n;
 }
 
 /* Our support for uniforms is piggy-backed on the struct
@@ -718,9 +747,12 @@ vec4_visitor::setup_uniform_values(ir_variable *ir)
                                      storage->type->matrix_columns);
       const unsigned vector_size = storage->type->vector_elements;
 
-      for (unsigned s = 0; s < vector_count; s++)
-         setup_vector_uniform_values(&storage->storage[s * vector_size],
-                                     vector_size);
+      for (unsigned s = 0; s < vector_count; s++) {
+         setup_vec4_uniform_value(uniforms * 4,
+                                  &storage->storage[s * vector_size],
+                                  vector_size);
+         uniforms++;
+      }
    }
 }
 
@@ -1044,11 +1076,9 @@ vec4_visitor::visit(ir_variable *ir)
       assert(ir->data.location != -1);
       reg = new(mem_ctx) dst_reg(this, ir->type);
 
-      for (int i = 0; i < type_size(ir->type); i++) {
+      for (int i = 0; i < type_size_vec4(ir->type); i++) {
 	 output_reg[ir->data.location + i] = *reg;
 	 output_reg[ir->data.location + i].reg_offset = i;
-	 output_reg[ir->data.location + i].type =
-            brw_type_for_base_type(ir->type->get_scalar_type());
 	 output_reg_annotation[ir->data.location + i] = ir->name;
       }
       break;
@@ -1068,14 +1098,14 @@ vec4_visitor::visit(ir_variable *ir)
        * Some uniforms, such as samplers and atomic counters, have no actual
        * storage, so we should ignore them.
        */
-      if (ir->is_in_buffer_block() || type_size(ir->type) == 0)
+      if (ir->is_in_buffer_block() || type_size_vec4(ir->type) == 0)
          return;
 
       /* Track how big the whole uniform variable is, in case we need to put a
        * copy of its data into pull constants for array access.
        */
       assert(this->uniforms < uniform_array_size);
-      this->uniform_size[this->uniforms] = type_size(ir->type);
+      this->uniform_size[this->uniforms] = type_size_vec4(ir->type);
 
       if (!strncmp(ir->name, "gl_", 3)) {
 	 setup_builtin_uniform_values(ir);
@@ -1085,7 +1115,7 @@ vec4_visitor::visit(ir_variable *ir)
       break;
 
    case ir_var_system_value:
-      reg = make_reg_for_system_value(ir);
+      reg = make_reg_for_system_value(ir->data.location, ir->type);
       break;
 
    default:
@@ -1257,7 +1287,7 @@ vec4_visitor::try_emit_b2f_of_compare(ir_expression *ir)
    return true;
 }
 
-void
+vec4_instruction *
 vec4_visitor::emit_minmax(enum brw_conditional_mod conditionalmod, dst_reg dst,
                           src_reg src0, src_reg src1)
 {
@@ -1272,9 +1302,11 @@ vec4_visitor::emit_minmax(enum brw_conditional_mod conditionalmod, dst_reg dst,
       inst = emit(BRW_OPCODE_SEL, dst, src0, src1);
       inst->predicate = BRW_PREDICATE_NORMAL;
    }
+
+   return inst;
 }
 
-void
+vec4_instruction *
 vec4_visitor::emit_lrp(const dst_reg &dst,
                        const src_reg &x, const src_reg &y, const src_reg &a)
 {
@@ -1282,8 +1314,8 @@ vec4_visitor::emit_lrp(const dst_reg &dst,
       /* Note that the instruction's argument order is reversed from GLSL
        * and the IR.
        */
-      emit(LRP(dst,
-               fix_3src_operand(a), fix_3src_operand(y), fix_3src_operand(x)));
+     return emit(LRP(dst, fix_3src_operand(a), fix_3src_operand(y),
+                     fix_3src_operand(x)));
    } else {
       /* Earlier generations don't support three source operations, so we
        * need to emit x*(1-a) + y*a.
@@ -1298,7 +1330,7 @@ vec4_visitor::emit_lrp(const dst_reg &dst,
       emit(MUL(y_times_a, y, a));
       emit(ADD(one_minus_a, negate(a), src_reg(1.0f)));
       emit(MUL(x_times_one_minus_a, x, src_reg(one_minus_a)));
-      emit(ADD(dst, src_reg(x_times_one_minus_a), src_reg(y_times_a)));
+      return emit(ADD(dst, src_reg(x_times_one_minus_a), src_reg(y_times_a)));
    }
 }
 
@@ -2026,7 +2058,7 @@ vec4_visitor::compute_array_stride(ir_dereference_array *ir)
    /* Under normal circumstances array elements are stored consecutively, so
     * the stride is equal to the size of the array element.
     */
-   return type_size(ir->type);
+   return type_size_vec4(ir->type);
 }
 
 
@@ -2095,7 +2127,7 @@ vec4_visitor::visit(ir_dereference_record *ir)
    for (i = 0; i < struct_type->length; i++) {
       if (strcmp(struct_type->fields.structure[i].name, ir->field) == 0)
 	 break;
-      offset += type_size(struct_type->fields.structure[i].type);
+      offset += type_size_vec4(struct_type->fields.structure[i].type);
    }
 
    /* If the type is smaller than a vec4, replicate the last channel out. */
@@ -2304,7 +2336,7 @@ vec4_visitor::visit(ir_assignment *ir)
       emit_bool_to_cond_code(ir->condition, &predicate);
    }
 
-   for (i = 0; i < type_size(ir->lhs->type); i++) {
+   for (i = 0; i < type_size_vec4(ir->lhs->type); i++) {
       vec4_instruction *inst = emit(MOV(dst, src));
       inst->predicate = predicate;
 
@@ -2458,7 +2490,8 @@ vec4_visitor::visit(ir_call *ir)
 }
 
 src_reg
-vec4_visitor::emit_mcs_fetch(ir_texture *ir, src_reg coordinate, src_reg sampler)
+vec4_visitor::emit_mcs_fetch(const glsl_type *coordinate_type,
+                             src_reg coordinate, src_reg sampler)
 {
    vec4_instruction *inst =
       new(mem_ctx) vec4_instruction(SHADER_OPCODE_TXF_MCS,
@@ -2485,26 +2518,203 @@ vec4_visitor::emit_mcs_fetch(ir_texture *ir, src_reg coordinate, src_reg sampler
    }
 
    /* parameters are: u, v, r, lod; lod will always be zero due to api restrictions */
-   int coord_mask = (1 << ir->coordinate->type->vector_elements) - 1;
+   int coord_mask = (1 << coordinate_type->vector_elements) - 1;
    int zero_mask = 0xf & ~coord_mask;
 
-   emit(MOV(dst_reg(MRF, param_base, ir->coordinate->type, coord_mask),
+   emit(MOV(dst_reg(MRF, param_base, coordinate_type, coord_mask),
             coordinate));
 
-   emit(MOV(dst_reg(MRF, param_base, ir->coordinate->type, zero_mask),
+   emit(MOV(dst_reg(MRF, param_base, coordinate_type, zero_mask),
             src_reg(0)));
 
    emit(inst);
    return src_reg(inst->dst);
 }
 
-static bool
-is_high_sampler(const struct brw_device_info *devinfo, src_reg sampler)
+bool
+vec4_visitor::is_high_sampler(src_reg sampler)
 {
    if (devinfo->gen < 8 && !devinfo->is_haswell)
       return false;
 
    return sampler.file != IMM || sampler.fixed_hw_reg.dw1.ud >= 16;
+}
+
+void
+vec4_visitor::emit_texture(ir_texture_opcode op,
+                           dst_reg dest,
+                           const glsl_type *dest_type,
+                           src_reg coordinate,
+                           int coord_components,
+                           src_reg shadow_comparitor,
+                           src_reg lod, src_reg lod2,
+                           src_reg sample_index,
+                           uint32_t constant_offset,
+                           src_reg offset_value,
+                           src_reg mcs,
+                           bool is_cube_array,
+                           uint32_t sampler,
+                           src_reg sampler_reg)
+{
+   enum opcode opcode;
+   switch (op) {
+   case ir_tex: opcode = SHADER_OPCODE_TXL; break;
+   case ir_txl: opcode = SHADER_OPCODE_TXL; break;
+   case ir_txd: opcode = SHADER_OPCODE_TXD; break;
+   case ir_txf: opcode = SHADER_OPCODE_TXF; break;
+   case ir_txf_ms: opcode = SHADER_OPCODE_TXF_CMS; break;
+   case ir_txs: opcode = SHADER_OPCODE_TXS; break;
+   case ir_tg4: opcode = offset_value.file != BAD_FILE
+                         ? SHADER_OPCODE_TG4_OFFSET : SHADER_OPCODE_TG4; break;
+   case ir_query_levels: opcode = SHADER_OPCODE_TXS; break;
+   case ir_txb:
+      unreachable("TXB is not valid for vertex shaders.");
+   case ir_lod:
+      unreachable("LOD is not valid for vertex shaders.");
+   default:
+      unreachable("Unrecognized tex op");
+   }
+
+   vec4_instruction *inst = new(mem_ctx) vec4_instruction(
+      opcode, dst_reg(this, dest_type));
+
+   inst->offset = constant_offset;
+
+   /* The message header is necessary for:
+    * - Gen4 (always)
+    * - Gen9+ for selecting SIMD4x2
+    * - Texel offsets
+    * - Gather channel selection
+    * - Sampler indices too large to fit in a 4-bit value.
+    */
+   inst->header_size =
+      (devinfo->gen < 5 || devinfo->gen >= 9 ||
+       inst->offset != 0 || op == ir_tg4 ||
+       is_high_sampler(sampler_reg)) ? 1 : 0;
+   inst->base_mrf = 2;
+   inst->mlen = inst->header_size + 1; /* always at least one */
+   inst->dst.writemask = WRITEMASK_XYZW;
+   inst->shadow_compare = shadow_comparitor.file != BAD_FILE;
+
+   inst->src[1] = sampler_reg;
+
+   /* MRF for the first parameter */
+   int param_base = inst->base_mrf + inst->header_size;
+
+   if (op == ir_txs || op == ir_query_levels) {
+      int writemask = devinfo->gen == 4 ? WRITEMASK_W : WRITEMASK_X;
+      emit(MOV(dst_reg(MRF, param_base, lod.type, writemask), lod));
+   } else {
+      /* Load the coordinate */
+      /* FINISHME: gl_clamp_mask and saturate */
+      int coord_mask = (1 << coord_components) - 1;
+      int zero_mask = 0xf & ~coord_mask;
+
+      emit(MOV(dst_reg(MRF, param_base, coordinate.type, coord_mask),
+               coordinate));
+
+      if (zero_mask != 0) {
+         emit(MOV(dst_reg(MRF, param_base, coordinate.type, zero_mask),
+                  src_reg(0)));
+      }
+      /* Load the shadow comparitor */
+      if (shadow_comparitor.file != BAD_FILE && op != ir_txd && (op != ir_tg4 || offset_value.file == BAD_FILE)) {
+	 emit(MOV(dst_reg(MRF, param_base + 1, shadow_comparitor.type,
+			  WRITEMASK_X),
+		  shadow_comparitor));
+	 inst->mlen++;
+      }
+
+      /* Load the LOD info */
+      if (op == ir_tex || op == ir_txl) {
+	 int mrf, writemask;
+	 if (devinfo->gen >= 5) {
+	    mrf = param_base + 1;
+	    if (shadow_comparitor.file != BAD_FILE) {
+	       writemask = WRITEMASK_Y;
+	       /* mlen already incremented */
+	    } else {
+	       writemask = WRITEMASK_X;
+	       inst->mlen++;
+	    }
+	 } else /* devinfo->gen == 4 */ {
+	    mrf = param_base;
+	    writemask = WRITEMASK_W;
+	 }
+         lod.swizzle = BRW_SWIZZLE_XXXX;
+	 emit(MOV(dst_reg(MRF, mrf, lod.type, writemask), lod));
+      } else if (op == ir_txf) {
+         emit(MOV(dst_reg(MRF, param_base, lod.type, WRITEMASK_W), lod));
+      } else if (op == ir_txf_ms) {
+         emit(MOV(dst_reg(MRF, param_base + 1, sample_index.type, WRITEMASK_X),
+                  sample_index));
+         if (devinfo->gen >= 7) {
+            /* MCS data is in the first channel of `mcs`, but we need to get it into
+             * the .y channel of the second vec4 of params, so replicate .x across
+             * the whole vec4 and then mask off everything except .y
+             */
+            mcs.swizzle = BRW_SWIZZLE_XXXX;
+            emit(MOV(dst_reg(MRF, param_base + 1, glsl_type::uint_type, WRITEMASK_Y),
+                     mcs));
+         }
+         inst->mlen++;
+      } else if (op == ir_txd) {
+         const brw_reg_type type = lod.type;
+
+	 if (devinfo->gen >= 5) {
+	    lod.swizzle = BRW_SWIZZLE4(SWIZZLE_X,SWIZZLE_X,SWIZZLE_Y,SWIZZLE_Y);
+	    lod2.swizzle = BRW_SWIZZLE4(SWIZZLE_X,SWIZZLE_X,SWIZZLE_Y,SWIZZLE_Y);
+	    emit(MOV(dst_reg(MRF, param_base + 1, type, WRITEMASK_XZ), lod));
+	    emit(MOV(dst_reg(MRF, param_base + 1, type, WRITEMASK_YW), lod2));
+	    inst->mlen++;
+
+	    if (dest_type->vector_elements == 3 || shadow_comparitor.file != BAD_FILE) {
+	       lod.swizzle = BRW_SWIZZLE_ZZZZ;
+	       lod2.swizzle = BRW_SWIZZLE_ZZZZ;
+	       emit(MOV(dst_reg(MRF, param_base + 2, type, WRITEMASK_X), lod));
+	       emit(MOV(dst_reg(MRF, param_base + 2, type, WRITEMASK_Y), lod2));
+	       inst->mlen++;
+
+               if (shadow_comparitor.file != BAD_FILE) {
+                  emit(MOV(dst_reg(MRF, param_base + 2,
+                                   shadow_comparitor.type, WRITEMASK_Z),
+                           shadow_comparitor));
+               }
+	    }
+	 } else /* devinfo->gen == 4 */ {
+	    emit(MOV(dst_reg(MRF, param_base + 1, type, WRITEMASK_XYZ), lod));
+	    emit(MOV(dst_reg(MRF, param_base + 2, type, WRITEMASK_XYZ), lod2));
+	    inst->mlen += 2;
+	 }
+      } else if (op == ir_tg4 && offset_value.file != BAD_FILE) {
+         if (shadow_comparitor.file != BAD_FILE) {
+            emit(MOV(dst_reg(MRF, param_base, shadow_comparitor.type, WRITEMASK_W),
+                     shadow_comparitor));
+         }
+
+         emit(MOV(dst_reg(MRF, param_base + 1, glsl_type::ivec2_type, WRITEMASK_XY),
+                  offset_value));
+         inst->mlen++;
+      }
+   }
+
+   emit(inst);
+
+   /* fixup num layers (z) for cube arrays: hardware returns faces * layers;
+    * spec requires layers.
+    */
+   if (op == ir_txs && is_cube_array) {
+      emit_math(SHADER_OPCODE_INT_QUOTIENT,
+                writemask(inst->dst, WRITEMASK_Z),
+                src_reg(inst->dst), src_reg(6));
+   }
+
+   if (devinfo->gen == 6 && op == ir_tg4) {
+      emit_gen6_gather_wa(key->tex.gen6_gather_wa[sampler], inst->dst);
+   }
+
+   swizzle_result(op, dest,
+                  src_reg(inst->dst), sampler, dest_type);
 }
 
 void
@@ -2572,7 +2782,9 @@ vec4_visitor::visit(ir_texture *ir)
     * generating these values may involve SEND messages that need the MRFs.
     */
    src_reg coordinate;
+   int coord_components = 0;
    if (ir->coordinate) {
+      coord_components = ir->coordinate->type->vector_elements;
       ir->coordinate->accept(this);
       coordinate = this->result;
    }
@@ -2590,42 +2802,35 @@ vec4_visitor::visit(ir_texture *ir)
       offset_value = src_reg(this->result);
    }
 
-   const glsl_type *lod_type = NULL, *sample_index_type = NULL;
-   src_reg lod, dPdx, dPdy, sample_index, mcs;
+   src_reg lod, lod2, sample_index, mcs;
    switch (ir->op) {
    case ir_tex:
       lod = src_reg(0.0f);
-      lod_type = glsl_type::float_type;
       break;
    case ir_txf:
    case ir_txl:
    case ir_txs:
       ir->lod_info.lod->accept(this);
       lod = this->result;
-      lod_type = ir->lod_info.lod->type;
       break;
    case ir_query_levels:
       lod = src_reg(0);
-      lod_type = glsl_type::int_type;
       break;
    case ir_txf_ms:
       ir->lod_info.sample_index->accept(this);
       sample_index = this->result;
-      sample_index_type = ir->lod_info.sample_index->type;
 
       if (devinfo->gen >= 7 && key->tex.compressed_multisample_layout_mask & (1<<sampler))
-         mcs = emit_mcs_fetch(ir, coordinate, sampler_reg);
+         mcs = emit_mcs_fetch(ir->coordinate->type, coordinate, sampler_reg);
       else
          mcs = src_reg(0u);
       break;
    case ir_txd:
       ir->lod_info.grad.dPdx->accept(this);
-      dPdx = this->result;
+      lod = this->result;
 
       ir->lod_info.grad.dPdy->accept(this);
-      dPdy = this->result;
-
-      lod_type = ir->lod_info.grad.dPdx->type;
+      lod2 = this->result;
       break;
    case ir_txb:
    case ir_lod:
@@ -2633,175 +2838,31 @@ vec4_visitor::visit(ir_texture *ir)
       break;
    }
 
-   enum opcode opcode;
-   switch (ir->op) {
-   case ir_tex: opcode = SHADER_OPCODE_TXL; break;
-   case ir_txl: opcode = SHADER_OPCODE_TXL; break;
-   case ir_txd: opcode = SHADER_OPCODE_TXD; break;
-   case ir_txf: opcode = SHADER_OPCODE_TXF; break;
-   case ir_txf_ms: opcode = SHADER_OPCODE_TXF_CMS; break;
-   case ir_txs: opcode = SHADER_OPCODE_TXS; break;
-   case ir_tg4: opcode = has_nonconstant_offset
-                         ? SHADER_OPCODE_TG4_OFFSET : SHADER_OPCODE_TG4; break;
-   case ir_query_levels: opcode = SHADER_OPCODE_TXS; break;
-   case ir_txb:
-      unreachable("TXB is not valid for vertex shaders.");
-   case ir_lod:
-      unreachable("LOD is not valid for vertex shaders.");
-   default:
-      unreachable("Unrecognized tex op");
-   }
-
-   vec4_instruction *inst = new(mem_ctx) vec4_instruction(
-      opcode, dst_reg(this, ir->type));
-
+   uint32_t constant_offset = 0;
    if (ir->offset != NULL && !has_nonconstant_offset) {
-      inst->offset =
+      constant_offset  =
          brw_texture_offset(ir->offset->as_constant()->value.i,
                             ir->offset->type->vector_elements);
    }
 
    /* Stuff the channel select bits in the top of the texture offset */
    if (ir->op == ir_tg4)
-      inst->offset |= gather_channel(ir, sampler) << 16;
+      constant_offset |=
+         gather_channel( ir->lod_info.component->as_constant()->value.i[0],
+                         sampler) << 16;
 
-   /* The message header is necessary for:
-    * - Gen4 (always)
-    * - Gen9+ for selecting SIMD4x2
-    * - Texel offsets
-    * - Gather channel selection
-    * - Sampler indices too large to fit in a 4-bit value.
-    */
-   inst->header_size =
-      (devinfo->gen < 5 || devinfo->gen >= 9 ||
-       inst->offset != 0 || ir->op == ir_tg4 ||
-       is_high_sampler(devinfo, sampler_reg)) ? 1 : 0;
-   inst->base_mrf = 2;
-   inst->mlen = inst->header_size + 1; /* always at least one */
-   inst->dst.writemask = WRITEMASK_XYZW;
-   inst->shadow_compare = ir->shadow_comparitor != NULL;
+   glsl_type const *type = ir->sampler->type;
+   bool is_cube_array = type->sampler_dimensionality == GLSL_SAMPLER_DIM_CUBE &&
+      type->sampler_array;
 
-   inst->src[1] = sampler_reg;
+   this->result = src_reg(this, ir->type);
+   dst_reg dest = dst_reg(this->result);
 
-   /* MRF for the first parameter */
-   int param_base = inst->base_mrf + inst->header_size;
-
-   if (ir->op == ir_txs || ir->op == ir_query_levels) {
-      int writemask = devinfo->gen == 4 ? WRITEMASK_W : WRITEMASK_X;
-      emit(MOV(dst_reg(MRF, param_base, lod_type, writemask), lod));
-   } else {
-      /* Load the coordinate */
-      /* FINISHME: gl_clamp_mask and saturate */
-      int coord_mask = (1 << ir->coordinate->type->vector_elements) - 1;
-      int zero_mask = 0xf & ~coord_mask;
-
-      emit(MOV(dst_reg(MRF, param_base, ir->coordinate->type, coord_mask),
-               coordinate));
-
-      if (zero_mask != 0) {
-         emit(MOV(dst_reg(MRF, param_base, ir->coordinate->type, zero_mask),
-                  src_reg(0)));
-      }
-      /* Load the shadow comparitor */
-      if (ir->shadow_comparitor && ir->op != ir_txd && (ir->op != ir_tg4 || !has_nonconstant_offset)) {
-	 emit(MOV(dst_reg(MRF, param_base + 1, ir->shadow_comparitor->type,
-			  WRITEMASK_X),
-		  shadow_comparitor));
-	 inst->mlen++;
-      }
-
-      /* Load the LOD info */
-      if (ir->op == ir_tex || ir->op == ir_txl) {
-	 int mrf, writemask;
-	 if (devinfo->gen >= 5) {
-	    mrf = param_base + 1;
-	    if (ir->shadow_comparitor) {
-	       writemask = WRITEMASK_Y;
-	       /* mlen already incremented */
-	    } else {
-	       writemask = WRITEMASK_X;
-	       inst->mlen++;
-	    }
-	 } else /* devinfo->gen == 4 */ {
-	    mrf = param_base;
-	    writemask = WRITEMASK_W;
-	 }
-	 emit(MOV(dst_reg(MRF, mrf, lod_type, writemask), lod));
-      } else if (ir->op == ir_txf) {
-         emit(MOV(dst_reg(MRF, param_base, lod_type, WRITEMASK_W), lod));
-      } else if (ir->op == ir_txf_ms) {
-         emit(MOV(dst_reg(MRF, param_base + 1, sample_index_type, WRITEMASK_X),
-                  sample_index));
-         if (devinfo->gen >= 7) {
-            /* MCS data is in the first channel of `mcs`, but we need to get it into
-             * the .y channel of the second vec4 of params, so replicate .x across
-             * the whole vec4 and then mask off everything except .y
-             */
-            mcs.swizzle = BRW_SWIZZLE_XXXX;
-            emit(MOV(dst_reg(MRF, param_base + 1, glsl_type::uint_type, WRITEMASK_Y),
-                     mcs));
-         }
-         inst->mlen++;
-      } else if (ir->op == ir_txd) {
-	 const glsl_type *type = lod_type;
-
-	 if (devinfo->gen >= 5) {
-	    dPdx.swizzle = BRW_SWIZZLE4(SWIZZLE_X,SWIZZLE_X,SWIZZLE_Y,SWIZZLE_Y);
-	    dPdy.swizzle = BRW_SWIZZLE4(SWIZZLE_X,SWIZZLE_X,SWIZZLE_Y,SWIZZLE_Y);
-	    emit(MOV(dst_reg(MRF, param_base + 1, type, WRITEMASK_XZ), dPdx));
-	    emit(MOV(dst_reg(MRF, param_base + 1, type, WRITEMASK_YW), dPdy));
-	    inst->mlen++;
-
-	    if (ir->type->vector_elements == 3 || ir->shadow_comparitor) {
-	       dPdx.swizzle = BRW_SWIZZLE_ZZZZ;
-	       dPdy.swizzle = BRW_SWIZZLE_ZZZZ;
-	       emit(MOV(dst_reg(MRF, param_base + 2, type, WRITEMASK_X), dPdx));
-	       emit(MOV(dst_reg(MRF, param_base + 2, type, WRITEMASK_Y), dPdy));
-	       inst->mlen++;
-
-               if (ir->shadow_comparitor) {
-                  emit(MOV(dst_reg(MRF, param_base + 2,
-                                   ir->shadow_comparitor->type, WRITEMASK_Z),
-                           shadow_comparitor));
-               }
-	    }
-	 } else /* devinfo->gen == 4 */ {
-	    emit(MOV(dst_reg(MRF, param_base + 1, type, WRITEMASK_XYZ), dPdx));
-	    emit(MOV(dst_reg(MRF, param_base + 2, type, WRITEMASK_XYZ), dPdy));
-	    inst->mlen += 2;
-	 }
-      } else if (ir->op == ir_tg4 && has_nonconstant_offset) {
-         if (ir->shadow_comparitor) {
-            emit(MOV(dst_reg(MRF, param_base, ir->shadow_comparitor->type, WRITEMASK_W),
-                     shadow_comparitor));
-         }
-
-         emit(MOV(dst_reg(MRF, param_base + 1, glsl_type::ivec2_type, WRITEMASK_XY),
-                  offset_value));
-         inst->mlen++;
-      }
-   }
-
-   emit(inst);
-
-   /* fixup num layers (z) for cube arrays: hardware returns faces * layers;
-    * spec requires layers.
-    */
-   if (ir->op == ir_txs) {
-      glsl_type const *type = ir->sampler->type;
-      if (type->sampler_dimensionality == GLSL_SAMPLER_DIM_CUBE &&
-          type->sampler_array) {
-         emit_math(SHADER_OPCODE_INT_QUOTIENT,
-                   writemask(inst->dst, WRITEMASK_Z),
-                   src_reg(inst->dst), src_reg(6));
-      }
-   }
-
-   if (devinfo->gen == 6 && ir->op == ir_tg4) {
-      emit_gen6_gather_wa(key->tex.gen6_gather_wa[sampler], inst->dst);
-   }
-
-   swizzle_result(ir, src_reg(inst->dst), sampler);
+   emit_texture(ir->op, dest, ir->type, coordinate, coord_components,
+                shadow_comparitor,
+                lod, lod2, sample_index,
+                constant_offset, offset_value,
+                mcs, is_cube_array, sampler, sampler_reg);
 }
 
 /**
@@ -2835,10 +2896,9 @@ vec4_visitor::emit_gen6_gather_wa(uint8_t wa, dst_reg dst)
  * Set up the gather channel based on the swizzle, for gather4.
  */
 uint32_t
-vec4_visitor::gather_channel(ir_texture *ir, uint32_t sampler)
+vec4_visitor::gather_channel(unsigned gather_component, uint32_t sampler)
 {
-   ir_constant *chan = ir->lod_info.component->as_constant();
-   int swiz = GET_SWZ(key->tex.swizzles[sampler], chan->value.i[0]);
+   int swiz = GET_SWZ(key->tex.swizzles[sampler], gather_component);
    switch (swiz) {
       case SWIZZLE_X: return 0;
       case SWIZZLE_Y:
@@ -2856,22 +2916,23 @@ vec4_visitor::gather_channel(ir_texture *ir, uint32_t sampler)
 }
 
 void
-vec4_visitor::swizzle_result(ir_texture *ir, src_reg orig_val, uint32_t sampler)
+vec4_visitor::swizzle_result(ir_texture_opcode op, dst_reg dest,
+                             src_reg orig_val, uint32_t sampler,
+                             const glsl_type *dest_type)
 {
    int s = key->tex.swizzles[sampler];
 
-   this->result = src_reg(this, ir->type);
-   dst_reg swizzled_result(this->result);
+   dst_reg swizzled_result = dest;
 
-   if (ir->op == ir_query_levels) {
+   if (op == ir_query_levels) {
       /* # levels is in .w */
       orig_val.swizzle = BRW_SWIZZLE4(SWIZZLE_W, SWIZZLE_W, SWIZZLE_W, SWIZZLE_W);
       emit(MOV(swizzled_result, orig_val));
       return;
    }
 
-   if (ir->op == ir_txs || ir->type == glsl_type::float_type
-			|| s == SWIZZLE_NOOP || ir->op == ir_tg4) {
+   if (op == ir_txs || dest_type == glsl_type::float_type
+			|| s == SWIZZLE_NOOP || op == ir_tg4) {
       emit(MOV(swizzled_result, orig_val));
       return;
    }
@@ -2954,10 +3015,23 @@ vec4_visitor::visit(ir_if *ir)
 }
 
 void
+vec4_visitor::gs_emit_vertex(int stream_id)
+{
+   unreachable("not reached");
+}
+
+void
 vec4_visitor::visit(ir_emit_vertex *)
 {
    unreachable("not reached");
 }
+
+void
+vec4_visitor::gs_end_primitive()
+{
+   unreachable("not reached");
+}
+
 
 void
 vec4_visitor::visit(ir_end_primitive *)
@@ -3094,6 +3168,7 @@ vec4_visitor::emit_psiz_and_flags(dst_reg reg)
          vec4_instruction *inst;
          inst = emit(OR(header1_w, src_reg(header1_w), src_reg(1u << 6)));
          inst->predicate = BRW_PREDICATE_NORMAL;
+         output_reg[BRW_VARYING_SLOT_NDC].type = BRW_REGISTER_TYPE_F;
          inst = emit(MOV(output_reg[BRW_VARYING_SLOT_NDC], src_reg(0.0f)));
          inst->predicate = BRW_PREDICATE_NORMAL;
       }
@@ -3106,18 +3181,23 @@ vec4_visitor::emit_psiz_and_flags(dst_reg reg)
       if (prog_data->vue_map.slots_valid & VARYING_BIT_PSIZ) {
          dst_reg reg_w = reg;
          reg_w.writemask = WRITEMASK_W;
-         emit(MOV(reg_w, src_reg(output_reg[VARYING_SLOT_PSIZ])));
+         src_reg reg_as_src = src_reg(output_reg[VARYING_SLOT_PSIZ]);
+         reg_as_src.type = reg_w.type;
+         reg_as_src.swizzle = brw_swizzle_for_size(1);
+         emit(MOV(reg_w, reg_as_src));
       }
       if (prog_data->vue_map.slots_valid & VARYING_BIT_LAYER) {
          dst_reg reg_y = reg;
          reg_y.writemask = WRITEMASK_Y;
          reg_y.type = BRW_REGISTER_TYPE_D;
+         output_reg[VARYING_SLOT_LAYER].type = reg_y.type;
          emit(MOV(reg_y, src_reg(output_reg[VARYING_SLOT_LAYER])));
       }
       if (prog_data->vue_map.slots_valid & VARYING_BIT_VIEWPORT) {
          dst_reg reg_z = reg;
          reg_z.writemask = WRITEMASK_Z;
          reg_z.type = BRW_REGISTER_TYPE_D;
+         output_reg[VARYING_SLOT_VIEWPORT].type = reg_z.type;
          emit(MOV(reg_z, src_reg(output_reg[VARYING_SLOT_VIEWPORT])));
       }
    }
@@ -3155,8 +3235,8 @@ vec4_visitor::emit_clip_distances(dst_reg reg, int offset)
 vec4_instruction *
 vec4_visitor::emit_generic_urb_slot(dst_reg reg, int varying)
 {
-   assert (varying < VARYING_SLOT_MAX);
-   reg.type = output_reg[varying].type;
+   assert(varying < VARYING_SLOT_MAX);
+   assert(output_reg[varying].type == reg.type);
    current_annotation = output_reg_annotation[varying];
    /* Copy the register, saturating if necessary */
    return emit(MOV(reg, src_reg(output_reg[varying])));
@@ -3166,6 +3246,7 @@ void
 vec4_visitor::emit_urb_slot(dst_reg reg, int varying)
 {
    reg.type = BRW_REGISTER_TYPE_F;
+   output_reg[varying].type = reg.type;
 
    switch (varying) {
    case VARYING_SLOT_PSIZ:
@@ -3422,7 +3503,8 @@ vec4_visitor::emit_scratch_write(bblock_t *block, vec4_instruction *inst,
    dst_reg dst = dst_reg(brw_writemask(brw_vec8_grf(0, 0),
 				       inst->dst.writemask));
    vec4_instruction *write = SCRATCH_WRITE(dst, temp, index);
-   write->predicate = inst->predicate;
+   if (inst->opcode != BRW_OPCODE_SEL)
+      write->predicate = inst->predicate;
    write->ir = inst->ir;
    write->annotation = inst->annotation;
    inst->insert_after(block, write);

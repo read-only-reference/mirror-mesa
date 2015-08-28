@@ -777,6 +777,15 @@ NIR_DEFINE_CAST(nir_deref_as_var, nir_deref, nir_deref_var, deref)
 NIR_DEFINE_CAST(nir_deref_as_array, nir_deref, nir_deref_array, deref)
 NIR_DEFINE_CAST(nir_deref_as_struct, nir_deref, nir_deref_struct, deref)
 
+/** Returns the tail of a deref chain */
+static inline nir_deref *
+nir_deref_tail(nir_deref *deref)
+{
+   while (deref->child)
+      deref = deref->child;
+   return deref;
+}
+
 typedef struct {
    nir_instr instr;
 
@@ -1101,6 +1110,8 @@ typedef struct {
 
 #define nir_foreach_phi_src(phi, entry) \
    foreach_list_typed(nir_phi_src, entry, node, &(phi)->srcs)
+#define nir_foreach_phi_src_safe(phi, entry) \
+   foreach_list_typed_safe(nir_phi_src, entry, node, &(phi)->srcs)
 
 typedef struct {
    nir_instr instr;
@@ -1309,7 +1320,7 @@ typedef struct {
 
    struct exec_list body; /** < list of nir_cf_node */
 
-   nir_block *start_block, *end_block;
+   nir_block *end_block;
 
    /** list for all local variables in the function */
    struct exec_list locals;
@@ -1335,6 +1346,12 @@ typedef struct {
 
    nir_metadata valid_metadata;
 } nir_function_impl;
+
+static inline nir_block *
+nir_start_block(nir_function_impl *impl)
+{
+   return (nir_block *) exec_list_get_head(&impl->body);
+}
 
 static inline nir_cf_node *
 nir_cf_node_next(nir_cf_node *node)
@@ -1467,8 +1484,8 @@ typedef struct nir_shader {
     */
    unsigned num_inputs, num_uniforms, num_outputs;
 
-   /** the number of uniforms that are only accessed directly */
-   unsigned num_direct_uniforms;
+   /** The shader stage, such as MESA_SHADER_VERTEX. */
+   gl_shader_stage stage;
 } nir_shader;
 
 #define nir_foreach_overload(shader, overload)                        \
@@ -1477,6 +1494,7 @@ typedef struct nir_shader {
                          &(func)->overload_list)
 
 nir_shader *nir_shader_create(void *mem_ctx,
+                              gl_shader_stage stage,
                               const nir_shader_compiler_options *options);
 
 /** creates a register, including assigning it an index and adding it to the list */
@@ -1499,21 +1517,6 @@ nir_if *nir_if_create(void *mem_ctx);
 nir_loop *nir_loop_create(void *mem_ctx);
 
 nir_function_impl *nir_cf_node_get_function(nir_cf_node *node);
-
-/** puts a control flow node immediately after another control flow node */
-void nir_cf_node_insert_after(nir_cf_node *node, nir_cf_node *after);
-
-/** puts a control flow node immediately before another control flow node */
-void nir_cf_node_insert_before(nir_cf_node *node, nir_cf_node *before);
-
-/** puts a control flow node at the beginning of a list from an if, loop, or function */
-void nir_cf_node_insert_begin(struct exec_list *list, nir_cf_node *node);
-
-/** puts a control flow node at the end of a list from an if, loop, or function */
-void nir_cf_node_insert_end(struct exec_list *list, nir_cf_node *node);
-
-/** removes a control flow node, doing any cleanup necessary */
-void nir_cf_node_remove(nir_cf_node *node);
 
 /** requests that the given pieces of metadata be generated */
 void nir_metadata_require(nir_function_impl *impl, nir_metadata required);
@@ -1552,19 +1555,170 @@ nir_deref *nir_copy_deref(void *mem_ctx, nir_deref *deref);
 nir_load_const_instr *
 nir_deref_get_const_initializer_load(nir_shader *shader, nir_deref_var *deref);
 
-void nir_instr_insert_before(nir_instr *instr, nir_instr *before);
-void nir_instr_insert_after(nir_instr *instr, nir_instr *after);
+/**
+ * NIR Cursors and Instruction Insertion API
+ * @{
+ *
+ * A tiny struct representing a point to insert/extract instructions or
+ * control flow nodes.  Helps reduce the combinatorial explosion of possible
+ * points to insert/extract.
+ *
+ * \sa nir_control_flow.h
+ */
+typedef enum {
+   nir_cursor_before_block,
+   nir_cursor_after_block,
+   nir_cursor_before_instr,
+   nir_cursor_after_instr,
+} nir_cursor_option;
 
-void nir_instr_insert_before_block(nir_block *block, nir_instr *before);
-void nir_instr_insert_after_block(nir_block *block, nir_instr *after);
+typedef struct {
+   nir_cursor_option option;
+   union {
+      nir_block *block;
+      nir_instr *instr;
+   };
+} nir_cursor;
 
-void nir_instr_insert_before_cf(nir_cf_node *node, nir_instr *before);
-void nir_instr_insert_after_cf(nir_cf_node *node, nir_instr *after);
+static inline nir_cursor
+nir_before_block(nir_block *block)
+{
+   nir_cursor cursor;
+   cursor.option = nir_cursor_before_block;
+   cursor.block = block;
+   return cursor;
+}
 
-void nir_instr_insert_before_cf_list(struct exec_list *list, nir_instr *before);
-void nir_instr_insert_after_cf_list(struct exec_list *list, nir_instr *after);
+static inline nir_cursor
+nir_after_block(nir_block *block)
+{
+   nir_cursor cursor;
+   cursor.option = nir_cursor_after_block;
+   cursor.block = block;
+   return cursor;
+}
+
+static inline nir_cursor
+nir_before_instr(nir_instr *instr)
+{
+   nir_cursor cursor;
+   cursor.option = nir_cursor_before_instr;
+   cursor.instr = instr;
+   return cursor;
+}
+
+static inline nir_cursor
+nir_after_instr(nir_instr *instr)
+{
+   nir_cursor cursor;
+   cursor.option = nir_cursor_after_instr;
+   cursor.instr = instr;
+   return cursor;
+}
+
+static inline nir_cursor
+nir_after_block_before_jump(nir_block *block)
+{
+   nir_instr *last_instr = nir_block_last_instr(block);
+   if (last_instr && last_instr->type == nir_instr_type_jump) {
+      return nir_before_instr(last_instr);
+   } else {
+      return nir_after_block(block);
+   }
+}
+
+static inline nir_cursor
+nir_before_cf_node(nir_cf_node *node)
+{
+   if (node->type == nir_cf_node_block)
+      return nir_before_block(nir_cf_node_as_block(node));
+
+   return nir_after_block(nir_cf_node_as_block(nir_cf_node_prev(node)));
+}
+
+static inline nir_cursor
+nir_after_cf_node(nir_cf_node *node)
+{
+   if (node->type == nir_cf_node_block)
+      return nir_after_block(nir_cf_node_as_block(node));
+
+   return nir_before_block(nir_cf_node_as_block(nir_cf_node_next(node)));
+}
+
+static inline nir_cursor
+nir_before_cf_list(struct exec_list *cf_list)
+{
+   nir_cf_node *first_node = exec_node_data(nir_cf_node,
+                                            exec_list_get_head(cf_list), node);
+   return nir_before_cf_node(first_node);
+}
+
+static inline nir_cursor
+nir_after_cf_list(struct exec_list *cf_list)
+{
+   nir_cf_node *last_node = exec_node_data(nir_cf_node,
+                                           exec_list_get_tail(cf_list), node);
+   return nir_after_cf_node(last_node);
+}
+
+/**
+ * Insert a NIR instruction at the given cursor.
+ *
+ * Note: This does not update the cursor.
+ */
+void nir_instr_insert(nir_cursor cursor, nir_instr *instr);
+
+static inline void
+nir_instr_insert_before(nir_instr *instr, nir_instr *before)
+{
+   nir_instr_insert(nir_before_instr(instr), before);
+}
+
+static inline void
+nir_instr_insert_after(nir_instr *instr, nir_instr *after)
+{
+   nir_instr_insert(nir_after_instr(instr), after);
+}
+
+static inline void
+nir_instr_insert_before_block(nir_block *block, nir_instr *before)
+{
+   nir_instr_insert(nir_before_block(block), before);
+}
+
+static inline void
+nir_instr_insert_after_block(nir_block *block, nir_instr *after)
+{
+   nir_instr_insert(nir_after_block(block), after);
+}
+
+static inline void
+nir_instr_insert_before_cf(nir_cf_node *node, nir_instr *before)
+{
+   nir_instr_insert(nir_before_cf_node(node), before);
+}
+
+static inline void
+nir_instr_insert_after_cf(nir_cf_node *node, nir_instr *after)
+{
+   nir_instr_insert(nir_after_cf_node(node), after);
+}
+
+static inline void
+nir_instr_insert_before_cf_list(struct exec_list *list, nir_instr *before)
+{
+   nir_instr_insert(nir_before_cf_list(list), before);
+}
+
+static inline void
+nir_instr_insert_after_cf_list(struct exec_list *list, nir_instr *after)
+{
+   nir_instr_insert(nir_after_cf_list(list), after);
+}
 
 void nir_instr_remove(nir_instr *instr);
+
+/** @} */
 
 typedef bool (*nir_foreach_ssa_def_cb)(nir_ssa_def *def, void *state);
 typedef bool (*nir_foreach_dest_cb)(nir_dest *dest, void *state);
@@ -1637,27 +1791,24 @@ void nir_lower_global_vars_to_local(nir_shader *shader);
 
 void nir_lower_locals_to_regs(nir_shader *shader);
 
-void nir_assign_var_locations_scalar(struct exec_list *var_list,
-                                     unsigned *size);
-void nir_assign_var_locations_scalar_direct_first(nir_shader *shader,
-                                                  struct exec_list *var_list,
-                                                  unsigned *direct_size,
-                                                  unsigned *size);
+void nir_assign_var_locations(struct exec_list *var_list,
+                              unsigned *size,
+                              int (*type_size)(const struct glsl_type *));
 
-void nir_lower_io(nir_shader *shader);
-
+void nir_lower_io(nir_shader *shader,
+                  int (*type_size)(const struct glsl_type *));
 void nir_lower_vars_to_ssa(nir_shader *shader);
 
 void nir_remove_dead_variables(nir_shader *shader);
 
 void nir_lower_vec_to_movs(nir_shader *shader);
 void nir_lower_alu_to_scalar(nir_shader *shader);
+void nir_lower_load_const_to_scalar(nir_shader *shader);
 
 void nir_lower_phis_to_scalar(nir_shader *shader);
 
 void nir_lower_samplers(nir_shader *shader,
-                        const struct gl_shader_program *shader_program,
-                        gl_shader_stage stage);
+                        const struct gl_shader_program *shader_program);
 
 void nir_lower_system_values(nir_shader *shader);
 void nir_lower_tex_projector(nir_shader *shader);
@@ -1700,6 +1851,8 @@ bool nir_opt_peephole_select(nir_shader *shader);
 bool nir_opt_peephole_ffma(nir_shader *shader);
 
 bool nir_opt_remove_phis(nir_shader *shader);
+
+bool nir_opt_undef(nir_shader *shader);
 
 void nir_sweep(nir_shader *shader);
 

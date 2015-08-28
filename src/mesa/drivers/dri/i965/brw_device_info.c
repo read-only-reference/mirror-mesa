@@ -299,7 +299,6 @@ static const struct brw_device_info brw_device_info_chv = {
    }
 };
 
-/* Thread counts and URB limits are placeholders, and may not be accurate. */
 #define GEN9_FEATURES                               \
    .gen = 9,                                        \
    .has_hiz_and_separate_stencil = true,            \
@@ -322,11 +321,6 @@ static const struct brw_device_info brw_device_info_chv = {
       .max_ds_entries = 1120,                       \
       .max_gs_entries = 640,                        \
    }
-
-static const struct brw_device_info brw_device_info_skl_early = {
-   GEN9_FEATURES, .gt = 1,
-   .supports_simd16_3src = false,
-};
 
 static const struct brw_device_info brw_device_info_skl_gt1 = {
    GEN9_FEATURES, .gt = 1,
@@ -376,11 +370,6 @@ brw_get_device_info(int devid, int revision)
       fprintf(stderr, "i965_dri.so does not support the 0x%x PCI ID.\n", devid);
       return NULL;
    }
-
-   if (devinfo->gen == 9 &&
-       !devinfo->is_broxton &&
-       (revision == 2 || revision == 3 || revision == -1))
-      return &brw_device_info_skl_early;
 
    return devinfo;
 }

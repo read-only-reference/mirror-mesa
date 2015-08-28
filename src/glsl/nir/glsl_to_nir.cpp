@@ -26,6 +26,7 @@
  */
 
 #include "glsl_to_nir.h"
+#include "nir_control_flow.h"
 #include "ir_visitor.h"
 #include "ir_hierarchical_visitor.h"
 #include "ir.h"
@@ -43,7 +44,7 @@ namespace {
 class nir_visitor : public ir_visitor
 {
 public:
-   nir_visitor(nir_shader *shader, gl_shader_stage stage);
+   nir_visitor(nir_shader *shader);
    ~nir_visitor();
 
    virtual void visit(ir_variable *);
@@ -84,7 +85,6 @@ private:
    bool supports_ints;
 
    nir_shader *shader;
-   gl_shader_stage stage;
    nir_function_impl *impl;
    exec_list *cf_node_list;
    nir_instr *result; /* result of the expression tree last visited */
@@ -131,9 +131,9 @@ private:
 nir_shader *
 glsl_to_nir(struct gl_shader *sh, const nir_shader_compiler_options *options)
 {
-   nir_shader *shader = nir_shader_create(NULL, options);
+   nir_shader *shader = nir_shader_create(NULL, sh->Stage, options);
 
-   nir_visitor v1(shader, sh->Stage);
+   nir_visitor v1(shader);
    nir_function_visitor v2(&v1);
    v2.run(sh->ir);
    visit_exec_list(sh->ir, &v1);
@@ -141,11 +141,10 @@ glsl_to_nir(struct gl_shader *sh, const nir_shader_compiler_options *options)
    return shader;
 }
 
-nir_visitor::nir_visitor(nir_shader *shader, gl_shader_stage stage)
+nir_visitor::nir_visitor(nir_shader *shader)
 {
    this->supports_ints = shader->options->native_integers;
    this->shader = shader;
-   this->stage = stage;
    this->is_global = true;
    this->var_table = _mesa_hash_table_create(NULL, _mesa_hash_pointer,
                                              _mesa_key_pointer_equal);
@@ -262,7 +261,7 @@ nir_visitor::visit(ir_variable *ir)
       break;
 
    case ir_var_shader_in:
-      if (stage == MESA_SHADER_FRAGMENT &&
+      if (shader->stage == MESA_SHADER_FRAGMENT &&
           ir->data.location == VARYING_SLOT_FACE) {
          /* For whatever reason, GLSL IR makes gl_FrontFacing an input */
          var->data.location = SYSTEM_VALUE_FRONT_FACE;
@@ -641,6 +640,8 @@ nir_visitor::visit(ir_call *ir)
          op = nir_intrinsic_image_atomic_comp_swap;
       } else if (strcmp(ir->callee_name(), "__intrinsic_memory_barrier") == 0) {
          op = nir_intrinsic_memory_barrier;
+      } else if (strcmp(ir->callee_name(), "__intrinsic_image_size") == 0) {
+         op = nir_intrinsic_image_size;
       } else {
          unreachable("not reached");
       }
@@ -666,7 +667,8 @@ nir_visitor::visit(ir_call *ir)
       case nir_intrinsic_image_atomic_or:
       case nir_intrinsic_image_atomic_xor:
       case nir_intrinsic_image_atomic_exchange:
-      case nir_intrinsic_image_atomic_comp_swap: {
+      case nir_intrinsic_image_atomic_comp_swap:
+      case nir_intrinsic_image_size: {
          nir_ssa_undef_instr *instr_undef =
             nir_ssa_undef_instr_create(shader, 1);
          nir_instr_insert_after_cf_list(this->cf_node_list,
@@ -680,6 +682,17 @@ nir_visitor::visit(ir_call *ir)
 
          instr->variables[0] = evaluate_deref(&instr->instr, image);
          param = param->get_next();
+
+         /* Set the intrinsic destination. */
+         if (ir->return_deref) {
+            const nir_intrinsic_info *info =
+                    &nir_intrinsic_infos[instr->intrinsic];
+            nir_ssa_dest_init(&instr->instr, &instr->dest,
+                              info->dest_components, NULL);
+         }
+
+         if (op == nir_intrinsic_image_size)
+            break;
 
          /* Set the address argument, extending the coordinate vector to four
           * components.
@@ -721,11 +734,6 @@ nir_visitor::visit(ir_call *ir)
             instr->src[3] = evaluate_rvalue((ir_dereference *)param);
             param = param->get_next();
          }
-
-         /* Set the intrinsic destination. */
-         if (ir->return_deref)
-            nir_ssa_dest_init(&instr->instr, &instr->dest,
-                              ir->return_deref->type->vector_elements, NULL);
          break;
       }
       case nir_intrinsic_memory_barrier:

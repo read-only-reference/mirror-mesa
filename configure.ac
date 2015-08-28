@@ -64,14 +64,17 @@ m4_ifdef([AM_PROG_AR], [AM_PROG_AR])
 dnl Set internal versions
 OSMESA_VERSION=8
 AC_SUBST([OSMESA_VERSION])
+OPENCL_VERSION=1
+AC_SUBST([OPENCL_VERSION])
 
 dnl Versions for external dependencies
-LIBDRM_REQUIRED=2.4.38
+LIBDRM_REQUIRED=2.4.60
 LIBDRM_RADEON_REQUIRED=2.4.56
+LIBDRM_AMDGPU_REQUIRED=2.4.63
 LIBDRM_INTEL_REQUIRED=2.4.61
 LIBDRM_NVVIEUX_REQUIRED=2.4.33
 LIBDRM_NOUVEAU_REQUIRED=2.4.62
-LIBDRM_FREEDRENO_REQUIRED=2.4.57
+LIBDRM_FREEDRENO_REQUIRED=2.4.64
 DRI2PROTO_REQUIRED=2.6
 DRI3PROTO_REQUIRED=1.0
 PRESENTPROTO_REQUIRED=1.0
@@ -79,7 +82,7 @@ LIBUDEV_REQUIRED=151
 GLPROTO_REQUIRED=1.4.14
 LIBOMXIL_BELLAGIO_REQUIRED=0.0
 LIBVA_REQUIRED=0.35.0
-VDPAU_REQUIRED=0.4.1
+VDPAU_REQUIRED=1.1
 WAYLAND_REQUIRED=1.2.0
 XCB_REQUIRED=1.9.3
 XCBDRI2_REQUIRED=1.8
@@ -233,7 +236,7 @@ _SAVE_LDFLAGS="$LDFLAGS"
 _SAVE_CPPFLAGS="$CPPFLAGS"
 
 dnl Compiler macros
-DEFINES=""
+DEFINES="-D__STDC_LIMIT_MACROS"
 AC_SUBST([DEFINES])
 case "$host_os" in
 linux*|*-gnu*|gnu*)
@@ -283,6 +286,9 @@ if test "x$GCC" = xyes; then
 
     # Work around aliasing bugs - developers should comment this out
     CFLAGS="$CFLAGS -fno-strict-aliasing"
+
+    # We don't want floating-point math functions to set errno or trap
+    CFLAGS="$CFLAGS -fno-math-errno -fno-trapping-math"
 
     # gcc's builtin memcmp is slower than glibc's
     # http://gcc.gnu.org/bugzilla/show_bug.cgi?id=43052
@@ -654,6 +660,7 @@ fi
 AC_CHECK_HEADER([xlocale.h], [DEFINES="$DEFINES -DHAVE_XLOCALE_H"])
 AC_CHECK_HEADER([sys/sysctl.h], [DEFINES="$DEFINES -DHAVE_SYS_SYSCTL_H"])
 AC_CHECK_FUNC([strtof], [DEFINES="$DEFINES -DHAVE_STRTOF"])
+AC_CHECK_FUNC([mkostemp], [DEFINES="$DEFINES -DHAVE_MKOSTEMP"])
 
 dnl Check to see if dlopen is in default libraries (like Solaris, which
 dnl has it in libc), or if libdl is needed to get it.
@@ -1626,6 +1633,10 @@ if test "x$enable_nine" = xyes; then
     if test "x$with_gallium_drivers" = xswrast; then
         AC_MSG_ERROR([nine requires at least one non-swrast gallium driver])
     fi
+    if test $GCC_VERSION_MAJOR -lt 4 -o $GCC_VERSION_MAJOR -eq 4 -a $GCC_VERSION_MINOR -lt 6; then
+        AC_MSG_ERROR([gcc >= 4.6 is required to build nine])
+    fi
+
     if test "x$enable_dri3" = xno; then
         AC_MSG_WARN([using nine together with wine requires DRI3 enabled system])
     fi
@@ -1740,6 +1751,9 @@ egl_platforms=`IFS=', '; echo $with_egl_platforms`
 for plat in $egl_platforms; do
 	case "$plat" in
 	wayland)
+		test "x$have_libdrm" != xyes &&
+			AC_MSG_ERROR([EGL platform wayland requires libdrm >= $LIBDRM_REQUIRED])
+
 		PKG_CHECK_MODULES([WAYLAND], [wayland-client >= $WAYLAND_REQUIRED wayland-server >= $WAYLAND_REQUIRED])
 
 		if test "x$WAYLAND_SCANNER" = x; then
@@ -1761,9 +1775,6 @@ for plat in $egl_platforms; do
 	surfaceless)
 		test "x$have_libdrm" != xyes &&
 			AC_MSG_ERROR([EGL platform surfaceless requires libdrm >= $LIBDRM_REQUIRED])
-		;;
-
-	android|gdi|null)
 		;;
 
 	*)
@@ -2099,6 +2110,7 @@ if test -n "$with_gallium_drivers"; then
         xradeonsi)
             HAVE_GALLIUM_RADEONSI=yes
             PKG_CHECK_MODULES([RADEON], [libdrm_radeon >= $LIBDRM_RADEON_REQUIRED])
+            PKG_CHECK_MODULES([AMDGPU], [libdrm_amdgpu >= $LIBDRM_AMDGPU_REQUIRED])
             gallium_require_drm "radeonsi"
             gallium_require_drm_loader
             radeon_llvm_check "radeonsi"
@@ -2305,6 +2317,7 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/auxiliary/Makefile
 		src/gallium/auxiliary/pipe-loader/Makefile
 		src/gallium/drivers/freedreno/Makefile
+		src/gallium/drivers/ddebug/Makefile
 		src/gallium/drivers/i915/Makefile
 		src/gallium/drivers/ilo/Makefile
 		src/gallium/drivers/llvmpipe/Makefile
@@ -2335,6 +2348,7 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/targets/libgl-xlib/Makefile
 		src/gallium/targets/omx/Makefile
 		src/gallium/targets/opencl/Makefile
+		src/gallium/targets/opencl/mesa.icd
 		src/gallium/targets/osmesa/Makefile
 		src/gallium/targets/osmesa/osmesa.pc
 		src/gallium/targets/pipe-loader/Makefile
@@ -2350,6 +2364,7 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/winsys/intel/drm/Makefile
 		src/gallium/winsys/nouveau/drm/Makefile
 		src/gallium/winsys/radeon/drm/Makefile
+		src/gallium/winsys/amdgpu/drm/Makefile
 		src/gallium/winsys/svga/drm/Makefile
 		src/gallium/winsys/sw/dri/Makefile
 		src/gallium/winsys/sw/kms-dri/Makefile

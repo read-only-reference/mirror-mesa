@@ -193,7 +193,7 @@ struct fd_context {
 	struct fd_program_stateobj solid_prog; // TODO move to screen?
 
 	/* shaders used by mem->gmem blits: */
-	struct fd_program_stateobj blit_prog[8]; // TODO move to screen?
+	struct fd_program_stateobj blit_prog[MAX_RENDER_TARGETS]; // TODO move to screen?
 	struct fd_program_stateobj blit_z, blit_zs;
 
 	/* do we need to mem2gmem before rendering.  We don't, if for example,
@@ -334,6 +334,7 @@ struct fd_context {
 		FD_DIRTY_INDEXBUF    = (1 << 16),
 		FD_DIRTY_SCISSOR     = (1 << 17),
 		FD_DIRTY_STREAMOUT   = (1 << 18),
+		FD_DIRTY_UCP         = (1 << 19),
 	} dirty;
 
 	struct pipe_blend_state *blend;
@@ -355,6 +356,7 @@ struct fd_context {
 	struct fd_constbuf_stateobj constbuf[PIPE_SHADER_TYPES];
 	struct pipe_index_buffer indexbuf;
 	struct fd_streamout_stateobj streamout;
+	struct pipe_clip_state ucp;
 
 	/* GMEM/tile handling fxns: */
 	void (*emit_tile_init)(struct fd_context *ctx);

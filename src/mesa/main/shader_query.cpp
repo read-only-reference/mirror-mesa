@@ -506,7 +506,7 @@ _mesa_program_resource_array_size(struct gl_program_resource *res)
 static bool
 valid_array_index(const GLchar *name, unsigned *array_index)
 {
-   unsigned idx = 0;
+   long idx = 0;
    const GLchar *out_base_name_end;
 
    idx = parse_program_resource_name(name, &out_base_name_end);
@@ -718,6 +718,12 @@ _mesa_get_program_resource_name(struct gl_shader_program *shProg,
     */
    bool add_index = !(((programInterface == GL_PROGRAM_INPUT) &&
                        res->StageReferences & (1 << MESA_SHADER_GEOMETRY)));
+
+   /* Transform feedback varyings have array index already appended
+    * in their names.
+    */
+   if (programInterface == GL_TRANSFORM_FEEDBACK_VARYING)
+      add_index = false;
 
    if (add_index && _mesa_program_resource_array_size(res)) {
       int i;
@@ -963,11 +969,17 @@ _mesa_program_resource_prop(struct gl_shader_program *shProg,
 
    switch(prop) {
    case GL_NAME_LENGTH:
-      if (res->Type == GL_ATOMIC_COUNTER_BUFFER)
+      switch (res->Type) {
+      case GL_ATOMIC_COUNTER_BUFFER:
          goto invalid_operation;
-      /* Base name +3 if array '[0]' + terminator. */
-      *val = strlen(_mesa_program_resource_name(res)) +
-         (_mesa_program_resource_array_size(res) > 0 ? 3 : 0) + 1;
+      case GL_TRANSFORM_FEEDBACK_VARYING:
+         *val = strlen(_mesa_program_resource_name(res)) + 1;
+         break;
+      default:
+         /* Base name +3 if array '[0]' + terminator. */
+         *val = strlen(_mesa_program_resource_name(res)) +
+            (_mesa_program_resource_array_size(res) > 0 ? 3 : 0) + 1;
+      }
       return 1;
    case GL_TYPE:
       switch (res->Type) {

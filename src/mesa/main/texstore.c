@@ -863,7 +863,7 @@ _mesa_texstore_can_use_memcpy(struct gl_context *ctx,
 
    /* The Mesa format must match the input format and type. */
    if (!_mesa_format_matches_format_and_type(dstFormat, srcFormat, srcType,
-                                             srcPacking->SwapBytes)) {
+                                             srcPacking->SwapBytes, NULL)) {
       return GL_FALSE;
    }
 
@@ -1004,6 +1004,7 @@ store_texsubimage(struct gl_context *ctx,
    /* compute slice info (and do some sanity checks) */
    switch (target) {
    case GL_TEXTURE_2D:
+   case GL_TEXTURE_2D_MULTISAMPLE:
    case GL_TEXTURE_RECTANGLE:
    case GL_TEXTURE_CUBE_MAP:
    case GL_TEXTURE_EXTERNAL_OES:
@@ -1025,6 +1026,7 @@ store_texsubimage(struct gl_context *ctx,
       srcImageStride = _mesa_image_row_stride(packing, width, format, type);
       break;
    case GL_TEXTURE_2D_ARRAY:
+   case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
       numSlices = depth;
       sliceOffset = zoffset;
       depth = 1;

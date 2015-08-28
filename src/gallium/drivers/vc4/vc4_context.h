@@ -270,6 +270,8 @@ struct vc4_context {
 
         struct ra_regs *regs;
         unsigned int reg_class_any;
+        unsigned int reg_class_a_or_b_or_acc;
+        unsigned int reg_class_r4_or_a;
         unsigned int reg_class_a;
 
         uint8_t prim_mode;
@@ -363,7 +365,7 @@ vc4_sampler_state(struct pipe_sampler_state *psampler)
 }
 
 struct pipe_context *vc4_context_create(struct pipe_screen *pscreen,
-                                        void *priv);
+                                        void *priv, unsigned flags);
 void vc4_draw_init(struct pipe_context *pctx);
 void vc4_state_init(struct pipe_context *pctx);
 void vc4_program_init(struct pipe_context *pctx);

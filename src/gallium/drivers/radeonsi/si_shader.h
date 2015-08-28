@@ -221,6 +221,7 @@ union si_shader_key {
 		uint64_t	es_enabled_outputs;
 		unsigned	as_es:1; /* export shader */
 		unsigned	as_ls:1; /* local shader */
+		unsigned	export_prim_id; /* when PS needs it and GS is disabled */
 	} vs;
 	struct {
 		unsigned	prim_mode:3;
@@ -231,6 +232,7 @@ union si_shader_key {
 		 * This describes how outputs are laid out in memory. */
 		uint64_t	es_enabled_outputs;
 		unsigned	as_es:1; /* export shader */
+		unsigned	export_prim_id; /* when PS needs it and GS is disabled */
 	} tes; /* tessellation evaluation shader */
 };
 
@@ -289,9 +291,20 @@ static inline struct si_shader* si_get_vs_state(struct si_context *sctx)
 		return sctx->vs_shader->current;
 }
 
+static inline bool si_vs_exports_prim_id(struct si_shader *shader)
+{
+	if (shader->selector->type == PIPE_SHADER_VERTEX)
+		return shader->key.vs.export_prim_id;
+	else if (shader->selector->type == PIPE_SHADER_TESS_EVAL)
+		return shader->key.tes.export_prim_id;
+	else
+		return false;
+}
+
 /* radeonsi_shader.c */
 int si_shader_create(struct si_screen *sscreen, LLVMTargetMachineRef tm,
 		     struct si_shader *shader);
+void si_dump_shader_key(unsigned shader, union si_shader_key *key, FILE *f);
 int si_compile_llvm(struct si_screen *sscreen, struct si_shader *shader,
 		    LLVMTargetMachineRef tm, LLVMModuleRef mod);
 void si_shader_destroy(struct pipe_context *ctx, struct si_shader *shader);

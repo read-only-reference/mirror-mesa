@@ -39,6 +39,8 @@
 #include "vc4_screen.h"
 #include "pipe/p_state.h"
 
+struct nir_builder;
+
 enum qfile {
         QFILE_NULL,
         QFILE_TEMP,
@@ -56,6 +58,7 @@ enum qfile {
 struct qreg {
         enum qfile file;
         uint32_t index;
+        int pack;
 };
 
 enum qop {
@@ -102,7 +105,6 @@ enum qop {
         QOP_LOG2,
         QOP_VW_SETUP,
         QOP_VR_SETUP,
-        QOP_PACK_SCALED,
         QOP_PACK_8888_F,
         QOP_PACK_8A_F,
         QOP_PACK_8B_F,
@@ -158,10 +160,6 @@ enum qop {
          * the destination
          */
         QOP_TEX_RESULT,
-        QOP_R4_UNPACK_A,
-        QOP_R4_UNPACK_B,
-        QOP_R4_UNPACK_C,
-        QOP_R4_UNPACK_D
 };
 
 struct queued_qpu_inst {
@@ -246,7 +244,11 @@ enum quniform_contents {
 
         QUNIFORM_TEXTURE_BORDER_COLOR,
 
-        QUNIFORM_BLEND_CONST_COLOR,
+        QUNIFORM_BLEND_CONST_COLOR_X,
+        QUNIFORM_BLEND_CONST_COLOR_Y,
+        QUNIFORM_BLEND_CONST_COLOR_Z,
+        QUNIFORM_BLEND_CONST_COLOR_W,
+
         QUNIFORM_STENCIL,
 
         QUNIFORM_ALPHA_REF,
@@ -418,6 +420,16 @@ struct vc4_compile {
         uint32_t variant_id;
 };
 
+/* Special nir_load_input intrinsic index for loading the current TLB
+ * destination color.
+ */
+#define VC4_NIR_TLB_COLOR_READ_INPUT		2000000000
+
+/* Special offset for nir_load_uniform values to get a QUNIFORM_*
+ * state-dependent value.
+ */
+#define VC4_NIR_STATE_UNIFORM_OFFSET		2000000000
+
 struct vc4_compile *qir_compile_init(void);
 void qir_compile_destroy(struct vc4_compile *c);
 struct qinst *qir_inst(enum qop op, struct qreg dst,
@@ -432,17 +444,23 @@ struct qreg qir_uniform(struct vc4_compile *c,
                         enum quniform_contents contents,
                         uint32_t data);
 void qir_reorder_uniforms(struct vc4_compile *c);
+
 void qir_emit(struct vc4_compile *c, struct qinst *inst);
+static inline void qir_emit_nodef(struct vc4_compile *c, struct qinst *inst)
+{
+        list_addtail(&inst->link, &c->instructions);
+}
+
 struct qreg qir_get_temp(struct vc4_compile *c);
 int qir_get_op_nsrc(enum qop qop);
 bool qir_reg_equals(struct qreg a, struct qreg b);
 bool qir_has_side_effects(struct vc4_compile *c, struct qinst *inst);
 bool qir_has_side_effect_reads(struct vc4_compile *c, struct qinst *inst);
 bool qir_is_multi_instruction(struct qinst *inst);
+bool qir_is_mul(struct qinst *inst);
 bool qir_is_tex(struct qinst *inst);
 bool qir_depends_on_flags(struct qinst *inst);
 bool qir_writes_r4(struct qinst *inst);
-bool qir_reads_r4(struct qinst *inst);
 bool qir_src_needs_a_file(struct qinst *inst);
 struct qreg qir_follow_movs(struct vc4_compile *c, struct qreg reg);
 
@@ -458,7 +476,12 @@ bool qir_opt_cse(struct vc4_compile *c);
 bool qir_opt_dead_code(struct vc4_compile *c);
 bool qir_opt_small_immediates(struct vc4_compile *c);
 bool qir_opt_vpm_writes(struct vc4_compile *c);
+void vc4_nir_lower_blend(struct vc4_compile *c);
 void vc4_nir_lower_io(struct vc4_compile *c);
+nir_ssa_def *vc4_nir_get_state_uniform(struct nir_builder *b,
+                                       enum quniform_contents contents);
+nir_ssa_def *vc4_nir_get_swizzled_channel(struct nir_builder *b,
+                                          nir_ssa_def **srcs, int swiz);
 void qir_lower_uniforms(struct vc4_compile *c);
 
 void qpu_schedule_instructions(struct vc4_compile *c);
@@ -493,6 +516,12 @@ qir_##name(struct vc4_compile *c, struct qreg a)                         \
         struct qreg t = qir_get_temp(c);                                 \
         qir_emit(c, qir_inst(QOP_##name, t, a, c->undef));               \
         return t;                                                        \
+}                                                                        \
+static inline void                                                       \
+qir_##name##_dest(struct vc4_compile *c, struct qreg dest,               \
+                  struct qreg a)                                         \
+{                                                                        \
+        qir_emit_nodef(c, qir_inst(QOP_##name, dest, a, c->undef));      \
 }
 
 #define QIR_ALU2(name)                                                   \
@@ -502,6 +531,12 @@ qir_##name(struct vc4_compile *c, struct qreg a, struct qreg b)          \
         struct qreg t = qir_get_temp(c);                                 \
         qir_emit(c, qir_inst(QOP_##name, t, a, b));                      \
         return t;                                                        \
+}                                                                        \
+static inline void                                                       \
+qir_##name##_dest(struct vc4_compile *c, struct qreg dest,               \
+                  struct qreg a, struct qreg b)                          \
+{                                                                        \
+        qir_emit_nodef(c, qir_inst(QOP_##name, dest, a, b));             \
 }
 
 #define QIR_NODST_1(name)                                               \
@@ -516,6 +551,14 @@ static inline void                                                      \
 qir_##name(struct vc4_compile *c, struct qreg a, struct qreg b)         \
 {                                                                       \
         qir_emit(c, qir_inst(QOP_##name, c->undef, a, b));       \
+}
+
+#define QIR_PACK(name)                                                   \
+static inline struct qreg                                                \
+qir_##name(struct vc4_compile *c, struct qreg dest, struct qreg a)       \
+{                                                                        \
+        qir_emit_nodef(c, qir_inst(QOP_##name, dest, a, c->undef));      \
+        return dest;                                                     \
 }
 
 QIR_ALU1(MOV)
@@ -554,12 +597,11 @@ QIR_ALU1(RCP)
 QIR_ALU1(RSQ)
 QIR_ALU1(EXP2)
 QIR_ALU1(LOG2)
-QIR_ALU2(PACK_SCALED)
 QIR_ALU1(PACK_8888_F)
-QIR_ALU2(PACK_8A_F)
-QIR_ALU2(PACK_8B_F)
-QIR_ALU2(PACK_8C_F)
-QIR_ALU2(PACK_8D_F)
+QIR_PACK(PACK_8A_F)
+QIR_PACK(PACK_8B_F)
+QIR_PACK(PACK_8C_F)
+QIR_PACK(PACK_8D_F)
 QIR_ALU1(VARY_ADD_C)
 QIR_NODST_2(TEX_S)
 QIR_NODST_2(TEX_T)
@@ -577,22 +619,6 @@ QIR_NODST_1(TLB_COLOR_WRITE)
 QIR_NODST_1(TLB_Z_WRITE)
 QIR_NODST_1(TLB_DISCARD_SETUP)
 QIR_NODST_1(TLB_STENCIL_SETUP)
-
-static inline struct qreg
-qir_R4_UNPACK(struct vc4_compile *c, struct qreg r4, int i)
-{
-        struct qreg t = qir_get_temp(c);
-        qir_emit(c, qir_inst(QOP_R4_UNPACK_A + i, t, r4, c->undef));
-        return t;
-}
-
-static inline struct qreg
-qir_SEL_X_0_COND(struct vc4_compile *c, int i)
-{
-        struct qreg t = qir_get_temp(c);
-        qir_emit(c, qir_inst(QOP_R4_UNPACK_A + i, t, c->undef, c->undef));
-        return t;
-}
 
 static inline struct qreg
 qir_UNPACK_8_F(struct vc4_compile *c, struct qreg src, int i)
@@ -627,11 +653,12 @@ qir_UNPACK_16_I(struct vc4_compile *c, struct qreg src, int i)
 }
 
 static inline struct qreg
-qir_PACK_8_F(struct vc4_compile *c, struct qreg rest, struct qreg val, int chan)
+qir_PACK_8_F(struct vc4_compile *c, struct qreg dest, struct qreg val, int chan)
 {
-        struct qreg t = qir_get_temp(c);
-        qir_emit(c, qir_inst(QOP_PACK_8A_F + chan, t, rest, val));
-        return t;
+        qir_emit(c, qir_inst(QOP_PACK_8A_F + chan, dest, val, c->undef));
+        if (dest.file == QFILE_TEMP)
+                c->defs[dest.index] = NULL;
+        return dest;
 }
 
 static inline struct qreg

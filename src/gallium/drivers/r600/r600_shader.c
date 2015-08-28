@@ -62,7 +62,7 @@ The compiler must issue the source argument to slots z, y, and x
 
 static int r600_shader_from_tgsi(struct r600_context *rctx,
 				 struct r600_pipe_shader *pipeshader,
-				 struct r600_shader_key key);
+				 union r600_shader_key key);
 
 
 static void r600_add_gpr_array(struct r600_shader *ps, int start_gpr,
@@ -133,7 +133,7 @@ static int store_shader(struct pipe_context *ctx,
 
 int r600_pipe_shader_create(struct pipe_context *ctx,
 			    struct r600_pipe_shader *shader,
-			    struct r600_shader_key key)
+			    union r600_shader_key key)
 {
 	struct r600_context *rctx = (struct r600_context *)ctx;
 	struct r600_pipe_shader_selector *sel = shader->selector;
@@ -141,7 +141,7 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 	bool dump = r600_can_dump_shader(&rctx->screen->b, sel->tokens);
 	unsigned use_sb = !(rctx->screen->b.debug_flags & DBG_NO_SB);
 	unsigned sb_disasm = use_sb || (rctx->screen->b.debug_flags & DBG_SB_DISASM);
-	unsigned export_shader = key.vs_as_es;
+	unsigned export_shader = key.vs.as_es;
 
 	shader->shader.bc.isa = rctx->isa;
 
@@ -1802,21 +1802,20 @@ static int emit_gs_ring_writes(struct r600_shader_ctx *ctx, bool ind)
 
 static int r600_shader_from_tgsi(struct r600_context *rctx,
 				 struct r600_pipe_shader *pipeshader,
-				 struct r600_shader_key key)
+				 union r600_shader_key key)
 {
 	struct r600_screen *rscreen = rctx->screen;
 	struct r600_shader *shader = &pipeshader->shader;
 	struct tgsi_token *tokens = pipeshader->selector->tokens;
 	struct pipe_stream_output_info so = pipeshader->selector->so;
 	struct tgsi_full_immediate *immediate;
-	struct tgsi_full_property *property;
 	struct r600_shader_ctx ctx;
 	struct r600_bytecode_output output[32];
 	unsigned output_done, noutput;
 	unsigned opcode;
 	int i, j, k, r = 0;
 	int next_param_base = 0, next_clip_base;
-	int max_color_exports = MAX2(key.nr_cbufs, 1);
+	int max_color_exports = MAX2(key.ps.nr_cbufs, 1);
 	/* Declarations used by llvm code */
 	bool use_llvm = false;
 	bool indirect_gprs;
@@ -1830,8 +1829,8 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 	ctx.shader = shader;
 	ctx.native_integers = true;
 
-	shader->vs_as_gs_a = key.vs_as_gs_a;
-	shader->vs_as_es = key.vs_as_es;
+	shader->vs_as_gs_a = key.vs.as_gs_a;
+	shader->vs_as_es = key.vs.as_es;
 
 	r600_bytecode_init(ctx.bc, rscreen->b.chip_class, rscreen->b.family,
 			   rscreen->has_compressed_msaa_texturing);
@@ -1840,13 +1839,13 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 	shader->indirect_files = ctx.info.indirect_files;
 	indirect_gprs = ctx.info.indirect_files & ~(1 << TGSI_FILE_CONSTANT);
 	tgsi_parse_init(&ctx.parse, tokens);
-	ctx.type = ctx.parse.FullHeader.Processor.Processor;
+	ctx.type = ctx.info.processor;
 	shader->processor_type = ctx.type;
 	ctx.bc->type = shader->processor_type;
 
-	ring_outputs = key.vs_as_es || (ctx.type == TGSI_PROCESSOR_GEOMETRY);
+	ring_outputs = key.vs.as_es || (ctx.type == TGSI_PROCESSOR_GEOMETRY);
 
-	if (key.vs_as_es) {
+	if (key.vs.as_es) {
 		ctx.gs_for_vs = &rctx->gs_shader->current->shader;
 	} else {
 		ctx.gs_for_vs = NULL;
@@ -1866,7 +1865,7 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 	shader->nr_ps_color_exports = 0;
 	shader->nr_ps_max_color_exports = 0;
 
-	shader->two_side = key.color_two_side;
+	shader->two_side = key.ps.color_two_side;
 
 	/* register allocations */
 	/* Values [0,127] correspond to GPR[0..127].
@@ -1968,9 +1967,15 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 	ctx.nliterals = 0;
 	ctx.literals = NULL;
 	shader->fs_write_all = FALSE;
+	if (ctx.info.properties[TGSI_PROPERTY_FS_COLOR0_WRITES_ALL_CBUFS])
+		shader->fs_write_all = TRUE;
+
+	shader->vs_position_window_space = FALSE;
+	if (ctx.info.properties[TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION])
+		shader->vs_position_window_space = TRUE;
 
 	if (shader->vs_as_gs_a)
-		vs_add_primid_output(&ctx, key.vs_prim_id_out);
+		vs_add_primid_output(&ctx, key.vs.prim_id_out);
 
 	while (!tgsi_parse_end_of_tokens(&ctx.parse)) {
 		tgsi_parse_token(&ctx.parse);
@@ -1994,34 +1999,7 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 				goto out_err;
 			break;
 		case TGSI_TOKEN_TYPE_INSTRUCTION:
-			break;
 		case TGSI_TOKEN_TYPE_PROPERTY:
-			property = &ctx.parse.FullToken.FullProperty;
-			switch (property->Property.PropertyName) {
-			case TGSI_PROPERTY_FS_COLOR0_WRITES_ALL_CBUFS:
-				if (property->u[0].Data == 1)
-					shader->fs_write_all = TRUE;
-				break;
-			case TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION:
-				if (property->u[0].Data == 1)
-					shader->vs_position_window_space = TRUE;
-				break;
-			case TGSI_PROPERTY_VS_PROHIBIT_UCPS:
-				/* we don't need this one */
-				break;
-			case TGSI_PROPERTY_GS_INPUT_PRIM:
-				shader->gs_input_prim = property->u[0].Data;
-				break;
-			case TGSI_PROPERTY_GS_OUTPUT_PRIM:
-				shader->gs_output_prim = property->u[0].Data;
-				break;
-			case TGSI_PROPERTY_GS_MAX_OUTPUT_VERTICES:
-				shader->gs_max_out_vertices = property->u[0].Data;
-				break;
-			case TGSI_PROPERTY_GS_INVOCATIONS:
-				shader->gs_num_invocations = property->u[0].Data;
-				break;
-			}
 			break;
 		default:
 			R600_ERR("unsupported token type %d\n", ctx.parse.FullToken.Token.Type);
@@ -2091,7 +2069,7 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 		radeon_llvm_ctx.chip_class = ctx.bc->chip_class;
 		radeon_llvm_ctx.fs_color_all = shader->fs_write_all && (rscreen->b.chip_class >= EVERGREEN);
 		radeon_llvm_ctx.stream_outputs = &so;
-		radeon_llvm_ctx.alpha_to_one = key.alpha_to_one;
+		radeon_llvm_ctx.alpha_to_one = key.ps.alpha_to_one;
 		radeon_llvm_ctx.has_compressed_msaa_texturing =
 			ctx.bc->has_compressed_msaa_texturing;
 		mod = r600_tgsi_llvm(&radeon_llvm_ctx, tokens);
@@ -2270,7 +2248,7 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 	convert_edgeflag_to_int(&ctx);
 
 	if (ring_outputs) {
-		if (key.vs_as_es)
+		if (key.vs.as_es)
 			emit_gs_ring_writes(&ctx, FALSE);
 	} else {
 		/* Export output */
@@ -2386,7 +2364,7 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 						j--;
 						continue;
 					}
-					output[j].swizzle_w = key.alpha_to_one ? 5 : 3;
+					output[j].swizzle_w = key.ps.alpha_to_one ? 5 : 3;
 					output[j].array_base = shader->output[i].sid;
 					output[j].type = V_SQ_CF_ALLOC_EXPORT_WORD0_SQ_EXPORT_PIXEL;
 					shader->nr_ps_color_exports++;
@@ -2399,7 +2377,7 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 							output[j].swizzle_x = 0;
 							output[j].swizzle_y = 1;
 							output[j].swizzle_z = 2;
-							output[j].swizzle_w = key.alpha_to_one ? 5 : 3;
+							output[j].swizzle_w = key.ps.alpha_to_one ? 5 : 3;
 							output[j].burst_count = 1;
 							output[j].array_base = k;
 							output[j].op = CF_OP_EXPORT;
@@ -2490,6 +2468,7 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 			output[j].array_base = 0;
 			output[j].op = CF_OP_EXPORT;
 			j++;
+			shader->nr_ps_color_exports++;
 		}
 
 		noutput = j;
@@ -6150,10 +6129,10 @@ static int tgsi_cmp(struct r600_shader_ctx *ctx)
 		r = tgsi_make_src_for_op3(ctx, temp_regs[0], i, &alu.src[0], &ctx->src[0]);
 		if (r)
 			return r;
-		r = tgsi_make_src_for_op3(ctx, temp_regs[1], i, &alu.src[1], &ctx->src[2]);
+		r = tgsi_make_src_for_op3(ctx, temp_regs[2], i, &alu.src[1], &ctx->src[2]);
 		if (r)
 			return r;
-		r = tgsi_make_src_for_op3(ctx, temp_regs[2], i, &alu.src[2], &ctx->src[1]);
+		r = tgsi_make_src_for_op3(ctx, temp_regs[1], i, &alu.src[2], &ctx->src[1]);
 		if (r)
 			return r;
 		tgsi_dst(ctx, &inst->Dst[0], i, &alu.dst);

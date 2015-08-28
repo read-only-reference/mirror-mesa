@@ -2880,8 +2880,9 @@ check_image_resources(struct gl_context *ctx, struct gl_shader_program *prog)
 
       if (sh) {
          if (sh->NumImages > ctx->Const.Program[i].MaxImageUniforms)
-            linker_error(prog, "Too many %s shader image uniforms\n",
-                         _mesa_shader_stage_to_string(i));
+            linker_error(prog, "Too many %s shader image uniforms (%u > %u)\n",
+                         _mesa_shader_stage_to_string(i), sh->NumImages,
+                         ctx->Const.Program[i].MaxImageUniforms);
 
          total_image_units += sh->NumImages;
 
@@ -2899,7 +2900,7 @@ check_image_resources(struct gl_context *ctx, struct gl_shader_program *prog)
       linker_error(prog, "Too many combined image uniforms\n");
 
    if (total_image_units + fragment_outputs >
-       ctx->Const.MaxCombinedImageUnitsAndFragmentOutputs)
+       ctx->Const.MaxCombinedShaderOutputResources)
       linker_error(prog, "Too many combined image uniforms and fragment outputs\n");
 }
 
@@ -3110,7 +3111,8 @@ add_program_resource(struct gl_shader_program *prog, GLenum type,
  * Function builds a stage reference bitmask from variable name.
  */
 static uint8_t
-build_stageref(struct gl_shader_program *shProg, const char *name)
+build_stageref(struct gl_shader_program *shProg, const char *name,
+               unsigned mode)
 {
    uint8_t stages = 0;
 
@@ -3131,6 +3133,13 @@ build_stageref(struct gl_shader_program *shProg, const char *name)
          ir_variable *var = node->as_variable();
          if (var) {
             unsigned baselen = strlen(var->name);
+
+            /* Type needs to match if specified, otherwise we might
+             * pick a variable with same name but different interface.
+             */
+            if (var->data.mode != mode)
+               continue;
+
             if (strncmp(var->name, name, baselen) == 0) {
                /* Check for exact name matches but also check for arrays and
                 * structs.
@@ -3188,7 +3197,8 @@ add_interface_variables(struct gl_shader_program *shProg,
       };
 
       if (!add_program_resource(shProg, programInterface, var,
-                                build_stageref(shProg, var->name) | mask))
+                                build_stageref(shProg, var->name,
+                                               var->data.mode) | mask))
          return false;
    }
    return true;
@@ -3239,12 +3249,9 @@ build_program_resource_list(struct gl_context *ctx,
    /* Add transform feedback varyings. */
    if (shProg->LinkedTransformFeedback.NumVarying > 0) {
       for (int i = 0; i < shProg->LinkedTransformFeedback.NumVarying; i++) {
-         uint8_t stageref =
-            build_stageref(shProg,
-                           shProg->LinkedTransformFeedback.Varyings[i].Name);
          if (!add_program_resource(shProg, GL_TRANSFORM_FEEDBACK_VARYING,
                                    &shProg->LinkedTransformFeedback.Varyings[i],
-                                   stageref))
+                                   0))
          return;
       }
    }
@@ -3256,7 +3263,8 @@ build_program_resource_list(struct gl_context *ctx,
          continue;
 
       uint8_t stageref =
-         build_stageref(shProg, shProg->UniformStorage[i].name);
+         build_stageref(shProg, shProg->UniformStorage[i].name,
+                        ir_var_uniform);
 
       /* Add stagereferences for uniforms in a uniform block. */
       int block_index = shProg->UniformStorage[i].block_index;

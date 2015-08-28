@@ -449,6 +449,8 @@ struct r300_context {
 
     /* The interface to the windowing system, etc. */
     struct radeon_winsys *rws;
+    /* The submission context. */
+    struct radeon_winsys_ctx *ctx;
     /* The command stream. */
     struct radeon_winsys_cs *cs;
     /* Screen. */
@@ -703,7 +705,7 @@ r300_get_nonnull_cb(struct pipe_framebuffer_state *fb, unsigned i)
 }
 
 struct pipe_context* r300_create_context(struct pipe_screen* screen,
-                                         void *priv);
+                                         void *priv, unsigned flags);
 
 /* Context initialization. */
 struct draw_stage* r300_draw_stage(struct r300_context* r300);

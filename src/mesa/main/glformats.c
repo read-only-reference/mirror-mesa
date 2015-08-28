@@ -820,6 +820,47 @@ _mesa_is_enum_format_signed_int(GLenum format)
    }
 }
 
+/**
+ * Test if the given format is an ASTC format.
+ */
+GLboolean
+_mesa_is_astc_format(GLenum internalFormat)
+{
+   switch (internalFormat) {
+   case GL_COMPRESSED_RGBA_ASTC_4x4_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_5x4_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_5x5_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_6x5_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_6x6_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_8x5_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_8x6_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_8x8_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_10x5_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_10x6_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_10x8_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_10x10_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_12x10_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_12x12_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_4x4_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x4_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x5_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x5_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x5_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x6_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x8_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x5_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x6_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x8_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x10_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12_KHR:
+      return true;
+   default:
+      return false;
+   }
+}
+
 
 /**
  * Test if the given format is an integer (non-normalized) format.
@@ -1262,6 +1303,35 @@ _mesa_is_compressed_format(const struct gl_context *ctx, GLenum format)
    case GL_COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT:
       return _mesa_is_desktop_gl(ctx) &&
          ctx->Extensions.ARB_texture_compression_bptc;
+   case GL_COMPRESSED_RGBA_ASTC_4x4_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_5x4_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_5x5_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_6x5_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_6x6_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_8x5_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_8x6_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_8x8_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_10x5_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_10x6_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_10x8_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_10x10_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_12x10_KHR:
+   case GL_COMPRESSED_RGBA_ASTC_12x12_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_4x4_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x4_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_5x5_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x5_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_6x6_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x5_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x6_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_8x8_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x5_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x6_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x8_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_10x10_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x10_KHR:
+   case GL_COMPRESSED_SRGB8_ALPHA8_ASTC_12x12_KHR:
+      return ctx->Extensions.KHR_texture_compression_astc_ldr;
    case GL_PALETTE4_RGB8_OES:
    case GL_PALETTE4_RGBA8_OES:
    case GL_PALETTE4_R5_G6_B5_OES:
@@ -2649,8 +2719,6 @@ get_swizzle_from_gl_format(GLenum format, uint8_t *swizzle)
 uint32_t
 _mesa_format_from_format_and_type(GLenum format, GLenum type)
 {
-   mesa_array_format array_format;
-
    bool is_array_format = true;
    uint8_t swizzle[4];
    bool normalized = false, is_float = false, is_signed = false;
@@ -2706,15 +2774,9 @@ _mesa_format_from_format_and_type(GLenum format, GLenum type)
       normalized = !_mesa_is_enum_format_integer(format);
       num_channels = _mesa_components_in_format(format);
 
-      array_format =
-         MESA_ARRAY_FORMAT(type_size, is_signed, is_float,
-                           normalized, num_channels,
-                           swizzle[0], swizzle[1], swizzle[2], swizzle[3]);
-
-      if (!_mesa_little_endian())
-         array_format = _mesa_array_format_flip_channels(array_format);
-
-      return array_format;
+      return MESA_ARRAY_FORMAT(type_size, is_signed, is_float,
+                               normalized, num_channels,
+                               swizzle[0], swizzle[1], swizzle[2], swizzle[3]);
    }
 
    /* Otherwise this is not an array format, so return the mesa_format

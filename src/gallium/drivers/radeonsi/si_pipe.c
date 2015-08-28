@@ -56,18 +56,22 @@ static void si_destroy_context(struct pipe_context *context)
 
 	if (sctx->pstipple_sampler_state)
 		sctx->b.b.delete_sampler_state(&sctx->b.b, sctx->pstipple_sampler_state);
-	if (sctx->dummy_pixel_shader) {
+	if (sctx->dummy_pixel_shader)
 		sctx->b.b.delete_fs_state(&sctx->b.b, sctx->dummy_pixel_shader);
-	}
 	if (sctx->fixed_func_tcs_shader)
 		sctx->b.b.delete_tcs_state(&sctx->b.b, sctx->fixed_func_tcs_shader);
-	sctx->b.b.delete_depth_stencil_alpha_state(&sctx->b.b, sctx->custom_dsa_flush);
-	sctx->b.b.delete_blend_state(&sctx->b.b, sctx->custom_blend_resolve);
-	sctx->b.b.delete_blend_state(&sctx->b.b, sctx->custom_blend_decompress);
-	sctx->b.b.delete_blend_state(&sctx->b.b, sctx->custom_blend_fastclear);
+	if (sctx->custom_dsa_flush)
+		sctx->b.b.delete_depth_stencil_alpha_state(&sctx->b.b, sctx->custom_dsa_flush);
+	if (sctx->custom_blend_resolve)
+		sctx->b.b.delete_blend_state(&sctx->b.b, sctx->custom_blend_resolve);
+	if (sctx->custom_blend_decompress)
+		sctx->b.b.delete_blend_state(&sctx->b.b, sctx->custom_blend_decompress);
+	if (sctx->custom_blend_fastclear)
+		sctx->b.b.delete_blend_state(&sctx->b.b, sctx->custom_blend_fastclear);
 	util_unreference_framebuffer_state(&sctx->framebuffer.state);
 
-	util_blitter_destroy(sctx->blitter);
+	if (sctx->blitter)
+		util_blitter_destroy(sctx->blitter);
 
 	si_pm4_cleanup(sctx);
 
@@ -77,10 +81,22 @@ static void si_destroy_context(struct pipe_context *context)
 	LLVMDisposeTargetMachine(sctx->tm);
 #endif
 
+	r600_resource_reference(&sctx->trace_buf, NULL);
+	r600_resource_reference(&sctx->last_trace_buf, NULL);
+	free(sctx->last_ib);
 	FREE(sctx);
 }
 
-static struct pipe_context *si_create_context(struct pipe_screen *screen, void *priv)
+static enum pipe_reset_status
+si_amdgpu_get_reset_status(struct pipe_context *ctx)
+{
+	struct si_context *sctx = (struct si_context *)ctx;
+
+	return sctx->b.ws->ctx_query_reset_status(sctx->b.ctx);
+}
+
+static struct pipe_context *si_create_context(struct pipe_screen *screen,
+                                              void *priv, unsigned flags)
 {
 	struct si_context *sctx = CALLOC_STRUCT(si_context);
 	struct si_screen* sscreen = (struct si_screen *)screen;
@@ -97,14 +113,20 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, void *
 	sctx->b.b.screen = screen; /* this must be set first */
 	sctx->b.b.priv = priv;
 	sctx->b.b.destroy = si_destroy_context;
+	sctx->b.set_atom_dirty = (void *)si_set_atom_dirty;
 	sctx->screen = sscreen; /* Easy accessing of screen/winsys. */
+	sctx->is_debug = (flags & PIPE_CONTEXT_DEBUG) != 0;
 
 	if (!r600_common_context_init(&sctx->b, &sscreen->b))
 		goto fail;
 
+	if (sscreen->b.info.drm_major == 3)
+		sctx->b.b.get_device_reset_status = si_amdgpu_get_reset_status;
+
 	si_init_blit_functions(sctx);
 	si_init_compute_functions(sctx);
 	si_init_cp_dma_functions(sctx);
+	si_init_debug_functions(sctx);
 
 	if (sscreen->b.info.has_uvd) {
 		sctx->b.b.create_video_codec = si_uvd_create_decoder;
@@ -114,7 +136,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, void *
 		sctx->b.b.create_video_buffer = vl_video_buffer_create;
 	}
 
-	sctx->b.rings.gfx.cs = ws->cs_create(ws, RING_GFX, si_context_gfx_flush,
+	sctx->b.rings.gfx.cs = ws->cs_create(sctx->b.ctx, RING_GFX, si_context_gfx_flush,
 					     sctx, sscreen->b.trace_bo ?
 						sscreen->b.trace_bo->cs_buf : NULL);
 	sctx->b.rings.gfx.flush = si_context_gfx_flush;
@@ -179,7 +201,9 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen, void *
 	r600_target = radeon_llvm_get_r600_target(triple);
 	sctx->tm = LLVMCreateTargetMachine(r600_target, triple,
 					   r600_get_llvm_processor_name(sscreen->b.family),
-					   "+DumpCode,+vgpr-spilling",
+					   sctx->b.chip_class >= VI ?
+						   "+DumpCode" :
+						   "+DumpCode,+vgpr-spilling",
 					   LLVMCodeGenLevelDefault,
 					   LLVMRelocDefault,
 					   LLVMCodeModelDefault);
@@ -252,18 +276,25 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_TEXCOORD:
 	case PIPE_CAP_TGSI_FS_FINE_DERIVATIVE:
 	case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
+	case PIPE_CAP_TEXTURE_FLOAT_LINEAR:
+	case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
+	case PIPE_CAP_DEPTH_BOUNDS_TEST:
 		return 1;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
 		return !SI_BIG_ENDIAN && sscreen->b.info.has_userptr;
 
 	case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
-		return sscreen->b.info.drm_major == 2 && sscreen->b.info.drm_minor >= 43;
+		return (sscreen->b.info.drm_major == 2 &&
+			sscreen->b.info.drm_minor >= 43) ||
+		       sscreen->b.info.drm_major == 3;
 
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
 		/* 2D tiling on CIK is supported since DRM 2.35.0 */
 		return sscreen->b.chip_class < CIK ||
-		       sscreen->b.info.drm_minor >= 35;
+		       (sscreen->b.info.drm_major == 2 &&
+			sscreen->b.info.drm_minor >= 35) ||
+		       sscreen->b.info.drm_major == 3;
 
         case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
                 return R600_MAP_BUFFER_ALIGNMENT;
@@ -561,7 +592,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 		sscreen->b.debug_flags |= DBG_FS | DBG_VS | DBG_GS | DBG_PS | DBG_CS;
 
 	/* Create the auxiliary context. This must be done last. */
-	sscreen->b.aux_context = sscreen->b.b.context_create(&sscreen->b.b, NULL);
+	sscreen->b.aux_context = sscreen->b.b.context_create(&sscreen->b.b, NULL, 0);
 
 	return &sscreen->b.b;
 }

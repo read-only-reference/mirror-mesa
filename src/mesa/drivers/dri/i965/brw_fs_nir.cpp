@@ -24,6 +24,7 @@
 #include "glsl/ir.h"
 #include "glsl/ir_optimization.h"
 #include "glsl/nir/glsl_to_nir.h"
+#include "main/shaderimage.h"
 #include "program/prog_to_nir.h"
 #include "brw_fs.h"
 #include "brw_fs_surface_builder.h"
@@ -130,7 +131,7 @@ fs_visitor::nir_setup_outputs(nir_shader *shader)
 
       switch (stage) {
       case MESA_SHADER_VERTEX:
-         for (int i = 0; i < ALIGN(type_size(var->type), 4) / 4; i++) {
+         for (unsigned int i = 0; i < ALIGN(type_size_scalar(var->type), 4) / 4; i++) {
             int output = var->data.location + i;
             this->outputs[output] = offset(reg, bld, 4 * i);
             this->output_components[output] = vector_elements;
@@ -174,18 +175,8 @@ fs_visitor::nir_setup_outputs(nir_shader *shader)
 void
 fs_visitor::nir_setup_uniforms(nir_shader *shader)
 {
-   num_direct_uniforms = shader->num_direct_uniforms;
-
    if (dispatch_width != 8)
       return;
-
-   /* We split the uniform register file in half.  The first half is
-    * entirely direct uniforms.  The second half is indirect.
-    */
-   if (num_direct_uniforms > 0)
-      param_size[0] = num_direct_uniforms;
-   if (shader->num_uniforms > num_direct_uniforms)
-      param_size[num_direct_uniforms] = shader->num_uniforms - num_direct_uniforms;
 
    uniforms = shader->num_uniforms;
 
@@ -199,15 +190,20 @@ fs_visitor::nir_setup_uniforms(nir_shader *shader)
             nir_setup_builtin_uniform(var);
          else
             nir_setup_uniform(var);
+         if(type_size_scalar(var->type) > 0)
+            param_size[var->data.driver_location] = type_size_scalar(var->type);
       }
    } else {
-      /* prog_to_nir doesn't create uniform variables; set param up directly. */
+      /* prog_to_nir only creates a single giant uniform variable so we can
+       * just set param up directly. */
       for (unsigned p = 0; p < prog->Parameters->NumParameters; p++) {
          for (unsigned int i = 0; i < 4; i++) {
             stage_prog_data->param[4 * p + i] =
                &prog->Parameters->ParameterValues[p][i];
          }
       }
+      if(prog->Parameters->NumParameters > 0)
+         param_size[0] = prog->Parameters->NumParameters * 4;
    }
 }
 
@@ -237,17 +233,18 @@ fs_visitor::nir_setup_uniform(nir_variable *var)
          continue;
       }
 
-      unsigned slots = storage->type->component_slots();
-      if (storage->array_elements)
-         slots *= storage->array_elements;
+      if (storage->type->is_image()) {
+         setup_image_uniform_values(index, storage);
+      } else {
+         unsigned slots = storage->type->component_slots();
+         if (storage->array_elements)
+            slots *= storage->array_elements;
 
-      for (unsigned i = 0; i < slots; i++) {
-         stage_prog_data->param[index++] = &storage->storage[i];
+         for (unsigned i = 0; i < slots; i++) {
+            stage_prog_data->param[index++] = &storage->storage[i];
+         }
       }
    }
-
-   /* Make sure we actually initialized the right amount of stuff here. */
-   assert(var->data.driver_location + var->type->component_slots() == index);
 }
 
 void
@@ -419,8 +416,6 @@ fs_visitor::nir_emit_if(nir_if *if_stmt)
    nir_emit_cf_list(&if_stmt->else_list);
 
    bld.emit(BRW_OPCODE_ENDIF);
-
-   try_replace_with_sel();
 }
 
 void
@@ -474,24 +469,6 @@ fs_visitor::nir_emit_instr(nir_instr *instr)
    default:
       unreachable("unknown instruction type");
    }
-}
-
-static brw_reg_type
-brw_type_for_nir_type(nir_alu_type type)
-{
-   switch (type) {
-   case nir_type_unsigned:
-      return BRW_REGISTER_TYPE_UD;
-   case nir_type_bool:
-   case nir_type_int:
-      return BRW_REGISTER_TYPE_D;
-   case nir_type_float:
-      return BRW_REGISTER_TYPE_F;
-   default:
-      unreachable("unknown type");
-   }
-
-   return BRW_REGISTER_TYPE_F;
 }
 
 bool
@@ -786,38 +763,9 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
       break;
 
    case nir_op_imul_high:
-   case nir_op_umul_high: {
-      if (devinfo->gen >= 7)
-         no16("SIMD16 explicit accumulator operands unsupported\n");
-
-      struct brw_reg acc = retype(brw_acc_reg(dispatch_width), result.type);
-
-      fs_inst *mul = bld.MUL(acc, op[0], op[1]);
-      bld.MACH(result, op[0], op[1]);
-
-      /* Until Gen8, integer multiplies read 32-bits from one source, and
-       * 16-bits from the other, and relying on the MACH instruction to
-       * generate the high bits of the result.
-       *
-       * On Gen8, the multiply instruction does a full 32x32-bit multiply,
-       * but in order to do a 64x64-bit multiply we have to simulate the
-       * previous behavior and then use a MACH instruction.
-       *
-       * FINISHME: Don't use source modifiers on src1.
-       */
-      if (devinfo->gen >= 8) {
-         assert(mul->src[1].type == BRW_REGISTER_TYPE_D ||
-                mul->src[1].type == BRW_REGISTER_TYPE_UD);
-         if (mul->src[1].type == BRW_REGISTER_TYPE_D) {
-            mul->src[1].type = BRW_REGISTER_TYPE_W;
-            mul->src[1].stride = 2;
-         } else {
-            mul->src[1].type = BRW_REGISTER_TYPE_UW;
-            mul->src[1].stride = 2;
-         }
-      }
+   case nir_op_umul_high:
+      bld.emit(SHADER_OPCODE_MULH, result, op[0], op[1]);
       break;
-   }
 
    case nir_op_idiv:
    case nir_op_udiv:
@@ -858,28 +806,28 @@ fs_visitor::nir_emit_alu(const fs_builder &bld, nir_alu_instr *instr)
 
    case nir_op_inot:
       if (devinfo->gen >= 8) {
-         resolve_source_modifiers(&op[0]);
+         op[0] = resolve_source_modifiers(op[0]);
       }
       bld.NOT(result, op[0]);
       break;
    case nir_op_ixor:
       if (devinfo->gen >= 8) {
-         resolve_source_modifiers(&op[0]);
-         resolve_source_modifiers(&op[1]);
+         op[0] = resolve_source_modifiers(op[0]);
+         op[1] = resolve_source_modifiers(op[1]);
       }
       bld.XOR(result, op[0], op[1]);
       break;
    case nir_op_ior:
       if (devinfo->gen >= 8) {
-         resolve_source_modifiers(&op[0]);
-         resolve_source_modifiers(&op[1]);
+         op[0] = resolve_source_modifiers(op[0]);
+         op[1] = resolve_source_modifiers(op[1]);
       }
       bld.OR(result, op[0], op[1]);
       break;
    case nir_op_iand:
       if (devinfo->gen >= 8) {
-         resolve_source_modifiers(&op[0]);
-         resolve_source_modifiers(&op[1]);
+         op[0] = resolve_source_modifiers(op[0]);
+         op[1] = resolve_source_modifiers(op[1]);
       }
       bld.AND(result, op[0], op[1]);
       break;
@@ -1196,6 +1144,49 @@ fs_visitor::get_nir_dest(nir_dest dest)
                              dest.reg.indirect);
 }
 
+fs_reg
+fs_visitor::get_nir_image_deref(const nir_deref_var *deref)
+{
+   fs_reg image(UNIFORM, deref->var->data.driver_location,
+                BRW_REGISTER_TYPE_UD);
+
+   if (deref->deref.child) {
+      const nir_deref_array *deref_array =
+         nir_deref_as_array(deref->deref.child);
+      assert(deref->deref.child->deref_type == nir_deref_type_array &&
+             deref_array->deref.child == NULL);
+      const unsigned size = glsl_get_length(deref->var->type);
+      const unsigned base = MIN2(deref_array->base_offset, size - 1);
+
+      image = offset(image, bld, base * BRW_IMAGE_PARAM_SIZE);
+
+      if (deref_array->deref_array_type == nir_deref_array_type_indirect) {
+         fs_reg *tmp = new(mem_ctx) fs_reg(vgrf(glsl_type::int_type));
+
+         if (devinfo->gen == 7 && !devinfo->is_haswell) {
+            /* IVB hangs when trying to access an invalid surface index with
+             * the dataport.  According to the spec "if the index used to
+             * select an individual element is negative or greater than or
+             * equal to the size of the array, the results of the operation
+             * are undefined but may not lead to termination" -- which is one
+             * of the possible outcomes of the hang.  Clamp the index to
+             * prevent access outside of the array bounds.
+             */
+            bld.emit_minmax(*tmp, retype(get_nir_src(deref_array->indirect),
+                                         BRW_REGISTER_TYPE_UD),
+                            fs_reg(size - base - 1), BRW_CONDITIONAL_L);
+         } else {
+            bld.MOV(*tmp, get_nir_src(deref_array->indirect));
+         }
+
+         bld.MUL(*tmp, *tmp, fs_reg(BRW_IMAGE_PARAM_SIZE));
+         image.reladdr = tmp;
+      }
+   }
+
+   return image;
+}
+
 void
 fs_visitor::emit_percomp(const fs_builder &bld, const fs_inst &inst,
                          unsigned wr_mask)
@@ -1211,6 +1202,55 @@ fs_visitor::emit_percomp(const fs_builder &bld, const fs_inst &inst,
             new_inst->src[j] = offset(new_inst->src[j], bld, i);
 
       bld.emit(new_inst);
+   }
+}
+
+/**
+ * Get the matching channel register datatype for an image intrinsic of the
+ * specified GLSL image type.
+ */
+static brw_reg_type
+get_image_base_type(const glsl_type *type)
+{
+   switch ((glsl_base_type)type->sampler_type) {
+   case GLSL_TYPE_UINT:
+      return BRW_REGISTER_TYPE_UD;
+   case GLSL_TYPE_INT:
+      return BRW_REGISTER_TYPE_D;
+   case GLSL_TYPE_FLOAT:
+      return BRW_REGISTER_TYPE_F;
+   default:
+      unreachable("Not reached.");
+   }
+}
+
+/**
+ * Get the appropriate atomic op for an image atomic intrinsic.
+ */
+static unsigned
+get_image_atomic_op(nir_intrinsic_op op, const glsl_type *type)
+{
+   switch (op) {
+   case nir_intrinsic_image_atomic_add:
+      return BRW_AOP_ADD;
+   case nir_intrinsic_image_atomic_min:
+      return (get_image_base_type(type) == BRW_REGISTER_TYPE_D ?
+              BRW_AOP_IMIN : BRW_AOP_UMIN);
+   case nir_intrinsic_image_atomic_max:
+      return (get_image_base_type(type) == BRW_REGISTER_TYPE_D ?
+              BRW_AOP_IMAX : BRW_AOP_UMAX);
+   case nir_intrinsic_image_atomic_and:
+      return BRW_AOP_AND;
+   case nir_intrinsic_image_atomic_or:
+      return BRW_AOP_OR;
+   case nir_intrinsic_image_atomic_xor:
+      return BRW_AOP_XOR;
+   case nir_intrinsic_image_atomic_exchange:
+      return BRW_AOP_MOV;
+   case nir_intrinsic_image_atomic_comp_swap:
+      return BRW_AOP_CMPWR;
+   default:
+      unreachable("Not reachable.");
    }
 }
 
@@ -1288,10 +1328,111 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
       break;
    }
 
+   case nir_intrinsic_image_load:
+   case nir_intrinsic_image_store:
+   case nir_intrinsic_image_atomic_add:
+   case nir_intrinsic_image_atomic_min:
+   case nir_intrinsic_image_atomic_max:
+   case nir_intrinsic_image_atomic_and:
+   case nir_intrinsic_image_atomic_or:
+   case nir_intrinsic_image_atomic_xor:
+   case nir_intrinsic_image_atomic_exchange:
+   case nir_intrinsic_image_atomic_comp_swap: {
+      using namespace image_access;
+
+      /* Get the referenced image variable and type. */
+      const nir_variable *var = instr->variables[0]->var;
+      const glsl_type *type = var->type->without_array();
+      const brw_reg_type base_type = get_image_base_type(type);
+
+      /* Get some metadata from the image intrinsic. */
+      const nir_intrinsic_info *info = &nir_intrinsic_infos[instr->intrinsic];
+      const unsigned arr_dims = type->sampler_array ? 1 : 0;
+      const unsigned surf_dims = type->coordinate_components() - arr_dims;
+      const mesa_format format =
+         (var->data.image.write_only ? MESA_FORMAT_NONE :
+          _mesa_get_shader_image_format(var->data.image.format));
+
+      /* Get the arguments of the image intrinsic. */
+      const fs_reg image = get_nir_image_deref(instr->variables[0]);
+      const fs_reg addr = retype(get_nir_src(instr->src[0]),
+                                 BRW_REGISTER_TYPE_UD);
+      const fs_reg src0 = (info->num_srcs >= 3 ?
+                           retype(get_nir_src(instr->src[2]), base_type) :
+                           fs_reg());
+      const fs_reg src1 = (info->num_srcs >= 4 ?
+                           retype(get_nir_src(instr->src[3]), base_type) :
+                           fs_reg());
+      fs_reg tmp;
+
+      /* Emit an image load, store or atomic op. */
+      if (instr->intrinsic == nir_intrinsic_image_load)
+         tmp = emit_image_load(bld, image, addr, surf_dims, arr_dims, format);
+
+      else if (instr->intrinsic == nir_intrinsic_image_store)
+         emit_image_store(bld, image, addr, src0, surf_dims, arr_dims, format);
+
+      else
+         tmp = emit_image_atomic(bld, image, addr, src0, src1,
+                                 surf_dims, arr_dims, info->dest_components,
+                                 get_image_atomic_op(instr->intrinsic, type));
+
+      /* Assign the result. */
+      for (unsigned c = 0; c < info->dest_components; ++c)
+         bld.MOV(offset(retype(dest, base_type), bld, c),
+                 offset(tmp, bld, c));
+      break;
+   }
+
    case nir_intrinsic_memory_barrier: {
       const fs_reg tmp = bld.vgrf(BRW_REGISTER_TYPE_UD, 16 / dispatch_width);
       bld.emit(SHADER_OPCODE_MEMORY_FENCE, tmp)
          ->regs_written = 2;
+      break;
+   }
+
+   case nir_intrinsic_image_size: {
+      /* Get the referenced image variable and type. */
+      const nir_variable *var = instr->variables[0]->var;
+      const glsl_type *type = var->type->without_array();
+
+      /* Get the size of the image. */
+      const fs_reg image = get_nir_image_deref(instr->variables[0]);
+      const fs_reg size = offset(image, bld, BRW_IMAGE_PARAM_SIZE_OFFSET);
+
+      /* For 1DArray image types, the array index is stored in the Z component.
+       * Fix this by swizzling the Z component to the Y component.
+       */
+      const bool is_1d_array_image =
+                  type->sampler_dimensionality == GLSL_SAMPLER_DIM_1D &&
+                  type->sampler_array;
+
+      /* For CubeArray images, we should count the number of cubes instead
+       * of the number of faces. Fix it by dividing the (Z component) by 6.
+       */
+      const bool is_cube_array_image =
+                  type->sampler_dimensionality == GLSL_SAMPLER_DIM_CUBE &&
+                  type->sampler_array;
+
+      /* Copy all the components. */
+      const nir_intrinsic_info *info = &nir_intrinsic_infos[instr->intrinsic];
+      for (unsigned c = 0; c < info->dest_components; ++c) {
+         if ((int)c >= type->coordinate_components()) {
+             bld.MOV(offset(retype(dest, BRW_REGISTER_TYPE_D), bld, c),
+                     fs_reg(1));
+         } else if (c == 1 && is_1d_array_image) {
+            bld.MOV(offset(retype(dest, BRW_REGISTER_TYPE_D), bld, c),
+                    offset(size, bld, 2));
+         } else if (c == 2 && is_cube_array_image) {
+            bld.emit(SHADER_OPCODE_INT_QUOTIENT,
+                     offset(retype(dest, BRW_REGISTER_TYPE_D), bld, c),
+                     offset(size, bld, c), fs_reg(6));
+         } else {
+            bld.MOV(offset(retype(dest, BRW_REGISTER_TYPE_D), bld, c),
+                    offset(size, bld, c));
+         }
+       }
+
       break;
    }
 
@@ -1356,21 +1497,13 @@ fs_visitor::nir_emit_intrinsic(const fs_builder &bld, nir_intrinsic_instr *instr
       has_indirect = true;
       /* fallthrough */
    case nir_intrinsic_load_uniform: {
-      unsigned index = instr->const_index[0];
-
-      fs_reg uniform_reg;
-      if (index < num_direct_uniforms) {
-         uniform_reg = fs_reg(UNIFORM, 0);
-      } else {
-         uniform_reg = fs_reg(UNIFORM, num_direct_uniforms);
-         index -= num_direct_uniforms;
-      }
+      fs_reg uniform_reg(UNIFORM, instr->const_index[0]);
+      uniform_reg.reg_offset = instr->const_index[1];
 
       for (unsigned j = 0; j < instr->num_components; j++) {
-         fs_reg src = offset(retype(uniform_reg, dest.type), bld, index);
+         fs_reg src = offset(retype(uniform_reg, dest.type), bld, j);
          if (has_indirect)
             src.reladdr = new(mem_ctx) fs_reg(get_nir_src(instr->src[0]));
-         index++;
 
          bld.MOV(dest, src);
          dest = offset(dest, bld, 1);
@@ -1717,20 +1850,8 @@ fs_visitor::nir_emit_texture(const fs_builder &bld, nir_tex_instr *instr)
       }
    }
 
-   enum glsl_base_type dest_base_type;
-   switch (instr->dest_type) {
-   case nir_type_float:
-      dest_base_type = GLSL_TYPE_FLOAT;
-      break;
-   case nir_type_int:
-      dest_base_type = GLSL_TYPE_INT;
-      break;
-   case nir_type_unsigned:
-      dest_base_type = GLSL_TYPE_UINT;
-      break;
-   default:
-      unreachable("bad type");
-   }
+   enum glsl_base_type dest_base_type =
+     brw_glsl_base_type_for_nir_type (instr->dest_type);
 
    const glsl_type *dest_type =
       glsl_type::get_instance(dest_base_type, nir_tex_instr_dest_size(instr),

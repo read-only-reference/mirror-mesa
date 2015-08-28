@@ -427,7 +427,9 @@ fs_reg::equals(const fs_reg &r) const
            negate == r.negate &&
            abs == r.abs &&
            !reladdr && !r.reladdr &&
-           memcmp(&fixed_hw_reg, &r.fixed_hw_reg, sizeof(fixed_hw_reg)) == 0 &&
+           ((file != HW_REG && file != IMM) ||
+            memcmp(&fixed_hw_reg, &r.fixed_hw_reg,
+                   sizeof(fixed_hw_reg)) == 0) &&
            stride == r.stride);
 }
 
@@ -455,8 +457,8 @@ fs_reg::component_size(unsigned width) const
    return MAX2(width * stride, 1) * type_sz(type);
 }
 
-int
-fs_visitor::type_size(const struct glsl_type *type)
+extern "C" int
+type_size_scalar(const struct glsl_type *type)
 {
    unsigned int size, i;
 
@@ -467,11 +469,11 @@ fs_visitor::type_size(const struct glsl_type *type)
    case GLSL_TYPE_BOOL:
       return type->components();
    case GLSL_TYPE_ARRAY:
-      return type_size(type->fields.array) * type->length;
+      return type_size_scalar(type->fields.array) * type->length;
    case GLSL_TYPE_STRUCT:
       size = 0;
       for (i = 0; i < type->length; i++) {
-	 size += type_size(type->fields.structure[i].type);
+	 size += type_size_scalar(type->fields.structure[i].type);
       }
       return size;
    case GLSL_TYPE_SAMPLER:
@@ -484,10 +486,12 @@ fs_visitor::type_size(const struct glsl_type *type)
    case GLSL_TYPE_SUBROUTINE:
       return 1;
    case GLSL_TYPE_IMAGE:
+      return BRW_IMAGE_PARAM_SIZE;
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
    case GLSL_TYPE_DOUBLE:
+   case GLSL_TYPE_FUNCTION:
       unreachable("not reached");
    }
 
@@ -808,6 +812,7 @@ fs_inst::regs_read(int arg) const
    case IMM:
       return 1;
    case GRF:
+   case ATTR:
    case HW_REG:
       return DIV_ROUND_UP(components_read(arg) *
                           src[arg].component_size(exec_size),
@@ -904,7 +909,7 @@ fs_reg
 fs_visitor::vgrf(const glsl_type *const type)
 {
    int reg_width = dispatch_width / 8;
-   return fs_reg(GRF, alloc.allocate(type_size(type) * reg_width),
+   return fs_reg(GRF, alloc.allocate(type_size_scalar(type) * reg_width),
                  brw_type_for_base_type(type));
 }
 
@@ -941,15 +946,17 @@ fs_visitor::import_uniforms(fs_visitor *v)
 }
 
 void
-fs_visitor::setup_vector_uniform_values(const gl_constant_value *values, unsigned n)
+fs_visitor::setup_vec4_uniform_value(unsigned param_offset,
+                                     const gl_constant_value *values,
+                                     unsigned n)
 {
    static const gl_constant_value zero = { 0 };
 
    for (unsigned i = 0; i < n; ++i)
-      stage_prog_data->param[uniforms++] = &values[i];
+      stage_prog_data->param[param_offset + i] = &values[i];
 
    for (unsigned i = n; i < 4; ++i)
-      stage_prog_data->param[uniforms++] = &zero;
+      stage_prog_data->param[param_offset + i] = &zero;
 }
 
 fs_reg *
@@ -1310,15 +1317,16 @@ fs_visitor::emit_sampleid_setup()
    return reg;
 }
 
-void
-fs_visitor::resolve_source_modifiers(fs_reg *src)
+fs_reg
+fs_visitor::resolve_source_modifiers(const fs_reg &src)
 {
-   if (!src->abs && !src->negate)
-      return;
+   if (!src.abs && !src.negate)
+      return src;
 
-   fs_reg temp = bld.vgrf(src->type);
-   bld.MOV(temp, *src);
-   *src = temp;
+   fs_reg temp = bld.vgrf(src.type);
+   bld.MOV(temp, src);
+
+   return temp;
 }
 
 void
@@ -1761,59 +1769,6 @@ fs_visitor::compact_virtual_grfs()
    return progress;
 }
 
-/*
- * Implements array access of uniforms by inserting a
- * PULL_CONSTANT_LOAD instruction.
- *
- * Unlike temporary GRF array access (where we don't support it due to
- * the difficulty of doing relative addressing on instruction
- * destinations), we could potentially do array access of uniforms
- * that were loaded in GRF space as push constants.  In real-world
- * usage we've seen, though, the arrays being used are always larger
- * than we could load as push constants, so just always move all
- * uniform array access out to a pull constant buffer.
- */
-void
-fs_visitor::move_uniform_array_access_to_pull_constants()
-{
-   if (dispatch_width != 8)
-      return;
-
-   pull_constant_loc = ralloc_array(mem_ctx, int, uniforms);
-   memset(pull_constant_loc, -1, sizeof(pull_constant_loc[0]) * uniforms);
-
-   /* Walk through and find array access of uniforms.  Put a copy of that
-    * uniform in the pull constant buffer.
-    *
-    * Note that we don't move constant-indexed accesses to arrays.  No
-    * testing has been done of the performance impact of this choice.
-    */
-   foreach_block_and_inst_safe(block, fs_inst, inst, cfg) {
-      for (int i = 0 ; i < inst->sources; i++) {
-         if (inst->src[i].file != UNIFORM || !inst->src[i].reladdr)
-            continue;
-
-         int uniform = inst->src[i].reg;
-
-         /* If this array isn't already present in the pull constant buffer,
-          * add it.
-          */
-         if (pull_constant_loc[uniform] == -1) {
-            const gl_constant_value **values = &stage_prog_data->param[uniform];
-
-            assert(param_size[uniform]);
-
-            for (int j = 0; j < param_size[uniform]; j++) {
-               pull_constant_loc[uniform + j] = stage_prog_data->nr_pull_params;
-
-               stage_prog_data->pull_param[stage_prog_data->nr_pull_params++] =
-                  values[j];
-            }
-         }
-      }
-   }
-}
-
 /**
  * Assign UNIFORM file registers to either push constants or pull constants.
  *
@@ -1821,7 +1776,9 @@ fs_visitor::move_uniform_array_access_to_pull_constants()
  * maximum number of fragment shader uniform components (64).  If
  * there are too many of these, they'd fill up all of register space.
  * So, this will push some of them out to the pull constant buffer and
- * update the program to load them.
+ * update the program to load them.  We also use pull constants for all
+ * indirect constant loads because we don't support indirect accesses in
+ * registers yet.
  */
 void
 fs_visitor::assign_constant_locations()
@@ -1830,20 +1787,46 @@ fs_visitor::assign_constant_locations()
    if (dispatch_width != 8)
       return;
 
-   /* Find which UNIFORM registers are still in use. */
-   bool is_live[uniforms];
-   for (unsigned int i = 0; i < uniforms; i++) {
-      is_live[i] = false;
-   }
+   unsigned int num_pull_constants = 0;
 
-   foreach_block_and_inst(block, fs_inst, inst, cfg) {
-      for (int i = 0; i < inst->sources; i++) {
+   pull_constant_loc = ralloc_array(mem_ctx, int, uniforms);
+   memset(pull_constant_loc, -1, sizeof(pull_constant_loc[0]) * uniforms);
+
+   bool is_live[uniforms];
+   memset(is_live, 0, sizeof(is_live));
+
+   /* First, we walk through the instructions and do two things:
+    *
+    *  1) Figure out which uniforms are live.
+    *
+    *  2) Find all indirect access of uniform arrays and flag them as needing
+    *     to go into the pull constant buffer.
+    *
+    * Note that we don't move constant-indexed accesses to arrays.  No
+    * testing has been done of the performance impact of this choice.
+    */
+   foreach_block_and_inst_safe(block, fs_inst, inst, cfg) {
+      for (int i = 0 ; i < inst->sources; i++) {
          if (inst->src[i].file != UNIFORM)
             continue;
 
-         int constant_nr = inst->src[i].reg + inst->src[i].reg_offset;
-         if (constant_nr >= 0 && constant_nr < (int) uniforms)
-            is_live[constant_nr] = true;
+         if (inst->src[i].reladdr) {
+            int uniform = inst->src[i].reg;
+
+            /* If this array isn't already present in the pull constant buffer,
+             * add it.
+             */
+            if (pull_constant_loc[uniform] == -1) {
+               assert(param_size[uniform]);
+               for (int j = 0; j < param_size[uniform]; j++)
+                  pull_constant_loc[uniform + j] = num_pull_constants++;
+            }
+         } else {
+            /* Mark the the one accessed uniform as live */
+            int constant_nr = inst->src[i].reg + inst->src[i].reg_offset;
+            if (constant_nr >= 0 && constant_nr < (int) uniforms)
+               is_live[constant_nr] = true;
+         }
       }
    }
 
@@ -1877,27 +1860,29 @@ fs_visitor::assign_constant_locations()
       } else {
          /* Demote to a pull constant. */
          push_constant_loc[i] = -1;
-
-         int pull_index = stage_prog_data->nr_pull_params++;
-         stage_prog_data->pull_param[pull_index] = stage_prog_data->param[i];
-         pull_constant_loc[i] = pull_index;
+         pull_constant_loc[i] = num_pull_constants++;
       }
    }
 
    stage_prog_data->nr_params = num_push_constants;
+   stage_prog_data->nr_pull_params = num_pull_constants;
 
    /* Up until now, the param[] array has been indexed by reg + reg_offset
-    * of UNIFORM registers.  Condense it to only contain the uniforms we
-    * chose to upload as push constants.
+    * of UNIFORM registers.  Move pull constants into pull_param[] and
+    * condense param[] to only contain the uniforms we chose to push.
+    *
+    * NOTE: Because we are condensing the params[] array, we know that
+    * push_constant_loc[i] <= i and we can do it in one smooth loop without
+    * having to make a copy.
     */
    for (unsigned int i = 0; i < uniforms; i++) {
-      int remapped = push_constant_loc[i];
+      const gl_constant_value *value = stage_prog_data->param[i];
 
-      if (remapped == -1)
-         continue;
-
-      assert(remapped <= (int)i);
-      stage_prog_data->param[remapped] = stage_prog_data->param[i];
+      if (pull_constant_loc[i] != -1) {
+         stage_prog_data->pull_param[pull_constant_loc[i]] = value;
+      } else if (push_constant_loc[i] != -1) {
+         stage_prog_data->param[push_constant_loc[i]] = value;
+      }
    }
 }
 
@@ -3129,155 +3114,208 @@ fs_visitor::lower_integer_multiplication()
 {
    bool progress = false;
 
-   /* Gen8's MUL instruction can do a 32-bit x 32-bit -> 32-bit operation
-    * directly, but Cherryview cannot.
-    */
-   if (devinfo->gen >= 8 && !devinfo->is_cherryview)
-      return false;
-
    foreach_block_and_inst_safe(block, fs_inst, inst, cfg) {
-      if (inst->opcode != BRW_OPCODE_MUL ||
-          inst->dst.is_accumulator() ||
-          (inst->dst.type != BRW_REGISTER_TYPE_D &&
-           inst->dst.type != BRW_REGISTER_TYPE_UD))
-         continue;
-
       const fs_builder ibld(this, block, inst);
 
-      /* The MUL instruction isn't commutative. On Gen <= 6, only the low
-       * 16-bits of src0 are read, and on Gen >= 7 only the low 16-bits of
-       * src1 are used.
-       *
-       * If multiplying by an immediate value that fits in 16-bits, do a
-       * single MUL instruction with that value in the proper location.
-       */
-      if (inst->src[1].file == IMM &&
-          inst->src[1].fixed_hw_reg.dw1.ud < (1 << 16)) {
-         if (devinfo->gen < 7) {
-            fs_reg imm(GRF, alloc.allocate(dispatch_width / 8),
-                       inst->dst.type);
-            ibld.MOV(imm, inst->src[1]);
-            ibld.MUL(inst->dst, imm, inst->src[0]);
+      if (inst->opcode == BRW_OPCODE_MUL) {
+         if (inst->dst.is_accumulator() ||
+             (inst->dst.type != BRW_REGISTER_TYPE_D &&
+              inst->dst.type != BRW_REGISTER_TYPE_UD))
+            continue;
+
+         /* Gen8's MUL instruction can do a 32-bit x 32-bit -> 32-bit
+          * operation directly, but CHV/BXT cannot.
+          */
+         if (devinfo->gen >= 8 &&
+             !devinfo->is_cherryview && !devinfo->is_broxton)
+            continue;
+
+         if (inst->src[1].file == IMM &&
+             inst->src[1].fixed_hw_reg.dw1.ud < (1 << 16)) {
+            /* The MUL instruction isn't commutative. On Gen <= 6, only the low
+             * 16-bits of src0 are read, and on Gen >= 7 only the low 16-bits of
+             * src1 are used.
+             *
+             * If multiplying by an immediate value that fits in 16-bits, do a
+             * single MUL instruction with that value in the proper location.
+             */
+            if (devinfo->gen < 7) {
+               fs_reg imm(GRF, alloc.allocate(dispatch_width / 8),
+                          inst->dst.type);
+               ibld.MOV(imm, inst->src[1]);
+               ibld.MUL(inst->dst, imm, inst->src[0]);
+            } else {
+               ibld.MUL(inst->dst, inst->src[0], inst->src[1]);
+            }
          } else {
-            ibld.MUL(inst->dst, inst->src[0], inst->src[1]);
+            /* Gen < 8 (and some Gen8+ low-power parts like Cherryview) cannot
+             * do 32-bit integer multiplication in one instruction, but instead
+             * must do a sequence (which actually calculates a 64-bit result):
+             *
+             *    mul(8)  acc0<1>D   g3<8,8,1>D      g4<8,8,1>D
+             *    mach(8) null       g3<8,8,1>D      g4<8,8,1>D
+             *    mov(8)  g2<1>D     acc0<8,8,1>D
+             *
+             * But on Gen > 6, the ability to use second accumulator register
+             * (acc1) for non-float data types was removed, preventing a simple
+             * implementation in SIMD16. A 16-channel result can be calculated by
+             * executing the three instructions twice in SIMD8, once with quarter
+             * control of 1Q for the first eight channels and again with 2Q for
+             * the second eight channels.
+             *
+             * Which accumulator register is implicitly accessed (by AccWrEnable
+             * for instance) is determined by the quarter control. Unfortunately
+             * Ivybridge (and presumably Baytrail) has a hardware bug in which an
+             * implicit accumulator access by an instruction with 2Q will access
+             * acc1 regardless of whether the data type is usable in acc1.
+             *
+             * Specifically, the 2Q mach(8) writes acc1 which does not exist for
+             * integer data types.
+             *
+             * Since we only want the low 32-bits of the result, we can do two
+             * 32-bit x 16-bit multiplies (like the mul and mach are doing), and
+             * adjust the high result and add them (like the mach is doing):
+             *
+             *    mul(8)  g7<1>D     g3<8,8,1>D      g4.0<8,8,1>UW
+             *    mul(8)  g8<1>D     g3<8,8,1>D      g4.1<8,8,1>UW
+             *    shl(8)  g9<1>D     g8<8,8,1>D      16D
+             *    add(8)  g2<1>D     g7<8,8,1>D      g8<8,8,1>D
+             *
+             * We avoid the shl instruction by realizing that we only want to add
+             * the low 16-bits of the "high" result to the high 16-bits of the
+             * "low" result and using proper regioning on the add:
+             *
+             *    mul(8)  g7<1>D     g3<8,8,1>D      g4.0<16,8,2>UW
+             *    mul(8)  g8<1>D     g3<8,8,1>D      g4.1<16,8,2>UW
+             *    add(8)  g7.1<2>UW  g7.1<16,8,2>UW  g8<16,8,2>UW
+             *
+             * Since it does not use the (single) accumulator register, we can
+             * schedule multi-component multiplications much better.
+             */
+
+            if (inst->conditional_mod && inst->dst.is_null()) {
+               inst->dst = fs_reg(GRF, alloc.allocate(dispatch_width / 8),
+                                  inst->dst.type);
+            }
+            fs_reg low = inst->dst;
+            fs_reg high(GRF, alloc.allocate(dispatch_width / 8),
+                        inst->dst.type);
+
+            if (devinfo->gen >= 7) {
+               fs_reg src1_0_w = inst->src[1];
+               fs_reg src1_1_w = inst->src[1];
+
+               if (inst->src[1].file == IMM) {
+                  src1_0_w.fixed_hw_reg.dw1.ud &= 0xffff;
+                  src1_1_w.fixed_hw_reg.dw1.ud >>= 16;
+               } else {
+                  src1_0_w.type = BRW_REGISTER_TYPE_UW;
+                  if (src1_0_w.stride != 0) {
+                     assert(src1_0_w.stride == 1);
+                     src1_0_w.stride = 2;
+                  }
+
+                  src1_1_w.type = BRW_REGISTER_TYPE_UW;
+                  if (src1_1_w.stride != 0) {
+                     assert(src1_1_w.stride == 1);
+                     src1_1_w.stride = 2;
+                  }
+                  src1_1_w.subreg_offset += type_sz(BRW_REGISTER_TYPE_UW);
+               }
+               ibld.MUL(low, inst->src[0], src1_0_w);
+               ibld.MUL(high, inst->src[0], src1_1_w);
+            } else {
+               fs_reg src0_0_w = inst->src[0];
+               fs_reg src0_1_w = inst->src[0];
+
+               src0_0_w.type = BRW_REGISTER_TYPE_UW;
+               if (src0_0_w.stride != 0) {
+                  assert(src0_0_w.stride == 1);
+                  src0_0_w.stride = 2;
+               }
+
+               src0_1_w.type = BRW_REGISTER_TYPE_UW;
+               if (src0_1_w.stride != 0) {
+                  assert(src0_1_w.stride == 1);
+                  src0_1_w.stride = 2;
+               }
+               src0_1_w.subreg_offset += type_sz(BRW_REGISTER_TYPE_UW);
+
+               ibld.MUL(low, src0_0_w, inst->src[1]);
+               ibld.MUL(high, src0_1_w, inst->src[1]);
+            }
+
+            fs_reg dst = inst->dst;
+            dst.type = BRW_REGISTER_TYPE_UW;
+            dst.subreg_offset = 2;
+            dst.stride = 2;
+
+            high.type = BRW_REGISTER_TYPE_UW;
+            high.stride = 2;
+
+            low.type = BRW_REGISTER_TYPE_UW;
+            low.subreg_offset = 2;
+            low.stride = 2;
+
+            ibld.ADD(dst, low, high);
+
+            if (inst->conditional_mod) {
+               fs_reg null(retype(ibld.null_reg_f(), inst->dst.type));
+               set_condmod(inst->conditional_mod,
+                           ibld.MOV(null, inst->dst));
+            }
+         }
+
+      } else if (inst->opcode == SHADER_OPCODE_MULH) {
+         /* Should have been lowered to 8-wide. */
+         assert(inst->exec_size <= 8);
+         const fs_reg acc = retype(brw_acc_reg(inst->exec_size),
+                                   inst->dst.type);
+         fs_inst *mul = ibld.MUL(acc, inst->src[0], inst->src[1]);
+         fs_inst *mach = ibld.MACH(inst->dst, inst->src[0], inst->src[1]);
+
+         if (devinfo->gen >= 8) {
+            /* Until Gen8, integer multiplies read 32-bits from one source,
+             * and 16-bits from the other, and relying on the MACH instruction
+             * to generate the high bits of the result.
+             *
+             * On Gen8, the multiply instruction does a full 32x32-bit
+             * multiply, but in order to do a 64-bit multiply we can simulate
+             * the previous behavior and then use a MACH instruction.
+             *
+             * FINISHME: Don't use source modifiers on src1.
+             */
+            assert(mul->src[1].type == BRW_REGISTER_TYPE_D ||
+                   mul->src[1].type == BRW_REGISTER_TYPE_UD);
+            mul->src[1].type = (type_is_signed(mul->src[1].type) ?
+                                BRW_REGISTER_TYPE_W : BRW_REGISTER_TYPE_UW);
+            mul->src[1].stride *= 2;
+
+         } else if (devinfo->gen == 7 && !devinfo->is_haswell &&
+                    inst->force_sechalf) {
+            /* Among other things the quarter control bits influence which
+             * accumulator register is used by the hardware for instructions
+             * that access the accumulator implicitly (e.g. MACH).  A
+             * second-half instruction would normally map to acc1, which
+             * doesn't exist on Gen7 and up (the hardware does emulate it for
+             * floating-point instructions *only* by taking advantage of the
+             * extra precision of acc0 not normally used for floating point
+             * arithmetic).
+             *
+             * HSW and up are careful enough not to try to access an
+             * accumulator register that doesn't exist, but on earlier Gen7
+             * hardware we need to make sure that the quarter control bits are
+             * zero to avoid non-deterministic behaviour and emit an extra MOV
+             * to get the result masked correctly according to the current
+             * channel enables.
+             */
+            mach->force_sechalf = false;
+            mach->force_writemask_all = true;
+            mach->dst = ibld.vgrf(inst->dst.type);
+            ibld.MOV(inst->dst, mach->dst);
          }
       } else {
-         /* Gen < 8 (and some Gen8+ low-power parts like Cherryview) cannot
-          * do 32-bit integer multiplication in one instruction, but instead
-          * must do a sequence (which actually calculates a 64-bit result):
-          *
-          *    mul(8)  acc0<1>D   g3<8,8,1>D      g4<8,8,1>D
-          *    mach(8) null       g3<8,8,1>D      g4<8,8,1>D
-          *    mov(8)  g2<1>D     acc0<8,8,1>D
-          *
-          * But on Gen > 6, the ability to use second accumulator register
-          * (acc1) for non-float data types was removed, preventing a simple
-          * implementation in SIMD16. A 16-channel result can be calculated by
-          * executing the three instructions twice in SIMD8, once with quarter
-          * control of 1Q for the first eight channels and again with 2Q for
-          * the second eight channels.
-          *
-          * Which accumulator register is implicitly accessed (by AccWrEnable
-          * for instance) is determined by the quarter control. Unfortunately
-          * Ivybridge (and presumably Baytrail) has a hardware bug in which an
-          * implicit accumulator access by an instruction with 2Q will access
-          * acc1 regardless of whether the data type is usable in acc1.
-          *
-          * Specifically, the 2Q mach(8) writes acc1 which does not exist for
-          * integer data types.
-          *
-          * Since we only want the low 32-bits of the result, we can do two
-          * 32-bit x 16-bit multiplies (like the mul and mach are doing), and
-          * adjust the high result and add them (like the mach is doing):
-          *
-          *    mul(8)  g7<1>D     g3<8,8,1>D      g4.0<8,8,1>UW
-          *    mul(8)  g8<1>D     g3<8,8,1>D      g4.1<8,8,1>UW
-          *    shl(8)  g9<1>D     g8<8,8,1>D      16D
-          *    add(8)  g2<1>D     g7<8,8,1>D      g8<8,8,1>D
-          *
-          * We avoid the shl instruction by realizing that we only want to add
-          * the low 16-bits of the "high" result to the high 16-bits of the
-          * "low" result and using proper regioning on the add:
-          *
-          *    mul(8)  g7<1>D     g3<8,8,1>D      g4.0<16,8,2>UW
-          *    mul(8)  g8<1>D     g3<8,8,1>D      g4.1<16,8,2>UW
-          *    add(8)  g7.1<2>UW  g7.1<16,8,2>UW  g8<16,8,2>UW
-          *
-          * Since it does not use the (single) accumulator register, we can
-          * schedule multi-component multiplications much better.
-          */
-
-         if (inst->conditional_mod && inst->dst.is_null()) {
-            inst->dst = fs_reg(GRF, alloc.allocate(dispatch_width / 8),
-                               inst->dst.type);
-         }
-         fs_reg low = inst->dst;
-         fs_reg high(GRF, alloc.allocate(dispatch_width / 8),
-                     inst->dst.type);
-
-         if (devinfo->gen >= 7) {
-            fs_reg src1_0_w = inst->src[1];
-            fs_reg src1_1_w = inst->src[1];
-
-            if (inst->src[1].file == IMM) {
-               src1_0_w.fixed_hw_reg.dw1.ud &= 0xffff;
-               src1_1_w.fixed_hw_reg.dw1.ud >>= 16;
-            } else {
-               src1_0_w.type = BRW_REGISTER_TYPE_UW;
-               if (src1_0_w.stride != 0) {
-                  assert(src1_0_w.stride == 1);
-                  src1_0_w.stride = 2;
-               }
-
-               src1_1_w.type = BRW_REGISTER_TYPE_UW;
-               if (src1_1_w.stride != 0) {
-                  assert(src1_1_w.stride == 1);
-                  src1_1_w.stride = 2;
-               }
-               src1_1_w.subreg_offset += type_sz(BRW_REGISTER_TYPE_UW);
-            }
-            ibld.MUL(low, inst->src[0], src1_0_w);
-            ibld.MUL(high, inst->src[0], src1_1_w);
-         } else {
-            fs_reg src0_0_w = inst->src[0];
-            fs_reg src0_1_w = inst->src[0];
-
-            src0_0_w.type = BRW_REGISTER_TYPE_UW;
-            if (src0_0_w.stride != 0) {
-               assert(src0_0_w.stride == 1);
-               src0_0_w.stride = 2;
-            }
-
-            src0_1_w.type = BRW_REGISTER_TYPE_UW;
-            if (src0_1_w.stride != 0) {
-               assert(src0_1_w.stride == 1);
-               src0_1_w.stride = 2;
-            }
-            src0_1_w.subreg_offset += type_sz(BRW_REGISTER_TYPE_UW);
-
-            ibld.MUL(low, src0_0_w, inst->src[1]);
-            ibld.MUL(high, src0_1_w, inst->src[1]);
-         }
-
-         fs_reg dst = inst->dst;
-         dst.type = BRW_REGISTER_TYPE_UW;
-         dst.subreg_offset = 2;
-         dst.stride = 2;
-
-         high.type = BRW_REGISTER_TYPE_UW;
-         high.stride = 2;
-
-         low.type = BRW_REGISTER_TYPE_UW;
-         low.subreg_offset = 2;
-         low.stride = 2;
-
-         ibld.ADD(dst, low, high);
-
-         if (inst->conditional_mod) {
-            fs_reg null(retype(ibld.null_reg_f(), inst->dst.type));
-            set_condmod(inst->conditional_mod,
-                        ibld.MOV(null, inst->dst));
-         }
+         continue;
       }
 
       inst->remove(block);
@@ -4079,6 +4117,74 @@ get_lowered_simd_width(const struct brw_device_info *devinfo,
                        const fs_inst *inst)
 {
    switch (inst->opcode) {
+   case BRW_OPCODE_MOV:
+   case BRW_OPCODE_SEL:
+   case BRW_OPCODE_NOT:
+   case BRW_OPCODE_AND:
+   case BRW_OPCODE_OR:
+   case BRW_OPCODE_XOR:
+   case BRW_OPCODE_SHR:
+   case BRW_OPCODE_SHL:
+   case BRW_OPCODE_ASR:
+   case BRW_OPCODE_CMP:
+   case BRW_OPCODE_CMPN:
+   case BRW_OPCODE_CSEL:
+   case BRW_OPCODE_F32TO16:
+   case BRW_OPCODE_F16TO32:
+   case BRW_OPCODE_BFREV:
+   case BRW_OPCODE_BFE:
+   case BRW_OPCODE_BFI1:
+   case BRW_OPCODE_BFI2:
+   case BRW_OPCODE_ADD:
+   case BRW_OPCODE_MUL:
+   case BRW_OPCODE_AVG:
+   case BRW_OPCODE_FRC:
+   case BRW_OPCODE_RNDU:
+   case BRW_OPCODE_RNDD:
+   case BRW_OPCODE_RNDE:
+   case BRW_OPCODE_RNDZ:
+   case BRW_OPCODE_LZD:
+   case BRW_OPCODE_FBH:
+   case BRW_OPCODE_FBL:
+   case BRW_OPCODE_CBIT:
+   case BRW_OPCODE_SAD2:
+   case BRW_OPCODE_MAD:
+   case BRW_OPCODE_LRP:
+   case SHADER_OPCODE_RCP:
+   case SHADER_OPCODE_RSQ:
+   case SHADER_OPCODE_SQRT:
+   case SHADER_OPCODE_EXP2:
+   case SHADER_OPCODE_LOG2:
+   case SHADER_OPCODE_POW:
+   case SHADER_OPCODE_INT_QUOTIENT:
+   case SHADER_OPCODE_INT_REMAINDER:
+   case SHADER_OPCODE_SIN:
+   case SHADER_OPCODE_COS: {
+      /* According to the PRMs:
+       *  "A. In Direct Addressing mode, a source cannot span more than 2
+       *      adjacent GRF registers.
+       *   B. A destination cannot span more than 2 adjacent GRF registers."
+       *
+       * Look for the source or destination with the largest register region
+       * which is the one that is going to limit the overal execution size of
+       * the instruction due to this rule.
+       */
+      unsigned reg_count = inst->regs_written;
+
+      for (unsigned i = 0; i < inst->sources; i++)
+         reg_count = MAX2(reg_count, (unsigned)inst->regs_read(i));
+
+      /* Calculate the maximum execution size of the instruction based on the
+       * factor by which it goes over the hardware limit of 2 GRFs.
+       */
+      return inst->exec_size / DIV_ROUND_UP(reg_count, 2);
+   }
+   case SHADER_OPCODE_MULH:
+      /* MULH is lowered to the MUL/MACH sequence using the accumulator, which
+       * is 8-wide on Gen7+.
+       */
+      return (devinfo->gen >= 7 ? 8 : inst->exec_size);
+
    case FS_OPCODE_FB_WRITE_LOGICAL:
       /* Gen6 doesn't support SIMD16 depth writes but we cannot handle them
        * here.
@@ -4677,11 +4783,10 @@ fs_visitor::optimize()
     */
    bld = fs_builder(this, 64);
 
-   split_virtual_grfs();
-
-   move_uniform_array_access_to_pull_constants();
    assign_constant_locations();
    demote_pull_constants();
+
+   split_virtual_grfs();
 
 #define OPT(pass, args...) ({                                           \
       pass_num++;                                                       \

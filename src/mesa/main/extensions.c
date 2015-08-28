@@ -50,6 +50,7 @@ enum {
    ES1 = 1 << API_OPENGLES,
    ES2 = 1 << API_OPENGLES2,
    ES3 = 1 << (API_OPENGL_LAST + 1),
+   ES31 = 1 << (API_OPENGL_LAST + 2),
 };
 
 /**
@@ -152,6 +153,7 @@ static const struct extension extension_table[] = {
    { "GL_ARB_shader_atomic_counters",              o(ARB_shader_atomic_counters),              GL,             2011 },
    { "GL_ARB_shader_bit_encoding",                 o(ARB_shader_bit_encoding),                 GL,             2010 },
    { "GL_ARB_shader_image_load_store",             o(ARB_shader_image_load_store),             GL,             2011 },
+   { "GL_ARB_shader_image_size",                   o(ARB_shader_image_size),                   GL,             2012 },
    { "GL_ARB_shader_objects",                      o(dummy_true),                              GL,             2002 },
    { "GL_ARB_shader_precision",                    o(ARB_shader_precision),                    GL,             2010 },
    { "GL_ARB_shader_stencil_export",               o(ARB_shader_stencil_export),               GL,             2009 },
@@ -334,12 +336,15 @@ static const struct extension extension_table[] = {
    { "GL_OES_texture_half_float",                  o(OES_texture_half_float),                             ES2, 2005 },
    { "GL_OES_texture_half_float_linear",           o(OES_texture_half_float_linear),                      ES2, 2005 },
    { "GL_OES_texture_mirrored_repeat",             o(dummy_true),                                   ES1,       2005 },
+   { "GL_OES_texture_storage_multisample_2d_array",o(ARB_texture_multisample),                           ES31, 2014 },
    { "GL_OES_texture_npot",                        o(ARB_texture_non_power_of_two),                 ES1 | ES2, 2005 },
    { "GL_OES_vertex_array_object",                 o(dummy_true),                                   ES1 | ES2, 2010 },
 
    /* KHR extensions */
    { "GL_KHR_debug",                               o(dummy_true),                              GL,             2012 },
    { "GL_KHR_context_flush_control",               o(dummy_true),                              GL       | ES2, 2014 },
+   { "GL_KHR_texture_compression_astc_hdr",        o(KHR_texture_compression_astc_hdr),        GL       | ES2, 2012 },
+   { "GL_KHR_texture_compression_astc_ldr",        o(KHR_texture_compression_astc_ldr),        GL       | ES2, 2012 },
 
    /* Vendor extensions */
    { "GL_3DFX_texture_compression_FXT1",           o(TDFX_texture_compression_FXT1),           GL,             1999 },
@@ -385,6 +390,9 @@ static const struct extension extension_table[] = {
    { "GL_NV_point_sprite",                         o(NV_point_sprite),                         GL,             2001 },
    { "GL_NV_primitive_restart",                    o(NV_primitive_restart),                    GLL,            2002 },
    { "GL_NV_read_buffer",                          o(dummy_true),                              ES2,            2011 },
+   { "GL_NV_read_depth",                           o(dummy_true),                              ES2,            2011 },
+   { "GL_NV_read_depth_stencil",                   o(dummy_true),                              ES2,            2011 },
+   { "GL_NV_read_stencil",                         o(dummy_true),                              ES2,            2011 },
    { "GL_NV_texgen_reflection",                    o(dummy_true),                              GLL,            1999 },
    { "GL_NV_texture_barrier",                      o(NV_texture_barrier),                      GL,             2009 },
    { "GL_NV_texture_env_combine4",                 o(NV_texture_env_combine4),                 GLL,            1999 },
@@ -770,6 +778,8 @@ _mesa_make_extension_string(struct gl_context *ctx)
    unsigned api_set = (1 << ctx->API);
    if (_mesa_is_gles3(ctx))
       api_set |= ES3;
+   if (_mesa_is_gles31(ctx))
+      api_set |= ES31;
 
    /* Check if the MESA_EXTENSION_MAX_YEAR env var is set */
    {
@@ -851,6 +861,8 @@ _mesa_get_extension_count(struct gl_context *ctx)
    unsigned api_set = (1 << ctx->API);
    if (_mesa_is_gles3(ctx))
       api_set |= ES3;
+   if (_mesa_is_gles31(ctx))
+      api_set |= ES31;
 
    /* only count once */
    if (ctx->Extensions.Count != 0)
@@ -877,6 +889,8 @@ _mesa_get_enabled_extension(struct gl_context *ctx, GLuint index)
    unsigned api_set = (1 << ctx->API);
    if (_mesa_is_gles3(ctx))
       api_set |= ES3;
+   if (_mesa_is_gles31(ctx))
+      api_set |= ES31;
 
    base = (GLboolean*) &ctx->Extensions;
    n = 0;

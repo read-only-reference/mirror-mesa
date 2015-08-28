@@ -64,6 +64,13 @@ extern "C" {
 enum mesa_format_layout {
    MESA_FORMAT_LAYOUT_ARRAY,
    MESA_FORMAT_LAYOUT_PACKED,
+   MESA_FORMAT_LAYOUT_S3TC,
+   MESA_FORMAT_LAYOUT_RGTC,
+   MESA_FORMAT_LAYOUT_FXT1,
+   MESA_FORMAT_LAYOUT_ETC1,
+   MESA_FORMAT_LAYOUT_ETC2,
+   MESA_FORMAT_LAYOUT_BPTC,
+   MESA_FORMAT_LAYOUT_ASTC,
    MESA_FORMAT_LAYOUT_OTHER,
 };
 
@@ -191,6 +198,11 @@ static inline void
 _mesa_array_format_set_swizzle(mesa_array_format *f,
                                int32_t x, int32_t y, int32_t z, int32_t w)
 {
+   *f &= ~(MESA_ARRAY_FORMAT_SWIZZLE_X_MASK |
+           MESA_ARRAY_FORMAT_SWIZZLE_Y_MASK |
+           MESA_ARRAY_FORMAT_SWIZZLE_Z_MASK |
+           MESA_ARRAY_FORMAT_SWIZZLE_W_MASK);
+
    *f |= ((x << 8 ) & MESA_ARRAY_FORMAT_SWIZZLE_X_MASK) |
          ((y << 11) & MESA_ARRAY_FORMAT_SWIZZLE_Y_MASK) |
          ((z << 14) & MESA_ARRAY_FORMAT_SWIZZLE_Z_MASK) |
@@ -575,6 +587,36 @@ typedef enum
    MESA_FORMAT_BPTC_RGB_SIGNED_FLOAT,
    MESA_FORMAT_BPTC_RGB_UNSIGNED_FLOAT,
 
+   /* ASTC compressed formats */
+   MESA_FORMAT_RGBA_ASTC_4x4,
+   MESA_FORMAT_RGBA_ASTC_5x4,
+   MESA_FORMAT_RGBA_ASTC_5x5,
+   MESA_FORMAT_RGBA_ASTC_6x5,
+   MESA_FORMAT_RGBA_ASTC_6x6,
+   MESA_FORMAT_RGBA_ASTC_8x5,
+   MESA_FORMAT_RGBA_ASTC_8x6,
+   MESA_FORMAT_RGBA_ASTC_8x8,
+   MESA_FORMAT_RGBA_ASTC_10x5,
+   MESA_FORMAT_RGBA_ASTC_10x6,
+   MESA_FORMAT_RGBA_ASTC_10x8,
+   MESA_FORMAT_RGBA_ASTC_10x10,
+   MESA_FORMAT_RGBA_ASTC_12x10,
+   MESA_FORMAT_RGBA_ASTC_12x12,
+
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_4x4,
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_5x4,
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_5x5,
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_6x5,
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_6x6,
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_8x5,
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_8x6,
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_8x8,
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_10x5,
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_10x6,
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_10x8,
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_10x10,
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_12x10,
+   MESA_FORMAT_SRGB8_ALPHA8_ASTC_12x12,
    MESA_FORMAT_COUNT
 } mesa_format;
 
@@ -654,7 +696,7 @@ extern GLint
 _mesa_format_row_stride(mesa_format format, GLsizei width);
 
 extern void
-_mesa_format_to_type_and_comps(mesa_format format,
+_mesa_uncompressed_format_to_type_and_comps(mesa_format format,
                                GLenum *datatype, GLuint *comps);
 
 extern void
@@ -675,7 +717,7 @@ _mesa_format_has_color_component(mesa_format format, int component);
 GLboolean
 _mesa_format_matches_format_and_type(mesa_format mesa_format,
 				     GLenum format, GLenum type,
-                                     GLboolean swapBytes);
+				     GLboolean swapBytes, GLenum *error);
 
 #ifdef __cplusplus
 }

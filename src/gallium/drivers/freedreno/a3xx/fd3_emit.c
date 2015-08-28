@@ -251,14 +251,15 @@ emit_textures(struct fd_context *ctx, struct fd_ringbuffer *ring,
 				CP_LOAD_STATE_1_EXT_SRC_ADDR(0));
 		for (i = 0; i < tex->num_textures; i++) {
 			static const struct fd3_pipe_sampler_view dummy_view = {
+					.base.target = PIPE_TEXTURE_1D, /* anything !PIPE_BUFFER */
 					.base.u.tex.first_level = 1,
 			};
 			const struct fd3_pipe_sampler_view *view = tex->textures[i] ?
 					fd3_pipe_sampler_view(tex->textures[i]) :
 					&dummy_view;
 			struct fd_resource *rsc = fd_resource(view->base.texture);
-			unsigned start = view->base.u.tex.first_level;
-			unsigned end   = view->base.u.tex.last_level;
+			unsigned start = fd_sampler_first_level(&view->base);
+			unsigned end   = fd_sampler_last_level(&view->base);;
 
 			for (j = 0; j < (end - start + 1); j++) {
 				struct fd_resource_slice *slice =
@@ -341,6 +342,7 @@ fd3_emit_gmem_restore_tex(struct fd_ringbuffer *ring,
 			format = fd3_gmem_restore_format(rsc->base.b.format);
 		}
 
+		/* note: PIPE_BUFFER disallowed for surfaces */
 		unsigned lvl = psurf[i]->u.tex.level;
 		struct fd_resource_slice *slice = fd_resource_slice(rsc, lvl);
 
@@ -561,8 +563,27 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		val |= COND(fp->writes_pos, A3XX_GRAS_CL_CLIP_CNTL_ZCLIP_DISABLE);
 		val |= COND(fp->frag_coord, A3XX_GRAS_CL_CLIP_CNTL_ZCOORD |
 				A3XX_GRAS_CL_CLIP_CNTL_WCOORD);
+		/* TODO only use if prog doesn't use clipvertex/clipdist */
+		val |= MIN2(util_bitcount(ctx->rasterizer->clip_plane_enable), 6) << 26;
 		OUT_PKT0(ring, REG_A3XX_GRAS_CL_CLIP_CNTL, 1);
 		OUT_RING(ring, val);
+	}
+
+	if (dirty & (FD_DIRTY_RASTERIZER | FD_DIRTY_UCP)) {
+		uint32_t planes = ctx->rasterizer->clip_plane_enable;
+		int count = 0;
+
+		while (planes && count < 6) {
+			int i = ffs(planes) - 1;
+
+			planes &= ~(1U << i);
+			fd_wfi(ctx, ring);
+			OUT_PKT0(ring, REG_A3XX_GRAS_CL_USER_PLANE(count++), 4);
+			OUT_RING(ring, fui(ctx->ucp.ucp[i][0]));
+			OUT_RING(ring, fui(ctx->ucp.ucp[i][1]));
+			OUT_RING(ring, fui(ctx->ucp.ucp[i][2]));
+			OUT_RING(ring, fui(ctx->ucp.ucp[i][3]));
+		}
 	}
 
 	/* NOTE: since primitive_restart is not actually part of any

@@ -329,6 +329,26 @@ enum pipe_flush_flags
 };
 
 /**
+ * Flags for pipe_context::dump_debug_state.
+ */
+#define PIPE_DEBUG_DEVICE_IS_HUNG      (1 << 0)
+
+/**
+ * Create a compute-only context. Use in pipe_screen::context_create.
+ * This disables draw, blit, and clear*, render_condition, and other graphics
+ * functions. Interop with other graphics contexts is still allowed.
+ * This allows scheduling jobs on a compute-only hardware command queue that
+ * can run in parallel with graphics without stalling it.
+ */
+#define PIPE_CONTEXT_COMPUTE_ONLY      (1 << 0)
+
+/**
+ * Gather debug information and expect that pipe_context::dump_debug_state
+ * will be called. Use in pipe_screen::context_create.
+ */
+#define PIPE_CONTEXT_DEBUG             (1 << 1)
+
+/**
  * Flags for pipe_context::memory_barrier.
  */
 #define PIPE_BARRIER_MAPPED_BUFFER     (1 << 0)
@@ -607,6 +627,9 @@ enum pipe_cap
    PIPE_CAP_RESOURCE_FROM_USER_MEMORY,
    PIPE_CAP_DEVICE_RESET_STATUS_QUERY,
    PIPE_CAP_MAX_SHADER_PATCH_VARYINGS,
+   PIPE_CAP_TEXTURE_FLOAT_LINEAR,
+   PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR,
+   PIPE_CAP_DEPTH_BOUNDS_TEST,
 };
 
 #define PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50 (1 << 0)
@@ -762,6 +785,7 @@ union pipe_query_result
    /* PIPE_QUERY_PRIMITIVES_GENERATED */
    /* PIPE_QUERY_PRIMITIVES_EMITTED */
    /* PIPE_DRIVER_QUERY_TYPE_UINT64 */
+   /* PIPE_DRIVER_QUERY_TYPE_HZ */
    uint64_t u64;
 
    /* PIPE_DRIVER_QUERY_TYPE_UINT */
@@ -796,12 +820,22 @@ enum pipe_driver_query_type
    PIPE_DRIVER_QUERY_TYPE_PERCENTAGE   = 3,
    PIPE_DRIVER_QUERY_TYPE_BYTES        = 4,
    PIPE_DRIVER_QUERY_TYPE_MICROSECONDS = 5,
+   PIPE_DRIVER_QUERY_TYPE_HZ           = 6,
 };
 
 enum pipe_driver_query_group_type
 {
    PIPE_DRIVER_QUERY_GROUP_TYPE_CPU = 0,
    PIPE_DRIVER_QUERY_GROUP_TYPE_GPU = 1,
+};
+
+/* Whether an average value per frame or a cumulative value should be
+ * displayed.
+ */
+enum pipe_driver_query_result_type
+{
+   PIPE_DRIVER_QUERY_RESULT_TYPE_AVERAGE = 0,
+   PIPE_DRIVER_QUERY_RESULT_TYPE_CUMULATIVE = 1,
 };
 
 union pipe_numeric_type_union
@@ -817,6 +851,7 @@ struct pipe_driver_query_info
    unsigned query_type; /* PIPE_QUERY_DRIVER_SPECIFIC + i */
    union pipe_numeric_type_union max_value; /* max value that can be returned */
    enum pipe_driver_query_type type;
+   enum pipe_driver_query_result_type result_type;
    unsigned group_id;
 };
 

@@ -112,7 +112,6 @@ public:
    void swizzle_result(ir_texture_opcode op, int dest_components,
                        fs_reg orig_val, uint32_t sampler);
 
-   int type_size(const struct glsl_type *type);
    fs_inst *get_instruction_generating_reg(fs_inst *start,
 					   fs_inst *end,
 					   const fs_reg &reg);
@@ -147,7 +146,6 @@ public:
    void spill_reg(int spill_reg);
    void split_virtual_grfs();
    bool compact_virtual_grfs();
-   void move_uniform_array_access_to_pull_constants();
    void assign_constant_locations();
    void demote_pull_constants();
    void invalidate_live_intervals();
@@ -225,9 +223,8 @@ public:
    fs_reg emit_mcs_fetch(const fs_reg &coordinate, unsigned components,
                          const fs_reg &sampler);
    void emit_gen6_gather_wa(uint8_t wa, fs_reg dst);
-   void resolve_source_modifiers(fs_reg *src);
+   fs_reg resolve_source_modifiers(const fs_reg &src);
    void emit_discard_jump();
-   bool try_replace_with_sel();
    bool opt_peephole_sel();
    bool opt_peephole_predicated_break();
    bool opt_saturate_propagation();
@@ -264,6 +261,7 @@ public:
                       nir_jump_instr *instr);
    fs_reg get_nir_src(nir_src src);
    fs_reg get_nir_dest(nir_dest dest);
+   fs_reg get_nir_image_deref(const nir_deref_var *deref);
    void emit_percomp(const brw::fs_builder &bld, const fs_inst &inst,
                      unsigned wr_mask);
 
@@ -290,8 +288,9 @@ public:
 
    struct brw_reg interp_reg(int location, int channel);
 
-   virtual void setup_vector_uniform_values(const gl_constant_value *values,
-                                            unsigned n);
+   virtual void setup_vec4_uniform_value(unsigned param_offset,
+                                         const gl_constant_value *values,
+                                         unsigned n);
 
    int implied_mrf_writes(fs_inst *inst);
 
@@ -316,9 +315,6 @@ public:
 
    /** Number of uniform variable components visited. */
    unsigned uniforms;
-
-   /** Total number of direct uniforms we can get from NIR */
-   unsigned num_direct_uniforms;
 
    /** Byte-offset for the next available spot in the scratch space buffer. */
    unsigned last_scratch;

@@ -651,7 +651,7 @@ get_tex_memcpy(struct gl_context *ctx,
        texBaseFormat == texImage->_BaseFormat) {
       memCopy = _mesa_format_matches_format_and_type(texImage->TexFormat,
                                                      format, type,
-                                                     ctx->Pack.SwapBytes);
+                                                     ctx->Pack.SwapBytes, NULL);
    }
 
    if (depth > 1) {
@@ -1211,6 +1211,13 @@ getteximage_error_check(struct gl_context *ctx,
             && !ctx->Extensions.ARB_texture_stencil8) {
       _mesa_error(ctx, GL_INVALID_ENUM,
                   "%s(format=GL_STENCIL_INDEX)", caller);
+      return true;
+   }
+   else if (_mesa_is_stencil_format(format)
+	    && !_mesa_is_depthstencil_format(baseFormat)
+	    && !_mesa_is_stencil_format(baseFormat)) {
+      _mesa_error(ctx, GL_INVALID_OPERATION,
+                  "%s(format mismatch)", caller);
       return true;
    }
    else if (_mesa_is_ycbcr_format(format)

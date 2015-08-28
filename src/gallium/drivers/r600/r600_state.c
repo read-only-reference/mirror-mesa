@@ -473,7 +473,7 @@ static void *r600_create_rs_state(struct pipe_context *ctx,
 
 	/* offset */
 	rs->offset_units = state->offset_units;
-	rs->offset_scale = state->offset_scale * 12.0f;
+	rs->offset_scale = state->offset_scale * 16.0f;
 	rs->offset_enable = state->offset_point || state->offset_line || state->offset_tri;
 
 	if (state->point_size_per_vertex) {
@@ -802,7 +802,7 @@ static void r600_set_scissor_states(struct pipe_context *ctx,
 		return;
 
 	for (i = start_slot ; i < start_slot + num_scissors; i++) {
-		rctx->scissor[i].atom.dirty = true;
+		r600_mark_atom_dirty(rctx, &rctx->scissor[i].atom);
 	}
 }
 
@@ -1193,7 +1193,7 @@ static void r600_set_framebuffer_state(struct pipe_context *ctx,
 
 		if (rctx->alphatest_state.bypass != alphatest_bypass) {
 			rctx->alphatest_state.bypass = alphatest_bypass;
-			rctx->alphatest_state.atom.dirty = true;
+			r600_mark_atom_dirty(rctx, &rctx->alphatest_state.atom);
 		}
 	}
 
@@ -1209,28 +1209,28 @@ static void r600_set_framebuffer_state(struct pipe_context *ctx,
 
 		if (state->zsbuf->format != rctx->poly_offset_state.zs_format) {
 			rctx->poly_offset_state.zs_format = state->zsbuf->format;
-			rctx->poly_offset_state.atom.dirty = true;
+			r600_mark_atom_dirty(rctx, &rctx->poly_offset_state.atom);
 		}
 
 		if (rctx->db_state.rsurf != surf) {
 			rctx->db_state.rsurf = surf;
-			rctx->db_state.atom.dirty = true;
-			rctx->db_misc_state.atom.dirty = true;
+			r600_mark_atom_dirty(rctx, &rctx->db_state.atom);
+			r600_mark_atom_dirty(rctx, &rctx->db_misc_state.atom);
 		}
 	} else if (rctx->db_state.rsurf) {
 		rctx->db_state.rsurf = NULL;
-		rctx->db_state.atom.dirty = true;
-		rctx->db_misc_state.atom.dirty = true;
+		r600_mark_atom_dirty(rctx, &rctx->db_state.atom);
+		r600_mark_atom_dirty(rctx, &rctx->db_misc_state.atom);
 	}
 
 	if (rctx->cb_misc_state.nr_cbufs != state->nr_cbufs) {
 		rctx->cb_misc_state.nr_cbufs = state->nr_cbufs;
-		rctx->cb_misc_state.atom.dirty = true;
+		r600_mark_atom_dirty(rctx, &rctx->cb_misc_state.atom);
 	}
 
 	if (state->nr_cbufs == 0 && rctx->alphatest_state.bypass) {
 		rctx->alphatest_state.bypass = false;
-		rctx->alphatest_state.atom.dirty = true;
+		r600_mark_atom_dirty(rctx, &rctx->alphatest_state.atom);
 	}
 
 	/* Calculate the CS size. */
@@ -1250,7 +1250,7 @@ static void r600_set_framebuffer_state(struct pipe_context *ctx,
 		rctx->framebuffer.atom.num_dw += 2;
 	}
 
-	rctx->framebuffer.atom.dirty = true;
+	r600_mark_atom_dirty(rctx, &rctx->framebuffer.atom);
 
 	r600_set_sample_locations_constant_buffer(rctx);
 }
@@ -1541,9 +1541,9 @@ static void r600_set_min_samples(struct pipe_context *ctx, unsigned min_samples)
 
 	rctx->ps_iter_samples = min_samples;
 	if (rctx->framebuffer.nr_samples > 1) {
-		rctx->rasterizer_state.atom.dirty = true;
+		r600_mark_atom_dirty(rctx, &rctx->rasterizer_state.atom);
 		if (rctx->b.chip_class == R600)
-			rctx->db_misc_state.atom.dirty = true;
+			r600_mark_atom_dirty(rctx, &rctx->db_misc_state.atom);
 	}
 }
 
@@ -1951,11 +1951,11 @@ static void r600_emit_shader_stages(struct r600_context *rctx, struct r600_atom 
 	if (state->geom_enable) {
 		uint32_t cut_val;
 
-		if (rctx->gs_shader->current->shader.gs_max_out_vertices <= 128)
+		if (rctx->gs_shader->gs_max_out_vertices <= 128)
 			cut_val = V_028A40_GS_CUT_128;
-		else if (rctx->gs_shader->current->shader.gs_max_out_vertices <= 256)
+		else if (rctx->gs_shader->gs_max_out_vertices <= 256)
 			cut_val = V_028A40_GS_CUT_256;
-		else if (rctx->gs_shader->current->shader.gs_max_out_vertices <= 512)
+		else if (rctx->gs_shader->gs_max_out_vertices <= 512)
 			cut_val = V_028A40_GS_CUT_512;
 		else
 			cut_val = V_028A40_GS_CUT_1024;
@@ -2089,7 +2089,7 @@ bool r600_adjust_gprs(struct r600_context *rctx)
 	if (rctx->config_state.sq_gpr_resource_mgmt_1 != tmp || rctx->config_state.sq_gpr_resource_mgmt_2 != tmp2) {
 		rctx->config_state.sq_gpr_resource_mgmt_1 = tmp;
 		rctx->config_state.sq_gpr_resource_mgmt_2 = tmp2;
-		rctx->config_state.atom.dirty = true;
+		r600_mark_atom_dirty(rctx, &rctx->config_state.atom);
 		rctx->b.flags |= R600_CONTEXT_WAIT_3D_IDLE;
 	}
 	return true;
@@ -2650,7 +2650,7 @@ void r600_update_gs_state(struct pipe_context *ctx, struct r600_pipe_shader *sha
 	struct r600_shader *rshader = &shader->shader;
 	struct r600_shader *cp_shader = &shader->gs_copy_shader->shader;
 	unsigned gsvs_itemsize =
-			(cp_shader->ring_item_size * rshader->gs_max_out_vertices) >> 2;
+			(cp_shader->ring_item_size * shader->selector->gs_max_out_vertices) >> 2;
 
 	r600_init_command_buffer(cb, 64);
 
@@ -2659,10 +2659,10 @@ void r600_update_gs_state(struct pipe_context *ctx, struct r600_pipe_shader *sha
 
 	if (rctx->b.chip_class >= R700) {
 		r600_store_context_reg(cb, R_028B38_VGT_GS_MAX_VERT_OUT,
-				       S_028B38_MAX_VERT_OUT(rshader->gs_max_out_vertices));
+				       S_028B38_MAX_VERT_OUT(shader->selector->gs_max_out_vertices));
 	}
 	r600_store_context_reg(cb, R_028A6C_VGT_GS_OUT_PRIM_TYPE,
-			       r600_conv_prim_to_gs_out(rshader->gs_output_prim));
+			       r600_conv_prim_to_gs_out(shader->selector->gs_output_prim));
 
 	r600_store_context_reg(cb, R_0288C8_SQ_GS_VERT_ITEMSIZE,
 	                       cp_shader->ring_item_size >> 2);
@@ -2796,7 +2796,7 @@ void r600_update_db_shader_control(struct r600_context * rctx)
 
 	if (db_shader_control != rctx->db_misc_state.db_shader_control) {
 		rctx->db_misc_state.db_shader_control = db_shader_control;
-		rctx->db_misc_state.atom.dirty = true;
+		r600_mark_atom_dirty(rctx, &rctx->db_misc_state.atom);
 	}
 }
 
@@ -3074,8 +3074,8 @@ void r600_init_state_functions(struct r600_context *rctx)
 	r600_init_atom(rctx, &rctx->config_state.atom, id++, r600_emit_config_state, 3);
 	r600_init_atom(rctx, &rctx->stencil_ref.atom, id++, r600_emit_stencil_ref, 4);
 	r600_init_atom(rctx, &rctx->vertex_fetch_shader.atom, id++, r600_emit_vertex_fetch_shader, 5);
-	rctx->atoms[id++] = &rctx->b.streamout.begin_atom;
-	rctx->atoms[id++] = &rctx->b.streamout.enable_atom;
+	r600_add_atom(rctx, &rctx->b.streamout.begin_atom, id++);
+	r600_add_atom(rctx, &rctx->b.streamout.enable_atom, id++);
 	r600_init_atom(rctx, &rctx->vertex_shader.atom, id++, r600_emit_shader, 23);
 	r600_init_atom(rctx, &rctx->pixel_shader.atom, id++, r600_emit_shader, 0);
 	r600_init_atom(rctx, &rctx->geometry_shader.atom, id++, r600_emit_shader, 0);

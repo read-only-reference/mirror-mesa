@@ -223,6 +223,9 @@ struct pipe_depth_state
    unsigned enabled:1;         /**< depth test enabled? */
    unsigned writemask:1;       /**< allow depth buffer writes? */
    unsigned func:3;            /**< depth test func (PIPE_FUNC_x) */
+   unsigned bounds_test:1;     /**< depth bounds test enabled? */
+   float bounds_min;           /**< minimum depth bound */
+   float bounds_max;           /**< maximum depth bound */
 };
 
 
@@ -660,6 +663,7 @@ struct pipe_blit_info
 
    boolean render_condition_enable; /**< whether the blit should honor the
                                     current render condition */
+   boolean alpha_blend; /* dst.rgb = src.rgb * src.a + dst.rgb * (1 - src.a) */
 };
 
 

@@ -276,6 +276,7 @@
 #define GEN8_SURFACE_TILING_W                       (1 << 12)
 #define GEN8_SURFACE_TILING_X                       (2 << 12)
 #define GEN8_SURFACE_TILING_Y                       (3 << 12)
+#define GEN8_SURFACE_SAMPLER_L2_BYPASS_DISABLE      (1 << 9)
 #define BRW_SURFACE_RC_READ_WRITE	(1 << 8)
 #define BRW_SURFACE_MIPLAYOUT_SHIFT	10
 #define BRW_SURFACE_MIPMAPLAYOUT_BELOW   0
@@ -504,6 +505,38 @@
 #define BRW_SURFACEFORMAT_R8G8B8_UINT                    0x1C8
 #define BRW_SURFACEFORMAT_R8G8B8_SINT                    0x1C9
 #define BRW_SURFACEFORMAT_RAW                            0x1FF
+
+#define GEN9_SURFACE_ASTC_HDR_FORMAT_BIT                 0x100
+
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_4x4_U8sRGB         0x200
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_5x4_U8sRGB         0x208
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_5x5_U8sRGB         0x209
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_6x5_U8sRGB         0x211
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_6x6_U8sRGB         0x212
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_8x5_U8sRGB         0x221
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_8x6_U8sRGB         0x222
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_8x8_U8sRGB         0x224
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_10x5_U8sRGB        0x231
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_10x6_U8sRGB        0x232
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_10x8_U8sRGB        0x234
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_10x10_U8sRGB       0x236
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_12x10_U8sRGB       0x23E
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_12x12_U8sRGB       0x23F
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_4x4_FLT16          0x240
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_5x4_FLT16          0x248
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_5x5_FLT16          0x249
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_6x5_FLT16          0x251
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_6x6_FLT16          0x252
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_8x5_FLT16          0x261
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_8x6_FLT16          0x262
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_8x8_FLT16          0x264
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_10x5_FLT16         0x271
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_10x6_FLT16         0x272
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_10x8_FLT16         0x274
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_10x10_FLT16        0x276
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_12x10_FLT16        0x27E
+#define BRW_SURFACEFORMAT_ASTC_LDR_2D_12x12_FLT16        0x27F
+
 #define BRW_SURFACE_FORMAT_SHIFT	18
 #define BRW_SURFACE_FORMAT_MASK		INTEL_MASK(26, 18)
 
@@ -1214,6 +1247,11 @@ enum opcode {
     * GLSL barrier()
     */
    SHADER_OPCODE_BARRIER,
+
+   /**
+    * Calculate the high 32-bits of a 32x32 multiply.
+    */
+   SHADER_OPCODE_MULH,
 };
 
 enum brw_urb_write_flags {
@@ -1850,6 +1888,7 @@ enum brw_message_target {
 # define GEN6_VS_BINDING_TABLE_ENTRY_COUNT_SHIFT	18
 # define GEN6_VS_FLOATING_POINT_MODE_IEEE_754		(0 << 16)
 # define GEN6_VS_FLOATING_POINT_MODE_ALT		(1 << 16)
+# define HSW_VS_UAV_ACCESS_ENABLE                       (1 << 12)
 /* DW4 */
 # define GEN6_VS_DISPATCH_START_GRF_SHIFT		20
 # define GEN6_VS_URB_READ_LENGTH_SHIFT			11
@@ -1875,6 +1914,7 @@ enum brw_message_target {
 # define GEN6_GS_BINDING_TABLE_ENTRY_COUNT_SHIFT	18
 # define GEN6_GS_FLOATING_POINT_MODE_IEEE_754		(0 << 16)
 # define GEN6_GS_FLOATING_POINT_MODE_ALT		(1 << 16)
+# define HSW_GS_UAV_ACCESS_ENABLE       		(1 << 12)
 /* DW4 */
 # define GEN7_GS_OUTPUT_VERTEX_SIZE_SHIFT		23
 # define GEN7_GS_OUTPUT_TOPOLOGY_SHIFT			17
@@ -2377,6 +2417,9 @@ enum brw_wm_barycentric_interp_mode {
 # define GEN7_WM_KILL_ENABLE				(1 << 25)
 # define GEN7_WM_COMPUTED_DEPTH_MODE_SHIFT              23
 # define GEN7_WM_USES_SOURCE_DEPTH			(1 << 20)
+# define GEN7_WM_EARLY_DS_CONTROL_NORMAL                (0 << 21)
+# define GEN7_WM_EARLY_DS_CONTROL_PSEXEC                (1 << 21)
+# define GEN7_WM_EARLY_DS_CONTROL_PREPS                 (2 << 21)
 # define GEN7_WM_USES_SOURCE_W			        (1 << 19)
 # define GEN7_WM_POSITION_ZW_PIXEL			(0 << 17)
 # define GEN7_WM_POSITION_ZW_CENTROID			(2 << 17)
@@ -2401,6 +2444,7 @@ enum brw_wm_barycentric_interp_mode {
 /* DW2 */
 # define GEN7_WM_MSDISPMODE_PERSAMPLE			(0 << 31)
 # define GEN7_WM_MSDISPMODE_PERPIXEL			(1 << 31)
+# define HSW_WM_UAV_ONLY                                (1 << 30)
 
 #define _3DSTATE_PS				0x7820 /* GEN7+ */
 /* DW1: kernel pointer */
@@ -2424,6 +2468,7 @@ enum brw_wm_barycentric_interp_mode {
 # define GEN7_PS_RENDER_TARGET_FAST_CLEAR_ENABLE	(1 << 8)
 # define GEN7_PS_DUAL_SOURCE_BLEND_ENABLE		(1 << 7)
 # define GEN7_PS_RENDER_TARGET_RESOLVE_ENABLE		(1 << 6)
+# define HSW_PS_UAV_ACCESS_ENABLE			(1 << 5)
 # define GEN7_PS_POSOFFSET_NONE				(0 << 3)
 # define GEN7_PS_POSOFFSET_CENTROID			(2 << 3)
 # define GEN7_PS_POSOFFSET_SAMPLE			(3 << 3)

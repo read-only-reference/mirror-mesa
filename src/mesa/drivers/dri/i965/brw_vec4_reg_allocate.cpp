@@ -115,7 +115,7 @@ brw_vec4_alloc_reg_set(struct brw_compiler *compiler)
    ralloc_free(compiler->vec4_reg_set.ra_reg_to_grf);
    compiler->vec4_reg_set.ra_reg_to_grf = ralloc_array(compiler, uint8_t, ra_reg_count);
    ralloc_free(compiler->vec4_reg_set.regs);
-   compiler->vec4_reg_set.regs = ra_alloc_reg_set(compiler, ra_reg_count);
+   compiler->vec4_reg_set.regs = ra_alloc_reg_set(compiler, ra_reg_count, false);
    if (compiler->devinfo->gen >= 6)
       ra_set_allocate_round_robin(compiler->vec4_reg_set.regs);
    ralloc_free(compiler->vec4_reg_set.classes);
@@ -140,7 +140,7 @@ brw_vec4_alloc_reg_set(struct brw_compiler *compiler)
 	 for (int base_reg = j;
 	      base_reg < j + class_sizes[i];
 	      base_reg++) {
-	    ra_add_transitive_reg_conflict(compiler->vec4_reg_set.regs, base_reg, reg);
+	    ra_add_reg_conflict(compiler->vec4_reg_set.regs, base_reg, reg);
 	 }
 
 	 reg++;
@@ -157,6 +157,9 @@ brw_vec4_alloc_reg_set(struct brw_compiler *compiler)
       }
    }
    assert(reg == ra_reg_count);
+
+   for (int reg = 0; reg < base_reg_count; reg++)
+      ra_make_reg_conflicts_transitive(compiler->vec4_reg_set.regs, reg);
 
    ra_set_finalize(compiler->vec4_reg_set.regs, q_values);
 
@@ -280,15 +283,15 @@ vec4_visitor::evaluate_spill_costs(float *spill_costs, bool *no_spill)
     */
    foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
       for (unsigned int i = 0; i < 3; i++) {
-	 if (inst->src[i].file == GRF) {
-	    spill_costs[inst->src[i].reg] += loop_scale;
+         if (inst->src[i].file == GRF) {
+            spill_costs[inst->src[i].reg] += loop_scale;
             if (inst->src[i].reladdr)
                no_spill[inst->src[i].reg] = true;
-	 }
+         }
       }
 
       if (inst->dst.file == GRF) {
-	 spill_costs[inst->dst.reg] += loop_scale;
+         spill_costs[inst->dst.reg] += loop_scale;
          if (inst->dst.reladdr)
             no_spill[inst->dst.reg] = true;
       }
@@ -296,12 +299,12 @@ vec4_visitor::evaluate_spill_costs(float *spill_costs, bool *no_spill)
       switch (inst->opcode) {
 
       case BRW_OPCODE_DO:
-	 loop_scale *= 10;
-	 break;
+         loop_scale *= 10;
+         break;
 
       case BRW_OPCODE_WHILE:
-	 loop_scale /= 10;
-	 break;
+         loop_scale /= 10;
+         break;
 
       case SHADER_OPCODE_GEN4_SCRATCH_READ:
       case SHADER_OPCODE_GEN4_SCRATCH_WRITE:
@@ -309,12 +312,12 @@ vec4_visitor::evaluate_spill_costs(float *spill_costs, bool *no_spill)
             if (inst->src[i].file == GRF)
                no_spill[inst->src[i].reg] = true;
          }
-	 if (inst->dst.file == GRF)
-	    no_spill[inst->dst.reg] = true;
-	 break;
+         if (inst->dst.file == GRF)
+            no_spill[inst->dst.reg] = true;
+         break;
 
       default:
-	 break;
+         break;
       }
    }
 }
