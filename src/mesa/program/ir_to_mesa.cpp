@@ -543,7 +543,6 @@ type_size(const struct glsl_type *type)
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
-   case GLSL_TYPE_FUNCTION:
       assert(!"Invalid type in type_size");
       break;
    }
@@ -1345,9 +1344,11 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
    case ir_unop_dFdy_coarse:
    case ir_unop_dFdy_fine:
    case ir_unop_subroutine_to_int:
+   case ir_unop_get_buffer_size:
       assert(!"not supported");
       break;
 
+   case ir_unop_ssbo_unsized_array_length:
    case ir_quadop_vector:
       /* This operation should have already been handled.
        */
@@ -1920,6 +1921,8 @@ ir_to_mesa_visitor::visit(ir_texture *ir)
    case ir_query_levels:
       assert(!"Unexpected ir_query_levels opcode");
       break;
+   case ir_texture_samples:
+      unreachable("Unexpected ir_texture_samples opcode");
    }
 
    const glsl_type *sampler_type = ir->sampler->type;
@@ -2464,7 +2467,6 @@ _mesa_associate_uniform_storage(struct gl_context *ctx,
          case GLSL_TYPE_STRUCT:
          case GLSL_TYPE_ERROR:
          case GLSL_TYPE_INTERFACE:
-         case GLSL_TYPE_FUNCTION:
 	    assert(!"Should not get here.");
 	    break;
 	 }
@@ -2981,7 +2983,7 @@ _mesa_glsl_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
       if (!ctx->Driver.LinkShader(ctx, prog)) {
 	 prog->LinkStatus = GL_FALSE;
       } else {
-         build_program_resource_list(ctx, prog);
+         build_program_resource_list(prog);
       }
    }
 

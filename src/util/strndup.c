@@ -1,5 +1,5 @@
 /*
- * Copyright © 2015 Intel Corporation
+ * Copyright (c) 2015 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -19,21 +19,29 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
- * Authors:
- *    Jason Ekstrand (jason@jlekstrand.net)
- *
  */
 
-#pragma once
+#if defined(_WIN32)
+#include <stdlib.h>
+#include <string.h>
+#include "strndup.h"
 
-#ifndef _NIR_SPIRV_H_
-#define _NIR_SPIRV_H_
+char *
+strndup(const char *str, size_t max)
+{
+   size_t n;
+   char *ptr;
 
-#include "nir.h"
+   if (!str)
+      return NULL;
 
-nir_shader *spirv_to_nir(const uint32_t *words, size_t word_count,
-                         gl_shader_stage stage,
-                         const nir_shader_compiler_options *options);
+   n = strnlen(str, max);
+   ptr = (char *) calloc(n + 1, sizeof(char));
+   if (!ptr)
+      return NULL;
 
-#endif /* _NIR_SPIRV_H_ */
+   memcpy(ptr, str, n);
+   return ptr;
+}
+
+#endif

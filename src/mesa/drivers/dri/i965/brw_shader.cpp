@@ -72,6 +72,20 @@ shader_perf_log_mesa(void *data, const char *fmt, ...)
    va_end(args);
 }
 
+static bool
+is_scalar_shader_stage(const struct brw_compiler *compiler, int stage)
+{
+   switch (stage) {
+   case MESA_SHADER_FRAGMENT:
+   case MESA_SHADER_COMPUTE:
+      return true;
+   case MESA_SHADER_VERTEX:
+      return compiler->scalar_vs;
+   default:
+      return false;
+   }
+}
+
 struct brw_compiler *
 brw_compiler_create(void *mem_ctx, const struct brw_device_info *devinfo)
 {
@@ -96,6 +110,14 @@ brw_compiler_create(void *mem_ctx, const struct brw_device_info *devinfo)
     */
    nir_options->lower_ffma = true;
    nir_options->lower_sub = true;
+   /* In the vec4 backend, our dpN instruction replicates its result to all
+    * the components of a vec4.  We would like NIR to give us replicated fdot
+    * instructions because it can optimize better for us.
+    *
+    * For the FS backend, it should be lowered away by the scalarizing pass so
+    * we should never see fdot anyway.
+    */
+   nir_options->fdot_replicates = true;
 
    /* We want the GLSL compiler to emit code that uses condition codes */
    for (int i = 0; i < MESA_SHADER_STAGES; i++) {
@@ -107,40 +129,22 @@ brw_compiler_create(void *mem_ctx, const struct brw_device_info *devinfo)
       compiler->glsl_compiler_options[i].EmitNoNoise = true;
       compiler->glsl_compiler_options[i].EmitNoMainReturn = true;
       compiler->glsl_compiler_options[i].EmitNoIndirectInput = true;
-      compiler->glsl_compiler_options[i].EmitNoIndirectOutput =
-	 (i == MESA_SHADER_FRAGMENT);
-      compiler->glsl_compiler_options[i].EmitNoIndirectTemp =
-	 (i == MESA_SHADER_FRAGMENT);
       compiler->glsl_compiler_options[i].EmitNoIndirectUniform = false;
       compiler->glsl_compiler_options[i].LowerClipDistance = true;
+
+      bool is_scalar = is_scalar_shader_stage(compiler, i);
+
+      compiler->glsl_compiler_options[i].EmitNoIndirectOutput = is_scalar;
+      compiler->glsl_compiler_options[i].EmitNoIndirectTemp = is_scalar;
+      compiler->glsl_compiler_options[i].OptimizeForAOS = !is_scalar;
 
       /* !ARB_gpu_shader5 */
       if (devinfo->gen < 7)
          compiler->glsl_compiler_options[i].EmitNoIndirectSampler = true;
+
+      if (is_scalar || brw_env_var_as_boolean("INTEL_USE_NIR", true))
+         compiler->glsl_compiler_options[i].NirOptions = nir_options;
    }
-
-   compiler->glsl_compiler_options[MESA_SHADER_VERTEX].OptimizeForAOS = true;
-   compiler->glsl_compiler_options[MESA_SHADER_GEOMETRY].OptimizeForAOS = true;
-
-   if (compiler->scalar_vs || brw_env_var_as_boolean("INTEL_USE_NIR", true)) {
-      if (compiler->scalar_vs) {
-         /* If we're using the scalar backend for vertex shaders, we need to
-          * configure these accordingly.
-          */
-         compiler->glsl_compiler_options[MESA_SHADER_VERTEX].EmitNoIndirectOutput = true;
-         compiler->glsl_compiler_options[MESA_SHADER_VERTEX].EmitNoIndirectTemp = true;
-         compiler->glsl_compiler_options[MESA_SHADER_VERTEX].OptimizeForAOS = false;
-      }
-
-      compiler->glsl_compiler_options[MESA_SHADER_VERTEX].NirOptions = nir_options;
-   }
-
-   if (brw_env_var_as_boolean("INTEL_USE_NIR", true)) {
-      compiler->glsl_compiler_options[MESA_SHADER_GEOMETRY].NirOptions = nir_options;
-   }
-
-   compiler->glsl_compiler_options[MESA_SHADER_FRAGMENT].NirOptions = nir_options;
-   compiler->glsl_compiler_options[MESA_SHADER_COMPUTE].NirOptions = nir_options;
 
    return compiler;
 }
@@ -190,19 +194,6 @@ brw_shader_precompile(struct gl_context *ctx,
    return true;
 }
 
-static inline bool
-is_scalar_shader_stage(struct brw_context *brw, int stage)
-{
-   switch (stage) {
-   case MESA_SHADER_FRAGMENT:
-      return true;
-   case MESA_SHADER_VERTEX:
-      return brw->intelScreen->compiler->scalar_vs;
-   default:
-      return false;
-   }
-}
-
 static void
 brw_lower_packing_builtins(struct brw_context *brw,
                            gl_shader_stage shader_type,
@@ -213,7 +204,7 @@ brw_lower_packing_builtins(struct brw_context *brw,
            | LOWER_PACK_UNORM_2x16
            | LOWER_UNPACK_UNORM_2x16;
 
-   if (is_scalar_shader_stage(brw, shader_type)) {
+   if (is_scalar_shader_stage(brw->intelScreen->compiler, shader_type)) {
       ops |= LOWER_UNPACK_UNORM_4x8
            | LOWER_UNPACK_SNORM_4x8
            | LOWER_PACK_UNORM_4x8
@@ -226,7 +217,7 @@ brw_lower_packing_builtins(struct brw_context *brw,
        * lowering is needed. For SOA code, the Half2x16 ops must be
        * scalarized.
        */
-      if (is_scalar_shader_stage(brw, shader_type)) {
+      if (is_scalar_shader_stage(brw->intelScreen->compiler, shader_type)) {
          ops |= LOWER_PACK_HALF_2x16_TO_SPLIT
              |  LOWER_UNPACK_HALF_2x16_TO_SPLIT;
       }
@@ -307,7 +298,7 @@ process_glsl_ir(gl_shader_stage stage,
    do {
       progress = false;
 
-      if (is_scalar_shader_stage(brw, shader->Stage)) {
+      if (is_scalar_shader_stage(brw->intelScreen->compiler, shader->Stage)) {
          brw_do_channel_expressions(shader->ir);
          brw_do_vector_splitting(shader->ir);
       }
@@ -321,9 +312,6 @@ process_glsl_ir(gl_shader_stage stage,
       progress = do_common_optimization(shader->ir, true, true,
                                         options, ctx->Const.NativeIntegers) || progress;
    } while (progress);
-
-   if (options->NirOptions != NULL)
-      lower_output_reads(stage, shader->ir);
 
    validate_ir_tree(shader->ir);
 
@@ -348,6 +336,7 @@ GLboolean
 brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 {
    struct brw_context *brw = brw_context(ctx);
+   const struct brw_compiler *compiler = brw->intelScreen->compiler;
    unsigned int stage;
 
    for (stage = 0; stage < ARRAY_SIZE(shProg->_LinkedShaders); stage++) {
@@ -404,7 +393,7 @@ brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 
       if (options->NirOptions) {
          prog->nir = brw_create_nir(brw, shProg, prog, (gl_shader_stage) stage,
-                                    is_scalar_shader_stage(brw, stage));
+                                    is_scalar_shader_stage(compiler, stage));
       }
 
       _mesa_reference_program(ctx, &prog, NULL);
@@ -459,7 +448,6 @@ brw_type_for_base_type(const struct glsl_type *type)
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
    case GLSL_TYPE_DOUBLE:
-   case GLSL_TYPE_FUNCTION:
       unreachable("not reached");
    }
 
@@ -622,6 +610,8 @@ brw_instruction_name(enum opcode op)
       return "tg4_offset";
    case SHADER_OPCODE_TG4_OFFSET_LOGICAL:
       return "tg4_offset_logical";
+   case SHADER_OPCODE_SAMPLEINFO:
+      return "sampleinfo";
 
    case SHADER_OPCODE_SHADER_TIME_ADD:
       return "shader_time_add";
@@ -696,6 +686,9 @@ brw_instruction_name(enum opcode op)
    case FS_OPCODE_PIXEL_Y:
       return "pixel_y";
 
+   case FS_OPCODE_GET_BUFFER_SIZE:
+      return "fs_get_buffer_size";
+
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD:
       return "uniform_pull_const";
    case FS_OPCODE_UNIFORM_PULL_CONSTANT_LOAD_GEN7:
@@ -743,6 +736,9 @@ brw_instruction_name(enum opcode op)
 
    case VS_OPCODE_SET_SIMD4X2_HEADER_GEN9:
       return "set_simd4x2_header_gen9";
+
+   case VS_OPCODE_GET_BUFFER_SIZE:
+      return "vs_get_buffer_size";
 
    case VS_OPCODE_UNPACK_FLAGS_SIMD4X2:
       return "unpack_flags_simd4x2";

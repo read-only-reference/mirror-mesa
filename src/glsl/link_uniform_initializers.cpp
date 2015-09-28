@@ -48,7 +48,7 @@ static unsigned
 get_uniform_block_index(const gl_shader_program *shProg,
                         const char *uniformBlockName)
 {
-   for (unsigned i = 0; i < shProg->NumUniformBlocks; i++) {
+   for (unsigned i = 0; i < shProg->NumBufferInterfaceBlocks; i++) {
       if (!strcmp(shProg->UniformBlocks[i].Name, uniformBlockName))
 	 return i;
    }
@@ -88,7 +88,6 @@ copy_constant_to_storage(union gl_constant_value *storage,
       case GLSL_TYPE_IMAGE:
       case GLSL_TYPE_ATOMIC_UINT:
       case GLSL_TYPE_INTERFACE:
-      case GLSL_TYPE_FUNCTION:
       case GLSL_TYPE_VOID:
       case GLSL_TYPE_SUBROUTINE:
       case GLSL_TYPE_ERROR:

@@ -64,7 +64,16 @@
 struct split_var_copies_state {
    void *mem_ctx;
    void *dead_ctx;
+   bool progress;
 };
+
+static nir_deref *
+get_deref_tail(nir_deref *deref)
+{
+   while (deref->child != NULL)
+      deref = deref->child;
+   return deref;
+}
 
 /* Recursively constructs deref chains to split a copy instruction into
  * multiple (if needed) copy instructions with full-length deref chains.
@@ -190,6 +199,7 @@ split_var_copy_instr(nir_intrinsic_instr *old_copy,
           * remove the old one later.
           */
          nir_instr_insert_after(&old_copy->instr, &new_copy->instr);
+         state->progress = true;
       }
       break;
 
@@ -217,8 +227,8 @@ split_var_copies_block(nir_block *block, void *void_state)
 
       nir_deref *dest_head = &intrinsic->variables[0]->deref;
       nir_deref *src_head = &intrinsic->variables[1]->deref;
-      nir_deref *dest_tail = nir_deref_tail(dest_head);
-      nir_deref *src_tail = nir_deref_tail(src_head);
+      nir_deref *dest_tail = get_deref_tail(dest_head);
+      nir_deref *src_tail = get_deref_tail(src_head);
 
       switch (glsl_get_base_type(src_tail->type)) {
       case GLSL_TYPE_ARRAY:
@@ -248,24 +258,31 @@ split_var_copies_block(nir_block *block, void *void_state)
    return true;
 }
 
-static void
+static bool
 split_var_copies_impl(nir_function_impl *impl)
 {
    struct split_var_copies_state state;
 
    state.mem_ctx = ralloc_parent(impl);
    state.dead_ctx = ralloc_context(NULL);
+   state.progress = false;
 
    nir_foreach_block(impl, split_var_copies_block, &state);
 
    ralloc_free(state.dead_ctx);
+
+   return state.progress;
 }
 
-void
+bool
 nir_split_var_copies(nir_shader *shader)
 {
+   bool progress = false;
+
    nir_foreach_overload(shader, overload) {
       if (overload->impl)
-         split_var_copies_impl(overload->impl);
+         progress = split_var_copies_impl(overload->impl) || progress;
    }
+
+   return progress;
 }

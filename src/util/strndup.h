@@ -1,5 +1,5 @@
 /*
- * Copyright © 2015 Intel Corporation
+ * Copyright (c) 2015 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -19,37 +19,22 @@
  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
- *
- * Authors:
- *    Jason Ekstrand (jason@jlekstrand.net)
- *
  */
 
-/*
- * A simple executable that opens a SPIR-V shader, converts it to NIR, and
- * dumps out the result.  This should be useful for testing the
- * spirv_to_nir code.
- */
+#pragma once
 
-#include "nir_spirv.h"
+#include <stdlib.h> // size_t
 
-#include <sys/mman.h>
-#include <sys/types.h>
-#include <fcntl.h>
-#include <unistd.h>
+#if defined(_WIN32)
 
-int main(int argc, char **argv)
-{
-   int fd = open(argv[1], O_RDONLY);
-   off_t len = lseek(fd, 0, SEEK_END);
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-   assert(len % 4 == 0);
-   size_t word_count = len / 4;
+char *strndup(const char *str, size_t max);
 
-   const void *map = mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0);
-   assert(map != NULL);
-
-   nir_shader *shader = spirv_to_nir(map, MESA_SHADER_FRAGMENT,
-                                     word_count, NULL);
-   nir_print_shader(shader, stderr);
+#ifdef __cplusplus
 }
+#endif
+
+#endif

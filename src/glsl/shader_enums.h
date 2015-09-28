@@ -43,7 +43,119 @@ typedef enum
    MESA_SHADER_COMPUTE = 5,
 } gl_shader_stage;
 
+const char * gl_shader_stage_name(gl_shader_stage stage);
+
 #define MESA_SHADER_STAGES (MESA_SHADER_COMPUTE + 1)
+
+
+/**
+ * Indexes for vertex program attributes.
+ * GL_NV_vertex_program aliases generic attributes over the conventional
+ * attributes.  In GL_ARB_vertex_program shader the aliasing is optional.
+ * In GL_ARB_vertex_shader / OpenGL 2.0 the aliasing is disallowed (the
+ * generic attributes are distinct/separate).
+ */
+typedef enum
+{
+   VERT_ATTRIB_POS = 0,
+   VERT_ATTRIB_WEIGHT = 1,
+   VERT_ATTRIB_NORMAL = 2,
+   VERT_ATTRIB_COLOR0 = 3,
+   VERT_ATTRIB_COLOR1 = 4,
+   VERT_ATTRIB_FOG = 5,
+   VERT_ATTRIB_COLOR_INDEX = 6,
+   VERT_ATTRIB_EDGEFLAG = 7,
+   VERT_ATTRIB_TEX0 = 8,
+   VERT_ATTRIB_TEX1 = 9,
+   VERT_ATTRIB_TEX2 = 10,
+   VERT_ATTRIB_TEX3 = 11,
+   VERT_ATTRIB_TEX4 = 12,
+   VERT_ATTRIB_TEX5 = 13,
+   VERT_ATTRIB_TEX6 = 14,
+   VERT_ATTRIB_TEX7 = 15,
+   VERT_ATTRIB_POINT_SIZE = 16,
+   VERT_ATTRIB_GENERIC0 = 17,
+   VERT_ATTRIB_GENERIC1 = 18,
+   VERT_ATTRIB_GENERIC2 = 19,
+   VERT_ATTRIB_GENERIC3 = 20,
+   VERT_ATTRIB_GENERIC4 = 21,
+   VERT_ATTRIB_GENERIC5 = 22,
+   VERT_ATTRIB_GENERIC6 = 23,
+   VERT_ATTRIB_GENERIC7 = 24,
+   VERT_ATTRIB_GENERIC8 = 25,
+   VERT_ATTRIB_GENERIC9 = 26,
+   VERT_ATTRIB_GENERIC10 = 27,
+   VERT_ATTRIB_GENERIC11 = 28,
+   VERT_ATTRIB_GENERIC12 = 29,
+   VERT_ATTRIB_GENERIC13 = 30,
+   VERT_ATTRIB_GENERIC14 = 31,
+   VERT_ATTRIB_GENERIC15 = 32,
+   VERT_ATTRIB_MAX = 33
+} gl_vert_attrib;
+
+const char * gl_vert_attrib_name(gl_vert_attrib attrib);
+
+/**
+ * Symbolic constats to help iterating over
+ * specific blocks of vertex attributes.
+ *
+ * VERT_ATTRIB_FF
+ *   includes all fixed function attributes as well as
+ *   the aliased GL_NV_vertex_program shader attributes.
+ * VERT_ATTRIB_TEX
+ *   include the classic texture coordinate attributes.
+ *   Is a subset of VERT_ATTRIB_FF.
+ * VERT_ATTRIB_GENERIC
+ *   include the OpenGL 2.0+ GLSL generic shader attributes.
+ *   These alias the generic GL_ARB_vertex_shader attributes.
+ */
+#define VERT_ATTRIB_FF(i)           (VERT_ATTRIB_POS + (i))
+#define VERT_ATTRIB_FF_MAX          VERT_ATTRIB_GENERIC0
+
+#define VERT_ATTRIB_TEX(i)          (VERT_ATTRIB_TEX0 + (i))
+#define VERT_ATTRIB_TEX_MAX         MAX_TEXTURE_COORD_UNITS
+
+#define VERT_ATTRIB_GENERIC(i)      (VERT_ATTRIB_GENERIC0 + (i))
+#define VERT_ATTRIB_GENERIC_MAX     MAX_VERTEX_GENERIC_ATTRIBS
+
+/**
+ * Bitflags for vertex attributes.
+ * These are used in bitfields in many places.
+ */
+/*@{*/
+#define VERT_BIT_POS             BITFIELD64_BIT(VERT_ATTRIB_POS)
+#define VERT_BIT_WEIGHT          BITFIELD64_BIT(VERT_ATTRIB_WEIGHT)
+#define VERT_BIT_NORMAL          BITFIELD64_BIT(VERT_ATTRIB_NORMAL)
+#define VERT_BIT_COLOR0          BITFIELD64_BIT(VERT_ATTRIB_COLOR0)
+#define VERT_BIT_COLOR1          BITFIELD64_BIT(VERT_ATTRIB_COLOR1)
+#define VERT_BIT_FOG             BITFIELD64_BIT(VERT_ATTRIB_FOG)
+#define VERT_BIT_COLOR_INDEX     BITFIELD64_BIT(VERT_ATTRIB_COLOR_INDEX)
+#define VERT_BIT_EDGEFLAG        BITFIELD64_BIT(VERT_ATTRIB_EDGEFLAG)
+#define VERT_BIT_TEX0            BITFIELD64_BIT(VERT_ATTRIB_TEX0)
+#define VERT_BIT_TEX1            BITFIELD64_BIT(VERT_ATTRIB_TEX1)
+#define VERT_BIT_TEX2            BITFIELD64_BIT(VERT_ATTRIB_TEX2)
+#define VERT_BIT_TEX3            BITFIELD64_BIT(VERT_ATTRIB_TEX3)
+#define VERT_BIT_TEX4            BITFIELD64_BIT(VERT_ATTRIB_TEX4)
+#define VERT_BIT_TEX5            BITFIELD64_BIT(VERT_ATTRIB_TEX5)
+#define VERT_BIT_TEX6            BITFIELD64_BIT(VERT_ATTRIB_TEX6)
+#define VERT_BIT_TEX7            BITFIELD64_BIT(VERT_ATTRIB_TEX7)
+#define VERT_BIT_POINT_SIZE      BITFIELD64_BIT(VERT_ATTRIB_POINT_SIZE)
+#define VERT_BIT_GENERIC0        BITFIELD64_BIT(VERT_ATTRIB_GENERIC0)
+
+#define VERT_BIT(i)              BITFIELD64_BIT(i)
+#define VERT_BIT_ALL             BITFIELD64_RANGE(0, VERT_ATTRIB_MAX)
+
+#define VERT_BIT_FF(i)           VERT_BIT(i)
+#define VERT_BIT_FF_ALL          BITFIELD64_RANGE(0, VERT_ATTRIB_FF_MAX)
+#define VERT_BIT_TEX(i)          VERT_BIT(VERT_ATTRIB_TEX(i))
+#define VERT_BIT_TEX_ALL         \
+   BITFIELD64_RANGE(VERT_ATTRIB_TEX(0), VERT_ATTRIB_TEX_MAX)
+
+#define VERT_BIT_GENERIC(i)      VERT_BIT(VERT_ATTRIB_GENERIC(i))
+#define VERT_BIT_GENERIC_ALL     \
+   BITFIELD64_RANGE(VERT_ATTRIB_GENERIC(0), VERT_ATTRIB_GENERIC_MAX)
+/*@}*/
+
 
 /**
  * Indexes for vertex shader outputs, geometry shader inputs/outputs, and
@@ -85,8 +197,43 @@ typedef enum
    VARYING_SLOT_TESS_LEVEL_OUTER, /* Only appears as TCS output. */
    VARYING_SLOT_TESS_LEVEL_INNER, /* Only appears as TCS output. */
    VARYING_SLOT_VAR0, /* First generic varying slot */
+   /* the remaining are simply for the benefit of gl_varying_slot_name()
+    * and not to be construed as an upper bound:
+    */
+   VARYING_SLOT_VAR1,
+   VARYING_SLOT_VAR2,
+   VARYING_SLOT_VAR3,
+   VARYING_SLOT_VAR4,
+   VARYING_SLOT_VAR5,
+   VARYING_SLOT_VAR6,
+   VARYING_SLOT_VAR7,
+   VARYING_SLOT_VAR8,
+   VARYING_SLOT_VAR9,
+   VARYING_SLOT_VAR10,
+   VARYING_SLOT_VAR11,
+   VARYING_SLOT_VAR12,
+   VARYING_SLOT_VAR13,
+   VARYING_SLOT_VAR14,
+   VARYING_SLOT_VAR15,
+   VARYING_SLOT_VAR16,
+   VARYING_SLOT_VAR17,
+   VARYING_SLOT_VAR18,
+   VARYING_SLOT_VAR19,
+   VARYING_SLOT_VAR20,
+   VARYING_SLOT_VAR21,
+   VARYING_SLOT_VAR22,
+   VARYING_SLOT_VAR23,
+   VARYING_SLOT_VAR24,
+   VARYING_SLOT_VAR25,
+   VARYING_SLOT_VAR26,
+   VARYING_SLOT_VAR27,
+   VARYING_SLOT_VAR28,
+   VARYING_SLOT_VAR29,
+   VARYING_SLOT_VAR30,
+   VARYING_SLOT_VAR31,
 } gl_varying_slot;
 
+const char * gl_varying_slot_name(gl_varying_slot slot);
 
 /**
  * Bitflags for varying slots.
@@ -130,6 +277,8 @@ typedef enum
 #define SYSTEM_BIT_SAMPLE_ID ((uint64_t)1 << SYSTEM_VALUE_SAMPLE_ID)
 #define SYSTEM_BIT_SAMPLE_POS ((uint64_t)1 << SYSTEM_VALUE_SAMPLE_POS)
 #define SYSTEM_BIT_SAMPLE_MASK_IN ((uint64_t)1 << SYSTEM_VALUE_SAMPLE_MASK_IN)
+#define SYSTEM_BIT_LOCAL_INVOCATION_ID ((uint64_t)1 << SYSTEM_VALUE_LOCAL_INVOCATION_ID)
+
 /**
  * If the gl_register_file is PROGRAM_SYSTEM_VALUE, the register index will be
  * one of these values.  If a NIR variable's mode is nir_var_system_value, it
@@ -250,14 +399,30 @@ typedef enum
    /*@{*/
    SYSTEM_VALUE_TESS_COORD,
    SYSTEM_VALUE_VERTICES_IN,    /**< Tessellation vertices in input patch */
-   SYSTEM_VALUE_PRIMITIVE_ID,   /**< (currently not used by GS) */
+   SYSTEM_VALUE_PRIMITIVE_ID,
    SYSTEM_VALUE_TESS_LEVEL_OUTER, /**< TES input */
    SYSTEM_VALUE_TESS_LEVEL_INNER, /**< TES input */
    /*@}*/
 
+   /**
+    * \name Compute shader system values
+    */
+   /*@{*/
+   SYSTEM_VALUE_LOCAL_INVOCATION_ID,
+   SYSTEM_VALUE_WORK_GROUP_ID,
+   SYSTEM_VALUE_NUM_WORK_GROUPS,
+   /*@}*/
+
+   /**
+    * Driver internal vertex-count, used (for example) for drivers to
+    * calculate stride for stream-out outputs.  Not externally visible.
+    */
+   SYSTEM_VALUE_VERTEX_CNT,
+
    SYSTEM_VALUE_MAX             /**< Number of values */
 } gl_system_value;
 
+const char * gl_system_value_name(gl_system_value sysval);
 
 /**
  * The possible interpolation qualifiers that can be applied to a fragment
@@ -275,6 +440,8 @@ enum glsl_interp_qualifier
    INTERP_QUALIFIER_COUNT /**< Number of interpolation qualifiers */
 };
 
+const char * glsl_interp_qualifier_name(enum glsl_interp_qualifier qual);
+
 /**
  * Fragment program results
  */
@@ -291,8 +458,19 @@ typedef enum
    /* FRAG_RESULT_DATAn are the per-render-target (GLSL gl_FragData[n]
     * or ARB_fragment_program fragment.color[n]) color results.  If
     * any are written, FRAG_RESULT_COLOR will not be written.
+    * FRAG_RESULT_DATA1 and up are simply for the benefit of
+    * gl_frag_result_name() and not to be construed as an upper bound
     */
    FRAG_RESULT_DATA0 = 4,
+   FRAG_RESULT_DATA1,
+   FRAG_RESULT_DATA2,
+   FRAG_RESULT_DATA3,
+   FRAG_RESULT_DATA4,
+   FRAG_RESULT_DATA5,
+   FRAG_RESULT_DATA6,
+   FRAG_RESULT_DATA7,
 } gl_frag_result;
+
+const char * gl_frag_result_name(gl_frag_result result);
 
 #endif /* SHADER_ENUMS_H */

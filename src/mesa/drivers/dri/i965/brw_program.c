@@ -544,23 +544,6 @@ brw_mark_surface_used(struct brw_stage_prog_data *prog_data,
       MAX2(prog_data->binding_table.size_bytes, (surf_index + 1) * 4);
 }
 
-bool
-brw_stage_prog_data_compare(const struct brw_stage_prog_data *a,
-                            const struct brw_stage_prog_data *b)
-{
-   /* Compare all the struct up to the pointers. */
-   if (memcmp(a, b, offsetof(struct brw_stage_prog_data, param)))
-      return false;
-
-   if (memcmp(a->param, b->param, a->nr_params * sizeof(void *)))
-      return false;
-
-   if (memcmp(a->pull_param, b->pull_param, a->nr_pull_params * sizeof(void *)))
-      return false;
-
-   return true;
-}
-
 void
 brw_stage_prog_data_free(const void *p)
 {
@@ -586,5 +569,24 @@ brw_dump_ir(const char *stage, struct gl_shader_program *shader_prog,
       fprintf(stderr, "ARB_%s_program %d ir for native %s shader\n",
               stage, prog->Id, stage);
       _mesa_print_program(prog);
+   }
+}
+
+void
+brw_setup_tex_for_precompile(struct brw_context *brw,
+                             struct brw_sampler_prog_key_data *tex,
+                             struct gl_program *prog)
+{
+   const bool has_shader_channel_select = brw->is_haswell || brw->gen >= 8;
+   unsigned sampler_count = _mesa_fls(prog->SamplersUsed);
+   for (unsigned i = 0; i < sampler_count; i++) {
+      if (!has_shader_channel_select && (prog->ShadowSamplers & (1 << i))) {
+         /* Assume DEPTH_TEXTURE_MODE is the default: X, X, X, 1 */
+         tex->swizzles[i] =
+            MAKE_SWIZZLE4(SWIZZLE_X, SWIZZLE_X, SWIZZLE_X, SWIZZLE_ONE);
+      } else {
+         /* Color sampler: assume no swizzling. */
+         tex->swizzles[i] = SWIZZLE_XYZW;
+      }
    }
 }

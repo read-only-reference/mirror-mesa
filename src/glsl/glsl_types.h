@@ -56,7 +56,6 @@ enum glsl_base_type {
    GLSL_TYPE_IMAGE,
    GLSL_TYPE_ATOMIC_UINT,
    GLSL_TYPE_STRUCT,
-   GLSL_TYPE_FUNCTION,
    GLSL_TYPE_INTERFACE,
    GLSL_TYPE_ARRAY,
    GLSL_TYPE_VOID,
@@ -78,7 +77,8 @@ enum glsl_sampler_dim {
 enum glsl_interface_packing {
    GLSL_INTERFACE_PACKING_STD140,
    GLSL_INTERFACE_PACKING_SHARED,
-   GLSL_INTERFACE_PACKING_PACKED
+   GLSL_INTERFACE_PACKING_PACKED,
+   GLSL_INTERFACE_PACKING_STD430
 };
 
 enum glsl_matrix_layout {
@@ -180,7 +180,7 @@ struct glsl_type {
     */
    union {
       const struct glsl_type *array;            /**< Type of array elements. */
-      struct glsl_function_param *parameters;   /**< Parameters to function. */
+      const struct glsl_type *parameters;       /**< Parameters to function. */
       struct glsl_struct_field *structure;      /**< List of struct fields. */
    } fields;
 
@@ -271,13 +271,6 @@ struct glsl_type {
    static const glsl_type *get_subroutine_instance(const char *subroutine_name);
 
    /**
-    * Get the instance of a function type
-    */
-   static const glsl_type *get_function_instance(const struct glsl_type *return_type,
-                                                 const glsl_function_param *parameters,
-                                                 unsigned num_params);
-
-   /**
     * Get the type resulting from a multiplication of \p type_a * \p type_b
     */
    static const glsl_type *get_mul_type(const glsl_type *type_a,
@@ -298,6 +291,14 @@ struct glsl_type {
     * might occupy.
     */
    unsigned component_slots() const;
+
+   /**
+    * Calculate offset between the base location of the struct in
+    * uniform storage and a struct member.
+    * For the initial call, length is the index of the member to find the
+    * offset for.
+    */
+   unsigned record_location_offset(unsigned length) const;
 
    /**
     * Calculate the number of unique values from glGetUniformLocation for the
@@ -332,6 +333,25 @@ struct glsl_type {
     * elements in the array)
     */
    unsigned std140_size(bool row_major) const;
+
+   /**
+    * Alignment in bytes of the start of this type in a std430 shader
+    * storage block.
+    */
+   unsigned std430_base_alignment(bool row_major) const;
+
+   /**
+    * Calculate array stride in bytes of this type in a std430 shader storage
+    * block.
+    */
+   unsigned std430_array_stride(bool row_major) const;
+
+   /**
+    * Size in bytes of this type in a std430 shader storage block.
+    *
+    * Note that this is not GL_BUFFER_SIZE
+    */
+   unsigned std430_size(bool row_major) const;
 
    /**
     * \brief Can this type be implicitly converted to another?
@@ -558,6 +578,25 @@ struct glsl_type {
    }
 
    /**
+    * Return the total number of elements in an array including the elements
+    * in arrays of arrays.
+    */
+   unsigned arrays_of_arrays_size() const
+   {
+      if (!is_array())
+         return 0;
+
+      unsigned size = length;
+      const glsl_type *base_type = fields.array;
+
+      while (base_type->is_array()) {
+         size = size * base_type->length;
+         base_type = base_type->fields.array;
+      }
+      return size;
+   }
+
+   /**
     * Return the amount of atomic counter storage required for a type.
     */
    unsigned atomic_size() const
@@ -697,10 +736,6 @@ private:
    glsl_type(const glsl_struct_field *fields, unsigned num_fields,
 	     enum glsl_interface_packing packing, const char *name);
 
-   /** Constructor for interface types */
-   glsl_type(const glsl_type *return_type,
-             const glsl_function_param *params, unsigned num_params);
-
    /** Constructor for array types */
    glsl_type(const glsl_type *array, unsigned length);
 
@@ -718,9 +753,6 @@ private:
 
    /** Hash table containing the known subroutine types. */
    static struct hash_table *subroutine_types;
-
-   /** Hash table containing the known function types. */
-   static struct hash_table *function_types;
 
    static bool record_key_compare(const void *a, const void *b);
    static unsigned record_key_hash(const void *key);
@@ -748,10 +780,6 @@ private:
    friend void _mesa_glsl_release_types(void);
    /*@}*/
 };
-
-#undef DECL_TYPE
-#undef STRUCT_TYPE
-#endif /* __cplusplus */
 
 struct glsl_struct_field {
    const struct glsl_type *type;
@@ -801,7 +829,17 @@ struct glsl_struct_field {
     */
    int stream;
 
-#ifdef __cplusplus
+
+   /**
+    * Image qualifiers, applicable to buffer variables defined in shader
+    * storage buffer objects (SSBOs)
+    */
+   unsigned image_read_only:1;
+   unsigned image_write_only:1;
+   unsigned image_coherent:1;
+   unsigned image_volatile:1;
+   unsigned image_restrict:1;
+
    glsl_struct_field(const struct glsl_type *_type, const char *_name)
       : type(_type), name(_name), location(-1), interpolation(0), centroid(0),
         sample(0), matrix_layout(GLSL_MATRIX_LAYOUT_INHERITED), patch(0),
@@ -814,14 +852,6 @@ struct glsl_struct_field {
    {
       /* empty */
    }
-#endif
-};
-
-struct glsl_function_param {
-   const struct glsl_type *type;
-
-   bool in;
-   bool out;
 };
 
 static inline unsigned int
@@ -829,5 +859,9 @@ glsl_align(unsigned int a, unsigned int align)
 {
    return (a + align - 1) / align * align;
 }
+
+#undef DECL_TYPE
+#undef STRUCT_TYPE
+#endif /* __cplusplus */
 
 #endif /* GLSL_TYPES_H */
