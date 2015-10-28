@@ -1962,7 +1962,9 @@ array_specifier:
    '[' ']'
    {
       void *ctx = state;
-      $$ = new(ctx) ast_array_specifier(@1);
+      $$ = new(ctx) ast_array_specifier(@1, new(ctx) ast_expression(
+                                                  ast_unsized_array_dim, NULL,
+                                                  NULL, NULL));
       $$->set_location_range(@1, @2);
    }
    | '[' constant_expression ']'
@@ -1973,29 +1975,21 @@ array_specifier:
    }
    | array_specifier '[' ']'
    {
+      void *ctx = state;
       $$ = $1;
 
-      if (!state->ARB_arrays_of_arrays_enable) {
-         _mesa_glsl_error(& @1, state,
-                          "GL_ARB_arrays_of_arrays "
-                          "required for defining arrays of arrays");
-      } else {
-         _mesa_glsl_error(& @1, state,
-                          "only the outermost array dimension can "
-                          "be unsized");
+      if (state->check_arrays_of_arrays_allowed(& @1)) {
+         $$->add_dimension(new(ctx) ast_expression(ast_unsized_array_dim, NULL,
+                                                   NULL, NULL));
       }
    }
    | array_specifier '[' constant_expression ']'
    {
       $$ = $1;
 
-      if (!state->ARB_arrays_of_arrays_enable) {
-         _mesa_glsl_error(& @1, state,
-                          "GL_ARB_arrays_of_arrays "
-                          "required for defining arrays of arrays");
+      if (state->check_arrays_of_arrays_allowed(& @1)) {
+         $$->add_dimension($3);
       }
-
-      $$->add_dimension($3);
    }
    ;
 
@@ -2615,17 +2609,6 @@ interface_block:
 
       block->layout.is_default_qualifier = false;
 
-      foreach_list_typed (ast_declarator_list, member, link, &block->declarations) {
-         ast_type_qualifier& qualifier = member->type->qualifier;
-         if (qualifier.flags.q.stream && qualifier.stream != block->layout.stream) {
-               _mesa_glsl_error(& @1, state,
-                             "stream layout qualifier on "
-                             "interface block member does not match "
-                             "the interface block (%d vs %d)",
-                             qualifier.stream, block->layout.stream);
-               YYERROR;
-         }
-      }
       $$ = block;
    }
    | memory_qualifier interface_block
@@ -2786,6 +2769,17 @@ layout_defaults:
       if (!state->default_shader_storage_qualifier->merge_qualifier(& @1, state, $1)) {
          YYERROR;
       }
+
+      /* From the GLSL 4.50 spec, section 4.4.5:
+       *
+       *     "It is a compile-time error to specify the binding identifier for
+       *     the global scope or for block member declarations."
+       */
+      if (state->default_shader_storage_qualifier->flags.q.explicit_binding) {
+         _mesa_glsl_error(& @1, state,
+                          "binding qualifier cannot be set for default layout");
+      }
+
       $$ = NULL;
    }
 

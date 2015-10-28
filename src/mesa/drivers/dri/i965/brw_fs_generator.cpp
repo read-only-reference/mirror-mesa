@@ -131,7 +131,6 @@ fs_generator::fs_generator(const struct brw_compiler *compiler, void *log_data,
                            void *mem_ctx,
                            const void *key,
                            struct brw_stage_prog_data *prog_data,
-                           struct gl_program *prog,
                            unsigned promoted_constants,
                            bool runtime_check_aads_emit,
                            const char *stage_abbrev)
@@ -139,7 +138,7 @@ fs_generator::fs_generator(const struct brw_compiler *compiler, void *log_data,
    : compiler(compiler), log_data(log_data),
      devinfo(compiler->devinfo), key(key),
      prog_data(prog_data),
-     prog(prog), promoted_constants(promoted_constants),
+     promoted_constants(promoted_constants),
      runtime_check_aads_emit(runtime_check_aads_emit), debug_flag(false),
      stage_abbrev(stage_abbrev), mem_ctx(mem_ctx)
 {
@@ -318,6 +317,14 @@ fs_generator::generate_fb_write(fs_inst *inst, struct brw_reg payload)
 		    brw_imm_ud(inst->target));
 	 }
 
+         /* Set computes stencil to render target */
+         if (prog_data->computed_stencil) {
+            brw_OR(p,
+                   vec1(retype(payload, BRW_REGISTER_TYPE_UD)),
+                   vec1(retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UD)),
+                   brw_imm_ud(0x1 << 14));
+         }
+
 	 implied_header = brw_null_reg();
       } else {
 	 implied_header = retype(brw_vec8_grf(0, 0), BRW_REGISTER_TYPE_UW);
@@ -356,6 +363,28 @@ fs_generator::generate_fb_write(fs_inst *inst, struct brw_reg payload)
 }
 
 void
+fs_generator::generate_urb_read(fs_inst *inst,
+                                struct brw_reg dst,
+                                struct brw_reg header)
+{
+   assert(header.file == BRW_GENERAL_REGISTER_FILE);
+   assert(header.type == BRW_REGISTER_TYPE_UD);
+
+   brw_inst *send = brw_next_insn(p, BRW_OPCODE_SEND);
+   brw_set_dest(p, send, dst);
+   brw_set_src0(p, send, header);
+   brw_set_src1(p, send, brw_imm_ud(0u));
+
+   brw_inst_set_sfid(p->devinfo, send, BRW_SFID_URB);
+   brw_inst_set_urb_opcode(p->devinfo, send, GEN8_URB_OPCODE_SIMD8_READ);
+
+   brw_inst_set_mlen(p->devinfo, send, inst->mlen);
+   brw_inst_set_rlen(p->devinfo, send, inst->regs_written);
+   brw_inst_set_header_present(p->devinfo, send, true);
+   brw_inst_set_urb_global_offset(p->devinfo, send, inst->offset);
+}
+
+void
 fs_generator::generate_urb_write(fs_inst *inst, struct brw_reg payload)
 {
    brw_inst *insn;
@@ -368,6 +397,14 @@ fs_generator::generate_urb_write(fs_inst *inst, struct brw_reg payload)
 
    brw_inst_set_sfid(p->devinfo, insn, BRW_SFID_URB);
    brw_inst_set_urb_opcode(p->devinfo, insn, GEN8_URB_OPCODE_SIMD8_WRITE);
+
+   if (inst->opcode == SHADER_OPCODE_URB_WRITE_SIMD8_PER_SLOT ||
+       inst->opcode == SHADER_OPCODE_URB_WRITE_SIMD8_MASKED_PER_SLOT)
+      brw_inst_set_urb_per_slot_offset(p->devinfo, insn, true);
+
+   if (inst->opcode == SHADER_OPCODE_URB_WRITE_SIMD8_MASKED ||
+       inst->opcode == SHADER_OPCODE_URB_WRITE_SIMD8_MASKED_PER_SLOT)
+      brw_inst_set_urb_channel_mask_present(p->devinfo, insn, true);
 
    brw_inst_set_mlen(p->devinfo, insn, inst->mlen);
    brw_inst_set_rlen(p->devinfo, insn, 0);
@@ -405,6 +442,47 @@ fs_generator::generate_cs_terminate(fs_inst *inst, struct brw_reg payload)
    brw_inst_set_ts_resource_select(devinfo, insn, 1); /* Do not dereference URB */
 
    brw_inst_set_mask_control(devinfo, insn, BRW_MASK_DISABLE);
+}
+
+void
+fs_generator::generate_stencil_ref_packing(fs_inst *inst,
+                                           struct brw_reg dst,
+                                           struct brw_reg src)
+{
+   assert(dispatch_width == 8);
+   assert(devinfo->gen >= 9);
+
+   /* Stencil value updates are provided in 8 slots of 1 byte per slot.
+    * Presumably, in order to save memory bandwidth, the stencil reference
+    * values written from the FS need to be packed into 2 dwords (this makes
+    * sense because the stencil values are limited to 1 byte each and a SIMD8
+    * send, so stencil slots 0-3 in dw0, and 4-7 in dw1.)
+    *
+    * The spec is confusing here because in the payload definition of MDP_RTW_S8
+    * (Message Data Payload for Render Target Writes with Stencil 8b) the
+    * stencil value seems to be dw4.0-dw4.7. However, if you look at the type of
+    * dw4 it is type MDPR_STENCIL (Message Data Payload Register) which is the
+    * packed values specified above and diagrammed below:
+    *
+    *     31                             0
+    *     --------------------------------
+    * DW  |                              |
+    * 2-7 |            IGNORED           |
+    *     |                              |
+    *     --------------------------------
+    * DW1 | STC   | STC   | STC   | STC  |
+    *     | slot7 | slot6 | slot5 | slot4|
+    *     --------------------------------
+    * DW0 | STC   | STC   | STC   | STC  |
+    *     | slot3 | slot2 | slot1 | slot0|
+    *     --------------------------------
+    */
+
+   src.vstride = BRW_VERTICAL_STRIDE_4;
+   src.width = BRW_WIDTH_1;
+   src.hstride = BRW_HORIZONTAL_STRIDE_0;
+   assert(src.type == BRW_REGISTER_TYPE_UB);
+   brw_MOV(p, retype(dst, BRW_REGISTER_TYPE_UB), src);
 }
 
 void
@@ -1377,15 +1455,14 @@ fs_generator::generate_pixel_interpolator_query(fs_inst *inst,
                                                 struct brw_reg msg_data,
                                                 unsigned msg_type)
 {
-   assert(msg_data.file == BRW_IMMEDIATE_VALUE &&
-          msg_data.type == BRW_REGISTER_TYPE_UD);
+   assert(msg_data.type == BRW_REGISTER_TYPE_UD);
 
    brw_pixel_interpolator_query(p,
          retype(dst, BRW_REGISTER_TYPE_UW),
          src,
          inst->pi_noperspective,
          msg_type,
-         msg_data.dw1.ud,
+         msg_data,
          inst->mlen,
          inst->regs_written);
 }
@@ -1427,18 +1504,18 @@ fs_generator::generate_set_sample_id(fs_inst *inst,
    assert(src0.type == BRW_REGISTER_TYPE_D ||
           src0.type == BRW_REGISTER_TYPE_UD);
 
-   brw_push_insn_state(p);
-   brw_set_default_exec_size(p, BRW_EXECUTE_8);
-   brw_set_default_compression_control(p, BRW_COMPRESSION_NONE);
-   brw_set_default_mask_control(p, BRW_MASK_DISABLE);
-   struct brw_reg reg = retype(stride(src1, 1, 4, 0), BRW_REGISTER_TYPE_UW);
-   if (dispatch_width == 8) {
+   struct brw_reg reg = stride(src1, 1, 4, 0);
+   if (devinfo->gen >= 8 || dispatch_width == 8) {
       brw_ADD(p, dst, src0, reg);
    } else if (dispatch_width == 16) {
+      brw_push_insn_state(p);
+      brw_set_default_exec_size(p, BRW_EXECUTE_8);
+      brw_set_default_compression_control(p, BRW_COMPRESSION_NONE);
       brw_ADD(p, firsthalf(dst), firsthalf(src0), reg);
+      brw_set_default_compression_control(p, BRW_COMPRESSION_2NDHALF);
       brw_ADD(p, sechalf(dst), sechalf(src0), suboffset(reg, 2));
+      brw_pop_insn_state(p);
    }
-   brw_pop_insn_state(p);
 }
 
 void
@@ -2003,7 +2080,14 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
          fill_count++;
 	 break;
 
+      case SHADER_OPCODE_URB_READ_SIMD8:
+         generate_urb_read(inst, dst, src[0]);
+         break;
+
       case SHADER_OPCODE_URB_WRITE_SIMD8:
+      case SHADER_OPCODE_URB_WRITE_SIMD8_PER_SLOT:
+      case SHADER_OPCODE_URB_WRITE_SIMD8_MASKED:
+      case SHADER_OPCODE_URB_WRITE_SIMD8_MASKED_PER_SLOT:
 	 generate_urb_write(inst, src[0]);
 	 break;
 
@@ -2147,6 +2231,10 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 	 generate_barrier(inst, src[0]);
 	 break;
 
+      case FS_OPCODE_PACK_STENCIL_REF:
+         generate_stencil_ref_packing(inst, dst, src[0]);
+         break;
+
       default:
          unreachable("Unsupported opcode");
 
@@ -2181,24 +2269,25 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 
    if (unlikely(debug_flag)) {
       fprintf(stderr, "Native code for %s\n"
-              "SIMD%d shader: %d instructions. %d loops. %d:%d spills:fills. Promoted %u constants. Compacted %d to %d"
+              "SIMD%d shader: %d instructions. %d loops. %u cycles. %d:%d spills:fills. Promoted %u constants. Compacted %d to %d"
               " bytes (%.0f%%)\n",
-              shader_name, dispatch_width, before_size / 16, loop_count,
+              shader_name, dispatch_width, before_size / 16, loop_count, cfg->cycle_count,
               spill_count, fill_count, promoted_constants, before_size, after_size,
               100.0f * (before_size - after_size) / before_size);
 
       dump_assembly(p->store, annotation.ann_count, annotation.ann,
-                    p->devinfo, prog);
+                    p->devinfo);
       ralloc_free(annotation.ann);
    }
 
    compiler->shader_debug_log(log_data,
-                              "%s SIMD%d shader: %d inst, %d loops, "
+                              "%s SIMD%d shader: %d inst, %d loops, %u cycles, "
                               "%d:%d spills:fills, Promoted %u constants, "
                               "compacted %d to %d bytes.\n",
                               stage_abbrev, dispatch_width, before_size / 16,
-                              loop_count, spill_count, fill_count,
-                              promoted_constants, before_size, after_size);
+                              loop_count, cfg->cycle_count, spill_count,
+                              fill_count, promoted_constants, before_size,
+                              after_size);
 
    return start_offset;
 }

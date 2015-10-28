@@ -27,6 +27,115 @@
 #include "glsl/nir/glsl_to_nir.h"
 #include "program/prog_to_nir.h"
 
+static bool
+remap_vs_attrs(nir_block *block, void *closure)
+{
+   GLbitfield64 inputs_read = *((GLbitfield64 *) closure);
+
+   nir_foreach_instr(block, instr) {
+      if (instr->type != nir_instr_type_intrinsic)
+         continue;
+
+      nir_intrinsic_instr *intrin = nir_instr_as_intrinsic(instr);
+
+      /* We set EmitNoIndirect for VS inputs, so there are no indirects. */
+      assert(intrin->intrinsic != nir_intrinsic_load_input_indirect);
+
+      if (intrin->intrinsic == nir_intrinsic_load_input) {
+         /* Attributes come in a contiguous block, ordered by their
+          * gl_vert_attrib value.  That means we can compute the slot
+          * number for an attribute by masking out the enabled attributes
+          * before it and counting the bits.
+          */
+         int attr = intrin->const_index[0];
+         int slot = _mesa_bitcount_64(inputs_read & BITFIELD64_MASK(attr));
+         intrin->const_index[0] = 4 * slot;
+      }
+   }
+   return true;
+}
+
+static void
+brw_nir_lower_inputs(nir_shader *nir, bool is_scalar)
+{
+   switch (nir->stage) {
+   case MESA_SHADER_VERTEX:
+      /* For now, leave the vec4 backend doing the old method. */
+      if (!is_scalar) {
+         nir_assign_var_locations(&nir->inputs, &nir->num_inputs,
+                                  type_size_vec4);
+         break;
+      }
+
+      /* Start with the location of the variable's base. */
+      foreach_list_typed(nir_variable, var, node, &nir->inputs) {
+         var->data.driver_location = var->data.location;
+      }
+
+      /* Now use nir_lower_io to walk dereference chains.  Attribute arrays
+       * are loaded as one vec4 per element (or matrix column), so we use
+       * type_size_vec4 here.
+       */
+      nir_lower_io(nir, nir_var_shader_in, type_size_vec4);
+
+      /* Finally, translate VERT_ATTRIB_* values into the actual registers.
+       *
+       * Note that we can use nir->info.inputs_read instead of key->inputs_read
+       * since the two are identical aside from Gen4-5 edge flag differences.
+       */
+      GLbitfield64 inputs_read = nir->info.inputs_read;
+      nir_foreach_overload(nir, overload) {
+         if (overload->impl) {
+            nir_foreach_block(overload->impl, remap_vs_attrs, &inputs_read);
+         }
+      }
+      break;
+   case MESA_SHADER_GEOMETRY:
+      foreach_list_typed(nir_variable, var, node, &nir->inputs) {
+         var->data.driver_location = var->data.location;
+      }
+      break;
+   case MESA_SHADER_FRAGMENT:
+      assert(is_scalar);
+      nir_assign_var_locations(&nir->inputs, &nir->num_inputs,
+                               type_size_scalar);
+      break;
+   case MESA_SHADER_COMPUTE:
+      /* Compute shaders have no inputs. */
+      assert(exec_list_is_empty(&nir->inputs));
+      break;
+   default:
+      unreachable("unsupported shader stage");
+   }
+}
+
+static void
+brw_nir_lower_outputs(nir_shader *nir, bool is_scalar)
+{
+   switch (nir->stage) {
+   case MESA_SHADER_VERTEX:
+   case MESA_SHADER_GEOMETRY:
+      if (is_scalar) {
+         nir_assign_var_locations(&nir->outputs, &nir->num_outputs,
+                                  type_size_scalar);
+      } else {
+         nir_foreach_variable(var, &nir->outputs)
+            var->data.driver_location = var->data.location;
+      }
+      break;
+   case MESA_SHADER_FRAGMENT:
+      nir_assign_var_locations(&nir->outputs, &nir->num_outputs,
+                               type_size_scalar);
+      break;
+   case MESA_SHADER_COMPUTE:
+      /* Compute shaders have no outputs. */
+      assert(exec_list_is_empty(&nir->outputs));
+      break;
+   default:
+      unreachable("unsupported shader stage");
+   }
+}
+
 static void
 nir_optimize(nir_shader *nir, bool is_scalar)
 {
@@ -83,13 +192,12 @@ brw_create_nir(struct brw_context *brw,
    static const nir_lower_tex_options tex_options = {
       .lower_txp = ~0,
    };
-   struct gl_shader *shader = shader_prog ? shader_prog->_LinkedShaders[stage] : NULL;
    bool debug_enabled = INTEL_DEBUG & intel_debug_flag_for_shader_stage(stage);
    nir_shader *nir;
 
    /* First, lower the GLSL IR or Mesa IR to NIR */
    if (shader_prog) {
-      nir = glsl_to_nir(shader, options);
+      nir = glsl_to_nir(shader_prog, stage, options);
    } else {
       nir = prog_to_nir(prog, options);
       nir_convert_to_ssa(nir); /* turn registers into SSA */
@@ -122,26 +230,12 @@ brw_create_nir(struct brw_context *brw,
    /* Get rid of split copies */
    nir_optimize(nir, is_scalar);
 
-   if (is_scalar) {
-      nir_assign_var_locations(&nir->uniforms,
-                               &nir->num_uniforms,
-                               type_size_scalar);
-      nir_assign_var_locations(&nir->inputs, &nir->num_inputs, type_size_scalar);
-      nir_assign_var_locations(&nir->outputs, &nir->num_outputs, type_size_scalar);
-      nir_lower_io(nir, type_size_scalar);
-   } else {
-      nir_assign_var_locations(&nir->uniforms,
-                               &nir->num_uniforms,
-                               type_size_vec4);
-
-      nir_assign_var_locations(&nir->inputs, &nir->num_inputs, type_size_vec4);
-
-      foreach_list_typed(nir_variable, var, node, &nir->outputs)
-         var->data.driver_location = var->data.location;
-
-      nir_lower_io(nir, type_size_vec4);
-   }
-
+   brw_nir_lower_inputs(nir, is_scalar);
+   brw_nir_lower_outputs(nir, is_scalar);
+   nir_assign_var_locations(&nir->uniforms,
+                            &nir->num_uniforms,
+                            is_scalar ? type_size_scalar : type_size_vec4);
+   nir_lower_io(nir, -1, is_scalar ? type_size_scalar : type_size_vec4);
    nir_validate_shader(nir);
 
    nir_remove_dead_variables(nir);
@@ -155,8 +249,10 @@ brw_create_nir(struct brw_context *brw,
    nir_lower_system_values(nir);
    nir_validate_shader(nir);
 
-   nir_lower_atomics(nir);
-   nir_validate_shader(nir);
+   if (shader_prog) {
+      nir_lower_atomics(nir, shader_prog);
+      nir_validate_shader(nir);
+   }
 
    nir_optimize(nir, is_scalar);
 

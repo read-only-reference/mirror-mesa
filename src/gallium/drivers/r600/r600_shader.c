@@ -162,12 +162,6 @@ int r600_pipe_shader_create(struct pipe_context *ctx,
 		goto error;
 	}
 
-    /* disable SB for geom shaders on R6xx/R7xx due to some mysterious gs piglit regressions with it enabled. */
-    if (rctx->b.chip_class <= R700) {
-	    use_sb &= (shader->shader.processor_type != TGSI_PROCESSOR_GEOMETRY);
-    }
-	/* disable SB for shaders using CF_INDEX_0/1 (sampler/ubo array indexing) as it doesn't handle those currently */
-	use_sb &= !shader->shader.uses_index_registers;
 	/* disable SB for shaders using doubles */
 	use_sb &= !shader->shader.uses_doubles;
 
@@ -1010,7 +1004,7 @@ static void tgsi_src(struct r600_shader_ctx *ctx,
 			(tgsi_src->Register.SwizzleX == tgsi_src->Register.SwizzleW)) {
 
 			index = tgsi_src->Register.Index * 4 + tgsi_src->Register.SwizzleX;
-			r600_bytecode_special_constants(ctx->literals[index], &r600_src->sel, &r600_src->neg);
+			r600_bytecode_special_constants(ctx->literals[index], &r600_src->sel, &r600_src->neg, r600_src->abs);
 			if (r600_src->sel != V_SQ_ALU_SRC_LITERAL)
 				return;
 		}
@@ -1249,9 +1243,6 @@ static int tgsi_split_constant(struct r600_shader_ctx *ctx)
 		if (inst->Src[i].Register.File != TGSI_FILE_CONSTANT) {
 			continue;
 		}
-
-		if (ctx->src[i].kc_rel)
-			ctx->shader->uses_index_registers = true;
 
 		if (ctx->src[i].rel) {
 			int chan = inst->Src[i].Indirect.Swizzle;
@@ -1912,7 +1903,7 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 
 	shader->uses_doubles = ctx.info.uses_doubles;
 
-	indirect_gprs = ctx.info.indirect_files & ~(1 << TGSI_FILE_CONSTANT);
+	indirect_gprs = ctx.info.indirect_files & ~((1 << TGSI_FILE_CONSTANT) | (1 << TGSI_FILE_SAMPLER));
 	tgsi_parse_init(&ctx.parse, tokens);
 	ctx.type = ctx.info.processor;
 	shader->processor_type = ctx.type;
@@ -1936,7 +1927,6 @@ static int r600_shader_from_tgsi(struct r600_context *rctx,
 	ctx.gs_next_vertex = 0;
 	ctx.gs_stream_output_info = &so;
 
-	shader->uses_index_registers = false;
 	ctx.face_gpr = -1;
 	ctx.fixed_pt_position_gpr = -1;
 	ctx.fragcoord_input = -1;
@@ -5703,8 +5693,6 @@ static int tgsi_tex(struct r600_shader_ctx *ctx)
 		sampler_src_reg = 3;
 
 	sampler_index_mode = inst->Src[sampler_src_reg].Indirect.Index == 2 ? 2 : 0; // CF_INDEX_1 : CF_INDEX_NONE
-	if (sampler_index_mode)
-		ctx->shader->uses_index_registers = true;
 
 	src_gpr = tgsi_tex_get_src_gpr(ctx, 0);
 

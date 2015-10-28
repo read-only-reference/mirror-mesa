@@ -103,7 +103,6 @@ struct vc4_uncompiled_shader {
         /** How many variants of this program were compiled, for shader-db. */
         uint32_t compiled_variant_count;
         struct pipe_shader_state base;
-        const struct tgsi_token *twoside_tokens;
 };
 
 struct vc4_ubo_range {
@@ -251,10 +250,10 @@ struct vc4_context {
         bool needs_flush;
 
         /**
-         * Set when needs_flush, and the queued rendering is not just composed
-         * of full-buffer clears.
+         * Number of draw calls (not counting full buffer clears) queued in
+         * the current job.
          */
-        bool draw_call_queued;
+        uint32_t draw_calls_queued;
 
         /** Maximum index buffer valid for the current shader_rec. */
         uint32_t max_index;
@@ -292,7 +291,10 @@ struct vc4_context {
 
         struct vc4_vertex_stateobj *vtx;
 
-        struct pipe_blend_color blend_color;
+        struct {
+                struct pipe_blend_color f;
+                uint8_t ub[4];
+        } blend_color;
         struct pipe_stencil_ref stencil_ref;
         unsigned sample_mask;
         struct pipe_framebuffer_state framebuffer;

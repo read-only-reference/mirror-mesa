@@ -48,7 +48,7 @@ extern "C" {
 #include "brw_wm.h"
 #include "intel_asm_annotation.h"
 }
-#include "glsl/glsl_types.h"
+#include "glsl/nir/glsl_types.h"
 #include "glsl/ir.h"
 #include "glsl/nir/nir.h"
 #include "program/sampler.h"
@@ -61,6 +61,8 @@ namespace {
 namespace brw {
    class fs_live_variables;
 }
+
+struct brw_gs_compile;
 
 static inline fs_reg
 offset(fs_reg reg, const brw::fs_builder& bld, unsigned delta)
@@ -93,14 +95,18 @@ class fs_visitor : public backend_shader
 public:
    fs_visitor(const struct brw_compiler *compiler, void *log_data,
               void *mem_ctx,
-              gl_shader_stage stage,
               const void *key,
               struct brw_stage_prog_data *prog_data,
-              struct gl_shader_program *shader_prog,
               struct gl_program *prog,
+              const nir_shader *shader,
               unsigned dispatch_width,
               int shader_time_index);
-
+   fs_visitor(const struct brw_compiler *compiler, void *log_data,
+              void *mem_ctx,
+              struct brw_gs_compile *gs_compile,
+              struct brw_gs_prog_data *prog_data,
+              const nir_shader *shader);
+   void init();
    ~fs_visitor();
 
    fs_reg vgrf(const glsl_type *const type);
@@ -128,8 +134,6 @@ public:
    bool run_cs();
    void optimize();
    void allocate_registers();
-   void assign_fs_binding_table_offsets();
-   void assign_cs_binding_table_offsets();
    void setup_payload_gen4();
    void setup_payload_gen6();
    void setup_vs_payload();
@@ -141,6 +145,8 @@ public:
    void assign_vs_urb_setup();
    bool assign_regs(bool allow_spilling);
    void assign_regs_trivial();
+   void calculate_payload_ranges(int payload_node_count,
+                                 int *payload_last_use_ip);
    void setup_payload_interference(struct ra_graph *g, int payload_reg_count,
                                    int first_payload_node);
    int choose_spill_reg(struct ra_graph *g);
@@ -207,7 +213,7 @@ public:
    void emit_interpolation_setup_gen6();
    void compute_sample_position(fs_reg dst, fs_reg int_sample_pos);
    fs_reg rescale_texcoord(fs_reg coordinate, int coord_components,
-                           bool is_rect, uint32_t sampler, int texunit);
+                           bool is_rect, uint32_t sampler);
    void emit_texture(ir_texture_opcode op,
                      const glsl_type *dest_type,
                      fs_reg coordinate, int components,
@@ -220,8 +226,7 @@ public:
                      bool is_cube_array,
                      bool is_rect,
                      uint32_t sampler,
-                     fs_reg sampler_reg,
-                     int texunit);
+                     fs_reg sampler_reg);
    fs_reg emit_mcs_fetch(const fs_reg &coordinate, unsigned components,
                          const fs_reg &sampler);
    void emit_gen6_gather_wa(uint8_t wa, fs_reg dst);
@@ -238,12 +243,10 @@ public:
                    uint32_t spill_offset, int count);
 
    void emit_nir_code();
-   void nir_setup_inputs(nir_shader *shader);
-   void nir_setup_outputs(nir_shader *shader);
-   void nir_setup_uniforms(nir_shader *shader);
-   void nir_setup_uniform(nir_variable *var);
-   void nir_setup_builtin_uniform(nir_variable *var);
-   void nir_emit_system_values(nir_shader *shader);
+   void nir_setup_inputs();
+   void nir_setup_outputs();
+   void nir_setup_uniforms();
+   void nir_emit_system_values();
    void nir_emit_impl(nir_function_impl *impl);
    void nir_emit_cf_list(exec_list *list);
    void nir_emit_if(nir_if *if_stmt);
@@ -294,10 +297,6 @@ public:
 
    struct brw_reg interp_reg(int location, int channel);
 
-   virtual void setup_vec4_uniform_value(unsigned param_offset,
-                                         const gl_constant_value *values,
-                                         unsigned n);
-
    int implied_mrf_writes(fs_inst *inst);
 
    virtual void dump_instructions();
@@ -308,8 +307,10 @@ public:
    const void *const key;
    const struct brw_sampler_prog_key_data *key_tex;
 
+   struct brw_gs_compile *gs_compile;
+
    struct brw_stage_prog_data *prog_data;
-   unsigned int sanity_param_count;
+   struct gl_program *prog;
 
    int *param_size;
 
@@ -338,6 +339,7 @@ public:
    int *push_constant_loc;
 
    fs_reg frag_depth;
+   fs_reg frag_stencil;
    fs_reg sample_mask;
    fs_reg outputs[VARYING_SLOT_MAX];
    unsigned output_components[VARYING_SLOT_MAX];
@@ -410,7 +412,6 @@ public:
                 void *mem_ctx,
                 const void *key,
                 struct brw_stage_prog_data *prog_data,
-                struct gl_program *fp,
                 unsigned promoted_constants,
                 bool runtime_check_aads_emit,
                 const char *stage_abbrev);
@@ -426,8 +427,11 @@ private:
                       struct brw_reg implied_header,
                       GLuint nr);
    void generate_fb_write(fs_inst *inst, struct brw_reg payload);
+   void generate_urb_read(fs_inst *inst, struct brw_reg dst, struct brw_reg payload);
    void generate_urb_write(fs_inst *inst, struct brw_reg payload);
    void generate_cs_terminate(fs_inst *inst, struct brw_reg payload);
+   void generate_stencil_ref_packing(fs_inst *inst, struct brw_reg dst,
+                                     struct brw_reg src);
    void generate_barrier(fs_inst *inst, struct brw_reg src);
    void generate_blorp_fb_write(fs_inst *inst);
    void generate_linterp(fs_inst *inst, struct brw_reg dst,
@@ -508,8 +512,6 @@ private:
    struct brw_codegen *p;
    const void * const key;
    struct brw_stage_prog_data * const prog_data;
-
-   const struct gl_program *prog;
 
    unsigned dispatch_width; /**< 8 or 16 */
 

@@ -305,7 +305,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
 		if (family >= CHIP_CEDAR)
-		   return 330;
+		   return 410;
 		/* pre-evergreen geom shaders need newer kernel */
 		if (rscreen->b.info.drm_minor >= 37)
 		   return 330;
@@ -342,6 +342,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEXID_NOBASE:
 	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
 	case PIPE_CAP_DEPTH_BOUNDS_TEST:
+	case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
+	case PIPE_CAP_SHAREABLE_SHADERS:
+	case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
 		return 0;
 
 	/* Stream output. */
@@ -509,6 +512,12 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
 		return 0;
+	case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
+		/* due to a bug in the shader compiler, some loops hang
+		 * if they are not unrolled, see:
+		 *    https://bugs.freedesktop.org/show_bug.cgi?id=86720
+		 */
+		return 255;
 	}
 	return 0;
 }

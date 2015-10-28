@@ -20,6 +20,8 @@ NIR_GENERATED_FILES = \
 NIR_FILES = \
 	nir/glsl_to_nir.cpp \
 	nir/glsl_to_nir.h \
+	nir/glsl_types.cpp \
+	nir/glsl_types.h \
 	nir/nir.c \
 	nir/nir.h \
 	nir/nir_array.h \
@@ -33,6 +35,8 @@ NIR_FILES = \
 	nir/nir_gs_count_vertices.c \
 	nir/nir_intrinsics.c \
 	nir/nir_intrinsics.h \
+	nir/nir_instr_set.c \
+	nir/nir_instr_set.h \
 	nir/nir_live_variables.c \
 	nir/nir_lower_alu_to_scalar.c \
 	nir/nir_lower_atomics.c \
@@ -79,7 +83,9 @@ NIR_FILES = \
 	nir/nir_vla.h \
 	nir/nir_worklist.c \
 	nir/nir_worklist.h \
-	nir/nir_types.cpp
+	nir/nir_types.cpp \
+	nir/shader_enums.h \
+	nir/shader_enums.c
 
 # libglsl
 
@@ -100,8 +106,6 @@ LIBGLSL_FILES = \
 	glsl_parser_extras.h \
 	glsl_symbol_table.cpp \
 	glsl_symbol_table.h \
-	glsl_types.cpp \
-	glsl_types.h \
 	hir_field_selection.cpp \
 	ir_basic_block.cpp \
 	ir_basic_block.h \
@@ -184,7 +188,6 @@ LIBGLSL_FILES = \
 	opt_constant_variable.cpp \
 	opt_copy_propagation.cpp \
 	opt_copy_propagation_elements.cpp \
-	opt_cse.cpp \
 	opt_dead_builtin_variables.cpp \
 	opt_dead_builtin_varyings.cpp \
 	opt_dead_code.cpp \
@@ -204,8 +207,7 @@ LIBGLSL_FILES = \
 	opt_vectorize.cpp \
 	program.h \
 	s_expression.cpp \
-	s_expression.h \
-	shader_enums.h
+	s_expression.h
 
 # glsl_compiler
 

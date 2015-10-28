@@ -69,8 +69,7 @@ static struct gl_program *brwNewProgram( struct gl_context *ctx,
       if (prog) {
 	 prog->id = get_new_program_id(brw->intelScreen);
 
-	 return _mesa_init_vertex_program( ctx, &prog->program,
-					     target, id );
+	 return _mesa_init_gl_program(&prog->program.Base, target, id);
       }
       else
 	 return NULL;
@@ -81,8 +80,7 @@ static struct gl_program *brwNewProgram( struct gl_context *ctx,
       if (prog) {
 	 prog->id = get_new_program_id(brw->intelScreen);
 
-	 return _mesa_init_fragment_program( ctx, &prog->program,
-					     target, id );
+	 return _mesa_init_gl_program(&prog->program.Base, target, id);
       }
       else
 	 return NULL;
@@ -93,7 +91,7 @@ static struct gl_program *brwNewProgram( struct gl_context *ctx,
       if (prog) {
          prog->id = get_new_program_id(brw->intelScreen);
 
-         return _mesa_init_geometry_program(ctx, &prog->program, target, id);
+         return _mesa_init_gl_program(&prog->program.Base, target, id);
       } else {
          return NULL;
       }
@@ -104,7 +102,7 @@ static struct gl_program *brwNewProgram( struct gl_context *ctx,
       if (prog) {
          prog->id = get_new_program_id(brw->intelScreen);
 
-         return _mesa_init_compute_program(ctx, &prog->program, target, id);
+         return _mesa_init_gl_program(&prog->program.Base, target, id);
       } else {
          return NULL;
       }
@@ -142,9 +140,7 @@ brwProgramStringNotify(struct gl_context *ctx,
 
       brw_add_texrect_params(prog);
 
-      if (ctx->Const.ShaderCompilerOptions[MESA_SHADER_FRAGMENT].NirOptions) {
-         prog->nir = brw_create_nir(brw, NULL, prog, MESA_SHADER_FRAGMENT, true);
-      }
+      prog->nir = brw_create_nir(brw, NULL, prog, MESA_SHADER_FRAGMENT, true);
 
       brw_fs_precompile(ctx, NULL, prog);
       break;
@@ -168,10 +164,8 @@ brwProgramStringNotify(struct gl_context *ctx,
 
       brw_add_texrect_params(prog);
 
-      if (ctx->Const.ShaderCompilerOptions[MESA_SHADER_VERTEX].NirOptions) {
-         prog->nir = brw_create_nir(brw, NULL, prog, MESA_SHADER_VERTEX,
-                                    brw->intelScreen->compiler->scalar_vs);
-      }
+      prog->nir = brw_create_nir(brw, NULL, prog, MESA_SHADER_VERTEX,
+                                 brw->intelScreen->compiler->scalar_vs);
 
       brw_vs_precompile(ctx, NULL, prog);
       break;
@@ -244,18 +238,6 @@ brw_add_texrect_params(struct gl_program *prog)
 
       _mesa_add_state_reference(prog->Parameters, (gl_state_index *)tokens);
    }
-}
-
-/* Per-thread scratch space is a power-of-two multiple of 1KB. */
-int
-brw_get_scratch_size(int size)
-{
-   int i;
-
-   for (i = 1024; i < size; i *= 2)
-      ;
-
-   return i;
 }
 
 void
@@ -535,22 +517,13 @@ brw_destroy_shader_time(struct brw_context *brw)
 }
 
 void
-brw_mark_surface_used(struct brw_stage_prog_data *prog_data,
-                      unsigned surf_index)
-{
-   assert(surf_index < BRW_MAX_SURFACES);
-
-   prog_data->binding_table.size_bytes =
-      MAX2(prog_data->binding_table.size_bytes, (surf_index + 1) * 4);
-}
-
-void
 brw_stage_prog_data_free(const void *p)
 {
    struct brw_stage_prog_data *prog_data = (struct brw_stage_prog_data *)p;
 
    ralloc_free(prog_data->param);
    ralloc_free(prog_data->pull_param);
+   ralloc_free(prog_data->image_param);
 }
 
 void

@@ -83,6 +83,14 @@ BARRIER(discard)
  */
 BARRIER(memory_barrier)
 
+/*
+ * Shader clock intrinsic with semantics analogous to the clock2x32ARB()
+ * GLSL intrinsic.
+ * The latter can be used as code motion barrier, which is currently not
+ * feasible with NIR.
+ */
+INTRINSIC(shader_clock, 0, ARR(), true, 1, 0, 0, NIR_INTRINSIC_CAN_ELIMINATE)
+
 /** A conditional discard, with a single boolean source. */
 INTRINSIC(discard_if, 1, ARR(1), false, 0, 0, 0, 0)
 
@@ -174,8 +182,10 @@ INTRINSIC(image_samples, 0, ARR(), true, 1, 1, 0,
  * 3: For CompSwap only: the second data parameter.
  */
 INTRINSIC(ssbo_atomic_add, 3, ARR(1, 1, 1), true, 1, 0, 0, 0)
-INTRINSIC(ssbo_atomic_min, 3, ARR(1, 1, 1), true, 1, 0, 0, 0)
-INTRINSIC(ssbo_atomic_max, 3, ARR(1, 1, 1), true, 1, 0, 0, 0)
+INTRINSIC(ssbo_atomic_imin, 3, ARR(1, 1, 1), true, 1, 0, 0, 0)
+INTRINSIC(ssbo_atomic_umin, 3, ARR(1, 1, 1), true, 1, 0, 0, 0)
+INTRINSIC(ssbo_atomic_imax, 3, ARR(1, 1, 1), true, 1, 0, 0, 0)
+INTRINSIC(ssbo_atomic_umax, 3, ARR(1, 1, 1), true, 1, 0, 0, 0)
 INTRINSIC(ssbo_atomic_and, 3, ARR(1, 1, 1), true, 1, 0, 0, 0)
 INTRINSIC(ssbo_atomic_or, 3, ARR(1, 1, 1), true, 1, 0, 0, 0)
 INTRINSIC(ssbo_atomic_xor, 3, ARR(1, 1, 1), true, 1, 0, 0, 0)
@@ -196,6 +206,10 @@ SYSTEM_VALUE(sample_pos, 2, 0)
 SYSTEM_VALUE(sample_mask_in, 1, 0)
 SYSTEM_VALUE(primitive_id, 1, 0)
 SYSTEM_VALUE(invocation_id, 1, 0)
+SYSTEM_VALUE(tess_coord, 3, 0)
+SYSTEM_VALUE(tess_level_outer, 4, 0)
+SYSTEM_VALUE(tess_level_inner, 2, 0)
+SYSTEM_VALUE(patch_vertices_in, 1, 0)
 SYSTEM_VALUE(local_invocation_id, 3, 0)
 SYSTEM_VALUE(work_group_id, 3, 0)
 SYSTEM_VALUE(user_clip_plane, 4, 1) /* const_index[0] is user_clip_plane[idx] */
@@ -228,6 +242,7 @@ SYSTEM_VALUE(num_work_groups, 3, 0)
 LOAD(uniform, 0, 2, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
 LOAD(ubo, 1, 1, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
 LOAD(input, 0, 1, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
+LOAD(per_vertex_input, 1, 1, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
 LOAD(ssbo, 1, 1, NIR_INTRINSIC_CAN_ELIMINATE)
 
 /*

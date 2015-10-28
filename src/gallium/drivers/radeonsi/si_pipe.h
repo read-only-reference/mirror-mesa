@@ -42,6 +42,7 @@
 #define SI_BASE_VERTEX_UNKNOWN INT_MIN
 #define SI_RESTART_INDEX_UNKNOWN INT_MIN
 #define SI_NUM_SMOOTH_AA_SAMPLES 8
+#define SI_GS_PER_ES 128
 
 /* Instruction cache. */
 #define SI_CONTEXT_INV_ICACHE		(R600_CONTEXT_PRIVATE_FLAG << 0)
@@ -85,6 +86,7 @@ struct si_compute;
 
 struct si_screen {
 	struct r600_common_screen	b;
+	unsigned			gs_table_depth;
 };
 
 struct si_blend_color {
@@ -96,10 +98,12 @@ struct si_sampler_view {
 	struct pipe_sampler_view	base;
 	struct list_head		list;
 	struct r600_resource		*resource;
+	struct r600_resource		*dcc_buffer;
         /* [0..7] = image descriptor
          * [4..7] = buffer descriptor */
 	uint32_t			state[8];
 	uint32_t			fmask_state[8];
+	bool is_stencil_sampler;
 };
 
 struct si_sampler_state {
@@ -151,6 +155,15 @@ struct si_viewports {
 	struct pipe_viewport_state	states[SI_MAX_VIEWPORTS];
 };
 
+/* A shader state consists of the shader selector, which is a constant state
+ * object shared by multiple contexts and shouldn't be modified, and
+ * the current shader variant selected for this context.
+ */
+struct si_shader_ctx_state {
+	struct si_shader_selector	*cso;
+	struct si_shader		*current;
+};
+
 struct si_context {
 	struct r600_common_context	b;
 	struct blitter_context		*blitter;
@@ -161,7 +174,7 @@ struct si_context {
 	void				*pstipple_sampler_state;
 	struct si_screen		*screen;
 	struct pipe_fence_handle	*last_gfx_fence;
-	struct si_shader_selector	*fixed_func_tcs_shader;
+	struct si_shader_ctx_state	fixed_func_tcs_shader;
 	LLVMTargetMachineRef		tm;
 
 	/* Atoms (direct states). */
@@ -187,26 +200,26 @@ struct si_context {
 	struct si_viewports		viewports;
 	struct si_stencil_ref		stencil_ref;
 	struct r600_atom		spi_map;
+	struct r600_atom		spi_ps_input;
 
 	/* Precomputed states. */
 	struct si_pm4_state		*init_config;
+	bool				init_config_has_vgt_flush;
 	struct si_pm4_state		*vgt_shader_config[4];
-	/* With rasterizer discard, there doesn't have to be a pixel shader.
-	 * In that case, we bind this one: */
-	void				*dummy_pixel_shader;
 
 	/* shaders */
-	struct si_shader_selector	*ps_shader;
-	struct si_shader_selector	*gs_shader;
-	struct si_shader_selector	*vs_shader;
-	struct si_shader_selector	*tcs_shader;
-	struct si_shader_selector	*tes_shader;
+	struct si_shader_ctx_state	ps_shader;
+	struct si_shader_ctx_state	gs_shader;
+	struct si_shader_ctx_state	vs_shader;
+	struct si_shader_ctx_state	tcs_shader;
+	struct si_shader_ctx_state	tes_shader;
 	struct si_cs_shader_state	cs_shader_state;
 
 	/* shader information */
 	struct si_vertex_element	*vertex_elements;
 	unsigned			sprite_coord_enable;
 	bool				flatshade;
+	bool				force_persample_interp;
 
 	/* shader descriptors */
 	struct si_descriptors		vertex_buffers;
@@ -237,7 +250,8 @@ struct si_context {
 	bool			dbcb_depth_copy_enabled;
 	bool			dbcb_stencil_copy_enabled;
 	unsigned		dbcb_copy_sample;
-	bool			db_inplace_flush_enabled;
+	bool			db_flush_depth_inplace;
+	bool			db_flush_stencil_inplace;
 	bool			db_depth_clear;
 	bool			db_depth_disable_expclear;
 	unsigned		ps_db_shader_control;
@@ -276,6 +290,9 @@ struct si_context {
 	struct r600_resource	*last_trace_buf;
 	struct r600_resource	*trace_buf;
 	unsigned		trace_id;
+	uint64_t		dmesg_timestamp;
+	unsigned		last_bo_count;
+	struct radeon_bo_list_item *last_bo_list;
 };
 
 /* cik_sdma.c */
@@ -310,6 +327,7 @@ void si_init_cp_dma_functions(struct si_context *sctx);
 
 /* si_debug.c */
 void si_init_debug_functions(struct si_context *sctx);
+void si_check_vm_faults(struct si_context *sctx);
 
 /* si_dma.c */
 void si_dma_copy(struct pipe_context *ctx,

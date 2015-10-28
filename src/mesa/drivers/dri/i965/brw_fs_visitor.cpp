@@ -41,9 +41,10 @@
 #include "brw_wm.h"
 #include "brw_cs.h"
 #include "brw_vec4.h"
+#include "brw_vec4_gs_visitor.h"
 #include "brw_fs.h"
 #include "main/uniforms.h"
-#include "glsl/glsl_types.h"
+#include "glsl/nir/glsl_types.h"
 #include "glsl/ir_optimization.h"
 #include "program/sampler.h"
 
@@ -53,7 +54,8 @@ fs_reg *
 fs_visitor::emit_vs_system_value(int location)
 {
    fs_reg *reg = new(this->mem_ctx)
-      fs_reg(ATTR, VERT_ATTRIB_MAX, BRW_REGISTER_TYPE_D);
+      fs_reg(ATTR, 4 * _mesa_bitcount_64(nir->info.inputs_read),
+             BRW_REGISTER_TYPE_D);
    brw_vs_prog_data *vs_prog_data = (brw_vs_prog_data *) prog_data;
 
    switch (location) {
@@ -79,7 +81,7 @@ fs_visitor::emit_vs_system_value(int location)
 
 fs_reg
 fs_visitor::rescale_texcoord(fs_reg coordinate, int coord_components,
-                             bool is_rect, uint32_t sampler, int texunit)
+                             bool is_rect, uint32_t sampler)
 {
    bool needs_gl_clamp = true;
    fs_reg scale_x, scale_y;
@@ -93,10 +95,16 @@ fs_visitor::rescale_texcoord(fs_reg coordinate, int coord_components,
         (devinfo->gen >= 6 && (key_tex->gl_clamp_mask[0] & (1 << sampler) ||
                                key_tex->gl_clamp_mask[1] & (1 << sampler))))) {
       struct gl_program_parameter_list *params = prog->Parameters;
+
+
+      /* FINISHME: We're failing to recompile our programs when the sampler is
+       * updated.  This only matters for the texture rectangle scale
+       * parameters (pre-gen6, or gen6+ with GL_CLAMP).
+       */
       int tokens[STATE_LENGTH] = {
 	 STATE_INTERNAL,
 	 STATE_TEXRECT_SCALE,
-	 texunit,
+	 prog->SamplerUnits[sampler],
 	 0,
 	 0
       };
@@ -221,7 +229,7 @@ fs_visitor::emit_texture(ir_texture_opcode op,
                          bool is_cube_array,
                          bool is_rect,
                          uint32_t sampler,
-                         fs_reg sampler_reg, int texunit)
+                         fs_reg sampler_reg)
 {
    fs_inst *inst = NULL;
 
@@ -256,7 +264,7 @@ fs_visitor::emit_texture(ir_texture_opcode op,
        * samplers.  This should only be a problem with GL_CLAMP on Gen7.
        */
       coordinate = rescale_texcoord(coordinate, coord_components, is_rect,
-                                    sampler, texunit);
+                                    sampler);
    }
 
    /* Writemasking doesn't eliminate channels on SIMD8 texture
@@ -689,19 +697,23 @@ fs_visitor::emit_single_fb_write(const fs_builder &bld,
    const fs_reg dst_depth = (payload.dest_depth_reg ?
                              fs_reg(brw_vec8_grf(payload.dest_depth_reg, 0)) :
                              fs_reg());
-   fs_reg src_depth;
+   fs_reg src_depth, src_stencil;
 
    if (source_depth_to_render_target) {
-      if (prog->OutputsWritten & BITFIELD64_BIT(FRAG_RESULT_DEPTH))
+      if (nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_DEPTH))
          src_depth = frag_depth;
       else
          src_depth = fs_reg(brw_vec8_grf(payload.source_depth_reg, 0));
    }
 
+   if (nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_STENCIL))
+      src_stencil = frag_stencil;
+
    const fs_reg sources[] = {
-      color0, color1, src0_alpha, src_depth, dst_depth, sample_mask,
-      fs_reg(components)
+      color0, color1, src0_alpha, src_depth, dst_depth, src_stencil,
+      sample_mask, fs_reg(components)
    };
+   assert(ARRAY_SIZE(sources) - 1 == FB_WRITE_LOGICAL_SRC_COMPONENTS);
    fs_inst *write = bld.emit(FS_OPCODE_FB_WRITE_LOGICAL, fs_reg(),
                              sources, ARRAY_SIZE(sources));
 
@@ -730,6 +742,16 @@ fs_visitor::emit_fb_writes()
        * for the second and third subspans.
        */
       no16("Missing support for simd16 depth writes on gen6\n");
+   }
+
+   if (nir->info.outputs_written & BITFIELD64_BIT(FRAG_RESULT_STENCIL)) {
+      /* From the 'Render Target Write message' section of the docs:
+       * "Output Stencil is not supported with SIMD16 Render Target Write
+       * Messages."
+       *
+       * FINISHME: split 16 into 2 8s
+       */
+      no16("FINISHME: support 2 simd8 writes for gl_FragStencilRefARB\n");
    }
 
    if (do_dual_src) {
@@ -861,13 +883,14 @@ void
 fs_visitor::emit_urb_writes()
 {
    int slot, urb_offset, length;
-   struct brw_vs_prog_data *vs_prog_data =
-      (struct brw_vs_prog_data *) prog_data;
-   const struct brw_vs_prog_key *key =
+   int starting_urb_offset = 0;
+   const struct brw_vue_prog_data *vue_prog_data =
+      (const struct brw_vue_prog_data *) this->prog_data;
+   const struct brw_vs_prog_key *vs_key =
       (const struct brw_vs_prog_key *) this->key;
    const GLbitfield64 psiz_mask =
       VARYING_BIT_LAYER | VARYING_BIT_VIEWPORT | VARYING_BIT_PSIZ;
-   const struct brw_vue_map *vue_map = &vs_prog_data->base.vue_map;
+   const struct brw_vue_map *vue_map = &vue_prog_data->vue_map;
    bool flush;
    fs_reg sources[8];
 
@@ -893,16 +916,26 @@ fs_visitor::emit_urb_writes()
       return;
    }
 
+   if (stage == MESA_SHADER_GEOMETRY) {
+      const struct brw_gs_prog_data *gs_prog_data =
+         (const struct brw_gs_prog_data *) prog_data;
+
+      /* We need to increment the Global Offset to skip over the control data
+       * header and the extra "Vertex Count" field (1 HWord) at the beginning
+       * of the VUE.  We're counting in OWords, so the units are doubled.
+       */
+      starting_urb_offset = 2 * gs_prog_data->control_data_header_size_hwords;
+      if (gs_prog_data->static_vertex_count == -1)
+         starting_urb_offset += 2;
+   }
+
    length = 0;
-   urb_offset = 0;
+   urb_offset = starting_urb_offset;
    flush = false;
    for (slot = 0; slot < vue_map->num_slots; slot++) {
-      fs_reg reg, src, zero;
-
       int varying = vue_map->slot_to_varying[slot];
       switch (varying) {
-      case VARYING_SLOT_PSIZ:
-
+      case VARYING_SLOT_PSIZ: {
          /* The point size varying slot is the vue header and is always in the
           * vue map.  But often none of the special varyings that live there
           * are written and in that case we can skip writing to the vue
@@ -914,7 +947,7 @@ fs_visitor::emit_urb_writes()
             break;
          }
 
-         zero = fs_reg(GRF, alloc.allocate(1), BRW_REGISTER_TYPE_UD);
+         fs_reg zero(GRF, alloc.allocate(1), BRW_REGISTER_TYPE_UD);
          bld.MOV(zero, fs_reg(0u));
 
          sources[length++] = zero;
@@ -933,7 +966,7 @@ fs_visitor::emit_urb_writes()
          else
             sources[length++] = zero;
          break;
-
+      }
       case BRW_VARYING_SLOT_NDC:
       case VARYING_SLOT_EDGE:
          unreachable("unexpected scalar vs output");
@@ -957,17 +990,17 @@ fs_visitor::emit_urb_writes()
             break;
          }
 
-         if ((varying == VARYING_SLOT_COL0 ||
+         if (stage == MESA_SHADER_VERTEX && vs_key->clamp_vertex_color &&
+             (varying == VARYING_SLOT_COL0 ||
               varying == VARYING_SLOT_COL1 ||
               varying == VARYING_SLOT_BFC0 ||
-              varying == VARYING_SLOT_BFC1) &&
-             key->clamp_vertex_color) {
+              varying == VARYING_SLOT_BFC1)) {
             /* We need to clamp these guys, so do a saturating MOV into a
              * temp register and use that for the payload.
              */
             for (int i = 0; i < 4; i++) {
-               reg = fs_reg(GRF, alloc.allocate(1), outputs[varying].type);
-               src = offset(this->outputs[varying], bld, i);
+               fs_reg reg = fs_reg(GRF, alloc.allocate(1), outputs[varying].type);
+               fs_reg src = offset(this->outputs[varying], bld, i);
                set_saturate(true, bld.MOV(reg, src));
                sources[length++] = reg;
             }
@@ -1001,10 +1034,10 @@ fs_visitor::emit_urb_writes()
 
          fs_inst *inst =
             abld.emit(SHADER_OPCODE_URB_WRITE_SIMD8, reg_undef, payload);
-         inst->eot = last;
+         inst->eot = last && stage == MESA_SHADER_VERTEX;
          inst->mlen = length + 1;
          inst->offset = urb_offset;
-         urb_offset = slot + 1;
+         urb_offset = starting_urb_offset + slot + 1;
          length = 0;
          flush = false;
       }
@@ -1060,20 +1093,40 @@ fs_visitor::emit_barrier()
 
 fs_visitor::fs_visitor(const struct brw_compiler *compiler, void *log_data,
                        void *mem_ctx,
-                       gl_shader_stage stage,
                        const void *key,
                        struct brw_stage_prog_data *prog_data,
-                       struct gl_shader_program *shader_prog,
                        struct gl_program *prog,
+                       const nir_shader *shader,
                        unsigned dispatch_width,
                        int shader_time_index)
-   : backend_shader(compiler, log_data, mem_ctx,
-                    shader_prog, prog, prog_data, stage),
-     key(key), prog_data(prog_data),
+   : backend_shader(compiler, log_data, mem_ctx, shader, prog_data),
+     key(key), gs_compile(NULL), prog_data(prog_data), prog(prog),
      dispatch_width(dispatch_width),
      shader_time_index(shader_time_index),
-     promoted_constants(0),
      bld(fs_builder(this, dispatch_width).at_end())
+{
+   init();
+}
+
+fs_visitor::fs_visitor(const struct brw_compiler *compiler, void *log_data,
+                       void *mem_ctx,
+                       struct brw_gs_compile *c,
+                       struct brw_gs_prog_data *prog_data,
+                       const nir_shader *shader)
+   : backend_shader(compiler, log_data, mem_ctx, shader,
+                    &prog_data->base.base),
+     key(&c->key), gs_compile(c),
+     prog_data(&prog_data->base.base), prog(NULL),
+     dispatch_width(8),
+     shader_time_index(ST_GS),
+     bld(fs_builder(this, dispatch_width).at_end())
+{
+   init();
+}
+
+
+void
+fs_visitor::init()
 {
    switch (stage) {
    case MESA_SHADER_FRAGMENT:
@@ -1091,6 +1144,8 @@ fs_visitor::fs_visitor(const struct brw_compiler *compiler, void *log_data,
    default:
       unreachable("unhandled shader stage");
    }
+
+   this->prog_data = this->stage_prog_data;
 
    this->failed = false;
    this->simd16_unsupported = false;
@@ -1116,6 +1171,8 @@ fs_visitor::fs_visitor(const struct brw_compiler *compiler, void *log_data,
    this->last_scratch = 0;
    this->pull_constant_loc = NULL;
    this->push_constant_loc = NULL;
+
+   this->promoted_constants = 0,
 
    this->spilled_any_registers = false;
    this->do_dual_src = false;

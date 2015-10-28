@@ -98,6 +98,9 @@
 #define DBG_PRECOMPILE		(1llu << 39)
 #define DBG_INFO		(1llu << 40)
 #define DBG_NO_WC		(1llu << 41)
+#define DBG_CHECK_VM		(1llu << 42)
+#define DBG_NO_DCC		(1llu << 43)
+#define DBG_NO_DCC_CLEAR	(1llu << 44)
 
 #define R600_MAP_BUFFER_ALIGNMENT 64
 
@@ -204,6 +207,7 @@ struct r600_texture {
 	unsigned			pitch_override;
 	bool				is_depth;
 	unsigned			dirty_level_mask; /* each bit says if that mipmap is compressed */
+	unsigned			stencil_dirty_level_mask; /* each bit says if that mipmap is compressed */
 	struct r600_texture		*flushed_depth_texture;
 	boolean				is_flushing_texture;
 	struct radeon_surf		surface;
@@ -212,6 +216,7 @@ struct r600_texture {
 	struct r600_fmask_info		fmask;
 	struct r600_cmask_info		cmask;
 	struct r600_resource		*cmask_buffer;
+	struct r600_resource		*dcc_buffer;
 	unsigned			cb_color_info; /* fast clear enable bit */
 	unsigned			color_clear_value[2];
 
@@ -241,6 +246,7 @@ struct r600_surface {
 	unsigned cb_color_dim;		/* EG only */
 	unsigned cb_color_pitch;	/* EG and later */
 	unsigned cb_color_slice;	/* EG and later */
+	unsigned cb_dcc_base;		/* VI and later */
 	unsigned cb_color_attrib;	/* EG and later */
 	unsigned cb_dcc_control;	/* VI and later */
 	unsigned cb_color_fmask;	/* CB_COLORn_FMASK (EG and later) or CB_COLORn_FRAG (r600) */
@@ -487,6 +493,11 @@ bool r600_init_resource(struct r600_common_screen *rscreen,
 struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 					 const struct pipe_resource *templ,
 					 unsigned alignment);
+struct pipe_resource * r600_aligned_buffer_create(struct pipe_screen *screen,
+						  unsigned bind,
+						  unsigned usage,
+						  unsigned size,
+						  unsigned alignment);
 struct pipe_resource *
 r600_buffer_from_user_memory(struct pipe_screen *screen,
 			     const struct pipe_resource *templ,
@@ -620,6 +631,18 @@ static inline unsigned r600_wavefront_size(enum radeon_family family)
 	default:
 		return 64;
 	}
+}
+
+static inline enum radeon_bo_priority
+r600_get_sampler_view_priority(struct r600_resource *res)
+{
+	if (res->b.b.target == PIPE_BUFFER)
+		return RADEON_PRIO_SAMPLER_BUFFER;
+
+	if (res->b.b.nr_samples > 1)
+		return RADEON_PRIO_SAMPLER_TEXTURE_MSAA;
+
+	return RADEON_PRIO_SAMPLER_TEXTURE;
 }
 
 #define COMPUTE_DBG(rscreen, fmt, args...) \

@@ -179,6 +179,9 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
    case PIPE_CAP_DEPTH_BOUNDS_TEST:
    case PIPE_CAP_TGSI_TXQS:
+   case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
+   case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
+   case PIPE_CAP_SHAREABLE_SHADERS:
       return 1;
    case PIPE_CAP_SEAMLESS_CUBE_MAP_PER_TEXTURE:
       return (class_3d >= NVE4_3D_CLASS) ? 1 : 0;
@@ -311,6 +314,8 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
       return 16; /* would be 32 in linked (OpenGL-style) mode */
    case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
       return 16; /* XXX not sure if more are really safe */
+   case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
+      return 32;
    default:
       NOUVEAU_ERR("unknown PIPE_SHADER_CAP %d\n", param);
       return 0;
@@ -536,7 +541,8 @@ nvc0_screen_fence_emit(struct pipe_screen *pscreen, u32 *sequence)
    /* we need to do it after possible flush in MARK_RING */
    *sequence = ++screen->base.fence.sequence;
 
-   BEGIN_NVC0(push, NVC0_3D(QUERY_ADDRESS_HIGH), 4);
+   assert(PUSH_AVAIL(push) >= 5);
+   PUSH_DATA (push, NVC0_FIFO_PKHDR_SQ(NVC0_3D(QUERY_ADDRESS_HIGH), 4));
    PUSH_DATAh(push, screen->fence.bo->offset);
    PUSH_DATA (push, screen->fence.bo->offset);
    PUSH_DATA (push, *sequence);
@@ -559,12 +565,7 @@ nvc0_screen_init_compute(struct nvc0_screen *screen)
    switch (screen->base.device->chipset & ~0xf) {
    case 0xc0:
    case 0xd0:
-      /* Using COMPUTE has weird effects on 3D state, we need to
-       * investigate this further before enabling it by default.
-       */
-      if (debug_get_bool_option("NVC0_COMPUTE", false))
-         return nvc0_screen_compute_setup(screen, screen->base.pushbuf);
-      return 0;
+      return nvc0_screen_compute_setup(screen, screen->base.pushbuf);
    case 0xe0:
       return nve4_screen_compute_setup(screen, screen->base.pushbuf);
    case 0xf0:
@@ -827,6 +828,8 @@ nvc0_screen_create(struct nouveau_device *dev)
    PUSH_DATA (push, 1);
    BEGIN_NVC0(push, NVC0_3D(BLEND_ENABLE_COMMON), 1);
    PUSH_DATA (push, 0);
+   BEGIN_NVC0(push, NVC0_3D(SHADE_MODEL), 1);
+   PUSH_DATA (push, NVC0_3D_SHADE_MODEL_SMOOTH);
    if (screen->eng3d->oclass < NVE4_3D_CLASS) {
       BEGIN_NVC0(push, NVC0_3D(TEX_MISC), 1);
       PUSH_DATA (push, NVC0_3D_TEX_MISC_SEAMLESS_CUBE_MAP);
@@ -912,6 +915,7 @@ nvc0_screen_create(struct nouveau_device *dev)
       else
          value = (16 << 8) | 4;
    }
+   screen->gpc_count = value & 0x000000ff;
    screen->mp_count = value >> 8;
    screen->mp_count_compute = screen->mp_count;
 

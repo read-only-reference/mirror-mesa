@@ -161,9 +161,6 @@ public:
                     const src_reg &src1 = src_reg(),
                     const src_reg &src2 = src_reg());
 
-   struct brw_reg get_dst(unsigned gen);
-   struct brw_reg get_src(const struct brw_vue_prog_data *prog_data, int i);
-
    dst_reg dst;
    src_reg src[3];
 
@@ -179,10 +176,32 @@ public:
                       int swizzle, int swizzle_mask);
    void reswizzle(int dst_writemask, int swizzle);
    bool can_do_source_mods(const struct brw_device_info *devinfo);
+   bool can_change_types() const;
 
    bool reads_flag()
    {
       return predicate || opcode == VS_OPCODE_UNPACK_FLAGS_SIMD4X2;
+   }
+
+   bool reads_flag(unsigned c)
+   {
+      if (opcode == VS_OPCODE_UNPACK_FLAGS_SIMD4X2)
+         return true;
+
+      switch (predicate) {
+      case BRW_PREDICATE_NONE:
+         return false;
+      case BRW_PREDICATE_ALIGN16_REPLICATE_X:
+         return c == 0;
+      case BRW_PREDICATE_ALIGN16_REPLICATE_Y:
+         return c == 1;
+      case BRW_PREDICATE_ALIGN16_REPLICATE_Z:
+         return c == 2;
+      case BRW_PREDICATE_ALIGN16_REPLICATE_W:
+         return c == 3;
+      default:
+         return true;
+      }
    }
 
    bool writes_flag()

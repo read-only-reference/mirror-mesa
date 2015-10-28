@@ -61,19 +61,6 @@
 extern "C" {
 #endif
 
-/**
- * Compile a fragment shader.
- *
- * Returns the final assembly and the program's size.
- */
-const unsigned *brw_wm_fs_emit(struct brw_context *brw,
-                               void *mem_ctx,
-                               const struct brw_wm_prog_key *key,
-                               struct brw_wm_prog_data *prog_data,
-                               struct gl_fragment_program *fp,
-                               struct gl_shader_program *prog,
-                               unsigned *final_assembly_size);
-
 GLboolean brw_link_shader(struct gl_context *ctx, struct gl_shader_program *prog);
 struct gl_shader *brw_new_shader(struct gl_context *ctx, GLuint name, GLuint type);
 

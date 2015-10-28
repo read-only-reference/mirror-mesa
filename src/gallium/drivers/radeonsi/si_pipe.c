@@ -55,10 +55,8 @@ static void si_destroy_context(struct pipe_context *context)
 
 	if (sctx->pstipple_sampler_state)
 		sctx->b.b.delete_sampler_state(&sctx->b.b, sctx->pstipple_sampler_state);
-	if (sctx->dummy_pixel_shader)
-		sctx->b.b.delete_fs_state(&sctx->b.b, sctx->dummy_pixel_shader);
-	if (sctx->fixed_func_tcs_shader)
-		sctx->b.b.delete_tcs_state(&sctx->b.b, sctx->fixed_func_tcs_shader);
+	if (sctx->fixed_func_tcs_shader.cso)
+		sctx->b.b.delete_tcs_state(&sctx->b.b, sctx->fixed_func_tcs_shader.cso);
 	if (sctx->custom_dsa_flush)
 		sctx->b.b.delete_depth_stencil_alpha_state(&sctx->b.b, sctx->custom_dsa_flush);
 	if (sctx->custom_blend_resolve)
@@ -81,6 +79,11 @@ static void si_destroy_context(struct pipe_context *context)
 	r600_resource_reference(&sctx->trace_buf, NULL);
 	r600_resource_reference(&sctx->last_trace_buf, NULL);
 	free(sctx->last_ib);
+	if (sctx->last_bo_list) {
+		for (i = 0; i < sctx->last_bo_count; i++)
+			pb_reference(&sctx->last_bo_list[i].buf, NULL);
+		free(sctx->last_bo_list);
+	}
 	FREE(sctx);
 }
 
@@ -106,6 +109,9 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 
 	if (sctx == NULL)
 		return NULL;
+
+	if (sscreen->b.debug_flags & DBG_CHECK_VM)
+		flags |= PIPE_CONTEXT_DEBUG;
 
 	sctx->b.b.screen = screen; /* this must be set first */
 	sctx->b.b.priv = priv;
@@ -263,6 +269,8 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_START_INSTANCE:
 	case PIPE_CAP_NPOT_TEXTURES:
 	case PIPE_CAP_MIXED_FRAMEBUFFER_SIZES:
+	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
+	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
         case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
 	case PIPE_CAP_TGSI_INSTANCEID:
 	case PIPE_CAP_COMPUTE:
@@ -283,10 +291,14 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_CONDITIONAL_RENDER_INVERTED:
 	case PIPE_CAP_TEXTURE_FLOAT_LINEAR:
 	case PIPE_CAP_TEXTURE_HALF_FLOAT_LINEAR:
+	case PIPE_CAP_SHAREABLE_SHADERS:
 	case PIPE_CAP_DEPTH_BOUNDS_TEST:
+	case PIPE_CAP_SAMPLER_VIEW_TARGET:
 	case PIPE_CAP_TEXTURE_QUERY_LOD:
 	case PIPE_CAP_TEXTURE_GATHER_SM5:
 	case PIPE_CAP_TGSI_TXQS:
+	case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
+	case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
 		return 1;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
@@ -321,12 +333,9 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	/* Unsupported features. */
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
 	case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
-	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
-	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
 	case PIPE_CAP_FAKE_SW_MSAA:
 	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
-	case PIPE_CAP_SAMPLER_VIEW_TARGET:
 	case PIPE_CAP_VERTEXID_NOBASE:
 		return 0;
 
@@ -498,6 +507,8 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
 		return 1;
+	case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
+		return 32;
 	}
 	return 0;
 }
@@ -566,6 +577,33 @@ static bool si_initialize_pipe_config(struct si_screen *sscreen)
 	return true;
 }
 
+static bool si_init_gs_info(struct si_screen *sscreen)
+{
+	switch (sscreen->b.family) {
+	case CHIP_OLAND:
+	case CHIP_HAINAN:
+	case CHIP_KAVERI:
+	case CHIP_KABINI:
+	case CHIP_MULLINS:
+	case CHIP_ICELAND:
+	case CHIP_CARRIZO:
+	case CHIP_STONEY:
+		sscreen->gs_table_depth = 16;
+		return true;
+	case CHIP_TAHITI:
+	case CHIP_PITCAIRN:
+	case CHIP_VERDE:
+	case CHIP_BONAIRE:
+	case CHIP_HAWAII:
+	case CHIP_TONGA:
+	case CHIP_FIJI:
+		sscreen->gs_table_depth = 32;
+		return true;
+	default:
+		return false;
+	}
+}
+
 struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 {
 	struct si_screen *sscreen = CALLOC_STRUCT(si_screen);
@@ -583,7 +621,8 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 	sscreen->b.b.resource_create = r600_resource_create_common;
 
 	if (!r600_common_screen_init(&sscreen->b, ws) ||
-	    !si_initialize_pipe_config(sscreen)) {
+	    !si_initialize_pipe_config(sscreen) ||
+	    !si_init_gs_info(sscreen)) {
 		FREE(sscreen);
 		return NULL;
 	}

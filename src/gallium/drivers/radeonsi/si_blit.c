@@ -55,11 +55,11 @@ static void si_blitter_begin(struct pipe_context *ctx, enum si_blitter_op op)
 	util_blitter_save_depth_stencil_alpha(sctx->blitter, sctx->queued.named.dsa);
 	util_blitter_save_stencil_ref(sctx->blitter, &sctx->stencil_ref.state);
 	util_blitter_save_rasterizer(sctx->blitter, sctx->queued.named.rasterizer);
-	util_blitter_save_fragment_shader(sctx->blitter, sctx->ps_shader);
-	util_blitter_save_geometry_shader(sctx->blitter, sctx->gs_shader);
-	util_blitter_save_tessctrl_shader(sctx->blitter, sctx->tcs_shader);
-	util_blitter_save_tesseval_shader(sctx->blitter, sctx->tes_shader);
-	util_blitter_save_vertex_shader(sctx->blitter, sctx->vs_shader);
+	util_blitter_save_fragment_shader(sctx->blitter, sctx->ps_shader.cso);
+	util_blitter_save_geometry_shader(sctx->blitter, sctx->gs_shader.cso);
+	util_blitter_save_tessctrl_shader(sctx->blitter, sctx->tcs_shader.cso);
+	util_blitter_save_tesseval_shader(sctx->blitter, sctx->tes_shader.cso);
+	util_blitter_save_vertex_shader(sctx->blitter, sctx->vs_shader.cso);
 	util_blitter_save_vertex_elements(sctx->blitter, sctx->vertex_elements);
 	util_blitter_save_sample_mask(sctx->blitter, sctx->sample_mask.sample_mask);
 	util_blitter_save_viewport(sctx->blitter, &sctx->viewports.states[0]);
@@ -180,19 +180,27 @@ static void si_blit_decompress_depth(struct pipe_context *ctx,
 
 static void si_blit_decompress_depth_in_place(struct si_context *sctx,
                                               struct r600_texture *texture,
+					      bool is_stencil_sampler,
                                               unsigned first_level, unsigned last_level,
                                               unsigned first_layer, unsigned last_layer)
 {
 	struct pipe_surface *zsurf, surf_tmpl = {{0}};
 	unsigned layer, max_layer, checked_last_layer, level;
+	unsigned *dirty_level_mask;
 
-	sctx->db_inplace_flush_enabled = true;
+	if (is_stencil_sampler) {
+		sctx->db_flush_stencil_inplace = true;
+		dirty_level_mask = &texture->stencil_dirty_level_mask;
+	} else {
+		sctx->db_flush_depth_inplace = true;
+		dirty_level_mask = &texture->dirty_level_mask;
+	}
 	si_mark_atom_dirty(sctx, &sctx->db_render_state);
 
 	surf_tmpl.format = texture->resource.b.b.format;
 
 	for (level = first_level; level <= last_level; level++) {
-		if (!(texture->dirty_level_mask & (1 << level)))
+		if (!(*dirty_level_mask & (1 << level)))
 			continue;
 
 		surf_tmpl.u.tex.level = level;
@@ -220,11 +228,12 @@ static void si_blit_decompress_depth_in_place(struct si_context *sctx,
 		/* The texture will always be dirty if some layers aren't flushed.
 		 * I don't think this case occurs often though. */
 		if (first_layer == 0 && last_layer == max_layer) {
-			texture->dirty_level_mask &= ~(1 << level);
+			*dirty_level_mask &= ~(1 << level);
 		}
 	}
 
-	sctx->db_inplace_flush_enabled = false;
+	sctx->db_flush_depth_inplace = false;
+	sctx->db_flush_stencil_inplace = false;
 	si_mark_atom_dirty(sctx, &sctx->db_render_state);
 }
 
@@ -236,17 +245,20 @@ void si_flush_depth_textures(struct si_context *sctx,
 
 	while (mask) {
 		struct pipe_sampler_view *view;
+		struct si_sampler_view *sview;
 		struct r600_texture *tex;
 
 		i = u_bit_scan(&mask);
 
 		view = textures->views.views[i];
 		assert(view);
+		sview = (struct si_sampler_view*)view;
 
 		tex = (struct r600_texture *)view->texture;
 		assert(tex->is_depth && !tex->is_flushing_texture);
 
 		si_blit_decompress_depth_in_place(sctx, tex,
+						  sview->is_stencil_sampler,
 						  view->u.tex.first_level, view->u.tex.last_level,
 						  0, util_max_layer(&tex->resource.b.b, view->u.tex.first_level));
 	}
@@ -314,7 +326,7 @@ void si_decompress_color_textures(struct si_context *sctx,
 		assert(view);
 
 		tex = (struct r600_texture *)view->texture;
-		assert(tex->cmask.size || tex->fmask.size);
+		assert(tex->cmask.size || tex->fmask.size || tex->dcc_buffer);
 
 		si_blit_decompress_color(&sctx->b.b, tex,
 					 view->u.tex.first_level, view->u.tex.last_level,
@@ -436,10 +448,14 @@ static void si_decompress_subresource(struct pipe_context *ctx,
 	struct r600_texture *rtex = (struct r600_texture*)tex;
 
 	if (rtex->is_depth && !rtex->is_flushing_texture) {
-		si_blit_decompress_depth_in_place(sctx, rtex,
+		si_blit_decompress_depth_in_place(sctx, rtex, false,
 						  level, level,
 						  first_layer, last_layer);
-	} else if (rtex->fmask.size || rtex->cmask.size) {
+		if (rtex->surface.flags & RADEON_SURF_SBUFFER)
+			si_blit_decompress_depth_in_place(sctx, rtex, true,
+							  level, level,
+							  first_layer, last_layer);
+	} else if (rtex->fmask.size || rtex->cmask.size || rtex->dcc_buffer) {
 		si_blit_decompress_color(ctx, rtex, level, level,
 					 first_layer, last_layer);
 	}
@@ -491,7 +507,7 @@ void si_resource_copy_region(struct pipe_context *ctx,
 	util_blitter_default_dst_texture(&dst_templ, dst, dst_level, dstz);
 	util_blitter_default_src_texture(&src_templ, src, src_level);
 
-	if (util_format_is_compressed(src->format) &&
+	if (util_format_is_compressed(src->format) ||
 	    util_format_is_compressed(dst->format)) {
 		unsigned blocksize = util_format_get_blocksize(src->format);
 
@@ -520,7 +536,7 @@ void si_resource_copy_region(struct pipe_context *ctx,
 		src_force_level = src_level;
 	} else if (!util_blitter_is_copy_supported(sctx->blitter, dst, src) ||
 		   /* also *8_SNORM has precision issues, use UNORM instead */
-		   util_format_is_snorm(src->format)) {
+		   util_format_is_snorm8(src->format)) {
 		if (util_format_is_subsampled_422(src->format)) {
 			src_templ.format = PIPE_FORMAT_R8G8B8A8_UINT;
 			dst_templ.format = PIPE_FORMAT_R8G8B8A8_UINT;
@@ -659,7 +675,8 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 	    info->src.box.depth == 1 &&
 	    dst->surface.level[info->dst.level].mode >= RADEON_SURF_MODE_1D &&
 	    !(dst->surface.flags & RADEON_SURF_SCANOUT) &&
-	    (!dst->cmask.size || !dst->dirty_level_mask) /* dst cannot be fast-cleared */) {
+	    (!dst->cmask.size || !dst->dirty_level_mask) && /* dst cannot be fast-cleared */
+	    !dst->dcc_buffer) {
 		si_blitter_begin(ctx, SI_COLOR_RESOLVE |
 				 (info->render_condition_enable ? 0 : SI_DISABLE_RENDER_COND));
 		util_blitter_custom_resolve_color(sctx->blitter,

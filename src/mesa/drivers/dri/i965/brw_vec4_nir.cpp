@@ -35,15 +35,13 @@ namespace brw {
 void
 vec4_visitor::emit_nir_code()
 {
-   nir_shader *nir = prog->nir;
-
    if (nir->num_inputs > 0)
-      nir_setup_inputs(nir);
+      nir_setup_inputs();
 
    if (nir->num_uniforms > 0)
-      nir_setup_uniforms(nir);
+      nir_setup_uniforms();
 
-   nir_setup_system_values(nir);
+   nir_setup_system_values();
 
    /* get the main function and emit it */
    nir_foreach_overload(nir, overload) {
@@ -105,11 +103,11 @@ setup_system_values_block(nir_block *block, void *void_visitor)
 }
 
 void
-vec4_visitor::nir_setup_system_values(nir_shader *shader)
+vec4_visitor::nir_setup_system_values()
 {
    nir_system_values = ralloc_array(mem_ctx, dst_reg, SYSTEM_VALUE_MAX);
 
-   nir_foreach_overload(shader, overload) {
+   nir_foreach_overload(nir, overload) {
       assert(strcmp(overload->function->name, "main") == 0);
       assert(overload->impl);
       nir_foreach_block(overload->impl, setup_system_values_block, this);
@@ -117,11 +115,11 @@ vec4_visitor::nir_setup_system_values(nir_shader *shader)
 }
 
 void
-vec4_visitor::nir_setup_inputs(nir_shader *shader)
+vec4_visitor::nir_setup_inputs()
 {
-   nir_inputs = ralloc_array(mem_ctx, src_reg, shader->num_inputs);
+   nir_inputs = ralloc_array(mem_ctx, src_reg, nir->num_inputs);
 
-   foreach_list_typed(nir_variable, var, node, &shader->inputs) {
+   nir_foreach_variable(var, &nir->inputs) {
       int offset = var->data.driver_location;
       unsigned size = type_size_vec4(var->type);
       for (unsigned i = 0; i < size; i++) {
@@ -132,137 +130,17 @@ vec4_visitor::nir_setup_inputs(nir_shader *shader)
 }
 
 void
-vec4_visitor::nir_setup_uniforms(nir_shader *shader)
+vec4_visitor::nir_setup_uniforms()
 {
-   uniforms = 0;
+   uniforms = nir->num_uniforms;
 
-   if (shader_prog) {
-      foreach_list_typed(nir_variable, var, node, &shader->uniforms) {
-         /* UBO's, atomics and samplers don't take up space in the
-            uniform file */
-         if (var->interface_type != NULL || var->type->contains_atomic() ||
-             type_size_vec4(var->type) == 0) {
-            continue;
-         }
+   nir_foreach_variable(var, &nir->uniforms) {
+      /* UBO's and atomics don't take up space in the uniform file */
+      if (var->interface_type != NULL || var->type->contains_atomic())
+         continue;
 
-         assert(uniforms < uniform_array_size);
-         uniform_size[uniforms] = type_size_vec4(var->type);
-
-         if (strncmp(var->name, "gl_", 3) == 0)
-            nir_setup_builtin_uniform(var);
-         else
-            nir_setup_uniform(var);
-      }
-   } else {
-      /* For ARB_vertex_program, only a single "parameters" variable is
-       * generated to support uniform data.
-       */
-      nir_variable *var = (nir_variable *) shader->uniforms.get_head();
-      assert(shader->uniforms.length() == 1 &&
-             strcmp(var->name, "parameters") == 0);
-
-      assert(uniforms < uniform_array_size);
-      uniform_size[uniforms] = type_size_vec4(var->type);
-
-      struct gl_program_parameter_list *plist = prog->Parameters;
-      for (unsigned p = 0; p < plist->NumParameters; p++) {
-         uniform_vector_size[uniforms] = plist->Parameters[p].Size;
-
-         /* Parameters should be either vec4 uniforms or single component
-          * constants; matrices and other larger types should have been broken
-          * down earlier.
-          */
-         assert(uniform_vector_size[uniforms] <= 4);
-
-         int i;
-         for (i = 0; i < uniform_vector_size[uniforms]; i++) {
-            stage_prog_data->param[uniforms * 4 + i] = &plist->ParameterValues[p][i];
-         }
-         for (; i < 4; i++) {
-            static const gl_constant_value zero = { 0.0 };
-            stage_prog_data->param[uniforms * 4 + i] = &zero;
-         }
-
-         uniforms++;
-      }
-   }
-}
-
-void
-vec4_visitor::nir_setup_uniform(nir_variable *var)
-{
-   int namelen = strlen(var->name);
-
-   /* The data for our (non-builtin) uniforms is stored in a series of
-    * gl_uniform_driver_storage structs for each subcomponent that
-    * glGetUniformLocation() could name.  We know it's been set up in the same
-    * order we'd walk the type, so walk the list of storage and find anything
-    * with our name, or the prefix of a component that starts with our name.
-    */
-    for (unsigned u = 0; u < shader_prog->NumUniformStorage; u++) {
-       struct gl_uniform_storage *storage = &shader_prog->UniformStorage[u];
-
-       if (storage->builtin)
-          continue;
-
-       if (strncmp(var->name, storage->name, namelen) != 0 ||
-           (storage->name[namelen] != 0 &&
-            storage->name[namelen] != '.' &&
-            storage->name[namelen] != '[')) {
-          continue;
-       }
-
-       gl_constant_value *components = storage->storage;
-       unsigned vector_count = (MAX2(storage->array_elements, 1) *
-                                storage->type->matrix_columns);
-
-       for (unsigned s = 0; s < vector_count; s++) {
-          assert(uniforms < uniform_array_size);
-          uniform_vector_size[uniforms] = storage->type->vector_elements;
-
-          int i;
-          for (i = 0; i < uniform_vector_size[uniforms]; i++) {
-             stage_prog_data->param[uniforms * 4 + i] = components;
-             components++;
-          }
-          for (; i < 4; i++) {
-             static const gl_constant_value zero = { 0.0 };
-             stage_prog_data->param[uniforms * 4 + i] = &zero;
-          }
-
-          uniforms++;
-       }
-    }
-}
-
-void
-vec4_visitor::nir_setup_builtin_uniform(nir_variable *var)
-{
-   const nir_state_slot *const slots = var->state_slots;
-   assert(var->state_slots != NULL);
-
-   for (unsigned int i = 0; i < var->num_state_slots; i++) {
-      /* This state reference has already been setup by ir_to_mesa,
-       * but we'll get the same index back here.  We can reference
-       * ParameterValues directly, since unlike brw_fs.cpp, we never
-       * add new state references during compile.
-       */
-      int index = _mesa_add_state_reference(prog->Parameters,
-					    (gl_state_index *)slots[i].tokens);
-      gl_constant_value *values =
-         &prog->Parameters->ParameterValues[index][0];
-
-      assert(uniforms < uniform_array_size);
-
-      for (unsigned j = 0; j < 4; j++)
-         stage_prog_data->param[uniforms * 4 + j] =
-            &values[GET_SWZ(slots[i].swizzle, j)];
-
-      uniform_vector_size[uniforms] =
-         (var->type->is_scalar() || var->type->is_vector() ||
-          var->type->is_matrix() ? var->type->vector_elements : 4);
-
-      uniforms++;
+      if (type_size_vec4(var->type) > 0)
+         uniform_size[var->data.driver_location] = type_size_vec4(var->type);
    }
 }
 
@@ -315,7 +193,9 @@ vec4_visitor::nir_emit_if(nir_if *if_stmt)
    vec4_instruction *inst = emit(MOV(dst_null_d(), condition));
    inst->conditional_mod = BRW_CONDITIONAL_NZ;
 
-   emit(IF(BRW_PREDICATE_NORMAL));
+   /* We can just predicate based on the X channel, as the condition only
+    * goes on its own line */
+   emit(IF(BRW_PREDICATE_ALIGN16_REPLICATE_X));
 
    nir_emit_cf_list(&if_stmt->then_list);
 
@@ -545,12 +425,10 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
 
    case nir_intrinsic_get_buffer_size: {
       nir_const_value *const_uniform_block = nir_src_as_const_value(instr->src[0]);
-      unsigned ubo_index = const_uniform_block ? const_uniform_block->u[0] : 0;
+      unsigned ssbo_index = const_uniform_block ? const_uniform_block->u[0] : 0;
 
-      assert(shader->base.UniformBlocks[ubo_index].IsShaderStorage);
-
-      src_reg surf_index = src_reg(prog_data->base.binding_table.ubo_start +
-                                   ubo_index);
+      src_reg surf_index = src_reg(prog_data->base.binding_table.ssbo_start +
+                                   ssbo_index);
       dst_reg result_dst = get_nir_dest(instr->dest);
       vec4_instruction *inst = new(mem_ctx)
          vec4_instruction(VS_OPCODE_GET_BUFFER_SIZE, result_dst);
@@ -580,19 +458,19 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
       nir_const_value *const_uniform_block =
          nir_src_as_const_value(instr->src[1]);
       if (const_uniform_block) {
-         unsigned index = prog_data->base.binding_table.ubo_start +
+         unsigned index = prog_data->base.binding_table.ssbo_start +
                           const_uniform_block->u[0];
          surf_index = src_reg(index);
          brw_mark_surface_used(&prog_data->base, index);
       } else {
          surf_index = src_reg(this, glsl_type::uint_type);
          emit(ADD(dst_reg(surf_index), get_nir_src(instr->src[1], 1),
-                  src_reg(prog_data->base.binding_table.ubo_start)));
+                  src_reg(prog_data->base.binding_table.ssbo_start)));
          surf_index = emit_uniformize(surf_index);
 
          brw_mark_surface_used(&prog_data->base,
-                               prog_data->base.binding_table.ubo_start +
-                               shader_prog->NumBufferInterfaceBlocks - 1);
+                               prog_data->base.binding_table.ssbo_start +
+                               nir->info.num_ssbos - 1);
       }
 
       /* Offset */
@@ -723,7 +601,7 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
 
       src_reg surf_index;
       if (const_uniform_block) {
-         unsigned index = prog_data->base.binding_table.ubo_start +
+         unsigned index = prog_data->base.binding_table.ssbo_start +
                           const_uniform_block->u[0];
          surf_index = src_reg(index);
 
@@ -731,15 +609,15 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
       } else {
          surf_index = src_reg(this, glsl_type::uint_type);
          emit(ADD(dst_reg(surf_index), get_nir_src(instr->src[0], 1),
-                  src_reg(prog_data->base.binding_table.ubo_start)));
+                  src_reg(prog_data->base.binding_table.ssbo_start)));
          surf_index = emit_uniformize(surf_index);
 
          /* Assume this may touch any UBO. It would be nice to provide
           * a tighter bound, but the array information is already lowered away.
           */
          brw_mark_surface_used(&prog_data->base,
-                               prog_data->base.binding_table.ubo_start +
-                               shader_prog->NumBufferInterfaceBlocks - 1);
+                               prog_data->base.binding_table.ssbo_start +
+                               nir->info.num_ssbos - 1);
       }
 
       src_reg offset_reg = src_reg(this, glsl_type::uint_type);
@@ -769,17 +647,17 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
    case nir_intrinsic_ssbo_atomic_add:
       nir_emit_ssbo_atomic(BRW_AOP_ADD, instr);
       break;
-   case nir_intrinsic_ssbo_atomic_min:
-      if (dest.type == BRW_REGISTER_TYPE_D)
-         nir_emit_ssbo_atomic(BRW_AOP_IMIN, instr);
-      else
-         nir_emit_ssbo_atomic(BRW_AOP_UMIN, instr);
+   case nir_intrinsic_ssbo_atomic_imin:
+      nir_emit_ssbo_atomic(BRW_AOP_IMIN, instr);
       break;
-   case nir_intrinsic_ssbo_atomic_max:
-      if (dest.type == BRW_REGISTER_TYPE_D)
-         nir_emit_ssbo_atomic(BRW_AOP_IMAX, instr);
-      else
-         nir_emit_ssbo_atomic(BRW_AOP_UMAX, instr);
+   case nir_intrinsic_ssbo_atomic_umin:
+      nir_emit_ssbo_atomic(BRW_AOP_UMIN, instr);
+      break;
+   case nir_intrinsic_ssbo_atomic_imax:
+      nir_emit_ssbo_atomic(BRW_AOP_IMAX, instr);
+      break;
+   case nir_intrinsic_ssbo_atomic_umax:
+      nir_emit_ssbo_atomic(BRW_AOP_UMAX, instr);
       break;
    case nir_intrinsic_ssbo_atomic_and:
       nir_emit_ssbo_atomic(BRW_AOP_AND, instr);
@@ -889,7 +767,7 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
           */
          brw_mark_surface_used(&prog_data->base,
                                prog_data->base.binding_table.ubo_start +
-                               shader_prog->NumBufferInterfaceBlocks - 1);
+                               nir->info.num_ubos - 1);
       }
 
       unsigned const_offset = instr->const_index[0];
@@ -930,6 +808,16 @@ vec4_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
       break;
    }
 
+   case nir_intrinsic_shader_clock: {
+      /* We cannot do anything if there is an event, so ignore it for now */
+      const src_reg shader_clock = get_timestamp();
+      const enum brw_reg_type type = brw_type_for_base_type(glsl_type::uvec2_type);
+
+      dest = get_nir_dest(instr->dest, type);
+      emit(MOV(dest, shader_clock));
+      break;
+   }
+
    default:
       unreachable("Unknown intrinsic");
    }
@@ -945,21 +833,21 @@ vec4_visitor::nir_emit_ssbo_atomic(int op, nir_intrinsic_instr *instr)
    src_reg surface;
    nir_const_value *const_surface = nir_src_as_const_value(instr->src[0]);
    if (const_surface) {
-      unsigned surf_index = prog_data->base.binding_table.ubo_start +
+      unsigned surf_index = prog_data->base.binding_table.ssbo_start +
                             const_surface->u[0];
       surface = src_reg(surf_index);
       brw_mark_surface_used(&prog_data->base, surf_index);
    } else {
       surface = src_reg(this, glsl_type::uint_type);
       emit(ADD(dst_reg(surface), get_nir_src(instr->src[0]),
-               src_reg(prog_data->base.binding_table.ubo_start)));
+               src_reg(prog_data->base.binding_table.ssbo_start)));
 
       /* Assume this may touch any UBO. This is the same we do for other
        * UBO/SSBO accesses with non-constant surface.
        */
       brw_mark_surface_used(&prog_data->base,
-                            prog_data->base.binding_table.ubo_start +
-                            shader_prog->NumBufferInterfaceBlocks - 1);
+                            prog_data->base.binding_table.ssbo_start +
+                            nir->info.num_ssbos - 1);
    }
 
    src_reg offset = get_nir_src(instr->src[1], 1);
@@ -1361,14 +1249,8 @@ vec4_visitor::nir_emit_alu(nir_alu_instr *instr)
       break;
 
    case nir_op_b2i:
-      emit(AND(dst, op[0], src_reg(1)));
-      break;
-
    case nir_op_b2f:
-      op[0].type = BRW_REGISTER_TYPE_D;
-      dst.type = BRW_REGISTER_TYPE_D;
-      emit(AND(dst, op[0], src_reg(0x3f800000u)));
-      dst.type = BRW_REGISTER_TYPE_F;
+      emit(MOV(dst, negate(op[0])));
       break;
 
    case nir_op_f2b:

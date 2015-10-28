@@ -1357,7 +1357,16 @@ set_max_gl_versions(struct intel_screen *screen)
    }
 }
 
-static int
+/**
+ * Return the revision (generally the revid field of the PCI header) of the
+ * graphics device.
+ *
+ * XXX: This function is useful to keep around even if it is not currently in
+ * use. It is necessary for new platforms and revision specific workarounds or
+ * features. Please don't remove it so that we know it at least continues to
+ * build.
+ */
+static __attribute__((__unused__)) int
 brw_get_revision(int fd)
 {
    struct drm_i915_getparam gp;
@@ -1416,12 +1425,23 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
        return false;
 
    intelScreen->deviceID = drm_intel_bufmgr_gem_get_devid(intelScreen->bufmgr);
-   intelScreen->devinfo = brw_get_device_info(intelScreen->deviceID,
-                                              brw_get_revision(psp->fd));
+   intelScreen->devinfo = brw_get_device_info(intelScreen->deviceID);
    if (!intelScreen->devinfo)
       return false;
 
-   brw_process_intel_debug_variable(intelScreen);
+   brw_process_intel_debug_variable();
+
+   if (INTEL_DEBUG & DEBUG_BUFMGR)
+      dri_bufmgr_set_debug(intelScreen->bufmgr, true);
+
+   if ((INTEL_DEBUG & DEBUG_SHADER_TIME) && intelScreen->devinfo->gen < 7) {
+      fprintf(stderr,
+              "shader_time debugging requires gen7 (Ivybridge) or better.\n");
+      INTEL_DEBUG &= ~DEBUG_SHADER_TIME;
+   }
+
+   if (INTEL_DEBUG & DEBUG_AUB)
+      drm_intel_bufmgr_gem_set_aub_dump(intelScreen->bufmgr, true);
 
    intelScreen->hw_must_use_separate_stencil = intelScreen->devinfo->gen >= 7;
 

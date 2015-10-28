@@ -698,16 +698,39 @@ valid_draw_indirect(struct gl_context *ctx,
 {
    const GLsizeiptr end = (GLsizeiptr)indirect + size;
 
+   /* OpenGL ES 3.1 spec. section 10.5:
+    *
+    *      "DrawArraysIndirect requires that all data sourced for the
+    *      command, including the DrawArraysIndirectCommand
+    *      structure,  be in buffer objects,  and may not be called when
+    *      the default vertex array object is bound."
+    */
+   if (ctx->Array.VAO == ctx->Array.DefaultVAO) {
+      _mesa_error(ctx, GL_INVALID_OPERATION, "(no VAO bound)");
+      return GL_FALSE;
+   }
+
    if (!_mesa_valid_prim_mode(ctx, mode, name))
       return GL_FALSE;
 
+   /* OpenGL ES 3.1 specification, section 10.5:
+    *
+    *      "An INVALID_OPERATION error is generated if
+    *      transform feedback is active and not paused."
+    */
+   if (_mesa_is_gles31(ctx) && _mesa_is_xfb_active_and_unpaused(ctx)) {
+      _mesa_error(ctx, GL_INVALID_OPERATION,
+                  "%s(TransformFeedback is active and not paused)", name);
+   }
 
-   /* From the ARB_draw_indirect specification:
-    * "An INVALID_OPERATION error is generated [...] if <indirect> is no
-    *  word aligned."
+   /* From OpenGL version 4.4. section 10.5
+    * and OpenGL ES 3.1, section 10.6:
+    *
+    *      "An INVALID_VALUE error is generated if indirect is not a
+    *       multiple of the size, in basic machine units, of uint."
     */
    if ((GLsizeiptr)indirect & (sizeof(GLuint) - 1)) {
-      _mesa_error(ctx, GL_INVALID_OPERATION,
+      _mesa_error(ctx, GL_INVALID_VALUE,
                   "%s(indirect is not aligned)", name);
       return GL_FALSE;
    }

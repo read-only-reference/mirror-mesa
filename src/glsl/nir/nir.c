@@ -41,6 +41,7 @@ nir_shader_create(void *mem_ctx,
    exec_list_make_empty(&shader->outputs);
 
    shader->options = options;
+   memset(&shader->info, 0, sizeof(shader->info));
 
    exec_list_make_empty(&shader->functions);
    exec_list_make_empty(&shader->registers);
@@ -53,9 +54,6 @@ nir_shader_create(void *mem_ctx,
    shader->num_uniforms = 0;
 
    shader->stage = stage;
-
-   shader->gs.vertices_out = 0;
-   shader->gs.invocations = 0;
 
    return shader;
 }
@@ -103,6 +101,72 @@ void
 nir_reg_remove(nir_register *reg)
 {
    exec_node_remove(&reg->node);
+}
+
+void
+nir_shader_add_variable(nir_shader *shader, nir_variable *var)
+{
+   switch (var->data.mode) {
+   case nir_var_local:
+      assert(!"nir_shader_add_variable cannot be used for local variables");
+      break;
+
+   case nir_var_global:
+      exec_list_push_tail(&shader->globals, &var->node);
+      break;
+
+   case nir_var_shader_in:
+      exec_list_push_tail(&shader->inputs, &var->node);
+      break;
+
+   case nir_var_shader_out:
+      exec_list_push_tail(&shader->outputs, &var->node);
+      break;
+
+   case nir_var_uniform:
+   case nir_var_shader_storage:
+      exec_list_push_tail(&shader->uniforms, &var->node);
+      break;
+
+   case nir_var_system_value:
+      exec_list_push_tail(&shader->system_values, &var->node);
+      break;
+   }
+}
+
+nir_variable *
+nir_variable_create(nir_shader *shader, nir_variable_mode mode,
+                    const struct glsl_type *type, const char *name)
+{
+   nir_variable *var = rzalloc(shader, nir_variable);
+   var->name = ralloc_strdup(var, name);
+   var->type = type;
+   var->data.mode = mode;
+
+   if ((mode == nir_var_shader_in && shader->stage != MESA_SHADER_VERTEX) ||
+       (mode == nir_var_shader_out && shader->stage != MESA_SHADER_FRAGMENT))
+      var->data.interpolation = INTERP_QUALIFIER_SMOOTH;
+
+   if (mode == nir_var_shader_in || mode == nir_var_uniform)
+      var->data.read_only = true;
+
+   nir_shader_add_variable(shader, var);
+
+   return var;
+}
+
+nir_variable *
+nir_local_variable_create(nir_function_impl *impl,
+                          const struct glsl_type *type, const char *name)
+{
+   nir_variable *var = rzalloc(impl->overload->function->shader, nir_variable);
+   var->name = ralloc_strdup(var, name);
+   var->type = type;
+   var->data.mode = nir_var_local;
+
+   nir_function_impl_add_variable(impl, var);
+
+   return var;
 }
 
 nir_function *
@@ -1082,31 +1146,33 @@ nir_src_as_const_value(nir_src src)
    return &load->value;
 }
 
+/**
+ * Returns true if the source is known to be dynamically uniform. Otherwise it
+ * returns false which means it may or may not be dynamically uniform but it
+ * can't be determined.
+ */
 bool
-nir_srcs_equal(nir_src src1, nir_src src2)
+nir_src_is_dynamically_uniform(nir_src src)
 {
-   if (src1.is_ssa) {
-      if (src2.is_ssa) {
-         return src1.ssa == src2.ssa;
-      } else {
-         return false;
-      }
-   } else {
-      if (src2.is_ssa) {
-         return false;
-      } else {
-         if ((src1.reg.indirect == NULL) != (src2.reg.indirect == NULL))
-            return false;
+   if (!src.is_ssa)
+      return false;
 
-         if (src1.reg.indirect) {
-            if (!nir_srcs_equal(*src1.reg.indirect, *src2.reg.indirect))
-               return false;
-         }
+   /* Constants are trivially dynamically uniform */
+   if (src.ssa->parent_instr->type == nir_instr_type_load_const)
+      return true;
 
-         return src1.reg.reg == src2.reg.reg &&
-                src1.reg.base_offset == src2.reg.base_offset;
-      }
+   /* As are uniform variables */
+   if (src.ssa->parent_instr->type == nir_instr_type_intrinsic) {
+      nir_intrinsic_instr *intr = nir_instr_as_intrinsic(src.ssa->parent_instr);
+
+      if (intr->intrinsic == nir_intrinsic_load_uniform)
+         return true;
    }
+
+   /* XXX: this could have many more tests, such as when a sampler function is
+    * called with dynamically uniform arguments.
+    */
+   return false;
 }
 
 static void
@@ -1491,12 +1557,14 @@ nir_intrinsic_from_system_value(gl_system_value val)
       return nir_intrinsic_load_num_work_groups;
    case SYSTEM_VALUE_PRIMITIVE_ID:
       return nir_intrinsic_load_primitive_id;
-   /* FINISHME: Add tessellation intrinsics.
    case SYSTEM_VALUE_TESS_COORD:
-   case SYSTEM_VALUE_VERTICES_IN:
+      return nir_intrinsic_load_tess_coord;
    case SYSTEM_VALUE_TESS_LEVEL_OUTER:
+      return nir_intrinsic_load_tess_level_outer;
    case SYSTEM_VALUE_TESS_LEVEL_INNER:
-    */
+      return nir_intrinsic_load_tess_level_inner;
+   case SYSTEM_VALUE_VERTICES_IN:
+      return nir_intrinsic_load_patch_vertices_in;
    default:
       unreachable("system value does not directly correspond to intrinsic");
    }
@@ -1532,13 +1600,14 @@ nir_system_value_from_intrinsic(nir_intrinsic_op intrin)
       return SYSTEM_VALUE_WORK_GROUP_ID;
    case nir_intrinsic_load_primitive_id:
       return SYSTEM_VALUE_PRIMITIVE_ID;
-   /* FINISHME: Add tessellation intrinsics.
+   case nir_intrinsic_load_tess_coord:
       return SYSTEM_VALUE_TESS_COORD;
-      return SYSTEM_VALUE_VERTICES_IN;
-      return SYSTEM_VALUE_PRIMITIVE_ID;
+   case nir_intrinsic_load_tess_level_outer:
       return SYSTEM_VALUE_TESS_LEVEL_OUTER;
+   case nir_intrinsic_load_tess_level_inner:
       return SYSTEM_VALUE_TESS_LEVEL_INNER;
-    */
+   case nir_intrinsic_load_patch_vertices_in:
+      return SYSTEM_VALUE_VERTICES_IN;
    default:
       unreachable("intrinsic doesn't produce a system value");
    }

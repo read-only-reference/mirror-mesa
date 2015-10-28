@@ -627,7 +627,7 @@ fd3_emit_state(struct fd_context *ctx, struct fd_ringbuffer *ring,
 		ctx->prog.dirty = 0;
 	}
 
-	if ((dirty & (FD_DIRTY_BLEND | FD_DIRTY_FRAMEBUFFER)) && ctx->blend) {
+	if (dirty & (FD_DIRTY_BLEND | FD_DIRTY_FRAMEBUFFER)) {
 		struct fd3_blend_stateobj *blend = fd3_blend_stateobj(ctx->blend);
 		uint32_t i;
 
@@ -798,11 +798,7 @@ fd3_emit_restore(struct fd_context *ctx)
 	OUT_RING(ring, A3XX_HLSQ_CONST_FSPRESV_RANGE_REG_STARTENTRY(0) |
 			A3XX_HLSQ_CONST_FSPRESV_RANGE_REG_ENDENTRY(0));
 
-	OUT_PKT0(ring, REG_A3XX_UCHE_CACHE_INVALIDATE0_REG, 2);
-	OUT_RING(ring, A3XX_UCHE_CACHE_INVALIDATE0_REG_ADDR(0));
-	OUT_RING(ring, A3XX_UCHE_CACHE_INVALIDATE1_REG_ADDR(0) |
-			A3XX_UCHE_CACHE_INVALIDATE1_REG_OPCODE(INVALIDATE) |
-			A3XX_UCHE_CACHE_INVALIDATE1_REG_ENTIRE_CACHE);
+	fd3_emit_cache_flush(ctx, ring);
 
 	OUT_PKT0(ring, REG_A3XX_GRAS_CL_CLIP_CNTL, 1);
 	OUT_RING(ring, 0x00000000);                  /* GRAS_CL_CLIP_CNTL */
