@@ -82,6 +82,7 @@ typedef struct {
 } nir_state_slot;
 
 typedef enum {
+   nir_var_all = -1,
    nir_var_shader_in,
    nir_var_shader_out,
    nir_var_global,
@@ -110,6 +111,11 @@ typedef struct nir_constant {
     * scalars, vectors, or matrices.
     */
    union nir_constant_data value;
+
+   /* we could get this from the var->type but makes clone *much* easier to
+    * not have to care about the type.
+    */
+   unsigned num_elements;
 
    /* Array elements / Structure Fields */
    struct nir_constant **elements;
@@ -146,19 +152,6 @@ typedef struct {
     * Declared name of the variable
     */
    char *name;
-
-   /**
-    * For variables which satisfy the is_interface_instance() predicate, this
-    * points to an array of integers such that if the ith member of the
-    * interface block is an array, max_ifc_array_access[i] is the maximum
-    * array element of that member that has been accessed.  If the ith member
-    * of the interface block is not an array, max_ifc_array_access[i] is
-    * unused.
-    *
-    * For variables whose type is not an interface block, this pointer is
-    * NULL.
-    */
-   unsigned *max_ifc_array_access;
 
    struct nir_variable_data {
 
@@ -299,6 +292,11 @@ typedef struct {
       int index;
 
       /**
+       * Descriptor set binding for sampler or UBO.
+       */
+      int descriptor_set;
+
+      /**
        * Initial binding point for a sampler or UBO.
        *
        * For array types, this represents the binding point for the first element.
@@ -394,10 +392,10 @@ typedef struct {
     */
    bool is_packed;
 
-   /** set of nir_instr's where this register is used (read from) */
+   /** set of nir_src's where this register is used (read from) */
    struct list_head uses;
 
-   /** set of nir_instr's where this register is defined (written to) */
+   /** set of nir_dest's where this register is defined (written to) */
    struct list_head defs;
 
    /** set of nir_if's where this register is used as a condition */
@@ -522,7 +520,11 @@ typedef struct nir_src {
    bool is_ssa;
 } nir_src;
 
-#define NIR_SRC_INIT (nir_src) { { NULL } }
+#ifdef __cplusplus
+#  define NIR_SRC_INIT nir_src()
+#else
+#  define NIR_SRC_INIT (nir_src) { { NULL } }
+#endif
 
 #define nir_foreach_use(reg_or_ssa_def, src) \
    list_for_each_entry(nir_src, src, &(reg_or_ssa_def)->uses, use_link)
@@ -545,7 +547,11 @@ typedef struct {
    bool is_ssa;
 } nir_dest;
 
-#define NIR_DEST_INIT (nir_dest) { { { NULL } } }
+#ifdef __cplusplus
+#  define NIR_DEST_INIT nir_dest()
+#else
+#  define NIR_DEST_INIT (nir_dest) { { { NULL } } }
+#endif
 
 #define nir_foreach_def(reg, dest) \
    list_for_each_entry(nir_dest, dest, &(reg)->defs, reg.def_link)
@@ -641,7 +647,7 @@ typedef enum {
    nir_type_invalid = 0, /* Not a valid type */
    nir_type_float,
    nir_type_int,
-   nir_type_unsigned,
+   nir_type_uint,
    nir_type_bool
 } nir_alu_type;
 
@@ -784,6 +790,15 @@ typedef struct {
 NIR_DEFINE_CAST(nir_deref_as_var, nir_deref, nir_deref_var, deref)
 NIR_DEFINE_CAST(nir_deref_as_array, nir_deref, nir_deref_array, deref)
 NIR_DEFINE_CAST(nir_deref_as_struct, nir_deref, nir_deref_struct, deref)
+
+/* Returns the last deref in the chain. */
+static inline nir_deref *
+nir_deref_tail(nir_deref *deref)
+{
+   while (deref->child)
+      deref = deref->child;
+   return deref;
+}
 
 typedef struct {
    nir_instr instr;
@@ -933,6 +948,7 @@ typedef enum {
    nir_tex_src_ms_index, /* MSAA sample index */
    nir_tex_src_ddx,
    nir_tex_src_ddy,
+   nir_tex_src_texture_offset, /* < dynamically uniform indirect offset */
    nir_tex_src_sampler_offset, /* < dynamically uniform indirect offset */
    nir_num_tex_src_types
 } nir_tex_src_type;
@@ -954,6 +970,9 @@ typedef enum {
    nir_texop_tg4,                /**< Texture gather */
    nir_texop_query_levels,       /**< Texture levels query */
    nir_texop_texture_samples,    /**< Texture samples query */
+   nir_texop_samples_identical,  /**< Query whether all samples are definitely
+                                  * identical.
+                                  */
 } nir_texop;
 
 typedef struct {
@@ -980,6 +999,24 @@ typedef struct {
    /* gather component selector */
    unsigned component : 2;
 
+   /** The texture index
+    *
+    * If this texture instruction has a nir_tex_src_texture_offset source,
+    * then the texture index is given by texture_index + texture_offset.
+    */
+   unsigned texture_index;
+
+   /** The size of the texture array or 0 if it's not an array */
+   unsigned texture_array_size;
+
+   /** The texture deref
+    *
+    * If both this and `sampler` are both NULL, use texture_index instead.
+    * If `texture` is NULL, but `sampler` is non-NULL, then the texture is
+    * implied from the sampler.
+    */
+   nir_deref_var *texture;
+
    /** The sampler index
     *
     * If this texture instruction has a nir_tex_src_sampler_offset source,
@@ -987,10 +1024,11 @@ typedef struct {
     */
    unsigned sampler_index;
 
-   /** The size of the sampler array or 0 if it's not an array */
-   unsigned sampler_array_size;
-
-   nir_deref_var *sampler; /* if this is NULL, use sampler_index instead */
+   /** The sampler deref
+    *
+    * If this is null, use sampler_index instead.
+    */
+   nir_deref_var *sampler;
 } nir_tex_instr;
 
 static inline unsigned
@@ -1027,6 +1065,7 @@ nir_tex_instr_dest_size(nir_tex_instr *instr)
 
    case nir_texop_texture_samples:
    case nir_texop_query_levels:
+   case nir_texop_samples_identical:
       return 1;
 
    default:
@@ -1034,6 +1073,31 @@ nir_tex_instr_dest_size(nir_tex_instr *instr)
          return 1;
 
       return 4;
+   }
+}
+
+/* Returns true if this texture operation queries something about the texture
+ * rather than actually sampling it.
+ */
+static inline bool
+nir_tex_instr_is_query(nir_tex_instr *instr)
+{
+   switch (instr->op) {
+   case nir_texop_txs:
+   case nir_texop_lod:
+   case nir_texop_texture_samples:
+   case nir_texop_query_levels:
+      return true;
+   case nir_texop_tex:
+   case nir_texop_txb:
+   case nir_texop_txl:
+   case nir_texop_txd:
+   case nir_texop_txf:
+   case nir_texop_txf_ms:
+   case nir_texop_tg4:
+      return false;
+   default:
+      unreachable("Invalid texture opcode");
    }
 }
 
@@ -1310,7 +1374,8 @@ typedef enum {
    nir_metadata_none = 0x0,
    nir_metadata_block_index = 0x1,
    nir_metadata_dominance = 0x2,
-   nir_metadata_live_variables = 0x4,
+   nir_metadata_live_ssa_defs = 0x4,
+   nir_metadata_not_properly_reset = 0x8,
 } nir_metadata;
 
 typedef struct {
@@ -1429,6 +1494,7 @@ typedef struct nir_function {
 
 typedef struct nir_shader_compiler_options {
    bool lower_ffma;
+   bool lower_fdiv;
    bool lower_flrp;
    bool lower_fpow;
    bool lower_fsat;
@@ -1481,6 +1547,11 @@ typedef struct nir_shader_info {
    /* Which system values are actually read */
    uint64_t system_values_read;
 
+   /* Which patch inputs are actually read */
+   uint32_t patch_inputs_read;
+   /* Which patch outputs are actually written */
+   uint32_t patch_outputs_written;
+
    /* Whether or not this shader ever uses textureGather() */
    bool uses_texture_gather;
 
@@ -1530,6 +1601,11 @@ typedef struct nir_shader_info {
       struct {
          unsigned local_size[3];
       } cs;
+
+      struct {
+         /** The number of vertices in the TCS output patch. */
+         unsigned vertices_out;
+      } tcs;
    };
 } nir_shader_info;
 
@@ -1621,9 +1697,9 @@ nir_function_overload *nir_function_overload_create(nir_function *func);
 
 nir_function_impl *nir_function_impl_create(nir_function_overload *func);
 
-nir_block *nir_block_create(void *mem_ctx);
-nir_if *nir_if_create(void *mem_ctx);
-nir_loop *nir_loop_create(void *mem_ctx);
+nir_block *nir_block_create(nir_shader *shader);
+nir_if *nir_if_create(nir_shader *shader);
+nir_loop *nir_loop_create(nir_shader *shader);
 
 nir_function_impl *nir_cf_node_get_function(nir_cf_node *node);
 
@@ -1688,6 +1764,17 @@ typedef struct {
       nir_instr *instr;
    };
 } nir_cursor;
+
+static inline nir_block *
+nir_cursor_current_block(nir_cursor cursor)
+{
+   if (cursor.option == nir_cursor_before_instr ||
+       cursor.option == nir_cursor_after_instr) {
+      return cursor.instr->block;
+   } else {
+      return cursor.block;
+   }
+}
 
 static inline nir_cursor
 nir_before_block(nir_block *block)
@@ -1851,6 +1938,8 @@ void nir_ssa_dest_init(nir_instr *instr, nir_dest *dest,
 void nir_ssa_def_init(nir_instr *instr, nir_ssa_def *def,
                       unsigned num_components, const char *name);
 void nir_ssa_def_rewrite_uses(nir_ssa_def *def, nir_src new_src);
+void nir_ssa_def_rewrite_uses_after(nir_ssa_def *def, nir_src new_src,
+                                    nir_instr *after_me);
 
 /* visits basic blocks in source-code order */
 typedef bool (*nir_foreach_block_cb)(nir_block *block, void *state);
@@ -1878,10 +1967,16 @@ void nir_index_blocks(nir_function_impl *impl);
 void nir_print_shader(nir_shader *shader, FILE *fp);
 void nir_print_instr(const nir_instr *instr, FILE *fp);
 
+nir_shader * nir_shader_clone(void *mem_ctx, const nir_shader *s);
+
 #ifdef DEBUG
 void nir_validate_shader(nir_shader *shader);
+void nir_metadata_set_validation_flag(nir_shader *shader);
+void nir_metadata_check_validation_flag(nir_shader *shader);
 #else
 static inline void nir_validate_shader(nir_shader *shader) { (void) shader; }
+static inline void nir_metadata_set_validation_flag(nir_shader *shader) { (void) shader; }
+static inline void nir_metadata_check_validation_flag(nir_shader *shader) { (void) shader; }
 #endif /* DEBUG */
 
 void nir_calc_dominance_impl(nir_function_impl *impl);
@@ -1912,6 +2007,10 @@ bool nir_lower_locals_to_regs(nir_shader *shader);
 
 void nir_lower_outputs_to_temporaries(nir_shader *shader);
 
+void nir_lower_outputs_to_temporaries(nir_shader *shader);
+
+void nir_shader_gather_info(nir_shader *shader, nir_function_impl *entrypoint);
+
 void nir_assign_var_locations(struct exec_list *var_list,
                               unsigned *size,
                               int (*type_size)(const struct glsl_type *));
@@ -1919,6 +2018,9 @@ void nir_assign_var_locations(struct exec_list *var_list,
 void nir_lower_io(nir_shader *shader,
                   nir_variable_mode mode,
                   int (*type_size)(const struct glsl_type *));
+nir_src *nir_get_io_indirect_src(nir_intrinsic_instr *instr);
+nir_src *nir_get_io_vertex_index_src(nir_intrinsic_instr *instr);
+
 void nir_lower_vars_to_ssa(nir_shader *shader);
 
 bool nir_remove_dead_variables(nir_shader *shader);
@@ -1966,9 +2068,22 @@ typedef struct nir_lower_tex_options {
    unsigned saturate_s;
    unsigned saturate_t;
    unsigned saturate_r;
+
+   /* Bitmask of samplers that need swizzling.
+    *
+    * If (swizzle_result & (1 << sampler_index)), then the swizzle in
+    * swizzles[sampler_index] is applied to the result of the texturing
+    * operation.
+    */
+   unsigned swizzle_result;
+
+   /* A swizzle for each sampler.  Values 0-3 represent x, y, z, or w swizzles
+    * while 4 and 5 represent 0 and 1 respectively.
+    */
+   uint8_t swizzles[32][4];
 } nir_lower_tex_options;
 
-void nir_lower_tex(nir_shader *shader,
+bool nir_lower_tex(nir_shader *shader,
                    const nir_lower_tex_options *options);
 
 void nir_lower_idiv(nir_shader *shader);
@@ -1986,7 +2101,7 @@ bool nir_lower_gs_intrinsics(nir_shader *shader);
 
 bool nir_normalize_cubemap_coords(nir_shader *shader);
 
-void nir_live_variables_impl(nir_function_impl *impl);
+void nir_live_ssa_defs_impl(nir_function_impl *impl);
 bool nir_ssa_defs_interfere(nir_ssa_def *a, nir_ssa_def *b);
 
 void nir_convert_to_ssa_impl(nir_function_impl *impl);
@@ -2004,12 +2119,10 @@ bool nir_opt_constant_folding(nir_shader *shader);
 
 bool nir_opt_global_to_local(nir_shader *shader);
 
-bool nir_copy_prop_impl(nir_function_impl *impl);
 bool nir_copy_prop(nir_shader *shader);
 
 bool nir_opt_cse(nir_shader *shader);
 
-bool nir_opt_dce_impl(nir_function_impl *impl);
 bool nir_opt_dce(nir_shader *shader);
 
 bool nir_opt_dead_cf(nir_shader *shader);
@@ -2017,7 +2130,6 @@ bool nir_opt_dead_cf(nir_shader *shader);
 void nir_opt_gcm(nir_shader *shader);
 
 bool nir_opt_peephole_select(nir_shader *shader);
-bool nir_opt_peephole_ffma(nir_shader *shader);
 
 bool nir_opt_remove_phis(nir_shader *shader);
 

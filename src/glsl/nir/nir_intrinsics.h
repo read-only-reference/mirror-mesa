@@ -91,6 +91,17 @@ BARRIER(memory_barrier)
  */
 INTRINSIC(shader_clock, 0, ARR(), true, 1, 0, 0, NIR_INTRINSIC_CAN_ELIMINATE)
 
+/*
+ * Memory barrier with semantics analogous to the compute shader
+ * groupMemoryBarrier(), memoryBarrierAtomicCounter(), memoryBarrierBuffer(),
+ * memoryBarrierImage() and memoryBarrierShared() GLSL intrinsics.
+ */
+BARRIER(group_memory_barrier)
+BARRIER(memory_barrier_atomic_counter)
+BARRIER(memory_barrier_buffer)
+BARRIER(memory_barrier_image)
+BARRIER(memory_barrier_shared)
+
 /** A conditional discard, with a single boolean source. */
 INTRINSIC(discard_if, 1, ARR(1), false, 0, 0, 0, 0)
 
@@ -165,6 +176,25 @@ INTRINSIC(image_samples, 0, ARR(), true, 1, 1, 0,
           NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
 
 /*
+ * Vulkan descriptor set intrinsic
+ *
+ * The Vulkan API uses a different binding model from GL.  In the Vulkan
+ * API, all external resources are represented by a tripple:
+ *
+ * (descriptor set, binding, array index)
+ *
+ * where the array index is the only thing allowed to be indirect.  The
+ * vulkan_surface_index intrinsic takes the descriptor set and binding as
+ * its first two indices and the array index as its source.  The third
+ * index is a nir_variable_mode in case that's useful to the backend.
+ *
+ * The intended usage is that the shader will call vulkan_surface_index to
+ * get an index and then pass that as the buffer index ubo/ssbo calls.
+ */
+INTRINSIC(vulkan_resource_index, 1, ARR(1), true, 1, 0, 3,
+          NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
+
+/*
  * SSBO atomic intrinsics
  *
  * All of the SSBO atomic memory operations read a value from memory,
@@ -214,14 +244,16 @@ SYSTEM_VALUE(local_invocation_id, 3, 0)
 SYSTEM_VALUE(work_group_id, 3, 0)
 SYSTEM_VALUE(user_clip_plane, 4, 1) /* const_index[0] is user_clip_plane[idx] */
 SYSTEM_VALUE(num_work_groups, 3, 0)
+SYSTEM_VALUE(helper_invocation, 1, 0)
 
 /*
  * The format of the indices depends on the type of the load.  For uniforms,
  * the first index is the base address and the second index is an offset that
  * should be added to the base address.  (This way you can determine in the
  * back-end which variable is being accessed even in an array.)  For inputs,
- * the one and only index corresponds to the attribute slot.  UBO loads also
- * have a single index which is the base address to load from.
+ * the one and only index corresponds to the attribute slot.  UBO loads
+ * have two indices the first of which is the descriptor set and the second
+ * is the base address to load from.
  *
  * UBO loads have a (possibly constant) source which is the UBO buffer index.
  * For each type of load, the _indirect variant has one additional source
@@ -240,10 +272,13 @@ SYSTEM_VALUE(num_work_groups, 3, 0)
              true, 0, 0, indices, flags)
 
 LOAD(uniform, 0, 2, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
-LOAD(ubo, 1, 1, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
+LOAD(ubo, 1, 2, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
 LOAD(input, 0, 1, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
 LOAD(per_vertex_input, 1, 1, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
 LOAD(ssbo, 1, 1, NIR_INTRINSIC_CAN_ELIMINATE)
+LOAD(output, 0, 1, NIR_INTRINSIC_CAN_ELIMINATE)
+LOAD(per_vertex_output, 1, 1, NIR_INTRINSIC_CAN_ELIMINATE)
+LOAD(push_constant, 0, 1, NIR_INTRINSIC_CAN_ELIMINATE | NIR_INTRINSIC_CAN_REORDER)
 
 /*
  * Stores work the same way as loads, except now the first register input is
@@ -261,6 +296,7 @@ LOAD(ssbo, 1, 1, NIR_INTRINSIC_CAN_ELIMINATE)
              false, 0, 0, 1 + extra_indices, flags)
 
 STORE(output, 0, 0, 0, 0)
+STORE(per_vertex_output, 1, 1, 0, 0)
 STORE(ssbo, 1, 1, 1, 0)
 
 LAST_INTRINSIC(store_ssbo_indirect)

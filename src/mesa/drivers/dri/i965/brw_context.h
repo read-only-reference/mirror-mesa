@@ -184,9 +184,7 @@ enum brw_state_id {
    BRW_STATE_CONTEXT,
    BRW_STATE_PSP,
    BRW_STATE_SURFACES,
-   BRW_STATE_VS_BINDING_TABLE,
-   BRW_STATE_GS_BINDING_TABLE,
-   BRW_STATE_PS_BINDING_TABLE,
+   BRW_STATE_BINDING_TABLE_POINTERS,
    BRW_STATE_INDICES,
    BRW_STATE_VERTICES,
    BRW_STATE_BATCH,
@@ -261,9 +259,7 @@ enum brw_state_id {
 #define BRW_NEW_CONTEXT                 (1ull << BRW_STATE_CONTEXT)
 #define BRW_NEW_PSP                     (1ull << BRW_STATE_PSP)
 #define BRW_NEW_SURFACES                (1ull << BRW_STATE_SURFACES)
-#define BRW_NEW_VS_BINDING_TABLE        (1ull << BRW_STATE_VS_BINDING_TABLE)
-#define BRW_NEW_GS_BINDING_TABLE        (1ull << BRW_STATE_GS_BINDING_TABLE)
-#define BRW_NEW_PS_BINDING_TABLE        (1ull << BRW_STATE_PS_BINDING_TABLE)
+#define BRW_NEW_BINDING_TABLE_POINTERS  (1ull << BRW_STATE_BINDING_TABLE_POINTERS)
 #define BRW_NEW_INDICES                 (1ull << BRW_STATE_INDICES)
 #define BRW_NEW_VERTICES                (1ull << BRW_STATE_VERTICES)
 /**
@@ -527,6 +523,8 @@ struct brw_tracked_state {
 enum shader_time_shader_type {
    ST_NONE,
    ST_VS,
+   ST_TCS,
+   ST_TES,
    ST_GS,
    ST_FS8,
    ST_FS16,
@@ -1172,7 +1170,7 @@ struct brw_context
 
    int num_atoms[BRW_NUM_PIPELINES];
    const struct brw_tracked_state render_atoms[60];
-   const struct brw_tracked_state compute_atoms[8];
+   const struct brw_tracked_state compute_atoms[9];
 
    /* If (INTEL_DEBUG & DEBUG_BATCH) */
    struct {
@@ -1469,6 +1467,8 @@ void brw_upload_image_surfaces(struct brw_context *brw,
 /* brw_surface_formats.c */
 bool brw_render_target_supported(struct brw_context *brw,
                                  struct gl_renderbuffer *rb);
+bool brw_losslessly_compressible_format(struct brw_context *brw,
+                                        uint32_t brw_format);
 uint32_t brw_depth_format(struct brw_context *brw, mesa_format format);
 mesa_format brw_lower_mesa_image_format(const struct brw_device_info *devinfo,
                                         mesa_format format);

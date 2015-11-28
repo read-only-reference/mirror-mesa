@@ -72,22 +72,6 @@ shader_perf_log_mesa(void *data, const char *fmt, ...)
    va_end(args);
 }
 
-bool
-is_scalar_shader_stage(const struct brw_compiler *compiler, int stage)
-{
-   switch (stage) {
-   case MESA_SHADER_FRAGMENT:
-   case MESA_SHADER_COMPUTE:
-      return true;
-   case MESA_SHADER_GEOMETRY:
-      return compiler->scalar_gs;
-   case MESA_SHADER_VERTEX:
-      return compiler->scalar_vs;
-   default:
-      return false;
-   }
-}
-
 struct brw_compiler *
 brw_compiler_create(void *mem_ctx, const struct brw_device_info *devinfo)
 {
@@ -100,11 +84,12 @@ brw_compiler_create(void *mem_ctx, const struct brw_device_info *devinfo)
    brw_fs_alloc_reg_sets(compiler);
    brw_vec4_alloc_reg_set(compiler);
 
-   if (devinfo->gen >= 8 && !(INTEL_DEBUG & DEBUG_VEC4VS))
-      compiler->scalar_vs = true;
-
-   if (devinfo->gen >= 8 && brw_env_var_as_boolean("INTEL_SCALAR_GS", false))
-      compiler->scalar_gs = true;
+   compiler->scalar_stage[MESA_SHADER_VERTEX] =
+      devinfo->gen >= 8 && !(INTEL_DEBUG & DEBUG_VEC4VS);
+   compiler->scalar_stage[MESA_SHADER_GEOMETRY] =
+      devinfo->gen >= 8 && brw_env_var_as_boolean("INTEL_SCALAR_GS", false);
+   compiler->scalar_stage[MESA_SHADER_FRAGMENT] = true;
+   compiler->scalar_stage[MESA_SHADER_COMPUTE] = true;
 
    nir_shader_compiler_options *nir_options =
       rzalloc(compiler, nir_shader_compiler_options);
@@ -115,6 +100,8 @@ brw_compiler_create(void *mem_ctx, const struct brw_device_info *devinfo)
     */
    nir_options->lower_ffma = true;
    nir_options->lower_sub = true;
+   nir_options->lower_fdiv = true;
+
    /* In the vec4 backend, our dpN instruction replicates its result to all
     * the components of a vec4.  We would like NIR to give us replicated fdot
     * instructions because it can optimize better for us.
@@ -137,7 +124,7 @@ brw_compiler_create(void *mem_ctx, const struct brw_device_info *devinfo)
       compiler->glsl_compiler_options[i].EmitNoIndirectUniform = false;
       compiler->glsl_compiler_options[i].LowerClipDistance = true;
 
-      bool is_scalar = is_scalar_shader_stage(compiler, i);
+      bool is_scalar = compiler->scalar_stage[i];
 
       compiler->glsl_compiler_options[i].EmitNoIndirectOutput = is_scalar;
       compiler->glsl_compiler_options[i].EmitNoIndirectTemp = is_scalar;
@@ -148,7 +135,12 @@ brw_compiler_create(void *mem_ctx, const struct brw_device_info *devinfo)
          compiler->glsl_compiler_options[i].EmitNoIndirectSampler = true;
 
       compiler->glsl_compiler_options[i].NirOptions = nir_options;
+
+      compiler->glsl_compiler_options[i].LowerBufferInterfaceBlocks = true;
    }
+
+   if (compiler->scalar_stage[MESA_SHADER_GEOMETRY])
+      compiler->glsl_compiler_options[MESA_SHADER_GEOMETRY].EmitNoIndirectInput = false;
 
    return compiler;
 }
@@ -207,6 +199,7 @@ brw_type_for_base_type(const struct glsl_type *type)
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
    case GLSL_TYPE_DOUBLE:
+   case GLSL_TYPE_FUNCTION:
       unreachable("not reached");
    }
 
@@ -288,7 +281,7 @@ const char *
 brw_instruction_name(enum opcode op)
 {
    switch (op) {
-   case BRW_OPCODE_MOV ... BRW_OPCODE_NOP:
+   case BRW_OPCODE_ILLEGAL ... BRW_OPCODE_NOP:
       assert(opcode_descs[op].name);
       return opcode_descs[op].name;
    case FS_OPCODE_FB_WRITE:
@@ -351,6 +344,10 @@ brw_instruction_name(enum opcode op)
       return "txf_cms";
    case SHADER_OPCODE_TXF_CMS_LOGICAL:
       return "txf_cms_logical";
+   case SHADER_OPCODE_TXF_CMS_W:
+      return "txf_cms_w";
+   case SHADER_OPCODE_TXF_CMS_W_LOGICAL:
+      return "txf_cms_w_logical";
    case SHADER_OPCODE_TXF_UMS:
       return "txf_ums";
    case SHADER_OPCODE_TXF_UMS_LOGICAL:
@@ -423,6 +420,8 @@ brw_instruction_name(enum opcode op)
       return "gen8_urb_write_simd8_masked_per_slot";
    case SHADER_OPCODE_URB_READ_SIMD8:
       return "urb_read_simd8";
+   case SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT:
+      return "urb_read_simd8_per_slot";
 
    case SHADER_OPCODE_FIND_LIVE_CHANNEL:
       return "find_live_channel";
@@ -546,6 +545,8 @@ brw_instruction_name(enum opcode op)
       return "barrier";
    case SHADER_OPCODE_MULH:
       return "mulh";
+   case SHADER_OPCODE_MOV_INDIRECT:
+      return "mov_indirect";
    }
 
    unreachable("not reached");
@@ -558,21 +559,17 @@ brw_saturate_immediate(enum brw_reg_type type, struct brw_reg *reg)
       unsigned ud;
       int d;
       float f;
-   } imm = { reg->dw1.ud }, sat_imm = { 0 };
+   } imm = { reg->ud }, sat_imm = { 0 };
 
    switch (type) {
    case BRW_REGISTER_TYPE_UD:
    case BRW_REGISTER_TYPE_D:
+   case BRW_REGISTER_TYPE_UW:
+   case BRW_REGISTER_TYPE_W:
    case BRW_REGISTER_TYPE_UQ:
    case BRW_REGISTER_TYPE_Q:
       /* Nothing to do. */
       return false;
-   case BRW_REGISTER_TYPE_UW:
-      sat_imm.ud = CLAMP(imm.ud, 0, USHRT_MAX);
-      break;
-   case BRW_REGISTER_TYPE_W:
-      sat_imm.d = CLAMP(imm.d, SHRT_MIN, SHRT_MAX);
-      break;
    case BRW_REGISTER_TYPE_F:
       sat_imm.f = CLAMP(imm.f, 0.0f, 1.0f);
       break;
@@ -589,7 +586,7 @@ brw_saturate_immediate(enum brw_reg_type type, struct brw_reg *reg)
    }
 
    if (imm.ud != sat_imm.ud) {
-      reg->dw1.ud = sat_imm.ud;
+      reg->ud = sat_imm.ud;
       return true;
    }
    return false;
@@ -601,17 +598,17 @@ brw_negate_immediate(enum brw_reg_type type, struct brw_reg *reg)
    switch (type) {
    case BRW_REGISTER_TYPE_D:
    case BRW_REGISTER_TYPE_UD:
-      reg->dw1.d = -reg->dw1.d;
+      reg->d = -reg->d;
       return true;
    case BRW_REGISTER_TYPE_W:
    case BRW_REGISTER_TYPE_UW:
-      reg->dw1.d = -(int16_t)reg->dw1.ud;
+      reg->d = -(int16_t)reg->ud;
       return true;
    case BRW_REGISTER_TYPE_F:
-      reg->dw1.f = -reg->dw1.f;
+      reg->f = -reg->f;
       return true;
    case BRW_REGISTER_TYPE_VF:
-      reg->dw1.ud ^= 0x80808080;
+      reg->ud ^= 0x80808080;
       return true;
    case BRW_REGISTER_TYPE_UB:
    case BRW_REGISTER_TYPE_B:
@@ -635,16 +632,16 @@ brw_abs_immediate(enum brw_reg_type type, struct brw_reg *reg)
 {
    switch (type) {
    case BRW_REGISTER_TYPE_D:
-      reg->dw1.d = abs(reg->dw1.d);
+      reg->d = abs(reg->d);
       return true;
    case BRW_REGISTER_TYPE_W:
-      reg->dw1.d = abs((int16_t)reg->dw1.ud);
+      reg->d = abs((int16_t)reg->ud);
       return true;
    case BRW_REGISTER_TYPE_F:
-      reg->dw1.f = fabsf(reg->dw1.f);
+      reg->f = fabsf(reg->f);
       return true;
    case BRW_REGISTER_TYPE_VF:
-      reg->dw1.ud &= ~0x80808080;
+      reg->ud &= ~0x80808080;
       return true;
    case BRW_REGISTER_TYPE_UB:
    case BRW_REGISTER_TYPE_B:
@@ -694,7 +691,7 @@ backend_reg::is_zero() const
    if (file != IMM)
       return false;
 
-   return fixed_hw_reg.dw1.d == 0;
+   return d == 0;
 }
 
 bool
@@ -704,8 +701,8 @@ backend_reg::is_one() const
       return false;
 
    return type == BRW_REGISTER_TYPE_F
-          ? fixed_hw_reg.dw1.f == 1.0
-          : fixed_hw_reg.dw1.d == 1;
+          ? f == 1.0
+          : d == 1;
 }
 
 bool
@@ -716,9 +713,9 @@ backend_reg::is_negative_one() const
 
    switch (type) {
    case BRW_REGISTER_TYPE_F:
-      return fixed_hw_reg.dw1.f == -1.0;
+      return f == -1.0;
    case BRW_REGISTER_TYPE_D:
-      return fixed_hw_reg.dw1.d == -1;
+      return d == -1;
    default:
       return false;
    }
@@ -727,25 +724,21 @@ backend_reg::is_negative_one() const
 bool
 backend_reg::is_null() const
 {
-   return file == HW_REG &&
-          fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE &&
-          fixed_hw_reg.nr == BRW_ARF_NULL;
+   return file == ARF && nr == BRW_ARF_NULL;
 }
 
 
 bool
 backend_reg::is_accumulator() const
 {
-   return file == HW_REG &&
-          fixed_hw_reg.file == BRW_ARCHITECTURE_REGISTER_FILE &&
-          fixed_hw_reg.nr == BRW_ARF_ACCUMULATOR;
+   return file == ARF && nr == BRW_ARF_ACCUMULATOR;
 }
 
 bool
 backend_reg::in_range(const backend_reg &r, unsigned n) const
 {
    return (file == r.file &&
-           reg == r.reg &&
+           nr == r.nr &&
            reg_offset >= r.reg_offset &&
            reg_offset < r.reg_offset + n);
 }
@@ -776,7 +769,7 @@ backend_instruction::is_commutative() const
 bool
 backend_instruction::is_3src() const
 {
-   return opcode < ARRAY_SIZE(opcode_descs) && opcode_descs[opcode].nsrc == 3;
+   return ::is_3src(opcode);
 }
 
 bool
@@ -787,6 +780,7 @@ backend_instruction::is_tex() const
            opcode == SHADER_OPCODE_TXD ||
            opcode == SHADER_OPCODE_TXF ||
            opcode == SHADER_OPCODE_TXF_CMS ||
+           opcode == SHADER_OPCODE_TXF_CMS_W ||
            opcode == SHADER_OPCODE_TXF_UMS ||
            opcode == SHADER_OPCODE_TXF_MCS ||
            opcode == SHADER_OPCODE_TXL ||

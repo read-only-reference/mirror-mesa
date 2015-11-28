@@ -87,6 +87,8 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
 
    this->extensions = &ctx->Extensions;
 
+   this->ARB_compute_shader_enable = true;
+
    this->Const.MaxLights = ctx->Const.MaxLights;
    this->Const.MaxClipPlanes = ctx->Const.MaxClipPlanes;
    this->Const.MaxTextureUnits = ctx->Const.MaxTextureUnits;
@@ -101,6 +103,8 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
    this->Const.MaxProgramTexelOffset = ctx->Const.MaxProgramTexelOffset;
 
    this->Const.MaxDrawBuffers = ctx->Const.MaxDrawBuffers;
+
+   this->Const.MaxDualSourceDrawBuffers = ctx->Const.MaxDualSourceDrawBuffers;
 
    /* 1.50 constants */
    this->Const.MaxVertexOutputComponents = ctx->Const.Program[MESA_SHADER_VERTEX].MaxOutputComponents;
@@ -594,6 +598,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(ARB_derivative_control,           true,  false,     ARB_derivative_control),
    EXT(ARB_draw_buffers,                 true,  false,     dummy_true),
    EXT(ARB_draw_instanced,               true,  false,     ARB_draw_instanced),
+   EXT(ARB_enhanced_layouts,             true,  false,     ARB_enhanced_layouts),
    EXT(ARB_explicit_attrib_location,     true,  false,     ARB_explicit_attrib_location),
    EXT(ARB_explicit_uniform_location,    true,  false,     ARB_explicit_uniform_location),
    EXT(ARB_fragment_coord_conventions,   true,  false,     ARB_fragment_coord_conventions),
@@ -633,7 +638,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
     */
    EXT(OES_EGL_image_external,         false, true,      OES_EGL_image_external),
    EXT(OES_standard_derivatives,       false, true,      OES_standard_derivatives),
-   EXT(OES_texture_3D,                 false, true,      EXT_texture3D),
+   EXT(OES_texture_3D,                 false, true,      dummy_true),
    EXT(OES_texture_storage_multisample_2d_array, false, true, ARB_texture_multisample),
 
    /* All other extensions go here, sorted alphabetically.
@@ -643,9 +648,11 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(AMD_shader_trinary_minmax,      true,  false,     dummy_true),
    EXT(AMD_vertex_shader_layer,        true,  false,     AMD_vertex_shader_layer),
    EXT(AMD_vertex_shader_viewport_index, true,  false,   AMD_vertex_shader_viewport_index),
+   EXT(EXT_blend_func_extended,        false,  true,     ARB_blend_func_extended),
    EXT(EXT_draw_buffers,               false,  true,     dummy_true),
    EXT(EXT_separate_shader_objects,    false, true,      dummy_true),
    EXT(EXT_shader_integer_mix,         true,  true,      EXT_shader_integer_mix),
+   EXT(EXT_shader_samples_identical,   true,  true,      EXT_shader_samples_identical),
    EXT(EXT_texture_array,              true,  false,     EXT_texture_array),
 };
 
@@ -1643,8 +1650,20 @@ set_shader_inout_layout(struct gl_shader *shader,
    switch (shader->Stage) {
    case MESA_SHADER_TESS_CTRL:
       shader->TessCtrl.VerticesOut = 0;
-      if (state->tcs_output_vertices_specified)
-         shader->TessCtrl.VerticesOut = state->out_qualifier->vertices;
+      if (state->tcs_output_vertices_specified) {
+         unsigned vertices;
+         if (state->out_qualifier->vertices->
+               process_qualifier_constant(state, "vertices", &vertices,
+                                          false)) {
+
+            YYLTYPE loc = state->out_qualifier->vertices->get_location();
+            if (vertices > state->Const.MaxPatchVertices) {
+               _mesa_glsl_error(&loc, state, "vertices (%d) exceeds "
+                                "GL_MAX_PATCH_VERTICES", vertices);
+            }
+            shader->TessCtrl.VerticesOut = vertices;
+         }
+      }
       break;
    case MESA_SHADER_TESS_EVAL:
       shader->TessEval.PrimitiveMode = PRIM_UNKNOWN;
@@ -1665,8 +1684,14 @@ set_shader_inout_layout(struct gl_shader *shader,
       break;
    case MESA_SHADER_GEOMETRY:
       shader->Geom.VerticesOut = 0;
-      if (state->out_qualifier->flags.q.max_vertices)
-         shader->Geom.VerticesOut = state->out_qualifier->max_vertices;
+      if (state->out_qualifier->flags.q.max_vertices) {
+         unsigned qual_max_vertices;
+         if (state->out_qualifier->max_vertices->
+               process_qualifier_constant(state, "max_vertices",
+                                          &qual_max_vertices, true)) {
+            shader->Geom.VerticesOut = qual_max_vertices;
+         }
+      }
 
       if (state->gs_input_prim_type_specified) {
          shader->Geom.InputType = state->in_qualifier->prim_type;
@@ -1681,8 +1706,22 @@ set_shader_inout_layout(struct gl_shader *shader,
       }
 
       shader->Geom.Invocations = 0;
-      if (state->in_qualifier->flags.q.invocations)
-         shader->Geom.Invocations = state->in_qualifier->invocations;
+      if (state->in_qualifier->flags.q.invocations) {
+         unsigned invocations;
+         if (state->in_qualifier->invocations->
+               process_qualifier_constant(state, "invocations",
+                                          &invocations, false)) {
+
+            YYLTYPE loc = state->in_qualifier->invocations->get_location();
+            if (invocations > MAX_GEOMETRY_SHADER_INVOCATIONS) {
+               _mesa_glsl_error(&loc, state,
+                                "invocations (%d) exceeds "
+                                "GL_MAX_GEOMETRY_SHADER_INVOCATIONS",
+                                invocations);
+            }
+            shader->Geom.Invocations = invocations;
+         }
+      }
       break;
 
    case MESA_SHADER_COMPUTE:
@@ -1794,15 +1833,15 @@ _mesa_glsl_compile_shader(struct gl_context *ctx, struct gl_shader *shader,
    if (shader->InfoLog)
       ralloc_free(shader->InfoLog);
 
+   if (!state->error)
+      set_shader_inout_layout(shader, state);
+
    shader->symbols = new(shader->ir) glsl_symbol_table;
    shader->CompileStatus = !state->error;
    shader->InfoLog = state->info_log;
    shader->Version = state->language_version;
    shader->IsES = state->es_shader;
    shader->uses_builtin_functions = state->uses_builtin_functions;
-
-   if (!state->error)
-      set_shader_inout_layout(shader, state);
 
    /* Retain any live IR, but trash the rest. */
    reparent_ir(shader->ir, shader->ir);

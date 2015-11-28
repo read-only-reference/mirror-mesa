@@ -174,6 +174,7 @@ intelInitExtensions(struct gl_context *ctx)
 
    assert(brw->gen >= 4);
 
+   ctx->Extensions.ARB_arrays_of_arrays = true;
    ctx->Extensions.ARB_buffer_storage = true;
    ctx->Extensions.ARB_clear_texture = true;
    ctx->Extensions.ARB_clip_control = true;
@@ -332,6 +333,7 @@ intelInitExtensions(struct gl_context *ctx)
       ctx->Extensions.ARB_texture_compression_bptc = true;
       ctx->Extensions.ARB_texture_view = true;
       ctx->Extensions.ARB_shader_storage_buffer_object = true;
+      ctx->Extensions.EXT_shader_samples_identical = true;
 
       if (can_do_pipelined_register_writes(brw)) {
          ctx->Extensions.ARB_draw_indirect = true;

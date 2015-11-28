@@ -541,6 +541,7 @@ type_size(const struct glsl_type *type)
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
+   case GLSL_TYPE_FUNCTION:
       assert(!"Invalid type in type_size");
       break;
    }
@@ -1919,6 +1920,8 @@ ir_to_mesa_visitor::visit(ir_texture *ir)
    case ir_query_levels:
       assert(!"Unexpected ir_query_levels opcode");
       break;
+   case ir_samples_identical:
+      unreachable("Unexpected ir_samples_identical opcode");
    case ir_texture_samples:
       unreachable("Unexpected ir_texture_samples opcode");
    }
@@ -2466,6 +2469,7 @@ _mesa_associate_uniform_storage(struct gl_context *ctx,
          case GLSL_TYPE_STRUCT:
          case GLSL_TYPE_ERROR:
          case GLSL_TYPE_INTERFACE:
+         case GLSL_TYPE_FUNCTION:
 	    assert(!"Should not get here.");
 	    break;
 	 }

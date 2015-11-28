@@ -3236,6 +3236,8 @@ glsl_to_tgsi_visitor::visit(ir_texture *ir)
    case ir_texture_samples:
       opcode = TGSI_OPCODE_TXQS;
       break;
+   case ir_samples_identical:
+      unreachable("Unexpected ir_samples_identical opcode");
    }
 
    if (ir->projector) {
@@ -4408,6 +4410,7 @@ const unsigned _mesa_sysval_to_semantic[SYSTEM_VALUE_MAX] = {
    TGSI_SEMANTIC_SAMPLEID,
    TGSI_SEMANTIC_SAMPLEPOS,
    TGSI_SEMANTIC_SAMPLEMASK,
+   TGSI_SEMANTIC_HELPER_INVOCATION,
 
    /* Tessellation shaders
     */
@@ -5138,6 +5141,8 @@ st_translate_program(
           TGSI_SEMANTIC_BASEVERTEX);
    assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_TESS_COORD] ==
           TGSI_SEMANTIC_TESSCOORD);
+   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_HELPER_INVOCATION] ==
+          TGSI_SEMANTIC_HELPER_INVOCATION);
 
    t = CALLOC_STRUCT(st_translate);
    if (!t) {
@@ -5822,7 +5827,6 @@ st_link_shader(struct gl_context *ctx, struct gl_shader_program *prog)
                          (!ctx->Const.NativeIntegers ? INT_DIV_TO_MUL_RCP : 0) |
                          (options->EmitNoSat ? SAT_TO_CLAMP : 0));
 
-      lower_ubo_reference(prog->_LinkedShaders[i], ir);
       do_vec_index_to_cond_assign(ir);
       lower_vector_insert(ir, true);
       lower_quadop_vector(ir, false);

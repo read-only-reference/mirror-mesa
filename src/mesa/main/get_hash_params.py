@@ -330,6 +330,9 @@ descriptor=[
 
 # GL_KHR_context_flush_control
   [ "CONTEXT_RELEASE_BEHAVIOR", "CONTEXT_ENUM(Const.ContextReleaseBehavior), NO_EXTRA" ],
+
+# blend_func_extended
+  [ "MAX_DUAL_SOURCE_DRAW_BUFFERS", "CONTEXT_INT(Const.MaxDualSourceDrawBuffers), extra_ARB_blend_func_extended" ],
 ]},
 
 # GLES3 is not a typo.
@@ -460,6 +463,7 @@ descriptor=[
   [ "MAX_COMPUTE_UNIFORM_COMPONENTS", "CONST(MAX_COMPUTE_UNIFORM_COMPONENTS), extra_ARB_compute_shader_es31" ],
   [ "MAX_COMPUTE_IMAGE_UNIFORMS", "CONST(MAX_COMPUTE_IMAGE_UNIFORMS), extra_ARB_compute_shader_es31" ],
   [ "DISPATCH_INDIRECT_BUFFER_BINDING", "LOC_CUSTOM, TYPE_INT, 0, extra_ARB_compute_shader_es31" ],
+  [ "MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS", "CONTEXT_INT(Const.Program[MESA_SHADER_COMPUTE].MaxCombinedUniformComponents), extra_ARB_compute_shader_es31" ],
 
 # GL_ARB_framebuffer_no_attachments / GLES 3.1
   ["MAX_FRAMEBUFFER_WIDTH", "CONTEXT_INT(Const.MaxFramebufferWidth), extra_ARB_framebuffer_no_attachments"],
@@ -800,7 +804,6 @@ descriptor=[
 # GL_ARB_robustness
   [ "RESET_NOTIFICATION_STRATEGY_ARB", "CONTEXT_ENUM(Const.ResetStrategy), NO_EXTRA" ],
 
-  [ "MAX_DUAL_SOURCE_DRAW_BUFFERS", "CONTEXT_INT(Const.MaxDualSourceDrawBuffers), extra_ARB_blend_func_extended" ],
 
 # GL_ARB_uniform_buffer_object
   [ "MAX_GEOMETRY_UNIFORM_BLOCKS", "CONTEXT_INT(Const.Program[MESA_SHADER_GEOMETRY].MaxUniformBlocks), extra_ARB_uniform_buffer_object_and_geometry_shader" ],

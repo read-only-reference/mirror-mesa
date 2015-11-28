@@ -322,18 +322,19 @@ protected:
  * Variable storage classes
  */
 enum ir_variable_mode {
-   ir_var_auto = 0,     /**< Function local variables and globals. */
-   ir_var_uniform,      /**< Variable declared as a uniform. */
-   ir_var_shader_storage,   /**< Variable declared as an ssbo. */
+   ir_var_auto = 0,             /**< Function local variables and globals. */
+   ir_var_uniform,              /**< Variable declared as a uniform. */
+   ir_var_shader_storage,       /**< Variable declared as an ssbo. */
+   ir_var_shader_shared,        /**< Variable declared as shared. */
    ir_var_shader_in,
    ir_var_shader_out,
    ir_var_function_in,
    ir_var_function_out,
    ir_var_function_inout,
-   ir_var_const_in,	/**< "in" param that must be a constant expression */
-   ir_var_system_value, /**< Ex: front-face, instance-id, etc. */
-   ir_var_temporary,	/**< Temporary variable generated during compilation. */
-   ir_var_mode_count	/**< Number of variable modes */
+   ir_var_const_in,             /**< "in" param that must be a constant expression */
+   ir_var_system_value,         /**< Ex: front-face, instance-id, etc. */
+   ir_var_temporary,            /**< Temporary variable generated during compilation. */
+   ir_var_mode_count            /**< Number of variable modes */
 };
 
 /**
@@ -770,6 +771,19 @@ public:
       unsigned index:1;
 
       /**
+       * Precision qualifier.
+       *
+       * In desktop GLSL we do not care about precision qualifiers at all, in
+       * fact, the spec says that precision qualifiers are ignored.
+       *
+       * To make things easy, we make it so that this field is always
+       * GLSL_PRECISION_NONE on desktop shaders. This way all the variables
+       * have the same precision value and the checks we add in the compiler
+       * for this field will never break a desktop shader compile.
+       */
+      unsigned precision:2;
+
+      /**
        * \brief Layout qualifier for gl_FragDepth.
        *
        * This is not equal to \c ir_depth_layout_none if and only if this
@@ -1157,6 +1171,8 @@ public:
     */
    int num_subroutine_types;
    const struct glsl_type **subroutine_types;
+
+   int subroutine_index;
 };
 
 inline const char *ir_function_signature::function_name() const
@@ -1951,6 +1967,7 @@ enum ir_texture_opcode {
    ir_tg4,		/**< Texture gather */
    ir_query_levels,     /**< Texture levels query */
    ir_texture_samples,  /**< Texture samples query */
+   ir_samples_identical, /**< Query whether all samples are definitely identical. */
 };
 
 
@@ -1977,6 +1994,7 @@ enum ir_texture_opcode {
  * (lod <type> <sampler> <coordinate>)
  * (tg4 <type> <sampler> <coordinate> <offset> <component>)
  * (query_levels <type> <sampler>)
+ * (samples_identical <sampler> <coordinate>)
  */
 class ir_texture : public ir_rvalue {
 public:

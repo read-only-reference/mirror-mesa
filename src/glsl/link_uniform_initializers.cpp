@@ -88,6 +88,7 @@ copy_constant_to_storage(union gl_constant_value *storage,
       case GLSL_TYPE_IMAGE:
       case GLSL_TYPE_ATOMIC_UINT:
       case GLSL_TYPE_INTERFACE:
+      case GLSL_TYPE_FUNCTION:
       case GLSL_TYPE_VOID:
       case GLSL_TYPE_SUBROUTINE:
       case GLSL_TYPE_ERROR:
@@ -178,7 +179,7 @@ set_block_binding(gl_shader_program *prog, const char *block_name, int binding)
 
       /* This is a field of a UBO.  val is the binding index. */
       for (int i = 0; i < MESA_SHADER_STAGES; i++) {
-         int stage_index = prog->UniformBlockStageIndex[i][block_index];
+         int stage_index = prog->InterfaceBlockStageIndex[i][block_index];
 
          if (stage_index != -1) {
             struct gl_shader *sh = prog->_LinkedShaders[i];

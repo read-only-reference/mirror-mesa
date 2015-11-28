@@ -661,12 +661,33 @@ _mesa_program_resource_index(struct gl_shader_program *shProg,
    switch (res->Type) {
    case GL_ATOMIC_COUNTER_BUFFER:
       return RESOURCE_ATC(res) - shProg->AtomicBuffers;
+   case GL_VERTEX_SUBROUTINE:
+   case GL_GEOMETRY_SUBROUTINE:
+   case GL_FRAGMENT_SUBROUTINE:
+   case GL_COMPUTE_SUBROUTINE:
+   case GL_TESS_CONTROL_SUBROUTINE:
+   case GL_TESS_EVALUATION_SUBROUTINE:
+      return RESOURCE_SUB(res)->index;
    case GL_UNIFORM_BLOCK:
    case GL_SHADER_STORAGE_BLOCK:
    case GL_TRANSFORM_FEEDBACK_VARYING:
    default:
       return calc_resource_index(shProg, res);
    }
+}
+
+/**
+ * Find a program resource that points to given data.
+ */
+static struct gl_program_resource*
+program_resource_find_data(struct gl_shader_program *shProg, void *data)
+{
+   struct gl_program_resource *res = shProg->ProgramResourceList;
+   for (unsigned i = 0; i < shProg->NumProgramResourceList; i++, res++) {
+      if (res->Data == data)
+         return res;
+   }
+   return NULL;
 }
 
 /* Find a program resource with specific index in given interface.
@@ -966,7 +987,7 @@ is_resource_referenced(struct gl_shader_program *shProg,
       return RESOURCE_ATC(res)->StageReferences[stage];
 
    if (res->Type == GL_UNIFORM_BLOCK || res->Type == GL_SHADER_STORAGE_BLOCK)
-      return shProg->UniformBlockStageIndex[stage][index] != -1;
+      return shProg->InterfaceBlockStageIndex[stage][index] != -1;
 
    return res->StageReferences & (1 << stage);
 }
@@ -1066,8 +1087,18 @@ get_buffer_property(struct gl_shader_program *shProg,
          *val = RESOURCE_ATC(res)->NumUniforms;
          return 1;
       case GL_ACTIVE_VARIABLES:
-         for (unsigned i = 0; i < RESOURCE_ATC(res)->NumUniforms; i++)
-            *val++ = RESOURCE_ATC(res)->Uniforms[i];
+         for (unsigned i = 0; i < RESOURCE_ATC(res)->NumUniforms; i++) {
+            /* Active atomic buffer contains index to UniformStorage. Find
+             * out gl_program_resource via data pointer and then calculate
+             * index of that uniform.
+             */
+            unsigned idx = RESOURCE_ATC(res)->Uniforms[i];
+            struct gl_program_resource *uni =
+               program_resource_find_data(shProg,
+                                          &shProg->UniformStorage[idx]);
+            assert(uni);
+            *val++ = _mesa_program_resource_index(shProg, uni);
+         }
          return RESOURCE_ATC(res)->NumUniforms;
       }
    }
@@ -1334,4 +1365,76 @@ _mesa_get_program_resourceiv(struct gl_shader_program *shProg,
     */
    if (length)
       *length = amount;
+}
+
+static bool
+validate_io(const struct gl_shader *input_stage,
+            const struct gl_shader *output_stage)
+{
+   assert(input_stage && output_stage);
+
+   /* For each output in a, find input in b and do any required checks. */
+   foreach_in_list(ir_instruction, out, input_stage->ir) {
+      ir_variable *out_var = out->as_variable();
+      if (!out_var || out_var->data.mode != ir_var_shader_out)
+         continue;
+
+      foreach_in_list(ir_instruction, in, output_stage->ir) {
+         ir_variable *in_var = in->as_variable();
+         if (!in_var || in_var->data.mode != ir_var_shader_in)
+            continue;
+
+         if (strcmp(in_var->name, out_var->name) == 0) {
+            /* From OpenGL ES 3.1 spec:
+             *     "When both shaders are in separate programs, mismatched
+             *     precision qualifiers will result in a program interface
+             *     mismatch that will result in program pipeline validation
+             *     failures, as described in section 7.4.1 (“Shader Interface
+             *     Matching”) of the OpenGL ES 3.1 Specification."
+             */
+            if (in_var->data.precision != out_var->data.precision)
+               return false;
+         }
+      }
+   }
+   return true;
+}
+
+/**
+ * Validate inputs against outputs in a program pipeline.
+ */
+extern "C" bool
+_mesa_validate_pipeline_io(struct gl_pipeline_object *pipeline)
+{
+   struct gl_shader_program **shProg =
+      (struct gl_shader_program **) pipeline->CurrentProgram;
+
+   /* Find first active stage in pipeline. */
+   unsigned idx, prev = 0;
+   for (idx = 0; idx < ARRAY_SIZE(pipeline->CurrentProgram); idx++) {
+      if (shProg[idx]) {
+         prev = idx;
+         break;
+      }
+   }
+
+   for (idx = prev + 1; idx < ARRAY_SIZE(pipeline->CurrentProgram); idx++) {
+      if (shProg[idx]) {
+         /* Since we now only validate precision, we can skip this step for
+          * desktop GLSL shaders, there precision qualifier is ignored.
+          *
+          * From OpenGL 4.50 Shading Language spec, section 4.7:
+          *     "For the purposes of determining if an output from one shader
+          *     stage matches an input of the next stage, the precision
+          *     qualifier need not match."
+          */
+         if (shProg[prev]->IsES || shProg[idx]->IsES) {
+            if (!validate_io(shProg[prev]->_LinkedShaders[prev],
+                             shProg[idx]->_LinkedShaders[idx]))
+               return false;
+         }
+         prev = idx;
+      }
+   }
+   return true;
 }

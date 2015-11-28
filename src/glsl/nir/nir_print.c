@@ -448,8 +448,12 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
    case nir_intrinsic_load_per_vertex_input_indirect:
       var_list = &state->shader->inputs;
       break;
+   case nir_intrinsic_load_output:
+   case nir_intrinsic_load_output_indirect:
    case nir_intrinsic_store_output:
    case nir_intrinsic_store_output_indirect:
+   case nir_intrinsic_store_per_vertex_output:
+   case nir_intrinsic_store_per_vertex_output_indirect:
       var_list = &state->shader->outputs;
       break;
    default:
@@ -508,7 +512,9 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
    case nir_texop_texture_samples:
       fprintf(fp, "texture_samples ");
       break;
-
+   case nir_texop_samples_identical:
+      fprintf(fp, "samples_identical ");
+      break;
    default:
       unreachable("Invalid texture operation");
       break;
@@ -547,6 +553,9 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
       case nir_tex_src_ddy:
          fprintf(fp, "(ddy)");
          break;
+      case nir_tex_src_texture_offset:
+         fprintf(fp, "(texture_offset)");
+         break;
       case nir_tex_src_sampler_offset:
          fprintf(fp, "(sampler_offset)");
          break;
@@ -577,13 +586,18 @@ print_tex_instr(nir_tex_instr *instr, print_state *state)
       fprintf(fp, "%u (gather_component), ", instr->component);
    }
 
+   if (instr->texture) {
+      assert(instr->sampler);
+      fprintf(fp, " (texture)");
+   }
    if (instr->sampler) {
       print_deref(instr->sampler, state);
+      fprintf(fp, " (sampler)");
    } else {
-      fprintf(fp, "%u", instr->sampler_index);
+      assert(instr->texture == NULL);
+      fprintf(fp, "%u (texture) %u (sampler)",
+              instr->texture_index, instr->sampler_index);
    }
-
-   fprintf(fp, " (sampler)");
 }
 
 static void
@@ -972,6 +986,16 @@ nir_print_shader(nir_shader *shader, FILE *fp)
    init_print_state(&state, shader, fp);
 
    fprintf(fp, "shader: %s\n", gl_shader_stage_name(shader->stage));
+
+   if (shader->info.name)
+      fprintf(fp, "name: %s\n", shader->info.name);
+
+   if (shader->info.label)
+      fprintf(fp, "label: %s\n", shader->info.label);
+
+   fprintf(fp, "inputs: %u\n", shader->num_inputs);
+   fprintf(fp, "outputs: %u\n", shader->num_outputs);
+   fprintf(fp, "uniforms: %u\n", shader->num_uniforms);
 
    nir_foreach_variable(var, &shader->uniforms) {
       print_var_decl(var, &state);

@@ -144,7 +144,7 @@ TEST_F(copy_propagation_test, test_swizzle_swizzle)
 
    copy_propagation(v);
 
-   EXPECT_EQ(test_mov->src[0].reg, a.reg);
+   EXPECT_EQ(test_mov->src[0].nr, a.nr);
    EXPECT_EQ(test_mov->src[0].swizzle, BRW_SWIZZLE4(SWIZZLE_Z,
                                                     SWIZZLE_W,
                                                     SWIZZLE_X,
@@ -162,7 +162,7 @@ TEST_F(copy_propagation_test, test_swizzle_writemask)
                                                       SWIZZLE_X,
                                                       SWIZZLE_Z))));
 
-   v->emit(v->MOV(writemask(a, WRITEMASK_XYZ), src_reg(1.0f)));
+   v->emit(v->MOV(writemask(a, WRITEMASK_XYZ), brw_imm_f(1.0f)));
 
    vec4_instruction *test_mov =
       v->MOV(c, swizzle(src_reg(b), BRW_SWIZZLE4(SWIZZLE_W,
@@ -174,7 +174,7 @@ TEST_F(copy_propagation_test, test_swizzle_writemask)
    copy_propagation(v);
 
    /* should not copy propagate */
-   EXPECT_EQ(test_mov->src[0].reg, b.reg);
+   EXPECT_EQ(test_mov->src[0].nr, b.nr);
    EXPECT_EQ(test_mov->src[0].swizzle, BRW_SWIZZLE4(SWIZZLE_W,
                                                     SWIZZLE_W,
                                                     SWIZZLE_W,

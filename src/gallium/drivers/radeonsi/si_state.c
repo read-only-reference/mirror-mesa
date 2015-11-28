@@ -248,7 +248,7 @@ static unsigned si_pack_float_12p4(float x)
  */
 static void si_emit_cb_target_mask(struct si_context *sctx, struct r600_atom *atom)
 {
-	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	struct si_state_blend *blend = sctx->queued.named.blend;
 	uint32_t mask = 0, i;
 
@@ -265,7 +265,7 @@ static void si_emit_cb_target_mask(struct si_context *sctx, struct r600_atom *at
 	 *
 	 * Reproducible with Unigine Heaven 4.0 and drirc missing.
 	 */
-	if (blend->dual_src_blend &&
+	if (blend && blend->dual_src_blend &&
 	    sctx->ps_shader.cso &&
 	    (sctx->ps_shader.cso->ps_colors_written & 0x3) != 0x3)
 		mask = 0;
@@ -454,7 +454,7 @@ static void si_set_blend_color(struct pipe_context *ctx,
 
 static void si_emit_blend_color(struct si_context *sctx, struct r600_atom *atom)
 {
-	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 
 	radeon_set_context_reg_seq(cs, R_028414_CB_BLEND_RED, 4);
 	radeon_emit_array(cs, (uint32_t*)sctx->blend_color.state.color, 4);
@@ -486,7 +486,7 @@ static void si_set_clip_state(struct pipe_context *ctx,
 
 static void si_emit_clip_state(struct si_context *sctx, struct r600_atom *atom)
 {
-	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 
 	radeon_set_context_reg_seq(cs, R_0285BC_PA_CL_UCP_0_X, 6*4);
 	radeon_emit_array(cs, (uint32_t*)sctx->clip_state.state.ucp, 6*4);
@@ -496,7 +496,7 @@ static void si_emit_clip_state(struct si_context *sctx, struct r600_atom *atom)
 
 static void si_emit_clip_regs(struct si_context *sctx, struct r600_atom *atom)
 {
-	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	struct tgsi_shader_info *info = si_get_vs_info(sctx);
 	unsigned window_space =
 	   info->properties[TGSI_PROPERTY_VS_WINDOW_SPACE_POSITION];
@@ -541,7 +541,7 @@ static void si_set_scissor_states(struct pipe_context *ctx,
 
 static void si_emit_scissors(struct si_context *sctx, struct r600_atom *atom)
 {
-	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	struct pipe_scissor_state *states = sctx->scissors.states;
 	unsigned mask = sctx->scissors.dirty_mask;
 
@@ -593,7 +593,7 @@ static void si_set_viewport_states(struct pipe_context *ctx,
 
 static void si_emit_viewports(struct si_context *sctx, struct r600_atom *atom)
 {
-	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	struct pipe_viewport_state *states = sctx->viewports.states;
 	unsigned mask = sctx->viewports.dirty_mask;
 
@@ -830,7 +830,7 @@ static void si_delete_rs_state(struct pipe_context *ctx, void *state)
  */
 static void si_emit_stencil_ref(struct si_context *sctx, struct r600_atom *atom)
 {
-	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	struct pipe_stencil_ref *ref = &sctx->stencil_ref.state;
 	struct si_dsa_stencil_ref_part *dsa = &sctx->stencil_ref.dsa_part;
 
@@ -989,7 +989,7 @@ static void si_set_occlusion_query_state(struct pipe_context *ctx, bool enable)
 
 static void si_emit_db_render_state(struct si_context *sctx, struct r600_atom *state)
 {
-	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	struct si_state_rasterizer *rs = sctx->queued.named.rasterizer;
 	unsigned db_shader_control;
 
@@ -2125,8 +2125,8 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 	 * Flush all CB and DB caches here because all buffers can be used
 	 * for write by both TC (with shader image stores) and CB/DB.
 	 */
-	sctx->b.flags |= SI_CONTEXT_INV_TC_L1 |
-			 SI_CONTEXT_INV_TC_L2 |
+	sctx->b.flags |= SI_CONTEXT_INV_VMEM_L1 |
+			 SI_CONTEXT_INV_GLOBAL_L2 |
 			 SI_CONTEXT_FLUSH_AND_INV_FRAMEBUFFER;
 
 	/* Take the maximum of the old and new count. If the new count is lower,
@@ -2233,7 +2233,7 @@ static void si_set_framebuffer_state(struct pipe_context *ctx,
 
 static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom *atom)
 {
-	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	struct pipe_framebuffer_state *state = &sctx->framebuffer.state;
 	unsigned i, nr_cbufs = state->nr_cbufs;
 	struct r600_texture *tex = NULL;
@@ -2252,20 +2252,20 @@ static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom 
 		}
 
 		tex = (struct r600_texture *)cb->base.texture;
-		radeon_add_to_buffer_list(&sctx->b, &sctx->b.rings.gfx,
+		radeon_add_to_buffer_list(&sctx->b, &sctx->b.gfx,
 				      &tex->resource, RADEON_USAGE_READWRITE,
 				      tex->surface.nsamples > 1 ?
 					      RADEON_PRIO_COLOR_BUFFER_MSAA :
 					      RADEON_PRIO_COLOR_BUFFER);
 
 		if (tex->cmask_buffer && tex->cmask_buffer != &tex->resource) {
-			radeon_add_to_buffer_list(&sctx->b, &sctx->b.rings.gfx,
+			radeon_add_to_buffer_list(&sctx->b, &sctx->b.gfx,
 				tex->cmask_buffer, RADEON_USAGE_READWRITE,
 				RADEON_PRIO_CMASK);
 		}
 
 		if (tex->dcc_buffer && tex->dcc_buffer != &tex->resource) {
-			radeon_add_to_buffer_list(&sctx->b, &sctx->b.rings.gfx,
+			radeon_add_to_buffer_list(&sctx->b, &sctx->b.gfx,
 				tex->dcc_buffer, RADEON_USAGE_READWRITE,
 				RADEON_PRIO_DCC);
 		}
@@ -2305,14 +2305,14 @@ static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom 
 		struct r600_surface *zb = (struct r600_surface*)state->zsbuf;
 		struct r600_texture *rtex = (struct r600_texture*)zb->base.texture;
 
-		radeon_add_to_buffer_list(&sctx->b, &sctx->b.rings.gfx,
+		radeon_add_to_buffer_list(&sctx->b, &sctx->b.gfx,
 				      &rtex->resource, RADEON_USAGE_READWRITE,
 				      zb->base.texture->nr_samples > 1 ?
 					      RADEON_PRIO_DEPTH_BUFFER_MSAA :
 					      RADEON_PRIO_DEPTH_BUFFER);
 
 		if (zb->db_htile_data_base) {
-			radeon_add_to_buffer_list(&sctx->b, &sctx->b.rings.gfx,
+			radeon_add_to_buffer_list(&sctx->b, &sctx->b.gfx,
 					      rtex->htile_buffer, RADEON_USAGE_READWRITE,
 					      RADEON_PRIO_HTILE);
 		}
@@ -2354,7 +2354,7 @@ static void si_emit_framebuffer_state(struct si_context *sctx, struct r600_atom 
 static void si_emit_msaa_sample_locs(struct si_context *sctx,
 				     struct r600_atom *atom)
 {
-	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	unsigned nr_samples = sctx->framebuffer.nr_samples;
 
 	cayman_emit_msaa_sample_locs(cs, nr_samples > 1 ? nr_samples :
@@ -2363,7 +2363,7 @@ static void si_emit_msaa_sample_locs(struct si_context *sctx,
 
 static void si_emit_msaa_config(struct si_context *sctx, struct r600_atom *atom)
 {
-	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 
 	cayman_emit_msaa_config(cs, sctx->framebuffer.nr_samples,
 				sctx->ps_iter_samples,
@@ -2846,7 +2846,7 @@ static void si_set_sample_mask(struct pipe_context *ctx, unsigned sample_mask)
 
 static void si_emit_sample_mask(struct si_context *sctx, struct r600_atom *atom)
 {
-	struct radeon_winsys_cs *cs = sctx->b.rings.gfx.cs;
+	struct radeon_winsys_cs *cs = sctx->b.gfx.cs;
 	unsigned mask = sctx->sample_mask.sample_mask;
 
 	radeon_set_context_reg_seq(cs, R_028C38_PA_SC_AA_MASK_X0Y0_X1Y0, 2);
@@ -3044,8 +3044,8 @@ static void si_texture_barrier(struct pipe_context *ctx)
 {
 	struct si_context *sctx = (struct si_context *)ctx;
 
-	sctx->b.flags |= SI_CONTEXT_INV_TC_L1 |
-			 SI_CONTEXT_INV_TC_L2 |
+	sctx->b.flags |= SI_CONTEXT_INV_VMEM_L1 |
+			 SI_CONTEXT_INV_GLOBAL_L2 |
 			 SI_CONTEXT_FLUSH_AND_INV_CB;
 }
 
@@ -3069,6 +3069,7 @@ static void si_init_config(struct si_context *sctx);
 
 void si_init_state_functions(struct si_context *sctx)
 {
+	si_init_external_atom(sctx, &sctx->b.render_cond_atom, &sctx->atoms.s.render_cond);
 	si_init_external_atom(sctx, &sctx->b.streamout.begin_atom, &sctx->atoms.s.streamout_begin);
 	si_init_external_atom(sctx, &sctx->b.streamout.enable_atom, &sctx->atoms.s.streamout_enable);
 
@@ -3255,25 +3256,34 @@ si_write_harvested_raster_configs(struct si_context *sctx,
 			}
 		}
 
-		/* GRBM_GFX_INDEX is privileged on VI */
-		if (sctx->b.chip_class <= CIK)
+		/* GRBM_GFX_INDEX has a different offset on SI and CI+ */
+		if (sctx->b.chip_class < CIK)
 			si_pm4_set_reg(pm4, GRBM_GFX_INDEX,
 				       SE_INDEX(se) | SH_BROADCAST_WRITES |
 				       INSTANCE_BROADCAST_WRITES);
+		else
+			si_pm4_set_reg(pm4, R_030800_GRBM_GFX_INDEX,
+				       S_030800_SE_INDEX(se) | S_030800_SH_BROADCAST_WRITES(1) |
+				       S_030800_INSTANCE_BROADCAST_WRITES(1));
 		si_pm4_set_reg(pm4, R_028350_PA_SC_RASTER_CONFIG, raster_config_se);
 		if (sctx->b.chip_class >= CIK)
 			si_pm4_set_reg(pm4, R_028354_PA_SC_RASTER_CONFIG_1, raster_config_1);
 	}
 
-	/* GRBM_GFX_INDEX is privileged on VI */
-	if (sctx->b.chip_class <= CIK)
+	/* GRBM_GFX_INDEX has a different offset on SI and CI+ */
+	if (sctx->b.chip_class < CIK)
 		si_pm4_set_reg(pm4, GRBM_GFX_INDEX,
 			       SE_BROADCAST_WRITES | SH_BROADCAST_WRITES |
 			       INSTANCE_BROADCAST_WRITES);
+	else
+		si_pm4_set_reg(pm4, R_030800_GRBM_GFX_INDEX,
+			       S_030800_SE_BROADCAST_WRITES(1) | S_030800_SH_BROADCAST_WRITES(1) |
+			       S_030800_INSTANCE_BROADCAST_WRITES(1));
 }
 
 static void si_init_config(struct si_context *sctx)
 {
+	struct si_screen *sscreen = sctx->screen;
 	unsigned num_rb = MIN2(sctx->screen->b.info.r600_num_backends, 16);
 	unsigned rb_mask = sctx->screen->b.info.si_backend_enabled_mask;
 	unsigned raster_config, raster_config_1;
@@ -3344,9 +3354,14 @@ static void si_init_config(struct si_context *sctx)
 		raster_config_1 = 0x0000002e;
 		break;
 	case CHIP_FIJI:
-		/* Fiji should be same as Hawaii, but that causes corruption in some cases */
-		raster_config = 0x16000012; /* 0x3a00161a */
-		raster_config_1 = 0x0000002a; /* 0x0000002e */
+		if (sscreen->b.info.cik_macrotile_mode_array[0] == 0x000000e8) {
+			/* old kernels with old tiling config */
+			raster_config = 0x16000012;
+			raster_config_1 = 0x0000002a;
+		} else {
+			raster_config = 0x3a00161a;
+			raster_config_1 = 0x0000002e;
+		}
 		break;
 	case CHIP_TONGA:
 		raster_config = 0x16000012;
@@ -3443,6 +3458,9 @@ static void si_init_config(struct si_context *sctx)
 		si_pm4_set_reg(pm4, R_028C58_VGT_VERTEX_REUSE_BLOCK_CNTL, 30);
 		si_pm4_set_reg(pm4, R_028C5C_VGT_OUT_DEALLOC_CNTL, 32);
 	}
+
+	if (sctx->b.family == CHIP_STONEY)
+		si_pm4_set_reg(pm4, R_028754_SX_PS_DOWNCONVERT, 0);
 
 	si_pm4_set_reg(pm4, R_028080_TA_BC_BASE_ADDR, border_color_va >> 8);
 	if (sctx->b.chip_class >= CIK)

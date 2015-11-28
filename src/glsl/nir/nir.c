@@ -107,6 +107,10 @@ void
 nir_shader_add_variable(nir_shader *shader, nir_variable *var)
 {
    switch (var->data.mode) {
+   case nir_var_all:
+      assert(!"invalid mode");
+      break;
+
    case nir_var_local:
       assert(!"nir_shader_add_variable cannot be used for local variables");
       break;
@@ -302,9 +306,9 @@ nir_function_impl_create(nir_function_overload *overload)
 }
 
 nir_block *
-nir_block_create(void *mem_ctx)
+nir_block_create(nir_shader *shader)
 {
-   nir_block *block = ralloc(mem_ctx, nir_block);
+   nir_block *block = ralloc(shader, nir_block);
 
    cf_init(&block->cf_node, nir_cf_node_block);
 
@@ -312,6 +316,14 @@ nir_block_create(void *mem_ctx)
    block->predecessors = _mesa_set_create(block, _mesa_hash_pointer,
                                           _mesa_key_pointer_equal);
    block->imm_dom = NULL;
+   /* XXX maybe it would be worth it to defer allocation?  This
+    * way it doesn't get allocated for shader ref's that never run
+    * nir_calc_dominance?  For example, state-tracker creates an
+    * initial IR, clones that, runs appropriate lowering pass, passes
+    * to driver which does common lowering/opt, and then stores ref
+    * which is later used to do state specific lowering and futher
+    * opt.  Do any of the references not need dominance metadata?
+    */
    block->dom_frontier = _mesa_set_create(block, _mesa_hash_pointer,
                                           _mesa_key_pointer_equal);
 
@@ -330,19 +342,19 @@ src_init(nir_src *src)
 }
 
 nir_if *
-nir_if_create(void *mem_ctx)
+nir_if_create(nir_shader *shader)
 {
-   nir_if *if_stmt = ralloc(mem_ctx, nir_if);
+   nir_if *if_stmt = ralloc(shader, nir_if);
 
    cf_init(&if_stmt->cf_node, nir_cf_node_if);
    src_init(&if_stmt->condition);
 
-   nir_block *then = nir_block_create(mem_ctx);
+   nir_block *then = nir_block_create(shader);
    exec_list_make_empty(&if_stmt->then_list);
    exec_list_push_tail(&if_stmt->then_list, &then->cf_node.node);
    then->cf_node.parent = &if_stmt->cf_node;
 
-   nir_block *else_stmt = nir_block_create(mem_ctx);
+   nir_block *else_stmt = nir_block_create(shader);
    exec_list_make_empty(&if_stmt->else_list);
    exec_list_push_tail(&if_stmt->else_list, &else_stmt->cf_node.node);
    else_stmt->cf_node.parent = &if_stmt->cf_node;
@@ -351,13 +363,13 @@ nir_if_create(void *mem_ctx)
 }
 
 nir_loop *
-nir_loop_create(void *mem_ctx)
+nir_loop_create(nir_shader *shader)
 {
-   nir_loop *loop = ralloc(mem_ctx, nir_loop);
+   nir_loop *loop = ralloc(shader, nir_loop);
 
    cf_init(&loop->cf_node, nir_cf_node_loop);
 
-   nir_block *body = nir_block_create(mem_ctx);
+   nir_block *body = nir_block_create(shader);
    exec_list_make_empty(&loop->body);
    exec_list_push_tail(&loop->body, &body->cf_node.node);
    body->cf_node.parent = &loop->cf_node;
@@ -488,8 +500,10 @@ nir_tex_instr_create(nir_shader *shader, unsigned num_srcs)
    for (unsigned i = 0; i < num_srcs; i++)
       src_init(&instr->src[i].src);
 
+   instr->texture_index = 0;
+   instr->texture_array_size = 0;
+   instr->texture = NULL;
    instr->sampler_index = 0;
-   instr->sampler_array_size = 0;
    instr->sampler = NULL;
 
    return instr;
@@ -1007,6 +1021,10 @@ visit_tex_src(nir_tex_instr *instr, nir_foreach_src_cb cb, void *state)
       if (!visit_src(&instr->src[i].src, cb, state))
          return false;
 
+   if (instr->texture != NULL)
+      if (!visit_deref_src(instr->texture, cb, state))
+         return false;
+
    if (instr->sampler != NULL)
       if (!visit_deref_src(instr->sampler, cb, state))
          return false;
@@ -1300,21 +1318,62 @@ nir_ssa_def_rewrite_uses(nir_ssa_def *def, nir_src new_src)
 {
    assert(!new_src.is_ssa || def != new_src.ssa);
 
-   nir_foreach_use_safe(def, use_src) {
-      nir_instr *src_parent_instr = use_src->parent_instr;
-      list_del(&use_src->use_link);
-      nir_src_copy(use_src, &new_src, src_parent_instr);
-      src_add_all_uses(use_src, src_parent_instr, NULL);
-   }
+   nir_foreach_use_safe(def, use_src)
+      nir_instr_rewrite_src(use_src->parent_instr, use_src, new_src);
 
-   nir_foreach_if_use_safe(def, use_src) {
-      nir_if *src_parent_if = use_src->parent_if;
-      list_del(&use_src->use_link);
-      nir_src_copy(use_src, &new_src, src_parent_if);
-      src_add_all_uses(use_src, NULL, src_parent_if);
-   }
+   nir_foreach_if_use_safe(def, use_src)
+      nir_if_rewrite_condition(use_src->parent_if, new_src);
 }
 
+static bool
+is_instr_between(nir_instr *start, nir_instr *end, nir_instr *between)
+{
+   assert(start->block == end->block);
+
+   if (between->block != start->block)
+      return false;
+
+   /* Search backwards looking for "between" */
+   while (start != end) {
+      if (between == end)
+         return true;
+
+      end = nir_instr_prev(end);
+      assert(end);
+   }
+
+   return false;
+}
+
+/* Replaces all uses of the given SSA def with the given source but only if
+ * the use comes after the after_me instruction.  This can be useful if you
+ * are emitting code to fix up the result of some instruction: you can freely
+ * use the result in that code and then call rewrite_uses_after and pass the
+ * last fixup instruction as after_me and it will replace all of the uses you
+ * want without touching the fixup code.
+ *
+ * This function assumes that after_me is in the same block as
+ * def->parent_instr and that after_me comes after def->parent_instr.
+ */
+void
+nir_ssa_def_rewrite_uses_after(nir_ssa_def *def, nir_src new_src,
+                               nir_instr *after_me)
+{
+   assert(!new_src.is_ssa || def != new_src.ssa);
+
+   nir_foreach_use_safe(def, use_src) {
+      assert(use_src->parent_instr != def->parent_instr);
+      /* Since def already dominates all of its uses, the only way a use can
+       * not be dominated by after_me is if it is between def and after_me in
+       * the instruction list.
+       */
+      if (!is_instr_between(def->parent_instr, after_me, use_src->parent_instr))
+         nir_instr_rewrite_src(use_src->parent_instr, use_src, new_src);
+   }
+
+   nir_foreach_if_use_safe(def, use_src)
+      nir_if_rewrite_condition(use_src->parent_if, new_src);
+}
 
 static bool foreach_cf_node(nir_cf_node *node, nir_foreach_block_cb cb,
                             bool reverse, void *state);
@@ -1565,6 +1624,8 @@ nir_intrinsic_from_system_value(gl_system_value val)
       return nir_intrinsic_load_tess_level_inner;
    case SYSTEM_VALUE_VERTICES_IN:
       return nir_intrinsic_load_patch_vertices_in;
+   case SYSTEM_VALUE_HELPER_INVOCATION:
+      return nir_intrinsic_load_helper_invocation;
    default:
       unreachable("system value does not directly correspond to intrinsic");
    }
@@ -1608,6 +1669,8 @@ nir_system_value_from_intrinsic(nir_intrinsic_op intrin)
       return SYSTEM_VALUE_TESS_LEVEL_INNER;
    case nir_intrinsic_load_patch_vertices_in:
       return SYSTEM_VALUE_VERTICES_IN;
+   case nir_intrinsic_load_helper_invocation:
+      return SYSTEM_VALUE_HELPER_INVOCATION;
    default:
       unreachable("intrinsic doesn't produce a system value");
    }

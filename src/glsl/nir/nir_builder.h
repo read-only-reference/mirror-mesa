@@ -59,6 +59,20 @@ nir_builder_cf_insert(nir_builder *build, nir_cf_node *cf)
 }
 
 static inline nir_ssa_def *
+nir_ssa_undef(nir_builder *build, unsigned num_components)
+{
+   nir_ssa_undef_instr *undef =
+      nir_ssa_undef_instr_create(build->shader, num_components);
+   if (!undef)
+      return NULL;
+
+   nir_instr_insert(nir_before_block(nir_start_block(build->impl)),
+                    &undef->instr);
+
+   return &undef->def;
+}
+
+static inline nir_ssa_def *
 nir_build_imm(nir_builder *build, unsigned num_components, nir_const_value value)
 {
    nir_load_const_instr *load_const =
@@ -242,11 +256,28 @@ nir_swizzle(nir_builder *build, nir_ssa_def *src, unsigned swiz[4],
 {
    nir_alu_src alu_src = { NIR_SRC_INIT };
    alu_src.src = nir_src_for_ssa(src);
-   for (int i = 0; i < 4; i++)
+   for (unsigned i = 0; i < num_components; i++)
       alu_src.swizzle[i] = swiz[i];
 
    return use_fmov ? nir_fmov_alu(build, alu_src, num_components) :
                      nir_imov_alu(build, alu_src, num_components);
+}
+
+/* Selects the right fdot given the number of components in each source. */
+static inline nir_ssa_def *
+nir_fdot(nir_builder *build, nir_ssa_def *src0, nir_ssa_def *src1)
+{
+   assert(src0->num_components == src1->num_components);
+   switch (src0->num_components) {
+   case 1: return nir_fmul(build, src0, src1);
+   case 2: return nir_fdot2(build, src0, src1);
+   case 3: return nir_fdot3(build, src0, src1);
+   case 4: return nir_fdot4(build, src0, src1);
+   default:
+      unreachable("bad component size");
+   }
+
+   return NULL;
 }
 
 static inline nir_ssa_def *
@@ -259,6 +290,8 @@ nir_channel(nir_builder *b, nir_ssa_def *def, unsigned c)
 /**
  * Turns a nir_src into a nir_ssa_def * so it can be passed to
  * nir_build_alu()-based builder calls.
+ *
+ * See nir_ssa_for_alu_src() for alu instructions.
  */
 static inline nir_ssa_def *
 nir_ssa_for_src(nir_builder *build, nir_src src, int num_components)
@@ -272,6 +305,25 @@ nir_ssa_for_src(nir_builder *build, nir_src src, int num_components)
       alu.swizzle[j] = j;
 
    return nir_imov_alu(build, alu, num_components);
+}
+
+/**
+ * Similar to nir_ssa_for_src(), but for alu src's, respecting the
+ * nir_alu_src's swizzle.
+ */
+static inline nir_ssa_def *
+nir_ssa_for_alu_src(nir_builder *build, nir_alu_instr *instr, unsigned srcn)
+{
+   static uint8_t trivial_swizzle[4] = { 0, 1, 2, 3 };
+   nir_alu_src *src = &instr->src[srcn];
+   unsigned num_components = nir_ssa_alu_instr_src_components(instr, srcn);
+
+   if (src->src.is_ssa && (src->src.ssa->num_components == num_components) &&
+       !src->abs && !src->negate &&
+       (memcmp(src->swizzle, trivial_swizzle, num_components) == 0))
+      return src->src.ssa;
+
+   return nir_imov_alu(build, *src, num_components);
 }
 
 static inline nir_ssa_def *

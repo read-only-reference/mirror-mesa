@@ -703,18 +703,10 @@ dri2_wl_swap_buffers_with_damage(_EGLDriver *drv,
    dri2_surf->dx = 0;
    dri2_surf->dy = 0;
 
-   if (n_rects == 0) {
-      wl_surface_damage(dri2_surf->wl_win->surface,
-                        0, 0, INT32_MAX, INT32_MAX);
-   } else {
-      for (i = 0; i < n_rects; i++) {
-         const int *rect = &rects[i * 4];
-         wl_surface_damage(dri2_surf->wl_win->surface,
-                           rect[0],
-                           dri2_surf->base.Height - rect[1] - rect[3],
-                           rect[2], rect[3]);
-      }
-   }
+   /* We deliberately ignore the damage region and post maximum damage, due to
+    * https://bugs.freedesktop.org/78190 */
+   wl_surface_damage(dri2_surf->wl_win->surface,
+                     0, 0, INT32_MAX, INT32_MAX);
 
    if (dri2_dpy->is_different_gpu) {
       _EGLContext *ctx = _eglGetCurrentContext();
@@ -1033,6 +1025,7 @@ static struct dri2_egl_display_vtbl dri2_wl_display_vtbl = {
    .query_buffer_age = dri2_wl_query_buffer_age,
    .create_wayland_buffer_from_image = dri2_wl_create_wayland_buffer_from_image,
    .get_sync_values = dri2_fallback_get_sync_values,
+   .get_dri_drawable = dri2_surface_get_dri_drawable,
 };
 
 static EGLBoolean
@@ -1760,6 +1753,7 @@ static struct dri2_egl_display_vtbl dri2_wl_swrast_display_vtbl = {
    .query_buffer_age = dri2_fallback_query_buffer_age,
    .create_wayland_buffer_from_image = dri2_fallback_create_wayland_buffer_from_image,
    .get_sync_values = dri2_fallback_get_sync_values,
+   .get_dri_drawable = dri2_surface_get_dri_drawable,
 };
 
 static EGLBoolean

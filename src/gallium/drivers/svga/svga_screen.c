@@ -383,6 +383,7 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
    case PIPE_CAP_SHAREABLE_SHADERS:
    case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
+   case PIPE_CAP_CLEAR_TEXTURE:
       return 0;
    }
 
@@ -788,6 +789,8 @@ svga_get_driver_query_info(struct pipe_screen *screen,
       {"map-buffer-time", SVGA_QUERY_MAP_BUFFER_TIME, {0},
        PIPE_DRIVER_QUERY_TYPE_MICROSECONDS},
       {"num-resources-mapped", SVGA_QUERY_NUM_RESOURCES_MAPPED, {0}},
+      {"num-bytes-uploaded", SVGA_QUERY_NUM_BYTES_UPLOADED, {0},
+       PIPE_DRIVER_QUERY_TYPE_BYTES, PIPE_DRIVER_QUERY_RESULT_TYPE_AVERAGE},
 
       /* running total counters */
       {"memory-used", SVGA_QUERY_MEMORY_USED, {0},
