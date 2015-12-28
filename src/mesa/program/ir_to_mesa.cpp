@@ -541,7 +541,6 @@ type_size(const struct glsl_type *type)
    case GLSL_TYPE_VOID:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
-   case GLSL_TYPE_FUNCTION:
       assert(!"Invalid type in type_size");
       break;
    }
@@ -1114,7 +1113,13 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
       if (ir->operands[0]->type->is_vector() ||
 	  ir->operands[1]->type->is_vector()) {
 	 src_reg temp = get_temp(glsl_type::vec4_type);
-	 emit(ir, OPCODE_SNE, dst_reg(temp), op[0], op[1]);
+         if (ir->operands[0]->type->is_boolean() &&
+             ir->operands[1]->as_constant() &&
+             ir->operands[1]->as_constant()->is_zero()) {
+            temp = op[0];
+         } else {
+            emit(ir, OPCODE_SNE, dst_reg(temp), op[0], op[1]);
+         }
 
 	 /* After the dot-product, the value will be an integer on the
 	  * range [0,4].  Zero stays zero, and positive values become 1.0.
@@ -1139,32 +1144,6 @@ ir_to_mesa_visitor::visit(ir_expression *ir)
 	 emit(ir, OPCODE_SNE, result_dst, op[0], op[1]);
       }
       break;
-
-   case ir_unop_any: {
-      assert(ir->operands[0]->type->is_vector());
-
-      /* After the dot-product, the value will be an integer on the
-       * range [0,4].  Zero stays zero, and positive values become 1.0.
-       */
-      ir_to_mesa_instruction *const dp =
-	 emit_dp(ir, result_dst, op[0], op[0],
-		 ir->operands[0]->type->vector_elements);
-      if (this->prog->Target == GL_FRAGMENT_PROGRAM_ARB) {
-	 /* The clamping to [0,1] can be done for free in the fragment
-	  * shader with a saturate.
-	  */
-	 dp->saturate = true;
-      } else {
-	 /* Negating the result of the dot-product gives values on the range
-	  * [-4, 0].  Zero stays zero, and negative values become 1.0.  This
-	  * is achieved using SLT.
-	  */
-	 src_reg slt_src = result_src;
-	 slt_src.negate = ~slt_src.negate;
-	 emit(ir, OPCODE_SLT, result_dst, slt_src, src_reg_for_float(0.0));
-      }
-      break;
-   }
 
    case ir_binop_logic_xor:
       emit(ir, OPCODE_SNE, result_dst, op[0], op[1]);
@@ -2469,7 +2448,6 @@ _mesa_associate_uniform_storage(struct gl_context *ctx,
          case GLSL_TYPE_STRUCT:
          case GLSL_TYPE_ERROR:
          case GLSL_TYPE_INTERFACE:
-         case GLSL_TYPE_FUNCTION:
 	    assert(!"Should not get here.");
 	    break;
 	 }

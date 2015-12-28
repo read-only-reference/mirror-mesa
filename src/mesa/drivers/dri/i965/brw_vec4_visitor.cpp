@@ -23,8 +23,8 @@
 
 #include "brw_vec4.h"
 #include "brw_cfg.h"
-#include "glsl/ir_uniform.h"
-#include "program/sampler.h"
+#include "brw_eu.h"
+#include "brw_program.h"
 
 namespace brw {
 
@@ -622,7 +622,6 @@ type_size_vec4(const struct glsl_type *type)
    case GLSL_TYPE_DOUBLE:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
-   case GLSL_TYPE_FUNCTION:
       unreachable("not reached");
    }
 
@@ -878,8 +877,6 @@ vec4_visitor::emit_texture(ir_texture_opcode op,
                            src_reg offset_value,
                            src_reg mcs,
                            bool is_cube_array,
-                           uint32_t surface,
-                           src_reg surface_reg,
                            uint32_t sampler,
                            src_reg sampler_reg)
 {
@@ -945,8 +942,7 @@ vec4_visitor::emit_texture(ir_texture_opcode op,
    inst->dst.writemask = WRITEMASK_XYZW;
    inst->shadow_compare = shadow_comparitor.file != BAD_FILE;
 
-   inst->src[1] = surface_reg;
-   inst->src[2] = sampler_reg;
+   inst->src[1] = sampler_reg;
 
    /* MRF for the first parameter */
    int param_base = inst->base_mrf + inst->header_size;
@@ -1072,7 +1068,7 @@ vec4_visitor::emit_texture(ir_texture_opcode op,
    }
 
    if (devinfo->gen == 6 && op == ir_tg4) {
-      emit_gen6_gather_wa(key_tex->gen6_gather_wa[surface], inst->dst);
+      emit_gen6_gather_wa(key_tex->gen6_gather_wa[sampler], inst->dst);
    }
 
    if (op == ir_query_levels) {
@@ -1476,24 +1472,16 @@ vec4_visitor::get_pull_constant_offset(bblock_t * block, vec4_instruction *inst,
       src_reg index = src_reg(this, glsl_type::int_type);
 
       emit_before(block, inst, ADD(dst_reg(index), *reladdr,
-                                   brw_imm_d(reg_offset)));
-
-      /* Pre-gen6, the message header uses byte offsets instead of vec4
-       * (16-byte) offset units.
-       */
-      if (devinfo->gen < 6) {
-         emit_before(block, inst, MUL(dst_reg(index), index, brw_imm_d(16)));
-      }
+                                   brw_imm_d(reg_offset * 16)));
 
       return index;
    } else if (devinfo->gen >= 8) {
       /* Store the offset in a GRF so we can send-from-GRF. */
       src_reg offset = src_reg(this, glsl_type::int_type);
-      emit_before(block, inst, MOV(dst_reg(offset), brw_imm_d(reg_offset)));
+      emit_before(block, inst, MOV(dst_reg(offset), brw_imm_d(reg_offset * 16)));
       return offset;
    } else {
-      int message_header_scale = devinfo->gen < 6 ? 16 : 1;
-      return brw_imm_d(reg_offset * message_header_scale);
+      return brw_imm_d(reg_offset * 16);
    }
 }
 

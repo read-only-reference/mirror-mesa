@@ -27,11 +27,10 @@
  * native instructions.
  */
 
-#include "main/macros.h"
-#include "brw_context.h"
 #include "brw_eu.h"
 #include "brw_fs.h"
 #include "brw_cfg.h"
+#include "brw_program.h"
 
 static enum brw_reg_file
 brw_file_from_reg(fs_reg *reg)
@@ -92,7 +91,7 @@ brw_reg_from_fs_reg(fs_inst *inst, fs_reg *reg, unsigned gen)
    case ARF:
    case FIXED_GRF:
    case IMM:
-      brw_reg = *static_cast<struct brw_reg *>(reg);
+      brw_reg = reg->as_brw_reg();
       break;
    case BAD_FILE:
       /* Probably unused. */
@@ -679,7 +678,6 @@ fs_generator::generate_get_buffer_size(fs_inst *inst,
 
 void
 fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src,
-                           struct brw_reg surface_index,
                            struct brw_reg sampler_index)
 {
    int msg_type = -1;
@@ -927,16 +925,14 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
          ? prog_data->binding_table.gather_texture_start
          : prog_data->binding_table.texture_start;
 
-   if (surface_index.file == BRW_IMMEDIATE_VALUE &&
-       sampler_index.file == BRW_IMMEDIATE_VALUE) {
-      uint32_t surface = surface_index.ud;
+   if (sampler_index.file == BRW_IMMEDIATE_VALUE) {
       uint32_t sampler = sampler_index.ud;
 
       brw_SAMPLE(p,
                  retype(dst, BRW_REGISTER_TYPE_UW),
                  inst->base_mrf,
                  src,
-                 surface + base_binding_table_index,
+                 sampler + base_binding_table_index,
                  sampler % 16,
                  msg_type,
                  rlen,
@@ -945,24 +941,19 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
                  simd_mode,
                  return_format);
 
-      brw_mark_surface_used(prog_data, surface + base_binding_table_index);
+      brw_mark_surface_used(prog_data, sampler + base_binding_table_index);
    } else {
       /* Non-const sampler index */
 
       struct brw_reg addr = vec1(retype(brw_address_reg(0), BRW_REGISTER_TYPE_UD));
-      struct brw_reg surface_reg = vec1(retype(surface_index, BRW_REGISTER_TYPE_UD));
       struct brw_reg sampler_reg = vec1(retype(sampler_index, BRW_REGISTER_TYPE_UD));
 
       brw_push_insn_state(p);
       brw_set_default_mask_control(p, BRW_MASK_DISABLE);
       brw_set_default_access_mode(p, BRW_ALIGN_1);
 
-      if (memcmp(&surface_reg, &sampler_reg, sizeof(surface_reg)) == 0) {
-         brw_MUL(p, addr, sampler_reg, brw_imm_uw(0x101));
-      } else {
-         brw_SHL(p, addr, sampler_reg, brw_imm_ud(8));
-         brw_OR(p, addr, addr, surface_reg);
-      }
+      /* addr = ((sampler * 0x101) + base_binding_table_index) & 0xfff */
+      brw_MUL(p, addr, sampler_reg, brw_imm_uw(0x101));
       if (base_binding_table_index)
          brw_ADD(p, addr, addr, brw_imm_ud(base_binding_table_index));
       brw_AND(p, addr, addr, brw_imm_ud(0xfff));
@@ -2071,7 +2062,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
       case SHADER_OPCODE_TG4:
       case SHADER_OPCODE_TG4_OFFSET:
       case SHADER_OPCODE_SAMPLEINFO:
-	 generate_tex(inst, dst, src[0], src[1], src[2]);
+	 generate_tex(inst, dst, src[0], src[1]);
 	 break;
       case FS_OPCODE_DDX_COARSE:
       case FS_OPCODE_DDX_FINE:

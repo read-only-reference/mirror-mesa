@@ -27,26 +27,8 @@
  * makes it easier to do backend-specific optimizations than doing so
  * in the GLSL IR or in the native code.
  */
-#include <sys/types.h>
-
-#include "main/macros.h"
-#include "main/shaderobj.h"
-#include "program/prog_parameter.h"
-#include "program/prog_print.h"
-#include "program/prog_optimize.h"
-#include "util/register_allocate.h"
-#include "program/hash_table.h"
-#include "brw_context.h"
-#include "brw_eu.h"
-#include "brw_wm.h"
-#include "brw_cs.h"
-#include "brw_vec4.h"
-#include "brw_vec4_gs_visitor.h"
 #include "brw_fs.h"
-#include "main/uniforms.h"
 #include "glsl/nir/glsl_types.h"
-#include "glsl/ir_optimization.h"
-#include "program/sampler.h"
 
 using namespace brw;
 
@@ -61,9 +43,14 @@ fs_visitor::emit_vs_system_value(int location)
    switch (location) {
    case SYSTEM_VALUE_BASE_VERTEX:
       reg->reg_offset = 0;
-      vs_prog_data->uses_vertexid = true;
+      vs_prog_data->uses_basevertex = true;
+      break;
+   case SYSTEM_VALUE_BASE_INSTANCE:
+      reg->reg_offset = 1;
+      vs_prog_data->uses_baseinstance = true;
       break;
    case SYSTEM_VALUE_VERTEX_ID:
+      unreachable("should have been lowered");
    case SYSTEM_VALUE_VERTEX_ID_ZERO_BASE:
       reg->reg_offset = 2;
       vs_prog_data->uses_vertexid = true;
@@ -71,6 +58,16 @@ fs_visitor::emit_vs_system_value(int location)
    case SYSTEM_VALUE_INSTANCE_ID:
       reg->reg_offset = 3;
       vs_prog_data->uses_instanceid = true;
+      break;
+   case SYSTEM_VALUE_DRAW_ID:
+      if (nir->info.system_values_read &
+          (BITFIELD64_BIT(SYSTEM_VALUE_BASE_VERTEX) |
+           BITFIELD64_BIT(SYSTEM_VALUE_BASE_INSTANCE) |
+           BITFIELD64_BIT(SYSTEM_VALUE_VERTEX_ID_ZERO_BASE) |
+           BITFIELD64_BIT(SYSTEM_VALUE_INSTANCE_ID)))
+         reg->nr += 4;
+      reg->reg_offset = 0;
+      vs_prog_data->uses_drawid = true;
       break;
    default:
       unreachable("not reached");
@@ -82,12 +79,12 @@ fs_visitor::emit_vs_system_value(int location)
 /* Sample from the MCS surface attached to this multisample texture. */
 fs_reg
 fs_visitor::emit_mcs_fetch(const fs_reg &coordinate, unsigned components,
-                           const fs_reg &texture)
+                           const fs_reg &sampler)
 {
    const fs_reg dest = vgrf(glsl_type::uvec4_type);
    const fs_reg srcs[] = {
       coordinate, fs_reg(), fs_reg(), fs_reg(), fs_reg(), fs_reg(),
-      texture, texture, fs_reg(), brw_imm_ud(components), brw_imm_d(0)
+      sampler, fs_reg(), brw_imm_ud(components), brw_imm_d(0)
    };
    fs_inst *inst = bld.emit(SHADER_OPCODE_TXF_MCS_LOGICAL, dest, srcs,
                             ARRAY_SIZE(srcs));
@@ -111,8 +108,6 @@ fs_visitor::emit_texture(ir_texture_opcode op,
                          fs_reg mcs,
                          int gather_component,
                          bool is_cube_array,
-                         uint32_t surface,
-                         fs_reg surface_reg,
                          uint32_t sampler,
                          fs_reg sampler_reg)
 {
@@ -152,7 +147,7 @@ fs_visitor::emit_texture(ir_texture_opcode op,
    fs_reg dst = vgrf(glsl_type::get_instance(dest_type->base_type, 4, 1));
    const fs_reg srcs[] = {
       coordinate, shadow_c, lod, lod2,
-      sample_index, mcs, surface_reg, sampler_reg, offset_value,
+      sample_index, mcs, sampler_reg, offset_value,
       brw_imm_d(coord_components), brw_imm_d(grad_components)
    };
    enum opcode opcode;
@@ -205,7 +200,7 @@ fs_visitor::emit_texture(ir_texture_opcode op,
 
    if (op == ir_tg4) {
       if (gather_component == 1 &&
-          key_tex->gather_channel_quirk_mask & (1 << surface)) {
+          key_tex->gather_channel_quirk_mask & (1 << sampler)) {
          /* gather4 sampler is broken for green channel on RG32F --
           * we must ask for blue instead.
           */
@@ -215,7 +210,7 @@ fs_visitor::emit_texture(ir_texture_opcode op,
       }
 
       if (devinfo->gen == 6)
-         emit_gen6_gather_wa(key_tex->gen6_gather_wa[surface], dst);
+         emit_gen6_gather_wa(key_tex->gen6_gather_wa[sampler], dst);
    }
 
    /* fixup #layers for cube map arrays */
@@ -718,6 +713,12 @@ fs_visitor::emit_urb_writes(const fs_reg &gs_vertex_count)
    const struct brw_vue_map *vue_map = &vue_prog_data->vue_map;
    bool flush;
    fs_reg sources[8];
+   fs_reg urb_handle;
+
+   if (stage == MESA_SHADER_TESS_EVAL)
+      urb_handle = fs_reg(retype(brw_vec8_grf(4, 0), BRW_REGISTER_TYPE_UD));
+   else
+      urb_handle = fs_reg(retype(brw_vec8_grf(1, 0), BRW_REGISTER_TYPE_UD));
 
    /* If we don't have any valid slots to write, just do a minimal urb write
     * send to terminate the shader.  This includes 1 slot of undefined data,
@@ -731,8 +732,7 @@ fs_visitor::emit_urb_writes(const fs_reg &gs_vertex_count)
     */
    if (vue_map->slots_valid == 0) {
       fs_reg payload = fs_reg(VGRF, alloc.allocate(2), BRW_REGISTER_TYPE_UD);
-      bld.exec_all().MOV(payload, fs_reg(retype(brw_vec8_grf(1, 0),
-                                                BRW_REGISTER_TYPE_UD)));
+      bld.exec_all().MOV(payload, urb_handle);
 
       fs_inst *inst = bld.emit(SHADER_OPCODE_URB_WRITE_SIMD8, reg_undef, payload);
       inst->eot = true;
@@ -768,7 +768,6 @@ fs_visitor::emit_urb_writes(const fs_reg &gs_vertex_count)
       const int output_vertex_size_owords =
          gs_prog_data->output_vertex_size_hwords * 2;
 
-      fs_reg offset;
       if (gs_vertex_count.file == IMM) {
          per_slot_offsets = brw_imm_ud(output_vertex_size_owords *
                                        gs_vertex_count.ud);
@@ -877,8 +876,7 @@ fs_visitor::emit_urb_writes(const fs_reg &gs_vertex_count)
             ralloc_array(mem_ctx, fs_reg, length + header_size);
          fs_reg payload = fs_reg(VGRF, alloc.allocate(length + header_size),
                                  BRW_REGISTER_TYPE_F);
-         payload_sources[0] =
-            fs_reg(retype(brw_vec8_grf(1, 0), BRW_REGISTER_TYPE_UD));
+         payload_sources[0] = urb_handle;
 
          if (opcode == SHADER_OPCODE_URB_WRITE_SIMD8_PER_SLOT)
             payload_sources[1] = per_slot_offsets;
@@ -890,7 +888,7 @@ fs_visitor::emit_urb_writes(const fs_reg &gs_vertex_count)
                            header_size);
 
          fs_inst *inst = abld.emit(opcode, reg_undef, payload);
-         inst->eot = last && stage == MESA_SHADER_VERTEX;
+         inst->eot = last && stage != MESA_SHADER_GEOMETRY;
          inst->mlen = length + header_size;
          inst->offset = urb_offset;
          urb_offset = starting_urb_offset + slot + 1;
@@ -954,9 +952,11 @@ fs_visitor::fs_visitor(const struct brw_compiler *compiler, void *log_data,
                        struct gl_program *prog,
                        const nir_shader *shader,
                        unsigned dispatch_width,
-                       int shader_time_index)
+                       int shader_time_index,
+                       const struct brw_vue_map *input_vue_map)
    : backend_shader(compiler, log_data, mem_ctx, shader, prog_data),
      key(key), gs_compile(NULL), prog_data(prog_data), prog(prog),
+     input_vue_map(input_vue_map),
      dispatch_width(dispatch_width),
      shader_time_index(shader_time_index),
      bld(fs_builder(this, dispatch_width).at_end())
@@ -991,6 +991,9 @@ fs_visitor::init()
       break;
    case MESA_SHADER_VERTEX:
       key_tex = &((const brw_vs_prog_key *) key)->tex;
+      break;
+   case MESA_SHADER_TESS_EVAL:
+      key_tex = &((const brw_tes_prog_key *) key)->tex;
       break;
    case MESA_SHADER_GEOMETRY:
       key_tex = &((const brw_gs_prog_key *) key)->tex;

@@ -20,14 +20,26 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-#include "main/context.h"
 #include "main/mtypes.h"
 
 #include "brw_context.h"
 #include "brw_state.h"
 #include "brw_defines.h"
-#include "brw_wm.h"
-#include "brw_surface_formats.h"
+
+struct surface_format_info {
+   bool exists;
+   int sampling;
+   int filtering;
+   int shadow_compare;
+   int chroma_key;
+   int render_target;
+   int alpha_blend;
+   int input_vb;
+   int streamed_output_vb;
+   int color_processing;
+   int lossless_compression;
+   const char *name;
+};
 
 /* This macro allows us to write the table almost as it appears in the PRM,
  * while restructuring it to turn it into the C code we want.
@@ -74,7 +86,7 @@
  * - VOL4_Part1 section 3.9.11 Render Target Write.
  * - Render Target Surface Types [SKL+]
  */
-const struct brw_surface_format_info surface_formats[] = {
+const struct surface_format_info surface_formats[] = {
 /* smpl filt shad CK  RT  AB  VB  SO  color ccs_e */
    SF( Y, 50,  x,  x,  Y,  Y,  Y,  Y,  x,   90,   R32G32B32A32_FLOAT)
    SF( Y,  x,  x,  x,  Y,  x,  Y,  Y,  x,   90,   R32G32B32A32_SINT)
@@ -153,8 +165,8 @@ const struct brw_surface_format_info surface_formats[] = {
    SF( Y, 50,  Y,  x,  x,  x,  x,  x,  x,    x,   I32_FLOAT)
    SF( Y, 50,  Y,  x,  x,  x,  x,  x,  x,    x,   L32_FLOAT)
    SF( Y, 50,  Y,  x,  x,  x,  x,  x,  x,    x,   A32_FLOAT)
-   SF( Y,  Y,  x,  Y,  x,  x,  x,  x, 60,   90,   B8G8R8X8_UNORM)
-   SF( Y,  Y,  x,  x,  x,  x,  x,  x,  x,    x,   B8G8R8X8_UNORM_SRGB)
+   SF( Y,  Y,  x,  Y, 80, 80,  x,  x, 60,   90,   B8G8R8X8_UNORM)
+   SF( Y,  Y,  x,  x, 80, 80,  x,  x,  x,    x,   B8G8R8X8_UNORM_SRGB)
    SF( Y,  Y,  x,  x,  x,  x,  x,  x,  x,    x,   R8G8B8X8_UNORM)
    SF( Y,  Y,  x,  x,  x,  x,  x,  x,  x,    x,   R8G8B8X8_UNORM_SRGB)
    SF( Y,  Y,  x,  x,  x,  x,  x,  x,  x,    x,   R9G9B9E5_SHAREDEXP)
@@ -396,6 +408,7 @@ brw_format_for_mesa_format(mesa_format mesa_format)
       [MESA_FORMAT_A8R8G8B8_SRGB] = 0,
       [MESA_FORMAT_R8G8B8A8_SRGB] = BRW_SURFACEFORMAT_R8G8B8A8_UNORM_SRGB,
       [MESA_FORMAT_X8R8G8B8_SRGB] = 0,
+      [MESA_FORMAT_B8G8R8X8_SRGB] = BRW_SURFACEFORMAT_B8G8R8X8_UNORM_SRGB,
       [MESA_FORMAT_L_SRGB8] = BRW_SURFACEFORMAT_L8_UNORM_SRGB,
       [MESA_FORMAT_L8A8_SRGB] = BRW_SURFACEFORMAT_L8A8_UNORM_SRGB,
       [MESA_FORMAT_A8L8_SRGB] = 0,
@@ -605,7 +618,7 @@ brw_init_surface_formats(struct brw_context *brw)
 
    for (format = MESA_FORMAT_NONE + 1; format < MESA_FORMAT_COUNT; format++) {
       uint32_t texture, render;
-      const struct brw_surface_format_info *rinfo, *tinfo;
+      const struct surface_format_info *rinfo, *tinfo;
       bool is_integer = _mesa_is_format_integer_color(format);
 
       render = texture = brw_format_for_mesa_format(format);
@@ -656,10 +669,15 @@ brw_init_surface_formats(struct brw_context *brw)
 	  * mask writes to alpha (ala glColorMask) and reconfigure the
 	  * alpha blending hardware to use GL_ONE (or GL_ZERO) for
 	  * cases where GL_DST_ALPHA (or GL_ONE_MINUS_DST_ALPHA) is
-	  * used.
+	  * used. On Gen8+ BGRX is actually allowed (but not RGBX).
 	  */
-	 render = BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
+         if (gen < tinfo->render_target)
+            render = BRW_SURFACEFORMAT_B8G8R8A8_UNORM;
 	 break;
+      case BRW_SURFACEFORMAT_B8G8R8X8_UNORM_SRGB:
+         if (gen < tinfo->render_target)
+            render = BRW_SURFACEFORMAT_B8G8R8A8_UNORM_SRGB;
+         break;
       case BRW_SURFACEFORMAT_R8G8B8X8_UNORM:
          render = BRW_SURFACEFORMAT_R8G8B8A8_UNORM;
          break;
@@ -781,7 +799,7 @@ bool
 brw_losslessly_compressible_format(struct brw_context *brw,
                                    uint32_t brw_format)
 {
-   const struct brw_surface_format_info * const sinfo =
+   const struct surface_format_info * const sinfo =
       &surface_formats[brw_format];
    const int gen = brw->gen * 10;
 

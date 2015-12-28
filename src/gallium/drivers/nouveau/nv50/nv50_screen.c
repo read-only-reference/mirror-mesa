@@ -217,6 +217,7 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
    case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
    case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
+   case PIPE_CAP_DRAW_PARAMETERS:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -405,6 +406,11 @@ nv50_screen_destroy(struct pipe_screen *pscreen)
 
    if (screen->blitter)
       nv50_blitter_destroy(screen);
+   if (screen->pm.prog) {
+      screen->pm.prog->code = NULL; /* hardcoded, don't FREE */
+      nv50_program_destroy(NULL, screen->pm.prog);
+      FREE(screen->pm.prog);
+   }
 
    nouveau_bo_ref(NULL, &screen->code);
    nouveau_bo_ref(NULL, &screen->tls_bo);
@@ -518,11 +524,11 @@ nv50_screen_init_hwctx(struct nv50_screen *screen)
    }
 
    BEGIN_NV04(push, NV50_3D(ZETA_COMP_ENABLE), 1);
-   PUSH_DATA(push, screen->base.device->drm_version >= 0x01000101);
+   PUSH_DATA(push, screen->base.drm->version >= 0x01000101);
 
    BEGIN_NV04(push, NV50_3D(RT_COMP_ENABLE(0)), 8);
    for (i = 0; i < 8; ++i)
-      PUSH_DATA(push, screen->base.device->drm_version >= 0x01000101);
+      PUSH_DATA(push, screen->base.drm->version >= 0x01000101);
 
    BEGIN_NV04(push, NV50_3D(RT_CONTROL), 1);
    PUSH_DATA (push, 1);
@@ -747,7 +753,7 @@ int nv50_tls_realloc(struct nv50_screen *screen, unsigned tls_space)
    return 1;
 }
 
-struct pipe_screen *
+struct nouveau_screen *
 nv50_screen_create(struct nouveau_device *dev)
 {
    struct nv50_screen *screen;
@@ -762,6 +768,7 @@ nv50_screen_create(struct nouveau_device *dev)
    if (!screen)
       return NULL;
    pscreen = &screen->base.base;
+   pscreen->destroy = nv50_screen_destroy;
 
    ret = nouveau_screen_init(&screen->base, dev);
    if (ret) {
@@ -782,7 +789,6 @@ nv50_screen_create(struct nouveau_device *dev)
 
    chan = screen->base.channel;
 
-   pscreen->destroy = nv50_screen_destroy;
    pscreen->context_create = nv50_create;
    pscreen->is_format_supported = nv50_screen_is_format_supported;
    pscreen->get_param = nv50_screen_get_param;
@@ -961,11 +967,11 @@ nv50_screen_create(struct nouveau_device *dev)
 
    nouveau_fence_new(&screen->base, &screen->base.fence.current, false);
 
-   return pscreen;
+   return &screen->base;
 
 fail:
-   nv50_screen_destroy(pscreen);
-   return NULL;
+   screen->base.base.context_create = NULL;
+   return &screen->base;
 }
 
 int

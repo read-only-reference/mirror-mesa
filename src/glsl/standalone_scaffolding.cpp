@@ -35,12 +35,6 @@
 #include "util/ralloc.h"
 #include "util/strtod.h"
 
-extern "C" void
-_mesa_error_no_memory(const char *caller)
-{
-   fprintf(stderr, "Mesa error: out of memory in %s", caller);
-}
-
 void
 _mesa_warning(struct gl_context *ctx, const char *fmt, ...)
 {
@@ -69,7 +63,7 @@ _mesa_reference_shader(struct gl_context *ctx, struct gl_shader **ptr,
 
 void
 _mesa_shader_debug(struct gl_context *, GLenum, GLuint *,
-                   const char *, int)
+                   const char *)
 {
 }
 
@@ -155,6 +149,7 @@ void initialize_context_to_defaults(struct gl_context *ctx, gl_api api)
    ctx->Extensions.ARB_gpu_shader_fp64 = true;
    ctx->Extensions.ARB_sample_shading = true;
    ctx->Extensions.ARB_shader_bit_encoding = true;
+   ctx->Extensions.ARB_shader_draw_parameters = true;
    ctx->Extensions.ARB_shader_stencil_export = true;
    ctx->Extensions.ARB_shader_subroutine = true;
    ctx->Extensions.ARB_shader_texture_lod = true;

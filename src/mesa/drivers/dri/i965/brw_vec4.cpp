@@ -28,14 +28,7 @@
 #include "brw_nir.h"
 #include "brw_vec4_live_variables.h"
 #include "brw_dead_control_flow.h"
-
-extern "C" {
-#include "main/macros.h"
-#include "main/shaderobj.h"
-#include "program/prog_print.h"
 #include "program/prog_parameter.h"
-}
-#include "main/context.h"
 
 #define MAX_INSTRUCTION (1 << 30)
 
@@ -71,7 +64,7 @@ src_reg::src_reg()
    init();
 }
 
-src_reg::src_reg(struct brw_reg reg) :
+src_reg::src_reg(struct ::brw_reg reg) :
    backend_reg(reg)
 {
    this->reg_offset = 0;
@@ -79,9 +72,8 @@ src_reg::src_reg(struct brw_reg reg) :
 }
 
 src_reg::src_reg(const dst_reg &reg) :
-   backend_reg(static_cast<struct brw_reg>(reg))
+   backend_reg(reg)
 {
-   this->reg_offset = reg.reg_offset;
    this->reladdr = reg.reladdr;
    this->swizzle = brw_swizzle_for_mask(reg.writemask);
 }
@@ -129,7 +121,7 @@ dst_reg::dst_reg(enum brw_reg_file file, int nr, brw_reg_type type,
    this->writemask = writemask;
 }
 
-dst_reg::dst_reg(struct brw_reg reg) :
+dst_reg::dst_reg(struct ::brw_reg reg) :
    backend_reg(reg)
 {
    this->reg_offset = 0;
@@ -137,9 +129,8 @@ dst_reg::dst_reg(struct brw_reg reg) :
 }
 
 dst_reg::dst_reg(const src_reg &reg) :
-   backend_reg(static_cast<struct brw_reg>(reg))
+   backend_reg(reg)
 {
-   this->reg_offset = reg.reg_offset;
    this->writemask = brw_mask_for_swizzle(reg.swizzle);
    this->reladdr = reg.reladdr;
 }
@@ -147,8 +138,7 @@ dst_reg::dst_reg(const src_reg &reg) :
 bool
 dst_reg::equals(const dst_reg &r) const
 {
-   return (memcmp((brw_reg *)this, (brw_reg *)&r, sizeof(brw_reg)) == 0 &&
-           reg_offset == r.reg_offset &&
+   return (this->backend_reg::equals(r) &&
            (reladdr == r.reladdr ||
             (reladdr && r.reladdr && reladdr->equals(*r.reladdr))));
 }
@@ -165,6 +155,42 @@ vec4_instruction::is_send_from_grf()
    case SHADER_OPCODE_TYPED_ATOMIC:
    case SHADER_OPCODE_TYPED_SURFACE_READ:
    case SHADER_OPCODE_TYPED_SURFACE_WRITE:
+   case VEC4_OPCODE_URB_READ:
+   case TCS_OPCODE_URB_WRITE:
+   case TCS_OPCODE_RELEASE_INPUT:
+   case SHADER_OPCODE_BARRIER:
+      return true;
+   default:
+      return false;
+   }
+}
+
+/**
+ * Returns true if this instruction's sources and destinations cannot
+ * safely be the same register.
+ *
+ * In most cases, a register can be written over safely by the same
+ * instruction that is its last use.  For a single instruction, the
+ * sources are dereferenced before writing of the destination starts
+ * (naturally).
+ *
+ * However, there are a few cases where this can be problematic:
+ *
+ * - Virtual opcodes that translate to multiple instructions in the
+ *   code generator: if src == dst and one instruction writes the
+ *   destination before a later instruction reads the source, then
+ *   src will have been clobbered.
+ *
+ * The register allocator uses this information to set up conflicts between
+ * GRF sources and the destination.
+ */
+bool
+vec4_instruction::has_source_and_destination_hazard() const
+{
+   switch (opcode) {
+   case TCS_OPCODE_SET_INPUT_URB_OFFSETS:
+   case TCS_OPCODE_SET_OUTPUT_URB_OFFSETS:
+   case TES_OPCODE_ADD_INDIRECT_URB_OFFSET:
       return true;
    default:
       return false;
@@ -185,6 +211,7 @@ vec4_instruction::regs_read(unsigned arg) const
    case SHADER_OPCODE_TYPED_ATOMIC:
    case SHADER_OPCODE_TYPED_SURFACE_READ:
    case SHADER_OPCODE_TYPED_SURFACE_WRITE:
+   case TCS_OPCODE_URB_WRITE:
       return arg == 0 ? mlen : 1;
 
    case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
@@ -249,6 +276,7 @@ vec4_visitor::implied_mrf_writes(vec4_instruction *inst)
    case SHADER_OPCODE_POW:
       return 2;
    case VS_OPCODE_URB_WRITE:
+   case TCS_OPCODE_THREAD_END:
       return 1;
    case VS_OPCODE_PULL_CONSTANT_LOAD:
       return 2;
@@ -262,6 +290,8 @@ vec4_visitor::implied_mrf_writes(vec4_instruction *inst)
       return 0;
    case GS_OPCODE_FF_SYNC:
       return 1;
+   case TCS_OPCODE_URB_WRITE:
+      return 0;
    case SHADER_OPCODE_SHADER_TIME_ADD:
       return 0;
    case SHADER_OPCODE_TEX:
@@ -285,8 +315,7 @@ vec4_visitor::implied_mrf_writes(vec4_instruction *inst)
 bool
 src_reg::equals(const src_reg &r) const
 {
-   return (memcmp((brw_reg *)this, (brw_reg *)&r, sizeof(brw_reg)) == 0 &&
-	   reg_offset == r.reg_offset &&
+   return (this->backend_reg::equals(r) &&
 	   !reladdr && !r.reladdr);
 }
 
@@ -587,7 +616,8 @@ vec4_visitor::opt_algebraic()
             if (inst->dst.type != inst->src[0].type)
                assert(!"unimplemented: saturate mixed types");
 
-            if (brw_saturate_immediate(inst->dst.type, &inst->src[0])) {
+            if (brw_saturate_immediate(inst->dst.type,
+                                       &inst->src[0].as_brw_reg())) {
                inst->saturate = false;
                progress = true;
             }
@@ -1536,7 +1566,7 @@ int
 vec4_vs_visitor::setup_attributes(int payload_reg)
 {
    int nr_attributes;
-   int attribute_map[VERT_ATTRIB_MAX + 1];
+   int attribute_map[VERT_ATTRIB_MAX + 2];
    memset(attribute_map, 0, sizeof(attribute_map));
 
    nr_attributes = 0;
@@ -1547,12 +1577,19 @@ vec4_vs_visitor::setup_attributes(int payload_reg)
       }
    }
 
+   if (vs_prog_data->uses_drawid) {
+      attribute_map[VERT_ATTRIB_MAX + 1] = payload_reg + nr_attributes;
+      nr_attributes++;
+   }
+
    /* VertexID is stored by the VF as the last vertex element, but we
     * don't represent it with a flag in inputs_read, so we call it
     * VERT_ATTRIB_MAX.
     */
-   if (vs_prog_data->uses_vertexid || vs_prog_data->uses_instanceid) {
+   if (vs_prog_data->uses_vertexid || vs_prog_data->uses_instanceid ||
+       vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance) {
       attribute_map[VERT_ATTRIB_MAX] = payload_reg + nr_attributes;
+      nr_attributes++;
    }
 
    lower_attributes_to_hw_regs(attribute_map, false /* interleaved */);
@@ -1769,7 +1806,7 @@ vec4_visitor::convert_to_hw_regs()
 
       case ARF:
       case FIXED_GRF:
-         reg = dst;
+         reg = dst.as_brw_reg();
          break;
 
       case BAD_FILE:
@@ -1952,8 +1989,15 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
     * incoming vertex attribute.  So, add an extra slot.
     */
    if (shader->info.system_values_read &
-       (BITFIELD64_BIT(SYSTEM_VALUE_VERTEX_ID_ZERO_BASE) |
+       (BITFIELD64_BIT(SYSTEM_VALUE_BASE_VERTEX) |
+        BITFIELD64_BIT(SYSTEM_VALUE_BASE_INSTANCE) |
+        BITFIELD64_BIT(SYSTEM_VALUE_VERTEX_ID_ZERO_BASE) |
         BITFIELD64_BIT(SYSTEM_VALUE_INSTANCE_ID))) {
+      nr_attributes++;
+   }
+
+   /* gl_DrawID has its very own vec4 */
+   if (shader->info.system_values_read & BITFIELD64_BIT(SYSTEM_VALUE_DRAW_ID)) {
       nr_attributes++;
    }
 

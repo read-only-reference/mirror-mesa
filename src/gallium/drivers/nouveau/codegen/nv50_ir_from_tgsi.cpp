@@ -377,6 +377,9 @@ static nv50_ir::SVSemantic translateSysVal(uint sysval)
    case TGSI_SEMANTIC_TESSINNER:  return nv50_ir::SV_TESS_INNER;
    case TGSI_SEMANTIC_VERTICESIN: return nv50_ir::SV_VERTEX_COUNT;
    case TGSI_SEMANTIC_HELPER_INVOCATION: return nv50_ir::SV_THREAD_KILL;
+   case TGSI_SEMANTIC_BASEVERTEX: return nv50_ir::SV_BASEVERTEX;
+   case TGSI_SEMANTIC_BASEINSTANCE: return nv50_ir::SV_BASEINSTANCE;
+   case TGSI_SEMANTIC_DRAWID:     return nv50_ir::SV_DRAWID;
    default:
       assert(0);
       return nv50_ir::SV_CLOCK;
@@ -1127,6 +1130,11 @@ bool Source::scanDeclaration(const struct tgsi_full_declaration *decl)
       case TGSI_SEMANTIC_SAMPLEID:
       case TGSI_SEMANTIC_SAMPLEPOS:
          info->prop.fp.sampleInterp = 1;
+         break;
+      case TGSI_SEMANTIC_BASEVERTEX:
+      case TGSI_SEMANTIC_BASEINSTANCE:
+      case TGSI_SEMANTIC_DRAWID:
+         info->prop.vp.usesDrawParameters = true;
          break;
       default:
          break;
@@ -1897,7 +1905,7 @@ Converter::handleTEX(Value *dst[4], int R, int S, int L, int C, int Dx, int Dy)
       shd = fetchSrc(C >> 4, C & 3);
 
    if (texi->op == OP_TXD) {
-      for (c = 0; c < tgt.getDim(); ++c) {
+      for (c = 0; c < tgt.getDim() + tgt.isCube(); ++c) {
          texi->dPdx[c].set(fetchSrc(Dx >> 4, (Dx & 3) + c));
          texi->dPdy[c].set(fetchSrc(Dy >> 4, (Dy & 3) + c));
       }
@@ -2893,6 +2901,12 @@ Converter::handleInstruction(const struct tgsi_full_instruction *insn)
          bb->cfg.attach(&loopBB->cfg, Graph::Edge::BACK);
       }
       setPosition(reinterpret_cast<BasicBlock *>(breakBBs.pop().u.p), true);
+
+      // If the loop never breaks (e.g. only has RET's inside), then there
+      // will be no way to get to the break bb. However BGNLOOP will have
+      // already made a PREBREAK to it, so it must be in the CFG.
+      if (getBB()->cfg.incidentCount() == 0)
+         loopBB->cfg.attach(&getBB()->cfg, Graph::Edge::TREE);
    }
       break;
    case TGSI_OPCODE_BRK:
@@ -3246,7 +3260,7 @@ Converter::handleUserClipPlanes()
 
    for (c = 0; c < 4; ++c) {
       for (i = 0; i < info->io.genUserClip; ++i) {
-         Symbol *sym = mkSymbol(FILE_MEMORY_CONST, info->io.ucpCBSlot,
+         Symbol *sym = mkSymbol(FILE_MEMORY_CONST, info->io.auxCBSlot,
                                 TYPE_F32, info->io.ucpBase + i * 16 + c * 4);
          Value *ucp = mkLoadv(TYPE_F32, sym, NULL);
          if (c == 0)

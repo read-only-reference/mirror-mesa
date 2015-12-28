@@ -41,14 +41,6 @@
 #include "glsl_types.h"
 #include "program/hash_table.h"
 
-#if defined(__SUNPRO_CC) && !defined(isnormal)
-#include <ieeefp.h>
-static int isnormal(double x)
-{
-   return fpclass(x) == FP_NORMAL;
-}
-#endif
-
 static float
 dot_f(ir_constant *op0, ir_constant *op1)
 {
@@ -654,14 +646,6 @@ ir_expression::constant_expression_value(struct hash_table *variable_context)
       assert(op[0]->type->base_type == GLSL_TYPE_FLOAT);
       for (unsigned c = 0; c < op[0]->type->components(); c++) {
 	 data.u[c] = bitcast_f2u(op[0]->value.f[c]);
-      }
-      break;
-   case ir_unop_any:
-      assert(op[0]->type->is_boolean());
-      data.b[0] = false;
-      for (unsigned c = 0; c < op[0]->type->components(); c++) {
-	 if (op[0]->value.b[c])
-	    data.b[0] = true;
       }
       break;
    case ir_unop_d2f:

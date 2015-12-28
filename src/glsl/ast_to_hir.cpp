@@ -1088,7 +1088,6 @@ do_comparison(void *mem_ctx, int operation, ir_rvalue *op0, ir_rvalue *op1)
    case GLSL_TYPE_SAMPLER:
    case GLSL_TYPE_IMAGE:
    case GLSL_TYPE_INTERFACE:
-   case GLSL_TYPE_FUNCTION:
    case GLSL_TYPE_ATOMIC_UINT:
    case GLSL_TYPE_SUBROUTINE:
       /* I assume a comparison of a struct containing a sampler just
@@ -1825,7 +1824,7 @@ ast_expression::do_hir(exec_list *instructions,
        * tree.  This particular use must be at location specified in the grammar
        * as 'variable_identifier'.
        */
-      ir_variable *var = 
+      ir_variable *var =
          state->symbols->get_variable(this->primary_expression.identifier);
 
       if (var != NULL) {
@@ -2650,7 +2649,9 @@ apply_explicit_binding(struct _mesa_glsl_parse_state *state,
 
          return;
       }
-   } else if (state->is_version(420, 310) && base_type->is_image()) {
+   } else if ((state->is_version(420, 310) ||
+               state->ARB_shading_language_420pack_enable) &&
+              base_type->is_image()) {
       assert(ctx->Const.MaxImageUnits <= MAX_IMAGE_UNITS);
       if (max_index >= ctx->Const.MaxImageUnits) {
          _mesa_glsl_error(loc, state, "Image binding %d exceeds the "
@@ -3104,7 +3105,7 @@ apply_layout_qualifier_to_variable(const struct ast_type_qualifier *qual,
                _mesa_glsl_error(loc, state,
                                 "misaligned atomic counter offset");
 
-            var->data.atomic.offset = *offset;
+            var->data.offset = *offset;
             *offset += var->type->atomic_size();
 
          } else {
@@ -3737,7 +3738,7 @@ process_initializer(ir_variable *var, ast_declaration *decl,
              * expressions. Const-qualified global variables must still be
              * initialized with constant expressions.
              */
-            if (!state->ARB_shading_language_420pack_enable
+            if (!state->has_420pack()
                 || state->current_function == NULL) {
                _mesa_glsl_error(& initializer_loc, state,
                                 "initializer of %s variable `%s' must be a "
@@ -5366,7 +5367,7 @@ ast_jump_statement::hir(exec_list *instructions,
          if (state->current_function->return_type != ret_type) {
             YYLTYPE loc = this->get_location();
 
-            if (state->ARB_shading_language_420pack_enable) {
+            if (state->has_420pack()) {
                if (!apply_implicit_conversion(state->current_function->return_type,
                                               ret, state)) {
                   _mesa_glsl_error(& loc, state,
@@ -5558,8 +5559,8 @@ ast_switch_statement::hir(exec_list *instructions,
 
    /* From page 66 (page 55 of the PDF) of the GLSL 1.50 spec:
     *
-    *    "The type of init-expression in a switch statement must be a 
-    *     scalar integer." 
+    *    "The type of init-expression in a switch statement must be a
+    *     scalar integer."
     */
    if (!test_expression->type->is_scalar() ||
        !test_expression->type->is_integer()) {
@@ -6168,7 +6169,7 @@ ast_type_specifier::hir(exec_list *instructions,
  * The number of fields processed.  A pointer to the array structure fields is
  * stored in \c *fields_ret.
  */
-unsigned
+static unsigned
 ast_process_struct_or_iface_block_members(exec_list *instructions,
                                           struct _mesa_glsl_parse_state *state,
                                           exec_list *declarations,
@@ -6178,7 +6179,8 @@ ast_process_struct_or_iface_block_members(exec_list *instructions,
                                           bool allow_reserved_names,
                                           ir_variable_mode var_mode,
                                           ast_type_qualifier *layout,
-                                          unsigned block_stream)
+                                          unsigned block_stream,
+                                          unsigned expl_location)
 {
    unsigned decl_count = 0;
 
@@ -6198,6 +6200,9 @@ ast_process_struct_or_iface_block_members(exec_list *instructions,
     */
    glsl_struct_field *const fields = ralloc_array(state, glsl_struct_field,
                                                   decl_count);
+
+   bool first_member = true;
+   bool first_member_has_explicit_location;
 
    unsigned i = 0;
    foreach_list_typed (ast_declarator_list, decl_list, link, declarations) {
@@ -6261,6 +6266,27 @@ ast_process_struct_or_iface_block_members(exec_list *instructions,
          _mesa_glsl_error(&loc, state,
                           "binding layout qualifier cannot be applied "
                           "to struct or interface block members");
+      }
+
+      if (is_interface) {
+         if (!first_member) {
+            if (!layout->flags.q.explicit_location &&
+                ((first_member_has_explicit_location &&
+                  !qual->flags.q.explicit_location) ||
+                 (!first_member_has_explicit_location &&
+                  qual->flags.q.explicit_location))) {
+               _mesa_glsl_error(&loc, state,
+                                "when block-level location layout qualifier "
+                                "is not supplied either all members must "
+                                "have a location layout qualifier or all "
+                                "members must not have a location layout "
+                                "qualifier");
+            }
+         } else {
+            first_member = false;
+            first_member_has_explicit_location =
+               qual->flags.q.explicit_location;
+         }
       }
 
       if (qual->flags.q.std140 ||
@@ -6337,13 +6363,28 @@ ast_process_struct_or_iface_block_members(exec_list *instructions,
          validate_array_dimensions(field_type, state, &loc);
          fields[i].type = field_type;
          fields[i].name = decl->identifier;
-         fields[i].location = -1;
          fields[i].interpolation =
             interpret_interpolation_qualifier(qual, var_mode, state, &loc);
          fields[i].centroid = qual->flags.q.centroid ? 1 : 0;
          fields[i].sample = qual->flags.q.sample ? 1 : 0;
          fields[i].patch = qual->flags.q.patch ? 1 : 0;
          fields[i].precision = qual->precision;
+
+         if (qual->flags.q.explicit_location) {
+            unsigned qual_location;
+            if (process_qualifier_constant(state, &loc, "location",
+                                           qual->location, &qual_location)) {
+               fields[i].location = VARYING_SLOT_VAR0 + qual_location;
+               expl_location = fields[i].location + 1;
+            }
+         } else {
+            if (layout && layout->flags.q.explicit_location) {
+               fields[i].location = expl_location;
+               expl_location = expl_location + 1;
+            } else {
+               fields[i].location = -1;
+            }
+         }
 
          /* Propogate row- / column-major information down the fields of the
           * structure or interface block.  Structures need this data because
@@ -6443,6 +6484,16 @@ ast_struct_specifier::hir(exec_list *instructions,
 
    state->struct_specifier_depth++;
 
+   unsigned expl_location = -1;
+   if (layout && layout->flags.q.explicit_location) {
+      if (!process_qualifier_constant(state, &loc, "location",
+                                      layout->location, &expl_location)) {
+         return NULL;
+      } else {
+         expl_location = VARYING_SLOT_VAR0 + expl_location;
+      }
+   }
+
    glsl_struct_field *fields;
    unsigned decl_count =
       ast_process_struct_or_iface_block_members(instructions,
@@ -6453,8 +6504,9 @@ ast_struct_specifier::hir(exec_list *instructions,
                                                 GLSL_MATRIX_LAYOUT_INHERITED,
                                                 false /* allow_reserved_names */,
                                                 ir_var_auto,
-                                                NULL,
-                                                0 /* for interface only */);
+                                                layout,
+                                                0, /* for interface only */
+                                                expl_location);
 
    validate_identifier(this->name, loc, state);
 
@@ -6619,6 +6671,16 @@ ast_interface_block::hir(exec_list *instructions,
       return NULL;
    }
 
+   unsigned expl_location = -1;
+   if (layout.flags.q.explicit_location) {
+      if (!process_qualifier_constant(state, &loc, "location",
+                                      layout.location, &expl_location)) {
+         return NULL;
+      } else {
+         expl_location = VARYING_SLOT_VAR0 + expl_location;
+      }
+   }
+
    unsigned int num_variables =
       ast_process_struct_or_iface_block_members(&declared_variables,
                                                 state,
@@ -6629,7 +6691,8 @@ ast_interface_block::hir(exec_list *instructions,
                                                 redeclaring_per_vertex,
                                                 var_mode,
                                                 &this->layout,
-                                                qual_stream);
+                                                qual_stream,
+                                                expl_location);
 
    state->struct_specifier_depth--;
 
@@ -6968,6 +7031,10 @@ ast_interface_block::hir(exec_list *instructions,
          }
 
          var->data.stream = qual_stream;
+         if (layout.flags.q.explicit_location) {
+            var->data.location = expl_location;
+            var->data.explicit_location = true;
+         }
 
          state->symbols->add_variable(var);
          instructions->push_tail(var);
@@ -6988,6 +7055,9 @@ ast_interface_block::hir(exec_list *instructions,
          var->data.sample = fields[i].sample;
          var->data.patch = fields[i].patch;
          var->data.stream = qual_stream;
+         var->data.location = fields[i].location;
+         if (fields[i].location != -1)
+            var->data.explicit_location = true;
          var->init_interface_type(block_type);
 
          if (var_mode == ir_var_shader_in || var_mode == ir_var_uniform)

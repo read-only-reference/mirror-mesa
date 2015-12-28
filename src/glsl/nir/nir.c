@@ -163,7 +163,7 @@ nir_variable *
 nir_local_variable_create(nir_function_impl *impl,
                           const struct glsl_type *type, const char *name)
 {
-   nir_variable *var = rzalloc(impl->overload->function->shader, nir_variable);
+   nir_variable *var = rzalloc(impl->function->shader, nir_variable);
    var->name = ralloc_strdup(var, name);
    var->type = type;
    var->data.mode = nir_var_local;
@@ -179,29 +179,15 @@ nir_function_create(nir_shader *shader, const char *name)
    nir_function *func = ralloc(shader, nir_function);
 
    exec_list_push_tail(&shader->functions, &func->node);
-   exec_list_make_empty(&func->overload_list);
+
    func->name = ralloc_strdup(func, name);
    func->shader = shader;
+   func->num_params = 0;
+   func->params = NULL;
+   func->return_type = glsl_void_type();
+   func->impl = NULL;
 
    return func;
-}
-
-nir_function_overload *
-nir_function_overload_create(nir_function *func)
-{
-   void *mem_ctx = ralloc_parent(func);
-
-   nir_function_overload *overload = ralloc(mem_ctx, nir_function_overload);
-
-   overload->num_params = 0;
-   overload->params = NULL;
-   overload->return_type = glsl_void_type();
-   overload->impl = NULL;
-
-   exec_list_push_tail(&func->overload_list, &overload->node);
-   overload->function = func;
-
-   return overload;
 }
 
 void nir_src_copy(nir_src *dest, const nir_src *src, void *mem_ctx)
@@ -268,16 +254,16 @@ cf_init(nir_cf_node *node, nir_cf_node_type type)
 }
 
 nir_function_impl *
-nir_function_impl_create(nir_function_overload *overload)
+nir_function_impl_create(nir_function *function)
 {
-   assert(overload->impl == NULL);
+   assert(function->impl == NULL);
 
-   void *mem_ctx = ralloc_parent(overload);
+   void *mem_ctx = ralloc_parent(function);
 
    nir_function_impl *impl = ralloc(mem_ctx, nir_function_impl);
 
-   overload->impl = impl;
-   impl->overload = overload;
+   function->impl = impl;
+   impl->function = function;
 
    cf_init(&impl->cf_node, nir_cf_node_function);
 
@@ -474,7 +460,7 @@ nir_intrinsic_instr_create(nir_shader *shader, nir_intrinsic_op op)
 }
 
 nir_call_instr *
-nir_call_instr_create(nir_shader *shader, nir_function_overload *callee)
+nir_call_instr_create(nir_shader *shader, nir_function *callee)
 {
    nir_call_instr *instr = ralloc(shader, nir_call_instr);
    instr_init(&instr->instr, nir_instr_type_call);
@@ -500,10 +486,8 @@ nir_tex_instr_create(nir_shader *shader, unsigned num_srcs)
    for (unsigned i = 0; i < num_srcs; i++)
       src_init(&instr->src[i].src);
 
-   instr->texture_index = 0;
-   instr->texture_array_size = 0;
-   instr->texture = NULL;
    instr->sampler_index = 0;
+   instr->sampler_array_size = 0;
    instr->sampler = NULL;
 
    return instr;
@@ -1021,10 +1005,6 @@ visit_tex_src(nir_tex_instr *instr, nir_foreach_src_cb cb, void *state)
       if (!visit_src(&instr->src[i].src, cb, state))
          return false;
 
-   if (instr->texture != NULL)
-      if (!visit_deref_src(instr->texture, cb, state))
-         return false;
-
    if (instr->sampler != NULL)
       if (!visit_deref_src(instr->sampler, cb, state))
          return false;
@@ -1382,13 +1362,13 @@ static inline bool
 foreach_if(nir_if *if_stmt, nir_foreach_block_cb cb, bool reverse, void *state)
 {
    if (reverse) {
-      foreach_list_typed_safe_reverse(nir_cf_node, node, node,
+      foreach_list_typed_reverse_safe(nir_cf_node, node, node,
                                       &if_stmt->else_list) {
          if (!foreach_cf_node(node, cb, reverse, state))
             return false;
       }
 
-      foreach_list_typed_safe_reverse(nir_cf_node, node, node,
+      foreach_list_typed_reverse_safe(nir_cf_node, node, node,
                                       &if_stmt->then_list) {
          if (!foreach_cf_node(node, cb, reverse, state))
             return false;
@@ -1412,7 +1392,7 @@ static inline bool
 foreach_loop(nir_loop *loop, nir_foreach_block_cb cb, bool reverse, void *state)
 {
    if (reverse) {
-      foreach_list_typed_safe_reverse(nir_cf_node, node, node, &loop->body) {
+      foreach_list_typed_reverse_safe(nir_cf_node, node, node, &loop->body) {
          if (!foreach_cf_node(node, cb, reverse, state))
             return false;
       }
@@ -1472,7 +1452,7 @@ nir_foreach_block_reverse(nir_function_impl *impl, nir_foreach_block_cb cb,
    if (!cb(impl->end_block, state))
       return false;
 
-   foreach_list_typed_safe_reverse(nir_cf_node, node, node, &impl->body) {
+   foreach_list_typed_reverse_safe(nir_cf_node, node, node, &impl->body) {
       if (!foreach_cf_node(node, cb, true, state))
          return false;
    }
@@ -1594,6 +1574,10 @@ nir_intrinsic_from_system_value(gl_system_value val)
       return nir_intrinsic_load_vertex_id;
    case SYSTEM_VALUE_INSTANCE_ID:
       return nir_intrinsic_load_instance_id;
+   case SYSTEM_VALUE_DRAW_ID:
+      return nir_intrinsic_load_draw_id;
+   case SYSTEM_VALUE_BASE_INSTANCE:
+      return nir_intrinsic_load_base_instance;
    case SYSTEM_VALUE_VERTEX_ID_ZERO_BASE:
       return nir_intrinsic_load_vertex_id_zero_base;
    case SYSTEM_VALUE_BASE_VERTEX:
@@ -1639,6 +1623,10 @@ nir_system_value_from_intrinsic(nir_intrinsic_op intrin)
       return SYSTEM_VALUE_VERTEX_ID;
    case nir_intrinsic_load_instance_id:
       return SYSTEM_VALUE_INSTANCE_ID;
+   case nir_intrinsic_load_draw_id:
+      return SYSTEM_VALUE_DRAW_ID;
+   case nir_intrinsic_load_base_instance:
+      return SYSTEM_VALUE_BASE_INSTANCE;
    case nir_intrinsic_load_vertex_id_zero_base:
       return SYSTEM_VALUE_VERTEX_ID_ZERO_BASE;
    case nir_intrinsic_load_base_vertex:

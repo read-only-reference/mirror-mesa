@@ -56,7 +56,6 @@ i965_compiler_FILES = \
 	brw_shader.cpp \
 	brw_shader.h \
 	brw_surface_formats.c \
-	brw_surface_formats.h \
 	brw_util.c \
 	brw_util.h \
 	brw_vec4_builder.h \
@@ -76,6 +75,8 @@ i965_compiler_FILES = \
 	brw_vec4_reg_allocate.cpp \
 	brw_vec4_surface_builder.cpp \
 	brw_vec4_surface_builder.h \
+	brw_vec4_tcs.cpp \
+	brw_vec4_tes.cpp \
 	brw_vec4_visitor.cpp \
 	brw_vec4_vs_visitor.cpp \
 	brw_vue_map.c \
@@ -151,6 +152,10 @@ i965_FILES = \
 	brw_state.h \
 	brw_state_upload.c \
 	brw_structs.h \
+	brw_tcs.c \
+	brw_tcs_surface_state.c \
+	brw_tes.c \
+	brw_tes_surface_state.c \
 	brw_tex.c \
 	brw_tex_layout.c \
 	brw_urb.c \
@@ -163,7 +168,6 @@ i965_FILES = \
 	brw_wm_state.c \
 	brw_wm_surface_state.c \
 	gen6_blorp.cpp \
-	gen6_blorp.h \
 	gen6_cc.c \
 	gen6_clip_state.c \
 	gen6_depth_state.c \
@@ -181,13 +185,15 @@ i965_FILES = \
 	gen6_vs_state.c \
 	gen6_wm_state.c \
 	gen7_blorp.cpp \
-	gen7_blorp.h \
 	gen7_cs_state.c \
-	gen7_disable.c \
+	gen7_ds_state.c \
 	gen7_gs_state.c \
+	gen7_hs_state.c \
+	gen7_l3_state.c \
 	gen7_misc_state.c \
 	gen7_sf_state.c \
 	gen7_sol_state.c \
+	gen7_te_state.c \
 	gen7_urb.c \
 	gen7_viewport_state.c \
 	gen7_vs_state.c \
@@ -197,7 +203,9 @@ i965_FILES = \
 	gen8_depth_state.c \
 	gen8_disable.c \
 	gen8_draw_upload.c \
+	gen8_ds_state.c \
 	gen8_gs_state.c \
+	gen8_hs_state.c \
 	gen8_misc_state.c \
 	gen8_multisample_state.c \
 	gen8_ps_state.c \

@@ -285,8 +285,6 @@ nvc0_tp_get_tess_mode(struct nvc0_program *tp, struct nv50_ir_prog_info *info)
       break;
    case PIPE_PRIM_TRIANGLES:
       tp->tp.tess_mode = NVC0_3D_TESS_MODE_PRIM_TRIANGLES;
-      if (info->prop.tp.winding > 0)
-         tp->tp.tess_mode |= NVC0_3D_TESS_MODE_CW;
       break;
    case PIPE_PRIM_QUADS:
       tp->tp.tess_mode = NVC0_3D_TESS_MODE_PRIM_QUADS;
@@ -295,6 +293,10 @@ nvc0_tp_get_tess_mode(struct nvc0_program *tp, struct nv50_ir_prog_info *info)
       tp->tp.tess_mode = ~0;
       return;
    }
+
+   if (info->prop.tp.winding > 0)
+      tp->tp.tess_mode |= NVC0_3D_TESS_MODE_CW;
+
    if (info->prop.tp.outputPrim != PIPE_PRIM_POINTS)
       tp->tp.tess_mode |= NVC0_3D_TESS_MODE_CONNECTED;
 
@@ -502,7 +504,7 @@ nvc0_program_dump(struct nvc0_program *prog)
    unsigned pos;
 
    if (prog->type != PIPE_SHADER_COMPUTE) {
-      for (pos = 0; pos < sizeof(prog->hdr) / sizeof(prog->hdr[0]); ++pos)
+      for (pos = 0; pos < ARRAY_SIZE(prog->hdr); ++pos)
          debug_printf("HDR[%02"PRIxPTR"] = 0x%08x\n",
                       pos * sizeof(prog->hdr[0]), prog->hdr[pos]);
    }
@@ -533,8 +535,9 @@ nvc0_program_translate(struct nvc0_program *prog, uint16_t chipset,
    info->bin.source = (void *)prog->pipe.tokens;
 
    info->io.genUserClip = prog->vp.num_ucps;
+   info->io.auxCBSlot = 15;
    info->io.ucpBase = 256;
-   info->io.ucpCBSlot = 15;
+   info->io.drawInfoBase = 256 + 128;
 
    if (prog->type == PIPE_SHADER_COMPUTE) {
       if (chipset >= NVISA_GK104_CHIPSET) {
@@ -583,6 +586,7 @@ nvc0_program_translate(struct nvc0_program *prog, uint16_t chipset,
    prog->num_barriers = info->numBarriers;
 
    prog->vp.need_vertex_id = info->io.vertexId < PIPE_MAX_SHADER_INPUTS;
+   prog->vp.need_draw_parameters = info->prop.vp.usesDrawParameters;
 
    if (info->io.edgeFlagOut < PIPE_MAX_ATTRIBS)
       info->out[info->io.edgeFlagOut].mask = 0; /* for headergen */

@@ -394,7 +394,10 @@ struct ruvd_msg {
 			uint32_t	dt_chroma_top_offset;
 			uint32_t	dt_chroma_bottom_offset;
 			uint32_t	dt_surf_tile_config;
-			uint32_t	dt_reserved[3];
+			uint32_t	dt_uv_surf_tile_config;
+			// re-use dt_wa_chroma_top_offset as dt_ext_info for UV pitch in stoney
+			uint32_t	dt_wa_chroma_top_offset;
+			uint32_t	dt_wa_chroma_bottom_offset;
 
 			uint32_t	reserved[16];
 
@@ -418,7 +421,7 @@ struct ruvd_msg {
 };
 
 /* driver dependent callback */
-typedef struct radeon_winsys_cs_handle* (*ruvd_set_dtb)
+typedef struct pb_buffer* (*ruvd_set_dtb)
 (struct ruvd_msg* msg, struct vl_video_buffer *vb);
 
 /* create an UVD decode */

@@ -70,18 +70,6 @@ glsl_get_struct_field(const glsl_type *type, unsigned index)
    return type->fields.structure[index].type;
 }
 
-const glsl_type *
-glsl_get_function_return_type(const glsl_type *type)
-{
-   return type->fields.parameters[0].type;
-}
-
-const glsl_function_param *
-glsl_get_function_param(const glsl_type *type, unsigned index)
-{
-   return &type->fields.parameters[index + 1];
-}
-
 const struct glsl_type *
 glsl_get_column_type(const struct glsl_type *type)
 {
@@ -130,20 +118,6 @@ glsl_get_struct_elem_name(const struct glsl_type *type, unsigned index)
    return type->fields.structure[index].name;
 }
 
-glsl_sampler_dim
-glsl_get_sampler_dim(const struct glsl_type *type)
-{
-   assert(glsl_type_is_sampler(type) || glsl_type_is_image(type));
-   return (glsl_sampler_dim)type->sampler_dimensionality;
-}
-
-glsl_base_type
-glsl_get_sampler_result_type(const struct glsl_type *type)
-{
-   assert(glsl_type_is_sampler(type) || glsl_type_is_image(type));
-   return (glsl_base_type)type->sampler_type;
-}
-
 unsigned
 glsl_get_record_location_offset(const struct glsl_type *type,
                                 unsigned length)
@@ -181,44 +155,6 @@ glsl_type_is_matrix(const struct glsl_type *type)
    return type->is_matrix();
 }
 
-bool
-glsl_type_is_array(const struct glsl_type *type)
-{
-   return type->is_array();
-}
-
-bool
-glsl_type_is_struct(const struct glsl_type *type)
-{
-   return type->is_record() || type->is_interface();
-}
-
-bool
-glsl_type_is_sampler(const struct glsl_type *type)
-{
-   return type->is_sampler();
-}
-
-bool
-glsl_type_is_image(const struct glsl_type *type)
-{
-   return type->is_image();
-}
-
-bool
-glsl_sampler_type_is_shadow(const struct glsl_type *type)
-{
-   assert(glsl_type_is_sampler(type));
-   return type->sampler_shadow;
-}
-
-bool
-glsl_sampler_type_is_array(const struct glsl_type *type)
-{
-   assert(glsl_type_is_sampler(type) || glsl_type_is_image(type));
-   return type->sampler_array;
-}
-
 const glsl_type *
 glsl_void_type(void)
 {
@@ -232,21 +168,9 @@ glsl_float_type(void)
 }
 
 const glsl_type *
-glsl_int_type(void)
+glsl_vec_type(unsigned n)
 {
-   return glsl_type::int_type;
-}
-
-const glsl_type *
-glsl_uint_type(void)
-{
-   return glsl_type::uint_type;
-}
-
-const glsl_type *
-glsl_bool_type(void)
-{
-   return glsl_type::bool_type;
+   return glsl_type::vec(n);
 }
 
 const glsl_type *
@@ -256,62 +180,13 @@ glsl_vec4_type(void)
 }
 
 const glsl_type *
-glsl_scalar_type(enum glsl_base_type base_type)
+glsl_uint_type(void)
 {
-   return glsl_type::get_instance(base_type, 1, 1);
-}
-
-const glsl_type *
-glsl_vector_type(enum glsl_base_type base_type, unsigned components)
-{
-   assert(components > 1 && components <= 4);
-   return glsl_type::get_instance(base_type, components, 1);
-}
-
-const glsl_type *
-glsl_matrix_type(enum glsl_base_type base_type, unsigned rows, unsigned columns)
-{
-   assert(rows > 1 && rows <= 4 && columns >= 1 && columns <= 4);
-   return glsl_type::get_instance(base_type, rows, columns);
+   return glsl_type::uint_type;
 }
 
 const glsl_type *
 glsl_array_type(const glsl_type *base, unsigned elements)
 {
    return glsl_type::get_array_instance(base, elements);
-}
-
-const glsl_type *
-glsl_struct_type(const glsl_struct_field *fields,
-                 unsigned num_fields, const char *name)
-{
-   return glsl_type::get_record_instance(fields, num_fields, name);
-}
-
-const struct glsl_type *
-glsl_sampler_type(enum glsl_sampler_dim dim, bool is_shadow, bool is_array,
-                  enum glsl_base_type base_type)
-{
-   return glsl_type::get_sampler_instance(dim, is_shadow, is_array, base_type);
-}
-
-const struct glsl_type *
-glsl_image_type(enum glsl_sampler_dim dim, bool is_array,
-                enum glsl_base_type base_type)
-{
-   return glsl_type::get_image_instance(dim, is_array, base_type);
-}
-
-const glsl_type *
-glsl_function_type(const glsl_type *return_type,
-                   const glsl_function_param *params, unsigned num_params)
-{
-   return glsl_type::get_function_instance(return_type, params, num_params);
-}
-
-const glsl_type *
-glsl_transposed_type(const struct glsl_type *type)
-{
-   return glsl_type::get_instance(type->base_type, type->matrix_columns,
-                                  type->vector_elements);
 }

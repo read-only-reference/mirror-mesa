@@ -22,7 +22,7 @@
  */
 
 #include <stdio.h>
-#include "main/core.h" /* for Elements, MAX2 */
+#include "main/macros.h"
 #include "glsl_parser_extras.h"
 #include "glsl_types.h"
 #include "util/hash_table.h"
@@ -32,7 +32,6 @@ mtx_t glsl_type::mutex = _MTX_INITIALIZER_NP;
 hash_table *glsl_type::array_types = NULL;
 hash_table *glsl_type::record_types = NULL;
 hash_table *glsl_type::interface_types = NULL;
-hash_table *glsl_type::function_types = NULL;
 hash_table *glsl_type::subroutine_types = NULL;
 void *glsl_type::mem_ctx = NULL;
 
@@ -165,39 +164,6 @@ glsl_type::glsl_type(const glsl_struct_field *fields, unsigned num_fields,
       this->fields.structure[i].matrix_layout = fields[i].matrix_layout;
       this->fields.structure[i].patch = fields[i].patch;
       this->fields.structure[i].precision = fields[i].precision;
-   }
-
-   mtx_unlock(&glsl_type::mutex);
-}
-
-glsl_type::glsl_type(const glsl_type *return_type,
-                     const glsl_function_param *params, unsigned num_params) :
-   gl_type(0),
-   base_type(GLSL_TYPE_FUNCTION),
-   sampler_dimensionality(0), sampler_shadow(0), sampler_array(0),
-   sampler_type(0), interface_packing(0),
-   vector_elements(0), matrix_columns(0),
-   length(num_params)
-{
-   unsigned int i;
-
-   mtx_lock(&glsl_type::mutex);
-
-   init_ralloc_type_ctx();
-
-   this->fields.parameters = rzalloc_array(this->mem_ctx,
-                                           glsl_function_param, num_params + 1);
-
-   /* We store the return type as the first parameter */
-   this->fields.parameters[0].type = return_type;
-   this->fields.parameters[0].in = false;
-   this->fields.parameters[0].out = true;
-
-   /* We store the i'th parameter in slot i+1 */
-   for (i = 0; i < length; i++) {
-      this->fields.parameters[i + 1].type = params[i].type;
-      this->fields.parameters[i + 1].in = params[i].in;
-      this->fields.parameters[i + 1].out = params[i].out;
    }
 
    mtx_unlock(&glsl_type::mutex);
@@ -715,93 +681,6 @@ glsl_type::get_sampler_instance(enum glsl_sampler_dim dim,
 }
 
 const glsl_type *
-glsl_type::get_image_instance(enum glsl_sampler_dim dim,
-                              bool array, glsl_base_type type)
-{
-   switch (type) {
-   case GLSL_TYPE_FLOAT:
-      switch (dim) {
-      case GLSL_SAMPLER_DIM_1D:
-         return (array ? image1DArray_type : image1D_type);
-      case GLSL_SAMPLER_DIM_2D:
-         return (array ? image2DArray_type : image2D_type);
-      case GLSL_SAMPLER_DIM_3D:
-         return image3D_type;
-      case GLSL_SAMPLER_DIM_CUBE:
-         return (array ? imageCubeArray_type : imageCube_type);
-      case GLSL_SAMPLER_DIM_RECT:
-         if (array)
-            return error_type;
-         else
-            return image2DRect_type;
-      case GLSL_SAMPLER_DIM_BUF:
-         if (array)
-            return error_type;
-         else
-            return imageBuffer_type;
-      case GLSL_SAMPLER_DIM_MS:
-         return (array ? image2DMSArray_type : image2DMS_type);
-      case GLSL_SAMPLER_DIM_EXTERNAL:
-         return error_type;
-      }
-   case GLSL_TYPE_INT:
-      switch (dim) {
-      case GLSL_SAMPLER_DIM_1D:
-         return (array ? iimage1DArray_type : iimage1D_type);
-      case GLSL_SAMPLER_DIM_2D:
-         return (array ? iimage2DArray_type : iimage2D_type);
-      case GLSL_SAMPLER_DIM_3D:
-         if (array)
-            return error_type;
-         return iimage3D_type;
-      case GLSL_SAMPLER_DIM_CUBE:
-         return (array ? iimageCubeArray_type : iimageCube_type);
-      case GLSL_SAMPLER_DIM_RECT:
-         if (array)
-            return error_type;
-         return iimage2DRect_type;
-      case GLSL_SAMPLER_DIM_BUF:
-         if (array)
-            return error_type;
-         return iimageBuffer_type;
-      case GLSL_SAMPLER_DIM_MS:
-         return (array ? iimage2DMSArray_type : iimage2DMS_type);
-      case GLSL_SAMPLER_DIM_EXTERNAL:
-         return error_type;
-      }
-   case GLSL_TYPE_UINT:
-      switch (dim) {
-      case GLSL_SAMPLER_DIM_1D:
-         return (array ? uimage1DArray_type : uimage1D_type);
-      case GLSL_SAMPLER_DIM_2D:
-         return (array ? uimage2DArray_type : uimage2D_type);
-      case GLSL_SAMPLER_DIM_3D:
-         if (array)
-            return error_type;
-         return uimage3D_type;
-      case GLSL_SAMPLER_DIM_CUBE:
-         return (array ? uimageCubeArray_type : uimageCube_type);
-      case GLSL_SAMPLER_DIM_RECT:
-         if (array)
-            return error_type;
-         return uimage2DRect_type;
-      case GLSL_SAMPLER_DIM_BUF:
-         if (array)
-            return error_type;
-         return uimageBuffer_type;
-      case GLSL_SAMPLER_DIM_MS:
-         return (array ? uimage2DMSArray_type : uimage2DMS_type);
-      case GLSL_SAMPLER_DIM_EXTERNAL:
-         return error_type;
-      }
-   default:
-      return error_type;
-   }
-
-   unreachable("switch statement above should be complete");
-}
-
-const glsl_type *
 glsl_type::get_array_instance(const glsl_type *base, unsigned array_size)
 {
    /* Generate a name using the base type pointer in the key.  This is
@@ -1045,74 +924,6 @@ glsl_type::get_subroutine_instance(const char *subroutine_name)
 }
 
 
-static bool
-function_key_compare(const void *a, const void *b)
-{
-   const glsl_type *const key1 = (glsl_type *) a;
-   const glsl_type *const key2 = (glsl_type *) b;
-
-   if (key1->length != key2->length)
-      return 1;
-
-   return memcmp(key1->fields.parameters, key2->fields.parameters,
-                 (key1->length + 1) * sizeof(*key1->fields.parameters));
-}
-
-
-static uint32_t
-function_key_hash(const void *a)
-{
-   const glsl_type *const key = (glsl_type *) a;
-   char hash_key[128];
-   unsigned size = 0;
-
-   size = snprintf(hash_key, sizeof(hash_key), "%08x", key->length);
-
-   for (unsigned i = 0; i < key->length; i++) {
-      if (size >= sizeof(hash_key))
-	 break;
-
-      size += snprintf(& hash_key[size], sizeof(hash_key) - size,
-		       "%p", (void *) key->fields.structure[i].type);
-   }
-
-   return _mesa_hash_string(hash_key);
-}
-
-const glsl_type *
-glsl_type::get_function_instance(const glsl_type *return_type,
-                                 const glsl_function_param *params,
-                                 unsigned num_params)
-{
-   const glsl_type key(return_type, params, num_params);
-
-   mtx_lock(&glsl_type::mutex);
-
-   if (function_types == NULL) {
-      function_types = _mesa_hash_table_create(NULL, function_key_hash,
-                                               function_key_compare);
-   }
-
-   struct hash_entry *entry = _mesa_hash_table_search(function_types, &key);
-   if (entry == NULL) {
-      mtx_unlock(&glsl_type::mutex);
-      const glsl_type *t = new glsl_type(return_type, params, num_params);
-      mtx_lock(&glsl_type::mutex);
-
-      entry = _mesa_hash_table_insert(function_types, t, (void *) t);
-   }
-
-   const glsl_type *t = (const glsl_type *)entry->data;
-
-   assert(t->base_type == GLSL_TYPE_FUNCTION);
-   assert(t->length == num_params);
-
-   mtx_unlock(&glsl_type::mutex);
-
-   return t;
-}
-
-
 const glsl_type *
 glsl_type::get_mul_type(const glsl_type *type_a, const glsl_type *type_b)
 {
@@ -1242,8 +1053,6 @@ glsl_type::component_slots() const
       return 1;
    case GLSL_TYPE_SUBROUTINE:
      return 1;
-
-   case GLSL_TYPE_FUNCTION:
    case GLSL_TYPE_SAMPLER:
    case GLSL_TYPE_ATOMIC_UINT:
    case GLSL_TYPE_VOID:
@@ -1831,7 +1640,7 @@ glsl_type::std430_size(bool row_major) const
 }
 
 unsigned
-glsl_type::count_attribute_slots() const
+glsl_type::count_attribute_slots(bool vertex_input_slots) const
 {
    /* From page 31 (page 37 of the PDF) of the GLSL 1.50 spec:
     *
@@ -1852,29 +1661,36 @@ glsl_type::count_attribute_slots() const
     * allows varying structs, the number of varying slots taken up by a
     * varying struct is simply equal to the sum of the number of slots taken
     * up by each element.
+    *
+    * Doubles are counted different depending on whether they are vertex
+    * inputs or everything else. Vertex inputs from ARB_vertex_attrib_64bit
+    * take one location no matter what size they are, otherwise dvec3/4
+    * take two locations.
     */
    switch (this->base_type) {
    case GLSL_TYPE_UINT:
    case GLSL_TYPE_INT:
    case GLSL_TYPE_FLOAT:
    case GLSL_TYPE_BOOL:
-   case GLSL_TYPE_DOUBLE:
       return this->matrix_columns;
-
+   case GLSL_TYPE_DOUBLE:
+      if (this->vector_elements > 2 && !vertex_input_slots)
+         return this->matrix_columns * 2;
+      else
+         return this->matrix_columns;
    case GLSL_TYPE_STRUCT:
    case GLSL_TYPE_INTERFACE: {
       unsigned size = 0;
 
       for (unsigned i = 0; i < this->length; i++)
-         size += this->fields.structure[i].type->count_attribute_slots();
+         size += this->fields.structure[i].type->count_attribute_slots(vertex_input_slots);
 
       return size;
    }
 
    case GLSL_TYPE_ARRAY:
-      return this->length * this->fields.array->count_attribute_slots();
+      return this->length * this->fields.array->count_attribute_slots(vertex_input_slots);
 
-   case GLSL_TYPE_FUNCTION:
    case GLSL_TYPE_SAMPLER:
    case GLSL_TYPE_IMAGE:
    case GLSL_TYPE_ATOMIC_UINT:

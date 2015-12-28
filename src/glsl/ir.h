@@ -659,6 +659,13 @@ public:
       unsigned assigned:1;
 
       /**
+       * When separate shader programs are enabled, only input/outputs between
+       * the stages of a multi-stage separate program can be safely removed
+       * from the shader interface. Other input/outputs must remains active.
+       */
+      unsigned always_active_io:1;
+
+      /**
        * Enum indicating how the variable was declared.  See
        * ir_var_declaration_type.
        *
@@ -864,9 +871,7 @@ public:
       /**
        * Location an atomic counter is stored at.
        */
-      struct {
-         unsigned offset;
-      } atomic;
+      unsigned offset;
 
       /**
        * Highest element accessed with a constant expression array index
@@ -1348,7 +1353,6 @@ enum ir_expression_operation {
    ir_unop_bitcast_f2i, /**< Bit-identical float-to-int "conversion" */
    ir_unop_bitcast_u2f, /**< Bit-identical uint-to-float "conversion" */
    ir_unop_bitcast_f2u, /**< Bit-identical float-to-uint "conversion" */
-   ir_unop_any,
 
    /**
     * \name Unary floating-point rounding operations.
@@ -1719,7 +1723,6 @@ public:
    {
       return operation == ir_binop_all_equal ||
              operation == ir_binop_any_nequal ||
-             operation == ir_unop_any ||
              operation == ir_binop_dot ||
              operation == ir_quadop_vector;
    }

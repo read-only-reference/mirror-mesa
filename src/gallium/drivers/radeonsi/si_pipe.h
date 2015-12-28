@@ -253,6 +253,8 @@ struct si_context {
 	bool			db_flush_stencil_inplace;
 	bool			db_depth_clear;
 	bool			db_depth_disable_expclear;
+	bool			db_stencil_clear;
+	bool			db_stencil_disable_expclear;
 	unsigned		ps_db_shader_control;
 
 	/* Emitted draw state. */
@@ -327,6 +329,7 @@ void si_init_cp_dma_functions(struct si_context *sctx);
 /* si_debug.c */
 void si_init_debug_functions(struct si_context *sctx);
 void si_check_vm_faults(struct si_context *sctx);
+bool si_replace_shader(unsigned num, struct radeon_shader_binary *binary);
 
 /* si_dma.c */
 void si_dma_copy(struct pipe_context *ctx,
@@ -345,6 +348,9 @@ void si_need_cs_space(struct si_context *ctx);
 
 /* si_compute.c */
 void si_init_compute_functions(struct si_context *sctx);
+
+/* si_perfcounters.c */
+void si_init_perfcounters(struct si_screen *screen);
 
 /* si_uvd.c */
 struct pipe_video_codec *si_uvd_create_decoder(struct pipe_context *context,

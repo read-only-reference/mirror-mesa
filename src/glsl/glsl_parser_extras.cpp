@@ -87,8 +87,6 @@ _mesa_glsl_parse_state::_mesa_glsl_parse_state(struct gl_context *_ctx,
 
    this->extensions = &ctx->Extensions;
 
-   this->ARB_compute_shader_enable = true;
-
    this->Const.MaxLights = ctx->Const.MaxLights;
    this->Const.MaxClipPlanes = ctx->Const.MaxClipPlanes;
    this->Const.MaxTextureUnits = ctx->Const.MaxTextureUnits;
@@ -479,7 +477,7 @@ _mesa_glsl_msg(const YYLTYPE *locp, _mesa_glsl_parse_state *state,
    struct gl_context *ctx = state->ctx;
 
    /* Report the error via GL_ARB_debug_output. */
-   _mesa_shader_debug(ctx, type, &msg_id, msg, strlen(msg));
+   _mesa_shader_debug(ctx, type, &msg_id, msg);
 
    ralloc_strcat(&state->info_log, "\n");
 }
@@ -610,6 +608,7 @@ static const _mesa_glsl_extension _mesa_glsl_supported_extensions[] = {
    EXT(ARB_shader_atomic_counters,       true,  false,     ARB_shader_atomic_counters),
    EXT(ARB_shader_bit_encoding,          true,  false,     ARB_shader_bit_encoding),
    EXT(ARB_shader_clock,                 true,  false,     ARB_shader_clock),
+   EXT(ARB_shader_draw_parameters,       true,  false,     ARB_shader_draw_parameters),
    EXT(ARB_shader_image_load_store,      true,  false,     ARB_shader_image_load_store),
    EXT(ARB_shader_image_size,            true,  false,     ARB_shader_image_size),
    EXT(ARB_shader_precision,             true,  false,     ARB_shader_precision),
@@ -876,7 +875,7 @@ void
 _mesa_ast_process_interface_block(YYLTYPE *locp,
                                   _mesa_glsl_parse_state *state,
                                   ast_interface_block *const block,
-                                  const struct ast_type_qualifier q)
+                                  const struct ast_type_qualifier &q)
 {
    if (q.flags.q.buffer) {
       if (!state->has_shader_storage_buffer_objects()) {
@@ -1088,7 +1087,7 @@ void
 ast_compound_statement::print(void) const
 {
    printf("{\n");
-   
+
    foreach_list_typed(ast_node, ast, link, &this->statements) {
       ast->print();
    }
@@ -1414,7 +1413,6 @@ ast_selection_statement::print(void) const
       printf("else ");
       else_statement->print();
    }
-   
 }
 
 

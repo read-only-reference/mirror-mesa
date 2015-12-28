@@ -91,13 +91,9 @@ is_phi_src_scalarizable(nir_phi_src *src,
       case nir_intrinsic_interp_var_at_sample:
       case nir_intrinsic_interp_var_at_offset:
       case nir_intrinsic_load_uniform:
-      case nir_intrinsic_load_uniform_indirect:
       case nir_intrinsic_load_ubo:
-      case nir_intrinsic_load_ubo_indirect:
       case nir_intrinsic_load_ssbo:
-      case nir_intrinsic_load_ssbo_indirect:
       case nir_intrinsic_load_input:
-      case nir_intrinsic_load_input_indirect:
          return true;
       default:
          break;
@@ -290,8 +286,8 @@ lower_phis_to_scalar_impl(nir_function_impl *impl)
 void
 nir_lower_phis_to_scalar(nir_shader *shader)
 {
-   nir_foreach_overload(shader, overload) {
-      if (overload->impl)
-         lower_phis_to_scalar_impl(overload->impl);
+   nir_foreach_function(shader, function) {
+      if (function->impl)
+         lower_phis_to_scalar_impl(function->impl);
    }
 }

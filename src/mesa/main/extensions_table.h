@@ -96,6 +96,7 @@ EXT(ARB_separate_shader_objects             , dummy_true                        
 EXT(ARB_shader_atomic_counters              , ARB_shader_atomic_counters             , GLL, GLC,  x ,  x , 2011)
 EXT(ARB_shader_bit_encoding                 , ARB_shader_bit_encoding                , GLL, GLC,  x ,  x , 2010)
 EXT(ARB_shader_clock                        , ARB_shader_clock                       , GLL, GLC,  x ,  x , 2015)
+EXT(ARB_shader_draw_parameters              , ARB_shader_draw_parameters             , GLL, GLC,  x ,  x , 2013)
 EXT(ARB_shader_image_load_store             , ARB_shader_image_load_store            , GLL, GLC,  x ,  x , 2011)
 EXT(ARB_shader_image_size                   , ARB_shader_image_size                  , GLL, GLC,  x ,  x , 2012)
 EXT(ARB_shader_objects                      , dummy_true                             , GLL, GLC,  x ,  x , 2002)
@@ -258,7 +259,7 @@ EXT(INGR_blend_func_separate                , EXT_blend_func_separate           
 EXT(INTEL_performance_query                 , INTEL_performance_query                , GLL, GLC,  x , ES2, 2013)
 
 EXT(KHR_context_flush_control               , dummy_true                             , GLL, GLC,  x , ES2, 2014)
-EXT(KHR_debug                               , dummy_true                             , GLL, GLC, ES1, ES2, 2012)
+EXT(KHR_debug                               , dummy_true                             , GLL, GLC,  11, ES2, 2012)
 EXT(KHR_texture_compression_astc_hdr        , KHR_texture_compression_astc_hdr       , GLL, GLC,  x , ES2, 2012)
 EXT(KHR_texture_compression_astc_ldr        , KHR_texture_compression_astc_ldr       , GLL, GLC,  x , ES2, 2012)
 

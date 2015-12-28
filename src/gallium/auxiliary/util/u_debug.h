@@ -268,9 +268,11 @@ void _debug_assert_fail(const char *expr,
  */
 #define pipe_debug_message(cb, type, fmt, ...) do { \
    static unsigned id = 0; \
-   _pipe_debug_message(cb, &id, \
-                       PIPE_DEBUG_TYPE_ ## type, \
-                       fmt, __VA_ARGS__); \
+   if ((cb) && (cb)->debug_message) { \
+      _pipe_debug_message(cb, &id, \
+                          PIPE_DEBUG_TYPE_ ## type, \
+                          fmt, ##__VA_ARGS__); \
+   } \
 } while (0)
 
 struct pipe_debug_callback;
@@ -401,6 +403,19 @@ uint64_t
 debug_get_flags_option(const char *name, 
                        const struct debug_named_value *flags,
                        uint64_t dfault);
+
+#define DEBUG_GET_ONCE_OPTION(suffix, name, dfault) \
+static const char * \
+debug_get_option_ ## suffix (void) \
+{ \
+   static boolean first = TRUE; \
+   static const char * value; \
+   if (first) { \
+      first = FALSE; \
+      value = debug_get_option(name, dfault); \
+   } \
+   return value; \
+}
 
 #define DEBUG_GET_ONCE_BOOL_OPTION(sufix, name, dfault) \
 static boolean \

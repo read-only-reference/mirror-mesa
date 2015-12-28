@@ -72,8 +72,8 @@ LIBDRM_REQUIRED=2.4.60
 LIBDRM_RADEON_REQUIRED=2.4.56
 LIBDRM_AMDGPU_REQUIRED=2.4.63
 LIBDRM_INTEL_REQUIRED=2.4.61
-LIBDRM_NVVIEUX_REQUIRED=2.4.33
-LIBDRM_NOUVEAU_REQUIRED=2.4.62
+LIBDRM_NVVIEUX_REQUIRED=2.4.66
+LIBDRM_NOUVEAU_REQUIRED=2.4.66
 LIBDRM_FREEDRENO_REQUIRED=2.4.65
 DRI2PROTO_REQUIRED=2.6
 DRI3PROTO_REQUIRED=1.0
@@ -98,8 +98,7 @@ AC_PROG_CXX
 AM_PROG_CC_C_O
 AM_PROG_AS
 AX_CHECK_GNU_MAKE
-AC_CHECK_PROGS([PYTHON2], [python2 python])
-AC_CHECK_PROGS([PYTHON3], [python3])
+AC_CHECK_PROGS([PYTHON2], [python2.7 python2 python])
 AC_PROG_SED
 AC_PROG_MKDIR_P
 
@@ -196,6 +195,13 @@ if test "x$GCC" = xyes -a "x$acv_mesa_CLANG" = xno; then
     if test "x$cross_compiling" = xyes; then
         GEN_ASM_OFFSETS=yes
     fi
+fi
+
+dnl We don't support building Mesa with Sun C compiler
+dnl https://bugs.freedesktop.org/show_bug.cgi?id=93189
+AC_CHECK_DECL([__SUNPRO_C], [SUNCC=yes], [SUNCC=no])
+if test "x$SUNCC" = xyes; then
+    AC_MSG_ERROR([Building with Sun C compiler is not supported, use GCC instead.])
 fi
 
 dnl Check for compiler builtins
@@ -377,10 +383,11 @@ save_CFLAGS="$CFLAGS"
 CFLAGS="$SSE41_CFLAGS $CFLAGS"
 AC_COMPILE_IFELSE([AC_LANG_SOURCE([[
 #include <smmintrin.h>
+int param;
 int main () {
-    __m128i a = _mm_set1_epi32 (0), b = _mm_set1_epi32 (0), c;
+    __m128i a = _mm_set1_epi32 (param), b = _mm_set1_epi32 (param + 1), c;
     c = _mm_max_epu32(a, b);
-    return 0;
+    return _mm_cvtsi128_si32(c);
 }]])], SSE41_SUPPORTED=1)
 CFLAGS="$save_CFLAGS"
 if test "x$SSE41_SUPPORTED" = x1; then
@@ -1559,8 +1566,6 @@ GBM_PC_LIB_PRIV="$DLOPEN_LIBS"
 AC_SUBST([GBM_PC_REQ_PRIV])
 AC_SUBST([GBM_PC_LIB_PRIV])
 
-AM_CONDITIONAL(HAVE_VULKAN, true)
-
 dnl
 dnl EGL configuration
 dnl
@@ -1708,7 +1713,15 @@ AC_ARG_WITH([clang-libdir],
    [CLANG_LIBDIR=''])
 
 PKG_CHECK_EXISTS([libclc], [have_libclc=yes], [have_libclc=no])
-AC_CHECK_LIB([elf], [elf_memory], [have_libelf=yes;ELF_LIB=-lelf])
+PKG_CHECK_MODULES([LIBELF], [libelf], [have_libelf=yes], [have_libelf=no])
+
+if test "x$have_libelf" = xno; then
+   LIBELF_LIBS=''
+   LIBELF_CFLAGS=''
+   AC_CHECK_LIB([elf], [elf_memory], [have_libelf=yes;LIBELF_LIBS=-lelf], [have_libelf=no])
+   AC_SUBST([LIBELF_LIBS])
+   AC_SUBST([LIBELF_CFLAGS])
+fi
 
 if test "x$enable_opencl" = xyes; then
     if test -z "$with_gallium_drivers"; then
@@ -2295,8 +2308,6 @@ if test "x$USE_VC4_SIMULATOR" = xyes -a "x$HAVE_GALLIUM_ILO" = xyes; then
     AC_MSG_ERROR([VC4 simulator on x86 replaces i965 driver build, so ilo must be disabled.])
 fi
 
-AC_SUBST([ELF_LIB])
-
 AM_CONDITIONAL(HAVE_LIBDRM, test "x$have_libdrm" = xyes)
 AM_CONDITIONAL(HAVE_X11_DRIVER, test "x$enable_xlib_glx" = xyes)
 AM_CONDITIONAL(HAVE_OSMESA, test "x$enable_osmesa" = xyes)
@@ -2331,13 +2342,6 @@ AC_SUBST([XA_MAJOR], $XA_MAJOR)
 AC_SUBST([XA_MINOR], $XA_MINOR)
 AC_SUBST([XA_TINY], $XA_TINY)
 AC_SUBST([XA_VERSION], "$XA_MAJOR.$XA_MINOR.$XA_TINY")
-
-PKG_CHECK_MODULES(VALGRIND, [valgrind],
-                  [have_valgrind=yes], [have_valgrind=no])
-if test "x$have_valgrind" = "xyes"; then
-    AC_DEFINE([HAVE_VALGRIND], 1,
-              [Use valgrind intrinsics to suppress false warnings])
-fi
 
 dnl Restore LDFLAGS and CPPFLAGS
 LDFLAGS="$_SAVE_LDFLAGS"
@@ -2451,9 +2455,6 @@ AC_CONFIG_FILES([Makefile
 		src/mesa/drivers/osmesa/osmesa.pc
 		src/mesa/drivers/x11/Makefile
 		src/mesa/main/tests/Makefile
-		src/vulkan/Makefile
-		src/vulkan/anv_icd.json
-		src/vulkan/tests/Makefile
 		src/util/Makefile
 		src/util/tests/hash_table/Makefile])
 
@@ -2576,7 +2577,6 @@ if test "x$MESA_LLVM" = x1; then
     echo ""
 fi
 echo "        PYTHON2:         $PYTHON2"
-echo "        PYTHON3:         $PYTHON3"
 
 echo ""
 echo "        Run '${MAKE-make}' to build Mesa"

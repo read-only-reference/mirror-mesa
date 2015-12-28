@@ -25,7 +25,6 @@
 
 #include "nir.h"
 #include "nir_builder.h"
-#include "../program.h"
 #include "program/hash_table.h"
 #include "ir_uniform.h"
 
@@ -95,9 +94,6 @@ lower_sampler(nir_tex_instr *instr, const struct gl_shader_program *shader_progr
    if (instr->sampler == NULL)
       return;
 
-   /* GLSL only has combined textures/samplers */
-   assert(instr->texture == NULL);
-
    instr->sampler_index = 0;
    unsigned location = instr->sampler->var->data.location;
    unsigned array_elements = 1;
@@ -110,7 +106,7 @@ lower_sampler(nir_tex_instr *instr, const struct gl_shader_program *shader_progr
    if (indirect) {
       /* First, we have to resize the array of texture sources */
       nir_tex_src *new_srcs = rzalloc_array(instr, nir_tex_src,
-                                            instr->num_srcs + 2);
+                                            instr->num_srcs + 1);
 
       for (unsigned i = 0; i < instr->num_srcs; i++) {
          new_srcs[i].src_type = instr->src[i].src_type;
@@ -124,19 +120,13 @@ lower_sampler(nir_tex_instr *instr, const struct gl_shader_program *shader_progr
       /* Now we can go ahead and move the source over to being a
        * first-class texture source.
        */
-      instr->src[instr->num_srcs].src_type = nir_tex_src_texture_offset;
-      instr->num_srcs++;
-      nir_instr_rewrite_src(&instr->instr,
-                            &instr->src[instr->num_srcs - 1].src,
-                            nir_src_for_ssa(indirect));
-
       instr->src[instr->num_srcs].src_type = nir_tex_src_sampler_offset;
       instr->num_srcs++;
       nir_instr_rewrite_src(&instr->instr,
                             &instr->src[instr->num_srcs - 1].src,
                             nir_src_for_ssa(indirect));
 
-      instr->texture_array_size = array_elements;
+      instr->sampler_array_size = array_elements;
    }
 
    if (location > shader_program->NumUniformStorage - 1 ||
@@ -149,8 +139,6 @@ lower_sampler(nir_tex_instr *instr, const struct gl_shader_program *shader_progr
       shader_program->UniformStorage[location].opaque[stage].index;
 
    instr->sampler = NULL;
-
-   instr->texture_index = instr->sampler_index;
 }
 
 typedef struct {
@@ -192,8 +180,8 @@ void
 nir_lower_samplers(nir_shader *shader,
                    const struct gl_shader_program *shader_program)
 {
-   nir_foreach_overload(shader, overload) {
-      if (overload->impl)
-         lower_impl(overload->impl, shader_program, shader->stage);
+   nir_foreach_function(shader, function) {
+      if (function->impl)
+         lower_impl(function->impl, shader_program, shader->stage);
    }
 }

@@ -213,7 +213,6 @@ struct si_shader_selector {
 	/* masks of "get_unique_index" bits */
 	uint64_t	outputs_written;
 	uint32_t	patch_outputs_written;
-	uint32_t	ps_colors_written;
 };
 
 /* Valid shader configurations:
@@ -290,8 +289,8 @@ struct si_shader {
 	bool			is_gs_copy_shader;
 	bool			dx10_clamp_mode; /* convert NaNs to 0 */
 
-	unsigned		ls_rsrc1;
-	unsigned		ls_rsrc2;
+	unsigned		rsrc1;
+	unsigned		rsrc2;
 };
 
 static inline struct tgsi_shader_info *si_get_vs_info(struct si_context *sctx)

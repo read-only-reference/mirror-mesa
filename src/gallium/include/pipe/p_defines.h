@@ -635,6 +635,7 @@ enum pipe_cap
    PIPE_CAP_SHAREABLE_SHADERS,
    PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS,
    PIPE_CAP_CLEAR_TEXTURE,
+   PIPE_CAP_DRAW_PARAMETERS,
 };
 
 #define PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50 (1 << 0)
@@ -822,8 +823,8 @@ union pipe_query_result
    /* PIPE_QUERY_PIPELINE_STATISTICS */
    struct pipe_query_data_pipeline_statistics pipeline_statistics;
 
-   /* batch queries */
-   union pipe_numeric_type_union batch[0];
+   /* batch queries (variable length) */
+   union pipe_numeric_type_union batch[1];
 };
 
 union pipe_color_union
@@ -860,6 +861,9 @@ enum pipe_driver_query_result_type
  * any time.
  */
 #define PIPE_DRIVER_QUERY_FLAG_BATCH     (1 << 0)
+
+/* Do not list this query in the HUD. */
+#define PIPE_DRIVER_QUERY_FLAG_DONT_LIST (1 << 1)
 
 struct pipe_driver_query_info
 {

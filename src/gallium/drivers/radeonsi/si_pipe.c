@@ -109,7 +109,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 #endif
 	int shader, i;
 
-	if (sctx == NULL)
+	if (!sctx)
 		return NULL;
 
 	if (sscreen->b.debug_flags & DBG_CHECK_VM)
@@ -143,7 +143,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 
 	sctx->b.gfx.cs = ws->cs_create(sctx->b.ctx, RING_GFX, si_context_gfx_flush,
 				       sctx, sscreen->b.trace_bo ?
-					       sscreen->b.trace_bo->cs_buf : NULL);
+					       sscreen->b.trace_bo->buf : NULL);
 	sctx->b.gfx.flush = si_context_gfx_flush;
 
 	/* Border colors. */
@@ -160,7 +160,7 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 		goto fail;
 
 	sctx->border_color_map =
-		ws->buffer_map(sctx->border_color_buffer->cs_buf,
+		ws->buffer_map(sctx->border_color_buffer->buf,
 			       NULL, PIPE_TRANSFER_WRITE);
 	if (!sctx->border_color_map)
 		goto fail;
@@ -340,6 +340,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TEXTURE_GATHER_OFFSETS:
 	case PIPE_CAP_VERTEXID_NOBASE:
 	case PIPE_CAP_CLEAR_TEXTURE:
+	case PIPE_CAP_DRAW_PARAMETERS:
 		return 0;
 
 	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
@@ -520,7 +521,7 @@ static void si_destroy_screen(struct pipe_screen* pscreen)
 {
 	struct si_screen *sscreen = (struct si_screen *)pscreen;
 
-	if (sscreen == NULL)
+	if (!sscreen)
 		return;
 
 	if (!sscreen->b.ws->unref(sscreen->b.ws))
@@ -611,7 +612,7 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 {
 	struct si_screen *sscreen = CALLOC_STRUCT(si_screen);
 
-	if (sscreen == NULL) {
+	if (!sscreen) {
 		return NULL;
 	}
 
@@ -629,6 +630,9 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 		FREE(sscreen);
 		return NULL;
 	}
+
+	if (!debug_get_bool_option("RADEON_DISABLE_PERFCOUNTERS", FALSE))
+		si_init_perfcounters(sscreen);
 
 	sscreen->b.has_cp_dma = true;
 	sscreen->b.has_streamout = true;

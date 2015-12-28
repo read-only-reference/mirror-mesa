@@ -73,6 +73,7 @@ load_input(nir_builder *b, nir_variable *in)
    load = nir_intrinsic_instr_create(b->shader, nir_intrinsic_load_input);
    load->num_components = 4;
    load->const_index[0] = in->data.driver_location;
+   load->src[0] = nir_src_for_ssa(nir_imm_int(b, 0));
    nir_ssa_dest_init(&load->instr, &load->dest, 4, NULL);
    nir_builder_instr_insert(b, &load->instr);
 
@@ -151,6 +152,7 @@ nir_lower_two_sided_color_block(nir_block *block, void *void_state)
          unsigned drvloc =
             state->colors[idx].front->data.driver_location;
          if (intr->const_index[0] == drvloc) {
+            assert(nir_src_as_const_value(intr->src[0]));
             break;
          }
       }
@@ -202,9 +204,9 @@ nir_lower_two_sided_color(nir_shader *shader)
    if (setup_inputs(&state) != 0)
       return;
 
-   nir_foreach_overload(shader, overload) {
-      if (overload->impl)
-         nir_lower_two_sided_color_impl(overload->impl, &state);
+   nir_foreach_function(shader, function) {
+      if (function->impl)
+         nir_lower_two_sided_color_impl(function->impl, &state);
    }
 
 }

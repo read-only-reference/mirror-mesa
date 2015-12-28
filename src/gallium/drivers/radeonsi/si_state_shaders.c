@@ -100,7 +100,7 @@ static void si_shader_ls(struct si_shader *shader)
 	uint64_t va;
 
 	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
-	if (pm4 == NULL)
+	if (!pm4)
 		return;
 
 	va = shader->bo->gpu_address;
@@ -121,11 +121,11 @@ static void si_shader_ls(struct si_shader *shader)
 	si_pm4_set_reg(pm4, R_00B520_SPI_SHADER_PGM_LO_LS, va >> 8);
 	si_pm4_set_reg(pm4, R_00B524_SPI_SHADER_PGM_HI_LS, va >> 40);
 
-	shader->ls_rsrc1 = S_00B528_VGPRS((shader->num_vgprs - 1) / 4) |
+	shader->rsrc1 = S_00B528_VGPRS((shader->num_vgprs - 1) / 4) |
 			   S_00B528_SGPRS((num_sgprs - 1) / 8) |
 		           S_00B528_VGPR_COMP_CNT(vgpr_comp_cnt) |
 			   S_00B528_DX10_CLAMP(shader->dx10_clamp_mode);
-	shader->ls_rsrc2 = S_00B52C_USER_SGPR(num_user_sgprs) |
+	shader->rsrc2 = S_00B52C_USER_SGPR(num_user_sgprs) |
 			   S_00B52C_SCRATCH_EN(shader->scratch_bytes_per_wave > 0);
 }
 
@@ -136,7 +136,7 @@ static void si_shader_hs(struct si_shader *shader)
 	uint64_t va;
 
 	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
-	if (pm4 == NULL)
+	if (!pm4)
 		return;
 
 	va = shader->bo->gpu_address;
@@ -172,7 +172,7 @@ static void si_shader_es(struct si_shader *shader)
 
 	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
 
-	if (pm4 == NULL)
+	if (!pm4)
 		return;
 
 	va = shader->bo->gpu_address;
@@ -229,7 +229,7 @@ static void si_shader_gs(struct si_shader *shader)
 
 	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
 
-	if (pm4 == NULL)
+	if (!pm4)
 		return;
 
 	if (gs_max_vert_out <= 128) {
@@ -301,7 +301,7 @@ static void si_shader_vs(struct si_shader *shader)
 
 	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
 
-	if (pm4 == NULL)
+	if (!pm4)
 		return;
 
 	/* If this is the GS copy shader, the GS state writes this register.
@@ -394,7 +394,7 @@ static void si_shader_ps(struct si_shader *shader)
 
 	pm4 = shader->pm4 = CALLOC_STRUCT(si_pm4_state);
 
-	if (pm4 == NULL)
+	if (!pm4)
 		return;
 
 	for (i = 0; i < info->num_inputs; i++) {
@@ -634,7 +634,6 @@ static int si_shader_select(struct pipe_context *ctx,
 		sel->last_variant = shader;
 	}
 	state->current = shader;
-	p_atomic_inc(&sctx->screen->b.num_compilations);
 	pipe_mutex_unlock(sel->mutex);
 	return 0;
 }
@@ -729,15 +728,6 @@ static void *si_create_shader_selector(struct pipe_context *ctx,
 			}
 		}
 		sel->esgs_itemsize = util_last_bit64(sel->outputs_written) * 16;
-		break;
-	case PIPE_SHADER_FRAGMENT:
-		for (i = 0; i < sel->info.num_outputs; i++) {
-			unsigned name = sel->info.output_semantic_name[i];
-			unsigned index = sel->info.output_semantic_index[i];
-
-			if (name == TGSI_SEMANTIC_COLOR)
-				sel->ps_colors_written |= 1 << index;
-		}
 		break;
 	}
 

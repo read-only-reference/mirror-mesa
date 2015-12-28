@@ -40,7 +40,18 @@ nir_builder_init(nir_builder *build, nir_function_impl *impl)
 {
    memset(build, 0, sizeof(*build));
    build->impl = impl;
-   build->shader = impl->overload->function->shader;
+   build->shader = impl->function->shader;
+}
+
+static inline void
+nir_builder_init_simple_shader(nir_builder *build, void *mem_ctx,
+                               gl_shader_stage stage,
+                               const nir_shader_compiler_options *options)
+{
+   build->shader = nir_shader_create(mem_ctx, stage, options);
+   nir_function *func = nir_function_create(build->shader, "main");
+   build->impl = nir_function_impl_create(func);
+   build->cursor = nir_after_cf_list(&build->impl->body);
 }
 
 static inline void
@@ -56,20 +67,6 @@ static inline void
 nir_builder_cf_insert(nir_builder *build, nir_cf_node *cf)
 {
    nir_cf_node_insert(build->cursor, cf);
-}
-
-static inline nir_ssa_def *
-nir_ssa_undef(nir_builder *build, unsigned num_components)
-{
-   nir_ssa_undef_instr *undef =
-      nir_ssa_undef_instr_create(build->shader, num_components);
-   if (!undef)
-      return NULL;
-
-   nir_instr_insert(nir_before_block(nir_start_block(build->impl)),
-                    &undef->instr);
-
-   return &undef->def;
 }
 
 static inline nir_ssa_def *
@@ -263,23 +260,6 @@ nir_swizzle(nir_builder *build, nir_ssa_def *src, unsigned swiz[4],
                      nir_imov_alu(build, alu_src, num_components);
 }
 
-/* Selects the right fdot given the number of components in each source. */
-static inline nir_ssa_def *
-nir_fdot(nir_builder *build, nir_ssa_def *src0, nir_ssa_def *src1)
-{
-   assert(src0->num_components == src1->num_components);
-   switch (src0->num_components) {
-   case 1: return nir_fmul(build, src0, src1);
-   case 2: return nir_fdot2(build, src0, src1);
-   case 3: return nir_fdot3(build, src0, src1);
-   case 4: return nir_fdot4(build, src0, src1);
-   default:
-      unreachable("bad component size");
-   }
-
-   return NULL;
-}
-
 static inline nir_ssa_def *
 nir_channel(nir_builder *b, nir_ssa_def *def, unsigned c)
 {
@@ -341,16 +321,30 @@ nir_load_var(nir_builder *build, nir_variable *var)
 }
 
 static inline void
-nir_store_var(nir_builder *build, nir_variable *var, nir_ssa_def *value)
+nir_store_var(nir_builder *build, nir_variable *var, nir_ssa_def *value,
+              unsigned writemask)
 {
    const unsigned num_components = glsl_get_vector_elements(var->type);
 
    nir_intrinsic_instr *store =
       nir_intrinsic_instr_create(build->shader, nir_intrinsic_store_var);
    store->num_components = num_components;
+   store->const_index[0] = writemask;
    store->variables[0] = nir_deref_var_create(store, var);
    store->src[0] = nir_src_for_ssa(value);
    nir_builder_instr_insert(build, &store->instr);
+}
+
+static inline nir_ssa_def *
+nir_load_system_value(nir_builder *build, nir_intrinsic_op op, int index)
+{
+   nir_intrinsic_instr *load = nir_intrinsic_instr_create(build->shader, op);
+   load->num_components = nir_intrinsic_infos[op].dest_components;
+   load->const_index[0] = index;
+   nir_ssa_dest_init(&load->instr, &load->dest,
+                     nir_intrinsic_infos[op].dest_components, NULL);
+   nir_builder_instr_insert(build, &load->instr);
+   return &load->dest.ssa;
 }
 
 #endif /* NIR_BUILDER_H */

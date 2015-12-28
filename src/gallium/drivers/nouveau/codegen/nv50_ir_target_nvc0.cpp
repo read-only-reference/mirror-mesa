@@ -295,6 +295,9 @@ TargetNVC0::getSVAddress(DataFile shaderFile, const Symbol *sym) const
    case SV_SAMPLE_INDEX:   return 0;
    case SV_SAMPLE_POS:     return 0;
    case SV_SAMPLE_MASK:    return 0;
+   case SV_BASEVERTEX:     return 0;
+   case SV_BASEINSTANCE:   return 0;
+   case SV_DRAWID:         return 0;
    default:
       return 0xffffffff;
    }
@@ -395,8 +398,6 @@ TargetNVC0::isAccessSupported(DataFile file, DataType ty) const
 bool
 TargetNVC0::isOpSupported(operation op, DataType ty) const
 {
-   if ((op == OP_MAD || op == OP_FMA) && (ty != TYPE_F32))
-      return false;
    if (op == OP_SAD && ty != TYPE_S32 && ty != TYPE_U32)
       return false;
    if (op == OP_POW || op == OP_SQRT || op == OP_DIV || op == OP_MOD)
@@ -439,7 +440,7 @@ TargetNVC0::isModSupported(const Instruction *insn, int s, Modifier mod) const
          return false;
       }
    }
-   if (s >= 3)
+   if (s >= opInfo[insn->op].srcNr || s >= 3)
       return false;
    return (mod & Modifier(opInfo[insn->op].srcMods[s])) == mod;
 }

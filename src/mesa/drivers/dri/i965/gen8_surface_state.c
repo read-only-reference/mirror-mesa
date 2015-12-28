@@ -27,6 +27,7 @@
 #include "main/texformat.h"
 #include "main/teximage.h"
 #include "program/prog_parameter.h"
+#include "program/prog_instruction.h"
 
 #include "intel_mipmap_tree.h"
 #include "intel_batchbuffer.h"
@@ -224,7 +225,11 @@ gen8_emit_texture_surface_state(struct brw_context *brw,
       pitch = mt->pitch;
    }
 
-   if (mt->mcs_mt) {
+   /* The MCS is not uploaded for single-sampled surfaces because the color
+    * buffer should always have been resolved before it is used as a texture
+    * so there is no need for it.
+    */
+   if (mt->mcs_mt && mt->num_samples > 1) {
       aux_mt = mt->mcs_mt;
       aux_mode = GEN8_SURFACE_AUX_MODE_MCS;
 
@@ -272,7 +277,7 @@ gen8_emit_texture_surface_state(struct brw_context *brw,
         format == BRW_SURFACEFORMAT_BC7_UNORM))
       surf[0] |= GEN8_SURFACE_SAMPLER_L2_BYPASS_DISABLE;
 
-   if (_mesa_is_array_texture(target) || target == GL_TEXTURE_CUBE_MAP)
+   if (_mesa_is_array_texture(mt->target) || mt->target == GL_TEXTURE_CUBE_MAP)
       surf[0] |= GEN8_SURFACE_IS_ARRAY;
 
    surf[1] = SET_FIELD(mocs_wb, GEN8_SURFACE_MOCS) | mt->qpitch >> 2;
@@ -451,7 +456,7 @@ gen8_update_renderbuffer_surface(struct brw_context *brw,
       /* fallthrough */
    default:
       surf_type = translate_tex_target(gl_target);
-      is_array = _mesa_tex_target_is_array(gl_target);
+      is_array = _mesa_is_array_texture(mt->target);
       break;
    }
 

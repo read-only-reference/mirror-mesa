@@ -387,6 +387,14 @@ vc4_generate_code(struct vc4_context *vc4, struct vc4_compile *c)
                                             qpu_rb(QPU_R_MS_REV_FLAGS)));
                         break;
 
+                case QOP_MS_MASK:
+                        src[1] = qpu_ra(QPU_R_MS_REV_FLAGS);
+                        fixup_raddr_conflict(c, dst, &src[0], &src[1],
+                                             qinst, &unpack);
+                        queue(c, qpu_a_AND(qpu_ra(QPU_W_MS_FLAGS),
+                                           src[0], src[1]) | unpack);
+                        break;
+
                 case QOP_FRAG_Z:
                 case QOP_FRAG_W:
                         /* QOP_FRAG_Z/W don't emit instructions, just allocate
@@ -425,6 +433,13 @@ vc4_generate_code(struct vc4_context *vc4, struct vc4_compile *c)
 
                 case QOP_TLB_COLOR_WRITE:
                         queue(c, qpu_a_MOV(qpu_tlbc(), src[0]) | unpack);
+                        if (discard) {
+                                set_last_cond_add(c, QPU_COND_ZS);
+                        }
+                        break;
+
+                case QOP_TLB_COLOR_WRITE_MS:
+                        queue(c, qpu_a_MOV(qpu_tlbc_ms(), src[0]));
                         if (discard) {
                                 set_last_cond_add(c, QPU_COND_ZS);
                         }
@@ -498,7 +513,8 @@ vc4_generate_code(struct vc4_context *vc4, struct vc4_compile *c)
                 }
         }
 
-        qpu_schedule_instructions(c);
+        uint32_t cycles = qpu_schedule_instructions(c);
+        uint32_t inst_count_at_schedule_time = c->qpu_inst_count;
 
         /* thread end can't have VPM write or read */
         if (QPU_GET_FIELD(c->qpu_insts[c->qpu_inst_count - 1],
@@ -539,6 +555,15 @@ vc4_generate_code(struct vc4_context *vc4, struct vc4_compile *c)
                         qpu_set_sig(c->qpu_insts[c->qpu_inst_count - 1],
                                     QPU_SIG_SCOREBOARD_UNLOCK);
                 break;
+        }
+
+        cycles += c->qpu_inst_count - inst_count_at_schedule_time;
+
+        if (vc4_debug & VC4_DEBUG_SHADERDB) {
+                fprintf(stderr, "SHADER-DB: %s prog %d/%d: %d estimated cycles\n",
+                        qir_get_stage_name(c->stage),
+                        c->program_id, c->variant_id,
+                        cycles);
         }
 
         if (vc4_debug & VC4_DEBUG_QPU)

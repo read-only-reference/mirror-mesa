@@ -187,7 +187,7 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
       return 0;
    case PIPE_CAP_MAX_VIEWPORTS:
-      return 1;
+      return PIPE_MAX_VIEWPORTS;
    case PIPE_CAP_ENDIANNESS:
       return PIPE_ENDIAN_NATIVE;
    case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
@@ -251,6 +251,7 @@ softpipe_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_SHAREABLE_SHADERS:
    case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
    case PIPE_CAP_CLEAR_TEXTURE:
+   case PIPE_CAP_DRAW_PARAMETERS:
       return 0;
    }
    /* should only get here on unhandled cases */
@@ -362,7 +363,8 @@ softpipe_is_format_supported( struct pipe_screen *screen,
          return FALSE;
    }
 
-   if (format_desc->layout == UTIL_FORMAT_LAYOUT_BPTC) {
+   if (format_desc->layout == UTIL_FORMAT_LAYOUT_BPTC ||
+       format_desc->layout == UTIL_FORMAT_LAYOUT_ASTC) {
       /* Software decoding is not hooked up. */
       return FALSE;
    }

@@ -57,6 +57,10 @@ static const struct debug_named_value debug_options[] = {
           "Flush after each draw call" },
         { "always_sync", VC4_DEBUG_ALWAYS_SYNC,
           "Wait for finish after each flush" },
+#if USE_VC4_SIMULATOR
+        { "dump", VC4_DEBUG_DUMP,
+          "Write a GPU command stream trace file" },
+#endif
         { NULL }
 };
 
@@ -95,6 +99,7 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_BLEND_EQUATION_SEPARATE:
         case PIPE_CAP_TWO_SIDED_STENCIL:
         case PIPE_CAP_USER_INDEX_BUFFERS:
+        case PIPE_CAP_TEXTURE_MULTISAMPLE:
                 return 1;
 
                 /* lying for GL 2.0 */
@@ -140,7 +145,6 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
         case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
         case PIPE_CAP_CONDITIONAL_RENDER:
         case PIPE_CAP_PRIMITIVE_RESTART:
-        case PIPE_CAP_TEXTURE_MULTISAMPLE:
         case PIPE_CAP_TEXTURE_BARRIER:
         case PIPE_CAP_SM3:
         case PIPE_CAP_INDEP_BLEND_ENABLE:
@@ -185,6 +189,7 @@ vc4_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_SHAREABLE_SHADERS:
 	case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
 	case PIPE_CAP_CLEAR_TEXTURE:
+	case PIPE_CAP_DRAW_PARAMETERS:
                 return 0;
 
                 /* Stream output. */
@@ -358,7 +363,6 @@ vc4_screen_is_format_supported(struct pipe_screen *pscreen,
         unsigned retval = 0;
 
         if ((target >= PIPE_MAX_TEXTURE_TYPES) ||
-            (sample_count > 1) ||
             !util_format_is_supported(format, usage)) {
                 return FALSE;
         }
@@ -417,11 +421,13 @@ vc4_screen_is_format_supported(struct pipe_screen *pscreen,
         }
 
         if ((usage & PIPE_BIND_RENDER_TARGET) &&
+            (sample_count == 0 || sample_count == VC4_MAX_SAMPLES) &&
             vc4_rt_format_supported(format)) {
                 retval |= PIPE_BIND_RENDER_TARGET;
         }
 
         if ((usage & PIPE_BIND_SAMPLER_VIEW) &&
+            (sample_count == 0 || sample_count == VC4_MAX_SAMPLES) &&
             (vc4_tex_format_supported(format))) {
                 retval |= PIPE_BIND_SAMPLER_VIEW;
         }

@@ -21,16 +21,16 @@
  * IN THE SOFTWARE.
  */
 
-#include "main/macros.h"
 #include "brw_context.h"
-#include "brw_vs.h"
-#include "brw_gs.h"
+#include "brw_shader.h"
 #include "brw_fs.h"
-#include "brw_cfg.h"
 #include "brw_nir.h"
+#include "brw_program.h"
 #include "glsl/ir_optimization.h"
 #include "glsl/glsl_parser_extras.h"
+#include "program/program.h"
 #include "main/shaderapi.h"
+#include "main/uniforms.h"
 
 /**
  * Performs a compile of the shader stages even when we don't know
@@ -42,6 +42,8 @@ brw_shader_precompile(struct gl_context *ctx,
                       struct gl_shader_program *sh_prog)
 {
    struct gl_shader *vs = sh_prog->_LinkedShaders[MESA_SHADER_VERTEX];
+   struct gl_shader *tcs = sh_prog->_LinkedShaders[MESA_SHADER_TESS_CTRL];
+   struct gl_shader *tes = sh_prog->_LinkedShaders[MESA_SHADER_TESS_EVAL];
    struct gl_shader *gs = sh_prog->_LinkedShaders[MESA_SHADER_GEOMETRY];
    struct gl_shader *fs = sh_prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
    struct gl_shader *cs = sh_prog->_LinkedShaders[MESA_SHADER_COMPUTE];
@@ -50,6 +52,12 @@ brw_shader_precompile(struct gl_context *ctx,
       return false;
 
    if (gs && !brw_gs_precompile(ctx, sh_prog, gs->Program))
+      return false;
+
+   if (tes && !brw_tes_precompile(ctx, sh_prog, tes->Program))
+      return false;
+
+   if (tcs && !brw_tcs_precompile(ctx, sh_prog, tcs->Program))
       return false;
 
    if (vs && !brw_vs_precompile(ctx, sh_prog, vs->Program))
@@ -198,7 +206,7 @@ process_glsl_ir(gl_shader_stage stage,
    }
 }
 
-GLboolean
+extern "C" GLboolean
 brw_link_shader(struct gl_context *ctx, struct gl_shader_program *shProg)
 {
    struct brw_context *brw = brw_context(ctx);

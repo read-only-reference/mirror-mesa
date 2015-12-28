@@ -65,7 +65,6 @@ name(const in_type *parent)                              \
    return exec_node_data(out_type, parent, field);       \
 }
 
-struct nir_function_overload;
 struct nir_function;
 struct nir_shader;
 struct nir_instr;
@@ -216,15 +215,6 @@ typedef struct {
       unsigned has_initializer:1;
 
       /**
-       * Is this variable a generic output or input that has not yet been matched
-       * up to a variable in another stage of the pipeline?
-       *
-       * This is used by the linker as scratch storage while assigning locations
-       * to generic inputs and outputs.
-       */
-      unsigned is_unmatched_generic_inout:1;
-
-      /**
        * If non-zero, then this variable may be packed along with other variables
        * into a single varying slot, so this offset should be applied when
        * accessing components.  For example, an offset of 1 means that the x
@@ -292,11 +282,6 @@ typedef struct {
       int index;
 
       /**
-       * Descriptor set binding for sampler or UBO.
-       */
-      int descriptor_set;
-
-      /**
        * Initial binding point for a sampler or UBO.
        *
        * For array types, this represents the binding point for the first element.
@@ -306,9 +291,7 @@ typedef struct {
       /**
        * Location an atomic counter is stored at.
        */
-      struct {
-         unsigned offset;
-      } atomic;
+      unsigned offset;
 
       /**
        * ARB_shader_image_load_store qualifiers.
@@ -520,11 +503,7 @@ typedef struct nir_src {
    bool is_ssa;
 } nir_src;
 
-#ifdef __cplusplus
-#  define NIR_SRC_INIT nir_src()
-#else
-#  define NIR_SRC_INIT (nir_src) { { NULL } }
-#endif
+#define NIR_SRC_INIT (nir_src) { { NULL } }
 
 #define nir_foreach_use(reg_or_ssa_def, src) \
    list_for_each_entry(nir_src, src, &(reg_or_ssa_def)->uses, use_link)
@@ -547,11 +526,7 @@ typedef struct {
    bool is_ssa;
 } nir_dest;
 
-#ifdef __cplusplus
-#  define NIR_DEST_INIT nir_dest()
-#else
-#  define NIR_DEST_INIT (nir_dest) { { { NULL } } }
-#endif
+#define NIR_DEST_INIT (nir_dest) { { { NULL } } }
 
 #define nir_foreach_def(reg, dest) \
    list_for_each_entry(nir_dest, dest, &(reg)->defs, reg.def_link)
@@ -807,7 +782,7 @@ typedef struct {
    nir_deref_var **params;
    nir_deref_var *return_deref;
 
-   struct nir_function_overload *callee;
+   struct nir_function *callee;
 } nir_call_instr;
 
 #define INTRINSIC(name, num_srcs, src_components, has_dest, dest_components, \
@@ -948,7 +923,6 @@ typedef enum {
    nir_tex_src_ms_index, /* MSAA sample index */
    nir_tex_src_ddx,
    nir_tex_src_ddy,
-   nir_tex_src_texture_offset, /* < dynamically uniform indirect offset */
    nir_tex_src_sampler_offset, /* < dynamically uniform indirect offset */
    nir_num_tex_src_types
 } nir_tex_src_type;
@@ -999,24 +973,6 @@ typedef struct {
    /* gather component selector */
    unsigned component : 2;
 
-   /** The texture index
-    *
-    * If this texture instruction has a nir_tex_src_texture_offset source,
-    * then the texture index is given by texture_index + texture_offset.
-    */
-   unsigned texture_index;
-
-   /** The size of the texture array or 0 if it's not an array */
-   unsigned texture_array_size;
-
-   /** The texture deref
-    *
-    * If both this and `sampler` are both NULL, use texture_index instead.
-    * If `texture` is NULL, but `sampler` is non-NULL, then the texture is
-    * implied from the sampler.
-    */
-   nir_deref_var *texture;
-
    /** The sampler index
     *
     * If this texture instruction has a nir_tex_src_sampler_offset source,
@@ -1024,11 +980,10 @@ typedef struct {
     */
    unsigned sampler_index;
 
-   /** The sampler deref
-    *
-    * If this is null, use sampler_index instead.
-    */
-   nir_deref_var *sampler;
+   /** The size of the sampler array or 0 if it's not an array */
+   unsigned sampler_array_size;
+
+   nir_deref_var *sampler; /* if this is NULL, use sampler_index instead */
 } nir_tex_instr;
 
 static inline unsigned
@@ -1309,8 +1264,8 @@ nir_block_last_instr(nir_block *block)
    foreach_list_typed_reverse(nir_instr, instr, node, &(block)->instr_list)
 #define nir_foreach_instr_safe(block, instr) \
    foreach_list_typed_safe(nir_instr, instr, node, &(block)->instr_list)
-#define nir_foreach_instr_safe_reverse(block, instr) \
-   foreach_list_typed_safe_reverse(nir_instr, instr, node, &(block)->instr_list)
+#define nir_foreach_instr_reverse_safe(block, instr) \
+   foreach_list_typed_reverse_safe(nir_instr, instr, node, &(block)->instr_list)
 
 typedef struct nir_if {
    nir_cf_node cf_node;
@@ -1381,8 +1336,8 @@ typedef enum {
 typedef struct {
    nir_cf_node cf_node;
 
-   /** pointer to the overload of which this is an implementation */
-   struct nir_function_overload *overload;
+   /** pointer to the function of which this is an implementation */
+   struct nir_function *function;
 
    struct exec_list body; /** < list of nir_cf_node */
 
@@ -1467,34 +1422,25 @@ typedef struct {
    const struct glsl_type *type;
 } nir_parameter;
 
-typedef struct nir_function_overload {
+typedef struct nir_function {
    struct exec_node node;
+
+   const char *name;
+   struct nir_shader *shader;
 
    unsigned num_params;
    nir_parameter *params;
    const struct glsl_type *return_type;
 
-   nir_function_impl *impl; /** < NULL if the overload is only declared yet */
-
-   /** pointer to the function of which this is an overload */
-   struct nir_function *function;
-} nir_function_overload;
-
-typedef struct nir_function {
-   struct exec_node node;
-
-   struct exec_list overload_list; /** < list of nir_function_overload */
-   const char *name;
-   struct nir_shader *shader;
+   /** The implementation of this function.
+    *
+    * If the function is only declared and not implemented, this is NULL.
+    */
+   nir_function_impl *impl;
 } nir_function;
-
-#define nir_function_first_overload(func) \
-   exec_node_data(nir_function_overload, \
-                  exec_list_get_head(&(func)->overload_list), node)
 
 typedef struct nir_shader_compiler_options {
    bool lower_ffma;
-   bool lower_fdiv;
    bool lower_flrp;
    bool lower_fpow;
    bool lower_fsat;
@@ -1653,10 +1599,8 @@ typedef struct nir_shader {
    gl_shader_stage stage;
 } nir_shader;
 
-#define nir_foreach_overload(shader, overload)                        \
-   foreach_list_typed(nir_function, func, node, &(shader)->functions) \
-      foreach_list_typed(nir_function_overload, overload, node, \
-                         &(func)->overload_list)
+#define nir_foreach_function(shader, func) \
+   foreach_list_typed(nir_function, func, node, &(shader)->functions)
 
 nir_shader *nir_shader_create(void *mem_ctx,
                               gl_shader_stage stage,
@@ -1692,10 +1636,7 @@ nir_variable *nir_local_variable_create(nir_function_impl *impl,
 /** creates a function and adds it to the shader's list of functions */
 nir_function *nir_function_create(nir_shader *shader, const char *name);
 
-/** creates a null function returning null */
-nir_function_overload *nir_function_overload_create(nir_function *func);
-
-nir_function_impl *nir_function_impl_create(nir_function_overload *func);
+nir_function_impl *nir_function_impl_create(nir_function *func);
 
 nir_block *nir_block_create(nir_shader *shader);
 nir_if *nir_if_create(nir_shader *shader);
@@ -1720,7 +1661,7 @@ nir_intrinsic_instr *nir_intrinsic_instr_create(nir_shader *shader,
                                                 nir_intrinsic_op op);
 
 nir_call_instr *nir_call_instr_create(nir_shader *shader,
-                                      nir_function_overload *callee);
+                                      nir_function *callee);
 
 nir_tex_instr *nir_tex_instr_create(nir_shader *shader, unsigned num_srcs);
 
@@ -1764,17 +1705,6 @@ typedef struct {
       nir_instr *instr;
    };
 } nir_cursor;
-
-static inline nir_block *
-nir_cursor_current_block(nir_cursor cursor)
-{
-   if (cursor.option == nir_cursor_before_instr ||
-       cursor.option == nir_cursor_after_instr) {
-      return cursor.instr->block;
-   } else {
-      return cursor.block;
-   }
-}
 
 static inline nir_cursor
 nir_before_block(nir_block *block)
@@ -2007,10 +1937,6 @@ bool nir_lower_locals_to_regs(nir_shader *shader);
 
 void nir_lower_outputs_to_temporaries(nir_shader *shader);
 
-void nir_lower_outputs_to_temporaries(nir_shader *shader);
-
-void nir_shader_gather_info(nir_shader *shader, nir_function_impl *entrypoint);
-
 void nir_assign_var_locations(struct exec_list *var_list,
                               unsigned *size,
                               int (*type_size)(const struct glsl_type *));
@@ -2018,7 +1944,7 @@ void nir_assign_var_locations(struct exec_list *var_list,
 void nir_lower_io(nir_shader *shader,
                   nir_variable_mode mode,
                   int (*type_size)(const struct glsl_type *));
-nir_src *nir_get_io_indirect_src(nir_intrinsic_instr *instr);
+nir_src *nir_get_io_offset_src(nir_intrinsic_instr *instr);
 nir_src *nir_get_io_vertex_index_src(nir_intrinsic_instr *instr);
 
 void nir_lower_vars_to_ssa(nir_shader *shader);
