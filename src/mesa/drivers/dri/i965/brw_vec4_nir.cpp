@@ -1069,7 +1069,11 @@ vec4_visitor::nir_emit_alu(nir_alu_instr *instr)
    case nir_op_umul_high: {
       struct brw_reg acc = retype(brw_acc_reg(8), dst.type);
 
-      emit(MUL(acc, op[0], op[1]));
+      if (devinfo->gen >= 8)
+         emit(MUL(acc, op[0], retype(op[1], BRW_REGISTER_TYPE_UW)));
+      else
+         emit(MUL(acc, op[0], op[1]));
+
       emit(MACH(dst, op[0], op[1]));
       break;
    }
@@ -1385,6 +1389,9 @@ vec4_visitor::nir_emit_alu(nir_alu_instr *instr)
 
    case nir_op_ubitfield_extract:
    case nir_op_ibitfield_extract:
+      unreachable("should have been lowered");
+   case nir_op_ubfe:
+   case nir_op_ibfe:
       op[0] = fix_3src_operand(op[0]);
       op[1] = fix_3src_operand(op[1]);
       op[2] = fix_3src_operand(op[2]);
@@ -1405,8 +1412,7 @@ vec4_visitor::nir_emit_alu(nir_alu_instr *instr)
       break;
 
    case nir_op_bitfield_insert:
-      unreachable("not reached: should be handled by "
-                  "lower_instructions::bitfield_insert_to_bfm_bfi");
+      unreachable("not reached: should have been lowered");
 
    case nir_op_fsign:
       /* AND(val, 0x80000000) gives the sign bit.

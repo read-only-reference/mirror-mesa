@@ -27,7 +27,6 @@
 #include "brw_fs.h"
 #include "brw_nir.h"
 #include "brw_vec4_tes.h"
-#include "glsl/glsl_parser_extras.h"
 #include "main/shaderobj.h"
 #include "main/uniforms.h"
 #include "util/debug.h"
@@ -97,12 +96,21 @@ brw_compiler_create(void *mem_ctx, const struct brw_device_info *devinfo)
    nir_shader_compiler_options *nir_options =
       rzalloc(compiler, nir_shader_compiler_options);
    nir_options->native_integers = true;
+   nir_options->lower_fdiv = true;
    /* In order to help allow for better CSE at the NIR level we tell NIR
     * to split all ffma instructions during opt_algebraic and we then
     * re-combine them as a later step.
     */
    nir_options->lower_ffma = true;
    nir_options->lower_sub = true;
+   nir_options->lower_fdiv = true;
+   nir_options->lower_scmp = true;
+   nir_options->lower_fmod = true;
+   nir_options->lower_bitfield_extract = true;
+   nir_options->lower_bitfield_insert = true;
+   nir_options->lower_uadd_carry = true;
+   nir_options->lower_usub_borrow = true;
+
    /* In the vec4 backend, our dpN instruction replicates its result to all
     * the components of a vec4.  We would like NIR to give us replicated fdot
     * instructions because it can optimize better for us.
@@ -1015,6 +1023,7 @@ backend_instruction::has_side_effects() const
    case SHADER_OPCODE_URB_WRITE_SIMD8_MASKED_PER_SLOT:
    case FS_OPCODE_FB_WRITE:
    case SHADER_OPCODE_BARRIER:
+   case TCS_OPCODE_URB_WRITE:
    case TCS_OPCODE_RELEASE_INPUT:
       return true;
    default:
@@ -1402,7 +1411,7 @@ brw_compile_tes(const struct brw_compiler *compiler,
 
       fs_generator g(compiler, log_data, mem_ctx, (void *) key,
                      &prog_data->base.base, v.promoted_constants, false,
-                     "TES");
+                     MESA_SHADER_TESS_EVAL);
       if (unlikely(INTEL_DEBUG & DEBUG_TES)) {
          g.enable_debug(ralloc_asprintf(mem_ctx,
                                         "%s tessellation evaluation shader %s",

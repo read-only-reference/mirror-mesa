@@ -644,19 +644,25 @@ try_setup_line( struct lp_setup_context *setup,
    line->inputs.layer = layer;
    line->inputs.viewport_index = viewport_index;
 
+   /*
+    * XXX: this code is mostly identical to the one in lp_setup_tri, except it
+    * uses 4 planes instead of 3. Could share the code (including the sse
+    * assembly, in fact we'd get the 4th plane for free).
+    * The only difference apart from storing the 4th plane would be some
+    * different shuffle for calculating dcdx/dcdy.
+    */
    for (i = 0; i < 4; i++) {
 
-      /* half-edge constants, will be interated over the whole render
+      /* half-edge constants, will be iterated over the whole render
        * target.
        */
       plane[i].c = IMUL64(plane[i].dcdx, x[i]) - IMUL64(plane[i].dcdy, y[i]);
 
-      
-      /* correct for top-left vs. bottom-left fill convention.  
-       */         
+      /* correct for top-left vs. bottom-left fill convention.
+       */
       if (plane[i].dcdx < 0) {
          /* both fill conventions want this - adjust for left edges */
-         plane[i].c++;            
+         plane[i].c++;
       }
       else if (plane[i].dcdx == 0) {
          if (setup->pixel_offset == 0) {
@@ -707,24 +713,24 @@ try_setup_line( struct lp_setup_context *setup,
       const struct u_rect *scissor =
          &setup->scissors[viewport_index];
 
-      plane[4].dcdx = -1;
+      plane[4].dcdx = -1 << 8;
       plane[4].dcdy = 0;
-      plane[4].c = 1-scissor->x0;
-      plane[4].eo = 1;
+      plane[4].c = (1-scissor->x0) << 8;
+      plane[4].eo = 1 << 8;
 
-      plane[5].dcdx = 1;
+      plane[5].dcdx = 1 << 8;
       plane[5].dcdy = 0;
-      plane[5].c = scissor->x1+1;
+      plane[5].c = (scissor->x1+1) << 8;
       plane[5].eo = 0;
 
       plane[6].dcdx = 0;
-      plane[6].dcdy = 1;
-      plane[6].c = 1-scissor->y0;
-      plane[6].eo = 1;
+      plane[6].dcdy = 1 << 8;
+      plane[6].c = (1-scissor->y0) << 8;
+      plane[6].eo = 1 << 8;
 
       plane[7].dcdx = 0;
-      plane[7].dcdy = -1;
-      plane[7].c = scissor->y1+1;
+      plane[7].dcdy = -1 << 8;
+      plane[7].c = (scissor->y1+1) << 8;
       plane[7].eo = 0;
    }
 

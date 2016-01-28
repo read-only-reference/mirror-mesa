@@ -87,6 +87,7 @@
 #define DBG_NO_DCC		(1llu << 43)
 #define DBG_NO_DCC_CLEAR	(1llu << 44)
 #define DBG_NO_RB_PLUS		(1llu << 45)
+#define DBG_SI_SCHED		(1llu << 46)
 
 #define R600_MAP_BUFFER_ALIGNMENT 64
 
@@ -128,6 +129,9 @@ struct radeon_shader_binary {
 	/** Disassembled shader in a string. */
 	char *disasm_string;
 };
+
+void radeon_shader_binary_init(struct radeon_shader_binary *b);
+void radeon_shader_binary_clean(struct radeon_shader_binary *b);
 
 struct r600_resource {
 	struct u_resource		b;
@@ -236,6 +240,7 @@ struct r600_surface {
 	/* Misc. color flags. */
 	bool alphatest_bypass;
 	bool export_16bpc;
+	bool color_is_int8;
 
 	/* Color registers. */
 	unsigned cb_color_info;
@@ -252,6 +257,10 @@ struct r600_surface {
 	unsigned cb_color_fmask_slice;	/* EG and later */
 	unsigned cb_color_cmask;	/* CB_COLORn_TILE (r600 only) */
 	unsigned cb_color_mask;		/* R600 only */
+	unsigned spi_shader_col_format;		/* SI+, no blending, no alpha-to-coverage. */
+	unsigned spi_shader_col_format_alpha;	/* SI+, alpha-to-coverage */
+	unsigned spi_shader_col_format_blend;	/* SI+, blending without alpha. */
+	unsigned spi_shader_col_format_blend_alpha; /* SI+, blending with alpha. */
 	unsigned sx_ps_downconvert;	/* Stoney only */
 	unsigned sx_blend_opt_epsilon;	/* Stoney only */
 	struct r600_resource *cb_buffer_fmask; /* Used for FMASK relocations. R600 only */
@@ -440,6 +449,8 @@ struct r600_common_context {
 	 * the GPU addresses are updated. */
 	struct list_head		texture_buffers;
 
+	struct pipe_debug_callback	debug;
+
 	/* Copy one resource to another using async DMA. */
 	void (*dma_copy)(struct pipe_context *ctx,
 			 struct pipe_resource *dst,
@@ -498,6 +509,9 @@ struct pipe_resource *
 r600_buffer_from_user_memory(struct pipe_screen *screen,
 			     const struct pipe_resource *templ,
 			     void *user_memory);
+void
+r600_invalidate_resource(struct pipe_context *ctx,
+			 struct pipe_resource *resource);
 
 /* r600_common_pipe.c */
 void r600_draw_rectangle(struct blitter_context *blitter,
@@ -514,7 +528,7 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 void r600_common_context_cleanup(struct r600_common_context *rctx);
 void r600_context_add_resource_size(struct pipe_context *ctx, struct pipe_resource *r);
 bool r600_can_dump_shader(struct r600_common_screen *rscreen,
-			  const struct tgsi_token *tokens);
+			  unsigned processor);
 void r600_screen_clear_buffer(struct r600_common_screen *rscreen, struct pipe_resource *dst,
 			      unsigned offset, unsigned size, unsigned value,
 			      bool is_framebuffer);

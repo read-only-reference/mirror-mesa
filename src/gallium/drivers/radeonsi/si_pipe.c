@@ -208,14 +208,18 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 	 * this for non-cs shaders.  Using the wrong value here can result in
 	 * GPU lockups, but the maximum value seems to always work.
 	 */
-	sctx->scratch_waves = 32 * sscreen->b.info.max_compute_units;
+	sctx->scratch_waves = 32 * sscreen->b.info.num_good_compute_units;
 
 #if HAVE_LLVM >= 0x0306
 	/* Initialize LLVM TargetMachine */
 	r600_target = radeon_llvm_get_r600_target(triple);
 	sctx->tm = LLVMCreateTargetMachine(r600_target, triple,
 					   r600_get_llvm_processor_name(sscreen->b.family),
-					   "+DumpCode,+vgpr-spilling",
+#if HAVE_LLVM >= 0x0308
+					   sscreen->b.debug_flags & DBG_SI_SCHED ?
+					   	"+DumpCode,+vgpr-spilling,+si-scheduler" :
+#endif
+					   	"+DumpCode,+vgpr-spilling",
 					   LLVMCodeGenLevelDefault,
 					   LLVMRelocDefault,
 					   LLVMCodeModelDefault);
@@ -301,6 +305,9 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_TXQS:
 	case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
 	case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
+	case PIPE_CAP_TGSI_FS_POSITION_IS_SYSVAL:
+	case PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL:
+	case PIPE_CAP_INVALIDATE_BUFFER:
 		return 1;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
@@ -341,6 +348,12 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_VERTEXID_NOBASE:
 	case PIPE_CAP_CLEAR_TEXTURE:
 	case PIPE_CAP_DRAW_PARAMETERS:
+	case PIPE_CAP_TGSI_PACK_HALF_FLOAT:
+	case PIPE_CAP_MULTI_DRAW_INDIRECT:
+	case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
+	case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
+	case PIPE_CAP_GENERATE_MIPMAP:
+	case PIPE_CAP_STRING_MARKER:
 		return 0;
 
 	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
@@ -513,6 +526,8 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 		return 1;
 	case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
 		return 32;
+	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
+		return 0;
 	}
 	return 0;
 }

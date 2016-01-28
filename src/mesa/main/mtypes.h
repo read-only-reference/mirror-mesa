@@ -42,7 +42,7 @@
 #include "main/config.h"
 #include "glapi/glapi.h"
 #include "math/m_matrix.h"	/* GLmatrix */
-#include "glsl/nir/shader_enums.h"
+#include "compiler/shader_enums.h"
 #include "main/formats.h"       /* MESA_FORMAT_COUNT */
 
 
@@ -1861,6 +1861,8 @@ typedef enum
    PROGRAM_SAMPLER,     /**< for shader samplers, compile-time only */
    PROGRAM_SYSTEM_VALUE,/**< InstanceId, PrimitiveID, etc. */
    PROGRAM_UNDEFINED,   /**< Invalid/TBD value */
+   PROGRAM_IMMEDIATE,   /**< Immediate value, used by TGSI */
+   PROGRAM_BUFFER,      /**< for shader buffers, compile-time only */
    PROGRAM_FILE_MAX
 } gl_register_file;
 
@@ -2525,6 +2527,67 @@ struct gl_active_atomic_buffer
 };
 
 /**
+ * Data container for shader queries. This holds only the minimal
+ * amount of required information for resource queries to work.
+ */
+struct gl_shader_variable
+{
+   /**
+    * Declared type of the variable
+    */
+   const struct glsl_type *type;
+
+   /**
+    * Declared name of the variable
+    */
+   char *name;
+
+   /**
+    * Storage location of the base of this variable
+    *
+    * The precise meaning of this field depends on the nature of the variable.
+    *
+    *   - Vertex shader input: one of the values from \c gl_vert_attrib.
+    *   - Vertex shader output: one of the values from \c gl_varying_slot.
+    *   - Geometry shader input: one of the values from \c gl_varying_slot.
+    *   - Geometry shader output: one of the values from \c gl_varying_slot.
+    *   - Fragment shader input: one of the values from \c gl_varying_slot.
+    *   - Fragment shader output: one of the values from \c gl_frag_result.
+    *   - Uniforms: Per-stage uniform slot number for default uniform block.
+    *   - Uniforms: Index within the uniform block definition for UBO members.
+    *   - Non-UBO Uniforms: explicit location until linking then reused to
+    *     store uniform slot number.
+    *   - Other: This field is not currently used.
+    *
+    * If the variable is a uniform, shader input, or shader output, and the
+    * slot has not been assigned, the value will be -1.
+    */
+   int location;
+
+   /**
+    * Output index for dual source blending.
+    *
+    * \note
+    * The GLSL spec only allows the values 0 or 1 for the index in \b dual
+    * source blending.
+    */
+   unsigned index:1;
+
+   /**
+    * Specifies whether a shader input/output is per-patch in tessellation
+    * shader stages.
+    */
+   unsigned patch:1;
+
+   /**
+    * Storage class of the variable.
+    *
+    * \sa (n)ir_variable_mode
+    */
+   unsigned mode:4;
+};
+
+/**
  * Active resource in a gl_shader_program
  */
 struct gl_program_resource
@@ -2734,6 +2797,13 @@ struct gl_shader_program
     * GL_UNIFORM_BLOCK_REFERENCED_BY_*_SHADER queries.
     */
    int *InterfaceBlockStageIndex[MESA_SHADER_STAGES];
+
+   /**
+    * Indices into the BufferInterfaceBlocks[] array for Uniform Buffer
+    * Objects and Shader Storage Buffer Objects.
+    */
+   unsigned *UboInterfaceBlockIndex;
+   unsigned *SsboInterfaceBlockIndex;
 
    /**
     * Map of active uniform names to locations
@@ -3515,6 +3585,10 @@ struct gl_constants
     */
    GLboolean GLSLSkipStrictMaxUniformLimitCheck;
 
+   /** Whether gl_FragCoord and gl_FrontFacing are system values. */
+   bool GLSLFragCoordIsSysVal;
+   bool GLSLFrontFacingIsSysVal;
+
    /**
     * Always use the GetTransformFeedbackVertexCount() driver hook, rather
     * than passing the transform feedback object to the drawing function.
@@ -3700,6 +3774,7 @@ struct gl_extensions
    GLboolean ARB_gpu_shader5;
    GLboolean ARB_gpu_shader_fp64;
    GLboolean ARB_half_float_vertex;
+   GLboolean ARB_indirect_parameters;
    GLboolean ARB_instanced_arrays;
    GLboolean ARB_internalformat_query;
    GLboolean ARB_map_buffer_range;
@@ -3807,6 +3882,7 @@ struct gl_extensions
    GLboolean ATI_texture_env_combine3;
    GLboolean ATI_fragment_shader;
    GLboolean ATI_separate_stencil;
+   GLboolean GREMEDY_string_marker;
    GLboolean INTEL_performance_query;
    GLboolean KHR_texture_compression_astc_hdr;
    GLboolean KHR_texture_compression_astc_ldr;
@@ -3831,6 +3907,7 @@ struct gl_extensions
    GLboolean OES_texture_half_float;
    GLboolean OES_texture_half_float_linear;
    GLboolean OES_compressed_ETC1_RGB8_texture;
+   GLboolean OES_geometry_shader;
    GLboolean extension_sentinel;
    /** The extension string */
    const GLubyte *String;
@@ -4348,6 +4425,7 @@ struct gl_context
    struct gl_perf_monitor_state PerfMonitor;
 
    struct gl_buffer_object *DrawIndirectBuffer; /** < GL_ARB_draw_indirect */
+   struct gl_buffer_object *ParameterBuffer; /** < GL_ARB_indirect_parameters */
    struct gl_buffer_object *DispatchIndirectBuffer; /** < GL_ARB_compute_shader */
 
    struct gl_buffer_object *CopyReadBuffer; /**< GL_ARB_copy_buffer */

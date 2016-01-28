@@ -213,6 +213,11 @@ The integer capabilities:
 * ``PIPE_CAP_DRAW_INDIRECT``: Whether the driver supports taking draw arguments
   { count, instance_count, start, index_bias } from a PIPE_BUFFER resource.
   See pipe_draw_info.
+* ``PIPE_CAP_MULTI_DRAW_INDIRECT``: Whether the driver supports
+  pipe_draw_info::indirect_stride and ::indirect_count
+* ``PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS``: Whether the driver supports
+  taking the number of indirect draws from a separate parameter
+  buffer, see pipe_draw_info::indirect_params.
 * ``PIPE_CAP_TGSI_FS_FINE_DERIVATIVE``: Whether the fragment shader supports
   the FINE versions of DDX/DDY.
 * ``PIPE_CAP_VENDOR_ID``: The vendor ID of the underlying hardware. If it's
@@ -285,6 +290,22 @@ The integer capabilities:
 * ``PIPE_CAP_DRAW_PARAMETERS``: Whether ``TGSI_SEMANTIC_BASEVERTEX``,
   ``TGSI_SEMANTIC_BASEINSTANCE``, and ``TGSI_SEMANTIC_DRAWID`` are
   supported in vertex shaders.
+* ``PIPE_CAP_TGSI_PACK_HALF_FLOAT``: Whether the ``UP2H`` and ``PK2H``
+  TGSI opcodes are supported.
+* ``PIPE_CAP_TGSI_FS_POSITION_IS_SYSVAL``: If state trackers should use
+  a system value for the POSITION fragment shader input.
+* ``PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL``: If state trackers should use
+  a system value for the FACE fragment shader input.
+  Also, the FACE system value is integer, not float.
+* ``PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT``: Describes the required
+  alignment for pipe_shader_buffer::buffer_offset, in bytes. Maximum
+  value allowed is 256 (for GL conformance). 0 is only allowed if
+  shader buffers are not supported.
+* ``PIPE_CAP_INVALIDATE_BUFFER``: Whether the use of ``invalidate_resource``
+  for buffers is supported.
+* ``PIPE_CAP_GENERATE_MIPMAP``: Indicates whether pipe_context::generate_mipmap
+  is supported.
+* ``PIPE_CAP_STRING_MARKER``: Whether pipe->emit_string_marker() is supported.
 
 
 .. _pipe_capf:
@@ -377,6 +398,10 @@ to be 0.
   of iterations that loops are allowed to have to be unrolled. It is only
   a hint to state trackers. Whether any loops will be unrolled is not
   guaranteed.
+* ``PIPE_SHADER_CAP_MAX_SHADER_BUFFERS``: Maximum number of memory buffers
+  (also used to implement atomic counters). Having this be non-0 also
+  implies support for the ``LOAD``, ``STORE``, and ``ATOM*`` TGSI
+  opcodes.
 
 
 .. _pipe_compute_cap:

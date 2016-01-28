@@ -750,6 +750,9 @@ brw_process_driconf_options(struct brw_context *brw)
 
    ctx->Const.AllowGLSLExtensionDirectiveMidShader =
       driQueryOptionb(options, "allow_glsl_extension_directive_midshader");
+
+   brw->dual_color_blend_by_location =
+      driQueryOptionb(options, "dual_color_blend_by_location");
 }
 
 GLboolean
@@ -812,7 +815,7 @@ brwCreateContext(gl_api api,
    brw->needs_unlit_centroid_workaround =
       devinfo->needs_unlit_centroid_workaround;
 
-   brw->must_use_separate_stencil = screen->hw_must_use_separate_stencil;
+   brw->must_use_separate_stencil = devinfo->must_use_separate_stencil;
    brw->has_swizzling = screen->hw_has_swizzling;
 
    brw->vs.base.stage = MESA_SHADER_VERTEX;

@@ -634,6 +634,11 @@ struct dd_function_table {
                               GLintptr readOffset, GLintptr writeOffset,
                               GLsizeiptr size );
 
+   void (*InvalidateBufferSubData)( struct gl_context *ctx,
+                                    struct gl_buffer_object *obj,
+                                    GLintptr offset,
+                                    GLsizeiptr length );
+
    /* Returns pointer to the start of the mapped range.
     * May return NULL if MESA_MAP_NOWAIT_BIT is set in access:
     */
@@ -757,6 +762,12 @@ struct dd_function_table {
    void (*UseProgram)(struct gl_context *ctx, struct gl_shader_program *shProg);
    /*@}*/
 
+   /**
+    * \name GREMEDY debug/marker functions
+    */
+   /*@{*/
+   void (*EmitStringMarker)(struct gl_context *ctx, const GLchar *string, GLsizei len);
+   /*@}*/
 
    /**
     * \name Support for multiple T&L engines

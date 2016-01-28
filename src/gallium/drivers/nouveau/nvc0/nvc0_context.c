@@ -56,6 +56,7 @@ static void
 nvc0_memory_barrier(struct pipe_context *pipe, unsigned flags)
 {
    struct nvc0_context *nvc0 = nvc0_context(pipe);
+   struct nouveau_pushbuf *push = nvc0->base.pushbuf;
    int i, s;
 
    if (flags & PIPE_BARRIER_MAPPED_BUFFER) {
@@ -90,6 +91,9 @@ nvc0_memory_barrier(struct pipe_context *pipe, unsigned flags)
          }
       }
    }
+   if (flags & PIPE_BARRIER_SHADER_BUFFER) {
+      IMMED_NVC0(push, NVC0_3D(MEM_BARRIER), 0x1011);
+   }
 }
 
 static void
@@ -121,6 +125,10 @@ nvc0_context_unreference_resources(struct nvc0_context *nvc0)
       for (i = 0; i < NVC0_MAX_SURFACE_SLOTS; ++i)
          pipe_surface_reference(&nvc0->surfaces[s][i], NULL);
    }
+
+   for (s = 0; s < 6; ++s)
+      for (i = 0; i < NVC0_MAX_BUFFERS; ++i)
+         pipe_resource_reference(&nvc0->buffers[s][i].buffer, NULL);
 
    for (i = 0; i < nvc0->num_tfbbufs; ++i)
       pipe_so_target_reference(&nvc0->tfbbuf[i], NULL);
@@ -207,6 +215,7 @@ nvc0_invalidate_resource_storage(struct nouveau_context *ctx,
    if (bind & (PIPE_BIND_VERTEX_BUFFER |
                PIPE_BIND_INDEX_BUFFER |
                PIPE_BIND_CONSTANT_BUFFER |
+               PIPE_BIND_SHADER_BUFFER |
                PIPE_BIND_STREAM_OUTPUT |
                PIPE_BIND_COMMAND_ARGS_BUFFER |
                PIPE_BIND_SAMPLER_VIEW)) {
@@ -248,6 +257,18 @@ nvc0_invalidate_resource_storage(struct nouveau_context *ctx,
             nvc0->dirty |= NVC0_NEW_CONSTBUF;
             nvc0->constbuf_dirty[s] |= 1 << i;
             nouveau_bufctx_reset(nvc0->bufctx_3d, NVC0_BIND_CB(s, i));
+            if (!--ref)
+               return ref;
+         }
+      }
+      }
+
+      for (s = 0; s < 5; ++s) {
+      for (i = 0; i < NVC0_MAX_BUFFERS; ++i) {
+         if (nvc0->buffers[s][i].buffer == res) {
+            nvc0->buffers_dirty[s] |= 1 << i;
+            nvc0->dirty |= NVC0_NEW_BUFFERS;
+            nouveau_bufctx_reset(nvc0->bufctx_3d, NVC0_BIND_BUF);
             if (!--ref)
                return ref;
          }

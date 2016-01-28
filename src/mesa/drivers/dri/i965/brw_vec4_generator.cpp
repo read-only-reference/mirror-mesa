@@ -20,7 +20,6 @@
  * IN THE SOFTWARE.
  */
 
-#include "glsl/glsl_parser_extras.h"
 #include "brw_vec4.h"
 #include "brw_cfg.h"
 #include "brw_eu.h"
@@ -1984,7 +1983,7 @@ generate_code(struct brw_codegen *p,
 
    compiler->shader_debug_log(log_data,
                               "%s vec4 shader: %d inst, %d loops, %u cycles, "
-                              "compacted %d to %d bytes.\n",
+                              "compacted %d to %d bytes.",
                               stage_abbrev, before_size / 16,
                               loop_count, cfg->cycle_count,
                               before_size, after_size);

@@ -1030,7 +1030,10 @@ CodeEmitterNVC0::emitCVT(Instruction *i)
 
       // for 8/16 source types, the byte/word is in subOp. word 1 is
       // represented as 2.
-      code[1] |= i->subOp << 0x17;
+      if (!isFloatType(i->sType))
+         code[1] |= i->subOp << 0x17;
+      else
+         code[1] |= i->subOp << 0x18;
 
       if (sat)
          code[0] |= 0x20;
@@ -2018,8 +2021,10 @@ CodeEmitterNVC0::emitATOM(const Instruction *i)
       code[0] |= 63 << 20;
    }
 
-   if (i->subOp == NV50_IR_SUBOP_ATOM_CAS)
-      srcId(i->src(2), 32 + 17);
+   if (i->subOp == NV50_IR_SUBOP_ATOM_CAS) {
+      assert(i->src(1).getSize() == 2 * typeSizeof(i->sType));
+      code[1] |= (SDATA(i->src(1)).id + 1) << 17;
+   }
 }
 
 void

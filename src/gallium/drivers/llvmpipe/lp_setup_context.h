@@ -105,10 +105,10 @@ struct lp_setup_context
    float pixel_offset;
    float line_width;
    float point_size;
-   uint8_t psize_slot;
-   uint8_t viewport_index_slot;
-   uint8_t layer_slot;
-   uint8_t face_slot;
+   int8_t psize_slot;
+   int8_t viewport_index_slot;
+   int8_t layer_slot;
+   int8_t face_slot;
 
    struct pipe_framebuffer_state fb;
    struct u_rect framebuffer;
@@ -133,6 +133,7 @@ struct lp_setup_context
       const struct lp_rast_state *stored; /**< what's in the scene */
       struct lp_rast_state current;  /**< currently set state */
       struct pipe_resource *current_tex[PIPE_MAX_SHADER_SAMPLER_VIEWS];
+      unsigned current_tex_num;
    } fs;
 
    /** fragment shader constants */
