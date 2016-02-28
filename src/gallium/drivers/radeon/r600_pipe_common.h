@@ -71,6 +71,7 @@
 #define DBG_NO_IR		(1 << 12)
 #define DBG_NO_TGSI		(1 << 13)
 #define DBG_NO_ASM		(1 << 14)
+#define DBG_PREOPT_IR		(1 << 15)
 /* Bits 21-31 are reserved for the r600g driver. */
 /* features */
 #define DBG_NO_ASYNC_DMA	(1llu << 32)
@@ -88,6 +89,7 @@
 #define DBG_NO_DCC_CLEAR	(1llu << 44)
 #define DBG_NO_RB_PLUS		(1llu << 45)
 #define DBG_SI_SCHED		(1llu << 46)
+#define DBG_MONOLITHIC_SHADERS	(1llu << 47)
 
 #define R600_MAP_BUFFER_ALIGNMENT 64
 
@@ -95,7 +97,7 @@ struct r600_common_context;
 struct r600_perfcounters;
 
 struct radeon_shader_reloc {
-	char *name;
+	char name[32];
 	uint64_t offset;
 };
 
@@ -261,8 +263,6 @@ struct r600_surface {
 	unsigned spi_shader_col_format_alpha;	/* SI+, alpha-to-coverage */
 	unsigned spi_shader_col_format_blend;	/* SI+, blending without alpha. */
 	unsigned spi_shader_col_format_blend_alpha; /* SI+, blending with alpha. */
-	unsigned sx_ps_downconvert;	/* Stoney only */
-	unsigned sx_blend_opt_epsilon;	/* Stoney only */
 	struct r600_resource *cb_buffer_fmask; /* Used for FMASK relocations. R600 only */
 	struct r600_resource *cb_buffer_cmask; /* Used for CMASK relocations. R600 only */
 
@@ -282,19 +282,12 @@ struct r600_surface {
 	unsigned pa_su_poly_offset_db_fmt_cntl;
 };
 
-struct r600_tiling_info {
-	unsigned num_channels;
-	unsigned num_banks;
-	unsigned group_bytes;
-};
-
 struct r600_common_screen {
 	struct pipe_screen		b;
 	struct radeon_winsys		*ws;
 	enum radeon_family		family;
 	enum chip_class			chip_class;
 	struct radeon_info		info;
-	struct r600_tiling_info		tiling_info;
 	uint64_t			debug_flags;
 	bool				has_cp_dma;
 	bool				has_streamout;
@@ -666,7 +659,7 @@ r600_get_sampler_view_priority(struct r600_resource *res)
 	} while (0);
 
 #define R600_ERR(fmt, args...) \
-	fprintf(stderr, "EE %s:%d %s - "fmt, __FILE__, __LINE__, __func__, ##args)
+	fprintf(stderr, "EE %s:%d %s - " fmt, __FILE__, __LINE__, __func__, ##args)
 
 /* For MSAA sample positions. */
 #define FILL_SREG(s0x, s0y, s1x, s1y, s2x, s2y, s3x, s3y)  \

@@ -136,6 +136,8 @@ ilo_get_shader_param(struct pipe_screen *screen, unsigned shader,
       return ILO_MAX_SAMPLER_VIEWS;
    case PIPE_SHADER_CAP_PREFERRED_IR:
       return PIPE_SHADER_IR_TGSI;
+   case PIPE_SHADER_CAP_SUPPORTED_IRS:
+      return 0;
    case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
       return 1;
    case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
@@ -428,6 +430,8 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_CUBE_MAP_ARRAY:
    case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
       return true;
+   case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
+      return 0;
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
       return 1;
    case PIPE_CAP_TGSI_TEXCOORD:
@@ -486,6 +490,9 @@ ilo_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_INVALIDATE_BUFFER:
    case PIPE_CAP_GENERATE_MIPMAP:
    case PIPE_CAP_STRING_MARKER:
+   case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
+   case PIPE_CAP_QUERY_BUFFER_OBJECT:
+   case PIPE_CAP_QUERY_MEMORY_INFO:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:

@@ -89,6 +89,7 @@
 #include "context.h"
 #include "cpuinfo.h"
 #include "debug.h"
+#include "debug_output.h"
 #include "depth.h"
 #include "dlist.h"
 #include "eval.h"
@@ -814,8 +815,8 @@ init_attrib_groups(struct gl_context *ctx)
    _mesa_init_current( ctx );
    _mesa_init_depth( ctx );
    _mesa_init_debug( ctx );
+   _mesa_init_debug_output( ctx );
    _mesa_init_display_list( ctx );
-   _mesa_init_errors( ctx );
    _mesa_init_eval( ctx );
    _mesa_init_fbobjects( ctx );
    _mesa_init_feedback( ctx );
@@ -1599,9 +1600,6 @@ _mesa_check_init_viewport(struct gl_context *ctx, GLuint width, GLuint height)
 static void
 handle_first_current(struct gl_context *ctx)
 {
-   GLenum buffer;
-   GLint bufferIndex;
-
    if (ctx->Version == 0) {
       /* probably in the process of tearing down the context */
       return;
@@ -1616,6 +1614,8 @@ handle_first_current(struct gl_context *ctx)
     * For GLES it is always GL_BACK which has a magic interpretation */
    if (!ctx->HasConfig && _mesa_is_desktop_gl(ctx)) {
       if (ctx->DrawBuffer != _mesa_get_incomplete_framebuffer()) {
+         GLenum buffer;
+
          if (ctx->DrawBuffer->Visual.doubleBufferMode)
             buffer = GL_BACK;
          else
@@ -1626,6 +1626,9 @@ handle_first_current(struct gl_context *ctx)
       }
 
       if (ctx->ReadBuffer != _mesa_get_incomplete_framebuffer()) {
+         gl_buffer_index bufferIndex;
+         GLenum buffer;
+
          if (ctx->ReadBuffer->Visual.doubleBufferMode) {
             buffer = GL_BACK;
             bufferIndex = BUFFER_BACK_LEFT;

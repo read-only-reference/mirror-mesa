@@ -1352,7 +1352,7 @@ private:
 
 namespace linker {
 
-bool
+void
 populate_consumer_input_sets(void *mem_ctx, exec_list *ir,
                              hash_table *consumer_inputs,
                              hash_table *consumer_interface_inputs,
@@ -1366,8 +1366,8 @@ populate_consumer_input_sets(void *mem_ctx, exec_list *ir,
       ir_variable *const input_var = node->as_variable();
 
       if ((input_var != NULL) && (input_var->data.mode == ir_var_shader_in)) {
-         if (input_var->type->is_interface())
-            return false;
+         /* All interface blocks should have been lowered by this point */
+         assert(!input_var->type->is_interface());
 
          if (input_var->data.explicit_location) {
             /* assign_varying_locations only cares about finding the
@@ -1401,8 +1401,6 @@ populate_consumer_input_sets(void *mem_ctx, exec_list *ir,
          }
       }
    }
-
-   return true;
 }
 
 /**
@@ -1626,18 +1624,11 @@ assign_varying_locations(struct gl_context *ctx,
    if (producer)
       canonicalize_shader_io(producer->ir, ir_var_shader_out);
 
-   if (consumer
-       && !linker::populate_consumer_input_sets(mem_ctx,
-                                                consumer->ir,
-                                                consumer_inputs,
-                                                consumer_interface_inputs,
-                                                consumer_inputs_with_locations)) {
-      assert(!"populate_consumer_input_sets failed");
-      hash_table_dtor(tfeedback_candidates);
-      hash_table_dtor(consumer_inputs);
-      hash_table_dtor(consumer_interface_inputs);
-      return false;
-   }
+   if (consumer)
+      linker::populate_consumer_input_sets(mem_ctx, consumer->ir,
+                                           consumer_inputs,
+                                           consumer_interface_inputs,
+                                           consumer_inputs_with_locations);
 
    if (producer) {
       foreach_in_list(ir_instruction, node, producer->ir) {
@@ -1652,8 +1643,10 @@ assign_varying_locations(struct gl_context *ctx,
                 (output_var->data.stream < MAX_VERTEX_STREAMS &&
                  producer->Stage == MESA_SHADER_GEOMETRY));
 
-         tfeedback_candidate_generator g(mem_ctx, tfeedback_candidates);
-         g.process(output_var);
+         if (num_tfeedback_decls > 0) {
+            tfeedback_candidate_generator g(mem_ctx, tfeedback_candidates);
+            g.process(output_var);
+         }
 
          ir_variable *const input_var =
             linker::get_matching_input(mem_ctx, output_var, consumer_inputs,
@@ -1746,22 +1739,7 @@ assign_varying_locations(struct gl_context *ctx,
 
          if (var && var->data.mode == ir_var_shader_in &&
              var->data.is_unmatched_generic_inout) {
-            if (prog->IsES) {
-               /*
-                * On Page 91 (Page 97 of the PDF) of the GLSL ES 1.0 spec:
-                *
-                *     If the vertex shader declares but doesn't write to a
-                *     varying and the fragment shader declares and reads it,
-                *     is this an error?
-                *
-                *     RESOLUTION: No.
-                */
-               linker_warning(prog, "%s shader varying %s not written "
-                              "by %s shader\n.",
-                              _mesa_shader_stage_to_string(consumer->Stage),
-                              var->name,
-                              _mesa_shader_stage_to_string(producer->Stage));
-            } else if (prog->Version <= 120) {
+            if (!prog->IsES && prog->Version <= 120) {
                /* On page 25 (page 31 of the PDF) of the GLSL 1.20 spec:
                 *
                 *     Only those varying variables used (i.e. read) in
@@ -1779,6 +1757,12 @@ assign_varying_locations(struct gl_context *ctx,
                             _mesa_shader_stage_to_string(consumer->Stage),
 			    var->name,
                             _mesa_shader_stage_to_string(producer->Stage));
+            } else {
+               linker_warning(prog, "%s shader varying %s not written "
+                              "by %s shader\n.",
+                              _mesa_shader_stage_to_string(consumer->Stage),
+                              var->name,
+                              _mesa_shader_stage_to_string(producer->Stage));
             }
          }
       }

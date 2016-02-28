@@ -432,17 +432,6 @@ public:
 
 
    /**
-    * Determine how this variable should be interpolated based on its
-    * interpolation qualifier (if present), whether it is gl_Color or
-    * gl_SecondaryColor, and whether flatshading is enabled in the current GL
-    * state.
-    *
-    * The return value will always be either INTERP_QUALIFIER_SMOOTH,
-    * INTERP_QUALIFIER_NOPERSPECTIVE, or INTERP_QUALIFIER_FLAT.
-    */
-   glsl_interp_qualifier determine_interpolation_mode(bool flat_shade);
-
-   /**
     * Determine whether or not a variable is part of a uniform or
     * shader storage block.
     */
@@ -862,6 +851,14 @@ public:
        * slot has not been assigned, the value will be -1.
        */
       int location;
+
+      /**
+       * for glsl->tgsi/mesa IR we need to store the index into the
+       * parameters for uniforms, initially the code overloaded location
+       * but this causes problems with indirect samplers and AoA.
+       * This is assigned in _mesa_generate_parameters_list_for_uniforms.
+       */
+      int param_index;
 
       /**
        * Vertex stream output identifier.
@@ -1402,16 +1399,6 @@ enum ir_expression_operation {
    /*@}*/
 
    /**
-    * \name Lowered floating point unpacking operations.
-    *
-    * \see lower_packing_builtins_visitor::split_unpack_half_2x16
-    */
-   /*@{*/
-   ir_unop_unpack_half_2x16_split_x,
-   ir_unop_unpack_half_2x16_split_y,
-   /*@}*/
-
-   /**
     * \name Bit operations, part of ARB_gpu_shader5.
     */
    /*@{*/
@@ -1540,15 +1527,6 @@ enum ir_expression_operation {
    ir_binop_max,
 
    ir_binop_pow,
-
-   /**
-    * \name Lowered floating point packing operations.
-    *
-    * \see lower_packing_builtins_visitor::split_pack_half_2x16
-    */
-   /*@{*/
-   ir_binop_pack_half_2x16_split,
-   /*@}*/
 
    /**
     * Load a value the size of a given GLSL type from a uniform block.
@@ -1708,6 +1686,7 @@ public:
              operation == ir_binop_dot ||
              operation == ir_binop_vector_extract ||
              operation == ir_triop_vector_insert ||
+             operation == ir_binop_ubo_load ||
              operation == ir_quadop_vector;
    }
 

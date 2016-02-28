@@ -128,6 +128,8 @@ private:
 
    void emitFlow(const Instruction *);
 
+   void emitVOTE(const Instruction *);
+
    inline void defId(const ValueDef&, const int pos);
    inline void srcId(const ValueRef&, const int pos);
    inline void srcId(const ValueRef *, const int pos);
@@ -433,6 +435,10 @@ CodeEmitterGK110::emitForm_21(const Instruction *i, uint32_t opc2,
          srcId(i->src(s), s ? ((s == 2) ? 42 : s1) : 10);
          break;
       default:
+         if (i->op == OP_SELP) {
+            assert(s == 2 && i->src(s).getFile() == FILE_PREDICATE);
+            srcId(i->src(s), 42);
+         }
          // ignore here, can be predicate or flags, but must not be address
          break;
       }
@@ -1045,7 +1051,7 @@ void CodeEmitterGK110::emitSELP(const Instruction *i)
 {
    emitForm_21(i, 0x250, 0x050);
 
-   if ((i->cc == CC_NOT_P) ^ (bool)(i->src(2).mod & Modifier(NV50_IR_MOD_NOT)))
+   if (i->src(2).mod & Modifier(NV50_IR_MOD_NOT))
       code[1] |= 1 << 13;
 }
 
@@ -1239,7 +1245,7 @@ CodeEmitterGK110::emitQUADOP(const Instruction *i, uint8_t qOp, uint8_t laneMask
 
    defId(i->def(0), 2);
    srcId(i->src(0), 10);
-   srcId(i->srcExists(1) ? i->src(1) : i->src(0), 23);
+   srcId((i->srcExists(1) && i->predSrc != 1) ? i->src(1) : i->src(0), 23);
 
    if (i->op == OP_QUADOP && progType != Program::TYPE_FRAGMENT)
       code[1] |= 1 << 9; // dall
@@ -1364,6 +1370,24 @@ CodeEmitterGK110::emitFlow(const Instruction *i)
       code[0] |= (pcRel & 0x1ff) << 23;
       code[1] |= (pcRel >> 9) & 0x7fff;
    }
+}
+
+void
+CodeEmitterGK110::emitVOTE(const Instruction *i)
+{
+   assert(i->src(0).getFile() == FILE_PREDICATE &&
+          i->def(1).getFile() == FILE_PREDICATE);
+
+   code[0] = 0x00000002;
+   code[1] = 0x86c00000 | (i->subOp << 19);
+
+   emitPredicate(i);
+
+   defId(i->def(0), 2);
+   defId(i->def(1), 48);
+   if (i->src(0).mod == Modifier(NV50_IR_MOD_NOT))
+      code[0] |= 1 << 45;
+   srcId(i->src(0), 42);
 }
 
 void
@@ -1593,7 +1617,13 @@ CodeEmitterGK110::emitSTORE(const Instruction *i)
    switch (i->src(0).getFile()) {
    case FILE_MEMORY_GLOBAL: code[1] = 0xe0000000; code[0] = 0x00000000; break;
    case FILE_MEMORY_LOCAL:  code[1] = 0x7a800000; code[0] = 0x00000002; break;
-   case FILE_MEMORY_SHARED: code[1] = 0x7ac00000; code[0] = 0x00000002; break;
+   case FILE_MEMORY_SHARED:
+      code[0] = 0x00000002;
+      if (i->subOp == NV50_IR_SUBOP_STORE_UNLOCKED)
+         code[1] = 0x78400000;
+      else
+         code[1] = 0x7ac00000;
+      break;
    default:
       assert(!"invalid memory file");
       break;
@@ -1613,6 +1643,13 @@ CodeEmitterGK110::emitSTORE(const Instruction *i)
    code[0] |= offset << 23;
    code[1] |= offset >> 9;
 
+   // Unlocked store on shared memory can fail.
+   if (i->src(0).getFile() == FILE_MEMORY_SHARED &&
+       i->subOp == NV50_IR_SUBOP_STORE_UNLOCKED) {
+      assert(i->defExists(0));
+      defId(i->def(0), 32 + 16);
+   }
+
    emitPredicate(i);
 
    srcId(i->src(1), 2);
@@ -1631,7 +1668,13 @@ CodeEmitterGK110::emitLOAD(const Instruction *i)
    switch (i->src(0).getFile()) {
    case FILE_MEMORY_GLOBAL: code[1] = 0xc0000000; code[0] = 0x00000000; break;
    case FILE_MEMORY_LOCAL:  code[1] = 0x7a000000; code[0] = 0x00000002; break;
-   case FILE_MEMORY_SHARED: code[1] = 0x7a400000; code[0] = 0x00000002; break;
+   case FILE_MEMORY_SHARED:
+      code[0] = 0x00000002;
+      if (i->subOp == NV50_IR_SUBOP_LOAD_LOCKED)
+         code[1] = 0x77400000;
+      else
+         code[1] = 0x7a400000;
+      break;
    case FILE_MEMORY_CONST:
       if (!i->src(0).isIndirect(0) && typeSizeof(i->dType) == 4) {
          emitMOV(i);
@@ -1658,6 +1701,13 @@ CodeEmitterGK110::emitLOAD(const Instruction *i)
    }
    code[0] |= offset << 23;
    code[1] |= offset >> 9;
+
+   // Locked store on shared memory can fail.
+   if (i->src(0).getFile() == FILE_MEMORY_SHARED &&
+       i->subOp == NV50_IR_SUBOP_LOAD_LOCKED) {
+      assert(i->defExists(1));
+      defId(i->def(1), 32 + 16);
+   }
 
    emitPredicate(i);
 
@@ -1947,9 +1997,15 @@ CodeEmitterGK110::emitInstruction(Instruction *insn)
    case OP_CEIL:
    case OP_FLOOR:
    case OP_TRUNC:
-   case OP_CVT:
    case OP_SAT:
       emitCVT(insn);
+      break;
+   case OP_CVT:
+      if (insn->def(0).getFile() == FILE_PREDICATE ||
+          insn->src(0).getFile() == FILE_PREDICATE)
+         emitMOV(insn);
+      else
+         emitCVT(insn);
       break;
    case OP_RSQ:
       emitSFnOp(insn, 5 + 2 * insn->subOp);
@@ -2043,6 +2099,9 @@ CodeEmitterGK110::emitInstruction(Instruction *insn)
       break;
    case OP_CCTL:
       emitCCTL(insn);
+      break;
+   case OP_VOTE:
+      emitVOTE(insn);
       break;
    case OP_PHI:
    case OP_UNION:

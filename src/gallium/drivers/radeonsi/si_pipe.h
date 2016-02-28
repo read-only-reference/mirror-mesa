@@ -80,10 +80,36 @@
 #define SI_MAX_BORDER_COLORS	4096
 
 struct si_compute;
+struct hash_table;
 
 struct si_screen {
 	struct r600_common_screen	b;
 	unsigned			gs_table_depth;
+
+	/* Whether shaders are monolithic (1-part) or separate (3-part). */
+	bool				use_monolithic_shaders;
+
+	pipe_mutex			shader_parts_mutex;
+	struct si_shader_part		*vs_prologs;
+	struct si_shader_part		*vs_epilogs;
+	struct si_shader_part		*tcs_epilogs;
+	struct si_shader_part		*ps_prologs;
+	struct si_shader_part		*ps_epilogs;
+
+	/* Shader cache in memory.
+	 *
+	 * Design & limitations:
+	 * - The shader cache is per screen (= per process), never saved to
+	 *   disk, and skips redundant shader compilations from TGSI to bytecode.
+	 * - It can only be used with one-variant-per-shader support, in which
+	 *   case only the main (typically middle) part of shaders is cached.
+	 * - Only VS, TCS, TES, PS are cached, out of which only the hw VS
+	 *   variants of VS and TES are cached, so LS and ES aren't.
+	 * - GS and CS aren't cached, but it's certainly possible to cache
+	 *   those as well.
+	 */
+	pipe_mutex			shader_cache_mutex;
+	struct hash_table		*shader_cache;
 };
 
 struct si_blend_color {
@@ -113,7 +139,6 @@ struct si_cs_shader_state {
 
 struct si_textures_info {
 	struct si_sampler_views		views;
-	struct si_sampler_states	states;
 	uint32_t			depth_texture_mask; /* which textures are depth */
 	uint32_t			compressed_colortex_mask;
 };
@@ -193,7 +218,7 @@ struct si_context {
 	struct r600_atom		db_render_state;
 	struct r600_atom		msaa_config;
 	struct si_sample_mask		sample_mask;
-	struct r600_atom		cb_target_mask;
+	struct r600_atom		cb_render_state;
 	struct si_blend_color		blend_color;
 	struct r600_atom		clip_regs;
 	struct si_clip_state		clip_state;
@@ -202,7 +227,6 @@ struct si_context {
 	struct si_viewports		viewports;
 	struct si_stencil_ref		stencil_ref;
 	struct r600_atom		spi_map;
-	struct r600_atom		spi_ps_input;
 
 	/* Precomputed states. */
 	struct si_pm4_state		*init_config;
@@ -222,7 +246,6 @@ struct si_context {
 	struct si_vertex_element	*vertex_elements;
 	unsigned			sprite_coord_enable;
 	bool				flatshade;
-	bool				force_persample_interp;
 
 	/* shader descriptors */
 	struct si_descriptors		vertex_buffers;

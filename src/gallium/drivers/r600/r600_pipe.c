@@ -136,7 +136,6 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen,
 		goto fail;
 
 	rctx->screen = rscreen;
-	rctx->keep_tiling_flags = rscreen->b.info.drm_minor >= 12;
 
 	r600_init_blit_functions(rctx);
 
@@ -285,6 +284,8 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_TXQS:
 	case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
 	case PIPE_CAP_INVALIDATE_BUFFER:
+	case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
+	case PIPE_CAP_QUERY_MEMORY_INFO:
 		return 1;
 
 	case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
@@ -342,6 +343,9 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		/* kernel command checker support is also required */
 		return family >= CHIP_CEDAR && rscreen->b.info.drm_minor >= 41;
 
+	case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
+		return family >= CHIP_CEDAR ? 0 : 1;
+
 	/* Unsupported features. */
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_INTEGER:
@@ -364,6 +368,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
 	case PIPE_CAP_GENERATE_MIPMAP:
 	case PIPE_CAP_STRING_MARKER:
+	case PIPE_CAP_QUERY_BUFFER_OBJECT:
 		return 0;
 
 	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
@@ -403,7 +408,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 12;
 	case PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS:
 		/* textures support 8192, but layered rendering supports 2048 */
-		return rscreen->b.info.drm_minor >= 9 ? 2048 : 0;
+		return 2048;
 
 	/* Render targets. */
 	case PIPE_CAP_MAX_RENDER_TARGETS:
@@ -415,10 +420,10 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 	/* Timer queries, present when the clock frequency is non zero. */
 	case PIPE_CAP_QUERY_TIME_ELAPSED:
-		return rscreen->b.info.r600_clock_crystal_freq != 0;
+		return rscreen->b.info.clock_crystal_freq != 0;
 	case PIPE_CAP_QUERY_TIMESTAMP:
 		return rscreen->b.info.drm_minor >= 20 &&
-		       rscreen->b.info.r600_clock_crystal_freq != 0;
+		       rscreen->b.info.clock_crystal_freq != 0;
 
 	case PIPE_CAP_MIN_TEXTURE_GATHER_OFFSET:
 	case PIPE_CAP_MIN_TEXEL_OFFSET:
@@ -522,14 +527,12 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 		return 16;
         case PIPE_SHADER_CAP_PREFERRED_IR:
 		if (shader == PIPE_SHADER_COMPUTE) {
-#if HAVE_LLVM < 0x0306
-			return PIPE_SHADER_IR_LLVM;
-#else
 			return PIPE_SHADER_IR_NATIVE;
-#endif
 		} else {
 			return PIPE_SHADER_IR_TGSI;
 		}
+	case PIPE_SHADER_CAP_SUPPORTED_IRS:
+		return 0;
 	case PIPE_SHADER_CAP_DOUBLES:
 		if (rscreen->b.family == CHIP_CYPRESS ||
 			rscreen->b.family == CHIP_CAYMAN || rscreen->b.family == CHIP_ARUBA)
@@ -539,6 +542,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
 	case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
 	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
+	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
 		return 0;
 	case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
 		/* due to a bug in the shader compiler, some loops hang

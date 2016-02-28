@@ -46,10 +46,12 @@ st_bind_ssbos(struct st_context *st, struct gl_shader *shader,
 {
    unsigned i;
    struct pipe_shader_buffer buffers[MAX_SHADER_STORAGE_BUFFERS];
-   struct gl_program_constants *c = &st->ctx->Const.Program[shader->Stage];
+   struct gl_program_constants *c;
 
    if (!shader || !st->pipe->set_shader_buffers)
       return;
+
+   c = &st->ctx->Const.Program[shader->Stage];
 
    for (i = 0; i < shader->NumShaderStorageBlocks; i++) {
       struct gl_shader_storage_buffer_binding *binding;
@@ -191,4 +193,25 @@ const struct st_tracked_state st_bind_tes_ssbos = {
       ST_NEW_TESSEVAL_PROGRAM | ST_NEW_STORAGE_BUFFER,
    },
    bind_tes_ssbos
+};
+
+static void bind_cs_ssbos(struct st_context *st)
+{
+   struct gl_shader_program *prog =
+      st->ctx->_Shader->CurrentProgram[MESA_SHADER_COMPUTE];
+
+   if (!prog)
+      return;
+
+   st_bind_ssbos(st, prog->_LinkedShaders[MESA_SHADER_COMPUTE],
+                 PIPE_SHADER_COMPUTE);
+}
+
+const struct st_tracked_state st_bind_cs_ssbos = {
+   "st_bind_cs_ssbos",
+   {
+      0,
+      ST_NEW_COMPUTE_PROGRAM | ST_NEW_STORAGE_BUFFER,
+   },
+   bind_cs_ssbos
 };

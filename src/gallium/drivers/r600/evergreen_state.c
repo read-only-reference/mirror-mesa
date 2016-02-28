@@ -772,7 +772,7 @@ evergreen_create_sampler_view_custom(struct pipe_context *ctx,
 		if (util_format_get_blocksize(pipe_format) >= 16)
 			non_disp_tiling = 1;
 	}
-	nbanks = eg_num_banks(rscreen->b.tiling_info.num_banks);
+	nbanks = eg_num_banks(rscreen->b.info.r600_num_banks);
 
 	if (state->target == PIPE_TEXTURE_1D_ARRAY) {
 	        height = 1;
@@ -986,7 +986,7 @@ void evergreen_init_color_surface_rat(struct r600_context *rctx,
 	unsigned block_size =
 		align(util_format_get_blocksize(pipe_buffer->format), 4);
 	unsigned pitch_alignment =
-		MAX2(64, rctx->screen->b.tiling_info.group_bytes / block_size);
+		MAX2(64, rctx->screen->b.info.pipe_interleave_bytes / block_size);
 	unsigned pitch = align(pipe_buffer->width0, pitch_alignment);
 
 	/* XXX: This is copied from evergreen_init_color_surface().  I don't
@@ -1098,7 +1098,7 @@ void evergreen_init_color_surface(struct r600_context *rctx,
 		if (util_format_get_blocksize(surf->base.format) >= 16)
 			non_disp_tiling = 1;
 	}
-	nbanks = eg_num_banks(rscreen->b.tiling_info.num_banks);
+	nbanks = eg_num_banks(rscreen->b.info.r600_num_banks);
 	desc = util_format_description(surf->base.format);
 	for (i = 0; i < 4; i++) {
 		if (desc->channel[i].type != UTIL_FORMAT_TYPE_VOID) {
@@ -1253,7 +1253,7 @@ static void evergreen_init_depth_surface(struct r600_context *rctx,
 	macro_aspect = eg_macro_tile_aspect(macro_aspect);
 	bankw = eg_bank_wh(bankw);
 	bankh = eg_bank_wh(bankh);
-	nbanks = eg_num_banks(rscreen->b.tiling_info.num_banks);
+	nbanks = eg_num_banks(rscreen->b.info.r600_num_banks);
 	offset >>= 8;
 
 	surf->db_z_info = S_028040_ARRAY_MODE(array_mode) |
@@ -1466,15 +1466,13 @@ static void evergreen_set_framebuffer_state(struct pipe_context *ctx,
 
 	/* Colorbuffers. */
 	rctx->framebuffer.atom.num_dw += state->nr_cbufs * 23;
-	if (rctx->keep_tiling_flags)
-		rctx->framebuffer.atom.num_dw += state->nr_cbufs * 2;
+	rctx->framebuffer.atom.num_dw += state->nr_cbufs * 2;
 	rctx->framebuffer.atom.num_dw += (12 - state->nr_cbufs) * 3;
 
 	/* ZS buffer. */
 	if (state->zsbuf) {
 		rctx->framebuffer.atom.num_dw += 24;
-		if (rctx->keep_tiling_flags)
-			rctx->framebuffer.atom.num_dw += 2;
+		rctx->framebuffer.atom.num_dw += 2;
 	} else if (rctx->screen->b.info.drm_minor >= 18) {
 		rctx->framebuffer.atom.num_dw += 4;
 	}
@@ -1656,11 +1654,6 @@ static void evergreen_emit_framebuffer_state(struct r600_context *rctx, struct r
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0)); /* R_028C60_CB_COLOR0_BASE */
 		radeon_emit(cs, reloc);
 
-		if (!rctx->keep_tiling_flags) {
-			radeon_emit(cs, PKT3(PKT3_NOP, 0, 0)); /* R_028C70_CB_COLOR0_INFO */
-			radeon_emit(cs, reloc);
-		}
-
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0)); /* R_028C74_CB_COLOR0_ATTRIB */
 		radeon_emit(cs, reloc);
 
@@ -1674,27 +1667,12 @@ static void evergreen_emit_framebuffer_state(struct r600_context *rctx, struct r
 	if (i == 1 && state->cbufs[0]) {
 		radeon_set_context_reg(cs, R_028C70_CB_COLOR0_INFO + 1 * 0x3C,
 				       cb->cb_color_info | tex->cb_color_info);
-
-		if (!rctx->keep_tiling_flags) {
-			unsigned reloc = radeon_add_to_buffer_list(&rctx->b,
-							       &rctx->b.gfx,
-							       (struct r600_resource*)state->cbufs[0]->texture,
-							       RADEON_USAGE_READWRITE,
-							       RADEON_PRIO_COLOR_BUFFER);
-
-			radeon_emit(cs, PKT3(PKT3_NOP, 0, 0)); /* R_028C70_CB_COLOR0_INFO */
-			radeon_emit(cs, reloc);
-		}
 		i++;
 	}
-	if (rctx->keep_tiling_flags) {
-		for (; i < 8 ; i++) {
-			radeon_set_context_reg(cs, R_028C70_CB_COLOR0_INFO + i * 0x3C, 0);
-		}
-		for (; i < 12; i++) {
-			radeon_set_context_reg(cs, R_028E50_CB_COLOR8_INFO + (i - 8) * 0x1C, 0);
-		}
-	}
+	for (; i < 8 ; i++)
+		radeon_set_context_reg(cs, R_028C70_CB_COLOR0_INFO + i * 0x3C, 0);
+	for (; i < 12; i++)
+		radeon_set_context_reg(cs, R_028E50_CB_COLOR8_INFO + (i - 8) * 0x1C, 0);
 
 	/* ZS buffer. */
 	if (state->zsbuf) {
@@ -1720,11 +1698,6 @@ static void evergreen_emit_framebuffer_state(struct r600_context *rctx, struct r
 		radeon_emit(cs, zb->db_stencil_base);	/* R_028054_DB_STENCIL_WRITE_BASE */
 		radeon_emit(cs, zb->db_depth_size);	/* R_028058_DB_DEPTH_SIZE */
 		radeon_emit(cs, zb->db_depth_slice);	/* R_02805C_DB_DEPTH_SLICE */
-
-		if (!rctx->keep_tiling_flags) {
-			radeon_emit(cs, PKT3(PKT3_NOP, 0, 0)); /* R_028040_DB_Z_INFO */
-			radeon_emit(cs, reloc);
-		}
 
 		radeon_emit(cs, PKT3(PKT3_NOP, 0, 0)); /* R_028048_DB_Z_READ_BASE */
 		radeon_emit(cs, reloc);
@@ -3467,7 +3440,7 @@ static void evergreen_dma_copy_tile(struct r600_context *rctx,
 	sub_cmd = EG_DMA_COPY_TILED;
 	lbpp = util_logbase2(bpp);
 	pitch_tile_max = ((pitch / bpp) / 8) - 1;
-	nbanks = eg_num_banks(rctx->screen->b.tiling_info.num_banks);
+	nbanks = eg_num_banks(rctx->screen->b.info.r600_num_banks);
 
 	if (dst_mode == RADEON_SURF_MODE_LINEAR) {
 		/* T2L */
@@ -3680,8 +3653,7 @@ void evergreen_init_state_functions(struct r600_context *rctx)
 	 */
 	if (rctx->b.chip_class == EVERGREEN) {
 		r600_init_atom(rctx, &rctx->config_state.atom, id++, evergreen_emit_config_state, 11);
-		if (rctx->screen->b.info.drm_minor >= 7)
-			rctx->config_state.dyn_gpr_enabled = true;
+		rctx->config_state.dyn_gpr_enabled = true;
 	}
 	r600_init_atom(rctx, &rctx->framebuffer.atom, id++, evergreen_emit_framebuffer_state, 0);
 	/* shader const */
@@ -3793,7 +3765,7 @@ void evergreen_setup_tess_constants(struct r600_context *rctx, const struct pipe
 	unsigned output_patch0_offset, perpatch_output_offset, lds_size;
 	uint32_t values[16];
 	unsigned num_waves;
-	unsigned num_pipes = rctx->screen->b.info.r600_max_pipes;
+	unsigned num_pipes = rctx->screen->b.info.r600_max_quad_pipes;
 	unsigned wave_divisor = (16 * num_pipes);
 
 	*num_patches = 1;
@@ -3933,7 +3905,7 @@ bool evergreen_adjust_gprs(struct r600_context *rctx)
 	max_gprs += def_num_clause_temp_gprs * 2;
 
 	/* if we have no TESS and dyn gpr is enabled then do nothing. */
-	if (!rctx->hw_shader_stages[EG_HW_STAGE_HS].shader || rctx->screen->b.info.drm_minor < 7) {
+	if (!rctx->hw_shader_stages[EG_HW_STAGE_HS].shader) {
 		if (rctx->config_state.dyn_gpr_enabled)
 			return true;
 

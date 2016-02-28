@@ -622,6 +622,7 @@ type_size_vec4(const struct glsl_type *type)
    case GLSL_TYPE_DOUBLE:
    case GLSL_TYPE_ERROR:
    case GLSL_TYPE_INTERFACE:
+   case GLSL_TYPE_FUNCTION:
       unreachable("not reached");
    }
 
@@ -678,18 +679,8 @@ vec4_instruction *
 vec4_visitor::emit_minmax(enum brw_conditional_mod conditionalmod, dst_reg dst,
                           src_reg src0, src_reg src1)
 {
-   vec4_instruction *inst;
-
-   if (devinfo->gen >= 6) {
-      inst = emit(BRW_OPCODE_SEL, dst, src0, src1);
-      inst->conditional_mod = conditionalmod;
-   } else {
-      emit(CMP(dst, src0, src1, conditionalmod));
-
-      inst = emit(BRW_OPCODE_SEL, dst, src0, src1);
-      inst->predicate = BRW_PREDICATE_NORMAL;
-   }
-
+   vec4_instruction *inst = emit(BRW_OPCODE_SEL, dst, src0, src1);
+   inst->conditional_mod = conditionalmod;
    return inst;
 }
 
@@ -815,13 +806,14 @@ vec4_visitor::emit_uniformize(const src_reg &src)
 
 src_reg
 vec4_visitor::emit_mcs_fetch(const glsl_type *coordinate_type,
-                             src_reg coordinate, src_reg sampler)
+                             src_reg coordinate, src_reg surface)
 {
    vec4_instruction *inst =
       new(mem_ctx) vec4_instruction(SHADER_OPCODE_TXF_MCS,
                                     dst_reg(this, glsl_type::uvec4_type));
    inst->base_mrf = 2;
-   inst->src[1] = sampler;
+   inst->src[1] = surface;
+   inst->src[2] = surface;
 
    int param_base;
 
@@ -877,6 +869,8 @@ vec4_visitor::emit_texture(ir_texture_opcode op,
                            src_reg offset_value,
                            src_reg mcs,
                            bool is_cube_array,
+                           uint32_t surface,
+                           src_reg surface_reg,
                            uint32_t sampler,
                            src_reg sampler_reg)
 {
@@ -942,7 +936,8 @@ vec4_visitor::emit_texture(ir_texture_opcode op,
    inst->dst.writemask = WRITEMASK_XYZW;
    inst->shadow_compare = shadow_comparitor.file != BAD_FILE;
 
-   inst->src[1] = sampler_reg;
+   inst->src[1] = surface_reg;
+   inst->src[2] = sampler_reg;
 
    /* MRF for the first parameter */
    int param_base = inst->base_mrf + inst->header_size;
@@ -1068,7 +1063,7 @@ vec4_visitor::emit_texture(ir_texture_opcode op,
    }
 
    if (devinfo->gen == 6 && op == ir_tg4) {
-      emit_gen6_gather_wa(key_tex->gen6_gather_wa[sampler], inst->dst);
+      emit_gen6_gather_wa(key_tex->gen6_gather_wa[surface], inst->dst);
    }
 
    if (op == ir_query_levels) {

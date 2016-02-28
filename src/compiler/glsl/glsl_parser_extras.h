@@ -290,13 +290,6 @@ struct _mesa_glsl_parse_state {
    gl_shader_stage stage;
 
    /**
-    * Number of nested struct_specifier levels
-    *
-    * Outside a struct_specifier, this is zero.
-    */
-   unsigned struct_specifier_depth;
-
-   /**
     * Default uniform layout qualifiers tracked during parsing.
     * Currently affects uniform blocks and uniform buffer variables in
     * those blocks.
@@ -429,6 +422,11 @@ struct _mesa_glsl_parse_state {
       unsigned MaxAtomicCounterBufferSize;
 
       /* ARB_compute_shader */
+      unsigned MaxComputeAtomicCounterBuffers;
+      unsigned MaxComputeAtomicCounters;
+      unsigned MaxComputeImageUniforms;
+      unsigned MaxComputeTextureImageUnits;
+      unsigned MaxComputeUniformComponents;
       unsigned MaxComputeWorkGroupCount[3];
       unsigned MaxComputeWorkGroupSize[3];
 
@@ -595,6 +593,10 @@ struct _mesa_glsl_parse_state {
    bool OES_geometry_point_size_warn;
    bool OES_geometry_shader_enable;
    bool OES_geometry_shader_warn;
+   bool OES_gpu_shader5_enable;
+   bool OES_gpu_shader5_warn;
+   bool OES_shader_image_atomic_enable;
+   bool OES_shader_image_atomic_warn;
    bool OES_standard_derivatives_enable;
    bool OES_standard_derivatives_warn;
    bool OES_texture_3D_enable;
@@ -618,6 +620,8 @@ struct _mesa_glsl_parse_state {
    bool EXT_blend_func_extended_warn;
    bool EXT_draw_buffers_enable;
    bool EXT_draw_buffers_warn;
+   bool EXT_gpu_shader5_enable;
+   bool EXT_gpu_shader5_warn;
    bool EXT_separate_shader_objects_enable;
    bool EXT_separate_shader_objects_warn;
    bool EXT_shader_integer_mix_enable;

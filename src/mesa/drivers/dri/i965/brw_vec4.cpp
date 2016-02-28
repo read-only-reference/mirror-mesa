@@ -26,6 +26,7 @@
 #include "brw_cfg.h"
 #include "brw_vs.h"
 #include "brw_nir.h"
+#include "brw_vec4_builder.h"
 #include "brw_vec4_live_variables.h"
 #include "brw_dead_control_flow.h"
 #include "program/prog_parameter.h"
@@ -274,9 +275,9 @@ vec4_visitor::implied_mrf_writes(vec4_instruction *inst)
    case SHADER_OPCODE_INT_QUOTIENT:
    case SHADER_OPCODE_INT_REMAINDER:
    case SHADER_OPCODE_POW:
+   case TCS_OPCODE_THREAD_END:
       return 2;
    case VS_OPCODE_URB_WRITE:
-   case TCS_OPCODE_THREAD_END:
       return 1;
    case VS_OPCODE_PULL_CONSTANT_LOAD:
       return 2;
@@ -1522,22 +1523,6 @@ vec4_visitor::lower_attributes_to_hw_regs(const int *attribute_map,
                                           bool interleaved)
 {
    foreach_block_and_inst(block, vec4_instruction, inst, cfg) {
-      /* We have to support ATTR as a destination for GL_FIXED fixup. */
-      if (inst->dst.file == ATTR) {
-         int grf = attribute_map[inst->dst.nr + inst->dst.reg_offset];
-
-         /* All attributes used in the shader need to have been assigned a
-          * hardware register by the caller
-          */
-         assert(grf != 0);
-
-	 struct brw_reg reg = attribute_to_hw_reg(grf, interleaved);
-	 reg.type = inst->dst.type;
-	 reg.writemask = inst->dst.writemask;
-
-         inst->dst = reg;
-      }
-
       for (int i = 0; i < 3; i++) {
 	 if (inst->src[i].file != ATTR)
 	    continue;
@@ -1577,11 +1562,6 @@ vec4_vs_visitor::setup_attributes(int payload_reg)
       }
    }
 
-   if (vs_prog_data->uses_drawid) {
-      attribute_map[VERT_ATTRIB_MAX + 1] = payload_reg + nr_attributes;
-      nr_attributes++;
-   }
-
    /* VertexID is stored by the VF as the last vertex element, but we
     * don't represent it with a flag in inputs_read, so we call it
     * VERT_ATTRIB_MAX.
@@ -1589,6 +1569,11 @@ vec4_vs_visitor::setup_attributes(int payload_reg)
    if (vs_prog_data->uses_vertexid || vs_prog_data->uses_instanceid ||
        vs_prog_data->uses_basevertex || vs_prog_data->uses_baseinstance) {
       attribute_map[VERT_ATTRIB_MAX] = payload_reg + nr_attributes;
+      nr_attributes++;
+   }
+
+   if (vs_prog_data->uses_drawid) {
+      attribute_map[VERT_ATTRIB_MAX + 1] = payload_reg + nr_attributes;
       nr_attributes++;
    }
 
@@ -1646,6 +1631,36 @@ vec4_vs_visitor::setup_payload(void)
    reg = setup_attributes(reg);
 
    this->first_non_payload_grf = reg;
+}
+
+bool
+vec4_visitor::lower_minmax()
+{
+   assert(devinfo->gen < 6);
+
+   bool progress = false;
+
+   foreach_block_and_inst_safe(block, vec4_instruction, inst, cfg) {
+      const vec4_builder ibld(this, block, inst);
+
+      if (inst->opcode == BRW_OPCODE_SEL &&
+          inst->predicate == BRW_PREDICATE_NONE) {
+         /* FIXME: Using CMP doesn't preserve the NaN propagation semantics of
+          *        the original SEL.L/GE instruction
+          */
+         ibld.CMP(ibld.null_reg_d(), inst->src[0], inst->src[1],
+                  inst->conditional_mod);
+         inst->predicate = BRW_PREDICATE_NORMAL;
+         inst->conditional_mod = BRW_CONDITIONAL_NONE;
+
+         progress = true;
+      }
+   }
+
+   if (progress)
+      invalidate_live_intervals();
+
+   return progress;
 }
 
 src_reg
@@ -1885,7 +1900,7 @@ vec4_visitor::run()
 
    if (unlikely(INTEL_DEBUG & DEBUG_OPTIMIZER)) {
       char filename[64];
-      snprintf(filename, 64, "%s-%s-00-start",
+      snprintf(filename, 64, "%s-%s-00-00-start",
                stage_abbrev, nir->info.name);
 
       backend_shader::dump_instructions(filename);
@@ -1917,6 +1932,13 @@ vec4_visitor::run()
       OPT(opt_cse);
       OPT(opt_copy_propagation, false);
       OPT(opt_copy_propagation, true);
+      OPT(dead_code_eliminate);
+   }
+
+   if (devinfo->gen <= 5 && OPT(lower_minmax)) {
+      OPT(opt_cmod_propagation);
+      OPT(opt_cse);
+      OPT(opt_copy_propagation);
       OPT(dead_code_eliminate);
    }
 
@@ -1992,6 +2014,9 @@ brw_compile_vs(const struct brw_compiler *compiler, void *log_data,
    nir_shader *shader = nir_shader_clone(mem_ctx, src_shader);
    shader = brw_nir_apply_sampler_key(shader, compiler->devinfo, &key->tex,
                                       is_scalar);
+   brw_nir_lower_vs_inputs(shader, compiler->devinfo, is_scalar,
+                           use_legacy_snorm_formula, key->gl_attrib_wa_flags);
+   brw_nir_lower_vue_outputs(shader, is_scalar);
    shader = brw_postprocess_nir(shader, compiler->devinfo, is_scalar);
 
    const unsigned *assembly = NULL;

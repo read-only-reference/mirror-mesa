@@ -298,8 +298,6 @@ ir_expression::ir_expression(int op, ir_rvalue *op0)
       break;
 
    case ir_unop_noise:
-   case ir_unop_unpack_half_2x16_split_x:
-   case ir_unop_unpack_half_2x16_split_y:
       this->type = glsl_type::float_type;
       break;
 
@@ -420,10 +418,6 @@ ir_expression::ir_expression(int op, ir_rvalue *op0, ir_rvalue *op1)
 
    case ir_binop_dot:
       this->type = op0->type->get_base_type();
-      break;
-
-   case ir_binop_pack_half_2x16_split:
-      this->type = glsl_type::uint_type;
       break;
 
    case ir_binop_imul_high:
@@ -555,8 +549,6 @@ static const char *const operator_strs[] = {
    "unpackUnorm2x16",
    "unpackUnorm4x8",
    "unpackHalf2x16",
-   "unpackHalf2x16_split_x",
-   "unpackHalf2x16_split_y",
    "bitfield_reverse",
    "bit_count",
    "find_msb",
@@ -599,7 +591,6 @@ static const char *const operator_strs[] = {
    "min",
    "max",
    "pow",
-   "packHalf2x16_split",
    "ubo_load",
    "ldexp",
    "vector_extract",
@@ -1451,7 +1442,7 @@ ir_texture::set_sampler(ir_dereference *sampler, const glsl_type *type)
       assert(sampler->type->base_type == GLSL_TYPE_SAMPLER);
       assert(sampler->type->sampler_dimensionality == GLSL_SAMPLER_DIM_MS);
    } else {
-      assert(sampler->type->sampler_type == (int) type->base_type);
+      assert(sampler->type->sampled_type == (int) type->base_type);
       if (sampler->type->sampler_shadow)
 	 assert(type->vector_elements == 4 || type->vector_elements == 1);
       else
@@ -1703,21 +1694,6 @@ interpolation_string(unsigned interpolation)
 
    assert(!"Should not get here.");
    return "";
-}
-
-
-glsl_interp_qualifier
-ir_variable::determine_interpolation_mode(bool flat_shade)
-{
-   if (this->data.interpolation != INTERP_QUALIFIER_NONE)
-      return (glsl_interp_qualifier) this->data.interpolation;
-   int location = this->data.location;
-   bool is_gl_Color =
-      location == VARYING_SLOT_COL0 || location == VARYING_SLOT_COL1;
-   if (flat_shade && is_gl_Color)
-      return INTERP_QUALIFIER_FLAT;
-   else
-      return INTERP_QUALIFIER_SMOOTH;
 }
 
 const char *const ir_variable::warn_extension_table[] = {

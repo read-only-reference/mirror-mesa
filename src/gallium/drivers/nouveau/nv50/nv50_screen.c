@@ -72,7 +72,8 @@ nv50_screen_is_format_supported(struct pipe_screen *pscreen,
                  PIPE_BIND_TRANSFER_WRITE |
                  PIPE_BIND_SHARED);
 
-   return (nv50_format_table[format].usage & bindings) == bindings;
+   return (( nv50_format_table[format].usage |
+            nv50_vertex_format[format].usage) & bindings) == bindings;
 }
 
 static int
@@ -120,7 +121,7 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_CONSTANT_BUFFER_OFFSET_ALIGNMENT:
       return 256;
    case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
-      return 1; /* 256 for binding as RT, but that's not possible in GL */
+      return 16; /* 256 for binding as RT, but that's not possible in GL */
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
       return NOUVEAU_MIN_BUFFER_MAP_ALIGN;
    case PIPE_CAP_MAX_VIEWPORTS:
@@ -227,6 +228,10 @@ nv50_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_INVALIDATE_BUFFER:
    case PIPE_CAP_GENERATE_MIPMAP:
    case PIPE_CAP_STRING_MARKER:
+   case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
+   case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
+   case PIPE_CAP_QUERY_BUFFER_OBJECT:
+   case PIPE_CAP_QUERY_MEMORY_INFO:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -259,8 +264,8 @@ nv50_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
    case PIPE_SHADER_VERTEX:
    case PIPE_SHADER_GEOMETRY:
    case PIPE_SHADER_FRAGMENT:
-   case PIPE_SHADER_COMPUTE:
       break;
+   case PIPE_SHADER_COMPUTE:
    default:
       return 0;
    }
@@ -311,6 +316,8 @@ nv50_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
    case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
+   case PIPE_SHADER_CAP_SUPPORTED_IRS:
+   case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
       return 0;
    case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
       return 32;
@@ -558,7 +565,7 @@ nv50_screen_init_hwctx(struct nv50_screen *screen)
 
    if (screen->tesla->oclass >= NVA0_3D_CLASS) {
       BEGIN_NV04(push, SUBC_3D(NVA0_3D_TEX_MISC), 1);
-      PUSH_DATA (push, NVA0_3D_TEX_MISC_SEAMLESS_CUBE_MAP);
+      PUSH_DATA (push, 0);
    }
 
    BEGIN_NV04(push, NV50_3D(SCREEN_Y_CONTROL), 1);

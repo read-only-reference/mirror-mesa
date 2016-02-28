@@ -82,8 +82,6 @@
 #include "main/enums.h"
 
 
-void linker_error(gl_shader_program *, const char *, ...);
-
 namespace {
 
 /**
@@ -2125,6 +2123,7 @@ link_intrastage_shaders(void *mem_ctx,
 
       if (ok) {
          memcpy(linking_shaders, shader_list, num_shaders * sizeof(gl_shader *));
+         _mesa_glsl_initialize_builtin_functions();
          linking_shaders[num_shaders] = _mesa_glsl_get_builtin_function_shader();
 
          ok = link_function_calls(prog, linked, linking_shaders, num_shaders + 1);
@@ -3009,12 +3008,13 @@ check_image_resources(struct gl_context *ctx, struct gl_shader_program *prog)
  * for a variable, checks for overlaps between other uniforms using explicit
  * locations.
  */
-static bool
+static int
 reserve_explicit_locations(struct gl_shader_program *prog,
                            string_to_uint_map *map, ir_variable *var)
 {
    unsigned slots = var->type->uniform_locations();
    unsigned max_loc = var->data.location + slots - 1;
+   unsigned return_value = slots;
 
    /* Resize remap table if locations do not fit in the current one. */
    if (max_loc + 1 > prog->NumUniformRemapTable) {
@@ -3025,7 +3025,7 @@ reserve_explicit_locations(struct gl_shader_program *prog,
 
       if (!prog->UniformRemapTable) {
          linker_error(prog, "Out of memory during linking.\n");
-         return false;
+         return -1;
       }
 
       /* Initialize allocated space. */
@@ -3043,8 +3043,10 @@ reserve_explicit_locations(struct gl_shader_program *prog,
 
          /* Possibly same uniform from a different stage, this is ok. */
          unsigned hash_loc;
-         if (map->get(hash_loc, var->name) && hash_loc == loc - i)
-               continue;
+         if (map->get(hash_loc, var->name) && hash_loc == loc - i) {
+            return_value = 0;
+            continue;
+         }
 
          /* ARB_explicit_uniform_location specification states:
           *
@@ -3056,7 +3058,7 @@ reserve_explicit_locations(struct gl_shader_program *prog,
                       "location qualifier for uniform %s overlaps "
                       "previously used location\n",
                       var->name);
-         return false;
+         return -1;
       }
 
       /* Initialize location as inactive before optimization
@@ -3068,7 +3070,7 @@ reserve_explicit_locations(struct gl_shader_program *prog,
    /* Note, base location used for arrays. */
    map->put(var->data.location, var->name);
 
-   return true;
+   return return_value;
 }
 
 static bool
@@ -3129,12 +3131,12 @@ reserve_subroutine_explicit_locations(struct gl_shader_program *prog,
  * any optimizations happen to handle also inactive uniforms and
  * inactive array elements that may get trimmed away.
  */
-static void
+static int
 check_explicit_uniform_locations(struct gl_context *ctx,
                                  struct gl_shader_program *prog)
 {
    if (!ctx->Extensions.ARB_explicit_uniform_location)
-      return;
+      return -1;
 
    /* This map is used to detect if overlapping explicit locations
     * occur with the same uniform (from different stage) or a different one.
@@ -3143,7 +3145,7 @@ check_explicit_uniform_locations(struct gl_context *ctx,
 
    if (!uniform_map) {
       linker_error(prog, "Out of memory during linking.\n");
-      return;
+      return -1;
    }
 
    unsigned entries_total = 0;
@@ -3158,31 +3160,47 @@ check_explicit_uniform_locations(struct gl_context *ctx,
          if (!var || var->data.mode != ir_var_uniform)
             continue;
 
-         entries_total += var->type->uniform_locations();
-
          if (var->data.explicit_location) {
-            bool ret;
+            bool ret = false;
             if (var->type->without_array()->is_subroutine())
                ret = reserve_subroutine_explicit_locations(prog, sh, var);
-            else
-               ret = reserve_explicit_locations(prog, uniform_map, var);
+            else {
+               int slots = reserve_explicit_locations(prog, uniform_map,
+                                                      var);
+               if (slots != -1) {
+                  ret = true;
+                  entries_total += slots;
+               }
+            }
             if (!ret) {
                delete uniform_map;
-               return;
+               return -1;
             }
          }
       }
    }
 
-   /* Verify that total amount of entries for explicit and implicit locations
-    * is less than MAX_UNIFORM_LOCATIONS.
-    */
-   if (entries_total >= ctx->Const.MaxUserAssignableUniformLocations) {
-      linker_error(prog, "count of uniform locations >= MAX_UNIFORM_LOCATIONS"
-                   "(%u >= %u)", entries_total,
-                   ctx->Const.MaxUserAssignableUniformLocations);
+   exec_list_make_empty(&prog->EmptyUniformLocations);
+   struct empty_uniform_block *current_block = NULL;
+
+   for (unsigned i = 0; i < prog->NumUniformRemapTable; i++) {
+      /* We found empty space in UniformRemapTable. */
+      if (prog->UniformRemapTable[i] == NULL) {
+         /* We've found the beginning of a new continous block of empty slots */
+         if (!current_block || current_block->start + current_block->slots != i) {
+            current_block = rzalloc(prog, struct empty_uniform_block);
+            current_block->start = i;
+            exec_list_push_tail(&prog->EmptyUniformLocations,
+                                &current_block->link);
+         }
+
+         /* The current block continues, so we simply increment its slots */
+         current_block->slots++;
+      }
    }
+
    delete uniform_map;
+   return entries_total;
 }
 
 static bool
@@ -4105,14 +4123,34 @@ disable_varying_optimizations_for_sso(struct gl_shader_program *prog)
 void
 link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
 {
-   tfeedback_decl *tfeedback_decls = NULL;
-   unsigned num_tfeedback_decls = prog->TransformFeedback.NumVarying;
-
-   void *mem_ctx = ralloc_context(NULL); // temporary linker context
-
    prog->LinkStatus = true; /* All error paths will set this to false */
    prog->Validated = false;
    prog->_Used = false;
+
+   /* Section 7.3 (Program Objects) of the OpenGL 4.5 Core Profile spec says:
+    *
+    *     "Linking can fail for a variety of reasons as specified in the
+    *     OpenGL Shading Language Specification, as well as any of the
+    *     following reasons:
+    *
+    *     - No shader objects are attached to program."
+    *
+    * The Compatibility Profile specification does not list the error.  In
+    * Compatibility Profile missing shader stages are replaced by
+    * fixed-function.  This applies to the case where all stages are
+    * missing.
+    */
+   if (prog->NumShaders == 0) {
+      if (ctx->API != API_OPENGL_COMPAT)
+         linker_error(prog, "no shaders attached to the program\n");
+      return;
+   }
+
+   tfeedback_decl *tfeedback_decls = NULL;
+   unsigned num_tfeedback_decls = prog->TransformFeedback.NumVarying;
+   unsigned int num_explicit_uniform_locs = 0;
+
+   void *mem_ctx = ralloc_context(NULL); // temporary linker context
 
    prog->ARB_fragment_coord_conventions_enable = false;
 
@@ -4129,13 +4167,11 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
 
    unsigned min_version = UINT_MAX;
    unsigned max_version = 0;
-   const bool is_es_prog =
-      (prog->NumShaders > 0 && prog->Shaders[0]->IsES) ? true : false;
    for (unsigned i = 0; i < prog->NumShaders; i++) {
       min_version = MIN2(min_version, prog->Shaders[i]->Version);
       max_version = MAX2(max_version, prog->Shaders[i]->Version);
 
-      if (prog->Shaders[i]->IsES != is_es_prog) {
+      if (prog->Shaders[i]->IsES != prog->Shaders[0]->IsES) {
 	 linker_error(prog, "all shaders must use same shading "
 		      "language version\n");
 	 goto done;
@@ -4153,80 +4189,59 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
    /* In desktop GLSL, different shader versions may be linked together.  In
     * GLSL ES, all shader versions must be the same.
     */
-   if (is_es_prog && min_version != max_version) {
+   if (prog->Shaders[0]->IsES && min_version != max_version) {
       linker_error(prog, "all shaders must use same shading "
 		   "language version\n");
       goto done;
    }
 
    prog->Version = max_version;
-   prog->IsES = is_es_prog;
-
-   /* From OpenGL 4.5 Core specification (7.3 Program Objects):
-    *     "Linking can fail for a variety of reasons as specified in the OpenGL
-    *     Shading Language Specification, as well as any of the following
-    *     reasons:
-    *
-    *     * No shader objects are attached to program.
-    *
-    *     ..."
-    *
-    *     Same rule applies for OpenGL ES >= 3.1.
-    */
-
-   if (prog->NumShaders == 0 &&
-       ((ctx->API == API_OPENGL_CORE && ctx->Version >= 45) ||
-        (ctx->API == API_OPENGLES2 && ctx->Version >= 31))) {
-      linker_error(prog, "No shader objects are attached to program.\n");
-      goto done;
-   }
+   prog->IsES = prog->Shaders[0]->IsES;
 
    /* Some shaders have to be linked with some other shaders present.
     */
-   if (num_shaders[MESA_SHADER_GEOMETRY] > 0 &&
-       num_shaders[MESA_SHADER_VERTEX] == 0 &&
-       !prog->SeparateShader) {
-      linker_error(prog, "Geometry shader must be linked with "
-		   "vertex shader\n");
-      goto done;
-   }
-   if (num_shaders[MESA_SHADER_TESS_EVAL] > 0 &&
-       num_shaders[MESA_SHADER_VERTEX] == 0 &&
-       !prog->SeparateShader) {
-      linker_error(prog, "Tessellation evaluation shader must be linked with "
-		   "vertex shader\n");
-      goto done;
-   }
-   if (num_shaders[MESA_SHADER_TESS_CTRL] > 0 &&
-       num_shaders[MESA_SHADER_VERTEX] == 0 &&
-       !prog->SeparateShader) {
-      linker_error(prog, "Tessellation control shader must be linked with "
-		   "vertex shader\n");
-      goto done;
-   }
+   if (!prog->SeparateShader) {
+      if (num_shaders[MESA_SHADER_GEOMETRY] > 0 &&
+          num_shaders[MESA_SHADER_VERTEX] == 0) {
+         linker_error(prog, "Geometry shader must be linked with "
+		      "vertex shader\n");
+         goto done;
+      }
+      if (num_shaders[MESA_SHADER_TESS_EVAL] > 0 &&
+          num_shaders[MESA_SHADER_VERTEX] == 0) {
+         linker_error(prog, "Tessellation evaluation shader must be linked "
+		      "with vertex shader\n");
+         goto done;
+      }
+      if (num_shaders[MESA_SHADER_TESS_CTRL] > 0 &&
+          num_shaders[MESA_SHADER_VERTEX] == 0) {
+         linker_error(prog, "Tessellation control shader must be linked with "
+		      "vertex shader\n");
+         goto done;
+      }
 
-   /* The spec is self-contradictory here. It allows linking without a tess
-    * eval shader, but that can only be used with transform feedback and
-    * rasterization disabled. However, transform feedback isn't allowed
-    * with GL_PATCHES, so it can't be used.
-    *
-    * More investigation showed that the idea of transform feedback after
-    * a tess control shader was dropped, because some hw vendors couldn't
-    * support tessellation without a tess eval shader, but the linker section
-    * wasn't updated to reflect that.
-    *
-    * All specifications (ARB_tessellation_shader, GL 4.0-4.5) have this
-    * spec bug.
-    *
-    * Do what's reasonable and always require a tess eval shader if a tess
-    * control shader is present.
-    */
-   if (num_shaders[MESA_SHADER_TESS_CTRL] > 0 &&
-       num_shaders[MESA_SHADER_TESS_EVAL] == 0 &&
-       !prog->SeparateShader) {
-      linker_error(prog, "Tessellation control shader must be linked with "
-		   "tessellation evaluation shader\n");
-      goto done;
+      /* The spec is self-contradictory here. It allows linking without a tess
+       * eval shader, but that can only be used with transform feedback and
+       * rasterization disabled. However, transform feedback isn't allowed
+       * with GL_PATCHES, so it can't be used.
+       *
+       * More investigation showed that the idea of transform feedback after
+       * a tess control shader was dropped, because some hw vendors couldn't
+       * support tessellation without a tess eval shader, but the linker
+       * section wasn't updated to reflect that.
+       *
+       * All specifications (ARB_tessellation_shader, GL 4.0-4.5) have this
+       * spec bug.
+       *
+       * Do what's reasonable and always require a tess eval shader if a tess
+       * control shader is present.
+       */
+      if (num_shaders[MESA_SHADER_TESS_CTRL] > 0 &&
+          num_shaders[MESA_SHADER_TESS_EVAL] == 0) {
+         linker_error(prog, "Tessellation control shader must be linked with "
+		      "tessellation evaluation shader\n");
+         goto done;
+      }
    }
 
    /* Compute shaders have additional restrictions. */
@@ -4315,7 +4330,7 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
       last = i;
    }
 
-   check_explicit_uniform_locations(ctx, prog);
+   num_explicit_uniform_locs = check_explicit_uniform_locations(ctx, prog);
    link_assign_subroutine_types(prog);
 
    if (!prog->LinkStatus)
@@ -4362,7 +4377,7 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
     *
     * This rule also applies to GLSL ES 3.00.
     */
-   if (max_version >= (is_es_prog ? 300 : 130)) {
+   if (max_version >= (prog->IsES ? 300 : 130)) {
       struct gl_shader *sh = prog->_LinkedShaders[MESA_SHADER_FRAGMENT];
       if (sh) {
 	 lower_discard_flow(sh->ir);
@@ -4451,9 +4466,10 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
        *     non-zero, but the program object has no vertex or geometry
        *     shader;
        */
-      if (first == MESA_SHADER_FRAGMENT) {
+      if (first >= MESA_SHADER_FRAGMENT) {
          linker_error(prog, "Transform feedback varyings specified, but "
-                      "no vertex or geometry shader is present.\n");
+                      "no vertex, tessellation, or geometry shader is "
+                      "present.\n");
          goto done;
       }
 
@@ -4465,98 +4481,89 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
          goto done;
    }
 
-   /* Linking the stages in the opposite order (from fragment to vertex)
-    * ensures that inter-shader outputs written to in an earlier stage are
-    * eliminated if they are (transitively) not used in a later stage.
+   /* If there is no fragment shader we need to set transform feedback.
+    *
+    * For SSO we need also need to assign output locations, we assign them
+    * here because we need to do it for both single stage programs and multi
+    * stage programs.
     */
-   int next;
+   if (last < MESA_SHADER_FRAGMENT &&
+       (num_tfeedback_decls != 0 || prog->SeparateShader)) {
+      if (!assign_varying_locations(ctx, mem_ctx, prog,
+                                    prog->_LinkedShaders[last], NULL,
+                                    num_tfeedback_decls, tfeedback_decls))
+         goto done;
+   }
 
-   if (first < MESA_SHADER_FRAGMENT) {
-      gl_shader *const sh = prog->_LinkedShaders[last];
-
-      if (first != MESA_SHADER_VERTEX) {
-         /* There was no vertex shader, but we still have to assign varying
-          * locations for use by tessellation/geometry shader inputs in SSO.
-          *
-          * If the shader is not separable (i.e., prog->SeparateShader is
-          * false), linking will have already failed when first is not
-          * MESA_SHADER_VERTEX.
-          */
-         if (!assign_varying_locations(ctx, mem_ctx, prog,
-                                       NULL, prog->_LinkedShaders[first],
-                                       num_tfeedback_decls, tfeedback_decls))
-            goto done;
-      }
-
-      if (last != MESA_SHADER_FRAGMENT &&
-         (num_tfeedback_decls != 0 || prog->SeparateShader)) {
-         /* There was no fragment shader, but we still have to assign varying
-          * locations for use by transform feedback.
-          */
-         if (!assign_varying_locations(ctx, mem_ctx, prog,
-                                       sh, NULL,
-                                       num_tfeedback_decls, tfeedback_decls))
-            goto done;
-      }
-
-      do_dead_builtin_varyings(ctx, sh, NULL,
-                               num_tfeedback_decls, tfeedback_decls);
-
-      remove_unused_shader_inputs_and_outputs(prog->SeparateShader, sh,
+   if (last <= MESA_SHADER_FRAGMENT) {
+      /* Remove unused varyings from the first/last stage unless SSO */
+      remove_unused_shader_inputs_and_outputs(prog->SeparateShader,
+                                              prog->_LinkedShaders[first],
+                                              ir_var_shader_in);
+      remove_unused_shader_inputs_and_outputs(prog->SeparateShader,
+                                              prog->_LinkedShaders[last],
                                               ir_var_shader_out);
-   }
-   else if (first == MESA_SHADER_FRAGMENT) {
-      /* If the program only contains a fragment shader...
-       */
-      gl_shader *const sh = prog->_LinkedShaders[first];
 
-      do_dead_builtin_varyings(ctx, NULL, sh,
-                               num_tfeedback_decls, tfeedback_decls);
+      /* If the program is made up of only a single stage */
+      if (first == last) {
 
-      if (prog->SeparateShader) {
-         if (!assign_varying_locations(ctx, mem_ctx, prog,
-                                       NULL /* producer */,
-                                       sh /* consumer */,
-                                       0 /* num_tfeedback_decls */,
-                                       NULL /* tfeedback_decls */))
-            goto done;
+         gl_shader *const sh = prog->_LinkedShaders[last];
+         if (prog->SeparateShader) {
+            /* Assign input locations for SSO, output locations are already
+             * assigned.
+             */
+            if (!assign_varying_locations(ctx, mem_ctx, prog,
+                                          NULL /* producer */,
+                                          sh /* consumer */,
+                                          0 /* num_tfeedback_decls */,
+                                          NULL /* tfeedback_decls */))
+               goto done;
+         }
+
+         do_dead_builtin_varyings(ctx, NULL, sh, 0, NULL);
+         do_dead_builtin_varyings(ctx, sh, NULL, num_tfeedback_decls,
+                                  tfeedback_decls);
       } else {
-         remove_unused_shader_inputs_and_outputs(false, sh,
-                                                 ir_var_shader_in);
+         /* Linking the stages in the opposite order (from fragment to vertex)
+          * ensures that inter-shader outputs written to in an earlier stage
+          * are eliminated if they are (transitively) not used in a later
+          * stage.
+          */
+         int next = last;
+         for (int i = next - 1; i >= 0; i--) {
+            if (prog->_LinkedShaders[i] == NULL)
+               continue;
+
+            gl_shader *const sh_i = prog->_LinkedShaders[i];
+            gl_shader *const sh_next = prog->_LinkedShaders[next];
+
+            if (!assign_varying_locations(ctx, mem_ctx, prog, sh_i, sh_next,
+                      next == MESA_SHADER_FRAGMENT ? num_tfeedback_decls : 0,
+                      tfeedback_decls))
+               goto done;
+
+            do_dead_builtin_varyings(ctx, sh_i, sh_next,
+                      next == MESA_SHADER_FRAGMENT ? num_tfeedback_decls : 0,
+                      tfeedback_decls);
+
+            /* This must be done after all dead varyings are eliminated. */
+            if (!check_against_output_limit(ctx, prog, sh_i))
+               goto done;
+            if (!check_against_input_limit(ctx, prog, sh_next))
+               goto done;
+
+            next = i;
+         }
       }
-   }
-
-   next = last;
-   for (int i = next - 1; i >= 0; i--) {
-      if (prog->_LinkedShaders[i] == NULL)
-         continue;
-
-      gl_shader *const sh_i = prog->_LinkedShaders[i];
-      gl_shader *const sh_next = prog->_LinkedShaders[next];
-
-      if (!assign_varying_locations(ctx, mem_ctx, prog, sh_i, sh_next,
-                next == MESA_SHADER_FRAGMENT ? num_tfeedback_decls : 0,
-                tfeedback_decls))
-         goto done;
-
-      do_dead_builtin_varyings(ctx, sh_i, sh_next,
-                next == MESA_SHADER_FRAGMENT ? num_tfeedback_decls : 0,
-                tfeedback_decls);
-
-      /* This must be done after all dead varyings are eliminated. */
-      if (!check_against_output_limit(ctx, prog, sh_i))
-         goto done;
-      if (!check_against_input_limit(ctx, prog, sh_next))
-         goto done;
-
-      next = i;
    }
 
    if (!store_tfeedback_info(ctx, prog, num_tfeedback_decls, tfeedback_decls))
       goto done;
 
    update_array_sizes(prog);
-   link_assign_uniform_locations(prog, ctx->Const.UniformBooleanTrue);
+   link_assign_uniform_locations(prog, ctx->Const.UniformBooleanTrue,
+                                 num_explicit_uniform_locs,
+                                 ctx->Const.MaxUserAssignableUniformLocations);
    link_assign_atomic_counter_resources(ctx, prog);
    store_fragdepth_layout(prog);
 
@@ -4569,38 +4576,38 @@ link_shaders(struct gl_context *ctx, struct gl_shader_program *prog)
    if (!prog->LinkStatus)
       goto done;
 
-   /* OpenGL ES requires that a vertex shader and a fragment shader both be
-    * present in a linked program. GL_ARB_ES2_compatibility doesn't say
+   /* OpenGL ES < 3.1 requires that a vertex shader and a fragment shader both
+    * be present in a linked program. GL_ARB_ES2_compatibility doesn't say
     * anything about shader linking when one of the shaders (vertex or
     * fragment shader) is absent. So, the extension shouldn't change the
     * behavior specified in GLSL specification.
+    *
+    * From OpenGL ES 3.1 specification (7.3 Program Objects):
+    *     "Linking can fail for a variety of reasons as specified in the
+    *     OpenGL ES Shading Language Specification, as well as any of the
+    *     following reasons:
+    *
+    *     ...
+    *
+    *     * program contains objects to form either a vertex shader or
+    *       fragment shader, and program is not separable, and does not
+    *       contain objects to form both a vertex shader and fragment
+    *       shader."
+    *
+    * However, the only scenario in 3.1+ where we don't require them both is
+    * when we have a compute shader. For example:
+    *
+    * - No shaders is a link error.
+    * - Geom or Tess without a Vertex shader is a link error which means we
+    *   always require a Vertex shader and hence a Fragment shader.
+    * - Finally a Compute shader linked with any other stage is a link error.
     */
-   if (!prog->SeparateShader && ctx->API == API_OPENGLES2) {
-      /* With ES < 3.1 one needs to have always vertex + fragment shader. */
-      if (ctx->Version < 31) {
-         if (prog->_LinkedShaders[MESA_SHADER_VERTEX] == NULL) {
-	    linker_error(prog, "program lacks a vertex shader\n");
-         } else if (prog->_LinkedShaders[MESA_SHADER_FRAGMENT] == NULL) {
-	    linker_error(prog, "program lacks a fragment shader\n");
-         }
-      } else {
-         /* From OpenGL ES 3.1 specification (7.3 Program Objects):
-          *     "Linking can fail for a variety of reasons as specified in the
-          *     OpenGL ES Shading Language Specification, as well as any of the
-          *     following reasons:
-          *
-          *     ...
-          *
-          *     * program contains objects to form either a vertex shader or
-          *       fragment shader, and program is not separable, and does not
-          *       contain objects to form both a vertex shader and fragment
-          *       shader."
-          */
-         if (!!prog->_LinkedShaders[MESA_SHADER_VERTEX] ^
-             !!prog->_LinkedShaders[MESA_SHADER_FRAGMENT]) {
-            linker_error(prog, "Program needs to contain both vertex and "
-                         "fragment shaders.\n");
-         }
+   if (!prog->SeparateShader && ctx->API == API_OPENGLES2 &&
+       num_shaders[MESA_SHADER_COMPUTE] == 0) {
+      if (prog->_LinkedShaders[MESA_SHADER_VERTEX] == NULL) {
+	 linker_error(prog, "program lacks a vertex shader\n");
+      } else if (prog->_LinkedShaders[MESA_SHADER_FRAGMENT] == NULL) {
+	 linker_error(prog, "program lacks a fragment shader\n");
       }
    }
 
