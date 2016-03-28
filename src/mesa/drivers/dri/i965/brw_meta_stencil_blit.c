@@ -49,6 +49,7 @@
 #include "main/blit.h"
 #include "main/buffers.h"
 #include "main/fbobject.h"
+#include "main/framebuffer.h"
 #include "main/uniforms.h"
 #include "main/texparam.h"
 #include "main/texobj.h"
@@ -192,6 +193,9 @@ static const char *fs_tmpl =
    "   %s;\n"
    "}\n";
 
+#define get_uniform_loc(sh_prog, name) \
+   _mesa_program_resource_location(sh_prog, GL_UNIFORM, name)
+
 /**
  * Setup uniforms telling the coordinates of the destination rectangle in the
  * native w-tiled space. These are needed to ignore pixels that lie outside.
@@ -200,12 +204,13 @@ static const char *fs_tmpl =
  * 16x2 y-tiled).
  */
 static void
-setup_bounding_rect(GLuint prog, const struct blit_dims *dims)
+setup_bounding_rect(struct gl_shader_program *sh_prog,
+                    const struct blit_dims *dims)
 {
-   _mesa_Uniform1i(_mesa_GetUniformLocation(prog, "dst_x0"), dims->dst_x0);
-   _mesa_Uniform1i(_mesa_GetUniformLocation(prog, "dst_x1"), dims->dst_x1);
-   _mesa_Uniform1i(_mesa_GetUniformLocation(prog, "dst_y0"), dims->dst_y0);
-   _mesa_Uniform1i(_mesa_GetUniformLocation(prog, "dst_y1"), dims->dst_y1);
+   _mesa_Uniform1i(get_uniform_loc(sh_prog, "dst_x0"), dims->dst_x0);
+   _mesa_Uniform1i(get_uniform_loc(sh_prog, "dst_x1"), dims->dst_x1);
+   _mesa_Uniform1i(get_uniform_loc(sh_prog, "dst_y0"), dims->dst_y0);
+   _mesa_Uniform1i(get_uniform_loc(sh_prog, "dst_y1"), dims->dst_y1);
 }
 
 /**
@@ -214,14 +219,15 @@ setup_bounding_rect(GLuint prog, const struct blit_dims *dims)
  * between destination and source that may have differing offsets.
  */
 static void
-setup_drawing_rect(GLuint prog, const struct blit_dims *dims)
+setup_drawing_rect(struct gl_shader_program *sh_prog,
+                   const struct blit_dims *dims)
 {
-   _mesa_Uniform1f(_mesa_GetUniformLocation(prog, "draw_rect_w"),
+   _mesa_Uniform1f(get_uniform_loc(sh_prog, "draw_rect_w"),
                    dims->dst_x1 - dims->dst_x0);
-   _mesa_Uniform1f(_mesa_GetUniformLocation(prog, "draw_rect_h"),
+   _mesa_Uniform1f(get_uniform_loc(sh_prog, "draw_rect_h"),
                    dims->dst_y1 - dims->dst_y0);
-   _mesa_Uniform1f(_mesa_GetUniformLocation(prog, "dst_x_off"), dims->dst_x0);
-   _mesa_Uniform1f(_mesa_GetUniformLocation(prog, "dst_y_off"), dims->dst_y0);
+   _mesa_Uniform1f(get_uniform_loc(sh_prog, "dst_x_off"), dims->dst_x0);
+   _mesa_Uniform1f(get_uniform_loc(sh_prog, "dst_y_off"), dims->dst_y0);
 }
 
 /**
@@ -240,7 +246,7 @@ setup_drawing_rect(GLuint prog, const struct blit_dims *dims)
  *   src_x = src_x0 + (dst_x1 -dst_x - 0.5) * scale
  */
 static void
-setup_coord_coeff(GLuint prog, GLuint multiplier, GLuint offset,
+setup_coord_coeff(GLuint multiplier, GLuint offset,
                   int src_0, int src_1, int dst_0, int dst_1, bool mirror)
 {
    const float scale = ((float)(src_1 - src_0)) / (dst_1 - dst_0);
@@ -264,22 +270,21 @@ setup_coord_coeff(GLuint prog, GLuint multiplier, GLuint offset,
  * destination rectangle is adjusted for possible msaa and Y-tiling.
  */
 static void
-setup_coord_transform(GLuint prog, const struct blit_dims *dims)
+setup_coord_transform(struct gl_shader_program *sh_prog,
+                      const struct blit_dims *dims)
 {
-   setup_coord_coeff(prog,
-                     _mesa_GetUniformLocation(prog, "src_x_scale"),
-                     _mesa_GetUniformLocation(prog, "src_x_off"),
+   setup_coord_coeff(get_uniform_loc(sh_prog, "src_x_scale"),
+                     get_uniform_loc(sh_prog, "src_x_off"),
                      dims->src_x0, dims->src_x1, dims->dst_x0, dims->dst_x1,
                      dims->mirror_x);
 
-   setup_coord_coeff(prog,
-                     _mesa_GetUniformLocation(prog, "src_y_scale"),
-                     _mesa_GetUniformLocation(prog, "src_y_off"),
+   setup_coord_coeff(get_uniform_loc(sh_prog, "src_y_scale"),
+                     get_uniform_loc(sh_prog, "src_y_off"),
                      dims->src_y0, dims->src_y1, dims->dst_y0, dims->dst_y1,
                      dims->mirror_y);
 }
 
-static GLuint
+static struct gl_shader_program *
 setup_program(struct brw_context *brw, bool msaa_tex)
 {
    struct gl_context *ctx = &brw->ctx;
@@ -290,21 +295,22 @@ setup_program(struct brw_context *brw, bool msaa_tex)
    _mesa_meta_setup_vertex_objects(&brw->ctx, &blit->VAO, &blit->buf_obj, true,
                                    2, 2, 0);
 
-   GLuint *prog_id = &brw->meta_stencil_blit_programs[msaa_tex];
+   struct gl_shader_program **sh_prog_p =
+      &brw->meta_stencil_blit_programs[msaa_tex];
 
-   if (*prog_id) {
-      _mesa_UseProgram(*prog_id);
-      return *prog_id;
+   if (*sh_prog_p) {
+      _mesa_meta_use_program(ctx, *sh_prog_p);
+      return *sh_prog_p;
    }
 
    fs_source = ralloc_asprintf(NULL, fs_tmpl, sampler->sampler,
                                sampler->fetch);
    _mesa_meta_compile_and_link_program(ctx, vs_source, fs_source,
                                        "i965 stencil blit",
-                                       prog_id);
+                                       sh_prog_p);
    ralloc_free(fs_source);
 
-   return *prog_id;
+   return *sh_prog_p;
 }
 
 /**
@@ -424,8 +430,9 @@ brw_meta_stencil_blit(struct brw_context *brw,
    struct gl_context *ctx = &brw->ctx;
    struct blit_dims dims = *orig_dims;
    struct fb_tex_blit_state blit;
-   GLuint prog, fbo;
-   struct gl_renderbuffer *rb;
+   struct gl_shader_program *prog;
+   struct gl_framebuffer *drawFb = NULL;
+   struct gl_renderbuffer *rb = NULL;
    GLenum target;
 
    _mesa_meta_fb_tex_blit_begin(ctx, &blit);
@@ -436,13 +443,18 @@ brw_meta_stencil_blit(struct brw_context *brw,
    assert(ctx->Extensions.ARB_texture_stencil8 == false);
    ctx->Extensions.ARB_texture_stencil8 = true;
 
-   _mesa_GenFramebuffers(1, &fbo);
+   drawFb = ctx->Driver.NewFramebuffer(ctx, 0xDEADBEEF);
+   if (drawFb == NULL) {
+      _mesa_error(ctx, GL_OUT_OF_MEMORY, "in %s", __func__);
+      goto error;
+   }
+
    /* Force the surface to be configured for level zero. */
    rb = brw_get_rb_for_slice(brw, dst_mt, 0, dst_layer, true);
    adjust_msaa(&dims, dst_mt->num_samples);
    adjust_tiling(&dims, dst_mt->num_samples);
 
-   _mesa_BindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+   _mesa_bind_framebuffers(ctx, drawFb, ctx->ReadBuffer);
    _mesa_framebuffer_renderbuffer(ctx, ctx->DrawBuffer, GL_COLOR_ATTACHMENT0,
                                   rb);
    _mesa_DrawBuffer(GL_COLOR_ATTACHMENT0);
@@ -460,7 +472,7 @@ brw_meta_stencil_blit(struct brw_context *brw,
    setup_drawing_rect(prog, &dims);
    setup_coord_transform(prog, orig_dims);
 
-   _mesa_Uniform1i(_mesa_GetUniformLocation(prog, "dst_num_samples"),
+   _mesa_Uniform1i(get_uniform_loc(prog, "dst_num_samples"),
                    dst_mt->num_samples);
 
    prepare_vertex_data(ctx, ctx->Meta->Blit.buf_obj);
@@ -477,7 +489,7 @@ error:
    _mesa_meta_end(ctx);
 
    _mesa_reference_renderbuffer(&rb, NULL);
-   _mesa_DeleteFramebuffers(1, &fbo);
+   _mesa_reference_framebuffer(&drawFb, NULL);
 }
 
 void
@@ -534,19 +546,22 @@ brw_meta_stencil_updownsample(struct brw_context *brw,
       .dst_x0 = 0, .dst_y0 = 0,
       .dst_x1 = dst->logical_width0, .dst_y1 = dst->logical_height0,
       .mirror_x = 0, .mirror_y = 0 };
-   GLuint fbo;
+   struct gl_framebuffer *readFb;
    struct gl_renderbuffer *rb;
 
    if (dst->stencil_mt)
       dst = dst->stencil_mt;
 
+   readFb = ctx->Driver.NewFramebuffer(ctx, 0xDEADBEEF);
+   if (readFb == NULL)
+      return;
+
    brw_emit_mi_flush(brw);
    _mesa_meta_begin(ctx, MESA_META_ALL);
 
-   _mesa_GenFramebuffers(1, &fbo);
    rb = brw_get_rb_for_slice(brw, src, 0, 0, false);
 
-   _mesa_BindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+   _mesa_bind_framebuffers(ctx, ctx->DrawBuffer, readFb);
    _mesa_framebuffer_renderbuffer(ctx, ctx->ReadBuffer, GL_STENCIL_ATTACHMENT,
                                   rb);
 
@@ -554,5 +569,5 @@ brw_meta_stencil_updownsample(struct brw_context *brw,
    brw_emit_mi_flush(brw);
 
    _mesa_reference_renderbuffer(&rb, NULL);
-   _mesa_DeleteFramebuffers(1, &fbo);
+   _mesa_reference_framebuffer(&readFb, NULL);
 }

@@ -43,9 +43,6 @@
 
 static const struct debug_named_value r600_debug_options[] = {
 	/* features */
-#if defined(R600_USE_LLVM)
-	{ "llvm", DBG_LLVM, "Enable the LLVM shader compiler" },
-#endif
 	{ "nocpdma", DBG_NO_CP_DMA, "Disable CP DMA" },
 
 	/* shader backend */
@@ -187,9 +184,7 @@ static struct pipe_context *r600_create_context(struct pipe_screen *screen,
 	}
 
 	rctx->b.gfx.cs = ws->cs_create(rctx->b.ctx, RING_GFX,
-				       r600_context_gfx_flush, rctx,
-				       rscreen->b.trace_bo ?
-					       rscreen->b.trace_bo->buf : NULL);
+				       r600_context_gfx_flush, rctx);
 	rctx->b.gfx.flush = r600_context_gfx_flush;
 
 	rctx->allocator_fetch_shader = u_suballocator_create(&rctx->b.b, 64 * 1024, 256,
@@ -439,7 +434,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return PIPE_ENDIAN_LITTLE;
 
 	case PIPE_CAP_VENDOR_ID:
-		return 0x1002;
+		return ATI_VENDOR_ID;
 	case PIPE_CAP_DEVICE_ID:
 		return rscreen->b.info.pci_id;
 	case PIPE_CAP_ACCELERATED:
@@ -450,6 +445,14 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 0;
 	case PIPE_CAP_MULTISAMPLE_Z_RESOLVE:
 		return rscreen->b.chip_class >= R700;
+	case PIPE_CAP_PCI_GROUP:
+		return rscreen->b.info.pci_domain;
+	case PIPE_CAP_PCI_BUS:
+		return rscreen->b.info.pci_bus;
+	case PIPE_CAP_PCI_DEVICE:
+		return rscreen->b.info.pci_dev;
+	case PIPE_CAP_PCI_FUNCTION:
+		return rscreen->b.info.pci_func;
 	}
 	return 0;
 }
@@ -614,8 +617,6 @@ struct pipe_screen *r600_screen_create(struct radeon_winsys *ws)
 		rscreen->b.debug_flags |= DBG_FS | DBG_VS | DBG_GS | DBG_PS | DBG_CS | DBG_TCS | DBG_TES;
 	if (!debug_get_bool_option("R600_HYPERZ", TRUE))
 		rscreen->b.debug_flags |= DBG_NO_HYPERZ;
-	if (debug_get_bool_option("R600_LLVM", FALSE))
-		rscreen->b.debug_flags |= DBG_LLVM;
 
 	if (rscreen->b.family == CHIP_UNKNOWN) {
 		fprintf(stderr, "r600: Unknown chipset 0x%04X\n", rscreen->b.info.pci_id);

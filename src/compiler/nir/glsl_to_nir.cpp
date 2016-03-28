@@ -143,7 +143,7 @@ glsl_to_nir(const struct gl_shader_program *shader_prog,
    v2.run(sh->ir);
    visit_exec_list(sh->ir, &v1);
 
-   nir_lower_outputs_to_temporaries(shader);
+   nir_lower_outputs_to_temporaries(shader, nir_shader_get_entrypoint(shader));
 
    shader->info.name = ralloc_asprintf(shader, "GLSL%d", shader_prog->Name);
    if (shader_prog->Label)
@@ -441,34 +441,8 @@ nir_visitor::create_function(ir_function_signature *ir)
 
    nir_function *func = nir_function_create(shader, ir->function_name());
 
-   unsigned num_params = ir->parameters.length();
-   func->num_params = num_params;
-   func->params = ralloc_array(shader, nir_parameter, num_params);
-
-   unsigned i = 0;
-   foreach_in_list(ir_variable, param, &ir->parameters) {
-      switch (param->data.mode) {
-      case ir_var_function_in:
-         func->params[i].param_type = nir_parameter_in;
-         break;
-
-      case ir_var_function_out:
-         func->params[i].param_type = nir_parameter_out;
-         break;
-
-      case ir_var_function_inout:
-         func->params[i].param_type = nir_parameter_inout;
-         break;
-
-      default:
-         unreachable("not reached");
-      }
-
-      func->params[i].type = param->type;
-      i++;
-   }
-
-   func->return_type = ir->return_type;
+   assert(ir->parameters.is_empty());
+   assert(ir->return_type == glsl_type::void_type);
 
    _mesa_hash_table_insert(this->overload_table, ir, func);
 }
@@ -496,24 +470,9 @@ nir_visitor::visit(ir_function_signature *ir)
       nir_function_impl *impl = nir_function_impl_create(func);
       this->impl = impl;
 
-      unsigned num_params = func->num_params;
-      impl->num_params = num_params;
-      impl->params = ralloc_array(this->shader, nir_variable *, num_params);
-      unsigned i = 0;
-      foreach_in_list(ir_variable, param, &ir->parameters) {
-         param->accept(this);
-         impl->params[i] = this->var;
-         i++;
-      }
-
-      if (func->return_type == glsl_type::void_type) {
-         impl->return_var = NULL;
-      } else {
-         impl->return_var = ralloc(this->shader, nir_variable);
-         impl->return_var->name = ralloc_strdup(impl->return_var,
-                                                "return_var");
-         impl->return_var->type = func->return_type;
-      }
+      assert(strcmp(func->name, "main") == 0);
+      assert(ir->parameters.is_empty());
+      assert(func->return_type == glsl_type::void_type);
 
       this->is_global = false;
 
@@ -759,7 +718,7 @@ nir_visitor::visit(ir_call *ir)
          ir_dereference *param =
             (ir_dereference *) ir->actual_parameters.get_head();
          instr->variables[0] = evaluate_deref(&instr->instr, param);
-         nir_ssa_dest_init(&instr->instr, &instr->dest, 1, NULL);
+         nir_ssa_dest_init(&instr->instr, &instr->dest, 1, 32, NULL);
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       }
@@ -793,7 +752,7 @@ nir_visitor::visit(ir_call *ir)
             const nir_intrinsic_info *info =
                     &nir_intrinsic_infos[instr->intrinsic];
             nir_ssa_dest_init(&instr->instr, &instr->dest,
-                              info->dest_components, NULL);
+                              info->dest_components, 32, NULL);
          }
 
          if (op == nir_intrinsic_image_size ||
@@ -854,7 +813,7 @@ nir_visitor::visit(ir_call *ir)
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       case nir_intrinsic_shader_clock:
-         nir_ssa_dest_init(&instr->instr, &instr->dest, 1, NULL);
+         nir_ssa_dest_init(&instr->instr, &instr->dest, 1, 32, NULL);
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       case nir_intrinsic_store_ssbo: {
@@ -895,7 +854,7 @@ nir_visitor::visit(ir_call *ir)
 
          /* Setup destination register */
          nir_ssa_dest_init(&instr->instr, &instr->dest,
-                           type->vector_elements, NULL);
+                           type->vector_elements, 32, NULL);
 
          /* Insert the created nir instruction now since in the case of boolean
           * result we will need to emit another instruction after it
@@ -918,7 +877,7 @@ nir_visitor::visit(ir_call *ir)
                load_ssbo_compare->src[1].swizzle[i] = 0;
             nir_ssa_dest_init(&load_ssbo_compare->instr,
                               &load_ssbo_compare->dest.dest,
-                              type->vector_elements, NULL);
+                              type->vector_elements, 32, NULL);
             load_ssbo_compare->dest.write_mask = (1 << type->vector_elements) - 1;
             nir_builder_instr_insert(&b, &load_ssbo_compare->instr);
             dest = &load_ssbo_compare->dest.dest;
@@ -964,7 +923,7 @@ nir_visitor::visit(ir_call *ir)
          /* Atomic result */
          assert(ir->return_deref);
          nir_ssa_dest_init(&instr->instr, &instr->dest,
-                           ir->return_deref->type->vector_elements, NULL);
+                           ir->return_deref->type->vector_elements, 32, NULL);
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       }
@@ -979,8 +938,9 @@ nir_visitor::visit(ir_call *ir)
          instr->num_components = type->vector_elements;
 
          /* Setup destination register */
+         unsigned bit_size = glsl_get_bit_size(type->base_type);
          nir_ssa_dest_init(&instr->instr, &instr->dest,
-                           type->vector_elements, NULL);
+                           type->vector_elements, bit_size, NULL);
 
          nir_builder_instr_insert(&b, &instr->instr);
          break;
@@ -1041,8 +1001,10 @@ nir_visitor::visit(ir_call *ir)
 
          /* Atomic result */
          assert(ir->return_deref);
+         unsigned bit_size = glsl_get_bit_size(ir->return_deref->type->base_type);
          nir_ssa_dest_init(&instr->instr, &instr->dest,
-                           ir->return_deref->type->vector_elements, NULL);
+                           ir->return_deref->type->vector_elements,
+                           bit_size, NULL);
          nir_builder_instr_insert(&b, &instr->instr);
          break;
       }
@@ -1088,6 +1050,9 @@ void
 nir_visitor::visit(ir_assignment *ir)
 {
    unsigned num_components = ir->lhs->type->vector_elements;
+
+   b.exact = ir->lhs->variable_referenced()->data.invariant ||
+             ir->lhs->variable_referenced()->data.precise;
 
    if ((ir->rhs->as_dereference() || ir->rhs->as_constant()) &&
        (ir->write_mask == (1 << num_components) - 1 || ir->write_mask == 0)) {
@@ -1191,7 +1156,7 @@ nir_visitor::add_instr(nir_instr *instr, unsigned num_components)
    nir_dest *dest = get_instr_dest(instr);
 
    if (dest)
-      nir_ssa_dest_init(instr, dest, num_components, NULL);
+      nir_ssa_dest_init(instr, dest, num_components, 32, NULL);
 
    nir_builder_instr_insert(&b, instr);
 
@@ -1231,6 +1196,7 @@ nir_visitor::visit(ir_expression *ir)
       nir_intrinsic_instr *load =
          nir_intrinsic_instr_create(this->shader, nir_intrinsic_load_ubo);
       load->num_components = ir->type->vector_elements;
+      load->dest.ssa.bit_size = glsl_get_bit_size(ir->type->base_type);
       load->src[0] = nir_src_for_ssa(evaluate_rvalue(ir->operands[0]));
       load->src[1] = nir_src_for_ssa(evaluate_rvalue(ir->operands[1]));
       add_instr(&load->instr, ir->type->vector_elements);

@@ -20,10 +20,11 @@ NIR_FILES = \
 	nir_dominance.c \
 	nir_from_ssa.c \
 	nir_gs_count_vertices.c \
-	nir_intrinsics.c \
-	nir_intrinsics.h \
+	nir_inline_functions.c \
 	nir_instr_set.c \
 	nir_instr_set.h \
+	nir_intrinsics.c \
+	nir_intrinsics.h \
 	nir_liveness.c \
 	nir_lower_alu_to_scalar.c \
 	nir_lower_atomics.c \
@@ -33,9 +34,11 @@ NIR_FILES = \
 	nir_lower_load_const_to_scalar.c \
 	nir_lower_locals_to_regs.c \
 	nir_lower_idiv.c \
+	nir_lower_indirect_derefs.c \
 	nir_lower_io.c \
 	nir_lower_outputs_to_temporaries.c \
 	nir_lower_phis_to_scalar.c \
+	nir_lower_returns.c \
 	nir_lower_samplers.c \
 	nir_lower_system_values.c \
 	nir_lower_tex.c \
@@ -57,8 +60,11 @@ NIR_FILES = \
 	nir_opt_peephole_select.c \
 	nir_opt_remove_phis.c \
 	nir_opt_undef.c \
+	nir_phi_builder.c \
+	nir_phi_builder.h \
 	nir_print.c \
 	nir_remove_dead_variables.c \
+	nir_repair_ssa.c \
 	nir_search.c \
 	nir_search.h \
 	nir_split_var_copies.c \

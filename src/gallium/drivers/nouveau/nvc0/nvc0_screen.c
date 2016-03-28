@@ -225,6 +225,10 @@ nvc0_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
    case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
    case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
    case PIPE_CAP_QUERY_MEMORY_INFO:
+   case PIPE_CAP_PCI_GROUP:
+   case PIPE_CAP_PCI_BUS:
+   case PIPE_CAP_PCI_DEVICE:
+   case PIPE_CAP_PCI_FUNCTION:
       return 0;
 
    case PIPE_CAP_VENDOR_ID:
@@ -324,7 +328,7 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
    case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
       return 1;
    case PIPE_SHADER_CAP_TGSI_SQRT_SUPPORTED:
-      return 0;
+      return 1;
    case PIPE_SHADER_CAP_SUBROUTINES:
       return 1;
    case PIPE_SHADER_CAP_INTEGERS:
@@ -333,8 +337,9 @@ nvc0_screen_get_shader_param(struct pipe_screen *pscreen, unsigned shader,
       return 1;
    case PIPE_SHADER_CAP_TGSI_DROUND_SUPPORTED:
       return 1;
-   case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_FMA_SUPPORTED:
+      return 1;
+   case PIPE_SHADER_CAP_TGSI_DFRACEXP_DLDEXP_SUPPORTED:
    case PIPE_SHADER_CAP_TGSI_ANY_INOUT_DECL_RANGE:
       return 0;
    case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
@@ -917,14 +922,14 @@ nvc0_screen_create(struct nouveau_device *dev)
       /* auxiliary constants (6 user clip planes, base instance id) */
       BEGIN_NVC0(push, NVC0_3D(CB_SIZE), 3);
       PUSH_DATA (push, 1024);
-      PUSH_DATAh(push, screen->uniform_bo->offset + (6 << 16) + (i << 10));
-      PUSH_DATA (push, screen->uniform_bo->offset + (6 << 16) + (i << 10));
+      PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(i));
+      PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(i));
       BEGIN_NVC0(push, NVC0_3D(CB_BIND(i)), 1);
       PUSH_DATA (push, (15 << 4) | 1);
       if (screen->eng3d->oclass >= NVE4_3D_CLASS) {
          unsigned j;
          BEGIN_1IC0(push, NVC0_3D(CB_POS), 9);
-         PUSH_DATA (push, 0);
+         PUSH_DATA (push, NVC0_CB_AUX_UNK_INFO);
          for (j = 0; j < 8; ++j)
             PUSH_DATA(push, j);
       } else {
@@ -938,8 +943,8 @@ nvc0_screen_create(struct nouveau_device *dev)
    /* return { 0.0, 0.0, 0.0, 0.0 } for out-of-bounds vtxbuf access */
    BEGIN_NVC0(push, NVC0_3D(CB_SIZE), 3);
    PUSH_DATA (push, 256);
-   PUSH_DATAh(push, screen->uniform_bo->offset + (6 << 16) + (6 << 10));
-   PUSH_DATA (push, screen->uniform_bo->offset + (6 << 16) + (6 << 10));
+   PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_RUNOUT_INFO);
+   PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_RUNOUT_INFO);
    BEGIN_1IC0(push, NVC0_3D(CB_POS), 5);
    PUSH_DATA (push, 0);
    PUSH_DATAf(push, 0.0f);
@@ -947,8 +952,8 @@ nvc0_screen_create(struct nouveau_device *dev)
    PUSH_DATAf(push, 0.0f);
    PUSH_DATAf(push, 0.0f);
    BEGIN_NVC0(push, NVC0_3D(VERTEX_RUNOUT_ADDRESS_HIGH), 2);
-   PUSH_DATAh(push, screen->uniform_bo->offset + (6 << 16) + (6 << 10));
-   PUSH_DATA (push, screen->uniform_bo->offset + (6 << 16) + (6 << 10));
+   PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_RUNOUT_INFO);
+   PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_RUNOUT_INFO);
 
    if (screen->base.drm->version >= 0x01000101) {
       ret = nouveau_getparam(dev, NOUVEAU_GETPARAM_GRAPH_UNITS, &value);

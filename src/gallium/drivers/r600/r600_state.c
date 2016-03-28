@@ -239,6 +239,11 @@ boolean r600_is_format_supported(struct pipe_screen *screen,
 	if (usage & PIPE_BIND_TRANSFER_WRITE)
 		retval |= PIPE_BIND_TRANSFER_WRITE;
 
+	if ((usage & PIPE_BIND_LINEAR) &&
+	    !util_format_is_compressed(format) &&
+	    !(usage & PIPE_BIND_DEPTH_STENCIL))
+		retval |= PIPE_BIND_LINEAR;
+
 	return retval == usage;
 }
 
@@ -930,11 +935,7 @@ static void r600_init_color_surface(struct r600_context *rctx,
 	swap = r600_translate_colorswap(surf->base.format);
 	assert(swap != ~0);
 
-	if (rtex->resource.b.b.usage == PIPE_USAGE_STAGING) {
-		endian = ENDIAN_NONE;
-	} else {
-		endian = r600_colorformat_endian_swap(format);
-	}
+	endian = r600_colorformat_endian_swap(format);
 
 	/* set blend bypass according to docs if SINT/UINT or
 	   8/24 COLOR variants */

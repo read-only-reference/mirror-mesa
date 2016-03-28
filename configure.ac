@@ -68,7 +68,7 @@ OPENCL_VERSION=1
 AC_SUBST([OPENCL_VERSION])
 
 dnl Versions for external dependencies
-LIBDRM_REQUIRED=2.4.60
+LIBDRM_REQUIRED=2.4.66
 LIBDRM_RADEON_REQUIRED=2.4.56
 LIBDRM_AMDGPU_REQUIRED=2.4.63
 LIBDRM_INTEL_REQUIRED=2.4.61
@@ -704,8 +704,10 @@ test "x$enable_asm" = xno && AC_MSG_RESULT([no])
 if test "x$enable_asm" = xyes -a "x$cross_compiling" = xyes; then
     case "$host_cpu" in
     i?86 | x86_64 | amd64)
-        enable_asm=no
-        AC_MSG_RESULT([no, cross compiling])
+        if test "x$host_cpu" != "x$target_cpu"; then
+            enable_asm=no
+            AC_MSG_RESULT([no, cross compiling])
+        fi
         ;;
     esac
 fi
@@ -928,12 +930,6 @@ AC_ARG_ENABLE([xlib-glx],
         [make GLX library Xlib-based instead of DRI-based @<:@default=disabled@:>@])],
     [enable_xlib_glx="$enableval"],
     [enable_xlib_glx=no])
-
-AC_ARG_ENABLE([r600-llvm-compiler],
-    [AS_HELP_STRING([--enable-r600-llvm-compiler],
-        [Enable experimental LLVM backend for graphics shaders @<:@default=disabled@:>@])],
-    [enable_r600_llvm="$enableval"],
-    [enable_r600_llvm=no])
 
 AC_ARG_ENABLE([gallium-tests],
     [AS_HELP_STRING([--enable-gallium-tests],
@@ -1735,6 +1731,7 @@ AM_CONDITIONAL(HAVE_ST_XVMC, test "x$enable_xvmc" = xyes)
 if test "x$enable_vdpau" = xyes; then
     PKG_CHECK_MODULES([VDPAU], [vdpau >= $VDPAU_REQUIRED])
     gallium_st="$gallium_st vdpau"
+    DEFINES="$DEFINES -DHAVE_ST_VDPAU"
 fi
 AM_CONDITIONAL(HAVE_ST_VDPAU, test "x$enable_vdpau" = xyes)
 
@@ -2191,6 +2188,16 @@ radeon_llvm_check() {
     fi
 }
 
+swr_llvm_check() {
+    gallium_require_llvm $1
+    if test ${LLVM_VERSION_INT} -lt 306; then
+        AC_MSG_ERROR([LLVM version 3.6 or later required when building $1])
+    fi
+    if test "x$enable_gallium_llvm" != "xyes"; then
+        AC_MSG_ERROR([--enable-gallium-llvm is required when building $1])
+    fi
+}
+
 dnl Duplicates in GALLIUM_DRIVERS_DIRS are removed by sorting it after this block
 if test -n "$with_gallium_drivers"; then
     gallium_drivers=`IFS=', '; echo $with_gallium_drivers`
@@ -2225,14 +2232,8 @@ if test -n "$with_gallium_drivers"; then
             PKG_CHECK_MODULES([RADEON], [libdrm_radeon >= $LIBDRM_RADEON_REQUIRED])
             gallium_require_drm "Gallium R600"
             gallium_require_drm_loader
-            if test "x$enable_r600_llvm" = xyes -o "x$enable_opencl" = xyes; then
-                radeon_llvm_check "r600g"
-                LLVM_COMPONENTS="${LLVM_COMPONENTS} bitreader asmparser"
-            fi
-            if test "x$enable_r600_llvm" = xyes; then
-                USE_R600_LLVM_COMPILER=yes;
-            fi
             if test "x$enable_opencl" = xyes; then
+                radeon_llvm_check "r600g"
                 LLVM_COMPONENTS="${LLVM_COMPONENTS} bitreader asmparser"
             fi
             ;;
@@ -2262,6 +2263,30 @@ if test -n "$with_gallium_drivers"; then
             if test "x$MESA_LLVM" = x1; then
                 HAVE_GALLIUM_LLVMPIPE=yes
             fi
+            ;;
+        xswr)
+            AX_CXX_COMPILE_STDCXX([11], [noext], [mandatory])
+            swr_llvm_check "swr"
+
+            AC_MSG_CHECKING([whether $CXX supports AVX/AVX2])
+            AVX_CXXFLAGS="-march=core-avx-i"
+            AVX2_CXXFLAGS="-march=core-avx2"
+
+            AC_LANG_PUSH([C++])
+            save_CXXFLAGS="$CXXFLAGS"
+            CXXFLAGS="$AVX_CXXFLAGS $CXXFLAGS"
+            AC_COMPILE_IFELSE([AC_LANG_PROGRAM()],[],
+                              [AC_MSG_ERROR([AVX compiler support not detected])])
+            CXXFLAGS="$save_CXXFLAGS"
+
+            save_CFLAGS="$CXXFLAGS"
+            CXXFLAGS="$AVX2_CXXFLAGS $CXXFLAGS"
+            AC_COMPILE_IFELSE([AC_LANG_PROGRAM()],[],
+                              [AC_MSG_ERROR([AVX2 compiler support not detected])])
+            CXXFLAGS="$save_CXXFLAGS"
+            AC_LANG_POP([C++])
+
+            HAVE_GALLIUM_SWR=yes
             ;;
         xvc4)
             HAVE_GALLIUM_VC4=yes
@@ -2352,6 +2377,7 @@ AM_CONDITIONAL(HAVE_GALLIUM_NOUVEAU, test "x$HAVE_GALLIUM_NOUVEAU" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_FREEDRENO, test "x$HAVE_GALLIUM_FREEDRENO" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_SOFTPIPE, test "x$HAVE_GALLIUM_SOFTPIPE" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_LLVMPIPE, test "x$HAVE_GALLIUM_LLVMPIPE" = xyes)
+AM_CONDITIONAL(HAVE_GALLIUM_SWR, test "x$HAVE_GALLIUM_SWR" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_VC4, test "x$HAVE_GALLIUM_VC4" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_VIRGL, test "x$HAVE_GALLIUM_VIRGL" = xyes)
 
@@ -2378,7 +2404,6 @@ AM_CONDITIONAL(NEED_RADEON_DRM_WINSYS, test "x$HAVE_GALLIUM_R300" = xyes -o \
                                             "x$HAVE_GALLIUM_RADEONSI" = xyes)
 AM_CONDITIONAL(NEED_WINSYS_XLIB, test "x$NEED_WINSYS_XLIB" = xyes)
 AM_CONDITIONAL(NEED_RADEON_LLVM, test x$NEED_RADEON_LLVM = xyes)
-AM_CONDITIONAL(USE_R600_LLVM_COMPILER, test x$USE_R600_LLVM_COMPILER = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_COMPUTE, test x$enable_opencl = xyes)
 AM_CONDITIONAL(HAVE_MESA_LLVM, test x$MESA_LLVM = x1)
 AM_CONDITIONAL(USE_VC4_SIMULATOR, test x$USE_VC4_SIMULATOR = xyes)
@@ -2461,6 +2486,9 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/drivers/rbug/Makefile
 		src/gallium/drivers/softpipe/Makefile
 		src/gallium/drivers/svga/Makefile
+		src/gallium/drivers/swr/Makefile
+		src/gallium/drivers/swr/avx/Makefile
+		src/gallium/drivers/swr/avx2/Makefile
 		src/gallium/drivers/trace/Makefile
 		src/gallium/drivers/vc4/Makefile
 		src/gallium/drivers/virgl/Makefile

@@ -68,6 +68,8 @@ static void si_destroy_context(struct pipe_context *context)
 		sctx->b.b.delete_blend_state(&sctx->b.b, sctx->custom_blend_decompress);
 	if (sctx->custom_blend_fastclear)
 		sctx->b.b.delete_blend_state(&sctx->b.b, sctx->custom_blend_fastclear);
+	if (sctx->custom_blend_dcc_decompress)
+		sctx->b.b.delete_blend_state(&sctx->b.b, sctx->custom_blend_dcc_decompress);
 	util_unreference_framebuffer_state(&sctx->framebuffer.state);
 
 	if (sctx->blitter)
@@ -138,9 +140,8 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 		sctx->b.b.create_video_buffer = vl_video_buffer_create;
 	}
 
-	sctx->b.gfx.cs = ws->cs_create(sctx->b.ctx, RING_GFX, si_context_gfx_flush,
-				       sctx, sscreen->b.trace_bo ?
-					       sscreen->b.trace_bo->buf : NULL);
+	sctx->b.gfx.cs = ws->cs_create(sctx->b.ctx, RING_GFX,
+				       si_context_gfx_flush, sctx);
 	sctx->b.gfx.flush = si_context_gfx_flush;
 
 	/* Border colors. */
@@ -418,7 +419,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return PIPE_ENDIAN_LITTLE;
 
 	case PIPE_CAP_VENDOR_ID:
-		return 0x1002;
+		return ATI_VENDOR_ID;
 	case PIPE_CAP_DEVICE_ID:
 		return sscreen->b.info.pci_id;
 	case PIPE_CAP_ACCELERATED:
@@ -427,6 +428,14 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return sscreen->b.info.vram_size >> 20;
 	case PIPE_CAP_UMA:
 		return 0;
+	case PIPE_CAP_PCI_GROUP:
+		return sscreen->b.info.pci_domain;
+	case PIPE_CAP_PCI_BUS:
+		return sscreen->b.info.pci_bus;
+	case PIPE_CAP_PCI_DEVICE:
+		return sscreen->b.info.pci_dev;
+	case PIPE_CAP_PCI_FUNCTION:
+		return sscreen->b.info.pci_func;
 	}
 	return 0;
 }
@@ -529,8 +538,9 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 	case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
 		return 32;
 	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
-	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
 		return 0;
+	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
+		return HAVE_LLVM >= 0x0309 ? SI_NUM_IMAGES : 0;
 	}
 	return 0;
 }
@@ -588,6 +598,8 @@ static bool si_init_gs_info(struct si_screen *sscreen)
 	case CHIP_HAWAII:
 	case CHIP_TONGA:
 	case CHIP_FIJI:
+	case CHIP_POLARIS10:
+	case CHIP_POLARIS11:
 		sscreen->gs_table_depth = 32;
 		return true;
 	default:
@@ -610,6 +622,8 @@ struct pipe_screen *radeonsi_screen_create(struct radeon_winsys *ws)
 	sscreen->b.b.get_shader_param = si_get_shader_param;
 	sscreen->b.b.is_format_supported = si_is_format_supported;
 	sscreen->b.b.resource_create = r600_resource_create_common;
+
+	si_init_screen_state_functions(sscreen);
 
 	if (!r600_common_screen_init(&sscreen->b, ws) ||
 	    !si_init_gs_info(sscreen) ||

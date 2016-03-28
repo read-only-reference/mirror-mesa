@@ -761,15 +761,11 @@ _mesa_set_debug_state_int(struct gl_context *ctx, GLenum pname, GLint val)
 GLint
 _mesa_get_debug_state_int(struct gl_context *ctx, GLenum pname)
 {
-   struct gl_debug_state *debug;
    GLint val;
 
-   mtx_lock(&ctx->DebugMutex);
-   debug = ctx->Debug;
-   if (!debug) {
-      mtx_unlock(&ctx->DebugMutex);
+   struct gl_debug_state *debug = _mesa_lock_debug_state(ctx);
+   if (!debug)
       return 0;
-   }
 
    switch (pname) {
    case GL_DEBUG_OUTPUT:
@@ -783,7 +779,7 @@ _mesa_get_debug_state_int(struct gl_context *ctx, GLenum pname)
       break;
    case GL_DEBUG_NEXT_LOGGED_MESSAGE_LENGTH:
       val = (debug->Log.NumMessages) ?
-         debug->Log.Messages[debug->Log.NextMessage].length : 0;
+         debug->Log.Messages[debug->Log.NextMessage].length + 1 : 0;
       break;
    case GL_DEBUG_GROUP_STACK_DEPTH:
       val = debug->CurrentGroup + 1;
@@ -794,7 +790,7 @@ _mesa_get_debug_state_int(struct gl_context *ctx, GLenum pname)
       break;
    }
 
-   mtx_unlock(&ctx->DebugMutex);
+   _mesa_unlock_debug_state(ctx);
 
    return val;
 }
@@ -806,15 +802,11 @@ _mesa_get_debug_state_int(struct gl_context *ctx, GLenum pname)
 void *
 _mesa_get_debug_state_ptr(struct gl_context *ctx, GLenum pname)
 {
-   struct gl_debug_state *debug;
    void *val;
+   struct gl_debug_state *debug = _mesa_lock_debug_state(ctx);
 
-   mtx_lock(&ctx->DebugMutex);
-   debug = ctx->Debug;
-   if (!debug) {
-      mtx_unlock(&ctx->DebugMutex);
+   if (!debug)
       return NULL;
-   }
 
    switch (pname) {
    case GL_DEBUG_CALLBACK_FUNCTION_ARB:
@@ -829,7 +821,7 @@ _mesa_get_debug_state_ptr(struct gl_context *ctx, GLenum pname)
       break;
    }
 
-   mtx_unlock(&ctx->DebugMutex);
+   _mesa_unlock_debug_state(ctx);
 
    return val;
 }
@@ -1017,15 +1009,16 @@ _mesa_DebugMessageInsert(GLenum source, GLenum type, GLuint id,
    if (!validate_length(ctx, callerstr, length, buf))
       return; /* GL_INVALID_VALUE */
 
+   /* if length not specified, string will be null terminated: */
+   if (length < 0)
+      length = strlen(buf);
+
    _mesa_log_msg(ctx, gl_enum_to_debug_source(source),
                  gl_enum_to_debug_type(type), id,
                  gl_enum_to_debug_severity(severity),
                  length, buf);
 
    if (type == GL_DEBUG_TYPE_MARKER && ctx->Driver.EmitStringMarker) {
-      /* if length not specified, string will be null terminated: */
-      if (length < 0)
-         length = strlen(buf);
       ctx->Driver.EmitStringMarker(ctx, buf, length);
    }
 }
@@ -1195,6 +1188,9 @@ _mesa_PushDebugGroup(GLenum source, GLuint id, GLsizei length,
 
    if (!validate_length(ctx, callerstr, length, message))
       return; /* GL_INVALID_VALUE */
+
+   if (length < 0)
+      length = strlen(message);
 
    debug = _mesa_lock_debug_state(ctx);
    if (!debug)

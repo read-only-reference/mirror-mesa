@@ -1933,8 +1933,8 @@ fs_visitor::compact_virtual_grfs()
 void
 fs_visitor::assign_constant_locations()
 {
-   /* Only the first compile (SIMD8 mode) gets to decide on locations. */
-   if (dispatch_width != 8)
+   /* Only the first compile gets to decide on locations. */
+   if (dispatch_width != min_dispatch_width)
       return;
 
    unsigned int num_pull_constants = 0;
@@ -2274,17 +2274,6 @@ fs_visitor::opt_algebraic()
             progress = true;
          }
          break;
-      case SHADER_OPCODE_RCP: {
-         fs_inst *prev = (fs_inst *)inst->prev;
-         if (prev->opcode == SHADER_OPCODE_SQRT) {
-            if (inst->src[0].equals(prev->dst)) {
-               inst->opcode = SHADER_OPCODE_RSQ;
-               inst->src[0] = prev->src[0];
-               progress = true;
-            }
-         }
-         break;
-      }
       case SHADER_OPCODE_BROADCAST:
          if (is_uniform(inst->src[0])) {
             inst->opcode = BRW_OPCODE_MOV;
@@ -2441,8 +2430,10 @@ fs_visitor::opt_sampler_eot()
     * we have enough space, but it will make sure the dead code eliminator kills
     * the instruction that this will replace.
     */
-   if (tex_inst->header_size != 0)
+   if (tex_inst->header_size != 0) {
+      invalidate_live_intervals();
       return true;
+   }
 
    fs_reg send_header = ibld.vgrf(BRW_REGISTER_TYPE_F,
                                   load_payload->sources + 1);
@@ -2473,6 +2464,7 @@ fs_visitor::opt_sampler_eot()
    tex_inst->insert_before(cfg->blocks[cfg->num_blocks - 1], new_load_payload);
    tex_inst->src[0] = send_header;
 
+   invalidate_live_intervals();
    return true;
 }
 
@@ -5187,12 +5179,18 @@ fs_visitor::optimize()
 void
 fs_visitor::fixup_3src_null_dest()
 {
+   bool progress = false;
+
    foreach_block_and_inst_safe (block, fs_inst, inst, cfg) {
       if (inst->is_3src() && inst->dst.is_null()) {
          inst->dst = fs_reg(VGRF, alloc.allocate(dispatch_width / 8),
                             inst->dst.type);
+         progress = true;
       }
    }
+
+   if (progress)
+      invalidate_live_intervals();
 }
 
 void
@@ -5228,7 +5226,7 @@ fs_visitor::allocate_registers()
        * SIMD8.  There's probably actually some intermediate point where
        * SIMD16 with a couple of spills is still better.
        */
-      if (dispatch_width == 16) {
+      if (dispatch_width == 16 && min_dispatch_width <= 8) {
          fail("Failure to register allocate.  Reduce number of "
               "live scalar values to avoid this.");
       } else {
@@ -5469,6 +5467,13 @@ fs_visitor::run_cs()
 
    if (shader_time_index >= 0)
       emit_shader_time_begin();
+
+   if (devinfo->is_haswell && prog_data->total_shared > 0) {
+      /* Move SLM index from g0.0[27:24] to sr0.1[11:8] */
+      const fs_builder abld = bld.exec_all().group(1, 0);
+      abld.MOV(retype(suboffset(brw_sr0_reg(), 1), BRW_REGISTER_TYPE_UW),
+               suboffset(retype(brw_vec1_grf(0, 0), BRW_REGISTER_TYPE_UW), 1));
+   }
 
    emit_nir_code();
 
@@ -5723,6 +5728,8 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
    nir_shader *shader = nir_shader_clone(mem_ctx, src_shader);
    shader = brw_nir_apply_sampler_key(shader, compiler->devinfo, &key->tex,
                                       true);
+   brw_nir_lower_cs_shared(shader);
+   prog_data->base.total_shared += shader->num_shared;
    shader = brw_postprocess_nir(shader, compiler->devinfo, true);
 
    prog_data->local_size[0] = shader->info.cs.local_size[0];
@@ -5733,6 +5740,7 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
       shader->info.cs.local_size[2];
 
    unsigned max_cs_threads = compiler->devinfo->max_cs_threads;
+   unsigned simd_required = DIV_ROUND_UP(local_workgroup_size, max_cs_threads);
 
    cfg_t *cfg = NULL;
    const char *fail_msg = NULL;
@@ -5742,11 +5750,13 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
    fs_visitor v8(compiler, log_data, mem_ctx, key, &prog_data->base,
                  NULL, /* Never used in core profile */
                  shader, 8, shader_time_index);
-   if (!v8.run_cs()) {
-      fail_msg = v8.fail_msg;
-   } else if (local_workgroup_size <= 8 * max_cs_threads) {
-      cfg = v8.cfg;
-      prog_data->simd_size = 8;
+   if (simd_required <= 8) {
+      if (!v8.run_cs()) {
+         fail_msg = v8.fail_msg;
+      } else {
+         cfg = v8.cfg;
+         prog_data->simd_size = 8;
+      }
    }
 
    fs_visitor v16(compiler, log_data, mem_ctx, key, &prog_data->base,
@@ -5756,7 +5766,8 @@ brw_compile_cs(const struct brw_compiler *compiler, void *log_data,
        !fail_msg && !v8.simd16_unsupported &&
        local_workgroup_size <= 16 * max_cs_threads) {
       /* Try a SIMD16 compile */
-      v16.import_uniforms(&v8);
+      if (simd_required <= 8)
+         v16.import_uniforms(&v8);
       if (!v16.run_cs()) {
          compiler->shader_perf_log(log_data,
                                    "SIMD16 shader failed to compile: %s",

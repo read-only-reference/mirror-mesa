@@ -228,10 +228,16 @@ fs_visitor::emit_texture(ir_texture_opcode op,
    }
 
    /* fixup #layers for cube map arrays */
-   if (op == ir_txs && is_cube_array) {
+   if (op == ir_txs && (devinfo->gen < 7 || is_cube_array)) {
       fs_reg depth = offset(dst, bld, 2);
       fs_reg fixed_depth = vgrf(glsl_type::int_type);
-      bld.emit(SHADER_OPCODE_INT_QUOTIENT, fixed_depth, depth, brw_imm_d(6));
+
+      if (is_cube_array) {
+         bld.emit(SHADER_OPCODE_INT_QUOTIENT, fixed_depth, depth, brw_imm_d(6));
+      } else if (devinfo->gen < 7) {
+         /* Gen4-6 return 0 instead of 1 for single layer surfaces. */
+         bld.emit_minmax(fixed_depth, depth, brw_imm_d(1), BRW_CONDITIONAL_GE);
+      }
 
       fs_reg *fixed_payload = ralloc_array(mem_ctx, fs_reg, inst->regs_written);
       int components = inst->regs_written / (inst->exec_size / 8);
@@ -1019,6 +1025,18 @@ fs_visitor::init()
       break;
    default:
       unreachable("unhandled shader stage");
+   }
+
+   if (stage == MESA_SHADER_COMPUTE) {
+      const brw_cs_prog_data *cs_prog_data =
+         (const brw_cs_prog_data *) prog_data;
+      unsigned size = cs_prog_data->local_size[0] *
+                      cs_prog_data->local_size[1] *
+                      cs_prog_data->local_size[2];
+      size = DIV_ROUND_UP(size, devinfo->max_cs_threads);
+      min_dispatch_width = size > 16 ? 32 : (size > 8 ? 16 : 8);
+   } else {
+      min_dispatch_width = 8;
    }
 
    this->prog_data = this->stage_prog_data;

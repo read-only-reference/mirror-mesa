@@ -384,6 +384,13 @@ static const int extra_ARB_shader_storage_buffer_object_and_geometry_shader[] = 
    EXTRA_END
 };
 
+static const int extra_ARB_shader_image_load_store_shader_storage_buffer_object_es31[] = {
+   EXT(ARB_shader_image_load_store),
+   EXT(ARB_shader_storage_buffer_object),
+   EXTRA_API_ES31,
+   EXTRA_END
+};
+
 static const int extra_ARB_framebuffer_no_attachments_and_geometry_shader[] = {
    EXTRA_EXT_FB_NO_ATTACH_GS,
    EXTRA_END
@@ -399,6 +406,11 @@ static const int extra_ARB_gpu_shader5_or_oes_geometry_shader[] = {
    EXT(ARB_gpu_shader5),
    EXTRA_EXT_ES_GS,
    EXTRA_END
+};
+
+static const int extra_ARB_gpu_shader5_or_OES_sample_variables[] = {
+   EXT(ARB_gpu_shader5),
+   EXT(OES_sample_variables),
 };
 
 EXTRA_EXT(ARB_texture_cube_map);
@@ -1055,6 +1067,8 @@ find_custom_value(struct gl_context *ctx, const struct value_desc *d, union valu
       }
       break;
    /* GL_KHR_DEBUG */
+   case GL_DEBUG_OUTPUT:
+   case GL_DEBUG_OUTPUT_SYNCHRONOUS:
    case GL_DEBUG_LOGGED_MESSAGES:
    case GL_DEBUG_NEXT_LOGGED_MESSAGE_LENGTH:
    case GL_DEBUG_GROUP_STACK_DEPTH:
@@ -1715,19 +1729,19 @@ _mesa_GetInteger64v(GLenum pname, GLint64 *params)
       break;
 
    case TYPE_FLOATN_4:
-      params[3] = FLOAT_TO_INT64(((GLfloat *) p)[3]);
+      params[3] = FLOAT_TO_INT(((GLfloat *) p)[3]);
    case TYPE_FLOATN_3:
-      params[2] = FLOAT_TO_INT64(((GLfloat *) p)[2]);
+      params[2] = FLOAT_TO_INT(((GLfloat *) p)[2]);
    case TYPE_FLOATN_2:
-      params[1] = FLOAT_TO_INT64(((GLfloat *) p)[1]);
+      params[1] = FLOAT_TO_INT(((GLfloat *) p)[1]);
    case TYPE_FLOATN:
-      params[0] = FLOAT_TO_INT64(((GLfloat *) p)[0]);
+      params[0] = FLOAT_TO_INT(((GLfloat *) p)[0]);
       break;
 
    case TYPE_DOUBLEN_2:
-      params[1] = FLOAT_TO_INT64(((GLdouble *) p)[1]);
+      params[1] = FLOAT_TO_INT(((GLdouble *) p)[1]);
    case TYPE_DOUBLEN:
-      params[0] = FLOAT_TO_INT64(((GLdouble *) p)[0]);
+      params[0] = FLOAT_TO_INT(((GLdouble *) p)[0]);
       break;
 
    case TYPE_INT_4:
@@ -1898,8 +1912,8 @@ tex_binding_to_index(const struct gl_context *ctx, GLenum binding)
          || _mesa_is_gles3(ctx)
          ? TEXTURE_2D_ARRAY_INDEX : -1;
    case GL_TEXTURE_BINDING_BUFFER:
-      return ctx->API == API_OPENGL_CORE &&
-             ctx->Extensions.ARB_texture_buffer_object ?
+      return (_mesa_has_ARB_texture_buffer_object(ctx) ||
+              _mesa_has_OES_texture_buffer(ctx)) ?
              TEXTURE_BUFFER_INDEX : -1;
    case GL_TEXTURE_BINDING_CUBE_MAP_ARRAY:
       return _mesa_is_desktop_gl(ctx) && ctx->Extensions.ARB_texture_cube_map_array

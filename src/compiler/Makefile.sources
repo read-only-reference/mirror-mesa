@@ -129,6 +129,7 @@ LIBGLSL_FILES = \
 	glsl/opt_tree_grafting.cpp \
 	glsl/opt_vectorize.cpp \
 	glsl/program.h \
+	glsl/propagate_invariance.cpp \
 	glsl/s_expression.cpp \
 	glsl/s_expression.h
 
@@ -176,10 +177,11 @@ NIR_FILES = \
 	nir/nir_dominance.c \
 	nir/nir_from_ssa.c \
 	nir/nir_gs_count_vertices.c \
-	nir/nir_intrinsics.c \
-	nir/nir_intrinsics.h \
+	nir/nir_inline_functions.c \
 	nir/nir_instr_set.c \
 	nir/nir_instr_set.h \
+	nir/nir_intrinsics.c \
+	nir/nir_intrinsics.h \
 	nir/nir_liveness.c \
 	nir/nir_lower_alu_to_scalar.c \
 	nir/nir_lower_atomics.c \
@@ -189,9 +191,11 @@ NIR_FILES = \
 	nir/nir_lower_load_const_to_scalar.c \
 	nir/nir_lower_locals_to_regs.c \
 	nir/nir_lower_idiv.c \
+	nir/nir_lower_indirect_derefs.c \
 	nir/nir_lower_io.c \
 	nir/nir_lower_outputs_to_temporaries.c \
 	nir/nir_lower_phis_to_scalar.c \
+	nir/nir_lower_returns.c \
 	nir/nir_lower_samplers.c \
 	nir/nir_lower_system_values.c \
 	nir/nir_lower_tex.c \
@@ -213,8 +217,11 @@ NIR_FILES = \
 	nir/nir_opt_peephole_select.c \
 	nir/nir_opt_remove_phis.c \
 	nir/nir_opt_undef.c \
+	nir/nir_phi_builder.c \
+	nir/nir_phi_builder.h \
 	nir/nir_print.c \
 	nir/nir_remove_dead_variables.c \
+	nir/nir_repair_ssa.c \
 	nir/nir_search.c \
 	nir/nir_search.h \
 	nir/nir_split_var_copies.c \

@@ -43,6 +43,8 @@
 #include "util/u_suballoc.h"
 #include "util/u_transfer.h"
 
+#define ATI_VENDOR_ID 0x1002
+
 #define R600_RESOURCE_FLAG_TRANSFER		(PIPE_RESOURCE_FLAG_DRV_PRIV << 0)
 #define R600_RESOURCE_FLAG_FLUSHED_DEPTH	(PIPE_RESOURCE_FLAG_DRV_PRIV << 1)
 #define R600_RESOURCE_FLAG_FORCE_TILING		(PIPE_RESOURCE_FLAG_DRV_PRIV << 2)
@@ -59,7 +61,7 @@
 /* gap - reuse */
 #define DBG_COMPUTE		(1 << 2)
 #define DBG_VM			(1 << 3)
-#define DBG_TRACE_CS		(1 << 4)
+/* gap - reuse */
 /* shader logging */
 #define DBG_FS			(1 << 5)
 #define DBG_VS			(1 << 6)
@@ -166,6 +168,10 @@ struct r600_resource {
 	 * use TC L2.
 	 */
 	bool				TC_L2_dirty;
+
+	/* Whether the resource has been exported via resource_get_handle. */
+	bool				is_shared;
+	unsigned			external_usage; /* PIPE_HANDLE_USAGE_* */
 };
 
 struct r600_transfer {
@@ -218,7 +224,7 @@ struct r600_texture {
 	struct r600_fmask_info		fmask;
 	struct r600_cmask_info		cmask;
 	struct r600_resource		*cmask_buffer;
-	struct r600_resource		*dcc_buffer;
+	unsigned			dcc_offset; /* 0 = disabled */
 	unsigned			cb_color_info; /* fast clear enable bit */
 	unsigned			color_clear_value[2];
 
@@ -297,10 +303,6 @@ struct r600_common_screen {
 	struct pipe_context		*aux_context;
 	pipe_mutex			aux_context_lock;
 
-	struct r600_resource		*trace_bo;
-	uint32_t			*trace_ptr;
-	unsigned			cs_count;
-
 	/* This must be in the screen, because UE4 uses one context for
 	 * compilation and another one for rendering.
 	 */
@@ -321,6 +323,23 @@ struct r600_common_screen {
 
 	/* Performance counters. */
 	struct r600_perfcounters	*perfcounters;
+
+	/* If pipe_screen wants to re-emit the framebuffer state of all
+	 * contexts, it should atomically increment this. Each context will
+	 * compare this with its own last known value of the counter before
+	 * drawing and re-emit the framebuffer state accordingly.
+	 */
+	unsigned			dirty_fb_counter;
+
+	/* Atomically increment this counter when an existing texture's
+	 * metadata is enabled or disabled in a way that requires changing
+	 * contexts' compressed texture binding masks.
+	 */
+	unsigned			compressed_colortex_counter;
+
+	void (*query_opaque_metadata)(struct r600_common_screen *rscreen,
+				      struct r600_texture *rtex,
+				      struct radeon_bo_metadata *md);
 };
 
 /* This encapsulates a state or an operation which can emitted into the GPU
@@ -388,6 +407,8 @@ struct r600_common_context {
 	struct pipe_fence_handle	*last_sdma_fence;
 	unsigned			initial_gfx_cs_size;
 	unsigned			gpu_reset_counter;
+	unsigned			last_dirty_fb_counter;
+	unsigned			last_compressed_colortex_counter;
 
 	struct u_upload_mgr		*uploader;
 	struct u_suballocator		*allocator_so_filled_size;
@@ -463,6 +484,9 @@ struct r600_common_context {
 				      unsigned first_level, unsigned last_level,
 				      unsigned first_layer, unsigned last_layer,
 				      unsigned first_sample, unsigned last_sample);
+
+	void (*decompress_dcc)(struct pipe_context *ctx,
+			       struct r600_texture *rtex);
 
 	/* Reallocate the buffer and update all resource bindings where
 	 * the buffer is bound, including all resource descriptors. */
@@ -582,6 +606,8 @@ void evergreen_do_fast_color_clear(struct r600_common_context *rctx,
 				   struct r600_atom *fb_state,
 				   unsigned *buffers, unsigned *dirty_cbufs,
 				   const union pipe_color_union *color);
+void r600_texture_disable_dcc(struct r600_common_screen *rscreen,
+			      struct r600_texture *rtex);
 void r600_init_screen_texture_functions(struct r600_common_screen *rscreen);
 void r600_init_context_texture_functions(struct r600_common_context *rctx);
 

@@ -153,7 +153,7 @@ nvc0_compute_validate_constbufs(struct nvc0_context *nvc0)
 
       if (nvc0->constbuf[s][i].user) {
          struct nouveau_bo *bo = nvc0->screen->uniform_bo;
-         const unsigned base = s << 16;
+         const unsigned base = NVC0_CB_USR_INFO(s);
          const unsigned size = nvc0->constbuf[s][0].size;
          assert(i == 0); /* we really only want OpenGL uniforms here */
          assert(nvc0->constbuf[s][0].u.data);
@@ -207,8 +207,8 @@ nvc0_compute_validate_driverconst(struct nvc0_context *nvc0)
 
    BEGIN_NVC0(push, NVC0_CP(CB_SIZE), 3);
    PUSH_DATA (push, 1024);
-   PUSH_DATAh(push, screen->uniform_bo->offset + (6 << 16) + (5 << 10));
-   PUSH_DATA (push, screen->uniform_bo->offset + (6 << 16) + (5 << 10));
+   PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(5));
+   PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(5));
    BEGIN_NVC0(push, NVC0_CP(CB_BIND), 1);
    PUSH_DATA (push, (15 << 8) | 1);
 
@@ -219,15 +219,16 @@ static void
 nvc0_compute_validate_buffers(struct nvc0_context *nvc0)
 {
    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
+   struct nvc0_screen *screen = nvc0->screen;
    const int s = 5;
    int i;
 
    BEGIN_NVC0(push, NVC0_CP(CB_SIZE), 3);
    PUSH_DATA (push, 1024);
-   PUSH_DATAh(push, nvc0->screen->uniform_bo->offset + (6 << 16) + (s << 10));
-   PUSH_DATA (push, nvc0->screen->uniform_bo->offset + (6 << 16) + (s << 10));
+   PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(s));
+   PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(s));
    BEGIN_1IC0(push, NVC0_CP(CB_POS), 1 + 4 * NVC0_MAX_BUFFERS);
-   PUSH_DATA (push, 512);
+   PUSH_DATA (push, NVC0_CB_AUX_BUF_INFO(0));
 
    for (i = 0; i < NVC0_MAX_BUFFERS; i++) {
       if (nvc0->buffers[s][i].buffer) {
@@ -262,35 +263,29 @@ nvc0_compute_validate_globals(struct nvc0_context *nvc0)
    }
 }
 
+static struct nvc0_state_validate
+validate_list_cp[] = {
+   { nvc0_compprog_validate,              NVC0_NEW_CP_PROGRAM     },
+   { nvc0_compute_validate_constbufs,     NVC0_NEW_CP_CONSTBUF    },
+   { nvc0_compute_validate_driverconst,   NVC0_NEW_CP_DRIVERCONST },
+   { nvc0_compute_validate_buffers,       NVC0_NEW_CP_BUFFERS     },
+   { nvc0_compute_validate_textures,      NVC0_NEW_CP_TEXTURES    },
+   { nvc0_compute_validate_samplers,      NVC0_NEW_CP_SAMPLERS    },
+   { nvc0_compute_validate_globals,       NVC0_NEW_CP_GLOBALS     },
+};
+
 static bool
-nvc0_compute_state_validate(struct nvc0_context *nvc0)
+nvc0_state_validate_cp(struct nvc0_context *nvc0, uint32_t mask)
 {
-   nvc0_compprog_validate(nvc0);
-   if (nvc0->dirty_cp & NVC0_NEW_CP_CONSTBUF)
-      nvc0_compute_validate_constbufs(nvc0);
-   if (nvc0->dirty_cp & NVC0_NEW_CP_DRIVERCONST)
-      nvc0_compute_validate_driverconst(nvc0);
-   if (nvc0->dirty_cp & NVC0_NEW_CP_BUFFERS)
-      nvc0_compute_validate_buffers(nvc0);
-   if (nvc0->dirty_cp & NVC0_NEW_CP_TEXTURES)
-      nvc0_compute_validate_textures(nvc0);
-   if (nvc0->dirty_cp & NVC0_NEW_CP_SAMPLERS)
-      nvc0_compute_validate_samplers(nvc0);
-   if (nvc0->dirty_cp & NVC0_NEW_CP_GLOBALS)
-      nvc0_compute_validate_globals(nvc0);
+   bool ret;
 
-   /* TODO: surfaces */
+   ret = nvc0_state_validate(nvc0, mask, validate_list_cp,
+                             ARRAY_SIZE(validate_list_cp), &nvc0->dirty_cp,
+                             nvc0->bufctx_cp);
 
-   nvc0_bufctx_fence(nvc0, nvc0->bufctx_cp, false);
-
-   nouveau_pushbuf_bufctx(nvc0->base.pushbuf, nvc0->bufctx_cp);
-   if (unlikely(nouveau_pushbuf_validate(nvc0->base.pushbuf)))
-      return false;
    if (unlikely(nvc0->state.flushed))
       nvc0_bufctx_fence(nvc0, nvc0->bufctx_cp, true);
-
-   return true;
-
+   return ret;
 }
 
 static void
@@ -326,7 +321,7 @@ nvc0_launch_grid(struct pipe_context *pipe, const struct pipe_grid_info *info)
    unsigned s;
    int ret;
 
-   ret = !nvc0_compute_state_validate(nvc0);
+   ret = !nvc0_state_validate_cp(nvc0, ~0);
    if (ret) {
       NOUVEAU_ERR("Failed to launch grid !\n");
       return;

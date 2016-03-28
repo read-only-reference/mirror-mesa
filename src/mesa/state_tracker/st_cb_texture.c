@@ -2886,10 +2886,18 @@ st_finalize_texture(struct gl_context *ctx,
          /* Need to import images in main memory or held in other textures.
           */
          if (stImage && stObj->pt != stImage->pt) {
+            GLuint height = stObj->height0;
+            GLuint depth = stObj->depth0;
+
+            if (stObj->base.Target != GL_TEXTURE_1D_ARRAY)
+               height = u_minify(height, level);
+            if (stObj->base.Target == GL_TEXTURE_3D)
+               depth = u_minify(depth, level);
+
             if (level == 0 ||
                 (stImage->base.Width == u_minify(stObj->width0, level) &&
-                 stImage->base.Height == u_minify(stObj->height0, level) &&
-                 stImage->base.Depth == u_minify(stObj->depth0, level))) {
+                 stImage->base.Height == height &&
+                 stImage->base.Depth == depth)) {
                /* src image fits expected dest mipmap level size */
                copy_image_data_to_texture(st, stObj, level, stImage);
             }
@@ -3104,7 +3112,7 @@ void
 st_init_texture_functions(struct dd_function_table *functions)
 {
    functions->ChooseTextureFormat = st_ChooseTextureFormat;
-   functions->QuerySamplesForFormat = st_QuerySamplesForFormat;
+   functions->QueryInternalFormat = st_QueryInternalFormat;
    functions->TexImage = st_TexImage;
    functions->TexSubImage = st_TexSubImage;
    functions->CompressedTexSubImage = st_CompressedTexSubImage;

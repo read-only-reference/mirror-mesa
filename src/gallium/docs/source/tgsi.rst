@@ -2095,7 +2095,7 @@ after lookup.
 .. opcode:: SAMPLE
 
   Using provided address, sample data from the specified texture using the
-  filtering mode identified by the gven sampler. The source data may come from
+  filtering mode identified by the given sampler. The source data may come from
   any resource type other than buffers.
 
   Syntax: ``SAMPLE dst, address, sampler_view, sampler``
@@ -3205,6 +3205,20 @@ NUM_CULLDIST_ENABLED
 """"""""""""""""
 
 How many cull distance scalar outputs are enabled.
+
+FS_EARLY_DEPTH_STENCIL
+""""""""""""""""""""""
+
+Whether depth test, stencil test, and occlusion query should run before
+the fragment shader (regardless of fragment shader side effects). Corresponds
+to GLSL early_fragment_tests.
+
+NEXT_SHADER
+"""""""""""
+
+Which shader stage will MOST LIKELY follow after this shader when the shader
+is bound. This is only a hint to the driver and doesn't have to be precise.
+Only set for VS and TES.
 
 
 Texture Sampling and Texture Formats

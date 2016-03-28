@@ -360,6 +360,14 @@ enum pipe_flush_flags
 #define PIPE_BARRIER_MAPPED_BUFFER     (1 << 0)
 #define PIPE_BARRIER_SHADER_BUFFER     (1 << 1)
 #define PIPE_BARRIER_QUERY_BUFFER      (1 << 2)
+#define PIPE_BARRIER_VERTEX_BUFFER     (1 << 3)
+#define PIPE_BARRIER_INDEX_BUFFER      (1 << 4)
+#define PIPE_BARRIER_CONSTANT_BUFFER   (1 << 5)
+#define PIPE_BARRIER_INDIRECT_BUFFER   (1 << 6)
+#define PIPE_BARRIER_TEXTURE           (1 << 7)
+#define PIPE_BARRIER_IMAGE             (1 << 8)
+#define PIPE_BARRIER_FRAMEBUFFER       (1 << 9)
+#define PIPE_BARRIER_STREAMOUT_BUFFER  (1 << 10)
 
 /**
  * Resource binding flags -- state tracker must specify in advance all
@@ -404,9 +412,9 @@ enum pipe_flush_flags
  * The third flag has been added to be able to force textures to be created
  * in linear mode (no tiling).
  */
-#define PIPE_BIND_SCANOUT     (1 << 18) /*  */
-#define PIPE_BIND_SHARED      (1 << 19) /* get_texture_handle ??? */
-#define PIPE_BIND_LINEAR      (1 << 20)
+#define PIPE_BIND_SCANOUT     (1 << 19) /*  */
+#define PIPE_BIND_SHARED      (1 << 20) /* get_texture_handle ??? */
+#define PIPE_BIND_LINEAR      (1 << 21)
 
 
 /**
@@ -528,6 +536,25 @@ enum pipe_reset_status
    PIPE_UNKNOWN_CONTEXT_RESET = 3
 };
 
+
+/**
+ * resource_get_handle flags.
+ */
+/* Requires pipe_context::flush_resource before external use. */
+#define PIPE_HANDLE_USAGE_EXPLICIT_FLUSH  (1 << 0)
+/* Expected external use of the resource: */
+#define PIPE_HANDLE_USAGE_READ            (1 << 1)
+#define PIPE_HANDLE_USAGE_WRITE           (1 << 2)
+#define PIPE_HANDLE_USAGE_READ_WRITE      (PIPE_HANDLE_USAGE_READ | \
+                                           PIPE_HANDLE_USAGE_WRITE)
+
+/**
+ * pipe_image_view access flags.
+ */
+#define PIPE_IMAGE_ACCESS_READ       (1 << 0)
+#define PIPE_IMAGE_ACCESS_WRITE      (1 << 1)
+#define PIPE_IMAGE_ACCESS_READ_WRITE (PIPE_IMAGE_ACCESS_READ | \
+                                      PIPE_IMAGE_ACCESS_WRITE)
 
 /**
  * Implementation capabilities/limits which are queried through
@@ -658,6 +685,10 @@ enum pipe_cap
    PIPE_CAP_SURFACE_REINTERPRET_BLOCKS,
    PIPE_CAP_QUERY_BUFFER_OBJECT,
    PIPE_CAP_QUERY_MEMORY_INFO,
+   PIPE_CAP_PCI_GROUP,
+   PIPE_CAP_PCI_BUS,
+   PIPE_CAP_PCI_DEVICE,
+   PIPE_CAP_PCI_FUNCTION,
 };
 
 #define PIPE_QUIRK_TEXTURE_BORDER_COLOR_SWIZZLE_NV50 (1 << 0)

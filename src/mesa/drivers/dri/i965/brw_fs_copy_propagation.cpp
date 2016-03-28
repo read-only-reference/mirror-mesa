@@ -654,21 +654,6 @@ fs_visitor::try_constant_propagate(fs_inst *inst, acp_entry *entry)
          }
          break;
 
-      case SHADER_OPCODE_RCP:
-         /* The hardware doesn't do math on immediate values
-          * (because why are you doing that, seriously?), but
-          * the correct answer is to just constant fold it
-          * anyway.
-          */
-         assert(i == 0);
-         if (inst->src[0].f != 0.0f) {
-            inst->opcode = BRW_OPCODE_MOV;
-            inst->src[0] = val;
-            inst->src[0].f = 1.0f / inst->src[0].f;
-            progress = true;
-         }
-         break;
-
       case SHADER_OPCODE_UNTYPED_ATOMIC:
       case SHADER_OPCODE_UNTYPED_SURFACE_READ:
       case SHADER_OPCODE_UNTYPED_SURFACE_WRITE:
@@ -737,8 +722,7 @@ fs_visitor::opt_copy_propagate_local(void *copy_prop_ctx, bblock_t *block,
          foreach_in_list(acp_entry, entry, &acp[inst->src[i].nr % ACP_HASH_SIZE]) {
             if (try_constant_propagate(inst, entry))
                progress = true;
-
-            if (try_copy_propagate(inst, i, entry))
+            else if (try_copy_propagate(inst, i, entry))
                progress = true;
          }
       }

@@ -72,6 +72,7 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
 {
     struct nouveau_pushbuf *push = nvc0->base.pushbuf;
     struct pipe_framebuffer_state *fb = &nvc0->framebuffer;
+    struct nvc0_screen *screen = nvc0->screen;
     unsigned i, ms;
     unsigned ms_mode = NVC0_3D_MULTISAMPLE_MODE_MS1;
     bool serialize = false;
@@ -183,10 +184,10 @@ nvc0_validate_fb(struct nvc0_context *nvc0)
     ms = 1 << ms_mode;
     BEGIN_NVC0(push, NVC0_3D(CB_SIZE), 3);
     PUSH_DATA (push, 1024);
-    PUSH_DATAh(push, nvc0->screen->uniform_bo->offset + (6 << 16) + (4 << 10));
-    PUSH_DATA (push, nvc0->screen->uniform_bo->offset + (6 << 16) + (4 << 10));
+    PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(4));
+    PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(4));
     BEGIN_1IC0(push, NVC0_3D(CB_POS), 1 + 2 * ms);
-    PUSH_DATA (push, 256 + 128);
+    PUSH_DATA (push, NVC0_CB_AUX_SAMPLE_INFO);
     for (i = 0; i < ms; i++) {
        float xy[2];
        nvc0->base.pipe.get_sample_position(&nvc0->base.pipe, ms, i, xy);
@@ -313,14 +314,14 @@ static inline void
 nvc0_upload_uclip_planes(struct nvc0_context *nvc0, unsigned s)
 {
    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
-   struct nouveau_bo *bo = nvc0->screen->uniform_bo;
+   struct nvc0_screen *screen = nvc0->screen;
 
    BEGIN_NVC0(push, NVC0_3D(CB_SIZE), 3);
    PUSH_DATA (push, 1024);
-   PUSH_DATAh(push, bo->offset + (6 << 16) + (s << 10));
-   PUSH_DATA (push, bo->offset + (6 << 16) + (s << 10));
+   PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(s));
+   PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(s));
    BEGIN_1IC0(push, NVC0_3D(CB_POS), PIPE_MAX_CLIP_PLANES * 4 + 1);
-   PUSH_DATA (push, 256);
+   PUSH_DATA (push, NVC0_CB_AUX_UCP_INFO);
    PUSH_DATAp(push, &nvc0->clip.ucp[0][0], PIPE_MAX_CLIP_PLANES * 4);
 }
 
@@ -424,7 +425,7 @@ nvc0_constbufs_validate(struct nvc0_context *nvc0)
 
          if (nvc0->constbuf[s][i].user) {
             struct nouveau_bo *bo = nvc0->screen->uniform_bo;
-            const unsigned base = s << 16;
+            const unsigned base = NVC0_CB_USR_INFO(s);
             const unsigned size = nvc0->constbuf[s][0].size;
             assert(i == 0); /* we really only want OpenGL uniforms here */
             assert(nvc0->constbuf[s][0].u.data);
@@ -478,15 +479,16 @@ static void
 nvc0_validate_buffers(struct nvc0_context *nvc0)
 {
    struct nouveau_pushbuf *push = nvc0->base.pushbuf;
+   struct nvc0_screen *screen = nvc0->screen;
    int i, s;
 
    for (s = 0; s < 5; s++) {
       BEGIN_NVC0(push, NVC0_3D(CB_SIZE), 3);
       PUSH_DATA (push, 1024);
-      PUSH_DATAh(push, nvc0->screen->uniform_bo->offset + (6 << 16) + (s << 10));
-      PUSH_DATA (push, nvc0->screen->uniform_bo->offset + (6 << 16) + (s << 10));
+      PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(s));
+      PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(s));
       BEGIN_1IC0(push, NVC0_3D(CB_POS), 1 + 4 * NVC0_MAX_BUFFERS);
-      PUSH_DATA (push, 512);
+      PUSH_DATA (push, NVC0_CB_AUX_BUF_INFO(0));
       for (i = 0; i < NVC0_MAX_BUFFERS; i++) {
          if (nvc0->buffers[s][i].buffer) {
             struct nv04_resource *res =
@@ -550,8 +552,8 @@ nvc0_validate_driverconst(struct nvc0_context *nvc0)
    for (i = 0; i < 5; ++i) {
       BEGIN_NVC0(push, NVC0_3D(CB_SIZE), 3);
       PUSH_DATA (push, 1024);
-      PUSH_DATAh(push, screen->uniform_bo->offset + (6 << 16) + (i << 10));
-      PUSH_DATA (push, screen->uniform_bo->offset + (6 << 16) + (i << 10));
+      PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(i));
+      PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(i));
       BEGIN_NVC0(push, NVC0_3D(CB_BIND(i)), 1);
       PUSH_DATA (push, (15 << 4) | 1);
    }
@@ -672,10 +674,8 @@ nvc0_switch_pipe_context(struct nvc0_context *ctx_to)
    ctx_to->screen->cur_ctx = ctx_to;
 }
 
-static struct state_validate {
-    void (*func)(struct nvc0_context *);
-    uint32_t states;
-} validate_list[] = {
+static struct nvc0_state_validate
+validate_list_3d[] = {
     { nvc0_validate_fb,            NVC0_NEW_3D_FRAMEBUFFER },
     { nvc0_validate_blend,         NVC0_NEW_3D_BLEND },
     { nvc0_validate_zsa,           NVC0_NEW_3D_ZSA },
@@ -714,7 +714,9 @@ static struct state_validate {
 };
 
 bool
-nvc0_state_validate(struct nvc0_context *nvc0, uint32_t mask)
+nvc0_state_validate(struct nvc0_context *nvc0, uint32_t mask,
+                    struct nvc0_state_validate *validate_list, int size,
+                    uint32_t *dirty, struct nouveau_bufctx *bufctx)
 {
    uint32_t state_mask;
    int ret;
@@ -723,26 +725,38 @@ nvc0_state_validate(struct nvc0_context *nvc0, uint32_t mask)
    if (nvc0->screen->cur_ctx != nvc0)
       nvc0_switch_pipe_context(nvc0);
 
-   state_mask = nvc0->dirty_3d & mask;
+   state_mask = *dirty & mask;
 
    if (state_mask) {
-      for (i = 0; i < ARRAY_SIZE(validate_list); ++i) {
-         struct state_validate *validate = &validate_list[i];
+      for (i = 0; i < size; ++i) {
+         struct nvc0_state_validate *validate = &validate_list[i];
 
          if (state_mask & validate->states)
             validate->func(nvc0);
       }
-      nvc0->dirty_3d &= ~state_mask;
+      *dirty &= ~state_mask;
 
-      nvc0_bufctx_fence(nvc0, nvc0->bufctx_3d, false);
+      nvc0_bufctx_fence(nvc0, bufctx, false);
    }
 
-   nouveau_pushbuf_bufctx(nvc0->base.pushbuf, nvc0->bufctx_3d);
+   nouveau_pushbuf_bufctx(nvc0->base.pushbuf, bufctx);
    ret = nouveau_pushbuf_validate(nvc0->base.pushbuf);
+
+   return !ret;
+}
+
+bool
+nvc0_state_validate_3d(struct nvc0_context *nvc0, uint32_t mask)
+{
+   bool ret;
+
+   ret = nvc0_state_validate(nvc0, mask, validate_list_3d,
+                             ARRAY_SIZE(validate_list_3d), &nvc0->dirty_3d,
+                             nvc0->bufctx_3d);
 
    if (unlikely(nvc0->state.flushed)) {
       nvc0->state.flushed = false;
       nvc0_bufctx_fence(nvc0, nvc0->bufctx_3d, true);
    }
-   return !ret;
+   return ret;
 }

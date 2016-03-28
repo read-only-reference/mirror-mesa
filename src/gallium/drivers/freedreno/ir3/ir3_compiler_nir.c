@@ -1017,7 +1017,7 @@ emit_intrinsic_load_ubo(struct ir3_compile *ctx, nir_intrinsic_instr *intr,
 
 	const_offset = nir_src_as_const_value(intr->src[1]);
 	if (const_offset) {
-		off += const_offset->u[0];
+		off += const_offset->u32[0];
 	} else {
 		/* For load_ubo_indirect, second src is indirect offset: */
 		src1 = get_src(ctx, &intr->src[1])[0];
@@ -1109,7 +1109,7 @@ emit_intrinsic_store_var(struct ir3_compile *ctx, nir_intrinsic_instr *intr)
 	default:
 		compile_error(ctx, "Unhandled store deref type: %u\n",
 				darr->deref_array_type);
-		break;
+		return;
 	}
 
 	for (int i = 0; i < intr->num_components; i++) {
@@ -1159,7 +1159,7 @@ emit_intrinsic(struct ir3_compile *ctx, nir_intrinsic_instr *intr)
 		idx = nir_intrinsic_base(intr);
 		const_offset = nir_src_as_const_value(intr->src[0]);
 		if (const_offset) {
-			idx += const_offset->u[0];
+			idx += const_offset->u32[0];
 			for (int i = 0; i < intr->num_components; i++) {
 				unsigned n = idx * 4 + i;
 				dst[i] = create_uniform(ctx, n);
@@ -1186,7 +1186,7 @@ emit_intrinsic(struct ir3_compile *ctx, nir_intrinsic_instr *intr)
 		idx = nir_intrinsic_base(intr);
 		const_offset = nir_src_as_const_value(intr->src[0]);
 		if (const_offset) {
-			idx += const_offset->u[0];
+			idx += const_offset->u32[0];
 			for (int i = 0; i < intr->num_components; i++) {
 				unsigned n = idx * 4 + i;
 				dst[i] = ctx->ir->inputs[n];
@@ -1213,7 +1213,7 @@ emit_intrinsic(struct ir3_compile *ctx, nir_intrinsic_instr *intr)
 		idx = nir_intrinsic_base(intr);
 		const_offset = nir_src_as_const_value(intr->src[1]);
 		compile_assert(ctx, const_offset != NULL);
-		idx += const_offset->u[0];
+		idx += const_offset->u32[0];
 
 		src = get_src(ctx, &intr->src[0]);
 		for (int i = 0; i < intr->num_components; i++) {
@@ -1258,7 +1258,14 @@ emit_intrinsic(struct ir3_compile *ctx, nir_intrinsic_instr *intr)
 			ctx->frag_face = create_input(b, 0);
 			ctx->frag_face->regs[0]->flags |= IR3_REG_HALF;
 		}
-		dst[0] = ir3_ADD_S(b, ctx->frag_face, 0, create_immed(b, 1), 0);
+		/* for fragface, we always get -1 or 0, but that is inverse
+		 * of what nir expects (where ~0 is true).  Unfortunately
+		 * trying to widen from half to full in add.s seems to do a
+		 * non-sign-extending widen (resulting in something that
+		 * gets interpreted as float Inf??)
+		 */
+		dst[0] = ir3_COV(b, ctx->frag_face, TYPE_S16, TYPE_S32);
+		dst[0] = ir3_ADD_S(b, dst[0], 0, create_immed(b, 1), 0);
 		break;
 	case nir_intrinsic_discard_if:
 	case nir_intrinsic_discard: {
@@ -1301,7 +1308,7 @@ emit_load_const(struct ir3_compile *ctx, nir_load_const_instr *instr)
 	struct ir3_instruction **dst = get_dst_ssa(ctx, &instr->def,
 			instr->def.num_components);
 	for (int i = 0; i < instr->def.num_components; i++)
-		dst[i] = create_immed(ctx->block, instr->value.u[i]);
+		dst[i] = create_immed(ctx->block, instr->value.u32[i]);
 }
 
 static void
