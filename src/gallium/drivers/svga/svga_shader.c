@@ -171,7 +171,7 @@ svga_init_shader_key_common(const struct svga_context *svga, unsigned shader,
 {
    unsigned i, idx = 0;
 
-   assert(shader < Elements(svga->curr.num_sampler_views));
+   assert(shader < ARRAY_SIZE(svga->curr.num_sampler_views));
 
    for (i = 0; i < svga->curr.num_sampler_views[shader]; i++) {
       struct pipe_sampler_view *view = svga->curr.sampler_views[shader][i];
@@ -195,7 +195,6 @@ svga_init_shader_key_common(const struct svga_context *svga, unsigned shader,
             }
          }
 
-         key->tex[i].texture_msaa = view->texture->nr_samples > 1;
          if (!svga->curr.sampler[shader][i]->normalized_coords) {
             assert(idx < (1 << 5));  /* width_height_idx:5 bitfield */
             key->tex[i].width_height_idx = idx++;

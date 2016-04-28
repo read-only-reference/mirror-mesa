@@ -39,6 +39,8 @@
 #include "program/prog_instruction.h"
 #include "main/framebuffer.h"
 
+#include "isl/isl.h"
+
 #include "intel_mipmap_tree.h"
 #include "intel_batchbuffer.h"
 #include "intel_tex.h"
@@ -540,6 +542,7 @@ const struct brw_tracked_state brw_wm_pull_constants = {
    .dirty = {
       .mesa = _NEW_PROGRAM_CONSTANTS,
       .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
              BRW_NEW_FRAGMENT_PROGRAM |
              BRW_NEW_FS_PROG_DATA,
    },
@@ -804,6 +807,7 @@ const struct brw_tracked_state brw_renderbuffer_surfaces = {
       .mesa = _NEW_BUFFERS |
               _NEW_COLOR,
       .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
              BRW_NEW_FS_PROG_DATA,
    },
    .emit = update_renderbuffer_surfaces,
@@ -812,7 +816,8 @@ const struct brw_tracked_state brw_renderbuffer_surfaces = {
 const struct brw_tracked_state gen6_renderbuffer_surfaces = {
    .dirty = {
       .mesa = _NEW_BUFFERS,
-      .brw = BRW_NEW_BATCH,
+      .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP,
    },
    .emit = update_renderbuffer_surfaces,
 };
@@ -902,6 +907,7 @@ const struct brw_tracked_state brw_texture_surfaces = {
    .dirty = {
       .mesa = _NEW_TEXTURE,
       .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
              BRW_NEW_FRAGMENT_PROGRAM |
              BRW_NEW_FS_PROG_DATA |
              BRW_NEW_GEOMETRY_PROGRAM |
@@ -941,6 +947,7 @@ const struct brw_tracked_state brw_cs_texture_surfaces = {
    .dirty = {
       .mesa = _NEW_TEXTURE,
       .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
              BRW_NEW_COMPUTE_PROGRAM,
    },
    .emit = brw_update_cs_texture_surfaces,
@@ -1031,6 +1038,7 @@ const struct brw_tracked_state brw_wm_ubo_surfaces = {
    .dirty = {
       .mesa = _NEW_PROGRAM,
       .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
              BRW_NEW_FS_PROG_DATA |
              BRW_NEW_UNIFORM_BUFFER,
    },
@@ -1057,6 +1065,7 @@ const struct brw_tracked_state brw_cs_ubo_surfaces = {
    .dirty = {
       .mesa = _NEW_PROGRAM,
       .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
              BRW_NEW_CS_PROG_DATA |
              BRW_NEW_UNIFORM_BUFFER,
    },
@@ -1109,6 +1118,7 @@ const struct brw_tracked_state brw_wm_abo_surfaces = {
    .dirty = {
       .mesa = _NEW_PROGRAM,
       .brw = BRW_NEW_ATOMIC_BUFFER |
+             BRW_NEW_BLORP |
              BRW_NEW_BATCH |
              BRW_NEW_FS_PROG_DATA,
    },
@@ -1134,6 +1144,7 @@ const struct brw_tracked_state brw_cs_abo_surfaces = {
    .dirty = {
       .mesa = _NEW_PROGRAM,
       .brw = BRW_NEW_ATOMIC_BUFFER |
+             BRW_NEW_BLORP |
              BRW_NEW_BATCH |
              BRW_NEW_CS_PROG_DATA,
    },
@@ -1159,6 +1170,7 @@ const struct brw_tracked_state brw_cs_image_surfaces = {
    .dirty = {
       .mesa = _NEW_TEXTURE | _NEW_PROGRAM,
       .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
              BRW_NEW_CS_PROG_DATA |
              BRW_NEW_IMAGE_UNITS
    },
@@ -1168,20 +1180,21 @@ const struct brw_tracked_state brw_cs_image_surfaces = {
 static uint32_t
 get_image_format(struct brw_context *brw, mesa_format format, GLenum access)
 {
+   const struct brw_device_info *devinfo = brw->intelScreen->devinfo;
+   uint32_t hw_format = brw_format_for_mesa_format(format);
    if (access == GL_WRITE_ONLY) {
-      return brw_format_for_mesa_format(format);
-   } else {
+      return hw_format;
+   } else if (isl_has_matching_typed_storage_image_format(devinfo, hw_format)) {
       /* Typed surface reads support a very limited subset of the shader
        * image formats.  Translate it into the closest format the
        * hardware supports.
        */
-      if ((_mesa_get_format_bytes(format) >= 16 && brw->gen <= 8) ||
-          (_mesa_get_format_bytes(format) >= 8 &&
-           (brw->gen == 7 && !brw->is_haswell)))
-         return BRW_SURFACEFORMAT_RAW;
-      else
-         return brw_format_for_mesa_format(
-            brw_lower_mesa_image_format(brw->intelScreen->devinfo, format));
+      return isl_lower_storage_image_format(devinfo, hw_format);
+   } else {
+      /* The hardware doesn't actually support a typed format that we can use
+       * so we have to fall back to untyped read/write messages.
+       */
+      return BRW_SURFACEFORMAT_RAW;
    }
 }
 
@@ -1326,13 +1339,14 @@ update_image_surface(struct brw_context *brw,
             const GLenum target = (obj->Target == GL_TEXTURE_CUBE_MAP ||
                                    obj->Target == GL_TEXTURE_CUBE_MAP_ARRAY ?
                                    GL_TEXTURE_2D_ARRAY : obj->Target);
+            const int surf_index = surf_offset - &brw->wm.base.surf_offset[0];
 
             brw->vtbl.emit_texture_surface_state(
                brw, mt, target,
                min_layer, min_layer + num_layers,
                min_level, min_level + 1,
                format, SWIZZLE_XYZW,
-               surf_offset, access != GL_READ_ONLY, false);
+               surf_offset, surf_index, access != GL_READ_ONLY, false);
          }
 
          update_texture_image_param(brw, u, surface_idx, param);
@@ -1390,6 +1404,7 @@ const struct brw_tracked_state brw_wm_image_surfaces = {
    .dirty = {
       .mesa = _NEW_TEXTURE,
       .brw = BRW_NEW_BATCH |
+             BRW_NEW_BLORP |
              BRW_NEW_FRAGMENT_PROGRAM |
              BRW_NEW_FS_PROG_DATA |
              BRW_NEW_IMAGE_UNITS
@@ -1444,7 +1459,8 @@ brw_upload_cs_work_groups_surface(struct brw_context *brw)
 
 const struct brw_tracked_state brw_cs_work_groups_surface = {
    .dirty = {
-      .brw = BRW_NEW_CS_WORK_GROUPS
+      .brw = BRW_NEW_BLORP |
+             BRW_NEW_CS_WORK_GROUPS
    },
    .emit = brw_upload_cs_work_groups_surface,
 };

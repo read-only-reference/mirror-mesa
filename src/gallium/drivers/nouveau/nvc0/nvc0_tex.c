@@ -36,13 +36,13 @@ static inline uint32_t
 nv50_tic_swizzle(const struct nvc0_format *fmt, unsigned swz, bool tex_int)
 {
    switch (swz) {
-   case PIPE_SWIZZLE_RED  : return fmt->tic.src_x;
-   case PIPE_SWIZZLE_GREEN: return fmt->tic.src_y;
-   case PIPE_SWIZZLE_BLUE : return fmt->tic.src_z;
-   case PIPE_SWIZZLE_ALPHA: return fmt->tic.src_w;
-   case PIPE_SWIZZLE_ONE:
+   case PIPE_SWIZZLE_X  : return fmt->tic.src_x;
+   case PIPE_SWIZZLE_Y: return fmt->tic.src_y;
+   case PIPE_SWIZZLE_Z : return fmt->tic.src_z;
+   case PIPE_SWIZZLE_W: return fmt->tic.src_w;
+   case PIPE_SWIZZLE_1:
       return tex_int ? G80_TIC_SOURCE_ONE_INT : G80_TIC_SOURCE_ONE_FLOAT;
-   case PIPE_SWIZZLE_ZERO:
+   case PIPE_SWIZZLE_0:
    default:
       return G80_TIC_SOURCE_ZERO;
    }
@@ -250,6 +250,7 @@ gf100_create_texture_view(struct pipe_context *pipe,
    uint32_t swz[4];
    uint32_t width, height;
    uint32_t depth;
+   uint32_t tex_fmt;
    struct nv50_tic_entry *view;
    struct nv50_miptree *mt;
    bool tex_int;
@@ -275,12 +276,13 @@ gf100_create_texture_view(struct pipe_context *pipe,
    fmt = &nvc0_format_table[view->pipe.format];
 
    tex_int = util_format_is_pure_integer(view->pipe.format);
+   tex_fmt = fmt->tic.format & 0x3f;
 
    swz[0] = nv50_tic_swizzle(fmt, view->pipe.swizzle_r, tex_int);
    swz[1] = nv50_tic_swizzle(fmt, view->pipe.swizzle_g, tex_int);
    swz[2] = nv50_tic_swizzle(fmt, view->pipe.swizzle_b, tex_int);
    swz[3] = nv50_tic_swizzle(fmt, view->pipe.swizzle_a, tex_int);
-   tic[0] = (fmt->tic.format << G80_TIC_0_COMPONENTS_SIZES__SHIFT) |
+   tic[0] = (tex_fmt << G80_TIC_0_COMPONENTS_SIZES__SHIFT) |
             (fmt->tic.type_r << G80_TIC_0_R_DATA_TYPE__SHIFT) |
             (fmt->tic.type_g << G80_TIC_0_G_DATA_TYPE__SHIFT) |
             (fmt->tic.type_b << G80_TIC_0_B_DATA_TYPE__SHIFT) |
@@ -288,7 +290,8 @@ gf100_create_texture_view(struct pipe_context *pipe,
             (swz[0] << G80_TIC_0_X_SOURCE__SHIFT) |
             (swz[1] << G80_TIC_0_Y_SOURCE__SHIFT) |
             (swz[2] << G80_TIC_0_Z_SOURCE__SHIFT) |
-            (swz[3] << G80_TIC_0_W_SOURCE__SHIFT);
+            (swz[3] << G80_TIC_0_W_SOURCE__SHIFT) |
+            ((fmt->tic.format & 0x40) << (GK20A_TIC_0_USE_COMPONENT_SIZES_EXTENDED__SHIFT - 6));
 
    address = mt->base.address;
 
@@ -718,7 +721,7 @@ nve4_set_tex_handles(struct nvc0_context *nvc0)
       if (!dirty)
          continue;
       BEGIN_NVC0(push, NVC0_3D(CB_SIZE), 3);
-      PUSH_DATA (push, 1024);
+      PUSH_DATA (push, 2048);
       PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(s));
       PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(s));
       do {
@@ -740,23 +743,60 @@ static const uint8_t nve4_su_format_map[PIPE_FORMAT_COUNT];
 static const uint16_t nve4_su_format_aux_map[PIPE_FORMAT_COUNT];
 static const uint16_t nve4_suldp_lib_offset[PIPE_FORMAT_COUNT];
 
+static void
+nvc0_get_surface_dims(struct pipe_image_view *view, int *width, int *height,
+                      int *depth)
+{
+   struct nv04_resource *res = nv04_resource(view->resource);
+   int level;
+
+   *width = *height = *depth = 1;
+   if (res->base.target == PIPE_BUFFER) {
+      *width = view->u.buf.last_element - view->u.buf.first_element + 1;
+      return;
+   }
+
+   level = view->u.tex.level;
+   *width = u_minify(view->resource->width0, level);
+   *height = u_minify(view->resource->height0, level);
+   *depth = u_minify(view->resource->depth0, level);
+
+   switch (res->base.target) {
+   case PIPE_TEXTURE_1D_ARRAY:
+   case PIPE_TEXTURE_2D_ARRAY:
+   case PIPE_TEXTURE_CUBE:
+   case PIPE_TEXTURE_CUBE_ARRAY:
+      *depth = view->u.tex.last_layer - view->u.tex.first_layer + 1;
+      break;
+   case PIPE_TEXTURE_1D:
+   case PIPE_TEXTURE_2D:
+   case PIPE_TEXTURE_RECT:
+   case PIPE_TEXTURE_3D:
+      break;
+   default:
+      assert(!"unexpected texture target");
+      break;
+   }
+}
+
 void
 nve4_set_surface_info(struct nouveau_pushbuf *push,
-                      struct pipe_surface *psf,
-                      struct nvc0_screen *screen)
+                      struct pipe_image_view *view,
+                      struct nvc0_context *nvc0)
 {
-   struct nv50_surface *sf = nv50_surface(psf);
+   struct nvc0_screen *screen = nvc0->screen;
    struct nv04_resource *res;
    uint64_t address;
    uint32_t *const info = push->cur;
+   int width, height, depth;
    uint8_t log2cpp;
 
-   if (psf && !nve4_su_format_map[psf->format])
+   if (view && !nve4_su_format_map[view->format])
       NOUVEAU_ERR("unsupported surface format, try is_format_supported() !\n");
 
    push->cur += 16;
 
-   if (!psf || !nve4_su_format_map[psf->format]) {
+   if (!view || !nve4_su_format_map[view->format]) {
       memset(info, 0, 16 * sizeof(*info));
 
       info[0] = 0xbadf0000;
@@ -765,13 +805,16 @@ nve4_set_surface_info(struct nouveau_pushbuf *push,
          screen->lib_code->start;
       return;
    }
-   res = nv04_resource(sf->base.texture);
+   res = nv04_resource(view->resource);
 
-   address = res->address + sf->offset;
+   address = res->address;
 
-   info[8] = sf->width;
-   info[9] = sf->height;
-   info[10] = sf->depth;
+   /* get surface dimensions based on the target. */
+   nvc0_get_surface_dims(view, &width, &height, &depth);
+
+   info[8] = width;
+   info[9] = height;
+   info[10] = depth;
    switch (res->base.target) {
    case PIPE_TEXTURE_1D_ARRAY:
       info[11] = 1;
@@ -792,17 +835,19 @@ nve4_set_surface_info(struct nouveau_pushbuf *push,
       info[11] = 0;
       break;
    }
-   log2cpp = (0xf000 & nve4_su_format_aux_map[sf->base.format]) >> 12;
+   log2cpp = (0xf000 & nve4_su_format_aux_map[view->format]) >> 12;
 
-   info[12] = nve4_suldp_lib_offset[sf->base.format] + screen->lib_code->start;
+   /* Stick the blockwidth (ie. number of bytes per pixel) to check if the
+    * format doesn't mismatch. */
+   info[12] = util_format_get_blocksize(view->format);
 
    /* limit in bytes for raw access */
-   info[13] = (0x06 << 22) | ((sf->width << log2cpp) - 1);
+   info[13] = (0x06 << 22) | ((width << log2cpp) - 1);
 
-   info[1] = nve4_su_format_map[sf->base.format];
+   info[1] = nve4_su_format_map[view->format];
 
 #if 0
-   switch (util_format_get_blocksizebits(sf->base.format)) {
+   switch (util_format_get_blocksizebits(view->format)) {
    case  16: info[1] |= 1 << 16; break;
    case  32: info[1] |= 2 << 16; break;
    case  64: info[1] |= 3 << 16; break;
@@ -813,13 +858,17 @@ nve4_set_surface_info(struct nouveau_pushbuf *push,
 #else
    info[1] |= log2cpp << 16;
    info[1] |=  0x4000;
-   info[1] |= (0x0f00 & nve4_su_format_aux_map[sf->base.format]);
+   info[1] |= (0x0f00 & nve4_su_format_aux_map[view->format]);
 #endif
 
    if (res->base.target == PIPE_BUFFER) {
+      unsigned blocksize = util_format_get_blocksize(view->format);
+
+      address += view->u.buf.first_element * blocksize;
+
       info[0]  = address >> 8;
-      info[2]  = sf->width - 1;
-      info[2] |= (0xff & nve4_su_format_aux_map[sf->base.format]) << 22;
+      info[2]  = width - 1;
+      info[2] |= (0xff & nve4_su_format_aux_map[view->format]) << 22;
       info[3]  = 0;
       info[4]  = 0;
       info[5]  = 0;
@@ -829,28 +878,34 @@ nve4_set_surface_info(struct nouveau_pushbuf *push,
       info[15] = 0;
    } else {
       struct nv50_miptree *mt = nv50_miptree(&res->base);
-      struct nv50_miptree_level *lvl = &mt->level[sf->base.u.tex.level];
-      const unsigned z = sf->base.u.tex.first_layer;
+      struct nv50_miptree_level *lvl = &mt->level[view->u.tex.level];
+      const unsigned z = view->u.tex.first_layer;
 
       if (z) {
          if (mt->layout_3d) {
-            address += nvc0_mt_zslice_offset(mt, psf->u.tex.level, z);
+            address += nvc0_mt_zslice_offset(mt, view->u.tex.level, z);
             /* doesn't work if z passes z-tile boundary */
-            assert(sf->depth == 1);
+            if (depth > 1) {
+               pipe_debug_message(&nvc0->base.debug, CONFORMANCE,
+                                  "3D images are not really supported!");
+               debug_printf("3D images are not really supported!\n");
+            }
          } else {
             address += mt->layer_stride * z;
          }
       }
+      address += lvl->offset;
+
       info[0]  = address >> 8;
-      info[2]  = sf->width - 1;
+      info[2]  = width - 1;
       /* NOTE: this is really important: */
-      info[2] |= (0xff & nve4_su_format_aux_map[sf->base.format]) << 22;
+      info[2] |= (0xff & nve4_su_format_aux_map[view->format]) << 22;
       info[3]  = (0x88 << 24) | (lvl->pitch / 64);
-      info[4]  = sf->height - 1;
+      info[4]  = height - 1;
       info[4] |= (lvl->tile_mode & 0x0f0) << 25;
       info[4] |= NVC0_TILE_SHIFT_Y(lvl->tile_mode) << 22;
       info[5]  = mt->layer_stride >> 8;
-      info[6]  = sf->depth - 1;
+      info[6]  = depth - 1;
       info[6] |= (lvl->tile_mode & 0xf00) << 21;
       info[6] |= NVC0_TILE_SHIFT_Z(lvl->tile_mode) << 22;
       info[7]  = 0;
@@ -868,7 +923,34 @@ nvc0_update_surface_bindings(struct nvc0_context *nvc0)
 static inline void
 nve4_update_surface_bindings(struct nvc0_context *nvc0)
 {
-   /* TODO */
+   struct nouveau_pushbuf *push = nvc0->base.pushbuf;
+   struct nvc0_screen *screen = nvc0->screen;
+   int i, j, s;
+
+   for (s = 0; s < 5; s++) {
+      if (!nvc0->images_dirty[s])
+         continue;
+
+      BEGIN_NVC0(push, NVC0_3D(CB_SIZE), 3);
+      PUSH_DATA (push, 2048);
+      PUSH_DATAh(push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(s));
+      PUSH_DATA (push, screen->uniform_bo->offset + NVC0_CB_AUX_INFO(s));
+      BEGIN_1IC0(push, NVC0_3D(CB_POS), 1 + 16 * NVC0_MAX_IMAGES);
+      PUSH_DATA (push, NVC0_CB_AUX_SU_INFO(0));
+
+      for (i = 0; i < NVC0_MAX_IMAGES; ++i) {
+         struct pipe_image_view *view = &nvc0->images[s][i];
+         if (view->resource) {
+            struct nv04_resource *res = nv04_resource(view->resource);
+
+            nve4_set_surface_info(push, view, nvc0);
+            BCTX_REFN(nvc0->bufctx_3d, 3D_SUF, res, RDWR);
+         } else {
+            for (j = 0; j < 16; j++)
+               PUSH_DATA(push, 0);
+         }
+      }
+   }
 }
 
 void
@@ -898,7 +980,7 @@ static const uint8_t nve4_su_format_map[PIPE_FORMAT_COUNT] =
    [PIPE_FORMAT_R8G8B8A8_UINT] = GK104_IMAGE_FORMAT_RGBA8_UINT,
    [PIPE_FORMAT_R11G11B10_FLOAT] = GK104_IMAGE_FORMAT_R11G11B10_FLOAT,
    [PIPE_FORMAT_R10G10B10A2_UNORM] = GK104_IMAGE_FORMAT_RGB10_A2_UNORM,
-/* [PIPE_FORMAT_R10G10B10A2_UINT] = GK104_IMAGE_FORMAT_RGB10_A2_UINT, */
+   [PIPE_FORMAT_R10G10B10A2_UINT] = GK104_IMAGE_FORMAT_RGB10_A2_UINT,
    [PIPE_FORMAT_R32G32_FLOAT] = GK104_IMAGE_FORMAT_RG32_FLOAT,
    [PIPE_FORMAT_R32G32_SINT] = GK104_IMAGE_FORMAT_RG32_SINT,
    [PIPE_FORMAT_R32G32_UINT] = GK104_IMAGE_FORMAT_RG32_UINT,
@@ -945,7 +1027,7 @@ static const uint16_t nve4_su_format_aux_map[PIPE_FORMAT_COUNT] =
    [PIPE_FORMAT_R32G32_UINT] = 0x3433,
 
    [PIPE_FORMAT_R10G10B10A2_UNORM] = 0x2a24,
-/* [PIPE_FORMAT_R10G10B10A2_UINT] = 0x2a24, */
+   [PIPE_FORMAT_R10G10B10A2_UINT] = 0x2a24,
    [PIPE_FORMAT_R8G8B8A8_UNORM] = 0x2a24,
    [PIPE_FORMAT_R8G8B8A8_SNORM] = 0x2a24,
    [PIPE_FORMAT_R8G8B8A8_SINT] = 0x2a24,
@@ -996,7 +1078,7 @@ static const uint16_t nve4_suldp_lib_offset[PIPE_FORMAT_COUNT] =
    [PIPE_FORMAT_R32G32_SINT]        = 0x468,
    [PIPE_FORMAT_R32G32_UINT]        = 0x468,
    [PIPE_FORMAT_R10G10B10A2_UNORM]  = 0x4a8,
-/* [PIPE_FORMAT_R10G10B10A2_UINT]   = 0x530, */
+   [PIPE_FORMAT_R10G10B10A2_UINT]   = 0x530,
    [PIPE_FORMAT_R8G8B8A8_UNORM]     = 0x588,
    [PIPE_FORMAT_R8G8B8A8_SNORM]     = 0x5f8,
    [PIPE_FORMAT_R8G8B8A8_SINT]      = 0x670,

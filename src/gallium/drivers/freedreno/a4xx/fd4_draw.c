@@ -93,14 +93,22 @@ fixup_shader_state(struct fd_context *ctx, struct ir3_shader_key *key)
 		if (last_key->has_per_samp || key->has_per_samp) {
 			if ((last_key->vsaturate_s != key->vsaturate_s) ||
 					(last_key->vsaturate_t != key->vsaturate_t) ||
-					(last_key->vsaturate_r != key->vsaturate_r))
+					(last_key->vsaturate_r != key->vsaturate_r) ||
+					(last_key->vastc_srgb != key->vastc_srgb))
 				ctx->prog.dirty |= FD_SHADER_DIRTY_VP;
 
 			if ((last_key->fsaturate_s != key->fsaturate_s) ||
 					(last_key->fsaturate_t != key->fsaturate_t) ||
-					(last_key->fsaturate_r != key->fsaturate_r))
+					(last_key->fsaturate_r != key->fsaturate_r) ||
+					(last_key->fastc_srgb != key->fastc_srgb))
 				ctx->prog.dirty |= FD_SHADER_DIRTY_FP;
 		}
+
+		if (last_key->vclamp_color != key->vclamp_color)
+			ctx->prog.dirty |= FD_SHADER_DIRTY_VP;
+
+		if (last_key->fclamp_color != key->fclamp_color)
+			ctx->prog.dirty |= FD_SHADER_DIRTY_FP;
 
 		if (last_key->color_two_side != key->color_two_side)
 			ctx->prog.dirty |= FD_SHADER_DIRTY_FP;
@@ -120,6 +128,7 @@ fd4_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info)
 {
 	struct fd4_context *fd4_ctx = fd4_context(ctx);
 	struct fd4_emit emit = {
+		.debug = &ctx->debug,
 		.vtx  = &ctx->vtx,
 		.prog = &ctx->prog,
 		.info = info,
@@ -127,18 +136,23 @@ fd4_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info)
 			/* do binning pass first: */
 			.binning_pass = true,
 			.color_two_side = ctx->rasterizer->light_twoside,
+			.vclamp_color = ctx->rasterizer->clamp_vertex_color,
+			.fclamp_color = ctx->rasterizer->clamp_fragment_color,
 			.rasterflat = ctx->rasterizer->flatshade,
 			// TODO set .half_precision based on render target format,
 			// ie. float16 and smaller use half, float32 use full..
 			.half_precision = !!(fd_mesa_debug & FD_DBG_FRAGHALF),
 			.ucp_enables = ctx->rasterizer->clip_plane_enable,
-			.has_per_samp = (fd4_ctx->fsaturate || fd4_ctx->vsaturate),
+			.has_per_samp = (fd4_ctx->fsaturate || fd4_ctx->vsaturate ||
+					fd4_ctx->fastc_srgb || fd4_ctx->vastc_srgb),
 			.vsaturate_s = fd4_ctx->vsaturate_s,
 			.vsaturate_t = fd4_ctx->vsaturate_t,
 			.vsaturate_r = fd4_ctx->vsaturate_r,
 			.fsaturate_s = fd4_ctx->fsaturate_s,
 			.fsaturate_t = fd4_ctx->fsaturate_t,
 			.fsaturate_r = fd4_ctx->fsaturate_r,
+			.vastc_srgb = fd4_ctx->vastc_srgb,
+			.fastc_srgb = fd4_ctx->fastc_srgb,
 		},
 		.rasterflat = ctx->rasterizer->flatshade,
 		.sprite_coord_enable = ctx->rasterizer->sprite_coord_enable,
@@ -157,7 +171,24 @@ fd4_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info)
 	emit.dirty = dirty;
 	emit.vp = NULL;   /* we changed key so need to refetch vp */
 	emit.fp = NULL;
+
+	if (ctx->rasterizer->rasterizer_discard) {
+		fd_wfi(ctx, ctx->ring);
+		OUT_PKT3(ctx->ring, CP_REG_RMW, 3);
+		OUT_RING(ctx->ring, REG_A4XX_RB_RENDER_CONTROL);
+		OUT_RING(ctx->ring, ~A4XX_RB_RENDER_CONTROL_DISABLE_COLOR_PIPE);
+		OUT_RING(ctx->ring, A4XX_RB_RENDER_CONTROL_DISABLE_COLOR_PIPE);
+	}
+
 	draw_impl(ctx, ctx->ring, &emit);
+
+	if (ctx->rasterizer->rasterizer_discard) {
+		fd_wfi(ctx, ctx->ring);
+		OUT_PKT3(ctx->ring, CP_REG_RMW, 3);
+		OUT_RING(ctx->ring, REG_A4XX_RB_RENDER_CONTROL);
+		OUT_RING(ctx->ring, ~A4XX_RB_RENDER_CONTROL_DISABLE_COLOR_PIPE);
+		OUT_RING(ctx->ring, 0);
+	}
 }
 
 /* clear operations ignore viewport state, so we need to reset it
@@ -187,6 +218,7 @@ fd4_clear_binning(struct fd_context *ctx, unsigned dirty)
 	struct fd4_context *fd4_ctx = fd4_context(ctx);
 	struct fd_ringbuffer *ring = ctx->binning_ring;
 	struct fd4_emit emit = {
+		.debug = &ctx->debug,
 		.vtx  = &fd4_ctx->solid_vbuf_state,
 		.prog = &ctx->solid_prog,
 		.key = {
@@ -224,6 +256,7 @@ fd4_clear(struct fd_context *ctx, unsigned buffers,
 	unsigned dirty = ctx->dirty;
 	unsigned i;
 	struct fd4_emit emit = {
+		.debug = &ctx->debug,
 		.vtx  = &fd4_ctx->solid_vbuf_state,
 		.prog = &ctx->solid_prog,
 		.key = {

@@ -102,8 +102,7 @@ void *r600_buffer_map_sync_with_rings(struct r600_common_context *ctx,
 
 bool r600_init_resource(struct r600_common_screen *rscreen,
 			struct r600_resource *res,
-			unsigned size, unsigned alignment,
-			bool use_reusable_pool)
+			uint64_t size, unsigned alignment)
 {
 	struct r600_texture *rtex = (struct r600_texture*)res;
 	struct pb_buffer *old_buf, *new_buf;
@@ -160,15 +159,23 @@ bool r600_init_resource(struct r600_common_screen *rscreen,
 	    rtex->surface.level[0].mode >= RADEON_SURF_MODE_1D) {
 		res->domains = RADEON_DOMAIN_VRAM;
 		flags &= ~RADEON_FLAG_CPU_ACCESS;
-		flags |= RADEON_FLAG_NO_CPU_ACCESS;
+		flags |= RADEON_FLAG_NO_CPU_ACCESS |
+			 RADEON_FLAG_GTT_WC;
 	}
+
+	/* If VRAM is just stolen system memory, allow both VRAM and GTT,
+	 * whichever has free space. If a buffer is evicted from VRAM to GTT,
+	 * it will stay there.
+	 */
+	if (!rscreen->info.has_dedicated_vram &&
+	    res->domains == RADEON_DOMAIN_VRAM)
+		res->domains = RADEON_DOMAIN_VRAM_GTT;
 
 	if (rscreen->debug_flags & DBG_NO_WC)
 		flags &= ~RADEON_FLAG_GTT_WC;
 
 	/* Allocate a new resource. */
 	new_buf = rscreen->ws->buffer_create(rscreen->ws, size, alignment,
-					     use_reusable_pool,
 					     res->domains, flags);
 	if (!new_buf) {
 		return false;
@@ -192,7 +199,7 @@ bool r600_init_resource(struct r600_common_screen *rscreen,
 	res->TC_L2_dirty = false;
 
 	if (rscreen->debug_flags & DBG_VM && res->b.b.target == PIPE_BUFFER) {
-		fprintf(stderr, "VM start=0x%"PRIX64"  end=0x%"PRIX64" | Buffer %u bytes\n",
+		fprintf(stderr, "VM start=0x%"PRIX64"  end=0x%"PRIX64" | Buffer %"PRIu64" bytes\n",
 			res->gpu_address, res->gpu_address + res->buf->size,
 			res->buf->size);
 	}
@@ -367,6 +374,10 @@ static void *r600_buffer_transfer_map(struct pipe_context *ctx,
 				       0, 0, resource, level, box);
 
 			data = r600_buffer_map_sync_with_rings(rctx, staging, PIPE_TRANSFER_READ);
+			if (!data) {
+				pipe_resource_reference((struct pipe_resource **)&staging, NULL);
+				return NULL;
+			}
 			data += box->x % R600_MAP_BUFFER_ALIGNMENT;
 
 			return r600_buffer_get_transfer(ctx, resource, level, usage, box,
@@ -476,7 +487,7 @@ struct pipe_resource *r600_buffer_create(struct pipe_screen *screen,
 	struct r600_common_screen *rscreen = (struct r600_common_screen*)screen;
 	struct r600_resource *rbuffer = r600_alloc_buffer_struct(screen, templ);
 
-	if (!r600_init_resource(rscreen, rbuffer, templ->width0, alignment, TRUE)) {
+	if (!r600_init_resource(rscreen, rbuffer, templ->width0, alignment)) {
 		FREE(rbuffer);
 		return NULL;
 	}

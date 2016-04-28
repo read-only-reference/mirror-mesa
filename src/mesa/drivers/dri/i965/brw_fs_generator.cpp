@@ -351,23 +351,71 @@ fs_generator::generate_mov_indirect(fs_inst *inst,
 
    unsigned imm_byte_offset = reg.nr * REG_SIZE + reg.subnr;
 
-   /* We use VxH indirect addressing, clobbering a0.0 through a0.7. */
-   struct brw_reg addr = vec8(brw_address_reg(0));
+   if (indirect_byte_offset.file == BRW_IMMEDIATE_VALUE) {
+      imm_byte_offset += indirect_byte_offset.ud;
 
-   /* The destination stride of an instruction (in bytes) must be greater
-    * than or equal to the size of the rest of the instruction.  Since the
-    * address register is of type UW, we can't use a D-type instruction.
-    * In order to get around this, re re-type to UW and use a stride.
-    */
-   indirect_byte_offset =
-      retype(spread(indirect_byte_offset, 2), BRW_REGISTER_TYPE_UW);
+      reg.nr = imm_byte_offset / REG_SIZE;
+      reg.subnr = imm_byte_offset % REG_SIZE;
+      brw_MOV(p, dst, reg);
+   } else {
+      /* Prior to Broadwell, there are only 8 address registers. */
+      assert(inst->exec_size == 8 || devinfo->gen >= 8);
 
-   /* Prior to Broadwell, there are only 8 address registers. */
-   assert(inst->exec_size == 8 || devinfo->gen >= 8);
+      /* We use VxH indirect addressing, clobbering a0.0 through a0.7. */
+      struct brw_reg addr = vec8(brw_address_reg(0));
 
-   brw_MOV(p, addr, indirect_byte_offset);
-   brw_inst_set_mask_control(devinfo, brw_last_inst, BRW_MASK_DISABLE);
-   brw_MOV(p, dst, retype(brw_VxH_indirect(0, imm_byte_offset), dst.type));
+      /* The destination stride of an instruction (in bytes) must be greater
+       * than or equal to the size of the rest of the instruction.  Since the
+       * address register is of type UW, we can't use a D-type instruction.
+       * In order to get around this, re retype to UW and use a stride.
+       */
+      indirect_byte_offset =
+         retype(spread(indirect_byte_offset, 2), BRW_REGISTER_TYPE_UW);
+
+      struct brw_reg ind_src;
+      if (devinfo->gen < 8) {
+         /* From the Haswell PRM section "Register Region Restrictions":
+          *
+          *    "The lower bits of the AddressImmediate must not overflow to
+          *    change the register address.  The lower 5 bits of Address
+          *    Immediate when added to lower 5 bits of address register gives
+          *    the sub-register offset. The upper bits of Address Immediate
+          *    when added to upper bits of address register gives the register
+          *    address. Any overflow from sub-register offset is dropped."
+          *
+          * This restriction is only listed in the Haswell PRM but emperical
+          * testing indicates that it applies on all older generations and is
+          * lifted on Broadwell.
+          *
+          * Since the indirect may cause us to cross a register boundary, this
+          * makes the base offset almost useless.  We could try and do
+          * something clever where we use a actual base offset if
+          * base_offset % 32 == 0 but that would mean we were generating
+          * different code depending on the base offset.  Instead, for the
+          * sake of consistency, we'll just do the add ourselves.
+          */
+         brw_ADD(p, addr, indirect_byte_offset, brw_imm_uw(imm_byte_offset));
+         ind_src = brw_VxH_indirect(0, 0);
+      } else {
+         brw_MOV(p, addr, indirect_byte_offset);
+         ind_src = brw_VxH_indirect(0, imm_byte_offset);
+      }
+
+      brw_inst *mov = brw_MOV(p, dst, retype(ind_src, dst.type));
+
+      if (devinfo->gen == 6 && dst.file == BRW_MESSAGE_REGISTER_FILE &&
+          !inst->get_next()->is_tail_sentinel() &&
+          ((fs_inst *)inst->get_next())->mlen > 0) {
+         /* From the Sandybridge PRM:
+          *
+          *    "[Errata: DevSNB(SNB)] If MRF register is updated by any
+          *    instruction that “indexed/indirect” source AND is followed by a
+          *    send, the instruction requires a “Switch”. This is to avoid
+          *    race condition where send may dispatch before MRF is updated."
+          */
+         brw_inst_set_thread_control(devinfo, mov, BRW_THREAD_SWITCH);
+      }
+   }
 }
 
 void
@@ -504,12 +552,13 @@ fs_generator::generate_barrier(fs_inst *inst, struct brw_reg src)
 }
 
 void
-fs_generator::generate_blorp_fb_write(fs_inst *inst)
+fs_generator::generate_blorp_fb_write(fs_inst *inst, struct brw_reg payload)
 {
    brw_fb_WRITE(p,
                 16 /* dispatch_width */,
-                brw_message_reg(inst->base_mrf),
-                brw_reg_from_fs_reg(inst, &inst->src[0], devinfo->gen),
+                inst->base_mrf >= 0 ?
+                   brw_message_reg(inst->base_mrf) : payload,
+                brw_null_reg(),
                 BRW_DATAPORT_RENDER_TARGET_WRITE_SIMD16_SINGLE_SOURCE,
                 inst->target,
                 inst->mlen,
@@ -682,7 +731,6 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
                            struct brw_reg sampler_index)
 {
    int msg_type = -1;
-   int rlen = 4;
    uint32_t simd_mode;
    uint32_t return_format;
    bool is_combined_send = inst->eot;
@@ -871,13 +919,7 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
    assert(msg_type != -1);
 
    if (simd_mode == BRW_SAMPLER_SIMD_MODE_SIMD16) {
-      rlen = 8;
       dst = vec16(dst);
-   }
-
-   if (is_combined_send) {
-      assert(devinfo->gen >= 9 || devinfo->is_cherryview);
-      rlen = 0;
    }
 
    assert(devinfo->gen < 7 || inst->header_size == 0 ||
@@ -946,7 +988,7 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
                  surface + base_binding_table_index,
                  sampler % 16,
                  msg_type,
-                 rlen,
+                 inst->regs_written,
                  inst->mlen,
                  inst->header_size != 0,
                  simd_mode,
@@ -983,7 +1025,7 @@ fs_generator::generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src
                               0 /* surface */,
                               0 /* sampler */,
                               msg_type,
-                              rlen,
+                              inst->regs_written,
                               inst->mlen /* mlen */,
                               inst->header_size != 0 /* header */,
                               simd_mode,
@@ -1089,12 +1131,16 @@ fs_generator::generate_ddy(enum opcode opcode,
        *
        * Similar text exists in the g45 PRM.
        *
+       * Empirically, compressed align16 instructions using odd register
+       * numbers don't appear to work on Sandybridge either.
+       *
        * On these platforms, if we're building a SIMD16 shader, we need to
        * manually unroll to a pair of SIMD8 instructions.
        */
       bool unroll_to_simd8 =
          (dispatch_width == 16 &&
-          (devinfo->gen == 4 || (devinfo->gen == 7 && !devinfo->is_haswell)));
+          (devinfo->gen == 4 || devinfo->gen == 6 ||
+           (devinfo->gen == 7 && !devinfo->is_haswell)));
 
       /* produce accurate derivatives */
       struct brw_reg src0 = brw_reg(src.file, src.nr, 0,
@@ -2144,7 +2190,7 @@ fs_generator::generate_code(const cfg_t *cfg, int dispatch_width)
 	 break;
 
       case FS_OPCODE_BLORP_FB_WRITE:
-	 generate_blorp_fb_write(inst);
+	 generate_blorp_fb_write(inst, src[0]);
 	 break;
 
       case FS_OPCODE_MOV_DISPATCH_TO_FLAGS:

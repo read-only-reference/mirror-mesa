@@ -364,6 +364,7 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_PCI_BUS:
    case PIPE_CAP_PCI_DEVICE:
    case PIPE_CAP_PCI_FUNCTION:
+   case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
       return 0;
    case PIPE_CAP_MIN_MAP_BUFFER_ALIGNMENT:
       return 64;
@@ -404,6 +405,7 @@ svga_get_param(struct pipe_screen *screen, enum pipe_cap param)
    case PIPE_CAP_TGSI_FS_FACE_IS_INTEGER_SYSVAL:
    case PIPE_CAP_BUFFER_SAMPLER_VIEW_RGBA_ONLY:
    case PIPE_CAP_QUERY_BUFFER_OBJECT:
+   case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
       return 0;
    }
 
@@ -429,6 +431,9 @@ vgpu9_get_shader_param(struct pipe_screen *screen, unsigned shader,
       {
       case PIPE_SHADER_CAP_MAX_INSTRUCTIONS:
       case PIPE_SHADER_CAP_MAX_ALU_INSTRUCTIONS:
+         return get_uint_cap(sws,
+                             SVGA3D_DEVCAP_MAX_FRAGMENT_SHADER_INSTRUCTIONS,
+                             512);
       case PIPE_SHADER_CAP_MAX_TEX_INSTRUCTIONS:
       case PIPE_SHADER_CAP_MAX_TEX_INDIRECTIONS:
          return 512;
@@ -865,9 +870,9 @@ svga_get_driver_query_info(struct pipe_screen *screen,
 #undef QUERY
 
    if (!info)
-      return Elements(queries);
+      return ARRAY_SIZE(queries);
 
-   if (index >= Elements(queries))
+   if (index >= ARRAY_SIZE(queries))
       return 0;
 
    *info = queries[index];
@@ -999,8 +1004,10 @@ svga_screen_create(struct svga_winsys_screen *sws)
       svgascreen->max_color_buffers = SVGA3D_DX_MAX_RENDER_TARGETS;
 
       /* Multisample samples per pixel */
-      svgascreen->ms_samples =
-         get_uint_cap(sws, SVGA3D_DEVCAP_MULTISAMPLE_MASKABLESAMPLES, 0);
+      if (debug_get_bool_option("SVGA_MSAA", TRUE)) {
+         svgascreen->ms_samples =
+            get_uint_cap(sws, SVGA3D_DEVCAP_MULTISAMPLE_MASKABLESAMPLES, 0);
+      }
 
       /* Maximum number of constant buffers */
       svgascreen->max_const_buffers =

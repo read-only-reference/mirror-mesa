@@ -197,8 +197,8 @@ radeon_drm_cs_create(struct radeon_winsys_ctx *ctx,
     cs->csc = &cs->csc1;
     cs->cst = &cs->csc2;
     cs->base.buf = cs->csc->buf;
-    cs->base.ring_type = ring_type;
     cs->base.max_dw = ARRAY_SIZE(cs->csc->buf);
+    cs->ring_type = ring_type;
 
     p_atomic_inc(&ws->num_cs);
     return &cs->base;
@@ -281,7 +281,7 @@ static unsigned radeon_add_buffer(struct radeon_drm_cs *cs,
          * This doesn't have to be done if virtual memory is enabled,
          * because there is no offset patching with virtual memory.
          */
-        if (cs->base.ring_type != RING_DMA || cs->ws->info.has_virtual_memory) {
+        if (cs->ring_type != RING_DMA || cs->ws->info.has_virtual_memory) {
             return i;
         }
     }
@@ -466,7 +466,7 @@ static void radeon_drm_cs_flush(struct radeon_winsys_cs *rcs,
     struct radeon_drm_cs *cs = radeon_drm_cs(rcs);
     struct radeon_cs_context *tmp;
 
-    switch (cs->base.ring_type) {
+    switch (cs->ring_type) {
     case RING_DMA:
         /* pad DMA ring to 8 DWs */
         if (cs->ws->info.chip_class <= SI) {
@@ -526,7 +526,7 @@ static void radeon_drm_cs_flush(struct radeon_winsys_cs *rcs,
             p_atomic_inc(&cs->cst->relocs_bo[i].bo->num_active_ioctls);
         }
 
-        switch (cs->base.ring_type) {
+        switch (cs->ring_type) {
         case RING_DMA:
             cs->cst->flags[0] = 0;
             cs->cst->flags[1] = RADEON_CS_RING_DMA;
@@ -566,7 +566,7 @@ static void radeon_drm_cs_flush(struct radeon_winsys_cs *rcs,
                 cs->cst->flags[0] |= RADEON_CS_END_OF_FRAME;
                 cs->cst->cs.num_chunks = 3;
             }
-            if (cs->base.ring_type == RING_COMPUTE) {
+            if (cs->ring_type == RING_COMPUTE) {
                 cs->cst->flags[1] = RADEON_CS_RING_COMPUTE;
                 cs->cst->cs.num_chunks = 3;
             }
@@ -638,7 +638,7 @@ radeon_cs_create_fence(struct radeon_winsys_cs *rcs)
     struct pb_buffer *fence;
 
     /* Create a fence, which is a dummy BO. */
-    fence = cs->ws->base.buffer_create(&cs->ws->base, 1, 1, TRUE,
+    fence = cs->ws->base.buffer_create(&cs->ws->base, 1, 1,
                                        RADEON_DOMAIN_GTT, 0);
     /* Add the fence as a dummy relocation. */
     cs->ws->base.cs_add_buffer(rcs, fence,

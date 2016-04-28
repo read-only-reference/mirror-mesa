@@ -71,6 +71,7 @@ static const struct debug_named_value debug_options[] = {
 		{"glsl120",   FD_DBG_GLSL120,"Temporary flag to force GLSL 1.20 (rather than 1.30) on a3xx+"},
 		{"shaderdb",  FD_DBG_SHADERDB, "Enable shaderdb output"},
 		{"flush",     FD_DBG_FLUSH,  "Force flush after every draw"},
+		{"deqp",      FD_DBG_DEQP,   "Enable dEQP hacks"},
 		DEBUG_NAMED_VALUE_END
 };
 
@@ -221,8 +222,6 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_TGSI_FS_COORD_ORIGIN_LOWER_LEFT:
 	case PIPE_CAP_TGSI_FS_COORD_PIXEL_CENTER_HALF_INTEGER:
 	case PIPE_CAP_TGSI_CAN_COMPACT_CONSTANTS:
-	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
-	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 	case PIPE_CAP_USER_VERTEX_BUFFERS:
 	case PIPE_CAP_USER_INDEX_BUFFERS:
 	case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
@@ -244,6 +243,7 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
 	case PIPE_CAP_DEPTH_BOUNDS_TEST:
 	case PIPE_CAP_TGSI_TXQS:
+	/* TODO if we need this, do it in nir/ir3 backend to avoid breaking precompile: */
 	case PIPE_CAP_FORCE_PERSAMPLE_INTERP:
 	case PIPE_CAP_COPY_BETWEEN_COMPRESSED_AND_PLAIN_FORMATS:
 	case PIPE_CAP_CLEAR_TEXTURE:
@@ -255,12 +255,17 @@ fd_screen_get_param(struct pipe_screen *pscreen, enum pipe_cap param)
 	case PIPE_CAP_INVALIDATE_BUFFER:
 	case PIPE_CAP_GENERATE_MIPMAP:
 	case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
+	case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
+	case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
 		return 0;
 
 	case PIPE_CAP_MAX_VIEWPORTS:
 		return 1;
 
 	case PIPE_CAP_SHAREABLE_SHADERS:
+	/* manage the variants for these ourself, to avoid breaking precompile: */
+	case PIPE_CAP_FRAGMENT_COLOR_CLAMPED:
+	case PIPE_CAP_VERTEX_COLOR_CLAMPED:
 		if (is_ir3(screen))
 			return 1;
 		return 0;
@@ -351,6 +356,16 @@ fd_screen_get_paramf(struct pipe_screen *pscreen, enum pipe_capf param)
 	switch (param) {
 	case PIPE_CAPF_MAX_LINE_WIDTH:
 	case PIPE_CAPF_MAX_LINE_WIDTH_AA:
+		/* NOTE: actual value is 127.0f, but this is working around a deqp
+		 * bug.. dEQP-GLES3.functional.rasterization.primitives.lines_wide
+		 * uses too small of a render target size, and gets confused when
+		 * the lines start going offscreen.
+		 *
+		 * See: https://code.google.com/p/android/issues/detail?id=206513
+		 */
+		if (fd_mesa_debug & FD_DBG_DEQP)
+			return 48.0f;
+		return 127.0f;
 	case PIPE_CAPF_MAX_POINT_WIDTH:
 	case PIPE_CAPF_MAX_POINT_WIDTH_AA:
 		return 4092.0f;

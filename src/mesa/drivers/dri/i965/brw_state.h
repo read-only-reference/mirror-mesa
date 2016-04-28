@@ -57,7 +57,6 @@ extern const struct brw_tracked_state brw_constant_buffer;
 extern const struct brw_tracked_state brw_curbe_offsets;
 extern const struct brw_tracked_state brw_invariant_state;
 extern const struct brw_tracked_state brw_fs_samplers;
-extern const struct brw_tracked_state brw_ff_gs_prog;
 extern const struct brw_tracked_state brw_gs_unit;
 extern const struct brw_tracked_state brw_line_stipple;
 extern const struct brw_tracked_state brw_aa_line_parameters;
@@ -70,8 +69,6 @@ extern const struct brw_tracked_state brw_sf_prog;
 extern const struct brw_tracked_state brw_sf_unit;
 extern const struct brw_tracked_state brw_sf_vp;
 extern const struct brw_tracked_state brw_state_base_address;
-extern const struct brw_tracked_state brw_urb_fence;
-extern const struct brw_tracked_state brw_vs_prog;
 extern const struct brw_tracked_state brw_vs_samplers;
 extern const struct brw_tracked_state brw_tcs_samplers;
 extern const struct brw_tracked_state brw_tes_samplers;
@@ -91,10 +88,6 @@ extern const struct brw_tracked_state brw_gs_ubo_surfaces;
 extern const struct brw_tracked_state brw_gs_abo_surfaces;
 extern const struct brw_tracked_state brw_gs_image_surfaces;
 extern const struct brw_tracked_state brw_vs_unit;
-extern const struct brw_tracked_state brw_hs_prog;
-extern const struct brw_tracked_state brw_ds_prog;
-extern const struct brw_tracked_state brw_gs_prog;
-extern const struct brw_tracked_state brw_wm_prog;
 extern const struct brw_tracked_state brw_renderbuffer_surfaces;
 extern const struct brw_tracked_state brw_texture_surfaces;
 extern const struct brw_tracked_state brw_wm_binding_table;
@@ -121,7 +114,6 @@ extern const struct brw_tracked_state brw_cs_state;
 extern const struct brw_tracked_state gen7_cs_push_constants;
 extern const struct brw_tracked_state gen6_binding_table_pointers;
 extern const struct brw_tracked_state gen6_blend_state;
-extern const struct brw_tracked_state gen6_cc_state_pointers;
 extern const struct brw_tracked_state gen6_clip_state;
 extern const struct brw_tracked_state gen6_clip_vp;
 extern const struct brw_tracked_state gen6_color_calc_state;
@@ -203,6 +195,13 @@ void brw_upload_binding_table(struct brw_context *brw,
 void brw_upload_invariant_state(struct brw_context *brw);
 uint32_t
 brw_depthbuffer_format(struct brw_context *brw);
+
+/* gen8_depth_state.c */
+void gen8_write_pma_stall_bits(struct brw_context *brw,
+                               uint32_t pma_stall_bits);
+
+/* gen8_misc_state.c */
+void gen8_upload_state_base_address(struct brw_context *brw);
 
 /***********************************************************************
  * brw_state.c
@@ -321,7 +320,22 @@ void gen7_upload_3dstate_so_decl_list(struct brw_context *brw,
                                       const struct brw_vue_map *vue_map);
 
 /* gen8_surface_state.c */
+
 void gen8_init_vtable_surface_functions(struct brw_context *brw);
+
+unsigned gen8_surface_tiling_mode(uint32_t tiling);
+unsigned gen8_vertical_alignment(const struct brw_context *brw,
+                                 const struct intel_mipmap_tree *mt,
+                                 uint32_t surf_type);
+unsigned gen8_horizontal_alignment(const struct brw_context *brw,
+                                   const struct intel_mipmap_tree *mt,
+                                   uint32_t surf_type);
+uint32_t *gen8_allocate_surface_state(struct brw_context *brw,
+                                      uint32_t *out_offset, int index);
+
+void gen8_emit_fast_clear_color(const struct brw_context *brw,
+                                const struct intel_mipmap_tree *mt,
+                                uint32_t *surf);
 
 /* brw_sampler_state.c */
 void brw_emit_sampler_state(struct brw_context *brw,
@@ -368,7 +382,6 @@ void
 calculate_attr_overrides(const struct brw_context *brw,
                          uint16_t *attr_overrides,
                          uint32_t *point_sprite_enables,
-                         uint32_t *flat_enables,
                          uint32_t *urb_entry_read_length,
                          uint32_t *urb_entry_read_offset);
 

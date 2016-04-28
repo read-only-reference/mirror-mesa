@@ -82,7 +82,8 @@ shader_perf_log_mesa(void *data, const char *fmt, ...)
    .lower_uadd_carry = true,                                                  \
    .lower_usub_borrow = true,                                                 \
    .lower_fdiv = true,                                                        \
-   .native_integers = true
+   .native_integers = true,                                                   \
+   .vertex_id_zero_based = true
 
 static const struct nir_shader_compiler_options scalar_nir_options = {
    COMMON_OPTIONS,
@@ -108,7 +109,7 @@ static const struct nir_shader_compiler_options vector_nir_options = {
    .fdot_replicates = true,
 
    /* Prior to Gen6, there are no three source operations for SIMD4x2. */
-   .lower_flrp = true,
+   .lower_flrp32 = true,
 
    .lower_pack_snorm_2x16 = true,
    .lower_pack_unorm_2x16 = true,
@@ -146,6 +147,8 @@ brw_compiler_create(void *mem_ctx, const struct brw_device_info *devinfo)
 
    brw_fs_alloc_reg_sets(compiler);
    brw_vec4_alloc_reg_set(compiler);
+
+   compiler->precise_trig = env_var_as_boolean("INTEL_PRECISE_TRIG", false);
 
    compiler->scalar_stage[MESA_SHADER_VERTEX] =
       devinfo->gen >= 8 && !(INTEL_DEBUG & DEBUG_VEC4VS);

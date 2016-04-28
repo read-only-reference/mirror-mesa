@@ -452,7 +452,7 @@ struct shader_translator
         BYTE major;
         BYTE minor;
     } version;
-    unsigned processor; /* TGSI_PROCESSOR_VERTEX/FRAMGENT */
+    unsigned processor; /* PIPE_SHADER_VERTEX/FRAMGENT */
     unsigned num_constf_allowed;
     unsigned num_consti_allowed;
     unsigned num_constb_allowed;
@@ -517,8 +517,8 @@ struct shader_translator
     int16_t op_info_map[D3DSIO_BREAKP + 1];
 };
 
-#define IS_VS (tx->processor == TGSI_PROCESSOR_VERTEX)
-#define IS_PS (tx->processor == TGSI_PROCESSOR_FRAGMENT)
+#define IS_VS (tx->processor == PIPE_SHADER_VERTEX)
+#define IS_PS (tx->processor == PIPE_SHADER_FRAGMENT)
 
 #define FAILURE_VOID(cond) if ((cond)) {tx->failure=1;return;}
 
@@ -2857,7 +2857,7 @@ create_op_info_map(struct shader_translator *tx)
     for (i = 0; i < Elements(tx->op_info_map); ++i)
         tx->op_info_map[i] = -1;
 
-    if (tx->processor == TGSI_PROCESSOR_VERTEX) {
+    if (tx->processor == PIPE_SHADER_VERTEX) {
         for (i = 0; i < Elements(inst_table); ++i) {
             assert(inst_table[i].sio < Elements(tx->op_info_map));
             if (inst_table[i].vert_version.min <= version &&
@@ -2928,8 +2928,8 @@ sm1_read_version(struct shader_translator *tx)
     tx->version.minor = D3DSHADER_VERSION_MINOR(tok);
 
     switch (tok >> 16) {
-    case NINED3D_SM1_VS: tx->processor = TGSI_PROCESSOR_VERTEX; break;
-    case NINED3D_SM1_PS: tx->processor = TGSI_PROCESSOR_FRAGMENT; break;
+    case NINED3D_SM1_VS: tx->processor = PIPE_SHADER_VERTEX; break;
+    case NINED3D_SM1_PS: tx->processor = PIPE_SHADER_FRAGMENT; break;
     default:
        DBG("Invalid shader type: %x\n", tok);
        tx->processor = ~0;
@@ -3254,17 +3254,6 @@ tx_dtor(struct shader_translator *tx)
     FREE(tx);
 }
 
-static inline unsigned
-tgsi_processor_from_type(unsigned shader_type)
-{
-    switch (shader_type) {
-    case PIPE_SHADER_VERTEX: return TGSI_PROCESSOR_VERTEX;
-    case PIPE_SHADER_FRAGMENT: return TGSI_PROCESSOR_FRAGMENT;
-    default:
-        return ~0;
-    }
-}
-
 static void
 shader_add_ps_fog_stage(struct shader_translator *tx, struct ureg_src src_col)
 {
@@ -3326,7 +3315,7 @@ nine_translate_shader(struct NineDevice9 *device, struct nine_shader_info *info)
 {
     struct shader_translator *tx;
     HRESULT hr = D3D_OK;
-    const unsigned processor = tgsi_processor_from_type(info->type);
+    const unsigned processor = info->type;
     unsigned s, slot_max;
     unsigned max_const_f;
 
@@ -3348,7 +3337,7 @@ nine_translate_shader(struct NineDevice9 *device, struct nine_shader_info *info)
         DBG("Shader type mismatch: %u / %u !\n", tx->processor, processor);
         goto out;
     }
-    DUMP("%s%u.%u\n", processor == TGSI_PROCESSOR_VERTEX ? "VS" : "PS",
+    DUMP("%s%u.%u\n", processor == PIPE_SHADER_VERTEX ? "VS" : "PS",
          tx->version.major, tx->version.minor);
 
     tx->ureg = ureg_create(processor);

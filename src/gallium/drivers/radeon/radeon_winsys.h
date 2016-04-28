@@ -229,7 +229,6 @@ struct radeon_winsys_cs {
     unsigned                    cdw;  /* Number of used dwords. */
     unsigned                    max_dw; /* Maximum number of dwords. */
     uint32_t                    *buf; /* The command buffer. */
-    enum ring_type              ring_type;
 };
 
 struct radeon_info {
@@ -245,6 +244,7 @@ struct radeon_info {
     enum chip_class             chip_class;
     uint64_t                    gart_size;
     uint64_t                    vram_size;
+    bool                        has_dedicated_vram;
     boolean                     has_virtual_memory;
     bool                        gfx_ib_pad_with_type2;
     boolean                     has_sdma;
@@ -326,7 +326,6 @@ enum radeon_feature_id {
 #define     RADEON_SURF_TYPE_2D_ARRAY               5
 #define RADEON_SURF_MODE_MASK                   0xFF
 #define RADEON_SURF_MODE_SHIFT                  8
-#define     RADEON_SURF_MODE_LINEAR                 0
 #define     RADEON_SURF_MODE_LINEAR_ALIGNED         1
 #define     RADEON_SURF_MODE_1D                     2
 #define     RADEON_SURF_MODE_2D                     3
@@ -449,9 +448,8 @@ struct radeon_winsys {
      * \return          The created buffer object.
      */
     struct pb_buffer *(*buffer_create)(struct radeon_winsys *ws,
-                                       unsigned size,
+                                       uint64_t size,
                                        unsigned alignment,
-                                       boolean use_reusable_pool,
                                        enum radeon_bo_domain domain,
                                        enum radeon_bo_flag flags);
 
@@ -528,7 +526,7 @@ struct radeon_winsys {
      * \param Size      Size in bytes for the new buffer.
      */
     struct pb_buffer *(*buffer_from_ptr)(struct radeon_winsys *ws,
-                                         void *pointer, unsigned size);
+                                         void *pointer, uint64_t size);
 
     /**
      * Whether the buffer was created from a user pointer.
@@ -602,6 +600,36 @@ struct radeon_winsys {
 							struct pipe_fence_handle **fence),
                                           void *flush_ctx);
 
+    /**
+     * Add a constant engine IB to a graphics CS. This makes the graphics CS
+     * from "cs_create" a group of two IBs that share a buffer list and are
+     * flushed together.
+     *
+     * The returned constant CS is only a stream for writing packets to the new
+     * IB. Calling other winsys functions with it is not allowed, not even
+     * "cs_destroy".
+     *
+     * In order to add buffers and check memory usage, use the graphics CS.
+     * In order to flush it, use the graphics CS, which will flush both IBs.
+     * Destroying the graphics CS will destroy both of them.
+     *
+     * \param cs  The graphics CS from "cs_create" that will hold the buffer
+     *            list and will be used for flushing.
+     */
+    struct radeon_winsys_cs *(*cs_add_const_ib)(struct radeon_winsys_cs *cs);
+
+     /**
+     * Add a constant engine preamble IB to a graphics CS. This add an extra IB
+     * in similar manner to cs_add_const_ib. This should always be called after
+     * cs_add_const_ib.
+     *
+     * The returned IB is a constant engine IB that only gets flushed if the
+     * context changed.
+     *
+     * \param cs  The graphics CS from "cs_create" that will hold the buffer
+     *            list and will be used for flushing.
+     */
+    struct radeon_winsys_cs *(*cs_add_const_preamble_ib)(struct radeon_winsys_cs *cs);
     /**
      * Destroy a command stream.
      *

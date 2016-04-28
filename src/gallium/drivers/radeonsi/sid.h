@@ -88,6 +88,9 @@
 #define PKT3_INDEX_BASE                        0x26
 #define PKT3_DRAW_INDEX_2                      0x27
 #define PKT3_CONTEXT_CONTROL                   0x28
+#define     CONTEXT_CONTROL_LOAD_ENABLE(x)     (((x) & 0x1) << 31)
+#define     CONTEXT_CONTROL_LOAD_CE_RAM(x)     (((x) & 0x1) << 28)
+#define     CONTEXT_CONTROL_SHADOW_ENABLE(x)   (((x) & 0x1) << 31)
 #define PKT3_INDEX_TYPE                        0x2A
 #define PKT3_DRAW_INDIRECT_MULTI               0x2C
 #define PKT3_DRAW_INDEX_AUTO                   0x2D
@@ -132,6 +135,7 @@
 #define		COPY_DATA_DST_SEL(x)		(((x) & 0xf) << 8)
 #define		COPY_DATA_COUNT_SEL		(1 << 16)
 #define		COPY_DATA_WR_CONFIRM		(1 << 20)
+#define PKT3_PFP_SYNC_ME		       0x42 /* r7xx+ */
 #define PKT3_SURFACE_SYNC                      0x43 /* deprecated on CIK, use ACQUIRE_MEM */
 #define PKT3_ME_INITIALIZE                     0x44 /* not on CIK */
 #define PKT3_COND_WRITE                        0x45
@@ -145,6 +149,12 @@
 #define PKT3_SET_SH_REG                        0x76
 #define PKT3_SET_SH_REG_OFFSET                 0x77
 #define PKT3_SET_UCONFIG_REG                   0x79 /* new for CIK */
+#define PKT3_LOAD_CONST_RAM                    0x80
+#define PKT3_WRITE_CONST_RAM                   0x81
+#define PKT3_DUMP_CONST_RAM                    0x83
+#define PKT3_INCREMENT_CE_COUNTER              0x84
+#define PKT3_INCREMENT_DE_COUNTER              0x85
+#define PKT3_WAIT_ON_CE_COUNTER                0x86
 
 #define PKT_TYPE_S(x)                   (((x) & 0x3) << 30)
 #define PKT_TYPE_G(x)                   (((x) >> 30) & 0x3)
@@ -2307,6 +2317,9 @@
 #define     V_008F30_SQ_TEX_MIRROR_ONCE_HALF_BORDER                 0x05
 #define     V_008F30_SQ_TEX_CLAMP_BORDER                            0x06
 #define     V_008F30_SQ_TEX_MIRROR_ONCE_BORDER                      0x07
+#define   S_008F30_MAX_ANISO_RATIO(x)                                 (((x) & 0x07) << 9)
+#define   G_008F30_MAX_ANISO_RATIO(x)                                 (((x) >> 9) & 0x07)
+#define   C_008F30_MAX_ANISO_RATIO                                    0xFFFFF1FF
 #define   S_008F30_DEPTH_COMPARE_FUNC(x)                              (((x) & 0x07) << 12)
 #define   G_008F30_DEPTH_COMPARE_FUNC(x)                              (((x) >> 12) & 0x07)
 #define   C_008F30_DEPTH_COMPARE_FUNC                                 0xFFFF8FFF
@@ -2371,6 +2384,8 @@
 #define   C_008F38_XY_MIN_FILTER                                      0xFF3FFFFF
 #define     V_008F38_SQ_TEX_XY_FILTER_POINT                         0x00
 #define     V_008F38_SQ_TEX_XY_FILTER_BILINEAR                      0x01
+#define     V_008F38_SQ_TEX_XY_FILTER_ANISO_POINT                   0x02
+#define     V_008F38_SQ_TEX_XY_FILTER_ANISO_BILINEAR                0x03
 #define   S_008F38_Z_FILTER(x)                                        (((x) & 0x03) << 24)
 #define   G_008F38_Z_FILTER(x)                                        (((x) >> 24) & 0x03)
 #define   C_008F38_Z_FILTER                                           0xFCFFFFFF
@@ -2392,6 +2407,9 @@
 #define   S_008F38_FILTER_PREC_FIX(x)                                 (((x) & 0x1) << 30)
 #define   G_008F38_FILTER_PREC_FIX(x)                                 (((x) >> 30) & 0x1)
 #define   C_008F38_FILTER_PREC_FIX                                    0xBFFFFFFF
+#define   S_008F38_ANISO_OVERRIDE(x)                                  (((x) & 0x1) << 31)
+#define   G_008F38_ANISO_OVERRIDE(x)                                  (((x) >> 31) & 0x1)
+#define   C_008F38_ANISO_OVERRIDE                                     0x7FFFFFFF
 #define R_008F3C_SQ_IMG_SAMP_WORD3                                      0x008F3C
 #define   S_008F3C_BORDER_COLOR_PTR(x)                                (((x) & 0xFFF) << 0)
 #define   G_008F3C_BORDER_COLOR_PTR(x)                                (((x) >> 0) & 0xFFF)

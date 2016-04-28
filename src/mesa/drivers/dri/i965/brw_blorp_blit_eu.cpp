@@ -26,16 +26,9 @@
 #include "brw_blorp.h"
 #include "brw_cfg.h"
 
-brw_blorp_eu_emitter::brw_blorp_eu_emitter(struct brw_context *brw,
-                                           bool debug_flag)
-   : mem_ctx(ralloc_context(NULL)),
-     generator(brw->intelScreen->compiler, brw,
-               mem_ctx, (void *) rzalloc(mem_ctx, struct brw_wm_prog_key),
-               (struct brw_stage_prog_data *) rzalloc(mem_ctx, struct brw_wm_prog_data),
-               0, false, MESA_SHADER_FRAGMENT)
+brw_blorp_eu_emitter::brw_blorp_eu_emitter()
+   : mem_ctx(ralloc_context(NULL))
 {
-   if (debug_flag)
-      generator.enable_debug("blorp");
 }
 
 brw_blorp_eu_emitter::~brw_blorp_eu_emitter()
@@ -44,9 +37,22 @@ brw_blorp_eu_emitter::~brw_blorp_eu_emitter()
 }
 
 const unsigned *
-brw_blorp_eu_emitter::get_program(unsigned *program_size)
+brw_blorp_eu_emitter::get_program(struct brw_context *brw, bool debug_flag,
+                                  unsigned *program_size)
 {
    cfg_t cfg(&insts);
+   brw_stage_prog_data prog_data = { 0 };
+   brw_wm_prog_key prog_key = { 0 };
+
+   prog_data.binding_table.texture_start =
+      BRW_BLORP_TEXTURE_BINDING_TABLE_INDEX;
+
+   fs_generator generator(brw->intelScreen->compiler, brw, mem_ctx, &prog_key,
+                          &prog_data, 0, false, MESA_SHADER_FRAGMENT);
+
+   if (debug_flag)
+      generator.enable_debug("blorp");
+
    generator.generate_code(&cfg, 16);
 
    return generator.get_assembly(program_size);
@@ -90,19 +96,21 @@ brw_blorp_eu_emitter::emit_texture_lookup(const struct brw_reg &dst,
    inst->base_mrf = base_mrf;
    inst->mlen = msg_length;
    inst->header_size = 0;
+   inst->regs_written = 8;
 
    insts.push_tail(inst);
 }
 
 void
 brw_blorp_eu_emitter::emit_render_target_write(const struct brw_reg &src0,
-                                               unsigned msg_reg_nr,
+                                               int msg_reg_nr,
                                                unsigned msg_length,
                                                bool use_header)
 {
    fs_inst *inst = new (mem_ctx) fs_inst(FS_OPCODE_BLORP_FB_WRITE, 16);
 
    inst->src[0] = src0;
+   inst->sources = 1;
    inst->base_mrf = msg_reg_nr;
    inst->mlen = msg_length;
    inst->header_size = use_header ? 2 : 0;

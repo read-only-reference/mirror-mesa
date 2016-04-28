@@ -79,7 +79,7 @@ util_make_vertex_passthrough_shader_with_so(struct pipe_context *pipe,
    struct ureg_program *ureg;
    uint i;
 
-   ureg = ureg_create( TGSI_PROCESSOR_VERTEX );
+   ureg = ureg_create( PIPE_SHADER_VERTEX );
    if (!ureg)
       return NULL;
 
@@ -123,7 +123,7 @@ void *util_make_layered_clear_vertex_shader(struct pipe_context *pipe)
    struct tgsi_token tokens[1000];
    struct pipe_shader_state state = {tokens};
 
-   if (!tgsi_text_translate(text, tokens, Elements(tokens))) {
+   if (!tgsi_text_translate(text, tokens, ARRAY_SIZE(tokens))) {
       assert(0);
       return NULL;
    }
@@ -151,7 +151,7 @@ void *util_make_layered_clear_helper_vertex_shader(struct pipe_context *pipe)
    struct tgsi_token tokens[1000];
    struct pipe_shader_state state = {tokens};
 
-   if (!tgsi_text_translate(text, tokens, Elements(tokens))) {
+   if (!tgsi_text_translate(text, tokens, ARRAY_SIZE(tokens))) {
       assert(0);
       return NULL;
    }
@@ -194,7 +194,7 @@ void *util_make_layered_clear_geometry_shader(struct pipe_context *pipe)
    struct tgsi_token tokens[1000];
    struct pipe_shader_state state = {tokens};
 
-   if (!tgsi_text_translate(text, tokens, Elements(tokens))) {
+   if (!tgsi_text_translate(text, tokens, ARRAY_SIZE(tokens))) {
       assert(0);
       return NULL;
    }
@@ -227,7 +227,7 @@ util_make_fragment_tex_shader_writemask(struct pipe_context *pipe,
    assert(interp_mode == TGSI_INTERPOLATE_LINEAR ||
           interp_mode == TGSI_INTERPOLATE_PERSPECTIVE);
 
-   ureg = ureg_create( TGSI_PROCESSOR_FRAGMENT );
+   ureg = ureg_create( PIPE_SHADER_FRAGMENT );
    if (!ureg)
       return NULL;
    
@@ -297,7 +297,7 @@ util_make_fragment_tex_shader_writedepth(struct pipe_context *pipe,
    struct ureg_dst out, depth;
    struct ureg_src imm;
 
-   ureg = ureg_create( TGSI_PROCESSOR_FRAGMENT );
+   ureg = ureg_create( PIPE_SHADER_FRAGMENT );
    if (!ureg)
       return NULL;
 
@@ -349,7 +349,7 @@ util_make_fragment_tex_shader_writedepthstencil(struct pipe_context *pipe,
    struct ureg_dst out, depth, stencil;
    struct ureg_src imm;
 
-   ureg = ureg_create( TGSI_PROCESSOR_FRAGMENT );
+   ureg = ureg_create( PIPE_SHADER_FRAGMENT );
    if (!ureg)
       return NULL;
 
@@ -413,7 +413,7 @@ util_make_fragment_tex_shader_writestencil(struct pipe_context *pipe,
    struct ureg_dst out, stencil;
    struct ureg_src imm;
 
-   ureg = ureg_create( TGSI_PROCESSOR_FRAGMENT );
+   ureg = ureg_create( PIPE_SHADER_FRAGMENT );
    if (!ureg)
       return NULL;
 
@@ -478,7 +478,7 @@ util_make_fragment_passthrough_shader(struct pipe_context *pipe,
            tgsi_semantic_names[input_semantic],
            tgsi_interpolate_names[input_interpolate]);
 
-   if (!tgsi_text_translate(text, tokens, Elements(tokens))) {
+   if (!tgsi_text_translate(text, tokens, ARRAY_SIZE(tokens))) {
       assert(0);
       return NULL;
    }
@@ -493,7 +493,7 @@ util_make_fragment_passthrough_shader(struct pipe_context *pipe,
 void *
 util_make_empty_fragment_shader(struct pipe_context *pipe)
 {
-   struct ureg_program *ureg = ureg_create(TGSI_PROCESSOR_FRAGMENT);
+   struct ureg_program *ureg = ureg_create(PIPE_SHADER_FRAGMENT);
    if (!ureg)
       return NULL;
 
@@ -517,7 +517,7 @@ util_make_fragment_cloneinput_shader(struct pipe_context *pipe, int num_cbufs,
 
    assert(num_cbufs <= PIPE_MAX_COLOR_BUFS);
 
-   ureg = ureg_create( TGSI_PROCESSOR_FRAGMENT );
+   ureg = ureg_create( PIPE_SHADER_FRAGMENT );
    if (!ureg)
       return NULL;
 
@@ -566,7 +566,7 @@ util_make_fs_blit_msaa_gen(struct pipe_context *pipe,
    sprintf(text, shader_templ, type, samp_type,
            output_semantic, output_mask, type);
 
-   if (!tgsi_text_translate(text, tokens, Elements(tokens))) {
+   if (!tgsi_text_translate(text, tokens, ARRAY_SIZE(tokens))) {
       puts(text);
       assert(0);
       return NULL;
@@ -666,7 +666,7 @@ util_make_fs_blit_msaa_depthstencil(struct pipe_context *pipe,
 
    sprintf(text, shader_templ, type, type, type);
 
-   if (!tgsi_text_translate(text, tokens, Elements(tokens))) {
+   if (!tgsi_text_translate(text, tokens, ARRAY_SIZE(tokens))) {
       assert(0);
       return NULL;
    }
@@ -688,7 +688,7 @@ util_make_fs_msaa_resolve(struct pipe_context *pipe,
    struct ureg_dst out, tmp_sum, tmp_coord, tmp;
    int i;
 
-   ureg = ureg_create(TGSI_PROCESSOR_FRAGMENT);
+   ureg = ureg_create(PIPE_SHADER_FRAGMENT);
    if (!ureg)
       return NULL;
 
@@ -749,7 +749,7 @@ util_make_fs_msaa_resolve_bilinear(struct pipe_context *pipe,
    struct ureg_dst tmp_coord[4], tmp_sum[4];
    int i, c;
 
-   ureg = ureg_create(TGSI_PROCESSOR_FRAGMENT);
+   ureg = ureg_create(PIPE_SHADER_FRAGMENT);
    if (!ureg)
       return NULL;
 
@@ -848,7 +848,7 @@ util_make_geometry_passthrough_shader(struct pipe_context *pipe,
 
    unsigned i;
 
-   ureg = ureg_create(TGSI_PROCESSOR_GEOMETRY);
+   ureg = ureg_create(PIPE_SHADER_GEOMETRY);
    if (!ureg)
       return NULL;
 

@@ -197,8 +197,6 @@ enum SWR_OUTER_TESSFACTOR_ID
 #define VERTEX_CLIPCULL_DIST_LO_SLOT 35 // VS writes lower 4 clip/cull dist
 #define VERTEX_CLIPCULL_DIST_HI_SLOT 36 // VS writes upper 4 clip/cull dist
 #define VERTEX_POINT_SIZE_SLOT 37       // VS writes point size here
-static_assert(VERTEX_POINT_SIZE_SLOT < KNOB_NUM_ATTRIBUTES, "Mismatched attribute slot size");
-
 // SoAoSoA
 struct simdvertex
 {
@@ -497,7 +495,6 @@ struct SWR_SURFACE_STATE
     uint32_t lod;               // for render targets, the lod being rendered to
     uint32_t arrayIndex;        // for render targets, the array index being rendered to for arrayed surfaces
     SWR_TILE_MODE tileMode;     // @llvm_enum
-    bool bInterleavedSamples;   // are MSAA samples stored interleaved or planar
     uint32_t halign;
     uint32_t valign;
     uint32_t xOffset;
@@ -506,6 +503,8 @@ struct SWR_SURFACE_STATE
     uint32_t lodOffsets[2][15]; // lod offsets for sampled surfaces
 
     uint8_t *pAuxBaseAddress;   // Used for compression, append/consume counter, etc.
+
+    bool bInterleavedSamples;   // are MSAA samples stored interleaved or planar
 };
 
 // vertex fetch state
@@ -790,6 +789,7 @@ typedef void(__cdecl *PFN_SO_FUNC)(SWR_STREAMOUT_CONTEXT& soContext);
 typedef void(__cdecl *PFN_PIXEL_KERNEL)(HANDLE hPrivateData, SWR_PS_CONTEXT *pContext);
 typedef void(__cdecl *PFN_CPIXEL_KERNEL)(HANDLE hPrivateData, SWR_PS_CONTEXT *pContext);
 typedef void(__cdecl *PFN_BLEND_JIT_FUNC)(const SWR_BLEND_STATE*, simdvector&, simdvector&, uint32_t, uint8_t*, simdvector&, simdscalari*, simdscalari*);
+typedef simdscalar(*PFN_QUANTIZE_DEPTH)(simdscalar);
 
 //////////////////////////////////////////////////////////////////////////
 /// FRONTEND_STATE
@@ -896,22 +896,22 @@ enum SWR_MSAA_RASTMODE
 //////////////////////////////////////////////////////////////////////////
 struct SWR_RASTSTATE
 {
-    uint32_t cullMode : 2;
-    uint32_t fillMode : 2;
-    uint32_t frontWinding : 1;
-    uint32_t scissorEnable : 1;
-    uint32_t depthClipEnable : 1;
+    uint32_t cullMode               : 2;
+    uint32_t fillMode               : 2;
+    uint32_t frontWinding           : 1;
+    uint32_t scissorEnable          : 1;
+    uint32_t depthClipEnable        : 1;
+    uint32_t pointParam             : 1;
+    uint32_t pointSpriteEnable      : 1;
+    uint32_t pointSpriteTopOrigin   : 1;
+    uint32_t msaaRastEnable         : 1;
+    uint32_t forcedSampleCount      : 1;
+    uint32_t pixelOffset            : 1;
+    uint32_t depthBiasPreAdjusted   : 1;    ///< depth bias constant is in float units, not per-format Z units
+
     float pointSize;
     float lineWidth;
 
-    // point size output from the VS
-    bool pointParam;
-
-    // point sprite
-    bool pointSpriteEnable;
-    bool pointSpriteTopOrigin;
-
-    // depth bias
     float depthBias;
     float slopeScaledDepthBias;
     float depthBiasClamp;
@@ -919,14 +919,11 @@ struct SWR_RASTSTATE
 
     ///@todo: MSAA lines
     // multisample state for MSAA lines
-    bool msaaRastEnable;
     SWR_MSAA_RASTMODE rastMode;    // @llvm_enum
 
     // sample count the rasterizer is running at
     SWR_MULTISAMPLE_COUNT sampleCount;  // @llvm_enum
-    bool bForcedSampleCount;
     uint32_t pixelLocation;     // UL or Center
-    bool pixelOffset;           // offset pixel positions by .5 in both the horizontal and vertical direction
     SWR_MULTISAMPLE_POS iSamplePos[SWR_MAX_NUM_MULTISAMPLES];   
     SWR_MSAA_SAMPLE_PATTERN samplePattern;   // @llvm_enum
 

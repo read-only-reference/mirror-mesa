@@ -53,6 +53,13 @@ d = 'd'
 # For constants, you have to be careful to make sure that it is the right
 # type because python is unaware of the source and destination types of the
 # opcodes.
+#
+# All expression types can have a bit-size specified.  For opcodes, this
+# looks like "op@32", for variables it is "a@32" or "a@uint32" to specify a
+# type and size, and for literals, you can write "2.0@32".  In the search half
+# of the expression this indicates that it should only match that particular
+# bit-size.  In the replace half of the expression this indicates that the
+# constructed value should have that bit-size.
 
 optimizations = [
    (('fneg', ('fneg', a)), a),
@@ -90,13 +97,16 @@ optimizations = [
    (('~flrp', a, b, 1.0), b),
    (('~flrp', a, a, b), a),
    (('~flrp', 0.0, a, b), ('fmul', a, b)),
-   (('~flrp', a, b, ('b2f', c)), ('bcsel', c, b, a), 'options->lower_flrp'),
-   (('flrp', a, b, c), ('fadd', ('fmul', c, ('fsub', b, a)), a), 'options->lower_flrp'),
+   (('~flrp', a, b, ('b2f', c)), ('bcsel', c, b, a), 'options->lower_flrp32'),
+   (('flrp@32', a, b, c), ('fadd', ('fmul', c, ('fsub', b, a)), a), 'options->lower_flrp32'),
+   (('flrp@64', a, b, c), ('fadd', ('fmul', c, ('fsub', b, a)), a), 'options->lower_flrp64'),
    (('ffract', a), ('fsub', a, ('ffloor', a)), 'options->lower_ffract'),
-   (('~fadd', ('fmul', a, ('fadd', 1.0, ('fneg', ('b2f', c)))), ('fmul', b, ('b2f', c))), ('bcsel', c, b, a), 'options->lower_flrp'),
-   (('~fadd', ('fmul', a, ('fadd', 1.0, ('fneg',         c ))), ('fmul', b,         c )), ('flrp', a, b, c), '!options->lower_flrp'),
-   (('~fadd', a, ('fmul', ('b2f', c), ('fadd', b, ('fneg', a)))), ('bcsel', c, b, a), 'options->lower_flrp'),
-   (('~fadd', a, ('fmul',         c , ('fadd', b, ('fneg', a)))), ('flrp', a, b, c), '!options->lower_flrp'),
+   (('~fadd', ('fmul', a, ('fadd', 1.0, ('fneg', ('b2f', c)))), ('fmul', b, ('b2f', c))), ('bcsel', c, b, a), 'options->lower_flrp32'),
+   (('~fadd@32', ('fmul', a, ('fadd', 1.0, ('fneg',         c ))), ('fmul', b,         c )), ('flrp', a, b, c), '!options->lower_flrp32'),
+   (('~fadd@64', ('fmul', a, ('fadd', 1.0, ('fneg',         c ))), ('fmul', b,         c )), ('flrp', a, b, c), '!options->lower_flrp64'),
+   (('~fadd', a, ('fmul', ('b2f', c), ('fadd', b, ('fneg', a)))), ('bcsel', c, b, a), 'options->lower_flrp32'),
+   (('~fadd@32', a, ('fmul',         c , ('fadd', b, ('fneg', a)))), ('flrp', a, b, c), '!options->lower_flrp32'),
+   (('~fadd@64', a, ('fmul',         c , ('fadd', b, ('fneg', a)))), ('flrp', a, b, c), '!options->lower_flrp64'),
    (('ffma', a, b, c), ('fadd', ('fmul', a, b), c), 'options->lower_ffma'),
    (('~fadd', ('fmul', a, b), c), ('ffma', a, b, c), '!options->lower_ffma'),
    # Comparison simplifications
@@ -137,7 +147,10 @@ optimizations = [
    (('~fmax', ('fmin', a, 1.0), 0.0), ('fsat', a), '!options->lower_fsat'),
    (('fsat', a), ('fmin', ('fmax', a, 0.0), 1.0), 'options->lower_fsat'),
    (('fsat', ('fsat', a)), ('fsat', a)),
-   (('fmin', ('fmax', ('fmin', ('fmax', a, 0.0), 1.0), 0.0), 1.0), ('fmin', ('fmax', a, 0.0), 1.0)),
+   (('fmin', ('fmax', ('fmin', ('fmax', a, b), c), b), c), ('fmin', ('fmax', a, b), c)),
+   (('imin', ('imax', ('imin', ('imax', a, b), c), b), c), ('imin', ('imax', a, b), c)),
+   (('umin', ('umax', ('umin', ('umax', a, b), c), b), c), ('umin', ('umax', a, b), c)),
+   (('extract_u8', ('imin', ('imax', a, 0), 0xff), 0), ('imin', ('imax', a, 0), 0xff)),
    (('~ior', ('flt', a, b), ('flt', a, c)), ('flt', a, ('fmax', b, c))),
    (('~ior', ('flt', a, c), ('flt', b, c)), ('flt', ('fmin', a, b), c)),
    (('~ior', ('fge', a, b), ('fge', a, c)), ('fge', a, ('fmin', b, c))),
@@ -274,10 +287,19 @@ optimizations = [
    (('fmul', ('fneg', a), b), ('fneg', ('fmul', a, b))),
    (('imul', ('ineg', a), b), ('ineg', ('imul', a, b))),
 
+   # Reassociate constants in add/mul chains so they can be folded together.
+   # For now, we only handle cases where the constants are separated by
+   # a single non-constant.  We could do better eventually.
+   (('~fmul', '#a', ('fmul', b, '#c')), ('fmul', ('fmul', a, c), b)),
+   (('imul', '#a', ('imul', b, '#c')), ('imul', ('imul', a, c), b)),
+   (('~fadd', '#a', ('fadd', b, '#c')), ('fadd', ('fadd', a, c), b)),
+   (('iadd', '#a', ('iadd', b, '#c')), ('iadd', ('iadd', a, c), b)),
+
    # Misc. lowering
    (('fmod', a, b), ('fsub', a, ('fmul', b, ('ffloor', ('fdiv', a, b)))), 'options->lower_fmod'),
-   (('uadd_carry', a, b), ('b2i', ('ult', ('iadd', a, b), a)), 'options->lower_uadd_carry'),
-   (('usub_borrow', a, b), ('b2i', ('ult', a, b)), 'options->lower_usub_borrow'),
+   (('frem', a, b), ('fsub', a, ('fmul', b, ('ftrunc', ('fdiv', a, b)))), 'options->lower_fmod'),
+   (('uadd_carry@32', a, b), ('b2i', ('ult', ('iadd', a, b), a)), 'options->lower_uadd_carry'),
+   (('usub_borrow@32', a, b), ('b2i', ('ult', a, b)), 'options->lower_usub_borrow'),
 
    (('bitfield_insert', 'base', 'insert', 'offset', 'bits'),
     ('bcsel', ('ilt', 31, 'bits'), 'insert',
@@ -359,6 +381,50 @@ optimizations = [
      'options->lower_unpack_snorm_4x8'),
 ]
 
+def fexp2i(exp, bits):
+   # We assume that exp is already in the right range.
+   if bits == 32:
+      return ('ishl', ('iadd', exp, 127), 23)
+   elif bits == 64:
+      return ('pack_double_2x32_split', 0, ('ishl', ('iadd', exp, 1023), 20))
+   else:
+      assert False
+
+def ldexp(f, exp, bits):
+   # First, we clamp exp to a reasonable range.  The maximum possible range
+   # for a normal exponent is [-126, 127] and, throwing in denormals, you get
+   # a maximum range of [-149, 127].  This means that we can potentially have
+   # a swing of +-276.  If you start with FLT_MAX, you actually have to do
+   # ldexp(FLT_MAX, -278) to get it to flush all the way to zero.  The GLSL
+   # spec, on the other hand, only requires that we handle an exponent value
+   # in the range [-126, 128].  This implementation is *mostly* correct; it
+   # handles a range on exp of [-252, 254] which allows you to create any
+   # value (including denorms if the hardware supports it) and to adjust the
+   # exponent of any normal value to anything you want.
+   if bits == 32:
+      exp = ('imin', ('imax', exp, -252), 254)
+   elif bits == 64:
+      exp = ('imin', ('imax', exp, -2044), 2046)
+   else:
+      assert False
+
+   # Now we compute two powers of 2, one for exp/2 and one for exp-exp/2.
+   # (We use ishr which isn't the same for -1, but the -1 case still works
+   # since we use exp-exp/2 as the second exponent.)  While the spec
+   # technically defines ldexp as f * 2.0^exp, simply multiplying once doesn't
+   # work with denormals and doesn't allow for the full swing in exponents
+   # that you can get with normalized values.  Instead, we create two powers
+   # of two and multiply by them each in turn.  That way the effective range
+   # of our exponent is doubled.
+   pow2_1 = fexp2i(('ishr', exp, 1), bits)
+   pow2_2 = fexp2i(('isub', exp, ('ishr', exp, 1)), bits)
+   return ('fmul', ('fmul', f, pow2_1), pow2_2)
+
+optimizations += [
+   (('ldexp@32', 'x', 'exp'), ldexp('x', 'exp', 32)),
+   (('ldexp@64', 'x', 'exp'), ldexp('x', 'exp', 64)),
+]
+
 # Unreal Engine 4 demo applications open-codes bitfieldReverse()
 def bitfield_reverse(u):
     step1 = ('ior', ('ishl', u, 16), ('ushr', u, 16))
@@ -369,7 +435,7 @@ def bitfield_reverse(u):
 
     return step5
 
-optimizations += [(bitfield_reverse('x'), ('bitfield_reverse', 'x'))]
+optimizations += [(bitfield_reverse('x@32'), ('bitfield_reverse', 'x'))]
 
 
 # Add optimizations to handle the case where the result of a ternary is

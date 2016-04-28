@@ -2295,30 +2295,6 @@ struct gl_shader
     */
    unsigned num_combined_uniform_components;
 
-   /**
-    * This shader's uniform/ssbo block information.
-    *
-    * These fields are only set post-linking.
-    *
-    * BufferInterfaceBlocks is a list containing both UBOs and SSBOs. This is
-    * useful during the linking process so that we don't have to handle SSBOs
-    * specifically.
-    *
-    * UniformBlocks is a list of UBOs. This is useful for backends that need
-    * or prefer to see separate index spaces for UBOS and SSBOs like the GL
-    * API specifies.
-    *
-    * ShaderStorageBlocks is a list of SSBOs. This is useful for backends that
-    * need or prefer to see separate index spaces for UBOS and SSBOs like the
-    * GL API specifies.
-    *
-    * UniformBlocks and ShaderStorageBlocks only have pointers into
-    * BufferInterfaceBlocks so the actual resource information is not
-    * duplicated.
-    */
-   unsigned NumBufferInterfaceBlocks;
-   struct gl_uniform_block **BufferInterfaceBlocks;
-
    unsigned NumUniformBlocks;
    struct gl_uniform_block **UniformBlocks;
 
@@ -2524,10 +2500,8 @@ struct gl_uniform_block
     */
    GLuint UniformBufferSize;
 
-   /**
-    * Is this actually an interface block for a shader storage buffer?
-    */
-   bool IsShaderStorage;
+   /** Stages that reference this block */
+   uint8_t stageref;
 
    /**
     * Layout specified in the shader
@@ -2801,43 +2775,11 @@ struct gl_shader_program
     */
    unsigned LastClipDistanceArraySize;
 
-   /**
-    * This shader's uniform/ssbo block information.
-    *
-    * BufferInterfaceBlocks is a list containing both UBOs and SSBOs. This is
-    * useful during the linking process so that we don't have to handle SSBOs
-    * specifically.
-    *
-    * UniformBlocks is a list of UBOs. This is useful for backends that need
-    * or prefer to see separate index spaces for UBOS and SSBOs like the GL
-    * API specifies.
-    *
-    * ShaderStorageBlocks is a list of SSBOs. This is useful for backends that
-    * need or prefer to see separate index spaces for UBOS and SSBOs like the
-    * GL API specifies.
-    *
-    * UniformBlocks and ShaderStorageBlocks only have pointers into
-    * BufferInterfaceBlocks so the actual resource information is not
-    * duplicated and are only set after linking.
-    */
-   unsigned NumBufferInterfaceBlocks;
-   struct gl_uniform_block *BufferInterfaceBlocks;
-
    unsigned NumUniformBlocks;
-   struct gl_uniform_block **UniformBlocks;
+   struct gl_uniform_block *UniformBlocks;
 
    unsigned NumShaderStorageBlocks;
-   struct gl_uniform_block **ShaderStorageBlocks;
-
-   /**
-    * Indices into the BufferInterfaceBlocks[] array for each stage they're
-    * used in, or -1.
-    *
-    * This is used to maintain the Binding values of the stage's
-    * BufferInterfaceBlocks[] and to answer the
-    * GL_UNIFORM_BLOCK_REFERENCED_BY_*_SHADER queries.
-    */
-   int *InterfaceBlockStageIndex[MESA_SHADER_STAGES];
+   struct gl_uniform_block *ShaderStorageBlocks;
 
    /**
     * Map of active uniform names to locations
@@ -3781,6 +3723,8 @@ struct gl_extensions
    GLboolean ANGLE_texture_compression_dxt;
    GLboolean ARB_ES2_compatibility;
    GLboolean ARB_ES3_compatibility;
+   GLboolean ARB_ES3_1_compatibility;
+   GLboolean ARB_ES3_2_compatibility;
    GLboolean ARB_arrays_of_arrays;
    GLboolean ARB_base_instance;
    GLboolean ARB_blend_func_extended;
@@ -3823,6 +3767,7 @@ struct gl_extensions
    GLboolean ARB_pipeline_statistics_query;
    GLboolean ARB_point_sprite;
    GLboolean ARB_query_buffer_object;
+   GLboolean ARB_robust_buffer_access_behavior;
    GLboolean ARB_sample_shading;
    GLboolean ARB_seamless_cube_map;
    GLboolean ARB_shader_atomic_counter_ops;

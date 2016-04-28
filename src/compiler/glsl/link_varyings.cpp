@@ -240,7 +240,16 @@ cross_validate_types_and_qualifiers(struct gl_shader_program *prog,
 
    /* Check that all of the qualifiers match between stages.
     */
-   if (input->data.centroid != output->data.centroid) {
+
+   /* According to the OpenGL and OpenGLES GLSL specs, the centroid qualifier
+    * should match until OpenGL 4.3 and OpenGLES 3.1. The OpenGLES 3.0
+    * conformance test suite does not verify that the qualifiers must match.
+    * The deqp test suite expects the opposite (OpenGLES 3.1) behavior for
+    * OpenGLES 3.0 drivers, so we relax the checking in all cases.
+    */
+   if (false /* always skip the centroid check */ &&
+       prog->Version < (prog->IsES ? 310 : 430) &&
+       input->data.centroid != output->data.centroid) {
       linker_error(prog,
                    "%s shader output `%s' %s centroid qualifier, "
                    "but %s shader input %s centroid qualifier\n",
@@ -358,18 +367,24 @@ cross_validate_outputs_to_inputs(struct gl_shader_program *prog,
          /* User-defined varyings with explicit locations are handled
           * differently because they do not need to have matching names.
           */
-         const unsigned idx = var->data.location - VARYING_SLOT_VAR0;
+         const glsl_type *type = get_varying_type(var, producer->Stage);
+         unsigned num_elements = type->count_attribute_slots(false);
+         unsigned idx = var->data.location - VARYING_SLOT_VAR0;
+         unsigned slot_limit = idx + num_elements;
 
-         if (explicit_locations[idx] != NULL) {
-            linker_error(prog,
+         while (idx < slot_limit) {
+            if (explicit_locations[idx] != NULL) {
+               linker_error(prog,
                          "%s shader has multiple outputs explicitly "
                          "assigned to location %d\n",
                          _mesa_shader_stage_to_string(producer->Stage),
                          idx);
-            return;
-         }
+               return;
+            }
 
-         explicit_locations[idx] = var;
+            explicit_locations[idx] = var;
+            idx++;
+         }
       }
    }
 
@@ -417,14 +432,25 @@ cross_validate_outputs_to_inputs(struct gl_shader_program *prog,
          ir_variable *output = NULL;
          if (input->data.explicit_location
              && input->data.location >= VARYING_SLOT_VAR0) {
-            output = explicit_locations[input->data.location - VARYING_SLOT_VAR0];
 
-            if (output == NULL) {
-               linker_error(prog,
-                            "%s shader input `%s' with explicit location "
-                            "has no matching output\n",
-                            _mesa_shader_stage_to_string(consumer->Stage),
-                            input->name);
+            const glsl_type *type = get_varying_type(input, consumer->Stage);
+            unsigned num_elements = type->count_attribute_slots(false);
+            unsigned idx = input->data.location - VARYING_SLOT_VAR0;
+            unsigned slot_limit = idx + num_elements;
+
+            while (idx < slot_limit) {
+               output = explicit_locations[idx];
+
+               if (output == NULL ||
+                   input->data.location != output->data.location) {
+                  linker_error(prog,
+                               "%s shader input `%s' with explicit location "
+                               "has no matching output\n",
+                               _mesa_shader_stage_to_string(consumer->Stage),
+                               input->name);
+                  break;
+               }
+               idx++;
             }
          } else {
             output = parameters.get_variable(input->name);
@@ -479,7 +505,7 @@ remove_unused_shader_inputs_and_outputs(bool is_separate_shader_object,
        * its value is used by other shader stages. This will cause the
        * variable to have a location assigned.
        */
-      if (var->data.is_unmatched_generic_inout) {
+      if (var->data.is_unmatched_generic_inout && !var->data.is_xfb_only) {
          assert(var->data.mode != ir_var_temporary);
          var->data.mode = ir_var_auto;
       }

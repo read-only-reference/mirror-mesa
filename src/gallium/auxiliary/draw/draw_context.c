@@ -556,7 +556,7 @@ draw_alloc_extra_vertex_attrib(struct draw_context *draw,
    num_outputs = draw_current_shader_outputs(draw);
    n = draw->extra_shader_outputs.num;
 
-   assert(n < Elements(draw->extra_shader_outputs.semantic_name));
+   assert(n < ARRAY_SIZE(draw->extra_shader_outputs.semantic_name));
 
    draw->extra_shader_outputs.semantic_name[n] = semantic_name;
    draw->extra_shader_outputs.semantic_index[n] = semantic_index;
@@ -749,7 +749,23 @@ draw_image(struct draw_context *draw,
    }
 }
 
-
+/**
+ * Provide TGSI buffer objects for vertex/geometry shaders that use
+ * load/store/atomic ops.  This state only needs to be set once per context.
+ * This might only be used by software drivers for the time being.
+ */
+void
+draw_buffer(struct draw_context *draw,
+            uint shader,
+            struct tgsi_buffer *buffer)
+{
+   if (shader == PIPE_SHADER_VERTEX) {
+      draw->vs.tgsi.buffer = buffer;
+   } else {
+      debug_assert(shader == PIPE_SHADER_GEOMETRY);
+      draw->gs.tgsi.buffer = buffer;
+   }
+}
 
 
 void draw_set_render( struct draw_context *draw, 

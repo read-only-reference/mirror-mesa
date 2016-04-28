@@ -445,6 +445,18 @@ void st_init_limits(struct pipe_screen *screen,
       extensions->ARB_shader_image_load_store = GL_TRUE;
       extensions->ARB_shader_image_size = GL_TRUE;
    }
+
+   /* ARB_framebuffer_no_attachments */
+   c->MaxFramebufferWidth   = c->MaxViewportWidth;
+   c->MaxFramebufferHeight  = c->MaxViewportHeight;
+   /* NOTE: we cheat here a little by assuming that
+    * PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS has the same
+    * number of layers as we need, although we technically
+    * could have more the generality is not really useful
+    * in practicality.
+    */
+   c->MaxFramebufferLayers =
+      screen->get_param(screen, PIPE_CAP_MAX_TEXTURE_ARRAY_LAYERS);
 }
 
 
@@ -577,6 +589,7 @@ void st_init_extensions(struct pipe_screen *screen,
       { o(ARB_pipeline_statistics_query),    PIPE_CAP_QUERY_PIPELINE_STATISTICS        },
       { o(ARB_point_sprite),                 PIPE_CAP_POINT_SPRITE                     },
       { o(ARB_query_buffer_object),          PIPE_CAP_QUERY_BUFFER_OBJECT              },
+      { o(ARB_robust_buffer_access_behavior), PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR   },
       { o(ARB_sample_shading),               PIPE_CAP_SAMPLE_SHADING                   },
       { o(ARB_seamless_cube_map),            PIPE_CAP_SEAMLESS_CUBE_MAP                },
       { o(ARB_shader_draw_parameters),       PIPE_CAP_DRAW_PARAMETERS                  },
@@ -956,6 +969,9 @@ void st_init_extensions(struct pipe_screen *screen,
       enum pipe_format int_formats[] = {
          PIPE_FORMAT_R8G8B8A8_SINT
       };
+      enum pipe_format void_formats[] = {
+         PIPE_FORMAT_NONE
+      };
 
       consts->MaxSamples =
          get_max_samples_for_formats(screen, ARRAY_SIZE(color_formats),
@@ -976,6 +992,12 @@ void st_init_extensions(struct pipe_screen *screen,
          get_max_samples_for_formats(screen, ARRAY_SIZE(int_formats),
                                      int_formats, consts->MaxSamples,
                                      PIPE_BIND_SAMPLER_VIEW);
+
+      /* ARB_framebuffer_no_attachments, assume max no. of samples 32 */
+      consts->MaxFramebufferSamples =
+         get_max_samples_for_formats(screen, ARRAY_SIZE(void_formats),
+                                     void_formats, 32,
+                                     PIPE_BIND_RENDER_TARGET);
    }
    if (consts->MaxSamples == 1) {
       /* one sample doesn't really make sense */
@@ -1068,6 +1090,13 @@ void st_init_extensions(struct pipe_screen *screen,
          extensions->AMD_vertex_shader_viewport_index = GL_TRUE;
    }
 
+   /* ARB_framebuffer_no_attachments */
+   if (screen->get_param(screen, PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT) &&
+       ((consts->MaxSamples >= 4 && consts->MaxFramebufferLayers >= 2048) ||
+        (consts->MaxFramebufferSamples >= consts->MaxSamples &&
+         consts->MaxFramebufferLayers >= consts->MaxArrayTextureLayers)))
+      extensions->ARB_framebuffer_no_attachments = GL_TRUE;
+
    /* GL_ARB_ES3_compatibility.
     *
     * Assume that ES3 is supported if GLSL 3.30 is supported.
@@ -1123,24 +1152,30 @@ void st_init_extensions(struct pipe_screen *screen,
                                   PIPE_SHADER_CAP_SUPPORTED_IRS);
       if (compute_supported_irs & (1 << PIPE_SHADER_IR_TGSI)) {
          uint64_t grid_size[3], block_size[3];
+         uint64_t max_local_size, max_threads_per_block;
 
-         screen->get_compute_param(screen, PIPE_COMPUTE_CAP_MAX_GRID_SIZE,
-                                   grid_size);
-         screen->get_compute_param(screen, PIPE_COMPUTE_CAP_MAX_BLOCK_SIZE,
-                                   block_size);
-         screen->get_compute_param(screen,
+         screen->get_compute_param(screen, PIPE_SHADER_IR_TGSI,
+                                   PIPE_COMPUTE_CAP_MAX_GRID_SIZE, grid_size);
+         screen->get_compute_param(screen, PIPE_SHADER_IR_TGSI,
+                                   PIPE_COMPUTE_CAP_MAX_BLOCK_SIZE, block_size);
+         screen->get_compute_param(screen, PIPE_SHADER_IR_TGSI,
                                    PIPE_COMPUTE_CAP_MAX_THREADS_PER_BLOCK,
-                                   &consts->MaxComputeWorkGroupInvocations);
-         screen->get_compute_param(screen, PIPE_COMPUTE_CAP_MAX_LOCAL_SIZE,
-                                   &consts->MaxComputeSharedMemorySize);
+                                   &max_threads_per_block);
+         screen->get_compute_param(screen, PIPE_SHADER_IR_TGSI,
+                                   PIPE_COMPUTE_CAP_MAX_LOCAL_SIZE,
+                                   &max_local_size);
+
+         consts->MaxComputeWorkGroupInvocations = max_threads_per_block;
+         consts->MaxComputeSharedMemorySize = max_local_size;
 
          for (i = 0; i < 3; i++) {
             consts->MaxComputeWorkGroupCount[i] = grid_size[i];
             consts->MaxComputeWorkGroupSize[i] = block_size[i];
          }
-         /* XXX: ARB_compute_shader is not enabled by default because images
-          * support is still not implemented yet. */
-         /* extensions->ARB_compute_shader = true; */
+
+         extensions->ARB_compute_shader =
+                                      extensions->ARB_shader_image_load_store &&
+                                      extensions->ARB_shader_atomic_counters;
       }
    }
 }

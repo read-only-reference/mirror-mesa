@@ -582,6 +582,53 @@ brw_abs_immediate(enum brw_reg_type type, struct brw_reg *reg)
    return false;
 }
 
+unsigned
+tesslevel_outer_components(GLenum tes_primitive_mode)
+{
+   switch (tes_primitive_mode) {
+   case GL_QUADS:
+      return 4;
+   case GL_TRIANGLES:
+      return 3;
+   case GL_ISOLINES:
+      return 2;
+   default:
+      unreachable("Bogus tessellation domain");
+   }
+   return 0;
+}
+
+unsigned
+tesslevel_inner_components(GLenum tes_primitive_mode)
+{
+   switch (tes_primitive_mode) {
+   case GL_QUADS:
+      return 2;
+   case GL_TRIANGLES:
+      return 1;
+   case GL_ISOLINES:
+      return 0;
+   default:
+      unreachable("Bogus tessellation domain");
+   }
+   return 0;
+}
+
+/**
+ * Given a normal .xyzw writemask, convert it to a writemask for a vector
+ * that's stored backwards, i.e. .wzyx.
+ */
+unsigned
+writemask_for_backwards_vector(unsigned mask)
+{
+   unsigned new_mask = 0;
+
+   for (int i = 0; i < 4; i++)
+      new_mask |= ((mask >> i) & 1) << (3 - i);
+
+   return new_mask;
+}
+
 backend_shader::backend_shader(const struct brw_compiler *compiler,
                                void *log_data,
                                void *mem_ctx,
@@ -710,7 +757,8 @@ backend_instruction::is_tex() const
            opcode == SHADER_OPCODE_TXS ||
            opcode == SHADER_OPCODE_LOD ||
            opcode == SHADER_OPCODE_TG4 ||
-           opcode == SHADER_OPCODE_TG4_OFFSET);
+           opcode == SHADER_OPCODE_TG4_OFFSET ||
+           opcode == SHADER_OPCODE_SAMPLEINFO);
 }
 
 bool
@@ -914,6 +962,9 @@ backend_instruction::is_volatile() const
    case SHADER_OPCODE_UNTYPED_SURFACE_READ_LOGICAL:
    case SHADER_OPCODE_TYPED_SURFACE_READ:
    case SHADER_OPCODE_TYPED_SURFACE_READ_LOGICAL:
+   case SHADER_OPCODE_URB_READ_SIMD8:
+   case SHADER_OPCODE_URB_READ_SIMD8_PER_SLOT:
+   case VEC4_OPCODE_URB_READ:
       return true;
    default:
       return false;
@@ -938,7 +989,7 @@ static void
 adjust_later_block_ips(bblock_t *start_block, int ip_adjustment)
 {
    for (bblock_t *block_iter = start_block->next();
-        !block_iter->link.is_tail_sentinel();
+        block_iter;
         block_iter = block_iter->next()) {
       block_iter->start_ip += ip_adjustment;
       block_iter->end_ip += ip_adjustment;

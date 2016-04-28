@@ -40,6 +40,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <inttypes.h>
 
 static inline struct radeon_bo *radeon_bo(struct pb_buffer *bo)
 {
@@ -297,8 +298,8 @@ void radeon_bo_destroy(struct pb_buffer *_buf)
 				    sizeof(va)) != 0 &&
 		va.operation == RADEON_VA_RESULT_ERROR) {
                 fprintf(stderr, "radeon: Failed to deallocate virtual address for buffer:\n");
-                fprintf(stderr, "radeon:    size      : %d bytes\n", bo->base.size);
-                fprintf(stderr, "radeon:    va        : 0x%016llx\n", (unsigned long long)bo->va);
+                fprintf(stderr, "radeon:    size      : %"PRIu64" bytes\n", bo->base.size);
+                fprintf(stderr, "radeon:    va        : 0x%"PRIx64"\n", bo->va);
             }
 	}
 
@@ -529,10 +530,10 @@ static struct radeon_bo *radeon_create_bo(struct radeon_drm_winsys *rws,
     if (drmCommandWriteRead(rws->fd, DRM_RADEON_GEM_CREATE,
                             &args, sizeof(args))) {
         fprintf(stderr, "radeon: Failed to allocate a buffer:\n");
-        fprintf(stderr, "radeon:    size      : %d bytes\n", size);
-        fprintf(stderr, "radeon:    alignment : %d bytes\n", alignment);
-        fprintf(stderr, "radeon:    domains   : %d\n", args.initial_domain);
-        fprintf(stderr, "radeon:    flags     : %d\n", args.flags);
+        fprintf(stderr, "radeon:    size      : %u bytes\n", size);
+        fprintf(stderr, "radeon:    alignment : %u bytes\n", alignment);
+        fprintf(stderr, "radeon:    domains   : %u\n", args.initial_domain);
+        fprintf(stderr, "radeon:    flags     : %u\n", args.flags);
         return NULL;
     }
 
@@ -717,15 +718,18 @@ static void radeon_bo_set_metadata(struct pb_buffer *_buf,
 
 static struct pb_buffer *
 radeon_winsys_bo_create(struct radeon_winsys *rws,
-                        unsigned size,
+                        uint64_t size,
                         unsigned alignment,
-                        boolean use_reusable_pool,
                         enum radeon_bo_domain domain,
                         enum radeon_bo_flag flags)
 {
     struct radeon_drm_winsys *ws = radeon_drm_winsys(rws);
     struct radeon_bo *bo;
     unsigned usage = 0;
+
+    /* Only 32-bit sizes are supported. */
+    if (size > UINT_MAX)
+        return NULL;
 
     /* Align size to page size. This is the minimum alignment for normal
      * BOs. Aligning this here helps the cached bufmgr. Especially small BOs,
@@ -743,11 +747,9 @@ radeon_winsys_bo_create(struct radeon_winsys *rws,
     assert(flags < sizeof(usage) * 8 - 3);
     usage |= 1 << (flags + 3);
 
-    if (use_reusable_pool) {
-        bo = radeon_bo(pb_cache_reclaim_buffer(&ws->bo_cache, size, alignment, usage));
-        if (bo)
-            return &bo->base;
-    }
+    bo = radeon_bo(pb_cache_reclaim_buffer(&ws->bo_cache, size, alignment, usage));
+    if (bo)
+        return &bo->base;
 
     bo = radeon_create_bo(ws, size, alignment, usage, domain, flags);
     if (!bo) {
@@ -758,7 +760,7 @@ radeon_winsys_bo_create(struct radeon_winsys *rws,
             return NULL;
     }
 
-    bo->use_reusable_pool = use_reusable_pool;
+    bo->use_reusable_pool = true;
 
     pipe_mutex_lock(ws->bo_handles_mutex);
     util_hash_table_set(ws->bo_handles, (void*)(uintptr_t)bo->handle, bo);
@@ -768,7 +770,7 @@ radeon_winsys_bo_create(struct radeon_winsys *rws,
 }
 
 static struct pb_buffer *radeon_winsys_bo_from_ptr(struct radeon_winsys *rws,
-                                                   void *pointer, unsigned size)
+                                                   void *pointer, uint64_t size)
 {
     struct radeon_drm_winsys *ws = radeon_drm_winsys(rws);
     struct drm_radeon_gem_userptr args;

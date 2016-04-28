@@ -98,7 +98,7 @@ vc4_nir_get_vattr_channel_vpm(struct vc4_compile *c,
                 &desc->channel[swiz];
         nir_ssa_def *temp;
 
-        if (swiz > UTIL_FORMAT_SWIZZLE_W) {
+        if (swiz > PIPE_SWIZZLE_W) {
                 return vc4_nir_get_swizzled_channel(b, vpm_reads, swiz);
         } else if (chan->size == 32 && chan->type == UTIL_FORMAT_TYPE_FLOAT) {
                 return vc4_nir_get_swizzled_channel(b, vpm_reads, swiz);
@@ -380,24 +380,14 @@ vc4_nir_lower_uniform(struct vc4_compile *c, nir_builder *b,
                 intr_comp->num_components = 1;
                 nir_ssa_dest_init(&intr_comp->instr, &intr_comp->dest, 1, 32, NULL);
 
-                /* Convert the uniform (not user_clip_plane) offset to bytes.
-                 * If it happens to be a constant, constant-folding will clean
-                 * up the shift for us.
+                /* Convert the uniform offset to bytes.  If it happens to be a
+                 * constant, constant-folding will clean up the shift for us.
                  */
-                if (intr->intrinsic == nir_intrinsic_load_uniform) {
-                        /* Convert the base offset to bytes and add the
-                         * component
-                         */
-                        intr_comp->const_index[0] = (intr->const_index[0] * 16 + i * 4);
+                intr_comp->const_index[0] = (intr->const_index[0] * 16 + i * 4);
 
-                        intr_comp->src[0] =
-                                nir_src_for_ssa(nir_ishl(b, intr->src[0].ssa,
-                                                         nir_imm_int(b, 4)));
-                } else {
-                        assert(intr->intrinsic ==
-                               nir_intrinsic_load_user_clip_plane);
-                        intr_comp->const_index[0] = intr->const_index[0] * 4 + i;
-                }
+                intr_comp->src[0] =
+                        nir_src_for_ssa(nir_ishl(b, intr->src[0].ssa,
+                                                 nir_imm_int(b, 4)));
 
                 dests[i] = &intr_comp->dest.ssa;
 
@@ -428,10 +418,10 @@ vc4_nir_lower_io_instr(struct vc4_compile *c, nir_builder *b,
                 break;
 
         case nir_intrinsic_load_uniform:
-        case nir_intrinsic_load_user_clip_plane:
                 vc4_nir_lower_uniform(c, b, intr);
                 break;
 
+        case nir_intrinsic_load_user_clip_plane:
         default:
                 break;
         }
@@ -447,7 +437,7 @@ vc4_nir_lower_io_block(nir_block *block, void *arg)
         nir_builder b;
         nir_builder_init(&b, impl);
 
-        nir_foreach_instr_safe(block, instr)
+        nir_foreach_instr_safe(instr, block)
                 vc4_nir_lower_io_instr(c, &b, instr);
 
         return true;
@@ -456,7 +446,7 @@ vc4_nir_lower_io_block(nir_block *block, void *arg)
 static bool
 vc4_nir_lower_io_impl(struct vc4_compile *c, nir_function_impl *impl)
 {
-        nir_foreach_block(impl, vc4_nir_lower_io_block, c);
+        nir_foreach_block_call(impl, vc4_nir_lower_io_block, c);
 
         nir_metadata_preserve(impl, nir_metadata_block_index |
                               nir_metadata_dominance);
@@ -465,9 +455,9 @@ vc4_nir_lower_io_impl(struct vc4_compile *c, nir_function_impl *impl)
 }
 
 void
-vc4_nir_lower_io(struct vc4_compile *c)
+vc4_nir_lower_io(nir_shader *s, struct vc4_compile *c)
 {
-        nir_foreach_function(c->s, function) {
+        nir_foreach_function(function, s) {
                 if (function->impl)
                         vc4_nir_lower_io_impl(c, function->impl);
         }

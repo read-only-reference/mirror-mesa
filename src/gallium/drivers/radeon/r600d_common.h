@@ -89,6 +89,7 @@
 #define EVENT_TYPE_SAMPLE_PIPELINESTAT		30
 #define EVENT_TYPE_SO_VGTSTREAMOUT_FLUSH	0x1f
 #define EVENT_TYPE_SAMPLE_STREAMOUTSTATS	0x20
+#define EVENT_TYPE_BOTTOM_OF_PIPE_TS		40
 #define EVENT_TYPE_FLUSH_AND_INV_DB_META       0x2c /* supported on r700+ */
 #define EVENT_TYPE_FLUSH_AND_INV_CB_META	46 /* supported on r700+ */
 #define		EVENT_TYPE(x)                           ((x) << 0)
@@ -219,5 +220,26 @@
 
 /*CIK+*/
 #define R_0300FC_CP_STRMOUT_CNTL		     0x0300FC
+
+#define R600_R_028C0C_PA_CL_GB_VERT_CLIP_ADJ         0x028C0C
+#define CM_R_028BE8_PA_CL_GB_VERT_CLIP_ADJ           0x28be8
+#define R_02843C_PA_CL_VPORT_XSCALE                  0x02843C
+
+#define R_028250_PA_SC_VPORT_SCISSOR_0_TL                               0x028250
+#define   S_028250_TL_X(x)                                            (((x) & 0x7FFF) << 0)
+#define   G_028250_TL_X(x)                                            (((x) >> 0) & 0x7FFF)
+#define   C_028250_TL_X                                               0xFFFF8000
+#define   S_028250_TL_Y(x)                                            (((x) & 0x7FFF) << 16)
+#define   G_028250_TL_Y(x)                                            (((x) >> 16) & 0x7FFF)
+#define   C_028250_TL_Y                                               0x8000FFFF
+#define   S_028250_WINDOW_OFFSET_DISABLE(x)                           (((x) & 0x1) << 31)
+#define   G_028250_WINDOW_OFFSET_DISABLE(x)                           (((x) >> 31) & 0x1)
+#define   C_028250_WINDOW_OFFSET_DISABLE                              0x7FFFFFFF
+#define   S_028254_BR_X(x)                                            (((x) & 0x7FFF) << 0)
+#define   G_028254_BR_X(x)                                            (((x) >> 0) & 0x7FFF)
+#define   C_028254_BR_X                                               0xFFFF8000
+#define   S_028254_BR_Y(x)                                            (((x) & 0x7FFF) << 16)
+#define   G_028254_BR_Y(x)                                            (((x) >> 16) & 0x7FFF)
+#define   C_028254_BR_Y                                               0x8000FFFF
 
 #endif

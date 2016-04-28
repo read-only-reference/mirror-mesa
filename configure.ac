@@ -99,6 +99,7 @@ AM_PROG_CC_C_O
 AM_PROG_AS
 AX_CHECK_GNU_MAKE
 AC_CHECK_PROGS([PYTHON2], [python2.7 python2 python])
+AC_CHECK_PROGS([PYTHON3], [python3.5 python3.4 python3])
 AC_PROG_SED
 AC_PROG_MKDIR_P
 
@@ -110,10 +111,10 @@ LT_INIT([disable-static])
 AC_CHECK_PROG(RM, rm, [rm -f])
 
 AX_PROG_BISON([],
-              AS_IF([test ! -f "$srcdir/src/glsl/glcpp/glcpp-parse.c"],
+              AS_IF([test ! -f "$srcdir/src/compiler/glsl/glcpp/glcpp-parse.c"],
                     [AC_MSG_ERROR([bison not found - unable to compile glcpp-parse.y])]))
 AX_PROG_FLEX([],
-             AS_IF([test ! -f "$srcdir/src/glsl/glcpp/glcpp-lex.c"],
+             AS_IF([test ! -f "$srcdir/src/compiler/glsl/glcpp/glcpp-lex.c"],
                    [AC_MSG_ERROR([flex not found - unable to compile glcpp-lex.l])]))
 
 AC_CHECK_PROG(INDENT, indent, indent, cat)
@@ -1545,6 +1546,56 @@ if test -n "$with_dri_drivers"; then
     DRI_DIRS=`echo $DRI_DIRS|tr " " "\n"|sort -u|tr "\n" " "`
 fi
 
+
+#
+# Vulkan driver configuration
+#
+
+AC_ARG_WITH([vulkan-drivers],
+    [AS_HELP_STRING([--with-vulkan-drivers@<:@=DIRS...@:>@],
+        [comma delimited Vulkan drivers list, e.g.
+        "intel"
+        @<:@default=no@:>@])],
+    [with_vulkan_drivers="$withval"],
+    [with_vulkan_drivers="no"])
+
+# Doing '--without-vulkan-drivers' will set this variable to 'no'.  Clear it
+# here so that the script doesn't choke on an unknown driver name later.
+case "x$with_vulkan_drivers" in
+    xyes) with_vulkan_drivers="$VULKAN_DRIVERS_DEFAULT" ;;
+    xno) with_vulkan_drivers='' ;;
+esac
+
+AC_ARG_WITH([vulkan-icddir],
+    [AS_HELP_STRING([--with-vulkan-icddir=DIR],
+        [directory for the Vulkan driver icd files @<:@${sysconfdir}/vulkan/icd.d@:>@])],
+    [VULKAN_ICD_INSTALL_DIR="$withval"],
+    [VULKAN_ICD_INSTALL_DIR='${sysconfdir}/vulkan/icd.d'])
+AC_SUBST([VULKAN_ICD_INSTALL_DIR])
+
+if test -n "$with_vulkan_drivers"; then
+    VULKAN_DRIVERS=`IFS=', '; echo $with_vulkan_drivers`
+    for driver in $VULKAN_DRIVERS; do
+        case "x$driver" in
+        xintel)
+            if test "x$HAVE_I965_DRI" != xyes; then
+                AC_MSG_ERROR([Intel Vulkan driver requires the i965 dri driver])
+            fi
+            if test "x$with_sha1" == "x"; then
+                AC_MSG_ERROR([Intel Vulkan driver requires SHA1])
+            fi
+            HAVE_INTEL_VULKAN=yes;
+
+            ;;
+        *)
+            AC_MSG_ERROR([Vulkan driver '$driver' does not exist])
+            ;;
+        esac
+    done
+    VULKAN_DRIVERS=`echo $VULKAN_DRIVERS|tr " " "\n"|sort -u|tr "\n" " "`
+fi
+
+
 AM_CONDITIONAL(NEED_MEGADRIVER, test -n "$DRI_DIRS")
 AM_CONDITIONAL(NEED_LIBMESA, test "x$enable_xlib_glx" = xyes -o \
                                   "x$enable_osmesa" = xyes -o \
@@ -2265,14 +2316,19 @@ if test -n "$with_gallium_drivers"; then
             fi
             ;;
         xswr)
-            AX_CXX_COMPILE_STDCXX([11], [noext], [mandatory])
             swr_llvm_check "swr"
 
-            AC_MSG_CHECKING([whether $CXX supports AVX/AVX2])
+            AC_MSG_CHECKING([whether $CXX supports c++11/AVX/AVX2])
             AVX_CXXFLAGS="-march=core-avx-i"
             AVX2_CXXFLAGS="-march=core-avx2"
 
             AC_LANG_PUSH([C++])
+            save_CXXFLAGS="$CXXFLAGS"
+            CXXFLAGS="-std=c++11 $CXXFLAGS"
+            AC_COMPILE_IFELSE([AC_LANG_PROGRAM()],[],
+                              [AC_MSG_ERROR([c++11 compiler support not detected])])
+            CXXFLAGS="$save_CXXFLAGS"
+
             save_CXXFLAGS="$CXXFLAGS"
             CXXFLAGS="$AVX_CXXFLAGS $CXXFLAGS"
             AC_COMPILE_IFELSE([AC_LANG_PROGRAM()],[],
@@ -2378,6 +2434,9 @@ AM_CONDITIONAL(HAVE_GALLIUM_FREEDRENO, test "x$HAVE_GALLIUM_FREEDRENO" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_SOFTPIPE, test "x$HAVE_GALLIUM_SOFTPIPE" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_LLVMPIPE, test "x$HAVE_GALLIUM_LLVMPIPE" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_SWR, test "x$HAVE_GALLIUM_SWR" = xyes)
+AM_CONDITIONAL(HAVE_GALLIUM_SWRAST, test "x$HAVE_GALLIUM_SOFTPIPE" = xyes -o \
+                                         "x$HAVE_GALLIUM_LLVMPIPE" = xyes -o \
+                                         "x$HAVE_GALLIUM_SWR" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_VC4, test "x$HAVE_GALLIUM_VC4" = xyes)
 AM_CONDITIONAL(HAVE_GALLIUM_VIRGL, test "x$HAVE_GALLIUM_VIRGL" = xyes)
 
@@ -2398,6 +2457,11 @@ AM_CONDITIONAL(HAVE_NOUVEAU_DRI, test x$HAVE_NOUVEAU_DRI = xyes)
 AM_CONDITIONAL(HAVE_R200_DRI, test x$HAVE_R200_DRI = xyes)
 AM_CONDITIONAL(HAVE_RADEON_DRI, test x$HAVE_RADEON_DRI = xyes)
 AM_CONDITIONAL(HAVE_SWRAST_DRI, test x$HAVE_SWRAST_DRI = xyes)
+
+AM_CONDITIONAL(HAVE_INTEL_VULKAN, test "x$HAVE_INTEL_VULKAN" = xyes)
+
+AM_CONDITIONAL(HAVE_INTEL_DRIVERS, test "x$HAVE_INTEL_VULKAN" = xyes -o \
+                                        "x$HAVE_I965_DRI" = xyes)
 
 AM_CONDITIONAL(NEED_RADEON_DRM_WINSYS, test "x$HAVE_GALLIUM_R300" = xyes -o \
                                             "x$HAVE_GALLIUM_R600" = xyes -o \
@@ -2446,6 +2510,27 @@ AC_SUBST([XA_MINOR], $XA_MINOR)
 AC_SUBST([XA_TINY], $XA_TINY)
 AC_SUBST([XA_VERSION], "$XA_MAJOR.$XA_MINOR.$XA_TINY")
 
+AC_ARG_ENABLE(valgrind,
+              [AS_HELP_STRING([--enable-valgrind],
+                             [Build mesa with valgrind support (default: auto)])],
+                             [VALGRIND=$enableval], [VALGRIND=auto])
+if test "x$VALGRIND" != xno; then
+	PKG_CHECK_MODULES(VALGRIND, [valgrind], [have_valgrind=yes], [have_valgrind=no])
+fi
+AC_MSG_CHECKING([whether to enable Valgrind support])
+if test "x$VALGRIND" = xauto; then
+	VALGRIND="$have_valgrind"
+fi
+
+if test "x$VALGRIND" = "xyes"; then
+	if ! test "x$have_valgrind" = xyes; then
+		AC_MSG_ERROR([Valgrind support required but not present])
+	fi
+	AC_DEFINE([HAVE_VALGRIND], 1, [Use valgrind intrinsics to suppress false warnings])
+fi
+
+AC_MSG_RESULT([$VALGRIND])
+
 dnl Restore LDFLAGS and CPPFLAGS
 LDFLAGS="$_SAVE_LDFLAGS"
 CPPFLAGS="$_SAVE_CPPFLAGS"
@@ -2487,8 +2572,6 @@ AC_CONFIG_FILES([Makefile
 		src/gallium/drivers/softpipe/Makefile
 		src/gallium/drivers/svga/Makefile
 		src/gallium/drivers/swr/Makefile
-		src/gallium/drivers/swr/avx/Makefile
-		src/gallium/drivers/swr/avx2/Makefile
 		src/gallium/drivers/trace/Makefile
 		src/gallium/drivers/vc4/Makefile
 		src/gallium/drivers/virgl/Makefile
@@ -2540,6 +2623,11 @@ AC_CONFIG_FILES([Makefile
 		src/glx/apple/Makefile
 		src/glx/tests/Makefile
 		src/gtest/Makefile
+		src/intel/Makefile
+		src/intel/genxml/Makefile
+		src/intel/isl/Makefile
+		src/intel/vulkan/Makefile
+		src/intel/vulkan/tests/Makefile
 		src/loader/Makefile
 		src/mapi/Makefile
 		src/mapi/es1api/glesv1_cm.pc
@@ -2565,6 +2653,14 @@ AC_CONFIG_FILES([Makefile
 		src/util/tests/hash_table/Makefile])
 
 AC_OUTPUT
+
+# Fix up dependencies in *.Plo files, where we changed the extension of a
+# source file
+$SED -i -e 's/brw_blorp.cpp/brw_blorp.c/' src/mesa/drivers/dri/i965/.deps/brw_blorp.Plo
+$SED -i -e 's/gen6_blorp.cpp/gen6_blorp.c/' src/mesa/drivers/dri/i965/.deps/gen6_blorp.Plo
+$SED -i -e 's/gen7_blorp.cpp/gen7_blorp.c/' src/mesa/drivers/dri/i965/.deps/gen7_blorp.Plo
+$SED -i -e 's/gen8_blorp.cpp/gen8_blorp.c/' src/mesa/drivers/dri/i965/.deps/gen8_blorp.Plo
+
 
 dnl
 dnl Output some configuration info for the user
@@ -2633,6 +2729,15 @@ if test "$enable_egl" = yes; then
     echo "        EGL drivers:    $egl_drivers"
 fi
 
+# Vulkan
+echo ""
+if test "x$VULKAN_DRIVERS" != x; then
+    echo "        Vulkan drivers:  $VULKAN_DRIVERS"
+    echo "        Vulkan ICD dir:  $VULKAN_ICD_INSTALL_DIR"
+else
+    echo "        Vulkan drivers:  no"
+fi
+
 echo ""
 if test "x$MESA_LLVM" = x1; then
     echo "        llvm:            yes"
@@ -2683,6 +2788,7 @@ if test "x$MESA_LLVM" = x1; then
     echo ""
 fi
 echo "        PYTHON2:         $PYTHON2"
+echo "        PYTHON3:         $PYTHON3"
 
 echo ""
 echo "        Run '${MAKE-make}' to build Mesa"

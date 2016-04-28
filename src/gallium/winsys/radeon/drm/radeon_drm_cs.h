@@ -51,7 +51,7 @@ struct radeon_cs_context {
     struct drm_radeon_cs_reloc  *relocs;
     uint64_t                    *priority_usage;
 
-    int                         reloc_indices_hashlist[512];
+    int                         reloc_indices_hashlist[4096];
 
     uint64_t                    used_vram;
     uint64_t                    used_gart;
@@ -59,6 +59,7 @@ struct radeon_cs_context {
 
 struct radeon_drm_cs {
     struct radeon_winsys_cs base;
+    enum ring_type          ring_type;
 
     /* We flip between these two CS. While one is being consumed
      * by the kernel in another thread, the other one is being filled

@@ -94,6 +94,7 @@ static void print_usage(void)
 	printf("    --saturate-s MASK - bitmask of samplers to saturate S coord\n");
 	printf("    --saturate-t MASK - bitmask of samplers to saturate T coord\n");
 	printf("    --saturate-r MASK - bitmask of samplers to saturate R coord\n");
+	printf("    --astc-srgb MASK  - bitmask of samplers to enable astc-srgb workaround\n");
 	printf("    --stream-out      - enable stream-out (aka transform feedback)\n");
 	printf("    --ucp MASK        - bitmask of enabled user-clip-planes\n");
 	printf("    --gpu GPU_ID      - specify gpu-id (default 320)\n");
@@ -174,6 +175,13 @@ int main(int argc, char **argv)
 			continue;
 		}
 
+		if (!strcmp(argv[n], "--astc-srgb")) {
+			debug_printf(" %s %s", argv[n], argv[n+1]);
+			key.vastc_srgb = key.fastc_srgb = strtol(argv[n+1], NULL, 0);
+			n += 2;
+			continue;
+		}
+
 		if (!strcmp(argv[n], "--stream-out")) {
 			struct pipe_stream_output_info *so = &s.stream_output;
 			debug_printf(" %s", argv[n]);
@@ -241,13 +249,13 @@ int main(int argc, char **argv)
 
 	tgsi_parse_init(&parse, toks);
 	switch (parse.FullHeader.Processor.Processor) {
-	case TGSI_PROCESSOR_FRAGMENT:
+	case PIPE_SHADER_FRAGMENT:
 		s.type = v.type = SHADER_FRAGMENT;
 		break;
-	case TGSI_PROCESSOR_VERTEX:
+	case PIPE_SHADER_VERTEX:
 		s.type = v.type = SHADER_VERTEX;
 		break;
-	case TGSI_PROCESSOR_COMPUTE:
+	case PIPE_SHADER_COMPUTE:
 		s.type = v.type = SHADER_COMPUTE;
 		break;
 	}

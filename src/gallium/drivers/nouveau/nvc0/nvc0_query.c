@@ -58,11 +58,12 @@ nvc0_begin_query(struct pipe_context *pipe, struct pipe_query *pq)
    return q->funcs->begin_query(nvc0_context(pipe), q);
 }
 
-static void
+static bool
 nvc0_end_query(struct pipe_context *pipe, struct pipe_query *pq)
 {
    struct nvc0_query *q = nvc0_query(pq);
    q->funcs->end_query(nvc0_context(pipe), q);
+   return true;
 }
 
 static boolean
@@ -254,6 +255,11 @@ nvc0_screen_get_driver_query_group_info(struct pipe_screen *pscreen,
    return 0;
 }
 
+static void
+nvc0_set_active_query_state(struct pipe_context *pipe, boolean enable)
+{
+}
+
 void
 nvc0_init_query_functions(struct nvc0_context *nvc0)
 {
@@ -265,6 +271,7 @@ nvc0_init_query_functions(struct nvc0_context *nvc0)
    pipe->end_query = nvc0_end_query;
    pipe->get_query_result = nvc0_get_query_result;
    pipe->get_query_result_resource = nvc0_get_query_result_resource;
+   pipe->set_active_query_state = nvc0_set_active_query_state;
    pipe->render_condition = nvc0_render_condition;
    nvc0->cond_condmode = NVC0_3D_COND_MODE_ALWAYS;
 }

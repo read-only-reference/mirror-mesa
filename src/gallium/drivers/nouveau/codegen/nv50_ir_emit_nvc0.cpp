@@ -815,8 +815,8 @@ CodeEmitterNVC0::emitLogicOp(const Instruction *i, uint8_t subOp)
       // (a OP b) OP c
       if (i->predSrc != 2 && i->srcExists(2)) {
          code[1] |= subOp << 21;
-         srcId(i->src(2), 17);
-         if (i->src(2).mod == Modifier(NV50_IR_MOD_NOT)) code[0] |= 1 << 20;
+         srcId(i->src(2), 49);
+         if (i->src(2).mod == Modifier(NV50_IR_MOD_NOT)) code[1] |= 1 << 20;
       } else {
          code[1] |= 0x000e0000;
       }
@@ -1858,7 +1858,10 @@ CodeEmitterNVC0::emitLOAD(const Instruction *i)
    if (i->src(0).getFile() == FILE_MEMORY_SHARED) {
       if (i->subOp == NV50_IR_SUBOP_LOAD_LOCKED) {
          assert(i->defExists(1));
-         defId(i->def(1), 32 + 18);
+         if (targ->getChipset() >= NVISA_GK104_CHIPSET)
+            defId(i->def(1), 8);
+         else
+            defId(i->def(1), 32 + 18);
       }
    }
 

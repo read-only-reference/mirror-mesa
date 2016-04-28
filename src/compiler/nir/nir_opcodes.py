@@ -95,6 +95,7 @@ tuint = "uint"
 tfloat32 = "float32"
 tint32 = "int32"
 tuint32 = "uint32"
+tuint64 = "uint64"
 tfloat64 = "float64"
 
 commutative = "commutative "
@@ -161,15 +162,23 @@ unop("fexp2", tfloat, "exp2f(src0)")
 unop("flog2", tfloat, "log2f(src0)")
 unop_convert("f2i", tint32, tfloat32, "src0") # Float-to-integer conversion.
 unop_convert("f2u", tuint32, tfloat32, "src0") # Float-to-unsigned conversion
+unop_convert("d2i", tint32, tfloat64, "src0") # Double-to-integer conversion.
+unop_convert("d2u", tuint32, tfloat64, "src0") # Double-to-unsigned conversion.
 unop_convert("i2f", tfloat32, tint32, "src0") # Integer-to-float conversion.
+unop_convert("i2d", tfloat64, tint32, "src0") # Integer-to-double conversion.
 # Float-to-boolean conversion
 unop_convert("f2b", tbool, tfloat32, "src0 != 0.0f")
+unop_convert("d2b", tbool, tfloat64, "src0 != 0.0")
 # Boolean-to-float conversion
 unop_convert("b2f", tfloat32, tbool, "src0 ? 1.0f : 0.0f")
 # Int-to-boolean conversion
 unop_convert("i2b", tbool, tint32, "src0 != 0")
 unop_convert("b2i", tint32, tbool, "src0 ? 1 : 0") # Boolean-to-int conversion
 unop_convert("u2f", tfloat32, tuint32, "src0") # Unsigned-to-float conversion.
+unop_convert("u2d", tfloat64, tuint32, "src0") # Unsigned-to-double conversion.
+# double-to-float conversion
+unop_convert("d2f", tfloat32, tfloat64, "src0") # Single to double precision
+unop_convert("f2d", tfloat64, tfloat32, "src0") # Double to single precision
 
 # Unary floating-point rounding operations.
 
@@ -180,6 +189,7 @@ unop("ffloor", tfloat, "bit_size == 64 ? floor(src0) : floorf(src0)")
 unop("ffract", tfloat, "src0 - (bit_size == 64 ? floor(src0) : floorf(src0))")
 unop("fround_even", tfloat, "bit_size == 64 ? _mesa_roundeven(src0) : _mesa_roundevenf(src0)")
 
+unop("fquantize2f16", tfloat, "(fabs(src0) < ldexpf(1.0, -14)) ? copysignf(0.0f, src0) : _mesa_half_to_float(_mesa_float_to_half(src0))")
 
 # Trigonometric operations.
 
@@ -252,6 +262,12 @@ dst.x = (src0.x <<  0) |
         (src0.w << 24);
 """)
 
+unop_horiz("pack_double_2x32", 1, tuint64, 2, tuint32,
+           "dst.x = src0.x | ((uint64_t)src0.y << 32);")
+
+unop_horiz("unpack_double_2x32", 2, tuint32, 1, tuint64,
+           "dst.x = src0.x; dst.y = src0.x >> 32;")
+
 # Lowered floating point unpacking operations.
 
 
@@ -260,6 +276,8 @@ unop_horiz("unpack_half_2x16_split_x", 1, tfloat32, 1, tuint32,
 unop_horiz("unpack_half_2x16_split_y", 1, tfloat32, 1, tuint32,
            "unpack_half_1x16((uint16_t)(src0.x >> 16))")
 
+unop_convert("unpack_double_2x32_split_x", tuint32, tuint64, "src0")
+unop_convert("unpack_double_2x32_split_y", tuint32, tuint64, "src0 >> 32")
 
 # Bit operations, part of ARB_gpu_shader5.
 
@@ -382,8 +400,22 @@ binop_convert("uadd_carry", tuint, tuint, commutative, "src0 + src1 < src0")
 
 binop_convert("usub_borrow", tuint, tuint, "", "src0 < src1")
 
-binop("fmod", tfloat, "", "src0 - src1 * floorf(src0 / src1)")
 binop("umod", tuint, "", "src1 == 0 ? 0 : src0 % src1")
+
+# For signed integers, there are several different possible definitions of
+# "modulus" or "remainder".  We follow the conventions used by LLVM and
+# SPIR-V.  The irem opcode implements the standard C/C++ signed "%"
+# operation while the imod opcode implements the more mathematical
+# "modulus" operation.  For details on the difference, see
+#
+# http://mathforum.org/library/drmath/view/52343.html
+
+binop("irem", tint, "", "src1 == 0 ? 0 : src0 % src1")
+binop("imod", tint, "",
+      "src1 == 0 ? 0 : ((src0 % src1 == 0 || (src0 >= 0) == (src1 >= 0)) ?"
+      "                 src0 % src1 : src0 % src1 + src1)")
+binop("fmod", tfloat, "", "src0 - src1 * floorf(src0 / src1)")
+binop("frem", tfloat, "", "src0 - src1 * truncf(src0 / src1)")
 
 #
 # Comparisons
@@ -525,6 +557,9 @@ binop("fpow", tfloat, "", "bit_size == 64 ? powf(src0, src1) : pow(src0, src1)")
 binop_horiz("pack_half_2x16_split", 1, tuint32, 1, tfloat32, 1, tfloat32,
             "pack_half_1x16(src0.x) | (pack_half_1x16(src1.x) << 16)")
 
+binop_convert("pack_double_2x32_split", tuint64, tuint32, "",
+              "src0 | ((uint64_t)src1 << 32)")
+
 # bfm implements the behavior of the first operation of the SM5 "bfi" assembly
 # and that of the "bfi1" i965 instruction. That is, it has undefined behavior
 # if either of its arguments are 32.
@@ -536,7 +571,7 @@ else
    dst = ((1u << bits) - 1) << offset;
 """)
 
-opcode("ldexp", 0, tfloat, [0, 0], [tfloat, tint], "", """
+opcode("ldexp", 0, tfloat, [0, 0], [tfloat, tint32], "", """
 dst = (bit_size == 64) ? ldexp(src0, src1) : ldexpf(src0, src1);
 /* flush denormals to zero. */
 if (!isnormal(dst))

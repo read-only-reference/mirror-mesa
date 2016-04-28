@@ -139,7 +139,7 @@ public:
    void split_virtual_grfs();
    bool compact_virtual_grfs();
    void assign_constant_locations();
-   void demote_pull_constants();
+   void lower_constant_loads();
    void invalidate_live_intervals();
    void calculate_live_intervals();
    void calculate_register_pressure();
@@ -153,6 +153,7 @@ public:
    bool try_constant_propagate(fs_inst *inst, acp_entry *entry);
    bool opt_copy_propagate_local(void *mem_ctx, bblock_t *block,
                                  exec_list *acp);
+   bool opt_drop_redundant_mov_to_flags();
    bool opt_register_renaming();
    bool register_coalesce();
    bool compute_to_mrf();
@@ -189,6 +190,7 @@ public:
    fs_reg *emit_frontfacing_interpolation();
    fs_reg *emit_samplepos_setup();
    fs_reg *emit_sampleid_setup();
+   fs_reg *emit_samplemaskin_setup();
    void emit_general_interpolation(fs_reg *attr, const char *name,
                                    const glsl_type *type,
                                    glsl_interp_qualifier interpolation_mode,
@@ -211,7 +213,8 @@ public:
                      uint32_t surface,
                      fs_reg surface_reg,
                      uint32_t sampler,
-                     fs_reg sampler_reg);
+                     fs_reg sampler_reg,
+                     unsigned return_channels);
    fs_reg emit_mcs_fetch(const fs_reg &coordinate, unsigned components,
                          const fs_reg &sampler);
    void emit_gen6_gather_wa(uint8_t wa, fs_reg dst);
@@ -325,8 +328,6 @@ public:
    struct gl_program *prog;
 
    const struct brw_vue_map *input_vue_map;
-
-   int *param_size;
 
    int *virtual_grf_start;
    int *virtual_grf_end;
@@ -450,7 +451,7 @@ private:
    void generate_stencil_ref_packing(fs_inst *inst, struct brw_reg dst,
                                      struct brw_reg src);
    void generate_barrier(fs_inst *inst, struct brw_reg src);
-   void generate_blorp_fb_write(fs_inst *inst);
+   void generate_blorp_fb_write(fs_inst *inst, struct brw_reg payload);
    void generate_linterp(fs_inst *inst, struct brw_reg dst,
 			 struct brw_reg *src);
    void generate_tex(fs_inst *inst, struct brw_reg dst, struct brw_reg src,

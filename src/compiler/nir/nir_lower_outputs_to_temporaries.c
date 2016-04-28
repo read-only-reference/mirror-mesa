@@ -61,7 +61,7 @@ emit_output_copies(nir_cursor cursor, struct lower_outputs_state *state)
 static bool
 emit_output_copies_block(nir_block *block, void *state)
 {
-   nir_foreach_instr(block, instr) {
+   nir_foreach_instr(instr, block) {
       if (instr->type != nir_instr_type_intrinsic)
          continue;
 
@@ -108,7 +108,7 @@ nir_lower_outputs_to_temporaries(nir_shader *shader, nir_function *entrypoint)
       exec_list_push_tail(&shader->outputs, &output->node);
    }
 
-   nir_foreach_function(shader, function) {
+   nir_foreach_function(function, shader) {
       if (function->impl == NULL)
          continue;
 
@@ -116,7 +116,7 @@ nir_lower_outputs_to_temporaries(nir_shader *shader, nir_function *entrypoint)
          /* For geometry shaders, we have to emit the output copies right
           * before each EmitVertex call.
           */
-         nir_foreach_block(function->impl, emit_output_copies_block, &state);
+         nir_foreach_block_call(function->impl, emit_output_copies_block, &state);
       } else if (function == entrypoint) {
          /* For all other shader types, we need to do the copies right before
           * the jumps to the end block.

@@ -156,14 +156,8 @@ static void r600_memory_barrier(struct pipe_context *ctx, unsigned flags)
 void r600_preflush_suspend_features(struct r600_common_context *ctx)
 {
 	/* suspend queries */
-	if (ctx->num_cs_dw_nontimer_queries_suspend) {
-		/* Since non-timer queries are suspended during blits,
-		 * we have to guard against double-suspends. */
-		r600_suspend_nontimer_queries(ctx);
-		ctx->nontimer_queries_suspended_by_flush = true;
-	}
-	if (!LIST_IS_EMPTY(&ctx->active_timer_queries))
-		r600_suspend_timer_queries(ctx);
+	if (!LIST_IS_EMPTY(&ctx->active_queries))
+		r600_suspend_queries(ctx);
 
 	ctx->streamout.suspended = false;
 	if (ctx->streamout.begin_emitted) {
@@ -180,12 +174,8 @@ void r600_postflush_resume_features(struct r600_common_context *ctx)
 	}
 
 	/* resume queries */
-	if (!LIST_IS_EMPTY(&ctx->active_timer_queries))
-		r600_resume_timer_queries(ctx);
-	if (ctx->nontimer_queries_suspended_by_flush) {
-		ctx->nontimer_queries_suspended_by_flush = false;
-		r600_resume_nontimer_queries(ctx);
-	}
+	if (!LIST_IS_EMPTY(&ctx->active_queries))
+		r600_resume_queries(ctx);
 }
 
 static void r600_flush_from_st(struct pipe_context *ctx,
@@ -296,6 +286,7 @@ bool r600_common_context_init(struct r600_common_context *rctx,
 	LIST_INITHEAD(&rctx->texture_buffers);
 
 	r600_init_context_texture_functions(rctx);
+	r600_init_viewport_functions(rctx);
 	r600_streamout_init(rctx);
 	r600_query_init(rctx);
 	cayman_init_msaa(&rctx->b);
@@ -362,12 +353,10 @@ void r600_context_add_resource_size(struct pipe_context *ctx, struct pipe_resour
 	 * In practice this gave very good estimate (+/- 10% of the target
 	 * memory limit).
 	 */
-	if (rr->domains & RADEON_DOMAIN_GTT) {
-		rctx->gtt += rr->buf->size;
-	}
-	if (rr->domains & RADEON_DOMAIN_VRAM) {
+	if (rr->domains & RADEON_DOMAIN_VRAM)
 		rctx->vram += rr->buf->size;
-	}
+	else if (rr->domains & RADEON_DOMAIN_GTT)
+		rctx->gtt += rr->buf->size;
 }
 
 /*
@@ -411,6 +400,7 @@ static const struct debug_named_value common_debug_options[] = {
 	{ "norbplus", DBG_NO_RB_PLUS, "Disable RB+ on Stoney." },
 	{ "sisched", DBG_SI_SCHED, "Enable LLVM SI Machine Instruction Scheduler." },
 	{ "mono", DBG_MONOLITHIC_SHADERS, "Use old-style monolithic shaders compiled on demand" },
+	{ "noce", DBG_NO_CE, "Disable the constant engine"},
 
 	DEBUG_NAMED_VALUE_END /* must be last */
 };
@@ -612,6 +602,7 @@ const char *r600_get_llvm_processor_name(enum radeon_family family)
 }
 
 static int r600_get_compute_param(struct pipe_screen *screen,
+        enum pipe_shader_ir ir_type,
         enum pipe_compute_cap param,
         void *ret)
 {
@@ -653,23 +644,34 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 			uint64_t *grid_size = ret;
 			grid_size[0] = 65535;
 			grid_size[1] = 65535;
-			grid_size[2] = 1;
+			grid_size[2] = 65535;
 		}
 		return 3 * sizeof(uint64_t) ;
 
 	case PIPE_COMPUTE_CAP_MAX_BLOCK_SIZE:
 		if (ret) {
 			uint64_t *block_size = ret;
-			block_size[0] = 256;
-			block_size[1] = 256;
-			block_size[2] = 256;
+			if (rscreen->chip_class >= SI && HAVE_LLVM >= 0x309 &&
+			    ir_type == PIPE_SHADER_IR_TGSI) {
+				block_size[0] = 2048;
+				block_size[1] = 2048;
+				block_size[2] = 2048;
+			} else {
+				block_size[0] = 256;
+				block_size[1] = 256;
+				block_size[2] = 256;
+			}
 		}
 		return 3 * sizeof(uint64_t);
 
 	case PIPE_COMPUTE_CAP_MAX_THREADS_PER_BLOCK:
 		if (ret) {
 			uint64_t *max_threads_per_block = ret;
-			*max_threads_per_block = 256;
+			if (rscreen->chip_class >= SI && HAVE_LLVM >= 0x309 &&
+			    ir_type == PIPE_SHADER_IR_TGSI)
+				*max_threads_per_block = 2048;
+			else
+				*max_threads_per_block = 256;
 		}
 		return sizeof(uint64_t);
 
@@ -678,7 +680,7 @@ static int r600_get_compute_param(struct pipe_screen *screen,
 			uint64_t *max_global_size = ret;
 			uint64_t max_mem_alloc_size;
 
-			r600_get_compute_param(screen,
+			r600_get_compute_param(screen, ir_type,
 				PIPE_COMPUTE_CAP_MAX_MEM_ALLOC_SIZE,
 				&max_mem_alloc_size);
 
@@ -897,6 +899,13 @@ bool r600_common_screen_init(struct r600_common_screen *rscreen,
 	rscreen->chip_class = rscreen->info.chip_class;
 	rscreen->debug_flags = debug_get_flags_option("R600_DEBUG", common_debug_options, 0);
 
+	rscreen->force_aniso = MIN2(16, debug_get_num_option("R600_TEX_ANISO", -1));
+	if (rscreen->force_aniso >= 0) {
+		printf("radeon: Forcing anisotropy filter to %ix\n",
+		       /* round down to a power of two */
+		       1 << util_logbase2(rscreen->force_aniso));
+	}
+
 	util_format_s3tc_init();
 	pipe_mutex_init(rscreen->aux_context_lock);
 	pipe_mutex_init(rscreen->gpu_load_mutex);
@@ -954,17 +963,17 @@ bool r600_can_dump_shader(struct r600_common_screen *rscreen,
 			  unsigned processor)
 {
 	switch (processor) {
-	case TGSI_PROCESSOR_VERTEX:
+	case PIPE_SHADER_VERTEX:
 		return (rscreen->debug_flags & DBG_VS) != 0;
-	case TGSI_PROCESSOR_TESS_CTRL:
+	case PIPE_SHADER_TESS_CTRL:
 		return (rscreen->debug_flags & DBG_TCS) != 0;
-	case TGSI_PROCESSOR_TESS_EVAL:
+	case PIPE_SHADER_TESS_EVAL:
 		return (rscreen->debug_flags & DBG_TES) != 0;
-	case TGSI_PROCESSOR_GEOMETRY:
+	case PIPE_SHADER_GEOMETRY:
 		return (rscreen->debug_flags & DBG_GS) != 0;
-	case TGSI_PROCESSOR_FRAGMENT:
+	case PIPE_SHADER_FRAGMENT:
 		return (rscreen->debug_flags & DBG_PS) != 0;
-	case TGSI_PROCESSOR_COMPUTE:
+	case PIPE_SHADER_COMPUTE:
 		return (rscreen->debug_flags & DBG_CS) != 0;
 	default:
 		return false;
@@ -972,13 +981,13 @@ bool r600_can_dump_shader(struct r600_common_screen *rscreen,
 }
 
 void r600_screen_clear_buffer(struct r600_common_screen *rscreen, struct pipe_resource *dst,
-			      unsigned offset, unsigned size, unsigned value,
-			      bool is_framebuffer)
+			      uint64_t offset, uint64_t size, unsigned value,
+			      enum r600_coherency coher)
 {
 	struct r600_common_context *rctx = (struct r600_common_context*)rscreen->aux_context;
 
 	pipe_mutex_lock(rscreen->aux_context_lock);
-	rctx->clear_buffer(&rctx->b, dst, offset, size, value, is_framebuffer);
+	rctx->clear_buffer(&rctx->b, dst, offset, size, value, coher);
 	rscreen->aux_context->flush(rscreen->aux_context, NULL, 0);
 	pipe_mutex_unlock(rscreen->aux_context_lock);
 }

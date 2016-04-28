@@ -727,7 +727,7 @@ get_programiv(struct gl_context *ctx, GLuint program, GLenum pname,
       for (i = 0; i < shProg->NumUniformBlocks; i++) {
 	 /* Add one for the terminating NUL character.
 	  */
-	 const GLint len = strlen(shProg->UniformBlocks[i]->Name) + 1;
+	 const GLint len = strlen(shProg->UniformBlocks[i].Name) + 1;
 
 	 if (len > max_len)
 	    max_len = len;
@@ -2398,7 +2398,7 @@ _mesa_GetActiveSubroutineUniformiv(GLuint program, GLenum shadertype,
       res = _mesa_program_resource_find_index(shProg, resource_type, index);
       if (res) {
          values[0] = strlen(_mesa_program_resource_name(res)) + 1
-            + ((_mesa_program_resource_array_size(res) != 0) ? 3 : 0);;
+            + ((_mesa_program_resource_array_size(res) != 0) ? 3 : 0);
       }
       break;
    default:

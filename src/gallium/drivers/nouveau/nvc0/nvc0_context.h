@@ -101,18 +101,27 @@
 /* 6 user uniform buffers, at 64K each */
 #define NVC0_CB_USR_INFO(s)         (s << 16)
 #define NVC0_CB_USR_SIZE            (6 << 16)
-/* 6 driver constbuts, at 1K each */
-#define NVC0_CB_AUX_INFO(s)         NVC0_CB_USR_SIZE + (s << 10)
-#define NVC0_CB_AUX_SIZE            (6 << 10)
+/* 6 driver constbuts, at 2K each */
+#define NVC0_CB_AUX_INFO(s)         NVC0_CB_USR_SIZE + (s << 11)
+#define NVC0_CB_AUX_SIZE            (6 << 11)
 /* XXX: Figure out what this UNK data is. */
 #define NVC0_CB_AUX_UNK_INFO        0x000
 #define NVC0_CB_AUX_UNK_SIZE        (8 * 4)
 /* 32 textures handles, at 1 32-bits integer each */
 #define NVC0_CB_AUX_TEX_INFO(i)     0x020 + (i) * 4
 #define NVC0_CB_AUX_TEX_SIZE        (32 * 4)
+/* 8 sets of 32-bits coordinate offsets */
+#define NVC0_CB_AUX_MS_INFO         0x0a0 /* CP */
+#define NVC0_CB_AUX_MS_SIZE         (8 * 2 * 4)
+/* block/grid size, at 3 32-bits integers each and gridid */
+#define NVC0_CB_AUX_GRID_INFO       0x0e0 /* CP */
+#define NVC0_CB_AUX_GRID_SIZE       (7 * 4)
 /* 8 user clip planes, at 4 32-bits floats each */
 #define NVC0_CB_AUX_UCP_INFO        0x100
 #define NVC0_CB_AUX_UCP_SIZE        (PIPE_MAX_CLIP_PLANES * 4 * 4)
+/* 13 ubos, at 4 32-bits integer each */
+#define NVC0_CB_AUX_UBO_INFO(i)     0x100 + (i) * 4 * 4 /* CP */
+#define NVC0_CB_AUX_UBO_SIZE        ((NVC0_MAX_PIPE_CONSTBUFS - 1) * 4 * 4)
 /* 8 sets of 32-bits integer pairs sample offsets */
 #define NVC0_CB_AUX_SAMPLE_INFO     0x180 /* FP */
 #define NVC0_CB_AUX_SAMPLE_SIZE     (8 * 4 * 2)
@@ -121,6 +130,9 @@
 /* 32 user buffers, at 4 32-bits integers each */
 #define NVC0_CB_AUX_BUF_INFO(i)     0x200 + (i) * 4 * 4
 #define NVC0_CB_AUX_BUF_SIZE        (NVC0_MAX_BUFFERS * 4 * 4)
+/* 8 surfaces, at 16 32-bits integers each */
+#define NVC0_CB_AUX_SU_INFO(i)      0x400 + (i) * 16 * 4
+#define NVC0_CB_AUX_SU_SIZE         (NVC0_MAX_IMAGES * 16 * 4)
 /* 4 32-bits floats for the vertex runout, put at the end */
 #define NVC0_CB_AUX_RUNOUT_INFO     NVC0_CB_USR_SIZE + NVC0_CB_AUX_SIZE
 
@@ -228,6 +240,10 @@ struct nvc0_context {
    uint32_t buffers_dirty[6];
    uint32_t buffers_valid[6];
 
+   struct pipe_image_view images[6][NVC0_MAX_IMAGES];
+   uint16_t images_dirty[6];
+   uint16_t images_valid[6];
+
    struct util_dynarray global_residents;
 };
 
@@ -311,8 +327,8 @@ void nvc0_validate_textures(struct nvc0_context *);
 void nvc0_validate_samplers(struct nvc0_context *);
 void nve4_set_tex_handles(struct nvc0_context *);
 void nvc0_validate_surfaces(struct nvc0_context *);
-void nve4_set_surface_info(struct nouveau_pushbuf *, struct pipe_surface *,
-                           struct nvc0_screen *);
+void nve4_set_surface_info(struct nouveau_pushbuf *, struct pipe_image_view *,
+                           struct nvc0_context *);
 
 struct pipe_sampler_view *
 nvc0_create_texture_view(struct pipe_context *,

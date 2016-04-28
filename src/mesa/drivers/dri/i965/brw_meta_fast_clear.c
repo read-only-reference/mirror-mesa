@@ -58,6 +58,7 @@
 #include "intel_batchbuffer.h"
 
 #include "brw_blorp.h"
+#include "brw_meta_util.h"
 
 struct brw_fast_clear_state {
    struct gl_buffer_object *buf_obj;
@@ -171,7 +172,7 @@ brw_meta_fast_clear_free(struct brw_context *brw)
 }
 
 struct rect {
-   int x0, y0, x1, y1;
+   unsigned x0, y0, x1, y1;
 };
 
 static void
@@ -215,16 +216,19 @@ brw_draw_rectlist(struct brw_context *brw, struct rect *rect, int num_instances)
                   NULL, 0, NULL);
 }
 
-static void
-get_fast_clear_rect(struct brw_context *brw, struct gl_framebuffer *fb,
-                    struct intel_renderbuffer *irb, struct rect *rect)
+void
+brw_get_fast_clear_rect(const struct brw_context *brw,
+                        const struct gl_framebuffer *fb,
+                        const struct intel_mipmap_tree* mt,
+                        unsigned *x0, unsigned *y0,
+                        unsigned *x1, unsigned *y1)
 {
    unsigned int x_align, y_align;
    unsigned int x_scaledown, y_scaledown;
 
    /* Only single sampled surfaces need to (and actually can) be resolved. */
-   if (irb->mt->msaa_layout == INTEL_MSAA_LAYOUT_NONE ||
-       intel_miptree_is_lossless_compressed(brw, irb->mt)) {
+   if (mt->msaa_layout == INTEL_MSAA_LAYOUT_NONE ||
+       intel_miptree_is_lossless_compressed(brw, mt)) {
       /* From the Ivy Bridge PRM, Vol2 Part1 11.7 "MCS Buffer for Render
        * Target(s)", beneath the "Fast Color Clear" bullet (p327):
        *
@@ -240,7 +244,7 @@ get_fast_clear_rect(struct brw_context *brw, struct gl_framebuffer *fb,
        * alignment size returned by intel_get_non_msrt_mcs_alignment(), but
        * with X alignment multiplied by 16 and Y alignment multiplied by 32.
        */
-      intel_get_non_msrt_mcs_alignment(irb->mt, &x_align, &y_align);
+      intel_get_non_msrt_mcs_alignment(brw, mt, &x_align, &y_align);
       x_align *= 16;
 
       /* SKL+ line alignment requirement for Y-tiled are half those of the prior
@@ -304,7 +308,7 @@ get_fast_clear_rect(struct brw_context *brw, struct gl_framebuffer *fb,
        * vertically and either 4 or 16 horizontally, and the scaledown
        * factor is 2 vertically and either 2 or 8 horizontally.
        */
-      switch (irb->mt->num_samples) {
+      switch (mt->num_samples) {
       case 2:
       case 4:
          x_scaledown = 8;
@@ -323,33 +327,35 @@ get_fast_clear_rect(struct brw_context *brw, struct gl_framebuffer *fb,
       y_align = y_scaledown * 2;
    }
 
-   rect->x0 = fb->_Xmin;
-   rect->x1 = fb->_Xmax;
+   *x0 = fb->_Xmin;
+   *x1 = fb->_Xmax;
    if (fb->Name != 0) {
-      rect->y0 = fb->_Ymin;
-      rect->y1 = fb->_Ymax;
+      *y0 = fb->_Ymin;
+      *y1 = fb->_Ymax;
    } else {
-      rect->y0 = fb->Height - fb->_Ymax;
-      rect->y1 = fb->Height - fb->_Ymin;
+      *y0 = fb->Height - fb->_Ymax;
+      *y1 = fb->Height - fb->_Ymin;
    }
 
-   rect->x0 = ROUND_DOWN_TO(rect->x0,  x_align) / x_scaledown;
-   rect->y0 = ROUND_DOWN_TO(rect->y0, y_align) / y_scaledown;
-   rect->x1 = ALIGN(rect->x1, x_align) / x_scaledown;
-   rect->y1 = ALIGN(rect->y1, y_align) / y_scaledown;
+   *x0 = ROUND_DOWN_TO(*x0,  x_align) / x_scaledown;
+   *y0 = ROUND_DOWN_TO(*y0, y_align) / y_scaledown;
+   *x1 = ALIGN(*x1, x_align) / x_scaledown;
+   *y1 = ALIGN(*y1, y_align) / y_scaledown;
 }
 
-static void
-get_buffer_rect(const struct gl_framebuffer *fb, struct rect *rect)
+void
+brw_meta_get_buffer_rect(const struct gl_framebuffer *fb,
+                         unsigned *x0, unsigned *y0,
+                         unsigned *x1, unsigned *y1)
 {
-   rect->x0 = fb->_Xmin;
-   rect->x1 = fb->_Xmax;
+   *x0 = fb->_Xmin;
+   *x1 = fb->_Xmax;
    if (fb->Name != 0) {
-      rect->y0 = fb->_Ymin;
-      rect->y1 = fb->_Ymax;
+      *y0 = fb->_Ymin;
+      *y1 = fb->_Ymax;
    } else {
-      rect->y0 = fb->Height - fb->_Ymax;
-      rect->y1 = fb->Height - fb->_Ymin;
+      *y0 = fb->Height - fb->_Ymax;
+      *y1 = fb->Height - fb->_Ymin;
    }
 }
 
@@ -359,11 +365,38 @@ get_buffer_rect(const struct gl_framebuffer *fb, struct rect *rect)
  * Fast color clear can only clear to color values of 1.0 or 0.0.  At the
  * moment we only support floating point, unorm, and snorm buffers.
  */
-static bool
-is_color_fast_clear_compatible(struct brw_context *brw,
-                               mesa_format format,
-                               const union gl_color_union *color)
+bool
+brw_is_color_fast_clear_compatible(struct brw_context *brw,
+                                   const struct intel_mipmap_tree *mt,
+                                   const union gl_color_union *color)
 {
+   const struct gl_context *ctx = &brw->ctx;
+
+   /* If we're mapping the render format to a different format than the
+    * format we use for texturing then it is a bit questionable whether it
+    * should be possible to use a fast clear. Although we only actually
+    * render using a renderable format, without the override workaround it
+    * wouldn't be possible to have a non-renderable surface in a fast clear
+    * state so the hardware probably legitimately doesn't need to support
+    * this case. At least on Gen9 this really does seem to cause problems.
+    */
+   if (brw->gen >= 9 &&
+       brw_format_for_mesa_format(mt->format) !=
+       brw->render_target_format[mt->format])
+      return false;
+
+   /* Gen9 doesn't support fast clear on single-sampled SRGB buffers. When
+    * GL_FRAMEBUFFER_SRGB is enabled any color renderbuffers will be
+    * resolved in intel_update_state. In that case it's pointless to do a
+    * fast clear because it's very likely to be immediately resolved.
+    */
+   if (brw->gen >= 9 &&
+       mt->num_samples <= 1 &&
+       ctx->Color.sRGBEnabled &&
+       _mesa_get_srgb_format_linear(mt->format) != mt->format)
+      return false;
+
+   const mesa_format format = _mesa_get_render_format(ctx, mt->format);
    if (_mesa_is_format_integer_color(format)) {
       if (brw->gen >= 8) {
          perf_debug("Integer fast clear not enabled for (%s)",
@@ -389,10 +422,10 @@ is_color_fast_clear_compatible(struct brw_context *brw,
  * Convert the given color to a bitfield suitable for ORing into DWORD 7 of
  * SURFACE_STATE (DWORD 12-15 on SKL+).
  */
-static void
-set_fast_clear_color(struct brw_context *brw,
-                     struct intel_mipmap_tree *mt,
-                     const union gl_color_union *color)
+void
+brw_meta_set_fast_clear_color(struct brw_context *brw,
+                              struct intel_mipmap_tree *mt,
+                              const union gl_color_union *color)
 {
    union gl_color_union override_color = *color;
 
@@ -553,7 +586,6 @@ brw_meta_fast_clear(struct brw_context *brw, struct gl_framebuffer *fb,
                     GLbitfield buffers, bool partial_clear)
 {
    struct gl_context *ctx = &brw->ctx;
-   mesa_format format;
    enum { FAST_CLEAR, REP_CLEAR, PLAIN_CLEAR } clear_type;
    GLbitfield plain_clear_buffers, meta_save, rep_clear_buffers, fast_clear_buffers;
    struct rect fast_clear_rect, clear_rect;
@@ -587,30 +619,6 @@ brw_meta_fast_clear(struct brw_context *brw, struct gl_framebuffer *fb,
       if (brw->gen < 7)
          clear_type = REP_CLEAR;
 
-      /* If we're mapping the render format to a different format than the
-       * format we use for texturing then it is a bit questionable whether it
-       * should be possible to use a fast clear. Although we only actually
-       * render using a renderable format, without the override workaround it
-       * wouldn't be possible to have a non-renderable surface in a fast clear
-       * state so the hardware probably legitimately doesn't need to support
-       * this case. At least on Gen9 this really does seem to cause problems.
-       */
-      if (brw->gen >= 9 &&
-          brw_format_for_mesa_format(irb->mt->format) !=
-          brw->render_target_format[irb->mt->format])
-         clear_type = REP_CLEAR;
-
-      /* Gen9 doesn't support fast clear on single-sampled SRGB buffers. When
-       * GL_FRAMEBUFFER_SRGB is enabled any color renderbuffers will be
-       * resolved in intel_update_state. In that case it's pointless to do a
-       * fast clear because it's very likely to be immediately resolved.
-       */
-      if (brw->gen >= 9 &&
-          irb->mt->num_samples <= 1 &&
-          brw->ctx.Color.sRGBEnabled &&
-          _mesa_get_srgb_format_linear(irb->mt->format) != irb->mt->format)
-         clear_type = REP_CLEAR;
-
       if (irb->mt->fast_clear_state == INTEL_FAST_CLEAR_STATE_NO_MCS)
          clear_type = REP_CLEAR;
 
@@ -623,8 +631,8 @@ brw_meta_fast_clear(struct brw_context *brw, struct gl_framebuffer *fb,
       /* Fast clear is only supported for colors where all components are
        * either 0 or 1.
        */
-      format = _mesa_get_render_format(ctx, irb->mt->format);
-      if (!is_color_fast_clear_compatible(brw, format, &ctx->Color.ClearColor))
+      if (!brw_is_color_fast_clear_compatible(brw, irb->mt,
+                                              &ctx->Color.ClearColor))
          clear_type = REP_CLEAR;
 
       /* From the SNB PRM (Vol4_Part1):
@@ -645,6 +653,7 @@ brw_meta_fast_clear(struct brw_context *brw, struct gl_framebuffer *fb,
       GLubyte *color_mask = ctx->Color.ColorMask[buf];
       for (int i = 0; i < 4; i++) {
          if (_mesa_format_has_color_component(irb->mt->format, i) &&
+             !(i == 3 && irb->Base.Base._BaseFormat == GL_RGB) &&
              !color_mask[i]) {
             perf_debug("Falling back to plain clear on %dx%d buffer because of color mask\n",
                        irb->mt->logical_width0, irb->mt->logical_height0);
@@ -662,7 +671,7 @@ brw_meta_fast_clear(struct brw_context *brw, struct gl_framebuffer *fb,
 
       switch (clear_type) {
       case FAST_CLEAR:
-         set_fast_clear_color(brw, irb->mt, &ctx->Color.ClearColor);
+         brw_meta_set_fast_clear_color(brw, irb->mt, &ctx->Color.ClearColor);
          irb->need_downsample = true;
 
          /* If the buffer is already in INTEL_FAST_CLEAR_STATE_CLEAR, the
@@ -678,17 +687,23 @@ brw_meta_fast_clear(struct brw_context *brw, struct gl_framebuffer *fb,
          irb->mt->fast_clear_state = INTEL_FAST_CLEAR_STATE_RESOLVED;
          irb->need_downsample = true;
          fast_clear_buffers |= 1 << index;
-         get_fast_clear_rect(brw, fb, irb, &fast_clear_rect);
+         brw_get_fast_clear_rect(brw, fb, irb->mt,
+                                 &fast_clear_rect.x0, &fast_clear_rect.y0,
+                                 &fast_clear_rect.x1, &fast_clear_rect.y1);
          break;
 
       case REP_CLEAR:
          rep_clear_buffers |= 1 << index;
-         get_buffer_rect(fb, &clear_rect);
+         brw_meta_get_buffer_rect(fb,
+                                  &clear_rect.x0, &clear_rect.y0,
+                                  &clear_rect.x1, &clear_rect.y1);
          break;
 
       case PLAIN_CLEAR:
          plain_clear_buffers |= 1 << index;
-         get_buffer_rect(fb, &clear_rect);
+         brw_meta_get_buffer_rect(fb,
+                                  &clear_rect.x0, &clear_rect.y0,
+                                  &clear_rect.x1, &clear_rect.y1);
          continue;
       }
    }
@@ -802,9 +817,11 @@ brw_meta_fast_clear(struct brw_context *brw, struct gl_framebuffer *fb,
    return true;
 }
 
-static void
-get_resolve_rect(struct brw_context *brw,
-                 struct intel_mipmap_tree *mt, struct rect *rect)
+void
+brw_get_resolve_rect(const struct brw_context *brw,
+                     const struct intel_mipmap_tree *mt,
+                     unsigned *x0, unsigned *y0,
+                     unsigned *x1, unsigned *y1)
 {
    unsigned x_align, y_align;
    unsigned x_scaledown, y_scaledown;
@@ -821,7 +838,7 @@ get_resolve_rect(struct brw_context *brw,
     * by a factor of 2.
     */
 
-   intel_get_non_msrt_mcs_alignment(mt, &x_align, &y_align);
+   intel_get_non_msrt_mcs_alignment(brw, mt, &x_align, &y_align);
    if (brw->gen >= 9) {
       x_scaledown = x_align * 8;
       y_scaledown = y_align * 8;
@@ -832,9 +849,9 @@ get_resolve_rect(struct brw_context *brw,
       x_scaledown = x_align / 2;
       y_scaledown = y_align / 2;
    }
-   rect->x0 = rect->y0 = 0;
-   rect->x1 = ALIGN(mt->logical_width0, x_scaledown) / x_scaledown;
-   rect->y1 = ALIGN(mt->logical_height0, y_scaledown) / y_scaledown;
+   *x0 = *y0 = 0;
+   *x1 = ALIGN(mt->logical_width0, x_scaledown) / x_scaledown;
+   *y1 = ALIGN(mt->logical_height0, y_scaledown) / y_scaledown;
 }
 
 void
@@ -879,7 +896,7 @@ brw_meta_resolve_color(struct brw_context *brw,
       set_fast_clear_op(brw, GEN7_PS_RENDER_TARGET_RESOLVE_ENABLE);
 
    mt->fast_clear_state = INTEL_FAST_CLEAR_STATE_RESOLVED;
-   get_resolve_rect(brw, mt, &rect);
+   brw_get_resolve_rect(brw, mt, &rect.x0, &rect.y0, &rect.x1, &rect.y1);
 
    brw_draw_rectlist(brw, &rect, 1);
 

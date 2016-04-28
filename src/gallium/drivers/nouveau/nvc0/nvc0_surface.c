@@ -959,10 +959,10 @@ nvc0_blit_set_src(struct nvc0_blitctx *ctx,
    templ.format = format;
    templ.u.tex.first_layer = templ.u.tex.last_layer = layer;
    templ.u.tex.first_level = templ.u.tex.last_level = level;
-   templ.swizzle_r = PIPE_SWIZZLE_RED;
-   templ.swizzle_g = PIPE_SWIZZLE_GREEN;
-   templ.swizzle_b = PIPE_SWIZZLE_BLUE;
-   templ.swizzle_a = PIPE_SWIZZLE_ALPHA;
+   templ.swizzle_r = PIPE_SWIZZLE_X;
+   templ.swizzle_g = PIPE_SWIZZLE_Y;
+   templ.swizzle_b = PIPE_SWIZZLE_Z;
+   templ.swizzle_a = PIPE_SWIZZLE_W;
 
    if (layer == -1) {
       templ.u.tex.first_layer = 0;
@@ -1043,6 +1043,8 @@ nvc0_blitctx_pre_blit(struct nvc0_blitctx *ctx)
 
    ctx->saved.fb.width = nvc0->framebuffer.width;
    ctx->saved.fb.height = nvc0->framebuffer.height;
+   ctx->saved.fb.samples = nvc0->framebuffer.samples;
+   ctx->saved.fb.layers = nvc0->framebuffer.layers;
    ctx->saved.fb.nr_cbufs = nvc0->framebuffer.nr_cbufs;
    ctx->saved.fb.cbufs[0] = nvc0->framebuffer.cbufs[0];
    ctx->saved.fb.zsbuf = nvc0->framebuffer.zsbuf;
@@ -1110,6 +1112,8 @@ nvc0_blitctx_post_blit(struct nvc0_blitctx *blit)
 
    nvc0->framebuffer.width = blit->saved.fb.width;
    nvc0->framebuffer.height = blit->saved.fb.height;
+   nvc0->framebuffer.samples = blit->saved.fb.samples;
+   nvc0->framebuffer.layers = blit->saved.fb.layers;
    nvc0->framebuffer.nr_cbufs = blit->saved.fb.nr_cbufs;
    nvc0->framebuffer.cbufs[0] = blit->saved.fb.cbufs[0];
    nvc0->framebuffer.zsbuf = blit->saved.fb.zsbuf;

@@ -32,6 +32,7 @@
 #include "util/u_index_modify.h"
 #include "util/u_upload_mgr.h"
 #include "util/u_prim.h"
+#include "util/u_memory.h"
 
 static unsigned si_conv_pipe_prim(unsigned mode)
 {
@@ -607,15 +608,13 @@ void si_emit_cache_flush(struct si_context *si_ctx, struct r600_atom *atom)
 	struct r600_common_context *sctx = &si_ctx->b;
 	struct radeon_winsys_cs *cs = sctx->gfx.cs;
 	uint32_t cp_coher_cntl = 0;
-	uint32_t compute =
-		PKT3_SHADER_TYPE_S(!!(sctx->flags & SI_CONTEXT_FLAG_COMPUTE));
 
 	/* SI has a bug that it always flushes ICACHE and KCACHE if either
 	 * bit is set. An alternative way is to write SQC_CACHES, but that
 	 * doesn't seem to work reliably. Since the bug doesn't affect
 	 * correctness (it only does more work than necessary) and
 	 * the performance impact is likely negligible, there is no plan
-	 * to fix it.
+	 * to add a workaround for it.
 	 */
 
 	if (sctx->flags & SI_CONTEXT_INV_ICACHE)
@@ -628,7 +627,6 @@ void si_emit_cache_flush(struct si_context *si_ctx, struct r600_atom *atom)
 	if (sctx->flags & SI_CONTEXT_INV_GLOBAL_L2) {
 		cp_coher_cntl |= S_0085F0_TC_ACTION_ENA(1);
 
-		/* TODO: this might not be needed. */
 		if (sctx->chip_class >= VI)
 			cp_coher_cntl |= S_0301F0_TC_WB_ACTION_ENA(1);
 	}
@@ -646,7 +644,7 @@ void si_emit_cache_flush(struct si_context *si_ctx, struct r600_atom *atom)
 
 		/* Necessary for DCC */
 		if (sctx->chip_class >= VI) {
-			radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, 0) | compute);
+			radeon_emit(cs, PKT3(PKT3_EVENT_WRITE_EOP, 4, 0));
 			radeon_emit(cs, EVENT_TYPE(V_028A90_FLUSH_AND_INV_CB_DATA_TS) |
 			                EVENT_INDEX(5));
 			radeon_emit(cs, 0);
@@ -661,65 +659,75 @@ void si_emit_cache_flush(struct si_context *si_ctx, struct r600_atom *atom)
 	}
 
 	if (sctx->flags & SI_CONTEXT_FLUSH_AND_INV_CB_META) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_FLUSH_AND_INV_CB_META) | EVENT_INDEX(0));
+		/* needed for wait for idle in SURFACE_SYNC */
+		assert(sctx->flags & SI_CONTEXT_FLUSH_AND_INV_CB);
 	}
 	if (sctx->flags & SI_CONTEXT_FLUSH_AND_INV_DB_META) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_FLUSH_AND_INV_DB_META) | EVENT_INDEX(0));
+		/* needed for wait for idle in SURFACE_SYNC */
+		assert(sctx->flags & SI_CONTEXT_FLUSH_AND_INV_DB);
 	}
-	if (sctx->flags & SI_CONTEXT_FLUSH_WITH_INV_L2) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
-		radeon_emit(cs, EVENT_TYPE(EVENT_TYPE_CACHE_FLUSH) | EVENT_INDEX(7) |
-				EVENT_WRITE_INV_L2);
-        }
 
-	/* FLUSH_AND_INV events must be emitted before PS_PARTIAL_FLUSH.
-	 * Otherwise, clearing CMASK (CB meta) with CP DMA isn't reliable.
-	 *
-	 * I think the reason is that FLUSH_AND_INV is only added to a queue
-	 * and it is PS_PARTIAL_FLUSH that waits for it to complete.
+	/* Wait for shader engines to go idle.
+	 * VS and PS waits are unnecessary if SURFACE_SYNC is going to wait
+	 * for everything including CB/DB cache flushes.
 	 */
-	if (sctx->flags & SI_CONTEXT_PS_PARTIAL_FLUSH) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
-		radeon_emit(cs, EVENT_TYPE(V_028A90_PS_PARTIAL_FLUSH) | EVENT_INDEX(4));
-	} else if (sctx->flags & SI_CONTEXT_VS_PARTIAL_FLUSH) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
-		radeon_emit(cs, EVENT_TYPE(V_028A90_VS_PARTIAL_FLUSH) | EVENT_INDEX(4));
+	if (!(sctx->flags & (SI_CONTEXT_FLUSH_AND_INV_CB |
+			     SI_CONTEXT_FLUSH_AND_INV_DB))) {
+		if (sctx->flags & SI_CONTEXT_PS_PARTIAL_FLUSH) {
+			radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+			radeon_emit(cs, EVENT_TYPE(V_028A90_PS_PARTIAL_FLUSH) | EVENT_INDEX(4));
+		} else if (sctx->flags & SI_CONTEXT_VS_PARTIAL_FLUSH) {
+			radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+			radeon_emit(cs, EVENT_TYPE(V_028A90_VS_PARTIAL_FLUSH) | EVENT_INDEX(4));
+		}
 	}
 	if (sctx->flags & SI_CONTEXT_CS_PARTIAL_FLUSH) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_CS_PARTIAL_FLUSH | EVENT_INDEX(4)));
 	}
+
+	/* VGT state synchronization. */
 	if (sctx->flags & SI_CONTEXT_VGT_FLUSH) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_VGT_FLUSH) | EVENT_INDEX(0));
 	}
 	if (sctx->flags & SI_CONTEXT_VGT_STREAMOUT_SYNC) {
-		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0) | compute);
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
 		radeon_emit(cs, EVENT_TYPE(V_028A90_VGT_STREAMOUT_SYNC) | EVENT_INDEX(0));
 	}
 
-	/* SURFACE_SYNC must be emitted after partial flushes.
-	 * It looks like SURFACE_SYNC flushes caches immediately and doesn't
-	 * wait for any engines. This should be last.
+	/* Make sure ME is idle (it executes most packets) before continuing.
+	 * This prevents read-after-write hazards between PFP and ME.
+	 */
+	if (cp_coher_cntl || (sctx->flags & SI_CONTEXT_CS_PARTIAL_FLUSH)) {
+		radeon_emit(cs, PKT3(PKT3_PFP_SYNC_ME, 0, 0));
+		radeon_emit(cs, 0);
+	}
+
+	/* When one of the DEST_BASE flags is set, SURFACE_SYNC waits for idle.
+	 * Therefore, it should be last. Done in PFP.
 	 */
 	if (cp_coher_cntl) {
-		if (sctx->chip_class >= CIK) {
-			radeon_emit(cs, PKT3(PKT3_ACQUIRE_MEM, 5, 0) | compute);
-			radeon_emit(cs, cp_coher_cntl);   /* CP_COHER_CNTL */
-			radeon_emit(cs, 0xffffffff);      /* CP_COHER_SIZE */
-			radeon_emit(cs, 0xff);            /* CP_COHER_SIZE_HI */
-			radeon_emit(cs, 0);               /* CP_COHER_BASE */
-			radeon_emit(cs, 0);               /* CP_COHER_BASE_HI */
-			radeon_emit(cs, 0x0000000A);      /* POLL_INTERVAL */
-		} else {
-			radeon_emit(cs, PKT3(PKT3_SURFACE_SYNC, 3, 0) | compute);
-			radeon_emit(cs, cp_coher_cntl);   /* CP_COHER_CNTL */
-			radeon_emit(cs, 0xffffffff);      /* CP_COHER_SIZE */
-			radeon_emit(cs, 0);               /* CP_COHER_BASE */
-			radeon_emit(cs, 0x0000000A);      /* POLL_INTERVAL */
-		}
+		/* ACQUIRE_MEM is only required on a compute ring. */
+		radeon_emit(cs, PKT3(PKT3_SURFACE_SYNC, 3, 0));
+		radeon_emit(cs, cp_coher_cntl);   /* CP_COHER_CNTL */
+		radeon_emit(cs, 0xffffffff);      /* CP_COHER_SIZE */
+		radeon_emit(cs, 0);               /* CP_COHER_BASE */
+		radeon_emit(cs, 0x0000000A);      /* POLL_INTERVAL */
+	}
+
+	if (sctx->flags & R600_CONTEXT_START_PIPELINE_STATS) {
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, EVENT_TYPE(V_028A90_PIPELINESTAT_START) |
+			        EVENT_INDEX(0));
+	} else if (sctx->flags & R600_CONTEXT_STOP_PIPELINE_STATS) {
+		radeon_emit(cs, PKT3(PKT3_EVENT_WRITE, 0, 0));
+		radeon_emit(cs, EVENT_TYPE(V_028A90_PIPELINESTAT_STOP) |
+			        EVENT_INDEX(0));
 	}
 
 	sctx->flags = 0;
@@ -740,6 +748,27 @@ static void si_get_draw_start_count(struct si_context *sctx,
 	} else {
 		*start = info->start;
 		*count = info->count;
+	}
+}
+
+void si_ce_pre_draw_synchronization(struct si_context *sctx)
+{
+	if (sctx->ce_need_synchronization) {
+		radeon_emit(sctx->ce_ib, PKT3(PKT3_INCREMENT_CE_COUNTER, 0, 0));
+		radeon_emit(sctx->ce_ib, 1);
+
+		radeon_emit(sctx->b.gfx.cs, PKT3(PKT3_WAIT_ON_CE_COUNTER, 0, 0));
+		radeon_emit(sctx->b.gfx.cs, 1);
+	}
+}
+
+void si_ce_post_draw_synchronization(struct si_context *sctx)
+{
+	if (sctx->ce_need_synchronization) {
+		radeon_emit(sctx->b.gfx.cs, PKT3(PKT3_INCREMENT_DE_COUNTER, 0, 0));
+		radeon_emit(sctx->b.gfx.cs, 0);
+
+		sctx->ce_need_synchronization = false;
 	}
 }
 
@@ -777,7 +806,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		si_mark_atom_dirty(sctx, &sctx->framebuffer.atom);
 	}
 
-	si_decompress_textures(sctx);
+	si_decompress_graphics_textures(sctx);
 
 	/* Set the rasterization primitive type.
 	 *
@@ -793,7 +822,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 		sctx->current_rast_prim = info->mode;
 
 	if (!si_update_shaders(sctx) ||
-	    !si_upload_shader_descriptors(sctx))
+	    !si_upload_graphics_shader_descriptors(sctx))
 		return;
 
 	if (info->indexed) {
@@ -872,7 +901,12 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	si_emit_scratch_reloc(sctx);
 	si_emit_rasterizer_prim_state(sctx);
 	si_emit_draw_registers(sctx, info);
+
+	si_ce_pre_draw_synchronization(sctx);
+
 	si_emit_draw_packets(sctx, info, &ib);
+
+	si_ce_post_draw_synchronization(sctx);
 
 	if (sctx->trace_buf)
 		si_trace_emit(sctx);
@@ -882,8 +916,7 @@ void si_draw_vbo(struct pipe_context *ctx, const struct pipe_draw_info *info)
 	if ((sctx->b.family == CHIP_HAWAII ||
 	     sctx->b.family == CHIP_TONGA ||
 	     sctx->b.family == CHIP_FIJI) &&
-	    (sctx->b.streamout.streamout_enabled ||
-	     sctx->b.streamout.prims_gen_query_enabled)) {
+	    r600_get_strmout_en(&sctx->b)) {
 		sctx->b.flags |= SI_CONTEXT_VGT_STREAMOUT_SYNC;
 	}
 

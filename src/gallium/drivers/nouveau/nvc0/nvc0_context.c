@@ -91,8 +91,39 @@ nvc0_memory_barrier(struct pipe_context *pipe, unsigned flags)
          }
       }
    }
-   if (flags & PIPE_BARRIER_SHADER_BUFFER) {
+
+   if (flags & (PIPE_BARRIER_SHADER_BUFFER   |
+                PIPE_BARRIER_CONSTANT_BUFFER |
+                PIPE_BARRIER_INDEX_BUFFER    |
+                PIPE_BARRIER_IMAGE           |
+                PIPE_BARRIER_TEXTURE         |
+                PIPE_BARRIER_VERTEX_BUFFER   |
+                PIPE_BARRIER_STREAMOUT_BUFFER)) {
       IMMED_NVC0(push, NVC0_3D(MEM_BARRIER), 0x1011);
+   }
+}
+
+static void
+nvc0_emit_string_marker(struct pipe_context *pipe, const char *str, int len)
+{
+   struct nouveau_pushbuf *push = nvc0_context(pipe)->base.pushbuf;
+   int string_words = len / 4;
+   int data_words;
+
+   if (len <= 0)
+      return;
+   string_words = MIN2(string_words, NV04_PFIFO_MAX_PACKET_LEN);
+   if (string_words == NV04_PFIFO_MAX_PACKET_LEN)
+      data_words = string_words;
+   else
+      data_words = string_words + !!(len & 3);
+   BEGIN_NIC0(push, SUBC_3D(NV04_GRAPH_NOP), data_words);
+   if (string_words)
+      PUSH_DATAp(push, str, string_words);
+   if (string_words != data_words) {
+      int data = 0;
+      memcpy(&data, &str[string_words * 4], len & 3);
+      PUSH_DATA (push, data);
    }
 }
 
@@ -277,6 +308,23 @@ nvc0_invalidate_resource_storage(struct nouveau_context *ctx,
          }
       }
       }
+
+      for (s = 0; s < 6; ++s) {
+      for (i = 0; i < NVC0_MAX_IMAGES; ++i) {
+         if (nvc0->images[s][i].resource == res) {
+            nvc0->images_dirty[s] |= 1 << i;
+            if (unlikely(s == 5)) {
+               nvc0->dirty_cp |= NVC0_NEW_CP_SURFACES;
+               nouveau_bufctx_reset(nvc0->bufctx_cp, NVC0_BIND_CP_SUF);
+            } else {
+               nvc0->dirty_3d |= NVC0_NEW_3D_SURFACES;
+               nouveau_bufctx_reset(nvc0->bufctx_3d, NVC0_BIND_3D_SUF);
+            }
+         }
+         if (!--ref)
+            return ref;
+      }
+      }
    }
 
    return ref;
@@ -333,6 +381,7 @@ nvc0_create(struct pipe_screen *pscreen, void *priv, unsigned ctxflags)
    pipe->texture_barrier = nvc0_texture_barrier;
    pipe->memory_barrier = nvc0_memory_barrier;
    pipe->get_sample_position = nvc0_context_get_sample_position;
+   pipe->emit_string_marker = nvc0_emit_string_marker;
 
    nouveau_context_init(&nvc0->base);
    nvc0_init_query_functions(nvc0);
@@ -380,7 +429,6 @@ nvc0_create(struct pipe_screen *pscreen, void *priv, unsigned ctxflags)
       BCTX_REFN_bo(nvc0->bufctx_cp, CP_SCREEN, flags, screen->text);
       BCTX_REFN_bo(nvc0->bufctx_cp, CP_SCREEN, flags, screen->uniform_bo);
       BCTX_REFN_bo(nvc0->bufctx_cp, CP_SCREEN, flags, screen->txc);
-      BCTX_REFN_bo(nvc0->bufctx_cp, CP_SCREEN, flags, screen->parm);
    }
 
    flags = NV_VRAM_DOMAIN(&screen->base) | NOUVEAU_BO_RDWR;

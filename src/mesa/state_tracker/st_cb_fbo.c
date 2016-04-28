@@ -40,6 +40,7 @@
 #include "main/glformats.h"
 #include "main/macros.h"
 #include "main/renderbuffer.h"
+#include "main/state.h"
 
 #include "pipe/p_context.h"
 #include "pipe/p_defines.h"
@@ -643,6 +644,7 @@ st_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
                                depth,
 			       PIPE_BIND_DEPTH_STENCIL)) {
       fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
+      st_fbo_invalid("Invalid depth attachment");
       return;
    }
    if (!st_validate_attachment(ctx,
@@ -650,6 +652,7 @@ st_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
                                stencil,
 			       PIPE_BIND_DEPTH_STENCIL)) {
       fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
+      st_fbo_invalid("Invalid stencil attachment");
       return;
    }
    for (i = 0; i < ctx->Const.MaxColorAttachments; i++) {
@@ -662,6 +665,7 @@ st_validate_framebuffer(struct gl_context *ctx, struct gl_framebuffer *fb)
 				  att,
 				  PIPE_BIND_RENDER_TARGET)) {
 	 fb->_Status = GL_FRAMEBUFFER_UNSUPPORTED_EXT;
+	 st_fbo_invalid("Invalid color attachment");
 	 return;
       }
 
@@ -729,6 +733,7 @@ st_ReadBuffer(struct gl_context *ctx, GLenum buffer)
        fb->Attachment[fb->_ColorReadBufferIndex].Type == GL_NONE) {
       /* add the buffer */
       st_manager_add_color_renderbuffer(st, fb, fb->_ColorReadBufferIndex);
+      _mesa_update_state(ctx);
       st_validate_state(st, ST_PIPELINE_RENDER);
    }
 }

@@ -140,7 +140,7 @@ struct pipe_context {
                          struct pipe_query *q);
 
    boolean (*begin_query)(struct pipe_context *pipe, struct pipe_query *q);
-   void (*end_query)(struct pipe_context *pipe, struct pipe_query *q);
+   bool (*end_query)(struct pipe_context *pipe, struct pipe_query *q);
 
    /**
     * Get results of a query.
@@ -172,6 +172,12 @@ struct pipe_context {
                                      int index,
                                      struct pipe_resource *resource,
                                      unsigned offset);
+
+   /**
+    * Set whether all current non-driver queries except TIME_ELAPSED are
+    * active or paused.
+    */
+   void (*set_active_query_state)(struct pipe_context *pipe, boolean enable);
 
    /*@}*/
 

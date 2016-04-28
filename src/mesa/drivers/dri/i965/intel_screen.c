@@ -516,7 +516,11 @@ intel_create_image(__DRIscreen *screen,
    int cpp;
    unsigned long pitch;
 
-   tiling = I915_TILING_X;
+   if (intelScreen->devinfo->gen >= 9) {
+      tiling = I915_TILING_Y;
+   } else {
+      tiling = I915_TILING_X;
+   }
    if (use & __DRI_IMAGE_USE_CURSOR) {
       if (width != 64 || height != 64)
 	 return NULL;
@@ -932,7 +936,7 @@ static const __DRIextension *intelRobustScreenExtensions[] = {
     NULL
 };
 
-static bool
+static int
 intel_get_param(__DRIscreen *psp, int param, int *value)
 {
    int ret;
@@ -943,20 +947,17 @@ intel_get_param(__DRIscreen *psp, int param, int *value)
    gp.value = value;
 
    ret = drmCommandWriteRead(psp->fd, DRM_I915_GETPARAM, &gp, sizeof(gp));
-   if (ret) {
-      if (ret != -EINVAL)
+   if (ret < 0 && ret != -EINVAL)
 	 _mesa_warning(NULL, "drm_i915_getparam: %d", ret);
-      return false;
-   }
 
-   return true;
+   return ret;
 }
 
 static bool
 intel_get_boolean(__DRIscreen *psp, int param)
 {
    int value = 0;
-   return intel_get_param(psp, param, &value) && value;
+   return (intel_get_param(psp, param, &value) == 0) && value;
 }
 
 static void
@@ -1000,14 +1001,18 @@ intelCreateBuffer(__DRIscreen * driScrnPriv,
       fb->Visual.samples = num_samples;
    }
 
-   if (mesaVis->redBits == 5)
-      rgbFormat = MESA_FORMAT_B5G6R5_UNORM;
-   else if (mesaVis->sRGBCapable)
-      rgbFormat = MESA_FORMAT_B8G8R8A8_SRGB;
-   else if (mesaVis->alphaBits == 0)
-      rgbFormat = MESA_FORMAT_B8G8R8X8_UNORM;
-   else {
-      rgbFormat = MESA_FORMAT_B8G8R8A8_SRGB;
+   if (mesaVis->redBits == 5) {
+      rgbFormat = mesaVis->redMask == 0x1f ? MESA_FORMAT_R5G6B5_UNORM
+                                           : MESA_FORMAT_B5G6R5_UNORM;
+   } else if (mesaVis->sRGBCapable) {
+      rgbFormat = mesaVis->redMask == 0xff ? MESA_FORMAT_R8G8B8A8_SRGB
+                                           : MESA_FORMAT_B8G8R8A8_SRGB;
+   } else if (mesaVis->alphaBits == 0) {
+      rgbFormat = mesaVis->redMask == 0xff ? MESA_FORMAT_R8G8B8X8_UNORM
+                                           : MESA_FORMAT_B8G8R8X8_UNORM;
+   } else {
+      rgbFormat = mesaVis->redMask == 0xff ? MESA_FORMAT_R8G8B8A8_SRGB
+                                           : MESA_FORMAT_B8G8R8A8_SRGB;
       fb->Visual.sRGBCapable = true;
    }
 
@@ -1078,11 +1083,45 @@ intelDestroyBuffer(__DRIdrawable * driDrawPriv)
     _mesa_reference_framebuffer(&fb, NULL);
 }
 
+static void
+intel_detect_sseu(struct intel_screen *intelScreen)
+{
+   assert(intelScreen->devinfo->gen >= 8);
+   int ret;
+
+   intelScreen->subslice_total = -1;
+   intelScreen->eu_total = -1;
+
+   ret = intel_get_param(intelScreen->driScrnPriv, I915_PARAM_SUBSLICE_TOTAL,
+                         &intelScreen->subslice_total);
+   if (ret < 0 && ret != -EINVAL)
+      goto err_out;
+
+   ret = intel_get_param(intelScreen->driScrnPriv,
+                         I915_PARAM_EU_TOTAL, &intelScreen->eu_total);
+   if (ret < 0 && ret != -EINVAL)
+      goto err_out;
+
+   /* Without this information, we cannot get the right Braswell brandstrings,
+    * and we have to use conservative numbers for GPGPU on many platforms, but
+    * otherwise, things will just work.
+    */
+   if (intelScreen->subslice_total < 1 || intelScreen->eu_total < 1)
+      _mesa_warning(NULL,
+                    "Kernel 4.1 required to properly query GPU properties.\n");
+
+   return;
+
+err_out:
+   intelScreen->subslice_total = -1;
+   intelScreen->eu_total = -1;
+   _mesa_warning(NULL, "Failed to query GPU properties (%s).\n", strerror(ret));
+}
+
 static bool
 intel_init_bufmgr(struct intel_screen *intelScreen)
 {
    __DRIscreen *spriv = intelScreen->driScrnPriv;
-   bool devid_override = getenv("INTEL_DEVID_OVERRIDE") != NULL;
 
    intelScreen->no_hw = getenv("INTEL_NO_HW") != NULL;
 
@@ -1100,25 +1139,6 @@ intel_init_bufmgr(struct intel_screen *intelScreen)
       return false;
    }
 
-   intelScreen->subslice_total = -1;
-   intelScreen->eu_total = -1;
-
-   /* Everything below this is for real hardware only */
-   if (intelScreen->no_hw || devid_override)
-      return true;
-
-   intel_get_param(spriv, I915_PARAM_SUBSLICE_TOTAL,
-                   &intelScreen->subslice_total);
-   intel_get_param(spriv, I915_PARAM_EU_TOTAL, &intelScreen->eu_total);
-
-   /* Without this information, we cannot get the right Braswell brandstrings,
-    * and we have to use conservative numbers for GPGPU on many platforms, but
-    * otherwise, things will just work.
-    */
-   if (intelScreen->subslice_total == -1 || intelScreen->eu_total == -1)
-      _mesa_warning(NULL,
-                    "Kernel 4.1 required to properly query GPU properties.\n");
-
    return true;
 }
 
@@ -1128,8 +1148,14 @@ intel_detect_swizzling(struct intel_screen *screen)
    drm_intel_bo *buffer;
    unsigned long flags = 0;
    unsigned long aligned_pitch;
-   uint32_t tiling = I915_TILING_X;
    uint32_t swizzle_mode = 0;
+   uint32_t tiling;
+
+   if (screen->devinfo->gen >= 9) {
+      tiling = I915_TILING_Y;
+   } else {
+      tiling = I915_TILING_X;
+   }
 
    buffer = drm_intel_bo_alloc_tiled(screen->bufmgr, "swizzle test",
 				     64, 64, 4,
@@ -1473,6 +1499,10 @@ __DRIconfig **intelInitScreen2(__DRIscreen *psp)
    intelScreen->hw_has_swizzling = intel_detect_swizzling(intelScreen);
    intelScreen->hw_has_timestamp = intel_detect_timestamp(intelScreen);
 
+   /* GENs prior to 8 do not support EU/Subslice info */
+   if (intelScreen->devinfo->gen >= 8)
+      intel_detect_sseu(intelScreen);
+
    const char *force_msaa = getenv("INTEL_FORCE_MSAA");
    if (force_msaa) {
       intelScreen->winsys_msaa_samples_override =
@@ -1551,7 +1581,12 @@ intelAllocateBuffer(__DRIscreen *screen,
       return NULL;
 
    /* The front and back buffers are color buffers, which are X tiled. */
-   uint32_t tiling = I915_TILING_X;
+   uint32_t tiling;
+   if (intelScreen->devinfo->gen >= 9) {
+      tiling = I915_TILING_Y;
+   } else {
+      tiling = I915_TILING_X;
+   }
    unsigned long pitch;
    int cpp = format / 8;
    intelBuffer->bo = drm_intel_bo_alloc_tiled(intelScreen->bufmgr,

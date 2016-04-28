@@ -40,32 +40,29 @@
 #include "swr_state.h"
 #include "swr_screen.h"
 
-bool operator==(const swr_jit_key &lhs, const swr_jit_key &rhs)
+bool operator==(const swr_jit_fs_key &lhs, const swr_jit_fs_key &rhs)
 {
    return !memcmp(&lhs, &rhs, sizeof(lhs));
 }
 
-void
-swr_generate_fs_key(struct swr_jit_key &key,
-                    struct swr_context *ctx,
-                    swr_fragment_shader *swr_fs)
+bool operator==(const swr_jit_vs_key &lhs, const swr_jit_vs_key &rhs)
 {
-   key.nr_cbufs = ctx->framebuffer.nr_cbufs;
-   key.light_twoside = ctx->rasterizer->light_twoside;
-   memcpy(&key.vs_output_semantic_name,
-          &ctx->vs->info.base.output_semantic_name,
-          sizeof(key.vs_output_semantic_name));
-   memcpy(&key.vs_output_semantic_idx,
-          &ctx->vs->info.base.output_semantic_index,
-          sizeof(key.vs_output_semantic_idx));
+   return !memcmp(&lhs, &rhs, sizeof(lhs));
+}
 
-   key.nr_samplers = swr_fs->info.base.file_max[TGSI_FILE_SAMPLER] + 1;
+static void
+swr_generate_sampler_key(const struct lp_tgsi_info &info,
+                         struct swr_context *ctx,
+                         unsigned shader_type,
+                         struct swr_jit_sampler_key &key)
+{
+   key.nr_samplers = info.base.file_max[TGSI_FILE_SAMPLER] + 1;
 
    for (unsigned i = 0; i < key.nr_samplers; i++) {
-      if (swr_fs->info.base.file_mask[TGSI_FILE_SAMPLER] & (1 << i)) {
+      if (info.base.file_mask[TGSI_FILE_SAMPLER] & (1 << i)) {
          lp_sampler_static_sampler_state(
             &key.sampler[i].sampler_state,
-            ctx->samplers[PIPE_SHADER_FRAGMENT][i]);
+            ctx->samplers[shader_type][i]);
       }
    }
 
@@ -74,43 +71,81 @@ swr_generate_fs_key(struct swr_jit_key &key,
     * are dx10-style? Can't really have mixed opcodes, at least not
     * if we want to skip the holes here (without rescanning tgsi).
     */
-   if (swr_fs->info.base.file_max[TGSI_FILE_SAMPLER_VIEW] != -1) {
+   if (info.base.file_max[TGSI_FILE_SAMPLER_VIEW] != -1) {
       key.nr_sampler_views =
-         swr_fs->info.base.file_max[TGSI_FILE_SAMPLER_VIEW] + 1;
+         info.base.file_max[TGSI_FILE_SAMPLER_VIEW] + 1;
       for (unsigned i = 0; i < key.nr_sampler_views; i++) {
-         if (swr_fs->info.base.file_mask[TGSI_FILE_SAMPLER_VIEW] & (1 << i)) {
+         if (info.base.file_mask[TGSI_FILE_SAMPLER_VIEW] & (1 << i)) {
             lp_sampler_static_texture_state(
                &key.sampler[i].texture_state,
-               ctx->sampler_views[PIPE_SHADER_FRAGMENT][i]);
+               ctx->sampler_views[shader_type][i]);
          }
       }
    } else {
       key.nr_sampler_views = key.nr_samplers;
       for (unsigned i = 0; i < key.nr_sampler_views; i++) {
-         if (swr_fs->info.base.file_mask[TGSI_FILE_SAMPLER] & (1 << i)) {
+         if (info.base.file_mask[TGSI_FILE_SAMPLER] & (1 << i)) {
             lp_sampler_static_texture_state(
                &key.sampler[i].texture_state,
-               ctx->sampler_views[PIPE_SHADER_FRAGMENT][i]);
+               ctx->sampler_views[shader_type][i]);
          }
       }
    }
 }
 
+void
+swr_generate_fs_key(struct swr_jit_fs_key &key,
+                    struct swr_context *ctx,
+                    swr_fragment_shader *swr_fs)
+{
+   memset(&key, 0, sizeof(key));
+
+   key.nr_cbufs = ctx->framebuffer.nr_cbufs;
+   key.light_twoside = ctx->rasterizer->light_twoside;
+   key.flatshade = ctx->rasterizer->flatshade;
+   memcpy(&key.vs_output_semantic_name,
+          &ctx->vs->info.base.output_semantic_name,
+          sizeof(key.vs_output_semantic_name));
+   memcpy(&key.vs_output_semantic_idx,
+          &ctx->vs->info.base.output_semantic_index,
+          sizeof(key.vs_output_semantic_idx));
+
+   swr_generate_sampler_key(swr_fs->info, ctx, PIPE_SHADER_FRAGMENT, key);
+}
+
+void
+swr_generate_vs_key(struct swr_jit_vs_key &key,
+                    struct swr_context *ctx,
+                    swr_vertex_shader *swr_vs)
+{
+   memset(&key, 0, sizeof(key));
+
+   swr_generate_sampler_key(swr_vs->info, ctx, PIPE_SHADER_VERTEX, key);
+}
+
 struct BuilderSWR : public Builder {
-   BuilderSWR(JitManager *pJitMgr)
+   BuilderSWR(JitManager *pJitMgr, const char *pName)
       : Builder(pJitMgr)
    {
       pJitMgr->SetupNewModule();
+      gallivm = gallivm_create(pName, wrap(&JM()->mContext));
+      pJitMgr->mpCurrentModule = unwrap(gallivm->module);
    }
 
-   PFN_VERTEX_FUNC
-   CompileVS(struct pipe_context *ctx, swr_vertex_shader *swr_vs);
-   PFN_PIXEL_KERNEL CompileFS(struct swr_context *ctx, swr_jit_key &key);
+   ~BuilderSWR() {
+      gallivm_free_ir(gallivm);
+   }
+
+   struct gallivm_state *gallivm;
+   PFN_VERTEX_FUNC CompileVS(struct swr_context *ctx, swr_jit_vs_key &key);
+   PFN_PIXEL_KERNEL CompileFS(struct swr_context *ctx, swr_jit_fs_key &key);
 };
 
 PFN_VERTEX_FUNC
-BuilderSWR::CompileVS(struct pipe_context *ctx, swr_vertex_shader *swr_vs)
+BuilderSWR::CompileVS(struct swr_context *ctx, swr_jit_vs_key &key)
 {
+   struct swr_vertex_shader *swr_vs = ctx->vs;
+
    swr_vs->linkageMask = 0;
 
    for (unsigned i = 0; i < swr_vs->info.base.num_outputs; i++) {
@@ -122,12 +157,6 @@ BuilderSWR::CompileVS(struct pipe_context *ctx, swr_vertex_shader *swr_vs)
          break;
       }
    }
-
-   //   tgsi_dump(swr_vs->pipe.tokens, 0);
-
-   struct gallivm_state *gallivm =
-      gallivm_create("VS", wrap(&JM()->mContext));
-   gallivm->module = wrap(JM()->mpCurrentModule);
 
    LLVMValueRef inputs[PIPE_MAX_SHADER_INPUTS][TGSI_NUM_CHANNELS];
    LLVMValueRef outputs[PIPE_MAX_SHADER_OUTPUTS][TGSI_NUM_CHANNELS];
@@ -180,6 +209,9 @@ BuilderSWR::CompileVS(struct pipe_context *ctx, swr_vertex_shader *swr_vs)
       }
    }
 
+   struct lp_build_sampler_soa *sampler =
+      swr_sampler_soa_create(key.sampler, PIPE_SHADER_VERTEX);
+
    struct lp_bld_tgsi_system_values system_values;
    memset(&system_values, 0, sizeof(system_values));
    system_values.instance_id = wrap(LOAD(pVsCtx, {0, SWR_VS_CONTEXT_InstanceID}));
@@ -194,11 +226,13 @@ BuilderSWR::CompileVS(struct pipe_context *ctx, swr_vertex_shader *swr_vs)
                      &system_values,
                      inputs,
                      outputs,
-                     NULL, // wrap(hPrivateData), (sampler context)
+                     wrap(hPrivateData), // (sampler context)
                      NULL, // thread data
-                     NULL, // sampler
+                     sampler, // sampler
                      &swr_vs->info.base,
                      NULL); // geometry shader face
+
+   sampler->destroy(sampler);
 
    IRB()->SetInsertPoint(unwrap(LLVMGetInsertBlock(gallivm->builder)));
 
@@ -239,11 +273,15 @@ BuilderSWR::CompileVS(struct pipe_context *ctx, swr_vertex_shader *swr_vs)
 }
 
 PFN_VERTEX_FUNC
-swr_compile_vs(struct pipe_context *ctx, swr_vertex_shader *swr_vs)
+swr_compile_vs(struct swr_context *ctx, swr_jit_vs_key &key)
 {
    BuilderSWR builder(
-      reinterpret_cast<JitManager *>(swr_screen(ctx->screen)->hJitMgr));
-   return builder.CompileVS(ctx, swr_vs);
+      reinterpret_cast<JitManager *>(swr_screen(ctx->pipe.screen)->hJitMgr),
+      "VS");
+   PFN_VERTEX_FUNC func = builder.CompileVS(ctx, key);
+
+   ctx->vs->map.insert(std::make_pair(key, make_unique<VariantVS>(builder.gallivm, func)));
+   return func;
 }
 
 static unsigned
@@ -269,15 +307,9 @@ locate_linkage(ubyte name, ubyte index, struct tgsi_shader_info *info)
 }
 
 PFN_PIXEL_KERNEL
-BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_key &key)
+BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_fs_key &key)
 {
    struct swr_fragment_shader *swr_fs = ctx->fs;
-
-   //   tgsi_dump(swr_fs->pipe.tokens, 0);
-
-   struct gallivm_state *gallivm =
-      gallivm_create("FS", wrap(&JM()->mContext));
-   gallivm->module = wrap(JM()->mpCurrentModule);
 
    LLVMValueRef inputs[PIPE_MAX_SHADER_INPUTS][TGSI_NUM_CHANNELS];
    LLVMValueRef outputs[PIPE_MAX_SHADER_OUTPUTS][TGSI_NUM_CHANNELS];
@@ -461,6 +493,9 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_key &key)
 
             if (interpMode == TGSI_INTERPOLATE_CONSTANT) {
                inputs[attrib][channel] = wrap(va);
+            } else if ((interpMode == TGSI_INTERPOLATE_COLOR) &&
+                       (key.flatshade == true)) {
+               inputs[attrib][channel] = wrap(vc);
             } else {
                Value *vk = FSUB(FSUB(VIMMED1(1.0f), vi), vj);
 
@@ -478,7 +513,7 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_key &key)
       }
    }
 
-   sampler = swr_sampler_soa_create(key.sampler);
+   sampler = swr_sampler_soa_create(key.sampler, PIPE_SHADER_FRAGMENT);
 
    struct lp_bld_tgsi_system_values system_values;
    memset(&system_values, 0, sizeof(system_values));
@@ -505,6 +540,8 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_key &key)
                      sampler, // sampler
                      &swr_fs->info.base,
                      NULL); // geometry shader face
+
+   sampler->destroy(sampler);
 
    IRB()->SetInsertPoint(unwrap(LLVMGetInsertBlock(gallivm->builder)));
 
@@ -583,9 +620,13 @@ BuilderSWR::CompileFS(struct swr_context *ctx, swr_jit_key &key)
 }
 
 PFN_PIXEL_KERNEL
-swr_compile_fs(struct swr_context *ctx, swr_jit_key &key)
+swr_compile_fs(struct swr_context *ctx, swr_jit_fs_key &key)
 {
    BuilderSWR builder(
-      reinterpret_cast<JitManager *>(swr_screen(ctx->pipe.screen)->hJitMgr));
-   return builder.CompileFS(ctx, key);
+      reinterpret_cast<JitManager *>(swr_screen(ctx->pipe.screen)->hJitMgr),
+      "FS");
+   PFN_PIXEL_KERNEL func = builder.CompileFS(ctx, key);
+
+   ctx->fs->map.insert(std::make_pair(key, make_unique<VariantFS>(builder.gallivm, func)));
+   return func;
 }

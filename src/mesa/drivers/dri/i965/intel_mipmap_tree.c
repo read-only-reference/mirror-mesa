@@ -144,7 +144,8 @@ compute_msaa_layout(struct brw_context *brw, mesa_format format,
  *   by half the block width, and Y coordinates by half the block height.
  */
 void
-intel_get_non_msrt_mcs_alignment(struct intel_mipmap_tree *mt,
+intel_get_non_msrt_mcs_alignment(const struct brw_context *brw,
+                                 const struct intel_mipmap_tree *mt,
                                  unsigned *width_px, unsigned *height)
 {
    switch (mt->tiling) {
@@ -156,6 +157,11 @@ intel_get_non_msrt_mcs_alignment(struct intel_mipmap_tree *mt,
       *height = 4;
       break;
    case I915_TILING_X:
+      /* The docs are somewhat confusing with the way the tables are displayed.
+       * However, it does clearly state: "MCS and Lossless compression is
+       * supported for TiledY/TileYs/TileYf non-MSRTs only."
+       */
+      assert(brw->gen < 9);
       *width_px = 64 / mt->cpp;
       *height = 2;
    }
@@ -1552,7 +1558,7 @@ intel_miptree_alloc_non_msrt_mcs(struct brw_context *brw,
    const mesa_format format = MESA_FORMAT_R_UINT32;
    unsigned block_width_px;
    unsigned block_height;
-   intel_get_non_msrt_mcs_alignment(mt, &block_width_px, &block_height);
+   intel_get_non_msrt_mcs_alignment(brw, mt, &block_width_px, &block_height);
    unsigned width_divisor = block_width_px * 4;
    unsigned height_divisor = block_height * 8;
 
@@ -2068,7 +2074,7 @@ intel_miptree_resolve_color(struct brw_context *brw,
       /* Fast color clear resolves only make sense for non-MSAA buffers. */
       if (mt->msaa_layout == INTEL_MSAA_LAYOUT_NONE ||
           intel_miptree_is_lossless_compressed(brw, mt)) {
-         brw_meta_resolve_color(brw, mt);
+         brw_blorp_resolve_color(brw, mt);
       }
       break;
    }
@@ -2164,9 +2170,13 @@ intel_miptree_updownsample(struct brw_context *brw,
                            struct intel_mipmap_tree *src,
                            struct intel_mipmap_tree *dst)
 {
-   if (brw->gen < 8) {
+   /* There is support for only up to eight samples. */
+   const bool use_blorp = src->num_samples <= 8 && dst->num_samples <= 8;
+
+   if (use_blorp) {
       brw_blorp_blit_miptrees(brw,
-                              src, 0 /* level */, 0 /* layer */, src->format,
+                              src, 0 /* level */, 0 /* layer */,
+                              src->format, SWIZZLE_XYZW,
                               dst, 0 /* level */, 0 /* layer */, dst->format,
                               0, 0,
                               src->logical_width0, src->logical_height0,
@@ -2181,14 +2191,14 @@ intel_miptree_updownsample(struct brw_context *brw,
    }
 
    if (src->stencil_mt) {
-      if (brw->gen >= 8) {
+      if (!use_blorp) {
          brw_meta_stencil_updownsample(brw, src->stencil_mt, dst);
          return;
       }
 
       brw_blorp_blit_miptrees(brw,
                               src->stencil_mt, 0 /* level */, 0 /* layer */,
-                              src->stencil_mt->format,
+                              src->stencil_mt->format, SWIZZLE_XYZW,
                               dst->stencil_mt, 0 /* level */, 0 /* layer */,
                               dst->stencil_mt->format,
                               0, 0,
@@ -2200,7 +2210,7 @@ intel_miptree_updownsample(struct brw_context *brw,
    }
 }
 
-void *
+static void *
 intel_miptree_map_raw(struct brw_context *brw, struct intel_mipmap_tree *mt)
 {
    /* CPU accesses to color buffers don't understand fast color clears, so
@@ -2221,7 +2231,7 @@ intel_miptree_map_raw(struct brw_context *brw, struct intel_mipmap_tree *mt)
    return bo->virtual;
 }
 
-void
+static void
 intel_miptree_unmap_raw(struct intel_mipmap_tree *mt)
 {
    drm_intel_bo_unmap(mt->bo);
@@ -2488,8 +2498,8 @@ intel_miptree_unmap_s8(struct brw_context *brw,
       for (uint32_t y = 0; y < map->h; y++) {
 	 for (uint32_t x = 0; x < map->w; x++) {
 	    ptrdiff_t offset = intel_offset_S8(mt->pitch,
-	                                       x + map->x,
-	                                       y + map->y,
+	                                       image_x + x + map->x,
+	                                       image_y + y + map->y,
 					       brw->has_swizzling);
 	    tiled_s8_map[offset] = untiled_s8_map[y * map->w + x];
 	 }

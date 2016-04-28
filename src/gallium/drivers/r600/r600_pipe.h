@@ -33,12 +33,11 @@
 #include "util/u_suballoc.h"
 #include "util/list.h"
 #include "util/u_transfer.h"
+#include "util/u_memory.h"
 
 #include "tgsi/tgsi_scan.h"
 
 #define R600_NUM_ATOMS 52
-
-#define R600_MAX_VIEWPORTS 16
 
 /* read caches */
 #define R600_CONTEXT_INV_VERTEX_CACHE		(R600_CONTEXT_PRIVATE_FLAG << 0)
@@ -56,7 +55,7 @@
 #define R600_CONTEXT_WAIT_CP_DMA_IDLE		(R600_CONTEXT_PRIVATE_FLAG << 10)
 
 /* the number of CS dwords for flushing and drawing */
-#define R600_MAX_FLUSH_CS_DWORDS	16
+#define R600_MAX_FLUSH_CS_DWORDS	18
 #define R600_MAX_DRAW_CS_DWORDS		58
 
 #define R600_MAX_USER_CONST_BUFFERS 13
@@ -94,12 +93,6 @@
 #define R600_NUM_HW_STAGES 4
 #define EG_NUM_HW_STAGES 6
 
-#ifdef PIPE_ARCH_BIG_ENDIAN
-#define R600_BIG_ENDIAN 1
-#else
-#define R600_BIG_ENDIAN 0
-#endif
-
 struct r600_context;
 struct r600_bytecode;
 union  r600_shader_key;
@@ -120,7 +113,7 @@ struct r600_db_state {
 
 struct r600_db_misc_state {
 	struct r600_atom		atom;
-	bool				occlusion_query_enabled;
+	bool				occlusion_queries_disabled;
 	bool				flush_depthstencil_through_cb;
 	bool				flush_depth_inplace;
 	bool				flush_stencil_inplace;
@@ -219,12 +212,6 @@ struct r600_stencil_ref_state {
 	struct r600_atom atom;
 	struct r600_stencil_ref state;
 	struct pipe_stencil_ref pipe_state;
-};
-
-struct r600_viewport_state {
-	struct r600_atom atom;
-	struct pipe_viewport_state state[R600_MAX_VIEWPORTS];
-	uint32_t dirty_mask;
 };
 
 struct r600_shader_stages_state {
@@ -412,14 +399,6 @@ struct r600_cso_state
 	struct r600_command_buffer *cb;
 };
 
-struct r600_scissor_state
-{
-	struct r600_atom		atom;
-	struct pipe_scissor_state	scissor[R600_MAX_VIEWPORTS];
-	uint32_t			dirty_mask;
-	bool				enable; /* r6xx only */
-};
-
 struct r600_fetch_shader {
 	struct r600_resource		*buffer;
 	unsigned			offset;
@@ -480,12 +459,10 @@ struct r600_context {
 	struct r600_poly_offset_state	poly_offset_state;
 	struct r600_cso_state		rasterizer_state;
 	struct r600_sample_mask		sample_mask;
-	struct r600_scissor_state	scissor;
 	struct r600_seamless_cube_map	seamless_cube_map;
 	struct r600_config_state	config_state;
 	struct r600_stencil_ref_state	stencil_ref;
 	struct r600_vgt_state		vgt_state;
-	struct r600_viewport_state	viewport;
 	/* Shaders and shader resources. */
 	struct r600_cso_state		vertex_fetch_shader;
 	struct r600_shader_state        hw_shader_stages[EG_NUM_HW_STAGES];
@@ -730,7 +707,6 @@ void r600_emit_blend_color(struct r600_context *rctx, struct r600_atom *atom);
 void r600_emit_vgt_state(struct r600_context *rctx, struct r600_atom *atom);
 void r600_emit_clip_misc_state(struct r600_context *rctx, struct r600_atom *atom);
 void r600_emit_stencil_ref(struct r600_context *rctx, struct r600_atom *atom);
-void r600_emit_viewport_state(struct r600_context *rctx, struct r600_atom *atom);
 void r600_emit_shader(struct r600_context *rctx, struct r600_atom *a);
 void r600_add_atom(struct r600_context *rctx, struct r600_atom *atom, unsigned id);
 void r600_init_atom(struct r600_context *rctx, struct r600_atom *atom, unsigned id,
@@ -746,7 +722,6 @@ void r600_set_sample_locations_constant_buffer(struct r600_context *rctx);
 uint32_t r600_translate_stencil_op(int s_op);
 uint32_t r600_translate_fill(uint32_t func);
 unsigned r600_tex_wrap(unsigned wrap);
-unsigned r600_tex_filter(unsigned filter);
 unsigned r600_tex_mipfilter(unsigned filter);
 unsigned r600_tex_compare(unsigned compare);
 bool sampler_state_needs_border_color(const struct pipe_sampler_state *state);
@@ -759,9 +734,11 @@ unsigned r600_get_swizzle_combined(const unsigned char *swizzle_format,
 				   boolean vtx);
 uint32_t r600_translate_texformat(struct pipe_screen *screen, enum pipe_format format,
 				  const unsigned char *swizzle_view,
-				  uint32_t *word4_p, uint32_t *yuv_format_p);
-uint32_t r600_translate_colorformat(enum chip_class chip, enum pipe_format format);
-uint32_t r600_colorformat_endian_swap(uint32_t colorformat);
+				  uint32_t *word4_p, uint32_t *yuv_format_p,
+				  bool do_endian_swap);
+uint32_t r600_translate_colorformat(enum chip_class chip, enum pipe_format format,
+				  bool do_endian_swap);
+uint32_t r600_colorformat_endian_swap(uint32_t colorformat, bool do_endian_swap);
 
 /* r600_uvd.c */
 struct pipe_video_codec *r600_uvd_create_decoder(struct pipe_context *context,

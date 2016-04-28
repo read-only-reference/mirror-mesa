@@ -174,6 +174,7 @@ struct dri2_egl_display
    const __DRI2configQueryExtension *config;
    const __DRI2fenceExtension *fence;
    const __DRI2rendererQueryExtension *rendererQuery;
+   const __DRI2interopExtension *interop;
    int                       fd;
 
    int                       own_device;
@@ -307,6 +308,8 @@ struct dri2_egl_image
 
 struct dri2_egl_sync {
    _EGLSync base;
+   mtx_t mutex;
+   cnd_t cond;
    int refcount;
    void *fence;
 };

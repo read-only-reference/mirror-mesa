@@ -152,46 +152,26 @@ lower_sampler(nir_tex_instr *instr, const struct gl_shader_program *shader_progr
    instr->texture = NULL;
 }
 
-typedef struct {
-   nir_builder builder;
-   const struct gl_shader_program *shader_program;
-   gl_shader_stage stage;
-} lower_state;
-
-static bool
-lower_block_cb(nir_block *block, void *_state)
-{
-   lower_state *state = (lower_state *) _state;
-
-   nir_foreach_instr(block, instr) {
-      if (instr->type == nir_instr_type_tex) {
-         nir_tex_instr *tex_instr = nir_instr_as_tex(instr);
-         lower_sampler(tex_instr, state->shader_program, state->stage,
-                       &state->builder);
-      }
-   }
-
-   return true;
-}
-
 static void
 lower_impl(nir_function_impl *impl, const struct gl_shader_program *shader_program,
            gl_shader_stage stage)
 {
-   lower_state state;
+   nir_builder b;
+   nir_builder_init(&b, impl);
 
-   nir_builder_init(&state.builder, impl);
-   state.shader_program = shader_program;
-   state.stage = stage;
-
-   nir_foreach_block(impl, lower_block_cb, &state);
+   nir_foreach_block(block, impl) {
+      nir_foreach_instr(instr, block) {
+         if (instr->type == nir_instr_type_tex)
+            lower_sampler(nir_instr_as_tex(instr), shader_program, stage, &b);
+      }
+   }
 }
 
 void
 nir_lower_samplers(nir_shader *shader,
                    const struct gl_shader_program *shader_program)
 {
-   nir_foreach_function(shader, function) {
+   nir_foreach_function(function, shader) {
       if (function->impl)
          lower_impl(function->impl, shader_program, shader->stage);
    }

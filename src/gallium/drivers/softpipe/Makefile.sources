@@ -1,8 +1,10 @@
 C_SOURCES := \
+	sp_buffer.c \
 	sp_clear.c \
 	sp_clear.h \
 	sp_context.c \
 	sp_context.h \
+	sp_compute.c \
 	sp_draw_arrays.c \
 	sp_fence.c \
 	sp_fence.h \
@@ -11,6 +13,7 @@ C_SOURCES := \
 	sp_fs_exec.c \
 	sp_fs.h \
 	sp_image.c \
+	sp_image.h \
 	sp_limits.h \
 	sp_prim_vbuf.c \
 	sp_prim_vbuf.h \

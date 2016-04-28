@@ -281,7 +281,7 @@ swr_begin_query(struct pipe_context *pipe, struct pipe_query *q)
    return true;
 }
 
-static void
+static bool
 swr_end_query(struct pipe_context *pipe, struct pipe_query *q)
 {
    struct swr_context *ctx = swr_context(pipe);
@@ -295,6 +295,7 @@ swr_end_query(struct pipe_context *pipe, struct pipe_query *q)
    pq->result = &pq->end;
    pq->enable_stats = FALSE;
    swr_gather_stats(pipe, pq);
+   return true;
 }
 
 
@@ -314,9 +315,15 @@ swr_check_render_cond(struct pipe_context *pipe)
    b = pipe->get_query_result(
       pipe, ctx->render_cond_query, wait, (union pipe_query_result *)&result);
    if (b)
-      return (!result == ctx->render_cond_cond);
+      return ((!result) == ctx->render_cond_cond);
    else
       return TRUE;
+}
+
+
+static void
+swr_set_active_query_state(struct pipe_context *pipe, boolean enable)
+{
 }
 
 void
@@ -329,6 +336,7 @@ swr_query_init(struct pipe_context *pipe)
    pipe->begin_query = swr_begin_query;
    pipe->end_query = swr_end_query;
    pipe->get_query_result = swr_get_query_result;
+   pipe->set_active_query_state = swr_set_active_query_state;
 
    ctx->active_queries = 0;
 }

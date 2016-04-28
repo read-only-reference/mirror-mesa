@@ -161,7 +161,7 @@ enum brw_pipeline {
 
 enum brw_cache_id {
    BRW_CACHE_FS_PROG,
-   BRW_CACHE_BLORP_BLIT_PROG,
+   BRW_CACHE_BLORP_PROG,
    BRW_CACHE_SF_PROG,
    BRW_CACHE_VS_PROG,
    BRW_CACHE_FF_GS_PROG,
@@ -222,6 +222,7 @@ enum brw_state_id {
    BRW_STATE_CS_WORK_GROUPS,
    BRW_STATE_URB_SIZE,
    BRW_STATE_CC_STATE,
+   BRW_STATE_BLORP,
    BRW_NUM_STATE_BITS
 };
 
@@ -251,7 +252,7 @@ enum brw_state_id {
  * polluting the brw_state_cache code with special cases, we retain the dirty
  * bit for now.  It should eventually be removed.
  */
-#define BRW_NEW_BLORP_BLIT_PROG_DATA    (1ull << BRW_CACHE_BLORP_BLIT_PROG)
+#define BRW_NEW_BLORP_BLIT_PROG_DATA    (1ull << BRW_CACHE_BLORP_PROG)
 #define BRW_NEW_SF_PROG_DATA            (1ull << BRW_CACHE_SF_PROG)
 #define BRW_NEW_VS_PROG_DATA            (1ull << BRW_CACHE_VS_PROG)
 #define BRW_NEW_FF_GS_PROG_DATA         (1ull << BRW_CACHE_FF_GS_PROG)
@@ -311,6 +312,7 @@ enum brw_state_id {
 #define BRW_NEW_CS_WORK_GROUPS          (1ull << BRW_STATE_CS_WORK_GROUPS)
 #define BRW_NEW_URB_SIZE                (1ull << BRW_STATE_URB_SIZE)
 #define BRW_NEW_CC_STATE                (1ull << BRW_STATE_CC_STATE)
+#define BRW_NEW_BLORP                   (1ull << BRW_STATE_BLORP)
 
 struct brw_state_flags {
    /** State update flags signalled by mesa internals */
@@ -738,6 +740,7 @@ struct brw_context
                                          unsigned format,
                                          unsigned swizzle,
                                          uint32_t *surf_offset,
+                                         int surf_index,
                                          bool rw, bool for_gather);
       void (*emit_buffer_surface_state)(struct brw_context *brw,
                                         uint32_t *out_offset,
@@ -1578,8 +1581,6 @@ bool brw_render_target_supported(struct brw_context *brw,
 bool brw_losslessly_compressible_format(const struct brw_context *brw,
                                         uint32_t brw_format);
 uint32_t brw_depth_format(struct brw_context *brw, mesa_format format);
-mesa_format brw_lower_mesa_image_format(const struct brw_device_info *devinfo,
-                                        mesa_format format);
 
 /* brw_performance_monitor.c */
 void brw_init_performance_monitors(struct brw_context *brw);

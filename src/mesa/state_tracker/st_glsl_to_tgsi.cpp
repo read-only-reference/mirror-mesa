@@ -389,7 +389,7 @@ public:
    unsigned num_output_arrays;
 
    int num_address_regs;
-   int samplers_used;
+   uint32_t samplers_used;
    glsl_base_type sampler_types[PIPE_MAX_SAMPLERS];
    int sampler_targets[PIPE_MAX_SAMPLERS];   /**< One of TGSI_TEXTURE_* */
    int buffers_used;
@@ -449,6 +449,8 @@ public:
    virtual void visit(ir_end_primitive *);
    virtual void visit(ir_barrier *);
    /*@}*/
+
+   void visit_expression(ir_expression *, st_src_reg *) ATTRIBUTE_NOINLINE;
 
    void visit_atomic_counter_intrinsic(ir_call *);
    void visit_ssbo_intrinsic(ir_call *);
@@ -1535,10 +1537,7 @@ glsl_to_tgsi_visitor::reladdr_to_temp(ir_instruction *ir,
 void
 glsl_to_tgsi_visitor::visit(ir_expression *ir)
 {
-   unsigned int operand;
    st_src_reg op[ARRAY_SIZE(ir->operands)];
-   st_src_reg result_src;
-   st_dst_reg result_dst;
 
    /* Quick peephole: Emit MAD(a, b, c) instead of ADD(MUL(a, b), c)
     */
@@ -1561,7 +1560,7 @@ glsl_to_tgsi_visitor::visit(ir_expression *ir)
    if (ir->operation == ir_quadop_vector)
       assert(!"ir_quadop_vector should have been lowered");
 
-   for (operand = 0; operand < ir->get_num_operands(); operand++) {
+   for (unsigned int operand = 0; operand < ir->get_num_operands(); operand++) {
       this->result.file = PROGRAM_UNDEFINED;
       ir->operands[operand]->accept(this);
       if (this->result.file == PROGRAM_UNDEFINED) {
@@ -1577,6 +1576,19 @@ glsl_to_tgsi_visitor::visit(ir_expression *ir)
        */
       assert(!ir->operands[operand]->type->is_matrix());
    }
+
+   visit_expression(ir, op);
+}
+
+/* The non-recursive part of the expression visitor lives in a separate
+ * function and should be prevented from being inlined, to avoid a stack
+ * explosion when deeply nested expressions are visited.
+ */
+void
+glsl_to_tgsi_visitor::visit_expression(ir_expression* ir, st_src_reg *op)
+{
+   st_src_reg result_src;
+   st_dst_reg result_dst;
 
    int vector_elements = ir->operands[0]->type->vector_elements;
    if (ir->operands[1]) {
@@ -4290,6 +4302,8 @@ glsl_to_tgsi_visitor::visit(ir_barrier *ir)
 
 glsl_to_tgsi_visitor::glsl_to_tgsi_visitor()
 {
+   STATIC_ASSERT(sizeof(samplers_used) * 8 >= PIPE_MAX_SAMPLERS);
+
    result.file = PROGRAM_UNDEFINED;
    next_temp = 1;
    array_sizes = NULL;
@@ -4346,7 +4360,7 @@ count_resources(glsl_to_tgsi_visitor *v, gl_program *prog)
       if (inst->info->is_tex) {
          for (int i = 0; i < inst->sampler_array_size; i++) {
             unsigned idx = inst->sampler_base + i;
-            v->samplers_used |= 1 << idx;
+            v->samplers_used |= 1u << idx;
 
             debug_assert(idx < (int)ARRAY_SIZE(v->sampler_types));
             v->sampler_types[idx] = inst->tex_type;
@@ -5184,49 +5198,78 @@ struct st_translate {
    unsigned insn_size;
    unsigned insn_count;
 
-   unsigned procType;  /**< TGSI_PROCESSOR_VERTEX/FRAGMENT */
+   unsigned procType;  /**< PIPE_SHADER_VERTEX/FRAGMENT */
 
    boolean error;
 };
 
 /** Map Mesa's SYSTEM_VALUE_x to TGSI_SEMANTIC_x */
-const unsigned _mesa_sysval_to_semantic[SYSTEM_VALUE_MAX] = {
-   /* Vertex shader
-    */
-   TGSI_SEMANTIC_VERTEXID,
-   TGSI_SEMANTIC_INSTANCEID,
-   TGSI_SEMANTIC_VERTEXID_NOBASE,
-   TGSI_SEMANTIC_BASEVERTEX,
-   TGSI_SEMANTIC_BASEINSTANCE,
-   TGSI_SEMANTIC_DRAWID,
+unsigned
+_mesa_sysval_to_semantic(unsigned sysval)
+{
+   switch (sysval) {
+   /* Vertex shader */
+   case SYSTEM_VALUE_VERTEX_ID:
+      return TGSI_SEMANTIC_VERTEXID;
+   case SYSTEM_VALUE_INSTANCE_ID:
+      return TGSI_SEMANTIC_INSTANCEID;
+   case SYSTEM_VALUE_VERTEX_ID_ZERO_BASE:
+      return TGSI_SEMANTIC_VERTEXID_NOBASE;
+   case SYSTEM_VALUE_BASE_VERTEX:
+      return TGSI_SEMANTIC_BASEVERTEX;
+   case SYSTEM_VALUE_BASE_INSTANCE:
+      return TGSI_SEMANTIC_BASEINSTANCE;
+   case SYSTEM_VALUE_DRAW_ID:
+      return TGSI_SEMANTIC_DRAWID;
 
-   /* Geometry shader
-    */
-   TGSI_SEMANTIC_INVOCATIONID,
+   /* Geometry shader */
+   case SYSTEM_VALUE_INVOCATION_ID:
+      return TGSI_SEMANTIC_INVOCATIONID;
 
-   /* Fragment shader
-    */
-   TGSI_SEMANTIC_POSITION,
-   TGSI_SEMANTIC_FACE,
-   TGSI_SEMANTIC_SAMPLEID,
-   TGSI_SEMANTIC_SAMPLEPOS,
-   TGSI_SEMANTIC_SAMPLEMASK,
-   TGSI_SEMANTIC_HELPER_INVOCATION,
+   /* Fragment shader */
+   case SYSTEM_VALUE_FRAG_COORD:
+      return TGSI_SEMANTIC_POSITION;
+   case SYSTEM_VALUE_FRONT_FACE:
+      return TGSI_SEMANTIC_FACE;
+   case SYSTEM_VALUE_SAMPLE_ID:
+      return TGSI_SEMANTIC_SAMPLEID;
+   case SYSTEM_VALUE_SAMPLE_POS:
+      return TGSI_SEMANTIC_SAMPLEPOS;
+   case SYSTEM_VALUE_SAMPLE_MASK_IN:
+      return TGSI_SEMANTIC_SAMPLEMASK;
+   case SYSTEM_VALUE_HELPER_INVOCATION:
+      return TGSI_SEMANTIC_HELPER_INVOCATION;
 
-   /* Tessellation shaders
-    */
-   TGSI_SEMANTIC_TESSCOORD,
-   TGSI_SEMANTIC_VERTICESIN,
-   TGSI_SEMANTIC_PRIMID,
-   TGSI_SEMANTIC_TESSOUTER,
-   TGSI_SEMANTIC_TESSINNER,
+   /* Tessellation shader */
+   case SYSTEM_VALUE_TESS_COORD:
+      return TGSI_SEMANTIC_TESSCOORD;
+   case SYSTEM_VALUE_VERTICES_IN:
+      return TGSI_SEMANTIC_VERTICESIN;
+   case SYSTEM_VALUE_PRIMITIVE_ID:
+      return TGSI_SEMANTIC_PRIMID;
+   case SYSTEM_VALUE_TESS_LEVEL_OUTER:
+      return TGSI_SEMANTIC_TESSOUTER;
+   case SYSTEM_VALUE_TESS_LEVEL_INNER:
+      return TGSI_SEMANTIC_TESSINNER;
 
-   /* Compute shaders
-    */
-   TGSI_SEMANTIC_THREAD_ID,
-   TGSI_SEMANTIC_BLOCK_ID,
-   TGSI_SEMANTIC_GRID_SIZE,
-};
+   /* Compute shader */
+   case SYSTEM_VALUE_LOCAL_INVOCATION_ID:
+      return TGSI_SEMANTIC_THREAD_ID;
+   case SYSTEM_VALUE_WORK_GROUP_ID:
+      return TGSI_SEMANTIC_BLOCK_ID;
+   case SYSTEM_VALUE_NUM_WORK_GROUPS:
+      return TGSI_SEMANTIC_GRID_SIZE;
+
+   /* Unhandled */
+   case SYSTEM_VALUE_LOCAL_INVOCATION_INDEX:
+   case SYSTEM_VALUE_GLOBAL_INVOCATION_ID:
+   case SYSTEM_VALUE_VERTEX_CNT:
+   default:
+      assert(!"Unexpected SYSTEM_VALUE_ enum");
+      return TGSI_SEMANTIC_COUNT;
+   }
+}
+
 
 /**
  * Make note of a branch to a label in the TGSI code.
@@ -5317,7 +5360,7 @@ dst_register(struct st_translate *t, gl_register_file file, unsigned index,
    case PROGRAM_TEMPORARY:
       /* Allocate space for temporaries on demand. */
       if (index >= t->temps_size) {
-         const int inc = 4096;
+         const int inc = align(index - t->temps_size + 1, 4096);
 
          t->temps = (struct ureg_dst*)
                     realloc(t->temps,
@@ -5348,10 +5391,10 @@ dst_register(struct st_translate *t, gl_register_file file, unsigned index,
 
    case PROGRAM_OUTPUT:
       if (!array_id) {
-         if (t->procType == TGSI_PROCESSOR_FRAGMENT)
+         if (t->procType == PIPE_SHADER_FRAGMENT)
             assert(index < FRAG_RESULT_MAX);
-         else if (t->procType == TGSI_PROCESSOR_TESS_CTRL ||
-                  t->procType == TGSI_PROCESSOR_TESS_EVAL)
+         else if (t->procType == PIPE_SHADER_TESS_CTRL ||
+                  t->procType == PIPE_SHADER_TESS_EVAL)
             assert(index < VARYING_SLOT_TESS_MAX);
          else
             assert(index < VARYING_SLOT_MAX);
@@ -5935,6 +5978,20 @@ find_array(unsigned attr, struct array_decl *arrays, unsigned count,
    return false;
 }
 
+static void
+emit_compute_block_size(const struct gl_program *program,
+                        struct ureg_program *ureg) {
+   const struct gl_compute_program *cp =
+      (const struct gl_compute_program *)program;
+
+   ureg_property(ureg, TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH,
+                       cp->LocalSize[0]);
+   ureg_property(ureg, TGSI_PROPERTY_CS_FIXED_BLOCK_HEIGHT,
+                       cp->LocalSize[1]);
+   ureg_property(ureg, TGSI_PROPERTY_CS_FIXED_BLOCK_DEPTH,
+                       cp->LocalSize[2]);
+}
+
 /**
  * Translate intermediate IR (glsl_to_tgsi_instruction) to TGSI format.
  * \param program  the program to translate
@@ -5984,35 +6041,6 @@ st_translate_program(
    assert(numInputs <= ARRAY_SIZE(t->inputs));
    assert(numOutputs <= ARRAY_SIZE(t->outputs));
 
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_FRONT_FACE] ==
-          TGSI_SEMANTIC_FACE);
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_VERTEX_ID] ==
-          TGSI_SEMANTIC_VERTEXID);
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_INSTANCE_ID] ==
-          TGSI_SEMANTIC_INSTANCEID);
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_SAMPLE_ID] ==
-          TGSI_SEMANTIC_SAMPLEID);
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_SAMPLE_POS] ==
-          TGSI_SEMANTIC_SAMPLEPOS);
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_SAMPLE_MASK_IN] ==
-          TGSI_SEMANTIC_SAMPLEMASK);
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_INVOCATION_ID] ==
-          TGSI_SEMANTIC_INVOCATIONID);
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_VERTEX_ID_ZERO_BASE] ==
-          TGSI_SEMANTIC_VERTEXID_NOBASE);
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_BASE_VERTEX] ==
-          TGSI_SEMANTIC_BASEVERTEX);
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_TESS_COORD] ==
-          TGSI_SEMANTIC_TESSCOORD);
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_HELPER_INVOCATION] ==
-          TGSI_SEMANTIC_HELPER_INVOCATION);
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_LOCAL_INVOCATION_ID] ==
-          TGSI_SEMANTIC_THREAD_ID);
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_WORK_GROUP_ID] ==
-          TGSI_SEMANTIC_BLOCK_ID);
-   assert(_mesa_sysval_to_semantic[SYSTEM_VALUE_NUM_WORK_GROUPS] ==
-          TGSI_SEMANTIC_GRID_SIZE);
-
    t = CALLOC_STRUCT(st_translate);
    if (!t) {
       ret = PIPE_ERROR_OUT_OF_MEMORY;
@@ -6032,7 +6060,7 @@ st_translate_program(
     * Declare input attributes.
     */
    switch (procType) {
-   case TGSI_PROCESSOR_FRAGMENT:
+   case PIPE_SHADER_FRAGMENT:
       for (i = 0; i < numInputs; i++) {
          unsigned array_id = 0;
          unsigned array_size;
@@ -6053,9 +6081,9 @@ st_translate_program(
          }
       }
       break;
-   case TGSI_PROCESSOR_GEOMETRY:
-   case TGSI_PROCESSOR_TESS_EVAL:
-   case TGSI_PROCESSOR_TESS_CTRL:
+   case PIPE_SHADER_GEOMETRY:
+   case PIPE_SHADER_TESS_EVAL:
+   case PIPE_SHADER_TESS_CTRL:
       for (i = 0; i < numInputs; i++) {
          unsigned array_id = 0;
          unsigned array_size;
@@ -6074,12 +6102,12 @@ st_translate_program(
          }
       }
       break;
-   case TGSI_PROCESSOR_VERTEX:
+   case PIPE_SHADER_VERTEX:
       for (i = 0; i < numInputs; i++) {
          t->inputs[i] = ureg_DECL_vs_input(ureg, i);
       }
       break;
-   case TGSI_PROCESSOR_COMPUTE:
+   case PIPE_SHADER_COMPUTE:
       break;
    default:
       assert(0);
@@ -6089,13 +6117,13 @@ st_translate_program(
     * Declare output attributes.
     */
    switch (procType) {
-   case TGSI_PROCESSOR_FRAGMENT:
-   case TGSI_PROCESSOR_COMPUTE:
+   case PIPE_SHADER_FRAGMENT:
+   case PIPE_SHADER_COMPUTE:
       break;
-   case TGSI_PROCESSOR_GEOMETRY:
-   case TGSI_PROCESSOR_TESS_EVAL:
-   case TGSI_PROCESSOR_TESS_CTRL:
-   case TGSI_PROCESSOR_VERTEX:
+   case PIPE_SHADER_GEOMETRY:
+   case PIPE_SHADER_TESS_EVAL:
+   case PIPE_SHADER_TESS_CTRL:
+   case PIPE_SHADER_VERTEX:
       for (i = 0; i < numOutputs; i++) {
          unsigned array_id = 0;
          unsigned array_size;
@@ -6120,7 +6148,7 @@ st_translate_program(
       assert(0);
    }
 
-   if (procType == TGSI_PROCESSOR_FRAGMENT) {
+   if (procType == PIPE_SHADER_FRAGMENT) {
       if (program->shader->EarlyFragmentTests)
          ureg_property(ureg, TGSI_PROPERTY_FS_EARLY_DEPTH_STENCIL, 1);
 
@@ -6168,7 +6196,7 @@ st_translate_program(
          }
       }
    }
-   else if (procType == TGSI_PROCESSOR_VERTEX) {
+   else if (procType == PIPE_SHADER_VERTEX) {
       for (i = 0; i < numOutputs; i++) {
          if (outputSemanticName[i] == TGSI_SEMANTIC_FOG) {
             /* force register to contain a fog coordinate in the form (F, 0, 0, 1). */
@@ -6178,6 +6206,10 @@ st_translate_program(
             t->outputs[i] = ureg_writemask(t->outputs[i], TGSI_WRITEMASK_X);
          }
       }
+   }
+
+   if (procType == PIPE_SHADER_COMPUTE) {
+      emit_compute_block_size(proginfo, ureg);
    }
 
    /* Declare address register.
@@ -6195,7 +6227,7 @@ st_translate_program(
 
       for (i = 0; sysInputs; i++) {
          if (sysInputs & (1 << i)) {
-            unsigned semName = _mesa_sysval_to_semantic[i];
+            unsigned semName = _mesa_sysval_to_semantic(i);
 
             t->systemValues[i] = ureg_DECL_system_value(ureg, semName, 0);
 
@@ -6210,7 +6242,7 @@ st_translate_program(
                 */
                struct st_context *st = st_context(ctx);
                struct pipe_screen *pscreen = st->pipe->screen;
-               assert(procType == TGSI_PROCESSOR_VERTEX);
+               assert(procType == PIPE_SHADER_VERTEX);
                assert(pscreen->get_shader_param(pscreen, PIPE_SHADER_VERTEX, PIPE_SHADER_CAP_INTEGERS));
                (void) pscreen;
                if (!ctx->Const.NativeIntegers) {
@@ -6220,7 +6252,7 @@ st_translate_program(
                }
             }
 
-            if (procType == TGSI_PROCESSOR_FRAGMENT &&
+            if (procType == PIPE_SHADER_FRAGMENT &&
                 semName == TGSI_SEMANTIC_POSITION)
                emit_wpos(st_context(ctx), t, proginfo, ureg,
                          program->wpos_transform_const);
@@ -6307,7 +6339,7 @@ st_translate_program(
 
    /* texture samplers */
    for (i = 0; i < frag_const->MaxTextureImageUnits; i++) {
-      if (program->samplers_used & (1 << i)) {
+      if (program->samplers_used & (1u << i)) {
          unsigned type;
 
          t->samplers[i] = ureg_DECL_sampler(ureg, i);
@@ -6372,8 +6404,8 @@ st_translate_program(
 
    /* Set the next shader stage hint for VS and TES. */
    switch (procType) {
-   case TGSI_PROCESSOR_VERTEX:
-   case TGSI_PROCESSOR_TESS_EVAL:
+   case PIPE_SHADER_VERTEX:
+   case PIPE_SHADER_TESS_EVAL:
       if (program->shader_program->SeparateShader)
          break;
 
@@ -6383,16 +6415,16 @@ st_translate_program(
 
             switch (i) {
             case MESA_SHADER_TESS_CTRL:
-               next = TGSI_PROCESSOR_TESS_CTRL;
+               next = PIPE_SHADER_TESS_CTRL;
                break;
             case MESA_SHADER_TESS_EVAL:
-               next = TGSI_PROCESSOR_TESS_EVAL;
+               next = PIPE_SHADER_TESS_EVAL;
                break;
             case MESA_SHADER_GEOMETRY:
-               next = TGSI_PROCESSOR_GEOMETRY;
+               next = PIPE_SHADER_GEOMETRY;
                break;
             case MESA_SHADER_FRAGMENT:
-               next = TGSI_PROCESSOR_FRAGMENT;
+               next = PIPE_SHADER_FRAGMENT;
                break;
             default:
                assert(0);

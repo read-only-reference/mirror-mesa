@@ -239,6 +239,35 @@ vec4_instruction::can_do_source_mods(const struct brw_device_info *devinfo)
 }
 
 bool
+vec4_instruction::can_do_writemask(const struct brw_device_info *devinfo)
+{
+   switch (opcode) {
+   case SHADER_OPCODE_GEN4_SCRATCH_READ:
+   case VS_OPCODE_PULL_CONSTANT_LOAD:
+   case VS_OPCODE_PULL_CONSTANT_LOAD_GEN7:
+   case VS_OPCODE_SET_SIMD4X2_HEADER_GEN9:
+   case TCS_OPCODE_SET_INPUT_URB_OFFSETS:
+   case TCS_OPCODE_SET_OUTPUT_URB_OFFSETS:
+   case TES_OPCODE_CREATE_INPUT_READ_HEADER:
+   case TES_OPCODE_ADD_INDIRECT_URB_OFFSET:
+   case VEC4_OPCODE_URB_READ:
+   case SHADER_OPCODE_MOV_INDIRECT:
+      return false;
+   default:
+      /* The MATH instruction on Gen6 only executes in align1 mode, which does
+       * not support writemasking.
+       */
+      if (devinfo->gen == 6 && is_math())
+         return false;
+
+      if (is_tex())
+         return false;
+
+      return true;
+   }
+}
+
+bool
 vec4_instruction::can_change_types() const
 {
    return dst.type == src[0].type &&
@@ -321,28 +350,6 @@ src_reg::equals(const src_reg &r) const
 }
 
 bool
-vec4_visitor::vectorize_mov(bblock_t *block, vec4_instruction *inst,
-                            uint8_t imm[4], vec4_instruction *imm_inst[4],
-                            int inst_count, unsigned writemask)
-{
-   if (inst_count < 2)
-      return false;
-
-   unsigned vf;
-   memcpy(&vf, imm, sizeof(vf));
-   vec4_instruction *mov = MOV(imm_inst[0]->dst, brw_imm_vf(vf));
-   mov->dst.type = BRW_REGISTER_TYPE_F;
-   mov->dst.writemask = writemask;
-   inst->insert_before(block, mov);
-
-   for (int i = 0; i < inst_count; i++) {
-      imm_inst[i]->remove(block);
-   }
-
-   return true;
-}
-
-bool
 vec4_visitor::opt_vector_float()
 {
    bool progress = false;
@@ -354,50 +361,88 @@ vec4_visitor::opt_vector_float()
    int inst_count = 0;
    vec4_instruction *imm_inst[4];
    unsigned writemask = 0;
+   enum brw_reg_type dest_type = BRW_REGISTER_TYPE_F;
 
    foreach_block_and_inst_safe(block, vec4_instruction, inst, cfg) {
+      int vf = -1;
+      enum brw_reg_type need_type;
+
+      /* Look for unconditional MOVs from an immediate with a partial
+       * writemask.  Skip type-conversion MOVs other than integer 0,
+       * where the type doesn't matter.  See if the immediate can be
+       * represented as a VF.
+       */
+      if (inst->opcode == BRW_OPCODE_MOV &&
+          inst->src[0].file == IMM &&
+          inst->predicate == BRW_PREDICATE_NONE &&
+          inst->dst.writemask != WRITEMASK_XYZW &&
+          (inst->src[0].type == inst->dst.type || inst->src[0].d == 0)) {
+
+         vf = brw_float_to_vf(inst->src[0].d);
+         need_type = BRW_REGISTER_TYPE_D;
+
+         if (vf == -1) {
+            vf = brw_float_to_vf(inst->src[0].f);
+            need_type = BRW_REGISTER_TYPE_F;
+         }
+      } else {
+         last_reg = -1;
+      }
+
+      /* If this wasn't a MOV, or the destination register doesn't match,
+       * or we have to switch destination types, then this breaks our
+       * sequence.  Combine anything we've accumulated so far.
+       */
       if (last_reg != inst->dst.nr ||
           last_reg_offset != inst->dst.reg_offset ||
-          last_reg_file != inst->dst.file) {
-         progress |= vectorize_mov(block, inst, imm, imm_inst, inst_count,
-                                   writemask);
+          last_reg_file != inst->dst.file ||
+          (vf > 0 && dest_type != need_type)) {
+
+         if (inst_count > 1) {
+            unsigned vf;
+            memcpy(&vf, imm, sizeof(vf));
+            vec4_instruction *mov = MOV(imm_inst[0]->dst, brw_imm_vf(vf));
+            mov->dst.type = dest_type;
+            mov->dst.writemask = writemask;
+            inst->insert_before(block, mov);
+
+            for (int i = 0; i < inst_count; i++) {
+               imm_inst[i]->remove(block);
+            }
+
+            progress = true;
+         }
+
          inst_count = 0;
+         last_reg = -1;
          writemask = 0;
-         last_reg = inst->dst.nr;
-         last_reg_offset = inst->dst.reg_offset;
-         last_reg_file = inst->dst.file;
+         dest_type = BRW_REGISTER_TYPE_F;
 
          for (int i = 0; i < 4; i++) {
             imm[i] = 0;
          }
       }
 
-      if (inst->opcode != BRW_OPCODE_MOV ||
-          inst->dst.writemask == WRITEMASK_XYZW ||
-          inst->src[0].file != IMM ||
-          inst->predicate != BRW_PREDICATE_NONE) {
-         progress |= vectorize_mov(block, inst, imm, imm_inst, inst_count,
-                                   writemask);
-         inst_count = 0;
-         last_reg = -1;
-         continue;
+      /* Record this instruction's value (if it was representable). */
+      if (vf != -1) {
+         if ((inst->dst.writemask & WRITEMASK_X) != 0)
+            imm[0] = vf;
+         if ((inst->dst.writemask & WRITEMASK_Y) != 0)
+            imm[1] = vf;
+         if ((inst->dst.writemask & WRITEMASK_Z) != 0)
+            imm[2] = vf;
+         if ((inst->dst.writemask & WRITEMASK_W) != 0)
+            imm[3] = vf;
+
+         writemask |= inst->dst.writemask;
+         imm_inst[inst_count++] = inst;
+
+         last_reg = inst->dst.nr;
+         last_reg_offset = inst->dst.reg_offset;
+         last_reg_file = inst->dst.file;
+         if (vf > 0)
+            dest_type = need_type;
       }
-
-      int vf = brw_float_to_vf(inst->src[0].f);
-      if (vf == -1)
-         continue;
-
-      if ((inst->dst.writemask & WRITEMASK_X) != 0)
-         imm[0] = vf;
-      if ((inst->dst.writemask & WRITEMASK_Y) != 0)
-         imm[1] = vf;
-      if ((inst->dst.writemask & WRITEMASK_Z) != 0)
-         imm[2] = vf;
-      if ((inst->dst.writemask & WRITEMASK_W) != 0)
-         imm[3] = vf;
-
-      writemask |= inst->dst.writemask;
-      imm_inst[inst_count++] = inst;
    }
 
    if (progress)
@@ -496,11 +541,6 @@ vec4_visitor::split_uniform_registers()
 	 inst->src[i].reg_offset = 0;
       }
    }
-
-   /* Update that everything is now vector-sized. */
-   for (int i = 0; i < this->uniforms; i++) {
-      this->uniform_size[i] = 1;
-   }
 }
 
 void
@@ -550,6 +590,24 @@ vec4_visitor::pack_uniform_registers()
                                    BRW_GET_SWZ(inst->src[i].swizzle, c) + 1);
          }
       }
+
+      if (inst->opcode == SHADER_OPCODE_MOV_INDIRECT &&
+          inst->src[0].file == UNIFORM) {
+         assert(inst->src[2].file == BRW_IMMEDIATE_VALUE);
+         assert(inst->src[0].subnr == 0);
+
+         unsigned bytes_read = inst->src[2].ud;
+         assert(bytes_read % 4 == 0);
+         unsigned vec4s_read = DIV_ROUND_UP(bytes_read, 16);
+
+         /* We just mark every register touched by a MOV_INDIRECT as being
+          * fully used.  This ensures that it doesn't broken up piecewise by
+          * the next part of our packing algorithm.
+          */
+         int reg = inst->src[0].nr;
+         for (unsigned i = 0; i < vec4s_read; i++)
+            chans_used[reg + i] = 4;
+      }
    }
 
    int new_uniform_count = 0;
@@ -558,7 +616,6 @@ vec4_visitor::pack_uniform_registers()
     * push constants.
     */
    for (int src = 0; src < uniforms; src++) {
-      assert(src < uniform_array_size);
       int size = chans_used[src];
 
       if (size == 0)
@@ -794,7 +851,7 @@ vec4_visitor::move_push_constants_to_pull_constants()
 	 dst_reg temp = dst_reg(this, glsl_type::vec4_type);
 
 	 emit_pull_constant_load(block, inst, temp, inst->src[i],
-				 pull_constant_loc[uniform]);
+				 pull_constant_loc[uniform], src_reg());
 
 	 inst->src[i].file = temp.file;
          inst->src[i].nr = temp.nr;
@@ -943,10 +1000,12 @@ vec4_instruction::can_reswizzle(const struct brw_device_info *devinfo,
                                 int swizzle_mask)
 {
    /* Gen6 MATH instructions can not execute in align16 mode, so swizzles
-    * or writemasking are not allowed.
+    * are not allowed.
     */
-   if (devinfo->gen == 6 && is_math() &&
-       (swizzle != BRW_SWIZZLE_XYZW || dst_writemask != WRITEMASK_XYZW))
+   if (devinfo->gen == 6 && is_math() && swizzle != BRW_SWIZZLE_XYZW)
+      return false;
+
+   if (!can_do_writemask(devinfo) && dst_writemask != WRITEMASK_XYZW)
       return false;
 
    /* If this instruction sets anything not referenced by swizzle, then we'd
@@ -1599,8 +1658,6 @@ vec4_visitor::setup_uniforms(int reg)
     * matter what, or the GPU would hang.
     */
    if (devinfo->gen < 6 && this->uniforms == 0) {
-      assert(this->uniforms < this->uniform_array_size);
-
       stage_prog_data->param =
          reralloc(NULL, stage_prog_data->param, const gl_constant_value *, 4);
       for (unsigned int i = 0; i < 4; i++) {

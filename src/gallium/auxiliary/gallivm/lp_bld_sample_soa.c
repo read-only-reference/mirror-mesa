@@ -228,11 +228,16 @@ lp_build_coord_mirror(struct lp_build_sample_context *bld,
    LLVMValueRef fract, flr, isOdd;
 
    lp_build_ifloor_fract(coord_bld, coord, &flr, &fract);
+   /* kill off NaNs */
+   /* XXX: not safe without arch rounding, fract can be anything. */
+   fract = lp_build_max_ext(coord_bld, fract, coord_bld->zero,
+                            GALLIVM_NAN_RETURN_OTHER_SECOND_NONNAN);
 
    /* isOdd = flr & 1 */
    isOdd = LLVMBuildAnd(bld->gallivm->builder, flr, int_coord_bld->one, "");
 
    /* make coord positive or negative depending on isOdd */
+   /* XXX slight overkill masking out sign bit is unnecessary */
    coord = lp_build_set_sign(coord_bld, fract, isOdd);
 
    /* convert isOdd to float */
@@ -272,10 +277,15 @@ lp_build_coord_repeat_npot_linear(struct lp_build_sample_context *bld,
     * we avoided the 0.5/length division before the repeat wrap,
     * now need to fix up edge cases with selects
     */
+   /*
+    * Note we do a float (unordered) compare so we can eliminate NaNs.
+    * (Otherwise would need fract_safe above).
+    */
+   mask = lp_build_compare(coord_bld->gallivm, coord_bld->type,
+                           PIPE_FUNC_LESS, coord_f, coord_bld->zero);
+
    /* convert to int, compute lerp weight */
    lp_build_ifloor_fract(coord_bld, coord_f, coord0_i, weight_f);
-   mask = lp_build_compare(int_coord_bld->gallivm, int_coord_bld->type,
-                           PIPE_FUNC_LESS, *coord0_i, int_coord_bld->zero);
    *coord0_i = lp_build_select(int_coord_bld, mask, length_minus_one, *coord0_i);
 }
 
@@ -375,7 +385,8 @@ lp_build_sample_wrap_linear(struct lp_build_sample_context *bld,
          }
 
          /* clamp to length max */
-         coord = lp_build_min(coord_bld, coord, length_f);
+         coord = lp_build_min_ext(coord_bld, coord, length_f,
+                                  GALLIVM_NAN_RETURN_OTHER_SECOND_NONNAN);
          /* subtract 0.5 */
          coord = lp_build_sub(coord_bld, coord, half);
          /* clamp to [0, length - 0.5] */
@@ -398,7 +409,7 @@ lp_build_sample_wrap_linear(struct lp_build_sample_context *bld,
          coord = lp_build_add(coord_bld, coord, offset);
       }
       /* was: clamp to [-0.5, length + 0.5], then sub 0.5 */
-      /* can skip clamp (though might not work for very large coord values */
+      /* can skip clamp (though might not work for very large coord values) */
       coord = lp_build_sub(coord_bld, coord, half);
       /* convert to int, compute lerp weight */
       lp_build_ifloor_fract(coord_bld, coord, &coord0, &weight);
@@ -465,7 +476,8 @@ lp_build_sample_wrap_linear(struct lp_build_sample_context *bld,
          coord = lp_build_abs(coord_bld, coord);
 
          /* clamp to length max */
-         coord = lp_build_min(coord_bld, coord, length_f);
+         coord = lp_build_min_ext(coord_bld, coord, length_f,
+                                  GALLIVM_NAN_RETURN_OTHER_SECOND_NONNAN);
          /* subtract 0.5 */
          coord = lp_build_sub(coord_bld, coord, half);
          /* clamp to [0, length - 0.5] */
@@ -628,9 +640,15 @@ lp_build_sample_wrap_nearest(struct lp_build_sample_context *bld,
 
       /* itrunc == ifloor here */
       icoord = lp_build_itrunc(coord_bld, coord);
-
-      /* clamp to [0, length - 1] */
-      icoord = lp_build_min(int_coord_bld, icoord, length_minus_one);
+      /*
+       * Use unsigned min due to possible undef values (NaNs, overflow)
+       */
+      {
+         struct lp_build_context abs_coord_bld = *int_coord_bld;
+         abs_coord_bld.type.sign = FALSE;
+         /* clamp to [0, length - 1] */
+         icoord = lp_build_min(&abs_coord_bld, icoord, length_minus_one);
+      }
       break;
 
    case PIPE_TEX_WRAP_MIRROR_CLAMP_TO_BORDER:
@@ -1360,7 +1378,7 @@ lp_build_sample_image_linear(struct lp_build_sample_context *bld,
          if (is_gather) {
             /* more hacks for swizzling, should be X, ONE or ZERO... */
             unsigned chan_swiz = bld->static_texture_state->swizzle_r;
-            if (chan_swiz <= PIPE_SWIZZLE_ALPHA) {
+            if (chan_swiz <= PIPE_SWIZZLE_W) {
                colors0[0] = lp_build_select(texel_bld, cmpval10,
                                             texel_bld->one, texel_bld->zero);
                colors0[1] = lp_build_select(texel_bld, cmpval11,
@@ -1370,7 +1388,7 @@ lp_build_sample_image_linear(struct lp_build_sample_context *bld,
                colors0[3] = lp_build_select(texel_bld, cmpval00,
                                             texel_bld->one, texel_bld->zero);
             }
-            else if (chan_swiz == PIPE_SWIZZLE_ZERO) {
+            else if (chan_swiz == PIPE_SWIZZLE_0) {
                colors0[0] = colors0[1] = colors0[2] = colors0[3] =
                             texel_bld->zero;
             }
@@ -1838,7 +1856,7 @@ lp_build_sample_common(struct lp_build_sample_context *bld,
       const struct util_format_description *format_desc = bld->format_desc;
       unsigned chan_type;
       /* not entirely sure we couldn't end up with non-valid swizzle here */
-      chan_type = format_desc->swizzle[0] <= UTIL_FORMAT_SWIZZLE_W ?
+      chan_type = format_desc->swizzle[0] <= PIPE_SWIZZLE_W ?
                      format_desc->channel[format_desc->swizzle[0]].type :
                      UTIL_FORMAT_TYPE_FLOAT;
       if (chan_type != UTIL_FORMAT_TYPE_FLOAT) {
@@ -1939,7 +1957,7 @@ lp_build_clamp_border_color(struct lp_build_sample_context *bld,
                                        LLVMPointerType(vec4_bld.vec_type, 0), "");
    border_color = LLVMBuildLoad(builder, border_color_ptr, "");
    /* we don't have aligned type in the dynamic state unfortunately */
-   lp_set_load_alignment(border_color, 4);
+   LLVMSetAlignment(border_color, 4);
 
    /*
     * Instead of having some incredibly complex logic which will try to figure out
@@ -1957,7 +1975,7 @@ lp_build_clamp_border_color(struct lp_build_sample_context *bld,
       else {
          chan = util_format_get_first_non_void_channel(format_desc->format);
       }
-      if (chan >= 0 && chan <= UTIL_FORMAT_SWIZZLE_W) {
+      if (chan >= 0 && chan <= PIPE_SWIZZLE_W) {
          unsigned chan_type = format_desc->channel[chan].type;
          unsigned chan_norm = format_desc->channel[chan].normalized;
          unsigned chan_pure = format_desc->channel[chan].pure_integer;
@@ -2256,8 +2274,8 @@ lp_build_sample_general(struct lp_build_sample_context *bld,
              * All pixels require just nearest filtering, which is way
              * cheaper than linear, hence do a separate path for that.
              */
-            lp_build_sample_mipmap(bld, PIPE_TEX_FILTER_NEAREST, FALSE,
-                                   mip_filter_for_nearest,
+            lp_build_sample_mipmap(bld, PIPE_TEX_FILTER_NEAREST,
+                                   mip_filter_for_nearest, FALSE,
                                    coords, offsets,
                                    ilevel0, ilevel1, lod_fpart,
                                    texels);
@@ -3439,14 +3457,7 @@ void
 lp_build_size_query_soa(struct gallivm_state *gallivm,
                         const struct lp_static_texture_state *static_state,
                         struct lp_sampler_dynamic_state *dynamic_state,
-                        struct lp_type int_type,
-                        unsigned texture_unit,
-                        unsigned target,
-                        LLVMValueRef context_ptr,
-                        boolean is_sviewinfo,
-                        enum lp_sampler_lod_property lod_property,
-                        LLVMValueRef explicit_lod,
-                        LLVMValueRef *sizes_out)
+                        const struct lp_sampler_size_query_params *params)
 {
    LLVMValueRef lod, level, size;
    LLVMValueRef first_level = NULL;
@@ -3454,6 +3465,9 @@ lp_build_size_query_soa(struct gallivm_state *gallivm,
    boolean has_array;
    unsigned num_lods = 1;
    struct lp_build_context bld_int_vec4;
+   LLVMValueRef context_ptr = params->context_ptr;
+   unsigned texture_unit = params->texture_unit;
+   unsigned target = params->target;
 
    if (static_state->format == PIPE_FORMAT_NONE) {
       /*
@@ -3461,9 +3475,9 @@ lp_build_size_query_soa(struct gallivm_state *gallivm,
        * all zero as mandated by d3d10 in this case.
        */
       unsigned chan;
-      LLVMValueRef zero = lp_build_const_vec(gallivm, int_type, 0.0F);
+      LLVMValueRef zero = lp_build_const_vec(gallivm, params->int_type, 0.0F);
       for (chan = 0; chan < 4; chan++) {
-         sizes_out[chan] = zero;
+         params->sizes_out[chan] = zero;
       }
       return;
    }
@@ -3508,13 +3522,13 @@ lp_build_size_query_soa(struct gallivm_state *gallivm,
       break;
    }
 
-   assert(!int_type.floating);
+   assert(!params->int_type.floating);
 
    lp_build_context_init(&bld_int_vec4, gallivm, lp_type_int_vec(32, 128));
 
-   if (explicit_lod) {
+   if (params->explicit_lod) {
       /* FIXME: this needs to honor per-element lod */
-      lod = LLVMBuildExtractElement(gallivm->builder, explicit_lod,
+      lod = LLVMBuildExtractElement(gallivm->builder, params->explicit_lod,
                                     lp_build_const_int32(gallivm, 0), "");
       first_level = dynamic_state->first_level(dynamic_state, gallivm,
                                                context_ptr, texture_unit);
@@ -3568,7 +3582,7 @@ lp_build_size_query_soa(struct gallivm_state *gallivm,
     * if level is out of bounds (note this can't cover unbound texture
     * here, which also requires returning zero).
     */
-   if (explicit_lod && is_sviewinfo) {
+   if (params->explicit_lod && params->is_sviewinfo) {
       LLVMValueRef last_level, out, out1;
       struct lp_build_context leveli_bld;
 
@@ -3590,13 +3604,13 @@ lp_build_size_query_soa(struct gallivm_state *gallivm,
       size = lp_build_andnot(&bld_int_vec4, size, out);
    }
    for (i = 0; i < dims + (has_array ? 1 : 0); i++) {
-      sizes_out[i] = lp_build_extract_broadcast(gallivm, bld_int_vec4.type, int_type,
+      params->sizes_out[i] = lp_build_extract_broadcast(gallivm, bld_int_vec4.type, params->int_type,
                                                 size,
                                                 lp_build_const_int32(gallivm, i));
    }
-   if (is_sviewinfo) {
+   if (params->is_sviewinfo) {
       for (; i < 4; i++) {
-         sizes_out[i] = lp_build_const_vec(gallivm, int_type, 0.0);
+         params->sizes_out[i] = lp_build_const_vec(gallivm, params->int_type, 0.0);
       }
    }
 
@@ -3604,7 +3618,7 @@ lp_build_size_query_soa(struct gallivm_state *gallivm,
     * if there's no explicit_lod (buffers, rects) queries requiring nr of
     * mips would be illegal.
     */
-   if (is_sviewinfo && explicit_lod) {
+   if (params->is_sviewinfo && params->explicit_lod) {
       struct lp_build_context bld_int_scalar;
       LLVMValueRef num_levels;
       lp_build_context_init(&bld_int_scalar, gallivm, lp_type_int(32));
@@ -3620,7 +3634,7 @@ lp_build_size_query_soa(struct gallivm_state *gallivm,
          num_levels = lp_build_sub(&bld_int_scalar, last_level, first_level);
          num_levels = lp_build_add(&bld_int_scalar, num_levels, bld_int_scalar.one);
       }
-      sizes_out[3] = lp_build_broadcast(gallivm, lp_build_vec_type(gallivm, int_type),
+      params->sizes_out[3] = lp_build_broadcast(gallivm, lp_build_vec_type(gallivm, params->int_type),
                                         num_levels);
    }
 }

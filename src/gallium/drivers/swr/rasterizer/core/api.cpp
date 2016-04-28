@@ -29,16 +29,19 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <new>
 
 #include "core/api.h"
 #include "core/backend.h"
 #include "core/context.h"
+#include "core/depthstencil.h"
 #include "core/frontend.h"
 #include "core/rasterizer.h"
 #include "core/rdtsc_core.h"
 #include "core/threads.h"
 #include "core/tilemgr.h"
 #include "core/clip.h"
+#include "core/utils.h"
 
 #include "common/simdintrin.h"
 #include "common/os.h"
@@ -64,11 +67,14 @@ HANDLE SwrCreateContext(
     pContext->dcRing.Init(KNOB_MAX_DRAWS_IN_FLIGHT);
     pContext->dsRing.Init(KNOB_MAX_DRAWS_IN_FLIGHT);
 
+    pContext->pMacroTileManagerArray = (MacroTileMgr*)_aligned_malloc(sizeof(MacroTileMgr) * KNOB_MAX_DRAWS_IN_FLIGHT, 64);
+    pContext->pDispatchQueueArray = (DispatchQueue*)_aligned_malloc(sizeof(DispatchQueue) * KNOB_MAX_DRAWS_IN_FLIGHT, 64);
+
     for (uint32_t dc = 0; dc < KNOB_MAX_DRAWS_IN_FLIGHT; ++dc)
     {
         pContext->dcRing[dc].pArena = new CachingArena(pContext->cachingArenaAllocator);
-        pContext->dcRing[dc].pTileMgr = new MacroTileMgr(*(pContext->dcRing[dc].pArena));
-        pContext->dcRing[dc].pDispatch = new DispatchQueue(); /// @todo Could lazily allocate this if Dispatch seen.
+        new (&pContext->pMacroTileManagerArray[dc]) MacroTileMgr(*pContext->dcRing[dc].pArena);
+        new (&pContext->pDispatchQueueArray[dc]) DispatchQueue();
 
         pContext->dsRing[dc].pArena = new CachingArena(pContext->cachingArenaAllocator);
     }
@@ -86,15 +92,26 @@ HANDLE SwrCreateContext(
     // Calling createThreadPool() above can set SINGLE_THREADED
     if (KNOB_SINGLE_THREADED)
     {
+        SET_KNOB(HYPERTHREADED_FE, false);
         pContext->NumWorkerThreads = 1;
+        pContext->NumFEThreads = 1;
+        pContext->NumBEThreads = 1;
     }
 
     // Allocate scratch space for workers.
     ///@note We could lazily allocate this but its rather small amount of memory.
     for (uint32_t i = 0; i < pContext->NumWorkerThreads; ++i)
     {
-        ///@todo Use numa API for allocations using numa information from thread data (if exists).
-        pContext->pScratch[i] = (uint8_t*)_aligned_malloc((32 * 1024), KNOB_SIMD_WIDTH * 4);
+#if defined(_WIN32)
+        uint32_t numaNode = pContext->threadPool.pThreadData ?
+            pContext->threadPool.pThreadData[i].numaId : 0;
+        pContext->pScratch[i] = (uint8_t*)VirtualAllocExNuma(
+            GetCurrentProcess(), nullptr, 32 * sizeof(KILOBYTE),
+            MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE,
+            numaNode);
+#else
+        pContext->pScratch[i] = (uint8_t*)_aligned_malloc(32 * sizeof(KILOBYTE), KNOB_SIMD_WIDTH * 4);
+#endif
     }
 
     // State setup AFTER context is fully initialized
@@ -131,14 +148,21 @@ void SwrDestroyContext(HANDLE hContext)
     {
         delete pContext->dcRing[i].pArena;
         delete pContext->dsRing[i].pArena;
-        delete(pContext->dcRing[i].pTileMgr);
-        delete(pContext->dcRing[i].pDispatch);
+        pContext->pMacroTileManagerArray[i].~MacroTileMgr();
+        pContext->pDispatchQueueArray[i].~DispatchQueue();
     }
+
+    _aligned_free(pContext->pDispatchQueueArray);
+    _aligned_free(pContext->pMacroTileManagerArray);
 
     // Free scratch space.
     for (uint32_t i = 0; i < pContext->NumWorkerThreads; ++i)
     {
+#if defined(_WIN32)
+        VirtualFree(pContext->pScratch[i], 0, MEM_RELEASE);
+#else
         _aligned_free(pContext->pScratch[i]);
+#endif
     }
 
     delete(pContext->pHotTileMgr);
@@ -160,12 +184,20 @@ void WakeAllThreads(SWR_CONTEXT *pContext)
 template<bool IsDraw>
 void QueueWork(SWR_CONTEXT *pContext)
 {
+    DRAW_CONTEXT* pDC = pContext->pCurDrawContext;
+    uint32_t dcIndex = pDC->drawId % KNOB_MAX_DRAWS_IN_FLIGHT;
+
+    if (IsDraw)
+    {
+        pDC->pTileMgr = &pContext->pMacroTileManagerArray[dcIndex];
+        pDC->pTileMgr->initialize();
+    }
+
     // Each worker thread looks at a DC for both FE and BE work at different times and so we
     // multiply threadDone by 2.  When the threadDone counter has reached 0 then all workers
     // have moved past this DC. (i.e. Each worker has checked this DC for both FE and BE work and
     // then moved on if all work is done.)
-    pContext->pCurDrawContext->threadsDone =
-        pContext->NumWorkerThreads ? pContext->NumWorkerThreads * 2 : 2;
+    pContext->pCurDrawContext->threadsDone = pContext->NumFEThreads + pContext->NumBEThreads;
 
     _ReadWriteBarrier();
     {
@@ -183,7 +215,7 @@ void QueueWork(SWR_CONTEXT *pContext)
         {
             static TileSet lockedTiles;
             uint64_t curDraw[2] = { pContext->pCurDrawContext->drawId, pContext->pCurDrawContext->drawId };
-            WorkOnFifoFE(pContext, 0, curDraw[0], 0);
+            WorkOnFifoFE(pContext, 0, curDraw[0]);
             WorkOnFifoBE(pContext, 0, curDraw[1], lockedTiles, 0, 0);
         }
         else
@@ -232,7 +264,20 @@ DRAW_CONTEXT* GetDrawContext(SWR_CONTEXT *pContext, bool isSplitDraw = false)
             _mm_pause();
         }
 
-        uint32_t dcIndex = pContext->dcRing.GetHead() % KNOB_MAX_DRAWS_IN_FLIGHT;
+        uint64_t curDraw = pContext->dcRing.GetHead();
+        uint32_t dcIndex = curDraw % KNOB_MAX_DRAWS_IN_FLIGHT;
+
+        static uint64_t lastDrawChecked;
+        static uint32_t lastFrameChecked;
+        if ((pContext->frameCount - lastFrameChecked) > 2 ||
+            (curDraw - lastDrawChecked) > 0x10000)
+        {
+            // Take this opportunity to clean-up old arena allocations
+            pContext->cachingArenaAllocator.FreeOldBlocks();
+
+            lastFrameChecked = pContext->frameCount;
+            lastDrawChecked = curDraw;
+        }
 
         DRAW_CONTEXT* pCurDrawContext = &pContext->dcRing[dcIndex];
         pContext->pCurDrawContext = pCurDrawContext;
@@ -283,8 +328,6 @@ DRAW_CONTEXT* GetDrawContext(SWR_CONTEXT *pContext, bool isSplitDraw = false)
         pCurDrawContext->doneFE = false;
         pCurDrawContext->FeLock = 0;
         pCurDrawContext->threadsDone = 0;
-
-        pCurDrawContext->pTileMgr->initialize();
 
         // Assign unique drawId for this DC
         pCurDrawContext->drawId = pContext->dcRing.GetHead();
@@ -485,11 +528,13 @@ void SwrSetGsFunc(
 void SwrSetCsFunc(
     HANDLE hContext,
     PFN_CS_FUNC pfnCsFunc,
-    uint32_t totalThreadsInGroup)
+    uint32_t totalThreadsInGroup,
+    uint32_t totalSpillFillSize)
 {
     API_STATE* pState = GetDrawState(GetContext(hContext));
     pState->pfnCsFunc = pfnCsFunc;
     pState->totalThreadsInGroup = totalThreadsInGroup;
+    pState->totalSpillFillSize = totalSpillFillSize;
 }
 
 void SwrSetTsState(
@@ -710,34 +755,30 @@ void SetupMacroTileScissors(DRAW_CONTEXT *pDC)
         pState->scissorInFixedPoint.bottom = bottom * FIXED_POINT_SCALE - 1;
     }
 }
+
 // templated backend function tables
 extern PFN_BACKEND_FUNC gBackendNullPs[SWR_MULTISAMPLE_TYPE_MAX];
-extern PFN_BACKEND_FUNC gBackendSingleSample[2][2];
-extern PFN_BACKEND_FUNC gBackendPixelRateTable[SWR_MULTISAMPLE_TYPE_MAX][SWR_MSAA_SAMPLE_PATTERN_MAX][SWR_INPUT_COVERAGE_MAX][2][2];
-extern PFN_BACKEND_FUNC gBackendSampleRateTable[SWR_MULTISAMPLE_TYPE_MAX][SWR_INPUT_COVERAGE_MAX][2];
-extern PFN_OUTPUT_MERGER gBackendOutputMergerTable[SWR_NUM_RENDERTARGETS + 1][SWR_MULTISAMPLE_TYPE_MAX];
-extern PFN_CALC_PIXEL_BARYCENTRICS gPixelBarycentricTable[2];
-extern PFN_CALC_SAMPLE_BARYCENTRICS gSampleBarycentricTable[2];
-extern PFN_CALC_CENTROID_BARYCENTRICS gCentroidBarycentricTable[SWR_MULTISAMPLE_TYPE_MAX][2][2][2];
+extern PFN_BACKEND_FUNC gBackendSingleSample[2][2][2];
+extern PFN_BACKEND_FUNC gBackendPixelRateTable[SWR_MULTISAMPLE_TYPE_MAX][SWR_MSAA_SAMPLE_PATTERN_MAX][SWR_INPUT_COVERAGE_MAX][2][2][2];
+extern PFN_BACKEND_FUNC gBackendSampleRateTable[SWR_MULTISAMPLE_TYPE_MAX][SWR_INPUT_COVERAGE_MAX][2][2];
 void SetupPipeline(DRAW_CONTEXT *pDC)
 {
     DRAW_STATE* pState = pDC->pState;
     const SWR_RASTSTATE &rastState = pState->state.rastState;
     const SWR_PS_STATE &psState = pState->state.psState;
     BACKEND_FUNCS& backendFuncs = pState->backendFuncs;
-    const uint32_t forcedSampleCount = (rastState.bForcedSampleCount) ? 1 : 0;
+    const uint32_t forcedSampleCount = (rastState.forcedSampleCount) ? 1 : 0;
 
     // setup backend
     if (psState.pfnPixelShader == nullptr)
     {
         backendFuncs.pfnBackend = gBackendNullPs[pState->state.rastState.sampleCount];
-        // always need to generate I & J per sample for Z interpolation
-        backendFuncs.pfnCalcSampleBarycentrics = gSampleBarycentricTable[1];
     }
     else
     {
-        const bool bMultisampleEnable = ((rastState.sampleCount > SWR_MULTISAMPLE_1X) || rastState.bForcedSampleCount) ? 1 : 0;
+        const bool bMultisampleEnable = ((rastState.sampleCount > SWR_MULTISAMPLE_1X) || rastState.forcedSampleCount) ? 1 : 0;
         const uint32_t centroid = ((psState.barycentricsMask & SWR_BARYCENTRIC_CENTROID_MASK) > 0) ? 1 : 0;
+        const uint32_t canEarlyZ = (psState.forceEarlyZ || (!psState.writesODepth && !psState.usesSourceDepth && !psState.usesUAV)) ? 1 : 0;
 
         // currently only support 'normal' input coverage
         SWR_ASSERT(psState.inputCoverage == SWR_INPUT_COVERAGE_NORMAL ||
@@ -753,38 +794,25 @@ void SetupPipeline(DRAW_CONTEXT *pDC)
             {
                 // always need to generate I & J per sample for Z interpolation
                 barycentricsMask = (SWR_BARYCENTRICS_MASK)(barycentricsMask | SWR_BARYCENTRIC_PER_SAMPLE_MASK);
-                backendFuncs.pfnBackend = gBackendPixelRateTable[rastState.sampleCount][rastState.samplePattern][psState.inputCoverage][centroid][forcedSampleCount];
-                backendFuncs.pfnOutputMerger = gBackendOutputMergerTable[psState.numRenderTargets][pState->state.blendState.sampleCount];
+                backendFuncs.pfnBackend = gBackendPixelRateTable[rastState.sampleCount][rastState.samplePattern][psState.inputCoverage][centroid][forcedSampleCount][canEarlyZ];
             }
             else
             {
                 // always need to generate I & J per pixel for Z interpolation
                 barycentricsMask = (SWR_BARYCENTRICS_MASK)(barycentricsMask | SWR_BARYCENTRIC_PER_PIXEL_MASK);
-                backendFuncs.pfnBackend = gBackendSingleSample[psState.inputCoverage][centroid];
-                backendFuncs.pfnOutputMerger = gBackendOutputMergerTable[psState.numRenderTargets][SWR_MULTISAMPLE_1X];
+                backendFuncs.pfnBackend = gBackendSingleSample[psState.inputCoverage][centroid][canEarlyZ];
             }
             break;
         case SWR_SHADING_RATE_SAMPLE:
             SWR_ASSERT(rastState.samplePattern == SWR_MSAA_STANDARD_PATTERN);
             // always need to generate I & J per sample for Z interpolation
             barycentricsMask = (SWR_BARYCENTRICS_MASK)(barycentricsMask | SWR_BARYCENTRIC_PER_SAMPLE_MASK);
-            backendFuncs.pfnBackend = gBackendSampleRateTable[rastState.sampleCount][psState.inputCoverage][centroid];
-            backendFuncs.pfnOutputMerger = gBackendOutputMergerTable[psState.numRenderTargets][pState->state.blendState.sampleCount];
+            backendFuncs.pfnBackend = gBackendSampleRateTable[rastState.sampleCount][psState.inputCoverage][centroid][canEarlyZ];
             break;
         default:
             SWR_ASSERT(0 && "Invalid shading rate");
             break;
         }
-
-        // setup pointer to function that generates necessary barycentrics required by the PS
-        bool bBarycentrics = (barycentricsMask & SWR_BARYCENTRIC_PER_PIXEL_MASK) > 0 ? 1 : 0;
-        backendFuncs.pfnCalcPixelBarycentrics = gPixelBarycentricTable[bBarycentrics];
-
-        bBarycentrics = (barycentricsMask & SWR_BARYCENTRIC_PER_SAMPLE_MASK) > 0 ? 1 : 0;
-        backendFuncs.pfnCalcSampleBarycentrics = gSampleBarycentricTable[bBarycentrics];
-
-        bBarycentrics = (barycentricsMask & SWR_BARYCENTRIC_CENTROID_MASK) > 0 ? 1 : 0;
-        backendFuncs.pfnCalcCentroidBarycentrics = gCentroidBarycentricTable[rastState.sampleCount][bBarycentrics][rastState.samplePattern][forcedSampleCount];
     }
     
     PFN_PROCESS_PRIMS pfnBinner;
@@ -871,6 +899,25 @@ void SetupPipeline(DRAW_CONTEXT *pDC)
                  !pState->state.blendState.renderTarget[rt].writeDisableGreen ||
                  !pState->state.blendState.renderTarget[rt].writeDisableBlue) ? (1 << rt) : 0;
         }
+    }
+
+    // Setup depth quantization function
+    if (pState->state.depthHottileEnable)
+    {
+        switch (pState->state.rastState.depthFormat)
+        {
+        case R32_FLOAT_X8X24_TYPELESS: pState->state.pfnQuantizeDepth = QuantizeDepth < R32_FLOAT_X8X24_TYPELESS > ; break;
+        case R32_FLOAT: pState->state.pfnQuantizeDepth = QuantizeDepth < R32_FLOAT > ; break;
+        case R24_UNORM_X8_TYPELESS: pState->state.pfnQuantizeDepth = QuantizeDepth < R24_UNORM_X8_TYPELESS > ; break;
+        case R16_UNORM: pState->state.pfnQuantizeDepth = QuantizeDepth < R16_UNORM > ; break;
+        default: SWR_ASSERT(false, "Unsupported depth format for depth quantiztion.");
+            pState->state.pfnQuantizeDepth = QuantizeDepth < R32_FLOAT > ;
+        }
+    }
+    else
+    {
+        // set up pass-through quantize if depth isn't enabled
+        pState->state.pfnQuantizeDepth = QuantizeDepth < R32_FLOAT > ;
     }
 }
 
@@ -966,42 +1013,6 @@ uint32_t MaxVertsPerDraw(
     return vertsPerDraw;
 }
 
-// Recursive template used to auto-nest conditionals.  Converts dynamic boolean function
-// arguments to static template arguments.
-template <bool... ArgsB>
-struct FEDrawChooser
-{
-    // Last Arg Terminator
-    static PFN_FE_WORK_FUNC GetFunc(bool bArg)
-    {
-        if (bArg)
-        {
-            return ProcessDraw<ArgsB..., true>;
-        }
-
-        return ProcessDraw<ArgsB..., false>;
-    }
-
-    // Recursively parse args
-    template <typename... TArgsT>
-    static PFN_FE_WORK_FUNC GetFunc(bool bArg, TArgsT... remainingArgs)
-    {
-        if (bArg)
-        {
-            return FEDrawChooser<ArgsB..., true>::GetFunc(remainingArgs...);
-        }
-
-        return FEDrawChooser<ArgsB..., false>::GetFunc(remainingArgs...);
-    }
-};
-
-// Selector for correct templated Draw front-end function
-INLINE
-static PFN_FE_WORK_FUNC GetFEDrawFunc(bool IsIndexed, bool HasTessellation, bool HasGeometryShader, bool HasStreamOut, bool RasterizerEnabled)
-{
-    return FEDrawChooser<>::GetFunc(IsIndexed, HasTessellation, HasGeometryShader, HasStreamOut, RasterizerEnabled);
-}
-
 
 //////////////////////////////////////////////////////////////////////////
 /// @brief DrawInstanced
@@ -1029,9 +1040,9 @@ void DrawInstanced(
     SWR_CONTEXT *pContext = GetContext(hContext);
     DRAW_CONTEXT* pDC = GetDrawContext(pContext);
 
-    int32_t maxVertsPerDraw = MaxVertsPerDraw(pDC, numVertices, topology);
+    uint32_t maxVertsPerDraw = MaxVertsPerDraw(pDC, numVertices, topology);
     uint32_t primsPerDraw = GetNumPrims(topology, maxVertsPerDraw);
-    int32_t remainingVerts = numVertices;
+    uint32_t remainingVerts = numVertices;
 
     API_STATE    *pState = &pDC->pState->state;
     pState->topology = topology;
@@ -1056,7 +1067,7 @@ void DrawInstanced(
         InitDraw(pDC, isSplitDraw);
 
         pDC->FeWork.type = DRAW;
-        pDC->FeWork.pfnWork = GetFEDrawFunc(
+        pDC->FeWork.pfnWork = GetProcessDrawFunc(
             false,  // IsIndexed
             pState->tsState.tsEnable,
             pState->gsState.gsEnable,
@@ -1149,9 +1160,9 @@ void DrawIndexedInstance(
     DRAW_CONTEXT* pDC = GetDrawContext(pContext);
     API_STATE* pState = &pDC->pState->state;
 
-    int32_t maxIndicesPerDraw = MaxVertsPerDraw(pDC, numIndices, topology);
+    uint32_t maxIndicesPerDraw = MaxVertsPerDraw(pDC, numIndices, topology);
     uint32_t primsPerDraw = GetNumPrims(topology, maxIndicesPerDraw);
-    int32_t remainingIndices = numIndices;
+    uint32_t remainingIndices = numIndices;
 
     uint32_t indexSize = 0;
     switch (pState->indexBuffer.format)
@@ -1189,7 +1200,7 @@ void DrawIndexedInstance(
         InitDraw(pDC, isSplitDraw);
 
         pDC->FeWork.type = DRAW;
-        pDC->FeWork.pfnWork = GetFEDrawFunc(
+        pDC->FeWork.pfnWork = GetProcessDrawFunc(
             true,   // IsIndexed
             pState->tsState.tsEnable,
             pState->gsState.gsEnable,
@@ -1334,9 +1345,6 @@ void SwrDispatch(
 
     pDC->isCompute = true;      // This is a compute context.
 
-    // Ensure spill fill pointers are initialized to nullptr.
-    memset(pDC->pSpillFill, 0, sizeof(pDC->pSpillFill));
-
     COMPUTE_DESC* pTaskData = (COMPUTE_DESC*)pDC->pArena->AllocAligned(sizeof(COMPUTE_DESC), 64);
 
     pTaskData->threadGroupCountX = threadGroupCountX;
@@ -1344,6 +1352,8 @@ void SwrDispatch(
     pTaskData->threadGroupCountZ = threadGroupCountZ;
 
     uint32_t totalThreadGroups = threadGroupCountX * threadGroupCountY * threadGroupCountZ;
+    uint32_t dcIndex = pDC->drawId % KNOB_MAX_DRAWS_IN_FLIGHT;
+    pDC->pDispatch = &pContext->pDispatchQueueArray[dcIndex];
     pDC->pDispatch->initialize(totalThreadGroups, pTaskData);
 
     QueueDispatch(pContext);
@@ -1497,4 +1507,6 @@ void SWR_API SwrEndFrame(
     HANDLE hContext)
 {
     RDTSC_ENDFRAME();
+    SWR_CONTEXT *pContext = GetContext(hContext);
+    pContext->frameCount++;
 }

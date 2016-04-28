@@ -59,8 +59,6 @@ vec4_tcs_visitor::emit_nir_code()
        * copies VS outputs to TES inputs.
        */
       uniforms = 2;
-      uniform_size[0] = 1;
-      uniform_size[1] = 1;
 
       uint64_t varyings = key->outputs_written;
 
@@ -288,53 +286,6 @@ vec4_tcs_visitor::emit_urb_write(const src_reg &value,
    inst->base_mrf = -1;
 }
 
-static unsigned
-tesslevel_outer_components(GLenum tes_primitive_mode)
-{
-   switch (tes_primitive_mode) {
-   case GL_QUADS:
-      return 4;
-   case GL_TRIANGLES:
-      return 3;
-   case GL_ISOLINES:
-      return 2;
-   default:
-      unreachable("Bogus tessellation domain");
-   }
-   return 0;
-}
-
-static unsigned
-tesslevel_inner_components(GLenum tes_primitive_mode)
-{
-   switch (tes_primitive_mode) {
-   case GL_QUADS:
-      return 2;
-   case GL_TRIANGLES:
-      return 1;
-   case GL_ISOLINES:
-      return 0;
-   default:
-      unreachable("Bogus tessellation domain");
-   }
-   return 0;
-}
-
-/**
- * Given a normal .xyzw writemask, convert it to a writemask for a vector
- * that's stored backwards, i.e. .wzyx.
- */
-static unsigned
-writemask_for_backwards_vector(unsigned mask)
-{
-   unsigned new_mask = 0;
-
-   for (int i = 0; i < 4; i++)
-      new_mask |= ((mask >> i) & 1) << (3 - i);
-
-   return new_mask;
-}
-
 void
 vec4_tcs_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
 {
@@ -372,7 +323,7 @@ vec4_tcs_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
    case nir_intrinsic_load_output:
    case nir_intrinsic_load_per_vertex_output: {
       src_reg indirect_offset = get_indirect_offset(instr);
-      unsigned imm_offset = instr->const_index[0];;
+      unsigned imm_offset = instr->const_index[0];
 
       dst_reg dst = get_nir_dest(instr->dest, BRW_REGISTER_TYPE_D);
       dst.writemask = brw_writemask_for_size(instr->num_components);
@@ -442,52 +393,56 @@ vec4_tcs_visitor::nir_emit_intrinsic(nir_intrinsic_instr *instr)
       src_reg indirect_offset = get_indirect_offset(instr);
       unsigned imm_offset = instr->const_index[0];
 
-      if (imm_offset == 0 && indirect_offset.file == BAD_FILE) {
-         value.type = BRW_REGISTER_TYPE_F;
+      if (indirect_offset.file == BAD_FILE) {
+         if (imm_offset == 0) {
+            value.type = BRW_REGISTER_TYPE_F;
 
-         mask &= (1 << tesslevel_inner_components(key->tes_primitive_mode)) - 1;
+            mask &=
+               (1 << tesslevel_inner_components(key->tes_primitive_mode)) - 1;
 
-         /* This is a write to gl_TessLevelInner[], which lives in the
-          * Patch URB header.  The layout depends on the domain.
-          */
-         switch (key->tes_primitive_mode) {
-         case GL_QUADS:
-            /* gl_TessLevelInner[].xy lives at DWords 3-2 (reversed).
-             * We use an XXYX swizzle to reverse put .xy in the .wz
-             * channels, and use a .zw writemask.
+            /* This is a write to gl_TessLevelInner[], which lives in the
+             * Patch URB header.  The layout depends on the domain.
              */
-            swiz = BRW_SWIZZLE4(0, 0, 1, 0);
-            mask = writemask_for_backwards_vector(mask);
-            break;
-         case GL_TRIANGLES:
-            /* gl_TessLevelInner[].x lives at DWord 4, so we set the
-             * writemask to X and bump the URB offset by 1.
+            switch (key->tes_primitive_mode) {
+            case GL_QUADS:
+               /* gl_TessLevelInner[].xy lives at DWords 3-2 (reversed).
+                * We use an XXYX swizzle to reverse put .xy in the .wz
+                * channels, and use a .zw writemask.
+                */
+               swiz = BRW_SWIZZLE4(0, 0, 1, 0);
+               mask = writemask_for_backwards_vector(mask);
+               break;
+            case GL_TRIANGLES:
+               /* gl_TessLevelInner[].x lives at DWord 4, so we set the
+                * writemask to X and bump the URB offset by 1.
+                */
+               imm_offset = 1;
+               break;
+            case GL_ISOLINES:
+               /* Skip; gl_TessLevelInner[] doesn't exist for isolines. */
+               return;
+            default:
+               unreachable("Bogus tessellation domain");
+            }
+         } else if (imm_offset == 1) {
+            value.type = BRW_REGISTER_TYPE_F;
+
+            mask &=
+               (1 << tesslevel_outer_components(key->tes_primitive_mode)) - 1;
+
+            /* This is a write to gl_TessLevelOuter[] which lives in the
+             * Patch URB Header at DWords 4-7.  However, it's reversed, so
+             * instead of .xyzw we have .wzyx.
              */
-            imm_offset = 1;
-            break;
-         case GL_ISOLINES:
-            /* Skip; gl_TessLevelInner[] doesn't exist for isolines. */
-            return;
-         default:
-            unreachable("Bogus tessellation domain");
-         }
-      } else if (imm_offset == 1 && indirect_offset.file == BAD_FILE) {
-         value.type = BRW_REGISTER_TYPE_F;
-
-         mask &= (1 << tesslevel_outer_components(key->tes_primitive_mode)) - 1;
-
-         /* This is a write to gl_TessLevelOuter[] which lives in the
-          * Patch URB Header at DWords 4-7.  However, it's reversed, so
-          * instead of .xyzw we have .wzyx.
-          */
-         if (key->tes_primitive_mode == GL_ISOLINES) {
-            /* Isolines .xy should be stored in .zw, in order. */
-            swiz = BRW_SWIZZLE4(0, 0, 0, 1);
-            mask <<= 2;
-         } else {
-            /* Other domains are reversed; store .wzyx instead of .xyzw. */
-            swiz = BRW_SWIZZLE_WZYX;
-            mask = writemask_for_backwards_vector(mask);
+            if (key->tes_primitive_mode == GL_ISOLINES) {
+               /* Isolines .xy should be stored in .zw, in order. */
+               swiz = BRW_SWIZZLE4(0, 0, 0, 1);
+               mask <<= 2;
+            } else {
+               /* Other domains are reversed; store .wzyx instead of .xyzw. */
+               swiz = BRW_SWIZZLE_WZYX;
+               mask = writemask_for_backwards_vector(mask);
+            }
          }
       }
 

@@ -900,10 +900,10 @@ format_is_alpha(enum pipe_format format)
    const struct util_format_description *desc = util_format_description(format);
 
    if (desc->nr_channels == 1 &&
-       desc->swizzle[0] == UTIL_FORMAT_SWIZZLE_0 &&
-       desc->swizzle[1] == UTIL_FORMAT_SWIZZLE_0 &&
-       desc->swizzle[2] == UTIL_FORMAT_SWIZZLE_0 &&
-       desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_X)
+       desc->swizzle[0] == PIPE_SWIZZLE_0 &&
+       desc->swizzle[1] == PIPE_SWIZZLE_0 &&
+       desc->swizzle[2] == PIPE_SWIZZLE_0 &&
+       desc->swizzle[3] == PIPE_SWIZZLE_X)
       return true;
 
    return false;
@@ -918,10 +918,10 @@ format_is_red(enum pipe_format format)
    const struct util_format_description *desc = util_format_description(format);
 
    if (desc->nr_channels == 1 &&
-       desc->swizzle[0] == UTIL_FORMAT_SWIZZLE_X &&
-       desc->swizzle[1] == UTIL_FORMAT_SWIZZLE_0 &&
-       desc->swizzle[2] == UTIL_FORMAT_SWIZZLE_0 &&
-       desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_1)
+       desc->swizzle[0] == PIPE_SWIZZLE_X &&
+       desc->swizzle[1] == PIPE_SWIZZLE_0 &&
+       desc->swizzle[2] == PIPE_SWIZZLE_0 &&
+       desc->swizzle[3] == PIPE_SWIZZLE_1)
       return true;
 
    return false;
@@ -937,10 +937,10 @@ format_is_luminance(enum pipe_format format)
    const struct util_format_description *desc = util_format_description(format);
 
    if (desc->nr_channels == 1 &&
-       desc->swizzle[0] == UTIL_FORMAT_SWIZZLE_X &&
-       desc->swizzle[1] == UTIL_FORMAT_SWIZZLE_X &&
-       desc->swizzle[2] == UTIL_FORMAT_SWIZZLE_X &&
-       desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_1)
+       desc->swizzle[0] == PIPE_SWIZZLE_X &&
+       desc->swizzle[1] == PIPE_SWIZZLE_X &&
+       desc->swizzle[2] == PIPE_SWIZZLE_X &&
+       desc->swizzle[3] == PIPE_SWIZZLE_1)
       return true;
 
    return false;
@@ -955,10 +955,10 @@ format_is_red_alpha(enum pipe_format format)
    const struct util_format_description *desc = util_format_description(format);
 
    if (desc->nr_channels == 2 &&
-       desc->swizzle[0] == UTIL_FORMAT_SWIZZLE_X &&
-       desc->swizzle[1] == UTIL_FORMAT_SWIZZLE_0 &&
-       desc->swizzle[2] == UTIL_FORMAT_SWIZZLE_0 &&
-       desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_Y)
+       desc->swizzle[0] == PIPE_SWIZZLE_X &&
+       desc->swizzle[1] == PIPE_SWIZZLE_0 &&
+       desc->swizzle[2] == PIPE_SWIZZLE_0 &&
+       desc->swizzle[3] == PIPE_SWIZZLE_Y)
       return true;
 
    return false;
@@ -969,10 +969,10 @@ format_is_swizzled_rgba(enum pipe_format format)
 {
     const struct util_format_description *desc = util_format_description(format);
 
-    if ((desc->swizzle[0] == TGSI_SWIZZLE_X || desc->swizzle[0] == UTIL_FORMAT_SWIZZLE_0) &&
-        (desc->swizzle[1] == TGSI_SWIZZLE_Y || desc->swizzle[1] == UTIL_FORMAT_SWIZZLE_0) &&
-        (desc->swizzle[2] == TGSI_SWIZZLE_Z || desc->swizzle[2] == UTIL_FORMAT_SWIZZLE_0) &&
-        (desc->swizzle[3] == TGSI_SWIZZLE_W || desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_1))
+    if ((desc->swizzle[0] == TGSI_SWIZZLE_X || desc->swizzle[0] == PIPE_SWIZZLE_0) &&
+        (desc->swizzle[1] == TGSI_SWIZZLE_Y || desc->swizzle[1] == PIPE_SWIZZLE_0) &&
+        (desc->swizzle[2] == TGSI_SWIZZLE_Z || desc->swizzle[2] == PIPE_SWIZZLE_0) &&
+        (desc->swizzle[3] == TGSI_SWIZZLE_W || desc->swizzle[3] == PIPE_SWIZZLE_1))
        return false;
 
     return true;
@@ -1101,10 +1101,10 @@ reinterpret_formats(enum pipe_format *src_format, enum pipe_format *dst_format)
       unsigned i;
 
       /* Make sure the format is an RGBA and not an RGBX format */
-      if (src_desc->nr_channels != 4 || src_desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_1)
+      if (src_desc->nr_channels != 4 || src_desc->swizzle[3] == PIPE_SWIZZLE_1)
          return false;
 
-      if (dst_desc->nr_channels != 4 || dst_desc->swizzle[3] == UTIL_FORMAT_SWIZZLE_1)
+      if (dst_desc->nr_channels != 4 || dst_desc->swizzle[3] == PIPE_SWIZZLE_1)
          return false;
 
       for (i = 0; i < 4; i++)
@@ -1131,7 +1131,7 @@ create_pbo_upload_vs(struct st_context *st)
    struct ureg_dst out_pos;
    struct ureg_dst out_layer;
 
-   ureg = ureg_create(TGSI_PROCESSOR_VERTEX);
+   ureg = ureg_create(PIPE_SHADER_VERTEX);
    if (!ureg)
       return NULL;
 
@@ -1176,7 +1176,7 @@ create_pbo_upload_gs(struct st_context *st)
    struct ureg_src imm;
    unsigned i;
 
-   ureg = ureg_create(TGSI_PROCESSOR_GEOMETRY);
+   ureg = ureg_create(PIPE_SHADER_GEOMETRY);
    if (!ureg)
       return NULL;
 
@@ -1222,7 +1222,7 @@ create_pbo_upload_fs(struct st_context *st)
    struct ureg_src const0;
    struct ureg_dst temp0;
 
-   ureg = ureg_create(TGSI_PROCESSOR_FRAGMENT);
+   ureg = ureg_create(PIPE_SHADER_FRAGMENT);
    if (!ureg)
       return NULL;
 
@@ -1345,6 +1345,7 @@ try_pbo_upload_common(struct gl_context *ctx,
                         CSO_BIT_DEPTH_STENCIL_ALPHA |
                         CSO_BIT_RASTERIZER |
                         CSO_BIT_STREAM_OUTPUTS |
+                        CSO_BIT_PAUSE_QUERIES |
                         CSO_BITS_ALL_SHADERS));
    cso_save_constant_buffer_slot0(cso, PIPE_SHADER_FRAGMENT);
 
@@ -1370,10 +1371,10 @@ try_pbo_upload_common(struct gl_context *ctx,
       templ.format = src_format;
       templ.u.buf.first_element = first_element;
       templ.u.buf.last_element = last_element;
-      templ.swizzle_r = PIPE_SWIZZLE_RED;
-      templ.swizzle_g = PIPE_SWIZZLE_GREEN;
-      templ.swizzle_b = PIPE_SWIZZLE_BLUE;
-      templ.swizzle_a = PIPE_SWIZZLE_ALPHA;
+      templ.swizzle_r = PIPE_SWIZZLE_X;
+      templ.swizzle_g = PIPE_SWIZZLE_Y;
+      templ.swizzle_b = PIPE_SWIZZLE_Z;
+      templ.swizzle_a = PIPE_SWIZZLE_W;
 
       sampler_view = pipe->create_sampler_view(pipe, buffer, &templ);
       if (sampler_view == NULL)
@@ -1845,7 +1846,7 @@ st_TexSubImage(struct gl_context *ctx, GLuint dims,
             /* 1D array textures.
              * We need to convert gallium coords to GL coords.
              */
-            GLvoid *src = _mesa_image_address2d(unpack, pixels,
+            void *src = _mesa_image_address2d(unpack, pixels,
                                                 width, depth, format,
                                                 type, slice, 0);
             memcpy(map, src, bytesPerRow);
@@ -1854,7 +1855,7 @@ st_TexSubImage(struct gl_context *ctx, GLuint dims,
             ubyte *slice_map = map;
 
             for (row = 0; row < (unsigned) height; row++) {
-               GLvoid *src = _mesa_image_address(dims, unpack, pixels,
+               void *src = _mesa_image_address(dims, unpack, pixels,
                                                  width, height, format,
                                                  type, slice, row, 0);
                memcpy(slice_map, src, bytesPerRow);
@@ -1928,7 +1929,7 @@ st_CompressedTexSubImage(struct gl_context *ctx, GLuint dims,
                          struct gl_texture_image *texImage,
                          GLint x, GLint y, GLint z,
                          GLsizei w, GLsizei h, GLsizei d,
-                         GLenum format, GLsizei imageSize, const GLvoid *data)
+                         GLenum format, GLsizei imageSize, const void *data)
 {
    struct st_context *st = st_context(ctx);
    struct st_texture_image *stImage = st_texture_image(texImage);
@@ -2053,7 +2054,7 @@ fallback:
 static void
 st_CompressedTexImage(struct gl_context *ctx, GLuint dims,
                       struct gl_texture_image *texImage,
-                      GLsizei imageSize, const GLvoid *data)
+                      GLsizei imageSize, const void *data)
 {
    prep_teximage(ctx, texImage, GL_NONE, GL_NONE);
 
@@ -2106,7 +2107,7 @@ static void
 st_GetTexSubImage(struct gl_context * ctx,
                   GLint xoffset, GLint yoffset, GLint zoffset,
                   GLsizei width, GLsizei height, GLint depth,
-                  GLenum format, GLenum type, GLvoid * pixels,
+                  GLenum format, GLenum type, void * pixels,
                   struct gl_texture_image *texImage)
 {
    struct st_context *st = st_context(ctx);
@@ -2319,7 +2320,7 @@ st_GetTexSubImage(struct gl_context * ctx,
             /* 1D array textures.
              * We need to convert gallium coords to GL coords.
              */
-            GLvoid *dest = _mesa_image_address3d(&ctx->Pack, pixels,
+            void *dest = _mesa_image_address3d(&ctx->Pack, pixels,
                                                  width, depth, format,
                                                  type, 0, slice, 0);
             memcpy(dest, map, bytesPerRow);
@@ -2328,7 +2329,7 @@ st_GetTexSubImage(struct gl_context * ctx,
             ubyte *slice_map = map;
 
             for (row = 0; row < height; row++) {
-               GLvoid *dest = _mesa_image_address3d(&ctx->Pack, pixels,
+               void *dest = _mesa_image_address3d(&ctx->Pack, pixels,
                                                     width, height, format,
                                                     type, slice, row, 0);
                memcpy(dest, slice_map, bytesPerRow);
@@ -2363,7 +2364,7 @@ st_GetTexSubImage(struct gl_context * ctx,
             /* 1D array textures.
              * We need to convert gallium coords to GL coords.
              */
-            GLvoid *dest = _mesa_image_address3d(&ctx->Pack, pixels,
+            void *dest = _mesa_image_address3d(&ctx->Pack, pixels,
                                                  width, depth, format,
                                                  type, 0, slice, 0);
 
@@ -2377,7 +2378,7 @@ st_GetTexSubImage(struct gl_context * ctx,
          }
          else {
             for (row = 0; row < height; row++) {
-               GLvoid *dest = _mesa_image_address3d(&ctx->Pack, pixels,
+               void *dest = _mesa_image_address3d(&ctx->Pack, pixels,
                                                     width, height, format,
                                                     type, slice, row, 0);
 
@@ -3085,7 +3086,7 @@ st_ClearTexSubImage(struct gl_context *ctx,
                     struct gl_texture_image *texImage,
                     GLint xoffset, GLint yoffset, GLint zoffset,
                     GLsizei width, GLsizei height, GLsizei depth,
-                    const GLvoid *clearValue)
+                    const void *clearValue)
 {
    static const char zeros[16] = {0};
    struct st_texture_image *stImage = st_texture_image(texImage);

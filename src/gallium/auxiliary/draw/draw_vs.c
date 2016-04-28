@@ -154,7 +154,7 @@ draw_vs_init( struct draw_context *draw )
    draw->dump_vs = debug_get_option_gallium_dump_vs();
 
    if (!draw->llvm) {
-      draw->vs.tgsi.machine = tgsi_exec_machine_create();
+      draw->vs.tgsi.machine = tgsi_exec_machine_create(PIPE_SHADER_VERTEX);
       if (!draw->vs.tgsi.machine)
          return FALSE;
    }
@@ -205,12 +205,12 @@ draw_vs_lookup_variant( struct draw_vertex_shader *vs,
 
    /* Add it to our list, could be smarter: 
     */
-   if (vs->nr_variants < Elements(vs->variant)) {
+   if (vs->nr_variants < ARRAY_SIZE(vs->variant)) {
       vs->variant[vs->nr_variants++] = variant;
    }
    else {
       vs->last_variant++;
-      vs->last_variant %= Elements(vs->variant);
+      vs->last_variant %= ARRAY_SIZE(vs->variant);
       vs->variant[vs->last_variant]->destroy(vs->variant[vs->last_variant]);
       vs->variant[vs->last_variant] = variant;
    }

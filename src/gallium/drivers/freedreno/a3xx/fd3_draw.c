@@ -118,6 +118,12 @@ fixup_shader_state(struct fd_context *ctx, struct ir3_shader_key *key)
 				ctx->prog.dirty |= FD_SHADER_DIRTY_FP;
 		}
 
+		if (last_key->vclamp_color != key->vclamp_color)
+			ctx->prog.dirty |= FD_SHADER_DIRTY_VP;
+
+		if (last_key->fclamp_color != key->fclamp_color)
+			ctx->prog.dirty |= FD_SHADER_DIRTY_FP;
+
 		if (last_key->color_two_side != key->color_two_side)
 			ctx->prog.dirty |= FD_SHADER_DIRTY_FP;
 
@@ -133,6 +139,7 @@ fd3_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info)
 {
 	struct fd3_context *fd3_ctx = fd3_context(ctx);
 	struct fd3_emit emit = {
+		.debug = &ctx->debug,
 		.vtx  = &ctx->vtx,
 		.prog = &ctx->prog,
 		.info = info,
@@ -140,6 +147,8 @@ fd3_draw_vbo(struct fd_context *ctx, const struct pipe_draw_info *info)
 			/* do binning pass first: */
 			.binning_pass = true,
 			.color_two_side = ctx->rasterizer->light_twoside,
+			.vclamp_color = ctx->rasterizer->clamp_vertex_color,
+			.fclamp_color = ctx->rasterizer->clamp_fragment_color,
 			// TODO set .half_precision based on render target format,
 			// ie. float16 and smaller use half, float32 use full..
 			.half_precision = !!(fd_mesa_debug & FD_DBG_FRAGHALF),
@@ -201,6 +210,7 @@ fd3_clear_binning(struct fd_context *ctx, unsigned dirty)
 	struct fd3_context *fd3_ctx = fd3_context(ctx);
 	struct fd_ringbuffer *ring = ctx->binning_ring;
 	struct fd3_emit emit = {
+		.debug = &ctx->debug,
 		.vtx  = &fd3_ctx->solid_vbuf_state,
 		.prog = &ctx->solid_prog,
 		.key = {
@@ -243,6 +253,7 @@ fd3_clear(struct fd_context *ctx, unsigned buffers,
 	unsigned dirty = ctx->dirty;
 	unsigned i;
 	struct fd3_emit emit = {
+		.debug = &ctx->debug,
 		.vtx  = &fd3_ctx->solid_vbuf_state,
 		.prog = &ctx->solid_prog,
 		.key = {

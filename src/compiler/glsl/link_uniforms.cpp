@@ -282,7 +282,7 @@ public:
       : num_active_uniforms(0), num_hidden_uniforms(0), num_values(0),
         num_shader_samplers(0), num_shader_images(0),
         num_shader_uniform_components(0), num_shader_subroutines(0),
-        is_ubo_var(false), is_shader_storage(false), map(map),
+        is_buffer_block(false), is_shader_storage(false), map(map),
         hidden_map(hidden_map)
    {
       /* empty */
@@ -299,7 +299,7 @@ public:
    void process(ir_variable *var)
    {
       this->current_var = var;
-      this->is_ubo_var = var->is_in_buffer_block();
+      this->is_buffer_block = var->is_in_buffer_block();
       this->is_shader_storage = var->is_in_shader_storage_block();
       if (var->is_interface_instance())
          program_resource_visitor::process(var->get_interface_type(),
@@ -340,7 +340,7 @@ public:
     */
    unsigned num_shader_subroutines;
 
-   bool is_ubo_var;
+   bool is_buffer_block;
    bool is_shader_storage;
 
    struct string_to_uint_map *map;
@@ -380,7 +380,7 @@ private:
           * Note that samplers do not count against this limit because they
           * don't use any storage on current hardware.
           */
-         if (!is_ubo_var && !is_shader_storage)
+         if (!is_buffer_block)
             this->num_shader_uniform_components += values;
       }
 
@@ -460,30 +460,33 @@ public:
       field_counter = 0;
       this->record_next_sampler = new string_to_uint_map;
 
-      ubo_block_index = -1;
+      buffer_block_index = -1;
       if (var->is_in_buffer_block()) {
+         struct gl_uniform_block *blks = var->is_in_shader_storage_block() ?
+            prog->ShaderStorageBlocks : prog->UniformBlocks;
+         unsigned num_blks = var->is_in_shader_storage_block() ?
+            prog->NumShaderStorageBlocks : prog->NumUniformBlocks;
+
          if (var->is_interface_instance() && var->type->is_array()) {
             unsigned l = strlen(var->get_interface_type()->name);
 
-            for (unsigned i = 0; i < prog->NumBufferInterfaceBlocks; i++) {
-               if (strncmp(var->get_interface_type()->name,
-                           prog->BufferInterfaceBlocks[i].Name,
-                           l) == 0
-                   && prog->BufferInterfaceBlocks[i].Name[l] == '[') {
-                  ubo_block_index = i;
+            for (unsigned i = 0; i < num_blks; i++) {
+               if (strncmp(var->get_interface_type()->name, blks[i].Name, l)
+                   == 0 && blks[i].Name[l] == '[') {
+                  buffer_block_index = i;
                   break;
                }
             }
          } else {
-            for (unsigned i = 0; i < prog->NumBufferInterfaceBlocks; i++) {
-               if (strcmp(var->get_interface_type()->name,
-                          prog->BufferInterfaceBlocks[i].Name) == 0) {
-                  ubo_block_index = i;
+            for (unsigned i = 0; i < num_blks; i++) {
+               if (strcmp(var->get_interface_type()->name, blks[i].Name) ==
+                   0) {
+                  buffer_block_index = i;
                   break;
                }
             }
          }
-         assert(ubo_block_index != -1);
+         assert(buffer_block_index != -1);
 
          /* Uniform blocks that were specified with an instance name must be
           * handled a little bit differently.  The name of the variable is the
@@ -497,7 +500,7 @@ public:
                     var->get_interface_type()->name);
          } else {
             const struct gl_uniform_block *const block =
-               &prog->BufferInterfaceBlocks[ubo_block_index];
+               &blks[buffer_block_index];
 
             assert(var->data.location != -1);
 
@@ -519,7 +522,7 @@ public:
       delete this->record_next_sampler;
    }
 
-   int ubo_block_index;
+   int buffer_block_index;
    int ubo_byte_offset;
    gl_shader_stage shader_type;
 
@@ -659,7 +662,7 @@ private:
    virtual void enter_record(const glsl_type *type, const char *,
                              bool row_major, const unsigned packing) {
       assert(type->is_record());
-      if (this->ubo_block_index == -1)
+      if (this->buffer_block_index == -1)
          return;
       if (packing == GLSL_INTERFACE_PACKING_STD430)
          this->ubo_byte_offset = glsl_align(
@@ -672,7 +675,7 @@ private:
    virtual void leave_record(const glsl_type *type, const char *,
                              bool row_major, const unsigned packing) {
       assert(type->is_record());
-      if (this->ubo_block_index == -1)
+      if (this->buffer_block_index == -1)
          return;
       if (packing == GLSL_INTERFACE_PACKING_STD430)
          this->ubo_byte_offset = glsl_align(
@@ -719,7 +722,7 @@ private:
       /* For array of arrays or struct arrays the base location may have
        * already been set so don't set it again.
        */
-      if (ubo_block_index == -1 && current_var->data.location == -1) {
+      if (buffer_block_index == -1 && current_var->data.location == -1) {
          current_var->data.location = id;
       }
 
@@ -766,8 +769,8 @@ private:
       this->uniforms[id].is_shader_storage =
          current_var->is_in_shader_storage_block();
 
-      if (this->ubo_block_index != -1) {
-         this->uniforms[id].block_index = this->ubo_block_index;
+      if (this->buffer_block_index != -1) {
+         this->uniforms[id].block_index = this->buffer_block_index;
 
          unsigned alignment = type->std140_base_alignment(row_major);
          if (packing == GLSL_INTERFACE_PACKING_STD430)
@@ -872,59 +875,6 @@ public:
 };
 
 /**
- * Merges a uniform block into an array of uniform blocks that may or
- * may not already contain a copy of it.
- *
- * Returns the index of the new block in the array.
- */
-int
-link_cross_validate_uniform_block(void *mem_ctx,
-                                  struct gl_uniform_block **linked_blocks,
-                                  unsigned int *num_linked_blocks,
-                                  struct gl_uniform_block *new_block)
-{
-   for (unsigned int i = 0; i < *num_linked_blocks; i++) {
-      struct gl_uniform_block *old_block = &(*linked_blocks)[i];
-
-      if (strcmp(old_block->Name, new_block->Name) == 0)
-         return link_uniform_blocks_are_compatible(old_block, new_block)
-            ? i : -1;
-   }
-
-   *linked_blocks = reralloc(mem_ctx, *linked_blocks,
-                             struct gl_uniform_block,
-                             *num_linked_blocks + 1);
-   int linked_block_index = (*num_linked_blocks)++;
-   struct gl_uniform_block *linked_block = &(*linked_blocks)[linked_block_index];
-
-   memcpy(linked_block, new_block, sizeof(*new_block));
-   linked_block->Uniforms = ralloc_array(*linked_blocks,
-                                         struct gl_uniform_buffer_variable,
-                                         linked_block->NumUniforms);
-
-   memcpy(linked_block->Uniforms,
-          new_block->Uniforms,
-          sizeof(*linked_block->Uniforms) * linked_block->NumUniforms);
-
-   linked_block->Name = ralloc_strdup(*linked_blocks, linked_block->Name);
-
-   for (unsigned int i = 0; i < linked_block->NumUniforms; i++) {
-      struct gl_uniform_buffer_variable *ubo_var =
-         &linked_block->Uniforms[i];
-
-      if (ubo_var->Name == ubo_var->IndexName) {
-         ubo_var->Name = ralloc_strdup(*linked_blocks, ubo_var->Name);
-         ubo_var->IndexName = ubo_var->Name;
-      } else {
-         ubo_var->Name = ralloc_strdup(*linked_blocks, ubo_var->Name);
-         ubo_var->IndexName = ralloc_strdup(*linked_blocks, ubo_var->IndexName);
-      }
-   }
-
-   return linked_block_index;
-}
-
-/**
  * Walks the IR and update the references to uniform blocks in the
  * ir_variables to point at linked shader's list (previously, they
  * would point at the uniform block list in one of the pre-linked
@@ -957,11 +907,16 @@ link_update_uniform_buffer_variables(struct gl_shader *shader)
          sentinel = '[';
       }
 
+      unsigned num_blocks = var->data.mode == ir_var_uniform ?
+         shader->NumUniformBlocks : shader->NumShaderStorageBlocks;
+      struct gl_uniform_block **blks = var->data.mode == ir_var_uniform ?
+         shader->UniformBlocks : shader->ShaderStorageBlocks;
+
       const unsigned l = strlen(var->name);
-      for (unsigned i = 0; i < shader->NumBufferInterfaceBlocks; i++) {
-         for (unsigned j = 0; j < shader->BufferInterfaceBlocks[i]->NumUniforms; j++) {
+      for (unsigned i = 0; i < num_blocks; i++) {
+         for (unsigned j = 0; j < blks[i]->NumUniforms; j++) {
             if (sentinel) {
-               const char *begin = shader->BufferInterfaceBlocks[i]->Uniforms[j].Name;
+               const char *begin = blks[i]->Uniforms[j].Name;
                const char *end = strchr(begin, sentinel);
 
                if (end == NULL)
@@ -975,8 +930,7 @@ link_update_uniform_buffer_variables(struct gl_shader *shader)
                   var->data.location = j;
                   break;
                }
-            } else if (!strcmp(var->name,
-                               shader->BufferInterfaceBlocks[i]->Uniforms[j].Name)) {
+            } else if (!strcmp(var->name, blks[i]->Uniforms[j].Name)) {
                found = true;
                var->data.location = j;
                break;
@@ -1101,11 +1055,9 @@ link_assign_uniform_locations(struct gl_shader_program *prog,
       sh->num_uniform_components = uniform_size.num_shader_uniform_components;
       sh->num_combined_uniform_components = sh->num_uniform_components;
 
-      for (unsigned i = 0; i < sh->NumBufferInterfaceBlocks; i++) {
-         if (!sh->BufferInterfaceBlocks[i]->IsShaderStorage) {
-            sh->num_combined_uniform_components +=
-               sh->BufferInterfaceBlocks[i]->UniformBufferSize / 4;
-         }
+      for (unsigned i = 0; i < sh->NumUniformBlocks; i++) {
+         sh->num_combined_uniform_components +=
+            sh->UniformBlocks[i]->UniformBufferSize / 4;
       }
    }
 

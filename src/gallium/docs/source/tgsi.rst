@@ -2288,6 +2288,9 @@ Resource Access Opcodes
                texture arrays and 2D textures.  address.w is always
                ignored.
 
+               A swizzle suffix may be added to the resource argument
+               this will cause the resource data to be swizzled accordingly.
+
 .. opcode:: STORE - Write data to a shader resource
 
                Syntax: ``STORE resource, address, src``
@@ -2710,7 +2713,7 @@ TGSI_SEMANTIC_COLOR
 """""""""""""""""""
 
 For vertex shader outputs or fragment shader inputs/outputs, this
-label indicates that the resister contains an R,G,B,A color.
+label indicates that the register contains an R,G,B,A color.
 
 Several shader inputs/outputs may contain colors so the semantic index
 is used to distinguish them.  For example, color[0] may be the diffuse
@@ -3220,6 +3223,12 @@ Which shader stage will MOST LIKELY follow after this shader when the shader
 is bound. This is only a hint to the driver and doesn't have to be precise.
 Only set for VS and TES.
 
+TGSI_PROPERTY_CS_FIXED_BLOCK_WIDTH / HEIGHT / DEPTH
+"""""""""""""""""""""""""""""""""""""""""""""""""""
+
+Threads per block in each dimension, if known at compile time. If the block size
+is known all three should be at least 1. If it is unknown they should all be set
+to 0 or not set.
 
 Texture Sampling and Texture Formats
 ------------------------------------

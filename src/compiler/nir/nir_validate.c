@@ -588,7 +588,7 @@ validate_phi_src(nir_phi_instr *instr, nir_block *pred, validate_state *state)
    assert(instr->dest.is_ssa);
 
    exec_list_validate(&instr->srcs);
-   nir_foreach_phi_src(instr, src) {
+   nir_foreach_phi_src(src, instr) {
       if (src->pred == pred) {
          assert(src->src.is_ssa);
          assert(src->src.ssa->num_components ==
@@ -606,7 +606,7 @@ validate_phi_src(nir_phi_instr *instr, nir_block *pred, validate_state *state)
 static void
 validate_phi_srcs(nir_block *block, nir_block *succ, validate_state *state)
 {
-   nir_foreach_instr(succ, instr) {
+   nir_foreach_instr(instr, succ) {
       if (instr->type != nir_instr_type_phi)
          break;
 
@@ -624,7 +624,7 @@ validate_block(nir_block *block, validate_state *state)
    state->block = block;
 
    exec_list_validate(&block->instr_list);
-   nir_foreach_instr(block, instr) {
+   nir_foreach_instr(instr, block) {
       if (instr->type == nir_instr_type_phi) {
          assert(instr == nir_block_first_instr(block) ||
                 nir_instr_prev(instr)->type == nir_instr_type_phi);
@@ -852,7 +852,7 @@ postvalidate_reg_decl(nir_register *reg, validate_state *state)
 
    reg_validate_state *reg_state = (reg_validate_state *) entry->data;
 
-   nir_foreach_use(reg, src) {
+   nir_foreach_use(src, reg) {
       struct set_entry *entry = _mesa_set_search(reg_state->uses, src);
       assert(entry);
       _mesa_set_remove(reg_state->uses, entry);
@@ -867,7 +867,7 @@ postvalidate_reg_decl(nir_register *reg, validate_state *state)
       abort();
    }
 
-   nir_foreach_if_use(reg, src) {
+   nir_foreach_if_use(src, reg) {
       struct set_entry *entry = _mesa_set_search(reg_state->if_uses, src);
       assert(entry);
       _mesa_set_remove(reg_state->if_uses, entry);
@@ -882,7 +882,7 @@ postvalidate_reg_decl(nir_register *reg, validate_state *state)
       abort();
    }
 
-   nir_foreach_def(reg, src) {
+   nir_foreach_def(src, reg) {
       struct set_entry *entry = _mesa_set_search(reg_state->defs, src);
       assert(entry);
       _mesa_set_remove(reg_state->defs, entry);
@@ -903,6 +903,9 @@ validate_var_decl(nir_variable *var, bool is_global, validate_state *state)
 {
    assert(is_global == nir_variable_is_global(var));
 
+   /* Must have exactly one mode set */
+   assert(util_bitcount(var->data.mode) == 1);
+
    /*
     * TODO validate some things ir_validate.cpp does (requires more GLSL type
     * support)
@@ -921,7 +924,7 @@ postvalidate_ssa_def(nir_ssa_def *def, void *void_state)
    struct hash_entry *entry = _mesa_hash_table_search(state->ssa_defs, def);
    ssa_def_validate_state *def_state = (ssa_def_validate_state *)entry->data;
 
-   nir_foreach_use(def, src) {
+   nir_foreach_use(src, def) {
       struct set_entry *entry = _mesa_set_search(def_state->uses, src);
       assert(entry);
       _mesa_set_remove(def_state->uses, entry);
@@ -936,7 +939,7 @@ postvalidate_ssa_def(nir_ssa_def *def, void *void_state)
       abort();
    }
 
-   nir_foreach_if_use(def, src) {
+   nir_foreach_if_use(src, def) {
       struct set_entry *entry = _mesa_set_search(def_state->if_uses, src);
       assert(entry);
       _mesa_set_remove(def_state->if_uses, entry);
@@ -950,15 +953,6 @@ postvalidate_ssa_def(nir_ssa_def *def, void *void_state)
 
       abort();
    }
-
-   return true;
-}
-
-static bool
-postvalidate_ssa_defs_block(nir_block *block, void *state)
-{
-   nir_foreach_instr(block, instr)
-      nir_foreach_ssa_def(instr, postvalidate_ssa_def, state);
 
    return true;
 }
@@ -1022,7 +1016,10 @@ validate_function_impl(nir_function_impl *impl, validate_state *state)
       postvalidate_reg_decl(reg, state);
    }
 
-   nir_foreach_block(impl, postvalidate_ssa_defs_block, state);
+   nir_foreach_block(block, impl) {
+      nir_foreach_instr(instr, block)
+         nir_foreach_ssa_def(instr, postvalidate_ssa_def, state);
+   }
 }
 
 static void

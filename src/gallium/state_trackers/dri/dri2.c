@@ -30,14 +30,19 @@
 
 #include <xf86drm.h>
 #include <dlfcn.h>
+#include "GL/mesa_glinterop.h"
 #include "util/u_memory.h"
 #include "util/u_inlines.h"
 #include "util/u_format.h"
 #include "util/u_debug.h"
 #include "state_tracker/drm_driver.h"
+#include "state_tracker/st_cb_bufferobjects.h"
+#include "state_tracker/st_cb_fbo.h"
+#include "state_tracker/st_cb_texture.h"
 #include "state_tracker/st_texture.h"
 #include "state_tracker/st_context.h"
 #include "pipe-loader/pipe_loader.h"
+#include "main/bufferobj.h"
 #include "main/texobj.h"
 
 #include "dri_screen.h"
@@ -99,6 +104,31 @@ static int convert_to_fourcc(int format)
       return -1;
    }
    return format;
+}
+
+static enum pipe_format dri2_format_to_pipe_format (int format)
+{
+   enum pipe_format pf;
+
+   switch (format) {
+   case __DRI_IMAGE_FORMAT_RGB565:
+      pf = PIPE_FORMAT_B5G6R5_UNORM;
+      break;
+   case __DRI_IMAGE_FORMAT_XRGB8888:
+      pf = PIPE_FORMAT_BGRX8888_UNORM;
+      break;
+   case __DRI_IMAGE_FORMAT_ARGB8888:
+      pf = PIPE_FORMAT_BGRA8888_UNORM;
+      break;
+   case __DRI_IMAGE_FORMAT_ABGR8888:
+      pf = PIPE_FORMAT_RGBA8888_UNORM;
+      break;
+   default:
+      pf = PIPE_FORMAT_NONE;
+      break;
+   }
+
+   return pf;
 }
 
 /**
@@ -711,7 +741,7 @@ dri2_lookup_egl_image(struct dri_screen *screen, void *handle)
 static __DRIimage *
 dri2_create_image_from_winsys(__DRIscreen *_screen,
                               int width, int height, int format,
-                              struct winsys_handle *whandle, int pitch,
+                              struct winsys_handle *whandle,
                               void *loaderPrivate)
 {
    struct dri_screen *screen = dri_screen(_screen);
@@ -722,23 +752,7 @@ dri2_create_image_from_winsys(__DRIscreen *_screen,
 
    tex_usage = PIPE_BIND_RENDER_TARGET | PIPE_BIND_SAMPLER_VIEW;
 
-   switch (format) {
-   case __DRI_IMAGE_FORMAT_RGB565:
-      pf = PIPE_FORMAT_B5G6R5_UNORM;
-      break;
-   case __DRI_IMAGE_FORMAT_XRGB8888:
-      pf = PIPE_FORMAT_BGRX8888_UNORM;
-      break;
-   case __DRI_IMAGE_FORMAT_ARGB8888:
-      pf = PIPE_FORMAT_BGRA8888_UNORM;
-      break;
-   case __DRI_IMAGE_FORMAT_ABGR8888:
-      pf = PIPE_FORMAT_RGBA8888_UNORM;
-      break;
-   default:
-      pf = PIPE_FORMAT_NONE;
-      break;
-   }
+   pf = dri2_format_to_pipe_format (format);
    if (pf == PIPE_FORMAT_NONE)
       return NULL;
 
@@ -756,7 +770,6 @@ dri2_create_image_from_winsys(__DRIscreen *_screen,
    templ.depth0 = 1;
    templ.array_size = 1;
 
-   whandle->stride = pitch * util_format_get_blocksize(pf);
    whandle->offset = 0;
 
    img->texture = screen->base.screen->resource_from_handle(screen->base.screen,
@@ -781,19 +794,26 @@ dri2_create_image_from_name(__DRIscreen *_screen,
                             int name, int pitch, void *loaderPrivate)
 {
    struct winsys_handle whandle;
+   enum pipe_format pf;
 
    memset(&whandle, 0, sizeof(whandle));
    whandle.type = DRM_API_HANDLE_TYPE_SHARED;
    whandle.handle = name;
 
+   pf = dri2_format_to_pipe_format (format);
+   if (pf == PIPE_FORMAT_NONE)
+      return NULL;
+
+   whandle.stride = pitch * util_format_get_blocksize(pf);
+
    return dri2_create_image_from_winsys(_screen, width, height, format,
-                                        &whandle, pitch, loaderPrivate);
+                                        &whandle, loaderPrivate);
 }
 
 static __DRIimage *
 dri2_create_image_from_fd(__DRIscreen *_screen,
                           int width, int height, int format,
-                          int fd, int pitch, void *loaderPrivate)
+                          int fd, int stride, void *loaderPrivate)
 {
    struct winsys_handle whandle;
 
@@ -803,9 +823,10 @@ dri2_create_image_from_fd(__DRIscreen *_screen,
    memset(&whandle, 0, sizeof(whandle));
    whandle.type = DRM_API_HANDLE_TYPE_FD;
    whandle.handle = (unsigned)fd;
+   whandle.stride = stride;
 
    return dri2_create_image_from_winsys(_screen, width, height, format,
-                                        &whandle, pitch, loaderPrivate);
+                                        &whandle, loaderPrivate);
 }
 
 static __DRIimage *
@@ -845,23 +866,7 @@ dri2_create_image(__DRIscreen *_screen,
       tex_usage |= PIPE_BIND_CURSOR;
    }
 
-   switch (format) {
-   case __DRI_IMAGE_FORMAT_RGB565:
-      pf = PIPE_FORMAT_B5G6R5_UNORM;
-      break;
-   case __DRI_IMAGE_FORMAT_XRGB8888:
-      pf = PIPE_FORMAT_BGRX8888_UNORM;
-      break;
-   case __DRI_IMAGE_FORMAT_ARGB8888:
-      pf = PIPE_FORMAT_BGRA8888_UNORM;
-      break;
-   case __DRI_IMAGE_FORMAT_ABGR8888:
-      pf = PIPE_FORMAT_RGBA8888_UNORM;
-      break;
-   default:
-      pf = PIPE_FORMAT_NONE;
-      break;
-   }
+   pf = dri2_format_to_pipe_format (format);
    if (pf == PIPE_FORMAT_NONE)
       return NULL;
 
@@ -999,7 +1004,8 @@ dri2_from_names(__DRIscreen *screen, int width, int height, int format,
                 void *loaderPrivate)
 {
    __DRIimage *img;
-   int stride, dri_components;
+   int dri_components;
+   struct winsys_handle whandle;
 
    if (num_names != 1)
       return NULL;
@@ -1010,11 +1016,13 @@ dri2_from_names(__DRIscreen *screen, int width, int height, int format,
    if (format == -1)
       return NULL;
 
-   /* Strides are in bytes not pixels. */
-   stride = strides[0] /4;
+   memset(&whandle, 0, sizeof(whandle));
+   whandle.type = DRM_API_HANDLE_TYPE_SHARED;
+   whandle.handle = names[0];
+   whandle.stride = strides[0];
 
-   img = dri2_create_image_from_name(screen, width, height, format,
-                                     names[0], stride, loaderPrivate);
+   img = dri2_create_image_from_winsys(screen, width, height, format,
+                                       &whandle, loaderPrivate);
    if (img == NULL)
       return NULL;
 
@@ -1114,7 +1122,7 @@ dri2_from_fds(__DRIscreen *screen, int width, int height, int fourcc,
               void *loaderPrivate)
 {
    __DRIimage *img;
-   int format, stride, dri_components;
+   int format, dri_components;
 
    if (num_fds != 1)
       return NULL;
@@ -1125,11 +1133,8 @@ dri2_from_fds(__DRIscreen *screen, int width, int height, int fourcc,
    if (format == -1)
       return NULL;
 
-   /* Strides are in bytes not pixels. */
-   stride = strides[0] /4;
-
    img = dri2_create_image_from_fd(screen, width, height, format,
-                                   fds[0], stride, loaderPrivate);
+                                   fds[0], strides[0], loaderPrivate);
    if (img == NULL)
       return NULL;
 
@@ -1150,7 +1155,7 @@ dri2_from_dma_bufs(__DRIscreen *screen,
                    void *loaderPrivate)
 {
    __DRIimage *img;
-   int format, stride, dri_components;
+   int format, dri_components;
 
    if (num_fds != 1 || offsets[0] != 0) {
       *error = __DRI_IMAGE_ERROR_BAD_MATCH;
@@ -1163,11 +1168,8 @@ dri2_from_dma_bufs(__DRIscreen *screen,
       return NULL;
    }
 
-   /* Strides are in bytes not pixels. */
-   stride = strides[0] /4;
-
    img = dri2_create_image_from_fd(screen, width, height, format,
-                                   fds[0], stride, loaderPrivate);
+                                   fds[0], strides[0], loaderPrivate);
    if (img == NULL) {
       *error = __DRI_IMAGE_ERROR_BAD_ALLOC;
       return NULL;
@@ -1419,6 +1421,257 @@ static const __DRIrobustnessExtension dri2Robustness = {
    .base = { __DRI2_ROBUSTNESS, 1 }
 };
 
+static int
+dri2_interop_query_device_info(__DRIcontext *_ctx,
+                               mesa_glinterop_device_info *out)
+{
+   struct pipe_screen *screen = dri_context(_ctx)->st->pipe->screen;
+
+   if (!out->struct_version)
+      return MESA_GLINTEROP_INVALID_VALUE;
+
+   out->pci_segment_group = screen->get_param(screen, PIPE_CAP_PCI_GROUP);
+   out->pci_bus = screen->get_param(screen, PIPE_CAP_PCI_BUS);
+   out->pci_device = screen->get_param(screen, PIPE_CAP_PCI_DEVICE);
+   out->pci_function = screen->get_param(screen, PIPE_CAP_PCI_FUNCTION);
+
+   out->vendor_id = screen->get_param(screen, PIPE_CAP_VENDOR_ID);
+   out->device_id = screen->get_param(screen, PIPE_CAP_DEVICE_ID);
+
+   out->interop_version = 1;
+
+   return MESA_GLINTEROP_SUCCESS;
+}
+
+static int
+dri2_interop_export_object(__DRIcontext *_ctx,
+                           const mesa_glinterop_export_in *in,
+                           mesa_glinterop_export_out *out)
+{
+   struct st_context_iface *st = dri_context(_ctx)->st;
+   struct pipe_screen *screen = st->pipe->screen;
+   struct gl_context *ctx = ((struct st_context *)st)->ctx;
+   struct pipe_resource *res = NULL;
+   struct winsys_handle whandle;
+   unsigned target, usage;
+   boolean success;
+
+   if (!in->struct_version || !out->struct_version)
+      return MESA_GLINTEROP_INVALID_VALUE;
+
+   /* Validate the target. */
+   switch (in->target) {
+   case GL_TEXTURE_BUFFER:
+   case GL_TEXTURE_1D:
+   case GL_TEXTURE_2D:
+   case GL_TEXTURE_3D:
+   case GL_TEXTURE_RECTANGLE:
+   case GL_TEXTURE_1D_ARRAY:
+   case GL_TEXTURE_2D_ARRAY:
+   case GL_TEXTURE_CUBE_MAP_ARRAY:
+   case GL_TEXTURE_CUBE_MAP:
+   case GL_TEXTURE_2D_MULTISAMPLE:
+   case GL_TEXTURE_2D_MULTISAMPLE_ARRAY:
+   case GL_TEXTURE_EXTERNAL_OES:
+   case GL_RENDERBUFFER:
+   case GL_ARRAY_BUFFER:
+      target = in->target;
+      break;
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_X:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_X:
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_Y:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_Y:
+   case GL_TEXTURE_CUBE_MAP_POSITIVE_Z:
+   case GL_TEXTURE_CUBE_MAP_NEGATIVE_Z:
+      target = GL_TEXTURE_CUBE_MAP;
+      break;
+   default:
+      return MESA_GLINTEROP_INVALID_TARGET;
+   }
+
+   /* Validate the simple case of miplevel. */
+   if ((target == GL_RENDERBUFFER || target == GL_ARRAY_BUFFER) &&
+       in->miplevel != 0)
+      return MESA_GLINTEROP_INVALID_MIP_LEVEL;
+
+   /* Validate the OpenGL object and get pipe_resource. */
+   mtx_lock(&ctx->Shared->Mutex);
+
+   if (target == GL_ARRAY_BUFFER) {
+      /* Buffer objects.
+       *
+       * The error checking is based on the documentation of
+       * clCreateFromGLBuffer from OpenCL 2.0 SDK.
+       */
+      struct gl_buffer_object *buf = _mesa_lookup_bufferobj(ctx, in->obj);
+
+      /* From OpenCL 2.0 SDK, clCreateFromGLBuffer:
+       *  "CL_INVALID_GL_OBJECT if bufobj is not a GL buffer object or is
+       *   a GL buffer object but does not have an existing data store or
+       *   the size of the buffer is 0."
+       */
+      if (!buf || buf->Size == 0) {
+         mtx_unlock(&ctx->Shared->Mutex);
+         return MESA_GLINTEROP_INVALID_OBJECT;
+      }
+
+      res = st_buffer_object(buf)->buffer;
+      if (!res) {
+         /* this shouldn't happen */
+         mtx_unlock(&ctx->Shared->Mutex);
+         return MESA_GLINTEROP_INVALID_OBJECT;
+      }
+
+      out->buf_offset = 0;
+      out->buf_size = buf->Size;
+
+      buf->UsageHistory |= USAGE_DISABLE_MINMAX_CACHE;
+   } else if (target == GL_RENDERBUFFER) {
+      /* Renderbuffers.
+       *
+       * The error checking is based on the documentation of
+       * clCreateFromGLRenderbuffer from OpenCL 2.0 SDK.
+       */
+      struct gl_renderbuffer *rb = _mesa_lookup_renderbuffer(ctx, in->obj);
+
+      /* From OpenCL 2.0 SDK, clCreateFromGLRenderbuffer:
+       *   "CL_INVALID_GL_OBJECT if renderbuffer is not a GL renderbuffer
+       *    object or if the width or height of renderbuffer is zero."
+       */
+      if (!rb || rb->Width == 0 || rb->Height == 0) {
+         mtx_unlock(&ctx->Shared->Mutex);
+         return MESA_GLINTEROP_INVALID_OBJECT;
+      }
+
+      /* From OpenCL 2.0 SDK, clCreateFromGLRenderbuffer:
+       *   "CL_INVALID_OPERATION if renderbuffer is a multi-sample GL
+       *    renderbuffer object."
+       */
+      if (rb->NumSamples > 1) {
+         mtx_unlock(&ctx->Shared->Mutex);
+         return MESA_GLINTEROP_INVALID_OPERATION;
+      }
+
+      /* From OpenCL 2.0 SDK, clCreateFromGLRenderbuffer:
+       *   "CL_OUT_OF_RESOURCES if there is a failure to allocate resources
+       *    required by the OpenCL implementation on the device."
+       */
+      res = st_renderbuffer(rb)->texture;
+      if (!res) {
+         mtx_unlock(&ctx->Shared->Mutex);
+         return MESA_GLINTEROP_OUT_OF_RESOURCES;
+      }
+
+      out->internalformat = rb->InternalFormat;
+      out->view_minlevel = 0;
+      out->view_numlevels = 1;
+      out->view_minlayer = 0;
+      out->view_numlayers = 1;
+   } else {
+      /* Texture objects.
+       *
+       * The error checking is based on the documentation of
+       * clCreateFromGLTexture from OpenCL 2.0 SDK.
+       */
+      struct gl_texture_object *obj = _mesa_lookup_texture(ctx, in->obj);
+
+      if (obj)
+         _mesa_test_texobj_completeness(ctx, obj);
+
+      /* From OpenCL 2.0 SDK, clCreateFromGLTexture:
+       *   "CL_INVALID_GL_OBJECT if texture is not a GL texture object whose
+       *    type matches texture_target, if the specified miplevel of texture
+       *    is not defined, or if the width or height of the specified
+       *    miplevel is zero or if the GL texture object is incomplete."
+       */
+      if (!obj ||
+          obj->Target != target ||
+          !obj->_BaseComplete ||
+          (in->miplevel > 0 && !obj->_MipmapComplete)) {
+         mtx_unlock(&ctx->Shared->Mutex);
+         return MESA_GLINTEROP_INVALID_OBJECT;
+      }
+
+      /* From OpenCL 2.0 SDK, clCreateFromGLTexture:
+       *   "CL_INVALID_MIP_LEVEL if miplevel is less than the value of
+       *    levelbase (for OpenGL implementations) or zero (for OpenGL ES
+       *    implementations); or greater than the value of q (for both OpenGL
+       *    and OpenGL ES). levelbase and q are defined for the texture in
+       *    section 3.8.10 (Texture Completeness) of the OpenGL 2.1
+       *    specification and section 3.7.10 of the OpenGL ES 2.0."
+       */
+      if (in->miplevel < obj->BaseLevel || in->miplevel > obj->_MaxLevel) {
+         mtx_unlock(&ctx->Shared->Mutex);
+         return MESA_GLINTEROP_INVALID_MIP_LEVEL;
+      }
+
+      if (!st_finalize_texture(ctx, st->pipe, obj)) {
+         mtx_unlock(&ctx->Shared->Mutex);
+         return MESA_GLINTEROP_OUT_OF_RESOURCES;
+      }
+
+      res = st_get_texobj_resource(obj);
+      if (!res) {
+         /* Incomplete texture buffer object? This shouldn't really occur. */
+         mtx_unlock(&ctx->Shared->Mutex);
+         return MESA_GLINTEROP_INVALID_OBJECT;
+      }
+
+      if (target == GL_TEXTURE_BUFFER) {
+         out->internalformat = obj->BufferObjectFormat;
+         out->buf_offset = obj->BufferOffset;
+         out->buf_size = obj->BufferSize == -1 ? obj->BufferObject->Size :
+                                                 obj->BufferSize;
+
+         obj->BufferObject->UsageHistory |= USAGE_DISABLE_MINMAX_CACHE;
+      } else {
+         out->internalformat = obj->Image[0][0]->InternalFormat;
+         out->view_minlevel = obj->MinLevel;
+         out->view_numlevels = obj->NumLevels;
+         out->view_minlayer = obj->MinLayer;
+         out->view_numlayers = obj->NumLayers;
+      }
+   }
+
+   /* Get the handle. */
+   switch (in->access) {
+   case MESA_GLINTEROP_ACCESS_READ_WRITE:
+      usage = PIPE_HANDLE_USAGE_READ_WRITE;
+      break;
+   case MESA_GLINTEROP_ACCESS_READ_ONLY:
+      usage = PIPE_HANDLE_USAGE_READ;
+      break;
+   case MESA_GLINTEROP_ACCESS_WRITE_ONLY:
+      usage = PIPE_HANDLE_USAGE_WRITE;
+      break;
+   default:
+      usage = 0;
+   }
+
+   memset(&whandle, 0, sizeof(whandle));
+   whandle.type = DRM_API_HANDLE_TYPE_FD;
+
+   success = screen->resource_get_handle(screen, res, &whandle, usage);
+   mtx_unlock(&ctx->Shared->Mutex);
+
+   if (!success)
+      return MESA_GLINTEROP_OUT_OF_HOST_MEMORY;
+
+   out->dmabuf_fd = whandle.handle;
+   out->out_driver_data_written = 0;
+
+   if (res->target == PIPE_BUFFER)
+      out->buf_offset += whandle.offset;
+
+   return MESA_GLINTEROP_SUCCESS;
+}
+
+static const __DRI2interopExtension dri2InteropExtension = {
+   .base = { __DRI2_INTEROP, 1 },
+   .query_device_info = dri2_interop_query_device_info,
+   .export_object = dri2_interop_export_object
+};
+
 /*
  * Backend function init_screen.
  */
@@ -1431,6 +1684,7 @@ static const __DRIextension *dri_screen_extensions[] = {
    &dri2ConfigQueryExtension.base,
    &dri2ThrottleExtension.base,
    &dri2FenceExtension.base,
+   &dri2InteropExtension.base,
    NULL
 };
 
@@ -1442,6 +1696,7 @@ static const __DRIextension *dri_robust_screen_extensions[] = {
    &dri2ConfigQueryExtension.base,
    &dri2ThrottleExtension.base,
    &dri2FenceExtension.base,
+   &dri2InteropExtension.base,
    &dri2Robustness.base,
    NULL
 };

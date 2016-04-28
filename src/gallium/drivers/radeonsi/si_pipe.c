@@ -29,6 +29,7 @@
 #include "radeon/radeon_llvm_emit.h"
 #include "radeon/radeon_uvd.h"
 #include "util/u_memory.h"
+#include "util/u_suballoc.h"
 #include "vl/vl_decoder.h"
 
 /*
@@ -41,6 +42,9 @@ static void si_destroy_context(struct pipe_context *context)
 
 	si_release_all_descriptors(sctx);
 
+	if (sctx->ce_suballocator)
+		u_suballocator_destroy(sctx->ce_suballocator);
+
 	pipe_resource_reference(&sctx->esgs_ring, NULL);
 	pipe_resource_reference(&sctx->gsvs_ring, NULL);
 	pipe_resource_reference(&sctx->tf_ring, NULL);
@@ -48,6 +52,7 @@ static void si_destroy_context(struct pipe_context *context)
 	r600_resource_reference(&sctx->border_color_buffer, NULL);
 	free(sctx->border_color_table);
 	r600_resource_reference(&sctx->scratch_buffer, NULL);
+	r600_resource_reference(&sctx->compute_scratch_buffer, NULL);
 	sctx->b.ws->fence_reference(&sctx->last_gfx_fence, NULL);
 
 	si_pm4_free_state(sctx, sctx->init_config, ~0);
@@ -56,8 +61,6 @@ static void si_destroy_context(struct pipe_context *context)
 	for (i = 0; i < Elements(sctx->vgt_shader_config); i++)
 		si_pm4_delete_state(sctx, vgt_shader_config, sctx->vgt_shader_config[i]);
 
-	if (sctx->pstipple_sampler_state)
-		sctx->b.b.delete_sampler_state(&sctx->b.b, sctx->pstipple_sampler_state);
 	if (sctx->fixed_func_tcs_shader.cso)
 		sctx->b.b.delete_tcs_state(&sctx->b.b, sctx->fixed_func_tcs_shader.cso);
 	if (sctx->custom_dsa_flush)
@@ -142,6 +145,28 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 
 	sctx->b.gfx.cs = ws->cs_create(sctx->b.ctx, RING_GFX,
 				       si_context_gfx_flush, sctx);
+
+	if (!(sscreen->b.debug_flags & DBG_NO_CE) && ws->cs_add_const_ib) {
+		sctx->ce_ib = ws->cs_add_const_ib(sctx->b.gfx.cs);
+		if (!sctx->ce_ib)
+			goto fail;
+
+		if (ws->cs_add_const_preamble_ib) {
+			sctx->ce_preamble_ib =
+			           ws->cs_add_const_preamble_ib(sctx->b.gfx.cs);
+
+			if (!sctx->ce_preamble_ib)
+				goto fail;
+		}
+
+		sctx->ce_suballocator =
+				u_suballocator_create(&sctx->b.b, 1024 * 1024,
+						      64, PIPE_BIND_CUSTOM,
+						      PIPE_USAGE_DEFAULT, FALSE);
+		if (!sctx->ce_suballocator)
+			goto fail;
+	}
+
 	sctx->b.gfx.flush = si_context_gfx_flush;
 
 	/* Border colors. */
@@ -199,7 +224,8 @@ static struct pipe_context *si_create_context(struct pipe_screen *screen,
 
 		/* Clear the NULL constant buffer, because loads should return zeros. */
 		sctx->b.clear_buffer(&sctx->b.b, sctx->null_const_buf.buffer, 0,
-				     sctx->null_const_buf.buffer->width0, 0, false);
+				     sctx->null_const_buf.buffer->width0, 0,
+				     R600_COHERENCY_SHADER);
 	}
 
 	/* XXX: This is the maximum value allowed.  I'm not sure how to compute
@@ -307,6 +333,8 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
 	case PIPE_CAP_QUERY_MEMORY_INFO:
 	case PIPE_CAP_TGSI_PACK_HALF_FLOAT:
+	case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
+	case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
 		return 1;
 
 	case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
@@ -331,9 +359,12 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_TEXTURE_BUFFER_OFFSET_ALIGNMENT:
 	case PIPE_CAP_MAX_TEXTURE_GATHER_COMPONENTS:
 		return 4;
+	case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
+		return HAVE_LLVM >= 0x0309 ? 4 : 0;
 
 	case PIPE_CAP_GLSL_FEATURE_LEVEL:
-		return HAVE_LLVM >= 0x0307 ? 410 : 330;
+		return HAVE_LLVM >= 0x0309 ? 420 :
+		       HAVE_LLVM >= 0x0307 ? 410 : 330;
 
 	case PIPE_CAP_MAX_TEXTURE_BUFFER_SIZE:
 		return MIN2(sscreen->b.info.vram_size, 0xFFFFFFFF);
@@ -352,7 +383,6 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_DRAW_PARAMETERS:
 	case PIPE_CAP_MULTI_DRAW_INDIRECT:
 	case PIPE_CAP_MULTI_DRAW_INDIRECT_PARAMS:
-	case PIPE_CAP_SHADER_BUFFER_OFFSET_ALIGNMENT:
 	case PIPE_CAP_GENERATE_MIPMAP:
 	case PIPE_CAP_STRING_MARKER:
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:
@@ -400,7 +430,7 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 		return 8;
 
 	case PIPE_CAP_MAX_VIEWPORTS:
-		return SI_MAX_VIEWPORTS;
+		return R600_MAX_VIEWPORTS;
 
 	/* Timer queries, present when the clock frequency is non zero. */
 	case PIPE_CAP_QUERY_TIMESTAMP:
@@ -442,6 +472,8 @@ static int si_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 
 static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enum pipe_shader_cap param)
 {
+	struct si_screen *sscreen = (struct si_screen *)pscreen;
+
 	switch(shader)
 	{
 	case PIPE_SHADER_FRAGMENT:
@@ -459,15 +491,25 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 		case PIPE_SHADER_CAP_PREFERRED_IR:
 			return PIPE_SHADER_IR_NATIVE;
 
-		case PIPE_SHADER_CAP_SUPPORTED_IRS:
-			return 0;
+		case PIPE_SHADER_CAP_SUPPORTED_IRS: {
+			int ir = 1 << PIPE_SHADER_IR_NATIVE;
 
+			/* Old kernels disallowed some register writes for SI
+			 * that are used for indirect dispatches. */
+			if (HAVE_LLVM >= 0x309 && (sscreen->b.chip_class >= CIK ||
+			                           sscreen->b.info.drm_major == 3 ||
+			                           (sscreen->b.info.drm_major == 2 &&
+			                            sscreen->b.info.drm_minor >= 45)))
+				ir |= 1 << PIPE_SHADER_IR_TGSI;
+
+			return ir;
+		}
 		case PIPE_SHADER_CAP_DOUBLES:
 			return HAVE_LLVM >= 0x0307;
 
 		case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE: {
 			uint64_t max_const_buffer_size;
-			pscreen->get_compute_param(pscreen,
+			pscreen->get_compute_param(pscreen, PIPE_SHADER_IR_TGSI,
 				PIPE_COMPUTE_CAP_MAX_MEM_ALLOC_SIZE,
 				&max_const_buffer_size);
 			return max_const_buffer_size;
@@ -500,7 +542,7 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
 		return 4096 * sizeof(float[4]); /* actually only memory limits this */
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFERS:
-		return SI_NUM_USER_CONST_BUFFERS;
+		return SI_NUM_CONST_BUFFERS;
 	case PIPE_SHADER_CAP_MAX_PREDS:
 		return 0; /* FIXME */
 	case PIPE_SHADER_CAP_TGSI_CONT_SUPPORTED:
@@ -522,7 +564,7 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 		return 0;
 	case PIPE_SHADER_CAP_MAX_TEXTURE_SAMPLERS:
 	case PIPE_SHADER_CAP_MAX_SAMPLER_VIEWS:
-		return 16;
+		return SI_NUM_SAMPLERS;
 	case PIPE_SHADER_CAP_PREFERRED_IR:
 		return PIPE_SHADER_IR_TGSI;
 	case PIPE_SHADER_CAP_SUPPORTED_IRS:
@@ -538,7 +580,7 @@ static int si_get_shader_param(struct pipe_screen* pscreen, unsigned shader, enu
 	case PIPE_SHADER_CAP_MAX_UNROLL_ITERATIONS_HINT:
 		return 32;
 	case PIPE_SHADER_CAP_MAX_SHADER_BUFFERS:
-		return 0;
+		return HAVE_LLVM >= 0x0309 ? SI_NUM_SHADER_BUFFERS : 0;
 	case PIPE_SHADER_CAP_MAX_SHADER_IMAGES:
 		return HAVE_LLVM >= 0x0309 ? SI_NUM_IMAGES : 0;
 	}

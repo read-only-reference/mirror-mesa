@@ -26,10 +26,41 @@
 
 #include "si_pipe.h"
 
+static unsigned si_descriptor_list_cs_space(unsigned count, unsigned element_size)
+{
+	/* Ensure we have enough space to start a new range in a hole */
+	assert(element_size >= 3);
+
+	/* 5 dwords for possible load to reinitialize when we have no preamble
+	 * IB + 5 dwords for write to L2 + 3 bytes for every range written to
+	 * CE RAM.
+	 */
+	return 5 + 5 + 3 + count * element_size;
+}
+
+static unsigned si_ce_needed_cs_space(void)
+{
+	unsigned space = 0;
+
+	space += si_descriptor_list_cs_space(SI_NUM_CONST_BUFFERS, 4);
+	space += si_descriptor_list_cs_space(SI_NUM_SHADER_BUFFERS, 4);
+	space += si_descriptor_list_cs_space(SI_NUM_SAMPLERS, 16);
+	space += si_descriptor_list_cs_space(SI_NUM_IMAGES, 8);
+	space *= SI_NUM_SHADERS;
+
+	space += si_descriptor_list_cs_space(SI_NUM_RW_BUFFERS, 4);
+
+	/* Increment CE counter packet */
+	space += 2;
+
+	return space;
+}
+
 /* initialize */
 void si_need_cs_space(struct si_context *ctx)
 {
 	struct radeon_winsys_cs *cs = ctx->b.gfx.cs;
+	struct radeon_winsys_cs *ce_ib = ctx->ce_ib;
 	struct radeon_winsys_cs *dma = ctx->b.dma.cs;
 
 	/* Flush the DMA IB if it's not empty. */
@@ -53,7 +84,9 @@ void si_need_cs_space(struct si_context *ctx)
 	/* If the CS is sufficiently large, don't count the space needed
 	 * and just flush if there is not enough space left.
 	 */
-	if (unlikely(cs->cdw > cs->max_dw - 2048))
+	if (unlikely(cs->cdw > cs->max_dw - 2048 ||
+                     (ce_ib && ce_ib->max_dw - ce_ib->cdw <
+                      si_ce_needed_cs_space())))
 		ctx->b.gfx.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
 }
 
@@ -81,11 +114,13 @@ void si_context_gfx_flush(void *context, unsigned flags,
 
 	r600_preflush_suspend_features(&ctx->b);
 
-	ctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_FRAMEBUFFER |
-			SI_CONTEXT_INV_VMEM_L1 |
-			SI_CONTEXT_INV_GLOBAL_L2 |
-			/* this is probably not needed anymore */
+	ctx->b.flags |= SI_CONTEXT_CS_PARTIAL_FLUSH |
 			SI_CONTEXT_PS_PARTIAL_FLUSH;
+	/* The kernel doesn't flush TC for VI correctly (need TC_WB_ACTION_ENA). */
+	if (ctx->b.chip_class == VI)
+		ctx->b.flags |= SI_CONTEXT_INV_GLOBAL_L2 |
+				SI_CONTEXT_INV_VMEM_L1;
+
 	si_emit_cache_flush(ctx, NULL);
 
 	/* force to keep tiling flags */
@@ -150,12 +185,12 @@ void si_begin_new_cs(struct si_context *ctx)
 	if (ctx->trace_buf)
 		si_trace_emit(ctx);
 
-	/* Flush read caches at the beginning of CS. */
-	ctx->b.flags |= SI_CONTEXT_FLUSH_AND_INV_FRAMEBUFFER |
-			SI_CONTEXT_INV_VMEM_L1 |
-			SI_CONTEXT_INV_GLOBAL_L2 |
-			SI_CONTEXT_INV_SMEM_L1 |
-			SI_CONTEXT_INV_ICACHE;
+	/* Flush read caches at the beginning of CS not flushed by the kernel. */
+	if (ctx->b.chip_class >= CIK)
+		ctx->b.flags |= SI_CONTEXT_INV_SMEM_L1 |
+				SI_CONTEXT_INV_ICACHE;
+
+	ctx->b.flags |= R600_CONTEXT_START_PIPELINE_STATS;
 
 	/* set all valid group as dirty so they get reemited on
 	 * next draw command
@@ -166,6 +201,11 @@ void si_begin_new_cs(struct si_context *ctx)
 	si_pm4_emit(ctx, ctx->init_config);
 	if (ctx->init_config_gs_rings)
 		si_pm4_emit(ctx, ctx->init_config_gs_rings);
+
+	if (ctx->ce_preamble_ib)
+		si_ce_enable_loads(ctx->ce_preamble_ib);
+	else if (ctx->ce_ib)
+		si_ce_enable_loads(ctx->ce_ib);
 
 	ctx->framebuffer.dirty_cbufs = (1 << 8) - 1;
 	ctx->framebuffer.dirty_zsbuf = true;
@@ -185,10 +225,10 @@ void si_begin_new_cs(struct si_context *ctx)
 	si_mark_atom_dirty(ctx, &ctx->b.render_cond_atom);
 	si_all_descriptors_begin_new_cs(ctx);
 
-	ctx->scissors.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
-	ctx->viewports.dirty_mask = (1 << SI_MAX_VIEWPORTS) - 1;
-	si_mark_atom_dirty(ctx, &ctx->scissors.atom);
-	si_mark_atom_dirty(ctx, &ctx->viewports.atom);
+	ctx->b.scissors.dirty_mask = (1 << R600_MAX_VIEWPORTS) - 1;
+	ctx->b.viewports.dirty_mask = (1 << R600_MAX_VIEWPORTS) - 1;
+	si_mark_atom_dirty(ctx, &ctx->b.scissors.atom);
+	si_mark_atom_dirty(ctx, &ctx->b.viewports.atom);
 
 	r600_postflush_resume_features(&ctx->b);
 
@@ -210,4 +250,6 @@ void si_begin_new_cs(struct si_context *ctx)
 	ctx->last_tcs = NULL;
 	ctx->last_tes_sh_base = -1;
 	ctx->last_num_tcs_input_cp = -1;
+
+	ctx->cs_shader_state.initialized = false;
 }

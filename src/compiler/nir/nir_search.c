@@ -25,9 +25,12 @@
  *
  */
 
+#include <inttypes.h>
 #include "nir_search.h"
 
 struct match_state {
+   bool inexact_match;
+   bool has_exact_alu;
    unsigned variables_seen;
    nir_alu_src variables[NIR_SEARCH_MAX_VARIABLES];
 };
@@ -84,6 +87,11 @@ match_value(const nir_search_value *value, nir_alu_instr *instr, unsigned src,
 
    for (unsigned i = 0; i < num_components; ++i)
       new_swizzle[i] = instr->src[src].swizzle[swizzle[i]];
+
+   /* If the value has a specific bit size and it doesn't match, bail */
+   if (value->bit_size &&
+       nir_src_bit_size(instr->src[src].src) != value->bit_size)
+      return false;
 
    switch (value->type) {
    case nir_search_value_expression:
@@ -239,7 +247,14 @@ match_expression(const nir_search_expression *expr, nir_alu_instr *instr,
       return false;
 
    assert(instr->dest.dest.is_ssa);
-   if (expr->inexact && instr->exact)
+
+   if (expr->value.bit_size &&
+       instr->dest.dest.ssa.bit_size != expr->value.bit_size)
+      return false;
+
+   state->inexact_match = expr->inexact || state->inexact_match;
+   state->has_exact_alu = instr->exact || state->has_exact_alu;
+   if (state->inexact_match && state->has_exact_alu)
       return false;
 
    assert(!instr->dest.saturate);
@@ -347,6 +362,11 @@ build_bitsize_tree(void *mem_ctx, struct match_state *state,
    }
    }
 
+   if (value->bit_size) {
+      assert(!tree->is_dest_sized || tree->dest_size == value->bit_size);
+      tree->common_size = value->bit_size;
+   }
+
    return tree;
 }
 
@@ -410,7 +430,7 @@ bitsize_tree_filter_down(bitsize_tree *tree, unsigned size)
 
 static nir_alu_src
 construct_value(const nir_search_value *value,
-                unsigned num_components, bitsize_tree *bitsize, bool exact,
+                unsigned num_components, bitsize_tree *bitsize,
                 struct match_state *state,
                 nir_instr *instr, void *mem_ctx)
 {
@@ -424,9 +444,15 @@ construct_value(const nir_search_value *value,
       nir_alu_instr *alu = nir_alu_instr_create(mem_ctx, expr->opcode);
       nir_ssa_dest_init(&alu->instr, &alu->dest.dest, num_components,
                         bitsize->dest_size, NULL);
-      alu->exact = exact;
       alu->dest.write_mask = (1 << num_components) - 1;
       alu->dest.saturate = false;
+
+      /* We have no way of knowing what values in a given search expression
+       * map to a particular replacement value.  Therefore, if the
+       * expression we are replacing has any exact values, the entire
+       * replacement should be exact.
+       */
+      alu->exact = state->has_exact_alu;
 
       for (unsigned i = 0; i < nir_op_infos[expr->opcode].num_inputs; i++) {
          /* If the source is an explicitly sized source, then we need to reset
@@ -436,7 +462,7 @@ construct_value(const nir_search_value *value,
             num_components = nir_op_infos[alu->op].input_sizes[i];
 
          alu->src[i] = construct_value(expr->srcs[i],
-                                       num_components, bitsize->srcs[i], exact,
+                                       num_components, bitsize->srcs[i],
                                        state, instr, mem_ctx);
       }
 
@@ -465,7 +491,8 @@ construct_value(const nir_search_value *value,
 
    case nir_search_value_constant: {
       const nir_search_constant *c = nir_search_value_as_constant(value);
-      nir_load_const_instr *load = nir_load_const_instr_create(mem_ctx, 1);
+      nir_load_const_instr *load =
+         nir_load_const_instr_create(mem_ctx, 1, bitsize->dest_size);
 
       switch (c->type) {
       case nir_type_float:
@@ -483,7 +510,7 @@ construct_value(const nir_search_value *value,
          break;
 
       case nir_type_int:
-         load->def.name = ralloc_asprintf(load, "%ld", c->data.i);
+         load->def.name = ralloc_asprintf(load, "%" PRIi64, c->data.i);
          switch (bitsize->dest_size) {
          case 32:
             load->value.i32[0] = c->data.i;
@@ -497,7 +524,7 @@ construct_value(const nir_search_value *value,
          break;
 
       case nir_type_uint:
-         load->def.name = ralloc_asprintf(load, "%lu", c->data.u);
+         load->def.name = ralloc_asprintf(load, "%" PRIu64, c->data.u);
          switch (bitsize->dest_size) {
          case 32:
             load->value.u32[0] = c->data.u;
@@ -508,6 +535,7 @@ construct_value(const nir_search_value *value,
          default:
             unreachable("unknown bit size");
          }
+         break;
 
       case nir_type_bool32:
          load->value.u32[0] = c->data.u;
@@ -515,8 +543,6 @@ construct_value(const nir_search_value *value,
       default:
          unreachable("Invalid alu source type");
       }
-
-      load->def.bit_size = bitsize->dest_size;
 
       nir_instr_insert_before(instr, &load->instr);
 
@@ -546,6 +572,8 @@ nir_replace_instr(nir_alu_instr *instr, const nir_search_expression *search,
    assert(instr->dest.dest.is_ssa);
 
    struct match_state state;
+   state.inexact_match = false;
+   state.has_exact_alu = false;
    state.variables_seen = 0;
 
    if (!match_expression(search, instr, instr->dest.dest.ssa.num_components,
@@ -569,7 +597,7 @@ nir_replace_instr(nir_alu_instr *instr, const nir_search_expression *search,
 
    mov->src[0] = construct_value(replace,
                                  instr->dest.dest.ssa.num_components, tree,
-                                 instr->exact, &state, &instr->instr, mem_ctx);
+                                 &state, &instr->instr, mem_ctx);
    nir_instr_insert_before(&instr->instr, &mov->instr);
 
    nir_ssa_def_rewrite_uses(&instr->dest.dest.ssa,

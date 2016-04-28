@@ -80,7 +80,7 @@ valid_dest(nir_block *block, nir_dest *dest)
 	/* The only uses of this definition must be phi's in the
 	 * successor or in the current block
 	 */
-	nir_foreach_use(&dest->ssa, use) {
+	nir_foreach_use(use, &dest->ssa) {
 		nir_instr *dest_instr = use->parent_instr;
 		if (dest_instr->block == block)
 			continue;
@@ -96,7 +96,7 @@ valid_dest(nir_block *block, nir_dest *dest)
 static bool
 block_check_for_allowed_instrs(nir_block *block)
 {
-	nir_foreach_instr(block, instr) {
+	nir_foreach_instr(instr, block) {
 		switch (instr->type) {
 		case nir_instr_type_intrinsic: {
 			nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
@@ -165,7 +165,7 @@ static void
 flatten_block(nir_builder *bld, nir_block *if_block, nir_block *prev_block,
 		nir_ssa_def *condition, bool invert)
 {
-	nir_foreach_instr_safe(if_block, instr) {
+	nir_foreach_instr_safe(instr, if_block) {
 		if (instr->type == nir_instr_type_intrinsic) {
 			nir_intrinsic_instr *intr = nir_instr_as_intrinsic(instr);
 			if ((intr->intrinsic == nir_intrinsic_discard) ||
@@ -270,7 +270,7 @@ lower_if_else_block(nir_block *block, void *void_state)
 	flatten_block(&state->b, else_block, prev_block,
 			if_stmt->condition.ssa, true);
 
-	nir_foreach_instr_safe(block, instr) {
+	nir_foreach_instr_safe(instr, block) {
 		if (instr->type != nir_instr_type_phi)
 			break;
 
@@ -281,7 +281,7 @@ lower_if_else_block(nir_block *block, void *void_state)
 		memset(sel->src[0].swizzle, 0, sizeof sel->src[0].swizzle);
 
 		assert(exec_list_length(&phi->srcs) == 2);
-		nir_foreach_phi_src(phi, src) {
+		nir_foreach_phi_src(src, phi) {
 			assert(src->pred == then_block || src->pred == else_block);
 			assert(src->src.is_ssa);
 
@@ -315,7 +315,7 @@ lower_if_else_impl(nir_function_impl *impl)
 	state.progress = false;
 	nir_builder_init(&state.b, impl);
 
-	nir_foreach_block(impl, lower_if_else_block, &state);
+	nir_foreach_block_call(impl, lower_if_else_block, &state);
 
 	if (state.progress)
 		nir_metadata_preserve(impl, nir_metadata_none);
@@ -328,7 +328,7 @@ ir3_nir_lower_if_else(nir_shader *shader)
 {
 	bool progress = false;
 
-	nir_foreach_function(shader, function) {
+	nir_foreach_function(function, shader) {
 		if (function->impl)
 			progress |= lower_if_else_impl(function->impl);
 	}

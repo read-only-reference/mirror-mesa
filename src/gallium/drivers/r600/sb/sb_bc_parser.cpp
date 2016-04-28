@@ -56,18 +56,18 @@ int bc_parser::decode() {
 
 	if (pshader) {
 		switch (bc->type) {
-		case TGSI_PROCESSOR_FRAGMENT: t = TARGET_PS; break;
-		case TGSI_PROCESSOR_VERTEX:
+		case PIPE_SHADER_FRAGMENT: t = TARGET_PS; break;
+		case PIPE_SHADER_VERTEX:
 			t = pshader->vs_as_ls ? TARGET_LS : (pshader->vs_as_es ? TARGET_ES : TARGET_VS);
 			break;
-		case TGSI_PROCESSOR_GEOMETRY: t = TARGET_GS; break;
-		case TGSI_PROCESSOR_COMPUTE: t = TARGET_COMPUTE; break;
-		case TGSI_PROCESSOR_TESS_CTRL: t = TARGET_HS; break;
-		case TGSI_PROCESSOR_TESS_EVAL: t = pshader->tes_as_es ? TARGET_ES : TARGET_VS; break;
+		case PIPE_SHADER_GEOMETRY: t = TARGET_GS; break;
+		case PIPE_SHADER_COMPUTE: t = TARGET_COMPUTE; break;
+		case PIPE_SHADER_TESS_CTRL: t = TARGET_HS; break;
+		case PIPE_SHADER_TESS_EVAL: t = pshader->tes_as_es ? TARGET_ES : TARGET_VS; break;
 		default: assert(!"unknown shader target"); return -1; break;
 		}
 	} else {
-		if (bc->type == TGSI_PROCESSOR_COMPUTE)
+		if (bc->type == PIPE_SHADER_COMPUTE)
 			t = TARGET_COMPUTE;
 		else
 			t = TARGET_FETCH;
@@ -218,7 +218,7 @@ int bc_parser::decode_cf(unsigned &i, bool &eop) {
 			return r;
 	} else if (flags & CF_FETCH) {
 		if ((r = decode_fetch_clause(cf)))
-			return r;;
+			return r;
 	} else if (flags & CF_EXP) {
 		if (cf->bc.rw_rel)
 			gpr_reladdr = true;

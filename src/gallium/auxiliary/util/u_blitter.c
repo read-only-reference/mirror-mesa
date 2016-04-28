@@ -428,7 +428,7 @@ void util_blitter_destroy(struct blitter_context *blitter)
       for (j = 0; j < 2; j++)
          pipe->delete_blend_state(pipe, ctx->blend[i][j]);
 
-   for (i = 0; i < Elements(ctx->blend_clear); i++) {
+   for (i = 0; i < ARRAY_SIZE(ctx->blend_clear); i++) {
       if (ctx->blend_clear[i])
          pipe->delete_blend_state(pipe, ctx->blend_clear[i]);
    }
@@ -483,17 +483,17 @@ void util_blitter_destroy(struct blitter_context *blitter)
       if (ctx->fs_texfetch_stencil_msaa[i])
          ctx->delete_fs_state(pipe, ctx->fs_texfetch_stencil_msaa[i]);
 
-      for (j = 0; j< Elements(ctx->fs_resolve[i]); j++)
+      for (j = 0; j< ARRAY_SIZE(ctx->fs_resolve[i]); j++)
          for (f = 0; f < 2; f++)
             if (ctx->fs_resolve[i][j][f])
                ctx->delete_fs_state(pipe, ctx->fs_resolve[i][j][f]);
 
-      for (j = 0; j< Elements(ctx->fs_resolve_sint[i]); j++)
+      for (j = 0; j< ARRAY_SIZE(ctx->fs_resolve_sint[i]); j++)
          for (f = 0; f < 2; f++)
             if (ctx->fs_resolve_sint[i][j][f])
                ctx->delete_fs_state(pipe, ctx->fs_resolve_sint[i][j][f]);
 
-      for (j = 0; j< Elements(ctx->fs_resolve_uint[i]); j++)
+      for (j = 0; j< ARRAY_SIZE(ctx->fs_resolve_uint[i]); j++)
          for (f = 0; f < 2; f++)
             if (ctx->fs_resolve_uint[i][j][f])
                ctx->delete_fs_state(pipe, ctx->fs_resolve_uint[i][j][f]);
@@ -529,6 +529,8 @@ static void blitter_set_running_flag(struct blitter_context_priv *ctx)
                     __LINE__);
    }
    ctx->base.running = TRUE;
+
+   ctx->base.pipe->set_active_query_state(ctx->base.pipe, false);
 }
 
 static void blitter_unset_running_flag(struct blitter_context_priv *ctx)
@@ -538,6 +540,8 @@ static void blitter_unset_running_flag(struct blitter_context_priv *ctx)
                     __LINE__);
    }
    ctx->base.running = FALSE;
+
+   ctx->base.pipe->set_active_query_state(ctx->base.pipe, true);
 }
 
 static void blitter_check_saved_vertex_states(struct blitter_context_priv *ctx)
@@ -1385,10 +1389,10 @@ void util_blitter_default_src_texture(struct pipe_sampler_view *src_templ,
     src_templ->u.tex.last_layer =
         src->target == PIPE_TEXTURE_3D ? u_minify(src->depth0, srclevel) - 1
                                        : src->array_size - 1;
-    src_templ->swizzle_r = PIPE_SWIZZLE_RED;
-    src_templ->swizzle_g = PIPE_SWIZZLE_GREEN;
-    src_templ->swizzle_b = PIPE_SWIZZLE_BLUE;
-    src_templ->swizzle_a = PIPE_SWIZZLE_ALPHA;
+    src_templ->swizzle_r = PIPE_SWIZZLE_X;
+    src_templ->swizzle_g = PIPE_SWIZZLE_Y;
+    src_templ->swizzle_b = PIPE_SWIZZLE_Z;
+    src_templ->swizzle_a = PIPE_SWIZZLE_W;
 }
 
 static boolean is_blit_generic_supported(struct blitter_context *blitter,
@@ -1521,7 +1525,7 @@ void util_blitter_blit_generic(struct blitter_context *blitter,
 {
    struct blitter_context_priv *ctx = (struct blitter_context_priv*)blitter;
    struct pipe_context *pipe = ctx->base.pipe;
-   struct pipe_framebuffer_state fb_state;
+   struct pipe_framebuffer_state fb_state = {0};
    enum pipe_texture_target src_target = src->texture->target;
    unsigned src_samples = src->texture->nr_samples;
    unsigned dst_samples = dst->texture->nr_samples;

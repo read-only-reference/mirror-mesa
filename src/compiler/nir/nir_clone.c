@@ -179,6 +179,7 @@ clone_register(clone_state *state, const nir_register *reg)
    add_remap(state, nreg, reg);
 
    nreg->num_components = reg->num_components;
+   nreg->bit_size = reg->bit_size;
    nreg->num_array_elems = reg->num_array_elems;
    nreg->index = reg->index;
    nreg->name = ralloc_strdup(nreg, reg->name);
@@ -359,7 +360,8 @@ static nir_load_const_instr *
 clone_load_const(clone_state *state, const nir_load_const_instr *lc)
 {
    nir_load_const_instr *nlc =
-      nir_load_const_instr_create(state->ns, lc->def.num_components);
+      nir_load_const_instr_create(state->ns, lc->def.num_components,
+                                  lc->def.bit_size);
 
    memcpy(&nlc->value, &lc->value, sizeof(nlc->value));
 
@@ -372,7 +374,8 @@ static nir_ssa_undef_instr *
 clone_ssa_undef(clone_state *state, const nir_ssa_undef_instr *sa)
 {
    nir_ssa_undef_instr *nsa =
-      nir_ssa_undef_instr_create(state->ns, sa->def.num_components);
+      nir_ssa_undef_instr_create(state->ns, sa->def.num_components,
+                                 sa->def.bit_size);
 
    add_remap(state, &nsa->def, &sa->def);
 
@@ -520,7 +523,7 @@ clone_block(clone_state *state, struct exec_list *cf_list, const nir_block *blk)
    /* We need this for phi sources */
    add_remap(state, nblk, blk);
 
-   nir_foreach_instr(blk, instr) {
+   nir_foreach_instr(instr, blk) {
       if (instr->type == nir_instr_type_phi) {
          /* Phi instructions are a bit of a special case when cloning because
           * we don't want inserting the instruction to automatically handle
@@ -698,7 +701,7 @@ nir_shader_clone(void *mem_ctx, const nir_shader *s)
     * functions of other functions and we don't know what order the functions
     * will have in the list.
     */
-   nir_foreach_function(s, fxn) {
+   nir_foreach_function(fxn, s) {
       nir_function *nfxn = remap_global(&state, fxn);
       nfxn->impl = clone_function_impl(&state, fxn->impl);
       nfxn->impl->function = nfxn;

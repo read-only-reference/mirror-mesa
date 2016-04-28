@@ -304,7 +304,7 @@ in		return IN_TOK;
 out		return OUT_TOK;
 inout		return INOUT_TOK;
 uniform		return UNIFORM;
-buffer		return BUFFER;
+buffer		KEYWORD_WITH_ALT(0, 0, 430, 310, yyextra->ARB_shader_storage_buffer_object_enable, BUFFER);
 varying		DEPRECATED_ES_KEYWORD(VARYING);
 centroid	KEYWORD(120, 300, 120, 300, CENTROID);
 invariant	KEYWORD(120, 100, 120, 100, INVARIANT);
@@ -476,8 +476,8 @@ layout		{
 			    char suffix = yytext[strlen(yytext) - 1];
 			    if (!state->is_version(120, 300) &&
 			        (suffix == 'f' || suffix == 'F')) {
-			        _mesa_glsl_error(yylloc, state,
-			                         "Float suffixes are invalid in GLSL 1.10");
+			        _mesa_glsl_warning(yylloc, state,
+			                           "Float suffixes are invalid in GLSL 1.10");
 			    }
 			    yylval->real = _mesa_strtof(yytext, NULL);
 			    return FLOATCONSTANT;

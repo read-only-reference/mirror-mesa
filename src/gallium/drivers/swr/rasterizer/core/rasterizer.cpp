@@ -45,25 +45,6 @@ void StepRasterTileY(uint32_t MaxRT, RenderOutputBuffers &buffers, RenderOutputB
                      uint32_t colorRowStep, uint32_t depthRowStep, uint32_t stencilRowStep);
 
 #define MASKTOVEC(i3,i2,i1,i0) {-i0,-i1,-i2,-i3}
-const __m128 gMaskToVec[] = {
-    MASKTOVEC(0,0,0,0),
-    MASKTOVEC(0,0,0,1),
-    MASKTOVEC(0,0,1,0),
-    MASKTOVEC(0,0,1,1),
-    MASKTOVEC(0,1,0,0),
-    MASKTOVEC(0,1,0,1),
-    MASKTOVEC(0,1,1,0),
-    MASKTOVEC(0,1,1,1),
-    MASKTOVEC(1,0,0,0),
-    MASKTOVEC(1,0,0,1),
-    MASKTOVEC(1,0,1,0),
-    MASKTOVEC(1,0,1,1),
-    MASKTOVEC(1,1,0,0),
-    MASKTOVEC(1,1,0,1),
-    MASKTOVEC(1,1,1,0),
-    MASKTOVEC(1,1,1,1),
-};
-
 const __m256d gMaskToVecpd[] =
 {
     MASKTOVEC(0, 0, 0, 0),
@@ -363,7 +344,13 @@ INLINE float ComputeDepthBias(const SWR_RASTSTATE* pState, const SWR_TRIANGLE_DE
         scale *= ComputeMaxDepthSlope(pTri);
     }
 
-    float bias = pState->depthBias * ComputeBiasFactor(pState, pTri, z) + scale;
+    float bias = pState->depthBias;
+    if (!pState->depthBiasPreAdjusted)
+    {
+        bias *= ComputeBiasFactor(pState, pTri, z);
+    }
+    bias += scale;
+
     if (pState->depthBiasClamp > 0.0f)
     {
         bias = std::min(bias, pState->depthBiasClamp);
@@ -383,7 +370,7 @@ __declspec(thread) volatile uint64_t gToss;
 
 static const uint32_t vertsPerTri = 3, componentsPerAttrib = 4;
 // try to avoid _chkstk insertions; make this thread local
-static THREAD OSALIGN(float, 16) perspAttribsTLS[vertsPerTri * KNOB_NUM_ATTRIBUTES * componentsPerAttrib];
+static THREAD OSALIGNLINE(float) perspAttribsTLS[vertsPerTri * KNOB_NUM_ATTRIBUTES * componentsPerAttrib];
 
 INLINE
 void ComputeEdgeData(int32_t a, int32_t b, EDGE& edge)
@@ -439,7 +426,7 @@ void RasterizeTriangle(DRAW_CONTEXT* pDC, uint32_t workerId, uint32_t macroTile,
     const SWR_RASTSTATE &rastState = state.rastState;
     const BACKEND_FUNCS& backendFuncs = pDC->pState->backendFuncs;
 
-    OSALIGN(SWR_TRIANGLE_DESC, 16) triDesc;
+    OSALIGNSIMD(SWR_TRIANGLE_DESC) triDesc;
     triDesc.pUserClipBuffer = workDesc.pUserClipBuffer;
 
     __m128 vX, vY, vZ, vRecipW;
@@ -502,7 +489,7 @@ void RasterizeTriangle(DRAW_CONTEXT* pDC, uint32_t workerId, uint32_t macroTile,
     _MM_EXTRACT_FLOAT(triDesc.J[1], vB, 2);
     _MM_EXTRACT_FLOAT(triDesc.J[2], vC, 2);
 
-    OSALIGN(float, 16) oneOverW[4];
+    OSALIGNSIMD(float) oneOverW[4];
     _mm_store_ps(oneOverW, vRecipW);
     triDesc.OneOverW[0] = oneOverW[0] - oneOverW[2];
     triDesc.OneOverW[1] = oneOverW[1] - oneOverW[2];
@@ -537,7 +524,7 @@ void RasterizeTriangle(DRAW_CONTEXT* pDC, uint32_t workerId, uint32_t macroTile,
 
     // compute bary Z
     // zInterp = zVert0 + i(zVert1-zVert0) + j (zVert2 - zVert0)
-    OSALIGN(float, 16) a[4];
+    OSALIGNSIMD(float) a[4];
     _mm_store_ps(a, vZ);
     triDesc.Z[0] = a[0] - a[2];
     triDesc.Z[1] = a[1] - a[2];
@@ -575,7 +562,7 @@ void RasterizeTriangle(DRAW_CONTEXT* pDC, uint32_t workerId, uint32_t macroTile,
     }
 
     // Calc bounding box of triangle
-    OSALIGN(BBOX, 16) bbox;
+    OSALIGNSIMD(BBOX) bbox;
     calcBoundingBoxInt(vXi, vYi, bbox);
 
     // Intersect with scissor/viewport
@@ -594,7 +581,7 @@ void RasterizeTriangle(DRAW_CONTEXT* pDC, uint32_t workerId, uint32_t macroTile,
     int32_t macroBoxTop = macroY * KNOB_MACROTILE_Y_DIM_FIXED;
     int32_t macroBoxBottom = macroBoxTop + KNOB_MACROTILE_Y_DIM_FIXED - 1;
 
-    OSALIGN(BBOX, 16) intersect;
+    OSALIGNSIMD(BBOX) intersect;
     intersect.left   = std::max(bbox.left, macroBoxLeft);
     intersect.top    = std::max(bbox.top, macroBoxTop);
     intersect.right  = std::min(bbox.right, macroBoxRight);
@@ -1047,7 +1034,7 @@ void RasterizeSimplePoint(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t macroTi
         { 50, 51, 54, 55, 58, 59, 62, 63 }
     };
 
-    OSALIGN(SWR_TRIANGLE_DESC, 16) triDesc;
+    OSALIGNSIMD(SWR_TRIANGLE_DESC) triDesc;
 
     // pull point information from triangle buffer
     // @todo use structs for readability
@@ -1166,16 +1153,20 @@ void StepRasterTileY(uint32_t NumRT, RenderOutputBuffers &buffers, RenderOutputB
 // initialize rasterizer function table
 PFN_WORK_FUNC gRasterizerTable[2][SWR_MULTISAMPLE_TYPE_MAX] =
 {
-    RasterizeTriangle<false, SWR_MULTISAMPLE_1X>,
-    RasterizeTriangle<false, SWR_MULTISAMPLE_2X>,
-    RasterizeTriangle<false, SWR_MULTISAMPLE_4X>,
-    RasterizeTriangle<false, SWR_MULTISAMPLE_8X>,
-    RasterizeTriangle<false, SWR_MULTISAMPLE_16X>,
-    RasterizeTriangle<true, SWR_MULTISAMPLE_1X>,
-    RasterizeTriangle<true, SWR_MULTISAMPLE_2X>,
-    RasterizeTriangle<true, SWR_MULTISAMPLE_4X>,
-    RasterizeTriangle<true, SWR_MULTISAMPLE_8X>,
-    RasterizeTriangle<true, SWR_MULTISAMPLE_16X>
+    {
+        RasterizeTriangle<false, SWR_MULTISAMPLE_1X>,
+        RasterizeTriangle<false, SWR_MULTISAMPLE_2X>,
+        RasterizeTriangle<false, SWR_MULTISAMPLE_4X>,
+        RasterizeTriangle<false, SWR_MULTISAMPLE_8X>,
+        RasterizeTriangle<false, SWR_MULTISAMPLE_16X>
+    },
+    {
+        RasterizeTriangle<true, SWR_MULTISAMPLE_1X>,
+        RasterizeTriangle<true, SWR_MULTISAMPLE_2X>,
+        RasterizeTriangle<true, SWR_MULTISAMPLE_4X>,
+        RasterizeTriangle<true, SWR_MULTISAMPLE_8X>,
+        RasterizeTriangle<true, SWR_MULTISAMPLE_16X>
+    }
 };
 
 void RasterizeLine(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t macroTile, void *pData)
@@ -1286,7 +1277,7 @@ void RasterizeLine(DRAW_CONTEXT *pDC, uint32_t workerId, uint32_t macroTile, voi
     // make sure this macrotile intersects the triangle
     __m128i vXai = fpToFixedPoint(vXa);
     __m128i vYai = fpToFixedPoint(vYa);
-    OSALIGN(BBOX, 16) bboxA;
+    OSALIGNSIMD(BBOX) bboxA;
     calcBoundingBoxInt(vXai, vYai, bboxA);
 
     if (!(bboxA.left > macroBoxRight ||

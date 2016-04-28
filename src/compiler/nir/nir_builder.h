@@ -78,8 +78,7 @@ static inline nir_ssa_def *
 nir_ssa_undef(nir_builder *build, unsigned num_components, unsigned bit_size)
 {
    nir_ssa_undef_instr *undef =
-      nir_ssa_undef_instr_create(build->shader, num_components);
-   undef->def.bit_size = bit_size;
+      nir_ssa_undef_instr_create(build->shader, num_components, bit_size);
    if (!undef)
       return NULL;
 
@@ -89,10 +88,11 @@ nir_ssa_undef(nir_builder *build, unsigned num_components, unsigned bit_size)
 }
 
 static inline nir_ssa_def *
-nir_build_imm(nir_builder *build, unsigned num_components, nir_const_value value)
+nir_build_imm(nir_builder *build, unsigned num_components,
+              unsigned bit_size, nir_const_value value)
 {
    nir_load_const_instr *load_const =
-      nir_load_const_instr_create(build->shader, num_components);
+      nir_load_const_instr_create(build->shader, num_components, bit_size);
    if (!load_const)
       return NULL;
 
@@ -111,7 +111,18 @@ nir_imm_float(nir_builder *build, float x)
    memset(&v, 0, sizeof(v));
    v.f32[0] = x;
 
-   return nir_build_imm(build, 1, v);
+   return nir_build_imm(build, 1, 32, v);
+}
+
+static inline nir_ssa_def *
+nir_imm_double(nir_builder *build, double x)
+{
+   nir_const_value v;
+
+   memset(&v, 0, sizeof(v));
+   v.f64[0] = x;
+
+   return nir_build_imm(build, 1, 64, v);
 }
 
 static inline nir_ssa_def *
@@ -125,7 +136,7 @@ nir_imm_vec4(nir_builder *build, float x, float y, float z, float w)
    v.f32[2] = z;
    v.f32[3] = w;
 
-   return nir_build_imm(build, 4, v);
+   return nir_build_imm(build, 4, 32, v);
 }
 
 static inline nir_ssa_def *
@@ -136,7 +147,7 @@ nir_imm_int(nir_builder *build, int x)
    memset(&v, 0, sizeof(v));
    v.i32[0] = x;
 
-   return nir_build_imm(build, 1, v);
+   return nir_build_imm(build, 1, 32, v);
 }
 
 static inline nir_ssa_def *
@@ -150,7 +161,7 @@ nir_imm_ivec4(nir_builder *build, int x, int y, int z, int w)
    v.i32[2] = z;
    v.i32[3] = w;
 
-   return nir_build_imm(build, 4, v);
+   return nir_build_imm(build, 4, 32, v);
 }
 
 static inline nir_ssa_def *
@@ -307,7 +318,7 @@ nir_imov_alu(nir_builder *build, nir_alu_src src, unsigned num_components)
  * Construct an fmov or imov that reswizzles the source's components.
  */
 static inline nir_ssa_def *
-nir_swizzle(nir_builder *build, nir_ssa_def *src, unsigned swiz[4],
+nir_swizzle(nir_builder *build, nir_ssa_def *src, const unsigned swiz[4],
             unsigned num_components, bool use_fmov)
 {
    nir_alu_src alu_src = { NIR_SRC_INIT };

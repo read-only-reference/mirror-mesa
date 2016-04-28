@@ -29,6 +29,11 @@
 #include "compiler/shader_enums.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <inttypes.h> /* for PRIx64 macro */
+
+#if defined(_WIN32) && !defined(snprintf)
+#define snprintf _snprintf
+#endif
 
 static void
 print_tabs(unsigned num_tabs, FILE *fp)
@@ -68,7 +73,7 @@ static void
 print_register_decl(nir_register *reg, print_state *state)
 {
    FILE *fp = state->fp;
-   fprintf(fp, "decl_reg %s ", sizes[reg->num_components]);
+   fprintf(fp, "decl_reg %s %u ", sizes[reg->num_components], reg->bit_size);
    if (reg->is_packed)
       fprintf(fp, "(packed) ");
    print_register(reg, state);
@@ -83,7 +88,8 @@ print_ssa_def(nir_ssa_def *def, print_state *state)
    FILE *fp = state->fp;
    if (def->name != NULL)
       fprintf(fp, "/* %s */ ", def->name);
-   fprintf(fp, "%s ssa_%u", sizes[def->num_components], def->index);
+   fprintf(fp, "%s %u ssa_%u", sizes[def->num_components], def->bit_size,
+           def->index);
 }
 
 static void
@@ -279,6 +285,13 @@ print_constant(nir_constant *c, const struct glsl_type *type, print_state *state
       }
       break;
 
+   case GLSL_TYPE_DOUBLE:
+      for (i = 0; i < total_elems; i++) {
+         if (i > 0) fprintf(fp, ", ");
+         fprintf(fp, "%f", c->value.d[i]);
+      }
+      break;
+
    case GLSL_TYPE_STRUCT:
       for (i = 0; i < c->num_elements; i++) {
          if (i > 0) fprintf(fp, ", ");
@@ -302,6 +315,30 @@ print_constant(nir_constant *c, const struct glsl_type *type, print_state *state
    }
 }
 
+static const char *
+get_variable_mode_str(nir_variable_mode mode)
+{
+   switch (mode) {
+   case nir_var_shader_in:
+      return "shader_in";
+   case nir_var_shader_out:
+      return "shader_out";
+   case nir_var_uniform:
+      return "uniform";
+   case nir_var_shader_storage:
+      return "shader_storage";
+   case nir_var_system_value:
+      return "system";
+   case nir_var_shared:
+      return "shared";
+   case nir_var_param:
+   case nir_var_global:
+   case nir_var_local:
+   default:
+      return "";
+   }
+}
+
 static void
 print_var_decl(nir_variable *var, print_state *state)
 {
@@ -313,13 +350,9 @@ print_var_decl(nir_variable *var, print_state *state)
    const char *const samp = (var->data.sample) ? "sample " : "";
    const char *const patch = (var->data.patch) ? "patch " : "";
    const char *const inv = (var->data.invariant) ? "invariant " : "";
-   const char *const mode[] = { "shader_in ", "shader_out ", "", "",
-                                "uniform ", "shader_storage ", "shared ",
-                                "system "};
-
-   fprintf(fp, "%s%s%s%s%s%s ",
-      cent, samp, patch, inv, mode[var->data.mode],
-	  glsl_interp_qualifier_name(var->data.interpolation));
+   fprintf(fp, "%s%s%s%s%s %s ",
+           cent, samp, patch, inv, get_variable_mode_str(var->data.mode),
+           glsl_interp_qualifier_name(var->data.interpolation));
 
    glsl_print_type(var->type, fp);
 
@@ -504,6 +537,9 @@ print_intrinsic_instr(nir_intrinsic_instr *instr, print_state *state)
       [NIR_INTRINSIC_WRMASK] = "wrmask",
       [NIR_INTRINSIC_STREAM_ID] = "stream-id",
       [NIR_INTRINSIC_UCP_ID] = "ucp-id",
+      [NIR_INTRINSIC_RANGE] = "range",
+      [NIR_INTRINSIC_DESC_SET] = "desc-set",
+      [NIR_INTRINSIC_BINDING] = "binding",
    };
    for (unsigned idx = 1; idx < NIR_INTRINSIC_NUM_INDEX_FLAGS; idx++) {
       if (!info->index_map[idx])
@@ -713,7 +749,11 @@ print_load_const_instr(nir_load_const_instr *instr, print_state *state)
        * and then print the float in a comment for readability.
        */
 
-      fprintf(fp, "0x%08x /* %f */", instr->value.u32[i], instr->value.f32[i]);
+      if (instr->def.bit_size == 64)
+         fprintf(fp, "0x%16" PRIx64 " /* %f */", instr->value.u64[i],
+                 instr->value.f64[i]);
+      else
+         fprintf(fp, "0x%08x /* %f */", instr->value.u32[i], instr->value.f32[i]);
    }
 
    fprintf(fp, ")");
@@ -753,7 +793,7 @@ print_phi_instr(nir_phi_instr *instr, print_state *state)
    FILE *fp = state->fp;
    print_dest(&instr->dest, state);
    fprintf(fp, " = phi ");
-   nir_foreach_phi_src(instr, src) {
+   nir_foreach_phi_src(src, instr) {
       if (&src->node != exec_list_get_head(&instr->srcs))
          fprintf(fp, ", ");
 
@@ -766,7 +806,7 @@ static void
 print_parallel_copy_instr(nir_parallel_copy_instr *instr, print_state *state)
 {
    FILE *fp = state->fp;
-   nir_foreach_parallel_copy_entry(instr, entry) {
+   nir_foreach_parallel_copy_entry(entry, instr) {
       if (&entry->node != exec_list_get_head(&instr->entries))
          fprintf(fp, "; ");
 
@@ -868,7 +908,7 @@ print_block(nir_block *block, print_state *state, unsigned tabs)
 
    free(preds);
 
-   nir_foreach_instr(block, instr) {
+   nir_foreach_instr(instr, block) {
       print_instr(instr, state, tabs);
       fprintf(fp, "\n");
    }

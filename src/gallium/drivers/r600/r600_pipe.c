@@ -264,7 +264,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_START_INSTANCE:
 	case PIPE_CAP_MAX_DUAL_SOURCE_RENDER_TARGETS:
 	case PIPE_CAP_TEXTURE_BUFFER_OBJECTS:
-        case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
+	case PIPE_CAP_PREFER_BLIT_BASED_TEXTURE_TRANSFER:
 	case PIPE_CAP_QUERY_PIPELINE_STATISTICS:
 	case PIPE_CAP_TEXTURE_MULTISAMPLE:
 	case PIPE_CAP_BUFFER_MAP_PERSISTENT_COHERENT:
@@ -281,6 +281,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_INVALIDATE_BUFFER:
 	case PIPE_CAP_SURFACE_REINTERPRET_BLOCKS:
 	case PIPE_CAP_QUERY_MEMORY_INFO:
+	case PIPE_CAP_FRAMEBUFFER_NO_ATTACHMENT:
 		return 1;
 
 	case PIPE_CAP_DEVICE_RESET_STATUS_QUERY:
@@ -364,6 +365,7 @@ static int r600_get_param(struct pipe_screen* pscreen, enum pipe_cap param)
 	case PIPE_CAP_GENERATE_MIPMAP:
 	case PIPE_CAP_STRING_MARKER:
 	case PIPE_CAP_QUERY_BUFFER_OBJECT:
+	case PIPE_CAP_ROBUST_BUFFER_ACCESS_BEHAVIOR:
 		return 0;
 
 	case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
@@ -499,7 +501,7 @@ static int r600_get_shader_param(struct pipe_screen* pscreen, unsigned shader, e
 	case PIPE_SHADER_CAP_MAX_CONST_BUFFER_SIZE:
 		if (shader == PIPE_SHADER_COMPUTE) {
 			uint64_t max_const_buffer_size;
-			pscreen->get_compute_param(pscreen,
+			pscreen->get_compute_param(pscreen, PIPE_SHADER_IR_TGSI,
 				PIPE_COMPUTE_CAP_MAX_MEM_ALLOC_SIZE,
 				&max_const_buffer_size);
 			return max_const_buffer_size;

@@ -115,8 +115,6 @@ public:
     */
    dst_reg output_reg[BRW_VARYING_SLOT_COUNT];
    const char *output_reg_annotation[BRW_VARYING_SLOT_COUNT];
-   int *uniform_size;
-   int uniform_array_size; /*< Size of the uniform_size array */
    int uniforms;
 
    src_reg shader_start_time;
@@ -278,8 +276,6 @@ public:
 
    src_reg get_scratch_offset(bblock_t *block, vec4_instruction *inst,
 			      src_reg *reladdr, int reg_offset);
-   src_reg get_pull_constant_offset(bblock_t *block, vec4_instruction *inst,
-				    src_reg *reladdr, int reg_offset);
    void emit_scratch_read(bblock_t *block, vec4_instruction *inst,
 			  dst_reg dst,
 			  src_reg orig_src,
@@ -289,7 +285,8 @@ public:
    void emit_pull_constant_load(bblock_t *block, vec4_instruction *inst,
 				dst_reg dst,
 				src_reg orig_src,
-				int base_offset);
+                                int base_offset,
+                                src_reg indirect);
    void emit_pull_constant_load_reg(dst_reg dst,
                                     src_reg surf_index,
                                     src_reg offset,
@@ -362,10 +359,6 @@ protected:
    virtual void gs_end_primitive();
 
 private:
-   bool vectorize_mov(bblock_t *block, vec4_instruction *inst,
-                      uint8_t imm[4], vec4_instruction *imm_inst[4],
-                      int inst_count, unsigned writemask);
-
    /**
     * If true, then register allocation should fail instead of spilling.
     */
