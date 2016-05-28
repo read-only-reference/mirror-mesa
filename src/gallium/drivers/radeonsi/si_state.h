@@ -40,6 +40,8 @@
 #define SI_NUM_IMAGES			16
 #define SI_NUM_SHADER_BUFFERS		16
 
+#define SI_TESS_OFFCHIP_BLOCK_SIZE	(8192 * 4)
+
 struct si_screen;
 struct si_shader;
 
@@ -155,6 +157,7 @@ struct si_shader_data {
 /* Private read-write buffer slots. */
 enum {
 	SI_HS_RING_TESS_FACTOR,
+	SI_HS_RING_TESS_OFFCHIP,
 
 	SI_ES_RING_ESGS,
 	SI_GS_RING_ESGS,
@@ -282,13 +285,6 @@ boolean si_is_format_supported(struct pipe_screen *screen,
                                unsigned usage);
 void si_init_state_functions(struct si_context *sctx);
 void si_init_screen_state_functions(struct si_screen *sscreen);
-unsigned cik_bank_wh(unsigned bankwh);
-unsigned cik_db_pipe_config(struct si_screen *sscreen, unsigned tile_mode);
-unsigned cik_macro_tile_aspect(unsigned macro_tile_aspect);
-unsigned cik_tile_split(unsigned tile_split);
-unsigned si_array_mode(unsigned mode);
-uint32_t si_num_banks(struct si_screen *sscreen, struct r600_texture *tex);
-unsigned si_tile_mode_index(struct r600_texture *rtex, unsigned level, bool stencil);
 void
 si_make_buffer_descriptor(struct si_screen *screen, struct r600_resource *buf,
 			  enum pipe_format format,
@@ -312,6 +308,7 @@ si_create_sampler_view_custom(struct pipe_context *ctx,
 			      const struct pipe_sampler_view *state,
 			      unsigned width0, unsigned height0,
 			      unsigned force_level);
+void si_dec_framebuffer_counters(const struct pipe_framebuffer_state *state);
 
 /* si_state_shader.c */
 bool si_update_shaders(struct si_context *sctx);

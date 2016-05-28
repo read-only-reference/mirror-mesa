@@ -19,6 +19,17 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
 
+git_sha1.h:
+	@if test -e $(top_srcdir)/.git; then \
+		if which git > /dev/null; then \
+		    git --git-dir=$(top_srcdir)/.git log -n 1 --oneline | \
+			sed 's/^\([^ ]*\) .*/#define MESA_GIT_SHA1 "git-\1"/' \
+			> git_sha1.h ; \
+		fi \
+	fi
+
+BUILT_SOURCES = git_sha1.h
+
 SUBDIRS = . gtest util mapi/glapi/gen mapi
 
 # include only conditionally ?
@@ -32,27 +43,34 @@ if NEED_OPENGL_COMMON
 SUBDIRS += mesa
 endif
 
-# This explicitly comes after mesa because it depends on the i965 compiler
-if HAVE_INTEL_VULKAN
-SUBDIRS += intel/vulkan
-endif
-
 SUBDIRS += loader
 
 if HAVE_DRI_GLX
 SUBDIRS += glx
 endif
 
-if HAVE_EGL_PLATFORM_WAYLAND
-SUBDIRS += egl/wayland/wayland-egl egl/wayland/wayland-drm
+## Optionally required by GBM and EGL
+if HAVE_PLATFORM_WAYLAND
+SUBDIRS += egl/wayland/wayland-drm
 endif
 
+## Optionally required by EGL (aka PLATFORM_GBM)
 if HAVE_GBM
 SUBDIRS += gbm
 endif
 
+## Optionally required by EGL
+if HAVE_PLATFORM_WAYLAND
+SUBDIRS += egl/wayland/wayland-egl
+endif
+
 if HAVE_EGL
 SUBDIRS += egl
+endif
+
+## Requires the i965 compiler (part of mesa) and wayland-drm
+if HAVE_INTEL_VULKAN
+SUBDIRS += intel/vulkan
 endif
 
 if HAVE_GALLIUM
@@ -60,7 +78,7 @@ SUBDIRS += gallium
 endif
 
 EXTRA_DIST = \
-	getopt hgl SConscript
+	getopt hgl SConscript git_sha1.h
 
 AM_CFLAGS = $(VISIBILITY_CFLAGS)
 AM_CXXFLAGS = $(VISIBILITY_CXXFLAGS)

@@ -1138,8 +1138,10 @@ vbo_validated_multidrawelements(struct gl_context *ctx, GLenum mode,
       return;
    }
 
-   if (!vbo_bind_arrays(ctx))
+   if (!vbo_bind_arrays(ctx)) {
+      free(prim);
       return;
+   }
 
    min_index_ptr = (uintptr_t)indices[0];
    max_index_ptr = 0;
@@ -1321,7 +1323,7 @@ vbo_draw_transform_feedback(struct gl_context *ctx, GLenum mode,
     * will be rendered. */
 
    vbo->draw_prims(ctx, prim, 1, NULL,
-                   GL_TRUE, 0, 0, obj, stream, NULL);
+                   GL_FALSE, ~0, ~0, obj, stream, NULL);
 
    if (MESA_DEBUG_FLAGS & DEBUG_ALWAYS_FLUSH) {
       _mesa_flush(ctx);

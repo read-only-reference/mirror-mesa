@@ -1,5 +1,9 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python2
+#encoding=utf-8
 
+from __future__ import (
+    absolute_import, division, print_function, unicode_literals
+)
 import xml.parsers.expat
 import re
 import sys
@@ -131,7 +135,7 @@ __gen_sfixed(float v, uint32_t start, uint32_t end, uint32_t fract_bits)
    assert(min <= v && v <= max);
 #endif
 
-   const int32_t int_val = roundf(v * factor);
+   const int64_t int_val = llroundf(v * factor);
    const uint64_t mask = ~0ull >> (64 - (end - start + 1));
 
    return (int_val & mask) << start;
@@ -150,7 +154,7 @@ __gen_ufixed(float v, uint32_t start, uint32_t end, uint32_t fract_bits)
    assert(min <= v && v <= max);
 #endif
 
-   const uint32_t uint_val = roundf(v * factor);
+   const uint64_t uint_val = llroundf(v * factor);
 
    return uint_val << start;
 }
@@ -197,7 +201,7 @@ def to_alphanum(name):
 
 def safe_name(name):
     name = to_alphanum(name)
-    if not str.isalpha(name[0]):
+    if not name[0].isalpha():
         name = '_' + name
 
     return name
@@ -209,9 +213,9 @@ def num_from_str(num_str):
         assert(not num_str.startswith('0') and 'octals numbers not allowed')
         return int(num_str)
 
-class Field:
-    ufixed_pattern = re.compile("u(\d+)\.(\d+)")
-    sfixed_pattern = re.compile("s(\d+)\.(\d+)")
+class Field(object):
+    ufixed_pattern = re.compile(r"u(\d+)\.(\d+)")
+    sfixed_pattern = re.compile(r"s(\d+)\.(\d+)")
 
     def __init__(self, parser, attrs):
         self.parser = parser
@@ -278,7 +282,7 @@ class Field:
         for value in self.values:
             print("#define %-40s %d" % (prefix + value.name, value.value))
 
-class Group:
+class Group(object):
     def __init__(self, parser, parent, start, count, size):
         self.parser = parser
         self.parent = parent
@@ -466,12 +470,12 @@ class Group:
             print("   dw[%d] = %s;" % (index, v))
             print("   dw[%d] = %s >> 32;" % (index + 1, v))
 
-class Value:
+class Value(object):
     def __init__(self, attrs):
         self.name = safe_name(attrs["name"])
         self.value = int(attrs["value"])
 
-class Parser:
+class Parser(object):
     def __init__(self):
         self.parser = xml.parsers.expat.ParserCreate()
         self.parser.StartElementHandler = self.start_element

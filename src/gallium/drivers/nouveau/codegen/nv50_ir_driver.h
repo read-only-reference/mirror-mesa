@@ -100,7 +100,7 @@ struct nv50_ir_prog_info
       uint8_t sourceRep;  /* NV50_PROGRAM_IR */
       const void *source;
       void *relocData;
-      void *interpData;
+      void *fixupData;
       struct nv50_ir_prog_symbol *syms;
       uint16_t numSyms;
    } bin;
@@ -146,11 +146,14 @@ struct nv50_ir_prog_info
          bool earlyFragTests;
          bool separateFragData;
          bool usesDiscard;
+         bool persampleInvocation;
+         bool usesSampleMaskIn;
       } fp;
       struct {
          uint32_t inputOffset; /* base address for user args */
          uint32_t sharedOffset; /* reserved space in s[] */
          uint32_t gridInfoBase;  /* base address for NTID,NCTAID */
+         uint32_t numThreads; /* max number of threads */
       } cp;
    } prop;
 
@@ -202,8 +205,8 @@ extern void nv50_ir_relocate_code(void *relocData, uint32_t *code,
                                   uint32_t dataPos);
 
 extern void
-nv50_ir_change_interp(void *interpData, uint32_t *code,
-                      bool force_per_sample, bool flatshade);
+nv50_ir_apply_fixups(void *fixupData, uint32_t *code,
+                     bool force_per_sample, bool flatshade);
 
 /* obtain code that will be shared among programs */
 extern void nv50_ir_get_target_library(uint32_t chipset,

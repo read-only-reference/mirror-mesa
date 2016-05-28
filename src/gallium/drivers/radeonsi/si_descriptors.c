@@ -254,7 +254,7 @@ static void si_release_sampler_views(struct si_sampler_views *views)
 {
 	int i;
 
-	for (i = 0; i < Elements(views->views); i++) {
+	for (i = 0; i < ARRAY_SIZE(views->views); i++) {
 		pipe_sampler_view_reference(&views->views[i], NULL);
 	}
 	si_release_descriptors(&views->desc);
@@ -387,6 +387,10 @@ static void si_set_sampler_views(struct pipe_context *ctx,
 			} else {
 				samplers->compressed_colortex_mask &= ~(1u << slot);
 			}
+
+			if (rtex->dcc_offset &&
+			    p_atomic_read(&rtex->framebuffers_bound))
+				sctx->need_check_render_feedback = true;
 		} else {
 			samplers->depth_texture_mask &= ~(1u << slot);
 			samplers->compressed_colortex_mask &= ~(1u << slot);
@@ -526,6 +530,10 @@ si_set_shader_images(struct pipe_context *pipe, unsigned shader,
 			} else {
 				images->compressed_colortex_mask &= ~(1 << slot);
 			}
+
+			if (tex->dcc_offset &&
+			    p_atomic_read(&tex->framebuffers_bound))
+				ctx->need_check_render_feedback = true;
 
 			/* Always force the base level to the selected level.
 			 *
@@ -673,7 +681,7 @@ static void si_vertex_buffers_begin_new_cs(struct si_context *sctx)
 	for (i = 0; i < count; i++) {
 		int vb = sctx->vertex_elements->elements[i].vertex_buffer_index;
 
-		if (vb >= Elements(sctx->vertex_buffer))
+		if (vb >= ARRAY_SIZE(sctx->vertex_buffer))
 			continue;
 		if (!sctx->vertex_buffer[vb].buffer)
 			continue;
@@ -725,7 +733,7 @@ static bool si_upload_vertex_buffer_descriptors(struct si_context *sctx)
 		unsigned offset;
 		uint32_t *desc = &ptr[i*4];
 
-		if (ve->vertex_buffer_index >= Elements(sctx->vertex_buffer)) {
+		if (ve->vertex_buffer_index >= ARRAY_SIZE(sctx->vertex_buffer)) {
 			memset(desc, 0, 16);
 			continue;
 		}
@@ -783,7 +791,7 @@ void si_upload_const_buffer(struct si_context *sctx, struct r600_resource **rbuf
 
 	u_upload_alloc(sctx->b.uploader, 0, size, 256, const_offset,
 		       (struct pipe_resource**)rbuffer, &tmp);
-	if (rbuffer)
+	if (*rbuffer)
 		util_memcpy_cpu_to_le32(tmp, ptr, size);
 }
 
@@ -1219,7 +1227,7 @@ static void si_invalidate_buffer(struct pipe_context *ctx, struct pipe_resource 
 	for (i = 0; i < num_elems; i++) {
 		int vb = sctx->vertex_elements->elements[i].vertex_buffer_index;
 
-		if (vb >= Elements(sctx->vertex_buffer))
+		if (vb >= ARRAY_SIZE(sctx->vertex_buffer))
 			continue;
 		if (!sctx->vertex_buffer[vb].buffer)
 			continue;

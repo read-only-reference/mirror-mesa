@@ -412,6 +412,104 @@ si_decompress_image_color_textures(struct si_context *sctx,
 	}
 }
 
+static void si_check_render_feedback_textures(struct si_context *sctx,
+                                              struct si_textures_info *textures)
+{
+	uint32_t mask = textures->views.desc.enabled_mask;
+
+	while (mask) {
+		const struct pipe_sampler_view *view;
+		struct r600_texture *tex;
+		bool render_feedback = false;
+
+		unsigned i = u_bit_scan(&mask);
+
+		view = textures->views.views[i];
+		if(view->texture->target == PIPE_BUFFER)
+			continue;
+
+		tex = (struct r600_texture *)view->texture;
+		if (!tex->dcc_offset)
+			continue;
+
+		for (unsigned j = 0; j < sctx->framebuffer.state.nr_cbufs; ++j) {
+			struct r600_surface * surf;
+
+			if (!sctx->framebuffer.state.cbufs[j])
+				continue;
+
+			surf = (struct r600_surface*)sctx->framebuffer.state.cbufs[j];
+
+			if (tex == (struct r600_texture*)surf->base.texture &&
+			    surf->base.u.tex.level >= view->u.tex.first_level &&
+			    surf->base.u.tex.level <= view->u.tex.last_level &&
+			    surf->base.u.tex.first_layer <= view->u.tex.last_layer &&
+			    surf->base.u.tex.last_layer >= view->u.tex.first_layer)
+				render_feedback = true;
+		}
+
+		if (render_feedback) {
+			struct si_screen *screen = sctx->screen;
+			r600_texture_disable_dcc(&screen->b, tex);
+		}
+	}
+}
+
+static void si_check_render_feedback_images(struct si_context *sctx,
+                                            struct si_images_info *images)
+{
+	uint32_t mask = images->desc.enabled_mask;
+
+	while (mask) {
+		const struct pipe_image_view *view;
+		struct r600_texture *tex;
+		bool render_feedback = false;
+
+		unsigned i = u_bit_scan(&mask);
+
+		view = &images->views[i];
+		if (view->resource->target == PIPE_BUFFER)
+			continue;
+
+		tex = (struct r600_texture *)view->resource;
+		if (!tex->dcc_offset)
+			continue;
+
+		for (unsigned j = 0; j < sctx->framebuffer.state.nr_cbufs; ++j) {
+			struct r600_surface * surf;
+
+			if (!sctx->framebuffer.state.cbufs[j])
+				continue;
+
+			surf = (struct r600_surface*)sctx->framebuffer.state.cbufs[j];
+
+			if (tex == (struct r600_texture*)surf->base.texture &&
+			    surf->base.u.tex.level == view->u.tex.level &&
+			    surf->base.u.tex.first_layer <= view->u.tex.last_layer &&
+			    surf->base.u.tex.last_layer >= view->u.tex.first_layer)
+				render_feedback = true;
+		}
+
+		if (render_feedback) {
+			struct si_screen *screen = sctx->screen;
+			r600_texture_disable_dcc(&screen->b, tex);
+		}
+	}
+}
+
+static void si_check_render_feedback(struct si_context *sctx)
+{
+
+	if (!sctx->need_check_render_feedback)
+		return;
+
+	for (int i = 0; i < SI_NUM_SHADERS; ++i) {
+		si_check_render_feedback_images(sctx, &sctx->images[i]);
+		si_check_render_feedback_textures(sctx, &sctx->samplers[i]);
+	}
+	sctx->need_check_render_feedback = false;
+}
+
 static void si_decompress_textures(struct si_context *sctx, int shader_start,
                                    int shader_end)
 {
@@ -439,6 +537,8 @@ static void si_decompress_textures(struct si_context *sctx, int shader_start,
 			si_decompress_image_color_textures(sctx, &sctx->images[i]);
 		}
 	}
+
+	si_check_render_feedback(sctx);
 }
 
 void si_decompress_graphics_textures(struct si_context *sctx)
@@ -748,42 +848,6 @@ void si_resource_copy_region(struct pipe_context *ctx,
 	pipe_sampler_view_reference(&src_view, NULL);
 }
 
-/* For MSAA integer resolving to work, we change the format to NORM using this function. */
-static enum pipe_format int_to_norm_format(enum pipe_format format)
-{
-	switch (format) {
-#define REPLACE_FORMAT_SIGN(format,sign) \
-	case PIPE_FORMAT_##format##_##sign##INT: \
-		return PIPE_FORMAT_##format##_##sign##NORM
-#define REPLACE_FORMAT(format) \
-		REPLACE_FORMAT_SIGN(format, U); \
-		REPLACE_FORMAT_SIGN(format, S)
-
-	REPLACE_FORMAT_SIGN(B10G10R10A2, U);
-	REPLACE_FORMAT(R8);
-	REPLACE_FORMAT(R8G8);
-	REPLACE_FORMAT(R8G8B8X8);
-	REPLACE_FORMAT(R8G8B8A8);
-	REPLACE_FORMAT(A8);
-	REPLACE_FORMAT(I8);
-	REPLACE_FORMAT(L8);
-	REPLACE_FORMAT(L8A8);
-	REPLACE_FORMAT(R16);
-	REPLACE_FORMAT(R16G16);
-	REPLACE_FORMAT(R16G16B16X16);
-	REPLACE_FORMAT(R16G16B16A16);
-	REPLACE_FORMAT(A16);
-	REPLACE_FORMAT(I16);
-	REPLACE_FORMAT(L16);
-	REPLACE_FORMAT(L16A16);
-
-#undef REPLACE_FORMAT
-#undef REPLACE_FORMAT_SIGN
-	default:
-		return format;
-	}
-}
-
 static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 				     const struct pipe_blit_info *info)
 {
@@ -791,7 +855,7 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 	struct r600_texture *dst = (struct r600_texture*)info->dst.resource;
 	unsigned dst_width = u_minify(info->dst.resource->width0, info->dst.level);
 	unsigned dst_height = u_minify(info->dst.resource->height0, info->dst.level);
-	enum pipe_format format = int_to_norm_format(info->dst.format);
+	enum pipe_format format = info->dst.format;
 	unsigned sample_mask = ~0;
 
 	/* Hardware MSAA resolve doesn't work if SPI format = NORM16_ABGR and
@@ -806,7 +870,8 @@ static bool do_hardware_msaa_resolve(struct pipe_context *ctx,
 	    info->dst.resource->nr_samples <= 1 &&
 	    util_max_layer(info->src.resource, 0) == 0 &&
 	    util_max_layer(info->dst.resource, info->dst.level) == 0 &&
-	    info->dst.format == info->src.format &&
+	    util_is_format_compatible(util_format_description(info->src.format),
+				      util_format_description(info->dst.format)) &&
 	    !util_format_is_pure_integer(format) &&
 	    !util_format_is_depth_or_stencil(format) &&
 	    !info->scissor_enable &&

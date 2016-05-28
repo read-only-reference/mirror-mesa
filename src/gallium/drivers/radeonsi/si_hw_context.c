@@ -64,7 +64,7 @@ void si_need_cs_space(struct si_context *ctx)
 	struct radeon_winsys_cs *dma = ctx->b.dma.cs;
 
 	/* Flush the DMA IB if it's not empty. */
-	if (dma && dma->cdw)
+	if (radeon_emitted(dma, 0))
 		ctx->b.dma.flush(ctx, RADEON_FLUSH_ASYNC, NULL);
 
 	/* There are two memory usage counters in the winsys for all buffers
@@ -102,7 +102,7 @@ void si_context_gfx_flush(void *context, unsigned flags,
 
 	ctx->gfx_flush_in_progress = true;
 
-	if (cs->cdw == ctx->b.initial_gfx_cs_size &&
+	if (!radeon_emitted(cs, ctx->b.initial_gfx_cs_size) &&
 	    (!fence || ctx->last_gfx_fence)) {
 		if (fence)
 			ws->fence_reference(fence, ctx->last_gfx_fence);
@@ -116,8 +116,9 @@ void si_context_gfx_flush(void *context, unsigned flags,
 
 	ctx->b.flags |= SI_CONTEXT_CS_PARTIAL_FLUSH |
 			SI_CONTEXT_PS_PARTIAL_FLUSH;
-	/* The kernel doesn't flush TC for VI correctly (need TC_WB_ACTION_ENA). */
-	if (ctx->b.chip_class == VI)
+
+	/* DRM 3.1.0 doesn't flush TC for VI correctly. */
+	if (ctx->b.chip_class == VI && ctx->b.screen->info.drm_minor <= 1)
 		ctx->b.flags |= SI_CONTEXT_INV_GLOBAL_L2 |
 				SI_CONTEXT_INV_VMEM_L1;
 
